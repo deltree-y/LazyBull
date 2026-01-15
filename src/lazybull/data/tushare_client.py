@@ -202,3 +202,103 @@ class TushareClient:
             start_date=start_date,
             end_date=end_date
         )
+    
+    def get_adj_factor(
+        self,
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """获取复权因子
+        
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            复权因子DataFrame，包含 ts_code, trade_date, adj_factor 等字段
+        """
+        return self.query(
+            "adj_factor",
+            ts_code=ts_code,
+            trade_date=trade_date,
+            start_date=start_date,
+            end_date=end_date
+        )
+    
+    def get_suspend_d(
+        self,
+        ts_code: Optional[str] = None,
+        suspend_date: Optional[str] = None,
+        resume_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """获取停复牌信息
+        
+        Args:
+            ts_code: 股票代码
+            suspend_date: 停牌日期
+            resume_date: 复牌日期
+            
+        Returns:
+            停复牌信息DataFrame
+        """
+        return self.query(
+            "suspend_d",
+            ts_code=ts_code,
+            suspend_date=suspend_date,
+            resume_date=resume_date
+        )
+    
+    def get_stk_limit(
+        self,
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """获取每日涨跌停价格
+        
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            涨跌停价格DataFrame，包含 up_limit, down_limit 等字段
+        """
+        return self.query(
+            "stk_limit",
+            ts_code=ts_code,
+            trade_date=trade_date,
+            start_date=start_date,
+            end_date=end_date
+        )
+    
+    def get_namechange(
+        self,
+        ts_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """获取股票名称变更历史
+        
+        用于判断ST状态等
+        
+        Args:
+            ts_code: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            名称变更历史DataFrame
+        """
+        return self.query(
+            "namechange",
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date
+        )
