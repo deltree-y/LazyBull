@@ -63,6 +63,8 @@ class FeatureBuilder:
             adj_factor: 复权因子DataFrame，需包含 ts_code, trade_date, adj_factor
             stock_basic: 股票基本信息DataFrame，需包含 ts_code, name, list_date
             suspend_info: 停复牌信息DataFrame（可选）
+                         新版API格式：ts_code, trade_date, suspend_type, suspend_timing
+                         旧版格式（兼容）：ts_code, suspend_date, resume_date
             limit_info: 涨跌停价格DataFrame（可选）
             
         Returns:
@@ -493,13 +495,24 @@ class FeatureBuilder:
         
         # 如果有停复牌信息，可以进一步完善
         if suspend_info is not None and len(suspend_info) > 0:
-            # 获取当日停牌的股票
-            suspend_today = suspend_info[
-                (suspend_info['suspend_date'] <= trade_date) &
-                ((suspend_info['resume_date'] >= trade_date) | (suspend_info['resume_date'].isna()))
-            ]['ts_code'].unique()
-            
-            result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
+            # 新版API：suspend_info包含trade_date和suspend_type字段
+            # 兼容旧版：如果有suspend_date字段，使用旧逻辑
+            if 'suspend_date' in suspend_info.columns and 'resume_date' in suspend_info.columns:
+                # 旧版逻辑：获取当日停牌的股票
+                suspend_today = suspend_info[
+                    (suspend_info['suspend_date'] <= trade_date) &
+                    ((suspend_info['resume_date'] >= trade_date) | (suspend_info['resume_date'].isna()))
+                ]['ts_code'].unique()
+                
+                result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
+            elif 'trade_date' in suspend_info.columns and 'suspend_type' in suspend_info.columns:
+                # 新版逻辑：筛选当日类型为'S'(停牌)的股票
+                suspend_today = suspend_info[
+                    (suspend_info['trade_date'] == trade_date) &
+                    (suspend_info['suspend_type'] == 'S')
+                ]['ts_code'].unique()
+                
+                result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
         
         return result
     

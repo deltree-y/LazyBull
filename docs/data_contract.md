@@ -7,9 +7,50 @@
 ```
 data/
 ├── raw/        # 原始数据层（从数据源直接获取）
+│   ├── {name}.parquet              # 非分区数据（旧格式，向后兼容）
+│   └── {name}/                     # 按日分区数据（新格式）
+│       ├── YYYY-MM-DD.parquet      # 每日数据文件
+│       └── ...
 ├── clean/      # 清洗数据层（标准化、去重、填充）
+│   ├── {name}.parquet              # 非分区数据（旧格式，向后兼容）
+│   └── {name}/                     # 按日分区数据（新格式）
+│       ├── YYYY-MM-DD.parquet      # 每日数据文件
+│       └── ...
 ├── features/   # 特征数据层（因子计算结果）
 └── reports/    # 报告数据层（回测结果）
+```
+
+## 数据存储策略
+
+### 按日分区存储
+
+从v0.2.0开始，raw和clean层支持按交易日分区存储：
+
+- **目录结构**: `data/{layer}/{name}/{YYYY-MM-DD}.parquet`
+- **优势**:
+  - 减少单文件大小，提高读写效率
+  - 支持增量更新，避免重复拉取全量数据
+  - 便于按日期范围查询和清理历史数据
+- **向后兼容**: 系统自动兼容旧的非分区数据格式
+
+### 使用示例
+
+```python
+from src.lazybull.data import Storage
+
+storage = Storage(enable_partitioning=True)
+
+# 保存按日分区的原始数据
+storage.save_raw_by_date(daily_df, "daily", "20230101")
+
+# 加载单日数据
+df = storage.load_raw_by_date("daily", "20230101")
+
+# 加载日期范围数据
+df = storage.load_raw_by_date_range("daily", "20230101", "20230131")
+
+# 列出所有分区日期
+dates = storage.list_partitions("raw", "daily")
 ```
 
 ## Raw 层数据契约
@@ -89,6 +130,41 @@ data/
 | free_share | float | 自由流通股本(万股) |
 | total_mv | float | 总市值(万元) |
 | circ_mv | float | 流通市值(万元) |
+
+### 5. suspend_d - 停复牌信息
+
+**来源**: TuShare `suspend_d`  
+**主键**: `(ts_code, trade_date)`  
+**API变更**: 从v0.2.0开始更新为新版API参数
+
+**字段说明**:
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| ts_code | str | 股票代码 |
+| trade_date | str/datetime | 停复牌日期 |
+| suspend_type | str | 停复牌类型：S=停牌，R=复牌 |
+| suspend_timing | str | 盘中停复牌时段（可选） |
+
+**API参数变更说明**:
+
+- **旧版API（已弃用）**: `suspend_date`, `resume_date`
+- **新版API**: `trade_date`, `start_date`, `end_date`, `suspend_type`
+
+```python
+# 新版调用示例
+client = TushareClient()
+
+# 获取某日所有停牌股票
+suspend_df = client.get_suspend_d(trade_date='20230315', suspend_type='S')
+
+# 获取某段时间某只股票的停复牌记录
+suspend_df = client.get_suspend_d(
+    ts_code='000001.SZ',
+    start_date='20230101',
+    end_date='20230331'
+)
+```
 
 ## Clean 层数据契约
 
