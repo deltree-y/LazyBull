@@ -243,7 +243,12 @@ class FeatureBuilder:
         )
         
         # 计算收益率: (close_adj_future / close_adj) - 1
-        result['y_ret_5'] = (result['close_adj_future'] / result['close_adj']) - 1
+        # 添加除零保护：过滤掉收盘价为0或极小的样本
+        valid_mask = result['close_adj'] > 1e-6
+        result.loc[valid_mask, 'y_ret_5'] = (
+            result.loc[valid_mask, 'close_adj_future'] / result.loc[valid_mask, 'close_adj']
+        ) - 1
+        result.loc[~valid_mask, 'y_ret_5'] = np.nan
         
         # 删除中间列
         result.drop(columns=['close_adj', 'close_adj_future'], inplace=True)
@@ -391,20 +396,26 @@ class FeatureBuilder:
         current_vol_amount = current_data[['ts_code', 'vol', 'amount', 'close_adj']].copy()
         window_features = window_features.merge(current_vol_amount, on='ts_code', how='left')
         
-        # 成交量比率
-        window_features[f'vol_ratio_{window}'] = (
-            window_features['vol'] / window_features['mean_vol']
+        # 成交量比率（添加除零保护）
+        valid_vol = window_features['mean_vol'] > 0
+        window_features[f'vol_ratio_{window}'] = np.nan
+        window_features.loc[valid_vol, f'vol_ratio_{window}'] = (
+            window_features.loc[valid_vol, 'vol'] / window_features.loc[valid_vol, 'mean_vol']
         )
         
-        # 成交额比率
-        window_features[f'amount_ratio_{window}'] = (
-            window_features['amount'] / window_features['mean_amount']
+        # 成交额比率（添加除零保护）
+        valid_amount = window_features['mean_amount'] > 0
+        window_features[f'amount_ratio_{window}'] = np.nan
+        window_features.loc[valid_amount, f'amount_ratio_{window}'] = (
+            window_features.loc[valid_amount, 'amount'] / window_features.loc[valid_amount, 'mean_amount']
         )
         
-        # 均线偏离度
-        window_features[f'ma_deviation_{window}'] = (
-            (window_features['close_adj'] - window_features['ma_close']) / 
-            window_features['ma_close']
+        # 均线偏离度（添加除零保护）
+        valid_ma = window_features['ma_close'] > 1e-6
+        window_features[f'ma_deviation_{window}'] = np.nan
+        window_features.loc[valid_ma, f'ma_deviation_{window}'] = (
+            (window_features.loc[valid_ma, 'close_adj'] - window_features.loc[valid_ma, 'ma_close']) / 
+            window_features.loc[valid_ma, 'ma_close']
         )
         
         # 保留需要的列
@@ -438,9 +449,10 @@ class FeatureBuilder:
         stock_names = stock_basic[['ts_code', 'name']].copy()
         result = result.merge(stock_names, on='ts_code', how='left')
         
-        # 判断ST：名称包含ST、*ST、S*ST等
+        # 判断ST：名称包含ST、*ST、S*ST等（使用更精确的匹配）
+        # 匹配模式：开头可选的*或S，然后是ST，或者包含"退"字
         result['is_st'] = result['name'].fillna('').str.contains(
-            r'ST|退', 
+            r'^\*?S?\*?ST|退', 
             case=False, 
             regex=True
         ).astype(int)
@@ -459,8 +471,10 @@ class FeatureBuilder:
             suffixes=('', '_basic')
         )
         
-        # 计算上市天数（简化：使用交易日字符串直接比较，实际应计算交易日数量）
-        # 这里先用一个粗略估计：(trade_date - list_date) 的天数
+        # 计算上市天数
+        # 注意：这里使用自然日天数作为粗略估计
+        # 实际应该使用交易日历计算实际交易日数量，但为简化计算使用自然日
+        # 对于min_list_days=60的设置，自然日60天大约对应40-45个交易日
         try:
             trade_date_dt = pd.to_datetime(trade_date, format='%Y%m%d')
             result['list_date_dt'] = pd.to_datetime(result['list_date'], format='%Y%m%d', errors='coerce')
