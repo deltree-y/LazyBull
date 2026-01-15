@@ -27,8 +27,8 @@ def test_calculate_commission():
     # 测试最小佣金
     assert model.calculate_commission(1000) == 5.0  # 1000 * 0.0003 = 0.3 < 5
     
-    # 测试正常佣金
-    assert model.calculate_commission(100000) == 30.0  # 100000 * 0.0003 = 30
+    # 测试正常佣金 (使用近似比较)
+    assert abs(model.calculate_commission(100000) - 30.0) < 0.01  # 100000 * 0.0003 ≈ 30
 
 
 def test_calculate_stamp_tax():
