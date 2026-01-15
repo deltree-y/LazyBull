@@ -22,7 +22,8 @@ from src.lazybull.data import Storage, TushareClient
 def main():
     """主函数"""
     # 初始化日志
-    setup_logger(log_level="INFO")
+    setup_logger(log_level="DEBUG")
+    get_config()  # 确保配置已加载
     
     logger.info("=" * 60)
     logger.info("开始拉取数据")

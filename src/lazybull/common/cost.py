@@ -11,10 +11,10 @@ class CostModel:
     
     def __init__(
         self,
-        commission_rate: float = 0.0003,
-        min_commission: float = 5.0,
-        stamp_tax: float = 0.001,
-        slippage: float = 0.001
+        commission_rate: float = 0.0001954, # 佣金费率（买卖双向）
+        min_commission: float = 5.0,        # 最小佣金（元）
+        stamp_tax: float = 0.0005,          # 印花税（仅卖出）
+        slippage: float = 0.0005,           # 滑点比率
     ):
         """初始化成本模型
         
