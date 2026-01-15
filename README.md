@@ -110,11 +110,18 @@ cp .env.example .env
 # 1. 拉取数据 (需要TuShare token)
 python scripts/pull_data.py
 
-# 2. 运行回测 (如无数据会使用mock数据演示)
+# 2. 构建特征 (日频截面特征 + 5日标签)
+python scripts/build_features.py --start_date 20230101 --end_date 20231231
+
+# 或者一步完成（自动拉取数据并构建特征）
+python scripts/build_features.py --start_date 20230101 --end_date 20231231 --pull_data
+
+# 3. 运行回测 (如无数据会使用mock数据演示)
 python scripts/run_backtest.py
 
-# 3. 查看报告
+# 4. 查看报告和特征
 ls data/reports/
+ls data/features/cs_train/
 ```
 
 ### 运行测试
@@ -125,6 +132,7 @@ pytest
 
 # 运行特定测试
 pytest tests/test_cost.py
+pytest tests/test_features.py
 
 # 查看覆盖率
 pytest --cov=src/lazybull --cov-report=html
@@ -192,6 +200,7 @@ LazyBull/
 
 - [数据契约](docs/data_contract.md): 各数据层的字段规范与主键约定
 - [回测假设](docs/backtest_assumptions.md): 回测系统的假设、简化与局限性
+- [特征与标签定义](docs/features_schema.md): 日频特征构建、标签计算、过滤规则说明
 - [项目路线图](docs/roadmap.md): 分阶段开发计划
 
 ---
@@ -216,7 +225,45 @@ stock_basic = client.get_stock_basic()
 storage.save_raw(stock_basic, "stock_basic")
 ```
 
-### 2. 构建股票池
+### 2. 构建日频特征与标签
+
+```python
+from src.lazybull.data import DataLoader, Storage
+from src.lazybull.features import FeatureBuilder
+
+# 初始化
+storage = Storage()
+loader = DataLoader(storage)
+builder = FeatureBuilder(
+    min_list_days=60,  # 最小上市60天
+    horizon=5          # 预测未来5个交易日
+)
+
+# 加载数据
+trade_cal = loader.load_trade_cal()
+stock_basic = loader.load_stock_basic()
+daily_data = storage.load_raw("daily")
+adj_factor = storage.load_raw("adj_factor")
+
+# 构建单日特征
+features = builder.build_features_for_day(
+    trade_date='20230110',
+    trade_cal=trade_cal,
+    daily_data=daily_data,
+    adj_factor=adj_factor,
+    stock_basic=stock_basic
+)
+
+# 保存特征
+storage.save_cs_train_day(features, '20230110')
+
+# 加载特征
+features = storage.load_cs_train_day('20230110')
+print(f"样本数: {len(features)}")
+print(f"特征列: {features.columns.tolist()}")
+```
+
+### 3. 构建股票池
 
 ```python
 from src.lazybull.universe import BasicUniverse
@@ -240,7 +287,7 @@ stocks = universe.get_stocks(pd.Timestamp('2023-12-31'))
 print(f"股票池大小: {len(stocks)}")
 ```
 
-### 3. 运行回测
+### 4. 运行回测
 
 ```python
 from src.lazybull.backtest import BacktestEngine, Reporter
