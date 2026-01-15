@@ -107,6 +107,31 @@ class Storage:
         """
         return self._load_data(self.features_path / name, format)
     
+    def save_cs_train_day(self, df: pd.DataFrame, trade_date: str, format: str = "parquet") -> None:
+        """保存单日截面训练数据
+        
+        Args:
+            df: 数据DataFrame
+            trade_date: 交易日期，格式YYYYMMDD
+            format: 文件格式，parquet/csv
+        """
+        cs_train_path = self.features_path / "cs_train"
+        cs_train_path.mkdir(parents=True, exist_ok=True)
+        self._save_data(df, cs_train_path / trade_date, format)
+    
+    def load_cs_train_day(self, trade_date: str, format: str = "parquet") -> Optional[pd.DataFrame]:
+        """加载单日截面训练数据
+        
+        Args:
+            trade_date: 交易日期，格式YYYYMMDD
+            format: 文件格式
+            
+        Returns:
+            数据DataFrame，不存在返回None
+        """
+        cs_train_path = self.features_path / "cs_train"
+        return self._load_data(cs_train_path / trade_date, format)
+    
     def _save_data(self, df: pd.DataFrame, path: Path, format: str) -> None:
         """保存数据
         
