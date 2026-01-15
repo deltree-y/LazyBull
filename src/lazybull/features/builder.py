@@ -284,14 +284,15 @@ class FeatureBuilder:
         Returns:
             包含特征的DataFrame
         """
-        # 初始化特征DataFrame
-        features = current_data[['trade_date', 'ts_code']].copy()
+        # 初始化特征DataFrame，包含vol和amount用于后续过滤
+        features = current_data[['trade_date', 'ts_code', 'vol', 'amount']].copy()
         
         # 当日收益率（已在数据中）
         features = features.merge(
             current_data[['ts_code', 'pct_chg']],
             on='ts_code',
-            how='left'
+            how='left',
+            suffixes=('', '_dup')
         )
         features.rename(columns={'pct_chg': 'ret_1'}, inplace=True)
         features['ret_1'] = features['ret_1'] / 100.0  # 转换为小数
@@ -471,7 +472,10 @@ class FeatureBuilder:
         
         # 3. 停牌标记
         # 简化处理：如果当日成交量为0或极小，视为停牌
-        result['suspend'] = (result.get('vol', 0) <= 0).astype(int)
+        if 'vol' in result.columns:
+            result['suspend'] = (result['vol'] <= 0).astype(int)
+        else:
+            result['suspend'] = 0
         
         # 如果有停复牌信息，可以进一步完善
         if suspend_info is not None and len(suspend_info) > 0:
