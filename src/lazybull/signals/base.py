@@ -60,9 +60,10 @@ class EqualWeightSignal(Signal):
             data: 数据字典（此信号不使用）
             
         Returns:
-            信号字典，前N只股票等权
+            信号字典，前N只股票等权（注：此处简单选择前N只，实际应用中
+            若需要特定排序逻辑应使用FactorSignal或自定义信号类）
         """
-        # 简单选择前N只（实际应用中应该有排序逻辑）
+        # 等权策略简单选择前N只股票（假设universe已按某种规则排序）
         selected = universe[:self.top_n]
         
         if not selected:

@@ -100,7 +100,7 @@ class BasicUniverse(Universe):
         Args:
             stock_basic: 股票基本信息DataFrame
             exclude_st: 是否排除ST股票
-            min_market_cap: 最小市值（亿元）
+            min_market_cap: 最小市值（亿元）- 暂未实现，需要额外的市值数据
             min_list_days: 最少上市天数
             markets: 市场列表，如 ["主板", "创业板"]
         """
@@ -134,8 +134,9 @@ class BasicUniverse(Universe):
         if self.min_list_days:
             stocks = self.filter_list_days(stocks, date, self.min_list_days)
         
-        # 市值过滤（需要额外数据，这里仅保留接口）
-        # if self.min_market_cap:
+        # 市值过滤（需要daily_basic数据，当前未实现）
+        # TODO: 实现市值过滤需要在调用时传入daily_basic数据
+        # if self.min_market_cap and daily_basic is not None:
         #     stocks = self.filter_market_cap(stocks, self.min_market_cap)
         
         stock_list = stocks['ts_code'].tolist()

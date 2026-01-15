@@ -1,7 +1,9 @@
 # Core dependencies
-# Note: TensorFlow 2.10 is required for Python 3.9.13, but not available for Python 3.12+
-# For development/testing on Python 3.12+, TensorFlow is optional
-# tensorflow==2.10.1; python_version < "3.11"
+# 注意：TensorFlow 2.10 仅支持 Python 3.9-3.10
+# 在 Python 3.11+ 环境下，TensorFlow >= 2.12
+# 本项目目标环境为 Python 3.9.13 + TensorFlow 2.10.1
+# 当前requirements.txt为简化依赖，适用于开发测试
+# 生产环境请使用 Poetry 管理精确版本
 pandas>=1.5.0
 numpy>=1.23.0
 pyyaml>=6.0

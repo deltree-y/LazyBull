@@ -75,7 +75,8 @@ def main():
         logger.info(f"数据保存位置: {storage.root_path}")
         logger.info("=" * 60)
         
-    except ValueError as e:
+    except (ValueError, ConnectionError, TimeoutError) as e:
+        # TuShare相关错误（token、网络等）
         logger.error("=" * 60)
         logger.error("数据拉取失败")
         logger.error("=" * 60)

@@ -48,6 +48,10 @@ class TushareClient:
         self.retry_delay = retry_delay
         self.rate_limit = rate_limit
         
+        # 参数验证
+        if rate_limit <= 0:
+            raise ValueError(f"rate_limit 必须大于0，当前值: {rate_limit}")
+        
         # 限频控制
         self._last_request_time = 0.0
         self._request_interval = 60.0 / rate_limit  # 每次请求最小间隔
