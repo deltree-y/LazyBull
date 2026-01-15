@@ -181,7 +181,7 @@ class Storage:
         partition_dir = self.raw_path / name
         
         if not partition_dir.exists():
-            logger.warning(f"分区目录不存在: {partition_dir}")
+            logger.debug(f"分区目录不存在: {partition_dir}，尝试加载非分区数据")
             # 尝试加载非分区数据（向后兼容）
             return self.load_raw(name, format)
         
@@ -278,7 +278,7 @@ class Storage:
         partition_dir = self.clean_path / name
         
         if not partition_dir.exists():
-            logger.warning(f"分区目录不存在: {partition_dir}")
+            logger.debug(f"分区目录不存在: {partition_dir}，尝试加载非分区数据")
             # 尝试加载非分区数据（向后兼容）
             return self.load_clean(name, format)
         
@@ -349,10 +349,35 @@ class Storage:
             
         Returns:
             格式化后的日期字符串YYYY-MM-DD
+            
+        Raises:
+            ValueError: 如果日期格式无效
         """
+        import re
+        
         if len(date_str) == 8:  # YYYYMMDD
-            return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            # 验证格式
+            if not re.match(r'^\d{8}$', date_str):
+                raise ValueError(f"不支持的日期格式: {date_str}，YYYYMMDD格式应为8位数字")
+            
+            # 验证日期有效性
+            try:
+                year = int(date_str[:4])
+                month = int(date_str[4:6])
+                day = int(date_str[6:8])
+                
+                # 简单范围检查
+                if not (1900 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31):
+                    raise ValueError(f"日期值超出有效范围: {date_str}")
+                    
+                return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            except (ValueError, IndexError) as e:
+                raise ValueError(f"无效的日期: {date_str}, 错误: {str(e)}")
+                
         elif len(date_str) == 10:  # YYYY-MM-DD
+            # 验证格式
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+                raise ValueError(f"不支持的日期格式: {date_str}，YYYY-MM-DD格式应为YYYY-MM-DD")
             return date_str
         else:
             raise ValueError(f"不支持的日期格式: {date_str}，应为YYYYMMDD或YYYY-MM-DD")

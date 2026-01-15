@@ -69,7 +69,7 @@ class TestStoragePartitioning:
             temp_storage._format_date("202301")  # 太短
         
         with pytest.raises(ValueError):
-            temp_storage._format_date("202301011")  # 太长
+            temp_storage._format_date("202301011")  # 过长
     
     def test_save_raw_by_date(self, temp_storage, sample_data):
         """测试按日期保存原始数据"""

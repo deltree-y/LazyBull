@@ -77,7 +77,7 @@ class DataLoader:
                     # 尝试从YYYYMMDD格式转换
                     try:
                         df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-                    except:
+                    except (ValueError, TypeError):
                         # 如果失败，可能已经是datetime格式
                         df['trade_date'] = pd.to_datetime(df['trade_date'])
                 return df
@@ -91,7 +91,7 @@ class DataLoader:
         if 'trade_date' in df.columns:
             try:
                 df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-            except:
+            except (ValueError, TypeError):
                 df['trade_date'] = pd.to_datetime(df['trade_date'])
         
         # 日期过滤
@@ -130,7 +130,7 @@ class DataLoader:
                 if 'trade_date' in df.columns:
                     try:
                         df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-                    except:
+                    except (ValueError, TypeError):
                         df['trade_date'] = pd.to_datetime(df['trade_date'])
                 return df
         
@@ -143,7 +143,7 @@ class DataLoader:
         if 'trade_date' in df.columns:
             try:
                 df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-            except:
+            except (ValueError, TypeError):
                 df['trade_date'] = pd.to_datetime(df['trade_date'])
         
         # 日期过滤
