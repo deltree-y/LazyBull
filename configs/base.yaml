@@ -1,0 +1,38 @@
+# 基础配置文件
+# 定义项目通用配置项
+
+# 数据路径
+data:
+  root: "./data"
+  raw: "./data/raw"
+  clean: "./data/clean"
+  features: "./data/features"
+  reports: "./data/reports"
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}"
+  rotation: "100 MB"
+  retention: "30 days"
+
+# TuShare配置
+tushare:
+  max_retries: 3
+  retry_delay: 1  # 秒
+  rate_limit: 200  # 每分钟请求数
+
+# 回测基础配置
+backtest:
+  start_date: "20200101"
+  end_date: "20231231"
+  initial_capital: 1000000  # 初始资金100万
+  benchmark: "000300.SH"  # 沪深300
+  rebalance_frequency: "M"  # W=周, M=月, Q=季
+
+# 交易成本配置
+costs:
+  commission_rate: 0.0003  # 佣金费率，双向
+  min_commission: 5  # 最小佣金，元
+  stamp_tax: 0.001  # 印花税，仅卖出
+  slippage: 0.001  # 滑点

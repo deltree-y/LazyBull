@@ -1,0 +1,28 @@
+# 云端运行时配置
+# 用于生产环境/定时任务
+
+# 数据路径（云端存储路径）
+data:
+  root: "/data/lazybull"
+
+# 日志配置
+logging:
+  level: "INFO"
+  sink: "/var/log/lazybull/prod.log"
+
+# 生产模式
+dev_mode: false
+
+# 回测配置（全量数据）
+backtest:
+  start_date: "20150101"
+  end_date: "20231231"
+
+# TuShare限频（云端可用更高频率）
+tushare:
+  rate_limit: 200
+
+# 定时任务配置
+schedule:
+  data_pull: "0 18 * * 1-5"  # 工作日18:00拉取数据
+  backtest_run: "0 20 * * 5"  # 周五20:00运行回测

@@ -1,0 +1,44 @@
+# 红利价值策略配置
+# 继承 base.yaml 并覆盖特定配置
+
+# 策略元信息
+strategy:
+  name: "dividend_value"
+  description: "红利价值策略 - 关注高股息率与低估值"
+  version: "0.1.0"
+
+# 股票池配置
+universe:
+  market: ["主板", "创业板"]  # 排除科创板、北交所
+  min_list_days: 252  # 最少上市交易日（1年）
+  exclude_st: true  # 排除ST股票
+  min_market_cap: 50  # 最小市值（亿元）
+
+# 因子配置
+factors:
+  # 红利因子
+  dividend:
+    - name: "dividend_yield"
+      weight: 0.4
+      direction: 1  # 1=正向，-1=反向
+  
+  # 价值因子
+  value:
+    - name: "pb_ratio"
+      weight: 0.3
+      direction: -1  # 低PB
+    - name: "pe_ratio"
+      weight: 0.3
+      direction: -1  # 低PE
+
+# 信号生成配置
+signals:
+  method: "score"  # score=打分法, rank=排序法
+  top_n: 30  # 持仓股票数量
+  weights: "equal"  # equal=等权, score=按得分加权
+
+# 调仓配置
+rebalance:
+  frequency: "M"  # 月度调仓
+  day_of_month: -1  # -1=月末最后一个交易日
+  turnover_limit: null  # 换手率限制，null表示无限制
