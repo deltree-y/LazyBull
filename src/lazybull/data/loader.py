@@ -193,3 +193,125 @@ class DataLoader:
         
         trading_dates = df[mask]['cal_date'].tolist()
         return sorted(trading_dates)
+    
+    def load_clean_daily(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> Optional[pd.DataFrame]:
+        """加载清洗后的日线行情数据
+        
+        优先尝试从分区数据加载（如果提供了日期范围），否则加载完整数据
+        
+        Args:
+            start_date: 开始日期，格式YYYY-MM-DD或YYYYMMDD
+            end_date: 结束日期，格式YYYY-MM-DD或YYYYMMDD
+            
+        Returns:
+            日线行情DataFrame（包含复权价格列）
+        """
+        # 如果提供了日期范围，尝试从分区加载
+        if start_date and end_date:
+            # 转换日期格式
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            
+            # 尝试从分区加载
+            df = self.storage.load_clean_by_date_range("daily", start_str, end_str)
+            
+            if df is not None:
+                # 确保日期格式一致（YYYYMMDD字符串）
+                if 'trade_date' in df.columns:
+                    # 如果是 datetime，转换为 YYYYMMDD
+                    if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                        df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+                return df
+        
+        # 回退到加载完整数据
+        df = self.storage.load_clean("daily")
+        if df is None:
+            return None
+        
+        # 确保日期格式一致
+        if 'trade_date' in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+        
+        # 日期过滤
+        if start_date:
+            start_dt = self._normalize_date(start_date).replace('-', '')
+            df = df[df['trade_date'] >= start_dt]
+        if end_date:
+            end_dt = self._normalize_date(end_date).replace('-', '')
+            df = df[df['trade_date'] <= end_dt]
+        
+        return df
+    
+    def load_clean_daily_basic(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> Optional[pd.DataFrame]:
+        """加载清洗后的每日指标数据
+        
+        Args:
+            start_date: 开始日期，格式YYYY-MM-DD或YYYYMMDD
+            end_date: 结束日期，格式YYYY-MM-DD或YYYYMMDD
+            
+        Returns:
+            每日指标DataFrame
+        """
+        # 如果提供了日期范围，尝试从分区加载
+        if start_date and end_date:
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            
+            df = self.storage.load_clean_by_date_range("daily_basic", start_str, end_str)
+            
+            if df is not None:
+                if 'trade_date' in df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                        df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+                return df
+        
+        # 回退到加载完整数据
+        df = self.storage.load_clean("daily_basic")
+        if df is None:
+            return None
+        
+        # 确保日期格式一致
+        if 'trade_date' in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+        
+        # 日期过滤
+        if start_date:
+            start_dt = self._normalize_date(start_date).replace('-', '')
+            df = df[df['trade_date'] >= start_dt]
+        if end_date:
+            end_dt = self._normalize_date(end_date).replace('-', '')
+            df = df[df['trade_date'] <= end_dt]
+        
+        return df
+    
+    def load_clean_trade_cal(self) -> Optional[pd.DataFrame]:
+        """加载清洗后的交易日历
+        
+        Returns:
+            交易日历DataFrame
+        """
+        df = self.storage.load_clean("trade_cal")
+        if df is not None:
+            # 保持日期为字符串格式（YYYYMMDD）
+            # clean 层已经标准化为 YYYYMMDD 字符串
+            pass
+        return df
+    
+    def load_clean_stock_basic(self) -> Optional[pd.DataFrame]:
+        """加载清洗后的股票基本信息
+        
+        Returns:
+            股票基本信息DataFrame
+        """
+        df = self.storage.load_clean("stock_basic")
+        return df

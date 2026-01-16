@@ -174,6 +174,11 @@ class FeatureBuilder:
         # 准备数据副本
         daily_adj = daily_data.copy()
         
+        # 检查是否已经包含复权价格（clean 层数据）
+        if 'close_adj' in daily_adj.columns:
+            logger.info("数据已包含复权价格列，跳过复权计算")
+            return daily_adj
+        
         # 确保日期格式一致
         if pd.api.types.is_datetime64_any_dtype(daily_adj['trade_date']):
             daily_adj['trade_date'] = daily_adj['trade_date'].dt.strftime('%Y%m%d')
@@ -446,6 +451,16 @@ class FeatureBuilder:
             添加了过滤标记的DataFrame
         """
         result = df.copy()
+        
+        # 检查是否已有 clean 层的标记（tradable, is_st 等）
+        has_clean_flags = all(col in result.columns for col in ['is_st', 'is_suspended', 'tradable'])
+        
+        if has_clean_flags:
+            logger.info("数据已包含 clean 层过滤标记，跳过标记添加")
+            # 重命名以匹配特征构建器的命名
+            if 'is_suspended' in result.columns and 'suspend' not in result.columns:
+                result['suspend'] = result['is_suspended']
+            return result
         
         # 1. ST标记：通过股票名称判断
         stock_names = stock_basic[['ts_code', 'name']].copy()

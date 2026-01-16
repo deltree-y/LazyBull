@@ -17,7 +17,7 @@ from loguru import logger
 
 from src.lazybull.common.config import get_config
 from src.lazybull.common.logger import setup_logger
-from src.lazybull.data import Storage, TushareClient
+from src.lazybull.data import DataCleaner, DataLoader, Storage, TushareClient
 
 
 def pull_basic_data(client: TushareClient, storage: Storage, start_date: str = "20200101", end_date: str = "20241231"):
@@ -187,6 +187,11 @@ def main():
         action="store_true",
         help="仅拉取基础数据（交易日历、股票列表）"
     )
+    parser.add_argument(
+        "--build-clean",
+        action="store_true",
+        help="拉取完成后自动构建 clean 数据"
+    )
     
     args = parser.parse_args()
     
@@ -198,13 +203,13 @@ def main():
     logger.info("开始拉取数据")
     logger.info("=" * 60)
     logger.info(f"日期范围: {args.start_date} - {args.end_date}")
-    logger.info(f"分区存储: {'是' if args.use_partitioning else '否'}")
-    logger.info(f"跳过基础数据: {'是' if args.skip_basic else '否'}")
-    logger.info(f"仅拉取基础数据: {'是' if args.only_basic else '否'}")    
+    logger.info(f"分区存储: {'否' if args.use_monolithic else '是'}")
+    logger.info(f"仅拉取基础数据: {'是' if args.only_basic else '否'}")
+    logger.info(f"构建 clean 数据: {'是' if args.build_clean else '否'}")
     try:
         # 初始化客户端和存储
         client = TushareClient()
-        storage = Storage(enable_partitioning=args.use_partitioning)
+        storage = Storage(enable_partitioning=not args.use_monolithic)
         
         # 拉取基础数据
         trade_cal = None
@@ -238,9 +243,40 @@ def main():
         logger.info("=" * 60)
         logger.info("数据拉取完成！")
         logger.info(f"数据保存位置: {storage.root_path}")
-        if args.use_partitioning:
+        if not args.use_monolithic:
             logger.info("提示: 使用了按日分区存储，可以通过 list_partitions() 查看所有分区")
         logger.info("=" * 60)
+        
+        # 如果需要，构建 clean 数据
+        if args.build_clean:
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("开始构建 clean 数据")
+            logger.info("=" * 60)
+            
+            try:
+                cleaner = DataCleaner()
+                loader = DataLoader(storage)
+                
+                # 调用 build_clean 逻辑
+                from scripts.build_clean import build_clean_for_date_range
+                build_clean_for_date_range(
+                    storage,
+                    loader,
+                    cleaner,
+                    args.start_date,
+                    args.end_date,
+                    use_partitioning=not args.use_monolithic
+                )
+                
+                logger.info("=" * 60)
+                logger.info("clean 数据构建完成！")
+                logger.info(f"数据保存位置: {storage.clean_path}")
+                logger.info("=" * 60)
+                
+            except Exception as e:
+                logger.error(f"构建 clean 数据失败: {str(e)}")
+                logger.error("可以稍后运行 python scripts/build_clean.py 重试")
         
     except (ValueError, ConnectionError, TimeoutError) as e:
         # TuShare相关错误（token、网络等）
