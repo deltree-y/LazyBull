@@ -457,7 +457,7 @@ class FeatureBuilder:
         
         if has_clean_flags:
             logger.info("数据已包含 clean 层过滤标记，跳过标记添加")
-            # 重命名以匹配特征构建器的命名
+            # 重命名以匹配特征构建器的命名（如果需要）
             if 'is_suspended' in result.columns and 'suspend' not in result.columns:
                 result['suspend'] = result['is_suspended']
             return result

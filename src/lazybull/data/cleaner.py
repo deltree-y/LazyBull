@@ -516,7 +516,7 @@ class DataCleaner:
         missing_adj = df['adj_factor'].isna().sum()
         if missing_adj > 0:
             logger.warning(f"有 {missing_adj} 条记录缺少复权因子，将使用 1.0 作为默认值")
-            df.loc[:, 'adj_factor'] = df['adj_factor'].fillna(1.0)
+            df['adj_factor'] = df['adj_factor'].fillna(1.0)
         
         # 计算复权价格: price_adj = price * adj_factor
         if 'close' in df.columns:

@@ -307,63 +307,61 @@ class TestDataCleaner:
         # 应抛出 ValueError
         with pytest.raises(ValueError, match="主键.*存在重复"):
             cleaner._validate_uniqueness(df, ['key1', 'key2'])
-
-
-def test_clean_daily_with_missing_adj_factor(cleaner):
-    """测试缺少复权因子的情况"""
-    daily_raw = pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ'],
-        'trade_date': ['20230102', '20230102'],
-        'close': [10.0, 11.0],
-        'open': [9.8, 10.8],
-        'high': [10.5, 11.5],
-        'low': [9.5, 10.5],
-        'vol': [1000000, 2000000],
-        'amount': [10000000, 22000000],
-        'pct_chg': [2.0, 1.8]
-    })
     
-    # 复权因子只有部分股票
-    adj_factor_raw = pd.DataFrame({
-        'ts_code': ['000001.SZ'],
-        'trade_date': ['20230102'],
-        'adj_factor': [1.1]
-    })
+    def test_clean_daily_with_missing_adj_factor(self, cleaner):
+        """测试缺少复权因子的情况"""
+        daily_raw = pd.DataFrame({
+            'ts_code': ['000001.SZ', '000002.SZ'],
+            'trade_date': ['20230102', '20230102'],
+            'close': [10.0, 11.0],
+            'open': [9.8, 10.8],
+            'high': [10.5, 11.5],
+            'low': [9.5, 10.5],
+            'vol': [1000000, 2000000],
+            'amount': [10000000, 22000000],
+            'pct_chg': [2.0, 1.8]
+        })
+        
+        # 复权因子只有部分股票
+        adj_factor_raw = pd.DataFrame({
+            'ts_code': ['000001.SZ'],
+            'trade_date': ['20230102'],
+            'adj_factor': [1.1]
+        })
+        
+        result = cleaner.clean_daily(daily_raw, adj_factor_raw)
+        
+        # 检查所有股票都有复权价格（缺失的用1.0填充）
+        assert 'close_adj' in result.columns
+        assert len(result) == 2
+        assert not result['close_adj'].isna().any()
+        
+        # 验证计算
+        assert abs(result[result['ts_code'] == '000001.SZ']['close_adj'].iloc[0] - 10.0 * 1.1) < 0.01
+        assert abs(result[result['ts_code'] == '000002.SZ']['close_adj'].iloc[0] - 11.0 * 1.0) < 0.01
     
-    result = cleaner.clean_daily(daily_raw, adj_factor_raw)
-    
-    # 检查所有股票都有复权价格（缺失的用1.0填充）
-    assert 'close_adj' in result.columns
-    assert len(result) == 2
-    assert not result['close_adj'].isna().any()
-    
-    # 验证计算
-    assert abs(result[result['ts_code'] == '000001.SZ']['close_adj'].iloc[0] - 10.0 * 1.1) < 0.01
-    assert abs(result[result['ts_code'] == '000002.SZ']['close_adj'].iloc[0] - 11.0 * 1.0) < 0.01
-
-
-def test_clean_daily_with_negative_volume(cleaner):
-    """测试过滤负成交量"""
-    daily_raw = pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ'],
-        'trade_date': ['20230102'] * 3,
-        'close': [10.0, 11.0, 12.0],
-        'open': [9.8, 10.8, 11.8],
-        'high': [10.5, 11.5, 12.5],
-        'low': [9.5, 10.5, 11.5],
-        'vol': [1000000, -100, 2000000],  # 第二个为负
-        'amount': [10000000, 1100, 24000000],
-        'pct_chg': [2.0, 1.0, 3.0]
-    })
-    
-    adj_factor_raw = pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ'],
-        'trade_date': ['20230102'] * 3,
-        'adj_factor': [1.0] * 3
-    })
-    
-    result = cleaner.clean_daily(daily_raw, adj_factor_raw)
-    
-    # 负成交量的记录应该被过滤
-    assert len(result) == 2
-    assert '000002.SZ' not in result['ts_code'].values
+    def test_clean_daily_with_negative_volume(self, cleaner):
+        """测试过滤负成交量"""
+        daily_raw = pd.DataFrame({
+            'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ'],
+            'trade_date': ['20230102'] * 3,
+            'close': [10.0, 11.0, 12.0],
+            'open': [9.8, 10.8, 11.8],
+            'high': [10.5, 11.5, 12.5],
+            'low': [9.5, 10.5, 11.5],
+            'vol': [1000000, -100, 2000000],  # 第二个为负
+            'amount': [10000000, 1100, 24000000],
+            'pct_chg': [2.0, 1.0, 3.0]
+        })
+        
+        adj_factor_raw = pd.DataFrame({
+            'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ'],
+            'trade_date': ['20230102'] * 3,
+            'adj_factor': [1.0] * 3
+        })
+        
+        result = cleaner.clean_daily(daily_raw, adj_factor_raw)
+        
+        # 负成交量的记录应该被过滤
+        assert len(result) == 2
+        assert '000002.SZ' not in result['ts_code'].values
