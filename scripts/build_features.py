@@ -18,7 +18,7 @@ import argparse
 from loguru import logger
 
 from src.lazybull.common.logger import setup_logger
-from src.lazybull.data import DataLoader, Storage, TushareClient
+from src.lazybull.data import DataCleaner, DataLoader, Storage, TushareClient
 from src.lazybull.features import FeatureBuilder
 
 
@@ -58,6 +58,19 @@ def parse_args():
         "--pull_data",
         action="store_true",
         help="是否先拉取所需数据（默认：否）"
+    )
+    
+    parser.add_argument(
+        "--auto_build_clean",
+        action="store_true",
+        default=True,
+        help="当 clean 数据不存在时自动从 raw 构建（默认：是）"
+    )
+    
+    parser.add_argument(
+        "--use_raw",
+        action="store_true",
+        help="强制使用 raw 数据而不是 clean 数据（默认：否）"
     )
     
     return parser.parse_args()
@@ -150,30 +163,131 @@ def main():
             client = TushareClient()
             pull_required_data(client, storage, args.start_date, args.end_date)
         
-        # 加载数据
+        # 加载数据：优先从 clean 层加载，如不存在则从 raw 层加载或自动构建
         logger.info("加载基础数据...")
-        trade_cal = loader.load_trade_cal()
-        stock_basic = loader.load_stock_basic()
-        daily_data = storage.load_raw("daily")
-        adj_factor = storage.load_raw("adj_factor")
         
-        # 检查数据是否存在
-        if trade_cal is None:
-            raise ValueError("交易日历数据不存在，请先运行 python scripts/pull_data.py")
+        use_clean_data = not args.use_raw
+        daily_data = None
+        trade_cal = None
+        stock_basic = None
         
-        if stock_basic is None:
-            raise ValueError("股票基本信息不存在，请先运行 python scripts/pull_data.py")
+        if use_clean_data:
+            logger.info("尝试从 clean 层加载数据...")
+            
+            # 加载 clean 层的交易日历和股票基本信息
+            trade_cal_clean = loader.load_clean_trade_cal()
+            stock_basic_clean = loader.load_clean_stock_basic()
+            
+            # 检查 clean 数据是否完整
+            clean_daily_exists = storage.load_clean("daily") is not None or \
+                                len(storage.list_partitions("clean", "daily")) > 0
+            
+            if trade_cal_clean is not None and stock_basic_clean is not None and clean_daily_exists:
+                logger.info("✓ clean 层数据可用")
+                trade_cal = trade_cal_clean
+                stock_basic = stock_basic_clean
+                
+                # 转换日期格式以兼容 loader.get_trading_dates
+                if 'cal_date' in trade_cal.columns:
+                    if not pd.api.types.is_datetime64_any_dtype(trade_cal['cal_date']):
+                        trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
+                
+                # 加载 clean daily（将在特征构建循环中使用）
+                # 这里先标记使用 clean 数据
+                daily_data = "CLEAN"  # 占位符，实际加载在循环中
+                
+            else:
+                logger.warning("clean 层数据不完整")
+                
+                if args.auto_build_clean:
+                    logger.info("尝试自动构建 clean 数据...")
+                    
+                    try:
+                        # 加载 raw 数据
+                        trade_cal_raw = storage.load_raw("trade_cal")
+                        stock_basic_raw = storage.load_raw("stock_basic")
+                        
+                        if trade_cal_raw is None or stock_basic_raw is None:
+                            raise ValueError("缺少 raw 层基础数据")
+                        
+                        # 构建 clean 数据
+                        cleaner = DataCleaner()
+                        
+                        logger.info("清洗交易日历...")
+                        trade_cal_clean = cleaner.clean_trade_cal(trade_cal_raw)
+                        storage.save_clean(trade_cal_clean, "trade_cal", is_force=True)
+                        
+                        logger.info("清洗股票基本信息...")
+                        stock_basic_clean = cleaner.clean_stock_basic(stock_basic_raw)
+                        storage.save_clean(stock_basic_clean, "stock_basic", is_force=True)
+                        
+                        # 简化：直接使用 build_clean 脚本的逻辑
+                        import pandas as pd
+                        from scripts.build_clean import build_clean_for_date_range
+                        
+                        start_dt = pd.to_datetime(args.start_date, format='%Y%m%d') - pd.DateOffset(months=1)
+                        end_dt = pd.to_datetime(args.end_date, format='%Y%m%d') + pd.DateOffset(months=1)
+                        
+                        build_clean_for_date_range(
+                            storage,
+                            loader,
+                            cleaner,
+                            start_dt.strftime('%Y%m%d'),
+                            end_dt.strftime('%Y%m%d'),
+                            use_partitioning=True
+                        )
+                        
+                        logger.info("✓ clean 数据自动构建完成")
+                        
+                        # 重新加载
+                        trade_cal = trade_cal_clean
+                        stock_basic = stock_basic_clean
+                        
+                        # 转换日期格式
+                        if 'cal_date' in trade_cal.columns:
+                            if not pd.api.types.is_datetime64_any_dtype(trade_cal['cal_date']):
+                                trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
+                        
+                        daily_data = "CLEAN"
+                        
+                    except Exception as e:
+                        logger.warning(f"自动构建 clean 数据失败: {str(e)}")
+                        logger.info("回退到使用 raw 数据")
+                        use_clean_data = False
+                else:
+                    logger.info("auto_build_clean 未启用，回退到使用 raw 数据")
+                    use_clean_data = False
         
-        if daily_data is None:
-            raise ValueError("日线行情数据不存在，请先运行 python scripts/pull_data.py")
-        
-        if adj_factor is None:
-            raise ValueError("复权因子数据不存在，请使用 --pull_data 参数拉取")
-        
-        logger.info(f"交易日历: {len(trade_cal)} 条")
-        logger.info(f"股票基本信息: {len(stock_basic)} 条")
-        logger.info(f"日线行情: {len(daily_data)} 条")
-        logger.info(f"复权因子: {len(adj_factor)} 条")
+        # 如果不使用 clean 或 clean 构建失败，使用 raw 数据
+        if not use_clean_data or daily_data != "CLEAN":
+            logger.info("从 raw 层加载数据...")
+            trade_cal = loader.load_trade_cal()
+            stock_basic = loader.load_stock_basic()
+            daily_data = storage.load_raw("daily")
+            adj_factor = storage.load_raw("adj_factor")
+            
+            # 检查数据是否存在
+            if trade_cal is None:
+                raise ValueError("交易日历数据不存在，请先运行 python scripts/pull_data.py")
+            
+            if stock_basic is None:
+                raise ValueError("股票基本信息不存在，请先运行 python scripts/pull_data.py")
+            
+            if daily_data is None:
+                raise ValueError("日线行情数据不存在，请先运行 python scripts/pull_data.py")
+            
+            if adj_factor is None:
+                raise ValueError("复权因子数据不存在，请使用 --pull_data 参数拉取")
+            
+            logger.info(f"交易日历: {len(trade_cal)} 条")
+            logger.info(f"股票基本信息: {len(stock_basic)} 条")
+            logger.info(f"日线行情: {len(daily_data)} 条")
+            logger.info(f"复权因子: {len(adj_factor)} 条")
+        else:
+            logger.info(f"交易日历: {len(trade_cal)} 条")
+            logger.info(f"股票基本信息: {len(stock_basic)} 条")
+            logger.info("日线行情: 将从 clean 层按需加载")
+            adj_factor = None  # clean 数据已包含复权价格
         
         # 获取交易日列表
         trading_dates = loader.get_trading_dates(
@@ -198,6 +312,29 @@ def main():
         success_count = 0
         skip_count = 0
         error_count = 0
+        
+        # 如果使用 clean 数据，需要加载全量数据或使用不同方式
+        if use_clean_data and daily_data == "CLEAN":
+            logger.info("使用 clean 层数据构建特征")
+            
+            # 尝试加载 clean 日线数据（含复权价格）
+            # 扩展日期范围以包含历史数据
+            start_dt = pd.to_datetime(args.start_date, format='%Y%m%d') - pd.DateOffset(months=1)
+            end_dt = pd.to_datetime(args.end_date, format='%Y%m%d') + pd.DateOffset(months=1)
+            
+            daily_clean = loader.load_clean_daily(
+                start_dt.strftime('%Y%m%d'),
+                end_dt.strftime('%Y%m%d')
+            )
+            
+            if daily_clean is None:
+                raise ValueError("无法加载 clean 日线数据")
+            
+            logger.info(f"clean 日线数据: {len(daily_clean)} 条记录")
+            
+            # clean 数据已包含复权价格，使用空的 adj_factor（FeatureBuilder 会检测 close_adj 列）
+            daily_data = daily_clean
+            adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
         
         for i, trade_date in enumerate(trading_dates_str, 1):
             logger.info(f"[{i}/{len(trading_dates_str)}] 构建 {trade_date} 特征...")

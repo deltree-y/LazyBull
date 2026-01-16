@@ -108,21 +108,48 @@ cp .env.example .env
 
 ```bash
 # 1. 拉取数据 (需要TuShare token)
-python scripts/pull_data.py
+python scripts/pull_data.py --start-date 20230101 --end-date 20231231
 
-# 2. 构建特征 (日频截面特征 + 5日标签)
+# 1b. 拉取数据并自动构建 clean 层（推荐）
+python scripts/pull_data.py --start-date 20230101 --end-date 20231231 --build-clean
+
+# 2. 构建 clean 数据（如果之前未使用 --build-clean）
+python scripts/build_clean.py --start-date 20230101 --end-date 20231231
+
+# 3. 构建特征 (日频截面特征 + 5日标签)
+# 默认优先使用 clean 数据，如不存在会自动从 raw 构建
 python scripts/build_features.py --start_date 20230101 --end_date 20231231
 
-# 或者一步完成（自动拉取数据并构建特征）
+# 或者一步完成（自动拉取数据、构建 clean 和特征）
 python scripts/build_features.py --start_date 20230101 --end_date 20231231 --pull_data
 
-# 3. 运行回测 (如无数据会使用mock数据演示)
+# 4. 运行回测 (如无数据会使用mock数据演示)
 python scripts/run_backtest.py
 
-# 4. 查看报告和特征
-ls data/reports/
-ls data/features/cs_train/
+# 5. 查看数据和报告
+ls data/raw/daily/          # 原始数据（按日分区）
+ls data/clean/daily/        # 清洗后数据（包含复权价格和可交易标记）
+ls data/features/cs_train/  # 特征数据
+ls data/reports/            # 回测报告
 ```
+
+### 数据层说明
+
+LazyBull 采用三层数据架构：
+
+- **raw 层**: 从 TuShare 直接拉取的原始数据，保持数据源格式
+- **clean 层**: 经过清洗和标准化的数据，包含：
+  - 去重（按主键 ts_code+trade_date）
+  - 类型统一（trade_date 统一为 YYYYMMDD 字符串）
+  - 复权价格（close_adj, open_adj, high_adj, low_adj）
+  - 可交易标记（tradable, is_st, is_suspended, is_limit_up, is_limit_down）
+  - 数据校验和排序
+- **features 层**: 基于 clean 数据计算的特征和标签，用于模型训练
+
+**推荐工作流**:
+1. 使用 `pull_data.py --build-clean` 拉取并清洗数据
+2. 使用 `build_features.py` 构建特征（自动使用 clean 数据）
+3. clean 数据可被多个下游任务复用，避免重复清洗
 
 ### 运行测试
 
@@ -133,6 +160,7 @@ pytest
 # 运行特定测试
 pytest tests/test_cost.py
 pytest tests/test_features.py
+pytest tests/test_cleaner.py
 
 # 查看覆盖率
 pytest --cov=src/lazybull --cov-report=html
@@ -209,25 +237,68 @@ LazyBull/
 
 ## 🎯 使用示例
 
-### 1. 拉取数据
+### 1. 拉取和清洗数据
 
 ```python
-from src.lazybull.data import TushareClient, Storage
+from src.lazybull.data import TushareClient, Storage, DataCleaner
 
-# 初始化客户端
+# 初始化
 client = TushareClient()  # 从环境变量读取TS_TOKEN
 storage = Storage()
+cleaner = DataCleaner()
 
-# 拉取交易日历
+# 拉取原始数据
 trade_cal = client.get_trade_cal("20230101", "20231231")
 storage.save_raw(trade_cal, "trade_cal")
 
-# 拉取股票列表
 stock_basic = client.get_stock_basic()
 storage.save_raw(stock_basic, "stock_basic")
+
+# 清洗数据
+trade_cal_clean = cleaner.clean_trade_cal(trade_cal)
+storage.save_clean(trade_cal_clean, "trade_cal")
+
+stock_basic_clean = cleaner.clean_stock_basic(stock_basic)
+storage.save_clean(stock_basic_clean, "stock_basic")
 ```
 
-### 2. 构建日频特征与标签
+### 2. 使用 clean 数据构建特征
+
+```python
+from src.lazybull.data import DataLoader, Storage
+from src.lazybull.features import FeatureBuilder
+
+# 初始化
+storage = Storage()
+loader = DataLoader(storage)
+builder = FeatureBuilder(
+    min_list_days=60,  # 最小上市60天
+    horizon=5          # 预测未来5个交易日
+)
+
+# 加载 clean 数据（优先使用，已包含复权价格）
+trade_cal = loader.load_clean_trade_cal()
+stock_basic = loader.load_clean_stock_basic()
+daily_clean = loader.load_clean_daily("20230101", "20231231")
+
+# clean 数据已包含复权价格列：close_adj, open_adj, high_adj, low_adj
+# 以及可交易标记：tradable, is_st, is_suspended, is_limit_up, is_limit_down
+print(daily_clean.columns)
+
+# 构建单日特征（clean 数据自动跳过复权计算）
+features = builder.build_features_for_day(
+    trade_date='20230110',
+    trade_cal=trade_cal,
+    daily_data=daily_clean,
+    adj_factor=pd.DataFrame(),  # clean 数据已含复权价格，无需提供
+    stock_basic=stock_basic
+)
+
+# 保存特征
+storage.save_cs_train_day(features, '20230110')
+```
+
+### 3. 传统方式：使用 raw 数据
 
 ```python
 from src.lazybull.data import DataLoader, Storage
@@ -265,7 +336,7 @@ print(f"样本数: {len(features)}")
 print(f"特征列: {features.columns.tolist()}")
 ```
 
-### 3. 构建股票池
+### 4. 构建股票池
 
 ```python
 from src.lazybull.universe import BasicUniverse
@@ -289,7 +360,7 @@ stocks = universe.get_stocks(pd.Timestamp('2023-12-31'))
 print(f"股票池大小: {len(stocks)}")
 ```
 
-### 4. 运行回测
+### 5. 运行回测
 
 ```python
 from src.lazybull.backtest import BacktestEngine, Reporter
