@@ -45,8 +45,9 @@ clean 层在 raw 层基础上执行以下数据处理：
 - 避免数据不足导致的特征计算错误
 
 **涨跌停标记**
-- 识别涨停：`(close - pre_close) / pre_close >= 0.095`
-- 识别跌停：`(close - pre_close) / pre_close <= -0.095`
+- 识别涨停和跌停：基于涨跌幅（pct_chg）判断
+  - 非 ST 股票：涨跌幅 >= ±9.9%
+  - ST 股票：涨跌幅 >= ±4.9%
 - 仅标记不过滤，保留字段用于后续分析
 
 #### 5. 复权后行情计算
@@ -566,10 +567,19 @@ for feat in required_features:
 ```
 Python >= 3.9
 pandas >= 1.5.0
-tushare >= 1.2.89
+numpy >= 1.23.0
+pyyaml >= 6.0
+python-dotenv >= 1.0.0
+pyarrow >= 10.0.0
 loguru >= 0.6.0
-pytest >= 7.2.0 (开发依赖)
+tushare >= 1.2.89
+
+# 开发依赖
+pytest >= 7.2.0
+pytest-cov >= 4.0.0
 ```
+
+详见 `requirements.txt` 或 `pyproject.toml`
 
 ## 总结
 

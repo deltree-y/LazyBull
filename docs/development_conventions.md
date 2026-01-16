@@ -38,19 +38,11 @@ def calculate_returns(prices: pd.DataFrame) -> pd.DataFrame:
     return returns
 
 
-# ❌ 不推荐：英文注释
-def calculate_returns(prices: pd.DataFrame) -> pd.DataFrame:
-    """Calculate returns
-    
-    Args:
-        prices: Price data with close column
-        
-    Returns:
-        DataFrame with returns column
-    """
-    # Calculate daily returns
-    returns = prices['close'].pct_change()
-    return returns
+# ❌ 不推荐：英文注释（此为反例，请勿使用）
+# def calculate_returns_wrong_example(prices):
+#     """Calculate returns [反例]"""
+#     # Calculate daily returns [反例]
+#     pass
 ```
 
 **例外情况**：
@@ -264,14 +256,41 @@ data/
 - **文件命名**：YYYY-MM-DD（如 "2023-01-01"）
 - **内部处理**：pandas.Timestamp
 
-工具函数统一转换：
+工具函数统一转换（需添加错误处理）：
 
 ```python
-# YYYYMMDD -> YYYY-MM-DD
-formatted = pd.to_datetime(date_str, format='%Y%m%d').strftime('%Y-%m-%d')
+import pandas as pd
+from typing import Optional
 
-# YYYY-MM-DD -> YYYYMMDD
-formatted = pd.to_datetime(date_str).strftime('%Y%m%d')
+def format_date_to_dash(date_str: str) -> Optional[str]:
+    """将 YYYYMMDD 格式转换为 YYYY-MM-DD
+    
+    Args:
+        date_str: YYYYMMDD 格式的日期字符串
+        
+    Returns:
+        YYYY-MM-DD 格式的日期字符串，如果格式错误返回 None
+    """
+    try:
+        return pd.to_datetime(date_str, format='%Y%m%d').strftime('%Y-%m-%d')
+    except (ValueError, TypeError) as e:
+        logger.warning(f"日期格式转换失败: {date_str}, 错误: {e}")
+        return None
+
+def format_date_to_compact(date_str: str) -> Optional[str]:
+    """将 YYYY-MM-DD 格式转换为 YYYYMMDD
+    
+    Args:
+        date_str: YYYY-MM-DD 格式的日期字符串
+        
+    Returns:
+        YYYYMMDD 格式的日期字符串，如果格式错误返回 None
+    """
+    try:
+        return pd.to_datetime(date_str).strftime('%Y%m%d')
+    except (ValueError, TypeError) as e:
+        logger.warning(f"日期格式转换失败: {date_str}, 错误: {e}")
+        return None
 ```
 
 ### 字段命名
@@ -481,9 +500,20 @@ pip freeze > requirements.txt
 
 ### 版本固定
 
-- 生产依赖：固定主版本（如 `pandas>=1.5.0,<2.0.0`）
-- 开发依赖：可灵活（如 `pytest>=7.2.0`）
-- 特殊依赖：严格固定（如 `tensorflow==2.10`）
+根据项目实际依赖（`requirements.txt`）：
+
+- **核心依赖**：
+  - `pandas>=1.5.0` - 数据处理
+  - `numpy>=1.23.0` - 数值计算
+  - `tushare>=1.2.89` - 数据接口
+  - `pyarrow>=10.0.0` - Parquet 支持
+  - `loguru>=0.6.0` - 日志
+  
+- **开发依赖**：
+  - `pytest>=7.2.0` - 测试框架
+  - `pytest-cov>=4.0.0` - 覆盖率
+  - `black>=22.10.0` - 格式化
+  - `flake8>=5.0.0` - 代码检查
 
 ## 文档规范
 
