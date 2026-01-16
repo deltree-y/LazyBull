@@ -70,7 +70,7 @@ class DataCleaner:
         df = raw_df.copy()
         
         # 1. 类型统一
-        df = self._standardize_date_columns(df, ['list_date', 'delist_date'])
+        df = self._standardize_date_columns(df, ['list_date'])
         
         # 2. ts_code 统一为字符串
         if 'ts_code' in df.columns:
