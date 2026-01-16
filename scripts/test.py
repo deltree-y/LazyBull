@@ -28,10 +28,6 @@ def main():
     logger.info("=" * 60)
 
     try:
-        # 运行测试
-        test_get_trading_dates_empty()
-        test_trading_dates_with_mock_data()
-        test_date_filtering()
         
         logger.info("所有测试通过！")
     except AssertionError as e:

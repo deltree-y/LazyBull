@@ -34,7 +34,7 @@ class Storage:
         
         logger.info(f"数据存储初始化完成，根目录: {self.root_path}, 分区存储: {enable_partitioning}")
     
-    def save_raw(self, df: pd.DataFrame, name: str, format: str = "parquet") -> None:
+    def save_raw(self, df: pd.DataFrame, name: str, format: str = "parquet", is_force: bool = False) -> None:
         """保存原始数据
         
         Args:
@@ -42,9 +42,9 @@ class Storage:
             name: 文件名（不含扩展名）
             format: 文件格式，parquet/csv
         """
-        self._save_data(df, self.raw_path / name, format)
+        self._save_data(df, self.raw_path / name, format, is_force)
     
-    def save_clean(self, df: pd.DataFrame, name: str, format: str = "parquet") -> None:
+    def save_clean(self, df: pd.DataFrame, name: str, format: str = "parquet", is_force: bool = False) -> None:
         """保存清洗后数据
         
         Args:
@@ -52,9 +52,9 @@ class Storage:
             name: 文件名（不含扩展名）
             format: 文件格式，parquet/csv
         """
-        self._save_data(df, self.clean_path / name, format)
+        self._save_data(df, self.clean_path / name, format, is_force)
     
-    def save_features(self, df: pd.DataFrame, name: str, format: str = "parquet") -> None:
+    def save_features(self, df: pd.DataFrame, name: str, format: str = "parquet", is_force: bool = False) -> None:
         """保存特征数据
         
         Args:
@@ -62,9 +62,9 @@ class Storage:
             name: 文件名（不含扩展名）
             format: 文件格式，parquet/csv
         """
-        self._save_data(df, self.features_path / name, format)
+        self._save_data(df, self.features_path / name, format, is_force)
     
-    def save_report(self, df: pd.DataFrame, name: str, format: str = "csv") -> None:
+    def save_report(self, df: pd.DataFrame, name: str, format: str = "csv", is_force: bool = False) -> None:
         """保存报告数据
         
         Args:
@@ -72,7 +72,7 @@ class Storage:
             name: 文件名（不含扩展名）
             format: 文件格式，csv/parquet
         """
-        self._save_data(df, self.reports_path / name, format)
+        self._save_data(df, self.reports_path / name, format, is_force)
     
     def load_raw(self, name: str, format: str = "parquet") -> Optional[pd.DataFrame]:
         """加载原始数据
@@ -407,7 +407,34 @@ class Storage:
         cs_train_path = self.features_path / "cs_train"
         return self._load_data(cs_train_path / trade_date, format)
     
-    def _save_data(self, df: pd.DataFrame, path: Path, format: str) -> None:
+
+    def is_data_exists(self, layer:str, name:str, date: str, format: str="parquet") -> None:
+        """判断文件是否存在
+        
+        Args:
+            layer: 数据层，'raw'或'clean'
+            name: 数据类型名称
+            date: 交易日期，格式YYYYMMDD
+            format: 文件格式
+        """
+        if layer == "raw":
+            base_path = self.raw_path
+        elif layer == "clean":
+            base_path = self.clean_path
+        else:
+            raise ValueError(f"不支持的数据层: {layer}")
+        path = base_path / name / self._format_date(date)
+        
+        if format == "parquet":
+            file_path = path.with_suffix(".parquet")
+        elif format == "csv":
+            file_path = path.with_suffix(".csv")
+        else:
+            raise ValueError(f"不支持的格式: {format}")
+        
+        return file_path.exists()
+        
+    def _save_data(self, df: pd.DataFrame, path: Path, format: str, is_force: bool = False) -> None:
         """保存数据
         
         Args:
@@ -417,10 +444,18 @@ class Storage:
         """
         if format == "parquet":
             file_path = path.with_suffix(".parquet")
-            df.to_parquet(file_path, index=False)
+            if not file_path.exists() or is_force:
+                df.to_parquet(file_path, index=False)
+            else:
+                logger.info(f"文件已存在，跳过保存: {file_path}")
+                return
         elif format == "csv":
             file_path = path.with_suffix(".csv")
-            df.to_csv(file_path, index=False, encoding="utf-8-sig")
+            if not file_path.exists() or is_force:
+                df.to_csv(file_path, index=False, encoding="utf-8-sig")
+            else:
+                logger.info(f"文件已存在，跳过保存: {file_path}")
+                return
         else:
             raise ValueError(f"不支持的格式: {format}")
         

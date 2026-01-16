@@ -20,7 +20,7 @@ from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import Storage, TushareClient
 
 
-def pull_basic_data(client: TushareClient, storage: Storage):
+def pull_basic_data(client: TushareClient, storage: Storage, start_date: str = "20200101", end_date: str = "20241231"):
     """拉取基础数据（交易日历、股票列表）
     
     这些数据不需要按日分区
@@ -28,17 +28,17 @@ def pull_basic_data(client: TushareClient, storage: Storage):
     # 1. 拉取交易日历（2020-2024）
     logger.info("拉取交易日历...")
     trade_cal = client.get_trade_cal(
-        start_date="20200101",
-        end_date="20241231",
+        start_date=start_date,
+        end_date=end_date,
         exchange="SSE"
     )
-    storage.save_raw(trade_cal, "trade_cal")
+    storage.save_raw(trade_cal, "trade_cal", is_force=True)
     logger.info(f"交易日历拉取完成: {len(trade_cal)} 条记录")
     
     # 2. 拉取股票基本信息
     logger.info("拉取股票基本信息...")
     stock_basic = client.get_stock_basic(list_status="L")
-    storage.save_raw(stock_basic, "stock_basic")
+    storage.save_raw(stock_basic, "stock_basic", is_force=True)
     logger.info(f"股票基本信息拉取完成: {len(stock_basic)} 条记录")
     
     return trade_cal
@@ -111,23 +111,51 @@ def pull_daily_data_partitioned(
     total_basic = 0
     
     for i, trade_date in enumerate(trading_dates, 1):
-        logger.info(f"[{i}/{len(trading_dates)}] 处理 {trade_date}...")
+        logger.info(f"[{i}/{len(trading_dates)}]({i/len(trading_dates):.1%}) 处理 {trade_date}...")
         
         try:
             # 拉取日线行情
-            daily_data = client.get_daily(trade_date=trade_date)
-            if len(daily_data) > 0:
-                storage.save_raw_by_date(daily_data, "daily", trade_date)
-                total_daily += len(daily_data)
-                logger.debug(f"  日线: {len(daily_data)} 条")
+            if storage.is_data_exists("raw", "daily", trade_date):
+                logger.info(f"  日线: 文件已存在，跳过拉取")
+            else:
+                daily_data = client.get_daily(trade_date=trade_date)
+                if len(daily_data) > 0:
+                    storage.save_raw_by_date(daily_data, "daily", trade_date)
+                    total_daily += len(daily_data)
             
             # 拉取每日指标
-            daily_basic = client.get_daily_basic(trade_date=trade_date)
-            if len(daily_basic) > 0:
-                storage.save_raw_by_date(daily_basic, "daily_basic", trade_date)
-                total_basic += len(daily_basic)
-                logger.debug(f"  指标: {len(daily_basic)} 条")
-                
+            if storage.is_data_exists("raw", "daily_basic", trade_date):
+                logger.info(f"  指标: 文件已存在，跳过拉取")
+            else:
+                daily_basic = client.get_daily_basic(trade_date=trade_date)
+                if len(daily_basic) > 0:
+                    storage.save_raw_by_date(daily_basic, "daily_basic", trade_date)
+                    total_basic += len(daily_basic)
+
+            # 拉取复权因子
+            if storage.is_data_exists("raw", "adj_factor", trade_date):
+                logger.info(f"  复权因子: 文件已存在，跳过拉取")
+            else:
+                adj_factor = client.get_adj_factor(trade_date=trade_date)
+                if len(adj_factor) > 0:
+                    storage.save_raw_by_date(adj_factor, "adj_factor", trade_date)
+                    
+            # 拉取停复牌信息
+            if storage.is_data_exists("raw", "suspend", trade_date):
+                logger.info(f"  停复牌信息: 文件已存在，跳过拉取")
+            else:
+                suspend = client.get_suspend_d(trade_date=trade_date)
+                if len(suspend) > 0:
+                    storage.save_raw_by_date(suspend, "suspend", trade_date)
+                    
+            # 拉取涨跌停信息
+            if storage.is_data_exists("raw", "stk_limit", trade_date):
+                logger.info(f"  涨跌停信息: 文件已存在，跳过拉取")
+            else:
+                limit_up_down = client.get_stk_limit(trade_date=trade_date)
+                if len(limit_up_down) > 0:
+                    storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
+                    
         except Exception as e:
             logger.error(f"拉取 {trade_date} 数据失败: {str(e)}")
             continue
@@ -141,23 +169,23 @@ def main():
     parser = argparse.ArgumentParser(description="从TuShare拉取数据")
     parser.add_argument(
         "--start-date",
-        default="20230101",
-        help="开始日期，格式YYYYMMDD，默认20230101"
+        default="20200101",
+        help="开始日期，格式YYYYMMDD，默认20200101"
     )
     parser.add_argument(
         "--end-date",
-        default="20231231",
-        help="结束日期，格式YYYYMMDD，默认20231231"
+        default="20251231",
+        help="结束日期，格式YYYYMMDD，默认20251231"
     )
     parser.add_argument(
-        "--use-partitioning",
+        "--use-monolithic",
         action="store_true",
-        help="使用按日分区存储（推荐，默认关闭以保持向后兼容）"
+        help="使用整体分区存储（不推荐，默认关闭）"
     )
     parser.add_argument(
-        "--skip-basic",
+        "--only-basic",
         action="store_true",
-        help="跳过基础数据（交易日历、股票列表）的拉取"
+        help="仅拉取基础数据（交易日历、股票列表）"
     )
     
     args = parser.parse_args()
@@ -171,7 +199,8 @@ def main():
     logger.info("=" * 60)
     logger.info(f"日期范围: {args.start_date} - {args.end_date}")
     logger.info(f"分区存储: {'是' if args.use_partitioning else '否'}")
-    
+    logger.info(f"跳过基础数据: {'是' if args.skip_basic else '否'}")
+    logger.info(f"仅拉取基础数据: {'是' if args.only_basic else '否'}")    
     try:
         # 初始化客户端和存储
         client = TushareClient()
@@ -179,16 +208,21 @@ def main():
         
         # 拉取基础数据
         trade_cal = None
-        if not args.skip_basic:
-            trade_cal = pull_basic_data(client, storage)
+        if args.only_basic:
+            trade_cal = pull_basic_data(client, storage, args.start_date, args.end_date)
+            logger.info("=" * 60)
+            logger.info("仅拉取基础数据，操作完成！")
+            logger.info(f"数据保存位置: {storage.root_path}")
+            logger.info("=" * 60)
+            sys.exit(0)
         
         # 拉取日线数据
-        if args.use_partitioning:
+        if not args.use_monolithic:
             # 如果需要交易日历但之前跳过了，现在加载
             if trade_cal is None:
                 trade_cal = storage.load_raw("trade_cal")
                 if trade_cal is None:
-                    logger.error("无法加载交易日历，请先运行不带 --skip-basic 的命令")
+                    logger.error("无法加载交易日历，请先运行带 --only-basic 的命令")
                     sys.exit(1)
             
             pull_daily_data_partitioned(
