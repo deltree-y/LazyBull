@@ -150,8 +150,10 @@ LazyBull/
 │   ├── runtime_local.yaml     # 本地运行配置
 │   └── runtime_cloud.yaml     # 云端运行配置
 ├── data/                       # 数据目录
-│   ├── raw/                   # 原始数据
-│   ├── clean/                 # 清洗后数据
+│   ├── raw/                   # 原始数据（支持按日分区）
+│   │   └── {name}/            # 按日分区: YYYY-MM-DD.parquet
+│   ├── clean/                 # 清洗后数据（支持按日分区）
+│   │   └── {name}/            # 按日分区: YYYY-MM-DD.parquet
 │   ├── features/              # 特征数据
 │   └── reports/               # 回测报告
 ├── docs/                       # 文档

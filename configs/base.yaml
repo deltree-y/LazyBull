@@ -8,6 +8,10 @@ data:
   clean: "./data/clean"
   features: "./data/features"
   reports: "./data/reports"
+  # 存储配置
+  storage:
+    enable_partitioning: true  # 是否启用按日分区存储（raw/clean层）
+    partition_format: "YYYY-MM-DD"  # 分区日期格式
 
 # 日志配置
 logging:

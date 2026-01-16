@@ -1,7 +1,7 @@
 """数据存储模块"""
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -11,25 +11,28 @@ class Storage:
     """数据存储类
     
     负责数据的持久化存储，优先使用Parquet格式
+    支持按日期分区存储raw和clean数据
     """
     
-    def __init__(self, root_path: str = "./data"):
+    def __init__(self, root_path: str = "./data", enable_partitioning: bool = True):
         """初始化存储
         
         Args:
             root_path: 数据根目录
+            enable_partitioning: 是否启用按日分区存储（raw/clean层）
         """
         self.root_path = Path(root_path)
         self.raw_path = self.root_path / "raw"
         self.clean_path = self.root_path / "clean"
         self.features_path = self.root_path / "features"
         self.reports_path = self.root_path / "reports"
+        self.enable_partitioning = enable_partitioning
         
         # 确保目录存在
         for path in [self.raw_path, self.clean_path, self.features_path, self.reports_path]:
             path.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"数据存储初始化完成，根目录: {self.root_path}")
+        logger.info(f"数据存储初始化完成，根目录: {self.root_path}, 分区存储: {enable_partitioning}")
     
     def save_raw(self, df: pd.DataFrame, name: str, format: str = "parquet") -> None:
         """保存原始数据
@@ -106,6 +109,278 @@ class Storage:
             数据DataFrame，不存在返回None
         """
         return self._load_data(self.features_path / name, format)
+    
+    def save_raw_by_date(
+        self,
+        df: pd.DataFrame,
+        name: str,
+        trade_date: str,
+        format: str = "parquet"
+    ) -> None:
+        """保存按日期分区的原始数据
+        
+        目录结构: data/raw/{name}/{YYYY-MM-DD}.parquet
+        
+        Args:
+            df: 数据DataFrame
+            name: 数据类型名称（如daily, daily_basic, suspend_d等）
+            trade_date: 交易日期，格式YYYYMMDD或YYYY-MM-DD
+            format: 文件格式，parquet/csv
+        """
+        # 转换日期格式为YYYY-MM-DD
+        date_str = self._format_date(trade_date)
+        
+        # 创建分区目录
+        partition_path = self.raw_path / name
+        partition_path.mkdir(parents=True, exist_ok=True)
+        
+        # 保存数据
+        self._save_data(df, partition_path / date_str, format)
+    
+    def load_raw_by_date(
+        self,
+        name: str,
+        trade_date: str,
+        format: str = "parquet"
+    ) -> Optional[pd.DataFrame]:
+        """加载按日期分区的原始数据
+        
+        Args:
+            name: 数据类型名称
+            trade_date: 交易日期，格式YYYYMMDD或YYYY-MM-DD
+            format: 文件格式
+            
+        Returns:
+            数据DataFrame，不存在返回None
+        """
+        # 转换日期格式
+        date_str = self._format_date(trade_date)
+        
+        # 尝试从分区目录加载
+        partition_path = self.raw_path / name / date_str
+        return self._load_data(partition_path, format)
+    
+    def load_raw_by_date_range(
+        self,
+        name: str,
+        start_date: str,
+        end_date: str,
+        format: str = "parquet"
+    ) -> Optional[pd.DataFrame]:
+        """加载日期范围内的原始数据
+        
+        Args:
+            name: 数据类型名称
+            start_date: 开始日期，格式YYYYMMDD或YYYY-MM-DD
+            end_date: 结束日期，格式YYYYMMDD或YYYY-MM-DD
+            format: 文件格式
+            
+        Returns:
+            合并后的数据DataFrame，不存在返回None
+        """
+        partition_dir = self.raw_path / name
+        
+        if not partition_dir.exists():
+            logger.debug(f"分区目录不存在: {partition_dir}，尝试加载非分区数据")
+            # 尝试加载非分区数据（向后兼容）
+            return self.load_raw(name, format)
+        
+        # 转换日期格式
+        start_str = self._format_date(start_date)
+        end_str = self._format_date(end_date)
+        
+        # 收集所有符合条件的文件
+        dfs = []
+        for file_path in sorted(partition_dir.glob(f"*.{format}")):
+            date_part = file_path.stem  # 文件名（不含扩展名）
+            if start_str <= date_part <= end_str:
+                df = self._load_data(partition_dir / date_part, format)
+                if df is not None:
+                    dfs.append(df)
+        
+        if not dfs:
+            logger.warning(f"没有找到符合日期范围的数据: {name} [{start_date}, {end_date}]")
+            return None
+        
+        # 合并所有数据
+        result = pd.concat(dfs, ignore_index=True)
+        logger.info(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
+        return result
+    
+    def save_clean_by_date(
+        self,
+        df: pd.DataFrame,
+        name: str,
+        trade_date: str,
+        format: str = "parquet"
+    ) -> None:
+        """保存按日期分区的清洗数据
+        
+        目录结构: data/clean/{name}/{YYYY-MM-DD}.parquet
+        
+        Args:
+            df: 数据DataFrame
+            name: 数据类型名称（如daily, daily_basic等）
+            trade_date: 交易日期，格式YYYYMMDD或YYYY-MM-DD
+            format: 文件格式，parquet/csv
+        """
+        # 转换日期格式为YYYY-MM-DD
+        date_str = self._format_date(trade_date)
+        
+        # 创建分区目录
+        partition_path = self.clean_path / name
+        partition_path.mkdir(parents=True, exist_ok=True)
+        
+        # 保存数据
+        self._save_data(df, partition_path / date_str, format)
+    
+    def load_clean_by_date(
+        self,
+        name: str,
+        trade_date: str,
+        format: str = "parquet"
+    ) -> Optional[pd.DataFrame]:
+        """加载按日期分区的清洗数据
+        
+        Args:
+            name: 数据类型名称
+            trade_date: 交易日期，格式YYYYMMDD或YYYY-MM-DD
+            format: 文件格式
+            
+        Returns:
+            数据DataFrame，不存在返回None
+        """
+        # 转换日期格式
+        date_str = self._format_date(trade_date)
+        
+        # 尝试从分区目录加载
+        partition_path = self.clean_path / name / date_str
+        return self._load_data(partition_path, format)
+    
+    def load_clean_by_date_range(
+        self,
+        name: str,
+        start_date: str,
+        end_date: str,
+        format: str = "parquet"
+    ) -> Optional[pd.DataFrame]:
+        """加载日期范围内的清洗数据
+        
+        Args:
+            name: 数据类型名称
+            start_date: 开始日期，格式YYYYMMDD或YYYY-MM-DD
+            end_date: 结束日期，格式YYYYMMDD或YYYY-MM-DD
+            format: 文件格式
+            
+        Returns:
+            合并后的数据DataFrame，不存在返回None
+        """
+        partition_dir = self.clean_path / name
+        
+        if not partition_dir.exists():
+            logger.debug(f"分区目录不存在: {partition_dir}，尝试加载非分区数据")
+            # 尝试加载非分区数据（向后兼容）
+            return self.load_clean(name, format)
+        
+        # 转换日期格式
+        start_str = self._format_date(start_date)
+        end_str = self._format_date(end_date)
+        
+        # 收集所有符合条件的文件
+        dfs = []
+        for file_path in sorted(partition_dir.glob(f"*.{format}")):
+            date_part = file_path.stem  # 文件名（不含扩展名）
+            if start_str <= date_part <= end_str:
+                df = self._load_data(partition_dir / date_part, format)
+                if df is not None:
+                    dfs.append(df)
+        
+        if not dfs:
+            logger.warning(f"没有找到符合日期范围的数据: {name} [{start_date}, {end_date}]")
+            return None
+        
+        # 合并所有数据
+        result = pd.concat(dfs, ignore_index=True)
+        logger.info(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
+        return result
+    
+    def list_partitions(self, layer: str, name: str) -> List[str]:
+        """列出某个数据类型的所有分区日期
+        
+        Args:
+            layer: 数据层，'raw'或'clean'
+            name: 数据类型名称
+            
+        Returns:
+            日期列表（格式YYYY-MM-DD），按升序排序
+        """
+        if layer == "raw":
+            partition_dir = self.raw_path / name
+        elif layer == "clean":
+            partition_dir = self.clean_path / name
+        else:
+            raise ValueError(f"不支持的数据层: {layer}")
+        
+        if not partition_dir.exists():
+            return []
+        
+        # 收集所有.parquet文件的日期
+        dates = []
+        for file_path in partition_dir.glob("*.parquet"):
+            date_str = file_path.stem
+            # 验证日期格式（YYYY-MM-DD）
+            if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                dates.append(date_str)
+        
+        # 同时检查.csv文件
+        for file_path in partition_dir.glob("*.csv"):
+            date_str = file_path.stem
+            if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+                if date_str not in dates:
+                    dates.append(date_str)
+        
+        return sorted(dates)
+    
+    def _format_date(self, date_str: str) -> str:
+        """统一日期格式为YYYY-MM-DD
+        
+        Args:
+            date_str: 日期字符串，支持YYYYMMDD或YYYY-MM-DD
+            
+        Returns:
+            格式化后的日期字符串YYYY-MM-DD
+            
+        Raises:
+            ValueError: 如果日期格式无效
+        """
+        import re
+        
+        if len(date_str) == 8:  # YYYYMMDD
+            # 验证格式
+            if not re.match(r'^\d{8}$', date_str):
+                raise ValueError(f"不支持的日期格式: {date_str}，YYYYMMDD格式应为8位数字")
+            
+            # 验证日期有效性
+            try:
+                year = int(date_str[:4])
+                month = int(date_str[4:6])
+                day = int(date_str[6:8])
+                
+                # 简单范围检查
+                if not (1900 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31):
+                    raise ValueError(f"日期值超出有效范围: {date_str}")
+                    
+                return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            except (ValueError, IndexError) as e:
+                raise ValueError(f"无效的日期: {date_str}, 错误: {str(e)}")
+                
+        elif len(date_str) == 10:  # YYYY-MM-DD
+            # 验证格式
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+                raise ValueError(f"不支持的日期格式: {date_str}，YYYY-MM-DD格式应为YYYY-MM-DD")
+            return date_str
+        else:
+            raise ValueError(f"不支持的日期格式: {date_str}，应为YYYYMMDD或YYYY-MM-DD")
     
     def save_cs_train_day(self, df: pd.DataFrame, trade_date: str, format: str = "parquet") -> None:
         """保存单日截面训练数据

@@ -53,54 +53,121 @@ class DataLoader:
     def load_daily(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
         """加载日线行情数据
         
+        优先尝试从分区数据加载（如果提供了日期范围），否则加载完整数据
+        
         Args:
-            start_date: 开始日期，格式YYYY-MM-DD
-            end_date: 结束日期，格式YYYY-MM-DD
+            start_date: 开始日期，格式YYYY-MM-DD或YYYYMMDD
+            end_date: 结束日期，格式YYYY-MM-DD或YYYYMMDD
             
         Returns:
             日线行情DataFrame
         """
+        # 如果提供了日期范围，尝试从分区加载
+        if start_date and end_date:
+            # 转换日期格式
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            
+            # 尝试从分区加载
+            df = self.storage.load_raw_by_date_range("daily", start_str, end_str)
+            
+            if df is not None:
+                # 转换日期格式
+                if 'trade_date' in df.columns:
+                    # 尝试从YYYYMMDD格式转换
+                    try:
+                        df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+                    except (ValueError, TypeError):
+                        # 如果失败，可能已经是datetime格式
+                        df['trade_date'] = pd.to_datetime(df['trade_date'])
+                return df
+        
+        # 回退到加载完整数据
         df = self.storage.load_raw("daily")
         if df is None:
             return None
         
         # 转换日期格式
         if 'trade_date' in df.columns:
-            df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+            try:
+                df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+            except (ValueError, TypeError):
+                df['trade_date'] = pd.to_datetime(df['trade_date'])
         
         # 日期过滤
         if start_date:
-            df = df[df['trade_date'] >= pd.to_datetime(start_date)]
+            start_dt = pd.to_datetime(self._normalize_date(start_date))
+            df = df[df['trade_date'] >= start_dt]
         if end_date:
-            df = df[df['trade_date'] <= pd.to_datetime(end_date)]
+            end_dt = pd.to_datetime(self._normalize_date(end_date))
+            df = df[df['trade_date'] <= end_dt]
         
         return df
     
     def load_daily_basic(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
         """加载每日指标数据
         
+        优先尝试从分区数据加载（如果提供了日期范围），否则加载完整数据
+        
         Args:
-            start_date: 开始日期，格式YYYY-MM-DD
-            end_date: 结束日期，格式YYYY-MM-DD
+            start_date: 开始日期，格式YYYY-MM-DD或YYYYMMDD
+            end_date: 结束日期，格式YYYY-MM-DD或YYYYMMDD
             
         Returns:
             每日指标DataFrame
         """
+        # 如果提供了日期范围，尝试从分区加载
+        if start_date and end_date:
+            # 转换日期格式
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            
+            # 尝试从分区加载
+            df = self.storage.load_raw_by_date_range("daily_basic", start_str, end_str)
+            
+            if df is not None:
+                # 转换日期格式
+                if 'trade_date' in df.columns:
+                    try:
+                        df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+                    except (ValueError, TypeError):
+                        df['trade_date'] = pd.to_datetime(df['trade_date'])
+                return df
+        
+        # 回退到加载完整数据
         df = self.storage.load_raw("daily_basic")
         if df is None:
             return None
         
         # 转换日期格式
         if 'trade_date' in df.columns:
-            df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+            try:
+                df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+            except (ValueError, TypeError):
+                df['trade_date'] = pd.to_datetime(df['trade_date'])
         
         # 日期过滤
         if start_date:
-            df = df[df['trade_date'] >= pd.to_datetime(start_date)]
+            start_dt = pd.to_datetime(self._normalize_date(start_date))
+            df = df[df['trade_date'] >= start_dt]
         if end_date:
-            df = df[df['trade_date'] <= pd.to_datetime(end_date)]
+            end_dt = pd.to_datetime(self._normalize_date(end_date))
+            df = df[df['trade_date'] <= end_dt]
         
         return df
+    
+    def _normalize_date(self, date_str: str) -> str:
+        """标准化日期格式为YYYY-MM-DD
+        
+        Args:
+            date_str: 日期字符串，支持YYYYMMDD或YYYY-MM-DD
+            
+        Returns:
+            标准化后的日期字符串
+        """
+        if len(date_str) == 8:  # YYYYMMDD
+            return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+        return date_str
     
     def get_trading_dates(self, start_date: str, end_date: str) -> list:
         """获取指定范围内的交易日列表

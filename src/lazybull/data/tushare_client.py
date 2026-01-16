@@ -232,24 +232,42 @@ class TushareClient:
     def get_suspend_d(
         self,
         ts_code: Optional[str] = None,
-        suspend_date: Optional[str] = None,
-        resume_date: Optional[str] = None
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        suspend_type: Optional[str] = None
     ) -> pd.DataFrame:
         """获取停复牌信息
         
+        注意：此API已更新参数，旧版本使用suspend_date/resume_date的代码需要迁移
+        
         Args:
-            ts_code: 股票代码
-            suspend_date: 停牌日期
-            resume_date: 复牌日期
+            ts_code: 股票代码，支持多个股票
+            trade_date: 交易日期，格式YYYYMMDD
+            start_date: 开始日期，格式YYYYMMDD
+            end_date: 结束日期，格式YYYYMMDD
+            suspend_type: 停复牌类型，S=停牌，R=复牌
             
         Returns:
-            停复牌信息DataFrame
+            停复牌信息DataFrame，包含以下字段：
+            - ts_code: 股票代码
+            - trade_date: 停复牌日期
+            - suspend_timing: 盘中停复牌时段（如有）
+            - suspend_type: S=停牌，R=复牌
+            
+        Examples:
+            >>> # 获取某日所有停牌股票
+            >>> client.get_suspend_d(trade_date='20230315', suspend_type='S')
+            >>> # 获取某个时间段某只股票的停复牌记录
+            >>> client.get_suspend_d(ts_code='000001.SZ', start_date='20230101', end_date='20230331')
         """
         return self.query(
             "suspend_d",
             ts_code=ts_code,
-            suspend_date=suspend_date,
-            resume_date=resume_date
+            trade_date=trade_date,
+            start_date=start_date,
+            end_date=end_date,
+            suspend_type=suspend_type
         )
     
     def get_stk_limit(
