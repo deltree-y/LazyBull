@@ -142,7 +142,7 @@ class ModelRegistry:
             (model, metadata) 元组
         """
         if not self.registry["models"]:
-            raise ValueError("没有已注册的模型")
+            raise ValueError("没有已注册的模型。请先使用 train_ml_model.py 训练模型。")
         
         if version is None:
             # 加载最新版本
@@ -156,7 +156,11 @@ class ModelRegistry:
                     break
             
             if metadata is None:
-                raise ValueError(f"未找到版本 {version} 的模型")
+                available_versions = [m["version"] for m in self.registry["models"]]
+                raise ValueError(
+                    f"未找到版本 {version} 的模型。"
+                    f"可用版本: {available_versions}"
+                )
         
         # 加载模型文件
         model_file = self.models_dir / metadata["model_file"]

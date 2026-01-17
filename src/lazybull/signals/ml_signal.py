@@ -6,6 +6,7 @@
 
 from typing import Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -122,24 +123,26 @@ class MLSignal(Signal):
         if self.weight_method == "equal":
             # 等权
             weight = 1.0 / len(top_stocks)
-            signals = {row['ts_code']: weight for _, row in top_stocks.iterrows()}
+            signals = {stock: weight for stock in top_stocks['ts_code'].tolist()}
         elif self.weight_method == "score":
             # 按预测分数加权
             total_score = top_stocks['ml_score'].sum()
             if total_score <= 0:
                 # 如果所有分数都是负数或零，使用等权
                 weight = 1.0 / len(top_stocks)
-                signals = {row['ts_code']: weight for _, row in top_stocks.iterrows()}
+                signals = {stock: weight for stock in top_stocks['ts_code'].tolist()}
             else:
-                # 归一化分数为权重
-                signals = {
-                    row['ts_code']: max(0, row['ml_score']) / total_score
-                    for _, row in top_stocks.iterrows()
-                }
+                # 归一化分数为权重（使用向量化操作）
+                scores = top_stocks['ml_score'].values
+                stocks = top_stocks['ts_code'].values
+                weights = np.maximum(0, scores) / total_score
+                
                 # 重新归一化确保权重和为 1
-                total_weight = sum(signals.values())
+                total_weight = weights.sum()
                 if total_weight > 0:
-                    signals = {k: v / total_weight for k, v in signals.items()}
+                    weights = weights / total_weight
+                
+                signals = dict(zip(stocks, weights))
         else:
             raise ValueError(f"不支持的权重方法: {self.weight_method}")
         

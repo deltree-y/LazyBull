@@ -110,13 +110,16 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5") -> tu
         raise ValueError(f"标签列 {label_column} 不存在")
     
     # 定义需要排除的列（非特征列）
-    exclude_columns = [
-        'ts_code', 'trade_date', 'name',  # 标识列
-        label_column,  # 标签列
-        'filter_st', 'filter_new_stock', 'filter_suspended',  # 过滤标记列
-        'filter_limit_up', 'filter_limit_down', 'filter_no_future',  # 过滤标记列
-        'is_tradable'  # 可交易标记
-    ]
+    # 标识列
+    id_columns = ['ts_code', 'trade_date', 'name']
+    # 标签列
+    label_columns = [label_column]
+    # 过滤标记列（以 filter_ 开头）
+    filter_columns = [col for col in df.columns if col.startswith('filter_')]
+    # 可交易标记
+    other_exclude_columns = ['is_tradable']
+    
+    exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns
     
     # 获取特征列
     feature_columns = [col for col in df.columns if col not in exclude_columns]
@@ -125,11 +128,9 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5") -> tu
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
     
     # 过滤可训练样本（移除含有过滤标记的样本）
-    filter_cols = [col for col in exclude_columns if col.startswith('filter_')]
     mask = True
-    for col in filter_cols:
-        if col in df.columns:
-            mask = mask & (~df[col])
+    for col in filter_columns:
+        mask = mask & (~df[col])
     
     df_train = df[mask].copy()
     logger.info(f"过滤后样本数: {len(df_train)} / {len(df)}")
