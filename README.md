@@ -166,6 +166,48 @@ python scripts/update_basic_data.py --force
 python scripts/run_backtest.py
 ```
 
+#### 机器学习模型训练与回测
+
+LazyBull 支持基于机器学习模型的量化策略：
+
+```bash
+# 步骤1: 训练 XGBoost 模型（使用已构建的特征数据）
+python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231
+
+# 自定义超参数训练
+python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
+    --n-estimators 200 --max-depth 5 --learning-rate 0.05
+
+# 步骤2: 使用 ML 模型运行回测
+python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231
+
+# 指定模型版本和 Top N
+python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
+    --model-version 1 --top-n 50
+
+# 指定调仓频率（M=月度，W=周度，D=日度）
+python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
+    --rebalance-freq M --top-n 30
+```
+
+**ML 模型特点：**
+- 使用全量特征列训练 XGBoost 回归模型
+- 标签为 `y_ret_5`（未来 5 日收益率）
+- 模型自动保存到 `data/models` 目录
+- 版本号自动递增（v1, v2, v3...）
+- 元数据记录在 `model_registry.json`
+- 支持排序选股 Top N 策略
+
+**查看模型文件：**
+```bash
+ls data/models/              # ML 模型目录
+  ├── model_registry.json    # 模型版本注册表
+  ├── v1_model.joblib        # 模型文件
+  ├── v1_features.json       # 特征列表
+  ├── v2_model.joblib
+  └── v2_features.json
+```
+
 #### 查看数据
 
 ```bash
@@ -266,6 +308,9 @@ LazyBull/
 │   ├── clean/                 # 清洗后数据（支持按日分区）
 │   │   └── {name}/            # 按日分区: YYYY-MM-DD.parquet
 │   ├── features/              # 特征数据
+│   ├── models/                # ML 模型目录
+│   │   ├── model_registry.json  # 模型版本注册表
+│   │   └── v*_model.joblib    # 训练好的模型文件
 │   └── reports/               # 回测报告
 ├── docs/                       # 文档
 │   ├── data_contract.md       # 数据契约
@@ -276,7 +321,9 @@ LazyBull/
 │   ├── build_clean_features.py # 构建clean和features
 │   ├── build_features.py      # 直接构建features（自动补齐依赖）
 │   ├── update_basic_data.py   # 更新trade_cal和stock_basic
-│   └── run_backtest.py        # 运行回测
+│   ├── train_ml_model.py      # 训练 ML 模型
+│   ├── run_backtest.py        # 运行回测
+│   └── run_ml_backtest.py     # 运行 ML 信号回测
 ├── src/lazybull/              # 源代码
 │   ├── common/                # 通用模块
 │   │   ├── config.py          # 配置管理
@@ -290,7 +337,10 @@ LazyBull/
 │   │   └── base.py            # 股票池基类
 │   ├── factors/               # 因子模块 (TODO)
 │   ├── signals/               # 信号模块
-│   │   └── base.py            # 信号基类
+│   │   ├── base.py            # 信号基类
+│   │   └── ml_signal.py       # ML 信号生成器
+│   ├── ml/                    # 机器学习模块
+│   │   └── model_registry.py  # 模型版本管理
 │   ├── portfolio/             # 组合管理 (TODO)
 │   ├── execution/             # 执行模块 (TODO)
 │   ├── backtest/              # 回测模块
