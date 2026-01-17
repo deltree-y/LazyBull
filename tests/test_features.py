@@ -244,8 +244,8 @@ class TestFeatureBuilder:
         )
         
         # 检查ST标记
-        assert result[result['ts_code'] == '600000.SH']['is_st'].iloc[0] == 1  # *ST浦发
-        assert result[result['ts_code'] == '000001.SZ']['is_st'].iloc[0] == 0  # 平安银行
+        assert result[result['ts_code'] == '600000.SH']['filter_is_st'].iloc[0] == 1  # *ST浦发
+        assert result[result['ts_code'] == '000001.SZ']['filter_is_st'].iloc[0] == 0  # 平安银行
         
         # 应用过滤
         filtered = builder._apply_filters(result)
@@ -305,7 +305,7 @@ class TestFeatureBuilder:
         )
         
         # 检查停牌标记
-        assert result[result['ts_code'] == '000002.SZ']['suspend'].iloc[0] == 1
+        assert result[result['ts_code'] == '000002.SZ']['filter_suspend'].iloc[0] == 1
         
         filtered = builder._apply_filters(result)
         
@@ -341,8 +341,8 @@ class TestFeatureBuilder:
         assert 'ts_code' in features.columns
         assert 'y_ret_5' in features.columns
         assert 'ret_1' in features.columns
-        assert 'is_st' in features.columns
-        assert 'suspend' in features.columns
+        assert 'filter_is_st' in features.columns
+        assert 'filter_suspend' in features.columns
         assert 'limit_up' in features.columns
         assert 'limit_down' in features.columns
         
@@ -353,10 +353,10 @@ class TestFeatureBuilder:
         assert not features['y_ret_5'].isna().any()
         
         # ST股票应该被过滤掉
-        assert not features['is_st'].any()
+        assert not features['filter_is_st'].any()
         
         # 停牌股票应该被过滤掉
-        assert not features['suspend'].any()
+        assert not features['filter_suspend'].any()
     
     def test_limit_flags(self, mock_daily_data, mock_stock_basic):
         """测试涨跌停标记"""
@@ -368,7 +368,7 @@ class TestFeatureBuilder:
             'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
             'ret_1': [0.01, 0.02, 0.03, 0.01],
             'y_ret_5': [0.05, 0.06, 0.07, 0.08],
-            'is_st': [0, 0, 1, 0],  # 第三只是ST
+            'filter_is_st': [0, 0, 1, 0],  # 第三只是ST
             'vol': [1000000, 1000000, 1000000, 1000000]
         })
         
