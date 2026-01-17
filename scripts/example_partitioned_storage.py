@@ -27,8 +27,8 @@ def example_save_daily_partitioned():
     logger.info("示例：使用按日分区存储")
     logger.info("=" * 60)
     
-    # 初始化
-    storage = Storage(enable_partitioning=True)
+    # 初始化（现在默认使用partitioned存储）
+    storage = Storage()
     client = TushareClient()
     
     # 示例1：拉取并保存单日数据

@@ -106,50 +106,133 @@ cp .env.example .env
 
 ### 运行示例
 
+LazyBull 提供三种数据处理模式，适应不同使用场景：
+
+#### 模式一：快速开始（推荐）- 一键构建特征
+
+最简单的方式，自动补齐所有依赖：
+
 ```bash
-# 1. 拉取数据 (需要TuShare token)
-python scripts/pull_data.py --start-date 20230101 --end-date 20231231
+# 直接构建特征，自动下载raw、构建clean（如缺失）
+python scripts/build_features.py --start-date 20230101 --end-date 20231231
 
-# 1b. 拉取数据并自动构建 clean 层（推荐）
-python scripts/pull_data.py --start-date 20230101 --end-date 20231231 --build-clean
-
-# 2. 构建 clean 数据（如果之前未使用 --build-clean）
-python scripts/build_clean.py --start-date 20230101 --end-date 20231231
-
-# 3. 构建特征 (日频截面特征 + 5日标签)
-# 默认优先使用 clean 数据，如不存在会自动从 raw 构建
-python scripts/build_features.py --start_date 20230101 --end_date 20231231
-
-# 或者一步完成（自动拉取数据、构建 clean 和特征）
-python scripts/build_features.py --start_date 20230101 --end_date 20231231 --pull_data
-
-# 4. 运行回测 (如无数据会使用mock数据演示)
-python scripts/run_backtest.py
-
-# 5. 查看数据和报告
-ls data/raw/daily/          # 原始数据（按日分区）
-ls data/clean/daily/        # 清洗后数据（包含复权价格和可交易标记）
-ls data/features/cs_train/  # 特征数据
-ls data/reports/            # 回测报告
+# 强制重新构建所有数据
+python scripts/build_features.py --start-date 20230101 --end-date 20231231 --force
 ```
 
-### 数据层说明
+#### 模式二：分步构建 - 精细控制
 
-LazyBull 采用三层数据架构：
+适合需要分步骤、精细控制的场景：
 
-- **raw 层**: 从 TuShare 直接拉取的原始数据，保持数据源格式
-- **clean 层**: 经过清洗和标准化的数据，包含：
+```bash
+# 步骤1: 仅下载raw数据（不构建clean/features）
+python scripts/download_raw.py --start-date 20230101 --end-date 20231231
+
+# 步骤2: 构建clean和features（假设raw已存在）
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
+
+# 或者只构建clean
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-clean
+
+# 或者只构建features（假设clean已存在）
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-features
+
+# 强制重新构建
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --force
+```
+
+#### 模式三：仅更新基础数据
+
+更新trade_cal和stock_basic（用于定时任务）：
+
+```bash
+# 更新交易日历和股票列表
+python scripts/update_basic_data.py
+
+# 仅更新交易日历
+python scripts/update_basic_data.py --only-trade-cal
+
+# 仅更新股票列表
+python scripts/update_basic_data.py --only-stock-basic
+
+# 强制更新（即使已是最新）
+python scripts/update_basic_data.py --force
+```
+
+#### 运行回测
+
+```bash
+# 运行回测 (如无数据会使用mock数据演示)
+python scripts/run_backtest.py
+```
+
+#### 查看数据
+
+```bash
+ls data/raw/              # 原始数据
+  ├── trade_cal.parquet        # 交易日历（单文件）
+  ├── stock_basic.parquet      # 股票列表（单文件）
+  ├── daily/                   # 日线行情（按日分区）
+  │   └── YYYY-MM-DD.parquet
+  ├── daily_basic/             # 每日指标（按日分区）
+  └── ...
+
+ls data/clean/            # 清洗后数据（包含复权价格和可交易标记）
+  ├── trade_cal.parquet        # 清洗后交易日历
+  ├── stock_basic.parquet      # 清洗后股票列表
+  └── daily/                   # 清洗后日线（按日分区）
+      └── YYYY-MM-DD.parquet
+
+ls data/features/         # 特征数据
+  └── cs_train/                # 截面训练特征（按日分区）
+      └── YYYYMMDD.parquet
+
+ls data/reports/          # 回测报告
+```
+
+### 数据架构说明
+
+LazyBull 采用三层数据架构，统一使用 **partitioned 存储**：
+
+- **raw 层**: 从 TuShare 直接拉取的原始数据
+  - `trade_cal`、`stock_basic`: 单文件存储（不分区）
+  - 其他数据（daily、daily_basic等）: 按日期分区存储 `{YYYY-MM-DD}.parquet`
+  
+- **clean 层**: 经过清洗和标准化的数据
   - 去重（按主键 ts_code+trade_date）
   - 类型统一（trade_date 统一为 YYYYMMDD 字符串）
   - 复权价格（close_adj, open_adj, high_adj, low_adj）
   - 可交易标记（tradable, is_st, is_suspended, is_limit_up, is_limit_down）
   - 数据校验和排序
-- **features 层**: 基于 clean 数据计算的特征和标签，用于模型训练
+  - 存储方式同raw层
+  
+- **features 层**: 基于 clean 数据计算的特征和标签
+  - 按交易日分区存储: `{YYYYMMDD}.parquet`
 
-**推荐工作流**:
-1. 使用 `pull_data.py --build-clean` 拉取并清洗数据
-2. 使用 `build_features.py` 构建特征（自动使用 clean 数据）
-3. clean 数据可被多个下游任务复用，避免重复清洗
+### force 参数说明
+
+所有脚本均支持 `--force` 参数：
+
+- 默认行为：存在即跳过（节省时间）
+- 使用 `--force`：强制重新下载/构建并覆盖已有文件
+- 适用场景：数据更正、重新计算、完整性检查
+
+### trade_cal 和 stock_basic 更新策略
+
+这两个基础数据采用"智能更新"策略：
+
+1. **判断逻辑**：
+   - `trade_cal`: 检查本地最新日期是否覆盖所需范围
+   - `stock_basic`: 简化为检查文件是否存在（建议每季度手动更新）
+
+2. **更新方式**：
+   - 每次更新都是全量更新（不是增量patch）
+   - 保证数据完整性和一致性
+
+3. **推荐频率**：
+   - `trade_cal`: 每月更新一次
+   - `stock_basic`: 每季度更新一次
+   - 或在 cron 中定期运行 `update_basic_data.py`
 
 ### 运行测试
 
@@ -189,8 +272,10 @@ LazyBull/
 │   ├── backtest_assumptions.md # 回测假设
 │   └── roadmap.md             # 路线图
 ├── scripts/                    # 脚本
-│   ├── pull_data.py           # 数据拉取
-│   ├── build_features.py      # 特征构建
+│   ├── download_raw.py        # 下载raw数据
+│   ├── build_clean_features.py # 构建clean和features
+│   ├── build_features.py      # 直接构建features（自动补齐依赖）
+│   ├── update_basic_data.py   # 更新trade_cal和stock_basic
 │   └── run_backtest.py        # 运行回测
 ├── src/lazybull/              # 源代码
 │   ├── common/                # 通用模块
@@ -237,32 +322,70 @@ LazyBull/
 
 ## 🎯 使用示例
 
-### 1. 拉取和清洗数据
+### 1. 命令行使用（推荐）
+
+#### 快速开始 - 一键构建
+
+```bash
+# 最简单方式：直接构建特征，自动补齐所有依赖
+python scripts/build_features.py --start-date 20230101 --end-date 20231231
+```
+
+#### 分步构建 - 精细控制
+
+```bash
+# 第一步：下载raw数据
+python scripts/download_raw.py --start-date 20230101 --end-date 20231231
+
+# 第二步：构建clean和features
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
+```
+
+#### 定期更新基础数据
+
+```bash
+# 在cron或定时任务中运行
+python scripts/update_basic_data.py
+```
+
+### 2. Python API 使用
+
+#### 下载和清洗数据
 
 ```python
 from src.lazybull.data import TushareClient, Storage, DataCleaner
 
-# 初始化
+# 初始化（Storage现在默认使用partitioned存储）
 client = TushareClient()  # 从环境变量读取TS_TOKEN
-storage = Storage()
+storage = Storage()  # 统一使用partitioned存储
 cleaner = DataCleaner()
 
-# 拉取原始数据
+# 下载基础数据（单文件存储）
 trade_cal = client.get_trade_cal("20230101", "20231231")
-storage.save_raw(trade_cal, "trade_cal")
+storage.save_raw(trade_cal, "trade_cal", is_force=True)
 
 stock_basic = client.get_stock_basic()
-storage.save_raw(stock_basic, "stock_basic")
+storage.save_raw(stock_basic, "stock_basic", is_force=True)
+
+# 下载日线数据（按日期分区存储）
+trade_date = "20230110"
+daily_data = client.get_daily(trade_date=trade_date)
+storage.save_raw_by_date(daily_data, "daily", trade_date)
 
 # 清洗数据
 trade_cal_clean = cleaner.clean_trade_cal(trade_cal)
-storage.save_clean(trade_cal_clean, "trade_cal")
+storage.save_clean(trade_cal_clean, "trade_cal", is_force=True)
 
 stock_basic_clean = cleaner.clean_stock_basic(stock_basic)
-storage.save_clean(stock_basic_clean, "stock_basic")
+storage.save_clean(stock_basic_clean, "stock_basic", is_force=True)
+
+# 清洗日线数据（按日期分区）
+adj_factor = client.get_adj_factor(trade_date=trade_date)
+daily_clean = cleaner.clean_daily(daily_data, adj_factor)
+storage.save_clean_by_date(daily_clean, "daily", trade_date)
 ```
 
-### 2. 使用 clean 数据构建特征
+#### 使用 clean 数据构建特征
 
 ```python
 from src.lazybull.data import DataLoader, Storage

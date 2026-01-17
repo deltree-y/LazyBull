@@ -305,8 +305,8 @@ def main():
     logger.info("=" * 60)
     
     try:
-        # 初始化组件
-        storage = Storage(enable_partitioning=False)  # 使用非分区模式简化测试
+        # 初始化组件（现在统一使用partitioned存储）
+        storage = Storage()
         cleaner = DataCleaner()
         loader = DataLoader(storage)
         

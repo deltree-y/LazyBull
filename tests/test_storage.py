@@ -13,7 +13,7 @@ from src.lazybull.data.storage import Storage
 def temp_storage():
     """创建临时存储实例"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        storage = Storage(root_path=tmpdir, enable_partitioning=True)
+        storage = Storage(root_path=tmpdir)
         yield storage
 
 
