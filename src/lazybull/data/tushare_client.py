@@ -110,26 +110,31 @@ class TushareClient:
     
     def get_trade_cal(
         self,
-        start_date: str,
-        end_date: str,
+        start_date: str = None,
+        end_date: str = None,
         exchange: str = "SSE"
     ) -> pd.DataFrame:
         """获取交易日历
         
         Args:
-            start_date: 开始日期，格式YYYYMMDD
-            end_date: 结束日期，格式YYYYMMDD
+            start_date: 开始日期，格式YYYYMMDD（不指定则获取全部数据）
+            end_date: 结束日期，格式YYYYMMDD（不指定则获取全部数据）
             exchange: 交易所，SSE上交所/SZSE深交所
             
         Returns:
             交易日历DataFrame
         """
+        # 构建查询参数
+        kwargs = {"exchange": exchange}
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+            
         return self.query(
             "trade_cal",
             fields="exchange,cal_date,is_open,pretrade_date",
-            exchange=exchange,
-            start_date=start_date,
-            end_date=end_date
+            **kwargs
         )
     
     def get_stock_basic(

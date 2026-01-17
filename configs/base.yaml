@@ -10,8 +10,10 @@ data:
   reports: "./data/reports"
   # 存储配置
   storage:
-    enable_partitioning: true  # 是否启用按日分区存储（raw/clean层）
     partition_format: "YYYY-MM-DD"  # 分区日期格式
+    # 注意：现已统一使用partitioned存储
+    # - trade_cal和stock_basic：单文件存储
+    # - 其他数据（daily等）：按日期分区存储
 
 # 日志配置
 logging:

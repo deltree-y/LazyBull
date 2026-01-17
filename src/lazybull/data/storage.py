@@ -14,25 +14,29 @@ class Storage:
     支持按日期分区存储raw和clean数据
     """
     
-    def __init__(self, root_path: str = "./data", enable_partitioning: bool = True):
+    def __init__(self, root_path: str = "./data"):
         """初始化存储
         
         Args:
             root_path: 数据根目录
-            enable_partitioning: 是否启用按日分区存储（raw/clean层）
+        
+        注意：
+            - trade_cal和stock_basic使用单文件存储（不分区）
+            - daily/daily_basic/adj_factor/suspend/stk_limit等使用按日期分区存储
+            - clean层数据使用按日期分区存储
+            - features层数据使用按日期分区存储
         """
         self.root_path = Path(root_path)
         self.raw_path = self.root_path / "raw"
         self.clean_path = self.root_path / "clean"
         self.features_path = self.root_path / "features"
         self.reports_path = self.root_path / "reports"
-        self.enable_partitioning = enable_partitioning
         
         # 确保目录存在
         for path in [self.raw_path, self.clean_path, self.features_path, self.reports_path]:
             path.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"数据存储初始化完成，根目录: {self.root_path}, 分区存储: {enable_partitioning}")
+        logger.info(f"数据存储初始化完成，根目录: {self.root_path}，使用partitioned存储模式")
     
     def save_raw(self, df: pd.DataFrame, name: str, format: str = "parquet", is_force: bool = False) -> None:
         """保存原始数据
@@ -181,9 +185,8 @@ class Storage:
         partition_dir = self.raw_path / name
         
         if not partition_dir.exists():
-            logger.debug(f"分区目录不存在: {partition_dir}，尝试加载非分区数据")
-            # 尝试加载非分区数据（向后兼容）
-            return self.load_raw(name, format)
+            logger.warning(f"分区目录不存在: {partition_dir}")
+            return None
         
         # 转换日期格式
         start_str = self._format_date(start_date)
@@ -278,9 +281,8 @@ class Storage:
         partition_dir = self.clean_path / name
         
         if not partition_dir.exists():
-            logger.debug(f"分区目录不存在: {partition_dir}，尝试加载非分区数据")
-            # 尝试加载非分区数据（向后兼容）
-            return self.load_clean(name, format)
+            logger.warning(f"分区目录不存在: {partition_dir}")
+            return None
         
         # 转换日期格式
         start_str = self._format_date(start_date)
@@ -407,8 +409,72 @@ class Storage:
         cs_train_path = self.features_path / "cs_train"
         return self._load_data(cs_train_path / trade_date, format)
     
+    def check_basic_data_freshness(self, name: str, required_end_date: str) -> bool:
+        """检查基础数据（trade_cal或stock_basic）是否足够新
+        
+        Args:
+            name: 数据名称，'trade_cal'或'stock_basic'
+            required_end_date: 需要的结束日期，格式YYYYMMDD
+            
+        Returns:
+            True表示数据足够新，False表示需要更新
+        """
+        df = self.load_raw(name)
+        if df is None:
+            logger.info(f"{name} 数据不存在，需要下载")
+            return False
+        
+        # 获取数据中的最新日期
+        if name == "trade_cal":
+            if 'cal_date' not in df.columns:
+                logger.warning(f"{name} 缺少 cal_date 列")
+                return False
+            
+            # 转换为字符串格式YYYYMMDD
+            try:
+                if pd.api.types.is_datetime64_any_dtype(df['cal_date']):
+                    latest_date = df['cal_date'].max().strftime('%Y%m%d')
+                else:
+                    latest_date = str(df['cal_date'].max()).replace('-', '')
+            except Exception as e:
+                logger.warning(f"无法解析 {name} 的日期: {e}")
+                return False
+            
+            logger.info(f"{name} 最新日期: {latest_date}, 需要日期: {required_end_date}")
+            return latest_date >= required_end_date
+            
+        elif name == "stock_basic":
+            # stock_basic不基于日期判断，而是检查是否存在
+            # 可以根据数据更新频率（如每季度）来判断是否需要更新
+            # 这里简化为：如果文件存在就认为足够新
+            logger.info(f"{name} 数据已存在，记录数: {len(df)}")
+            return True
+        
+        return False
+    
+    def is_feature_exists(self, trade_date: str, format: str = "parquet") -> bool:
+        """判断特征数据是否存在
+        
+        Args:
+            trade_date: 交易日期，格式YYYYMMDD
+            format: 文件格式
+            
+        Returns:
+            True表示存在，False表示不存在
+        """
+        cs_train_path = self.features_path / "cs_train"
+        path = cs_train_path / trade_date
+        
+        if format == "parquet":
+            file_path = path.with_suffix(".parquet")
+        elif format == "csv":
+            file_path = path.with_suffix(".csv")
+        else:
+            raise ValueError(f"不支持的格式: {format}")
+        
+        return file_path.exists()
 
-    def is_data_exists(self, layer:str, name:str, date: str, format: str="parquet") -> None:
+    def is_data_exists(self, layer: str, name: str, date: str, format: str = "parquet") -> bool:
         """判断文件是否存在
         
         Args:

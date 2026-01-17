@@ -13,7 +13,7 @@ from src.lazybull.data.storage import Storage
 def temp_storage():
     """创建临时存储实例"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        storage = Storage(root_path=tmpdir, enable_partitioning=True)
+        storage = Storage(root_path=tmpdir)
         yield storage
 
 
@@ -159,32 +159,6 @@ class TestStoragePartitioning:
         """测试列出不存在的分区"""
         partitions = temp_storage.list_partitions("raw", "nonexistent")
         assert partitions == []
-
-
-class TestStorageBackwardCompatibility:
-    """测试向后兼容性"""
-    
-    def test_load_raw_fallback(self, temp_storage, sample_data):
-        """测试加载非分区数据的回退机制"""
-        # 保存非分区数据
-        temp_storage.save_raw(sample_data, "daily")
-        
-        # 尝试使用date_range加载，应该回退到非分区加载
-        loaded = temp_storage.load_raw_by_date_range("daily", "20230101", "20230103")
-        
-        assert loaded is not None
-        assert len(loaded) == len(sample_data)
-    
-    def test_load_clean_fallback(self, temp_storage, sample_data):
-        """测试加载非分区清洗数据的回退机制"""
-        # 保存非分区数据
-        temp_storage.save_clean(sample_data, "daily")
-        
-        # 尝试使用date_range加载，应该回退到非分区加载
-        loaded = temp_storage.load_clean_by_date_range("daily", "20230101", "20230103")
-        
-        assert loaded is not None
-        assert len(loaded) == len(sample_data)
 
 
 class TestTushareClient:
