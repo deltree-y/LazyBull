@@ -94,15 +94,16 @@ def load_features_data(
     return df
 
 
-def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5") -> tuple:
-    """准备训练数据
+def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_ratio: float = 0.2) -> tuple:
+    """准备训练数据，并按时间切分训练集和验证集
     
     Args:
         df: 特征 DataFrame
         label_column: 标签列名
+        val_ratio: 验证集比例，默认 0.2（最后 20% 的时间作为验证集）
         
     Returns:
-        (X, y, feature_columns) 元组
+        (X_train, y_train, X_val, y_val, feature_columns) 元组
     """
     logger.info("准备训练数据...")
     
@@ -115,10 +116,10 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5") -> tu
     id_columns = ['ts_code', 'trade_date', 'name']
     # 标签列
     label_columns = [label_column]
-    # 过滤标记列（以 filter_ 开头）
-    filter_columns = [col for col in df.columns if col.startswith('filter_')]
-    # 可交易标记
-    other_exclude_columns = ['tradable', 'list_date', 'list_days', 'limit_up', 'limit_down']   # 根据需要添加其他非特征列
+    # 过滤标记列（不再使用 filter_ 前缀）
+    filter_columns = ['is_st', 'suspend']
+    # 其他非特征列
+    other_exclude_columns = ['tradable', 'list_date', 'list_days', 'limit_up', 'limit_down']
     
     exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns
     
@@ -129,9 +130,12 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5") -> tu
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
     
     # 过滤可训练样本（移除含有过滤标记的样本）
-    mask = True
+    # 注意：由于 FeatureBuilder 已经过滤了不符合条件的样本，这里理论上不需要再过滤
+    # 但为了安全起见，还是检查一下这些列（如果存在）
+    mask = pd.Series([True] * len(df))
     for col in filter_columns:
-        mask = mask & (~df[col])
+        if col in df.columns:
+            mask = mask & (~df[col].astype(bool))
     
     df_train = df[mask].copy()
     logger.info(f"过滤后样本数: {len(df_train)} / {len(df)}")
@@ -143,21 +147,42 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5") -> tu
     if len(df_train) == 0:
         raise ValueError("没有可用的训练样本")
     
-    # 准备 X 和 y
-    X = df_train[feature_columns].copy()
-    y = df_train[label_column].copy()
+    # 按时间切分训练集和验证集（避免未来信息泄漏）
+    df_train = df_train.sort_values('trade_date')
+    split_idx = int(len(df_train) * (1 - val_ratio))
+    
+    df_train_split = df_train.iloc[:split_idx]
+    df_val_split = df_train.iloc[split_idx:]
+    
+    # 获取验证集的时间范围
+    val_start_date = df_val_split['trade_date'].min() if len(df_val_split) > 0 else "N/A"
+    val_end_date = df_val_split['trade_date'].max() if len(df_val_split) > 0 else "N/A"
+    
+    logger.info(f"训练集样本数: {len(df_train_split)}, 验证集样本数: {len(df_val_split)}")
+    logger.info(f"验证集时间范围: {val_start_date} 至 {val_end_date}")
+    
+    # 准备训练集 X 和 y
+    X_train = df_train_split[feature_columns].copy()
+    y_train = df_train_split[label_column].copy()
+    
+    # 准备验证集 X 和 y
+    X_val = df_val_split[feature_columns].copy()
+    y_val = df_val_split[label_column].copy()
     
     # 处理特征中的缺失值（填充为0）
-    X = X.fillna(0)
+    X_train = X_train.fillna(0)
+    X_val = X_val.fillna(0)
     
-    logger.info(f"训练数据准备完成: X shape={X.shape}, y shape={y.shape}")
+    logger.info(f"训练数据准备完成: X_train shape={X_train.shape}, X_val shape={X_val.shape}")
     
-    return X, y, feature_columns
+    return X_train, y_train, X_val, y_val, feature_columns
 
 
 def train_xgboost_model(
-    X: pd.DataFrame,
-    y: pd.Series,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
     n_estimators: int = 100,
     max_depth: int = 6,
     learning_rate: float = 0.1,
@@ -168,8 +193,10 @@ def train_xgboost_model(
     """训练 XGBoost 模型
     
     Args:
-        X: 特征数据
-        y: 标签数据
+        X_train: 训练特征数据
+        y_train: 训练标签数据
+        X_val: 验证特征数据
+        y_val: 验证标签数据
         n_estimators: 树的数量
         max_depth: 树的最大深度
         learning_rate: 学习率
@@ -178,7 +205,7 @@ def train_xgboost_model(
         random_state: 随机种子
         
     Returns:
-        (model, train_params, performance_metrics) 元组
+        (model, train_params, train_metrics, val_metrics) 元组
     """
     logger.info("开始训练 XGBoost 模型...")
     
@@ -199,25 +226,50 @@ def train_xgboost_model(
     
     # 创建并训练模型
     model = xgb.XGBRegressor(**train_params)
-    model.fit(X, y)
+    model.fit(X_train, y_train)
     
     logger.info("模型训练完成")
     
-    # 计算性能指标
-    y_pred = model.predict(X)
-    mse = mean_squared_error(y, y_pred)
-    rmse = mse ** 0.5
-    r2 = r2_score(y, y_pred)
+    # 计算训练集性能指标
+    y_train_pred = model.predict(X_train)
+    train_mse = mean_squared_error(y_train, y_train_pred)
+    train_rmse = train_mse ** 0.5
+    train_r2 = r2_score(y_train, y_train_pred)
     
-    performance_metrics = {
-        "mse": float(mse),
-        "rmse": float(rmse),
-        "r2": float(r2)
+    train_metrics = {
+        "mse": float(train_mse),
+        "rmse": float(train_rmse),
+        "r2": float(train_r2)
     }
     
-    logger.info(f"训练集性能: MSE={mse:.6f}, RMSE={rmse:.6f}, R2={r2:.4f}")
+    logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}")
     
-    return model, train_params, performance_metrics
+    # 计算验证集性能指标
+    if len(X_val) > 0:
+        y_val_pred = model.predict(X_val)
+        val_mse = mean_squared_error(y_val, y_val_pred)
+        val_rmse = val_mse ** 0.5
+        val_r2 = r2_score(y_val, y_val_pred)
+        
+        val_metrics = {
+            "mse": float(val_mse),
+            "rmse": float(val_rmse),
+            "r2": float(val_r2)
+        }
+        
+        logger.info("=" * 60)
+        logger.info("验证集评估结果")
+        logger.info("=" * 60)
+        logger.info(f"验证集样本数: {len(X_val)}")
+        logger.info(f"MSE（均方误差）: {val_mse:.6f}")
+        logger.info(f"RMSE（均方根误差）: {val_rmse:.6f}")
+        logger.info(f"R2（决定系数）: {val_r2:.4f}")
+        logger.info("=" * 60)
+    else:
+        val_metrics = {}
+        logger.warning("验证集为空，无法评估")
+    
+    return model, train_params, train_metrics, val_metrics
 
 
 def main():
@@ -311,12 +363,12 @@ def main():
         # 1. 加载特征数据
         df = load_features_data(storage, loader, args.start_date, args.end_date)
         
-        # 2. 准备训练数据
-        X, y, feature_columns = prepare_training_data(df, args.label_column)
+        # 2. 准备训练数据（包含验证集切分）
+        X_train, y_train, X_val, y_val, feature_columns = prepare_training_data(df, args.label_column)
         
         # 3. 训练模型
-        model, train_params, performance_metrics = train_xgboost_model(
-            X, y,
+        model, train_params, train_metrics, val_metrics = train_xgboost_model(
+            X_train, y_train, X_val, y_val,
             n_estimators=args.n_estimators,
             max_depth=args.max_depth,
             learning_rate=args.learning_rate,
@@ -324,6 +376,12 @@ def main():
             colsample_bytree=args.colsample_bytree,
             random_state=args.random_state
         )
+        
+        # 合并训练和验证指标
+        performance_metrics = {
+            "train": train_metrics,
+            "validation": val_metrics
+        }
         
         # 4. 注册模型
         version = registry.register_model(
@@ -333,7 +391,7 @@ def main():
             train_end_date=args.end_date,
             feature_columns=feature_columns,
             label_column=args.label_column,
-            n_samples=len(X),
+            n_samples=len(X_train) + len(X_val),
             train_params=train_params,
             performance_metrics=performance_metrics
         )

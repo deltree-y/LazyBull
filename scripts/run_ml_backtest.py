@@ -188,7 +188,7 @@ def run_ml_backtest(
 class BacktestEngineML(BacktestEngine):
     """支持 ML 信号的回测引擎
     
-    扩展原有回测引擎，在调仓时传入特征数据
+    扩展原有回测引擎，在信号生成时传入特征数据
     """
     
     def __init__(self, features_by_date: dict, **kwargs):
@@ -201,12 +201,14 @@ class BacktestEngineML(BacktestEngine):
         super().__init__(**kwargs)
         self.features_by_date = features_by_date
     
-    def _rebalance(self, date: pd.Timestamp, price_dict: dict) -> None:
-        """执行调仓（重写以支持特征数据）
+    def _generate_signal(self, date: pd.Timestamp, trading_dates: list, price_dict: dict, date_to_idx: dict) -> None:
+        """生成信号（重写以支持特征数据）
         
         Args:
-            date: 调仓日期
+            date: 信号生成日期
+            trading_dates: 交易日列表
             price_dict: 价格字典
+            date_to_idx: 日期到索引的映射
         """
         # 获取股票池
         stock_universe = self.universe.get_stocks(date)
@@ -216,7 +218,7 @@ class BacktestEngineML(BacktestEngine):
         features_df = self.features_by_date.get(date_str)
         
         if features_df is None:
-            logger.warning(f"调仓日 {date.date()} 没有特征数据，跳过")
+            logger.warning(f"信号日 {date.date()} 没有特征数据，跳过")
             return
         
         # 生成信号（传入特征数据）
@@ -224,23 +226,13 @@ class BacktestEngineML(BacktestEngine):
         signals = self.signal.generate(date, stock_universe, data)
         
         if not signals:
-            logger.warning(f"调仓日 {date.date()} 无信号，跳过")
+            logger.warning(f"信号日 {date.date()} 无信号")
             return
         
-        # 计算当前组合市值
-        current_value = self._calculate_portfolio_value(date, price_dict)
-        
-        # 卖出不在信号中的持仓
-        for stock in list(self.positions.keys()):
-            if stock not in signals:
-                self._sell_stock(date, stock, price_dict)
-        
-        # 买入信号中的股票
-        for stock, weight in signals.items():
-            target_value = current_value * weight
-            self._buy_stock(date, stock, target_value, price_dict)
-        
-        logger.info(f"调仓完成: {date.date()}, 持仓 {len(self.positions)} 只股票")
+        # 保存信号，待 T+1 执行
+        self.pending_signals[date] = signals
+        logger.info(f"信号生成: {date.date()}, 信号数 {len(signals)}")
+
 
 
 def main():

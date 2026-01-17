@@ -243,16 +243,18 @@ class TestFeatureBuilder:
             '20230110'
         )
         
-        # 检查ST标记
+        # 检查ST标记（新列名：去掉 filter_ 前缀）
         assert result[result['ts_code'] == '600000.SH']['filter_is_st'].iloc[0] == 1  # *ST浦发
         assert result[result['ts_code'] == '000001.SZ']['filter_is_st'].iloc[0] == 0  # 平安银行
         
-        # 应用过滤
+        # 应用过滤（应用后列名会去掉 filter_ 前缀）
         filtered = builder._apply_filters(result)
         
         # ST股票应该被过滤掉
         assert '600000.SH' not in filtered['ts_code'].values
         assert '000001.SZ' in filtered['ts_code'].values
+        # 确认新列名存在
+        assert 'is_st' in filtered.columns
     
     def test_apply_filters_list_days(
         self,
@@ -307,10 +309,13 @@ class TestFeatureBuilder:
         # 检查停牌标记
         assert result[result['ts_code'] == '000002.SZ']['filter_suspend'].iloc[0] == 1
         
+        # 应用过滤（应用后列名会去掉 filter_ 前缀）
         filtered = builder._apply_filters(result)
         
         # 停牌股票应该被过滤掉
         assert '000002.SZ' not in filtered['ts_code'].values
+        # 确认新列名存在
+        assert 'suspend' in filtered.columns
     
     def test_build_features_for_day_integration(
         self,
@@ -341,8 +346,10 @@ class TestFeatureBuilder:
         assert 'ts_code' in features.columns
         assert 'y_ret_5' in features.columns
         assert 'ret_1' in features.columns
-        assert 'filter_is_st' in features.columns
-        assert 'filter_suspend' in features.columns
+        # 新的列名（去掉 filter_ 前缀）
+        assert 'is_st' in features.columns
+        assert 'suspend' in features.columns
+        assert 'list_days' in features.columns
         assert 'limit_up' in features.columns
         assert 'limit_down' in features.columns
         
@@ -353,10 +360,10 @@ class TestFeatureBuilder:
         assert not features['y_ret_5'].isna().any()
         
         # ST股票应该被过滤掉
-        assert not features['filter_is_st'].any()
+        assert not features['is_st'].any()
         
         # 停牌股票应该被过滤掉
-        assert not features['filter_suspend'].any()
+        assert not features['suspend'].any()
     
     def test_limit_flags(self, mock_daily_data, mock_stock_basic):
         """测试涨跌停标记"""
