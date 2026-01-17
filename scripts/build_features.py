@@ -21,6 +21,9 @@ from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataCleaner, DataLoader, Storage, TushareClient
 from src.lazybull.features import FeatureBuilder
 
+# 在模块顶层导入 pandas，避免在函数内部局部导入导致 UnboundLocalError
+import pandas as pd
+
 
 def parse_args():
     """解析命令行参数"""
@@ -92,7 +95,6 @@ def pull_required_data(client: TushareClient, storage: Storage, start_date: str,
     # 1. 交易日历（需要包含足够的历史和未来数据）
     logger.info("拉取交易日历...")
     # 扩展日期范围：前后各6个月
-    import pandas as pd
     start_dt = pd.to_datetime(start_date, format='%Y%m%d') - pd.DateOffset(months=6)
     end_dt = pd.to_datetime(end_date, format='%Y%m%d') + pd.DateOffset(months=6)
     
@@ -222,7 +224,6 @@ def main():
                         storage.save_clean(stock_basic_clean, "stock_basic", is_force=True)
                         
                         # 简化：直接使用 build_clean 脚本的逻辑
-                        import pandas as pd
                         from scripts.build_clean import build_clean_for_date_range
                         
                         start_dt = pd.to_datetime(args.start_date, format='%Y%m%d') - pd.DateOffset(months=1)
@@ -299,7 +300,6 @@ def main():
             raise ValueError(f"指定日期范围内没有交易日: {args.start_date} - {args.end_date}")
         
         # 转换为YYYYMMDD格式
-        import pandas as pd
         trading_dates_str = [
             d.strftime('%Y%m%d') if isinstance(d, pd.Timestamp) else d
             for d in trading_dates
@@ -370,7 +370,7 @@ def main():
         logger.info("特征构建完成")
         logger.info("=" * 60)
         logger.info(f"成功: {success_count} 个交易日")
-        logger.info(f"跳过: {skip_count} 个交易日（无有效样本）")
+        logger.info(f"跳过: {skip_count} ���交易日（无有效样本）")
         logger.info(f"失败: {error_count} 个交易日")
         logger.info(f"保存位置: {storage.features_path / 'cs_train'}")
         logger.info("=" * 60)
@@ -396,4 +396,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

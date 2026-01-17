@@ -29,9 +29,10 @@ def setup_logger(
     # 默认格式
     if format_string is None:
         format_string = (
-            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+            "<green>{time:HH:mm:ss}</green> | "
+            "<level>{level: <5}</level> | "
+            #"<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+            "<cyan>{name}</cyan> - "
             "<level>{message}</level>"
         )
     
