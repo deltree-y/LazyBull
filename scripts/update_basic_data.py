@@ -40,33 +40,41 @@ def update_trade_cal(
     Args:
         client: TushareClient实例
         storage: Storage实例
-        start_date: 开始日期，格式YYYYMMDD（默认：5年前）
-        end_date: 结束日期，格式YYYYMMDD（默认：2年后）
+        start_date: 开始日期，格式YYYYMMDD（不指定则获取全部数据）
+        end_date: 结束日期，格式YYYYMMDD（不指定则获取全部数据）
         force: 是否强制更新
     """
     logger.info("=" * 60)
     logger.info("更新交易日历")
     logger.info("=" * 60)
     
-    # 设置默认日期范围（5年前到2年后，确保覆盖足够范围）
-    if start_date is None:
-        start_dt = datetime.now() - timedelta(days=5*365)
-        start_date = start_dt.strftime('%Y%m%d')
+    # 如果未指定日期范围，则获取全量数据
+    if start_date is None and end_date is None:
+        logger.info("获取全量交易日历数据（不限日期范围）")
+    else:
+        # 设置默认日期范围（如果只指定了一个）
+        if start_date is None:
+            start_dt = datetime.now() - timedelta(days=5*365)
+            start_date = start_dt.strftime('%Y%m%d')
+        
+        if end_date is None:
+            end_dt = datetime.now() + timedelta(days=2*365)
+            end_date = end_dt.strftime('%Y%m%d')
+        
+        logger.info(f"日期范围: {start_date} - {end_date}")
     
-    if end_date is None:
-        end_dt = datetime.now() + timedelta(days=2*365)
-        end_date = end_dt.strftime('%Y%m%d')
-    
-    logger.info(f"日期范围: {start_date} - {end_date}")
-    
-    # 检查是否需要更新
-    if not force and storage.check_basic_data_freshness("trade_cal", end_date):
+    # 检查是否需要更新（仅在指定了end_date时检查）
+    if not force and end_date is not None and storage.check_basic_data_freshness("trade_cal", end_date):
         logger.info("交易日历数据已是最新，无需更新")
         logger.info("提示：使用 --force 参数可强制更新")
         return
     
-    # 下载全量交易日历
-    logger.info("下载交易日历全集...")
+    # 下载交易日历（全量或指定范围）
+    if start_date is None and end_date is None:
+        logger.info("下载交易日历全集...")
+    else:
+        logger.info("下载指定范围的交易日历...")
+    
     trade_cal = client.get_trade_cal(
         start_date=start_date,
         end_date=end_date,
