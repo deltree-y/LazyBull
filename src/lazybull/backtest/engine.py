@@ -1,5 +1,6 @@
 """回测引擎"""
 
+import sys
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -29,7 +30,9 @@ class BacktestEngine:
         initial_capital: float = 1000000.0,
         cost_model: Optional[CostModel] = None,
         rebalance_freq: str = "M",
-        holding_period: Optional[int] = None
+        holding_period: Optional[int] = None,
+        verbose: bool = True,
+        price_type: str = "close"
     ):
         """初始化回测引擎
         
@@ -38,19 +41,37 @@ class BacktestEngine:
             signal: 信号生成器
             initial_capital: 初始资金
             cost_model: 成本模型
-            rebalance_freq: 调仓频率，D=日，W=周，M=月
+            rebalance_freq: 调仓频率，D=日，W=周，M=月，或整数表示每N天调仓
             holding_period: 持有期（交易日），None 则自动根据调仓频率设置
+            verbose: 是否输出详细日志（买入/卖出操作），默认True
+            price_type: 价格类型，可选值：
+                - 'close': 不复权收盘价（默认，推荐用于成本计算）
+                - 'close_adj': 后复权收盘价（用于收益计算）
+                - 'close_hfq': 前复权收盘价
         """
         self.universe = universe
         self.signal = signal
         self.initial_capital = initial_capital
         self.cost_model = cost_model or CostModel()
         self.rebalance_freq = rebalance_freq
+        self.verbose = verbose
+        self.price_type = price_type
+        
+        # 校验价格类型
+        valid_price_types = ['close', 'close_adj', 'close_hfq']
+        if price_type not in valid_price_types:
+            raise ValueError(
+                f"不支持的价格类型: {price_type}。"
+                f"可选值: {', '.join(valid_price_types)}"
+            )
         
         # 设置持有期
         if holding_period is None:
             # 根据调仓频率自动设置持有期
-            if rebalance_freq == "D":
+            if isinstance(rebalance_freq, int):
+                # 如果是整数，直接使用
+                self.holding_period = rebalance_freq
+            elif rebalance_freq == "D":
                 self.holding_period = 1
             elif rebalance_freq == "W":
                 self.holding_period = 5
@@ -68,7 +89,8 @@ class BacktestEngine:
         
         logger.info(
             f"回测引擎初始化完成: 初始资金={initial_capital}, "
-            f"调仓频率={rebalance_freq}, 持有期={self.holding_period}天"
+            f"调仓频率={rebalance_freq}, 持有期={self.holding_period}天, "
+            f"价格类型={price_type}, 详细日志={'开启' if verbose else '关闭'}"
         )
         logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日收盘价卖出")
 
@@ -111,8 +133,16 @@ class BacktestEngine:
         # 记录开始时间
         start_time = time.time()
         
-        # 使用 tqdm 显示进度条
-        with tqdm(total=total_days, desc="回测进度", unit="天") as pbar:
+        # 使用 tqdm 显示进度条（确保实时刷新）
+        with tqdm(
+            total=total_days,
+            desc="回测进度",
+            unit="天",
+            file=sys.stdout,  # 输出到 stdout
+            ncols=100,  # 固定宽度，避免换行
+            mininterval=0.1,  # 最小更新间隔（秒），加快刷新频率
+            leave=True  # 完成后保留进度条
+        ) as pbar:
             # 按日推进
             for idx, date in enumerate(trading_dates):
                 # 判断是否为信号生成日
@@ -168,12 +198,14 @@ class BacktestEngine:
         signals = self.signal.generate(date, stock_universe, {})
         
         if not signals:
-            logger.warning(f"信号日 {date.date()} 无信号")
+            if self.verbose:
+                logger.warning(f"信号日 {date.date()} 无信号")
             return
         
         # 保存信号，待 T+1 执行
         self.pending_signals[date] = signals
-        logger.info(f"信号生成: {date.date()}, 信号数 {len(signals)}")
+        if self.verbose:
+            logger.info(f"信号生成: {date.date()}, 信号数 {len(signals)}")
     
     def _execute_pending_buys(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
         """执行待执行的买入操作（T+1）
@@ -204,7 +236,8 @@ class BacktestEngine:
             target_value = current_value * weight
             self._buy_stock(date, stock, target_value, price_dict)
         
-        logger.info(f"买入执行: {date.date()}, 买入 {len(signals)} 只股票（信号日: {signal_date.date()}）")
+        if self.verbose:
+            logger.info(f"买入执行: {date.date()}, 买入 {len(signals)} 只股票（信号日: {signal_date.date()}）")
     
     def _check_and_sell(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
         """检查并执行卖出操作（达到持有期 T+n）
@@ -240,24 +273,35 @@ class BacktestEngine:
         for stock in stocks_to_sell:
             self._sell_stock(date, stock, price_dict)
         
-        if stocks_to_sell:
+        if stocks_to_sell and self.verbose:
             logger.info(f"卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票（达到持有期）")
     
     def _prepare_price_dict(self, price_data: pd.DataFrame) -> Dict:
         """准备价格字典
         
         Args:
-            price_data: 价格数据
+            price_data: 价格数据，需包含 ts_code, trade_date 和指定的价格列
             
         Returns:
-            {trade_date: {ts_code: close_price}}
+            {trade_date: {ts_code: price}}
         """
+        # 检查价格列是否存在
+        if self.price_type not in price_data.columns:
+            logger.warning(
+                f"价格数据中缺少 {self.price_type} 列，尝试使用 'close' 列"
+            )
+            price_col = 'close' if 'close' in price_data.columns else price_data.columns[-1]
+        else:
+            price_col = self.price_type
+        
         price_dict = {}
         for _, row in price_data.iterrows():
             date = pd.to_datetime(row['trade_date'])
             if date not in price_dict:
                 price_dict[date] = {}
-            price_dict[date][row['ts_code']] = row['close']
+            price_dict[date][row['ts_code']] = row[price_col]
+        
+        logger.info(f"价格字典构建完成，使用价格列: {price_col}")
         return price_dict
     
     def _get_rebalance_dates(self, trading_dates: List[pd.Timestamp]) -> List[pd.Timestamp]:
@@ -269,6 +313,15 @@ class BacktestEngine:
         Returns:
             调仓日期列表
         """
+        # 支持整数天数
+        if isinstance(self.rebalance_freq, int):
+            # 每 N 个交易日调仓一次
+            n = self.rebalance_freq
+            if n <= 0:
+                raise ValueError(f"调仓频率必须为正整数，当前值: {n}")
+            return [trading_dates[i] for i in range(0, len(trading_dates), n)]
+        
+        # 支持字符串频率
         if self.rebalance_freq == "D":
             return trading_dates
         elif self.rebalance_freq == "W":
@@ -283,7 +336,10 @@ class BacktestEngine:
             df['month'] = df['date'].dt.to_period('M')
             return df.groupby('month')['date'].last().tolist()
         else:
-            return [trading_dates[0]]  # 只在第一天调仓
+            raise ValueError(
+                f"不支持的调仓频率: {self.rebalance_freq}。"
+                f"请使用 'D'（日）、'W'（周）、'M'（月）或正整数（每N天）"
+            )
     
     
     def _buy_stock(self, date: pd.Timestamp, stock: str, target_value: float, price_dict: Dict) -> None:
