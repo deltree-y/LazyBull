@@ -13,6 +13,11 @@ pyarrow>=10.0.0
 loguru>=0.6.0
 tushare>=1.2.89
 
+# Machine Learning dependencies
+xgboost>=1.7.0
+scikit-learn>=1.2.0
+joblib>=1.2.0
+
 # Development dependencies
 pytest>=7.2.0
 pytest-cov>=4.0.0
