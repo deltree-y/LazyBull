@@ -57,7 +57,7 @@ data/features/*
 data/reports/*
 !data/reports/.gitkeep
 data/models/*.joblib
-data/models/v*_features.json
+data/models/*.json
 !data/models/.gitkeep
 
 # Logs

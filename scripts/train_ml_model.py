@@ -118,7 +118,7 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5") -> tu
     # 过滤标记列（以 filter_ 开头）
     filter_columns = [col for col in df.columns if col.startswith('filter_')]
     # 可交易标记
-    other_exclude_columns = ['is_tradable']
+    other_exclude_columns = ['tradable', 'list_date', 'list_days', 'limit_up', 'limit_down']   # 根据需要添加其他非特征列
     
     exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns
     

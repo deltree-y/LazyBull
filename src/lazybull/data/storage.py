@@ -510,18 +510,10 @@ class Storage:
         """
         if format == "parquet":
             file_path = path.with_suffix(".parquet")
-            if not file_path.exists() or is_force:
-                df.to_parquet(file_path, index=False)
-            else:
-                logger.info(f"文件已存在，跳过保存: {file_path}")
-                return
+            df.to_parquet(file_path, index=False)
         elif format == "csv":
             file_path = path.with_suffix(".csv")
-            if not file_path.exists() or is_force:
-                df.to_csv(file_path, index=False, encoding="utf-8-sig")
-            else:
-                logger.info(f"文件已存在，跳过保存: {file_path}")
-                return
+            df.to_csv(file_path, index=False, encoding="utf-8-sig")
         else:
             raise ValueError(f"不支持的格式: {format}")
         
