@@ -13,16 +13,21 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import pandas as pd
 from loguru import logger
 
 from src.lazybull.common.config import get_config
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import Storage, TushareClient
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def download_basic_data(
@@ -31,7 +36,7 @@ def download_basic_data(
     start_date: str,
     end_date: str,
     force: bool = False
-) -> pd.DataFrame:
+) -> "pd.DataFrame":
     """下载基础数据（trade_cal和stock_basic）
     
     Args:
@@ -44,8 +49,6 @@ def download_basic_data(
     Returns:
         交易日历DataFrame
     """
-    import pandas as pd
-    
     # 1. 下载交易日历
     logger.info("检查交易日历...")
     if not force and storage.check_basic_data_freshness("trade_cal", end_date):
@@ -77,7 +80,7 @@ def download_basic_data(
 def download_daily_data(
     client: TushareClient,
     storage: Storage,
-    trade_cal: pd.DataFrame,
+    trade_cal: "pd.DataFrame",
     start_date: str,
     end_date: str,
     force: bool = False

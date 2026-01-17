@@ -199,6 +199,35 @@ for date_str, group_df in daily_df.groupby('trade_date'):
     storage.save_raw_by_date(group_df, "daily", date_str)
 ```
 
+#### 4. 重要行为变更
+
+**`load_raw_by_date_range` 和 `load_clean_by_date_range` 不再回退到非分区加载**：
+
+- **旧行为**：如果分区目录不存在，会尝试加载非分区文件
+- **新行为**：如果分区目录不存在，直接返回 `None` 并记录警告
+
+**影响**：如果你的代码依赖于这个回退机制，需要：
+1. 确保数据已迁移到分区格式，或
+2. 明确使用 `load_raw()` / `load_clean()` 加载非分区数据
+
+**示例**：
+```python
+# 旧代码（依赖回退机制）
+data = storage.load_raw_by_date_range("daily", "20230101", "20230131")  
+# 即使daily是单文件也能工作
+
+# 新代码（需明确选择）
+# 方式一：使用分区数据
+data = storage.load_raw_by_date_range("daily", "20230101", "20230131")
+
+# 方式二：使用单文件
+data = storage.load_raw("daily")
+if data is not None:
+    # 手动过滤日期范围
+    data = data[(data['trade_date'] >= '20230101') & 
+                (data['trade_date'] <= '20230131')]
+```
+
 ## 使用示例
 
 ### 场景一：首次使用

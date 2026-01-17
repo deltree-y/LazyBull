@@ -474,7 +474,7 @@ class Storage:
         
         return file_path.exists()
 
-    def is_data_exists(self, layer:str, name:str, date: str, format: str="parquet") -> bool:
+    def is_data_exists(self, layer: str, name: str, date: str, format: str = "parquet") -> bool:
         """判断文件是否存在
         
         Args:
