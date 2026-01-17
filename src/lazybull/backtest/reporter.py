@@ -41,15 +41,19 @@ class Reporter:
         # 打印到控制台
         self._print_summary(stats)
         
+        # 将列名转换为中文
+        nav_curve_chinese = self._translate_nav_columns(nav_curve)
+        trades_chinese = self._translate_trades_columns(trades)
+        
         # 保存净值曲线
         nav_file = self.output_dir / f"{output_name}_nav.csv"
-        nav_curve.to_csv(nav_file, index=False, encoding="utf-8-sig")
+        nav_curve_chinese.to_csv(nav_file, index=False, encoding="utf-8-sig")
         logger.info(f"净值曲线已保存: {nav_file}")
         
         # 保存交易记录
-        if not trades.empty:
+        if not trades_chinese.empty:
             trades_file = self.output_dir / f"{output_name}_trades.csv"
-            trades.to_csv(trades_file, index=False, encoding="utf-8-sig")
+            trades_chinese.to_csv(trades_file, index=False, encoding="utf-8-sig")
             logger.info(f"交易记录已保存: {trades_file}")
         
         # 保存统计指标
@@ -57,6 +61,67 @@ class Reporter:
         self._save_stats(stats, stats_file)
         
         return stats
+    
+    def _translate_nav_columns(self, nav_curve: pd.DataFrame) -> pd.DataFrame:
+        """将净值曲线列名转换为中文
+        
+        Args:
+            nav_curve: 原始净值曲线DataFrame
+            
+        Returns:
+            列名为中文的DataFrame
+        """
+        if nav_curve.empty:
+            return nav_curve
+        
+        column_mapping = {
+            'date': '日期',
+            'portfolio_value': '组合总值',
+            'capital': '可用资金',
+            'market_value': '持仓市值',
+            'nav': '净值',
+            'return': '收益率'
+        }
+        
+        result = nav_curve.copy()
+        result = result.rename(columns=column_mapping)
+        
+        return result
+    
+    def _translate_trades_columns(self, trades: pd.DataFrame) -> pd.DataFrame:
+        """将交易记录列名转换为中文
+        
+        Args:
+            trades: 原始交易记录DataFrame
+            
+        Returns:
+            列名为中文的DataFrame
+        """
+        if trades.empty:
+            return trades
+        
+        column_mapping = {
+            'date': '交易日期',
+            'stock': '股票代码',
+            'action': '操作',
+            'price': '成交价格',
+            'shares': '成交股数',
+            'amount': '成交金额',
+            'cost': '交易成本'
+        }
+        
+        result = trades.copy()
+        result = result.rename(columns=column_mapping)
+        
+        # 将 action 列的值也转换为中文
+        if '操作' in result.columns:
+            action_mapping = {
+                'buy': '买入',
+                'sell': '卖出'
+            }
+            result['操作'] = result['操作'].map(action_mapping).fillna(result['操作'])
+        
+        return result
     
     def _calculate_statistics(self, nav_curve: pd.DataFrame, trades: pd.DataFrame) -> dict:
         """计算统计指标

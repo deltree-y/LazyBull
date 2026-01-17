@@ -352,7 +352,7 @@ class FeatureBuilder:
         current_data: pd.DataFrame,
         window: int
     ) -> pd.DataFrame:
-        """计算单个窗口的特征
+        """计算单个窗口的特征（优化版本，使用向量化计算）
         
         Args:
             hist_data: 历史窗口数据
@@ -362,67 +362,59 @@ class FeatureBuilder:
         Returns:
             窗口特征DataFrame
         """
-        # 按股票分组计算
-        grouped = hist_data.groupby('ts_code')
-        
-        features_list = []
-        
-        for ts_code, group in grouped:
-            if len(group) == 0:
-                continue
-            
-            # 按日期排序
-            group = group.sort_values('trade_date')
-            
-            # 累计收益率：(最后收盘价 / 第一个收盘价) - 1
-            ret_n = (group['close_adj'].iloc[-1] / group['close_adj'].iloc[0]) - 1
-            
-            # 平均成交量
-            mean_vol = group['vol'].mean()
-            
-            # 平均成交额
-            mean_amount = group['amount'].mean()
-            
-            # 均线
-            ma_close = group['close_adj'].mean()
-            
-            features_list.append({
-                'ts_code': ts_code,
-                f'ret_{window}': ret_n,
-                'mean_vol': mean_vol,
-                'mean_amount': mean_amount,
-                'ma_close': ma_close
-            })
-        
-        if len(features_list) == 0:
+        if len(hist_data) == 0:
             return pd.DataFrame(columns=['ts_code'])
         
-        window_features = pd.DataFrame(features_list)
+        # 按股票分组，使用向量化操作计算特征
+        grouped = hist_data.groupby('ts_code', as_index=False)
+        
+        # 计算累计收益率：(最后收盘价 / 第一个收盘价) - 1
+        # 使用 agg 同时计算多个统计量
+        window_features = grouped.agg({
+            'close_adj': ['first', 'last', 'mean'],
+            'vol': 'mean',
+            'amount': 'mean'
+        })
+        
+        # 展平列名
+        window_features.columns = ['_'.join(col).strip('_') for col in window_features.columns.values]
+        window_features = window_features.rename(columns={'close_adj_': 'ts_code'})
+        
+        # 重命名列
+        window_features = window_features.rename(columns={
+            'close_adj_first': 'first_close',
+            'close_adj_last': 'last_close',
+            'close_adj_mean': 'ma_close',
+            'vol_mean': 'mean_vol',
+            'amount_mean': 'mean_amount'
+        })
+        
+        # 计算累计收益率
+        window_features[f'ret_{window}'] = (
+            window_features['last_close'] / window_features['first_close']
+        ) - 1
         
         # 合并当日数据计算比率
         current_vol_amount = current_data[['ts_code', 'vol', 'amount', 'close_adj']].copy()
         window_features = window_features.merge(current_vol_amount, on='ts_code', how='left')
         
-        # 成交量比率（添加除零保护）
-        valid_vol = window_features['mean_vol'] > 0
-        window_features[f'vol_ratio_{window}'] = np.nan
-        window_features.loc[valid_vol, f'vol_ratio_{window}'] = (
-            window_features.loc[valid_vol, 'vol'] / window_features.loc[valid_vol, 'mean_vol']
+        # 使用向量化操作计算比率（带除零保护）
+        window_features[f'vol_ratio_{window}'] = np.where(
+            window_features['mean_vol'] > 0,
+            window_features['vol'] / window_features['mean_vol'],
+            np.nan
         )
         
-        # 成交额比率（添加除零保护）
-        valid_amount = window_features['mean_amount'] > 0
-        window_features[f'amount_ratio_{window}'] = np.nan
-        window_features.loc[valid_amount, f'amount_ratio_{window}'] = (
-            window_features.loc[valid_amount, 'amount'] / window_features.loc[valid_amount, 'mean_amount']
+        window_features[f'amount_ratio_{window}'] = np.where(
+            window_features['mean_amount'] > 0,
+            window_features['amount'] / window_features['mean_amount'],
+            np.nan
         )
         
-        # 均线偏离度（添加除零保护）
-        valid_ma = window_features['ma_close'] > 1e-6
-        window_features[f'ma_deviation_{window}'] = np.nan
-        window_features.loc[valid_ma, f'ma_deviation_{window}'] = (
-            (window_features.loc[valid_ma, 'close_adj'] - window_features.loc[valid_ma, 'ma_close']) / 
-            window_features.loc[valid_ma, 'ma_close']
+        window_features[f'ma_deviation_{window}'] = np.where(
+            window_features['ma_close'] > 1e-6,
+            (window_features['close_adj'] - window_features['ma_close']) / window_features['ma_close'],
+            np.nan
         )
         
         # 保留需要的列
@@ -618,7 +610,7 @@ class FeatureBuilder:
             df: 特征DataFrame
             
         Returns:
-            过滤后的DataFrame
+            过滤后的DataFrame，filter_ 前缀已被移除
         """
         original_count = len(df)
         
@@ -643,5 +635,17 @@ class FeatureBuilder:
         ].copy()
         
         logger.info(f"过滤后样本数: {len(result)}")
+        
+        # 重命名列：去掉 filter_ 前缀，list_days 保留但不作为 filter 列
+        # filter 列只包含 is_st 和 suspend
+        rename_map = {
+            'filter_is_st': 'is_st',
+            'filter_suspend': 'suspend',
+            'filter_list_days': 'list_days'
+        }
+        
+        for old_name, new_name in rename_map.items():
+            if old_name in result.columns:
+                result.rename(columns={old_name: new_name}, inplace=True)
         
         return result
