@@ -66,7 +66,7 @@ python scripts/update_basic_data.py --force             # 强制更新
 - 判断依据：`Storage.check_basic_data_freshness()` 检查本地最新日期是否覆盖需求
 - 不够才更新：本地最新日期 < 所需结束日期时更新
 - 每次更新都是全集：使用全量API（不是增量patch）
-- 推荐频率：每月更新一次
+- 推荐频率：每年年初更新一次（新增当年全部数据）
 
 **stock_basic**：
 - 判断依据：`Storage.check_basic_data_freshness()` 检查文件是否存在
@@ -326,7 +326,7 @@ def check_basic_data_freshness(self, name: str, required_end_date: str) -> bool:
    - 不需要维护增量更新状态
 
 4. **符合实际使用场景**：
-   - trade_cal：每月新增20-30条记录，全量更新合理
+   - trade_cal：每年年初新增当年全部交易日数据，全量更新合理
    - stock_basic：每季度变化，建议定期全量更新
    - 低频更新，全量成本可接受
 
@@ -339,8 +339,8 @@ def check_basic_data_freshness(self, name: str, required_end_date: str) -> bool:
 
 **trade_cal**：
 ```bash
-# 每月1号自动更新（cron）
-0 2 1 * * python scripts/update_basic_data.py --only-trade-cal
+# 每年1月初自动更新（cron）
+0 2 5 1 * python scripts/update_basic_data.py --only-trade-cal
 ```
 
 **stock_basic**：

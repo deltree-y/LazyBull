@@ -230,7 +230,7 @@ LazyBull 采用三层数据架构，统一使用 **partitioned 存储**：
    - 保证数据完整性和一致性
 
 3. **推荐频率**：
-   - `trade_cal`: 每月更新一次
+   - `trade_cal`: 每年年初更新一次（新增当年全部数据）
    - `stock_basic`: 每季度更新一次
    - 或在 cron 中定期运行 `update_basic_data.py`
 

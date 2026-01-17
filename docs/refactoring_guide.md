@@ -68,7 +68,7 @@ python scripts/update_basic_data.py
 #### trade_cal
 - **判断依据**：检查本地最新日期是否覆盖所需范围
 - **更新方式**：全量更新（不是增量）
-- **推荐频率**：每月更新一次
+- **推荐频率**：每年年初更新一次（新增当年全部数据）
 - **实现方法**：`Storage.check_basic_data_freshness()`
 
 #### stock_basic
@@ -240,7 +240,7 @@ python scripts/build_features.py --start-date 20230101 --end-date 20231231
 ### 场景二：定期更新
 
 ```bash
-# 1. 每月更新基础数据
+# 1. 每年年初更新基础数据（或需要时手动更新）
 python scripts/update_basic_data.py
 
 # 2. 下载新日期的数据
@@ -261,8 +261,8 @@ python scripts/build_features.py --start-date 20230601 --end-date 20230630 --for
 
 ```bash
 # crontab -e
-# 每月1号凌晨2点更新基础数据
-0 2 1 * * cd /path/to/LazyBull && python scripts/update_basic_data.py >> logs/update.log 2>&1
+# 每年1月5日凌晨2点更新基础数据
+0 2 5 1 * cd /path/to/LazyBull && python scripts/update_basic_data.py >> logs/update.log 2>&1
 
 # 每天凌晨3点下载前一交易日数据
 0 3 * * * cd /path/to/LazyBull && python scripts/download_raw.py --start-date $(date -d "1 day ago" +\%Y\%m\%d) --end-date $(date +\%Y\%m\%d) >> logs/download.log 2>&1

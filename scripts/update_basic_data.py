@@ -226,7 +226,7 @@ def main():
         logger.info("=" * 60)
         logger.info("")
         logger.info("更新策略说明：")
-        logger.info("1. trade_cal: 建议每月更新一次，确保包含最新交易日")
+        logger.info("1. trade_cal: 建议每年年初更新一次，新增当年全部交易日数据")
         logger.info("2. stock_basic: 建议每季度更新一次，获取新上市/退市股票")
         logger.info("3. 可以在cron或定时任务中运行此脚本")
         logger.info("=" * 60)
