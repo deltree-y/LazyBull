@@ -201,13 +201,14 @@ class BacktestEngineML(BacktestEngine):
         super().__init__(**kwargs)
         self.features_by_date = features_by_date
     
-    def _generate_signal(self, date: pd.Timestamp, trading_dates: list, price_dict: dict) -> None:
+    def _generate_signal(self, date: pd.Timestamp, trading_dates: list, price_dict: dict, date_to_idx: dict) -> None:
         """生成信号（重写以支持特征数据）
         
         Args:
             date: 信号生成日期
             trading_dates: 交易日列表
             price_dict: 价格字典
+            date_to_idx: 日期到索引的映射
         """
         # 获取股票池
         stock_universe = self.universe.get_stocks(date)

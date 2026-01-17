@@ -98,6 +98,9 @@ class BacktestEngine:
         trading_dates = [d for d in trading_dates if start_date <= d <= end_date]
         total_days = len(trading_dates)
         
+        # 创建日期到索引的映射，优化查找效率
+        date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+        
         # 准备价格数据字典，加速查询
         price_dict = self._prepare_price_dict(price_data)
         
@@ -111,13 +114,13 @@ class BacktestEngine:
         for idx, date in enumerate(trading_dates):
             # 判断是否为信号生成日
             if date in signal_dates:
-                self._generate_signal(date, trading_dates, price_dict)
+                self._generate_signal(date, trading_dates, price_dict, date_to_idx)
             
             # 执行待执行的买入操作（T+1）
-            self._execute_pending_buys(date, trading_dates, price_dict)
+            self._execute_pending_buys(date, trading_dates, price_dict, date_to_idx)
             
             # 检查并执行卖出操作（达到持有期）
-            self._check_and_sell(date, trading_dates, price_dict)
+            self._check_and_sell(date, trading_dates, price_dict, date_to_idx)
             
             # 计算当日组合价值
             portfolio_value = self._calculate_portfolio_value(date, price_dict)
@@ -149,13 +152,14 @@ class BacktestEngine:
         
         return nav_df
     
-    def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict) -> None:
+    def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
         """生成信号（在 T 日生成，T+1 日执行买入）
         
         Args:
             date: 信号生成日期
             trading_dates: 交易日列表
             price_dict: 价格字典
+            date_to_idx: 日期到索引的映射
         """
         # 获取股票池
         stock_universe = self.universe.get_stocks(date)
@@ -171,17 +175,18 @@ class BacktestEngine:
         self.pending_signals[date] = signals
         logger.info(f"信号生成: {date.date()}, 信号数 {len(signals)}")
     
-    def _execute_pending_buys(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict) -> None:
+    def _execute_pending_buys(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
         """执行待执行的买入操作（T+1）
         
         Args:
             date: 当前日期
             trading_dates: 交易日列表
             price_dict: 价格字典
+            date_to_idx: 日期到索引的映射
         """
         # 查找前一个交易日的信号
-        current_idx = trading_dates.index(date)
-        if current_idx == 0:
+        current_idx = date_to_idx.get(date)
+        if current_idx is None or current_idx == 0:
             return
         
         signal_date = trading_dates[current_idx - 1]
@@ -201,32 +206,35 @@ class BacktestEngine:
         
         logger.info(f"买入执行: {date.date()}, 买入 {len(signals)} 只股票（信号日: {signal_date.date()}）")
     
-    def _check_and_sell(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict) -> None:
+    def _check_and_sell(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
         """检查并执行卖出操作（达到持有期 T+n）
         
         Args:
             date: 当前日期
             trading_dates: 交易日列表
             price_dict: 价格字典
+            date_to_idx: 日期到索引的映射
         """
         stocks_to_sell = []
         
+        current_idx = date_to_idx.get(date)
+        if current_idx is None:
+            return
+        
         for stock, info in self.positions.items():
             buy_date = info['buy_date']
+            buy_idx = date_to_idx.get(buy_date)
+            
+            if buy_idx is None:
+                logger.warning(f"股票 {stock} 买入日期 {buy_date} 不在交易日映射中")
+                continue
             
             # 计算持有天数（交易日）
-            try:
-                buy_idx = trading_dates.index(buy_date)
-                current_idx = trading_dates.index(date)
-                holding_days = current_idx - buy_idx
-                
-                # 达到持有期，执行卖出
-                if holding_days >= self.holding_period:
-                    stocks_to_sell.append(stock)
-            except ValueError:
-                # 日期不在交易日列表中，跳过
-                logger.warning(f"股票 {stock} 买入日期 {buy_date} 不在交易日列表中")
-                continue
+            holding_days = current_idx - buy_idx
+            
+            # 达到持有期，执行卖出
+            if holding_days >= self.holding_period:
+                stocks_to_sell.append(stock)
         
         # 执行卖出
         for stock in stocks_to_sell:
@@ -311,15 +319,20 @@ class BacktestEngine:
             total_cost = amount + cost
         
         # 更新持仓和资金（记录买入日期）
+        # 注意：在当前 T+n 卖出策略下，理论上不应该出现已有持仓的情况
+        # 因为旧持仓应该在达到持有期后自动卖出
+        # 如果出现已有持仓，说明可能是边界情况或配置问题
         if stock in self.positions:
-            # 已有持仓，累加（更新买入日期为最新）
-            self.positions[stock]['shares'] += shares
-            self.positions[stock]['buy_date'] = date
-        else:
-            self.positions[stock] = {
-                'shares': shares,
-                'buy_date': date
-            }
+            logger.warning(
+                f"股票 {stock} 已有持仓（买入日期: {self.positions[stock]['buy_date']}），"
+                f"新买入将覆盖旧持仓（可能配置有误）"
+            )
+        
+        # 设置或覆盖持仓
+        self.positions[stock] = {
+            'shares': shares,
+            'buy_date': date
+        }
         
         self.current_capital -= total_cost
         

@@ -366,6 +366,7 @@ class FeatureBuilder:
             return pd.DataFrame(columns=['ts_code'])
         
         # 按股票分组，使用向量化操作计算特征
+        # as_index=False 保留 ts_code 作为普通列
         grouped = hist_data.groupby('ts_code', as_index=False)
         
         # 计算累计收益率：(最后收盘价 / 第一个收盘价) - 1
@@ -376,9 +377,17 @@ class FeatureBuilder:
             'amount': 'mean'
         })
         
-        # 展平列名
-        window_features.columns = ['_'.join(col).strip('_') for col in window_features.columns.values]
-        window_features = window_features.rename(columns={'close_adj_': 'ts_code'})
+        # 展平多级列名
+        # grouped.agg() 返回的 columns 是 MultiIndex
+        # 第一列是 ('ts_code', '')，后面是 ('close_adj', 'first') 等
+        new_columns = []
+        for col in window_features.columns:
+            if col[0] == 'ts_code':
+                new_columns.append('ts_code')
+            else:
+                # 连接列名和聚合函数名
+                new_columns.append('_'.join(col).strip('_'))
+        window_features.columns = new_columns
         
         # 重命名列
         window_features = window_features.rename(columns={
