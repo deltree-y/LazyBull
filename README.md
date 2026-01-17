@@ -36,12 +36,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **Parquet存储**: 高效的列式存储，加速数据读取
 - ✅ **回测引擎**: 支持日/周/月频调仓，包含成本模型
 - ✅ **T+1 交易规则**: T 日生成信号，T+1 日收盘价买入，T+n 日收盘价卖出
-- ✅ **实时进度显示**: 回测时显示当前日期、完成度、耗时与 ETA
+- ✅ **实时进度显示**: 回测时使用 tqdm 进度条显示当前日期、净值、耗时
+- ✅ **收益明细跟踪**: 每笔卖出交易自动计算收益金额和收益率（已扣除成本）
 - ✅ **信号生成**: 提供等权、因子打分等多种方法
 - ✅ **报告生成**: 自动计算收益率、夏普、最大回撤等指标，支持中文列名
 - ✅ **单元测试**: 基于pytest的测试框架
 - ✅ **ML 模型训练**: 支持 XGBoost 模型训练，自动验证集评估
+- ✅ **模型优化**: 早停机制、标签 winsorize、正则化、IC/RankIC 评估
 - ✅ **特征优化**: 向量化计算提升特征生成效率
+- ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
 
 ### v0.2.0 更新内容
 
@@ -208,28 +211,42 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231
 python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
     --n-estimators 200 --max-depth 5 --learning-rate 0.05
 
-# 步骤2: 使用 ML 模型运行回测
+# 步骤2: 使用 ML 模型运行回测（使用新的默认值）
+# 默认：Top N=5, 初始资金=50万, 周频调仓, 排除ST
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231
 
-# 指定模型版本和 Top N
+# 自定义参数示例
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --model-version 1 --top-n 50
+    --model-version 1 --top-n 10 --initial-capital 1000000
 
 # 指定调仓频率（M=月度，W=周度，D=日度）
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --rebalance-freq M --top-n 30
+    --rebalance-freq M --top-n 5
+
+# 包含ST股票（默认排除）
+python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
+    --include-st
 ```
 
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率）
 - **训练时自动切分验证集**（默认最后 20% 时间作为验证集）
-- **训练结束后打印验证集评估结果**（MSE、RMSE、R2）
+- **训练结束后打印验证集评估结果**（MSE、RMSE、R2、IC、RankIC）
+- **使用早停机制**（early_stopping_rounds=30）防止过拟合
+- **标签 winsorize 处理**减少极端值影响
+- **增加正则化参数**（L1/L2）提升泛化能力
 - 模型自动保存到 `data/models` 目录
 - 版本号自动递增（v1, v2, v3...）
 - 元数据记录在 `model_registry.json`
 - 支持排序选股 Top N 策略
 - 随机种子固定（random_state=42），保证可复现
+
+**默认回测参数：**
+- Top N: 5（选择前5只股票）
+- 初始资金: 500,000（50万）
+- 调仓频率: W（周频）
+- 排除ST: 是（默认过滤ST股票）
 
 **查看模型文件：**
 ```bash

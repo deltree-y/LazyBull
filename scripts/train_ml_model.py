@@ -190,16 +190,22 @@ def train_xgboost_model(
     colsample_bytree: float = 0.8,
     random_state: int = 42
 ) -> tuple:
-    """训练 XGBoost 模型
+    """训练 XGBoost 模型（改进版本）
+    
+    改进点：
+    1. 增加早停机制（early stopping）防止过拟合
+    2. 优化默认超参数（更深的树和正则化）
+    3. 添加更全面的评估指标（IC/RankIC）
+    4. 对标签进行 winsorize 处理减少异常值影响
     
     Args:
         X_train: 训练特征数据
         y_train: 训练标签数据
         X_val: 验证特征数据
         y_val: 验证标签数据
-        n_estimators: 树的数量
-        max_depth: 树的最大深度
-        learning_rate: 学习率
+        n_estimators: 树的数量（默认100，建议200-300）
+        max_depth: 树的最大深度（默认6，建议6-10）
+        learning_rate: 学习率（默认0.1，建议0.05-0.1）
         subsample: 样本采样比例
         colsample_bytree: 特征采样比例
         random_state: 随机种子
@@ -207,9 +213,17 @@ def train_xgboost_model(
     Returns:
         (model, train_params, train_metrics, val_metrics) 元组
     """
-    logger.info("开始训练 XGBoost 模型...")
+    logger.info("开始训练 XGBoost 模型（改进版本）...")
     
-    # 准备训练参数
+    # 对标签进行 winsorize 处理（截断极端值，减少噪音）
+    from scipy.stats import mstats
+    y_train_winsorized = pd.Series(
+        mstats.winsorize(y_train, limits=[0.01, 0.01]),  # 截断上下1%极端值
+        index=y_train.index
+    )
+    logger.info("标签 winsorize 处理完成（截断上下1%极端值）")
+    
+    # 准备训练参数（增加正则化参数）
     train_params = {
         "objective": "reg:squarederror",
         "n_estimators": n_estimators,
@@ -219,42 +233,70 @@ def train_xgboost_model(
         "colsample_bytree": colsample_bytree,
         "random_state": random_state,
         "tree_method": "hist",
-        "n_jobs": -1
+        "n_jobs": -1,
+        # 增加正则化参数防止过拟合
+        "gamma": 0.1,  # 分裂所需的最小损失减少
+        "reg_alpha": 0.1,  # L1 正则化
+        "reg_lambda": 1.0,  # L2 正则化
     }
     
     logger.info(f"训练参数: {train_params}")
+    logger.info("使用早停机制（early_stopping_rounds=30）")
     
-    # 创建并训练模型
+    # 创建并训练模型（使用早停）
     model = xgb.XGBRegressor(**train_params)
-    model.fit(X_train, y_train)
     
-    logger.info("模型训练完成")
+    # 如果有验证集，使用早停机制
+    if len(X_val) > 0:
+        model.fit(
+            X_train, y_train_winsorized,
+            eval_set=[(X_val, y_val)],
+            early_stopping_rounds=30,  # 30轮无改进则停止
+            verbose=False  # 不打印每轮训练信息
+        )
+        logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
+    else:
+        model.fit(X_train, y_train_winsorized)
+        logger.info("模型训练完成（无验证集，未使用早停）")
     
     # 计算训练集性能指标
     y_train_pred = model.predict(X_train)
-    train_mse = mean_squared_error(y_train, y_train_pred)
+    train_mse = mean_squared_error(y_train, y_train_pred)  # 注意：使用原始标签评估
     train_rmse = train_mse ** 0.5
     train_r2 = r2_score(y_train, y_train_pred)
+    
+    # 计算训练集 IC（信息系数，衡量预测与真实值的相关性）
+    train_ic = y_train.corr(pd.Series(y_train_pred, index=y_train.index))
     
     train_metrics = {
         "mse": float(train_mse),
         "rmse": float(train_rmse),
-        "r2": float(train_r2)
+        "r2": float(train_r2),
+        "ic": float(train_ic)
     }
     
-    logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}")
+    logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}")
     
-    # 计算验证集性能指标
+    # 计算验证集性能指标（包括 IC）
     if len(X_val) > 0:
         y_val_pred = model.predict(X_val)
         val_mse = mean_squared_error(y_val, y_val_pred)
         val_rmse = val_mse ** 0.5
         val_r2 = r2_score(y_val, y_val_pred)
         
+        # 计算验证集 IC（更重要的指标）
+        val_ic = y_val.corr(pd.Series(y_val_pred, index=y_val.index))
+        
+        # 计算 RankIC（排序相关性，对选股策略更有意义）
+        from scipy.stats import spearmanr
+        val_rank_ic, _ = spearmanr(y_val, y_val_pred)
+        
         val_metrics = {
             "mse": float(val_mse),
             "rmse": float(val_rmse),
-            "r2": float(val_r2)
+            "r2": float(val_r2),
+            "ic": float(val_ic),
+            "rank_ic": float(val_rank_ic)
         }
         
         logger.info("=" * 60)
@@ -264,6 +306,12 @@ def train_xgboost_model(
         logger.info(f"MSE（均方误差）: {val_mse:.6f}")
         logger.info(f"RMSE（均方根误差）: {val_rmse:.6f}")
         logger.info(f"R2（决定系数）: {val_r2:.4f}")
+        logger.info(f"IC（信息系数）: {val_ic:.4f}  <- 重要指标")
+        logger.info(f"RankIC（排序IC）: {val_rank_ic:.4f}  <- 选股策略关键指标")
+        logger.info("=" * 60)
+        logger.info("提示：对于选股策略，IC 和 RankIC 比 R2 更重要")
+        logger.info("     IC > 0.03 通常可认为有一定预测能力")
+        logger.info("     RankIC > 0.05 说明排序能力较好")
         logger.info("=" * 60)
     else:
         val_metrics = {}
@@ -300,20 +348,20 @@ def main():
     parser.add_argument(
         "--n-estimators",
         type=int,
-        default=100,
-        help="树的数量，默认 100"
+        default=200,
+        help="树的数量，默认 200（建议范围：100-300）"
     )
     parser.add_argument(
         "--max-depth",
         type=int,
-        default=6,
-        help="树的最大深度，默认 6"
+        default=8,
+        help="树的最大深度，默认 8（建议范围：6-10）"
     )
     parser.add_argument(
         "--learning-rate",
         type=float,
-        default=0.1,
-        help="学习率，默认 0.1"
+        default=0.05,
+        help="学习率，默认 0.05（建议范围：0.01-0.1）"
     )
     parser.add_argument(
         "--subsample",
