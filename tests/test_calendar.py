@@ -15,26 +15,15 @@ def test_get_trading_dates_empty():
     assert isinstance(dates, list)
 
 
-def test_trading_dates_with_mock_data():
-    """测试模拟交易日历数据"""
-    # 创建模拟交易日历
-    mock_cal = pd.DataFrame({
-        'exchange': ['SSE'] * 10,
-        'cal_date': pd.date_range('2023-01-01', periods=10, freq='D'),
-        'is_open': [1, 1, 0, 1, 1, 0, 0, 1, 1, 1],  # 前2天开盘，第3天休市...
-        'pretrade_date': [None] * 10
-    })
-    
-    # 保存模拟数据
+def test_trading_dates_with_real_data():
     storage = Storage()
-    storage.save_raw(mock_cal, "trade_cal")
     
     # 测试加载
     loader = DataLoader(storage)
     dates = loader.get_trading_dates('2023-01-01', '2023-01-10')
     
     # 应该只返回is_open=1的日期
-    assert len(dates) == 7  # 10天中有7个交易日
+    assert len(dates) == 6  # 10天中有6个交易日
     
     # 验证日期排序
     assert dates == sorted(dates)
