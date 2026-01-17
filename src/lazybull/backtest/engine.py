@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
+from tqdm import tqdm
 
 from ..common.cost import CostModel
 from ..signals.base import Signal
@@ -110,39 +111,38 @@ class BacktestEngine:
         # 记录开始时间
         start_time = time.time()
         
-        # 按日推进
-        for idx, date in enumerate(trading_dates):
-            # 判断是否为信号生成日
-            if date in signal_dates:
-                self._generate_signal(date, trading_dates, price_dict, date_to_idx)
-            
-            # 执行待执行的买入操作（T+1）
-            self._execute_pending_buys(date, trading_dates, price_dict, date_to_idx)
-            
-            # 检查并执行卖出操作（达到持有期）
-            self._check_and_sell(date, trading_dates, price_dict, date_to_idx)
-            
-            # 计算当日组合价值
-            portfolio_value = self._calculate_portfolio_value(date, price_dict)
-            
-            self.portfolio_values.append({
-                'date': date,
-                'portfolio_value': portfolio_value,
-                'capital': self.current_capital,
-                'market_value': portfolio_value - self.current_capital
-            })
-            
-            # 打印进度（每10%或每个调仓日打印一次）
-            progress = (idx + 1) / total_days
-            if (idx + 1) % max(1, total_days // 10) == 0 or date in signal_dates:
+        # 使用 tqdm 显示进度条
+        with tqdm(total=total_days, desc="回测进度", unit="天") as pbar:
+            # 按日推进
+            for idx, date in enumerate(trading_dates):
+                # 判断是否为信号生成日
+                if date in signal_dates:
+                    self._generate_signal(date, trading_dates, price_dict, date_to_idx)
+                
+                # 执行待执行的买入操作（T+1）
+                self._execute_pending_buys(date, trading_dates, price_dict, date_to_idx)
+                
+                # 检查并执行卖出操作（达到持有期）
+                self._check_and_sell(date, trading_dates, price_dict, date_to_idx)
+                
+                # 计算当日组合价值
+                portfolio_value = self._calculate_portfolio_value(date, price_dict)
+                
+                self.portfolio_values.append({
+                    'date': date,
+                    'portfolio_value': portfolio_value,
+                    'capital': self.current_capital,
+                    'market_value': portfolio_value - self.current_capital
+                })
+                
+                # 更新进度条
                 elapsed_time = time.time() - start_time
-                eta = elapsed_time / (idx + 1) * (total_days - idx - 1) if idx > 0 else 0
-                logger.info(
-                    f"回测进度: {progress*100:.1f}% ({idx+1}/{total_days}) | "
-                    f"当前日期: {date.date()} | "
-                    f"已用时: {elapsed_time:.1f}秒 | "
-                    f"预计剩余: {eta:.1f}秒"
-                )
+                pbar.set_postfix({
+                    '当前日期': date.strftime('%Y-%m-%d'),
+                    '净值': f"{portfolio_value/self.initial_capital:.4f}",
+                    '已用时': f"{elapsed_time:.1f}秒"
+                })
+                pbar.update(1)
         
         # 生成净值曲线
         nav_df = self._generate_nav_curve()
@@ -328,10 +328,12 @@ class BacktestEngine:
                 f"新买入将覆盖旧持仓（可能配置有误）"
             )
         
-        # 设置或覆盖持仓
+        # 设置或覆盖持仓（记录买入价格和成本，用于计算收益）
         self.positions[stock] = {
             'shares': shares,
-            'buy_date': date
+            'buy_date': date,
+            'buy_price': price,
+            'buy_cost': total_cost
         }
         
         self.current_capital -= total_cost
@@ -367,11 +369,19 @@ class BacktestEngine:
         amount = shares * price
         cost = self.cost_model.calculate_sell_cost(amount)
         
+        # 计算收益（基于 FIFO 原则：使用记录的买入成本）
+        # 收益 = 卖出所得（扣除成本）- 买入成本
+        buy_cost = self.positions[stock]['buy_cost']
+        buy_price = self.positions[stock]['buy_price']
+        sell_proceeds = amount - cost  # 卖出后实际到手金额
+        profit_amount = sell_proceeds - buy_cost  # 绝对收益（已扣除买卖成本）
+        profit_pct = profit_amount / buy_cost if buy_cost > 0 else 0  # 收益率
+        
         # 更新持仓和资金
         del self.positions[stock]
-        self.current_capital += (amount - cost)
+        self.current_capital += sell_proceeds
         
-        # 记录交易
+        # 记录交易（包含收益信息）
         self.trades.append({
             'date': date,
             'stock': stock,
@@ -379,7 +389,10 @@ class BacktestEngine:
             'price': price,
             'shares': shares,
             'amount': amount,
-            'cost': cost
+            'cost': cost,
+            'buy_price': buy_price,  # 买入价格
+            'profit_amount': profit_amount,  # 单笔收益金额（已扣除成本）
+            'profit_pct': profit_pct  # 单笔收益率
         })
     
     def _calculate_portfolio_value(self, date: pd.Timestamp, price_dict: Dict) -> float:

@@ -20,6 +20,8 @@ tushare = "^1.2.89"
 xgboost = "^1.7.0"
 scikit-learn = "^1.2.0"
 joblib = "^1.2.0"
+tqdm = "^4.64.0"
+scipy = "^1.9.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.2.0"

@@ -32,9 +32,11 @@ tushare:
 backtest:
   start_date: "20200101"
   end_date: "20231231"
-  initial_capital: 1000000  # 初始资金100万
+  initial_capital: 500000  # 初始资金50万
   benchmark: "000300.SH"  # 沪深300
-  rebalance_frequency: "M"  # W=周, M=月, Q=季
+  rebalance_frequency: "W"  # W=周, M=月, Q=季
+  top_n: 5  # 选股数量
+  exclude_st: true  # 排除ST股票
 
 # 交易成本配置
 costs:

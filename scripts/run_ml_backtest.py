@@ -255,15 +255,15 @@ def main():
     parser.add_argument(
         "--initial-capital",
         type=float,
-        default=1000000.0,
-        help="初始资金，默认 1000000"
+        default=500000.0,
+        help="初始资金，默认 500000"
     )
     parser.add_argument(
         "--rebalance-freq",
         type=str,
-        default="M",
+        default="W",
         choices=["D", "W", "M"],
-        help="调仓频率，D=日度，W=周度，M=月度，默认 M"
+        help="调仓频率，D=日度，W=周度，M=月度，默认 W"
     )
     
     # ML 信号参数
@@ -276,8 +276,8 @@ def main():
     parser.add_argument(
         "--top-n",
         type=int,
-        default=30,
-        help="选择 Top N 只股票，默认 30"
+        default=5,
+        help="选择 Top N 只股票，默认 5"
     )
     parser.add_argument(
         "--weight-method",
@@ -291,7 +291,14 @@ def main():
     parser.add_argument(
         "--exclude-st",
         action="store_true",
-        help="排除 ST 股票"
+        default=True,
+        help="排除 ST 股票（默认开启）"
+    )
+    parser.add_argument(
+        "--include-st",
+        action="store_false",
+        dest="exclude_st",
+        help="包含 ST 股票"
     )
     parser.add_argument(
         "--min-list-days",

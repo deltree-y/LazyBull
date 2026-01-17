@@ -107,7 +107,10 @@ class Reporter:
             'price': '成交价格',
             'shares': '成交股数',
             'amount': '成交金额',
-            'cost': '交易成本'
+            'cost': '交易成本',
+            'buy_price': '买入价格',
+            'profit_amount': '收益金额',
+            'profit_pct': '收益率'
         }
         
         result = trades.copy()
@@ -120,6 +123,12 @@ class Reporter:
                 'sell': '卖出'
             }
             result['操作'] = result['操作'].map(action_mapping).fillna(result['操作'])
+        
+        # 格式化收益率为百分比（仅对卖出交易）
+        if '收益率' in result.columns:
+            result['收益率'] = result['收益率'].apply(
+                lambda x: f"{x*100:.2f}%" if pd.notna(x) else ""
+            )
         
         return result
     
