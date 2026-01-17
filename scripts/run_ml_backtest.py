@@ -23,6 +23,7 @@ ML 信号回测脚本
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 # 添加项目路径
@@ -407,7 +408,6 @@ def main():
         
     except Exception as e:
         logger.error(f"回测失败: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)
 

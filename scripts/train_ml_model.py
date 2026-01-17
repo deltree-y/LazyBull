@@ -21,6 +21,7 @@ XGBoost 模型训练脚本
 
 import argparse
 import sys
+import traceback
 from pathlib import Path
 
 # 添加项目路径
@@ -344,7 +345,6 @@ def main():
         
     except Exception as e:
         logger.error(f"训练失败: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)
 

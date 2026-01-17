@@ -128,7 +128,7 @@ class MLSignal(Signal):
             # 按预测分数加权
             total_score = top_stocks['ml_score'].sum()
             if total_score <= 0:
-                # 如果所有分数都是负数或零，使用等权
+                # 如果所有分数都是负数或零，回退到等权
                 weight = 1.0 / len(top_stocks)
                 signals = {stock: weight for stock in top_stocks['ts_code'].tolist()}
             else:
