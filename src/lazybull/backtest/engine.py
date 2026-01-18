@@ -129,51 +129,34 @@ class BacktestEngine:
         
         # 获取调仓日期（信号生成日期）
         signal_dates = self._get_rebalance_dates(trading_dates)
+
+        logger.info(f"数据准备完成, 调仓日期共 {len(signal_dates)} 天")
         
         # 记录开始时间
         start_time = time.time()
         
-        # 使用 tqdm 显示进度条（确保实时刷新）
-        with tqdm(
-            total=total_days,
-            desc="回测进度",
-            unit="天",
-            file=sys.stdout,  # 输出到 stdout
-            ncols=100,  # 固定宽度，避免换行
-            mininterval=0.1,  # 最小更新间隔（秒），加快刷新频率
-            leave=True  # 完成后保留进度条
-        ) as pbar:
-            # 按日推进
-            for idx, date in enumerate(trading_dates):
-                # 判断是否为信号生成日
-                if date in signal_dates:
-                    self._generate_signal(date, trading_dates, price_dict, date_to_idx)
-                
-                # 执行待执行的买入操作（T+1）
-                self._execute_pending_buys(date, trading_dates, price_dict, date_to_idx)
-                
-                # 检查并执行卖出操作（达到持有期）
-                self._check_and_sell(date, trading_dates, price_dict, date_to_idx)
-                
-                # 计算当日组合价值
-                portfolio_value = self._calculate_portfolio_value(date, price_dict)
-                
-                self.portfolio_values.append({
-                    'date': date,
-                    'portfolio_value': portfolio_value,
-                    'capital': self.current_capital,
-                    'market_value': portfolio_value - self.current_capital
-                })
-                
-                # 更新进度条
-                elapsed_time = time.time() - start_time
-                pbar.set_postfix({
-                    '当前日期': date.strftime('%Y-%m-%d'),
-                    '净值': f"{portfolio_value/self.initial_capital:.4f}",
-                    '已用时': f"{elapsed_time:.1f}秒"
-                })
-                pbar.update(1)
-        
+        # 按日推进
+        for idx, date in enumerate(trading_dates):
+            # 判断是否为信号生成日
+            if date in signal_dates:
+                self._generate_signal(date, trading_dates, price_dict, date_to_idx)
+            
+            # 执行待执行的买入操作（T+1）
+            self._execute_pending_buys(date, trading_dates, price_dict, date_to_idx)
+            
+            # 检查并执行卖出操作（达到持有期）
+            self._check_and_sell(date, trading_dates, price_dict, date_to_idx)
+            
+            # 计算当日组合价值
+            portfolio_value = self._calculate_portfolio_value(date, price_dict)
+            
+            self.portfolio_values.append({
+                'date': date,
+                'portfolio_value': portfolio_value,
+                'capital': self.current_capital,
+                'market_value': portfolio_value - self.current_capital
+            })
+            
         # 生成净值曲线
         nav_df = self._generate_nav_curve()
         
@@ -313,6 +296,8 @@ class BacktestEngine:
         Returns:
             调仓日期列表
         """
+        if self.rebalance_freq.isdecimal():
+            self.rebalance_freq = int(self.rebalance_freq)
         # 支持整数天数
         if isinstance(self.rebalance_freq, int):
             # 每 N 个交易日调仓一次

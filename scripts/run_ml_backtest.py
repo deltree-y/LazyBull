@@ -168,7 +168,8 @@ def run_ml_backtest(
         features_by_date=features_by_date,
         initial_capital=initial_capital,
         cost_model=cost_model or CostModel(),
-        rebalance_freq=rebalance_freq
+        rebalance_freq=rebalance_freq,
+        price_type="close",
     )
     
     # 运行回测
@@ -262,7 +263,7 @@ def main():
         "--rebalance-freq",
         type=str,
         default="W",
-        choices=["D", "W", "M"],
+        #choices=["D", "W", "M"],
         help="调仓频率，D=日度，W=周度，M=月度，默认 W"
     )
     
@@ -357,7 +358,8 @@ def main():
         universe = BasicUniverse(
             stock_basic=stock_basic,
             exclude_st=args.exclude_st,
-            min_list_days=args.min_list_days
+            min_list_days=args.min_list_days,
+            markets=['主板'],  # 可根据需要调整
         )
         
         # 4. 创建 ML 信号
@@ -374,6 +376,7 @@ def main():
         logger.info(f"训练区间: {model_info['train_start_date']} 至 {model_info['train_end_date']}")
         logger.info(f"特征数: {model_info['feature_count']}")
         logger.info(f"训练样本数: {model_info['n_samples']}")
+        logger.info(f"性能指标: \n{model_info['performance_metrics']}")
         
         # 5. 准备交易日列表
         trading_dates = trade_cal[

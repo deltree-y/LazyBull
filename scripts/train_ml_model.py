@@ -234,6 +234,7 @@ def train_xgboost_model(
         "random_state": random_state,
         "tree_method": "hist",
         "n_jobs": -1,
+        "early_stopping_rounds": 30,  # 早停机制参数
         # 增加正则化参数防止过拟合
         "gamma": 0.1,  # 分裂所需的最小损失减少
         "reg_alpha": 0.1,  # L1 正则化
@@ -251,7 +252,6 @@ def train_xgboost_model(
         model.fit(
             X_train, y_train_winsorized,
             eval_set=[(X_val, y_val)],
-            early_stopping_rounds=30,  # 30轮无改进则停止
             verbose=False  # 不打印每轮训练信息
         )
         logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")

@@ -546,7 +546,7 @@ class Storage:
             else:
                 df = pd.read_csv(file_path)
             
-            logger.info(f"数据已加载: {file_path} ({len(df)} 条记录)")
+            logger.debug(f"数据已加载: {file_path} ({len(df)} 条记录)")
             return df
         except Exception as e:
             logger.error(f"加载数据失败: {file_path}, 错误: {str(e)}")
