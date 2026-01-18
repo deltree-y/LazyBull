@@ -24,6 +24,9 @@ class BacktestEngine:
     - T+n 日收盘价卖出（n 为持有期，默认与调仓频率一致）
     """
     
+    # 常量：每年交易日数量（用于年化波动率计算）
+    TRADING_DAYS_PER_YEAR = 252
+    
     def __init__(
         self,
         universe: Universe,
@@ -289,6 +292,7 @@ class BacktestEngine:
         
         # 转换日期列为 datetime（向量化操作，避免 iterrows）
         if not pd.api.types.is_datetime64_any_dtype(price_data['trade_date']):
+            # 创建副本以避免修改原始数据
             price_data = price_data.copy()
             price_data['trade_date'] = pd.to_datetime(price_data['trade_date'])
         
@@ -374,7 +378,7 @@ class BacktestEngine:
                 return self.vol_epsilon
             
             # 计算波动率（年化，假设每年252个交易日）
-            vol = returns.std() * np.sqrt(252)
+            vol = returns.std() * np.sqrt(self.TRADING_DAYS_PER_YEAR)
             
             # 确保波动率不低于 epsilon
             return max(vol, self.vol_epsilon)
@@ -577,13 +581,16 @@ class BacktestEngine:
         pnl_buy_amount = shares * buy_pnl_price  # 绩效口径买入金额
         pnl_sell_amount = shares * sell_pnl_price  # 绩效口径卖出金额
         
-        # 买入时的总成本（含手续费）
+        # 买入和卖出的手续费
         buy_amount = shares * buy_trade_price
         buy_cost = self.cost_model.calculate_buy_cost(buy_amount)
         total_cost = buy_cost + sell_cost  # 总手续费
         
         # 绩效收益（基于绩效价格，扣除手续费）
+        # 收益 = 卖出金额 - 买入金额 - 总手续费
         pnl_profit_amount = pnl_sell_amount - pnl_buy_amount - total_cost
+        # 收益率 = 收益 / (买入金额 + 买入手续费)
+        # 买入成本是买入金额+买入手续费，这是投资者实际付出的成本
         pnl_profit_pct = pnl_profit_amount / (pnl_buy_amount + buy_cost) if (pnl_buy_amount + buy_cost) > 0 else 0
         
         # 更新持仓和资金
