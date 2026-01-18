@@ -29,24 +29,55 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.2.0 - 增强版)
+### 当前版本 (v0.2.1 - 进度与配置优化版)
 
 - ✅ **完整的项目骨架**: 模块化设计，易于扩展
 - ✅ **TuShare数据接入**: 自动拉取交易日历、股票列表、日线行情、财务指标
 - ✅ **Parquet存储**: 高效的列式存储，加速数据读取
-- ✅ **回测引擎**: 支持日/周/月频调仓，包含成本模型
+- ✅ **回测引擎**: 支持日/周/月频调仓，**支持自定义天数调仓**（如每5天、10天）
 - ✅ **T+1 交易规则**: T 日生成信号，T+1 日收盘价买入，T+n 日收盘价卖出
-- ✅ **实时进度显示**: 回测时使用 tqdm 进度条显示当前日期、净值、耗时
+- ✅ **实时进度显示**: 回测时使用 tqdm 进度条实时显示当前日期、净值、耗时，**支持详细日志开关**
+- ✅ **价格口径配置**: 支持选择不复权/前复权/后复权价格用于成本计算，**推荐使用不复权价格**
 - ✅ **收益明细跟踪**: 每笔卖出交易自动计算收益金额和收益率（已扣除成本）
 - ✅ **信号生成**: 提供等权、因子打分等多种方法
 - ✅ **报告生成**: 自动计算收益率、夏普、最大回撤等指标，支持中文列名
-- ✅ **单元测试**: 基于pytest的测试框架
+- ✅ **单元测试**: 基于pytest的测试框架，**测试数据隔离，不污染工作区**
 - ✅ **ML 模型训练**: 支持 XGBoost 模型训练，自动验证集评估
 - ✅ **模型优化**: 早停机制、标签 winsorize、正则化、IC/RankIC 评估
 - ✅ **特征优化**: 向量化计算提升特征生成效率
+- ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
 
-### v0.2.0 更新内容
+### v0.2.1 更新内容
+
+**回测进度优化**:
+- 进度条实时刷新显示，不再缓存到最后输出
+- 添加 `verbose` 参数控制详细日志输出
+- 日志输出到 stderr，进度条输出到 stdout，避免混乱
+- 优化进度条配置（固定宽度、加快刷新频率）
+
+**调仓频率增强**:
+- **支持自定义天数**：`rebalance_freq=5` 表示每5个交易日调仓一次
+- 保持向后兼容：`D`/`W`/`M` 仍然有效
+- 添加参数校验，提供清晰的中文错误提示
+- 持有期自动匹配调仓频率
+
+**价格口径配置**:
+- 新增 `price_type` 参数，支持选择 `close`（不复权）、`close_adj`（后复权）、`close_hfq`（前复权）
+- **默认使用不复权价格**（`close`），更符合实际交易
+- 提供详细的[价格口径说明文档](docs/price_type_guide.md)
+- 包含迁移指南和结果对比说明
+
+**测试数据隔离**:
+- 所有测试使用临时目录（`tempfile.TemporaryDirectory`）
+- 测试运行不会修改 `data/` 目录中的文件
+- 确保测试的独立性和可重复性
+
+**IC/RankIC 优化指南**:
+- 新增[IC优化指南文档](docs/ic_optimization_guide.md)
+- 涵盖特征工程、标签定义、样本选择、模型训练等全方位优化
+- 提供可执行的代码示例和评估工具
+- 包含短期、中期、长期分阶段优化建议
 
 **特征数据优化**:
 - 移除 `filter_list_days` 作为 filter 列，改为信息列 `list_days`
@@ -222,6 +253,10 @@ python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
 # 指定调仓频率（M=月度，W=周度，D=日度）
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
     --rebalance-freq M --top-n 5
+
+# 使用自定义天数调仓（每10个交易日调仓一次）
+python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
+    --rebalance-freq 10 --top-n 5
 
 # 包含ST股票（默认排除）
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
@@ -417,6 +452,8 @@ LazyBull/
 - [回测假设](docs/backtest_assumptions.md): 回测系统的假设、简化与局限性
 - [特征与标签定义](docs/features_schema.md): 日频特征构建、标签计算、过滤规则说明
 - [项目路线图](docs/roadmap.md): 分阶段开发计划
+- [价格口径说明与迁移指南](docs/price_type_guide.md): 回测价格口径选择、不复权vs复权、迁移说明
+- [IC与RankIC优化指南](docs/ic_optimization_guide.md): 提升模型预测能力的系统性优化方案
 
 ---
 
@@ -594,12 +631,34 @@ from src.lazybull.common.cost import CostModel
 signal = EqualWeightSignal(top_n=30)  # 等权30只
 cost_model = CostModel()
 
+# 示例1：基础回测（月度调仓）
 engine = BacktestEngine(
     universe=universe,
     signal=signal,
     initial_capital=1000000,
     cost_model=cost_model,
     rebalance_freq="M"  # 月度调仓
+)
+
+# 示例2：自定义天数调仓
+engine = BacktestEngine(
+    universe=universe,
+    signal=signal,
+    initial_capital=1000000,
+    cost_model=cost_model,
+    rebalance_freq=10,  # 每10个交易日调仓
+    verbose=False  # 关闭详细日志，保持输出整洁
+)
+
+# 示例3：指定价格类型（推荐使用不复权价格）
+engine = BacktestEngine(
+    universe=universe,
+    signal=signal,
+    initial_capital=1000000,
+    cost_model=cost_model,
+    rebalance_freq="W",
+    price_type='close',  # 使用不复权价格（默认，推荐）
+    verbose=True  # 输出详细交易日志
 )
 
 # 运行回测
