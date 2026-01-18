@@ -6,6 +6,8 @@ from typing import List, Optional
 import pandas as pd
 from loguru import logger
 
+from ..common.trade_status import is_tradeable
+
 
 class Universe(ABC):
     """股票池基类
@@ -22,11 +24,16 @@ class Universe(ABC):
         self.name = name
     
     @abstractmethod
-    def get_stocks(self, date: pd.Timestamp) -> List[str]:
+    def get_stocks(
+        self, 
+        date: pd.Timestamp,
+        quote_data: Optional[pd.DataFrame] = None
+    ) -> List[str]:
         """获取指定日期的股票列表
         
         Args:
             date: 查询日期
+            quote_data: 行情数据（可选），用于过滤停牌、涨跌停股票
             
         Returns:
             股票代码列表
@@ -93,7 +100,9 @@ class BasicUniverse(Universe):
         exclude_st: bool = True,
         min_market_cap: Optional[float] = None,
         min_list_days: Optional[int] = None,
-        markets: Optional[List[str]] = None
+        markets: Optional[List[str]] = None,
+        filter_suspended: bool = True,
+        filter_limit_stocks: bool = True
     ):
         """初始化基础股票池
         
@@ -103,6 +112,8 @@ class BasicUniverse(Universe):
             min_market_cap: 最小市值（亿元）- 暂未实现，需要额外的市值数据
             min_list_days: 最少上市天数
             markets: 市场列表，如 ["主板", "创业板"]
+            filter_suspended: 是否过滤停牌股票，默认True
+            filter_limit_stocks: 是否过滤涨跌停股票，默认True
         """
         super().__init__("basic")
         self.stock_basic = stock_basic.copy()
@@ -110,12 +121,19 @@ class BasicUniverse(Universe):
         self.min_market_cap = min_market_cap
         self.min_list_days = min_list_days
         self.markets = markets
+        self.filter_suspended = filter_suspended
+        self.filter_limit_stocks = filter_limit_stocks
     
-    def get_stocks(self, date: pd.Timestamp) -> List[str]:
+    def get_stocks(
+        self, 
+        date: pd.Timestamp,
+        quote_data: Optional[pd.DataFrame] = None
+    ) -> List[str]:
         """获取指定日期的股票列表
         
         Args:
             date: 查询日期
+            quote_data: 行情数据（可选），用于过滤停牌、涨跌停股票
             
         Returns:
             股票代码列表
@@ -140,6 +158,67 @@ class BasicUniverse(Universe):
         #     stocks = self.filter_market_cap(stocks, self.min_market_cap)
         
         stock_list = stocks['ts_code'].tolist()
+        
+        # 如果提供了行情数据，进一步过滤停牌和涨跌停股票
+        if quote_data is not None and (self.filter_suspended or self.filter_limit_stocks):
+            stock_list = self._filter_untradeable_stocks(
+                stock_list, date, quote_data
+            )
+        
         logger.debug(f"股票池 {self.name} 在 {date.date()} 选出 {len(stock_list)} 只股票")
         
         return stock_list
+    
+    def _filter_untradeable_stocks(
+        self,
+        stock_list: List[str],
+        date: pd.Timestamp,
+        quote_data: pd.DataFrame
+    ) -> List[str]:
+        """过滤不可交易的股票（停牌、涨停）
+        
+        Args:
+            stock_list: 股票代码列表
+            date: 查询日期
+            quote_data: 行情数据
+            
+        Returns:
+            过滤后的股票代码列表
+        """
+        trade_date_str = date.strftime('%Y%m%d')
+        filtered_stocks = []
+        filtered_count = {'停牌': 0, '涨停': 0, '跌停': 0}
+        
+        for stock in stock_list:
+            # 检查是否可买入（选股阶段主要关注买入）
+            tradeable, reason = is_tradeable(
+                stock, trade_date_str, quote_data, action='buy'
+            )
+            
+            if tradeable:
+                filtered_stocks.append(stock)
+            else:
+                # 根据配置决定是否过滤
+                should_filter = False
+                if reason == "停牌" and self.filter_suspended:
+                    should_filter = True
+                elif reason in ["涨停", "跌停"] and self.filter_limit_stocks:
+                    should_filter = True
+                
+                if should_filter:
+                    filtered_count[reason] = filtered_count.get(reason, 0) + 1
+                else:
+                    # 不过滤，保留在股票池中
+                    filtered_stocks.append(stock)
+        
+        # 输出过滤日志
+        if sum(filtered_count.values()) > 0:
+            logger.info(
+                f"选股过滤 {date.date()}: 原始 {len(stock_list)} 只，"
+                f"过滤停牌 {filtered_count['停牌']} 只，"
+                f"过滤涨停 {filtered_count['涨停']} 只，"
+                f"过滤跌停 {filtered_count['跌停']} 只，"
+                f"最终 {len(filtered_stocks)} 只"
+            )
+        
+        return filtered_stocks

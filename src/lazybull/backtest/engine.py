@@ -9,6 +9,8 @@ from loguru import logger
 from tqdm import tqdm
 
 from ..common.cost import CostModel
+from ..common.trade_status import is_tradeable
+from ..execution.pending_order import PendingOrderManager
 from ..signals.base import Signal
 from ..universe.base import Universe
 
@@ -39,7 +41,10 @@ class BacktestEngine:
         price_type: str = "close",  # 保留以兼容旧代码，但不再使用
         enable_risk_budget: bool = False,
         vol_window: int = 20,
-        vol_epsilon: float = 0.001
+        vol_epsilon: float = 0.001,
+        enable_pending_order: bool = True,
+        max_retry_count: int = 5,
+        max_retry_days: int = 10
     ):
         """初始化回测引擎
         
@@ -59,6 +64,9 @@ class BacktestEngine:
             enable_risk_budget: 是否启用风险预算/波动率缩放，默认False（保持向后兼容）
             vol_window: 波动率计算窗口（交易日），默认20
             vol_epsilon: 波动率缩放的最小波动率，防止除零，默认0.001
+            enable_pending_order: 是否启用延迟订单功能，默认True
+            max_retry_count: 延迟订单最大重试次数，默认5次
+            max_retry_days: 延迟订单最大延迟天数，默认10天
         """
         self.universe = universe
         self.signal = signal
@@ -72,6 +80,15 @@ class BacktestEngine:
         self.enable_risk_budget = enable_risk_budget
         self.vol_window = vol_window
         self.vol_epsilon = vol_epsilon
+        
+        # 延迟订单参数
+        self.enable_pending_order = enable_pending_order
+        self.pending_order_manager = None
+        if enable_pending_order:
+            self.pending_order_manager = PendingOrderManager(
+                max_retry_count=max_retry_count,
+                max_retry_days=max_retry_days
+            )
         
         # 设置持有期及调仓频率(目前二者保持一致)
         self.rebalance_freq = rebalance_freq
@@ -92,10 +109,14 @@ class BacktestEngine:
         self.trade_price_index: Optional[pd.Series] = None  # 成交价格（不复权 close）
         self.pnl_price_index: Optional[pd.Series] = None  # 绩效价格（后复权 close_adj）
         
+        # 存储价格数据用于交易状态检查
+        self.price_data_cache: Optional[pd.DataFrame] = None
+        
         logger.info(
             f"回测引擎初始化完成: 初始资金={initial_capital}, "
             f"调仓频率={self.rebalance_freq}, 持有期={self.holding_period}天, "
             f"风险预算={'启用' if enable_risk_budget else '禁用'}, "
+            f"延迟订单={'启用' if enable_pending_order else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
         logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日收盘价卖出")
@@ -134,6 +155,9 @@ class BacktestEngine:
         # 准备价格索引（使用 MultiIndex，替代嵌套字典）
         self._prepare_price_index(price_data)
         
+        # 缓存价格数据用于交易状态检查
+        self.price_data_cache = price_data
+        
         # 获取调仓日期（信号生成日期）
         signal_dates = self._get_rebalance_dates(trading_dates)
 
@@ -144,6 +168,10 @@ class BacktestEngine:
         
         # 按日推进
         for idx, date in enumerate(trading_dates):
+            # 处理延迟订单（先处理延迟订单，再处理新信号）
+            if self.enable_pending_order:
+                self._process_pending_orders(date)
+            
             # 判断是否为信号生成日
             if date in signal_dates:
                 self._generate_signal(date, trading_dates, price_data, date_to_idx)
@@ -172,6 +200,16 @@ class BacktestEngine:
         total_time = time.time() - start_time
         logger.info(f"回测完成: 共 {len(trading_dates)} 个交易日, {len(self.trades)} 笔交易, 总耗时 {total_time:.1f}秒")
         
+        # 输出延迟订单统计
+        if self.enable_pending_order and self.pending_order_manager:
+            stats = self.pending_order_manager.get_statistics()
+            logger.info(
+                f"延迟订单统计: 累计添加 {stats['total_added']}, "
+                f"成功执行 {stats['total_succeeded']}, "
+                f"过期放弃 {stats['total_expired']}, "
+                f"剩余待处理 {stats['pending']}"
+            )
+        
         return nav_df
     
     def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_data: pd.DataFrame, date_to_idx: Dict) -> None:
@@ -180,10 +218,14 @@ class BacktestEngine:
         Args:
             date: 信号生成日期
             trading_dates: 交易日列表
+            price_data: 价格数据，包含行情信息
             date_to_idx: 日期到索引的映射
         """
-        # 获取股票池
-        stock_universe = self.universe.get_stocks(date)
+        # 获取当日行情数据用于过滤
+        date_quote = price_data[price_data['trade_date'] == date]
+        
+        # 获取股票池（传入行情数据进行过滤）
+        stock_universe = self.universe.get_stocks(date, quote_data=date_quote)
         
         # 生成信号
         signals = self.signal.generate(date, stock_universe, {})
@@ -462,14 +504,97 @@ class BacktestEngine:
             )
     
     
-    def _buy_stock(self, date: pd.Timestamp, stock: str, target_value: float) -> None:
-        """买入股票（在 T+1 日以收盘价买入）
+    
+    def _process_pending_orders(self, date: pd.Timestamp) -> None:
+        """处理延迟订单队列
         
-        使用成交价格（trade_price）计算买入金额和持仓
-        同时记录绩效价格（pnl_price）用于后续收益率计算
+        Args:
+            date: 当前日期
+        """
+        if not self.pending_order_manager:
+            return
+        
+        # 获取应重试的订单列表
+        orders_to_retry = self.pending_order_manager.get_orders_to_retry(date)
+        
+        if not orders_to_retry:
+            return
+        
+        # 获取当日行情数据
+        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
+        trade_date_str = date.strftime('%Y%m%d')
+        
+        for order in orders_to_retry:
+            # 检查是否可交易
+            tradeable, reason = is_tradeable(
+                order.stock, trade_date_str, date_quote, action=order.action
+            )
+            
+            if tradeable:
+                # 可交易，尝试执行
+                if order.action == 'buy':
+                    self._buy_stock_direct(date, order.stock, order.target_value)
+                    self.pending_order_manager.mark_success(order.stock, 'buy')
+                elif order.action == 'sell':
+                    self._sell_stock_direct(date, order.stock)
+                    self.pending_order_manager.mark_success(order.stock, 'sell')
+            else:
+                # 仍不可交易，更新延迟订单
+                self.pending_order_manager.add_order(
+                    stock=order.stock,
+                    action=order.action,
+                    current_date=date,
+                    signal_date=order.signal_date,
+                    target_value=order.target_value,
+                    reason=reason
+                )
+    
+    def _buy_stock_with_status_check(self, date: pd.Timestamp, stock: str, target_value: float, signal_date: Optional[pd.Timestamp] = None) -> None:
+        """买入股票（带交易状态检查）
+        
+        如果启用延迟订单功能，会检查股票是否可交易（停牌、涨停）
+        不可交易时加入延迟队列而非直接失败
         
         Args:
             date: 买入日期（T+1）
+            stock: 股票代码
+            target_value: 目标市值
+            signal_date: 信号生成日期（用于延迟订单）
+        """
+        # 检查交易状态
+        if self.enable_pending_order and self.price_data_cache is not None:
+            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
+            trade_date_str = date.strftime('%Y%m%d')
+            tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action='buy')
+            
+            if not tradeable:
+                # 不可交易，加入延迟队列
+                if self.pending_order_manager:
+                    self.pending_order_manager.add_order(
+                        stock=stock,
+                        action='buy',
+                        current_date=date,
+                        signal_date=signal_date or date,
+                        target_value=target_value,
+                        reason=reason
+                    )
+                if self.verbose:
+                    logger.info(
+                        f"买入延迟: {date.date()} {stock}, 原因: {reason}, "
+                        f"目标市值: {target_value:.2f}"
+                    )
+                return
+        
+        # 可交易，直接买入
+        self._buy_stock_direct(date, stock, target_value)
+    
+    def _buy_stock_direct(self, date: pd.Timestamp, stock: str, target_value: float) -> None:
+        """直接买入股票（不检查交易状态）
+        
+        内部使用，实际执行买入操作
+        
+        Args:
+            date: 买入日期
             stock: 股票代码
             target_value: 目标市值
         """
@@ -541,8 +666,66 @@ class BacktestEngine:
             'cost': cost
         })
     
+    def _buy_stock(self, date: pd.Timestamp, stock: str, target_value: float, signal_date: Optional[pd.Timestamp] = None) -> None:
+        """买入股票（在 T+1 日以收盘价买入）
+        
+        带交易状态检查的买入方法。如果启用延迟订单功能，会检查股票是否可交易。
+        
+        Args:
+            date: 买入日期（T+1）
+            stock: 股票代码
+            target_value: 目标市值
+            signal_date: 信号生成日期（用于延迟订单）
+        """
+        self._buy_stock_with_status_check(date, stock, target_value, signal_date)
+    
+    def _sell_stock_with_status_check(self, date: pd.Timestamp, stock: str) -> None:
+        """卖出股票（带交易状态检查）
+        
+        如果启用延迟订单功能，会检查股票是否可交易（跌停）
+        不可交易时加入延迟队列而非直接失败
+        
+        Args:
+            date: 卖出日期
+            stock: 股票代码
+        """
+        # 检查交易状态
+        if self.enable_pending_order and self.price_data_cache is not None:
+            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
+            trade_date_str = date.strftime('%Y%m%d')
+            tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action='sell')
+            
+            if not tradeable:
+                # 不可交易，加入延迟队列
+                if self.pending_order_manager:
+                    self.pending_order_manager.add_order(
+                        stock=stock,
+                        action='sell',
+                        current_date=date,
+                        signal_date=date,  # 卖出是基于持有期，用当前日期
+                        target_value=None,
+                        reason=reason
+                    )
+                if self.verbose:
+                    logger.info(f"卖出延迟: {date.date()} {stock}, 原因: {reason}")
+                return
+        
+        # 可交易，直接卖出
+        self._sell_stock_direct(date, stock)
+    
     def _sell_stock(self, date: pd.Timestamp, stock: str) -> None:
         """卖出股票（在 T+n 日以收盘价卖出）
+        
+        带交易状态检查的卖出方法。如果启用延迟订单功能，会检查股票是否可交易。
+        
+        Args:
+            date: 卖出日期（T+n）
+            stock: 股票代码
+        """
+        self._sell_stock_with_status_check(date, stock)
+    
+    def _sell_stock_direct(self, date: pd.Timestamp, stock: str) -> None:
+        """直接卖出股票（不检查交易状态）
         
         现金流使用成交价格（trade_price）计算
         收益率使用绩效价格（pnl_price）计算
