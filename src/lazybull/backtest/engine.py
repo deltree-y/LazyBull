@@ -58,7 +58,7 @@ class BacktestEngine:
         self.price_type = price_type
         
         # 校验价格类型
-        valid_price_types = ['close', 'close_adj', 'close_hfq']
+        valid_price_types = ['close', 'close_adj', 'close_qfq']
         if price_type not in valid_price_types:
             raise ValueError(
                 f"不支持的价格类型: {price_type}。"
