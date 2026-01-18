@@ -47,7 +47,7 @@ class BacktestEngine:
             price_type: 价格类型，可选值：
                 - 'close': 不复权收盘价（默认，推荐用于成本计算）
                 - 'close_adj': 后复权收盘价（用于收益计算）
-                - 'close_hfq': 前复权收盘价
+                - 'close_qfq': 前复权收盘价
         """
         self.universe = universe
         self.signal = signal
