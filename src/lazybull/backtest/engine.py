@@ -106,7 +106,7 @@ class BacktestEngine:
             f"详细日志={'开启' if verbose else '关闭'}"
         )
         logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日收盘价卖出")
-        logger.info(f"价格口径: 成交使用不复权close，绩效使用后复权close_adj")
+        logger.info(f"价格口径: 成交使用不复权 close, 绩效使用后复权 close_adj")
 
     
     def run(
@@ -596,7 +596,10 @@ class BacktestEngine:
         pnl_profit_amount = pnl_sell_amount - pnl_buy_amount - total_cost
         # 收益率 = 收益 / (买入金额 + 买入手续费)
         # 买入成本是买入金额+买入手续费，这是投资者实际付出的成本
-        pnl_profit_pct = pnl_profit_amount / (pnl_buy_amount + buy_cost) if (pnl_buy_amount + buy_cost) > 0 else 0
+        pnl_profit_pct = (
+            pnl_profit_amount / (pnl_buy_amount + buy_cost) 
+            if (pnl_buy_amount + buy_cost) > 0 else 0
+        )
         
         # 更新持仓和资金
         del self.positions[stock]
