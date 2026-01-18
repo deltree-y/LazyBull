@@ -178,13 +178,15 @@ def test_position_tracking_with_buy_date(mock_price_data, mock_trading_dates):
     )
     
     # 验证持仓结构
-    # 注意：持仓结构现在是 {股票: {shares: 数量, buy_date: 日期, buy_price: 价格, buy_cost: 成本}}
+    # 注意：持仓结构现在是 {股票: {shares, buy_date, buy_trade_price, buy_pnl_price, buy_cost_cash}}
     for stock, info in engine.positions.items():
         assert 'shares' in info
         assert 'buy_date' in info
-        assert 'buy_price' in info
-        assert 'buy_cost' in info
+        assert 'buy_trade_price' in info
+        assert 'buy_pnl_price' in info
+        assert 'buy_cost_cash' in info
         assert isinstance(info['shares'], (int, float))
         assert isinstance(info['buy_date'], pd.Timestamp)
-        assert isinstance(info['buy_price'], (int, float))
-        assert isinstance(info['buy_cost'], (int, float))
+        assert isinstance(info['buy_trade_price'], (int, float))
+        assert isinstance(info['buy_pnl_price'], (int, float))
+        assert isinstance(info['buy_cost_cash'], (int, float))

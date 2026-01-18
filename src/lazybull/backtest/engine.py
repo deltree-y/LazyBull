@@ -1,8 +1,9 @@
 """回测引擎"""
 
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 from tqdm import tqdm
@@ -23,6 +24,9 @@ class BacktestEngine:
     - T+n 日收盘价卖出（n 为持有期，默认与调仓频率一致）
     """
     
+    # 常量：每年交易日数量（用于年化波动率计算）
+    TRADING_DAYS_PER_YEAR = 252
+    
     def __init__(
         self,
         universe: Universe,
@@ -32,9 +36,16 @@ class BacktestEngine:
         rebalance_freq: str = "M",
         holding_period: Optional[int] = None,
         verbose: bool = True,
-        price_type: str = "close"
+        price_type: str = "close",  # 保留以兼容旧代码，但不再使用
+        enable_risk_budget: bool = False,
+        vol_window: int = 20,
+        vol_epsilon: float = 0.001
     ):
         """初始化回测引擎
+        
+        价格口径说明：
+        - 成交价格（trade_price）：使用不复权 close，用于计算成交金额、持仓市值、可买入数量
+        - 绩效价格（pnl_price）：使用后复权 close_adj，用于计算收益率和绩效指标
         
         Args:
             universe: 股票池
@@ -44,10 +55,10 @@ class BacktestEngine:
             rebalance_freq: 调仓频率，D=日，W=周，M=月，或整数表示每N天调仓
             holding_period: 持有期（交易日），None 则自动根据调仓频率设置
             verbose: 是否输出详细日志（买入/卖出操作），默认True
-            price_type: 价格类型，可选值：
-                - 'close': 不复权收盘价（默认，推荐用于成本计算）
-                - 'close_adj': 后复权收盘价（用于收益计算）
-                - 'close_qfq': 前复权收盘价
+            price_type: （已废弃，保留以兼容旧代码）价格类型，新版本中不再使用
+            enable_risk_budget: 是否启用风险预算/波动率缩放，默认False（保持向后兼容）
+            vol_window: 波动率计算窗口（交易日），默认20
+            vol_epsilon: 波动率缩放的最小波动率，防止除零，默认0.001
         """
         self.universe = universe
         self.signal = signal
@@ -55,15 +66,12 @@ class BacktestEngine:
         self.cost_model = cost_model or CostModel()
         self.rebalance_freq = rebalance_freq
         self.verbose = verbose
-        self.price_type = price_type
+        self.price_type = price_type  # 保留以兼容旧代码
         
-        # 校验价格类型
-        valid_price_types = ['close', 'close_adj', 'close_qfq']
-        if price_type not in valid_price_types:
-            raise ValueError(
-                f"不支持的价格类型: {price_type}。"
-                f"可选值: {', '.join(valid_price_types)}"
-            )
+        # 风险预算参数
+        self.enable_risk_budget = enable_risk_budget
+        self.vol_window = vol_window
+        self.vol_epsilon = vol_epsilon
         
         # 设置持有期
         if holding_period is None:
@@ -82,17 +90,23 @@ class BacktestEngine:
         
         # 回测状态
         self.current_capital = initial_capital
-        self.positions: Dict[str, Dict] = {}  # {股票代码: {shares: 持仓数量, buy_date: 买入日期}}
+        self.positions: Dict[str, Dict] = {}  # {股票代码: {shares, buy_date, buy_trade_price, buy_pnl_price, buy_cost_cash}}
         self.pending_signals: Dict[pd.Timestamp, Dict] = {}  # {信号日期: {股票: 权重}}
         self.portfolio_values: List[Dict] = []  # 组合价值历史
         self.trades: List[Dict] = []  # 交易记录
         
+        # 价格索引（在 run 时初始化）
+        self.trade_price_index: Optional[pd.Series] = None  # 成交价格（不复权 close）
+        self.pnl_price_index: Optional[pd.Series] = None  # 绩效价格（后复权 close_adj）
+        
         logger.info(
             f"回测引擎初始化完成: 初始资金={initial_capital}, "
             f"调仓频率={rebalance_freq}, 持有期={self.holding_period}天, "
-            f"价格类型={price_type}, 详细日志={'开启' if verbose else '关闭'}"
+            f"风险预算={'启用' if enable_risk_budget else '禁用'}, "
+            f"详细日志={'开启' if verbose else '关闭'}"
         )
         logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日收盘价卖出")
+        logger.info(f"价格口径: 成交使用不复权 close, 绩效使用后复权 close_adj")
 
     
     def run(
@@ -108,7 +122,7 @@ class BacktestEngine:
             start_date: 开始日期
             end_date: 结束日期
             trading_dates: 交易日列表
-            price_data: 价格数据，包含ts_code, trade_date, close
+            price_data: 价格数据，需包含 ts_code, trade_date, close, close_adj（可选）
             
         Returns:
             净值曲线DataFrame
@@ -124,8 +138,8 @@ class BacktestEngine:
         # 创建日期到索引的映射，优化查找效率
         date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
         
-        # 准备价格数据字典，加速查询
-        price_dict = self._prepare_price_dict(price_data)
+        # 准备价格索引（使用 MultiIndex，替代嵌套字典）
+        self._prepare_price_index(price_data)
         
         # 获取调仓日期（信号生成日期）
         signal_dates = self._get_rebalance_dates(trading_dates)
@@ -139,16 +153,16 @@ class BacktestEngine:
         for idx, date in enumerate(trading_dates):
             # 判断是否为信号生成日
             if date in signal_dates:
-                self._generate_signal(date, trading_dates, price_dict, date_to_idx)
+                self._generate_signal(date, trading_dates, date_to_idx)
             
             # 执行待执行的买入操作（T+1）
-            self._execute_pending_buys(date, trading_dates, price_dict, date_to_idx)
+            self._execute_pending_buys(date, trading_dates, date_to_idx)
             
             # 检查并执行卖出操作（达到持有期）
-            self._check_and_sell(date, trading_dates, price_dict, date_to_idx)
+            self._check_and_sell(date, trading_dates, date_to_idx)
             
             # 计算当日组合价值
-            portfolio_value = self._calculate_portfolio_value(date, price_dict)
+            portfolio_value = self._calculate_portfolio_value(date)
             
             self.portfolio_values.append({
                 'date': date,
@@ -165,13 +179,12 @@ class BacktestEngine:
         
         return nav_df
     
-    def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
+    def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
         """生成信号（在 T 日生成，T+1 日执行买入）
         
         Args:
             date: 信号生成日期
             trading_dates: 交易日列表
-            price_dict: 价格字典
             date_to_idx: 日期到索引的映射
         """
         # 获取股票池
@@ -190,13 +203,12 @@ class BacktestEngine:
         if self.verbose:
             logger.info(f"信号生成: {date.date()}, 信号数 {len(signals)}")
     
-    def _execute_pending_buys(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
+    def _execute_pending_buys(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
         """执行待执行的买入操作（T+1）
         
         Args:
             date: 当前日期
             trading_dates: 交易日列表
-            price_dict: 价格字典
             date_to_idx: 日期到索引的映射
         """
         # 查找前一个交易日的信号
@@ -211,24 +223,27 @@ class BacktestEngine:
         
         signals = self.pending_signals.pop(signal_date)
         
+        # 应用风险预算（波动率缩放）
+        if self.enable_risk_budget:
+            signals = self._apply_risk_budget(signals, date)
+        
         # 计算当前组合市值
-        current_value = self._calculate_portfolio_value(date, price_dict)
+        current_value = self._calculate_portfolio_value(date)
         
         # 买入信号中的股票
         for stock, weight in signals.items():
             target_value = current_value * weight
-            self._buy_stock(date, stock, target_value, price_dict)
+            self._buy_stock(date, stock, target_value)
         
         if self.verbose:
             logger.info(f"买入执行: {date.date()}, 买入 {len(signals)} 只股票（信号日: {signal_date.date()}）")
     
-    def _check_and_sell(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_dict: Dict, date_to_idx: Dict) -> None:
+    def _check_and_sell(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
         """检查并执行卖出操作（达到持有期 T+n）
         
         Args:
             date: 当前日期
             trading_dates: 交易日列表
-            price_dict: 价格字典
             date_to_idx: 日期到索引的映射
         """
         stocks_to_sell = []
@@ -254,38 +269,163 @@ class BacktestEngine:
         
         # 执行卖出
         for stock in stocks_to_sell:
-            self._sell_stock(date, stock, price_dict)
+            self._sell_stock(date, stock)
         
         if stocks_to_sell and self.verbose:
             logger.info(f"卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票（达到持有期）")
     
-    def _prepare_price_dict(self, price_data: pd.DataFrame) -> Dict:
-        """准备价格字典
+    def _prepare_price_index(self, price_data: pd.DataFrame) -> None:
+        """准备价格索引（使用 MultiIndex，替代嵌套字典）
+        
+        构建两套价格序列：
+        - trade_price_index: 成交价格（不复权 close）
+        - pnl_price_index: 绩效价格（后复权 close_adj）
         
         Args:
-            price_data: 价格数据，需包含 ts_code, trade_date 和指定的价格列
+            price_data: 价格数据，需包含 ts_code, trade_date, close, close_adj（可选）
+        """
+        logger.info("开始准备价格索引...")
+        
+        # 检查必需列
+        if 'close' not in price_data.columns:
+            raise ValueError("价格数据缺少 'close' 列，无法进行回测")
+        
+        # 转换日期列为 datetime（向量化操作，避免 iterrows）
+        if not pd.api.types.is_datetime64_any_dtype(price_data['trade_date']):
+            # 创建副本以避免修改原始数据
+            price_data = price_data.copy()
+            price_data['trade_date'] = pd.to_datetime(price_data['trade_date'])
+        
+        # 构建成交价格索引（不复权 close）
+        trade_price_df = price_data[['trade_date', 'ts_code', 'close']].copy()
+        trade_price_df.set_index(['trade_date', 'ts_code'], inplace=True)
+        self.trade_price_index = trade_price_df['close']
+        
+        # 构建绩效价格索引（后复权 close_adj）
+        if 'close_adj' in price_data.columns:
+            pnl_price_df = price_data[['trade_date', 'ts_code', 'close_adj']].copy()
+            pnl_price_df.set_index(['trade_date', 'ts_code'], inplace=True)
+            self.pnl_price_index = pnl_price_df['close_adj']
+            logger.info("价格索引构建完成: 成交价格=close, 绩效价格=close_adj")
+        else:
+            # 如果缺少 close_adj，回退到 close
+            logger.warning("价格数据缺少 'close_adj' 列，绩效价格将使用 'close' 列（不复权）")
+            self.pnl_price_index = self.trade_price_index.copy()
+            logger.info("价格索引构建完成: 成交价格=close, 绩效价格=close（退化）")
+    
+    def _get_trade_price(self, date: pd.Timestamp, stock: str) -> Optional[float]:
+        """获取成交价格（不复权 close）
+        
+        Args:
+            date: 日期
+            stock: 股票代码
             
         Returns:
-            {trade_date: {ts_code: price}}
+            成交价格，如果不存在则返回 None
         """
-        # 检查价格列是否存在
-        if self.price_type not in price_data.columns:
-            logger.warning(
-                f"价格数据中缺少 {self.price_type} 列，尝试使用 'close' 列"
-            )
-            price_col = 'close' if 'close' in price_data.columns else price_data.columns[-1]
+        try:
+            return self.trade_price_index.loc[(date, stock)]
+        except KeyError:
+            return None
+    
+    def _get_pnl_price(self, date: pd.Timestamp, stock: str) -> Optional[float]:
+        """获取绩效价格（后复权 close_adj）
+        
+        Args:
+            date: 日期
+            stock: 股票代码
+            
+        Returns:
+            绩效价格，如果不存在则返回 None
+        """
+        try:
+            return self.pnl_price_index.loc[(date, stock)]
+        except KeyError:
+            return None
+    
+    def _calculate_volatility(self, stock: str, end_date: pd.Timestamp) -> float:
+        """计算个股历史波动率（基于绩效价格，避免未来函数）
+        
+        使用 end_date 之前的 vol_window 个交易日的收益率计算波动率
+        
+        Args:
+            stock: 股票代码
+            end_date: 结束日期（不包含，只使用该日期之前的数据）
+            
+        Returns:
+            年化波动率
+        """
+        try:
+            # 获取该股票的所有绩效价格（按日期排序）
+            stock_prices = self.pnl_price_index.xs(stock, level='ts_code').sort_index()
+            
+            # 筛选 end_date 之前的数据
+            stock_prices = stock_prices[stock_prices.index < end_date]
+            
+            if len(stock_prices) < 2:
+                return self.vol_epsilon
+            
+            # 取最近 vol_window 个交易日
+            recent_prices = stock_prices.iloc[-self.vol_window:]
+            
+            if len(recent_prices) < 2:
+                return self.vol_epsilon
+            
+            # 计算日收益率
+            returns = recent_prices.pct_change().dropna()
+            
+            if len(returns) < 2:
+                return self.vol_epsilon
+            
+            # 计算波动率（年化，假设每年252个交易日）
+            vol = returns.std() * np.sqrt(self.TRADING_DAYS_PER_YEAR)
+            
+            # 确保波动率不低于 epsilon
+            return max(vol, self.vol_epsilon)
+            
+        except (KeyError, ValueError, IndexError) as e:
+            logger.warning(f"计算 {stock} 波动率时出错: {e}，使用默认值 {self.vol_epsilon}")
+            return self.vol_epsilon
+    
+    def _apply_risk_budget(self, signals: Dict[str, float], date: pd.Timestamp) -> Dict[str, float]:
+        """应用风险预算（波动率缩放）
+        
+        调整权重: adj_weight ∝ raw_weight / volatility
+        然后归一化使权重和为1
+        
+        Args:
+            signals: 原始信号 {stock: weight}
+            date: 当前日期（买入日期）
+            
+        Returns:
+            调整后的信号 {stock: adj_weight}
+        """
+        if not signals:
+            return signals
+        
+        # 计算每只股票的波动率（使用 date 之前的数据）
+        volatilities = {}
+        for stock in signals:
+            vol = self._calculate_volatility(stock, date)
+            volatilities[stock] = vol
+        
+        # 计算调整后的权重: raw_weight / volatility
+        adj_weights = {}
+        for stock, weight in signals.items():
+            adj_weights[stock] = weight / volatilities[stock]
+        
+        # 归一化
+        total_adj_weight = sum(adj_weights.values())
+        if total_adj_weight > 0:
+            for stock in adj_weights:
+                adj_weights[stock] /= total_adj_weight
         else:
-            price_col = self.price_type
+            # 如果总权重为0，均分
+            n = len(adj_weights)
+            for stock in adj_weights:
+                adj_weights[stock] = 1.0 / n if n > 0 else 0.0
         
-        price_dict = {}
-        for _, row in price_data.iterrows():
-            date = pd.to_datetime(row['trade_date'])
-            if date not in price_dict:
-                price_dict[date] = {}
-            price_dict[date][row['ts_code']] = row[price_col]
-        
-        logger.info(f"价格字典构建完成，使用价格列: {price_col}")
-        return price_dict
+        return adj_weights
     
     def _get_rebalance_dates(self, trading_dates: List[pd.Timestamp]) -> List[pd.Timestamp]:
         """获取调仓日期
@@ -327,132 +467,176 @@ class BacktestEngine:
             )
     
     
-    def _buy_stock(self, date: pd.Timestamp, stock: str, target_value: float, price_dict: Dict) -> None:
+    def _buy_stock(self, date: pd.Timestamp, stock: str, target_value: float) -> None:
         """买入股票（在 T+1 日以收盘价买入）
+        
+        使用成交价格（trade_price）计算买入金额和持仓
+        同时记录绩效价格（pnl_price）用于后续收益率计算
         
         Args:
             date: 买入日期（T+1）
             stock: 股票代码
             target_value: 目标市值
-            price_dict: 价格字典
         """
-        if date not in price_dict or stock not in price_dict[date]:
-            logger.warning(f"无法获取 {stock} 在 {date.date()} 的价格，跳过买入")
+        # 获取成交价格（不复权 close）
+        trade_price = self._get_trade_price(date, stock)
+        if trade_price is None:
+            logger.warning(f"无法获取 {stock} 在 {date.date()} 的成交价格，跳过买入")
             return
         
-        price = price_dict[date][stock]
-        shares = int(target_value / price / 100) * 100  # 按手买入
+        # 获取绩效价格（后复权 close_adj）
+        pnl_price = self._get_pnl_price(date, stock)
+        if pnl_price is None:
+            logger.warning(f"无法获取 {stock} 在 {date.date()} 的绩效价格，使用成交价格代替")
+            pnl_price = trade_price
+        
+        # 按手买入（100股为一手）
+        shares = int(target_value / trade_price / 100) * 100
         
         if shares == 0:
             return
         
-        amount = shares * price
+        # 计算买入金额和成本（基于成交价格）
+        amount = shares * trade_price
         cost = self.cost_model.calculate_buy_cost(amount)
-        total_cost = amount + cost
+        total_cost_cash = amount + cost  # 总现金支出（含手续费）
         
-        if total_cost > self.current_capital:
+        if total_cost_cash > self.current_capital:
             # 资金不足，按可用资金买入
-            shares = int((self.current_capital - cost) / price / 100) * 100
+            # 确保有足够资金支付手续费
+            if self.current_capital <= cost:
+                # 资金不足以支付手续费，无法买入
+                return
+            
+            shares = int((self.current_capital - cost) / trade_price / 100) * 100
             if shares == 0:
                 return
-            amount = shares * price
+            amount = shares * trade_price
             cost = self.cost_model.calculate_buy_cost(amount)
-            total_cost = amount + cost
+            total_cost_cash = amount + cost
         
-        # 更新持仓和资金（记录买入日期）
+        # 更新持仓和资金
         # 注意：在当前 T+n 卖出策略下，理论上不应该出现已有持仓的情况
         # 因为旧持仓应该在达到持有期后自动卖出
-        # 如果出现已有持仓，说明可能是边界情况或配置问题
         if stock in self.positions:
             logger.warning(
                 f"股票 {stock} 已有持仓（买入日期: {self.positions[stock]['buy_date']}），"
                 f"新买入将覆盖旧持仓（可能配置有误）"
             )
         
-        # 设置或覆盖持仓（记录买入价格和成本，用于计算收益）
+        # 设置或覆盖持仓（记录买入的成交价格和绩效价格）
         self.positions[stock] = {
             'shares': shares,
             'buy_date': date,
-            'buy_price': price,
-            'buy_cost': total_cost
+            'buy_trade_price': trade_price,  # 成交价格（不复权）
+            'buy_pnl_price': pnl_price,      # 绩效价格（后复权）
+            'buy_cost_cash': total_cost_cash  # 总现金支出（含手续费）
         }
         
-        self.current_capital -= total_cost
+        self.current_capital -= total_cost_cash
         
         # 记录交易
         self.trades.append({
             'date': date,
             'stock': stock,
             'action': 'buy',
-            'price': price,
+            'price': trade_price,            # 成交价格
             'shares': shares,
             'amount': amount,
             'cost': cost
         })
     
-    def _sell_stock(self, date: pd.Timestamp, stock: str, price_dict: Dict) -> None:
+    def _sell_stock(self, date: pd.Timestamp, stock: str) -> None:
         """卖出股票（在 T+n 日以收盘价卖出）
+        
+        现金流使用成交价格（trade_price）计算
+        收益率使用绩效价格（pnl_price）计算
         
         Args:
             date: 卖出日期（T+n）
             stock: 股票代码
-            price_dict: 价格字典
         """
         if stock not in self.positions or self.positions[stock]['shares'] == 0:
             return
         
-        if date not in price_dict or stock not in price_dict[date]:
-            logger.warning(f"无法获取 {stock} 在 {date.date()} 的价格，跳过卖出")
+        # 获取成交价格（不复权 close）
+        sell_trade_price = self._get_trade_price(date, stock)
+        if sell_trade_price is None:
+            logger.warning(f"无法获取 {stock} 在 {date.date()} 的成交价格，跳过卖出")
             return
         
-        price = price_dict[date][stock]
-        shares = self.positions[stock]['shares']
-        amount = shares * price
-        cost = self.cost_model.calculate_sell_cost(amount)
+        # 获取绩效价格（后复权 close_adj）
+        sell_pnl_price = self._get_pnl_price(date, stock)
+        if sell_pnl_price is None:
+            logger.warning(f"无法获取 {stock} 在 {date.date()} 的绩效价格，使用成交价格代替")
+            sell_pnl_price = sell_trade_price
         
-        # 计算收益（基于 FIFO 原则：使用记录的买入成本）
-        # 收益 = 卖出所得（扣除成本）- 买入成本
-        buy_cost = self.positions[stock]['buy_cost']
-        buy_price = self.positions[stock]['buy_price']
-        sell_proceeds = amount - cost  # 卖出后实际到手金额
-        profit_amount = sell_proceeds - buy_cost  # 绝对收益（已扣除买卖成本）
-        profit_pct = profit_amount / buy_cost if buy_cost > 0 else 0  # 收益率
+        # 获取持仓信息
+        shares = self.positions[stock]['shares']
+        buy_trade_price = self.positions[stock]['buy_trade_price']
+        buy_pnl_price = self.positions[stock]['buy_pnl_price']
+        buy_cost_cash = self.positions[stock]['buy_cost_cash']
+        
+        # 计算现金流（基于成交价格）
+        sell_amount = shares * sell_trade_price
+        sell_cost = self.cost_model.calculate_sell_cost(sell_amount)
+        sell_proceeds = sell_amount - sell_cost  # 卖出后实际到手金额
+        
+        # 计算收益率（基于绩效价格）
+        pnl_buy_amount = shares * buy_pnl_price  # 绩效口径买入金额
+        pnl_sell_amount = shares * sell_pnl_price  # 绩效口径卖出金额
+        
+        # 买入和卖出的手续费
+        buy_amount = shares * buy_trade_price
+        buy_cost = self.cost_model.calculate_buy_cost(buy_amount)
+        total_cost = buy_cost + sell_cost  # 总手续费
+        
+        # 绩效收益（基于绩效价格，扣除手续费）
+        # 收益 = 卖出金额 - 买入金额 - 总手续费
+        pnl_profit_amount = pnl_sell_amount - pnl_buy_amount - total_cost
+        # 收益率 = 收益 / (买入金额 + 买入手续费)
+        # 买入成本是买入金额+买入手续费，这是投资者实际付出的成本
+        pnl_profit_pct = (
+            pnl_profit_amount / (pnl_buy_amount + buy_cost) 
+            if (pnl_buy_amount + buy_cost) > 0 else 0
+        )
         
         # 更新持仓和资金
         del self.positions[stock]
         self.current_capital += sell_proceeds
         
-        # 记录交易（包含收益信息）
+        # 记录交易（包含绩效收益信息）
         self.trades.append({
             'date': date,
             'stock': stock,
             'action': 'sell',
-            'price': price,
+            'price': sell_trade_price,       # 卖出成交价格
             'shares': shares,
-            'amount': amount,
-            'cost': cost,
-            'buy_price': buy_price,  # 买入价格
-            'profit_amount': profit_amount,  # 单笔收益金额（已扣除成本）
-            'profit_pct': profit_pct  # 单笔收益率
+            'amount': sell_amount,
+            'cost': sell_cost,
+            'buy_price': buy_trade_price,    # 买入成交价格
+            'buy_pnl_price': buy_pnl_price,  # 买入绩效价格
+            'sell_pnl_price': sell_pnl_price,  # 卖出绩效价格
+            'pnl_profit_amount': pnl_profit_amount,  # 绩效收益金额
+            'pnl_profit_pct': pnl_profit_pct  # 绩效收益率
         })
     
-    def _calculate_portfolio_value(self, date: pd.Timestamp, price_dict: Dict) -> float:
-        """计算组合市值
+    def _calculate_portfolio_value(self, date: pd.Timestamp) -> float:
+        """计算组合市值（基于成交价格）
         
         Args:
             date: 计算日期
-            price_dict: 价格字典
             
         Returns:
             组合总市值
         """
         market_value = 0.0
         
-        if date in price_dict:
-            for stock, info in self.positions.items():
-                shares = info['shares']
-                if stock in price_dict[date]:
-                    market_value += shares * price_dict[date][stock]
+        for stock, info in self.positions.items():
+            shares = info['shares']
+            trade_price = self._get_trade_price(date, stock)
+            if trade_price is not None:
+                market_value += shares * trade_price
         
         return self.current_capital + market_value
     
