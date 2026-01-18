@@ -100,7 +100,7 @@ def test_price_type_close_hfq(mock_price_data_with_adj):
         universe=universe,
         signal=signal,
         initial_capital=1000000,
-        price_type='close_hfq',
+        price_type='close_qfq',
         verbose=False
     )
     
