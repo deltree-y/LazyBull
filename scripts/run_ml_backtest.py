@@ -120,12 +120,12 @@ def prepare_price_data(daily_data: pd.DataFrame) -> pd.DataFrame:
     
     # 检查是否有复权价格
     if 'close_adj' in daily_data.columns:
-        price_data = daily_data[['ts_code', 'trade_date', 'close_adj']].copy()
-        price_data.rename(columns={'close_adj': 'close'}, inplace=True)
-        logger.info("使用复权价格（close_adj）")
+        price_data = daily_data[['ts_code', 'trade_date','close','close_adj']].copy()
+        #price_data.rename(columns={'close_adj': 'close'}, inplace=True)
+        #logger.info("使用复权价格（close_adj）")
     else:
         price_data = daily_data[required_cols].copy()
-        logger.info("使用原始收盘价（close）")
+        logger.warning("没有找到close_adj, 使用原始收盘价（close）")
     
     return price_data
 
@@ -261,10 +261,10 @@ def main():
     )
     parser.add_argument(
         "--rebalance-freq",
-        type=str,
-        default="W",
+        type=int,
+        default=10,
         #choices=["D", "W", "M"],
-        help="调仓频率，D=日度，W=周度，M=月度，默认 W"
+        help="调仓频率, 单位为交易日天数，默认 10"
     )
     
     # ML 信号参数

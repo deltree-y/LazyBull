@@ -73,20 +73,13 @@ class BacktestEngine:
         self.vol_window = vol_window
         self.vol_epsilon = vol_epsilon
         
-        # 设置持有期
+        # 设置持有期及调仓频率(目前二者保持一致)
+        self.rebalance_freq = rebalance_freq
         if holding_period is None:
-            # 根据调仓频率自动设置持有期
-            if isinstance(rebalance_freq, int):
-                # 如果是整数，直接使用
-                self.holding_period = rebalance_freq
-            elif rebalance_freq == "D":
-                self.holding_period = 1
-            elif rebalance_freq == "W":
-                self.holding_period = 5
-            else:  # M
-                self.holding_period = 20
+            self.holding_period = self.rebalance_freq
         else:
-            self.holding_period = holding_period
+            self.holding_period = self.rebalance_freq
+        
         
         # 回测状态
         self.current_capital = initial_capital
@@ -101,7 +94,7 @@ class BacktestEngine:
         
         logger.info(
             f"回测引擎初始化完成: 初始资金={initial_capital}, "
-            f"调仓频率={rebalance_freq}, 持有期={self.holding_period}天, "
+            f"调仓频率={self.rebalance_freq}, 持有期={self.holding_period}天, "
             f"风险预算={'启用' if enable_risk_budget else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
@@ -153,13 +146,15 @@ class BacktestEngine:
         for idx, date in enumerate(trading_dates):
             # 判断是否为信号生成日
             if date in signal_dates:
-                self._generate_signal(date, trading_dates, date_to_idx)
-            
-            # 执行待执行的买入操作（T+1）
-            self._execute_pending_buys(date, trading_dates, date_to_idx)
-            
+                self._generate_signal(date, trading_dates, price_data, date_to_idx)
+
+            # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
+            # TODO: 更正确的做法应该是在持有期计算中排除当天买入的股票, 此部分还待优化
             # 检查并执行卖出操作（达到持有期）
             self._check_and_sell(date, trading_dates, date_to_idx)
+
+            # 执行待执行的买入操作（T+1）
+            self._execute_pending_buys(date, trading_dates, date_to_idx)
             
             # 计算当日组合价值
             portfolio_value = self._calculate_portfolio_value(date)
@@ -179,7 +174,7 @@ class BacktestEngine:
         
         return nav_df
     
-    def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
+    def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_data: pd.DataFrame, date_to_idx: Dict) -> None:
         """生成信号（在 T 日生成，T+1 日执行买入）
         
         Args:
@@ -309,7 +304,7 @@ class BacktestEngine:
             logger.info("价格索引构建完成: 成交价格=close, 绩效价格=close_adj")
         else:
             # 如果缺少 close_adj，回退到 close
-            logger.warning("价格数据缺少 'close_adj' 列，绩效价格将使用 'close' 列（不复权）")
+            logger.warning(f"价格数据缺少 'close_adj' 列，绩效价格将使用 'close' 列（不复权）")
             self.pnl_price_index = self.trade_price_index.copy()
             logger.info("价格索引构建完成: 成交价格=close, 绩效价格=close（退化）")
     
@@ -436,8 +431,8 @@ class BacktestEngine:
         Returns:
             调仓日期列表
         """
-        if self.rebalance_freq.isdecimal():
-            self.rebalance_freq = int(self.rebalance_freq)
+        #if self.rebalance_freq.isdecimal():
+        #    self.rebalance_freq = int(self.rebalance_freq)
         # 支持整数天数
         if isinstance(self.rebalance_freq, int):
             # 每 N 个交易日调仓一次
