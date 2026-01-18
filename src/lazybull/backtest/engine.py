@@ -383,7 +383,7 @@ class BacktestEngine:
             # 确保波动率不低于 epsilon
             return max(vol, self.vol_epsilon)
             
-        except Exception as e:
+        except (KeyError, ValueError, IndexError) as e:
             logger.warning(f"计算 {stock} 波动率时出错: {e}，使用默认值 {self.vol_epsilon}")
             return self.vol_epsilon
     
@@ -503,6 +503,11 @@ class BacktestEngine:
         
         if total_cost_cash > self.current_capital:
             # 资金不足，按可用资金买入
+            # 确保有足够资金支付手续费
+            if self.current_capital <= cost:
+                # 资金不足以支付手续费，无法买入
+                return
+            
             shares = int((self.current_capital - cost) / trade_price / 100) * 100
             if shares == 0:
                 return
