@@ -371,7 +371,7 @@ print(df[['close', 'close_adj', 'adj_factor']].head())
   - 优点：历史价格固定不变
   - 缺点：当前价格可能很高，不直观
 
-LazyBull 项目使用**前复权（后复权价格，close_adj）**，这是业界主流做法。
+LazyBull 项目使用**后复权（后复权价格，close_adj）**，这是业界主流做法。
 
 ### Q5: 如何验证价格口径是否正确？
 
