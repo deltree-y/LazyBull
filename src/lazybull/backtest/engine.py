@@ -92,10 +92,12 @@ class BacktestEngine:
         
         # 设置持有期及调仓频率(目前二者保持一致)
         self.rebalance_freq = rebalance_freq
+        
+        # 持有期逻辑：如果未指定，与调仓频率保持一致
         if holding_period is None:
             self.holding_period = self.rebalance_freq
         else:
-            self.holding_period = self.rebalance_freq
+            self.holding_period = holding_period  # 修复：应使用传入的 holding_period
         
         
         # 回测状态

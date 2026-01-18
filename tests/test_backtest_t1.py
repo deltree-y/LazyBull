@@ -12,7 +12,7 @@ from src.lazybull.universe.base import Universe
 class MockUniverse(Universe):
     """模拟股票池"""
     
-    def get_stocks(self, date):
+    def get_stocks(self, date, quote_data=None):
         """返回所有可用股票"""
         return ['000001.SZ', '000002.SZ']
 
