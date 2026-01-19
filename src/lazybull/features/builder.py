@@ -451,6 +451,9 @@ class FeatureBuilder:
     ) -> pd.DataFrame:
         """添加过滤标记
         
+        当 clean 层数据包含标记时直接复用，否则重新计算。
+        注意：涨跌停标记由 _add_limit_flags 方法处理。
+        
         Args:
             df: 特征DataFrame
             stock_basic: 股票基本信息
@@ -463,6 +466,7 @@ class FeatureBuilder:
         result = df.copy()
         
         # 检查是否已有 clean 层的标记（tradable, is_st 等）
+        # 注意：is_limit_up/is_limit_down 由 _add_limit_flags 单独检查和处理
         has_clean_flags = all(col in result.columns for col in ['is_st', 'is_suspended', 'tradable', 'list_days'])
         
         if has_clean_flags:
@@ -562,6 +566,8 @@ class FeatureBuilder:
         trade_date: str
     ) -> pd.DataFrame:
         """添加涨跌停标记
+        
+        当 clean 层数据包含涨跌停标记时直接复用，否则重新计算。
         
         Args:
             df: 特征DataFrame
