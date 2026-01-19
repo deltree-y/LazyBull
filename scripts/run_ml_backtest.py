@@ -123,11 +123,11 @@ def prepare_price_data(daily_data: pd.DataFrame) -> pd.DataFrame:
         'close', 'close_adj',
 
         # 交易状态相关（用于 is_tradeable / is_limit_up / is_suspended 等）
-        'filter_is_suspended', 'is_limit_up', 'is_limit_down',
+        'is_suspended', 'is_limit_up', 'is_limit_down',
         'vol', 'pct_chg',
 
         # 股票池基础过滤可能用到的字段（按存在保留）
-        'filter_is_st', 'filter_list_days', 'tradable'
+        'is_st', 'list_days', 'tradable'
     ]
 
     # 实际存在的列才保留，避免 raw 数据缺列时报错
@@ -189,7 +189,6 @@ def run_ml_backtest(
         initial_capital=initial_capital,
         cost_model=cost_model or CostModel(),
         rebalance_freq=rebalance_freq,
-        price_type="close",
     )
     
     # 运行回测
