@@ -463,14 +463,14 @@ class FeatureBuilder:
         result = df.copy()
         
         # 检查是否已有 clean 层的标记（tradable, is_st 等）
-        has_clean_flags = all(col in result.columns for col in ['is_st', 'is_suspended', 'tradable'])
+        has_clean_flags = all(col in result.columns for col in ['is_st', 'is_suspended', 'tradable', 'list_days'])
         
         if has_clean_flags:
-            logger.info("数据已包含 clean 层过滤标记，跳过标记添加")
-            # 重命名以匹配特征构建器的命名（如果需要）
-            if 'is_suspended' in result.columns and 'suspend' not in result.columns:
-                result['suspend'] = result['is_suspended']
+            logger.info("数据已包含 clean 层过滤标记，直接复用")
             return result
+        
+        # 如果没有clean标记，则需要自己计算
+        logger.info("clean 层标记不存在，开始计算过滤标记")
         
         # 1. ST标记：通过股票名称判断
         stock_names = stock_basic[['ts_code', 'name']].copy()
@@ -511,12 +511,12 @@ class FeatureBuilder:
             logger.warning(f"计算上市天数失败: {e}，使用默认值")
             result['list_days'] = 999  # 默认视为满足条件
         
-        # 3. 停牌标记
+        # 3. 停牌标记（使用统一列名 is_suspended）
         # 简化处理：如果当日成交量为0或极小，视为停牌
         if 'vol' in result.columns:
-            result['suspend'] = (result['vol'] <= 0).astype(int)
+            result['is_suspended'] = (result['vol'] <= 0).astype(int)
         else:
-            result['suspend'] = 0
+            result['is_suspended'] = 0
         
         # 如果有停复牌信息，可以进一步完善
         if suspend_info is not None and len(suspend_info) > 0:
@@ -536,7 +536,7 @@ class FeatureBuilder:
                      (suspend_info_normalized['resume_date'].isna()))
                 ]['ts_code'].unique()
                 
-                result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
+                result.loc[result['ts_code'].isin(suspend_today), 'is_suspended'] = 1
             elif 'trade_date' in suspend_info.columns and 'suspend_type' in suspend_info.columns:
                 # 新版逻辑：筛选当日类型为'S'(停牌)的股票
                 # 统一日期格式
@@ -550,7 +550,7 @@ class FeatureBuilder:
                     (suspend_info_normalized['suspend_type'] == 'S')
                 ]['ts_code'].unique()
                 
-                result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
+                result.loc[result['ts_code'].isin(suspend_today), 'is_suspended'] = 1
         
         return result
     
@@ -574,6 +574,16 @@ class FeatureBuilder:
         """
         result = df.copy()
         
+        # 检查是否已有 clean 层的涨跌停标记
+        has_clean_limit_flags = all(col in result.columns for col in ['is_limit_up', 'is_limit_down'])
+        
+        if has_clean_limit_flags:
+            logger.info("数据已包含 clean 层涨跌停标记，直接复用")
+            return result
+        
+        # 如果没有clean标记，则需要自己计算
+        logger.info("clean 层涨跌停标记不存在，开始计算")
+        
         # 获取当日行情
         current_daily = daily_data[daily_data['trade_date'] == trade_date][
             ['ts_code', 'close', 'pct_chg']
@@ -583,18 +593,18 @@ class FeatureBuilder:
         
         # 简化方法：使用涨跌幅判断（A股涨跌停通常为±10%，ST为±5%）
         # 这里使用9.9%和-9.9%作为阈值（考虑精度问题）
-        result['limit_up'] = 0
-        result['limit_down'] = 0
+        result['is_limit_up'] = 0
+        result['is_limit_down'] = 0
         
         # 非ST股票：涨跌幅 >= 9.9%
-        non_st_mask = (result['filter_is_st'] == 0)
-        result.loc[non_st_mask & (result['pct_chg'] >= 9.9), 'limit_up'] = 1
-        result.loc[non_st_mask & (result['pct_chg'] <= -9.9), 'limit_down'] = 1
+        non_st_mask = (result['is_st'] == 0)
+        result.loc[non_st_mask & (result['pct_chg'] >= 9.9), 'is_limit_up'] = 1
+        result.loc[non_st_mask & (result['pct_chg'] <= -9.9), 'is_limit_down'] = 1
         
         # ST股票：涨跌幅 >= 4.9%
-        st_mask = (result['filter_is_st'] == 1)
-        result.loc[st_mask & (result['pct_chg'] >= 4.9), 'limit_up'] = 1
-        result.loc[st_mask & (result['pct_chg'] <= -4.9), 'limit_down'] = 1
+        st_mask = (result['is_st'] == 1)
+        result.loc[st_mask & (result['pct_chg'] >= 4.9), 'is_limit_up'] = 1
+        result.loc[st_mask & (result['pct_chg'] <= -4.9), 'is_limit_down'] = 1
         
         # 如果有涨跌停价格信息，可以更精确地判断
         if limit_info is not None and len(limit_info) > 0:
@@ -613,11 +623,11 @@ class FeatureBuilder:
                 # 使用价格对比（更精确）
                 result.loc[
                     (result['close'] >= result['up_limit'] * 0.999),
-                    'limit_up'
+                    'is_limit_up'
                 ] = 1
                 result.loc[
                     (result['close'] <= result['down_limit'] * 1.001),
-                    'limit_down'
+                    'is_limit_down'
                 ] = 1
                 
                 result.drop(columns=['up_limit', 'down_limit'], inplace=True, errors='ignore')
@@ -633,7 +643,7 @@ class FeatureBuilder:
         过滤条件：
         - 剔除 ST (is_st=1)
         - 剔除上市 < 60天 (list_days < 60)
-        - 剔除停牌 (suspend=1)
+        - 剔除停牌 (is_suspended=1)
         - 剔除标签缺失 (y_ret_5 为空)
         - 涨跌停不剔除，仅标记
         
@@ -648,7 +658,7 @@ class FeatureBuilder:
         # 记录过滤统计
         st_count = (df['is_st'] == 1).sum()
         list_days_count = (df['list_days'] < self.min_list_days).sum()
-        suspend_count = (df['suspend'] == 1).sum()
+        suspend_count = (df['is_suspended'] == 1).sum()
         missing_label_count = df['y_ret_5'].isna().sum()
         
         logger.info(
@@ -661,7 +671,7 @@ class FeatureBuilder:
         result = df[
             (df['is_st'] == 0) &
             (df['list_days'] >= self.min_list_days) &
-            (df['suspend'] == 0) &
+            (df['is_suspended'] == 0) &
             (df['y_ret_5'].notna())
         ].copy()
         

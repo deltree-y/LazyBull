@@ -243,17 +243,17 @@ class TestFeatureBuilder:
             '20230110'
         )
         
-        # 检查ST标记（新列名：去掉 filter_ 前缀）
-        assert result[result['ts_code'] == '600000.SH']['filter_is_st'].iloc[0] == 1  # *ST浦发
-        assert result[result['ts_code'] == '000001.SZ']['filter_is_st'].iloc[0] == 0  # 平安银行
+        # 检查ST标记（统一列名：is_st）
+        assert result[result['ts_code'] == '600000.SH']['is_st'].iloc[0] == 1  # *ST浦发
+        assert result[result['ts_code'] == '000001.SZ']['is_st'].iloc[0] == 0  # 平安银行
         
-        # 应用过滤（应用后列名会去掉 filter_ 前缀）
+        # 应用过滤
         filtered = builder._apply_filters(result)
         
         # ST股票应该被过滤掉
         assert '600000.SH' not in filtered['ts_code'].values
         assert '000001.SZ' in filtered['ts_code'].values
-        # 确认新列名存在
+        # 确认统一列名存在
         assert 'is_st' in filtered.columns
     
     def test_apply_filters_list_days(
@@ -306,16 +306,16 @@ class TestFeatureBuilder:
             '20230110'
         )
         
-        # 检查停牌标记
-        assert result[result['ts_code'] == '000002.SZ']['filter_suspend'].iloc[0] == 1
+        # 检查停牌标记（统一列名：is_suspended）
+        assert result[result['ts_code'] == '000002.SZ']['is_suspended'].iloc[0] == 1
         
-        # 应用过滤（应用后列名会去掉 filter_ 前缀）
+        # 应用过滤
         filtered = builder._apply_filters(result)
         
         # 停牌股票应该被过滤掉
         assert '000002.SZ' not in filtered['ts_code'].values
-        # 确认新列名存在
-        assert 'suspend' in filtered.columns
+        # 确认统一列名存在
+        assert 'is_suspended' in filtered.columns
     
     def test_build_features_for_day_integration(
         self,
@@ -346,12 +346,12 @@ class TestFeatureBuilder:
         assert 'ts_code' in features.columns
         assert 'y_ret_5' in features.columns
         assert 'ret_1' in features.columns
-        # 新的列名（去掉 filter_ 前缀）
+        # 统一列名（与clean层一致）
         assert 'is_st' in features.columns
-        assert 'suspend' in features.columns
+        assert 'is_suspended' in features.columns
         assert 'list_days' in features.columns
-        assert 'limit_up' in features.columns
-        assert 'limit_down' in features.columns
+        assert 'is_limit_up' in features.columns
+        assert 'is_limit_down' in features.columns
         
         # 所有样本的trade_date应该一致
         assert (features['trade_date'] == trade_date).all()
@@ -363,7 +363,7 @@ class TestFeatureBuilder:
         assert not features['is_st'].any()
         
         # 停牌股票应该被过滤掉
-        assert not features['suspend'].any()
+        assert not features['is_suspended'].any()
     
     def test_limit_flags(self, mock_daily_data, mock_stock_basic):
         """测试涨跌停标记"""
@@ -375,7 +375,7 @@ class TestFeatureBuilder:
             'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
             'ret_1': [0.01, 0.02, 0.03, 0.01],
             'y_ret_5': [0.05, 0.06, 0.07, 0.08],
-            'filter_is_st': [0, 0, 1, 0],  # 第三只是ST
+            'is_st': [0, 0, 1, 0],  # 第三只是ST
             'vol': [1000000, 1000000, 1000000, 1000000]
         })
         
@@ -394,11 +394,11 @@ class TestFeatureBuilder:
             '20230110'
         )
         
-        # 检查涨跌停标记
-        assert result[result['ts_code'] == '000001.SZ']['limit_up'].iloc[0] == 1
-        assert result[result['ts_code'] == '000002.SZ']['limit_down'].iloc[0] == 1
-        assert result[result['ts_code'] == '600000.SH']['limit_up'].iloc[0] == 1  # ST股票5%涨停
-        assert result[result['ts_code'] == '600001.SH']['limit_up'].iloc[0] == 0
+        # 检查涨跌停标记（统一列名：is_limit_up, is_limit_down）
+        assert result[result['ts_code'] == '000001.SZ']['is_limit_up'].iloc[0] == 1
+        assert result[result['ts_code'] == '000002.SZ']['is_limit_down'].iloc[0] == 1
+        assert result[result['ts_code'] == '600000.SH']['is_limit_up'].iloc[0] == 1  # ST股票5%涨停
+        assert result[result['ts_code'] == '600001.SH']['is_limit_up'].iloc[0] == 0
 
 
 def test_feature_builder_with_empty_data():
@@ -410,3 +410,73 @@ def test_feature_builder_with_empty_data():
     
     trading_dates = builder._get_trading_dates(empty_cal)
     assert len(trading_dates) == 0
+
+
+def test_feature_builder_reuses_clean_markers():
+    """测试特征构建器复用clean层标记"""
+    builder = FeatureBuilder(min_list_days=60)
+    
+    # 创建包含clean层标记的数据
+    df = pd.DataFrame({
+        'trade_date': ['20230110'] * 4,
+        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
+        'ret_1': [0.01, 0.02, 0.03, 0.01],
+        'y_ret_5': [0.05, 0.06, 0.07, 0.08],
+        'vol': [1000000, 1000000, 1000000, 1000000],
+        # clean层标记
+        'is_st': [0, 0, 1, 0],
+        'is_suspended': [0, 1, 0, 0],
+        'is_limit_up': [1, 0, 0, 0],
+        'is_limit_down': [0, 0, 0, 1],
+        'list_days': [1000, 1000, 1000, 50],
+        'tradable': [1, 0, 0, 0]
+    })
+    
+    # 模拟stock_basic（实际不会被使用，因为有clean标记）
+    stock_basic = pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
+        'name': ['平安银行', '万科A', '*ST浦发', '邯郸钢铁'],
+        'list_date': ['20100101', '20100101', '20100101', '20230101']
+    })
+    
+    # 添加过滤标记（应该直接复用clean层标记）
+    result = builder._add_filter_flags(
+        df,
+        stock_basic,
+        None,
+        '20230110'
+    )
+    
+    # 验证clean层标记被保留
+    assert result[result['ts_code'] == '600000.SH']['is_st'].iloc[0] == 1
+    assert result[result['ts_code'] == '000002.SZ']['is_suspended'].iloc[0] == 1
+    assert result[result['ts_code'] == '600001.SH']['list_days'].iloc[0] == 50
+    
+    # 模拟daily_data用于涨跌停标记（实际不会被使用，因为有clean标记）
+    daily_data = pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
+        'trade_date': ['20230110'] * 4,
+        'close': [11.0, 12.0, 13.0, 14.0],
+        'pct_chg': [10.0, -10.0, 5.0, -10.0]
+    })
+    
+    # 添加涨跌停标记（应该直接复用clean层标记）
+    result = builder._add_limit_flags(
+        result,
+        daily_data,
+        None,
+        '20230110'
+    )
+    
+    # 验证clean层涨跌停标记被保留
+    assert result[result['ts_code'] == '000001.SZ']['is_limit_up'].iloc[0] == 1
+    assert result[result['ts_code'] == '600001.SH']['is_limit_down'].iloc[0] == 1
+    
+    # 应用过滤
+    filtered = builder._apply_filters(result)
+    
+    # ST、停牌、上市不足60天的股票应该被过滤
+    assert '000001.SZ' in filtered['ts_code'].values  # 正常，仅涨停不过滤
+    assert '000002.SZ' not in filtered['ts_code'].values  # 停牌
+    assert '600000.SH' not in filtered['ts_code'].values  # ST
+    assert '600001.SH' not in filtered['ts_code'].values  # 上市不足60天
