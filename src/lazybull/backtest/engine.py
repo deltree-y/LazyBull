@@ -38,7 +38,6 @@ class BacktestEngine:
         rebalance_freq: str = "M",
         holding_period: Optional[int] = None,
         verbose: bool = True,
-        price_type: str = "close",  # 保留以兼容旧代码，但不再使用
         enable_risk_budget: bool = False,
         vol_window: int = 20,
         vol_epsilon: float = 0.001,
@@ -60,7 +59,6 @@ class BacktestEngine:
             rebalance_freq: 调仓频率，D=日，W=周，M=月，或整数表示每N天调仓
             holding_period: 持有期（交易日），None 则自动根据调仓频率设置
             verbose: 是否输出详细日志（买入/卖出操作），默认True
-            price_type: （已废弃，保留以兼容旧代码）价格类型，新版本中不再使用
             enable_risk_budget: 是否启用风险预算/波动率缩放，默认False（保持向后兼容）
             vol_window: 波动率计算窗口（交易日），默认20
             vol_epsilon: 波动率缩放的最小波动率，防止除零，默认0.001
@@ -74,7 +72,6 @@ class BacktestEngine:
         self.cost_model = cost_model or CostModel()
         self.rebalance_freq = rebalance_freq
         self.verbose = verbose
-        self.price_type = price_type  # 保留以兼容旧代码
         
         # 风险预算参数
         self.enable_risk_budget = enable_risk_budget
