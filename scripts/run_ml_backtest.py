@@ -114,19 +114,39 @@ def prepare_price_data(daily_data: pd.DataFrame) -> pd.DataFrame:
     """
     if daily_data is None or len(daily_data) == 0:
         raise ValueError("没有价格数据")
-    
-    # 选择需要的列
-    required_cols = ['ts_code', 'trade_date', 'close']
-    
-    # 检查是否有复权价格
-    if 'close_adj' in daily_data.columns:
-        price_data = daily_data[['ts_code', 'trade_date','close','close_adj']].copy()
-        #price_data.rename(columns={'close_adj': 'close'}, inplace=True)
-        #logger.info("使用复权价格（close_adj）")
-    else:
-        price_data = daily_data[required_cols].copy()
-        logger.warning("没有找到close_adj, 使用原始收盘价（close）")
-    
+
+    # 回测中既要成交价格（close），也要绩效价格（close_adj）
+    desired_cols = [
+        'ts_code', 'trade_date',
+
+        # 价格口径
+        'close', 'close_adj',
+
+        # 交易状态相关（用于 is_tradeable / is_limit_up / is_suspended 等）
+        'filter_is_suspended', 'is_limit_up', 'is_limit_down',
+        'vol', 'pct_chg',
+
+        # 股票池基础过滤可能用到的字段（按存在保留）
+        'filter_is_st', 'filter_list_days', 'tradable'
+    ]
+
+    # 实际存在的列才保留，避免 raw 数据缺列时报错
+    existing_cols = [c for c in desired_cols if c in daily_data.columns]
+    price_data = daily_data[existing_cols].copy()
+
+    # 关键列检查：close 必须有
+    if 'close' not in price_data.columns:
+        raise ValueError("价格数据缺少 'close' 列，无法进行回测")
+
+    # close_adj 可选：没有就退化（engine 里也会退化）
+    if 'close_adj' not in price_data.columns:
+        logger.warning("prepare_price_data: 未找到 close_adj，绩效价格将退化为 close（不复权）")
+
+    # 交易状态列缺失要明确提示（否则你以为过滤生效但其实没生效）
+    missing_status_cols = [c for c in ['filter_is_suspended', 'is_limit_up', 'is_limit_down'] if c not in price_data.columns]
+    if missing_status_cols:
+        logger.warning(f"prepare_price_data: 缺少交易状态列 {missing_status_cols}，涨跌停/停牌过滤将退化")
+
     return price_data
 
 

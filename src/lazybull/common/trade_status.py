@@ -27,8 +27,8 @@ def is_suspended(
     try:
         mask = (quote_data['ts_code'] == ts_code) & (quote_data['trade_date'] == trade_date)
         if mask.sum() == 0:
-            logger.debug(f"未找到 {ts_code} 在 {trade_date} 的行情数据，假定未停牌")
-            return False
+            logger.warning(f"未找到 {ts_code} 在 {trade_date} 的行情数据，假定停牌")
+            return True
         
         row = quote_data[mask].iloc[0]
         if 'filter_is_suspended' in row:
@@ -62,7 +62,7 @@ def is_limit_up(
     try:
         mask = (quote_data['ts_code'] == ts_code) & (quote_data['trade_date'] == trade_date)
         if mask.sum() == 0:
-            logger.debug(f"未找到 {ts_code} 在 {trade_date} 的行情数据，假定未涨停")
+            logger.warning(f"未找到 {ts_code} 在 {trade_date} 的行情数据，假定未涨停")
             return False
         
         row = quote_data[mask].iloc[0]
@@ -134,6 +134,10 @@ def is_tradeable(
         - False, "涨停": 涨停买入不可交易
         - False, "跌停": 跌停卖出不可交易
     """
+    if quote_data.empty:
+        logger.warning(f"行情数据为空，假定股票可交易 {ts_code} {trade_date}")
+        return True, None
+
     # 检查停牌
     if is_suspended(ts_code, trade_date, quote_data):
         return False, "停牌"
@@ -175,6 +179,17 @@ def get_trade_status_info(
             'pct_chg': float or None
         }
     """
+    if quote_data.empty:
+        logger.warning(f"行情数据为空，无法获取交易状态信息 {ts_code} {trade_date}")
+        return {
+            'is_suspended': False,
+            'is_limit_up': False,
+            'is_limit_down': False,
+            'can_buy': True,
+            'can_sell': True,
+            'close': None,
+            'pct_chg': None
+        }
     suspended = is_suspended(ts_code, trade_date, quote_data)
     limit_up = is_limit_up(ts_code, trade_date, quote_data)
     limit_down = is_limit_down(ts_code, trade_date, quote_data)

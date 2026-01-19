@@ -160,7 +160,7 @@ class BasicUniverse(Universe):
         stock_list = stocks['ts_code'].tolist()
         
         # 如果提供了行情数据，进一步过滤停牌和涨跌停股票
-        if quote_data is not None and (self.filter_suspended or self.filter_limit_stocks):
+        if not quote_data.empty and (self.filter_suspended or self.filter_limit_stocks):
             stock_list = self._filter_untradeable_stocks(
                 stock_list, date, quote_data
             )
@@ -196,6 +196,13 @@ class BasicUniverse(Universe):
         
         for stock in stock_list:
             # 仅检查停牌状态（涨跌停过滤已移至信号生成阶段基于T+1数据）
+            if quote_data.empty:
+                # 行情数据为空，无法判断交易状态，保留股票
+                logger.warning(
+                    f"Universe过滤时行情数据为空，保留股票 {stock} 在 {date.date()}"
+                )
+                filtered_stocks.append(stock)
+                continue
             tradeable, reason = is_tradeable(
                 stock, trade_date_str, quote_data, action='buy'
             )

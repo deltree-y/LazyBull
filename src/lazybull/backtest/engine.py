@@ -240,8 +240,8 @@ class BacktestEngine:
             date_to_idx: 日期到索引的映射
         """
         # 获取当日行情数据用于基础过滤（ST、停牌等基础过滤）
-        date_quote = price_data[price_data['trade_date'] == date]
-        
+        trade_date_str = date.strftime('%Y%m%d')        
+        date_quote = price_data[price_data['trade_date'] == trade_date_str]
         # 获取股票池（不过滤涨跌停，因为 T 日涨跌停不代表 T+1 日也涨跌停）
         # 但保留 ST、基本可交易性等过滤
         stock_universe = self.universe.get_stocks(date, quote_data=date_quote)
@@ -294,6 +294,16 @@ class BacktestEngine:
             candidates_checked += 1
             
             # 检查 T+1 日该股票是否可买入
+            if buy_date_quote.empty:
+                # T+1 日行情数据为空，无法判断交易状态，跳过
+                filtered_reasons['停牌'] += 1
+                if self.verbose:
+                    logger.warning(
+                        f"信号日 {date.date()} 的候选股票 {stock} 在 T+1 日 {buy_date.date()} 无行情数据，"
+                        f"假定不可买入，从候选中回填"
+                    )
+                continue
+
             tradeable, reason = is_tradeable(stock, buy_date_str, buy_date_quote, action='buy')
             
             if tradeable:
@@ -307,7 +317,7 @@ class BacktestEngine:
                 # 不可交易，记录原因并继续检查下一个候选
                 filtered_reasons[reason] = filtered_reasons.get(reason, 0) + 1
                 if self.verbose:
-                    logger.debug(
+                    logger.warning(
                         f"候选股票 {stock} 在 {buy_date.date()} 不可买入(原因: {reason})，"
                         f"从候选中回填"
                     )
@@ -628,6 +638,12 @@ class BacktestEngine:
         
         for order in orders_to_retry:
             # 检查是否可交易
+            if date_quote.empty:
+                # 当日行情数据为空，无法判断交易状态，继续延迟
+                logger.warning(
+                    f"延迟订单 {order.stock} 在 {date.date()} 无行情数据，继续延迟"
+                )
+                continue
             tradeable, reason = is_tradeable(
                 order.stock, trade_date_str, date_quote, action=order.action
             )
@@ -667,6 +683,23 @@ class BacktestEngine:
         if self.enable_pending_order and self.price_data_cache is not None:
             date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
             trade_date_str = date.strftime('%Y%m%d')
+            if date_quote.empty:
+                # 当日行情数据为空，无法判断交易状态，加入延迟队列
+                if self.pending_order_manager:
+                    self.pending_order_manager.add_order(
+                        stock=stock,
+                        action='buy',
+                        current_date=date,
+                        signal_date=signal_date or date,
+                        target_value=target_value,
+                        reason='无行情数据'
+                    )
+                if self.verbose:
+                    logger.info(
+                        f"买入延迟: {date.date()} {stock}, 原因: 无行情数据, "
+                        f"目标市值: {target_value:.2f}"
+                    )
+                return
             tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action='buy')
             
             if not tradeable:
@@ -795,8 +828,22 @@ class BacktestEngine:
         """
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
-            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
             trade_date_str = date.strftime('%Y%m%d')
+            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
+            if date_quote.empty:
+                # 当日行情数据为空，无法判断交易状态，加入延迟队列
+                if self.pending_order_manager:
+                    self.pending_order_manager.add_order(
+                        stock=stock,
+                        action='sell',
+                        current_date=date,
+                        signal_date=date,  # 卖出是基于持有期，用当前日期
+                        target_value=None,
+                        reason='无行情数据'
+                    )
+                if self.verbose:
+                    logger.info(f"卖出延迟: {date.date()} {stock}, 原因: 无行情数据")
+                return
             tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action='sell')
             
             if not tradeable:
