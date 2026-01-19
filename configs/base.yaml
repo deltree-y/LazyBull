@@ -37,6 +37,11 @@ backtest:
   rebalance_frequency: "W"  # W=周, M=月, Q=季
   top_n: 5  # 选股数量
   exclude_st: true  # 排除ST股票
+  # 分批调仓配置
+  batch_rebalance_enabled: false  # 是否启用分批调仓，默认关闭
+  batch_size: 5  # 每批调整的股票数量
+  batch_freq: "W"  # 分批频率：D=日，W=周，M=月
+  batch_strategy: "rank_based"  # 分批策略：rank_based=优先换出排名最差的，random=随机
 
 # 交易成本配置
 costs:
@@ -44,3 +49,16 @@ costs:
   min_commission: 5  # 最小佣金，元
   stamp_tax: 0.0005  # 印花税，仅卖出
   slippage: 0.0005  # 滑点
+
+# 止损配置
+stop_loss:
+  enabled: false  # 是否启用止损功能，默认关闭
+  # 回撤止损
+  drawdown_pct: 20.0  # 从买入成本回撤超过N%触发止损，默认20%
+  # 移动止损
+  trailing_enabled: false  # 是否启用移动止损，默认关闭
+  trailing_pct: 15.0  # 从最高点回撤超过N%触发止损，默认15%
+  # 连续跌停止损
+  consecutive_limit_down: 2  # 连续N天跌停触发止损，默认2天
+  # 触发后操作
+  post_action: "hold_cash"  # 触发后操作：hold_cash=持币等待，buy_alternative=补买备选

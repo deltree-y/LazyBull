@@ -453,14 +453,14 @@ class FeatureBuilder:
         """
         result = df.copy()
         
-        # 检查是否已有 clean 层的标记（tradable, filter_is_st 等）
-        has_clean_flags = all(col in result.columns for col in ['filter_is_st', 'filter_is_suspended', 'tradable'])
+        # 检查是否已有 clean 层的标记（tradable, is_st 等）
+        has_clean_flags = all(col in result.columns for col in ['is_st', 'is_suspended', 'tradable'])
         
         if has_clean_flags:
             logger.info("数据已包含 clean 层过滤标记，跳过标记添加")
             # 重命名以匹配特征构建器的命名（如果需要）
-            if 'filter_is_suspended' in result.columns and 'filter_suspend' not in result.columns:
-                result['filter_suspend'] = result['filter_is_suspended']
+            if 'is_suspended' in result.columns and 'suspend' not in result.columns:
+                result['suspend'] = result['is_suspended']
             return result
         
         # 1. ST标记：通过股票名称判断
@@ -469,7 +469,7 @@ class FeatureBuilder:
         
         # 判断ST：名称包含ST、*ST、S*ST等（使用更精确的匹配）
         # 匹配模式：开头可选的*或S，然后是ST，或者包含"退"字
-        result['filter_is_st'] = result['name'].fillna('').str.contains(
+        result['is_st'] = result['name'].fillna('').str.contains(
             r'^\*?S?\*?ST|退', 
             case=False, 
             regex=True
@@ -496,18 +496,18 @@ class FeatureBuilder:
         try:
             trade_date_dt = pd.to_datetime(trade_date, format='%Y%m%d')
             result['list_date_dt'] = pd.to_datetime(result['list_date'], format='%Y%m%d', errors='coerce')
-            result['filter_list_days'] = (trade_date_dt - result['list_date_dt']).dt.days
+            result['list_days'] = (trade_date_dt - result['list_date_dt']).dt.days
             result.drop(columns=['list_date_dt'], inplace=True)
         except Exception as e:
             logger.warning(f"计算上市天数失败: {e}，使用默认值")
-            result['filter_list_days'] = 999  # 默认视为满足条件
+            result['list_days'] = 999  # 默认视为满足条件
         
         # 3. 停牌标记
         # 简化处理：如果当日成交量为0或极小，视为停牌
         if 'vol' in result.columns:
-            result['filter_suspend'] = (result['vol'] <= 0).astype(int)
+            result['suspend'] = (result['vol'] <= 0).astype(int)
         else:
-            result['filter_suspend'] = 0
+            result['suspend'] = 0
         
         # 如果有停复牌信息，可以进一步完善
         if suspend_info is not None and len(suspend_info) > 0:
@@ -520,7 +520,7 @@ class FeatureBuilder:
                     ((suspend_info['resume_date'] >= trade_date) | (suspend_info['resume_date'].isna()))
                 ]['ts_code'].unique()
                 
-                result.loc[result['ts_code'].isin(suspend_today), 'filter_suspend'] = 1
+                result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
             elif 'trade_date' in suspend_info.columns and 'suspend_type' in suspend_info.columns:
                 # 新版逻辑：筛选当日类型为'S'(停牌)的股票
                 suspend_today = suspend_info[
@@ -528,7 +528,7 @@ class FeatureBuilder:
                     (suspend_info['suspend_type'] == 'S')
                 ]['ts_code'].unique()
                 
-                result.loc[result['ts_code'].isin(suspend_today), 'filter_suspend'] = 1
+                result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
         
         return result
     
@@ -609,9 +609,9 @@ class FeatureBuilder:
         """应用过滤规则
         
         过滤条件：
-        - 剔除 ST (filter_is_st=1)
-        - 剔除上市 < 60天 (filter_list_days < 60)
-        - 剔除停牌 (filter_suspend=1)
+        - 剔除 ST (is_st=1)
+        - 剔除上市 < 60天 (list_days < 60)
+        - 剔除停牌 (suspend=1)
         - 剔除标签缺失 (y_ret_5 为空)
         - 涨跌停不剔除，仅标记
         
@@ -619,14 +619,14 @@ class FeatureBuilder:
             df: 特征DataFrame
             
         Returns:
-            过滤后的DataFrame，filter_ 前缀已被移除
+            过滤后的DataFrame
         """
         original_count = len(df)
         
         # 记录过滤统计
-        st_count = (df['filter_is_st'] == 1).sum()
-        list_days_count = (df['filter_list_days'] < self.min_list_days).sum()
-        suspend_count = (df['filter_suspend'] == 1).sum()
+        st_count = (df['is_st'] == 1).sum()
+        list_days_count = (df['list_days'] < self.min_list_days).sum()
+        suspend_count = (df['suspend'] == 1).sum()
         missing_label_count = df['y_ret_5'].isna().sum()
         
         logger.info(
@@ -637,24 +637,12 @@ class FeatureBuilder:
         
         # 应用过滤
         result = df[
-            (df['filter_is_st'] == 0) &
-            (df['filter_list_days'] >= self.min_list_days) &
-            (df['filter_suspend'] == 0) &
+            (df['is_st'] == 0) &
+            (df['list_days'] >= self.min_list_days) &
+            (df['suspend'] == 0) &
             (df['y_ret_5'].notna())
         ].copy()
         
         logger.info(f"过滤后样本数: {len(result)}")
-        
-        # 重命名列：去掉 filter_ 前缀，list_days 保留但不作为 filter 列
-        # filter 列只包含 is_st 和 suspend
-        rename_map = {
-            'filter_is_st': 'is_st',
-            'filter_suspend': 'suspend',
-            'filter_list_days': 'list_days'
-        }
-        
-        for old_name, new_name in rename_map.items():
-            if old_name in result.columns:
-                result.rename(columns={old_name: new_name}, inplace=True)
         
         return result

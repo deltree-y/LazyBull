@@ -19,7 +19,7 @@ def is_suspended(
     Args:
         ts_code: 股票代码
         trade_date: 交易日期（YYYYMMDD格式字符串）
-        quote_data: 行情数据，需包含 filter_is_suspended 列
+        quote_data: 行情数据，需包含 is_suspended 列
         
     Returns:
         True 表示停牌，False 表示未停牌
@@ -31,8 +31,8 @@ def is_suspended(
             return True
         
         row = quote_data[mask].iloc[0]
-        if 'filter_is_suspended' in row:
-            return bool(row['filter_is_suspended'] == 1)
+        if 'is_suspended' in row:
+            return bool(row['is_suspended'] == 1)
         
         # 备用方案：检查成交量
         if 'vol' in row:
