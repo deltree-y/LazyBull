@@ -33,7 +33,7 @@ sys.path.insert(0, str(project_root))
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.backtest import BacktestEngine, Reporter
+from src.lazybull.backtest import BacktestEngine, BacktestEngineML, Reporter
 from src.lazybull.common.cost import CostModel
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
@@ -184,56 +184,6 @@ def run_ml_backtest(
     trades = engine.get_trades()
     
     return nav_curve, trades
-
-
-class BacktestEngineML(BacktestEngine):
-    """支持 ML 信号的回测引擎
-    
-    扩展原有回测引擎，在信号生成时传入特征数据
-    """
-    
-    def __init__(self, features_by_date: dict, **kwargs):
-        """初始化
-        
-        Args:
-            features_by_date: 按日期组织的特征数据字典
-            **kwargs: 其他参数传递给父类
-        """
-        super().__init__(**kwargs)
-        self.features_by_date = features_by_date
-    
-    def _generate_signal(self, date: pd.Timestamp, trading_dates: list, price_dict: dict, date_to_idx: dict) -> None:
-        """生成信号（重写以支持特征数据）
-        
-        Args:
-            date: 信号生成日期
-            trading_dates: 交易日列表
-            price_dict: 价格字典
-            date_to_idx: 日期到索引的映射
-        """
-        # 获取股票池
-        stock_universe = self.universe.get_stocks(date)
-        
-        # 获取当日特征数据
-        date_str = date.strftime('%Y%m%d')
-        features_df = self.features_by_date.get(date_str)
-        
-        if features_df is None:
-            logger.warning(f"信号日 {date.date()} 没有特征数据，跳过")
-            return
-        
-        # 生成信号（传入特征数据）
-        data = {"features": features_df}
-        signals = self.signal.generate(date, stock_universe, data)
-        
-        if not signals:
-            logger.warning(f"信号日 {date.date()} 无信号")
-            return
-        
-        # 保存信号，待 T+1 执行
-        self.pending_signals[date] = signals
-        logger.info(f"信号生成: {date.date()}, 信号数 {len(signals)}")
-
 
 
 def main():
