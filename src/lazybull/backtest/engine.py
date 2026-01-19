@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from ..common.cost import CostModel
 from ..common.trade_status import is_tradeable
+from ..common.date_utils import to_trade_date_str
 from ..execution.pending_order import PendingOrderManager
 from ..signals.base import Signal
 from ..universe.base import Universe
@@ -35,7 +36,7 @@ class BacktestEngine:
         signal: Signal,
         initial_capital: float = 1000000.0,
         cost_model: Optional[CostModel] = None,
-        rebalance_freq: str = "M",
+        rebalance_freq: int = 5,
         holding_period: Optional[int] = None,
         verbose: bool = True,
         enable_risk_budget: bool = False,
@@ -56,7 +57,7 @@ class BacktestEngine:
             signal: 信号生成器
             initial_capital: 初始资金
             cost_model: 成本模型
-            rebalance_freq: 调仓频率，D=日，W=周，M=月，或整数表示每N天调仓
+            rebalance_freq: 调仓频率（交易日数），必须为正整数。例如：5表示每5个交易日调仓一次
             holding_period: 持有期（交易日），None 则自动根据调仓频率设置
             verbose: 是否输出详细日志（买入/卖出操作），默认True
             enable_risk_budget: 是否启用风险预算/波动率缩放，默认False（保持向后兼容）
@@ -70,6 +71,13 @@ class BacktestEngine:
         self.signal = signal
         self.initial_capital = initial_capital
         self.cost_model = cost_model or CostModel()
+        
+        # 验证调仓频率
+        if not isinstance(rebalance_freq, int):
+            raise TypeError(f"调仓频率必须为整数类型，当前类型: {type(rebalance_freq).__name__}")
+        if rebalance_freq <= 0:
+            raise ValueError(f"调仓频率必须为正整数，当前值: {rebalance_freq}")
+        
         self.rebalance_freq = rebalance_freq
         self.verbose = verbose
         
@@ -86,9 +94,6 @@ class BacktestEngine:
                 max_retry_count=max_retry_count,
                 max_retry_days=max_retry_days
             )
-        
-        # 设置持有期及调仓频率(目前二者保持一致)
-        self.rebalance_freq = rebalance_freq
         
         # 持有期逻辑：如果未指定，与调仓频率保持一致
         if holding_period is None:
@@ -237,7 +242,7 @@ class BacktestEngine:
             date_to_idx: 日期到索引的映射
         """
         # 获取当日行情数据用于基础过滤（ST、停牌等基础过滤）
-        trade_date_str = date.strftime('%Y%m%d')        
+        trade_date_str = to_trade_date_str(date)
         date_quote = price_data[price_data['trade_date'] == trade_date_str]
         # 获取股票池（不过滤涨跌停，因为 T 日涨跌停不代表 T+1 日也涨跌停）
         # 但保留 ST、基本可交易性等过滤
@@ -272,7 +277,7 @@ class BacktestEngine:
             return
         
         buy_date = trading_dates[current_idx + 1]
-        buy_date_str = buy_date.strftime('%Y%m%d')
+        buy_date_str = to_trade_date_str(buy_date)
         buy_date_quote = price_data[price_data['trade_date'] == buy_date_str]
         
         # 从排序候选中选择 top N 可交易股票
@@ -588,35 +593,11 @@ class BacktestEngine:
         Returns:
             调仓日期列表
         """
-        #if self.rebalance_freq.isdecimal():
-        #    self.rebalance_freq = int(self.rebalance_freq)
-        # 支持整数天数
-        if isinstance(self.rebalance_freq, int):
-            # 每 N 个交易日调仓一次
-            n = self.rebalance_freq
-            if n <= 0:
-                raise ValueError(f"调仓频率必须为正整数，当前值: {n}")
-            return [trading_dates[i] for i in range(0, len(trading_dates), n)]
-        
-        # 支持字符串频率
-        if self.rebalance_freq == "D":
-            return trading_dates
-        elif self.rebalance_freq == "W":
-            # 每周最后一个交易日
-            df = pd.DataFrame({'date': trading_dates})
-            df['week'] = df['date'].dt.isocalendar().week
-            df['year'] = df['date'].dt.year
-            return df.groupby(['year', 'week'])['date'].last().tolist()
-        elif self.rebalance_freq == "M":
-            # 每月最后一个交易日
-            df = pd.DataFrame({'date': trading_dates})
-            df['month'] = df['date'].dt.to_period('M')
-            return df.groupby('month')['date'].last().tolist()
-        else:
-            raise ValueError(
-                f"不支持的调仓频率: {self.rebalance_freq}。"
-                f"请使用 'D'（日）、'W'（周）、'M'（月）或正整数（每N天）"
-            )
+        # 仅支持整数天数
+        n = self.rebalance_freq
+        if n <= 0:
+            raise ValueError(f"调仓频率必须为正整数，当前值: {n}")
+        return [trading_dates[i] for i in range(0, len(trading_dates), n)]
     
     
     
@@ -636,8 +617,8 @@ class BacktestEngine:
             return
         
         # 获取当日行情数据
-        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date.strftime('%Y%m%d')]
-        trade_date_str = date.strftime('%Y%m%d')
+        trade_date_str = to_trade_date_str(date)
+        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
         
         for order in orders_to_retry:
             # 检查是否可交易
@@ -684,8 +665,8 @@ class BacktestEngine:
         """
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
-            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
-            trade_date_str = date.strftime('%Y%m%d')
+            trade_date_str = to_trade_date_str(date)
+            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
             if date_quote.empty:
                 # 当日行情数据为空，无法判断交易状态，加入延迟队列
                 if self.pending_order_manager:
@@ -831,7 +812,7 @@ class BacktestEngine:
         """
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
-            trade_date_str = date.strftime('%Y%m%d')
+            trade_date_str = to_trade_date_str(date)
             date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
             if date_quote.empty:
                 # 当日行情数据为空，无法判断交易状态，加入延迟队列

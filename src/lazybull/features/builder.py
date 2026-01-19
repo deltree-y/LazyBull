@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_date_columns, to_trade_date_str
+
 
 class FeatureBuilder:
     """特征构建器
@@ -426,10 +428,17 @@ class FeatureBuilder:
             np.nan
         )
         
-        # 保留需要的列
+        # 保留需要的列（增加 amount_ma 和 vol_ma）
         keep_cols = ['ts_code', f'ret_{window}', f'vol_ratio_{window}', 
-                     f'amount_ratio_{window}', f'ma_deviation_{window}']
+                     f'amount_ratio_{window}', f'ma_deviation_{window}',
+                     'mean_vol', 'mean_amount']
         window_features = window_features[keep_cols]
+        
+        # 重命名 mean_vol 和 mean_amount 为更友好的名称
+        window_features = window_features.rename(columns={
+            'mean_vol': f'vol_ma{window}',
+            'mean_amount': f'amount_ma{window}'
+        })
         
         return window_features
     
@@ -515,17 +524,30 @@ class FeatureBuilder:
             # 兼容旧版：如果有suspend_date字段，使用旧逻辑
             if 'suspend_date' in suspend_info.columns and 'resume_date' in suspend_info.columns:
                 # 旧版逻辑：获取当日停牌的股票
-                suspend_today = suspend_info[
-                    (suspend_info['suspend_date'] <= trade_date) &
-                    ((suspend_info['resume_date'] >= trade_date) | (suspend_info['resume_date'].isna()))
+                # 统一日期类型为字符串以避免类型不匹配
+                suspend_info_normalized = normalize_date_columns(
+                    suspend_info, ['suspend_date', 'resume_date'], to_str=True
+                )
+                trade_date_str = to_trade_date_str(trade_date)
+                
+                suspend_today = suspend_info_normalized[
+                    (suspend_info_normalized['suspend_date'] <= trade_date_str) &
+                    ((suspend_info_normalized['resume_date'] >= trade_date_str) | 
+                     (suspend_info_normalized['resume_date'].isna()))
                 ]['ts_code'].unique()
                 
                 result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1
             elif 'trade_date' in suspend_info.columns and 'suspend_type' in suspend_info.columns:
                 # 新版逻辑：筛选当日类型为'S'(停牌)的股票
-                suspend_today = suspend_info[
-                    (suspend_info['trade_date'] == trade_date) &
-                    (suspend_info['suspend_type'] == 'S')
+                # 统一日期格式
+                suspend_info_normalized = normalize_date_columns(
+                    suspend_info, ['trade_date'], to_str=True
+                )
+                trade_date_str = to_trade_date_str(trade_date)
+                
+                suspend_today = suspend_info_normalized[
+                    (suspend_info_normalized['trade_date'] == trade_date_str) &
+                    (suspend_info_normalized['suspend_type'] == 'S')
                 ]['ts_code'].unique()
                 
                 result.loc[result['ts_code'].isin(suspend_today), 'suspend'] = 1

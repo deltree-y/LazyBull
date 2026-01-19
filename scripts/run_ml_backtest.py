@@ -16,9 +16,9 @@ ML 信号回测脚本
     python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
         --model-version 1 --top-n 50
     
-    # 指定调仓频率
+    # 指定调仓频率（每N个交易日）
     python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-        --rebalance-freq M  # M=月度，W=周度，D=日度
+        --rebalance-freq 5  # 每5个交易日调仓一次
 """
 
 import argparse
@@ -159,7 +159,7 @@ def run_ml_backtest(
     price_data: pd.DataFrame,
     features_by_date: dict,
     initial_capital: float = 1000000.0,
-    rebalance_freq: str = "M",
+    rebalance_freq: int = 5,
     cost_model: CostModel = None
 ) -> tuple:
     """运行 ML 信号回测
@@ -173,7 +173,7 @@ def run_ml_backtest(
         price_data: 价格数据
         features_by_date: 按日期组织的特征数据字典
         initial_capital: 初始资金
-        rebalance_freq: 调仓频率
+        rebalance_freq: 调仓频率（交易日数），必须为正整数
         cost_model: 成本模型
         
     Returns:

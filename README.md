@@ -48,7 +48,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **特征优化**: 向量化计算提升特征生成效率
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
-- ✅ **成交量过滤**: 在信号生成（选股）阶段过滤成交量后N%的股票，提高持仓流动性（新增）
+- ✅ **成交额过滤**: 在信号生成（选股）阶段过滤成交额后N%的股票，提高持仓流动性（新增）
 - ✅ **分批调仓**: 支持将完整调仓分多批执行，降低冲击成本（新增）
 - ✅ **止损触发**: 支持回撤止损、移动止损、连续跌停止损（新增）
 
@@ -57,7 +57,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 **功能增强与重构** - 新增三大核心功能，优化数据架构：
 
 #### 新增功能
-- **成交量过滤**: 在信号生成（选股）阶段剔除成交量后N%的股票（默认20%），提高持仓流动性
+- **成交额过滤**: 在信号生成（选股）阶段剔除成交额后N%的股票（默认20%），提高持仓流动性
   - **重要**: 仅在选股时过滤，模型训练时保留所有股票数据以保证学习效果
 - **分批调仓**: 支持将完整调仓分多批执行，例如20只股票分4周调仓，每周5只
 - **止损触发**: 支持回撤止损、移动止损、连续跌停止损，实现风险管理
@@ -100,7 +100,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 **调仓频率增强**:
 - **支持自定义天数**：`rebalance_freq=5` 表示每5个交易日调仓一次
-- 保持向后兼容：`D`/`W`/`M` 仍然有效
+- **Breaking Change**: 不再支持字母频率（D/W/M），仅支持正整数
 - 添加参数校验，提供清晰的中文错误提示
 - 持有期自动匹配调仓频率
 
@@ -292,9 +292,9 @@ python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
     --model-version 1 --top-n 10 --initial-capital 1000000
 
-# 指定调仓频率（M=月度，W=周度，D=日度）
+# 指定调仓频率（每20个交易日调仓一次，约1个月）
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --rebalance-freq M --top-n 5
+    --rebalance-freq 20 --top-n 5
 
 # 使用自定义天数调仓（每10个交易日调仓一次）
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
@@ -496,7 +496,7 @@ LazyBull/
 - [涨跌停与停牌处理指南](docs/trade_status_guide.md): 涨跌停与停牌状态的自动处理机制
 - [项目路线图](docs/roadmap.md): 分阶段开发计划
 - [IC与RankIC优化指南](docs/ic_optimization_guide.md): 提升模型预测能力的系统性优化方案
-- [成交量过滤指南](docs/volume_filter_guide.md): 成交量过滤功能说明与配置 ⭐ 新增
+- [成交额过滤指南](docs/amount_filter_guide.md): 成交额过滤功能说明与配置 ⭐ 新增
 - [分批调仓指南](docs/batch_rebalance_guide.md): 分批调仓功能说明与配置 ⭐ 新增
 - [止损触发指南](docs/stop_loss_guide.md): 止损触发功能说明与配置 ⭐ 新增
 - [重大变更说明](docs/BREAKING_CHANGES.md): v0.4.0 版本的 Breaking Changes ⚠️ 重要
@@ -679,13 +679,13 @@ from src.lazybull.common.cost import CostModel
 signal = EqualWeightSignal(top_n=30)  # 等权30只
 cost_model = CostModel()
 
-# 示例1：基础回测（月度调仓）
+# 示例1：基础回测（每20个交易日调仓，约1个月）
 engine = BacktestEngine(
     universe=universe,
     signal=signal,
     initial_capital=1000000,
     cost_model=cost_model,
-    rebalance_freq="M"  # 月度调仓
+    rebalance_freq=20  # 每20个交易日调仓
 )
 
 # 示例2：自定义天数调仓
@@ -698,14 +698,13 @@ engine = BacktestEngine(
     verbose=False  # 关闭详细日志，保持输出整洁
 )
 
-# 示例3：指定价格类型（推荐使用不复权价格）
+# 示例3：周频调仓（每5个交易日，约1周）
 engine = BacktestEngine(
     universe=universe,
     signal=signal,
     initial_capital=1000000,
     cost_model=cost_model,
-    rebalance_freq="W",
-    price_type='close',  # 使用不复权价格（默认，推荐）
+    rebalance_freq=5,  # 每5个交易日调仓
     verbose=True  # 输出详细交易日志
 )
 
@@ -750,7 +749,7 @@ backtest:
   start_date: "20200101"
   end_date: "20231231"
   initial_capital: 1000000
-  rebalance_frequency: "M"
+  rebalance_frequency: 5  # 每5个交易日调仓一次
 
 costs:
   commission_rate: 0.0003    # 万3佣金
