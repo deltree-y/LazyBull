@@ -39,6 +39,6 @@ signals:
 
 # 调仓配置
 rebalance:
-  frequency: "M"  # 月度调仓
-  day_of_month: -1  # -1=月末最后一个交易日
+  frequency: 20  # 调仓频率（交易日数），例如20表示每20个交易日（约1个月）调仓一次
+  day_of_month: -1  # -1=月末最后一个交易日（此参数在新版本中已废弃）
   turnover_limit: null  # 换手率限制，null表示无限制

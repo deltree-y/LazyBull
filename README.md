@@ -100,7 +100,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 **调仓频率增强**:
 - **支持自定义天数**：`rebalance_freq=5` 表示每5个交易日调仓一次
-- 保持向后兼容：`D`/`W`/`M` 仍然有效
+- **Breaking Change**: 不再支持字母频率（D/W/M），仅支持正整数
 - 添加参数校验，提供清晰的中文错误提示
 - 持有期自动匹配调仓频率
 
@@ -292,9 +292,9 @@ python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
     --model-version 1 --top-n 10 --initial-capital 1000000
 
-# 指定调仓频率（M=月度，W=周度，D=日度）
+# 指定调仓频率（每20个交易日调仓一次，约1个月）
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --rebalance-freq M --top-n 5
+    --rebalance-freq 20 --top-n 5
 
 # 使用自定义天数调仓（每10个交易日调仓一次）
 python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
@@ -679,13 +679,13 @@ from src.lazybull.common.cost import CostModel
 signal = EqualWeightSignal(top_n=30)  # 等权30只
 cost_model = CostModel()
 
-# 示例1：基础回测（月度调仓）
+# 示例1：基础回测（每20个交易日调仓，约1个月）
 engine = BacktestEngine(
     universe=universe,
     signal=signal,
     initial_capital=1000000,
     cost_model=cost_model,
-    rebalance_freq="M"  # 月度调仓
+    rebalance_freq=20  # 每20个交易日调仓
 )
 
 # 示例2：自定义天数调仓
@@ -698,14 +698,13 @@ engine = BacktestEngine(
     verbose=False  # 关闭详细日志，保持输出整洁
 )
 
-# 示例3：指定价格类型（推荐使用不复权价格）
+# 示例3：周频调仓（每5个交易日，约1周）
 engine = BacktestEngine(
     universe=universe,
     signal=signal,
     initial_capital=1000000,
     cost_model=cost_model,
-    rebalance_freq="W",
-    price_type='close',  # 使用不复权价格（默认，推荐）
+    rebalance_freq=5,  # 每5个交易日调仓
     verbose=True  # 输出详细交易日志
 )
 
@@ -750,7 +749,7 @@ backtest:
   start_date: "20200101"
   end_date: "20231231"
   initial_capital: 1000000
-  rebalance_frequency: "M"
+  rebalance_frequency: 5  # 每5个交易日调仓一次
 
 costs:
   commission_rate: 0.0003    # 万3佣金

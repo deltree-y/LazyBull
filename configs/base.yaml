@@ -34,13 +34,13 @@ backtest:
   end_date: "20231231"
   initial_capital: 500000  # 初始资金50万
   benchmark: "000300.SH"  # 沪深300
-  rebalance_frequency: "W"  # W=周, M=月, Q=季
+  rebalance_frequency: 5  # 调仓频率（交易日数），例如5表示每5个交易日调仓一次
   top_n: 5  # 选股数量
   exclude_st: true  # 排除ST股票
   # 分批调仓配置
   batch_rebalance_enabled: false  # 是否启用分批调仓，默认关闭
   batch_size: 5  # 每批调整的股票数量
-  batch_freq: "W"  # 分批频率：D=日，W=周，M=月
+  batch_freq: 5  # 分批频率（交易日数），例如5表示每5个交易日执行一批
   batch_strategy: "rank_based"  # 分批策略：rank_based=优先换出排名最差的，random=随机
 
 # 交易成本配置

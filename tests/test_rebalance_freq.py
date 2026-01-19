@@ -91,15 +91,15 @@ def test_rebalance_freq_integer(mock_trading_dates, mock_price_data):
         assert idx2 - idx1 == 5 or i == len(rebalance_dates) - 1
 
 
-def test_rebalance_freq_daily(mock_trading_dates):
-    """测试日频调仓"""
+def test_rebalance_freq_1day(mock_trading_dates):
+    """测试每1个交易日调仓（相当于日频）"""
     universe = MockUniverse(['000001.SZ'])
     signal = MockSignal()
     
     engine = BacktestEngine(
         universe=universe,
         signal=signal,
-        rebalance_freq="D",
+        rebalance_freq=1,  # 每1个交易日调仓
         verbose=False
     )
     
@@ -107,38 +107,38 @@ def test_rebalance_freq_daily(mock_trading_dates):
     assert len(rebalance_dates) == len(mock_trading_dates)
 
 
-def test_rebalance_freq_weekly(mock_trading_dates):
-    """测试周频调仓"""
+def test_rebalance_freq_5days(mock_trading_dates):
+    """测试每5个交易日调仓（相当于周频）"""
     universe = MockUniverse(['000001.SZ'])
     signal = MockSignal()
     
     engine = BacktestEngine(
         universe=universe,
         signal=signal,
-        rebalance_freq="W",
+        rebalance_freq=5,  # 每5个交易日调仓
         verbose=False
     )
     
     rebalance_dates = engine._get_rebalance_dates(mock_trading_dates)
-    # 50个交易日大约是10周
-    assert 8 <= len(rebalance_dates) <= 12
+    # 50个交易日，每5天调仓一次，应该有10次调仓
+    assert len(rebalance_dates) == 10
 
 
-def test_rebalance_freq_monthly(mock_trading_dates):
-    """测试月频调仓"""
+def test_rebalance_freq_20days(mock_trading_dates):
+    """测试每20个交易日调仓（相当于月频）"""
     universe = MockUniverse(['000001.SZ'])
     signal = MockSignal()
     
     engine = BacktestEngine(
         universe=universe,
         signal=signal,
-        rebalance_freq="M",
+        rebalance_freq=20,  # 每20个交易日调仓
         verbose=False
     )
     
     rebalance_dates = engine._get_rebalance_dates(mock_trading_dates)
-    # 50个交易日大约是2-3个月
-    assert 2 <= len(rebalance_dates) <= 4
+    # 50个交易日，每20天调仓一次，应该有3次调仓 (0, 20, 40)
+    assert len(rebalance_dates) == 3
 
 
 def test_rebalance_freq_invalid_integer():
@@ -153,7 +153,6 @@ def test_rebalance_freq_invalid_integer():
             rebalance_freq=0,
             verbose=False
         )
-        engine._get_rebalance_dates([pd.Timestamp('2023-01-01')])
     
     with pytest.raises(ValueError, match="调仓频率必须为正整数"):
         engine = BacktestEngine(
@@ -162,22 +161,42 @@ def test_rebalance_freq_invalid_integer():
             rebalance_freq=-5,
             verbose=False
         )
-        engine._get_rebalance_dates([pd.Timestamp('2023-01-01')])
 
 
-def test_rebalance_freq_invalid_string():
-    """测试无效的字符串调仓频率"""
+def test_rebalance_freq_invalid_type():
+    """测试无效的调仓频率类型（字符串）"""
     universe = MockUniverse(['000001.SZ'])
     signal = MockSignal()
     
-    with pytest.raises(ValueError, match="不支持的调仓频率"):
+    with pytest.raises(TypeError, match="调仓频率必须为整数类型"):
         engine = BacktestEngine(
             universe=universe,
             signal=signal,
-            rebalance_freq="X",
+            rebalance_freq="M",
             verbose=False
         )
-        engine._get_rebalance_dates([pd.Timestamp('2023-01-01')])
+    
+    with pytest.raises(TypeError, match="调仓频率必须为整数类型"):
+        engine = BacktestEngine(
+            universe=universe,
+            signal=signal,
+            rebalance_freq="W",
+            verbose=False
+        )
+
+
+def test_rebalance_freq_float():
+    """测试浮点数调仓频率应抛出类型错误"""
+    universe = MockUniverse(['000001.SZ'])
+    signal = MockSignal()
+    
+    with pytest.raises(TypeError, match="调仓频率必须为整数类型"):
+        engine = BacktestEngine(
+            universe=universe,
+            signal=signal,
+            rebalance_freq=5.5,
+            verbose=False
+        )
 
 
 def test_holding_period_auto_integer():
