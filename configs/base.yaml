@@ -37,9 +37,6 @@ backtest:
   rebalance_frequency: "W"  # W=周, M=月, Q=季
   top_n: 5  # 选股数量
   exclude_st: true  # 排除ST股票
-  # 成交量过滤配置
-  volume_filter_enabled: true  # 是否启用成交量过滤
-  volume_filter_pct: 20  # 过滤成交量后N%的股票（默认20%）
   # 分批调仓配置
   batch_rebalance_enabled: false  # 是否启用分批调仓，默认关闭
   batch_size: 5  # 每批调整的股票数量

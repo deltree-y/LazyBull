@@ -25,9 +25,7 @@ class FeatureBuilder:
         self,
         min_list_days: int = 60,
         horizon: int = 5,
-        lookback_windows: List[int] = None,
-        volume_filter_pct: float = 20.0,
-        volume_filter_enabled: bool = True
+        lookback_windows: List[int] = None
     ):
         """初始化特征构建器
         
@@ -35,19 +33,14 @@ class FeatureBuilder:
             min_list_days: 最小上市天数，默认60天
             horizon: 预测时间窗口（交易日），默认5天
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
-            volume_filter_pct: 过滤成交量后N%的股票，默认20%
-            volume_filter_enabled: 是否启用成交量过滤，默认True
         """
         self.min_list_days = min_list_days
         self.horizon = horizon
         self.lookback_windows = lookback_windows or [5, 10, 20]
-        self.volume_filter_pct = volume_filter_pct
-        self.volume_filter_enabled = volume_filter_enabled
         
         logger.info(
             f"特征构建器初始化: min_list_days={min_list_days}, "
-            f"horizon={horizon}, lookback_windows={self.lookback_windows}, "
-            f"volume_filter_pct={volume_filter_pct}%, volume_filter_enabled={volume_filter_enabled}"
+            f"horizon={horizon}, lookback_windows={self.lookback_windows}"
         )
     
     def build_features_for_day(
@@ -619,7 +612,6 @@ class FeatureBuilder:
         - 剔除 ST (is_st=1)
         - 剔除上市 < 60天 (list_days < 60)
         - 剔除停牌 (suspend=1)
-        - 剔除成交量后N%的股票（可配置）
         - 剔除标签缺失 (y_ret_5 为空)
         - 涨跌停不剔除，仅标记
         
@@ -637,7 +629,13 @@ class FeatureBuilder:
         suspend_count = (df['suspend'] == 1).sum()
         missing_label_count = df['y_ret_5'].isna().sum()
         
-        # 应用基础过滤
+        logger.info(
+            f"过滤前样本数: {original_count}, "
+            f"ST: {st_count}, 上市<{self.min_list_days}天: {list_days_count}, "
+            f"停牌: {suspend_count}, 标签缺失: {missing_label_count}"
+        )
+        
+        # 应用过滤
         result = df[
             (df['is_st'] == 0) &
             (df['list_days'] >= self.min_list_days) &
@@ -645,33 +643,6 @@ class FeatureBuilder:
             (df['y_ret_5'].notna())
         ].copy()
         
-        # 成交量过滤
-        volume_filtered_count = 0
-        if self.volume_filter_enabled and 'vol' in result.columns and len(result) > 0:
-            # 处理成交量缺失或为0的情况
-            valid_vol_mask = (result['vol'].notna()) & (result['vol'] > 0)
-            result_with_vol = result[valid_vol_mask].copy()
-            result_no_vol = result[~valid_vol_mask].copy()
-            
-            if len(result_with_vol) > 0:
-                # 计算成交量分位数阈值
-                volume_threshold_pct = self.volume_filter_pct / 100.0
-                volume_threshold = result_with_vol['vol'].quantile(volume_threshold_pct)
-                
-                # 过滤掉成交量在后N%的股票
-                before_vol_filter = len(result_with_vol)
-                result_with_vol = result_with_vol[result_with_vol['vol'] > volume_threshold].copy()
-                volume_filtered_count = before_vol_filter - len(result_with_vol)
-                
-                # 合并有成交量和无成交量的数据（无成交量的已在停牌过滤中处理，这里可忽略）
-                result = result_with_vol
-        
-        logger.info(
-            f"过滤前样本数: {original_count}, "
-            f"ST: {st_count}, 上市<{self.min_list_days}天: {list_days_count}, "
-            f"停牌: {suspend_count}, 标签缺失: {missing_label_count}, "
-            f"成交量过滤: {volume_filtered_count}"
-        )
         logger.info(f"过滤后样本数: {len(result)}")
         
         return result

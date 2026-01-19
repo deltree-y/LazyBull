@@ -25,7 +25,10 @@ class MLSignal(Signal):
         top_n: int = 30,
         model_version: Optional[int] = None,
         models_dir: str = "./data/models",
-        weight_method: str = "equal"
+        weight_method: str = "equal",
+        volume_filter_enabled: bool = True,
+        volume_filter_pct: float = 20.0,
+        volume_lookback_days: int = 5
     ):
         """初始化 ML 信号
         
@@ -34,12 +37,18 @@ class MLSignal(Signal):
             model_version: 模型版本号，None 表示使用最新版本
             models_dir: 模型目录
             weight_method: 权重分配方法，"equal" 表示等权，"score" 表示按预测分数加权
+            volume_filter_enabled: 是否启用成交量过滤，默认True
+            volume_filter_pct: 过滤成交量后N%的股票，默认20%
+            volume_lookback_days: 计算成交量时使用的回看天数，默认5天（使用近5日平均成交量）
         """
         super().__init__("ml_signal")
         self.top_n = top_n
         self.model_version = model_version
         self.models_dir = models_dir
         self.weight_method = weight_method
+        self.volume_filter_enabled = volume_filter_enabled
+        self.volume_filter_pct = volume_filter_pct
+        self.volume_lookback_days = volume_lookback_days
         
         # 延迟加载模型
         self.model = None
@@ -48,7 +57,8 @@ class MLSignal(Signal):
         
         logger.info(
             f"ML 信号初始化: top_n={top_n}, model_version={model_version}, "
-            f"weight_method={weight_method}"
+            f"weight_method={weight_method}, volume_filter_enabled={volume_filter_enabled}, "
+            f"volume_filter_pct={volume_filter_pct}%, volume_lookback_days={volume_lookback_days}"
         )
     
     def _load_model(self) -> None:
@@ -61,6 +71,59 @@ class MLSignal(Signal):
                 f"模型已加载: {self.metadata['version_str']}, "
                 f"特征数={self.metadata['feature_count']}"
             )
+    
+    def _apply_volume_filter(self, features_df: pd.DataFrame) -> pd.DataFrame:
+        """应用成交量过滤
+        
+        过滤掉成交量后N%的股票。使用vol字段（当日成交量）或vol_ma5等字段。
+        
+        Args:
+            features_df: 特征DataFrame，需包含vol或相关成交量字段
+            
+        Returns:
+            过滤后的DataFrame
+        """
+        if not self.volume_filter_enabled:
+            return features_df
+        
+        if len(features_df) == 0:
+            return features_df
+        
+        # 检查是否有成交量字段
+        volume_col = None
+        if 'vol' in features_df.columns:
+            volume_col = 'vol'
+        elif f'vol_ma{self.volume_lookback_days}' in features_df.columns:
+            volume_col = f'vol_ma{self.volume_lookback_days}'
+        
+        if volume_col is None:
+            logger.warning("特征数据中没有成交量字段(vol或vol_ma*)，跳过成交量过滤")
+            return features_df
+        
+        # 过滤成交量缺失或为0的股票（这些通常是停牌的）
+        valid_vol_mask = (features_df[volume_col].notna()) & (features_df[volume_col] > 0)
+        features_with_vol = features_df[valid_vol_mask].copy()
+        
+        if len(features_with_vol) == 0:
+            logger.warning("所有股票成交量为0或缺失，跳过成交量过滤")
+            return features_df
+        
+        # 计算成交量分位数阈值
+        volume_threshold_pct = self.volume_filter_pct / 100.0
+        volume_threshold = features_with_vol[volume_col].quantile(volume_threshold_pct)
+        
+        # 过滤掉成交量后N%的股票
+        before_count = len(features_with_vol)
+        features_filtered = features_with_vol[features_with_vol[volume_col] > volume_threshold].copy()
+        filtered_count = before_count - len(features_filtered)
+        
+        if filtered_count > 0:
+            logger.info(
+                f"成交量过滤: 从{before_count}只股票中过滤掉成交量后{self.volume_filter_pct}%的{filtered_count}只股票, "
+                f"剩余{len(features_filtered)}只"
+            )
+        
+        return features_filtered
     
     def generate(
         self,
@@ -97,6 +160,13 @@ class MLSignal(Signal):
         
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
+            return {}
+        
+        # 应用成交量过滤
+        features_df = self._apply_volume_filter(features_df)
+        
+        if len(features_df) == 0:
+            logger.warning(f"{date.date()} 成交量过滤后无可选股票")
             return {}
         
         # 准备特征
@@ -191,6 +261,13 @@ class MLSignal(Signal):
         
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
+            return []
+        
+        # 应用成交量过滤
+        features_df = self._apply_volume_filter(features_df)
+        
+        if len(features_df) == 0:
+            logger.warning(f"{date.date()} 成交量过滤后无可选股票")
             return []
         
         # 准备特征
