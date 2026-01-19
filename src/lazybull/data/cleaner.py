@@ -267,11 +267,11 @@ class DataCleaner:
         """为 daily 数据添加可交易标记
         
         标记逻辑：
-        - filter_is_st: 是否为 ST 股票（1=是, 0=否）
-        - filter_is_suspended: 是否停牌（1=是, 0=否）
+        - is_st: 是否为 ST 股票（1=是, 0=否）
+        - is_suspended: 是否停牌（1=是, 0=否）
         - is_limit_up: 是否涨停（1=是, 0=否）
         - is_limit_down: 是否跌停（1=是, 0=否）
-        - filter_list_days: 上市天数
+        - list_days: 上市天数
         - tradable: 是否可交易（1=可交易, 0=不可交易）
           不可交易条件：ST或停牌或上市不足N天
         
@@ -294,14 +294,14 @@ class DataCleaner:
         df = df.merge(stock_info, on='ts_code', how='left')
         
         # 2. ST 标记
-        df['filter_is_st'] = df['name'].fillna('').str.contains(
+        df['is_st'] = df['name'].fillna('').str.contains(
             r'^\*?S?\*?ST|退', 
             case=False, 
             regex=True
         ).astype(int)
         
         # 3. 上市天数（使用自然日近似）
-        df['filter_list_days'] = 999  # 默认值
+        df['list_days'] = 999  # 默认值
         valid_mask = df['list_date'].notna() & (df['list_date'] != '')
         if valid_mask.sum() > 0:
             try:
@@ -316,7 +316,7 @@ class DataCleaner:
                     errors='coerce'
                 )
                 valid_dates = df['list_date_dt'].notna() & df['trade_date_dt'].notna()
-                df.loc[valid_dates, 'filter_list_days'] = (
+                df.loc[valid_dates, 'list_days'] = (
                     df.loc[valid_dates, 'trade_date_dt'] - df.loc[valid_dates, 'list_date_dt']
                 ).dt.days
                 df.drop(columns=['list_date_dt', 'trade_date_dt'], inplace=True, errors='ignore')
@@ -324,7 +324,7 @@ class DataCleaner:
                 logger.warning(f"计算上市天数失败: {e}")
         
         # 4. 停牌标记：先用成交量判断
-        df['filter_is_suspended'] = ((df['vol'] <= 0) | (df['vol'].isna())).astype(int)
+        df['is_suspended'] = ((df['vol'] <= 0) | (df['vol'].isna())).astype(int)
         
         # 如果有停复牌信息，进一步完善
         if suspend_info_df is not None and len(suspend_info_df) > 0:
@@ -335,7 +335,7 @@ class DataCleaner:
                 ][['ts_code', 'trade_date']].copy()
                 suspend_dates['_suspended'] = 1
                 df = df.merge(suspend_dates, on=['ts_code', 'trade_date'], how='left')
-                df['filter_is_suspended'] = df['_suspended'].fillna(df['filter_is_suspended']).astype(int)
+                df['is_suspended'] = df['_suspended'].fillna(df['is_suspended']).astype(int)
                 df.drop(columns=['_suspended'], inplace=True, errors='ignore')
         
         # 5. 涨跌停标记：使用涨跌幅判断
@@ -344,12 +344,12 @@ class DataCleaner:
         
         if 'pct_chg' in df.columns:
             # 非 ST：±10%
-            non_st = df['filter_is_st'] == 0
+            non_st = df['is_st'] == 0
             df.loc[non_st & (df['pct_chg'] >= 9.9), 'is_limit_up'] = 1
             df.loc[non_st & (df['pct_chg'] <= -9.9), 'is_limit_down'] = 1
             
             # ST：±5%
-            st = df['filter_is_st'] == 1
+            st = df['is_st'] == 1
             df.loc[st & (df['pct_chg'] >= 4.9), 'is_limit_up'] = 1
             df.loc[st & (df['pct_chg'] <= -4.9), 'is_limit_down'] = 1
         
@@ -366,9 +366,9 @@ class DataCleaner:
         
         # 6. 可交易标记：非 ST、非停牌、上市满足天数
         df['tradable'] = (
-            (df['filter_is_st'] == 0) &
-            (df['filter_is_suspended'] == 0) &
-            (df['filter_list_days'] >= min_list_days)
+            (df['is_st'] == 0) &
+            (df['is_suspended'] == 0) &
+            (df['list_days'] >= min_list_days)
         ).astype(int)
         
         # 清理临时列
@@ -379,8 +379,8 @@ class DataCleaner:
         
         logger.info(
             f"可交易标记添加完成: 可交易 {tradable_count} ({tradable_pct:.1f}%), "
-            f"ST {df['filter_is_st'].sum()}, 停牌 {df['filter_is_suspended'].sum()}, "
-            f"上市不足{min_list_days}天 {(df['filter_list_days'] < min_list_days).sum()}"
+            f"ST {df['is_st'].sum()}, 停牌 {df['is_suspended'].sum()}, "
+            f"上市不足{min_list_days}天 {(df['list_days'] < min_list_days).sum()}"
         )
         
         return df
