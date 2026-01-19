@@ -153,6 +153,71 @@ class MLSignal(Signal):
         
         return signals
     
+    def generate_ranked(
+        self,
+        date: pd.Timestamp,
+        universe: List[str],
+        data: Dict
+    ) -> List[tuple]:
+        """生成排序后的候选股票列表（支持回填）
+        
+        返回所有候选股票的完整排序列表，而不仅仅是 top N。
+        这样可以在 top N 中有不可交易股票时从后续候选中回填。
+        
+        Args:
+            date: 当前日期
+            universe: 股票池
+            data: 数据字典，应包含 "features" 键
+            
+        Returns:
+            排序后的 (股票代码, 预测分数) 元组列表，按分数降序排列
+        """
+        # 加载模型
+        self._load_model()
+        
+        # 获取当日特征数据
+        if "features" not in data:
+            logger.warning(f"{date.date()} 没有特征数据")
+            return []
+        
+        features_df = data["features"]
+        
+        if features_df is None or len(features_df) == 0:
+            logger.warning(f"{date.date()} 特征数据为空")
+            return []
+        
+        # 过滤股票池
+        features_df = features_df[features_df['ts_code'].isin(universe)].copy()
+        
+        if len(features_df) == 0:
+            logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
+            return []
+        
+        # 准备特征
+        try:
+            X = features_df[self.feature_columns].copy()
+            X = X.fillna(0)  # 填充缺失值
+        except KeyError as e:
+            logger.error(f"特征列缺失: {e}")
+            return []
+        
+        # 预测
+        predictions = self.model.predict(X)
+        features_df['ml_score'] = predictions
+        
+        # 按预测分数排序，返回所有候选
+        features_df = features_df.sort_values('ml_score', ascending=False)
+        
+        # 返回 (股票代码, 分数) 元组列表
+        ranked = list(zip(features_df['ts_code'].tolist(), features_df['ml_score'].tolist()))
+        
+        logger.debug(
+            f"ML 排序候选生成完成: {date.date()}, 候选数 {len(ranked)}, "
+            f"平均预测分数={features_df['ml_score'].mean():.6f}"
+        )
+        
+        return ranked
+    
     def generate_with_features(
         self,
         date: pd.Timestamp,
