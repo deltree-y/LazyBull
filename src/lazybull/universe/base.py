@@ -177,6 +177,11 @@ class BasicUniverse(Universe):
     ) -> List[str]:
         """过滤不可交易的股票（停牌、涨停）
         
+        注意：此方法在Universe级别调用，使用T日数据。
+        但根据新的交易逻辑，涨跌停应该在信号生成后基于T+1日数据过滤。
+        因此这里只过滤停牌股票（如果配置了filter_suspended），
+        不过滤涨跌停股票（即使配置了filter_limit_stocks）。
+        
         Args:
             stock_list: 股票代码列表
             date: 查询日期
@@ -187,10 +192,10 @@ class BasicUniverse(Universe):
         """
         trade_date_str = date.strftime('%Y%m%d')
         filtered_stocks = []
-        filtered_count = {'停牌': 0, '涨停': 0, '跌停': 0}
+        filtered_count = {'停牌': 0}
         
         for stock in stock_list:
-            # 检查是否可买入（选股阶段主要关注买入）
+            # 仅检查停牌状态（涨跌停过滤已移至信号生成阶段基于T+1数据）
             tradeable, reason = is_tradeable(
                 stock, trade_date_str, quote_data, action='buy'
             )
@@ -198,26 +203,18 @@ class BasicUniverse(Universe):
             if tradeable:
                 filtered_stocks.append(stock)
             else:
-                # 根据配置决定是否过滤
-                should_filter = False
+                # 只过滤停牌股票
                 if reason == "停牌" and self.filter_suspended:
-                    should_filter = True
-                elif reason in ["涨停", "跌停"] and self.filter_limit_stocks:
-                    should_filter = True
-                
-                if should_filter:
-                    filtered_count[reason] = filtered_count.get(reason, 0) + 1
+                    filtered_count['停牌'] = filtered_count.get('停牌', 0) + 1
                 else:
-                    # 不过滤，保留在股票池中
+                    # 涨跌停不在此过滤，保留在股票池中
                     filtered_stocks.append(stock)
         
         # 输出过滤日志
         if sum(filtered_count.values()) > 0:
             logger.info(
-                f"选股过滤 {date.date()}: 原始 {len(stock_list)} 只，"
+                f"Universe过滤 {date.date()}: 原始 {len(stock_list)} 只，"
                 f"过滤停牌 {filtered_count['停牌']} 只，"
-                f"过滤涨停 {filtered_count['涨停']} 只，"
-                f"过滤跌停 {filtered_count['跌停']} 只，"
                 f"最终 {len(filtered_stocks)} 只"
             )
         

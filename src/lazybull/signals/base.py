@@ -34,6 +34,29 @@ class Signal(ABC):
             信号字典，{股票代码: 权重}
         """
         pass
+    
+    def generate_ranked(self, date: pd.Timestamp, universe: List[str], data: Dict) -> List[tuple]:
+        """生成排序后的候选股票列表（用于支持回填）
+        
+        子类可以重写此方法以返回完整的排序候选列表。
+        如果不重写，则从 generate() 结果推导（按权重排序）。
+        
+        Args:
+            date: 当前日期
+            universe: 股票池
+            data: 数据字典，包含价格、因子等
+            
+        Returns:
+            排序后的 (股票代码, 分数/权重) 元组列表，按分数降序排列
+        """
+        # 默认实现：从 generate() 结果按权重排序
+        signals = self.generate(date, universe, data)
+        if not signals:
+            return []
+        
+        # 按权重降序排列
+        ranked = sorted(signals.items(), key=lambda x: x[1], reverse=True)
+        return ranked
 
 
 class EqualWeightSignal(Signal):

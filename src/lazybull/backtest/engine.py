@@ -217,30 +217,104 @@ class BacktestEngine:
     def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_data: pd.DataFrame, date_to_idx: Dict) -> None:
         """生成信号（在 T 日生成，T+1 日执行买入）
         
+        新逻辑：生成排序候选列表，在 T+1 日过滤不可交易股票并回填，确保 top N 全部可交易。
+        
         Args:
             date: 信号生成日期
             trading_dates: 交易日列表
             price_data: 价格数据，包含行情信息
             date_to_idx: 日期到索引的映射
         """
-        # 获取当日行情数据用于过滤
+        # 获取当日行情数据用于基础过滤（ST、停牌等基础过滤）
         date_quote = price_data[price_data['trade_date'] == date]
         
-        # 获取股票池（传入行情数据进行过滤）
+        # 获取股票池（不过滤涨跌停，因为 T 日涨跌停不代表 T+1 日也涨跌停）
+        # 但保留 ST、基本可交易性等过滤
         stock_universe = self.universe.get_stocks(date, quote_data=date_quote)
         
-        # 生成信号
-        signals = self.signal.generate(date, stock_universe, {})
+        # 生成排序后的候选列表（返回所有候选，不仅仅是 top N）
+        ranked_candidates = self.signal.generate_ranked(date, stock_universe, {})
+        
+        if not ranked_candidates:
+            if self.verbose:
+                logger.warning(f"信号日 {date.date()} 无候选")
+            return
+        
+        # 获取 T+1 日（买入日）的行情数据
+        current_idx = date_to_idx.get(date)
+        if current_idx is None or current_idx + 1 >= len(trading_dates):
+            # 没有 T+1 日，无法买入
+            if self.verbose:
+                logger.warning(f"信号日 {date.date()} 之后没有交易日，无法执行")
+            return
+        
+        buy_date = trading_dates[current_idx + 1]
+        buy_date_str = buy_date.strftime('%Y%m%d')
+        buy_date_quote = price_data[price_data['trade_date'] == buy_date_str]
+        
+        # 从排序候选中选择 top N 可交易股票
+        signals = {}
+        candidates_checked = 0
+        filtered_reasons = {'停牌': 0, '涨停': 0, '跌停': 0}
+        
+        # 获取目标数量（从信号生成器获取）
+        if hasattr(self.signal, 'top_n'):
+            target_n = self.signal.top_n
+        else:
+            # 如果信号生成器没有 top_n 属性，则使用所有候选
+            target_n = len(ranked_candidates)
+        
+        for stock, score in ranked_candidates:
+            candidates_checked += 1
+            
+            # 检查 T+1 日该股票是否可买入
+            tradeable, reason = is_tradeable(stock, buy_date_str, buy_date_quote, action='buy')
+            
+            if tradeable:
+                # 可交易，加入信号
+                signals[stock] = score
+                
+                # 达到目标数量，停止
+                if len(signals) >= target_n:
+                    break
+            else:
+                # 不可交易，记录原因并继续检查下一个候选
+                filtered_reasons[reason] = filtered_reasons.get(reason, 0) + 1
+                if self.verbose:
+                    logger.debug(
+                        f"候选股票 {stock} 在 {buy_date.date()} 不可买入(原因: {reason})，"
+                        f"从候选中回填"
+                    )
         
         if not signals:
             if self.verbose:
-                logger.warning(f"信号日 {date.date()} 无信号")
+                logger.warning(
+                    f"信号日 {date.date()} 所有候选在 T+1 日 {buy_date.date()} 均不可交易，"
+                    f"检查了 {candidates_checked} 个候选"
+                )
             return
+        
+        # 归一化权重（将分数转换为权重，使其和为 1）
+        total_score = sum(signals.values())
+        if total_score > 0:
+            signals = {stock: score / total_score for stock, score in signals.items()}
+        else:
+            # 如果所有分数都是0或负数，使用等权
+            weight = 1.0 / len(signals)
+            signals = {stock: weight for stock in signals.keys()}
         
         # 保存信号，待 T+1 执行
         self.pending_signals[date] = signals
+        
         if self.verbose:
-            logger.info(f"信号生成: {date.date()}, 信号数 {len(signals)}")
+            logger.info(
+                f"信号生成: {date.date()}, 信号数 {len(signals)}/{target_n}, "
+                f"检查候选 {candidates_checked} 个, "
+                f"过滤: 停牌 {filtered_reasons.get('停牌', 0)}, "
+                f"涨停 {filtered_reasons.get('涨停', 0)}, "
+                f"跌停 {filtered_reasons.get('跌停', 0)}"
+            )
+    
     
     def _execute_pending_buys(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
         """执行待执行的买入操作（T+1）
@@ -671,15 +745,17 @@ class BacktestEngine:
     def _buy_stock(self, date: pd.Timestamp, stock: str, target_value: float, signal_date: Optional[pd.Timestamp] = None) -> None:
         """买入股票（在 T+1 日以收盘价买入）
         
-        带交易状态检查的买入方法。如果启用延迟订单功能，会检查股票是否可交易。
+        直接买入，不再进行交易状态检查，因为在信号生成阶段已经过滤了不可交易的股票。
         
         Args:
             date: 买入日期（T+1）
             stock: 股票代码
             target_value: 目标市值
-            signal_date: 信号生成日期（用于延迟订单）
+            signal_date: 信号生成日期（保留参数以兼容，但不使用）
         """
-        self._buy_stock_with_status_check(date, stock, target_value, signal_date)
+        # 直接买入，不检查交易状态（已在信号生成时过滤）
+        self._buy_stock_direct(date, stock, target_value)
+    
     
     def _sell_stock_with_status_check(self, date: pd.Timestamp, stock: str) -> None:
         """卖出股票（带交易状态检查）

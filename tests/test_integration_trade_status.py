@@ -86,14 +86,14 @@ def sample_stock_basic():
 
 
 def test_stock_selection_filtering(sample_price_data_with_status, sample_stock_basic):
-    """测试选股阶段过滤停牌和涨停股票"""
+    """测试Universe阶段仅过滤停牌股票（涨跌停在信号生成时基于T+1数据过滤）"""
     
     # 创建股票池（启用过滤）
     universe = BasicUniverse(
         stock_basic=sample_stock_basic,
         exclude_st=False,
         filter_suspended=True,  # 过滤停牌
-        filter_limit_stocks=True  # 过滤涨跌停
+        filter_limit_stocks=True  # 此参数在Universe级别不再过滤涨跌停
     )
     
     # 获取第3天的行情数据（000002停牌，000003涨停）
@@ -106,18 +106,24 @@ def test_stock_selection_filtering(sample_price_data_with_status, sample_stock_b
     # 获取股票池
     stocks = universe.get_stocks(date, quote_data=date_quote)
     
-    # 验证：000002（停牌）和000003（涨停）应被过滤
-    assert '000002.SZ' not in stocks  # 停牌
-    assert '000003.SZ' not in stocks  # 涨停
+    # 验证：
+    # - 000002（停牌）应被过滤（Universe级别过滤）
+    # - 000003（涨停）不应被过滤（因为T日涨停不代表T+1日也涨停，需要在信号生成时基于T+1数据过滤）
+    assert '000002.SZ' not in stocks  # 停牌被过滤
+    assert '000003.SZ' in stocks  # 涨停不在此过滤（留给信号生成阶段）
     assert '000001.SZ' in stocks  # 正常
     assert '000004.SZ' in stocks  # 正常
     assert '000005.SZ' in stocks  # 正常
     
-    print(f"✓ 选股过滤测试通过: 过滤了 {5 - len(stocks)} 只不可交易股票")
+    print(f"✓ Universe过滤测试通过: 仅过滤停牌股票，涨跌停留待信号生成时基于T+1数据过滤")
 
 
 def test_pending_order_mechanism(sample_price_data_with_status, sample_stock_basic):
-    """测试延迟订单机制"""
+    """测试新的信号生成机制（基于T+1数据过滤并回填）
+    
+    新设计：不再使用延迟订单for买入，而是在信号生成时基于T+1数据过滤并回填。
+    延迟订单机制仅用于卖出时的跌停情况。
+    """
     
     # 创建股票池（启用过滤）
     universe = BasicUniverse(
@@ -129,7 +135,7 @@ def test_pending_order_mechanism(sample_price_data_with_status, sample_stock_bas
     
     signal = MockSignal()
     
-    # 创建回测引擎（启用延迟订单）
+    # 创建回测引擎
     engine = BacktestEngine(
         universe=universe,
         signal=signal,
@@ -137,7 +143,7 @@ def test_pending_order_mechanism(sample_price_data_with_status, sample_stock_bas
         cost_model=CostModel(),
         rebalance_freq=1,  # 每天调仓
         holding_period=2,  # 持有2天
-        enable_pending_order=True,  # 启用延迟订单
+        enable_pending_order=True,  # 启用延迟订单（主要用于卖出跌停）
         max_retry_count=5,
         max_retry_days=5,
         verbose=False  # 关闭详细日志避免输出过多
@@ -156,18 +162,19 @@ def test_pending_order_mechanism(sample_price_data_with_status, sample_stock_bas
     assert len(nav_curve) == len(trading_dates)
     assert 'nav' in nav_curve.columns
     
-    # 验证延迟订单统计
+    # 验证延迟订单统计（新设计下买入不使用延迟订单）
     if engine.pending_order_manager:
         stats = engine.pending_order_manager.get_statistics()
         print(f"✓ 延迟订单统计: 累计添加 {stats['total_added']}, "
               f"成功执行 {stats['total_succeeded']}, 过期放弃 {stats['total_expired']}")
         
-        # 应该有一些延迟订单被添加（因为有停牌和涨跌停）
-        # 但不强制要求，因为取决于信号生成的时机
+        # 新设计：买入不使用延迟订单（在信号生成时已过滤），
+        # 延迟订单仅用于卖出跌停情况
     
     # 获取交易记录
     trades_df = engine.get_trades()
     print(f"✓ 回测完成: 共 {len(trades_df)} 笔交易")
+    print(f"✓ 新设计验证: 信号生成时基于T+1数据过滤并回填，买入不使用延迟订单")
     
     # 验证基本交易记录
     assert len(trades_df) >= 0  # 至少应该没有错误
@@ -211,21 +218,22 @@ def test_filtering_configuration(sample_price_data_with_status, sample_stock_bas
     assert '000003.SZ' in stocks_filter_suspend  # 涨停未过滤
     assert len(stocks_filter_suspend) == 4
     
-    # 测试3: 仅过滤涨跌停
+    # 测试3: filter_limit_stocks参数（已不在Universe级别过滤，保留参数以兼容）
     universe_filter_limit = BasicUniverse(
         stock_basic=sample_stock_basic,
         exclude_st=False,
         filter_suspended=False,  # 不过滤停牌
-        filter_limit_stocks=True  # 过滤涨跌停
+        filter_limit_stocks=True  # 此参数在Universe级别不再生效
     )
     
     stocks_filter_limit = universe_filter_limit.get_stocks(date, quote_data=date_quote)
     
+    # 新设计：涨跌停不在Universe级别过滤，所以都应该在
     assert '000002.SZ' in stocks_filter_limit  # 停牌未过滤
-    assert '000003.SZ' not in stocks_filter_limit  # 涨停被过滤
-    assert len(stocks_filter_limit) == 4
+    assert '000003.SZ' in stocks_filter_limit  # 涨停不在此过滤（已移至信号生成阶段）
+    assert len(stocks_filter_limit) == 5
     
-    print("✓ 过滤配置测试通过: 所有配置选项工作正常")
+    print("✓ 过滤配置测试通过: Universe仅过滤停牌，涨跌停在信号生成阶段基于T+1数据过滤")
 
 
 def test_backward_compatibility(sample_price_data_with_status, sample_stock_basic):

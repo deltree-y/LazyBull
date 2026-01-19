@@ -2,31 +2,45 @@
 
 ## 概述
 
-LazyBull 从 v0.3.0 开始支持对股票涨跌停与停牌状态的自动处理，包括：
-- **选股阶段过滤**：自动过滤停牌、涨跌停股票
-- **交易延迟机制**：遇到涨跌停/停牌时延迟订单而非直接失败
+LazyBull 从 v0.3.1 开始采用新的涨跌停与停牌处理策略：
+- **信号生成阶段过滤与回填**：基于 T+1 日数据检查涨跌停/停牌状态，从候选池回填以确保 top N 全部可交易
+- **Universe 阶段仅过滤停牌**：T 日停牌不代表不在候选池，因为可能 T+1 复牌
+- **延迟订单仅用于卖出**：买入不使用延迟订单（已在信号生成时过滤），延迟订单仅用于卖出跌停情况
 
-这些功能可以通过配置参数灵活控制，确保策略在面对交易限制时更加稳健。
+这种设计更符合实际交易逻辑：**T 日的涨跌停状态不代表 T+1 日也涨跌停**，因此应该基于 T+1 日（实际买入日）的数据来过滤。
 
 ## 功能说明
 
-### 1. 选股阶段过滤
+### 1. 信号生成阶段的智能过滤与回填
 
-在生成选股信号时，系统会自动过滤以下股票：
-- **停牌股票**：成交量为0或有停牌标记的股票
-- **涨停股票**：涨幅≥9.9%（非ST）或≥4.9%（ST），或收盘价达到涨停价
-- **跌停股票**：跌幅≤-9.9%（非ST）或≤-4.9%（ST），或收盘价达到跌停价
+**新的处理流程**：
+1. 信号生成器产生排序后的候选列表（不仅仅是 top N）
+2. 获取 T+1 日（实际买入日）的行情数据
+3. 从排序候选中依次检查：
+   - 检查 T+1 日是否停牌
+   - 检查 T+1 日是否涨停（买入难成交）
+   - 若不可交易，自动从后续候选中回填
+4. 确保最终选出的 top N 股票在 T+1 日全部可交易
 
-**过滤逻辑**：
-- 买入时：过滤停牌和涨停股票（难以买入）
-- 卖出时：过滤停牌和跌停股票（难以卖出）
+**过滤规则**：
+- **停牌股票**：T+1 日成交量为 0 或有停牌标记
+- **涨停股票**（买入时）：T+1 日涨幅 ≥9.9%（非ST）或 ≥4.9%（ST），或收盘价达到涨停价
+- **跌停股票**（卖出时）：跌幅 ≤-9.9%（非ST）或 ≤-4.9%（ST），或收盘价达到跌停价
 
-### 2. 延迟订单机制
+### 2. Universe 过滤策略
 
-当股票因涨跌停或停牌无法立即交易时，订单会被加入延迟队列：
+Universe 阶段（T 日）仅过滤停牌股票：
+- **为什么不过滤涨跌停**：T 日涨跌停不代表 T+1 日也涨跌停，应该保留在候选池中
+- **为什么过滤停牌**：长期停牌股票可以过滤，但这不是绝对的（可能 T+1 复牌）
+
+### 3. 延迟订单机制（仅用于卖出）
+
+延迟订单主要用于卖出时遇到跌停的情况：
+- **买入不使用延迟订单**：已在信号生成阶段过滤
+- **卖出使用延迟订单**：持仓股票若遇跌停，加入延迟队列，后续交易日重试
 - **自动重试**：在每个交易日检查延迟订单，条件解除后自动执行
-- **最大重试次数**：默认5次（可配置）
-- **最大延迟天数**：默认10个交易日（可配置）
+- **最大重试次数**：默认 5 次（可配置）
+- **最大延迟天数**：默认 10 个交易日（可配置）
 - **超时处理**：超过限制后自动放弃并记录日志
 
 ## 使用方法
@@ -38,25 +52,29 @@ from src.lazybull.backtest import BacktestEngine
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.signals.base import EqualWeightSignal
 
-# 1. 创建支持过滤的股票池
+# 1. 创建股票池
 universe = BasicUniverse(
     stock_basic=stock_basic_df,
     exclude_st=True,           # 排除ST股票
-    filter_suspended=True,     # 过滤停牌股票（默认True）
-    filter_limit_stocks=True   # 过滤涨跌停股票（默认True）
+    filter_suspended=True,     # Universe级别过滤停牌股票
+    filter_limit_stocks=True   # 此参数在Universe级别已不生效（兼容保留）
 )
 
-# 2. 创建支持延迟订单的回测引擎
+# 2. 创建信号（需支持 generate_ranked 方法以提供回填候选）
+# MLSignal 和 EqualWeightSignal 等已支持
+signal = MLSignal(top_n=30)  # 或其他信号生成器
+
+# 3. 创建回测引擎
 engine = BacktestEngine(
     universe=universe,
     signal=signal,
     initial_capital=1000000,
-    enable_pending_order=True,  # 启用延迟订单（默认True）
+    enable_pending_order=True,  # 启用延迟订单（仅用于卖出跌停）
     max_retry_count=5,          # 最大重试次数（默认5）
     max_retry_days=10           # 最大延迟天数（默认10）
 )
 
-# 3. 运行回测
+# 4. 运行回测
 nav_curve = engine.run(
     start_date=start_date,
     end_date=end_date,
@@ -64,10 +82,10 @@ nav_curve = engine.run(
     price_data=price_data  # 需包含交易状态字段
 )
 
-# 4. 查看延迟订单统计
+# 5. 查看延迟订单统计（主要是卖出跌停的情况）
 if engine.pending_order_manager:
     stats = engine.pending_order_manager.get_statistics()
-    print(f"累计添加: {stats['total_added']}")
+    print(f"累计添加: {stats['total_added']}")  # 主要是卖出跌停
     print(f"成功执行: {stats['total_succeeded']}")
     print(f"过期放弃: {stats['total_expired']}")
 ```
@@ -79,10 +97,12 @@ if engine.pending_order_manager:
 ```python
 universe = BasicUniverse(
     stock_basic=stock_basic_df,
-    filter_suspended=True,      # 是否过滤停牌股票
-    filter_limit_stocks=True    # 是否过滤涨跌停股票
+    filter_suspended=True,      # Universe级别是否过滤停牌股票
+    filter_limit_stocks=True    # 此参数在Universe级别已不生效（保留以兼容）
 )
 ```
+
+**注意**：`filter_limit_stocks` 参数在 Universe 级别已不再过滤涨跌停股票（因为 T 日涨跌停不代表 T+1 日也涨跌停）。涨跌停过滤已移至信号生成阶段，基于 T+1 日数据进行。
 
 #### 延迟订单配置
 
@@ -90,18 +110,20 @@ universe = BasicUniverse(
 engine = BacktestEngine(
     universe=universe,
     signal=signal,
-    enable_pending_order=True,  # 是否启用延迟订单
+    enable_pending_order=True,  # 是否启用延迟订单（主要用于卖出跌停）
     max_retry_count=5,          # 最大重试次数
     max_retry_days=10           # 最大延迟天数
 )
 ```
+
+**注意**：新设计下，买入不使用延迟订单（已在信号生成时过滤），延迟订单主要用于卖出时遇到跌停的情况。
 
 ### 关闭功能
 
 如果不需要这些功能，可以关闭：
 
 ```python
-# 关闭选股过滤
+# 关闭Universe过滤
 universe = BasicUniverse(
     stock_basic=stock_basic_df,
     filter_suspended=False,
