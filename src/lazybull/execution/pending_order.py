@@ -169,7 +169,7 @@ class PendingOrderManager:
         
         return orders_to_retry
     
-    def mark_success(self, stock: str, action: str) -> None:
+    def mark_success(self, success_date: pd.Timestamp, stock: str, action: str) -> None:
         """标记订单执行成功并移除
         
         Args:
@@ -182,7 +182,7 @@ class PendingOrderManager:
             logger.info(
                 f"延迟订单执行成功: {stock} {action} "
                 f"(重试次数: {order.retry_count}, "
-                f"延迟天数: {(pd.Timestamp.now() - order.create_date).days})"
+                f"延迟天数: {(success_date - order.create_date).days})"
             )
             del self.pending_orders[key]
             self.total_succeeded += 1

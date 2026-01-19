@@ -211,9 +211,10 @@ class MLSignal(Signal):
         # 返回 (股票代码, 分数) 元组列表
         ranked = list(zip(features_df['ts_code'].tolist(), features_df['ml_score'].tolist()))
         
-        logger.debug(
-            f"ML 排序候选生成完成: {date.date()}, 候选数 {len(ranked)}, "
-            f"平均预测分数={features_df['ml_score'].mean():.6f}"
+        logger.info(
+            f"ML排序候选生成: {date.date()}, "#候选数 {len(ranked)}, "
+            f"平均预测分数[{features_df['ml_score'].mean():.3f}], "
+            f"最高/最低[{features_df['ml_score'].max():.3f}/{features_df['ml_score'].min():.3f}]"
         )
         
         return ranked

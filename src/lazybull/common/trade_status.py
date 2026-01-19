@@ -27,7 +27,7 @@ def is_suspended(
     try:
         mask = (quote_data['ts_code'] == ts_code) & (quote_data['trade_date'] == trade_date)
         if mask.sum() == 0:
-            logger.warning(f"未找到 {ts_code} 在 {trade_date} 的行情数据，假定停牌")
+            logger.debug(f"未找到 {ts_code} 在 {trade_date} 的行情数据，假定停牌")
             return True
         
         row = quote_data[mask].iloc[0]

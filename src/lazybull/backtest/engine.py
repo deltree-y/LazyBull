@@ -319,7 +319,7 @@ class BacktestEngine:
                 if self.verbose:
                     logger.warning(
                         f"候选股票 {stock} 在 {buy_date.date()} 不可买入(原因: {reason})，"
-                        f"从候选中回填"
+                        f"从候选中顺延选择"
                     )
         
         if not signals:
@@ -331,13 +331,19 @@ class BacktestEngine:
             return
         
         # 归一化权重（将分数转换为权重，使其和为 1）
-        total_score = sum(signals.values())
-        if total_score > 0:
-            signals = {stock: score / total_score for stock, score in signals.items()}
-        else:
-            # 如果所有分数都是0或负数，使用等权
+        if self.signal.weight_method == "equal":
+            # 等权
             weight = 1.0 / len(signals)
             signals = {stock: weight for stock in signals.keys()}
+        else:
+            # 按分数加权
+            total_score = sum(signals.values())
+            if total_score > 0:
+                signals = {stock: score / total_score for stock, score in signals.items()}
+            else:
+                # 如果所有分数都是0或负数，使用等权
+                weight = 1.0 / len(signals)
+                signals = {stock: weight for stock in signals.keys()}
         
         # 保存信号，待 T+1 执行
         self.pending_signals[date] = signals
@@ -633,7 +639,7 @@ class BacktestEngine:
             return
         
         # 获取当日行情数据
-        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
+        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date.strftime('%Y%m%d')]
         trade_date_str = date.strftime('%Y%m%d')
         
         for order in orders_to_retry:
@@ -652,10 +658,10 @@ class BacktestEngine:
                 # 可交易，尝试执行
                 if order.action == 'buy':
                     self._buy_stock_direct(date, order.stock, order.target_value)
-                    self.pending_order_manager.mark_success(order.stock, 'buy')
+                    self.pending_order_manager.mark_success(date, order.stock, 'buy')
                 elif order.action == 'sell':
                     self._sell_stock_direct(date, order.stock)
-                    self.pending_order_manager.mark_success(order.stock, 'sell')
+                    self.pending_order_manager.mark_success(date, order.stock, 'sell')
             else:
                 # 仍不可交易，更新延迟订单
                 self.pending_order_manager.add_order(
