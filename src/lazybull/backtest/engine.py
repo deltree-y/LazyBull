@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from ..common.cost import CostModel
 from ..common.trade_status import is_tradeable
+from ..common.date_utils import to_trade_date_str
 from ..execution.pending_order import PendingOrderManager
 from ..signals.base import Signal
 from ..universe.base import Universe
@@ -241,7 +242,7 @@ class BacktestEngine:
             date_to_idx: 日期到索引的映射
         """
         # 获取当日行情数据用于基础过滤（ST、停牌等基础过滤）
-        trade_date_str = date.strftime('%Y%m%d')        
+        trade_date_str = to_trade_date_str(date)
         date_quote = price_data[price_data['trade_date'] == trade_date_str]
         # 获取股票池（不过滤涨跌停，因为 T 日涨跌停不代表 T+1 日也涨跌停）
         # 但保留 ST、基本可交易性等过滤
@@ -276,7 +277,7 @@ class BacktestEngine:
             return
         
         buy_date = trading_dates[current_idx + 1]
-        buy_date_str = buy_date.strftime('%Y%m%d')
+        buy_date_str = to_trade_date_str(buy_date)
         buy_date_quote = price_data[price_data['trade_date'] == buy_date_str]
         
         # 从排序候选中选择 top N 可交易股票
@@ -616,8 +617,8 @@ class BacktestEngine:
             return
         
         # 获取当日行情数据
-        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date.strftime('%Y%m%d')]
-        trade_date_str = date.strftime('%Y%m%d')
+        trade_date_str = to_trade_date_str(date)
+        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
         
         for order in orders_to_retry:
             # 检查是否可交易
@@ -664,8 +665,8 @@ class BacktestEngine:
         """
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
-            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == date]
-            trade_date_str = date.strftime('%Y%m%d')
+            trade_date_str = to_trade_date_str(date)
+            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
             if date_quote.empty:
                 # 当日行情数据为空，无法判断交易状态，加入延迟队列
                 if self.pending_order_manager:
@@ -811,7 +812,7 @@ class BacktestEngine:
         """
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
-            trade_date_str = date.strftime('%Y%m%d')
+            trade_date_str = to_trade_date_str(date)
             date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
             if date_quote.empty:
                 # 当日行情数据为空，无法判断交易状态，加入延迟队列

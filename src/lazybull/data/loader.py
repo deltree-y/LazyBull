@@ -6,6 +6,7 @@ import pandas as pd
 from loguru import logger
 
 from .storage import Storage
+from ..common.date_utils import to_trade_date_str, normalize_date_column
 
 
 class DataLoader:
@@ -87,14 +88,11 @@ class DataLoader:
         if df is None:
             return None
         
-        # 转换日期格式
+        # 确保日期类型一致（转换为 datetime 以便比较）
         if 'trade_date' in df.columns:
-            try:
-                df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-            except (ValueError, TypeError):
-                df['trade_date'] = pd.to_datetime(df['trade_date'])
+            df = normalize_date_column(df, 'trade_date', to_str=False)
         
-        # 日期过滤
+        # 日期过滤（统一为 datetime 类型比较）
         if start_date:
             start_dt = pd.to_datetime(self._normalize_date(start_date))
             df = df[df['trade_date'] >= start_dt]
@@ -139,14 +137,11 @@ class DataLoader:
         if df is None:
             return None
         
-        # 转换日期格式
+        # 确保日期类型一致（转换为 datetime 以便比较）
         if 'trade_date' in df.columns:
-            try:
-                df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-            except (ValueError, TypeError):
-                df['trade_date'] = pd.to_datetime(df['trade_date'])
+            df = normalize_date_column(df, 'trade_date', to_str=False)
         
-        # 日期过滤
+        # 日期过滤（统一为 datetime 类型比较）
         if start_date:
             start_dt = pd.to_datetime(self._normalize_date(start_date))
             df = df[df['trade_date'] >= start_dt]
