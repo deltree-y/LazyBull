@@ -426,10 +426,17 @@ class FeatureBuilder:
             np.nan
         )
         
-        # 保留需要的列
+        # 保留需要的列（增加 amount_ma 和 vol_ma）
         keep_cols = ['ts_code', f'ret_{window}', f'vol_ratio_{window}', 
-                     f'amount_ratio_{window}', f'ma_deviation_{window}']
+                     f'amount_ratio_{window}', f'ma_deviation_{window}',
+                     'mean_vol', 'mean_amount']
         window_features = window_features[keep_cols]
+        
+        # 重命名 mean_vol 和 mean_amount 为更友好的名称
+        window_features = window_features.rename(columns={
+            'mean_vol': f'vol_ma{window}',
+            'mean_amount': f'amount_ma{window}'
+        })
         
         return window_features
     
