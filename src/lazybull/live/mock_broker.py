@@ -79,12 +79,8 @@ class MockBroker:
     
     def _default_cost_model(self) -> CostModel:
         """默认成本模型"""
-        return CostModel(
-            commission_rate=0.0003,  # 万三佣金
-            min_commission=5.0,      # 最小 5 元
-            stamp_tax=0.001,         # 千一印花税
-            slippage=0.001           # 千一滑点
-        )
+        from ..common.cost import get_default_cost_model
+        return get_default_cost_model()
     
     def _generate_order_id(self) -> str:
         """生成订单 ID"""

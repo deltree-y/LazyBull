@@ -155,8 +155,9 @@ def generate_signals(
         logger.info(f"  ... 还有 {len(signals) - 5} 只")
     
     # 计算执行日期（T+1）
-    # 这里简化处理，假设下一个交易日为 trade_date + 1 天
-    # 实际应该查询交易日历
+    # 注意：这里简化处理，实际生产环境应该查询交易日历获取下一个交易日
+    # 当前实现在跨月/跨年时会产生无效日期（如 20241231 + 1 = 20241232）
+    # 建议在生产环境中使用 DataLoader 加载交易日历并调用 get_next_trade_date()
     exec_date = str(int(trade_date) + 1)  # 简化实现
     
     # 保存到 pending_signals
@@ -224,6 +225,9 @@ def execute_signals(
         logger.info(f"执行信号: {trade_date} -> {exec_date}, {len(signals)} 只股票")
         
         # 按权重分配资金
+        # 注意：这里使用初始现金计算目标仓位，即按照信号生成时的权重等比例分配
+        # 这是等权策略的标准做法，确保每只股票的目标仓位相同
+        # 实际买入时会因为资金不足、取整等原因导致实际仓位略有偏差
         for code, weight in signals.items():
             if code not in price_dict:
                 logger.warning(f"股票 {code} 在 {exec_date} 无行情数据，跳过")
