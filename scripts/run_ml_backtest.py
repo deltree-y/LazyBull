@@ -144,7 +144,7 @@ def prepare_price_data(daily_data: pd.DataFrame) -> pd.DataFrame:
         logger.warning("prepare_price_data: 未找到 close_adj，绩效价格将退化为 close（不复权）")
 
     # 交易状态列缺失要明确提示（否则你以为过滤生效但其实没生效）
-    missing_status_cols = [c for c in ['filter_is_suspended', 'is_limit_up', 'is_limit_down'] if c not in price_data.columns]
+    missing_status_cols = [c for c in ['is_suspended', 'is_limit_up', 'is_limit_down'] if c not in price_data.columns]
     if missing_status_cols:
         logger.warning(f"prepare_price_data: 缺少交易状态列 {missing_status_cols}，涨跌停/停牌过滤将退化")
 
