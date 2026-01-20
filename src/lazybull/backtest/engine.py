@@ -352,7 +352,8 @@ class BacktestEngine:
             return
         
         # 归一化权重（将分数转换为权重，使其和为 1）
-        if self.signal.weight_method == "equal":
+        weight_method = getattr(self.signal, 'weight_method', 'equal')
+        if weight_method == "equal":
             # 等权
             weight = 1.0 / len(signals)
             signals = {stock: weight for stock in signals.keys()}
