@@ -299,7 +299,17 @@ class FeatureBuilder:
             包含特征的DataFrame
         """
         # 初始化特征DataFrame，包含vol和amount用于后续过滤
-        features = current_data[['trade_date', 'ts_code', 'vol', 'amount']].copy()
+        # 同时检查并保留 clean 层的标记列（如果存在）
+        base_columns = ['trade_date', 'ts_code', 'vol', 'amount']
+        clean_marker_columns = ['is_st', 'is_suspended', 'is_limit_up', 'is_limit_down', 'list_days', 'tradable']
+        
+        # 保留存在的 clean 层标记列
+        columns_to_keep = base_columns.copy()
+        for col in clean_marker_columns:
+            if col in current_data.columns:
+                columns_to_keep.append(col)
+        
+        features = current_data[columns_to_keep].copy()
         
         # 当日收益率（已在数据中）
         features = features.merge(
