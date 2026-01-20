@@ -352,6 +352,7 @@ class BacktestEngine:
             return
         
         # 归一化权重（将分数转换为权重，使其和为 1）
+        # 使用 getattr 保证向后兼容（某些 Mock 信号对象可能没有 weight_method 属性）
         weight_method = getattr(self.signal, 'weight_method', 'equal')
         if weight_method == "equal":
             # 等权
