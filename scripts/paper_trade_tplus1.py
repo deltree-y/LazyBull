@@ -393,7 +393,7 @@ def main():
     
     # 设置日志
     log_level = "DEBUG" if args.verbose else "INFO"
-    setup_logger(level=log_level)
+    setup_logger(log_level=log_level)
     
     # 检查子命令
     if not args.command:

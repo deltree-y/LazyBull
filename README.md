@@ -51,6 +51,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **成交额过滤**: 在信号生成（选股）阶段过滤成交额后N%的股票，提高持仓流动性（新增）
 - ✅ **分批调仓**: 支持将完整调仓分多批执行，降低冲击成本（新增）
 - ✅ **止损触发**: 支持回撤止损、移动止损、连续跌停止损（新增）
+- ✅ **T+1 纸面交易**: 简化的模拟券商和持久化，用于本地纸面验证（新增）
 
 ### v0.4.0 更新内容（2026-01-19）
 
@@ -335,6 +336,43 @@ ls data/models/              # ML 模型目录
   └── v2_features.json
 ```
 
+#### T+1 纸面交易（Paper Trading）
+
+LazyBull 提供简化的 T+1 纸面交易功能，用于本地模拟实盘验证：
+
+```bash
+# 步骤 1: 初始化账户（设置初始资金）
+python scripts/paper_trade_tplus1.py reset --initial-cash 500000
+
+# 步骤 2: 在交易日 T 生成信号并保存
+python scripts/paper_trade_tplus1.py generate --trade-date 20240115 --top-n 5
+
+# 步骤 3: 次日 T+1 执行信号（使用次日收盘价买入）
+python scripts/paper_trade_tplus1.py execute --exec-date 20240116
+
+# 查看账户状态
+python scripts/paper_trade_tplus1.py status
+```
+
+**T+1 纸面交易特点：**
+- **T+1 执行模式**：当天生成信号，次日按收盘价执行
+- **简化的 MockBroker**：立即全部成交，无部分成交、挂单、撤单
+- **JSON 持久化**：所有交易状态保存在 `data/trading_state.json`
+- **佣金与滑点**：默认万三佣金、千一印花税、千一滑点
+- **资金与持仓管理**：自动检查资金、持仓，计算平均成本
+- **选股策略**：默认按市值排序（可自定义为因子排序）
+- **仅用于纸面验证**：不涉及真实券商对接
+
+**注意事项：**
+- 需要先构建数据（features 或 clean/daily）
+- 生产环境请替换为真实券商接口和数据库持久化
+- 仅实现最简化流程，不包含当日成交模拟
+
+**查看状态文件：**
+```bash
+cat data/trading_state.json   # 查看完整交易状态（账户、持仓、订单、信号）
+```
+
 #### 查看数据
 
 ```bash
@@ -450,7 +488,8 @@ LazyBull/
 │   ├── update_basic_data.py   # 更新trade_cal和stock_basic
 │   ├── train_ml_model.py      # 训练 ML 模型
 │   ├── run_backtest.py        # 运行回测
-│   └── run_ml_backtest.py     # 运行 ML 信号回测
+│   ├── run_ml_backtest.py     # 运行 ML 信号回测
+│   └── paper_trade_tplus1.py  # T+1 纸面交易脚本
 ├── src/lazybull/              # 源代码
 │   ├── common/                # 通用模块
 │   │   ├── config.py          # 配置管理
@@ -469,11 +508,14 @@ LazyBull/
 │   ├── ml/                    # 机器学习模块
 │   │   └── model_registry.py  # 模型版本管理
 │   ├── portfolio/             # 组合管理 (TODO)
-│   ├── execution/             # 执行模块 (TODO)
+│   ├── execution/             # 执行模块
+│   │   └── pending_order.py   # 延迟订单管理
 │   ├── backtest/              # 回测模块
 │   │   ├── engine.py          # 回测引擎
 │   │   └── reporter.py        # 报告生成
-│   └── live/                  # 实盘模块 (TODO)
+│   └── live/                  # 实盘模块
+│       ├── persistence.py     # 简单持久化（JSON）
+│       └── mock_broker.py     # 模拟券商（T+1纸面交易）
 ├── tests/                      # 测试
 │   ├── conftest.py            # pytest配置
 │   ├── test_config.py         # 配置测试
