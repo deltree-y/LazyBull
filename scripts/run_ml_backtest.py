@@ -121,7 +121,7 @@ def prepare_price_data(daily_data: pd.DataFrame) -> pd.DataFrame:
         'ts_code', 'trade_date',
 
         # 价格口径
-        'close', 'close_adj',
+        'close', 'close_adj', 'open', 'open_adj',
 
         # 交易状态相关（用于 is_tradeable / is_limit_up / is_suspended 等）
         'is_suspended', 'is_limit_up', 'is_limit_down',
@@ -162,7 +162,8 @@ def run_ml_backtest(
     initial_capital: float = 1000000.0,
     rebalance_freq: int = 5,
     cost_model: CostModel = None,
-    stop_loss_config: StopLossConfig = None
+    stop_loss_config: StopLossConfig = None,
+    sell_timing: str = 'open'
 ) -> tuple:
     """运行 ML 信号回测
     
@@ -193,6 +194,7 @@ def run_ml_backtest(
         cost_model=cost_model or CostModel(),
         rebalance_freq=rebalance_freq,
         stop_loss_config=stop_loss_config,
+        sell_timing=sell_timing,
     )
     
     # 运行回测
@@ -260,6 +262,14 @@ def main():
         choices=["equal", "score"],
         help="权重方法，equal=等权，score=按分数加权，默认 equal"
     )
+    parser.add_argument(
+        "--sell-timing",
+        type=str,
+        default="open",
+        choices=["open", "close"],
+        help="卖出时机，open=开盘价卖出，close=收盘价卖出，默认 open"
+    )
+
     
     # 股票池参数
     parser.add_argument(
@@ -421,7 +431,8 @@ def main():
             features_by_date=features_by_date,
             initial_capital=args.initial_capital,
             rebalance_freq=args.rebalance_freq,
-            stop_loss_config=stop_loss_config
+            stop_loss_config=stop_loss_config,
+            sell_timing=args.sell_timing,
         )
         
         # 7. 生成报告
