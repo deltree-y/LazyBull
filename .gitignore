@@ -60,6 +60,9 @@ data/models/*.joblib
 data/models/*.json
 !data/models/.gitkeep
 
+# Paper trading state
+data/trading_state.json
+
 # Logs
 *.log
 logs/
