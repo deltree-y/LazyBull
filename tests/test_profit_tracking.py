@@ -69,7 +69,7 @@ def test_profit_tracking_in_sell_trades(price_data_with_profit, trading_dates):
         signal=signal,
         initial_capital=100000,
         cost_model=cost_model,
-        rebalance_freq="D",
+        rebalance_freq=1,
         holding_period=3
     )
     
@@ -116,7 +116,7 @@ def test_profit_calculation_accuracy(price_data_with_profit, trading_dates):
         signal=signal,
         initial_capital=100000,
         cost_model=cost_model,
-        rebalance_freq="D",
+        rebalance_freq=1,
         holding_period=3
     )
     
@@ -190,7 +190,7 @@ def test_profit_with_price_increase(price_data_with_profit, trading_dates):
         signal=signal,
         initial_capital=100000,
         cost_model=cost_model,
-        rebalance_freq="D",
+        rebalance_freq=1,
         holding_period=3
     )
     
@@ -237,7 +237,7 @@ def test_profit_with_price_decrease(trading_dates):
         signal=signal,
         initial_capital=100000,
         cost_model=cost_model,
-        rebalance_freq="D",
+        rebalance_freq=1,
         holding_period=3
     )
     

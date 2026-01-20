@@ -63,7 +63,7 @@ def test_t1_trading_logic(mock_price_data, mock_trading_dates):
         signal=signal,
         initial_capital=100000,
         cost_model=CostModel(),
-        rebalance_freq="D",  # 每日调仓
+        rebalance_freq=1,  # 每日调仓
         holding_period=2  # 持有2天
     )
     

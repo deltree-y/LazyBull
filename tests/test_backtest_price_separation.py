@@ -105,7 +105,7 @@ def test_trade_records_with_pnl_fields(mock_price_data_with_adj, mock_trading_da
         universe=universe,
         signal=signal,
         initial_capital=100000,
-        rebalance_freq="D",  # 每日调仓以产生更多交易
+        rebalance_freq=1,  # 每日调仓以产生更多交易
         holding_period=5
     )
     
@@ -149,7 +149,7 @@ def test_risk_budget_enabled(mock_price_data_with_adj, mock_trading_dates_30):
         universe=universe,
         signal=signal,
         initial_capital=100000,
-        rebalance_freq="D",  # 每日调仓以产生更多交易
+        rebalance_freq=1,  # 每日调仓以产生更多交易
         holding_period=5,
         enable_risk_budget=True,
         vol_window=10
@@ -160,7 +160,7 @@ def test_risk_budget_enabled(mock_price_data_with_adj, mock_trading_dates_30):
         universe=universe,
         signal=signal,
         initial_capital=100000,
-        rebalance_freq="D",  # 每日调仓
+        rebalance_freq=1,  # 每日调仓
         holding_period=5,
         enable_risk_budget=False
     )
