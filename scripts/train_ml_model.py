@@ -116,10 +116,10 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     id_columns = ['ts_code', 'trade_date', 'name']
     # 标签列
     label_columns = [label_column]
-    # 过滤标记列（不再使用 filter_ 前缀）
-    filter_columns = ['is_st', 'suspend']
+    # 过滤标记列（使用统一的列名，与clean层一致）
+    filter_columns = ['is_st', 'is_suspended']
     # 其他非特征列
-    other_exclude_columns = ['tradable', 'list_date', 'list_days', 'limit_up', 'limit_down']
+    other_exclude_columns = ['tradable', 'list_date', 'list_days', 'is_limit_up', 'is_limit_down']
     
     exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns
     

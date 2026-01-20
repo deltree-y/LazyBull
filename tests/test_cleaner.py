@@ -174,11 +174,11 @@ class TestDataCleaner:
         
         result = cleaner.add_tradable_universe_flag(daily_df, stock_basic_df)
         
-        # 检查 filter_is_st 标记
-        assert result[result['ts_code'] == '000001.SZ']['filter_is_st'].iloc[0] == 0
-        assert result[result['ts_code'] == '000002.SZ']['filter_is_st'].iloc[0] == 0
-        assert result[result['ts_code'] == '600000.SH']['filter_is_st'].iloc[0] == 1
-        assert result[result['ts_code'] == '600001.SH']['filter_is_st'].iloc[0] == 1
+        # 检查 is_st 标记（统一列名）
+        assert result[result['ts_code'] == '000001.SZ']['is_st'].iloc[0] == 0
+        assert result[result['ts_code'] == '000002.SZ']['is_st'].iloc[0] == 0
+        assert result[result['ts_code'] == '600000.SH']['is_st'].iloc[0] == 1
+        assert result[result['ts_code'] == '600001.SH']['is_st'].iloc[0] == 1
     
     def test_add_tradable_universe_flag_suspension_detection(self, cleaner):
         """测试停牌检测"""
@@ -198,10 +198,10 @@ class TestDataCleaner:
         
         result = cleaner.add_tradable_universe_flag(daily_df, stock_basic_df)
         
-        # 检查 filter_is_suspended 标记
-        assert result[result['ts_code'] == '000001.SZ']['filter_is_suspended'].iloc[0] == 0
-        assert result[result['ts_code'] == '000002.SZ']['filter_is_suspended'].iloc[0] == 1
-        assert result[result['ts_code'] == '000003.SZ']['filter_is_suspended'].iloc[0] == 0
+        # 检查 is_suspended 标记（统一列名）
+        assert result[result['ts_code'] == '000001.SZ']['is_suspended'].iloc[0] == 0
+        assert result[result['ts_code'] == '000002.SZ']['is_suspended'].iloc[0] == 1
+        assert result[result['ts_code'] == '000003.SZ']['is_suspended'].iloc[0] == 0
     
     def test_add_tradable_universe_flag_limit_detection(self, cleaner):
         """测试涨跌停检测"""
