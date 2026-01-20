@@ -335,6 +335,55 @@ ls data/models/              # ML 模型目录
   └── v2_features.json
 ```
 
+#### 本地 T+1 纸面交易（示例）
+
+LazyBull 提供轻量级的纸面交易工具，用于本地验证交易流程。**注意：仅用于演示和流程验证，不涉及真实券商对接。**
+
+**功能特点：**
+- T+1 交易逻辑：T 日生成信号，T+1 日以收盘价执行
+- 等权分配：可用现金等权分配到各个股票
+- 模拟成交：立即全部成交，不支持部分成交/挂单/撤单
+- 简单持久化：基于 JSON 文件（`data/trading_state.json`）保存订单、持仓和账户状态
+
+**使用流程：**
+
+```bash
+# 步骤1: 在T日生成信号（不下单，仅保存）
+python scripts/paper_trade_tplus1.py generate --trade-date 20230601 --top-n 10
+
+# 步骤2: 在T+1日执行交易（按T+1日收盘价买卖）
+python scripts/paper_trade_tplus1.py execute --exec-date 20230602
+
+# 自定义参数
+python scripts/paper_trade_tplus1.py execute --exec-date 20230602 \
+    --initial-cash 1000000 --commission-rate 0.0005 --slippage 0.002
+
+# 查看交易状态
+cat data/trading_state.json
+```
+
+**数据要求：**
+- 优先从 `data/features/cs_train/{YYYYMMDD}.parquet` 读取
+- 若不存在则从 `data/clean/daily/{YYYY-MM-DD}.parquet` 读取
+- 需包含 `ts_code`, `close` 等基础字段
+- 如有 `score` 列则使用，否则生成简化评分
+
+**默认参数：**
+- 初始资金: 500,000（50万）
+- 佣金率: 0.0003（万3）
+- 滑点: 0.001（0.1%）
+- 卖出印花税: 0.001（千分之一）
+- 最低佣金: 5元
+
+**注意事项：**
+- **复权口径**: 使用不复权价格（`close`），与实际交易一致
+- **T+1 与 today_close**: 注意 T 日信号在 T+1 日执行，执行价为 T+1 日收盘价
+- **生产环境**: 实际应用应替换为：
+  - 数据库持久化（替代 JSON 文件）
+  - 真实券商接口（替代 MockBroker）
+  - 完整的订单管理系统（支持部分成交、挂单、撤单等）
+- **数据对齐**: 确保 `generate` 和 `execute` 使用的数据复权口径一致
+
 #### 查看数据
 
 ```bash
