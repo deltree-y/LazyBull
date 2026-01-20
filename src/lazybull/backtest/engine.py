@@ -14,6 +14,7 @@ from ..common.date_utils import to_trade_date_str
 from ..execution.pending_order import PendingOrderManager
 from ..signals.base import Signal
 from ..universe.base import Universe
+from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 
 
 class BacktestEngine:
@@ -44,7 +45,8 @@ class BacktestEngine:
         vol_epsilon: float = 0.001,
         enable_pending_order: bool = True,
         max_retry_count: int = 5,
-        max_retry_days: int = 10
+        max_retry_days: int = 10,
+        stop_loss_config: Optional[StopLossConfig] = None
     ):
         """初始化回测引擎
         
@@ -66,6 +68,7 @@ class BacktestEngine:
             enable_pending_order: 是否启用延迟订单功能，默认True
             max_retry_count: 延迟订单最大重试次数，默认5次
             max_retry_days: 延迟订单最大延迟天数，默认10天
+            stop_loss_config: 止损配置，None 表示不启用止损功能（默认）
         """
         self.universe = universe
         self.signal = signal
@@ -95,6 +98,12 @@ class BacktestEngine:
                 max_retry_days=max_retry_days
             )
         
+        # 止损配置
+        self.stop_loss_config = stop_loss_config
+        self.stop_loss_monitor = None
+        if stop_loss_config and stop_loss_config.enabled:
+            self.stop_loss_monitor = StopLossMonitor(stop_loss_config)
+        
         # 持有期逻辑：如果未指定，与调仓频率保持一致
         if holding_period is None:
             self.holding_period = self.rebalance_freq
@@ -106,6 +115,7 @@ class BacktestEngine:
         self.current_capital = initial_capital
         self.positions: Dict[str, Dict] = {}  # {股票代码: {shares, buy_date, buy_trade_price, buy_pnl_price, buy_cost_cash}}
         self.pending_signals: Dict[pd.Timestamp, Dict] = {}  # {信号日期: {股票: 权重}}
+        self.pending_stop_loss_sells: Dict[str, Dict] = {}  # {股票代码: {trigger_date, reason, trigger_type}} 待止损卖出队列
         self.portfolio_values: List[Dict] = []  # 组合价值历史
         self.trades: List[Dict] = []  # 交易记录
         
@@ -121,6 +131,7 @@ class BacktestEngine:
             f"调仓频率={self.rebalance_freq}, 持有期={self.holding_period}天, "
             f"风险预算={'启用' if enable_risk_budget else '禁用'}, "
             f"延迟订单={'启用' if enable_pending_order else '禁用'}, "
+            f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
         logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日收盘价卖出")
@@ -176,12 +187,20 @@ class BacktestEngine:
             if self.enable_pending_order:
                 self._process_pending_orders(date)
             
+            # 检查止损（T 日检查，T+1 日执行卖出）
+            if self.stop_loss_monitor:
+                self._check_stop_loss(date, trading_dates, date_to_idx)
+            
             # 判断是否为信号生成日
             if date in signal_dates:
                 self._generate_signal(date, trading_dates, price_data, date_to_idx)
 
             # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
             # TODO: 更正确的做法应该是在持有期计算中排除当天买入的股票, 此部分还待优化
+            # 执行止损卖出（T+1 日执行）
+            if self.stop_loss_monitor:
+                self._execute_pending_stop_loss_sells(date, trading_dates, date_to_idx)
+            
             # 检查并执行卖出操作（达到持有期）
             self._check_and_sell(date, trading_dates, date_to_idx)
 
@@ -426,10 +445,118 @@ class BacktestEngine:
         
         # 执行卖出
         for stock in stocks_to_sell:
-            self._sell_stock(date, stock)
+            self._sell_stock(date, stock, sell_type='holding_period')
         
         if stocks_to_sell and self.verbose:
             logger.info(f"卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票（达到持有期）")
+    
+    def _check_stop_loss(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
+        """检查止损触发条件（T 日检查，生成 T+1 卖出信号）
+        
+        Args:
+            date: 当前日期（检查日）
+            trading_dates: 交易日列表
+            date_to_idx: 日期到索引的映射
+        """
+        if not self.stop_loss_monitor:
+            return
+        
+        # 遍历所有持仓检查止损
+        for stock, info in list(self.positions.items()):
+            # 如果该股票已经在待止损卖出队列中，跳过（避免重复触发）
+            if stock in self.pending_stop_loss_sells:
+                continue
+            
+            # 获取当前价格
+            current_price = self._get_trade_price(date, stock)
+            if current_price is None:
+                continue
+            
+            buy_price = info['buy_trade_price']
+            
+            # 获取当日行情数据判断是否跌停
+            trade_date_str = to_trade_date_str(date)
+            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
+            is_limit_down = False
+            if not date_quote.empty:
+                stock_quote = date_quote[date_quote['ts_code'] == stock]
+                if not stock_quote.empty and 'is_limit_down' in stock_quote.columns:
+                    is_limit_down = stock_quote['is_limit_down'].iloc[0]
+            
+            # 检查止损触发
+            triggered, trigger_type, reason = self.stop_loss_monitor.check_stop_loss(
+                stock=stock,
+                buy_price=buy_price,
+                current_price=current_price,
+                is_limit_down=is_limit_down
+            )
+            
+            if triggered:
+                # 止损触发，记录到待卖出队列（T+1 执行）
+                self.pending_stop_loss_sells[stock] = {
+                    'trigger_date': date,
+                    'reason': reason,
+                    'trigger_type': trigger_type.value if trigger_type else 'unknown'
+                }
+                
+                if self.verbose:
+                    logger.warning(
+                        f"止损触发: {date.date()} {stock}, 原因: {reason}, "
+                        f"将在下一交易日执行卖出"
+                    )
+    
+    def _execute_pending_stop_loss_sells(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
+        """执行待止损卖出操作（T+1 日执行）
+        
+        Args:
+            date: 当前日期（执行日，T+1）
+            trading_dates: 交易日列表
+            date_to_idx: 日期到索引的映射
+        """
+        if not self.stop_loss_monitor or not self.pending_stop_loss_sells:
+            return
+        
+        # 查找前一个交易日触发的止损
+        current_idx = date_to_idx.get(date)
+        if current_idx is None or current_idx == 0:
+            return
+        
+        trigger_date = trading_dates[current_idx - 1]
+        
+        # 执行前一交易日触发的止损卖出
+        stocks_to_sell = []
+        for stock, info in list(self.pending_stop_loss_sells.items()):
+            if info['trigger_date'] == trigger_date:
+                stocks_to_sell.append((stock, info))
+        
+        if not stocks_to_sell:
+            return
+        
+        # 执行卖出
+        for stock, info in stocks_to_sell:
+            # 检查股票是否还在持仓中（可能已被正常调仓卖出）
+            if stock not in self.positions:
+                # 从待卖出队列中移除
+                self.pending_stop_loss_sells.pop(stock, None)
+                continue
+            
+            # 执行止损卖出
+            self._sell_stock(
+                date, 
+                stock, 
+                sell_type='stop_loss',
+                sell_reason=info['reason'],
+                trigger_type=info['trigger_type']
+            )
+            
+            # 从待卖出队列中移除
+            self.pending_stop_loss_sells.pop(stock, None)
+        
+        if stocks_to_sell and self.verbose:
+            logger.info(
+                f"止损卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票 "
+                f"（触发日: {trigger_date.date()}）"
+            )
     
     def _prepare_price_index(self, price_data: pd.DataFrame) -> None:
         """准备价格索引（使用 MultiIndex，替代嵌套字典）
@@ -800,7 +927,35 @@ class BacktestEngine:
         self._buy_stock_direct(date, stock, target_value)
     
     
-    def _sell_stock_with_status_check(self, date: pd.Timestamp, stock: str) -> None:
+    def _sell_stock(
+        self, 
+        date: pd.Timestamp, 
+        stock: str,
+        sell_type: str = 'holding_period',
+        sell_reason: Optional[str] = None,
+        trigger_type: Optional[str] = None
+    ) -> None:
+        """卖出股票（在 T+n 日以收盘价卖出）
+        
+        带交易状态检查的卖出方法。如果启用延迟订单功能，会检查股票是否可交易。
+        
+        Args:
+            date: 卖出日期（T+n）
+            stock: 股票代码
+            sell_type: 卖出类型，'holding_period' 或 'stop_loss'
+            sell_reason: 卖出原因描述（止损时使用）
+            trigger_type: 触发类型（止损时使用）
+        """
+        self._sell_stock_with_status_check(date, stock, sell_type, sell_reason, trigger_type)
+    
+    def _sell_stock_with_status_check(
+        self, 
+        date: pd.Timestamp, 
+        stock: str,
+        sell_type: str = 'holding_period',
+        sell_reason: Optional[str] = None,
+        trigger_type: Optional[str] = None
+    ) -> None:
         """卖出股票（带交易状态检查）
         
         如果启用延迟订单功能，会检查股票是否可交易（跌停）
@@ -809,6 +964,9 @@ class BacktestEngine:
         Args:
             date: 卖出日期
             stock: 股票代码
+            sell_type: 卖出类型，'holding_period' 或 'stop_loss'
+            sell_reason: 卖出原因描述（止损时使用）
+            trigger_type: 触发类型（止损时使用）
         """
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
@@ -846,20 +1004,16 @@ class BacktestEngine:
                 return
         
         # 可交易，直接卖出
-        self._sell_stock_direct(date, stock)
+        self._sell_stock_direct(date, stock, sell_type, sell_reason, trigger_type)
     
-    def _sell_stock(self, date: pd.Timestamp, stock: str) -> None:
-        """卖出股票（在 T+n 日以收盘价卖出）
-        
-        带交易状态检查的卖出方法。如果启用延迟订单功能，会检查股票是否可交易。
-        
-        Args:
-            date: 卖出日期（T+n）
-            stock: 股票代码
-        """
-        self._sell_stock_with_status_check(date, stock)
-    
-    def _sell_stock_direct(self, date: pd.Timestamp, stock: str) -> None:
+    def _sell_stock_direct(
+        self, 
+        date: pd.Timestamp, 
+        stock: str,
+        sell_type: str = 'holding_period',
+        sell_reason: Optional[str] = None,
+        trigger_type: Optional[str] = None
+    ) -> None:
         """直接卖出股票（不检查交易状态）
         
         现金流使用成交价格（trade_price）计算
@@ -868,6 +1022,9 @@ class BacktestEngine:
         Args:
             date: 卖出日期（T+n）
             stock: 股票代码
+            sell_type: 卖出类型，'holding_period' 或 'stop_loss'
+            sell_reason: 卖出原因描述（止损时使用）
+            trigger_type: 触发类型（止损时使用）
         """
         if stock not in self.positions or self.positions[stock]['shares'] == 0:
             return
@@ -918,8 +1075,12 @@ class BacktestEngine:
         del self.positions[stock]
         self.current_capital += sell_proceeds
         
-        # 记录交易（包含绩效收益信息）
-        self.trades.append({
+        # 如果是止损卖出，清理止损监控器中的持仓状态
+        if sell_type == 'stop_loss' and self.stop_loss_monitor:
+            self.stop_loss_monitor.remove_position(stock)
+        
+        # 记录交易（包含绩效收益信息和卖出类型）
+        trade_record = {
             'date': date,
             'stock': stock,
             'action': 'sell',
@@ -931,8 +1092,16 @@ class BacktestEngine:
             'buy_pnl_price': buy_pnl_price,  # 买入绩效价格
             'sell_pnl_price': sell_pnl_price,  # 卖出绩效价格
             'pnl_profit_amount': pnl_profit_amount,  # 绩效收益金额
-            'pnl_profit_pct': pnl_profit_pct  # 绩效收益率
-        })
+            'pnl_profit_pct': pnl_profit_pct,  # 绩效收益率
+            'sell_type': sell_type  # 新增：卖出类型
+        }
+        
+        # 如果是止损卖出，添加止损相关信息
+        if sell_type == 'stop_loss':
+            trade_record['sell_reason'] = sell_reason
+            trade_record['trigger_type'] = trigger_type
+        
+        self.trades.append(trade_record)
     
     def _calculate_portfolio_value(self, date: pd.Timestamp) -> float:
         """计算组合市值（基于成交价格）

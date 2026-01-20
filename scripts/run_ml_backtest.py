@@ -39,6 +39,7 @@ from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.signals import MLSignal
 from src.lazybull.universe import BasicUniverse
+from src.lazybull.risk.stop_loss import StopLossConfig, create_stop_loss_config_from_dict
 
 
 def load_backtest_data(
@@ -160,7 +161,8 @@ def run_ml_backtest(
     features_by_date: dict,
     initial_capital: float = 1000000.0,
     rebalance_freq: int = 5,
-    cost_model: CostModel = None
+    cost_model: CostModel = None,
+    stop_loss_config: StopLossConfig = None
 ) -> tuple:
     """运行 ML 信号回测
     
@@ -175,6 +177,7 @@ def run_ml_backtest(
         initial_capital: 初始资金
         rebalance_freq: 调仓频率（交易日数），必须为正整数
         cost_model: 成本模型
+        stop_loss_config: 止损配置（可选）
         
     Returns:
         (nav_curve, trades) 元组
@@ -189,6 +192,7 @@ def run_ml_backtest(
         initial_capital=initial_capital,
         cost_model=cost_model or CostModel(),
         rebalance_freq=rebalance_freq,
+        stop_loss_config=stop_loss_config,
     )
     
     # 运行回测
@@ -277,6 +281,38 @@ def main():
         help="最小上市天数，默认 60"
     )
     
+    # 止损参数
+    parser.add_argument(
+        "--stop-loss-enabled",
+        action="store_true",
+        default=False,
+        help="启用止损功能"
+    )
+    parser.add_argument(
+        "--stop-loss-drawdown-pct",
+        type=float,
+        default=20.0,
+        help="回撤止损阈值（百分比），默认 20.0"
+    )
+    parser.add_argument(
+        "--stop-loss-trailing-enabled",
+        action="store_true",
+        default=False,
+        help="启用移动止损"
+    )
+    parser.add_argument(
+        "--stop-loss-trailing-pct",
+        type=float,
+        default=15.0,
+        help="移动止损阈值（百分比），默认 15.0"
+    )
+    parser.add_argument(
+        "--stop-loss-consecutive-limit-down",
+        type=int,
+        default=2,
+        help="连续跌停止损天数，默认 2"
+    )
+    
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -305,11 +341,30 @@ def main():
     logger.info(f"模型版本: {args.model_version or '最新版本'}")
     logger.info(f"Top N: {args.top_n}")
     logger.info(f"权重方法: {args.weight_method}")
+    logger.info(f"止损功能: {'启用' if args.stop_loss_enabled else '禁用'}")
+    if args.stop_loss_enabled:
+        logger.info(f"  - 回撤止损: {args.stop_loss_drawdown_pct}%")
+        logger.info(f"  - 移动止损: {'启用' if args.stop_loss_trailing_enabled else '禁用'}")
+        if args.stop_loss_trailing_enabled:
+            logger.info(f"  - 移动止损阈值: {args.stop_loss_trailing_pct}%")
+        logger.info(f"  - 连续跌停止损: {args.stop_loss_consecutive_limit_down} 天")
     
     try:
         # 初始化组件
         storage = Storage(root_path=args.data_root)
         loader = DataLoader(storage)
+        
+        # 创建止损配置
+        stop_loss_config = None
+        if args.stop_loss_enabled:
+            stop_loss_config = StopLossConfig(
+                enabled=True,
+                drawdown_pct=args.stop_loss_drawdown_pct,
+                trailing_stop_enabled=args.stop_loss_trailing_enabled,
+                trailing_stop_pct=args.stop_loss_trailing_pct,
+                consecutive_limit_down_days=args.stop_loss_consecutive_limit_down,
+                post_trigger_action='hold_cash'
+            )
         
         # 1. 加载数据
         trade_cal, stock_basic, daily_data, features_by_date = load_backtest_data(
@@ -365,7 +420,8 @@ def main():
             price_data=price_data,
             features_by_date=features_by_date,
             initial_capital=args.initial_capital,
-            rebalance_freq=args.rebalance_freq
+            rebalance_freq=args.rebalance_freq,
+            stop_loss_config=stop_loss_config
         )
         
         # 7. 生成报告
