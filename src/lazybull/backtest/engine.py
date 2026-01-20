@@ -25,7 +25,8 @@ class BacktestEngine:
     交易规则：
     - T 日生成信号
     - T+1 日收盘价买入
-    - T+n 日收盘价卖出（n 为持有期，默认与调仓频率一致）
+    - T+n 日卖出（n 为持有期，默认与调仓频率一致）
+      - 卖出时机可配置：收盘价（默认）或开盘价
     """
     
     # 常量：每年交易日数量（用于年化波动率计算）
@@ -46,13 +47,14 @@ class BacktestEngine:
         enable_pending_order: bool = True,
         max_retry_count: int = 5,
         max_retry_days: int = 10,
-        stop_loss_config: Optional[StopLossConfig] = None
+        stop_loss_config: Optional[StopLossConfig] = None,
+        sell_timing: str = 'close'
     ):
         """初始化回测引擎
         
         价格口径说明：
-        - 成交价格（trade_price）：使用不复权 close，用于计算成交金额、持仓市值、可买入数量
-        - 绩效价格（pnl_price）：使用后复权 close_adj，用于计算收益率和绩效指标
+        - 成交价格（trade_price）：使用不复权 close/open，用于计算成交金额、持仓市值、可买入数量
+        - 绩效价格（pnl_price）：使用后复权 close_adj/open_adj，用于计算收益率和绩效指标
         
         Args:
             universe: 股票池
@@ -69,6 +71,7 @@ class BacktestEngine:
             max_retry_count: 延迟订单最大重试次数，默认5次
             max_retry_days: 延迟订单最大延迟天数，默认10天
             stop_loss_config: 止损配置，None 表示不启用止损功能（默认）
+            sell_timing: 卖出时机，'close' 表示 T+n 日收盘价卖出（默认），'open' 表示 T+n 日开盘价卖出
         """
         self.universe = universe
         self.signal = signal
@@ -81,7 +84,12 @@ class BacktestEngine:
         if rebalance_freq <= 0:
             raise ValueError(f"调仓频率必须为正整数，当前值: {rebalance_freq}")
         
+        # 验证卖出时机参数
+        if sell_timing not in ['close', 'open']:
+            raise ValueError(f"卖出时机参数必须为 'close' 或 'open'，当前值: {sell_timing}")
+        
         self.rebalance_freq = rebalance_freq
+        self.sell_timing = sell_timing
         self.verbose = verbose
         
         # 风险预算参数
@@ -122,6 +130,8 @@ class BacktestEngine:
         # 价格索引（在 run 时初始化）
         self.trade_price_index: Optional[pd.Series] = None  # 成交价格（不复权 close）
         self.pnl_price_index: Optional[pd.Series] = None  # 绩效价格（后复权 close_adj）
+        self.trade_price_open_index: Optional[pd.Series] = None  # 开盘成交价格（不复权 open）
+        self.pnl_price_open_index: Optional[pd.Series] = None  # 开盘绩效价格（后复权 open_adj）
         
         # 存储价格数据用于交易状态检查
         self.price_data_cache: Optional[pd.DataFrame] = None
@@ -129,13 +139,15 @@ class BacktestEngine:
         logger.info(
             f"回测引擎初始化完成: 初始资金={initial_capital}, "
             f"调仓频率={self.rebalance_freq}, 持有期={self.holding_period}天, "
+            f"卖出时机={self.sell_timing}, "
             f"风险预算={'启用' if enable_risk_budget else '禁用'}, "
             f"延迟订单={'启用' if enable_pending_order else '禁用'}, "
             f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
-        logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日收盘价卖出")
-        logger.info(f"价格口径: 成交使用不复权 close, 绩效使用后复权 close_adj")
+        sell_price_type = "开盘价" if self.sell_timing == 'open' else "收盘价"
+        logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日{sell_price_type}卖出")
+        logger.info(f"价格口径: 成交使用不复权 close/open, 绩效使用后复权 close_adj/open_adj")
 
     
     def run(
@@ -563,12 +575,14 @@ class BacktestEngine:
     def _prepare_price_index(self, price_data: pd.DataFrame) -> None:
         """准备价格索引（使用 MultiIndex，替代嵌套字典）
         
-        构建两套价格序列：
-        - trade_price_index: 成交价格（不复权 close）
-        - pnl_price_index: 绩效价格（后复权 close_adj）
+        构建四套价格序列：
+        - trade_price_index: 收盘成交价格（不复权 close）
+        - pnl_price_index: 收盘绩效价格（后复权 close_adj）
+        - trade_price_open_index: 开盘成交价格（不复权 open）
+        - pnl_price_open_index: 开盘绩效价格（后复权 open_adj）
         
         Args:
-            price_data: 价格数据，需包含 ts_code, trade_date, close, close_adj（可选）
+            price_data: 价格数据，需包含 ts_code, trade_date, close, open（可选），close_adj（可选），open_adj（可选）
         """
         logger.info("开始准备价格索引...")
         
@@ -582,25 +596,71 @@ class BacktestEngine:
             price_data = price_data.copy()
             price_data['trade_date'] = pd.to_datetime(price_data['trade_date'])
         
-        # 构建成交价格索引（不复权 close）
+        # 构建收盘成交价格索引（不复权 close）
         trade_price_df = price_data[['trade_date', 'ts_code', 'close']].copy()
         trade_price_df.set_index(['trade_date', 'ts_code'], inplace=True)
         self.trade_price_index = trade_price_df['close']
         
-        # 构建绩效价格索引（后复权 close_adj）
+        # 构建收盘绩效价格索引（后复权 close_adj）
         if 'close_adj' in price_data.columns:
             pnl_price_df = price_data[['trade_date', 'ts_code', 'close_adj']].copy()
             pnl_price_df.set_index(['trade_date', 'ts_code'], inplace=True)
             self.pnl_price_index = pnl_price_df['close_adj']
-            logger.info("价格索引构建完成: 成交价格=close, 绩效价格=close_adj")
+            logger.info("价格索引构建完成: 收盘成交价格=close, 收盘绩效价格=close_adj")
         else:
             # 如果缺少 close_adj，回退到 close
             logger.warning(f"价格数据缺少 'close_adj' 列，绩效价格将使用 'close' 列（不复权）")
             self.pnl_price_index = self.trade_price_index.copy()
-            logger.info("价格索引构建完成: 成交价格=close, 绩效价格=close（退化）")
+            logger.info("价格索引构建完成: 收盘成交价格=close, 收盘绩效价格=close（退化）")
+        
+        # 构建开盘成交价格索引（不复权 open）
+        if 'open' in price_data.columns:
+            # 过滤掉NaN值，只保留有效的开盘价
+            open_data = price_data[['trade_date', 'ts_code', 'open']].copy()
+            open_data = open_data[open_data['open'].notna()]
+            
+            if len(open_data) > 0:
+                open_data.set_index(['trade_date', 'ts_code'], inplace=True)
+                self.trade_price_open_index = open_data['open']
+                logger.info(f"开盘价格索引构建完成: 开盘成交价格=open, 共{len(open_data)}条记录")
+            else:
+                logger.warning(f"价格数据的 'open' 列全部为NaN，开盘价格将使用收盘价格代替")
+                self.trade_price_open_index = self.trade_price_index.copy()
+        else:
+            logger.warning(f"价格数据缺少 'open' 列，开盘价格将使用收盘价格代替")
+            self.trade_price_open_index = self.trade_price_index.copy()
+        
+        # 构建开盘绩效价格索引（后复权 open_adj）
+        if 'open_adj' in price_data.columns:
+            # 过滤掉NaN值，只保留有效的开盘绩效价格
+            open_adj_data = price_data[['trade_date', 'ts_code', 'open_adj']].copy()
+            open_adj_data = open_adj_data[open_adj_data['open_adj'].notna()]
+            
+            if len(open_adj_data) > 0:
+                open_adj_data.set_index(['trade_date', 'ts_code'], inplace=True)
+                self.pnl_price_open_index = open_adj_data['open_adj']
+                logger.info(f"开盘绩效价格索引构建完成: 开盘绩效价格=open_adj, 共{len(open_adj_data)}条记录")
+            else:
+                # 如果open_adj全部为NaN，尝试使用open
+                if 'open' in price_data.columns:
+                    logger.warning(f"价格数据的 'open_adj' 列全部为NaN，开盘绩效价格将使用 'open' 列（不复权）")
+                    self.pnl_price_open_index = self.trade_price_open_index.copy()
+                else:
+                    logger.warning(f"价格数据缺少 'open' 和 'open_adj' 列，开盘绩效价格将使用收盘绩效价格代替")
+                    self.pnl_price_open_index = self.pnl_price_index.copy()
+        else:
+            # 如果缺少 open_adj，回退到 open 或 close_adj
+            if 'open' in price_data.columns:
+                # 如果有 open 但没有 open_adj，使用 open
+                logger.warning(f"价格数据缺少 'open_adj' 列，开盘绩效价格将使用 'open' 列（不复权）")
+                self.pnl_price_open_index = self.trade_price_open_index.copy()
+            else:
+                # 如果连 open 都没有，使用 close_adj
+                logger.warning(f"价格数据缺少 'open_adj' 列，开盘绩效价格将使用收盘绩效价格代替")
+                self.pnl_price_open_index = self.pnl_price_index.copy()
     
     def _get_trade_price(self, date: pd.Timestamp, stock: str) -> Optional[float]:
-        """获取成交价格（不复权 close）
+        """获取收盘成交价格（不复权 close）
         
         Args:
             date: 日期
@@ -615,7 +675,7 @@ class BacktestEngine:
             return None
     
     def _get_pnl_price(self, date: pd.Timestamp, stock: str) -> Optional[float]:
-        """获取绩效价格（后复权 close_adj）
+        """获取收盘绩效价格（后复权 close_adj）
         
         Args:
             date: 日期
@@ -626,6 +686,40 @@ class BacktestEngine:
         """
         try:
             return self.pnl_price_index.loc[(date, stock)]
+        except KeyError:
+            return None
+    
+    def _get_trade_price_open(self, date: pd.Timestamp, stock: str) -> Optional[float]:
+        """获取开盘成交价格（不复权 open）
+        
+        如果开盘价格不存在，返回 None。调用者应处理降级策略（如使用收盘价）。
+        
+        Args:
+            date: 日期
+            stock: 股票代码
+            
+        Returns:
+            开盘成交价格，如果不存在则返回 None
+        """
+        try:
+            return self.trade_price_open_index.loc[(date, stock)]
+        except KeyError:
+            return None
+    
+    def _get_pnl_price_open(self, date: pd.Timestamp, stock: str) -> Optional[float]:
+        """获取开盘绩效价格（后复权 open_adj）
+        
+        如果开盘绩效价格不存在，返回 None。调用者应处理降级策略（如使用收盘绩效价格）。
+        
+        Args:
+            date: 日期
+            stock: 股票代码
+            
+        Returns:
+            开盘绩效价格，如果不存在则返回 None
+        """
+        try:
+            return self.pnl_price_open_index.loc[(date, stock)]
         except KeyError:
             return None
     
@@ -1021,6 +1115,10 @@ class BacktestEngine:
         现金流使用成交价格（trade_price）计算
         收益率使用绩效价格（pnl_price）计算
         
+        根据 sell_timing 参数选择使用开盘价或收盘价：
+        - sell_timing='close': 使用收盘价（默认）
+        - sell_timing='open': 使用开盘价，如果开盘价不存在则降级到收盘价
+        
         Args:
             date: 卖出日期（T+n）
             stock: 股票代码
@@ -1031,17 +1129,41 @@ class BacktestEngine:
         if stock not in self.positions or self.positions[stock]['shares'] == 0:
             return
         
-        # 获取成交价格（不复权 close）
-        sell_trade_price = self._get_trade_price(date, stock)
-        if sell_trade_price is None:
-            logger.warning(f"无法获取 {stock} 在 {date.date()} 的成交价格，跳过卖出")
-            return
-        
-        # 获取绩效价格（后复权 close_adj）
-        sell_pnl_price = self._get_pnl_price(date, stock)
-        if sell_pnl_price is None:
-            logger.warning(f"无法获取 {stock} 在 {date.date()} 的绩效价格，使用成交价格代替")
-            sell_pnl_price = sell_trade_price
+        # 根据 sell_timing 参数选择价格
+        if self.sell_timing == 'open':
+            # 尝试使用开盘价
+            sell_trade_price = self._get_trade_price_open(date, stock)
+            sell_pnl_price = self._get_pnl_price_open(date, stock)
+            
+            # 降级策略：如果开盘价不存在，使用收盘价
+            if sell_trade_price is None:
+                if self.verbose:
+                    logger.warning(
+                        f"股票 {stock} 在 {date.date()} 缺少开盘成交价格，"
+                        f"降级使用收盘价卖出"
+                    )
+                sell_trade_price = self._get_trade_price(date, stock)
+                if sell_trade_price is None:
+                    logger.warning(f"无法获取 {stock} 在 {date.date()} 的成交价格（开盘/收盘），跳过卖出")
+                    return
+            
+            if sell_pnl_price is None:
+                # 开盘绩效价格不存在，尝试降级到收盘绩效价格
+                sell_pnl_price = self._get_pnl_price(date, stock)
+                if sell_pnl_price is None:
+                    logger.warning(f"无法获取 {stock} 在 {date.date()} 的绩效价格，使用成交价格代替")
+                    sell_pnl_price = sell_trade_price
+        else:
+            # 使用收盘价（默认）
+            sell_trade_price = self._get_trade_price(date, stock)
+            if sell_trade_price is None:
+                logger.warning(f"无法获取 {stock} 在 {date.date()} 的成交价格，跳过卖出")
+                return
+            
+            sell_pnl_price = self._get_pnl_price(date, stock)
+            if sell_pnl_price is None:
+                logger.warning(f"无法获取 {stock} 在 {date.date()} 的绩效价格，使用成交价格代替")
+                sell_pnl_price = sell_trade_price
         
         # 获取持仓信息
         shares = self.positions[stock]['shares']
@@ -1095,7 +1217,8 @@ class BacktestEngine:
             'sell_pnl_price': sell_pnl_price,  # 卖出绩效价格
             'pnl_profit_amount': pnl_profit_amount,  # 绩效收益金额
             'pnl_profit_pct': pnl_profit_pct,  # 绩效收益率
-            'sell_type': sell_type  # 新增：卖出类型
+            'sell_type': sell_type,  # 卖出类型
+            'sell_timing': self.sell_timing  # 新增：卖出时机（open/close）
         }
         
         # 如果是止损卖出，添加止损相关信息

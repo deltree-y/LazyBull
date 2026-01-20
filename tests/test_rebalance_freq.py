@@ -172,7 +172,7 @@ def test_rebalance_freq_invalid_type():
         engine = BacktestEngine(
             universe=universe,
             signal=signal,
-            rebalance_freq="M",
+            rebalance_freq=20,
             verbose=False
         )
     
@@ -180,7 +180,7 @@ def test_rebalance_freq_invalid_type():
         engine = BacktestEngine(
             universe=universe,
             signal=signal,
-            rebalance_freq="W",
+            rebalance_freq=5,
             verbose=False
         )
 
