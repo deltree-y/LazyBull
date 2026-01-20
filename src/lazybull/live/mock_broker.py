@@ -271,7 +271,11 @@ class MockBroker:
         return order
     
     def _save_state(self):
-        """保存当前状态到持久化"""
+        """保存当前状态到持久化
+        
+        注意：total_value 使用成本价估算，不代表真实市值。
+        实际市值需要用当前市场价格计算。
+        """
         total_value = self.cash
         for symbol, pos in self.positions.items():
             # 注意：这里只是简单保存成本价，实际市值需要用当前价格计算
@@ -287,7 +291,11 @@ class MockBroker:
             账户信息字典，包含：
             - cash: 可用现金
             - positions: 持仓列表
-            - total_value: 账户总值（基于成本价估算）
+            - total_value: 账户总值（基于成本价估算，非实际市值）
+        
+        注意：
+            total_value 使用成本价计算，不代表真实市值。
+            真实市值需要使用当前市场价格计算。
         """
         total_value = self.cash
         for symbol, pos in self.positions.items():

@@ -201,10 +201,11 @@ def cmd_execute(args):
         logger.warning("没有待执行的信号")
         return 1
     
-    # 找到最早的未执行信号
-    # 理论上应该按照trade_date匹配，这里简化为取第一个
+    # 按trade_date排序并找到最早的未执行信号
+    # 理论上应该按照trade_date匹配，这里简化为取最早的一个
+    pending_list = sorted(pending_list, key=lambda x: x['trade_date'])
     if len(pending_list) > 1:
-        logger.warning(f"有 {len(pending_list)} 个待执行信号，将执行最早的一个")
+        logger.warning(f"有 {len(pending_list)} 个待执行信号，将执行最早的一个（{pending_list[0]['trade_date']}）")
     
     pending = pending_list[0]
     trade_date = pending['trade_date']
@@ -259,9 +260,13 @@ def cmd_execute(args):
         target_value = available_cash * weight
         
         # 计算买入数量（向下取整）
-        # 考虑佣金和滑点的粗略估算
-        cost_factor = 1 + args.commission_rate + args.slippage
-        qty = int(target_value / (price * cost_factor))
+        # 注意：这里使用简化估算，实际成交量可能略有不同
+        # 实际逻辑：broker会在price基础上加滑点，再加佣金
+        # 为了更准确，使用与MockBroker一致的计算方法
+        exec_price = price * (1 + args.slippage)  # 买入价格向上滑动
+        # 估算每股总成本（含佣金）
+        estimated_commission_rate = args.commission_rate
+        qty = int(target_value / (exec_price * (1 + estimated_commission_rate)))
         
         if qty <= 0:
             logger.warning(f"{symbol}: 资金不足，无法买入")
