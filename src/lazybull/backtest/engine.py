@@ -622,7 +622,7 @@ class BacktestEngine:
             if len(open_data) > 0:
                 open_data.set_index(['trade_date', 'ts_code'], inplace=True)
                 self.trade_price_open_index = open_data['open']
-                logger.info("开盘价格索引构建完成: 开盘成交价格=open")
+                logger.info(f"开盘价格索引构建完成: 开盘成交价格=open, 共{len(open_data)}条记录")
             else:
                 logger.warning(f"价格数据的 'open' 列全部为NaN，开盘价格将使用收盘价格代替")
                 self.trade_price_open_index = self.trade_price_index.copy()
@@ -639,7 +639,7 @@ class BacktestEngine:
             if len(open_adj_data) > 0:
                 open_adj_data.set_index(['trade_date', 'ts_code'], inplace=True)
                 self.pnl_price_open_index = open_adj_data['open_adj']
-                logger.info("开盘绩效价格索引构建完成: 开盘绩效价格=open_adj")
+                logger.info(f"开盘绩效价格索引构建完成: 开盘绩效价格=open_adj, 共{len(open_adj_data)}条记录")
             else:
                 # 如果open_adj全部为NaN，尝试使用open
                 if 'open' in price_data.columns:

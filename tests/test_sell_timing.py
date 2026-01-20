@@ -41,7 +41,8 @@ class MockSignal(Signal):
 @pytest.fixture
 def mock_price_data_with_open():
     """模拟包含开盘价的价格数据"""
-    dates = pd.date_range('2023-01-01', periods=10, freq='B')
+    # 使用确定的工作日作为起始日期
+    dates = pd.date_range('2023-01-02', periods=10, freq='B')  # 2023-01-02是星期一
     stocks = ['000001.SZ', '000002.SZ']
     
     data = []
@@ -66,7 +67,8 @@ def mock_price_data_with_open():
 @pytest.fixture
 def mock_price_data_missing_open():
     """模拟缺少部分开盘价的价格数据（测试降级策略）"""
-    dates = pd.date_range('2023-01-01', periods=10, freq='B')
+    # 使用确定的工作日作为起始日期
+    dates = pd.date_range('2023-01-02', periods=10, freq='B')  # 2023-01-02是星期一
     stocks = ['000001.SZ', '000002.SZ']
     
     data = []
@@ -99,7 +101,8 @@ def mock_price_data_missing_open():
 @pytest.fixture
 def mock_trading_dates():
     """模拟交易日列表"""
-    dates = pd.date_range('2023-01-01', periods=10, freq='B')
+    # 使用确定的工作日作为起始日期
+    dates = pd.date_range('2023-01-02', periods=10, freq='B')  # 2023-01-02是星期一
     return [pd.Timestamp(d) for d in dates]
 
 
