@@ -615,23 +615,42 @@ class BacktestEngine:
         
         # 构建开盘成交价格索引（不复权 open）
         if 'open' in price_data.columns:
-            trade_price_open_df = price_data[['trade_date', 'ts_code', 'open']].copy()
-            trade_price_open_df.set_index(['trade_date', 'ts_code'], inplace=True)
-            self.trade_price_open_index = trade_price_open_df['open']
-            logger.info("开盘价格索引构建完成: 开盘成交价格=open")
+            # 过滤掉NaN值，只保留有效的开盘价
+            open_data = price_data[['trade_date', 'ts_code', 'open']].copy()
+            open_data = open_data[open_data['open'].notna()]
+            
+            if len(open_data) > 0:
+                open_data.set_index(['trade_date', 'ts_code'], inplace=True)
+                self.trade_price_open_index = open_data['open']
+                logger.info("开盘价格索引构建完成: 开盘成交价格=open")
+            else:
+                logger.warning(f"价格数据的 'open' 列全部为NaN，开盘价格将使用收盘价格代替")
+                self.trade_price_open_index = self.trade_price_index.copy()
         else:
             logger.warning(f"价格数据缺少 'open' 列，开盘价格将使用收盘价格代替")
             self.trade_price_open_index = self.trade_price_index.copy()
         
         # 构建开盘绩效价格索引（后复权 open_adj）
         if 'open_adj' in price_data.columns:
-            pnl_price_open_df = price_data[['trade_date', 'ts_code', 'open_adj']].copy()
-            pnl_price_open_df.set_index(['trade_date', 'ts_code'], inplace=True)
-            self.pnl_price_open_index = pnl_price_open_df['open_adj']
-            logger.info("开盘绩效价格索引构建完成: 开盘绩效价格=open_adj")
+            # 过滤掉NaN值，只保留有效的开盘绩效价格
+            open_adj_data = price_data[['trade_date', 'ts_code', 'open_adj']].copy()
+            open_adj_data = open_adj_data[open_adj_data['open_adj'].notna()]
+            
+            if len(open_adj_data) > 0:
+                open_adj_data.set_index(['trade_date', 'ts_code'], inplace=True)
+                self.pnl_price_open_index = open_adj_data['open_adj']
+                logger.info("开盘绩效价格索引构建完成: 开盘绩效价格=open_adj")
+            else:
+                # 如果open_adj全部为NaN，尝试使用open
+                if 'open' in price_data.columns:
+                    logger.warning(f"价格数据的 'open_adj' 列全部为NaN，开盘绩效价格将使用 'open' 列（不复权）")
+                    self.pnl_price_open_index = self.trade_price_open_index.copy()
+                else:
+                    logger.warning(f"价格数据缺少 'open' 和 'open_adj' 列，开盘绩效价格将使用收盘绩效价格代替")
+                    self.pnl_price_open_index = self.pnl_price_index.copy()
         else:
             # 如果缺少 open_adj，回退到 open 或 close_adj
-            if 'open' in price_data.columns and self.pnl_price_index is not None:
+            if 'open' in price_data.columns:
                 # 如果有 open 但没有 open_adj，使用 open
                 logger.warning(f"价格数据缺少 'open_adj' 列，开盘绩效价格将使用 'open' 列（不复权）")
                 self.pnl_price_open_index = self.trade_price_open_index.copy()
