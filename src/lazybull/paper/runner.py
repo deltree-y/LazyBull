@@ -26,7 +26,8 @@ class PaperTradingRunner:
         signal: Optional[Signal] = None,
         initial_capital: float = 500000.0,
         data_root: str = "./data",
-        paper_root: str = "./data/paper"
+        paper_root: str = "./data/paper",
+        weight_method: str = "equal"
     ):
         """初始化运行器
         
@@ -35,6 +36,7 @@ class PaperTradingRunner:
             initial_capital: 初始资金
             data_root: 数据根目录
             paper_root: 纸面交易数据目录
+            weight_method: 权重分配方法，"equal"表示等权，"score"表示按分数加权
         """
         # 初始化存储
         self.storage = Storage(data_root)
@@ -46,6 +48,7 @@ class PaperTradingRunner:
         
         # 初始化信号生成器
         self.signal = signal
+        self.weight_method = weight_method
         
         # 初始化数据加载器
         self.loader = DataLoader(self.storage)
@@ -135,15 +138,15 @@ class PaperTradingRunner:
         
         # 2. 加载价格数据
         logger.info("步骤2: 加载价格数据")
-        prices = self._load_prices(trade_date, buy_price_type, sell_price_type)
+        buy_prices, sell_prices = self._load_prices(trade_date, buy_price_type, sell_price_type)
         
-        if not prices:
+        if not buy_prices and not sell_prices:
             logger.error("无法加载价格数据")
             return
         
         # 3. 生成订单
         logger.info("步骤3: 生成订单")
-        orders = self.broker.generate_orders(targets, prices, trade_date)
+        orders = self.broker.generate_orders(targets, buy_prices, sell_prices, trade_date)
         
         if not orders:
             logger.warning("未生成任何订单")
@@ -164,34 +167,113 @@ class PaperTradingRunner:
         
         # 6. 记录净值
         logger.info("步骤6: 记录净值")
-        self._record_nav(trade_date, prices)
+        # 使用收盘价计算净值
+        all_prices = {**sell_prices, **buy_prices}  # 合并价格字典
+        self._record_nav(trade_date, all_prices)
         
         logger.info("=" * 80)
         logger.info(f"T1工作流完成 - {trade_date}")
         logger.info("=" * 80)
     
     def _download_data(self, trade_date: str) -> None:
-        """下载数据
+        """下载并构建数据（复用仓库既有能力）
         
         Args:
             trade_date: 交易日期 YYYYMMDD
         """
         try:
-            # 下载日线数据
-            if not self.storage.is_data_exists("clean", "daily", trade_date):
-                logger.info(f"下载日线数据: {trade_date}")
-                daily_data = self.client.get_daily(trade_date=trade_date)
-                adj_factor = self.client.get_adj_factor(trade_date=trade_date)
-                
-                # 简单清洗并保存
-                if not daily_data.empty:
-                    from ..data.cleaner import DataCleaner
-                    cleaner = DataCleaner()
-                    daily_clean = cleaner.clean_daily(daily_data, adj_factor)
-                    self.storage.save_clean_by_date(daily_clean, "daily", trade_date)
-                    logger.info(f"已保存clean数据: {len(daily_clean)} 条")
-            else:
+            # 检查clean数据是否已存在
+            if self.storage.is_data_exists("clean", "daily", trade_date):
                 logger.info(f"数据已存在，跳过下载: {trade_date}")
+                return
+            
+            # 1. 下载raw数据（复用TushareClient）
+            logger.info(f"下载raw数据: {trade_date}")
+            
+            # 下载日线行情
+            if not self.storage.is_data_exists("raw", "daily", trade_date):
+                daily_data = self.client.get_daily(trade_date=trade_date)
+                if not daily_data.empty:
+                    self.storage.save_raw_by_date(daily_data, "daily", trade_date)
+                    logger.info(f"  日线: 已保存 {len(daily_data)} 条记录")
+            
+            # 下载复权因子
+            if not self.storage.is_data_exists("raw", "adj_factor", trade_date):
+                adj_factor = self.client.get_adj_factor(trade_date=trade_date)
+                if not adj_factor.empty:
+                    self.storage.save_raw_by_date(adj_factor, "adj_factor", trade_date)
+                    logger.info(f"  复权因子: 已保存 {len(adj_factor)} 条记录")
+            
+            # 下载停复牌信息
+            if not self.storage.is_data_exists("raw", "suspend", trade_date):
+                suspend = self.client.get_suspend_d(trade_date=trade_date)
+                if not suspend.empty:
+                    self.storage.save_raw_by_date(suspend, "suspend", trade_date)
+                    logger.info(f"  停复牌: 已保存 {len(suspend)} 条记录")
+            
+            # 下载涨跌停信息
+            if not self.storage.is_data_exists("raw", "stk_limit", trade_date):
+                limit_up_down = self.client.get_stk_limit(trade_date=trade_date)
+                if not limit_up_down.empty:
+                    self.storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
+                    logger.info(f"  涨跌停: 已保存 {len(limit_up_down)} 条记录")
+            
+            # 2. 构建clean数据（复用DataCleaner）
+            logger.info(f"构建clean数据: {trade_date}")
+            from ..data.cleaner import DataCleaner
+            cleaner = DataCleaner()
+            
+            # 加载raw数据
+            daily_raw = self.storage.load_raw_by_date("daily", trade_date)
+            adj_factor_raw = self.storage.load_raw_by_date("adj_factor", trade_date)
+            
+            if daily_raw is None or daily_raw.empty:
+                logger.warning(f"未找到raw层daily数据，跳过clean构建")
+                return
+            
+            # 处理缺失的复权因子
+            if adj_factor_raw is None or adj_factor_raw.empty:
+                logger.warning(f"未找到复权因子，使用默认值1.0")
+                adj_factor_raw = daily_raw[['ts_code', 'trade_date']].copy()
+                adj_factor_raw['adj_factor'] = 1.0
+            
+            # 清洗日线数据
+            daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
+            
+            # 添加可交易标记
+            stock_basic = self.loader.load_clean_stock_basic()
+            if stock_basic is None:
+                # 如果没有stock_basic，尝试从raw加载并清洗
+                stock_basic_raw = self.storage.load_raw("stock_basic")
+                if stock_basic_raw is not None:
+                    stock_basic = cleaner.clean_stock_basic(stock_basic_raw)
+                    self.storage.save_clean(stock_basic, "stock_basic", is_force=True)
+            
+            if stock_basic is not None:
+                suspend_raw = self.storage.load_raw_by_date("suspend", trade_date)
+                limit_raw = self.storage.load_raw_by_date("stk_limit", trade_date)
+                
+                suspend_clean = None
+                limit_clean = None
+                
+                if suspend_raw is not None and len(suspend_raw) > 0:
+                    suspend_clean = cleaner.clean_suspend_info(suspend_raw)
+                
+                if limit_raw is not None and len(limit_raw) > 0:
+                    limit_clean = cleaner.clean_limit_info(limit_raw)
+                
+                daily_clean = cleaner.add_tradable_universe_flag(
+                    daily_clean,
+                    stock_basic,
+                    suspend_info_df=suspend_clean,
+                    limit_info_df=limit_clean,
+                    min_list_days=60
+                )
+            
+            # 保存clean数据
+            self.storage.save_clean_by_date(daily_clean, "daily", trade_date)
+            logger.info(f"已保存clean数据: {len(daily_clean)} 条")
+            
         except Exception as e:
             logger.error(f"下载数据失败: {e}")
             raise
@@ -243,7 +325,11 @@ class PaperTradingRunner:
         if self.signal is None:
             # 使用默认的ML信号
             if model_version is not None:
-                self.signal = MLSignal(top_n=top_n, model_version=model_version)
+                self.signal = MLSignal(
+                    top_n=top_n, 
+                    model_version=model_version,
+                    weight_method=self.weight_method
+                )
             else:
                 logger.warning("未指定信号生成器，使用等权")
                 from ..signals.base import EqualWeightSignal
@@ -308,39 +394,71 @@ class PaperTradingRunner:
         trade_date: str,
         buy_price_type: str,
         sell_price_type: str
-    ) -> Dict[str, float]:
-        """加载价格数据
+    ) -> tuple[Dict[str, float], Dict[str, float]]:
+        """加载价格数据（分开盘/收盘）
         
         Args:
             trade_date: 交易日期 YYYYMMDD
-            buy_price_type: 买入价格类型
-            sell_price_type: 卖出价格类型
+            buy_price_type: 买入价格类型 open/close
+            sell_price_type: 卖出价格类型 open/close
             
         Returns:
-            {ts_code: price} 价格字典
+            (buy_prices, sell_prices) 价格字典元组
+            buy_prices: {ts_code: price} 买入价格字典
+            sell_prices: {ts_code: price} 卖出价格字典
         """
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {trade_date} 的日线数据")
-            return {}
+            return {}, {}
         
-        # 注意：当前实现简化处理，买卖使用相同价格
-        # 实际应用中，可以分别处理买入和卖出价格
-        # 由于卖出价格固定为 close，这里统一使用 close
-        # 如需支持不同买卖价格，需要在 broker 中分别处理
-        price_col = 'close'  # 统一使用收盘价
-        if buy_price_type == 'open' and sell_price_type == 'close':
-            # 如果买入用开盘价，这里也需要提供开盘价
-            # 但由于 broker 需要统一的价格字典，暂时统一使用收盘价
-            # TODO: 优化 broker 接口以支持分别指定买卖价格
-            logger.warning("当前实现买卖使用相同价格，均为收盘价")
+        buy_prices = {}
+        sell_prices = {}
         
-        prices = {}
+        # 处理买入价格
+        buy_col = buy_price_type  # 'open' 或 'close'
+        if buy_col not in daily_data.columns:
+            logger.warning(f"买入价格列 {buy_col} 不存在，降级到 close")
+            buy_col = 'close'
+        
+        # 处理卖出价格
+        sell_col = sell_price_type  # 'open' 或 'close'
+        if sell_col not in daily_data.columns:
+            logger.warning(f"卖出价格列 {sell_col} 不存在，降级到 close")
+            sell_col = 'close'
+        
+        # 填充价格字典
         for _, row in daily_data.iterrows():
-            prices[row['ts_code']] = row[price_col]
+            ts_code = row['ts_code']
+            
+            # 买入价格（如果缺失，尝试降级）
+            buy_price = row.get(buy_col)
+            if pd.isna(buy_price) or buy_price <= 0:
+                # open缺失，降级到close
+                if buy_col == 'open' and 'close' in row:
+                    buy_price = row['close']
+                    if not pd.isna(buy_price) and buy_price > 0:
+                        logger.debug(f"{ts_code} open价格缺失，使用close={buy_price}")
+            
+            if not pd.isna(buy_price) and buy_price > 0:
+                buy_prices[ts_code] = buy_price
+            
+            # 卖出价格（如果缺失，尝试降级）
+            sell_price = row.get(sell_col)
+            if pd.isna(sell_price) or sell_price <= 0:
+                # open缺失，降级到close
+                if sell_col == 'open' and 'close' in row:
+                    sell_price = row['close']
+                    if not pd.isna(sell_price) and sell_price > 0:
+                        logger.debug(f"{ts_code} open价格缺失，使用close={sell_price}")
+            
+            if not pd.isna(sell_price) and sell_price > 0:
+                sell_prices[ts_code] = sell_price
         
-        logger.info(f"加载价格数据: {len(prices)} 只股票")
-        return prices
+        logger.info(f"加载价格数据: 买入({buy_price_type})={len(buy_prices)}只, "
+                   f"卖出({sell_price_type})={len(sell_prices)}只")
+        
+        return buy_prices, sell_prices
     
     def _record_nav(self, trade_date: str, prices: Dict[str, float]) -> None:
         """记录净值

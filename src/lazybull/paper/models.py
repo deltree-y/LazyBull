@@ -21,6 +21,25 @@ class Position:
     buy_price: float  # 买入价格
     buy_cost: float  # 买入成本（含手续费）
     buy_date: str  # 买入日期 YYYYMMDD
+    status: str = "持有"  # 持仓状态：持有、延迟卖出等
+    notes: str = ""  # 备注信息
+    
+    def get_holding_days(self, current_date: str) -> int:
+        """计算持有天数（自然日）
+        
+        Args:
+            current_date: 当前日期 YYYYMMDD
+            
+        Returns:
+            持有天数
+        """
+        try:
+            import pandas as pd
+            buy_dt = pd.to_datetime(self.buy_date, format='%Y%m%d')
+            current_dt = pd.to_datetime(current_date, format='%Y%m%d')
+            return (current_dt - buy_dt).days
+        except Exception:
+            return 0
 
 
 @dataclass

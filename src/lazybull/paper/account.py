@@ -111,7 +111,9 @@ class PaperAccount:
         shares: int,
         buy_price: float,
         buy_cost: float,
-        buy_date: str
+        buy_date: str,
+        status: str = "持有",
+        notes: str = ""
     ) -> None:
         """增加持仓
         
@@ -121,6 +123,8 @@ class PaperAccount:
             buy_price: 买入价格
             buy_cost: 买入成本
             buy_date: 买入日期 YYYYMMDD
+            status: 持仓状态
+            notes: 备注信息
         """
         if ts_code in self.state.positions:
             # 已有持仓，累加
@@ -134,7 +138,9 @@ class PaperAccount:
                 shares=total_shares,
                 buy_price=avg_price,
                 buy_cost=total_cost,
-                buy_date=buy_date  # 更新为最新买入日期
+                buy_date=buy_date,  # 更新为最新买入日期
+                status=status,
+                notes=notes
             )
             logger.debug(f"累加持仓 {ts_code}: {shares} 股，总持仓: {total_shares} 股")
         else:
@@ -144,7 +150,9 @@ class PaperAccount:
                 shares=shares,
                 buy_price=buy_price,
                 buy_cost=buy_cost,
-                buy_date=buy_date
+                buy_date=buy_date,
+                status=status,
+                notes=notes
             )
             logger.debug(f"新建持仓 {ts_code}: {shares} 股")
     
@@ -179,7 +187,9 @@ class PaperAccount:
                 shares=remaining_shares,
                 buy_price=pos.buy_price,
                 buy_cost=remaining_cost,
-                buy_date=pos.buy_date
+                buy_date=pos.buy_date,
+                status=pos.status,
+                notes=pos.notes
             )
             logger.debug(f"减少持仓 {ts_code}: {shares} 股，剩余: {remaining_shares} 股")
             return self.state.positions[ts_code]

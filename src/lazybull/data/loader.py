@@ -310,3 +310,27 @@ class DataLoader:
         """
         df = self.storage.load_clean("stock_basic")
         return df
+    
+    def load_clean_daily_by_date(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """加载指定日期的清洗后日线数据
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            
+        Returns:
+            日线数据DataFrame
+        """
+        # 转换日期格式 YYYYMMDD -> YYYY-MM-DD
+        if len(trade_date) == 8:
+            date_str = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
+        else:
+            date_str = trade_date
+        
+        df = self.storage.load_clean_by_date("daily", date_str)
+        
+        if df is not None and 'trade_date' in df.columns:
+            # 确保日期格式一致（YYYYMMDD字符串）
+            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+        
+        return df

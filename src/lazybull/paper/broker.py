@@ -37,16 +37,18 @@ class PaperBroker:
     def generate_orders(
         self,
         targets: List[TargetWeight],
-        prices: Dict[str, float],
+        buy_prices: Dict[str, float],
+        sell_prices: Dict[str, float],
         trade_date: str
     ) -> List[Order]:
-        """生成订单
+        """生成订单（含可交易性检查）
         
-        从当前持仓和目标权重生成买卖订单
+        从当前持仓和目标权重生成买卖订单，并检查涨跌停、停牌等可交易性
         
         Args:
             targets: 目标权重列表
-            prices: {ts_code: price} 价格字典
+            buy_prices: {ts_code: price} 买入价格字典
+            sell_prices: {ts_code: price} 卖出价格字典
             trade_date: 交易日期 YYYYMMDD
             
         Returns:
@@ -54,8 +56,12 @@ class PaperBroker:
         """
         orders = []
         
-        # 计算总资产
-        total_value = self.account.get_total_value(prices)
+        # 加载当日可交易性信息
+        tradability = self._load_tradability_info(trade_date)
+        
+        # 使用卖出价格计算总资产（因为卖出在前）
+        all_prices = {**buy_prices, **sell_prices}  # 卖出价格优先（后者覆盖前者）
+        total_value = self.account.get_total_value(all_prices)
         if total_value <= 0:
             logger.warning("总资产为0，无法生成订单")
             return orders
@@ -71,21 +77,28 @@ class PaperBroker:
         
         # 1. 卖出订单：当前持有但不在目标中，或目标权重降低
         for ts_code in current_stocks:
-            current_weight = self.account.get_position_weight(ts_code, prices)
+            current_weight = self.account.get_position_weight(ts_code, all_prices)
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
             
             if target_weight < current_weight:
                 # 需要卖出
                 pos = self.account.get_position(ts_code)
-                if ts_code not in prices:
-                    logger.warning(f"股票 {ts_code} 无价格数据，跳过卖出")
+                if ts_code not in sell_prices:
+                    logger.warning(f"股票 {ts_code} 无卖出价格数据，跳过卖出")
+                    continue
+                
+                # 检查可交易性
+                can_sell, sell_reason = self._check_can_sell(ts_code, tradability)
+                if not can_sell:
+                    logger.warning(f"股票 {ts_code} 不可卖出: {sell_reason}，订单延迟")
+                    # 跌停或停牌，订单延迟
                     continue
                 
                 # 计算需要卖出的股数
                 target_value = total_value * target_weight
-                current_value = pos.shares * prices[ts_code]
+                current_value = pos.shares * sell_prices[ts_code]
                 sell_value = current_value - target_value
-                sell_shares = int(sell_value / prices[ts_code])
+                sell_shares = int(sell_value / sell_prices[ts_code])
                 
                 # 确保不超过持仓
                 sell_shares = min(sell_shares, pos.shares)
@@ -95,7 +108,7 @@ class PaperBroker:
                         ts_code=ts_code,
                         action='sell',
                         shares=sell_shares,
-                        price=prices[ts_code],
+                        price=sell_prices[ts_code],
                         target_weight=target_weight,
                         current_weight=current_weight,
                         reason=reason if target_weight == 0 else "减仓"
@@ -104,12 +117,19 @@ class PaperBroker:
         # 2. 买入订单：目标持有但当前没有，或目标权重增加
         for ts_code in target_stocks:
             target_weight, reason = target_weights[ts_code]
-            current_weight = self.account.get_position_weight(ts_code, prices)
+            current_weight = self.account.get_position_weight(ts_code, all_prices)
             
             if target_weight > current_weight:
                 # 需要买入
-                if ts_code not in prices:
-                    logger.warning(f"股票 {ts_code} 无价格数据，跳过买入")
+                if ts_code not in buy_prices:
+                    logger.warning(f"股票 {ts_code} 无买入价格数据，跳过买入")
+                    continue
+                
+                # 检查可交易性
+                can_buy, buy_reason = self._check_can_buy(ts_code, tradability)
+                if not can_buy:
+                    logger.warning(f"股票 {ts_code} 不可买入: {buy_reason}，跳过订单")
+                    # 涨停、停牌或其他不可交易，跳过
                     continue
                 
                 # 计算需要买入的金额
@@ -129,14 +149,14 @@ class PaperBroker:
                         continue
                 
                 # 计算股数（向下取整到100的倍数）
-                buy_shares = int(buy_value / prices[ts_code] / 100) * 100
+                buy_shares = int(buy_value / buy_prices[ts_code] / 100) * 100
                 
                 if buy_shares > 0:
                     orders.append(Order(
                         ts_code=ts_code,
                         action='buy',
                         shares=buy_shares,
-                        price=prices[ts_code],
+                        price=buy_prices[ts_code],
                         target_weight=target_weight,
                         current_weight=current_weight,
                         reason=reason if current_weight == 0 else "加仓"
@@ -146,6 +166,89 @@ class PaperBroker:
                    f"{len([o for o in orders if o.action == 'sell'])} 卖")
         
         return orders
+    
+    def _load_tradability_info(self, trade_date: str) -> Dict[str, Dict]:
+        """加载可交易性信息
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            
+        Returns:
+            {ts_code: {is_suspended, is_limit_up, is_limit_down, tradable}}
+        """
+        from ..data import DataLoader, Storage
+        
+        storage = Storage()
+        loader = DataLoader(storage)
+        
+        daily_data = loader.load_clean_daily_by_date(trade_date)
+        
+        tradability = {}
+        if daily_data is not None and not daily_data.empty:
+            for _, row in daily_data.iterrows():
+                ts_code = row['ts_code']
+                tradability[ts_code] = {
+                    'is_suspended': row.get('is_suspended', 0),
+                    'is_limit_up': row.get('is_limit_up', 0),
+                    'is_limit_down': row.get('is_limit_down', 0),
+                    'tradable': row.get('tradable', 1)
+                }
+        
+        return tradability
+    
+    def _check_can_buy(self, ts_code: str, tradability: Dict) -> tuple[bool, str]:
+        """检查是否可以买入
+        
+        Args:
+            ts_code: 股票代码
+            tradability: 可交易性信息字典
+            
+        Returns:
+            (can_buy, reason) 是否可买入及原因
+        """
+        if ts_code not in tradability:
+            return True, "无可交易性数据"
+        
+        info = tradability[ts_code]
+        
+        # 停牌检查
+        if info.get('is_suspended', 0) == 1:
+            return False, "停牌"
+        
+        # 涨停检查（涨停不可买入）
+        if info.get('is_limit_up', 0) == 1:
+            return False, "涨停"
+        
+        # 基本可交易性检查
+        if info.get('tradable', 1) == 0:
+            return False, "不可交易（ST/上市不足等）"
+        
+        return True, "可买入"
+    
+    def _check_can_sell(self, ts_code: str, tradability: Dict) -> tuple[bool, str]:
+        """检查是否可以卖出
+        
+        Args:
+            ts_code: 股票代码
+            tradability: 可交易性信息字典
+            
+        Returns:
+            (can_sell, reason) 是否可卖出及原因
+        """
+        if ts_code not in tradability:
+            return True, "无可交易性数据"
+        
+        info = tradability[ts_code]
+        
+        # 停牌检查
+        if info.get('is_suspended', 0) == 1:
+            return False, "停牌"
+        
+        # 跌停检查（跌停不可卖出）
+        if info.get('is_limit_down', 0) == 1:
+            return False, "跌停"
+        
+        return True, "可卖出"
     
     def execute_orders(
         self,
@@ -310,3 +413,98 @@ class PaperBroker:
             f"{fill.commission:<10.2f} {fill.stamp_tax:<10.2f} {fill.slippage:<10.2f} "
             f"{fill.total_cost:<10.2f} {fill.reason:<15}"
         )
+    
+    def get_positions_detail(self, current_prices: Dict[str, float], current_date: Optional[str] = None) -> pd.DataFrame:
+        """获取持仓明细（含收益信息）
+        
+        Args:
+            current_prices: {ts_code: price} 当前价格字典
+            current_date: 当前日期 YYYYMMDD（可选，用于计算持有天数）
+            
+        Returns:
+            持仓明细DataFrame
+        """
+        positions = self.account.get_positions()
+        
+        if not positions:
+            logger.info("当前无持仓")
+            return pd.DataFrame()
+        
+        details = []
+        for ts_code, pos in positions.items():
+            current_price = current_prices.get(ts_code, 0.0)
+            current_value = pos.shares * current_price
+            cost_value = pos.shares * pos.buy_price + pos.buy_cost
+            profit = current_value - cost_value
+            profit_rate = (profit / cost_value * 100) if cost_value > 0 else 0.0
+            
+            # 计算持有天数
+            holding_days = 0
+            if current_date:
+                holding_days = pos.get_holding_days(current_date)
+            
+            details.append({
+                '股票代码': ts_code,
+                '持仓股数': pos.shares,
+                '买入均价': pos.buy_price,
+                '买入成本': pos.buy_cost,
+                '买入日期': pos.buy_date,
+                '持有天数': holding_days,
+                '当前价格': current_price,
+                '当前市值': current_value,
+                '浮动盈亏': profit,
+                '收益率(%)': profit_rate,
+                '状态': pos.status,
+                '备注': pos.notes
+            })
+        
+        df = pd.DataFrame(details)
+        return df
+    
+    def print_positions_summary(self, current_prices: Dict[str, float], current_date: Optional[str] = None) -> None:
+        """打印持仓汇总信息
+        
+        Args:
+            current_prices: {ts_code: price} 当前价格字典
+            current_date: 当前日期 YYYYMMDD（可选，用于计算持有天数）
+        """
+        df = self.get_positions_detail(current_prices, current_date)
+        
+        if df.empty:
+            logger.info("=" * 80)
+            logger.info("当前无持仓")
+            logger.info("=" * 80)
+            return
+        
+        logger.info("=" * 140)
+        logger.info("持仓明细")
+        logger.info("=" * 140)
+        
+        # 打印表头
+        logger.info(f"{'股票代码':<12} {'股数':<8} {'买入均价':<10} {'买入成本':<10} "
+                   f"{'买入日期':<10} {'持有天数':<8} {'当前价格':<10} {'当前市值':<12} "
+                   f"{'浮盈':<12} {'收益率(%)':<10} {'状态':<8}")
+        logger.info("-" * 140)
+        
+        # 打印每行
+        for _, row in df.iterrows():
+            logger.info(
+                f"{row['股票代码']:<12} {row['持仓股数']:<8} {row['买入均价']:<10.2f} {row['买入成本']:<10.2f} "
+                f"{row['买入日期']:<10} {row['持有天数']:<8} {row['当前价格']:<10.2f} {row['当前市值']:<12.2f} "
+                f"{row['浮动盈亏']:<12.2f} {row['收益率(%)']:<10.2f} {row['状态']:<8}"
+            )
+        
+        # 打印汇总
+        total_cost = df['买入成本'].sum() + (df['持仓股数'] * df['买入均价']).sum()
+        total_value = df['当前市值'].sum()
+        total_profit = df['浮动盈亏'].sum()
+        total_profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+        
+        logger.info("-" * 140)
+        logger.info(f"{'合计':<12} {df['持仓股数'].sum():<8} {'':<10} {df['买入成本'].sum():<10.2f} "
+                   f"{'':<10} {'':<8} {'':<10} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<10.2f}")
+        logger.info("=" * 140)
+        logger.info(f"账户现金: {self.account.get_cash():,.2f}")
+        logger.info(f"持仓市值: {total_value:,.2f}")
+        logger.info(f"总资产: {self.account.get_cash() + total_value:,.2f}")
+        logger.info("=" * 140)
