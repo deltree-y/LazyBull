@@ -9,15 +9,18 @@
 
 ## 核心特性
 
-- **T0/T1 分离工作流**：T0 收盘后生成信号，T1 执行调仓
-- **交易日自动校正**：输入非交易日自动滚动到下一交易日（v0.6.0）
-- **调仓频率控制**：可设置调仓频率，仅在调仓日允许生成新目标（v0.6.0）
-- **100股整手交易**：买卖严格按100股操作，清仓自动处理零股（v0.6.0）
-- **幂等性保障**：同日 T0/T1 只能执行一次，防止重复操作（v0.6.0）
-- **延迟卖出机制**：跌停/停牌股票自动延迟，支持 retry 重试（v0.6.0）
+- **统一运行入口（v0.7.0）**：`run` 命令自动编排执行所有动作（止损、延迟卖出、T1、T0）
+- **全局配置管理（v0.7.0）**：`config` 命令持久化账户级配置
+- **止损功能（v0.7.0）**：支持回撤止损、移动止损、连续跌停止损
+- **智能调度（v0.7.0）**：非调仓日允许仅执行卖出和T1，跳过T0
+- **交易日自动校正**：输入非交易日自动滚动到下一交易日
+- **调仓频率控制**：可设置调仓频率，仅在调仓日允许生成新目标
+- **100股整手交易**：买卖严格按100股操作，清仓自动处理零股
+- **幂等性保障**：同日 T0/T1 只能执行一次，防止重复操作
+- **延迟卖出机制**：跌停/停牌股票自动延迟，自动重试
 - **完整的持久化**：账户状态、交易记录、净值曲线均可持久化和恢复
 - **详细的打印输出**：包含股票、方向、权重、价格、成本、原因等完整信息
-- **灵活的价格配置**：买入可选开盘价/收盘价，卖出固定收盘价
+- **灵活的价格配置**：买入可选开盘价/收盘价，卖出可选开盘价/收盘价
 - **主板股票池**：仅包含沪深主板股票，排除科创板、创业板、北交所
 - **成本计算**：包括佣金、印花税、滑点
 
@@ -37,222 +40,157 @@ pip install -r requirements.txt
 TS_TOKEN=your_tushare_token_here
 ```
 
-### 3. 运行 T0 工作流
+### 3. 设置全局配置（首次使用）
 
-T0 工作流在交易日收盘后运行，拉取数据并生成次日待执行目标：
+在开始纸面交易之前，需要先使用 `config` 命令设置全局配置：
 
 ```bash
-python scripts/paper_trade.py t0 \
-    --trade-date 20260121 \
+python scripts/paper_trade.py config \
     --buy-price close \
+    --sell-price close \
+    --top-n 5 \
+    --initial-capital 500000 \
+    --rebalance-freq 5 \
+    --weight-method equal \
     --universe mainboard \
-    --top-n 5
+    --stop-loss-enabled \
+    --stop-loss-drawdown-pct 20.0 \
+    --stop-loss-trailing-enabled \
+    --stop-loss-trailing-pct 15.0 \
+    --stop-loss-consecutive-limit-down 2
 ```
 
-**参数说明：**
-- `--trade-date`: T0 交易日期（格式：YYYYMMDD）。**注意**：如果输入非交易日，会自动校正到下一交易日（v0.6.0）
-- `--buy-price`: T1 买入价格类型（`open` 或 `close`，默认 `close`）
-- `--universe`: 股票池类型（`mainboard` 仅主板，`all` 全市场，默认 `mainboard`）
+**配置参数说明：**
+- `--buy-price`: 买入价格类型（`open` 或 `close`，默认 `close`）
+- `--sell-price`: 卖出价格类型（`open` 或 `close`，默认 `close`）
 - `--top-n`: 持仓股票数（默认：5）
-- `--rebalance-freq`: **新增（v0.6.0）** 调仓频率，单位为交易日数（默认：5）。只有在调仓日才允许执行T0，非调仓日会报错
-- `--model-version`: ML模型版本（可选，指定则使用ML信号）
 - `--initial-capital`: 初始资金（默认：500000）
-- `--weight-method`: **新增** 权重分配方法（`equal` 等权，`score` 按分数加权，默认：equal）
+- `--rebalance-freq`: 调仓频率（交易日数，默认：5）
+- `--weight-method`: 权重分配方法（`equal` 等权，`score` 按分数加权，默认：equal）
+- `--model-version`: ML模型版本（可选）
+- `--universe`: 股票池类型（`mainboard` 仅主板，`all` 全市场，默认：mainboard）
+- `--stop-loss-enabled`: 启用止损功能（标志位）
+- `--stop-loss-drawdown-pct`: 回撤止损百分比（默认：20.0）
+- `--stop-loss-trailing-enabled`: 启用移动止损（标志位）
+- `--stop-loss-trailing-pct`: 移动止损百分比（默认：15.0）
+- `--stop-loss-consecutive-limit-down`: 连续跌停触发天数（默认：2）
 
-**数据下载机制变更（v0.5.0）：**
-- 不再在paper模块中自建下载逻辑
-- 复用仓库既有的TushareClient和DataCleaner能力
-- 自动下载raw数据：日线行情、复权因子、停复牌信息、涨跌停信息
-- 自动构建clean数据：数据清洗 + 可交易性标记（`is_suspended`、`is_limit_up`、`is_limit_down`等）
-- 数据保存到标准的partitioned存储路径（`data/raw` 和 `data/clean`）
-- `--top-n`: 持仓股票数（默认 5）
-- `--model-version`: ML 模型版本（可选，如果有训练好的模型）
-- `--initial-capital`: 初始资金（默认 500000）
+**配置存储：**
+- 配置保存在 `data/paper/config.json`
+- 可随时运行 `config` 命令更新配置
 
-**输出：**
-- 拉取 T0 日的行情数据
-- 生成 T1 日的待执行目标权重
-- 保存到 `data/paper/pending/{T1日期}.parquet`
+### 4. 每日运行纸面交易
 
-### 4. 运行 T1 工作流
-
-T1 工作流在次日运行，读取待执行目标并生成订单：
+配置完成后，每天只需运行一次 `run` 命令：
 
 ```bash
-python scripts/paper_trade.py t1 \
-    --trade-date 20260122 \
-    --buy-price close \
-    --sell-price close
+python scripts/paper_trade.py run --trade-date 20260121
 ```
 
 **参数说明：**
-- `--trade-date`: T1 交易日期（格式：YYYYMMDD）。**注意**：如果输入非交易日，会自动校正到下一交易日（v0.6.0）
-- `--buy-price`: **增强** 买入价格类型（`open` 或 `close`，默认 `close`）
-- `--sell-price`: **增强** 卖出价格类型（`open` 或 `close`，默认 `close`）
+- `--trade-date`: 交易日期（格式：YYYYMMDD）。**注意**：如果输入非交易日，会自动校正到下一交易日
+- `--model-version`: ML模型版本（可选，覆盖配置中的默认值）
+- `--weight-method`: 权重分配方法（可选，覆盖配置中的默认值）
 
-**重要提示（v0.6.0）：**
-- T1 命令具有幂等性保护，同一日期只能执行一次，重复执行会报错
-- 买卖订单严格按100股整手操作：
-  - 买入：按100股向下取整
-  - 减仓：按100股向下取整
-  - 清仓：卖出100股倍数，零股保留并标记
-- 跌停/停牌股票无法卖出时，会自动加入延迟卖出队列，可使用 `retry` 命令重试
+**`run` 命令自动执行流程：**
 
-**价格口径支持（v0.5.0）：**
-- 支持灵活的价格组合：T1开盘卖出+收盘买入、T1开盘买入+收盘卖出等
-- open价格缺失时自动降级到close价格并打印warning
-- 订单打印中明确显示使用的价格口径
-
-**可交易性检查（v0.5.0）：**
-- T1执行订单时自动检查涨跌停、停牌状态
-- 停牌股票：不可买入或卖出，订单跳过
-- 涨停股票：不可买入，订单跳过
-- 跌停股票：不可卖出，订单延迟
-- 打印详细的不可交易原因
+1. **交易日校正**：非交易日自动滚动到下一交易日
+2. **执行止损检查**：
+   - 检查所有持仓是否触发止损
+   - 触发止损的标的生成卖出指令
+   - 如果跌停不可卖出，自动加入延迟卖出队列
+3. **处理延迟卖出队列**：
+   - 尝试卖出之前因跌停/停牌延迟的订单
+   - 成功卖出的订单从队列移除
+   - 仍不可卖出的订单保留在队列中
+4. **执行 T1（如有待执行目标）**：
+   - 检查是否存在 `pending_weights/{trade_date}.parquet`
+   - 如存在，生成并执行调仓订单
+   - 更新账户状态和净值
+   - 同日只执行一次（幂等保护）
+5. **判断是否调仓日并执行 T0**：
+   - 检查距离上次调仓是否满足 `rebalance_freq`
+   - 如果是调仓日，拉取数据并生成信号
+   - 生成的目标保存到下一交易日的 `pending_weights`
+   - 同日只执行一次（幂等保护）
+   - **非调仓日自动跳过 T0，不会报错**
 
 **输出示例：**
 
 ```
-========================================================================================================================
-纸面交易执行明细 - 20260122
-========================================================================================================================
-股票代码       方向     目标权重     当前权重     股数      价格类型   参考价格     成交金额       佣金        印花税      滑点        总成本      原因            
-------------------------------------------------------------------------------------------------------------------------
-600000.SH    sell     0.0000     0.2000     2000     close      15.00      30000.00      5.85      15.00      15.00      35.85      退出持仓       
-000001.SZ    buy      0.2000     0.0000     2000     close      10.00      20000.00      5.00      0.00       10.00      15.00      新建仓位       
-000002.SZ    buy      0.2000     0.0000     1000     close      20.00      20000.00      5.00      0.00       10.00      15.00      新建仓位       
-========================================================================================================================
-执行完成: 2 买，1 卖
-账户现金: 460065.85
-持仓数量: 2
-========================================================================================================================
+================================================================================
+纸面交易自动运行
+================================================================================
+交易日期: 20260121
+使用配置：
+  买入价格类型: close
+  卖出价格类型: close
+  持仓数: 5
+  调仓频率: 5 个交易日
+  权重方法: equal
+  止损开关: True
+================================================================================
+
+--------------------------------------------------------------------------------
+步骤1: 检查止损触发
+--------------------------------------------------------------------------------
+止损检查完成：触发 1 个止损信号
+
+--------------------------------------------------------------------------------
+步骤2: 处理延迟卖出队列
+--------------------------------------------------------------------------------
+延迟卖出处理完成：成交 0 笔，剩余 1 笔
+
+--------------------------------------------------------------------------------
+步骤3: 检查并执行 T1
+--------------------------------------------------------------------------------
+找到 5 个待执行目标，执行 T1
+... （执行明细）
+T1 执行完成：5 个订单
+
+--------------------------------------------------------------------------------
+步骤4: 检查是否调仓日并执行 T0
+--------------------------------------------------------------------------------
+当前是调仓日，执行 T0
+... （执行流程）
+T0 执行完成：生成 5 个目标
+
+============================================================================
+手工操作指令汇总
+============================================================================
+
+【止损卖出清单】
+----------------------------------------------------------------------------
+股票代码         建议股数    是否可执行     原因
+----------------------------------------------------------------------------
+600000.SH       2000       否(跌停)      回撤止损: 从买入价15.00下跌至12.00，跌幅20.00%
+
+【延迟卖出清单】
+----------------------------------------------------------------------------
+股票代码         待卖股数    状态          原因
+----------------------------------------------------------------------------
+600000.SH       2000       不可卖出      止损-回撤止损: 从买入价15.00下跌至12.00，跌幅20.00%
+
+【T1 调仓订单清单】
+----------------------------------------------------------------------------
+股票代码         方向      股数          原因
+----------------------------------------------------------------------------
+000001.SZ       buy       2000         新建仓位
+000002.SZ       buy       1000         新建仓位
+
+【T0 生成目标清单】
+----------------------------------------------------------------------------
+股票代码         目标权重      原因/评分
+----------------------------------------------------------------------------
+000003.SZ       0.2000       信号生成
+000004.SZ       0.2000       信号生成
+
+============================================================================
+运行完成 - 20260121
+============================================================================
 ```
 
-## 数据结构
-
-### 持久化目录
-
-```
-data/paper/
-├── pending/              # 待执行目标权重
-│   └── {YYYYMMDD}.parquet
-├── state/                # 账户状态
-│   └── account.json
-├── trades/               # 交易记录
-│   └── trades.parquet
-├── nav/                  # 净值曲线
-│   └── nav.parquet
-├── runs/                 # **新增（v0.6.0）** 执行记录（幂等性）
-│   ├── t0_{YYYYMMDD}.json
-│   ├── t1_{YYYYMMDD}.json
-│   └── rebalance_state.json
-└── pending_sells/        # **新增（v0.6.0）** 延迟卖出队列
-    └── pending_sells.json
-```
-
-### 账户状态 (account.json)
-
-```json
-{
-  "cash": 500000.0,
-  "last_update": "20260122",
-  "positions": {
-    "000001.SZ": {
-      "ts_code": "000001.SZ",
-      "shares": 2000,
-      "buy_price": 10.0,
-      "buy_cost": 15.0,
-      "buy_date": "20260122",
-      "status": "持有",
-      "notes": ""
-    }
-  }
-}
-```
-
-### 交易记录 (trades.parquet)
-
-| trade_date | ts_code   | action | shares | price | amount   | commission | stamp_tax | slippage | total_cost | reason   |
-|------------|-----------|--------|--------|-------|----------|------------|-----------|----------|------------|----------|
-| 20260122   | 000001.SZ | buy    | 2000   | 10.0  | 20000.00 | 5.00       | 0.00      | 10.00    | 15.00      | 新建仓位 |
-
-### 净值曲线 (nav.parquet)
-
-| trade_date | cash      | position_value | total_value | nav    |
-|------------|-----------|----------------|-------------|--------|
-| 20260122   | 460065.85 | 40000.00       | 500065.85   | 1.0001 |
-
-## 工作流示例
-
-### 连续多日运行
-
-```bash
-# Day 1: T0 (2026-01-21)
-python scripts/paper_trade.py t0 --trade-date 20260121
-
-# Day 2: T1 (2026-01-22)
-python scripts/paper_trade.py t1 --trade-date 20260122
-
-# Day 2: T0 (2026-01-22)
-python scripts/paper_trade.py t0 --trade-date 20260122
-
-# Day 3: T1 (2026-01-23)
-python scripts/paper_trade.py t1 --trade-date 20260123
-
-# ... 依此类推
-```
-
-### 使用 ML 模型
-
-如果已经训练了 ML 模型（参见 `scripts/train_ml_model.py`）：
-
-```bash
-# T0: 使用模型版本 1 生成信号
-python scripts/paper_trade.py t0 \
-    --trade-date 20260121 \
-    --model-version 1 \
-    --top-n 10
-```
-
-## 股票池说明
-
-### 主板股票池 (mainboard)
-
-仅包含沪深主板股票：
-- 过滤条件：`market == "主板"`
-- 自动排除：科创板、创业板、北交所
-- 自动排除：ST 股票
-- 自动排除：上市不足 60 天的股票
-
-### 全市场股票池 (all)
-
-包含所有上市股票（仍会排除 ST 和上市不足 60 天的股票）。
-
-## 成本计算
-
-使用 `CostModel` 计算交易成本：
-
-- **佣金**：0.01954%，最低 5 元（买卖双向）
-- **印花税**：0.05%（仅卖出）
-- **滑点**：0.05%（买卖双向）
-
-可以通过修改 `src/lazybull/common/cost.py` 中的默认值来调整。
-
-## 注意事项
-
-1. **数据依赖**：确保已下载必要的基础数据（trade_cal、stock_basic）
-2. **TuShare 限制**：免费版 TuShare 有访问频率限制，请合理安排拉取频率
-3. **状态恢复**：每次运行 T1 后会自动保存状态，可随时中断和恢复
-4. **买入价格**：开盘价买入适合盘前下单，收盘价买入更保守
-5. **交易日自动校正（v0.6.0）**：输入非交易日会自动滚动到下一交易日
-6. **幂等性保护（v0.6.0）**：T0 和 T1 命令同一日期只能执行一次，重复执行会报错
-7. **100股整手规则（v0.6.0）**：所有买卖都按100股操作，清仓时零股会保留并标记
-8. **延迟卖出（v0.6.0）**：跌停/停牌股票会进入延迟队列，需要使用 retry 命令处理
-9. **调仓频率（v0.6.0）**：只有在调仓日才能执行 T0，避免过度交易
-
-## 高级用法
-
-### 查看持仓明细（v0.5.0新增）
+### 5. 查看持仓明细
 
 使用 `positions` 子命令查看当前持仓状态和收益情况：
 
@@ -279,55 +217,265 @@ python scripts/paper_trade.py positions --trade-date 20260122
 ================================================================================
 ```
 
-**字段说明：**
-- **股票代码**：持仓股票的代码
-- **持仓股数**：当前持有股数
-- **买入均价**：平均买入价格
-- **买入成本**：总交易成本（佣金+滑点）
-- **买入日期**：最后一次买入日期
-- **持有天数**：从买入日期到当前日期的自然日天数
-- **当前价格**：参考日期的收盘价
-- **当前市值**：持仓股数 × 当前价格
-- **浮动盈亏**：当前市值 - （买入成本 + 买入均价 × 股数）
-- **收益率(%)**：浮动盈亏 / 成本 × 100
-- **状态**：持仓状态（持有、延迟卖出、零股待处理等）
+## 工作流示例
 
-### 处理延迟卖出（v0.6.0新增）
-
-当股票因跌停或停牌无法卖出时，会自动进入延迟卖出队列。使用 `retry` 子命令可以在后续交易日重试卖出：
+### 连续多日运行
 
 ```bash
-python scripts/paper_trade.py retry \
-    --trade-date 20260123 \
-    --sell-price close
+# 首次配置（仅需一次）
+python scripts/paper_trade.py config \
+    --buy-price close \
+    --sell-price close \
+    --top-n 5 \
+    --initial-capital 500000 \
+    --rebalance-freq 5 \
+    --weight-method equal \
+    --stop-loss-enabled
+
+# Day 1 (2026-01-21)
+python scripts/paper_trade.py run --trade-date 20260121
+
+# Day 2 (2026-01-22)
+python scripts/paper_trade.py run --trade-date 20260122
+
+# Day 3 (2026-01-23)
+python scripts/paper_trade.py run --trade-date 20260123
+
+# 查看持仓
+python scripts/paper_trade.py positions --trade-date 20260123
 ```
 
-**参数说明：**
-- `--trade-date`: 重试日期（格式：YYYYMMDD）。**注意**：输入非交易日会自动校正
-- `--sell-price`: 卖出价格类型（`open` 或 `close`，默认 `close`）
+### 使用 ML 模型
 
-**特点：**
-- retry 命令不受幂等性限制，可以在同一日期多次执行
-- 自动检查延迟队列中的股票是否可以卖出
-- 可卖出的股票会立即成交并从队列移除
-- 仍不可卖出的股票保留在队列中，等待下次 retry
-- 支持100股整手规则，零股无法卖出会保留
+```bash
+# 配置时指定模型版本
+python scripts/paper_trade.py config \
+    --buy-price close \
+    --sell-price close \
+    --top-n 10 \
+    --model-version 1 \
+    --weight-method score
 
-**使用场景：**
-- 每日盘后执行一次 retry，尝试清理延迟卖出队列
-- 发现某只股票解除跌停/复牌后，手动执行 retry 卖出
-- 定期检查 `data/paper/pending_sells/pending_sells.json` 文件，查看延迟队列
+# 或在运行时覆盖
+python scripts/paper_trade.py run \
+    --trade-date 20260121 \
+    --model-version 2
+```
+
+## 止损功能详解
+
+### 回撤止损
+
+当持仓从买入成本价下跌超过设定百分比时触发。
+
+**配置：**
+```bash
+--stop-loss-enabled \
+--stop-loss-drawdown-pct 20.0
+```
+
+**触发条件：** 当前价格 ≤ 买入价格 × (1 - drawdown_pct/100)
+
+### 移动止损
+
+当持仓从最高价下跌超过设定百分比时触发。
+
+**配置：**
+```bash
+--stop-loss-enabled \
+--stop-loss-trailing-enabled \
+--stop-loss-trailing-pct 15.0
+```
+
+**触发条件：** 当前价格 ≤ 最高价格 × (1 - trailing_pct/100)
+
+**注意：** 系统会自动跟踪每个持仓的历史最高价
+
+### 连续跌停止损
+
+当持仓连续跌停达到设定天数时触发。
+
+**配置：**
+```bash
+--stop-loss-enabled \
+--stop-loss-consecutive-limit-down 2
+```
+
+**触发条件：** 连续跌停天数 ≥ consecutive_limit_down
+
+**注意：** 如果某天不跌停，计数器会重置为0
+
+### 止损状态持久化
+
+止损监控器的运行状态（最高价、连续跌停计数）会自动持久化到 `data/paper/state/stop_loss_state.json`，确保重启后状态不丢失。
+
+## 数据结构
+
+### 持久化目录
+
+```
+data/paper/
+├── config.json           # 【新增 v0.7.0】全局配置
+├── pending/              # 待执行目标权重
+│   └── {YYYYMMDD}.parquet
+├── state/                # 账户状态
+│   ├── account.json
+│   └── stop_loss_state.json  # 【新增 v0.7.0】止损状态
+├── trades/               # 交易记录
+│   └── trades.parquet
+├── nav/                  # 净值曲线
+│   └── nav.parquet
+├── runs/                 # 执行记录（幂等性）
+│   ├── t0_{YYYYMMDD}.json
+│   ├── t1_{YYYYMMDD}.json
+│   └── rebalance_state.json
+└── pending_sells/        # 延迟卖出队列
+    └── pending_sells.json
+```
+
+### 全局配置 (config.json) - 新增
+
+```json
+{
+  "buy_price": "close",
+  "sell_price": "close",
+  "top_n": 5,
+  "initial_capital": 500000.0,
+  "rebalance_freq": 5,
+  "weight_method": "equal",
+  "model_version": null,
+  "stop_loss_enabled": true,
+  "stop_loss_drawdown_pct": 20.0,
+  "stop_loss_trailing_enabled": true,
+  "stop_loss_trailing_pct": 15.0,
+  "stop_loss_consecutive_limit_down": 2,
+  "universe": "mainboard"
+}
+```
+
+### 止损状态 (stop_loss_state.json) - 新增
+
+```json
+{
+  "position_high_prices": {
+    "000001.SZ": 15.8,
+    "000002.SZ": 22.5
+  },
+  "consecutive_limit_down_days": {
+    "000001.SZ": 0,
+    "000002.SZ": 1
+  }
+}
+```
+
+## 命令对比（v0.6.0 vs v0.7.0）
+
+### v0.6.0（旧版本）
+
+需要分别运行多个命令：
+
+```bash
+# T0 生成信号
+python scripts/paper_trade.py t0 --trade-date 20260121 --buy-price close --top-n 5 --rebalance-freq 5
+
+# T1 执行调仓
+python scripts/paper_trade.py t1 --trade-date 20260122 --buy-price close --sell-price close
+
+# 重试延迟卖出
+python scripts/paper_trade.py retry --trade-date 20260122 --sell-price close
+```
+
+### v0.7.0（新版本）
+
+一条命令自动执行所有动作：
+
+```bash
+# 首次配置
+python scripts/paper_trade.py config --buy-price close --sell-price close --top-n 5 --rebalance-freq 5
+
+# 每日运行
+python scripts/paper_trade.py run --trade-date 20260122
+```
+
+**优势：**
+- 更少的命令，更简单的流程
+- 自动处理止损、延迟卖出、T1、T0
+- 非调仓日自动跳过 T0，无需手动判断
+- 统一的输出格式，便于手工实盘
+
+## 注意事项
+
+1. **必须先配置**：首次使用前必须运行 `config` 命令设置配置
+2. **数据依赖**：确保已下载必要的基础数据（trade_cal、stock_basic）
+3. **TuShare 限制**：免费版 TuShare 有访问频率限制，请合理安排拉取频率
+4. **状态恢复**：每次运行后会自动保存状态，可随时中断和恢复
+5. **交易日自动校正**：输入非交易日会自动滚动到下一交易日
+6. **幂等性保护**：T0 和 T1 命令同一日期只能执行一次，重复执行会报错
+7. **100股整手规则**：所有买卖都按100股操作，清仓时零股会保留并标记
+8. **延迟卖出自动重试**：延迟卖出在 `run` 命令中自动重试，无需手动执行
+9. **止损状态持久化**：止损监控器的状态会自动保存和恢复
+10. **非调仓日允许卖出**：即使不是调仓日，止损卖出和延迟卖出仍会执行
+
+## 高级用法
+
+### 动态调整配置
+
+配置可以随时更新：
+
+```bash
+# 调整止损参数
+python scripts/paper_trade.py config \
+    --buy-price close \
+    --sell-price close \
+    --top-n 5 \
+    --initial-capital 500000 \
+    --rebalance-freq 5 \
+    --weight-method equal \
+    --stop-loss-enabled \
+    --stop-loss-drawdown-pct 15.0 \
+    --stop-loss-trailing-pct 10.0
+```
+
+### 临时覆盖配置
+
+运行时可以临时覆盖部分配置：
+
+```bash
+# 临时使用不同的模型版本
+python scripts/paper_trade.py run \
+    --trade-date 20260121 \
+    --model-version 2 \
+    --weight-method score
+```
 
 ### 查看账户状态
 
 ```bash
-# 使用 Python 读取
+# 使用 Python 读取配置
+python -c "
+import json
+with open('data/paper/config.json') as f:
+    config = json.load(f)
+    for k, v in config.items():
+        print(f'{k}: {v}')
+"
+
+# 查看账户状态
 python -c "
 import json
 with open('data/paper/state/account.json') as f:
     state = json.load(f)
     print(f'现金: {state[\"cash\"]:,.2f}')
     print(f'持仓数: {len(state[\"positions\"])}')
+"
+
+# 查看止损状态
+python -c "
+import json
+with open('data/paper/state/stop_loss_state.json') as f:
+    state = json.load(f)
+    print('最高价记录:', state['position_high_prices'])
+    print('连续跌停计数:', state['consecutive_limit_down_days'])
 "
 ```
 
@@ -357,13 +505,28 @@ plt.show()
 
 ## 故障排查
 
+### 问题：提示未找到配置文件
+
+**原因**：未运行 `config` 命令
+
+**解决**：
+```bash
+python scripts/paper_trade.py config \
+    --buy-price close \
+    --sell-price close \
+    --top-n 5 \
+    --initial-capital 500000 \
+    --rebalance-freq 5
+```
+
 ### 问题：未找到待执行目标
 
 **原因**：T0 未成功运行或日期不匹配
 
 **解决**：
 1. 检查 `data/paper/pending/` 目录下是否有对应日期的文件
-2. 确认 T0 和 T1 的日期是连续的交易日
+2. 确认 T0 在调仓日成功执行
+3. 使用 `run` 命令会自动处理这种情况
 
 ### 问题：无法加载数据
 
@@ -379,46 +542,17 @@ python scripts/download_raw.py --start-date 20260101 --end-date 20260131
 python scripts/build_clean_features.py --start-date 20260101 --end-date 20260131 --only-clean
 ```
 
-### 问题：股票池为空
+### 问题：止损未触发
 
-**原因**：主板股票过滤过于严格或数据缺失
+**原因**：
+1. 止损功能未启用
+2. 止损条件未达到
+3. 止损状态未正确加载
 
 **解决**：
-1. 检查 `stock_basic.parquet` 是否存在且包含 `market` 字段
-2. 尝试使用 `--universe all` 查看全市场股票数量
-3. 检查日线数据是否完整
-
-## 扩展开发
-
-### 自定义信号生成器
-
-参考 `src/lazybull/signals/base.py`，实现自己的信号生成器：
-
-```python
-from src.lazybull.signals.base import Signal
-
-class MySignal(Signal):
-    def generate(self, date, universe, data):
-        # 自定义信号逻辑
-        signals = {}
-        # ...
-        return signals
-```
-
-### 自定义成本模型
-
-参考 `src/lazybull/common/cost.py`，调整成本参数：
-
-```python
-from src.lazybull.common.cost import CostModel
-
-custom_cost = CostModel(
-    commission_rate=0.0003,  # 万3佣金
-    min_commission=5.0,
-    stamp_tax=0.001,         # 千1印花税
-    slippage=0.001           # 0.1%滑点
-)
-```
+1. 检查配置：`stop_loss_enabled` 是否为 `true`
+2. 检查止损参数设置是否合理
+3. 查看 `data/paper/state/stop_loss_state.json` 确认状态
 
 ## 相关文档
 
@@ -431,3 +565,38 @@ custom_cost = CostModel(
 如有问题，请访问：
 - [GitHub Issues](https://github.com/deltree-y/LazyBull/issues)
 - [项目主页](https://github.com/deltree-y/LazyBull)
+
+## 更新日志
+
+### v0.7.0（当前版本）
+
+- **重大重构**：统一命令接口
+  - 新增 `config` 命令：持久化全局配置
+  - 新增 `run` 命令：自动编排执行所有动作
+  - 保留 `positions` 命令：查看持仓
+  - 移除 `t0`、`t1`、`retry` 命令（旧版本已备份）
+
+- **止损功能**：
+  - 回撤止损：从买入成本价触发
+  - 移动止损：从历史最高价触发
+  - 连续跌停止损：连续N天跌停触发
+  - 状态持久化：自动保存和恢复止损状态
+
+- **智能调度**：
+  - 非调仓日允许执行止损、延迟卖出、T1
+  - 自动跳过非调仓日的 T0
+  - 延迟卖出自动重试
+
+- **更好的输出**：
+  - 统一的手工操作指令汇总
+  - 清晰的表格格式
+  - 完整的动作记录
+
+### v0.6.0
+
+- T0/T1 分离工作流
+- 交易日自动校正
+- 调仓频率控制
+- 100股整手交易
+- 幂等性保障
+- 延迟卖出机制
