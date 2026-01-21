@@ -5,7 +5,14 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from ..data import DataLoader, Storage, TushareClient
+from ..data import (
+    DataCleaner,
+    DataLoader,
+    Storage,
+    TushareClient,
+    ensure_basic_data,
+)
+from ..features import FeatureBuilder, ensure_features_for_date
 from ..signals.base import Signal
 from ..signals.ml_signal import MLSignal
 from ..universe.base import BasicUniverse
@@ -55,6 +62,10 @@ class PaperTradingRunner:
         
         # 初始化TuShare客户端
         self.client = TushareClient()
+        
+        # 初始化数据清洗器和特征构建器（用于 ensure 功能）
+        self.cleaner = DataCleaner()
+        self.feature_builder = FeatureBuilder(min_list_days=60, horizon=5)
     
     def _correct_trade_date(self, input_date: str) -> str:
         """校正交易日期：非交易日自动滚动到下一交易日
@@ -470,6 +481,20 @@ class PaperTradingRunner:
         Returns:
             目标权重列表
         """
+        # 确保 features 数据存在
+        logger.info(f"检查并确保 features 数据存在: {trade_date}")
+        if not ensure_features_for_date(
+            self.storage,
+            self.loader,
+            self.feature_builder,
+            self.cleaner,
+            self.client,
+            trade_date,
+            force=False
+        ):
+            logger.error(f"无法获取 features 数据: {trade_date}")
+            return []
+        
         # 加载股票池
         stock_basic = self.loader.load_clean_stock_basic()
         if stock_basic is None:
@@ -522,16 +547,19 @@ class PaperTradingRunner:
             logger.error(f"信号生成失败: {e}")
             return []
         
-        # 转换为目标权重
-        targets = []
-        for ts_code, weight in signal_dict.items():
-            targets.append(TargetWeight(
-                ts_code=ts_code,
-                target_weight=weight,
-                reason="信号生成"
-            ))
+        # 转换为目标权重，并增强信息
+        targets = self._enhance_target_info(
+            signal_dict,
+            stock_basic,
+            daily_data,
+            trade_date
+        )
         
         logger.info(f"生成 {len(targets)} 个目标权重")
+        
+        # 打印 T0 详细信息
+        self._print_t0_targets(targets, stock_basic, daily_data)
+        
         return targets
     
     def _create_universe(self, stock_basic: pd.DataFrame, universe_type: str) -> BasicUniverse:
@@ -688,6 +716,119 @@ class PaperTradingRunner:
         except Exception as e:
             logger.error(f"获取下一个交易日失败: {e}")
             return None
+    
+    def _enhance_target_info(
+        self,
+        signal_dict: Dict[str, float],
+        stock_basic: pd.DataFrame,
+        daily_data: pd.DataFrame,
+        trade_date: str
+    ) -> List[TargetWeight]:
+        """增强目标权重信息
+        
+        为每个目标添加股票名称等额外信息
+        
+        Args:
+            signal_dict: {ts_code: weight} 信号字典
+            stock_basic: 股票基本信息
+            daily_data: 日线数据
+            trade_date: 交易日期
+            
+        Returns:
+            增强后的目标权重列表
+        """
+        # 构建股票名称映射
+        name_map = dict(zip(stock_basic['ts_code'], stock_basic['name']))
+        
+        # 构建价格映射
+        price_map = {}
+        if daily_data is not None:
+            for _, row in daily_data.iterrows():
+                price_map[row['ts_code']] = row.get('close', 0.0)
+        
+        # 转换为目标权重
+        targets = []
+        for ts_code, weight in signal_dict.items():
+            name = name_map.get(ts_code, '-')
+            price = price_map.get(ts_code, 0.0)
+            
+            # 构建原因字符串（包含权重信息）
+            reason = f"信号生成 (权重={weight:.4f})"
+            
+            target = TargetWeight(
+                ts_code=ts_code,
+                target_weight=weight,
+                reason=reason
+            )
+            targets.append(target)
+        
+        return targets
+    
+    def _print_t0_targets(
+        self,
+        targets: List[TargetWeight],
+        stock_basic: pd.DataFrame,
+        daily_data: pd.DataFrame
+    ) -> None:
+        """打印 T0 目标详细信息
+        
+        输出包含：代码、名称、方向、T0价、股数、原因
+        
+        Args:
+            targets: 目标权重列表
+            stock_basic: 股票基本信息
+            daily_data: 日线数据
+        """
+        if not targets:
+            logger.info("无 T0 目标")
+            return
+        
+        logger.info("")
+        logger.info("=" * 100)
+        logger.info("T0 建仓目标详情")
+        logger.info("=" * 100)
+        
+        # 构建股票名称和价格映射
+        name_map = dict(zip(stock_basic['ts_code'], stock_basic['name']))
+        price_map = {}
+        if daily_data is not None:
+            for _, row in daily_data.iterrows():
+                price_map[row['ts_code']] = row.get('close', 0.0)
+        
+        # 计算每只股票的建议股数
+        # 使用账户总资金 * 目标权重 / 股价，向下取整到100股的倍数
+        total_capital = self.account.initial_capital
+        
+        # 表头
+        logger.info(
+            f"{'股票代码':<12} {'股票名称':<10} {'方向':<6} "
+            f"{'T0价格':>10} {'建议股数':>10} {'原因':<30}"
+        )
+        logger.info("-" * 100)
+        
+        # 打印每个目标
+        for target in targets:
+            ts_code = target.ts_code
+            name = name_map.get(ts_code, '-')
+            direction = "买入"  # T0 都是建仓，方向为买入
+            t0_price = price_map.get(ts_code, 0.0)
+            
+            # 计算建议股数
+            if t0_price > 0:
+                target_value = total_capital * target.target_weight
+                shares = int(target_value / t0_price / 100) * 100  # 向下取整到100股的倍数
+            else:
+                shares = 0
+            
+            reason = target.reason if target.reason else "信号生成"
+            
+            logger.info(
+                f"{ts_code:<12} {name:<10} {direction:<6} "
+                f"{t0_price:>10.2f} {shares:>10} {reason:<30}"
+            )
+        
+        logger.info("=" * 100)
+        logger.info("")
     
     def run_retry(
         self,
