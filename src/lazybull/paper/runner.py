@@ -816,7 +816,11 @@ class PaperTradingRunner:
             # 计算建议股数
             if t0_price > 0:
                 target_value = total_capital * target.target_weight
-                shares = int(target_value / t0_price / 100) * 100  # 向下取整到100股的倍数
+                # 验证目标价值为正
+                if target_value > 0:
+                    shares = int(target_value / t0_price / 100) * 100  # 向下取整到100股的倍数
+                else:
+                    shares = 0
             else:
                 shares = 0
             

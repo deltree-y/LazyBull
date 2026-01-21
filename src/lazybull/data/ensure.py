@@ -13,6 +13,11 @@ from .loader import DataLoader
 from .storage import Storage
 from .tushare_client import TushareClient
 
+# 常量定义
+TRADE_CAL_HISTORY_MONTHS = 6  # 交易日历历史数据月数
+TRADE_CAL_FUTURE_MONTHS = 6   # 交易日历未来数据月数
+MIN_LIST_DAYS = 60             # 最小上市天数
+
 
 def ensure_raw_data_for_date(
     client: TushareClient,
@@ -95,8 +100,12 @@ def ensure_basic_data(
         logger.info("下载交易日历...")
         try:
             # 扩展日期范围以包含足够的历史和未来数据
-            start_dt = pd.to_datetime(end_date, format='%Y%m%d') - pd.DateOffset(months=6)
-            end_dt = pd.to_datetime(end_date, format='%Y%m%d') + pd.DateOffset(months=6)
+            start_dt = pd.to_datetime(end_date, format='%Y%m%d') - pd.DateOffset(
+                months=TRADE_CAL_HISTORY_MONTHS
+            )
+            end_dt = pd.to_datetime(end_date, format='%Y%m%d') + pd.DateOffset(
+                months=TRADE_CAL_FUTURE_MONTHS
+            )
             
             trade_cal = client.get_trade_cal(
                 start_date=start_dt.strftime('%Y%m%d'),
@@ -202,7 +211,7 @@ def ensure_clean_data_for_date(
                 stock_basic,
                 suspend_info_df=suspend_clean,
                 limit_info_df=limit_clean,
-                min_list_days=60
+                min_list_days=MIN_LIST_DAYS
             )
         
         # 保存 clean 数据

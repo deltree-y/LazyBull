@@ -12,6 +12,12 @@ from ..data import DataCleaner, DataLoader, Storage, TushareClient
 from ..data.ensure import ensure_basic_data, ensure_clean_data_for_date
 from .builder import FeatureBuilder
 
+# 常量定义
+FEATURE_DATA_HISTORY_MONTHS = 1  # 特征数据历史月数
+FEATURE_DATA_FUTURE_MONTHS = 1   # 特征数据未来月数
+HISTORICAL_DATA_MONTHS = 1       # 历史数据回看月数
+MAX_HISTORICAL_DAYS = 30         # 最多检查的历史交易日数
+
 
 def ensure_features_for_date(
     storage: Storage,
@@ -80,8 +86,12 @@ def ensure_features_for_date(
                 trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
         
         # 5. 加载 clean 日线数据（扩展范围以包含历史数据）
-        start_dt = pd.to_datetime(trade_date, format='%Y%m%d') - pd.DateOffset(months=1)
-        end_dt = pd.to_datetime(trade_date, format='%Y%m%d') + pd.DateOffset(months=1)
+        start_dt = pd.to_datetime(trade_date, format='%Y%m%d') - pd.DateOffset(
+            months=FEATURE_DATA_HISTORY_MONTHS
+        )
+        end_dt = pd.to_datetime(trade_date, format='%Y%m%d') + pd.DateOffset(
+            months=FEATURE_DATA_FUTURE_MONTHS
+        )
         
         daily_clean = loader.load_clean_daily(
             start_dt.strftime('%Y%m%d'),
@@ -94,15 +104,12 @@ def ensure_features_for_date(
         
         logger.info(f"clean 日线数据: {len(daily_clean)} 条记录")
         
-        # clean 数据已包含复权价格
-        adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
-        
-        # 6. 构建特征
+        # 6. 构建特征（无需传递 adj_factor，clean 数据已包含复权价格）
         features_df = builder.build_features_for_day(
             trade_date=trade_date,
             trade_cal=trade_cal,
             daily_data=daily_clean,
-            adj_factor=adj_factor,
+            adj_factor=pd.DataFrame(),  # 空 DataFrame，clean 数据已包含复权价格
             stock_basic=stock_basic,
             suspend_info=None,
             limit_info=None
@@ -158,7 +165,9 @@ def _ensure_historical_clean_data(
             trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
     
     # 获取过去一个月的交易日
-    start_dt = pd.to_datetime(trade_date, format='%Y%m%d') - pd.DateOffset(months=1)
+    start_dt = pd.to_datetime(trade_date, format='%Y%m%d') - pd.DateOffset(
+        months=HISTORICAL_DATA_MONTHS
+    )
     
     trading_dates = trade_cal[
         (trade_cal['cal_date'] >= start_dt) &
@@ -178,11 +187,11 @@ def _ensure_historical_clean_data(
     
     logger.info(f"检查 {len(trading_dates_str)} 个历史交易日的 clean 数据")
     
-    # 检查并补齐缺失的历史数据（最多补齐最近的 30 个交易日）
+    # 检查并补齐缺失的历史数据（最多补齐最近的指定个交易日）
     missing_count = 0
     success_count = 0
     
-    for hist_date in trading_dates_str[-30:]:  # 最多检查最近 30 个交易日
+    for hist_date in trading_dates_str[-MAX_HISTORICAL_DAYS:]:  # 最多检查最近指定个交易日
         if not storage.is_data_exists("clean", "daily", hist_date):
             missing_count += 1
             # 尝试补齐
