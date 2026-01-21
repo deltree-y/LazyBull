@@ -1,0 +1,240 @@
+"""纸面交易存储模块"""
+
+import json
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import pandas as pd
+from loguru import logger
+
+from .models import AccountState, Fill, NAVRecord, Position, TargetWeight
+
+
+class PaperStorage:
+    """纸面交易存储
+    
+    负责持久化和读取纸面交易的各类数据
+    """
+    
+    def __init__(self, root_path: str = "./data/paper"):
+        """初始化纸面交易存储
+        
+        Args:
+            root_path: 数据根目录
+        """
+        self.root_path = Path(root_path)
+        self.pending_path = self.root_path / "pending"
+        self.state_path = self.root_path / "state"
+        self.trades_path = self.root_path / "trades"
+        self.nav_path = self.root_path / "nav"
+        
+        # 确保目录存在
+        for path in [self.pending_path, self.state_path, self.trades_path, self.nav_path]:
+            path.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
+    
+    def save_pending_weights(self, trade_date: str, targets: List[TargetWeight]) -> None:
+        """保存待执行的目标权重
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            targets: 目标权重列表
+        """
+        file_path = self.pending_path / f"{trade_date}.parquet"
+        
+        # 转换为DataFrame
+        data = []
+        for target in targets:
+            data.append({
+                'ts_code': target.ts_code,
+                'target_weight': target.target_weight,
+                'reason': target.reason
+            })
+        
+        df = pd.DataFrame(data)
+        df.to_parquet(file_path, index=False)
+        logger.info(f"保存待执行目标权重: {file_path} ({len(targets)} 条)")
+    
+    def load_pending_weights(self, trade_date: str) -> Optional[List[TargetWeight]]:
+        """读取待执行的目标权重
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            
+        Returns:
+            目标权重列表，不存在返回None
+        """
+        file_path = self.pending_path / f"{trade_date}.parquet"
+        
+        if not file_path.exists():
+            logger.warning(f"待执行目标权重文件不存在: {file_path}")
+            return None
+        
+        df = pd.read_parquet(file_path)
+        targets = []
+        for _, row in df.iterrows():
+            targets.append(TargetWeight(
+                ts_code=row['ts_code'],
+                target_weight=row['target_weight'],
+                reason=row.get('reason', '信号生成')
+            ))
+        
+        logger.info(f"读取待执行目标权重: {file_path} ({len(targets)} 条)")
+        return targets
+    
+    def save_account_state(self, state: AccountState) -> None:
+        """保存账户状态
+        
+        Args:
+            state: 账户状态
+        """
+        file_path = self.state_path / "account.json"
+        
+        # 转换为字典
+        state_dict = {
+            'cash': state.cash,
+            'last_update': state.last_update,
+            'positions': {}
+        }
+        
+        for ts_code, pos in state.positions.items():
+            state_dict['positions'][ts_code] = {
+                'ts_code': pos.ts_code,
+                'shares': pos.shares,
+                'buy_price': pos.buy_price,
+                'buy_cost': pos.buy_cost,
+                'buy_date': pos.buy_date
+            }
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(state_dict, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"保存账户状态: {file_path}")
+    
+    def load_account_state(self) -> Optional[AccountState]:
+        """读取账户状态
+        
+        Returns:
+            账户状态，不存在返回None
+        """
+        file_path = self.state_path / "account.json"
+        
+        if not file_path.exists():
+            logger.warning(f"账户状态文件不存在: {file_path}")
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            state_dict = json.load(f)
+        
+        # 重建持仓
+        positions = {}
+        for ts_code, pos_dict in state_dict.get('positions', {}).items():
+            positions[ts_code] = Position(
+                ts_code=pos_dict['ts_code'],
+                shares=pos_dict['shares'],
+                buy_price=pos_dict['buy_price'],
+                buy_cost=pos_dict['buy_cost'],
+                buy_date=pos_dict['buy_date']
+            )
+        
+        state = AccountState(
+            cash=state_dict['cash'],
+            positions=positions,
+            last_update=state_dict.get('last_update', '')
+        )
+        
+        logger.info(f"读取账户状态: {file_path}")
+        return state
+    
+    def append_trade(self, fill: Fill) -> None:
+        """追加成交记录
+        
+        Args:
+            fill: 成交记录
+        """
+        file_path = self.trades_path / "trades.parquet"
+        
+        # 新记录
+        new_data = pd.DataFrame([{
+            'trade_date': fill.trade_date,
+            'ts_code': fill.ts_code,
+            'action': fill.action,
+            'shares': fill.shares,
+            'price': fill.price,
+            'amount': fill.amount,
+            'commission': fill.commission,
+            'stamp_tax': fill.stamp_tax,
+            'slippage': fill.slippage,
+            'total_cost': fill.total_cost,
+            'reason': fill.reason
+        }])
+        
+        # 追加到现有文件
+        if file_path.exists():
+            existing_df = pd.read_parquet(file_path)
+            df = pd.concat([existing_df, new_data], ignore_index=True)
+        else:
+            df = new_data
+        
+        df.to_parquet(file_path, index=False)
+        logger.debug(f"追加成交记录: {file_path}")
+    
+    def load_all_trades(self) -> Optional[pd.DataFrame]:
+        """读取所有成交记录
+        
+        Returns:
+            成交记录DataFrame，不存在返回None
+        """
+        file_path = self.trades_path / "trades.parquet"
+        
+        if not file_path.exists():
+            logger.warning(f"成交记录文件不存在: {file_path}")
+            return None
+        
+        df = pd.read_parquet(file_path)
+        logger.info(f"读取成交记录: {file_path} ({len(df)} 条)")
+        return df
+    
+    def append_nav(self, nav_record: NAVRecord) -> None:
+        """追加净值记录
+        
+        Args:
+            nav_record: 净值记录
+        """
+        file_path = self.nav_path / "nav.parquet"
+        
+        # 新记录
+        new_data = pd.DataFrame([{
+            'trade_date': nav_record.trade_date,
+            'cash': nav_record.cash,
+            'position_value': nav_record.position_value,
+            'total_value': nav_record.total_value,
+            'nav': nav_record.nav
+        }])
+        
+        # 追加到现有文件
+        if file_path.exists():
+            existing_df = pd.read_parquet(file_path)
+            df = pd.concat([existing_df, new_data], ignore_index=True)
+        else:
+            df = new_data
+        
+        df.to_parquet(file_path, index=False)
+        logger.debug(f"追加净值记录: {file_path}")
+    
+    def load_all_nav(self) -> Optional[pd.DataFrame]:
+        """读取所有净值记录
+        
+        Returns:
+            净值记录DataFrame，不存在返回None
+        """
+        file_path = self.nav_path / "nav.parquet"
+        
+        if not file_path.exists():
+            logger.warning(f"净值记录文件不存在: {file_path}")
+            return None
+        
+        df = pd.read_parquet(file_path)
+        logger.info(f"读取净值记录: {file_path} ({len(df)} 条)")
+        return df
