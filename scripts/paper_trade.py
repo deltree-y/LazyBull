@@ -42,7 +42,8 @@ def run_t0(args):
     
     # 创建运行器
     runner = PaperTradingRunner(
-        initial_capital=args.initial_capital
+        initial_capital=args.initial_capital,
+        weight_method=args.weight_method
     )
     
     # 运行T0
@@ -83,6 +84,40 @@ def run_t1(args):
         logger.info("T1 工作流完成！")
     except Exception as e:
         logger.exception(f"T1 工作流失败: {e}")
+        sys.exit(1)
+
+
+def view_positions(args):
+    """查看当前持仓"""
+    logger.info("=" * 80)
+    logger.info("查看纸面交易持仓")
+    logger.info("=" * 80)
+    logger.info(f"参考日期: {args.trade_date}")
+    logger.info("=" * 80)
+    
+    # 创建运行器
+    runner = PaperTradingRunner()
+    
+    try:
+        # 加载价格数据
+        from src.lazybull.data import DataLoader
+        loader = DataLoader(runner.storage)
+        
+        daily_data = loader.load_clean_daily_by_date(args.trade_date)
+        if daily_data is None or daily_data.empty:
+            logger.error(f"无法加载 {args.trade_date} 的价格数据")
+            sys.exit(1)
+        
+        # 构建价格字典（使用收盘价）
+        prices = {}
+        for _, row in daily_data.iterrows():
+            prices[row['ts_code']] = row['close']
+        
+        # 打印持仓明细
+        runner.broker.print_positions_summary(prices)
+        
+    except Exception as e:
+        logger.exception(f"查看持仓失败: {e}")
         sys.exit(1)
 
 
@@ -134,6 +169,12 @@ def main():
         default=500000.0,
         help='初始资金（默认：500000）'
     )
+    t0_parser.add_argument(
+        '--weight-method',
+        choices=['equal', 'score'],
+        default='equal',
+        help='权重分配方法（默认：equal等权，score按预测分数加权）'
+    )
     
     # T1 子命令
     t1_parser = subparsers.add_parser(
@@ -158,6 +199,17 @@ def main():
         help='卖出价格类型（默认：close，固定）'
     )
     
+    # positions 子命令
+    pos_parser = subparsers.add_parser(
+        'positions',
+        help='查看当前持仓明细'
+    )
+    pos_parser.add_argument(
+        '--trade-date',
+        required=True,
+        help='参考交易日期（用于获取当前价格），格式YYYYMMDD'
+    )
+    
     args = parser.parse_args()
     
     if args.command is None:
@@ -173,6 +225,8 @@ def main():
         run_t0(args)
     elif args.command == 't1':
         run_t1(args)
+    elif args.command == 'positions':
+        view_positions(args)
 
 
 if __name__ == "__main__":
