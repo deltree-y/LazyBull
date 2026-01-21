@@ -60,7 +60,7 @@ class PaperBroker:
         tradability = self._load_tradability_info(trade_date)
         
         # 使用卖出价格计算总资产（因为卖出在前）
-        all_prices = {**sell_prices, **buy_prices}  # 卖出价格优先
+        all_prices = {**buy_prices, **sell_prices}  # 卖出价格优先（后者覆盖前者）
         total_value = self.account.get_total_value(all_prices)
         if total_value <= 0:
             logger.warning("总资产为0，无法生成订单")
