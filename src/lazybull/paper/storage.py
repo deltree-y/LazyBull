@@ -351,3 +351,62 @@ class PaperStorage:
         
         logger.info(f"读取延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
         return pending_sells
+    
+    def save_config(self, config: dict) -> None:
+        """保存全局配置
+        
+        Args:
+            config: 配置字典
+        """
+        file_path = self.root_path / "config.json"
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"保存全局配置: {file_path}")
+    
+    def load_config(self) -> Optional[dict]:
+        """读取全局配置
+        
+        Returns:
+            配置字典，不存在返回None
+        """
+        file_path = self.root_path / "config.json"
+        
+        if not file_path.exists():
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        logger.info(f"读取全局配置: {file_path}")
+        return config
+    
+    def save_stop_loss_state(self, state: dict) -> None:
+        """保存止损监控状态
+        
+        Args:
+            state: 止损状态字典
+        """
+        file_path = self.state_path / "stop_loss_state.json"
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        
+        logger.debug(f"保存止损状态: {file_path}")
+    
+    def load_stop_loss_state(self) -> Optional[dict]:
+        """读取止损监控状态
+        
+        Returns:
+            止损状态字典，不存在返回None
+        """
+        file_path = self.state_path / "stop_loss_state.json"
+        
+        if not file_path.exists():
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        
+        return state
