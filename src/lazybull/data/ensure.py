@@ -16,7 +16,7 @@ from .tushare_client import TushareClient
 # 常量定义
 TRADE_CAL_HISTORY_MONTHS = 6  # 交易日历历史数据月数
 TRADE_CAL_FUTURE_MONTHS = 6   # 交易日历未来数据月数
-MIN_LIST_DAYS = 60             # 最小上市天数
+MIN_LIST_DAYS = 60             # 最小上市天数（约2个月交易日，用于稳定性分析）
 
 
 def ensure_raw_data_for_date(

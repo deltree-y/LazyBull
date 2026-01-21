@@ -21,6 +21,10 @@ from .broker import PaperBroker
 from .models import NAVRecord, TargetWeight
 from .storage import PaperStorage
 
+# 常量定义
+SHARE_LOT_SIZE = 100         # A股买卖单位（手）
+SEPARATOR_LENGTH = 100       # 分隔线长度
+
 
 class PaperTradingRunner:
     """纸面交易运行器
@@ -784,9 +788,9 @@ class PaperTradingRunner:
             return
         
         logger.info("")
-        logger.info("=" * 100)
+        logger.info("=" * SEPARATOR_LENGTH)
         logger.info("T0 建仓目标详情")
-        logger.info("=" * 100)
+        logger.info("=" * SEPARATOR_LENGTH)
         
         # 构建股票名称和价格映射
         name_map = dict(zip(stock_basic['ts_code'], stock_basic['name']))
@@ -804,7 +808,7 @@ class PaperTradingRunner:
             f"{'股票代码':<12} {'股票名称':<10} {'方向':<6} "
             f"{'T0价格':>10} {'建议股数':>10} {'原因':<30}"
         )
-        logger.info("-" * 100)
+        logger.info("-" * SEPARATOR_LENGTH)
         
         # 打印每个目标
         for target in targets:
@@ -818,7 +822,8 @@ class PaperTradingRunner:
                 target_value = total_capital * target.target_weight
                 # 验证目标价值为正
                 if target_value > 0:
-                    shares = int(target_value / t0_price / 100) * 100  # 向下取整到100股的倍数
+                    # 向下取整到手（100股）的倍数
+                    shares = int(target_value / t0_price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
                 else:
                     shares = 0
             else:
@@ -831,7 +836,7 @@ class PaperTradingRunner:
                 f"{t0_price:>10.2f} {shares:>10} {reason:<30}"
             )
         
-        logger.info("=" * 100)
+        logger.info("=" * SEPARATOR_LENGTH)
         logger.info("")
     
     def run_retry(
