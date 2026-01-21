@@ -287,8 +287,9 @@ def test_account_add_position(sample_account, sample_prices):
     
     pos = sample_account.get_position('000001.SZ')
     assert pos.shares == 1500
-    # 平均价格应该是 (1000*10 + 500*12) / 1500 = 10.67
-    assert abs(pos.buy_price - 10.666666) < 0.01
+    # 平均价格应该是 (1000*10 + 500*12) / 1500
+    expected_avg_price = (1000 * 10.0 + 500 * 12.0) / 1500
+    assert abs(pos.buy_price - expected_avg_price) < 0.01
 
 
 def test_account_reduce_position(sample_account):

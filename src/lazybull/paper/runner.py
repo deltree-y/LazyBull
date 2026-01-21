@@ -324,10 +324,16 @@ class PaperTradingRunner:
             logger.error(f"无法加载 {trade_date} 的日线数据")
             return {}
         
-        # 根据价格类型选择价格列
-        # 注意：这里简化处理，买卖使用相同价格
-        # 实际应用中可以分别处理
-        price_col = 'open' if buy_price_type == 'open' else 'close'
+        # 注意：当前实现简化处理，买卖使用相同价格
+        # 实际应用中，可以分别处理买入和卖出价格
+        # 由于卖出价格固定为 close，这里统一使用 close
+        # 如需支持不同买卖价格，需要在 broker 中分别处理
+        price_col = 'close'  # 统一使用收盘价
+        if buy_price_type == 'open' and sell_price_type == 'close':
+            # 如果买入用开盘价，这里也需要提供开盘价
+            # 但由于 broker 需要统一的价格字典，暂时统一使用收盘价
+            # TODO: 优化 broker 接口以支持分别指定买卖价格
+            logger.warning("当前实现买卖使用相同价格，均为收盘价")
         
         prices = {}
         for _, row in daily_data.iterrows():
