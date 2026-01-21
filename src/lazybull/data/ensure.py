@@ -109,7 +109,7 @@ def ensure_basic_data(
             
             trade_cal = client.get_trade_cal(
                 start_date=start_dt.strftime('19901219'),
-                end_date=end_dt.strftime('%Y%m%d'),
+                end_date=f"{end_dt.year}1231",    #直接指向目标年度最后一天
                 exchange="SSE"
             )
             storage.save_raw(trade_cal, "trade_cal", is_force=True)
