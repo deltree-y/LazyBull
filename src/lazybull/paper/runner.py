@@ -168,7 +168,7 @@ class PaperTradingRunner:
         # 6. 记录净值
         logger.info("步骤6: 记录净值")
         # 使用收盘价计算净值
-        all_prices = {**buy_prices, **sell_prices}  # 合并价格字典
+        all_prices = {**sell_prices, **buy_prices}  # 合并价格字典
         self._record_nav(trade_date, all_prices)
         
         logger.info("=" * 80)
