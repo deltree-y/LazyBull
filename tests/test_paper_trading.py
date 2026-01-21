@@ -348,7 +348,7 @@ def test_broker_generate_orders_new_position():
         
         prices = {'000001.SZ': 10.0}
         
-        orders = broker.generate_orders(targets, prices, '20260121')
+        orders = broker.generate_orders(targets, prices, prices, '20260121')
         
         # 应该生成买入订单
         assert len(orders) == 1
@@ -382,7 +382,7 @@ def test_broker_generate_orders_reduce_position():
         
         prices = {'000001.SZ': 10.0}
         
-        orders = broker.generate_orders(targets, prices, '20260121')
+        orders = broker.generate_orders(targets, prices, prices, '20260121')
         
         # 应该生成卖出订单
         assert len(orders) == 1
@@ -483,3 +483,172 @@ def test_storage_nav_not_exist(temp_storage):
     """测试读取不存在的净值记录"""
     result = temp_storage.load_all_nav()
     assert result is None
+
+
+def test_position_with_status():
+    """测试Position模型的status和notes字段"""
+    pos = Position(
+        ts_code='000001.SZ',
+        shares=1000,
+        buy_price=10.0,
+        buy_cost=15.0,
+        buy_date='20260115',
+        status='持有',
+        notes='正常持仓'
+    )
+    
+    assert pos.status == '持有'
+    assert pos.notes == '正常持仓'
+    
+    # 测试持有天数计算
+    holding_days = pos.get_holding_days('20260122')
+    assert holding_days == 7  # 7天
+
+
+def test_position_holding_days():
+    """测试持有天数计算"""
+    pos = Position(
+        ts_code='000001.SZ',
+        shares=1000,
+        buy_price=10.0,
+        buy_cost=15.0,
+        buy_date='20260115'
+    )
+    
+    # 同一天
+    assert pos.get_holding_days('20260115') == 0
+    
+    # 7天后
+    assert pos.get_holding_days('20260122') == 7
+    
+    # 30天后
+    assert pos.get_holding_days('20260214') == 30
+
+
+def test_broker_get_positions_detail(sample_account, sample_prices):
+    """测试获取持仓明细"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        broker = PaperBroker(sample_account, storage=storage)
+        
+        # 添加持仓
+        sample_account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115',
+            status='持有'
+        )
+        sample_account.update_cash(-10015.0)
+        
+        # 获取持仓明细
+        df = broker.get_positions_detail(sample_prices, current_date='20260122')
+        
+        assert len(df) == 1
+        assert df.iloc[0]['股票代码'] == '000001.SZ'
+        assert df.iloc[0]['持仓股数'] == 1000
+        assert df.iloc[0]['持有天数'] == 7
+        assert df.iloc[0]['状态'] == '持有'
+
+
+def test_broker_generate_orders_with_separate_prices():
+    """测试使用分开的买卖价格生成订单"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 添加持仓（用于测试卖出）
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260120'
+        )
+        account.update_cash(-10015.0)
+        
+        targets = [
+            TargetWeight(ts_code='000002.SZ', target_weight=0.5, reason='新建仓位'),
+        ]
+        
+        buy_prices = {'000002.SZ': 20.0}
+        sell_prices = {'000001.SZ': 11.0}  # 卖出价格不同
+        
+        orders = broker.generate_orders(targets, buy_prices, sell_prices, '20260121')
+        
+        # 应该生成买入和卖出订单
+        buy_orders = [o for o in orders if o.action == 'buy']
+        sell_orders = [o for o in orders if o.action == 'sell']
+        
+        assert len(buy_orders) == 1
+        assert len(sell_orders) == 1
+        assert buy_orders[0].price == 20.0
+        assert sell_orders[0].price == 11.0
+
+
+def test_broker_check_can_buy():
+    """测试买入可交易性检查"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 正常股票
+        tradability = {
+            '000001.SZ': {
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'tradable': 1
+            }
+        }
+        can_buy, reason = broker._check_can_buy('000001.SZ', tradability)
+        assert can_buy is True
+        
+        # 停牌股票
+        tradability['000001.SZ']['is_suspended'] = 1
+        can_buy, reason = broker._check_can_buy('000001.SZ', tradability)
+        assert can_buy is False
+        assert '停牌' in reason
+        
+        # 涨停股票
+        tradability['000001.SZ']['is_suspended'] = 0
+        tradability['000001.SZ']['is_limit_up'] = 1
+        can_buy, reason = broker._check_can_buy('000001.SZ', tradability)
+        assert can_buy is False
+        assert '涨停' in reason
+
+
+def test_broker_check_can_sell():
+    """测试卖出可交易性检查"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 正常股票
+        tradability = {
+            '000001.SZ': {
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'tradable': 1
+            }
+        }
+        can_sell, reason = broker._check_can_sell('000001.SZ', tradability)
+        assert can_sell is True
+        
+        # 停牌股票
+        tradability['000001.SZ']['is_suspended'] = 1
+        can_sell, reason = broker._check_can_sell('000001.SZ', tradability)
+        assert can_sell is False
+        assert '停牌' in reason
+        
+        # 跌停股票
+        tradability['000001.SZ']['is_suspended'] = 0
+        tradability['000001.SZ']['is_limit_down'] = 1
+        can_sell, reason = broker._check_can_sell('000001.SZ', tradability)
+        assert can_sell is False
+        assert '跌停' in reason
