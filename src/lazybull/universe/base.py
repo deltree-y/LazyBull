@@ -160,7 +160,7 @@ class BasicUniverse(Universe):
         stock_list = stocks['ts_code'].tolist()
         
         # 如果提供了行情数据，进一步过滤停牌和涨跌停股票
-        if not quote_data.empty and (self.filter_suspended or self.filter_limit_stocks):
+        if quote_data is not None and not quote_data.empty and (self.filter_suspended or self.filter_limit_stocks):
             stock_list = self._filter_untradeable_stocks(
                 stock_list, date, quote_data
             )
