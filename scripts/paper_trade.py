@@ -114,7 +114,7 @@ def view_positions(args):
             prices[row['ts_code']] = row['close']
         
         # 打印持仓明细
-        runner.broker.print_positions_summary(prices)
+        runner.broker.print_positions_summary(prices, args.trade_date)
         
     except Exception as e:
         logger.exception(f"查看持仓失败: {e}")

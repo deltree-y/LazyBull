@@ -414,11 +414,12 @@ class PaperBroker:
             f"{fill.total_cost:<10.2f} {fill.reason:<15}"
         )
     
-    def get_positions_detail(self, current_prices: Dict[str, float]) -> pd.DataFrame:
+    def get_positions_detail(self, current_prices: Dict[str, float], current_date: Optional[str] = None) -> pd.DataFrame:
         """获取持仓明细（含收益信息）
         
         Args:
             current_prices: {ts_code: price} 当前价格字典
+            current_date: 当前日期 YYYYMMDD（可选，用于计算持有天数）
             
         Returns:
             持仓明细DataFrame
@@ -437,28 +438,37 @@ class PaperBroker:
             profit = current_value - cost_value
             profit_rate = (profit / cost_value * 100) if cost_value > 0 else 0.0
             
+            # 计算持有天数
+            holding_days = 0
+            if current_date:
+                holding_days = pos.get_holding_days(current_date)
+            
             details.append({
                 '股票代码': ts_code,
                 '持仓股数': pos.shares,
                 '买入均价': pos.buy_price,
                 '买入成本': pos.buy_cost,
                 '买入日期': pos.buy_date,
+                '持有天数': holding_days,
                 '当前价格': current_price,
                 '当前市值': current_value,
                 '浮动盈亏': profit,
-                '收益率(%)': profit_rate
+                '收益率(%)': profit_rate,
+                '状态': pos.status,
+                '备注': pos.notes
             })
         
         df = pd.DataFrame(details)
         return df
     
-    def print_positions_summary(self, current_prices: Dict[str, float]) -> None:
+    def print_positions_summary(self, current_prices: Dict[str, float], current_date: Optional[str] = None) -> None:
         """打印持仓汇总信息
         
         Args:
             current_prices: {ts_code: price} 当前价格字典
+            current_date: 当前日期 YYYYMMDD（可选，用于计算持有天数）
         """
-        df = self.get_positions_detail(current_prices)
+        df = self.get_positions_detail(current_prices, current_date)
         
         if df.empty:
             logger.info("=" * 80)
@@ -466,21 +476,22 @@ class PaperBroker:
             logger.info("=" * 80)
             return
         
-        logger.info("=" * 120)
+        logger.info("=" * 140)
         logger.info("持仓明细")
-        logger.info("=" * 120)
+        logger.info("=" * 140)
         
         # 打印表头
-        logger.info(f"{'股票代码':<12} {'股数':<10} {'买入均价':<10} {'买入成本':<10} "
-                   f"{'买入日期':<10} {'当前价格':<10} {'当前市值':<12} {'浮盈':<12} {'收益率(%)':<10}")
-        logger.info("-" * 120)
+        logger.info(f"{'股票代码':<12} {'股数':<8} {'买入均价':<10} {'买入成本':<10} "
+                   f"{'买入日期':<10} {'持有天数':<8} {'当前价格':<10} {'当前市值':<12} "
+                   f"{'浮盈':<12} {'收益率(%)':<10} {'状态':<8}")
+        logger.info("-" * 140)
         
         # 打印每行
         for _, row in df.iterrows():
             logger.info(
-                f"{row['股票代码']:<12} {row['持仓股数']:<10} {row['买入均价']:<10.2f} {row['买入成本']:<10.2f} "
-                f"{row['买入日期']:<10} {row['当前价格']:<10.2f} {row['当前市值']:<12.2f} "
-                f"{row['浮动盈亏']:<12.2f} {row['收益率(%)']:<10.2f}"
+                f"{row['股票代码']:<12} {row['持仓股数']:<8} {row['买入均价']:<10.2f} {row['买入成本']:<10.2f} "
+                f"{row['买入日期']:<10} {row['持有天数']:<8} {row['当前价格']:<10.2f} {row['当前市值']:<12.2f} "
+                f"{row['浮动盈亏']:<12.2f} {row['收益率(%)']:<10.2f} {row['状态']:<8}"
             )
         
         # 打印汇总
@@ -489,11 +500,11 @@ class PaperBroker:
         total_profit = df['浮动盈亏'].sum()
         total_profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
         
-        logger.info("-" * 120)
-        logger.info(f"{'合计':<12} {df['持仓股数'].sum():<10} {'':<10} {df['买入成本'].sum():<10.2f} "
-                   f"{'':<10} {'':<10} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<10.2f}")
-        logger.info("=" * 120)
+        logger.info("-" * 140)
+        logger.info(f"{'合计':<12} {df['持仓股数'].sum():<8} {'':<10} {df['买入成本'].sum():<10.2f} "
+                   f"{'':<10} {'':<8} {'':<10} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<10.2f}")
+        logger.info("=" * 140)
         logger.info(f"账户现金: {self.account.get_cash():,.2f}")
         logger.info(f"持仓市值: {total_value:,.2f}")
         logger.info(f"总资产: {self.account.get_cash() + total_value:,.2f}")
-        logger.info("=" * 120)
+        logger.info("=" * 140)
