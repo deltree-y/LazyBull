@@ -140,9 +140,6 @@ class PaperBroker:
                 
                 # 确保不超过持仓且不卖超
                 sell_shares = min(sell_shares, pos.shares)
-                # 额外确保不会产生负剩余
-                if sell_shares > pos.shares:
-                    sell_shares = (pos.shares // 100) * 100
                 
                 if sell_shares > 0:
                     orders.append(Order(
@@ -429,8 +426,13 @@ class PaperBroker:
             # 检查是否清仓但留有零股
             remaining_pos = self.account.get_position(order.ts_code)
             if order.target_weight == 0 and remaining_pos and remaining_pos.shares > 0:
-                # 清仓目标但有剩余零股，更新notes
-                remaining_pos.notes = f"清仓时保留零股{remaining_pos.shares}股"
+                # 清仓目标但有剩余零股，更新notes（追加而不是覆盖）
+                existing_notes = remaining_pos.notes
+                odd_lot_note = f"清仓时保留零股{remaining_pos.shares}股"
+                if existing_notes:
+                    remaining_pos.notes = f"{existing_notes}; {odd_lot_note}"
+                else:
+                    remaining_pos.notes = odd_lot_note
                 remaining_pos.status = "零股待处理"
                 logger.info(f"股票 {order.ts_code} 清仓后剩余零股 {remaining_pos.shares} 股，已标记")
             
