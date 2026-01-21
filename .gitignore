@@ -59,6 +59,8 @@ data/reports/*
 data/models/*.joblib
 data/models/*.json
 !data/models/.gitkeep
+data/paper/*
+!data/paper/.gitkeep
 
 # Logs
 *.log

@@ -1,34 +1,55 @@
 {
-  "cash": 87572.47871,
-  "last_update": "20260109",
+  "cash": 42361.34249999994,
+  "last_update": "20260106",
   "positions": {
-    "600730.SH": {
-      "ts_code": "600730.SH",
-      "shares": 1,
-      "buy_price": 12.01,
-      "buy_cost": 0.008504999999999999,
-      "buy_date": "20260106"
-    },
-    "600800.SH": {
-      "ts_code": "600800.SH",
-      "shares": 7200,
-      "buy_price": 3.5005555555555556,
-      "buy_cost": 22.602,
-      "buy_date": "20260109"
-    },
-    "603878.SH": {
-      "ts_code": "603878.SH",
-      "shares": 2919,
-      "buy_price": 8.02,
-      "buy_cost": 16.413254516129033,
+    "002294.SZ": {
+      "ts_code": "002294.SZ",
+      "shares": 400,
+      "buy_price": 50.49,
+      "buy_cost": 15.098,
       "buy_date": "20260106"
     },
     "000078.SZ": {
       "ts_code": "000078.SZ",
-      "shares": 7000,
-      "buy_price": 3.5814285714285714,
-      "buy_cost": 22.535,
-      "buy_date": "20260109"
+      "shares": 6900,
+      "buy_price": 3.58,
+      "buy_cost": 17.351,
+      "buy_date": "20260106"
+    },
+    "605580.SH": {
+      "ts_code": "605580.SH",
+      "shares": 1000,
+      "buy_price": 22.74,
+      "buy_cost": 16.37,
+      "buy_date": "20260106"
+    },
+    "603815.SH": {
+      "ts_code": "603815.SH",
+      "shares": 3200,
+      "buy_price": 7.61,
+      "buy_cost": 17.176000000000002,
+      "buy_date": "20260106"
+    },
+    "600730.SH": {
+      "ts_code": "600730.SH",
+      "shares": 2000,
+      "buy_price": 12.01,
+      "buy_cost": 17.009999999999998,
+      "buy_date": "20260106"
+    },
+    "603863.SH": {
+      "ts_code": "603863.SH",
+      "shares": 1200,
+      "buy_price": 19.64,
+      "buy_cost": 16.784,
+      "buy_date": "20260106"
+    },
+    "603353.SH": {
+      "ts_code": "603353.SH",
+      "shares": 800,
+      "buy_price": 27.78,
+      "buy_cost": 16.112000000000002,
+      "buy_date": "20260106"
     },
     "603322.SH": {
       "ts_code": "603322.SH",
@@ -37,96 +58,82 @@
       "buy_cost": 16.97,
       "buy_date": "20260106"
     },
+    "002110.SZ": {
+      "ts_code": "002110.SZ",
+      "shares": 5800,
+      "buy_price": 4.29,
+      "buy_cost": 17.441000000000003,
+      "buy_date": "20260106"
+    },
+    "600603.SH": {
+      "ts_code": "600603.SH",
+      "shares": 3800,
+      "buy_price": 6.5,
+      "buy_cost": 17.35,
+      "buy_date": "20260106"
+    },
+    "603878.SH": {
+      "ts_code": "603878.SH",
+      "shares": 3100,
+      "buy_price": 8.02,
+      "buy_cost": 17.431,
+      "buy_date": "20260106"
+    },
+    "000520.SZ": {
+      "ts_code": "000520.SZ",
+      "shares": 5200,
+      "buy_price": 4.72,
+      "buy_cost": 17.272,
+      "buy_date": "20260106"
+    },
+    "000572.SZ": {
+      "ts_code": "000572.SZ",
+      "shares": 3200,
+      "buy_price": 7.81,
+      "buy_cost": 17.496000000000002,
+      "buy_date": "20260106"
+    },
+    "603680.SH": {
+      "ts_code": "603680.SH",
+      "shares": 1500,
+      "buy_price": 15.96,
+      "buy_cost": 16.97,
+      "buy_date": "20260106"
+    },
+    "600815.SH": {
+      "ts_code": "600815.SH",
+      "shares": 7300,
+      "buy_price": 3.39,
+      "buy_cost": 17.3735,
+      "buy_date": "20260106"
+    },
+    "002127.SZ": {
+      "ts_code": "002127.SZ",
+      "shares": 7600,
+      "buy_price": 3.27,
+      "buy_cost": 17.426000000000002,
+      "buy_date": "20260106"
+    },
+    "000952.SZ": {
+      "ts_code": "000952.SZ",
+      "shares": 3100,
+      "buy_price": 7.97,
+      "buy_cost": 17.3535,
+      "buy_date": "20260106"
+    },
+    "600800.SH": {
+      "ts_code": "600800.SH",
+      "shares": 7100,
+      "buy_price": 3.5,
+      "buy_cost": 17.425,
+      "buy_date": "20260106"
+    },
     "603829.SH": {
       "ts_code": "603829.SH",
       "shares": 1100,
       "buy_price": 22.27,
       "buy_cost": 17.2485,
       "buy_date": "20260106"
-    },
-    "605580.SH": {
-      "ts_code": "605580.SH",
-      "shares": 1100,
-      "buy_price": 22.786363636363635,
-      "buy_cost": 22.5325,
-      "buy_date": "20260109"
-    },
-    "002702.SZ": {
-      "ts_code": "002702.SZ",
-      "shares": 3500,
-      "buy_price": 7.02,
-      "buy_cost": 17.285,
-      "buy_date": "20260107"
-    },
-    "002977.SZ": {
-      "ts_code": "002977.SZ",
-      "shares": 644,
-      "buy_price": 33.99,
-      "buy_cost": 15.544780000000001,
-      "buy_date": "20260107"
-    },
-    "600734.SH": {
-      "ts_code": "600734.SH",
-      "shares": 5300,
-      "buy_price": 4.69,
-      "buy_cost": 17.4285,
-      "buy_date": "20260107"
-    },
-    "600846.SH": {
-      "ts_code": "600846.SH",
-      "shares": 1700,
-      "buy_price": 14.3,
-      "buy_cost": 17.155,
-      "buy_date": "20260107"
-    },
-    "002715.SZ": {
-      "ts_code": "002715.SZ",
-      "shares": 1600,
-      "buy_price": 15.82,
-      "buy_cost": 17.656,
-      "buy_date": "20260109"
-    },
-    "002792.SZ": {
-      "ts_code": "002792.SZ",
-      "shares": 400,
-      "buy_price": 60.78,
-      "buy_cost": 17.156,
-      "buy_date": "20260109"
-    },
-    "002598.SZ": {
-      "ts_code": "002598.SZ",
-      "shares": 2700,
-      "buy_price": 9.47,
-      "buy_cost": 17.7845,
-      "buy_date": "20260109"
-    },
-    "001330.SZ": {
-      "ts_code": "001330.SZ",
-      "shares": 3200,
-      "buy_price": 8.0,
-      "buy_cost": 17.80224,
-      "buy_date": "20260109"
-    },
-    "002738.SZ": {
-      "ts_code": "002738.SZ",
-      "shares": 300,
-      "buy_price": 80.3,
-      "buy_cost": 17.045,
-      "buy_date": "20260109"
-    },
-    "603903.SH": {
-      "ts_code": "603903.SH",
-      "shares": 1900,
-      "buy_price": 12.89,
-      "buy_cost": 17.2455,
-      "buy_date": "20260109"
-    },
-    "001208.SZ": {
-      "ts_code": "001208.SZ",
-      "shares": 800,
-      "buy_price": 29.0,
-      "buy_cost": 16.6,
-      "buy_date": "20260109"
     }
   }
 }
