@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from ..common.print_table import format_row
+
 from ..common.cost import CostModel
 from .account import PaperAccount
 from .models import Fill, Order, TargetWeight
@@ -33,6 +35,11 @@ class PaperBroker:
         self.account = account
         self.cost_model = cost_model or CostModel()
         self.storage = storage or PaperStorage()
+        self.order_table_widths = [12, 6, 10, 10, 8, 8, 10, 12, 10, 10, 10, 10, 15]
+        self.order_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
+        self.positions_table_widths = [12, 8, 10, 10, 12, 8, 10, 12, 12, 12, 8]
+        self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
+
     
     def generate_orders(
         self,
@@ -271,12 +278,15 @@ class PaperBroker:
         fills = []
         
         # 打印标题
+        header = ["股票代码", "方向", "目标权重", "当前权重", "股数", "价格类型", "参考价格", "成交金额", "佣金", "印花税", "滑点", "总成本", "原因"]
         logger.info("=" * 120)
         logger.info(f"纸面交易执行明细 - {trade_date}")
         logger.info("=" * 120)
-        logger.info(f"{'股票代码':<12} {'方向':<6} {'目标权重':<10} {'当前权重':<10} "
-                   f"{'股数':<8} {'价格类型':<8} {'参考价格':<10} {'成交金额':<12} "
-                   f"{'佣金':<10} {'印花税':<10} {'滑点':<10} {'总成本':<10} {'原因':<15}")
+        #logger.info(f"{'股票代码':<12} {'方向':<6} {'目标权重':<10} {'当前权重':<10} "
+        #           f"{'股数':<8} {'价格类型':<8} {'参考价格':<10} {'成交金额':<12} "
+        #           f"{'佣金':<10} {'印花税':<10} {'滑点':<10} {'总成本':<10} {'原因':<15}")
+        logger.info(format_row(header, self.order_table_widths, ['left'] * len(self.order_table_widths)))
+
         logger.info("-" * 120)
         
         # 先执行卖出订单
@@ -407,12 +417,29 @@ class PaperBroker:
             fill: 成交记录
             price_type: 价格类型
         """
-        logger.info(
-            f"{order.ts_code:<12} {order.action:<6} {order.target_weight:<10.4f} {order.current_weight:<10.4f} "
-            f"{order.shares:<8} {price_type:<8} {fill.price:<10.2f} {fill.amount:<12.2f} "
-            f"{fill.commission:<10.2f} {fill.stamp_tax:<10.2f} {fill.slippage:<10.2f} "
-            f"{fill.total_cost:<10.2f} {fill.reason:<15}"
-        )
+        #logger.info(
+        #    f"{order.ts_code:<12} {order.action:<6} {order.target_weight:<10.4f} {order.current_weight:<10.4f} "
+        #    f"{order.shares:<8} {price_type:<8} {fill.price:<10.2f} {fill.amount:<12.2f} "
+        #    f"{fill.commission:<10.2f} {fill.stamp_tax:<10.2f} {fill.slippage:<10.2f} "
+        #    f"{fill.total_cost:<10.2f} {fill.reason:<15}"
+        #)
+        row = [
+            order.ts_code,
+            order.action,
+            f"{order.target_weight:.4f}",
+            f"{order.current_weight:.4f}",
+            str(order.shares),
+            price_type,
+            f"{fill.price:.2f}",
+            f"{fill.amount:.2f}",
+            f"{fill.commission:.2f}",
+            f"{fill.stamp_tax:.2f}",
+            f"{fill.slippage:.2f}",
+            f"{fill.total_cost:.2f}",
+            fill.reason
+        ]
+        logger.info(format_row(row, self.order_table_widths, self.order_table_aligns))
+
     
     def get_positions_detail(self, current_prices: Dict[str, float], current_date: Optional[str] = None) -> pd.DataFrame:
         """获取持仓明细（含收益信息）
@@ -481,18 +508,31 @@ class PaperBroker:
         logger.info("=" * 140)
         
         # 打印表头
-        logger.info(f"{'股票代码':<12} {'股数':<8} {'买入均价':<10} {'买入成本':<10} "
-                   f"{'买入日期':<10} {'持有天数':<8} {'当前价格':<10} {'当前市值':<12} "
-                   f"{'浮盈':<12} {'收益率(%)':<10} {'状态':<8}")
+        #logger.info(f"{'股票代码':<12} {'股数':<8} {'买入均价':<10} {'买入成本':<10} "
+        #           f"{'买入日期':<10} {'持有天数':<8} {'当前价格':<10} {'当前市值':<12} "
+        #           f"{'浮盈':<12} {'收益率(%)':<10} {'状态':<8}")
+        header = ["股票代码", "股数", "买入均价", "买入成本", "买入日期", "持有天数", "当前价格", "当前市值", "浮盈", "收益率(%)", "状态"]
+        logger.info(format_row(header, self.positions_table_widths, ['left'] * len(self.positions_table_widths)))
+
         logger.info("-" * 140)
         
         # 打印每行
         for _, row in df.iterrows():
-            logger.info(
-                f"{row['股票代码']:<12} {row['持仓股数']:<8} {row['买入均价']:<10.2f} {row['买入成本']:<10.2f} "
-                f"{row['买入日期']:<10} {row['持有天数']:<8} {row['当前价格']:<10.2f} {row['当前市值']:<12.2f} "
-                f"{row['浮动盈亏']:<12.2f} {row['收益率(%)']:<10.2f} {row['状态']:<8}"
-            )
+            #logger.info(
+            #    f"{row['股票代码']:<12} {row['持仓股数']:<8} {row['买入均价']:<10.2f} {row['买入成本']:<10.2f} "
+            #    f"{row['买入日期']:<10} {row['持有天数']:<8} {row['当前价格']:<10.2f} {row['当前市值']:<12.2f} "
+            #    f"{row['浮动盈亏']:<12.2f} {row['收益率(%)']:<10.2f} {row['状态']:<8}"
+            #)
+            row = [
+                row['股票代码'], row['持仓股数'], 
+                f"{row['买入均价']:.2f}", f"{row['买入成本']:.2f}", 
+                row['买入日期'], row['持有天数'],
+                f"{row['当前价格']:.2f}", f"{row['当前市值']:.2f}", 
+                f"{row['浮动盈亏']:.2f}", f"{row['收益率(%)']:.2f}",
+                row['状态']
+            ]
+            logger.info(format_row(row, self.positions_table_widths, self.positions_table_aligns))
+
         
         # 打印汇总
         total_cost = df['买入成本'].sum() + (df['持仓股数'] * df['买入均价']).sum()

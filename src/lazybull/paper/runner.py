@@ -47,7 +47,7 @@ class PaperTradingRunner:
         self.broker = PaperBroker(self.account, storage=self.paper_storage)
         
         # 初始化信号生成器
-        self.signal = signal
+        self.signal = signal 
         self.weight_method = weight_method
         
         # 初始化数据加载器
@@ -83,6 +83,11 @@ class PaperTradingRunner:
         
         # 2. 生成信号
         logger.info("步骤2: 生成信号")
+        self.signal = self.signal or MLSignal(
+            top_n=top_n,
+            model_version=model_version,
+            weight_method=self.weight_method
+        )
         targets = self._generate_signals(
             trade_date,
             universe_type=universe_type,
@@ -307,6 +312,7 @@ class PaperTradingRunner:
         
         # 加载价格数据
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
+        signal_data = self.storage.load_cs_train_day(trade_date).copy()
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {trade_date} 的日线数据")
             return []
@@ -340,7 +346,8 @@ class PaperTradingRunner:
             signal_dict = self.signal.generate(
                 date_ts,
                 stocks,
-                {'daily': daily_data}
+                #{'daily': daily_data}
+                {'features': signal_data}
             )
         except Exception as e:
             logger.error(f"信号生成失败: {e}")

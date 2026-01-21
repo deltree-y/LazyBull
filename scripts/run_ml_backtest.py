@@ -382,7 +382,7 @@ def main():
         )
         
         if len(features_by_date) == 0:
-            logger.error("没有特征数据，无法运行回测")
+            logger.error("，无法运行回测")
             sys.exit(1)
         
         # 2. 准备价格数据

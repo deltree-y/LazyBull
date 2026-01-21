@@ -22,7 +22,7 @@ class MLSignal(Signal):
     
     def __init__(
         self,
-        top_n: int = 30,
+        top_n: int = 20,
         model_version: Optional[int] = None,
         models_dir: str = "./data/models",
         weight_method: str = "equal",
@@ -156,6 +156,7 @@ class MLSignal(Signal):
         # 获取当日特征数据
         if "features" not in data:
             logger.warning(f"{date.date()} 没有特征数据")
+            logger.info(f"data columns: {data['daily'].columns.tolist() if 'daily' in data else 'N/A'}")
             return {}
         
         features_df = data["features"]
