@@ -39,6 +39,9 @@ class PaperBroker:
         self.order_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
         self.positions_table_widths = [12, 8, 10, 10, 12, 8, 10, 12, 12, 12, 8]
         self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
+        
+        # 加载延迟卖出队列
+        self.pending_sells = self.storage.load_pending_sells()
 
     
     def generate_orders(
@@ -98,17 +101,48 @@ class PaperBroker:
                 can_sell, sell_reason = self._check_can_sell(ts_code, tradability)
                 if not can_sell:
                     logger.warning(f"股票 {ts_code} 不可卖出: {sell_reason}，订单延迟")
-                    # 跌停或停牌，订单延迟
+                    # 跌停或停牌，加入延迟卖出队列
+                    from .models import PendingSell
+                    pending_sell = PendingSell(
+                        ts_code=ts_code,
+                        shares=pos.shares,  # 记录待卖出股数
+                        target_weight=target_weight,
+                        reason=reason if target_weight == 0 else "减仓",
+                        create_date=trade_date,
+                        attempts=0
+                    )
+                    self.pending_sells.append(pending_sell)
                     continue
                 
                 # 计算需要卖出的股数
                 target_value = total_value * target_weight
                 current_value = pos.shares * sell_prices[ts_code]
                 sell_value = current_value - target_value
-                sell_shares = int(sell_value / sell_prices[ts_code])
+                sell_shares_raw = int(sell_value / sell_prices[ts_code])
                 
-                # 确保不超过持仓
+                # 判断是否为清仓
+                is_full_liquidation = (target_weight == 0)
+                
+                if is_full_liquidation:
+                    # 清仓：卖出最大100倍数，零股保留
+                    sell_shares = (pos.shares // 100) * 100
+                    if sell_shares < pos.shares:
+                        # 有零股剩余，需要warning并标记
+                        odd_shares = pos.shares - sell_shares
+                        logger.warning(
+                            f"股票 {ts_code} 清仓时检测到零股 {odd_shares} 股，"
+                            f"仅卖出100倍数部分 {sell_shares} 股，零股保留"
+                        )
+                        # 标记持仓notes（在execute时处理）
+                else:
+                    # 减仓：按100股向下取整
+                    sell_shares = (sell_shares_raw // 100) * 100
+                
+                # 确保不超过持仓且不卖超
                 sell_shares = min(sell_shares, pos.shares)
+                # 额外确保不会产生负剩余
+                if sell_shares > pos.shares:
+                    sell_shares = (pos.shares // 100) * 100
                 
                 if sell_shares > 0:
                     orders.append(Order(
@@ -171,6 +205,9 @@ class PaperBroker:
         
         logger.info(f"生成订单: {len([o for o in orders if o.action == 'buy'])} 买，"
                    f"{len([o for o in orders if o.action == 'sell'])} 卖")
+        
+        # 保存延迟卖出队列
+        self.storage.save_pending_sells(self.pending_sells)
         
         return orders
     
@@ -389,6 +426,14 @@ class PaperBroker:
             self.account.update_cash(cash_received)
             self.account.reduce_position(order.ts_code, order.shares)
             
+            # 检查是否清仓但留有零股
+            remaining_pos = self.account.get_position(order.ts_code)
+            if order.target_weight == 0 and remaining_pos and remaining_pos.shares > 0:
+                # 清仓目标但有剩余零股，更新notes
+                remaining_pos.notes = f"清仓时保留零股{remaining_pos.shares}股"
+                remaining_pos.status = "零股待处理"
+                logger.info(f"股票 {order.ts_code} 清仓后剩余零股 {remaining_pos.shares} 股，已标记")
+            
             # 创建成交记录
             fill = Fill(
                 trade_date=trade_date,
@@ -548,3 +593,120 @@ class PaperBroker:
         logger.info(f"持仓市值: {total_value:,.2f}")
         logger.info(f"总资产: {self.account.get_cash() + total_value:,.2f}")
         logger.info("=" * 140)
+    
+    def retry_pending_sells(
+        self, 
+        trade_date: str, 
+        sell_price_type: str = 'close'
+    ) -> List[Fill]:
+        """重试延迟卖出订单
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            sell_price_type: 卖出价格类型 open/close
+            
+        Returns:
+            成交记录列表
+        """
+        if not self.pending_sells:
+            logger.info("当前无延迟卖出订单")
+            return []
+        
+        logger.info("=" * 80)
+        logger.info(f"重试延迟卖出订单 - {trade_date}")
+        logger.info(f"待处理订单数: {len(self.pending_sells)}")
+        logger.info("=" * 80)
+        
+        # 加载当日可交易性
+        tradability = self._load_tradability_info(trade_date)
+        
+        # 加载价格
+        from ..data import DataLoader, Storage
+        storage = Storage()
+        loader = DataLoader(storage)
+        daily_data = loader.load_clean_daily_by_date(trade_date)
+        
+        if daily_data is None or daily_data.empty:
+            logger.error(f"无法加载 {trade_date} 的价格数据")
+            return []
+        
+        # 构建价格字典
+        sell_prices = {}
+        price_col = sell_price_type  # 'open' 或 'close'
+        if price_col not in daily_data.columns:
+            logger.warning(f"价格列 {price_col} 不存在，降级到 close")
+            price_col = 'close'
+        
+        for _, row in daily_data.iterrows():
+            ts_code = row['ts_code']
+            price = row.get(price_col)
+            if not pd.isna(price) and price > 0:
+                sell_prices[ts_code] = price
+        
+        # 重试每个订单
+        fills = []
+        remaining_sells = []
+        
+        for ps in self.pending_sells:
+            ps.attempts += 1
+            
+            # 检查持仓是否还存在
+            pos = self.account.get_position(ps.ts_code)
+            if not pos or pos.shares == 0:
+                logger.info(f"股票 {ps.ts_code} 已无持仓，移除延迟卖出订单")
+                continue
+            
+            # 检查价格数据
+            if ps.ts_code not in sell_prices:
+                logger.warning(f"股票 {ps.ts_code} 无价格数据，保留订单")
+                remaining_sells.append(ps)
+                continue
+            
+            # 检查可交易性
+            can_sell, reason = self._check_can_sell(ps.ts_code, tradability)
+            if not can_sell:
+                logger.warning(f"股票 {ps.ts_code} 仍不可卖出: {reason}，保留订单（尝试次数: {ps.attempts}）")
+                remaining_sells.append(ps)
+                continue
+            
+            # 可以卖出，生成订单
+            # 计算实际可卖股数（取当前持仓和pending记录的最小值）
+            sell_shares = min(ps.shares, pos.shares)
+            # 按100股向下取整
+            sell_shares = (sell_shares // 100) * 100
+            
+            if sell_shares == 0:
+                logger.warning(f"股票 {ps.ts_code} 持仓不足100股，无法卖出，保留订单")
+                remaining_sells.append(ps)
+                continue
+            
+            # 构建订单
+            order = Order(
+                ts_code=ps.ts_code,
+                action='sell',
+                shares=sell_shares,
+                price=sell_prices[ps.ts_code],
+                target_weight=ps.target_weight,
+                current_weight=0.0,  # 不重要
+                reason=f"{ps.reason}(延迟)"
+            )
+            
+            # 执行订单
+            fill = self._execute_single_order(order, trade_date, sell_price_type)
+            if fill:
+                fills.append(fill)
+                logger.info(f"成功卖出 {ps.ts_code} {sell_shares} 股")
+            else:
+                # 执行失败，保留订单
+                logger.warning(f"股票 {ps.ts_code} 执行失败，保留订单")
+                remaining_sells.append(ps)
+        
+        # 更新延迟卖出队列
+        self.pending_sells = remaining_sells
+        self.storage.save_pending_sells(self.pending_sells)
+        
+        logger.info("=" * 80)
+        logger.info(f"重试完成: 成功卖出 {len(fills)} 笔，剩余 {len(remaining_sells)} 笔延迟订单")
+        logger.info("=" * 80)
+        
+        return fills

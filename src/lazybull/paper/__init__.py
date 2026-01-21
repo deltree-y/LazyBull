@@ -2,7 +2,7 @@
 
 from .account import PaperAccount
 from .broker import PaperBroker
-from .models import AccountState, Fill, NAVRecord, Order, Position, TargetWeight
+from .models import AccountState, Fill, NAVRecord, Order, PendingSell, Position, TargetWeight
 from .runner import PaperTradingRunner
 from .storage import PaperStorage
 
@@ -17,4 +17,5 @@ __all__ = [
     'Fill',
     'TargetWeight',
     'NAVRecord',
+    'PendingSell',
 ]

@@ -136,3 +136,14 @@ class NAVRecord:
     position_value: float  # 持仓市值
     total_value: float  # 总资产
     nav: float  # 净值
+
+
+@dataclass
+class PendingSell:
+    """延迟卖出订单"""
+    ts_code: str  # 股票代码
+    shares: int  # 待卖出股数
+    target_weight: float  # 目标权重
+    reason: str  # 原因
+    create_date: str  # 创建日期 YYYYMMDD
+    attempts: int = 0  # 尝试次数
