@@ -150,6 +150,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ### 计划功能 (Roadmap)
 
+- ✅ **纸面交易（Paper Trading）**: 日频工作流，T0 生成信号，T1 执行打印，支持状态持久化 ⭐ 新增
 - 🔲 完整的价值红利因子库
 - 🔲 组合优化与风险管理
 - 🔲 云端定时任务
@@ -265,6 +266,28 @@ python scripts/update_basic_data.py --only-stock-basic
 # 强制更新（即使已是最新）
 python scripts/update_basic_data.py --force
 ```
+
+##### 纸面交易（Paper Trading）
+
+LazyBull 支持纸面交易工作流，用于模拟实盘交易：
+
+```bash
+# T0 工作流：拉取数据 + 生成T1待执行目标
+python scripts/paper_trade.py t0 --trade-date 20260121 --buy-price close --universe mainboard --top-n 5
+
+# T1 工作流：读取待执行目标 + 执行订单 + 打印明细
+python scripts/paper_trade.py t1 --trade-date 20260122 --buy-price close --sell-price close
+```
+
+**纸面交易特点：**
+- T0/T1 分离工作流（T0 收盘后生成信号，T1 执行调仓）
+- 完整的持久化（账户状态、交易记录、净值曲线）
+- 详细的打印输出（股票、方向、权重、价格、成本、原因）
+- 灵活的价格配置（买入可选开盘价/收盘价）
+- 主板股票池（仅沪深主板，排除科创板、创业板、北交所）
+- 成本计算（佣金、印花税、滑点）
+
+详见 [纸面交易使用指南](docs/paper_trading_guide.md)
 
 #### 运行回测
 
@@ -495,11 +518,12 @@ LazyBull/
 - [回测假设](docs/backtest_assumptions.md): 回测系统的假设、简化与局限性
 - [特征与标签定义](docs/features_schema.md): 日频特征构建、标签计算、过滤规则说明
 - [涨跌停与停牌处理指南](docs/trade_status_guide.md): 涨跌停与停牌状态的自动处理机制
+- [纸面交易使用指南](docs/paper_trading_guide.md): 纸面交易（Paper Trading）完整使用指南 ⭐ 新增
 - [项目路线图](docs/roadmap.md): 分阶段开发计划
 - [IC与RankIC优化指南](docs/ic_optimization_guide.md): 提升模型预测能力的系统性优化方案
-- [成交额过滤指南](docs/amount_filter_guide.md): 成交额过滤功能说明与配置 ⭐ 新增
-- [分批调仓指南](docs/batch_rebalance_guide.md): 分批调仓功能说明与配置 ⭐ 新增
-- [止损触发指南](docs/stop_loss_guide.md): 止损触发功能说明与配置 ⭐ 新增
+- [成交额过滤指南](docs/amount_filter_guide.md): 成交额过滤功能说明与配置
+- [分批调仓指南](docs/batch_rebalance_guide.md): 分批调仓功能说明与配置
+- [止损触发指南](docs/stop_loss_guide.md): 止损触发功能说明与配置
 - [重大变更说明](docs/BREAKING_CHANGES.md): v0.4.0 版本的 Breaking Changes ⚠️ 重要
 - [项目更新记录](docs/PR/UPDATES.md): 历史版本更新说明
 - [重构总结](docs/PR/REFACTOR_SUMMARY.md): 代码重构文档
