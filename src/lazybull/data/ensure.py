@@ -108,7 +108,7 @@ def ensure_basic_data(
             )
             
             trade_cal = client.get_trade_cal(
-                start_date=start_dt.strftime('%Y%m%d'),
+                start_date=start_dt.strftime('19901219'),
                 end_date=end_dt.strftime('%Y%m%d'),
                 exchange="SSE"
             )
