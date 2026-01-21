@@ -36,6 +36,7 @@ def run_t0(args):
     logger.info(f"买入价格: {args.buy_price}")
     logger.info(f"股票池: {args.universe}")
     logger.info(f"持仓数: {args.top_n}")
+    logger.info(f"调仓频率: {args.rebalance_freq} 个交易日")
     if args.model_version:
         logger.info(f"模型版本: {args.model_version}")
     logger.info("=" * 80)
@@ -53,7 +54,8 @@ def run_t0(args):
             buy_price_type=args.buy_price,
             universe_type=args.universe,
             top_n=args.top_n,
-            model_version=args.model_version
+            model_version=args.model_version,
+            rebalance_freq=args.rebalance_freq
         )
         logger.info("T0 工作流完成！")
     except Exception as e:
@@ -121,6 +123,30 @@ def view_positions(args):
         sys.exit(1)
 
 
+def run_retry(args):
+    """运行延迟卖出重试"""
+    logger.info("=" * 80)
+    logger.info("纸面交易 延迟卖出重试")
+    logger.info("=" * 80)
+    logger.info(f"交易日期: {args.trade_date}")
+    logger.info(f"卖出价格: {args.sell_price}")
+    logger.info("=" * 80)
+    
+    # 创建运行器
+    runner = PaperTradingRunner()
+    
+    # 运行重试
+    try:
+        runner.run_retry(
+            trade_date=args.trade_date,
+            sell_price_type=args.sell_price
+        )
+        logger.info("重试完成！")
+    except Exception as e:
+        logger.exception(f"重试失败: {e}")
+        sys.exit(1)
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -175,6 +201,12 @@ def main():
         default='equal',
         help='权重分配方法（默认：equal等权，score按预测分数加权）'
     )
+    t0_parser.add_argument(
+        '--rebalance-freq',
+        type=int,
+        default=5,
+        help='调仓频率（交易日数，默认：5）'
+    )
     
     # T1 子命令
     t1_parser = subparsers.add_parser(
@@ -210,6 +242,23 @@ def main():
         help='参考交易日期（用于获取当前价格），格式YYYYMMDD'
     )
     
+    # retry 子命令
+    retry_parser = subparsers.add_parser(
+        'retry',
+        help='重试延迟卖出订单'
+    )
+    retry_parser.add_argument(
+        '--trade-date',
+        required=True,
+        help='交易日期，格式YYYYMMDD'
+    )
+    retry_parser.add_argument(
+        '--sell-price',
+        choices=['open', 'close'],
+        default='close',
+        help='卖出价格类型（默认：close）'
+    )
+    
     args = parser.parse_args()
     
     if args.command is None:
@@ -227,6 +276,8 @@ def main():
         run_t1(args)
     elif args.command == 'positions':
         view_positions(args)
+    elif args.command == 'retry':
+        run_retry(args)
 
 
 if __name__ == "__main__":

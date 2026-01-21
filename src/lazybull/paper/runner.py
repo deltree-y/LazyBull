@@ -56,13 +56,122 @@ class PaperTradingRunner:
         # 初始化TuShare客户端
         self.client = TushareClient()
     
+    def _correct_trade_date(self, input_date: str) -> str:
+        """校正交易日期：非交易日自动滚动到下一交易日
+        
+        Args:
+            input_date: 输入日期 YYYYMMDD
+            
+        Returns:
+            校正后的交易日期 YYYYMMDD
+        """
+        try:
+            trade_cal = self.loader.load_clean_trade_cal()
+            if trade_cal is None:
+                logger.error("无法加载交易日历")
+                return input_date
+            
+            # 筛选开市日
+            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+            
+            # 检查输入日期是否为交易日
+            if input_date in trade_dates:
+                return input_date
+            
+            # 找到输入日期后的第一个交易日
+            for date in trade_dates:
+                if date > input_date:
+                    logger.warning(
+                        f"输入日期 {input_date} 不是交易日，"
+                        f"已自动校正到下一交易日: {date}"
+                    )
+                    return date
+            
+            # 如果没有找到后续交易日，返回原日期（可能是未来日期）
+            logger.warning(f"未找到 {input_date} 之后的交易日，使用原日期")
+            return input_date
+            
+        except Exception as e:
+            logger.error(f"校正交易日期失败: {e}")
+            return input_date
+    
+    def _check_rebalance_day(
+        self, 
+        trade_date: str, 
+        rebalance_freq: int
+    ) -> bool:
+        """检查是否为调仓日
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            rebalance_freq: 调仓频率（交易日数）
+            
+        Returns:
+            True 如果是调仓日
+            
+        Raises:
+            RuntimeError: 如果不是调仓日
+        """
+        # 加载调仓状态
+        rebalance_state = self.paper_storage.load_rebalance_state()
+        
+        # 首次运行，允许执行
+        if rebalance_state is None:
+            logger.info("首次运行T0，允许执行")
+            return True
+        
+        last_rebalance_date = rebalance_state.get('last_rebalance_date')
+        if not last_rebalance_date:
+            logger.info("无上次调仓记录，允许执行")
+            return True
+        
+        # 计算距离上次调仓的交易日数
+        try:
+            trade_cal = self.loader.load_clean_trade_cal()
+            if trade_cal is None:
+                logger.error("无法加载交易日历，跳过调仓日检查")
+                return True
+            
+            # 筛选开市日
+            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+            
+            # 找到两个日期的索引
+            try:
+                last_idx = trade_dates.index(last_rebalance_date)
+                current_idx = trade_dates.index(trade_date)
+            except ValueError as e:
+                logger.error(f"日期不在交易日历中: {e}")
+                return True
+            
+            # 计算间隔
+            days_since_last = current_idx - last_idx
+            
+            if days_since_last >= rebalance_freq:
+                logger.info(
+                    f"距离上次调仓 {last_rebalance_date} 已过 {days_since_last} 个交易日，"
+                    f"满足调仓频率 {rebalance_freq}，允许执行"
+                )
+                return True
+            else:
+                raise RuntimeError(
+                    f"当前不是调仓日！距离上次调仓 {last_rebalance_date} "
+                    f"仅过 {days_since_last} 个交易日，"
+                    f"需要至少 {rebalance_freq} 个交易日。"
+                )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.error(f"检查调仓日失败: {e}，跳过检查")
+            return True
+    
     def run_t0(
         self,
         trade_date: str,
         buy_price_type: str = 'close',
         universe_type: str = 'mainboard',
         top_n: int = 5,
-        model_version: Optional[int] = None
+        model_version: Optional[int] = None,
+        rebalance_freq: int = 5
     ) -> None:
         """T0工作流：拉取数据 + 生成T1待执行目标
         
@@ -72,16 +181,31 @@ class PaperTradingRunner:
             universe_type: 股票池类型 mainboard
             top_n: 持仓股票数
             model_version: ML模型版本（可选）
+            rebalance_freq: 调仓频率（交易日数）
         """
-        logger.info("=" * 80)
-        logger.info(f"开始T0工作流 - {trade_date}")
-        logger.info("=" * 80)
+        # 1. 校正交易日期
+        corrected_date = self._correct_trade_date(trade_date)
         
-        # 1. 拉取数据
+        # 2. 检查幂等性
+        if self.paper_storage.check_run_exists("t0", corrected_date):
+            raise RuntimeError(
+                f"T0 工作流已在 {corrected_date} 执行过，"
+                f"不允许重复执行（幂等性保障）"
+            )
+        
+        # 3. 检查调仓日
+        self._check_rebalance_day(corrected_date, rebalance_freq)
+        
+        logger.info("=" * 80)
+        logger.info(f"开始T0工作流 - {corrected_date}")
+        logger.info("=" * 80)
+        logger.info(f"调仓频率: {rebalance_freq} 个交易日")
+        
+        # 4. 拉取数据
         logger.info("步骤1: 拉取数据")
-        self._download_data(trade_date)
+        self._download_data(corrected_date)
         
-        # 2. 生成信号
+        # 5. 生成信号
         logger.info("步骤2: 生成信号")
         self.signal = self.signal or MLSignal(
             top_n=top_n,
@@ -89,7 +213,7 @@ class PaperTradingRunner:
             weight_method=self.weight_method
         )
         targets = self._generate_signals(
-            trade_date,
+            corrected_date,
             universe_type=universe_type,
             top_n=top_n,
             model_version=model_version
@@ -99,15 +223,36 @@ class PaperTradingRunner:
             logger.warning("未生成任何目标权重")
             return
         
-        # 3. 持久化待执行目标
+        # 6. 持久化待执行目标
         logger.info("步骤3: 保存待执行目标")
         # T0生成的是T1执行的目标，所以需要获取T1日期
-        t1_date = self._get_next_trade_date(trade_date)
+        t1_date = self._get_next_trade_date(corrected_date)
         if not t1_date:
-            logger.error(f"无法获取 {trade_date} 的下一个交易日")
+            logger.error(f"无法获取 {corrected_date} 的下一个交易日")
             return
         
         self.paper_storage.save_pending_weights(t1_date, targets)
+        
+        # 7. 更新调仓状态
+        rebalance_state = {
+            'last_rebalance_date': corrected_date,
+            'rebalance_freq': rebalance_freq
+        }
+        self.paper_storage.save_rebalance_state(rebalance_state)
+        
+        # 8. 保存执行记录
+        run_record = {
+            'trade_date': corrected_date,
+            't1_date': t1_date,
+            'buy_price_type': buy_price_type,
+            'universe_type': universe_type,
+            'top_n': top_n,
+            'model_version': model_version,
+            'rebalance_freq': rebalance_freq,
+            'targets_count': len(targets),
+            'timestamp': pd.Timestamp.now().isoformat()
+        }
+        self.paper_storage.save_run_record("t0", corrected_date, run_record)
         
         logger.info("=" * 80)
         logger.info(f"T0工作流完成 - 已生成 {len(targets)} 个目标权重，待T1执行")
@@ -127,57 +272,81 @@ class PaperTradingRunner:
             buy_price_type: 买入价格类型 open/close
             sell_price_type: 卖出价格类型 open/close（固定为close）
         """
+        # 1. 校正交易日期
+        corrected_date = self._correct_trade_date(trade_date)
+        
+        # 2. 检查幂等性
+        if self.paper_storage.check_run_exists("t1", corrected_date):
+            raise RuntimeError(
+                f"T1 工作流已在 {corrected_date} 执行过，"
+                f"不允许重复执行（幂等性保障）"
+            )
+        
         logger.info("=" * 80)
-        logger.info(f"开始T1工作流 - {trade_date}")
+        logger.info(f"开始T1工作流 - {corrected_date}")
         logger.info("=" * 80)
         
-        # 1. 读取待执行目标
+        # 3. 读取待执行目标
         logger.info("步骤1: 读取待执行目标")
-        targets = self.paper_storage.load_pending_weights(trade_date)
+        targets = self.paper_storage.load_pending_weights(corrected_date)
         
         if not targets:
-            logger.warning(f"未找到 {trade_date} 的待执行目标")
+            logger.warning(f"未找到 {corrected_date} 的待执行目标")
             return
         
         logger.info(f"读取到 {len(targets)} 个目标权重")
         
-        # 2. 加载价格数据
+        # 4. 加载价格数据
         logger.info("步骤2: 加载价格数据")
-        buy_prices, sell_prices = self._load_prices(trade_date, buy_price_type, sell_price_type)
+        buy_prices, sell_prices = self._load_prices(corrected_date, buy_price_type, sell_price_type)
         
         if not buy_prices and not sell_prices:
             logger.error("无法加载价格数据")
             return
         
-        # 3. 生成订单
+        # 5. 生成订单
         logger.info("步骤3: 生成订单")
-        orders = self.broker.generate_orders(targets, buy_prices, sell_prices, trade_date)
+        orders = self.broker.generate_orders(targets, buy_prices, sell_prices, corrected_date)
         
+        fills_count = 0
         if not orders:
             logger.warning("未生成任何订单")
         else:
-            # 4. 执行订单并打印明细
+            # 6. 执行订单并打印明细
             logger.info("步骤4: 执行订单")
             fills = self.broker.execute_orders(
                 orders,
-                trade_date,
+                corrected_date,
                 buy_price_type,
                 sell_price_type
             )
+            fills_count = len(fills) if fills else 0
         
-        # 5. 更新账户状态
+        # 7. 更新账户状态
         logger.info("步骤5: 更新账户状态")
-        self.account.update_last_date(trade_date)
+        self.account.update_last_date(corrected_date)
         self.account.save_state()
         
-        # 6. 记录净值
+        # 8. 记录净值
         logger.info("步骤6: 记录净值")
         # 使用收盘价计算净值
         all_prices = {**sell_prices, **buy_prices}  # 合并价格字典
-        self._record_nav(trade_date, all_prices)
+        self._record_nav(corrected_date, all_prices)
+        
+        # 9. 保存执行记录
+        run_record = {
+            'trade_date': corrected_date,
+            'buy_price_type': buy_price_type,
+            'sell_price_type': sell_price_type,
+            'targets_count': len(targets),
+            'orders_count': len(orders) if orders else 0,
+            'fills_count': fills_count,
+            'timestamp': pd.Timestamp.now().isoformat()
+        }
+        self.paper_storage.save_run_record("t1", corrected_date, run_record)
         
         logger.info("=" * 80)
-        logger.info(f"T1工作流完成 - {trade_date}")
+        logger.info(f"T1工作流完成 - {corrected_date}")
         logger.info("=" * 80)
     
     def _download_data(self, trade_date: str) -> None:
@@ -519,3 +688,42 @@ class PaperTradingRunner:
         except Exception as e:
             logger.error(f"获取下一个交易日失败: {e}")
             return None
+    
+    def run_retry(
+        self,
+        trade_date: str,
+        sell_price_type: str = 'close'
+    ) -> None:
+        """重试延迟卖出订单
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            sell_price_type: 卖出价格类型 open/close
+        """
+        # 1. 校正交易日期
+        corrected_date = self._correct_trade_date(trade_date)
+        
+        # 注意：retry 命令不加锁，允许同日多次执行
+        
+        logger.info("=" * 80)
+        logger.info(f"重试延迟卖出 - {corrected_date}")
+        logger.info("=" * 80)
+        
+        # 2. 重试延迟卖出
+        fills = self.broker.retry_pending_sells(corrected_date, sell_price_type)
+        
+        # 3. 如果有成交，更新账户状态和净值
+        if fills:
+            logger.info("步骤1: 更新账户状态")
+            self.account.update_last_date(corrected_date)
+            self.account.save_state()
+            
+            logger.info("步骤2: 记录净值")
+            # 加载价格
+            buy_prices, sell_prices = self._load_prices(corrected_date, 'close', sell_price_type)
+            all_prices = {**sell_prices, **buy_prices}
+            self._record_nav(corrected_date, all_prices)
+        
+        logger.info("=" * 80)
+        logger.info(f"重试完成 - {corrected_date}，成交 {len(fills)} 笔")
+        logger.info("=" * 80)

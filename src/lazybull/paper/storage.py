@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from .models import AccountState, Fill, NAVRecord, Position, TargetWeight
+from .models import AccountState, Fill, NAVRecord, PendingSell, Position, TargetWeight
 
 
 class PaperStorage:
@@ -27,9 +27,12 @@ class PaperStorage:
         self.state_path = self.root_path / "state"
         self.trades_path = self.root_path / "trades"
         self.nav_path = self.root_path / "nav"
+        self.runs_path = self.root_path / "runs"
+        self.pending_sells_path = self.root_path / "pending_sells"
         
         # 确保目录存在
-        for path in [self.pending_path, self.state_path, self.trades_path, self.nav_path]:
+        for path in [self.pending_path, self.state_path, self.trades_path, 
+                     self.nav_path, self.runs_path, self.pending_sells_path]:
             path.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
@@ -238,3 +241,113 @@ class PaperStorage:
         df = pd.read_parquet(file_path)
         logger.info(f"读取净值记录: {file_path} ({len(df)} 条)")
         return df
+    
+    def save_run_record(self, run_type: str, trade_date: str, record: dict) -> None:
+        """保存执行记录（用于幂等性检查）
+        
+        Args:
+            run_type: 运行类型 "t0" 或 "t1"
+            trade_date: 交易日期 YYYYMMDD
+            record: 记录字典（包含参数、时间戳、统计信息等）
+        """
+        file_path = self.runs_path / f"{run_type}_{trade_date}.json"
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(record, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"保存执行记录: {file_path}")
+    
+    def check_run_exists(self, run_type: str, trade_date: str) -> bool:
+        """检查执行记录是否存在
+        
+        Args:
+            run_type: 运行类型 "t0" 或 "t1"
+            trade_date: 交易日期 YYYYMMDD
+            
+        Returns:
+            True 如果记录存在
+        """
+        file_path = self.runs_path / f"{run_type}_{trade_date}.json"
+        return file_path.exists()
+    
+    def save_rebalance_state(self, state: dict) -> None:
+        """保存调仓状态（记录上次调仓日期）
+        
+        Args:
+            state: 调仓状态字典 {"last_rebalance_date": "YYYYMMDD", ...}
+        """
+        file_path = self.runs_path / "rebalance_state.json"
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        
+        logger.debug(f"保存调仓状态: {file_path}")
+    
+    def load_rebalance_state(self) -> Optional[dict]:
+        """读取调仓状态
+        
+        Returns:
+            调仓状态字典，不存在返回None
+        """
+        file_path = self.runs_path / "rebalance_state.json"
+        
+        if not file_path.exists():
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        
+        return state
+    
+    def save_pending_sells(self, pending_sells: List[PendingSell]) -> None:
+        """保存延迟卖出队列
+        
+        Args:
+            pending_sells: 延迟卖出订单列表
+        """
+        file_path = self.pending_sells_path / "pending_sells.json"
+        
+        # 转换为字典列表
+        data = []
+        for ps in pending_sells:
+            data.append({
+                'ts_code': ps.ts_code,
+                'shares': ps.shares,
+                'target_weight': ps.target_weight,
+                'reason': ps.reason,
+                'create_date': ps.create_date,
+                'attempts': ps.attempts
+            })
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"保存延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
+    
+    def load_pending_sells(self) -> List[PendingSell]:
+        """读取延迟卖出队列
+        
+        Returns:
+            延迟卖出订单列表，不存在返回空列表
+        """
+        file_path = self.pending_sells_path / "pending_sells.json"
+        
+        if not file_path.exists():
+            return []
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        pending_sells = []
+        for item in data:
+            pending_sells.append(PendingSell(
+                ts_code=item['ts_code'],
+                shares=item['shares'],
+                target_weight=item['target_weight'],
+                reason=item['reason'],
+                create_date=item['create_date'],
+                attempts=item.get('attempts', 0)
+            ))
+        
+        logger.info(f"读取延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
+        return pending_sells
