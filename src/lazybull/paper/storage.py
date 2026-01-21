@@ -71,7 +71,7 @@ class PaperStorage:
         file_path = self.pending_path / f"{trade_date}.parquet"
         
         if not file_path.exists():
-            logger.warning(f"待执行目标权重文件不存在: {file_path}")
+            logger.info(f"待执行目标权重文件不存在: {file_path}")
             return None
         
         df = pd.read_parquet(file_path)
