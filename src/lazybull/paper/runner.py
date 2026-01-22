@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from ..common.print_table import format_row
 from ..data import (
     DataCleaner,
     DataLoader,
@@ -69,7 +70,8 @@ class PaperTradingRunner:
         
         # 初始化数据清洗器和特征构建器（用于 ensure 功能）
         self.cleaner = DataCleaner()
-        self.feature_builder = FeatureBuilder(min_list_days=60, horizon=5)
+        # 实盘模式使用 require_label=False，因为 T0 没有未来数据无法生成标签
+        self.feature_builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=False)
     
     def _correct_trade_date(self, input_date: str) -> str:
         """校正交易日期：非交易日自动滚动到下一交易日
@@ -774,9 +776,9 @@ class PaperTradingRunner:
         stock_basic: pd.DataFrame,
         daily_data: pd.DataFrame
     ) -> None:
-        """打印 T0 目标详细信息
+        """打印 T0 目标详细信息（包含买入/减仓/清仓）
         
-        输出包含：代码、名称、方向、T0价、股数、原因
+        输出包含：代码、名称、方向、参考价格、建议股数、原因
         
         Args:
             targets: 目标权重列表
@@ -799,42 +801,77 @@ class PaperTradingRunner:
             for _, row in daily_data.iterrows():
                 price_map[row['ts_code']] = row.get('close', 0.0)
         
-        # 计算每只股票的建议股数
-        # 使用账户总资金 * 目标权重 / 股价，向下取整到100股的倍数
+        # 获取当前持仓
+        current_positions = self.account.get_positions()
+        
+        # 使用账户总资金计算
         total_capital = self.account.initial_capital
         
+        # 准备表格列宽和对齐
+        widths = [12, 10, 6, 10, 10, 30]
+        aligns = ['left', 'left', 'left', 'right', 'right', 'left']
+        
         # 表头
-        logger.info(
-            f"{'股票代码':<12} {'股票名称':<10} {'方向':<6} "
-            f"{'T0价格':>10} {'建议股数':>10} {'原因':<30}"
-        )
+        header = ["股票代码", "股票名称", "方向", "参考价格", "建议股数", "原因"]
+        logger.info(format_row(header, widths, aligns))
         logger.info("-" * SEPARATOR_LENGTH)
         
-        # 打印每个目标
-        for target in targets:
-            ts_code = target.ts_code
+        # 目标权重字典
+        target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
+        
+        # 1. 处理所有目标股票（买入/加仓/减仓/清仓）
+        all_stocks = set(target_weights.keys()) | set(current_positions.keys())
+        
+        for ts_code in sorted(all_stocks):
+            target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
+            pos = current_positions.get(ts_code)
+            current_shares = pos.shares if pos else 0
+            
             name = name_map.get(ts_code, '-')
-            direction = "买入"  # T0 都是建仓，方向为买入
-            t0_price = price_map.get(ts_code, 0.0)
+            price = price_map.get(ts_code, 0.0)
             
-            # 计算建议股数
-            if t0_price > 0:
-                target_value = total_capital * target.target_weight
-                # 验证目标价值为正
-                if target_value > 0:
-                    # 向下取整到手（100股）的倍数
-                    shares = int(target_value / t0_price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            if price <= 0:
+                # 无价格数据，跳过
+                continue
+            
+            # 计算目标股数
+            target_value = total_capital * target_weight
+            target_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            
+            # 判断方向和建议股数
+            if target_shares > current_shares:
+                # 买入或加仓
+                direction = "买入" if current_shares == 0 else "加仓"
+                suggested_shares = target_shares - current_shares
+                suggested_shares = (suggested_shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            elif target_shares < current_shares:
+                if target_shares == 0:
+                    # 清仓
+                    direction = "清仓"
+                    suggested_shares = current_shares  # 全部卖出
                 else:
-                    shares = 0
+                    # 减仓
+                    direction = "减仓"
+                    suggested_shares = current_shares - target_shares
+                    suggested_shares = (suggested_shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
             else:
-                shares = 0
+                # 权重不变，跳过
+                continue
             
-            reason = target.reason if target.reason else "信号生成"
+            if suggested_shares <= 0:
+                continue
             
-            logger.info(
-                f"{ts_code:<12} {name:<10} {direction:<6} "
-                f"{t0_price:>10.2f} {shares:>10} {reason:<30}"
-            )
+            reason_text = reason if reason else "信号生成"
+            
+            row = [
+                ts_code,
+                name,
+                direction,
+                f"{price:.2f}",
+                str(suggested_shares),
+                reason_text
+            ]
+            logger.info(format_row(row, widths, aligns))
         
         logger.info("=" * SEPARATOR_LENGTH)
         logger.info("")

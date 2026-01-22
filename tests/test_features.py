@@ -480,3 +480,52 @@ def test_feature_builder_reuses_clean_markers():
     assert '000002.SZ' not in filtered['ts_code'].values  # 停牌
     assert '600000.SH' not in filtered['ts_code'].values  # ST
     assert '600001.SH' not in filtered['ts_code'].values  # 上市不足60天
+
+
+def test_feature_builder_require_label_false():
+    """测试 require_label=False 时不过滤标签缺失样本"""
+    # 创建特征构建器（不要求标签）
+    builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=False)
+    
+    # 创建带标签缺失的DataFrame
+    df = pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH'],
+        'trade_date': ['20230110'] * 3,
+        'is_st': [0, 0, 0],
+        'list_days': [100, 100, 100],
+        'is_suspended': [0, 0, 0],
+        'y_ret_5': [0.05, float('nan'), 0.03]  # 第二个样本标签缺失
+    })
+    
+    # 应用过滤
+    result = builder._apply_filters(df)
+    
+    # 验证标签缺失的样本未被过滤
+    assert len(result) == 3
+    assert '000002.SZ' in result['ts_code'].values
+    assert pd.isna(result[result['ts_code'] == '000002.SZ']['y_ret_5'].iloc[0])
+
+
+def test_feature_builder_require_label_true():
+    """测试 require_label=True 时过滤标签缺失样本（默认行为）"""
+    # 创建特征构建器（要求标签，默认行为）
+    builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=True)
+    
+    # 创建带标签缺失的DataFrame
+    df = pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH'],
+        'trade_date': ['20230110'] * 3,
+        'is_st': [0, 0, 0],
+        'list_days': [100, 100, 100],
+        'is_suspended': [0, 0, 0],
+        'y_ret_5': [0.05, float('nan'), 0.03]  # 第二个样本标签缺失
+    })
+    
+    # 应用过滤
+    result = builder._apply_filters(df)
+    
+    # 验证标签缺失的样本被过滤
+    assert len(result) == 2
+    assert '000002.SZ' not in result['ts_code'].values
+    assert '000001.SZ' in result['ts_code'].values
+    assert '600000.SH' in result['ts_code'].values

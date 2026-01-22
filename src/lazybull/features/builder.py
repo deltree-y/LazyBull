@@ -27,7 +27,8 @@ class FeatureBuilder:
         self,
         min_list_days: int = 60,
         horizon: int = 5,
-        lookback_windows: List[int] = None
+        lookback_windows: List[int] = None,
+        require_label: bool = True
     ):
         """初始化特征构建器
         
@@ -35,14 +36,17 @@ class FeatureBuilder:
             min_list_days: 最小上市天数，默认60天
             horizon: 预测时间窗口（交易日），默认5天
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
+            require_label: 是否要求标签非空，默认True（训练/回测模式）；设为False用于实盘/推理模式
         """
         self.min_list_days = min_list_days
         self.horizon = horizon
         self.lookback_windows = lookback_windows or [5, 10, 20]
+        self.require_label = require_label
         
         logger.info(
             f"特征构建器初始化: min_list_days={min_list_days}, "
-            f"horizon={horizon}, lookback_windows={self.lookback_windows}"
+            f"horizon={horizon}, lookback_windows={self.lookback_windows}, "
+            f"require_label={require_label}"
         )
     
     def build_features_for_day(
@@ -660,7 +664,7 @@ class FeatureBuilder:
         - 剔除 ST (is_st=1)
         - 剔除上市 < 60天 (list_days < 60)
         - 剔除停牌 (is_suspended=1)
-        - 剔除标签缺失 (y_ret_5 为空)
+        - 剔除标签缺失 (y_ret_5 为空) - 仅当 require_label=True 时
         - 涨跌停不剔除，仅标记
         
         Args:
@@ -684,12 +688,21 @@ class FeatureBuilder:
         )
         
         # 应用过滤
-        result = df[
+        # 基础过滤条件
+        filter_mask = (
             (df['is_st'] == 0) &
             (df['list_days'] >= self.min_list_days) &
-            (df['is_suspended'] == 0) &
-            (df['y_ret_5'].notna())
-        ].copy()
+            (df['is_suspended'] == 0)
+        )
+        
+        # 仅当 require_label=True 时过滤标签缺失
+        if self.require_label:
+            filter_mask = filter_mask & (df['y_ret_5'].notna())
+            logger.info(f"require_label=True, 将过滤标签缺失样本")
+        else:
+            logger.info(f"require_label=False, 保留标签缺失样本（实盘/推理模式）")
+        
+        result = df[filter_mask].copy()
         
         logger.info(f"过滤后样本数: {len(result)}")
         
