@@ -190,7 +190,8 @@ def run_main(args):
     logger.info("=" * 120)
     
     _print_manual_actions(stop_loss_actions, pending_sell_actions, t1_actions, t0_targets)
-    
+    print_positions(corrected_date)    
+
     logger.info("=" * 120)
     logger.info(f"运行完成 - {corrected_date}")
     logger.info("=" * 120)
@@ -549,24 +550,28 @@ def view_positions(args):
     """查看当前持仓"""
     logger.info("=" * 80)
     logger.info("查看纸面交易持仓")
-    logger.info("=" * 80)
-    logger.info(f"参考日期: {args.trade_date}")
-    logger.info("=" * 80)
+    print_positions(args.trade_date)
     
+
+def print_positions(trade_date: str):
+    print("\n\n\n")
+    logger.info("=" * 80)
+    logger.info(f"[{trade_date}]持仓情况")
+    logger.info("=" * 80)
     # 读取配置（可选，用于获取一些参数）
-    storage = PaperStorage()
-    config = storage.load_config()
+    #storage = PaperStorage()
+    #config = storage.load_config()
     
     # 创建运行器
-    runner = PaperTradingRunner()
+    runner = PaperTradingRunner(verbose=False)
     
     try:
         # 加载价格数据
-        loader = DataLoader(runner.storage)
+        loader = DataLoader(runner.storage, verbose=False)
         
-        daily_data = loader.load_clean_daily_by_date(args.trade_date)
+        daily_data = loader.load_clean_daily_by_date(trade_date)
         if daily_data is None or daily_data.empty:
-            logger.error(f"无法加载 {args.trade_date} 的价格数据")
+            logger.error(f"无法加载 {trade_date} 的价格数据")
             sys.exit(1)
         
         # 构建价格字典（使用收盘价）
@@ -575,12 +580,11 @@ def view_positions(args):
             prices[row['ts_code']] = row['close']
         
         # 打印持仓明细
-        runner.broker.print_positions_summary(prices, args.trade_date)
+        runner.broker.print_positions_summary(prices, trade_date)
         
     except Exception as e:
-        logger.exception(f"查看持仓失败: {e}")
+        logger.exception(f"打印持仓失败: {e}")
         sys.exit(1)
-
 
 def main():
     """主函数"""

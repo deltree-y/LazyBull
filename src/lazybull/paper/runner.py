@@ -39,7 +39,8 @@ class PaperTradingRunner:
         initial_capital: float = 500000.0,
         data_root: str = "./data",
         paper_root: str = "./data/paper",
-        weight_method: str = "equal"
+        weight_method: str = "equal",
+        verbose: bool = True,
     ):
         """初始化运行器
         
@@ -49,27 +50,28 @@ class PaperTradingRunner:
             data_root: 数据根目录
             paper_root: 纸面交易数据目录
             weight_method: 权重分配方法，"equal"表示等权，"score"表示按分数加权
+            verbose: 是否输出详细日志
         """
         # 初始化存储
-        self.storage = Storage(data_root)
-        self.paper_storage = PaperStorage(paper_root)
+        self.storage = Storage(data_root, verbose=verbose)
+        self.paper_storage = PaperStorage(paper_root, verbose=verbose)
         
         # 初始化账户和经纪
-        self.account = PaperAccount(initial_capital, self.paper_storage)
-        self.broker = PaperBroker(self.account, storage=self.paper_storage)
+        self.account = PaperAccount(initial_capital, self.paper_storage, verbose=verbose)
+        self.broker = PaperBroker(self.account, storage=self.paper_storage, verbose=verbose)
         
         # 初始化信号生成器
         self.signal = signal 
         self.weight_method = weight_method
         
         # 初始化数据加载器
-        self.loader = DataLoader(self.storage)
+        self.loader = DataLoader(self.storage, verbose=verbose)
         
         # 初始化TuShare客户端
-        self.client = TushareClient()
+        self.client = TushareClient(verbose=verbose)
         
         # 初始化数据清洗器和特征构建器（用于 ensure 功能）
-        self.cleaner = DataCleaner()
+        self.cleaner = DataCleaner(verbose=verbose)
         # 实盘模式使用 require_label=False，因为 T0 没有未来数据无法生成标签
         self.feature_builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=False)
     

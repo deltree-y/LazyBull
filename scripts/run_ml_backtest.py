@@ -22,6 +22,7 @@ ML 信号回测脚本
 """
 
 import argparse
+from datetime import datetime
 import sys
 import traceback
 from pathlib import Path
@@ -31,6 +32,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import pandas as pd
+import csv
 from loguru import logger
 
 from src.lazybull.backtest import BacktestEngine, BacktestEngineML, Reporter
@@ -209,6 +211,29 @@ def run_ml_backtest(
     trades = engine.get_trades()
     
     return nav_curve, trades
+
+def _append_dict_to_csv(file_path: Path, row: dict, fieldnames: list = None):
+    """把一个 dict 追加到 CSV（如果不存在则写 header）
+    
+    Args:
+        file_path: 目标文件 Path
+        row: 要写入的一行 dict
+        fieldnames: 列顺序列表（如果 None 则使用 row.keys() 的顺序）
+    """
+    # 确保目录存在
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = file_path.exists()
+
+    # 使用 utf-8-sig 以便 Excel 直接识别中文
+    with open(file_path, 'a', newline='', encoding='utf-8-sig') as f:
+        if fieldnames is None:
+            fieldnames_local = list(row.keys())
+        else:
+            fieldnames_local = fieldnames
+        writer = csv.DictWriter(f, fieldnames=fieldnames_local)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def main():
@@ -443,7 +468,65 @@ def main():
         logger.info("回测完成！")
         logger.info(f"报告已保存到: {args.data_root}/reports/")
         logger.info("=" * 60)
-        
+
+
+        # ------------------ 追加写入回测记录到固定 CSV（不会覆盖老数据） ------------------
+        try:
+            # 构建要写入的一行记录（可按需扩展字段）
+            record = {
+                "run_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "start_date": args.start_date,
+                "end_date": args.end_date,
+                "model_version": args.model_version if args.model_version is not None else "latest",
+                "top_n": args.top_n,
+                "weight_method": args.weight_method,
+                "rebalance_freq": args.rebalance_freq,
+                "initial_capital": args.initial_capital,
+                "sell_timing": args.sell_timing,
+                "stop_loss_enabled": args.stop_loss_enabled,
+                "report_name": args.output_name,
+                # 以下尽量从 nav_curve / stats 中提取常用指标（若不存在则写 None）
+                "nav_final": None,
+                "total_return": None,
+                "max_drawdown": None,
+                "sharpe": None,
+            }
+
+            # 从 nav_curve 尝试取最终净值或组合市值
+            if isinstance(nav_curve, pd.DataFrame) and not nav_curve.empty:
+                if 'nav' in nav_curve.columns:
+                    record["nav_final"] = float(nav_curve['nav'].iloc[-1])
+                elif 'portfolio_value' in nav_curve.columns:
+                    record["nav_final"] = float(nav_curve['portfolio_value'].iloc[-1])
+                else:
+                    # 尝试找到第一个数值列作替代
+                    numeric_cols = nav_curve.select_dtypes(include='number').columns.tolist()
+                    if numeric_cols:
+                        record["nav_final"] = float(nav_curve[numeric_cols[-1]].iloc[-1])
+
+            # 从 stats 字典中安全读取指标（字段名以实际 stats 为准）
+            if isinstance(stats, dict):
+                record["total_return"] = stats.get("total_return") or stats.get("收益率") or stats.get("return")
+                record["max_drawdown"] = stats.get("max_drawdown") or stats.get("最大回撤")
+                record["sharpe"] = stats.get("sharpe") or stats.get("夏普比率")
+
+            # 写入到 Reporter 的 output_dir（复用已有目录）
+            log_file = Path(reporter.output_dir) / "backtest_runs.csv"
+
+            # 指定列顺序，保证稳定性；如果需要新增字段请在这里同步修改
+            fieldnames = [
+                "run_time", "start_date", "end_date", "model_version", "top_n", "weight_method",
+                "rebalance_freq", "initial_capital", "sell_timing", "stop_loss_enabled",
+                "report_name", "nav_final", "total_return", "max_drawdown", "sharpe"
+            ]
+
+            _append_dict_to_csv(log_file, record, fieldnames=fieldnames)
+            logger.info(f"本次回测记录已追加到: {log_file}")
+        except Exception as ex:
+            # 记录追加失败不影响回测结果输出，但记录错误信息
+            logger.exception(f"写回测记录到 CSV 失败: {ex}")
+        # ---------------------------------------------------------------------------
+
     except Exception as e:
         logger.error(f"回测失败: {e}")
         traceback.print_exc()

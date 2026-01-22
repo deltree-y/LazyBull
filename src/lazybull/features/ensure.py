@@ -117,7 +117,7 @@ def ensure_features_for_date(
         
         # 7. 保存结果
         if len(features_df) > 0:
-            storage.save_cs_train_day(features_df, trade_date)
+            storage.save_cs_train_day(features_df, trade_date)#, has_label=builder.require_label)
             logger.info(f"已保存 features 数据: {len(features_df)} 条")
             return True
         else:

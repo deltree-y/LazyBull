@@ -18,16 +18,18 @@ class PaperAccount:
     def __init__(
         self,
         initial_capital: float = 500000.0,
-        storage: Optional[PaperStorage] = None
+        storage: Optional[PaperStorage] = None,
+        verbose: bool = False,
     ):
         """初始化账户
         
         Args:
             initial_capital: 初始资金
             storage: 存储实例
+            verbose: 是否输出详细日志
         """
         self.initial_capital = initial_capital
-        self.storage = storage or PaperStorage()
+        self.storage = storage or PaperStorage(verbose=verbose)
         
         # 尝试从存储加载账户状态
         self.state = self.storage.load_account_state()
@@ -37,11 +39,13 @@ class PaperAccount:
             self.state = AccountState(
                 cash=initial_capital,
                 positions={},
-                last_update=""
+                last_update="",
             )
-            logger.info(f"创建新纸面账户，初始资金: {initial_capital:,.2f}")
+            if verbose:
+                logger.info(f"创建新纸面账户，初始资金: {initial_capital:,.2f}")
         else:
-            logger.info(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")
+            if verbose:
+                logger.info(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")
     
     def get_cash(self) -> float:
         """获取现金"""

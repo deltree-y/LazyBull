@@ -15,13 +15,15 @@ class DataLoader:
     提供标准化的数据加载接口
     """
     
-    def __init__(self, storage: Optional[Storage] = None):
+    def __init__(self, storage: Optional[Storage] = None, verbose: bool = False):
         """初始化数据加载器
         
         Args:
             storage: 存储实例，如不提供则创建默认实例
+            verbose: 是否输出详细日志
         """
-        self.storage = storage or Storage()
+        self.storage = storage or Storage(verbose=verbose)
+        self.verbose = verbose
     
     def load_trade_cal(self) -> Optional[pd.DataFrame]:
         """加载交易日历
@@ -325,6 +327,15 @@ class DataLoader:
             date_str = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
         else:
             date_str = trade_date
+        
+        # 确保已存在清洗过的数据, 若不存在则下载创建
+        from .ensure import ensure_clean_data_for_date
+        from ..data.tushare_client import TushareClient
+        from ..data.cleaner import DataCleaner
+        loader = DataLoader(verbose=False)
+        ts = TushareClient(verbose=False)
+        cleaner = DataCleaner(verbose=False)
+        ensure_clean_data_for_date(self.storage, loader, cleaner, ts, trade_date)
         
         df = self.storage.load_clean_by_date("daily", date_str)
         

@@ -16,11 +16,12 @@ class PaperStorage:
     负责持久化和读取纸面交易的各类数据
     """
     
-    def __init__(self, root_path: str = "./data/paper"):
+    def __init__(self, root_path: str = "./data/paper", verbose: bool = False):
         """初始化纸面交易存储
         
         Args:
             root_path: 数据根目录
+            verbose: 是否输出详细日志
         """
         self.root_path = Path(root_path)
         self.pending_path = self.root_path / "pending"
@@ -29,13 +30,14 @@ class PaperStorage:
         self.nav_path = self.root_path / "nav"
         self.runs_path = self.root_path / "runs"
         self.pending_sells_path = self.root_path / "pending_sells"
+        self.verbose = verbose
         
         # 确保目录存在
         for path in [self.pending_path, self.state_path, self.trades_path, 
                      self.nav_path, self.runs_path, self.pending_sells_path]:
             path.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
+        if verbose:
+            logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
     
     def save_pending_weights(self, trade_date: str, targets: List[TargetWeight]) -> None:
         """保存待执行的目标权重
@@ -146,8 +148,8 @@ class PaperStorage:
             positions=positions,
             last_update=state_dict.get('last_update', '')
         )
-        
-        logger.info(f"读取账户状态: {file_path}")
+        if self.verbose:
+            logger.info(f"读取账户状态: {file_path}")
         return state
     
     def append_trade(self, fill: Fill) -> None:
@@ -348,8 +350,8 @@ class PaperStorage:
                 create_date=item['create_date'],
                 attempts=item.get('attempts', 0)
             ))
-        
-        logger.info(f"读取延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
+        if self.verbose:
+            logger.info(f"读取延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
         return pending_sells
     
     def save_config(self, config: dict) -> None:

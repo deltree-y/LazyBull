@@ -28,7 +28,8 @@ class FeatureBuilder:
         min_list_days: int = 60,
         horizon: int = 5,
         lookback_windows: List[int] = None,
-        require_label: bool = True
+        require_label: bool = True,
+        verbose: bool = False,
     ):
         """初始化特征构建器
         
@@ -37,17 +38,20 @@ class FeatureBuilder:
             horizon: 预测时间窗口（交易日），默认5天
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
             require_label: 是否要求标签非空，默认True（训练/回测模式）；设为False用于实盘/推理模式
+            verbose: 是否输出详细日志
         """
         self.min_list_days = min_list_days
         self.horizon = horizon
         self.lookback_windows = lookback_windows or [5, 10, 20]
         self.require_label = require_label
+        self.verbose = verbose
         
-        logger.info(
-            f"特征构建器初始化: min_list_days={min_list_days}, "
-            f"horizon={horizon}, lookback_windows={self.lookback_windows}, "
-            f"require_label={require_label}"
-        )
+        if self.verbose:
+            logger.info(
+                f"特征构建器初始化: min_list_days={min_list_days}, "
+                f"horizon={horizon}, lookback_windows={self.lookback_windows}, "
+                f"require_label={require_label}"
+            )
     
     def build_features_for_day(
         self,

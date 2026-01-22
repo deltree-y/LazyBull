@@ -14,11 +14,12 @@ class Storage:
     支持按日期分区存储raw和clean数据
     """
     
-    def __init__(self, root_path: str = "./data"):
+    def __init__(self, root_path: str = "./data", verbose: bool = False):
         """初始化存储
         
         Args:
             root_path: 数据根目录
+            verbose: 是否输出详细日志
         
         注意：
             - trade_cal和stock_basic使用单文件存储（不分区）
@@ -31,12 +32,13 @@ class Storage:
         self.clean_path = self.root_path / "clean"
         self.features_path = self.root_path / "features"
         self.reports_path = self.root_path / "reports"
+        self.verbose = verbose
         
         # 确保目录存在
         for path in [self.raw_path, self.clean_path, self.features_path, self.reports_path]:
             path.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"数据存储初始化完成，根目录: {self.root_path}，使用partitioned存储模式")
+        if verbose:
+            logger.info(f"数据存储初始化完成，根目录: {self.root_path}")
     
     def save_raw(self, df: pd.DataFrame, name: str, format: str = "parquet", is_force: bool = False) -> None:
         """保存原始数据
@@ -384,17 +386,21 @@ class Storage:
         else:
             raise ValueError(f"不支持的日期格式: {date_str}，应为YYYYMMDD或YYYY-MM-DD")
     
-    def save_cs_train_day(self, df: pd.DataFrame, trade_date: str, format: str = "parquet") -> None:
+    def save_cs_train_day(self, df: pd.DataFrame, trade_date: str, format: str = "parquet", has_label: bool = True) -> None:
         """保存单日截面训练数据
         
         Args:
             df: 数据DataFrame
             trade_date: 交易日期，格式YYYYMMDD
             format: 文件格式，parquet/csv
+            has_label: 是否包含标签列数据(有标签才保存,否则会造成垃圾数据)，默认为True
         """
-        cs_train_path = self.features_path / "cs_train"
-        cs_train_path.mkdir(parents=True, exist_ok=True)
-        self._save_data(df, cs_train_path / trade_date, format)
+        if has_label:
+            cs_train_path = self.features_path / "cs_train"
+            cs_train_path.mkdir(parents=True, exist_ok=True)
+            self._save_data(df, cs_train_path / trade_date, format)
+        else:
+            logger.info("保存截面训练数据时未包含标签列，跳过保存操作")
     
     def load_cs_train_day(self, trade_date: str, format: str = "parquet") -> Optional[pd.DataFrame]:
         """加载单日截面训练数据

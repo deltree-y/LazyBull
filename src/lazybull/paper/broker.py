@@ -23,7 +23,8 @@ class PaperBroker:
         self,
         account: PaperAccount,
         cost_model: Optional[CostModel] = None,
-        storage: Optional[PaperStorage] = None
+        storage: Optional[PaperStorage] = None,
+        verbose: bool = True,
     ):
         """初始化经纪
         
@@ -31,6 +32,7 @@ class PaperBroker:
             account: 账户实例
             cost_model: 成本模型
             storage: 存储实例
+            verbose: 是否输出详细日志
         """
         self.account = account
         self.cost_model = cost_model or CostModel()
@@ -39,7 +41,7 @@ class PaperBroker:
         self.order_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
         self.positions_table_widths = [12, 8, 10, 10, 12, 8, 10, 12, 12, 12, 8]
         self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
-        
+        self.verbose = verbose
         # 加载延迟卖出队列
         self.pending_sells = self.storage.load_pending_sells()
 
@@ -551,14 +553,7 @@ class PaperBroker:
             logger.info("=" * 80)
             return
         
-        logger.info("=" * 140)
-        logger.info("持仓明细")
-        logger.info("=" * 140)
-        
         # 打印表头
-        #logger.info(f"{'股票代码':<12} {'股数':<8} {'买入均价':<10} {'买入成本':<10} "
-        #           f"{'买入日期':<10} {'持有天数':<8} {'当前价格':<10} {'当前市值':<12} "
-        #           f"{'浮盈':<12} {'收益率(%)':<10} {'状态':<8}")
         header = ["股票代码", "股数", "买入均价", "买入成本", "买入日期", "持有天数", "当前价格", "当前市值", "浮盈", "收益率(%)", "状态"]
         logger.info(format_row(header, self.positions_table_widths, ['left'] * len(self.positions_table_widths)))
 
@@ -566,11 +561,6 @@ class PaperBroker:
         
         # 打印每行
         for _, row in df.iterrows():
-            #logger.info(
-            #    f"{row['股票代码']:<12} {row['持仓股数']:<8} {row['买入均价']:<10.2f} {row['买入成本']:<10.2f} "
-            #    f"{row['买入日期']:<10} {row['持有天数']:<8} {row['当前价格']:<10.2f} {row['当前市值']:<12.2f} "
-            #    f"{row['浮动盈亏']:<12.2f} {row['收益率(%)']:<10.2f} {row['状态']:<8}"
-            #)
             row = [
                 row['股票代码'], row['持仓股数'], 
                 f"{row['买入均价']:.2f}", f"{row['买入成本']:.2f}", 

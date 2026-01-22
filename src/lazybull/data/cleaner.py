@@ -22,9 +22,11 @@ class DataCleaner:
     负责将 raw 层数据转换为标准化的 clean 层数据
     """
     
-    def __init__(self):
+    def __init__(self, verbose: bool = False):
         """初始化数据清洗器"""
-        logger.info("数据清洗器初始化完成")
+        self.verbose = verbose
+        if self.verbose:
+            logger.info("数据清洗器初始化完成")
     
     def clean_trade_cal(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """清洗交易日历数据

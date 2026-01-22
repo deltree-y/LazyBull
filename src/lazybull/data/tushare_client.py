@@ -20,7 +20,8 @@ class TushareClient:
         token: Optional[str] = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
-        rate_limit: int = 200
+        rate_limit: int = 200,
+        verbose: bool = True,
     ):
         """初始化TuShare客户端
         
@@ -29,6 +30,7 @@ class TushareClient:
             max_retries: 最大重试次数
             retry_delay: 重试延迟（秒）
             rate_limit: 每分钟请求限制
+            verbose: 是否输出详细日志
         """
         # 获取token
         self.token = token or os.getenv("TS_TOKEN")
@@ -55,8 +57,9 @@ class TushareClient:
         # 限频控制
         self._last_request_time = 0.0
         self._request_interval = 60.0 / rate_limit  # 每次请求最小间隔
-        
-        logger.info(f"TuShare客户端初始化成功，限频: {rate_limit}次/分钟")
+        if verbose:
+            logger.info(f"TuShare客户端初始化成功，限频: {rate_limit}次/分钟")
+        self.verbose = verbose
     
     def _rate_limit_wait(self) -> None:
         """执行限频等待"""
