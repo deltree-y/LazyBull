@@ -810,7 +810,7 @@ def test_broker_generate_orders_100_lot_sell_reduce():
 
 
 def test_broker_generate_orders_100_lot_sell_liquidate():
-    """测试清仓卖出处理零股"""
+    """测试清仓时遇到零股应该 raise"""
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = PaperStorage(tmpdir)
         account = PaperAccount(initial_capital=100000.0, storage=storage)
@@ -832,14 +832,9 @@ def test_broker_generate_orders_100_lot_sell_liquidate():
         
         prices = {'000001.SZ': 10.0}
         
-        orders = broker.generate_orders(targets, prices, prices, '20260121')
-        
-        # 清仓应该只卖出100倍数部分
-        assert len(orders) == 1
-        sell_order = orders[0]
-        assert sell_order.action == 'sell'
-        assert sell_order.shares == 1200  # 只卖12手，保留55股零股
-        assert sell_order.shares % 100 == 0
+        # 预期在 generate_orders 时 raise ValueError（零股）
+        with pytest.raises(ValueError, match="清仓时检测到零股"):
+            orders = broker.generate_orders(targets, prices, prices, '20260121')
 
 
 def test_broker_execute_sell_raises_on_odd_lots():
