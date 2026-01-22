@@ -537,29 +537,6 @@ def _print_manual_actions(
             ]
             logger.info(format_row(row, widths, aligns))
     
-    # 4. T0 生成目标清单
-    if t0_targets:
-        logger.info("")
-        logger.info("【T0 生成目标清单】")
-        logger.info("-" * 120)
-        
-        widths = [15, 15, 60]
-        aligns = ['left', 'right', 'left']
-        header = ["股票代码", "目标权重", "原因/评分"]
-        logger.info(format_row(header, widths, aligns))
-        logger.info("-" * 120)
-        
-        for target in t0_targets:
-            reason_score = target['reason']
-            if target.get('score') is not None:
-                reason_score = f"{target['reason']} (score: {target['score']:.4f})"
-            
-            row = [
-                target['ts_code'],
-                f"{target['target_weight']:.4f}",
-                reason_score
-            ]
-            logger.info(format_row(row, widths, aligns))
     
     # 汇总
     total_actions = len(stop_loss_actions) + len(pending_sell_actions) + len(t1_actions) + len(t0_targets)

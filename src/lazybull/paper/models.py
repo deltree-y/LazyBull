@@ -147,3 +147,4 @@ class PendingSell:
     reason: str  # 原因
     create_date: str  # 创建日期 YYYYMMDD
     attempts: int = 0  # 尝试次数
+    last_attempt_date: str = ""  # 最后一次尝试日期 YYYYMMDD（用于避免同日重复推进）

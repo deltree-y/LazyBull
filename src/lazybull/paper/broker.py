@@ -124,16 +124,30 @@ class PaperBroker:
                 is_full_liquidation = (target_weight == 0)
                 
                 if is_full_liquidation:
-                    # 清仓：卖出最大100倍数，零股保留
-                    sell_shares = (pos.shares // 100) * 100
-                    if sell_shares < pos.shares:
-                        # 有零股剩余，需要warning并标记
-                        odd_shares = pos.shares - sell_shares
-                        logger.warning(
-                            f"股票 {ts_code} 清仓时检测到零股 {odd_shares} 股，"
-                            f"仅卖出100倍数部分 {sell_shares} 股，零股保留"
+                    # 清仓：必须卖出全部股数，不允许零股
+                    sell_shares = pos.shares
+                    
+                    # 检查是否有零股（不是100的倍数）
+                    if sell_shares % 100 != 0:
+                        # 零股出现：详细日志并 raise 异常
+                        current_price = sell_prices.get(ts_code, 0.0)
+                        current_market_value = pos.shares * current_price if current_price > 0 else 0.0
+                        
+                        error_msg = (
+                            f"清仓时检测到零股，必须中止执行！\n"
+                            f"  股票代码: {ts_code}\n"
+                            f"  持仓股数: {pos.shares} 股（非100倍数）\n"
+                            f"  交易日期: {trade_date}\n"
+                            f"  目标权重: {target_weight}\n"
+                            f"  原因: {reason}\n"
+                            f"  当前价格: {current_price:.2f}\n"
+                            f"  当前市值: {current_market_value:.2f}\n"
+                            f"  买入日期: {pos.buy_date}\n"
+                            f"  买入价格: {pos.buy_price:.2f}\n"
+                            f"  持仓备注: {pos.notes}"
                         )
-                        # 标记持仓notes（在execute时处理）
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
                 else:
                     # 减仓：按100股向下取整
                     sell_shares = (sell_shares_raw // 100) * 100
@@ -423,19 +437,6 @@ class PaperBroker:
             self.account.update_cash(cash_received)
             self.account.reduce_position(order.ts_code, order.shares)
             
-            # 检查是否清仓但留有零股
-            remaining_pos = self.account.get_position(order.ts_code)
-            if order.target_weight == 0 and remaining_pos and remaining_pos.shares > 0:
-                # 清仓目标但有剩余零股，更新notes（追加而不是覆盖）
-                existing_notes = remaining_pos.notes
-                odd_lot_note = f"清仓时保留零股{remaining_pos.shares}股"
-                if existing_notes:
-                    remaining_pos.notes = f"{existing_notes}; {odd_lot_note}"
-                else:
-                    remaining_pos.notes = odd_lot_note
-                remaining_pos.status = "零股待处理"
-                logger.info(f"股票 {order.ts_code} 清仓后剩余零股 {remaining_pos.shares} 股，已标记")
-            
             # 创建成交记录
             fill = Fill(
                 trade_date=trade_date,
@@ -650,7 +651,17 @@ class PaperBroker:
         remaining_sells = []
         
         for ps in self.pending_sells:
-            ps.attempts += 1
+            # 检查是否同日重复执行：若 last_attempt_date == trade_date，则不增加 attempts
+            if ps.last_attempt_date == trade_date:
+                logger.info(
+                    f"股票 {ps.ts_code} 今日已重试过（last_attempt_date={ps.last_attempt_date}），"
+                    f"不重复推进 attempts（当前 attempts={ps.attempts}）"
+                )
+            else:
+                # 不同日期，推进 attempts 并更新 last_attempt_date
+                ps.attempts += 1
+                ps.last_attempt_date = trade_date
+                logger.debug(f"股票 {ps.ts_code} 尝试次数增加到 {ps.attempts}，更新 last_attempt_date={trade_date}")
             
             # 检查持仓是否还存在
             pos = self.account.get_position(ps.ts_code)
