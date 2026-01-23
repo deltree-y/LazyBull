@@ -705,6 +705,7 @@ class BacktestEngine:
             bought_stocks = []
             current_value = self._calculate_portfolio_value(date)
             remaining_unfilled_slots = []
+            bought_stock_set = set()  # 跟踪已买入的股票，避免重复买入
             
             # 逐个槽位尝试补齐
             for slot_weight_info in unfilled_slot_weights:
@@ -715,6 +716,10 @@ class BacktestEngine:
                 bought_for_this_slot = False
                 
                 for stock, score in stocks_to_try:
+                    # 跳过已买入的股票
+                    if stock in bought_stock_set:
+                        continue
+                    
                     # 检查是否可交易（在当日 D）
                     tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action='buy')
                     
@@ -728,6 +733,7 @@ class BacktestEngine:
                     # 检查是否买入成功
                     if stock in self.positions:
                         bought_stocks.append(stock)
+                        bought_stock_set.add(stock)  # 记录已买入
                         bought_for_this_slot = True
                         
                         self.completion_stats['total_completed'] += 1
@@ -739,8 +745,6 @@ class BacktestEngine:
                                 f"原槽位股票 {original_stock}, 信号日 {original_signal_date.date()}"
                             )
                         
-                        # 从候选中移除已买入的股票，避免重复买入
-                        stocks_to_try.remove((stock, score))
                         break
                 
                 # 如果该槽位未能补齐，保留到下次
