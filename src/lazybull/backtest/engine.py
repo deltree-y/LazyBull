@@ -454,13 +454,16 @@ class BacktestEngine:
         
         signal_data = self.pending_signals.pop(signal_date)
         
-        # 兼容旧格式（dict 直接是 signals）和新格式（dict 包含 signals、ranked_candidates、target_n）
+        # 兼容性处理：支持旧格式和新格式
+        # 旧格式（补齐功能禁用时）：signal_data = {stock: weight}
+        # 新格式（补齐功能启用时）：signal_data = {'signals': {stock: weight}, 'ranked_candidates': [...], 'target_n': N}
         if isinstance(signal_data, dict) and 'signals' in signal_data:
+            # 新格式
             signals = signal_data['signals']
             ranked_candidates = signal_data.get('ranked_candidates', [])
             target_n = signal_data.get('target_n', len(signals))
         else:
-            # 旧格式兼容
+            # 旧格式兼容（当 enable_position_completion=False 或旧代码生成的信号）
             signals = signal_data
             ranked_candidates = []
             target_n = len(signals)
@@ -602,6 +605,7 @@ class BacktestEngine:
             # 尝试买入
             bought_stocks = []
             current_value = self._calculate_portfolio_value(date)
+            original_unfilled_count = len(unfilled_stocks)  # 记录初始未成交数量
             
             for stock, score, is_original in stocks_to_try:
                 # 检查是否可交易
@@ -652,8 +656,8 @@ class BacktestEngine:
                             f"{'原未成交股票' if is_original else '新候选股票'}"
                         )
                     
-                    # 如果已经补齐够了，停止
-                    if len(bought_stocks) >= len(unfilled_stocks):
+                    # 如果已经补齐够了所有原未成交的槽位，停止
+                    if len(bought_stocks) >= original_unfilled_count:
                         break
             
             # 更新槽位信息
