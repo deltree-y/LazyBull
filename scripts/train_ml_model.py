@@ -34,12 +34,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
-from src.lazybull.ml import (
-    ModelRegistry,
-    evaluate_model_ic,
-    print_ic_evaluation_report,
-    process_labels_cross_sectional,
-)
+from src.lazybull.ml import ModelRegistry
 
 try:
     import xgboost as xgb
@@ -102,15 +97,13 @@ def load_features_data(
 def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_ratio: float = 0.2) -> tuple:
     """准备训练数据，并按时间切分训练集和验证集
     
-    改进：增加按日横截面标签处理（winsorize + zscore）
-    
     Args:
         df: 特征 DataFrame
         label_column: 标签列名
         val_ratio: 验证集比例，默认 0.2（最后 20% 的时间作为验证集）
         
     Returns:
-        (X_train, y_train, X_val, y_val, feature_columns, train_dates, val_dates) 元组
+        (X_train, y_train, X_val, y_val, feature_columns) 元组
     """
     logger.info("准备训练数据...")
     
@@ -154,22 +147,6 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     if len(df_train) == 0:
         raise ValueError("没有可用的训练样本")
     
-    # 【新增】按日横截面标签处理（winsorize + zscore）
-    logger.info("=" * 70)
-    logger.info("开始按日横截面标签处理（默认流程）")
-    logger.info("=" * 70)
-    df_train = process_labels_cross_sectional(
-        df_train,
-        label_col=label_column,
-        date_col='trade_date',
-        winsorize_limits=(0.01, 0.01),  # 截断上下1%
-        apply_winsorize=True,
-        apply_zscore=True,
-        inplace=True
-    )
-    logger.info("横截面标签处理完成")
-    logger.info("=" * 70)
-    
     # 按时间切分训练集和验证集（避免未来信息泄漏）
     df_train = df_train.sort_values('trade_date')
     split_idx = int(len(df_train) * (1 - val_ratio))
@@ -187,12 +164,10 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     # 准备训练集 X 和 y
     X_train = df_train_split[feature_columns].copy()
     y_train = df_train_split[label_column].copy()
-    train_dates = df_train_split['trade_date'].copy()
     
     # 准备验证集 X 和 y
     X_val = df_val_split[feature_columns].copy()
     y_val = df_val_split[label_column].copy()
-    val_dates = df_val_split['trade_date'].copy()
     
     # 处理特征中的缺失值（填充为0）
     X_train = X_train.fillna(0)
@@ -200,7 +175,7 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     
     logger.info(f"训练数据准备完成: X_train shape={X_train.shape}, X_val shape={X_val.shape}")
     
-    return X_train, y_train, X_val, y_val, feature_columns, train_dates, val_dates
+    return X_train, y_train, X_val, y_val, feature_columns
 
 
 def train_xgboost_model(
@@ -208,8 +183,6 @@ def train_xgboost_model(
     y_train: pd.Series,
     X_val: pd.DataFrame,
     y_val: pd.Series,
-    train_dates: pd.Series,
-    val_dates: pd.Series,
     n_estimators: int = 100,
     max_depth: int = 6,
     learning_rate: float = 0.1,
@@ -222,16 +195,14 @@ def train_xgboost_model(
     改进点：
     1. 增加早停机制（early stopping）防止过拟合
     2. 优化默认超参数（更深的树和正则化）
-    3. 添加更全面的评估指标（IC/RankIC + 按日IC序列统计）
-    4. 标签已在 prepare_training_data 中完成横截面处理（winsorize + zscore）
+    3. 添加更全面的评估指标（IC/RankIC）
+    4. 对标签进行 winsorize 处理减少异常值影响
     
     Args:
         X_train: 训练特征数据
-        y_train: 训练标签数据（已经过横截面处理）
+        y_train: 训练标签数据
         X_val: 验证特征数据
-        y_val: 验证标签数据（已经过横截面处理）
-        train_dates: 训练集日期序列
-        val_dates: 验证集日期序列
+        y_val: 验证标签数据
         n_estimators: 树的数量（默认100，建议200-300）
         max_depth: 树的最大深度（默认6，建议6-10）
         learning_rate: 学习率（默认0.1，建议0.05-0.1）
@@ -242,7 +213,15 @@ def train_xgboost_model(
     Returns:
         (model, train_params, train_metrics, val_metrics) 元组
     """
-    logger.info("开始训练 XGBoost 模型（改进版本 + 横截面标签处理）...")
+    logger.info("开始训练 XGBoost 模型（改进版本）...")
+    
+    # 对标签进行 winsorize 处理（截断极端值，减少噪音）
+    from scipy.stats import mstats
+    y_train_winsorized = pd.Series(
+        mstats.winsorize(y_train, limits=[0.01, 0.01]),  # 截断上下1%极端值
+        index=y_train.index
+    )
+    logger.info("标签 winsorize 处理完成（截断上下1%极端值）")
     
     # 准备训练参数（增加正则化参数）
     train_params = {
@@ -264,7 +243,6 @@ def train_xgboost_model(
     
     logger.info(f"训练参数: {train_params}")
     logger.info("使用早停机制（early_stopping_rounds=30）")
-    logger.info("标签已完成按日横截面处理（winsorize + zscore），直接用于训练")
     
     # 创建并训练模型（使用早停）
     model = xgb.XGBRegressor(**train_params)
@@ -272,18 +250,18 @@ def train_xgboost_model(
     # 如果有验证集，使用早停机制
     if len(X_val) > 0:
         model.fit(
-            X_train, y_train,
+            X_train, y_train_winsorized,
             eval_set=[(X_val, y_val)],
             verbose=False  # 不打印每轮训练信息
         )
         logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
     else:
-        model.fit(X_train, y_train)
+        model.fit(X_train, y_train_winsorized)
         logger.info("模型训练完成（无验证集，未使用早停）")
     
     # 计算训练集性能指标
     y_train_pred = model.predict(X_train)
-    train_mse = mean_squared_error(y_train, y_train_pred)
+    train_mse = mean_squared_error(y_train, y_train_pred)  # 注意：使用原始标签评估
     train_rmse = train_mse ** 0.5
     train_r2 = r2_score(y_train, y_train_pred)
     
@@ -299,43 +277,42 @@ def train_xgboost_model(
     
     logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}")
     
-    # 计算验证集性能指标（包括增强的按日IC统计）
+    # 计算验证集性能指标（包括 IC）
     if len(X_val) > 0:
         y_val_pred = model.predict(X_val)
         val_mse = mean_squared_error(y_val, y_val_pred)
         val_rmse = val_mse ** 0.5
         val_r2 = r2_score(y_val, y_val_pred)
         
-        # 【新增】使用增强的IC评估函数
-        ic_metrics = evaluate_model_ic(
-            y_true=y_val,
-            y_pred=y_val_pred,
-            trade_dates=val_dates,
-            return_daily_series=False
-        )
+        # 计算验证集 IC（更重要的指标）
+        val_ic = y_val.corr(pd.Series(y_val_pred, index=y_val.index))
+        
+        # 计算 RankIC（排序相关性，对选股策略更有意义）
+        from scipy.stats import spearmanr
+        val_rank_ic, _ = spearmanr(y_val, y_val_pred)
         
         val_metrics = {
             "mse": float(val_mse),
             "rmse": float(val_rmse),
             "r2": float(val_r2),
+            "ic": float(val_ic),
+            "rank_ic": float(val_rank_ic)
         }
-        # 合并IC指标
-        val_metrics.update(ic_metrics)
         
-        # 【新增】打印增强的IC评估报告
-        logger.info("")
-        logger.info("=" * 70)
-        logger.info("验证集评估结果（增强版）")
-        logger.info("=" * 70)
+        logger.info("=" * 60)
+        logger.info("验证集评估结果")
+        logger.info("=" * 60)
         logger.info(f"验证集样本数: {len(X_val)}")
         logger.info(f"MSE（均方误差）: {val_mse:.6f}")
         logger.info(f"RMSE（均方根误差）: {val_rmse:.6f}")
         logger.info(f"R2（决定系数）: {val_r2:.4f}")
-        logger.info("")
-        
-        # 使用新的IC报告函数
-        print_ic_evaluation_report(ic_metrics, title="验证集IC详细统计")
-        
+        logger.info(f"IC（信息系数）: {val_ic:.4f}  <- 重要指标")
+        logger.info(f"RankIC（排序IC）: {val_rank_ic:.4f}  <- 选股策略关键指标")
+        logger.info("=" * 60)
+        logger.info("提示：对于选股策略，IC 和 RankIC 比 R2 更重要")
+        logger.info("     IC > 0.03 通常可认为有一定预测能力")
+        logger.info("     RankIC > 0.05 说明排序能力较好")
+        logger.info("=" * 60)
     else:
         val_metrics = {}
         logger.warning("验证集为空，无法评估")
@@ -434,14 +411,12 @@ def main():
         # 1. 加载特征数据
         df = load_features_data(storage, loader, args.start_date, args.end_date)
         
-        # 2. 准备训练数据（包含验证集切分和横截面标签处理）
-        X_train, y_train, X_val, y_val, feature_columns, train_dates, val_dates = prepare_training_data(
-            df, args.label_column
-        )
+        # 2. 准备训练数据（包含验证集切分）
+        X_train, y_train, X_val, y_val, feature_columns = prepare_training_data(df, args.label_column)
         
         # 3. 训练模型
         model, train_params, train_metrics, val_metrics = train_xgboost_model(
-            X_train, y_train, X_val, y_val, train_dates, val_dates,
+            X_train, y_train, X_val, y_val,
             n_estimators=args.n_estimators,
             max_depth=args.max_depth,
             learning_rate=args.learning_rate,
