@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "lazybull"
-version = "0.3.2"
+version = "0.4.0"
 description = "A股量化研究与回测框架 - 专注价值红利策略"
 authors = ["deltree-y"]
 readme = "README.md"
