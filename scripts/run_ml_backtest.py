@@ -197,6 +197,7 @@ def run_ml_backtest(
         rebalance_freq=rebalance_freq,
         stop_loss_config=stop_loss_config,
         sell_timing=sell_timing,
+        completion_window_days=5,
     )
     
     # 运行回测
@@ -419,6 +420,7 @@ def main():
             exclude_st=args.exclude_st,
             min_list_days=args.min_list_days,
             markets=['主板'],  # 可根据需要调整
+            verbose=False,
         )
         
         # 4. 创建 ML 信号
@@ -426,7 +428,8 @@ def main():
             top_n=args.top_n,
             model_version=args.model_version,
             models_dir=f"{args.data_root}/models",
-            weight_method=args.weight_method
+            weight_method=args.weight_method,
+            verbose=False,
         )
         
         # 打印模型信息

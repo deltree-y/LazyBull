@@ -28,7 +28,8 @@ class MLSignal(Signal):
         weight_method: str = "equal",
         amount_filter_enabled: bool = True,
         amount_filter_pct: float = 20.0,
-        amount_window: int = 5
+        amount_window: int = 5,
+        verbose: bool = True,
     ):
         """初始化 ML 信号
         
@@ -40,6 +41,7 @@ class MLSignal(Signal):
             amount_filter_enabled: 是否启用成交额过滤，默认True
             amount_filter_pct: 过滤成交额后N%的股票，默认20%
             amount_window: 计算成交额时使用的天数窗口，默认5天（使用近5日平均成交额）
+            verbose: 是否输出详细日志，默认True
         """
         super().__init__("ml_signal")
         self.top_n = top_n
@@ -49,7 +51,7 @@ class MLSignal(Signal):
         self.amount_filter_enabled = amount_filter_enabled
         self.amount_filter_pct = amount_filter_pct
         self.amount_window = amount_window
-        
+        self.verbose = verbose
         # 延迟加载模型
         self.model = None
         self.metadata = None
@@ -127,10 +129,11 @@ class MLSignal(Signal):
         filtered_count = before_count - len(features_filtered)
         
         if filtered_count > 0:
-            logger.info(
-                f"成交额过滤: 从{before_count}只股票中过滤掉{self.amount_window}天成交额后{self.amount_filter_pct}%的{filtered_count}只股票, "
-                f"剩余{len(features_filtered)}只 (阈值={amount_threshold:.2f})"
-            )
+            if self.verbose:
+                logger.info(
+                    f"成交额过滤: 从{before_count}只股票中过滤掉{self.amount_window}天成交额后{self.amount_filter_pct}%的{filtered_count}只股票, "
+                    f"剩余{len(features_filtered)}只 (阈值={amount_threshold:.2f})"
+                )
         
         return features_filtered
     

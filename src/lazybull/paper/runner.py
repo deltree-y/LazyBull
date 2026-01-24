@@ -229,7 +229,8 @@ class PaperTradingRunner:
         self.signal = self.signal or MLSignal(
             top_n=top_n,
             model_version=model_version,
-            weight_method=self.weight_method
+            weight_method=self.weight_method,
+            verbose=False,
         )
         targets = self._generate_signals(
             corrected_date,
@@ -536,7 +537,8 @@ class PaperTradingRunner:
                 self.signal = MLSignal(
                     top_n=top_n, 
                     model_version=model_version,
-                    weight_method=self.weight_method
+                    weight_method=self.weight_method,
+                    verbose=False,
                 )
             else:
                 logger.warning("未指定信号生成器，使用等权")
@@ -591,14 +593,16 @@ class PaperTradingRunner:
             return BasicUniverse(
                 stock_basic=mainboard_stocks,
                 exclude_st=True,
-                min_list_days=60
+                min_list_days=60,
+                verbose=self.verbose,
             )
         else:
             # 默认全市场
             return BasicUniverse(
                 stock_basic=stock_basic,
                 exclude_st=True,
-                min_list_days=60
+                min_list_days=60,
+                verbose=self.verbose,
             )
     
     def _load_prices(

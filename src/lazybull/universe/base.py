@@ -102,7 +102,8 @@ class BasicUniverse(Universe):
         min_list_days: Optional[int] = None,
         markets: Optional[List[str]] = None,
         filter_suspended: bool = True,
-        filter_limit_stocks: bool = True
+        filter_limit_stocks: bool = True,
+        verbose: bool = True,
     ):
         """初始化基础股票池
         
@@ -114,6 +115,7 @@ class BasicUniverse(Universe):
             markets: 市场列表，如 ["主板", "创业板"]
             filter_suspended: 是否过滤停牌股票，默认True
             filter_limit_stocks: 是否过滤涨跌停股票，默认True
+            verbose: 是否输出详细日志，默认True
         """
         super().__init__("basic")
         self.stock_basic = stock_basic.copy()
@@ -123,7 +125,8 @@ class BasicUniverse(Universe):
         self.markets = markets
         self.filter_suspended = filter_suspended
         self.filter_limit_stocks = filter_limit_stocks
-    
+        self.verbose = verbose
+
     def get_stocks(
         self, 
         date: pd.Timestamp,
@@ -219,10 +222,11 @@ class BasicUniverse(Universe):
         
         # 输出过滤日志
         if sum(filtered_count.values()) > 0:
-            logger.info(
-                f"Universe过滤 {date.date()}: 原始 {len(stock_list)} 只，"
-                f"过滤停牌 {filtered_count['停牌']} 只，"
-                f"最终 {len(filtered_stocks)} 只"
-            )
+            if self.verbose:
+                logger.info(
+                    f"Universe过滤 {date.date()}: 原始 {len(stock_list)} 只，"
+                    f"过滤停牌 {filtered_count['停牌']} 只，"
+                    f"最终 {len(filtered_stocks)} 只"
+                )
         
         return filtered_stocks

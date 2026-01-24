@@ -216,6 +216,7 @@ class BacktestEngine:
         
         # 按日推进
         for idx, date in enumerate(trading_dates):
+            logger.info(f"回测进度: {idx + 1}/{total_days} 天, 日期: {date.date()}")
             # 处理延迟订单（先处理延迟订单，再处理新信号）
             if self.enable_pending_order:
                 self._process_pending_orders(date)
@@ -518,12 +519,12 @@ class BacktestEngine:
                         continue  # 跳过该股票，不买入
                 
                 # 可交易，执行买入
-                self._buy_stock(date, stock, target_value)
+                self._buy_stock(date, stock, target_value, signal_date=signal_date)
         else:
             # 未启用补齐功能，直接买入（信号生成时已过滤）
             for stock, weight in signals.items():
                 target_value = current_value * weight
-                self._buy_stock(date, stock, target_value)
+                self._buy_stock(date, stock, target_value, signal_date=signal_date)
         
         # 记录买入后的持仓数量
         positions_after = len(self.positions)
@@ -641,22 +642,20 @@ class BacktestEngine:
                 self.completion_stats['total_abandoned'] += 1
                 completed_signal_dates.append(signal_date)
                 
-                if self.verbose:
-                    logger.warning(
-                        f"补齐放弃: {date.date()}, 信号日 {original_signal_date.date()}, "
-                        f"已尝试 {attempts} 次补齐, 仍有 {unfilled_count} 个槽位未成交: {unfilled_stocks_str}, "
-                        f"超过补齐窗口 {self.completion_window_days} 天，放弃补齐，对应权重持币"
-                    )
+                logger.warning(
+                    f"补齐放弃: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"已尝试 {attempts} 次补齐, 仍有 {unfilled_count} 个槽位未成交: {unfilled_stocks_str}, "
+                    f"超过补齐窗口 {self.completion_window_days} 天，放弃补齐，对应权重持币"
+                )
                 continue
             
             # 在补齐窗口内，尝试补齐
             # 使用 D-1 日的数据重新生成候选股票列表
             if prev_date_quote.empty:
-                if self.verbose:
-                    logger.warning(
-                        f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
-                        f"上一交易日 {prev_date.date()} 无行情数据，无法生成候选"
-                    )
+                logger.warning(
+                    f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"上一交易日 {prev_date.date()} 无行情数据，无法生成候选"
+                )
                 continue
             
             # 获取 D-1 日的股票池
@@ -665,8 +664,7 @@ class BacktestEngine:
             # 调用扩展点获取 D-1 日的额外数据
             extra_data = self._build_signal_data(prev_date)
             if extra_data is None:
-                if self.verbose:
-                    logger.warning(
+                logger.warning(
                         f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
                         f"上一交易日 {prev_date.date()} 无可用数据（_build_signal_data 返回 None）"
                     )
@@ -680,25 +678,28 @@ class BacktestEngine:
             new_ranked_candidates = self.signal.generate_ranked(prev_date, stock_universe, signal_data)
             
             if not new_ranked_candidates:
-                if self.verbose:
-                    logger.warning(
-                        f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
-                        f"基于 {prev_date.date()} 数据无候选股票"
-                    )
+                logger.warning(
+                    f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"基于 {prev_date.date()} 数据无候选股票"
+                )
                 continue
             
             # 从新的候选列表中选择可用股票，排除已持仓股票
+            # 关键约束：只选择 unfilled_count 数量的候选（模拟实盘开盘前固定下单数量）
+            unfilled_count = len(unfilled_slot_weights)
             stocks_to_try = []
             for stock, score in new_ranked_candidates:
                 if stock not in self.positions:
                     stocks_to_try.append((stock, score))
+                    # 限制候选数量为未成交数量
+                    if len(stocks_to_try) >= unfilled_count:
+                        break
             
             if not stocks_to_try:
-                if self.verbose:
-                    logger.warning(
-                        f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
-                        f"基于 {prev_date.date()} 数据生成的候选均已持仓"
-                    )
+                logger.warning(
+                    f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"基于 {prev_date.date()} 数据生成的候选均已持仓"
+                )
                 continue
             
             # 尝试按槽位补齐
@@ -712,7 +713,7 @@ class BacktestEngine:
                 original_stock = slot_weight_info['stock']
                 weight = slot_weight_info['weight']
                 
-                # 尝试买入候选股票（按顺序）
+                # 尝试从有限的候选列表中买入（按顺序）
                 bought_for_this_slot = False
                 
                 for stock, score in stocks_to_try:
@@ -724,11 +725,15 @@ class BacktestEngine:
                     tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action='buy')
                     
                     if not tradeable:
+                        logger.info(
+                            f"补齐失败: {date.date()} (基于 {prev_date.date()} 数据), "
+                            f"槽位 {original_stock} (权重 {weight:.4f}) 尝试买入股票 {stock} 失败, 原因: {reason}"
+                        )
                         continue
                     
                     # 可交易，尝试买入
                     target_value = current_value * weight
-                    self._buy_stock(date, stock, target_value)
+                    self._buy_stock(date, stock, target_value, signal_date=original_signal_date)
                     
                     # 检查是否买入成功
                     if stock in self.positions:
@@ -738,23 +743,22 @@ class BacktestEngine:
                         
                         self.completion_stats['total_completed'] += 1
                         
-                        if self.verbose:
-                            logger.info(
-                                f"补齐成功: {date.date()} (基于 {prev_date.date()} 数据), "
-                                f"股票 {stock}, 权重 {weight:.4f}, 目标市值 {target_value:.2f}, "
-                                f"原槽位股票 {original_stock}, 信号日 {original_signal_date.date()}"
-                            )
+                        logger.info(
+                            f"补齐成功: {date.date()} (基于 {prev_date.date()} 数据), "
+                            f"槽位 {original_stock} (权重 {weight:.4f}) 买入股票 {stock} 成功."
+                            f"信号日 {original_signal_date.date()}, 目标市值 {target_value:.2f}, "
+                            f"候选池大小 {len(stocks_to_try)-len(bought_stock_set)}/{unfilled_count}"
+                        )
                         
                         break
                 
-                # 如果该槽位未能补齐，保留到下次
+                # 如果该槽位未能补齐，保留到下次（会在下次重新生成有限候选继续尝试）
                 if not bought_for_this_slot:
                     remaining_unfilled_slots.append(slot_weight_info)
-                    if self.verbose:
-                        logger.info(
-                            f"补齐失败: {date.date()}, 槽位 {original_stock} (权重 {weight:.4f}) "
-                            f"未找到可买入的候选股票，保留到下次补齐"
-                        )
+                    logger.info(
+                        f"补齐延迟: {date.date()}, 槽位 {original_stock} (权重 {weight:.4f}) "
+                        f"在有限候选池 {len(stocks_to_try)} 只中未找到可买入股票，保留到下次"
+                    )
             
             # 更新槽位信息
             slot_info['attempts'] += 1
@@ -764,11 +768,10 @@ class BacktestEngine:
             # 如果已经全部补齐，从待补齐列表中移除
             if not remaining_unfilled_slots:
                 completed_signal_dates.append(signal_date)
-                if self.verbose:
-                    logger.info(
-                        f"补齐完成: {date.date()}, 信号日 {original_signal_date.date()}, "
-                        f"本次补齐 {len(bought_stocks)} 只，仓位已满"
-                    )
+                logger.info(
+                    f"补齐完成: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"本次补齐 {len(bought_stocks)} 只，仓位已满"
+                )
         
         # 清理已完成或放弃的槽位
         for signal_date in completed_signal_dates:
@@ -790,25 +793,30 @@ class BacktestEngine:
         
         for stock, info in self.positions.items():
             buy_date = info['buy_date']
+            signal_date = info.get('signal_date', buy_date)
             buy_idx = date_to_idx.get(buy_date)
+            signal_idx = date_to_idx.get(signal_date)
             
-            if buy_idx is None:
-                logger.warning(f"股票 {stock} 买入日期 {buy_date} 不在交易日映射中")
+            # 优先使用信号日作为持有期起点，确保延迟成交的仓位与原批次同时卖出
+            anchor_idx = signal_idx if signal_idx is not None else buy_idx
+            if anchor_idx is None:
+                logger.warning(f"股票 {stock} 买入/信号日期 {buy_date}/{signal_date} 不在交易日映射中")
                 continue
             
             # 计算持有天数（交易日）
-            holding_days = current_idx - buy_idx
+            holding_days = current_idx - anchor_idx
             
             # 达到持有期，执行卖出
             if holding_days >= self.holding_period:
                 stocks_to_sell.append(stock)
-        
+
+        if stocks_to_sell and self.verbose:
+            logger.info(f"卖出执行: {date.date()}, 尝试卖出 {len(stocks_to_sell)} 只股票（达到持有期）")
+
         # 执行卖出
         for stock in stocks_to_sell:
             self._sell_stock(date, stock, sell_type='holding_period')
         
-        if stocks_to_sell and self.verbose:
-            logger.info(f"卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票（达到持有期）")
     
     def _check_stop_loss(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
         """检查止损触发条件（T 日检查，生成 T+1 卖出信号）
@@ -1204,7 +1212,9 @@ class BacktestEngine:
             if tradeable:
                 # 可交易，尝试执行
                 if order.action == 'buy':
-                    self._buy_stock_direct(date, order.stock, order.target_value)
+                    self._buy_stock_direct(
+                        date, order.stock, order.target_value, signal_date=order.signal_date
+                    )
                     self.pending_order_manager.mark_success(date, order.stock, 'buy')
                 elif order.action == 'sell':
                     self._sell_stock_direct(date, order.stock)
@@ -1274,9 +1284,15 @@ class BacktestEngine:
                 return
         
         # 可交易，直接买入
-        self._buy_stock_direct(date, stock, target_value)
+        self._buy_stock_direct(date, stock, target_value, signal_date=signal_date)
     
-    def _buy_stock_direct(self, date: pd.Timestamp, stock: str, target_value: float) -> None:
+    def _buy_stock_direct(
+        self, 
+        date: pd.Timestamp, 
+        stock: str, 
+        target_value: float,
+        signal_date: Optional[pd.Timestamp] = None
+    ) -> None:
         """直接买入股票（不检查交易状态）
         
         内部使用，实际执行买入操作
@@ -1336,6 +1352,7 @@ class BacktestEngine:
         self.positions[stock] = {
             'shares': shares,
             'buy_date': date,
+            'signal_date': signal_date or date,
             'buy_trade_price': trade_price,  # 成交价格（不复权）
             'buy_pnl_price': pnl_price,      # 绩效价格（后复权）
             'buy_cost_cash': total_cost_cash  # 总现金支出（含手续费）
@@ -1366,7 +1383,7 @@ class BacktestEngine:
             signal_date: 信号生成日期（保留参数以兼容，但不使用）
         """
         # 直接买入，不检查交易状态（已在信号生成时过滤）
-        self._buy_stock_direct(date, stock, target_value)
+        self._buy_stock_direct(date, stock, target_value, signal_date=signal_date)
     
     
     def _sell_stock(
