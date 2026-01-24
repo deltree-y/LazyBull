@@ -1,6 +1,285 @@
 # 回测与模型优化更新说明
 
-本次更新针对 LazyBull 项目实现了4项重要改进，提升了回测体验和模型性能。
+本次更新针对 LazyBull 项目实现了5项重要改进，提升了回测体验和模型性能。
+
+## 0. 横截面标签处理与IC统计增强（v0.4.0，2026-01-24）
+
+### 改进说明
+- **现状**：训练标签只做全局1% winsorize，未按日横截面处理，IC评估只有总体IC/RankIC
+- **改进**：默认训练流程支持按日横截面去极值+标准化，增强IC评估（按日IC序列、统计指标、分位数）
+
+### 实现细节
+
+#### 0.1 新增预处理模块
+文件：`src/lazybull/ml/preprocess.py`
+
+核心函数：
+- `cross_sectional_winsorize()`: 按日横截面去极值
+  - 每个trade_date分组独立处理
+  - 默认截断上下1%极端值
+  - 使用 scipy.stats.mstats.winsorize
+
+- `cross_sectional_zscore()`: 按日横截面标准化
+  - 每个trade_date分组独立标准化
+  - 标准化后均值≈0，标准差≈1
+  - 自动处理标准差为0的情况
+
+- `process_labels_cross_sectional()`: 完整处理流程
+  - 组合 winsorize + zscore
+  - 可配置是否应用各步骤
+  - 输出处理统计信息
+
+- `validate_cross_sectional_standardization()`: 验证处理效果
+  - 检查每日均值≈0，标准差≈1
+  - 返回验证结果和无效日期列表
+
+#### 0.2 新增IC评估模块
+文件：`src/lazybull/ml/evaluation.py`
+
+核心函数：
+- `calculate_daily_ic()`: 按日IC计算
+  - 支持 Pearson 和 Spearman 相关系数
+  - 返回按日IC序列（pd.Series）
+
+- `calculate_ic_statistics()`: IC统计指标
+  - IC均值、标准差、信息比率（IR）
+  - IC胜率（>0的比例）
+  - IC分位数（P10/P50/P90）
+
+- `evaluate_model_ic()`: 完整IC评估
+  - 计算总体IC和RankIC
+  - 如提供日期，计算按日IC序列及统计
+  - 可选返回IC序列
+
+- `print_ic_evaluation_report()`: 格式化报告
+  - 打印详细的IC统计报告
+  - 包含提示信息（IC>0.03, RankIC>0.05等）
+
+#### 0.3 训练脚本集成
+文件：`scripts/train_ml_model.py`
+
+修改点：
+1. **import新模块**：
+   ```python
+   from src.lazybull.ml import (
+       ModelRegistry,
+       evaluate_model_ic,
+       print_ic_evaluation_report,
+       process_labels_cross_sectional,
+   )
+   ```
+
+2. **prepare_training_data增强**：
+   - 在数据准备阶段自动应用横截面标签处理
+   - 返回train_dates和val_dates用于按日IC计算
+   ```python
+   df_train = process_labels_cross_sectional(
+       df_train,
+       label_col=label_column,
+       date_col='trade_date',
+       winsorize_limits=(0.01, 0.01),
+       apply_winsorize=True,
+       apply_zscore=True,
+       inplace=True
+   )
+   ```
+
+3. **train_xgboost_model增强**：
+   - 接收train_dates和val_dates参数
+   - 移除旧的全局winsorize（已被横截面处理替代）
+   - 使用evaluate_model_ic计算增强的IC指标
+   - 调用print_ic_evaluation_report打印详细报告
+   ```python
+   ic_metrics = evaluate_model_ic(
+       y_true=y_val,
+       y_pred=y_val_pred,
+       trade_dates=val_dates,
+       return_daily_series=False
+   )
+   ```
+
+#### 0.4 单元测试
+新增测试文件：
+
+**tests/test_ml_preprocess.py**：
+- `test_cross_sectional_winsorize()`: 验证去极值生效
+- `test_cross_sectional_zscore()`: 验证每日均值≈0，std≈1
+- `test_process_labels_cross_sectional_full_pipeline()`: 验证完整流程
+- `test_handle_missing_values()`: 验证缺失值处理
+- `test_edge_case_zero_std()`: 验证标准差为0的情况
+- 等11个测试用例
+
+**tests/test_ml_evaluation.py**：
+- `test_calculate_daily_ic_pearson()`: 验证Pearson IC计算
+- `test_calculate_daily_ic_spearman()`: 验证Spearman IC计算
+- `test_calculate_ic_statistics()`: 验证统计指标计算
+- `test_evaluate_model_ic_with_dates()`: 验证完整评估
+- `test_perfect_correlation()`: 验证完美相关（IC=1）
+- 等14个测试用例
+
+运行测试：
+```bash
+pytest tests/test_ml_preprocess.py -v
+pytest tests/test_ml_evaluation.py -v
+```
+
+### 技术原理
+
+#### 为什么需要横截面处理
+
+**问题**：
+1. 不同日期的标签分布差异大（牛市vs熊市）
+2. 极端值（涨跌停、停牌复牌）影响模型训练
+3. 模型学到的是绝对值而非相对排序
+
+**解决方案**：
+1. **按日去极值**：每日独立截断异常值，减少噪音
+2. **按日标准化**：每日独立标准化，消除跨期差异
+3. **关注排序**：标准化后模型关注相对强弱，不关注绝对值
+
+#### 为什么不引入未来泄漏
+
+- 每个trade_date分组独立处理
+- 只使用当日横截面数据计算统计量
+- 不使用未来日期的信息
+- train/val分开处理，各自计算统计量
+
+#### IC统计的意义
+
+**按日IC序列**：
+- 追踪IC的时序变化
+- 诊断模型在不同市场环境下的表现
+
+**统计指标**：
+- IC_mean: 平均预测能力
+- IC_std: 稳定性（越小越好）
+- IC_IR: 信息比率（收益/风险，越大越好）
+- IC胜率: 稳定性（>55%说明大多数时间有效）
+
+**分位数**：
+- P10: 最差10%的IC
+- P50: 中位数IC
+- P90: 最好10%的IC
+- 用于诊断IC分布和极端情况
+
+### 使用示例
+
+**默认使用**（无需配置）：
+```bash
+python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231
+```
+
+**程序化使用预处理**：
+```python
+from src.lazybull.ml import process_labels_cross_sectional
+
+# 处理标签
+df = process_labels_cross_sectional(
+    df,
+    label_col='y_ret_5',
+    date_col='trade_date',
+    winsorize_limits=(0.01, 0.01),
+    apply_winsorize=True,
+    apply_zscore=True
+)
+```
+
+**程序化使用IC评估**：
+```python
+from src.lazybull.ml import evaluate_model_ic, print_ic_evaluation_report
+
+# 评估模型
+metrics = evaluate_model_ic(
+    y_true=y_val,
+    y_pred=y_pred,
+    trade_dates=val_dates
+)
+
+# 打印报告
+print_ic_evaluation_report(metrics)
+```
+
+### 输出示例
+
+```
+======================================================================
+开始按日横截面标签处理（默认流程）
+======================================================================
+横截面 winsorize 完成: 处理 250/250 个交易日, 截断比例=(0.01, 0.01)
+横截面 z-score 标准化完成: 处理 250/250 个交易日
+标签处理完成: mean=0.000000, std=1.000000, min=-3.5234, max=3.8921
+横截面标签处理完成
+======================================================================
+
+...（训练过程）...
+
+======================================================================
+验证集IC详细统计
+======================================================================
+总体 IC（信息系数）: 0.0456
+总体 RankIC（排序IC）: 0.0678
+
+----------------------------------------------------------------------
+按日IC序列统计
+----------------------------------------------------------------------
+  IC均值: 0.0445
+  IC标准差: 0.0823
+  IC信息比率(IR): 0.5408
+  IC胜率(>0): 58.33%
+  IC范围: [-0.1234, 0.2156]
+  IC分位数: P10=-0.0456, P50=0.0423, P90=0.1567
+
+----------------------------------------------------------------------
+按日RankIC序列统计
+----------------------------------------------------------------------
+  RankIC均值: 0.0656
+  RankIC标准差: 0.0912
+  RankIC信息比率(IR): 0.7193
+  RankIC胜率(>0): 62.50%
+  RankIC范围: [-0.1123, 0.2345]
+  RankIC分位数: P10=-0.0323, P50=0.0612, P90=0.1789
+======================================================================
+提示：
+  - IC > 0.03 通常认为有一定预测能力
+  - RankIC > 0.05 说明排序能力较好（对选股策略更重要）
+  - IR（信息比率）> 1.0 说明稳定性较好
+======================================================================
+```
+
+### 预期效果
+
+根据 `docs/ic_optimization_guide.md` 的目标：
+
+**短期目标（1-2周）**：
+- IC: 0.1 → 0.15
+- RankIC: 0.1 → 0.15
+- IR: > 0.5
+
+**中期目标（2-4周）**：
+- IC: 0.15 → 0.20
+- RankIC: 0.15 → 0.20
+- IR: > 1.0
+
+**长期目标（1-2月）**：
+- IC: 0.20 → 0.25+
+- RankIC: 0.20 → 0.25+
+- IR: > 1.5
+
+### 向后兼容性
+
+- 完全向后兼容
+- 旧代码无需修改
+- 作为新的默认流程
+- 横截面处理替代了旧的全局winsorize
+
+### 相关文档
+
+- 理论指导：`docs/ic_optimization_guide.md`
+- 代码实现：`src/lazybull/ml/preprocess.py`, `src/lazybull/ml/evaluation.py`
+- 使用示例：`scripts/train_ml_model.py`
+- 单元测试：`tests/test_ml_preprocess.py`, `tests/test_ml_evaluation.py`
+
+---
 
 ## 1. 回测进度实时显示
 
