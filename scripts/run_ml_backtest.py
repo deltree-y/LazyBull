@@ -26,6 +26,7 @@ from datetime import datetime
 import sys
 import traceback
 from pathlib import Path
+import hashlib
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
@@ -235,6 +236,114 @@ def _append_dict_to_csv(file_path: Path, row: dict, fieldnames: list = None):
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
+
+
+def _generate_run_id(args) -> str:
+    """生成唯一的回测ID
+    
+    Args:
+        args: 命令行参数
+        
+    Returns:
+        回测ID字符串（时间戳_参数hash）
+    """
+    # 使用时间戳和关键参数生成唯一ID
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    
+    # 将关键参数拼接成字符串并计算hash
+    params_str = f"{args.start_date}_{args.end_date}_{args.model_version}_{args.top_n}_{args.weight_method}_{args.rebalance_freq}_{args.initial_capital}_{args.sell_timing}"
+    params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
+    
+    return f"{timestamp}_{params_hash}"
+
+
+def _append_trades_to_cumulative_file(
+    trades: pd.DataFrame,
+    args,
+    reporter: 'Reporter',
+    run_id: str,
+    run_time: str
+):
+    """将交易记录追加到累加文件中
+    
+    Args:
+        trades: 本次回测的交易记录DataFrame
+        args: 命令行参数
+        reporter: Reporter实例
+        run_id: 回测ID
+        run_time: 回测执行时间
+    """
+    if trades is None or len(trades) == 0:
+        logger.info("本次回测无交易记录，跳过累加文件写入")
+        return
+    
+    try:
+        # 累加文件路径
+        cumulative_file = Path(reporter.output_dir) / "ml_backtest_trades_runs.csv"
+        
+        # 准备要添加的参数列（中文列名）
+        model_version_str = "最新版本" if args.model_version is None else str(args.model_version)
+        
+        # 定义所有字段及其顺序（先是核心参数，再是原有交易字段）
+        fieldnames = [
+            "回测ID",
+            "回测时间",
+            "开始日期",
+            "结束日期",
+            "模型版本",
+            "TopN",
+            "权重方法",
+            "调仓频率",
+            "初始资金",
+            "卖出时机",
+            # 原有交易记录字段
+            "交易日期",
+            "股票代码",
+            "操作",
+            "成交价格",
+            "成交股数",
+            "成交金额",
+            "交易成本",
+            "买入价格",
+            "收益金额",
+            "收益率"
+        ]
+        
+        # 遍历每笔交易，添加参数列后写入累加文件
+        for _, trade in trades.iterrows():
+            # 构建完整的交易记录（参数 + 交易明细）
+            trade_with_params = {
+                "回测ID": run_id,
+                "回测时间": run_time,
+                "开始日期": args.start_date,
+                "结束日期": args.end_date,
+                "模型版本": model_version_str,
+                "TopN": args.top_n,
+                "权重方法": args.weight_method,
+                "调仓频率": args.rebalance_freq,
+                "初始资金": args.initial_capital,
+                "卖出时机": args.sell_timing,
+                # 原有交易字段（处理可能不存在的列）
+                "交易日期": trade.get('date', ''),
+                "股票代码": trade.get('stock', ''),
+                "操作": "买入" if trade.get('action') == 'buy' else "卖出" if trade.get('action') == 'sell' else trade.get('action', ''),
+                "成交价格": trade.get('price', ''),
+                "成交股数": trade.get('shares', ''),
+                "成交金额": trade.get('amount', ''),
+                "交易成本": trade.get('cost', ''),
+                "买入价格": trade.get('buy_price', ''),
+                "收益金额": trade.get('profit_amount', ''),
+                "收益率": trade.get('profit_pct', '')
+            }
+            
+            # 追加到累加文件
+            _append_dict_to_csv(cumulative_file, trade_with_params, fieldnames=fieldnames)
+        
+        logger.info(f"本次回测 {len(trades)} 笔交易已追加到累加文件: {cumulative_file}")
+        
+    except Exception as ex:
+        # 记录追加失败不影响回测结果输出，但记录错误信息
+        logger.exception(f"写交易记录到累加文件失败: {ex}")
 
 
 def main():
@@ -472,6 +581,14 @@ def main():
         logger.info(f"报告已保存到: {args.data_root}/reports/")
         logger.info("=" * 60)
 
+        # ------------------ 追加交易记录到累加文件 ------------------
+        try:
+            run_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            run_id = _generate_run_id(args)
+            _append_trades_to_cumulative_file(trades, args, reporter, run_id, run_time)
+        except Exception as ex:
+            logger.exception(f"写交易记录到累加文件失败: {ex}")
+        # -------------------------------------------------------------
 
         # ------------------ 追加写入回测记录到固定 CSV（不会覆盖老数据） ------------------
         try:
