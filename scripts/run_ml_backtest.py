@@ -44,6 +44,7 @@ from src.lazybull.data import DataLoader, Storage
 from src.lazybull.signals import MLSignal
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.risk.stop_loss import StopLossConfig, create_stop_loss_config_from_dict
+from src.lazybull.risk.equity_curve import EquityCurveConfig, create_equity_curve_config_from_dict
 
 
 def load_backtest_data(
@@ -167,6 +168,7 @@ def run_ml_backtest(
     rebalance_freq: int = 5,
     cost_model: CostModel = None,
     stop_loss_config: StopLossConfig = None,
+    equity_curve_config: EquityCurveConfig = None,
     sell_timing: str = 'open'
 ) -> tuple:
     """运行 ML 信号回测
@@ -183,6 +185,7 @@ def run_ml_backtest(
         rebalance_freq: 调仓频率（交易日数），必须为正整数
         cost_model: 成本模型
         stop_loss_config: 止损配置（可选）
+        equity_curve_config: ECT 配置（可选）
         
     Returns:
         (nav_curve, trades) 元组
@@ -198,6 +201,7 @@ def run_ml_backtest(
         cost_model=cost_model or CostModel(),
         rebalance_freq=rebalance_freq,
         stop_loss_config=stop_loss_config,
+        equity_curve_config=equity_curve_config,
         sell_timing=sell_timing,
         completion_window_days=5,
     )
@@ -514,6 +518,53 @@ def main():
         help="连续跌停止损天数，默认 2"
     )
     
+    # ECT 参数
+    parser.add_argument(
+        "--equity-curve-enabled",
+        action="store_true",
+        default=False,
+        help="启用权益曲线交易（ECT）功能"
+    )
+    parser.add_argument(
+        "--equity-curve-drawdown-thresholds",
+        type=float,
+        nargs='+',
+        default=[5.0, 10.0, 15.0, 20.0],
+        help="ECT 回撤阈值列表（百分比），默认：5.0 10.0 15.0 20.0"
+    )
+    parser.add_argument(
+        "--equity-curve-exposure-levels",
+        type=float,
+        nargs='+',
+        default=[0.8, 0.6, 0.4, 0.2],
+        help="ECT 对应仓位系数列表，默认：0.8 0.6 0.4 0.2"
+    )
+    parser.add_argument(
+        "--equity-curve-ma-short",
+        type=int,
+        default=5,
+        help="ECT 短期均线窗口，默认 5"
+    )
+    parser.add_argument(
+        "--equity-curve-ma-long",
+        type=int,
+        default=20,
+        help="ECT 长期均线窗口，默认 20"
+    )
+    parser.add_argument(
+        "--equity-curve-recovery-mode",
+        type=str,
+        default="gradual",
+        choices=["gradual", "immediate"],
+        help="ECT 恢复模式，默认 gradual"
+    )
+    parser.add_argument(
+        "--equity-curve-recovery-step",
+        type=float,
+        default=0.1,
+        help="ECT 逐步恢复步长，默认 0.1"
+    )
+    
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -550,6 +601,13 @@ def main():
             logger.info(f"  - 移动止损阈值: {args.stop_loss_trailing_pct}%")
         logger.info(f"  - 连续跌停止损: {args.stop_loss_consecutive_limit_down} 天")
     
+    logger.info(f"ECT功能: {'启用' if args.equity_curve_enabled else '禁用'}")
+    if args.equity_curve_enabled:
+        logger.info(f"  - 回撤阈值: {args.equity_curve_drawdown_thresholds}")
+        logger.info(f"  - 仓位系数: {args.equity_curve_exposure_levels}")
+        logger.info(f"  - 均线窗口: 短期={args.equity_curve_ma_short}, 长期={args.equity_curve_ma_long}")
+        logger.info(f"  - 恢复模式: {args.equity_curve_recovery_mode}")
+    
     try:
         # 初始化组件
         storage = Storage(root_path=args.data_root)
@@ -565,6 +623,19 @@ def main():
                 trailing_stop_pct=args.stop_loss_trailing_pct,
                 consecutive_limit_down_days=args.stop_loss_consecutive_limit_down,
                 post_trigger_action='hold_cash'
+            )
+        
+        # 创建 ECT 配置
+        equity_curve_config = None
+        if args.equity_curve_enabled:
+            equity_curve_config = EquityCurveConfig(
+                enabled=True,
+                drawdown_thresholds=args.equity_curve_drawdown_thresholds,
+                exposure_levels=args.equity_curve_exposure_levels,
+                ma_short_window=args.equity_curve_ma_short,
+                ma_long_window=args.equity_curve_ma_long,
+                recovery_mode=args.equity_curve_recovery_mode,
+                recovery_step=args.equity_curve_recovery_step
             )
         
         # 1. 加载数据
@@ -625,6 +696,7 @@ def main():
             initial_capital=args.initial_capital,
             rebalance_freq=args.rebalance_freq,
             stop_loss_config=stop_loss_config,
+            equity_curve_config=equity_curve_config,
             sell_timing=args.sell_timing,
         )
         
