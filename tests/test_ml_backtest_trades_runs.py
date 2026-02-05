@@ -229,6 +229,194 @@ class TestMLBacktestTradesRuns:
         
         df = pd.read_csv(csv_file, encoding='utf-8-sig')
         assert df.iloc[0]["模型版本"] == "最新版本", "模型版本None应显示为'最新版本'"
+    
+    def test_profit_calculation_in_cumulative_file(self, temp_dir):
+        """测试累加文件中收益金额和收益率的计算"""
+        # 模拟交易数据：一笔买入 + 一笔卖出
+        trades_data = [
+            {
+                'date': '2023-01-03',
+                'stock': '000001.SZ',
+                'action': 'buy',
+                'price': 10.00,
+                'shares': 1000,
+                'amount': 10000.00,
+                'cost': 30.00  # 买入交易成本
+            },
+            {
+                'date': '2023-02-01',
+                'stock': '000001.SZ',
+                'action': 'sell',
+                'price': 12.00,
+                'shares': 1000,
+                'amount': 12000.00,
+                'cost': 60.00  # 卖出交易成本
+            }
+        ]
+        
+        trades_df = pd.DataFrame(trades_data)
+        
+        # 模拟 args 和 reporter
+        import argparse
+        args = argparse.Namespace(
+            start_date="20230101",
+            end_date="20231231",
+            model_version=None,
+            top_n=5,
+            weight_method="equal",
+            rebalance_freq=10,
+            initial_capital=500000.0,
+            sell_timing="open"
+        )
+        
+        class MockReporter:
+            def __init__(self, output_dir):
+                self.output_dir = output_dir
+        
+        reporter = MockReporter(temp_dir)
+        
+        # 调用被测试的函数
+        from scripts.run_ml_backtest import _append_trades_to_cumulative_file
+        _append_trades_to_cumulative_file(
+            trades_df,
+            args,
+            reporter,
+            run_id="test_run_001",
+            run_time="2024-01-17 15:32:01"
+        )
+        
+        # 读取生成的累加文件
+        csv_file = Path(temp_dir) / "ml_backtest_trades_runs.csv"
+        assert csv_file.exists(), "累加文件应该被创建"
+        
+        df = pd.read_csv(csv_file, encoding='utf-8-sig')
+        
+        # 验证有2条记录（1买1卖）
+        assert len(df) == 2, "应该有2条交易记录"
+        
+        # 验证买入记录的收益列为空
+        buy_record = df[df['操作'] == '买入'].iloc[0]
+        # pandas 读取空字符串时会是 NaN
+        assert pd.isna(buy_record['买入价格']) or buy_record['买入价格'] == '', "买入记录的买入价格列应为空"
+        assert pd.isna(buy_record['收益金额']) or buy_record['收益金额'] == '', "买入记录的收益金额列应为空"
+        assert pd.isna(buy_record['收益率']) or buy_record['收益率'] == '', "买入记录的收益率列应为空"
+        
+        # 验证卖出记录的收益计算正确
+        sell_record = df[df['操作'] == '卖出'].iloc[0]
+        
+        # 买入成本 = 10000 + 30 = 10030
+        # 收益金额 = 12000 - 10030 - 60 = 1910.00
+        expected_profit_amount = 1910.00
+        assert sell_record['买入价格'] == 10.00, "卖出记录应包含买入价格"
+        assert float(sell_record['收益金额']) == expected_profit_amount, f"收益金额应为 {expected_profit_amount}"
+        
+        # 收益率 = (1910 / 10030) * 100 = 19.04%
+        expected_profit_pct = (1910.00 / 10030.00) * 100
+        actual_profit_pct = float(sell_record['收益率'].rstrip('%'))
+        assert abs(actual_profit_pct - expected_profit_pct) < 0.01, f"收益率应约为 {expected_profit_pct:.2f}%"
+    
+    def test_profit_calculation_multiple_buys_fifo(self, temp_dir):
+        """测试多次买卖的FIFO配对规则"""
+        # 模拟交易数据：两笔买入 + 两笔卖出（测试FIFO）
+        trades_data = [
+            # 第一次买入
+            {
+                'date': '2023-01-03',
+                'stock': '000001.SZ',
+                'action': 'buy',
+                'price': 10.00,
+                'shares': 1000,
+                'amount': 10000.00,
+                'cost': 30.00
+            },
+            # 第二次买入（同一只股票）
+            {
+                'date': '2023-01-05',
+                'stock': '000001.SZ',
+                'action': 'buy',
+                'price': 11.00,
+                'shares': 1000,
+                'amount': 11000.00,
+                'cost': 33.00
+            },
+            # 第一次卖出（应该匹配第一次买入：FIFO）
+            {
+                'date': '2023-02-01',
+                'stock': '000001.SZ',
+                'action': 'sell',
+                'price': 12.00,
+                'shares': 1000,
+                'amount': 12000.00,
+                'cost': 60.00
+            },
+            # 第二次卖出（应该匹配第二次买入）
+            {
+                'date': '2023-02-05',
+                'stock': '000001.SZ',
+                'action': 'sell',
+                'price': 12.50,
+                'shares': 1000,
+                'amount': 12500.00,
+                'cost': 62.50
+            }
+        ]
+        
+        trades_df = pd.DataFrame(trades_data)
+        
+        # 模拟 args 和 reporter
+        import argparse
+        args = argparse.Namespace(
+            start_date="20230101",
+            end_date="20231231",
+            model_version=1,
+            top_n=5,
+            weight_method="equal",
+            rebalance_freq=10,
+            initial_capital=500000.0,
+            sell_timing="open"
+        )
+        
+        class MockReporter:
+            def __init__(self, output_dir):
+                self.output_dir = output_dir
+        
+        reporter = MockReporter(temp_dir)
+        
+        # 调用被测试的函数
+        from scripts.run_ml_backtest import _append_trades_to_cumulative_file
+        _append_trades_to_cumulative_file(
+            trades_df,
+            args,
+            reporter,
+            run_id="test_run_002",
+            run_time="2024-01-17 15:35:01"
+        )
+        
+        # 读取生成的累加文件
+        csv_file = Path(temp_dir) / "ml_backtest_trades_runs.csv"
+        df = pd.read_csv(csv_file, encoding='utf-8-sig')
+        
+        # 验证有4条记录
+        assert len(df) == 4, "应该有4条交易记录"
+        
+        # 获取两次卖出记录
+        sell_records = df[df['操作'] == '卖出']
+        assert len(sell_records) == 2, "应该有2条卖出记录"
+        
+        # 第一次卖出应该匹配第一次买入（FIFO）
+        first_sell = sell_records.iloc[0]
+        assert float(first_sell['买入价格']) == 10.00, "第一次卖出应匹配第一次买入价格10.00"
+        # 买入成本 = 10000 + 30 = 10030
+        # 收益金额 = 12000 - 10030 - 60 = 1910.00
+        assert float(first_sell['收益金额']) == 1910.00, "第一次卖出收益金额应为1910.00"
+        
+        # 第二次卖出应该匹配第二次买入
+        second_sell = sell_records.iloc[1]
+        assert float(second_sell['买入价格']) == 11.00, "第二次卖出应匹配第二次买入价格11.00"
+        # 买入成本 = 11000 + 33 = 11033
+        # 收益金额 = 12500 - 11033 - 62.50 = 1404.50
+        expected_profit = 12500.00 - 11033.00 - 62.50
+        assert abs(float(second_sell['收益金额']) - expected_profit) < 0.01, f"第二次卖出收益金额应为{expected_profit}"
 
 
 if __name__ == "__main__":
