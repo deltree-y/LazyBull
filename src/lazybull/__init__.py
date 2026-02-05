@@ -3,7 +3,7 @@ LazyBull - A股量化研究与回测框架
 专注价值红利策略方向
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.3"
 __author__ = "deltree-y"
 
 from pathlib import Path
