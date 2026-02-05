@@ -27,6 +27,7 @@ import sys
 import traceback
 from pathlib import Path
 import hashlib
+from collections import defaultdict, deque
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
@@ -311,7 +312,6 @@ def _append_trades_to_cumulative_file(
         
         # 构建买入价格字典（FIFO：先进先出）
         # 存储格式：buy_prices[股票代码] = [{'price': 买入价格, 'amount': 买入金额, 'cost': 买入成本, 'shares': 股数}, ...]
-        from collections import defaultdict, deque
         buy_prices = defaultdict(deque)
         
         # 第一遍遍历：记录所有买入交易
