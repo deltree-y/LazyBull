@@ -27,6 +27,7 @@ import sys
 import traceback
 from pathlib import Path
 import hashlib
+from collections import defaultdict, deque
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
@@ -264,7 +265,7 @@ def _append_trades_to_cumulative_file(
     run_id: str,
     run_time: str
 ):
-    """将交易记录追加到累加文件中
+    """将交易记录追加到累加文件中，并计算交易盈亏
     
     Args:
         trades: 本次回测的交易记录DataFrame
@@ -309,8 +310,63 @@ def _append_trades_to_cumulative_file(
             "收益率"
         ]
         
-        # 遍历每笔交易，添加参数列后写入累加文件
+        # 构建买入价格字典（FIFO：先进先出）
+        # 存储格式：buy_prices[股票代码] = [{'price': 买入价格, 'amount': 买入金额, 'cost': 买入成本, 'shares': 股数}, ...]
+        buy_prices = defaultdict(deque)
+        
+        # 第一遍遍历：记录所有买入交易
         for _, trade in trades.iterrows():
+            action = trade.get('action', '')
+            if action == 'buy':
+                stock = trade.get('stock', '')
+                buy_prices[stock].append({
+                    'price': trade.get('price', 0),
+                    'amount': trade.get('amount', 0),
+                    'cost': trade.get('cost', 0),
+                    'shares': trade.get('shares', 0)
+                })
+        
+        # 第二遍遍历：计算卖出交易的盈亏，并写入累加文件
+        for _, trade in trades.iterrows():
+            action = trade.get('action', '')
+            stock = trade.get('stock', '')
+            
+            # 初始化收益字段
+            buy_price_value = ''
+            profit_amount = ''
+            profit_pct = ''
+            
+            # 如果是卖出交易，计算收益
+            if action == 'sell':
+                # 从 FIFO 队列中获取对应的买入信息
+                if stock in buy_prices and len(buy_prices[stock]) > 0:
+                    buy_info = buy_prices[stock].popleft()  # 先进先出
+                    
+                    # 计算收益
+                    # 买入成本 = 买入金额 + 买入交易成本
+                    buy_cost = buy_info['amount'] + buy_info['cost']
+                    
+                    # 卖出金额和成本
+                    sell_amount = trade.get('amount', 0)
+                    sell_cost = trade.get('cost', 0)
+                    
+                    # 收益金额 = 卖出金额 - 买入成本 - 卖出成本
+                    profit_amount_value = sell_amount - buy_cost - sell_cost
+                    
+                    # 收益率 = (收益金额 / 买入成本) × 100%
+                    if buy_cost > 0:
+                        profit_pct_value = (profit_amount_value / buy_cost) * 100
+                        profit_pct = f"{profit_pct_value:.2f}%"
+                    else:
+                        profit_pct = "0.00%"
+                    
+                    # 格式化收益金额（保留2位小数）
+                    profit_amount = f"{profit_amount_value:.2f}"
+                    buy_price_value = buy_info['price']
+                else:
+                    # 没有找到对应的买入记录（理论上不应发生）
+                    logger.warning(f"卖出交易未找到对应买入记录: {stock} @ {trade.get('date', '')}")
+            
             # 构建完整的交易记录（参数 + 交易明细）
             trade_with_params = {
                 "回测ID": run_id,
@@ -323,17 +379,17 @@ def _append_trades_to_cumulative_file(
                 "调仓频率": args.rebalance_freq,
                 "初始资金": args.initial_capital,
                 "卖出时机": args.sell_timing,
-                # 原有交易字段（处理可能不存在的列）
+                # 原有交易字段
                 "交易日期": trade.get('date', ''),
-                "股票代码": trade.get('stock', ''),
-                "操作": "买入" if trade.get('action') == 'buy' else "卖出" if trade.get('action') == 'sell' else trade.get('action', ''),
+                "股票代码": stock,
+                "操作": "买入" if action == 'buy' else "卖出" if action == 'sell' else action,
                 "成交价格": trade.get('price', ''),
                 "成交股数": trade.get('shares', ''),
                 "成交金额": trade.get('amount', ''),
                 "交易成本": trade.get('cost', ''),
-                "买入价格": trade.get('buy_price', ''),
-                "收益金额": trade.get('profit_amount', ''),
-                "收益率": trade.get('profit_pct', '')
+                "买入价格": buy_price_value,
+                "收益金额": profit_amount,
+                "收益率": profit_pct
             }
             
             # 追加到累加文件
