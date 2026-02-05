@@ -29,7 +29,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.3.2 - 仓位补齐机制)
+### 当前版本 (v0.3.5 - 权益曲线交易风险管理)
 
 - ✅ **完整的项目骨架**: 模块化设计，易于扩展
 - ✅ **TuShare数据接入**: 自动拉取交易日历、股票列表、日线行情、财务指标
@@ -40,6 +40,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **涨跌停与停牌处理**: **信号生成时基于T+1数据过滤并回填，确保top N可交易**（优化）
 - ✅ **实时进度显示**: 回测时使用 tqdm 进度条实时显示当前日期、净值、耗时，**支持详细日志开关**
 - ✅ **仓位补齐机制**: **调仓后未满仓时自动在补齐窗口期内尝试补齐，确保回测实盘一致**（新增）
+- ✅ **止损机制**: 回撤止损、移动止损、连续跌停止损（可选）
+- ✅ **权益曲线交易（ECT）**: **基于账户盈亏曲线的仓位/风险管理**（新增 v0.3.5）
+  - 回撤分档控制仓位
+  - 净值均线趋势过滤
+  - 风险解除后逐步恢复仓位
 - ✅ **价格口径配置**: 统一使用不复权价格计算成本，后复权价格计算收益
 - ✅ **收益明细跟踪**: 每笔卖出交易自动计算收益金额和收益率（已扣除成本）
 - ✅ **信号生成**: 提供等权、因子打分等多种方法
@@ -55,6 +60,109 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **止损触发**: 支持回撤止损、移动止损、连续跌停止损（新增）
 
 ### v0.4.0 更新内容（2026-01-19）
+
+### v0.3.5 更新内容（2026-02-05）
+
+**权益曲线交易（Equity Curve Trading, ECT）** - 基于账户盈亏曲线的仓位/风险管理：
+
+#### 核心功能
+- **回撤分档控制**: 根据净值回撤程度分档降低仓位
+  - 可配置多档回撤阈值（默认：5%、10%、15%、20%）
+  - 对应不同仓位系数（默认：0.8、0.6、0.4、0.2）
+- **均线趋势过滤**: 基于净值短期/长期均线判断趋势
+  - 短期均线高于长期均线：允许持仓（系数1.0）
+  - 短期均线低于长期均线：降低仓位（系数0.5）
+- **逐步恢复机制**: 风险解除后仓位阶梯式回升
+  - gradual 模式：每个调仓周期按步长增加仓位（默认0.1）
+  - immediate 模式：立即恢复满仓
+  - 可配置恢复前等待周期数
+- **组合决策**: 同时考虑回撤和均线，取较小值（更保守）
+- **适用范围**: 同时支持纸面交易和回测
+
+#### 使用示例
+
+**纸面交易**:
+```bash
+# 配置 ECT 参数
+python scripts/paper_trade.py config \
+  --buy-price close --sell-price close \
+  --top-n 5 --initial-capital 500000 --rebalance-freq 5 \
+  --equity-curve-enabled \
+  --equity-curve-drawdown-thresholds 5.0 10.0 15.0 \
+  --equity-curve-exposure-levels 0.8 0.6 0.4 \
+  --equity-curve-ma-short 5 \
+  --equity-curve-ma-long 20 \
+  --equity-curve-recovery-mode gradual \
+  --equity-curve-recovery-step 0.1
+
+# 运行（ECT 会自动生效）
+python scripts/paper_trade.py run --trade-date 20260205
+```
+
+**回测**:
+```bash
+python scripts/run_ml_backtest.py \
+  --start-date 20230101 --end-date 20231231 \
+  --top-n 5 --rebalance-freq 5 \
+  --equity-curve-enabled \
+  --equity-curve-drawdown-thresholds 5.0 10.0 15.0 \
+  --equity-curve-exposure-levels 0.8 0.6 0.4 \
+  --equity-curve-ma-short 5 \
+  --equity-curve-ma-long 20
+```
+
+**Python API**:
+```python
+from src.lazybull.risk.equity_curve import EquityCurveConfig, EquityCurveMonitor
+from src.lazybull.backtest import BacktestEngine
+
+# 创建 ECT 配置
+ect_config = EquityCurveConfig(
+    enabled=True,
+    drawdown_thresholds=[5.0, 10.0, 15.0, 20.0],
+    exposure_levels=[0.8, 0.6, 0.4, 0.2],
+    ma_short_window=5,
+    ma_long_window=20,
+    recovery_mode='gradual',
+    recovery_step=0.1
+)
+
+# 传入回测引擎
+engine = BacktestEngine(
+    universe=universe,
+    signal=signal,
+    equity_curve_config=ect_config,
+    # ... 其他参数
+)
+```
+
+#### 工作流程
+
+1. **计算当前状态**:
+   - 从历史 NAV 序列计算最大回撤
+   - 计算短期/长期均线
+   
+2. **确定仓位系数**:
+   - 回撤系数: 根据回撤档位确定
+   - 均线系数: 根据均线趋势确定
+   - 最终系数: 取两者较小值
+   
+3. **应用恢复逻辑**:
+   - 降仓: 立即执行
+   - 增仓: 按恢复策略逐步执行
+   
+4. **调整目标权重**:
+   - 所有目标权重乘以仓位系数
+   - 系数为0时清仓
+
+#### 输出日志示例
+
+```
+ECT 计算结果: [20260205] ECT: 回撤 12.50% (触发), 均线趋势向下, 系数=0.40
+ECT 仓位系数: 0.40
+应用 ECT 系数 0.40 到目标权重
+已将 ECT 系数应用到 5 个目标权重
+```
 
 ### v0.3.2 更新内容（2026-01-23）
 
