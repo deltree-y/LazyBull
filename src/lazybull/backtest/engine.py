@@ -15,6 +15,7 @@ from ..execution.pending_order import PendingOrderManager
 from ..signals.base import Signal
 from ..universe.base import Universe
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
+from ..risk.equity_curve import EquityCurveConfig, EquityCurveMonitor
 
 
 class BacktestEngine:
@@ -50,7 +51,8 @@ class BacktestEngine:
         stop_loss_config: Optional[StopLossConfig] = None,
         sell_timing: str = 'close',
         enable_position_completion: bool = True,
-        completion_window_days: int = 3
+        completion_window_days: int = 3,
+        equity_curve_config: Optional[EquityCurveConfig] = None
     ):
         """初始化回测引擎
         
@@ -76,6 +78,7 @@ class BacktestEngine:
             sell_timing: 卖出时机，'close' 表示 T+n 日收盘价卖出（默认），'open' 表示 T+n 日开盘价卖出
             enable_position_completion: 是否启用仓位补齐功能，默认True
             completion_window_days: 补齐窗口期（交易日），默认3天
+            equity_curve_config: ECT（权益曲线交易）配置，None 表示不启用（默认）
         """
         self.universe = universe
         self.signal = signal
@@ -119,6 +122,12 @@ class BacktestEngine:
         self.stop_loss_monitor = None
         if stop_loss_config and stop_loss_config.enabled:
             self.stop_loss_monitor = StopLossMonitor(stop_loss_config)
+        
+        # ECT 配置
+        self.equity_curve_config = equity_curve_config
+        self.equity_curve_monitor = None
+        if equity_curve_config and equity_curve_config.enabled:
+            self.equity_curve_monitor = EquityCurveMonitor(equity_curve_config)
         
         # 持有期逻辑：如果未指定，与调仓频率保持一致
         if holding_period is None:
@@ -281,6 +290,30 @@ class BacktestEngine:
             )
         
         return nav_df
+    
+    def _build_nav_series(self, current_date: pd.Timestamp) -> Optional[pd.Series]:
+        """构建用于 ECT 的历史 NAV 序列
+        
+        Args:
+            current_date: 当前日期
+            
+        Returns:
+            NAV Series (index=date, values=nav) 或 None
+        """
+        if not self.portfolio_values:
+            return None
+        
+        # 从 portfolio_values 构建 DataFrame
+        df = pd.DataFrame(self.portfolio_values)
+        
+        # 计算 NAV（相对于初始资金的净值）
+        df['nav'] = df['portfolio_value'] / self.initial_capital
+        
+        # 转换为 Series
+        nav_series = pd.Series(df['nav'].values, index=df['date'])
+        
+        return nav_series
+
     
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建传递给信号生成器的额外数据（扩展点）
@@ -488,6 +521,29 @@ class BacktestEngine:
         # 应用风险预算（波动率缩放）
         if self.enable_risk_budget:
             signals = self._apply_risk_budget(signals, date)
+        
+        # 应用 ECT 仓位系数
+        ect_exposure = 1.0
+        if self.equity_curve_monitor:
+            # 构建历史 NAV 序列
+            nav_series = self._build_nav_series(date)
+            
+            if nav_series is not None and len(nav_series) > 0:
+                # 计算 ECT 系数
+                ect_exposure, ect_reason = self.equity_curve_monitor.calculate_exposure(
+                    nav_series,
+                    current_date=to_trade_date_str(date)
+                )
+                
+                if self.verbose and ect_exposure < 1.0:
+                    logger.info(f"ECT 生效: {date.date()}, {ect_reason}")
+                
+                # 将系数应用到所有目标权重
+                if ect_exposure < 1.0:
+                    signals = {stock: weight * ect_exposure for stock, weight in signals.items()}
+                    
+                    if self.verbose:
+                        logger.info(f"ECT 调整: 所有目标权重乘以系数 {ect_exposure:.2f}")
         
         # 计算当前组合市值
         current_value = self._calculate_portfolio_value(date)

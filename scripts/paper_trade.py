@@ -32,6 +32,7 @@ from src.lazybull.common.print_table import format_row
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.paper import PaperTradingRunner, PaperStorage
 from src.lazybull.risk.stop_loss import StopLossConfig, StopLossMonitor
+from src.lazybull.risk.equity_curve import EquityCurveConfig, EquityCurveMonitor, create_equity_curve_config_from_dict
 
 
 def run_config(args):
@@ -54,7 +55,14 @@ def run_config(args):
         'stop_loss_trailing_enabled': args.stop_loss_trailing_enabled,
         'stop_loss_trailing_pct': args.stop_loss_trailing_pct,
         'stop_loss_consecutive_limit_down': args.stop_loss_consecutive_limit_down,
-        'universe': args.universe
+        'universe': args.universe,
+        'equity_curve_enabled': args.equity_curve_enabled,
+        'equity_curve_drawdown_thresholds': args.equity_curve_drawdown_thresholds,
+        'equity_curve_exposure_levels': args.equity_curve_exposure_levels,
+        'equity_curve_ma_short': args.equity_curve_ma_short,
+        'equity_curve_ma_long': args.equity_curve_ma_long,
+        'equity_curve_recovery_mode': args.equity_curve_recovery_mode,
+        'equity_curve_recovery_step': args.equity_curve_recovery_step,
     }
     
     # 保存配置
@@ -106,6 +114,7 @@ def run_main(args):
     logger.info(f"  调仓频率: {config['rebalance_freq']} 个交易日")
     logger.info(f"  权重方法: {config['weight_method']}")
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
+    logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
     logger.info("=" * 80)
     
     # 2. 创建运行器
@@ -181,7 +190,7 @@ def run_main(args):
     logger.info("步骤4: 检查是否调仓日并执行 T0")
     logger.info("-" * 80)
     
-    t0_targets = _execute_t0_if_rebalance_day(runner, corrected_date, config)
+    t0_targets, ect_exposure, ect_reason = _execute_t0_if_rebalance_day(runner, corrected_date, config)
     
     # 9. 打印手工操作指令汇总
     logger.info("")
@@ -189,7 +198,7 @@ def run_main(args):
     logger.info("手工操作指令汇总")
     logger.info("=" * 120)
     
-    _print_manual_actions(stop_loss_actions, pending_sell_actions, t1_actions, t0_targets)
+    _print_manual_actions(stop_loss_actions, pending_sell_actions, t1_actions, t0_targets, ect_exposure, ect_reason)
     print_positions(corrected_date)    
 
     logger.info("=" * 120)
@@ -408,18 +417,23 @@ def _execute_t0_if_rebalance_day(
     runner: PaperTradingRunner,
     trade_date: str,
     config: dict
-) -> List[Dict]:
+) -> Tuple[List[Dict], float, str]:
     """执行 T0（如果是调仓日）
     
     Returns:
-        T0 目标列表 [{ts_code, target_weight, reason, score}, ...]
+        (T0 目标列表, ECT系数, ECT原因) 元组
+        - T0 目标列表: [{ts_code, target_weight, reason, score}, ...]
+        - ECT系数: exposure_multiplier
+        - ECT原因: ECT 计算原因
     """
     targets_info = []
+    ect_exposure = 1.0
+    ect_reason = "ECT 未启用"
     
     # 检查幂等性
     if runner.paper_storage.check_run_exists("t0", trade_date):
         logger.info(f"T0 工作流已在 {trade_date} 执行过，跳过")
-        return targets_info
+        return targets_info, ect_exposure, ect_reason
     
     # 检查是否调仓日
     try:
@@ -427,13 +441,44 @@ def _execute_t0_if_rebalance_day(
     except RuntimeError as e:
         logger.info(f"当前不是调仓日：{e}")
         logger.info("非调仓日允许执行卖出和T1，T0跳过")
-        return targets_info
+        return targets_info, ect_exposure, ect_reason
     
     if not is_rebalance_day:
         logger.info("非调仓日，跳过 T0")
-        return targets_info
+        return targets_info, ect_exposure, ect_reason
     
     logger.info("当前是调仓日，执行 T0")
+    
+    # 计算 ECT 系数（在生成信号前计算）
+    if config.get('equity_curve_enabled', False):
+        logger.info("-" * 80)
+        logger.info("计算 ECT 仓位系数")
+        logger.info("-" * 80)
+        
+        # 创建 ECT 配置和监控器
+        ect_config = create_equity_curve_config_from_dict(config)
+        ect_monitor = EquityCurveMonitor(ect_config)
+        
+        # 加载历史 NAV
+        nav_df = runner.paper_storage.load_all_nav()
+        if nav_df is not None and len(nav_df) > 0:
+            # 转为 Series (index=date, values=nav)
+            nav_series = nav_df.set_index('trade_date')['nav']
+            
+            # 计算 exposure
+            ect_exposure, ect_reason = ect_monitor.calculate_exposure(
+                nav_series, 
+                current_date=trade_date
+            )
+            
+            logger.info(f"ECT 计算结果: {ect_reason}")
+            logger.info(f"ECT 仓位系数: {ect_exposure:.2f}")
+        else:
+            logger.warning("NAV 历史为空，使用默认系数 1.0")
+            ect_exposure = 1.0
+            ect_reason = "NAV 历史为空"
+        
+        logger.info("-" * 80)
     
     # 执行 T0
     try:
@@ -452,6 +497,19 @@ def _execute_t0_if_rebalance_day(
             # 读取生成的目标
             targets = runner.paper_storage.load_pending_weights(t1_date)
             if targets:
+                # 应用 ECT 系数到目标权重
+                if ect_exposure < 1.0:
+                    logger.info(f"应用 ECT 系数 {ect_exposure:.2f} 到目标权重")
+                    for target in targets:
+                        original_weight = target.target_weight
+                        target.target_weight = original_weight * ect_exposure
+                        target.reason = f"{target.reason} (ECT调整: {original_weight:.4f} -> {target.target_weight:.4f})"
+                    
+                    # 重新保存调整后的目标
+                    runner.paper_storage.save_pending_weights(t1_date, targets)
+                    logger.info(f"已将 ECT 系数应用到 {len(targets)} 个目标权重")
+                
+                # 收集目标信息用于显示
                 for target in targets:
                     targets_info.append({
                         'ts_code': target.ts_code,
@@ -464,16 +522,27 @@ def _execute_t0_if_rebalance_day(
     except Exception as e:
         logger.error(f"T0 执行失败: {e}")
     
-    return targets_info
+    return targets_info, ect_exposure, ect_reason
 
 
 def _print_manual_actions(
     stop_loss_actions: List[Dict],
     pending_sell_actions: List[Dict],
     t1_actions: List[Dict],
-    t0_targets: List[Dict]
+    t0_targets: List[Dict],
+    ect_exposure: float = 1.0,
+    ect_reason: str = ""
 ):
     """打印手工操作指令汇总"""
+    
+    # 0. ECT 信息（如果启用）
+    if ect_reason and "未启用" not in ect_reason and "为空" not in ect_reason:
+        logger.info("")
+        logger.info("【ECT 仓位管理】")
+        logger.info("-" * 120)
+        logger.info(f"仓位系数: {ect_exposure:.2f}")
+        logger.info(f"计算原因: {ect_reason}")
+        logger.info("-" * 120)
     
     # 1. 止损卖出清单
     if stop_loss_actions:
@@ -674,6 +743,51 @@ def main():
         type=int,
         default=2,
         help='连续跌停触发天数（默认：2）'
+    )
+    
+    # ECT 相关参数
+    config_parser.add_argument(
+        '--equity-curve-enabled',
+        action='store_true',
+        help='启用权益曲线交易（ECT）功能'
+    )
+    config_parser.add_argument(
+        '--equity-curve-drawdown-thresholds',
+        type=float,
+        nargs='+',
+        default=[5.0, 10.0, 15.0, 20.0],
+        help='ECT 回撤阈值列表（百分比），默认：5.0 10.0 15.0 20.0'
+    )
+    config_parser.add_argument(
+        '--equity-curve-exposure-levels',
+        type=float,
+        nargs='+',
+        default=[0.8, 0.6, 0.4, 0.2],
+        help='ECT 对应仓位系数列表，默认：0.8 0.6 0.4 0.2'
+    )
+    config_parser.add_argument(
+        '--equity-curve-ma-short',
+        type=int,
+        default=5,
+        help='ECT 短期均线窗口（默认：5）'
+    )
+    config_parser.add_argument(
+        '--equity-curve-ma-long',
+        type=int,
+        default=20,
+        help='ECT 长期均线窗口（默认：20）'
+    )
+    config_parser.add_argument(
+        '--equity-curve-recovery-mode',
+        choices=['gradual', 'immediate'],
+        default='gradual',
+        help='ECT 恢复模式（默认：gradual）'
+    )
+    config_parser.add_argument(
+        '--equity-curve-recovery-step',
+        type=float,
+        default=0.1,
+        help='ECT 逐步恢复步长（默认：0.1）'
     )
     
     # run 子命令
