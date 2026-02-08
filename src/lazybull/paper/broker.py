@@ -9,7 +9,7 @@ from ..common.print_table import format_row
 
 from ..common.cost import CostModel
 from .account import PaperAccount
-from .models import Fill, Order, TargetWeight
+from .models import Fill, Order, PendingBuy, TargetWeight
 from .storage import PaperStorage
 
 
@@ -44,6 +44,10 @@ class PaperBroker:
         self.verbose = verbose
         # 加载延迟卖出队列
         self.pending_sells = self.storage.load_pending_sells()
+        # 加载延迟买入队列（补位计划）
+        self.pending_buys = self.storage.load_pending_buys()
+        # 记录最近一次买入失败的目标（用于补位）
+        self._failed_buy_targets = []
 
     
     def generate_orders(
@@ -169,6 +173,8 @@ class PaperBroker:
                     ))
         
         # 2. 买入订单：目标持有但当前没有，或目标权重增加
+        failed_buy_targets = []  # 记录买入失败的目标（用于补位）
+        
         for ts_code in target_stocks:
             target_weight, reason = target_weights[ts_code]
             current_weight = self.account.get_position_weight(ts_code, all_prices)
@@ -177,13 +183,24 @@ class PaperBroker:
                 # 需要买入
                 if ts_code not in buy_prices:
                     logger.warning(f"股票 {ts_code} 无买入价格数据，跳过买入")
+                    # 记录失败目标（原因：无价格数据）
+                    failed_buy_targets.append(TargetWeight(
+                        ts_code=ts_code,
+                        target_weight=target_weight,
+                        reason=f"{reason}（无价格数据）"
+                    ))
                     continue
                 
                 # 检查可交易性
                 can_buy, buy_reason = self._check_can_buy(ts_code, tradability)
                 if not can_buy:
-                    logger.warning(f"股票 {ts_code} 不可买入: {buy_reason}，跳过订单")
-                    # 涨停、停牌或其他不可交易，跳过
+                    logger.warning(f"股票 {ts_code} 不可买入: {buy_reason}，记录为补位候选")
+                    # 记录失败目标（原因：涨停、停牌等）
+                    failed_buy_targets.append(TargetWeight(
+                        ts_code=ts_code,
+                        target_weight=target_weight,
+                        reason=f"{reason}（{buy_reason}）"
+                    ))
                     continue
                 
                 # 计算需要买入的金额
@@ -200,6 +217,12 @@ class PaperBroker:
                     buy_value = available_cash - estimated_cost
                     if buy_value <= 0:
                         logger.warning(f"现金不足，跳过买入 {ts_code}")
+                        # 记录失败目标（原因：现金不足）
+                        failed_buy_targets.append(TargetWeight(
+                            ts_code=ts_code,
+                            target_weight=target_weight,
+                            reason=f"{reason}（现金不足）"
+                        ))
                         continue
                 
                 # 计算股数（向下取整到100的倍数）
@@ -215,9 +238,24 @@ class PaperBroker:
                         current_weight=current_weight,
                         reason=reason if current_weight == 0 else "加仓"
                     ))
+                else:
+                    # 记录失败目标（原因：不足一手）
+                    logger.warning(f"股票 {ts_code} 不足一手，无法买入")
+                    failed_buy_targets.append(TargetWeight(
+                        ts_code=ts_code,
+                        target_weight=target_weight,
+                        reason=f"{reason}（不足一手）"
+                    ))
         
         logger.info(f"生成订单: {len([o for o in orders if o.action == 'buy'])} 买，"
                    f"{len([o for o in orders if o.action == 'sell'])} 卖")
+        
+        if failed_buy_targets:
+            logger.warning(f"买入失败目标数: {len(failed_buy_targets)}，将生成补位计划")
+            # 记录失败信息，供后续生成补位计划使用
+            self._failed_buy_targets = failed_buy_targets
+        else:
+            self._failed_buy_targets = []
         
         # 保存延迟卖出队列
         self.storage.save_pending_sells(self.pending_sells)
@@ -713,3 +751,167 @@ class PaperBroker:
         logger.info("=" * 80)
         
         return fills
+    
+    def retry_pending_buys(
+        self,
+        trade_date: str,
+        buy_price_type: str = 'close',
+        max_attempts: int = 5
+    ) -> tuple[List[Fill], List[PendingBuy]]:
+        """重试延迟买入订单（补位计划）
+        
+        对于延迟买入队列中的订单，检查是否可以买入。
+        如果可以买入，执行买入；如果不可买入，继续保留并增加尝试次数。
+        超过最大尝试次数的订单会被移除。
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            buy_price_type: 买入价格类型 open/close
+            max_attempts: 最大尝试次数（默认5次）
+            
+        Returns:
+            (成交记录列表, 仍失败的订单列表) 元组
+        """
+        if not self.pending_buys:
+            logger.info("当前无延迟买入订单")
+            return [], []
+        
+        logger.info("=" * 80)
+        logger.info(f"重试延迟买入订单（补位计划） - {trade_date}")
+        logger.info(f"待处理订单数: {len(self.pending_buys)}")
+        logger.info("=" * 80)
+        
+        # 加载当日可交易性
+        tradability = self._load_tradability_info(trade_date)
+        
+        # 加载价格
+        from ..data import DataLoader, Storage
+        storage = Storage()
+        loader = DataLoader(storage)
+        daily_data = loader.load_clean_daily_by_date(trade_date)
+        
+        if daily_data is None or daily_data.empty:
+            logger.error(f"无法加载 {trade_date} 的价格数据")
+            return [], self.pending_buys
+        
+        # 构建价格字典
+        buy_prices = {}
+        price_col = buy_price_type  # 'open' 或 'close'
+        if price_col not in daily_data.columns:
+            logger.warning(f"价格列 {price_col} 不存在，降级到 close")
+            price_col = 'close'
+        
+        for _, row in daily_data.iterrows():
+            ts_code = row['ts_code']
+            price = row.get(price_col)
+            if not pd.isna(price) and price > 0:
+                buy_prices[ts_code] = price
+        
+        # 重试每个订单
+        fills = []
+        remaining_buys = []
+        expired_buys = []
+        
+        for pb in self.pending_buys:
+            # 检查是否同日重复执行：若 last_attempt_date == trade_date，则不增加 attempts
+            if pb.last_attempt_date == trade_date:
+                logger.info(
+                    f"股票 {pb.ts_code} 今日已重试过（last_attempt_date={pb.last_attempt_date}），"
+                    f"不重复推进 attempts（当前 attempts={pb.attempts}）"
+                )
+            else:
+                # 不同日期，推进 attempts 并更新 last_attempt_date
+                pb.attempts += 1
+                pb.last_attempt_date = trade_date
+                logger.debug(f"股票 {pb.ts_code} 尝试次数增加到 {pb.attempts}，更新 last_attempt_date={trade_date}")
+            
+            # 检查是否超过最大尝试次数
+            if pb.attempts > max_attempts:
+                logger.warning(f"股票 {pb.ts_code} 已达到最大尝试次数 {max_attempts}，移除补位订单")
+                expired_buys.append(pb)
+                continue
+            
+            # 检查价格数据
+            if pb.ts_code not in buy_prices:
+                logger.warning(f"股票 {pb.ts_code} 无价格数据，保留订单")
+                remaining_buys.append(pb)
+                continue
+            
+            # 检查可交易性
+            can_buy, reason = self._check_can_buy(pb.ts_code, tradability)
+            if not can_buy:
+                logger.warning(f"股票 {pb.ts_code} 仍不可买入: {reason}，保留订单（尝试次数: {pb.attempts}/{max_attempts}）")
+                remaining_buys.append(pb)
+                continue
+            
+            # 可以买入，计算买入金额和股数
+            # 使用当前剩余现金按权重分配
+            available_cash = self.account.get_cash()
+            price = buy_prices[pb.ts_code]
+            
+            # 按目标权重计算应买金额
+            # 注意：这里使用剩余现金 * 权重，而不是总资产 * 权重
+            # 因为补位时总资产可能已经变化
+            buy_value = available_cash * pb.target_weight
+            
+            # 预估成本
+            estimated_cost = self.cost_model.calculate_buy_cost(buy_value)
+            
+            # 确保有足够现金
+            if buy_value + estimated_cost > available_cash:
+                buy_value = available_cash - estimated_cost
+                if buy_value <= 0:
+                    logger.warning(f"股票 {pb.ts_code} 现金不足，保留订单")
+                    remaining_buys.append(pb)
+                    continue
+            
+            # 计算股数（向下取整到100的倍数）
+            buy_shares = int(buy_value / price / 100) * 100
+            
+            if buy_shares < 100:
+                logger.warning(f"股票 {pb.ts_code} 不足一手（可买{buy_shares}股），保留订单")
+                remaining_buys.append(pb)
+                continue
+            
+            # 构建订单
+            order = Order(
+                ts_code=pb.ts_code,
+                action='buy',
+                shares=buy_shares,
+                price=price,
+                target_weight=pb.target_weight,
+                current_weight=0.0,
+                reason=f"{pb.reason}(补位)"
+            )
+            
+            # 执行订单
+            fill = self._execute_single_order(order, trade_date, buy_price_type)
+            if fill:
+                fills.append(fill)
+                logger.info(f"成功买入 {pb.ts_code} {buy_shares} 股（补位）")
+            else:
+                # 执行失败，保留订单
+                logger.warning(f"股票 {pb.ts_code} 执行失败，保留订单")
+                remaining_buys.append(pb)
+        
+        # 更新延迟买入队列
+        self.pending_buys = remaining_buys
+        self.storage.save_pending_buys(self.pending_buys)
+        
+        logger.info("=" * 80)
+        logger.info(f"补位重试完成: 成功买入 {len(fills)} 笔，剩余 {len(remaining_buys)} 笔延迟订单，过期 {len(expired_buys)} 笔")
+        logger.info("=" * 80)
+        
+        return fills, remaining_buys
+    
+    def get_failed_buy_targets(self) -> List[TargetWeight]:
+        """获取最近一次买入失败的目标列表
+        
+        Returns:
+            失败目标列表
+        """
+        return self._failed_buy_targets
+    
+    def clear_failed_buy_targets(self) -> None:
+        """清空失败买入目标列表"""
+        self._failed_buy_targets = []

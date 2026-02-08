@@ -145,6 +145,7 @@ def run_main(args):
     # 收集所有待手工操作的信息
     stop_loss_actions = []
     pending_sell_actions = []
+    pending_buy_actions = []  # 新增：补位买入动作
     t1_actions = []
     t0_targets = []
     
@@ -176,29 +177,37 @@ def run_main(args):
     
     pending_sell_actions = _process_pending_sells(runner, corrected_date, config)
     
-    # 7. 执行 T1（如果有待执行目标）
+    # 7. 处理延迟买入队列（补位计划）
     logger.info("")
     logger.info("-" * 80)
-    logger.info("步骤3: 检查并执行 T1")
+    logger.info("步骤3: 处理延迟买入队列（补位计划）")
+    logger.info("-" * 80)
+    
+    pending_buy_actions = _process_pending_buys(runner, corrected_date, config)
+    
+    # 8. 执行 T1（如果有待执行目标）
+    logger.info("")
+    logger.info("-" * 80)
+    logger.info("步骤4: 检查并执行 T1")
     logger.info("-" * 80)
     
     t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
     
-    # 8. 判断是否调仓日并执行 T0
+    # 9. 判断是否调仓日并执行 T0
     logger.info("")
     logger.info("-" * 80)
-    logger.info("步骤4: 检查是否调仓日并执行 T0")
+    logger.info("步骤5: 检查是否调仓日并执行 T0")
     logger.info("-" * 80)
     
     t0_targets, ect_exposure, ect_reason = _execute_t0_if_rebalance_day(runner, corrected_date, config)
     
-    # 9. 打印手工操作指令汇总
+    # 10. 打印手工操作指令汇总
     logger.info("")
     logger.info("=" * 120)
     logger.info("手工操作指令汇总")
     logger.info("=" * 120)
     
-    _print_manual_actions(stop_loss_actions, pending_sell_actions, t1_actions, t0_targets, ect_exposure, ect_reason)
+    _print_manual_actions(stop_loss_actions, pending_sell_actions, pending_buy_actions, t1_actions, t0_targets, ect_exposure, ect_reason)
     print_positions(corrected_date)    
 
     logger.info("=" * 120)
@@ -335,6 +344,53 @@ def _process_pending_sells(
     return actions
 
 
+def _process_pending_buys(
+    runner: PaperTradingRunner,
+    trade_date: str,
+    config: dict
+) -> List[Dict]:
+    """处理延迟买入队列（补位计划）
+    
+    Returns:
+        延迟买入动作列表 [{ts_code, target_weight, reason, status}, ...]
+    """
+    actions = []
+    
+    # 重试延迟买入
+    fills, remaining_buys = runner.broker.retry_pending_buys(trade_date, config['buy_price'])
+    
+    # 收集仍在队列中的订单
+    for pb in remaining_buys:
+        actions.append({
+            'ts_code': pb.ts_code,
+            'target_weight': pb.target_weight,
+            'reason': pb.reason,
+            'status': f'不可买入（尝试次数: {pb.attempts}/5）'
+        })
+    
+    # 收集已成交的订单
+    for fill in fills:
+        actions.append({
+            'ts_code': fill.ts_code,
+            'target_weight': 0.0,
+            'reason': fill.reason,
+            'status': '已成交'
+        })
+    
+    if fills:
+        # 更新账户状态和净值
+        runner.account.update_last_date(trade_date)
+        runner.account.save_state()
+        
+        # 加载价格
+        buy_prices, sell_prices = runner._load_prices(trade_date, config['buy_price'], config['sell_price'])
+        all_prices = {**sell_prices, **buy_prices}
+        runner._record_nav(trade_date, all_prices)
+    
+    logger.info(f"延迟买入处理完成：成交 {len(fills)} 笔，剩余 {len(remaining_buys)} 笔")
+    return actions
+
+
 def _execute_t1_if_pending(
     runner: PaperTradingRunner,
     trade_date: str,
@@ -371,6 +427,9 @@ def _execute_t1_if_pending(
     # 生成订单
     orders = runner.broker.generate_orders(targets, buy_prices, sell_prices, trade_date)
     
+    # 获取买入失败的目标
+    failed_buy_targets = runner.broker.get_failed_buy_targets()
+    
     if orders:
         # 执行订单
         fills = runner.broker.execute_orders(
@@ -405,9 +464,57 @@ def _execute_t1_if_pending(
             'targets_count': len(targets),
             'orders_count': len(orders),
             'fills_count': len(fills),
+            'failed_buys_count': len(failed_buy_targets),
             'timestamp': pd.Timestamp.now().isoformat()
         }
         runner.paper_storage.save_run_record("t1", trade_date, run_record)
+    
+    # 处理买入失败情况：生成补位计划
+    if failed_buy_targets:
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info(f"检测到 {len(failed_buy_targets)} 个买入失败目标，生成补位计划")
+        logger.info("=" * 80)
+        
+        # 获取下一交易日
+        next_trade_date = runner._get_next_trade_date(trade_date)
+        if next_trade_date:
+            # 生成补位目标
+            replacement_targets = runner.generate_replacement_targets(
+                trade_date=trade_date,  # 使用当日数据生成信号
+                failed_count=len(failed_buy_targets),
+                universe_type=config['universe'],
+                model_version=config.get('model_version'),
+                buy_price_type=config['buy_price'],
+                original_signal_date=trade_date
+            )
+            
+            if replacement_targets:
+                # 转换为 PendingBuy 并加入队列
+                from src.lazybull.paper.models import PendingBuy
+                for target in replacement_targets:
+                    pending_buy = PendingBuy(
+                        ts_code=target.ts_code,
+                        target_weight=target.target_weight,
+                        reason=target.reason,
+                        create_date=trade_date,
+                        attempts=0,
+                        last_attempt_date="",
+                        original_signal_date=trade_date
+                    )
+                    runner.broker.pending_buys.append(pending_buy)
+                
+                # 保存补位队列
+                runner.broker.storage.save_pending_buys(runner.broker.pending_buys)
+                
+                logger.info(f"已生成 {len(replacement_targets)} 个补位计划，将在 {next_trade_date} 继续买入")
+            else:
+                logger.warning("无法生成补位目标，候选可能已耗尽")
+        else:
+            logger.error("无法获取下一交易日，补位计划生成失败")
+        
+        # 清空失败目标列表
+        runner.broker.clear_failed_buy_targets()
     
     logger.info(f"T1 执行完成：{len(actions)} 个订单")
     return actions
@@ -528,6 +635,7 @@ def _execute_t0_if_rebalance_day(
 def _print_manual_actions(
     stop_loss_actions: List[Dict],
     pending_sell_actions: List[Dict],
+    pending_buy_actions: List[Dict],  # 新增参数
     t1_actions: List[Dict],
     t0_targets: List[Dict],
     ect_exposure: float = 1.0,
@@ -586,7 +694,28 @@ def _print_manual_actions(
             ]
             logger.info(format_row(row, widths, aligns))
     
-    # 3. T1 调仓订单清单
+    # 3. 延迟买入清单（补位计划）
+    if pending_buy_actions:
+        logger.info("")
+        logger.info("【延迟买入清单（补位计划）】")
+        logger.info("-" * 120)
+        
+        widths = [15, 12, 15, 60]
+        aligns = ['left', 'right', 'left', 'left']
+        header = ["股票代码", "目标权重", "状态", "原因"]
+        logger.info(format_row(header, widths, aligns))
+        logger.info("-" * 120)
+        
+        for action in pending_buy_actions:
+            row = [
+                action['ts_code'],
+                f"{action['target_weight']:.4f}" if action['target_weight'] > 0 else "-",
+                action['status'],
+                action['reason']
+            ]
+            logger.info(format_row(row, widths, aligns))
+    
+    # 4. T1 调仓订单清单
     if t1_actions:
         logger.info("")
         logger.info("【T1 调仓订单清单】")
@@ -609,7 +738,7 @@ def _print_manual_actions(
     
     
     # 汇总
-    total_actions = len(stop_loss_actions) + len(pending_sell_actions) + len(t1_actions) + len(t0_targets)
+    total_actions = len(stop_loss_actions) + len(pending_sell_actions) + len(pending_buy_actions) + len(t1_actions) + len(t0_targets)
     if total_actions == 0:
         logger.info("")
         logger.info("今日无需手工操作")
