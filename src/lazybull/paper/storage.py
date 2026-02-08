@@ -74,9 +74,13 @@ class PaperStorage:
         
         # 保存元数据（如果提供）
         if metadata is not None:
-            with open(meta_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, ensure_ascii=False, indent=2)
-            logger.info(f"保存待执行目标元数据: {meta_path}")
+            try:
+                with open(meta_path, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, ensure_ascii=False, indent=2)
+                logger.info(f"保存待执行目标元数据: {meta_path}")
+            except Exception as e:
+                logger.error(f"保存元数据失败: {e}，但目标权重已成功保存")
+                # 不抛出异常，因为主要数据（parquet）已成功保存
     
     def load_pending_weights(self, trade_date: str) -> Optional[List[TargetWeight]]:
         """读取待执行的目标权重

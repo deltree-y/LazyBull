@@ -500,7 +500,7 @@ def _execute_t1_if_pending(
         if next_trade_date:
             # 基于当日 Tn 数据重新生成补位信号，用于下一交易日 Tn+1 买入
             replacement_targets = runner.generate_replacement_targets(
-                trade_date=trade_date,  # 使用当日 Tn 数据生成信号
+                trade_date=trade_date,
                 failed_count=len(failed_buy_targets),
                 universe_type=config['universe'],
                 model_version=config.get('model_version'),
