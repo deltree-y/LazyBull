@@ -678,14 +678,14 @@ def main():
     config_parser.add_argument(
         '--sell-price',
         choices=['open', 'close'],
-        default='close',
-        help='卖出价格类型（默认：close）'
+        default='open',
+        help='卖出价格类型（默认：open）'
     )
     config_parser.add_argument(
         '--top-n',
         type=int,
-        default=5,
-        help='持仓股票数（默认：5）'
+        default=30,
+        help='持仓股票数（默认：30）'
     )
     config_parser.add_argument(
         '--initial-capital',
@@ -696,8 +696,8 @@ def main():
     config_parser.add_argument(
         '--rebalance-freq',
         type=int,
-        default=5,
-        help='调仓频率（交易日数，默认：5）'
+        default=20,
+        help='调仓频率（交易日数，默认：20）'
     )
     config_parser.add_argument(
         '--weight-method',
@@ -786,8 +786,8 @@ def main():
     config_parser.add_argument(
         '--equity-curve-recovery-step',
         type=float,
-        default=0.1,
-        help='ECT 逐步恢复步长（默认：0.1）'
+        default=0.25,
+        help='ECT 逐步恢复步长（默认：0.25）'
     )
     
     # run 子命令

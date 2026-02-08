@@ -45,7 +45,7 @@ class EquityCurveConfig:
     # 恢复策略配置
     recovery_mode: str = "gradual"  # 恢复模式：gradual=逐步恢复，immediate=立即恢复
     recovery_step: float = 0.1  # 逐步恢复时每次增加的系数（每个调仓周期）
-    recovery_delay_periods: int = 1  # 恢复前等待的调仓周期数
+    recovery_delay_periods: int = 0  # 恢复前等待的调仓周期数
     
     # 限制
     min_exposure: float = 0.0  # 最小仓位系数
@@ -237,11 +237,25 @@ class EquityCurveMonitor:
         elif target_exposure > self.last_exposure:
             # 需要增仓，进入恢复状态
             if not self.is_recovering:
-                # 首次进入恢复状态
-                self.is_recovering = True
-                self.recovery_target = target_exposure
-                self.recovery_counter = 0
-                return self.last_exposure  # 本次不增仓，等待
+                if self.config.recovery_delay_periods == 0:
+                    # 无等待期，直接增仓
+                    # 计算逐步增加后的仓位
+                    new_exposure = self.last_exposure + self.config.recovery_step
+                    
+                    if new_exposure >= target_exposure:
+                        # 已达到目标，结束恢复
+                        self.is_recovering = False
+                        self.recovery_counter = 0
+                        return target_exposure
+                    else:
+                        # 继续恢复
+                        return new_exposure                    
+                else:
+                    # 首次进入恢复状态
+                    self.is_recovering = True
+                    self.recovery_target = target_exposure
+                    self.recovery_counter = 0
+                    return self.last_exposure  # 本次不增仓，等待
             else:
                 # 已在恢复状态
                 self.recovery_counter += 1

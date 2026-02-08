@@ -548,7 +548,7 @@ def main():
     parser.add_argument(
         "--equity-curve-ma-long",
         type=int,
-        default=20,
+        default=30,
         help="ECT 长期均线窗口，默认 20"
     )
     parser.add_argument(
@@ -561,8 +561,14 @@ def main():
     parser.add_argument(
         "--equity-curve-recovery-step",
         type=float,
-        default=0.1,
-        help="ECT 逐步恢复步长，默认 0.1"
+        default=0.25,
+        help="ECT 逐步恢复步长，默认 0.25（仅在 gradual 模式下生效）"
+    )
+    parser.add_argument(
+        "--equity-curve-recovery-delay-periods",
+        type=int,
+        default=0,
+        help="ECT 恢复等待周期数，默认 0（仅在 gradual 模式下生效）"
     )
     
     # 其他参数
@@ -607,7 +613,9 @@ def main():
         logger.info(f"  - 仓位系数: {args.equity_curve_exposure_levels}")
         logger.info(f"  - 均线窗口: 短期={args.equity_curve_ma_short}, 长期={args.equity_curve_ma_long}")
         logger.info(f"  - 恢复模式: {args.equity_curve_recovery_mode}")
-    
+        logger.info(f"  - 恢复步长: {args.equity_curve_recovery_step}")
+        logger.info(f"  - 恢复等待周期: {args.equity_curve_recovery_delay_periods} 个调仓周期")
+
     try:
         # 初始化组件
         storage = Storage(root_path=args.data_root)
@@ -635,7 +643,8 @@ def main():
                 ma_short_window=args.equity_curve_ma_short,
                 ma_long_window=args.equity_curve_ma_long,
                 recovery_mode=args.equity_curve_recovery_mode,
-                recovery_step=args.equity_curve_recovery_step
+                recovery_step=args.equity_curve_recovery_step,
+                recovery_delay_periods=args.equity_curve_recovery_delay_periods
             )
         
         # 1. 加载数据

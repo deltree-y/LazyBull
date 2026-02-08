@@ -1,10 +1,11 @@
 ﻿# 0. 定义参数
-$startDate = Get-Date "2025-07-01"
-$endDate = Get-Date "2025-07-31"
-$freq_list = 18, 19, 20, 30
-$top_n_list = 30
-$mv_list = 15
-$para_list = @('--stop-loss-enabled','')
+$startDate = Get-Date "2025-01-01"
+$endDate = Get-Date "2025-01-31"
+$freq_list = 20             #持有天数
+$top_n_list = 30            #持股数量
+$mv_list = 15               #模型版本
+#$para_list = @('--equity-curve-enabled')
+$para_list = @('--stop-loss-enabled')
 
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
 $count = 0
@@ -50,6 +51,7 @@ while ($currentDate -le $endDate) {
                         $completionTime = (Get-Date).AddMilliseconds($remainingMs)
 
                         Write-Host "`n--------------------------------------------------" -ForegroundColor Cyan
+                        Write-Host "py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para" -ForegroundColor Cyan
                         Write-Host "进度: $percent% ($count/$totalTasks)" -ForegroundColor White
                         Write-Host "正在执行: 日期=$dateStr, Freq=$freq, TopN=$topn, MV=$mv" -ForegroundColor Green
                         Write-Host "已耗时: $($totalTimer.Elapsed.ToString('hh\:mm\:ss'))"

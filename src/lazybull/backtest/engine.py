@@ -537,6 +537,8 @@ class BacktestEngine:
                 
                 if self.verbose and ect_exposure < 1.0:
                     logger.info(f"ECT 生效: {date.date()}, {ect_reason}")
+                elif self.verbose:
+                    logger.info(f"ECT 不生效: {date.date()}, {ect_reason}")
                 
                 # 将系数应用到所有目标权重
                 if ect_exposure < 1.0:
