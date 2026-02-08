@@ -148,3 +148,15 @@ class PendingSell:
     create_date: str  # 创建日期 YYYYMMDD
     attempts: int = 0  # 尝试次数
     last_attempt_date: str = ""  # 最后一次尝试日期 YYYYMMDD（用于避免同日重复推进）
+
+
+@dataclass
+class PendingBuy:
+    """延迟买入订单（补位计划）"""
+    ts_code: str  # 股票代码
+    target_weight: float  # 目标权重
+    reason: str  # 原因（如：补位-涨停）
+    create_date: str  # 创建日期 YYYYMMDD
+    attempts: int = 0  # 尝试次数
+    last_attempt_date: str = ""  # 最后一次尝试日期 YYYYMMDD（用于避免同日重复推进）
+    original_signal_date: str = ""  # 原始信号日期（T0日期）

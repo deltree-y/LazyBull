@@ -1055,3 +1055,202 @@ class PaperTradingRunner:
         logger.info("=" * 80)
         logger.info(f"重试完成 - {corrected_date}，成交 {len(fills)} 笔")
         logger.info("=" * 80)
+    
+    def generate_replacement_targets(
+        self,
+        trade_date: str,
+        failed_count: int,
+        universe_type: str = 'mainboard',
+        model_version: Optional[int] = None,
+        buy_price_type: str = 'close',
+        original_signal_date: str = ""
+    ) -> List[TargetWeight]:
+        """生成补位目标（当买入失败时使用）
+        
+        使用现有的信号生成链路，从候选中选择 top_k（k=失败数量）的补位股票，
+        应用一手可买约束，生成新的目标权重列表。
+        
+        Args:
+            trade_date: 当前交易日期 YYYYMMDD（用于生成信号）
+            failed_count: 失败买入的数量
+            universe_type: 股票池类型
+            model_version: ML模型版本
+            buy_price_type: 买入价格类型（用于一手约束检查）
+            original_signal_date: 原始信号日期（T0日期）
+            
+        Returns:
+            补位目标权重列表
+        """
+        if failed_count <= 0:
+            logger.info("无需生成补位目标")
+            return []
+        
+        logger.info("=" * 80)
+        logger.info(f"生成补位目标 - {trade_date}")
+        logger.info(f"补位数量: {failed_count}")
+        logger.info("=" * 80)
+        
+        # 1. 确保features数据存在
+        logger.info(f"检查并确保 features 数据存在: {trade_date}")
+        if not ensure_features_for_date(
+            self.storage,
+            self.loader,
+            self.feature_builder,
+            self.cleaner,
+            self.client,
+            trade_date,
+            force=False
+        ):
+            logger.error(f"无法获取 features 数据: {trade_date}")
+            return []
+        
+        # 2. 加载股票池
+        stock_basic = self.loader.load_clean_stock_basic()
+        if stock_basic is None:
+            logger.error("无法加载stock_basic数据")
+            return []
+        
+        # 创建股票池
+        universe = self._create_universe(stock_basic, universe_type)
+        
+        # 3. 加载数据
+        daily_data = self.loader.load_clean_daily_by_date(trade_date)
+        signal_data = self.storage.load_cs_train_day(trade_date).copy()
+        if daily_data is None or daily_data.empty:
+            logger.error(f"无法加载 {trade_date} 的日线数据")
+            return []
+        
+        # 4. 获取股票列表（排除已持仓的）
+        date_ts = pd.Timestamp(trade_date)
+        stocks = universe.get_stocks(date_ts, daily_data)
+        
+        # 排除已持仓的股票（补位只考虑新股票）
+        current_positions = set(self.account.get_positions().keys())
+        stocks = [s for s in stocks if s not in current_positions]
+        
+        if not stocks:
+            logger.warning("股票池为空（排除持仓后）")
+            return []
+        
+        logger.info(f"股票池大小（排除持仓）: {len(stocks)}")
+        
+        # 5. 使用信号生成器获取排序候选
+        if self.signal is None:
+            if model_version is not None:
+                self.signal = MLSignal(
+                    top_n=failed_count,
+                    model_version=model_version,
+                    weight_method=self.weight_method,
+                    verbose=False,
+                )
+            else:
+                logger.warning("未指定信号生成器，使用等权")
+                from ..signals.base import EqualWeightSignal
+                self.signal = EqualWeightSignal(top_n=failed_count)
+        
+        # 6. 生成排序候选（使用与T0相同的逻辑）
+        try:
+            if isinstance(self.signal, MLSignal):
+                # 使用等权+一手约束逻辑
+                signal_dict = self._generate_equal_weight_with_lot_constraint(
+                    date_ts,
+                    stocks,
+                    signal_data,
+                    daily_data,
+                    failed_count,
+                    buy_price_type
+                )
+            else:
+                signal_dict = self.signal.generate(
+                    date_ts,
+                    stocks,
+                    {'features': signal_data}
+                )
+        except Exception as e:
+            logger.error(f"补位信号生成失败: {e}")
+            return []
+        
+        # 7. 转换为目标权重
+        targets = self._enhance_target_info(
+            signal_dict,
+            stock_basic,
+            daily_data,
+            trade_date
+        )
+        
+        # 8. 修改reason以标识补位来源
+        for target in targets:
+            target.reason = f"补位-{target.reason}"
+        
+        logger.info(f"生成 {len(targets)} 个补位目标")
+        
+        # 9. 打印补位目标
+        self._print_replacement_targets(targets, stock_basic, daily_data)
+        
+        logger.info("=" * 80)
+        logger.info(f"补位目标生成完成 - {len(targets)} 个")
+        logger.info("=" * 80)
+        
+        return targets
+    
+    def _print_replacement_targets(
+        self,
+        targets: List[TargetWeight],
+        stock_basic: pd.DataFrame,
+        daily_data: pd.DataFrame
+    ) -> None:
+        """打印补位目标（格式与T0输出一致）
+        
+        Args:
+            targets: 目标权重列表
+            stock_basic: 股票基本信息
+            daily_data: 日线数据
+        """
+        if not targets:
+            logger.info("无补位目标")
+            return
+        
+        # 构建映射
+        name_map = dict(zip(stock_basic['ts_code'], stock_basic['name']))
+        price_map = {}
+        if daily_data is not None:
+            for _, row in daily_data.iterrows():
+                price_map[row['ts_code']] = row.get('close', 0.0)
+        
+        # 打印表头
+        logger.info("=" * 120)
+        logger.info("补位买入目标详情（需要在下一交易日继续买入）")
+        logger.info("=" * 120)
+        
+        header = ["股票代码", "股票名称", "方向", "参考价格", "建议股数", "原因"]
+        widths = [15, 12, 8, 12, 12, 60]
+        aligns = ['left', 'left', 'left', 'right', 'right', 'left']
+        logger.info(format_row(header, widths, aligns))
+        logger.info("-" * 120)
+        
+        # 计算建议股数（使用等权分配 + 当前剩余现金）
+        available_cash = self.account.get_cash()
+        equal_weight_value = available_cash / len(targets) if targets else 0
+        
+        # 打印每行
+        for target in targets:
+            name = name_map.get(target.ts_code, '-')
+            price = price_map.get(target.ts_code, 0.0)
+            
+            # 计算建议股数
+            if price > 0:
+                suggested_shares = int(equal_weight_value / price / 100) * 100
+            else:
+                suggested_shares = 0
+            
+            row = [
+                target.ts_code,
+                name,
+                "买入",
+                f"{price:.2f}" if price > 0 else "-",
+                str(suggested_shares),
+                target.reason
+            ]
+            logger.info(format_row(row, widths, aligns))
+        
+        logger.info("=" * 120)

@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from .models import AccountState, Fill, NAVRecord, PendingSell, Position, TargetWeight
+from .models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight
 
 
 class PaperStorage:
@@ -30,11 +30,12 @@ class PaperStorage:
         self.nav_path = self.root_path / "nav"
         self.runs_path = self.root_path / "runs"
         self.pending_sells_path = self.root_path / "pending_sells"
+        self.pending_buys_path = self.root_path / "pending_buys"
         self.verbose = verbose
         
         # 确保目录存在
         for path in [self.pending_path, self.state_path, self.trades_path, 
-                     self.nav_path, self.runs_path, self.pending_sells_path]:
+                     self.nav_path, self.runs_path, self.pending_sells_path, self.pending_buys_path]:
             path.mkdir(parents=True, exist_ok=True)
         if verbose:
             logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
@@ -348,11 +349,67 @@ class PaperStorage:
                 target_weight=item['target_weight'],
                 reason=item['reason'],
                 create_date=item['create_date'],
-                attempts=item.get('attempts', 0)
+                attempts=item.get('attempts', 0),
+                last_attempt_date=item.get('last_attempt_date', '')
             ))
         if self.verbose:
             logger.info(f"读取延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
         return pending_sells
+    
+    def save_pending_buys(self, pending_buys: List[PendingBuy]) -> None:
+        """保存延迟买入队列（补位计划）
+        
+        Args:
+            pending_buys: 延迟买入订单列表
+        """
+        file_path = self.pending_buys_path / "pending_buys.json"
+        
+        # 转换为字典列表
+        data = []
+        for pb in pending_buys:
+            data.append({
+                'ts_code': pb.ts_code,
+                'target_weight': pb.target_weight,
+                'reason': pb.reason,
+                'create_date': pb.create_date,
+                'attempts': pb.attempts,
+                'last_attempt_date': pb.last_attempt_date,
+                'original_signal_date': pb.original_signal_date
+            })
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"保存延迟买入队列: {file_path} ({len(pending_buys)} 条)")
+    
+    def load_pending_buys(self) -> List[PendingBuy]:
+        """读取延迟买入队列（补位计划）
+        
+        Returns:
+            延迟买入订单列表，不存在返回空列表
+        """
+        file_path = self.pending_buys_path / "pending_buys.json"
+        
+        if not file_path.exists():
+            return []
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        pending_buys = []
+        for item in data:
+            pending_buys.append(PendingBuy(
+                ts_code=item['ts_code'],
+                target_weight=item['target_weight'],
+                reason=item['reason'],
+                create_date=item['create_date'],
+                attempts=item.get('attempts', 0),
+                last_attempt_date=item.get('last_attempt_date', ''),
+                original_signal_date=item.get('original_signal_date', '')
+            ))
+        if self.verbose:
+            logger.info(f"读取延迟买入队列: {file_path} ({len(pending_buys)} 条)")
+        return pending_buys
     
     def save_config(self, config: dict) -> None:
         """保存全局配置
