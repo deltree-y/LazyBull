@@ -240,7 +240,8 @@ class PaperTradingRunner:
             corrected_date,
             universe_type=universe_type,
             top_n=top_n,
-            model_version=model_version
+            model_version=model_version,
+            buy_price_type=buy_price_type
         )
         
         if not targets:
@@ -481,7 +482,8 @@ class PaperTradingRunner:
         trade_date: str,
         universe_type: str = 'mainboard',
         top_n: int = 5,
-        model_version: Optional[int] = None
+        model_version: Optional[int] = None,
+        buy_price_type: str = 'close'
     ) -> List[TargetWeight]:
         """生成信号
         
@@ -490,6 +492,7 @@ class PaperTradingRunner:
             universe_type: 股票池类型
             top_n: 持仓股票数
             model_version: ML模型版本（可选）
+            buy_price_type: T1买入价格类型 open/close（用于一手可买约束）
             
         Returns:
             目标权重列表
@@ -551,12 +554,23 @@ class PaperTradingRunner:
         
         # 生成信号
         try:
-            signal_dict = self.signal.generate(
-                date_ts,
-                stocks,
-                #{'daily': daily_data}
-                {'features': signal_data}
-            )
+            # 如果是等权策略且信号生成器是MLSignal，则使用generate_ranked获取排序候选并应用一手可买约束
+            if self.weight_method == "equal" and isinstance(self.signal, MLSignal):
+                signal_dict = self._generate_equal_weight_with_lot_constraint(
+                    date_ts,
+                    stocks,
+                    signal_data,
+                    daily_data,
+                    top_n,
+                    buy_price_type
+                )
+            else:
+                # 其他情况（score加权或非MLSignal），使用原有逻辑
+                signal_dict = self.signal.generate(
+                    date_ts,
+                    stocks,
+                    {'features': signal_data}
+                )
         except Exception as e:
             logger.error(f"信号生成失败: {e}")
             return []
@@ -575,6 +589,120 @@ class PaperTradingRunner:
         self._print_t0_targets(targets, stock_basic, daily_data)
         
         return targets
+    
+    def _generate_equal_weight_with_lot_constraint(
+        self,
+        date: pd.Timestamp,
+        stocks: List[str],
+        signal_data: pd.DataFrame,
+        daily_data: pd.DataFrame,
+        top_n: int,
+        buy_price_type: str
+    ) -> Dict[str, float]:
+        """等权策略下生成信号（含一手可买约束和顺延补足）
+        
+        对等权策略启用"一手可买约束"：如果按资金分配给某股票的金额不足以买入100股（1手），
+        则跳过该股票并从候选中顺延选择下一只，直到凑足top_n个可买股票或候选耗尽。
+        
+        Args:
+            date: 当前日期
+            stocks: 股票池
+            signal_data: 特征数据
+            daily_data: 日线数据（包含价格）
+            top_n: 目标股票数
+            buy_price_type: T1买入价格类型 open/close
+            
+        Returns:
+            信号字典 {股票代码: 权重}
+        """
+        # 使用 generate_ranked 获取完整排序候选列表
+        ranked_candidates = self.signal.generate_ranked(
+            date,
+            stocks,
+            {'features': signal_data}
+        )
+        
+        if not ranked_candidates:
+            logger.warning(f"{date.date()} 未获取到排序候选")
+            return {}
+        
+        original_count = len(ranked_candidates)
+        logger.info(f"等权+一手约束: 原始排序候选数 {original_count}")
+        
+        # 构建价格映射（使用 buy_price_type 指定的价格列）
+        price_col = buy_price_type  # 'open' 或 'close'
+        if price_col not in daily_data.columns:
+            logger.warning(f"价格列 '{price_col}' 不存在，降级到 'close'")
+            price_col = 'close'
+        
+        price_map = {}
+        for _, row in daily_data.iterrows():
+            ts_code = row['ts_code']
+            price = row.get(price_col)
+            if not pd.isna(price) and price > 0:
+                price_map[ts_code] = price
+        
+        # 计算每只股票的等权分配金额
+        total_capital = self.account.initial_capital
+        equal_weight_value = total_capital / top_n
+        
+        # 从排序候选中筛选可买至少1手的股票
+        selected_stocks = []
+        skipped_stocks = []
+        
+        for ts_code, score in ranked_candidates:
+            # 检查是否已凑足 top_n
+            if len(selected_stocks) >= top_n:
+                break
+            
+            # 获取价格
+            price = price_map.get(ts_code)
+            if price is None or price <= 0:
+                # 无价格数据，跳过
+                skipped_stocks.append((ts_code, "无价格数据"))
+                continue
+            
+            # 计算可买股数（向下取整到100的倍数）
+            affordable_shares = int(equal_weight_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            
+            if affordable_shares < SHARE_LOT_SIZE:
+                # 不足1手，跳过并记录
+                skipped_stocks.append((ts_code, f"不足1手(价格={price:.2f}, 可买={affordable_shares}股)"))
+                continue
+            
+            # 可买至少1手，加入选中列表
+            selected_stocks.append(ts_code)
+        
+        # 日志输出
+        final_count = len(selected_stocks)
+        skipped_count = len(skipped_stocks)
+        
+        logger.info(
+            f"等权+一手约束: 最终目标数 {final_count}, "
+            f"跳过 {skipped_count} 只 (原始候选 {original_count})"
+        )
+        
+        if skipped_count > 0:
+            # 输出若干示例（最多5个）
+            examples = skipped_stocks[:5]
+            for ts_code, reason in examples:
+                logger.info(f"  跳过示例: {ts_code} - {reason}")
+            if skipped_count > 5:
+                logger.info(f"  ... 及其他 {skipped_count - 5} 只")
+        
+        if final_count < top_n:
+            logger.warning(
+                f"等权+一手约束: 候选不足，目标 {top_n} 只，实际仅 {final_count} 只可选"
+            )
+        
+        # 构建等权信号字典
+        if final_count == 0:
+            return {}
+        
+        weight = 1.0 / final_count
+        signal_dict = {ts_code: weight for ts_code in selected_stocks}
+        
+        return signal_dict
     
     def _create_universe(self, stock_basic: pd.DataFrame, universe_type: str) -> BasicUniverse:
         """创建股票池
