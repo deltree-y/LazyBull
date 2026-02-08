@@ -40,14 +40,24 @@ class PaperStorage:
         if verbose:
             logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
     
-    def save_pending_weights(self, trade_date: str, targets: List[TargetWeight]) -> None:
-        """保存待执行的目标权重
+    def save_pending_weights(
+        self, 
+        trade_date: str, 
+        targets: List[TargetWeight],
+        metadata: Optional[Dict] = None
+    ) -> None:
+        """保存待执行的目标权重（及可选的元数据）
         
         Args:
             trade_date: 交易日期 YYYYMMDD
             targets: 目标权重列表
+            metadata: 可选元数据字典，可包含：
+                - attempt_count: 补位尝试次数（默认0表示首次生成）
+                - original_signal_date: 原始信号日期
+                - source: 来源标识（如 "t0_signal" 或 "replenishment"）
         """
         file_path = self.pending_path / f"{trade_date}.parquet"
+        meta_path = self.pending_path / f"{trade_date}_meta.json"
         
         # 转换为DataFrame
         data = []
@@ -61,6 +71,12 @@ class PaperStorage:
         df = pd.DataFrame(data)
         df.to_parquet(file_path, index=False)
         logger.info(f"保存待执行目标权重: {file_path} ({len(targets)} 条)")
+        
+        # 保存元数据（如果提供）
+        if metadata is not None:
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+            logger.info(f"保存待执行目标元数据: {meta_path}")
     
     def load_pending_weights(self, trade_date: str) -> Optional[List[TargetWeight]]:
         """读取待执行的目标权重
@@ -88,6 +104,30 @@ class PaperStorage:
         
         logger.info(f"读取待执行目标权重: {file_path} ({len(targets)} 条)")
         return targets
+    
+    def load_pending_weights_metadata(self, trade_date: str) -> Optional[Dict]:
+        """读取待执行目标权重的元数据
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            
+        Returns:
+            元数据字典，不存在返回None
+        """
+        meta_path = self.pending_path / f"{trade_date}_meta.json"
+        
+        if not meta_path.exists():
+            logger.debug(f"待执行目标元数据文件不存在: {meta_path}")
+            return None
+        
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            logger.info(f"读取待执行目标元数据: {meta_path}")
+            return metadata
+        except Exception as e:
+            logger.warning(f"读取元数据失败: {e}")
+            return None
     
     def save_account_state(self, state: AccountState) -> None:
         """保存账户状态
