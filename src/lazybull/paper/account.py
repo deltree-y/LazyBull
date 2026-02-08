@@ -43,6 +43,8 @@ class PaperAccount:
             )
             if verbose:
                 logger.info(f"创建新纸面账户，初始资金: {initial_capital:,.2f}")
+            # 首次创建账户后立即保存状态，确保后续可以加载
+            self.save_state()
         else:
             if verbose:
                 logger.info(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")

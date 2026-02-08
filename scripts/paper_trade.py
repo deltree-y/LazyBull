@@ -724,7 +724,7 @@ def main():
     config_parser.add_argument(
         '--stop-loss-drawdown-pct',
         type=float,
-        default=20.0,
+        default=30.0,
         help='回撤止损百分比（默认：20.0）'
     )
     config_parser.add_argument(

@@ -496,7 +496,7 @@ def main():
     parser.add_argument(
         "--stop-loss-drawdown-pct",
         type=float,
-        default=20.0,
+        default=30,
         help="回撤止损阈值（百分比），默认 20.0"
     )
     parser.add_argument(

@@ -74,6 +74,10 @@ class PaperTradingRunner:
         self.cleaner = DataCleaner(verbose=verbose)
         # 实盘模式使用 require_label=False，因为 T0 没有未来数据无法生成标签
         self.feature_builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=False)
+
+        self.verbose = verbose
+        # 确保基础数据存在（如交易日历、股票基本信息等）
+        #ensure_basic_data(self.storage, self.loader, self.cleaner, self.client)
     
     def _correct_trade_date(self, input_date: str) -> str:
         """校正交易日期：非交易日自动滚动到下一交易日
@@ -838,6 +842,7 @@ class PaperTradingRunner:
             
             if price <= 0:
                 # 无价格数据，跳过
+                logger.warning(f"{ts_code} 无有效价格数据，跳过目标计算")
                 continue
             
             # 计算目标股数
@@ -862,9 +867,11 @@ class PaperTradingRunner:
                     suggested_shares = (suggested_shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
             else:
                 # 权重不变，跳过
+                logger.warning(f"{ts_code} 权重不变，当前持仓 {current_shares} 股，目标持仓 {target_shares} 股，跳过")
                 continue
             
             if suggested_shares <= 0:
+                logger.warning(f"{ts_code} 建议股数 <= 0，跳过")
                 continue
             
             reason_text = reason if reason else "信号生成"

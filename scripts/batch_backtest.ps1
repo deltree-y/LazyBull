@@ -1,6 +1,6 @@
 ﻿# 0. 定义参数
-$startDate = Get-Date "2025-01-01"
-$endDate = Get-Date "2025-01-31"
+$startDate = Get-Date "2025-07-01"
+$endDate = Get-Date "2025-07-31"
 $freq_list = 20             #持有天数
 $top_n_list = 30            #持股数量
 $mv_list = 15               #模型版本
@@ -38,7 +38,7 @@ while ($currentDate -le $endDate) {
                         $count++
                         
                         # 执行 Python 命令
-                        py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para
+                        py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para --initial-capital 100000
                         
                         # 预测逻辑
                         $percent = [Math]::Round(($count / $totalTasks) * 100, 2)
