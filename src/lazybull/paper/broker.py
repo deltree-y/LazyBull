@@ -39,8 +39,9 @@ class PaperBroker:
         self.storage = storage or PaperStorage()
         self.order_table_widths = [12, 6, 10, 10, 8, 8, 10, 12, 10, 10, 10, 10, 15]
         self.order_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
-        self.positions_table_widths = [12, 8, 10, 10, 12, 8, 10, 12, 12, 12, 8]
-        self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
+        # 持仓表列：股票代码(名称)、股数、当前价格、买入均价、买入日期、持有天数、当前市值、浮盈、收益率(%)、状态
+        self.positions_table_widths = [18, 8, 10, 10, 12, 8, 12, 12, 12, 8]
+        self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
         self.verbose = verbose
         # 加载延迟卖出队列
         self.pending_sells = self.storage.load_pending_sells()
@@ -601,12 +602,13 @@ class PaperBroker:
         logger.info(format_row(row, self.order_table_widths, self.order_table_aligns))
 
     
-    def get_positions_detail(self, current_prices: Dict[str, float], current_date: Optional[str] = None) -> pd.DataFrame:
+    def get_positions_detail(self, current_prices: Dict[str, float], current_date: Optional[str] = None, stock_names: Optional[Dict[str, str]] = None) -> pd.DataFrame:
         """获取持仓明细（含收益信息）
         
         Args:
             current_prices: {ts_code: price} 当前价格字典
             current_date: 当前日期 YYYYMMDD（可选，用于计算持有天数）
+            stock_names: {ts_code: name} 股票名称字典（可选）
             
         Returns:
             持仓明细DataFrame
@@ -630,14 +632,18 @@ class PaperBroker:
             if current_date:
                 holding_days = pos.get_holding_days(current_date)
             
+            # 构建股票代码显示（包含名称）
+            stock_name = stock_names.get(ts_code, 'na') if stock_names else 'na'
+            stock_display = f"{ts_code}({stock_name})"
+            
             details.append({
-                '股票代码': ts_code,
+                '股票代码': stock_display,
                 '持仓股数': pos.shares,
+                '当前价格': current_price,
                 '买入均价': pos.buy_price,
-                '买入成本': pos.buy_cost,
+                '买入成本': pos.buy_cost,  # 内部仍保留用于计算
                 '买入日期': pos.buy_date,
                 '持有天数': holding_days,
-                '当前价格': current_price,
                 '当前市值': current_value,
                 '浮动盈亏': profit,
                 '收益率(%)': profit_rate,
@@ -648,14 +654,15 @@ class PaperBroker:
         df = pd.DataFrame(details)
         return df
     
-    def print_positions_summary(self, current_prices: Dict[str, float], current_date: Optional[str] = None) -> None:
+    def print_positions_summary(self, current_prices: Dict[str, float], current_date: Optional[str] = None, stock_names: Optional[Dict[str, str]] = None) -> None:
         """打印持仓汇总信息
         
         Args:
             current_prices: {ts_code: price} 当前价格字典
             current_date: 当前日期 YYYYMMDD（可选，用于计算持有天数）
+            stock_names: {ts_code: name} 股票名称字典（可选）
         """
-        df = self.get_positions_detail(current_prices, current_date)
+        df = self.get_positions_detail(current_prices, current_date, stock_names)
         
         if df.empty:
             logger.info("=" * 80)
@@ -663,39 +670,123 @@ class PaperBroker:
             logger.info("=" * 80)
             return
         
-        # 打印表头
-        header = ["股票代码", "股数", "买入均价", "买入成本", "买入日期", "持有天数", "当前价格", "当前市值", "浮盈", "收益率(%)", "状态"]
+        # 打印表头（新列顺序：股票代码、股数、当前价格、买入均价、买入日期、持有天数、当前市值、浮盈、收益率(%)、状态）
+        header = ["股票代码", "股数", "当前价格", "买入均价", "买入日期", "持有天数", "当前市值", "浮盈", "收益率(%)", "状态"]
         logger.info(format_row(header, self.positions_table_widths, ['left'] * len(self.positions_table_widths)))
 
         logger.info("-" * 140)
         
         # 打印每行
         for _, row in df.iterrows():
-            row = [
+            row_data = [
                 row['股票代码'], row['持仓股数'], 
-                f"{row['买入均价']:.2f}", f"{row['买入成本']:.2f}", 
+                f"{row['当前价格']:.2f}", f"{row['买入均价']:.2f}",
                 row['买入日期'], row['持有天数'],
-                f"{row['当前价格']:.2f}", f"{row['当前市值']:.2f}", 
+                f"{row['当前市值']:.2f}", 
                 f"{row['浮动盈亏']:.2f}", f"{row['收益率(%)']:.2f}",
                 row['状态']
             ]
-            logger.info(format_row(row, self.positions_table_widths, self.positions_table_aligns))
+            logger.info(format_row(row_data, self.positions_table_widths, self.positions_table_aligns))
 
         
-        # 打印汇总
+        # 打印汇总（使用内部买入成本计算总成本，但不在表中显示）
         total_cost = df['买入成本'].sum() + (df['持仓股数'] * df['买入均价']).sum()
         total_value = df['当前市值'].sum()
         total_profit = df['浮动盈亏'].sum()
         total_profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
         
         logger.info("-" * 140)
-        logger.info(f"{'合计':<12} {df['持仓股数'].sum():<8} {'':<10} {df['买入成本'].sum():<10.2f} "
-                   f"{'':<10} {'':<8} {'':<10} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<10.2f}")
+        logger.info(f"{'合计':<18} {df['持仓股数'].sum():<8} {'':<10} {'':<10} "
+                   f"{'':<12} {'':<8} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<12.2f}")
         logger.info("=" * 140)
         logger.info(f"账户现金: {self.account.get_cash():,.2f}")
         logger.info(f"持仓市值: {total_value:,.2f}")
-        logger.info(f"总资产: {self.account.get_cash() + total_value:,.2f}")
+        
+        total_assets = self.account.get_cash() + total_value
+        logger.info(f"总资产: {total_assets:,.2f}")
+        
+        # 新增：总盈亏百分比
+        total_profit_pct = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+        logger.info(f"总盈亏百分比: {total_profit_pct:.2f}%")
+        
+        # 新增：年化收益率
+        # 从配置读取 initial_capital
+        config = self.storage.load_config()
+        if config and 'initial_capital' in config:
+            initial_capital = config['initial_capital']
+        else:
+            # 如果配置不存在，使用账户的 initial_capital
+            initial_capital = self.account.initial_capital
+        
+        # 计算年化收益率
+        annualized_return = self._calculate_annualized_return(
+            initial_capital, 
+            total_assets,
+            current_date
+        )
+        
+        if annualized_return is not None:
+            logger.info(f"年化收益率: {annualized_return:.2f}%")
+        else:
+            logger.info(f"年化收益率: 无法计算（缺少账户起始日期）")
+        
         logger.info("=" * 140)
+    
+    def _calculate_annualized_return(
+        self, 
+        initial_capital: float, 
+        current_value: float, 
+        current_date: Optional[str]
+    ) -> Optional[float]:
+        """计算年化收益率
+        
+        Args:
+            initial_capital: 初始资金
+            current_value: 当前总资产
+            current_date: 当前日期 YYYYMMDD
+            
+        Returns:
+            年化收益率（百分比），如果无法计算则返回 None
+        """
+        # 空仓时年化收益率为 0
+        if current_value <= 0 or initial_capital <= 0:
+            return 0.0
+        
+        # 尝试从配置获取账户起始日期
+        config = self.storage.load_config()
+        account_start_date = None
+        
+        if config and 'account_start_date' in config:
+            account_start_date = config['account_start_date']
+        
+        # 如果没有起始日期，尝试从 NAV 记录获取最早日期
+        if not account_start_date:
+            nav_df = self.storage.load_all_nav()
+            if nav_df is not None and len(nav_df) > 0:
+                # 获取最早的交易日期
+                account_start_date = str(nav_df['trade_date'].iloc[0])
+        
+        # 如果仍然没有起始日期，返回 None
+        if not account_start_date or not current_date:
+            return None
+        
+        # 计算持有天数
+        try:
+            start_dt = pd.to_datetime(account_start_date, format='%Y%m%d')
+            current_dt = pd.to_datetime(current_date, format='%Y%m%d')
+            days = (current_dt - start_dt).days
+            
+            # 如果天数太少（例如小于1天），返回 0
+            if days < 1:
+                return 0.0
+            
+            # 年化收益率: (total_value/initial_capital) ** (365/days) - 1
+            annualized = (pow(current_value / initial_capital, 365.0 / days) - 1) * 100
+            return annualized
+            
+        except Exception as e:
+            logger.warning(f"计算年化收益率失败: {e}")
+            return None
     
     def retry_pending_sells(
         self, 

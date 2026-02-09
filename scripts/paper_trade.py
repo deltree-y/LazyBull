@@ -852,8 +852,15 @@ def print_positions(trade_date: str):
         for _, row in daily_data.iterrows():
             prices[row['ts_code']] = row['close']
         
-        # 打印持仓明细
-        runner.broker.print_positions_summary(prices, trade_date)
+        # 构建股票名称字典（如果 daily_data 有 name 列）
+        stock_names = {}
+        if 'name' in daily_data.columns:
+            for _, row in daily_data.iterrows():
+                if pd.notna(row.get('name')) and row['name']:
+                    stock_names[row['ts_code']] = row['name']
+        
+        # 打印持仓明细（传入股票名称字典）
+        runner.broker.print_positions_summary(prices, trade_date, stock_names=stock_names)
         
     except Exception as e:
         logger.exception(f"打印持仓失败: {e}")
