@@ -893,21 +893,35 @@ class BacktestEngine:
             if stock in self.pending_stop_loss_sells:
                 continue
             
+            # 获取当日行情数据判断停牌状态
+            trade_date_str = to_trade_date_str(date)
+            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
+            
+            # 检查是否停牌
+            is_suspended = False
+            is_limit_down = False
+            if not date_quote.empty:
+                stock_quote = date_quote[date_quote['ts_code'] == stock]
+                if not stock_quote.empty:
+                    # 检查停牌
+                    if 'is_suspended' in stock_quote.columns:
+                        is_suspended = bool(stock_quote['is_suspended'].iloc[0] == 1)
+                    # 检查跌停
+                    if 'is_limit_down' in stock_quote.columns:
+                        is_limit_down = bool(stock_quote['is_limit_down'].iloc[0] == 1)
+            
+            # 停牌时跳过止损检查
+            if is_suspended:
+                if self.verbose:
+                    logger.info(f"股票 {stock} 停牌，跳过止损检查 ({date.date()})")
+                continue
+            
             # 获取当前价格
             current_price = self._get_trade_price(date, stock)
             if current_price is None:
                 continue
             
             buy_price = info['buy_trade_price']
-            
-            # 获取当日行情数据判断是否跌停
-            trade_date_str = to_trade_date_str(date)
-            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
-            is_limit_down = False
-            if not date_quote.empty:
-                stock_quote = date_quote[date_quote['ts_code'] == stock]
-                if not stock_quote.empty and 'is_limit_down' in stock_quote.columns:
-                    is_limit_down = stock_quote['is_limit_down'].iloc[0]
             
             # 检查止损触发
             triggered, trigger_type, reason = self.stop_loss_monitor.check_stop_loss(
