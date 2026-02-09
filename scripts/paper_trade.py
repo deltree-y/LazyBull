@@ -208,7 +208,7 @@ def run_main(args):
     print_positions(corrected_date)    
 
     logger.info("=" * 120)
-    logger.info(f"运行完成 - {corrected_date}")
+    logger.info(f"运行完成 - {corrected_date}, 下个交易日: [{runner._get_next_trade_date(corrected_date)}]")
     logger.info("=" * 120)
 
 
