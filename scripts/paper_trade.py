@@ -395,6 +395,8 @@ def _execute_t1_if_pending(
 ) -> List[Dict]:
     """执行 T1（如果有待执行目标或补位买入计划）
     
+    优先检查并执行 instructions（指令驱动），若不存在则使用 pending_weights（兼容模式）
+    
     Returns:
         T1 动作列表 [{ts_code, action, shares, reason}, ...]
     """
@@ -405,20 +407,33 @@ def _execute_t1_if_pending(
         logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
         return actions
     
-    # 检查是否有待执行目标（全量调仓）
+    # 优先检查是否有交易指令（新模式）
+    instructions = runner.paper_storage.load_instructions(trade_date)
+    
+    # 检查是否有待执行目标（全量调仓，兼容模式）
     targets = runner.paper_storage.load_pending_weights(trade_date)
     
     # 检查是否有补位买入计划（增量买入）
     pending_buys = runner.paper_storage.load_pending_buys()
     
-    if not targets and not pending_buys:
-        logger.info(f"未找到 {trade_date} 的待执行目标或补位买入计划，跳过 T1")
+    if not instructions and not targets and not pending_buys:
+        logger.info(f"未找到 {trade_date} 的交易指令、待执行目标或补位买入计划，跳过 T1")
         return actions
     
-    if targets:
-        logger.info(f"找到 {len(targets)} 个全量调仓目标")
+    # 输出清晰的模式标识
+    if instructions:
+        logger.info("=" * 80)
+        logger.info(f"【T1 指令驱动模式】读取到 {len(instructions)} 条交易指令")
+        logger.info("将忽略 pending_weights，严格按指令执行")
+        logger.info("=" * 80)
+    elif targets:
+        logger.info("=" * 80)
+        logger.info(f"【T1 兼容模式】找到 {len(targets)} 个全量调仓目标")
+        logger.info("将按 pending_weights 生成订单执行")
+        logger.info("=" * 80)
+    
     if pending_buys:
-        logger.info(f"找到 {len(pending_buys)} 个补位买入计划")
+        logger.info(f"找到 {len(pending_buys)} 个补位买入计划（将在主流程后处理）")
     
     # 加载价格数据
     buy_prices, sell_prices = runner._load_prices(trade_date, config['buy_price'], config['sell_price'])
@@ -430,8 +445,31 @@ def _execute_t1_if_pending(
     fills_count = 0
     orders_count = 0
     
-    # 处理全量调仓（如果有pending_weights）
-    if targets:
+    # 执行交易指令（优先，新模式）
+    if instructions:
+        logger.info("执行交易指令")
+        fills = runner.broker.execute_instructions(
+            instructions,
+            buy_prices,
+            sell_prices,
+            trade_date
+        )
+        fills_count += len(fills) if fills else 0
+        orders_count += len(instructions)
+        
+        # 收集动作
+        for fill in fills:
+            actions.append({
+                'ts_code': fill.ts_code,
+                'action': fill.action,
+                'shares': fill.shares,
+                'reason': fill.reason
+            })
+        
+        logger.info(f"指令执行完成：{len(instructions)} 条指令，{len(fills)} 笔成交")
+    
+    # 处理全量调仓（如果没有指令，使用兼容模式）
+    elif targets:
         # 生成订单
         orders = runner.broker.generate_orders(targets, buy_prices, sell_prices, trade_date)
         orders_count += len(orders) if orders else 0
@@ -502,11 +540,12 @@ def _execute_t1_if_pending(
         runner._record_nav(trade_date, all_prices)
     
     # 保存执行记录
-    if targets or pending_buys:
+    if instructions or targets or pending_buys:
         run_record = {
             'trade_date': trade_date,
             'buy_price_type': config['buy_price'],
             'sell_price_type': config['sell_price'],
+            'instructions_count': len(instructions) if instructions else 0,
             'targets_count': len(targets) if targets else 0,
             'pending_buys_count': len(pending_buys) if pending_buys else 0,
             'orders_count': orders_count,
@@ -667,6 +706,7 @@ def _execute_t0_if_rebalance_day(
         runner.run_t0(
             trade_date=trade_date,
             buy_price_type=config['buy_price'],
+            sell_price_type=config['sell_price'],
             universe_type=config['universe'],
             top_n=config['top_n'],
             model_version=config.get('model_version'),

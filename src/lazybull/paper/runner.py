@@ -276,6 +276,7 @@ class PaperTradingRunner:
         self,
         trade_date: str,
         buy_price_type: str = 'close',
+        sell_price_type: str = 'close',
         universe_type: str = 'mainboard',
         top_n: int = 5,
         model_version: Optional[int] = None,
@@ -286,6 +287,7 @@ class PaperTradingRunner:
         Args:
             trade_date: 交易日期 YYYYMMDD（T0日期）
             buy_price_type: T1买入价格类型 open/close
+            sell_price_type: T1卖出价格类型 open/close
             universe_type: 股票池类型 mainboard
             top_n: 持仓股票数
             model_version: ML模型版本（可选）
@@ -345,11 +347,11 @@ class PaperTradingRunner:
         for _, row in daily_data.iterrows():
             current_prices[row['ts_code']] = row.get('close', 0.0)
         
-        # 生成指令（sell_price_type 固定为 close）
+        # 生成指令（使用传入的 sell_price_type 参数）
         instructions = self._generate_instructions(
             targets=targets,
             buy_price_type=buy_price_type,
-            sell_price_type='close',
+            sell_price_type=sell_price_type,
             current_prices=current_prices,
             source_date=corrected_date
         )
