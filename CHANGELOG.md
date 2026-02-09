@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.10] - 2026-02-09
+
+### Added
+- **纸面交易「持仓情况」表单与汇总统计改进**：优化持仓显示和增加重要统计指标
+  - **持仓表单列调整**：
+    - 股票代码列增加股票名称显示：`ts_code(股票名称)` 或 `ts_code(na)`（名称缺失时）
+    - 删除"买入成本"列（数据仍保留用于内部计算）
+    - 调整列顺序：将"当前价格"移至"买入均价"前，符合"当前→历史"的阅读习惯
+  - **汇总统计新增指标**：
+    - 总盈亏百分比：`(总资产 - 初始资金) / 初始资金 × 100`
+    - 年化收益率：`(总资产 / 初始资金) ^ (365 / 持有天数) - 1`
+    - 空仓时年化收益率显示为 0
+  - **数据模型更新**：
+    - `AccountState` 增加 `initial_capital` 和 `start_date` 字段
+    - 新账户创建时自动记录初始资金和起始日期
+    - 旧账户加载时自动兼容（使用默认值）
+  - **核心修改**：
+    - `src/lazybull/paper/models.py`：AccountState 增加新字段
+    - `src/lazybull/paper/account.py`：初始化和兼容逻辑
+    - `src/lazybull/paper/storage.py`：持久化新字段
+    - `src/lazybull/paper/broker.py`：支持股票名称显示、调整表格列、计算新指标
+    - `scripts/paper_trade.py`：从 daily_data 提取股票名称传递给 broker
+  - **测试覆盖**：新增5个单元测试，修复1个现有测试以适配新格式
+
+### Improved
+- **代码质量**：
+  - 使用命名常量 `MIN_HOLDING_DAYS` 替代魔法数字
+  - 优化旧账户兼容逻辑，仅在字段不存在时设置默认值
+  - 通过代码审查，无安全漏洞
+
+### Documentation
+- 新增 `docs/PR/positions_summary_improvement.md` 详细说明改进动机、实现方案和验证方法
+- 更新 CHANGELOG.md 记录版本变更
+
 ## [0.3.9] - 2026-02-09
 
 ### Fixed
