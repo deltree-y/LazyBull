@@ -826,6 +826,44 @@ def view_positions(args):
     print_positions(args.trade_date)
     
 
+def build_stock_names_dict(loader: DataLoader) -> Dict[str, str]:
+    """从 stock_basic 构建股票名称字典
+    
+    Args:
+        loader: DataLoader 实例
+        
+    Returns:
+        {ts_code: name} 股票名称字典
+    """
+    stock_names = {}
+    
+    # 优先尝试加载清洗后的 stock_basic
+    stock_basic = loader.load_clean_stock_basic()
+    
+    # 若清洗后的数据不存在，尝试加载原始 stock_basic
+    if stock_basic is None or stock_basic.empty:
+        stock_basic = loader.load_stock_basic()
+    
+    # 检查是否成功加载且包含必要列
+    if stock_basic is None or stock_basic.empty:
+        logger.warning("无法加载 stock_basic 数据")
+        logger.warning("建议运行以下命令更新基础数据：python scripts/update_basic_data.py")
+        return stock_names
+    
+    if 'ts_code' not in stock_basic.columns or 'name' not in stock_basic.columns:
+        logger.warning("stock_basic 数据缺少必要列（ts_code 或 name）")
+        logger.warning("建议运行以下命令更新基础数据：python scripts/update_basic_data.py")
+        return stock_names
+    
+    # 构建股票名称字典
+    for _, row in stock_basic.iterrows():
+        if pd.notna(row.get('ts_code')) and pd.notna(row.get('name')) and row['name']:
+            stock_names[row['ts_code']] = row['name']
+    
+    logger.info(f"成功加载 {len(stock_names)} 只股票的名称信息")
+    return stock_names
+
+
 def print_positions(trade_date: str):
     print("\n\n\n")
     logger.info("=" * 80)
@@ -852,12 +890,8 @@ def print_positions(trade_date: str):
         for _, row in daily_data.iterrows():
             prices[row['ts_code']] = row['close']
         
-        # 构建股票名称字典（如果 daily_data 有 name 列）
-        stock_names = {}
-        if 'name' in daily_data.columns:
-            for _, row in daily_data.iterrows():
-                if pd.notna(row.get('name')) and row['name']:
-                    stock_names[row['ts_code']] = row['name']
+        # 从 stock_basic 构建股票名称字典
+        stock_names = build_stock_names_dict(loader)
         
         # 打印持仓明细（传入股票名称字典）
         runner.broker.print_positions_summary(prices, trade_date, stock_names=stock_names)

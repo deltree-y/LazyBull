@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.11] - 2026-02-09
+
+### Fixed
+- **修复 paper_trade positions 命令股票名称显示问题**：持仓明细现在能正确显示股票名称
+  - **问题描述**：运行 `python scripts/paper_trade.py positions --trade-date YYYYMMDD` 时，所有股票名称都显示为 `(na)` 而非实际名称
+  - **问题根因**：`print_positions()` 函数试图从 `daily_data` 的 `name` 列构建 `stock_names` 字典，但 clean daily 数据不包含 `name` 列
+  - **解决方案**：从 `stock_basic` 表读取股票名称（包含 `ts_code` 和 `name` 列）
+    - 新增 `build_stock_names_dict()` 辅助函数
+    - 优先使用 `DataLoader.load_clean_stock_basic()`
+    - 回退使用 `DataLoader.load_stock_basic()`
+    - 若无法加载 stock_basic，输出清晰的中文提示日志，建议运行 `python scripts/update_basic_data.py`
+  - **核心修改**：
+    - `scripts/paper_trade.py`：新增 `build_stock_names_dict()` 函数，修改 `print_positions()` 函数
+  - **验收测试**：新增 `tests/test_stock_names_display.py`，5个测试用例全部通过
+    - 测试当提供股票名称字典时，持仓明细能正确显示股票名称
+    - 测试当不提供股票名称字典时，持仓明细回退显示 `(na)`
+    - 测试从 clean/raw stock_basic 加载
+
+### Documentation
+- 新增 `docs/PR/fix_stock_names_display.md` 详细说明本次修复的问题、方案和验证方法
+
 ## [0.3.9] - 2026-02-09
 
 ### Fixed
