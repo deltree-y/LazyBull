@@ -568,7 +568,7 @@ class PaperStorage:
                 price_type=row['price_type'],
                 reason=row['reason'],
                 source_date=row['source_date'],
-                target_weight=float(row.get('target_weight', 0.0)),
+                target_weight=row.get('target_weight', 0.0),
                 original_signal_date=row.get('original_signal_date', '')
             ))
         

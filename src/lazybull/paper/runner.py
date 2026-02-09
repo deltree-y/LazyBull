@@ -252,10 +252,12 @@ class PaperTradingRunner:
                     ))
             elif target_shares < current_shares:
                 # 卖出或减仓
-                shares = (current_shares - target_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
                 # 如果是清仓（目标权重为0），必须卖出全部
                 if target_weight == 0:
                     shares = current_shares
+                else:
+                    shares = (current_shares - target_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
+                
                 if shares > 0:
                     instructions.append(TradeInstruction(
                         ts_code=ts_code,

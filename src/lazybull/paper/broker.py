@@ -446,7 +446,7 @@ class PaperBroker:
         Returns:
             成交记录列表
         """
-        from .models import PendingSell, PendingBuy, Order
+        from .models import PendingSell, PendingBuy, Order, TargetWeight
         
         fills = []
         
