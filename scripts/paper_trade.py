@@ -252,14 +252,15 @@ def _check_stop_loss(
     
     # 检查每个持仓
     for ts_code, pos in positions.items():
-        if ts_code not in prices:
-            logger.warning(f"股票 {ts_code} 无价格数据，跳过止损检查")
-            continue
-        
         # 检查是否停牌
         is_suspended = suspended_info.get(ts_code, False)
         if is_suspended:
             logger.info(f"股票 {ts_code} 停牌，跳过止损检查")
+            continue
+            
+        # 检查是否有价格数据
+        if ts_code not in prices:
+            logger.warning(f"股票 {ts_code} 无价格数据，跳过止损检查")
             continue
         
         current_price = prices[ts_code]
