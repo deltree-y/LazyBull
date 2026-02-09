@@ -323,17 +323,24 @@ class PaperTradingRunner:
         logger.info(f"开始T1工作流 - {corrected_date}")
         logger.info("=" * 80)
         
-        # 3. 读取待执行目标
+        # 3. 读取待执行目标（全量调仓）
         logger.info("步骤1: 读取待执行目标")
         targets = self.paper_storage.load_pending_weights(corrected_date)
         
-        if not targets:
-            logger.warning(f"未找到 {corrected_date} 的待执行目标")
+        # 4. 读取补位买入计划（增量买入）
+        pending_buys = self.paper_storage.load_pending_buys()
+        
+        # 检查是否有任何待执行任务
+        if not targets and not pending_buys:
+            logger.warning(f"未找到 {corrected_date} 的待执行目标或补位买入计划")
             return
         
-        logger.info(f"读取到 {len(targets)} 个目标权重")
+        if targets:
+            logger.info(f"读取到 {len(targets)} 个全量调仓目标")
+        if pending_buys:
+            logger.info(f"读取到 {len(pending_buys)} 个补位买入计划")
         
-        # 4. 加载价格数据
+        # 5. 加载价格数据
         logger.info("步骤2: 加载价格数据")
         buy_prices, sell_prices = self._load_prices(corrected_date, buy_price_type, sell_price_type)
         
@@ -341,42 +348,58 @@ class PaperTradingRunner:
             logger.error("无法加载价格数据")
             return
         
-        # 5. 生成订单
-        logger.info("步骤3: 生成订单")
-        orders = self.broker.generate_orders(targets, buy_prices, sell_prices, corrected_date)
-        
         fills_count = 0
-        if not orders:
-            logger.warning("未生成任何订单")
-        else:
-            # 6. 执行订单并打印明细
-            logger.info("步骤4: 执行订单")
-            fills = self.broker.execute_orders(
-                orders,
-                corrected_date,
-                buy_price_type,
-                sell_price_type
-            )
-            fills_count = len(fills) if fills else 0
+        orders_count = 0
         
-        # 7. 更新账户状态
+        # 6. 执行全量调仓（如果有pending_weights）
+        if targets:
+            logger.info("步骤3a: 生成全量调仓订单")
+            orders = self.broker.generate_orders(targets, buy_prices, sell_prices, corrected_date)
+            orders_count += len(orders) if orders else 0
+            
+            if orders:
+                logger.info("步骤4a: 执行全量调仓订单")
+                fills = self.broker.execute_orders(
+                    orders,
+                    corrected_date,
+                    buy_price_type,
+                    sell_price_type
+                )
+                fills_count += len(fills) if fills else 0
+            else:
+                logger.warning("未生成全量调仓订单")
+        
+        # 7. 执行补位买入（如果有pending_buys）
+        if pending_buys:
+            logger.info("步骤3b: 处理补位买入计划")
+            replenishment_fills = self._execute_pending_buys(
+                pending_buys,
+                buy_prices,
+                corrected_date,
+                buy_price_type
+            )
+            fills_count += len(replenishment_fills) if replenishment_fills else 0
+            orders_count += len(replenishment_fills) if replenishment_fills else 0
+        
+        # 8. 更新账户状态
         logger.info("步骤5: 更新账户状态")
         self.account.update_last_date(corrected_date)
         self.account.save_state()
         
-        # 8. 记录净值
+        # 9. 记录净值
         logger.info("步骤6: 记录净值")
         # 使用收盘价计算净值
         all_prices = {**sell_prices, **buy_prices}  # 合并价格字典
         self._record_nav(corrected_date, all_prices)
         
-        # 9. 保存执行记录
+        # 10. 保存执行记录
         run_record = {
             'trade_date': corrected_date,
             'buy_price_type': buy_price_type,
             'sell_price_type': sell_price_type,
-            'targets_count': len(targets),
-            'orders_count': len(orders) if orders else 0,
+            'targets_count': len(targets) if targets else 0,
+            'pending_buys_count': len(pending_buys) if pending_buys else 0,
+            'orders_count': orders_count,
             'fills_count': fills_count,
             'timestamp': pd.Timestamp.now().isoformat()
         }
@@ -385,6 +408,168 @@ class PaperTradingRunner:
         logger.info("=" * 80)
         logger.info(f"T1工作流完成 - {corrected_date}")
         logger.info("=" * 80)
+    
+    def _execute_pending_buys(
+        self,
+        pending_buys: List,
+        buy_prices: Dict[str, float],
+        trade_date: str,
+        buy_price_type: str = 'close'
+    ) -> List:
+        """执行补位买入计划（仅买入，不触发卖出）
+        
+        Args:
+            pending_buys: 补位买入计划列表
+            buy_prices: 买入价格字典
+            trade_date: 交易日期
+            buy_price_type: 买入价格类型
+            
+        Returns:
+            成交记录列表
+        """
+        from .models import Fill, Order, PendingBuy, TargetWeight
+        
+        MAX_REPLENISHMENT_ATTEMPTS = 5
+        
+        logger.info("=" * 80)
+        logger.info(f"执行补位买入计划 - {trade_date}")
+        logger.info(f"待处理补位: {len(pending_buys)} 个")
+        logger.info("=" * 80)
+        
+        # 加载可交易性信息
+        tradability = self.broker._load_tradability_info(trade_date)
+        
+        # 计算总资产
+        all_prices = buy_prices
+        total_value = self.account.get_total_value(all_prices)
+        
+        fills = []
+        updated_pending_buys = []
+        failed_buy_targets = []
+        
+        for pending_buy in pending_buys:
+            # 检查是否超过尝试次数
+            if pending_buy.attempts >= MAX_REPLENISHMENT_ATTEMPTS:
+                logger.warning(
+                    f"补位 {pending_buy.ts_code} 已达最大尝试次数 ({MAX_REPLENISHMENT_ATTEMPTS})，放弃"
+                )
+                continue
+            
+            # 避免同日重复尝试
+            if pending_buy.last_attempt_date == trade_date:
+                logger.info(f"补位 {pending_buy.ts_code} 今日已尝试，跳过（避免重复）")
+                updated_pending_buys.append(pending_buy)
+                continue
+            
+            ts_code = pending_buy.ts_code
+            
+            # 检查是否已持仓
+            if ts_code in self.account.get_positions():
+                logger.info(f"补位 {ts_code} 已在持仓中，跳过")
+                continue
+            
+            # 检查价格数据
+            if ts_code not in buy_prices:
+                logger.warning(f"补位 {ts_code} 无买入价格数据，记录失败并继续尝试")
+                pending_buy.attempts += 1
+                pending_buy.last_attempt_date = trade_date
+                failed_buy_targets.append(TargetWeight(
+                    ts_code=ts_code,
+                    target_weight=pending_buy.target_weight,
+                    reason=f"{pending_buy.reason}（无价格数据）"
+                ))
+                updated_pending_buys.append(pending_buy)
+                continue
+            
+            # 检查可交易性
+            can_buy, buy_reason = self.broker._check_can_buy(ts_code, tradability)
+            if not can_buy:
+                logger.warning(f"补位 {ts_code} 不可买入: {buy_reason}，记录失败并继续尝试")
+                pending_buy.attempts += 1
+                pending_buy.last_attempt_date = trade_date
+                failed_buy_targets.append(TargetWeight(
+                    ts_code=ts_code,
+                    target_weight=pending_buy.target_weight,
+                    reason=f"{pending_buy.reason}（{buy_reason}）"
+                ))
+                updated_pending_buys.append(pending_buy)
+                continue
+            
+            # 计算买入金额
+            target_value = total_value * pending_buy.target_weight
+            
+            # 预估成本
+            estimated_cost = self.broker.cost_model.calculate_buy_cost(target_value)
+            available_cash = self.account.get_cash()
+            
+            # 检查现金
+            if target_value + estimated_cost > available_cash:
+                target_value = available_cash - estimated_cost
+                if target_value <= 0:
+                    logger.warning(f"补位 {ts_code} 现金不足，记录失败并继续尝试")
+                    pending_buy.attempts += 1
+                    pending_buy.last_attempt_date = trade_date
+                    failed_buy_targets.append(TargetWeight(
+                        ts_code=ts_code,
+                        target_weight=pending_buy.target_weight,
+                        reason=f"{pending_buy.reason}（现金不足）"
+                    ))
+                    updated_pending_buys.append(pending_buy)
+                    continue
+            
+            # 计算股数
+            buy_shares = int(target_value / buy_prices[ts_code] / 100) * 100
+            
+            if buy_shares <= 0:
+                logger.warning(f"补位 {ts_code} 不足一手，记录失败并继续尝试")
+                pending_buy.attempts += 1
+                pending_buy.last_attempt_date = trade_date
+                failed_buy_targets.append(TargetWeight(
+                    ts_code=ts_code,
+                    target_weight=pending_buy.target_weight,
+                    reason=f"{pending_buy.reason}（不足一手）"
+                ))
+                updated_pending_buys.append(pending_buy)
+                continue
+            
+            # 创建订单
+            order = Order(
+                ts_code=ts_code,
+                action='buy',
+                shares=buy_shares,
+                price=buy_prices[ts_code],
+                target_weight=pending_buy.target_weight,
+                current_weight=0.0,
+                reason=pending_buy.reason
+            )
+            
+            # 执行订单
+            logger.info(f"补位买入: {ts_code}, {buy_shares} 股")
+            fill = self.broker._execute_single_order(order, trade_date, buy_price_type)
+            
+            if fill:
+                fills.append(fill)
+                logger.info(f"补位成功: {ts_code}")
+                # 补位成功，不再保留在队列中
+            else:
+                logger.warning(f"补位执行失败: {ts_code}")
+                pending_buy.attempts += 1
+                pending_buy.last_attempt_date = trade_date
+                updated_pending_buys.append(pending_buy)
+        
+        # 如果有新的失败买入，生成新的补位计划
+        if failed_buy_targets:
+            logger.info(f"补位执行失败 {len(failed_buy_targets)} 个，将生成新的补位计划")
+            # 将失败的目标记录到broker，供后续处理
+            self.broker._failed_buy_targets = failed_buy_targets
+        
+        # 保存更新后的补位队列
+        self.paper_storage.save_pending_buys(updated_pending_buys)
+        
+        logger.info(f"补位买入执行完成: 成功 {len(fills)} 个，失败 {len(updated_pending_buys)} 个")
+        logger.info("=" * 80)
+        
+        return fills
     
     def _download_data(self, trade_date: str) -> None:
         """下载并构建数据（复用仓库既有能力）
