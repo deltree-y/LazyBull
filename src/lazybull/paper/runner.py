@@ -256,7 +256,19 @@ class PaperTradingRunner:
             logger.error(f"无法获取 {corrected_date} 的下一个交易日")
             return
         
-        self.paper_storage.save_pending_weights(t1_date, targets)
+        # 检查是否存在补位目标（警告用户将被覆盖）
+        existing_meta = self.paper_storage.load_pending_weights_metadata(t1_date)
+        if existing_meta and existing_meta.get('source') == 'replenishment':
+            logger.warning(f"注意: {t1_date} 已存在补位目标（第 {existing_meta.get('attempt_count', 0)} 次尝试），将被本次 T0 信号覆盖")
+        
+        # 保存 T0 生成的目标（不带元数据，或带 source=t0_signal）
+        t0_metadata = {
+            'source': 't0_signal',
+            'attempt_count': 0,
+            'signal_date': corrected_date,
+            'timestamp': pd.Timestamp.now().isoformat()
+        }
+        self.paper_storage.save_pending_weights(t1_date, targets, metadata=t0_metadata)
         
         # 7. 更新调仓状态
         rebalance_state = {

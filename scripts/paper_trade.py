@@ -177,37 +177,34 @@ def run_main(args):
     
     pending_sell_actions = _process_pending_sells(runner, corrected_date, config)
     
-    # 7. 处理延迟买入队列（补位计划）
+    # 注意：旧的"延迟买入队列（补位计划）"机制已被移除
+    # 新机制：补位目标直接保存为下一交易日的 pending_weights，无需单独处理
+    # 补位将在 T1 执行时自动处理（如果有失败，会生成下一日的 pending）
+    
+    # 7. 执行 T1（如果有待执行目标）
     logger.info("")
     logger.info("-" * 80)
-    logger.info("步骤3: 处理延迟买入队列（补位计划）")
-    logger.info("-" * 80)
-    
-    pending_buy_actions = _process_pending_buys(runner, corrected_date, config)
-    
-    # 8. 执行 T1（如果有待执行目标）
-    logger.info("")
-    logger.info("-" * 80)
-    logger.info("步骤4: 检查并执行 T1")
+    logger.info("步骤3: 检查并执行 T1")
     logger.info("-" * 80)
     
     t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
     
-    # 9. 判断是否调仓日并执行 T0
+    # 8. 判断是否调仓日并执行 T0
     logger.info("")
     logger.info("-" * 80)
-    logger.info("步骤5: 检查是否调仓日并执行 T0")
+    logger.info("步骤4: 检查是否调仓日并执行 T0")
     logger.info("-" * 80)
     
     t0_targets, ect_exposure, ect_reason = _execute_t0_if_rebalance_day(runner, corrected_date, config)
     
-    # 10. 打印手工操作指令汇总
+    # 9. 打印手工操作指令汇总
     logger.info("")
     logger.info("=" * 120)
     logger.info("手工操作指令汇总")
     logger.info("=" * 120)
     
-    _print_manual_actions(stop_loss_actions, pending_sell_actions, pending_buy_actions, t1_actions, t0_targets, ect_exposure, ect_reason)
+    # 不再传递 pending_buy_actions，因为补位已集成到 T1 流程
+    _print_manual_actions(stop_loss_actions, pending_sell_actions, [], t1_actions, t0_targets, ect_exposure, ect_reason)
     print_positions(corrected_date)    
 
     logger.info("=" * 120)
@@ -415,6 +412,15 @@ def _execute_t1_if_pending(
         logger.info(f"未找到 {trade_date} 的待执行目标，跳过 T1")
         return actions
     
+    # 读取元数据（包含补位尝试次数）
+    metadata = runner.paper_storage.load_pending_weights_metadata(trade_date)
+    current_attempt = 0
+    source = "t0_signal"
+    if metadata:
+        current_attempt = metadata.get('attempt_count', 0)
+        source = metadata.get('source', 't0_signal')
+        logger.info(f"读取到元数据: 来源={source}, 补位尝试次数={current_attempt}")
+    
     logger.info(f"找到 {len(targets)} 个待执行目标，执行 T1")
     
     # 加载价格数据
@@ -465,23 +471,36 @@ def _execute_t1_if_pending(
             'orders_count': len(orders),
             'fills_count': len(fills),
             'failed_buys_count': len(failed_buy_targets),
+            'attempt_count': current_attempt,  # 记录补位尝试次数
             'timestamp': pd.Timestamp.now().isoformat()
         }
         runner.paper_storage.save_run_record("t1", trade_date, run_record)
     
-    # 处理买入失败情况：生成补位计划
+    # 处理买入失败情况：基于当日数据重新生成下一交易日补位目标
+    MAX_REPLENISHMENT_ATTEMPTS = 5  # 最大补位尝试次数
+    
     if failed_buy_targets:
         logger.info("")
         logger.info("=" * 80)
-        logger.info(f"检测到 {len(failed_buy_targets)} 个买入失败目标，生成补位计划")
+        logger.info(f"检测到 {len(failed_buy_targets)} 个买入失败目标")
+        
+        # 检查补位尝试次数
+        next_attempt = current_attempt + 1
+        if next_attempt > MAX_REPLENISHMENT_ATTEMPTS:
+            logger.warning(f"补位尝试次数已达上限 ({MAX_REPLENISHMENT_ATTEMPTS})，不再继续补位")
+            logger.info("=" * 80)
+            runner.broker.clear_failed_buy_targets()
+            return actions
+        
+        logger.info(f"基于当日 {trade_date} 数据重新生成下一交易日补位目标（第 {next_attempt} 次补位尝试）")
         logger.info("=" * 80)
         
         # 获取下一交易日
         next_trade_date = runner._get_next_trade_date(trade_date)
         if next_trade_date:
-            # 生成补位目标
+            # 基于当日 Tn 数据重新生成补位信号，用于下一交易日 Tn+1 买入
             replacement_targets = runner.generate_replacement_targets(
-                trade_date=trade_date,  # 使用当日数据生成信号
+                trade_date=trade_date,
                 failed_count=len(failed_buy_targets),
                 universe_type=config['universe'],
                 model_version=config.get('model_version'),
@@ -490,24 +509,24 @@ def _execute_t1_if_pending(
             )
             
             if replacement_targets:
-                # 转换为 PendingBuy 并加入队列
-                from src.lazybull.paper.models import PendingBuy
-                for target in replacement_targets:
-                    pending_buy = PendingBuy(
-                        ts_code=target.ts_code,
-                        target_weight=target.target_weight,
-                        reason=target.reason,
-                        create_date=trade_date,
-                        attempts=0,
-                        last_attempt_date="",
-                        original_signal_date=trade_date
-                    )
-                    runner.broker.pending_buys.append(pending_buy)
+                # 构建元数据
+                replenishment_metadata = {
+                    'source': 'replenishment',
+                    'attempt_count': next_attempt,
+                    'original_signal_date': trade_date,
+                    'failed_targets_count': len(failed_buy_targets),
+                    'timestamp': pd.Timestamp.now().isoformat()
+                }
                 
-                # 保存补位队列
-                runner.broker.storage.save_pending_buys(runner.broker.pending_buys)
+                # 直接保存为下一交易日的 pending_weights（与 T0->T1 机制一致）
+                runner.paper_storage.save_pending_weights(
+                    next_trade_date, 
+                    replacement_targets,
+                    metadata=replenishment_metadata
+                )
                 
-                logger.info(f"已生成 {len(replacement_targets)} 个补位计划，将在 {next_trade_date} 继续买入")
+                logger.info(f"已生成 {len(replacement_targets)} 个补位目标，保存为 {next_trade_date} 的待执行目标")
+                logger.info(f"下一交易日 {next_trade_date} 将自动读取并执行补位买入（第 {next_attempt}/{MAX_REPLENISHMENT_ATTEMPTS} 次尝试）")
             else:
                 logger.warning("无法生成补位目标，候选可能已耗尽")
         else:
