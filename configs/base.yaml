@@ -49,6 +49,8 @@ costs:
   min_commission: 5  # 最小佣金，元
   stamp_tax: 0.0005  # 印花税，仅卖出
   slippage: 0.0005  # 滑点
+  capital_retention_ratio: 0.00  # 整体买入时保留的资金比例，默认5%，避免过度买入导致后续无法补位
+  pendding_capital_retention_ratio: 0.3  # 补位买入时保留的资金比例，默认5%，避免过度买入导致后续无法补位
 
 # 止损配置
 stop_loss:

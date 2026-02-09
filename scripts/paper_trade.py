@@ -281,6 +281,11 @@ def _check_stop_loss(
         if current_price is None or current_price <= 0:
             logger.warning(f"股票 {ts_code} 价格无效（{current_price}），跳过止损检查")
             continue
+            
+        # 检查是否有价格数据
+        if ts_code not in prices:
+            logger.warning(f"股票 {ts_code} 无价格数据，跳过止损检查")
+            continue
         
         is_limit_down = limit_down_info.get(ts_code, False)
         
