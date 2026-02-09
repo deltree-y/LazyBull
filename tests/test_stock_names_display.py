@@ -52,8 +52,8 @@ def sample_positions_account(temp_paper_storage):
     """创建带有持仓的账户"""
     account = PaperAccount(initial_capital=100000.0, storage=temp_paper_storage)
     
-    # 添加一些持仓
-    account.positions['000001.SZ'] = Position(
+    # 添加一些持仓（访问 state.positions）
+    account.state.positions['000001.SZ'] = Position(
         ts_code='000001.SZ',
         shares=1000,
         buy_price=10.0,
@@ -61,7 +61,7 @@ def sample_positions_account(temp_paper_storage):
         buy_date='20260205'
     )
     
-    account.positions['603115.SH'] = Position(
+    account.state.positions['603115.SH'] = Position(
         ts_code='603115.SH',
         shares=500,
         buy_price=20.0,
