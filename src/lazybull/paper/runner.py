@@ -171,14 +171,14 @@ class PaperTradingRunner:
             
             if days_since_last >= rebalance_freq:
                 logger.info(
-                    f"距离上次调仓 {last_rebalance_date} 已过 {days_since_last} 个交易日，"
+                    f"距离上次调仓 {last_rebalance_date} 已过 [{days_since_last}] 个交易日，"
                     f"满足调仓频率 {rebalance_freq}，允许执行"
                 )
                 return True
             else:
                 raise RuntimeError(
                     f"当前不是调仓日！距离上次调仓 {last_rebalance_date} "
-                    f"仅过 {days_since_last} 个交易日，"
+                    f"仅过 [{days_since_last}] 个交易日，"
                     f"需要至少 {rebalance_freq} 个交易日。"
                 )
         except RuntimeError:
@@ -632,7 +632,6 @@ class PaperTradingRunner:
             total_cash = self.account.get_cash() * 0.95  # 留出一定现金空间，避免过度买入导致后续无法补位
             # 计算买入金额
             target_value = total_cash * pending_buy.target_weight
-            logger.warning(f"DEBUG: 补位 {ts_code} 目标金额估算 - {target_value:.2f} 元")
             
             # 预估成本
             estimated_cost = self.broker.cost_model.calculate_buy_cost(target_value)
@@ -680,15 +679,15 @@ class PaperTradingRunner:
             )
             
             # 执行订单
-            logger.info(f"补位买入: {ts_code}, {buy_shares} 股")
+            #logger.info(f"补位买入: {ts_code}, {buy_shares} 股, 目标权重 {pending_buy.target_weight:.2%}, 预估成本 {target_value:.2f}")
             fill = self.broker._execute_single_order(order, trade_date, buy_price_type)
             
             if fill:
                 fills.append(fill)
-                logger.info(f"补位成功: {ts_code}")
+                logger.info(f"补位成功: {ts_code}, 买入 {fill.shares} 股, 成交价 {fill.price:.2f}, 成交金额 {fill.shares * fill.price:.2f}")
                 # 补位成功，不再保留在队列中
             else:
-                logger.warning(f"补位执行失败: {ts_code}")
+                logger.warning(f"补位执行失败: {ts_code}, ")
                 pending_buy.attempts += 1
                 pending_buy.last_attempt_date = trade_date
                 updated_pending_buys.append(pending_buy)

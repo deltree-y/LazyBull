@@ -661,7 +661,7 @@ def _execute_t0_if_rebalance_day(
         is_rebalance_day = runner._check_rebalance_day(trade_date, config['rebalance_freq'])
     except RuntimeError as e:
         logger.info(f"当前不是调仓日：{e}")
-        logger.info("非调仓日允许执行卖出和T1，T0跳过")
+        #logger.info("非调仓日允许执行卖出和T1，T0跳过")
         return targets_info, ect_exposure, ect_reason
     
     if not is_rebalance_day:
@@ -905,7 +905,6 @@ def build_stock_names_dict(loader: DataLoader) -> Dict[str, str]:
 
 
 def print_positions(trade_date: str):
-    print("\n")
     logger.info("=" * 80)
     logger.info(f"[{trade_date}]持仓情况")
     logger.info("=" * 80)
