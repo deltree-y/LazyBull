@@ -1154,10 +1154,14 @@ class PaperTradingRunner:
         # 目标权重字典
         target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
         
-        # 1. 处理所有目标股票（买入/加仓/减仓/清仓）
+        # 0. 处理所有目标股票（买入/加仓/减仓/清仓）
         all_stocks = set(target_weights.keys()) | set(current_positions.keys())
         
-        for ts_code in sorted(all_stocks):
+        # 1. 初始化存储列表和计数器
+        rows_to_print = []
+        stats = {"清仓": 0, "减仓": 0, "加仓": 0, "买入": 0}
+
+        for ts_code in all_stocks:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
             pos = current_positions.get(ts_code)
             current_shares = pos.shares if pos else 0
@@ -1166,50 +1170,46 @@ class PaperTradingRunner:
             price = price_map.get(ts_code, 0.0)
             
             if price <= 0:
-                # 无价格数据，跳过
-                logger.warning(f"{ts_code} 无有效价格数据，跳过目标计算")
                 continue
             
-            # 计算目标股数
             target_value = total_capital * target_weight
             target_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
             
-            # 判断方向和建议股数
+            # 判断方向
             if target_shares > current_shares:
-                # 买入或加仓
                 direction = "买入" if current_shares == 0 else "加仓"
-                suggested_shares = target_shares - current_shares
-                suggested_shares = (suggested_shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+                suggested_shares = (target_shares - current_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
             elif target_shares < current_shares:
-                if target_shares == 0:
-                    # 清仓
-                    direction = "清仓"
-                    suggested_shares = current_shares  # 全部卖出
-                else:
-                    # 减仓
-                    direction = "减仓"
-                    suggested_shares = current_shares - target_shares
-                    suggested_shares = (suggested_shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+                direction = "清仓" if target_shares == 0 else "减仓"
+                suggested_shares = (current_shares - target_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
             else:
-                # 权重不变，跳过
-                logger.warning(f"{ts_code} 权重不变，当前持仓 {current_shares} 股，目标持仓 {target_shares} 股，跳过")
+                continue
+
+            if suggested_shares <= 0:
                 continue
             
-            if suggested_shares <= 0:
-                logger.warning(f"{ts_code} 建议股数 <= 0，跳过")
-                continue
+            # 统计数量
+            if direction in stats:
+                stats[direction] += 1
             
             reason_text = reason if reason else "信号生成"
-            
-            row = [
-                ts_code,
-                name,
-                direction,
-                f"{price:.2f}",
-                str(suggested_shares),
-                reason_text
-            ]
-            logger.info(format_row(row, widths, aligns))
+            rows_to_print.append({
+                'data': [ts_code, name, direction, f"{price:.2f}", str(suggested_shares), reason_text],
+                'direction': direction
+            })
+
+        # 2. 按照指定顺序排序：清仓 > 减仓 > 加仓 > 买入
+        priority = {"清仓": 0, "减仓": 1, "加仓": 2, "买入": 3}
+        rows_to_print.sort(key=lambda x: priority.get(x['direction'], 99))
+
+        # 3. 打印表格行
+        for item in rows_to_print:
+            logger.info(format_row(item['data'], widths, aligns))
+        
+        # 4. 打印统计摘要
+        logger.info("-" * SEPARATOR_LENGTH)
+        stats_str = f"【操作统计】 清仓: {stats['清仓']} | 减仓: {stats['减仓']} | 加仓: {stats['加仓']} | 买入: {stats['买入']}"
+        logger.info(stats_str)
         
         logger.info("=" * SEPARATOR_LENGTH)
         logger.info("")

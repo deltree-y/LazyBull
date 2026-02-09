@@ -286,7 +286,7 @@ class PaperStorage:
             return None
         
         df = pd.read_parquet(file_path)
-        logger.info(f"读取净值记录: {file_path} ({len(df)} 条)")
+        #logger.info(f"读取净值记录: {file_path} ({len(df)} 条)")
         return df
     
     def save_run_record(self, run_type: str, trade_date: str, record: dict) -> None:
@@ -482,7 +482,7 @@ class PaperStorage:
         with open(file_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
         
-        logger.info(f"读取全局配置: {file_path}")
+        #logger.info(f"读取全局配置: {file_path}")
         return config
     
     def save_stop_loss_state(self, state: dict) -> None:

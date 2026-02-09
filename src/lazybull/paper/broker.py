@@ -40,7 +40,7 @@ class PaperBroker:
         self.order_table_widths = [12, 6, 10, 10, 8, 8, 10, 12, 10, 10, 10, 10, 15]
         self.order_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
         # 持仓表列：股票代码(名称)、股数、当前价格、买入均价、买入日期、持有天数、当前市值、浮盈、收益率(%)、状态
-        self.positions_table_widths = [18, 8, 10, 10, 12, 8, 12, 12, 12, 8]
+        self.positions_table_widths = [20, 8, 10, 10, 12, 8, 12, 12, 12, 8]
         self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
         self.verbose = verbose
         # 加载延迟卖出队列
@@ -675,9 +675,11 @@ class PaperBroker:
         logger.info(format_row(header, self.positions_table_widths, ['left'] * len(self.positions_table_widths)))
 
         logger.info("-" * 140)
-        
-        # 打印每行
-        for _, row in df.iterrows():
+
+        # 1. 先按“收益率(%)”进行降序排列 (ascending=False 表示降序)
+        df_sorted = df.sort_values(by='收益率(%)', ascending=False)        
+        # 2. 打印每行: 遍历排序后的 df_sorted
+        for _, row in df_sorted.iterrows():
             row_data = [
                 row['股票代码'], row['持仓股数'], 
                 f"{row['当前价格']:.2f}", f"{row['买入均价']:.2f}",

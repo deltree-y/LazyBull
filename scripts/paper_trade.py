@@ -198,14 +198,14 @@ def run_main(args):
     t0_targets, ect_exposure, ect_reason = _execute_t0_if_rebalance_day(runner, corrected_date, config)
     
     # 9. 打印手工操作指令汇总
-    logger.info("")
-    logger.info("=" * 120)
-    logger.info("手工操作指令汇总")
-    logger.info("=" * 120)
+    #logger.info("")
+    #logger.info("=" * 120)
+    #logger.info("手工操作指令汇总")
+    #logger.info("=" * 120)
     
     # 不再传递 pending_buy_actions，因为补位已集成到 T1 流程
-    _print_manual_actions(stop_loss_actions, pending_sell_actions, [], t1_actions, t0_targets, ect_exposure, ect_reason)
-    print_positions(corrected_date)    
+    #_print_manual_actions(stop_loss_actions, pending_sell_actions, [], t1_actions, t0_targets, ect_exposure, ect_reason)
+    print_positions(corrected_date)
 
     logger.info("=" * 120)
     logger.info(f"运行完成 - {corrected_date}, 下个交易日: [{runner._get_next_trade_date(corrected_date)}]")
@@ -865,7 +865,7 @@ def build_stock_names_dict(loader: DataLoader) -> Dict[str, str]:
 
 
 def print_positions(trade_date: str):
-    print("\n\n\n")
+    print("\n")
     logger.info("=" * 80)
     logger.info(f"[{trade_date}]持仓情况")
     logger.info("=" * 80)
