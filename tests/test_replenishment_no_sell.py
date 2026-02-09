@@ -162,8 +162,8 @@ def test_replenishment_with_existing_positions_no_sell(temp_storage):
         assert order.target_weight == 0.0, "错误情况下应该是清仓（target_weight=0）"
         assert order.reason == "退出持仓", f"错误情况应该是'退出持仓'，实际是'{order.reason}'"
     
-    logger_msg = "测试通过：证实了如果将补位目标错误地作为全量目标，会触发清仓"
-    print(logger_msg)
+    # 测试通过：证实了如果将补位目标错误地作为全量目标，会触发清仓
+    assert len(sell_orders_wrong) > 0, "测试验证：补位目标错误地作为全量目标会触发清仓"
 
 
 def test_replenishment_correct_flow(temp_storage):
@@ -244,8 +244,8 @@ def test_replenishment_correct_flow(temp_storage):
         ts_code = f"{600000 + i:06d}.SH"
         assert ts_code in positions_before
     
-    logger_msg = "测试通过：使用 pending_buys 时，现有持仓不受影响"
-    print(logger_msg)
+    # 测试通过：使用 pending_buys 时，现有持仓不受影响
+    assert len(positions_before) == 27, "使用 pending_buys 时，现有持仓不受影响"
 
 
 def test_full_rebalance_vs_replenishment(temp_storage):
@@ -332,8 +332,9 @@ def test_full_rebalance_vs_replenishment(temp_storage):
     # 补位流程不会调用 broker.generate_orders
     # 而是调用 _execute_pending_buys，它只生成买入订单
     
-    logger_msg = "测试通过：全量调仓会卖出，补位不会卖出"
-    print(logger_msg)
+    # 测试通过：全量调仓会卖出，补位不会卖出
+    assert len(sell_orders_full) > 0, "全量调仓会生成卖出订单"
+    assert len(buy_orders_full) > 0, "全量调仓会生成买入订单"
 
 
 if __name__ == "__main__":
