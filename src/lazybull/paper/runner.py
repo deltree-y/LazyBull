@@ -579,6 +579,13 @@ class PaperTradingRunner:
         # 计算总资产
         all_prices = buy_prices
         total_value = self.account.get_total_value(all_prices)
+        #算算手头还有多少现金
+        import yaml
+        with open("configs/base.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+
+        total_cash = self.account.get_cash() * (1 - cfg['costs']['pendding_capital_retention_ratio'])  # 留出一定现金空间，避免过度买入导致后续无法补位
+        available_cash = total_cash / len(pending_buys)  # 简单平均分配现金到每个补位目标
         
         fills = []
         updated_pending_buys = []
@@ -632,19 +639,11 @@ class PaperTradingRunner:
                 updated_pending_buys.append(pending_buy)
                 continue
             
-            #算算手头还有多少现金
-            import yaml
-            with open("configs/base.yaml", "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-
-            total_cash = self.account.get_cash() * (1 - cfg['costs']['pendding_capital_retention_ratio'])  # 留出一定现金空间，避免过度买入导致后续无法补位
             # 计算买入金额
             target_value = total_cash * pending_buy.target_weight
             
             # 预估成本
             estimated_cost = self.broker.cost_model.calculate_buy_cost(target_value)
-            available_cash = total_cash / len(pending_buys)  # 简单平均分配现金到每个补位目标
-            logger.warning(f"DEBUG: 补位 {ts_code} 目标金额 {target_value:.2f}, 预估成本 {estimated_cost:.2f}, 可用现金 {available_cash:.2f}, 剩余补位目标 {len(pending_buys)} 个")
             
             # 检查现金
             if target_value + estimated_cost > available_cash:
