@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.9] - 2026-02-09
+
+### Fixed
+- **修复纸面交易日志/原因文案不清晰的问题**：卖出订单的 reason 文案现在能准确反映实际交易行为
+  - **问题描述**：当目标权重为0时，所有卖出订单统一使用"退出持仓"，但实际可能只是减仓（部分卖出），容易误导用户
+  - **解决方案**：根据实际卖出股数和持仓股数判断 reason 文案
+    - 完全清仓（`sell_shares == pos.shares` 且 `target_weight == 0`）→ "退出持仓"
+    - 部分清仓（`sell_shares < pos.shares` 且 `target_weight == 0`）→ "减仓(退出持仓未完全清仓)"
+    - 普通减仓（`target_weight > 0`）→ "减仓"
+  - **核心修改**：
+    - `src/lazybull/paper/broker.py` 中的 `generate_orders()` 方法：重新组织卖出订单生成逻辑，在计算 sell_shares 后根据实际情况确定 reason
+    - 同步更新 PendingSell 延迟卖出订单的 reason 逻辑
+  - **验收测试**：新增 `tests/test_sell_order_reason.py`，7个测试用例全部通过
+
+### Improved
+- **增强执行日志统计**：在订单执行完成后增加详细的交易类型统计
+  - 新增 `_calculate_execution_stats()` 方法，统计以下信息：
+    - 买入：新建持仓笔数、加仓笔数
+    - 卖出：清仓笔数、减仓笔数
+  - 统计基于执行前的持仓快照，避免卖出/买入顺序影响判断
+  - 日志格式示例：
+    ```
+    执行完成: 27 买，26 卖
+      - 买入: 新建持仓 15 笔，加仓 12 笔
+      - 卖出: 清仓 10 笔，减仓 16 笔
+    ```
+  - 这些统计以"成交 fill"为准，帮助用户更直观地了解交易结果
+
+### Documentation
+- 新增 `docs/PR/fix_sell_order_reason_clarity.md` 详细说明本次修复的动机与变更点
+- 更新 CHANGELOG.md 记录版本变更
+
 ## [0.3.8] - 2026-02-09
 
 ### Fixed
