@@ -345,3 +345,29 @@ class DataLoader:
                 df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
         
         return df
+    
+    def load_suspend_by_date(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """加载指定日期的停牌数据
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            
+        Returns:
+            停牌数据DataFrame，包含 ts_code, trade_date, suspend_type 等列
+            suspend_type: 'S' 表示停牌，'R' 表示复牌
+        """
+        # 转换日期格式 YYYYMMDD -> YYYY-MM-DD
+        if len(trade_date) == 8:
+            date_str = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
+        else:
+            date_str = trade_date
+        
+        # 尝试从 raw/suspend 加载
+        df = self.storage.load_raw_by_date("suspend", date_str)
+        
+        if df is not None and 'trade_date' in df.columns:
+            # 确保日期格式一致（YYYYMMDD字符串）
+            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+        
+        return df

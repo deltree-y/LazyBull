@@ -240,29 +240,41 @@ def _check_stop_loss(
         logger.warning(f"无法加载 {trade_date} 的价格数据，跳过止损检查")
         return actions
     
-    # 构建价格字典、跌停信息和停牌信息
+    # 加载停牌数据（优先使用 raw/suspend）
+    suspend_data = loader.load_suspend_by_date(trade_date)
+    if suspend_data is not None and not suspend_data.empty:
+        logger.debug(f"成功加载 {trade_date} 的停牌数据，共 {len(suspend_data)} 条记录")
+    else:
+        logger.debug(f"未找到 {trade_date} 的停牌数据，将从 daily 数据判断")
+    
+    # 构建价格字典和跌停信息
     prices = {}
     limit_down_info = {}
-    suspended_info = {}
     for _, row in daily_data.iterrows():
         ts_code = row['ts_code']
         prices[ts_code] = row.get('close', 0.0)
         limit_down_info[ts_code] = row.get('is_limit_down', 0) == 1
-        suspended_info[ts_code] = row.get('is_suspended', 0) == 1
     
     # 检查每个持仓
     for ts_code, pos in positions.items():
-        if ts_code not in prices:
-            logger.warning(f"股票 {ts_code} 无价格数据，跳过止损检查")
-            continue
-        
-        # 检查是否停牌
-        is_suspended = suspended_info.get(ts_code, False)
-        if is_suspended:
+        # 检查是否停牌（优先使用 suspend_data）
+        from src.lazybull.common.trade_status import is_suspended
+        is_suspended_stock = is_suspended(ts_code, trade_date, daily_data, suspend_data)
+        if is_suspended_stock:
             logger.info(f"股票 {ts_code} 停牌，跳过止损检查")
             continue
         
+        # 检查是否有价格数据
+        if ts_code not in prices:
+            logger.warning(f"股票 {ts_code} 无行情数据，跳过止损检查")
+            continue
+        
         current_price = prices[ts_code]
+        # 价格为0或缺失时，也跳过止损检查
+        if current_price <= 0 or pd.isna(current_price):
+            logger.warning(f"股票 {ts_code} 价格数据缺失或为0（{current_price}），跳过止损检查")
+            continue
+        
         is_limit_down = limit_down_info.get(ts_code, False)
         
         # 检查是否触发止损

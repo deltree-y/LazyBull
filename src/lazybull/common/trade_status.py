@@ -9,10 +9,58 @@ import pandas as pd
 from loguru import logger
 
 
+def is_suspended_by_suspend_df(
+    ts_code: str,
+    trade_date: str,
+    suspend_df: pd.DataFrame
+) -> bool:
+    """基于 suspend 数据判断股票是否停牌
+    
+    Args:
+        ts_code: 股票代码
+        trade_date: 交易日期（YYYYMMDD格式字符串）
+        suspend_df: 停牌数据，需包含 ts_code, trade_date, suspend_type 列
+                   suspend_type: 'S' 表示停牌，'R' 表示复牌/恢复交易
+        
+    Returns:
+        True 表示停牌，False 表示未停牌或复牌
+        
+    注意:
+        - 若当日记录 suspend_type == 'S' => 停牌 True
+        - 若当日记录 suspend_type == 'R' => 复牌/可交易 False
+        - 若当日无记录 => 视为未停牌 False
+    """
+    try:
+        if suspend_df is None or suspend_df.empty:
+            return False
+        
+        mask = (suspend_df['ts_code'] == ts_code) & (suspend_df['trade_date'] == trade_date)
+        if mask.sum() == 0:
+            # 当日无停牌记录，视为未停牌
+            return False
+        
+        row = suspend_df[mask].iloc[0]
+        suspend_type = row.get('suspend_type', '')
+        
+        if suspend_type == 'S':
+            # 停牌
+            return True
+        elif suspend_type == 'R':
+            # 复牌/恢复交易
+            return False
+        else:
+            # 其他类型，视为未停牌
+            return False
+    except Exception as e:
+        logger.warning(f"检查停牌状态时出错 {ts_code} {trade_date}: {e}")
+        return False
+
+
 def is_suspended(
     ts_code: str,
     trade_date: str,
-    quote_data: pd.DataFrame
+    quote_data: pd.DataFrame,
+    suspend_df: Optional[pd.DataFrame] = None
 ) -> bool:
     """检查股票是否停牌
     
@@ -20,10 +68,21 @@ def is_suspended(
         ts_code: 股票代码
         trade_date: 交易日期（YYYYMMDD格式字符串）
         quote_data: 行情数据，需包含 is_suspended 列
+        suspend_df: （可选）停牌数据，若提供则优先使用
         
     Returns:
         True 表示停牌，False 表示未停牌
+        
+    注意:
+        - 若提供 suspend_df，则以其为准（suspend_type='S'为停牌，'R'为复牌，无记录为未停牌）
+        - 若未提供 suspend_df，则从 quote_data 的 is_suspended 列判断
+        - 最后降级：quote_data 缺行时假定停牌（保守策略）
     """
+    # 优先使用 suspend_df
+    if suspend_df is not None and not suspend_df.empty:
+        return is_suspended_by_suspend_df(ts_code, trade_date, suspend_df)
+    
+    # 降级到 quote_data
     try:
         mask = (quote_data['ts_code'] == ts_code) & (quote_data['trade_date'] == trade_date)
         if mask.sum() == 0:
@@ -110,7 +169,8 @@ def is_tradeable(
     ts_code: str,
     trade_date: str,
     quote_data: pd.DataFrame,
-    action: str = 'buy'
+    action: str = 'buy',
+    suspend_df: Optional[pd.DataFrame] = None
 ) -> tuple[bool, Optional[str]]:
     """检查股票是否可交易
     
@@ -126,6 +186,7 @@ def is_tradeable(
         trade_date: 交易日期（YYYYMMDD格式字符串）
         quote_data: 行情数据
         action: 操作类型，'buy' 或 'sell'
+        suspend_df: （可选）停牌数据，若提供则优先使用
         
     Returns:
         (可交易标志, 不可交易原因)
@@ -139,7 +200,7 @@ def is_tradeable(
         return True, None
 
     # 检查停牌
-    if is_suspended(ts_code, trade_date, quote_data):
+    if is_suspended(ts_code, trade_date, quote_data, suspend_df):
         return False, "停牌"
     
     # 检查涨跌停
@@ -158,7 +219,8 @@ def is_tradeable(
 def get_trade_status_info(
     ts_code: str,
     trade_date: str,
-    quote_data: pd.DataFrame
+    quote_data: pd.DataFrame,
+    suspend_df: Optional[pd.DataFrame] = None
 ) -> Dict[str, Any]:
     """获取股票的完整交易状态信息
     
@@ -166,6 +228,7 @@ def get_trade_status_info(
         ts_code: 股票代码
         trade_date: 交易日期（YYYYMMDD格式字符串）
         quote_data: 行情数据
+        suspend_df: （可选）停牌数据，若提供则优先使用
         
     Returns:
         包含交易状态的字典：
@@ -190,7 +253,7 @@ def get_trade_status_info(
             'close': None,
             'pct_chg': None
         }
-    suspended = is_suspended(ts_code, trade_date, quote_data)
+    suspended = is_suspended(ts_code, trade_date, quote_data, suspend_df)
     limit_up = is_limit_up(ts_code, trade_date, quote_data)
     limit_down = is_limit_down(ts_code, trade_date, quote_data)
     

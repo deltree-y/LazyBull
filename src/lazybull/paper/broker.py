@@ -310,18 +310,25 @@ class PaperBroker:
             {ts_code: {is_suspended, is_limit_up, is_limit_down, tradable}}
         """
         from ..data import DataLoader, Storage
+        from ..common.trade_status import is_suspended as check_suspended
         
         storage = Storage()
         loader = DataLoader(storage)
         
         daily_data = loader.load_clean_daily_by_date(trade_date)
+        # 加载停牌数据（优先使用 raw/suspend）
+        suspend_data = loader.load_suspend_by_date(trade_date)
         
         tradability = {}
         if daily_data is not None and not daily_data.empty:
             for _, row in daily_data.iterrows():
                 ts_code = row['ts_code']
+                # 使用统一的停牌判断逻辑（优先使用 suspend_data）
+                is_suspended_stock = check_suspended(
+                    ts_code, trade_date, daily_data, suspend_data
+                )
                 tradability[ts_code] = {
-                    'is_suspended': row.get('is_suspended', 0),
+                    'is_suspended': 1 if is_suspended_stock else 0,
                     'is_limit_up': row.get('is_limit_up', 0),
                     'is_limit_down': row.get('is_limit_down', 0),
                     'tradable': row.get('tradable', 1)

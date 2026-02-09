@@ -163,6 +163,8 @@ class BacktestEngine:
         
         # 存储价格数据用于交易状态检查
         self.price_data_cache: Optional[pd.DataFrame] = None
+        # 存储停牌数据用于止损和可交易性检查
+        self.suspend_data_cache: Optional[pd.DataFrame] = None
         
         logger.info(
             f"回测引擎初始化完成: 初始资金={initial_capital}, "
@@ -185,7 +187,8 @@ class BacktestEngine:
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
         trading_dates: List[pd.Timestamp],
-        price_data: pd.DataFrame
+        price_data: pd.DataFrame,
+        suspend_data: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
         """运行回测
         
@@ -194,6 +197,7 @@ class BacktestEngine:
             end_date: 结束日期
             trading_dates: 交易日列表
             price_data: 价格数据，需包含 ts_code, trade_date, close, close_adj（可选）
+            suspend_data: （可选）停牌数据，包含 ts_code, trade_date, suspend_type 列
             
         Returns:
             净值曲线DataFrame
@@ -214,6 +218,11 @@ class BacktestEngine:
         
         # 缓存价格数据用于交易状态检查
         self.price_data_cache = price_data
+        
+        # 缓存停牌数据用于止损和可交易性检查
+        self.suspend_data_cache = suspend_data
+        if suspend_data is not None and not suspend_data.empty:
+            logger.info(f"加载停牌数据: {len(suspend_data)} 条记录")
         
         # 获取调仓日期（信号生成日期）
         signal_dates = self._get_rebalance_dates(trading_dates)
@@ -887,39 +896,47 @@ class BacktestEngine:
         if not self.stop_loss_monitor:
             return
         
+        # 获取当日行情数据判断停牌状态
+        trade_date_str = to_trade_date_str(date)
+        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
+        
+        # 准备停牌数据（筛选当日）
+        suspend_df_today = None
+        if self.suspend_data_cache is not None and not self.suspend_data_cache.empty:
+            suspend_df_today = self.suspend_data_cache[
+                self.suspend_data_cache['trade_date'] == trade_date_str
+            ]
+        
         # 遍历所有持仓检查止损
         for stock, info in list(self.positions.items()):
             # 如果该股票已经在待止损卖出队列中，跳过（避免重复触发）
             if stock in self.pending_stop_loss_sells:
                 continue
             
-            # 获取当日行情数据判断停牌状态
-            trade_date_str = to_trade_date_str(date)
-            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
-            
-            # 检查是否停牌
-            is_suspended = False
-            is_limit_down = False
-            if not date_quote.empty:
-                stock_quote = date_quote[date_quote['ts_code'] == stock]
-                if not stock_quote.empty:
-                    # 检查停牌
-                    if 'is_suspended' in stock_quote.columns:
-                        is_suspended = bool(stock_quote['is_suspended'].iloc[0] == 1)
-                    # 检查跌停
-                    if 'is_limit_down' in stock_quote.columns:
-                        is_limit_down = bool(stock_quote['is_limit_down'].iloc[0] == 1)
+            # 检查是否停牌（优先使用 suspend_data）
+            from ..common.trade_status import is_suspended
+            is_suspended_stock = is_suspended(stock, trade_date_str, date_quote, suspend_df_today)
             
             # 停牌时跳过止损检查
-            if is_suspended:
+            if is_suspended_stock:
                 if self.verbose:
                     logger.info(f"股票 {stock} 停牌，跳过止损检查 ({date.date()})")
                 continue
             
             # 获取当前价格
             current_price = self._get_trade_price(date, stock)
-            if current_price is None:
+            if current_price is None or current_price <= 0:
+                if self.verbose:
+                    logger.debug(f"股票 {stock} 无有效价格数据（{current_price}），跳过止损检查 ({date.date()})")
                 continue
+            
+            # 检查跌停
+            is_limit_down = False
+            if not date_quote.empty:
+                stock_quote = date_quote[date_quote['ts_code'] == stock]
+                if not stock_quote.empty:
+                    if 'is_limit_down' in stock_quote.columns:
+                        is_limit_down = bool(stock_quote['is_limit_down'].iloc[0] == 1)
             
             buy_price = info['buy_trade_price']
             
