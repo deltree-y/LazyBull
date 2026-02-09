@@ -542,11 +542,12 @@ def test_broker_get_positions_detail(sample_account, sample_prices):
         )
         sample_account.update_cash(-10015.0)
         
-        # 获取持仓明细
+        # 获取持仓明细（默认不传stock_names，显示 na）
         df = broker.get_positions_detail(sample_prices, current_date='20260122')
         
         assert len(df) == 1
-        assert df.iloc[0]['股票代码'] == '000001.SZ'
+        # 股票代码现在包含名称，不传stock_names时显示为 ts_code(na)
+        assert df.iloc[0]['股票代码'] == '000001.SZ(na)'
         assert df.iloc[0]['持仓股数'] == 1000
         assert df.iloc[0]['持有天数'] == 7
         assert df.iloc[0]['状态'] == '持有'
