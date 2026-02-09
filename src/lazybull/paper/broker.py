@@ -113,11 +113,13 @@ class PaperBroker:
                         logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
                     
                     # 加入延迟卖出队列
+                    # 注意：由于无价格数据，无法计算精确的卖出股数
+                    # 使用当前持仓全部股数记录，重试时会根据价格重新计算
                     from .models import PendingSell
                     sell_reason = "退出持仓" if target_weight == 0 else "减仓"
                     pending_sell = PendingSell(
                         ts_code=ts_code,
-                        shares=pos.shares,  # 使用当前持仓股数以确保清仓不会遗漏
+                        shares=pos.shares,  # 记录当前持仓股数，重试时重新计算
                         target_weight=target_weight,
                         reason=f"{sell_reason}{reason_suffix}",
                         create_date=trade_date,
@@ -512,11 +514,15 @@ class PaperBroker:
                     logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
                 
                 # 加入延迟卖出队列
+                # 注意：使用当前持仓股数而非指令股数，因为：
+                # 1) 无价格时无法验证指令股数是否合理
+                # 2) retry 时会重新计算可卖股数（取 min(pending.shares, pos.shares)）
+                # 3) 确保能够完成卖出意图
                 pos = self.account.get_position(ts_code)
                 if pos:
                     pending_sell = PendingSell(
                         ts_code=ts_code,
-                        shares=pos.shares,  # 使用当前持仓股数
+                        shares=pos.shares,  # 记录当前持仓股数，重试时重新计算
                         target_weight=inst.target_weight,
                         reason=f"{reason}{reason_suffix}",
                         create_date=trade_date,

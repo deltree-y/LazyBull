@@ -129,7 +129,7 @@ class TestPaperTradingSuspendedHandling:
                 'is_suspended': 1,
                 'is_limit_up': 0,
                 'is_limit_down': 0,
-                'tradable': 1
+                'tradable': 0  # 停牌股票不可交易
             }
         }
         
@@ -233,7 +233,7 @@ class TestPaperTradingSuspendedHandling:
                 'is_suspended': 1,
                 'is_limit_up': 0,
                 'is_limit_down': 0,
-                'tradable': 1
+                'tradable': 0  # 停牌股票不可交易
             }
         }
         
