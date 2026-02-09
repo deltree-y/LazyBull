@@ -39,8 +39,9 @@ def test_is_suspended_suspended(sample_quote_data):
 
 
 def test_is_suspended_missing_data(sample_quote_data):
-    """测试数据缺失情况"""
-    assert not is_suspended('999999.SZ', '20230110', sample_quote_data)
+    """测试数据缺失情况（保守策略：假定停牌）"""
+    # 当股票不在行情数据中时，保守策略假定停牌
+    assert is_suspended('999999.SZ', '20230110', sample_quote_data)
 
 
 def test_is_limit_up_normal(sample_quote_data):
@@ -160,12 +161,112 @@ def test_get_trade_status_info_limit_down(sample_quote_data):
 
 
 def test_get_trade_status_info_missing(sample_quote_data):
-    """测试数据缺失情况"""
+    """测试数据缺失情况（保守策略：假定停牌）"""
     info = get_trade_status_info('999999.SZ', '20230110', sample_quote_data)
-    assert not info['is_suspended']
-    assert not info['is_limit_up']
-    assert not info['is_limit_down']
-    assert info['can_buy']
-    assert info['can_sell']
+    # 当股票不在行情数据中时，保守策略假定停牌
+    assert info['is_suspended']
+    assert not info['can_buy']
+    assert not info['can_sell']
     assert info['close'] is None
     assert info['pct_chg'] is None
+
+
+@pytest.fixture
+def sample_suspend_data():
+    """创建示例停牌数据"""
+    return pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ'],
+        'trade_date': ['20230110', '20230110', '20230110'],
+        'suspend_type': ['R', 'S', 'S'],  # R=复牌, S=停牌
+        'suspend_timing': ['0', '0', '0']
+    })
+
+
+def test_is_suspended_by_suspend_df_suspended():
+    """测试使用suspend_df判断停牌股票"""
+    from src.lazybull.common.trade_status import is_suspended_by_suspend_df
+    
+    suspend_df = pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ'],
+        'trade_date': ['20230110', '20230110'],
+        'suspend_type': ['S', 'S']
+    })
+    
+    assert is_suspended_by_suspend_df('000001.SZ', '20230110', suspend_df)
+    assert is_suspended_by_suspend_df('000002.SZ', '20230110', suspend_df)
+
+
+def test_is_suspended_by_suspend_df_resumed():
+    """测试使用suspend_df判断复牌股票"""
+    from src.lazybull.common.trade_status import is_suspended_by_suspend_df
+    
+    suspend_df = pd.DataFrame({
+        'ts_code': ['000001.SZ'],
+        'trade_date': ['20230110'],
+        'suspend_type': ['R']  # R表示复牌
+    })
+    
+    assert not is_suspended_by_suspend_df('000001.SZ', '20230110', suspend_df)
+
+
+def test_is_suspended_by_suspend_df_no_record():
+    """测试使用suspend_df判断无记录的股票（视为未停牌）"""
+    from src.lazybull.common.trade_status import is_suspended_by_suspend_df
+    
+    suspend_df = pd.DataFrame({
+        'ts_code': ['000001.SZ'],
+        'trade_date': ['20230110'],
+        'suspend_type': ['S']
+    })
+    
+    # 不在suspend_df中的股票，视为未停牌
+    assert not is_suspended_by_suspend_df('000002.SZ', '20230110', suspend_df)
+
+
+def test_is_suspended_with_suspend_df_priority(sample_quote_data, sample_suspend_data):
+    """测试优先使用suspend_df判断停牌状态"""
+    # 000001.SZ 在 quote_data 中 is_suspended=0，但在 suspend_df 中 suspend_type='R'（复牌）
+    # 应该使用 suspend_df 的结果：未停牌
+    assert not is_suspended('000001.SZ', '20230110', sample_quote_data, sample_suspend_data)
+    
+    # 000002.SZ 在 suspend_df 中 suspend_type='S'（停牌）
+    # 应该使用 suspend_df 的结果：停牌
+    assert is_suspended('000002.SZ', '20230110', sample_quote_data, sample_suspend_data)
+    
+    # 000003.SZ 在 suspend_df 中 suspend_type='S'（停牌）
+    assert is_suspended('000003.SZ', '20230110', sample_quote_data, sample_suspend_data)
+
+
+def test_is_suspended_fallback_to_quote_data(sample_quote_data):
+    """测试在没有suspend_df时回退到quote_data"""
+    # 当没有 suspend_df 时，应该使用 quote_data 的 is_suspended 列
+    # 000003.SZ 在 quote_data 中 vol=0（停牌）
+    assert is_suspended('000003.SZ', '20230110', sample_quote_data, None)
+
+
+def test_is_tradeable_with_suspend_df(sample_quote_data, sample_suspend_data):
+    """测试使用suspend_df判断可交易性"""
+    # 000002.SZ 在 suspend_df 中停牌
+    tradeable, reason = is_tradeable('000002.SZ', '20230110', sample_quote_data, 'buy', sample_suspend_data)
+    assert not tradeable
+    assert reason == "停牌"
+    
+    # 000001.SZ 在 suspend_df 中复牌，应该可交易
+    tradeable, reason = is_tradeable('000001.SZ', '20230110', sample_quote_data, 'buy', sample_suspend_data)
+    assert tradeable
+    assert reason is None
+
+
+def test_get_trade_status_info_with_suspend_df(sample_quote_data, sample_suspend_data):
+    """测试使用suspend_df获取交易状态信息"""
+    # 000002.SZ 在 suspend_df 中停牌
+    info = get_trade_status_info('000002.SZ', '20230110', sample_quote_data, sample_suspend_data)
+    assert info['is_suspended']
+    assert not info['can_buy']
+    assert not info['can_sell']
+    
+    # 000001.SZ 在 suspend_df 中复牌
+    info = get_trade_status_info('000001.SZ', '20230110', sample_quote_data, sample_suspend_data)
+    assert not info['is_suspended']
+    assert info['can_buy']
+    assert info['can_sell']
