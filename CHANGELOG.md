@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.8] - 2026-02-09
+
+### Fixed
+- **修复补位机制导致的清仓问题**：补位目标不再覆盖全量组合目标，避免触发"退出持仓"卖出订单
+  - **问题根因**：补位目标直接保存到 `pending/{next_date}.parquet`，T1执行时当作全量目标，导致现有持仓被清仓
+  - **解决方案**：引入独立的 `pending_buys` 队列存储补位计划（增量买入），与 `pending_weights`（全量调仓）分离
+  - **核心修改**：
+    - `scripts/paper_trade.py`：将补位目标保存到 `pending_buys` 队列
+    - `src/lazybull/paper/runner.py`：新增 `_execute_pending_buys()` 方法专门处理补位买入（仅买入，不触发卖出）
+    - `run_t1()` 方法分别处理 pending_weights 和 pending_buys
+    - 重构 `_execute_t1_if_pending()` 和新增 `_handle_failed_buys()` 辅助函数
+  - **验收测试**：新增 `tests/test_replenishment_no_sell.py` 验证修复
+    - 场景1：持有27只股票 + 3只补位计划 → 不生成卖出订单 ✓
+    - 场景2：错误使用（3只补位作为全量目标） → 生成27个卖出订单（清仓）✓
+    - 场景3：正确的补位流程 → 仅买入，不影响持仓 ✓
+
+### Improved
+- 补位机制更加健壮，与现有持仓管理解耦
+- 补位执行不再影响全量调仓逻辑
+- 更贴近真实交易场景：补位仅用于增量买入，不触发减仓/清仓
+
+### Documentation
+- 新增修复说明文档（详见本次提交的PR描述）
+- 补位机制的生命周期和数据格式说明
+
 ## [0.3.6] - 2026-02-08
 
 ### Added
