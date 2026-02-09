@@ -25,6 +25,7 @@ class PaperBroker:
         cost_model: Optional[CostModel] = None,
         storage: Optional[PaperStorage] = None,
         verbose: bool = True,
+        data_storage = None,  # 新增：数据存储实例（用于读取 raw/suspend 数据）
     ):
         """初始化经纪
         
@@ -33,10 +34,12 @@ class PaperBroker:
             cost_model: 成本模型
             storage: 存储实例
             verbose: 是否输出详细日志
+            data_storage: 数据存储实例（用于读取 raw/suspend 数据），如不提供则在需要时创建
         """
         self.account = account
         self.cost_model = cost_model or CostModel()
         self.storage = storage or PaperStorage()
+        self.data_storage = data_storage  # 保存数据存储实例
         self.order_table_widths = [12, 6, 10, 10, 8, 8, 10, 12, 10, 10, 10, 10, 15]
         self.order_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
         # 持仓表列：股票代码(名称)、股数、当前价格、买入均价、买入日期、持有天数、当前市值、浮盈、收益率(%)、状态
@@ -49,6 +52,23 @@ class PaperBroker:
         self.pending_buys = self.storage.load_pending_buys()
         # 记录最近一次买入失败的目标（用于补位）
         self._failed_buy_targets = []
+        # 停牌日历实例（延迟创建）
+        self._suspend_calendar = None
+
+    def _get_suspend_calendar(self):
+        """获取停牌日历实例（延迟创建）"""
+        if self._suspend_calendar is None:
+            from ..common.suspend_calendar import SuspendCalendar
+            from ..data import Storage
+            
+            # 如果没有提供 data_storage，创建一个默认实例
+            if self.data_storage is None:
+                self.data_storage = Storage()
+            
+            self._suspend_calendar = SuspendCalendar(self.data_storage)
+        
+        return self._suspend_calendar
+    
 
     
     def generate_orders(
@@ -103,14 +123,21 @@ class PaperBroker:
                 
                 # 检查是否有卖出价格数据
                 if ts_code not in sell_prices:
-                    # 无卖出价格数据，判断原因（停牌优先，否则无价格数据）
+                    # 无卖出价格数据，使用 SuspendCalendar 判断原因（停牌优先，否则无价格数据）
                     reason_suffix = ""
-                    if ts_code in tradability and tradability[ts_code].get('is_suspended', 0) == 1:
-                        reason_suffix = "（停牌）"
-                        logger.warning(f"股票 {ts_code} 停牌，无法卖出，加入延迟卖出队列")
-                    else:
+                    try:
+                        suspend_calendar = self._get_suspend_calendar()
+                        is_suspended = suspend_calendar.is_suspended(ts_code, trade_date)
+                        if is_suspended:
+                            reason_suffix = "（停牌）"
+                            logger.warning(f"股票 {ts_code} 停牌，无法卖出，加入延迟卖出队列")
+                        else:
+                            reason_suffix = "（无价格数据）"
+                            logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
+                    except Exception as e:
+                        # 停牌数据加载失败，使用通用描述
                         reason_suffix = "（无价格数据）"
-                        logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
+                        logger.warning(f"股票 {ts_code} 无卖出价格数据，且停牌数据加载失败（{e}），加入延迟卖出队列")
                     
                     # 加入延迟卖出队列
                     # 注意：由于无价格数据，无法计算精确的卖出股数
@@ -183,7 +210,7 @@ class PaperBroker:
                     sell_reason = "减仓"
                 
                 # 检查可交易性
-                can_sell, check_reason = self._check_can_sell(ts_code, tradability)
+                can_sell, check_reason = self._check_can_sell(ts_code, tradability, trade_date)
                 if not can_sell:
                     logger.warning(f"股票 {ts_code} 不可卖出: {check_reason}，订单延迟")
                     # 跌停或停牌，加入延迟卖出队列
@@ -358,23 +385,36 @@ class PaperBroker:
         
         return True, "可买入"
     
-    def _check_can_sell(self, ts_code: str, tradability: Dict) -> tuple[bool, str]:
+    def _check_can_sell(self, ts_code: str, tradability: Dict, trade_date: str = None) -> tuple[bool, str]:
         """检查是否可以卖出
         
         Args:
             ts_code: 股票代码
             tradability: 可交易性信息字典
+            trade_date: 交易日期（可选），如提供则使用 SuspendCalendar 检查停牌
             
         Returns:
             (can_sell, reason) 是否可卖出及原因
         """
+        # 如果提供了 trade_date，优先使用 SuspendCalendar 检查停牌
+        if trade_date:
+            try:
+                suspend_calendar = self._get_suspend_calendar()
+                is_suspended = suspend_calendar.is_suspended(ts_code, trade_date)
+                if is_suspended:
+                    return False, "停牌"
+            except Exception as e:
+                # 停牌数据加载失败，回退到使用 tradability
+                logger.warning(f"停牌数据加载失败（{e}），使用 tradability 判断")
+        
+        # 使用 tradability 判断（兼容旧逻辑）
         if ts_code not in tradability:
             return True, "无可交易性数据"
         
         info = tradability[ts_code]
         
-        # 停牌检查
-        if info.get('is_suspended', 0) == 1:
+        # 停牌检查（如果没有使用 SuspendCalendar）
+        if not trade_date and info.get('is_suspended', 0) == 1:
             return False, "停牌"
         
         # 跌停检查（跌停不可卖出）
@@ -504,14 +544,21 @@ class PaperBroker:
             
             # 检查价格数据
             if ts_code not in sell_prices:
-                # 无卖出价格数据，判断原因（停牌优先，否则无价格数据）
+                # 无卖出价格数据，使用 SuspendCalendar 判断原因（停牌优先，否则无价格数据）
                 reason_suffix = ""
-                if ts_code in tradability and tradability[ts_code].get('is_suspended', 0) == 1:
-                    reason_suffix = "（停牌）"
-                    logger.warning(f"股票 {ts_code} 停牌，无法卖出，加入延迟卖出队列")
-                else:
+                try:
+                    suspend_calendar = self._get_suspend_calendar()
+                    is_suspended = suspend_calendar.is_suspended(ts_code, trade_date)
+                    if is_suspended:
+                        reason_suffix = "（停牌）"
+                        logger.warning(f"股票 {ts_code} 停牌，无法卖出，加入延迟卖出队列")
+                    else:
+                        reason_suffix = "（无价格数据）"
+                        logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
+                except Exception as e:
+                    # 停牌数据加载失败，使用通用描述
                     reason_suffix = "（无价格数据）"
-                    logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
+                    logger.warning(f"股票 {ts_code} 无卖出价格数据，且停牌数据加载失败（{e}），加入延迟卖出队列")
                 
                 # 加入延迟卖出队列
                 # 注意：使用当前持仓股数而非指令股数，因为：
@@ -532,7 +579,7 @@ class PaperBroker:
                 continue
             
             # 检查可交易性
-            can_sell, check_reason = self._check_can_sell(ts_code, tradability)
+            can_sell, check_reason = self._check_can_sell(ts_code, tradability, trade_date)
             if not can_sell:
                 logger.warning(f"股票 {ts_code} 不可卖出: {check_reason}，加入延迟队列")
                 # 加入延迟卖出队列
@@ -1149,7 +1196,7 @@ class PaperBroker:
                 continue
             
             # 检查可交易性
-            can_sell, reason = self._check_can_sell(ps.ts_code, tradability)
+            can_sell, reason = self._check_can_sell(ps.ts_code, tradability, trade_date)
             if not can_sell:
                 logger.warning(f"股票 {ps.ts_code} 仍不可卖出: {reason}，保留订单（尝试次数: {ps.attempts}）")
                 remaining_sells.append(ps)

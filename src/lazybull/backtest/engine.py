@@ -52,7 +52,8 @@ class BacktestEngine:
         sell_timing: str = 'close',
         enable_position_completion: bool = True,
         completion_window_days: int = 3,
-        equity_curve_config: Optional[EquityCurveConfig] = None
+        equity_curve_config: Optional[EquityCurveConfig] = None,
+        data_storage = None  # 新增：数据存储实例（用于读取 raw/suspend 数据）
     ):
         """初始化回测引擎
         
@@ -79,11 +80,14 @@ class BacktestEngine:
             enable_position_completion: 是否启用仓位补齐功能，默认True
             completion_window_days: 补齐窗口期（交易日），默认3天
             equity_curve_config: ECT（权益曲线交易）配置，None 表示不启用（默认）
+            data_storage: 数据存储实例（用于读取 raw/suspend 数据），如不提供则在需要时创建
         """
         self.universe = universe
         self.signal = signal
         self.initial_capital = initial_capital
         self.cost_model = cost_model or CostModel()
+        self.data_storage = data_storage  # 保存数据存储实例
+        self._suspend_calendar = None  # 停牌日历实例（延迟创建）
         
         # 验证调仓频率
         if not isinstance(rebalance_freq, int):
@@ -178,6 +182,21 @@ class BacktestEngine:
         sell_price_type = "开盘价" if self.sell_timing == 'open' else "收盘价"
         logger.info(f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日{sell_price_type}卖出")
         logger.info(f"价格口径: 成交使用不复权 close/open, 绩效使用后复权 close_adj/open_adj")
+
+    def _get_suspend_calendar(self):
+        """获取停牌日历实例（延迟创建）"""
+        if self._suspend_calendar is None:
+            from ..common.suspend_calendar import SuspendCalendar
+            from ..data import Storage
+            
+            # 如果没有提供 data_storage，创建一个默认实例
+            if self.data_storage is None:
+                self.data_storage = Storage()
+            
+            self._suspend_calendar = SuspendCalendar(self.data_storage)
+        
+        return self._suspend_calendar
+
 
     
     def run(
@@ -887,38 +906,56 @@ class BacktestEngine:
         if not self.stop_loss_monitor:
             return
         
+        # 获取停牌日历
+        trade_date_str = to_trade_date_str(date)
+        suspend_calendar = None
+        try:
+            suspend_calendar = self._get_suspend_calendar()
+        except Exception as e:
+            logger.warning(f"停牌日历初始化失败（{e}），将跳过停牌检查")
+        
         # 遍历所有持仓检查止损
         for stock, info in list(self.positions.items()):
             # 如果该股票已经在待止损卖出队列中，跳过（避免重复触发）
             if stock in self.pending_stop_loss_sells:
                 continue
             
-            # 获取当日行情数据判断停牌状态
-            trade_date_str = to_trade_date_str(date)
+            # 使用 SuspendCalendar 检查是否停牌
+            is_suspended = False
+            if suspend_calendar:
+                try:
+                    is_suspended = suspend_calendar.is_suspended(stock, trade_date_str)
+                    if is_suspended:
+                        if self.verbose:
+                            logger.info(f"股票 {stock} 停牌，跳过止损检查 ({date.date()})")
+                        continue
+                except Exception as e:
+                    # 停牌数据加载失败，记录警告但继续检查（降级处理）
+                    logger.warning(f"股票 {stock} 停牌状态检查失败（{e}），继续止损检查")
+            
+            # 获取当日行情数据判断跌停状态
             date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
             
-            # 检查是否停牌
-            is_suspended = False
+            # 检查跌停
             is_limit_down = False
             if not date_quote.empty:
                 stock_quote = date_quote[date_quote['ts_code'] == stock]
                 if not stock_quote.empty:
-                    # 检查停牌
-                    if 'is_suspended' in stock_quote.columns:
-                        is_suspended = bool(stock_quote['is_suspended'].iloc[0] == 1)
                     # 检查跌停
                     if 'is_limit_down' in stock_quote.columns:
                         is_limit_down = bool(stock_quote['is_limit_down'].iloc[0] == 1)
             
-            # 停牌时跳过止损检查
-            if is_suspended:
-                if self.verbose:
-                    logger.info(f"股票 {stock} 停牌，跳过止损检查 ({date.date()})")
-                continue
-            
             # 获取当前价格
             current_price = self._get_trade_price(date, stock)
             if current_price is None:
+                if self.verbose:
+                    logger.warning(f"股票 {stock} 无行情数据，跳过止损检查")
+                continue
+            
+            # 检查价格是否有效
+            if current_price <= 0:
+                if self.verbose:
+                    logger.warning(f"股票 {stock} 价格无效（{current_price}），跳过止损检查")
                 continue
             
             buy_price = info['buy_trade_price']
@@ -1489,7 +1526,7 @@ class BacktestEngine:
     ) -> None:
         """卖出股票（带交易状态检查）
         
-        如果启用延迟订单功能，会检查股票是否可交易（跌停）
+        如果启用延迟订单功能，会检查股票是否可交易（停牌或跌停）
         不可交易时加入延迟队列而非直接失败
         
         Args:
@@ -1502,6 +1539,32 @@ class BacktestEngine:
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
             trade_date_str = to_trade_date_str(date)
+            
+            # 使用 SuspendCalendar 检查停牌状态
+            is_suspended_flag = False
+            suspend_calendar = None
+            try:
+                suspend_calendar = self._get_suspend_calendar()
+                is_suspended_flag = suspend_calendar.is_suspended(stock, trade_date_str)
+                if is_suspended_flag:
+                    # 停牌，加入延迟队列
+                    if self.pending_order_manager:
+                        self.pending_order_manager.add_order(
+                            stock=stock,
+                            action='sell',
+                            current_date=date,
+                            signal_date=date,  # 卖出是基于持有期，用当前日期
+                            target_value=None,
+                            reason='停牌'
+                        )
+                    if self.verbose:
+                        logger.info(f"卖出延迟: {date.date()} {stock}, 原因: 停牌")
+                    return
+            except Exception as e:
+                # 停牌数据加载失败，记录警告但继续检查（降级处理）
+                logger.warning(f"停牌状态检查失败（{e}），继续检查其他交易状态")
+            
+            # 检查行情数据
             date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
             if date_quote.empty:
                 # 当日行情数据为空，无法判断交易状态，加入延迟队列
@@ -1517,10 +1580,12 @@ class BacktestEngine:
                 if self.verbose:
                     logger.info(f"卖出延迟: {date.date()} {stock}, 原因: 无行情数据")
                 return
+            
+            # 检查跌停状态
             tradeable, reason = is_tradeable(stock, trade_date_str, date_quote, action='sell')
             
             if not tradeable:
-                # 不可交易，加入延迟队列
+                # 不可交易（跌停等），加入延迟队列
                 if self.pending_order_manager:
                     self.pending_order_manager.add_order(
                         stock=stock,

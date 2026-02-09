@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.15] - 2026-02-09
+
+### Added
+- **新增停牌判断统一工具类 SuspendCalendar**：基于 raw/suspend 数据提供统一的停牌判断接口
+  - **问题背景**：停牌信息不在 daily/clean daily 中，停牌股票在 daily 中可能缺行或价格缺失/为0，导致：
+    - 纸面交易止损检查可能误触发（0价造成大回撤）
+    - 调仓/执行卖出可能因 sell_prices 缺失而直接跳过，既不卖出也不进入延迟卖出队列
+    - 回测同样可能出现止损误触发或卖出静默失败
+  - **新增模块**：`src/lazybull/common/suspend_calendar.py`
+    - 实现 `SuspendCalendar` 工具类，提供 `is_suspended()`, `get_status_reason()`, `batch_is_suspended()` 方法
+    - 判定规则基于 raw/suspend 数据：suspend_type='S' => 停牌，suspend_type='R' => 复牌，无记录 => 非停牌
+    - 严格模式：suspend 数据文件缺失时抛出 FileNotFoundError 异常
+    - 按 trade_date 缓存机制，提高查询效率
+  - **测试覆盖**：新增 `tests/test_suspend_calendar.py`，8个测试用例全部通过
+
+### Changed
+- **纸面交易集成 SuspendCalendar**：
+  - 修改 `scripts/paper_trade.py` 的 `_check_stop_loss()` 方法：
+    - 使用 SuspendCalendar 判断停牌（而非依赖 daily 中的 is_suspended 列）
+    - 停牌股票跳过止损检查，输出中文日志"停牌，跳过止损检查"
+    - 无行情数据股票跳过止损检查，输出中文日志"无行情数据，跳过止损检查"
+  - 修改 `src/lazybull/paper/broker.py` 的卖出流程：
+    - `generate_orders()` 和 `execute_instructions()` 方法：停牌/无价格时创建 PendingSell 并持久化
+    - reason 文案按优先级：停牌优先，否则无价格数据
+    - 更新 `_check_can_sell()` 方法支持通过 trade_date 参数使用 SuspendCalendar
+  - 修改 `src/lazybull/paper/runner.py`：传递 data_storage 给 broker，确保使用相同的数据根路径
+
+- **回测引擎集成 SuspendCalendar**：
+  - 修改 `src/lazybull/backtest/engine.py` 的止损检查：
+    - `_check_stop_loss()` 方法使用 SuspendCalendar 判断停牌（而非依赖 price_data 中的 is_suspended 列）
+    - 停牌时跳过止损检查，输出中文日志"股票 {stock} 停牌，跳过止损检查"
+  - 修改回测引擎的卖出流程：
+    - `_sell_stock_with_status_check()` 方法：停牌/无价格时进入延迟卖出队列
+    - reason 文案按优先级：停牌优先，否则无价格数据或跌停
+  - 新增 `data_storage` 参数支持传入 Storage 实例
+
+### Documentation
+- 新增 `docs/PR/suspend_detection_unified.md` 详细说明本次功能的问题、方案、影响范围和验证步骤
+
 ## [0.3.11] - 2026-02-09
 
 ### Fixed
