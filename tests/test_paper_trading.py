@@ -966,3 +966,172 @@ def test_broker_retry_pending_sells_same_day_not_increment_attempts():
         # 验证 attempts 增加了
         assert ps.attempts == original_attempts + 1
         assert ps.last_attempt_date == '20260122'
+
+
+def test_broker_positions_with_stock_names():
+    """测试持仓明细显示股票名称"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115',
+            status='持有'
+        )
+        account.update_cash(-10015.0)
+        
+        # 准备价格和股票名称
+        prices = {'000001.SZ': 12.0}
+        stock_names = {'000001.SZ': '平安银行'}
+        
+        # 获取持仓明细
+        df = broker.get_positions_detail(prices, current_date='20260122', stock_names=stock_names)
+        
+        # 验证股票代码包含名称
+        assert len(df) == 1
+        assert df.iloc[0]['股票代码'] == '000001.SZ(平安银行)'
+        assert df.iloc[0]['持仓股数'] == 1000
+        assert df.iloc[0]['持有天数'] == 7
+
+
+def test_broker_positions_without_stock_names():
+    """测试持仓明细缺少股票名称时显示 na"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115',
+            status='持有'
+        )
+        account.update_cash(-10015.0)
+        
+        # 准备价格，但不提供股票名称
+        prices = {'000001.SZ': 12.0}
+        
+        # 获取持仓明细（不传 stock_names）
+        df = broker.get_positions_detail(prices, current_date='20260122')
+        
+        # 验证股票代码显示为 na
+        assert len(df) == 1
+        assert df.iloc[0]['股票代码'] == '000001.SZ(na)'
+
+
+def test_broker_positions_column_order():
+    """测试持仓明细列顺序正确"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115'
+        )
+        account.update_cash(-10015.0)
+        
+        prices = {'000001.SZ': 12.0}
+        stock_names = {'000001.SZ': '平安银行'}
+        
+        df = broker.get_positions_detail(prices, current_date='20260122', stock_names=stock_names)
+        
+        # 验证列顺序（新顺序应该是：股票代码、持仓股数、当前价格、买入均价、...）
+        # 注意：当前价格应该在买入均价前
+        columns = df.columns.tolist()
+        stock_code_idx = columns.index('股票代码')
+        current_price_idx = columns.index('当前价格')
+        buy_price_idx = columns.index('买入均价')
+        
+        # 当前价格应该在买入均价前
+        assert current_price_idx < buy_price_idx
+        
+        # 不应该包含"买入成本"列（虽然内部有，但不会在展示列中）
+        # 实际上buy_cost仍在df中用于计算，但打印时不显示
+
+
+def test_broker_calculate_annualized_return_with_nav():
+    """测试通过NAV记录计算年化收益率"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 保存一个NAV记录作为起始日期
+        nav_record = NAVRecord(
+            trade_date='20260101',
+            cash=100000.0,
+            position_value=0.0,
+            total_value=100000.0,
+            nav=1.0
+        )
+        storage.append_nav(nav_record)
+        
+        # 计算年化收益率（30天后，总资产110000）
+        annualized = broker._calculate_annualized_return(
+            initial_capital=100000.0,
+            current_value=110000.0,
+            current_date='20260131'
+        )
+        
+        # 验证有结果
+        assert annualized is not None
+        # 30天从100000到110000，年化收益率应该很高
+        assert annualized > 0
+
+
+def test_broker_calculate_annualized_return_without_start_date():
+    """测试无起始日期时年化收益率为None"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 不保存任何NAV记录，也不设置config中的account_start_date
+        
+        # 计算年化收益率
+        annualized = broker._calculate_annualized_return(
+            initial_capital=100000.0,
+            current_value=110000.0,
+            current_date='20260131'
+        )
+        
+        # 验证返回None（因为没有起始日期）
+        assert annualized is None
+
+
+def test_broker_calculate_annualized_return_zero_days():
+    """测试零天时年化收益率为0"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 保存配置，设置起始日期
+        config = {'account_start_date': '20260101', 'initial_capital': 100000.0}
+        storage.save_config(config)
+        
+        # 同一天计算年化收益率
+        annualized = broker._calculate_annualized_return(
+            initial_capital=100000.0,
+            current_value=110000.0,
+            current_date='20260101'
+        )
+        
+        # 验证返回0（因为天数为0）
+        assert annualized == 0.0
