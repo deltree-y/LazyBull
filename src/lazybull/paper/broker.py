@@ -426,6 +426,235 @@ class PaperBroker:
         
         return fills
     
+    def execute_instructions(
+        self,
+        instructions: List,
+        buy_prices: Dict[str, float],
+        sell_prices: Dict[str, float],
+        trade_date: str
+    ) -> List[Fill]:
+        """执行交易指令（新模式）
+        
+        按指令明确执行，不再基于权重重新计算
+        
+        Args:
+            instructions: 交易指令列表
+            buy_prices: {ts_code: price} 买入价格字典
+            sell_prices: {ts_code: price} 卖出价格字典
+            trade_date: 交易日期 YYYYMMDD
+            
+        Returns:
+            成交记录列表
+        """
+        from .models import PendingSell, PendingBuy, Order, TargetWeight
+        
+        fills = []
+        
+        # 加载可交易性信息（如果加载失败，假设所有股票可交易）
+        try:
+            tradability = self._load_tradability_info(trade_date)
+        except Exception as e:
+            logger.warning(f"加载可交易性信息失败: {e}，假设所有股票可交易")
+            tradability = {}
+        
+        # 记录执行前的持仓快照（用于统计）
+        positions_before = {}
+        for ts_code, pos in self.account.get_positions().items():
+            positions_before[ts_code] = pos.shares
+        
+        # 打印标题
+        header = ["股票代码", "方向", "指令股数", "价格类型", "参考价格", "实际股数", "成交金额", "佣金", "印花税", "滑点", "总成本", "原因"]
+        logger.info("=" * 120)
+        logger.info(f"纸面交易执行明细（指令模式）- {trade_date}")
+        logger.info("=" * 120)
+        logger.info(format_row(header, [12, 6, 10, 10, 10, 10, 12, 10, 10, 10, 10, 20], ['left'] * 12))
+        logger.info("-" * 120)
+        
+        # 1. 先执行卖出指令
+        sell_instructions = [i for i in instructions if i.action == 'sell']
+        for inst in sell_instructions:
+            ts_code = inst.ts_code
+            target_shares = inst.shares
+            price_type = inst.price_type
+            reason = inst.reason
+            
+            # 检查价格数据
+            if ts_code not in sell_prices:
+                logger.warning(f"股票 {ts_code} 无卖出价格数据，跳过卖出")
+                continue
+            
+            # 检查可交易性
+            can_sell, check_reason = self._check_can_sell(ts_code, tradability)
+            if not can_sell:
+                logger.warning(f"股票 {ts_code} 不可卖出: {check_reason}，加入延迟队列")
+                # 加入延迟卖出队列
+                pos = self.account.get_position(ts_code)
+                if pos:
+                    pending_sell = PendingSell(
+                        ts_code=ts_code,
+                        shares=pos.shares,
+                        target_weight=inst.target_weight,
+                        reason=f"{reason}（{check_reason}）",
+                        create_date=trade_date,
+                        attempts=0
+                    )
+                    self.pending_sells.append(pending_sell)
+                continue
+            
+            # 检查持仓
+            pos = self.account.get_position(ts_code)
+            if not pos:
+                logger.warning(f"股票 {ts_code} 无持仓，跳过卖出")
+                continue
+            
+            # 实际卖出股数不超过持仓
+            actual_shares = min(target_shares, pos.shares)
+            
+            # 创建订单并执行
+            order = Order(
+                ts_code=ts_code,
+                action='sell',
+                shares=actual_shares,
+                price=sell_prices[ts_code],
+                target_weight=inst.target_weight,
+                current_weight=0.0,  # 指令模式不需要权重
+                reason=reason
+            )
+            
+            fill = self._execute_single_order(order, trade_date, price_type)
+            if fill:
+                fills.append(fill)
+                # 打印执行详情
+                row = [
+                    ts_code,
+                    'sell',
+                    str(target_shares),
+                    price_type,
+                    f"{sell_prices[ts_code]:.2f}",
+                    str(actual_shares),
+                    f"{fill.amount:.2f}",
+                    f"{fill.commission:.2f}",
+                    f"{fill.stamp_tax:.2f}",
+                    f"{fill.slippage:.2f}",
+                    f"{fill.total_cost:.2f}",
+                    reason
+                ]
+                logger.info(format_row(row, [12, 6, 10, 10, 10, 10, 12, 10, 10, 10, 10, 20], ['left'] * 12))
+        
+        # 2. 再执行买入指令
+        buy_instructions = [i for i in instructions if i.action == 'buy']
+        failed_buy_targets = []  # 记录买入失败的目标
+        
+        for inst in buy_instructions:
+            ts_code = inst.ts_code
+            target_shares = inst.shares
+            price_type = inst.price_type
+            reason = inst.reason
+            
+            # 检查价格数据
+            if ts_code not in buy_prices:
+                logger.warning(f"股票 {ts_code} 无买入价格数据，加入补位计划")
+                failed_buy_targets.append(TargetWeight(
+                    ts_code=ts_code,
+                    target_weight=inst.target_weight,
+                    reason=f"{reason}（无价格数据）"
+                ))
+                continue
+            
+            # 检查可交易性
+            can_buy, check_reason = self._check_can_buy(ts_code, tradability)
+            if not can_buy:
+                logger.warning(f"股票 {ts_code} 不可买入: {check_reason}，加入补位计划")
+                failed_buy_targets.append(TargetWeight(
+                    ts_code=ts_code,
+                    target_weight=inst.target_weight,
+                    reason=f"{reason}（{check_reason}）"
+                ))
+                continue
+            
+            # 计算实际可买入股数（考虑现金约束）
+            price = buy_prices[ts_code]
+            available_cash = self.account.get_cash()
+            
+            # 预估成本
+            target_amount = target_shares * price
+            estimated_cost = self.cost_model.calculate_buy_cost(target_amount)
+            
+            # 检查现金是否足够
+            if target_amount + estimated_cost > available_cash:
+                # 现金不足，缩比买入
+                max_amount = available_cash - estimated_cost
+                if max_amount > 0:
+                    actual_shares = int(max_amount / price / 100) * 100
+                else:
+                    actual_shares = 0
+                
+                if actual_shares <= 0:
+                    logger.warning(f"股票 {ts_code} 现金不足，不足1手，加入补位计划")
+                    failed_buy_targets.append(TargetWeight(
+                        ts_code=ts_code,
+                        target_weight=inst.target_weight,
+                        reason=f"{reason}（现金不足）"
+                    ))
+                    continue
+                else:
+                    logger.warning(f"股票 {ts_code} 现金不足，缩比买入 {actual_shares} 股（指令 {target_shares} 股）")
+            else:
+                actual_shares = target_shares
+            
+            # 创建订单并执行
+            order = Order(
+                ts_code=ts_code,
+                action='buy',
+                shares=actual_shares,
+                price=price,
+                target_weight=inst.target_weight,
+                current_weight=0.0,  # 指令模式不需要权重
+                reason=reason
+            )
+            
+            fill = self._execute_single_order(order, trade_date, price_type)
+            if fill:
+                fills.append(fill)
+                # 打印执行详情
+                row = [
+                    ts_code,
+                    'buy',
+                    str(target_shares),
+                    price_type,
+                    f"{price:.2f}",
+                    str(actual_shares),
+                    f"{fill.amount:.2f}",
+                    f"{fill.commission:.2f}",
+                    f"{fill.stamp_tax:.2f}",
+                    f"{fill.slippage:.2f}",
+                    f"{fill.total_cost:.2f}",
+                    reason
+                ]
+                logger.info(format_row(row, [12, 6, 10, 10, 10, 10, 12, 10, 10, 10, 10, 20], ['left'] * 12))
+        
+        # 保存延迟卖出队列
+        if self.pending_sells:
+            self.storage.save_pending_sells(self.pending_sells)
+        
+        # 记录买入失败目标（用于后续补位）
+        if failed_buy_targets:
+            self._failed_buy_targets = failed_buy_targets
+        
+        # 统计交易类型
+        stats = self._calculate_execution_stats(fills, positions_before)
+        
+        logger.info("=" * 120)
+        logger.info(f"执行完成: {len([f for f in fills if f.action == 'buy'])} 买，"
+                   f"{len([f for f in fills if f.action == 'sell'])} 卖")
+        logger.info(f"  - 买入: 新建持仓 {stats['new_position']} 笔，加仓 {stats['add_position']} 笔")
+        logger.info(f"  - 卖出: 清仓 {stats['liquidate']} 笔，减仓 {stats['reduce_position']} 笔")
+        logger.info(f"账户现金: {self.account.get_cash():,.2f}")
+        logger.info(f"持仓数量: {len(self.account.get_positions())}")
+        logger.info("=" * 120)
+        
+        return fills
+    
     def _execute_single_order(
         self,
         order: Order,

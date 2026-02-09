@@ -1136,3 +1136,351 @@ def test_broker_calculate_annualized_return_zero_days():
         
         # 验证返回0（因为天数为0）
         assert annualized == 0.0
+
+
+# ============================================================================
+# 交易指令（TradeInstruction）相关测试
+# ============================================================================
+
+
+def test_trade_instruction_model():
+    """测试交易指令数据模型"""
+    from src.lazybull.paper import TradeInstruction
+    
+    inst = TradeInstruction(
+        ts_code='000001.SZ',
+        action='buy',
+        shares=100,
+        price_type='close',
+        reason='信号生成',
+        source_date='20260121',
+        target_weight=0.2,
+        original_signal_date='20260121'
+    )
+    
+    assert inst.ts_code == '000001.SZ'
+    assert inst.action == 'buy'
+    assert inst.shares == 100
+    assert inst.price_type == 'close'
+    assert inst.reason == '信号生成'
+    assert inst.source_date == '20260121'
+    assert inst.target_weight == 0.2
+
+
+def test_storage_save_load_instructions(temp_storage):
+    """测试交易指令的保存和读取"""
+    from src.lazybull.paper import TradeInstruction
+    
+    # 创建指令
+    instructions = [
+        TradeInstruction(
+            ts_code='000001.SZ',
+            action='buy',
+            shares=100,
+            price_type='close',
+            reason='建仓',
+            source_date='20260121',
+            target_weight=0.2
+        ),
+        TradeInstruction(
+            ts_code='000002.SZ',
+            action='sell',
+            shares=200,
+            price_type='close',
+            reason='清仓',
+            source_date='20260121',
+            target_weight=0.0
+        ),
+    ]
+    
+    # 保存指令
+    temp_storage.save_instructions('20260122', instructions)
+    
+    # 读取指令
+    loaded = temp_storage.load_instructions('20260122')
+    
+    assert loaded is not None
+    assert len(loaded) == 2
+    assert loaded[0].ts_code == '000001.SZ'
+    assert loaded[0].action == 'buy'
+    assert loaded[0].shares == 100
+    assert loaded[1].ts_code == '000002.SZ'
+    assert loaded[1].action == 'sell'
+    assert loaded[1].shares == 200
+
+
+def test_broker_execute_instructions_sell():
+    """测试执行卖出指令"""
+    from src.lazybull.paper import TradeInstruction
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=500,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260120'
+        )
+        account.update_cash(-5015.0)
+        
+        broker = PaperBroker(account, storage=storage)
+        
+        # 创建减仓指令
+        instructions = [
+            TradeInstruction(
+                ts_code='000001.SZ',
+                action='sell',
+                shares=100,
+                price_type='close',
+                reason='减仓',
+                source_date='20260121',
+                target_weight=0.16
+            )
+        ]
+        
+        buy_prices = {'000001.SZ': 12.0}
+        sell_prices = {'000001.SZ': 12.0}
+        
+        # 执行指令
+        fills = broker.execute_instructions(
+            instructions,
+            buy_prices,
+            sell_prices,
+            '20260122'
+        )
+        
+        # 验证成交
+        assert len(fills) == 1
+        assert fills[0].action == 'sell'
+        assert fills[0].shares == 100
+        assert fills[0].ts_code == '000001.SZ'
+        
+        # 验证持仓变化
+        pos = account.get_position('000001.SZ')
+        assert pos.shares == 400  # 500 - 100
+
+
+def test_broker_execute_instructions_buy():
+    """测试执行买入指令"""
+    from src.lazybull.paper import TradeInstruction
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 创建买入指令
+        instructions = [
+            TradeInstruction(
+                ts_code='000001.SZ',
+                action='buy',
+                shares=100,
+                price_type='close',
+                reason='建仓',
+                source_date='20260121',
+                target_weight=0.2
+            )
+        ]
+        
+        buy_prices = {'000001.SZ': 10.0}
+        sell_prices = {}
+        
+        # 执行指令
+        fills = broker.execute_instructions(
+            instructions,
+            buy_prices,
+            sell_prices,
+            '20260122'
+        )
+        
+        # 验证成交
+        assert len(fills) == 1
+        assert fills[0].action == 'buy'
+        assert fills[0].shares == 100
+        assert fills[0].ts_code == '000001.SZ'
+        
+        # 验证持仓变化
+        pos = account.get_position('000001.SZ')
+        assert pos.shares == 100
+
+
+def test_broker_execute_instructions_insufficient_cash():
+    """测试现金不足时的缩比买入"""
+    from src.lazybull.paper import TradeInstruction
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=2000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 创建超过现金的买入指令
+        instructions = [
+            TradeInstruction(
+                ts_code='000001.SZ',
+                action='buy',
+                shares=300,
+                price_type='close',
+                reason='建仓',
+                source_date='20260121',
+                target_weight=0.6
+            )
+        ]
+        
+        buy_prices = {'000001.SZ': 10.0}
+        sell_prices = {}
+        
+        # 执行指令
+        fills = broker.execute_instructions(
+            instructions,
+            buy_prices,
+            sell_prices,
+            '20260122'
+        )
+        
+        # 验证缩比买入
+        if fills:
+            assert fills[0].shares < 300
+            assert fills[0].shares % 100 == 0
+            assert fills[0].shares > 0
+
+
+def test_broker_execute_instructions_insufficient_cash_less_than_one_lot():
+    """测试现金不足1手时进入补位队列"""
+    from src.lazybull.paper import TradeInstruction
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=500.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 创建买入指令，但现金不足1手
+        instructions = [
+            TradeInstruction(
+                ts_code='000001.SZ',
+                action='buy',
+                shares=100,
+                price_type='close',
+                reason='建仓',
+                source_date='20260121',
+                target_weight=0.2
+            )
+        ]
+        
+        buy_prices = {'000001.SZ': 10.0}
+        sell_prices = {}
+        
+        # 执行指令
+        fills = broker.execute_instructions(
+            instructions,
+            buy_prices,
+            sell_prices,
+            '20260122'
+        )
+        
+        # 验证没有成交
+        assert len(fills) == 0
+        
+        # 验证进入补位队列
+        assert len(broker._failed_buy_targets) > 0
+        assert broker._failed_buy_targets[0].ts_code == '000001.SZ'
+
+
+def test_broker_execute_instructions_clearance_full_shares():
+    """测试清仓指令必须卖出全部股数"""
+    from src.lazybull.paper import TradeInstruction
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=500,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260120'
+        )
+        account.update_cash(-5015.0)
+        
+        broker = PaperBroker(account, storage=storage)
+        
+        # 创建清仓指令
+        instructions = [
+            TradeInstruction(
+                ts_code='000001.SZ',
+                action='sell',
+                shares=500,
+                price_type='close',
+                reason='退出持仓',
+                source_date='20260121',
+                target_weight=0.0
+            )
+        ]
+        
+        buy_prices = {'000001.SZ': 12.0}
+        sell_prices = {'000001.SZ': 12.0}
+        
+        # 执行指令
+        fills = broker.execute_instructions(
+            instructions,
+            buy_prices,
+            sell_prices,
+            '20260122'
+        )
+        
+        # 验证清仓成功
+        assert len(fills) == 1
+        assert fills[0].shares == 500
+        
+        # 验证持仓已清空
+        pos = account.get_position('000001.SZ')
+        assert pos is None
+
+
+def test_instruction_priority_over_targets():
+    """测试指令优先于目标权重执行"""
+    from src.lazybull.paper import TradeInstruction
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        
+        # 保存指令
+        instructions = [
+            TradeInstruction(
+                ts_code='000001.SZ',
+                action='buy',
+                shares=100,
+                price_type='close',
+                reason='指令买入',
+                source_date='20260121',
+                target_weight=0.2
+            )
+        ]
+        storage.save_instructions('20260122', instructions)
+        
+        # 同时保存目标权重（旧模式）
+        targets = [
+            TargetWeight(
+                ts_code='000002.SZ',
+                target_weight=0.3,
+                reason='信号生成'
+            )
+        ]
+        storage.save_pending_weights('20260122', targets)
+        
+        # 读取时应该都能读到
+        loaded_instructions = storage.load_instructions('20260122')
+        loaded_targets = storage.load_pending_weights('20260122')
+        
+        # 两者都应该存在
+        assert loaded_instructions is not None
+        assert loaded_targets is not None
+        
+        # 但在 runner 中应该优先使用 instructions
+        assert len(loaded_instructions) == 1
+        assert loaded_instructions[0].ts_code == '000001.SZ'

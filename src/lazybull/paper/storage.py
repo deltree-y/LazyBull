@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from .models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight
+from .models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight, TradeInstruction
 
 
 class PaperStorage:
@@ -31,11 +31,13 @@ class PaperStorage:
         self.runs_path = self.root_path / "runs"
         self.pending_sells_path = self.root_path / "pending_sells"
         self.pending_buys_path = self.root_path / "pending_buys"
+        self.instructions_path = self.root_path / "instructions"
         self.verbose = verbose
         
         # 确保目录存在
         for path in [self.pending_path, self.state_path, self.trades_path, 
-                     self.nav_path, self.runs_path, self.pending_sells_path, self.pending_buys_path]:
+                     self.nav_path, self.runs_path, self.pending_sells_path, self.pending_buys_path,
+                     self.instructions_path]:
             path.mkdir(parents=True, exist_ok=True)
         if verbose:
             logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
@@ -513,3 +515,62 @@ class PaperStorage:
             state = json.load(f)
         
         return state
+    
+    def save_instructions(self, trade_date: str, instructions: List[TradeInstruction]) -> None:
+        """保存交易指令列表
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD（T1执行日期）
+            instructions: 交易指令列表
+        """
+        file_path = self.instructions_path / f"{trade_date}.parquet"
+        
+        # 转换为DataFrame
+        data = []
+        for inst in instructions:
+            data.append({
+                'ts_code': inst.ts_code,
+                'action': inst.action,
+                'shares': inst.shares,
+                'price_type': inst.price_type,
+                'reason': inst.reason,
+                'source_date': inst.source_date,
+                'target_weight': inst.target_weight,
+                'original_signal_date': inst.original_signal_date
+            })
+        
+        df = pd.DataFrame(data)
+        df.to_parquet(file_path, index=False)
+        logger.info(f"保存交易指令: {file_path} ({len(instructions)} 条)")
+    
+    def load_instructions(self, trade_date: str) -> Optional[List[TradeInstruction]]:
+        """读取交易指令列表
+        
+        Args:
+            trade_date: 交易日期 YYYYMMDD（T1执行日期）
+            
+        Returns:
+            交易指令列表，不存在返回None
+        """
+        file_path = self.instructions_path / f"{trade_date}.parquet"
+        
+        if not file_path.exists():
+            logger.info(f"交易指令文件不存在: {file_path}")
+            return None
+        
+        df = pd.read_parquet(file_path)
+        instructions = []
+        for _, row in df.iterrows():
+            instructions.append(TradeInstruction(
+                ts_code=row['ts_code'],
+                action=row['action'],
+                shares=int(row['shares']),
+                price_type=row['price_type'],
+                reason=row['reason'],
+                source_date=row['source_date'],
+                target_weight=row.get('target_weight', 0.0),
+                original_signal_date=row.get('original_signal_date', '')
+            ))
+        
+        logger.info(f"读取交易指令: {file_path} ({len(instructions)} 条)")
+        return instructions
