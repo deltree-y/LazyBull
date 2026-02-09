@@ -58,7 +58,7 @@ class PaperTradingRunner:
         
         # 初始化账户和经纪
         self.account = PaperAccount(initial_capital, self.paper_storage, verbose=verbose)
-        self.broker = PaperBroker(self.account, storage=self.paper_storage, verbose=verbose)
+        self.broker = PaperBroker(self.account, storage=self.paper_storage, verbose=verbose, data_storage=self.storage)
         
         # 初始化信号生成器
         self.signal = signal 

@@ -223,6 +223,8 @@ def _check_stop_loss(
     Returns:
         止损动作列表 [{ts_code, shares, reason}, ...]
     """
+    from src.lazybull.common.suspend_calendar import SuspendCalendar
+    
     actions = []
     
     # 获取当前持仓
@@ -240,29 +242,46 @@ def _check_stop_loss(
         logger.warning(f"无法加载 {trade_date} 的价格数据，跳过止损检查")
         return actions
     
-    # 构建价格字典、跌停信息和停牌信息
+    # 初始化停牌日历（使用与 runner 相同的 storage）
+    suspend_calendar = SuspendCalendar(runner.storage)
+    
+    # 构建价格字典和跌停信息
     prices = {}
     limit_down_info = {}
-    suspended_info = {}
     for _, row in daily_data.iterrows():
         ts_code = row['ts_code']
         prices[ts_code] = row.get('close', 0.0)
         limit_down_info[ts_code] = row.get('is_limit_down', 0) == 1
-        suspended_info[ts_code] = row.get('is_suspended', 0) == 1
     
     # 检查每个持仓
     for ts_code, pos in positions.items():
-        if ts_code not in prices:
-            logger.warning(f"股票 {ts_code} 无价格数据，跳过止损检查")
-            continue
+        # 先检查停牌（基于 raw/suspend 数据）
+        try:
+            is_suspended = suspend_calendar.is_suspended(ts_code, trade_date)
+            if is_suspended:
+                logger.info(f"股票 {ts_code} 停牌，跳过止损检查")
+                continue
+        except FileNotFoundError as e:
+            # suspend 数据文件缺失，记录错误并跳过所有止损检查
+            logger.error(f"停牌数据文件缺失，无法进行止损检查：{e}")
+            return actions
+        except Exception as e:
+            # 其他加载错误，记录错误并跳过所有止损检查
+            logger.error(f"加载停牌数据失败，无法进行止损检查：{e}")
+            return actions
         
-        # 检查是否停牌
-        is_suspended = suspended_info.get(ts_code, False)
-        if is_suspended:
-            logger.info(f"股票 {ts_code} 停牌，跳过止损检查")
+        # 检查是否有行情数据
+        if ts_code not in prices:
+            logger.warning(f"股票 {ts_code} 无行情数据，跳过止损检查")
             continue
         
         current_price = prices[ts_code]
+        
+        # 检查价格是否有效
+        if current_price is None or current_price <= 0:
+            logger.warning(f"股票 {ts_code} 价格无效（{current_price}），跳过止损检查")
+            continue
+        
         is_limit_down = limit_down_info.get(ts_code, False)
         
         # 检查是否触发止损
