@@ -100,8 +100,32 @@ class PaperBroker:
             if target_weight < current_weight:
                 # 需要卖出
                 pos = self.account.get_position(ts_code)
+                
+                # 检查是否有卖出价格数据
                 if ts_code not in sell_prices:
-                    logger.warning(f"股票 {ts_code} 无卖出价格数据，跳过卖出")
+                    # 无卖出价格数据，判断原因（停牌优先，否则无价格数据）
+                    reason_suffix = ""
+                    if ts_code in tradability and tradability[ts_code].get('is_suspended', 0) == 1:
+                        reason_suffix = "（停牌）"
+                        logger.warning(f"股票 {ts_code} 停牌，无法卖出，加入延迟卖出队列")
+                    else:
+                        reason_suffix = "（无价格数据）"
+                        logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
+                    
+                    # 加入延迟卖出队列
+                    # 注意：由于无价格数据，无法计算精确的卖出股数
+                    # 使用当前持仓全部股数记录，重试时会根据价格重新计算
+                    from .models import PendingSell
+                    sell_reason = "退出持仓" if target_weight == 0 else "减仓"
+                    pending_sell = PendingSell(
+                        ts_code=ts_code,
+                        shares=pos.shares,  # 记录当前持仓股数，重试时重新计算
+                        target_weight=target_weight,
+                        reason=f"{sell_reason}{reason_suffix}",
+                        create_date=trade_date,
+                        attempts=0
+                    )
+                    self.pending_sells.append(pending_sell)
                     continue
                 
                 # 计算需要卖出的股数
@@ -480,7 +504,31 @@ class PaperBroker:
             
             # 检查价格数据
             if ts_code not in sell_prices:
-                logger.warning(f"股票 {ts_code} 无卖出价格数据，跳过卖出")
+                # 无卖出价格数据，判断原因（停牌优先，否则无价格数据）
+                reason_suffix = ""
+                if ts_code in tradability and tradability[ts_code].get('is_suspended', 0) == 1:
+                    reason_suffix = "（停牌）"
+                    logger.warning(f"股票 {ts_code} 停牌，无法卖出，加入延迟卖出队列")
+                else:
+                    reason_suffix = "（无价格数据）"
+                    logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
+                
+                # 加入延迟卖出队列
+                # 注意：使用当前持仓股数而非指令股数，因为：
+                # 1) 无价格时无法验证指令股数是否合理
+                # 2) retry 时会重新计算可卖股数（取 min(pending.shares, pos.shares)）
+                # 3) 确保能够完成卖出意图
+                pos = self.account.get_position(ts_code)
+                if pos:
+                    pending_sell = PendingSell(
+                        ts_code=ts_code,
+                        shares=pos.shares,  # 记录当前持仓股数，重试时重新计算
+                        target_weight=inst.target_weight,
+                        reason=f"{reason}{reason_suffix}",
+                        create_date=trade_date,
+                        attempts=0
+                    )
+                    self.pending_sells.append(pending_sell)
                 continue
             
             # 检查可交易性
