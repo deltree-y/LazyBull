@@ -927,7 +927,7 @@ class PaperBroker:
         total_profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
         
         logger.info("-" * 140)
-        logger.info(f"{'合计':<18} {df['持仓股数'].sum():<8} {'':<10} {'':<10} "
+        logger.info(f"{'合计(' + str(len(df)) + ')':<18} {df['持仓股数'].sum():<8} {'':<10} {'':<10} "
                    f"{'':<12} {'':<8} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<12.2f}")
         logger.info("=" * 140)
         logger.info(f"账户现金: {self.account.get_cash():,.2f}")
@@ -935,12 +935,7 @@ class PaperBroker:
         
         total_assets = self.account.get_cash() + total_value
         logger.info(f"总资产: {total_assets:,.2f}")
-        
-        # 新增：总盈亏百分比
-        total_profit_pct = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
-        logger.info(f"总盈亏百分比: {total_profit_pct:.2f}%")
-        
-        # 新增：年化收益率
+
         # 从配置读取 initial_capital
         config = self.storage.load_config()
         if config and 'initial_capital' in config:
@@ -948,7 +943,15 @@ class PaperBroker:
         else:
             # 如果配置不存在，使用账户的 initial_capital
             initial_capital = self.account.initial_capital
+        # 本轮盈亏
+        round_profit =  (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+        logger.info(f"本轮盈亏: {round_profit:,.2f}% ({total_cost:,.2f} -> {total_profit+total_cost:,.2f})")
+
+        # 新增：总盈亏百分比
+        total_profit_pct = ((total_assets - initial_capital) / initial_capital * 100) if initial_capital > 0 else 0.0
+        logger.info(f"  总盈亏: {total_profit_pct:.2f}% ({initial_capital:,.2f} -> {total_assets:,.2f})")
         
+        # 新增：年化收益率
         # 计算年化收益率
         annualized_return = self._calculate_annualized_return(
             initial_capital, 

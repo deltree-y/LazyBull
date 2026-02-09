@@ -493,7 +493,7 @@ def _execute_t1_if_pending(
                     'reason': fill.reason
                 })
         
-    # 无论哪种模式, 均要获取买入失败的目标
+    # 无论哪种模式,获取买入失败的目标
     failed_buy_targets = runner.broker.get_failed_buy_targets()
 
     # 处理买入失败：生成补位计划
@@ -900,7 +900,7 @@ def build_stock_names_dict(loader: DataLoader) -> Dict[str, str]:
         if pd.notna(row.get('ts_code')) and pd.notna(row.get('name')) and row['name']:
             stock_names[row['ts_code']] = row['name']
     
-    logger.info(f"成功加载 {len(stock_names)} 只股票的名称信息")
+    #logger.info(f"成功加载 {len(stock_names)} 只股票的名称信息")
     return stock_names
 
 

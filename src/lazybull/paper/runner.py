@@ -216,7 +216,8 @@ class PaperTradingRunner:
         current_positions = self.account.get_positions()
         
         # 使用账户总资金计算
-        total_capital = self.account.initial_capital
+        #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
+        total_capital = self.account.get_total_value(current_prices) * 1.00  # 乘以系数以留出现金空间，避免过度买入
         
         # 合并所有股票（目标+持仓）
         all_stocks = set(target_weights.keys()) | set(current_positions.keys())
@@ -338,7 +339,7 @@ class PaperTradingRunner:
         # 6. 生成交易指令
         logger.info("步骤3: 生成交易指令")
         # 获取T0日的收盘价（用于计算指令股数）
-        daily_data = self.loader.load_clean_daily(corrected_date,corrected_date)
+        daily_data = self.loader.load_clean_daily(start_date=corrected_date, end_date=corrected_date)
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {corrected_date} 的价格数据")
             return
@@ -627,16 +628,19 @@ class PaperTradingRunner:
                 updated_pending_buys.append(pending_buy)
                 continue
             
+            #算算手头还有多少现金
+            total_cash = self.account.get_cash() * 0.95  # 留出一定现金空间，避免过度买入导致后续无法补位
             # 计算买入金额
-            target_value = total_value * pending_buy.target_weight
+            target_value = total_cash * pending_buy.target_weight
+            logger.warning(f"DEBUG: 补位 {ts_code} 目标金额估算 - {target_value:.2f} 元")
             
             # 预估成本
             estimated_cost = self.broker.cost_model.calculate_buy_cost(target_value)
-            available_cash = self.account.get_cash()
+            available_cash = total_cash / len(pending_buys)  # 简单平均分配现金到每个补位目标
             
             # 检查现金
             if target_value + estimated_cost > available_cash:
-                target_value = available_cash - estimated_cost
+                target_value = available_cash - estimated_cost  # 当前目标的所有现金都用来购买
                 if target_value <= 0:
                     logger.warning(f"补位 {ts_code} 现金不足，记录失败并继续尝试")
                     pending_buy.attempts += 1
