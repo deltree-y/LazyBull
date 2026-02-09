@@ -160,3 +160,19 @@ class PendingBuy:
     attempts: int = 0  # 尝试次数
     last_attempt_date: str = ""  # 最后一次尝试日期 YYYYMMDD（用于避免同日重复推进）
     original_signal_date: str = ""  # 原始信号日期（T0日期）
+
+
+@dataclass
+class TradeInstruction:
+    """交易指令
+    
+    T0 生成的明确交易指令，T1 按指令执行，不再基于权重重新计算
+    """
+    ts_code: str  # 股票代码
+    action: str  # 操作类型：buy/sell
+    shares: int  # 交易股数（已整手取整）
+    price_type: str  # 价格类型：open/close（买入或卖出价格）
+    reason: str  # 交易原因
+    source_date: str  # 源日期（T0日期）YYYYMMDD
+    target_weight: float = 0.0  # 目标权重（可选，用于追踪）
+    original_signal_date: str = ""  # 原始信号日期（可选，用于补位场景）

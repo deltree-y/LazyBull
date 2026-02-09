@@ -19,7 +19,7 @@ from ..signals.ml_signal import MLSignal
 from ..universe.base import BasicUniverse
 from .account import PaperAccount
 from .broker import PaperBroker
-from .models import NAVRecord, TargetWeight
+from .models import NAVRecord, TargetWeight, TradeInstruction
 from .storage import PaperStorage
 
 # 常量定义
@@ -187,6 +187,89 @@ class PaperTradingRunner:
             logger.error(f"检查调仓日失败: {e}，跳过检查")
             return True
     
+    def _generate_instructions(
+        self,
+        targets: List[TargetWeight],
+        buy_price_type: str,
+        sell_price_type: str,
+        current_prices: Dict[str, float],
+        source_date: str
+    ) -> List[TradeInstruction]:
+        """从目标权重生成明确的交易指令
+        
+        Args:
+            targets: 目标权重列表
+            buy_price_type: 买入价格类型 open/close
+            sell_price_type: 卖出价格类型 open/close
+            current_prices: 当前价格字典
+            source_date: 源日期（T0日期）
+            
+        Returns:
+            交易指令列表
+        """
+        instructions = []
+        
+        # 目标权重字典
+        target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
+        
+        # 当前持仓
+        current_positions = self.account.get_positions()
+        
+        # 使用账户总资金计算
+        total_capital = self.account.initial_capital
+        
+        # 合并所有股票（目标+持仓）
+        all_stocks = set(target_weights.keys()) | set(current_positions.keys())
+        
+        for ts_code in all_stocks:
+            target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
+            pos = current_positions.get(ts_code)
+            current_shares = pos.shares if pos else 0
+            
+            # 获取价格
+            price = current_prices.get(ts_code, 0.0)
+            if price <= 0:
+                logger.warning(f"股票 {ts_code} 无价格数据，跳过生成指令")
+                continue
+            
+            # 计算目标股数
+            target_value = total_capital * target_weight
+            target_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            
+            # 判断操作类型
+            if target_shares > current_shares:
+                # 买入或加仓
+                shares = (target_shares - current_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
+                if shares > 0:
+                    instructions.append(TradeInstruction(
+                        ts_code=ts_code,
+                        action='buy',
+                        shares=shares,
+                        price_type=buy_price_type,
+                        reason=reason,
+                        source_date=source_date,
+                        target_weight=target_weight
+                    ))
+            elif target_shares < current_shares:
+                # 卖出或减仓
+                shares = (current_shares - target_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
+                # 如果是清仓（目标权重为0），必须卖出全部
+                if target_weight == 0:
+                    shares = current_shares
+                if shares > 0:
+                    instructions.append(TradeInstruction(
+                        ts_code=ts_code,
+                        action='sell',
+                        shares=shares,
+                        price_type=sell_price_type,
+                        reason=reason if target_weight > 0 else "退出持仓",
+                        source_date=source_date,
+                        target_weight=target_weight
+                    ))
+        
+        logger.info(f"生成 {len(instructions)} 条交易指令")
+        return instructions
+    
     def run_t0(
         self,
         trade_date: str,
@@ -248,8 +331,33 @@ class PaperTradingRunner:
             logger.warning("未生成任何目标权重")
             return
         
-        # 6. 持久化待执行目标
-        logger.info("步骤3: 保存待执行目标")
+        # 6. 生成交易指令
+        logger.info("步骤3: 生成交易指令")
+        # 获取T0日的收盘价（用于计算指令股数）
+        daily_data = self.loader.load_clean_daily(corrected_date)
+        if daily_data is None or daily_data.empty:
+            logger.error(f"无法加载 {corrected_date} 的价格数据")
+            return
+        
+        current_prices = {}
+        for _, row in daily_data.iterrows():
+            current_prices[row['ts_code']] = row.get('close', 0.0)
+        
+        # 生成指令（sell_price_type 固定为 close）
+        instructions = self._generate_instructions(
+            targets=targets,
+            buy_price_type=buy_price_type,
+            sell_price_type='close',
+            current_prices=current_prices,
+            source_date=corrected_date
+        )
+        
+        if not instructions:
+            logger.warning("未生成任何交易指令")
+            return
+        
+        # 7. 持久化指令和待执行目标
+        logger.info("步骤4: 保存交易指令和待执行目标")
         # T0生成的是T1执行的目标，所以需要获取T1日期
         t1_date = self._get_next_trade_date(corrected_date)
         if not t1_date:
@@ -261,7 +369,10 @@ class PaperTradingRunner:
         if existing_meta and existing_meta.get('source') == 'replenishment':
             logger.warning(f"注意: {t1_date} 已存在补位目标（第 {existing_meta.get('attempt_count', 0)} 次尝试），将被本次 T0 信号覆盖")
         
-        # 保存 T0 生成的目标（不带元数据，或带 source=t0_signal）
+        # 保存交易指令（新模式）
+        self.paper_storage.save_instructions(t1_date, instructions)
+        
+        # 保存 T0 生成的目标（旧模式兼容，但现在优先使用指令）
         t0_metadata = {
             'source': 't0_signal',
             'attempt_count': 0,
@@ -270,14 +381,14 @@ class PaperTradingRunner:
         }
         self.paper_storage.save_pending_weights(t1_date, targets, metadata=t0_metadata)
         
-        # 7. 更新调仓状态
+        # 8. 更新调仓状态
         rebalance_state = {
             'last_rebalance_date': corrected_date,
             'rebalance_freq': rebalance_freq
         }
         self.paper_storage.save_rebalance_state(rebalance_state)
         
-        # 8. 保存执行记录
+        # 9. 保存执行记录
         run_record = {
             'trade_date': corrected_date,
             't1_date': t1_date,
@@ -287,12 +398,13 @@ class PaperTradingRunner:
             'model_version': model_version,
             'rebalance_freq': rebalance_freq,
             'targets_count': len(targets),
+            'instructions_count': len(instructions),
             'timestamp': pd.Timestamp.now().isoformat()
         }
         self.paper_storage.save_run_record("t0", corrected_date, run_record)
         
         logger.info("=" * 80)
-        logger.info(f"T0工作流完成 - 已生成 {len(targets)} 个目标权重，待T1执行")
+        logger.info(f"T0工作流完成 - 已生成 {len(targets)} 个目标权重和 {len(instructions)} 条交易指令")
         logger.info(f"下一交易日: {t1_date}")
         logger.info("=" * 80)
     
@@ -323,24 +435,29 @@ class PaperTradingRunner:
         logger.info(f"开始T1工作流 - {corrected_date}")
         logger.info("=" * 80)
         
-        # 3. 读取待执行目标（全量调仓）
-        logger.info("步骤1: 读取待执行目标")
+        # 3. 读取交易指令（优先）
+        logger.info("步骤1: 读取交易指令")
+        instructions = self.paper_storage.load_instructions(corrected_date)
+        
+        # 4. 读取待执行目标（全量调仓，兼容旧模式）
         targets = self.paper_storage.load_pending_weights(corrected_date)
         
-        # 4. 读取补位买入计划（增量买入）
+        # 5. 读取补位买入计划（增量买入）
         pending_buys = self.paper_storage.load_pending_buys()
         
         # 检查是否有任何待执行任务
-        if not targets and not pending_buys:
-            logger.warning(f"未找到 {corrected_date} 的待执行目标或补位买入计划")
+        if not instructions and not targets and not pending_buys:
+            logger.warning(f"未找到 {corrected_date} 的交易指令、待执行目标或补位买入计划")
             return
         
+        if instructions:
+            logger.info(f"读取到 {len(instructions)} 条交易指令（新模式）")
         if targets:
-            logger.info(f"读取到 {len(targets)} 个全量调仓目标")
+            logger.info(f"读取到 {len(targets)} 个全量调仓目标（兼容模式）")
         if pending_buys:
             logger.info(f"读取到 {len(pending_buys)} 个补位买入计划")
         
-        # 5. 加载价格数据
+        # 6. 加载价格数据
         logger.info("步骤2: 加载价格数据")
         buy_prices, sell_prices = self._load_prices(corrected_date, buy_price_type, sell_price_type)
         
@@ -351,9 +468,20 @@ class PaperTradingRunner:
         fills_count = 0
         orders_count = 0
         
-        # 6. 执行全量调仓（如果有pending_weights）
-        if targets:
-            logger.info("步骤3a: 生成全量调仓订单")
+        # 7. 执行交易指令（优先，新模式）
+        if instructions:
+            logger.info("步骤3a: 执行交易指令")
+            fills = self.broker.execute_instructions(
+                instructions,
+                buy_prices,
+                sell_prices,
+                corrected_date
+            )
+            fills_count += len(fills) if fills else 0
+            orders_count += len(instructions)
+        # 8. 执行全量调仓（如果没有指令，使用旧模式）
+        elif targets:
+            logger.info("步骤3a: 生成全量调仓订单（兼容模式）")
             orders = self.broker.generate_orders(targets, buy_prices, sell_prices, corrected_date)
             orders_count += len(orders) if orders else 0
             
