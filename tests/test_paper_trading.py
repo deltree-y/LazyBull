@@ -546,7 +546,7 @@ def test_broker_get_positions_detail(sample_account, sample_prices):
         df = broker.get_positions_detail(sample_prices, current_date='20260122')
         
         assert len(df) == 1
-        assert df.iloc[0]['股票代码'] == '000001.SZ'
+        assert df.iloc[0]['股票代码'] == '000001.SZ(na)'  # 新版本追加股票名称，未提供时显示(na)
         assert df.iloc[0]['持仓股数'] == 1000
         assert df.iloc[0]['持有天数'] == 7
         assert df.iloc[0]['状态'] == '持有'
