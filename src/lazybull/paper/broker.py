@@ -450,8 +450,12 @@ class PaperBroker:
         
         fills = []
         
-        # 加载可交易性信息
-        tradability = self._load_tradability_info(trade_date)
+        # 加载可交易性信息（如果加载失败，假设所有股票可交易）
+        try:
+            tradability = self._load_tradability_info(trade_date)
+        except Exception as e:
+            logger.warning(f"加载可交易性信息失败: {e}，假设所有股票可交易")
+            tradability = {}
         
         # 记录执行前的持仓快照（用于统计）
         positions_before = {}
