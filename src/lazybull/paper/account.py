@@ -36,16 +36,26 @@ class PaperAccount:
         
         if self.state is None:
             # 首次运行，创建新账户
+            import datetime
+            today = datetime.datetime.now().strftime('%Y%m%d')
             self.state = AccountState(
                 cash=initial_capital,
                 positions={},
                 last_update="",
+                initial_capital=initial_capital,
+                start_date=today,
             )
             if verbose:
-                logger.info(f"创建新纸面账户，初始资金: {initial_capital:,.2f}")
+                logger.info(f"创建新纸面账户，初始资金: {initial_capital:,.2f}，起始日期: {today}")
             # 首次创建账户后立即保存状态，确保后续可以加载
             self.save_state()
         else:
+            # 兼容旧账户状态：如果没有 initial_capital 和 start_date，使用默认值
+            if not hasattr(self.state, 'initial_capital') or self.state.initial_capital == 0.0:
+                self.state.initial_capital = initial_capital
+            if not hasattr(self.state, 'start_date') or self.state.start_date == "":
+                # 旧账户没有起始日期，使用 last_update 作为近似值
+                self.state.start_date = self.state.last_update if self.state.last_update else ""
             if verbose:
                 logger.info(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")
     

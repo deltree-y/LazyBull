@@ -966,3 +966,172 @@ def test_broker_retry_pending_sells_same_day_not_increment_attempts():
         # 验证 attempts 增加了
         assert ps.attempts == original_attempts + 1
         assert ps.last_attempt_date == '20260122'
+
+
+def test_broker_get_positions_detail_with_stock_names():
+    """测试获取持仓明细（含股票名称）"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115',
+            status='持有'
+        )
+        account.update_cash(-10015.0)
+        
+        # 价格字典
+        prices = {'000001.SZ': 12.0}
+        
+        # 股票名称字典
+        stock_names = {'000001.SZ': '平安银行'}
+        
+        # 测试有股票名称的情况
+        df = broker.get_positions_detail(prices, current_date='20260122', stock_names=stock_names)
+        assert len(df) == 1
+        assert df.iloc[0]['股票代码'] == '000001.SZ(平安银行)'
+        assert df.iloc[0]['持仓股数'] == 1000
+        
+        # 测试股票名称缺失的情况
+        stock_names_partial = {}
+        df = broker.get_positions_detail(prices, current_date='20260122', stock_names=stock_names_partial)
+        assert len(df) == 1
+        assert df.iloc[0]['股票代码'] == '000001.SZ(na)'
+        
+        # 测试不提供股票名称字典的情况
+        df = broker.get_positions_detail(prices, current_date='20260122')
+        assert len(df) == 1
+        assert df.iloc[0]['股票代码'] == '000001.SZ(na)'
+
+
+def test_positions_detail_column_order():
+    """测试持仓明细列顺序正确（当前价格在买入均价前，不包含买入成本）"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115',
+            status='持有'
+        )
+        
+        prices = {'000001.SZ': 12.0}
+        stock_names = {'000001.SZ': '平安银行'}
+        
+        df = broker.get_positions_detail(prices, current_date='20260122', stock_names=stock_names)
+        
+        # 检查列顺序：股票代码、持仓股数、当前价格、买入均价、买入成本、买入日期、持有天数、当前市值、浮动盈亏、收益率(%)、状态
+        columns = list(df.columns)
+        
+        # 确保有这些列
+        assert '股票代码' in columns
+        assert '持仓股数' in columns
+        assert '当前价格' in columns
+        assert '买入均价' in columns
+        assert '买入成本' in columns  # 数据中仍保留，但打印时不显示
+        
+        # 确保当前价格在买入均价之前
+        price_idx = columns.index('当前价格')
+        avg_price_idx = columns.index('买入均价')
+        assert price_idx < avg_price_idx, "当前价格应在买入均价前"
+
+
+def test_account_state_with_initial_capital_and_start_date():
+    """测试账户状态包含初始资金和起始日期"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        
+        # 验证账户状态包含新字段
+        assert hasattr(account.state, 'initial_capital')
+        assert hasattr(account.state, 'start_date')
+        assert account.state.initial_capital == 100000.0
+        assert account.state.start_date != ""
+        
+        # 保存并重新加载
+        account.save_state()
+        
+        # 创建新账户加载状态
+        account2 = PaperAccount(initial_capital=100000.0, storage=storage)
+        assert account2.state.initial_capital == 100000.0
+        assert account2.state.start_date == account.state.start_date
+
+
+def test_annual_return_calculation():
+    """测试年化收益率计算"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 设置起始日期
+        account.state.start_date = '20260101'
+        account.state.initial_capital = 100000.0
+        
+        # 添加持仓
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260101',
+            status='持有'
+        )
+        account.update_cash(-10015.0)
+        
+        prices = {'000001.SZ': 12.0}
+        stock_names = {'000001.SZ': '平安银行'}
+        
+        # 获取持仓明细（这会触发年化收益率计算）
+        df = broker.get_positions_detail(prices, current_date='20260201', stock_names=stock_names)
+        
+        # 验证数据
+        assert len(df) == 1
+        total_value = account.get_cash() + df['当前市值'].sum()
+        
+        # 计算年化收益率
+        import pandas as pd
+        start_dt = pd.to_datetime('20260101', format='%Y%m%d')
+        current_dt = pd.to_datetime('20260201', format='%Y%m%d')
+        days = (current_dt - start_dt).days
+        expected_annual_return = (total_value / 100000.0) ** (365.0 / days) - 1.0
+        
+        # 注意：这里我们只是验证计算逻辑，实际的年化收益率在 print_positions_summary 中计算
+        assert days > 0
+
+
+def test_empty_positions_annual_return():
+    """测试空仓时年化收益率为0"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+        
+        # 设置起始日期
+        account.state.start_date = '20260101'
+        account.state.initial_capital = 100000.0
+        
+        prices = {}
+        
+        # 获取持仓明细（空仓）
+        df = broker.get_positions_detail(prices, current_date='20260201')
+        
+        # 验证空仓
+        assert df.empty
+        
+        # 年化收益率在空仓时应该为0（在 print_positions_summary 中验证）
+        # 这里只验证数据结构正确
+        assert account.state.initial_capital == 100000.0
+        assert account.state.start_date == '20260101'

@@ -76,6 +76,8 @@ class AccountState:
     cash: float  # 现金
     positions: dict = field(default_factory=dict)  # {ts_code: Position}
     last_update: str = ""  # 最后更新日期 YYYYMMDD
+    initial_capital: float = 0.0  # 初始资金（用于计算年化收益率）
+    start_date: str = ""  # 账户起始日期 YYYYMMDD（用于计算年化收益率）
     
     def get_position_value(self, prices: dict) -> float:
         """计算持仓市值

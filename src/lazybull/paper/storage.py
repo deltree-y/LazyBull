@@ -145,6 +145,8 @@ class PaperStorage:
         state_dict = {
             'cash': state.cash,
             'last_update': state.last_update,
+            'initial_capital': state.initial_capital,
+            'start_date': state.start_date,
             'positions': {}
         }
         
@@ -191,7 +193,9 @@ class PaperStorage:
         state = AccountState(
             cash=state_dict['cash'],
             positions=positions,
-            last_update=state_dict.get('last_update', '')
+            last_update=state_dict.get('last_update', ''),
+            initial_capital=state_dict.get('initial_capital', 0.0),
+            start_date=state_dict.get('start_date', '')
         )
         if self.verbose:
             logger.info(f"读取账户状态: {file_path}")
