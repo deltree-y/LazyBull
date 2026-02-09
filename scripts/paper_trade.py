@@ -473,10 +473,7 @@ def _execute_t1_if_pending(
         # 生成订单
         orders = runner.broker.generate_orders(targets, buy_prices, sell_prices, trade_date)
         orders_count += len(orders) if orders else 0
-        
-        # 获取买入失败的目标
-        failed_buy_targets = runner.broker.get_failed_buy_targets()
-        
+       
         if orders:
             # 执行订单
             fills = runner.broker.execute_orders(
@@ -496,9 +493,12 @@ def _execute_t1_if_pending(
                     'reason': fill.reason
                 })
         
-        # 处理买入失败：生成补位计划
-        if failed_buy_targets:
-            _handle_failed_buys(runner, trade_date, config, failed_buy_targets, attempt_count=0)
+    # 无论哪种模式, 均要获取买入失败的目标
+    failed_buy_targets = runner.broker.get_failed_buy_targets()
+
+    # 处理买入失败：生成补位计划
+    if failed_buy_targets:
+        _handle_failed_buys(runner, trade_date, config, failed_buy_targets, attempt_count=0)
     
     # 处理补位买入（如果有pending_buys）
     if pending_buys:
