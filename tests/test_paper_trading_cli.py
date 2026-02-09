@@ -474,3 +474,51 @@ def test_config_with_all_parameters():
     # 验证所有必要参数都存在
     for param in required_params:
         assert param in config
+
+
+def test_instructions_loading(temp_paper_storage):
+    """测试交易指令的保存和加载"""
+    from src.lazybull.paper.models import TradeInstruction
+    
+    # 创建测试指令
+    instructions = [
+        TradeInstruction(
+            ts_code='603115.SH',
+            action='sell',
+            shares=100,
+            price_type='close',
+            reason='减仓调整',
+            source_date='20260202',
+            target_weight=0.15
+        ),
+        TradeInstruction(
+            ts_code='600519.SH',
+            action='buy',
+            shares=200,
+            price_type='close',
+            reason='加仓买入',
+            source_date='20260202',
+            target_weight=0.20
+        )
+    ]
+    
+    # 保存指令
+    temp_paper_storage.save_instructions('20260203', instructions)
+    
+    # 加载指令
+    loaded_instructions = temp_paper_storage.load_instructions('20260203')
+    
+    assert loaded_instructions is not None
+    assert len(loaded_instructions) == 2
+    assert loaded_instructions[0].ts_code == '603115.SH'
+    assert loaded_instructions[0].action == 'sell'
+    assert loaded_instructions[0].shares == 100
+    assert loaded_instructions[1].ts_code == '600519.SH'
+    assert loaded_instructions[1].action == 'buy'
+
+
+def test_instructions_not_exist(temp_paper_storage):
+    """测试加载不存在的指令文件"""
+    instructions = temp_paper_storage.load_instructions('20260203')
+    assert instructions is None or len(instructions) == 0
+
