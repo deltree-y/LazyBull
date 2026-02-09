@@ -51,11 +51,14 @@ class PaperAccount:
             self.save_state()
         else:
             # 兼容旧账户状态：如果没有 initial_capital 和 start_date，使用默认值
-            if not hasattr(self.state, 'initial_capital') or self.state.initial_capital == 0.0:
+            # 注意：仅在字段不存在时设置，避免覆盖已有数据
+            if not hasattr(self.state, 'initial_capital'):
                 self.state.initial_capital = initial_capital
-            if not hasattr(self.state, 'start_date') or self.state.start_date == "":
+                logger.debug(f"旧账户缺少 initial_capital，使用构造参数: {initial_capital:,.2f}")
+            if not hasattr(self.state, 'start_date'):
                 # 旧账户没有起始日期，使用 last_update 作为近似值
                 self.state.start_date = self.state.last_update if self.state.last_update else ""
+                logger.debug(f"旧账户缺少 start_date，使用 last_update: {self.state.start_date}")
             if verbose:
                 logger.info(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")
     

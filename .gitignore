@@ -71,3 +71,4 @@ logs/
 
 # Poetry
 poetry.lock
+test_positions_manual.py

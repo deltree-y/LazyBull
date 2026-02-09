@@ -733,6 +733,8 @@ class PaperBroker:
             total_profit_pct = 0.0
         
         # 年化收益率
+        # 定义最小持有天数常量
+        MIN_HOLDING_DAYS = 1  # 至少为1天
         annual_return = 0.0
         if initial_capital > 0 and start_date and current_date:
             try:
@@ -740,8 +742,8 @@ class PaperBroker:
                 start_dt = pd.to_datetime(start_date, format='%Y%m%d')
                 current_dt = pd.to_datetime(current_date, format='%Y%m%d')
                 days = (current_dt - start_dt).days
-                if days < 1:
-                    days = 1  # 至少为1天
+                if days < MIN_HOLDING_DAYS:
+                    days = MIN_HOLDING_DAYS
                 annual_return = (total_assets / initial_capital) ** (365.0 / days) - 1.0
             except Exception as e:
                 logger.warning(f"计算年化收益率失败: {e}")
