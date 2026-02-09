@@ -336,7 +336,7 @@ class PaperTradingRunner:
         # 6. 生成交易指令
         logger.info("步骤3: 生成交易指令")
         # 获取T0日的收盘价（用于计算指令股数）
-        daily_data = self.loader.load_clean_daily(corrected_date)
+        daily_data = self.loader.load_clean_daily(corrected_date,corrected_date)
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {corrected_date} 的价格数据")
             return
