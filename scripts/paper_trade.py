@@ -177,9 +177,8 @@ def run_main(args):
     
     pending_sell_actions = _process_pending_sells(runner, corrected_date, config)
     
-    # 注意：旧的"延迟买入队列（补位计划）"机制已被移除
-    # 新机制：补位目标直接保存为下一交易日的 pending_weights，无需单独处理
-    # 补位将在 T1 执行时自动处理（如果有失败，会生成下一日的 pending）
+    # 注意：补位计划通过 pending_buys 队列处理
+    # 补位将在 T1 执行时自动处理（如果有失败，会生成新的 pending_buys）
     
     # 7. 执行 T1（如果有待执行目标）
     logger.info("")
@@ -425,9 +424,9 @@ def _execute_t1_if_pending(
     trade_date: str,
     config: dict
 ) -> List[Dict]:
-    """执行 T1（如果有待执行目标或补位买入计划）
+    """执行 T1（如果有交易指令或补位买入计划）
     
-    优先检查并执行 instructions（指令驱动），若不存在则使用 pending_weights（兼容模式）
+    执行 instructions（指令驱动）和 pending_buys（补位队列）
     
     Returns:
         T1 动作列表 [{ts_code, action, shares, reason}, ...]
@@ -439,33 +438,24 @@ def _execute_t1_if_pending(
         logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
         return actions
     
-    # 优先检查是否有交易指令（新模式）
+    # 检查是否有交易指令
     instructions = runner.paper_storage.load_instructions(trade_date)
     
-    # 检查是否有待执行目标（全量调仓，兼容模式）
-    targets = runner.paper_storage.load_pending_weights(trade_date)
-    
-    # 检查是否有补位买入计划（增量买入）
+    # 检查是否有补位买入计划
     pending_buys = runner.paper_storage.load_pending_buys()
     
-    if not instructions and not targets and not pending_buys:
-        logger.info(f"未找到 {trade_date} 的交易指令、待执行目标或补位买入计划，跳过 T1")
+    if not instructions and not pending_buys:
+        logger.info(f"未找到 {trade_date} 的交易指令或补位买入计划，跳过 T1")
         return actions
     
     # 输出清晰的模式标识
     if instructions:
         logger.info("=" * 80)
-        logger.info(f"【T1 指令驱动模式】读取到 {len(instructions)} 条交易指令")
-        logger.info("将忽略 pending_weights，严格按指令执行")
-        logger.info("=" * 80)
-    elif targets:
-        logger.info("=" * 80)
-        logger.info(f"【T1 兼容模式】找到 {len(targets)} 个全量调仓目标")
-        logger.info("将按 pending_weights 生成订单执行")
+        logger.info(f"【T1 指令驱动】读取到 {len(instructions)} 条交易指令")
         logger.info("=" * 80)
     
     if pending_buys:
-        logger.info(f"找到 {len(pending_buys)} 个补位买入计划（将在主流程后处理）")
+        logger.info(f"找到 {len(pending_buys)} 个补位买入计划（将在指令执行后处理）")
     
     # 加载价格数据
     buy_prices, sell_prices = runner._load_prices(trade_date, config['buy_price'], config['sell_price'])
@@ -477,7 +467,7 @@ def _execute_t1_if_pending(
     fills_count = 0
     orders_count = 0
     
-    # 执行交易指令（优先，新模式）
+    # 执行交易指令
     if instructions:
         logger.info("执行交易指令")
         fills = runner.broker.execute_instructions(
@@ -500,32 +490,7 @@ def _execute_t1_if_pending(
         
         logger.info(f"指令执行完成：{len(instructions)} 条指令，{len(fills)} 笔成交")
     
-    # 处理全量调仓（如果没有指令，使用兼容模式）
-    elif targets:
-        # 生成订单
-        orders = runner.broker.generate_orders(targets, buy_prices, sell_prices, trade_date)
-        orders_count += len(orders) if orders else 0
-       
-        if orders:
-            # 执行订单
-            fills = runner.broker.execute_orders(
-                orders,
-                trade_date,
-                config['buy_price'],
-                config['sell_price']
-            )
-            fills_count += len(fills) if fills else 0
-            
-            # 收集动作
-            for fill in fills:
-                actions.append({
-                    'ts_code': fill.ts_code,
-                    'action': fill.action,
-                    'shares': fill.shares,
-                    'reason': fill.reason
-                })
-        
-    # 无论哪种模式,获取买入失败的目标
+    # 获取买入失败的目标
     failed_buy_targets = runner.broker.get_failed_buy_targets()
 
     # 处理买入失败：生成补位计划
@@ -572,13 +537,12 @@ def _execute_t1_if_pending(
         runner._record_nav(trade_date, all_prices)
     
     # 保存执行记录
-    if instructions or targets or pending_buys:
+    if instructions or pending_buys:
         run_record = {
             'trade_date': trade_date,
             'buy_price_type': config['buy_price'],
             'sell_price_type': config['sell_price'],
             'instructions_count': len(instructions) if instructions else 0,
-            'targets_count': len(targets) if targets else 0,
             'pending_buys_count': len(pending_buys) if pending_buys else 0,
             'orders_count': orders_count,
             'fills_count': fills_count,
@@ -651,7 +615,7 @@ def _handle_failed_buys(
                     original_signal_date=trade_date
                 ))
             
-            # 保存到独立的 pending_buys 队列（不覆盖 pending_weights）
+            # 保存到 pending_buys 队列
             runner.paper_storage.save_pending_buys(pending_buys)
             
             logger.info(f"已生成 {len(replacement_targets)} 个补位目标，保存到独立的补位买入队列")
@@ -748,29 +712,34 @@ def _execute_t0_if_rebalance_day(
         # 获取下一交易日
         t1_date = runner._get_next_trade_date(trade_date)
         if t1_date:
-            # 读取生成的目标
-            targets = runner.paper_storage.load_pending_weights(t1_date)
-            if targets:
-                # 应用 ECT 系数到目标权重
+            # 读取生成的交易指令
+            instructions = runner.paper_storage.load_instructions(t1_date)
+            if instructions:
+                # 应用 ECT 系数到目标权重（仅对买入指令调整股数）
                 if ect_exposure < 1.0:
-                    logger.info(f"应用 ECT 系数 {ect_exposure:.2f} 到目标权重")
-                    for target in targets:
-                        original_weight = target.target_weight
-                        target.target_weight = original_weight * ect_exposure
-                        target.reason = f"{target.reason} (ECT调整: {original_weight:.4f} -> {target.target_weight:.4f})"
+                    logger.info(f"应用 ECT 系数 {ect_exposure:.2f} 到买入指令")
+                    for inst in instructions:
+                        if inst.action == 'buy':
+                            original_shares = inst.shares
+                            inst.shares = int(inst.shares * ect_exposure)
+                            # 确保是100的倍数
+                            inst.shares = (inst.shares // 100) * 100
+                            if inst.shares != original_shares:
+                                inst.reason = f"{inst.reason} (ECT调整: {original_shares} -> {inst.shares}股)"
                     
-                    # 重新保存调整后的目标
-                    runner.paper_storage.save_pending_weights(t1_date, targets)
-                    logger.info(f"已将 ECT 系数应用到 {len(targets)} 个目标权重")
+                    # 重新保存调整后的指令
+                    runner.paper_storage.save_instructions(t1_date, instructions)
+                    logger.info(f"已将 ECT 系数应用到 {len(instructions)} 条买入指令")
                 
-                # 收集目标信息用于显示
-                for target in targets:
-                    targets_info.append({
-                        'ts_code': target.ts_code,
-                        'target_weight': target.target_weight,
-                        'reason': target.reason,
-                        'score': None  # 如果信号包含score可以在这里添加
-                    })
+                # 收集目标信息用于显示（仅买入指令）
+                for inst in instructions:
+                    if inst.action == 'buy':
+                        targets_info.append({
+                            'ts_code': inst.ts_code,
+                            'target_weight': inst.target_weight,
+                            'reason': inst.reason,
+                            'score': None
+                        })
         
         logger.info(f"T0 执行完成：生成 {len(targets_info)} 个目标")
     except Exception as e:
