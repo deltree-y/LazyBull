@@ -510,6 +510,61 @@ class PaperTradingRunner:
         logger.info(f"T1工作流完成 - {corrected_date}")
         logger.info("=" * 80)
     
+    def _estimate_pending_buy_shares(
+        self,
+        ts_code: str,
+        price: float,
+        target_weight: float,
+        total_pending_count: int,
+        pendding_capital_retention_ratio: float
+    ) -> int:
+        """估算补位买入股数（与_execute_pending_buys的实际执行口径一致）
+        
+        本方法封装了补位买入股数的计算逻辑，确保提示信息与实际执行一致。
+        
+        计算逻辑：
+        1. total_cash = account.cash * (1 - pendding_capital_retention_ratio)
+        2. available_cash = total_cash / total_pending_count  # 每个补位目标平均分配
+        3. target_value = total_cash * target_weight
+        4. 若 target_value + estimated_cost > available_cash，则 target_value = available_cash - estimated_cost
+        5. buy_shares = floor(target_value / price / 100) * 100  # 按100股取整
+        
+        Args:
+            ts_code: 股票代码
+            price: 买入价格
+            target_weight: 目标权重
+            total_pending_count: 补位队列中的总数量
+            pendding_capital_retention_ratio: 补位资金保留比例
+            
+        Returns:
+            估算的买入股数（已按100股取整）。若不足一手，返回0
+        """
+        if price <= 0 or total_pending_count <= 0:
+            return 0
+        
+        # 1. 计算总可用现金（扣除保留比例）
+        total_cash = self.account.get_cash() * (1 - pendding_capital_retention_ratio)
+        
+        # 2. 平均分配到每个补位目标
+        available_cash = total_cash / total_pending_count
+        
+        # 3. 根据目标权重计算买入金额
+        target_value = total_cash * target_weight
+        
+        # 4. 预估成本
+        estimated_cost = self.broker.cost_model.calculate_buy_cost(target_value)
+        
+        # 5. 检查是否超出可用现金
+        if target_value + estimated_cost > available_cash:
+            target_value = available_cash - estimated_cost
+            if target_value <= 0:
+                return 0
+        
+        # 6. 计算股数（按100股取整）
+        buy_shares = int(target_value / price / 100) * 100
+        
+        return buy_shares
+    
     def _execute_pending_buys(
         self,
         pending_buys: List,
@@ -603,29 +658,14 @@ class PaperTradingRunner:
                 updated_pending_buys.append(pending_buy)
                 continue
             
-            # 计算买入金额
-            target_value = total_cash * pending_buy.target_weight
-            
-            # 预估成本
-            estimated_cost = self.broker.cost_model.calculate_buy_cost(target_value)
-            
-            # 检查现金
-            if target_value + estimated_cost > available_cash:
-                target_value = available_cash - estimated_cost  # 当前目标的所有现金都用来购买
-                if target_value <= 0:
-                    logger.warning(f"补位 {ts_code} 现金不足，记录失败并继续尝试")
-                    pending_buy.attempts += 1
-                    pending_buy.last_attempt_date = trade_date
-                    failed_buy_targets.append(TargetWeight(
-                        ts_code=ts_code,
-                        target_weight=pending_buy.target_weight,
-                        reason=f"{pending_buy.reason}（现金不足）"
-                    ))
-                    updated_pending_buys.append(pending_buy)
-                    continue
-            
-            # 计算股数
-            buy_shares = int(target_value / buy_prices[ts_code] / 100) * 100
+            # 使用统一的估算方法计算买入股数
+            buy_shares = self._estimate_pending_buy_shares(
+                ts_code=ts_code,
+                price=buy_prices[ts_code],
+                target_weight=pending_buy.target_weight,
+                total_pending_count=len(pending_buys),
+                pendding_capital_retention_ratio=cfg['costs']['pendding_capital_retention_ratio']
+            )
             
             if buy_shares <= 0:
                 logger.warning(f"补位 {ts_code} 不足一手，记录失败并继续尝试")
@@ -1505,6 +1545,8 @@ class PaperTradingRunner:
     ) -> None:
         """打印补位目标（格式与T0输出一致）
         
+        使用与实际执行一致的股数估算逻辑，包含现金保留比例、成本预估等。
+        
         Args:
             targets: 目标权重列表
             stock_basic: 股票基本信息
@@ -1521,38 +1563,52 @@ class PaperTradingRunner:
             for _, row in daily_data.iterrows():
                 price_map[row['ts_code']] = row.get('close', 0.0)
         
+        # 加载配置以获取资金保留比例
+        import yaml
+        with open("configs/base.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        pendding_capital_retention_ratio = cfg['costs']['pendding_capital_retention_ratio']
+        
         # 打印表头
         logger.info("=" * 120)
         logger.info("补位买入目标详情（需要在下一交易日继续买入）")
         logger.info("=" * 120)
+        logger.info(f"注意：以下股数为估算值，基于当前价格与现金（保留比例 {pendding_capital_retention_ratio:.1%}）")
+        logger.info(f"实际执行时会受到执行日价格变化、补位队列长度变化等因素影响，但计算规则一致")
+        logger.info("=" * 120)
         
-        header = ["股票代码", "股票名称", "方向", "参考价格", "建议股数", "原因"]
+        header = ["股票代码", "股票名称", "方向", "参考价格", "估算股数", "原因"]
         widths = [15, 12, 8, 12, 12, 60]
         aligns = ['left', 'left', 'left', 'right', 'right', 'left']
         logger.info(format_row(header, widths, aligns))
         logger.info("-" * 120)
-        
-        # 计算建议股数（使用等权分配 + 当前剩余现金）
-        available_cash = self.account.get_cash()
-        equal_weight_value = available_cash / len(targets) if targets else 0
         
         # 打印每行
         for target in targets:
             name = name_map.get(target.ts_code, '-')
             price = price_map.get(target.ts_code, 0.0)
             
-            # 计算建议股数
+            # 使用统一的估算方法计算建议股数
             if price > 0:
-                suggested_shares = int(equal_weight_value / price / 100) * 100
+                suggested_shares = self._estimate_pending_buy_shares(
+                    ts_code=target.ts_code,
+                    price=price,
+                    target_weight=target.target_weight,
+                    total_pending_count=len(targets),
+                    pendding_capital_retention_ratio=pendding_capital_retention_ratio
+                )
             else:
                 suggested_shares = 0
+            
+            # 如果不足一手，显示提示
+            shares_display = str(suggested_shares) if suggested_shares > 0 else "0 (不足一手)"
             
             row = [
                 target.ts_code,
                 name,
                 "买入",
                 f"{price:.2f}" if price > 0 else "-",
-                str(suggested_shares),
+                shares_display,
                 target.reason
             ]
             logger.info(format_row(row, widths, aligns))

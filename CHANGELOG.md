@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2] - 2026-02-10
+
+### Added
+- **补位买入股数估算口径统一**：提示信息与实际执行逻辑完全一致
+  - **问题背景**：生成 pending_buys（补位计划）时，提示的"预计购买数量"与实际执行时计算逻辑不一致，导致用户困惑
+    - 提示逻辑：简单使用 `available_cash / len(targets)` 平均分配
+    - 执行逻辑：考虑现金保留比例、成本预估、可用现金上限约束
+  - **新增方法**：`PaperTradingRunner._estimate_pending_buy_shares()`
+    - 封装统一的补位买入股数估算逻辑
+    - 参数：`ts_code`, `price`, `target_weight`, `total_pending_count`, `pendding_capital_retention_ratio`
+    - 计算逻辑与 `_execute_pending_buys()` 完全一致：
+      1. `total_cash = account.cash * (1 - retention_ratio)` - 扣除保留比例
+      2. `available_cash = total_cash / pending_count` - 平均分配
+      3. `target_value = total_cash * target_weight` - 按权重计算
+      4. 预估成本并检查是否超出可用现金上限
+      5. `buy_shares = floor(target_value / price / 100) * 100` - 100股取整
+  - **测试覆盖**：新增 `tests/test_pending_buy_estimation.py`，8个测试用例全部通过
+    - 正常情况、现金受限、不足一手、异常价格、多目标分配、高保留比例、取整验证
+
+### Changed
+- **重构 `_execute_pending_buys()` 方法**：使用统一的 `_estimate_pending_buy_shares()` 计算股数
+  - 简化原有逻辑约40行代码
+  - 消除了重复的计算代码
+  - 确保执行逻辑与估算逻辑完全一致
+
+- **重构 `_print_replacement_targets()` 方法**：使用统一的估算逻辑并增加说明
+  - 表头改为"估算股数"而非"建议股数"
+  - 新增提示信息：
+    - "注意：以下股数为估算值，基于当前价格与现金（保留比例 X%）"
+    - "实际执行时会受到执行日价格变化、补位队列长度变化等因素影响，但计算规则一致"
+  - 不足一手时显示为 "0 (不足一手)" 而非简单的 "0"
+
+### Documentation
+- 新增 `docs/PR/pending_buy_estimation_alignment.md` 详细说明本次改进的背景、方案和影响
+- 新增 `docs/guide/pending_buy_estimation_guide.md` 说明补位买入股数的估算逻辑和影响因素
+
+### Version
+- 版本号从 0.4.1 升级到 0.4.2
+
 ## [0.3.15] - 2026-02-09
 
 ### Added
