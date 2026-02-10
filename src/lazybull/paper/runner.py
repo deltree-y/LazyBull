@@ -365,30 +365,16 @@ class PaperTradingRunner:
             logger.warning("未生成任何交易指令")
             return
         
-        # 7. 持久化指令和待执行目标
-        logger.info("步骤4: 保存交易指令和待执行目标")
+        # 7. 持久化指令
+        logger.info("步骤4: 保存交易指令")
         # T0生成的是T1执行的目标，所以需要获取T1日期
         t1_date = self._get_next_trade_date(corrected_date)
         if not t1_date:
             logger.error(f"无法获取 {corrected_date} 的下一个交易日")
             return
         
-        # 检查是否存在补位目标（警告用户将被覆盖）
-        existing_meta = self.paper_storage.load_pending_weights_metadata(t1_date)
-        if existing_meta and existing_meta.get('source') == 'replenishment':
-            logger.warning(f"注意: {t1_date} 已存在补位目标（第 {existing_meta.get('attempt_count', 0)} 次尝试），将被本次 T0 信号覆盖")
-        
-        # 保存交易指令（新模式）
+        # 保存交易指令（指令驱动模式）
         self.paper_storage.save_instructions(t1_date, instructions)
-        
-        # 保存 T0 生成的目标（旧模式兼容，但现在优先使用指令）
-        t0_metadata = {
-            'source': 't0_signal',
-            'attempt_count': 0,
-            'signal_date': corrected_date,
-            'timestamp': pd.Timestamp.now().isoformat()
-        }
-        self.paper_storage.save_pending_weights(t1_date, targets, metadata=t0_metadata)
         
         # 8. 更新调仓状态
         rebalance_state = {
@@ -444,25 +430,20 @@ class PaperTradingRunner:
         logger.info(f"开始T1工作流 - {corrected_date}")
         logger.info("=" * 80)
         
-        # 3. 读取交易指令（优先）
+        # 3. 读取交易指令
         logger.info("步骤1: 读取交易指令")
         instructions = self.paper_storage.load_instructions(corrected_date)
         
-        # 4. 读取待执行目标（全量调仓，兼容旧模式）
-        targets = self.paper_storage.load_pending_weights(corrected_date)
-        
-        # 5. 读取补位买入计划（增量买入）
+        # 4. 读取补位买入计划（增量买入）
         pending_buys = self.paper_storage.load_pending_buys()
         
         # 检查是否有任何待执行任务
-        if not instructions and not targets and not pending_buys:
-            logger.warning(f"未找到 {corrected_date} 的交易指令、待执行目标或补位买入计划")
+        if not instructions and not pending_buys:
+            logger.warning(f"未找到 {corrected_date} 的交易指令或补位买入计划，跳过执行")
             return
         
         if instructions:
-            logger.info(f"读取到 {len(instructions)} 条交易指令（新模式）")
-        if targets:
-            logger.info(f"读取到 {len(targets)} 个全量调仓目标（兼容模式）")
+            logger.info(f"读取到 {len(instructions)} 条交易指令")
         if pending_buys:
             logger.info(f"读取到 {len(pending_buys)} 个补位买入计划")
         
@@ -477,9 +458,9 @@ class PaperTradingRunner:
         fills_count = 0
         orders_count = 0
         
-        # 7. 执行交易指令（优先，新模式）
+        # 7. 执行交易指令
         if instructions:
-            logger.info("步骤3a: 执行交易指令")
+            logger.info("步骤3: 执行交易指令")
             fills = self.broker.execute_instructions(
                 instructions,
                 buy_prices,
@@ -488,25 +469,8 @@ class PaperTradingRunner:
             )
             fills_count += len(fills) if fills else 0
             orders_count += len(instructions)
-        # 8. 执行全量调仓（如果没有指令，使用旧模式）
-        elif targets:
-            logger.info("步骤3a: 生成全量调仓订单（兼容模式）")
-            orders = self.broker.generate_orders(targets, buy_prices, sell_prices, corrected_date)
-            orders_count += len(orders) if orders else 0
-            
-            if orders:
-                logger.info("步骤4a: 执行全量调仓订单")
-                fills = self.broker.execute_orders(
-                    orders,
-                    corrected_date,
-                    buy_price_type,
-                    sell_price_type
-                )
-                fills_count += len(fills) if fills else 0
-            else:
-                logger.warning("未生成全量调仓订单")
         
-        # 7. 执行补位买入（如果有pending_buys）
+        # 8. 执行补位买入（如果有pending_buys）
         if pending_buys:
             logger.info("步骤3b: 处理补位买入计划")
             replenishment_fills = self._execute_pending_buys(
@@ -529,12 +493,12 @@ class PaperTradingRunner:
         all_prices = {**sell_prices, **buy_prices}  # 合并价格字典
         self._record_nav(corrected_date, all_prices)
         
-        # 10. 保存执行记录
+        # 11. 保存执行记录
         run_record = {
             'trade_date': corrected_date,
             'buy_price_type': buy_price_type,
             'sell_price_type': sell_price_type,
-            'targets_count': len(targets) if targets else 0,
+            'instructions_count': len(instructions) if instructions else 0,
             'pending_buys_count': len(pending_buys) if pending_buys else 0,
             'orders_count': orders_count,
             'fills_count': fills_count,

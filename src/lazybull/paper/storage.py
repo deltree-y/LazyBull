@@ -24,7 +24,6 @@ class PaperStorage:
             verbose: 是否输出详细日志
         """
         self.root_path = Path(root_path)
-        self.pending_path = self.root_path / "pending"
         self.state_path = self.root_path / "state"
         self.trades_path = self.root_path / "trades"
         self.nav_path = self.root_path / "nav"
@@ -35,105 +34,12 @@ class PaperStorage:
         self.verbose = verbose
         
         # 确保目录存在
-        for path in [self.pending_path, self.state_path, self.trades_path, 
+        for path in [self.state_path, self.trades_path, 
                      self.nav_path, self.runs_path, self.pending_sells_path, self.pending_buys_path,
                      self.instructions_path]:
             path.mkdir(parents=True, exist_ok=True)
         if verbose:
             logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
-    
-    def save_pending_weights(
-        self, 
-        trade_date: str, 
-        targets: List[TargetWeight],
-        metadata: Optional[Dict] = None
-    ) -> None:
-        """保存待执行的目标权重（及可选的元数据）
-        
-        Args:
-            trade_date: 交易日期 YYYYMMDD
-            targets: 目标权重列表
-            metadata: 可选元数据字典，可包含：
-                - attempt_count: 补位尝试次数（默认0表示首次生成）
-                - original_signal_date: 原始信号日期
-                - source: 来源标识（如 "t0_signal" 或 "replenishment"）
-        """
-        file_path = self.pending_path / f"{trade_date}.parquet"
-        meta_path = self.pending_path / f"{trade_date}_meta.json"
-        
-        # 转换为DataFrame
-        data = []
-        for target in targets:
-            data.append({
-                'ts_code': target.ts_code,
-                'target_weight': target.target_weight,
-                'reason': target.reason
-            })
-        
-        df = pd.DataFrame(data)
-        df.to_parquet(file_path, index=False)
-        logger.info(f"保存待执行目标权重: {file_path} ({len(targets)} 条)")
-        
-        # 保存元数据（如果提供）
-        if metadata is not None:
-            try:
-                with open(meta_path, 'w', encoding='utf-8') as f:
-                    json.dump(metadata, f, ensure_ascii=False, indent=2)
-                logger.info(f"保存待执行目标元数据: {meta_path}")
-            except Exception as e:
-                logger.error(f"保存元数据失败: {e}，但目标权重已成功保存")
-                # 不抛出异常，因为主要数据（parquet）已成功保存
-    
-    def load_pending_weights(self, trade_date: str) -> Optional[List[TargetWeight]]:
-        """读取待执行的目标权重
-        
-        Args:
-            trade_date: 交易日期 YYYYMMDD
-            
-        Returns:
-            目标权重列表，不存在返回None
-        """
-        file_path = self.pending_path / f"{trade_date}.parquet"
-        
-        if not file_path.exists():
-            logger.info(f"待执行目标权重文件不存在: {file_path}")
-            return None
-        
-        df = pd.read_parquet(file_path)
-        targets = []
-        for _, row in df.iterrows():
-            targets.append(TargetWeight(
-                ts_code=row['ts_code'],
-                target_weight=row['target_weight'],
-                reason=row.get('reason', '信号生成')
-            ))
-        
-        logger.info(f"读取待执行目标权重: {file_path} ({len(targets)} 条)")
-        return targets
-    
-    def load_pending_weights_metadata(self, trade_date: str) -> Optional[Dict]:
-        """读取待执行目标权重的元数据
-        
-        Args:
-            trade_date: 交易日期 YYYYMMDD
-            
-        Returns:
-            元数据字典，不存在返回None
-        """
-        meta_path = self.pending_path / f"{trade_date}_meta.json"
-        
-        if not meta_path.exists():
-            logger.debug(f"待执行目标元数据文件不存在: {meta_path}")
-            return None
-        
-        try:
-            with open(meta_path, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
-            logger.info(f"读取待执行目标元数据: {meta_path}")
-            return metadata
-        except Exception as e:
-            logger.warning(f"读取元数据失败: {e}")
-            return None
     
     def save_account_state(self, state: AccountState) -> None:
         """保存账户状态
@@ -574,3 +480,137 @@ class PaperStorage:
         
         logger.info(f"读取交易指令: {file_path} ({len(instructions)} 条)")
         return instructions
+    
+    def truncate_since(self, cut_off_date: str) -> None:
+        """截断/清理从指定日期开始的所有数据（包含该日期）
+        
+        用于手工修正账户后，清理 cut-off 日期及之后的所有记录，
+        以便从该日期重新运行并保持一致性。
+        
+        清理范围：
+        - trades.parquet: 删除 trade_date >= cut_off_date 的行
+        - nav.parquet: 删除 trade_date >= cut_off_date 的行
+        - runs/: 删除日期 >= cut_off_date 的 t0_*.json 和 t1_*.json 文件
+        - instructions/: 删除日期 >= cut_off_date 的指令文件
+        - pending_buys.json 和 pending_sells.json: 清空
+        - rebalance_state.json: 按规则回滚
+        
+        Args:
+            cut_off_date: 截断日期 YYYYMMDD（包含此日期）
+        """
+        logger.info("=" * 80)
+        logger.info(f"开始清理数据：删除 >= {cut_off_date} 的所有记录")
+        logger.info("=" * 80)
+        
+        # 1. 清理 trades.parquet
+        trades_file = self.trades_path / "trades.parquet"
+        if trades_file.exists():
+            df = pd.read_parquet(trades_file)
+            original_count = len(df)
+            df = df[df['trade_date'] < cut_off_date]
+            new_count = len(df)
+            
+            if new_count < original_count:
+                df.to_parquet(trades_file, index=False)
+                logger.info(f"清理成交记录: {original_count} -> {new_count} 条（删除 {original_count - new_count} 条）")
+            else:
+                logger.info(f"成交记录无需清理（无 >= {cut_off_date} 的记录）")
+        else:
+            logger.info("成交记录文件不存在，跳过")
+        
+        # 2. 清理 nav.parquet
+        nav_file = self.nav_path / "nav.parquet"
+        if nav_file.exists():
+            df = pd.read_parquet(nav_file)
+            original_count = len(df)
+            df = df[df['trade_date'] < cut_off_date]
+            new_count = len(df)
+            
+            if new_count < original_count:
+                df.to_parquet(nav_file, index=False)
+                logger.info(f"清理净值记录: {original_count} -> {new_count} 条（删除 {original_count - new_count} 条）")
+            else:
+                logger.info(f"净值记录无需清理（无 >= {cut_off_date} 的记录）")
+        else:
+            logger.info("净值记录文件不存在，跳过")
+        
+        # 3. 清理 runs/ 目录
+        deleted_runs = 0
+        for run_file in self.runs_path.glob("*.json"):
+            if run_file.name == "rebalance_state.json":
+                continue  # rebalance_state 单独处理
+            
+            # 提取日期：t0_YYYYMMDD.json 或 t1_YYYYMMDD.json
+            parts = run_file.stem.split('_')
+            if len(parts) == 2 and parts[0] in ['t0', 't1']:
+                file_date = parts[1]
+                if file_date >= cut_off_date:
+                    run_file.unlink()
+                    deleted_runs += 1
+        
+        if deleted_runs > 0:
+            logger.info(f"清理运行记录: 删除 {deleted_runs} 个文件")
+        else:
+            logger.info("运行记录无需清理")
+        
+        # 4. 清理 instructions/ 目录
+        deleted_instructions = 0
+        for inst_file in self.instructions_path.glob("*.parquet"):
+            # 提取日期：YYYYMMDD.parquet
+            file_date = inst_file.stem
+            if file_date >= cut_off_date:
+                inst_file.unlink()
+                deleted_instructions += 1
+        
+        if deleted_instructions > 0:
+            logger.info(f"清理交易指令: 删除 {deleted_instructions} 个文件")
+        else:
+            logger.info("交易指令无需清理")
+        
+        # 5. 清空 pending_buys.json
+        pending_buys_file = self.pending_buys_path / "pending_buys.json"
+        if pending_buys_file.exists():
+            with open(pending_buys_file, 'w', encoding='utf-8') as f:
+                json.dump([], f)
+            logger.info("清空延迟买入队列")
+        else:
+            logger.info("延迟买入队列文件不存在，跳过")
+        
+        # 6. 清空 pending_sells.json
+        pending_sells_file = self.pending_sells_path / "pending_sells.json"
+        if pending_sells_file.exists():
+            with open(pending_sells_file, 'w', encoding='utf-8') as f:
+                json.dump([], f)
+            logger.info("清空延迟卖出队列")
+        else:
+            logger.info("延迟卖出队列文件不存在，跳过")
+        
+        # 7. 回滚 rebalance_state.json
+        rebalance_state = self.load_rebalance_state()
+        if rebalance_state and rebalance_state.get('last_rebalance_date', '') >= cut_off_date:
+            # 需要回滚：找到 cut_off 之前最近的 t0 记录
+            t0_files = sorted([f for f in self.runs_path.glob("t0_*.json")])
+            rollback_date = None
+            
+            for t0_file in reversed(t0_files):
+                file_date = t0_file.stem.split('_')[1]
+                if file_date < cut_off_date:
+                    rollback_date = file_date
+                    break
+            
+            if rollback_date:
+                rebalance_state['last_rebalance_date'] = rollback_date
+                self.save_rebalance_state(rebalance_state)
+                logger.info(f"回滚调仓状态: {rebalance_state.get('last_rebalance_date')} -> {rollback_date}")
+            else:
+                # cut_off 之前没有 t0 记录，删除 rebalance_state
+                rebalance_file = self.runs_path / "rebalance_state.json"
+                if rebalance_file.exists():
+                    rebalance_file.unlink()
+                logger.info("删除调仓状态（无有效的 t0 记录可回滚）")
+        else:
+            logger.info("调仓状态无需回滚")
+        
+        logger.info("=" * 80)
+        logger.info("数据清理完成")
+        logger.info("=" * 80)
