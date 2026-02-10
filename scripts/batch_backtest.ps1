@@ -38,7 +38,7 @@ while ($currentDate -le $endDate) {
                         $count++
                         
                         # 执行 Python 命令
-                        py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para --initial-capital 100000
+                        py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para 
                         
                         # 预测逻辑
                         $percent = [Math]::Round(($count / $totalTasks) * 100, 2)
