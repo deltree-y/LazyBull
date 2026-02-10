@@ -105,14 +105,14 @@ python scripts/paper_trade.py run --trade-date 20260121
    - 成功卖出的订单从队列移除
    - 仍不可卖出的订单保留在队列中
 4. **执行 T1（如有待执行目标）**：
-   - 检查是否存在 `pending_weights/{trade_date}.parquet`
-   - 如存在，生成并执行调仓订单
+   - 检查是否存在交易指令（`instructions/{trade_date}.parquet`）
+   - 如存在，执行交易指令（买入/卖出）
    - 更新账户状态和净值
    - 同日只执行一次（幂等保护）
 5. **判断是否调仓日并执行 T0**：
    - 检查距离上次调仓是否满足 `rebalance_freq`
    - 如果是调仓日，拉取数据并生成信号
-   - 生成的目标保存到下一交易日的 `pending_weights`
+   - 生成交易指令保存到下一交易日的 `instructions`
    - 同日只执行一次（幂等保护）
    - **非调仓日自动跳过 T0，不会报错**
 
