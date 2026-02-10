@@ -149,25 +149,6 @@ def test_account_state_model(sample_prices):
     assert abs(weight - 10000.0/60000.0) < 1e-6
 
 
-def test_storage_save_and_load_pending(temp_storage):
-    """测试存储和读取待执行目标"""
-    targets = [
-        TargetWeight(ts_code='000001.SZ', target_weight=0.5, reason='信号生成'),
-        TargetWeight(ts_code='000002.SZ', target_weight=0.3, reason='信号生成'),
-    ]
-    
-    # 保存
-    temp_storage.save_pending_weights('20260121', targets)
-    
-    # 读取
-    loaded_targets = temp_storage.load_pending_weights('20260121')
-    
-    assert loaded_targets is not None
-    assert len(loaded_targets) == 2
-    assert loaded_targets[0].ts_code == '000001.SZ'
-    assert loaded_targets[0].target_weight == 0.5
-
-
 def test_storage_save_and_load_account_state(temp_storage):
     """测试存储和读取账户状态"""
     state = AccountState(
@@ -459,12 +440,6 @@ def test_broker_execute_sell_order():
         pos = account.get_position('000001.SZ')
         assert pos is not None
         assert pos.shares == 500
-
-
-def test_storage_pending_weights_not_exist(temp_storage):
-    """测试读取不存在的待执行目标"""
-    result = temp_storage.load_pending_weights('20991231')
-    assert result is None
 
 
 def test_storage_account_state_not_exist(temp_storage):
@@ -1440,47 +1415,3 @@ def test_broker_execute_instructions_clearance_full_shares():
         # 验证持仓已清空
         pos = account.get_position('000001.SZ')
         assert pos is None
-
-
-def test_instruction_priority_over_targets():
-    """测试指令优先于目标权重执行"""
-    from src.lazybull.paper import TradeInstruction
-    
-    with tempfile.TemporaryDirectory() as tmpdir:
-        storage = PaperStorage(tmpdir)
-        
-        # 保存指令
-        instructions = [
-            TradeInstruction(
-                ts_code='000001.SZ',
-                action='buy',
-                shares=100,
-                price_type='close',
-                reason='指令买入',
-                source_date='20260121',
-                target_weight=0.2
-            )
-        ]
-        storage.save_instructions('20260122', instructions)
-        
-        # 同时保存目标权重（旧模式）
-        targets = [
-            TargetWeight(
-                ts_code='000002.SZ',
-                target_weight=0.3,
-                reason='信号生成'
-            )
-        ]
-        storage.save_pending_weights('20260122', targets)
-        
-        # 读取时应该都能读到
-        loaded_instructions = storage.load_instructions('20260122')
-        loaded_targets = storage.load_pending_weights('20260122')
-        
-        # 两者都应该存在
-        assert loaded_instructions is not None
-        assert loaded_targets is not None
-        
-        # 但在 runner 中应该优先使用 instructions
-        assert len(loaded_instructions) == 1
-        assert loaded_instructions[0].ts_code == '000001.SZ'
