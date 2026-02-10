@@ -718,18 +718,26 @@ def _execute_t0_if_rebalance_day(
                 # 应用 ECT 系数到目标权重（仅对买入指令调整股数）
                 if ect_exposure < 1.0:
                     logger.info(f"应用 ECT 系数 {ect_exposure:.2f} 到买入指令")
+                    valid_instructions = []
                     for inst in instructions:
                         if inst.action == 'buy':
                             original_shares = inst.shares
                             inst.shares = int(inst.shares * ect_exposure)
                             # 确保是100的倍数
                             inst.shares = (inst.shares // 100) * 100
+                            
+                            # 如果调整后股数为0，跳过该指令
+                            if inst.shares == 0:
+                                logger.warning(f"ECT调整后 {inst.ts_code} 股数为0，跳过该买入指令（原 {original_shares} 股）")
+                                continue
+                                
                             if inst.shares != original_shares:
                                 inst.reason = f"{inst.reason} (ECT调整: {original_shares} -> {inst.shares}股)"
+                        valid_instructions.append(inst)
                     
-                    # 重新保存调整后的指令
-                    runner.paper_storage.save_instructions(t1_date, instructions)
-                    logger.info(f"已将 ECT 系数应用到 {len(instructions)} 条买入指令")
+                    # 重新保存调整后的指令（仅保存有效指令）
+                    runner.paper_storage.save_instructions(t1_date, valid_instructions)
+                    logger.info(f"已将 ECT 系数应用到买入指令：{len(valid_instructions)}/{len(instructions)} 条有效")
                 
                 # 收集目标信息用于显示（仅买入指令）
                 for inst in instructions:

@@ -25,14 +25,15 @@ def temp_storage():
 
 
 def test_replenishment_with_existing_positions_no_sell(temp_storage):
-    """测试：存在持仓 + 仅补位计划时，不生成卖出订单
+    """测试：存在持仓 + 仅补位计划时，验证数据结构正确
     
     场景模拟：
     1. 账户持有27只股票
     2. pending_buys 仅有3条补位计划（来自之前的买入失败）
-    3. T1 执行时应：
-       - 仅处理 pending_buys（尝试买入3只）
-       - 不生成任何卖出订单（27只持仓保持不变）
+    3. 验证：
+       - pending_buys 队列正确保存和加载
+       - 无意外的数据混淆
+       - 持仓状态保持完整
     """
     storage, tmpdir = temp_storage
     
