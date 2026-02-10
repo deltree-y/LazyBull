@@ -971,6 +971,226 @@ def print_positions(trade_date: str):
         logger.exception(f"打印持仓失败: {e}")
         sys.exit(1)
 
+def run_adjust_delete_position(args):
+    """删除持仓并按成本价释放资金"""
+    logger.info("=" * 80)
+    logger.info("手工修正：删除持仓")
+    logger.info("=" * 80)
+    logger.info(f"Cut-off 日期: {args.trade_date}")
+    logger.info(f"股票代码: {args.ts_code}")
+    
+    # 加载账户
+    storage = PaperStorage()
+    account_state = storage.load_account_state()
+    
+    if account_state is None:
+        logger.error("账户状态文件不存在，无法执行修正")
+        sys.exit(1)
+    
+    # 检查持仓是否存在
+    if args.ts_code not in account_state.positions:
+        logger.error(f"持仓 {args.ts_code} 不存在，无法删除")
+        sys.exit(1)
+    
+    position = account_state.positions[args.ts_code]
+    
+    # 按买入价格释放资金
+    released_cash = position.shares * position.buy_price
+    account_state.cash += released_cash
+    
+    # 删除持仓
+    del account_state.positions[args.ts_code]
+    
+    logger.info(f"删除持仓: {args.ts_code}")
+    logger.info(f"  股数: {position.shares}")
+    logger.info(f"  买入价格: {position.buy_price:.2f}")
+    logger.info(f"  释放资金: {released_cash:,.2f}")
+    logger.info(f"  更新后现金: {account_state.cash:,.2f}")
+    
+    # 设置 last_update 为 cut-off 日期
+    account_state.last_update = args.trade_date
+    
+    # 保存账户状态
+    storage.save_account_state(account_state)
+    
+    # 执行清理
+    logger.info("")
+    storage.truncate_since(args.trade_date)
+    
+    logger.info("")
+    logger.info("持仓删除完成")
+    logger.info("=" * 80)
+
+
+def run_adjust_update_position(args):
+    """更新持仓股数和买入价格"""
+    logger.info("=" * 80)
+    logger.info("手工修正：更新持仓")
+    logger.info("=" * 80)
+    logger.info(f"Cut-off 日期: {args.trade_date}")
+    logger.info(f"股票代码: {args.ts_code}")
+    logger.info(f"新股数: {args.shares}")
+    logger.info(f"新买入价格: {args.buy_price:.2f}")
+    
+    # 加载账户
+    storage = PaperStorage()
+    account_state = storage.load_account_state()
+    
+    if account_state is None:
+        logger.error("账户状态文件不存在，无法执行修正")
+        sys.exit(1)
+    
+    # 检查持仓是否存在
+    if args.ts_code not in account_state.positions:
+        logger.error(f"持仓 {args.ts_code} 不存在，无法更新")
+        sys.exit(1)
+    
+    position = account_state.positions[args.ts_code]
+    
+    # 计算现金变动
+    old_cost = position.shares * position.buy_price
+    new_cost = args.shares * args.buy_price
+    delta_cash = old_cost - new_cost
+    
+    logger.info(f"旧持仓: {position.shares} 股 @ {position.buy_price:.2f} = {old_cost:,.2f}")
+    logger.info(f"新持仓: {args.shares} 股 @ {args.buy_price:.2f} = {new_cost:,.2f}")
+    logger.info(f"现金变动: {delta_cash:+,.2f}")
+    
+    # 更新现金
+    account_state.cash += delta_cash
+    
+    # 更新持仓
+    position.shares = args.shares
+    position.buy_price = args.buy_price
+    position.buy_cost = args.shares * args.buy_price
+    
+    logger.info(f"更新后现金: {account_state.cash:,.2f}")
+    
+    # 设置 last_update 为 cut-off 日期
+    account_state.last_update = args.trade_date
+    
+    # 保存账户状态
+    storage.save_account_state(account_state)
+    
+    # 执行清理
+    logger.info("")
+    storage.truncate_since(args.trade_date)
+    
+    logger.info("")
+    logger.info("持仓更新完成")
+    logger.info("=" * 80)
+
+
+def run_adjust_add_shares(args):
+    """对已有持仓加仓"""
+    logger.info("=" * 80)
+    logger.info("手工修正：加仓")
+    logger.info("=" * 80)
+    logger.info(f"Cut-off 日期: {args.trade_date}")
+    logger.info(f"股票代码: {args.ts_code}")
+    logger.info(f"加仓股数: {args.shares}")
+    logger.info(f"加仓价格: {args.price:.2f}")
+    
+    # 加载账户
+    storage = PaperStorage()
+    account_state = storage.load_account_state()
+    
+    if account_state is None:
+        logger.error("账户状态文件不存在，无法执行修正")
+        sys.exit(1)
+    
+    # 检查持仓是否存在
+    if args.ts_code not in account_state.positions:
+        logger.error(f"持仓 {args.ts_code} 不存在，无法加仓")
+        logger.error("提示：add-shares 仅允许对已存在持仓加仓")
+        logger.error("      如需新建持仓，请使用 update-position 命令")
+        sys.exit(1)
+    
+    position = account_state.positions[args.ts_code]
+    
+    # 计算加仓成本
+    add_cost = args.shares * args.price
+    
+    # 检查现金是否足够
+    if add_cost > account_state.cash:
+        logger.error(f"现金不足：需要 {add_cost:,.2f}，可用 {account_state.cash:,.2f}")
+        sys.exit(1)
+    
+    # 扣减现金
+    account_state.cash -= add_cost
+    
+    # 加权更新买入价格
+    old_shares = position.shares
+    old_buy_price = position.buy_price
+    new_total_shares = old_shares + args.shares
+    new_buy_price = (old_buy_price * old_shares + args.price * args.shares) / new_total_shares
+    
+    logger.info(f"旧持仓: {old_shares} 股 @ {old_buy_price:.2f}")
+    logger.info(f"加仓: {args.shares} 股 @ {args.price:.2f}")
+    logger.info(f"新持仓: {new_total_shares} 股 @ {new_buy_price:.2f}")
+    logger.info(f"现金变动: -{add_cost:,.2f}")
+    logger.info(f"更新后现金: {account_state.cash:,.2f}")
+    
+    # 更新持仓
+    position.shares = new_total_shares
+    position.buy_price = new_buy_price
+    position.buy_cost = new_total_shares * new_buy_price
+    
+    # 设置 last_update 为 cut-off 日期
+    account_state.last_update = args.trade_date
+    
+    # 保存账户状态
+    storage.save_account_state(account_state)
+    
+    # 执行清理
+    logger.info("")
+    storage.truncate_since(args.trade_date)
+    
+    logger.info("")
+    logger.info("加仓完成")
+    logger.info("=" * 80)
+
+
+def run_adjust_cash(args):
+    """设置现金金额"""
+    logger.info("=" * 80)
+    logger.info("手工修正：设置现金")
+    logger.info("=" * 80)
+    logger.info(f"Cut-off 日期: {args.trade_date}")
+    logger.info(f"新现金金额: {args.set:,.2f}")
+    
+    # 加载账户
+    storage = PaperStorage()
+    account_state = storage.load_account_state()
+    
+    if account_state is None:
+        logger.error("账户状态文件不存在，无法执行修正")
+        sys.exit(1)
+    
+    old_cash = account_state.cash
+    
+    # 设置现金
+    account_state.cash = args.set
+    
+    logger.info(f"旧现金: {old_cash:,.2f}")
+    logger.info(f"新现金: {account_state.cash:,.2f}")
+    logger.info(f"变动: {account_state.cash - old_cash:+,.2f}")
+    
+    # 设置 last_update 为 cut-off 日期
+    account_state.last_update = args.trade_date
+    
+    # 保存账户状态
+    storage.save_account_state(account_state)
+    
+    # 执行清理
+    logger.info("")
+    storage.truncate_since(args.trade_date)
+    
+    logger.info("")
+    logger.info("现金设置完成")
+    logger.info("=" * 80)
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -1138,6 +1358,102 @@ def main():
         help='参考交易日期（用于获取当前价格），格式YYYYMMDD'
     )
     
+    # adjust 子命令
+    adjust_parser = subparsers.add_parser(
+        'adjust',
+        help='手工修正账户状态（修正发生在 cut-off 日期的 run 之前）'
+    )
+    adjust_subparsers = adjust_parser.add_subparsers(dest='adjust_command', help='修正类型')
+    
+    # adjust delete-position
+    delete_pos_parser = adjust_subparsers.add_parser(
+        'delete-position',
+        help='删除持仓并按买入价格释放资金'
+    )
+    delete_pos_parser.add_argument(
+        '--trade-date',
+        required=True,
+        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+    )
+    delete_pos_parser.add_argument(
+        '--ts-code',
+        required=True,
+        help='股票代码'
+    )
+    
+    # adjust update-position
+    update_pos_parser = adjust_subparsers.add_parser(
+        'update-position',
+        help='更新持仓股数和买入价格'
+    )
+    update_pos_parser.add_argument(
+        '--trade-date',
+        required=True,
+        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+    )
+    update_pos_parser.add_argument(
+        '--ts-code',
+        required=True,
+        help='股票代码'
+    )
+    update_pos_parser.add_argument(
+        '--shares',
+        type=int,
+        required=True,
+        help='新持仓股数'
+    )
+    update_pos_parser.add_argument(
+        '--buy-price',
+        type=float,
+        required=True,
+        help='新买入价格'
+    )
+    
+    # adjust add-shares
+    add_shares_parser = adjust_subparsers.add_parser(
+        'add-shares',
+        help='对已有持仓加仓'
+    )
+    add_shares_parser.add_argument(
+        '--trade-date',
+        required=True,
+        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+    )
+    add_shares_parser.add_argument(
+        '--ts-code',
+        required=True,
+        help='股票代码'
+    )
+    add_shares_parser.add_argument(
+        '--shares',
+        type=int,
+        required=True,
+        help='加仓股数'
+    )
+    add_shares_parser.add_argument(
+        '--price',
+        type=float,
+        required=True,
+        help='加仓价格'
+    )
+    
+    # adjust cash
+    cash_parser = adjust_subparsers.add_parser(
+        'cash',
+        help='设置账户现金'
+    )
+    cash_parser.add_argument(
+        '--trade-date',
+        required=True,
+        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+    )
+    cash_parser.add_argument(
+        '--set',
+        type=float,
+        required=True,
+        help='新现金金额'
+    )
+    
     args = parser.parse_args()
     
     if args.command is None:
@@ -1155,6 +1471,22 @@ def main():
         run_main(args)
     elif args.command == 'positions':
         view_positions(args)
+    elif args.command == 'adjust':
+        if args.adjust_command is None:
+            adjust_parser.print_help()
+            sys.exit(1)
+        
+        if args.adjust_command == 'delete-position':
+            run_adjust_delete_position(args)
+        elif args.adjust_command == 'update-position':
+            run_adjust_update_position(args)
+        elif args.adjust_command == 'add-shares':
+            run_adjust_add_shares(args)
+        elif args.adjust_command == 'cash':
+            run_adjust_cash(args)
+        else:
+            logger.error(f"未知的 adjust 子命令: {args.adjust_command}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
