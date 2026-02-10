@@ -359,19 +359,19 @@ cp -r data/paper data/paper.backup.$(date +%Y%m%d%H%M%S)
 
 ## 版本兼容性
 
-### v0.4.0+ (当前版本)
+### v0.4.1+ (当前版本)
 - ✅ 完全支持 `adjust` 命令
-- ✅ 仅使用 instructions（废弃 pending_weights）
+- ✅ 仅使用 instructions（指令驱动）
 - ✅ 智能清理和回滚
+- ✅ pending_buys 队列处理补位买入
 
 ### v0.3.x (旧版本)
 - ❌ 不支持 `adjust` 命令
-- ⚠️ 使用 pending_weights（已废弃）
-- ⚠️ 升级到 v0.4.0 后，旧的 pending 数据不再被读取
+- ⚠️ 升级到 v0.4.0+ 后，需使用 instructions 机制
 
 **升级建议**：
-- 在升级前完成所有待执行的 pending_weights
-- 或从最后一次成功的 T1 日期重新运行
+- 确保使用最新版本进行 T0 生成指令
+- 使用 `adjust` 命令进行账户修正
 
 ---
 
