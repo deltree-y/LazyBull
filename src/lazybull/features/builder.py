@@ -36,7 +36,7 @@ class FeatureBuilder:
         
         Args:
             min_list_days: 最小上市天数，默认60天
-            horizon: 预测时间窗口（交易日），默认5天（已废弃，使用 horizons 参数）
+            horizon: 预测时间窗口（交易日），默认5天（自 0.5.0 版本起已废弃，请使用 horizons 参数）
             horizons: 预测时间窗口列表（交易日），默认[5, 10, 20]，生成多个标签 y_ret_5, y_ret_10, y_ret_20
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
             require_label: 是否要求标签非空，默认True（训练/回测模式）；设为False用于实盘/推理模式

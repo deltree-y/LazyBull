@@ -605,8 +605,20 @@ def main():
     try:
         _, model_metadata = registry.load_model(version=args.model_version)
         model_label = model_metadata.get('label_column', 'y_ret_5')
+    except ValueError as e:
+        # 没有找到模型或模型版本不存在
+        logger.warning(f"无法加载模型元数据: {e}")
+        logger.warning("将使用默认标签 y_ret_5。如果需要训练模型，请先运行 train_ml_model.py")
+        model_label = 'y_ret_5'
+    except FileNotFoundError as e:
+        # 模型文件不存在
+        logger.warning(f"模型文件缺失: {e}")
+        logger.warning("请先运行 train_ml_model.py 训练模型")
+        model_label = 'y_ret_5'
     except Exception as e:
-        logger.warning(f"无法加载模型元数据: {e}，将使用默认标签")
+        # 其他未预期错误
+        logger.error(f"加载模型元数据时发生未预期错误: {e}")
+        logger.warning("将使用默认标签 y_ret_5，但回测结果可能不准确")
         model_label = 'y_ret_5'
     
     # 处理 label 参数
