@@ -27,6 +27,7 @@ class FeatureBuilder:
         self,
         min_list_days: int = 60,
         horizon: int = 5,
+        horizons: List[int] = None,
         lookback_windows: List[int] = None,
         require_label: bool = True,
         verbose: bool = False,
@@ -35,13 +36,17 @@ class FeatureBuilder:
         
         Args:
             min_list_days: 最小上市天数，默认60天
-            horizon: 预测时间窗口（交易日），默认5天
+            horizon: 预测时间窗口（交易日），默认5天（已废弃，使用 horizons 参数）
+            horizons: 预测时间窗口列表（交易日），默认[5, 10, 20]，生成多个标签 y_ret_5, y_ret_10, y_ret_20
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
             require_label: 是否要求标签非空，默认True（训练/回测模式）；设为False用于实盘/推理模式
             verbose: 是否输出详细日志
         """
         self.min_list_days = min_list_days
-        self.horizon = horizon
+        # 如果 horizons 未指定，则使用旧参数 horizon 或默认值
+        self.horizons = horizons or [5, 10, 20]
+        # 保留旧参数向后兼容
+        self.horizon = horizon if horizon in self.horizons else self.horizons[0]
         self.lookback_windows = lookback_windows or [5, 10, 20]
         self.require_label = require_label
         self.verbose = verbose
@@ -49,7 +54,7 @@ class FeatureBuilder:
         if self.verbose:
             logger.info(
                 f"特征构建器初始化: min_list_days={min_list_days}, "
-                f"horizon={horizon}, lookback_windows={self.lookback_windows}, "
+                f"horizons={self.horizons}, lookback_windows={self.lookback_windows}, "
                 f"require_label={require_label}"
             )
     
@@ -101,7 +106,7 @@ class FeatureBuilder:
             logger.warning(f"{trade_date} 没有行情数据")
             return pd.DataFrame()
         
-        # 4. 计算标签：未来5日收益
+        # 4. 计算标签：未来N日收益（多个 horizon）
         labels = self._calculate_forward_returns(
             current_data,
             daily_adj,
@@ -223,7 +228,7 @@ class FeatureBuilder:
         trading_dates: List[str],
         current_idx: int
     ) -> pd.DataFrame:
-        """计算未来N日收益标签
+        """计算未来N日收益标签（支持多个 horizon）
         
         Args:
             current_data: 当日数据
@@ -233,49 +238,58 @@ class FeatureBuilder:
             current_idx: 当前交易日在序列中的索引
             
         Returns:
-            包含标签的DataFrame
+            包含多个标签的DataFrame（y_ret_5, y_ret_10, y_ret_20等）
         """
-        # 检查是否有足够的未来交易日
-        if current_idx + self.horizon >= len(trading_dates):
-            logger.warning(f"{trade_date} 后续交易日不足 {self.horizon} 天，无法计算标签")
-            # 返回空标签
-            result = current_data[['trade_date', 'ts_code', 'close_adj']].copy()
-            result['y_ret_5'] = np.nan
-            return result
+        # 初始化结果DataFrame
+        result = current_data[['trade_date', 'ts_code', 'close_adj']].copy()
         
-        # 获取未来第N个交易日
-        future_date = trading_dates[current_idx + self.horizon]
-        
-        # 获取未来收盘价
-        future_data = daily_adj[daily_adj['trade_date'] == future_date][
-            ['ts_code', 'close_adj']
-        ].copy()
-        future_data.rename(columns={'close_adj': 'close_adj_future'}, inplace=True)
-        
-        # 合并当前和未来数据
-        result = current_data[['trade_date', 'ts_code', 'close_adj']].merge(
-            future_data,
-            on='ts_code',
-            how='left'
-        )
-        
-        # 计算收益率: (close_adj_future / close_adj) - 1
-        # 添加除零保护：过滤掉收盘价为0或极小的样本
-        valid_mask = result['close_adj'] > 1e-6
-        result.loc[valid_mask, 'y_ret_5'] = (
-            result.loc[valid_mask, 'close_adj_future'] / result.loc[valid_mask, 'close_adj']
-        ) - 1
-        result.loc[~valid_mask, 'y_ret_5'] = np.nan
-        
-        # 删除中间列
-        result.drop(columns=['close_adj', 'close_adj_future'], inplace=True)
-        
-        # 记录缺失标签的样本数
-        missing_labels = result['y_ret_5'].isna().sum()
-        if missing_labels > 0:
-            logger.warning(
-                f"{trade_date} 有 {missing_labels} 个样本缺失未来收盘价，标签为空"
+        # 为每个 horizon 计算标签
+        for horizon in self.horizons:
+            label_col = f'y_ret_{horizon}'
+            
+            # 检查是否有足够的未来交易日
+            if current_idx + horizon >= len(trading_dates):
+                logger.warning(f"{trade_date} 后续交易日不足 {horizon} 天，{label_col} 标签为空")
+                result[label_col] = np.nan
+                continue
+            
+            # 获取未来第N个交易日
+            future_date = trading_dates[current_idx + horizon]
+            
+            # 获取未来收盘价
+            future_data = daily_adj[daily_adj['trade_date'] == future_date][
+                ['ts_code', 'close_adj']
+            ].copy()
+            future_data.rename(columns={'close_adj': f'close_adj_future_{horizon}'}, inplace=True)
+            
+            # 合并当前和未来数据
+            result = result.merge(
+                future_data,
+                on='ts_code',
+                how='left'
             )
+            
+            # 计算收益率: (close_adj_future / close_adj) - 1
+            # 添加除零保护：过滤掉收盘价为0或极小的样本
+            valid_mask = result['close_adj'] > 1e-6
+            future_col = f'close_adj_future_{horizon}'
+            result.loc[valid_mask, label_col] = (
+                result.loc[valid_mask, future_col] / result.loc[valid_mask, 'close_adj']
+            ) - 1
+            result.loc[~valid_mask, label_col] = np.nan
+            
+            # 删除中间列
+            result.drop(columns=[future_col], inplace=True)
+            
+            # 记录缺失标签的样本数
+            missing_labels = result[label_col].isna().sum()
+            if missing_labels > 0:
+                logger.warning(
+                    f"{trade_date} 有 {missing_labels} 个样本缺失 {label_col}（未来{horizon}日收盘价缺失）"
+                )
+        
+        # 删除 close_adj 列
+        result.drop(columns=['close_adj'], inplace=True)
         
         return result
     
@@ -668,7 +682,7 @@ class FeatureBuilder:
         - 剔除 ST (is_st=1)
         - 剔除上市 < 60天 (list_days < 60)
         - 剔除停牌 (is_suspended=1)
-        - 剔除标签缺失 (y_ret_5 为空) - 仅当 require_label=True 时
+        - 剔除标签缺失 (所有 y_ret_* 为空) - 仅当 require_label=True 时
         - 涨跌停不剔除，仅标记
         
         Args:
@@ -683,12 +697,18 @@ class FeatureBuilder:
         st_count = (df['is_st'] == 1).sum()
         list_days_count = (df['list_days'] < self.min_list_days).sum()
         suspend_count = (df['is_suspended'] == 1).sum()
-        missing_label_count = df['y_ret_5'].isna().sum()
+        
+        # 统计各标签缺失情况
+        label_missing_info = {}
+        for horizon in self.horizons:
+            label_col = f'y_ret_{horizon}'
+            if label_col in df.columns:
+                label_missing_info[label_col] = df[label_col].isna().sum()
         
         logger.info(
             f"过滤前样本数: {original_count}, "
             f"ST: {st_count}, 上市<{self.min_list_days}天: {list_days_count}, "
-            f"停牌: {suspend_count}, 标签缺失: {missing_label_count}"
+            f"停牌: {suspend_count}, 标签缺失: {label_missing_info}"
         )
         
         # 应用过滤
@@ -700,9 +720,17 @@ class FeatureBuilder:
         )
         
         # 仅当 require_label=True 时过滤标签缺失
+        # 要求至少有一个标签非空（而非所有标签都非空）
         if self.require_label:
-            filter_mask = filter_mask & (df['y_ret_5'].notna())
-            logger.info(f"require_label=True, 将过滤标签缺失样本")
+            # 构建标签非空的条件：至少一个标签列非空
+            label_mask = pd.Series([False] * len(df), index=df.index)
+            for horizon in self.horizons:
+                label_col = f'y_ret_{horizon}'
+                if label_col in df.columns:
+                    label_mask = label_mask | df[label_col].notna()
+            
+            filter_mask = filter_mask & label_mask
+            logger.info(f"require_label=True, 将过滤所有标签均缺失的样本")
         else:
             logger.info(f"require_label=False, 保留标签缺失样本（实盘/推理模式）")
         

@@ -343,6 +343,13 @@ def main():
         default="y_ret_5",
         help="标签列名，默认 y_ret_5"
     )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        choices=["y_ret_5", "y_ret_10", "y_ret_20"],
+        help="标签选择（y_ret_5|y_ret_10|y_ret_20），默认 y_ret_5。优先级高于 --label-column"
+    )
     
     # 模型参数
     parser.add_argument(
@@ -391,6 +398,10 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # 如果指定了 --label，则覆盖 --label-column
+    if args.label is not None:
+        args.label_column = args.label
     
     # 设置日志
     setup_logger()

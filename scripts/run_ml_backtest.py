@@ -432,9 +432,8 @@ def main():
     parser.add_argument(
         "--rebalance-freq",
         type=int,
-        default=10,
-        #choices=["D", "W", "M"],
-        help="调仓频率, 单位为交易日天数，默认 10"
+        default=None,
+        help="调仓频率（交易日天数）。若未指定，将根据 --label 自动设置（y_ret_5->5, y_ret_10->10, y_ret_20->20）"
     )
     
     # ML 信号参数
@@ -443,6 +442,13 @@ def main():
         type=int,
         default=None,
         help="模型版本号，默认使用最新版本"
+    )
+    parser.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        choices=["y_ret_5", "y_ret_10", "y_ret_20"],
+        help="标签选择（y_ret_5|y_ret_10|y_ret_20）。若未指定则使用模型训练时的标签。若同时指定 --model-version，将校验一致性"
     )
     parser.add_argument(
         "--top-n",
@@ -590,12 +596,68 @@ def main():
     # 设置日志
     setup_logger()
     
+    # 初始化组件以加载模型元数据
+    from src.lazybull.ml import ModelRegistry
+    storage = Storage(root_path=args.data_root)
+    registry = ModelRegistry(models_dir=f"{args.data_root}/models")
+    
+    # 加载模型元数据以获取 label_column
+    try:
+        _, model_metadata = registry.load_model(version=args.model_version)
+        model_label = model_metadata.get('label_column', 'y_ret_5')
+    except Exception as e:
+        logger.warning(f"无法加载模型元数据: {e}，将使用默认标签")
+        model_label = 'y_ret_5'
+    
+    # 处理 label 参数
+    if args.label is not None:
+        # 用户显式指定了 label
+        # 如果同时指定了 model_version，需要校验一致性
+        if args.model_version is not None and model_label != args.label:
+            logger.error("=" * 60)
+            logger.error("参数错误：模型版本与标签不一致")
+            logger.error("=" * 60)
+            logger.error(f"模型版本 v{args.model_version} 训练时使用的标签: {model_label}")
+            logger.error(f"您指定的标签: {args.label}")
+            logger.error("")
+            logger.error("解决方案：")
+            logger.error(f"1. 移除 --label 参数，使用模型训练时的标签（{model_label}）")
+            logger.error(f"2. 移除 --model-version 参数，自动加载使用 {args.label} 训练的最新模型")
+            logger.error(f"3. 使用正确的 --model-version，该模型应使用 {args.label} 标签训练")
+            logger.error("=" * 60)
+            sys.exit(1)
+        selected_label = args.label
+    else:
+        # 用户未指定 label，使用模型训练时的标签
+        selected_label = model_label
+        logger.info(f"未指定 --label 参数，使用模型训练时的标签: {selected_label}")
+    
+    # 处理 rebalance_freq 参数：若未指定，根据 label 自动设置
+    if args.rebalance_freq is None:
+        # 从 label 中提取数字作为默认调仓频率
+        if selected_label == 'y_ret_5':
+            args.rebalance_freq = 5
+        elif selected_label == 'y_ret_10':
+            args.rebalance_freq = 10
+        elif selected_label == 'y_ret_20':
+            args.rebalance_freq = 20
+        else:
+            # 如果是其他标签，尝试从名称中提取数字
+            import re
+            match = re.search(r'(\d+)', selected_label)
+            if match:
+                args.rebalance_freq = int(match.group(1))
+            else:
+                args.rebalance_freq = 10  # 默认值
+        logger.info(f"未指定 --rebalance-freq 参数，根据标签 {selected_label} 自动设置为: {args.rebalance_freq}")
+    
     logger.info("=" * 60)
     logger.info("ML 信号回测")
     logger.info("=" * 60)
     logger.info(f"回测区间: {args.start_date} 至 {args.end_date}")
     logger.info(f"初始资金: {args.initial_capital}")
-    logger.info(f"调仓频率: {args.rebalance_freq}")
+    logger.info(f"标签: {selected_label}")
+    logger.info(f"调仓频率: {args.rebalance_freq} 个交易日")
     logger.info(f"模型版本: {args.model_version or '最新版本'}")
     logger.info(f"Top N: {args.top_n}")
     logger.info(f"权重方法: {args.weight_method}")
@@ -617,8 +679,7 @@ def main():
         logger.info(f"  - 恢复等待周期: {args.equity_curve_recovery_delay_periods} 个调仓周期")
 
     try:
-        # 初始化组件
-        storage = Storage(root_path=args.data_root)
+        # 初始化组件（registry 已在前面初始化）
         loader = DataLoader(storage)
         
         # 创建止损配置
