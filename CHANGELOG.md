@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-02-11
+
+### Added
+- **多 horizon 标签支持**：特征构建同时生成 `y_ret_5`, `y_ret_10`, `y_ret_20` 三个标签
+  - 标签定义：未来 N 个交易日的后复权收益率，公式：`(close_adj(t+N) / close_adj(t)) - 1`
+  - `FeatureBuilder` 新增 `horizons` 参数（默认 `[5, 10, 20]`），同时生成多个预测窗口的标签
+  - `scripts/build_features.py` 新增 `--horizons` CLI 参数，支持自定义预测窗口列表
+
+- **训练脚本支持选择标签**：`scripts/train_ml_model.py` 支持选择不同 horizon 的标签进行训练
+  - 新增 `--label` CLI 参数（可选 `y_ret_5|y_ret_10|y_ret_20`，默认 `y_ret_5`）
+  - 训练元数据自动记录所用标签到 `model_registry.json` 的 `label_column` 字段
+
+- **回测脚本支持标签选择与自动调仓频率**：`scripts/run_ml_backtest.py` 增强标签和调仓频率管理
+  - 新增 `--label` CLI 参数（可选 `y_ret_5|y_ret_10|y_ret_20`）
+  - 当未显式指定 `--rebalance-freq` 时，根据标签自动设置默认值：
+    - `y_ret_5` → 调仓频率 5 个交易日
+    - `y_ret_10` → 调仓频率 10 个交易日
+    - `y_ret_20` → 调仓频率 20 个交易日
+  - 若同时指定 `--model-version` 和 `--label`，自动校验模型元数据中的标签一致性，不一致时给出清晰的中文报错提示
+
+### Changed
+- **`FeatureBuilder` 向后兼容**：保留 `horizon` 参数（已废弃），新参数 `horizons` 优先级更高
+- **过滤逻辑优化**：`_apply_filters` 方法改为要求至少一个标签非空（而非所有标签都非空），更加灵活
+
+### Documentation
+- 新增 `docs/PR/multi_horizon_labels_and_selectable_training.md`：详细说明本次功能的背景、实现方案和使用方法
+- 新增 `docs/guide/ml_label_horizon_guide.md`：完整的使用指南，包含标签定义、特征构建、训练和回测的详细说明
+
+### Version
+- 版本号从 0.4.2 升级到 0.5.0
+
 ## [0.4.2] - 2026-02-10
 
 ### Added

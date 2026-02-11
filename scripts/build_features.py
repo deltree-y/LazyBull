@@ -414,10 +414,17 @@ def main():
         help="最小上市天数（默认：60）"
     )
     parser.add_argument(
+        "--horizons",
+        type=int,
+        nargs='+',
+        default=[5, 10, 20],
+        help="预测时间窗口（交易日）列表（默认：5 10 20），生成 y_ret_5, y_ret_10, y_ret_20 等标签"
+    )
+    parser.add_argument(
         "--horizon",
         type=int,
         default=5,
-        help="预测时间窗口（交易日）（默认：5）"
+        help="（已废弃，使用 --horizons 参数）单个预测时间窗口（交易日）（默认：5）"
     )
     
     args = parser.parse_args()
@@ -429,6 +436,7 @@ def main():
     logger.info("直接构建特征（自动补齐依赖）")
     logger.info("=" * 60)
     logger.info(f"日期范围: {args.start_date} - {args.end_date}")
+    logger.info(f"预测窗口: {args.horizons}")
     logger.info(f"强制重新构建: {'是' if args.force else '否'}")
     logger.info(f"跳过自动下载: {'是' if args.skip_download else '否'}")
     logger.info("=" * 60)
@@ -440,7 +448,7 @@ def main():
         cleaner = DataCleaner()
         builder = FeatureBuilder(
             min_list_days=args.min_list_days,
-            horizon=args.horizon
+            horizons=args.horizons
         )
         
         # 如果不跳过下载，则确保数据完整
