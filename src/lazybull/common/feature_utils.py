@@ -167,22 +167,24 @@ def cross_sectional_zscore(
     # 标准化
     if group_col is not None:
         # 按组标准化
-        result = df.groupby(group_col)[value_col if winsorize_limits is None else values.name].transform(
-            lambda x: zscore_transform(pd.Series(x.values if hasattr(x, 'values') else x), ddof=ddof)
-        )
-        # 如果已经 winsorize，则使用 winsorize 后的值
         if winsorize_limits is not None:
+            # 已经 winsorize，直接对 winsorized values 标准化
             result = df.groupby(group_col).apply(
                 lambda g: zscore_transform(
                     winsorize_series(g[value_col], limits=winsorize_limits),
                     ddof=ddof
                 )
             ).reset_index(level=0, drop=True)
+        else:
+            # 未 winsorize，直接标准化原始值
+            result = df.groupby(group_col)[value_col].transform(
+                lambda x: zscore_transform(pd.Series(x.values), ddof=ddof)
+            )
     else:
         # 全局标准化
         if winsorize_limits is not None:
             result = zscore_transform(values, ddof=ddof)
         else:
-            result = zscore_transform(values, ddof=ddof)
+            result = zscore_transform(df[value_col], ddof=ddof)
     
     return result

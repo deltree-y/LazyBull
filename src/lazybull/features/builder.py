@@ -671,11 +671,20 @@ class FeatureBuilder:
                 )
             
             # 按股票分组计算 rolling 特征
-            rolling_features = hist_moneyflow.groupby('ts_code').agg({
-                'net_mf_amount': ['sum', 'mean'] if 'net_mf_amount' in hist_moneyflow.columns else [],
-                'lg_net_amount': ['sum'] if 'lg_net_amount' in hist_moneyflow.columns else [],
-                'elg_net_amount': ['sum'] if 'elg_net_amount' in hist_moneyflow.columns else []
-            }).reset_index()
+            # 只对存在的列进行聚合
+            agg_dict = {}
+            if 'net_mf_amount' in hist_moneyflow.columns:
+                agg_dict['net_mf_amount'] = ['sum', 'mean']
+            if 'lg_net_amount' in hist_moneyflow.columns:
+                agg_dict['lg_net_amount'] = ['sum']
+            if 'elg_net_amount' in hist_moneyflow.columns:
+                agg_dict['elg_net_amount'] = ['sum']
+            
+            if not agg_dict:
+                # 没有可聚合的列，跳过
+                continue
+            
+            rolling_features = hist_moneyflow.groupby('ts_code').agg(agg_dict).reset_index()
             
             # 展平列名
             new_columns = ['ts_code']

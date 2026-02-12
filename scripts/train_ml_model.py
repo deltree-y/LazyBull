@@ -277,12 +277,17 @@ def generate_classification_labels(
         if pos_topk is not None:
             # 数量模式：Top K
             actual_k = min(pos_topk, len(sorted_values))
-            threshold_value = sorted_values.iloc[actual_k - 1] if actual_k > 0 else np.inf
             
-            # 标记正类（处理并列情况）
-            group.loc[valid_mask, binary_label_col] = (
-                group.loc[valid_mask, label_column] >= threshold_value
-            ).astype(int)
+            if actual_k == 0:
+                # 没有样本，全部标记为负类
+                group.loc[valid_mask, binary_label_col] = 0
+            else:
+                threshold_value = sorted_values.iloc[actual_k - 1]
+                
+                # 标记正类（处理并列情况）
+                group.loc[valid_mask, binary_label_col] = (
+                    group.loc[valid_mask, label_column] >= threshold_value
+                ).astype(int)
         else:
             # 百分比模式：Top X%
             quantile_threshold = sorted_values.quantile(1 - pos_quantile)
@@ -699,10 +704,10 @@ def main():
         full_train_params = train_params.copy()
         full_train_params.update({
             "task": args.task,
-            "label_transform": args.label_transform if args.task == "regression" else "N/A",
-            "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else "N/A",
-            "pos_quantile": args.pos_quantile if args.task == "classification" else "N/A",
-            "pos_topk": args.pos_topk if args.task == "classification" else "N/A"
+            "label_transform": args.label_transform if args.task == "regression" else None,
+            "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else None,
+            "pos_quantile": args.pos_quantile if args.task == "classification" else None,
+            "pos_topk": args.pos_topk if args.task == "classification" else None
         })
         
         # 4. 注册模型
