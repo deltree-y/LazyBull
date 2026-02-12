@@ -113,15 +113,15 @@ def test_rank_ic_calculation(trained_model):
     # 计算 Spearman 相关
     rank_ic = scores.corr(returns, method='spearman')
     
-    # 完美正相关应该是 1.0
-    assert rank_ic == 1.0
+    # 完美正相关应该接近 1.0
+    assert abs(rank_ic - 1.0) < 1e-10
     
     # 创建完美负相关
     returns_neg = pd.Series([0.02, 0.04, 0.06, 0.08, 0.10], index=[f"stock_{i}" for i in range(5)])
     rank_ic_neg = scores.corr(returns_neg, method='spearman')
     
-    # 完美负相关应该是 -1.0
-    assert rank_ic_neg == -1.0
+    # 完美负相关应该接近 -1.0
+    assert abs(rank_ic_neg - (-1.0)) < 1e-10
     
     # 创建无相关
     returns_random = pd.Series([0.06, 0.02, 0.10, 0.04, 0.08], index=[f"stock_{i}" for i in range(5)])
