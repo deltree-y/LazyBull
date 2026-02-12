@@ -527,7 +527,7 @@ def evaluate_daily(
     # TopK 平均真实收益
     topk_return = None
     if topk is not None and topk > 0:
-        topk_samples = eval_df.nsmallest(min(topk, len(eval_df)), 'group')  # group 越小，排名越高
+        topk_samples = eval_df.nlargest(min(topk, len(eval_df)), 'score')
         if len(topk_samples) > 0:
             topk_return = topk_samples[label_column].mean()
     
@@ -659,7 +659,7 @@ def export_evaluation_panel(
         # 聚合指标
         rank_ic_mean = daily_df['RankIC'].mean()
         rank_ic_std = daily_df['RankIC'].std()
-        rank_ic_ir = rank_ic_mean / rank_ic_std if rank_ic_std > 0 else None
+        rank_ic_ir = rank_ic_mean / rank_ic_std if rank_ic_std > 1e-10 else None
         
         topk_mean = daily_df['TopK平均收益'].mean() if 'TopK平均收益' in daily_df.columns else None
         long_short_mean = daily_df['多空收益'].mean() if '多空收益' in daily_df.columns else None
@@ -892,7 +892,6 @@ def main():
     parser.add_argument(
         "--export-eval",
         action="store_true",
-        default=True,
         help="导出评估面板 CSV（默认开启）"
     )
     parser.add_argument(
@@ -913,6 +912,9 @@ def main():
         default=None,
         help="评估面板 TopK 指标的 K，默认使用 --top-n"
     )
+    
+    # 设置 export_eval 的默认值（如果用户既没有指定 --export-eval 也没有指定 --no-export-eval）
+    parser.set_defaults(export_eval=True)
     
     args = parser.parse_args()
     

@@ -15,10 +15,11 @@ class MockMLModel:
     """模拟 ML 模型（用于测试）"""
     
     def predict(self, X):
-        """返回模拟预测值（基于第一个特征）"""
+        """返回模拟预测值（基于第一个特征，确保测试可重复性）"""
         if len(X.columns) > 0:
             return X.iloc[:, 0].values * 0.1
-        return np.random.randn(len(X))
+        # 如果没有特征列，返回全零（测试边界情况）
+        return np.zeros(len(X))
 
 
 @pytest.fixture
