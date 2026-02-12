@@ -40,6 +40,7 @@ class PaperTradingRunner:
         data_root: str = "./data",
         paper_root: str = "./data/paper",
         weight_method: str = "equal",
+        horizon: int = 5,
         verbose: bool = True,
     ):
         """初始化运行器
@@ -50,6 +51,7 @@ class PaperTradingRunner:
             data_root: 数据根目录
             paper_root: 纸面交易数据目录
             weight_method: 权重分配方法，"equal"表示等权，"score"表示按分数加权
+            horizon: 特征构建的预测周期（天数），用于生成 y_ret_N 特征，默认 5
             verbose: 是否输出详细日志
         """
         # 初始化存储
@@ -73,8 +75,9 @@ class PaperTradingRunner:
         # 初始化数据清洗器和特征构建器（用于 ensure 功能）
         self.cleaner = DataCleaner(verbose=verbose)
         # 实盘模式使用 require_label=False，因为 T0 没有未来数据无法生成标签
-        self.feature_builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=False)
+        self.feature_builder = FeatureBuilder(min_list_days=60, horizon=horizon, require_label=False)
 
+        self.horizon = horizon  # 保存 horizon 供其他地方使用
         self.verbose = verbose
         # 确保基础数据存在（如交易日历、股票基本信息等）
         #ensure_basic_data(self.storage, self.loader, self.cleaner, self.client)
