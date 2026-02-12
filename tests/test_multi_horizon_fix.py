@@ -188,7 +188,7 @@ class TestMultiHorizonCalculationFix:
         
         # 创建简单的线性价格序列以便验证
         num_days = 30
-        dates = [f"2023{i+1:04d}" for i in range(num_days)]
+        dates = pd.date_range('2023-01-01', periods=num_days, freq='D').strftime('%Y%m%d').tolist()
         
         trade_cal = pd.DataFrame({
             'exchange': ['SSE'] * num_days,
@@ -347,7 +347,7 @@ class TestMultiHorizonCalculationFix:
         
         # 创建大量交易日
         num_days = 1000
-        dates = [f"2020{i+1:04d}" for i in range(num_days)]
+        dates = pd.date_range('2020-01-01', periods=num_days, freq='D').strftime('%Y%m%d').tolist()
         
         trade_cal = pd.DataFrame({
             'exchange': ['SSE'] * num_days,
