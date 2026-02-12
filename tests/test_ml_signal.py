@@ -137,7 +137,7 @@ def test_ml_signal_generate_score_weight(trained_model):
     
     features_df = pd.DataFrame({
         "ts_code": universe,
-        "f1": [10, 5, 8, 3],  # 预测值基于此列
+        "f1": [10, 5, 8, 3],  # 预测值基于此列：预测值为 [1.0, 0.5, 0.8, 0.3]
         "f2": [1, 2, 3, 4],
         "f3": [5, 6, 7, 8]
     })
@@ -157,6 +157,16 @@ def test_ml_signal_generate_score_weight(trained_model):
     assert "000001.SZ" in signals
     assert "000003.SZ" in signals
     assert "000002.SZ" in signals
+    
+    # 验证权重不相等（非等权）
+    weights = list(signals.values())
+    assert len(set(weights)) > 1, "score权重应该产生不同的权重值，而不是等权"
+    
+    # 验证权重大小关系：000001.SZ > 000003.SZ > 000002.SZ
+    assert signals["000001.SZ"] > signals["000003.SZ"], \
+        "分数更高的股票权重应该更大"
+    assert signals["000003.SZ"] > signals["000002.SZ"], \
+        "分数更高的股票权重应该更大"
 
 
 def test_ml_signal_generate_no_features(trained_model):
