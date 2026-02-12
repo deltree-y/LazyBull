@@ -87,14 +87,17 @@ class FeatureBuilder:
         """
         logger.info(f"开始构建 {trade_date} 的特征")
         
-        # 1. 获取交易日序列
+        # 1. 获取交易日序列和索引映射
         trading_dates = self._get_trading_dates(trade_cal)
         
-        if trade_date not in trading_dates:
+        # 构建日期到索引的映射字典（避免重复使用 list.index() 导致 O(n) 查找）
+        date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+        
+        if trade_date not in date_to_idx:
             logger.warning(f"{trade_date} 不是交易日，跳过")
             return pd.DataFrame()
         
-        current_idx = trading_dates.index(trade_date)
+        current_idx = date_to_idx[trade_date]
         
         # 2. 计算后复权收盘价
         daily_adj = self._calculate_adj_close(daily_data, adj_factor)
@@ -157,7 +160,7 @@ class FeatureBuilder:
             trade_cal: 交易日历DataFrame
             
         Returns:
-            交易日列表（格式YYYYMMDD，排序）
+            交易日列表（格式YYYYMMDD，排序且去重）
         """
         if 'cal_date' in trade_cal.columns:
             # 如果是datetime格式，转换为字符串
@@ -165,11 +168,13 @@ class FeatureBuilder:
                 trade_cal = trade_cal.copy()
                 trade_cal['cal_date'] = trade_cal['cal_date'].dt.strftime('%Y%m%d')
             
-            trading_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+            # 提取交易日并去重（关键修复：防止重复日期导致索引计算错误）
+            trading_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].unique().tolist()
         else:
             logger.error("交易日历缺少 cal_date 字段")
             return []
         
+        # 排序并返回（确保时间顺序正确）
         return sorted(trading_dates)
     
     def _calculate_adj_close(
