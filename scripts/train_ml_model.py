@@ -178,11 +178,141 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     return X_train, y_train, X_val, y_val, feature_columns
 
 
+def transform_labels_cs_zscore(
+    df: pd.DataFrame,
+    label_column: str,
+    winsorize_p: float = 0.01
+) -> pd.DataFrame:
+    """对标签进行截面 winsorize + zscore 变换
+    
+    仅在训练阶段生效，对每个 trade_date 的原始回归标签进行：
+    1. 截面 winsorize（截断极端值）
+    2. 截面 zscore（标准化：均值=0，标准差=1）
+    
+    Args:
+        df: 训练数据 DataFrame
+        label_column: 标签列名
+        winsorize_p: winsorize 参数，默认 0.01（截断上下1%极端值）
+        
+    Returns:
+        变换后的 DataFrame（标签列已替换为标准化后的值）
+    """
+    from src.lazybull.common.feature_utils import cross_sectional_zscore
+    
+    logger.info(f"对标签 {label_column} 进行截面 z-score 标准化...")
+    logger.info(f"  winsorize 参数: {winsorize_p}")
+    
+    df_transformed = df.copy()
+    
+    # 按 trade_date 分组进行截面标准化
+    df_transformed[label_column] = cross_sectional_zscore(
+        df_transformed,
+        value_col=label_column,
+        group_col='trade_date',
+        winsorize_limits=(winsorize_p, winsorize_p),
+        ddof=0
+    )
+    
+    # 统计标准化后的效果
+    mean = df_transformed[label_column].mean()
+    std = df_transformed[label_column].std()
+    logger.info(f"标准化后: 均值={mean:.6f}, 标准差={std:.6f}")
+    
+    # 检查是否有 NaN（可能由于某天标准差为0）
+    nan_count = df_transformed[label_column].isna().sum()
+    if nan_count > 0:
+        logger.warning(f"标准化后产生 {nan_count} 个 NaN（可能某天标准差为0），将被移除")
+        df_transformed = df_transformed.dropna(subset=[label_column])
+    
+    return df_transformed
+
+
+def generate_classification_labels(
+    df: pd.DataFrame,
+    label_column: str,
+    pos_quantile: Optional[float] = None,
+    pos_topk: Optional[int] = None
+) -> pd.DataFrame:
+    """生成分类标签（TopN 正类）
+    
+    按每个交易日截面，将原始标签按分位阈值或数量阈值转为 0/1 标签。
+    
+    Args:
+        df: 训练数据 DataFrame
+        label_column: 原始标签列名
+        pos_quantile: 百分比阈值（例如 0.2 表示 Top20% 为正类）
+        pos_topk: 数量阈值（例如 300 表示每个交易日收益最高的 300 只为正类）
+        
+    Returns:
+        添加了二分类标签的 DataFrame（新增列 {label_column}_binary）
+        
+    Note:
+        pos_quantile 和 pos_topk 二选一，pos_topk 优先级更高
+    """
+    logger.info(f"生成分类标签（基于 {label_column}）...")
+    
+    if pos_quantile is None and pos_topk is None:
+        raise ValueError("必须指定 pos_quantile 或 pos_topk 之一")
+    
+    if pos_topk is not None and pos_quantile is not None:
+        logger.warning("同时指定了 pos_topk 和 pos_quantile，使用 pos_topk（优先级更高）")
+    
+    df_labeled = df.copy()
+    binary_label_col = f"{label_column}_binary"
+    
+    # 按 trade_date 分组生成标签
+    def label_group(group):
+        group = group.copy()
+        
+        # 排除 NaN
+        valid_mask = group[label_column].notna()
+        group.loc[~valid_mask, binary_label_col] = np.nan
+        
+        if valid_mask.sum() == 0:
+            return group
+        
+        # 对有效样本排序
+        sorted_values = group.loc[valid_mask, label_column].sort_values(ascending=False)
+        
+        if pos_topk is not None:
+            # 数量模式：Top K
+            actual_k = min(pos_topk, len(sorted_values))
+            threshold_value = sorted_values.iloc[actual_k - 1] if actual_k > 0 else np.inf
+            
+            # 标记正类（处理并列情况）
+            group.loc[valid_mask, binary_label_col] = (
+                group.loc[valid_mask, label_column] >= threshold_value
+            ).astype(int)
+        else:
+            # 百分比模式：Top X%
+            quantile_threshold = sorted_values.quantile(1 - pos_quantile)
+            group.loc[valid_mask, binary_label_col] = (
+                group.loc[valid_mask, label_column] >= quantile_threshold
+            ).astype(int)
+        
+        return group
+    
+    df_labeled = df_labeled.groupby('trade_date', group_keys=False).apply(label_group)
+    
+    # 统计正类比例
+    total_valid = df_labeled[binary_label_col].notna().sum()
+    pos_count = df_labeled[binary_label_col].sum()
+    pos_ratio = pos_count / total_valid if total_valid > 0 else 0
+    
+    logger.info(f"分类标签生成完成:")
+    logger.info(f"  模式: {'pos_topk=' + str(pos_topk) if pos_topk else 'pos_quantile=' + str(pos_quantile)}")
+    logger.info(f"  正类样本数: {pos_count:.0f} / {total_valid:.0f} ({pos_ratio:.2%})")
+    
+    return df_labeled
+
+
+
 def train_xgboost_model(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     X_val: pd.DataFrame,
     y_val: pd.Series,
+    task: str = "regression",
     n_estimators: int = 100,
     max_depth: int = 6,
     learning_rate: float = 0.1,
@@ -190,15 +320,17 @@ def train_xgboost_model(
     colsample_bytree: float = 0.8,
     random_state: int = 42
 ) -> tuple:
-    """训练 XGBoost 模型（改进版本）
+    """训练 XGBoost 模型（支持回归和分类）
     
     改进点：
     1. 增加早停机制（early stopping）防止过拟合
     2. 优化默认超参数（更深的树和正则化）
     3. 添加更全面的评估指标（IC/RankIC）
-    4. 对标签进行 winsorize 处理减少异常值影响
+    4. 对回归标签进行 winsorize 处理减少异常值影响（已在 cs_zscore 中处理）
+    5. 支持分类任务（二分类）
     
     Args:
+        task: 任务类型，"regression" 或 "classification"
         X_train: 训练特征数据
         y_train: 训练标签数据
         X_val: 验证特征数据
@@ -213,19 +345,23 @@ def train_xgboost_model(
     Returns:
         (model, train_params, train_metrics, val_metrics) 元组
     """
-    logger.info("开始训练 XGBoost 模型（改进版本）...")
+    logger.info(f"开始训练 XGBoost 模型（任务类型: {task}）...")
     
-    # 对标签进行 winsorize 处理（截断极端值，减少噪音）
-    from scipy.stats import mstats
-    y_train_winsorized = pd.Series(
-        mstats.winsorize(y_train, limits=[0.01, 0.01]),  # 截断上下1%极端值
-        index=y_train.index
-    )
-    logger.info("标签 winsorize 处理完成（截断上下1%极端值）")
+    # 对回归标签进行 winsorize 处理（分类标签不需要）
+    if task == "regression":
+        from scipy.stats import mstats
+        y_train_processed = pd.Series(
+            mstats.winsorize(y_train, limits=[0.01, 0.01]),  # 截断上下1%极端值
+            index=y_train.index
+        )
+        logger.info("标签 winsorize 处理完成（截断上下1%极端值）")
+    else:
+        y_train_processed = y_train
+        logger.info("分类任务，跳过标签 winsorize 处理")
     
-    # 准备训练参数（增加正则化参数）
+    # 准备训练参数
     train_params = {
-        "objective": "reg:squarederror",
+        "objective": "reg:squarederror" if task == "regression" else "binary:logistic",
         "n_estimators": n_estimators,
         "max_depth": max_depth,
         "learning_rate": learning_rate,
@@ -244,75 +380,131 @@ def train_xgboost_model(
     logger.info(f"训练参数: {train_params}")
     logger.info("使用早停机制（early_stopping_rounds=30）")
     
-    # 创建并训练模型（使用早停）
-    model = xgb.XGBRegressor(**train_params)
+    # 创建并训练模型
+    if task == "regression":
+        model = xgb.XGBRegressor(**train_params)
+    else:
+        model = xgb.XGBClassifier(**train_params)
     
     # 如果有验证集，使用早停机制
     if len(X_val) > 0:
         model.fit(
-            X_train, y_train_winsorized,
+            X_train, y_train_processed,
             eval_set=[(X_val, y_val)],
             verbose=False  # 不打印每轮训练信息
         )
         logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
     else:
-        model.fit(X_train, y_train_winsorized)
+        model.fit(X_train, y_train_processed)
         logger.info("模型训练完成（无验证集，未使用早停）")
     
     # 计算训练集性能指标
-    y_train_pred = model.predict(X_train)
-    train_mse = mean_squared_error(y_train, y_train_pred)  # 注意：使用原始标签评估
-    train_rmse = train_mse ** 0.5
-    train_r2 = r2_score(y_train, y_train_pred)
-    
-    # 计算训练集 IC（信息系数，衡量预测与真实值的相关性）
-    train_ic = y_train.corr(pd.Series(y_train_pred, index=y_train.index))
-    
-    train_metrics = {
-        "mse": float(train_mse),
-        "rmse": float(train_rmse),
-        "r2": float(train_r2),
-        "ic": float(train_ic)
-    }
-    
-    logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}")
-    
-    # 计算验证集性能指标（包括 IC）
-    if len(X_val) > 0:
-        y_val_pred = model.predict(X_val)
-        val_mse = mean_squared_error(y_val, y_val_pred)
-        val_rmse = val_mse ** 0.5
-        val_r2 = r2_score(y_val, y_val_pred)
+    if task == "regression":
+        y_train_pred = model.predict(X_train)
+        train_mse = mean_squared_error(y_train, y_train_pred)  # 注意：使用原始标签评估
+        train_rmse = train_mse ** 0.5
+        train_r2 = r2_score(y_train, y_train_pred)
         
-        # 计算验证集 IC（更重要的指标）
-        val_ic = y_val.corr(pd.Series(y_val_pred, index=y_val.index))
+        # 计算训练集 IC（信息系数，衡量预测与真实值的相关性）
+        train_ic = y_train.corr(pd.Series(y_train_pred, index=y_train.index))
         
-        # 计算 RankIC（排序相关性，对选股策略更有意义）
-        from scipy.stats import spearmanr
-        val_rank_ic, _ = spearmanr(y_val, y_val_pred)
-        
-        val_metrics = {
-            "mse": float(val_mse),
-            "rmse": float(val_rmse),
-            "r2": float(val_r2),
-            "ic": float(val_ic),
-            "rank_ic": float(val_rank_ic)
+        train_metrics = {
+            "mse": float(train_mse),
+            "rmse": float(train_rmse),
+            "r2": float(train_r2),
+            "ic": float(train_ic)
         }
         
-        logger.info("=" * 60)
-        logger.info("验证集评估结果")
-        logger.info("=" * 60)
-        logger.info(f"验证集样本数: {len(X_val)}")
-        logger.info(f"MSE（均方误差）: {val_mse:.6f}")
-        logger.info(f"RMSE（均方根误差）: {val_rmse:.6f}")
-        logger.info(f"R2（决定系数）: {val_r2:.4f}")
-        logger.info(f"IC（信息系数）: {val_ic:.4f}  <- 重要指标")
-        logger.info(f"RankIC（排序IC）: {val_rank_ic:.4f}  <- 选股策略关键指标")
-        logger.info("=" * 60)
-        logger.info("提示：对于选股策略，IC 和 RankIC 比 R2 更重要")
-        logger.info("     IC > 0.03 通常可认为有一定预测能力")
-        logger.info("     RankIC > 0.05 说明排序能力较好")
-        logger.info("=" * 60)
+        logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}")
+    else:
+        # 分类任务
+        from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score
+        
+        y_train_pred_proba = model.predict_proba(X_train)[:, 1]
+        y_train_pred_binary = model.predict(X_train)
+        
+        train_acc = accuracy_score(y_train, y_train_pred_binary)
+        train_auc = roc_auc_score(y_train, y_train_pred_proba)
+        train_precision = precision_score(y_train, y_train_pred_binary)
+        train_recall = recall_score(y_train, y_train_pred_binary)
+        
+        train_metrics = {
+            "accuracy": float(train_acc),
+            "auc": float(train_auc),
+            "precision": float(train_precision),
+            "recall": float(train_recall)
+        }
+        
+        logger.info(f"训练集性能: ACC={train_acc:.4f}, AUC={train_auc:.4f}, Precision={train_precision:.4f}, Recall={train_recall:.4f}")
+    
+    # 计算验证集性能指标
+    if len(X_val) > 0:
+        if task == "regression":
+            y_val_pred = model.predict(X_val)
+            val_mse = mean_squared_error(y_val, y_val_pred)
+            val_rmse = val_mse ** 0.5
+            val_r2 = r2_score(y_val, y_val_pred)
+            
+            # 计算验证集 IC（更重要的指标）
+            val_ic = y_val.corr(pd.Series(y_val_pred, index=y_val.index))
+            
+            # 计算 RankIC（排序相关性，对选股策略更有意义）
+            from scipy.stats import spearmanr
+            val_rank_ic, _ = spearmanr(y_val, y_val_pred)
+            
+            val_metrics = {
+                "mse": float(val_mse),
+                "rmse": float(val_rmse),
+                "r2": float(val_r2),
+                "ic": float(val_ic),
+                "rank_ic": float(val_rank_ic)
+            }
+            
+            logger.info("=" * 60)
+            logger.info("验证集评估结果（回归任务）")
+            logger.info("=" * 60)
+            logger.info(f"验证集样本数: {len(X_val)}")
+            logger.info(f"MSE（均方误差）: {val_mse:.6f}")
+            logger.info(f"RMSE（均方根误差）: {val_rmse:.6f}")
+            logger.info(f"R2（决定系数）: {val_r2:.4f}")
+            logger.info(f"IC（信息系数）: {val_ic:.4f}  <- 重要指标")
+            logger.info(f"RankIC（排序IC）: {val_rank_ic:.4f}  <- 选股策略关键指标")
+            logger.info("=" * 60)
+            logger.info("提示：对于选股策略，IC 和 RankIC 比 R2 更重要")
+            logger.info("     IC > 0.03 通常可认为有一定预测能力")
+            logger.info("     RankIC > 0.05 说明排序能力较好")
+            logger.info("=" * 60)
+        else:
+            # 分类任务
+            from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score
+            
+            y_val_pred_proba = model.predict_proba(X_val)[:, 1]
+            y_val_pred_binary = model.predict(X_val)
+            
+            val_acc = accuracy_score(y_val, y_val_pred_binary)
+            val_auc = roc_auc_score(y_val, y_val_pred_proba)
+            val_precision = precision_score(y_val, y_val_pred_binary)
+            val_recall = recall_score(y_val, y_val_pred_binary)
+            
+            val_metrics = {
+                "accuracy": float(val_acc),
+                "auc": float(val_auc),
+                "precision": float(val_precision),
+                "recall": float(val_recall)
+            }
+            
+            logger.info("=" * 60)
+            logger.info("验证集评估结果（分类任务）")
+            logger.info("=" * 60)
+            logger.info(f"验证集样本数: {len(X_val)}")
+            logger.info(f"Accuracy（准确率）: {val_acc:.4f}")
+            logger.info(f"AUC（ROC曲线下面积）: {val_auc:.4f}  <- 重要指标")
+            logger.info(f"Precision（精确率）: {val_precision:.4f}")
+            logger.info(f"Recall（召回率）: {val_recall:.4f}")
+            logger.info("=" * 60)
+            logger.info("提示：对于分类任务，AUC 是关键指标")
+            logger.info("     AUC > 0.6 说明模型有一定区分能力")
+            logger.info("=" * 60)
     else:
         val_metrics = {}
         logger.warning("验证集为空，无法评估")
@@ -349,6 +541,40 @@ def main():
         default=None,
         choices=["y_ret_5", "y_ret_10", "y_ret_20"],
         help="标签选择（y_ret_5|y_ret_10|y_ret_20），默认 y_ret_5。优先级高于 --label-column"
+    )
+    
+    # 任务类型和标签变换参数
+    parser.add_argument(
+        "--task",
+        type=str,
+        default="regression",
+        choices=["regression", "classification"],
+        help="任务类型（regression|classification），默认 regression"
+    )
+    parser.add_argument(
+        "--label-transform",
+        type=str,
+        default="raw",
+        choices=["raw", "cs_zscore"],
+        help="标签变换方式（raw|cs_zscore），默认 raw。仅对 regression 任务生效"
+    )
+    parser.add_argument(
+        "--winsorize-p",
+        type=float,
+        default=0.01,
+        help="winsorize 参数（截断比例），默认 0.01（截断上下1%%）。仅当 label-transform=cs_zscore 时生效"
+    )
+    parser.add_argument(
+        "--pos-quantile",
+        type=float,
+        default=None,
+        help="分类任务正类百分比阈值（例如 0.2 表示 Top20%%），与 pos-topk 二选一"
+    )
+    parser.add_argument(
+        "--pos-topk",
+        type=int,
+        default=None,
+        help="分类任务正类数量阈值（例如 300 表示每日 Top300），与 pos-quantile 二选一，优先级更高"
     )
     
     # 模型参数
@@ -422,12 +648,39 @@ def main():
         # 1. 加载特征数据
         df = load_features_data(storage, loader, args.start_date, args.end_date)
         
+        # 1.5. 应用标签变换（如果需要）
+        if args.task == "classification":
+            # 分类任务：生成二分类标签
+            if args.pos_quantile is None and args.pos_topk is None:
+                raise ValueError("分类任务必须指定 --pos-quantile 或 --pos-topk")
+            
+            df = generate_classification_labels(
+                df,
+                label_column=args.label_column,
+                pos_quantile=args.pos_quantile,
+                pos_topk=args.pos_topk
+            )
+            
+            # 使用二分类标签作为训练标签
+            binary_label_col = f"{args.label_column}_binary"
+            actual_label_column = binary_label_col
+        else:
+            # 回归任务：应用标签变换
+            if args.label_transform == "cs_zscore":
+                df = transform_labels_cs_zscore(
+                    df,
+                    label_column=args.label_column,
+                    winsorize_p=args.winsorize_p
+                )
+            actual_label_column = args.label_column
+        
         # 2. 准备训练数据（包含验证集切分）
-        X_train, y_train, X_val, y_val, feature_columns = prepare_training_data(df, args.label_column)
+        X_train, y_train, X_val, y_val, feature_columns = prepare_training_data(df, actual_label_column)
         
         # 3. 训练模型
         model, train_params, train_metrics, val_metrics = train_xgboost_model(
             X_train, y_train, X_val, y_val,
+            task=args.task,
             n_estimators=args.n_estimators,
             max_depth=args.max_depth,
             learning_rate=args.learning_rate,
@@ -442,16 +695,26 @@ def main():
             "validation": val_metrics
         }
         
+        # 准备完整的训练参数（包含任务配置）
+        full_train_params = train_params.copy()
+        full_train_params.update({
+            "task": args.task,
+            "label_transform": args.label_transform if args.task == "regression" else "N/A",
+            "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else "N/A",
+            "pos_quantile": args.pos_quantile if args.task == "classification" else "N/A",
+            "pos_topk": args.pos_topk if args.task == "classification" else "N/A"
+        })
+        
         # 4. 注册模型
         version = registry.register_model(
             model=model,
-            model_type="xgboost",
+            model_type=f"xgboost_{args.task}",
             train_start_date=args.start_date,
             train_end_date=args.end_date,
             feature_columns=feature_columns,
             label_column=args.label_column,
             n_samples=len(X_train) + len(X_val),
-            train_params=train_params,
+            train_params=full_train_params,
             performance_metrics=performance_metrics
         )
         
