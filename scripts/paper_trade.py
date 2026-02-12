@@ -120,7 +120,7 @@ def run_main(args):
     # 2. 创建运行器
     runner = PaperTradingRunner(
         initial_capital=config['initial_capital'],
-        weight_method=config['weight_method']
+        weight_method=config['weight_method'],
     )
     
     # 3. 校正交易日期

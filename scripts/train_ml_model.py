@@ -115,7 +115,7 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     # 标识列
     id_columns = ['ts_code', 'trade_date', 'name']
     # 标签列
-    label_columns = [label_column]
+    label_columns = [col for col in df.columns if col.startswith('y_')]
     # 过滤标记列（使用统一的列名，与clean层一致）
     filter_columns = ['is_st', 'is_suspended']
     # 其他非特征列
