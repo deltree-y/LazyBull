@@ -233,6 +233,43 @@ def build_features_data(
     
     logger.info(f"clean日线数据: {len(daily_clean)} 条记录")
     
+    # 加载 daily_basic 数据
+    daily_basic_clean = loader.load_clean_daily_basic(
+        start_dt.strftime('%Y%m%d'),
+        end_dt.strftime('%Y%m%d')
+    )
+    if daily_basic_clean is not None:
+        logger.info(f"clean daily_basic 数据: {len(daily_basic_clean)} 条记录")
+    else:
+        logger.warning("未找到 daily_basic 数据，价值红利特征将为空")
+    
+    # 加载 moneyflow 数据
+    try:
+        moneyflow_clean = loader.load_clean_moneyflow(
+            start_dt.strftime('%Y%m%d'),
+            end_dt.strftime('%Y%m%d')
+        )
+        if moneyflow_clean is not None:
+            logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
+        else:
+            logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
+    except AttributeError:
+        # DataLoader 可能还没有 load_clean_moneyflow 方法
+        logger.warning("DataLoader 不支持 load_clean_moneyflow，尝试直接从 storage 加载")
+        moneyflow_clean = None
+        # 从 storage 按日期范围加载
+        try:
+            moneyflow_clean = storage.load_clean_by_date_range(
+                "moneyflow",
+                start_dt.strftime('%Y-%m-%d'),
+                end_dt.strftime('%Y-%m-%d')
+            )
+            if moneyflow_clean is not None:
+                logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
+        except:
+            logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
+            moneyflow_clean = None
+    
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
     
@@ -258,6 +295,8 @@ def build_features_data(
                 daily_data=daily_clean,
                 adj_factor=adj_factor,
                 stock_basic=stock_basic,
+                daily_basic_data=daily_basic_clean,
+                moneyflow_data=moneyflow_clean,
                 suspend_info=None,
                 limit_info=None
             )
