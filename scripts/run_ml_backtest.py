@@ -169,7 +169,10 @@ def run_ml_backtest(
     cost_model: CostModel = None,
     stop_loss_config: StopLossConfig = None,
     equity_curve_config: EquityCurveConfig = None,
-    sell_timing: str = 'open'
+    sell_timing: str = 'open',
+    max_weight_per_stock: float = None,
+    max_per_industry: int = None,
+    stock_basic: pd.DataFrame = None
 ) -> tuple:
     """运行 ML 信号回测
     
@@ -186,6 +189,10 @@ def run_ml_backtest(
         cost_model: 成本模型
         stop_loss_config: 止损配置（可选）
         equity_curve_config: ECT 配置（可选）
+        sell_timing: 卖出时机
+        max_weight_per_stock: 单股最大权重（可选）
+        max_per_industry: 单行业最大持仓数量（可选）
+        stock_basic: 股票基本信息 DataFrame（用于行业约束，可选）
         
     Returns:
         (nav_curve, trades) 元组
@@ -204,6 +211,9 @@ def run_ml_backtest(
         equity_curve_config=equity_curve_config,
         sell_timing=sell_timing,
         completion_window_days=5,
+        max_weight_per_stock=max_weight_per_stock,
+        max_per_industry=max_per_industry,
+        stock_basic=stock_basic,
     )
     
     # 运行回测
@@ -874,6 +884,20 @@ def main():
         help="ECT 恢复等待周期数，默认 0（仅在 gradual 模式下生效）"
     )
     
+    # 组合构建约束参数
+    parser.add_argument(
+        "--max-weight-per-stock",
+        type=float,
+        default=None,
+        help="单个股票最大权重（0-1之间的浮点数），默认 None 表示不启用。例如：0.2 表示单票最大权重 20%%"
+    )
+    parser.add_argument(
+        "--max-per-industry",
+        type=int,
+        default=None,
+        help="单个行业最大持仓数量，默认 None 表示不启用。例如：3 表示每个行业最多持有 3 只股票"
+    )
+    
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -998,6 +1022,10 @@ def main():
     logger.info(f"模型版本: {args.model_version or '最新版本'}")
     logger.info(f"Top N: {args.top_n}")
     logger.info(f"权重方法: {args.weight_method}")
+    if args.max_weight_per_stock is not None:
+        logger.info(f"单股最大权重: {args.max_weight_per_stock:.2%}")
+    if args.max_per_industry is not None and args.max_per_industry > 0:
+        logger.info(f"单行业最大持仓数量: {args.max_per_industry}")
     logger.info(f"止损功能: {'启用' if args.stop_loss_enabled else '禁用'}")
     if args.stop_loss_enabled:
         logger.info(f"  - 回撤止损: {args.stop_loss_drawdown_pct}%")
@@ -1105,6 +1133,9 @@ def main():
             stop_loss_config=stop_loss_config,
             equity_curve_config=equity_curve_config,
             sell_timing=args.sell_timing,
+            max_weight_per_stock=args.max_weight_per_stock,
+            max_per_industry=args.max_per_industry,
+            stock_basic=stock_basic,
         )
         
         # 7. 生成报告
