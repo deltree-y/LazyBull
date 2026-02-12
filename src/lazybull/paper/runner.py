@@ -76,7 +76,7 @@ class PaperTradingRunner:
         self.cleaner = DataCleaner(verbose=verbose)
         # 实盘模式使用 require_label=False，因为 T0 没有未来数据无法生成标签
         self.feature_builder = FeatureBuilder(min_list_days=60, horizon=horizon, require_label=False)
-        
+
         self.horizon = horizon  # 保存 horizon 供其他地方使用
         self.verbose = verbose
         # 确保基础数据存在（如交易日历、股票基本信息等）
