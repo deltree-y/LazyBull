@@ -50,6 +50,7 @@ def run_config(args):
         'rebalance_freq': args.rebalance_freq,
         'weight_method': args.weight_method,
         'model_version': args.model_version,
+        'horizon': args.horizon,
         'stop_loss_enabled': args.stop_loss_enabled,
         'stop_loss_drawdown_pct': args.stop_loss_drawdown_pct,
         'stop_loss_trailing_enabled': args.stop_loss_trailing_enabled,
@@ -107,12 +108,17 @@ def run_main(args):
     if args.weight_method is not None:
         config['weight_method'] = args.weight_method
     
+    # 设置默认 horizon，如果配置中不存在
+    if 'horizon' not in config:
+        config['horizon'] = 5
+    
     logger.info("使用配置：")
     logger.info(f"  买入价格类型: {config['buy_price']}")
     logger.info(f"  卖出价格类型: {config['sell_price']}")
     logger.info(f"  持仓数: {config['top_n']}")
     logger.info(f"  调仓频率: {config['rebalance_freq']} 个交易日")
     logger.info(f"  权重方法: {config['weight_method']}")
+    logger.info(f"  特征预测周期（horizon）: {config['horizon']} 天")
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
     logger.info("=" * 80)
@@ -121,6 +127,7 @@ def run_main(args):
     runner = PaperTradingRunner(
         initial_capital=config['initial_capital'],
         weight_method=config['weight_method'],
+        horizon=config['horizon'],
     )
     
     # 3. 校正交易日期
@@ -1222,6 +1229,12 @@ def main():
         '--model-version',
         type=int,
         help='ML模型版本（可选）'
+    )
+    config_parser.add_argument(
+        '--horizon',
+        type=int,
+        default=5,
+        help='特征构建的预测周期（天数），用于生成 y_ret_N 特征（默认：5）'
     )
     config_parser.add_argument(
         '--universe',
