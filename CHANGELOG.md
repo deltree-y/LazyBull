@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-02-12
+
+### Added
+- **统一评估面板（CSV输出）**：在回测运行时按日评估 MLSignal 的截面排序质量
+  - 新增 `--export-eval` 参数：是否导出评估面板 CSV（默认开启）
+  - 新增 `--eval-groups` 参数：分组数量（默认 10）
+  - 新增 `--eval-topk` 参数：TopK 指标的 K（默认使用 --top-n）
+  - 输出三个 CSV 文件：
+    - `{output_name}_eval_daily.csv`：日度评估指标（RankIC、TopK收益、多空收益等）
+    - `{output_name}_eval_groups.csv`：分组收益明细（每日每组的平均真实收益）
+    - `{output_name}_eval_summary.csv`：汇总指标（参数配置和聚合统计）
+  - 评估口径：
+    - 真实收益标签直接使用 features 文件中的 label 列（y_ret_5/y_ret_10/y_ret_20）
+    - 分组方式：按预测分数排序后等数量分组（默认 10 组）
+    - RankIC 使用 Spearman 相关系数
+  - CSV 统一使用 utf-8-sig 编码（Excel 兼容）
+
+### Documentation
+- 新增 `docs/PR/unified_eval_panel_csv_output.md`：详细说明评估面板功能的背景、实现和使用方法
+- 新增 `docs/guide/ml_eval_panel_guide.md`：评估面板使用指南
+
 ## [0.5.0] - 2026-02-11
 
 ### Added
