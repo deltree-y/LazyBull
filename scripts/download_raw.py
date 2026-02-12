@@ -164,6 +164,17 @@ def download_daily_data(
                 if len(limit_up_down) > 0:
                     storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
                     logger.info(f"  涨跌停: 已保存 {len(limit_up_down)} 条记录")
+            
+            # 下载资金流向
+            if not force and storage.is_data_exists("raw", "moneyflow", trade_date):
+                logger.info(f"  资金流向: 文件已存在，跳过下载")
+            else:
+                moneyflow = client.get_moneyflow(trade_date=trade_date)
+                if len(moneyflow) > 0:
+                    storage.save_raw_by_date(moneyflow, "moneyflow", trade_date)
+                    logger.info(f"  资金流向: 已保存 {len(moneyflow)} 条记录")
+                else:
+                    logger.error(f"  资金流向数据缺失（moneyflow 为强制依赖项）")
                     
         except Exception as e:
             logger.error(f"下载 {trade_date} 数据失败: {str(e)}")

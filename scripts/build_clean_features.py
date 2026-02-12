@@ -143,6 +143,15 @@ def build_clean_data(
                     daily_basic_clean = cleaner.clean_daily_basic(daily_basic_raw)
                     storage.save_clean_by_date(daily_basic_clean, "daily_basic", trade_date)
             
+            # 处理moneyflow
+            moneyflow_raw = storage.load_raw_by_date("moneyflow", trade_date)
+            if moneyflow_raw is not None and len(moneyflow_raw) > 0:
+                if force or not storage.is_data_exists("clean", "moneyflow", trade_date):
+                    moneyflow_clean = cleaner.clean_moneyflow(moneyflow_raw)
+                    storage.save_clean_by_date(moneyflow_clean, "moneyflow", trade_date)
+            else:
+                logger.warning(f"  未找到资金流向数据（moneyflow 为强制依赖项）")
+            
         except Exception as e:
             logger.error(f"处理 {trade_date} 失败: {str(e)}")
             error_count += 1
