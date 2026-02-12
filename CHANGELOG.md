@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-02-12
+
+### Fixed
+- **修复 `weight_method=score` 未生效问题**：修复了在回测引擎中 `score` 权重方法被等权覆盖的bug
+  - 问题原因：`BacktestEngine._generate_signal()` 在信号生成阶段强制重新归一化权重，导致 MLSignal 已计算的按分数加权结果被覆盖
+  - 修复方案：正确处理 `weight_method` 属性，当使用 `score` 时按预测分数归一化权重，而不是强制等权
+  - 新增日志：明确显示当前使用的权重方法和前几只股票的权重示例，便于验证权重方法是否生效
+
+### Added
+- **权重后处理功能（限权/归一化）**：新增可复用的权重约束管理模块
+  - 新增 `src/lazybull/portfolio/weight_processor.py` 模块
+  - 实现 `cap_and_normalize_weights()` 函数：对权重进行限制并重新归一化
+    - 支持设置单个股票最大权重 `max_weight_per_stock`（0-1之间）
+    - 迭代式限权确保最终所有权重都不超过上限
+    - 自动处理边界情况：空权重、全0、NaN、负数（过滤 <= 0 的权重）
+  - BacktestEngine 新增 `max_weight_per_stock` 参数
+  - CLI 新增 `--max-weight-per-stock` 参数（示例：`0.2` 表示单票最大 20%）
+  - 单元测试：26 个测试全部通过，覆盖各种边界情况
+
+- **行业持仓数量约束**：新增基于行业的持仓数量约束功能
+  - 新增 `src/lazybull/portfolio/industry_constraint.py` 模块
+  - 实现 `load_industry_mapping()` 函数：从 `stock_basic` 数据加载行业映射
+    - 自动将行业缺失的股票归为"未知行业"
+  - 实现 `apply_industry_constraint()` 函数：应用行业数量约束
+    - 按分数排序选股，跳过已达到行业上限的股票并顺延
+    - "未知行业"同样受约束限制
+  - BacktestEngine 新增 `max_per_industry` 和 `stock_basic` 参数
+  - CLI 新增 `--max-per-industry` 参数（示例：`3` 表示每个行业最多 3 只）
+  - 单元测试：14 个测试全部通过，覆盖各种场景
+
+### Documentation
+- 新增 `docs/PR/portfolio_construction_enhancements.md`：详细说明三项改进的背景、实现和使用方法
+- 新增测试文件：
+  - `tests/test_weight_processor.py`：权重后处理模块测试（12个测试）
+  - `tests/test_industry_constraint.py`：行业约束模块测试（14个测试）
+- 扩展 `tests/test_ml_signal.py`：验证 score 权重方法产生非等权结果
+
+### Technical Details
+- 权重限权采用迭代算法：限权 → 归一化 → 检查收敛 → 重复（最多100次）
+  - 确保最终所有权重都不超过设定上限
+  - 处理多只股票同时被限权的情况
+- 行业约束在信号生成阶段应用，在选择候选股票之前进行过滤
+- 权重限权在权重归一化之后应用，确保最终权重满足约束
+
 ## [0.6.0] - 2026-02-12
 
 ### Added

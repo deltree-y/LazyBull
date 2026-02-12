@@ -53,7 +53,10 @@ class BacktestEngine:
         enable_position_completion: bool = True,
         completion_window_days: int = 3,
         equity_curve_config: Optional[EquityCurveConfig] = None,
-        data_storage = None  # 新增：数据存储实例（用于读取 raw/suspend 数据）
+        data_storage = None,  # 新增：数据存储实例（用于读取 raw/suspend 数据）
+        max_weight_per_stock: Optional[float] = None,  # 新增：单股最大权重
+        max_per_industry: Optional[int] = None,  # 新增：单行业最大持仓数量
+        stock_basic: Optional[pd.DataFrame] = None  # 新增：股票基本信息（用于行业约束）
     ):
         """初始化回测引擎
         
@@ -81,6 +84,9 @@ class BacktestEngine:
             completion_window_days: 补齐窗口期（交易日），默认3天
             equity_curve_config: ECT（权益曲线交易）配置，None 表示不启用（默认）
             data_storage: 数据存储实例（用于读取 raw/suspend 数据），如不提供则在需要时创建
+            max_weight_per_stock: 单个股票最大权重（0-1），None 表示不启用限权，启用后会在信号生成时对权重进行限制并归一化
+            max_per_industry: 单个行业最大持仓数量，None 或 0 表示不启用行业约束
+            stock_basic: 股票基本信息 DataFrame（用于行业约束），必须包含 ts_code 和 industry 列
         """
         self.universe = universe
         self.signal = signal
@@ -88,6 +94,24 @@ class BacktestEngine:
         self.cost_model = cost_model or CostModel()
         self.data_storage = data_storage  # 保存数据存储实例
         self._suspend_calendar = None  # 停牌日历实例（延迟创建）
+        
+        # 组合构建约束参数
+        self.max_weight_per_stock = max_weight_per_stock
+        self.max_per_industry = max_per_industry if max_per_industry and max_per_industry > 0 else None
+        self.stock_basic = stock_basic
+        self.industry_mapping = None  # 延迟构建
+        
+        # 验证参数
+        if max_weight_per_stock is not None:
+            if max_weight_per_stock <= 0 or max_weight_per_stock > 1:
+                raise ValueError(f"max_weight_per_stock 必须在 (0, 1] 范围内，当前值: {max_weight_per_stock}")
+        
+        if self.max_per_industry is not None:
+            if stock_basic is None or stock_basic.empty:
+                raise ValueError("启用行业约束时必须提供 stock_basic 数据")
+            # 延迟导入以避免循环依赖
+            from ..portfolio import load_industry_mapping
+            self.industry_mapping = load_industry_mapping(stock_basic, verbose=verbose)
         
         # 验证调仓频率
         if not isinstance(rebalance_freq, int):
@@ -398,6 +422,18 @@ class BacktestEngine:
         buy_date_str = to_trade_date_str(buy_date)
         buy_date_quote = price_data[price_data['trade_date'] == buy_date_str]
         
+        # 应用行业约束（如果启用）
+        if self.max_per_industry is not None:
+            # 延迟导入
+            from ..portfolio import apply_industry_constraint
+            ranked_candidates = apply_industry_constraint(
+                ranked_candidates,
+                self.industry_mapping,
+                max_per_industry=self.max_per_industry,
+                target_n=len(ranked_candidates),  # 保留所有候选，只改变顺序
+                verbose=self.verbose
+            )
+        
         # 从排序候选中选择 top N 股票
         # 当启用仓位补齐功能时，不在信号生成阶段过滤 T+1 的涨停/停牌，
         # 而是在 T+1 执行买入时处理失败，并在 T+2 等日期补齐
@@ -463,19 +499,53 @@ class BacktestEngine:
         # 归一化权重（将分数转换为权重，使其和为 1）
         # 使用 getattr 保证向后兼容（某些 Mock 信号对象可能没有 weight_method 属性）
         weight_method = getattr(self.signal, 'weight_method', 'equal')
+        
         if weight_method == "equal":
             # 等权
             weight = 1.0 / len(signals)
             signals = {stock: weight for stock in signals.keys()}
+            
+            if self.verbose:
+                logger.info(
+                    f"权重方法: equal (等权), 每只股票权重 {weight:.4f}"
+                )
         else:
             # 按分数加权
             total_score = sum(signals.values())
             if total_score > 0:
                 signals = {stock: score / total_score for stock, score in signals.items()}
+                
+                if self.verbose:
+                    # 显示前3只股票的权重示例
+                    sample_stocks = list(signals.items())[:3]
+                    weights_str = ', '.join([f"{stock}: {weight:.4f}" for stock, weight in sample_stocks])
+                    logger.info(
+                        f"权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}"
+                    )
             else:
                 # 如果所有分数都是0或负数，使用等权
                 weight = 1.0 / len(signals)
                 signals = {stock: weight for stock in signals.keys()}
+                if self.verbose:
+                    logger.warning(
+                        f"所有分数 <= 0，回退到等权分配，每只股票权重 {weight:.4f}"
+                    )
+        
+        # 应用权重限制（如果启用）
+        if self.max_weight_per_stock is not None:
+            from ..portfolio import cap_and_normalize_weights
+            signals = cap_and_normalize_weights(
+                signals,
+                max_weight_per_stock=self.max_weight_per_stock,
+                verbose=self.verbose
+            )
+            
+            if not signals:
+                if self.verbose:
+                    logger.warning(
+                        f"信号日 {date.date()} 权重限制后无有效权重，跳过"
+                    )
+                return
         
         # 保存信号，待 T+1 执行
         # 同时保存完整的排序候选列表用于补齐（如果启用补齐功能）
