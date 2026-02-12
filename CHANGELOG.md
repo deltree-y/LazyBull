@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.2] - 2026-02-12
+
+### Fixed
+- **修复多 horizon 标签计算错误**：修复 `FeatureBuilder._calculate_forward_returns()` 中 `y_ret_10` / `y_ret_20` 计算错误的问题
+  - **根因**：`_get_trading_dates()` 方法未对交易日列表去重，导致当 `trade_cal` 包含重复日期时（如多个交易所数据），`current_idx + horizon` 索引计算错误
+  - **修复内容**：
+    1. 在 `_get_trading_dates()` 中使用 `.unique()` 对交易日列表去重，确保每个交易日只出现一次
+    2. 在 `build_features_for_day()` 中构建 `date_to_idx` 字典映射，避免重复使用 `list.index()` 带来的 O(n) 查找开销，优化为 O(1) 查找
+    3. 新增 `tests/test_multi_horizon_fix.py` 测试文件，包含6个测试用例：
+       - 重复交易日期处理测试
+       - 真实场景模拟测试（600036.SH 案例）
+       - 所有 horizon (5/10/20) 同时正确性测试
+       - 日期格式一致性测试
+       - 乱序交易日历处理测试
+       - 日期索引映射性能测试
+  - **影响**：使用 `build_features` / `build_clean_features` 脚本重新生成 `cs_train` 数据后，多 horizon 标签将正确反映未来 N 个交易日的收益率
+  - **验证**：所有现有测试（15个 `test_features.py` + 12个 `test_multi_horizon_labels.py` + 6个新测试）均通过
+
+### Documentation
+- 新增 `docs/PR/fix_multi_horizon_label_calculation.md`：详细说明bug根因、修复方式、对已有数据的影响
+
 ## [0.6.0] - 2026-02-12
 
 ### Added
