@@ -69,6 +69,7 @@ python scripts/paper_trade.py config \
 - `--rebalance-freq`: 调仓频率（交易日数，默认：5）
 - `--weight-method`: 权重分配方法（`equal` 等权，`score` 按分数加权，默认：equal）
 - `--model-version`: ML模型版本（可选）
+- `--horizon`: 特征构建的预测周期（天数），用于生成 y_ret_N 特征（默认：5）
 - `--universe`: 股票池类型（`mainboard` 仅主板，`all` 全市场，默认：mainboard）
 - `--stop-loss-enabled`: 启用止损功能（标志位）
 - `--stop-loss-drawdown-pct`: 回撤止损百分比（默认：20.0）
@@ -79,6 +80,25 @@ python scripts/paper_trade.py config \
 **配置存储：**
 - 配置保存在 `data/paper/config.json`
 - 可随时运行 `config` 命令更新配置
+
+**关于 horizon 参数（重要）：**
+
+`horizon` 参数控制特征构建的预测周期（天数），用于生成 `y_ret_N` 特征。**该参数应与训练模型时使用的 horizon 保持一致**。
+
+- 如果模型使用 `y_ret_5` 标签训练（horizon=5），则纸面交易应使用默认值或设置 `--horizon 5`
+- 如果模型使用 `y_ret_10` 标签训练（horizon=10），则纸面交易应设置 `--horizon 10`
+- 如果模型使用 `y_ret_20` 标签训练（horizon=20），则纸面交易应设置 `--horizon 20`
+
+示例（设置 horizon=10）：
+```bash
+python scripts/paper_trade.py config \
+    --buy-price close \
+    --sell-price close \
+    --top-n 5 \
+    --horizon 10
+```
+
+**注意**：horizon 参数仅影响特征构建，不影响实际调仓频率（调仓频率由 `--rebalance-freq` 控制）。
 
 ### 4. 每日运行纸面交易
 
