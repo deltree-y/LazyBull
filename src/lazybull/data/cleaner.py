@@ -258,6 +258,45 @@ class DataCleaner:
         
         return df
     
+    def clean_moneyflow(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """清洗资金流向数据
+        
+        Args:
+            raw_df: 原始资金流向DataFrame
+            
+        Returns:
+            清洗后的资金流向DataFrame
+        """
+        logger.info(f"开始清洗资金流向数据，原始记录数: {len(raw_df)}")
+        
+        df = raw_df.copy()
+        
+        # 1. 类型统一
+        df = self._standardize_date_columns(df, ['trade_date'])
+        
+        if 'ts_code' in df.columns:
+            df['ts_code'] = df['ts_code'].astype(str)
+        
+        # 2. 数值列转换
+        numeric_cols = [
+            'buy_sm_vol', 'buy_sm_amount', 'sell_sm_vol', 'sell_sm_amount',
+            'buy_md_vol', 'buy_md_amount', 'sell_md_vol', 'sell_md_amount',
+            'buy_lg_vol', 'buy_lg_amount', 'sell_lg_vol', 'sell_lg_amount',
+            'buy_elg_vol', 'buy_elg_amount', 'sell_elg_vol', 'sell_elg_amount',
+            'net_mf_vol', 'net_mf_amount'
+        ]
+        df = self._convert_numeric_columns(df, numeric_cols)
+        
+        # 3. 去重
+        df = self._deduplicate(df, ['ts_code', 'trade_date'])
+        
+        # 4. 排序
+        df = df.sort_values(['ts_code', 'trade_date']).reset_index(drop=True)
+        
+        logger.info(f"资金流向数据清洗完成，清洗后记录数: {len(df)}")
+        
+        return df
+    
     def add_tradable_universe_flag(
         self,
         daily_df: pd.DataFrame,

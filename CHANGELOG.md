@@ -2,6 +2,70 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-02-12
+
+### Added
+
+- **新增资金流数据源（moneyflow）**：提升模型在"价值红利"方向的选股能力
+  - Raw/Ensure 层：新增 `TushareClient.get_moneyflow()` 方法，支持从 TuShare 获取个股资金流向数据
+  - 在 `ensure_raw_data_for_date()` 中新增 moneyflow 下载逻辑，设为强制依赖（缺失时报错提示）
+  - 在 `download_raw.py` 脚本中集成 moneyflow 下载
+  - Clean 层：新增 `DataCleaner.clean_moneyflow()` 清洗方法
+  - 在 `build_clean_features.py` 脚本中集成 moneyflow 清洗流程
+  - 更新 `docs/data_contract.md` 补充 moneyflow 数据契约（主键、字段说明）
+  
+- **新增价值红利和资金流特征**：丰富因子库，支持价值投资和资金流分析
+  - 新增 `feature_utils.py` 工具模块：提供 winsorize、log1p、zscore、cross_sectional_zscore 等通用特征处理函数
+  - FeatureBuilder 新增 `_add_value_dividend_features()` 方法：
+    - 基础因子：pb, pe_ttm, ps_ttm, dv_ttm, total_mv, circ_mv, turnover_rate, volume_ratio
+    - 派生因子：ep_ttm (1/pe_ttm)、bp (1/pb)、log_total_mv、log_circ_mv
+    - 亏损标记：is_loss（pe_ttm 为负或 NaN）
+    - 处理 pe_ttm/pb 缺失和为0的情况
+  - FeatureBuilder 新增 `_add_moneyflow_features()` 方法：
+    - 当日净流入：net_mf_amount
+    - 大单/特大单净流入：lg_net_amount、elg_net_amount
+    - Rolling 特征（窗口 5/20）：net_mf_amount_sum/mean、lg_net_amount_sum、elg_net_amount_sum
+    - 对重尾列自动应用 winsorize 处理
+  - 更新 `build_features.py` 和 `build_clean_features.py` 加载并传递 daily_basic 和 moneyflow 数据
+
+- **训练标签变换：cs_zscore（截面标准化）**：更稳定的回归标签，减少极端值影响
+  - 新增 `transform_labels_cs_zscore()` 函数：对每个 trade_date 的标签进行截面 winsorize + zscore 变换
+  - 变换后每个交易日标签均值≈0，标准差≈1
+  - 新增 CLI 参数：`--label-transform {raw,cs_zscore}`（默认 raw）
+  - 新增 CLI 参数：`--winsorize-p FLOAT`（默认 0.01，截断上下1%极端值）
+  - 在模型元数据（model_registry.json）中记录 label_transform 和 winsorize_p
+
+- **新增训练任务：classification（Top 分位分类）**：更贴近 TopN 选股的实际交易场景
+  - 新增 `generate_classification_labels()` 函数：按每个交易日截面将标签转为 0/1 二分类标签
+  - 支持两种模式（二选一，pos_topk 优先级更高）：
+    - 百分比模式：`--pos-quantile FLOAT`（例如 0.2 表示 Top20% 为正类）
+    - 数量模式：`--pos-topk INT`（例如 300 表示每日收益最高的 300 只为正类）
+  - 新增 CLI 参数：`--task {regression,classification}`（默认 regression）
+  - 新增 CLI 参数：`--pos-quantile FLOAT` 和 `--pos-topk INT`
+  - 支持 XGBoost 分类器训练，目标函数自动切换为 `binary:logistic`
+  - 分类任务评估指标：Accuracy、AUC、Precision、Recall
+  - 在模型元数据中记录 task、pos_quantile、pos_topk
+  - 模型类型标记为 `xgboost_classification` 以区分回归模型
+
+### Changed
+
+- **train_xgboost_model 函数增强**：统一支持回归和分类任务
+  - 新增 `task` 参数，根据任务类型选择 XGBRegressor 或 XGBClassifier
+  - 回归任务：保留 winsorize 处理和 IC/RankIC 评估
+  - 分类任务：跳过 winsorize，使用 AUC/Precision/Recall 评估
+  - 早停机制对两种任务均生效
+
+### Documentation
+
+- 更新 `docs/data_contract.md`：补充 moneyflow（资金流向）数据源的字段说明
+- 新增 feature_utils.py 模块文档字符串：详细说明各工具函数的用法和示例
+
+### Version
+
+- 版本号从 0.7.0 升级到 0.8.0
+
+---
+
 ## [0.7.0] - 2026-02-12
 
 ### Fixed

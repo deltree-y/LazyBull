@@ -328,3 +328,49 @@ class TushareClient:
             start_date=start_date,
             end_date=end_date
         )
+    
+    def get_moneyflow(
+        self,
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> pd.DataFrame:
+        """获取个股资金流向
+        
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            资金流向DataFrame，包含以下字段：
+            - ts_code: 股票代码
+            - trade_date: 交易日期
+            - buy_sm_vol: 小单买入量（手）
+            - buy_sm_amount: 小单买入金额（万元）
+            - sell_sm_vol: 小单卖出量（手）
+            - sell_sm_amount: 小单卖出金额（万元）
+            - buy_md_vol: 中单买入量（手）
+            - buy_md_amount: 中单买入金额（万元）
+            - sell_md_vol: 中单卖出量（手）
+            - sell_md_amount: 中单卖出金额（万元）
+            - buy_lg_vol: 大单买入量（手）
+            - buy_lg_amount: 大单买入金额（万元）
+            - sell_lg_vol: 大单卖出量（手）
+            - sell_lg_amount: 大单卖出金额（万元）
+            - buy_elg_vol: 特大单买入量（手）
+            - buy_elg_amount: 特大单买入金额（万元）
+            - sell_elg_vol: 特大单卖出量（手）
+            - sell_elg_amount: 特大单卖出金额（万元）
+            - net_mf_vol: 净流入量（手）
+            - net_mf_amount: 净流入额（万元）
+        """
+        return self.query(
+            "moneyflow",
+            ts_code=ts_code,
+            trade_date=trade_date,
+            start_date=start_date,
+            end_date=end_date
+        )

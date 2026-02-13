@@ -65,6 +65,8 @@ class FeatureBuilder:
         daily_data: pd.DataFrame,
         adj_factor: pd.DataFrame,
         stock_basic: pd.DataFrame,
+        daily_basic_data: Optional[pd.DataFrame] = None,
+        moneyflow_data: Optional[pd.DataFrame] = None,
         suspend_info: Optional[pd.DataFrame] = None,
         limit_info: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
@@ -77,6 +79,8 @@ class FeatureBuilder:
                        pct_chg, vol, amount 等字段
             adj_factor: 复权因子DataFrame，需包含 ts_code, trade_date, adj_factor
             stock_basic: 股票基本信息DataFrame，需包含 ts_code, name, list_date
+            daily_basic_data: 每日指标DataFrame（可选），包含 pb, pe_ttm, ps_ttm, dv_ttm, total_mv, circ_mv 等
+            moneyflow_data: 资金流向DataFrame（可选），包含净流入、大单特大单净流入等
             suspend_info: 停复牌信息DataFrame（可选）
                          新版API格式：ts_code, trade_date, suspend_type, suspend_timing
                          旧版格式（兼容）：ts_code, suspend_date, resume_date
@@ -121,7 +125,9 @@ class FeatureBuilder:
             daily_adj,
             trade_date,
             trading_dates,
-            current_idx
+            current_idx,
+            daily_basic_data,
+            moneyflow_data
         )
         
         # 6. 合并特征和标签
@@ -299,7 +305,9 @@ class FeatureBuilder:
         daily_adj: pd.DataFrame,
         trade_date: str,
         trading_dates: List[str],
-        current_idx: int
+        current_idx: int,
+        daily_basic_data: Optional[pd.DataFrame] = None,
+        moneyflow_data: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
         """计算基础数值特征
         
@@ -309,6 +317,8 @@ class FeatureBuilder:
         - vol_ratio_N: 过去N日平均成交量比
         - amount_ratio_N: 过去N日平均成交额比
         - ma_deviation_N: 收盘价与N日均线的偏离度
+        - 价值红利因子：pb, pe_ttm, ep_ttm, bp, ps_ttm, dv_ttm, total_mv, circ_mv, log_total_mv等
+        - 资金流因子：净流入、大单特大单净流入等
         
         Args:
             current_data: 当日数据
@@ -316,6 +326,8 @@ class FeatureBuilder:
             trade_date: 当前交易日
             trading_dates: 交易日序列
             current_idx: 当前交易日索引
+            daily_basic_data: 每日指标数据（可选）
+            moneyflow_data: 资金流向数据（可选）
             
         Returns:
             包含特征的DataFrame
@@ -377,6 +389,14 @@ class FeatureBuilder:
             
             # 合并特征
             features = features.merge(hist_features, on='ts_code', how='left')
+        
+        # 添加价值红利因子（从 daily_basic）
+        if daily_basic_data is not None and len(daily_basic_data) > 0:
+            features = self._add_value_dividend_features(features, daily_basic_data, trade_date)
+        
+        # 添加资金流因子（从 moneyflow）
+        if moneyflow_data is not None and len(moneyflow_data) > 0:
+            features = self._add_moneyflow_features(features, moneyflow_data, trade_date, trading_dates, current_idx)
         
         return features
     
@@ -473,6 +493,218 @@ class FeatureBuilder:
         })
         
         return window_features
+    
+    def _add_value_dividend_features(
+        self,
+        features: pd.DataFrame,
+        daily_basic_data: pd.DataFrame,
+        trade_date: str
+    ) -> pd.DataFrame:
+        """添加价值红利因子（从 daily_basic）
+        
+        Args:
+            features: 特征DataFrame
+            daily_basic_data: daily_basic 数据
+            trade_date: 当前交易日
+            
+        Returns:
+            添加价值红利因子后的DataFrame
+        """
+        from ..common.feature_utils import log1p_transform
+        
+        # 筛选当日数据
+        daily_basic_today = daily_basic_data[
+            daily_basic_data['trade_date'] == trade_date
+        ].copy()
+        
+        if len(daily_basic_today) == 0:
+            logger.warning(f"{trade_date} 没有 daily_basic 数据，价值红利特征将为空")
+            return features
+        
+        # 选择需要的列
+        value_cols = ['ts_code', 'pb', 'pe_ttm', 'ps_ttm', 'dv_ttm', 
+                      'total_mv', 'circ_mv', 'turnover_rate', 'volume_ratio']
+        
+        # 只保留存在的列
+        existing_cols = ['ts_code'] + [c for c in value_cols[1:] if c in daily_basic_today.columns]
+        daily_basic_today = daily_basic_today[existing_cols].copy()
+        
+        # 合并到 features
+        features = features.merge(daily_basic_today, on='ts_code', how='left')
+        
+        # 派生特征
+        if 'pe_ttm' in features.columns:
+            # ep_ttm = 1 / pe_ttm（市盈率倒数，即盈利收益率）
+            # 处理 pe_ttm <= 0 或 NaN 的情况
+            features['ep_ttm'] = np.where(
+                (features['pe_ttm'].notna()) & (features['pe_ttm'] > 0),
+                1.0 / features['pe_ttm'],
+                np.nan
+            )
+            # 添加亏损标记（pe_ttm 为负或 NaN）
+            features['is_loss'] = (
+                (features['pe_ttm'].isna()) | (features['pe_ttm'] <= 0)
+            ).astype(int)
+        
+        if 'pb' in features.columns:
+            # bp = 1 / pb（市净率倒数，即账面市值比）
+            # 处理 pb <= 0 或 NaN 的情况
+            features['bp'] = np.where(
+                (features['pb'].notna()) & (features['pb'] > 0),
+                1.0 / features['pb'],
+                np.nan
+            )
+        
+        if 'total_mv' in features.columns:
+            # log_total_mv = log1p(total_mv)（总市值对数变换）
+            features['log_total_mv'] = log1p_transform(features['total_mv'])
+        
+        if 'circ_mv' in features.columns:
+            # log_circ_mv = log1p(circ_mv)（流通市值对数变换）
+            features['log_circ_mv'] = log1p_transform(features['circ_mv'])
+        
+        return features
+    
+    def _add_moneyflow_features(
+        self,
+        features: pd.DataFrame,
+        moneyflow_data: pd.DataFrame,
+        trade_date: str,
+        trading_dates: List[str],
+        current_idx: int
+    ) -> pd.DataFrame:
+        """添加资金流因子（从 moneyflow）
+        
+        计算净流入、大单特大单净流入的 rolling 特征
+        
+        Args:
+            features: 特征DataFrame
+            moneyflow_data: moneyflow 数据
+            trade_date: 当前交易日
+            trading_dates: 交易日序列
+            current_idx: 当前交易日索引
+            
+        Returns:
+            添加资金流因子后的DataFrame
+        """
+        from ..common.feature_utils import winsorize_series
+        
+        # 筛选当日数据
+        moneyflow_today = moneyflow_data[
+            moneyflow_data['trade_date'] == trade_date
+        ].copy()
+        
+        if len(moneyflow_today) == 0:
+            logger.warning(f"{trade_date} 没有 moneyflow 数据，资金流特征将为空")
+            return features
+        
+        # 当日净流入特征（直接合并）
+        merge_cols = ['ts_code', 'net_mf_amount']
+        # 只保留存在的列
+        merge_cols = [c for c in merge_cols if c in moneyflow_today.columns]
+        if len(merge_cols) > 1:
+            features = features.merge(
+                moneyflow_today[merge_cols],
+                on='ts_code',
+                how='left'
+            )
+        
+        # 计算大单、特大单净流入（当日）
+        if 'buy_lg_amount' in moneyflow_today.columns and 'sell_lg_amount' in moneyflow_today.columns:
+            moneyflow_today['lg_net_amount'] = (
+                moneyflow_today['buy_lg_amount'] - moneyflow_today['sell_lg_amount']
+            )
+            features = features.merge(
+                moneyflow_today[['ts_code', 'lg_net_amount']],
+                on='ts_code',
+                how='left'
+            )
+        
+        if 'buy_elg_amount' in moneyflow_today.columns and 'sell_elg_amount' in moneyflow_today.columns:
+            moneyflow_today['elg_net_amount'] = (
+                moneyflow_today['buy_elg_amount'] - moneyflow_today['sell_elg_amount']
+            )
+            features = features.merge(
+                moneyflow_today[['ts_code', 'elg_net_amount']],
+                on='ts_code',
+                how='left'
+            )
+        
+        # 计算 rolling 特征（窗口 5, 20）
+        for window in [5, 20]:
+            if current_idx < window:
+                # 历史数据不足，填充空值
+                features[f'net_mf_amount_sum_{window}'] = np.nan
+                features[f'net_mf_amount_mean_{window}'] = np.nan
+                if 'lg_net_amount' in features.columns:
+                    features[f'lg_net_amount_sum_{window}'] = np.nan
+                if 'elg_net_amount' in features.columns:
+                    features[f'elg_net_amount_sum_{window}'] = np.nan
+                continue
+            
+            # 历史日期范围
+            hist_start_date = trading_dates[current_idx - window]
+            hist_end_date = trading_dates[current_idx - 1]  # 不包含当日
+            
+            hist_dates = [
+                d for d in trading_dates
+                if hist_start_date <= d <= hist_end_date
+            ]
+            
+            # 获取历史数据
+            hist_moneyflow = moneyflow_data[
+                moneyflow_data['trade_date'].isin(hist_dates)
+            ].copy()
+            
+            if len(hist_moneyflow) == 0:
+                continue
+            
+            # 计算大单、特大单净流入（历史）
+            if 'buy_lg_amount' in hist_moneyflow.columns and 'sell_lg_amount' in hist_moneyflow.columns:
+                hist_moneyflow['lg_net_amount'] = (
+                    hist_moneyflow['buy_lg_amount'] - hist_moneyflow['sell_lg_amount']
+                )
+            
+            if 'buy_elg_amount' in hist_moneyflow.columns and 'sell_elg_amount' in hist_moneyflow.columns:
+                hist_moneyflow['elg_net_amount'] = (
+                    hist_moneyflow['buy_elg_amount'] - hist_moneyflow['sell_elg_amount']
+                )
+            
+            # 按股票分组计算 rolling 特征
+            # 只对存在的列进行聚合
+            agg_dict = {}
+            if 'net_mf_amount' in hist_moneyflow.columns:
+                agg_dict['net_mf_amount'] = ['sum', 'mean']
+            if 'lg_net_amount' in hist_moneyflow.columns:
+                agg_dict['lg_net_amount'] = ['sum']
+            if 'elg_net_amount' in hist_moneyflow.columns:
+                agg_dict['elg_net_amount'] = ['sum']
+            
+            if not agg_dict:
+                # 没有可聚合的列，跳过
+                continue
+            
+            rolling_features = hist_moneyflow.groupby('ts_code').agg(agg_dict).reset_index()
+            
+            # 展平列名
+            new_columns = ['ts_code']
+            for col in rolling_features.columns[1:]:
+                if isinstance(col, tuple):
+                    new_columns.append(f'{col[0]}_{col[1]}_{window}')
+                else:
+                    new_columns.append(col)
+            rolling_features.columns = new_columns
+            
+            # 合并到 features
+            features = features.merge(rolling_features, on='ts_code', how='left')
+        
+        # 对重尾列进行 winsorize 处理
+        winsorize_cols = [c for c in features.columns if 'net_amount' in c or 'mf_amount' in c]
+        for col in winsorize_cols:
+            if col in features.columns:
+                features[col] = winsorize_series(features[col], limits=(0.01, 0.01))
+        
+        return features
     
     def _add_filter_flags(
         self,

@@ -131,7 +131,36 @@ dates = storage.list_partitions("raw", "daily")
 | total_mv | float | 总市值(万元) |
 | circ_mv | float | 流通市值(万元) |
 
-### 5. suspend_d - 停复牌信息
+### 6. moneyflow - 个股资金流向
+
+**来源**: TuShare `moneyflow`  
+**主键**: `(ts_code, trade_date)`  
+**字段说明**:
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| ts_code | str | 股票代码 |
+| trade_date | str/datetime | 交易日期 |
+| buy_sm_vol | float | 小单买入量(手) |
+| buy_sm_amount | float | 小单买入金额(万元) |
+| sell_sm_vol | float | 小单卖出量(手) |
+| sell_sm_amount | float | 小单卖出金额(万元) |
+| buy_md_vol | float | 中单买入量(手) |
+| buy_md_amount | float | 中单买入金额(万元) |
+| sell_md_vol | float | 中单卖出量(手) |
+| sell_md_amount | float | 中单卖出金额(万元) |
+| buy_lg_vol | float | 大单买入量(手) |
+| buy_lg_amount | float | 大单买入金额(万元) |
+| sell_lg_vol | float | 大单卖出量(手) |
+| sell_lg_amount | float | 大单卖出金额(万元) |
+| buy_elg_vol | float | 特大单买入量(手) |
+| buy_elg_amount | float | 特大单买入金额(万元) |
+| sell_elg_vol | float | 特大单卖出量(手) |
+| sell_elg_amount | float | 特大单卖出金额(万元) |
+| net_mf_vol | float | 净流入量(手) |
+| net_mf_amount | float | 净流入额(万元) |
+
+### 7. suspend_d - 停复牌信息
 
 **来源**: TuShare `suspend_d`  
 **主键**: `(ts_code, trade_date)`  
