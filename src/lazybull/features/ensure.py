@@ -97,6 +97,17 @@ def ensure_features_for_date(
             start_dt.strftime('%Y%m%d'),
             end_dt.strftime('%Y%m%d')
         )
+
+        daily_basic_clean = loader.load_clean_daily_basic(
+            start_dt.strftime('%Y%m%d'),
+            end_dt.strftime('%Y%m%d')
+        )
+
+        moneyflow_clean = loader.load_clean_moneyflow(
+            start_dt.strftime('%Y%m%d'),
+            end_dt.strftime('%Y%m%d')
+        )
+
         
         if daily_clean is None or daily_clean.empty:
             logger.error(f"缺少 clean 日线数据: {trade_date}")
@@ -111,6 +122,8 @@ def ensure_features_for_date(
             daily_data=daily_clean,
             adj_factor=pd.DataFrame(),  # 空 DataFrame，clean 数据已包含复权价格
             stock_basic=stock_basic,
+            daily_basic=daily_basic_clean,
+            moneyflow=moneyflow_clean,
             suspend_info=None,
             limit_info=None
         )

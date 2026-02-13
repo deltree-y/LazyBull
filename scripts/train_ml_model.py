@@ -23,7 +23,7 @@ import argparse
 import sys
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
