@@ -167,14 +167,15 @@ def cross_sectional_zscore(
     # 标准化（使用矢量化 transform 方法避免 groupby.apply FutureWarning）
     if group_col is not None:
         # 按组标准化：使用 transform 直接计算 zscore
-        grouped = df.groupby(group_col)
+        # 选择正确的输入数据：如果已 winsorize，使用 values；否则使用原始列
+        input_data = values if winsorize_limits is not None else df[value_col]
         
         # 计算组内均值和标准差
-        mean = grouped[value_col].transform('mean') if winsorize_limits is None else values.groupby(df[group_col]).transform('mean')
-        std = grouped[value_col].transform('std', ddof=ddof) if winsorize_limits is None else values.groupby(df[group_col]).transform('std', ddof=ddof)
+        mean = input_data.groupby(df[group_col]).transform('mean')
+        std = input_data.groupby(df[group_col]).transform('std', ddof=ddof)
         
         # 计算 zscore
-        result = (values if winsorize_limits is not None else df[value_col]) - mean
+        result = input_data - mean
         # 避免除零
         result = result.where(std > 1e-10, 0.0) / std.where(std > 1e-10, 1.0)
     else:

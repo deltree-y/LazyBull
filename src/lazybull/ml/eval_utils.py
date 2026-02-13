@@ -6,7 +6,7 @@
 - 统一的日度评估接口
 """
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any
 
 import numpy as np
 import pandas as pd
@@ -201,7 +201,7 @@ def compute_diagnostic_statistics(
     prediction_col: str,
     return_col: str,
     topk_values: List[int]
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """计算逐日评估诊断统计（用于排查 TopK/RankIC 不一致风险）
     
     诊断项包括：
