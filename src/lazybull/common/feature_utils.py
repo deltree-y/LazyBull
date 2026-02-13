@@ -156,7 +156,7 @@ def cross_sectional_zscore(
     # 先 winsorize（如果需要）
     if winsorize_limits is not None:
         if group_col is not None:
-            # 按组 winsorize
+            # 按组 winsorize（使用 transform 避免 FutureWarning）
             values = df.groupby(group_col)[value_col].transform(
                 lambda x: winsorize_series(x, limits=winsorize_limits)
             )
@@ -164,15 +164,20 @@ def cross_sectional_zscore(
             # 全局 winsorize
             values = winsorize_series(values, limits=winsorize_limits)
     
-    # 标准化
+    # 标准化（使用矢量化 transform 方法避免 groupby.apply FutureWarning）
     if group_col is not None:
-        # 按组标准化（对已 winsorize 的 values 或原始 value_col 进行标准化）
-        result = df.groupby(group_col).apply(
-            lambda g: zscore_transform(
-                values.loc[g.index] if winsorize_limits is not None else g[value_col],
-                ddof=ddof
-            )
-        ).reset_index(level=0, drop=True)
+        # 按组标准化：使用 transform 直接计算 zscore
+        # 选择正确的输入数据：如果已 winsorize，使用 values；否则使用原始列
+        input_data = values if winsorize_limits is not None else df[value_col]
+        
+        # 计算组内均值和标准差
+        mean = input_data.groupby(df[group_col]).transform('mean')
+        std = input_data.groupby(df[group_col]).transform('std', ddof=ddof)
+        
+        # 计算 zscore
+        result = input_data - mean
+        # 避免除零
+        result = result.where(std > 1e-10, 0.0) / std.where(std > 1e-10, 1.0)
     else:
         # 全局标准化
         if winsorize_limits is not None:

@@ -313,6 +313,53 @@ class DataLoader:
         df = self.storage.load_clean("stock_basic")
         return df
     
+    def load_clean_moneyflow(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> Optional[pd.DataFrame]:
+        """加载清洗后的资金流向数据
+        
+        Args:
+            start_date: 开始日期，格式YYYY-MM-DD或YYYYMMDD
+            end_date: 结束日期，格式YYYY-MM-DD或YYYYMMDD
+            
+        Returns:
+            资金流向DataFrame
+        """
+        # 如果提供了日期范围，尝试从分区加载
+        if start_date and end_date:
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            
+            df = self.storage.load_clean_by_date_range("moneyflow", start_str, end_str)
+            
+            if df is not None:
+                if 'trade_date' in df.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                        df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+                return df
+        
+        # 回退到加载完整数据
+        df = self.storage.load_clean("moneyflow")
+        if df is None:
+            return None
+        
+        # 确保日期格式一致
+        if 'trade_date' in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
+                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+        
+        # 日期过滤
+        if start_date:
+            start_dt = self._normalize_date(start_date).replace('-', '')
+            df = df[df['trade_date'] >= start_dt]
+        if end_date:
+            end_dt = self._normalize_date(end_date).replace('-', '')
+            df = df[df['trade_date'] <= end_dt]
+        
+        return df
+    
     def load_clean_daily_by_date(self, trade_date: str) -> Optional[pd.DataFrame]:
         """加载指定日期的清洗后日线数据
         

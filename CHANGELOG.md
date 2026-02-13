@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.2] - 2026-02-13
+
+### Added
+
+- **纸面交易与回测适配新模型/新特征（moneyflow + daily_basic）**
+  - `DataLoader.load_clean_moneyflow()` - 新增资金流向数据加载方法，支持日期范围分区加载
+  - `FeatureBuilder` 现在强制依赖 moneyflow 数据，缺失时会明确报错并提示补齐步骤
+  - `MLSignal` 适配 classification 模型：自动使用 `predict_proba` 获取正类概率作为分数
+  - `ensure_features_for_date()` 增强错误提示：moneyflow 缺失时提供详细的补数据命令
+
+- **逐日评估诊断增强（排查 TopK/RankIC 不一致风险）**
+  - `eval_utils.py` 新增 `compute_diagnostic_statistics()` 函数：
+    - 全市场收益逐日均值/标准差统计
+    - TopK 相对全市场提升计算（TopK - UniverseMean）
+    - 每日样本数分布（min/median/max）
+    - TopK 收益分位数（25%/50%/75%）
+  - `eval_utils.py` 新增 `print_diagnostic_report()` 函数：格式化输出诊断报告
+  - `train_ml_model.py` 集成诊断输出到验证集逐日评估流程
+
+### Fixed
+
+- **消除 Pandas FutureWarning（groupby.apply）**
+  - `feature_utils.py` - `cross_sectional_zscore()` 改用矢量化 `transform` 方法，避免 `groupby.apply` 触发 FutureWarning
+  - `train_ml_model.py` - `generate_classification_labels()` 改用矢量化方式计算百分比阈值，避免 `groupby.apply`
+
+- **特征列一致性检查增强**
+  - `ensure_features_for_date()` 增加 moneyflow 数据日志输出，记录加载的条数
+  - moneyflow 缺失时的报错信息更友好，包含推荐的补数据命令
+
+### Documentation
+
+- 新增 `docs/PR/fix_paper_trade_moneyflow_v0.8.2.md` - 本 PR 详细说明
+  - 说明纸面交易/回测为何缺特征列、如何修复、如何补齐数据
+  - 说明 moneyflow 强制依赖的行为与补数据命令
+  - 说明逐日评估新增诊断项的意义
+  - 说明 FutureWarning 修复点
+
 ## [0.8.1] - 2026-02-13
 
 ### Fixed

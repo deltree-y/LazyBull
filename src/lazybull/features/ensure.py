@@ -113,7 +113,19 @@ def ensure_features_for_date(
             logger.error(f"缺少 clean 日线数据: {trade_date}")
             return False
         
+        # 强制检查 moneyflow 数据（新模型必须依赖）
+        if moneyflow_clean is None or moneyflow_clean.empty:
+            logger.error(
+                f"缺少 clean moneyflow 数据: {trade_date}\n"
+                f"新模型训练需要资金流向特征，请先补齐 moneyflow 数据。\n"
+                f"推荐步骤：\n"
+                f"  1. 下载 raw moneyflow: python scripts/download_raw.py --data-type moneyflow --start-date {start_dt.strftime('%Y%m%d')} --end-date {end_dt.strftime('%Y%m%d')}\n"
+                f"  2. 构建 clean moneyflow: python scripts/build_clean_features.py --start-date {start_dt.strftime('%Y%m%d')} --end-date {end_dt.strftime('%Y%m%d')}"
+            )
+            return False
+        
         logger.info(f"clean 日线数据: {len(daily_clean)} 条记录")
+        logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
         
         # 6. 构建特征（无需传递 adj_factor，clean 数据已包含复权价格）
         features_df = builder.build_features_for_day(
