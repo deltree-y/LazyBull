@@ -193,3 +193,149 @@ def summarize_daily_metrics(daily_metrics: pd.DataFrame) -> Dict[str, float]:
             summary[f"{col}_标准差"] = np.nan
     
     return summary
+
+
+def compute_diagnostic_statistics(
+    df: pd.DataFrame,
+    date_col: str,
+    prediction_col: str,
+    return_col: str,
+    topk_values: List[int]
+) -> Dict[str, any]:
+    """计算逐日评估诊断统计（用于排查 TopK/RankIC 不一致风险）
+    
+    诊断项包括：
+    - 验证集全市场收益的逐日均值与标准差（跨日汇总）
+    - TopK 均值相对全市场均值的提升（TopK - UniverseMean）
+    - 每日可选样本数的分布（min/median/max）
+    - TopK 收益的分位数（25%/50%/75%）
+    
+    Args:
+        df: DataFrame，包含日期、预测分数、真实收益列
+        date_col: 日期列名
+        prediction_col: 预测分数列名
+        return_col: 真实收益列名（例如 y_ret_20）
+        topk_values: TopK 评估的 K 值列表
+        
+    Returns:
+        诊断统计字典
+    """
+    diagnostics = {}
+    
+    # 1. 全市场收益的逐日统计
+    daily_universe_stats = []
+    for trade_date in df[date_col].unique():
+        day_df = df[df[date_col] == trade_date]
+        valid_returns = day_df[return_col].dropna()
+        
+        if len(valid_returns) > 0:
+            daily_universe_stats.append({
+                'date': trade_date,
+                'mean': valid_returns.mean(),
+                'std': valid_returns.std(),
+                'count': len(valid_returns)
+            })
+    
+    universe_stats_df = pd.DataFrame(daily_universe_stats)
+    
+    if len(universe_stats_df) > 0:
+        diagnostics['全市场收益_逐日均值的均值'] = universe_stats_df['mean'].mean()
+        diagnostics['全市场收益_逐日均值的标准差'] = universe_stats_df['mean'].std()
+        diagnostics['全市场收益_逐日标准差的均值'] = universe_stats_df['std'].mean()
+        
+        # 样本数分布
+        diagnostics['每日样本数_最小'] = int(universe_stats_df['count'].min())
+        diagnostics['每日样本数_中位数'] = int(universe_stats_df['count'].median())
+        diagnostics['每日样本数_最大'] = int(universe_stats_df['count'].max())
+    
+    # 2. 计算 TopK 收益及其相对提升
+    for k in topk_values:
+        topk_daily_returns = []
+        
+        for trade_date in df[date_col].unique():
+            day_df = df[df[date_col] == trade_date]
+            
+            # 过滤有效样本
+            valid_mask = day_df[prediction_col].notna() & day_df[return_col].notna()
+            valid_df = day_df[valid_mask]
+            
+            if len(valid_df) == 0:
+                continue
+            
+            # 按预测分数降序排序，选择 TopK
+            sorted_df = valid_df.sort_values(prediction_col, ascending=False)
+            actual_k = min(k, len(sorted_df))
+            topk_df = sorted_df.head(actual_k)
+            
+            # 计算 TopK 平均收益
+            topk_mean = topk_df[return_col].mean()
+            
+            # 计算全市场平均收益（用于计算提升）
+            universe_mean = valid_df[return_col].mean()
+            
+            topk_daily_returns.append({
+                'date': trade_date,
+                'topk_mean': topk_mean,
+                'universe_mean': universe_mean,
+                'lift': topk_mean - universe_mean  # 提升 = TopK - 全市场
+            })
+        
+        topk_returns_df = pd.DataFrame(topk_daily_returns)
+        
+        if len(topk_returns_df) > 0:
+            # TopK 均值统计
+            diagnostics[f'Top{k}_逐日均值的均值'] = topk_returns_df['topk_mean'].mean()
+            diagnostics[f'Top{k}_逐日均值的标准差'] = topk_returns_df['topk_mean'].std()
+            
+            # 提升统计
+            diagnostics[f'Top{k}_相对全市场提升_均值'] = topk_returns_df['lift'].mean()
+            diagnostics[f'Top{k}_相对全市场提升_标准差'] = topk_returns_df['lift'].std()
+            
+            # 分位数统计（用于判断是否被极端日驱动）
+            diagnostics[f'Top{k}_逐日均值_25分位'] = topk_returns_df['topk_mean'].quantile(0.25)
+            diagnostics[f'Top{k}_逐日均值_50分位'] = topk_returns_df['topk_mean'].quantile(0.50)
+            diagnostics[f'Top{k}_逐日均值_75分位'] = topk_returns_df['topk_mean'].quantile(0.75)
+    
+    return diagnostics
+
+
+def print_diagnostic_report(diagnostics: Dict[str, any]) -> None:
+    """打印诊断报告（格式化输出）
+    
+    Args:
+        diagnostics: 诊断统计字典（来自 compute_diagnostic_statistics）
+    """
+    from loguru import logger
+    
+    logger.info("=" * 80)
+    logger.info("逐日评估诊断报告（排查 TopK/RankIC 不一致风险）")
+    logger.info("=" * 80)
+    
+    # 1. 全市场收益统计
+    logger.info("\n【1. 全市场收益统计】")
+    if '全市场收益_逐日均值的均值' in diagnostics:
+        logger.info(f"  逐日均值的均值: {diagnostics['全市场收益_逐日均值的均值']:.6f}")
+        logger.info(f"  逐日均值的标准差: {diagnostics['全市场收益_逐日均值的标准差']:.6f}")
+        logger.info(f"  逐日标准差的均值: {diagnostics['全市场收益_逐日标准差的均值']:.6f}")
+    
+    # 2. 样本数分布
+    logger.info("\n【2. 每日样本数分布】")
+    if '每日样本数_最小' in diagnostics:
+        logger.info(f"  最小: {diagnostics['每日样本数_最小']}")
+        logger.info(f"  中位数: {diagnostics['每日样本数_中位数']}")
+        logger.info(f"  最大: {diagnostics['每日样本数_最大']}")
+    
+    # 3. TopK 收益与提升
+    logger.info("\n【3. TopK 收益统计与相对提升】")
+    topk_keys = [k for k in diagnostics.keys() if k.startswith('Top') and '_逐日均值的均值' in k]
+    for key in sorted(topk_keys):
+        k_str = key.split('_')[0]  # 提取 "Top30", "Top100" 等
+        logger.info(f"\n  {k_str}:")
+        logger.info(f"    逐日均值的均值: {diagnostics[key]:.6f}")
+        logger.info(f"    逐日均值的标准差: {diagnostics[key.replace('逐日均值的均值', '逐日均值的标准差')]:.6f}")
+        logger.info(f"    相对全市场提升（均值）: {diagnostics[key.replace('逐日均值的均值', '相对全市场提升_均值')]:.6f}")
+        logger.info(f"    相对全市场提升（标准差）: {diagnostics[key.replace('逐日均值的均值', '相对全市场提升_标准差')]:.6f}")
+        logger.info(f"    分位数 (25%/50%/75%): {diagnostics[key.replace('逐日均值的均值', '逐日均值_25分位')]:.6f} / {diagnostics[key.replace('逐日均值的均值', '逐日均值_50分位')]:.6f} / {diagnostics[key.replace('逐日均值的均值', '逐日均值_75分位')]:.6f}")
+    
+    logger.info("=" * 80)
+

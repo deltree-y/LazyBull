@@ -287,27 +287,16 @@ def generate_classification_labels(
         df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
     else:
         # 百分比模式：Top X%
-        # 计算每个交易日的阈值排名
-        def get_quantile_threshold(group):
-            valid_count = group['_rank'].notna().sum()
-            if valid_count == 0:
-                return np.nan
-            # Top X% 对应的排名阈值
-            threshold_rank = max(1, int(valid_count * pos_quantile))
-            return threshold_rank
+        # 使用矢量化方式计算每个交易日的阈值排名（避免 groupby.apply FutureWarning）
+        
+        # 计算每个交易日的有效样本数
+        valid_counts = df_labeled.groupby('trade_date')['_rank'].transform('count')
         
         # 计算每个交易日的阈值排名
-        threshold_ranks = df_labeled.groupby('trade_date').apply(
-            get_quantile_threshold,
-            include_groups=False
-        )
+        threshold_ranks = (valid_counts * pos_quantile).clip(lower=1).astype(int)
         
-        # 标记正类
-        df_labeled[binary_label_col] = 0.0
-        for trade_date, threshold_rank in threshold_ranks.items():
-            if not np.isnan(threshold_rank):
-                mask = (df_labeled['trade_date'] == trade_date) & (df_labeled['_rank'] <= threshold_rank)
-                df_labeled.loc[mask, binary_label_col] = 1.0
+        # 标记正类（排名 <= threshold_rank 为正类）
+        df_labeled[binary_label_col] = (df_labeled['_rank'] <= threshold_ranks).astype(float)
         
         # 恢复原始 NaN
         df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
@@ -650,14 +639,32 @@ def evaluate_validation_daily(
     logger.info("  - 分类任务应重点关注这些指标，不要过度解读 Accuracy/Recall")
     logger.info("=" * 60)
     
-    # 返回汇总结果
-    return {
+    # 计算并打印诊断统计（用于排查 TopK/RankIC 不一致风险）
+    from src.lazybull.ml.eval_utils import compute_diagnostic_statistics, print_diagnostic_report
+    
+    diagnostics = compute_diagnostic_statistics(
+        df=df_eval,
+        date_col='trade_date',
+        prediction_col='pred_score',
+        return_col=original_return_col,
+        topk_values=topk_values
+    )
+    
+    print_diagnostic_report(diagnostics)
+    
+    # 返回汇总结果（包含诊断统计）
+    result = {
         'daily_rankic_mean': summary.get('RankIC_均值', np.nan),
         'daily_rankic_std': summary.get('RankIC_标准差', np.nan),
         'daily_rankic_ir': summary.get('RankIC_IR', np.nan),
         **{f'top{k}_return_mean': summary.get(f"Top{k}平均收益_均值", np.nan) for k in topk_values},
         **{f'top{k}_return_std': summary.get(f"Top{k}平均收益_标准差", np.nan) for k in topk_values}
     }
+    
+    # 添加诊断统计
+    result.update({f'diagnostic_{k}': v for k, v in diagnostics.items()})
+    
+    return result
 
 
 def main():

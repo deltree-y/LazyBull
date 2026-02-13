@@ -203,8 +203,21 @@ class MLSignal(Signal):
             logger.error(f"特征列缺失: {e}")
             return {}
         
-        # 预测
-        predictions = self.model.predict(X)
+        # 预测（classification 模型使用 predict_proba 获取正类概率）
+        model_type = self.metadata.get('model_type', 'unknown')
+        task = self.metadata.get('train_params', {}).get('task', 'regression')
+        
+        if task == 'classification' and hasattr(self.model, 'predict_proba'):
+            # 分类模型：使用正类概率作为分数
+            predictions = self.model.predict_proba(X)[:, 1]  # 取正类（标签=1）的概率
+            if self.verbose:
+                logger.debug(f"使用 classification 模型预测概率（正类）作为分数")
+        else:
+            # 回归模型：使用预测值作为分数
+            predictions = self.model.predict(X)
+            if self.verbose and task == 'classification':
+                logger.warning(f"模型声明为 classification，但无 predict_proba 方法，回退到 predict")
+        
         features_df['ml_score'] = predictions
         
         # 按预测分数排序，选择 Top N
@@ -312,8 +325,20 @@ class MLSignal(Signal):
             logger.error(f"特征列缺失: {e}")
             return []
         
-        # 预测
-        predictions = self.model.predict(X)
+        # 预测（classification 模型使用 predict_proba 获取正类概率）
+        task = self.metadata.get('train_params', {}).get('task', 'regression')
+        
+        if task == 'classification' and hasattr(self.model, 'predict_proba'):
+            # 分类模型：使用正类概率作为分数
+            predictions = self.model.predict_proba(X)[:, 1]  # 取正类（标签=1）的概率
+            if self.verbose:
+                logger.debug(f"使用 classification 模型预测概率（正类）作为分数")
+        else:
+            # 回归模型：使用预测值作为分数
+            predictions = self.model.predict(X)
+            if self.verbose and task == 'classification':
+                logger.warning(f"模型声明为 classification，但无 predict_proba 方法，回退到 predict")
+        
         features_df['ml_score'] = predictions
         
         # 按预测分数排序，返回所有候选
