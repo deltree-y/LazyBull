@@ -250,6 +250,7 @@ def generate_classification_labels(
         
     Note:
         pos_quantile 和 pos_topk 二选一，pos_topk 优先级更高
+        使用 rank(method='first') 确保 topk 数量严格等于 k（打散并列）
     """
     logger.info(f"生成分类标签（基于 {label_column}）...")
     
@@ -261,46 +262,54 @@ def generate_classification_labels(
     
     df_labeled = df.copy()
     binary_label_col = f"{label_column}_binary"
-    df_labeled[binary_label_col] = 0  # 显式初始化为 0
     
-    # 按 trade_date 分组生成标签
-    def label_group(group):
-        group = group.copy()
-        
-        # 排除 NaN
-        valid_mask = group[label_column].notna()
-        group.loc[~valid_mask, binary_label_col] = np.nan
-        
-        if valid_mask.sum() == 0:
-            return group
-        
-        # 对有效样本排序
-        sorted_values = group.loc[valid_mask, label_column].sort_values(ascending=False)
-        
-        if pos_topk is not None:
-            # 数量模式：Top K
-            actual_k = min(pos_topk, len(sorted_values))
-            
-            if actual_k == 0:
-                # 没有样本，全部标记为负类
-                group.loc[valid_mask, binary_label_col] = 0
-            else:
-                threshold_value = sorted_values.iloc[actual_k - 1]
-                
-                # 标记正类（处理并列情况）
-                group.loc[valid_mask, binary_label_col] = (
-                    group.loc[valid_mask, label_column] >= threshold_value
-                ).astype(int)
-        else:
-            # 百分比模式：Top X%
-            quantile_threshold = sorted_values.quantile(1 - pos_quantile)
-            group.loc[valid_mask, binary_label_col] = (
-                group.loc[valid_mask, label_column] >= quantile_threshold
-            ).astype(int)
-        
-        return group
+    # 初始化标签列为 NaN
+    df_labeled[binary_label_col] = np.nan
     
-    df_labeled = df_labeled.groupby('trade_date', group_keys=False).apply(label_group)
+    # 按 trade_date 分组，对每组的标签进行排名
+    # 使用 rank(method='first', ascending=False) 确保：
+    # 1. 降序排名（最大值排名=1）
+    # 2. 并列时按出现顺序打散（确保 topk 数量严格等于 k）
+    df_labeled['_rank'] = df_labeled.groupby('trade_date')[label_column].rank(
+        method='first',
+        ascending=False,
+        na_option='keep'  # NaN 保持为 NaN
+    )
+    
+    if pos_topk is not None:
+        # 数量模式：Top K（排名 <= K 为正类）
+        # 注意：如果某个交易日的有效样本数 < pos_topk，则只标记所有有效样本为正类
+        df_labeled[binary_label_col] = (df_labeled['_rank'] <= pos_topk).astype(float)
+        df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
+    else:
+        # 百分比模式：Top X%
+        # 计算每个交易日的阈值排名
+        def get_quantile_threshold(group):
+            valid_count = group['_rank'].notna().sum()
+            if valid_count == 0:
+                return np.nan
+            # Top X% 对应的排名阈值
+            threshold_rank = max(1, int(valid_count * pos_quantile))
+            return threshold_rank
+        
+        # 计算每个交易日的阈值排名
+        threshold_ranks = df_labeled.groupby('trade_date').apply(
+            get_quantile_threshold,
+            include_groups=False
+        )
+        
+        # 标记正类
+        df_labeled[binary_label_col] = 0.0
+        for trade_date, threshold_rank in threshold_ranks.items():
+            if not np.isnan(threshold_rank):
+                mask = (df_labeled['trade_date'] == trade_date) & (df_labeled['_rank'] <= threshold_rank)
+                df_labeled.loc[mask, binary_label_col] = 1.0
+        
+        # 恢复原始 NaN
+        df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
+    
+    # 删除临时排名列
+    df_labeled = df_labeled.drop(columns=['_rank'])
     
     # 统计正类比例
     total_valid = df_labeled[binary_label_col].notna().sum()
@@ -310,6 +319,11 @@ def generate_classification_labels(
     logger.info(f"分类标签生成完成:")
     logger.info(f"  模式: {'pos_topk=' + str(pos_topk) if pos_topk else 'pos_quantile=' + str(pos_quantile)}")
     logger.info(f"  正类样本数: {pos_count:.0f} / {total_valid:.0f} ({pos_ratio:.2%})")
+    
+    # 验证 topk 模式下每个交易日的正类数量
+    if pos_topk is not None:
+        pos_counts_per_day = df_labeled.groupby('trade_date')[binary_label_col].sum()
+        logger.debug(f"  各交易日正类数量统计: min={pos_counts_per_day.min():.0f}, max={pos_counts_per_day.max():.0f}, mean={pos_counts_per_day.mean():.1f}")
     
     return df_labeled
 
@@ -321,6 +335,7 @@ def train_xgboost_model(
     X_val: pd.DataFrame,
     y_val: pd.Series,
     task: str = "regression",
+    skip_label_winsorize: bool = False,
     n_estimators: int = 100,
     max_depth: int = 6,
     learning_rate: float = 0.1,
@@ -334,11 +349,12 @@ def train_xgboost_model(
     1. 增加早停机制（early stopping）防止过拟合
     2. 优化默认超参数（更深的树和正则化）
     3. 添加更全面的评估指标（IC/RankIC）
-    4. 对回归标签进行 winsorize 处理减少异常值影响（已在 cs_zscore 中处理）
+    4. 对回归标签进行 winsorize 处理减少异常值影响（除非已在 cs_zscore 中处理）
     5. 支持分类任务（二分类）
     
     Args:
         task: 任务类型，"regression" 或 "classification"
+        skip_label_winsorize: 是否跳过标签 winsorize（当 label_transform=cs_zscore 时为 True）
         X_train: 训练特征数据
         y_train: 训练标签数据
         X_val: 验证特征数据
@@ -355,17 +371,20 @@ def train_xgboost_model(
     """
     logger.info(f"开始训练 XGBoost 模型（任务类型: {task}）...")
     
-    # 对回归标签进行 winsorize 处理（分类标签不需要）
-    if task == "regression":
+    # 对回归标签进行 winsorize 处理（分类标签不需要，cs_zscore 标签也不需要）
+    if task == "regression" and not skip_label_winsorize:
         from scipy.stats import mstats
         y_train_processed = pd.Series(
             mstats.winsorize(y_train, limits=[0.01, 0.01]),  # 截断上下1%极端值
             index=y_train.index
         )
-        logger.info("标签 winsorize 处理完成（截断上下1%极端值）")
+        logger.info("对回归标签进行 winsorize 处理（截断上下1%极端值），用于稳定训练")
     else:
         y_train_processed = y_train
-        logger.info("分类任务，跳过标签 winsorize 处理")
+        if task == "classification":
+            logger.info("分类任务，跳过标签 winsorize 处理")
+        elif skip_label_winsorize:
+            logger.info("标签已在 cs_zscore 步骤中 winsorize，训练阶段跳过 winsorize")
     
     # 准备训练参数
     train_params = {
@@ -686,9 +705,13 @@ def main():
         X_train, y_train, X_val, y_val, feature_columns = prepare_training_data(df, actual_label_column)
         
         # 3. 训练模型
+        # 当 label_transform=cs_zscore 时，标签已在 cs_zscore 步骤中 winsorize，训练时不再 winsorize
+        skip_label_winsorize = (args.task == "regression" and args.label_transform == "cs_zscore")
+        
         model, train_params, train_metrics, val_metrics = train_xgboost_model(
             X_train, y_train, X_val, y_val,
             task=args.task,
+            skip_label_winsorize=skip_label_winsorize,
             n_estimators=args.n_estimators,
             max_depth=args.max_depth,
             learning_rate=args.learning_rate,
