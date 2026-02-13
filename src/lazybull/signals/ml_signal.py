@@ -67,7 +67,11 @@ class MLSignal(Signal):
         """加载模型（延迟加载）"""
         if self.model is None:
             registry = ModelRegistry(models_dir=self.models_dir)
-            self.model, self.metadata = registry.load_model(version=self.model_version)
+            # 严格检查：拒绝旧模型
+            self.model, self.metadata = registry.load_model(
+                version=self.model_version,
+                strict_version_check=True
+            )
             self.feature_columns = self.metadata["feature_columns"]
             logger.info(
                 f"模型已加载: {self.metadata['version_str']}, "
@@ -182,6 +186,15 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 成交额过滤后无可选股票")
             return {}
         
+        # 特征列一致性检查
+        available_features = features_df.columns.tolist()
+        registry = ModelRegistry(models_dir=self.models_dir)
+        try:
+            registry.check_feature_consistency(self.metadata, available_features)
+        except ValueError as e:
+            logger.error(f"特征列一致性检查失败: {e}")
+            raise
+        
         # 准备特征
         try:
             X = features_df[self.feature_columns].copy()
@@ -282,6 +295,15 @@ class MLSignal(Signal):
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 成交额过滤后无可选股票")
             return []
+        
+        # 特征列一致性检查
+        available_features = features_df.columns.tolist()
+        registry = ModelRegistry(models_dir=self.models_dir)
+        try:
+            registry.check_feature_consistency(self.metadata, available_features)
+        except ValueError as e:
+            logger.error(f"特征列一致性检查失败: {e}")
+            raise
         
         # 准备特征
         try:

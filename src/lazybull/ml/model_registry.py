@@ -132,14 +132,18 @@ class ModelRegistry:
         
         return version
     
-    def load_model(self, version: Optional[int] = None) -> tuple:
+    def load_model(self, version: Optional[int] = None, strict_version_check: bool = True) -> tuple:
         """加载模型
         
         Args:
             version: 模型版本号，None表示加载最新版本
+            strict_version_check: 是否严格检查模型版本元数据（默认 True）
             
         Returns:
             (model, metadata) 元组
+            
+        Raises:
+            ValueError: 当 strict_version_check=True 且模型缺少新版本必需元数据时
         """
         if not self.registry["models"]:
             raise ValueError("没有已注册的模型。请先使用 train_ml_model.py 训练模型。")
@@ -162,12 +166,43 @@ class ModelRegistry:
                     f"可用版本: {available_versions}"
                 )
         
+        # 严格模式：检查新版本必需的元数据字段
+        if strict_version_check:
+            required_fields = ['feature_columns', 'train_params', 'model_type']
+            missing_fields = []
+            
+            # 检查是否有 feature_columns（可能在单独文件中）
+            features_file = self.models_dir / metadata.get("features_file", "")
+            if not features_file.exists():
+                missing_fields.append('feature_columns (features_file 不存在)')
+            
+            # 检查 train_params
+            if 'train_params' not in metadata or not metadata['train_params']:
+                missing_fields.append('train_params')
+            
+            # 检查 model_type
+            if 'model_type' not in metadata:
+                missing_fields.append('model_type')
+            
+            if missing_fields:
+                raise ValueError(
+                    f"旧模型（版本 {metadata.get('version_str', 'unknown')}）缺少新版本必需的元数据字段：{', '.join(missing_fields)}。\n"
+                    f"这些字段对于特征列一致性检查和模型推理至关重要。\n"
+                    f"请重新训练模型以生成包含完整元数据的新版本。"
+                )
+        
         # 加载模型文件
         model_file = self.models_dir / metadata["model_file"]
+        if not model_file.exists():
+            raise FileNotFoundError(f"模型文件不存在: {model_file}")
+        
         model = joblib.load(model_file)
         
         # 加载特征列表
         features_file = self.models_dir / metadata["features_file"]
+        if not features_file.exists():
+            raise FileNotFoundError(f"特征列表文件不存在: {features_file}")
+        
         with open(features_file, 'r', encoding='utf-8') as f:
             feature_columns = json.load(f)
         
@@ -179,6 +214,43 @@ class ModelRegistry:
         )
         
         return model, metadata
+    
+    def check_feature_consistency(
+        self,
+        model_metadata: Dict,
+        available_features: List[str]
+    ) -> None:
+        """检查特征列一致性
+        
+        检查推理数据是否包含模型训练时使用的所有特征列。
+        
+        Args:
+            model_metadata: 模型元数据（来自 load_model）
+            available_features: 推理数据中可用的特征列
+            
+        Raises:
+            ValueError: 当缺少必需的特征列时
+        """
+        if "feature_columns" not in model_metadata:
+            raise ValueError("模型元数据中缺少 feature_columns 信息，无法进行特征一致性检查")
+        
+        required_features = set(model_metadata["feature_columns"])
+        available_features_set = set(available_features)
+        
+        missing_features = required_features - available_features_set
+        
+        if missing_features:
+            raise ValueError(
+                f"推理数据缺少模型训练时使用的特征列（共 {len(missing_features)} 个）：\n"
+                f"{sorted(list(missing_features))[:20]}{'...' if len(missing_features) > 20 else ''}\n"
+                f"模型训练特征数: {len(required_features)}, 当前数据特征数: {len(available_features_set)}\n"
+                f"请确保推理数据包含模型训练时的所有特征列。"
+            )
+        
+        logger.debug(
+            f"特征列一致性检查通过：模型需要 {len(required_features)} 个特征，"
+            f"数据提供 {len(available_features_set)} 个特征"
+        )
     
     def list_models(self) -> List[Dict]:
         """列出所有已注册的模型
