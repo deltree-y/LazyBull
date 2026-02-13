@@ -37,6 +37,10 @@ from sklearn.metrics import mean_squared_error, r2_score
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
+from src.lazybull.ml.eval_utils import (
+    evaluate_predictions_by_date,
+    summarize_daily_metrics
+)
 
 try:
     import xgboost as xgb
@@ -105,7 +109,7 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
         val_ratio: 验证集比例，默认 0.2（最后 20% 的时间作为验证集）
         
     Returns:
-        (X_train, y_train, X_val, y_val, feature_columns) 元组
+        (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split) 元组
     """
     logger.info("准备训练数据...")
     
@@ -177,7 +181,7 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     
     logger.info(f"训练数据准备完成: X_train shape={X_train.shape}, X_val shape={X_val.shape}")
     
-    return X_train, y_train, X_val, y_val, feature_columns
+    return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split
 
 
 def transform_labels_cs_zscore(
@@ -250,6 +254,7 @@ def generate_classification_labels(
         
     Note:
         pos_quantile 和 pos_topk 二选一，pos_topk 优先级更高
+        使用 rank(method='first') 确保 topk 数量严格等于 k（打散并列）
     """
     logger.info(f"生成分类标签（基于 {label_column}）...")
     
@@ -261,46 +266,54 @@ def generate_classification_labels(
     
     df_labeled = df.copy()
     binary_label_col = f"{label_column}_binary"
-    df_labeled[binary_label_col] = 0  # 显式初始化为 0
     
-    # 按 trade_date 分组生成标签
-    def label_group(group):
-        group = group.copy()
-        
-        # 排除 NaN
-        valid_mask = group[label_column].notna()
-        group.loc[~valid_mask, binary_label_col] = np.nan
-        
-        if valid_mask.sum() == 0:
-            return group
-        
-        # 对有效样本排序
-        sorted_values = group.loc[valid_mask, label_column].sort_values(ascending=False)
-        
-        if pos_topk is not None:
-            # 数量模式：Top K
-            actual_k = min(pos_topk, len(sorted_values))
-            
-            if actual_k == 0:
-                # 没有样本，全部标记为负类
-                group.loc[valid_mask, binary_label_col] = 0
-            else:
-                threshold_value = sorted_values.iloc[actual_k - 1]
-                
-                # 标记正类（处理并列情况）
-                group.loc[valid_mask, binary_label_col] = (
-                    group.loc[valid_mask, label_column] >= threshold_value
-                ).astype(int)
-        else:
-            # 百分比模式：Top X%
-            quantile_threshold = sorted_values.quantile(1 - pos_quantile)
-            group.loc[valid_mask, binary_label_col] = (
-                group.loc[valid_mask, label_column] >= quantile_threshold
-            ).astype(int)
-        
-        return group
+    # 初始化标签列为 NaN
+    df_labeled[binary_label_col] = np.nan
     
-    df_labeled = df_labeled.groupby('trade_date', group_keys=False).apply(label_group)
+    # 按 trade_date 分组，对每组的标签进行排名
+    # 使用 rank(method='first', ascending=False) 确保：
+    # 1. 降序排名（最大值排名=1）
+    # 2. 并列时按出现顺序打散（确保 topk 数量严格等于 k）
+    df_labeled['_rank'] = df_labeled.groupby('trade_date')[label_column].rank(
+        method='first',
+        ascending=False,
+        na_option='keep'  # NaN 保持为 NaN
+    )
+    
+    if pos_topk is not None:
+        # 数量模式：Top K（排名 <= K 为正类）
+        # 注意：如果某个交易日的有效样本数 < pos_topk，则只标记所有有效样本为正类
+        df_labeled[binary_label_col] = (df_labeled['_rank'] <= pos_topk).astype(float)
+        df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
+    else:
+        # 百分比模式：Top X%
+        # 计算每个交易日的阈值排名
+        def get_quantile_threshold(group):
+            valid_count = group['_rank'].notna().sum()
+            if valid_count == 0:
+                return np.nan
+            # Top X% 对应的排名阈值
+            threshold_rank = max(1, int(valid_count * pos_quantile))
+            return threshold_rank
+        
+        # 计算每个交易日的阈值排名
+        threshold_ranks = df_labeled.groupby('trade_date').apply(
+            get_quantile_threshold,
+            include_groups=False
+        )
+        
+        # 标记正类
+        df_labeled[binary_label_col] = 0.0
+        for trade_date, threshold_rank in threshold_ranks.items():
+            if not np.isnan(threshold_rank):
+                mask = (df_labeled['trade_date'] == trade_date) & (df_labeled['_rank'] <= threshold_rank)
+                df_labeled.loc[mask, binary_label_col] = 1.0
+        
+        # 恢复原始 NaN
+        df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
+    
+    # 删除临时排名列
+    df_labeled = df_labeled.drop(columns=['_rank'])
     
     # 统计正类比例
     total_valid = df_labeled[binary_label_col].notna().sum()
@@ -310,6 +323,11 @@ def generate_classification_labels(
     logger.info(f"分类标签生成完成:")
     logger.info(f"  模式: {'pos_topk=' + str(pos_topk) if pos_topk else 'pos_quantile=' + str(pos_quantile)}")
     logger.info(f"  正类样本数: {pos_count:.0f} / {total_valid:.0f} ({pos_ratio:.2%})")
+    
+    # 验证 topk 模式下每个交易日的正类数量
+    if pos_topk is not None:
+        pos_counts_per_day = df_labeled.groupby('trade_date')[binary_label_col].sum()
+        logger.debug(f"  各交易日正类数量统计: min={pos_counts_per_day.min():.0f}, max={pos_counts_per_day.max():.0f}, mean={pos_counts_per_day.mean():.1f}")
     
     return df_labeled
 
@@ -321,6 +339,8 @@ def train_xgboost_model(
     X_val: pd.DataFrame,
     y_val: pd.Series,
     task: str = "regression",
+    skip_label_winsorize: bool = False,
+    scale_pos_weight: Optional[float] = None,
     n_estimators: int = 100,
     max_depth: int = 6,
     learning_rate: float = 0.1,
@@ -334,11 +354,14 @@ def train_xgboost_model(
     1. 增加早停机制（early stopping）防止过拟合
     2. 优化默认超参数（更深的树和正则化）
     3. 添加更全面的评估指标（IC/RankIC）
-    4. 对回归标签进行 winsorize 处理减少异常值影响（已在 cs_zscore 中处理）
+    4. 对回归标签进行 winsorize 处理减少异常值影响（除非已在 cs_zscore 中处理）
     5. 支持分类任务（二分类）
+    6. 支持 scale_pos_weight 自动计算（分类任务）
     
     Args:
         task: 任务类型，"regression" 或 "classification"
+        skip_label_winsorize: 是否跳过标签 winsorize（当 label_transform=cs_zscore 时为 True）
+        scale_pos_weight: 正类权重（分类任务），None 表示自动计算为 neg/pos
         X_train: 训练特征数据
         y_train: 训练标签数据
         X_val: 验证特征数据
@@ -355,17 +378,39 @@ def train_xgboost_model(
     """
     logger.info(f"开始训练 XGBoost 模型（任务类型: {task}）...")
     
-    # 对回归标签进行 winsorize 处理（分类标签不需要）
-    if task == "regression":
+    # 对回归标签进行 winsorize 处理（分类标签不需要，cs_zscore 标签也不需要）
+    if task == "regression" and not skip_label_winsorize:
         from scipy.stats import mstats
         y_train_processed = pd.Series(
             mstats.winsorize(y_train, limits=[0.01, 0.01]),  # 截断上下1%极端值
             index=y_train.index
         )
-        logger.info("标签 winsorize 处理完成（截断上下1%极端值）")
+        logger.info("对回归标签进行 winsorize 处理（截断上下1%极端值），用于稳定训练")
     else:
         y_train_processed = y_train
-        logger.info("分类任务，跳过标签 winsorize 处理")
+        if task == "classification":
+            logger.info("分类任务，跳过标签 winsorize 处理")
+        elif skip_label_winsorize:
+            logger.info("标签已在 cs_zscore 步骤中 winsorize，训练阶段跳过 winsorize")
+    
+    # 计算 scale_pos_weight（分类任务）
+    computed_scale_pos_weight = None
+    if task == "classification":
+        pos_count = (y_train_processed == 1).sum()
+        neg_count = (y_train_processed == 0).sum()
+        
+        if scale_pos_weight is None:
+            # 自动计算：neg/pos
+            if pos_count > 0:
+                computed_scale_pos_weight = neg_count / pos_count
+                logger.info(f"自动计算 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
+            else:
+                logger.warning("训练集中无正类样本，无法计算 scale_pos_weight")
+                computed_scale_pos_weight = 1.0
+        else:
+            # 使用用户指定值
+            computed_scale_pos_weight = scale_pos_weight
+            logger.info(f"使用用户指定 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
     
     # 准备训练参数
     train_params = {
@@ -384,6 +429,10 @@ def train_xgboost_model(
         "reg_alpha": 0.1,  # L1 正则化
         "reg_lambda": 1.0,  # L2 正则化
     }
+    
+    # 分类任务添加 scale_pos_weight
+    if task == "classification" and computed_scale_pos_weight is not None:
+        train_params["scale_pos_weight"] = computed_scale_pos_weight
     
     logger.info(f"训练参数: {train_params}")
     logger.info("使用早停机制（early_stopping_rounds=30）")
@@ -520,6 +569,97 @@ def train_xgboost_model(
     return model, train_params, train_metrics, val_metrics
 
 
+def evaluate_validation_daily(
+    model,
+    df_val: pd.DataFrame,
+    feature_columns: List[str],
+    original_return_col: str,
+    task: str,
+    topk_values: Optional[List[int]] = None
+) -> Dict:
+    """对验证集进行逐日评估（分类任务的贴近交易评估）
+    
+    Args:
+        model: 训练好的模型
+        df_val: 验证集 DataFrame（包含 trade_date, ts_code, 特征列, 原始收益列）
+        feature_columns: 特征列名列表
+        original_return_col: 原始真实收益列名（如 y_ret_20）
+        task: 任务类型
+        topk_values: TopK 评估的 K 值列表
+        
+    Returns:
+        逐日评估结果字典
+    """
+    if len(df_val) == 0:
+        logger.warning("验证集为空，跳过逐日评估")
+        return {}
+    
+    if original_return_col not in df_val.columns:
+        logger.warning(f"验证集缺少原始收益列 {original_return_col}，跳过逐日评估")
+        return {}
+    
+    if topk_values is None:
+        topk_values = [30, 100, 300]
+    
+    logger.info("=" * 60)
+    logger.info("验证集逐日评估（贴近交易场景）")
+    logger.info("=" * 60)
+    
+    # 准备预测数据
+    df_eval = df_val.copy()
+    X_val_features = df_val[feature_columns].fillna(0)
+    
+    # 预测
+    if task == "classification":
+        # 分类任务：使用概率作为分数
+        y_pred_proba = model.predict_proba(X_val_features)[:, 1]
+        df_eval['pred_score'] = y_pred_proba
+    else:
+        # 回归任务：直接使用预测值
+        y_pred = model.predict(X_val_features)
+        df_eval['pred_score'] = y_pred
+    
+    # 逐日评估
+    daily_results = evaluate_predictions_by_date(
+        df=df_eval,
+        date_col='trade_date',
+        prediction_col='pred_score',
+        return_col=original_return_col,
+        topk_values=topk_values
+    )
+    
+    # 汇总统计
+    summary = summarize_daily_metrics(daily_results)
+    
+    # 输出结果
+    logger.info(f"评估天数: {len(daily_results)}")
+    logger.info(f"逐日 RankIC 均值: {summary.get('RankIC_均值', np.nan):.4f}")
+    logger.info(f"逐日 RankIC 标准差: {summary.get('RankIC_标准差', np.nan):.4f}")
+    logger.info(f"逐日 RankIC IR: {summary.get('RankIC_IR', np.nan):.4f}")
+    
+    for k in topk_values:
+        mean_key = f"Top{k}平均收益_均值"
+        std_key = f"Top{k}平均收益_标准差"
+        if mean_key in summary:
+            logger.info(f"Top{k} 平均收益（跨日）: 均值={summary[mean_key]:.4f}, 标准差={summary[std_key]:.4f}")
+    
+    logger.info("=" * 60)
+    logger.info("提示：")
+    logger.info("  - 逐日 RankIC 与回测口径一致（先逐日计算，再取均值）")
+    logger.info("  - TopK 收益评估基于原始收益列，更贴近实际交易场景")
+    logger.info("  - 分类任务应重点关注这些指标，不要过度解读 Accuracy/Recall")
+    logger.info("=" * 60)
+    
+    # 返回汇总结果
+    return {
+        'daily_rankic_mean': summary.get('RankIC_均值', np.nan),
+        'daily_rankic_std': summary.get('RankIC_标准差', np.nan),
+        'daily_rankic_ir': summary.get('RankIC_IR', np.nan),
+        **{f'top{k}_return_mean': summary.get(f"Top{k}平均收益_均值", np.nan) for k in topk_values},
+        **{f'top{k}_return_std': summary.get(f"Top{k}平均收益_标准差", np.nan) for k in topk_values}
+    }
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="训练 XGBoost 模型")
@@ -583,6 +723,12 @@ def main():
         type=int,
         default=None,
         help="分类任务正类数量阈值（例如 300 表示每日 Top300），与 pos-quantile 二选一，优先级更高"
+    )
+    parser.add_argument(
+        "--scale-pos-weight",
+        type=float,
+        default=None,
+        help="分类任务正类权重，None 表示自动计算为 neg/pos（默认）"
     )
     
     # 模型参数
@@ -683,12 +829,17 @@ def main():
             actual_label_column = args.label_column
         
         # 2. 准备训练数据（包含验证集切分）
-        X_train, y_train, X_val, y_val, feature_columns = prepare_training_data(df, actual_label_column)
+        X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split = prepare_training_data(df, actual_label_column)
         
         # 3. 训练模型
+        # 当 label_transform=cs_zscore 时，标签已在 cs_zscore 步骤中 winsorize，训练时不再 winsorize
+        skip_label_winsorize = (args.task == "regression" and args.label_transform == "cs_zscore")
+        
         model, train_params, train_metrics, val_metrics = train_xgboost_model(
             X_train, y_train, X_val, y_val,
             task=args.task,
+            skip_label_winsorize=skip_label_winsorize,
+            scale_pos_weight=args.scale_pos_weight,
             n_estimators=args.n_estimators,
             max_depth=args.max_depth,
             learning_rate=args.learning_rate,
@@ -697,10 +848,25 @@ def main():
             random_state=args.random_state
         )
         
+        # 4. 验证集逐日评估（贴近交易场景，特别是分类任务）
+        daily_val_metrics = {}
+        if len(df_val_split) > 0 and args.task == "classification":
+            # 分类任务：基于原始收益列（如 y_ret_20）进行逐日评估
+            original_return_col = args.label_column  # 使用原始标签列（去掉 _binary）
+            daily_val_metrics = evaluate_validation_daily(
+                model=model,
+                df_val=df_val_split,
+                feature_columns=feature_columns,
+                original_return_col=original_return_col,
+                task=args.task,
+                topk_values=[30, 100, 300]
+            )
+        
         # 合并训练和验证指标
         performance_metrics = {
             "train": train_metrics,
-            "validation": val_metrics
+            "validation": val_metrics,
+            "validation_daily": daily_val_metrics  # 逐日评估结果
         }
         
         # 准备完整的训练参数（包含任务配置）
