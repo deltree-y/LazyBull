@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.1] - 2026-02-13
+
+### Fixed
+
+- **修复 cs_zscore 的"重复 winsorize"问题**
+  - `feature_utils.py` - 修复 `cross_sectional_zscore` 函数在按组标准化时重复 winsorize 的 bug
+  - `train_ml_model.py` - 当 `label_transform=cs_zscore` 时，训练阶段不再对标签进行 winsorize（避免重复处理）
+  - 新增 `skip_label_winsorize` 参数控制训练阶段是否跳过标签 winsorize
+  - 目标行为：`label_transform=cs_zscore` 时仅在 cs_zscore 步骤做 winsorize；`label_transform=raw` 时仍保留训练阶段 winsorize 并在日志中说明
+
+- **修复 Pandas FutureWarning（groupby.apply）**
+  - `feature_utils.py` - 优化 `cross_sectional_zscore` 的 groupby 逻辑，避免 FutureWarning
+  - `train_ml_model.py` - 改用 `rank(method='first')` 矢量化方式生成 pos_topk 标签，替代 groupby.apply
+  - pos_topk 标签生成规则明确：正类数量严格等于 topk（使用 rank(method='first') 打散并列）
+
+### Added
+
+- **Classification 训练增强**
+  - 新增 `--scale-pos-weight` CLI 参数，支持用户指定或自动计算（neg/pos）正类权重
+  - 自动计算时在日志打印详细信息（负类数、正类数、计算值）
+  - 新增 `src/lazybull/ml/eval_utils.py` 模块：提供可复用的逐日评估函数
+    - `compute_daily_rankic()` - 计算单日 RankIC（Spearman）
+    - `compute_daily_topk_returns()` - 计算单日 TopK 平均收益
+    - `evaluate_predictions_by_date()` - 对多日预测进行逐日评估
+    - `summarize_daily_metrics()` - 汇总逐日指标（均值、标准差、IR）
+  - 分类任务训练后增加**验证集逐日评估**（贴近交易场景）
+    - 逐日 RankIC（Spearman）：按每个 `trade_date` 计算预测概率与真实收益的秩相关，输出均值/标准差/IR
+    - 逐日 TopK 收益评估：按每个 `trade_date` 以预测概率排序，计算 TopK（K=30/100/300）对应原始真实收益的均值，输出跨日均值/标准差
+  - 统一 RankIC 计算口径：训练脚本中的 RankIC 改为"逐日计算后取均值"（与回测 eval panel 一致）
+
+- **回测与纸面交易脚本适配新模型**
+  - `model_registry.py` - 新增 `strict_version_check` 参数（默认 True），严格检查模型元数据
+    - 检查必需字段：`feature_columns`、`train_params`、`model_type`
+    - 缺少字段时明确报错并提示重新训练
+  - `model_registry.py` - 新增 `check_feature_consistency()` 方法，检查推理数据特征列一致性
+    - 验证推理数据是否包含模型训练时使用的所有特征列
+    - 缺失特征时抛出详细错误（列出前 20 个缺失列）
+  - `ml_signal.py` - 集成旧模型拒绝和特征列一致性检查
+    - `_load_model` 方法调用 `strict_version_check=True` 拒绝旧模型
+    - `generate` 和 `generate_ranked` 方法在预测前调用特征列一致性检查
+  - **不兼容声明**：本版本明确不兼容旧模型（v1~v5），需重新训练
+
+### Documentation
+
+- 新增 `docs/PR/fix_cs_zscore_classification_enhancements_v0.8.1.md` - 本 PR 详细说明
+  - 修复点说明
+  - Classification 增强功能说明
+  - 不兼容旧模型的决定与迁移方式
+- 新增 `docs/guide/classification_evaluation_guide.md` - 分类模型评估指标指南
+  - 说明应重点关注的指标（逐日 RankIC、TopK 收益）
+  - 不要过度解读 Accuracy/Recall
+  - 与回测结果对比的最佳实践
+
+### Version
+
+- 版本号从 0.8.0 升级到 0.8.1
+
+---
+
 ## [0.8.0] - 2026-02-12
 
 ### Added
