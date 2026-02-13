@@ -259,6 +259,7 @@ def generate_classification_labels(
     
     df_labeled = df.copy()
     binary_label_col = f"{label_column}_binary"
+    df_labeled[binary_label_col] = 0  # 显式初始化为 0
     
     # 按 trade_date 分组生成标签
     def label_group(group):
