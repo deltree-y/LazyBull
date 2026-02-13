@@ -23,12 +23,14 @@ import argparse
 import sys
 import traceback
 from pathlib import Path
+from typing import Optional
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import pandas as pd
+import numpy as np
 from loguru import logger
 from sklearn.metrics import mean_squared_error, r2_score
 

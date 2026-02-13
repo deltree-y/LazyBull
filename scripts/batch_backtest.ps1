@@ -41,7 +41,8 @@ while ($currentDate -le $endDate) {
                         #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para 
                         #$out_name = "topn${topn}_mv${mv}"
                         $out_name = "mv_test"
-                        py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv $para --output-name $out_name
+                        #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv $para --output-name $out_name
+                        py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv --weight-method score --max-weight-per-stock 0.08 --max-per-industry 1 $para --output-name $out_name
                         # 预测逻辑
                         $percent = [Math]::Round(($count / $totalTasks) * 100, 2)
                         $elapsedMs = $totalTimer.ElapsedMilliseconds
