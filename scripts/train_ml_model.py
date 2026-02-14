@@ -424,6 +424,7 @@ def train_xgboost_model(
         "colsample_bytree": colsample_bytree,
         "random_state": random_state,
         "tree_method": "hist",
+        "device": "cuda",          # 指定使用 GPU 加速        
         "n_jobs": -1,
         "early_stopping_rounds": 30,  # 早停机制参数
         # 增加正则化参数防止过拟合
@@ -960,7 +961,7 @@ def main():
             if args.run_log_csv is not None:
                 csv_path = args.run_log_csv
             else:
-                csv_path = f"{args.data_root}/ml_train_runs.csv"
+                csv_path = f"{args.data_root}/models/ml_train_runs.csv"
             
             # 写入CSV
             write_training_run_to_csv(run_record, csv_path)
