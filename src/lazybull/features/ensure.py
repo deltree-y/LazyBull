@@ -134,8 +134,8 @@ def ensure_features_for_date(
             daily_data=daily_clean,
             adj_factor=pd.DataFrame(),  # 空 DataFrame，clean 数据已包含复权价格
             stock_basic=stock_basic,
-            daily_basic=daily_basic_clean,
-            moneyflow=moneyflow_clean,
+            daily_basic_data=daily_basic_clean,
+            moneyflow_data=moneyflow_clean,
             suspend_info=None,
             limit_info=None
         )

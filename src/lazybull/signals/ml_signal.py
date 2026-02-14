@@ -223,6 +223,7 @@ class MLSignal(Signal):
         # 按预测分数排序，选择 Top N
         features_df = features_df.sort_values('ml_score', ascending=False)
         top_stocks = features_df.head(self.top_n)
+        logger.info("  TOP预测概率抽样: {}".format(features_df[['ts_code', 'ml_score']].head(3).to_string(index=False).replace('\n', ' | ')))        
         
         if len(top_stocks) == 0:
             logger.warning(f"{date.date()} 没有有效的预测结果")
@@ -343,12 +344,13 @@ class MLSignal(Signal):
         
         # 按预测分数排序，返回所有候选
         features_df = features_df.sort_values('ml_score', ascending=False)
-        
+        logger.info("  TOP预测概率抽样: {}".format(features_df[['ts_code', 'ml_score']].head(3).to_string(index=False).replace('\n', ' | ')))        
+
         # 返回 (股票代码, 分数) 元组列表
         ranked = list(zip(features_df['ts_code'].tolist(), features_df['ml_score'].tolist()))
         
         logger.info(
-            f"ML排序候选生成: {date.date()}, "#候选数 {len(ranked)}, "
+            f"  ML排序候选生成: {date.date()}, "#候选数 {len(ranked)}, "
             f"平均预测分数[{features_df['ml_score'].mean():.3f}], "
             f"最高/最低[{features_df['ml_score'].max():.3f}/{features_df['ml_score'].min():.3f}]"
         )

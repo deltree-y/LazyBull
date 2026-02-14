@@ -1109,8 +1109,15 @@ def main():
         logger.info(f"训练区间: {model_info['train_start_date']} 至 {model_info['train_end_date']}")
         logger.info(f"特征数: {model_info['feature_count']}")
         logger.info(f"训练样本数: {model_info['n_samples']}")
-        logger.info(f"性能指标: \n{model_info['performance_metrics']}")
-        
+        #logger.info(f"性能指标: \n{model_info['performance_metrics']}")
+        # 提取 validation_daily 部分引用
+        vd = model_info['performance_metrics']['validation_daily']
+        logger.info(
+            f"性能指标 (Validation Daily): "
+            f"RankIC Mean: {vd['daily_rankic_mean']:.3f}, "
+            f"RankIC IR: {vd['daily_rankic_ir']:.3f}, "
+            f"Top30 提升均值: {vd['diagnostic_Top30_相对全市场提升_均值']:.3f}"
+        )        
         # 5. 准备交易日列表
         trading_dates = trade_cal[
             (trade_cal['cal_date'] >= args.start_date) & 

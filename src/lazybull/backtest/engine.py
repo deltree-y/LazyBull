@@ -507,7 +507,7 @@ class BacktestEngine:
             
             if self.verbose:
                 logger.info(
-                    f"权重方法: equal (等权), 每只股票权重 {weight:.4f}"
+                    f"  权重方法: equal (等权), 每只股票权重 {weight:.4f}"
                 )
         else:
             # 按分数加权
@@ -520,7 +520,7 @@ class BacktestEngine:
                     sample_stocks = list(signals.items())[:3]
                     weights_str = ', '.join([f"{stock}: {weight:.4f}" for stock, weight in sample_stocks])
                     logger.info(
-                        f"权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}"
+                        f"  权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}"
                     )
             else:
                 # 如果所有分数都是0或负数，使用等权
@@ -558,12 +558,12 @@ class BacktestEngine:
         if self.verbose:
             if self.enable_position_completion:
                 logger.info(
-                    f"信号生成: {date.date()}, 选择 top {len(signals)}/{target_n} 股票（未检查 T+1 可交易性，将在买入时处理）, "
+                    f"  信号生成: {date.date()}, 选择 top {len(signals)}/{target_n} 股票（未检查 T+1 可交易性，将在买入时处理）, "
                     f"候选总数 {len(ranked_candidates)} 个"
                 )
             else:
                 logger.info(
-                    f"信号生成: {date.date()}, 信号数 {len(signals)}/{target_n}, "
+                    f"  信号生成: {date.date()}, 信号数 {len(signals)}/{target_n}, "
                     f"检查候选 {candidates_checked} 个, "
                     f"过滤: 停牌 {filtered_reasons.get('停牌', 0)}, "
                     f"涨停 {filtered_reasons.get('涨停', 0)}, "
@@ -660,7 +660,7 @@ class BacktestEngine:
                     if not tradeable:
                         if self.verbose:
                             logger.info(
-                                f"买入失败: {date.date()} {stock}, 原因: {reason}, "
+                                f"  买入失败: {date.date()} {stock}, 原因: {reason}, "
                                 f"权重 {weight:.4f}, 将在后续交易日补齐"
                             )
                         continue  # 跳过该股票，不买入
@@ -715,13 +715,13 @@ class BacktestEngine:
                 
                 if self.verbose:
                     logger.warning(
-                        f"仓位未满: {date.date()}, 目标 {target_n} 只, 实际买入 {actually_bought} 只, "
+                        f"  仓位未满: {date.date()}, 目标 {target_n} 只, 实际买入 {actually_bought} 只, "
                         f"缺口槽位 {unfilled_count} 个, 未成交股票: {unfilled_stocks}, "
                         f"将在接下来 {self.completion_window_days} 天内尝试补齐"
                     )
         
         if self.verbose:
-            logger.info(f"买入执行: {date.date()}, 买入 {actually_bought} 只股票（信号日: {signal_date.date()}）")
+            logger.info(f"  买入执行: {date.date()}, 买入 {actually_bought} 只股票（信号日: {signal_date.date()}）")
     
     def _process_position_completion(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_data: pd.DataFrame, date_to_idx: Dict) -> None:
         """处理仓位补齐逻辑
@@ -873,7 +873,7 @@ class BacktestEngine:
                     
                     if not tradeable:
                         logger.info(
-                            f"补齐失败: {date.date()} (基于 {prev_date.date()} 数据), "
+                            f"  补齐失败: {date.date()} (基于 {prev_date.date()} 数据), "
                             f"槽位 {original_stock} (权重 {weight:.4f}) 尝试买入股票 {stock} 失败, 原因: {reason}"
                         )
                         continue
@@ -891,7 +891,7 @@ class BacktestEngine:
                         self.completion_stats['total_completed'] += 1
                         
                         logger.info(
-                            f"补齐成功: {date.date()} (基于 {prev_date.date()} 数据), "
+                            f"  补齐成功: {date.date()} (基于 {prev_date.date()} 数据), "
                             f"槽位 {original_stock} (权重 {weight:.4f}) 买入股票 {stock} 成功."
                             f"信号日 {original_signal_date.date()}, 目标市值 {target_value:.2f}, "
                             f"候选池大小 {len(stocks_to_try)-len(bought_stock_set)}/{unfilled_count}"
@@ -903,7 +903,7 @@ class BacktestEngine:
                 if not bought_for_this_slot:
                     remaining_unfilled_slots.append(slot_weight_info)
                     logger.info(
-                        f"补齐延迟: {date.date()}, 槽位 {original_stock} (权重 {weight:.4f}) "
+                        f"  补齐延迟: {date.date()}, 槽位 {original_stock} (权重 {weight:.4f}) "
                         f"在有限候选池 {len(stocks_to_try)} 只中未找到可买入股票，保留到下次"
                     )
             
@@ -916,7 +916,7 @@ class BacktestEngine:
             if not remaining_unfilled_slots:
                 completed_signal_dates.append(signal_date)
                 logger.info(
-                    f"补齐完成: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"  补齐完成: {date.date()}, 信号日 {original_signal_date.date()}, "
                     f"本次补齐 {len(bought_stocks)} 只，仓位已满"
                 )
         
@@ -958,7 +958,7 @@ class BacktestEngine:
                 stocks_to_sell.append(stock)
 
         if stocks_to_sell and self.verbose:
-            logger.info(f"卖出执行: {date.date()}, 尝试卖出 {len(stocks_to_sell)} 只股票（达到持有期）")
+            logger.info(f"  卖出执行: {date.date()}, 尝试卖出 {len(stocks_to_sell)} 只股票（达到持有期）")
 
         # 执行卖出
         for stock in stocks_to_sell:
@@ -997,11 +997,11 @@ class BacktestEngine:
                     is_suspended = suspend_calendar.is_suspended(stock, trade_date_str)
                     if is_suspended:
                         if self.verbose:
-                            logger.info(f"股票 {stock} 停牌，跳过止损检查 ({date.date()})")
+                            logger.info(f"  股票 {stock} 停牌，跳过止损检查 ({date.date()})")
                         continue
                 except Exception as e:
                     # 停牌数据加载失败，记录警告但继续检查（降级处理）
-                    logger.warning(f"股票 {stock} 停牌状态检查失败（{e}），继续止损检查")
+                    logger.warning(f"  股票 {stock} 停牌状态检查失败（{e}），继续止损检查")
             
             # 获取当日行情数据判断跌停状态
             date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
@@ -1048,7 +1048,7 @@ class BacktestEngine:
                 
                 if self.verbose:
                     logger.warning(
-                        f"止损触发: {date.date()} {stock}, 原因: {reason}, "
+                        f"  止损触发: {date.date()} {stock}, 原因: {reason}, "
                         f"将在下一交易日执行卖出"
                     )
     
@@ -1101,7 +1101,7 @@ class BacktestEngine:
         
         if stocks_to_sell and self.verbose:
             logger.info(
-                f"止损卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票 "
+                f"  止损卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票 "
                 f"（触发日: {trigger_date.date()}）"
             )
     
@@ -1628,7 +1628,7 @@ class BacktestEngine:
                             reason='停牌'
                         )
                     if self.verbose:
-                        logger.info(f"卖出延迟: {date.date()} {stock}, 原因: 停牌")
+                        logger.info(f"  卖出延迟: {date.date()} {stock}, 原因: 停牌")
                     return
             except Exception as e:
                 # 停牌数据加载失败，记录警告但继续检查（降级处理）
@@ -1648,7 +1648,7 @@ class BacktestEngine:
                         reason='无行情数据'
                     )
                 if self.verbose:
-                    logger.info(f"卖出延迟: {date.date()} {stock}, 原因: 无行情数据")
+                    logger.info(f"  卖出延迟: {date.date()} {stock}, 原因: 无行情数据")
                 return
             
             # 检查跌停状态
@@ -1666,7 +1666,7 @@ class BacktestEngine:
                         reason=reason
                     )
                 if self.verbose:
-                    logger.info(f"卖出延迟: {date.date()} {stock}, 原因: {reason}")
+                    logger.info(f"  卖出延迟: {date.date()} {stock}, 原因: {reason}")
                 return
         
         # 可交易，直接卖出

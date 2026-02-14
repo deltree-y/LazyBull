@@ -123,7 +123,7 @@ def apply_industry_constraint(
     
     if verbose:
         logger.info(
-            f"行业约束选股: 候选 {len(ranked_candidates)} 只 → 选中 {len(selected)}/{target_n} 只 "
+            f"  行业约束选股: 候选 {len(ranked_candidates)} 只 → 选中 {len(selected)}/{target_n} 只 "
             f"(行业上限 {max_per_industry})"
         )
         
@@ -132,13 +132,13 @@ def apply_industry_constraint(
             industry_dist = sorted(industry_counts.items(), key=lambda x: x[1], reverse=True)
             top_industries = industry_dist[:5]  # 显示前5个行业
             dist_str = ', '.join([f"{ind}({cnt})" for ind, cnt in top_industries])
-            logger.info(f"  行业分布（前5）: {dist_str}")
+            logger.info(f"    行业分布（前5）: {dist_str}")
         
         # 显示被跳过的行业统计
         if skipped_by_industry:
             skipped_industries = sorted(skipped_by_industry.items(), key=lambda x: x[1], reverse=True)
             top_skipped = skipped_industries[:3]  # 显示前3个被跳过最多的行业
             skipped_str = ', '.join([f"{ind}({cnt})" for ind, cnt in top_skipped])
-            logger.info(f"  因行业限制跳过（前3）: {skipped_str}")
+            logger.info(f"    因行业限制跳过（前3）: {skipped_str}")
     
     return selected

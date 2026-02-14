@@ -328,7 +328,10 @@ def print_diagnostic_report(diagnostics: Dict[str, any]) -> None:
     # 3. TopK 收益与提升
     logger.info("\n【3. TopK 收益统计与相对提升】")
     topk_keys = [k for k in diagnostics.keys() if k.startswith('Top') and '_逐日均值的均值' in k]
-    for key in sorted(topk_keys):
+    import re
+    sorted_keys = sorted(topk_keys, key=lambda x: int(re.search(r'\d+', x).group()))
+    
+    for key in sorted_keys:
         k_str = key.split('_')[0]  # 提取 "Top30", "Top100" 等
         logger.info(f"\n  {k_str}:")
         logger.info(f"    逐日均值的均值: {diagnostics[key]:.6f}")

@@ -94,7 +94,7 @@ class StopLossMonitor:
         drawdown_from_cost = (current_price - buy_price) / buy_price * 100
         if drawdown_from_cost <= -self.config.drawdown_pct:
             reason = f"回撤止损: 从买入价{buy_price:.2f}下跌至{current_price:.2f}，跌幅{-drawdown_from_cost:.2f}%"
-            logger.warning(f"{stock} 触发止损: {reason}")
+            logger.warning(f"  {stock} 触发止损: {reason}")
             return True, StopLossTriggerType.DRAWDOWN, reason
         
         # 2. 检查移动止损（从最高点）
@@ -105,7 +105,7 @@ class StopLossMonitor:
             
             if drawdown_from_high <= -self.config.trailing_stop_pct:
                 reason = f"移动止损: 从最高价{high_price:.2f}下跌至{current_price:.2f}，跌幅{-drawdown_from_high:.2f}%"
-                logger.warning(f"{stock} 触发止损: {reason}")
+                logger.warning(f"  {stock} 触发止损: {reason}")
                 return True, StopLossTriggerType.TRAILING_STOP, reason
         
         # 3. 检查连续跌停
@@ -116,7 +116,7 @@ class StopLossMonitor:
             
             if consecutive_days >= self.config.consecutive_limit_down_days:
                 reason = f"连续跌停止损: 连续{consecutive_days}天跌停"
-                logger.warning(f"{stock} 触发止损: {reason}")
+                logger.warning(f"  {stock} 触发止损: {reason}")
                 return True, StopLossTriggerType.CONSECUTIVE_LIMIT_DOWN, reason
         else:
             # 重置连续跌停计数

@@ -104,7 +104,7 @@ class PendingOrderManager:
             order.retry_count += 1
             order.last_reason = reason
             logger.debug(
-                f"延迟订单更新: {stock} {action} "
+                f"  延迟订单更新: {stock} {action} "
                 f"(重试次数: {order.retry_count}, 原因: {reason})"
             )
         else:
@@ -121,7 +121,7 @@ class PendingOrderManager:
             self.pending_orders[key] = order
             self.total_added += 1
             logger.info(
-                f"添加延迟订单: {stock} {action} "
+                f"  添加延迟订单: {stock} {action} "
                 f"(信号日期: {signal_date.date()}, 原因: {reason})"
             )
     
@@ -180,7 +180,7 @@ class PendingOrderManager:
         if key in self.pending_orders:
             order = self.pending_orders[key]
             logger.info(
-                f"延迟订单执行成功: {stock} {action} "
+                f"  延迟订单执行成功: {stock} {action} "
                 f"(重试次数: {order.retry_count}, "
                 f"延迟天数: {(success_date - order.create_date).days})"
             )

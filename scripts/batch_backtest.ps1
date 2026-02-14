@@ -3,7 +3,7 @@ $startDate = Get-Date "2025-07-01"
 $endDate = Get-Date "2025-07-31"
 $freq_list = @(20)             #持有天数
 $top_n_list = @(30)            #持股数量
-$mv_list = @(33)               #模型版本
+$mv_list = @(59)               #模型版本
 #$para_list = @('--equity-curve-enabled')
 $para_list = @('--stop-loss-enabled')
 
@@ -42,7 +42,13 @@ while ($currentDate -le $endDate) {
                         #$out_name = "topn${topn}_mv${mv}"
                         $out_name = "mv_test"
                         #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv $para --output-name $out_name
-                        py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv --weight-method score --max-weight-per-stock 0.08 --max-per-industry 1 $para --output-name $out_name
+                        py scripts\run_ml_backtest.py `
+                            --start-date $dateStr --end-date 20251231 `
+                            --sell-timing open --top-n $topn --model-version $mv `
+                            --weight-method score `
+                            --max-weight-per-stock 0.04 --max-per-industry 3 `
+                            $para --output-name $out_name
+
                         # 预测逻辑
                         $percent = [Math]::Round(($count / $totalTasks) * 100, 2)
                         $elapsedMs = $totalTimer.ElapsedMilliseconds

@@ -110,12 +110,12 @@ def cap_and_normalize_weights(
     
     if verbose:
         logger.info(
-            f"权重后处理完成: 原始 {len(weights)} 只 → 有效 {len(valid_weights)} 只 → "
+            f"  权重后处理完成: 原始 {len(weights)} 只 → 有效 {len(valid_weights)} 只 → "
             f"归一化完成（单股上限 {max_weight_per_stock:.2%}）"
         )
         # 显示前3只股票的最终权重
         sample_stocks = list(normalized_weights.keys())[:3]
-        for stock in sample_stocks:
-            logger.info(f"  {stock}: {normalized_weights[stock]:.4f}")
-    
+        weights_str = ", ".join([f"{stock}: {normalized_weights[stock]:.4f}" for stock in sample_stocks])
+        logger.info(f"  样本权重抽样: {weights_str}") 
+        
     return normalized_weights
