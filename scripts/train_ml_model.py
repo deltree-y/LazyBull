@@ -195,8 +195,6 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     }
     
     return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats
-    
-    return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split
 
 
 def transform_labels_cs_zscore(
