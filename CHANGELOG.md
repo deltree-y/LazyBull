@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.3] - 2026-02-14
+
+### Added
+
+- **训练运行日志CSV追加记录功能**
+  - 新增 `src/lazybull/ml/run_logger.py` 模块，提供训练运行记录的结构化存储与CSV追加功能
+  - `TrainingRunRecord` 数据类：记录每次训练的完整信息
+    - 基本信息：时间戳、版本号、训练日期区间、标签、任务类型
+    - 训练配置：label_transform、winsorize_p、分类任务参数（pos_quantile/pos_topk/scale_pos_weight及模式）
+    - XGBoost超参数：n_estimators、max_depth、learning_rate、subsample、colsample_bytree、gamma、reg_alpha、reg_lambda、early_stopping_rounds、tree_method、random_state、n_jobs
+    - 数据统计：交易日数、总样本数、过滤后样本数、训练集/验证集样本数、验证集日期范围
+    - 训练结果：best_iteration
+    - 评估指标：训练集/验证集的MSE、RMSE、R2、IC、RankIC、ACC、AUC、Precision、Recall
+    - 逐日评估：RankIC均值/标准差/IR、TopK收益统计
+    - 诊断统计：全市场收益、样本数分布、TopK提升和分位数
+  - `write_training_run_to_csv()` 函数：支持追加模式写入CSV，自动创建文件和表头
+  - `create_training_run_record_from_training_session()` 函数：从训练会话信息创建记录对象
+  - **动态列扩展**：新增字段时自动扩展表头，旧行缺失字段留空（向前兼容）
+
+- **训练脚本集成日志记录**
+  - `scripts/train_ml_model.py` 新增 `--run-log-csv` 参数，支持自定义日志文件路径（默认 `data/ml_train_runs.csv`）
+  - 修改 `load_features_data()` 返回交易日数量
+  - 修改 `prepare_training_data()` 返回数据统计（samples_after_filter、val_start_date、val_end_date）
+  - 修改 `train_xgboost_model()` 在 train_params 中记录 best_iteration
+  - 训练完成后自动记录运行日志到CSV（失败不影响模型保存）
+
+### Documentation
+
+- 新增 `docs/PR/training_run_logging.md` - 本 PR 详细说明
+  - 功能介绍：CSV日志结构、字段说明、使用方法
+  - 示例命令：如何使用 --run-log-csv 参数
+  - 分析建议：如何利用CSV进行模型对比与超参数调优
+
+### Tests
+
+- 新增 `tests/test_ml_run_logger.py` - 训练运行日志模块完整测试套件（9个测试用例）
+  - 测试CSV创建和首次写入
+  - 测试追加记录功能
+  - 测试自定义路径
+  - 测试列扩展兼容性
+  - 测试回归和分类任务记录
+  - 测试完整工作流
+
 ## [0.8.2] - 2026-02-13
 
 ### Added
