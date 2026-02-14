@@ -41,6 +41,10 @@ from src.lazybull.ml.eval_utils import (
     evaluate_predictions_by_date,
     summarize_daily_metrics
 )
+from src.lazybull.ml.run_logger import (
+    create_training_run_record_from_training_session,
+    write_training_run_to_csv
+)
 
 try:
     import xgboost as xgb
@@ -54,7 +58,7 @@ def load_features_data(
     loader: DataLoader,
     start_date: str,
     end_date: str
-) -> pd.DataFrame:
+) -> tuple:
     """加载指定日期区间的特征数据
     
     Args:
@@ -64,7 +68,7 @@ def load_features_data(
         end_date: 结束日期，格式 YYYYMMDD
         
     Returns:
-        合并后的特征 DataFrame
+        (df, trade_days_count) 元组：合并后的特征 DataFrame 和交易日数量
     """
     logger.info(f"加载特征数据: {start_date} 至 {end_date}")
     
@@ -97,7 +101,7 @@ def load_features_data(
     df = pd.concat(all_features, ignore_index=True)
     logger.info(f"成功加载 {len(df)} 条样本")
     
-    return df
+    return df, len(trade_dates)
 
 
 def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_ratio: float = 0.2) -> tuple:
@@ -109,7 +113,8 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
         val_ratio: 验证集比例，默认 0.2（最后 20% 的时间作为验证集）
         
     Returns:
-        (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split) 元组
+        (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats) 元组
+        data_stats 包含：samples_after_filter, val_start_date, val_end_date
     """
     logger.info("准备训练数据...")
     
@@ -145,6 +150,7 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     
     df_train = df[mask].copy()
     logger.info(f"过滤后样本数: {len(df_train)} / {len(df)}")
+    samples_after_filter = len(df_train)
     
     # 移除标签为 NaN 的样本
     df_train = df_train.dropna(subset=[label_column])
@@ -180,6 +186,15 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     X_val = X_val.fillna(0)
     
     logger.info(f"训练数据准备完成: X_train shape={X_train.shape}, X_val shape={X_val.shape}")
+    
+    # 数据统计
+    data_stats = {
+        "samples_after_filter": samples_after_filter,
+        "val_start_date": str(val_start_date),
+        "val_end_date": str(val_end_date)
+    }
+    
+    return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats
     
     return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split
 
@@ -555,6 +570,10 @@ def train_xgboost_model(
         val_metrics = {}
         logger.warning("验证集为空，无法评估")
     
+    # 添加 best_iteration 到 train_params（用于日志记录）
+    if len(X_val) > 0 and hasattr(model, 'best_iteration'):
+        train_params["best_iteration"] = int(model.best_iteration)
+    
     return model, train_params, train_metrics, val_metrics
 
 
@@ -783,6 +802,12 @@ def main():
         default="./data",
         help="数据根目录，默认 ./data"
     )
+    parser.add_argument(
+        "--run-log-csv",
+        type=str,
+        default=None,
+        help="训练运行日志CSV路径，默认为 {data_root}/ml_train_runs.csv"
+    )
     
     args = parser.parse_args()
     
@@ -807,7 +832,8 @@ def main():
         registry = ModelRegistry(models_dir=f"{args.data_root}/models")
         
         # 1. 加载特征数据
-        df = load_features_data(storage, loader, args.start_date, args.end_date)
+        df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)
+        total_samples = len(df)
         
         # 1.5. 应用标签变换（如果需要）
         if args.task == "classification":
@@ -836,7 +862,7 @@ def main():
             actual_label_column = args.label_column
         
         # 2. 准备训练数据（包含验证集切分）
-        X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split = prepare_training_data(df, actual_label_column)
+        X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(df, actual_label_column)
         
         # 3. 训练模型
         # 当 label_transform=cs_zscore 时，标签已在 cs_zscore 步骤中 winsorize，训练时不再 winsorize
@@ -883,7 +909,9 @@ def main():
             "label_transform": args.label_transform if args.task == "regression" else None,
             "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else None,
             "pos_quantile": args.pos_quantile if args.task == "classification" else None,
-            "pos_topk": args.pos_topk if args.task == "classification" else None
+            "pos_topk": args.pos_topk if args.task == "classification" else None,
+            # 记录 scale_pos_weight 是否手动指定
+            "scale_pos_weight_manual": args.scale_pos_weight is not None
         })
         
         # 4. 注册模型
@@ -902,6 +930,47 @@ def main():
         logger.info("=" * 60)
         logger.info(f"模型训练完成！版本: v{version}")
         logger.info(f"模型保存路径: {args.data_root}/models/")
+        logger.info("=" * 60)
+        
+        # 5. 记录训练运行日志到CSV
+        try:
+            # 准备完整的数据统计
+            complete_data_stats = {
+                "trade_days_count": trade_days_count,
+                "total_samples": total_samples,
+                "samples_after_filter": data_stats["samples_after_filter"],
+                "train_samples": len(X_train),
+                "val_samples": len(X_val),
+                "val_start_date": data_stats["val_start_date"],
+                "val_end_date": data_stats["val_end_date"],
+                "val_ratio": 0.2  # 默认值，如果需要可以改为参数
+            }
+            
+            # 创建训练运行记录
+            run_record = create_training_run_record_from_training_session(
+                start_date=args.start_date,
+                end_date=args.end_date,
+                label_column=args.label_column,
+                task=args.task,
+                model_version=version,
+                train_params=full_train_params,
+                data_stats=complete_data_stats,
+                performance_metrics=performance_metrics
+            )
+            
+            # 确定CSV路径
+            if args.run_log_csv is not None:
+                csv_path = args.run_log_csv
+            else:
+                csv_path = f"{args.data_root}/ml_train_runs.csv"
+            
+            # 写入CSV
+            write_training_run_to_csv(run_record, csv_path)
+            
+            logger.info(f"训练运行日志已记录到: {csv_path}")
+        except Exception as e:
+            logger.error(f"记录训练运行日志失败: {e}")
+            logger.warning("训练已完成，但日志记录失败，不影响模型保存")
         logger.info("=" * 60)
         
     except Exception as e:
