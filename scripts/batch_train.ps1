@@ -1,10 +1,10 @@
 ﻿# 0. 定义参数
 $startDate_list = @(Get-Date "2021-07-01")
 $endDate_list = @(Get-Date "2025-06-30")
-$label_list = @("y_ret_10")#, "y_ret_10", "y_ret_20")    #标签
+$label_list = @("y_ret_20")#, "y_ret_10", "y_ret_20")    #标签
 $topk_list = @(500)            #训练集正值数量
 $max_depth_list = @(16)           #树的最大深度
-$learning_rate_list = @(0.02,0.05,0.08)     #学习率
+$learning_rate_list = @(0.01, 0.02, 0.05, 0.08, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5)     #学习率
 
 $n_estimators = 2000
 

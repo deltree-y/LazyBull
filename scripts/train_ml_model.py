@@ -51,7 +51,9 @@ try:
 except ImportError:
     logger.error("需要安装 xgboost: pip install xgboost")
     sys.exit(1)
-
+import warnings
+# 匹配告警信息中的关键字符串，设置为 ignore
+warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 
 def load_features_data(
     storage: Storage,
@@ -457,7 +459,7 @@ def train_xgboost_model(
     else:
         model.fit(X_train, y_train_processed)
         logger.info("模型训练完成（无验证集，未使用早停）")
-    
+
     # 计算训练集性能指标
     if task == "regression":
         y_train_pred = model.predict(X_train)

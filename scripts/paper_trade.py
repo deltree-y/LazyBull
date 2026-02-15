@@ -33,6 +33,9 @@ from src.lazybull.data import DataLoader, Storage
 from src.lazybull.paper import PaperTradingRunner, PaperStorage
 from src.lazybull.risk.stop_loss import StopLossConfig, StopLossMonitor
 from src.lazybull.risk.equity_curve import EquityCurveConfig, EquityCurveMonitor, create_equity_curve_config_from_dict
+import warnings
+# 匹配告警信息中的关键字符串，设置为 ignore
+warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 
 
 def run_config(args):

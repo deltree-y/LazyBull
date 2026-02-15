@@ -45,7 +45,9 @@ from src.lazybull.signals import MLSignal
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.risk.stop_loss import StopLossConfig, create_stop_loss_config_from_dict
 from src.lazybull.risk.equity_curve import EquityCurveConfig, create_equity_curve_config_from_dict
-
+import warnings
+# 匹配告警信息中的关键字符串，设置为 ignore
+warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 
 def load_backtest_data(
     loader: DataLoader,

@@ -3,7 +3,7 @@ $startDate = Get-Date "2025-07-01"
 $endDate = Get-Date "2025-07-31"
 $freq_list = @(20)             #持有天数
 $top_n_list = @(30)            #持股数量
-$mv_list = @(59)               #模型版本
+$mv_list = @(37)               #模型版本
 #$para_list = @('--equity-curve-enabled')
 $para_list = @('--stop-loss-enabled')
 
