@@ -122,6 +122,13 @@ class TrainingRunRecord:
     # 额外指标（用于存储动态字段，如各种TopK统计）
     additional_metrics: Dict[str, Any] = field(default_factory=dict)
     
+    # Walk-forward 相关字段
+    wf_run_id: Optional[str] = None  # walk-forward 运行ID（UUID或可读字符串）
+    split_index: Optional[int] = None  # 切分索引（在一次 walk-forward 运行中的序号）
+    step_frequency: Optional[str] = None  # 滚动频率（monthly/quarterly/semiannual）
+    test_start_date: Optional[str] = None  # 样本外测试开始日期
+    test_end_date: Optional[str] = None  # 样本外测试结束日期
+    
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（扁平化结构，便于写入CSV）"""
         result = {}

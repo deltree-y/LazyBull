@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.4] - 2026-02-15
+
+### Added
+
+- **Walk-forward 滚动训练能力**
+  - 新增 `src/lazybull/ml/train_core.py` 模块，抽取训练核心逻辑供复用
+    - `load_features_data()` - 加载特征数据
+    - `prepare_training_data()` - 准备训练数据
+    - `transform_labels_cs_zscore()` - 标签变换
+    - `generate_classification_labels()` - 分类标签生成
+    - `train_xgboost_model()` - 训练模型
+    - `evaluate_validation_daily()` - 逐日评估
+  - 新增 `src/lazybull/ml/walk_forward_utils.py` 模块，提供 walk-forward 切分工具
+    - `generate_walk_forward_splits()` - 生成训练/测试区间切分
+    - `WalkForwardSplit` - 切分数据结构
+    - `print_splits_summary()` - 打印切分汇总
+    - 支持按季度/月度/半年度滚动（monthly/quarterly/semiannual）
+    - 支持可配置的训练窗口（默认5年）和测试窗口（默认6个月）
+    - 所有日期自动对齐到交易日
+  - 新增 `scripts/walk_forward.py` 脚本，实现完整的 walk-forward 流程
+    - 生成多个训练/测试切分
+    - 对每个切分执行完整训练（复用 train_core 逻辑）
+    - 为每个切分注册模型版本并记录到 ml_train_runs.csv
+    - 生成 walk_forward_summary.csv 汇总文件
+    - 支持所有训练参数透传（task、label、pos_topk/pos_quantile、XGBoost 超参数等）
+  - 扩展 `TrainingRunRecord` 支持 walk-forward 字段
+    - `wf_run_id` - walk-forward 运行 ID
+    - `split_index` - 切分索引
+    - `step_frequency` - 滚动频率
+    - `test_start_date` / `test_end_date` - 测试区间日期
+  - 完整复用现有能力：训练、评估、逐日评估诊断、模型注册、CSV 训练运行日志
+
+### Changed
+
+- 重构 `scripts/train_ml_model.py`，使用 `train_core` 模块的函数
+- 移除 `train_ml_model.py` 中的重复代码，改为导入 `train_core` 模块
+
+### Documentation
+
+- 新增 `docs/PR/walk_forward_implementation.md` - Walk-forward 实现说明
+  - 功能特性：核心功能、切分口径、实现细节
+  - 使用方法：基础用法、自定义参数、透传训练参数
+  - 输出文件说明：ml_train_runs.csv 新增字段、walk_forward_summary.csv 字段
+  - 与 train_ml_model.py 的关系：复用能力、区别
+- 新增 `docs/guide/walk_forward_guide.md` - Walk-forward 使用指南
+  - Walk-forward 原理介绍
+  - 配置参数详解
+  - 使用示例（按月度/季度/半年度滚动、分类/回归任务、超参数调优）
+  - 输出文件说明
+  - 结果分析方法（可视化、统计分析）
+  - 常见问题与最佳实践
+
+### Tests
+
+- 新增 `tests/test_walk_forward.py` - Walk-forward 完整测试套件（11个测试用例）
+  - 测试 split 生成逻辑（季度/月度/半年度）
+  - 测试边界条件（窗口过大、日期范围不足、无效频率）
+  - 测试切分验证（日期推进、无重叠、索引连续）
+  - 测试汇总 CSV 生成
+  - 测试与 run_logger 集成（wf 字段写入、动态列扩展）
+
 ## [0.8.3] - 2026-02-14
 
 ### Added
