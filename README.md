@@ -29,7 +29,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.3.5 - 权益曲线交易风险管理)
+### 当前版本 (v0.9.0)
 
 - ✅ **完整的项目骨架**: 模块化设计，易于扩展
 - ✅ **TuShare数据接入**: 自动拉取交易日历、股票列表、日线行情、财务指标
@@ -665,7 +665,15 @@ LazyBull/
 │   │   └── loader.py          # 数据加载
 │   ├── universe/              # 股票池模块
 │   │   └── base.py            # 股票池基类
-│   ├── factors/               # 因子模块 (TODO)
+│   ├── factors/               # 因子库模块 ✅ v0.9.0
+│   │   ├── technical_indicators.py  # 技术指标（RSI/KDJ/MACD/布林带）
+│   │   ├── candlestick.py          # K线形态（振幅/上下影线）
+│   │   ├── volatility.py           # 波动率
+│   │   ├── industry.py             # 行业相关（alpha/偏离）
+│   │   ├── momentum.py             # 动量加速度
+│   │   └── volume.py               # 量能突变
+│   ├── features/              # 特征构建模块
+│   │   └── builder.py         # 特征构建器（调用 factors 模块）
 │   ├── signals/               # 信号模块
 │   │   ├── base.py            # 信号基类
 │   │   └── ml_signal.py       # ML 信号生成器
@@ -976,15 +984,55 @@ costs:
 
 ## 🧪 开发指南
 
-### 添加新因子
+### 添加新因子（v0.5.0）
+
+LazyBull 使用模块化的因子库架构。添加新因子只需在 `src/lazybull/factors/` 中添加函数，无需修改核心代码。
 
 ```python
-# 在 src/lazybull/factors/ 中创建新文件
-class MyFactor:
-    def calculate(self, data):
-        # 实现因子计算逻辑
-        pass
+# 在 src/lazybull/factors/technical_indicators.py 中添加
+import numpy as np
+import pandas as pd
+
+def calculate_your_indicator(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
+    """计算您的技术指标
+    
+    Args:
+        df: DataFrame，需包含 ts_code, trade_date, close_adj
+        window: 窗口参数
+        
+    Returns:
+        DataFrame，包含 ts_code, trade_date, your_indicator
+    """
+    result = df[['ts_code', 'trade_date']].copy()
+    
+    # 按股票分组计算
+    grouped = df.sort_values(['ts_code', 'trade_date']).groupby('ts_code')
+    
+    indicator_values = []
+    for ts_code, group in grouped:
+        group = group.sort_values('trade_date').copy()
+        
+        # 实现您的计算逻辑
+        indicator = group['close_adj'].rolling(window=window).mean()
+        
+        temp_df = pd.DataFrame({
+            'ts_code': ts_code,
+            'trade_date': group['trade_date'].values,
+            'your_indicator': indicator.values
+        })
+        indicator_values.append(temp_df)
+    
+    if indicator_values:
+        result = pd.concat(indicator_values, ignore_index=True)
+    else:
+        result['your_indicator'] = np.nan
+    
+    return result
 ```
+
+然后在 `FeatureBuilder._add_advanced_factors()` 中调用该函数。
+
+**详细指南**: 参见 [docs/guide/factor_extension.md](docs/guide/factor_extension.md)
 
 ### 添加新策略
 
