@@ -101,7 +101,7 @@
 | alpha_industry_10 | float | 10日行业alpha | ret_10(t) - mean_by_industry(ret_10(t)) |
 | alpha_industry_20 | float | 20日行业alpha | ret_20(t) - mean_by_industry(ret_20(t)) |
 
-#### 8. 动量加速度特征 (v0.5.0新增)
+#### 8. 动量加速度特征 (v0.9.0新增)
 
 | 字段名 | 类型 | 说明 | 计算方式 |
 |--------|------|------|----------|
