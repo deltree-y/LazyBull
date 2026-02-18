@@ -59,9 +59,11 @@
 
 | 字段名 | 类型 | 说明 | 计算方式 |
 |--------|------|------|----------|
-| amount_ratio_5 | float | 当日成交额 / 过去5日平均成交额 | amount(t) / mean(amount(t-5:t-1)) |
-| amount_ratio_10 | float | 当日成交额 / 过去10日平均成交额 | amount(t) / mean(amount(t-10:t-1)) |
-| amount_ratio_20 | float | 当日成交额 / 过去20日平均成交额 | amount(t) / mean(amount(t-20:t-1)) |
+| amount_ma5 | float | 过去5日平均成交额 | mean(amount(t-5:t-1)) |
+| amount_ma10 | float | 过去10日平均成交额 | mean(amount(t-10:t-1)) |
+| amount_ma20 | float | 过去20日平均成交额 | mean(amount(t-20:t-1)) |
+
+**注意**: v0.5.0 删除了 `amount_ratio_5/10/20` 特征，保留 `amount_ma*` 特征。
 
 #### 4. 均线偏离特征
 
@@ -70,6 +72,82 @@
 | ma_deviation_5 | float | 收盘价偏离5日均线 | (close_adj(t) - MA5(t-5:t-1)) / MA5(t-5:t-1) |
 | ma_deviation_10 | float | 收盘价偏离10日均线 | (close_adj(t) - MA10(t-10:t-1)) / MA10(t-10:t-1) |
 | ma_deviation_20 | float | 收盘价偏离20日均线 | (close_adj(t) - MA20(t-20:t-1)) / MA20(t-20:t-1) |
+
+#### 5. K线形态特征 (v0.5.0新增)
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| amplitude | float | 振幅 | (high_adj - low_adj) / pre_close_adj |
+| upper_shadow | float | 上影线比例 | (high_adj - max(open_adj, close_adj)) / close_adj |
+| lower_shadow | float | 下影线比例 | (min(open_adj, close_adj) - low_adj) / close_adj |
+| body_length | float | K线实体长度比例 | abs(close_adj - open_adj) / close_adj |
+
+#### 6. 波动率特征 (v0.5.0新增)
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| volatility_5 | float | 5日波动率 | std(ret_1(t-5:t-1)) |
+| volatility_10 | float | 10日波动率 | std(ret_1(t-10:t-1)) |
+| volatility_20 | float | 20日波动率 | std(ret_1(t-20:t-1)) |
+
+#### 7. 行业特征 (v0.5.0新增)
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| industry | str | 行业名称 | 从 stock_basic 获取 |
+| industry_id | int | 行业编码 | 稳定的整数映射 |
+| alpha_industry | float | 当日行业alpha | ret_1(t) - mean_by_industry(ret_1(t)) |
+| alpha_industry_5 | float | 5日行业alpha | ret_5(t) - mean_by_industry(ret_5(t)) |
+| alpha_industry_10 | float | 10日行业alpha | ret_10(t) - mean_by_industry(ret_10(t)) |
+| alpha_industry_20 | float | 20日行业alpha | ret_20(t) - mean_by_industry(ret_20(t)) |
+
+#### 8. 动量加速度特征 (v0.5.0新增)
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| acceleration | float | 动量加速度 | ret_5 - ret_10 |
+
+#### 9. 量能突变特征 (v0.5.0新增)
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| vol_burst_5 | float | 5日量能突变 | zscore_cross_section(vol_ratio_5) |
+| vol_burst_10 | float | 10日量能突变 | zscore_cross_section(vol_ratio_10) |
+| vol_burst_20 | float | 20日量能突变 | zscore_cross_section(vol_ratio_20) |
+
+#### 10. 技术指标 (v0.5.0新增)
+
+**RSI（相对强弱指标）**:
+
+| 字段名 | 类型 | 说明 | 参数 |
+|--------|------|------|------|
+| rsi_14 | float | RSI(14) | 窗口=14 |
+
+**KDJ（随机指标）**:
+
+| 字段名 | 类型 | 说明 | 参数 |
+|--------|------|------|------|
+| kdj_k | float | KDJ的K值 | n=9, m1=3, m2=3 |
+| kdj_d | float | KDJ的D值 | n=9, m1=3, m2=3 |
+| kdj_j | float | KDJ的J值 | n=9, m1=3, m2=3 |
+
+**MACD（指数平滑移动平均线）**:
+
+| 字段名 | 类型 | 说明 | 参数 |
+|--------|------|------|------|
+| macd_dif | float | MACD的DIF线 | fast=12, slow=26, signal=9 |
+| macd_dea | float | MACD的DEA线 | fast=12, slow=26, signal=9 |
+| macd_hist | float | MACD柱 | fast=12, slow=26, signal=9 |
+
+**布林带（Bollinger Bands）**:
+
+| 字段名 | 类型 | 说明 | 参数 |
+|--------|------|------|------|
+| bb_middle | float | 布林带中轨 | 窗口=20, std=2 |
+| bb_upper | float | 布林带上轨 | 窗口=20, std=2 |
+| bb_lower | float | 布林带下轨 | 窗口=20, std=2 |
+| bb_width | float | 布林带宽度 | 窗口=20, std=2 |
+| bb_pct | float | 布林带%B | 窗口=20, std=2 |
 
 ### 过滤与标记字段
 
@@ -276,12 +354,21 @@ model.fit(X, y)
 
 ## 扩展方向
 
+### v0.5.0 已实现 ✅
+
+1. ✅ 添加更多技术指标特征（RSI、MACD、布林带、KDJ）
+2. ✅ 添加行业分类特征（industry_id, alpha_industry）
+3. ✅ K线形态特征（振幅、上下影线）
+4. ✅ 波动率特征
+5. ✅ 量能突变特征
+6. ✅ 动量加速度特征
+
 ### 短期扩展
 
-1. 添加更多技术指标特征（RSI、MACD、布林带等）
-2. 添加基本面特征（PE、PB、ROE等）
+1. 添加更多技术指标（ATR、CCI、Williams %R等）
+2. 增强基本面特征（PE、PB、ROE等）
 3. 支持不同的预测时间窗口（horizon=1, 3, 10等）
-4. 添加行业、市场分类特征
+4. 市场宽度特征（涨跌家数比、涨停数量等）
 
 ### 长期扩展
 
@@ -290,9 +377,33 @@ model.fit(X, y)
 3. 支持因子标准化、去极值处理
 4. 支持在线特征更新（实盘场景）
 
+## 版本变更历史
+
+### v0.5.0 (2026-02-18) - 特征工程重构
+
+**Breaking Changes**: 
+- 删除 `amount_ratio_5/10/20` 特征
+- 删除 `vol_ma5/10/20` 特征
+- 需要重新生成 features 并重训模型
+
+**新增特征**:
+- K线形态: amplitude, upper_shadow, lower_shadow, body_length
+- 波动率: volatility_5/10/20
+- 行业: industry, industry_id, alpha_industry, alpha_industry_5/10/20
+- 动量: acceleration
+- 量能: vol_burst_5/10/20
+- 技术指标: rsi_14, kdj_k/d/j, macd_dif/dea/hist, bb_*
+
+**架构变更**:
+- 新增 `src/lazybull/factors` 模块，提供可复用的因子库
+- FeatureBuilder 重构，委托 factors 模块进行因子计算
+
+详见: [docs/PR/feature_refactoring.md](./PR/feature_refactoring.md)
+
 ## 参考资料
 
 - [TuShare Pro API文档](https://tushare.pro/document/2)
 - [XGBoost官方文档](https://xgboost.readthedocs.io/)
+- [因子扩展开发指南](./guide/factor_extension.md)
 - 项目README: `README.md`
 - 数据契约: `docs/data_contract.md`

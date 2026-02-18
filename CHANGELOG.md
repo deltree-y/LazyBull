@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-02-18
+
+### 重大变更 (Breaking Changes)
+
+本版本引入特征工程重构，**不兼容旧版本特征数据**。需要重新生成 features 并重训模型。
+
+### Added
+
+- **因子库模块 (src/lazybull/factors/)**
+  - 新增 `technical_indicators.py` - 技术指标因子
+    - RSI(14): 相对强弱指标
+    - KDJ(9,3,3): 随机指标
+    - MACD(12,26,9): 指数平滑移动平均线
+    - 布林带(20,2): 输出带宽 (bb_width) 和 %B (bb_pct)
+  - 新增 `candlestick.py` - K线形态因子
+    - 振幅 (amplitude): (high_adj - low_adj) / pre_close_adj
+    - 上影线 (upper_shadow): (high_adj - body_high) / close_adj
+    - 下影线 (lower_shadow): (body_low - low_adj) / close_adj
+    - 实体长度 (body_length): |close_adj - open_adj| / close_adj
+  - 新增 `volatility.py` - 波动率因子
+    - volatility_5/10/20: 基于 ret_1 的滚动标准差
+  - 新增 `industry.py` - 行业相关因子
+    - industry_id: 行业整数编码（稳定映射）
+    - alpha_industry: 个股收益 - 行业平均收益
+    - alpha_industry_5/10/20: 多窗口行业 alpha
+  - 新增 `momentum.py` - 动量加速度
+    - acceleration: ret_5 - ret_10 (短期动量 - 中期动量)
+  - 新增 `volume.py` - 量能突变
+    - vol_burst_5/10/20: vol_ratio 的截面 zscore
+
+- **FeatureBuilder 增强**
+  - 新增 `_add_advanced_factors()` 方法，统一整合因子库
+  - 扩展 `_calculate_adj_close()` 自动计算 open_adj/high_adj/low_adj
+  - 行业数据从 stock_basic 的 industry 字段获取
+  - 缺失 industry 字段时抛出清晰错误提示
+
+### Changed
+
+- **特征删除**
+  - 删除 `amount_ratio_5/10/20` 特征（不再生成）
+  - 删除 `vol_ma5/10/20` 特征（不再生成）
+  - 保留 `amount_ma5/10/20` 特征
+
+- **FeatureBuilder 重构**
+  - 特征计算逻辑拆分到 factors 模块，提升可维护性
+  - features/builder.py 主要负责数据流编排，因子计算委托给 factors 模块
+
+### Testing
+
+- 新增 `tests/test_new_features.py` 包含12个测试用例
+  - 验证已删除特征不再出现
+  - 验证新增特征存在且可计算
+  - 验证行业字段缺失报错
+  - 验证 industry_id 编码稳定性
+
+### Documentation
+
+- 新增 `docs/PR/feature_refactoring.md` - 本次PR详细说明
+- 新增 `docs/guide/factor_extension.md` - 因子扩展开发指南
+- 更新 `docs/features_schema.md` - 反映新增/删除字段
+
+### Migration Guide
+
+旧模型和旧特征数据**不兼容**本版本，需要：
+1. 重新生成 features: `python scripts/ensure_features.py --start-date 20200101 --end-date 20231231`
+2. 重新训练模型: `python scripts/train_ml_model.py ...`
+
+---
+
 ## [0.8.4] - 2026-02-15
 
 ### Added
