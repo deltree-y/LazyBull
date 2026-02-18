@@ -63,7 +63,7 @@
 | amount_ma10 | float | 过去10日平均成交额 | mean(amount(t-10:t-1)) |
 | amount_ma20 | float | 过去20日平均成交额 | mean(amount(t-20:t-1)) |
 
-**注意**: v0.5.0 删除了 `amount_ratio_5/10/20` 特征，保留 `amount_ma*` 特征。
+**注意**: v0.9.0 删除了 `amount_ratio_5/10/20` 特征，保留 `amount_ma*` 特征。
 
 #### 4. 均线偏离特征
 
