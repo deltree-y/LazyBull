@@ -665,7 +665,7 @@ LazyBull/
 │   │   └── loader.py          # 数据加载
 │   ├── universe/              # 股票池模块
 │   │   └── base.py            # 股票池基类
-│   ├── factors/               # 因子库模块 ✅ v0.5.0
+│   ├── factors/               # 因子库模块 ✅ v0.9.0
 │   │   ├── technical_indicators.py  # 技术指标（RSI/KDJ/MACD/布林带）
 │   │   ├── candlestick.py          # K线形态（振幅/上下影线）
 │   │   ├── volatility.py           # 波动率
