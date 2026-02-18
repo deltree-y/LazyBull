@@ -210,14 +210,14 @@ class FeatureBuilder:
         daily_data: pd.DataFrame,
         adj_factor: pd.DataFrame
     ) -> pd.DataFrame:
-        """计算后复权收盘价
+        """计算后复权收盘价和OHLC
         
         Args:
             daily_data: 日线行情DataFrame
             adj_factor: 复权因子DataFrame
             
         Returns:
-            添加了 close_adj 列的DataFrame
+            添加了 close_adj, open_adj, high_adj, low_adj 列的DataFrame
         """
         # 准备数据副本
         daily_adj = daily_data.copy()
@@ -245,11 +245,27 @@ class FeatureBuilder:
         # 计算后复权收盘价: close_adj = close * adj_factor
         daily_adj['close_adj'] = daily_adj['close'] * daily_adj['adj_factor']
         
+        # 计算其他复权价格（如果存在）
+        if 'open' in daily_adj.columns:
+            daily_adj['open_adj'] = daily_adj['open'] * daily_adj['adj_factor']
+        
+        if 'high' in daily_adj.columns:
+            daily_adj['high_adj'] = daily_adj['high'] * daily_adj['adj_factor']
+        
+        if 'low' in daily_adj.columns:
+            daily_adj['low_adj'] = daily_adj['low'] * daily_adj['adj_factor']
+        
         # 处理缺失的复权因子（如果有）
         missing_adj = daily_adj['adj_factor'].isna().sum()
         if missing_adj > 0:
-            logger.warning(f"有 {missing_adj} 条记录缺少复权因子，将使用原始收盘价")
+            logger.warning(f"有 {missing_adj} 条记录缺少复权因子，将使用原始价格")
             daily_adj['close_adj'].fillna(daily_adj['close'], inplace=True)
+            if 'open_adj' in daily_adj.columns:
+                daily_adj['open_adj'].fillna(daily_adj['open'], inplace=True)
+            if 'high_adj' in daily_adj.columns:
+                daily_adj['high_adj'].fillna(daily_adj['high'], inplace=True)
+            if 'low_adj' in daily_adj.columns:
+                daily_adj['low_adj'].fillna(daily_adj['low'], inplace=True)
         
         return daily_adj
     
