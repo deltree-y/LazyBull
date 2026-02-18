@@ -115,7 +115,7 @@
 | vol_burst_10 | float | 10日量能突变 | zscore_cross_section(vol_ratio_10) |
 | vol_burst_20 | float | 20日量能突变 | zscore_cross_section(vol_ratio_20) |
 
-#### 10. 技术指标 (v0.5.0新增)
+#### 10. 技术指标 (v0.9.0新增)
 
 **RSI（相对强弱指标）**:
 
