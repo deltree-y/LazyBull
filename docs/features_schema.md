@@ -82,7 +82,7 @@
 | lower_shadow | float | 下影线比例 | (min(open_adj, close_adj) - low_adj) / close_adj |
 | body_length | float | K线实体长度比例 | abs(close_adj - open_adj) / close_adj |
 
-#### 6. 波动率特征 (v0.5.0新增)
+#### 6. 波动率特征 (v0.9.0新增)
 
 | 字段名 | 类型 | 说明 | 计算方式 |
 |--------|------|------|----------|
