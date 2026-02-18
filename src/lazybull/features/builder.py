@@ -6,6 +6,9 @@
 - 基础数值特征
 - 股票池过滤（ST、上市<60天、停牌）
 - 涨跌停标记
+- 技术指标因子（RSI、KDJ、MACD、布林带等）
+- K线形态因子（振幅、上下影线等）
+- 行业相关因子（alpha、偏离等）
 """
 
 from typing import Dict, List, Optional
@@ -15,6 +18,19 @@ import pandas as pd
 from loguru import logger
 
 from ..common.date_utils import normalize_date_columns, to_trade_date_str
+from ..factors import (
+    calculate_rsi,
+    calculate_kdj,
+    calculate_macd,
+    calculate_bollinger_bands,
+    calculate_amplitude,
+    calculate_shadows,
+    calculate_volatility,
+    add_industry_features,
+    calculate_industry_alpha_windows,
+    calculate_acceleration,
+    calculate_volume_burst,
+)
 
 
 class FeatureBuilder:
@@ -128,6 +144,17 @@ class FeatureBuilder:
             current_idx,
             daily_basic_data,
             moneyflow_data
+        )
+        
+        # 5.5 添加新增因子（技术指标、K线形态、波动率、行业等）
+        features = self._add_advanced_factors(
+            features,
+            current_data,
+            daily_adj,
+            trade_date,
+            trading_dates,
+            current_idx,
+            stock_basic
         )
         
         # 6. 合并特征和标签
@@ -315,10 +342,12 @@ class FeatureBuilder:
         - ret_1: 当日收益率
         - ret_N: 过去N日累计收益
         - vol_ratio_N: 过去N日平均成交量比
-        - amount_ratio_N: 过去N日平均成交额比
+        - amount_ma_N: 过去N日平均成交额（保留）
         - ma_deviation_N: 收盘价与N日均线的偏离度
         - 价值红利因子：pb, pe_ttm, ep_ttm, bp, ps_ttm, dv_ttm, total_mv, circ_mv, log_total_mv等
         - 资金流因子：净流入、大单特大单净流入等
+        
+        注意：已删除 amount_ratio_N 和 vol_ma_N 特征
         
         Args:
             current_data: 当日数据
@@ -362,7 +391,7 @@ class FeatureBuilder:
                 # 历史数据不足，填充空值
                 features[f'ret_{window}'] = np.nan
                 features[f'vol_ratio_{window}'] = np.nan
-                features[f'amount_ratio_{window}'] = np.nan
+                # 删除：不再生成 amount_ratio_{window}
                 features[f'ma_deviation_{window}'] = np.nan
                 continue
             
@@ -468,11 +497,8 @@ class FeatureBuilder:
             np.nan
         )
         
-        window_features[f'amount_ratio_{window}'] = np.where(
-            window_features['mean_amount'] > 0,
-            window_features['amount'] / window_features['mean_amount'],
-            np.nan
-        )
+        # 删除：不再生成 amount_ratio_* 特征
+        # window_features[f'amount_ratio_{window}'] = ...
         
         window_features[f'ma_deviation_{window}'] = np.where(
             window_features['ma_close'] > 1e-6,
@@ -480,19 +506,132 @@ class FeatureBuilder:
             np.nan
         )
         
-        # 保留需要的列（增加 amount_ma 和 vol_ma）
+        # 保留需要的列（保留 amount_ma，删除 vol_ma 和 amount_ratio）
         keep_cols = ['ts_code', f'ret_{window}', f'vol_ratio_{window}', 
-                     f'amount_ratio_{window}', f'ma_deviation_{window}',
-                     'mean_vol', 'mean_amount']
+                     f'ma_deviation_{window}', 'mean_amount']
         window_features = window_features[keep_cols]
         
-        # 重命名 mean_vol 和 mean_amount 为更友好的名称
+        # 重命名 mean_amount 为 amount_ma（保留 amount_ma，不保留 vol_ma）
         window_features = window_features.rename(columns={
-            'mean_vol': f'vol_ma{window}',
             'mean_amount': f'amount_ma{window}'
         })
         
         return window_features
+    
+    def _add_advanced_factors(
+        self,
+        features: pd.DataFrame,
+        current_data: pd.DataFrame,
+        daily_adj: pd.DataFrame,
+        trade_date: str,
+        trading_dates: List[str],
+        current_idx: int,
+        stock_basic: pd.DataFrame
+    ) -> pd.DataFrame:
+        """添加高级因子（技术指标、K线形态、波动率、行业等）
+        
+        Args:
+            features: 基础特征DataFrame
+            current_data: 当日数据
+            daily_adj: 全部日线数据（含复权价）
+            trade_date: 当前交易日
+            trading_dates: 交易日序列
+            current_idx: 当前交易日索引
+            stock_basic: 股票基础信息
+            
+        Returns:
+            添加了高级因子的DataFrame
+        """
+        result = features.copy()
+        
+        # 1. K线形态因子：振幅、上下影线
+        if all(col in current_data.columns for col in ['high_adj', 'low_adj', 'pre_close', 'adj_factor']):
+            amplitude_df = calculate_amplitude(current_data)
+            result = result.merge(amplitude_df, on=['ts_code', 'trade_date'], how='left')
+        
+        if all(col in current_data.columns for col in ['open_adj', 'high_adj', 'low_adj', 'close_adj']):
+            shadows_df = calculate_shadows(current_data)
+            result = result.merge(shadows_df, on=['ts_code', 'trade_date'], how='left')
+        
+        # 2. 波动率因子（基于 ret_1 的 rolling std）
+        if 'ret_1' in result.columns and current_idx >= max(self.lookback_windows):
+            # 获取历史窗口数据用于计算波动率
+            lookback = max(self.lookback_windows) + 1  # 额外留1天用于计算 ret_1
+            hist_start_date = trading_dates[max(0, current_idx - lookback)]
+            hist_dates = [d for d in trading_dates if hist_start_date <= d <= trade_date]
+            
+            vol_hist_data = daily_adj[daily_adj['trade_date'].isin(hist_dates)].copy()
+            
+            # 确保包含 ret_1 列（从 pct_chg 计算）
+            if 'ret_1' not in vol_hist_data.columns and 'pct_chg' in vol_hist_data.columns:
+                vol_hist_data['ret_1'] = vol_hist_data['pct_chg'] / 100.0
+            
+            if 'ret_1' in vol_hist_data.columns:
+                volatility_df = calculate_volatility(vol_hist_data, ret_col='ret_1', windows=self.lookback_windows)
+                # 只保留当日的波动率
+                volatility_today = volatility_df[volatility_df['trade_date'] == trade_date]
+                if len(volatility_today) > 0:
+                    result = result.merge(volatility_today, on=['ts_code', 'trade_date'], how='left')
+        
+        # 3. 行业相关因子：industry_id, alpha_industry
+        result = add_industry_features(result, stock_basic, ret_col='ret_1')
+        
+        # 计算多窗口行业 alpha（如果存在 ret_N）
+        if all(f'ret_{w}' in result.columns for w in self.lookback_windows):
+            industry_alpha_df = calculate_industry_alpha_windows(
+                result, ret_windows=self.lookback_windows, industry_col='industry'
+            )
+            result = result.merge(industry_alpha_df, on=['ts_code', 'trade_date'], how='left')
+        
+        # 4. 动量加速度
+        if 'ret_5' in result.columns and 'ret_10' in result.columns:
+            acceleration_df = calculate_acceleration(result)
+            result = result.merge(acceleration_df, on=['ts_code', 'trade_date'], how='left')
+        
+        # 5. 量能突变（基于 vol_ratio 的截面 zscore）
+        vol_ratio_cols = [f'vol_ratio_{w}' for w in self.lookback_windows]
+        if all(col in result.columns for col in vol_ratio_cols):
+            vol_burst_df = calculate_volume_burst(result, vol_ratio_windows=self.lookback_windows)
+            result = result.merge(vol_burst_df, on=['ts_code', 'trade_date'], how='left')
+        
+        # 6. 技术指标：RSI, KDJ, MACD, 布林带
+        # 需要足够的历史数据（至少30天用于 MACD(12,26,9) 和布林带(20)）
+        if current_idx >= 30:
+            lookback = 50  # 给技术指标留足够历史
+            hist_start_date = trading_dates[max(0, current_idx - lookback)]
+            hist_dates = [d for d in trading_dates if hist_start_date <= d <= trade_date]
+            
+            tech_hist_data = daily_adj[daily_adj['trade_date'].isin(hist_dates)].copy()
+            
+            # RSI(14)
+            if 'close_adj' in tech_hist_data.columns:
+                rsi_df = calculate_rsi(tech_hist_data, window=14)
+                rsi_today = rsi_df[rsi_df['trade_date'] == trade_date]
+                if len(rsi_today) > 0:
+                    result = result.merge(rsi_today, on=['ts_code', 'trade_date'], how='left')
+            
+            # KDJ(9,3,3)
+            if all(col in tech_hist_data.columns for col in ['high_adj', 'low_adj', 'close_adj']):
+                kdj_df = calculate_kdj(tech_hist_data, n=9, m1=3, m2=3)
+                kdj_today = kdj_df[kdj_df['trade_date'] == trade_date]
+                if len(kdj_today) > 0:
+                    result = result.merge(kdj_today, on=['ts_code', 'trade_date'], how='left')
+            
+            # MACD(12,26,9)
+            if 'close_adj' in tech_hist_data.columns:
+                macd_df = calculate_macd(tech_hist_data, fast=12, slow=26, signal=9)
+                macd_today = macd_df[macd_df['trade_date'] == trade_date]
+                if len(macd_today) > 0:
+                    result = result.merge(macd_today, on=['ts_code', 'trade_date'], how='left')
+            
+            # 布林带(20,2)
+            if 'close_adj' in tech_hist_data.columns:
+                bb_df = calculate_bollinger_bands(tech_hist_data, window=20, num_std=2.0)
+                bb_today = bb_df[bb_df['trade_date'] == trade_date]
+                if len(bb_today) > 0:
+                    result = result.merge(bb_today, on=['ts_code', 'trade_date'], how='left')
+        
+        return result
     
     def _add_value_dividend_features(
         self,
