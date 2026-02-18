@@ -354,7 +354,7 @@ model.fit(X, y)
 
 ## 扩展方向
 
-### v0.5.0 已实现 ✅
+### v0.9.0 已实现 ✅
 
 1. ✅ 添加更多技术指标特征（RSI、MACD、布林带、KDJ）
 2. ✅ 添加行业分类特征（industry_id, alpha_industry）
