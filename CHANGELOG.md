@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.0] - 2026-02-18
+## [0.9.0] - 2026-02-18
 
 ### 重大变更 (Breaking Changes)
 
