@@ -1,11 +1,12 @@
 ﻿# 0. 定义参数
-$startDate = Get-Date "2025-07-01"
+$startDate = Get-Date "2025-07-21"
 $endDate = Get-Date "2025-07-31"
 $freq_list = @(20)             #持有天数
 $top_n_list = @(30)            #持股数量
-$mv_list = @(37)               #模型版本
+$mv_list = @(26,27,28,29,30,31,32,33,34,35)               #模型版本
 #$para_list = @('--equity-curve-enabled')
 $para_list = @('--stop-loss-enabled')
+
 
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
 $count = 0
@@ -40,7 +41,7 @@ while ($currentDate -le $endDate) {
                         # 执行 Python 命令
                         #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para 
                         #$out_name = "topn${topn}_mv${mv}"
-                        $out_name = "mv_test"
+                        $out_name = "batch_test"
                         #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv $para --output-name $out_name
                         py scripts\run_ml_backtest.py `
                             --start-date $dateStr --end-date 20251231 `
