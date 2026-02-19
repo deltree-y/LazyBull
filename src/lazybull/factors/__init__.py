@@ -33,6 +33,11 @@ from .volume import (
     calculate_volume_burst,
 )
 
+from .normalization import (
+    cross_sectional_zscore,
+    industry_neutralization,
+)
+
 __all__ = [
     # 技术指标
     'calculate_rsi',
@@ -52,4 +57,7 @@ __all__ = [
     'calculate_acceleration',
     # 量能
     'calculate_volume_burst',
+    # 标准化与中性化
+    'cross_sectional_zscore',
+    'industry_neutralization',
 ]

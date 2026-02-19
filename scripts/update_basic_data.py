@@ -25,7 +25,7 @@ from loguru import logger
 
 from src.lazybull.common.config import get_config
 from src.lazybull.common.logger import setup_logger
-from src.lazybull.data import Storage, TushareClient
+from src.lazybull.data import Storage, TushareClient, DataCleaner
 
 
 def update_trade_cal(
@@ -164,10 +164,119 @@ def update_stock_basic(
     logger.info("=" * 60)
 
 
+def update_shenwan_industry(
+    client: TushareClient,
+    storage: Storage,
+    force: bool = False
+) -> None:
+    """更新申万行业分类数据
+    
+    Args:
+        client: TushareClient实例
+        storage: Storage实例
+        force: 是否强制更新
+    """
+    logger.info("=" * 60)
+    logger.info("更新申万行业分类数据")
+    logger.info("=" * 60)
+    
+    # 检查是否需要更新
+    if not force:
+        existing = storage.load_raw("shenwan_industry")
+        if existing is not None:
+            logger.info(f"申万行业数据已存在，记录数: {len(existing)}")
+            logger.info("提示：使用 --force 参数可强制更新")
+            logger.info("提示：申万行业建议每季度更新一次")
+            return
+    
+    # 1. 获取申万一级行业指数列表
+    logger.info("获取申万一级行业指数列表...")
+    try:
+        index_basic = client.get_index_basic(market="SW")
+        logger.info(f"获取到 {len(index_basic)} 个申万指数")
+        
+        # 筛选一级行业指数（通常指数代码为 801xxx.SI 格式）
+        # 申万一级行业指数代码范围：801010.SI - 801230.SI
+        if 'ts_code' in index_basic.columns:
+            sw_l1_indices = index_basic[
+                (index_basic['ts_code'].str.startswith('8010')) | 
+                (index_basic['ts_code'].str.startswith('8011')) |
+                (index_basic['ts_code'].str.startswith('8012'))
+            ].copy()
+            logger.info(f"筛选出 {len(sw_l1_indices)} 个申万一级行业指数")
+        else:
+            logger.warning("index_basic缺少ts_code字段，使用全部指数")
+            sw_l1_indices = index_basic
+    except Exception as e:
+        logger.error(f"获取申万行业指数失败: {e}")
+        logger.error("请确保TuShare账号有权限访问index_basic接口")
+        return
+    
+    if len(sw_l1_indices) == 0:
+        logger.warning("未找到申万一级行业指数")
+        return
+    
+    # 2. 获取每个行业的成分股
+    logger.info("获取各行业成分股...")
+    index_members = {}
+    success_count = 0
+    
+    for _, row in sw_l1_indices.iterrows():
+        index_code = row['ts_code']
+        index_name = row.get('name', index_code)
+        
+        try:
+            logger.info(f"  获取 {index_name} ({index_code}) 成分股...")
+            members = client.get_index_member(index_code=index_code)
+            
+            if len(members) > 0:
+                index_members[index_code] = members
+                success_count += 1
+                logger.info(f"    成功：{len(members)} 只股票")
+            else:
+                logger.warning(f"    无成分股数据")
+        except Exception as e:
+            logger.warning(f"    获取失败：{e}")
+            continue
+    
+    logger.info(f"成功获取 {success_count}/{len(sw_l1_indices)} 个行业的成分股数据")
+    
+    if success_count == 0:
+        logger.error("未能获取任何行业的成分股数据，更新失败")
+        return
+    
+    # 3. 保存原始数据到raw层
+    logger.info("保存原始数据...")
+    # 将index_basic和index_members保存到raw层
+    # 这里使用一个简单的方案：将清洗后的数据直接保存到raw层
+    # 在实际使用时，FeatureBuilder会从clean层读取
+    
+    # 先进行清洗
+    cleaner = DataCleaner()
+    clean_data = cleaner.clean_shenwan_industry(sw_l1_indices, index_members)
+    
+    if len(clean_data) == 0:
+        logger.warning("清洗后无有效数据")
+        return
+    
+    # 保存到raw层（这里直接保存清洗后的数据）
+    storage.save_raw(clean_data, "shenwan_industry", is_force=True)
+    logger.info(f"申万行业分类已更新: {len(clean_data)} 条股票-行业映射")
+    
+    # 显示统计信息
+    if 'sw_name' in clean_data.columns:
+        industry_counts = clean_data['sw_name'].value_counts()
+        logger.info(f"行业分布（前10）:")
+        for industry, count in industry_counts.head(10).items():
+            logger.info(f"  {industry}: {count} 只")
+    
+    logger.info("=" * 60)
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description="更新基础数据（trade_cal和stock_basic的全集）"
+        description="更新基础数据（trade_cal、stock_basic、申万行业分类）"
     )
     parser.add_argument(
         "--trade-cal-start",
@@ -188,6 +297,11 @@ def main():
         help="仅更新股票基本信息"
     )
     parser.add_argument(
+        "--only-shenwan",
+        action="store_true",
+        help="仅更新申万行业分类"
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="强制更新，即使数据已是最新"
@@ -200,10 +314,11 @@ def main():
     get_config()  # 确保配置已加载
     
     logger.info("=" * 60)
-    logger.info("更新基础数据（trade_cal和stock_basic）")
+    logger.info("更新基础数据（trade_cal、stock_basic、申万行业）")
     logger.info("=" * 60)
     logger.info(f"仅更新trade_cal: {'是' if args.only_trade_cal else '否'}")
     logger.info(f"仅更新stock_basic: {'是' if args.only_stock_basic else '否'}")
+    logger.info(f"仅更新申万行业: {'是' if args.only_shenwan else '否'}")
     logger.info(f"强制更新: {'是' if args.force else '否'}")
     logger.info("=" * 60)
     
@@ -213,7 +328,7 @@ def main():
         storage = Storage()
         
         # 更新trade_cal
-        if not args.only_stock_basic:
+        if not args.only_stock_basic and not args.only_shenwan:
             update_trade_cal(
                 client, storage,
                 start_date=args.trade_cal_start,
@@ -222,8 +337,12 @@ def main():
             )
         
         # 更新stock_basic
-        if not args.only_trade_cal:
+        if not args.only_trade_cal and not args.only_shenwan:
             update_stock_basic(client, storage, force=args.force)
+        
+        # 更新申万行业分类
+        if not args.only_trade_cal and not args.only_stock_basic:
+            update_shenwan_industry(client, storage, force=args.force)
         
         logger.info("")
         logger.info("=" * 60)
@@ -231,12 +350,14 @@ def main():
         logger.info(f"数据保存位置: {storage.root_path}/raw")
         logger.info("  - trade_cal.parquet (单文件)")
         logger.info("  - stock_basic.parquet (单文件)")
+        logger.info("  - shenwan_industry.parquet (单文件)")
         logger.info("=" * 60)
         logger.info("")
         logger.info("更新策略说明：")
         logger.info("1. trade_cal: 建议每年年初更新一次，新增当年全部交易日数据")
         logger.info("2. stock_basic: 建议每季度更新一次，获取新上市/退市股票")
-        logger.info("3. 可以在cron或定时任务中运行此脚本")
+        logger.info("3. shenwan_industry: 建议每季度更新一次，获取最新行业分类")
+        logger.info("4. 可以在cron或定时任务中运行此脚本")
         logger.info("=" * 60)
         
     except (ValueError, ConnectionError, TimeoutError) as e:

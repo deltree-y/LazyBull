@@ -374,3 +374,81 @@ class TushareClient:
             start_date=start_date,
             end_date=end_date
         )
+    
+    def get_index_basic(
+        self,
+        market: str = "SW",
+        **kwargs
+    ) -> pd.DataFrame:
+        """获取指数基本信息
+        
+        Args:
+            market: 市场类型，SW=申万指数
+            **kwargs: 其他参数
+            
+        Returns:
+            指数基本信息DataFrame，包含以下字段：
+            - ts_code: 指数代码
+            - name: 指数名称
+            - market: 市场类型
+            - publisher: 发布商
+            - category: 指数类别
+        """
+        return self.query(
+            "index_basic",
+            market=market,
+            **kwargs
+        )
+    
+    def get_index_classify(
+        self,
+        level: str = "L1",
+        src: str = "SW2021",
+        **kwargs
+    ) -> pd.DataFrame:
+        """获取申万行业分类
+        
+        Args:
+            level: 行业级别，L1=一级/L2=二级/L3=三级
+            src: 申万分类版本，SW2021=申万2021版/SW2014=申万2014版
+            **kwargs: 其他参数
+            
+        Returns:
+            申万行业分类DataFrame，包含以下字段：
+            - index_code: 指数代码
+            - industry_name: 行业名称
+            - level: 行业级别
+            - industry_code: 行业代码
+            - parent_code: 父级代码
+            - src: 分类来源
+        """
+        return self.query(
+            "index_classify",
+            level=level,
+            src=src,
+            **kwargs
+        )
+    
+    def get_index_member(
+        self,
+        index_code: str,
+        **kwargs
+    ) -> pd.DataFrame:
+        """获取指数成分股
+        
+        Args:
+            index_code: 指数代码
+            **kwargs: 其他参数
+            
+        Returns:
+            指数成分股DataFrame，包含以下字段：
+            - index_code: 指数代码
+            - con_code: 成分股代码（对应 ts_code）
+            - in_date: 纳入日期
+            - out_date: 剔除日期
+        """
+        return self.query(
+            "index_member",
+            index_code=index_code,
+            **kwargs
+        )

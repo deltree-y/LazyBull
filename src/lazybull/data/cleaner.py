@@ -602,3 +602,90 @@ class DataCleaner:
             raise ValueError(f"主键 {key_cols} 存在重复，请检查数据清洗逻辑")
         
         logger.debug(f"主键唯一性验证通过: {key_cols}")
+    
+    def clean_shenwan_industry(
+        self,
+        raw_index_basic: pd.DataFrame,
+        raw_index_members: Dict[str, pd.DataFrame]
+    ) -> pd.DataFrame:
+        """清洗申万行业分类数据，生成 ts_code -> 行业映射表
+        
+        Args:
+            raw_index_basic: 原始申万指数基本信息DataFrame（一级行业指数）
+            raw_index_members: 字典，key为index_code，value为该行业的成分股DataFrame
+            
+        Returns:
+            清洗后的申万行业映射DataFrame，包含以下字段：
+            - ts_code: 股票代码
+            - sw_code: 申万行业指数代码
+            - sw_name: 申万行业名称（一级）
+            - in_date: 纳入日期
+        """
+        logger.info(f"开始清洗申万行业分类数据，行业数: {len(raw_index_members)}")
+        
+        # 构建行业代码到行业名称的映射
+        index_code_to_name = {}
+        if 'ts_code' in raw_index_basic.columns and 'name' in raw_index_basic.columns:
+            for _, row in raw_index_basic.iterrows():
+                index_code_to_name[row['ts_code']] = row['name']
+        
+        # 合并所有行业的成分股数据
+        all_members = []
+        for index_code, members_df in raw_index_members.items():
+            if len(members_df) == 0:
+                continue
+            
+            # 复制数据
+            df = members_df.copy()
+            
+            # 确保包含必要字段
+            if 'con_code' not in df.columns:
+                logger.warning(f"行业 {index_code} 的成分股数据缺少 con_code 字段，跳过")
+                continue
+            
+            # 重命名列
+            df = df.rename(columns={'con_code': 'ts_code'})
+            
+            # 添加行业信息
+            df['sw_code'] = index_code
+            df['sw_name'] = index_code_to_name.get(index_code, '未知行业')
+            
+            # 标准化日期列
+            if 'in_date' in df.columns:
+                df = self._standardize_date_columns(df, ['in_date'])
+            
+            if 'out_date' in df.columns:
+                df = self._standardize_date_columns(df, ['out_date'])
+            
+            # 只保留当前在行业内的股票（out_date为空）
+            if 'out_date' in df.columns:
+                df = df[df['out_date'].isna() | (df['out_date'] == '')].copy()
+            
+            # 选择需要的列
+            keep_cols = ['ts_code', 'sw_code', 'sw_name']
+            if 'in_date' in df.columns:
+                keep_cols.append('in_date')
+            
+            df = df[keep_cols]
+            all_members.append(df)
+        
+        if not all_members:
+            logger.warning("没有有效的申万行业成分股数据")
+            return pd.DataFrame(columns=['ts_code', 'sw_code', 'sw_name', 'in_date'])
+        
+        # 合并所有行业数据
+        result = pd.concat(all_members, ignore_index=True)
+        
+        # ts_code 统一为字符串
+        result['ts_code'] = result['ts_code'].astype(str)
+        
+        # 去重：一只股票可能属于多个行业，这里保留第一条记录（通常是主营行业）
+        # 如果需要保留所有行业归属，则不去重
+        result = self._deduplicate(result, ['ts_code'])
+        
+        # 排序
+        result = result.sort_values('ts_code').reset_index(drop=True)
+        
+        logger.info(f"申万行业分类清洗完成，清洗后记录数: {len(result)}")
+        
+        return result
