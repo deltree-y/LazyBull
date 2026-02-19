@@ -369,7 +369,7 @@ def main():
     args = parser.parse_args()
     
     # 初始化日志
-    setup_logger(log_level="INFO")
+    setup_logger(log_level="DEBUG")
     
     logger.info("=" * 60)
     logger.info("开始构建clean和features数据")
@@ -387,7 +387,8 @@ def main():
         cleaner = DataCleaner()
         builder = FeatureBuilder(
             min_list_days=args.min_list_days,
-            horizon=args.horizon
+            horizon=args.horizon,
+            require_label=False,
         )
         
         # 构建clean数据

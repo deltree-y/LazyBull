@@ -561,15 +561,18 @@ class FeatureBuilder:
         result = features.copy()
         
         # 1. K线形态因子：振幅、上下影线
+        logger.debug("计算K线形态因子...")
         if all(col in current_data.columns for col in ['high_adj', 'low_adj', 'pre_close', 'adj_factor']):
             amplitude_df = calculate_amplitude(current_data)
             result = result.merge(amplitude_df, on=['ts_code', 'trade_date'], how='left')
         
+        logger.debug("计算K线形态因子（上下影线）...")
         if all(col in current_data.columns for col in ['open_adj', 'high_adj', 'low_adj', 'close_adj']):
             shadows_df = calculate_shadows(current_data)
             result = result.merge(shadows_df, on=['ts_code', 'trade_date'], how='left')
         
         # 2. 波动率因子（基于 ret_1 的 rolling std）
+        logger.debug("计算波动率因子...")
         if 'ret_1' in result.columns and current_idx >= max(self.lookback_windows):
             # 获取历史窗口数据用于计算波动率
             lookback = max(self.lookback_windows) + 1  # 额外留1天用于计算 ret_1
@@ -590,10 +593,12 @@ class FeatureBuilder:
                     result = result.merge(volatility_today, on=['ts_code', 'trade_date'], how='left')
         
         # 3. 行业相关因子：industry_id, alpha_industry
+        logger.debug("计算行业相关因子...")
         result = add_industry_features(result, stock_basic, ret_col='ret_1')
         
         # 计算多窗口行业 alpha（如果存在 ret_N）
         if all(f'ret_{w}' in result.columns for w in self.lookback_windows):
+            logger.debug("计算多个窗口的行业 alpha...")
             industry_alpha_df = calculate_industry_alpha_windows(
                 result, ret_windows=self.lookback_windows, industry_col='industry'
             )
@@ -601,12 +606,14 @@ class FeatureBuilder:
         
         # 4. 动量加速度
         if 'ret_5' in result.columns and 'ret_10' in result.columns:
+            logger.debug("计算动量加速度因子...")
             acceleration_df = calculate_acceleration(result)
             result = result.merge(acceleration_df, on=['ts_code', 'trade_date'], how='left')
         
         # 5. 量能突变（基于 vol_ratio 的截面 zscore）
         vol_ratio_cols = [f'vol_ratio_{w}' for w in self.lookback_windows]
         if all(col in result.columns for col in vol_ratio_cols):
+            logger.debug("计算量能突变因子...")
             vol_burst_df = calculate_volume_burst(result, vol_ratio_windows=self.lookback_windows)
             result = result.merge(vol_burst_df, on=['ts_code', 'trade_date'], how='left')
         
@@ -620,6 +627,7 @@ class FeatureBuilder:
             tech_hist_data = daily_adj[daily_adj['trade_date'].isin(hist_dates)].copy()
             
             # RSI(14)
+            logger.debug("计算RSI指标...")
             if 'close_adj' in tech_hist_data.columns:
                 rsi_df = calculate_rsi(tech_hist_data, window=14)
                 rsi_today = rsi_df[rsi_df['trade_date'] == trade_date]
@@ -627,6 +635,7 @@ class FeatureBuilder:
                     result = result.merge(rsi_today, on=['ts_code', 'trade_date'], how='left')
             
             # KDJ(9,3,3)
+            logger.debug("计算KDJ指标...")
             if all(col in tech_hist_data.columns for col in ['high_adj', 'low_adj', 'close_adj']):
                 kdj_df = calculate_kdj(tech_hist_data, n=9, m1=3, m2=3)
                 kdj_today = kdj_df[kdj_df['trade_date'] == trade_date]
@@ -634,6 +643,7 @@ class FeatureBuilder:
                     result = result.merge(kdj_today, on=['ts_code', 'trade_date'], how='left')
             
             # MACD(12,26,9)
+            logger.debug("计算MACD指标...")
             if 'close_adj' in tech_hist_data.columns:
                 macd_df = calculate_macd(tech_hist_data, fast=12, slow=26, signal=9)
                 macd_today = macd_df[macd_df['trade_date'] == trade_date]
@@ -641,6 +651,7 @@ class FeatureBuilder:
                     result = result.merge(macd_today, on=['ts_code', 'trade_date'], how='left')
             
             # 布林带(20,2)
+            logger.debug("计算布林带指标...")
             if 'close_adj' in tech_hist_data.columns:
                 bb_df = calculate_bollinger_bands(tech_hist_data, window=20, num_std=2.0)
                 bb_today = bb_df[bb_df['trade_date'] == trade_date]

@@ -42,6 +42,7 @@ def add_industry_features(
     Returns:
         DataFrame，添加了行业相关特征
     """
+    logger.info("添加行业相关特征...")
     result = features_df.copy()
     
     # 检查 stock_basic 是否包含 industry 字段
@@ -61,8 +62,9 @@ def add_industry_features(
     
     # 检查合并后是否有 industry 缺失
     missing_industry = result['industry'].isna().sum()
+    missing_industry_ts_codes = result[result['industry'].isna()]['ts_code'].unique()
     if missing_industry > 0:
-        logger.warning(f"有 {missing_industry} 个样本缺少行业信息")
+        logger.warning(f"有 {missing_industry} 个样本缺少行业信息，涉及股票代码: {missing_industry_ts_codes}")
     
     # 生成 industry_id 编码（保证相同 industry 映射一致）
     industry_encoding = generate_industry_encoding(result['industry'])
@@ -99,6 +101,7 @@ def calculate_industry_alpha_windows(
     Returns:
         DataFrame，包含 ts_code, trade_date, alpha_industry_{window}
     """
+    logger.info("计算多个窗口的行业 alpha...")
     result = df[['ts_code', 'trade_date']].copy()
     
     for window in ret_windows:

@@ -6,6 +6,9 @@
 import numpy as np
 import pandas as pd
 from typing import List
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_volume_burst(
@@ -23,6 +26,7 @@ def calculate_volume_burst(
     Returns:
         DataFrame，包含 ts_code, trade_date, vol_burst_{window}
     """
+    logger.debug("计算量能突变特征...")
     if vol_ratio_windows is None:
         vol_ratio_windows = [5, 10, 20]
     

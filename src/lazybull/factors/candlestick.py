@@ -5,6 +5,9 @@
 
 import numpy as np
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_amplitude(df: pd.DataFrame) -> pd.DataFrame:
@@ -19,6 +22,7 @@ def calculate_amplitude(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame，包含 ts_code, trade_date, amplitude
     """
+    logging.debug("计算振幅...")
     result = df[['ts_code', 'trade_date']].copy()
     
     # 计算前收盘复权价
@@ -51,6 +55,7 @@ def calculate_shadows(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame，包含 ts_code, trade_date, upper_shadow, lower_shadow, body_length
     """
+    logger.debug("计算上下影线和实体长度...")
     result = df[['ts_code', 'trade_date']].copy()
     
     # 计算K线上下端点

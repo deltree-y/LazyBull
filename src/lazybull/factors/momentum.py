@@ -3,8 +3,11 @@
 提供基于价格动量的二阶变化特征
 """
 
+import logging
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_acceleration(df: pd.DataFrame) -> pd.DataFrame:
@@ -19,6 +22,7 @@ def calculate_acceleration(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame，包含 ts_code, trade_date, acceleration
     """
+    logger.debug("计算加速度特征...")
     result = df[['ts_code', 'trade_date']].copy()
     
     # 计算加速度
