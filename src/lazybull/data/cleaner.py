@@ -679,8 +679,9 @@ class DataCleaner:
         # ts_code 统一为字符串
         result['ts_code'] = result['ts_code'].astype(str)
         
-        # 去重：一只股票可能属于多个行业，这里保留第一条记录（通常是主营行业）
-        # 如果需要保留所有行业归属，则不去重
+        # 去重：一只股票可能属于多个行业指数（例如同时属于行业指数和主题指数）
+        # 保留第一条记录（通常是主营行业分类）
+        # 如果需要保留所有行业归属，可以注释掉此去重步骤
         result = self._deduplicate(result, ['ts_code'])
         
         # 排序
