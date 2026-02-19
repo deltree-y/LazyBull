@@ -192,24 +192,19 @@ def update_shenwan_industry(
     # 1. 获取申万一级行业指数列表
     logger.info("获取申万一级行业指数列表...")
     try:
-        index_basic = client.get_index_basic(market="SW")
-        logger.info(f"获取到 {len(index_basic)} 个申万指数")
+        index_classify = client.get_index_classify(level="L1", src="SW2021")
+        logger.info(f"获取到 {len(index_classify)} 个申万指数")
         
         # 筛选一级行业指数（通常指数代码为 801xxx.SI 格式）
-        # 申万一级行业指数代码范围：801010.SI - 801230.SI
-        if 'ts_code' in index_basic.columns:
-            sw_l1_indices = index_basic[
-                (index_basic['ts_code'].str.startswith('8010')) | 
-                (index_basic['ts_code'].str.startswith('8011')) |
-                (index_basic['ts_code'].str.startswith('8012'))
-            ].copy()
+        if 'index_code' in index_classify.columns:
+            sw_l1_indices = index_classify.copy()
             logger.info(f"筛选出 {len(sw_l1_indices)} 个申万一级行业指数")
         else:
-            logger.warning("index_basic缺少ts_code字段，使用全部指数")
-            sw_l1_indices = index_basic
+            logger.warning("index_classify缺少index_code字段，使用全部指数")
+            sw_l1_indices = index_classify
     except Exception as e:
         logger.error(f"获取申万行业指数失败: {e}")
-        logger.error("请确保TuShare账号有权限访问index_basic接口")
+        logger.error("请确保TuShare账号有权限访问index_classify接口")
         return
     
     if len(sw_l1_indices) == 0:
@@ -222,12 +217,12 @@ def update_shenwan_industry(
     success_count = 0
     
     for _, row in sw_l1_indices.iterrows():
-        index_code = row['ts_code']
+        index_code = row['index_code']
         index_name = row.get('name', index_code)
         
         try:
             logger.info(f"  获取 {index_name} ({index_code}) 成分股...")
-            members = client.get_index_member(index_code=index_code)
+            members = client.get_index_member(l1_code=index_code)
             
             if len(members) > 0:
                 index_members[index_code] = members
@@ -253,7 +248,7 @@ def update_shenwan_industry(
     
     # 先进行清洗
     cleaner = DataCleaner()
-    clean_data = cleaner.clean_shenwan_industry(sw_l1_indices, index_members)
+    clean_data = cleaner.clean_shenwan_industry(sw_l1_indices, index_members, level_str='l1')
     
     if len(clean_data) == 0:
         logger.warning("清洗后无有效数据")

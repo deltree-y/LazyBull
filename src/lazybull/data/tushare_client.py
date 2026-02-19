@@ -375,28 +375,32 @@ class TushareClient:
             end_date=end_date
         )
     
-    def get_index_basic(
+    def get_index_classify(
         self,
-        market: str = "SW",
+        level: str = "L1",
+        src: str = "SW2021",
         **kwargs
     ) -> pd.DataFrame:
         """获取指数基本信息
         
         Args:
-            market: 市场类型，SW=申万指数
+            level: 行业级别，L1=一级/L2=二级/L3=三级
+            src: 申万分类版本，SW2021=申万2021版/SW2014=申万2014版
             **kwargs: 其他参数
             
         Returns:
             指数基本信息DataFrame，包含以下字段：
-            - ts_code: 指数代码
-            - name: 指数名称
-            - market: 市场类型
-            - publisher: 发布商
-            - category: 指数类别
+            - index_code: 指数代码
+            - index_name: 指数名称
+            - level: 行业级别
+            - industry_code: 行业代码
+            - parent_code: 父级代码
+            - src: 分类来源
         """
         return self.query(
-            "index_basic",
-            market=market,
+            "index_classify",
+            level = level,
+            src = src,
             **kwargs
         )
     
@@ -431,24 +435,37 @@ class TushareClient:
     
     def get_index_member(
         self,
-        index_code: str,
+        l1_code: str = None,
+        l2_code: str = None,
+        l3_code: str = None,
         **kwargs
     ) -> pd.DataFrame:
         """获取指数成分股
         
         Args:
-            index_code: 指数代码
+            l1_code: 一级行业代码
+            l2_code: 二级行业代码
+            l3_code: 三级行业代码
             **kwargs: 其他参数
             
         Returns:
             指数成分股DataFrame，包含以下字段：
-            - index_code: 指数代码
-            - con_code: 成分股代码（对应 ts_code）
-            - in_date: 纳入日期
-            - out_date: 剔除日期
+            - l1_code: 一级行业代码
+            - l1_name: 一级行业名称
+            - l2_code: 二级行业代码
+            - l2_name: 二级行业名称
+            - l3_code: 三级行业代码
+            - l3_name: 三级行业名称
+            - ts_code: 成分股代码
+            - ts_name: 成分股名称
+            - in_date: 加入日期
+            - out_date: 退出日期
+            - is_new: 是否最新成分股，1=是，0=否
         """
         return self.query(
-            "index_member",
-            index_code=index_code,
+            "index_member_all",
+            l1_code=l1_code,
+            l2_code=l2_code,
+            l3_code=l3_code,
             **kwargs
         )

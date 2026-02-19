@@ -149,6 +149,7 @@ class FeatureBuilder:
             daily_basic_data,
             moneyflow_data
         )
+        logger.debug(f"{trade_date} 基础特征计算完成: {len(features.columns.tolist())} 列")
         
         # 5.5 添加新增因子（技术指标、K线形态、波动率、行业等）
         features = self._add_advanced_factors(
@@ -160,13 +161,16 @@ class FeatureBuilder:
             current_idx,
             stock_basic
         )
+        logger.debug(f"{trade_date} 高级特征计算完成: {len(features.columns.tolist())} 列")
         
         # 6. 合并特征和标签
         result = features.merge(labels, on=['trade_date', 'ts_code'], how='inner')
+        logger.debug(f"{trade_date} 合并特征和标签完成: {len(result.columns.tolist())} 列")
         
         # 6.5 合并申万行业分类
         if shenwan_industry is not None:
             result = self._merge_shenwan_industry(result, shenwan_industry)
+            logger.debug(f"{trade_date} 合并申万行业分类完成: {len(result.columns.tolist())} 列")
         
         # 7. 添加过滤标记
         result = self._add_filter_flags(
@@ -175,6 +179,7 @@ class FeatureBuilder:
             suspend_info,
             trade_date
         )
+        logger.debug(f"{trade_date} 添加过滤标记完成: {len(result.columns.tolist())} 列")
         
         # 8. 添加涨跌停标记
         result = self._add_limit_flags(
@@ -183,13 +188,16 @@ class FeatureBuilder:
             limit_info,
             trade_date
         )
+        logger.debug(f"{trade_date} 添加涨跌停标记完成: {len(result.columns.tolist())} 列")
         
         # 9. 应用过滤规则
         result = self._apply_filters(result)
+        logger.debug(f"{trade_date} 应用过滤规则完成: {len(result)} 个样本")
         
         # 10. 应用行业中性化（如果启用）
         if apply_industry_neutralization and shenwan_industry is not None:
             result = self._apply_industry_neutralization(result)
+            logger.debug(f"{trade_date} 行业中性化完成: {len(result.columns.tolist())} 列")
         
         logger.info(f"{trade_date} 特征构建完成: {len(result)} 个样本")
         
@@ -1186,11 +1194,13 @@ class FeatureBuilder:
         # 生成行业ID（整数编码）
         if 'sw_name' in result.columns:
             from ..factors.industry import generate_industry_encoding
-            industry_id_df = generate_industry_encoding(
-                result[['ts_code', 'trade_date', 'sw_name']],
-                industry_col='sw_name'
+            industry_id_dict = generate_industry_encoding(
+                result['sw_name'],
+                #result[['ts_code', 'trade_date', 'sw_name']],
+                #industry_col='sw_name',
             )
-            result = result.merge(industry_id_df, on=['ts_code', 'trade_date'], how='left')
+            #logger.warning(f"industry_id_dict: {industry_id_dict}")
+            result['industry_id'] = result['sw_name'].map(industry_id_dict)
             
             # 统计行业分布
             if self.verbose:

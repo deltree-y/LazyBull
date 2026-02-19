@@ -606,7 +606,8 @@ class DataCleaner:
     def clean_shenwan_industry(
         self,
         raw_index_basic: pd.DataFrame,
-        raw_index_members: Dict[str, pd.DataFrame]
+        raw_index_members: Dict[str, pd.DataFrame],
+        level_str: str = 'l1',
     ) -> pd.DataFrame:
         """清洗申万行业分类数据，生成 ts_code -> 行业映射表
         
@@ -625,9 +626,10 @@ class DataCleaner:
         
         # 构建行业代码到行业名称的映射
         index_code_to_name = {}
-        if 'ts_code' in raw_index_basic.columns and 'name' in raw_index_basic.columns:
+        logger.warning(f"raw_index_basic 列名: {raw_index_basic.columns.tolist()}")
+        if 'index_code' in raw_index_basic.columns and 'industry_name' in raw_index_basic.columns:
             for _, row in raw_index_basic.iterrows():
-                index_code_to_name[row['ts_code']] = row['name']
+                index_code_to_name[row['index_code']] = row['industry_name']
         
         # 合并所有行业的成分股数据
         all_members = []
@@ -639,12 +641,13 @@ class DataCleaner:
             df = members_df.copy()
             
             # 确保包含必要字段
-            if 'con_code' not in df.columns:
-                logger.warning(f"行业 {index_code} 的成分股数据缺少 con_code 字段，跳过")
+            if f'{level_str}_code' not in df.columns:
+                logger.warning(f"行业 {index_code} 的成分股数据缺少 {level_str}_code 字段，跳过")
                 continue
             
             # 重命名列
-            df = df.rename(columns={'con_code': 'ts_code'})
+            #logger.warning(f"行业 {index_code} 列名: {df.columns.tolist()}")
+            #df = df.rename(columns={f'{level_str}_code': 'ts_code'})
             
             # 添加行业信息
             df['sw_code'] = index_code
@@ -668,6 +671,7 @@ class DataCleaner:
             
             df = df[keep_cols]
             all_members.append(df)
+            logger.info(f"行业 {index_code} ({index_code_to_name.get(index_code, '未知行业')}) 成分股数: {len(df)}")
         
         if not all_members:
             logger.warning("没有有效的申万行业成分股数据")

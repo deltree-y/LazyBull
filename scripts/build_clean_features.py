@@ -171,7 +171,9 @@ def build_features_data(
     builder: FeatureBuilder,
     start_date: str,
     end_date: str,
-    force: bool = False
+    force: bool = False,
+    shenwan_industry: pd.DataFrame = None,
+    apply_industry_neutralization: bool = False,
 ) -> None:
     """构建features层数据
     
@@ -182,6 +184,8 @@ def build_features_data(
         start_date: 开始日期，格式YYYYMMDD
         end_date: 结束日期，格式YYYYMMDD
         force: 是否强制重新构建
+        shenwan_industry: 申万行业数据（可选，启用中性化时必需）
+        apply_industry_neutralization: 是否应用行业中性化
     """
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
@@ -298,7 +302,9 @@ def build_features_data(
                 daily_basic_data=daily_basic_clean,
                 moneyflow_data=moneyflow_clean,
                 suspend_info=None,
-                limit_info=None
+                limit_info=None,
+                shenwan_industry=shenwan_industry if apply_industry_neutralization else None,
+                apply_industry_neutralization=apply_industry_neutralization,
             )
             
             # 保存结果
@@ -354,6 +360,11 @@ def main():
         help="强制重新构建，即使文件已存在"
     )
     parser.add_argument(
+        "--enable-industry-neutralization",
+        action="store_true",
+        help="启用中性特征构建"
+    )
+    parser.add_argument(
         "--min-list-days",
         type=int,
         default=60,
@@ -362,8 +373,8 @@ def main():
     parser.add_argument(
         "--horizon",
         type=int,
-        default=5,
-        help="预测时间窗口（交易日）（默认：5）"
+        default=20,
+        help="预测时间窗口（交易日）（默认：20）"
     )
     
     args = parser.parse_args()
@@ -384,6 +395,7 @@ def main():
         # 初始化组件
         storage = Storage()
         loader = DataLoader(storage)
+        shenwan_industry = loader.load_shenwan_industry()
         cleaner = DataCleaner()
         builder = FeatureBuilder(
             min_list_days=args.min_list_days,
@@ -404,7 +416,9 @@ def main():
             build_features_data(
                 storage, loader, builder,
                 args.start_date, args.end_date,
-                force=args.force
+                force=args.force,
+                shenwan_industry=shenwan_industry if args.enable_industry_neutralization else None,
+                apply_industry_neutralization=args.enable_industry_neutralization,
             )
         
         logger.info("=" * 60)
