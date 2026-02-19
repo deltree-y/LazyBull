@@ -258,3 +258,128 @@ def industry_neutralization(
     logger.info(f"行业中性化完成")
     
     return result
+
+
+def industry_demean(
+    df: pd.DataFrame,
+    columns: List[str],
+    industry_col: str = 'sw_name',
+    tradable_col: str = 'tradable',
+    min_group_size: int = 5,
+    prefix: str = 'neu_',
+    inplace: bool = False
+) -> pd.DataFrame:
+    """行业去均值（demean）中性化
+    
+    对指定列进行行业去均值：neu_x = x - mean(x within industry same day)
+    主要用于收益率/标签列的中性化，消除行业间收益差异
+    
+    Args:
+        df: 输入DataFrame，应包含单日截面数据
+        columns: 需要去均值的列名列表（通常是收益率/标签列）
+        industry_col: 行业列名，默认'sw_name'（申万行业名称）
+        tradable_col: 可交易标记列，只使用该列为1的样本计算均值
+        min_group_size: 最小组内样本数，小于该值时回退到全市场均值
+        prefix: 输出列前缀，默认'neu_'
+        inplace: 是否原地修改（覆盖原列），默认False（新增列）
+        
+    Returns:
+        添加了去均值列的DataFrame
+    """
+    result = df.copy()
+    
+    # 检查行业列是否存在
+    if industry_col not in result.columns:
+        raise ValueError(
+            f"行业列 {industry_col} 不存在！\n"
+            f"请先下载并加载申万行业分类数据。\n"
+            f"运行命令：python scripts/update_basic_data.py --only-shenwan --force"
+        )
+    
+    # 检查列是否存在
+    missing_cols = [col for col in columns if col not in result.columns]
+    if missing_cols:
+        raise ValueError(
+            f"以下列不存在：{missing_cols}\n"
+            f"请确保这些特征已在 FeatureBuilder 中生成。"
+        )
+    
+    logger.info(
+        f"开始行业去均值：{len(columns)} 个列，"
+        f"行业列={industry_col}，min_group_size={min_group_size}"
+    )
+    
+    # 确保tradable列存在
+    if tradable_col not in result.columns:
+        logger.warning(f"未找到 {tradable_col} 列，将使用全部样本")
+        tradable_mask = pd.Series(True, index=result.index)
+    else:
+        tradable_mask = (result[tradable_col] == 1)
+    
+    # 对每个列进行去均值
+    for col in columns:
+        if inplace:
+            output_col = col
+            # 先备份原始列
+            backup_col = f"_original_{col}"
+            result[backup_col] = result[col].copy()
+        else:
+            output_col = f"{prefix}{col}"
+        
+        # 初始化输出列为NaN
+        result[output_col] = np.nan
+        
+        # 计算全市场均值（用于小组回退）
+        tradable_values = result.loc[tradable_mask, col]
+        valid_values = tradable_values.dropna()
+        
+        if len(valid_values) == 0:
+            logger.warning(f"{col}: 没有有效的可交易样本")
+            continue
+        
+        global_mean = valid_values.mean()
+        
+        if pd.isna(global_mean):
+            logger.warning(f"{col}: 全市场均值为NaN，跳过")
+            continue
+        
+        # 按行业分组进行去均值
+        groups = result.groupby(industry_col, dropna=False)
+        
+        for group_name, group_df in groups:
+            group_indices = group_df.index
+            
+            # 获取该组内可交易样本
+            group_tradable_mask = tradable_mask[group_indices]
+            group_tradable_values = group_df.loc[group_tradable_mask, col]
+            group_valid_values = group_tradable_values.dropna()
+            
+            # 判断是否需要回退到全市场
+            if len(group_valid_values) < min_group_size:
+                # 样本数不足，使用全市场均值
+                result.loc[group_indices, output_col] = group_df[col] - global_mean
+            else:
+                # 使用组内均值
+                group_mean = group_valid_values.mean()
+                
+                # 如果组内均值为NaN，回退到全市场
+                if pd.isna(group_mean):
+                    result.loc[group_indices, output_col] = group_df[col] - global_mean
+                else:
+                    result.loc[group_indices, output_col] = group_df[col] - group_mean
+        
+        # 统计使用行业统计和全市场统计的样本数
+        if industry_col in result.columns and tradable_col in result.columns:
+            tradable_df = result[result[tradable_col] == 1]
+            industry_counts = tradable_df.groupby(industry_col)[col].count()
+            small_groups = (industry_counts < min_group_size).sum()
+            large_groups = (industry_counts >= min_group_size).sum()
+            
+            logger.debug(
+                f"  {col}: {large_groups} 个行业使用行业均值，"
+                f"{small_groups} 个行业回退全市场均值"
+            )
+    
+    logger.info(f"行业去均值完成")
+    
+    return result

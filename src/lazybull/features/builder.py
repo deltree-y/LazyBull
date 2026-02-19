@@ -1213,9 +1213,11 @@ class FeatureBuilder:
         self,
         features: pd.DataFrame
     ) -> pd.DataFrame:
-        """应用行业中性化（行业内 Z-Score）
+        """应用行业中性化（包含去均值和Z-Score两类）
         
-        对指定的特征列进行行业内 Z-Score 标准化
+        对指定的列进行行业中性化：
+        1. 去均值（demean）：收益率/标签列，neu_前缀
+        2. Z-Score：指标/特征列，_zscore后缀
         
         Args:
             features: 特征DataFrame，需包含 sw_name, tradable 列
@@ -1223,34 +1225,7 @@ class FeatureBuilder:
         Returns:
             添加了行业中性化列的DataFrame
         """
-        from ..factors.normalization import industry_neutralization
-        
-        # 定义需要行业中性化的列白名单
-        neutralization_columns = [
-            'pe_ttm',           # 市盈率
-            'pb',               # 市净率
-            'bp',               # 市净率倒数
-            'dv_ttm',          # 股息率
-            'log_total_mv',    # 对数总市值
-            'amount_ma20',     # 20日均成交额
-            'turnover_rate',   # 换手率
-            'net_mf_amount',   # 净资金流入
-            'ret_20',          # 20日收益率
-            'ma_deviation_20', # 20日均线偏离度
-        ]
-        
-        # 检查哪些列存在
-        existing_columns = [col for col in neutralization_columns if col in features.columns]
-        
-        # 添加波动率列（volatility_5, volatility_10, volatility_20）
-        for window in self.lookback_windows:
-            vol_col = f'volatility_{window}'
-            if vol_col in features.columns:
-                existing_columns.append(vol_col)
-        
-        if len(existing_columns) == 0:
-            logger.warning("没有找到需要中性化的特征列")
-            return features
+        from ..factors.normalization import industry_demean, industry_neutralization
         
         # 检查必要的列是否存在
         if 'sw_name' not in features.columns:
@@ -1263,25 +1238,106 @@ class FeatureBuilder:
         if 'tradable' not in features.columns:
             logger.warning("缺少 tradable 列，将使用全部样本进行统计")
         
-        logger.info(f"开始行业中性化：{len(existing_columns)} 个特征")
-        logger.debug(f"中性化特征列表：{existing_columns}")
+        result = features.copy()
         
-        try:
-            result = industry_neutralization(
-                features,
-                columns=existing_columns,
-                industry_col='sw_name',
-                tradable_col='tradable',
-                min_group_size=5,
-                prefix='neu_',
-                inplace=False
-            )
+        # ========================================
+        # 1. 去均值（demean）中性化：收益率/标签列
+        # ========================================
+        # 适用列：y_ret_5, y_ret_10, y_ret_20, ret_5, ret_10, ret_20
+        # 命名规则：neu_ 前缀
+        demean_columns = []
+        
+        # 标签列
+        for horizon in self.horizons:
+            label_col = f'y_ret_{horizon}'
+            if label_col in result.columns:
+                demean_columns.append(label_col)
+        
+        # 历史收益列
+        for window in self.lookback_windows:
+            ret_col = f'ret_{window}'
+            if ret_col in result.columns:
+                demean_columns.append(ret_col)
+        
+        if len(demean_columns) > 0:
+            logger.info(f"开始行业去均值：{len(demean_columns)} 个收益率/标签列")
+            logger.debug(f"去均值列表：{demean_columns}")
             
-            # 统计新增的列
-            new_cols = [col for col in result.columns if col.startswith('neu_')]
-            logger.info(f"行业中性化完成，新增 {len(new_cols)} 个特征列")
+            try:
+                result = industry_demean(
+                    result,
+                    columns=demean_columns,
+                    industry_col='sw_name',
+                    tradable_col='tradable',
+                    min_group_size=5,
+                    prefix='neu_',
+                    inplace=False
+                )
+                
+                # 统计新增的列
+                new_cols = [f'neu_{col}' for col in demean_columns]
+                actual_new_cols = [col for col in new_cols if col in result.columns]
+                logger.info(f"去均值完成，新增 {len(actual_new_cols)} 列")
+            except Exception as e:
+                logger.error(f"行业去均值失败：{e}")
+        else:
+            logger.info("没有找到需要去均值的收益率/标签列")
+        
+        # ========================================
+        # 2. Z-Score 中性化：指标/特征列
+        # ========================================
+        # 白名单（注意：从白名单中移除了 ret_20，因为用户明确只要去均值版）
+        zscore_columns = [
+            'pe_ttm',           # 市盈率
+            'pb',               # 市净率
+            'bp',               # 市净率倒数
+            'dv_ttm',          # 股息率
+            'log_total_mv',    # 对数总市值
+            'amount_ma20',     # 20日均成交额
+            'turnover_rate',   # 换手率
+            'net_mf_amount',   # 净资金流入
+            'ma_deviation_20', # 20日均线偏离度
+        ]
+        
+        # 检查哪些列存在
+        existing_zscore_columns = [col for col in zscore_columns if col in result.columns]
+        
+        # 添加波动率列（volatility_5, volatility_10, volatility_20）
+        for window in self.lookback_windows:
+            vol_col = f'volatility_{window}'
+            if vol_col in result.columns:
+                existing_zscore_columns.append(vol_col)
+        
+        if len(existing_zscore_columns) > 0:
+            logger.info(f"开始行业内 Z-Score：{len(existing_zscore_columns)} 个特征")
+            logger.debug(f"Z-Score 列表：{existing_zscore_columns}")
             
-            return result
-        except Exception as e:
-            logger.error(f"行业中性化失败：{e}")
-            return features
+            try:
+                result = industry_neutralization(
+                    result,
+                    columns=existing_zscore_columns,
+                    industry_col='sw_name',
+                    tradable_col='tradable',
+                    min_group_size=5,
+                    prefix='',  # 不使用前缀，而是使用后缀
+                    inplace=False
+                )
+                
+                # 将 neu_ 前缀改为 _zscore 后缀
+                for col in existing_zscore_columns:
+                    old_col = f'neu_{col}'
+                    new_col = f'{col}_zscore'
+                    if old_col in result.columns:
+                        result[new_col] = result[old_col]
+                        result.drop(columns=[old_col], inplace=True)
+                
+                    # 统计新增的列
+                new_cols = [f'{col}_zscore' for col in existing_zscore_columns]
+                actual_new_cols = [col for col in new_cols if col in result.columns]
+                logger.info(f"Z-Score 完成，新增 {len(actual_new_cols)} 列")
+            except Exception as e:
+                logger.error(f"行业内 Z-Score 失败：{e}")
+        else:
+            logger.info("没有找到需要 Z-Score 的特征列")
+        
+        return result
