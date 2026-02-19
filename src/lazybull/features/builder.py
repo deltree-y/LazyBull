@@ -84,7 +84,9 @@ class FeatureBuilder:
         daily_basic_data: Optional[pd.DataFrame] = None,
         moneyflow_data: Optional[pd.DataFrame] = None,
         suspend_info: Optional[pd.DataFrame] = None,
-        limit_info: Optional[pd.DataFrame] = None
+        limit_info: Optional[pd.DataFrame] = None,
+        shenwan_industry: Optional[pd.DataFrame] = None,
+        apply_industry_neutralization: bool = False
     ) -> pd.DataFrame:
         """构建单个交易日的截面特征和标签
         
@@ -101,6 +103,8 @@ class FeatureBuilder:
                          新版API格式：ts_code, trade_date, suspend_type, suspend_timing
                          旧版格式（兼容）：ts_code, suspend_date, resume_date
             limit_info: 涨跌停价格DataFrame（可选）
+            shenwan_industry: 申万行业分类DataFrame（可选），包含 ts_code, sw_code, sw_name
+            apply_industry_neutralization: 是否应用行业中性化，默认False
             
         Returns:
             特征DataFrame，包含 trade_date, ts_code, 特征列, 标签列, 标记列
@@ -160,6 +164,10 @@ class FeatureBuilder:
         # 6. 合并特征和标签
         result = features.merge(labels, on=['trade_date', 'ts_code'], how='inner')
         
+        # 6.5 合并申万行业分类
+        if shenwan_industry is not None:
+            result = self._merge_shenwan_industry(result, shenwan_industry)
+        
         # 7. 添加过滤标记
         result = self._add_filter_flags(
             result,
@@ -178,6 +186,10 @@ class FeatureBuilder:
         
         # 9. 应用过滤规则
         result = self._apply_filters(result)
+        
+        # 10. 应用行业中性化（如果启用）
+        if apply_industry_neutralization and shenwan_industry is not None:
+            result = self._apply_industry_neutralization(result)
         
         logger.info(f"{trade_date} 特征构建完成: {len(result)} 个样本")
         
@@ -1137,3 +1149,129 @@ class FeatureBuilder:
         logger.info(f"过滤后样本数: {len(result)}")
         
         return result
+    
+    def _merge_shenwan_industry(
+        self,
+        features: pd.DataFrame,
+        shenwan_industry: pd.DataFrame
+    ) -> pd.DataFrame:
+        """合并申万行业分类信息
+        
+        Args:
+            features: 特征DataFrame
+            shenwan_industry: 申万行业分类DataFrame，包含 ts_code, sw_code, sw_name
+            
+        Returns:
+            合并了行业信息的DataFrame
+        """
+        if shenwan_industry is None or len(shenwan_industry) == 0:
+            logger.warning("申万行业分类数据为空，跳过合并")
+            return features
+        
+        # 选择需要的列
+        industry_cols = ['ts_code', 'sw_code', 'sw_name']
+        existing_cols = [col for col in industry_cols if col in shenwan_industry.columns]
+        
+        if len(existing_cols) < 2:  # 至少需要 ts_code + 一个行业字段
+            logger.warning(f"申万行业数据缺少必要字段，现有列：{shenwan_industry.columns.tolist()}")
+            return features
+        
+        # 合并行业信息
+        result = features.merge(
+            shenwan_industry[existing_cols],
+            on='ts_code',
+            how='left'
+        )
+        
+        # 生成行业ID（整数编码）
+        if 'sw_name' in result.columns:
+            from ..factors.industry import generate_industry_encoding
+            industry_id_df = generate_industry_encoding(
+                result[['ts_code', 'trade_date', 'sw_name']],
+                industry_col='sw_name'
+            )
+            result = result.merge(industry_id_df, on=['ts_code', 'trade_date'], how='left')
+            
+            # 统计行业分布
+            if self.verbose:
+                industry_counts = result['sw_name'].value_counts()
+                logger.info(f"行业分布（前5）：\n{industry_counts.head()}")
+        
+        return result
+    
+    def _apply_industry_neutralization(
+        self,
+        features: pd.DataFrame
+    ) -> pd.DataFrame:
+        """应用行业中性化（行业内 Z-Score）
+        
+        对指定的特征列进行行业内 Z-Score 标准化
+        
+        Args:
+            features: 特征DataFrame，需包含 sw_name, tradable 列
+            
+        Returns:
+            添加了行业中性化列的DataFrame
+        """
+        from ..factors.normalization import industry_neutralization
+        
+        # 定义需要行业中性化的列白名单
+        neutralization_columns = [
+            'pe_ttm',           # 市盈率
+            'pb',               # 市净率
+            'bp',               # 市净率倒数
+            'dv_ttm',          # 股息率
+            'log_total_mv',    # 对数总市值
+            'amount_ma20',     # 20日均成交额
+            'turnover_rate',   # 换手率
+            'net_mf_amount',   # 净资金流入
+            'ret_20',          # 20日收益率
+            'ma_deviation_20', # 20日均线偏离度
+        ]
+        
+        # 检查哪些列存在
+        existing_columns = [col for col in neutralization_columns if col in features.columns]
+        
+        # 添加波动率列（volatility_5, volatility_10, volatility_20）
+        for window in self.lookback_windows:
+            vol_col = f'volatility_{window}'
+            if vol_col in features.columns:
+                existing_columns.append(vol_col)
+        
+        if len(existing_columns) == 0:
+            logger.warning("没有找到需要中性化的特征列")
+            return features
+        
+        # 检查必要的列是否存在
+        if 'sw_name' not in features.columns:
+            logger.error(
+                "缺少申万行业列 sw_name，无法进行行业中性化。\n"
+                "请确保已加载申万行业分类数据并通过参数传递给 build_features_for_day"
+            )
+            return features
+        
+        if 'tradable' not in features.columns:
+            logger.warning("缺少 tradable 列，将使用全部样本进行统计")
+        
+        logger.info(f"开始行业中性化：{len(existing_columns)} 个特征")
+        logger.debug(f"中性化特征列表：{existing_columns}")
+        
+        try:
+            result = industry_neutralization(
+                features,
+                columns=existing_columns,
+                industry_col='sw_name',
+                tradable_col='tradable',
+                min_group_size=5,
+                prefix='neu_',
+                inplace=False
+            )
+            
+            # 统计新增的列
+            new_cols = [col for col in result.columns if col.startswith('neu_')]
+            logger.info(f"行业中性化完成，新增 {len(new_cols)} 个特征列")
+            
+            return result
+        except Exception as e:
+            logger.error(f"行业中性化失败：{e}")
+            return features

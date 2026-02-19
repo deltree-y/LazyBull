@@ -127,7 +127,16 @@ def ensure_features_for_date(
         logger.info(f"clean 日线数据: {len(daily_clean)} 条记录")
         logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
         
-        # 6. 构建特征（无需传递 adj_factor，clean 数据已包含复权价格）
+        # 6. 加载申万行业分类数据（如果存在）
+        shenwan_industry = loader.load_shenwan_industry()
+        if shenwan_industry is None:
+            logger.warning("未找到申万行业分类数据，将跳过行业中性化")
+            apply_neutralization = False
+        else:
+            apply_neutralization = True
+            logger.info(f"已加载申万行业分类数据: {len(shenwan_industry)} 条映射")
+        
+        # 7. 构建特征（无需传递 adj_factor，clean 数据已包含复权价格）
         features_df = builder.build_features_for_day(
             trade_date=trade_date,
             trade_cal=trade_cal,
@@ -137,10 +146,12 @@ def ensure_features_for_date(
             daily_basic_data=daily_basic_clean,
             moneyflow_data=moneyflow_clean,
             suspend_info=None,
-            limit_info=None
+            limit_info=None,
+            shenwan_industry=shenwan_industry,
+            apply_industry_neutralization=apply_neutralization
         )
         
-        # 7. 保存结果
+        # 8. 保存结果
         if len(features_df) > 0:
             storage.save_cs_train_day(features_df, trade_date)#, has_label=builder.require_label)
             logger.info(f"已保存 features 数据: {len(features_df)} 条")

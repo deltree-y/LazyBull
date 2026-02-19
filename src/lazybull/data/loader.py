@@ -392,3 +392,17 @@ class DataLoader:
                 df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
         
         return df
+    
+    def load_shenwan_industry(self) -> Optional[pd.DataFrame]:
+        """加载申万行业分类数据
+        
+        Returns:
+            申万行业分类DataFrame，包含 ts_code, sw_code, sw_name 等字段
+        """
+        df = self.storage.load_raw("shenwan_industry")
+        if df is None:
+            logger.warning(
+                "未找到申万行业分类数据！\n"
+                "请先运行: python scripts/update_basic_data.py --only-shenwan --force"
+            )
+        return df

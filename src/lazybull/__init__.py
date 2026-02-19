@@ -3,7 +3,7 @@ LazyBull - A股量化研究与回测框架
 专注价值红利策略方向
 """
 
-__version__ = "0.9.0"  # v0.9.0 特征工程重构，引入 factors 模块
+__version__ = "0.10.0"  # v0.10.0 行业中性化与申万行业分类接入
 __author__ = "deltree-y"
 
 from pathlib import Path
