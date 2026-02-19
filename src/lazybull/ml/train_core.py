@@ -115,8 +115,15 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     filter_columns = ['is_st', 'is_suspended']
     # 其他非特征列
     other_exclude_columns = ['tradable', 'list_date', 'list_days', 'is_limit_up', 'is_limit_down', 'industry']
+    # 临时过滤掉的列
+    temp_test_exclude_columns = ['total_mv', 'circ_mv', 'log_circ_mv'] +\
+                                ['kdj_k', 'kdj_d'] +\
+                                ['bb_upper', 'bb_lower'] +\
+                                ['macd_dif', 'macd_dea'] +\
+                                ['ps_ttm', 'ep_ttm'] +\
+                                ['amount_ma10', 'amount_ma20', 'volume_ratio', 'log_circ_mv', 'net_mf_amount_mean_5', 'net_mf_amount_mean_20', 'vol_burst_10', 'vol_burst_20', 'kdj_d', 'macd_dea', 'bb_upper', 'bb_lower']
     
-    exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns
+    exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns + temp_test_exclude_columns
     
     # 获取特征列
     feature_columns = [col for col in df.columns if col not in exclude_columns]

@@ -186,3 +186,47 @@ def cross_sectional_zscore(
             result = zscore_transform(df[value_col], ddof=ddof)
     
     return result
+
+
+def drop_high_correlation_features(df, threshold=0.9):
+    """
+    自动识别并建议删除高相关性特征
+    """
+    # 1. 计算相关系数矩阵
+    #print(f"columns: {df.columns}")
+    corr_matrix = df.corr().abs()
+    
+    # 2. 选取上三角矩阵（避免重复比较）
+    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+    
+    # 3. 找出相关系数大于阈值的列
+    to_drop = [column for column in upper.columns if any(upper[column] > threshold)]
+    
+    # 4. 打印报告
+    print(f"--- 发现高相关性特征 (阈值 > {threshold}) ---")
+    for col in to_drop:
+        # 找到与该列相关的列名
+        correlated_with = upper.index[upper[col] > threshold].tolist()
+        print(f"特征 [{col}] 与以下特征高度冗余: {correlated_with}")
+        
+    return to_drop
+
+def analyze_feature_importance(X_train, y_train):
+    """
+    使用 SHAP 分析特征对收益率预测的真实贡献度
+    """
+    import shap
+    import lightgbm as lgb    
+    # 1. 快速训练一个基础模型 (以 LightGBM 为例)
+    model = lgb.LGBMRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # 2. 计算 SHAP 值
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_train)
+    
+    # 3. 绘制特征贡献排名图
+    # 这张图会告诉你哪些指标是真大腿，哪些是滥竽充数
+    shap.summary_plot(shap_values, X_train, plot_type="bar")
+    
+    return shap_values
