@@ -101,6 +101,19 @@
 | alpha_industry_10 | float | 10日行业alpha | ret_10(t) - mean_by_industry(ret_10(t)) |
 | alpha_industry_20 | float | 20日行业alpha | ret_20(t) - mean_by_industry(ret_20(t)) |
 
+**申万行业分类字段（v0.11.0新增）**：
+
+| 字段名 | 类型 | 说明 | 数据来源 |
+|--------|------|------|----------|
+| sw_code | str | 申万一级行业代码 | TuShare index_classify + index_member |
+| sw_name | str | 申万一级行业名称 | TuShare index_classify + index_member |
+| sw_l1_id | int | 申万一级行业整数编码（稳定映射） | 基于 sw_name 生成 |
+
+**说明**：
+- v0.11.0 起使用申万行业分类（SW2021版本），不再使用 stock_basic.industry
+- 申万行业数据通过 `scripts/update_basic_data.py --only-shenwan` 更新
+- sw_l1_id 编码稳定：同一 sw_name 始终映射到相同的整数ID
+
 #### 8. 动量加速度特征 (v0.9.0新增)
 
 | 字段名 | 类型 | 说明 | 计算方式 |
@@ -148,6 +161,58 @@
 | bb_lower | float | 布林带下轨 | 窗口=20, std=2 |
 | bb_width | float | 布林带宽度 | 窗口=20, std=2 |
 | bb_pct | float | 布林带%B | 窗口=20, std=2 |
+
+#### 11. 行业中性化字段 (v0.11.0新增)
+
+LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
+
+**类型1：行业去均值（Demean）- 收益率/标签列**
+
+适用于收益率和标签列，目的是消除行业间收益差异。
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| neu_y_ret_5 | float | 行业中性化后的5日标签 | y_ret_5 - mean_industry(y_ret_5) |
+| neu_y_ret_10 | float | 行业中性化后的10日标签 | y_ret_10 - mean_industry(y_ret_10) |
+| neu_y_ret_20 | float | 行业中性化后的20日标签 | y_ret_20 - mean_industry(y_ret_20) |
+| neu_ret_5 | float | 行业中性化后的5日收益 | ret_5 - mean_industry(ret_5) |
+| neu_ret_10 | float | 行业中性化后的10日收益 | ret_10 - mean_industry(ret_10) |
+| neu_ret_20 | float | 行业中性化后的20日收益 | ret_20 - mean_industry(ret_20) |
+
+**命名规则**：`neu_` 前缀
+
+**类型2：行业内Z-Score - 指标/特征列**
+
+适用于估值、市值、流动性等指标，目的是标准化行业内相对水平。
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| pe_ttm_zscore | float | 市盈率行业内Z-Score | (pe_ttm - mean_industry) / std_industry |
+| pb_zscore | float | 市净率行业内Z-Score | (pb - mean_industry) / std_industry |
+| bp_zscore | float | 市净率倒数行业内Z-Score | (bp - mean_industry) / std_industry |
+| dv_ttm_zscore | float | 股息率行业内Z-Score | (dv_ttm - mean_industry) / std_industry |
+| log_total_mv_zscore | float | 对数总市值行业内Z-Score | (log_total_mv - mean_industry) / std_industry |
+| amount_ma20_zscore | float | 20日均成交额行业内Z-Score | (amount_ma20 - mean_industry) / std_industry |
+| turnover_rate_zscore | float | 换手率行业内Z-Score | (turnover_rate - mean_industry) / std_industry |
+| volatility_5_zscore | float | 5日波动率行业内Z-Score | (volatility_5 - mean_industry) / std_industry |
+| volatility_10_zscore | float | 10日波动率行业内Z-Score | (volatility_10 - mean_industry) / std_industry |
+| volatility_20_zscore | float | 20日波动率行业内Z-Score | (volatility_20 - mean_industry) / std_industry |
+| net_mf_amount_zscore | float | 净资金流入行业内Z-Score | (net_mf_amount - mean_industry) / std_industry |
+| ma_deviation_20_zscore | float | 20日均线偏离度行业内Z-Score | (ma_deviation_20 - mean_industry) / std_industry |
+
+**命名规则**：`_zscore` 后缀
+
+**通用规则**：
+- **统计范围**：仅使用 `tradable==1` 的样本计算行业统计量（均值/标准差）
+- **小样本处理**：当行业内可交易样本数 < 5 时，回退使用全市场统计量
+- **行业列**：基于 `sw_name`（申万一级行业名称）进行分组
+- **启用方式**：在 FeatureBuilder 中设置 `apply_industry_neutralization=True`
+
+**使用建议**：
+- **训练标签**：推荐使用 `neu_y_ret_20` 作为训练标签（v0.11.0默认）
+- **特征选择**：可同时使用原始特征和中性化特征，让模型自主学习
+- **行业轮动**：使用原始收益率特征可捕捉行业轮动效应
+- **个股选择**：使用中性化特征可专注行业内个股选择能力
 
 ### 过滤与标记字段
 

@@ -2,6 +2,141 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-02-19
+
+### 重大变更 (Breaking Changes)
+
+本版本完善行业中性化特征工程，**训练默认标签变更**。需要重新构建 features 并重训模型。
+
+### Added
+
+- **完整行业中性化实现**
+  - 新增 `industry_demean()` 函数 - 行业去均值中性化（`src/lazybull/factors/normalization.py`）
+    - 适用于收益率/标签列：`y_ret_5/10/20`, `ret_5/10/20`
+    - 命名规则：`neu_` 前缀（如 `neu_y_ret_20`）
+    - 公式：`neu_x = x - mean(x within industry)`
+    - 统计范围：仅 `tradable==1`，小样本（<5）回退全市场均值
+  - 完善 `_apply_industry_neutralization()` 方法 - 整合两类中性化
+    - 去均值：收益率/标签列 → `neu_` 前缀
+    - Z-Score：指标/特征列 → `_zscore` 后缀
+    - 从 Z-Score 白名单移除 `ret_20`（用户明确只要去均值版本）
+  
+- **申万行业分类字段**（已在 v0.10.0 实现，本版本完善集成）
+  - `sw_code`: 申万一级行业代码
+  - `sw_name`: 申万一级行业名称（用于中性化分组）
+  - `sw_l1_id` / `industry_id`: 整数编码（稳定映射）
+
+- **新增中性化特征列**
+  - 去均值列：`neu_y_ret_5/10/20`, `neu_ret_5/10/20`
+  - Z-Score列：`pe_ttm_zscore`, `pb_zscore`, `bp_zscore`, `dv_ttm_zscore`, 
+    `log_total_mv_zscore`, `amount_ma20_zscore`, `turnover_rate_zscore`,
+    `volatility_5/10/20_zscore`, `net_mf_amount_zscore`, `ma_deviation_20_zscore`
+
+### Changed
+
+- **训练默认标签变更**
+  - 旧默认：`y_ret_5`（未中性化的5日收益）
+  - 新默认：`neu_y_ret_20`（行业中性化后的20日收益）
+  - 更新 `scripts/train_ml_model.py` 默认参数和帮助信息
+  - 支持的标签选项扩展：`y_ret_5/10/20`, `neu_y_ret_5/10/20`
+
+- **行业中性化白名单优化**
+  - 从 Z-Score 白名单移除 `ret_20`（只保留 `neu_ret_20` 去均值版本）
+  - 保持其他指标列的 Z-Score 中性化
+
+### Testing
+
+- 新增 `tests/test_industry_demean.py` - 包含8个测试用例
+  - 验证行业去均值基本功能
+  - 验证 tradable==1 过滤
+  - 验证小样本回退全市场
+  - 验证缺失列和行业列错误处理
+  - 验证多列同时去均值
+  - 验证命名约定（neu_ vs _zscore）
+
+### Documentation
+
+- 新增 `docs/PR/industry_neutralization_v0.11.0.md` - 本版本完整说明
+  - 申万行业分类接入方法
+  - 两类中性化对比（去均值 vs Z-Score）
+  - 训练默认标签变更说明
+  - 重建 features 与重训模型命令
+  - 扩展与验证指南
+  - 常见问题排查
+  
+- 新增 `docs/guide/industry_neutralization_extension_guide.md` - 扩展指南
+  - 如何扩展中性化白名单
+  - 如何验证中性化效果
+  - IC 分析方法
+  
+- 更新 `docs/features_schema.md`
+  - 新增申万行业分类字段说明
+  - 新增行业中性化字段说明（去均值 + Z-Score）
+  - 详细说明两类中性化的区别和用途
+
+### Migration Guide
+
+**从 v0.10.0 升级到 v0.11.0**：
+
+1. 更新代码：`git pull`
+2. 确保申万行业数据已下载（v0.10.0已支持）：
+   ```bash
+   python scripts/update_basic_data.py --only-shenwan --force
+   ```
+3. 重新构建特征（启用行业中性化）：
+   ```bash
+   python scripts/build_features.py \
+       --start-date 20230101 --end-date 20231231 \
+       --apply-industry-neutralization
+   ```
+4. 重新训练模型（自动使用新默认标签 `neu_y_ret_20`）：
+   ```bash
+   python scripts/train_ml_model.py \
+       --start-date 20230101 --end-date 20231130
+   ```
+
+**不兼容说明**：
+- 旧版本构建的特征文件不包含去均值列（`neu_*`），需重新构建
+- 训练脚本默认标签已改变，旧脚本使用新代码会自动使用新默认标签
+
+---
+
+## [0.10.0] - 2026-02-18
+
+### Added
+
+- **申万行业分类数据接入**
+  - TuShare `index_classify` + `index_member` 接口
+  - 申万一级行业分类（SW2021版本，约30个行业）
+  - 数据存储在 `data/raw/shenwan_industry.parquet`
+  - 更新脚本：`scripts/update_basic_data.py --only-shenwan`
+
+- **行业内 Z-Score 中性化**（初版实现）
+  - `src/lazybull/factors/normalization.py` - 中性化模块
+  - `industry_neutralization()` - 行业内 Z-Score 标准化
+  - `cross_sectional_zscore()` - 截面 Z-Score 标准化
+  - FeatureBuilder 集成：`apply_industry_neutralization=True`
+
+- **数据清洗与加载**
+  - `DataCleaner.clean_shenwan_industry()` - 清洗申万行业数据
+  - `DataLoader.load_shenwan_industry()` - 加载申万行业数据
+  - `TushareClient.get_index_classify()` - 获取指数分类
+  - `TushareClient.get_index_member()` - 获取指数成分股
+
+### Testing
+
+- 新增 `tests/test_industry_neutralization.py`
+  - 验证截面 Z-Score 基本功能
+  - 验证行业内 Z-Score 中性化
+  - 验证小样本回退全市场统计
+
+### Documentation
+
+- 更新 `docs/features_schema.md` - 说明行业特征字段
+- 新增行业中性化相关文档
+
+---
+
 ## [0.9.0] - 2026-02-18
 
 ### 重大变更 (Breaking Changes)
