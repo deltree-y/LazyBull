@@ -5,13 +5,13 @@ XGBoost 模型训练脚本
 
 功能：
 - 读取指定日期区间的特征数据
-- 训练 XGBoost 回归模型（标签为 y_ret_5）
+- 训练 XGBoost 回归模型（默认标签为 neu_y_ret_20：行业中性化后的20日收益）
 - 自动保存模型到 data/models 目录（使用 joblib）
 - 自动递增版本号（v1, v2, ...）
 - 记录训练元数据到 model_registry.json
 
 使用示例：
-    # 使用默认参数训练
+    # 使用默认参数训练（默认标签为 neu_y_ret_20）
     python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231
     
     # 指定超参数
@@ -85,15 +85,15 @@ def main():
     parser.add_argument(
         "--label-column",
         type=str,
-        default="y_ret_5",
-        help="标签列名，默认 y_ret_5"
+        default="neu_y_ret_20",
+        help="标签列名，默认 neu_y_ret_20（行业中性化后的20日收益）"
     )
     parser.add_argument(
         "--label",
         type=str,
         default=None,
-        choices=["y_ret_5", "y_ret_10", "y_ret_20"],
-        help="标签选择（y_ret_5|y_ret_10|y_ret_20），默认 y_ret_5。优先级高于 --label-column"
+        choices=["y_ret_5", "y_ret_10", "y_ret_20", "neu_y_ret_5", "neu_y_ret_10", "neu_y_ret_20"],
+        help="标签选择，默认 neu_y_ret_20。优先级高于 --label-column"
     )
     
     # 任务类型和标签变换参数
