@@ -12,14 +12,14 @@ def test_load_industry_mapping_basic():
     """测试基本的行业映射加载"""
     stock_basic = pd.DataFrame({
         'ts_code': ['000001.SZ', '000002.SZ', '600000.SH'],
-        'industry': ['银行', '房地产', '银行']
+        'sw_industry': ['国有大型银行', '房地产开发', '国有大型银行']
     })
     
     mapping = load_industry_mapping(stock_basic)
     
-    assert mapping['000001.SZ'] == '银行'
-    assert mapping['000002.SZ'] == '房地产'
-    assert mapping['600000.SH'] == '银行'
+    assert mapping['000001.SZ'] == '国有大型银行'
+    assert mapping['000002.SZ'] == '房地产开发'
+    assert mapping['600000.SH'] == '国有大型银行'
     assert len(mapping) == 3
 
 
@@ -27,12 +27,12 @@ def test_load_industry_mapping_with_missing():
     """测试行业缺失的情况"""
     stock_basic = pd.DataFrame({
         'ts_code': ['000001.SZ', '000002.SZ', '600000.SH'],
-        'industry': ['银行', None, '']
+        'sw_industry': ['国有大型银行', None, '']
     })
     
     mapping = load_industry_mapping(stock_basic)
     
-    assert mapping['000001.SZ'] == '银行'
+    assert mapping['000001.SZ'] == '国有大型银行'
     assert mapping['000002.SZ'] == '未知行业'
     assert mapping['600000.SH'] == '未知行业'
 
@@ -50,11 +50,11 @@ def test_load_industry_mapping_missing_columns():
         'ts_code': ['000001.SZ'],
     })
     
-    with pytest.raises(ValueError, match="必须包含 industry 列"):
+    with pytest.raises(ValueError, match="必须包含 sw_industry 列"):
         load_industry_mapping(stock_basic)
     
     stock_basic = pd.DataFrame({
-        'industry': ['银行'],
+        'sw_industry': ['银行I'],
     })
     
     with pytest.raises(ValueError, match="必须包含 ts_code 列"):

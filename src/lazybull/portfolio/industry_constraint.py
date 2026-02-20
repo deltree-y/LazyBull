@@ -12,7 +12,8 @@ def load_industry_mapping(stock_basic: pd.DataFrame, verbose: bool = False) -> D
     """从 stock_basic 数据加载行业映射
     
     Args:
-        stock_basic: 股票基本信息 DataFrame，必须包含 ts_code 和 industry 列
+        stock_basic: 股票基本信息 DataFrame，必须包含 ts_code 和 sw_industry 列
+            sw_industry 为申万**二级**行业名称（v0.12.0+ 统一字段）
         verbose: 是否输出详细日志
         
     Returns:
@@ -29,8 +30,8 @@ def load_industry_mapping(stock_basic: pd.DataFrame, verbose: bool = False) -> D
     if 'ts_code' not in stock_basic.columns:
         raise ValueError("stock_basic 必须包含 ts_code 列")
     
-    if 'sw_name' not in stock_basic.columns:
-        raise ValueError("stock_basic 必须包含 sw_name 列")
+    if 'sw_industry' not in stock_basic.columns:
+        raise ValueError("stock_basic 必须包含 sw_industry 列")
     
     # 构建映射：将 NaN/None 映射为 "未知行业"
     industry_mapping = {}
@@ -38,7 +39,7 @@ def load_industry_mapping(stock_basic: pd.DataFrame, verbose: bool = False) -> D
     
     for _, row in stock_basic.iterrows():
         ts_code = row['ts_code']
-        industry = row['sw_name']  # 使用申万行业分类
+        industry = row['sw_industry']  # 使用申万二级行业分类
         
         # 处理缺失值
         if pd.isna(industry) or industry == '' or industry is None:
