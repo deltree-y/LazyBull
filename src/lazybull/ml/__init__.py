@@ -12,6 +12,7 @@ from .run_logger import (
     write_training_run_to_csv,
     create_training_run_record_from_training_session
 )
+from .train_core import build_rank_sample_weights
 
 __all__ = [
     "ModelRegistry",
@@ -21,5 +22,6 @@ __all__ = [
     "summarize_daily_metrics",
     "TrainingRunRecord",
     "write_training_run_to_csv",
-    "create_training_run_record_from_training_session"
+    "create_training_run_record_from_training_session",
+    "build_rank_sample_weights",
 ]

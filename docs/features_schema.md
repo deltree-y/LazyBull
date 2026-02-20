@@ -101,18 +101,27 @@
 | alpha_industry_10 | float | 10日行业alpha | ret_10(t) - mean_by_industry(ret_10(t)) |
 | alpha_industry_20 | float | 20日行业alpha | ret_20(t) - mean_by_industry(ret_20(t)) |
 
-**申万行业分类字段（v0.11.0新增）**：
+**申万行业分类字段（v0.12.0 切换为二级行业）**：
 
 | 字段名 | 类型 | 说明 | 数据来源 |
 |--------|------|------|----------|
-| sw_code | str | 申万一级行业代码 | TuShare index_classify + index_member |
-| sw_name | str | 申万一级行业名称 | TuShare index_classify + index_member |
-| sw_l1_id | int | 申万一级行业整数编码（稳定映射） | 基于 sw_name 生成 |
+| sw_industry | str | 申万**二级**行业名称（如 `银行I`） | TuShare index_classify（level=2）+ index_member |
+| sw_industry_code | str | 申万**二级**行业指数代码（如 `110101`） | TuShare index_classify（level=2） |
+| sw_industry_id | int | 申万**二级**行业整数编码（稳定映射） | 基于 sw_industry 排序生成 |
+
+**字段命名变更历史**：
+
+| 版本 | 旧字段名 | 新字段名 | 行业层级 |
+|---|---|---|---|
+| v0.10.0-v0.11.0 | sw_code / sw_name / industry_id | — | 一级（~30个） |
+| v0.12.0+ | — | sw_industry_code / sw_industry / sw_industry_id | 二级（~100个） |
 
 **说明**：
-- v0.11.0 起使用申万行业分类（SW2021版本），不再使用 stock_basic.industry
-- 申万行业数据通过 `scripts/update_basic_data.py --only-shenwan` 更新
-- sw_l1_id 编码稳定：同一 sw_name 始终映射到相同的整数ID
+- v0.12.0 起使用申万**二级**行业分类（SW2021版本），粒度更细，中性化效果更好
+- v0.11.0 及更早版本的旧字段（`sw_code`/`sw_name`/`industry_id`）不再出现在 FeatureBuilder 输出中
+- 申万行业数据通过 `scripts/update_basic_data.py --only-shenwan` 更新（需传入 level=2 参数）
+- sw_industry_id 编码稳定：同一 sw_industry 名称始终映射到相同的整数ID
+- 中性化分组字段：`sw_industry`（原为 `sw_name`）
 
 #### 8. 动量加速度特征 (v0.9.0新增)
 
@@ -205,7 +214,7 @@ LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
 **通用规则**：
 - **统计范围**：仅使用 `tradable==1` 的样本计算行业统计量（均值/标准差）
 - **小样本处理**：当行业内可交易样本数 < 5 时，回退使用全市场统计量
-- **行业列**：基于 `sw_name`（申万一级行业名称）进行分组
+- **行业列**：基于 `sw_industry`（申万**二级**行业名称，v0.12.0+）进行分组
 - **启用方式**：在 FeatureBuilder 中设置 `apply_industry_neutralization=True`
 
 **使用建议**：

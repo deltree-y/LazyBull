@@ -2,7 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.11.0] - 2026-02-19
+## [0.12.0] - 2026-02-20
+
+### 新增功能
+
+- **申万行业从一级切换到二级**
+  - `DataCleaner.clean_shenwan_industry()` 默认 `level_str='l2'`（原 `'l1'`）
+  - `FeatureBuilder._merge_shenwan_industry()` 输出字段重命名：
+    - `sw_name` -> `sw_industry`（申万二级行业名称）
+    - `sw_code` -> `sw_industry_code`（申万二级行业指数代码）
+    - `industry_id` -> `sw_industry_id`（稳定整数编码）
+  - 中性化分组字段由 `sw_name` 更新为 `sw_industry`
+  - 行业 alpha 计算使用 `sw_industry` 列（若存在）
+
+- **训练 rank-weight：Top/Bottom K 样本权重增强**
+  - 新增 `ml/train_core.py::build_rank_sample_weights()` 函数
+    - 按 `trade_date` 分组，每日 Top K / Bottom K 样本权重 = `top_weight`
+    - 退化处理：样本数 <= 2*topk 时全组赋予 top_weight
+  - `train_xgboost_model()` 新增 `sample_weight` 参数，传给 XGBoost fit
+  - `scripts/train_ml_model.py` 新增 CLI 参数：
+    - `--rank-weight-enabled`（默认开启）/ `--no-rank-weight`
+    - `--rank-weight-topk`（默认 30）
+    - `--rank-weight-weight`（默认 5.0）
+  - rank-weight 配置记录到 `ml_train_runs.csv`（`rank_weight_enabled` / `rank_weight_topk` / `rank_weight_weight` 列）
+
+### 测试
+
+- 新增 `tests/test_sw_industry_l2.py`（11 个测试用例）
+  - 验证申万二级行业字段切换正确性
+  - 验证 sw_industry_id 编码稳定性
+- 新增 `tests/test_rank_sample_weight.py`（13 个测试用例）
+  - 验证单日/多日 Top/Bottom K 权重逻辑
+  - 验证多日分组独立不串
+  - 验证 K 大于样本数时的退化处理
+
+### 文档
+
+- 新增 `docs/PR/sw_industry_l2_and_rank_weight.md`：PR 说明文档
+- 新增 `docs/guide/rank_weight_guide.md`：rank-weight 使用与验证指南
+- 更新 `docs/features_schema.md`：行业字段说明（sw_industry* 统一命名）
+
+### Breaking Changes
+
+- 特征文件中行业字段重命名：`sw_name` -> `sw_industry`，`sw_code` -> `sw_industry_code`，`industry_id` -> `sw_industry_id`
+- 若已有历史特征文件，需重新运行 `build_features.py` 以生效
+- `DataCleaner.clean_shenwan_industry()` 默认级别从一级改为二级，若需一级行业需显式传 `level_str='l1'`
+
+
 
 ### 重大变更 (Breaking Changes)
 

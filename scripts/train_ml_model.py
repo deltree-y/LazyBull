@@ -52,7 +52,8 @@ from src.lazybull.ml.train_core import (
     transform_labels_cs_zscore,
     generate_classification_labels,
     train_xgboost_model,
-    evaluate_validation_daily
+    evaluate_validation_daily,
+    build_rank_sample_weights,
 )
 
 try:
@@ -174,6 +175,32 @@ def main():
         help="随机种子，默认 42"
     )
     
+    # rank-weight 参数：Top/Bottom K 样本增强权重
+    parser.add_argument(
+        "--rank-weight-enabled",
+        action="store_true",
+        default=True,
+        help="启用 Top/Bottom K 样本权重增强（默认开启）"
+    )
+    parser.add_argument(
+        "--no-rank-weight",
+        action="store_false",
+        dest="rank_weight_enabled",
+        help="禁用 rank-weight（覆盖 --rank-weight-enabled）"
+    )
+    parser.add_argument(
+        "--rank-weight-topk",
+        type=int,
+        default=30,
+        help="每日 Top/Bottom K 样本数，默认 30"
+    )
+    parser.add_argument(
+        "--rank-weight-weight",
+        type=float,
+        default=5.0,
+        help="Top/Bottom K 样本权重，默认 5.0"
+    )
+    
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -203,6 +230,10 @@ def main():
     logger.info(f"训练日期区间: {args.start_date} 至 {args.end_date}")
     logger.info(f"标签列: {args.label_column}")
     logger.info(f"数据目录: {args.data_root}")
+    logger.info(
+        f"rank-weight: {'已启用' if args.rank_weight_enabled else '已禁用'} "
+        f"（topk={args.rank_weight_topk}, weight={args.rank_weight_weight}）"
+    )
     
     try:
         # 初始化组件
@@ -265,11 +296,22 @@ def main():
         # 当 label_transform=cs_zscore 时，标签已在 cs_zscore 步骤中 winsorize，训练时不再 winsorize
         skip_label_winsorize = (args.task == "regression" and args.label_transform == "cs_zscore")
         
+        # 3.1. 构造样本权重（rank-weight：Top/Bottom K 增强）
+        rank_sample_weight = None
+        if args.rank_weight_enabled:
+            rank_sample_weight = build_rank_sample_weights(
+                df_train=df_train_split,
+                label_column=actual_label_column,
+                topk=args.rank_weight_topk,
+                top_weight=args.rank_weight_weight,
+            )
+        
         model, train_params, train_metrics, val_metrics = train_xgboost_model(
             X_train, y_train, X_val, y_val,
             task=args.task,
             skip_label_winsorize=skip_label_winsorize,
             scale_pos_weight=args.scale_pos_weight,
+            sample_weight=rank_sample_weight,
             n_estimators=args.n_estimators,
             max_depth=args.max_depth,
             learning_rate=args.learning_rate,
@@ -308,7 +350,11 @@ def main():
             "pos_quantile": args.pos_quantile if args.task == "classification" else None,
             "pos_topk": args.pos_topk if args.task == "classification" else None,
             # 记录 scale_pos_weight 是否手动指定
-            "scale_pos_weight_manual": args.scale_pos_weight is not None
+            "scale_pos_weight_manual": args.scale_pos_weight is not None,
+            # 记录 rank-weight 配置，便于回溯
+            "rank_weight_enabled": args.rank_weight_enabled,
+            "rank_weight_topk": args.rank_weight_topk if args.rank_weight_enabled else None,
+            "rank_weight_weight": args.rank_weight_weight if args.rank_weight_enabled else None,
         })
         
         # 4. 注册模型
