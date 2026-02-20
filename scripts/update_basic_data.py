@@ -189,26 +189,26 @@ def update_shenwan_industry(
             logger.info("提示：申万行业建议每季度更新一次")
             return
     
-    # 1. 获取申万一级行业指数列表
-    logger.info("获取申万一级行业指数列表...")
+    # 1. 获取申万二级行业指数列表
+    logger.info("获取申万二级行业指数列表...")
     try:
-        index_classify = client.get_index_classify(level="L1", src="SW2021")
+        index_classify = client.get_index_classify(level="L2", src="SW2021")
         logger.info(f"获取到 {len(index_classify)} 个申万指数")
         
-        # 筛选一级行业指数（通常指数代码为 801xxx.SI 格式）
+        # 筛选二级行业指数
         if 'index_code' in index_classify.columns:
-            sw_l1_indices = index_classify.copy()
-            logger.info(f"筛选出 {len(sw_l1_indices)} 个申万一级行业指数")
+            sw_l2_indices = index_classify.copy()
+            logger.info(f"筛选出 {len(sw_l2_indices)} 个申万二级行业指数")
         else:
             logger.warning("index_classify缺少index_code字段，使用全部指数")
-            sw_l1_indices = index_classify
+            sw_l2_indices = index_classify
     except Exception as e:
         logger.error(f"获取申万行业指数失败: {e}")
         logger.error("请确保TuShare账号有权限访问index_classify接口")
         return
     
-    if len(sw_l1_indices) == 0:
-        logger.warning("未找到申万一级行业指数")
+    if len(sw_l2_indices) == 0:
+        logger.warning("未找到申万二级行业指数")
         return
     
     # 2. 获取每个行业的成分股
@@ -216,7 +216,7 @@ def update_shenwan_industry(
     index_members = {}
     success_count = 0
     
-    for _, row in sw_l1_indices.iterrows():
+    for _, row in sw_l2_indices.iterrows():
         index_code = row['index_code']
         index_name = row.get('name', index_code)
         
@@ -234,7 +234,7 @@ def update_shenwan_industry(
             logger.warning(f"    获取失败：{e}")
             continue
     
-    logger.info(f"成功获取 {success_count}/{len(sw_l1_indices)} 个行业的成分股数据")
+    logger.info(f"成功获取 {success_count}/{len(sw_l2_indices)} 个行业的成分股数据")
     
     if success_count == 0:
         logger.error("未能获取任何行业的成分股数据，更新失败")
@@ -248,7 +248,7 @@ def update_shenwan_industry(
     
     # 先进行清洗
     cleaner = DataCleaner()
-    clean_data = cleaner.clean_shenwan_industry(sw_l1_indices, index_members, level_str='l1')
+    clean_data = cleaner.clean_shenwan_industry(sw_l2_indices, index_members, level_str='l2')
     
     if len(clean_data) == 0:
         logger.warning("清洗后无有效数据")

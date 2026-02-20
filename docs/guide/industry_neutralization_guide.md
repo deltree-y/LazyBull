@@ -127,7 +127,7 @@ features = builder.build_features_for_day(
 features = industry_neutralization(
     features,
     columns=['my_custom_feature', 'another_feature'],
-    industry_col='sw_name',
+    industry_col='sw_industry',
     tradable_col='tradable',
     min_group_size=5,
     prefix='neu_'
@@ -155,12 +155,12 @@ features = loader.load_features_for_date('20240101')
 feature_name = 'pe_ttm'
 
 # 按行业查看原始特征的均值和标准差
-original_stats = features.groupby('sw_name')[feature_name].agg(['mean', 'std'])
+original_stats = features.groupby('sw_industry')[feature_name].agg(['mean', 'std'])
 print("原始特征 - 各行业统计:")
 print(original_stats)
 
 # 按行业查看中性化后特征的均值和标准差
-neu_stats = features.groupby('sw_name')[f'neu_{feature_name}'].agg(['mean', 'std'])
+neu_stats = features.groupby('sw_industry')[f'neu_{feature_name}'].agg(['mean', 'std'])
 print(f"\n中性化后 - 各行业统计:")
 print(neu_stats)
 
@@ -217,7 +217,7 @@ def validate_neutralization_for_date(trade_date: str):
         original_col = neu_col.replace('neu_', '')
         
         # 按行业统计
-        industry_stats = features.groupby('sw_name')[neu_col].agg(['mean', 'std'])
+        industry_stats = features.groupby('sw_industry')[neu_col].agg(['mean', 'std'])
         
         # 检查是否符合预期（均值接近0，标准差接近1）
         mean_abs_mean = industry_stats['mean'].abs().mean()
@@ -256,14 +256,14 @@ if __name__ == '__main__':
 3. TuShare数据更新延迟
 
 **解决方案**: 
-- 这些股票的 `sw_name` 为 NaN，会被跳过中性化
+- 这些股票的 `sw_industry` 为 NaN，会被跳过中性化
 - 如果样本数较多，建议重新下载行业数据
 
 ### Q2: 中性化后特征变成NaN？
 
 **A**: 检查以下几点：
 1. 原始特征本身是否有NaN
-2. 行业列 `sw_name` 是否为NaN
+2. 行业列 `sw_industry` 是否为NaN
 3. 该交易日是否有足够的可交易样本（`tradable == 1`）
 
 ### Q3: 小样本行业如何处理？
