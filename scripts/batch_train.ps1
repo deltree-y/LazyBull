@@ -1,12 +1,12 @@
 ﻿# 0. 定义参数
 $startDate_list = @((Get-Date "2020-07-01"))#, (Get-Date "2021-07-01"), (Get-Date "2022-07-01"))    #训练开始日期
 $endDate_list = @((Get-Date "2025-06-30"))#, (Get-Date "2025-10-31"))    #训练结束日期
-$label_list = @("y_ret_20")#, "y_ret_10", "y_ret_20")    #标签
-$topk_list = @(500)            #训练集正值数量
-$max_depth_list = @(16)           #树的最大深度
-$learning_rate_list = @(0.01)     #学习率
+$label_list = @("neu_y_ret_20")#, "y_ret_10", "y_ret_20")    #标签
+$topk_list = @(300)            #训练集正值数量
+$max_depth_list = @(4)           #树的最大深度
+$learning_rate_list = @(0.02)     #学习率
 
-$n_estimators = 20000
+$n_estimators = 2000
 
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
 $count = 0

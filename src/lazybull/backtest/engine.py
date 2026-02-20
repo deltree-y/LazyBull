@@ -11,6 +11,7 @@ from tqdm import tqdm
 from ..common.cost import CostModel
 from ..common.trade_status import is_tradeable
 from ..common.date_utils import to_trade_date_str
+from ..data.loader import DataLoader
 from ..execution.pending_order import PendingOrderManager
 from ..signals.base import Signal
 from ..universe.base import Universe
@@ -111,7 +112,9 @@ class BacktestEngine:
                 raise ValueError("启用行业约束时必须提供 stock_basic 数据")
             # 延迟导入以避免循环依赖
             from ..portfolio import load_industry_mapping
-            self.industry_mapping = load_industry_mapping(stock_basic, verbose=verbose)
+            loader = DataLoader(self.data_storage)  # 使用数据存储实例创建加载器
+            shenwan_stock_basic = loader.load_shenwan_industry()
+            self.industry_mapping = load_industry_mapping(shenwan_stock_basic, verbose=verbose)
         
         # 验证调仓频率
         if not isinstance(rebalance_freq, int):

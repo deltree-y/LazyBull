@@ -129,7 +129,7 @@ class FeatureBuilder:
         if len(current_data) == 0:
             logger.warning(f"{trade_date} 没有行情数据")
             return pd.DataFrame()
-        
+
         # 4. 计算标签：未来N日收益（多个 horizon）
         labels = self._calculate_forward_returns(
             current_data,
@@ -150,7 +150,12 @@ class FeatureBuilder:
             moneyflow_data
         )
         logger.debug(f"{trade_date} 基础特征计算完成: {len(features.columns.tolist())} 列")
-        
+
+        # 6.5 合并申万行业分类
+        if shenwan_industry is not None:
+            features = self._merge_shenwan_industry(features, shenwan_industry)
+            logger.debug(f"{trade_date} 合并申万行业分类完成: {len(features.columns.tolist())} 列")
+
         # 5.5 添加新增因子（技术指标、K线形态、波动率、行业等）
         features = self._add_advanced_factors(
             features,
@@ -166,11 +171,6 @@ class FeatureBuilder:
         # 6. 合并特征和标签
         result = features.merge(labels, on=['trade_date', 'ts_code'], how='inner')
         logger.debug(f"{trade_date} 合并特征和标签完成: {len(result.columns.tolist())} 列")
-        
-        # 6.5 合并申万行业分类
-        if shenwan_industry is not None:
-            result = self._merge_shenwan_industry(result, shenwan_industry)
-            logger.debug(f"{trade_date} 合并申万行业分类完成: {len(result.columns.tolist())} 列")
         
         # 7. 添加过滤标记
         result = self._add_filter_flags(
@@ -613,14 +613,14 @@ class FeatureBuilder:
                     result = result.merge(volatility_today, on=['ts_code', 'trade_date'], how='left')
         
         # 3. 行业相关因子：industry_id, alpha_industry
-        logger.debug("计算行业相关因子...")
-        result = add_industry_features(result, stock_basic, ret_col='ret_1')
+        #logger.debug("计算行业相关因子...")
+        #result = add_industry_features(result, stock_basic, ret_col='ret_1')
         
         # 计算多窗口行业 alpha（如果存在 ret_N）
         if all(f'ret_{w}' in result.columns for w in self.lookback_windows):
             logger.debug("计算多个窗口的行业 alpha...")
             industry_alpha_df = calculate_industry_alpha_windows(
-                result, ret_windows=self.lookback_windows, industry_col='industry'
+                result, ret_windows=self.lookback_windows, industry_col='sw_name'
             )
             result = result.merge(industry_alpha_df, on=['ts_code', 'trade_date'], how='left')
         
@@ -1295,8 +1295,15 @@ class FeatureBuilder:
             'log_total_mv',    # 对数总市值
             'amount_ma20',     # 20日均成交额
             'turnover_rate',   # 换手率
+            'volatility_5',   # 5日波动率
+            'volatility_10',  # 10日波动率
+            'volatility_20',  # 20日波动率
             'net_mf_amount',   # 净资金流入
             'ma_deviation_20', # 20日均线偏离度
+            'elg_net_amount_sum_20', # 20日特大单净流入
+            'acceleration',       # 动量加速度
+            'macd_hist',           # MACD柱状图
+            'bb_width',             # 布林带宽度
         ]
         
         # 检查哪些列存在
@@ -1319,20 +1326,20 @@ class FeatureBuilder:
                     industry_col='sw_name',
                     tradable_col='tradable',
                     min_group_size=5,
-                    prefix='',  # 不使用前缀，而是使用后缀
+                    prefix='zscore_',  
                     inplace=False
                 )
                 
                 # 将 neu_ 前缀改为 _zscore 后缀
-                for col in existing_zscore_columns:
-                    old_col = f'neu_{col}'
-                    new_col = f'{col}_zscore'
-                    if old_col in result.columns:
-                        result[new_col] = result[old_col]
-                        result.drop(columns=[old_col], inplace=True)
+                #for col in existing_zscore_columns:
+                #    old_col = f'neu_{col}'
+                #    new_col = f'{col}_zscore'
+                #    if old_col in result.columns:
+                #        result[new_col] = result[old_col]
+                #        result.drop(columns=[old_col], inplace=True)
                 
                 # 统计新增的列
-                new_cols = [f'{col}_zscore' for col in existing_zscore_columns]
+                new_cols = [f'zscore_{col}' for col in existing_zscore_columns]
                 actual_new_cols = [col for col in new_cols if col in result.columns]
                 logger.info(f"Z-Score 完成，新增 {len(actual_new_cols)} 列")
             except Exception as e:

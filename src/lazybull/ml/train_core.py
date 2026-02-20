@@ -88,7 +88,7 @@ def load_features_data(
     return df, len(trade_dates)
 
 
-def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_ratio: float = 0.2) -> tuple:
+def prepare_training_data(df: pd.DataFrame, label_column: str = "neu_y_ret_20", val_ratio: float = 0.2) -> tuple:
     """准备训练数据，并按时间切分训练集和验证集
     
     Args:
@@ -112,7 +112,7 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     # 标签列
     label_columns = [col for col in df.columns if col.startswith('y_')]
     # 过滤标记列（使用统一的列名，与clean层一致）
-    filter_columns = ['is_st', 'is_suspended']
+    filter_columns = ['is_st', 'is_suspended', 'is_limit_up', 'is_limit_down']
     # 其他非特征列
     other_exclude_columns = ['tradable', 'list_date', 'list_days', 'is_limit_up', 'is_limit_down', 'industry']
     # 临时过滤掉的列
@@ -126,7 +126,37 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "y_ret_5", val_r
     exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns + temp_test_exclude_columns
     
     # 获取特征列
-    feature_columns = [col for col in df.columns if col not in exclude_columns]
+    #feature_columns = [col for col in df.columns if col not in exclude_columns]
+    feature_columns = [
+        # --- 收益率相关 ---
+        'ret_1',                # 唯一建议保留的非中性化收益特征
+        'neu_ret_5',           # 核心动量
+        'neu_ret_20',           # 核心动量
+        'alpha_industry_20',    # 相对强度
+        
+        # --- 估值与市值 ---
+        'zscore_bp',            # 相对便宜度
+        'zscore_log_total_mv',  # 相对大小
+        'is_loss',              # 质量过滤标志位 (0/1无需中性化)
+        
+        # --- 资金与量比 ---
+        'zscore_elg_net_amount_sum_20', # 机构资金沉淀
+        'zscore_turnover_rate',         # 相对活跃度
+        'vol_ratio_20',                 # 20日成交量放大情况
+        
+        # --- 技术趋势 (全中性化) ---
+        'zscore_acceleration',    # 动力加速
+        'zscore_macd_hist',      # 动量强弱
+        'zscore_ma_deviation_20', # 乖离回归
+        'zscore_bb_width',        # 波动挤压
+        'zscore_volatility_20',   # 风险水平
+        
+        # --- 静态属性 ---
+        'list_days',               # 上市天数 (对新股逻辑有影响，建议保留原值)
+
+        # --- 其他特征（可选，视情况添加） ---
+        'log_total_mv',    # 对数总市值
+    ]
     
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
@@ -363,6 +393,7 @@ def train_xgboost_model(
     
     # 计算 scale_pos_weight（分类任务）
     computed_scale_pos_weight = None
+    sample_weight = None
     if task == "classification":
         pos_count = (y_train_processed == 1).sum()
         neg_count = (y_train_processed == 0).sum()
@@ -377,6 +408,10 @@ def train_xgboost_model(
         else:
             computed_scale_pos_weight = scale_pos_weight
             logger.info(f"使用用户指定 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
+        
+        #增加排在前面的权重，提升模型对正类的关注
+        #sample_weight = np.ones(len(y_train_processed))
+        #sample_weight = np.where(y_train_processed == 1, 2.0, 1.0)
     
     # 准备训练参数
     train_params = {
@@ -390,10 +425,11 @@ def train_xgboost_model(
         "tree_method": "hist",
         "device": "cuda",
         "n_jobs": -1,
-        "early_stopping_rounds": 30,
+        "early_stopping_rounds": 50,
         "gamma": 0.1,
         "reg_alpha": 0.1,
         "reg_lambda": 1.0,
+        "min_child_weight": 100,
     }
     
     # 分类任务添加 scale_pos_weight
@@ -413,12 +449,17 @@ def train_xgboost_model(
     if len(X_val) > 0:
         model.fit(
             X_train, y_train_processed,
+            #sample_weight=sample_weight,    #为分类任务提供样本权重
             eval_set=[(X_val, y_val)],
             verbose=False
         )
         logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
     else:
-        model.fit(X_train, y_train_processed)
+        model.fit(
+            X_train, y_train_processed,
+            #sample_weight=sample_weight,    #为分类任务提供样本权重
+            verbose=False
+        )
         logger.info("模型训练完成（无验证集，未使用早停）")
 
     # 计算训练集性能指标

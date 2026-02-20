@@ -242,7 +242,6 @@ def main():
         
         # 2. 准备训练数据（包含验证集切分）
         X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(df, actual_label_column)
-
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
         if False:  # 默认不启用，后续可以改为参数控制
             df_new = df.copy()
