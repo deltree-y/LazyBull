@@ -607,22 +607,28 @@ class DataCleaner:
         self,
         raw_index_basic: pd.DataFrame,
         raw_index_members: Dict[str, pd.DataFrame],
-        level_str: str = 'l1',
+        level_str: str = 'l2',
     ) -> pd.DataFrame:
         """清洗申万行业分类数据，生成 ts_code -> 行业映射表
+
+        字段映射说明（level=2，即申万二级行业）：
+          - 原始成分股表中的 l2_code 字段 -> 股票代码（ts_code）
+          - 原始指数基本信息中的 index_code  -> sw_code（二级行业指数代码）
+          - 原始指数基本信息中的 industry_name -> sw_name（二级行业名称）
         
         Args:
-            raw_index_basic: 原始申万指数基本信息DataFrame（一级行业指数）
+            raw_index_basic: 原始申万指数基本信息DataFrame（二级行业指数）
             raw_index_members: 字典，key为index_code，value为该行业的成分股DataFrame
+            level_str: 行业层级字符串，默认 'l2'（二级行业）；若需一级行业可传 'l1'
             
         Returns:
             清洗后的申万行业映射DataFrame，包含以下字段：
             - ts_code: 股票代码
-            - sw_code: 申万行业指数代码
-            - sw_name: 申万行业名称（一级）
+            - sw_code: 申万二级行业指数代码（对应原始 index_code，level=2）
+            - sw_name: 申万二级行业名称（对应原始 industry_name，level=2）
             - in_date: 纳入日期
         """
-        logger.info(f"开始清洗申万行业分类数据，行业数: {len(raw_index_members)}")
+        logger.info(f"开始清洗申万行业分类数据（level={level_str}），行业数: {len(raw_index_members)}")
         
         # 构建行业代码到行业名称的映射
         index_code_to_name = {}

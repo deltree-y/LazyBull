@@ -3,7 +3,7 @@ LazyBull - A股量化研究与回测框架
 专注价值红利策略方向
 """
 
-__version__ = "0.11.0"  # v0.11.0 申万行业分类与完整行业中性化（去均值+Z-Score）
+__version__ = "0.12.0"  # v0.12.0 申万二级行业切换 + Top/Bottom K rank-weight 训练增强
 __author__ = "deltree-y"
 
 from pathlib import Path

@@ -103,7 +103,7 @@ class FeatureBuilder:
                          新版API格式：ts_code, trade_date, suspend_type, suspend_timing
                          旧版格式（兼容）：ts_code, suspend_date, resume_date
             limit_info: 涨跌停价格DataFrame（可选）
-            shenwan_industry: 申万行业分类DataFrame（可选），包含 ts_code, sw_code, sw_name
+            shenwan_industry: 申万行业分类DataFrame（可选），包含 ts_code, sw_code, sw_name（申万二级行业）
             apply_industry_neutralization: 是否应用行业中性化，默认False
             
         Returns:
@@ -616,13 +616,18 @@ class FeatureBuilder:
         #logger.debug("计算行业相关因子...")
         #result = add_industry_features(result, stock_basic, ret_col='ret_1')
         
-        # 计算多窗口行业 alpha（如果存在 ret_N）
+        # 计算多窗口行业 alpha（如果存在 ret_N，且行业列 sw_industry 存在）
         if all(f'ret_{w}' in result.columns for w in self.lookback_windows):
-            logger.debug("计算多个窗口的行业 alpha...")
-            industry_alpha_df = calculate_industry_alpha_windows(
-                result, ret_windows=self.lookback_windows, industry_col='sw_name'
-            )
-            result = result.merge(industry_alpha_df, on=['ts_code', 'trade_date'], how='left')
+            # 优先使用 sw_industry（申万二级行业），若不存在则跳过行业 alpha 计算
+            industry_col = 'sw_industry' if 'sw_industry' in result.columns else None
+            if industry_col is not None:
+                logger.debug("计算多个窗口的行业 alpha（基于申万二级行业 sw_industry）...")
+                industry_alpha_df = calculate_industry_alpha_windows(
+                    result, ret_windows=self.lookback_windows, industry_col=industry_col
+                )
+                result = result.merge(industry_alpha_df, on=['ts_code', 'trade_date'], how='left')
+            else:
+                logger.debug("未找到行业列，跳过行业 alpha 计算")
         
         # 4. 动量加速度
         if 'ret_5' in result.columns and 'ret_10' in result.columns:
@@ -1163,20 +1168,27 @@ class FeatureBuilder:
         features: pd.DataFrame,
         shenwan_industry: pd.DataFrame
     ) -> pd.DataFrame:
-        """合并申万行业分类信息
+        """合并申万行业分类信息（申万二级行业）
+
+        clean 层字段映射（level=2）：
+          - sw_code  -> 申万二级行业指数代码（对应 FeatureBuilder 输出的 sw_industry_code）
+          - sw_name  -> 申万二级行业名称（对应 FeatureBuilder 输出的 sw_industry）
         
         Args:
             features: 特征DataFrame
-            shenwan_industry: 申万行业分类DataFrame，包含 ts_code, sw_code, sw_name
+            shenwan_industry: 申万行业分类DataFrame，包含 ts_code, sw_code（二级代码）, sw_name（二级名称）
             
         Returns:
-            合并了行业信息的DataFrame
+            合并了行业信息的DataFrame，新增列：
+              - sw_industry: 申万二级行业名称（用于中性化分组）
+              - sw_industry_code: 申万二级行业指数代码
+              - sw_industry_id: 稳定整数编码（基于 sw_industry 排序映射）
         """
         if shenwan_industry is None or len(shenwan_industry) == 0:
             logger.warning("申万行业分类数据为空，跳过合并")
             return features
         
-        # 选择需要的列
+        # 选择需要的列（sw_code=二级代码，sw_name=二级名称）
         industry_cols = ['ts_code', 'sw_code', 'sw_name']
         existing_cols = [col for col in industry_cols if col in shenwan_industry.columns]
         
@@ -1191,21 +1203,25 @@ class FeatureBuilder:
             how='left'
         )
         
-        # 生成行业ID（整数编码）
+        # 重命名：sw_code -> sw_industry_code，sw_name -> sw_industry（统一字段命名）
+        rename_map = {}
         if 'sw_name' in result.columns:
+            rename_map['sw_name'] = 'sw_industry'
+        if 'sw_code' in result.columns:
+            rename_map['sw_code'] = 'sw_industry_code'
+        if rename_map:
+            result = result.rename(columns=rename_map)
+        
+        # 生成行业ID（整数编码，基于 sw_industry 名称稳定映射）
+        if 'sw_industry' in result.columns:
             from ..factors.industry import generate_industry_encoding
-            industry_id_dict = generate_industry_encoding(
-                result['sw_name'],
-                #result[['ts_code', 'trade_date', 'sw_name']],
-                #industry_col='sw_name',
-            )
-            #logger.warning(f"industry_id_dict: {industry_id_dict}")
-            result['industry_id'] = result['sw_name'].map(industry_id_dict)
+            industry_id_dict = generate_industry_encoding(result['sw_industry'])
+            result['sw_industry_id'] = result['sw_industry'].map(industry_id_dict)
             
             # 统计行业分布
             if self.verbose:
-                industry_counts = result['sw_name'].value_counts()
-                logger.info(f"行业分布（前5）：\n{industry_counts.head()}")
+                industry_counts = result['sw_industry'].value_counts()
+                logger.info(f"申万二级行业分布（前5）：\n{industry_counts.head()}")
         
         return result
     
@@ -1220,17 +1236,17 @@ class FeatureBuilder:
         2. Z-Score：指标/特征列，_zscore后缀
         
         Args:
-            features: 特征DataFrame，需包含 sw_name, tradable 列
+            features: 特征DataFrame，需包含 sw_industry（申万二级行业名称）, tradable 列
             
         Returns:
             添加了行业中性化列的DataFrame
         """
         from ..factors.normalization import industry_demean, industry_neutralization
         
-        # 检查必要的列是否存在
-        if 'sw_name' not in features.columns:
+        # 检查必要的列是否存在（使用统一字段名 sw_industry）
+        if 'sw_industry' not in features.columns:
             logger.error(
-                "缺少申万行业列 sw_name，无法进行行业中性化。\n"
+                "缺少申万二级行业列 sw_industry，无法进行行业中性化。\n"
                 "请确保已加载申万行业分类数据并通过参数传递给 build_features_for_day"
             )
             return features
@@ -1260,14 +1276,14 @@ class FeatureBuilder:
                 demean_columns.append(ret_col)
         
         if len(demean_columns) > 0:
-            logger.info(f"开始行业去均值：{len(demean_columns)} 个收益率/标签列")
+            logger.info(f"开始行业去均值（按 sw_industry 分组）：{len(demean_columns)} 个收益率/标签列")
             logger.debug(f"去均值列表：{demean_columns}")
             
             try:
                 result = industry_demean(
                     result,
                     columns=demean_columns,
-                    industry_col='sw_name',
+                    industry_col='sw_industry',
                     tradable_col='tradable',
                     min_group_size=5,
                     prefix='neu_',
@@ -1316,27 +1332,19 @@ class FeatureBuilder:
                 existing_zscore_columns.append(vol_col)
         
         if len(existing_zscore_columns) > 0:
-            logger.info(f"开始行业内 Z-Score：{len(existing_zscore_columns)} 个特征")
+            logger.info(f"开始行业内 Z-Score（按 sw_industry 分组）：{len(existing_zscore_columns)} 个特征")
             logger.debug(f"Z-Score 列表：{existing_zscore_columns}")
             
             try:
                 result = industry_neutralization(
                     result,
                     columns=existing_zscore_columns,
-                    industry_col='sw_name',
+                    industry_col='sw_industry',
                     tradable_col='tradable',
                     min_group_size=5,
                     prefix='zscore_',  
                     inplace=False
                 )
-                
-                # 将 neu_ 前缀改为 _zscore 后缀
-                #for col in existing_zscore_columns:
-                #    old_col = f'neu_{col}'
-                #    new_col = f'{col}_zscore'
-                #    if old_col in result.columns:
-                #        result[new_col] = result[old_col]
-                #        result.drop(columns=[old_col], inplace=True)
                 
                 # 统计新增的列
                 new_cols = [f'zscore_{col}' for col in existing_zscore_columns]

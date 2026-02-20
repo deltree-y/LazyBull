@@ -339,6 +339,76 @@ def generate_classification_labels(
     return df_labeled
 
 
+def build_rank_sample_weights(
+    df_train: pd.DataFrame,
+    label_column: str,
+    topk: int = 30,
+    top_weight: float = 5.0,
+    date_col: str = 'trade_date'
+) -> np.ndarray:
+    """按日截面排名构造训练样本权重
+
+    对训练集按每个交易日截面排序，将每日 Top K 和 Bottom K 样本的权重设为
+    top_weight，其余样本权重为 1.0。用于强化模型对极端头部/尾部样本的预测精度。
+
+    处理规则：
+    - 若某日样本数 <= 2*topk，则该日全部样本均设为 top_weight（防止权重分配异常）。
+    - 排名依据：标签列在当日截面内的值（升序排名最小/最大分别对应 Bottom/Top）。
+
+    Args:
+        df_train: 训练集 DataFrame，需包含 trade_date 列和标签列
+        label_column: 排名所用标签列名（如 neu_y_ret_20）
+        topk: 每日 Top/Bottom 取前 K 个样本，默认 30
+        top_weight: Top/Bottom K 样本的权重，默认 5.0
+        date_col: 日期列名，默认 trade_date
+
+    Returns:
+        与 df_train 行数相同的 numpy 数组，包含每个样本的权重
+    """
+    weights = np.ones(len(df_train), dtype=float)
+
+    if label_column not in df_train.columns:
+        logger.warning(f"标签列 {label_column} 不存在，返回全为1的权重")
+        return weights
+
+    if date_col not in df_train.columns:
+        logger.warning(f"日期列 {date_col} 不存在，返回全为1的权重")
+        return weights
+
+    # 按日截面处理
+    for date, grp_idx in df_train.groupby(date_col).groups.items():
+        grp = df_train.loc[grp_idx, label_column].dropna()
+        n = len(grp)
+        if n == 0:
+            continue
+
+        if n <= 2 * topk:
+            # 样本数不足时，整组都赋予 top_weight（退化处理）
+            positions = df_train.index.get_indexer_for(grp_idx)
+            valid_positions = positions[positions >= 0]
+            weights[valid_positions] = top_weight
+            continue
+
+        # 排序取 Top K（最大值）和 Bottom K（最小值）
+        sorted_vals = grp.sort_values()
+        bottom_k_idx = sorted_vals.iloc[:topk].index
+        top_k_idx = sorted_vals.iloc[-topk:].index
+
+        # 将 Top/Bottom K 的位置映射到 weights 数组位置（使用 get_indexer_for 确保正确映射）
+        top_positions = df_train.index.get_indexer_for(top_k_idx)
+        bottom_positions = df_train.index.get_indexer_for(bottom_k_idx)
+        weights[top_positions[top_positions >= 0]] = top_weight
+        weights[bottom_positions[bottom_positions >= 0]] = top_weight
+
+    top_bottom_count = int((weights > 1.0).sum())
+    logger.info(
+        f"样本权重构造完成: Top/Bottom {topk} 增强，"
+        f"加权样本数={top_bottom_count}，权重={top_weight}，"
+        f"普通样本数={len(weights) - top_bottom_count}"
+    )
+    return weights
+
+
 def train_xgboost_model(
     X_train: pd.DataFrame,
     y_train: pd.Series,
@@ -347,6 +417,7 @@ def train_xgboost_model(
     task: str = "regression",
     skip_label_winsorize: bool = False,
     scale_pos_weight: Optional[float] = None,
+    sample_weight: Optional[np.ndarray] = None,
     n_estimators: int = 100,
     max_depth: int = 6,
     learning_rate: float = 0.1,
@@ -360,6 +431,8 @@ def train_xgboost_model(
         task: 任务类型，"regression" 或 "classification"
         skip_label_winsorize: 是否跳过标签 winsorize（当 label_transform=cs_zscore 时为 True）
         scale_pos_weight: 正类权重（分类任务），None 表示自动计算为 neg/pos
+        sample_weight: 样本权重数组（可选），用于 Top/Bottom K 强化训练精度，
+                       由 build_rank_sample_weights() 生成；None 表示不使用样本权重
         X_train: 训练特征数据
         y_train: 训练标签数据
         X_val: 验证特征数据
@@ -393,7 +466,6 @@ def train_xgboost_model(
     
     # 计算 scale_pos_weight（分类任务）
     computed_scale_pos_weight = None
-    sample_weight = None
     if task == "classification":
         pos_count = (y_train_processed == 1).sum()
         neg_count = (y_train_processed == 0).sum()
@@ -408,10 +480,11 @@ def train_xgboost_model(
         else:
             computed_scale_pos_weight = scale_pos_weight
             logger.info(f"使用用户指定 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
-        
-        #增加排在前面的权重，提升模型对正类的关注
-        #sample_weight = np.ones(len(y_train_processed))
-        #sample_weight = np.where(y_train_processed == 1, 2.0, 1.0)
+    
+    if sample_weight is not None:
+        logger.info(f"使用样本权重（rank-weight），加权样本数={int((sample_weight > 1.0).sum())}")
+    else:
+        logger.info("未使用样本权重（rank-weight 未启用）")
     
     # 准备训练参数
     train_params = {
@@ -449,7 +522,7 @@ def train_xgboost_model(
     if len(X_val) > 0:
         model.fit(
             X_train, y_train_processed,
-            #sample_weight=sample_weight,    #为分类任务提供样本权重
+            sample_weight=sample_weight,
             eval_set=[(X_val, y_val)],
             verbose=False
         )
@@ -457,7 +530,7 @@ def train_xgboost_model(
     else:
         model.fit(
             X_train, y_train_processed,
-            #sample_weight=sample_weight,    #为分类任务提供样本权重
+            sample_weight=sample_weight,
             verbose=False
         )
         logger.info("模型训练完成（无验证集，未使用早停）")
