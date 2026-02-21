@@ -29,7 +29,19 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.12.0)
+### 当前版本 (v0.12.1)
+
+**新增个股特征与市场状态特征** (v0.12.1 新增):
+- ✅ **新增个股特征（4个）**：
+  - `is_new_stock`：新股标记（上市<365天=1）
+  - `size`：流通市值（`circ_mv`）
+  - `zscore_size`：行业内流通市值 Z-Score（`log1p(size)` 按 `sw_industry`）
+  - `spec_score`：个股特质得分（`zscore_volatility_20 × (−zscore_size)`）
+- ✅ **新增市场状态特征（6个）**：每日一个标量值，广播到所有股票
+  - `mkt_vol_cnt`：截面收益率标准差；`mkt_vol_20`：20日滚动均值
+  - `mkt_turnover_ratio`：市场拥挤度；`mkt_ret_avg_20`：20日平均收益率之和
+  - `mkt_turnover_std`：换手率截面标准差；`mkt_adv_dec_ratio`：60日涨跌比均值
+- ✅ **新增模块** `src/lazybull/factors/market_state.py`（可复用市场状态计算）
 
 **申万二级行业切换 + rank-weight 训练增强** (v0.12.0 新增):
 - ✅ **申万行业切换为二级**：行业分类从一级（~30个）切换为**二级（~100个子行业）**，中性化精度更高

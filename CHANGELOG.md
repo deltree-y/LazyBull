@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.1] - 2026-02-21
+
+### 新增功能
+
+- **新增个股特征**（在 `FeatureBuilder` 中生成）：
+  - `is_new_stock`：上市不足 365 自然日则为 1，否则为 0（依赖 `list_days`）
+  - `size`：流通市值（= `circ_mv`，来自 daily_basic）
+  - `zscore_size`：对 `log1p(size)` 进行行业内 Z-Score（`sw_industry` 分组，tradable==1，min_group_size=5 回退）
+  - `spec_score`：`zscore_volatility_20 × (−zscore_size)`（需 `apply_industry_neutralization=True`）
+
+- **新增市场状态特征**（每日一个标量，广播至当日所有股票）：
+  - `mkt_vol_cnt`：全市场收益率截面标准差（tradable==1）
+  - `mkt_vol_20`：`mkt_vol_cnt` 过去 20 日滚动均值
+  - `mkt_turnover_ratio`：市场拥挤度 `sum(amount)/sum(circ_mv)`（tradable==1）
+  - `mkt_ret_avg_20`：过去 20 日全市场平均收益率之和
+  - `mkt_turnover_std`：全市场换手率截面标准差（优先 `turnover_rate_f`）
+  - `mkt_adv_dec_ratio`：过去 60 日涨跌家数比滚动均值
+
+- **新增模块** `src/lazybull/factors/market_state.py`：可复用的市场状态特征计算模块
+
+### 测试
+
+- 新增 `tests/test_market_and_new_features.py`（17 个测试用例）：
+  - `is_new_stock` 边界验证（刚好 365 天）
+  - `zscore_size` 大样本行业 vs 小样本回退全市场
+  - `spec_score` 公式验证与缺失依赖时 NaN 传播
+  - 市场状态单日截面特征正确性
+  - 市场状态滚动特征（窗口不足时 min_periods=1 行为）
+
+### 文档
+
+- 更新 `docs/features_schema.md`：
+  - 新增第 12 节（新增个股特征）和第 13 节（市场状态特征）
+  - 统一 zscore 列命名为 `zscore_` 前缀
+- 新增 `docs/PR/market_and_stock_features.md`：PR 说明（新特征列表、依赖补齐方式、重建命令）
+- 新增 `docs/guide/market_state_verification.md`：市场状态特征验证示例代码
+
 ## [0.12.0] - 2026-02-20
 
 ### 新增功能
