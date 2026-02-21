@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.2] - 2026-02-21
+
+### 性能优化
+
+- **技术指标与波动率批量预计算 + 实例级缓存（方案 A + A）**
+  - 新增 `precompute_technical_factors(daily_adj, vol_windows)` 函数
+    （`src/lazybull/factors/precompute_technical_factors.py`）：
+    对全量 `daily_adj` 一次性调用现有
+    `calculate_rsi / calculate_kdj / calculate_macd / calculate_bollinger_bands / calculate_volatility`，
+    输出宽表（`ts_code, trade_date` + 15 个因子列），仅做一次排序与必要列裁剪。
+  - `FeatureBuilder` 新增 `_tech_factor_cache` 实例级字段（内存缓存，不落盘）：
+    首次调用 `_get_tech_factor_today()` 时触发批量预计算并缓存；后续每日
+    仅按 `trade_date` 过滤（`O(1)` 查表），彻底消除批量构建时逐日切片
+    50 天历史、重复计算 RSI/KDJ/MACD/BB/波动率 的瓶颈。
+  - `FeatureBuilder._add_advanced_factors()` 技术指标与波动率分支改为调用
+    `_get_tech_factor_today()`，不再按日 `hist_dates` 切片。
+  - `factors/__init__.py` 新增 `precompute_technical_factors` 导出。
+  - 复用现有各指标计算函数，**不改公式与实现细节**，输出口径完全不变。
+  - 缓存生命周期为 `FeatureBuilder` 实例级，兼容
+    `build_features.py` 和 `build_clean_features.py` 两条构建链路。
+
+### 测试
+
+- 新增 `tests/test_technical_indicators_precompute.py`（11 个测试用例）：
+  - `TestPrecomputeTechnicalFactors`
+    - `test_rsi_parity`：RSI(14) 与旧逻辑完全一致（< 1e-6）
+    - `test_kdj_parity`：KDJ K/D/J 与旧逻辑完全一致
+    - `test_macd_parity`：MACD DIF/DEA/HIST 与旧逻辑完全一致
+    - `test_bollinger_bands_parity`：布林带中/上/下轨与旧逻辑完全一致
+    - `test_volatility_parity`：volatility_5/10/20 与旧逻辑完全一致
+    - `test_output_contains_required_columns`：输出包含全部预期列
+    - `test_empty_input_returns_empty_df`：空输入不抛异常
+  - `TestTechFactorCache`
+    - `test_precompute_called_only_once`：多日构建时预计算只触发 1 次（monkeypatch）
+    - `test_cache_returns_correct_date`：缓存查表返回正确日期的数据
+    - `test_cache_is_instance_scoped`：不同实例缓存相互独立
+    - `test_new_builder_instance_cache_is_none`：新建实例缓存初始为 None
+
+### 文档
+
+- 新增 `docs/PR/optimize_technical_indicators_performance.md`：
+  性能瓶颈说明、优化方案 A+A、口径不变证明、对两条构建链路的影响
+
+### 版本变更
+
+- 版本号：`0.13.1` → `0.13.2`（patch bump，纯性能优化，不改口径）
+
 ## [0.13.1] - 2026-02-21
 
 ### 性能优化
