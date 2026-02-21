@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.3] - 2026-02-21
+
+### Bug 修复
+
+- **修复 `volatility_20` / `zscore_volatility_20` / `spec_score` 数值不一致**
+  - 新增共用函数 `compute_ret_1(daily_adj)`（`src/lazybull/factors/returns.py`）：
+    统一 `ret_1` 构造优先级：
+    1. 已有 `ret_1` 列 → 直接返回；
+    2. 有 `close_adj` → 按 `ts_code` 分组 `pct_change()`（复权口径，无前瞻）；
+    3. 有 `pct_chg` → `pct_chg / 100`（fallback，记录 WARNING）；
+    4. 均无 → 全 NaN 并记录 WARNING。
+  - 修改 `precompute_technical_factors.py` 步骤 6：调用 `compute_ret_1` 替换
+    旧的直接使用 `pct_chg/100` 的逻辑，消除与复权收益率的口径偏差。
+  - `zscore_volatility_20` 和 `spec_score` 由 `volatility_20` 派生，随之自动修复。
+  - 性能优化（批量预计算 + 实例级缓存）**不回退**，`calculate_volatility` 公式不变。
+  - `factors/__init__.py` 新增 `compute_ret_1` 导出。
+
+### 测试
+
+- 新增测试类 `TestComputeRet1`（6 个用例）和 `TestVolatilityRet1Consistency`（3 个用例）：
+  - `test_priority1_uses_existing_ret_1`：已有 `ret_1` 时直接返回
+  - `test_priority2_uses_close_adj_pct_change`：`close_adj` 路径结果正确
+  - `test_priority2_no_cross_stock_leakage`：无跨股票边界差分
+  - `test_priority3_fallback_pct_chg_with_warning`：fallback 行为可控且有 warning
+  - `test_priority4_all_nan_with_warning`：全缺失返回 NaN 并有 warning
+  - `test_result_aligned_to_original_index`：结果索引对齐
+  - `test_volatility_20_consistent_with_close_adj_pct_change`：端到端一致性
+  - `test_volatility_differs_from_pct_chg_path`：确认修复改变旧口径
+  - `test_zscore_volatility_20_stable_with_close_adj`：zscore 一致性
+
 ## [0.13.2] - 2026-02-21
 
 ### 性能优化

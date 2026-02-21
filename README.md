@@ -29,7 +29,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.13.2)
+### 当前版本 (v0.13.3)
+
+**修复 volatility_20 / zscore_volatility_20 / spec_score 数值不一致** (v0.13.3 修复):
+- ✅ **新增共用函数 `compute_ret_1()`**：
+  新增 `src/lazybull/factors/returns.py`，统一 `ret_1` 构造口径：
+  优先使用已有 `ret_1` → 若无则用 `close_adj` 按组 `pct_change()`（复权口径）→ fallback 到 `pct_chg/100`。
+- ✅ **修复预计算口径**：`precompute_technical_factors` 波动率分支改为调用 `compute_ret_1`，
+  消除旧版本在缺少 `ret_1` 时直接使用 `pct_chg/100` 导致的口径偏差。
+- ✅ **衍生指标自动一致**：`zscore_volatility_20` 与 `spec_score` 均由 `volatility_20` 派生，无需额外处理。
+- ✅ **性能优化不回退**：缓存机制、批量预计算均保持不变。
 
 **技术指标与波动率批量预计算 + 实例级缓存** (v0.13.2 新增):
 - ✅ **批量预计算函数 `precompute_technical_factors()`**：
