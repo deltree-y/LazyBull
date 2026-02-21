@@ -178,11 +178,13 @@ def generate_walk_forward_splits(
         
         # 计算 test_end：test_start + test_window_months
         test_end_dt = to_datetime(test_start) + relativedelta(months=test_window_months)
-        test_end = find_nearest_trade_date(to_date_str(test_end_dt), direction="backward")
+        #test_end = find_nearest_trade_date(to_date_str(test_end_dt), direction="backward")
+        test_end = to_date_str(test_end_dt) # 测试结束日期不受训练结束日期约束
         
         if test_end is None or test_end > wf_end_date:
             # 调整 test_end 到 wf_end_date
-            test_end = find_nearest_trade_date(wf_end_date, direction="backward")
+            #test_end = find_nearest_trade_date(wf_end_date, direction="backward")
+            test_end = to_date_str(test_end_dt) # 测试结束日期不受训练结束日期约束
         
         if test_end is None or test_end < test_start:
             logger.info(f"无法生成有效的测试区间（test_start={test_start}），停止生成切分")

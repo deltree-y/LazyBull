@@ -30,8 +30,8 @@ def load_industry_mapping(stock_basic: pd.DataFrame, verbose: bool = False) -> D
     if 'ts_code' not in stock_basic.columns:
         raise ValueError("stock_basic 必须包含 ts_code 列")
     
-    if 'sw_industry' not in stock_basic.columns:
-        raise ValueError("stock_basic 必须包含 sw_industry 列")
+    if not {'sw_name', 'sw_industry'}.intersection(stock_basic.columns):
+        raise ValueError("stock_basic 必须包含 sw_industry或sw_name 列")
     
     # 构建映射：将 NaN/None 映射为 "未知行业"
     industry_mapping = {}
@@ -39,7 +39,7 @@ def load_industry_mapping(stock_basic: pd.DataFrame, verbose: bool = False) -> D
     
     for _, row in stock_basic.iterrows():
         ts_code = row['ts_code']
-        industry = row['sw_industry']  # 使用申万二级行业分类
+        industry = row.get('sw_industry') or row.get('sw_name')  # 使用申万二级行业分类或一级行业名称
         
         # 处理缺失值
         if pd.isna(industry) or industry == '' or industry is None:

@@ -222,7 +222,7 @@ def update_shenwan_industry(
         
         try:
             logger.info(f"  获取 {index_name} ({index_code}) 成分股...")
-            members = client.get_index_member(l1_code=index_code)
+            members = client.get_index_member(l2_code=index_code)
             
             if len(members) > 0:
                 index_members[index_code] = members

@@ -391,14 +391,14 @@ def build_rank_sample_weights(
 
         # 排序取 Top K（最大值）和 Bottom K（最小值）
         sorted_vals = grp.sort_values()
-        bottom_k_idx = sorted_vals.iloc[:topk].index
+        #bottom_k_idx = sorted_vals.iloc[:topk].index
         top_k_idx = sorted_vals.iloc[-topk:].index
 
         # 将 Top/Bottom K 的位置映射到 weights 数组位置（使用 get_indexer_for 确保正确映射）
         top_positions = df_train.index.get_indexer_for(top_k_idx)
-        bottom_positions = df_train.index.get_indexer_for(bottom_k_idx)
+        #bottom_positions = df_train.index.get_indexer_for(bottom_k_idx)
         weights[top_positions[top_positions >= 0]] = top_weight
-        weights[bottom_positions[bottom_positions >= 0]] = top_weight
+        #weights[bottom_positions[bottom_positions >= 0]] = top_weight
 
     top_bottom_count = int((weights > 1.0).sum())
     logger.info(
@@ -534,6 +534,12 @@ def train_xgboost_model(
             verbose=False
         )
         logger.info("模型训练完成（无验证集，未使用早停）")
+
+    importance = model.feature_importances_
+    feature_names = X_train.columns
+    feat_imp = pd.Series(importance, index=feature_names).sort_values(ascending=False)
+    logger.info(f"Model Top 5 Features:")
+    logger.warning(f"{feat_imp.head(5)}")
 
     # 计算训练集性能指标
     if task == "regression":

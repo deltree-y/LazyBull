@@ -3,10 +3,10 @@ $startDate_list = @((Get-Date "2020-07-01"))#, (Get-Date "2021-07-01"), (Get-Dat
 $endDate_list = @((Get-Date "2025-06-30"))#, (Get-Date "2025-10-31"))    #训练结束日期
 $label_list = @("neu_y_ret_20")#, "y_ret_10", "y_ret_20")    #标签
 $topk_list = @(300)            #训练集正值数量
-$max_depth_list = @(4)           #树的最大深度
-$learning_rate_list = @(0.02)     #学习率
+$max_depth_list = @(16)           #树的最大深度
+$learning_rate_list = @(0.01)     #学习率
 
-$n_estimators = 2000
+$n_estimators = 20000
 
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
 $count = 0
@@ -39,7 +39,9 @@ foreach ($startDate in $startDate_list) {
                                     "--task classification --pos-topk $topk " +
                                     "--n-estimators $n_estimators " +
                                     "--max-depth $max_depth " +
-                                    "--learning-rate $learning_rate"
+                                    "--learning-rate $learning_rate " +
+                                    "--rank-weight-enabled " +
+                                    "--rank-weight-topk 50"
 
                         # 2. 打印命令到控制台（带颜色标注，方便肉眼识别）
                         Write-Host "`n[执行指令]:" -ForegroundColor Green

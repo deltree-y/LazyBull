@@ -51,7 +51,8 @@ from src.lazybull.ml.train_core import (
     transform_labels_cs_zscore,
     generate_classification_labels,
     train_xgboost_model,
-    evaluate_validation_daily
+    evaluate_validation_daily,
+    build_rank_sample_weights,
 )
 from src.lazybull.ml.walk_forward_utils import (
     generate_walk_forward_splits,
@@ -134,15 +135,26 @@ def execute_split_training(
     X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(
         df_train, actual_label_column, val_ratio=args.val_ratio
     )
-    
+
+    # 4.1. 构造样本权重（rank-weight：Top/Bottom K 增强）
+    rank_sample_weight = None
+    if args.rank_weight_enabled:
+        rank_sample_weight = build_rank_sample_weights(
+            df_train=df_train_split,
+            label_column=actual_label_column,
+            topk=args.rank_weight_topk,
+            top_weight=args.rank_weight_weight,
+        )
+
     # 5. 训练模型
     skip_label_winsorize = (args.task == "regression" and args.label_transform == "cs_zscore")
-    
+
     model, train_params, train_metrics, val_metrics = train_xgboost_model(
         X_train, y_train, X_val, y_val,
         task=args.task,
         skip_label_winsorize=skip_label_winsorize,
         scale_pos_weight=args.scale_pos_weight,
+        sample_weight=rank_sample_weight,
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,
         learning_rate=args.learning_rate,
@@ -525,8 +537,8 @@ def main():
         "--label",
         type=str,
         default=None,
-        choices=["y_ret_5", "y_ret_10", "y_ret_20"],
-        help="标签选择（y_ret_5|y_ret_10|y_ret_20），默认 y_ret_5。优先级高于 --label-column"
+        choices=["y_ret_5", "y_ret_10", "y_ret_20", "neu_y_ret_5", "neu_y_ret_10", "neu_y_ret_20"],
+        help="标签选择（y_ret_5|y_ret_10|y_ret_20|neu_y_ret_5|neu_y_ret_10|neu_y_ret_20），默认 y_ret_5。优先级高于 --label-column"
     )
     
     # 任务类型和标签变换参数
@@ -606,7 +618,27 @@ def main():
         default=42,
         help="随机种子，默认 42"
     )
-    
+
+    # rank-weight 参数：Top/Bottom K 样本增强权重
+    parser.add_argument(
+        "--rank-weight-enabled",
+        action="store_true",
+        default=True,
+        help="启用 Top/Bottom K 样本权重增强（默认开启）"
+    )
+    parser.add_argument(
+        "--rank-weight-topk",
+        type=int,
+        default=30,
+        help="每日 Top/Bottom K 样本数，默认 30"
+    )
+    parser.add_argument(
+        "--rank-weight-weight",
+        type=float,
+        default=5.0,
+        help="Top/Bottom K 样本权重，默认 5.0"
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",
