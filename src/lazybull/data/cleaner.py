@@ -607,96 +607,179 @@ class DataCleaner:
         self,
         raw_index_basic: pd.DataFrame,
         raw_index_members: Dict[str, pd.DataFrame],
-        level_str: str = 'l2',
+        level_str: str = 'l3',
     ) -> pd.DataFrame:
-        """清洗申万行业分类数据，生成 ts_code -> 行业映射表
+        """清洗申万行业分类数据，生成 ts_code -> L1/L2/L3 行业映射表（单张表）
 
-        字段映射说明（level=2，即申万二级行业）：
-          - 原始成分股表中的 l2_code 字段 -> 股票代码（ts_code）
-          - 原始指数基本信息中的 index_code  -> sw_code（二级行业指数代码）
-          - 原始指数基本信息中的 industry_name -> sw_name（二级行业名称）
-        
+        支持的 level_str 值：
+          - 'l3'（默认）：产出包含 L1/L2/L3 三层行业字段的统一映射表。
+            raw_index_members 中每个 DataFrame 应含以下字段（来自 index_member_all
+            以 l3_code 查询）：ts_code、l1_code、l1_name（或 l1）、l2_code、
+            l2_name（或 l2）、l3_code、l3_name（或 l3）、in_date（可选）、out_date（可选）。
+          - 'l2'：旧式二级行业清洗，产出 ts_code、sw_code、sw_name、in_date。
+          - 'l1'：旧式一级行业清洗，产出 ts_code、sw_code、sw_name、in_date。
+
         Args:
-            raw_index_basic: 原始申万指数基本信息DataFrame（二级行业指数）
-            raw_index_members: 字典，key为index_code，value为该行业的成分股DataFrame
-            level_str: 行业层级字符串，默认 'l2'（二级行业）；若需一级行业可传 'l1'
-            
+            raw_index_basic: 原始申万指数基本信息（含 index_code、industry_name 列）
+            raw_index_members: 字典，key 为行业指数代码，value 为该行业的成分股 DataFrame
+            level_str: 行业层级，默认 'l3'
+
         Returns:
-            清洗后的申万行业映射DataFrame，包含以下字段：
-            - ts_code: 股票代码
-            - sw_code: 申万二级行业指数代码（对应原始 index_code，level=2）
-            - sw_name: 申万二级行业名称（对应原始 industry_name，level=2）
-            - in_date: 纳入日期
+            清洗后的申万行业映射 DataFrame。
+            - level_str='l3' 时：ts_code、sw_l1_code、sw_l1、sw_l2_code、sw_l2、
+              sw_l3_code、sw_l3、in_date（若可得）
+            - level_str='l1'/'l2' 时（向后兼容）：ts_code、sw_code、sw_name、in_date
         """
         logger.info(f"开始清洗申万行业分类数据（level={level_str}），行业数: {len(raw_index_members)}")
-        
-        # 构建行业代码到行业名称的映射
-        index_code_to_name = {}
-        logger.warning(f"raw_index_basic 列名: {raw_index_basic.columns.tolist()}")
-        if 'index_code' in raw_index_basic.columns and 'industry_name' in raw_index_basic.columns:
-            for _, row in raw_index_basic.iterrows():
-                index_code_to_name[row['index_code']] = row['industry_name']
-        
-        # 合并所有行业的成分股数据
+
+        if level_str == 'l3':
+            return self._clean_shenwan_industry_l3(raw_index_members)
+        else:
+            return self._clean_shenwan_industry_legacy(raw_index_basic, raw_index_members, level_str)
+
+    def _clean_shenwan_industry_l3(
+        self,
+        raw_index_members: Dict[str, pd.DataFrame],
+    ) -> pd.DataFrame:
+        """L3 模式：产出包含 L1/L2/L3 三层字段的统一映射表
+
+        期望 raw_index_members 中每个 DataFrame 含以下字段（来自 index_member_all）：
+          ts_code, l1_code, l1_name, l2_code, l2_name, l3_code, l3_name,
+          in_date（可选）, out_date（可选）, is_new（可选）
+
+        Returns:
+            包含 ts_code、sw_l1_code、sw_l1、sw_l2_code、sw_l2、
+            sw_l3_code、sw_l3、in_date 的 DataFrame
+        """
+        # l3_name 字段别名（index_member_all 可能会返回不同命名）
+        _L3_NAME_ALIASES = ['l3_name', 'l3']
+        _L2_NAME_ALIASES = ['l2_name', 'l2']
+        _L1_NAME_ALIASES = ['l1_name', 'l1']
+
         all_members = []
         for index_code, members_df in raw_index_members.items():
             if len(members_df) == 0:
                 continue
-            
-            # 复制数据
+
             df = members_df.copy()
-            
-            # 确保包含必要字段
+
+            # 必须有 ts_code 和 l3_code
+            if 'ts_code' not in df.columns or 'l3_code' not in df.columns:
+                logger.warning(
+                    f"行业 {index_code} 的成分股数据缺少 ts_code 或 l3_code 字段，跳过"
+                )
+                continue
+
+            # 标准化日期
+            if 'in_date' in df.columns:
+                df = self._standardize_date_columns(df, ['in_date'])
+            if 'out_date' in df.columns:
+                df = self._standardize_date_columns(df, ['out_date'])
+
+            # 只保留当前成员：out_date 为空，或 is_new==1
+            if 'out_date' in df.columns:
+                df = df[df['out_date'].isna() | (df['out_date'] == '')].copy()
+            elif 'is_new' in df.columns:
+                df = df[df['is_new'] == 1].copy()
+
+            # 统一字段名：处理 l3_name/l3 别名
+            l3_name_col = next((c for c in _L3_NAME_ALIASES if c in df.columns), None)
+            l2_name_col = next((c for c in _L2_NAME_ALIASES if c in df.columns), None)
+            l1_name_col = next((c for c in _L1_NAME_ALIASES if c in df.columns), None)
+
+            row = df.copy()
+            row['sw_l3_code'] = row['l3_code']
+            row['sw_l3'] = row[l3_name_col] if l3_name_col else row['l3_code']
+
+            if 'l2_code' in df.columns:
+                row['sw_l2_code'] = row['l2_code']
+                row['sw_l2'] = row[l2_name_col] if l2_name_col else row['l2_code']
+            else:
+                row['sw_l2_code'] = None
+                row['sw_l2'] = None
+
+            if 'l1_code' in df.columns:
+                row['sw_l1_code'] = row['l1_code']
+                row['sw_l1'] = row[l1_name_col] if l1_name_col else row['l1_code']
+            else:
+                row['sw_l1_code'] = None
+                row['sw_l1'] = None
+
+            keep_cols = ['ts_code', 'sw_l1_code', 'sw_l1', 'sw_l2_code', 'sw_l2',
+                         'sw_l3_code', 'sw_l3']
+            if 'in_date' in df.columns:
+                row['in_date'] = df['in_date']
+                keep_cols.append('in_date')
+
+            all_members.append(row[keep_cols])
+            logger.debug(f"L3 行业 {index_code} 成分股数: {len(row)}")
+
+        if not all_members:
+            logger.warning("没有有效的申万三级行业成分股数据")
+            return pd.DataFrame(
+                columns=['ts_code', 'sw_l1_code', 'sw_l1', 'sw_l2_code', 'sw_l2',
+                         'sw_l3_code', 'sw_l3', 'in_date']
+            )
+
+        result = pd.concat(all_members, ignore_index=True)
+        result['ts_code'] = result['ts_code'].astype(str)
+
+        # 每只股票只保留一条记录（对应最精细的主营行业）
+        result = self._deduplicate(result, ['ts_code'])
+        result = result.sort_values('ts_code').reset_index(drop=True)
+
+        logger.info(f"申万三级行业分类清洗完成，记录数: {len(result)}")
+        return result
+
+    def _clean_shenwan_industry_legacy(
+        self,
+        raw_index_basic: pd.DataFrame,
+        raw_index_members: Dict[str, pd.DataFrame],
+        level_str: str,
+    ) -> pd.DataFrame:
+        """旧式 L1/L2 清洗（向后兼容），产出 ts_code、sw_code、sw_name、in_date"""
+        # 构建行业代码到行业名称的映射
+        index_code_to_name = {}
+        if 'index_code' in raw_index_basic.columns and 'industry_name' in raw_index_basic.columns:
+            for _, row in raw_index_basic.iterrows():
+                index_code_to_name[row['index_code']] = row['industry_name']
+
+        all_members = []
+        for index_code, members_df in raw_index_members.items():
+            if len(members_df) == 0:
+                continue
+
+            df = members_df.copy()
+
             if f'{level_str}_code' not in df.columns:
                 logger.warning(f"行业 {index_code} 的成分股数据缺少 {level_str}_code 字段，跳过")
                 continue
-            
-            # 重命名列
-            #logger.warning(f"行业 {index_code} 列名: {df.columns.tolist()}")
-            #df = df.rename(columns={f'{level_str}_code': 'ts_code'})
-            
-            # 添加行业信息
+
             df['sw_code'] = index_code
             df['sw_name'] = index_code_to_name.get(index_code, '未知行业')
-            
-            # 标准化日期列
+
             if 'in_date' in df.columns:
                 df = self._standardize_date_columns(df, ['in_date'])
-            
             if 'out_date' in df.columns:
                 df = self._standardize_date_columns(df, ['out_date'])
-            
-            # 只保留当前在行业内的股票（out_date为空）
-            if 'out_date' in df.columns:
                 df = df[df['out_date'].isna() | (df['out_date'] == '')].copy()
-            
-            # 选择需要的列
+
             keep_cols = ['ts_code', 'sw_code', 'sw_name']
             if 'in_date' in df.columns:
                 keep_cols.append('in_date')
-            
+
             df = df[keep_cols]
             all_members.append(df)
             logger.info(f"行业 {index_code} ({index_code_to_name.get(index_code, '未知行业')}) 成分股数: {len(df)}")
-        
+
         if not all_members:
             logger.warning("没有有效的申万行业成分股数据")
             return pd.DataFrame(columns=['ts_code', 'sw_code', 'sw_name', 'in_date'])
-        
-        # 合并所有行业数据
+
         result = pd.concat(all_members, ignore_index=True)
-        
-        # ts_code 统一为字符串
         result['ts_code'] = result['ts_code'].astype(str)
-        
-        # 去重：一只股票可能属于多个行业指数（例如同时属于行业指数和主题指数）
-        # 保留第一条记录（通常是主营行业分类）
-        # 如果需要保留所有行业归属，可以注释掉此去重步骤
         result = self._deduplicate(result, ['ts_code'])
-        
-        # 排序
         result = result.sort_values('ts_code').reset_index(drop=True)
-        
+
         logger.info(f"申万行业分类清洗完成，清洗后记录数: {len(result)}")
-        
         return result

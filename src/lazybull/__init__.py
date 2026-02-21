@@ -3,7 +3,7 @@ LazyBull - A股量化研究与回测框架
 专注价值红利策略方向
 """
 
-__version__ = "0.12.1"  # v0.12.1 新增个股特征（is_new_stock/size/zscore_size/spec_score）与市场状态特征（mkt_vol_cnt等）
+__version__ = "0.13.0"  # v0.13.0 申万行业升级三级（L3）并支持 L3→L2→L1→全市场分层回退中性化
 __author__ = "deltree-y"
 
 from pathlib import Path

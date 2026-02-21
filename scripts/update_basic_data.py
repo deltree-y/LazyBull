@@ -169,17 +169,17 @@ def update_shenwan_industry(
     storage: Storage,
     force: bool = False
 ) -> None:
-    """更新申万行业分类数据
-    
+    """更新申万行业分类数据（三级行业，含 L1/L2/L3 完整层级）
+
     Args:
         client: TushareClient实例
         storage: Storage实例
         force: 是否强制更新
     """
     logger.info("=" * 60)
-    logger.info("更新申万行业分类数据")
+    logger.info("更新申万行业分类数据（申万三级 L3）")
     logger.info("=" * 60)
-    
+
     # 检查是否需要更新
     if not force:
         existing = storage.load_raw("shenwan_industry")
@@ -188,83 +188,79 @@ def update_shenwan_industry(
             logger.info("提示：使用 --force 参数可强制更新")
             logger.info("提示：申万行业建议每季度更新一次")
             return
-    
-    # 1. 获取申万二级行业指数列表
-    logger.info("获取申万二级行业指数列表...")
+
+    # 1. 获取申万三级行业指数列表
+    logger.info("获取申万三级行业指数列表（index_classify level=L3）...")
     try:
-        index_classify = client.get_index_classify(level="L2", src="SW2021")
-        logger.info(f"获取到 {len(index_classify)} 个申万指数")
-        
-        # 筛选二级行业指数
+        index_classify = client.get_index_classify(level="L3", src="SW2021")
+        logger.info(f"获取到 {len(index_classify)} 个申万三级指数")
+
         if 'index_code' in index_classify.columns:
-            sw_l2_indices = index_classify.copy()
-            logger.info(f"筛选出 {len(sw_l2_indices)} 个申万二级行业指数")
+            sw_l3_indices = index_classify.copy()
+            logger.info(f"筛选出 {len(sw_l3_indices)} 个申万三级行业指数")
         else:
             logger.warning("index_classify缺少index_code字段，使用全部指数")
-            sw_l2_indices = index_classify
+            sw_l3_indices = index_classify
     except Exception as e:
-        logger.error(f"获取申万行业指数失败: {e}")
+        logger.error(f"获取申万三级行业指数失败: {e}")
         logger.error("请确保TuShare账号有权限访问index_classify接口")
         return
-    
-    if len(sw_l2_indices) == 0:
-        logger.warning("未找到申万二级行业指数")
+
+    if len(sw_l3_indices) == 0:
+        logger.warning("未找到申万三级行业指数")
         return
-    
-    # 2. 获取每个行业的成分股
-    logger.info("获取各行业成分股...")
+
+    # 2. 获取每个 L3 行业的成分股（index_member_all 包含 L1/L2/L3 完整层级信息）
+    logger.info("获取各三级行业成分股（含 L1/L2/L3 层级信息）...")
     index_members = {}
     success_count = 0
-    
-    for _, row in sw_l2_indices.iterrows():
+
+    for _, row in sw_l3_indices.iterrows():
         index_code = row['index_code']
-        index_name = row.get('name', index_code)
-        
+        index_name = row.get('industry_name', row.get('name', index_code))
+
         try:
-            logger.info(f"  获取 {index_name} ({index_code}) 成分股...")
-            members = client.get_index_member(l2_code=index_code)
-            
+            logger.debug(f"  获取 {index_name} ({index_code}) 成分股...")
+            members = client.get_index_member(l3_code=index_code)
+
             if len(members) > 0:
                 index_members[index_code] = members
                 success_count += 1
-                logger.info(f"    成功：{len(members)} 只股票")
+                logger.debug(f"    成功：{len(members)} 只股票")
             else:
-                logger.warning(f"    无成分股数据")
+                logger.warning(f"    {index_name} ({index_code}) 无成分股数据")
         except Exception as e:
-            logger.warning(f"    获取失败：{e}")
+            logger.warning(f"    获取 {index_code} 失败：{e}")
             continue
-    
-    logger.info(f"成功获取 {success_count}/{len(sw_l2_indices)} 个行业的成分股数据")
-    
+
+    logger.info(f"成功获取 {success_count}/{len(sw_l3_indices)} 个三级行业的成分股数据")
+
     if success_count == 0:
         logger.error("未能获取任何行业的成分股数据，更新失败")
         return
-    
-    # 3. 保存原始数据到raw层
-    logger.info("保存原始数据...")
-    # 将index_basic和index_members保存到raw层
-    # 这里使用一个简单的方案：将清洗后的数据直接保存到raw层
-    # 在实际使用时，FeatureBuilder会从clean层读取
-    
-    # 先进行清洗
+
+    # 3. 清洗并保存（L3 模式，产出 L1/L2/L3 完整层级字段）
+    logger.info("清洗申万三级行业分类数据...")
     cleaner = DataCleaner()
-    clean_data = cleaner.clean_shenwan_industry(sw_l2_indices, index_members, level_str='l2')
-    
+    clean_data = cleaner.clean_shenwan_industry(sw_l3_indices, index_members, level_str='l3')
+
     if len(clean_data) == 0:
         logger.warning("清洗后无有效数据")
         return
-    
-    # 保存到raw层（这里直接保存清洗后的数据）
+
     storage.save_raw(clean_data, "shenwan_industry", is_force=True)
-    logger.info(f"申万行业分类已更新: {len(clean_data)} 条股票-行业映射")
-    
+    logger.info(f"申万行业分类已更新（三级）: {len(clean_data)} 条股票-行业映射")
+
     # 显示统计信息
-    if 'sw_name' in clean_data.columns:
-        industry_counts = clean_data['sw_name'].value_counts()
-        logger.info(f"行业分布（前10）:")
-        for industry, count in industry_counts.head(10).items():
+    if 'sw_l3' in clean_data.columns:
+        l3_counts = clean_data['sw_l3'].value_counts()
+        logger.info(f"三级行业分布（前10）:")
+        for industry, count in l3_counts.head(10).items():
             logger.info(f"  {industry}: {count} 只")
-    
+    if 'sw_l1' in clean_data.columns:
+        l1_counts = clean_data['sw_l1'].value_counts()
+        logger.info(f"一级行业数量: {l1_counts.nunique()}，覆盖一级行业: {l1_counts.index.tolist()[:5]}...")
+
     logger.info("=" * 60)
 
 
@@ -345,13 +341,13 @@ def main():
         logger.info(f"数据保存位置: {storage.root_path}/raw")
         logger.info("  - trade_cal.parquet (单文件)")
         logger.info("  - stock_basic.parquet (单文件)")
-        logger.info("  - shenwan_industry.parquet (单文件)")
+        logger.info("  - shenwan_industry.parquet (单文件，含 L1/L2/L3 三层字段)")
         logger.info("=" * 60)
         logger.info("")
         logger.info("更新策略说明：")
         logger.info("1. trade_cal: 建议每年年初更新一次，新增当年全部交易日数据")
         logger.info("2. stock_basic: 建议每季度更新一次，获取新上市/退市股票")
-        logger.info("3. shenwan_industry: 建议每季度更新一次，获取最新行业分类")
+        logger.info("3. shenwan_industry: 建议每季度更新一次，获取最新三级行业分类（L1/L2/L3）")
         logger.info("4. 可以在cron或定时任务中运行此脚本")
         logger.info("=" * 60)
         
