@@ -31,6 +31,7 @@ from ..factors import (
     calculate_acceleration,
     calculate_volume_burst,
     compute_market_state_features,
+    precompute_market_state_features,
 )
 from ..factors.normalization import cross_sectional_zscore
 
@@ -68,6 +69,8 @@ class FeatureBuilder:
         self.lookback_windows = lookback_windows or [5, 10, 20]
         self.require_label = require_label
         self.verbose = verbose
+        # 实例级缓存：批量预计算的市场状态特征（首次调用时触发，后续 O(1) 取值）
+        self._market_state_cache: Optional[pd.DataFrame] = None
         
         if self.verbose:
             logger.info(
@@ -1498,25 +1501,44 @@ class FeatureBuilder:
     ) -> pd.DataFrame:
         """添加市场状态特征（每日一个标量，广播到所有股票）
 
+        首次调用时对全部 trading_dates 批量预计算并缓存；
+        后续调用直接按 trade_date 从缓存 O(1) 取值，避免逐日重复计算。
+
         Args:
             result: 当日截面 DataFrame
             daily_adj: 全量后复权日线数据
             trade_date: 目标交易日（YYYYMMDD）
             trading_dates: 已排序的交易日列表
-            current_idx: trade_date 在 trading_dates 中的索引
+            current_idx: trade_date 在 trading_dates 中的索引（保留，兼容旧调用）
             daily_basic_data: 全量每日指标数据（可选）
 
         Returns:
             添加了市场状态列的 DataFrame
         """
         try:
-            mkt_features = compute_market_state_features(
-                daily_data=daily_adj,
-                trade_date=trade_date,
-                trading_dates=trading_dates,
-                current_idx=current_idx,
-                daily_basic_data=daily_basic_data,
-            )
+            # 首次进入时批量预计算并缓存
+            if self._market_state_cache is None:
+                logger.info("首次构建：批量预计算所有交易日市场状态特征（缓存中）...")
+                self._market_state_cache = precompute_market_state_features(
+                    daily_data=daily_adj,
+                    trading_dates=trading_dates,
+                    daily_basic_data=daily_basic_data,
+                )
+
+            # 按 trade_date O(1) 取值
+            if trade_date in self._market_state_cache.index:
+                row = self._market_state_cache.loc[trade_date]
+                mkt_features = row.to_dict()
+            else:
+                # 安全回退：该日不在缓存中，逐日计算
+                logger.warning(f"{trade_date} 不在市场状态缓存中，回退到逐日计算")
+                mkt_features = compute_market_state_features(
+                    daily_data=daily_adj,
+                    trade_date=trade_date,
+                    trading_dates=trading_dates,
+                    current_idx=current_idx,
+                    daily_basic_data=daily_basic_data,
+                )
         except Exception as e:
             logger.error(f"计算市场状态特征失败：{e}")
             mkt_features = {
