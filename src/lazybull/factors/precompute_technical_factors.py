@@ -16,6 +16,7 @@ from typing import List, Optional
 import pandas as pd
 from loguru import logger
 
+from .returns import compute_ret_1
 from .technical_indicators import (
     calculate_bollinger_bands,
     calculate_kdj,
@@ -125,21 +126,15 @@ def precompute_technical_factors(
             logger.error(f"批量计算布林带失败：{e}")
 
     # ---- 步骤 6：波动率（多窗口滚动标准差） ----
-    # 需要 ret_1 列（从 pct_chg 衍生或直接使用）
-    ret_col_available = None
-    if 'ret_1' in daily_adj.columns:
-        ret_col_available = 'ret_1'
-    elif 'pct_chg' in daily_adj.columns:
-        ret_col_available = 'ret_1'
+    # 使用共用 compute_ret_1 构造收益率：优先 close_adj pct_change，其次 pct_chg/100
+    ret_1_series = compute_ret_1(daily_adj)
+    ret_col_available = not ret_1_series.isna().all()
 
-    if ret_col_available is not None:
+    if ret_col_available:
         logger.debug(f"批量计算滚动波动率（窗口={vol_windows}）...")
         try:
             vol_input = daily_adj[['ts_code', 'trade_date']].copy()
-            if 'ret_1' in daily_adj.columns:
-                vol_input['ret_1'] = daily_adj['ret_1'].values
-            else:
-                vol_input['ret_1'] = daily_adj['pct_chg'].values / 100.0
+            vol_input['ret_1'] = ret_1_series.values
 
             vol_df = calculate_volatility(vol_input, ret_col='ret_1', windows=vol_windows)
             vol_cols = [f'volatility_{w}' for w in vol_windows]
@@ -152,7 +147,7 @@ def precompute_technical_factors(
         except Exception as e:
             logger.error(f"批量计算波动率失败：{e}")
     else:
-        logger.warning("precompute_technical_factors: 缺少 ret_1/pct_chg 列，跳过波动率计算")
+        logger.warning("precompute_technical_factors: 无法构造 ret_1（缺少 ret_1/close_adj/pct_chg 列），跳过波动率计算")
 
     elapsed = time.time() - t0
     output_cols = [c for c in result.columns if c not in ('ts_code', 'trade_date')]
