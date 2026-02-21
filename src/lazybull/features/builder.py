@@ -32,6 +32,7 @@ from ..factors import (
     calculate_volume_burst,
     compute_market_state_features,
     precompute_market_state_features,
+    precompute_technical_factors,
 )
 from ..factors.normalization import cross_sectional_zscore
 
@@ -71,6 +72,8 @@ class FeatureBuilder:
         self.verbose = verbose
         # 实例级缓存：批量预计算的市场状态特征（首次调用时触发，后续 O(1) 取值）
         self._market_state_cache: Optional[pd.DataFrame] = None
+        # 实例级缓存：批量预计算的技术指标与波动率因子（首次调用时触发，后续 O(1) 查表）
+        self._tech_factor_cache: Optional[pd.DataFrame] = None
         
         if self.verbose:
             logger.info(
@@ -606,26 +609,18 @@ class FeatureBuilder:
             shadows_df = calculate_shadows(current_data)
             result = result.merge(shadows_df, on=['ts_code', 'trade_date'], how='left')
         
-        # 2. 波动率因子（基于 ret_1 的 rolling std）
-        logger.debug("计算波动率因子...")
+        # 2. 波动率因子（基于 ret_1 的 rolling std）——改为从预计算缓存取值
+        logger.debug("获取波动率因子（批量预计算缓存）...")
         if 'ret_1' in result.columns and current_idx >= max(self.lookback_windows):
-            # 获取历史窗口数据用于计算波动率
-            lookback = max(self.lookback_windows) + 1  # 额外留1天用于计算 ret_1
-            hist_start_date = trading_dates[max(0, current_idx - lookback)]
-            hist_dates = [d for d in trading_dates if hist_start_date <= d <= trade_date]
-            
-            vol_hist_data = daily_adj[daily_adj['trade_date'].isin(hist_dates)].copy()
-            
-            # 确保包含 ret_1 列（从 pct_chg 计算）
-            if 'ret_1' not in vol_hist_data.columns and 'pct_chg' in vol_hist_data.columns:
-                vol_hist_data['ret_1'] = vol_hist_data['pct_chg'] / 100.0
-            
-            if 'ret_1' in vol_hist_data.columns:
-                volatility_df = calculate_volatility(vol_hist_data, ret_col='ret_1', windows=self.lookback_windows)
-                # 只保留当日的波动率
-                volatility_today = volatility_df[volatility_df['trade_date'] == trade_date]
-                if len(volatility_today) > 0:
-                    result = result.merge(volatility_today, on=['ts_code', 'trade_date'], how='left')
+            tech_today = self._get_tech_factor_today(daily_adj, trade_date)
+            vol_cols = [f'volatility_{w}' for w in self.lookback_windows
+                        if f'volatility_{w}' in tech_today.columns]
+            if vol_cols and len(tech_today) > 0:
+                result = result.merge(
+                    tech_today[['ts_code', 'trade_date'] + vol_cols],
+                    on=['ts_code', 'trade_date'],
+                    how='left',
+                )
         
         # 3. 行业相关因子：industry_id, alpha_industry
         #logger.debug("计算行业相关因子...")
@@ -657,49 +652,56 @@ class FeatureBuilder:
             vol_burst_df = calculate_volume_burst(result, vol_ratio_windows=self.lookback_windows)
             result = result.merge(vol_burst_df, on=['ts_code', 'trade_date'], how='left')
         
-        # 6. 技术指标：RSI, KDJ, MACD, 布林带
+        # 6. 技术指标：RSI, KDJ, MACD, 布林带——改为从预计算缓存取值
         # 需要足够的历史数据（至少30天用于 MACD(12,26,9) 和布林带(20)）
         if current_idx >= 30:
-            lookback = 50  # 给技术指标留足够历史
-            hist_start_date = trading_dates[max(0, current_idx - lookback)]
-            hist_dates = [d for d in trading_dates if hist_start_date <= d <= trade_date]
-            
-            tech_hist_data = daily_adj[daily_adj['trade_date'].isin(hist_dates)].copy()
-            
-            # RSI(14)
-            logger.debug("计算RSI指标...")
-            if 'close_adj' in tech_hist_data.columns:
-                rsi_df = calculate_rsi(tech_hist_data, window=14)
-                rsi_today = rsi_df[rsi_df['trade_date'] == trade_date]
-                if len(rsi_today) > 0:
-                    result = result.merge(rsi_today, on=['ts_code', 'trade_date'], how='left')
-            
-            # KDJ(9,3,3)
-            logger.debug("计算KDJ指标...")
-            if all(col in tech_hist_data.columns for col in ['high_adj', 'low_adj', 'close_adj']):
-                kdj_df = calculate_kdj(tech_hist_data, n=9, m1=3, m2=3)
-                kdj_today = kdj_df[kdj_df['trade_date'] == trade_date]
-                if len(kdj_today) > 0:
-                    result = result.merge(kdj_today, on=['ts_code', 'trade_date'], how='left')
-            
-            # MACD(12,26,9)
-            logger.debug("计算MACD指标...")
-            if 'close_adj' in tech_hist_data.columns:
-                macd_df = calculate_macd(tech_hist_data, fast=12, slow=26, signal=9)
-                macd_today = macd_df[macd_df['trade_date'] == trade_date]
-                if len(macd_today) > 0:
-                    result = result.merge(macd_today, on=['ts_code', 'trade_date'], how='left')
-            
-            # 布林带(20,2)
-            logger.debug("计算布林带指标...")
-            if 'close_adj' in tech_hist_data.columns:
-                bb_df = calculate_bollinger_bands(tech_hist_data, window=20, num_std=2.0)
-                bb_today = bb_df[bb_df['trade_date'] == trade_date]
-                if len(bb_today) > 0:
-                    result = result.merge(bb_today, on=['ts_code', 'trade_date'], how='left')
+            tech_today = self._get_tech_factor_today(daily_adj, trade_date)
+            tech_indicator_cols = [
+                c for c in ['rsi_14', 'kdj_k', 'kdj_d', 'kdj_j',
+                             'macd_dif', 'macd_dea', 'macd_hist',
+                             'bb_middle', 'bb_upper', 'bb_lower', 'bb_width', 'bb_pct']
+                if c in tech_today.columns
+            ]
+            if tech_indicator_cols and len(tech_today) > 0:
+                logger.debug("从预计算缓存获取技术指标（RSI/KDJ/MACD/布林带）...")
+                result = result.merge(
+                    tech_today[['ts_code', 'trade_date'] + tech_indicator_cols],
+                    on=['ts_code', 'trade_date'],
+                    how='left',
+                )
         
         return result
     
+    def _get_tech_factor_today(
+        self,
+        daily_adj: pd.DataFrame,
+        trade_date: str,
+    ) -> pd.DataFrame:
+        """获取当日技术指标与波动率因子（内存缓存，首次触发批量预计算）
+
+        首次调用时对全量 daily_adj 批量预计算所有指标并缓存到
+        ``self._tech_factor_cache``；后续调用仅按 trade_date 过滤，
+        实现 O(1) 查表，避免逐日重复计算。
+
+        Args:
+            daily_adj: 全量后复权日线数据
+            trade_date: 目标交易日（YYYYMMDD）
+
+        Returns:
+            当日截面技术指标 DataFrame（ts_code + trade_date + 各指标列）
+        """
+        if self._tech_factor_cache is None:
+            logger.info("首次构建：批量预计算技术指标与波动率因子（缓存中）...")
+            self._tech_factor_cache = precompute_technical_factors(
+                daily_adj=daily_adj,
+                vol_windows=self.lookback_windows,
+            )
+
+        if self._tech_factor_cache is None or len(self._tech_factor_cache) == 0:
+            return pd.DataFrame(columns=['ts_code', 'trade_date'])
+
+        return self._tech_factor_cache[self._tech_factor_cache['trade_date'] == trade_date]
+
     def _add_value_dividend_features(
         self,
         features: pd.DataFrame,

@@ -39,6 +39,7 @@ from .normalization import (
 )
 
 from .market_state import compute_market_state_features, precompute_market_state_features
+from .precompute_technical_factors import precompute_technical_factors
 
 __all__ = [
     # 技术指标
@@ -65,4 +66,6 @@ __all__ = [
     # 市场状态特征
     'compute_market_state_features',
     'precompute_market_state_features',
+    # 技术指标与波动率批量预计算
+    'precompute_technical_factors',
 ]

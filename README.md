@@ -29,7 +29,20 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.13.1)
+### 当前版本 (v0.13.2)
+
+**技术指标与波动率批量预计算 + 实例级缓存** (v0.13.2 新增):
+- ✅ **批量预计算函数 `precompute_technical_factors()`**：
+  新增 `src/lazybull/factors/precompute_technical_factors.py`，
+  对全量 `daily_adj` 一次性计算 RSI(14)、KDJ(9,3,3)、MACD(12,26,9)、布林带(20,2)
+  及多窗口滚动波动率，输出宽表供按日查表。
+- ✅ **`FeatureBuilder` 实例级缓存**：新增 `_tech_factor_cache` 字段，
+  首次构建时触发批量预计算并缓存；后续每日仅做 `O(1)` 查表，
+  彻底消除批量构建时逐日切片 + 重复计算的瓶颈。
+- ✅ **输出口径不变**：复用现有 `calculate_rsi/kdj/macd/bollinger_bands/volatility`
+  函数，数值精度与旧逻辑完全一致（< 1e-6），无需重新训练模型。
+- ✅ **`build_features.py` 和 `build_clean_features.py` 自动受益**：
+  两条链路均通过 `FeatureBuilder` 构建，无需修改脚本。
 
 **市场状态特征性能优化** (v0.13.1 新增):
 - ✅ **批量预计算 + 实例级缓存**：新增 `precompute_market_state_features()` 函数，
