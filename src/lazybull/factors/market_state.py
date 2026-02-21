@@ -57,9 +57,22 @@ def _compute_daily_market_stats(daily_data: pd.DataFrame, date: str) -> dict:
 
     adv = int((ret > 0).sum())
     dec = int((ret < 0).sum())
+    # +1 为 Laplace 平滑，防止 dec==0 时除以零，同时缓解极端单边行情的影响
     result['adv_dec_ratio'] = (adv + 1) / (dec + 1)
 
     return result
+
+
+def _rolling_mean(values: list, window: int) -> float:
+    """对列表最后 window 个有效（非 NaN）值求均值（min_periods=1）"""
+    window_vals = [v for v in values[-window:] if not np.isnan(v)]
+    return float(np.mean(window_vals)) if window_vals else np.nan
+
+
+def _rolling_sum(values: list, window: int) -> float:
+    """对列表最后 window 个有效（非 NaN）值求和（min_periods=1）"""
+    window_vals = [v for v in values[-window:] if not np.isnan(v)]
+    return float(sum(window_vals)) if window_vals else np.nan
 
 
 def compute_market_state_features(
@@ -137,25 +150,13 @@ def compute_market_state_features(
         adv_dec_ratio_list.append(stats['adv_dec_ratio'])
 
     # mkt_vol_20: 最近 20 日 vol_cnt 均值（含当日，min_periods=1）
-    if vol_cnt_list:
-        window_vals = [v for v in vol_cnt_list[-VOL_WINDOW:] if not np.isnan(v)]
-        mkt_vol_20 = float(np.mean(window_vals)) if window_vals else np.nan
-    else:
-        mkt_vol_20 = np.nan
+    mkt_vol_20 = _rolling_mean(vol_cnt_list, VOL_WINDOW)
 
     # mkt_ret_avg_20: 最近 20 日截面平均收益率之和
-    if mean_ret_list:
-        window_vals = [v for v in mean_ret_list[-RET_AVG_WINDOW:] if not np.isnan(v)]
-        mkt_ret_avg_20 = float(sum(window_vals)) if window_vals else np.nan
-    else:
-        mkt_ret_avg_20 = np.nan
+    mkt_ret_avg_20 = _rolling_sum(mean_ret_list, RET_AVG_WINDOW)
 
     # mkt_adv_dec_ratio: 最近 60 日涨跌比均值
-    if adv_dec_ratio_list:
-        window_vals = [v for v in adv_dec_ratio_list[-ADV_DEC_WINDOW:] if not np.isnan(v)]
-        mkt_adv_dec_ratio = float(np.mean(window_vals)) if window_vals else np.nan
-    else:
-        mkt_adv_dec_ratio = np.nan
+    mkt_adv_dec_ratio = _rolling_mean(adv_dec_ratio_list, ADV_DEC_WINDOW)
 
     logger.debug(
         f"市场状态特征 [{trade_date}]: "

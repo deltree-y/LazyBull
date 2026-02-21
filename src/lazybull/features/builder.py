@@ -1385,6 +1385,7 @@ class FeatureBuilder:
         if 'list_days' in result.columns:
             result['is_new_stock'] = (result['list_days'] < 365).astype(int)
         else:
+            logger.warning("缺少 list_days 列，is_new_stock 将全部设为 0（无法判断新股）")
             result['is_new_stock'] = 0
 
         # size: 流通市值
