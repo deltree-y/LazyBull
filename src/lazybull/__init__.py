@@ -3,7 +3,7 @@ LazyBull - A股量化研究与回测框架
 专注价值红利策略方向
 """
 
-__version__ = "0.13.0"  # v0.13.0 申万行业升级三级（L3）并支持 L3→L2→L1→全市场分层回退中性化
+__version__ = "0.13.1"  # v0.13.1 性能优化：批量预计算市场状态特征，消除批量构建时的重复计算
 __author__ = "deltree-y"
 
 from pathlib import Path

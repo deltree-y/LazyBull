@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.1] - 2026-02-21
+
+### 性能优化
+
+- **市场状态特征批量预计算 + 实例级缓存**
+  - 新增 `precompute_market_state_features(daily_data, trading_dates, daily_basic_data)` 函数
+    （`src/lazybull/factors/market_state.py`）：对全量数据一次性 groupby + pandas rolling，
+    将批量构建时逐日重复的 O(N×60) 计算降低为 O(N) 预计算 + O(1) 取值。
+  - `FeatureBuilder._add_market_state_features()` 首次调用时自动触发批量预计算并存入
+    `self._market_state_cache`，后续每日直接按索引取一行，兼容
+    `build_features.py` 和 `build_clean_features.py` 两条构建链路。
+  - 保留原 `compute_market_state_features()` 作为单日/回退入口，输出口径 **完全不变**
+    （6 个字段数值精度 < 1e-9）。
+  - `factors/__init__.py` 新增 `precompute_market_state_features` 导出。
+
+### 测试
+
+- 更新 `tests/test_market_and_new_features.py`（新增 6 个测试用例）：
+  - `TestPrecomputeMarketStateFeatures`
+    - `test_output_shape`：验证输出行数与 trading_dates 一致
+    - `test_parity_with_single_day_no_basic`：无 daily_basic 时与逐日结果精确一致
+    - `test_parity_with_single_day_with_basic`：含 daily_basic 时与逐日结果精确一致
+    - `test_rolling_min_periods_1`：数据不足窗口时 min_periods=1 行为验证
+    - `test_empty_data_returns_nan`：空数据不抛异常，返回全 NaN
+    - `test_no_duplicate_compute_with_cache`：多次调用只触发一次批量预计算
+
+### 文档
+
+- 新增 `docs/PR/optimize_market_state_features.md`：性能问题说明、优化方案、影响范围
+- 新增 `docs/guide/market_state_features.md`：如何验证输出一致性
+
+### 版本变更
+
+- 版本号：`0.13.0` → `0.13.1`（patch bump，纯性能优化，不改口径）
+
 ## [0.13.0] - 2026-02-21
 
 ### 新增功能

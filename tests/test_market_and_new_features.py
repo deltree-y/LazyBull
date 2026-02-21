@@ -6,6 +6,7 @@ import pytest
 
 from src.lazybull.factors.market_state import (
     compute_market_state_features,
+    precompute_market_state_features,
     _compute_daily_market_stats,
 )
 from src.lazybull.features.builder import FeatureBuilder
@@ -320,3 +321,117 @@ class TestMarketStateRolling:
         # 仅 5 日数据，mkt_vol_20 不应为 NaN
         assert not np.isnan(result['mkt_vol_20'])
         assert not np.isnan(result['mkt_ret_avg_20'])
+
+
+# ---------------------------------------------------------------------------
+# TestPrecomputeMarketStateFeatures
+# ---------------------------------------------------------------------------
+
+class TestPrecomputeMarketStateFeatures:
+    """测试批量预计算市场状态特征（precompute_market_state_features）"""
+
+    def _make_multi_day_data(self, n_days, n_stocks=20, seed=42):
+        """构造多日行情测试数据（同 TestMarketStateRolling）"""
+        rng = np.random.default_rng(seed)
+        base = pd.Timestamp('20230101')
+        dates = [(base + pd.Timedelta(days=i)).strftime('%Y%m%d') for i in range(n_days)]
+        rows = []
+        for d in dates:
+            for j in range(n_stocks):
+                rows.append({
+                    'trade_date': d,
+                    'ts_code': f'{j:06d}.SZ',
+                    'pct_chg': float(rng.normal(0, 2)),
+                    'vol': float(rng.integers(0, 1000)),
+                    'amount': float(rng.uniform(1000, 10000)),
+                })
+        return pd.DataFrame(rows), dates
+
+    def _make_daily_basic(self, dates, n_stocks=20, seed=99):
+        """构造多日 daily_basic 测试数据"""
+        rng = np.random.default_rng(seed)
+        rows = []
+        for d in dates:
+            for j in range(n_stocks):
+                rows.append({
+                    'trade_date': d,
+                    'ts_code': f'{j:06d}.SZ',
+                    'circ_mv': float(rng.uniform(1e6, 1e8)),
+                    'turnover_rate_f': float(rng.uniform(0.5, 5.0)),
+                })
+        return pd.DataFrame(rows)
+
+    def test_output_shape(self):
+        """批量预计算应返回行数等于 trading_dates 的 DataFrame"""
+        daily_data, dates = self._make_multi_day_data(30)
+        result = precompute_market_state_features(daily_data, dates)
+        assert len(result) == len(dates)
+        assert set(result.columns) == {
+            'mkt_vol_cnt', 'mkt_vol_20', 'mkt_turnover_ratio',
+            'mkt_ret_avg_20', 'mkt_turnover_std', 'mkt_adv_dec_ratio',
+        }
+
+    def test_parity_with_single_day_no_basic(self):
+        """批量预计算结果应与逐日计算完全一致（无 daily_basic）"""
+        daily_data, dates = self._make_multi_day_data(70)
+        batch = precompute_market_state_features(daily_data, dates)
+        # 对后 5 天逐日比对 6 个字段
+        for i, d in enumerate(dates[-5:], len(dates) - 5):
+            single = compute_market_state_features(daily_data, d, dates, i)
+            for col in single:
+                b_val = float(batch.loc[d, col])
+                s_val = float(single[col])
+                if np.isnan(s_val):
+                    assert np.isnan(b_val), f"[{d}] {col}: 期望 NaN，实际 {b_val}"
+                else:
+                    assert abs(b_val - s_val) < 1e-9, (
+                        f"[{d}] {col}: 批量={b_val:.12f} 逐日={s_val:.12f}"
+                    )
+
+    def test_parity_with_single_day_with_basic(self):
+        """批量预计算结果应与逐日计算完全一致（含 daily_basic）"""
+        daily_data, dates = self._make_multi_day_data(70)
+        daily_basic = self._make_daily_basic(dates)
+        batch = precompute_market_state_features(daily_data, dates, daily_basic)
+        for i, d in enumerate(dates[-5:], len(dates) - 5):
+            single = compute_market_state_features(daily_data, d, dates, i, daily_basic)
+            for col in single:
+                b_val = float(batch.loc[d, col])
+                s_val = float(single[col])
+                if np.isnan(s_val):
+                    assert np.isnan(b_val), f"[{d}] {col}: 期望 NaN，实际 {b_val}"
+                else:
+                    assert abs(b_val - s_val) < 1e-9, (
+                        f"[{d}] {col}: 批量={b_val:.12f} 逐日={s_val:.12f}"
+                    )
+
+    def test_rolling_min_periods_1(self):
+        """rolling min_periods=1：数据不足窗口时不应返回 NaN"""
+        daily_data, dates = self._make_multi_day_data(5)
+        result = precompute_market_state_features(daily_data, dates)
+        # 全部 5 天的 mkt_vol_20 和 mkt_ret_avg_20 均不应为 NaN（min_periods=1）
+        assert not result['mkt_vol_20'].isna().any(), "min_periods=1 时 mkt_vol_20 不应有 NaN"
+        assert not result['mkt_ret_avg_20'].isna().any(), "min_periods=1 时 mkt_ret_avg_20 不应有 NaN"
+
+    def test_empty_data_returns_nan(self):
+        """空 daily_data 时应返回全 NaN，不应抛出异常"""
+        dates = ['20230101', '20230102']
+        empty = pd.DataFrame(columns=['trade_date', 'ts_code', 'pct_chg', 'vol'])
+        result = precompute_market_state_features(empty, dates)
+        assert len(result) == 2
+        assert result['mkt_vol_cnt'].isna().all()
+
+    def test_no_duplicate_compute_with_cache(self):
+        """FeatureBuilder 缓存：多次调用 _add_market_state_features 只触发一次批量预计算"""
+        daily_data, dates = self._make_multi_day_data(10)
+        builder = FeatureBuilder()
+        assert builder._market_state_cache is None
+
+        # 模拟两次调用：每次传入一个空截面 DataFrame
+        result_df = pd.DataFrame({'ts_code': ['000000.SZ', '000001.SZ']})
+        for i, d in enumerate(dates[:2]):
+            builder._add_market_state_features(result_df.copy(), daily_data, d, dates, i)
+
+        # 缓存应在第一次调用后建立，且不为空
+        assert builder._market_state_cache is not None
+        assert len(builder._market_state_cache) == len(dates)

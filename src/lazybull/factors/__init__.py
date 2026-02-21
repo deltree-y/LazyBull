@@ -38,7 +38,7 @@ from .normalization import (
     industry_neutralization,
 )
 
-from .market_state import compute_market_state_features
+from .market_state import compute_market_state_features, precompute_market_state_features
 
 __all__ = [
     # 技术指标
@@ -64,4 +64,5 @@ __all__ = [
     'industry_neutralization',
     # 市场状态特征
     'compute_market_state_features',
+    'precompute_market_state_features',
 ]

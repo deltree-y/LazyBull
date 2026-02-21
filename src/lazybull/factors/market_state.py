@@ -7,6 +7,9 @@
 - mkt_ret_avg_20: 过去 20 日全市场平均收益率之和（仅 tradable==1）
 - mkt_turnover_std: 全市场换手率截面标准差（仅 tradable==1）
 - mkt_adv_dec_ratio: 过去 60 日涨跌家数比值滚动均值（仅 tradable==1）
+
+性能优化：批量构建时应使用 `precompute_market_state_features()` 一次性计算所有交易日，
+再通过 `FeatureBuilder` 实例缓存按日 O(1) 取值，避免逐日重复计算。
 """
 
 import numpy as np
@@ -174,3 +177,163 @@ def compute_market_state_features(
         'mkt_turnover_std': mkt_turnover_std,
         'mkt_adv_dec_ratio': mkt_adv_dec_ratio,
     }
+
+
+def precompute_market_state_features(
+    daily_data: pd.DataFrame,
+    trading_dates: list,
+    daily_basic_data: pd.DataFrame = None,
+) -> pd.DataFrame:
+    """批量预计算所有交易日的市场状态特征（高性能版本）
+
+    通过向量化 groupby + pandas rolling 一次性计算全部交易日，
+    避免逐日循环调用 compute_market_state_features() 带来的重复计算。
+    输出口径与 compute_market_state_features() 完全一致。
+
+    Args:
+        daily_data: 全量历史日线数据（含 ts_code, trade_date, pct_chg/ret_1, vol, amount）
+        trading_dates: 已排序的交易日列表（YYYYMMDD 格式）
+        daily_basic_data: 全量历史每日指标数据（可选，含 circ_mv, turnover_rate_f 等）
+
+    Returns:
+        以 trade_date 为索引的 DataFrame，包含 6 个市场状态列：
+        mkt_vol_cnt, mkt_vol_20, mkt_turnover_ratio, mkt_ret_avg_20,
+        mkt_turnover_std, mkt_adv_dec_ratio
+    """
+    VOL_WINDOW = 20
+    RET_AVG_WINDOW = 20
+    ADV_DEC_WINDOW = 60
+
+    nan_result = pd.DataFrame(
+        {
+            'mkt_vol_cnt': np.nan,
+            'mkt_vol_20': np.nan,
+            'mkt_turnover_ratio': np.nan,
+            'mkt_ret_avg_20': np.nan,
+            'mkt_turnover_std': np.nan,
+            'mkt_adv_dec_ratio': np.nan,
+        },
+        index=pd.Index(trading_dates, name='trade_date'),
+    )
+
+    if daily_data is None or len(daily_data) == 0 or not trading_dates:
+        return nan_result
+
+    # --- 步骤 1：生成 _ret 列 ---
+    if 'ret_1' in daily_data.columns:
+        work = daily_data[['trade_date', 'ts_code', 'ret_1']].copy()
+        work = work.rename(columns={'ret_1': '_ret'})
+    elif 'pct_chg' in daily_data.columns:
+        work = daily_data[['trade_date', 'ts_code', 'pct_chg']].copy()
+        work['_ret'] = work['pct_chg'] / 100.0
+        work = work.drop(columns=['pct_chg'])
+    else:
+        logger.warning("precompute_market_state_features: 缺少 ret_1 / pct_chg 列，返回全 NaN")
+        return nan_result
+
+    # 附加 vol 和 amount 列（后续使用）
+    for col in ('vol', 'amount'):
+        if col in daily_data.columns:
+            work[col] = daily_data[col].values
+
+    # --- 步骤 2：过滤可交易（vol > 0 代理）---
+    if 'vol' in work.columns:
+        tradable = work[work['vol'] > 0].copy()
+    else:
+        tradable = work.copy()
+
+    # --- 步骤 3：按 trade_date groupby 计算截面统计量 ---
+    def _group_stats(grp):
+        ret = grp['_ret'].dropna()
+        if len(ret) < 2:
+            return pd.Series({'vol_cnt': np.nan, 'mean_ret': np.nan, 'adv_dec_ratio': np.nan})
+        adv = int((ret > 0).sum())
+        dec = int((ret < 0).sum())
+        return pd.Series({
+            'vol_cnt': float(ret.std()),   # ddof=1，与原实现一致
+            'mean_ret': float(ret.mean()),
+            'adv_dec_ratio': (adv + 1) / (dec + 1),
+        })
+
+    daily_stats = tradable.groupby('trade_date').apply(_group_stats)
+
+    # --- 步骤 4：对齐到 trading_dates（缺失日期补 NaN）---
+    daily_stats = daily_stats.reindex(trading_dates)
+
+    # --- 步骤 5：pandas rolling 计算窗口特征 ---
+    # min_periods=1：有效值不足窗口时仍计算（与原 _rolling_mean/_rolling_sum 行为一致）
+    mkt_vol_20 = daily_stats['vol_cnt'].rolling(window=VOL_WINDOW, min_periods=1).mean()
+    mkt_ret_avg_20 = daily_stats['mean_ret'].rolling(window=RET_AVG_WINDOW, min_periods=1).sum()
+    mkt_adv_dec_ratio = daily_stats['adv_dec_ratio'].rolling(window=ADV_DEC_WINDOW, min_periods=1).mean()
+
+    # --- 步骤 6：计算 turnover_ratio 和 turnover_std（当日截面特征）---
+    mkt_turnover_ratio = pd.Series(np.nan, index=pd.Index(trading_dates, name='trade_date'))
+    mkt_turnover_std = pd.Series(np.nan, index=pd.Index(trading_dates, name='trade_date'))
+
+    if daily_basic_data is not None and len(daily_basic_data) > 0:
+        # 确定换手率列名（优先 turnover_rate_f）
+        tf_col = (
+            'turnover_rate_f'
+            if 'turnover_rate_f' in daily_basic_data.columns
+            else 'turnover_rate'
+        )
+
+        basic_cols = ['trade_date', 'ts_code']
+        if 'circ_mv' in daily_basic_data.columns:
+            basic_cols.append('circ_mv')
+        if tf_col in daily_basic_data.columns:
+            basic_cols.append(tf_col)
+
+        db = daily_basic_data[basic_cols].copy()
+
+        # 与 daily_data 的 (trade_date, ts_code, vol, amount) 向量化 merge
+        merge_cols = ['trade_date', 'ts_code']
+        if 'vol' in daily_data.columns:
+            merge_cols.append('vol')
+        if 'amount' in daily_data.columns:
+            merge_cols.append('amount')
+
+        daily_sub = daily_data[merge_cols].copy()
+        merged = db.merge(daily_sub, on=['trade_date', 'ts_code'], how='left')
+
+        # 只保留可交易（vol > 0）
+        if 'vol' in merged.columns:
+            tradable_merged = merged[merged['vol'] > 0]
+        else:
+            tradable_merged = merged
+
+        # mkt_turnover_ratio = sum(amount) / sum(circ_mv)
+        if 'circ_mv' in tradable_merged.columns and 'amount' in tradable_merged.columns:
+            tr_grp = tradable_merged.groupby('trade_date').agg(
+                total_amount=('amount', 'sum'),
+                total_circ_mv=('circ_mv', 'sum'),
+            )
+            tr_grp['ratio'] = tr_grp['total_amount'] / tr_grp['total_circ_mv'].replace(0, np.nan)
+            mkt_turnover_ratio = tr_grp['ratio'].reindex(
+                trading_dates
+            ).set_axis(pd.Index(trading_dates, name='trade_date'))
+
+        # mkt_turnover_std = std(turnover_rate_f)，ddof=1（pandas 默认）
+        if tf_col in tradable_merged.columns:
+            tf_grp = tradable_merged.groupby('trade_date')[tf_col].std()
+            mkt_turnover_std = tf_grp.reindex(
+                trading_dates
+            ).set_axis(pd.Index(trading_dates, name='trade_date'))
+
+    # --- 步骤 7：组装结果 DataFrame ---
+    result = pd.DataFrame(
+        {
+            'mkt_vol_cnt': daily_stats['vol_cnt'].values,
+            'mkt_vol_20': mkt_vol_20.values,
+            'mkt_turnover_ratio': mkt_turnover_ratio.values,
+            'mkt_ret_avg_20': mkt_ret_avg_20.values,
+            'mkt_turnover_std': mkt_turnover_std.values,
+            'mkt_adv_dec_ratio': mkt_adv_dec_ratio.values,
+        },
+        index=pd.Index(trading_dates, name='trade_date'),
+    )
+
+    logger.debug(
+        f"precompute_market_state_features: 已批量预计算 {len(trading_dates)} 个交易日的市场状态特征"
+    )
+    return result
