@@ -38,6 +38,8 @@ from .normalization import (
     industry_neutralization,
 )
 
+from .market_state import compute_market_state_features
+
 __all__ = [
     # 技术指标
     'calculate_rsi',
@@ -60,4 +62,6 @@ __all__ = [
     # 标准化与中性化
     'cross_sectional_zscore',
     'industry_neutralization',
+    # 市场状态特征
+    'compute_market_state_features',
 ]
