@@ -256,6 +256,38 @@ LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
 - 滚动窗口不足时使用现有数据计算（min_periods=1）
 - `turnover_rate_f`：优先使用 daily_basic 中的自由流通换手率；若不存在则回退至 `turnover_rate`
 
+#### 14. 行业分层信息字段 (v0.13.0新增)
+
+当 `shenwan_industry` 数据为 L3 格式时，FeatureBuilder 输出以下三层行业字段：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| sw_industry | str | 申万三级行业名称（主字段，用于中性化分组） |
+| sw_industry_code | str | 申万三级行业指数代码 |
+| sw_industry_id | int | 三级行业稳定整数编码（基于名称排序） |
+| sw_l2 | str | 申万二级行业名称 |
+| sw_l2_code | str | 申万二级行业指数代码 |
+| sw_l2_id | int | 二级行业稳定整数编码 |
+| sw_l1 | str | 申万一级行业名称 |
+| sw_l1_code | str | 申万一级行业指数代码 |
+| sw_l1_id | int | 一级行业稳定整数编码 |
+
+**字段映射关系**：`sw_industry*` 始终对应最精细层级（当前 = L3），L2/L1 字段并行输出供调试/解释。
+
+#### 15. 分层回退中性化规则 (v0.13.0新增)
+
+中性化（`apply_industry_neutralization=True`）执行策略：
+
+1. **检测 L3 层级信息**：若 `sw_industry_code`、`sw_l2_code`、`sw_l1_code` 均存在，启用分层路径；否则退化为单层 `sw_industry` 分组。
+2. **分组逻辑（每列独立判断）**：
+   - L3 行业内 `tradable==1` 样本数 ≥ `min_group_size(=5)` → 使用 L3 统计量
+   - 否则检查 L2：L2 内 `tradable==1` 样本数 ≥ 5 → 使用 L2 统计量
+   - 否则检查 L1：L1 内 `tradable==1` 样本数 ≥ 5 → 使用 L1 统计量
+   - L1 仍不足 → 使用全市场（所有 `tradable==1` 样本）统计量
+3. **统计过程无前瞻**：仅使用当日截面数据。
+4. **命名规范**：去均值输出 `neu_` 前缀；Z-Score 输出 `zscore_` 前缀。
+
+
 ### 过滤与标记字段
 
 **注意**：从 v0.2.0 开始，filter 列定义已更新：
