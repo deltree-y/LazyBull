@@ -242,20 +242,27 @@ def precompute_market_state_features(
     else:
         tradable = work.copy()
 
-    # --- 步骤 3：按 trade_date groupby 计算截面统计量 ---
-    def _group_stats(grp):
-        ret = grp['_ret'].dropna()
-        if len(ret) < 2:
-            return pd.Series({'vol_cnt': np.nan, 'mean_ret': np.nan, 'adv_dec_ratio': np.nan})
-        adv = int((ret > 0).sum())
-        dec = int((ret < 0).sum())
-        return pd.Series({
-            'vol_cnt': float(ret.std()),   # ddof=1，与原实现一致
-            'mean_ret': float(ret.mean()),
-            'adv_dec_ratio': (adv + 1) / (dec + 1),
-        })
+    #--- 步骤 3：批量计算每日市场统计量（vol_cnt, mean_ret, adv_dec_ratio）---
+    # 3.1. 预计算基础指标 (批量 C 级运算)
+    # count 会自动忽略 NaN
+    stats = tradable.groupby('trade_date')['_ret'].agg(
+        vol_cnt='std',     # 默认 ddof=1
+        mean_ret='mean',
+        valid_count='count',
+        adv=lambda x: (x > 0).sum(),
+        dec=lambda x: (x < 0).sum()
+    )
 
-    daily_stats = tradable.groupby('trade_date').apply(_group_stats)
+    # 3.2. 向量化处理逻辑判断 (代替 if len < 2)
+    # 如果样本数 < 2，将统计量设为 NaN
+    mask_too_small = stats['valid_count'] < 2
+    stats.loc[mask_too_small, ['vol_cnt', 'mean_ret']] = np.nan
+
+    # 3.3. 向量化计算 adv_dec_ratio (代替字典里的计算)
+    stats['adv_dec_ratio'] = (stats['adv'] + 1) / (stats['dec'] + 1)
+
+    # 3.4. 只保留需要的列
+    daily_stats = stats[['vol_cnt', 'mean_ret', 'adv_dec_ratio']]
 
     # --- 步骤 4：对齐到 trading_dates（缺失日期补 NaN）---
     daily_stats = daily_stats.reindex(trading_dates)

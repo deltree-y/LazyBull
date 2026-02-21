@@ -293,7 +293,7 @@ class FeatureBuilder:
         # 处理缺失的复权因子（如果有）
         missing_adj = daily_adj['adj_factor'].isna().sum()
         if missing_adj > 0:
-            logger.warning(f"有 {missing_adj} 条记录缺少复权因子，将使用原始价格")
+            logger.error(f"有 {missing_adj} 条记录缺少复权因子，将使用原始价格")
             daily_adj['close_adj'].fillna(daily_adj['close'], inplace=True)
             if 'open_adj' in daily_adj.columns:
                 daily_adj['open_adj'].fillna(daily_adj['open'], inplace=True)

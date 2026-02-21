@@ -21,30 +21,71 @@ def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
     Returns:
         DataFrame，包含 ts_code, trade_date, rsi_{window}
     """
-    logger.debug("计算RSI指标(Optimized)...")
-    
-    col_name = f'rsi_{window}'
-    df_calc = df[['ts_code', 'trade_date', 'close_adj']].copy()
-    df_calc.sort_values(['ts_code', 'trade_date'], inplace=True)
-    
-    # 1. 分组计算 Diff
-    delta = df_calc.groupby('ts_code')['close_adj'].diff()
-    
-    # 2. 计算 Gain/Loss
-    gain = delta.clip(lower=0)
-    loss = (-delta).clip(lower=0)
-    
-    # 3. 使用 transform 自动对齐索引，避免 join 报错
-    avg_gain = gain.groupby(df_calc['ts_code']).rolling(window=window, min_periods=window).mean().reset_index(level=0, drop=True)
-    avg_loss = loss.groupby(df_calc['ts_code']).rolling(window=window, min_periods=window).mean().reset_index(level=0, drop=True)
-    
-    # 4. 计算 RSI
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    df_calc[col_name] = 100 - (100 / (1 + rs))
-    
-    result = df_calc[['ts_code', 'trade_date', col_name]]
-    return result
+    if False:   #原始实现：逐行计算，效率较低
+        col_name = f'rsi_{window}'
+        df_calc = df[['ts_code', 'trade_date', 'close_adj']].copy()
+        df_calc.sort_values(['ts_code', 'trade_date'], inplace=True)
+        
+        # 1. 分组计算 Diff
+        delta = df_calc.groupby('ts_code')['close_adj'].diff()
+        
+        # 2. 计算 Gain/Loss
+        gain = delta.clip(lower=0)
+        loss = (-delta).clip(lower=0)
+        
+        # 3. 使用 transform 自动对齐索引，避免 join 报错
+        avg_gain = gain.groupby(df_calc['ts_code']).rolling(window=window, min_periods=window).mean().reset_index(level=0, drop=True)
+        avg_loss = loss.groupby(df_calc['ts_code']).rolling(window=window, min_periods=window).mean().reset_index(level=0, drop=True)
+        
+        # 4. 计算 RSI
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        df_calc[col_name] = 100 - (100 / (1 + rs))
+        
+        result = df_calc[['ts_code', 'trade_date', col_name]]
+        return result
+    else:   #优化实现：全局排序 + 向量化计算，效率更高
+        col_name = f'rsi_{window}'
+        # 1. 排序并提取 values，转为 Numpy 运算避开索引开销
+        df = df.sort_values(['ts_code', 'trade_date'])
+        close = df['close_adj'].values
+        codes = df['ts_code'].values
+        
+        # 2. 计算全局差值
+        delta = np.zeros_like(close)
+        delta[1:] = np.diff(close)
+        
+        # 3. 处理股票切换处的 delta (不同股票之间不应计算差值)
+        # 如果当前行的 ts_code 不等于前一行的，将 delta 设为 0
+        mask_new_code = (codes[1:] != codes[:-1])
+        delta[1:][mask_new_code] = 0
+        
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+        
+        # 4. 使用快速滑动平均 (使用 uniform filter 的向量化实现)
+        # 这里用 pandas 的 rolling 但不带分组，速度会快很多
+        # 或者为了极致性能，我们可以利用卷积/累加和
+        def fast_rolling_mean(arr, window):
+            # 我们可以利用 cumsum 实现快速滑动平均，或者直接调用无分组的 pandas
+            return pd.Series(arr).rolling(window=window, min_periods=window).mean().values
 
+        # 注意：为了处理不同股票的边界，这里仍然需要按组处理，
+        # 但我们通过将 gain/loss 直接放回 DataFrame 一次性处理来优化
+        df['g'] = gain
+        df['l'] = loss
+        
+        # 优化点：合并 groupby 减少重复分组开销
+        grouped = df.groupby('ts_code', sort=False)
+        # 使用 engine='cython' 或直接在 Series 上调用
+        avg_gain = grouped['g'].transform(lambda x: x.rolling(window).mean())
+        avg_loss = grouped['l'].transform(lambda x: x.rolling(window).mean())
+        
+        # 5. 计算 RSI
+        # 这里的 np.where 相当于原来的 replace(0, np.nan) 但更高效
+        rs = np.where(avg_loss == 0, np.nan, avg_gain / avg_loss)
+        df[col_name] = 100 - (100 / (1 + rs))
+        
+        return df[['ts_code', 'trade_date', col_name]]
 
 def calculate_kdj(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.DataFrame:
     """计算KDJ指标
@@ -58,8 +99,6 @@ def calculate_kdj(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.
     Returns:
         DataFrame，包含 ts_code, trade_date, kdj_k, kdj_d, kdj_j
     """
-    logger.debug("计算KDJ指标(Optimized)...")
-    
     # 1. 预处理：只取必要列并排序，确保计算逻辑正确
     # 使用 reset_index 确保我们有一个干净的单层索引用于最后合并
     df_calc = df[['ts_code', 'trade_date', 'high_adj', 'low_adj', 'close_adj']].copy()
@@ -110,7 +149,6 @@ def calculate_macd(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int
     Returns:
         DataFrame，包含 ts_code, trade_date, macd_dif, macd_dea, macd_hist
     """
-    logger.debug("计算MACD指标(Optimized)...")
     
     # 1. 预处理：只取必要列并全局排序（只需排序一次）
     df_calc = df[['ts_code', 'trade_date', 'close_adj']].copy()
@@ -153,7 +191,6 @@ def calculate_bollinger_bands(df: pd.DataFrame, window: int = 20, num_std: float
     Returns:
         DataFrame，包含 ts_code, trade_date, bb_middle, bb_upper, bb_lower, bb_width, bb_pct
     """
-    logger.debug("计算布林带指标(Optimized)...")
     
     # 1. 预处理：排序并提取核心数据，减少内存负担
     df_calc = df[['ts_code', 'trade_date', 'close_adj']].copy()
