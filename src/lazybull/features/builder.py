@@ -30,7 +30,9 @@ from ..factors import (
     calculate_industry_alpha_windows,
     calculate_acceleration,
     calculate_volume_burst,
+    compute_market_state_features,
 )
+from ..factors.normalization import cross_sectional_zscore
 
 
 class FeatureBuilder:
@@ -199,6 +201,16 @@ class FeatureBuilder:
             result = self._apply_industry_neutralization(result)
             logger.debug(f"{trade_date} 行业中性化完成: {len(result.columns.tolist())} 列")
         
+        # 11. 添加新增个股特征
+        result = self._add_new_individual_features(result)
+        logger.debug(f"{trade_date} 新增个股特征完成: {len(result.columns.tolist())} 列")
+
+        # 12. 添加市场状态特征
+        result = self._add_market_state_features(
+            result, daily_adj, trade_date, trading_dates, current_idx, daily_basic_data
+        )
+        logger.debug(f"{trade_date} 市场状态特征完成: {len(result.columns.tolist())} 列")
+
         logger.info(f"{trade_date} 特征构建完成: {len(result)} 个样本")
         
         return result
@@ -1355,4 +1367,99 @@ class FeatureBuilder:
         else:
             logger.info("没有找到需要 Z-Score 的特征列")
         
+        return result
+
+    def _add_new_individual_features(
+        self,
+        result: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """添加新增个股特征：is_new_stock、size、zscore_size、spec_score
+
+        Args:
+            result: 当日截面 DataFrame
+
+        Returns:
+            添加了新特征列的 DataFrame
+        """
+        # is_new_stock: 上市不足 365 天则为 1，否则为 0
+        if 'list_days' in result.columns:
+            result['is_new_stock'] = (result['list_days'] < 365).astype(int)
+        else:
+            logger.warning("缺少 list_days 列，is_new_stock 将全部设为 0（无法判断新股）")
+            result['is_new_stock'] = 0
+
+        # size: 流通市值
+        if 'circ_mv' in result.columns:
+            result['size'] = result['circ_mv']
+
+        # zscore_size: 行业内对 log1p(size) 做 Z-Score
+        if 'size' in result.columns and 'sw_industry' in result.columns:
+            result['_log1p_size'] = np.log1p(result['size'])
+            result = cross_sectional_zscore(
+                result,
+                columns=['_log1p_size'],
+                group_col='sw_industry',
+                tradable_col='tradable',
+                min_group_size=5,
+                suffix='_z',
+            )
+            if '_log1p_size_z' in result.columns:
+                result.rename(columns={'_log1p_size_z': 'zscore_size'}, inplace=True)
+            if '_log1p_size' in result.columns:
+                result.drop(columns=['_log1p_size'], inplace=True)
+
+        # spec_score: zscore_volatility_20 * (-zscore_size)
+        if 'zscore_volatility_20' in result.columns and 'zscore_size' in result.columns:
+            result['spec_score'] = (
+                result['zscore_volatility_20'] * (-result['zscore_size'])
+            )
+        else:
+            result['spec_score'] = np.nan
+
+        return result
+
+    def _add_market_state_features(
+        self,
+        result: pd.DataFrame,
+        daily_adj: pd.DataFrame,
+        trade_date: str,
+        trading_dates: list,
+        current_idx: int,
+        daily_basic_data: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """添加市场状态特征（每日一个标量，广播到所有股票）
+
+        Args:
+            result: 当日截面 DataFrame
+            daily_adj: 全量后复权日线数据
+            trade_date: 目标交易日（YYYYMMDD）
+            trading_dates: 已排序的交易日列表
+            current_idx: trade_date 在 trading_dates 中的索引
+            daily_basic_data: 全量每日指标数据（可选）
+
+        Returns:
+            添加了市场状态列的 DataFrame
+        """
+        try:
+            mkt_features = compute_market_state_features(
+                daily_data=daily_adj,
+                trade_date=trade_date,
+                trading_dates=trading_dates,
+                current_idx=current_idx,
+                daily_basic_data=daily_basic_data,
+            )
+        except Exception as e:
+            logger.error(f"计算市场状态特征失败：{e}")
+            mkt_features = {
+                'mkt_vol_cnt': np.nan,
+                'mkt_vol_20': np.nan,
+                'mkt_turnover_ratio': np.nan,
+                'mkt_ret_avg_20': np.nan,
+                'mkt_turnover_std': np.nan,
+                'mkt_adv_dec_ratio': np.nan,
+            }
+
+        for feat_name, feat_val in mkt_features.items():
+            result[feat_name] = feat_val
+
         return result

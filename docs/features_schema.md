@@ -196,20 +196,20 @@ LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
 
 | 字段名 | 类型 | 说明 | 计算方式 |
 |--------|------|------|----------|
-| pe_ttm_zscore | float | 市盈率行业内Z-Score | (pe_ttm - mean_industry) / std_industry |
-| pb_zscore | float | 市净率行业内Z-Score | (pb - mean_industry) / std_industry |
-| bp_zscore | float | 市净率倒数行业内Z-Score | (bp - mean_industry) / std_industry |
-| dv_ttm_zscore | float | 股息率行业内Z-Score | (dv_ttm - mean_industry) / std_industry |
-| log_total_mv_zscore | float | 对数总市值行业内Z-Score | (log_total_mv - mean_industry) / std_industry |
-| amount_ma20_zscore | float | 20日均成交额行业内Z-Score | (amount_ma20 - mean_industry) / std_industry |
-| turnover_rate_zscore | float | 换手率行业内Z-Score | (turnover_rate - mean_industry) / std_industry |
-| volatility_5_zscore | float | 5日波动率行业内Z-Score | (volatility_5 - mean_industry) / std_industry |
-| volatility_10_zscore | float | 10日波动率行业内Z-Score | (volatility_10 - mean_industry) / std_industry |
-| volatility_20_zscore | float | 20日波动率行业内Z-Score | (volatility_20 - mean_industry) / std_industry |
-| net_mf_amount_zscore | float | 净资金流入行业内Z-Score | (net_mf_amount - mean_industry) / std_industry |
-| ma_deviation_20_zscore | float | 20日均线偏离度行业内Z-Score | (ma_deviation_20 - mean_industry) / std_industry |
+| zscore_pe_ttm | float | 市盈率行业内Z-Score | (pe_ttm - mean_industry) / std_industry |
+| zscore_pb | float | 市净率行业内Z-Score | (pb - mean_industry) / std_industry |
+| zscore_bp | float | 市净率倒数行业内Z-Score | (bp - mean_industry) / std_industry |
+| zscore_dv_ttm | float | 股息率行业内Z-Score | (dv_ttm - mean_industry) / std_industry |
+| zscore_log_total_mv | float | 对数总市值行业内Z-Score | (log_total_mv - mean_industry) / std_industry |
+| zscore_amount_ma20 | float | 20日均成交额行业内Z-Score | (amount_ma20 - mean_industry) / std_industry |
+| zscore_turnover_rate | float | 换手率行业内Z-Score | (turnover_rate - mean_industry) / std_industry |
+| zscore_volatility_5 | float | 5日波动率行业内Z-Score | (volatility_5 - mean_industry) / std_industry |
+| zscore_volatility_10 | float | 10日波动率行业内Z-Score | (volatility_10 - mean_industry) / std_industry |
+| zscore_volatility_20 | float | 20日波动率行业内Z-Score | (volatility_20 - mean_industry) / std_industry |
+| zscore_net_mf_amount | float | 净资金流入行业内Z-Score | (net_mf_amount - mean_industry) / std_industry |
+| zscore_ma_deviation_20 | float | 20日均线偏离度行业内Z-Score | (ma_deviation_20 - mean_industry) / std_industry |
 
-**命名规则**：`_zscore` 后缀
+**命名规则**：`zscore_` 前缀
 
 **通用规则**：
 - **统计范围**：仅使用 `tradable==1` 的样本计算行业统计量（均值/标准差）
@@ -222,6 +222,39 @@ LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
 - **特征选择**：可同时使用原始特征和中性化特征，让模型自主学习
 - **行业轮动**：使用原始收益率特征可捕捉行业轮动效应
 - **个股选择**：使用中性化特征可专注行业内个股选择能力
+
+#### 12. 新增个股特征 (v0.12.1新增)
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| is_new_stock | int | 新股标记 | list_days < 365 则为 1，否则为 0（自然日） |
+| size | float | 流通市值 | circ_mv（来自 daily_basic） |
+| zscore_size | float | 行业内流通市值 Z-Score | 对 log1p(size) 按 sw_industry 行业内 Z-Score（仅 tradable==1，min_group_size=5 回退） |
+| spec_score | float | 个股特质得分 | zscore_volatility_20 × (−zscore_size) |
+
+**依赖字段**：
+- `list_days`：来自 `_add_filter_flags` 计算（基于 stock_basic.list_date）
+- `circ_mv`：来自 daily_basic；若缺失则 size/zscore_size/spec_score 为 NaN
+- `zscore_volatility_20`：需启用行业中性化（`apply_industry_neutralization=True`）
+
+#### 13. 市场状态特征 (v0.12.1新增)
+
+每日一个标量值，广播到当日所有股票。仅 tradable==1（历史日期以 vol>0 近似）参与截面统计。
+
+| 字段名 | 类型 | 说明 | 计算方式 |
+|--------|------|------|----------|
+| mkt_vol_cnt | float | 当日市场收益率截面标准差 | std(ret_1(t), tradable==1) |
+| mkt_vol_20 | float | mkt_vol_cnt 过去 20 日滚动均值 | mean(mkt_vol_cnt(t-19:t))（无前瞻） |
+| mkt_turnover_ratio | float | 市场拥挤度因子 | sum(amount(t)) / sum(circ_mv(t))（tradable==1） |
+| mkt_ret_avg_20 | float | 过去 20 日市场平均收益率之和 | sum_{i=0}^{19} mean_cs(ret_1(t-i))（tradable==1） |
+| mkt_turnover_std | float | 市场换手率截面标准差 | std(turnover_rate_f(t), tradable==1)（fallback: turnover_rate） |
+| mkt_adv_dec_ratio | float | 过去 60 日涨跌比滚动均值 | mean_{i=0}^{59} [(adv(t-i)+1)/(dec(t-i)+1)]（tradable==1） |
+
+**说明**：
+- adv = 当日 ret_1 > 0 的股票数；dec = 当日 ret_1 < 0 的股票数（不含 ret_1==0）
+- 历史日期以 `vol > 0` 近似 tradable，当日以 `tradable==1` 列（若存在）为准
+- 滚动窗口不足时使用现有数据计算（min_periods=1）
+- `turnover_rate_f`：优先使用 daily_basic 中的自由流通换手率；若不存在则回退至 `turnover_rate`
 
 ### 过滤与标记字段
 
@@ -452,6 +485,16 @@ model.fit(X, y)
 4. 支持在线特征更新（实盘场景）
 
 ## 版本变更历史
+
+### v0.12.1 (2026-02-21) - 新增个股特征与市场状态特征
+
+**新增特征**:
+- 个股：is_new_stock, size, zscore_size, spec_score
+- 市场状态：mkt_vol_cnt, mkt_vol_20, mkt_turnover_ratio, mkt_ret_avg_20, mkt_turnover_std, mkt_adv_dec_ratio
+
+**命名规范**：zscore 列使用 `zscore_` 前缀（v0.12.0 已切换，本文件同步更新）
+
+详见：[docs/PR/market_and_stock_features.md](./PR/market_and_stock_features.md)
 
 ### v0.9.0 (2026-02-18) - 特征工程重构
 
