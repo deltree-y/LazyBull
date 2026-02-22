@@ -128,41 +128,47 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "neu_y_ret_20", 
     # 获取特征列
     #feature_columns = [col for col in df.columns if col not in exclude_columns]
     feature_columns = [
-        # --- 收益率相关 ---
-        'ret_1',                # 唯一建议保留的非中性化收益特征
-        'neu_ret_5',           # 核心动量
-        'neu_ret_20',           # 核心动量
-        'alpha_industry_20',    # 相对强度
+        # --- 1. 静态属性与行业 ---
+        "zscore_size", "is_new_stock", "sw_l1_id",
         
-        # --- 估值与市值 ---
-        'zscore_bp',            # 相对便宜度
-        'zscore_log_total_mv',  # 相对大小
-        'is_loss',              # 质量过滤标志位 (0/1无需中性化)
+        # --- 2. 动量与收益 (Momentum) ---
+        #"alpha_industry_20",       # 行业内超额
+        "zscore_acceleration",     # 动量加速度
+        "zscore_ma_deviation_20",  # 中期乖离
+        "ma_deviation_5",          # 短期乖离 (反弹捕捉)
+        "neu_ret_20",              # 中期动量（核心特征）
         
-        # --- 资金与量比 ---
-        'zscore_elg_net_amount_sum_20', # 机构资金沉淀
-        'zscore_turnover_rate',         # 相对活跃度
-        'vol_ratio_20',                 # 20日成交量放大情况
+        # --- 3. 风险与情绪 (Risk/Sentiment) ---
+        "spec_score",              # 小盘高波交互
+        "zscore_volatility_20",    # 风险水平
+        "amplitude",               # 振幅
+        "upper_shadow",            # 压力感知
         
-        # --- 技术趋势 (全中性化) ---
-        'zscore_acceleration',    # 动力加速
-        'zscore_macd_hist',      # 动量强弱
-        'zscore_ma_deviation_20', # 乖离回归
-        'zscore_bb_width',        # 波动挤压
-        'zscore_volatility_20',   # 风险水平
+        # --- 4. 活跃度与资金 (Liquidity) ---
+        "zscore_turnover_rate",    # 相对换手率 (流量中心)
+        "vol_ratio_5",             # 相对量比 (动能确认)
+        "zscore_elg_net_amount_sum_20", # 主力轨迹
+        "zscore_net_mf_amount",    # 当日资金博弈
         
-        # --- 静态属性 ---
-        'list_days',               # 上市天数 (对新股逻辑有影响，建议保留原值)
-
-        # --- 其他特征（可选，视情况添加） ---
-        'log_total_mv',    # 对数总市值
+        # --- 5. 估值与防御 (Value) ---
+        "zscore_pe_ttm", "zscore_bp", "zscore_dv_ttm",
+        
+        # --- 6. 技术结构 (Technical) ---
+        "zscore_macd_hist", "zscore_bb_width",
+        
+        # --- 7. 全局环境感知 (Market Regime - 极其重要) ---
+        "mkt_vol_20",              # 市场波动率 (VIX)
+        "mkt_ret_avg_20",          # 赚钱效应 (均值)
+        "mkt_turnover_ratio",      # 拥挤度 (热度)
+        "mkt_turnover_std",        # 资金分化 (抱团还是普涨)
+        "mkt_adv_dec_ratio"        # 涨跌家数比 (情绪方向)
     ]
     
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
     
     # 过滤可训练样本（移除含有过滤标记的样本）
-    mask = pd.Series([True] * len(df))
+    mask = pd.Series([True] * len(df), index=df.index)
     for col in filter_columns:
         if col in df.columns:
             mask = mask & (~df[col].astype(bool))
@@ -241,6 +247,8 @@ def transform_labels_cs_zscore(
     logger.info(f"  winsorize 参数: {winsorize_p}")
     
     df_transformed = df.copy()
+    nan_count_ori = df_transformed[label_column].isna().sum()
+    logger.info(f"原始标签 NaN 数量: {nan_count_ori}")
     
     # 按 trade_date 分组进行截面标准化
     df_transformed[label_column] = cross_sectional_zscore(
@@ -261,7 +269,11 @@ def transform_labels_cs_zscore(
     if nan_count > 0:
         logger.warning(f"标准化后产生 {nan_count} 个 NaN（可能某天标准差为0），将被移除")
         df_transformed = df_transformed.dropna(subset=[label_column])
-    
+
+    # --- 新增：硬截断，防止标准化后依然存在离群值干扰 MSE ---
+    # 哪怕 winsorize 过了，如果有极端分布，z-score 后依然可能出现 > 5 的值
+    df_transformed[label_column] = df_transformed[label_column].clip(-3.0, 3.0)
+
     return df_transformed
 
 
@@ -489,6 +501,7 @@ def train_xgboost_model(
     # 准备训练参数
     train_params = {
         "objective": "reg:squarederror" if task == "regression" else "binary:logistic",
+        "eval_metric": "mae" if task == "regression" else "auc",   #回归使用 MAE，分类使用 AUC（XGBoost 会自动选择适合的 eval_metric）
         "n_estimators": n_estimators,
         "max_depth": max_depth,
         "learning_rate": learning_rate,
@@ -498,9 +511,9 @@ def train_xgboost_model(
         "tree_method": "hist",
         "device": "cuda",
         "n_jobs": -1,
-        "early_stopping_rounds": 50,
+        "early_stopping_rounds": 200,
         "gamma": 0.1,
-        "reg_alpha": 0.1,
+        "reg_alpha": 0.05,
         "reg_lambda": 1.0,
         "min_child_weight": 100,
     }
@@ -510,13 +523,20 @@ def train_xgboost_model(
         train_params["scale_pos_weight"] = computed_scale_pos_weight
     
     logger.info(f"训练参数: {train_params}")
-    logger.info("使用早停机制（early_stopping_rounds=30）")
+    logger.info(f"使用早停机制（early_stopping_rounds={train_params['early_stopping_rounds']}）")
     
     # 创建并训练模型
     if task == "regression":
         model = xgb.XGBRegressor(**train_params)
     else:
         model = xgb.XGBClassifier(**train_params)
+
+    # 训练前调试：输出训练数据的基本统计信息
+    if False:   # 仅在需要时启用，平时保持 False 避免日志过于冗长
+        logger.debug(f"训练数据 X_train 统计信息:\n{X_train.describe().transpose()}")
+        logger.debug(f"训练标签 y_train 统计信息:\n{y_train_processed.describe()}")    
+        X_train.to_csv("debug_X_train.csv", index=False)
+        y_train_processed.to_csv("debug_y_train.csv", index=False)
     
     # 如果有验证集，使用早停机制
     if len(X_val) > 0:
@@ -538,8 +558,8 @@ def train_xgboost_model(
     importance = model.feature_importances_
     feature_names = X_train.columns
     feat_imp = pd.Series(importance, index=feature_names).sort_values(ascending=False)
-    logger.info(f"Model Top 5 Features:")
-    logger.warning(f"{feat_imp.head(5)}")
+    logger.info(f"Model Top 10 Features:")
+    logger.warning(f"\n{feat_imp.head(10)}")
 
     # 计算训练集性能指标
     if task == "regression":
