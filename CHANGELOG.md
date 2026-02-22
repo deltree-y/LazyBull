@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.4] - 2026-02-22
+
+### Bug 修复
+
+- **修复 `label_transform=cs_zscore` 场景下的数据泄露/评估口径问题**
+  - 新增共用切分函数 `split_train_val_by_date(df, val_ratio, date_col)`（`src/lazybull/ml/train_core.py`）：
+    以唯一交易日列表为单位切分，最后 `ceil(n_dates * val_ratio)` 个日期作为验证集，
+    确保同一交易日的所有样本不会被拆分到不同集合，彻底避免截面统计量跨集合污染。
+  - 修改 `prepare_training_data()` 使用 `split_train_val_by_date` 替换旧的按行数 `iloc` 切分；
+    新增可选参数 `label_transform_fn`，若提供则在切分后对 train/val 各自独立调用，不共享统计量。
+  - 修改 `scripts/train_ml_model.py`：`label_transform=cs_zscore` + `task=regression` 时，
+    不再对全量 df 预先变换，改为通过 `label_transform_fn` 在切分后各自独立变换。
+  - 修改 `scripts/walk_forward.py`：每个 split 内部同理，切分后分别对内部 train/val 独立变换。
+  - `src/lazybull/ml/__init__.py` 新增 `split_train_val_by_date` 导出。
+
+### 测试
+
+- 新增 `tests/test_train_core_date_split.py`（12 个用例）：
+  - `TestSplitTrainValByDate`（8 个）：
+    - `test_no_same_day_split`：同日样本不被拆分
+    - `test_all_samples_preserved`：切分后样本总数不变
+    - `test_val_ratio_approximately_correct`：验证集日期数量正确
+    - `test_val_dates_are_later_than_train_dates`：验证集日期晚于训练集
+    - `test_stats_keys_present`：返回统计字段完整
+    - `test_empty_dataframe`：空 DataFrame 不抛异常
+    - `test_single_date`：单日情况处理正确
+    - `test_custom_date_col`：支持自定义日期列名
+  - `TestCsZscoreNoLeakage`（4 个）：
+    - `test_old_logic_causes_leakage_on_boundary_date`：旧逻辑确实存在泄露（对照）
+    - `test_new_logic_no_cross_set_statistics`：新逻辑各自独立统计量
+    - `test_transform_labels_cs_zscore_per_date`：每日截面独立标准化
+    - `test_split_train_val_date_sets_disjoint_with_transform`：切分后日期不交叉
+
+### 文档
+
+- 新增 `docs/PR/fix_label_cs_zscore_leakage.md`：详述问题根因、修复方案与影响
+- 新增 `docs/guide/label_transform_cs_zscore.md`：cs_zscore 训练/验证口径指南
+
 ## [0.13.3] - 2026-02-21
 
 ### Bug 修复

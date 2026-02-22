@@ -29,7 +29,19 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.13.3)
+### 当前版本 (v0.13.4)
+
+**修复 `label_transform=cs_zscore` 场景下的数据泄露/评估口径问题** (v0.13.4 修复):
+- ✅ **新增 `split_train_val_by_date()` 共用切分函数**：
+  `src/lazybull/ml/train_core.py` 新增按 `trade_date` 粒度切分训练集/验证集的函数，
+  确保同一交易日的所有样本不会被拆分到不同集合，彻底避免截面统计量跨集合污染。
+- ✅ **`prepare_training_data()` 改用日期切分**：
+  替换旧的按行数比例（`iloc`）切分为按交易日列表切分；
+  新增可选参数 `label_transform_fn`，支持切分后各自独立变换。
+- ✅ **`train_ml_model.py` 与 `walk_forward.py` 修复**：
+  `label_transform=cs_zscore` 时不再对全量数据预先变换，
+  改为先按日期切分，再对训练集和验证集各自独立应用 `transform_labels_cs_zscore`，
+  确保截面统计量（均值/标准差）互相独立，不跨集合混入。
 
 **修复 volatility_20 / zscore_volatility_20 / spec_score 数值不一致** (v0.13.3 修复):
 - ✅ **新增共用函数 `compute_ret_1()`**：
