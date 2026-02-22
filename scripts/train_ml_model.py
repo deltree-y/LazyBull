@@ -262,17 +262,19 @@ def main():
             binary_label_col = f"{args.label_column}_binary"
             actual_label_column = binary_label_col
         else:
-            # 回归任务：应用标签变换
-            if args.label_transform == "cs_zscore":
-                df = transform_labels_cs_zscore(
-                    df,
-                    label_column=args.label_column,
-                    winsorize_p=args.winsorize_p
-                )
+            # 回归任务：标签变换（cs_zscore 在切分后各自独立变换，避免数据泄露）
             actual_label_column = args.label_column
         
-        # 2. 准备训练数据（包含验证集切分）
-        X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(df, actual_label_column)
+        # 2. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
+        # cs_zscore 回归任务：切分后对 train/val 各自独立变换，不共享截面统计量
+        label_transform_fn = None
+        if args.task == "regression" and args.label_transform == "cs_zscore":
+            label_transform_fn = lambda d: transform_labels_cs_zscore(
+                d, label_column=actual_label_column, winsorize_p=args.winsorize_p
+            )
+        X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(
+            df, actual_label_column, label_transform_fn=label_transform_fn
+        )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
         if False:  # 默认不启用，后续可以改为参数控制
             df_new = df.copy()

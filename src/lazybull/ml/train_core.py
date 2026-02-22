@@ -13,8 +13,9 @@
 - 验证集逐日评估
 """
 
+import math
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Callable
 
 import pandas as pd
 import numpy as np
@@ -88,14 +89,90 @@ def load_features_data(
     return df, len(trade_dates)
 
 
-def prepare_training_data(df: pd.DataFrame, label_column: str = "neu_y_ret_20", val_ratio: float = 0.2) -> tuple:
-    """准备训练数据，并按时间切分训练集和验证集
-    
+def split_train_val_by_date(
+    df: pd.DataFrame,
+    val_ratio: float = 0.2,
+    date_col: str = 'trade_date'
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
+    """按 trade_date 粒度切分训练集和验证集
+
+    确保同一交易日的所有样本不会被拆分到不同集合，彻底避免截面统计量跨集合污染。
+    以唯一交易日列表为单位，最后 ceil(n_dates * val_ratio) 个日期作为验证集。
+
+    Args:
+        df: 输入 DataFrame（需包含 date_col 列）
+        val_ratio: 验证集比例，默认 0.2
+        date_col: 日期列名，默认 trade_date
+
+    Returns:
+        (df_train, df_val, stats) 元组：
+            - df_train: 训练集 DataFrame
+            - df_val: 验证集 DataFrame
+            - stats: 包含日期统计信息的字典（train_n_dates/val_n_dates/train_start_date/
+                     train_end_date/val_start_date/val_end_date）
+    """
+    all_dates = sorted(df[date_col].unique())
+    n_dates = len(all_dates)
+
+    if n_dates == 0:
+        empty_stats = {
+            "train_n_dates": 0, "val_n_dates": 0,
+            "train_start_date": "N/A", "train_end_date": "N/A",
+            "val_start_date": "N/A", "val_end_date": "N/A",
+        }
+        return df.iloc[:0].copy(), df.iloc[:0].copy(), empty_stats
+
+    n_val_dates = max(1, math.ceil(n_dates * val_ratio))
+    n_train_dates = n_dates - n_val_dates
+
+    if n_train_dates <= 0:
+        n_train_dates = 0
+        n_val_dates = n_dates
+
+    train_dates_set = set(all_dates[:n_train_dates])
+    val_dates_set = set(all_dates[n_train_dates:])
+
+    df_train = df[df[date_col].isin(train_dates_set)].copy()
+    df_val = df[df[date_col].isin(val_dates_set)].copy()
+
+    stats = {
+        "train_n_dates": n_train_dates,
+        "val_n_dates": len(val_dates_set),
+        "train_start_date": str(all_dates[0]) if n_train_dates > 0 else "N/A",
+        "train_end_date": str(all_dates[n_train_dates - 1]) if n_train_dates > 0 else "N/A",
+        "val_start_date": str(all_dates[n_train_dates]) if val_dates_set else "N/A",
+        "val_end_date": str(all_dates[-1]) if val_dates_set else "N/A",
+    }
+
+    logger.info(f"按 trade_date 粒度切分（共 {n_dates} 个交易日）:")
+    logger.info(
+        f"  训练集: {stats['train_start_date']} 至 {stats['train_end_date']}"
+        f"（{n_train_dates} 个交易日，{len(df_train)} 条样本）"
+    )
+    logger.info(
+        f"  验证集: {stats['val_start_date']} 至 {stats['val_end_date']}"
+        f"（{stats['val_n_dates']} 个交易日，{len(df_val)} 条样本）"
+    )
+
+    return df_train, df_val, stats
+
+
+def prepare_training_data(
+    df: pd.DataFrame,
+    label_column: str = "neu_y_ret_20",
+    val_ratio: float = 0.2,
+    label_transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
+) -> tuple:
+    """准备训练数据，并按 trade_date 粒度切分训练集和验证集
+
     Args:
         df: 特征 DataFrame
         label_column: 标签列名
-        val_ratio: 验证集比例，默认 0.2（最后 20% 的时间作为验证集）
-        
+        val_ratio: 验证集比例，默认 0.2（最后 20% 的交易日作为验证集）
+        label_transform_fn: 可选的标签变换函数，接受 DataFrame 并返回变换后的 DataFrame。
+            若提供，将在按日切分后分别对训练集与验证集独立调用，避免跨集合统计量污染。
+            典型用法：cs_zscore 变换（见 transform_labels_cs_zscore）。
+
     Returns:
         (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats) 元组
         data_stats 包含：samples_after_filter, val_start_date, val_end_date
@@ -184,19 +261,21 @@ def prepare_training_data(df: pd.DataFrame, label_column: str = "neu_y_ret_20", 
     if len(df_train) == 0:
         raise ValueError("没有可用的训练样本")
     
-    # 按时间切分训练集和验证集（避免未来信息泄漏）
-    df_train = df_train.sort_values('trade_date')
-    split_idx = int(len(df_train) * (1 - val_ratio))
-    
-    df_train_split = df_train.iloc[:split_idx]
-    df_val_split = df_train.iloc[split_idx:]
-    
+    # 按 trade_date 粒度切分训练集和验证集（确保同日样本不被拆分到两侧）
+    df_train_split, df_val_split, split_stats = split_train_val_by_date(
+        df_train, val_ratio=val_ratio
+    )
+
+    # 如果提供了标签变换函数，切分后各自独立变换（避免跨集合统计量污染）
+    if label_transform_fn is not None:
+        logger.info("切分后分别对训练集与验证集独立进行标签变换...")
+        df_train_split = label_transform_fn(df_train_split)
+        if len(df_val_split) > 0:
+            df_val_split = label_transform_fn(df_val_split)
+
     # 获取验证集的时间范围
-    val_start_date = df_val_split['trade_date'].min() if len(df_val_split) > 0 else "N/A"
-    val_end_date = df_val_split['trade_date'].max() if len(df_val_split) > 0 else "N/A"
-    
-    logger.info(f"训练集样本数: {len(df_train_split)}, 验证集样本数: {len(df_val_split)}")
-    logger.info(f"验证集时间范围: {val_start_date} 至 {val_end_date}")
+    val_start_date = split_stats["val_start_date"]
+    val_end_date = split_stats["val_end_date"]
     
     # 准备训练集 X 和 y
     X_train = df_train_split[feature_columns].copy()

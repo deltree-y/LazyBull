@@ -123,17 +123,18 @@ def execute_split_training(
         binary_label_col = f"{args.label_column}_binary"
         actual_label_column = binary_label_col
     else:
-        if args.label_transform == "cs_zscore":
-            df_train = transform_labels_cs_zscore(
-                df_train,
-                label_column=args.label_column,
-                winsorize_p=args.winsorize_p
-            )
+        # 回归任务：标签变换（cs_zscore 在切分后各自独立变换，避免数据泄露）
         actual_label_column = args.label_column
-    
-    # 4. 准备训练数据（内部切分训练集/验证集）
+
+    # 4. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
+    # cs_zscore 回归任务：切分后对 train/val 各自独立变换，不共享截面统计量
+    label_transform_fn = None
+    if args.task == "regression" and args.label_transform == "cs_zscore":
+        label_transform_fn = lambda d: transform_labels_cs_zscore(
+            d, label_column=actual_label_column, winsorize_p=args.winsorize_p
+        )
     X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(
-        df_train, actual_label_column, val_ratio=args.val_ratio
+        df_train, actual_label_column, val_ratio=args.val_ratio, label_transform_fn=label_transform_fn
     )
 
     # 4.1. 构造样本权重（rank-weight：Top/Bottom K 增强）
