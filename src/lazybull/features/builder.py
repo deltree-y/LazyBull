@@ -1402,6 +1402,9 @@ class FeatureBuilder:
             label_col = f'y_ret_{horizon}'
             if label_col in result.columns:
                 demean_columns.append(label_col)
+        # ret_1 单独加入（lookback_windows 不含 1，但 ret_1 是重要的反转信号）
+        if 'ret_1' in result.columns:
+            demean_columns.append('ret_1')
         for window in self.lookback_windows:
             ret_col = f'ret_{window}'
             if ret_col in result.columns:
