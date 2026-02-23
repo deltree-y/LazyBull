@@ -22,6 +22,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+# debug py
+debug*.py
 
 # Virtual Environment
 venv/

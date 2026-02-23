@@ -129,8 +129,9 @@ def split_train_val_by_date(
         n_train_dates = 0
         n_val_dates = n_dates
 
-    train_dates_set = set(all_dates[:n_train_dates])
-    val_dates_set = set(all_dates[n_train_dates:])
+    delta = 10
+    train_dates_set = set(all_dates[:n_train_dates-delta]) if n_train_dates > delta else set(all_dates[:n_train_dates])
+    val_dates_set = set(all_dates[n_train_dates+delta:]) if n_train_dates + delta < n_dates else set(all_dates[n_train_dates:])
 
     df_train = df[df[date_col].isin(train_dates_set)].copy()
     df_val = df[df[date_col].isin(val_dates_set)].copy()
@@ -139,8 +140,8 @@ def split_train_val_by_date(
         "train_n_dates": n_train_dates,
         "val_n_dates": len(val_dates_set),
         "train_start_date": str(all_dates[0]) if n_train_dates > 0 else "N/A",
-        "train_end_date": str(all_dates[n_train_dates - 1]) if n_train_dates > 0 else "N/A",
-        "val_start_date": str(all_dates[n_train_dates]) if val_dates_set else "N/A",
+        "train_end_date": str(all_dates[n_train_dates-delta - 1]) if n_train_dates > 0 else "N/A",
+        "val_start_date": str(all_dates[n_train_dates+delta]) if val_dates_set else "N/A",
         "val_end_date": str(all_dates[-1]) if val_dates_set else "N/A",
     }
 
@@ -205,40 +206,55 @@ def prepare_training_data(
     # 获取特征列
     #feature_columns = [col for col in df.columns if col not in exclude_columns]
     feature_columns = [
-        # --- 1. 静态属性与行业 ---
-        "zscore_size", "is_new_stock", "sw_l1_id",
-        
-        # --- 2. 动量与收益 (Momentum) ---
-        #"alpha_industry_20",       # 行业内超额
+        # 1. 中性化动量与趋势 (8个) - 剔除行业/市值后的纯选股动量
+        "neu_ret_20",              # 中期个股中性化超额
+        "neu_ret_5",               # 短期个股中性化超额
+        "alpha_industry_20",       # 行业动量（保留此特征以保留行业轮动视角）
+        "alpha_industry_5",        # 行业短期爆发力
+        "zscore_ma_deviation_20",  # 20日均线乖离率
         "zscore_acceleration",     # 动量加速度
-        "zscore_ma_deviation_20",  # 中期乖离
-        "ma_deviation_5",          # 短期乖离 (反弹捕捉)
-        "neu_ret_20",              # 中期动量（核心特征）
-        
-        # --- 3. 风险与情绪 (Risk/Sentiment) ---
-        "spec_score",              # 小盘高波交互
-        "zscore_volatility_20",    # 风险水平
-        "amplitude",               # 振幅
-        "upper_shadow",            # 压力感知
-        
-        # --- 4. 活跃度与资金 (Liquidity) ---
-        "zscore_turnover_rate",    # 相对换手率 (流量中心)
-        "vol_ratio_5",             # 相对量比 (动能确认)
-        "zscore_elg_net_amount_sum_20", # 主力轨迹
-        "zscore_net_mf_amount",    # 当日资金博弈
-        
-        # --- 5. 估值与防御 (Value) ---
-        "zscore_pe_ttm", "zscore_bp", "zscore_dv_ttm",
-        
-        # --- 6. 技术结构 (Technical) ---
-        "zscore_macd_hist", "zscore_bb_width",
-        
-        # --- 7. 全局环境感知 (Market Regime - 极其重要) ---
-        "mkt_vol_20",              # 市场波动率 (VIX)
-        "mkt_ret_avg_20",          # 赚钱效应 (均值)
-        "mkt_turnover_ratio",      # 拥挤度 (热度)
-        "mkt_turnover_std",        # 资金分化 (抱团还是普涨)
-        "mkt_adv_dec_ratio"        # 涨跌家数比 (情绪方向)
+        "zscore_macd_hist",        # MACD能量柱（动能切换）
+        "bb_pct",                  # 布林带位置
+
+        # 2. 流动性与资金博弈 (8个) - 识别虚假繁荣与主力意图
+        "zscore_turnover_rate",    # 换手率级别
+        "vol_ratio_20",            # 20日量比
+        "vol_burst_20",            # 20日爆量系数
+        "zscore_amount_ma20",      # 20日成交额基准
+        "zscore_net_mf_amount",    # 当日净流入资金
+        "zscore_elg_net_amount_sum_20", # 20日特大单累积（主力深度）
+        "lg_net_amount_sum_5",     # 5日大单累积
+        "volume_ratio",            # 实时量比
+
+        # 3. 波动风险与形态特征 (10个) - 解决“早夭”与压制回撤
+        "zscore_volatility_20",    # 20日波动率
+        "zscore_volatility_5",     # 5日波动率
+        "amplitude",               # 当日振幅
+        "zscore_bb_width",         # 布林带宽度（波动挤压/释放）
+        "upper_shadow",            # 上影线（压力位）
+        "lower_shadow",            # 下影线（支撑位）
+        "body_length",             # K线实体长度
+        "spec_score",              # 投机分（风险评估）
+        "rsi_14",                  # 强弱指标（超买超卖）
+        "kdj_j",                   # 随机指标J值（灵敏度高）
+
+        # 4. 估值、质量与安全边际 (8个) - 风格锚点，提供底层防御
+        "zscore_size",             # 市值因子（核心锚点）
+        "zscore_bp",               # 账面市值比（价值挖掘）
+        "zscore_dv_ttm",           # 股息率
+        "zscore_pe_ttm",           # PE分位
+        "is_loss",                 # 是否亏损（质量过滤）
+        "list_days",               # 上市天数
+        "log_circ_mv",             # 流通市值对数
+        "pb",                      # 原始PB（提供原始量纲）
+
+        # 5. 市场环境特征 (6个) - 环境感知，缓解逻辑断裂导致的早停
+        "mkt_adv_dec_ratio",       # 市场涨跌比
+        "mkt_ret_avg_20",          # 市场平均收益
+        "mkt_turnover_std",        # 市场成交额波动
+        "mkt_vol_20",              # 市场总体成交量
+        "is_limit_up",             # 情绪极值：涨停
+        "is_limit_down"            # 情绪极值：跌停
     ]
     
     logger.info(f"特征列数量: {len(feature_columns)}")
@@ -594,7 +610,7 @@ def train_xgboost_model(
         "gamma": 0.1,
         "reg_alpha": 0.05,
         "reg_lambda": 1.0,
-        "min_child_weight": 100,
+        "min_child_weight": 20,
     }
     
     # 分类任务添加 scale_pos_weight
