@@ -129,7 +129,7 @@ def split_train_val_by_date(
         n_train_dates = 0
         n_val_dates = n_dates
 
-    delta = 10
+    delta = 20
     train_dates_set = set(all_dates[:n_train_dates-delta]) if n_train_dates > delta else set(all_dates[:n_train_dates])
     val_dates_set = set(all_dates[n_train_dates+delta:]) if n_train_dates + delta < n_dates else set(all_dates[n_train_dates:])
 
@@ -175,7 +175,10 @@ def prepare_training_data(
             典型用法：cs_zscore 变换（见 transform_labels_cs_zscore）。
 
     Returns:
-        (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats) 元组
+        (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats,
+         df_val_split_original) 元组
+        - df_val_split: 标签已变换（供模型训练/early stopping 使用）
+        - df_val_split_original: 标签变换前的原始快照（供逐日收益评估使用，保持真实收益单位）
         data_stats 包含：samples_after_filter, val_start_date, val_end_date
     """
     logger.info("准备训练数据...")
@@ -282,6 +285,9 @@ def prepare_training_data(
         df_train, val_ratio=val_ratio
     )
 
+    # 在标签变换前保存 val 原始 df 快照，用于逐日评估（保持真实收益单位）
+    df_val_split_original = df_val_split.copy()
+
     # 如果提供了标签变换函数，切分后各自独立变换（避免跨集合统计量污染）
     if label_transform_fn is not None:
         logger.info("切分后分别对训练集与验证集独立进行标签变换...")
@@ -306,15 +312,15 @@ def prepare_training_data(
     X_val = X_val.fillna(0)
     
     logger.info(f"训练数据准备完成: X_train shape={X_train.shape}, X_val shape={X_val.shape}")
-    
+
     # 数据统计
     data_stats = {
         "samples_after_filter": samples_after_filter,
         "val_start_date": str(val_start_date),
         "val_end_date": str(val_end_date)
     }
-    
-    return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats
+
+    return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original
 
 
 def transform_labels_cs_zscore(

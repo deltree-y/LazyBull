@@ -133,7 +133,7 @@ def execute_split_training(
         label_transform_fn = lambda d: transform_labels_cs_zscore(
             d, label_column=actual_label_column, winsorize_p=args.winsorize_p
         )
-    X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(
+    X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original = prepare_training_data(
         df_train, actual_label_column, val_ratio=args.val_ratio, label_transform_fn=label_transform_fn
     )
 
@@ -165,12 +165,14 @@ def execute_split_training(
     )
     
     # 6. 验证集逐日评估（用于内部评估）
+    # 使用变换前的原始 val df（df_val_split_original），确保 TopK 收益以真实收益单位展示，
+    # 避免 cs_zscore 场景下 z-score 值（0~3）被误读为百分比收益
     val_daily_metrics = {}
-    if len(df_val_split) > 0:
+    if len(df_val_split_original) > 0:
         original_return_col = args.label_column
         val_daily_metrics = evaluate_validation_daily(
             model=model,
-            df_val=df_val_split,
+            df_val=df_val_split_original,
             feature_columns=feature_columns,
             original_return_col=original_return_col,
             task=args.task,
@@ -185,8 +187,8 @@ def execute_split_training(
     # 准备测试数据
     df_test_eval = df_test.copy()
     
-    # 过滤测试集样本（与训练时一致）
-    filter_columns = ['is_st', 'is_suspended']
+    # 过滤测试集样本（与训练时一致：过滤 ST、停牌、涨跌停）
+    filter_columns = ['is_st', 'is_suspended', 'is_limit_up', 'is_limit_down']
     mask = pd.Series([True] * len(df_test_eval))
     for col in filter_columns:
         if col in df_test_eval.columns:

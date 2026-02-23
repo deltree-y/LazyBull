@@ -272,7 +272,7 @@ def main():
             label_transform_fn = lambda d: transform_labels_cs_zscore(
                 d, label_column=actual_label_column, winsorize_p=args.winsorize_p
             )
-        X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats = prepare_training_data(
+        X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original = prepare_training_data(
             df, actual_label_column, label_transform_fn=label_transform_fn
         )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
@@ -324,12 +324,13 @@ def main():
         
         # 4. 验证集逐日评估（贴近交易场景，特别是分类任务）
         daily_val_metrics = {}
-        if len(df_val_split) > 0 and args.task == "classification":
+        if len(df_val_split_original) > 0 and args.task == "classification":
             # 分类任务：基于原始收益列（如 y_ret_20）进行逐日评估
+            # 使用变换前的原始 val df，确保收益单位不被 label_transform 污染
             original_return_col = args.label_column  # 使用原始标签列（去掉 _binary）
             daily_val_metrics = evaluate_validation_daily(
                 model=model,
-                df_val=df_val_split,
+                df_val=df_val_split_original,
                 feature_columns=feature_columns,
                 original_return_col=original_return_col,
                 task=args.task,
