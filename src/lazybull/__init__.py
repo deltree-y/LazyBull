@@ -3,7 +3,7 @@ LazyBull - A股量化研究与回测框架
 专注价值红利策略方向
 """
 
-__version__ = "0.13.1"  # v0.13.1 性能优化：批量预计算市场状态特征，消除批量构建时的重复计算
+__version__ = "0.13.5"  # v0.13.5 修复：窗口特征依赖全量 trade_cal，消除 --start-date 变化导致的特征不稳定
 __author__ = "deltree-y"
 
 from pathlib import Path

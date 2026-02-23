@@ -529,3 +529,215 @@ def test_feature_builder_require_label_true():
     assert '000002.SZ' not in result['ts_code'].values
     assert '000001.SZ' in result['ts_code'].values
     assert '600000.SH' in result['ts_code'].values
+
+
+# ============================================================
+# 测试：不同 start_date 截断，同一 trade_date 的窗口特征应一致
+# ============================================================
+
+def _make_full_trade_cal(dates):
+    """辅助函数：根据日期列表生成完整交易日历 DataFrame
+
+    Returns:
+        DataFrame，包含 exchange、cal_date（YYYYMMDD 字符串）、is_open（全为 1）列
+    """
+    return pd.DataFrame({
+        'exchange': ['SSE'] * len(dates),
+        'cal_date': [d.strftime('%Y%m%d') for d in dates],
+        'is_open': [1] * len(dates),
+    })
+
+
+def _make_daily_data(dates, stocks, seed=42):
+    """辅助函数：生成模拟日线数据（价格随机游走）
+
+    Returns:
+        DataFrame，包含 ts_code、trade_date、open/high/low/close/pre_close、
+        pct_chg、vol、amount、close_adj/open_adj/high_adj/low_adj、adj_factor 列
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    records = []
+    for stock in stocks:
+        price = 10.0
+        for date in dates:
+            pct = rng.uniform(-0.03, 0.03)
+            close = round(price * (1 + pct), 4)
+            pre_close = price
+            records.append({
+                'ts_code': stock,
+                'trade_date': date.strftime('%Y%m%d'),
+                'open': close,
+                'high': close * 1.01,
+                'low': close * 0.99,
+                'close': close,
+                'pre_close': pre_close,
+                'pct_chg': pct * 100,
+                'vol': 1_000_000,
+                'amount': close * 1_000_000,
+                'close_adj': close,
+                'open_adj': close,
+                'high_adj': close * 1.01,
+                'low_adj': close * 0.99,
+                'adj_factor': 1.0,
+            })
+            price = close
+    return pd.DataFrame(records)
+
+
+def _make_stock_basic(stocks):
+    """辅助函数：生成股票基本信息
+
+    Returns:
+        DataFrame，包含 ts_code、name、list_date（均设为 20100101）列
+    """
+    return pd.DataFrame({
+        'ts_code': stocks,
+        'name': [f'股票{i}' for i in range(len(stocks))],
+        'list_date': ['20100101'] * len(stocks),
+    })
+
+
+def test_get_lookback_dates_basic():
+    """测试 _get_lookback_dates 基础功能"""
+    import pandas as pd
+    dates = pd.date_range('2023-01-01', periods=30, freq='B')
+    trading_dates = [d.strftime('%Y%m%d') for d in dates]
+    builder = FeatureBuilder()
+
+    # 正常回溯 5 个交易日
+    result = builder._get_lookback_dates(trading_dates[10], 5, trading_dates)
+    assert len(result) == 5
+    assert result == trading_dates[5:10]
+
+    # 正好历史够 5 个
+    result = builder._get_lookback_dates(trading_dates[5], 5, trading_dates)
+    assert len(result) == 5
+
+    # 历史不足（位置 < n）
+    result = builder._get_lookback_dates(trading_dates[3], 5, trading_dates)
+    assert result == []
+
+    # trade_date 不在序列中
+    result = builder._get_lookback_dates('99991231', 5, trading_dates)
+    assert result == []
+
+
+def test_window_features_stable_across_start_dates():
+    """测试同一 trade_date，输入数据不同起始截断时，基础窗口特征应一致
+
+    模拟场景：
+    - 全量交易日历包含 60 个交易日
+    - 目标 trade_date 为第 50 个交易日
+    - "run_1" 的 daily_data 从第 1 个交易日开始（充足历史）
+    - "run_2" 的 daily_data 从第 10 个交易日开始（也有足够历史 >= lookback_windows max=20）
+    - 两次构建的 ret_5/ret_10/ret_20、vol_ratio_*、ma_deviation_* 应完全一致
+    """
+    import pandas as pd
+
+    all_dates = pd.date_range('2023-01-01', periods=60, freq='B')
+    stocks = ['000001.SZ', '000002.SZ']
+
+    full_trade_cal = _make_full_trade_cal(all_dates)
+    all_daily = _make_daily_data(all_dates, stocks)
+    stock_basic = _make_stock_basic(stocks)
+    adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+
+    target_date = all_dates[49].strftime('%Y%m%d')  # 第 50 个交易日
+
+    builder = FeatureBuilder(
+        min_list_days=10,
+        horizon=5,
+        lookback_windows=[5, 10, 20],
+        require_label=False,
+    )
+
+    # run_1：从第 1 个交易日起的全量数据
+    daily_run1 = all_daily.copy()
+
+    # run_2：从第 10 个交易日起截断（仍有 >=20 天历史）
+    cutoff_date = all_dates[9].strftime('%Y%m%d')
+    daily_run2 = all_daily[all_daily['trade_date'] >= cutoff_date].copy()
+
+    feat_run1 = builder.build_features_for_day(
+        trade_date=target_date,
+        trade_cal=full_trade_cal,
+        daily_data=daily_run1,
+        adj_factor=adj_factor,
+        stock_basic=stock_basic,
+    )
+
+    # 重置缓存，使 run_2 重新预计算
+    builder._tech_factor_cache = None
+    builder._market_state_cache = None
+
+    feat_run2 = builder.build_features_for_day(
+        trade_date=target_date,
+        trade_cal=full_trade_cal,
+        daily_data=daily_run2,
+        adj_factor=adj_factor,
+        stock_basic=stock_basic,
+    )
+
+    assert len(feat_run1) > 0 and len(feat_run2) > 0, "两次构建均应有输出样本"
+
+    # 对比每只股票的窗口特征
+    for stock in stocks:
+        r1 = feat_run1[feat_run1['ts_code'] == stock]
+        r2 = feat_run2[feat_run2['ts_code'] == stock]
+        if r1.empty or r2.empty:
+            continue
+        for col in ['ret_5', 'ret_10', 'ret_20',
+                    'vol_ratio_5', 'vol_ratio_10', 'vol_ratio_20',
+                    'ma_deviation_5', 'ma_deviation_10', 'ma_deviation_20']:
+            if col not in r1.columns or col not in r2.columns:
+                continue
+            v1 = r1[col].iloc[0]
+            v2 = r2[col].iloc[0]
+            assert abs(v1 - v2) < 1e-9, (
+                f"stock={stock}, col={col}: run_1={v1}, run_2={v2}，"
+                f"不同 start_date 截断应产生相同窗口特征"
+            )
+
+
+def test_window_features_nan_when_insufficient_history():
+    """测试历史不足时窗口特征应为 NaN
+
+    仅传入 4 个交易日的 daily_data，lookback_windows=[5,10,20]，
+    对于目标 trade_date（第 5 个交易日）：
+    - 全量 trade_cal 也只有 5 个交易日
+    - 因此 4 < 5 <= 10 <= 20，所有窗口特征应为 NaN
+    """
+    import pandas as pd
+    import numpy as np
+
+    all_dates = pd.date_range('2023-01-01', periods=5, freq='B')
+    stocks = ['000001.SZ']
+
+    full_trade_cal = _make_full_trade_cal(all_dates)
+    all_daily = _make_daily_data(all_dates, stocks)
+    stock_basic = _make_stock_basic(stocks)
+    adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+
+    target_date = all_dates[4].strftime('%Y%m%d')  # 第 5 个交易日
+
+    builder = FeatureBuilder(
+        min_list_days=10,
+        horizon=5,
+        lookback_windows=[5, 10, 20],
+        require_label=False,
+    )
+
+    feat = builder.build_features_for_day(
+        trade_date=target_date,
+        trade_cal=full_trade_cal,
+        daily_data=all_daily,
+        adj_factor=adj_factor,
+        stock_basic=stock_basic,
+    )
+
+    # 样本可能因 min_list_days 过滤而为空，此处仅验证窗口特征列存在且为 NaN
+    if len(feat) > 0:
+        for col in ['ret_5', 'ret_10', 'ret_20']:
+            if col in feat.columns:
+                assert feat[col].isna().all(), f"{col} 历史不足时应全为 NaN"

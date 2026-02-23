@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.5] - 2026-02-23
+
+### Bug 修复
+
+- **修复 `--start-date` 变化导致同一 `trade_date` 特征值不稳定**
+  - 新增 `_get_lookback_dates(trade_date, n, trading_dates)` 私有方法
+    （`src/lazybull/features/builder.py`）：
+    以 `trade_date` 在全量 `trading_dates` 中的位置为锚点，向前回溯恰好 `n` 个交易日，
+    确保窗口日期集合只由全量 `trade_cal` 决定。
+  - 修改 `_calculate_features()`：替换旧的 `current_idx - window` 切片 + 区间筛选
+    为调用 `_get_lookback_dates`，消除 `trading_dates` 被截断时的窗口错位。
+  - 修改 `_add_moneyflow_features()`：资金流 rolling 窗口同步使用 `_get_lookback_dates`。
+  - 修改 `_get_tech_factor_today()`：新增 `trading_dates` 参数；预计算时先将 `daily_adj`
+    过滤到全量交易日历日期集合，消除 `daily_adj` 起始日期不同导致的 EWM/滚动指标差异。
+  - 历史不足（回溯不够 N 天）时返回空列表，对应特征置 NaN，不报错。
+
+### 测试
+
+- 新增 `test_get_lookback_dates_basic`：验证 `_get_lookback_dates` 基础行为与边界情况。
+- 新增 `test_window_features_stable_across_start_dates`：
+  相同全量 `trade_cal`、不同 `daily_data` 起始截断，同一 `trade_date` 的
+  `ret_N`、`vol_ratio_N`、`ma_deviation_N` 应完全一致（精度 < 1e-9）。
+- 新增 `test_window_features_nan_when_insufficient_history`：
+  历史不足时，窗口特征应全部为 NaN。
+
 ## [0.13.4] - 2026-02-22
 
 ### Bug 修复
