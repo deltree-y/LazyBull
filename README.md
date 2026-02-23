@@ -29,7 +29,22 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.13.4)
+### 当前版本 (v0.13.5)
+
+**修复 `--start-date` 变化导致同一 `trade_date` 特征不稳定** (v0.13.5 修复):
+- ✅ **新增 `_get_lookback_dates()` 私有方法**：
+  以目标 `trade_date` 在**全量** `trade_cal` 中的位置为锚点，向前回溯恰好 N 个交易日，
+  确保窗口日期只由全量交易日历决定，与构建脚本的 `start_date` 范围无关。
+- ✅ **`_calculate_features()` 使用新方法**：
+  替换旧的 `current_idx - window` 切片 + 区间筛选逻辑，改用 `_get_lookback_dates`，
+  消除因 `trading_dates` 被截断时窗口错位导致的 `ret_N`、`vol_ratio_N`、`ma_deviation_N` 差异。
+- ✅ **`_add_moneyflow_features()` 同步修复**：资金流 rolling 窗口也改用 `_get_lookback_dates`。
+- ✅ **`_get_tech_factor_today()` 过滤 `daily_adj` 到全量交易日历**：
+  预计算技术指标（RSI/KDJ/MACD/布林带/波动率）前，先将 `daily_adj` 过滤到 `trading_dates`
+  集合，消除因 `daily_adj` 起始日期不同导致的滚动/EWM 指标差异。
+- ✅ **历史不足时返回 NaN**：历史窗口回溯不足 N 个交易日时，相关特征置 NaN，不抛异常。
+
+### v0.13.4
 
 **修复 `label_transform=cs_zscore` 场景下的数据泄露/评估口径问题** (v0.13.4 修复):
 - ✅ **新增 `split_train_val_by_date()` 共用切分函数**：

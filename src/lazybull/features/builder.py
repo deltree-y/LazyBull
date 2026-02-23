@@ -242,6 +242,28 @@ class FeatureBuilder:
             return []
         
         return sorted(trading_dates)
+
+    def _get_lookback_dates(self, trade_date: str, n: int, trading_dates: List[str]) -> List[str]:
+        """从全量交易日序列中，以 trade_date 为锚点向前回溯恰好 n 个交易日
+
+        以 trade_date 在全量交易日序列中的位置为锚点，向前回溯 n 个交易日，
+        确保窗口日期只由全量 trade_cal 决定，与构建脚本的 start/end 范围无关。
+
+        Args:
+            trade_date: 目标交易日（YYYYMMDD）
+            n: 回溯交易日数
+            trading_dates: 全量交易日序列（已排序，不重复）
+
+        Returns:
+            前 n 个交易日列表（不含 trade_date 本身）；历史不足时返回空列表
+        """
+        if trade_date not in trading_dates:
+            return []
+        idx = trading_dates.index(trade_date)
+        if idx < n:
+            # 历史不足 n 个交易日
+            return []
+        return trading_dates[idx - n: idx]
     
     def _calculate_adj_close(
         self,
@@ -440,27 +462,19 @@ class FeatureBuilder:
         
         # 计算回看特征
         for window in self.lookback_windows:
-            # 获取历史窗口数据
-            if current_idx < window:
-                # 历史数据不足，填充空值
+            # 以全量交易日历为锚点，向前回溯恰好 window 个交易日
+            # 确保窗口日期只由 trade_cal 决定，与构建脚本的 start_date 无关
+            hist_dates = self._get_lookback_dates(trade_date, window, trading_dates)
+            if not hist_dates:
+                # 历史不足 window 个交易日，填充空值
                 features[f'ret_{window}'] = np.nan
                 features[f'vol_ratio_{window}'] = np.nan
-                # 删除：不再生成 amount_ratio_{window}
                 features[f'ma_deviation_{window}'] = np.nan
                 continue
             
-            # 历史日期范围
-            hist_start_date = trading_dates[current_idx - window]
-            hist_end_date = trading_dates[current_idx - 1]  # 不包含当日
-            
-            hist_dates = [
-                d for d in trading_dates
-                if hist_start_date <= d <= hist_end_date
-            ]
-            
-            # 获取历史数据
+            # 获取历史数据（只取全量交易日序列中确定的 window 个日期）
             hist_data = daily_adj[
-                (daily_adj['trade_date'].isin(hist_dates))
+                daily_adj['trade_date'].isin(hist_dates)
             ].copy()
             
             # 按股票分组计算特征
@@ -612,7 +626,7 @@ class FeatureBuilder:
         # 2. 波动率因子（基于 ret_1 的 rolling std）——改为从预计算缓存取值
         logger.debug("获取波动率因子（批量预计算缓存）...")
         if 'ret_1' in result.columns and current_idx >= max(self.lookback_windows):
-            tech_today = self._get_tech_factor_today(daily_adj, trade_date)
+            tech_today = self._get_tech_factor_today(daily_adj, trade_date, trading_dates)
             vol_cols = [f'volatility_{w}' for w in self.lookback_windows
                         if f'volatility_{w}' in tech_today.columns]
             if vol_cols and len(tech_today) > 0:
@@ -655,7 +669,7 @@ class FeatureBuilder:
         # 6. 技术指标：RSI, KDJ, MACD, 布林带——改为从预计算缓存取值
         # 需要足够的历史数据（至少30天用于 MACD(12,26,9) 和布林带(20)）
         if current_idx >= 30:
-            tech_today = self._get_tech_factor_today(daily_adj, trade_date)
+            tech_today = self._get_tech_factor_today(daily_adj, trade_date, trading_dates)
             tech_indicator_cols = [
                 c for c in ['rsi_14', 'kdj_k', 'kdj_d', 'kdj_j',
                              'macd_dif', 'macd_dea', 'macd_hist',
@@ -676,24 +690,41 @@ class FeatureBuilder:
         self,
         daily_adj: pd.DataFrame,
         trade_date: str,
+        trading_dates: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """获取当日技术指标与波动率因子（内存缓存，首次触发批量预计算）
 
-        首次调用时对全量 daily_adj 批量预计算所有指标并缓存到
+        首次调用时过滤 daily_adj 到全量交易日序列，再批量预计算所有指标并缓存到
         ``self._tech_factor_cache``；后续调用仅按 trade_date 过滤，
         实现 O(1) 查表，避免逐日重复计算。
+
+        通过将 daily_adj 过滤到 trading_dates（全量 trade_cal 提取的交易日集合），
+        确保滚动/EWM 指标的计算范围只依赖全量交易日历，与构建脚本的 start_date 无关。
 
         Args:
             daily_adj: 全量后复权日线数据
             trade_date: 目标交易日（YYYYMMDD）
+            trading_dates: 全量交易日序列（已排序），用于过滤 daily_adj；为 None 时不过滤
 
         Returns:
             当日截面技术指标 DataFrame（ts_code + trade_date + 各指标列）
         """
         if self._tech_factor_cache is None:
             logger.info("首次构建：批量预计算技术指标与波动率因子（缓存中）...")
+            # 将 daily_adj 过滤到全量交易日序列，消除因 start_date 不同导致的数据起点差异
+            if trading_dates is not None:
+                trading_dates_set = set(trading_dates)
+                daily_adj_for_cache = daily_adj[
+                    daily_adj['trade_date'].isin(trading_dates_set)
+                ]
+                logger.debug(
+                    f"技术指标预计算：daily_adj 按全量交易日历过滤后剩余 "
+                    f"{len(daily_adj_for_cache)} 条记录（原 {len(daily_adj)} 条）"
+                )
+            else:
+                daily_adj_for_cache = daily_adj
             self._tech_factor_cache = precompute_technical_factors(
-                daily_adj=daily_adj,
+                daily_adj=daily_adj_for_cache,
                 vol_windows=self.lookback_windows,
             )
 
@@ -840,8 +871,10 @@ class FeatureBuilder:
         
         # 计算 rolling 特征（窗口 5, 20）
         for window in [5, 20]:
-            if current_idx < window:
-                # 历史数据不足，填充空值
+            # 以全量交易日历为锚点，向前回溯恰好 window 个交易日
+            hist_dates = self._get_lookback_dates(trade_date, window, trading_dates)
+            if not hist_dates:
+                # 历史不足 window 个交易日，填充空值
                 features[f'net_mf_amount_sum_{window}'] = np.nan
                 features[f'net_mf_amount_mean_{window}'] = np.nan
                 if 'lg_net_amount' in features.columns:
@@ -850,16 +883,7 @@ class FeatureBuilder:
                     features[f'elg_net_amount_sum_{window}'] = np.nan
                 continue
             
-            # 历史日期范围
-            hist_start_date = trading_dates[current_idx - window]
-            hist_end_date = trading_dates[current_idx - 1]  # 不包含当日
-            
-            hist_dates = [
-                d for d in trading_dates
-                if hist_start_date <= d <= hist_end_date
-            ]
-            
-            # 获取历史数据
+            # 获取历史数据（只取全量交易日序列中确定的 window 个日期）
             hist_moneyflow = moneyflow_data[
                 moneyflow_data['trade_date'].isin(hist_dates)
             ].copy()
