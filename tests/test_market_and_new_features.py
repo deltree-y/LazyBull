@@ -435,3 +435,214 @@ class TestPrecomputeMarketStateFeatures:
         # 缓存应在第一次调用后建立，且不为空
         assert builder._market_state_cache is not None
         assert len(builder._market_state_cache) == len(dates)
+
+
+# ---------------------------------------------------------------------------
+# TestWarmupStartDateIndependence
+# ---------------------------------------------------------------------------
+
+class TestWarmupStartDateIndependence:
+    """测试 warmup 机制确保同一 trade_date 特征不受历史起点（--start-date）影响"""
+
+    def _make_daily_data(self, n_days=200, n_stocks=15, seed=42):
+        """构造多日行情测试数据（含技术指标所需字段）"""
+        rng = np.random.default_rng(seed)
+        base = pd.Timestamp('20230101')
+        dates = [(base + pd.Timedelta(days=i)).strftime('%Y%m%d') for i in range(n_days)]
+        rows = []
+        for d in dates:
+            for j in range(n_stocks):
+                close = float(rng.uniform(5.0, 50.0))
+                rows.append({
+                    'trade_date': d,
+                    'ts_code': f'{j:06d}.SZ',
+                    'pct_chg': float(rng.normal(0, 2)),
+                    'vol': float(rng.integers(500, 2000)),
+                    'amount': float(rng.uniform(1000, 10000)),
+                    'close_adj': close,
+                    'high_adj': close * float(rng.uniform(1.0, 1.05)),
+                    'low_adj': close * float(rng.uniform(0.95, 1.0)),
+                    'open_adj': close * float(rng.uniform(0.98, 1.02)),
+                    'ret_1': float(rng.normal(0, 0.02)),
+                })
+        return pd.DataFrame(rows), dates
+
+    def _make_daily_basic(self, dates, n_stocks=15, seed=99):
+        """构造多日 daily_basic 测试数据"""
+        rng = np.random.default_rng(seed)
+        rows = []
+        for d in dates:
+            for j in range(n_stocks):
+                rows.append({
+                    'trade_date': d,
+                    'ts_code': f'{j:06d}.SZ',
+                    'circ_mv': float(rng.uniform(1e6, 1e8)),
+                    'turnover_rate_f': float(rng.uniform(0.5, 5.0)),
+                })
+        return pd.DataFrame(rows)
+
+    def test_slice_by_trading_days_basic(self):
+        """_slice_by_trading_days 应正确按 warmup_days 截取数据"""
+        _, dates = self._make_daily_data(n_days=200)
+        daily_data, _ = self._make_daily_data(n_days=200)
+        builder = FeatureBuilder()
+
+        anchor = dates[150]
+        # warmup=120 → 起点应是 dates[30]
+        sliced = builder._slice_by_trading_days(daily_data, dates, anchor, warmup_days=120)
+        expected_start = dates[30]
+        assert sliced['trade_date'].min() == expected_start
+        # 不应包含 dates[29] 或之前的数据
+        assert dates[29] not in set(sliced['trade_date'].unique())
+
+    def test_slice_by_trading_days_insufficient_history(self):
+        """历史不足 warmup_days 时应从第一个交易日开始（不抛异常）"""
+        daily_data, dates = self._make_daily_data(n_days=50)
+        builder = FeatureBuilder()
+        anchor = dates[10]
+        # warmup=120 > 10，应从 dates[0] 开始
+        sliced = builder._slice_by_trading_days(daily_data, dates, anchor, warmup_days=120)
+        assert sliced['trade_date'].min() == dates[0]
+
+    def test_slice_by_trading_days_unknown_anchor(self):
+        """anchor 不在 trading_dates 中时应原样返回 DataFrame"""
+        daily_data, dates = self._make_daily_data(n_days=50)
+        builder = FeatureBuilder()
+        sliced = builder._slice_by_trading_days(daily_data, dates, '99991231', warmup_days=120)
+        assert len(sliced) == len(daily_data)
+
+    def test_market_state_independent_of_start_date(self):
+        """同一目标日市场状态特征在历史充足时不受历史起点影响"""
+        daily_data, dates = self._make_daily_data()
+        # target_date = dates[160]，warmup 起点 = dates[40]（160-120=40）
+        target_date = dates[160]
+        result_df = pd.DataFrame({'ts_code': ['000000.SZ']})
+
+        # Run1：使用全量数据（dates[0..199]）
+        builder1 = FeatureBuilder()
+        builder1._add_market_state_features(
+            result_df.copy(), daily_data, target_date, dates, dates.index(target_date)
+        )
+
+        # Run2：截断到 dates[10..199]（仍覆盖 warmup 起点 dates[40]）
+        trunc_dates = set(dates[10:])
+        trunc_data = daily_data[daily_data['trade_date'].isin(trunc_dates)]
+        builder2 = FeatureBuilder()
+        builder2._add_market_state_features(
+            result_df.copy(), trunc_data, target_date, dates, dates.index(target_date)
+        )
+
+        # 目标日期的所有市场状态特征应完全一致（两次切片后输入相同）
+        for col in ['mkt_vol_cnt', 'mkt_vol_20', 'mkt_adv_dec_ratio', 'mkt_ret_avg_20']:
+            v1 = float(builder1._market_state_cache.loc[target_date, col])
+            v2 = float(builder2._market_state_cache.loc[target_date, col])
+            if np.isnan(v1):
+                assert np.isnan(v2), f"市场状态 {col}: run1=NaN, run2={v2}"
+            else:
+                assert abs(v1 - v2) < 1e-9, (
+                    f"市场状态 {col} 不一致（受 start-date 影响）: "
+                    f"run1={v1:.12f}, run2={v2:.12f}"
+                )
+
+    def test_market_state_with_basic_independent_of_start_date(self):
+        """含 daily_basic 时，市场状态特征在历史充足条件下与起点无关"""
+        daily_data, dates = self._make_daily_data()
+        daily_basic = self._make_daily_basic(dates)
+        target_date = dates[160]
+        result_df = pd.DataFrame({'ts_code': ['000000.SZ']})
+
+        # Run1：全量数据
+        builder1 = FeatureBuilder()
+        builder1._add_market_state_features(
+            result_df.copy(), daily_data, target_date, dates, dates.index(target_date),
+            daily_basic_data=daily_basic,
+        )
+
+        # Run2：截断到 dates[15..199]（仍覆盖 warmup 起点 dates[40]）
+        trunc_dates = set(dates[15:])
+        trunc_data = daily_data[daily_data['trade_date'].isin(trunc_dates)]
+        trunc_basic = daily_basic[daily_basic['trade_date'].isin(trunc_dates)]
+        builder2 = FeatureBuilder()
+        builder2._add_market_state_features(
+            result_df.copy(), trunc_data, target_date, dates, dates.index(target_date),
+            daily_basic_data=trunc_basic,
+        )
+
+        for col in ['mkt_vol_cnt', 'mkt_vol_20', 'mkt_adv_dec_ratio',
+                    'mkt_turnover_ratio', 'mkt_turnover_std']:
+            v1 = float(builder1._market_state_cache.loc[target_date, col])
+            v2 = float(builder2._market_state_cache.loc[target_date, col])
+            if np.isnan(v1):
+                assert np.isnan(v2), f"市场状态(含basic) {col}: run1=NaN, run2={v2}"
+            else:
+                assert abs(v1 - v2) < 1e-9, (
+                    f"市场状态(含basic) {col} 不一致: run1={v1:.12f}, run2={v2:.12f}"
+                )
+
+    def test_tech_factor_independent_of_start_date(self):
+        """同一目标日技术指标在历史充足时不受历史起点影响"""
+        daily_data, dates = self._make_daily_data(n_days=200, n_stocks=5)
+        target_date = dates[160]
+
+        # Run1：全量数据
+        builder1 = FeatureBuilder()
+        tech1 = builder1._get_tech_factor_today(daily_data, target_date, dates)
+
+        # Run2：截断到 dates[10..199]（仍覆盖 warmup 起点 dates[40]）
+        trunc_dates = set(dates[10:])
+        trunc_data = daily_data[daily_data['trade_date'].isin(trunc_dates)]
+        builder2 = FeatureBuilder()
+        tech2 = builder2._get_tech_factor_today(trunc_data, target_date, dates)
+
+        assert len(tech1) > 0, "Run1 技术指标结果不应为空"
+        assert len(tech2) > 0, "Run2 技术指标结果不应为空"
+
+        # 对每支股票验证技术指标一致
+        for col in ['macd_dif', 'macd_dea', 'macd_hist', 'kdj_k', 'kdj_d', 'kdj_j',
+                    'rsi_14', 'bb_pct']:
+            if col not in tech1.columns or col not in tech2.columns:
+                continue
+            for ts_code in tech1['ts_code'].unique():
+                r1 = tech1[tech1['ts_code'] == ts_code][col]
+                r2 = tech2[tech2['ts_code'] == ts_code][col]
+                if r1.empty or r2.empty:
+                    continue
+                v1 = float(r1.iloc[0])
+                v2 = float(r2.iloc[0])
+                if np.isnan(v1):
+                    assert np.isnan(v2), f"技术指标 {col}[{ts_code}]: run1=NaN, run2={v2}"
+                else:
+                    assert abs(v1 - v2) < 1e-9, (
+                        f"技术指标 {col}[{ts_code}] 不一致: "
+                        f"run1={v1:.12f}, run2={v2:.12f}"
+                    )
+
+    def test_insufficient_warmup_produces_different_values(self):
+        """当截断导致 warmup 不足时，特征值可能不同（预期行为）"""
+        daily_data, dates = self._make_daily_data()
+        target_date = dates[160]
+        result_df = pd.DataFrame({'ts_code': ['000000.SZ']})
+
+        # Run1：全量数据（warmup 充足，60 日滚动窗口完整）
+        builder1 = FeatureBuilder()
+        builder1._add_market_state_features(
+            result_df.copy(), daily_data, target_date, dates, dates.index(target_date)
+        )
+
+        # Run3：截断到 dates[115..199]（深入 60 日窗口内，dates[100..114] 丢失）
+        # mkt_adv_dec_ratio 的 60 日窗口为 dates[100..160]，截断后只有 45 天数据
+        trunc_dates = set(dates[115:])
+        trunc_data = daily_data[daily_data['trade_date'].isin(trunc_dates)]
+        builder3 = FeatureBuilder()
+        builder3._add_market_state_features(
+            result_df.copy(), trunc_data, target_date, dates, dates.index(target_date)
+        )
+
+        # mkt_adv_dec_ratio 使用 60 日窗口：数据不足时 (min_periods=1) 用不同子集计算
+        v1 = float(builder1._market_state_cache.loc[target_date, 'mkt_adv_dec_ratio'])
+        v3 = float(builder3._market_state_cache.loc[target_date, 'mkt_adv_dec_ratio'])
+        assert not np.isnan(v1) and not np.isnan(v3)
+        # 两者应不相等（数据截断导致不同的滚动窗口覆盖范围）
+        assert abs(v1 - v3) > 1e-9, (
+            f"截断后 mkt_adv_dec_ratio 预期不同，实际相同: v1={v1}, v3={v3}"
+        )

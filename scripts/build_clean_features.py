@@ -223,8 +223,8 @@ def build_features_data(
     
     logger.info(f"共 {len(trading_dates_str)} 个交易日需要构建特征")
     
-    # 加载clean层日线数据（扩展范围以包含历史数据）
-    start_dt = pd.to_datetime(start_date, format='%Y%m%d') - pd.DateOffset(months=1)
+    # 加载clean层日线数据（扩展范围以包含足够的 warmup 历史，覆盖 120 个交易日 ≈ 7 个月）
+    start_dt = pd.to_datetime(start_date, format='%Y%m%d') - pd.DateOffset(months=7)
     end_dt = pd.to_datetime(end_date, format='%Y%m%d') + pd.DateOffset(months=1)
     
     daily_clean = loader.load_clean_daily(

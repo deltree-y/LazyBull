@@ -29,7 +29,26 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.13.5)
+### 当前版本 (v0.13.6)
+
+**修复市场状态与技术指标特征对 `--start-date` 敏感的问题** (v0.13.6 修复):
+- ✅ **新增 `_slice_by_trading_days()` 通用切片方法**：
+  以目标 `trade_date` 在全量 `trade_cal` 中的位置为锚点，向前回溯固定 **120 个交易日**
+  作为 warmup 窗口，返回该起点之后的所有交易日数据子集，确保两次构建的输入起点相同。
+- ✅ **`_add_market_state_features()` 切片修复**：
+  首次建立 `_market_state_cache` 时，先对 `daily_adj` 与 `daily_basic_data` 应用
+  `_slice_by_trading_days`，保证 rolling 计算（`mkt_adv_dec_ratio`、`mkt_vol_20`、
+  `mkt_ret_avg_20` 等）的输入起点固定，不受 `--start-date` 影响。
+- ✅ **`_get_tech_factor_today()` 切片修复**：
+  首次建立 `_tech_factor_cache` 时，使用 `_slice_by_trading_days` 替换原有全量交易日
+  过滤逻辑，确保 KDJ/MACD/RSI/布林带/波动率等 EWM/rolling 指标历史起点一致。
+- ✅ **`build_clean_features.py` 扩展 warmup 加载范围**：
+  数据加载起点从 `start_date - 1个月` 扩展为 `start_date - 7个月`（约覆盖 150 个
+  交易日），为 warmup=120 提供充足的历史支撑。
+- ✅ **历史不足时行为不变**：历史窗口 < 120 个交易日时，按 `min_periods=1` 行为
+  计算，不抛异常。
+
+### v0.13.5
 
 **修复 `--start-date` 变化导致同一 `trade_date` 特征不稳定** (v0.13.5 修复):
 - ✅ **新增 `_get_lookback_dates()` 私有方法**：

@@ -36,6 +36,9 @@ from ..factors import (
 )
 from ..factors.normalization import cross_sectional_zscore
 
+# 预计算 warmup 天数：固定 120 个交易日，确保 rolling/EWM 指标在历史充足时与 --start-date 无关
+_WARMUP_TRADING_DAYS = 120
+
 
 class FeatureBuilder:
     """特征构建器
@@ -264,7 +267,44 @@ class FeatureBuilder:
             # 历史不足 n 个交易日
             return []
         return trading_dates[idx - n: idx]
-    
+
+    def _slice_by_trading_days(
+        self,
+        daily_df: pd.DataFrame,
+        trading_dates: List[str],
+        anchor_trade_date: str,
+        warmup_days: int = _WARMUP_TRADING_DAYS,
+    ) -> pd.DataFrame:
+        """按交易日历回溯 warmup_days 个交易日切片数据
+
+        以 anchor_trade_date 在全量 trading_dates 中的位置为锚点，向前回溯
+        warmup_days 个交易日，返回该起点（含）之后属于全量交易日历的所有数据。
+
+        通过确保两次构建的输入起点相同（无论 --start-date 如何），消除
+        rolling/EWM 指标因历史截断点不同而产生的差异。
+
+        Args:
+            daily_df: 包含 trade_date 列的 DataFrame
+            trading_dates: 已排序的全量交易日列表（YYYYMMDD 格式）
+            anchor_trade_date: 锚点日期（首次处理的 trade_date），切片从该日
+                               往前 warmup_days 个交易日处开始
+            warmup_days: warmup 天数，默认 _WARMUP_TRADING_DAYS
+
+        Returns:
+            切片后的 DataFrame，仅保留 warmup 起始日（含）之后的交易日数据。
+            若 anchor_trade_date 不在 trading_dates 中，则原样返回 daily_df。
+        """
+        if daily_df is None or len(daily_df) == 0:
+            return daily_df
+        if anchor_trade_date not in trading_dates:
+            return daily_df
+
+        anchor_idx = trading_dates.index(anchor_trade_date)
+        warmup_start_idx = max(0, anchor_idx - warmup_days)
+        # 过滤到 warmup 起始日（含）之后的所有交易日
+        window_dates = set(trading_dates[warmup_start_idx:])
+        return daily_df[daily_df['trade_date'].isin(window_dates)].copy()
+
     def _calculate_adj_close(
         self,
         daily_data: pd.DataFrame,
@@ -711,14 +751,14 @@ class FeatureBuilder:
         """
         if self._tech_factor_cache is None:
             logger.info("首次构建：批量预计算技术指标与波动率因子（缓存中）...")
-            # 将 daily_adj 过滤到全量交易日序列，消除因 start_date 不同导致的数据起点差异
+            # 统一从 trade_date 往前 _WARMUP_TRADING_DAYS 个交易日切片输入，
+            # 消除 --start-date 不同导致的 rolling/EWM 指标历史起点差异
             if trading_dates is not None:
-                trading_dates_set = set(trading_dates)
-                daily_adj_for_cache = daily_adj[
-                    daily_adj['trade_date'].isin(trading_dates_set)
-                ]
+                daily_adj_for_cache = self._slice_by_trading_days(
+                    daily_adj, trading_dates, trade_date
+                )
                 logger.debug(
-                    f"技术指标预计算：daily_adj 按全量交易日历过滤后剩余 "
+                    f"技术指标预计算：daily_adj 按 warmup 窗口切片后剩余 "
                     f"{len(daily_adj_for_cache)} 条记录（原 {len(daily_adj)} 条）"
                 )
             else:
@@ -1545,10 +1585,19 @@ class FeatureBuilder:
             # 首次进入时批量预计算并缓存
             if self._market_state_cache is None:
                 logger.info("首次构建：批量预计算所有交易日市场状态特征（缓存中）...")
+                # 统一从 trade_date 往前 _WARMUP_TRADING_DAYS 个交易日切片输入，
+                # 消除 --start-date 不同导致的 rolling 指标历史起点差异
+                sliced_daily_adj = self._slice_by_trading_days(
+                    daily_adj, trading_dates, trade_date
+                )
+                sliced_daily_basic = (
+                    self._slice_by_trading_days(daily_basic_data, trading_dates, trade_date)
+                    if daily_basic_data is not None else None
+                )
                 self._market_state_cache = precompute_market_state_features(
-                    daily_data=daily_adj,
+                    daily_data=sliced_daily_adj,
                     trading_dates=trading_dates,
-                    daily_basic_data=daily_basic_data,
+                    daily_basic_data=sliced_daily_basic,
                 )
 
             # 按 trade_date O(1) 取值
