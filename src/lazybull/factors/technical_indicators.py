@@ -46,7 +46,8 @@ def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
     else:   #优化实现：全局排序 + 向量化计算，效率更高
         col_name = f'rsi_{window}'
         # 1. 排序并提取 values，转为 Numpy 运算避开索引开销
-        df = df.sort_values(['ts_code', 'trade_date'])
+        # 使用 .copy() 避免对原始 DataFrame 原地添加临时列 g/l，防止意外污染调用方数据
+        df = df.sort_values(['ts_code', 'trade_date']).copy()
         close = df['close_adj'].values
         codes = df['ts_code'].values
         
@@ -116,8 +117,15 @@ def calculate_kdj(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.
     denom = (high_n - low_n).replace(0, np.nan)
     rsv = 100 * (df_calc['close_adj'] - low_n) / denom
     
-    # 填充初始值的 RSV (防止 ewm 报错，通常 KDJ 初始值为 50)
-    df_calc['rsv_tmp'] = rsv.fillna(50.0)
+    # 填充 RSV 的 NaN：
+    #   - 先在每只股票内部做前向填充（ffill），处理停牌等导致的中间 NaN 段，
+    #     避免用固定值 50 覆盖停牌前的最后有效 RSV
+    #   - 再用 50 填充股票历史起始阶段（窗口不足时）的初始 NaN，
+    #     符合传统 KDJ 初始值为 50 的约定
+    df_calc['rsv_tmp'] = (
+        rsv.groupby(df_calc['ts_code'])
+           .transform(lambda x: x.ffill().fillna(50.0))
+    )
     
     # 4. 计算 K, D, J (使用 transform 避免索引冲突)
     # transform 会保持与原 df_calc 相同的索引结构，彻底解决 join 失败问题

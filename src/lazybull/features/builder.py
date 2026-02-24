@@ -133,7 +133,12 @@ class FeatureBuilder:
         
         # 2. 计算后复权收盘价
         daily_adj = self._calculate_adj_close(daily_data, adj_factor)
-        
+
+        # 计算前一交易日复权收盘价（用于振幅因子分母，避免 pre_close * adj_factor 口径错误）
+        # 正确口径：pre_close_adj = 前一日的 close_adj（而非 pre_close * 当日 adj_factor）
+        daily_adj = daily_adj.sort_values(['ts_code', 'trade_date'])
+        daily_adj['pre_close_adj'] = daily_adj.groupby('ts_code')['close_adj'].shift(1)
+
         # 3. 获取当日数据
         current_data = daily_adj[daily_adj['trade_date'] == trade_date].copy()
         
@@ -358,7 +363,13 @@ class FeatureBuilder:
         # 处理缺失的复权因子（如果有）
         missing_adj = daily_adj['adj_factor'].isna().sum()
         if missing_adj > 0:
-            logger.error(f"有 {missing_adj} 条记录缺少复权因子，将使用原始价格")
+            # 统计缺失复权因子的股票，便于区分"新上市（正常）"与"数据缺失（异常）"
+            missing_codes = daily_adj.loc[daily_adj['adj_factor'].isna(), 'ts_code'].unique()
+            logger.warning(
+                f"有 {missing_adj} 条记录缺少复权因子（涉及 {len(missing_codes)} 只股票），"
+                f"将使用原始价格（新上市股票属正常，除权日缺失则为数据问题）。"
+                f"股票列表: {list(missing_codes[:10])}{'...' if len(missing_codes) > 10 else ''}"
+            )
             daily_adj['close_adj'].fillna(daily_adj['close'], inplace=True)
             if 'open_adj' in daily_adj.columns:
                 daily_adj['open_adj'].fillna(daily_adj['open'], inplace=True)
@@ -555,7 +566,10 @@ class FeatureBuilder:
         """
         if len(hist_data) == 0:
             return pd.DataFrame(columns=['ts_code'])
-        
+
+        # 必须先按时间排序，保证 agg('first'/'last') 对应最早/最晚交易日
+        hist_data = hist_data.sort_values(['ts_code', 'trade_date'])
+
         # 按股票分组，使用向量化操作计算特征
         # as_index=False 保留 ts_code 作为普通列
         grouped = hist_data.groupby('ts_code', as_index=False)
@@ -1133,18 +1147,31 @@ class FeatureBuilder:
         
         result = result.merge(current_daily, on='ts_code', how='left', suffixes=('', '_daily'))
         
-        # 简化方法：使用涨跌幅判断（A股涨跌停通常为±10%，ST为±5%）
-        # 这里使用9.9%和-9.9%作为阈值（考虑精度问题）
+        # 使用涨跌幅判断涨跌停
+        # 注意：不同板块涨跌幅限制不同
+        #   主板/中小板：±10%（非ST），±5%（ST）
+        #   科创板（688xxx.SH）：±20%
+        #   创业板注册制（300xxx/301xxx.SZ，2020-08-24起）：±20%
         result['is_limit_up'] = 0
         result['is_limit_down'] = 0
-        
-        # 非ST股票：涨跌幅 >= 9.9%
+
         non_st_mask = (result['is_st'] == 0)
-        result.loc[non_st_mask & (result['pct_chg'] >= 9.9), 'is_limit_up'] = 1
-        result.loc[non_st_mask & (result['pct_chg'] <= -9.9), 'is_limit_down'] = 1
-        
-        # ST股票：涨跌幅 >= 4.9%
         st_mask = (result['is_st'] == 1)
+
+        # 科创板（688开头）/ 创业板注册制（300/301开头）：±20% 阈值
+        kcb_mask = result['ts_code'].str.startswith('688')
+        gem_mask = result['ts_code'].str.startswith('300') | result['ts_code'].str.startswith('301')
+        reg_board_mask = (kcb_mask | gem_mask) & non_st_mask
+
+        # 主板/其他非ST：±10% 阈值
+        main_board_mask = ~(kcb_mask | gem_mask) & non_st_mask
+
+        result.loc[reg_board_mask & (result['pct_chg'] >= 19.9), 'is_limit_up'] = 1
+        result.loc[reg_board_mask & (result['pct_chg'] <= -19.9), 'is_limit_down'] = 1
+        result.loc[main_board_mask & (result['pct_chg'] >= 9.9), 'is_limit_up'] = 1
+        result.loc[main_board_mask & (result['pct_chg'] <= -9.9), 'is_limit_down'] = 1
+
+        # ST股票：±5% 阈值
         result.loc[st_mask & (result['pct_chg'] >= 4.9), 'is_limit_up'] = 1
         result.loc[st_mask & (result['pct_chg'] <= -4.9), 'is_limit_down'] = 1
         

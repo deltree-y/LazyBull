@@ -202,6 +202,13 @@ def execute_split_training(
     logger.info(f"测试集样本数（过滤后）: {len(df_test_eval)}")
     
     # 测试集预测
+    _test_nan_rates = df_test_eval[feature_columns].isna().mean()
+    _test_high_nan = _test_nan_rates[_test_nan_rates > 0.3]
+    if len(_test_high_nan) > 0:
+        logger.warning(
+            f"测试集特征 NaN 比例 >30%（fillna(0) 可能使预测偏离训练分布）: "
+            f"{_test_high_nan.round(3).to_dict()}"
+        )
     X_test_features = df_test_eval[feature_columns].fillna(0)
     
     if args.task == "classification":
@@ -622,12 +629,20 @@ def main():
         help="随机种子，默认 42"
     )
 
-    # rank-weight 参数：Top/Bottom K 样本增强权重
+    # rank-weight 参数：Top K 样本增强权重
+    # 默认开启；使用 --no-rank-weight-enabled 关闭
     parser.add_argument(
         "--rank-weight-enabled",
+        dest="rank_weight_enabled",
         action="store_true",
         default=True,
-        help="启用 Top/Bottom K 样本权重增强（默认开启）"
+        help="启用 Top K 样本权重增强（默认开启）"
+    )
+    parser.add_argument(
+        "--no-rank-weight-enabled",
+        dest="rank_weight_enabled",
+        action="store_false",
+        help="禁用 Top K 样本权重增强"
     )
     parser.add_argument(
         "--rank-weight-topk",

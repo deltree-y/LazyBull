@@ -92,7 +92,8 @@ def load_features_data(
 def split_train_val_by_date(
     df: pd.DataFrame,
     val_ratio: float = 0.2,
-    date_col: str = 'trade_date'
+    date_col: str = 'trade_date',
+    delta: int = 20,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
     """按 trade_date 粒度切分训练集和验证集
 
@@ -103,6 +104,8 @@ def split_train_val_by_date(
         df: 输入 DataFrame（需包含 date_col 列）
         val_ratio: 验证集比例，默认 0.2
         date_col: 日期列名，默认 trade_date
+        delta: 训练集末尾与验证集开头之间的间隔交易日数，用于防止标签前向泄露；
+               应设置为标签 horizon（如 y_ret_20 对应 delta=20）。
 
     Returns:
         (df_train, df_val, stats) 元组：
@@ -129,15 +132,15 @@ def split_train_val_by_date(
         n_train_dates = 0
         n_val_dates = n_dates
 
-    delta = 20
     train_dates_set = set(all_dates[:n_train_dates-delta]) if n_train_dates > delta else set(all_dates[:n_train_dates])
     val_dates_set = set(all_dates[n_train_dates+delta:]) if n_train_dates + delta < n_dates else set(all_dates[n_train_dates:])
 
     df_train = df[df[date_col].isin(train_dates_set)].copy()
     df_val = df[df[date_col].isin(val_dates_set)].copy()
 
+    actual_train_n_dates = len(train_dates_set)
     stats = {
-        "train_n_dates": n_train_dates,
+        "train_n_dates": actual_train_n_dates,   # 实际参与训练的日期数（已扣除末尾 delta 天间隔）
         "val_n_dates": len(val_dates_set),
         "train_start_date": str(all_dates[0]) if n_train_dates > 0 else "N/A",
         "train_end_date": str(all_dates[n_train_dates-delta - 1]) if n_train_dates > 0 else "N/A",
@@ -145,10 +148,10 @@ def split_train_val_by_date(
         "val_end_date": str(all_dates[-1]) if val_dates_set else "N/A",
     }
 
-    logger.info(f"按 trade_date 粒度切分（共 {n_dates} 个交易日）:")
+    logger.info(f"按 trade_date 粒度切分（共 {n_dates} 个交易日，delta={delta} 天间隔）:")
     logger.info(
         f"  训练集: {stats['train_start_date']} 至 {stats['train_end_date']}"
-        f"（{n_train_dates} 个交易日，{len(df_train)} 条样本）"
+        f"（{actual_train_n_dates} 个交易日，{len(df_train)} 条样本）"
     )
     logger.info(
         f"  验证集: {stats['val_start_date']} 至 {stats['val_end_date']}"
@@ -210,53 +213,53 @@ def prepare_training_data(
     #feature_columns = [col for col in df.columns if col not in exclude_columns]
     feature_columns = [
         # 1. 中性化动量与趋势 (9个) - 剔除行业/市值后的纯选股动量
-        “neu_ret_1”,               # 超短期个股中性化反转（A股隔日反转效应）
-        “neu_ret_20”,              # 中期个股中性化超额
-        “neu_ret_5”,               # 短期个股中性化超额
-        “alpha_industry_20”,       # 行业动量（保留此特征以保留行业轮动视角）
-        “alpha_industry_5”,        # 行业短期爆发力
-        “zscore_ma_deviation_20”,  # 20日均线乖离率
-        “zscore_acceleration”,     # 动量加速度
-        “zscore_macd_hist”,        # MACD能量柱（动能切换）
-        “bb_pct”,                  # 布林带位置
+        "neu_ret_1",               # 超短期个股中性化反转（A股隔日反转效应）
+        "neu_ret_20",              # 中期个股中性化超额
+        "neu_ret_5",               # 短期个股中性化超额
+        "alpha_industry_20",       # 行业动量（保留此特征以保留行业轮动视角）
+        "alpha_industry_5",        # 行业短期爆发力
+        "zscore_ma_deviation_20",  # 20日均线乖离率
+        "zscore_acceleration",     # 动量加速度
+        "zscore_macd_hist",        # MACD能量柱（动能切换）
+        "bb_pct",                  # 布林带位置
 
         # 2. 流动性与资金博弈 (7个) - 识别虚假繁荣与主力意图
         # volume_ratio（实时量比）与 vol_ratio_20 高度重叠，已移除
-        “zscore_turnover_rate”,    # 换手率级别
-        “vol_ratio_20”,            # 20日量比
-        “vol_burst_20”,            # 20日爆量系数
-        “zscore_amount_ma20”,      # 20日成交额基准
-        “zscore_net_mf_amount”,    # 当日净流入资金
-        “zscore_elg_net_amount_sum_20”, # 20日特大单累积（主力深度）
-        “lg_net_amount_sum_5”,     # 5日大单累积
+        "zscore_turnover_rate",    # 换手率级别
+        "vol_ratio_20",            # 20日量比
+        "vol_burst_20",            # 20日爆量系数
+        "zscore_amount_ma20",      # 20日成交额基准
+        "zscore_net_mf_amount",    # 当日净流入资金
+        "zscore_elg_net_amount_sum_20", # 20日特大单累积（主力深度）
+        "lg_net_amount_sum_5",     # 5日大单累积
 
         # 3. 波动风险与形态特征 (8个) - 解决”早夭”与压制回撤
         # body_length 可由 amplitude - upper_shadow - lower_shadow 推导，已移除
-        “zscore_volatility_20”,    # 20日波动率
-        “zscore_volatility_5”,     # 5日波动率
-        “amplitude”,               # 当日振幅
-        “zscore_bb_width”,         # 布林带宽度（波动挤压/释放）
-        “upper_shadow”,            # 上影线（压力位）
-        “lower_shadow”,            # 下影线（支撑位）
-        “spec_score”,              # 投机分（高波动小市值复合得分）
-        “rsi_14”,                  # 强弱指标（超买超卖）
-        “kdj_j”,                   # 随机指标J值（灵敏度高）
+        "zscore_volatility_20",    # 20日波动率
+        "zscore_volatility_5",     # 5日波动率
+        "amplitude",               # 当日振幅
+        "zscore_bb_width",         # 布林带宽度（波动挤压/释放）
+        "upper_shadow",            # 上影线（压力位）
+        "lower_shadow",            # 下影线（支撑位）
+        "spec_score",              # 投机分（高波动小市值复合得分）
+        "rsi_14",                  # 强弱指标（超买超卖）
+        "kdj_j",                   # 随机指标J值（灵敏度高）
 
         # 4. 估值、质量与安全边际 (6个) - 风格锚点，提供底层防御
         # pb 与 zscore_bp 线性冗余（BP=1/PB），已移除 pb
-        “zscore_size”,             # 市值因子（核心锚点）
-        “zscore_bp”,               # 账面市值比（价值挖掘）
-        “zscore_dv_ttm”,           # 股息率
-        “zscore_pe_ttm”,           # PE分位
-        “is_loss”,                 # 是否亏损（质量过滤）
-        “list_days”,               # 上市天数
+        "zscore_size",             # 市值因子（核心锚点）
+        "zscore_bp",               # 账面市值比（价值挖掘）
+        "zscore_dv_ttm",           # 股息率
+        "zscore_pe_ttm",           # PE分位
+        "is_loss",                 # 是否亏损（质量过滤）
+        "list_days",               # 上市天数
 
         # 5. 市场环境特征 (4个) - 环境感知，缓解逻辑断裂导致的早停
         # is_limit_up / is_limit_down 过滤后恒为 0，已移除
-        “mkt_adv_dec_ratio”,       # 市场涨跌比
-        “mkt_ret_avg_20”,          # 市场平均收益
-        “mkt_turnover_std”,        # 市场成交额波动
-        “mkt_vol_20”,              # 市场总体成交量
+        "mkt_adv_dec_ratio",       # 市场涨跌比
+        "mkt_ret_avg_20",          # 市场平均收益
+        "mkt_turnover_std",        # 市场成交额波动
+        "mkt_vol_20",              # 市场总体成交量
     ]
     
     logger.info(f"特征列数量: {len(feature_columns)}")
@@ -279,9 +282,17 @@ def prepare_training_data(
     if len(df_train) == 0:
         raise ValueError("没有可用的训练样本")
     
+    # 从标签列名自动推断 delta（例如 neu_y_ret_20 -> horizon=20，y_ret_5 -> horizon=5）
+    # delta 是训练集末尾与验证集开头之间的交易日间隔，需 >= 标签 horizon 以防止标签泄露
+    try:
+        inferred_horizon = int(label_column.rstrip('d').split('_')[-1])
+    except (ValueError, IndexError):
+        inferred_horizon = 20
+    label_delta = max(inferred_horizon, 5)  # 最少 5 个交易日间隔
+
     # 按 trade_date 粒度切分训练集和验证集（确保同日样本不被拆分到两侧）
     df_train_split, df_val_split, split_stats = split_train_val_by_date(
-        df_train, val_ratio=val_ratio
+        df_train, val_ratio=val_ratio, delta=label_delta
     )
 
     # 在标签变换前保存 val 原始 df 快照，用于逐日评估（保持真实收益单位）
@@ -307,9 +318,27 @@ def prepare_training_data(
     y_val = df_val_split[label_column].copy()
     
     # 处理特征中的缺失值（填充为0）
+    # 注意：对于 zscore_* 前缀的特征，0 ≈ 截面均值，填充合理；
+    #       对于非标准化特征（如 spec_score、amplitude 等），0 可能偏离真实分布，属已知局限。
+    nan_rates = X_train.isna().mean()
+    high_nan_cols = nan_rates[nan_rates > 0.3]
+    if len(high_nan_cols) > 0:
+        logger.warning(
+            f"以下特征在训练集中 NaN 比例 >30%，fillna(0) 可能引入偏差（建议检查数据源）: "
+            f"{high_nan_cols.round(3).to_dict()}"
+        )
+    # spec_score / volatility 等非 z-score 特征：0 ≠ 截面均值，NaN 率高时 fillna(0) 会引入虚假信号
+    non_zscore_nan_risk = [c for c in ['spec_score', 'amplitude', 'upper_shadow', 'lower_shadow',
+                                        'rsi_14', 'kdj_j', 'bb_pct']
+                           if c in X_train.columns and X_train[c].isna().mean() > 0.05]
+    if non_zscore_nan_risk:
+        logger.warning(
+            f"非 z-score 特征存在 >5% NaN（fillna(0) 可能使其值偏离真实分布均值）: "
+            f"{non_zscore_nan_risk}"
+        )
     X_train = X_train.fillna(0)
     X_val = X_val.fillna(0)
-    
+
     logger.info(f"训练数据准备完成: X_train shape={X_train.shape}, X_val shape={X_val.shape}")
 
     # 数据统计
@@ -341,7 +370,9 @@ def transform_labels_cs_zscore(
     Returns:
         变换后的 DataFrame（标签列已替换为标准化后的值）
     """
-    from src.lazybull.common.feature_utils import cross_sectional_zscore
+    # 使用别名以区别于 normalization.cross_sectional_zscore（后者处理多列 DataFrame）
+    from src.lazybull.common.feature_utils import cross_sectional_zscore as _single_col_zscore
+    cross_sectional_zscore = _single_col_zscore
     
     logger.info(f"对标签 {label_column} 进行截面 z-score 标准化...")
     logger.info(f"  winsorize 参数: {winsorize_p}")
@@ -514,7 +545,7 @@ def build_rank_sample_weights(
 
     top_bottom_count = int((weights > 1.0).sum())
     logger.info(
-        f"样本权重构造完成: Top/Bottom {topk} 增强，"
+        f"样本权重构造完成: Top {topk} 增强（Bottom K 未启用），"
         f"加权样本数={top_bottom_count}，权重={top_weight}，"
         f"普通样本数={len(weights) - top_bottom_count}"
     )
@@ -662,20 +693,22 @@ def train_xgboost_model(
     logger.warning(f"\n{feat_imp.head(10)}")
 
     # 计算训练集性能指标
+    # 使用 y_train_processed（winsorize 后）与预测值比较，保持与训练目标一致
     if task == "regression":
         y_train_pred = model.predict(X_train)
-        train_mse = mean_squared_error(y_train, y_train_pred)
+        y_train_eval = pd.Series(y_train_processed, index=y_train.index)
+        train_mse = mean_squared_error(y_train_eval, y_train_pred)
         train_rmse = train_mse ** 0.5
-        train_r2 = r2_score(y_train, y_train_pred)
-        train_ic = y_train.corr(pd.Series(y_train_pred, index=y_train.index))
-        
+        train_r2 = r2_score(y_train_eval, y_train_pred)
+        train_ic = y_train_eval.corr(pd.Series(y_train_pred, index=y_train.index))
+
         train_metrics = {
             "mse": float(train_mse),
             "rmse": float(train_rmse),
             "r2": float(train_r2),
             "ic": float(train_ic)
         }
-        
+
         logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}")
     else:
         from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score
@@ -698,6 +731,9 @@ def train_xgboost_model(
         logger.info(f"训练集性能: ACC={train_acc:.4f}, AUC={train_auc:.4f}, Precision={train_precision:.4f}, Recall={train_recall:.4f}")
     
     # 计算验证集性能指标
+    # 注意：当使用 label_transform=cs_zscore 时，y_val 是截面 z-score 标准化后的标签（均值≈0，标准差≈1），
+    #       val_mse/val_ic 等指标均在 z-score 空间计算，与 train_metrics（使用 y_train_processed，
+    #       同样是处理后的标签）可比；但与真实收益单位的 val 逐日评估结果不可直接比较。
     if len(X_val) > 0:
         if task == "regression":
             y_val_pred = model.predict(X_val)
@@ -706,7 +742,7 @@ def train_xgboost_model(
             val_r2 = r2_score(y_val, y_val_pred)
             val_ic = y_val.corr(pd.Series(y_val_pred, index=y_val.index))
             val_rank_ic, _ = spearmanr(y_val, y_val_pred)
-            
+
             val_metrics = {
                 "mse": float(val_mse),
                 "rmse": float(val_rmse),
@@ -714,7 +750,7 @@ def train_xgboost_model(
                 "ic": float(val_ic),
                 "rank_ic": float(val_rank_ic)
             }
-            
+
             logger.info("=" * 60)
             logger.info("验证集评估结果（回归任务）")
             logger.info("=" * 60)
@@ -722,7 +758,7 @@ def train_xgboost_model(
             logger.info(f"MSE（均方误差）: {val_mse:.6f}")
             logger.info(f"RMSE（均方根误差）: {val_rmse:.6f}")
             logger.info(f"R2（决定系数）: {val_r2:.4f}")
-            logger.info(f"IC（信息系数）: {val_ic:.4f}  <- 重要指标")
+            logger.info(f"IC（信息系数）: {val_ic:.4f}  <- 重要指标（cs_zscore 模式下为 z-score 空间）")
             logger.info(f"RankIC（排序IC）: {val_rank_ic:.4f}  <- 选股策略关键指标")
             logger.info("=" * 60)
         else:

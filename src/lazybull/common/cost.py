@@ -104,10 +104,16 @@ class CostModel:
 
 
 def get_default_cost_model() -> CostModel:
-    """获取默认成本模型"""
+    """获取默认成本模型（用于回测仿真，采用较保守的成本假设）
+
+    参数说明：
+        commission_rate=0.0002: 典型零售佣金（万二）
+        stamp_tax=0.0005:       当前印花税（2023年后调降至千分之零点五，仅卖出方向）
+        slippage=0.001:         双边滑点（千一），适用于中等流动性股票
+    """
     return CostModel(
-        commission_rate=0.0003,
+        commission_rate=0.0002,
         min_commission=5.0,
-        stamp_tax=0.001,
+        stamp_tax=0.0005,
         slippage=0.001
     )

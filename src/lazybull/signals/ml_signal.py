@@ -198,10 +198,19 @@ class MLSignal(Signal):
         # 准备特征
         try:
             X = features_df[self.feature_columns].copy()
-            X = X.fillna(0)  # 填充缺失值
         except KeyError as e:
             logger.error(f"特征列缺失: {e}")
             return {}
+
+        # 检查高 NaN 比例特征（NaN >30% 时 fillna(0) 可能引入偏差）
+        nan_rates = X.isna().mean()
+        high_nan_cols = nan_rates[nan_rates > 0.3]
+        if len(high_nan_cols) > 0:
+            logger.warning(
+                f"预测特征中以下列 NaN 比例 >30%（fillna(0) 可能使预测偏离训练分布）: "
+                f"{high_nan_cols.round(3).to_dict()}"
+            )
+        X = X.fillna(0)
         
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         model_type = self.metadata.get('model_type', 'unknown')
@@ -321,11 +330,19 @@ class MLSignal(Signal):
         # 准备特征
         try:
             X = features_df[self.feature_columns].copy()
-            X = X.fillna(0)  # 填充缺失值
         except KeyError as e:
             logger.error(f"特征列缺失: {e}")
             return []
-        
+
+        nan_rates = X.isna().mean()
+        high_nan_cols = nan_rates[nan_rates > 0.3]
+        if len(high_nan_cols) > 0:
+            logger.warning(
+                f"选股特征中以下列 NaN 比例 >30%（fillna(0) 可能使预测偏离训练分布）: "
+                f"{high_nan_cols.round(3).to_dict()}"
+            )
+        X = X.fillna(0)
+
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         task = self.metadata.get('train_params', {}).get('task', 'regression')
         

@@ -943,16 +943,16 @@ class BacktestEngine:
         
         for stock, info in self.positions.items():
             buy_date = info['buy_date']
-            signal_date = info.get('signal_date', buy_date)
             buy_idx = date_to_idx.get(buy_date)
-            signal_idx = date_to_idx.get(signal_date)
-            
-            # 优先使用信号日作为持有期起点，确保延迟成交的仓位与原批次同时卖出
-            anchor_idx = signal_idx if signal_idx is not None else buy_idx
+
+            # 以实际买入日作为持有期起点，确保每只股票都持满 holding_period 个交易日
+            # （原以 signal_date 为起点会导致补齐仓位实际持有天数不足，低估收益、高估换手率）
+            anchor_idx = buy_idx
             if anchor_idx is None:
-                logger.warning(f"股票 {stock} 买入/信号日期 {buy_date}/{signal_date} 不在交易日映射中")
+                signal_date = info.get('signal_date', buy_date)
+                logger.warning(f"股票 {stock} 买入日期 {buy_date}（信号日 {signal_date}）不在交易日映射中")
                 continue
-            
+
             # 计算持有天数（交易日）
             holding_days = current_idx - anchor_idx
             
@@ -1811,13 +1811,28 @@ class BacktestEngine:
             组合总市值
         """
         market_value = 0.0
-        
+
         for stock, info in self.positions.items():
             shares = info['shares']
             trade_price = self._get_trade_price(date, stock)
-            if trade_price is not None:
-                market_value += shares * trade_price
-        
+            if trade_price is None:
+                # 股票当日无价格（可能已退市/停牌），使用仓位中缓存的最后已知价格
+                # 避免市值突降为 0 导致净值曲线出现虚假跳水
+                trade_price = info.get('last_known_price')
+                if trade_price is None:
+                    # 兜底：使用买入价
+                    trade_price = info.get('buy_trade_price', 0.0)
+                    if trade_price > 0:
+                        logger.warning(
+                            f"股票 {stock} 在 {date.date()} 无价格数据，"
+                            f"用买入价 {trade_price:.2f} 估值（可能已退市）"
+                        )
+            else:
+                # 更新最后已知价格缓存
+                info['last_known_price'] = trade_price
+
+            market_value += shares * trade_price
+
         return self.current_capital + market_value
     
     def _generate_nav_curve(self) -> pd.DataFrame:
