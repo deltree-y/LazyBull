@@ -1369,9 +1369,9 @@ class BacktestEngine:
         if not self.pending_order_manager:
             return
         
-        # 获取应重试的订单列表
-        orders_to_retry = self.pending_order_manager.get_orders_to_retry(date)
-        
+        # 获取应重试的订单列表及已放弃的订单（仅 buy 订单会过期，sell 订单持续重试直至复牌）
+        orders_to_retry, expired_orders = self.pending_order_manager.get_orders_to_retry(date)
+
         if not orders_to_retry:
             return
         
@@ -1476,14 +1476,22 @@ class BacktestEngine:
         signal_date: Optional[pd.Timestamp] = None
     ) -> None:
         """直接买入股票（不检查交易状态）
-        
+
         内部使用，实际执行买入操作
-        
+
         Args:
             date: 买入日期
             stock: 股票代码
             target_value: 目标市值
         """
+        # 若已有持仓，跳过重复买入，避免覆盖持有期与成本基础导致计算错误
+        if stock in self.positions:
+            logger.info(
+                f"  股票 {stock} 已在持仓中（买入日期: {self.positions[stock]['buy_date'].date()}），"
+                f"跳过重复买入，旧持仓将按原持有期正常到期"
+            )
+            return
+
         # 获取成交价格（不复权 close）
         trade_price = self._get_trade_price(date, stock)
         if trade_price is None:
@@ -1521,16 +1529,7 @@ class BacktestEngine:
             cost = self.cost_model.calculate_buy_cost(amount)
             total_cost_cash = amount + cost
         
-        # 更新持仓和资金
-        # 注意：在当前 T+n 卖出策略下，理论上不应该出现已有持仓的情况
-        # 因为旧持仓应该在达到持有期后自动卖出
-        if stock in self.positions:
-            logger.warning(
-                f"股票 {stock} 已有持仓（买入日期: {self.positions[stock]['buy_date']}），"
-                f"新买入将覆盖旧持仓（可能配置有误）"
-            )
-        
-        # 设置或覆盖持仓（记录买入的成交价格和绩效价格）
+        # 建立新持仓（记录买入的成交价格和绩效价格）
         self.positions[stock] = {
             'shares': shares,
             'buy_date': date,

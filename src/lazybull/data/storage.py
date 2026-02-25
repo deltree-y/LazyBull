@@ -543,7 +543,7 @@ class Storage:
             raise ValueError(f"不支持的格式: {format}")
         
         if not file_path.exists():
-            logger.warning(f"文件不存在: {file_path}")
+            logger.debug(f"文件不存在: {file_path}")
             return None
         
         try:

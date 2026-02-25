@@ -169,6 +169,30 @@ def main():
         help="特征采样比例，默认 0.8"
     )
     parser.add_argument(
+        "--min-child-weight",
+        type=int,
+        default=20,
+        help="叶节点最少样本权重和，防止过拟合，默认 20（金融数据建议 200-500）"
+    )
+    parser.add_argument(
+        "--reg-alpha",
+        type=float,
+        default=0.05,
+        help="L1 正则化系数，默认 0.05（建议范围 0.05-0.5）"
+    )
+    parser.add_argument(
+        "--reg-lambda",
+        type=float,
+        default=1.0,
+        help="L2 正则化系数，默认 1.0（建议范围 1.0-5.0）"
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.1,
+        help="节点分裂最小损失下降，默认 0.1（建议范围 0.0-1.0）"
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=42,
@@ -195,7 +219,7 @@ def main():
         help="每日 Top/Bottom K 样本数，默认 30"
     )
     parser.add_argument(
-        "--rank-weight-weight",
+        "--rank-weight",
         type=float,
         default=5.0,
         help="Top/Bottom K 样本权重，默认 5.0"
@@ -232,7 +256,7 @@ def main():
     logger.info(f"数据目录: {args.data_root}")
     logger.info(
         f"rank-weight: {'已启用' if args.rank_weight_enabled else '已禁用'} "
-        f"（topk={args.rank_weight_topk}, weight={args.rank_weight_weight}）"
+        f"（topk={args.rank_weight_topk}, weight={args.rank_weight}）"
     )
     
     try:
@@ -305,7 +329,7 @@ def main():
                 df_train=df_train_split,
                 label_column=actual_label_column,
                 topk=args.rank_weight_topk,
-                top_weight=args.rank_weight_weight,
+                top_weight=args.rank_weight,
             )
         
         model, train_params, train_metrics, val_metrics = train_xgboost_model(
@@ -319,7 +343,11 @@ def main():
             learning_rate=args.learning_rate,
             subsample=args.subsample,
             colsample_bytree=args.colsample_bytree,
-            random_state=args.random_state
+            random_state=args.random_state,
+            min_child_weight=args.min_child_weight,
+            reg_alpha=args.reg_alpha,
+            reg_lambda=args.reg_lambda,
+            gamma=args.gamma,
         )
         
         # 4. 验证集逐日评估（贴近交易场景，特别是分类任务）
@@ -357,7 +385,7 @@ def main():
             # 记录 rank-weight 配置，便于回溯
             "rank_weight_enabled": args.rank_weight_enabled,
             "rank_weight_topk": args.rank_weight_topk if args.rank_weight_enabled else None,
-            "rank_weight_weight": args.rank_weight_weight if args.rank_weight_enabled else None,
+            "rank_weight": args.rank_weight if args.rank_weight_enabled else None,
         })
         
         # 4. 注册模型

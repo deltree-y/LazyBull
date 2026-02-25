@@ -68,15 +68,20 @@ def generate_walk_forward_splits(
     logger.info(f"  训练窗口: {train_window_years} 年")
     logger.info(f"  测试窗口: {test_window_months} 个月")
     
-    # 获取交易日列表
+    # 获取 wf 区间内的交易日列表（用于 train 期操作）
     trade_dates = trade_cal[
-        (trade_cal['cal_date'] >= wf_start_date) & 
-        (trade_cal['cal_date'] <= wf_end_date) & 
+        (trade_cal['cal_date'] >= wf_start_date) &
+        (trade_cal['cal_date'] <= wf_end_date) &
         (trade_cal['is_open'] == 1)
     ]['cal_date'].tolist()
-    
+
     if len(trade_dates) == 0:
         raise ValueError(f"指定区间内没有交易日: {wf_start_date} 至 {wf_end_date}")
+
+    # 获取所有可用交易日（不受 wf_end_date 限制，用于 test 期查找）
+    all_trade_dates = trade_cal[
+        trade_cal['is_open'] == 1
+    ]['cal_date'].tolist()
     
     logger.info(f"  区间内交易日数: {len(trade_dates)}")
     
@@ -101,29 +106,33 @@ def generate_walk_forward_splits(
         return dt.strftime("%Y%m%d")
     
     # 查找最接近的交易日（向后查找，如果没有则向前查找）
-    def find_nearest_trade_date(target_date_str: str, direction: str = "forward") -> str:
+    def find_nearest_trade_date(target_date_str: str, direction: str = "forward", date_list=None) -> str:
         """
         查找最接近的交易日
-        
+
         Args:
             target_date_str: 目标日期（YYYYMMDD）
             direction: "forward"（向后查找）或 "backward"（向前查找）
-            
+            date_list: 使用的交易日列表，默认使用 wf 区间内的 trade_dates
+
         Returns:
             最接近的交易日（YYYYMMDD），如果找不到返回 None
         """
-        if target_date_str in trade_dates:
+        if date_list is None:
+            date_list = trade_dates
+
+        if target_date_str in date_list:
             return target_date_str
-        
+
         if direction == "forward":
             # 向后查找最近的交易日
-            for td in trade_dates:
+            for td in date_list:
                 if td >= target_date_str:
                     return td
             return None  # 没有找到
         else:
             # 向前查找最近的交易日
-            for td in reversed(trade_dates):
+            for td in reversed(date_list):
                 if td <= target_date_str:
                     return td
             return None  # 没有找到
@@ -168,22 +177,18 @@ def generate_walk_forward_splits(
             current_train_end_dt += relativedelta(months=step_months)
             continue
         
-        # 计算 test_start：train_end 的下一个交易日
-        train_end_idx = trade_dates.index(train_end)
-        if train_end_idx + 1 >= len(trade_dates):
-            logger.info(f"train_end {train_end} 已经是最后一个交易日，停止生成切分")
+        # 计算 test_start：train_end 的下一个交易日（使用全量交易日）
+        train_end_idx_all = all_trade_dates.index(train_end)
+        if train_end_idx_all + 1 >= len(all_trade_dates):
+            logger.info(f"train_end {train_end} 已经是最后一个可用交易日，停止生成切分")
             break
-        
-        test_start = trade_dates[train_end_idx + 1]
-        
-        # 计算 test_end：test_start + test_window_months，向前对齐至最近交易日
-        test_end_dt = to_datetime(test_start) + relativedelta(months=test_window_months)
-        test_end = find_nearest_trade_date(to_date_str(test_end_dt), direction="backward")
 
-        if test_end is None or test_end > wf_end_date:
-            # test_end 超出 walk-forward 终止日，截断到 wf_end_date
-            test_end = find_nearest_trade_date(wf_end_date, direction="backward")
-        
+        test_start = all_trade_dates[train_end_idx_all + 1]
+
+        # 计算 test_end：test_start + test_window_months，向前对齐至最近交易日（使用全量交易日，不受 wf_end_date 限制）
+        test_end_dt = to_datetime(test_start) + relativedelta(months=test_window_months)
+        test_end = find_nearest_trade_date(to_date_str(test_end_dt), direction="backward", date_list=all_trade_dates)
+
         if test_end is None or test_end < test_start:
             logger.info(f"无法生成有效的测试区间（test_start={test_start}），停止生成切分")
             break

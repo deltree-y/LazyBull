@@ -72,19 +72,24 @@ def load_features_data(
     
     # 加载每日特征数据
     all_features = []
+    missing_dates = []
     for trade_date in trade_dates:
         features = storage.load_cs_train_day(trade_date)
         if features is not None and len(features) > 0:
             all_features.append(features)
         else:
-            logger.warning(f"日期 {trade_date} 没有特征数据")
-    
+            logger.debug(f"日期 {trade_date} 没有特征数据")
+            missing_dates.append(trade_date)
+
+    if missing_dates:
+        logger.info(f"共 {len(missing_dates)} 个交易日无特征数据（跳过）: {missing_dates[0]} ~ {missing_dates[-1]}")
+
     if not all_features:
         raise ValueError(f"指定日期区间内没有特征数据")
-    
+
     # 合并所有数据
     df = pd.concat(all_features, ignore_index=True)
-    logger.info(f"成功加载 {len(df)} 条样本")
+    logger.info(f"成功加载 {len(df)} 条样本（{len(all_features)}/{len(trade_dates)} 个交易日有数据）")
     
     return df, len(trade_dates)
 
@@ -196,7 +201,8 @@ def prepare_training_data(
     # 标签列
     label_columns = [col for col in df.columns if col.startswith('y_')]
     # 过滤标记列（使用统一的列名，与clean层一致）
-    filter_columns = ['is_st', 'is_suspended', 'is_limit_up', 'is_limit_down']
+    # 收盘买入策略：涨停无法买入需过滤；跌停可以买入（有人卖出），保留参与训练
+    filter_columns = ['is_st', 'is_suspended', 'is_limit_up']
     # 其他非特征列
     other_exclude_columns = ['tradable', 'list_date', 'list_days', 'is_limit_up', 'is_limit_down', 'industry']
     # 临时过滤掉的列
@@ -255,7 +261,7 @@ def prepare_training_data(
         "list_days",               # 上市天数
 
         # 5. 市场环境特征 (4个) - 环境感知，缓解逻辑断裂导致的早停
-        # is_limit_up / is_limit_down 过滤后恒为 0，已移除
+        # is_limit_up 过滤后恒为 0，已移除；is_limit_down 保留（跌停股参与训练，不作为特征）
         "mkt_adv_dec_ratio",       # 市场涨跌比
         "mkt_ret_avg_20",          # 市场平均收益
         "mkt_turnover_std",        # 市场成交额波动
@@ -566,10 +572,14 @@ def train_xgboost_model(
     learning_rate: float = 0.1,
     subsample: float = 0.8,
     colsample_bytree: float = 0.8,
-    random_state: int = 42
+    random_state: int = 42,
+    min_child_weight: int = 20,
+    reg_alpha: float = 0.05,
+    reg_lambda: float = 1.0,
+    gamma: float = 0.1,
 ) -> tuple:
     """训练 XGBoost 模型（支持回归和分类）
-    
+
     Args:
         task: 任务类型，"regression" 或 "classification"
         skip_label_winsorize: 是否跳过标签 winsorize（当 label_transform=cs_zscore 时为 True）
@@ -586,7 +596,11 @@ def train_xgboost_model(
         subsample: 样本采样比例
         colsample_bytree: 特征采样比例
         random_state: 随机种子
-        
+        min_child_weight: 叶节点最少样本权重和，防止过拟合，默认 20（金融数据建议 200-500）
+        reg_alpha: L1 正则化系数，默认 0.05
+        reg_lambda: L2 正则化系数，默认 1.0
+        gamma: 节点分裂最小损失下降，默认 0.1
+
     Returns:
         (model, train_params, train_metrics, val_metrics) 元组
     """
@@ -643,10 +657,10 @@ def train_xgboost_model(
         "device": "cuda",
         "n_jobs": -1,
         "early_stopping_rounds": 200,
-        "gamma": 0.1,
-        "reg_alpha": 0.05,
-        "reg_lambda": 1.0,
-        "min_child_weight": 20,
+        "gamma": gamma,
+        "reg_alpha": reg_alpha,
+        "reg_lambda": reg_lambda,
+        "min_child_weight": min_child_weight,
     }
     
     # 分类任务添加 scale_pos_weight

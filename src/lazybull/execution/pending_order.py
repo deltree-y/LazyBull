@@ -125,49 +125,60 @@ class PendingOrderManager:
                 f"(信号日期: {signal_date.date()}, 原因: {reason})"
             )
     
-    def get_orders_to_retry(self, current_date: pd.Timestamp) -> List[PendingOrder]:
+    def get_orders_to_retry(self, current_date: pd.Timestamp) -> Tuple[List[PendingOrder], List[PendingOrder]]:
         """获取当前应重试的订单列表
-        
+
         检查所有延迟订单，过滤掉已超时或超过重试次数的订单。
-        
+
         Args:
             current_date: 当前日期
-            
+
         Returns:
-            可重试的订单列表
+            (orders_to_retry, expired_orders):
+                orders_to_retry  -- 本轮可继续重试的订单列表（含全部 sell 订单）
+                expired_orders   -- 已放弃的 buy 订单列表（sell 订单不会过期）
         """
         orders_to_retry = []
         expired_keys = []
-        
+        expired_orders = []
+
         for key, order in self.pending_orders.items():
-            # 检查是否超过最大重试次数
+            # sell 订单不受重试次数/天数限制：
+            # 停牌期间无法交易是客观约束，必须持仓等待复牌，强制过期会产生幽灵持仓
+            if order.action == 'sell':
+                orders_to_retry.append(order)
+                continue
+
+            # buy 订单：检查是否超过最大重试次数
             if order.retry_count > self.max_retry_count:
                 logger.info(
-                    f"延迟订单超过最大重试次数，放弃: {order.stock} {order.action} "
+                    f"延迟买入订单超过最大重试次数，放弃: {order.stock} "
                     f"(重试次数: {order.retry_count}, 最大重试: {self.max_retry_count})"
                 )
                 expired_keys.append(key)
+                expired_orders.append(order)
                 self.total_expired += 1
                 continue
-            
-            # 检查是否超过最大延迟天数（简化：使用自然日计算）
+
+            # buy 订单：检查是否超过最大延迟天数（简化：使用自然日计算）
             days_elapsed = (current_date - order.create_date).days
             if days_elapsed > self.max_retry_days:
                 logger.info(
-                    f"延迟订单超过最大延迟天数，放弃: {order.stock} {order.action} "
+                    f"延迟买入订单超过最大延迟天数，放弃: {order.stock} "
                     f"(已延迟: {days_elapsed}天, 最大延迟: {self.max_retry_days}天)"
                 )
                 expired_keys.append(key)
+                expired_orders.append(order)
                 self.total_expired += 1
                 continue
-            
+
             orders_to_retry.append(order)
-        
+
         # 移除过期订单
         for key in expired_keys:
             del self.pending_orders[key]
-        
-        return orders_to_retry
+
+        return orders_to_retry, expired_orders
     
     def mark_success(self, success_date: pd.Timestamp, stock: str, action: str) -> None:
         """标记订单执行成功并移除

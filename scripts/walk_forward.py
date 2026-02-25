@@ -66,6 +66,8 @@ from src.lazybull.ml.run_logger import (
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
+# test 期延伸到数据末尾时，标签列（如 y_ret_20）在最近 N 个交易日全为 NaN，concat 时触发此警告
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*DataFrame concatenation with empty or all-NA entries.*")
 
 
 def execute_split_training(
@@ -144,7 +146,7 @@ def execute_split_training(
             df_train=df_train_split,
             label_column=actual_label_column,
             topk=args.rank_weight_topk,
-            top_weight=args.rank_weight_weight,
+            top_weight=args.rank_weight,
         )
 
     # 5. 训练模型
@@ -161,7 +163,11 @@ def execute_split_training(
         learning_rate=args.learning_rate,
         subsample=args.subsample,
         colsample_bytree=args.colsample_bytree,
-        random_state=args.random_state
+        random_state=args.random_state,
+        min_child_weight=args.min_child_weight,
+        reg_alpha=args.reg_alpha,
+        reg_lambda=args.reg_lambda,
+        gamma=args.gamma,
     )
     
     # 6. 验证集逐日评估（用于内部评估）
@@ -187,8 +193,8 @@ def execute_split_training(
     # 准备测试数据
     df_test_eval = df_test.copy()
     
-    # 过滤测试集样本（与训练时一致：过滤 ST、停牌、涨跌停）
-    filter_columns = ['is_st', 'is_suspended', 'is_limit_up', 'is_limit_down']
+    # 过滤测试集样本（与训练时一致：过滤 ST、停牌、涨停；跌停可买入，保留）
+    filter_columns = ['is_st', 'is_suspended', 'is_limit_up']
     mask = pd.Series([True] * len(df_test_eval))
     for col in filter_columns:
         if col in df_test_eval.columns:
@@ -314,6 +320,8 @@ def execute_split_training(
         "train_samples": len(X_train),
         "val_samples": len(X_val),
         "test_samples": len(df_test_eval),
+        "best_iteration": train_params.get("best_iteration"),
+        "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
         "test_daily_metrics": test_daily_metrics
     }
     
@@ -445,23 +453,53 @@ def create_training_run_record_from_training_session(
 
 def write_walk_forward_summary(
     results: List[Dict],
-    output_path: str
+    output_path: str,
+    args,
+    wf_run_id: str
 ) -> None:
     """生成 walk-forward 汇总 CSV
-    
+
     Args:
         results: 所有 split 的结果列表
         output_path: 输出CSV路径
+        args: 命令行参数（用于写入训练参数列）
+        wf_run_id: walk-forward 运行ID
     """
     if len(results) == 0:
         logger.warning("没有结果可以写入汇总文件")
         return
-    
+
     logger.info(f"生成 walk-forward 汇总文件: {output_path}")
-    
+
+    # 训练参数（所有 split 共享，写入每行方便后续对比脚本独立使用）
+    train_params_cols = {
+        "wf_run_id": wf_run_id,
+        "wf_start_date": args.wf_start_date,
+        "wf_end_date": args.wf_end_date,
+        "step": args.step,
+        "train_window_years": args.train_window_years,
+        "test_window_months": args.test_window_months,
+        "val_ratio": args.val_ratio,
+        "label_column": args.label_column,
+        "task": args.task,
+        "label_transform": args.label_transform if args.task == "regression" else None,
+        "n_estimators": args.n_estimators,
+        "max_depth": args.max_depth,
+        "learning_rate": args.learning_rate,
+        "subsample": args.subsample,
+        "colsample_bytree": args.colsample_bytree,
+        "min_child_weight": args.min_child_weight,
+        "gamma": args.gamma,
+        "reg_alpha": args.reg_alpha,
+        "reg_lambda": args.reg_lambda,
+        "rank_weight_enabled": args.rank_weight_enabled,
+        "rank_weight_topk": args.rank_weight_topk,
+        "rank_weight": args.rank_weight,
+    }
+
     # 提取每个 split 的关键指标
     summary_rows = []
-    
+
     for result in results:
         row = {
             "split_index": result["split_index"],
@@ -472,22 +510,27 @@ def write_walk_forward_summary(
             "model_version": result["model_version"],
             "train_samples": result["train_samples"],
             "val_samples": result["val_samples"],
-            "test_samples": result["test_samples"]
+            "test_samples": result["test_samples"],
+            "best_iteration": result.get("best_iteration"),
+            "val_rankic_ir": result.get("val_rankic_ir"),
         }
-        
+
         # 添加测试集逐日评估指标
         test_daily = result.get("test_daily_metrics", {})
         row.update(test_daily)
-        
+
+        # 追加训练参数列（放在最后）
+        row.update(train_params_cols)
+
         summary_rows.append(row)
-    
+
     # 转为 DataFrame 并写入
     df_summary = pd.DataFrame(summary_rows)
-    
+
     # 确保输出目录存在
     output_dir = Path(output_path).parent
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     df_summary.to_csv(output_path, index=False, encoding='utf-8-sig')
     logger.info(f"汇总文件已保存: {output_path}")
     logger.info(f"  共 {len(summary_rows)} 个切分")
@@ -526,14 +569,14 @@ def main():
     parser.add_argument(
         "--test-window-months",
         type=int,
-        default=6,
-        help="测试窗口月数，默认 6"
+        default=12,
+        help="测试窗口月数，默认 12"
     )
     parser.add_argument(
         "--val-ratio",
         type=float,
-        default=0.2,
-        help="训练数据内部验证集比例，默认 0.2"
+        default=0.1,
+        help="训练数据内部验证集比例，默认 0.1"
     )
     
     # 数据参数
@@ -623,26 +666,48 @@ def main():
         help="特征采样比例，默认 0.8"
     )
     parser.add_argument(
+        "--min-child-weight",
+        type=int,
+        default=20,
+        help="叶节点最少样本权重和，防止过拟合，默认 20（金融数据建议 200-500）"
+    )
+    parser.add_argument(
+        "--reg-alpha",
+        type=float,
+        default=0.05,
+        help="L1 正则化系数，默认 0.05（建议范围 0.05-0.5）"
+    )
+    parser.add_argument(
+        "--reg-lambda",
+        type=float,
+        default=1.0,
+        help="L2 正则化系数，默认 1.0（建议范围 1.0-5.0）"
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.1,
+        help="节点分裂最小损失下降，默认 0.1（建议范围 0.0-1.0）"
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=42,
         help="随机种子，默认 42"
     )
 
-    # rank-weight 参数：Top K 样本增强权重
-    # 默认开启；使用 --no-rank-weight-enabled 关闭
+    # rank-weight 参数：Top/Bottom K 样本增强权重
     parser.add_argument(
         "--rank-weight-enabled",
-        dest="rank_weight_enabled",
         action="store_true",
         default=True,
-        help="启用 Top K 样本权重增强（默认开启）"
+        help="启用 Top/Bottom K 样本权重增强（默认开启）"
     )
     parser.add_argument(
-        "--no-rank-weight-enabled",
-        dest="rank_weight_enabled",
+        "--no-rank-weight",
         action="store_false",
-        help="禁用 Top K 样本权重增强"
+        dest="rank_weight_enabled",
+        help="禁用 rank-weight（覆盖 --rank-weight-enabled）"
     )
     parser.add_argument(
         "--rank-weight-topk",
@@ -651,7 +716,7 @@ def main():
         help="每日 Top/Bottom K 样本数，默认 30"
     )
     parser.add_argument(
-        "--rank-weight-weight",
+        "--rank-weight",
         type=float,
         default=5.0,
         help="Top/Bottom K 样本权重，默认 5.0"
@@ -749,14 +814,14 @@ def main():
                 logger.warning("继续执行下一个 split...")
                 continue
         
-        # 3. 生成 walk-forward 汇总文件
+        # 3. 生成 walk-forward 汇总文件（统一输出到 raw/ 子目录）
         if len(results) > 0:
             if args.wf_summary_csv:
                 summary_csv_path = args.wf_summary_csv
             else:
-                summary_csv_path = f"{args.data_root}/walk_forward/walk_forward_summary_{wf_run_id}.csv"
-            
-            write_walk_forward_summary(results, summary_csv_path)
+                summary_csv_path = f"{args.data_root}/walk_forward/raw/walk_forward_summary_{wf_run_id}.csv"
+
+            write_walk_forward_summary(results, summary_csv_path, args, wf_run_id)
         else:
             logger.warning("没有成功完成的训练，跳过生成汇总文件")
         

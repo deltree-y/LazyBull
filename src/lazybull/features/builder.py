@@ -77,6 +77,15 @@ class FeatureBuilder:
         self._market_state_cache: Optional[pd.DataFrame] = None
         # 实例级缓存：批量预计算的技术指标与波动率因子（首次调用时触发，后续 O(1) 查表）
         self._tech_factor_cache: Optional[pd.DataFrame] = None
+        # 优化3：技术指标按 trade_date 的字典索引，O(1) 取代 DataFrame 全量过滤
+        self._tech_factor_cache_dict: Optional[Dict[str, pd.DataFrame]] = None
+        # 优化2：交易日列表缓存 + O(1) 索引字典（_get_trading_dates 首次调用时填充）
+        self._trading_dates_cache: Optional[List[str]] = None
+        self._trading_date_index: Optional[Dict[str, int]] = None
+        # 优化1：预计算的全量 daily_adj（含 pre_close_adj），循环外调用 precompute_daily_adj 填充
+        self._daily_adj_precomputed: Optional[pd.DataFrame] = None
+        # 优化4：daily_adj 按 trade_date 的字典索引，O(1) 取代 isin 全量扫描
+        self._daily_adj_dict: Optional[Dict[str, pd.DataFrame]] = None
         
         if self.verbose:
             logger.info(
@@ -85,6 +94,31 @@ class FeatureBuilder:
                 f"require_label={require_label}"
             )
     
+    def precompute_daily_adj(self, daily_data: pd.DataFrame, adj_factor: pd.DataFrame) -> None:
+        """预计算全量 daily_adj 并建立按交易日索引的字典（循环外调用一次）
+
+        将原本在每次 build_features_for_day 内执行的全量 copy / sort / groupby.shift
+        提前一次性完成，避免对 ~千万行 DataFrame 做 2000 次重复操作。
+
+        Args:
+            daily_data: 全量日线数据（clean 层，已含 close_adj 等复权价）
+            adj_factor: 复权因子（clean 层场景下传入空 DataFrame 即可）
+        """
+        logger.info("预计算 daily_adj（含 pre_close_adj）并建立日期索引字典...")
+        daily_adj = self._calculate_adj_close(daily_data, adj_factor)
+        daily_adj = daily_adj.sort_values(['ts_code', 'trade_date'])
+        daily_adj['pre_close_adj'] = daily_adj.groupby('ts_code')['close_adj'].shift(1)
+        self._daily_adj_precomputed = daily_adj
+        # 按 trade_date 分组建立字典，后续 O(1) 切片（各 sub_df 已 reset_index 成独立副本）
+        self._daily_adj_dict = {
+            d: sub_df.reset_index(drop=True)
+            for d, sub_df in daily_adj.groupby('trade_date', sort=False)
+        }
+        logger.info(
+            f"daily_adj 预计算完成：{len(daily_adj)} 条记录，"
+            f"{len(self._daily_adj_dict)} 个交易日"
+        )
+
     def build_features_for_day(
         self,
         trade_date: str,
@@ -122,22 +156,28 @@ class FeatureBuilder:
         """
         logger.info(f"开始构建 {trade_date} 的特征")
         
-        # 1. 获取交易日序列
+        # 1. 获取交易日序列（有缓存则 O(1) 返回）
         trading_dates = self._get_trading_dates(trade_cal)
-        
-        if trade_date not in trading_dates:
-            logger.warning(f"{trade_date} 不是交易日，跳过")
-            return pd.DataFrame()
-        
-        current_idx = trading_dates.index(trade_date)
-        
-        # 2. 计算后复权收盘价
-        daily_adj = self._calculate_adj_close(daily_data, adj_factor)
 
-        # 计算前一交易日复权收盘价（用于振幅因子分母，避免 pre_close * adj_factor 口径错误）
-        # 正确口径：pre_close_adj = 前一日的 close_adj（而非 pre_close * 当日 adj_factor）
-        daily_adj = daily_adj.sort_values(['ts_code', 'trade_date'])
-        daily_adj['pre_close_adj'] = daily_adj.groupby('ts_code')['close_adj'].shift(1)
+        # 优化2：O(1) dict 查找替代 list.index()
+        if self._trading_date_index is not None:
+            current_idx = self._trading_date_index.get(trade_date, -1)
+            if current_idx == -1:
+                logger.warning(f"{trade_date} 不是交易日，跳过")
+                return pd.DataFrame()
+        else:
+            if trade_date not in trading_dates:
+                logger.warning(f"{trade_date} 不是交易日，跳过")
+                return pd.DataFrame()
+            current_idx = trading_dates.index(trade_date)
+
+        # 2. 优化1：使用循环外预计算的 daily_adj，避免每日重复 copy/sort/groupby.shift
+        if self._daily_adj_precomputed is not None:
+            daily_adj = self._daily_adj_precomputed
+        else:
+            daily_adj = self._calculate_adj_close(daily_data, adj_factor)
+            daily_adj = daily_adj.sort_values(['ts_code', 'trade_date'])
+            daily_adj['pre_close_adj'] = daily_adj.groupby('ts_code')['close_adj'].shift(1)
 
         # 3. 获取当日数据
         current_data = daily_adj[daily_adj['trade_date'] == trade_date].copy()
@@ -230,26 +270,34 @@ class FeatureBuilder:
         return result
     
     def _get_trading_dates(self, trade_cal: pd.DataFrame) -> List[str]:
-        """从交易日历提取交易日列表
-        
+        """从交易日历提取交易日列表（结果缓存，只计算一次）
+
+        首次调用时计算并缓存结果及 O(1) 索引字典；后续调用直接返回缓存。
+
         Args:
             trade_cal: 交易日历DataFrame
-            
+
         Returns:
             交易日列表（格式YYYYMMDD，排序）
         """
+        if self._trading_dates_cache is not None:
+            return self._trading_dates_cache
+
         if 'cal_date' in trade_cal.columns:
             # 如果是datetime格式，转换为字符串
             if pd.api.types.is_datetime64_any_dtype(trade_cal['cal_date']):
                 trade_cal = trade_cal.copy()
                 trade_cal['cal_date'] = trade_cal['cal_date'].dt.strftime('%Y%m%d')
-            
+
             trading_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
         else:
             logger.error("交易日历缺少 cal_date 字段")
             return []
-        
-        return sorted(trading_dates)
+
+        self._trading_dates_cache = sorted(trading_dates)
+        # 优化2：同时建立 O(1) 索引字典，替代后续所有 list.index() 调用
+        self._trading_date_index = {d: i for i, d in enumerate(self._trading_dates_cache)}
+        return self._trading_dates_cache
 
     def _get_lookback_dates(self, trade_date: str, n: int, trading_dates: List[str]) -> List[str]:
         """从全量交易日序列中，以 trade_date 为锚点向前回溯恰好 n 个交易日
@@ -265,9 +313,15 @@ class FeatureBuilder:
         Returns:
             前 n 个交易日列表（不含 trade_date 本身）；历史不足时返回空列表
         """
-        if trade_date not in trading_dates:
-            return []
-        idx = trading_dates.index(trade_date)
+        # 优化2：优先使用 O(1) 字典查找，回退到 O(n) list.index()
+        if self._trading_date_index is not None:
+            idx = self._trading_date_index.get(trade_date, -1)
+            if idx == -1:
+                return []
+        else:
+            if trade_date not in trading_dates:
+                return []
+            idx = trading_dates.index(trade_date)
         if idx < n:
             # 历史不足 n 个交易日
             return []
@@ -416,10 +470,17 @@ class FeatureBuilder:
             # 获取未来第N个交易日
             future_date = trading_dates[current_idx + horizon]
             
-            # 获取未来收盘价
-            future_data = daily_adj[daily_adj['trade_date'] == future_date][
-                ['ts_code', 'close_adj']
-            ].copy()
+            # 获取未来收盘价（优化4：优先 O(1) 字典取值，否则全量过滤）
+            if self._daily_adj_dict is not None:
+                _future_sub = self._daily_adj_dict.get(future_date)
+                if _future_sub is not None:
+                    future_data = _future_sub[['ts_code', 'close_adj']].copy()
+                else:
+                    future_data = pd.DataFrame(columns=['ts_code', 'close_adj'])
+            else:
+                future_data = daily_adj[daily_adj['trade_date'] == future_date][
+                    ['ts_code', 'close_adj']
+                ].copy()
             future_data.rename(columns={'close_adj': f'close_adj_future_{horizon}'}, inplace=True)
             
             # 合并当前和未来数据
@@ -523,10 +584,14 @@ class FeatureBuilder:
                 features[f'ma_deviation_{window}'] = np.nan
                 continue
             
-            # 获取历史数据（只取全量交易日序列中确定的 window 个日期）
-            hist_data = daily_adj[
-                daily_adj['trade_date'].isin(hist_dates)
-            ].copy()
+            # 获取历史数据（优化4：优先按 trade_date 字典拼接，避免 isin 全量扫描）
+            if self._daily_adj_dict is not None:
+                _frames = [self._daily_adj_dict[d] for d in hist_dates if d in self._daily_adj_dict]
+                hist_data = pd.concat(_frames, ignore_index=True) if _frames else pd.DataFrame()
+            else:
+                hist_data = daily_adj[
+                    daily_adj['trade_date'].isin(hist_dates)
+                ].copy()
             
             # 按股票分组计算特征
             hist_features = self._calculate_window_features(
@@ -781,10 +846,21 @@ class FeatureBuilder:
                 daily_adj=daily_adj_for_cache,
                 vol_windows=self.lookback_windows,
             )
+            # 优化3：预计算完成后立即建立 trade_date→sub_df 字典，后续 O(1) 取值
+            if self._tech_factor_cache is not None and len(self._tech_factor_cache) > 0:
+                self._tech_factor_cache_dict = {
+                    d: sub_df.reset_index(drop=True)
+                    for d, sub_df in self._tech_factor_cache.groupby('trade_date', sort=False)
+                }
 
         if self._tech_factor_cache is None or len(self._tech_factor_cache) == 0:
             return pd.DataFrame(columns=['ts_code', 'trade_date'])
 
+        # 优化3：O(1) 字典查表，替代全量 DataFrame 过滤
+        if self._tech_factor_cache_dict is not None:
+            return self._tech_factor_cache_dict.get(
+                trade_date, pd.DataFrame(columns=['ts_code', 'trade_date'])
+            )
         return self._tech_factor_cache[self._tech_factor_cache['trade_date'] == trade_date]
 
     def _add_value_dividend_features(
@@ -824,7 +900,12 @@ class FeatureBuilder:
         
         # 合并到 features
         features = features.merge(daily_basic_today, on='ts_code', how='left')
-        
+
+        # dv_ttm=NaN 表示未分红，语义上等同于 0（股息率为零）
+        # 在此处填充，避免 NaN 传播到 zscore_dv_ttm，消除训练时 >30% NaN 警告
+        if 'dv_ttm' in features.columns:
+            features['dv_ttm'] = features['dv_ttm'].fillna(0)
+
         # 派生特征
         if 'pe_ttm' in features.columns:
             # ep_ttm = 1 / pe_ttm（市盈率倒数，即盈利收益率）

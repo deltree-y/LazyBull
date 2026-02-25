@@ -276,7 +276,11 @@ def build_features_data(
     
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
-    
+
+    # 优化1/4：循环外一次性预计算 daily_adj（含 pre_close_adj）及日期索引字典
+    # 避免在 2000 次循环内重复执行全量 copy / sort_values / groupby.shift
+    builder.precompute_daily_adj(daily_clean, adj_factor)
+
     # 构建特征
     success_count = 0
     skip_count = 0

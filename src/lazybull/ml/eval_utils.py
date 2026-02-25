@@ -247,6 +247,8 @@ def compute_diagnostic_statistics(
         diagnostics['每日样本数_最小'] = int(universe_stats_df['count'].min())
         diagnostics['每日样本数_中位数'] = int(universe_stats_df['count'].median())
         diagnostics['每日样本数_最大'] = int(universe_stats_df['count'].max())
+        min_idx = universe_stats_df['count'].idxmin()
+        diagnostics['每日样本数_最小日期'] = str(universe_stats_df.loc[min_idx, 'date'])
     
     # 2. 计算 TopK 收益及其相对提升
     for k in topk_values:
@@ -321,7 +323,8 @@ def print_diagnostic_report(diagnostics: Dict[str, any]) -> None:
     # 2. 样本数分布
     logger.info("\n【2. 每日样本数分布】")
     if '每日样本数_最小' in diagnostics:
-        logger.info(f"  最小: {diagnostics['每日样本数_最小']}")
+        min_date = diagnostics.get('每日样本数_最小日期', '?')
+        logger.info(f"  最小: {diagnostics['每日样本数_最小']}（日期: {min_date}）")
         logger.info(f"  中位数: {diagnostics['每日样本数_中位数']}")
         logger.info(f"  最大: {diagnostics['每日样本数_最大']}")
     

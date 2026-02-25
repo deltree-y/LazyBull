@@ -1,9 +1,9 @@
 ﻿# 0. 定义参数
-$startDate = Get-Date "2025-07-21"
-$endDate = Get-Date "2025-07-31"
+$startDate = Get-Date "2025-07-01"
+$endDate = Get-Date "2025-07-01"
 $freq_list = @(20)             #持有天数
 $top_n_list = @(30)            #持股数量
-$mv_list = @(489,490,491,492,493,494,495,496,497)               #模型版本
+$mv_list = @(680)               #模型版本
 #$para_list = @('--equity-curve-enabled')
 $para_list = @('--stop-loss-enabled')
 
@@ -47,7 +47,7 @@ while ($currentDate -le $endDate) {
                             --start-date $dateStr --end-date 20251231 `
                             --sell-timing open --top-n $topn --model-version $mv `
                             --weight-method score `
-                            --max-weight-per-stock 0.04 --max-per-industry 2 `
+                            --max-weight-per-stock 0.04 --max-per-industry 4 `
                             $para --output-name $out_name
 
                         # 预测逻辑
