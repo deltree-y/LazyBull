@@ -569,8 +569,8 @@ def main():
     parser.add_argument(
         "--test-window-months",
         type=int,
-        default=12,
-        help="测试窗口月数，默认 12"
+        default=11,
+        help="测试窗口月数，默认 11"
     )
     parser.add_argument(
         "--val-ratio",

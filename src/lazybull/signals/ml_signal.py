@@ -20,27 +20,32 @@ class MLSignal(Signal):
     基于机器学习模型预测，选择预测收益最高的 Top N 股票
     """
     
+    # 申万一级行业：银行(801780)、非银金融(801790，含保险/券商)
+    _FINANCIAL_SW_L1_CODES = {'801780', '801790'}
+
     def __init__(
         self,
         top_n: int = 20,
         model_version: Optional[int] = None,
         models_dir: str = "./data/models",
         weight_method: str = "equal",
-        amount_filter_enabled: bool = True,
-        amount_filter_pct: float = 20.0,
-        amount_window: int = 5,
+        min_amount_ma20: float = 50000.0,
+        min_total_mv: float = 500000.0,
+        max_total_mv: float = 15000000.0,
+        exclude_financial: bool = True,
         verbose: bool = True,
     ):
         """初始化 ML 信号
-        
+
         Args:
             top_n: 选择 Top N 只股票
             model_version: 模型版本号，None 表示使用最新版本
             models_dir: 模型目录
             weight_method: 权重分配方法，"equal" 表示等权，"score" 表示按预测分数加权
-            amount_filter_enabled: 是否启用成交额过滤，默认True
-            amount_filter_pct: 过滤成交额后N%的股票，默认20%
-            amount_window: 计算成交额时使用的天数窗口，默认5天（使用近5日平均成交额）
+            min_amount_ma20: 20日均成交额下限（千元），默认50000（=5000万元）
+            min_total_mv: 总市值下限（万元），默认500000（=50亿元）
+            max_total_mv: 总市值上限（万元），默认15000000（=1500亿元）
+            exclude_financial: 是否剔除金融股（银行/非银金融），默认True
             verbose: 是否输出详细日志，默认True
         """
         super().__init__("ml_signal")
@@ -48,20 +53,23 @@ class MLSignal(Signal):
         self.model_version = model_version
         self.models_dir = models_dir
         self.weight_method = weight_method
-        self.amount_filter_enabled = amount_filter_enabled
-        self.amount_filter_pct = amount_filter_pct
-        self.amount_window = amount_window
+        self.min_amount_ma20 = min_amount_ma20
+        self.min_total_mv = min_total_mv
+        self.max_total_mv = max_total_mv
+        self.exclude_financial = exclude_financial
         self.verbose = verbose
         # 延迟加载模型
         self.model = None
         self.metadata = None
         self.feature_columns = None
         self.registry = None  # 复用 registry 实例
-        
+
         logger.info(
             f"ML 信号初始化: top_n={top_n}, model_version={model_version}, "
-            f"weight_method={weight_method}, amount_filter_enabled={amount_filter_enabled}, "
-            f"amount_filter_pct={amount_filter_pct}%, amount_window={amount_window}"
+            f"weight_method={weight_method}, "
+            f"min_amount_ma20={min_amount_ma20:.0f}千元, "
+            f"total_mv=[{min_total_mv/10000:.0f}亿,{max_total_mv/10000:.0f}亿], "
+            f"exclude_financial={exclude_financial}"
         )
     
     def _load_model(self) -> None:
@@ -79,68 +87,68 @@ class MLSignal(Signal):
                 f"特征数={self.metadata['feature_count']}"
             )
     
-    def _apply_amount_filter(self, features_df: pd.DataFrame) -> pd.DataFrame:
-        """应用成交额过滤
-        
-        过滤掉后N%的股票（基于n天成交额）。优先使用amount字段，缺失时当作0处理。
-        
+    def _apply_selection_filters(self, features_df: pd.DataFrame) -> pd.DataFrame:
+        """选股阶段过滤（实盘/回测共用）
+
+        规则（均使用特征文件中的原始列，z-score 归一化不影响这些列）：
+        - 20日均成交额 >= min_amount_ma20（千元，默认50000=5000万）
+        - 总市值 in [min_total_mv, max_total_mv]（万元，默认50亿~1500亿）
+        - 剔除金融股（申万一级 银行801780/非银金融801790）
+
         Args:
-            features_df: 特征DataFrame，需包含amount或相关成交额字段
-            
+            features_df: 特征DataFrame
+
         Returns:
             过滤后的DataFrame
         """
-        if not self.amount_filter_enabled:
-            return features_df
-        
         if len(features_df) == 0:
             return features_df
-        
-        # 检查是否有成交额字段
-        amount_col = None
-        if 'amount' in features_df.columns:
-            amount_col = 'amount'
-        elif f'amount_ma{self.amount_window}' in features_df.columns:
-            amount_col = f'amount_ma{self.amount_window}'
-        elif f'amount_ratio_{self.amount_window}' in features_df.columns:
-            # 如果有amount_ratio，尝试反推出平均成交额
-            logger.warning(f"未找到amount或amount_ma{self.amount_window}字段，尝试使用amount_ratio")
-            # 这种情况下，我们无法准确过滤，给出警告后跳过
-            logger.warning("无法从amount_ratio推算绝对成交额，跳过成交额过滤")
-            return features_df
-        
-        if amount_col is None:
-            logger.warning("特征数据中没有成交额字段(amount或amount_ma*)，跳过成交额过滤")
-            return features_df
-        
-        # 成交额缺失当0处理
-        features_with_amount = features_df.copy()
-        features_with_amount[amount_col] = features_with_amount[amount_col].fillna(0)
-        
-        # 过滤成交额为0的股票也要包含在内，但它们会被排在最后
-        # 计算成交额分位数阈值（基于所有股票，包括成交额为0的）
-        amount_threshold_pct = self.amount_filter_pct / 100.0
-        
-        # 如果所有成交额都是0，则不过滤
-        if (features_with_amount[amount_col] == 0).all():
-            logger.warning("所有股票成交额为0，跳过成交额过滤")
-            return features_df
-        
-        amount_threshold = features_with_amount[amount_col].quantile(amount_threshold_pct)
-        
-        # 过滤掉成交额后N%的股票
-        before_count = len(features_with_amount)
-        features_filtered = features_with_amount[features_with_amount[amount_col] > amount_threshold].copy()
-        filtered_count = before_count - len(features_filtered)
-        
-        if filtered_count > 0:
-            if self.verbose:
+
+        before = len(features_df)
+        mask = pd.Series(True, index=features_df.index)
+
+        # ── 成交额：amount_ma20 原始列（千元）────────────────────────────
+        if 'amount_ma20' in features_df.columns:
+            amount_low = (features_df['amount_ma20'].fillna(0) < self.min_amount_ma20).sum()
+            if amount_low > 0:
                 logger.info(
-                    f"成交额过滤: 从{before_count}只股票中过滤掉{self.amount_window}天成交额后{self.amount_filter_pct}%的{filtered_count}只股票, "
-                    f"剩余{len(features_filtered)}只 (阈值={amount_threshold:.2f})"
+                    f"选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
+                    f"（={self.min_amount_ma20 / 100:.0f}万元）的 {amount_low} 只"
                 )
-        
-        return features_filtered
+            mask &= features_df['amount_ma20'].fillna(0) >= self.min_amount_ma20
+        else:
+            logger.warning("选股过滤-成交额: amount_ma20 列不存在，跳过")
+
+        # ── 市值：total_mv 原始列（万元）────────────────────────────────
+        if 'total_mv' in features_df.columns:
+            mv_low = (features_df['total_mv'] < self.min_total_mv).sum()
+            mv_high = (features_df['total_mv'] > self.max_total_mv).sum()
+            if mv_low + mv_high > 0:
+                logger.info(
+                    f"选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
+                    f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
+                )
+            mask &= features_df['total_mv'].between(self.min_total_mv, self.max_total_mv)
+        else:
+            logger.warning("选股过滤-市值: total_mv 列不存在，跳过")
+
+        # ── 金融股：sw_l1_code────────────────────────────────────────────
+        if self.exclude_financial:
+            if 'sw_l1_code' not in features_df.columns:
+                logger.warning(
+                    "选股过滤-金融股: sw_l1_code 列不存在（申万行业数据未加载），跳过此规则"
+                )
+            else:
+                fin_mask = features_df['sw_l1_code'].isin(self._FINANCIAL_SW_L1_CODES)
+                fin_count = fin_mask.sum()
+                if fin_count > 0:
+                    logger.info(f"选股过滤-金融股: 剔除银行/非银金融 {fin_count} 只")
+                mask &= ~fin_mask
+
+        result = features_df[mask].copy()
+        if self.verbose and (before - len(result)) > 0:
+            logger.info(f"选股过滤合计: {before} → {len(result)}（剔除 {before - len(result)} 只）")
+        return result
     
     def generate(
         self,
@@ -180,13 +188,13 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
             return {}
         
-        # 应用成交额过滤
-        features_df = self._apply_amount_filter(features_df)
-        
+        # 应用选股过滤（成交额/市值/金融股）
+        features_df = self._apply_selection_filters(features_df)
+
         if len(features_df) == 0:
-            logger.warning(f"{date.date()} 成交额过滤后无可选股票")
+            logger.warning(f"{date.date()} 选股过滤后无可选股票")
             return {}
-        
+
         # 特征列一致性检查
         available_features = features_df.columns.tolist()
         try:
@@ -312,11 +320,11 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
             return []
         
-        # 应用成交额过滤
-        features_df = self._apply_amount_filter(features_df)
-        
+        # 应用选股过滤（成交额/市值/金融股）
+        features_df = self._apply_selection_filters(features_df)
+
         if len(features_df) == 0:
-            logger.warning(f"{date.date()} 成交额过滤后无可选股票")
+            logger.warning(f"{date.date()} 选股过滤后无可选股票")
             return []
         
         # 特征列一致性检查

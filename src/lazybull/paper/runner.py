@@ -75,7 +75,7 @@ class PaperTradingRunner:
         # 初始化数据清洗器和特征构建器（用于 ensure 功能）
         self.cleaner = DataCleaner(verbose=verbose)
         # 实盘模式使用 require_label=False，因为 T0 没有未来数据无法生成标签
-        self.feature_builder = FeatureBuilder(min_list_days=60, horizon=horizon, require_label=False)
+        self.feature_builder = FeatureBuilder(horizon=horizon, require_label=False)
 
         self.horizon = horizon  # 保存 horizon 供其他地方使用
         self.verbose = verbose
@@ -813,7 +813,7 @@ class PaperTradingRunner:
                     stock_basic,
                     suspend_info_df=suspend_clean,
                     limit_info_df=limit_clean,
-                    min_list_days=60
+                    min_list_days=365
                 )
             
             # 保存clean数据
@@ -1072,7 +1072,7 @@ class PaperTradingRunner:
             return BasicUniverse(
                 stock_basic=mainboard_stocks,
                 exclude_st=True,
-                min_list_days=60,
+                min_list_days=365,
                 verbose=self.verbose,
             )
         else:
@@ -1080,7 +1080,7 @@ class PaperTradingRunner:
             return BasicUniverse(
                 stock_basic=stock_basic,
                 exclude_st=True,
-                min_list_days=60,
+                min_list_days=365,
                 verbose=self.verbose,
             )
     

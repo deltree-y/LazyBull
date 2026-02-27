@@ -221,8 +221,10 @@ def prepare_training_data(
         # 1. 中性化动量与趋势 (9个) - 剔除行业/市值后的纯选股动量
         "neu_ret_1",               # 超短期个股中性化反转（A股隔日反转效应）
         "neu_ret_20",              # 中期个股中性化超额
+        #"neu_ret_10",              # 中期个股中性化超额
         "neu_ret_5",               # 短期个股中性化超额
         "alpha_industry_20",       # 行业动量（保留此特征以保留行业轮动视角）
+        #"alpha_industry_10",       # 行业动量（保留此特征以保留行业轮动视角）
         "alpha_industry_5",        # 行业短期爆发力
         "zscore_ma_deviation_20",  # 20日均线乖离率
         "zscore_acceleration",     # 动量加速度
@@ -242,6 +244,7 @@ def prepare_training_data(
         # 3. 波动风险与形态特征 (8个) - 解决”早夭”与压制回撤
         # body_length 可由 amplitude - upper_shadow - lower_shadow 推导，已移除
         "zscore_volatility_20",    # 20日波动率
+        #"zscore_volatility_10",    # 10日波动率
         "zscore_volatility_5",     # 5日波动率
         "amplitude",               # 当日振幅
         "zscore_bb_width",         # 布林带宽度（波动挤压/释放）
@@ -409,7 +412,7 @@ def transform_labels_cs_zscore(
 
     # --- 新增：硬截断，防止标准化后依然存在离群值干扰 MSE ---
     # 哪怕 winsorize 过了，如果有极端分布，z-score 后依然可能出现 > 5 的值
-    df_transformed[label_column] = df_transformed[label_column].clip(-3.0, 3.0)
+    df_transformed[label_column] = df_transformed[label_column].clip(-5.0, 5.0)
 
     return df_transformed
 

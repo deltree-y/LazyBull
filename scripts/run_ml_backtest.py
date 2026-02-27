@@ -797,8 +797,8 @@ def main():
     parser.add_argument(
         "--min-list-days",
         type=int,
-        default=60,
-        help="最小上市天数，默认 60"
+        default=365,
+        help="最小上市自然日天数，默认 365（约12个月）"
     )
     
     # 止损参数

@@ -303,7 +303,7 @@ class DataCleaner:
         stock_basic_df: pd.DataFrame,
         suspend_info_df: Optional[pd.DataFrame] = None,
         limit_info_df: Optional[pd.DataFrame] = None,
-        min_list_days: int = 60
+        min_list_days: int = 365
     ) -> pd.DataFrame:
         """为 daily 数据添加可交易标记
         
@@ -321,7 +321,7 @@ class DataCleaner:
             stock_basic_df: 清洗后的股票基本信息DataFrame
             suspend_info_df: 清洗后的停复牌信息（可选）
             limit_info_df: 清洗后的涨跌停信息（可选）
-            min_list_days: 最小上市天数，默认60天
+            min_list_days: 最小上市自然日天数，默认365天（约12个月）
             
         Returns:
             添加了标记列的DataFrame

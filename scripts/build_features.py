@@ -253,9 +253,9 @@ def ensure_clean_data(
                 stock_basic_clean,
                 suspend_info_df=suspend_clean,
                 limit_info_df=limit_clean,
-                min_list_days=60
+                min_list_days=args.min_list_days
             )
-            
+
             # 保存clean数据
             storage.save_clean_by_date(daily_clean, "daily", trade_date)
             
@@ -449,8 +449,8 @@ def main():
     parser.add_argument(
         "--min-list-days",
         type=int,
-        default=60,
-        help="最小上市天数（默认：60）"
+        default=365,
+        help="最小上市自然日天数（默认：365，约12个月）"
     )
     parser.add_argument(
         "--horizons",

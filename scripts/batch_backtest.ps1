@@ -1,9 +1,9 @@
 ﻿# 0. 定义参数
 $startDate = Get-Date "2025-07-01"
-$endDate = Get-Date "2025-07-01"
+$endDate = Get-Date "2025-07-10"
 $freq_list = @(20)             #持有天数
 $top_n_list = @(30)            #持股数量
-$mv_list = @(680)               #模型版本
+$mv_list = @(2004,2018,2032)               #模型版本
 #$para_list = @('--equity-curve-enabled')
 $para_list = @('--stop-loss-enabled')
 
@@ -30,46 +30,45 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 $currentDate = $startDate 
 while ($currentDate -le $endDate) {
     $dateStr = $currentDate.ToString("yyyyMMdd")
-    
     if ($currentDate.DayOfWeek -ne "Saturday" -and $currentDate.DayOfWeek -ne "Sunday") {
         foreach ($para in $para_list) {
-            foreach ($freq in $freq_list) {
-                foreach ($topn in $top_n_list) {
-                    foreach ($mv in $mv_list) {
-                        $count++
-                        
-                        # 执行 Python 命令
-                        #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para 
-                        #$out_name = "topn${topn}_mv${mv}"
-                        $out_name = "batch_test"
-                        #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv $para --output-name $out_name
-                        py scripts\run_ml_backtest.py `
-                            --start-date $dateStr --end-date 20251231 `
-                            --sell-timing open --top-n $topn --model-version $mv `
-                            --weight-method score `
-                            --max-weight-per-stock 0.04 --max-per-industry 4 `
-                            $para --output-name $out_name
+        foreach ($freq in $freq_list) {
+        foreach ($topn in $top_n_list) {
+        foreach ($mv in $mv_list) {
+            $count++
+            
+            # 执行 Python 命令
+            #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para 
+            #$out_name = "topn${topn}_mv${mv}"
+            $out_name = "batch_test"
+            #py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --sell-timing open --top-n $topn --model-version $mv $para --output-name $out_name
+            py scripts\run_ml_backtest.py `
+                --start-date $dateStr --end-date 20251231 `
+                --sell-timing open --top-n $topn --model-version $mv `
+                --weight-method score `
+                --max-weight-per-stock 0.04 --max-per-industry 4 `
+                $para --output-name $out_name
 
-                        # 预测逻辑
-                        $percent = [Math]::Round(($count / $totalTasks) * 100, 2)
-                        $elapsedMs = $totalTimer.ElapsedMilliseconds
-                        $avgMsPerTask = $elapsedMs / $count
-                        $remainingTasks = $totalTasks - $count
-                        $remainingMs = $avgMsPerTask * $remainingTasks
-                        
-                        $eta = [TimeSpan]::FromMilliseconds($remainingMs)
-                        $completionTime = (Get-Date).AddMilliseconds($remainingMs)
+            # 预测逻辑
+            $percent = [Math]::Round(($count / $totalTasks) * 100, 2)
+            $elapsedMs = $totalTimer.ElapsedMilliseconds
+            $avgMsPerTask = $elapsedMs / $count
+            $remainingTasks = $totalTasks - $count
+            $remainingMs = $avgMsPerTask * $remainingTasks
+            
+            $eta = [TimeSpan]::FromMilliseconds($remainingMs)
+            $completionTime = (Get-Date).AddMilliseconds($remainingMs)
 
-                        Write-Host "`n--------------------------------------------------" -ForegroundColor Cyan
-                        Write-Host "py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para" -ForegroundColor Cyan
-                        Write-Host "进度: $percent% ($count/$totalTasks)" -ForegroundColor White
-                        Write-Host "正在执行: 日期=$dateStr, Freq=$freq, TopN=$topn, MV=$mv" -ForegroundColor Green
-                        Write-Host "已耗时: $($totalTimer.Elapsed.ToString('hh\:mm\:ss'))"
-                        Write-Host "还剩余: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
-                        Write-Host "预计将完成于: $($completionTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
-                    }
-                }
-            }
+            Write-Host "`n--------------------------------------------------" -ForegroundColor Cyan
+            Write-Host "py scripts\run_ml_backtest.py --start-date $dateStr --end-date 20251231 --rebalance-freq $freq --sell-timing open --top-n $topn --model-version $mv $para" -ForegroundColor Cyan
+            Write-Host "进度: $percent% ($count/$totalTasks)" -ForegroundColor White
+            Write-Host "正在执行: 日期=$dateStr, Freq=$freq, TopN=$topn, MV=$mv" -ForegroundColor Green
+            Write-Host "已耗时: $($totalTimer.Elapsed.ToString('hh\:mm\:ss'))"
+            Write-Host "还剩余: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
+            Write-Host "预计将完成于: $($completionTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
+        }
+        }
+        }
         }
     }
     $currentDate = $currentDate.AddDays(1)

@@ -48,7 +48,7 @@ class FeatureBuilder:
     
     def __init__(
         self,
-        min_list_days: int = 60,
+        min_list_days: int = 365,
         horizon: int = 5,
         horizons: List[int] = None,
         lookback_windows: List[int] = None,
@@ -56,9 +56,9 @@ class FeatureBuilder:
         verbose: bool = False,
     ):
         """初始化特征构建器
-        
+
         Args:
-            min_list_days: 最小上市天数，默认60天
+            min_list_days: 最小上市自然日天数，默认365天（约12个月）
             horizon: 预测时间窗口（交易日），默认5天（自 0.5.0 版本起已废弃，请使用 horizons 参数）
             horizons: 预测时间窗口列表（交易日），默认[5, 10, 20]，生成多个标签 y_ret_5, y_ret_10, y_ret_20
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
@@ -1136,7 +1136,7 @@ class FeatureBuilder:
         # 计算上市天数
         # 注意：这里使用自然日天数作为粗略估计
         # 实际应该使用交易日历计算实际交易日数量，但为简化计算使用自然日
-        # 对于min_list_days=60的设置，自然日60天大约对应40-45个交易日
+        # 对于min_list_days=365的设置，自然日365天约对应250个交易日（约12个月）
         try:
             trade_date_dt = pd.to_datetime(trade_date, format='%Y%m%d')
             result['list_date_dt'] = pd.to_datetime(result['list_date'], format='%Y%m%d', errors='coerce')
@@ -1288,67 +1288,63 @@ class FeatureBuilder:
         return result
     
     def _apply_filters(self, df: pd.DataFrame) -> pd.DataFrame:
-        """应用过滤规则
-        
+        """应用过滤规则（训练/推理共用）
+
         过滤条件：
         - 剔除 ST (is_st=1)
-        - 剔除上市 < 60天 (list_days < 60)
+        - 剔除上市 < min_list_days 自然日（默认365天≈12个月）
         - 剔除停牌 (is_suspended=1)
         - 剔除标签缺失 (所有 y_ret_* 为空) - 仅当 require_label=True 时
         - 涨跌停不剔除，仅标记
-        
+
+        注：成交额/市值/金融股过滤在 MLSignal._apply_selection_filters 中执行，
+        仅作用于实盘/回测选股阶段，不影响训练数据。
+
         Args:
             df: 特征DataFrame
-            
+
         Returns:
             过滤后的DataFrame
         """
         original_count = len(df)
-        
-        # 记录过滤统计
+
         st_count = (df['is_st'] == 1).sum()
         list_days_count = (df['list_days'] < self.min_list_days).sum()
         suspend_count = (df['is_suspended'] == 1).sum()
-        
+
         # 统计各标签缺失情况
         label_missing_info = {}
         for horizon in self.horizons:
             label_col = f'y_ret_{horizon}'
             if label_col in df.columns:
                 label_missing_info[label_col] = df[label_col].isna().sum()
-        
+
         logger.info(
             f"过滤前样本数: {original_count}, "
             f"ST: {st_count}, 上市<{self.min_list_days}天: {list_days_count}, "
             f"停牌: {suspend_count}, 标签缺失: {label_missing_info}"
         )
-        
-        # 应用过滤
-        # 基础过滤条件
+
         filter_mask = (
             (df['is_st'] == 0) &
             (df['list_days'] >= self.min_list_days) &
             (df['is_suspended'] == 0)
         )
-        
-        # 仅当 require_label=True 时过滤标签缺失
-        # 要求至少有一个标签非空（而非所有标签都非空）
+
         if self.require_label:
-            # 构建标签非空的条件：至少一个标签列非空
             label_mask = pd.Series([False] * len(df), index=df.index)
             for horizon in self.horizons:
                 label_col = f'y_ret_{horizon}'
                 if label_col in df.columns:
                     label_mask = label_mask | df[label_col].notna()
-            
             filter_mask = filter_mask & label_mask
-            logger.info(f"require_label=True, 将过滤所有标签均缺失的样本")
+            logger.info("require_label=True, 将过滤所有标签均缺失的样本")
         else:
-            logger.info(f"require_label=False, 保留标签缺失样本（实盘/推理模式）")
-        
+            logger.info("require_label=False, 保留标签缺失样本（实盘/推理模式）")
+
         result = df[filter_mask].copy()
-        
-        logger.info(f"过滤后样本数: {len(result)}")
+
+        logger.info(f"过滤后样本数: {len(result)} （剔除 {original_count - len(result)} 只）")
         
         return result
     
