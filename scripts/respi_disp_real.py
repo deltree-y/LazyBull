@@ -4,17 +4,14 @@
 树莓派 mini-LED 实时持仓显示
 
 每10分钟通过 Tushare realtime_quote 刷新持仓数据，
-将以下6项指标显示在128x64 OLED 屏幕上：
-  Pos   - 持仓数量
-  MktV  - 持仓市值（万元）
-  Tot   - 总资产（万元）
-  Flt   - 浮盈率（%）
-  Gain  - 总盈亏率（%）
-  Ann   - 年化收益率（%）
+显示在128x64 OLED 屏幕上：
 
-屏幕分区：
-  黄色区（page 0-1，上16px）：当前时间标题（8x16 字体）
-  蓝色区（page 2-7，下48px）：6项指标（6x8 字体，每行一项）
+屏幕分区（8x16 字体）：
+  黄色区（page 0-1，上16px）：<最后更新时间>/<距下次调仓剩余交易日>
+  蓝色区（page 2-7，下48px）：
+    第1行：<市值总额>/<浮盈率>
+    第2行：<总资产>/<总盈亏率>
+    第3行：<持仓数量>/<年化收益率>
 
 自动息屏：23:00 - 6:00 关闭显示
 """
@@ -69,34 +66,79 @@ def _fmt_pct(value: float) -> str:
     return f"{sign}{value:.1f}%"
 
 
+# ---------- 调仓日计算 ----------
+
+def _calc_days_to_rebalance() -> int | None:
+    """计算距下次调仓还剩多少交易日。
+
+    Returns:
+        剩余交易日数（0 表示今天是调仓日，负数表示已超期），
+        None 表示无法计算（无调仓记录或数据加载失败）。
+    """
+    from src.lazybull.paper import PaperStorage
+    from src.lazybull.data import DataLoader
+
+    cfg = get_config()
+    rebalance_state = PaperStorage(cfg).load_rebalance_state()
+    if rebalance_state is None:
+        return None
+
+    last_rebalance_date = rebalance_state.get('last_rebalance_date')
+    rebalance_freq = rebalance_state.get('rebalance_freq')
+    if not last_rebalance_date or not rebalance_freq:
+        return None
+
+    try:
+        trade_cal = DataLoader(cfg).load_clean_trade_cal()
+        if trade_cal is None:
+            return None
+
+        trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+
+        today_str = datetime.now().strftime("%Y%m%d")
+        current_date = today_str if today_str in trade_dates else next(
+            (d for d in reversed(trade_dates) if d <= today_str), None
+        )
+        if current_date is None:
+            return None
+
+        last_idx = trade_dates.index(last_rebalance_date)
+        current_idx = trade_dates.index(current_date)
+        return rebalance_freq - (current_idx - last_idx)
+    except Exception:
+        return None
+
+
 # ---------- 显示逻辑 ----------
 
-def _render(oled: OledDevice, summary: dict | None, last_update_time: str) -> None:
+def _render(oled: OledDevice, summary: dict | None, last_update_time: str,
+            days_to_rebalance: int | None) -> None:
     """将持仓摘要渲染到 OLED 缓冲区并刷新。"""
     oled.clear_buffer()
 
+    days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}d"
+
+    # 黄色区（page 0-1）：最后更新时间/距下次调仓剩余交易日，8x16 字体
+    oled.draw_8x16(0, 0, f"{last_update_time}/{days_str}")
+
     if summary is None:
-        # 黄色区：更新时间/--/--%
-        oled.draw_8x16(0, 0, f"{last_update_time}/--/--%")
-        # 蓝色区：占位
-        oled.draw_8x16(0, 2, "M/T:--/--")
-        oled.draw_8x16(0, 4, "F/G:--/--")
+        oled.draw_8x16(0, 2, "--/--")
+        oled.draw_8x16(0, 4, "--/--")
+        oled.draw_8x16(0, 6, "--/--")
         oled.refresh()
         return
 
-    pos_count  = summary['pos_count']
-    mkt_val    = summary['market_value']
-    total_ast  = summary['total_assets']
-    flt_pct    = summary['float_pnl_pct']
-    gain_pct   = summary['total_pnl_pct']
-    ann_pct    = summary['annual_return_pct']
+    pos_count = summary['pos_count']
+    mkt_val   = summary['market_value']
+    total_ast = summary['total_assets']
+    flt_pct   = summary['float_pnl_pct']
+    gain_pct  = summary['total_pnl_pct']
+    ann_pct   = summary['annual_return_pct']
 
-    # 黄色区（page 0-1）：最后更新时间/持仓数量/年化收益率，8x16 字体
-    oled.draw_8x16(0, 0, f"{last_update_time}/{pos_count}/{_fmt_pct(ann_pct)}")
-
-    # 蓝色区（page 2-5）：两行 8x16 字体
-    oled.draw_8x16(0, 2, f"M/T:{_fmt_wan(mkt_val)}/{_fmt_wan(total_ast)}")
-    oled.draw_8x16(0, 4, f"F/G:{_fmt_pct(flt_pct)}/{_fmt_pct(gain_pct)}")
+    # 蓝色区（page 2-7）：三行 8x16 字体
+    oled.draw_8x16(0, 2, f"{_fmt_wan(mkt_val)}/{_fmt_pct(flt_pct)}")
+    oled.draw_8x16(0, 4, f"{_fmt_wan(total_ast)}/{_fmt_pct(gain_pct)}")
+    oled.draw_8x16(0, 6, f"{pos_count}/{_fmt_pct(ann_pct)}")
 
     oled.refresh()
 
@@ -115,6 +157,7 @@ def _worker(oled: OledDevice, stop_event: threading.Event) -> None:
     is_screen_on = True
     last_summary: dict | None = None
     last_update_time = "--:--"
+    last_days_to_rebalance: int | None = None
 
     while not stop_event.is_set():
         hour = datetime.now().hour
@@ -140,8 +183,16 @@ def _worker(oled: OledDevice, stop_event: threading.Event) -> None:
         except Exception:
             pass  # 保留 last_summary，下次循环重试
 
+        # ---- 计算距调仓剩余交易日 ----
+        try:
+            days = _calc_days_to_rebalance()
+            if days is not None:
+                last_days_to_rebalance = days
+        except Exception:
+            pass
+
         # ---- 渲染 ----
-        _render(oled, last_summary, last_update_time)
+        _render(oled, last_summary, last_update_time, last_days_to_rebalance)
 
         # ---- 等待下次刷新 ----
         stop_event.wait(REFRESH_INTERVAL)
