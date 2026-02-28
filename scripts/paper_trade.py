@@ -1178,6 +1178,227 @@ def run_adjust_cash(args):
     logger.info("=" * 80)
 
 
+def _print_realtime_profit_only(
+    runner: 'PaperTradingRunner',
+    prices: Dict[str, float],
+    current_date: str,
+    display_time: str
+) -> None:
+    """打印精简版实时收益统计"""
+    df = runner.broker.get_positions_detail(prices, current_date)
+    if df.empty:
+        logger.info(f"[{display_time}] 当前无持仓")
+        return
+
+    total_cost = df['买入成本'].sum() + (df['持仓股数'] * df['买入均价']).sum()
+    total_value = df['当前市值'].sum()
+    total_profit = df['浮动盈亏'].sum()
+    profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+
+    cash = runner.account.get_cash()
+    total_assets = cash + total_value
+
+    storage = PaperStorage()
+    config = storage.load_config()
+    initial_capital = (
+        config.get('initial_capital', runner.account.initial_capital)
+        if config else runner.account.initial_capital
+    )
+    total_pnl_pct = (
+        (total_assets - initial_capital) / initial_capital * 100
+        if initial_capital > 0 else 0.0
+    )
+
+    annualized = runner.broker._calculate_annualized_return(
+        initial_capital, total_assets, current_date
+    )
+    ann_str = f"{annualized:.2f}%" if annualized is not None else "N/A"
+
+    p_sign = "+" if total_profit >= 0 else ""
+    t_sign = "+" if total_pnl_pct >= 0 else ""
+
+    logger.info(
+        f"[{display_time}] {len(df)}只 | "
+        f"现金:{cash:,.2f} | 市值:{total_value:,.2f} | 总资产:{total_assets:,.2f} | "
+        f"浮盈:{p_sign}{total_profit:,.2f}({p_sign}{profit_rate:.2f}%) | "
+        f"总盈亏:{t_sign}{total_pnl_pct:.2f}% | 年化:{ann_str}"
+    )
+
+
+def run_real(args):
+    """实时行情命令：获取持仓实时数据并展示"""
+    from src.lazybull.data.tushare_client import TushareClient
+
+    runner = PaperTradingRunner(verbose=False)
+    positions = runner.account.get_positions()
+
+    if not positions:
+        logger.info("当前无持仓")
+        return
+
+    ts_codes = ','.join(positions.keys())
+
+    try:
+        client = TushareClient(verbose=False)
+        rt_df = client.get_realtime_quote(ts_codes)
+    except Exception as e:
+        logger.error(f"获取实时行情失败: {e}")
+        return
+
+    if rt_df is None or rt_df.empty:
+        logger.error("实时行情数据为空")
+        return
+
+    # 构建价格字典，记录报价时间
+    prices: Dict[str, float] = {}
+    quote_time = ""
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('ts_code', ''))
+        price = row.get('price', None)
+        if ts_code and price is not None:
+            try:
+                prices[ts_code] = float(price)
+            except (ValueError, TypeError):
+                pass
+        if not quote_time:
+            t = row.get('time', '')
+            if t:
+                quote_time = str(t)
+
+    # 警告缺失行情的持仓
+    missing = [c for c in positions if c not in prices]
+    if missing:
+        logger.warning(f"以下持仓未获取到实时行情: {', '.join(missing)}")
+
+    current_date = pd.Timestamp.today().strftime('%Y%m%d')
+    display_time = quote_time or pd.Timestamp.now().strftime('%H:%M:%S')
+
+    if not args.ret_profit_only:
+        loader = DataLoader(runner.storage, verbose=False)
+        stock_names = build_stock_names_dict(loader)
+
+        logger.info("=" * 140)
+        logger.info(f"实时持仓  [{display_time}]")
+        logger.info("=" * 140)
+        runner.broker.print_positions_summary(prices, current_date, stock_names=stock_names)
+    else:
+        _print_realtime_profit_only(runner, prices, current_date, display_time)
+
+
+def get_realtime_portfolio_summary() -> Optional[Dict]:
+    """获取实时持仓摘要，供树莓派 LED 显示使用。
+
+    通过 Tushare realtime_quote 接口获取当前持仓的实时价格，
+    计算 6 项关键指标。
+
+    Returns:
+        dict: {
+            pos_count: int       - 持仓数量
+            market_value: float  - 持仓市值（元）
+            total_assets: float  - 总资产（元）
+            float_pnl_pct: float - 浮盈率（%，当前仓位未实现盈亏）
+            total_pnl_pct: float - 总盈亏率（%，相对初始资金）
+            annual_return_pct: float - 年化收益率（%）
+            quote_time: str      - 行情时间
+        }
+        None if data unavailable
+    """
+    from src.lazybull.data.tushare_client import TushareClient
+
+    runner = PaperTradingRunner(verbose=False)
+    positions = runner.account.get_positions()
+    cash = runner.account.get_cash()
+
+    storage = PaperStorage()
+    config = storage.load_config()
+    initial_capital = (
+        config.get('initial_capital', runner.account.initial_capital)
+        if config else runner.account.initial_capital
+    )
+
+    current_date = pd.Timestamp.today().strftime('%Y%m%d')
+
+    if not positions:
+        total_assets = cash
+        total_pnl_pct = (
+            (total_assets - initial_capital) / initial_capital * 100
+            if initial_capital > 0 else 0.0
+        )
+        return {
+            'pos_count': 0,
+            'market_value': 0.0,
+            'total_assets': total_assets,
+            'float_pnl_pct': 0.0,
+            'total_pnl_pct': total_pnl_pct,
+            'annual_return_pct': 0.0,
+            'quote_time': '',
+        }
+
+    ts_codes_str = ','.join(positions.keys())
+    try:
+        client = TushareClient(verbose=False)
+        rt_df = client.get_realtime_quote(ts_codes_str)
+    except Exception as e:
+        logger.warning(f"获取实时行情失败: {e}")
+        return None
+
+    if rt_df is None or rt_df.empty:
+        return None
+
+    prices: Dict[str, float] = {}
+    quote_time = ""
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('ts_code', ''))
+        price = row.get('price', None)
+        if ts_code and price is not None:
+            try:
+                prices[ts_code] = float(price)
+            except (ValueError, TypeError):
+                pass
+        if not quote_time:
+            t = row.get('time', '')
+            if t:
+                quote_time = str(t)
+
+    # 计算市值和浮盈（基于买入均价）
+    market_value = 0.0
+    total_float_pnl = 0.0
+    total_buy_value = 0.0
+    for ts_code, pos in positions.items():
+        current_price = prices.get(ts_code, pos.buy_price)
+        market_value += current_price * pos.shares
+        total_float_pnl += (current_price - pos.buy_price) * pos.shares
+        total_buy_value += pos.buy_price * pos.shares
+
+    float_pnl_pct = (total_float_pnl / total_buy_value * 100) if total_buy_value > 0 else 0.0
+    total_assets = cash + market_value
+    total_pnl_pct = (
+        (total_assets - initial_capital) / initial_capital * 100
+        if initial_capital > 0 else 0.0
+    )
+
+    annual_return_pct = 0.0
+    try:
+        if hasattr(runner.broker, '_calculate_annualized_return'):
+            result = runner.broker._calculate_annualized_return(
+                initial_capital, total_assets, current_date
+            )
+            if result is not None:
+                annual_return_pct = float(result)
+    except Exception:
+        pass
+
+    return {
+        'pos_count': len(positions),
+        'market_value': market_value,
+        'total_assets': total_assets,
+        'float_pnl_pct': float_pnl_pct,
+        'total_pnl_pct': total_pnl_pct,
+        'annual_return_pct': annual_return_pct,
+        'quote_time': quote_time,
+    }
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -1326,8 +1547,8 @@ def main():
     )
     run_parser.add_argument(
         '--trade-date',
-        required=True,
-        help='交易日期，格式YYYYMMDD'
+        default=pd.Timestamp.today().strftime('%Y%m%d'),
+        help='交易日期，格式YYYYMMDD（默认：当前日期）'
     )
     run_parser.add_argument(
         '--model-version',
@@ -1351,6 +1572,17 @@ def main():
         help='参考交易日期（用于获取当前价格），格式YYYYMMDD'
     )
     
+    # real 子命令
+    real_parser = subparsers.add_parser(
+        'real',
+        help='实时行情：获取持仓的实时数据并展示'
+    )
+    real_parser.add_argument(
+        '--ret-profit-only',
+        action='store_true',
+        help='仅显示收益统计（精简单行输出）'
+    )
+
     # adjust 子命令
     adjust_parser = subparsers.add_parser(
         'adjust',
@@ -1464,6 +1696,8 @@ def main():
         run_main(args)
     elif args.command == 'positions':
         view_positions(args)
+    elif args.command == 'real':
+        run_real(args)
     elif args.command == 'adjust':
         if args.adjust_command is None:
             adjust_parser.print_help()

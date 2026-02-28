@@ -433,6 +433,18 @@ class TushareClient:
             **kwargs
         )
     
+    def get_realtime_quote(self, ts_codes: str) -> pd.DataFrame:
+        """获取实时行情
+
+        Args:
+            ts_codes: 股票代码，多个以逗号分隔，如 '000001.SZ,000002.SZ'
+
+        Returns:
+            实时行情DataFrame，包含 ts_code, name, price, pre_close, open,
+            high, low, volume, amount, time 等字段
+        """
+        return self.query("realtime_quote", ts_code=ts_codes)
+
     def get_index_member(
         self,
         l1_code: str = None,

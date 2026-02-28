@@ -29,7 +29,24 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.13.6)
+### 当前版本 (v0.14.0)
+
+**实时行情查看 + 树莓派 mini-LED 持仓显示** (v0.14.0 新增):
+- ✅ **`paper_trade.py real` 子命令**：一键查看持仓实时行情，支持 `--ret-profit-only` 精简单行输出
+- ✅ **`TushareClient.get_realtime_quote()`**：封装 Tushare `realtime_quote` 接口，按需获取实时价格
+- ✅ **`get_realtime_portfolio_summary()`**：计算6项实时汇总指标（持仓数/市值/总资产/浮盈率/总盈亏/年化收益），供外部调用
+- ✅ **`scripts/respi_disp_real.py`**：树莓派 mini-LED 持仓看板，每10分钟刷新一次，23:00-6:00 自动息屏
+- ✅ **`src/lazybull/drv/mini_led/`**：128×64 OLED 硬件驱动（SSD1306，GPIO/SPI 方式），含 8×16 / 6×8 字库
+- ✅ **`paper_trade.py run` 默认日期**：`--trade-date` 由必填改为默认当日日期（`pd.Timestamp.today()`）
+
+### v0.13.9
+
+**选股过滤重构、compare_walk_forward 增强与新股过滤优化**:
+- ✅ **选股过滤重构（`ml_signal.py`）**：将百分位成交额过滤重构为 `_apply_selection_filters`，引入三个绝对阈值：成交额 `amount_ma20 ≥ 5000万`、市值 `total_mv ∈ [50亿, 1500亿]`、申万一级银行/非银金融剔除
+- ✅ **新股过滤统一**：全局 `min_list_days` 默认值由60天提升至365天（约12个月），涉及 `cleaner.py`、`builder.py`、`paper/runner.py` 等多处
+- ✅ **`compare_walk_forward.py` 大幅增强**：输出从 CSV 改为 Excel（两个 sheet：实验对比 + 指标说明）；新增综合评分体系（8指标加权百分位排名，0~100分）；标题行超链接跳转指标说明；参与评分列着浅→深绿底色；新增 `model_version_range` 列；按运行时间戳降序排列；所有列名改为中文
+
+### v0.13.6
 
 **修复市场状态与技术指标特征对 `--start-date` 敏感的问题** (v0.13.6 修复):
 - ✅ **新增 `_slice_by_trading_days()` 通用切片方法**：
@@ -565,6 +582,12 @@ python scripts/paper_trade.py t0 --trade-date 20260121 --buy-price close --unive
 
 # T1 工作流：读取待执行目标 + 执行订单 + 打印明细
 python scripts/paper_trade.py t1 --trade-date 20260122 --buy-price close --sell-price close
+
+# 实时行情：查看持仓当前价格及盈亏（--trade-date 默认当日）
+python scripts/paper_trade.py real
+
+# 精简模式：仅输出单行收益统计（适合定时任务/屏幕显示）
+python scripts/paper_trade.py real --ret-profit-only
 ```
 
 **纸面交易特点：**
@@ -574,6 +597,7 @@ python scripts/paper_trade.py t1 --trade-date 20260122 --buy-price close --sell-
 - 灵活的价格配置（买入可选开盘价/收盘价）
 - 主板股票池（仅沪深主板，排除科创板、创业板、北交所）
 - 成本计算（佣金、印花税、滑点）
+- **实时行情查看**（`real` 子命令，基于 Tushare `realtime_quote` 接口）
 
 详见 [纸面交易使用指南](docs/paper_trading_guide.md)
 
