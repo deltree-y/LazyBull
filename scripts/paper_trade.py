@@ -1249,19 +1249,19 @@ def run_real(args):
         logger.error("实时行情数据为空")
         return
 
-    # 构建价格字典，记录报价时间
+    # 构建价格字典，记录报价时间（realtime_quote 返回大写列名）
     prices: Dict[str, float] = {}
     quote_time = ""
     for _, row in rt_df.iterrows():
-        ts_code = str(row.get('ts_code', ''))
-        price = row.get('price', None)
+        ts_code = str(row.get('TS_CODE', ''))
+        price = row.get('PRICE', None)
         if ts_code and price is not None:
             try:
                 prices[ts_code] = float(price)
             except (ValueError, TypeError):
                 pass
         if not quote_time:
-            t = row.get('time', '')
+            t = row.get('TIME', '')
             if t:
                 quote_time = str(t)
 
@@ -1348,15 +1348,15 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     prices: Dict[str, float] = {}
     quote_time = ""
     for _, row in rt_df.iterrows():
-        ts_code = str(row.get('ts_code', ''))
-        price = row.get('price', None)
+        ts_code = str(row.get('TS_CODE', ''))
+        price = row.get('PRICE', None)
         if ts_code and price is not None:
             try:
                 prices[ts_code] = float(price)
             except (ValueError, TypeError):
                 pass
         if not quote_time:
-            t = row.get('time', '')
+            t = row.get('TIME', '')
             if t:
                 quote_time = str(t)
 

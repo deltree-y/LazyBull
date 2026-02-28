@@ -443,7 +443,8 @@ class TushareClient:
             实时行情DataFrame，包含 ts_code, name, price, pre_close, open,
             high, low, volume, amount, time 等字段
         """
-        return self.query("realtime_quote", ts_code=ts_codes)
+        #return self.query("realtime_quote", ts_code=ts_codes)
+        return ts.realtime_quote(ts_code=ts_codes)
 
     def get_index_member(
         self,
