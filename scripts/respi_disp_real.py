@@ -71,18 +71,16 @@ def _fmt_pct(value: float) -> str:
 
 # ---------- 显示逻辑 ----------
 
-def _render(oled: OledDevice, summary: dict | None) -> None:
+def _render(oled: OledDevice, summary: dict | None, last_update_time: str) -> None:
     """将持仓摘要渲染到 OLED 缓冲区并刷新。"""
     oled.clear_buffer()
 
-    # 黄色区（page 0-1）：当前时间，8x16 字体，居中
-    now_str = datetime.now().strftime("%H:%M")
-    title = f"LB  {now_str}"
-    x = max(0, (128 - len(title) * 8) // 2)
-    oled.draw_8x16(x, 0, title)
-
     if summary is None:
-        oled.draw_6x8(0, 2, "No data - retry...")
+        # 黄色区：更新时间/--/--%
+        oled.draw_8x16(0, 0, f"{last_update_time}/--/--%")
+        # 蓝色区：占位
+        oled.draw_8x16(0, 2, "M/T:--/--")
+        oled.draw_8x16(0, 4, "F/G:--/--")
         oled.refresh()
         return
 
@@ -93,17 +91,12 @@ def _render(oled: OledDevice, summary: dict | None) -> None:
     gain_pct   = summary['total_pnl_pct']
     ann_pct    = summary['annual_return_pct']
 
-    # 蓝色区（page 2-7）：每行一项指标，6x8 字体
-    lines = [
-        f"Pos:  {pos_count}",
-        f"MktV: {_fmt_wan(mkt_val)}",
-        f"Tot:  {_fmt_wan(total_ast)}",
-        f"Flt:  {_fmt_pct(flt_pct)}",
-        f"Gain: {_fmt_pct(gain_pct)}",
-        f"Ann:  {_fmt_pct(ann_pct)}",
-    ]
-    for page_offset, line in enumerate(lines):
-        oled.draw_6x8(0, 2 + page_offset, line)
+    # 黄色区（page 0-1）：最后更新时间/持仓数量/年化收益率，8x16 字体
+    oled.draw_8x16(0, 0, f"{last_update_time}/{pos_count}/{_fmt_pct(ann_pct)}")
+
+    # 蓝色区（page 2-5）：两行 8x16 字体
+    oled.draw_8x16(0, 2, f"M/T:{_fmt_wan(mkt_val)}/{_fmt_wan(total_ast)}")
+    oled.draw_8x16(0, 4, f"F/G:{_fmt_pct(flt_pct)}/{_fmt_pct(gain_pct)}")
 
     oled.refresh()
 
@@ -121,6 +114,7 @@ def _worker(oled: OledDevice, stop_event: threading.Event) -> None:
 
     is_screen_on = True
     last_summary: dict | None = None
+    last_update_time = "--:--"
 
     while not stop_event.is_set():
         hour = datetime.now().hour
@@ -142,11 +136,12 @@ def _worker(oled: OledDevice, stop_event: threading.Event) -> None:
             summary = get_realtime_portfolio_summary()
             if summary is not None:
                 last_summary = summary
+                last_update_time = datetime.now().strftime("%H:%M")
         except Exception:
             pass  # 保留 last_summary，下次循环重试
 
         # ---- 渲染 ----
-        _render(oled, last_summary)
+        _render(oled, last_summary, last_update_time)
 
         # ---- 等待下次刷新 ----
         stop_event.wait(REFRESH_INTERVAL)

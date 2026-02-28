@@ -30,7 +30,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(9)    # ← 想对比的参数示例
-$learning_rate_list      = @(0.005)  # ← 想对比的参数示例
+$learning_rate_list      = @(0.06,0.07)  # ← 想对比的参数示例
 $subsample_list          = @(0.8)
 $colsample_bytree_list   = @(0.5)
 $min_child_weight_list   = @(50)
