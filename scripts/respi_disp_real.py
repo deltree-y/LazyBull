@@ -76,10 +76,11 @@ def _calc_days_to_rebalance() -> int | None:
         None 表示无法计算（无调仓记录或数据加载失败）。
     """
     from src.lazybull.paper import PaperStorage
-    from src.lazybull.data import DataLoader
+    from src.lazybull.data import DataLoader, Storage
 
-    cfg = get_config()
-    rebalance_state = PaperStorage(cfg).load_rebalance_state()
+    rebalance_state = PaperStorage(
+        root_path=str(project_root / "data" / "paper")
+    ).load_rebalance_state()
     if rebalance_state is None:
         return None
 
@@ -89,7 +90,8 @@ def _calc_days_to_rebalance() -> int | None:
         return None
 
     try:
-        trade_cal = DataLoader(cfg).load_clean_trade_cal()
+        loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
+        trade_cal = loader.load_clean_trade_cal()
         if trade_cal is None:
             return None
 
