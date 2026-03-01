@@ -19,7 +19,7 @@ $wf_end_date             = "20250830"
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
-$train_window_years_list = @(6)             # 训练窗口年数
+$train_window_years_list = @(6,7,8)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
 
 # ── 标签与任务 ────────────────────────────────────────────────
@@ -29,8 +29,8 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(9)    # ← 想对比的参数示例
-$learning_rate_list      = @(0.06,0.07)  # ← 想对比的参数示例
+$max_depth_list          = @(4,9)    # ← 想对比的参数示例
+$learning_rate_list      = @(0.005,0.007)  # ← 想对比的参数示例
 $subsample_list          = @(0.8)
 $colsample_bytree_list   = @(0.5)
 $min_child_weight_list   = @(50)
@@ -40,8 +40,8 @@ $gamma_list              = @(0.1)
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(30,50,100)
-$rank_weight_list        = @(2.5,3)
+$rank_weight_topk_list   = @(30)
+$rank_weight_list        = @(2)
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"

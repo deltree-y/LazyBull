@@ -36,7 +36,7 @@ sys.path.insert(0, str(scripts_dir))
 sys.path.insert(0, str(driver_dir))
 
 # ---------- OLED 驱动 ----------
-from device import OledDevice, CMD  # noqa: E402
+from device import OledDevice, CMD  # type: ignore # noqa: E402
 
 # ---------- 项目日志 ----------
 from src.lazybull.common.logger import setup_logger  # noqa: E402
@@ -163,6 +163,7 @@ def _worker(oled: OledDevice, stop_event: threading.Event) -> None:
 
     while not stop_event.is_set():
         hour = datetime.now().hour
+        weekday = datetime.now().weekday()
 
         # ---- 息屏逻辑（23:00 - 6:00）----
         if hour >= 23 or hour < 6:
@@ -177,11 +178,14 @@ def _worker(oled: OledDevice, stop_event: threading.Event) -> None:
             is_screen_on = True
 
         # ---- 获取实时数据 ----
+        # 仅在工作日的交易时段获取数据，非交易时段保留上次数据继续显示，避免频繁请求失败。
         try:
-            summary = get_realtime_portfolio_summary()
-            if summary is not None:
-                last_summary = summary
-                last_update_time = datetime.now().strftime("%H:%M")
+            if weekday < 5:  # 仅工作日获取数据
+                if (hour > 9 and hour < 12) or (hour > 13 and hour < 15): # 仅交易时段获取数据
+                    summary = get_realtime_portfolio_summary()
+                    if summary is not None:
+                        last_summary = summary
+                        last_update_time = datetime.now().strftime("%H:%M")
         except Exception:
             pass  # 保留 last_summary，下次循环重试
 

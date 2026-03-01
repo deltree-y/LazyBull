@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 import time
 import socket
-import gpiod
+import gpiod # type: ignore
 import random
 import threading
 import psutil
 from threading import Lock
-from gpiod.line import Direction, Value
+from gpiod.line import Direction, Value # type: ignore
 
 try:
     from fonts import F8X16, F6X8
