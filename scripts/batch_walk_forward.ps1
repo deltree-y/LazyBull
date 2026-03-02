@@ -19,28 +19,30 @@ $wf_end_date             = "20250830"
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
-$train_window_years_list = @(6,7,8)             # 训练窗口年数
+$train_window_years_list = @(7)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
 
 # ── 标签与任务 ────────────────────────────────────────────────
+$algorithm_list          = @("lightgbm")        # xgboost | lightgbm（训练算法）
 $label_list              = @("neu_y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(4,9)    # ← 想对比的参数示例
-$learning_rate_list      = @(0.005,0.007)  # ← 想对比的参数示例
-$subsample_list          = @(0.8)
-$colsample_bytree_list   = @(0.5)
-$min_child_weight_list   = @(50)
-$reg_alpha_list          = @(0.05)
-$reg_lambda_list         = @(1.0)
-$gamma_list              = @(0.1)
+$max_depth_list          = @(6)         # XGB推荐9, LGB推荐6
+$num_leaves_list         = @(31,63,127)        # 仅LightGBM有效，XGBoost忽略。LGB推荐31
+$learning_rate_list      = @(0.01)      # XGB推荐0.005, LGB推荐0.01
+$subsample_list          = @(0.7)       # XGB推荐0.8, LGB推荐0.7
+$colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
+$min_child_weight_list   = @(200)       # XGB推荐150, LGB推荐200
+$reg_alpha_list          = @(0.1)       # XGB推荐0.05, LGB推荐0.1
+$reg_lambda_list         = @(5.0)       # XGB推荐1.0, LGB推荐5.0
+$gamma_list              = @(1.0)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(30)
+$rank_weight_topk_list   = @(50)
 $rank_weight_list        = @(2)
 
 # ── 路径 ─────────────────────────────────────────────────────
@@ -62,13 +64,15 @@ $count      = 0
 $failed     = 0
 
 # 计算总任务数（各列表长度的笛卡尔积）
-$totalTasks = $step_list.Length *
+$totalTasks = $algorithm_list.Length *
+              $step_list.Length *
               $train_window_years_list.Length *
               $test_window_months_list.Length *
               $label_list.Length *
               $task_list.Length *
               $label_transform_list.Length *
               $max_depth_list.Length *
+              $num_leaves_list.Length *
               $learning_rate_list.Length *
               $subsample_list.Length *
               $colsample_bytree_list.Length *
@@ -88,6 +92,7 @@ Write-Host "  数据目录   : $data_root" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
 
+foreach ($algorithm in $algorithm_list) {
 foreach ($step in $step_list) {
 foreach ($train_window_years in $train_window_years_list) {
 foreach ($test_window_months in $test_window_months_list) {
@@ -95,6 +100,7 @@ foreach ($label in $label_list) {
 foreach ($task in $task_list) {
 foreach ($label_transform in $label_transform_list) {
 foreach ($max_depth in $max_depth_list) {
+foreach ($num_leaves in $num_leaves_list) {
 foreach ($learning_rate in $learning_rate_list) {
 foreach ($subsample in $subsample_list) {
 foreach ($colsample_bytree in $colsample_bytree_list) {
@@ -109,6 +115,7 @@ foreach ($rank_weight in $rank_weight_list) {
 
     # 构建命令字符串
     $pythonCmd = "py .\scripts\walk_forward.py" +
+                 " --algorithm $algorithm" +
                  " --wf-start-date $wf_start_date" +
                  " --wf-end-date $wf_end_date" +
                  " --step $step" +
@@ -119,6 +126,7 @@ foreach ($rank_weight in $rank_weight_list) {
                  " --label-transform $label_transform" +
                  " --n-estimators $n_estimators" +
                  " --max-depth $max_depth" +
+                 " --num-leaves $num_leaves" +
                  " --learning-rate $learning_rate" +
                  " --subsample $subsample" +
                  " --colsample-bytree $colsample_bytree" +
@@ -161,7 +169,7 @@ foreach ($rank_weight in $rank_weight_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}  # end foreach（16 层）
+}}}}}}}}}}}}}}}}}}  # end foreach（18 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

@@ -52,6 +52,7 @@ from src.lazybull.ml.train_core import (
     transform_labels_cs_zscore,
     generate_classification_labels,
     train_xgboost_model,
+    train_lightgbm_model,
     evaluate_validation_daily,
     build_rank_sample_weights,
 )
@@ -151,6 +152,12 @@ def main():
         help="树的最大深度，默认 8（建议范围：6-10）"
     )
     parser.add_argument(
+        "--num-leaves",
+        type=int,
+        default=None,
+        help="LightGBM 叶子数，默认 31。仅 LightGBM 有效，XGBoost 忽略此参数"
+    )
+    parser.add_argument(
         "--learning-rate",
         type=float,
         default=0.05,
@@ -225,6 +232,15 @@ def main():
         help="Top/Bottom K 样本权重，默认 5.0"
     )
     
+    # 算法选择
+    parser.add_argument(
+        "--algorithm",
+        type=str,
+        default="xgboost",
+        choices=["xgboost", "lightgbm"],
+        help="训练算法（xgboost|lightgbm），默认 xgboost"
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -249,8 +265,9 @@ def main():
     setup_logger()
     
     logger.info("=" * 60)
-    logger.info("XGBoost 模型训练")
+    logger.info(f"{args.algorithm.upper()} 模型训练")
     logger.info("=" * 60)
+    logger.info(f"训练算法: {args.algorithm}")
     logger.info(f"训练日期区间: {args.start_date} 至 {args.end_date}")
     logger.info(f"标签列: {args.label_column}")
     logger.info(f"数据目录: {args.data_root}")
@@ -332,7 +349,15 @@ def main():
                 top_weight=args.rank_weight,
             )
         
-        model, train_params, train_metrics, val_metrics = train_xgboost_model(
+        # 根据算法选择训练函数
+        train_fn = train_lightgbm_model if args.algorithm == "lightgbm" else train_xgboost_model
+
+        # 构建训练参数（num_leaves 仅 LightGBM 使用）
+        extra_kwargs = {}
+        if args.algorithm == "lightgbm" and args.num_leaves is not None:
+            extra_kwargs["num_leaves"] = args.num_leaves
+
+        model, train_params, train_metrics, val_metrics = train_fn(
             X_train, y_train, X_val, y_val,
             task=args.task,
             skip_label_winsorize=skip_label_winsorize,
@@ -348,8 +373,9 @@ def main():
             reg_alpha=args.reg_alpha,
             reg_lambda=args.reg_lambda,
             gamma=args.gamma,
+            **extra_kwargs,
         )
-        
+
         # 4. 验证集逐日评估（贴近交易场景，特别是分类任务）
         daily_val_metrics = {}
         if len(df_val_split_original) > 0 and args.task == "classification":
@@ -375,6 +401,7 @@ def main():
         # 准备完整的训练参数（包含任务配置）
         full_train_params = train_params.copy()
         full_train_params.update({
+            "algorithm": args.algorithm,
             "task": args.task,
             "label_transform": args.label_transform if args.task == "regression" else None,
             "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else None,
@@ -391,7 +418,7 @@ def main():
         # 4. 注册模型
         version = registry.register_model(
             model=model,
-            model_type=f"xgboost_{args.task}",
+            model_type=f"{args.algorithm}_{args.task}",
             train_start_date=args.start_date,
             train_end_date=args.end_date,
             feature_columns=feature_columns,

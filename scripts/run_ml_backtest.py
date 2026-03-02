@@ -41,7 +41,7 @@ from src.lazybull.backtest import BacktestEngine, BacktestEngineML, Reporter
 from src.lazybull.common.cost import CostModel
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
-from src.lazybull.signals import MLSignal
+from src.lazybull.signals import MLSignal, EnsembleMLSignal
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.risk.stop_loss import StopLossConfig, create_stop_loss_config_from_dict
 from src.lazybull.risk.equity_curve import EquityCurveConfig, create_equity_curve_config_from_dict
@@ -753,6 +753,18 @@ def main():
         help="模型版本号，默认使用最新版本"
     )
     parser.add_argument(
+        "--model-version-b",
+        type=int,
+        default=None,
+        help="第二个模型版本号（用于集成），指定后自动启用双模型 Ensemble"
+    )
+    parser.add_argument(
+        "--ensemble-weight-a",
+        type=float,
+        default=0.5,
+        help="集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5"
+    )
+    parser.add_argument(
         "--label",
         type=str,
         default=None,
@@ -1096,14 +1108,28 @@ def main():
             verbose=False,
         )
         
-        # 4. 创建 ML 信号
-        signal = MLSignal(
-            top_n=args.top_n,
-            model_version=args.model_version,
-            models_dir=f"{args.data_root}/models",
-            weight_method=args.weight_method,
-            verbose=False,
-        )
+        # 4. 创建 ML 信号（单模型或集成）
+        if args.model_version_b is not None:
+            # 双模型集成
+            signal = EnsembleMLSignal(
+                model_version_a=args.model_version if args.model_version is not None else registry.get_latest_version(),
+                model_version_b=args.model_version_b,
+                ensemble_weight_a=args.ensemble_weight_a,
+                top_n=args.top_n,
+                models_dir=f"{args.data_root}/models",
+                weight_method=args.weight_method,
+                verbose=False,
+            )
+            logger.info(f"使用双模型集成: model_a=v{args.model_version or 'latest'}, model_b=v{args.model_version_b}, weight_a={args.ensemble_weight_a}")
+        else:
+            # 单模型
+            signal = MLSignal(
+                top_n=args.top_n,
+                model_version=args.model_version,
+                models_dir=f"{args.data_root}/models",
+                weight_method=args.weight_method,
+                verbose=False,
+            )
         
         # 打印模型信息
         model_info = signal.get_model_info()

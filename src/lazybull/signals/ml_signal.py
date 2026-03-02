@@ -111,10 +111,11 @@ class MLSignal(Signal):
         if 'amount_ma20' in features_df.columns:
             amount_low = (features_df['amount_ma20'].fillna(0) < self.min_amount_ma20).sum()
             if amount_low > 0:
-                logger.info(
-                    f"选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
-                    f"（={self.min_amount_ma20 / 100:.0f}万元）的 {amount_low} 只"
-                )
+                #logger.info(
+                #    f"选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
+                #    f"（={self.min_amount_ma20 / 100:.0f}万元）的 {amount_low} 只"
+                #)
+                pass
             mask &= features_df['amount_ma20'].fillna(0) >= self.min_amount_ma20
         else:
             logger.warning("选股过滤-成交额: amount_ma20 列不存在，跳过")
@@ -124,10 +125,11 @@ class MLSignal(Signal):
             mv_low = (features_df['total_mv'] < self.min_total_mv).sum()
             mv_high = (features_df['total_mv'] > self.max_total_mv).sum()
             if mv_low + mv_high > 0:
-                logger.info(
-                    f"选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
-                    f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
-                )
+                #logger.info(
+                #    f"选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
+                #    f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
+                #)
+                pass
             mask &= features_df['total_mv'].between(self.min_total_mv, self.max_total_mv)
         else:
             logger.warning("选股过滤-市值: total_mv 列不存在，跳过")
@@ -403,9 +405,264 @@ class MLSignal(Signal):
     
     def get_model_info(self) -> Dict:
         """获取模型信息
-        
+
         Returns:
             模型元数据字典
         """
         self._load_model()
         return self.metadata
+
+
+class EnsembleMLSignal(MLSignal):
+    """双模型集成信号生成器
+
+    加载两个模型（如 XGBoost + LightGBM），各自预测后对截面排名取加权均值，
+    再按综合排名选 Top N。其余逻辑（过滤、权重分配）复用父类 MLSignal。
+    """
+
+    def __init__(
+        self,
+        model_version_a: int,
+        model_version_b: int,
+        ensemble_weight_a: float = 0.5,
+        top_n: int = 20,
+        models_dir: str = "./data/models",
+        weight_method: str = "equal",
+        min_amount_ma20: float = 50000.0,
+        min_total_mv: float = 500000.0,
+        max_total_mv: float = 15000000.0,
+        exclude_financial: bool = True,
+        verbose: bool = True,
+    ):
+        """初始化双模型集成信号
+
+        Args:
+            model_version_a: 模型A版本号（如 XGBoost）
+            model_version_b: 模型B版本号（如 LightGBM）
+            ensemble_weight_a: 模型A的排名权重，模型B权重为 1 - ensemble_weight_a，默认 0.5
+            其余参数同 MLSignal
+        """
+        # 用 model_version_a 作为主模型初始化父类
+        super().__init__(
+            top_n=top_n,
+            model_version=model_version_a,
+            models_dir=models_dir,
+            weight_method=weight_method,
+            min_amount_ma20=min_amount_ma20,
+            min_total_mv=min_total_mv,
+            max_total_mv=max_total_mv,
+            exclude_financial=exclude_financial,
+            verbose=verbose,
+        )
+        self.model_version_b = model_version_b
+        self.ensemble_weight_a = ensemble_weight_a
+        self.ensemble_weight_b = 1.0 - ensemble_weight_a
+
+        # 模型B的延迟加载
+        self.model_b = None
+        self.metadata_b = None
+        self.feature_columns_b = None
+
+        logger.info(
+            f"Ensemble 信号初始化: model_a=v{model_version_a}, model_b=v{model_version_b}, "
+            f"weight_a={ensemble_weight_a:.2f}, weight_b={self.ensemble_weight_b:.2f}"
+        )
+
+    def _load_model_b(self) -> None:
+        """加载模型B（延迟加载）"""
+        if self.model_b is None:
+            if self.registry is None:
+                from ..ml import ModelRegistry
+                self.registry = ModelRegistry(models_dir=self.models_dir)
+            self.model_b, self.metadata_b = self.registry.load_model(
+                version=self.model_version_b,
+                strict_version_check=True
+            )
+            self.feature_columns_b = self.metadata_b["feature_columns"]
+            logger.info(
+                f"模型B已加载: {self.metadata_b['version_str']}, "
+                f"特征数={self.metadata_b['feature_count']}"
+            )
+
+    def _predict_scores(self, X: pd.DataFrame, model, metadata) -> np.ndarray:
+        """单模型预测，返回分数数组"""
+        task = metadata.get('train_params', {}).get('task', 'regression')
+        if task == 'classification' and hasattr(model, 'predict_proba'):
+            return model.predict_proba(X)[:, 1]
+        else:
+            return model.predict(X)
+
+    def _ensemble_predict(self, features_df: pd.DataFrame):
+        """双模型预测 → 排名融合 + 加权原始分数
+
+        Args:
+            features_df: 过滤后的特征 DataFrame（已包含 ts_code）
+
+        Returns:
+            tuple: (avg_rank, blended_score)
+                - avg_rank: pd.Series, 综合排名（值越小排名越靠前），用于选股排序
+                - blended_score: pd.Series, 加权原始分数（正数，有区分度），用于 score 加权
+        """
+        # 模型A预测
+        X_a = features_df[self.feature_columns].fillna(0)
+        scores_a = self._predict_scores(X_a, self.model, self.metadata)
+
+        # 模型B预测（特征列可能不同）
+        X_b = features_df[self.feature_columns_b].fillna(0)
+        scores_b = self._predict_scores(X_b, self.model_b, self.metadata_b)
+
+        s_a = pd.Series(scores_a, index=features_df.index)
+        s_b = pd.Series(scores_b, index=features_df.index)
+
+        # 排名融合（用于选股排序）
+        rank_a = s_a.rank(ascending=False)
+        rank_b = s_b.rank(ascending=False)
+        avg_rank = rank_a * self.ensemble_weight_a + rank_b * self.ensemble_weight_b
+
+        # 加权原始分数（用于 score 加权分配权重）
+        # 先将两组分数各自 min-max 归一化到 [0,1]，再加权平均，保证正数且有区分度
+        def _minmax(s):
+            smin, smax = s.min(), s.max()
+            if smax - smin < 1e-12:
+                return pd.Series(0.5, index=s.index)
+            return (s - smin) / (smax - smin)
+
+        norm_a = _minmax(s_a)
+        norm_b = _minmax(s_b)
+        blended_score = norm_a * self.ensemble_weight_a + norm_b * self.ensemble_weight_b
+
+        return avg_rank, blended_score
+
+    def generate(
+        self,
+        date: pd.Timestamp,
+        universe: List[str],
+        data: Dict
+    ) -> Dict[str, float]:
+        """生成 Ensemble 信号"""
+        # 加载两个模型
+        self._load_model()
+        self._load_model_b()
+
+        # 获取当日特征数据
+        if "features" not in data:
+            logger.warning(f"{date.date()} 没有特征数据")
+            return {}
+
+        features_df = data["features"]
+        if features_df is None or len(features_df) == 0:
+            logger.warning(f"{date.date()} 特征数据为空")
+            return {}
+
+        # 过滤股票池
+        features_df = features_df[features_df['ts_code'].isin(universe)].copy()
+        if len(features_df) == 0:
+            return {}
+
+        # 应用选股过滤
+        features_df = self._apply_selection_filters(features_df)
+        if len(features_df) == 0:
+            return {}
+
+        # 特征一致性检查（两个模型都检查）
+        available_features = features_df.columns.tolist()
+        self.registry.check_feature_consistency(self.metadata, available_features)
+        self.registry.check_feature_consistency(self.metadata_b, available_features)
+
+        # 集成预测
+        avg_rank, blended_score = self._ensemble_predict(features_df)
+
+        # 按综合排名选 Top N（排名值越小越好）
+        features_df['ensemble_rank'] = avg_rank.values
+        features_df['blended_score'] = blended_score.values
+        features_df = features_df.sort_values('ensemble_rank', ascending=True)
+        top_stocks = features_df.head(self.top_n)
+
+        if self.verbose:
+            logger.info(
+                f"  Ensemble TOP抽样: {top_stocks[['ts_code', 'ensemble_rank', 'blended_score']].head(3).to_string(index=False).replace(chr(10), ' | ')}"
+            )
+
+        if len(top_stocks) == 0:
+            return {}
+
+        # 分配权重
+        if self.weight_method == "equal":
+            weight = 1.0 / len(top_stocks)
+            signals = {stock: weight for stock in top_stocks['ts_code'].tolist()}
+        elif self.weight_method == "score":
+            # score 模式下用归一化加权分数作为权重
+            scores = top_stocks['blended_score'].values
+            total_score = scores.sum()
+            if total_score > 0:
+                weights = scores / total_score
+            else:
+                weights = np.full(len(scores), 1.0 / len(scores))
+            signals = dict(zip(top_stocks['ts_code'].tolist(), weights))
+        else:
+            raise ValueError(f"不支持的权重方法: {self.weight_method}")
+
+        return signals
+
+    def generate_ranked(
+        self,
+        date: pd.Timestamp,
+        universe: List[str],
+        data: Dict
+    ) -> List[tuple]:
+        """生成排序后的候选股票列表（集成版本）"""
+        # 加载两个模型
+        self._load_model()
+        self._load_model_b()
+
+        if "features" not in data:
+            return []
+
+        features_df = data["features"]
+        if features_df is None or len(features_df) == 0:
+            return []
+
+        features_df = features_df[features_df['ts_code'].isin(universe)].copy()
+        if len(features_df) == 0:
+            return []
+
+        features_df = self._apply_selection_filters(features_df)
+        if len(features_df) == 0:
+            return []
+
+        available_features = features_df.columns.tolist()
+        self.registry.check_feature_consistency(self.metadata, available_features)
+        self.registry.check_feature_consistency(self.metadata_b, available_features)
+
+        # 集成预测
+        avg_rank, blended_score = self._ensemble_predict(features_df)
+        features_df['ensemble_rank'] = avg_rank.values
+        features_df['blended_score'] = blended_score.values
+        features_df = features_df.sort_values('ensemble_rank', ascending=True)
+
+        if self.verbose:
+            logger.info(
+                f"  Ensemble排序候选生成: {date.date()}, "
+                f"#候选数 {len(features_df)}, "
+                f"blended_score[{features_df['blended_score'].max():.3f}/{features_df['blended_score'].min():.3f}]"
+            )
+
+        # 返回 (股票代码, blended_score) — 归一化加权分数，正数且有区分度
+        # 按 ensemble_rank 排序（已排好），score 用于下游 score 加权
+        ranked = list(zip(
+            features_df['ts_code'].tolist(),
+            features_df['blended_score'].tolist()
+        ))
+        return ranked
+
+    def get_model_info(self) -> Dict:
+        """获取集成模型信息"""
+        self._load_model()
+        self._load_model_b()
+        info = self.metadata.copy()
+        info['ensemble'] = True
+        info['model_a_version'] = self.metadata['version_str']
+        info['model_b_version'] = self.metadata_b['version_str']
+        info['ensemble_weight_a'] = self.ensemble_weight_a
+        info['ensemble_weight_b'] = self.ensemble_weight_b
+        return info

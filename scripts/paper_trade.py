@@ -67,6 +67,8 @@ def run_config(args):
         'equity_curve_ma_long': args.equity_curve_ma_long,
         'equity_curve_recovery_mode': args.equity_curve_recovery_mode,
         'equity_curve_recovery_step': args.equity_curve_recovery_step,
+        'model_version_b': args.model_version_b,
+        'ensemble_weight_a': args.ensemble_weight_a,
     }
     
     # 保存配置
@@ -126,8 +128,23 @@ def run_main(args):
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
     logger.info("=" * 80)
     
-    # 2. 创建运行器
+    # 2. 创建运行器（如果配置了双模型集成，预创建 signal）
+    signal = None
+    model_version_b = config.get('model_version_b')
+    if model_version_b is not None:
+        from src.lazybull.signals import EnsembleMLSignal
+        signal = EnsembleMLSignal(
+            model_version_a=config.get('model_version'),
+            model_version_b=model_version_b,
+            ensemble_weight_a=config.get('ensemble_weight_a', 0.5),
+            top_n=config['top_n'],
+            weight_method=config['weight_method'],
+            verbose=False,
+        )
+        logger.info(f"使用双模型集成: model_a=v{config.get('model_version')}, model_b=v{model_version_b}")
+
     runner = PaperTradingRunner(
+        signal=signal,
         initial_capital=config['initial_capital'],
         weight_method=config['weight_method'],
         horizon=config['horizon'],
@@ -1453,6 +1470,18 @@ def main():
         '--model-version',
         type=int,
         help='ML模型版本（可选）'
+    )
+    config_parser.add_argument(
+        '--model-version-b',
+        type=int,
+        default=None,
+        help='第二个模型版本号（用于集成），指定后自动启用双模型 Ensemble'
+    )
+    config_parser.add_argument(
+        '--ensemble-weight-a',
+        type=float,
+        default=0.5,
+        help='集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5'
     )
     config_parser.add_argument(
         '--horizon',

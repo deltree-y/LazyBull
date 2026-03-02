@@ -51,6 +51,7 @@ from src.lazybull.ml.train_core import (
     transform_labels_cs_zscore,
     generate_classification_labels,
     train_xgboost_model,
+    train_lightgbm_model,
     evaluate_validation_daily,
     build_rank_sample_weights,
 )
@@ -152,7 +153,18 @@ def execute_split_training(
     # 5. 训练模型
     skip_label_winsorize = (args.task == "regression" and args.label_transform == "cs_zscore")
 
-    model, train_params, train_metrics, val_metrics = train_xgboost_model(
+    # 根据算法选择训练函数
+    algorithm = getattr(args, 'algorithm', 'xgboost')
+    train_fn = train_lightgbm_model if algorithm == "lightgbm" else train_xgboost_model
+
+    # num_leaves 仅 LightGBM 使用
+    extra_kwargs = {}
+    if algorithm == "lightgbm":
+        num_leaves_val = getattr(args, 'num_leaves', None)
+        if num_leaves_val is not None:
+            extra_kwargs["num_leaves"] = num_leaves_val
+
+    model, train_params, train_metrics, val_metrics = train_fn(
         X_train, y_train, X_val, y_val,
         task=args.task,
         skip_label_winsorize=skip_label_winsorize,
@@ -168,6 +180,7 @@ def execute_split_training(
         reg_alpha=args.reg_alpha,
         reg_lambda=args.reg_lambda,
         gamma=args.gamma,
+        **extra_kwargs,
     )
     
     # 6. 验证集逐日评估（用于内部评估）
@@ -247,6 +260,7 @@ def execute_split_training(
     # 准备完整的训练参数
     full_train_params = train_params.copy()
     full_train_params.update({
+        "algorithm": algorithm,
         "task": args.task,
         "label_transform": args.label_transform if args.task == "regression" else None,
         "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else None,
@@ -258,7 +272,7 @@ def execute_split_training(
     # 注册模型
     version = registry.register_model(
         model=model,
-        model_type=f"xgboost_{args.task}_wf",
+        model_type=f"{algorithm}_{args.task}_wf",
         train_start_date=split.train_start,
         train_end_date=split.train_end,
         feature_columns=feature_columns,
@@ -376,6 +390,7 @@ def create_training_run_record_from_training_session(
     # XGBoost超参数
     record.n_estimators = train_params.get("n_estimators", 0)
     record.max_depth = train_params.get("max_depth", 0)
+    record.num_leaves = train_params.get("num_leaves", 0)
     record.learning_rate = train_params.get("learning_rate", 0.0)
     record.subsample = train_params.get("subsample", 0.0)
     record.colsample_bytree = train_params.get("colsample_bytree", 0.0)
@@ -476,6 +491,7 @@ def write_walk_forward_summary(
         "wf_run_id": wf_run_id,
         "wf_start_date": args.wf_start_date,
         "wf_end_date": args.wf_end_date,
+        "algorithm": args.algorithm,
         "step": args.step,
         "train_window_years": args.train_window_years,
         "test_window_months": args.test_window_months,
@@ -485,6 +501,7 @@ def write_walk_forward_summary(
         "label_transform": args.label_transform if args.task == "regression" else None,
         "n_estimators": args.n_estimators,
         "max_depth": args.max_depth,
+        "num_leaves": getattr(args, 'num_leaves', None),
         "learning_rate": args.learning_rate,
         "subsample": args.subsample,
         "colsample_bytree": args.colsample_bytree,
@@ -634,6 +651,15 @@ def main():
         help="分类任务正类权重，None 表示自动计算为 neg/pos（默认）"
     )
     
+    # 算法选择
+    parser.add_argument(
+        "--algorithm",
+        type=str,
+        default="xgboost",
+        choices=["xgboost", "lightgbm"],
+        help="训练算法（xgboost|lightgbm），默认 xgboost"
+    )
+
     # 模型参数
     parser.add_argument(
         "--n-estimators",
@@ -646,6 +672,12 @@ def main():
         type=int,
         default=8,
         help="树的最大深度，默认 8"
+    )
+    parser.add_argument(
+        "--num-leaves",
+        type=int,
+        default=None,
+        help="LightGBM 叶子数，默认 31。仅 LightGBM 有效，XGBoost 忽略此参数"
     )
     parser.add_argument(
         "--learning-rate",

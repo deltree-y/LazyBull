@@ -1,11 +1,12 @@
 """Signals模块初始化"""
 
 from .base import EqualWeightSignal, FactorSignal, Signal
-from .ml_signal import MLSignal
+from .ml_signal import MLSignal, EnsembleMLSignal
 
 __all__ = [
     "Signal",
     "EqualWeightSignal",
     "FactorSignal",
     "MLSignal",
+    "EnsembleMLSignal",
 ]

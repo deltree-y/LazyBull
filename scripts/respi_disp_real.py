@@ -144,6 +144,33 @@ def _render(oled: OledDevice, summary: dict | None, last_update_time: str,
 
     oled.refresh()
 
+# --------- 市场时间判断 ----------
+def is_market_open():
+    # 1. 获取当前系统时间
+    now = datetime.now()
+    
+    # 2. 判断是否是周末 (0-4 是周一到周五，5-6 是周六日)
+    if now.weekday() >= 5:
+        return False, "今天是非交易日（周末）"
+
+    # 3. 将当前时间提取为 time 对象，方便直接比较
+    current_time = now.time()
+    
+    # 定义交易时段
+    morning_start = time(9, 15)
+    morning_end = time(11, 45)
+    afternoon_start = time(12, 45)
+    afternoon_end = time(15, 15)
+
+    # 4. 判断逻辑
+    is_morning = morning_start <= current_time <= morning_end
+    is_afternoon = afternoon_start <= current_time <= afternoon_end
+
+    if is_morning or is_afternoon:
+        return True # "市场正在交易中"
+    else:
+        return False # "当前不在交易时间段"
+
 
 # ---------- 后台刷新线程 ----------
 
@@ -180,12 +207,11 @@ def _worker(oled: OledDevice, stop_event: threading.Event) -> None:
         # ---- 获取实时数据 ----
         # 仅在工作日的交易时段获取数据，非交易时段保留上次数据继续显示，避免频繁请求失败。
         try:
-            if weekday < 5:  # 仅工作日获取数据
-                if (hour > 9 and hour < 12) or (hour > 13 and hour < 15): # 仅交易时段获取数据
-                    summary = get_realtime_portfolio_summary()
-                    if summary is not None:
-                        last_summary = summary
-                        last_update_time = datetime.now().strftime("%H:%M")
+            if is_market_open():
+                summary = get_realtime_portfolio_summary()
+                if summary is not None:
+                    last_summary = summary
+                    last_update_time = datetime.now().strftime("%H:%M")
         except Exception:
             pass  # 保留 last_summary，下次循环重试
 
