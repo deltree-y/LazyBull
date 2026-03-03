@@ -22,6 +22,8 @@ import signal
 import threading
 from pathlib import Path
 from datetime import datetime
+import time as t_module
+from datetime import time as dt_time
 
 # ---------- 路径设置 ----------
 project_root = Path(__file__).parent.parent
@@ -157,10 +159,10 @@ def is_market_open():
     current_time = now.time()
     
     # 定义交易时段
-    morning_start = time(9, 15)
-    morning_end = time(11, 45)
-    afternoon_start = time(12, 45)
-    afternoon_end = time(15, 15)
+    morning_start = dt_time(9, 15)
+    morning_end = dt_time(11, 45)
+    afternoon_start = dt_time(12, 45)
+    afternoon_end = dt_time(15, 15)
 
     # 4. 判断逻辑
     is_morning = morning_start <= current_time <= morning_end
@@ -251,7 +253,7 @@ def main() -> None:
     # 主线程只做看门狗
     try:
         while not stop_event.is_set():
-            time.sleep(1)
+            t_module.sleep(1)
     finally:
         oled.close()
 

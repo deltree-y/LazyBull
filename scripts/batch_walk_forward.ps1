@@ -30,9 +30,9 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(6)         # XGB推荐9, LGB推荐6
-$num_leaves_list         = @(31,63,127)        # 仅LightGBM有效，XGBoost忽略。LGB推荐31
-$learning_rate_list      = @(0.01)      # XGB推荐0.005, LGB推荐0.01
+$max_depth_list          = @(5)         # XGB推荐9, LGB推荐6
+$num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐31
+$learning_rate_list      = @(0.01,0.0075,0.005)      # XGB推荐0.005, LGB推荐0.01
 $subsample_list          = @(0.7)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(200)       # XGB推荐150, LGB推荐200
