@@ -13,6 +13,10 @@ from dingtalk_stream import DingTalkStreamClient, Credential, AckMessage    # ty
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+# 加载 .env 文件中的环境变量
+from dotenv import load_dotenv  # type: ignore
+load_dotenv(project_root / ".env")
+
 import pandas as pd
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.paper import PaperTradingRunner, PaperStorage
@@ -481,6 +485,9 @@ class SimpleHandler(dts.ChatbotHandler):
 
 
 def main():
+    if APP_KEY is None or APP_SECRET is None:
+        print("错误: 请在环境变量中设置 APP_KEY 和 APP_SECRET")
+        return
     credential = Credential(APP_KEY, APP_SECRET)
     client = DingTalkStreamClient(credential)
     # ChatbotMessage.TOPIC 就是 "/v1.0/im/bot/messages/get"
