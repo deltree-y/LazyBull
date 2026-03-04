@@ -37,6 +37,15 @@ from src.lazybull.ml.eval_utils import (
     print_diagnostic_report
 )
 
+# 基本面因子特征列（行业 z-score 后的列名）
+FUNDAMENTAL_FEATURE_COLUMNS = [
+    "zscore_roe_waa",          # 加权平均ROE
+    "zscore_or_yoy",           # 营业收入同比增速
+    "zscore_netprofit_yoy",    # 净利润同比增速
+    "zscore_debt_to_assets",   # 资产负债率
+    "zscore_q_gr_yoy",         # 单季度营收同比增速
+]
+
 
 def load_features_data(
     storage: Storage,
@@ -170,7 +179,8 @@ def prepare_training_data(
     df: pd.DataFrame,
     label_column: str = "neu_y_ret_20",
     val_ratio: float = 0.2,
-    label_transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None
+    label_transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
+    enable_fundamental_features: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
 
@@ -270,7 +280,16 @@ def prepare_training_data(
         "mkt_turnover_std",        # 市场成交额波动
         "mkt_vol_20",              # 市场总体成交量
     ]
-    
+
+    # 基本面因子（可选）
+    if enable_fundamental_features:
+        available_funda = [col for col in FUNDAMENTAL_FEATURE_COLUMNS if col in df.columns]
+        if available_funda:
+            feature_columns.extend(available_funda)
+            logger.info(f"启用基本面因子: {available_funda}")
+        else:
+            logger.warning("enable_fundamental_features=True，但数据中未找到基本面列，跳过")
+
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
     
@@ -706,8 +725,8 @@ def train_xgboost_model(
     importance = model.feature_importances_
     feature_names = X_train.columns
     feat_imp = pd.Series(importance, index=feature_names).sort_values(ascending=False)
-    logger.info(f"Model Top 20 Features:")
-    logger.warning(f"\n{feat_imp.head(20)}")
+    logger.info(f"Model Features sorted:")
+    logger.warning(f"\n{feat_imp.head(len(feat_imp)).to_string(float_format='%.3f')}")
 
     # 计算训练集性能指标
     # 使用 y_train_processed（winsorize 后）与预测值比较，保持与训练目标一致

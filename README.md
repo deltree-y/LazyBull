@@ -29,7 +29,31 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.14.0)
+### 当前版本 (v0.15.0)
+
+**基本面因子系统 + 行业/组合约束 + 钉钉机器人交易** (v0.15.0 新增):
+- ✅ **基本面因子系统（全新模块）**：
+  - 新增 `src/lazybull/factors/fundamental.py`：季度财务指标（fina_indicator）按 ann_date 前向填充到日频，防止前视偏差
+  - 5个因子：`roe_waa`（加权ROE）、`or_yoy`（营收增速）、`netprofit_yoy`（净利增速）、`debt_to_assets`（资产负债率）、`q_gr_yoy`（单季营收增速）
+  - 新增 `scripts/download_fina_indicator.py`：全市场财务指标下载（支持断点续传 `--resume`）
+  - `TushareClient.get_fina_indicator()` / `DataLoader.load_fina_indicator()` 新增
+  - `FeatureBuilder._add_fundamental_features()` 自动合并到截面特征
+  - 训练脚本 `--enable-fundamental-features` 开关：`train_ml_model.py` / `walk_forward.py` / `build_features.py` / `build_clean_features.py` 均支持
+- ✅ **行业约束 + 组合约束接入纸面交易**：
+  - `paper_trade.py config` 新增 `--max-per-industry`、`--max-weight-per-stock`、`--exclude-st` / `--no-exclude-st`、`--min-list-days` 参数
+  - `PaperTradingRunner` 信号生成 / T0 / 补位均传递行业约束和单股权重上限
+  - `industry_constraint.py` 优先使用 `sw_l2`（申万二级）行业分类
+- ✅ **钉钉机器人增强（`bot_service.py`）**：
+  - 新增 `positions [日期]` 命令：手机友好的 Markdown 持仓展示（按收益率排序）
+  - 新增 `trade [日期]` 命令：异步执行交易流程（止损→延迟卖出→T1→T0），完成后推送结果
+  - 新增 `help` 命令：显示所有可用命令
+  - `execute_trade()` 复用 paper_trade.py 核心逻辑，无需登录服务器即可远程交易
+- ✅ **其他改进**：
+  - `paper_trade.py`: horizon 默认值 5→20
+  - `train_core.py`: 特征重要度打印全部特征（不再限制 Top20）
+  - `compare_walk_forward.py`: 新增 `algorithm`（算法）列
+
+### v0.14.0
 
 **实时行情查看 + 树莓派 mini-LED 持仓显示** (v0.14.0 新增):
 - ✅ **`paper_trade.py real` 子命令**：一键查看持仓实时行情，支持 `--ret-profit-only` 精简单行输出

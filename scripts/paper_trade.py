@@ -69,6 +69,10 @@ def run_config(args):
         'equity_curve_recovery_step': args.equity_curve_recovery_step,
         'model_version_b': args.model_version_b,
         'ensemble_weight_a': args.ensemble_weight_a,
+        'max_per_industry': args.max_per_industry,
+        'max_weight_per_stock': args.max_weight_per_stock,
+        'exclude_st': args.exclude_st,
+        'min_list_days': args.min_list_days,
     }
     
     # 保存配置
@@ -126,6 +130,12 @@ def run_main(args):
     logger.info(f"  特征预测周期（horizon）: {config['horizon']} 天")
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
+    if config.get('max_per_industry'):
+        logger.info(f"  单行业最大持仓: {config['max_per_industry']}")
+    if config.get('max_weight_per_stock'):
+        logger.info(f"  单股最大权重: {config['max_weight_per_stock']:.2%}")
+    logger.info(f"  排除ST: {config.get('exclude_st', True)}")
+    logger.info(f"  最少上市天数: {config.get('min_list_days', 365)}")
     logger.info("=" * 80)
     
     # 2. 创建运行器（如果配置了双模型集成，预创建 signal）
@@ -624,7 +634,10 @@ def _handle_failed_buys(
             universe_type=config['universe'],
             model_version=config.get('model_version'),
             buy_price_type=config['buy_price'],
-            original_signal_date=trade_date
+            original_signal_date=trade_date,
+            max_per_industry=config.get('max_per_industry'),
+            exclude_st=config.get('exclude_st', True),
+            min_list_days=config.get('min_list_days', 365),
         )
         
         if replacement_targets:
@@ -733,7 +746,11 @@ def _execute_t0_if_rebalance_day(
             universe_type=config['universe'],
             top_n=config['top_n'],
             model_version=config.get('model_version'),
-            rebalance_freq=config['rebalance_freq']
+            rebalance_freq=config['rebalance_freq'],
+            max_per_industry=config.get('max_per_industry'),
+            max_weight_per_stock=config.get('max_weight_per_stock'),
+            exclude_st=config.get('exclude_st', True),
+            min_list_days=config.get('min_list_days', 365),
         )
         
         # 获取下一交易日
@@ -1484,10 +1501,40 @@ def main():
         help='集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5'
     )
     config_parser.add_argument(
+        '--max-per-industry',
+        type=int,
+        default=None,
+        help='单行业最大持仓数量（默认：不限制）'
+    )
+    config_parser.add_argument(
+        '--max-weight-per-stock',
+        type=float,
+        default=None,
+        help='单股最大权重，如 0.05 表示 5%%（默认：不限制）'
+    )
+    config_parser.add_argument(
+        '--exclude-st',
+        action='store_true',
+        default=True,
+        help='排除ST股票（默认：启用）'
+    )
+    config_parser.add_argument(
+        '--no-exclude-st',
+        action='store_false',
+        dest='exclude_st',
+        help='不排除ST股票'
+    )
+    config_parser.add_argument(
+        '--min-list-days',
+        type=int,
+        default=365,
+        help='最少上市天数（默认：365）'
+    )
+    config_parser.add_argument(
         '--horizon',
         type=int,
-        default=5,
-        help='特征构建的预测周期（天数），用于生成 y_ret_N 特征（默认：5）'
+        default=20,
+        help='特征构建的预测周期（天数），用于生成 y_ret_N 特征（默认20）'
     )
     config_parser.add_argument(
         '--universe',

@@ -137,7 +137,8 @@ def execute_split_training(
             d, label_column=actual_label_column, winsorize_p=args.winsorize_p
         )
     X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original = prepare_training_data(
-        df_train, actual_label_column, val_ratio=args.val_ratio, label_transform_fn=label_transform_fn
+        df_train, actual_label_column, val_ratio=args.val_ratio, label_transform_fn=label_transform_fn,
+        enable_fundamental_features=args.enable_fundamental_features,
     )
 
     # 4.1. 构造样本权重（rank-weight：Top/Bottom K 增强）
@@ -512,6 +513,7 @@ def write_walk_forward_summary(
         "rank_weight_enabled": args.rank_weight_enabled,
         "rank_weight_topk": args.rank_weight_topk,
         "rank_weight": args.rank_weight,
+        "enable_fundamental": args.enable_fundamental_features,
     }
 
     # 提取每个 split 的关键指标
@@ -752,6 +754,13 @@ def main():
         type=float,
         default=5.0,
         help="Top/Bottom K 样本权重，默认 5.0"
+    )
+
+    # 基本面因子
+    parser.add_argument(
+        "--enable-fundamental-features",
+        action="store_true",
+        help="启用基本面因子（ROE、营收增速等）作为训练特征"
     )
 
     # 其他参数

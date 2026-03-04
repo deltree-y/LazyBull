@@ -395,7 +395,7 @@ class DataLoader:
     
     def load_shenwan_industry(self) -> Optional[pd.DataFrame]:
         """加载申万行业分类数据
-        
+
         Returns:
             申万行业分类DataFrame，包含 ts_code, sw_code, sw_name 等字段
         """
@@ -405,4 +405,26 @@ class DataLoader:
                 "未找到申万行业分类数据！\n"
                 "请先运行: python scripts/update_basic_data.py --only-shenwan --force"
             )
+        return df
+
+    def load_fina_indicator(self) -> Optional[pd.DataFrame]:
+        """加载财务指标数据（fina_indicator）
+
+        Returns:
+            财务指标DataFrame，包含 ts_code, ann_date, end_date, roe_waa 等字段。
+            不存在返回 None。
+        """
+        df = self.storage.load_raw("fina_indicator")
+        if df is None:
+            logger.warning(
+                "未找到财务指标数据！\n"
+                "请先运行: python scripts/download_fina_indicator.py"
+            )
+            return None
+
+        # 日期列标准化为 YYYYMMDD 字符串
+        for col in ['ann_date', 'end_date']:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.replace('-', '').str[:8]
+
         return df

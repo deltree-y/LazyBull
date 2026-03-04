@@ -83,6 +83,7 @@ COL_NAMES = {
     "rank_weight_enabled":        "rank权重启用",
     "rank_weight_topk":           "rank权重TopK",
     "rank_weight":                "rank权重值",
+    "algorithm":                  "算法",
 }
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ COL_NAMES = {
 # ---------------------------------------------------------------------------
 PARAM_COLS = [
     "wf_run_id",
+    "algorithm",
     "wf_start_date", "wf_end_date", "step",
     "train_window_years", "test_window_months", "val_ratio",
     "label_column", "task", "label_transform",

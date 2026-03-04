@@ -17,6 +17,7 @@ from ..features import FeatureBuilder, ensure_features_for_date
 from ..signals.base import Signal
 from ..signals.ml_signal import MLSignal
 from ..universe.base import BasicUniverse
+from ..portfolio.industry_constraint import load_industry_mapping, apply_industry_constraint
 from .account import PaperAccount
 from .broker import PaperBroker
 from .models import NAVRecord, TargetWeight, TradeInstruction
@@ -288,10 +289,14 @@ class PaperTradingRunner:
         universe_type: str = 'mainboard',
         top_n: int = 5,
         model_version: Optional[int] = None,
-        rebalance_freq: int = 5
+        rebalance_freq: int = 5,
+        max_per_industry: Optional[int] = None,
+        max_weight_per_stock: Optional[float] = None,
+        exclude_st: bool = True,
+        min_list_days: int = 365,
     ) -> None:
         """T0工作流：拉取数据 + 生成T1待执行目标
-        
+
         Args:
             trade_date: 交易日期 YYYYMMDD（T0日期）
             buy_price_type: T1买入价格类型 open/close
@@ -300,6 +305,10 @@ class PaperTradingRunner:
             top_n: 持仓股票数
             model_version: ML模型版本（可选）
             rebalance_freq: 调仓频率（交易日数）
+            max_per_industry: 单行业最大持仓数量（可选）
+            max_weight_per_stock: 单股最大权重（可选）
+            exclude_st: 是否排除ST股票
+            min_list_days: 最少上市天数
         """
         # 1. 校正交易日期
         corrected_date = self._correct_trade_date(trade_date)
@@ -336,7 +345,11 @@ class PaperTradingRunner:
             universe_type=universe_type,
             top_n=top_n,
             model_version=model_version,
-            buy_price_type=buy_price_type
+            buy_price_type=buy_price_type,
+            max_per_industry=max_per_industry,
+            max_weight_per_stock=max_weight_per_stock,
+            exclude_st=exclude_st,
+            min_list_days=min_list_days,
         )
         
         if not targets:
@@ -830,17 +843,25 @@ class PaperTradingRunner:
         universe_type: str = 'mainboard',
         top_n: int = 5,
         model_version: Optional[int] = None,
-        buy_price_type: str = 'close'
+        buy_price_type: str = 'close',
+        max_per_industry: Optional[int] = None,
+        max_weight_per_stock: Optional[float] = None,
+        exclude_st: bool = True,
+        min_list_days: int = 365,
     ) -> List[TargetWeight]:
         """生成信号
-        
+
         Args:
             trade_date: 交易日期 YYYYMMDD
             universe_type: 股票池类型
             top_n: 持仓股票数
             model_version: ML模型版本（可选）
             buy_price_type: T1买入价格类型 open/close（用于一手可买约束）
-            
+            max_per_industry: 单行业最大持仓数量（可选）
+            max_weight_per_stock: 单股最大权重（可选）
+            exclude_st: 是否排除ST股票
+            min_list_days: 最少上市天数
+
         Returns:
             目标权重列表
         """
@@ -864,9 +885,12 @@ class PaperTradingRunner:
             logger.error("无法加载stock_basic数据")
             return []
         
-        # 创建股票池（仅主板）
-        universe = self._create_universe(stock_basic, universe_type)
-        
+        # 创建股票池
+        universe = self._create_universe(
+            stock_basic, universe_type,
+            exclude_st=exclude_st, min_list_days=min_list_days,
+        )
+
         # 加载价格数据
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
         signal_data = self.storage.load_cs_train_day(trade_date).copy()
@@ -899,6 +923,11 @@ class PaperTradingRunner:
                 from ..signals.base import EqualWeightSignal
                 self.signal = EqualWeightSignal(top_n=top_n)
         
+        # 加载行业映射（如果启用行业约束）
+        industry_mapping = {}
+        if max_per_industry and max_per_industry > 0:
+            industry_mapping = load_industry_mapping(stock_basic, verbose=True)
+
         # 生成信号
         try:
             # 如果是等权策略且信号生成器是MLSignal，则使用generate_ranked获取排序候选并应用一手可买约束
@@ -909,7 +938,9 @@ class PaperTradingRunner:
                     signal_data,
                     daily_data,
                     top_n,
-                    buy_price_type
+                    buy_price_type,
+                    max_per_industry=max_per_industry,
+                    industry_mapping=industry_mapping,
                 )
             else:
                 # 其他情况（score加权或非MLSignal），使用原有逻辑
@@ -921,7 +952,16 @@ class PaperTradingRunner:
         except Exception as e:
             logger.error(f"信号生成失败: {e}")
             return []
-        
+
+        # 应用单股最大权重限制
+        if max_weight_per_stock is not None and signal_dict:
+            from ..portfolio import cap_and_normalize_weights
+            signal_dict = cap_and_normalize_weights(
+                signal_dict,
+                max_weight_per_stock=max_weight_per_stock,
+                verbose=True,
+            )
+
         # 转换为目标权重，并增强信息
         targets = self._enhance_target_info(
             signal_dict,
@@ -944,13 +984,15 @@ class PaperTradingRunner:
         signal_data: pd.DataFrame,
         daily_data: pd.DataFrame,
         top_n: int,
-        buy_price_type: str
+        buy_price_type: str,
+        max_per_industry: Optional[int] = None,
+        industry_mapping: Optional[Dict[str, str]] = None,
     ) -> Dict[str, float]:
-        """等权策略下生成信号（含一手可买约束和顺延补足）
-        
+        """等权策略下生成信号（含行业约束 + 一手可买约束和顺延补足）
+
         对等权策略启用"一手可买约束"：如果按资金分配给某股票的金额不足以买入100股（1手），
         则跳过该股票并从候选中顺延选择下一只，直到凑足top_n个可买股票或候选耗尽。
-        
+
         Args:
             date: 当前日期
             stocks: 股票池
@@ -958,7 +1000,9 @@ class PaperTradingRunner:
             daily_data: 日线数据（包含价格）
             top_n: 目标股票数
             buy_price_type: T1买入价格类型 open/close
-            
+            max_per_industry: 单行业最大持仓数量（可选）
+            industry_mapping: 行业映射字典（可选）
+
         Returns:
             信号字典 {股票代码: 权重}
         """
@@ -968,13 +1012,25 @@ class PaperTradingRunner:
             stocks,
             {'features': signal_data}
         )
-        
+
         if not ranked_candidates:
             logger.warning(f"{date.date()} 未获取到排序候选")
             return {}
-        
+
         original_count = len(ranked_candidates)
-        logger.info(f"等权+一手约束: 原始排序候选数 {original_count}")
+
+        # 应用行业约束（在一手约束之前）
+        if max_per_industry and max_per_industry > 0 and industry_mapping:
+            ranked_candidates = apply_industry_constraint(
+                ranked_candidates=ranked_candidates,
+                industry_mapping=industry_mapping,
+                max_per_industry=max_per_industry,
+                target_n=top_n * 3,  # 多选一些候选，后续一手约束还会筛掉
+                verbose=True,
+            )
+            logger.info(f"行业约束后候选数: {len(ranked_candidates)} (原始 {original_count})")
+
+        logger.info(f"等权+一手约束: 排序候选数 {len(ranked_candidates)}")
         
         # 构建价格映射（使用 buy_price_type 指定的价格列）
         price_col = buy_price_type  # 'open' 或 'close'
@@ -1051,36 +1107,37 @@ class PaperTradingRunner:
         
         return signal_dict
     
-    def _create_universe(self, stock_basic: pd.DataFrame, universe_type: str) -> BasicUniverse:
+    def _create_universe(
+        self, stock_basic: pd.DataFrame, universe_type: str,
+        exclude_st: bool = True, min_list_days: int = 365,
+    ) -> BasicUniverse:
         """创建股票池
-        
+
         Args:
             stock_basic: 股票基本信息
             universe_type: 股票池类型
-            
+            exclude_st: 是否排除ST股票
+            min_list_days: 最少上市天数
+
         Returns:
             股票池实例
         """
         if universe_type == 'mainboard':
-            # 仅沪深主板
-            # 过滤逻辑：保留 ts_code 以 SH/SZ 开头，排除科创板、创业板、北交所
-            # market 字段通常为 "主板"、"创业板"、"科创板" 等
-            # 保守过滤：仅保留 market == "主板"
             mainboard_stocks = stock_basic[stock_basic['market'] == '主板'].copy()
             logger.info(f"主板股票数: {len(mainboard_stocks)} / {len(stock_basic)}")
-            
+
             return BasicUniverse(
                 stock_basic=mainboard_stocks,
-                exclude_st=True,
-                min_list_days=365,
+                exclude_st=exclude_st,
+                min_list_days=min_list_days,
                 verbose=self.verbose,
             )
         else:
             # 默认全市场
             return BasicUniverse(
                 stock_basic=stock_basic,
-                exclude_st=True,
-                min_list_days=365,
+                exclude_st=exclude_st,
+                min_list_days=min_list_days,
                 verbose=self.verbose,
             )
     
@@ -1410,13 +1467,16 @@ class PaperTradingRunner:
         universe_type: str = 'mainboard',
         model_version: Optional[int] = None,
         buy_price_type: str = 'close',
-        original_signal_date: str = ""
+        original_signal_date: str = "",
+        max_per_industry: Optional[int] = None,
+        exclude_st: bool = True,
+        min_list_days: int = 365,
     ) -> List[TargetWeight]:
         """生成补位目标（当买入失败时使用）
-        
+
         使用现有的信号生成链路，从候选中选择 top_k（k=失败数量）的补位股票，
-        应用一手可买约束，生成新的目标权重列表。
-        
+        应用行业约束和一手可买约束，生成新的目标权重列表。
+
         Args:
             trade_date: 当前交易日期 YYYYMMDD（用于生成信号）
             failed_count: 失败买入的数量
@@ -1424,7 +1484,10 @@ class PaperTradingRunner:
             model_version: ML模型版本
             buy_price_type: 买入价格类型（用于一手约束检查）
             original_signal_date: 原始信号日期（T0日期）
-            
+            max_per_industry: 单行业最大持仓数量（可选）
+            exclude_st: 是否排除ST股票
+            min_list_days: 最少上市天数
+
         Returns:
             补位目标权重列表
         """
@@ -1458,8 +1521,11 @@ class PaperTradingRunner:
             return []
         
         # 创建股票池
-        universe = self._create_universe(stock_basic, universe_type)
-        
+        universe = self._create_universe(
+            stock_basic, universe_type,
+            exclude_st=exclude_st, min_list_days=min_list_days,
+        )
+
         # 3. 加载数据
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
         signal_data = self.storage.load_cs_train_day(trade_date).copy()
@@ -1495,6 +1561,11 @@ class PaperTradingRunner:
                 from ..signals.base import EqualWeightSignal
                 self.signal = EqualWeightSignal(top_n=failed_count)
         
+        # 加载行业映射（如果启用行业约束）
+        industry_mapping = {}
+        if max_per_industry and max_per_industry > 0:
+            industry_mapping = load_industry_mapping(stock_basic, verbose=True)
+
         # 6. 生成排序候选（使用与T0相同的逻辑）
         try:
             if isinstance(self.signal, MLSignal):
@@ -1505,7 +1576,9 @@ class PaperTradingRunner:
                     signal_data,
                     daily_data,
                     failed_count,
-                    buy_price_type
+                    buy_price_type,
+                    max_per_industry=max_per_industry,
+                    industry_mapping=industry_mapping,
                 )
             else:
                 signal_dict = self.signal.generate(

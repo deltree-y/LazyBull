@@ -41,6 +41,7 @@ from .normalization import (
 from .market_state import compute_market_state_features, precompute_market_state_features
 from .precompute_technical_factors import precompute_technical_factors
 from .returns import compute_ret_1
+from .fundamental import build_fundamental_lookup_by_date, FUNDA_COLS
 
 __all__ = [
     # 技术指标
@@ -71,4 +72,7 @@ __all__ = [
     'precompute_technical_factors',
     # 收益率构造工具
     'compute_ret_1',
+    # 基本面因子
+    'build_fundamental_lookup_by_date',
+    'FUNDA_COLS',
 ]

@@ -276,7 +276,8 @@ def build_features(
     builder: FeatureBuilder,
     start_date: str,
     end_date: str,
-    force: bool = False
+    force: bool = False,
+    enable_fundamental: bool = False,
 ) -> None:
     """构建特征数据
     
@@ -368,9 +369,23 @@ def build_features(
             logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
             moneyflow_clean = None
     
+    # 加载基本面数据（可选）
+    fundamental_lookup = None
+    if enable_fundamental:
+        from src.lazybull.factors.fundamental import build_fundamental_lookup_by_date
+        fina_indicator = loader.load_fina_indicator()
+        if fina_indicator is not None:
+            logger.info("构建基本面日频查询表...")
+            fundamental_lookup = build_fundamental_lookup_by_date(
+                fina_indicator, trading_dates_str
+            )
+        else:
+            logger.warning("未找到财务指标数据，基本面特征将被跳过。"
+                         "请先运行: python scripts/download_fina_indicator.py")
+
     # clean数据已包含复权价格
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
-    
+
     # 构建特征
     success_count = 0
     skip_count = 0
@@ -386,6 +401,11 @@ def build_features(
                 skip_count += 1
                 continue
             
+            # 获取当日基本面数据
+            funda_today = None
+            if fundamental_lookup is not None:
+                funda_today = fundamental_lookup.get(trade_date)
+
             # 构建特征
             features_df = builder.build_features_for_day(
                 trade_date=trade_date,
@@ -396,7 +416,8 @@ def build_features(
                 daily_basic_data=daily_basic_clean,
                 moneyflow_data=moneyflow_clean,
                 suspend_info=None,
-                limit_info=None
+                limit_info=None,
+                fundamental_data=funda_today,
             )
             
             # 保存结果
@@ -465,7 +486,12 @@ def main():
         default=5,
         help="（已废弃，使用 --horizons 参数）单个预测时间窗口（交易日）（默认：5）"
     )
-    
+    parser.add_argument(
+        "--enable-fundamental-features",
+        action="store_true",
+        help="启用基本面因子（ROE、营收增速等），需先下载 fina_indicator 数据"
+    )
+
     args = parser.parse_args()
     
     # 初始化日志
@@ -478,6 +504,7 @@ def main():
     logger.info(f"预测窗口: {args.horizons}")
     logger.info(f"强制重新构建: {'是' if args.force else '否'}")
     logger.info(f"跳过自动下载: {'是' if args.skip_download else '否'}")
+    logger.info(f"基本面因子: {'启用' if args.enable_fundamental_features else '禁用'}")
     logger.info("=" * 60)
     
     try:
@@ -521,7 +548,8 @@ def main():
         build_features(
             storage, loader, builder,
             args.start_date, args.end_date,
-            force=args.force
+            force=args.force,
+            enable_fundamental=args.enable_fundamental_features,
         )
         
         logger.info("=" * 60)

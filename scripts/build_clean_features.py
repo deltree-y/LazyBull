@@ -32,10 +32,11 @@ def build_clean_data(
     cleaner: DataCleaner,
     start_date: str,
     end_date: str,
-    force: bool = False
+    force: bool = False,
+    min_list_days: int = 365,
 ) -> None:
     """构建clean层数据
-    
+
     Args:
         storage: Storage实例
         loader: DataLoader实例
@@ -43,6 +44,7 @@ def build_clean_data(
         start_date: 开始日期，格式YYYYMMDD
         end_date: 结束日期，格式YYYYMMDD
         force: 是否强制重新构建
+        min_list_days: 最小上市天数
     """
     logger.info("=" * 60)
     logger.info("开始构建clean层数据")
@@ -128,7 +130,7 @@ def build_clean_data(
                 stock_basic_clean,
                 suspend_info_df=suspend_clean,
                 limit_info_df=limit_clean,
-                min_list_days=args.min_list_days
+                min_list_days=min_list_days
             )
 
             # 保存clean数据
@@ -174,9 +176,10 @@ def build_features_data(
     force: bool = False,
     shenwan_industry: pd.DataFrame = None,
     apply_industry_neutralization: bool = False,
+    enable_fundamental: bool = False,
 ) -> None:
     """构建features层数据
-    
+
     Args:
         storage: Storage实例
         loader: DataLoader实例
@@ -186,6 +189,7 @@ def build_features_data(
         force: 是否强制重新构建
         shenwan_industry: 申万行业数据（可选，启用中性化时必需）
         apply_industry_neutralization: 是否应用行业中性化
+        enable_fundamental: 是否启用基本面因子
     """
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
@@ -274,6 +278,20 @@ def build_features_data(
             logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
             moneyflow_clean = None
     
+    # 加载基本面数据（可选）
+    fundamental_lookup = None
+    if enable_fundamental:
+        from src.lazybull.factors.fundamental import build_fundamental_lookup_by_date
+        fina_indicator = loader.load_fina_indicator()
+        if fina_indicator is not None:
+            logger.info("构建基本面日频查询表...")
+            fundamental_lookup = build_fundamental_lookup_by_date(
+                fina_indicator, trading_dates_str
+            )
+        else:
+            logger.warning("未找到财务指标数据，基本面特征将被跳过。"
+                         "请先运行: python scripts/download_fina_indicator.py")
+
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
 
@@ -296,6 +314,11 @@ def build_features_data(
                 skip_count += 1
                 continue
             
+            # 获取当日基本面数据
+            funda_today = None
+            if fundamental_lookup is not None:
+                funda_today = fundamental_lookup.get(trade_date)
+
             # 构建特征
             features_df = builder.build_features_for_day(
                 trade_date=trade_date,
@@ -309,6 +332,7 @@ def build_features_data(
                 limit_info=None,
                 shenwan_industry=shenwan_industry if apply_industry_neutralization else None,
                 apply_industry_neutralization=apply_industry_neutralization,
+                fundamental_data=funda_today,
             )
             
             # 保存结果
@@ -380,7 +404,12 @@ def main():
         default=20,
         help="预测时间窗口（交易日）（默认：20）"
     )
-    
+    parser.add_argument(
+        "--enable-fundamental-features",
+        action="store_true",
+        help="启用基本面因子（ROE、营收增速等），需先下载 fina_indicator 数据"
+    )
+
     args = parser.parse_args()
     
     # 初始化日志
@@ -393,6 +422,7 @@ def main():
     logger.info(f"仅构建clean: {'是' if args.only_clean else '否'}")
     logger.info(f"仅构建features: {'是' if args.only_features else '否'}")
     logger.info(f"强制重新构建: {'是' if args.force else '否'}")
+    logger.info(f"基本面因子: {'启用' if args.enable_fundamental_features else '禁用'}")
     logger.info("=" * 60)
     
     try:
@@ -412,7 +442,8 @@ def main():
             build_clean_data(
                 storage, loader, cleaner,
                 args.start_date, args.end_date,
-                force=args.force
+                force=args.force,
+                min_list_days=args.min_list_days,
             )
         
         # 构建features数据
@@ -423,6 +454,7 @@ def main():
                 force=args.force,
                 shenwan_industry=shenwan_industry if args.enable_industry_neutralization else None,
                 apply_industry_neutralization=args.enable_industry_neutralization,
+                enable_fundamental=args.enable_fundamental_features,
             )
         
         logger.info("=" * 60)

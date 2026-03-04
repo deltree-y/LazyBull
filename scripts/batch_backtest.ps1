@@ -18,8 +18,8 @@ $endDate                 = Get-Date "2025-07-10"
 $backtest_end_date       = "20251231"         # 每组回测的结束日期
 
 # ── 模型与信号 ──────────────────────────────────────────────
-$mv_list                 = @(3167)            # 模型版本（模型A）
-$model_version_b         = $null              # 第二个模型版本号（集成模式），$null 表示不启用
+$mv_list                 = @(3299)#(3299)            # 模型版本（模型A）
+$model_version_b         = 3275#3275             # 第二个模型版本号（集成模式），$null 表示不启用
 $ensemble_weight_a       = 0.5                # 集成时模型A的排名权重（模型B = 1 - 该值）
 
 # ── 选股与调仓 ──────────────────────────────────────────────
@@ -30,7 +30,7 @@ $weight_method           = "score"            # 权重方法：equal | score
 
 # ── 组合约束 ────────────────────────────────────────────────
 $max_weight_per_stock    = 0.04               # 单票最大权重，$null 表示不限
-$max_per_industry        = 4                  # 单行业最大持仓数，$null 表示不限
+$max_per_industry        = 3                  # 单行业最大持仓数，$null 表示不限
 
 # ── 止损配置 ────────────────────────────────────────────────
 $stop_loss_enabled       = $true              # $true 启用 | $false 禁用
@@ -40,7 +40,7 @@ $stop_loss_drawdown_pct  = 30                 # 回撤止损阈值（%）
 $equity_curve_enabled    = $false             # $true 启用 | $false 禁用
 
 # ── 输出 ────────────────────────────────────────────────────
-$output_name             = "batch_test"       # 报告输出名称
+$output_name             = "dual"       # 报告输出名称
 
 # ── 全部完成后是否倒计时关机 ────────────────────────────────
 $shutdown_on_complete    = $false

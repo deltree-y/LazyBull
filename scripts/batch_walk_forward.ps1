@@ -23,27 +23,30 @@ $train_window_years_list = @(7)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
 
 # ── 标签与任务 ────────────────────────────────────────────────
-$algorithm_list          = @("lightgbm")        # xgboost | lightgbm（训练算法）
+$algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
 $label_list              = @("neu_y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(5)         # XGB推荐9, LGB推荐6
-$num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐31
-$learning_rate_list      = @(0.01,0.0075,0.005)      # XGB推荐0.005, LGB推荐0.01
-$subsample_list          = @(0.7)       # XGB推荐0.8, LGB推荐0.7
+$max_depth_list          = @(9)         # XGB推荐9, LGB推荐5
+$num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
+$learning_rate_list      = @(0.005)      # XGB推荐0.005, LGB推荐0.005
+$subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
-$min_child_weight_list   = @(200)       # XGB推荐150, LGB推荐200
-$reg_alpha_list          = @(0.1)       # XGB推荐0.05, LGB推荐0.1
-$reg_lambda_list         = @(5.0)       # XGB推荐1.0, LGB推荐5.0
-$gamma_list              = @(1.0)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
+$min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
+$reg_alpha_list          = @(0.05)       # XGB推荐0.05, LGB推荐0.1
+$reg_lambda_list         = @(1.0)       # XGB推荐1.0, LGB推荐5.0
+$gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
 $rank_weight_topk_list   = @(50)
-$rank_weight_list        = @(2)
+$rank_weight_list        = @(2,1.5,2.5,3,5)
+
+# ── 基本面因子（需先运行 download_fina_indicator.py 下载数据）───
+$enable_fundamental      = $true  # $true 启用 | $false 禁用
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
@@ -140,6 +143,10 @@ foreach ($rank_weight in $rank_weight_list) {
 
     if (-not $rank_weight_enabled) {
         $pythonCmd += " --no-rank-weight"
+    }
+
+    if ($enable_fundamental) {
+        $pythonCmd += " --enable-fundamental-features"
     }
 
     Write-Host ""

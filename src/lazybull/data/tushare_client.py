@@ -482,3 +482,38 @@ class TushareClient:
             l3_code=l3_code,
             **kwargs
         )
+
+    def get_fina_indicator(
+        self,
+        ts_code: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        fields: Optional[str] = None
+    ) -> pd.DataFrame:
+        """获取财务指标数据（fina_indicator）
+
+        注意：此 API 只支持按单个股票查询，每次最多返回 100 条记录。
+        需要 2000 积分权限。
+
+        Args:
+            ts_code: 股票代码（必须，单只股票，如 '000001.SZ'）
+            start_date: 报告期开始日期，格式 YYYYMMDD
+            end_date: 报告期结束日期，格式 YYYYMMDD
+            fields: 返回字段，逗号分隔
+
+        Returns:
+            财务指标 DataFrame
+        """
+        if fields is None:
+            fields = (
+                "ts_code,ann_date,end_date,"
+                "roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy"
+            )
+
+        return self.query(
+            "fina_indicator",
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+            fields=fields,
+        )

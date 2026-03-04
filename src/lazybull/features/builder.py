@@ -131,7 +131,8 @@ class FeatureBuilder:
         suspend_info: Optional[pd.DataFrame] = None,
         limit_info: Optional[pd.DataFrame] = None,
         shenwan_industry: Optional[pd.DataFrame] = None,
-        apply_industry_neutralization: bool = False
+        apply_industry_neutralization: bool = False,
+        fundamental_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """构建单个交易日的截面特征和标签
         
@@ -203,7 +204,8 @@ class FeatureBuilder:
             trading_dates,
             current_idx,
             daily_basic_data,
-            moneyflow_data
+            moneyflow_data,
+            fundamental_data,
         )
         logger.debug(f"{trade_date} 基础特征计算完成: {len(features.columns.tolist())} 列")
 
@@ -522,10 +524,11 @@ class FeatureBuilder:
         trading_dates: List[str],
         current_idx: int,
         daily_basic_data: Optional[pd.DataFrame] = None,
-        moneyflow_data: Optional[pd.DataFrame] = None
+        moneyflow_data: Optional[pd.DataFrame] = None,
+        fundamental_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """计算基础数值特征
-        
+
         特征包括：
         - ret_1: 当日收益率
         - ret_N: 过去N日累计收益
@@ -534,7 +537,8 @@ class FeatureBuilder:
         - ma_deviation_N: 收盘价与N日均线的偏离度
         - 价值红利因子：pb, pe_ttm, ep_ttm, bp, ps_ttm, dv_ttm, total_mv, circ_mv, log_total_mv等
         - 资金流因子：净流入、大单特大单净流入等
-        
+        - 基本面因子：roe_waa, or_yoy, netprofit_yoy 等（可选）
+
         注意：已删除 amount_ratio_N 和 vol_ma_N 特征
         
         Args:
@@ -610,7 +614,11 @@ class FeatureBuilder:
         # 添加资金流因子（从 moneyflow）
         if moneyflow_data is not None and len(moneyflow_data) > 0:
             features = self._add_moneyflow_features(features, moneyflow_data, trade_date, trading_dates, current_idx)
-        
+
+        # 添加基本面因子（从 fina_indicator 季度数据前向填充）
+        if fundamental_data is not None and len(fundamental_data) > 0:
+            features = self._add_fundamental_features(features, fundamental_data, trade_date)
+
         return features
     
     def _calculate_window_features(
@@ -1072,7 +1080,42 @@ class FeatureBuilder:
                 features[col] = winsorize_series(features[col], limits=(0.01, 0.01))
         
         return features
-    
+
+    def _add_fundamental_features(
+        self,
+        features: pd.DataFrame,
+        fundamental_data: pd.DataFrame,
+        trade_date: str,
+    ) -> pd.DataFrame:
+        """添加基本面因子（从 fina_indicator 季度数据前向填充）
+
+        Args:
+            features: 特征 DataFrame
+            fundamental_data: 当日基本面数据（已前向填充），含 ts_code, roe_waa 等
+            trade_date: 当前交易日
+
+        Returns:
+            添加基本面因子后的 DataFrame
+        """
+        from ..factors.fundamental import FUNDA_COLS
+
+        if fundamental_data is None or len(fundamental_data) == 0:
+            logger.debug(f"{trade_date} 没有基本面数据，跳过")
+            return features
+
+        merge_cols = ['ts_code'] + [c for c in FUNDA_COLS if c in fundamental_data.columns]
+        features = features.merge(
+            fundamental_data[merge_cols],
+            on='ts_code',
+            how='left'
+        )
+
+        matched = features[FUNDA_COLS[0]].notna().sum() if FUNDA_COLS[0] in features.columns else 0
+        if self.verbose:
+            logger.debug(f"{trade_date} 基本面特征: 匹配 {matched}/{len(features)} 只股票")
+
+        return features
+
     def _add_filter_flags(
         self,
         df: pd.DataFrame,
@@ -1563,6 +1606,8 @@ class FeatureBuilder:
             'amount_ma20', 'turnover_rate', 'volatility_5', 'volatility_10',
             'volatility_20', 'net_mf_amount', 'ma_deviation_20',
             'elg_net_amount_sum_20', 'acceleration', 'macd_hist', 'bb_width',
+            # 基本面因子（季度数据前向填充，启用时才存在）
+            'roe_waa', 'or_yoy', 'netprofit_yoy', 'debt_to_assets', 'q_gr_yoy',
         ]
         existing_zscore_columns = [col for col in zscore_columns if col in result.columns]
         for window in self.lookback_windows:
