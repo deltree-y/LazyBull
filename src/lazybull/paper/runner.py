@@ -926,7 +926,8 @@ class PaperTradingRunner:
         # 加载行业映射（如果启用行业约束）
         industry_mapping = {}
         if max_per_industry and max_per_industry > 0:
-            industry_mapping = load_industry_mapping(stock_basic, verbose=True)
+            shenwan_industry = self.loader.load_shenwan_industry()
+            industry_mapping = load_industry_mapping(shenwan_industry, verbose=True)
 
         # 生成信号
         try:
@@ -1564,7 +1565,8 @@ class PaperTradingRunner:
         # 加载行业映射（如果启用行业约束）
         industry_mapping = {}
         if max_per_industry and max_per_industry > 0:
-            industry_mapping = load_industry_mapping(stock_basic, verbose=True)
+            shenwan_industry = self.loader.load_shenwan_industry()
+            industry_mapping = load_industry_mapping(shenwan_industry, verbose=True)
 
         # 6. 生成排序候选（使用与T0相同的逻辑）
         try:

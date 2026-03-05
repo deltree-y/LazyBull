@@ -40,6 +40,8 @@ from loguru import logger
 from src.lazybull.backtest import BacktestEngine, BacktestEngineML, Reporter
 from src.lazybull.common.cost import CostModel
 from src.lazybull.common.logger import setup_logger
+from src.lazybull.common.trading_config import TradingConfig, add_trading_args
+from src.lazybull.common.signal_factory import create_signal
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.signals import MLSignal, EnsembleMLSignal
 from src.lazybull.universe import BasicUniverse
@@ -718,241 +720,37 @@ def export_evaluation_panel(
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="运行 ML 信号回测")
-    
-    # 回测参数
-    parser.add_argument(
-        "--start-date",
-        type=str,
-        required=True,
-        help="回测开始日期，格式 YYYYMMDD"
-    )
-    parser.add_argument(
-        "--end-date",
-        type=str,
-        required=True,
-        help="回测结束日期，格式 YYYYMMDD"
-    )
-    parser.add_argument(
-        "--initial-capital",
-        type=float,
-        default=500000.0,
-        help="初始资金，默认 500000"
-    )
-    parser.add_argument(
-        "--rebalance-freq",
-        type=int,
-        default=None,
-        help="调仓频率（交易日天数）。若未指定，将根据 --label 自动设置（y_ret_5->5, y_ret_10->10, y_ret_20->20）"
-    )
-    
-    # ML 信号参数
-    parser.add_argument(
-        "--model-version",
-        type=int,
-        default=None,
-        help="模型版本号，默认使用最新版本"
-    )
-    parser.add_argument(
-        "--model-version-b",
-        type=int,
-        default=None,
-        help="第二个模型版本号（用于集成），指定后自动启用双模型 Ensemble"
-    )
-    parser.add_argument(
-        "--ensemble-weight-a",
-        type=float,
-        default=0.5,
-        help="集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5"
-    )
-    parser.add_argument(
-        "--label",
-        type=str,
-        default=None,
-        choices=["y_ret_5", "y_ret_10", "y_ret_20"],
-        help="标签选择（y_ret_5|y_ret_10|y_ret_20）。若未指定则使用模型训练时的标签。若同时指定 --model-version，将校验一致性"
-    )
-    parser.add_argument(
-        "--top-n",
-        type=int,
-        default=5,
-        help="选择 Top N 只股票，默认 5"
-    )
-    parser.add_argument(
-        "--weight-method",
-        type=str,
-        default="equal",
-        choices=["equal", "score"],
-        help="权重方法，equal=等权，score=按分数加权，默认 equal"
-    )
-    parser.add_argument(
-        "--sell-timing",
-        type=str,
-        default="open",
-        choices=["open", "close"],
-        help="卖出时机，open=开盘价卖出，close=收盘价卖出，默认 open"
-    )
 
-    
-    # 股票池参数
-    parser.add_argument(
-        "--exclude-st",
-        action="store_true",
-        default=True,
-        help="排除 ST 股票（默认开启）"
-    )
-    parser.add_argument(
-        "--include-st",
-        action="store_false",
-        dest="exclude_st",
-        help="包含 ST 股票"
-    )
-    parser.add_argument(
-        "--min-list-days",
-        type=int,
-        default=365,
-        help="最小上市自然日天数，默认 365（约12个月）"
-    )
-    
-    # 止损参数
-    parser.add_argument(
-        "--stop-loss-enabled",
-        action="store_true",
-        default=False,
-        help="启用止损功能"
-    )
-    parser.add_argument(
-        "--stop-loss-drawdown-pct",
-        type=float,
-        default=30,
-        help="回撤止损阈值（百分比），默认 20.0"
-    )
-    parser.add_argument(
-        "--stop-loss-trailing-enabled",
-        action="store_true",
-        default=False,
-        help="启用移动止损"
-    )
-    parser.add_argument(
-        "--stop-loss-trailing-pct",
-        type=float,
-        default=15.0,
-        help="移动止损阈值（百分比），默认 15.0"
-    )
-    parser.add_argument(
-        "--stop-loss-consecutive-limit-down",
-        type=int,
-        default=2,
-        help="连续跌停止损天数，默认 2"
-    )
-    
-    # ECT 参数
-    parser.add_argument(
-        "--equity-curve-enabled",
-        action="store_true",
-        default=False,
-        help="启用权益曲线交易（ECT）功能"
-    )
-    parser.add_argument(
-        "--equity-curve-drawdown-thresholds",
-        type=float,
-        nargs='+',
-        default=[5.0, 10.0, 15.0, 20.0],
-        help="ECT 回撤阈值列表（百分比），默认：5.0 10.0 15.0 20.0"
-    )
-    parser.add_argument(
-        "--equity-curve-exposure-levels",
-        type=float,
-        nargs='+',
-        default=[0.8, 0.6, 0.4, 0.2],
-        help="ECT 对应仓位系数列表，默认：0.8 0.6 0.4 0.2"
-    )
-    parser.add_argument(
-        "--equity-curve-ma-short",
-        type=int,
-        default=5,
-        help="ECT 短期均线窗口，默认 5"
-    )
-    parser.add_argument(
-        "--equity-curve-ma-long",
-        type=int,
-        default=30,
-        help="ECT 长期均线窗口，默认 20"
-    )
-    parser.add_argument(
-        "--equity-curve-recovery-mode",
-        type=str,
-        default="gradual",
-        choices=["gradual", "immediate"],
-        help="ECT 恢复模式，默认 gradual"
-    )
-    parser.add_argument(
-        "--equity-curve-recovery-step",
-        type=float,
-        default=0.25,
-        help="ECT 逐步恢复步长，默认 0.25（仅在 gradual 模式下生效）"
-    )
-    parser.add_argument(
-        "--equity-curve-recovery-delay-periods",
-        type=int,
-        default=0,
-        help="ECT 恢复等待周期数，默认 0（仅在 gradual 模式下生效）"
-    )
-    
-    # 组合构建约束参数
-    parser.add_argument(
-        "--max-weight-per-stock",
-        type=float,
-        default=None,
-        help="单个股票最大权重（0-1之间的浮点数），默认 None 表示不启用。例如：0.2 表示单票最大权重 20%%"
-    )
-    parser.add_argument(
-        "--max-per-industry",
-        type=int,
-        default=None,
-        help="单个行业最大持仓数量，默认 None 表示不启用。例如：3 表示每个行业最多持有 3 只股票"
-    )
-    
-    # 其他参数
-    parser.add_argument(
-        "--data-root",
-        type=str,
-        default="./data",
-        help="数据根目录，默认 ./data"
-    )
-    parser.add_argument(
-        "--output-name",
-        type=str,
-        default="ml_backtest",
-        help="报告输出名称，默认 ml_backtest"
-    )
-    
+    # 回测专用参数
+    parser.add_argument("--start-date", type=str, required=True,
+                        help="回测开始日期，格式 YYYYMMDD")
+    parser.add_argument("--end-date", type=str, required=True,
+                        help="回测结束日期，格式 YYYYMMDD")
+    parser.add_argument("--initial-capital", type=float, default=500000.0,
+                        help="初始资金，默认 500000")
+    parser.add_argument("--label", type=str, default=None,
+                        choices=["y_ret_5", "y_ret_10", "y_ret_20"],
+                        help="标签选择（y_ret_5|y_ret_10|y_ret_20）。若未指定则使用模型训练时的标签")
+    parser.add_argument("--sell-timing", type=str, default="open",
+                        choices=["open", "close"],
+                        help="卖出时机，默认 open")
+    parser.add_argument("--data-root", type=str, default="./data",
+                        help="数据根目录，默认 ./data")
+    parser.add_argument("--output-name", type=str, default="ml_backtest",
+                        help="报告输出名称，默认 ml_backtest")
+
     # 评估面板参数
-    parser.add_argument(
-        "--export-eval",
-        action="store_true",
-        help="导出评估面板 CSV（默认开启）"
-    )
-    parser.add_argument(
-        "--no-export-eval",
-        action="store_false",
-        dest="export_eval",
-        help="禁用评估面板导出"
-    )
-    parser.add_argument(
-        "--eval-groups",
-        type=int,
-        default=10,
-        help="评估面板分组数量，默认 10"
-    )
-    parser.add_argument(
-        "--eval-topk",
-        type=int,
-        default=None,
-        help="评估面板 TopK 指标的 K，默认使用 --top-n"
-    )
-    
-    # 设置 export_eval 的默认值（如果用户既没有指定 --export-eval 也没有指定 --no-export-eval）
+    parser.add_argument("--export-eval", action="store_true", help="导出评估面板 CSV（默认开启）")
+    parser.add_argument("--no-export-eval", action="store_false", dest="export_eval",
+                        help="禁用评估面板导出")
+    parser.add_argument("--eval-groups", type=int, default=10,
+                        help="评估面板分组数量，默认 10")
+    parser.add_argument("--eval-topk", type=int, default=None,
+                        help="评估面板 TopK 指标的 K，默认使用 --top-n")
     parser.set_defaults(export_eval=True)
+
+    # 公共策略参数（模型、组合、股票池、止损、ECT）
+    add_trading_args(parser)
     
     args = parser.parse_args()
     
@@ -1057,79 +855,40 @@ def main():
         logger.info(f"  - 恢复步长: {args.equity_curve_recovery_step}")
         logger.info(f"  - 恢复等待周期: {args.equity_curve_recovery_delay_periods} 个调仓周期")
 
+    # 构建统一策略配置
+    trading_config = TradingConfig.from_args(args)
+
     try:
         # 初始化组件（registry 已在前面初始化）
         loader = DataLoader(storage)
-        
-        # 创建止损配置
-        stop_loss_config = None
-        if args.stop_loss_enabled:
-            stop_loss_config = StopLossConfig(
-                enabled=True,
-                drawdown_pct=args.stop_loss_drawdown_pct,
-                trailing_stop_enabled=args.stop_loss_trailing_enabled,
-                trailing_stop_pct=args.stop_loss_trailing_pct,
-                consecutive_limit_down_days=args.stop_loss_consecutive_limit_down,
-                post_trigger_action='hold_cash'
-            )
-        
-        # 创建 ECT 配置
-        equity_curve_config = None
-        if args.equity_curve_enabled:
-            equity_curve_config = EquityCurveConfig(
-                enabled=True,
-                drawdown_thresholds=args.equity_curve_drawdown_thresholds,
-                exposure_levels=args.equity_curve_exposure_levels,
-                ma_short_window=args.equity_curve_ma_short,
-                ma_long_window=args.equity_curve_ma_long,
-                recovery_mode=args.equity_curve_recovery_mode,
-                recovery_step=args.equity_curve_recovery_step,
-                recovery_delay_periods=args.equity_curve_recovery_delay_periods
-            )
-        
+
+        # 通过 TradingConfig 创建止损 / ECT 配置
+        stop_loss_config = trading_config.create_stop_loss_config()
+        equity_curve_config = trading_config.create_equity_curve_config()
+
         # 1. 加载数据
         trade_cal, stock_basic, daily_data, features_by_date = load_backtest_data(
             loader, storage, args.start_date, args.end_date
         )
-        
+
         if len(features_by_date) == 0:
             logger.error("，无法运行回测")
             sys.exit(1)
-        
+
         # 2. 准备价格数据
         price_data = prepare_price_data(daily_data)
-        
+
         # 3. 创建股票池
         universe = BasicUniverse(
             stock_basic=stock_basic,
-            exclude_st=args.exclude_st,
-            min_list_days=args.min_list_days,
-            markets=['主板'],  # 可根据需要调整
+            exclude_st=trading_config.exclude_st,
+            min_list_days=trading_config.min_list_days,
+            markets=['主板'],
             verbose=False,
         )
-        
-        # 4. 创建 ML 信号（单模型或集成）
-        if args.model_version_b is not None:
-            # 双模型集成
-            signal = EnsembleMLSignal(
-                model_version_a=args.model_version if args.model_version is not None else registry.get_latest_version(),
-                model_version_b=args.model_version_b,
-                ensemble_weight_a=args.ensemble_weight_a,
-                top_n=args.top_n,
-                models_dir=f"{args.data_root}/models",
-                weight_method=args.weight_method,
-                verbose=False,
-            )
-            logger.info(f"使用双模型集成: model_a=v{args.model_version or 'latest'}, model_b=v{args.model_version_b}, weight_a={args.ensemble_weight_a}")
-        else:
-            # 单模型
-            signal = MLSignal(
-                top_n=args.top_n,
-                model_version=args.model_version,
-                models_dir=f"{args.data_root}/models",
-                weight_method=args.weight_method,
-                verbose=False,
-            )
+
+        # 4. 创建 ML 信号（通过公共工厂函数）
+        signal = create_signal(trading_config, models_dir=f"{args.data_root}/models")
         
         # 打印模型信息
         model_info = signal.get_model_info()
@@ -1163,13 +922,13 @@ def main():
             trading_dates=trading_dates,
             price_data=price_data,
             features_by_date=features_by_date,
-            initial_capital=args.initial_capital,
-            rebalance_freq=args.rebalance_freq,
+            initial_capital=trading_config.initial_capital,
+            rebalance_freq=trading_config.rebalance_freq,
             stop_loss_config=stop_loss_config,
             equity_curve_config=equity_curve_config,
             sell_timing=args.sell_timing,
-            max_weight_per_stock=args.max_weight_per_stock,
-            max_per_industry=args.max_per_industry,
+            max_weight_per_stock=trading_config.max_weight_per_stock,
+            max_per_industry=trading_config.max_per_industry,
             stock_basic=stock_basic,
         )
         

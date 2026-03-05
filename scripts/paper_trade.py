@@ -29,13 +29,156 @@ from loguru import logger
 from src.lazybull.common.config import get_config
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.common.print_table import format_row
+from src.lazybull.common.trading_config import TradingConfig, add_trading_args
+from src.lazybull.common.signal_factory import create_signal
 from src.lazybull.data import DataLoader, Storage
+from src.lazybull.ml import ModelRegistry
 from src.lazybull.paper import PaperTradingRunner, PaperStorage
 from src.lazybull.risk.stop_loss import StopLossConfig, StopLossMonitor
+from src.lazybull.risk.stop_loss_checker import check_positions_stop_loss
 from src.lazybull.risk.equity_curve import EquityCurveConfig, EquityCurveMonitor, create_equity_curve_config_from_dict
 import warnings
 # 匹配告警信息中的关键字符串，设置为 ignore
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
+
+
+def format_model_info(models_dir: str = "./data/models") -> str:
+    """获取当前配置使用的模型信息
+
+    Args:
+        models_dir: 模型目录
+
+    Returns:
+        格式化的模型信息文本
+    """
+    storage = PaperStorage()
+    config = storage.load_config()
+    if not config:
+        return "未找到配置文件，请先运行 config 命令设置配置。"
+
+    registry = ModelRegistry(models_dir=models_dir)
+    models = registry.list_models()
+
+    if not models:
+        return "没有已注册的模型。请先使用 train_ml_model.py 训练模型。"
+
+    lines = []
+
+    # 从配置中读取版本
+    target_version = config.get('model_version')
+
+    # 查找目标模型
+    target_meta = None
+    if target_version is not None:
+        for m in models:
+            if m['version'] == target_version:
+                target_meta = m
+                break
+    else:
+        # 配置中未指定版本，使用最新
+        target_meta = models[-1]
+
+    if target_meta is None:
+        return f"未找到版本 {target_version} 的模型。可用版本: {[m['version'] for m in models]}"
+
+    # 显示当前使用的模型详情
+    version_label = target_meta['version_str']
+    if target_version is None:
+        version_label += " (最新)"
+    lines.append(f"当前模型: {version_label}")
+    lines.append(f"  模型类型: {target_meta.get('model_type', '未知')}")
+    lines.append(f"  训练区间: {target_meta.get('train_start_date', '?')} ~ {target_meta.get('train_end_date', '?')}")
+    lines.append(f"  特征数量: {target_meta.get('feature_count', '?')}")
+    lines.append(f"  训练样本: {target_meta.get('n_samples', '?')}")
+    lines.append(f"  标签列: {target_meta.get('label_column', '?')}")
+    lines.append(f"  创建时间: {target_meta.get('created_at', '?')}")
+
+    # 训练参数
+    train_params = target_meta.get('train_params', {})
+    if train_params:
+        lines.append(f"  训练参数:")
+        for k, v in train_params.items():
+            lines.append(f"    {k}: {v}")
+
+    # 性能指标（只显示关键摘要）
+    perf = target_meta.get('performance_metrics', {})
+    if perf:
+        lines.append(f"  性能指标:")
+        # 优先显示 validation 和 test 中的关键指标
+        for split in ['validation', 'test']:
+            split_data = perf.get(split, {})
+            if isinstance(split_data, dict) and split_data:
+                ic = split_data.get('ic') or split_data.get('rank_ic')
+                r2 = split_data.get('r2')
+                rmse = split_data.get('rmse')
+                parts = []
+                if ic is not None:
+                    parts.append(f"IC={ic:.4f}")
+                rank_ic = split_data.get('rank_ic')
+                if rank_ic is not None:
+                    parts.append(f"RankIC={rank_ic:.4f}")
+                if r2 is not None:
+                    parts.append(f"R2={r2:.4f}")
+                if rmse is not None:
+                    parts.append(f"RMSE={rmse:.4f}")
+                if parts:
+                    lines.append(f"    {split}: {', '.join(parts)}")
+        # validation_daily 关键指标
+        vd = perf.get('validation_daily', {})
+        if isinstance(vd, dict) and vd:
+            rankic_mean = vd.get('daily_rankic_mean')
+            rankic_ir = vd.get('daily_rankic_ir')
+            top30_ret = vd.get('top30_return_mean')
+            parts = []
+            if rankic_mean is not None:
+                parts.append(f"DailyRankIC={rankic_mean:.4f}")
+            if rankic_ir is not None:
+                parts.append(f"IR={rankic_ir:.4f}")
+            if top30_ret is not None:
+                parts.append(f"Top30Ret={top30_ret:.4f}")
+            if parts:
+                lines.append(f"    validation_daily: {', '.join(parts)}")
+        # test_daily 关键指标
+        td = perf.get('test_daily', {})
+        if isinstance(td, dict) and td:
+            rankic_mean = td.get('daily_rankic_mean')
+            rankic_ir = td.get('daily_rankic_ir')
+            top30_ret = td.get('top30_return_mean')
+            parts = []
+            if rankic_mean is not None:
+                parts.append(f"DailyRankIC={rankic_mean:.4f}")
+            if rankic_ir is not None:
+                parts.append(f"IR={rankic_ir:.4f}")
+            if top30_ret is not None:
+                parts.append(f"Top30Ret={top30_ret:.4f}")
+            if parts:
+                lines.append(f"    test_daily: {', '.join(parts)}")
+
+    # 双模型集成信息
+    storage = PaperStorage()
+    config = storage.load_config()
+    if config and config.get('model_version_b') is not None:
+        mv_b = config['model_version_b']
+        weight_a = config.get('ensemble_weight_a', 0.5)
+        lines.append("")
+        lines.append(f"集成模式: 双模型 Ensemble")
+        lines.append(f"  模型A: v{config.get('model_version', '最新')} (权重 {weight_a})")
+        lines.append(f"  模型B: v{mv_b} (权重 {1 - weight_a})")
+
+    return "\n".join(lines)
+
+
+def run_model_info(_args):
+    """模型信息命令"""
+    logger.info("=" * 80)
+    logger.info("模型信息")
+    logger.info("=" * 80)
+
+    text = format_model_info()
+    for line in text.split("\n"):
+        logger.info(line)
+
+    logger.info("=" * 80)
 
 
 def run_config(args):
@@ -43,38 +186,11 @@ def run_config(args):
     logger.info("=" * 80)
     logger.info("纸面交易配置设置")
     logger.info("=" * 80)
-    
-    # 构建配置字典
-    config = {
-        'buy_price': args.buy_price,
-        'sell_price': args.sell_price,
-        'top_n': args.top_n,
-        'initial_capital': args.initial_capital,
-        'rebalance_freq': args.rebalance_freq,
-        'weight_method': args.weight_method,
-        'model_version': args.model_version,
-        'horizon': args.horizon,
-        'stop_loss_enabled': args.stop_loss_enabled,
-        'stop_loss_drawdown_pct': args.stop_loss_drawdown_pct,
-        'stop_loss_trailing_enabled': args.stop_loss_trailing_enabled,
-        'stop_loss_trailing_pct': args.stop_loss_trailing_pct,
-        'stop_loss_consecutive_limit_down': args.stop_loss_consecutive_limit_down,
-        'universe': args.universe,
-        'equity_curve_enabled': args.equity_curve_enabled,
-        'equity_curve_drawdown_thresholds': args.equity_curve_drawdown_thresholds,
-        'equity_curve_exposure_levels': args.equity_curve_exposure_levels,
-        'equity_curve_ma_short': args.equity_curve_ma_short,
-        'equity_curve_ma_long': args.equity_curve_ma_long,
-        'equity_curve_recovery_mode': args.equity_curve_recovery_mode,
-        'equity_curve_recovery_step': args.equity_curve_recovery_step,
-        'model_version_b': args.model_version_b,
-        'ensemble_weight_a': args.ensemble_weight_a,
-        'max_per_industry': args.max_per_industry,
-        'max_weight_per_stock': args.max_weight_per_stock,
-        'exclude_st': args.exclude_st,
-        'min_list_days': args.min_list_days,
-    }
-    
+
+    # 通过 TradingConfig 统一构建配置
+    trading_config = TradingConfig.from_args(args)
+    config = trading_config.to_dict()
+
     # 保存配置
     storage = PaperStorage()
     storage.save_config(config)
@@ -119,7 +235,7 @@ def run_main(args):
     
     # 设置默认 horizon，如果配置中不存在
     if 'horizon' not in config:
-        config['horizon'] = 5
+        config['horizon'] = 20  # 默认持仓周期20天
     
     logger.info("使用配置：")
     logger.info(f"  买入价格类型: {config['buy_price']}")
@@ -138,20 +254,9 @@ def run_main(args):
     logger.info(f"  最少上市天数: {config.get('min_list_days', 365)}")
     logger.info("=" * 80)
     
-    # 2. 创建运行器（如果配置了双模型集成，预创建 signal）
-    signal = None
-    model_version_b = config.get('model_version_b')
-    if model_version_b is not None:
-        from src.lazybull.signals import EnsembleMLSignal
-        signal = EnsembleMLSignal(
-            model_version_a=config.get('model_version'),
-            model_version_b=model_version_b,
-            ensemble_weight_a=config.get('ensemble_weight_a', 0.5),
-            top_n=config['top_n'],
-            weight_method=config['weight_method'],
-            verbose=False,
-        )
-        logger.info(f"使用双模型集成: model_a=v{config.get('model_version')}, model_b=v{model_version_b}")
+    # 2. 创建运行器（通过公共工厂函数创建 signal）
+    trading_config = TradingConfig.from_dict(config)
+    signal = create_signal(trading_config) if trading_config.model_version_b is not None else None
 
     runner = PaperTradingRunner(
         signal=signal,
@@ -163,14 +268,8 @@ def run_main(args):
     # 3. 校正交易日期
     corrected_date = runner._correct_trade_date(args.trade_date)
     
-    # 4. 创建止损监控器
-    stop_loss_config = StopLossConfig(
-        enabled=config['stop_loss_enabled'],
-        drawdown_pct=config['stop_loss_drawdown_pct'],
-        trailing_stop_enabled=config['stop_loss_trailing_enabled'],
-        trailing_stop_pct=config['stop_loss_trailing_pct'],
-        consecutive_limit_down_days=config['stop_loss_consecutive_limit_down']
-    )
+    # 4. 创建止损监控器（通过 TradingConfig）
+    stop_loss_config = trading_config.create_stop_loss_config() or StopLossConfig()
     stop_loss_monitor = StopLossMonitor(stop_loss_config)
     
     # 加载止损状态
@@ -179,24 +278,15 @@ def run_main(args):
         stop_loss_monitor.position_high_prices = sl_state.get('position_high_prices', {})
         stop_loss_monitor.consecutive_limit_down_days = sl_state.get('consecutive_limit_down_days', {})
     
-    # 收集所有待手工操作的信息
-    stop_loss_actions = []
-    pending_sell_actions = []
-    pending_buy_actions = []  # 新增：补位买入动作
-    t1_actions = []
-    t0_targets = []
-    
     # 5. 执行止损检查
     logger.info("")
     logger.info("-" * 80)
     logger.info("步骤1: 检查止损触发")
     logger.info("-" * 80)
-    
+
     if config['stop_loss_enabled']:
-        stop_loss_actions = _check_stop_loss(
-            runner, stop_loss_monitor, corrected_date, config
-        )
-        
+        _check_stop_loss(runner, stop_loss_monitor, corrected_date, config)
+
         # 保存止损状态
         sl_state = {
             'position_high_prices': stop_loss_monitor.position_high_prices,
@@ -205,42 +295,32 @@ def run_main(args):
         storage.save_stop_loss_state(sl_state)
     else:
         logger.info("止损功能未启用，跳过")
-    
+
     # 6. 执行延迟卖出队列
     logger.info("")
     logger.info("-" * 80)
     logger.info("步骤2: 处理延迟卖出队列")
     logger.info("-" * 80)
-    
-    pending_sell_actions = _process_pending_sells(runner, corrected_date, config)
-    
-    # 注意：补位计划通过 pending_buys 队列处理
-    # 补位将在 T1 执行时自动处理（如果有失败，会生成新的 pending_buys）
-    
+
+    _process_pending_sells(runner, corrected_date, config)
+
     # 7. 执行 T1（如果有待执行目标）
     logger.info("")
     logger.info("-" * 80)
     logger.info("步骤3: 检查并执行 T1")
     logger.info("-" * 80)
-    
-    t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
-    
+
+    _execute_t1_if_pending(runner, corrected_date, config)
+
     # 8. 判断是否调仓日并执行 T0
     logger.info("")
     logger.info("-" * 80)
     logger.info("步骤4: 检查是否调仓日并执行 T0")
     logger.info("-" * 80)
-    
-    t0_targets, ect_exposure, ect_reason = _execute_t0_if_rebalance_day(runner, corrected_date, config)
-    
-    # 9. 打印手工操作指令汇总
-    #logger.info("")
-    #logger.info("=" * 120)
-    #logger.info("手工操作指令汇总")
-    #logger.info("=" * 120)
-    
-    # 不再传递 pending_buy_actions，因为补位已集成到 T1 流程
-    #_print_manual_actions(stop_loss_actions, pending_sell_actions, [], t1_actions, t0_targets, ect_exposure, ect_reason)
+
+    _execute_t0_if_rebalance_day(runner, corrected_date, config)
+
+    # 9. 打印持仓
     print_positions(corrected_date)
 
     logger.info("=" * 120)
@@ -254,33 +334,27 @@ def _check_stop_loss(
     trade_date: str,
     config: dict
 ) -> List[Dict]:
-    """检查止损触发
-    
+    """检查止损触发（委托公共模块 check_positions_stop_loss）
+
     Returns:
-        止损动作列表 [{ts_code, shares, reason}, ...]
+        止损动作列表 [{ts_code, shares, reason, can_execute}, ...]
     """
     from src.lazybull.common.suspend_calendar import SuspendCalendar
-    
+
     actions = []
-    
-    # 获取当前持仓
+
     positions = runner.account.get_positions()
-    
     if not positions:
         logger.info("当前无持仓，跳过止损检查")
         return actions
-    
+
     # 加载价格数据
     loader = DataLoader(runner.storage)
     daily_data = loader.load_clean_daily_by_date(trade_date)
-    
     if daily_data is None or daily_data.empty:
         logger.warning(f"无法加载 {trade_date} 的价格数据，跳过止损检查")
         return actions
-    
-    # 初始化停牌日历（使用与 runner 相同的 storage）
-    suspend_calendar = SuspendCalendar(runner.storage)
-    
+
     # 构建价格字典和跌停信息
     prices = {}
     limit_down_info = {}
@@ -288,77 +362,45 @@ def _check_stop_loss(
         ts_code = row['ts_code']
         prices[ts_code] = row.get('close', 0.0)
         limit_down_info[ts_code] = row.get('is_limit_down', 0) == 1
-    
-    # 检查每个持仓
-    for ts_code, pos in positions.items():
-        # 先检查停牌（基于 raw/suspend 数据）
-        try:
-            is_suspended = suspend_calendar.is_suspended(ts_code, trade_date)
-            if is_suspended:
-                logger.info(f"股票 {ts_code} 停牌，跳过止损检查")
-                continue
-        except FileNotFoundError as e:
-            # suspend 数据文件缺失，记录错误并跳过所有止损检查
-            logger.error(f"停牌数据文件缺失，无法进行止损检查：{e}")
-            return actions
-        except Exception as e:
-            # 其他加载错误，记录错误并跳过所有止损检查
-            logger.error(f"加载停牌数据失败，无法进行止损检查：{e}")
-            return actions
-        
-        # 检查是否有行情数据
-        if ts_code not in prices:
-            logger.warning(f"股票 {ts_code} 无行情数据，跳过止损检查")
-            continue
-        
-        current_price = prices[ts_code]
-        
-        # 检查价格是否有效
-        if current_price is None or current_price <= 0:
-            logger.warning(f"股票 {ts_code} 价格无效（{current_price}），跳过止损检查")
-            continue
-            
-        # 检查是否有价格数据
-        if ts_code not in prices:
-            logger.warning(f"股票 {ts_code} 无价格数据，跳过止损检查")
-            continue
-        
-        is_limit_down = limit_down_info.get(ts_code, False)
-        
-        # 检查是否触发止损
-        triggered, trigger_type, reason = stop_loss_monitor.check_stop_loss(
-            ts_code,
-            pos.buy_price,
-            current_price,
-            is_limit_down
-        )
-        
-        if triggered:
-            # 计算建议卖出股数（按100股规则）
-            sell_shares = (pos.shares // 100) * 100
-            
-            actions.append({
-                'ts_code': ts_code,
-                'shares': sell_shares,
-                'reason': reason,
-                'can_execute': not is_limit_down
-            })
-            
-            # 如果不可卖出，加入延迟卖出队列
-            if is_limit_down:
-                from src.lazybull.paper.models import PendingSell
-                pending_sell = PendingSell(
-                    ts_code=ts_code,
-                    shares=sell_shares,
-                    target_weight=0.0,
-                    reason=f"止损-{reason}",
-                    create_date=trade_date,
-                    attempts=0
-                )
-                runner.broker.pending_sells.append(pending_sell)
-                runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
-    
-    logger.info(f"止损检查完成：触发 {len(actions)} 个止损信号")
+
+    # 初始化停牌日历
+    suspend_calendar = SuspendCalendar(runner.storage)
+
+    # 调用公共止损检查
+    sl_actions = check_positions_stop_loss(
+        positions=positions,
+        stop_loss_monitor=stop_loss_monitor,
+        prices=prices,
+        limit_down_info=limit_down_info,
+        suspend_calendar=suspend_calendar,
+        trade_date=trade_date,
+    )
+
+    # 转换为脚本层格式，并处理跌停延迟卖出队列
+    for sl in sl_actions:
+        pos = positions.get(sl.ts_code)
+        sell_shares = (pos.shares // 100) * 100 if pos else 0
+
+        actions.append({
+            'ts_code': sl.ts_code,
+            'shares': sell_shares,
+            'reason': sl.reason,
+            'can_execute': sl.can_execute,
+        })
+
+        if sl.is_limit_down:
+            from src.lazybull.paper.models import PendingSell
+            pending_sell = PendingSell(
+                ts_code=sl.ts_code,
+                shares=sell_shares,
+                target_weight=0.0,
+                reason=f"止损-{sl.reason}",
+                create_date=trade_date,
+                attempts=0,
+            )
+            runner.broker.pending_sells.append(pending_sell)
+            runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
+
     return actions
 
 
@@ -800,162 +842,12 @@ def _execute_t0_if_rebalance_day(
     return targets_info, ect_exposure, ect_reason
 
 
-def _print_manual_actions(
-    stop_loss_actions: List[Dict],
-    pending_sell_actions: List[Dict],
-    pending_buy_actions: List[Dict],  # 新增参数
-    t1_actions: List[Dict],
-    t0_targets: List[Dict],
-    ect_exposure: float = 1.0,
-    ect_reason: str = ""
-):
-    """打印手工操作指令汇总"""
-    
-    # 0. ECT 信息（如果启用）
-    if ect_reason and "未启用" not in ect_reason and "为空" not in ect_reason:
-        logger.info("")
-        logger.info("【ECT 仓位管理】")
-        logger.info("-" * 120)
-        logger.info(f"仓位系数: {ect_exposure:.2f}")
-        logger.info(f"计算原因: {ect_reason}")
-        logger.info("-" * 120)
-    
-    # 1. 止损卖出清单
-    if stop_loss_actions:
-        logger.info("")
-        logger.info("【止损卖出清单】")
-        logger.info("-" * 120)
-        
-        widths = [15, 10, 15, 60]
-        aligns = ['left', 'right', 'left', 'left']
-        header = ["股票代码", "建议股数", "是否可执行", "原因"]
-        logger.info(format_row(header, widths, aligns))
-        logger.info("-" * 120)
-        
-        for action in stop_loss_actions:
-            row = [
-                action['ts_code'],
-                str(action['shares']),
-                "是" if action['can_execute'] else "否(跌停)",
-                action['reason']
-            ]
-            logger.info(format_row(row, widths, aligns))
-    
-    # 2. 延迟卖出清单
-    if pending_sell_actions:
-        logger.info("")
-        logger.info("【延迟卖出清单】")
-        logger.info("-" * 120)
-        
-        widths = [15, 10, 15, 60]
-        aligns = ['left', 'right', 'left', 'left']
-        header = ["股票代码", "待卖股数", "状态", "原因"]
-        logger.info(format_row(header, widths, aligns))
-        logger.info("-" * 120)
-        
-        for action in pending_sell_actions:
-            row = [
-                action['ts_code'],
-                str(action['shares']),
-                action['status'],
-                action['reason']
-            ]
-            logger.info(format_row(row, widths, aligns))
-    
-    # 3. 延迟买入清单（补位计划）
-    if pending_buy_actions:
-        logger.info("")
-        logger.info("【延迟买入清单（补位计划）】")
-        logger.info("-" * 120)
-        
-        widths = [15, 12, 15, 60]
-        aligns = ['left', 'right', 'left', 'left']
-        header = ["股票代码", "目标权重", "状态", "原因"]
-        logger.info(format_row(header, widths, aligns))
-        logger.info("-" * 120)
-        
-        for action in pending_buy_actions:
-            row = [
-                action['ts_code'],
-                f"{action['target_weight']:.4f}" if action['target_weight'] > 0 else "-",
-                action['status'],
-                action['reason']
-            ]
-            logger.info(format_row(row, widths, aligns))
-    
-    # 4. T1 调仓订单清单
-    if t1_actions:
-        logger.info("")
-        logger.info("【T1 调仓订单清单】")
-        logger.info("-" * 120)
-        
-        widths = [15, 10, 10, 60]
-        aligns = ['left', 'left', 'right', 'left']
-        header = ["股票代码", "方向", "股数", "原因"]
-        logger.info(format_row(header, widths, aligns))
-        logger.info("-" * 120)
-        
-        for action in t1_actions:
-            row = [
-                action['ts_code'],
-                action['action'],
-                str(action['shares']),
-                action['reason']
-            ]
-            logger.info(format_row(row, widths, aligns))
-    
-    
-    # 汇总
-    total_actions = len(stop_loss_actions) + len(pending_sell_actions) + len(pending_buy_actions) + len(t1_actions) + len(t0_targets)
-    if total_actions == 0:
-        logger.info("")
-        logger.info("今日无需手工操作")
-
-
 def view_positions(args):
     """查看当前持仓"""
     logger.info("=" * 80)
     logger.info("查看纸面交易持仓")
     print_positions(args.trade_date)
     
-
-def build_stock_names_dict(loader: DataLoader) -> Dict[str, str]:
-    """从 stock_basic 构建股票名称字典
-    
-    Args:
-        loader: DataLoader 实例
-        
-    Returns:
-        {ts_code: name} 股票名称字典
-    """
-    stock_names = {}
-    
-    # 优先尝试加载清洗后的 stock_basic
-    stock_basic = loader.load_clean_stock_basic()
-    
-    # 若清洗后的数据不存在，尝试加载原始 stock_basic
-    if stock_basic is None or stock_basic.empty:
-        stock_basic = loader.load_stock_basic()
-    
-    # 检查是否成功加载且包含必要列
-    if stock_basic is None or stock_basic.empty:
-        logger.warning("无法加载 stock_basic 数据")
-        logger.warning("建议运行以下命令更新基础数据：python scripts/update_basic_data.py")
-        return stock_names
-    
-    if 'ts_code' not in stock_basic.columns or 'name' not in stock_basic.columns:
-        logger.warning("stock_basic 数据缺少必要列（ts_code 或 name）")
-        logger.warning("建议运行以下命令更新基础数据：python scripts/update_basic_data.py")
-        return stock_names
-    
-    # 构建股票名称字典
-    for _, row in stock_basic.iterrows():
-        if pd.notna(row.get('ts_code')) and pd.notna(row.get('name')) and row['name']:
-            stock_names[row['ts_code']] = row['name']
-    
-    #logger.info(f"成功加载 {len(stock_names)} 只股票的名称信息")
-    return stock_names
-
 
 def print_positions(trade_date: str):
     logger.info("=" * 80)
@@ -982,9 +874,9 @@ def print_positions(trade_date: str):
         for _, row in daily_data.iterrows():
             prices[row['ts_code']] = row['close']
         
-        # 从 stock_basic 构建股票名称字典
-        stock_names = build_stock_names_dict(loader)
-        
+        # 从 stock_basic 构建股票名称字典（使用 DataLoader 公共方法）
+        stock_names = loader.build_stock_names_dict()
+
         # 打印持仓明细（传入股票名称字典）
         runner.broker.print_positions_summary(prices, trade_date, stock_names=stock_names)
         
@@ -1309,7 +1201,7 @@ def run_real(args):
 
     if not args.ret_profit_only:
         loader = DataLoader(runner.storage, verbose=False)
-        stock_names = build_stock_names_dict(loader)
+        stock_names = loader.build_stock_names_dict()
 
         logger.info("=" * 140)
         logger.info(f"实时持仓  [{display_time}]")
@@ -1442,179 +1334,12 @@ def main():
     
     subparsers = parser.add_subparsers(dest='command', help='子命令')
     
-    # config 子命令
+    # config 子命令 — 使用公共参数注册函数
     config_parser = subparsers.add_parser(
         'config',
         help='设置全局配置（持久化）'
     )
-    config_parser.add_argument(
-        '--buy-price',
-        choices=['open', 'close'],
-        default='close',
-        help='买入价格类型（默认：close）'
-    )
-    config_parser.add_argument(
-        '--sell-price',
-        choices=['open', 'close'],
-        default='open',
-        help='卖出价格类型（默认：open）'
-    )
-    config_parser.add_argument(
-        '--top-n',
-        type=int,
-        default=30,
-        help='持仓股票数（默认：30）'
-    )
-    config_parser.add_argument(
-        '--initial-capital',
-        type=float,
-        default=500000.0,
-        help='初始资金（默认：500000）'
-    )
-    config_parser.add_argument(
-        '--rebalance-freq',
-        type=int,
-        default=20,
-        help='调仓频率（交易日数，默认：20）'
-    )
-    config_parser.add_argument(
-        '--weight-method',
-        choices=['equal', 'score'],
-        default='equal',
-        help='权重分配方法（默认：equal）'
-    )
-    config_parser.add_argument(
-        '--model-version',
-        type=int,
-        help='ML模型版本（可选）'
-    )
-    config_parser.add_argument(
-        '--model-version-b',
-        type=int,
-        default=None,
-        help='第二个模型版本号（用于集成），指定后自动启用双模型 Ensemble'
-    )
-    config_parser.add_argument(
-        '--ensemble-weight-a',
-        type=float,
-        default=0.5,
-        help='集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5'
-    )
-    config_parser.add_argument(
-        '--max-per-industry',
-        type=int,
-        default=None,
-        help='单行业最大持仓数量（默认：不限制）'
-    )
-    config_parser.add_argument(
-        '--max-weight-per-stock',
-        type=float,
-        default=None,
-        help='单股最大权重，如 0.05 表示 5%%（默认：不限制）'
-    )
-    config_parser.add_argument(
-        '--exclude-st',
-        action='store_true',
-        default=True,
-        help='排除ST股票（默认：启用）'
-    )
-    config_parser.add_argument(
-        '--no-exclude-st',
-        action='store_false',
-        dest='exclude_st',
-        help='不排除ST股票'
-    )
-    config_parser.add_argument(
-        '--min-list-days',
-        type=int,
-        default=365,
-        help='最少上市天数（默认：365）'
-    )
-    config_parser.add_argument(
-        '--horizon',
-        type=int,
-        default=20,
-        help='特征构建的预测周期（天数），用于生成 y_ret_N 特征（默认20）'
-    )
-    config_parser.add_argument(
-        '--universe',
-        choices=['mainboard', 'all'],
-        default='mainboard',
-        help='股票池类型（默认：mainboard）'
-    )
-    config_parser.add_argument(
-        '--stop-loss-enabled',
-        action='store_true',
-        help='启用止损功能'
-    )
-    config_parser.add_argument(
-        '--stop-loss-drawdown-pct',
-        type=float,
-        default=30.0,
-        help='回撤止损百分比（默认：20.0）'
-    )
-    config_parser.add_argument(
-        '--stop-loss-trailing-enabled',
-        action='store_true',
-        help='启用移动止损'
-    )
-    config_parser.add_argument(
-        '--stop-loss-trailing-pct',
-        type=float,
-        default=15.0,
-        help='移动止损百分比（默认：15.0）'
-    )
-    config_parser.add_argument(
-        '--stop-loss-consecutive-limit-down',
-        type=int,
-        default=2,
-        help='连续跌停触发天数（默认：2）'
-    )
-    
-    # ECT 相关参数
-    config_parser.add_argument(
-        '--equity-curve-enabled',
-        action='store_true',
-        help='启用权益曲线交易（ECT）功能'
-    )
-    config_parser.add_argument(
-        '--equity-curve-drawdown-thresholds',
-        type=float,
-        nargs='+',
-        default=[5.0, 10.0, 15.0, 20.0],
-        help='ECT 回撤阈值列表（百分比），默认：5.0 10.0 15.0 20.0'
-    )
-    config_parser.add_argument(
-        '--equity-curve-exposure-levels',
-        type=float,
-        nargs='+',
-        default=[0.8, 0.6, 0.4, 0.2],
-        help='ECT 对应仓位系数列表，默认：0.8 0.6 0.4 0.2'
-    )
-    config_parser.add_argument(
-        '--equity-curve-ma-short',
-        type=int,
-        default=5,
-        help='ECT 短期均线窗口（默认：5）'
-    )
-    config_parser.add_argument(
-        '--equity-curve-ma-long',
-        type=int,
-        default=20,
-        help='ECT 长期均线窗口（默认：20）'
-    )
-    config_parser.add_argument(
-        '--equity-curve-recovery-mode',
-        choices=['gradual', 'immediate'],
-        default='gradual',
-        help='ECT 恢复模式（默认：gradual）'
-    )
-    config_parser.add_argument(
-        '--equity-curve-recovery-step',
-        type=float,
-        default=0.25,
-        help='ECT 逐步恢复步长（默认：0.25）'
-    )
+    add_trading_args(config_parser, include_price=True)
     
     # run 子命令
     run_parser = subparsers.add_parser(
@@ -1637,6 +1362,12 @@ def main():
         help='权重分配方法（覆盖配置）'
     )
     
+    # model-info 子命令
+    subparsers.add_parser(
+        'model-info',
+        help='查看当前使用的模型信息'
+    )
+
     # positions 子命令
     pos_parser = subparsers.add_parser(
         'positions',
@@ -1768,6 +1499,8 @@ def main():
     # 执行命令
     if args.command == 'config':
         run_config(args)
+    elif args.command == 'model-info':
+        run_model_info(args)
     elif args.command == 'run':
         run_main(args)
     elif args.command == 'positions':

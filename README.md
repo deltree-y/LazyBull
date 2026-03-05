@@ -29,7 +29,22 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.15.0)
+### 当前版本 (v0.15.1)
+
+**公共模块重构：消除三套脚本间的重复代码** (v0.15.1):
+- ✅ **`TradingConfig` 统一策略参数**（新增 `src/lazybull/common/trading_config.py`）：
+  - 将 `paper_trade.py` / `run_ml_backtest.py` / `bot_service.py` 中重复定义的 ~170 行 argparse 参数抽取为公共 dataclass + `add_trading_args()` 注册函数
+  - 支持 `from_args()` / `from_dict()` / `to_dict()` 互转，`create_stop_loss_config()` / `create_equity_curve_config()` 统一构建
+- ✅ **`create_signal()` 信号工厂**（新增 `src/lazybull/common/signal_factory.py`）：
+  - 单模型 / 双模型 Ensemble 判断逻辑统一为一个入口
+- ✅ **`check_positions_stop_loss()` 止损检查**（新增 `src/lazybull/risk/stop_loss_checker.py`）：
+  - 将 `paper_trade.py` 和 `BacktestEngine` 中重复的止损检查逻辑提取为纯函数
+- ✅ **`DataLoader.build_stock_names_dict()`**：股票名称构建逻辑下沉到 DataLoader 公共方法
+- ✅ **`paper_trade.py model-info` 子命令** / **`bot_service.py model` 命令**：查看当前模型版本、训练参数、性能指标
+- ✅ **大幅精简**：`paper_trade.py` 删除 ~200 行废弃代码，`run_ml_backtest.py` argparse 从 ~200 行缩减为 ~40 行
+- ✅ **`runner.py` 行业映射修复**：`load_industry_mapping()` 改为从 `shenwan_industry` 数据加载
+
+### v0.15.0
 
 **基本面因子系统 + 行业/组合约束 + 钉钉机器人交易** (v0.15.0 新增):
 - ✅ **基本面因子系统（全新模块）**：

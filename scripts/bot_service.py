@@ -20,6 +20,8 @@ load_dotenv(project_root / ".env")
 import pandas as pd
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.paper import PaperTradingRunner, PaperStorage
+from src.lazybull.common.trading_config import TradingConfig
+from src.lazybull.common.signal_factory import create_signal
 from src.lazybull.risk.stop_loss import StopLossConfig, StopLossMonitor
 from src.lazybull.risk.equity_curve import EquityCurveMonitor, create_equity_curve_config_from_dict
 
@@ -30,22 +32,11 @@ APP_SECRET = os.getenv("APP_SECRET")
 logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------------
-# 辅助函数：构建股票名称字典（复用 paper_trade.py 逻辑）
+# 辅助函数：构建股票名称字典（委托 DataLoader 公共方法）
 # ---------------------------------------------------------------------------
 def _build_stock_names(loader: DataLoader) -> dict:
     """从 stock_basic 构建 {ts_code: name} 映射"""
-    stock_names = {}
-    stock_basic = loader.load_clean_stock_basic()
-    if stock_basic is None or stock_basic.empty:
-        stock_basic = loader.load_stock_basic()
-    if stock_basic is None or stock_basic.empty:
-        return stock_names
-    if 'ts_code' not in stock_basic.columns or 'name' not in stock_basic.columns:
-        return stock_names
-    for _, row in stock_basic.iterrows():
-        if pd.notna(row.get('ts_code')) and pd.notna(row.get('name')) and row['name']:
-            stock_names[row['ts_code']] = row['name']
-    return stock_names
+    return loader.build_stock_names_dict()
 
 
 def _short_code(ts_code: str) -> str:
@@ -249,40 +240,24 @@ def execute_trade(trade_date: str) -> str:
         return "错误: 未找到配置文件，请先运行 config 命令"
 
     if 'horizon' not in config:
-        config['horizon'] = 5
+        config['horizon'] = 20  # 默认持仓周期20天
 
-    # 2. 创建运行器
-    signal = None
-    model_version_b = config.get('model_version_b')
-    if model_version_b is not None:
-        from src.lazybull.signals import EnsembleMLSignal
-        signal = EnsembleMLSignal(
-            model_version_a=config.get('model_version'),
-            model_version_b=model_version_b,
-            ensemble_weight_a=config.get('ensemble_weight_a', 0.5),
-            top_n=config['top_n'],
-            weight_method=config['weight_method'],
-            verbose=False,
-        )
+    # 2. 创建运行器（通过公共工厂函数创建 signal）
+    trading_config = TradingConfig.from_dict(config)
+    signal = create_signal(trading_config) if trading_config.model_version_b is not None else None
 
     runner = PaperTradingRunner(
         signal=signal,
-        initial_capital=config['initial_capital'],
-        weight_method=config['weight_method'],
-        horizon=config['horizon'],
+        initial_capital=trading_config.initial_capital,
+        weight_method=trading_config.weight_method,
+        horizon=trading_config.horizon,
     )
 
     # 3. 校正交易日期
     corrected_date = runner._correct_trade_date(trade_date)
 
-    # 4. 创建止损监控器
-    stop_loss_config = StopLossConfig(
-        enabled=config['stop_loss_enabled'],
-        drawdown_pct=config['stop_loss_drawdown_pct'],
-        trailing_stop_enabled=config['stop_loss_trailing_enabled'],
-        trailing_stop_pct=config['stop_loss_trailing_pct'],
-        consecutive_limit_down_days=config['stop_loss_consecutive_limit_down']
-    )
+    # 4. 创建止损监控器（通过 TradingConfig）
+    stop_loss_config = trading_config.create_stop_loss_config() or StopLossConfig()
     stop_loss_monitor = StopLossMonitor(stop_loss_config)
 
     sl_state = storage.load_stop_loss_state()
@@ -362,6 +337,7 @@ class SimpleHandler(dts.ChatbotHandler):
             "ip": lambda args, inc: self.run_shell(["curl", "ifconfig.me"], inc),
             "positions": self.handle_positions,
             "trade": self.handle_trade,
+            "model": self.handle_model,
             "help": self.handle_help,
         }
 
@@ -452,6 +428,17 @@ class SimpleHandler(dts.ChatbotHandler):
         t = threading.Thread(target=_run, daemon=True)
         t.start()
 
+    def handle_model(self, args, incoming):
+        """查看当前使用的模型信息
+        用法: model
+        """
+        from scripts.paper_trade import format_model_info
+        try:
+            text = format_model_info()
+            self.reply_markdown("模型信息", text, incoming)
+        except Exception as e:
+            self.reply_text(f"查询模型信息失败: {e}", incoming)
+
     def handle_help(self, args, incoming):
         """显示帮助信息"""
         text = (
@@ -460,6 +447,8 @@ class SimpleHandler(dts.ChatbotHandler):
             "  查看持仓（默认今天）\n\n"
             "trade [日期]\n"
             "  执行交易（默认今天）\n\n"
+            "model\n"
+            "  查看当前模型信息\n\n"
             "ping [IP]\n"
             "  测试连通性\n\n"
             "date\n"

@@ -16,6 +16,7 @@ from ..execution.pending_order import PendingOrderManager
 from ..signals.base import Signal
 from ..universe.base import Universe
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
+from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..risk.equity_curve import EquityCurveConfig, EquityCurveMonitor
 
 
@@ -970,7 +971,7 @@ class BacktestEngine:
     
     def _check_stop_loss(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
         """检查止损触发条件（T 日检查，生成 T+1 卖出信号）
-        
+
         Args:
             date: 当前日期（检查日）
             trading_dates: 交易日列表
@@ -978,82 +979,60 @@ class BacktestEngine:
         """
         if not self.stop_loss_monitor:
             return
-        
-        # 获取停牌日历
+
         trade_date_str = to_trade_date_str(date)
+
+        # 过滤掉已在待止损卖出队列中的持仓
+        positions_to_check = {
+            stock: info for stock, info in self.positions.items()
+            if stock not in self.pending_stop_loss_sells
+        }
+        if not positions_to_check:
+            return
+
+        # 构建价格和跌停信息
+        date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
+        prices: Dict[str, float] = {}
+        limit_down_info: Dict[str, bool] = {}
+        for stock in positions_to_check:
+            price = self._get_trade_price(date, stock)
+            if price is not None:
+                prices[stock] = price
+            if not date_quote.empty:
+                stock_quote = date_quote[date_quote['ts_code'] == stock]
+                if not stock_quote.empty and 'is_limit_down' in stock_quote.columns:
+                    limit_down_info[stock] = bool(stock_quote['is_limit_down'].iloc[0] == 1)
+
+        # 获取停牌日历
         suspend_calendar = None
         try:
             suspend_calendar = self._get_suspend_calendar()
         except Exception as e:
             logger.warning(f"停牌日历初始化失败（{e}），将跳过停牌检查")
-        
-        # 遍历所有持仓检查止损
-        for stock, info in list(self.positions.items()):
-            # 如果该股票已经在待止损卖出队列中，跳过（避免重复触发）
-            if stock in self.pending_stop_loss_sells:
-                continue
-            
-            # 使用 SuspendCalendar 检查是否停牌
-            is_suspended = False
-            if suspend_calendar:
-                try:
-                    is_suspended = suspend_calendar.is_suspended(stock, trade_date_str)
-                    if is_suspended:
-                        if self.verbose:
-                            logger.info(f"  股票 {stock} 停牌，跳过止损检查 ({date.date()})")
-                        continue
-                except Exception as e:
-                    # 停牌数据加载失败，记录警告但继续检查（降级处理）
-                    logger.warning(f"  股票 {stock} 停牌状态检查失败（{e}），继续止损检查")
-            
-            # 获取当日行情数据判断跌停状态
-            date_quote = self.price_data_cache[self.price_data_cache['trade_date'] == trade_date_str]
-            
-            # 检查跌停
-            is_limit_down = False
-            if not date_quote.empty:
-                stock_quote = date_quote[date_quote['ts_code'] == stock]
-                if not stock_quote.empty:
-                    # 检查跌停
-                    if 'is_limit_down' in stock_quote.columns:
-                        is_limit_down = bool(stock_quote['is_limit_down'].iloc[0] == 1)
-            
-            # 获取当前价格
-            current_price = self._get_trade_price(date, stock)
-            if current_price is None:
-                if self.verbose:
-                    logger.warning(f"股票 {stock} 无行情数据，跳过止损检查")
-                continue
-            
-            # 检查价格是否有效
-            if current_price <= 0:
-                if self.verbose:
-                    logger.warning(f"股票 {stock} 价格无效（{current_price}），跳过止损检查")
-                continue
-            
-            buy_price = info['buy_trade_price']
-            
-            # 检查止损触发
-            triggered, trigger_type, reason = self.stop_loss_monitor.check_stop_loss(
-                stock=stock,
-                buy_price=buy_price,
-                current_price=current_price,
-                is_limit_down=is_limit_down
-            )
-            
-            if triggered:
-                # 止损触发，记录到待卖出队列（T+1 执行）
-                self.pending_stop_loss_sells[stock] = {
-                    'trigger_date': date,
-                    'reason': reason,
-                    'trigger_type': trigger_type.value if trigger_type else 'unknown'
-                }
-                
-                if self.verbose:
-                    logger.warning(
-                        f"  止损触发: {date.date()} {stock}, 原因: {reason}, "
-                        f"将在下一交易日执行卖出"
-                    )
+
+        # 调用公共止损检查
+        actions = check_positions_stop_loss(
+            positions=positions_to_check,
+            stop_loss_monitor=self.stop_loss_monitor,
+            prices=prices,
+            limit_down_info=limit_down_info,
+            suspend_calendar=suspend_calendar,
+            trade_date=trade_date_str,
+            verbose=self.verbose,
+        )
+
+        # 将结果转换为引擎内部的 pending_stop_loss_sells 格式
+        for action in actions:
+            self.pending_stop_loss_sells[action.ts_code] = {
+                'trigger_date': date,
+                'reason': action.reason,
+                'trigger_type': action.trigger_type or 'unknown',
+            }
+            if self.verbose:
+                logger.warning(
+                    f"  止损触发: {date.date()} {action.ts_code}, 原因: {action.reason}, "
+                    f"将在下一交易日执行卖出"
+                )
     
     def _execute_pending_stop_loss_sells(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict) -> None:
         """执行待止损卖出操作（T+1 日执行）

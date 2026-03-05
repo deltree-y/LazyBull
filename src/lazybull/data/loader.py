@@ -1,6 +1,6 @@
 """数据加载模块"""
 
-from typing import Optional
+from typing import Dict, Optional
 
 import pandas as pd
 from loguru import logger
@@ -428,3 +428,25 @@ class DataLoader:
                 df[col] = df[col].astype(str).str.replace('-', '').str[:8]
 
         return df
+
+    def build_stock_names_dict(self) -> Dict[str, str]:
+        """从 stock_basic 构建 {ts_code: name} 股票名称字典"""
+        stock_names: Dict[str, str] = {}
+
+        stock_basic = self.load_clean_stock_basic()
+        if stock_basic is None or stock_basic.empty:
+            stock_basic = self.load_stock_basic()
+
+        if stock_basic is None or stock_basic.empty:
+            logger.warning("无法加载 stock_basic 数据")
+            return stock_names
+
+        if 'ts_code' not in stock_basic.columns or 'name' not in stock_basic.columns:
+            logger.warning("stock_basic 数据缺少必要列（ts_code 或 name）")
+            return stock_names
+
+        for _, row in stock_basic.iterrows():
+            if pd.notna(row.get('ts_code')) and pd.notna(row.get('name')) and row['name']:
+                stock_names[row['ts_code']] = row['name']
+
+        return stock_names
