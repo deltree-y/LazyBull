@@ -68,14 +68,13 @@ def ensure_raw_data_for_date(
             storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
             logger.info(f"  涨跌停: 已保存 {len(limit_up_down)} 条记录")
         
-        # 下载资金流向
+        # 下载资金流向（可选依赖：T0 特征构建需要，止损/T1 不需要）
         moneyflow = client.get_moneyflow(trade_date=trade_date)
         if not moneyflow.empty:
             storage.save_raw_by_date(moneyflow, "moneyflow", trade_date)
             logger.info(f"  资金流向: 已保存 {len(moneyflow)} 条记录")
         else:
-            logger.error(f"资金流向数据缺失: {trade_date}，moneyflow 为强制依赖项，请检查 TuShare 权限或数据可用性")
-            raise ValueError(f"moneyflow 数据缺失: {trade_date}")
+            logger.warning(f"资金流向数据暂缺: {trade_date}（TuShare 通常 18:00 后更新，T0 特征构建时需要）")
         
         return True
         

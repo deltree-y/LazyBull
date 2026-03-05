@@ -264,9 +264,19 @@ def run_main(args):
         weight_method=config['weight_method'],
         horizon=config['horizon'],
     )
-    
+
     # 3. 校正交易日期
     corrected_date = runner._correct_trade_date(args.trade_date)
+
+    # 4. 日期回退检测
+    account_state = storage.load_account_state()
+    if account_state and account_state.last_update:
+        if corrected_date < account_state.last_update:
+            logger.error(
+                f"日期回退：输入日期 {corrected_date} 早于账户最后更新日期 {account_state.last_update}，"
+                f"不允许回退执行"
+            )
+            sys.exit(1)
     
     # 4. 创建止损监控器（通过 TradingConfig）
     stop_loss_config = trading_config.create_stop_loss_config() or StopLossConfig()
@@ -516,13 +526,48 @@ def _execute_t1_if_pending(
     if runner.paper_storage.check_run_exists("t1", trade_date):
         logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
         return actions
-    
-    # 检查是否有交易指令
-    instructions = runner.paper_storage.load_instructions(trade_date)
-    
+
+    # 向前搜索未执行的交易指令（支持跳日期场景）
+    instructions = None
+    inst_date = trade_date
+    found = runner.paper_storage.find_pending_instructions(trade_date)
+    if found:
+        inst_date, instructions = found
+        if inst_date != trade_date:
+            # 检查是否过期：信号日期与当前日期间隔 >= rebalance_freq * 0.5
+            source_date = instructions[0].source_date if instructions else inst_date
+            try:
+                trade_cal = runner.loader.load_clean_trade_cal()
+                trade_dates_list = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+                src_idx = trade_dates_list.index(source_date)
+                cur_idx = trade_dates_list.index(trade_date)
+                gap = cur_idx - src_idx
+                threshold = int(config['rebalance_freq'] * 0.5)
+                if gap >= threshold:
+                    logger.warning(
+                        f"发现 {inst_date} 的未执行指令（信号日 {source_date}），"
+                        f"但距今已 {gap} 个交易日，超过阈值 {threshold}（rebalance_freq*0.5），"
+                        f"指令已过期，丢弃"
+                    )
+                    # 标记过期指令为已执行，防止后续重复拾取
+                    runner.paper_storage.save_run_record("t1", inst_date, {
+                        'trade_date': inst_date,
+                        'note': f'指令过期丢弃（距信号日 {gap} 个交易日，阈值 {threshold}）',
+                        'expired': True,
+                        'timestamp': pd.Timestamp.now().isoformat()
+                    })
+                    instructions = None
+                else:
+                    logger.info(
+                        f"发现 {inst_date} 的未执行指令（延迟 {gap} 个交易日），"
+                        f"将在 {trade_date} 补充执行"
+                    )
+            except (ValueError, Exception) as e:
+                logger.warning(f"检查指令过期失败: {e}，按原日期执行")
+
     # 检查是否有补位买入计划
     pending_buys = runner.paper_storage.load_pending_buys()
-    
+
     if not instructions and not pending_buys:
         logger.info(f"未找到 {trade_date} 的交易指令或补位买入计划，跳过 T1")
         return actions
@@ -628,6 +673,12 @@ def _execute_t1_if_pending(
             'timestamp': pd.Timestamp.now().isoformat()
         }
         runner.paper_storage.save_run_record("t1", trade_date, run_record)
+        # 如果指令来自其他日期，也标记原日期已执行，防止重复拾取
+        if inst_date != trade_date and instructions:
+            runner.paper_storage.save_run_record("t1", inst_date, {
+                **run_record,
+                'note': f'指令延迟执行，实际执行日期 {trade_date}'
+            })
     
     logger.info(f"T1 执行完成：{len(actions)} 个订单")
     return actions

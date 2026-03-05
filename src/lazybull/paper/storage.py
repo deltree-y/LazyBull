@@ -481,6 +481,36 @@ class PaperStorage:
         logger.info(f"读取交易指令: {file_path} ({len(instructions)} 条)")
         return instructions
     
+    def find_pending_instructions(self, before_date: str) -> Optional[tuple]:
+        """查找 <= before_date 且未执行的最新交易指令
+
+        Args:
+            before_date: 截止日期 YYYYMMDD（包含）
+
+        Returns:
+            (instruction_date, instructions) 元组，不存在返回 None
+        """
+        # 扫描 instructions/ 目录下所有 .parquet 文件
+        instruction_files = sorted(self.instructions_path.glob("*.parquet"))
+
+        if not instruction_files:
+            return None
+
+        # 从最新到最旧遍历，找第一个 <= before_date 且未执行的
+        for f in reversed(instruction_files):
+            inst_date = f.stem  # 文件名即日期 YYYYMMDD
+            if inst_date > before_date:
+                continue
+            # 检查是否已执行（有对应的 t1 run record）
+            if self.check_run_exists("t1", inst_date):
+                continue
+            # 找到未执行的指令
+            instructions = self.load_instructions(inst_date)
+            if instructions:
+                return (inst_date, instructions)
+
+        return None
+
     def truncate_since(self, cut_off_date: str) -> None:
         """截断/清理从指定日期开始的所有数据（包含该日期）
         
