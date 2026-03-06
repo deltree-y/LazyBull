@@ -148,8 +148,8 @@ def main():
     parser.add_argument(
         "--max-depth",
         type=int,
-        default=8,
-        help="树的最大深度，默认 8（建议范围：6-10）"
+        default=5,
+        help="树的最大深度，默认 5（建议范围：4-6，金融数据噪声大不宜过深）"
     )
     parser.add_argument(
         "--num-leaves",
@@ -178,8 +178,8 @@ def main():
     parser.add_argument(
         "--min-child-weight",
         type=int,
-        default=20,
-        help="叶节点最少样本权重和，防止过拟合，默认 20（金融数据建议 200-500）"
+        default=100,
+        help="叶节点最少样本权重和，防止过拟合，默认 100（金融数据建议 100-500）"
     )
     parser.add_argument(
         "--reg-alpha",
@@ -239,6 +239,15 @@ def main():
         default="xgboost",
         choices=["xgboost", "lightgbm"],
         help="训练算法（xgboost|lightgbm），默认 xgboost"
+    )
+
+    # 目标函数
+    parser.add_argument(
+        "--objective",
+        type=str,
+        default="mse",
+        choices=["mse", "lambdarank"],
+        help="目标函数类型：mse（回归，默认）或 lambdarank（排序学习，直接优化股票排序）"
     )
 
     # 基本面因子
@@ -364,6 +373,13 @@ def main():
         extra_kwargs = {}
         if args.algorithm == "lightgbm" and args.num_leaves is not None:
             extra_kwargs["num_leaves"] = args.num_leaves
+
+        # LambdaRank 需要传入 DataFrame 用于按 trade_date 构造 qid 分组
+        if args.algorithm == "xgboost":
+            extra_kwargs["objective_type"] = args.objective
+            if args.objective == "lambdarank":
+                extra_kwargs["df_train_for_group"] = df_train_split
+                extra_kwargs["df_val_for_group"] = df_val_split
 
         model, train_params, train_metrics, val_metrics = train_fn(
             X_train, y_train, X_val, y_val,

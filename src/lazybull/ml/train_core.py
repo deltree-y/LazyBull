@@ -590,17 +590,20 @@ def train_xgboost_model(
     scale_pos_weight: Optional[float] = None,
     sample_weight: Optional[np.ndarray] = None,
     n_estimators: int = 100,
-    max_depth: int = 6,
+    max_depth: int = 5,
     learning_rate: float = 0.1,
     subsample: float = 0.8,
     colsample_bytree: float = 0.8,
     random_state: int = 42,
-    min_child_weight: int = 20,
+    min_child_weight: int = 100,
     reg_alpha: float = 0.05,
     reg_lambda: float = 1.0,
     gamma: float = 0.1,
+    objective_type: str = "mse",
+    df_train_for_group: Optional[pd.DataFrame] = None,
+    df_val_for_group: Optional[pd.DataFrame] = None,
 ) -> tuple:
-    """训练 XGBoost 模型（支持回归和分类）
+    """训练 XGBoost 模型（支持回归、分类和排序学习）
 
     Args:
         task: 任务类型，"regression" 或 "classification"
@@ -618,10 +621,14 @@ def train_xgboost_model(
         subsample: 样本采样比例
         colsample_bytree: 特征采样比例
         random_state: 随机种子
-        min_child_weight: 叶节点最少样本权重和，防止过拟合，默认 20（金融数据建议 200-500）
+        min_child_weight: 叶节点最少样本权重和，防止过拟合，默认 100（金融数据建议 100-500）
         reg_alpha: L1 正则化系数，默认 0.05
         reg_lambda: L2 正则化系数，默认 1.0
         gamma: 节点分裂最小损失下降，默认 0.1
+        objective_type: 目标函数类型，"mse"（回归，默认）或 "lambdarank"（排序学习，
+                        直接优化股票排序而非预测收益绝对值，与 RankIC 评估指标对齐）
+        df_train_for_group: 训练集 DataFrame（仅 lambdarank 需要，用于提取 trade_date 分组信息）
+        df_val_for_group: 验证集 DataFrame（仅 lambdarank 需要，用于提取 trade_date 分组信息）
 
     Returns:
         (model, train_params, train_metrics, val_metrics) 元组
@@ -665,61 +672,142 @@ def train_xgboost_model(
     else:
         logger.info("未使用样本权重（rank-weight 未启用）")
     
+    # 判断是否使用 LambdaRank（排序学习）
+    use_lambdarank = (task == "regression" and objective_type == "lambdarank")
+
+    if use_lambdarank:
+        if df_train_for_group is None:
+            raise ValueError("lambdarank 目标需要 df_train_for_group 参数（用于按 trade_date 分组）")
+        logger.info("使用 LambdaRank 排序学习目标（直接优化股票排序，与 RankIC 评估对齐）")
+
     # 准备训练参数
-    train_params = {
-        "objective": "reg:squarederror" if task == "regression" else "binary:logistic",
-        "eval_metric": "mae" if task == "regression" else "auc",   #回归使用 MAE，分类使用 AUC（XGBoost 会自动选择适合的 eval_metric）
-        "n_estimators": n_estimators,
-        "max_depth": max_depth,
-        "learning_rate": learning_rate,
-        "subsample": subsample,
-        "colsample_bytree": colsample_bytree,
-        "random_state": random_state,
-        "tree_method": "hist",
-        "device": "cuda",
-        "n_jobs": -1,
-        "early_stopping_rounds": 200,
-        "gamma": gamma,
-        "reg_alpha": reg_alpha,
-        "reg_lambda": reg_lambda,
-        "min_child_weight": min_child_weight,
-    }
-    
+    if use_lambdarank:
+        train_params = {
+            "objective": "rank:pairwise",
+            "eval_metric": "ndcg",
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "learning_rate": learning_rate,
+            "subsample": subsample,
+            "colsample_bytree": colsample_bytree,
+            "random_state": random_state,
+            "tree_method": "hist",
+            "device": "cuda",
+            "n_jobs": -1,
+            "early_stopping_rounds": 200,
+            "gamma": gamma,
+            "reg_alpha": reg_alpha,
+            "reg_lambda": reg_lambda,
+            "min_child_weight": min_child_weight,
+        }
+    else:
+        train_params = {
+            "objective": "reg:squarederror" if task == "regression" else "binary:logistic",
+            "eval_metric": "mae" if task == "regression" else "auc",
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "learning_rate": learning_rate,
+            "subsample": subsample,
+            "colsample_bytree": colsample_bytree,
+            "random_state": random_state,
+            "tree_method": "hist",
+            "device": "cuda",
+            "n_jobs": -1,
+            "early_stopping_rounds": 200,
+            "gamma": gamma,
+            "reg_alpha": reg_alpha,
+            "reg_lambda": reg_lambda,
+            "min_child_weight": min_child_weight,
+        }
+
     # 分类任务添加 scale_pos_weight
     if task == "classification" and computed_scale_pos_weight is not None:
         train_params["scale_pos_weight"] = computed_scale_pos_weight
-    
+
     logger.info(f"训练参数: {train_params}")
     logger.info(f"使用早停机制（early_stopping_rounds={train_params['early_stopping_rounds']}）")
-    
+
+    # LambdaRank 需要构造 qid（query group ID），每个 trade_date 为一个 query group
+    # 同时需要将连续收益率标签转换为非负整数等级（XGBoost rank 要求）
+    qid_train = None
+    qid_val = None
+    if use_lambdarank:
+        # 按 trade_date 排序并构造 qid（同一天的股票属于同一组，组内进行排序优化）
+        train_dates = df_train_for_group['trade_date'].values
+        val_dates = df_val_for_group['trade_date'].values if df_val_for_group is not None and len(df_val_for_group) > 0 else np.array([])
+
+        # qid: 将日期映射为整数 group id
+        unique_train_dates = sorted(set(train_dates))
+        date_to_qid = {d: i for i, d in enumerate(unique_train_dates)}
+        qid_train = np.array([date_to_qid[d] for d in train_dates])
+
+        if len(val_dates) > 0:
+            offset = len(unique_train_dates)
+            unique_val_dates = sorted(set(val_dates))
+            val_date_to_qid = {d: i + offset for i, d in enumerate(unique_val_dates)}
+            qid_val = np.array([val_date_to_qid[d] for d in val_dates])
+
+        logger.info(f"LambdaRank 分组: 训练集 {len(unique_train_dates)} 个交易日, "
+                    f"验证集 {len(unique_val_dates) if len(val_dates) > 0 else 0} 个交易日")
+
+        # 将连续收益率转换为按日截面排名等级 (0~31)
+        # XGBoost rank:pairwise + NDCG 指数增益要求标签 <= 31
+        # ~3000 只股票 / 32 级 ≈ 每级 ~94 只，粒度足够保留排序信息
+        max_grade = 31
+        def _returns_to_grades(y: pd.Series, dates: np.ndarray) -> pd.Series:
+            """按每日截面将连续收益率转为 0~max_grade 的整数等级"""
+            grades = pd.Series(0, index=y.index, dtype=int)
+            for date in sorted(set(dates)):
+                mask = dates == date
+                daily_y = y[mask]
+                n = len(daily_y)
+                if n <= 1:
+                    grades[mask] = 0
+                else:
+                    pct_rank = daily_y.rank(method='average') / n  # (0, 1]
+                    grades[mask] = (pct_rank * max_grade).clip(0, max_grade).astype(int)
+            return grades
+
+        y_train_processed = _returns_to_grades(y_train_processed, train_dates)
+        logger.info(f"LambdaRank 标签转换完成: 连续收益 → 排名等级 (0~{max_grade})")
+        logger.info(f"  等级范围: {y_train_processed.min()} ~ {y_train_processed.max()}, "
+                    f"均值: {y_train_processed.mean():.1f}")
+
+        # 验证集标签也需要转换
+        if len(val_dates) > 0:
+            y_val = _returns_to_grades(y_val, val_dates)
+
     # 创建并训练模型
-    if task == "regression":
+    if use_lambdarank:
+        model = xgb.XGBRanker(**train_params)
+    elif task == "regression":
         model = xgb.XGBRegressor(**train_params)
     else:
         model = xgb.XGBClassifier(**train_params)
 
-    # 训练前调试：输出训练数据的基本统计信息
-    if False:   # 仅在需要时启用，平时保持 False 避免日志过于冗长
-        logger.debug(f"训练数据 X_train 统计信息:\n{X_train.describe().transpose()}")
-        logger.debug(f"训练标签 y_train 统计信息:\n{y_train_processed.describe()}")    
-        X_train.to_csv("debug_X_train.csv", index=False)
-        y_train_processed.to_csv("debug_y_train.csv", index=False)
-    
     # 如果有验证集，使用早停机制
     if len(X_val) > 0:
-        model.fit(
-            X_train, y_train_processed,
-            sample_weight=sample_weight,
-            eval_set=[(X_val, y_val)],
-            verbose=False
-        )
+        fit_kwargs = {
+            "eval_set": [(X_val, y_val)],
+            "verbose": False,
+        }
+        if use_lambdarank:
+            fit_kwargs["qid"] = qid_train
+            if qid_val is not None:
+                fit_kwargs["eval_qid"] = [qid_val]
+        else:
+            fit_kwargs["sample_weight"] = sample_weight
+
+        model.fit(X_train, y_train_processed, **fit_kwargs)
         logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
     else:
-        model.fit(
-            X_train, y_train_processed,
-            sample_weight=sample_weight,
-            verbose=False
-        )
+        fit_kwargs = {"verbose": False}
+        if use_lambdarank:
+            fit_kwargs["qid"] = qid_train
+        else:
+            fit_kwargs["sample_weight"] = sample_weight
+
+        model.fit(X_train, y_train_processed, **fit_kwargs)
         logger.info("模型训练完成（无验证集，未使用早停）")
 
     importance = model.feature_importances_

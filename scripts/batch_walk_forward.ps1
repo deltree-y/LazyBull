@@ -30,12 +30,12 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(6)         # XGB推荐9, LGB推荐5
+$max_depth_list          = @(5)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.005)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
-$min_child_weight_list   = @(150,100,50,200)       # XGB推荐150, LGB推荐200
+$min_child_weight_list   = @(150,200,300)       # XGB推荐150, LGB推荐200
 $reg_alpha_list          = @(0.05)       # XGB推荐0.05, LGB推荐0.1
 $reg_lambda_list         = @(1.0)       # XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
@@ -45,8 +45,11 @@ $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
 $rank_weight_topk_list   = @(50)
 $rank_weight_list        = @(2)
 
+# ── 目标函数 ─────────────────────────────────────────────────
+$objective_list          = @("lambdarank")  # mse | lambdarank（排序学习，直接优化股票排序）
+
 # ── 基本面因子（需先运行 download_fina_indicator.py 下载数据）───
-$enable_fundamental      = $true  # $true 启用 | $false 禁用
+$enable_fundamental      = $false  # $true 启用 | $false 禁用
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
@@ -74,6 +77,7 @@ $totalTasks = $algorithm_list.Length *
               $label_list.Length *
               $task_list.Length *
               $label_transform_list.Length *
+              $objective_list.Length *
               $max_depth_list.Length *
               $num_leaves_list.Length *
               $learning_rate_list.Length *
@@ -102,6 +106,7 @@ foreach ($test_window_months in $test_window_months_list) {
 foreach ($label in $label_list) {
 foreach ($task in $task_list) {
 foreach ($label_transform in $label_transform_list) {
+foreach ($objective in $objective_list) {
 foreach ($max_depth in $max_depth_list) {
 foreach ($num_leaves in $num_leaves_list) {
 foreach ($learning_rate in $learning_rate_list) {
@@ -127,6 +132,7 @@ foreach ($rank_weight in $rank_weight_list) {
                  " --label $label" +
                  " --task $task" +
                  " --label-transform $label_transform" +
+                 " --objective $objective" +
                  " --n-estimators $n_estimators" +
                  " --max-depth $max_depth" +
                  " --num-leaves $num_leaves" +
@@ -176,7 +182,7 @@ foreach ($rank_weight in $rank_weight_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}  # end foreach（18 层）
+}}}}}}}}}}}}}}}}}}}  # end foreach（19 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()
