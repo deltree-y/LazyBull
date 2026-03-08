@@ -54,6 +54,14 @@ COL_NAMES = {
     "oos_top100_win_rate":        "Top100胜率",
     "oos_top300_median_mean":     "Top300中位收益均值",
     "oos_top300_win_rate":        "Top300胜率",
+    # OOS 回测
+    "bt_annual_return_mean":      "回测年化收益均值",
+    "bt_sharpe_mean":             "回测夏普均值",
+    "bt_max_drawdown_worst":      "回测最大回撤(最差)",
+    "bt_calmar_mean":             "回测Calmar均值",
+    "bt_win_rate":                "回测胜率",
+    "bt_total_return_mean":       "回测总收益均值",
+    "bt_volatility_mean":         "回测波动率均值",
     # 训练质量
     "val_rankic_ir_mean":         "验证集RankIC_IR均值",
     "train_val_ir_gap":           "验证_OOS_IR差距",
@@ -109,14 +117,21 @@ PARAM_COLS = [
 # 权重之和应为 1.0
 # ---------------------------------------------------------------------------
 SCORE_CONFIG = [
-    ("oos_cross_split_ir",        0.30, "high"),     # 跨切分IR：核心稳健性
-    ("oos_top30_win_rate",        0.15, "high"),     # Top30胜率：策略持续性
-    ("train_val_ir_gap",          0.15, "low"),      # 验证_OOS差距：过拟合风险（越小越好）
-    ("oos_top30_worst_median",    0.10, "high"),     # Top30最差切分：抗压能力
-    ("oos_top30_median_mean",     0.10, "high"),     # Top30中位收益：核心盈利能力
-    ("oos_rankic_ir_trend",       0.10, "high"),     # IC趋势：alpha是否在衰减
-    ("oos_top30_lift_mean",       0.05, "high"),     # Top30超额：纯选股能力
-    ("oos_top30_skew_score_mean", 0.05, "abs_low"),  # 偏斜度：极端日干扰风险（绝对值越小越好）
+    # ── 回测指标（60%）：真实组合模拟，最直接反映参数优劣 ──────────
+    ("bt_annual_return_mean",     0.20, "high"),     # 回测年化收益均值：核心盈利能力
+    ("bt_win_rate",               0.15, "high"),     # 回测胜率：各切分正收益占比
+    ("bt_sharpe_mean",            0.15, "high"),     # 回测夏普均值：风险收益比
+    ("bt_max_drawdown_worst",     0.10, "high"),     # 回测最差回撤：风险下限（值为负，越大=回撤越小=越好）
+    # ── 统计指标（32%）：辅助验证，防止回测过拟合 ─────────────────
+    ("oos_cross_split_ir",        0.10, "high"),     # 跨切分IR：核心稳健性
+    ("oos_top30_win_rate",        0.05, "high"),     # Top30胜率：策略持续性
+    ("oos_top30_worst_median",    0.05, "high"),     # Top30最差切分：抗压能力
+    ("oos_rankic_ir_trend",       0.05, "high"),     # IC趋势：alpha是否在衰减
+    ("oos_top30_median_mean",     0.03, "high"),     # Top30中位收益：核心盈利能力
+    ("oos_top30_lift_mean",       0.02, "high"),     # Top30超额：纯选股能力
+    ("oos_top30_skew_score_mean", 0.02, "abs_low"),  # 偏斜度：极端日干扰风险（绝对值越小越好）
+    # ── 训练质量（8%）：过拟合检测 ────────────────────────────────
+    ("train_val_ir_gap",          0.08, "low"),      # 验证_OOS差距：过拟合风险（越小越好）
 ]
 
 
@@ -231,6 +246,29 @@ def aggregate_run(group: pd.DataFrame) -> dict:
         row["oos_top300_median_mean"] = row["oos_top300_win_rate"] = None
 
     # -----------------------------------------------------------------------
+    # OOS 回测指标（来自 run_oos_backtest 写入的 bt_* 列）
+    # -----------------------------------------------------------------------
+    if "bt_total_return" in group.columns:
+        bt_ret = group["bt_total_return"].dropna()
+        bt_ar  = group["bt_annual_return"].dropna() if "bt_annual_return" in group.columns else pd.Series(dtype=float)
+        bt_sh  = group["bt_sharpe"].dropna()        if "bt_sharpe"        in group.columns else pd.Series(dtype=float)
+        bt_md  = group["bt_max_drawdown"].dropna()  if "bt_max_drawdown"  in group.columns else pd.Series(dtype=float)
+        bt_cal = group["bt_calmar"].dropna()         if "bt_calmar"        in group.columns else pd.Series(dtype=float)
+        bt_vol = group["bt_volatility"].dropna()     if "bt_volatility"    in group.columns else pd.Series(dtype=float)
+
+        row["bt_total_return_mean"]  = round(bt_ret.mean(), 6) if len(bt_ret) else None
+        row["bt_annual_return_mean"] = round(bt_ar.mean(),  6) if len(bt_ar)  else None
+        row["bt_sharpe_mean"]        = round(bt_sh.mean(),  4) if len(bt_sh)  else None
+        row["bt_max_drawdown_worst"] = round(bt_md.min(),   6) if len(bt_md)  else None
+        row["bt_calmar_mean"]        = round(bt_cal.mean(), 4) if len(bt_cal) else None
+        row["bt_volatility_mean"]    = round(bt_vol.mean(), 6) if len(bt_vol) else None
+        row["bt_win_rate"]           = round((bt_ret > 0).mean(), 3) if len(bt_ret) else None
+    else:
+        for k in ["bt_total_return_mean", "bt_annual_return_mean", "bt_sharpe_mean",
+                   "bt_max_drawdown_worst", "bt_calmar_mean", "bt_volatility_mean", "bt_win_rate"]:
+            row[k] = None
+
+    # -----------------------------------------------------------------------
     # 训练质量指标
     # -----------------------------------------------------------------------
     # 验证集 RankIC IR（val_rankic_ir 列，每 split 一个值）
@@ -283,23 +321,24 @@ def build_comparison_table(all_df: pd.DataFrame) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
 
-    # 列顺序：wf_run_id → OOS 指标 → 训练质量指标 → 训练参数
-    oos_cols = [
-        "n_splits",
-        "model_version_range",
-        "oos_rankic_ir_mean", "oos_rankic_ir_std", "oos_cross_split_ir", "oos_rankic_ir_trend",
-        "oos_top30_median_mean", "oos_top30_win_rate", "oos_top30_worst_median",
-        "oos_top30_skew_score_mean", "oos_top30_lift_mean",
+    # 列顺序：wf_run_id → 参与评分的指标（按权重降序）→ 非评分指标 → 训练参数
+    scored_cols = [col for col, _w, _d in sorted(SCORE_CONFIG, key=lambda x: -x[1])]
+
+    non_scored_metric_cols = [
+        "n_splits", "model_version_range",
+        # 回测补充
+        "bt_calmar_mean", "bt_total_return_mean", "bt_volatility_mean",
+        # 统计补充
+        "oos_rankic_ir_mean", "oos_rankic_ir_std",
         "oos_top100_median_mean", "oos_top100_win_rate",
         "oos_top300_median_mean", "oos_top300_win_rate",
-    ]
-    quality_cols = [
-        "val_rankic_ir_mean", "train_val_ir_gap",
+        # 训练质量补充
+        "val_rankic_ir_mean",
         "best_iter_mean", "best_iter_min", "best_iter_max", "best_iter_std",
     ]
     param_cols_ordered = [c for c in PARAM_COLS if c != "wf_run_id"]
 
-    all_cols = ["wf_run_id"] + oos_cols + quality_cols + param_cols_ordered
+    all_cols = ["wf_run_id"] + scored_cols + non_scored_metric_cols + param_cols_ordered
     df = pd.DataFrame(rows)
     # 只保留存在的列，避免 KeyError
     final_cols = [c for c in all_cols if c in df.columns]
@@ -369,10 +408,11 @@ def build_metric_descriptions() -> pd.DataFrame:
         # ── 综合评分 ──────────────────────────────────────────────────────────
         ("综合评分", "综合得分",
          "跨实验百分位排名加权综合得分（0~100，越高越好）。"
-         "对8个关键指标分别计算当前实验集内的百分位排名（0~1），再按权重求和×100。"
-         "权重配置：跨切分IR 30%、Top30胜率 15%、验证_OOS_IR差距 15%（低好）、"
-         "Top30最差中位收益 10%、Top30中位收益均值 10%、RankIC_IR趋势 10%、"
-         "Top30超额均值 5%、Top30偏斜度均值 5%（绝对值低好）。"
+         "对12个关键指标分别计算当前实验集内的百分位排名（0~1），再按权重求和×100。"
+         "权重配置（回测60%）：回测年化收益 20%、回测胜率 15%、回测夏普 15%、回测最差回撤 10%；"
+         "（统计32%）：跨切分IR 10%、Top30胜率 5%、Top30最差中位收益 5%、"
+         "RankIC_IR趋势 5%、Top30中位收益 3%、Top30超额 2%、偏斜度 2%（绝对值低好）；"
+         "（训练质量8%）：验证_OOS_IR差距 8%（低好）。"
          "NaN指标以中性分（0.5百分位）计入；仅1组实验时固定得50分。",
          "越高越好"),
         # ── OOS 性能指标 ──────────────────────────────────────────────────────
@@ -392,6 +432,14 @@ def build_metric_descriptions() -> pd.DataFrame:
         ("OOS性能", "Top100胜率",           "各切分中Top100中位收益>0的占比",                                                                                                              "越高越好"),
         ("OOS性能", "Top300中位收益均值",    "各切分每日Top300持仓20日收益中位数的跨切分均值；样本量大，统计更稳定但个股alpha被稀释",                                                               "越高越好"),
         ("OOS性能", "Top300胜率",           "各切分中Top300中位收益>0的占比",                                                                                                              "越高越好"),
+        # ── OOS 回测指标 ──────────────────────────────────────────────────────
+        ("OOS回测", "回测年化收益均值",       "各切分OOS回测（真实组合模拟）年化收益率的跨切分均值，包含交易成本和调仓摩擦",                                                                            "越高越好"),
+        ("OOS回测", "回测夏普均值",          "各切分OOS回测夏普比率（年化收益-3%无风险利率/年化波动率）的跨切分均值",                                                                                "越高越好（>1.0为优秀）"),
+        ("OOS回测", "回测最大回撤(最差)",     "所有切分OOS回测中最大回撤的最差值（绝对值最大的回撤），衡量极端风险下限",                                                                                "越接近0越好（-30%以下需警惕）"),
+        ("OOS回测", "回测Calmar均值",        "各切分年化收益/最大回撤的均值，衡量单位风险回报",                                                                                                   "越高越好（>1.0为良好）"),
+        ("OOS回测", "回测胜率",              "各切分OOS回测总收益>0的占比，衡量策略在不同历史时段的盈利稳健性",                                                                                     "越高越好（>0.7为优秀）"),
+        ("OOS回测", "回测总收益均值",         "各切分OOS回测期间总收益率的跨切分均值",                                                                                                           "越高越好"),
+        ("OOS回测", "回测波动率均值",         "各切分OOS回测年化波动率的跨切分均值",                                                                                                             "越低越稳定"),
         # ── 训练质量指标 ──────────────────────────────────────────────────────
         ("训练质量", "验证集RankIC_IR均值",  "各切分内部验证集逐日RankIC IR的跨切分均值；验证集来自训练窗口末尾，反映模型在样本内末期的泛化能力",                                                      "越高越好"),
         ("训练质量", "验证_OOS_IR差距",      "验证集IR均值 - OOS IR均值；正值表示验证集优于OOS（轻度过拟合信号），负值表示OOS优于验证集（通常正常）",                                               "接近0为好，负值可接受，大正值（>0.5）需警惕过拟合"),
@@ -556,6 +604,10 @@ def print_comparison_table(df: pd.DataFrame) -> None:
         COL_NAMES["oos_top30_median_mean"],
         COL_NAMES["oos_top30_worst_median"],
         COL_NAMES["oos_top30_lift_mean"],
+        COL_NAMES["bt_annual_return_mean"],
+        COL_NAMES["bt_sharpe_mean"],
+        COL_NAMES["bt_max_drawdown_worst"],
+        COL_NAMES["bt_win_rate"],
         COL_NAMES["val_rankic_ir_mean"],
         COL_NAMES["train_val_ir_gap"],
         COL_NAMES["best_iter_mean"],

@@ -176,6 +176,10 @@ def compute_market_state_features(
         'mkt_ret_avg_20': mkt_ret_avg_20,
         'mkt_turnover_std': mkt_turnover_std,
         'mkt_adv_dec_ratio': mkt_adv_dec_ratio,
+        # 以下新增特征在逐日计算模式下不可用（需要完整历史），填 NaN
+        'mkt_ma_trend': np.nan,
+        'mkt_drawdown_20': np.nan,
+        'mkt_ret_avg_60': np.nan,
     }
 
 
@@ -327,7 +331,27 @@ def precompute_market_state_features(
                 trading_dates
             ).set_axis(pd.Index(trading_dates, name='trade_date'))
 
-    # --- 步骤 7：组装结果 DataFrame ---
+    # --- 步骤 7：市场择时特征 ---
+    MA_SHORT = 20
+    MA_LONG = 60
+    DRAWDOWN_WINDOW = 20
+
+    # mkt_cumret: 全市场日均收益的累积曲线（用于计算 MA 趋势和回撤）
+    mkt_cumret = (1 + daily_stats['mean_ret'].fillna(0)).cumprod()
+
+    # mkt_ma_trend: 短期 MA / 长期 MA，>1 为牛市趋势，<1 为熊市趋势
+    ma_short = mkt_cumret.rolling(window=MA_SHORT, min_periods=1).mean()
+    ma_long = mkt_cumret.rolling(window=MA_LONG, min_periods=1).mean()
+    mkt_ma_trend = (ma_short / ma_long.replace(0, np.nan)).fillna(1.0)
+
+    # mkt_drawdown_20: 近 20 日全市场累积收益的最大回撤（值 ≤ 0）
+    rolling_max = mkt_cumret.rolling(window=DRAWDOWN_WINDOW, min_periods=1).max()
+    mkt_drawdown_20 = ((mkt_cumret - rolling_max) / rolling_max.replace(0, np.nan)).fillna(0.0)
+
+    # mkt_ret_avg_60: 近 60 日全市场平均收益之和（中长期动量信号）
+    mkt_ret_avg_60 = daily_stats['mean_ret'].rolling(window=60, min_periods=1).sum()
+
+    # --- 步骤 8：组装结果 DataFrame ---
     result = pd.DataFrame(
         {
             'mkt_vol_cnt': daily_stats['vol_cnt'].values,
@@ -336,6 +360,9 @@ def precompute_market_state_features(
             'mkt_ret_avg_20': mkt_ret_avg_20.values,
             'mkt_turnover_std': mkt_turnover_std.values,
             'mkt_adv_dec_ratio': mkt_adv_dec_ratio.values,
+            'mkt_ma_trend': mkt_ma_trend.values,
+            'mkt_drawdown_20': mkt_drawdown_20.values,
+            'mkt_ret_avg_60': mkt_ret_avg_60.values,
         },
         index=pd.Index(trading_dates, name='trade_date'),
     )

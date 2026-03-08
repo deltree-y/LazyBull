@@ -15,41 +15,59 @@
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
 $wf_start_date           = "20130101"
-$wf_end_date             = "20250830"
+$wf_end_date             = "20250131"
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
-$train_window_years_list = @(7)             # 训练窗口年数
+$train_window_years_list = @(6)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
+$label_list              = @("neu_y_ret_10")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(5)         # XGB推荐9, LGB推荐5
+$n_estimators            = 1000       # 固定：树数量上限（配合早停，不需要多组）
+$max_depth_list          = @(7)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.005)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
-$min_child_weight_list   = @(150,200,300)       # XGB推荐150, LGB推荐200
+$min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
 $reg_alpha_list          = @(0.05)       # XGB推荐0.05, LGB推荐0.1
 $reg_lambda_list         = @(1.0)       # XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
+
+# ── 早停配置 ───────────────────────────────────────────────────
+$early_stopping_rounds   = 500       # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树）
+$early_stopping_metric   = "auto" # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
 $rank_weight_topk_list   = @(50)
 $rank_weight_list        = @(2)
 
+# ── 时间衰减权重 ──────────────────────────────────────────────
+$time_decay_half_life    = 3         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
+
 # ── 目标函数 ─────────────────────────────────────────────────
-$objective_list          = @("lambdarank")  # mse | lambdarank（排序学习，直接优化股票排序）
+$objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 
 # ── 基本面因子（需先运行 download_fina_indicator.py 下载数据）───
 $enable_fundamental      = $false  # $true 启用 | $false 禁用
+
+# ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
+$oos_backtest            = $true   # $true 启用 | $false 禁用
+$oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 test_window_months
+$bt_top_n                = 30      # 回测持仓 Top N
+$bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
+
+# ── 市场择时仓位管理（熊市自动降仓）──────────────────────────
+$market_regime           = $true   # $true 启用 | $false 禁用
+$market_regime_bear_threshold_list = @(-0.03)  # mkt_ret_avg_20 低于此值判定为熊市
+$market_regime_bear_exposure  = 0.3    # 熊市仓位系数（0~1）
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
@@ -88,7 +106,8 @@ $totalTasks = $algorithm_list.Length *
               $reg_lambda_list.Length *
               $gamma_list.Length *
               $rank_weight_topk_list.Length *
-              $rank_weight_list.Length
+              $rank_weight_list.Length *
+              $market_regime_bear_threshold_list.Length
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -118,6 +137,7 @@ foreach ($reg_lambda in $reg_lambda_list) {
 foreach ($gamma in $gamma_list) {
 foreach ($rank_weight_topk in $rank_weight_topk_list) {
 foreach ($rank_weight in $rank_weight_list) {
+foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
 
     $count++
 
@@ -145,7 +165,10 @@ foreach ($rank_weight in $rank_weight_list) {
                  " --gamma $gamma" +
                  " --rank-weight-topk $rank_weight_topk" +
                  " --rank-weight $rank_weight" +
-                 " --data-root $data_root"
+                 " --data-root $data_root" +
+                 " --early-stopping-rounds $early_stopping_rounds" +
+                 " --early-stopping-metric $early_stopping_metric" +
+                 " --time-decay-half-life $time_decay_half_life"
 
     if (-not $rank_weight_enabled) {
         $pythonCmd += " --no-rank-weight"
@@ -153,6 +176,19 @@ foreach ($rank_weight in $rank_weight_list) {
 
     if ($enable_fundamental) {
         $pythonCmd += " --enable-fundamental-features"
+    }
+
+    if ($market_regime) {
+        $pythonCmd += " --market-regime --market-regime-bear-threshold $market_regime_bear_threshold --market-regime-bear-exposure $market_regime_bear_exposure"
+    }
+
+    if ($oos_backtest) {
+        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n"
+        if ($null -ne $bt_rebalance_freq) {
+            $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
+        }
+    } else {
+        $pythonCmd += " --no-oos-backtest"
     }
 
     Write-Host ""
@@ -182,7 +218,7 @@ foreach ($rank_weight in $rank_weight_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}  # end foreach（19 层）
+}}}}}}}}}}}}}}}}}}}}  # end foreach（20 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

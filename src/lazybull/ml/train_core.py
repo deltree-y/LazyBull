@@ -47,6 +47,20 @@ FUNDAMENTAL_FEATURE_COLUMNS = [
 ]
 
 
+# ── 自定义早停 eval metric ──────────────────────────────────────
+def neg_rank_ic(y_true, y_pred):
+    """Spearman Rank IC（XGBoost sklearn 早停用）。
+    返回负值以适配 XGBoost minimize 约定；函数名自动作为 metric name。"""
+    corr, _ = spearmanr(y_true, y_pred)
+    return float(-corr if not np.isnan(corr) else 0)
+
+
+def _rank_ic_eval_lgb(y_true, y_pred):
+    """Spearman Rank IC（LightGBM 早停用，higher_is_better=True）"""
+    corr, _ = spearmanr(y_true, y_pred)
+    return 'rank_ic', float(corr if not np.isnan(corr) else 0), True
+
+
 def load_features_data(
     storage: Storage,
     loader: DataLoader,
@@ -273,10 +287,10 @@ def prepare_training_data(
         "is_loss",                 # 是否亏损（质量过滤）
         "list_days",               # 上市天数
 
-        # 5. 市场环境特征 (4个) - 环境感知，缓解逻辑断裂导致的早停
+        # 5. 市场环境特征 (7个) - 环境感知 + 择时信号
         # is_limit_up 过滤后恒为 0，已移除；is_limit_down 保留（跌停股参与训练，不作为特征）
         "mkt_adv_dec_ratio",       # 市场涨跌比
-        "mkt_ret_avg_20",          # 市场平均收益
+        "mkt_ret_avg_20",          # 市场平均收益（20日）
         "mkt_turnover_std",        # 市场成交额波动
         "mkt_vol_20",              # 市场总体成交量
     ]
@@ -510,6 +524,55 @@ def generate_classification_labels(
     return df_labeled
 
 
+def build_time_decay_weights(
+    df_train: pd.DataFrame,
+    half_life_years: float = 1.0,
+    date_col: str = 'trade_date'
+) -> np.ndarray:
+    """按时间衰减构造训练样本权重
+
+    越近的样本权重越高，使模型更重视近期市场模式。
+    使用指数衰减：weight = 0.5 ^ (distance_years / half_life_years)
+
+    - half_life_years=1.0 → 1年前的样本权重为0.5，2年前为0.25
+    - half_life_years=2.0 → 2年前的样本权重为0.5，4年前为0.25（衰减更慢）
+
+    Args:
+        df_train: 训练集 DataFrame，需包含 trade_date 列
+        half_life_years: 半衰期（年），即权重衰减到 0.5 所需的年数
+        date_col: 日期列名
+
+    Returns:
+        与 df_train 行数相同的 numpy 数组，包含每个样本的权重（最新样本=1.0）
+    """
+    if date_col not in df_train.columns:
+        logger.warning(f"日期列 {date_col} 不存在，返回全为1的权重")
+        return np.ones(len(df_train), dtype=float)
+
+    dates = pd.to_datetime(df_train[date_col].astype(str))
+    max_date = dates.max()
+
+    # 距最新日期的交易日数（用实际行数近似，避免需要交易日历）
+    # 按唯一日期排序，给每个日期赋予序号距离
+    unique_dates = sorted(dates.unique())
+    date_to_rank = {d: i for i, d in enumerate(unique_dates)}
+    total_days = len(unique_dates)
+
+    ranks = dates.map(date_to_rank).values.astype(float)
+    # distance: 距最新日期的交易日距离（最新=0，最旧=total_days-1）
+    distance = (total_days - 1) - ranks
+    distance_years = distance / 252.0
+
+    weights = np.power(0.5, distance_years / half_life_years)
+
+    logger.info(
+        f"时间衰减权重构造完成: half_life={half_life_years}y, "
+        f"训练跨度={total_days}交易日(≈{total_days/252:.1f}y), "
+        f"最旧样本权重={weights.min():.4f}, 最新样本权重={weights.max():.4f}"
+    )
+    return weights
+
+
 def build_rank_sample_weights(
     df_train: pd.DataFrame,
     label_column: str,
@@ -562,18 +625,18 @@ def build_rank_sample_weights(
 
         # 排序取 Top K（最大值）和 Bottom K（最小值）
         sorted_vals = grp.sort_values()
-        #bottom_k_idx = sorted_vals.iloc[:topk].index
+        bottom_k_idx = sorted_vals.iloc[:topk].index
         top_k_idx = sorted_vals.iloc[-topk:].index
 
         # 将 Top/Bottom K 的位置映射到 weights 数组位置（使用 get_indexer_for 确保正确映射）
         top_positions = df_train.index.get_indexer_for(top_k_idx)
-        #bottom_positions = df_train.index.get_indexer_for(bottom_k_idx)
+        bottom_positions = df_train.index.get_indexer_for(bottom_k_idx)
         weights[top_positions[top_positions >= 0]] = top_weight
-        #weights[bottom_positions[bottom_positions >= 0]] = top_weight
+        weights[bottom_positions[bottom_positions >= 0]] = top_weight
 
     top_bottom_count = int((weights > 1.0).sum())
     logger.info(
-        f"样本权重构造完成: Top {topk} 增强（Bottom K 未启用），"
+        f"样本权重构造完成: Top/Bottom {topk} 增强，"
         f"加权样本数={top_bottom_count}，权重={top_weight}，"
         f"普通样本数={len(weights) - top_bottom_count}"
     )
@@ -602,6 +665,8 @@ def train_xgboost_model(
     objective_type: str = "mse",
     df_train_for_group: Optional[pd.DataFrame] = None,
     df_val_for_group: Optional[pd.DataFrame] = None,
+    early_stopping_rounds: Optional[int] = 200,
+    early_stopping_metric: str = "auto",
 ) -> tuple:
     """训练 XGBoost 模型（支持回归、分类和排序学习）
 
@@ -694,16 +759,21 @@ def train_xgboost_model(
             "tree_method": "hist",
             "device": "cuda",
             "n_jobs": -1,
-            "early_stopping_rounds": 200,
             "gamma": gamma,
             "reg_alpha": reg_alpha,
             "reg_lambda": reg_lambda,
             "min_child_weight": min_child_weight,
         }
     else:
+        # 确定 eval_metric：rank_ic 用自定义函数（尺度无关，跨 split 更稳定）
+        if early_stopping_metric == "rank_ic" and task == "regression":
+            xgb_eval_metric = neg_rank_ic
+        else:
+            xgb_eval_metric = "mae" if task == "regression" else "auc"
+
         train_params = {
             "objective": "reg:squarederror" if task == "regression" else "binary:logistic",
-            "eval_metric": "mae" if task == "regression" else "auc",
+            "eval_metric": xgb_eval_metric,
             "n_estimators": n_estimators,
             "max_depth": max_depth,
             "learning_rate": learning_rate,
@@ -713,19 +783,28 @@ def train_xgboost_model(
             "tree_method": "hist",
             "device": "cuda",
             "n_jobs": -1,
-            "early_stopping_rounds": 200,
             "gamma": gamma,
             "reg_alpha": reg_alpha,
             "reg_lambda": reg_lambda,
             "min_child_weight": min_child_weight,
         }
 
+    # 早停设置：early_stopping_rounds=None 或 0 表示禁用早停，使用固定 n_estimators
+    if early_stopping_rounds:
+        train_params["early_stopping_rounds"] = early_stopping_rounds
+
     # 分类任务添加 scale_pos_weight
     if task == "classification" and computed_scale_pos_weight is not None:
         train_params["scale_pos_weight"] = computed_scale_pos_weight
 
-    logger.info(f"训练参数: {train_params}")
-    logger.info(f"使用早停机制（early_stopping_rounds={train_params['early_stopping_rounds']}）")
+    # 日志中显示可读的 eval_metric 名称（callable 替换为字符串）
+    log_params = {k: (v.__name__ if callable(v) else v) for k, v in train_params.items()}
+    logger.info(f"训练参数: {log_params}")
+    if early_stopping_rounds:
+        es_metric_display = early_stopping_metric if early_stopping_metric != "auto" else log_params.get("eval_metric", "mae")
+        logger.info(f"使用早停机制（rounds={early_stopping_rounds}, metric={es_metric_display}）")
+    else:
+        logger.info(f"未使用早停机制，固定训练 {n_estimators} 棵树")
 
     # LambdaRank 需要构造 qid（query group ID），每个 trade_date 为一个 query group
     # 同时需要将连续收益率标签转换为非负整数等级（XGBoost rank 要求）
@@ -799,7 +878,10 @@ def train_xgboost_model(
             fit_kwargs["sample_weight"] = sample_weight
 
         model.fit(X_train, y_train_processed, **fit_kwargs)
-        logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
+        if early_stopping_rounds:
+            logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
+        else:
+            logger.info(f"模型训练完成（固定 {n_estimators} 棵树）")
     else:
         fit_kwargs = {"verbose": False}
         if use_lambdarank:
@@ -919,7 +1001,11 @@ def train_xgboost_model(
     # 添加 best_iteration 到 train_params
     if len(X_val) > 0 and hasattr(model, 'best_iteration'):
         train_params["best_iteration"] = int(model.best_iteration)
-    
+    train_params["early_stopping_metric"] = early_stopping_metric
+    # 确保 eval_metric 可序列化（callable 替换为函数名）
+    if callable(train_params.get("eval_metric")):
+        train_params["eval_metric"] = train_params["eval_metric"].__name__
+
     return model, train_params, train_metrics, val_metrics
 
 
@@ -1043,6 +1129,8 @@ def train_lightgbm_model(
     reg_alpha: float = 0.05,
     reg_lambda: float = 1.0,
     gamma: float = 0.1,
+    early_stopping_rounds: Optional[int] = 200,
+    early_stopping_metric: str = "auto",
 ) -> tuple:
     """训练 LightGBM 模型（支持回归和分类）
 
@@ -1122,6 +1210,9 @@ def train_lightgbm_model(
         "verbosity": -1,
     }
 
+    if early_stopping_rounds:
+        train_params["early_stopping_rounds"] = early_stopping_rounds
+
     logger.info(f"训练参数: {train_params}")
 
     # 创建模型
@@ -1131,26 +1222,42 @@ def train_lightgbm_model(
         model = lgb.LGBMClassifier(**train_params)
 
     # 训练（LightGBM 使用 callbacks 进行早停）
-    early_stopping_rounds = 200
-    callbacks = [
-        lgb.early_stopping(stopping_rounds=early_stopping_rounds),
-        lgb.log_evaluation(period=0),  # 静默
-    ]
+    if early_stopping_rounds and len(X_val) > 0:
+        callbacks = [
+            lgb.early_stopping(stopping_rounds=early_stopping_rounds),
+            lgb.log_evaluation(period=0),  # 静默
+        ]
+        es_metric_display = early_stopping_metric if early_stopping_metric != "auto" else train_params.get("metric", "mae")
+        logger.info(f"使用早停机制（rounds={early_stopping_rounds}, metric={es_metric_display}）")
 
-    if len(X_val) > 0:
+        fit_kwargs = {
+            "sample_weight": sample_weight,
+            "eval_set": [(X_val, y_val)],
+            "callbacks": callbacks,
+        }
+        # 自定义早停 eval metric（rank_ic 替代 mae，尺度无关更稳定）
+        if early_stopping_metric == "rank_ic" and task == "regression":
+            fit_kwargs["eval_metric"] = _rank_ic_eval_lgb
+
+        model.fit(X_train, y_train_processed, **fit_kwargs)
+        logger.info(f"模型训练完成（最佳迭代: {model.best_iteration_}）")
+    elif len(X_val) > 0:
+        callbacks = [lgb.log_evaluation(period=0)]
+        logger.info(f"未使用早停机制，固定训练 {n_estimators} 棵树")
         model.fit(
             X_train, y_train_processed,
             sample_weight=sample_weight,
             eval_set=[(X_val, y_val)],
             callbacks=callbacks
         )
-        logger.info(f"模型训练完成（最佳迭代: {model.best_iteration_}）")
+        logger.info(f"模型训练完成（固定 {n_estimators} 棵树）")
     else:
+        logger.info(f"未使用早停机制，固定训练 {n_estimators} 棵树")
         model.fit(
             X_train, y_train_processed,
             sample_weight=sample_weight,
         )
-        logger.info("模型训练完成（无验证集，未使用早停）")
+        logger.info("模型训练完成（无验证集）")
 
     importance = model.feature_importances_
     feature_names = X_train.columns
@@ -1257,5 +1364,6 @@ def train_lightgbm_model(
     # 添加 best_iteration 到 train_params
     if len(X_val) > 0 and hasattr(model, 'best_iteration_'):
         train_params["best_iteration"] = int(model.best_iteration_)
+    train_params["early_stopping_metric"] = early_stopping_metric
 
     return model, train_params, train_metrics, val_metrics
