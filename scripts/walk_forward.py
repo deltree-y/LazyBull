@@ -88,6 +88,9 @@ def run_oos_backtest(
     market_regime_enabled: bool = False,
     market_regime_bear_threshold: float = -0.02,
     market_regime_bear_exposure: float = 0.3,
+    bt_weight_method: str = "equal",
+    industry_momentum_filter: bool = False,
+    industry_momentum_bottom_pct: float = 0.2,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测，返回组合级绩效指标
 
@@ -166,7 +169,7 @@ def run_oos_backtest(
         top_n=bt_top_n,
         model_version=model_version,
         models_dir=f"{data_root}/models",
-        weight_method="equal",
+        weight_method=bt_weight_method,
         verbose=False,
     )
 
@@ -190,6 +193,8 @@ def run_oos_backtest(
         market_regime_enabled=market_regime_enabled,
         market_regime_bear_threshold=market_regime_bear_threshold,
         market_regime_bear_exposure=market_regime_bear_exposure,
+        industry_momentum_filter=industry_momentum_filter,
+        industry_momentum_bottom_pct=industry_momentum_bottom_pct,
     )
 
     trading_dates_ts = [pd.Timestamp(d) for d in trade_dates]
@@ -726,6 +731,9 @@ def write_walk_forward_summary(
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
+        "bt_weight_method": getattr(args, 'bt_weight_method', 'equal'),
+        "industry_momentum_filter": getattr(args, 'industry_momentum_filter', False),
+        "industry_momentum_bottom_pct": getattr(args, 'industry_momentum_bottom_pct', 0.2),
         "market_regime": getattr(args, 'market_regime', False),
         "market_regime_bear_threshold": getattr(args, 'market_regime_bear_threshold', None),
         "market_regime_bear_exposure": getattr(args, 'market_regime_bear_exposure', None),
@@ -1140,6 +1148,29 @@ def main():
         help="OOS 回测调仓频率（交易日），默认从标签自动推断"
     )
 
+    # 回测权重方法
+    parser.add_argument(
+        "--bt-weight-method",
+        type=str,
+        default="equal",
+        choices=["equal", "score"],
+        help="回测权重分配方法：equal（等权）或 score（按预测分数加权），默认 equal"
+    )
+
+    # 行业动量过滤
+    parser.add_argument(
+        "--industry-momentum-filter",
+        action="store_true",
+        default=False,
+        help="启用行业动量过滤（剔除弱势行业股票，自动补位），默认关闭"
+    )
+    parser.add_argument(
+        "--industry-momentum-bottom-pct",
+        type=float,
+        default=0.2,
+        help="行业动量过滤阈值：剔除排名后 X%% 的行业（0~1），默认 0.2（后20%%）"
+    )
+
     # 市场择时仓位管理参数
     parser.add_argument(
         "--market-regime",
@@ -1269,6 +1300,9 @@ def main():
                             market_regime_enabled=args.market_regime,
                             market_regime_bear_threshold=args.market_regime_bear_threshold,
                             market_regime_bear_exposure=args.market_regime_bear_exposure,
+                            bt_weight_method=args.bt_weight_method,
+                            industry_momentum_filter=args.industry_momentum_filter,
+                            industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)

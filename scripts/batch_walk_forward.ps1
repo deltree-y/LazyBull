@@ -24,13 +24,13 @@ $test_window_months_list = @(6)             # 测试窗口月数（建议与标�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_10")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
+$label_list              = @("neu_y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 1000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(7)         # XGB推荐9, LGB推荐5
+$max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.005)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
@@ -50,7 +50,7 @@ $rank_weight_topk_list   = @(50)
 $rank_weight_list        = @(2)
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
-$time_decay_half_life    = 3         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
+$time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
 
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
@@ -61,11 +61,16 @@ $enable_fundamental      = $false  # $true 启用 | $false 禁用
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
 $oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n                = 30      # 回测持仓 Top N
+$bt_top_n_list           = @(30)   # 回测持仓 Top N
 $bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
+$bt_weight_method        = "score" # 权重方法：equal（等权）| score（按预测分数加权）
+
+# ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
+$industry_momentum_filter     = $false  # $true 启用 | $false 禁用
+$industry_momentum_bottom_pct = 0.2     # 剔除排名后 X% 的行业（0~1），默认 0.2
 
 # ── 市场择时仓位管理（熊市自动降仓）──────────────────────────
-$market_regime           = $true   # $true 启用 | $false 禁用
+$market_regime           = $false   # $true 启用 | $false 禁用
 $market_regime_bear_threshold_list = @(-0.03)  # mkt_ret_avg_20 低于此值判定为熊市
 $market_regime_bear_exposure  = 0.3    # 熊市仓位系数（0~1）
 
@@ -107,7 +112,8 @@ $totalTasks = $algorithm_list.Length *
               $gamma_list.Length *
               $rank_weight_topk_list.Length *
               $rank_weight_list.Length *
-              $market_regime_bear_threshold_list.Length
+              $market_regime_bear_threshold_list.Length *
+              $bt_top_n_list.Length
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -138,6 +144,7 @@ foreach ($gamma in $gamma_list) {
 foreach ($rank_weight_topk in $rank_weight_topk_list) {
 foreach ($rank_weight in $rank_weight_list) {
 foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
+foreach ($bt_top_n in $bt_top_n_list) {
 
     $count++
 
@@ -183,12 +190,16 @@ foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
     }
 
     if ($oos_backtest) {
-        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n"
+        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method"
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
         }
     } else {
         $pythonCmd += " --no-oos-backtest"
+    }
+
+    if ($industry_momentum_filter) {
+        $pythonCmd += " --industry-momentum-filter --industry-momentum-bottom-pct $industry_momentum_bottom_pct"
     }
 
     Write-Host ""
@@ -218,7 +229,7 @@ foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}  # end foreach（20 层）
+}}}}}}}}}}}}}}}}}}}}}  # end foreach（21 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

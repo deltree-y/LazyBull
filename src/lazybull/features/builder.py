@@ -777,6 +777,13 @@ class FeatureBuilder:
                     result, ret_windows=self.lookback_windows, industry_col=industry_col
                 )
                 result = result.merge(industry_alpha_df, on=['ts_code', 'trade_date'], how='left')
+
+                # 行业动量特征（下沉到个股）
+                from ..factors.industry import calculate_industry_momentum_features
+                ind_mom_df = calculate_industry_momentum_features(
+                    result, industry_col=industry_col, ret_col='ret_20',
+                )
+                result = result.merge(ind_mom_df, on=['ts_code', 'trade_date'], how='left')
             else:
                 logger.debug("未找到行业列，跳过行业 alpha 计算")
         

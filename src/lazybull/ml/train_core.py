@@ -250,6 +250,8 @@ def prepare_training_data(
         "alpha_industry_20",       # 行业动量（保留此特征以保留行业轮动视角）
         #"alpha_industry_10",       # 行业动量（保留此特征以保留行业轮动视角）
         "alpha_industry_5",        # 行业短期爆发力
+        "ind_ret_avg",             # 所属行业平均收益（行业绝对动量）
+        "ind_momentum_rank",       # 行业动量百分位排名（0~1，1=最强行业）
         "zscore_ma_deviation_20",  # 20日均线乖离率
         "zscore_acceleration",     # 动量加速度
         "zscore_macd_hist",        # MACD能量柱（动能切换）

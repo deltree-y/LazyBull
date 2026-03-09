@@ -364,17 +364,34 @@ class BacktestEngine:
     
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建传递给信号生成器的额外数据（扩展点）
-        
+
         子类可以重写此方法以注入特定数据（如 ML 特征）。
-        
+
         Args:
             date: 信号生成日期
-            
+
         Returns:
             数据字典，将与默认数据合并后传递给 signal.generate_ranked()
             返回 None 表示该日期无可用数据，将跳过信号生成
         """
         return {}
+
+    def _post_filter_candidates(
+        self, ranked_candidates: list, date: pd.Timestamp
+    ) -> list:
+        """对排序候选列表做额外过滤（扩展点）
+
+        子类可重写此方法，例如按行业动量过滤弱势行业的股票。
+        默认不做任何过滤。
+
+        Args:
+            ranked_candidates: [(stock_code, score), ...] 已按分数降序排列
+            date: 信号生成日期
+
+        Returns:
+            过滤后的候选列表
+        """
+        return ranked_candidates
     
     def _generate_signal(self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], price_data: pd.DataFrame, date_to_idx: Dict) -> None:
         """生成信号（在 T 日生成，T+1 日执行买入）
@@ -437,7 +454,10 @@ class BacktestEngine:
                 target_n=len(ranked_candidates),  # 保留所有候选，只改变顺序
                 verbose=self.verbose
             )
-        
+
+        # 扩展点：子类可覆盖此方法对候选列表做额外过滤
+        ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
+
         # 从排序候选中选择 top N 股票
         # 当启用仓位补齐功能时，不在信号生成阶段过滤 T+1 的涨停/停牌，
         # 而是在 T+1 执行买入时处理失败，并在 T+2 等日期补齐

@@ -31,6 +31,8 @@ class BacktestEngineML(BacktestEngine):
         market_regime_enabled: bool = False,
         market_regime_bear_threshold: float = -0.02,
         market_regime_bear_exposure: float = 0.3,
+        industry_momentum_filter: bool = False,
+        industry_momentum_bottom_pct: float = 0.2,
         **kwargs,
     ):
         """初始化 ML 回测引擎
@@ -40,6 +42,8 @@ class BacktestEngineML(BacktestEngine):
             market_regime_enabled: 是否启用市场择时仓位管理，默认 False
             market_regime_bear_threshold: mkt_ret_avg_20 低于此值判定为熊市，默认 -0.02
             market_regime_bear_exposure: 熊市仓位系数（0~1），默认 0.3
+            industry_momentum_filter: 是否启用行业动量过滤（剔除弱势行业股票），默认 False
+            industry_momentum_bottom_pct: 剔除行业动量排名后 X% 的行业（0~1），默认 0.2
             **kwargs: 其他参数传递给父类 BacktestEngine
         """
         super().__init__(**kwargs)
@@ -47,6 +51,8 @@ class BacktestEngineML(BacktestEngine):
         self.market_regime_enabled = market_regime_enabled
         self.market_regime_bear_threshold = market_regime_bear_threshold
         self.market_regime_bear_exposure = market_regime_bear_exposure
+        self.industry_momentum_filter = industry_momentum_filter
+        self.industry_momentum_bottom_pct = industry_momentum_bottom_pct
 
         regime_info = ""
         if market_regime_enabled:
@@ -54,7 +60,13 @@ class BacktestEngineML(BacktestEngine):
                 f", 市场择时=开启(bear_threshold={market_regime_bear_threshold}, "
                 f"bear_exposure={market_regime_bear_exposure})"
             )
-        logger.info(f"ML 回测引擎初始化: 特征数据覆盖 {len(features_by_date)} 个交易日{regime_info}")
+        ind_filter_info = ""
+        if industry_momentum_filter:
+            ind_filter_info = f", 行业动量过滤=开启(剔除后{industry_momentum_bottom_pct*100:.0f}%行业)"
+        logger.info(
+            f"ML 回测引擎初始化: 特征数据覆盖 {len(features_by_date)} 个交易日"
+            f"{regime_info}{ind_filter_info}"
+        )
     
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建信号数据（注入 ML 特征）
@@ -80,6 +92,49 @@ class BacktestEngineML(BacktestEngine):
 
         # 返回特征数据字典
         return {"features": features_df}
+
+    # ── 行业动量过滤 ────────────────────────────────────────────────
+
+    def _post_filter_candidates(
+        self, ranked_candidates: list, date: pd.Timestamp
+    ) -> list:
+        """剔除弱势行业的股票，剩余候选自动补位到 top_n
+
+        利用 features_by_date 中的 ind_momentum_rank（行业动量百分位排名，0~1）
+        过滤掉排名 < bottom_pct 的行业的所有股票。由于候选列表远多于 top_n，
+        过滤后父类仍从前 N 个候选中选取，自动实现补位。
+        """
+        if not self.industry_momentum_filter:
+            return ranked_candidates
+
+        date_str = date.strftime('%Y%m%d')
+        features_df = self.features_by_date.get(date_str)
+        if features_df is None or 'ind_momentum_rank' not in features_df.columns:
+            return ranked_candidates
+
+        # 构建 {ts_code: ind_momentum_rank} 查找表
+        rank_map = dict(zip(
+            features_df['ts_code'],
+            features_df['ind_momentum_rank'],
+        ))
+
+        threshold = self.industry_momentum_bottom_pct
+        filtered = []
+        removed = 0
+        for stock, score in ranked_candidates:
+            rank = rank_map.get(stock)
+            if rank is not None and rank < threshold:
+                removed += 1
+                continue
+            filtered.append((stock, score))
+
+        if removed > 0 and self.verbose:
+            logger.info(
+                f"  行业动量过滤: {date.date()}, "
+                f"剔除 {removed} 只弱势行业股票 (bottom {threshold*100:.0f}%)"
+            )
+
+        return filtered
 
     # ── 市场择时仓位管理 ──────────────────────────────────────────────
 

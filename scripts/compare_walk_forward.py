@@ -473,6 +473,95 @@ def build_metric_descriptions() -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["分类", "指标名", "说明", "优劣方向"])
 
 
+def build_split_detail_table(all_df: pd.DataFrame) -> pd.DataFrame:
+    """构建逐 split 明细表（每个 split 一行，展示该 split 的回测表现与训练参数）
+
+    用于对比不同实验在各时间段的表现差异，帮助定位哪些时段拖后腿。
+    """
+    if all_df.empty or "wf_run_id" not in all_df.columns:
+        return pd.DataFrame()
+
+    # 选取需要的列
+    detail_cols = [
+        "wf_run_id", "split_index",
+        "train_start", "train_end", "test_start", "test_end",
+        # 逐 split 回测指标
+        "bt_total_return", "bt_annual_return", "bt_max_drawdown",
+        "bt_sharpe", "bt_calmar", "bt_volatility",
+        "bt_trading_days", "bt_top_n",
+        # 逐 split 模型质量
+        "daily_rankic_mean", "daily_rankic_ir", "val_rankic_ir",
+        "best_iteration", "train_samples", "test_samples",
+        # 关键训练参数（用于区分实验）
+        "algorithm", "label_column", "task", "label_transform",
+        "max_depth", "learning_rate", "train_window_years", "test_window_months",
+        "time_decay_half_life", "market_regime", "enable_fundamental",
+    ]
+    available_cols = [c for c in detail_cols if c in all_df.columns]
+    result = all_df[available_cols].copy()
+
+    # 按运行时间降序、split 升序排列
+    result = result.sort_values(["wf_run_id", "split_index"], ascending=[False, True])
+
+    # 计算累计净值（组内 cumprod）
+    if "bt_total_return" in result.columns:
+        result["chain_nav"] = result.groupby("wf_run_id")["bt_total_return"].transform(
+            lambda x: (1 + x).cumprod()
+        )
+
+    # 列名翻译
+    rename_map = {
+        "wf_run_id": "运行ID",
+        "split_index": "切分序号",
+        "train_start": "训练开始",
+        "train_end": "训练结束",
+        "test_start": "测试开始",
+        "test_end": "测试结束",
+        "bt_total_return": "总收益",
+        "bt_annual_return": "年化收益",
+        "bt_max_drawdown": "最大回撤",
+        "bt_sharpe": "夏普",
+        "bt_calmar": "Calmar",
+        "bt_volatility": "波动率",
+        "bt_trading_days": "交易天数",
+        "bt_top_n": "TopN",
+        "daily_rankic_mean": "OOS_RankIC均值",
+        "daily_rankic_ir": "OOS_RankIC_IR",
+        "val_rankic_ir": "验证集RankIC_IR",
+        "best_iteration": "最佳迭代",
+        "train_samples": "训练样本数",
+        "test_samples": "测试样本数",
+        "chain_nav": "累计净值",
+        "algorithm": "算法",
+        "label_column": "标签列",
+        "task": "任务类型",
+        "label_transform": "标签变换",
+        "max_depth": "最大深度",
+        "learning_rate": "学习率",
+        "train_window_years": "训练窗口年数",
+        "test_window_months": "测试窗口月数",
+        "time_decay_half_life": "时间衰减半衰期",
+        "market_regime": "市场择时",
+        "enable_fundamental": "基本面因子",
+    }
+    result = result.rename(columns={k: v for k, v in rename_map.items() if k in result.columns})
+
+    # 调整列序：运行ID → 切分序号 → 时间 → 回测指标 → 累计净值 → 模型质量 → 训练参数
+    ordered = [
+        "运行ID", "切分序号",
+        "训练开始", "训练结束", "测试开始", "测试结束",
+        "总收益", "年化收益", "最大回撤", "夏普", "Calmar", "波动率", "交易天数", "TopN",
+        "累计净值",
+        "OOS_RankIC均值", "OOS_RankIC_IR", "验证集RankIC_IR", "最佳迭代",
+        "训练样本数", "测试样本数",
+        "算法", "标签列", "任务类型", "标签变换",
+        "最大深度", "学习率", "训练窗口年数", "测试窗口月数",
+        "时间衰减半衰期", "市场择时", "基本面因子",
+    ]
+    final_cols = [c for c in ordered if c in result.columns]
+    return result[final_cols].reset_index(drop=True)
+
+
 def sort_by_run_time(df: pd.DataFrame, run_id_col: str = "运行ID") -> pd.DataFrame:
     """按 wf_run_id 中的运行时间戳降序排列（最近的排在前面）
 
@@ -555,7 +644,8 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
             col_letter_fill[cell.column_letter] = score_cn_fills[str(cell.value)]
 
     # ── 全局字体、冻结、列宽、绿色背景 ──────────────────────────────────
-    for sheet_name in ["实验对比", "指标说明"]:
+    all_sheets = [s for s in ["实验对比", "指标说明", "逐Split明细"] if s in wb.sheetnames]
+    for sheet_name in all_sheets:
         ws = wb[sheet_name]
         ws.freeze_panes = "A2"
 
@@ -661,16 +751,22 @@ def main():
     # 4. 构建指标说明表
     desc_df = build_metric_descriptions()
 
-    # 5. 按运行时间降序排列（最近的排在最前面）
+    # 5. 构建逐 split 明细表
+    split_df = build_split_detail_table(all_df)
+    logger.info(f"逐Split明细表: {len(split_df)} 行")
+
+    # 6. 按运行时间降序排列（最近的排在最前面）
     comp_df = sort_by_run_time(comp_df)
 
-    # 6. 输出 Excel（两个 sheet），并应用格式化
+    # 7. 输出 Excel（三个 sheet），并应用格式化
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         comp_df.to_excel(writer, sheet_name="实验对比", index=False)
         desc_df.to_excel(writer, sheet_name="指标说明", index=False)
+        if not split_df.empty:
+            split_df.to_excel(writer, sheet_name="逐Split明细", index=False)
         format_excel_output(writer.book, desc_df)
-    logger.info(f"对比表已保存: {output_path}（{len(comp_df)} 个实验，共2个sheet）")
+    logger.info(f"对比表已保存: {output_path}（{len(comp_df)} 个实验，共{len(writer.book.sheetnames)}个sheet）")
 
     # 7. 控制台打印精简版
     print_comparison_table(comp_df)
