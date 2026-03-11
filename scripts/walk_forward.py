@@ -326,6 +326,7 @@ def execute_split_training(
     X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original = prepare_training_data(
         df_train, actual_label_column, val_ratio=args.val_ratio, label_transform_fn=label_transform_fn,
         enable_fundamental_features=args.enable_fundamental_features,
+        enable_alt_features=args.enable_alt_features,
     )
 
     # 4.1. 构造样本权重（rank-weight + 时间衰减，可叠加）
@@ -432,15 +433,8 @@ def execute_split_training(
     
     logger.info(f"测试集样本数（过滤后）: {len(df_test_eval)}")
     
-    # 测试集预测
-    _test_nan_rates = df_test_eval[feature_columns].isna().mean()
-    _test_high_nan = _test_nan_rates[_test_nan_rates > 0.3]
-    if len(_test_high_nan) > 0:
-        logger.warning(
-            f"测试集特征 NaN 比例 >30%（fillna(0) 可能使预测偏离训练分布）: "
-            f"{_test_high_nan.round(3).to_dict()}"
-        )
-    X_test_features = df_test_eval[feature_columns].fillna(0)
+    # 测试集预测（XGB/LGB 原生支持 NaN，不做 fillna）
+    X_test_features = df_test_eval[feature_columns]
     
     if args.task == "classification":
         y_test_pred_proba = model.predict_proba(X_test_features)[:, 1]
@@ -728,6 +722,7 @@ def write_walk_forward_summary(
         "rank_weight": args.rank_weight,
         "time_decay_half_life": args.time_decay_half_life,
         "enable_fundamental": args.enable_fundamental_features,
+        "enable_alt": args.enable_alt_features,
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
@@ -1094,6 +1089,13 @@ def main():
         "--enable-fundamental-features",
         action="store_true",
         help="启用基本面因子（ROE、营收增速等）作为训练特征"
+    )
+
+    # 另类数据因子
+    parser.add_argument(
+        "--enable-alt-features",
+        action="store_true",
+        help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
     )
 
     # 其他参数

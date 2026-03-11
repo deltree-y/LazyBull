@@ -257,6 +257,13 @@ def main():
         help="启用基本面因子（ROE、营收增速等）作为训练特征"
     )
 
+    # 另类数据因子
+    parser.add_argument(
+        "--enable-alt-features",
+        action="store_true",
+        help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -332,6 +339,7 @@ def main():
         X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original = prepare_training_data(
             df, actual_label_column, label_transform_fn=label_transform_fn,
             enable_fundamental_features=args.enable_fundamental_features,
+            enable_alt_features=args.enable_alt_features,
         )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
         if False:  # 默认不启用，后续可以改为参数控制

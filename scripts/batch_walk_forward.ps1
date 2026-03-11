@@ -24,15 +24,15 @@ $test_window_months_list = @(6)             # 测试窗口月数（建议与标�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
+$label_list              = @("neu_y_ret_20","neu_y_ret_10")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 1000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
+$max_depth_list          = @(3,4,5,7,9)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.005)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.005,0.0025,0.01)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -55,15 +55,18 @@ $time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年�
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 
-# ── 基本面因子（需先运行 download_fina_indicator.py 下载数据）───
+# ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
 $enable_fundamental      = $false  # $true 启用 | $false 禁用
+
+# ── 另类数据因子（融资融券、股东人数、业绩预告、人气榜）(0310添加)──────────
+$enable_alt              = $true  # $true 启用 | $false 禁用
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
 $oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 test_window_months
 $bt_top_n_list           = @(30)   # 回测持仓 Top N
 $bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
-$bt_weight_method        = "score" # 权重方法：equal（等权）| score（按预测分数加权）
+$bt_weight_method        = "equal" # 权重方法：equal（等权）| score（按预测分数加权）
 
 # ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
 $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
@@ -183,6 +186,10 @@ foreach ($bt_top_n in $bt_top_n_list) {
 
     if ($enable_fundamental) {
         $pythonCmd += " --enable-fundamental-features"
+    }
+
+    if ($enable_alt) {
+        $pythonCmd += " --enable-alt-features"
     }
 
     if ($market_regime) {

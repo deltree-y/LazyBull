@@ -769,7 +769,7 @@ def main():
     logger.info(f"对比表已保存: {output_path}（{len(comp_df)} 个实验，共{len(writer.book.sheetnames)}个sheet）")
 
     # 7. 控制台打印精简版
-    print_comparison_table(comp_df)
+    #print_comparison_table(comp_df)
 
     logger.info("=" * 70)
 

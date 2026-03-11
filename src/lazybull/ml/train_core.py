@@ -46,6 +46,26 @@ FUNDAMENTAL_FEATURE_COLUMNS = [
     "zscore_q_gr_yoy",         # 单季度营收同比增速
 ]
 
+# 另类数据因子特征列
+ALT_FEATURE_COLUMNS = [
+    # 融资融券 (4)
+    "rzye_chg_5",              # 融资余额5日变动率
+    "rzye_chg_20",             # 融资余额20日变动率
+    "rqye_rzye_ratio",         # 融券/融资余额比
+    "margin_net_buy_ratio",    # 融资净买入/成交额
+    # 股东人数 (2)
+    "holder_num_chg",          # 股东人数环比变动率
+    "holder_num_chg_2q",       # 股东人数两期变动率
+    # 业绩预告/快报 (4)
+    "forecast_type_score",     # 业绩预告类型评分
+    "forecast_chg_mid",        # 业绩预告变动幅度中值
+    "express_profit_yoy",      # 业绩快报净利润同比
+    "express_revenue_yoy",     # 业绩快报营收同比
+    # 东财人气榜 (2)
+    "hot_rank",                # 人气排名
+    "hot_rank_chg_5",          # 5日人气排名变动
+]
+
 
 # ── 自定义早停 eval metric ──────────────────────────────────────
 def neg_rank_ic(y_true, y_pred):
@@ -195,6 +215,7 @@ def prepare_training_data(
     val_ratio: float = 0.2,
     label_transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
     enable_fundamental_features: bool = False,
+    enable_alt_features: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
 
@@ -306,6 +327,15 @@ def prepare_training_data(
         else:
             logger.warning("enable_fundamental_features=True，但数据中未找到基本面列，跳过")
 
+    # 另类数据因子（可选）
+    if enable_alt_features:
+        available_alt = [col for col in ALT_FEATURE_COLUMNS if col in df.columns]
+        if available_alt:
+            feature_columns.extend(available_alt)
+            logger.info(f"启用另类数据因子: {available_alt}")
+        else:
+            logger.warning("enable_alt_features=True，但数据中未找到另类数据列，跳过")
+
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
     
@@ -361,27 +391,8 @@ def prepare_training_data(
     X_val = df_val_split[feature_columns].copy()
     y_val = df_val_split[label_column].copy()
     
-    # 处理特征中的缺失值（填充为0）
-    # 注意：对于 zscore_* 前缀的特征，0 ≈ 截面均值，填充合理；
-    #       对于非标准化特征（如 spec_score、amplitude 等），0 可能偏离真实分布，属已知局限。
-    nan_rates = X_train.isna().mean()
-    high_nan_cols = nan_rates[nan_rates > 0.3]
-    if len(high_nan_cols) > 0:
-        logger.warning(
-            f"以下特征在训练集中 NaN 比例 >30%，fillna(0) 可能引入偏差（建议检查数据源）: "
-            f"{high_nan_cols.round(3).to_dict()}"
-        )
-    # spec_score / volatility 等非 z-score 特征：0 ≠ 截面均值，NaN 率高时 fillna(0) 会引入虚假信号
-    non_zscore_nan_risk = [c for c in ['spec_score', 'amplitude', 'upper_shadow', 'lower_shadow',
-                                        'rsi_14', 'kdj_j', 'bb_pct']
-                           if c in X_train.columns and X_train[c].isna().mean() > 0.05]
-    if non_zscore_nan_risk:
-        logger.warning(
-            f"非 z-score 特征存在 >5% NaN（fillna(0) 可能使其值偏离真实分布均值）: "
-            f"{non_zscore_nan_risk}"
-        )
-    X_train = X_train.fillna(0)
-    X_val = X_val.fillna(0)
+    # NaN 处理：XGBoost / LightGBM 原生支持 NaN（自动学习缺失值的最优分裂方向），
+    # 不再 fillna(0)，保留 NaN 让模型区分"无数据"与"值为0"。
 
     logger.info(f"训练数据准备完成: X_train shape={X_train.shape}, X_val shape={X_val.shape}")
 

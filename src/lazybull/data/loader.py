@@ -429,6 +429,62 @@ class DataLoader:
 
         return df
 
+    def load_margin_detail(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Optional[pd.DataFrame]:
+        """加载融资融券明细数据（按日分区存储）"""
+        if start_date and end_date:
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            df = self.storage.load_raw_by_date_range("margin_detail", start_str, end_str)
+            if df is not None and "trade_date" in df.columns:
+                df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+            return df
+        df = self.storage.load_raw("margin_detail")
+        return df
+
+    def load_stk_holdernumber(self) -> Optional[pd.DataFrame]:
+        """加载股东人数数据（单文件）"""
+        df = self.storage.load_raw("stk_holdernumber")
+        if df is None:
+            logger.warning("未找到股东人数数据")
+        else:
+            for col in ["ann_date", "end_date"]:
+                if col in df.columns:
+                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+        return df
+
+    def load_forecast(self) -> Optional[pd.DataFrame]:
+        """加载业绩预告数据（单文件）"""
+        df = self.storage.load_raw("forecast")
+        if df is None:
+            logger.warning("未找到业绩预告数据")
+        else:
+            for col in ["ann_date", "end_date"]:
+                if col in df.columns:
+                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+        return df
+
+    def load_express(self) -> Optional[pd.DataFrame]:
+        """加载业绩快报数据（单文件）"""
+        df = self.storage.load_raw("express")
+        if df is None:
+            logger.warning("未找到业绩快报数据")
+        else:
+            for col in ["ann_date", "end_date"]:
+                if col in df.columns:
+                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+        return df
+
+    def load_hot_rank(self) -> Optional[pd.DataFrame]:
+        """加载东财人气榜数据（单文件）"""
+        df = self.storage.load_raw("hot_rank")
+        if df is None:
+            logger.warning("未找到人气榜数据")
+        return df
+
     def build_stock_names_dict(self) -> Dict[str, str]:
         """从 stock_basic 构建 {ts_code: name} 股票名称字典"""
         stock_names: Dict[str, str] = {}

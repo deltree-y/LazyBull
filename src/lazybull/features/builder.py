@@ -133,25 +133,32 @@ class FeatureBuilder:
         shenwan_industry: Optional[pd.DataFrame] = None,
         apply_industry_neutralization: bool = False,
         fundamental_data: Optional[pd.DataFrame] = None,
+        margin_data: Optional[pd.DataFrame] = None,
+        holder_data: Optional[pd.DataFrame] = None,
+        earnings_data: Optional[pd.DataFrame] = None,
+        hot_rank_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """构建单个交易日的截面特征和标签
-        
+
         Args:
             trade_date: 目标交易日，格式YYYYMMDD
             trade_cal: 交易日历DataFrame，需包含 cal_date, is_open
-            daily_data: 日线行情DataFrame，需包含 ts_code, trade_date, close, pre_close, 
+            daily_data: 日线行情DataFrame，需包含 ts_code, trade_date, close, pre_close,
                        pct_chg, vol, amount 等字段
             adj_factor: 复权因子DataFrame，需包含 ts_code, trade_date, adj_factor
             stock_basic: 股票基本信息DataFrame，需包含 ts_code, name, list_date
             daily_basic_data: 每日指标DataFrame（可选），包含 pb, pe_ttm, ps_ttm, dv_ttm, total_mv, circ_mv 等
             moneyflow_data: 资金流向DataFrame（可选），包含净流入、大单特大单净流入等
             suspend_info: 停复牌信息DataFrame（可选）
-                         新版API格式：ts_code, trade_date, suspend_type, suspend_timing
-                         旧版格式（兼容）：ts_code, suspend_date, resume_date
             limit_info: 涨跌停价格DataFrame（可选）
-            shenwan_industry: 申万行业分类DataFrame（可选），包含 ts_code, sw_code, sw_name（申万二级行业）
+            shenwan_industry: 申万行业分类DataFrame（可选）
             apply_industry_neutralization: 是否应用行业中性化，默认False
-            
+            fundamental_data: 基本面因子（可选），当日已前向填充的数据
+            margin_data: 融资融券因子（可选），当日数据
+            holder_data: 股东人数因子（可选），当日数据
+            earnings_data: 业绩预告/快报因子（可选），当日数据
+            hot_rank_data: 人气榜因子（可选），当日数据
+
         Returns:
             特征DataFrame，包含 trade_date, ts_code, 特征列, 标签列, 标记列
         """
@@ -206,6 +213,10 @@ class FeatureBuilder:
             daily_basic_data,
             moneyflow_data,
             fundamental_data,
+            margin_data,
+            holder_data,
+            earnings_data,
+            hot_rank_data,
         )
         logger.debug(f"{trade_date} 基础特征计算完成: {len(features.columns.tolist())} 列")
 
@@ -526,6 +537,10 @@ class FeatureBuilder:
         daily_basic_data: Optional[pd.DataFrame] = None,
         moneyflow_data: Optional[pd.DataFrame] = None,
         fundamental_data: Optional[pd.DataFrame] = None,
+        margin_data: Optional[pd.DataFrame] = None,
+        holder_data: Optional[pd.DataFrame] = None,
+        earnings_data: Optional[pd.DataFrame] = None,
+        hot_rank_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """计算基础数值特征
 
@@ -538,6 +553,7 @@ class FeatureBuilder:
         - 价值红利因子：pb, pe_ttm, ep_ttm, bp, ps_ttm, dv_ttm, total_mv, circ_mv, log_total_mv等
         - 资金流因子：净流入、大单特大单净流入等
         - 基本面因子：roe_waa, or_yoy, netprofit_yoy 等（可选）
+        - 另类因子：融资融券、股东人数、业绩预告/快报、人气榜（可选）
 
         注意：已删除 amount_ratio_N 和 vol_ma_N 特征
         
@@ -618,6 +634,35 @@ class FeatureBuilder:
         # 添加基本面因子（从 fina_indicator 季度数据前向填充）
         if fundamental_data is not None and len(fundamental_data) > 0:
             features = self._add_fundamental_features(features, fundamental_data, trade_date)
+
+        # ── 另类数据因子 ──────────────────────────────────────────
+        # 融资融券
+        if margin_data is not None and len(margin_data) > 0:
+            merge_cols = [c for c in margin_data.columns if c != "ts_code"]
+            features = features.merge(
+                margin_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+
+        # 股东人数
+        if holder_data is not None and len(holder_data) > 0:
+            merge_cols = [c for c in holder_data.columns if c != "ts_code"]
+            features = features.merge(
+                holder_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+
+        # 业绩预告/快报
+        if earnings_data is not None and len(earnings_data) > 0:
+            merge_cols = [c for c in earnings_data.columns if c != "ts_code"]
+            features = features.merge(
+                earnings_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+
+        # 东财人气榜
+        if hot_rank_data is not None and len(hot_rank_data) > 0:
+            merge_cols = [c for c in hot_rank_data.columns if c != "ts_code"]
+            features = features.merge(
+                hot_rank_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
 
         return features
     

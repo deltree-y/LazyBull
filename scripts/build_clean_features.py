@@ -177,6 +177,7 @@ def build_features_data(
     shenwan_industry: pd.DataFrame = None,
     apply_industry_neutralization: bool = False,
     enable_fundamental: bool = False,
+    enable_alt: bool = False,
 ) -> None:
     """构建features层数据
 
@@ -190,6 +191,7 @@ def build_features_data(
         shenwan_industry: 申万行业数据（可选，启用中性化时必需）
         apply_industry_neutralization: 是否应用行业中性化
         enable_fundamental: 是否启用基本面因子
+        enable_alt: 是否启用另类数据因子
     """
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
@@ -290,7 +292,57 @@ def build_features_data(
             )
         else:
             logger.warning("未找到财务指标数据，基本面特征将被跳过。"
-                         "请先运行: python scripts/download_fina_indicator.py")
+                         "请先运行: python scripts/download_raw.py --download fina_indicator")
+
+    # 加载另类数据（可选）
+    margin_lookup = None
+    holder_lookup = None
+    earnings_lookup = None
+    hot_rank_lookup = None
+    if enable_alt:
+        from src.lazybull.factors.margin import build_margin_lookup_by_date
+        from src.lazybull.factors.holder import build_holder_lookup_by_date
+        from src.lazybull.factors.earnings import build_earnings_lookup_by_date
+        from src.lazybull.factors.hot_rank import build_hot_rank_lookup_by_date
+
+        # 融资融券（日频分区）
+        margin_detail = loader.load_margin_detail(
+            start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d')
+        )
+        if margin_detail is not None:
+            logger.info(f"融资融券数据: {len(margin_detail)} 条")
+            margin_lookup = build_margin_lookup_by_date(margin_detail, trading_dates_str)
+        else:
+            logger.warning("未找到融资融券数据，相关特征将为空")
+
+        # 股东人数
+        stk_holdernumber = loader.load_stk_holdernumber()
+        if stk_holdernumber is not None:
+            logger.info(f"股东人数数据: {len(stk_holdernumber)} 条")
+            holder_lookup = build_holder_lookup_by_date(stk_holdernumber, trading_dates_str)
+        else:
+            logger.warning("未找到股东人数数据，相关特征将为空")
+
+        # 业绩预告/快报
+        forecast_df = loader.load_forecast()
+        express_df = loader.load_express()
+        if forecast_df is not None or express_df is not None:
+            fc_n = len(forecast_df) if forecast_df is not None else 0
+            ex_n = len(express_df) if express_df is not None else 0
+            logger.info(f"业绩预告: {fc_n} 条, 业绩快报: {ex_n} 条")
+            earnings_lookup = build_earnings_lookup_by_date(
+                forecast_df, express_df, trading_dates_str
+            )
+        else:
+            logger.warning("未找到业绩预告/快报数据，相关特征将为空")
+
+        # 东财人气榜
+        hot_rank_df = loader.load_hot_rank()
+        if hot_rank_df is not None:
+            logger.info(f"人气榜数据: {len(hot_rank_df)} 条")
+            hot_rank_lookup = build_hot_rank_lookup_by_date(hot_rank_df, trading_dates_str)
+        else:
+            logger.warning("未找到人气榜数据，相关特征将为空")
 
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
@@ -319,6 +371,12 @@ def build_features_data(
             if fundamental_lookup is not None:
                 funda_today = fundamental_lookup.get(trade_date)
 
+            # 获取当日另类数据
+            margin_today = margin_lookup.get(trade_date) if margin_lookup else None
+            holder_today = holder_lookup.get(trade_date) if holder_lookup else None
+            earnings_today = earnings_lookup.get(trade_date) if earnings_lookup else None
+            hot_rank_today = hot_rank_lookup.get(trade_date) if hot_rank_lookup else None
+
             # 构建特征
             features_df = builder.build_features_for_day(
                 trade_date=trade_date,
@@ -333,6 +391,10 @@ def build_features_data(
                 shenwan_industry=shenwan_industry if apply_industry_neutralization else None,
                 apply_industry_neutralization=apply_industry_neutralization,
                 fundamental_data=funda_today,
+                margin_data=margin_today,
+                holder_data=holder_today,
+                earnings_data=earnings_today,
+                hot_rank_data=hot_rank_today,
             )
             
             # 保存结果
@@ -409,6 +471,11 @@ def main():
         action="store_true",
         help="启用基本面因子（ROE、营收增速等），需先下载 fina_indicator 数据"
     )
+    parser.add_argument(
+        "--enable-alt-features",
+        action="store_true",
+        help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
+    )
 
     args = parser.parse_args()
     
@@ -423,6 +490,7 @@ def main():
     logger.info(f"仅构建features: {'是' if args.only_features else '否'}")
     logger.info(f"强制重新构建: {'是' if args.force else '否'}")
     logger.info(f"基本面因子: {'启用' if args.enable_fundamental_features else '禁用'}")
+    logger.info(f"另类数据因子: {'启用' if args.enable_alt_features else '禁用'}")
     logger.info("=" * 60)
     
     try:
@@ -455,6 +523,7 @@ def main():
                 shenwan_industry=shenwan_industry if args.enable_industry_neutralization else None,
                 apply_industry_neutralization=args.enable_industry_neutralization,
                 enable_fundamental=args.enable_fundamental_features,
+                enable_alt=args.enable_alt_features,
             )
         
         logger.info("=" * 60)
