@@ -19,18 +19,28 @@ class BacktestEngineML(BacktestEngine):
     通过重写 _build_signal_data 方法注入特征数据，
     其他回测逻辑（信号过滤、回填、权重归一化等）复用父类实现。
 
-    市场择时仓位管理（可选）：
-    当 market_regime_enabled=True 时，在每个调仓日根据全市场状态动态调整仓位：
-    - 熊市（mkt_ret_avg_20 < bear_threshold）：仓位降至 bear_exposure
-    - 正常/牛市：保持满仓
+    市场择时仓位管理（可选，market_regime_enabled=True）：
+    支持 4 种模式（market_regime_mode）：
+    - binary:     mkt_ret_avg_20 < threshold → bear_exposure，否则满仓（原有逻辑）
+    - vol_target: exposure = target_vol / annualized_vol，波动越大仓位越低
+    - trend:      基于 mkt_ma_trend（MA20/MA60）线性降仓，下行趋势自动减仓
+    - combined:   vol_target 与 trend 取最小值（或相乘），双重保护
     """
 
     def __init__(
         self,
         features_by_date: Dict[str, pd.DataFrame],
         market_regime_enabled: bool = False,
+        market_regime_mode: str = "binary",
         market_regime_bear_threshold: float = -0.02,
         market_regime_bear_exposure: float = 0.3,
+        market_regime_vol_target: float = 0.15,
+        market_regime_trend_threshold: float = 1.0,
+        market_regime_min_exposure: float = 0.2,
+        market_regime_combine_method: str = "min",
+        market_regime_trend_guard: bool = True,
+        market_regime_drawdown_guard: bool = True,
+        market_regime_drawdown_threshold: float = -0.08,
         industry_momentum_filter: bool = False,
         industry_momentum_bottom_pct: float = 0.2,
         **kwargs,
@@ -40,8 +50,20 @@ class BacktestEngineML(BacktestEngine):
         Args:
             features_by_date: 按日期组织的特征数据字典，键为日期字符串（YYYYMMDD），值为特征 DataFrame
             market_regime_enabled: 是否启用市场择时仓位管理，默认 False
-            market_regime_bear_threshold: mkt_ret_avg_20 低于此值判定为熊市，默认 -0.02
-            market_regime_bear_exposure: 熊市仓位系数（0~1），默认 0.3
+            market_regime_mode: 择时模式 binary|vol_target|trend|combined，默认 binary
+            market_regime_bear_threshold: mkt_ret_avg_20 低于此值判定为熊市，默认 -0.02（仅 binary）
+            market_regime_bear_exposure: 熊市仓位系数（0~1），默认 0.3（仅 binary）
+            market_regime_vol_target: 年化波动率目标，默认 0.15（仅 vol_target/combined）
+            market_regime_trend_threshold: mkt_ma_trend 低于此值开始降仓，默认 1.0（仅 trend/combined）
+            market_regime_min_exposure: 最低仓位系数，默认 0.2（非 binary 模式的下限）
+            market_regime_combine_method: combined 模式组合方式 min|multiply，默认 min
+            market_regime_trend_guard: combined 模式下趋势保护开关，默认 True。
+                开启时上行趋势（mkt_ma_trend >= threshold）强制满仓，避免高波动上涨被误杀
+            market_regime_drawdown_guard: 回撤保护开关，默认 True。
+                开启时当 mkt_drawdown_20 低于 drawdown_threshold 时停止降仓，
+                避免急跌后在底部继续减仓踏空反弹
+            market_regime_drawdown_threshold: 回撤保护阈值，默认 -0.08（-8%）。
+                mkt_drawdown_20 低于此值时视为已充分下跌，不再继续降仓
             industry_momentum_filter: 是否启用行业动量过滤（剔除弱势行业股票），默认 False
             industry_momentum_bottom_pct: 剔除行业动量排名后 X% 的行业（0~1），默认 0.2
             **kwargs: 其他参数传递给父类 BacktestEngine
@@ -49,17 +71,38 @@ class BacktestEngineML(BacktestEngine):
         super().__init__(**kwargs)
         self.features_by_date = features_by_date
         self.market_regime_enabled = market_regime_enabled
+        self.market_regime_mode = market_regime_mode
         self.market_regime_bear_threshold = market_regime_bear_threshold
         self.market_regime_bear_exposure = market_regime_bear_exposure
+        self.market_regime_vol_target = market_regime_vol_target
+        self.market_regime_trend_threshold = market_regime_trend_threshold
+        self.market_regime_min_exposure = market_regime_min_exposure
+        self.market_regime_combine_method = market_regime_combine_method
+        self.market_regime_trend_guard = market_regime_trend_guard
+        self.market_regime_drawdown_guard = market_regime_drawdown_guard
+        self.market_regime_drawdown_threshold = market_regime_drawdown_threshold
+        self._last_regime_exposure = 1.0  # 上一次的仓位系数，用于检测变动
         self.industry_momentum_filter = industry_momentum_filter
         self.industry_momentum_bottom_pct = industry_momentum_bottom_pct
 
         regime_info = ""
         if market_regime_enabled:
-            regime_info = (
-                f", 市场择时=开启(bear_threshold={market_regime_bear_threshold}, "
-                f"bear_exposure={market_regime_bear_exposure})"
-            )
+            if market_regime_mode == "binary":
+                regime_info = (
+                    f", 市场择时=开启(mode=binary, bear_threshold={market_regime_bear_threshold}, "
+                    f"bear_exposure={market_regime_bear_exposure})"
+                )
+            else:
+                regime_info = (
+                    f", 市场择时=开启(mode={market_regime_mode}, "
+                    f"vol_target={market_regime_vol_target}, "
+                    f"trend_threshold={market_regime_trend_threshold}, "
+                    f"min_exposure={market_regime_min_exposure}, "
+                    f"combine={market_regime_combine_method}, "
+                    f"trend_guard={market_regime_trend_guard}, "
+                    f"dd_guard={market_regime_drawdown_guard}, "
+                    f"dd_threshold={market_regime_drawdown_threshold})"
+                )
         ind_filter_info = ""
         if industry_momentum_filter:
             ind_filter_info = f", 行业动量过滤=开启(剔除后{industry_momentum_bottom_pct*100:.0f}%行业)"
@@ -67,7 +110,7 @@ class BacktestEngineML(BacktestEngine):
             f"ML 回测引擎初始化: 特征数据覆盖 {len(features_by_date)} 个交易日"
             f"{regime_info}{ind_filter_info}"
         )
-    
+
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建信号数据（注入 ML 特征）
 
@@ -138,11 +181,21 @@ class BacktestEngineML(BacktestEngine):
 
     # ── 市场择时仓位管理 ──────────────────────────────────────────────
 
+    def _get_feature_scalar(self, features_df: pd.DataFrame, col: str) -> float:
+        """从 features_df 取广播到所有行的标量值（首行），缺失返回 NaN"""
+        if col not in features_df.columns:
+            return np.nan
+        val = features_df[col].iloc[0]
+        return float(val) if not pd.isna(val) else np.nan
+
     def _get_market_regime_exposure(self, date: pd.Timestamp) -> float:
         """根据市场状态计算仓位系数
 
-        利用 features_by_date 中已有的 mkt_ret_avg_20（过去 20 日全市场平均
-        收益之和）和 mkt_adv_dec_ratio（60 日涨跌比均值）来判断熊市。
+        按 market_regime_mode 分派到对应策略：
+        - binary:     二值模式（原有逻辑）
+        - vol_target: 波动率目标模式
+        - trend:      趋势叠加模式
+        - combined:   vol_target + trend 组合
 
         Returns:
             仓位系数，1.0 = 满仓，< 1.0 = 降仓
@@ -152,18 +205,90 @@ class BacktestEngineML(BacktestEngine):
         if features_df is None or len(features_df) == 0:
             return 1.0
 
-        # mkt_ret_avg_20 是广播到所有股票的同一值，取首行即可
-        mkt_ret = np.nan
-        if 'mkt_ret_avg_20' in features_df.columns:
-            mkt_ret = features_df['mkt_ret_avg_20'].iloc[0]
+        mode = self.market_regime_mode
 
+        if mode == "binary":
+            exposure = self._regime_binary(features_df)
+        elif mode == "vol_target":
+            exposure = self._regime_vol_target(features_df)
+        elif mode == "trend":
+            exposure = self._regime_trend(features_df)
+        elif mode == "combined":
+            exposure = self._regime_combined(features_df)
+        else:
+            logger.warning(f"未知 market_regime_mode={mode}，回退到 binary")
+            exposure = self._regime_binary(features_df)
+
+        # 回撤保护：已经大幅下跌时不再继续降仓，避免在底部减仓踏空反弹
+        if self.market_regime_drawdown_guard and exposure < self._last_regime_exposure:
+            drawdown = self._get_feature_scalar(features_df, 'mkt_drawdown_20')
+            if not np.isnan(drawdown) and drawdown < self.market_regime_drawdown_threshold:
+                logger.warning(
+                    f"回撤保护触发: mkt_drawdown_20={drawdown:.1%} < {self.market_regime_drawdown_threshold:.0%}, "
+                    f"阻止降仓 {self._last_regime_exposure:.0%} → {exposure:.0%}，维持 {self._last_regime_exposure:.0%}"
+                )
+                return self._last_regime_exposure
+
+        return exposure
+
+    def _regime_binary(self, features_df: pd.DataFrame) -> float:
+        """二值模式：mkt_ret_avg_20 < threshold → bear_exposure，否则 1.0"""
+        mkt_ret = self._get_feature_scalar(features_df, 'mkt_ret_avg_20')
         if np.isnan(mkt_ret):
             return 1.0
-
         if mkt_ret < self.market_regime_bear_threshold:
             return self.market_regime_bear_exposure
-
         return 1.0
+
+    def _regime_vol_target(self, features_df: pd.DataFrame) -> float:
+        """波动率目标模式：target_vol / realized_vol，clamp [min_exposure, 1.0]
+
+        使用 mkt_ret_vol_20（近 20 日全市场日均收益时序标准差）年化后
+        与目标波动率比较，波动越大仓位越低。
+        """
+        mkt_ret_vol = self._get_feature_scalar(features_df, 'mkt_ret_vol_20')
+        if np.isnan(mkt_ret_vol) or mkt_ret_vol <= 0:
+            return 1.0
+        annualized_vol = mkt_ret_vol * np.sqrt(252)
+        exposure = self.market_regime_vol_target / annualized_vol
+        return float(np.clip(exposure, self.market_regime_min_exposure, 1.0))
+
+    def _regime_trend(self, features_df: pd.DataFrame) -> float:
+        """趋势叠加模式：基于 mkt_ma_trend 线性降仓
+
+        mkt_ma_trend = MA20(cumret) / MA60(cumret)，>1 为上行趋势。
+        当 mkt_ma_trend >= threshold 时满仓；低于 threshold 时线性缩放。
+        """
+        ma_trend = self._get_feature_scalar(features_df, 'mkt_ma_trend')
+        if np.isnan(ma_trend):
+            return 1.0
+        if ma_trend >= self.market_regime_trend_threshold:
+            return 1.0
+        # 线性缩放：trend 越低于 threshold，exposure 越小
+        exposure = ma_trend / self.market_regime_trend_threshold
+        return float(np.clip(exposure, self.market_regime_min_exposure, 1.0))
+
+    def _regime_combined(self, features_df: pd.DataFrame) -> float:
+        """组合模式：同时考虑 vol_target 和 trend
+
+        trend_guard=True（默认）时：上行趋势强制满仓，避免高波动上涨被 vol_target 误杀。
+        仅当趋势向下时才启用 vol_target + trend 双重保护。
+
+        combine_method="min" → 取两者中更保守的值（默认）
+        combine_method="multiply" → 两者相乘（效果更强）
+        """
+        trend_exp = self._regime_trend(features_df)
+
+        # 趋势保护：上行趋势时跳过 vol_target，直接满仓
+        if self.market_regime_trend_guard and trend_exp >= 1.0:
+            return 1.0
+
+        vol_exp = self._regime_vol_target(features_df)
+        if self.market_regime_combine_method == "multiply":
+            combined = vol_exp * trend_exp
+        else:  # "min"
+            combined = min(vol_exp, trend_exp)
+        return float(np.clip(combined, self.market_regime_min_exposure, 1.0))
 
     def _execute_pending_buys(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
@@ -182,6 +307,18 @@ class BacktestEngineML(BacktestEngine):
 
                 if signal_data is not None:
                     exposure = self._get_market_regime_exposure(signal_date)
+
+                    # 检测仓位变动并输出日志
+                    prev = self._last_regime_exposure
+                    if abs(exposure - prev) > 1e-6:
+                        direction = "↓ 降仓" if exposure < prev else "↑ 加仓"
+                        logger.warning(
+                            f"市场择时变动: {date.date()}, "
+                            f"mode={self.market_regime_mode}, "
+                            f"exposure {prev:.0%} → {exposure:.0%} ({direction})"
+                        )
+                    self._last_regime_exposure = exposure
+
                     if exposure < 1.0:
                         # 缩放信号权重
                         if isinstance(signal_data, dict) and 'signals' in signal_data:
@@ -197,7 +334,8 @@ class BacktestEngineML(BacktestEngine):
                         if self.verbose:
                             logger.info(
                                 f"  市场择时: {date.date()}, "
-                                f"mkt_regime_exposure={exposure:.2f}, 仓位降至 {exposure*100:.0f}%"
+                                f"mode={self.market_regime_mode}, "
+                                f"exposure={exposure:.2f}, 仓位降至 {exposure*100:.0f}%"
                             )
 
         # 调用父类完成实际买入

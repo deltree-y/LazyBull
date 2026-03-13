@@ -5,7 +5,6 @@
 **专注价值红利策略的量化投资框架**
 
 [![Python](https://img.shields.io/badge/Python-3.9.13-blue.svg)](https://www.python.org/)
-[![TensorFlow](https://img.shields.io/badge/TensorFlow-2.10-orange.svg)](https://www.tensorflow.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [功能特性](#功能特性) • [快速开始](#快速开始) • [项目结构](#项目结构) • [文档](#文档) • [路线图](#路线图)
@@ -29,7 +28,22 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.15.1)
+### 当前版本 (v0.16.0)
+
+**市场择时多模式扩展 + 依赖精简** (v0.16.0):
+- ✅ **市场择时扩展为 4 种模式**（`engine_ml.py` + `walk_forward.py`）：
+  - `binary`（原有）：mkt_ret_avg_20 < threshold → bear_exposure，否则满仓
+  - `vol_target`（新增）：exposure = target_vol / realized_vol，波动越大仓位越低
+  - `trend`（新增）：基于 mkt_ma_trend（MA20/MA60）线性降仓，下行趋势自动减仓
+  - `combined`（新增）：vol_target + trend 取最小值或相乘，双重保护
+  - 回撤保护：已大幅下跌时停止降仓，避免底部踏空反弹（`--market-regime-drawdown-guard`）
+  - 趋势保护：上行趋势时跳过 vol_target 强制满仓（`--market-regime-trend-guard`）
+- ✅ **新增 `mkt_ret_vol_20` 市场特征**：20日全市场收益波动率，用于 vol_target 模式
+- ✅ **移除业绩快报因子**：删除 `express_profit_yoy`、`express_revenue_yoy`（数据质量不稳定）
+- ✅ **移除 tensorflow 依赖**：精简项目依赖
+- ✅ **删除 `scripts/build_features.py`**：已由 `build_clean_features.py` 完全替代
+
+### v0.15.1
 
 **公共模块重构：消除三套脚本间的重复代码** (v0.15.1):
 - ✅ **`TradingConfig` 统一策略参数**（新增 `src/lazybull/common/trading_config.py`）：
@@ -507,7 +521,6 @@ T+4日: 补齐尝试3（最后一次）
 ### 环境要求
 
 - Python: 3.9.13
-- TensorFlow: 2.10 (不可升级)
 - 操作系统: Linux/macOS/Windows
 
 ### 方式一: 使用Poetry安装（推荐）
@@ -558,19 +571,7 @@ cp .env.example .env
 
 LazyBull 提供三种数据处理模式，适应不同使用场景：
 
-#### 模式一：快速开始（推荐）- 一键构建特征
-
-最简单的方式，自动补齐所有依赖：
-
-```bash
-# 直接构建特征，自动下载raw、构建clean（如缺失）
-python scripts/build_features.py --start-date 20230101 --end-date 20231231
-
-# 强制重新构建所有数据
-python scripts/build_features.py --start-date 20230101 --end-date 20231231 --force
-```
-
-#### 模式二：分步构建 - 精细控制
+#### 模式一：分步构建（推荐）
 
 适合需要分步骤、精细控制的场景：
 
@@ -591,7 +592,7 @@ python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --force
 ```
 
-#### 模式三：仅更新基础数据
+#### 模式二：仅更新基础数据
 
 更新trade_cal和stock_basic（用于定时任务）：
 
@@ -819,7 +820,6 @@ LazyBull/
 ├── scripts/                    # 脚本
 │   ├── download_raw.py        # 下载raw数据
 │   ├── build_clean_features.py # 构建clean和features
-│   ├── build_features.py      # 直接构建features（自动补齐依赖）
 │   ├── update_basic_data.py   # 更新trade_cal和stock_basic
 │   ├── train_ml_model.py      # 训练 ML 模型
 │   ├── run_backtest.py        # 运行回测
@@ -891,14 +891,7 @@ LazyBull/
 
 ### 1. 命令行使用（推荐）
 
-#### 快速开始 - 一键构建
-
-```bash
-# 最简单方式：直接构建特征，自动补齐所有依赖
-python scripts/build_features.py --start-date 20230101 --end-date 20231231
-```
-
-#### 分步构建 - 精细控制
+#### 分步构建
 
 ```bash
 # 第一步：下载raw数据

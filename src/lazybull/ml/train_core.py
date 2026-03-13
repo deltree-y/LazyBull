@@ -56,11 +56,9 @@ ALT_FEATURE_COLUMNS = [
     # 股东人数 (2)
     "holder_num_chg",          # 股东人数环比变动率
     "holder_num_chg_2q",       # 股东人数两期变动率
-    # 业绩预告/快报 (4)
+    # 业绩预告 (2)
     "forecast_type_score",     # 业绩预告类型评分
     "forecast_chg_mid",        # 业绩预告变动幅度中值
-    "express_profit_yoy",      # 业绩快报净利润同比
-    "express_revenue_yoy",     # 业绩快报营收同比
     # 东财人气榜 (2)
     "hot_rank",                # 人气排名
     "hot_rank_chg_5",          # 5日人气排名变动

@@ -14,7 +14,7 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"
+$wf_start_date           = "20130101"   #20130101
 $wf_end_date             = "20250131"
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
@@ -24,15 +24,15 @@ $test_window_months_list = @(6)             # 测试窗口月数（建议与标�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_20","neu_y_ret_10")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
+$label_list              = @("neu_y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 1000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(3,4,5,7,9)         # XGB推荐9, LGB推荐5
+$max_depth_list          = @(4)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.005,0.0025,0.01)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.008)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -46,8 +46,8 @@ $early_stopping_metric   = "auto" # 早停指标：auto（mae/auc）| rank_ic（
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(50)
-$rank_weight_list        = @(2)
+$rank_weight_topk_list   = @(30,40,60,70)
+$rank_weight_list        = @(2.5,3,3.5)
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
 $time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
@@ -56,7 +56,7 @@ $time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年�
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
-$enable_fundamental      = $false  # $true 启用 | $false 禁用
+$enable_fundamental      = $true  # $true 启用 | $false 禁用
 
 # ── 另类数据因子（融资融券、股东人数、业绩预告、人气榜）(0310添加)──────────
 $enable_alt              = $true  # $true 启用 | $false 禁用
@@ -64,7 +64,7 @@ $enable_alt              = $true  # $true 启用 | $false 禁用
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
 $oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(30)   # 回测持仓 Top N
+$bt_top_n_list           = @(20)   # 回测持仓 Top N
 $bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
 $bt_weight_method        = "equal" # 权重方法：equal（等权）| score（按预测分数加权）
 
@@ -72,10 +72,18 @@ $bt_weight_method        = "equal" # 权重方法：equal（等权）| score（�
 $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
 $industry_momentum_bottom_pct = 0.2     # 剔除排名后 X% 的行业（0~1），默认 0.2
 
-# ── 市场择时仓位管理（熊市自动降仓）──────────────────────────
-$market_regime           = $false   # $true 启用 | $false 禁用
-$market_regime_bear_threshold_list = @(-0.03)  # mkt_ret_avg_20 低于此值判定为熊市
-$market_regime_bear_exposure  = 0.3    # 熊市仓位系数（0~1）
+# ── 市场择时仓位管理 ─────────────────────────────────────────
+$market_regime                = $false       # $true 启用 | $false 禁用
+$market_regime_mode_list      = @("combined")  # binary | vol_target | trend | combined
+$market_regime_bear_threshold_list = @(-0.03)  # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
+$market_regime_bear_exposure  = 0.3            # binary 模式：熊市仓位系数（0~1）
+$market_regime_vol_target_list = @(0.2)       # vol_target/combined 模式：年化波动率目标
+$market_regime_trend_threshold = 1.0           # trend/combined 模式：mkt_ma_trend 低于此值降仓
+$market_regime_min_exposure    = 0.2           # 非 binary 模式：最低仓位下限
+$market_regime_combine_method  = "min"         # combined 模式组合方式：min | multiply
+$market_regime_trend_guard     = $true        # combined 模式趋势保护：上行趋势跳过 vol 降仓
+$market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
+$market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
@@ -116,6 +124,8 @@ $totalTasks = $algorithm_list.Length *
               $rank_weight_topk_list.Length *
               $rank_weight_list.Length *
               $market_regime_bear_threshold_list.Length *
+              $market_regime_mode_list.Length *
+              $market_regime_vol_target_list.Length *
               $bt_top_n_list.Length
 
 Write-Host ""
@@ -147,6 +157,8 @@ foreach ($gamma in $gamma_list) {
 foreach ($rank_weight_topk in $rank_weight_topk_list) {
 foreach ($rank_weight in $rank_weight_list) {
 foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
+foreach ($market_regime_mode in $market_regime_mode_list) {
+foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
 
     $count++
@@ -193,7 +205,22 @@ foreach ($bt_top_n in $bt_top_n_list) {
     }
 
     if ($market_regime) {
-        $pythonCmd += " --market-regime --market-regime-bear-threshold $market_regime_bear_threshold --market-regime-bear-exposure $market_regime_bear_exposure"
+        $pythonCmd += " --market-regime" +
+                      " --market-regime-mode $market_regime_mode" +
+                      " --market-regime-bear-threshold $market_regime_bear_threshold" +
+                      " --market-regime-bear-exposure $market_regime_bear_exposure" +
+                      " --market-regime-vol-target $market_regime_vol_target" +
+                      " --market-regime-trend-threshold $market_regime_trend_threshold" +
+                      " --market-regime-min-exposure $market_regime_min_exposure" +
+                      " --market-regime-combine-method $market_regime_combine_method"
+        if (-not $market_regime_trend_guard) {
+            $pythonCmd += " --no-market-regime-trend-guard"
+        }
+        if ($market_regime_drawdown_guard) {
+            $pythonCmd += " --market-regime-drawdown-guard --market-regime-drawdown-threshold $market_regime_drawdown_threshold"
+        } else {
+            $pythonCmd += " --no-market-regime-drawdown-guard"
+        }
     }
 
     if ($oos_backtest) {
@@ -236,7 +263,7 @@ foreach ($bt_top_n in $bt_top_n_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}  # end foreach（21 层）
+}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（23 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

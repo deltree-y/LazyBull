@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.16.0] - 2026-03-13
+
+### 新增功能
+
+- **市场择时扩展为 4 种模式**（`src/lazybull/backtest/engine_ml.py`、`scripts/walk_forward.py`）
+  - `binary`：原有二值模式（mkt_ret_avg_20 < threshold → 降仓）
+  - `vol_target`：波动率目标模式，exposure = target_vol / realized_vol，波动越大仓位越低
+  - `trend`：趋势叠加模式，基于 mkt_ma_trend（MA20/MA60）线性降仓
+  - `combined`：vol_target + trend 组合模式，双重保护
+  - 新增回撤保护（`--market-regime-drawdown-guard`）：已大幅下跌时停止降仓，避免底部踏空反弹
+  - 新增趋势保护（`--market-regime-trend-guard`）：上行趋势时跳过 vol_target 强制满仓
+  - 新增仓位变动日志：每次择时变动输出 WARNING 级别日志
+  - CLI 新增参数：`--market-regime-mode`、`--market-regime-vol-target`、`--market-regime-trend-threshold`、`--market-regime-min-exposure`、`--market-regime-combine-method`、`--market-regime-drawdown-threshold`
+
+- **新增 `mkt_ret_vol_20` 市场特征**（`src/lazybull/factors/market_state.py`）
+  - 近 20 日全市场日均收益的时间序列波动率（rolling std）
+  - 用于 vol_target 模式的年化波动率计算
+
+### 变更
+
+- **移除业绩快报因子**（`src/lazybull/ml/train_core.py`）
+  - 删除 `express_profit_yoy`（业绩快报净利润同比）、`express_revenue_yoy`（业绩快报营收同比）
+  - 另类数据因子从 8 个缩减为 6 个
+- **移除 tensorflow 依赖**（`pyproject.toml`）
+- **删除 `scripts/build_features.py`**：已由 `build_clean_features.py` 完全替代
+- **OOS 回测初始资金 50万→100万**（`scripts/walk_forward.py`）
+- **`batch_walk_forward.ps1` 参数精简**：默认超参从网格搜索精简为单值，新增择时模式参数支持
+
+### 版本变更
+
+- 版本号：`0.15.1` → `0.16.0`
+
 ## [0.13.5] - 2026-02-23
 
 ### Bug 修复

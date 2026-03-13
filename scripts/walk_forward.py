@@ -86,8 +86,16 @@ def run_oos_backtest(
     bt_rebalance_freq: Optional[int] = None,
     data_root: str = "./data",
     market_regime_enabled: bool = False,
+    market_regime_mode: str = "binary",
     market_regime_bear_threshold: float = -0.02,
     market_regime_bear_exposure: float = 0.3,
+    market_regime_vol_target: float = 0.15,
+    market_regime_trend_threshold: float = 1.0,
+    market_regime_min_exposure: float = 0.2,
+    market_regime_combine_method: str = "min",
+    market_regime_trend_guard: bool = True,
+    market_regime_drawdown_guard: bool = True,
+    market_regime_drawdown_threshold: float = -0.08,
     bt_weight_method: str = "equal",
     industry_momentum_filter: bool = False,
     industry_momentum_bottom_pct: float = 0.2,
@@ -183,7 +191,7 @@ def run_oos_backtest(
         universe=universe,
         signal=signal,
         features_by_date=features_by_date,
-        initial_capital=500000.0,
+        initial_capital=1000000.0,
         cost_model=CostModel(),
         rebalance_freq=bt_rebalance_freq,
         sell_timing='open',
@@ -191,8 +199,16 @@ def run_oos_backtest(
         completion_window_days=5,
         verbose=False,
         market_regime_enabled=market_regime_enabled,
+        market_regime_mode=market_regime_mode,
         market_regime_bear_threshold=market_regime_bear_threshold,
         market_regime_bear_exposure=market_regime_bear_exposure,
+        market_regime_vol_target=market_regime_vol_target,
+        market_regime_trend_threshold=market_regime_trend_threshold,
+        market_regime_min_exposure=market_regime_min_exposure,
+        market_regime_combine_method=market_regime_combine_method,
+        market_regime_trend_guard=market_regime_trend_guard,
+        market_regime_drawdown_guard=market_regime_drawdown_guard,
+        market_regime_drawdown_threshold=market_regime_drawdown_threshold,
         industry_momentum_filter=industry_momentum_filter,
         industry_momentum_bottom_pct=industry_momentum_bottom_pct,
     )
@@ -244,6 +260,7 @@ def run_oos_backtest(
 
     if market_regime_enabled:
         metrics["bt_market_regime"] = True
+        metrics["bt_market_regime_mode"] = market_regime_mode
 
     logger.info(
         f"OOS回测结果: 总收益={total_return*100:.2f}%, "
@@ -732,6 +749,14 @@ def write_walk_forward_summary(
         "market_regime": getattr(args, 'market_regime', False),
         "market_regime_bear_threshold": getattr(args, 'market_regime_bear_threshold', None),
         "market_regime_bear_exposure": getattr(args, 'market_regime_bear_exposure', None),
+        "market_regime_mode": getattr(args, 'market_regime_mode', 'binary'),
+        "market_regime_vol_target": getattr(args, 'market_regime_vol_target', None),
+        "market_regime_trend_threshold": getattr(args, 'market_regime_trend_threshold', None),
+        "market_regime_min_exposure": getattr(args, 'market_regime_min_exposure', None),
+        "market_regime_combine_method": getattr(args, 'market_regime_combine_method', None),
+        "market_regime_trend_guard": getattr(args, 'market_regime_trend_guard', True),
+        "market_regime_drawdown_guard": getattr(args, 'market_regime_drawdown_guard', True),
+        "market_regime_drawdown_threshold": getattr(args, 'market_regime_drawdown_threshold', None),
     }
 
     # 提取每个 split 的关键指标
@@ -1190,7 +1215,69 @@ def main():
         "--market-regime-bear-exposure",
         type=float,
         default=0.3,
-        help="熊市仓位系数（0~1），默认 0.3"
+        help="熊市仓位系数（0~1），默认 0.3（仅 binary 模式）"
+    )
+    parser.add_argument(
+        "--market-regime-mode",
+        type=str,
+        default="binary",
+        choices=["binary", "vol_target", "trend", "combined"],
+        help="市场择时模式: binary(二值) | vol_target(波动率目标) | trend(趋势叠加) | combined(组合)，默认 binary"
+    )
+    parser.add_argument(
+        "--market-regime-vol-target",
+        type=float,
+        default=0.15,
+        help="波动率目标（年化），默认 0.15（15%%）。仅 vol_target/combined 模式有效"
+    )
+    parser.add_argument(
+        "--market-regime-trend-threshold",
+        type=float,
+        default=1.0,
+        help="趋势阈值（mkt_ma_trend 低于此值开始降仓），默认 1.0。仅 trend/combined 模式有效"
+    )
+    parser.add_argument(
+        "--market-regime-min-exposure",
+        type=float,
+        default=0.2,
+        help="最低仓位系数（非 binary 模式的下限），默认 0.2"
+    )
+    parser.add_argument(
+        "--market-regime-combine-method",
+        type=str,
+        default="min",
+        choices=["min", "multiply"],
+        help="combined 模式组合方式: min(取最小) | multiply(相乘)，默认 min"
+    )
+    parser.add_argument(
+        "--market-regime-trend-guard",
+        action="store_true",
+        default=True,
+        help="combined 模式下趋势保护：上行趋势时跳过 vol_target 强制满仓，避免高波动上涨误杀，默认开启"
+    )
+    parser.add_argument(
+        "--no-market-regime-trend-guard",
+        action="store_false",
+        dest="market_regime_trend_guard",
+        help="关闭趋势保护"
+    )
+    parser.add_argument(
+        "--market-regime-drawdown-guard",
+        action="store_true",
+        default=True,
+        help="回撤保护：市场已大幅下跌时停止降仓，避免底部减仓踏空反弹，默认开启"
+    )
+    parser.add_argument(
+        "--no-market-regime-drawdown-guard",
+        action="store_false",
+        dest="market_regime_drawdown_guard",
+        help="关闭回撤保护"
+    )
+    parser.add_argument(
+        "--market-regime-drawdown-threshold",
+        type=float,
+        default=-0.08,
+        help="回撤保护阈值：mkt_drawdown_20 低于此值时停止降仓，默认 -0.08（-8%%）"
     )
 
     args = parser.parse_args()
@@ -1222,7 +1309,15 @@ def main():
         logger.info(f"  持仓 Top N: {args.bt_top_n}")
         logger.info(f"  调仓频率: {args.bt_rebalance_freq or '自动推断'}")
         if args.market_regime:
-            logger.info(f"  市场择时: 开启 (bear_threshold={args.market_regime_bear_threshold}, bear_exposure={args.market_regime_bear_exposure})")
+            regime_detail = f"mode={args.market_regime_mode}"
+            if args.market_regime_mode == "binary":
+                regime_detail += f", bear_threshold={args.market_regime_bear_threshold}, bear_exposure={args.market_regime_bear_exposure}"
+            else:
+                regime_detail += f", vol_target={args.market_regime_vol_target}, trend_threshold={args.market_regime_trend_threshold}, min_exposure={args.market_regime_min_exposure}"
+                if args.market_regime_mode == "combined":
+                    regime_detail += f", combine={args.market_regime_combine_method}, trend_guard={args.market_regime_trend_guard}"
+                regime_detail += f", dd_guard={args.market_regime_drawdown_guard}, dd_threshold={args.market_regime_drawdown_threshold}"
+            logger.info(f"  市场择时: 开启 ({regime_detail})")
     logger.info(f"数据目录: {args.data_root}")
     
     try:
@@ -1300,8 +1395,16 @@ def main():
                             bt_rebalance_freq=args.bt_rebalance_freq,
                             data_root=args.data_root,
                             market_regime_enabled=args.market_regime,
+                            market_regime_mode=args.market_regime_mode,
                             market_regime_bear_threshold=args.market_regime_bear_threshold,
                             market_regime_bear_exposure=args.market_regime_bear_exposure,
+                            market_regime_vol_target=args.market_regime_vol_target,
+                            market_regime_trend_threshold=args.market_regime_trend_threshold,
+                            market_regime_min_exposure=args.market_regime_min_exposure,
+                            market_regime_combine_method=args.market_regime_combine_method,
+                            market_regime_trend_guard=args.market_regime_trend_guard,
+                            market_regime_drawdown_guard=args.market_regime_drawdown_guard,
+                            market_regime_drawdown_threshold=args.market_regime_drawdown_threshold,
                             bt_weight_method=args.bt_weight_method,
                             industry_momentum_filter=args.industry_momentum_filter,
                             industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,

@@ -180,6 +180,7 @@ def compute_market_state_features(
         'mkt_ma_trend': np.nan,
         'mkt_drawdown_20': np.nan,
         'mkt_ret_avg_60': np.nan,
+        'mkt_ret_vol_20': np.nan,
     }
 
 
@@ -351,6 +352,9 @@ def precompute_market_state_features(
     # mkt_ret_avg_60: 近 60 日全市场平均收益之和（中长期动量信号）
     mkt_ret_avg_60 = daily_stats['mean_ret'].rolling(window=60, min_periods=1).sum()
 
+    # mkt_ret_vol_20: 近 20 日全市场日均收益的时间序列波动率（用于 vol targeting）
+    mkt_ret_vol_20 = daily_stats['mean_ret'].rolling(window=20, min_periods=5).std()
+
     # --- 步骤 8：组装结果 DataFrame ---
     result = pd.DataFrame(
         {
@@ -363,6 +367,7 @@ def precompute_market_state_features(
             'mkt_ma_trend': mkt_ma_trend.values,
             'mkt_drawdown_20': mkt_drawdown_20.values,
             'mkt_ret_avg_60': mkt_ret_avg_60.values,
+            'mkt_ret_vol_20': mkt_ret_vol_20.values,
         },
         index=pd.Index(trading_dates, name='trade_date'),
     )
