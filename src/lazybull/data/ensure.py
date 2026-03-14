@@ -38,7 +38,7 @@ def ensure_raw_data_for_date(
     """
     daily_exists = not force and storage.is_data_exists("raw", "daily", trade_date)
 
-    # 日线等核心数据已存在时，仍需检查可选依赖（daily_basic / margin_detail）
+    # 日线等核心数据已存在时，仍需检查可选依赖（moneyflow / daily_basic / margin_detail）
     if daily_exists:
         logger.debug(f"raw 核心数据已存在: {trade_date}，检查可选依赖")
     else:
@@ -70,7 +70,9 @@ def ensure_raw_data_for_date(
                 storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
                 logger.info(f"  涨跌停: 已保存 {len(limit_up_down)} 条记录")
 
-            # 下载资金流向（可选依赖：T0 特征构建需要，止损/T1 不需要）
+        # 以下可选数据独立检查，不受 daily 存在与否影响
+        # 下载资金流向（T0 特征构建需要）
+        if force or not storage.is_data_exists("raw", "moneyflow", trade_date):
             moneyflow = client.get_moneyflow(trade_date=trade_date)
             if not moneyflow.empty:
                 storage.save_raw_by_date(moneyflow, "moneyflow", trade_date)
@@ -78,7 +80,6 @@ def ensure_raw_data_for_date(
             else:
                 logger.warning(f"资金流向数据暂缺: {trade_date}（TuShare 通常 18:00 后更新，T0 特征构建时需要）")
 
-        # 以下可选数据独立检查，不受 daily 存在与否影响
         # 下载每日指标（pb/pe/换手率等，特征构建需要）
         if force or not storage.is_data_exists("raw", "daily_basic", trade_date):
             daily_basic = client.get_daily_basic(trade_date=trade_date)

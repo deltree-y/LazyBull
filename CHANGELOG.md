@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.1] - 2026-03-14
+
+### 修复
+
+- **moneyflow 自动下载在 daily 已存在时被跳过**
+  - `ensure_raw_data_for_date()` 中 moneyflow 下载逻辑原本位于 `if not daily_exists:` 分支内
+  - 当 daily 数据已缓存时，moneyflow 下载被完全跳过，导致纸面交易报"缺少 clean moneyflow 数据"
+  - 修复: 将 moneyflow 下载移至与 `daily_basic`/`margin_detail` 同级的独立检查块，带 `is_data_exists` 判断
+
 ## [0.18.0] - 2026-03-14
 
 ### 新增功能
