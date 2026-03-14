@@ -6,6 +6,8 @@ import threading
 import traceback
 from pathlib import Path
 
+import requests  # type: ignore
+
 import dingtalk_stream as dts   # type: ignore
 from dingtalk_stream import DingTalkStreamClient, Credential, AckMessage    # type: ignore
 
@@ -25,9 +27,10 @@ from src.lazybull.common.signal_factory import create_signal
 from src.lazybull.risk.stop_loss import StopLossConfig, StopLossMonitor
 from src.lazybull.risk.equity_curve import EquityCurveMonitor, create_equity_curve_config_from_dict
 
-# 1. 填入你的凭证
+# 凭证与 Webhook
 APP_KEY = os.getenv("APP_KEY")
 APP_SECRET = os.getenv("APP_SECRET")
+DINGTALK_WEBHOOK = os.getenv("DINGTALK_WEBHOOK")
 
 logging.basicConfig(level=logging.INFO)
 
@@ -578,6 +581,25 @@ class SimpleHandler(dts.ChatbotHandler):
             self.reply_text(f"执行失败: {str(e)}", incoming)
 
 
+def _notify_startup():
+    """通过 Webhook 发送启动通知到钉钉群"""
+    if not DINGTALK_WEBHOOK:
+        print("未配置 DINGTALK_WEBHOOK，跳过启动通知")
+        return
+    try:
+        payload = {
+            "msgtype": "text",
+            "text": {"content": "Bot 启动完毕，等待接收指令"},
+        }
+        resp = requests.post(DINGTALK_WEBHOOK, json=payload, timeout=5)
+        if resp.ok:
+            print("启动通知已发送")
+        else:
+            print(f"启动通知发送失败: {resp.text}")
+    except Exception as e:
+        print(f"启动通知发送异常: {e}")
+
+
 def main():
     if APP_KEY is None or APP_SECRET is None:
         print("错误: 请在环境变量中设置 APP_KEY 和 APP_SECRET")
@@ -586,6 +608,7 @@ def main():
     client = DingTalkStreamClient(credential)
     # ChatbotMessage.TOPIC 就是 "/v1.0/im/bot/messages/get"
     client.register_callback_handler(dts.ChatbotMessage.TOPIC, SimpleHandler())
+    _notify_startup()
     print("启动中，等待消息...")
     client.start_forever()
 
