@@ -475,41 +475,47 @@ def temp_storage_for_reset_t0():
 
 
 def test_reset_t0_full_rollback(temp_storage_for_reset_t0):
-    """测试 reset_t0 完整回滚：T0记录、T1记录、成交、净值、账户last_update"""
+    """测试 reset_t0 清空所有交易数据，恢复为新账户状态"""
     storage = temp_storage_for_reset_t0
+
+    # 先保存一个 config 以提供 initial_capital
+    storage.save_config({'initial_capital': 100000.0})
 
     stats = storage.reset_t0()
 
     assert stats['t0_date'] == '20260210'
 
-    # T0和T1运行记录已删除
+    # 所有运行记录已删除
     assert not storage.check_run_exists('t0', '20260210')
     assert not storage.check_run_exists('t1', '20260211')
+    assert not storage.check_run_exists('t0', '20260205')
+    assert not storage.check_run_exists('t1', '20260206')
 
-    # T1交易指令已删除
+    # 交易指令已删除
     assert storage.load_instructions('20260211') is None
 
     # 延迟订单已清空
     assert storage.load_pending_buys() == []
     assert storage.load_pending_sells() == []
 
-    # 账户 last_update 已回滚到T0之前最近的T1日期
+    # 账户状态已重置为新账户
     account = storage.load_account_state()
-    assert account.last_update == '20260206'
+    assert account.last_update == ''
+    assert account.cash == 100000.0
+    assert len(account.positions) == 0
 
-    # 成交记录只保留T0之前的
-    trades = pd.read_parquet(storage.trades_path / "trades.parquet")
-    assert len(trades) == 1
-    assert trades.iloc[0]['trade_date'] == '20260206'
+    # 成交记录已清空
+    trades_file = storage.trades_path / "trades.parquet"
+    assert not trades_file.exists()
 
-    # 净值记录只保留T0之前的
-    nav = pd.read_parquet(storage.nav_path / "nav.parquet")
-    assert len(nav) == 1
-    assert nav.iloc[0]['trade_date'] == '20260206'
+    # 净值记录已清空
+    nav_file = storage.nav_path / "nav.parquet"
+    assert not nav_file.exists()
 
-    # 更早的T0/T1记录不受影响
-    assert storage.check_run_exists('t0', '20260205')
-    assert storage.check_run_exists('t1', '20260206')
+    # config.json 仍然存在
+    config = storage.load_config()
+    assert config is not None
+    assert config['initial_capital'] == 100000.0
 
 
 def test_reset_t0_no_records():
@@ -538,25 +544,35 @@ def test_find_latest_t0():
         assert storage.find_latest_t0() == '20260210'
 
 
-def test_reset_t0_account_last_update_rollback():
-    """测试 reset_t0 回滚 account last_update 到 T0 之前"""
+def test_reset_t0_account_reset_to_initial():
+    """测试 reset_t0 重置账户为初始状态"""
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = PaperStorage(tmpdir)
 
-        # 设置账户状态
-        account = AccountState(cash=100000.0, positions={}, last_update='20260211')
+        # 保存配置
+        storage.save_config({'initial_capital': 200000.0})
+
+        # 设置账户状态（模拟已交易过）
+        account = AccountState(
+            cash=80000.0,
+            positions={
+                '000001.SZ': Position(
+                    ts_code='000001.SZ', shares=100,
+                    buy_price=10.0, buy_cost=5.0, buy_date='20260206',
+                ),
+            },
+            last_update='20260211',
+        )
         storage.save_account_state(account)
 
         # T0记录
         storage.save_run_record('t0', '20260210', {
             'trade_date': '20260210', 't1_date': '20260211',
         })
-        # 之前有个T1
-        storage.save_run_record('t1', '20260206', {
-            'trade_date': '20260206', 'fills_count': 1,
-        })
 
         storage.reset_t0()
 
         updated_account = storage.load_account_state()
-        assert updated_account.last_update == '20260206'
+        assert updated_account.last_update == ''
+        assert updated_account.cash == 200000.0
+        assert len(updated_account.positions) == 0

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.5] - 2026-03-14
+
+### 修复
+
+- **纸面交易 reset-t0 后持有天数为负值**
+  - `reset_t0` 只回滚了 `last_update`，未清理持仓和现金，导致 positions 中的
+    `buy_date` 晚于重新运行时的当前交易日，`get_holding_days()` 计算出负值
+  - 修复: `reset_t0` 改为全量重置——清空所有子目录（state/trades/nav/runs/instructions/
+    pending_buys/pending_sells），仅保留 `config.json`，账户恢复为初始资金的新账户状态
+
 ## [0.18.4] - 2026-03-14
 
 ### 修复

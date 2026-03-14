@@ -1378,24 +1378,18 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
 
 
 def run_reset_t0(args):
-    """重置最新T0日并清空所有延迟交易订单"""
+    """重置纸面交易，清空所有交易数据恢复为新账户"""
     storage = PaperStorage()
 
-    # 自动查找最新T0日期
-    t0_date = storage.find_latest_t0()
-    if t0_date is None:
-        logger.error("未找到任何T0运行记录，无需重置")
-        sys.exit(1)
-
     logger.info("=" * 80)
-    logger.info(f"重置T0日: {t0_date}")
+    logger.info("重置纸面交易：清空所有交易数据，恢复为新账户")
     logger.info("=" * 80)
 
-    # 执行重置（内部调用 truncate_since 完成所有清理）
-    storage.reset_t0(t0_date)
+    # 执行重置（清空所有数据，仅保留 config.json）
+    storage.reset_t0()
 
     logger.info("")
-    logger.info("重置完成，可重新执行 run 命令")
+    logger.info("重置完成，账户已恢复初始状态，可重新执行 run 命令")
     logger.info("=" * 80)
 
 

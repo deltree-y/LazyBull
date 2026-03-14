@@ -524,52 +524,50 @@ class PaperStorage:
         return t0_files[-1].stem.split('_')[1]
 
     def reset_t0(self, t0_date: Optional[str] = None) -> dict:
-        """重置最新T0日及之后的所有数据，允许从该T0日重新执行
+        """重置纸面交易，清空所有交易数据恢复为新账户状态
 
-        若未指定 t0_date，则自动查找最新的T0记录。
-        内部调用 truncate_since(t0_date) 清理T0及之后的所有运行记录、
-        成交、净值、交易指令、延迟订单等，同时回滚账户 last_update 和调仓状态。
+        清空账户状态、成交记录、净值、运行记录、交易指令、延迟订单等，
+        仅保留 config.json 配置文件。账户现金重置为 config 中的 initial_capital。
 
         Args:
-            t0_date: T0日期 YYYYMMDD（可选，默认自动查找最新）
+            t0_date: 仅用于日志显示（可选，默认自动查找最新）
 
         Returns:
             操作结果统计字典
         """
-        # 自动查找最新T0日期
         if t0_date is None:
             t0_date = self.find_latest_t0()
 
-        stats = {
-            't0_date': t0_date,
-        }
+        stats = {'t0_date': t0_date}
 
-        if t0_date is None:
-            logger.warning("未找到任何T0运行记录")
-            return stats
+        # 读取配置以获取初始资金
+        config = self.load_config()
+        initial_capital = config.get('initial_capital', 500000.0) if config else 500000.0
 
-        # 回滚账户 last_update 到 T0 之前最近的运行日期
-        account_state = self.load_account_state()
-        if account_state and account_state.last_update >= t0_date:
-            # 找到 t0_date 之前最近的 t1 运行记录日期
-            t1_files = sorted(self.runs_path.glob("t1_*.json"))
-            prev_date = ""
-            for f in reversed(t1_files):
-                file_date = f.stem.split('_')[1]
-                if file_date < t0_date:
-                    prev_date = file_date
-                    break
+        # 清空各子目录下的所有文件
+        dirs_to_clean = [
+            self.state_path,
+            self.trades_path,
+            self.nav_path,
+            self.runs_path,
+            self.pending_sells_path,
+            self.pending_buys_path,
+            self.instructions_path,
+        ]
+        for dir_path in dirs_to_clean:
+            for f in dir_path.iterdir():
+                if f.is_file():
+                    f.unlink()
+            logger.info(f"已清空: {dir_path.name}/")
 
-            old_last_update = account_state.last_update
-            account_state.last_update = prev_date
-            self.save_account_state(account_state)
-            logger.info(
-                f"回滚账户 last_update: {old_last_update} -> "
-                f"{prev_date if prev_date else '(空)'}"
-            )
-
-        # 使用 truncate_since 清理 T0 及之后的所有数据
-        self.truncate_since(t0_date)
+        # 重建空账户状态
+        new_state = AccountState(
+            cash=initial_capital,
+            positions={},
+            last_update="",
+        )
+        self.save_account_state(new_state)
+        logger.info(f"已重建账户状态，初始资金: {initial_capital:,.2f}")
 
         return stats
 
@@ -601,7 +599,7 @@ class PaperStorage:
             original_count = len(df)
             df = df[df['trade_date'] < cut_off_date]
             new_count = len(df)
-            
+
             if new_count < original_count:
                 df.to_parquet(trades_file, index=False)
                 logger.info(f"清理成交记录: {original_count} -> {new_count} 条（删除 {original_count - new_count} 条）")
@@ -706,3 +704,4 @@ class PaperStorage:
         logger.info("=" * 80)
         logger.info("数据清理完成")
         logger.info("=" * 80)
+

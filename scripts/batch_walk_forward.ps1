@@ -29,7 +29,7 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 1000       # 固定：树数量上限（配合早停，不需要多组）
+$n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(4)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.008)      # XGB推荐0.005, LGB推荐0.005
