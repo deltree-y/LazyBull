@@ -663,6 +663,12 @@ class FeatureBuilder:
             features = features.merge(
                 hot_rank_data[["ts_code"] + merge_cols], on="ts_code", how="left"
             )
+        else:
+            # 数据不可用时仍创建列（NaN），保证特征 schema 一致
+            from ..factors.hot_rank import HOT_RANK_COLS
+            for col in HOT_RANK_COLS:
+                if col not in features.columns:
+                    features[col] = np.nan
 
         return features
     

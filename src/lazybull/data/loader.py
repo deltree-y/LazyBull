@@ -403,7 +403,6 @@ class DataLoader:
         if df is None:
             logger.warning(
                 "未找到申万行业分类数据！\n"
-                "请先运行: python scripts/update_basic_data.py --only-shenwan --force"
             )
         return df
 

@@ -888,6 +888,7 @@ _REQUIRED_FACTOR_COLS = [
     "neu_ret_5",                                            # 行业中性化收益
     "alpha_industry_5",                                     # 行业 alpha
     "ind_momentum_rank",                                    # 行业动量
+    "hot_rank", "hot_rank_chg_5",                           # 东财人气榜
 ]
 
 

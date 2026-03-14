@@ -197,6 +197,17 @@ class ModelRegistry:
             raise FileNotFoundError(f"模型文件不存在: {model_file}")
         
         model = joblib.load(model_file)
+        # 环境检测逻辑
+        try:
+            # 尝试检查是否有 NVIDIA 驱动和显卡
+            # 在树莓派上，这通常会直接失败
+            import subprocess
+            subprocess.check_output(['nvidia-smi'])
+            device = "cuda"
+        except:
+            # 如果没有 nvidia-smi 或者执行报错，则强制回退到 cpu
+            device = "cpu"        
+        model.set_params(device=device, tree_method='hist' if device == 'cpu' else 'gpu_hist')        
         
         # 加载特征列表
         features_file = self.models_dir / metadata["features_file"]

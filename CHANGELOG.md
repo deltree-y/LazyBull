@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.4] - 2026-03-14
+
+### 修复
+
+- **纸面交易 hot_rank 特征缺失导致推理失败**
+  - `_try_download_hot_rank` 将快照标记为当天日期，目标交易日非当天时 lookup 返回 None，
+    特征 DataFrame 完全缺失 `hot_rank`/`hot_rank_chg_5` 列，导致模型推理报"特征列一致性检查失败"
+  - 修复: FeatureBuilder 在 hot_rank 数据不可用时仍创建这两列（填充 NaN），
+    保证特征 schema 与模型一致（XGBoost 原生支持 NaN）
+  - 同时将 `hot_rank`/`hot_rank_chg_5` 加入 `_REQUIRED_FACTOR_COLS`，旧缓存自动淘汰重建
+
 ## [0.18.3] - 2026-03-14
 
 ### 修复
