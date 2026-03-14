@@ -508,7 +508,10 @@ class SimpleHandler(dts.ChatbotHandler):
         """执行交易 — 异步执行，完成后返回结果
         用法: trade [日期]  例: trade 20260304
         """
-        trade_date = args[0] if args else pd.Timestamp.today().strftime('%Y%m%d')
+        if not args:
+            self.reply_text("错误: 请指定交易日期，如 trade 20260314", incoming)
+            return
+        trade_date = args[0]
         self.reply_text(f"开始执行交易 ({trade_date})，请稍候...", incoming)
 
         def _run():
