@@ -39,6 +39,34 @@ def _build_stock_names(loader: DataLoader) -> dict:
     return loader.build_stock_names_dict()
 
 
+def _md_join(lines: list) -> str:
+    """将行列表拼接为钉钉 Markdown 文本
+
+    非空行末尾加两个空格实现强制换行；空行保持原样用于段落分隔。
+    """
+    result = []
+    for line in lines:
+        if line.strip():
+            result.append(line + "  ")
+        else:
+            result.append("")
+    return "\n".join(result)
+
+
+def _extract_weight(reason: str, target_weight: float = 0.0) -> str:
+    """从 target_weight 或 reason 字符串中提取权重，返回格式化字符串如 '权5.00%'
+
+    优先使用 target_weight；若为 0 则尝试从 reason 中解析 '权重=0.0500' 模式。
+    """
+    import re
+    if target_weight > 0:
+        return f"权{target_weight:.2%}"
+    match = re.search(r'权重[=:]([\d.]+)', reason)
+    if match:
+        return f"权{float(match.group(1)):.2%}"
+    return ""
+
+
 def _get_rebalance_status(trade_date: str) -> str:
     """计算已持仓交易日和距下次调仓剩余交易日
 
@@ -148,7 +176,7 @@ def format_positions_mobile(runner: PaperTradingRunner, trade_date: str) -> str:
         )
         lines.append(f"   {p_sign}{pnl_pct:.2f}% ({p_sign}{row['浮动盈亏']:,.0f})")
 
-    return "\n".join(lines)
+    return _md_join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +267,13 @@ def format_trade_result(
             for i, a in enumerate(t1_buys, 1):
                 name = stock_names.get(a['ts_code'], '')
                 lines.append(f"{i}. {name}({a['ts_code']})")
-                lines.append(f"   量{a['shares']}, 因{a['reason']}")
+                weight_str = _extract_weight(a.get('reason', ''))
+                parts = [f"量{a['shares']}"]
+                if weight_str:
+                    parts.append(weight_str)
+                lines.append(f"   {', '.join(parts)}")
         if t1_sells:
+            lines.append("")
             lines.append("卖出-")
             for i, a in enumerate(t1_sells, 1):
                 name = stock_names.get(a['ts_code'], '')
@@ -254,12 +287,11 @@ def format_trade_result(
         lines.append("")
         lines.append("--- T0 明日交易指令 ---")
         if buys:
-            lines.append("")
             lines.append("买入-")
             for i, inst in enumerate(buys, 1):
                 name = stock_names.get(inst.ts_code, '')
                 lines.append(f"{i}. {name}({inst.ts_code})")
-                weight_str = f"权{inst.target_weight:.2%}" if inst.target_weight > 0 else ""
+                weight_str = _extract_weight(inst.reason, inst.target_weight)
                 parts = [f"量{inst.shares}"]
                 if weight_str:
                     parts.append(weight_str)
@@ -287,7 +319,7 @@ def format_trade_result(
     cash = runner.account.get_cash()
     lines.append(f"持仓: {len(positions)}只 | 现金: {cash:,.0f}")
 
-    return "\n".join(lines)
+    return _md_join(lines)
 
 
 # ---------------------------------------------------------------------------

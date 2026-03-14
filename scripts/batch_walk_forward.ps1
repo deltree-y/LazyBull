@@ -32,7 +32,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(4)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.007,0.008,0.009)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.008)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -50,7 +50,7 @@ $rank_weight_topk_list   = @(50)
 $rank_weight_list        = @(3)
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
-$time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
+$time_decay_half_life    = 1         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
 
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
