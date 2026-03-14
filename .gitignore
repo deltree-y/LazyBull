@@ -49,6 +49,9 @@ htmlcov/
 .claude/
 CLAUDE.md
 
+# Markdownlint configuration
+.markdownlint.json
+
 # Environment variables
 .env
 .env.local

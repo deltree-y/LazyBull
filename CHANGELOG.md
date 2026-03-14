@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.17.1] - 2026-03-14
+
+### 修复
+
+- **补齐 AKShare 依赖声明**
+  - 在 `pyproject.toml` 和 `requirements.txt` 中新增 `akshare` 依赖
+  - 修复 `src/lazybull/features/ensure.py` 中按需导入 `akshare` 时，Pylance 在工作区 `.venv` 下报 `无法解析导入“akshare”` 的问题
+
+## [0.17.0] - 2026-03-13
+
+### 新增功能
+
+- **纸面交易缺失数据自动下载**（`ensure` 链路全覆盖）
+  - `ensure_raw_data_for_date()` 新增 `daily_basic`、`margin_detail` 自动下载
+  - `ensure_clean_data_for_date()` 新增 `daily_basic`、`moneyflow` 的 clean 层自动构建
+  - `_load_factor_data()` 缺失因子数据时自动按日增量下载并追加保存：
+    - `fina_indicator`：通过 `fina_indicator_vip` API 按 `ann_date` 获取当日全市场公告
+    - `stk_holdernumber`：按 `ann_date` 获取当日全市场数据
+    - `forecast`：通过 `forecast_vip` API 按 `ann_date` 获取当日全市场预告
+    - `hot_rank`：通过 AKShare `stock_hot_rank_em()` 获取当日快照
+  - `TushareClient` 新增 3 个按日查询方法：`get_fina_indicator_by_date()`、`get_forecast_by_date()`、`get_stk_holdernumber_by_date()`
+  - 实现完整的 ensure 链路：`raw → clean → features` + 因子自动增量，纸面交易零手动干预
+
+### 修复
+
+- **features 缓存缺失融资融券列导致推理失败**
+  - `ensure_raw_data_for_date()` 取消 `raw/daily` 存在即跳过的早期返回：`daily_basic` 和 `margin_detail` 现在独立检查，即使日线数据已存在也会补齐
+  - `_load_factor_data()` 融资融券段改为总是先补齐历史分区再加载，确保 20+ 天历史数据供滚动变化率计算
+  - `ensure_features_for_date()` 新增 Parquet schema 校验：通过 `pyarrow.read_schema()` 检查缓存文件是否包含必要因子列（`rzye_chg_5`、`rzye_chg_20`、`rqye_rzye_ratio`），缺失则自动触发重建
+
+### 删除
+
+- **移除业绩快报（express）支持**
+  - 删除 `DataLoader.load_express()` 方法
+  - 删除 `earnings.py` 中 express 相关逻辑（`express_profit_yoy`、`express_revenue_yoy` 列）
+  - `build_earnings_lookup_by_date()` 签名简化：移除 `express_df` 参数
+  - 清理 `download_raw.py`、`build_clean_features.py`、`features/ensure.py` 中的 express 引用
+
+## [0.16.2] - 2026-03-13
+
+### 重构
+
+- **删除 `_download_data()` 冗余方法**（`src/lazybull/paper/runner.py`）
+  - T0 工作流中数据下载已由 `ensure_features_for_date()` 内部的 ensure 链自动完成（raw → clean → features）
+  - 移除约 100 行重复代码，ensure 链还额外下载 moneyflow 数据，覆盖更完整
+- **`load_industry_mapping()` 参数重命名**（`src/lazybull/portfolio/industry_constraint.py`）
+  - 参数 `stock_basic` → `shenwan_industry`，文档描述同步更新，消除命名歧义
+- **`engine.py` 变量重命名**：`shenwan_stock_basic` → `shenwan_industry`
+
+## [0.16.1] - 2026-03-13
+
+### 修复
+
+- **纸面交易 T0 特征构建缺少因子数据**（`src/lazybull/features/ensure.py`）
+  - `ensure_features_for_date()` 此前未加载基本面和另类数据因子（fina_indicator、margin_detail、stk_holdernumber、forecast/express、hot_rank），导致纸面交易生成的 features 缺少这些列，模型预测质量下降
+  - 新增 `_load_factor_data()` 函数：自动加载已下载的因子 raw 数据，构建 lookup 表并传入 builder
+  - 因子缺失时输出 WARNING 级别汇总日志（覆盖率 N/5 + 缺失列表 + 下载命令提示），避免静默跳过
+  - `ensure_features_for_date` 返回值扩展为 `Tuple[bool, List[str]]`，携带缺失因子列表
+  - `PaperTradingRunner` 新增 `missing_factors` 属性，供上层读取
+  - `bot_service.py` 钉钉交易结果消息中展示因子缺失警告（覆盖率 + 缺失列表）
+
 ## [0.16.0] - 2026-03-13
 
 ### 新增功能

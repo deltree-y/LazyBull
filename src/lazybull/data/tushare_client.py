@@ -517,3 +517,62 @@ class TushareClient:
             end_date=end_date,
             fields=fields,
         )
+
+    def get_fina_indicator_by_date(
+        self,
+        ann_date: str,
+        fields: Optional[str] = None
+    ) -> pd.DataFrame:
+        """按公告日获取全市场财务指标（fina_indicator_vip，5000 积分）
+
+        Args:
+            ann_date: 公告日期，格式 YYYYMMDD
+            fields: 返回字段，逗号分隔
+
+        Returns:
+            当日有公告的全部股票财务指标 DataFrame
+        """
+        if fields is None:
+            fields = (
+                "ts_code,ann_date,end_date,"
+                "roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy"
+            )
+        return self.query(
+            "fina_indicator_vip",
+            ann_date=ann_date,
+            fields=fields,
+        )
+
+    def get_forecast_by_date(
+        self,
+        ann_date: str,
+    ) -> pd.DataFrame:
+        """按公告日获取全市场业绩预告（forecast_vip，5000 积分）
+
+        Args:
+            ann_date: 公告日期，格式 YYYYMMDD
+
+        Returns:
+            当日有公告的全部股票业绩预告 DataFrame
+        """
+        return self.query(
+            "forecast_vip",
+            ann_date=ann_date,
+        )
+
+    def get_stk_holdernumber_by_date(
+        self,
+        ann_date: str,
+    ) -> pd.DataFrame:
+        """按公告日获取全市场股东人数
+
+        Args:
+            ann_date: 公告日期，格式 YYYYMMDD
+
+        Returns:
+            当日有公告的全部股票股东人数 DataFrame
+        """
+        return self.query(
+            "stk_holdernumber",
+            ann_date=ann_date,
+        )

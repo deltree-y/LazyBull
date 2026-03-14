@@ -28,7 +28,27 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.16.0)
+### 当前版本 (v0.17.1)
+
+**AKShare 依赖补齐 + 纸面交易缺失数据自动下载** (v0.17.1):
+- ✅ **补齐 `akshare` 项目依赖**：解决 `features/ensure.py` 中 `import akshare` 的 Pylance 告警与环境不一致问题
+- ✅ **ensure 链路全覆盖**：`ensure_raw` 新增 `daily_basic`/`margin_detail`，`ensure_clean` 新增 `daily_basic`/`moneyflow` 自动构建
+- ✅ **因子数据按日自动下载**：`fina_indicator`/`forecast`/`stk_holdernumber`/`hot_rank` 缺失时自动增量下载并追加保存
+- ✅ **删除业绩快报（express）支持**：简化 `earnings.py` 逻辑，清理全部 express 引用
+
+### v0.16.2
+
+**数据下载去重 + 命名规范化** (v0.16.2):
+- ✅ **删除 `_download_data()` 冗余方法**：T0 数据下载统一由 ensure 链完成，减少约 100 行重复代码
+- ✅ **`load_industry_mapping()` 参数重命名**：`stock_basic` → `shenwan_industry`，消除命名歧义
+
+### v0.16.1
+
+**修复纸面交易因子数据缺失** (v0.16.1):
+- ✅ **纸面交易 T0 自动加载因子数据**：`ensure_features_for_date()` 补全基本面和另类数据因子的加载逻辑
+- ✅ **因子缺失可见性**：缺失因子数据时输出 WARNING 汇总日志（覆盖率 + 缺失列表 + 下载命令提示）
+
+### v0.16.0
 
 **市场择时多模式扩展 + 依赖精简** (v0.16.0):
 - ✅ **市场择时扩展为 4 种模式**（`engine_ml.py` + `walk_forward.py`）：

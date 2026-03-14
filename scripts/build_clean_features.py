@@ -323,18 +323,15 @@ def build_features_data(
         else:
             logger.warning("未找到股东人数数据，相关特征将为空")
 
-        # 业绩预告/快报
+        # 业绩预告
         forecast_df = loader.load_forecast()
-        express_df = loader.load_express()
-        if forecast_df is not None or express_df is not None:
-            fc_n = len(forecast_df) if forecast_df is not None else 0
-            ex_n = len(express_df) if express_df is not None else 0
-            logger.info(f"业绩预告: {fc_n} 条, 业绩快报: {ex_n} 条")
+        if forecast_df is not None:
+            logger.info(f"业绩预告: {len(forecast_df)} 条")
             earnings_lookup = build_earnings_lookup_by_date(
-                forecast_df, express_df, trading_dates_str
+                forecast_df, trading_dates_str
             )
         else:
-            logger.warning("未找到业绩预告/快报数据，相关特征将为空")
+            logger.warning("未找到业绩预告数据，相关特征将为空")
 
         # 东财人气榜
         hot_rank_df = loader.load_hot_rank()
@@ -480,7 +477,7 @@ def main():
     args = parser.parse_args()
     
     # 初始化日志
-    setup_logger(log_level="DEBUG")
+    setup_logger(log_level="INFO")
     
     logger.info("=" * 60)
     logger.info("开始构建clean和features数据")

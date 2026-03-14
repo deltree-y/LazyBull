@@ -50,14 +50,14 @@ def test_load_industry_mapping_missing_columns():
         'ts_code': ['000001.SZ'],
     })
     
-    with pytest.raises(ValueError, match="必须包含 sw_industry 列"):
+    with pytest.raises(ValueError, match="必须包含 sw_industry"):
         load_industry_mapping(stock_basic)
-    
+
     stock_basic = pd.DataFrame({
         'sw_industry': ['银行I'],
     })
-    
-    with pytest.raises(ValueError, match="必须包含 ts_code 列"):
+
+    with pytest.raises(ValueError, match="必须包含 ts_code"):
         load_industry_mapping(stock_basic)
 
 

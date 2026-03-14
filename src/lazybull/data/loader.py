@@ -467,17 +467,6 @@ class DataLoader:
                     df[col] = df[col].astype(str).str.replace("-", "").str[:8]
         return df
 
-    def load_express(self) -> Optional[pd.DataFrame]:
-        """加载业绩快报数据（单文件）"""
-        df = self.storage.load_raw("express")
-        if df is None:
-            logger.warning("未找到业绩快报数据")
-        else:
-            for col in ["ann_date", "end_date"]:
-                if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
-        return df
-
     def load_hot_rank(self) -> Optional[pd.DataFrame]:
         """加载东财人气榜数据（单文件）"""
         df = self.storage.load_raw("hot_rank")

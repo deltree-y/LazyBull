@@ -36,48 +36,68 @@ def ensure_raw_data_for_date(
     Returns:
         是否成功（True 表示数据已存在或下载成功）
     """
-    # 检查是否已存在
-    if not force and storage.is_data_exists("raw", "daily", trade_date):
-        logger.debug(f"raw 数据已存在: {trade_date}")
-        return True
-    
-    logger.info(f"下载 raw 数据: {trade_date}")
-    
+    daily_exists = not force and storage.is_data_exists("raw", "daily", trade_date)
+
+    # 日线等核心数据已存在时，仍需检查可选依赖（daily_basic / margin_detail）
+    if daily_exists:
+        logger.debug(f"raw 核心数据已存在: {trade_date}，检查可选依赖")
+    else:
+        logger.info(f"下载 raw 数据: {trade_date}")
+
     try:
-        # 下载日线行情
-        daily_data = client.get_daily(trade_date=trade_date)
-        if not daily_data.empty:
-            storage.save_raw_by_date(daily_data, "daily", trade_date)
-            logger.info(f"  日线: 已保存 {len(daily_data)} 条记录")
-        
-        # 下载复权因子
-        adj_factor = client.get_adj_factor(trade_date=trade_date)
-        if not adj_factor.empty:
-            storage.save_raw_by_date(adj_factor, "adj_factor", trade_date)
-            logger.info(f"  复权因子: 已保存 {len(adj_factor)} 条记录")
-        
-        # 下载停复牌信息
-        suspend = client.get_suspend_d(trade_date=trade_date)
-        if not suspend.empty:
-            storage.save_raw_by_date(suspend, "suspend", trade_date)
-            logger.info(f"  停复牌: 已保存 {len(suspend)} 条记录")
-        
-        # 下载涨跌停信息
-        limit_up_down = client.get_stk_limit(trade_date=trade_date)
-        if not limit_up_down.empty:
-            storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
-            logger.info(f"  涨跌停: 已保存 {len(limit_up_down)} 条记录")
-        
-        # 下载资金流向（可选依赖：T0 特征构建需要，止损/T1 不需要）
-        moneyflow = client.get_moneyflow(trade_date=trade_date)
-        if not moneyflow.empty:
-            storage.save_raw_by_date(moneyflow, "moneyflow", trade_date)
-            logger.info(f"  资金流向: 已保存 {len(moneyflow)} 条记录")
-        else:
-            logger.warning(f"资金流向数据暂缺: {trade_date}（TuShare 通常 18:00 后更新，T0 特征构建时需要）")
-        
+        if not daily_exists:
+            # 下载日线行情
+            daily_data = client.get_daily(trade_date=trade_date)
+            if not daily_data.empty:
+                storage.save_raw_by_date(daily_data, "daily", trade_date)
+                logger.info(f"  日线: 已保存 {len(daily_data)} 条记录")
+
+            # 下载复权因子
+            adj_factor = client.get_adj_factor(trade_date=trade_date)
+            if not adj_factor.empty:
+                storage.save_raw_by_date(adj_factor, "adj_factor", trade_date)
+                logger.info(f"  复权因子: 已保存 {len(adj_factor)} 条记录")
+
+            # 下载停复牌信息
+            suspend = client.get_suspend_d(trade_date=trade_date)
+            if not suspend.empty:
+                storage.save_raw_by_date(suspend, "suspend", trade_date)
+                logger.info(f"  停复牌: 已保存 {len(suspend)} 条记录")
+
+            # 下载涨跌停信息
+            limit_up_down = client.get_stk_limit(trade_date=trade_date)
+            if not limit_up_down.empty:
+                storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
+                logger.info(f"  涨跌停: 已保存 {len(limit_up_down)} 条记录")
+
+            # 下载资金流向（可选依赖：T0 特征构建需要，止损/T1 不需要）
+            moneyflow = client.get_moneyflow(trade_date=trade_date)
+            if not moneyflow.empty:
+                storage.save_raw_by_date(moneyflow, "moneyflow", trade_date)
+                logger.info(f"  资金流向: 已保存 {len(moneyflow)} 条记录")
+            else:
+                logger.warning(f"资金流向数据暂缺: {trade_date}（TuShare 通常 18:00 后更新，T0 特征构建时需要）")
+
+        # 以下可选数据独立检查，不受 daily 存在与否影响
+        # 下载每日指标（pb/pe/换手率等，特征构建需要）
+        if force or not storage.is_data_exists("raw", "daily_basic", trade_date):
+            daily_basic = client.get_daily_basic(trade_date=trade_date)
+            if not daily_basic.empty:
+                storage.save_raw_by_date(daily_basic, "daily_basic", trade_date)
+                logger.info(f"  每日指标: 已保存 {len(daily_basic)} 条记录")
+
+        # 下载融资融券明细（按日分区，特征构建需要）
+        if force or not storage.is_data_exists("raw", "margin_detail", trade_date):
+            try:
+                margin_detail = client.query("margin_detail", trade_date=trade_date)
+                if margin_detail is not None and not margin_detail.empty:
+                    storage.save_raw_by_date(margin_detail, "margin_detail", trade_date)
+                    logger.info(f"  融资融券: 已保存 {len(margin_detail)} 条记录")
+            except Exception as e:
+                logger.warning(f"融资融券数据获取失败: {trade_date}（{e}）")
+
         return True
-        
+
     except Exception as e:
         logger.error(f"下载 raw 数据失败 {trade_date}: {e}")
         return False
@@ -224,7 +244,23 @@ def ensure_clean_data_for_date(
         
         # 保存 clean 数据
         storage.save_clean_by_date(daily_clean, "daily", trade_date)
-        logger.info(f"已保存 clean 数据: {len(daily_clean)} 条")
+        logger.info(f"已保存 clean/daily 数据: {len(daily_clean)} 条")
+        
+        # 构建 clean/daily_basic
+        if force or not storage.is_data_exists("clean", "daily_basic", trade_date):
+            daily_basic_raw = storage.load_raw_by_date("daily_basic", trade_date)
+            if daily_basic_raw is not None and not daily_basic_raw.empty:
+                daily_basic_clean = cleaner.clean_daily_basic(daily_basic_raw)
+                storage.save_clean_by_date(daily_basic_clean, "daily_basic", trade_date)
+                logger.info(f"已保存 clean/daily_basic 数据: {len(daily_basic_clean)} 条")
+
+        # 构建 clean/moneyflow
+        if force or not storage.is_data_exists("clean", "moneyflow", trade_date):
+            moneyflow_raw = storage.load_raw_by_date("moneyflow", trade_date)
+            if moneyflow_raw is not None and not moneyflow_raw.empty:
+                moneyflow_clean = cleaner.clean_moneyflow(moneyflow_raw)
+                storage.save_clean_by_date(moneyflow_clean, "moneyflow", trade_date)
+                logger.info(f"已保存 clean/moneyflow 数据: {len(moneyflow_clean)} 条")
         
         return True
         

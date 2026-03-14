@@ -15,7 +15,7 @@
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
 $wf_start_date           = "20130101"   #20130101
-$wf_end_date             = "20250131"
+$wf_end_date             = "20251231"
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -46,8 +46,8 @@ $early_stopping_metric   = "auto" # 早停指标：auto（mae/auc）| rank_ic（
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(30,40,60,70)
-$rank_weight_list        = @(2.5,3,3.5)
+$rank_weight_topk_list   = @(50)
+$rank_weight_list        = @(3)
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
 $time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5

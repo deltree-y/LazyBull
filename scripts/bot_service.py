@@ -126,6 +126,7 @@ def format_trade_result(
     ect_reason: str,
     runner: PaperTradingRunner,
     stock_names: dict,
+    missing_factors: list = None,
 ) -> str:
     """生成手机友好的交易执行结果 Markdown"""
     lines = []
@@ -152,6 +153,14 @@ def format_trade_result(
     # ECT 信息
     if ect_reason and "未启用" not in ect_reason and "为空" not in ect_reason:
         lines.append(f"ECT系数: {ect_exposure:.2f} ({ect_reason})")
+
+    # 因子缺失警告
+    if missing_factors:
+        total = 5
+        loaded = total - len(missing_factors)
+        lines.append("")
+        lines.append(f"⚠ 因子覆盖: {loaded}/{total}")
+        lines.append(f"缺失: {', '.join(missing_factors)}")
 
     # --- 止损卖出明细 ---
     if stop_loss_actions:
@@ -319,6 +328,7 @@ def execute_trade(trade_date: str) -> str:
         ect_reason=ect_reason,
         runner=runner,
         stock_names=stock_names,
+        missing_factors=runner.missing_factors,
     )
 
 

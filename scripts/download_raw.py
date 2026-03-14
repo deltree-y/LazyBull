@@ -13,11 +13,10 @@
   基础数据（默认）：trade_cal, stock_basic
   日线数据（默认）：daily, daily_basic, adj_factor, suspend, stk_limit, moneyflow
   另类数据（需指定）：
-    fina_indicator   - 财务指标（Tushare，逐股下载）
+    fina_indicator   - 财务指标（Tushare fina_indicator_vip，按日全市场）
     margin_detail    - 融资融券明细（Tushare，按日分区）
     stk_holdernumber - 股东人数（Tushare，逐股下载）
-    forecast         - 业绩预告（Tushare，逐股下载）
-    express          - 业绩快报（Tushare，逐股下载）
+    forecast         - 业绩预告（Tushare forecast_vip，按日全市场）
     hot_rank         - 东财人气榜（AKShare，逐股下载）
 
 使用示例：
@@ -54,7 +53,7 @@ if TYPE_CHECKING:
 # 所有另类数据集名称
 ALT_DATASETS = [
     "fina_indicator", "margin_detail", "stk_holdernumber",
-    "forecast", "express", "hot_rank",
+    "forecast", "hot_rank",
 ]
 
 
@@ -529,7 +528,7 @@ def main():
         default=None,
         help="指定下载的另类数据集，可多选。"
              "可选值: fina_indicator, margin_detail, stk_holdernumber, "
-             "forecast, express, hot_rank, all_alt。"
+             "forecast, hot_rank, all_alt。"
              "不指定时仅下载基础+日线数据"
     )
     parser.add_argument(
@@ -629,17 +628,6 @@ def main():
                     client, storage,
                     dataset_name="forecast",
                     api_name="forecast",
-                    stock_codes=stock_codes,
-                    dedup_cols=["ts_code", "end_date", "ann_date"],
-                    force=args.force,
-                )
-
-            # 业绩快报
-            if "express" in download_set:
-                download_per_stock_data(
-                    client, storage,
-                    dataset_name="express",
-                    api_name="express",
                     stock_codes=stock_codes,
                     dedup_cols=["ts_code", "end_date", "ann_date"],
                     force=args.force,

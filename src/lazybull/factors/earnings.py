@@ -1,11 +1,10 @@
-"""业绩预告/快报因子模块
+"""业绩预告因子模块
 
-将事件驱动的业绩预告（forecast）和业绩快报（express）数据
+将事件驱动的业绩预告（forecast）数据
 按 ann_date point-in-time 对齐到日频。
 
 数据来源：
-- Tushare forecast API（2000 积分）：业绩预告
-- Tushare express API（2000 积分）：业绩快报
+- Tushare forecast_vip API（5000 积分）：业绩预告
 
 关键防前视：只用 ann_date（公告日），不用 end_date（报告期末）。
 公告后前向填充，直到被同一报告期的新公告或下一报告期覆盖。
@@ -35,23 +34,18 @@ FORECAST_TYPE_SCORE = {
 EARNINGS_COLS = [
     "forecast_type_score",
     "forecast_chg_mid",
-    "express_profit_yoy",
-    "express_revenue_yoy",
 ]
 
 
 def build_earnings_lookup_by_date(
     forecast_df: pd.DataFrame,
-    express_df: pd.DataFrame,
     trading_dates: List[str],
 ) -> Dict[str, pd.DataFrame]:
-    """将业绩预告和快报数据按 ann_date point-in-time 对齐到日频
+    """将业绩预告数据按 ann_date point-in-time 对齐到日频
 
     Args:
         forecast_df: 业绩预告 DataFrame，需包含
             ts_code, ann_date, end_date, type, p_change_min, p_change_max
-        express_df: 业绩快报 DataFrame，需包含
-            ts_code, ann_date, end_date, yoy_net_profit, yoy_sales
         trading_dates: 交易日列表（YYYYMMDD 字符串，已排序）
 
     Returns:
@@ -95,37 +89,8 @@ def build_earnings_lookup_by_date(
                 for _, row in grp.iterrows()
             ]
 
-    # ── 处理业绩快报 ────────────────────────────────────────────
-    ex_records: Dict[str, list] = {}
-
-    if express_df is not None and len(express_df) > 0:
-        ex = express_df.copy()
-        ex["ann_date"] = ex["ann_date"].astype(str).str.replace("-", "").str[:8]
-        ex = ex.dropna(subset=["ann_date"])
-
-        for col in ["yoy_net_profit", "yoy_sales"]:
-            if col in ex.columns:
-                ex[col] = pd.to_numeric(ex[col], errors="coerce")
-
-        # 去重
-        if "end_date" in ex.columns:
-            ex["end_date"] = ex["end_date"].astype(str).str.replace("-", "").str[:8]
-            ex = ex.sort_values(["ts_code", "end_date", "ann_date"])
-            ex = ex.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
-        ex = ex.sort_values(["ts_code", "ann_date"])
-
-        for ts_code, grp in ex.groupby("ts_code"):
-            ex_records[ts_code] = [
-                {
-                    "ann_date": row["ann_date"],
-                    "express_profit_yoy": row.get("yoy_net_profit", np.nan),
-                    "express_revenue_yoy": row.get("yoy_sales", np.nan),
-                }
-                for _, row in grp.iterrows()
-            ]
-
     # ── 对每个交易日做 point-in-time 查询 ───────────────────────
-    all_codes = set(list(fc_records.keys()) + list(ex_records.keys()))
+    all_codes = set(fc_records.keys())
     result: Dict[str, pd.DataFrame] = {}
 
     for trade_date in trading_dates:
@@ -145,22 +110,11 @@ def build_earnings_lookup_by_date(
                     row["forecast_chg_mid"] = r["forecast_chg_mid"]
                     has_data = True
 
-            # 快报查询
-            if ts_code in ex_records:
-                recs = ex_records[ts_code]
-                ann_dates = [r["ann_date"] for r in recs]
-                idx = bisect.bisect_right(ann_dates, trade_date) - 1
-                if idx >= 0:
-                    r = recs[idx]
-                    row["express_profit_yoy"] = r["express_profit_yoy"]
-                    row["express_revenue_yoy"] = r["express_revenue_yoy"]
-                    has_data = True
-
             if has_data:
                 rows.append(row)
 
         if rows:
             result[trade_date] = pd.DataFrame(rows)
 
-    logger.info(f"业绩预告/快报查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
+    logger.info(f"业绩预告查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
     return result

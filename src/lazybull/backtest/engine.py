@@ -114,8 +114,8 @@ class BacktestEngine:
             # 延迟导入以避免循环依赖
             from ..portfolio import load_industry_mapping
             loader = DataLoader(self.data_storage)  # 使用数据存储实例创建加载器
-            shenwan_stock_basic = loader.load_shenwan_industry()
-            self.industry_mapping = load_industry_mapping(shenwan_stock_basic, verbose=verbose)
+            shenwan_industry = loader.load_shenwan_industry()
+            self.industry_mapping = load_industry_mapping(shenwan_industry, verbose=verbose)
         
         # 验证调仓频率
         if not isinstance(rebalance_freq, int):

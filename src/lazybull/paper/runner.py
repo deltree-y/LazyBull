@@ -80,6 +80,7 @@ class PaperTradingRunner:
 
         self.horizon = horizon  # 保存 horizon 供其他地方使用
         self.verbose = verbose
+        self.missing_factors: list = []  # 缺失的因子数据名称列表
         # 确保基础数据存在（如交易日历、股票基本信息等）
         #ensure_basic_data(self.storage, self.loader, self.cleaner, self.client)
     
@@ -328,11 +329,7 @@ class PaperTradingRunner:
         logger.info("=" * 80)
         logger.info(f"调仓频率: {rebalance_freq} 个交易日")
         
-        # 4. 拉取数据
-        logger.info("步骤1: 拉取数据")
-        self._download_data(corrected_date)
-        
-        # 5. 生成信号
+        # 4. 生成信号（ensure_features_for_date 内部自动下载缺失的 raw/clean 数据）
         logger.info("步骤2: 生成信号")
         self.signal = self.signal or MLSignal(
             top_n=top_n,
@@ -734,109 +731,6 @@ class PaperTradingRunner:
         
         return fills
     
-    def _download_data(self, trade_date: str) -> None:
-        """下载并构建数据（复用仓库既有能力）
-        
-        Args:
-            trade_date: 交易日期 YYYYMMDD
-        """
-        try:
-            # 检查clean数据是否已存在
-            if self.storage.is_data_exists("clean", "daily", trade_date):
-                logger.info(f"数据已存在，跳过下载: {trade_date}")
-                return
-            
-            # 1. 下载raw数据（复用TushareClient）
-            logger.info(f"下载raw数据: {trade_date}")
-            
-            # 下载日线行情
-            if not self.storage.is_data_exists("raw", "daily", trade_date):
-                daily_data = self.client.get_daily(trade_date=trade_date)
-                if not daily_data.empty:
-                    self.storage.save_raw_by_date(daily_data, "daily", trade_date)
-                    logger.info(f"  日线: 已保存 {len(daily_data)} 条记录")
-            
-            # 下载复权因子
-            if not self.storage.is_data_exists("raw", "adj_factor", trade_date):
-                adj_factor = self.client.get_adj_factor(trade_date=trade_date)
-                if not adj_factor.empty:
-                    self.storage.save_raw_by_date(adj_factor, "adj_factor", trade_date)
-                    logger.info(f"  复权因子: 已保存 {len(adj_factor)} 条记录")
-            
-            # 下载停复牌信息
-            if not self.storage.is_data_exists("raw", "suspend", trade_date):
-                suspend = self.client.get_suspend_d(trade_date=trade_date)
-                if not suspend.empty:
-                    self.storage.save_raw_by_date(suspend, "suspend", trade_date)
-                    logger.info(f"  停复牌: 已保存 {len(suspend)} 条记录")
-            
-            # 下载涨跌停信息
-            if not self.storage.is_data_exists("raw", "stk_limit", trade_date):
-                limit_up_down = self.client.get_stk_limit(trade_date=trade_date)
-                if not limit_up_down.empty:
-                    self.storage.save_raw_by_date(limit_up_down, "stk_limit", trade_date)
-                    logger.info(f"  涨跌停: 已保存 {len(limit_up_down)} 条记录")
-            
-            # 2. 构建clean数据（复用DataCleaner）
-            logger.info(f"构建clean数据: {trade_date}")
-            from ..data.cleaner import DataCleaner
-            cleaner = DataCleaner()
-            
-            # 加载raw数据
-            daily_raw = self.storage.load_raw_by_date("daily", trade_date)
-            adj_factor_raw = self.storage.load_raw_by_date("adj_factor", trade_date)
-            
-            if daily_raw is None or daily_raw.empty:
-                logger.warning(f"未找到raw层daily数据，跳过clean构建")
-                return
-            
-            # 处理缺失的复权因子
-            if adj_factor_raw is None or adj_factor_raw.empty:
-                logger.warning(f"未找到复权因子，使用默认值1.0")
-                adj_factor_raw = daily_raw[['ts_code', 'trade_date']].copy()
-                adj_factor_raw['adj_factor'] = 1.0
-            
-            # 清洗日线数据
-            daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
-            
-            # 添加可交易标记
-            stock_basic = self.loader.load_clean_stock_basic()
-            if stock_basic is None:
-                # 如果没有stock_basic，尝试从raw加载并清洗
-                stock_basic_raw = self.storage.load_raw("stock_basic")
-                if stock_basic_raw is not None:
-                    stock_basic = cleaner.clean_stock_basic(stock_basic_raw)
-                    self.storage.save_clean(stock_basic, "stock_basic", is_force=True)
-            
-            if stock_basic is not None:
-                suspend_raw = self.storage.load_raw_by_date("suspend", trade_date)
-                limit_raw = self.storage.load_raw_by_date("stk_limit", trade_date)
-                
-                suspend_clean = None
-                limit_clean = None
-                
-                if suspend_raw is not None and len(suspend_raw) > 0:
-                    suspend_clean = cleaner.clean_suspend_info(suspend_raw)
-                
-                if limit_raw is not None and len(limit_raw) > 0:
-                    limit_clean = cleaner.clean_limit_info(limit_raw)
-                
-                daily_clean = cleaner.add_tradable_universe_flag(
-                    daily_clean,
-                    stock_basic,
-                    suspend_info_df=suspend_clean,
-                    limit_info_df=limit_clean,
-                    min_list_days=365
-                )
-            
-            # 保存clean数据
-            self.storage.save_clean_by_date(daily_clean, "daily", trade_date)
-            logger.info(f"已保存clean数据: {len(daily_clean)} 条")
-            
-        except Exception as e:
-            logger.error(f"下载数据失败: {e}")
-            raise
-    
     def _generate_signals(
         self,
         trade_date: str,
@@ -867,7 +761,7 @@ class PaperTradingRunner:
         """
         # 确保 features 数据存在
         logger.info(f"检查并确保 features 数据存在: {trade_date}")
-        if not ensure_features_for_date(
+        success, missing = ensure_features_for_date(
             self.storage,
             self.loader,
             self.feature_builder,
@@ -875,16 +769,18 @@ class PaperTradingRunner:
             self.client,
             trade_date,
             force=False
-        ):
+        )
+        self.missing_factors = missing
+        if not success:
             logger.error(f"无法获取 features 数据: {trade_date}")
             return []
-        
+
         # 加载股票池
         stock_basic = self.loader.load_clean_stock_basic()
         if stock_basic is None:
             logger.error("无法加载stock_basic数据")
             return []
-        
+
         # 创建股票池
         universe = self._create_universe(
             stock_basic, universe_type,
@@ -1503,7 +1399,7 @@ class PaperTradingRunner:
         
         # 1. 确保features数据存在
         logger.info(f"检查并确保 features 数据存在: {trade_date}")
-        if not ensure_features_for_date(
+        success, missing = ensure_features_for_date(
             self.storage,
             self.loader,
             self.feature_builder,
@@ -1511,10 +1407,12 @@ class PaperTradingRunner:
             self.client,
             trade_date,
             force=False
-        ):
+        )
+        self.missing_factors = missing
+        if not success:
             logger.error(f"无法获取 features 数据: {trade_date}")
             return []
-        
+
         # 2. 加载股票池
         stock_basic = self.loader.load_clean_stock_basic()
         if stock_basic is None:

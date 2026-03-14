@@ -8,36 +8,38 @@ import pandas as pd
 from loguru import logger
 
 
-def load_industry_mapping(stock_basic: pd.DataFrame, verbose: bool = False) -> Dict[str, str]:
-    """从 stock_basic 数据加载行业映射
-    
+def load_industry_mapping(
+    shenwan_industry: pd.DataFrame, verbose: bool = False
+) -> Dict[str, str]:
+    """从申万行业分类数据加载行业映射
+
     Args:
-        stock_basic: 股票基本信息 DataFrame，必须包含 ts_code 和 sw_l2 列
-            sw_l2 为申万二级行业名称（约130个行业）
+        shenwan_industry: 申万行业分类 DataFrame，必须包含 ts_code 列
+            以及 sw_l2/sw_industry/sw_name/sw_l3 中至少一列
         verbose: 是否输出详细日志
-        
+
     Returns:
         行业映射字典 {股票代码: 行业名称}，行业缺失的股票映射到 "未知行业"
-        
+
     Raises:
-        ValueError: 当 stock_basic 缺少必需列时
+        ValueError: 当 shenwan_industry 缺少必需列时
     """
-    if stock_basic is None or stock_basic.empty:
+    if shenwan_industry is None or shenwan_industry.empty:
         if verbose:
-            logger.warning("stock_basic 为空，返回空行业映射")
+            logger.warning("shenwan_industry 为空，返回空行业映射")
         return {}
-    
-    if 'ts_code' not in stock_basic.columns:
-        raise ValueError("stock_basic 必须包含 ts_code 列")
-    
-    if not {'sw_name', 'sw_industry', 'sw_l3'}.intersection(stock_basic.columns):
-        raise ValueError("stock_basic 必须包含 sw_industry、sw_name 或 sw_l3 列")
-    
+
+    if 'ts_code' not in shenwan_industry.columns:
+        raise ValueError("shenwan_industry 必须包含 ts_code 列")
+
+    if not {'sw_name', 'sw_industry', 'sw_l3'}.intersection(shenwan_industry.columns):
+        raise ValueError("shenwan_industry 必须包含 sw_industry、sw_name 或 sw_l3 列")
+
     # 构建映射：将 NaN/None 映射为 "未知行业"
     industry_mapping = {}
     unknown_count = 0
-    
-    for _, row in stock_basic.iterrows():
+
+    for _, row in shenwan_industry.iterrows():
         ts_code = row['ts_code']
         industry = row.get('sw_l2') or row.get('sw_industry') or row.get('sw_name') or row.get('sw_l3')  # 优先使用申万二级行业
         
