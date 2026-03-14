@@ -39,9 +39,41 @@ def _build_stock_names(loader: DataLoader) -> dict:
     return loader.build_stock_names_dict()
 
 
-def _short_code(ts_code: str) -> str:
-    """600519.SH -> 600519"""
-    return ts_code.split('.')[0] if '.' in ts_code else ts_code
+def _get_rebalance_status(trade_date: str) -> str:
+    """计算已持仓交易日和距下次调仓剩余交易日
+
+    Returns:
+        格式化字符串，如 "已持 12d 剩 8d"；无法计算时返回空字符串
+    """
+    try:
+        ps = PaperStorage()
+        rebalance_state = ps.load_rebalance_state()
+        config = ps.load_config()
+        if rebalance_state is None or config is None:
+            return ""
+
+        last_date = rebalance_state.get('last_rebalance_date')
+        rebalance_freq = config.get('rebalance_freq', 20)
+        if not last_date:
+            return ""
+
+        storage = Storage()
+        loader = DataLoader(storage, verbose=False)
+        trade_cal = loader.load_clean_trade_cal()
+        if trade_cal is None:
+            return ""
+
+        trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+        if last_date not in trade_dates or trade_date not in trade_dates:
+            return ""
+
+        last_idx = trade_dates.index(last_date)
+        current_idx = trade_dates.index(trade_date)
+        days_held = current_idx - last_idx
+        days_remaining = max(0, rebalance_freq - days_held)
+        return f"已持 {days_held}d 剩 {days_remaining}d"
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -88,25 +120,33 @@ def format_positions_mobile(runner: PaperTradingRunner, trade_date: str) -> str:
 
     lines = []
     lines.append(f"持仓概览 ({trade_date})")
-    lines.append("")
     lines.append(f"总资产: {total_assets:,.0f}")
     lines.append(f"现金: {cash:,.0f} | 市值: {total_value:,.0f}")
     lines.append(f"本轮: {r_sign}{round_pnl_pct:.2f}% | 总: {sign}{total_pnl_pct:.2f}%")
-    lines.append("")
+    rebalance_info = _get_rebalance_status(trade_date)
+    if rebalance_info:
+        lines.append(rebalance_info)
     lines.append("---")
 
     # 按收益率排序
     df_sorted = df.sort_values(by='收益率(%)', ascending=False)
     for i, (_, row) in enumerate(df_sorted.iterrows(), 1):
-        # 股票代码列已经是 "ts_code(name)" 格式
+        # 股票代码列格式为 "ts_code(name)", 转为 "name(ts_code)"
         code_display = row['股票代码']
+        # 解析 "000858.SZ(五粮液)" -> "五粮液(000858.SZ)"
+        if '(' in code_display and code_display.endswith(')'):
+            ts_part = code_display[:code_display.index('(')]
+            name_part = code_display[code_display.index('(') + 1:-1]
+            code_display = f"{name_part}({ts_part})"
+
         pnl_pct = row['收益率(%)']
         p_sign = "+" if pnl_pct >= 0 else ""
 
         lines.append(f"{i}. {code_display}")
-        lines.append(f"  {row['持仓股数']}股 现价{row['当前价格']:.2f} 成本{row['买入均价']:.2f}")
-        lines.append(f"  盈亏: {p_sign}{pnl_pct:.2f}% ({p_sign}{row['浮动盈亏']:,.0f})")
-        lines.append("")
+        lines.append(
+            f"   {row['持仓股数']:.0f}股, 现{row['当前价格']:.2f}, 原{row['买入均价']:.2f}"
+        )
+        lines.append(f"   {p_sign}{pnl_pct:.2f}% ({p_sign}{row['浮动盈亏']:,.0f})")
 
     return "\n".join(lines)
 
@@ -154,6 +194,11 @@ def format_trade_result(
     if ect_reason and "未启用" not in ect_reason and "为空" not in ect_reason:
         lines.append(f"ECT系数: {ect_exposure:.2f} ({ect_reason})")
 
+    # 调仓状态
+    rebalance_info = _get_rebalance_status(corrected_date)
+    if rebalance_info:
+        lines.append(rebalance_info)
+
     # 因子缺失警告
     if missing_factors:
         total = 5
@@ -166,62 +211,77 @@ def format_trade_result(
     if stop_loss_actions:
         lines.append("")
         lines.append("--- 止损卖出 ---")
-        for a in stop_loss_actions:
+        for i, a in enumerate(stop_loss_actions, 1):
             name = stock_names.get(a['ts_code'], '')
             can = "可执行" if a['can_execute'] else "跌停无法卖"
-            lines.append(f"卖 {name} {_short_code(a['ts_code'])}")
-            lines.append(f"  {a['shares']}股 | {can}")
-            lines.append(f"  原因: {a['reason']}")
-            lines.append("")
+            lines.append(f"{i}. {name}({a['ts_code']})")
+            lines.append(f"   量{a['shares']}, {can}")
+            lines.append(f"   因{a['reason']}")
 
     # --- 延迟卖出明细 ---
     if pending_sell_actions:
         lines.append("")
         lines.append("--- 延迟卖出 ---")
-        for a in pending_sell_actions:
+        for i, a in enumerate(pending_sell_actions, 1):
             name = stock_names.get(a['ts_code'], '')
-            lines.append(f"卖 {name} {_short_code(a['ts_code'])}")
-            lines.append(f"  {a['shares']}股 | {a['status']}")
-            lines.append(f"  原因: {a['reason']}")
-            lines.append("")
+            lines.append(f"{i}. {name}({a['ts_code']})")
+            lines.append(f"   量{a['shares']}, {a['status']}")
+            lines.append(f"   因{a['reason']}")
 
-    # --- T1 已执行操作明细（重点） ---
+    # --- T1 已执行操作明细 — 买卖分组 ---
     if t1_actions:
+        t1_buys = [a for a in t1_actions if a['action'] == 'buy']
+        t1_sells = [a for a in t1_actions if a['action'] == 'sell']
         lines.append("")
         lines.append("--- T1 今日操作明细 ---")
-        for a in t1_actions:
-            name = stock_names.get(a['ts_code'], '')
-            direction = "买" if a['action'] == 'buy' else "卖"
-            lines.append(f"{direction} {name} {_short_code(a['ts_code'])}")
-            lines.append(f"  {a['shares']}股")
-            lines.append(f"  原因: {a['reason']}")
-            lines.append("")
+        if t1_buys:
+            lines.append("买入-")
+            for i, a in enumerate(t1_buys, 1):
+                name = stock_names.get(a['ts_code'], '')
+                lines.append(f"{i}. {name}({a['ts_code']})")
+                lines.append(f"   量{a['shares']}, 因{a['reason']}")
+        if t1_sells:
+            lines.append("卖出-")
+            for i, a in enumerate(t1_sells, 1):
+                name = stock_names.get(a['ts_code'], '')
+                lines.append(f"{i}. {name}({a['ts_code']})")
+                lines.append(f"   量{a['shares']}, 因{a['reason']}")
 
-    # --- T0 新目标/明日交易指令（核心：用户据此手工下单） ---
+    # --- T0 新目标/明日交易指令 — 买卖分组 ---
     if t0_instructions:
+        buys = [inst for inst in t0_instructions if inst.action == 'buy']
+        sells = [inst for inst in t0_instructions if inst.action == 'sell']
         lines.append("")
         lines.append("--- T0 明日交易指令 ---")
-        for inst in t0_instructions:
-            name = stock_names.get(inst.ts_code, '')
-            direction = "买" if inst.action == 'buy' else "卖"
-            lines.append(f"{direction} {name} {_short_code(inst.ts_code)}")
-            lines.append(f"  {inst.shares}股 | 价格:{inst.price_type}")
-            if inst.target_weight > 0:
-                lines.append(f"  目标权重: {inst.target_weight:.2%}")
-            lines.append(f"  原因: {inst.reason}")
+        if buys:
             lines.append("")
+            lines.append("买入-")
+            for i, inst in enumerate(buys, 1):
+                name = stock_names.get(inst.ts_code, '')
+                lines.append(f"{i}. {name}({inst.ts_code})")
+                weight_str = f"权{inst.target_weight:.2%}" if inst.target_weight > 0 else ""
+                parts = [f"量{inst.shares}"]
+                if weight_str:
+                    parts.append(weight_str)
+                lines.append(f"   {', '.join(parts)}")
+        if sells:
+            lines.append("")
+            lines.append("卖出-")
+            for i, inst in enumerate(sells, 1):
+                name = stock_names.get(inst.ts_code, '')
+                lines.append(f"{i}. {name}({inst.ts_code})")
+                lines.append(f"   量{inst.shares}, 因{inst.reason}")
     elif t0_targets:
         # 兜底：如果没有 instructions 但有 targets
         lines.append("")
         lines.append("--- T0 明日目标 ---")
-        for t in t0_targets:
+        for i, t in enumerate(t0_targets, 1):
             name = stock_names.get(t['ts_code'], '')
-            lines.append(f"买 {name} {_short_code(t['ts_code'])}")
-            lines.append(f"  目标权重: {t['target_weight']:.2%}")
-            lines.append(f"  原因: {t['reason']}")
-            lines.append("")
+            lines.append(f"{i}. {name}({t['ts_code']})")
+            lines.append(f"   权{t['target_weight']:.2%}, 因{t['reason']}")
 
     # --- 执行后持仓概要 ---
+    lines.append("")
     lines.append("---")
     positions = runner.account.get_positions()
     cash = runner.account.get_cash()
