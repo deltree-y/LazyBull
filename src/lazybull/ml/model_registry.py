@@ -195,8 +195,6 @@ class ModelRegistry:
         model_file = self.models_dir / metadata["model_file"]
         if not model_file.exists():
             raise FileNotFoundError(f"模型文件不存在: {model_file}")
-        
-        model = joblib.load(model_file)
         # 环境检测逻辑
         try:
             # 尝试检查是否有 NVIDIA 驱动和显卡
@@ -208,6 +206,7 @@ class ModelRegistry:
             # 如果没有 nvidia-smi 或者执行报错，则强制回退到 cpu
             device = "cpu"        
         model.set_params(device=device, tree_method='hist' if device == 'cpu' else 'gpu_hist')        
+        model = joblib.load(model_file)
         
         # 加载特征列表
         features_file = self.models_dir / metadata["features_file"]
