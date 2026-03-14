@@ -188,66 +188,69 @@ def ensure_clean_data_for_date(
     Returns:
         是否成功
     """
-    # 检查是否已存在
-    if not force and storage.is_data_exists("clean", "daily", trade_date):
+    # 检查所有 clean 数据集是否都已存在
+    daily_exists = not force and storage.is_data_exists("clean", "daily", trade_date)
+    daily_basic_exists = not force and storage.is_data_exists("clean", "daily_basic", trade_date)
+    moneyflow_exists = not force and storage.is_data_exists("clean", "moneyflow", trade_date)
+
+    if daily_exists and daily_basic_exists and moneyflow_exists:
         logger.debug(f"clean 数据已存在: {trade_date}")
         return True
-    
+
     logger.info(f"构建 clean 数据: {trade_date}")
-    
-    # 确保 raw 数据存在
+
+    # 确保 raw 数据存在（会下载 daily/daily_basic/moneyflow 等）
     if not ensure_raw_data_for_date(client, storage, trade_date, force):
         logger.error(f"无法获取 raw 数据: {trade_date}")
         return False
-    
+
     try:
         # 确保基础 clean 数据存在
         _ensure_basic_clean_data(storage, cleaner)
-        
-        # 加载 raw 数据
-        daily_raw = storage.load_raw_by_date("daily", trade_date)
-        if daily_raw is None or daily_raw.empty:
-            logger.error(f"未找到 raw 层 daily 数据: {trade_date}")
-            return False
-        
-        adj_factor_raw = storage.load_raw_by_date("adj_factor", trade_date)
-        if adj_factor_raw is None or adj_factor_raw.empty:
-            logger.warning(f"未找到复权因子，使用默认值 1.0: {trade_date}")
-            adj_factor_raw = daily_raw[['ts_code', 'trade_date']].copy()
-            adj_factor_raw['adj_factor'] = 1.0
-        
-        # 清洗日线数据
-        daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
-        
-        # 添加可交易标记
-        stock_basic = loader.load_clean_stock_basic()
-        if stock_basic is not None:
-            suspend_raw = storage.load_raw_by_date("suspend", trade_date)
-            limit_raw = storage.load_raw_by_date("stk_limit", trade_date)
-            
-            suspend_clean = None
-            limit_clean = None
-            
-            if suspend_raw is not None and len(suspend_raw) > 0:
-                suspend_clean = cleaner.clean_suspend_info(suspend_raw)
-            
-            if limit_raw is not None and len(limit_raw) > 0:
-                limit_clean = cleaner.clean_limit_info(limit_raw)
-            
-            daily_clean = cleaner.add_tradable_universe_flag(
-                daily_clean,
-                stock_basic,
-                suspend_info_df=suspend_clean,
-                limit_info_df=limit_clean,
-                min_list_days=MIN_LIST_DAYS
-            )
-        
-        # 保存 clean 数据
-        storage.save_clean_by_date(daily_clean, "daily", trade_date)
-        logger.info(f"已保存 clean/daily 数据: {len(daily_clean)} 条")
-        
+
+        # 构建 clean/daily
+        if not daily_exists:
+            daily_raw = storage.load_raw_by_date("daily", trade_date)
+            if daily_raw is None or daily_raw.empty:
+                logger.error(f"未找到 raw 层 daily 数据: {trade_date}")
+                return False
+
+            adj_factor_raw = storage.load_raw_by_date("adj_factor", trade_date)
+            if adj_factor_raw is None or adj_factor_raw.empty:
+                logger.warning(f"未找到复权因子，使用默认值 1.0: {trade_date}")
+                adj_factor_raw = daily_raw[['ts_code', 'trade_date']].copy()
+                adj_factor_raw['adj_factor'] = 1.0
+
+            daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
+
+            # 添加可交易标记
+            stock_basic = loader.load_clean_stock_basic()
+            if stock_basic is not None:
+                suspend_raw = storage.load_raw_by_date("suspend", trade_date)
+                limit_raw = storage.load_raw_by_date("stk_limit", trade_date)
+
+                suspend_clean = None
+                limit_clean = None
+
+                if suspend_raw is not None and len(suspend_raw) > 0:
+                    suspend_clean = cleaner.clean_suspend_info(suspend_raw)
+
+                if limit_raw is not None and len(limit_raw) > 0:
+                    limit_clean = cleaner.clean_limit_info(limit_raw)
+
+                daily_clean = cleaner.add_tradable_universe_flag(
+                    daily_clean,
+                    stock_basic,
+                    suspend_info_df=suspend_clean,
+                    limit_info_df=limit_clean,
+                    min_list_days=MIN_LIST_DAYS
+                )
+
+            storage.save_clean_by_date(daily_clean, "daily", trade_date)
+            logger.info(f"已保存 clean/daily 数据: {len(daily_clean)} 条")
+
         # 构建 clean/daily_basic
-        if force or not storage.is_data_exists("clean", "daily_basic", trade_date):
+        if not daily_basic_exists:
             daily_basic_raw = storage.load_raw_by_date("daily_basic", trade_date)
             if daily_basic_raw is not None and not daily_basic_raw.empty:
                 daily_basic_clean = cleaner.clean_daily_basic(daily_basic_raw)
@@ -255,13 +258,13 @@ def ensure_clean_data_for_date(
                 logger.info(f"已保存 clean/daily_basic 数据: {len(daily_basic_clean)} 条")
 
         # 构建 clean/moneyflow
-        if force or not storage.is_data_exists("clean", "moneyflow", trade_date):
+        if not moneyflow_exists:
             moneyflow_raw = storage.load_raw_by_date("moneyflow", trade_date)
             if moneyflow_raw is not None and not moneyflow_raw.empty:
                 moneyflow_clean = cleaner.clean_moneyflow(moneyflow_raw)
                 storage.save_clean_by_date(moneyflow_clean, "moneyflow", trade_date)
                 logger.info(f"已保存 clean/moneyflow 数据: {len(moneyflow_clean)} 条")
-        
+
         return True
         
     except Exception as e:

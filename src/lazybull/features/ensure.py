@@ -257,9 +257,13 @@ def _ensure_historical_clean_data(
     success_count = 0
     
     for hist_date in trading_dates_str[-MAX_HISTORICAL_DAYS:]:  # 最多检查最近指定个交易日
-        if not storage.is_data_exists("clean", "daily", hist_date):
+        # 检查 daily/daily_basic/moneyflow 任一缺失即需补齐
+        daily_ok = storage.is_data_exists("clean", "daily", hist_date)
+        daily_basic_ok = storage.is_data_exists("clean", "daily_basic", hist_date)
+        moneyflow_ok = storage.is_data_exists("clean", "moneyflow", hist_date)
+        if not (daily_ok and daily_basic_ok and moneyflow_ok):
             missing_count += 1
-            # 尝试补齐
+            # 尝试补齐（ensure_clean_data_for_date 内部会跳过已存在的数据集）
             if ensure_clean_data_for_date(
                 storage, loader, cleaner, client, hist_date, force
             ):
