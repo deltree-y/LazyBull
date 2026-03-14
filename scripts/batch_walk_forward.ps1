@@ -32,7 +32,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators            = 1000       # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(4)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.008)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.007,0.008,0.009)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -46,7 +46,7 @@ $early_stopping_metric   = "auto" # 早停指标：auto（mae/auc）| rank_ic（
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(50)
+$rank_weight_topk_list   = @(40,50)
 $rank_weight_list        = @(3)
 
 # ── 时间衰减权重 ──────────────────────────────────────────────

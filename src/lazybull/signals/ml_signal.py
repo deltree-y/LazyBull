@@ -31,8 +31,8 @@ class MLSignal(Signal):
         weight_method: str = "equal",
         min_amount_ma20: float = 50000.0,
         min_total_mv: float = 500000.0,
-        max_total_mv: float = 15000000.0,
-        exclude_financial: bool = True,
+        max_total_mv: float = 1500000000.0,
+        exclude_financial: bool = False,
         verbose: bool = True,
     ):
         """初始化 ML 信号
@@ -44,8 +44,8 @@ class MLSignal(Signal):
             weight_method: 权重分配方法，"equal" 表示等权，"score" 表示按预测分数加权
             min_amount_ma20: 20日均成交额下限（千元），默认50000（=5000万元）
             min_total_mv: 总市值下限（万元），默认500000（=50亿元）
-            max_total_mv: 总市值上限（万元），默认15000000（=1500亿元）
-            exclude_financial: 是否剔除金融股（银行/非银金融），默认True
+            max_total_mv: 总市值上限（万元），默认1500000000（=150000亿元）
+            exclude_financial: 是否剔除金融股（银行/非银金融），默认False
             verbose: 是否输出详细日志，默认True
         """
         super().__init__("ml_signal")

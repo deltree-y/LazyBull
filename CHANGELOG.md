@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.0] - 2026-03-14
+
+### 新增功能
+
+- **纸面交易 `adjust reset-t0` 子命令**
+  - 自动查找最新T0运行记录并重置，允许重新执行T0工作流
+  - 自动删除该T0生成的T1交易指令文件
+  - 清空所有延迟买入/卖出队列
+  - `PaperStorage` 新增 `find_latest_t0()` 和 `reset_t0()` 方法
+  - `PendingBuy` 新增到 `paper` 模块的公开导出
+  - 用法: `python scripts/paper_trade.py adjust reset-t0`
+
 ## [0.17.1] - 2026-03-14
 
 ### 修复

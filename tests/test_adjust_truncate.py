@@ -12,6 +12,8 @@ from src.lazybull.paper import (
     Fill,
     NAVRecord,
     PaperStorage,
+    PendingBuy,
+    PendingSell,
     Position,
     TradeInstruction,
 )
@@ -370,3 +372,152 @@ def test_truncate_since_no_cutoff_data():
         # 验证数据仍然存在
         trades = pd.read_parquet(storage.trades_path / "trades.parquet")
         assert len(trades) == 1
+
+
+# ==================== reset_t0 测试 ====================
+
+
+@pytest.fixture
+def temp_storage_for_reset_t0():
+    """临时存储目录，包含T0/T1运行记录、交易指令和延迟订单"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+
+        # T0运行记录（包含t1_date）
+        t0_record = {
+            'trade_date': '20260210',
+            't1_date': '20260211',
+            'top_n': 5,
+            'timestamp': '2026-02-10T15:30:00',
+        }
+        storage.save_run_record('t0', '20260210', t0_record)
+
+        # 对应的T1交易指令
+        instructions = [
+            TradeInstruction(
+                ts_code='000001.SZ', action='buy', shares=100,
+                price_type='close', reason='信号买入', source_date='20260210',
+            ),
+            TradeInstruction(
+                ts_code='000002.SZ', action='sell', shares=200,
+                price_type='close', reason='信号卖出', source_date='20260210',
+            ),
+        ]
+        storage.save_instructions('20260211', instructions)
+
+        # 延迟买入队列
+        pending_buys = [
+            PendingBuy(
+                ts_code='000003.SZ', target_weight=0.1,
+                reason='补位买入', create_date='20260209',
+            ),
+        ]
+        storage.save_pending_buys(pending_buys)
+
+        # 延迟卖出队列
+        pending_sells = [
+            PendingSell(
+                ts_code='000004.SZ', shares=100, target_weight=0.0,
+                reason='停牌延迟', create_date='20260209',
+            ),
+        ]
+        storage.save_pending_sells(pending_sells)
+
+        yield storage
+
+
+def test_reset_t0_auto_find(temp_storage_for_reset_t0):
+    """测试 reset_t0 自动查找最新T0日期"""
+    storage = temp_storage_for_reset_t0
+
+    # 不传日期，自动找到最新的T0记录 20260210
+    stats = storage.reset_t0()
+
+    assert stats['t0_date'] == '20260210'
+    assert stats['t0_record_deleted'] is True
+    assert not storage.check_run_exists('t0', '20260210')
+
+    # T1交易指令已删除
+    assert stats['t1_instructions_deleted'] is True
+    assert stats['t1_date'] == '20260211'
+    assert storage.load_instructions('20260211') is None
+
+    # 延迟买入队列已清空
+    assert stats['pending_buys_cleared'] == 1
+    assert storage.load_pending_buys() == []
+
+    # 延迟卖出队列已清空
+    assert stats['pending_sells_cleared'] == 1
+    assert storage.load_pending_sells() == []
+
+
+def test_reset_t0_no_records():
+    """测试 reset_t0 无任何T0运行记录"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+
+        stats = storage.reset_t0()
+
+        assert stats['t0_date'] is None
+        assert stats['t0_record_deleted'] is False
+        assert stats['t1_instructions_deleted'] is False
+        assert stats['pending_buys_cleared'] == 0
+        assert stats['pending_sells_cleared'] == 0
+
+
+def test_reset_t0_no_pending_orders(temp_storage_for_reset_t0):
+    """测试 reset_t0 当延迟订单已为空时"""
+    storage = temp_storage_for_reset_t0
+
+    # 先清空延迟队列
+    storage.save_pending_buys([])
+    storage.save_pending_sells([])
+
+    stats = storage.reset_t0()
+
+    assert stats['t0_record_deleted'] is True
+    assert stats['pending_buys_cleared'] == 0
+    assert stats['pending_sells_cleared'] == 0
+
+
+def test_find_latest_t0():
+    """测试 find_latest_t0 找到最新的T0日期"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+
+        # 无记录时返回None
+        assert storage.find_latest_t0() is None
+
+        # 添加多个T0记录
+        for date in ['20260205', '20260210', '20260208']:
+            storage.save_run_record('t0', date, {'trade_date': date})
+
+        # 应返回最新的
+        assert storage.find_latest_t0() == '20260210'
+
+
+def test_reset_t0_preserves_earlier_records(temp_storage_for_reset_t0):
+    """测试 reset_t0 不影响更早日期的记录"""
+    storage = temp_storage_for_reset_t0
+
+    # 添加一个更早的T0记录
+    earlier_record = {
+        'trade_date': '20260205',
+        't1_date': '20260206',
+        'timestamp': '2026-02-05T15:30:00',
+    }
+    storage.save_run_record('t0', '20260205', earlier_record)
+    earlier_instructions = [
+        TradeInstruction(
+            ts_code='000005.SZ', action='buy', shares=100,
+            price_type='close', reason='测试', source_date='20260205',
+        ),
+    ]
+    storage.save_instructions('20260206', earlier_instructions)
+
+    # 自动重置最新的(20260210)
+    storage.reset_t0()
+
+    # 更早的记录不受影响
+    assert storage.check_run_exists('t0', '20260205')
+    assert storage.load_instructions('20260206') is not None

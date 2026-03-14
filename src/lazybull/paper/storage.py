@@ -511,6 +511,97 @@ class PaperStorage:
 
         return None
 
+    def find_latest_t0(self) -> Optional[str]:
+        """查找最新的T0运行记录日期
+
+        Returns:
+            最新T0日期 YYYYMMDD，不存在返回None
+        """
+        t0_files = sorted(self.runs_path.glob("t0_*.json"))
+        if not t0_files:
+            return None
+        # 文件名格式: t0_YYYYMMDD.json，取最后一个
+        return t0_files[-1].stem.split('_')[1]
+
+    def reset_t0(self, t0_date: Optional[str] = None) -> dict:
+        """重置T0运行记录，并清空所有延迟交易订单
+
+        若未指定 t0_date，则自动查找最新的T0记录。
+
+        删除范围：
+        - runs/t0_{t0_date}.json: T0运行记录
+        - instructions/{t1_date}.parquet: T0生成的T1交易指令
+        - pending_buys.json: 清空
+        - pending_sells.json: 清空
+
+        Args:
+            t0_date: T0日期 YYYYMMDD（可选，默认自动查找最新）
+
+        Returns:
+            操作结果统计字典
+        """
+        # 自动查找最新T0日期
+        if t0_date is None:
+            t0_date = self.find_latest_t0()
+
+        stats = {
+            't0_date': t0_date,
+            't0_record_deleted': False,
+            't1_instructions_deleted': False,
+            't1_date': None,
+            'pending_buys_cleared': 0,
+            'pending_sells_cleared': 0,
+        }
+
+        if t0_date is None:
+            logger.warning("未找到任何T0运行记录")
+            return stats
+
+        # 1. 读取T0运行记录，获取T1日期
+        t0_file = self.runs_path / f"t0_{t0_date}.json"
+        if t0_file.exists():
+            with open(t0_file, 'r', encoding='utf-8') as f:
+                t0_record = json.load(f)
+            t1_date = t0_record.get('t1_date')
+            stats['t1_date'] = t1_date
+
+            # 删除T0运行记录
+            t0_file.unlink()
+            stats['t0_record_deleted'] = True
+            logger.info(f"删除T0运行记录: {t0_file}")
+
+            # 2. 删除对应的T1交易指令
+            if t1_date:
+                inst_file = self.instructions_path / f"{t1_date}.parquet"
+                if inst_file.exists():
+                    inst_file.unlink()
+                    stats['t1_instructions_deleted'] = True
+                    logger.info(f"删除T1交易指令: {inst_file}")
+                else:
+                    logger.info(f"T1交易指令文件不存在: {inst_file}")
+        else:
+            logger.warning(f"T0运行记录不存在: {t0_file}")
+
+        # 3. 清空延迟买入队列
+        pending_buys = self.load_pending_buys()
+        stats['pending_buys_cleared'] = len(pending_buys)
+        if pending_buys:
+            self.save_pending_buys([])
+            logger.info(f"清空延迟买入队列: {len(pending_buys)} 条")
+        else:
+            logger.info("延迟买入队列为空，无需清理")
+
+        # 4. 清空延迟卖出队列
+        pending_sells = self.load_pending_sells()
+        stats['pending_sells_cleared'] = len(pending_sells)
+        if pending_sells:
+            self.save_pending_sells([])
+            logger.info(f"清空延迟卖出队列: {len(pending_sells)} 条")
+        else:
+            logger.info("延迟卖出队列为空，无需清理")
+
+        return stats
+
     def truncate_since(self, cut_off_date: str) -> None:
         """截断/清理从指定日期开始的所有数据（包含该日期）
         

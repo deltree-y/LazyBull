@@ -7,6 +7,7 @@
 - config 子命令：设置全局配置（持久化）
 - run 子命令：每日运行入口，自动编排执行各项动作
 - positions 子命令：查看持仓明细
+- adjust reset-t0 子命令：重置T0日并清空延迟交易订单
 
 示例：
   python scripts/paper_trade.py config --buy-price close --sell-price close --top-n 5 --initial-capital 500000 --rebalance-freq 5 --weight-method equal
@@ -1376,6 +1377,37 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     }
 
 
+def run_reset_t0(args):
+    """重置最新T0日并清空所有延迟交易订单"""
+    storage = PaperStorage()
+
+    # 自动查找最新T0日期
+    t0_date = storage.find_latest_t0()
+    if t0_date is None:
+        logger.error("未找到任何T0运行记录，无需重置")
+        sys.exit(1)
+
+    logger.info("=" * 80)
+    logger.info(f"重置T0日: {t0_date}")
+    logger.info("=" * 80)
+
+    # 执行重置
+    stats = storage.reset_t0(t0_date)
+
+    # 汇总输出
+    logger.info("")
+    logger.info("重置结果：")
+    logger.info(f"  T0运行记录({t0_date}): {'已删除' if stats['t0_record_deleted'] else '不存在'}")
+    if stats['t1_date']:
+        logger.info(
+            f"  T1交易指令({stats['t1_date']}): "
+            f"{'已删除' if stats['t1_instructions_deleted'] else '不存在'}"
+        )
+    logger.info(f"  清空延迟买入: {stats['pending_buys_cleared']} 条")
+    logger.info(f"  清空延迟卖出: {stats['pending_sells_cleared']} 条")
+    logger.info("=" * 80)
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -1520,6 +1552,12 @@ def main():
         help='加仓价格'
     )
     
+    # adjust reset-t0
+    adjust_subparsers.add_parser(
+        'reset-t0',
+        help='重置最新T0日并清空所有延迟交易订单（允许重新执行T0）'
+    )
+
     # adjust cash
     cash_parser = adjust_subparsers.add_parser(
         'cash',
@@ -1571,6 +1609,8 @@ def main():
             run_adjust_add_shares(args)
         elif args.adjust_command == 'cash':
             run_adjust_cash(args)
+        elif args.adjust_command == 'reset-t0':
+            run_reset_t0(args)
         else:
             logger.error(f"未知的 adjust 子命令: {args.adjust_command}")
             sys.exit(1)
