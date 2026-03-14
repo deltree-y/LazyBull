@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.3] - 2026-03-14
+
+### 修复
+
+- **纸面交易推理特征缺失导致信号生成失败**
+  - features 缓存校验 (`_REQUIRED_FACTOR_COLS`) 未包含行业中性化特征（`zscore_*`/`neu_*`/`alpha_industry_*`/`ind_*`），
+    导致缺失中性化特征的旧缓存通过校验，推理时触发"特征列一致性检查失败"
+  - 修复: 将中性化代表性特征加入校验列表，旧缓存自动淘汰并触发重建
+  - 同时将申万行业数据缺失从 warning 降级为 error 并中断构建，避免静默生成不完整特征
+
 ## [0.18.2] - 2026-03-14
 
 ### 修复

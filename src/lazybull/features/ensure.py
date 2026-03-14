@@ -150,8 +150,12 @@ def ensure_features_for_date(
             logger.info("自动下载申万行业分类数据...")
             shenwan_industry = _ensure_shenwan_industry(client, storage, cleaner)
         if shenwan_industry is None:
-            logger.warning("未找到申万行业分类数据，将跳过行业中性化")
-            apply_neutralization = False
+            logger.error(
+                "未找到申万行业分类数据，无法构建行业中性化特征！\n"
+                "模型依赖 zscore_*/neu_*/alpha_industry_*/ind_* 特征，缺失会导致推理失败。\n"
+                "请运行: python scripts/update_basic_data.py --only-shenwan --force"
+            )
+            return False, []
         else:
             apply_neutralization = True
             logger.info(f"已加载申万行业分类数据: {len(shenwan_industry)} 条映射")
@@ -877,7 +881,14 @@ def _try_ensure_historical_margin(
 # ── Features 缓存完整性校验 ──────────────────────────────────────
 
 # 已缓存 features 必须包含的因子列（缺失则触发重建）
-_REQUIRED_FACTOR_COLS = ["rzye_chg_5", "rzye_chg_20", "rqye_rzye_ratio"]
+# 包含融资融券 + 行业中性化特征，确保旧缓存被自动淘汰
+_REQUIRED_FACTOR_COLS = [
+    "rzye_chg_5", "rzye_chg_20", "rqye_rzye_ratio",       # 融资融券
+    "zscore_bp", "zscore_dv_ttm", "zscore_amount_ma20",    # 截面 z-score
+    "neu_ret_5",                                            # 行业中性化收益
+    "alpha_industry_5",                                     # 行业 alpha
+    "ind_momentum_rank",                                    # 行业动量
+]
 
 
 def _check_features_schema(storage: Storage, trade_date: str) -> bool:
