@@ -3,7 +3,8 @@
 提供确保 features 数据存在的封装函数
 """
 
-from typing import Dict, List, Optional, Tuple
+import time
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -17,6 +18,15 @@ FEATURE_DATA_HISTORY_MONTHS = 1  # 特征数据历史月数
 FEATURE_DATA_FUTURE_MONTHS = 1   # 特征数据未来月数
 HISTORICAL_DATA_MONTHS = 1       # 历史数据回看月数
 MAX_HISTORICAL_DAYS = 30         # 最多检查的历史交易日数
+
+# 逐股批量下载每批保存间隔（股票数）
+_BULK_SAVE_INTERVAL = 500
+
+# 因子数据最低记录数阈值，低于此值视为数据不足，触发全量下载
+# 这些因子是 point-in-time 查询，需要全量历史才有意义
+_MIN_FINA_RECORDS = 1000       # 财务指标：全量应有 10 万+ 条
+_MIN_HOLDER_RECORDS = 500      # 股东人数：全量应有数万条
+_MIN_FORECAST_RECORDS = 500    # 业绩预告：全量应有数万条
 
 
 def ensure_features_for_date(
@@ -134,8 +144,11 @@ def ensure_features_for_date(
         logger.info(f"clean 日线数据: {len(daily_clean)} 条记录")
         logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
 
-        # 6. 加载申万行业分类数据（如果存在）
+        # 6. 加载申万行业分类数据（缺失则自动下载）
         shenwan_industry = loader.load_shenwan_industry()
+        if shenwan_industry is None:
+            logger.info("自动下载申万行业分类数据...")
+            shenwan_industry = _ensure_shenwan_industry(client, storage, cleaner)
         if shenwan_industry is None:
             logger.warning("未找到申万行业分类数据，将跳过行业中性化")
             apply_neutralization = False
@@ -308,7 +321,8 @@ def _load_factor_data(
     # ── 基本面因子 ──────────────────────────────────────────
     funda_today = None
     fina_indicator = loader.load_fina_indicator()
-    if fina_indicator is None or len(fina_indicator) == 0:
+    # 数据不存在、或记录过少（之前单日增量下载的残留）均触发全量下载
+    if fina_indicator is None or len(fina_indicator) < _MIN_FINA_RECORDS:
         fina_indicator = _try_download_fina_indicator(client, storage, trade_date)
     if fina_indicator is not None and len(fina_indicator) > 0:
         from ..factors.fundamental import build_fundamental_lookup_by_date
@@ -336,7 +350,7 @@ def _load_factor_data(
     # ── 股东人数 ────────────────────────────────────────────
     holder_today = None
     stk_holdernumber = loader.load_stk_holdernumber()
-    if stk_holdernumber is None or len(stk_holdernumber) == 0:
+    if stk_holdernumber is None or len(stk_holdernumber) < _MIN_HOLDER_RECORDS:
         stk_holdernumber = _try_download_stk_holdernumber(client, storage, trade_date)
     if stk_holdernumber is not None and len(stk_holdernumber) > 0:
         from ..factors.holder import build_holder_lookup_by_date
@@ -349,7 +363,7 @@ def _load_factor_data(
     # ── 业绩预告 ────────────────────────────────────────────
     earnings_today = None
     forecast_df = loader.load_forecast()
-    if forecast_df is None or len(forecast_df) == 0:
+    if forecast_df is None or len(forecast_df) < _MIN_FORECAST_RECORDS:
         forecast_df = _try_download_forecast(client, storage, trade_date)
     if forecast_df is not None and len(forecast_df) > 0:
         from ..factors.earnings import build_earnings_lookup_by_date
@@ -419,29 +433,179 @@ def _append_and_save_raw(
     return result
 
 
+def _bulk_download_per_stock(
+    client: TushareClient,
+    storage: Storage,
+    dataset_name: str,
+    api_name: str,
+    stock_codes: List[str],
+    fields: Optional[str] = None,
+    dedup_cols: Optional[List[str]] = None,
+) -> Optional[pd.DataFrame]:
+    """逐股批量下载因子数据（首次全量，支持断点续传）
+
+    当 raw 文件不存在或为空时，需要逐股下载全量历史数据。
+    这些因子（fina_indicator/stk_holdernumber/forecast）采用 point-in-time
+    查询，必须有全量历史才能通过 bisect 查找到 ann_date <= trade_date 的记录。
+
+    Args:
+        client: TushareClient 实例
+        storage: Storage 实例
+        dataset_name: 数据集名称
+        api_name: TuShare API 名称
+        stock_codes: 全部股票代码列表
+        fields: 返回字段
+        dedup_cols: 去重列
+
+    Returns:
+        下载并保存后的完整 DataFrame，或 None
+    """
+    # 断点续传：跳过已有数据的股票
+    existing_codes: Set[str] = set()
+    existing_df = storage.load_raw(dataset_name)
+    if existing_df is not None and len(existing_df) > 0:
+        existing_codes = set(existing_df["ts_code"].unique())
+        logger.info(f"[{dataset_name}] 已有 {len(existing_codes)} 只股票数据（断点续传）")
+
+    codes_to_download = [c for c in stock_codes if c not in existing_codes]
+    if not codes_to_download:
+        logger.info(f"[{dataset_name}] 所有股票数据已存在")
+        return existing_df
+
+    logger.info(
+        f"[{dataset_name}] 首次全量下载: 待下载 {len(codes_to_download)} 只股票 "
+        f"(共 {len(stock_codes)} 只)"
+    )
+
+    all_dfs: List[pd.DataFrame] = []
+    success = empty = errors = 0
+    t0 = time.time()
+
+    for i, ts_code in enumerate(codes_to_download, 1):
+        try:
+            kwargs = {"ts_code": ts_code}
+            if fields:
+                df = client.query(api_name, fields=fields, **kwargs)
+            else:
+                df = client.query(api_name, **kwargs)
+
+            if df is not None and len(df) > 0:
+                all_dfs.append(df)
+                success += 1
+            else:
+                empty += 1
+        except Exception as e:
+            errors += 1
+            logger.debug(f"[{dataset_name}] {ts_code} 失败: {e}")
+
+        if i % 100 == 0 or i == len(codes_to_download):
+            elapsed = time.time() - t0
+            speed = i / elapsed if elapsed > 0 else 0
+            remaining = (len(codes_to_download) - i) / speed if speed > 0 else 0
+            logger.info(
+                f"[{dataset_name}] [{i}/{len(codes_to_download)}] "
+                f"成功={success} 空={empty} 失败={errors} "
+                f"速度={speed:.0f}只/秒 剩余≈{remaining / 60:.1f}分钟"
+            )
+
+        # 每批保存中间结果，防止中断丢失
+        if i % _BULK_SAVE_INTERVAL == 0 and all_dfs:
+            existing_df = _save_merged_bulk(
+                storage, dataset_name, all_dfs, existing_df, dedup_cols
+            )
+            all_dfs = []
+
+    # 最终保存
+    if all_dfs:
+        existing_df = _save_merged_bulk(
+            storage, dataset_name, all_dfs, existing_df, dedup_cols
+        )
+
+    elapsed_total = time.time() - t0
+    logger.info(
+        f"[{dataset_name}] 全量下载完成: 成功={success} 空={empty} 失败={errors} "
+        f"耗时={elapsed_total / 60:.1f}分钟"
+    )
+    return existing_df
+
+
+def _save_merged_bulk(
+    storage: Storage,
+    dataset_name: str,
+    new_dfs: List[pd.DataFrame],
+    existing_df: Optional[pd.DataFrame],
+    dedup_cols: Optional[List[str]],
+) -> pd.DataFrame:
+    """合并新旧数据并保存（批量下载中间/最终保存用）"""
+    result = pd.concat(new_dfs, ignore_index=True)
+    if existing_df is not None and len(existing_df) > 0:
+        result = pd.concat([existing_df, result], ignore_index=True)
+    if dedup_cols:
+        result = result.drop_duplicates(subset=dedup_cols, keep="last")
+    storage.save_raw(result, dataset_name, is_force=True)
+    logger.info(f"[{dataset_name}] 已保存: {len(result)} 条记录")
+    return result
+
+
+def _get_stock_codes(storage: Storage) -> List[str]:
+    """从 stock_basic 获取全部股票代码列表"""
+    stock_basic = storage.load_raw("stock_basic")
+    if stock_basic is None or len(stock_basic) == 0:
+        logger.warning("未找到 stock_basic 数据，无法执行逐股下载")
+        return []
+    return sorted(stock_basic["ts_code"].unique().tolist())
+
+
 def _try_download_fina_indicator(
     client: TushareClient,
     storage: Storage,
     trade_date: str,
 ) -> Optional[pd.DataFrame]:
-    """尝试按公告日增量下载财务指标并追加保存"""
-    try:
-        logger.info(f"增量下载 fina_indicator (ann_date={trade_date})...")
-        new_df = client.get_fina_indicator_by_date(ann_date=trade_date)
-        if new_df is not None and len(new_df) > 0:
-            result = _append_and_save_raw(
-                storage, "fina_indicator", new_df,
-                dedup_cols=["ts_code", "end_date", "ann_date"],
-            )
-            logger.info(f"  fina_indicator 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条")
-            return result
-        else:
-            logger.info(f"  fina_indicator: {trade_date} 无新公告")
-            # 仍返回已有数据（可能之前下载过但非当日公告）
-            return storage.load_raw("fina_indicator")
-    except Exception as e:
-        logger.warning(f"增量下载 fina_indicator 失败: {e}")
-        return storage.load_raw("fina_indicator")
+    """下载财务指标数据
+
+    数据充足（>= 阈值）：按公告日增量下载当日新公告。
+    数据不足或不存在：逐股全量下载全部历史财务指标。
+    """
+    existing = storage.load_raw("fina_indicator")
+
+    if existing is not None and len(existing) >= _MIN_FINA_RECORDS:
+        # 增量模式：数据量充足，按公告日下载
+        try:
+            logger.info(f"增量下载 fina_indicator (ann_date={trade_date})...")
+            new_df = client.get_fina_indicator_by_date(ann_date=trade_date)
+            if new_df is not None and len(new_df) > 0:
+                result = _append_and_save_raw(
+                    storage, "fina_indicator", new_df,
+                    dedup_cols=["ts_code", "end_date", "ann_date"],
+                )
+                logger.info(
+                    f"  fina_indicator 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
+                )
+                return result
+            else:
+                logger.info(f"  fina_indicator: {trade_date} 无新公告")
+                return existing
+        except Exception as e:
+            logger.warning(f"增量下载 fina_indicator 失败: {e}")
+            return existing
+
+    # 全量下载（首次或数据不足）
+    stock_codes = _get_stock_codes(storage)
+    if not stock_codes:
+        return None
+    cnt = len(existing) if existing is not None else 0
+    logger.info(
+        f"财务指标数据不足 (当前 {cnt} 条, 阈值 {_MIN_FINA_RECORDS})，"
+        f"启动全量逐股下载..."
+    )
+    return _bulk_download_per_stock(
+        client, storage,
+        dataset_name="fina_indicator",
+        api_name="fina_indicator",
+        stock_codes=stock_codes,
+        fields="ts_code,ann_date,end_date,roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy",
+        dedup_cols=["ts_code", "end_date", "ann_date"],
+    )
 
 
 def _try_download_stk_holdernumber(
@@ -449,23 +613,49 @@ def _try_download_stk_holdernumber(
     storage: Storage,
     trade_date: str,
 ) -> Optional[pd.DataFrame]:
-    """尝试按公告日增量下载股东人数并追加保存"""
-    try:
-        logger.info(f"增量下载 stk_holdernumber (ann_date={trade_date})...")
-        new_df = client.get_stk_holdernumber_by_date(ann_date=trade_date)
-        if new_df is not None and len(new_df) > 0:
-            result = _append_and_save_raw(
-                storage, "stk_holdernumber", new_df,
-                dedup_cols=["ts_code", "end_date"],
-            )
-            logger.info(f"  stk_holdernumber 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条")
-            return result
-        else:
-            logger.info(f"  stk_holdernumber: {trade_date} 无新公告")
-            return storage.load_raw("stk_holdernumber")
-    except Exception as e:
-        logger.warning(f"增量下载 stk_holdernumber 失败: {e}")
-        return storage.load_raw("stk_holdernumber")
+    """下载股东人数数据
+
+    数据充足（>= 阈值）：按公告日增量下载。
+    数据不足或不存在：逐股全量下载。
+    """
+    existing = storage.load_raw("stk_holdernumber")
+
+    if existing is not None and len(existing) >= _MIN_HOLDER_RECORDS:
+        try:
+            logger.info(f"增量下载 stk_holdernumber (ann_date={trade_date})...")
+            new_df = client.get_stk_holdernumber_by_date(ann_date=trade_date)
+            if new_df is not None and len(new_df) > 0:
+                result = _append_and_save_raw(
+                    storage, "stk_holdernumber", new_df,
+                    dedup_cols=["ts_code", "end_date"],
+                )
+                logger.info(
+                    f"  stk_holdernumber 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
+                )
+                return result
+            else:
+                logger.info(f"  stk_holdernumber: {trade_date} 无新公告")
+                return existing
+        except Exception as e:
+            logger.warning(f"增量下载 stk_holdernumber 失败: {e}")
+            return existing
+
+    # 全量下载（首次或数据不足）
+    stock_codes = _get_stock_codes(storage)
+    if not stock_codes:
+        return None
+    cnt = len(existing) if existing is not None else 0
+    logger.info(
+        f"股东人数数据不足 (当前 {cnt} 条, 阈值 {_MIN_HOLDER_RECORDS})，"
+        f"启动全量逐股下载..."
+    )
+    return _bulk_download_per_stock(
+        client, storage,
+        dataset_name="stk_holdernumber",
+        api_name="stk_holdernumber",
+        stock_codes=stock_codes,
+        dedup_cols=["ts_code", "end_date"],
+    )
 
 
 def _try_download_forecast(
@@ -473,23 +663,49 @@ def _try_download_forecast(
     storage: Storage,
     trade_date: str,
 ) -> Optional[pd.DataFrame]:
-    """尝试按公告日增量下载业绩预告并追加保存"""
-    try:
-        logger.info(f"增量下载 forecast (ann_date={trade_date})...")
-        new_df = client.get_forecast_by_date(ann_date=trade_date)
-        if new_df is not None and len(new_df) > 0:
-            result = _append_and_save_raw(
-                storage, "forecast", new_df,
-                dedup_cols=["ts_code", "end_date", "ann_date"],
-            )
-            logger.info(f"  forecast 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条")
-            return result
-        else:
-            logger.info(f"  forecast: {trade_date} 无新公告")
-            return storage.load_raw("forecast")
-    except Exception as e:
-        logger.warning(f"增量下载 forecast 失败: {e}")
-        return storage.load_raw("forecast")
+    """下载业绩预告数据
+
+    数据充足（>= 阈值）：按公告日增量下载。
+    数据不足或不存在：逐股全量下载。
+    """
+    existing = storage.load_raw("forecast")
+
+    if existing is not None and len(existing) >= _MIN_FORECAST_RECORDS:
+        try:
+            logger.info(f"增量下载 forecast (ann_date={trade_date})...")
+            new_df = client.get_forecast_by_date(ann_date=trade_date)
+            if new_df is not None and len(new_df) > 0:
+                result = _append_and_save_raw(
+                    storage, "forecast", new_df,
+                    dedup_cols=["ts_code", "end_date", "ann_date"],
+                )
+                logger.info(
+                    f"  forecast 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
+                )
+                return result
+            else:
+                logger.info(f"  forecast: {trade_date} 无新公告")
+                return existing
+        except Exception as e:
+            logger.warning(f"增量下载 forecast 失败: {e}")
+            return existing
+
+    # 全量下载（首次或数据不足）
+    stock_codes = _get_stock_codes(storage)
+    if not stock_codes:
+        return None
+    cnt = len(existing) if existing is not None else 0
+    logger.info(
+        f"业绩预告数据不足 (当前 {cnt} 条, 阈值 {_MIN_FORECAST_RECORDS})，"
+        f"启动全量逐股下载..."
+    )
+    return _bulk_download_per_stock(
+        client, storage,
+        dataset_name="forecast",
+        api_name="forecast",
+        stock_codes=stock_codes,
+        dedup_cols=["ts_code", "end_date", "ann_date"],
+    )
 
 
 def _try_download_hot_rank(
@@ -542,6 +758,75 @@ def _try_download_hot_rank(
     except Exception as e:
         logger.warning(f"增量下载 hot_rank 失败: {e}")
         return storage.load_raw("hot_rank")
+
+
+# ── 申万行业分类自动下载 ─────────────────────────────────────────
+
+
+def _ensure_shenwan_industry(
+    client: TushareClient,
+    storage: Storage,
+    cleaner: DataCleaner,
+) -> Optional[pd.DataFrame]:
+    """自动下载申万三级行业分类数据
+
+    逻辑与 scripts/update_basic_data.py 中 update_shenwan_industry() 一致，
+    但集成到 ensure 链路中，纸面交易可自动触发。
+
+    Returns:
+        申万行业分类 DataFrame，或 None（失败时）
+    """
+    try:
+        # 1. 获取申万三级行业指数列表
+        logger.info("获取申万三级行业指数列表...")
+        index_classify = client.get_index_classify(level="L3", src="SW2021")
+        if index_classify is None or len(index_classify) == 0:
+            logger.warning("未获取到申万三级行业指数")
+            return None
+
+        if "index_code" not in index_classify.columns:
+            logger.warning("index_classify 缺少 index_code 字段")
+            return None
+
+        sw_l3_indices = index_classify
+        logger.info(f"获取到 {len(sw_l3_indices)} 个申万三级指数")
+
+        # 2. 逐个获取成分股
+        logger.info("获取各三级行业成分股...")
+        index_members: Dict[str, pd.DataFrame] = {}
+        success_count = 0
+
+        for _, row in sw_l3_indices.iterrows():
+            index_code = row["index_code"]
+            try:
+                members = client.get_index_member(l3_code=index_code)
+                if len(members) > 0:
+                    index_members[index_code] = members
+                    success_count += 1
+            except Exception as e:
+                logger.debug(f"获取 {index_code} 成分股失败: {e}")
+
+        logger.info(f"成功获取 {success_count}/{len(sw_l3_indices)} 个三级行业成分股")
+
+        if success_count == 0:
+            logger.warning("未获取到任何行业成分股数据")
+            return None
+
+        # 3. 清洗并保存
+        clean_data = cleaner.clean_shenwan_industry(
+            sw_l3_indices, index_members, level_str="l3"
+        )
+        if len(clean_data) == 0:
+            logger.warning("申万行业清洗后无有效数据")
+            return None
+
+        storage.save_raw(clean_data, "shenwan_industry", is_force=True)
+        logger.info(f"申万行业分类已自动下载: {len(clean_data)} 条映射")
+        return clean_data
+
+    except Exception as e:
+        logger.warning(f"自动下载申万行业分类失败: {e}")
+        return None
 
 
 # ── 融资融券历史数据补齐 ─────────────────────────────────────────

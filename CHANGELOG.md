@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.18.2] - 2026-03-14
+
+### 修复
+
+- **纸面交易因子数据自动下载不完整**
+  - **fina_indicator/stk_holdernumber/forecast**: 原增量下载仅获取单日公告（1~59条），
+    point-in-time 查询需要全量历史数据（10万+条）。首次运行时改为逐股全量下载，
+    支持断点续传；后续运行按公告日增量追加。同时增加最低记录数阈值，
+    低于阈值的残留数据也会自动触发全量重下
+  - **申万行业分类**: 原本需要手动运行 `update_basic_data.py --only-shenwan`，
+    现在 ensure 链路自动检测并下载三级行业分类数据
+  - **hot_rank（人气榜）**: 保持当日快照增量模式（历史回填需数小时，不适合自动触发）
+
 ## [0.18.1] - 2026-03-14
 
 ### 修复
