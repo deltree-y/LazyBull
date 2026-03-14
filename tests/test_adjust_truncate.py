@@ -379,11 +379,19 @@ def test_truncate_since_no_cutoff_data():
 
 @pytest.fixture
 def temp_storage_for_reset_t0():
-    """临时存储目录，包含T0/T1运行记录、交易指令和延迟订单"""
+    """临时存储目录，模拟T0已执行、T1也已执行的完整场景"""
     with tempfile.TemporaryDirectory() as tmpdir:
         storage = PaperStorage(tmpdir)
 
-        # T0运行记录（包含t1_date）
+        # 更早的一次完整T0+T1循环（20260205）
+        storage.save_run_record('t0', '20260205', {
+            'trade_date': '20260205', 't1_date': '20260206',
+        })
+        storage.save_run_record('t1', '20260206', {
+            'trade_date': '20260206', 'fills_count': 2,
+        })
+
+        # 最新的T0（20260210），T1日期为20260211
         t0_record = {
             'trade_date': '20260210',
             't1_date': '20260211',
@@ -392,63 +400,116 @@ def temp_storage_for_reset_t0():
         }
         storage.save_run_record('t0', '20260210', t0_record)
 
-        # 对应的T1交易指令
+        # T1已执行
+        storage.save_run_record('t1', '20260211', {
+            'trade_date': '20260211', 'fills_count': 3,
+        })
+
+        # T1的交易指令
         instructions = [
             TradeInstruction(
                 ts_code='000001.SZ', action='buy', shares=100,
                 price_type='close', reason='信号买入', source_date='20260210',
             ),
-            TradeInstruction(
-                ts_code='000002.SZ', action='sell', shares=200,
-                price_type='close', reason='信号卖出', source_date='20260210',
-            ),
         ]
         storage.save_instructions('20260211', instructions)
 
-        # 延迟买入队列
+        # 成交记录（跨越两个周期）
+        trades_data = pd.DataFrame([
+            {'trade_date': '20260206', 'ts_code': '000001.SZ', 'action': 'buy',
+             'shares': 100, 'price': 10.0, 'amount': 1000.0, 'commission': 5.0,
+             'stamp_tax': 0.0, 'slippage': 1.0, 'total_cost': 1006.0, 'reason': '买入'},
+            {'trade_date': '20260211', 'ts_code': '000002.SZ', 'action': 'buy',
+             'shares': 200, 'price': 20.0, 'amount': 4000.0, 'commission': 10.0,
+             'stamp_tax': 0.0, 'slippage': 2.0, 'total_cost': 4012.0, 'reason': '买入'},
+        ])
+        trades_file = storage.trades_path / "trades.parquet"
+        trades_data.to_parquet(trades_file, index=False)
+
+        # 净值记录
+        nav_data = pd.DataFrame([
+            {'trade_date': '20260206', 'cash': 95000.0, 'position_value': 1000.0,
+             'total_value': 96000.0, 'nav': 0.96},
+            {'trade_date': '20260211', 'cash': 91000.0, 'position_value': 5000.0,
+             'total_value': 96000.0, 'nav': 0.96},
+        ])
+        nav_file = storage.nav_path / "nav.parquet"
+        nav_data.to_parquet(nav_file, index=False)
+
+        # 账户状态（last_update 为 T1 执行日期）
+        account_state = AccountState(
+            cash=91000.0,
+            positions={
+                '000001.SZ': Position(
+                    ts_code='000001.SZ', shares=100,
+                    buy_price=10.0, buy_cost=1006.0, buy_date='20260206',
+                ),
+            },
+            last_update='20260211',
+        )
+        storage.save_account_state(account_state)
+
+        # 延迟订单
         pending_buys = [
             PendingBuy(
                 ts_code='000003.SZ', target_weight=0.1,
-                reason='补位买入', create_date='20260209',
+                reason='补位买入', create_date='20260210',
             ),
         ]
         storage.save_pending_buys(pending_buys)
-
-        # 延迟卖出队列
         pending_sells = [
             PendingSell(
                 ts_code='000004.SZ', shares=100, target_weight=0.0,
-                reason='停牌延迟', create_date='20260209',
+                reason='停牌延迟', create_date='20260210',
             ),
         ]
         storage.save_pending_sells(pending_sells)
 
+        # 调仓状态
+        storage.save_rebalance_state({
+            'last_rebalance_date': '20260210',
+            'rebalance_freq': 5,
+        })
+
         yield storage
 
 
-def test_reset_t0_auto_find(temp_storage_for_reset_t0):
-    """测试 reset_t0 自动查找最新T0日期"""
+def test_reset_t0_full_rollback(temp_storage_for_reset_t0):
+    """测试 reset_t0 完整回滚：T0记录、T1记录、成交、净值、账户last_update"""
     storage = temp_storage_for_reset_t0
 
-    # 不传日期，自动找到最新的T0记录 20260210
     stats = storage.reset_t0()
 
     assert stats['t0_date'] == '20260210'
-    assert stats['t0_record_deleted'] is True
+
+    # T0和T1运行记录已删除
     assert not storage.check_run_exists('t0', '20260210')
+    assert not storage.check_run_exists('t1', '20260211')
 
     # T1交易指令已删除
-    assert stats['t1_instructions_deleted'] is True
-    assert stats['t1_date'] == '20260211'
     assert storage.load_instructions('20260211') is None
 
-    # 延迟买入队列已清空
-    assert stats['pending_buys_cleared'] == 1
+    # 延迟订单已清空
     assert storage.load_pending_buys() == []
-
-    # 延迟卖出队列已清空
-    assert stats['pending_sells_cleared'] == 1
     assert storage.load_pending_sells() == []
+
+    # 账户 last_update 已回滚到T0之前最近的T1日期
+    account = storage.load_account_state()
+    assert account.last_update == '20260206'
+
+    # 成交记录只保留T0之前的
+    trades = pd.read_parquet(storage.trades_path / "trades.parquet")
+    assert len(trades) == 1
+    assert trades.iloc[0]['trade_date'] == '20260206'
+
+    # 净值记录只保留T0之前的
+    nav = pd.read_parquet(storage.nav_path / "nav.parquet")
+    assert len(nav) == 1
+    assert nav.iloc[0]['trade_date'] == '20260206'
+
+    # 更早的T0/T1记录不受影响
+    assert storage.check_run_exists('t0', '20260205')
+    assert storage.check_run_exists('t1', '20260206')
 
 
 def test_reset_t0_no_records():
@@ -459,25 +520,6 @@ def test_reset_t0_no_records():
         stats = storage.reset_t0()
 
         assert stats['t0_date'] is None
-        assert stats['t0_record_deleted'] is False
-        assert stats['t1_instructions_deleted'] is False
-        assert stats['pending_buys_cleared'] == 0
-        assert stats['pending_sells_cleared'] == 0
-
-
-def test_reset_t0_no_pending_orders(temp_storage_for_reset_t0):
-    """测试 reset_t0 当延迟订单已为空时"""
-    storage = temp_storage_for_reset_t0
-
-    # 先清空延迟队列
-    storage.save_pending_buys([])
-    storage.save_pending_sells([])
-
-    stats = storage.reset_t0()
-
-    assert stats['t0_record_deleted'] is True
-    assert stats['pending_buys_cleared'] == 0
-    assert stats['pending_sells_cleared'] == 0
 
 
 def test_find_latest_t0():
@@ -496,28 +538,25 @@ def test_find_latest_t0():
         assert storage.find_latest_t0() == '20260210'
 
 
-def test_reset_t0_preserves_earlier_records(temp_storage_for_reset_t0):
-    """测试 reset_t0 不影响更早日期的记录"""
-    storage = temp_storage_for_reset_t0
+def test_reset_t0_account_last_update_rollback():
+    """测试 reset_t0 回滚 account last_update 到 T0 之前"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
 
-    # 添加一个更早的T0记录
-    earlier_record = {
-        'trade_date': '20260205',
-        't1_date': '20260206',
-        'timestamp': '2026-02-05T15:30:00',
-    }
-    storage.save_run_record('t0', '20260205', earlier_record)
-    earlier_instructions = [
-        TradeInstruction(
-            ts_code='000005.SZ', action='buy', shares=100,
-            price_type='close', reason='测试', source_date='20260205',
-        ),
-    ]
-    storage.save_instructions('20260206', earlier_instructions)
+        # 设置账户状态
+        account = AccountState(cash=100000.0, positions={}, last_update='20260211')
+        storage.save_account_state(account)
 
-    # 自动重置最新的(20260210)
-    storage.reset_t0()
+        # T0记录
+        storage.save_run_record('t0', '20260210', {
+            'trade_date': '20260210', 't1_date': '20260211',
+        })
+        # 之前有个T1
+        storage.save_run_record('t1', '20260206', {
+            'trade_date': '20260206', 'fills_count': 1,
+        })
 
-    # 更早的记录不受影响
-    assert storage.check_run_exists('t0', '20260205')
-    assert storage.load_instructions('20260206') is not None
+        storage.reset_t0()
+
+        updated_account = storage.load_account_state()
+        assert updated_account.last_update == '20260206'

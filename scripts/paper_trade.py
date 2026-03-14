@@ -1391,20 +1391,11 @@ def run_reset_t0(args):
     logger.info(f"重置T0日: {t0_date}")
     logger.info("=" * 80)
 
-    # 执行重置
-    stats = storage.reset_t0(t0_date)
+    # 执行重置（内部调用 truncate_since 完成所有清理）
+    storage.reset_t0(t0_date)
 
-    # 汇总输出
     logger.info("")
-    logger.info("重置结果：")
-    logger.info(f"  T0运行记录({t0_date}): {'已删除' if stats['t0_record_deleted'] else '不存在'}")
-    if stats['t1_date']:
-        logger.info(
-            f"  T1交易指令({stats['t1_date']}): "
-            f"{'已删除' if stats['t1_instructions_deleted'] else '不存在'}"
-        )
-    logger.info(f"  清空延迟买入: {stats['pending_buys_cleared']} 条")
-    logger.info(f"  清空延迟卖出: {stats['pending_sells_cleared']} 条")
+    logger.info("重置完成，可重新执行 run 命令")
     logger.info("=" * 80)
 
 
