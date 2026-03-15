@@ -22,6 +22,38 @@ import pandas as pd
 from loguru import logger
 
 
+def _compute_revenue_yoy(ex: pd.DataFrame) -> None:
+    """在 DataFrame 上原地计算营收同比增速（%）
+
+    逻辑：同一 ts_code，当前 end_date 对比去年同期（年份-1、月日相同）的 revenue。
+    公式：(当期revenue - 去年同期revenue) / abs(去年同期revenue) * 100
+    """
+    if "revenue" not in ex.columns or "end_date" not in ex.columns:
+        ex["revenue_yoy"] = np.nan
+        return
+
+    # 构建 (ts_code, end_date) -> revenue 的映射
+    rev_map: Dict[tuple, float] = {}
+    for _, row in ex.iterrows():
+        rev_map[(row["ts_code"], row["end_date"])] = row["revenue"]
+
+    yoy_values = []
+    for _, row in ex.iterrows():
+        end_date = str(row["end_date"])
+        if len(end_date) == 8:
+            # 去年同期：年份 -1，月日不变
+            prev_end = str(int(end_date[:4]) - 1) + end_date[4:]
+            prev_rev = rev_map.get((row["ts_code"], prev_end))
+            cur_rev = row["revenue"]
+            if prev_rev is not None and pd.notna(prev_rev) and abs(prev_rev) > 1e-6 and pd.notna(cur_rev):
+                yoy_values.append((cur_rev - prev_rev) / abs(prev_rev) * 100)
+            else:
+                yoy_values.append(np.nan)
+        else:
+            yoy_values.append(np.nan)
+    ex["revenue_yoy"] = yoy_values
+
+
 EXPRESS_COLS = [
     "express_revenue_yoy",    # 营业收入同比增速
     "express_profit_yoy",     # 净利润同比增速
@@ -39,7 +71,7 @@ def build_express_lookup_by_date(
 
     Args:
         express_df: 业绩快报 DataFrame，需包含
-            ts_code, ann_date, end_date, revenue_yoy, n_income_yoy, roe
+            ts_code, ann_date, end_date, revenue, yoy_net_profit, diluted_roe
         trading_dates: 交易日列表（YYYYMMDD 字符串，已排序）
         forecast_df: 业绩预告 DataFrame（可选），用于计算 express_surprise
 
@@ -58,8 +90,8 @@ def build_express_lookup_by_date(
 
     ex = ex.dropna(subset=["ann_date"])
 
-    # 数值列转换
-    for col in ["revenue_yoy", "n_income_yoy", "roe"]:
+    # 数值列转换（TuShare express_vip 实际列名）
+    for col in ["revenue", "yoy_net_profit", "diluted_roe"]:
         if col in ex.columns:
             ex[col] = pd.to_numeric(ex[col], errors="coerce")
 
@@ -67,6 +99,10 @@ def build_express_lookup_by_date(
     ex = ex.sort_values(["ts_code", "end_date", "ann_date"])
     ex = ex.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
     ex = ex.sort_values(["ts_code", "ann_date"])
+
+    # 计算营收同比增速（TuShare express_vip 不提供此字段，需自行计算）
+    # 同一公司，当前 end_date 对比去年同期 end_date 的 revenue
+    _compute_revenue_yoy(ex)
 
     # 构建预告 lookup（用于计算 express_surprise）
     fc_lookup: Dict[str, Dict[str, float]] = {}  # ts_code -> {end_date -> forecast_chg_mid}
@@ -92,19 +128,19 @@ def build_express_lookup_by_date(
         records = []
         for _, row in grp.iterrows():
             revenue_yoy = row.get("revenue_yoy", np.nan)
-            n_income_yoy = row.get("n_income_yoy", np.nan)
-            roe = row.get("roe", np.nan)
+            profit_yoy = row.get("yoy_net_profit", np.nan)
+            roe = row.get("diluted_roe", np.nan)
 
             # express_surprise = 实际净利润增速 - 预告预期增速
             surprise = np.nan
             end_date = row.get("end_date", "")
-            if pd.notna(n_income_yoy) and ts_code in fc_lookup and end_date in fc_lookup[ts_code]:
-                surprise = n_income_yoy - fc_lookup[ts_code][end_date]
+            if pd.notna(profit_yoy) and ts_code in fc_lookup and end_date in fc_lookup[ts_code]:
+                surprise = profit_yoy - fc_lookup[ts_code][end_date]
 
             records.append({
                 "ann_date": row["ann_date"],
                 "express_revenue_yoy": revenue_yoy,
-                "express_profit_yoy": n_income_yoy,
+                "express_profit_yoy": profit_yoy,
                 "express_roe": roe,
                 "express_surprise": surprise,
             })

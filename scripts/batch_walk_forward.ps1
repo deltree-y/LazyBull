@@ -65,10 +65,10 @@ $enable_alt              = $true  # $true 启用 | $false 禁用
 $enable_cyq              = $true  # $true 启用 | $false 禁用
 
 # ── 基金持仓因子（需5000+积分，需先下载 fund_portfolio）──────────
-$enable_fund             = $true  # $true 启用 | $false 禁用
+$enable_fund             = $false  # $true 启用 | $false 禁用
 
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
-$enable_express          = $true  # $true 启用 | $false 禁用
+$enable_express          = $false  # $true 启用 | $false 禁用
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用

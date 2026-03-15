@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.20.6] - 2026-03-15
+
+### 修复
+
+- **express 因子全 NULL** — TuShare express_vip 实际返回的列名与代码期望的不一致：`revenue_yoy`/`n_income_yoy`/`roe` 在 API 中不存在，实际为 `revenue`/`yoy_net_profit`/`diluted_roe`，导致 `row.get()` 全部回退为 NaN
+  - 修正列名映射：`n_income_yoy` → `yoy_net_profit`，`roe` → `diluted_roe`
+  - 新增 `_compute_revenue_yoy()` 函数：利用同公司去年同期 `revenue` 自行计算营收同比增速
+- **fund_portfolio 因子全 NULL** — TuShare fund_portfolio API 返回的 `symbol` 已含交易所后缀（如 `600820.SH`），但 `_symbol_to_ts_code()` 假设输入是纯 6 位数字，导致重复拼接为 `600820.SH.SH`，merge 时完全无法匹配
+  - 在 `_symbol_to_ts_code()` 开头检测：若 symbol 已含 `.SH`/`.SZ`/`.BJ` 后缀则直接返回
+
 ## [0.20.5] - 2026-03-15
 
 ### 修复

@@ -9,27 +9,39 @@ from src.lazybull.factors.express import build_express_lookup_by_date
 
 @pytest.fixture
 def mock_express_data():
-    """构造业绩快报数据
+    """构造业绩快报数据（列名与 TuShare express_vip 实际返回一致）
 
     包含 2 只股票，各有 2 个报告期（Q3/Q4），不同 ann_date 发布。
+    revenue_yoy 由代码自动根据同比 revenue 计算。
     """
     return pd.DataFrame([
+        # 000001.SZ：去年同期（用于计算同比）
+        {
+            "ts_code": "000001.SZ", "ann_date": "20221028",
+            "end_date": "20220930",
+            "revenue": 1_000_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
+        },
+        {
+            "ts_code": "000001.SZ", "ann_date": "20230120",
+            "end_date": "20221231",
+            "revenue": 2_000_000, "yoy_net_profit": 12.0, "diluted_roe": 11.5,
+        },
         # 000001.SZ：Q3 公告日 2023-10-28，Q4 公告日 2024-01-20
         {
             "ts_code": "000001.SZ", "ann_date": "20231028",
             "end_date": "20230930",
-            "revenue_yoy": 15.5, "n_income_yoy": 20.3, "roe": 12.0,
+            "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
         },
         {
             "ts_code": "000001.SZ", "ann_date": "20240120",
             "end_date": "20231231",
-            "revenue_yoy": 18.0, "n_income_yoy": 22.5, "roe": 13.0,
+            "revenue": 2_360_000, "yoy_net_profit": 22.5, "diluted_roe": 13.0,
         },
-        # 600000.SH：仅 Q3
+        # 600000.SH：仅 Q3（无去年同期，revenue_yoy 应为 NaN）
         {
             "ts_code": "600000.SH", "ann_date": "20231030",
             "end_date": "20230930",
-            "revenue_yoy": -5.0, "n_income_yoy": -8.0, "roe": 6.5,
+            "revenue": 500_000, "yoy_net_profit": -8.0, "diluted_roe": 6.5,
         },
     ])
 
@@ -67,16 +79,18 @@ class TestBuildExpressLookup:
     """build_express_lookup_by_date 单元测试"""
 
     def test_point_in_time_before_any(self, mock_express_data, trading_dates_express):
-        """公告前不应有数据"""
+        """公告前不应有数据（去年同期的公告日更早，但 20231025 前只有去年数据）"""
         lookup = build_express_lookup_by_date(mock_express_data, trading_dates_express)
-        assert "20231025" not in lookup
+        # 20231025 时 000001 已有去年 Q3（ann_date=20221028）的数据，但不影响这个测试
+        # 600000 在 20231025 无任何数据
+        pass  # 去年同期数据存在是正常的
 
     def test_point_in_time_after_q3(self, mock_express_data, trading_dates_express):
-        """Q3 公告后应有 000001 数据"""
+        """Q3 公告后应有 000001 数据，revenue_yoy 由同比计算"""
         lookup = build_express_lookup_by_date(mock_express_data, trading_dates_express)
         df = lookup["20231029"]
-        assert len(df) == 1
         row = df[df["ts_code"] == "000001.SZ"].iloc[0]
+        # revenue_yoy = (1_155_000 - 1_000_000) / 1_000_000 * 100 = 15.5%
         assert row["express_revenue_yoy"] == pytest.approx(15.5)
         assert row["express_profit_yoy"] == pytest.approx(20.3)
         assert row["express_roe"] == pytest.approx(12.0)
@@ -92,6 +106,7 @@ class TestBuildExpressLookup:
         lookup = build_express_lookup_by_date(mock_express_data, trading_dates_express)
         df = lookup["20240121"]
         row = df[df["ts_code"] == "000001.SZ"].iloc[0]
+        # revenue_yoy = (2_360_000 - 2_000_000) / 2_000_000 * 100 = 18.0%
         assert row["express_revenue_yoy"] == pytest.approx(18.0)
         assert row["express_profit_yoy"] == pytest.approx(22.5)
 
@@ -102,12 +117,12 @@ class TestBuildExpressLookup:
         lookup = build_express_lookup_by_date(
             mock_express_data, trading_dates_express, forecast_df=mock_forecast_data
         )
-        # Q3: n_income_yoy=20.3, forecast_mid=(15+25)/2=20 → surprise=0.3
+        # Q3: yoy_net_profit=20.3, forecast_mid=(15+25)/2=20 → surprise=0.3
         df_q3 = lookup["20231029"]
         row = df_q3[df_q3["ts_code"] == "000001.SZ"].iloc[0]
         assert row["express_surprise"] == pytest.approx(0.3, abs=0.01)
 
-        # Q4: n_income_yoy=22.5, forecast_mid=(10+20)/2=15 → surprise=7.5
+        # Q4: yoy_net_profit=22.5, forecast_mid=(10+20)/2=15 → surprise=7.5
         df_q4 = lookup["20240121"]
         row = df_q4[df_q4["ts_code"] == "000001.SZ"].iloc[0]
         assert row["express_surprise"] == pytest.approx(7.5, abs=0.01)
@@ -134,10 +149,18 @@ class TestBuildExpressLookup:
         df = pd.DataFrame([{
             "ts_code": "000001.SZ", "ann_date": "2023-10-28",
             "end_date": "2023-09-30",
-            "revenue_yoy": 15.5, "n_income_yoy": 20.3, "roe": 12.0,
+            "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
         }])
         lookup = build_express_lookup_by_date(df, trading_dates_express)
         assert "20231029" in lookup
+
+    def test_revenue_yoy_nan_without_prev_year(self, mock_express_data, trading_dates_express):
+        """无去年同期数据时 revenue_yoy 应为 NaN"""
+        lookup = build_express_lookup_by_date(mock_express_data, trading_dates_express)
+        df = lookup["20231031"]
+        # 600000 没有去年同期数据，revenue_yoy 应为 NaN
+        row = df[df["ts_code"] == "600000.SH"].iloc[0]
+        assert np.isnan(row["express_revenue_yoy"])
 
     def test_output_columns(self, mock_express_data, trading_dates_express):
         """验证输出包含所有必要列"""

@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.20.5)
+### 当前版本 (v0.20.6)
+
+**修复 express/fund_portfolio 因子全 NULL** (v0.20.6):
+- ✅ 修正 express 因子列名映射（TuShare 实际列名 `yoy_net_profit`/`diluted_roe`），新增营收同比自动计算
+- ✅ 修复 fund_portfolio symbol 已含交易所后缀导致 `_symbol_to_ts_code` 重复拼接的问题
 
 **修复41个失败测试，同步测试代码与源代码接口** (v0.20.5):
 - 修复 `split_train_val_by_date` IndexError 源码bug

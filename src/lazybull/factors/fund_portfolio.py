@@ -135,15 +135,20 @@ def build_fund_portfolio_lookup_by_date(
 
 
 def _symbol_to_ts_code(symbol: str) -> str:
-    """将6位股票代码转换为 ts_code 格式
+    """将股票代码转换为 ts_code 格式
 
     Args:
-        symbol: 6位股票代码，如 '000001'
+        symbol: 股票代码，可以是纯6位数字（如 '000001'）
+                或已含交易所后缀（如 '000001.SZ'）
 
     Returns:
         ts_code 格式，如 '000001.SZ'，无法识别返回 None
     """
-    s = str(symbol).strip().zfill(6)
+    s = str(symbol).strip()
+    # 如果已含交易所后缀（如 TuShare fund_portfolio 返回的 symbol），直接返回
+    if "." in s and s.split(".")[-1] in ("SH", "SZ", "BJ"):
+        return s
+    s = s.zfill(6)
     if s.startswith(("6", "9")):
         return f"{s}.SH"
     elif s.startswith(("0", "2", "3")):
