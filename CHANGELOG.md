@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.19.1] - 2026-03-15
+
+### 优化
+
+- **trade 命令支持 next 参数** (bot_service.py)
+  - 输入 `trade next` 自动获取下一个交易日（含今天）并执行交易
+
 ## [0.19.0] - 2026-03-15
 
 ### 新增

@@ -175,7 +175,7 @@ def format_positions_mobile(runner: PaperTradingRunner, trade_date: str) -> str:
 
         lines.append(f"{i}. {code_display}")
         lines.append(
-            f"   {row['持仓股数']:.0f}股, 现{row['当前价格']:.2f}, 原{row['买入均价']:.2f}"
+            f"   {row['持仓股数']:.0f}股({row['买入均价']:.2f}->{row['当前价格']:.2f})"
         )
         lines.append(f"   {p_sign}{pnl_pct:.2f}% ({p_sign}{row['浮动盈亏']:,.0f})")
 
@@ -511,12 +511,19 @@ class SimpleHandler(dts.ChatbotHandler):
 
     def handle_trade(self, args, incoming):
         """执行交易 — 异步执行，完成后返回结果
-        用法: trade [日期]  例: trade 20260304
+        用法: trade <日期|next>  例: trade 20260304 / trade next
         """
         if not args:
-            self.reply_text("错误: 请指定交易日期，如 trade 20260314", incoming)
+            self.reply_text("错误: 请指定交易日期或 next，如 trade 20260314", incoming)
             return
-        trade_date = args[0]
+
+        if args[0].lower() == "next":
+            trade_date = self._resolve_next_trade_date()
+            if trade_date is None:
+                self.reply_text("错误: 无法获取下一个交易日", incoming)
+                return
+        else:
+            trade_date = args[0]
         self.reply_text(f"开始执行交易 ({trade_date})，请稍候...", incoming)
 
         def _run():
@@ -555,8 +562,8 @@ class SimpleHandler(dts.ChatbotHandler):
             "可用命令\n\n"
             "positions [日期]\n"
             "  查看持仓（默认今天）\n\n"
-            "trade [日期]\n"
-            "  执行交易（默认今天）\n\n"
+            "trade <日期|next>\n"
+            "  执行交易（next=下一交易日）\n\n"
             "model\n"
             "  查看当前模型信息\n\n"
             "ping [IP]\n"
@@ -601,6 +608,35 @@ class SimpleHandler(dts.ChatbotHandler):
             self.reply_text("reset-t0 完成，账户已恢复初始状态", incoming)
         except Exception as e:
             self.reply_text(f"reset-t0 失败: {e}", incoming)
+
+    def _resolve_next_trade_date(self) -> str | None:
+        """获取上次交易日之后的下一个交易日
+
+        基于账户 last_update 推算；若账户尚未执行过交易则回退到今天起。
+        """
+        try:
+            storage = Storage()
+            loader = DataLoader(storage, verbose=False)
+            trade_cal = loader.load_clean_trade_cal()
+            if trade_cal is None:
+                return None
+            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+
+            # 获取上次交易日期
+            ps = PaperStorage()
+            state = ps.load_account_state()
+            last_date = state.last_update if state and state.last_update else ""
+
+            if last_date:
+                # 取 last_date 之后的第一个交易日（严格大于）
+                future = [d for d in trade_dates if d > last_date]
+            else:
+                # 从未执行过，回退到今天起
+                today = pd.Timestamp.today().strftime('%Y%m%d')
+                future = [d for d in trade_dates if d >= today]
+            return future[0] if future else None
+        except Exception:
+            return None
 
     def run_shell(self, cmd_list, incoming):
         """底层的安全执行逻辑"""
