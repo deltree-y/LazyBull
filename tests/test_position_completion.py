@@ -362,13 +362,13 @@ def test_completion_with_alternative_candidates():
         price_data=price_data
     )
     
-    # 验证：引擎只从有限候选池（unfilled_count=1）中选择替代股票
-    # 由于 000002.SZ 持续涨停且候选池只有1只，补齐无法成功
+    # 验证：引擎从扩大的候选池（unfilled_count * 2）中选择替代股票
+    # 由于候选池有buffer，可以跳过不可交易的股票找到替代
     assert engine.completion_stats['total_unfilled'] == 1, "应该有1次未满仓"
-    assert engine.completion_stats['total_abandoned'] >= 1, "应该至少放弃1次补齐"
 
-    # 验证最终持仓：由于000002持续涨停且候选池有限，最终只持有1只股票
+    # 验证最终持仓：000002涨停但候选池buffer足够找到替代，应持有2只股票
     assert '000001.SZ' in engine.positions, "应该持有000001"
+    assert len(engine.positions) == 2, "候选buffer应允许找到替代股票完成补齐"
 
 
 def test_completion_uses_prev_day_data():

@@ -15,13 +15,13 @@
 
 import math
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Callable
+from typing import Callable, Dict, List, Optional, Tuple
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from loguru import logger
-from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import spearmanr
+from sklearn.metrics import mean_squared_error, r2_score
 
 try:
     import xgboost as xgb
@@ -31,62 +31,62 @@ except ImportError:
 
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml.eval_utils import (
-    evaluate_predictions_by_date,
-    summarize_daily_metrics,
     compute_diagnostic_statistics,
-    print_diagnostic_report
+    evaluate_predictions_by_date,
+    print_diagnostic_report,
+    summarize_daily_metrics,
 )
 
 # 基本面因子特征列（行业 z-score 后的列名）
 FUNDAMENTAL_FEATURE_COLUMNS = [
-    "zscore_roe_waa",          # 加权平均ROE
-    "zscore_or_yoy",           # 营业收入同比增速
-    "zscore_netprofit_yoy",    # 净利润同比增速
-    "zscore_debt_to_assets",   # 资产负债率
-    "zscore_q_gr_yoy",         # 单季度营收同比增速
+    "zscore_roe_waa",  # 加权平均ROE
+    "zscore_or_yoy",  # 营业收入同比增速
+    "zscore_netprofit_yoy",  # 净利润同比增速
+    "zscore_debt_to_assets",  # 资产负债率
+    "zscore_q_gr_yoy",  # 单季度营收同比增速
 ]
 
 # 另类数据因子特征列
 ALT_FEATURE_COLUMNS = [
     # 融资融券 (4)
-    "rzye_chg_5",              # 融资余额5日变动率
-    "rzye_chg_20",             # 融资余额20日变动率
-    "rqye_rzye_ratio",         # 融券/融资余额比
-    "margin_net_buy_ratio",    # 融资净买入/成交额
+    "rzye_chg_5",  # 融资余额5日变动率
+    "rzye_chg_20",  # 融资余额20日变动率
+    "rqye_rzye_ratio",  # 融券/融资余额比
+    "margin_net_buy_ratio",  # 融资净买入/成交额
     # 股东人数 (2)
-    "holder_num_chg",          # 股东人数环比变动率
-    "holder_num_chg_2q",       # 股东人数两期变动率
+    "holder_num_chg",  # 股东人数环比变动率
+    "holder_num_chg_2q",  # 股东人数两期变动率
     # 业绩预告 (2)
-    "forecast_type_score",     # 业绩预告类型评分
-    "forecast_chg_mid",        # 业绩预告变动幅度中值
+    "forecast_type_score",  # 业绩预告类型评分
+    "forecast_chg_mid",  # 业绩预告变动幅度中值
     # 东财人气榜 (2)
-    "hot_rank",                # 人气排名
-    "hot_rank_chg_5",          # 5日人气排名变动
+    "hot_rank",  # 人气排名
+    "hot_rank_chg_5",  # 5日人气排名变动
 ]
 
 # 筹码胜率因子特征列（5000 积分）
 CYQ_FEATURE_COLUMNS = [
-    "winner_rate",             # 胜率
-    "weight_avg_bias",         # 加权平均成本偏离度
-    "cost_concentration",      # 筹码集中度
-    "winner_rate_chg_5",       # 5日胜率变化
-    "winner_rate_chg_20",      # 20日胜率变化
+    "winner_rate",  # 胜率
+    "weight_avg_bias",  # 加权平均成本偏离度
+    "cost_concentration",  # 筹码集中度
+    "winner_rate_chg_5",  # 5日胜率变化
+    "winner_rate_chg_20",  # 20日胜率变化
 ]
 
 # 基金持仓因子特征列（5000 积分）
 FUND_FEATURE_COLUMNS = [
-    "fund_hold_ratio",         # 基金持股占流通股比例
-    "fund_hold_ratio_chg",     # 基金持股比例季度变化
-    "fund_count",              # 持仓基金数量
-    "fund_count_chg",          # 持仓基金数量季度变化
+    "fund_hold_ratio",  # 基金持股占流通股比例
+    "fund_hold_ratio_chg",  # 基金持股比例季度变化
+    "fund_count",  # 持仓基金数量
+    "fund_count_chg",  # 持仓基金数量季度变化
 ]
 
 # 业绩快报因子特征列（5000 积分）
 EXPRESS_FEATURE_COLUMNS = [
-    "express_revenue_yoy",     # 营业收入同比增速
-    "express_profit_yoy",      # 净利润同比增速
-    "express_roe",             # 快报ROE
-    "express_surprise",        # 业绩惊喜
+    "express_revenue_yoy",  # 营业收入同比增速
+    "express_profit_yoy",  # 净利润同比增速
+    "express_roe",  # 快报ROE
+    "express_surprise",  # 业绩惊喜
 ]
 
 
@@ -101,41 +101,38 @@ def neg_rank_ic(y_true, y_pred):
 def _rank_ic_eval_lgb(y_true, y_pred):
     """Spearman Rank IC（LightGBM 早停用，higher_is_better=True）"""
     corr, _ = spearmanr(y_true, y_pred)
-    return 'rank_ic', float(corr if not np.isnan(corr) else 0), True
+    return "rank_ic", float(corr if not np.isnan(corr) else 0), True
 
 
 def load_features_data(
-    storage: Storage,
-    loader: DataLoader,
-    start_date: str,
-    end_date: str
+    storage: Storage, loader: DataLoader, start_date: str, end_date: str
 ) -> tuple:
     """加载指定日期区间的特征数据
-    
+
     Args:
         storage: Storage 实例
         loader: DataLoader 实例
         start_date: 开始日期，格式 YYYYMMDD
         end_date: 结束日期，格式 YYYYMMDD
-        
+
     Returns:
         (df, trade_days_count) 元组：合并后的特征 DataFrame 和交易日数量
     """
     logger.info(f"加载特征数据: {start_date} 至 {end_date}")
-    
+
     # 获取交易日列表
     trade_cal = loader.load_clean_trade_cal()
     if trade_cal is None:
         trade_cal = loader.load_trade_cal()
-    
+
     trade_dates = trade_cal[
-        (trade_cal['cal_date'] >= start_date) & 
-        (trade_cal['cal_date'] <= end_date) & 
-        (trade_cal['is_open'] == 1)
-    ]['cal_date'].tolist()
-    
+        (trade_cal["cal_date"] >= start_date)
+        & (trade_cal["cal_date"] <= end_date)
+        & (trade_cal["is_open"] == 1)
+    ]["cal_date"].tolist()
+
     logger.info(f"共 {len(trade_dates)} 个交易日")
-    
+
     # 加载每日特征数据
     all_features = []
     missing_dates = []
@@ -148,22 +145,26 @@ def load_features_data(
             missing_dates.append(trade_date)
 
     if missing_dates:
-        logger.info(f"共 {len(missing_dates)} 个交易日无特征数据（跳过）: {missing_dates[0]} ~ {missing_dates[-1]}")
+        logger.info(
+            f"共 {len(missing_dates)} 个交易日无特征数据（跳过）: {missing_dates[0]} ~ {missing_dates[-1]}"
+        )
 
     if not all_features:
         raise ValueError(f"指定日期区间内没有特征数据")
 
     # 合并所有数据
     df = pd.concat(all_features, ignore_index=True)
-    logger.info(f"成功加载 {len(df)} 条样本（{len(all_features)}/{len(trade_dates)} 个交易日有数据）")
-    
+    logger.info(
+        f"成功加载 {len(df)} 条样本（{len(all_features)}/{len(trade_dates)} 个交易日有数据）"
+    )
+
     return df, len(trade_dates)
 
 
 def split_train_val_by_date(
     df: pd.DataFrame,
     val_ratio: float = 0.2,
-    date_col: str = 'trade_date',
+    date_col: str = "trade_date",
     delta: int = 20,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
     """按 trade_date 粒度切分训练集和验证集
@@ -190,9 +191,12 @@ def split_train_val_by_date(
 
     if n_dates == 0:
         empty_stats = {
-            "train_n_dates": 0, "val_n_dates": 0,
-            "train_start_date": "N/A", "train_end_date": "N/A",
-            "val_start_date": "N/A", "val_end_date": "N/A",
+            "train_n_dates": 0,
+            "val_n_dates": 0,
+            "train_start_date": "N/A",
+            "train_end_date": "N/A",
+            "val_start_date": "N/A",
+            "val_end_date": "N/A",
         }
         return df.iloc[:0].copy(), df.iloc[:0].copy(), empty_stats
 
@@ -203,8 +207,22 @@ def split_train_val_by_date(
         n_train_dates = 0
         n_val_dates = n_dates
 
-    train_dates_set = set(all_dates[:n_train_dates-delta]) if n_train_dates > delta else set(all_dates[:n_train_dates])
-    val_dates_set = set(all_dates[n_train_dates+delta:]) if n_train_dates + delta < n_dates else set(all_dates[n_train_dates:])
+    # 训练集末尾扣除 delta 天间隔，防止标签泄漏到验证集
+    if n_train_dates > delta:
+        train_dates_set = set(all_dates[: n_train_dates - delta])
+    else:
+        train_dates_set = set(all_dates[:n_train_dates])
+
+    if n_train_dates + delta < n_dates:
+        val_dates_set = set(all_dates[n_train_dates + delta :])
+    else:
+        # 数据不足以保留完整 delta 间隔，训练/验证集之间可能存在标签泄漏
+        logger.warning(
+            f"训练/验证集分割: 数据不足以保留 {delta} 天间隔 "
+            f"(总日期={n_dates}, 训练={n_train_dates}, delta={delta})，"
+            f"验证集紧跟训练集末尾，存在标签泄漏风险"
+        )
+        val_dates_set = set(all_dates[n_train_dates:])
 
     df_train = df[df[date_col].isin(train_dates_set)].copy()
     df_val = df[df[date_col].isin(val_dates_set)].copy()
@@ -213,7 +231,7 @@ def split_train_val_by_date(
     sorted_train_dates = sorted(train_dates_set)
     sorted_val_dates = sorted(val_dates_set)
     stats = {
-        "train_n_dates": actual_train_n_dates,   # 实际参与训练的日期数（已扣除末尾 delta 天间隔）
+        "train_n_dates": actual_train_n_dates,  # 实际参与训练的日期数（已扣除末尾 delta 天间隔）
         "val_n_dates": len(val_dates_set),
         "train_start_date": str(sorted_train_dates[0]) if sorted_train_dates else "N/A",
         "train_end_date": str(sorted_train_dates[-1]) if sorted_train_dates else "N/A",
@@ -263,87 +281,111 @@ def prepare_training_data(
         data_stats 包含：samples_after_filter, val_start_date, val_end_date
     """
     logger.info("准备训练数据...")
-    
+
     # 确认标签列存在
     if label_column not in df.columns:
         raise ValueError(f"标签列 {label_column} 不存在")
-    
+
     # 定义需要排除的列（非特征列）
     # 标识列
-    id_columns = ['ts_code', 'trade_date', 'name']
+    id_columns = ["ts_code", "trade_date", "name"]
     # 标签列
-    label_columns = [col for col in df.columns if col.startswith('y_')]
+    label_columns = [col for col in df.columns if col.startswith("y_")]
     # 过滤标记列（使用统一的列名，与clean层一致）
     # 收盘买入策略：涨停无法买入需过滤；跌停可以买入（有人卖出），保留参与训练
-    filter_columns = ['is_st', 'is_suspended', 'is_limit_up']
+    filter_columns = ["is_st", "is_suspended", "is_limit_up"]
     # 其他非特征列
-    other_exclude_columns = ['tradable', 'list_date', 'list_days', 'is_limit_up', 'is_limit_down', 'industry']
+    other_exclude_columns = [
+        "tradable",
+        "list_date",
+        "list_days",
+        "is_limit_up",
+        "is_limit_down",
+        "industry",
+    ]
     # 临时过滤掉的列
-    temp_test_exclude_columns = ['total_mv', 'circ_mv', 'log_circ_mv'] +\
-                                ['kdj_k', 'kdj_d'] +\
-                                ['bb_upper', 'bb_lower'] +\
-                                ['macd_dif', 'macd_dea'] +\
-                                ['ps_ttm', 'ep_ttm'] +\
-                                ['amount_ma10', 'amount_ma20', 'volume_ratio', 'log_circ_mv', 'net_mf_amount_mean_5', 'net_mf_amount_mean_20', 'vol_burst_10', 'vol_burst_20', 'kdj_d', 'macd_dea', 'bb_upper', 'bb_lower']
-    
-    exclude_columns = id_columns + label_columns + filter_columns + other_exclude_columns + temp_test_exclude_columns
-    
+    temp_test_exclude_columns = (
+        ["total_mv", "circ_mv", "log_circ_mv"]
+        + ["kdj_k", "kdj_d"]
+        + ["bb_upper", "bb_lower"]
+        + ["macd_dif", "macd_dea"]
+        + ["ps_ttm", "ep_ttm"]
+        + [
+            "amount_ma10",
+            "amount_ma20",
+            "volume_ratio",
+            "log_circ_mv",
+            "net_mf_amount_mean_5",
+            "net_mf_amount_mean_20",
+            "vol_burst_10",
+            "vol_burst_20",
+            "kdj_d",
+            "macd_dea",
+            "bb_upper",
+            "bb_lower",
+        ]
+    )
+
+    exclude_columns = (
+        id_columns
+        + label_columns
+        + filter_columns
+        + other_exclude_columns
+        + temp_test_exclude_columns
+    )
+
     # 获取特征列
-    #feature_columns = [col for col in df.columns if col not in exclude_columns]
+    # feature_columns = [col for col in df.columns if col not in exclude_columns]
     feature_columns = [
         # 1. 中性化动量与趋势 (9个) - 剔除行业/市值后的纯选股动量
-        "neu_ret_1",               # 超短期个股中性化反转（A股隔日反转效应）
-        "neu_ret_20",              # 中期个股中性化超额
-        #"neu_ret_10",              # 中期个股中性化超额
-        "neu_ret_5",               # 短期个股中性化超额
-        "alpha_industry_20",       # 行业动量（保留此特征以保留行业轮动视角）
-        #"alpha_industry_10",       # 行业动量（保留此特征以保留行业轮动视角）
-        "alpha_industry_5",        # 行业短期爆发力
-        "ind_ret_avg",             # 所属行业平均收益（行业绝对动量）
-        "ind_momentum_rank",       # 行业动量百分位排名（0~1，1=最强行业）
+        "neu_ret_1",  # 超短期个股中性化反转（A股隔日反转效应）
+        "neu_ret_20",  # 中期个股中性化超额
+        # "neu_ret_10",              # 中期个股中性化超额
+        "neu_ret_5",  # 短期个股中性化超额
+        "alpha_industry_20",  # 行业动量（保留此特征以保留行业轮动视角）
+        # "alpha_industry_10",       # 行业动量（保留此特征以保留行业轮动视角）
+        "alpha_industry_5",  # 行业短期爆发力
+        "ind_ret_avg",  # 所属行业平均收益（行业绝对动量）
+        "ind_momentum_rank",  # 行业动量百分位排名（0~1，1=最强行业）
         "zscore_ma_deviation_20",  # 20日均线乖离率
-        "zscore_acceleration",     # 动量加速度
-        "zscore_macd_hist",        # MACD能量柱（动能切换）
-        "bb_pct",                  # 布林带位置
-
+        "zscore_acceleration",  # 动量加速度
+        "zscore_macd_hist",  # MACD能量柱（动能切换）
+        "bb_pct",  # 布林带位置
         # 2. 流动性与资金博弈 (7个) - 识别虚假繁荣与主力意图
         # volume_ratio（实时量比）与 vol_ratio_20 高度重叠，已移除
-        "zscore_turnover_rate",    # 换手率级别
-        "vol_ratio_20",            # 20日量比
-        "vol_burst_20",            # 20日爆量系数
-        "zscore_amount_ma20",      # 20日成交额基准
-        "zscore_net_mf_amount",    # 当日净流入资金
-        "zscore_elg_net_amount_sum_20", # 20日特大单累积（主力深度）
-        "lg_net_amount_sum_5",     # 5日大单累积
-
+        "zscore_turnover_rate",  # 换手率级别
+        "vol_ratio_20",  # 20日量比
+        "vol_burst_20",  # 20日爆量系数
+        "zscore_amount_ma20",  # 20日成交额基准
+        "zscore_net_mf_amount",  # 当日净流入资金
+        "zscore_elg_net_amount_sum_20",  # 20日特大单累积（主力深度）
+        "lg_net_amount_sum_5",  # 5日大单累积
         # 3. 波动风险与形态特征 (8个) - 解决”早夭”与压制回撤
         # body_length 可由 amplitude - upper_shadow - lower_shadow 推导，已移除
-        "zscore_volatility_20",    # 20日波动率
-        #"zscore_volatility_10",    # 10日波动率
-        "zscore_volatility_5",     # 5日波动率
-        "amplitude",               # 当日振幅
-        "zscore_bb_width",         # 布林带宽度（波动挤压/释放）
-        "upper_shadow",            # 上影线（压力位）
-        "lower_shadow",            # 下影线（支撑位）
-        "spec_score",              # 投机分（高波动小市值复合得分）
-        "rsi_14",                  # 强弱指标（超买超卖）
-        "kdj_j",                   # 随机指标J值（灵敏度高）
-
+        "zscore_volatility_20",  # 20日波动率
+        # "zscore_volatility_10",    # 10日波动率
+        "zscore_volatility_5",  # 5日波动率
+        "amplitude",  # 当日振幅
+        "zscore_bb_width",  # 布林带宽度（波动挤压/释放）
+        "upper_shadow",  # 上影线（压力位）
+        "lower_shadow",  # 下影线（支撑位）
+        "spec_score",  # 投机分（高波动小市值复合得分）
+        "rsi_14",  # 强弱指标（超买超卖）
+        "kdj_j",  # 随机指标J值（灵敏度高）
         # 4. 估值、质量与安全边际 (6个) - 风格锚点，提供底层防御
         # pb 与 zscore_bp 线性冗余（BP=1/PB），已移除 pb
-        "zscore_size",             # 市值因子（核心锚点）
-        "zscore_bp",               # 账面市值比（价值挖掘）
-        "zscore_dv_ttm",           # 股息率
-        "zscore_pe_ttm",           # PE分位
-        "is_loss",                 # 是否亏损（质量过滤）
-        "list_days",               # 上市天数
-
+        "zscore_size",  # 市值因子（核心锚点）
+        "zscore_bp",  # 账面市值比（价值挖掘）
+        "zscore_dv_ttm",  # 股息率
+        "zscore_pe_ttm",  # PE分位
+        "is_loss",  # 是否亏损（质量过滤）
+        "list_days",  # 上市天数
         # 5. 市场环境特征 (7个) - 环境感知 + 择时信号
         # is_limit_up 过滤后恒为 0，已移除；is_limit_down 保留（跌停股参与训练，不作为特征）
-        "mkt_adv_dec_ratio",       # 市场涨跌比
-        "mkt_ret_avg_20",          # 市场平均收益（20日）
-        "mkt_turnover_std",        # 市场成交额波动
-        "mkt_vol_20",              # 市场总体成交量
+        "mkt_adv_dec_ratio",  # 市场涨跌比
+        "mkt_ret_avg_20",  # 市场平均收益（20日）
+        "mkt_turnover_std",  # 市场成交额波动
+        "mkt_vol_20",  # 市场总体成交量
     ]
 
     # 基本面因子（可选）
@@ -393,28 +435,28 @@ def prepare_training_data(
 
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
-    
+
     # 过滤可训练样本（移除含有过滤标记的样本）
     mask = pd.Series([True] * len(df), index=df.index)
     for col in filter_columns:
         if col in df.columns:
             mask = mask & (~df[col].astype(bool))
-    
+
     df_train = df[mask].copy()
     logger.info(f"过滤后样本数: {len(df_train)} / {len(df)}")
     samples_after_filter = len(df_train)
-    
+
     # 移除标签为 NaN 的样本
     df_train = df_train.dropna(subset=[label_column])
     logger.info(f"移除标签 NaN 后样本数: {len(df_train)}")
-    
+
     if len(df_train) == 0:
         raise ValueError("没有可用的训练样本")
-    
+
     # 从标签列名自动推断 delta（例如 neu_y_ret_20 -> horizon=20，y_ret_5 -> horizon=5）
     # delta 是训练集末尾与验证集开头之间的交易日间隔，需 >= 标签 horizon 以防止标签泄露
     try:
-        inferred_horizon = int(label_column.rstrip('d').split('_')[-1])
+        inferred_horizon = int(label_column.rstrip("d").split("_")[-1])
     except (ValueError, IndexError):
         inferred_horizon = 20
     label_delta = max(inferred_horizon, 5)  # 最少 5 个交易日间隔
@@ -437,15 +479,15 @@ def prepare_training_data(
     # 获取验证集的时间范围
     val_start_date = split_stats["val_start_date"]
     val_end_date = split_stats["val_end_date"]
-    
+
     # 准备训练集 X 和 y
     X_train = df_train_split[feature_columns].copy()
     y_train = df_train_split[label_column].copy()
-    
+
     # 准备验证集 X 和 y
     X_val = df_val_split[feature_columns].copy()
     y_val = df_val_split[label_column].copy()
-    
+
     # NaN 处理：XGBoost / LightGBM 原生支持 NaN（自动学习缺失值的最优分裂方向），
     # 不再 fillna(0)，保留 NaN 让模型区分"无数据"与"值为0"。
 
@@ -455,56 +497,65 @@ def prepare_training_data(
     data_stats = {
         "samples_after_filter": samples_after_filter,
         "val_start_date": str(val_start_date),
-        "val_end_date": str(val_end_date)
+        "val_end_date": str(val_end_date),
     }
 
-    return X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original
+    return (
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        feature_columns,
+        df_train_split,
+        df_val_split,
+        data_stats,
+        df_val_split_original,
+    )
 
 
 def transform_labels_cs_zscore(
-    df: pd.DataFrame,
-    label_column: str,
-    winsorize_p: float = 0.01
+    df: pd.DataFrame, label_column: str, winsorize_p: float = 0.01
 ) -> pd.DataFrame:
     """对标签进行截面 winsorize + zscore 变换
-    
+
     仅在训练阶段生效，对每个 trade_date 的原始回归标签进行：
     1. 截面 winsorize（截断极端值）
     2. 截面 zscore（标准化：均值=0，标准差=1）
-    
+
     Args:
         df: 训练数据 DataFrame
         label_column: 标签列名
         winsorize_p: winsorize 参数，默认 0.01（截断上下1%极端值）
-        
+
     Returns:
         变换后的 DataFrame（标签列已替换为标准化后的值）
     """
     # 使用别名以区别于 normalization.cross_sectional_zscore（后者处理多列 DataFrame）
     from src.lazybull.common.feature_utils import cross_sectional_zscore as _single_col_zscore
+
     cross_sectional_zscore = _single_col_zscore
-    
+
     logger.info(f"对标签 {label_column} 进行截面 z-score 标准化...")
     logger.info(f"  winsorize 参数: {winsorize_p}")
-    
+
     df_transformed = df.copy()
     nan_count_ori = df_transformed[label_column].isna().sum()
     logger.info(f"原始标签 NaN 数量: {nan_count_ori}")
-    
+
     # 按 trade_date 分组进行截面标准化
     df_transformed[label_column] = cross_sectional_zscore(
         df_transformed,
         value_col=label_column,
-        group_col='trade_date',
+        group_col="trade_date",
         winsorize_limits=(winsorize_p, winsorize_p),
-        ddof=0
+        ddof=0,
     )
-    
+
     # 统计标准化后的效果
     mean = df_transformed[label_column].mean()
     std = df_transformed[label_column].std()
     logger.info(f"标准化后: 均值={mean:.6f}, 标准差={std:.6f}")
-    
+
     # 检查是否有 NaN（可能由于某天标准差为0）
     nan_count = df_transformed[label_column].isna().sum()
     if nan_count > 0:
@@ -522,80 +573,80 @@ def generate_classification_labels(
     df: pd.DataFrame,
     label_column: str,
     pos_quantile: Optional[float] = None,
-    pos_topk: Optional[int] = None
+    pos_topk: Optional[int] = None,
 ) -> pd.DataFrame:
     """生成分类标签（TopN 正类）
-    
+
     按每个交易日截面，将原始标签按分位阈值或数量阈值转为 0/1 标签。
-    
+
     Args:
         df: 训练数据 DataFrame
         label_column: 原始标签列名
         pos_quantile: 百分比阈值（例如 0.2 表示 Top20% 为正类）
         pos_topk: 数量阈值（例如 300 表示每个交易日收益最高的 300 只为正类）
-        
+
     Returns:
         添加了二分类标签的 DataFrame（新增列 {label_column}_binary）
-        
+
     Note:
         pos_quantile 和 pos_topk 二选一，pos_topk 优先级更高
         使用 rank(method='first') 确保 topk 数量严格等于 k（打散并列）
     """
     logger.info(f"生成分类标签（基于 {label_column}）...")
-    
+
     if pos_quantile is None and pos_topk is None:
         raise ValueError("必须指定 pos_quantile 或 pos_topk 之一")
-    
+
     if pos_topk is not None and pos_quantile is not None:
         logger.warning("同时指定了 pos_topk 和 pos_quantile，使用 pos_topk（优先级更高）")
-    
+
     df_labeled = df.copy()
     binary_label_col = f"{label_column}_binary"
-    
+
     # 初始化标签列为 NaN
     df_labeled[binary_label_col] = np.nan
-    
+
     # 按 trade_date 分组，对每组的标签进行排名
-    df_labeled['_rank'] = df_labeled.groupby('trade_date')[label_column].rank(
-        method='first',
-        ascending=False,
-        na_option='keep'
+    df_labeled["_rank"] = df_labeled.groupby("trade_date")[label_column].rank(
+        method="first", ascending=False, na_option="keep"
     )
-    
+
     if pos_topk is not None:
         # 数量模式：Top K（排名 <= K 为正类）
-        df_labeled[binary_label_col] = (df_labeled['_rank'] <= pos_topk).astype(float)
-        df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
+        df_labeled[binary_label_col] = (df_labeled["_rank"] <= pos_topk).astype(float)
+        df_labeled.loc[df_labeled["_rank"].isna(), binary_label_col] = np.nan
     else:
         # 百分比模式：Top X%
-        valid_counts = df_labeled.groupby('trade_date')['_rank'].transform('count')
+        valid_counts = df_labeled.groupby("trade_date")["_rank"].transform("count")
         threshold_ranks = (valid_counts * pos_quantile).clip(lower=1).astype(int)
-        df_labeled[binary_label_col] = (df_labeled['_rank'] <= threshold_ranks).astype(float)
-        df_labeled.loc[df_labeled['_rank'].isna(), binary_label_col] = np.nan
-    
+        df_labeled[binary_label_col] = (df_labeled["_rank"] <= threshold_ranks).astype(float)
+        df_labeled.loc[df_labeled["_rank"].isna(), binary_label_col] = np.nan
+
     # 删除临时排名列
-    df_labeled = df_labeled.drop(columns=['_rank'])
-    
+    df_labeled = df_labeled.drop(columns=["_rank"])
+
     # 统计正类比例
     total_valid = df_labeled[binary_label_col].notna().sum()
     pos_count = df_labeled[binary_label_col].sum()
     pos_ratio = pos_count / total_valid if total_valid > 0 else 0
-    
+
     logger.info(f"分类标签生成完成:")
-    logger.info(f"  模式: {'pos_topk=' + str(pos_topk) if pos_topk else 'pos_quantile=' + str(pos_quantile)}")
+    logger.info(
+        f"  模式: {'pos_topk=' + str(pos_topk) if pos_topk else 'pos_quantile=' + str(pos_quantile)}"
+    )
     logger.info(f"  正类样本数: {pos_count:.0f} / {total_valid:.0f} ({pos_ratio:.2%})")
-    
+
     if pos_topk is not None:
-        pos_counts_per_day = df_labeled.groupby('trade_date')[binary_label_col].sum()
-        logger.debug(f"  各交易日正类数量统计: min={pos_counts_per_day.min():.0f}, max={pos_counts_per_day.max():.0f}, mean={pos_counts_per_day.mean():.1f}")
-    
+        pos_counts_per_day = df_labeled.groupby("trade_date")[binary_label_col].sum()
+        logger.debug(
+            f"  各交易日正类数量统计: min={pos_counts_per_day.min():.0f}, max={pos_counts_per_day.max():.0f}, mean={pos_counts_per_day.mean():.1f}"
+        )
+
     return df_labeled
 
 
 def build_time_decay_weights(
-    df_train: pd.DataFrame,
-    half_life_years: float = 1.0,
-    date_col: str = 'trade_date'
+    df_train: pd.DataFrame, half_life_years: float = 1.0, date_col: str = "trade_date"
 ) -> np.ndarray:
     """按时间衰减构造训练样本权重
 
@@ -646,7 +697,7 @@ def build_rank_sample_weights(
     label_column: str,
     topk: int = 30,
     top_weight: float = 5.0,
-    date_col: str = 'trade_date'
+    date_col: str = "trade_date",
 ) -> np.ndarray:
     """按日截面排名构造训练样本权重
 
@@ -767,13 +818,13 @@ def train_xgboost_model(
         (model, train_params, train_metrics, val_metrics) 元组
     """
     logger.info(f"开始训练 XGBoost 模型（任务类型: {task}）...")
-    
+
     # 对回归标签进行 winsorize 处理（分类标签不需要，cs_zscore 标签也不需要）
     if task == "regression" and not skip_label_winsorize:
         from scipy.stats import mstats
+
         y_train_processed = pd.Series(
-            mstats.winsorize(y_train, limits=[0.01, 0.01]),
-            index=y_train.index
+            mstats.winsorize(y_train, limits=[0.01, 0.01]), index=y_train.index
         )
         logger.info("对回归标签进行 winsorize 处理（截断上下1%极端值），用于稳定训练")
     else:
@@ -782,35 +833,41 @@ def train_xgboost_model(
             logger.info("分类任务，跳过标签 winsorize 处理")
         elif skip_label_winsorize:
             logger.info("标签已在 cs_zscore 步骤中 winsorize，训练阶段跳过 winsorize")
-    
+
     # 计算 scale_pos_weight（分类任务）
     computed_scale_pos_weight = None
     if task == "classification":
         pos_count = (y_train_processed == 1).sum()
         neg_count = (y_train_processed == 0).sum()
-        
+
         if scale_pos_weight is None:
             if pos_count > 0:
                 computed_scale_pos_weight = neg_count / pos_count
-                logger.info(f"自动计算 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
+                logger.info(
+                    f"自动计算 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})"
+                )
             else:
                 logger.warning("训练集中无正类样本，无法计算 scale_pos_weight")
                 computed_scale_pos_weight = 1.0
         else:
             computed_scale_pos_weight = scale_pos_weight
-            logger.info(f"使用用户指定 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
-    
+            logger.info(
+                f"使用用户指定 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})"
+            )
+
     if sample_weight is not None:
         logger.info(f"使用样本权重（rank-weight），加权样本数={int((sample_weight > 1.0).sum())}")
     else:
         logger.info("未使用样本权重（rank-weight 未启用）")
-    
+
     # 判断是否使用 LambdaRank（排序学习）
-    use_lambdarank = (task == "regression" and objective_type == "lambdarank")
+    use_lambdarank = task == "regression" and objective_type == "lambdarank"
 
     if use_lambdarank:
         if df_train_for_group is None:
-            raise ValueError("lambdarank 目标需要 df_train_for_group 参数（用于按 trade_date 分组）")
+            raise ValueError(
+                "lambdarank 目标需要 df_train_for_group 参数（用于按 trade_date 分组）"
+            )
         logger.info("使用 LambdaRank 排序学习目标（直接优化股票排序，与 RankIC 评估对齐）")
 
     # 准备训练参数
@@ -869,7 +926,11 @@ def train_xgboost_model(
     log_params = {k: (v.__name__ if callable(v) else v) for k, v in train_params.items()}
     logger.info(f"训练参数: {log_params}")
     if early_stopping_rounds:
-        es_metric_display = early_stopping_metric if early_stopping_metric != "auto" else log_params.get("eval_metric", "mae")
+        es_metric_display = (
+            early_stopping_metric
+            if early_stopping_metric != "auto"
+            else log_params.get("eval_metric", "mae")
+        )
         logger.info(f"使用早停机制（rounds={early_stopping_rounds}, metric={es_metric_display}）")
     else:
         logger.info(f"未使用早停机制，固定训练 {n_estimators} 棵树")
@@ -880,8 +941,12 @@ def train_xgboost_model(
     qid_val = None
     if use_lambdarank:
         # 按 trade_date 排序并构造 qid（同一天的股票属于同一组，组内进行排序优化）
-        train_dates = df_train_for_group['trade_date'].values
-        val_dates = df_val_for_group['trade_date'].values if df_val_for_group is not None and len(df_val_for_group) > 0 else np.array([])
+        train_dates = df_train_for_group["trade_date"].values
+        val_dates = (
+            df_val_for_group["trade_date"].values
+            if df_val_for_group is not None and len(df_val_for_group) > 0
+            else np.array([])
+        )
 
         # qid: 将日期映射为整数 group id
         unique_train_dates = sorted(set(train_dates))
@@ -894,13 +959,16 @@ def train_xgboost_model(
             val_date_to_qid = {d: i + offset for i, d in enumerate(unique_val_dates)}
             qid_val = np.array([val_date_to_qid[d] for d in val_dates])
 
-        logger.info(f"LambdaRank 分组: 训练集 {len(unique_train_dates)} 个交易日, "
-                    f"验证集 {len(unique_val_dates) if len(val_dates) > 0 else 0} 个交易日")
+        logger.info(
+            f"LambdaRank 分组: 训练集 {len(unique_train_dates)} 个交易日, "
+            f"验证集 {len(unique_val_dates) if len(val_dates) > 0 else 0} 个交易日"
+        )
 
         # 将连续收益率转换为按日截面排名等级 (0~31)
         # XGBoost rank:pairwise + NDCG 指数增益要求标签 <= 31
         # ~3000 只股票 / 32 级 ≈ 每级 ~94 只，粒度足够保留排序信息
         max_grade = 31
+
         def _returns_to_grades(y: pd.Series, dates: np.ndarray) -> pd.Series:
             """按每日截面将连续收益率转为 0~max_grade 的整数等级"""
             grades = pd.Series(0, index=y.index, dtype=int)
@@ -911,14 +979,16 @@ def train_xgboost_model(
                 if n <= 1:
                     grades[mask] = 0
                 else:
-                    pct_rank = daily_y.rank(method='average') / n  # (0, 1]
+                    pct_rank = daily_y.rank(method="average") / n  # (0, 1]
                     grades[mask] = (pct_rank * max_grade).clip(0, max_grade).astype(int)
             return grades
 
         y_train_processed = _returns_to_grades(y_train_processed, train_dates)
         logger.info(f"LambdaRank 标签转换完成: 连续收益 → 排名等级 (0~{max_grade})")
-        logger.info(f"  等级范围: {y_train_processed.min()} ~ {y_train_processed.max()}, "
-                    f"均值: {y_train_processed.mean():.1f}")
+        logger.info(
+            f"  等级范围: {y_train_processed.min()} ~ {y_train_processed.max()}, "
+            f"均值: {y_train_processed.mean():.1f}"
+        )
 
         # 验证集标签也需要转换
         if len(val_dates) > 0:
@@ -972,7 +1042,7 @@ def train_xgboost_model(
         y_train_pred = model.predict(X_train)
         y_train_eval = pd.Series(y_train_processed, index=y_train.index)
         train_mse = mean_squared_error(y_train_eval, y_train_pred)
-        train_rmse = train_mse ** 0.5
+        train_rmse = train_mse**0.5
         train_r2 = r2_score(y_train_eval, y_train_pred)
         train_ic = y_train_eval.corr(pd.Series(y_train_pred, index=y_train.index))
 
@@ -980,30 +1050,34 @@ def train_xgboost_model(
             "mse": float(train_mse),
             "rmse": float(train_rmse),
             "r2": float(train_r2),
-            "ic": float(train_ic)
+            "ic": float(train_ic),
         }
 
-        logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}")
+        logger.info(
+            f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}"
+        )
     else:
-        from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score
-        
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
+
         y_train_pred_proba = model.predict_proba(X_train)[:, 1]
         y_train_pred_binary = model.predict(X_train)
-        
+
         train_acc = accuracy_score(y_train, y_train_pred_binary)
         train_auc = roc_auc_score(y_train, y_train_pred_proba)
         train_precision = precision_score(y_train, y_train_pred_binary)
         train_recall = recall_score(y_train, y_train_pred_binary)
-        
+
         train_metrics = {
             "accuracy": float(train_acc),
             "auc": float(train_auc),
             "precision": float(train_precision),
-            "recall": float(train_recall)
+            "recall": float(train_recall),
         }
-        
-        logger.info(f"训练集性能: ACC={train_acc:.4f}, AUC={train_auc:.4f}, Precision={train_precision:.4f}, Recall={train_recall:.4f}")
-    
+
+        logger.info(
+            f"训练集性能: ACC={train_acc:.4f}, AUC={train_auc:.4f}, Precision={train_precision:.4f}, Recall={train_recall:.4f}"
+        )
+
     # 计算验证集性能指标
     # 注意：当使用 label_transform=cs_zscore 时，y_val 是截面 z-score 标准化后的标签（均值≈0，标准差≈1），
     #       val_mse/val_ic 等指标均在 z-score 空间计算，与 train_metrics（使用 y_train_processed，
@@ -1012,7 +1086,7 @@ def train_xgboost_model(
         if task == "regression":
             y_val_pred = model.predict(X_val)
             val_mse = mean_squared_error(y_val, y_val_pred)
-            val_rmse = val_mse ** 0.5
+            val_rmse = val_mse**0.5
             val_r2 = r2_score(y_val, y_val_pred)
             val_ic = y_val.corr(pd.Series(y_val_pred, index=y_val.index))
             val_rank_ic, _ = spearmanr(y_val, y_val_pred)
@@ -1022,7 +1096,7 @@ def train_xgboost_model(
                 "rmse": float(val_rmse),
                 "r2": float(val_r2),
                 "ic": float(val_ic),
-                "rank_ic": float(val_rank_ic)
+                "rank_ic": float(val_rank_ic),
             }
 
             logger.info("=" * 60)
@@ -1032,27 +1106,29 @@ def train_xgboost_model(
             logger.info(f"MSE（均方误差）: {val_mse:.6f}")
             logger.info(f"RMSE（均方根误差）: {val_rmse:.6f}")
             logger.info(f"R2（决定系数）: {val_r2:.4f}")
-            logger.info(f"IC（信息系数）: {val_ic:.4f}  <- 重要指标（cs_zscore 模式下为 z-score 空间）")
+            logger.info(
+                f"IC（信息系数）: {val_ic:.4f}  <- 重要指标（cs_zscore 模式下为 z-score 空间）"
+            )
             logger.info(f"RankIC（排序IC）: {val_rank_ic:.4f}  <- 选股策略关键指标")
             logger.info("=" * 60)
         else:
-            from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score
-            
+            from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
+
             y_val_pred_proba = model.predict_proba(X_val)[:, 1]
             y_val_pred_binary = model.predict(X_val)
-            
+
             val_acc = accuracy_score(y_val, y_val_pred_binary)
             val_auc = roc_auc_score(y_val, y_val_pred_proba)
             val_precision = precision_score(y_val, y_val_pred_binary)
             val_recall = recall_score(y_val, y_val_pred_binary)
-            
+
             val_metrics = {
                 "accuracy": float(val_acc),
                 "auc": float(val_auc),
                 "precision": float(val_precision),
-                "recall": float(val_recall)
+                "recall": float(val_recall),
             }
-            
+
             logger.info("=" * 60)
             logger.info("验证集评估结果（分类任务）")
             logger.info("=" * 60)
@@ -1065,9 +1141,9 @@ def train_xgboost_model(
     else:
         val_metrics = {}
         logger.warning("验证集为空，无法评估")
-    
+
     # 添加 best_iteration 到 train_params
-    if len(X_val) > 0 and hasattr(model, 'best_iteration'):
+    if len(X_val) > 0 and hasattr(model, "best_iteration"):
         train_params["best_iteration"] = int(model.best_iteration)
     train_params["early_stopping_metric"] = early_stopping_metric
     # 确保 eval_metric 可序列化（callable 替换为函数名）
@@ -1083,10 +1159,10 @@ def evaluate_validation_daily(
     feature_columns: List[str],
     original_return_col: str,
     task: str,
-    topk_values: Optional[List[int]] = None
+    topk_values: Optional[List[int]] = None,
 ) -> Dict:
     """对验证集进行逐日评估（贴近交易场景）
-    
+
     Args:
         model: 训练好的模型
         df_val: 验证集 DataFrame（包含 trade_date, ts_code, 特征列, 原始收益列）
@@ -1094,86 +1170,90 @@ def evaluate_validation_daily(
         original_return_col: 原始真实收益列名（如 y_ret_20）
         task: 任务类型
         topk_values: TopK 评估的 K 值列表
-        
+
     Returns:
         逐日评估结果字典
     """
     if len(df_val) == 0:
         logger.warning("验证集为空，跳过逐日评估")
         return {}
-    
+
     if original_return_col not in df_val.columns:
         logger.warning(f"验证集缺少原始收益列 {original_return_col}，跳过逐日评估")
         return {}
-    
+
     if topk_values is None:
         topk_values = [30, 100, 300]
-    
+
     logger.info("=" * 60)
     logger.info("验证集逐日评估（贴近交易场景）")
     logger.info("=" * 60)
-    
+
     # 准备预测数据
     df_eval = df_val.copy()
     X_val_features = df_val[feature_columns].fillna(0)
-    
+
     # 预测
     if task == "classification":
         y_pred_proba = model.predict_proba(X_val_features)[:, 1]
-        df_eval['pred_score'] = y_pred_proba
+        df_eval["pred_score"] = y_pred_proba
     else:
         y_pred = model.predict(X_val_features)
-        df_eval['pred_score'] = y_pred
-    
+        df_eval["pred_score"] = y_pred
+
     # 逐日评估
     daily_results = evaluate_predictions_by_date(
         df=df_eval,
-        date_col='trade_date',
-        prediction_col='pred_score',
+        date_col="trade_date",
+        prediction_col="pred_score",
         return_col=original_return_col,
-        topk_values=topk_values
+        topk_values=topk_values,
     )
-    
+
     # 汇总统计
     summary = summarize_daily_metrics(daily_results)
-    
+
     # 输出结果
     logger.info(f"评估天数: {len(daily_results)}")
     logger.info(f"逐日 RankIC 均值: {summary.get('RankIC_均值', np.nan):.4f}")
     logger.info(f"逐日 RankIC 标准差: {summary.get('RankIC_标准差', np.nan):.4f}")
     logger.info(f"逐日 RankIC IR: {summary.get('RankIC_IR', np.nan):.4f}")
-    
+
     for k in topk_values:
         mean_key = f"Top{k}平均收益_均值"
         std_key = f"Top{k}平均收益_标准差"
         if mean_key in summary:
-            logger.info(f"Top{k} 平均收益（跨日）: 均值={summary[mean_key]:.4f}, 标准差={summary[std_key]:.4f}")
-    
+            logger.info(
+                f"Top{k} 平均收益（跨日）: 均值={summary[mean_key]:.4f}, 标准差={summary[std_key]:.4f}"
+            )
+
     logger.info("=" * 60)
-    
+
     # 计算并打印诊断统计
     diagnostics = compute_diagnostic_statistics(
         df=df_eval,
-        date_col='trade_date',
-        prediction_col='pred_score',
+        date_col="trade_date",
+        prediction_col="pred_score",
         return_col=original_return_col,
-        topk_values=topk_values
+        topk_values=topk_values,
     )
-    
+
     print_diagnostic_report(diagnostics)
-    
+
     # 返回汇总结果（包含诊断统计）
     result = {
-        'daily_rankic_mean': summary.get('RankIC_均值', np.nan),
-        'daily_rankic_std': summary.get('RankIC_标准差', np.nan),
-        'daily_rankic_ir': summary.get('RankIC_IR', np.nan),
-        **{f'top{k}_return_mean': summary.get(f"Top{k}平均收益_均值", np.nan) for k in topk_values},
-        **{f'top{k}_return_std': summary.get(f"Top{k}平均收益_标准差", np.nan) for k in topk_values}
+        "daily_rankic_mean": summary.get("RankIC_均值", np.nan),
+        "daily_rankic_std": summary.get("RankIC_标准差", np.nan),
+        "daily_rankic_ir": summary.get("RankIC_IR", np.nan),
+        **{f"top{k}_return_mean": summary.get(f"Top{k}平均收益_均值", np.nan) for k in topk_values},
+        **{
+            f"top{k}_return_std": summary.get(f"Top{k}平均收益_标准差", np.nan) for k in topk_values
+        },
     }
-    
+
     # 添加诊断统计
-    result.update({f'diagnostic_{k}': v for k, v in diagnostics.items()})
-    
+    result.update({f"diagnostic_{k}": v for k, v in diagnostics.items()})
+
     return result
 
 
@@ -1220,9 +1300,9 @@ def train_lightgbm_model(
     # 对回归标签进行 winsorize 处理
     if task == "regression" and not skip_label_winsorize:
         from scipy.stats import mstats
+
         y_train_processed = pd.Series(
-            mstats.winsorize(y_train, limits=[0.01, 0.01]),
-            index=y_train.index
+            mstats.winsorize(y_train, limits=[0.01, 0.01]), index=y_train.index
         )
         logger.info("对回归标签进行 winsorize 处理（截断上下1%极端值），用于稳定训练")
     else:
@@ -1241,13 +1321,17 @@ def train_lightgbm_model(
         if scale_pos_weight is None:
             if pos_count > 0:
                 computed_scale_pos_weight = neg_count / pos_count
-                logger.info(f"自动计算 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
+                logger.info(
+                    f"自动计算 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})"
+                )
             else:
                 logger.warning("训练集中无正类样本，无法计算 scale_pos_weight")
                 computed_scale_pos_weight = 1.0
         else:
             computed_scale_pos_weight = scale_pos_weight
-            logger.info(f"使用用户指定 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})")
+            logger.info(
+                f"使用用户指定 scale_pos_weight: {computed_scale_pos_weight:.4f} (负类={neg_count}, 正类={pos_count})"
+            )
 
     if sample_weight is not None:
         logger.info(f"使用样本权重（rank-weight），加权样本数={int((sample_weight > 1.0).sum())}")
@@ -1295,7 +1379,11 @@ def train_lightgbm_model(
             lgb.early_stopping(stopping_rounds=early_stopping_rounds),
             lgb.log_evaluation(period=0),  # 静默
         ]
-        es_metric_display = early_stopping_metric if early_stopping_metric != "auto" else train_params.get("metric", "mae")
+        es_metric_display = (
+            early_stopping_metric
+            if early_stopping_metric != "auto"
+            else train_params.get("metric", "mae")
+        )
         logger.info(f"使用早停机制（rounds={early_stopping_rounds}, metric={es_metric_display}）")
 
         fit_kwargs = {
@@ -1313,16 +1401,18 @@ def train_lightgbm_model(
         callbacks = [lgb.log_evaluation(period=0)]
         logger.info(f"未使用早停机制，固定训练 {n_estimators} 棵树")
         model.fit(
-            X_train, y_train_processed,
+            X_train,
+            y_train_processed,
             sample_weight=sample_weight,
             eval_set=[(X_val, y_val)],
-            callbacks=callbacks
+            callbacks=callbacks,
         )
         logger.info(f"模型训练完成（固定 {n_estimators} 棵树）")
     else:
         logger.info(f"未使用早停机制，固定训练 {n_estimators} 棵树")
         model.fit(
-            X_train, y_train_processed,
+            X_train,
+            y_train_processed,
             sample_weight=sample_weight,
         )
         logger.info("模型训练完成（无验证集）")
@@ -1338,7 +1428,7 @@ def train_lightgbm_model(
         y_train_pred = model.predict(X_train)
         y_train_eval = pd.Series(y_train_processed, index=y_train.index)
         train_mse = mean_squared_error(y_train_eval, y_train_pred)
-        train_rmse = train_mse ** 0.5
+        train_rmse = train_mse**0.5
         train_r2 = r2_score(y_train_eval, y_train_pred)
         train_ic = y_train_eval.corr(pd.Series(y_train_pred, index=y_train.index))
 
@@ -1346,12 +1436,14 @@ def train_lightgbm_model(
             "mse": float(train_mse),
             "rmse": float(train_rmse),
             "r2": float(train_r2),
-            "ic": float(train_ic)
+            "ic": float(train_ic),
         }
 
-        logger.info(f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}")
+        logger.info(
+            f"训练集性能: MSE={train_mse:.6f}, RMSE={train_rmse:.6f}, R2={train_r2:.4f}, IC={train_ic:.4f}"
+        )
     else:
-        from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
 
         y_train_pred_proba = model.predict_proba(X_train)[:, 1]
         y_train_pred_binary = model.predict(X_train)
@@ -1365,17 +1457,19 @@ def train_lightgbm_model(
             "accuracy": float(train_acc),
             "auc": float(train_auc),
             "precision": float(train_precision),
-            "recall": float(train_recall)
+            "recall": float(train_recall),
         }
 
-        logger.info(f"训练集性能: ACC={train_acc:.4f}, AUC={train_auc:.4f}, Precision={train_precision:.4f}, Recall={train_recall:.4f}")
+        logger.info(
+            f"训练集性能: ACC={train_acc:.4f}, AUC={train_auc:.4f}, Precision={train_precision:.4f}, Recall={train_recall:.4f}"
+        )
 
     # 计算验证集性能指标
     if len(X_val) > 0:
         if task == "regression":
             y_val_pred = model.predict(X_val)
             val_mse = mean_squared_error(y_val, y_val_pred)
-            val_rmse = val_mse ** 0.5
+            val_rmse = val_mse**0.5
             val_r2 = r2_score(y_val, y_val_pred)
             val_ic = y_val.corr(pd.Series(y_val_pred, index=y_val.index))
             val_rank_ic, _ = spearmanr(y_val, y_val_pred)
@@ -1385,7 +1479,7 @@ def train_lightgbm_model(
                 "rmse": float(val_rmse),
                 "r2": float(val_r2),
                 "ic": float(val_ic),
-                "rank_ic": float(val_rank_ic)
+                "rank_ic": float(val_rank_ic),
             }
 
             logger.info("=" * 60)
@@ -1399,7 +1493,7 @@ def train_lightgbm_model(
             logger.info(f"RankIC（排序IC）: {val_rank_ic:.4f}  <- 选股策略关键指标")
             logger.info("=" * 60)
         else:
-            from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score
+            from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
 
             y_val_pred_proba = model.predict_proba(X_val)[:, 1]
             y_val_pred_binary = model.predict(X_val)
@@ -1413,7 +1507,7 @@ def train_lightgbm_model(
                 "accuracy": float(val_acc),
                 "auc": float(val_auc),
                 "precision": float(val_precision),
-                "recall": float(val_recall)
+                "recall": float(val_recall),
             }
 
             logger.info("=" * 60)
@@ -1430,7 +1524,7 @@ def train_lightgbm_model(
         logger.warning("验证集为空，无法评估")
 
     # 添加 best_iteration 到 train_params
-    if len(X_val) > 0 and hasattr(model, 'best_iteration_'):
+    if len(X_val) > 0 and hasattr(model, "best_iteration_"):
         train_params["best_iteration"] = int(model.best_iteration_)
     train_params["early_stopping_metric"] = early_stopping_metric
 

@@ -45,7 +45,12 @@ def _compute_revenue_yoy(ex: pd.DataFrame) -> None:
             prev_end = str(int(end_date[:4]) - 1) + end_date[4:]
             prev_rev = rev_map.get((row["ts_code"], prev_end))
             cur_rev = row["revenue"]
-            if prev_rev is not None and pd.notna(prev_rev) and abs(prev_rev) > 1e-6 and pd.notna(cur_rev):
+            if (
+                prev_rev is not None
+                and pd.notna(prev_rev)
+                and abs(prev_rev) > 1e-6
+                and pd.notna(cur_rev)
+            ):
                 yoy_values.append((cur_rev - prev_rev) / abs(prev_rev) * 100)
             else:
                 yoy_values.append(np.nan)
@@ -55,10 +60,10 @@ def _compute_revenue_yoy(ex: pd.DataFrame) -> None:
 
 
 EXPRESS_COLS = [
-    "express_revenue_yoy",    # 营业收入同比增速
-    "express_profit_yoy",     # 净利润同比增速
-    "express_roe",            # 快报加权ROE
-    "express_surprise",       # 业绩惊喜（净利润增速 vs 上期预告偏差）
+    "express_revenue_yoy",  # 营业收入同比增速
+    "express_profit_yoy",  # 净利润同比增速
+    "express_roe",  # 快报加权ROE
+    "express_surprise",  # 业绩惊喜（净利润增速 vs 上期预告偏差）
 ]
 
 
@@ -83,10 +88,13 @@ def build_express_lookup_by_date(
 
     ex = express_df.copy()
 
-    # 日期标准化
+    # 日期标准化（兼容 datetime 和字符串类型）
     for col in ["ann_date", "end_date"]:
         if col in ex.columns:
-            ex[col] = ex[col].astype(str).str.replace("-", "").str[:8]
+            if pd.api.types.is_datetime64_any_dtype(ex[col]):
+                ex[col] = ex[col].dt.strftime("%Y%m%d")
+            else:
+                ex[col] = ex[col].astype(str).str.replace("-", "").str[:8]
 
     ex = ex.dropna(subset=["ann_date"])
 
@@ -137,13 +145,15 @@ def build_express_lookup_by_date(
             if pd.notna(profit_yoy) and ts_code in fc_lookup and end_date in fc_lookup[ts_code]:
                 surprise = profit_yoy - fc_lookup[ts_code][end_date]
 
-            records.append({
-                "ann_date": row["ann_date"],
-                "express_revenue_yoy": revenue_yoy,
-                "express_profit_yoy": profit_yoy,
-                "express_roe": roe,
-                "express_surprise": surprise,
-            })
+            records.append(
+                {
+                    "ann_date": row["ann_date"],
+                    "express_revenue_yoy": revenue_yoy,
+                    "express_profit_yoy": profit_yoy,
+                    "express_roe": roe,
+                    "express_surprise": surprise,
+                }
+            )
         stock_records[ts_code] = records
 
     # 对每个交易日做 point-in-time 查询
@@ -158,13 +168,15 @@ def build_express_lookup_by_date(
             idx = bisect.bisect_right(ann_dates, trade_date) - 1
             if idx >= 0:
                 r = recs[idx]
-                rows.append({
-                    "ts_code": ts_code,
-                    "express_revenue_yoy": r["express_revenue_yoy"],
-                    "express_profit_yoy": r["express_profit_yoy"],
-                    "express_roe": r["express_roe"],
-                    "express_surprise": r["express_surprise"],
-                })
+                rows.append(
+                    {
+                        "ts_code": ts_code,
+                        "express_revenue_yoy": r["express_revenue_yoy"],
+                        "express_profit_yoy": r["express_profit_yoy"],
+                        "express_roe": r["express_roe"],
+                        "express_surprise": r["express_surprise"],
+                    }
+                )
         if rows:
             result[trade_date] = pd.DataFrame(rows)
 

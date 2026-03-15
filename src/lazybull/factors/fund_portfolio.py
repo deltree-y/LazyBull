@@ -18,12 +18,11 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-
 FUND_PORTFOLIO_COLS = [
-    "fund_hold_ratio",      # 基金持股占流通股比例（全基金汇总）
+    "fund_hold_ratio",  # 基金持股占流通股比例（全基金汇总）
     "fund_hold_ratio_chg",  # 基金持股比例季度环比变化
-    "fund_count",           # 持仓基金数量
-    "fund_count_chg",       # 持仓基金数量季度变化
+    "fund_count",  # 持仓基金数量
+    "fund_count_chg",  # 持仓基金数量季度变化
 ]
 
 
@@ -41,10 +40,13 @@ def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
     """
     df = raw_df.copy()
 
-    # 日期标准化
+    # 日期标准化（兼容 datetime 和字符串类型）
     for col in ["ann_date", "end_date"]:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df[col] = df[col].dt.strftime("%Y%m%d")
+            else:
+                df[col] = df[col].astype(str).str.replace("-", "").str[:8]
 
     # 数值列转换
     for col in ["stk_float_ratio", "mkv", "amount"]:
@@ -54,11 +56,15 @@ def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(subset=["symbol", "end_date"])
 
     # 按个股+季度聚合
-    agg_df = df.groupby(["symbol", "end_date"]).agg(
-        fund_hold_ratio=("stk_float_ratio", "sum"),    # 合计占流通股比例
-        fund_count=("ts_code", "nunique"),               # 持仓基金数量
-        ann_date=("ann_date", "max"),                    # 取最晚公告日作为信息可用时点
-    ).reset_index()
+    agg_df = (
+        df.groupby(["symbol", "end_date"])
+        .agg(
+            fund_hold_ratio=("stk_float_ratio", "sum"),  # 合计占流通股比例
+            fund_count=("ts_code", "nunique"),  # 持仓基金数量
+            ann_date=("ann_date", "max"),  # 取最晚公告日作为信息可用时点
+        )
+        .reset_index()
+    )
 
     return agg_df
 
@@ -101,13 +107,15 @@ def build_fund_portfolio_lookup_by_date(
             continue
         records = []
         for _, row in grp.sort_values("ann_date").iterrows():
-            records.append({
-                "ann_date": row["ann_date"],
-                "fund_hold_ratio": row["fund_hold_ratio"],
-                "fund_hold_ratio_chg": row["fund_hold_ratio_chg"],
-                "fund_count": row["fund_count"],
-                "fund_count_chg": row["fund_count_chg"],
-            })
+            records.append(
+                {
+                    "ann_date": row["ann_date"],
+                    "fund_hold_ratio": row["fund_hold_ratio"],
+                    "fund_hold_ratio_chg": row["fund_hold_ratio_chg"],
+                    "fund_count": row["fund_count"],
+                    "fund_count_chg": row["fund_count_chg"],
+                }
+            )
         stock_records[ts_code] = records
 
     # 对每个交易日做 point-in-time 查询
@@ -120,13 +128,15 @@ def build_fund_portfolio_lookup_by_date(
             idx = bisect.bisect_right(ann_dates, trade_date) - 1
             if idx >= 0:
                 r = records[idx]
-                rows.append({
-                    "ts_code": ts_code,
-                    "fund_hold_ratio": r["fund_hold_ratio"],
-                    "fund_hold_ratio_chg": r["fund_hold_ratio_chg"],
-                    "fund_count": r["fund_count"],
-                    "fund_count_chg": r["fund_count_chg"],
-                })
+                rows.append(
+                    {
+                        "ts_code": ts_code,
+                        "fund_hold_ratio": r["fund_hold_ratio"],
+                        "fund_hold_ratio_chg": r["fund_hold_ratio_chg"],
+                        "fund_count": r["fund_count"],
+                        "fund_count_chg": r["fund_count_chg"],
+                    }
+                )
         if rows:
             result[trade_date] = pd.DataFrame(rows)
 
@@ -144,7 +154,11 @@ def _symbol_to_ts_code(symbol: str) -> str:
     Returns:
         ts_code 格式，如 '000001.SZ'，无法识别返回 None
     """
+    if symbol is None or (isinstance(symbol, float) and pd.isna(symbol)):
+        return None
     s = str(symbol).strip()
+    if not s or s == "nan":
+        return None
     # 如果已含交易所后缀（如 TuShare fund_portfolio 返回的 symbol），直接返回
     if "." in s and s.split(".")[-1] in ("SH", "SZ", "BJ"):
         return s

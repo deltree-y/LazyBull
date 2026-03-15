@@ -16,12 +16,12 @@ from .base import Signal
 
 class MLSignal(Signal):
     """ML 信号生成器
-    
+
     基于机器学习模型预测，选择预测收益最高的 Top N 股票
     """
-    
+
     # 申万一级行业：银行(801780)、非银金融(801790，含保险/券商)
-    _FINANCIAL_SW_L1_CODES = {'801780', '801790'}
+    _FINANCIAL_SW_L1_CODES = {"801780", "801790"}
 
     def __init__(
         self,
@@ -30,7 +30,7 @@ class MLSignal(Signal):
         models_dir: str = "./data/models",
         weight_method: str = "equal",
         min_amount_ma20: float = 50000.0,
-        min_total_mv: float =   500000.0,
+        min_total_mv: float = 500000.0,
         max_total_mv: float = 15000000.0,
         exclude_financial: bool = True,
         verbose: bool = True,
@@ -71,22 +71,21 @@ class MLSignal(Signal):
             f"total_mv=[{min_total_mv/10000:.0f}亿,{max_total_mv/10000:.0f}亿], "
             f"exclude_financial={exclude_financial}"
         )
-    
+
     def _load_model(self) -> None:
         """加载模型（延迟加载）"""
         if self.model is None:
             self.registry = ModelRegistry(models_dir=self.models_dir)
             # 严格检查：拒绝旧模型
             self.model, self.metadata = self.registry.load_model(
-                version=self.model_version,
-                strict_version_check=True
+                version=self.model_version, strict_version_check=True
             )
             self.feature_columns = self.metadata["feature_columns"]
             logger.info(
                 f"模型已加载: {self.metadata['version_str']}, "
                 f"特征数={self.metadata['feature_count']}"
             )
-    
+
     def _apply_selection_filters(self, features_df: pd.DataFrame) -> pd.DataFrame:
         """选股阶段过滤（实盘/回测共用）
 
@@ -108,40 +107,40 @@ class MLSignal(Signal):
         mask = pd.Series(True, index=features_df.index)
 
         # ── 成交额：amount_ma20 原始列（千元）────────────────────────────
-        if 'amount_ma20' in features_df.columns:
-            amount_low = (features_df['amount_ma20'].fillna(0) < self.min_amount_ma20).sum()
+        if "amount_ma20" in features_df.columns:
+            amount_low = (features_df["amount_ma20"].fillna(0) < self.min_amount_ma20).sum()
             if amount_low > 0:
-                #logger.info(
+                # logger.info(
                 #    f"选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
                 #    f"（={self.min_amount_ma20 / 100:.0f}万元）的 {amount_low} 只"
-                #)
+                # )
                 pass
-            mask &= features_df['amount_ma20'].fillna(0) >= self.min_amount_ma20
+            mask &= features_df["amount_ma20"].fillna(0) >= self.min_amount_ma20
         else:
             logger.warning("选股过滤-成交额: amount_ma20 列不存在，跳过")
 
         # ── 市值：total_mv 原始列（万元）────────────────────────────────
-        if 'total_mv' in features_df.columns:
-            mv_low = (features_df['total_mv'] < self.min_total_mv).sum()
-            mv_high = (features_df['total_mv'] > self.max_total_mv).sum()
+        if "total_mv" in features_df.columns:
+            mv_low = (features_df["total_mv"] < self.min_total_mv).sum()
+            mv_high = (features_df["total_mv"] > self.max_total_mv).sum()
             if mv_low + mv_high > 0:
-                #logger.info(
+                # logger.info(
                 #    f"选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
                 #    f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
-                #)
+                # )
                 pass
-            mask &= features_df['total_mv'].between(self.min_total_mv, self.max_total_mv)
+            mask &= features_df["total_mv"].between(self.min_total_mv, self.max_total_mv)
         else:
             logger.warning("选股过滤-市值: total_mv 列不存在，跳过")
 
         # ── 金融股：sw_l1_code────────────────────────────────────────────
         if self.exclude_financial:
-            if 'sw_l1_code' not in features_df.columns:
+            if "sw_l1_code" not in features_df.columns:
                 logger.warning(
                     "选股过滤-金融股: sw_l1_code 列不存在（申万行业数据未加载），跳过此规则"
                 )
             else:
-                fin_mask = features_df['sw_l1_code'].isin(self._FINANCIAL_SW_L1_CODES)
+                fin_mask = features_df["sw_l1_code"].isin(self._FINANCIAL_SW_L1_CODES)
                 fin_count = fin_mask.sum()
                 if fin_count > 0:
                     logger.info(f"选股过滤-金融股: 剔除银行/非银金融 {fin_count} 只")
@@ -151,45 +150,42 @@ class MLSignal(Signal):
         if self.verbose and (before - len(result)) > 0:
             logger.info(f"选股过滤合计: {before} → {len(result)}（剔除 {before - len(result)} 只）")
         return result
-    
-    def generate(
-        self,
-        date: pd.Timestamp,
-        universe: List[str],
-        data: Dict
-    ) -> Dict[str, float]:
+
+    def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 ML 信号
-        
+
         Args:
             date: 当前日期
             universe: 股票池（股票代码列表）
             data: 数据字典，应包含 "features" 键，值为当日特征 DataFrame
-            
+
         Returns:
             信号字典，{股票代码: 权重}
         """
         # 加载模型
         self._load_model()
-        
+
         # 获取当日特征数据
         if "features" not in data:
             logger.warning(f"{date.date()} 没有特征数据")
-            logger.info(f"data columns: {data['daily'].columns.tolist() if 'daily' in data else 'N/A'}")
+            logger.info(
+                f"data columns: {data['daily'].columns.tolist() if 'daily' in data else 'N/A'}"
+            )
             return {}
-        
+
         features_df = data["features"]
-        
+
         if features_df is None or len(features_df) == 0:
             logger.warning(f"{date.date()} 特征数据为空")
             return {}
-        
+
         # 过滤股票池
-        features_df = features_df[features_df['ts_code'].isin(universe)].copy()
-        
+        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
+
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
             return {}
-        
+
         # 应用选股过滤（成交额/市值/金融股）
         features_df = self._apply_selection_filters(features_df)
 
@@ -204,7 +200,7 @@ class MLSignal(Signal):
         except ValueError as e:
             logger.error(f"特征列一致性检查失败: {e}")
             raise
-        
+
         # 准备特征
         try:
             X = features_df[self.feature_columns].copy()
@@ -213,12 +209,12 @@ class MLSignal(Signal):
             return {}
 
         # XGB/LGB 原生支持 NaN，不做 fillna，保留缺失值信息
-        
+
         # 预测（classification 模型使用 predict_proba 获取正类概率）
-        model_type = self.metadata.get('model_type', 'unknown')
-        task = self.metadata.get('train_params', {}).get('task', 'regression')
-        
-        if task == 'classification' and hasattr(self.model, 'predict_proba'):
+        model_type = self.metadata.get("model_type", "unknown")
+        task = self.metadata.get("train_params", {}).get("task", "regression")
+
+        if task == "classification" and hasattr(self.model, "predict_proba"):
             # 分类模型：使用正类概率作为分数
             predictions = self.model.predict_proba(X)[:, 1]  # 取正类（标签=1）的概率
             if self.verbose:
@@ -226,101 +222,100 @@ class MLSignal(Signal):
         else:
             # 回归模型：使用预测值作为分数
             predictions = self.model.predict(X)
-            if self.verbose and task == 'classification':
-                logger.warning(f"模型声明为 classification，但无 predict_proba 方法，回退到 predict")
-        
-        features_df['ml_score'] = predictions
-        
+            if self.verbose and task == "classification":
+                logger.warning(
+                    f"模型声明为 classification，但无 predict_proba 方法，回退到 predict"
+                )
+
+        features_df["ml_score"] = predictions
+
         # 按预测分数排序，选择 Top N
-        features_df = features_df.sort_values('ml_score', ascending=False)
+        features_df = features_df.sort_values("ml_score", ascending=False)
         top_stocks = features_df.head(self.top_n)
-        logger.info("  TOP预测概率抽样: {}".format(features_df[['ts_code', 'ml_score']].head(3).to_string(index=False).replace('\n', ' | ')))        
-        
+        logger.info(
+            "  TOP预测概率抽样: {}".format(
+                features_df[["ts_code", "ml_score"]]
+                .head(3)
+                .to_string(index=False)
+                .replace("\n", " | ")
+            )
+        )
+
         if len(top_stocks) == 0:
             logger.warning(f"{date.date()} 没有有效的预测结果")
             return {}
-        
+
         # 分配权重
         if self.weight_method == "equal":
             # 等权
             weight = 1.0 / len(top_stocks)
-            signals = {stock: weight for stock in top_stocks['ts_code'].tolist()}
+            signals = {stock: weight for stock in top_stocks["ts_code"].tolist()}
         elif self.weight_method == "score":
-            # 按预测分数加权
-            total_score = top_stocks['ml_score'].sum()
-            if total_score <= 0:
-                # 如果所有分数都是负数或零，回退到等权
+            # 按预测分数加权 — 先过滤负分股票，避免占位但权重为0
+            positive_stocks = top_stocks[top_stocks["ml_score"] > 0]
+            if len(positive_stocks) == 0:
+                # 所有分数都是负数或零，回退到等权
                 weight = 1.0 / len(top_stocks)
-                signals = {stock: weight for stock in top_stocks['ts_code'].tolist()}
+                signals = {stock: weight for stock in top_stocks["ts_code"].tolist()}
             else:
-                # 归一化分数为权重（使用向量化操作）
-                scores = top_stocks['ml_score'].values
-                stocks = top_stocks['ts_code'].values
-                weights = np.maximum(0, scores) / total_score
-                
-                # 重新归一化确保权重和为 1
-                total_weight = weights.sum()
-                if total_weight > 0:
-                    weights = weights / total_weight
-                
+                # 归一化正分数为权重（使用向量化操作）
+                scores = positive_stocks["ml_score"].values
+                stocks = positive_stocks["ts_code"].values
+                weights = scores / scores.sum()
+
                 signals = dict(zip(stocks, weights))
         else:
             raise ValueError(f"不支持的权重方法: {self.weight_method}")
-        
+
         logger.debug(
             f"ML 信号生成完成: {date.date()}, 选择 {len(signals)} 只股票, "
             f"平均预测分数={top_stocks['ml_score'].mean():.6f}"
         )
-        
+
         return signals
-    
-    def generate_ranked(
-        self,
-        date: pd.Timestamp,
-        universe: List[str],
-        data: Dict
-    ) -> List[tuple]:
+
+    def generate_ranked(self, date: pd.Timestamp, universe: List[str], data: Dict) -> List[tuple]:
         """生成排序后的候选股票列表（支持回填）
-        
+
         返回所有候选股票的完整排序列表，而不仅仅是 top N。
         这样可以在 top N 中有不可交易股票时从后续候选中回填。
-        
+
         Args:
             date: 当前日期
             universe: 股票池
             data: 数据字典，应包含 "features" 键
-            
+
         Returns:
             排序后的 (股票代码, 预测分数) 元组列表，按分数降序排列
         """
         # 加载模型
         self._load_model()
-        
+
         # 获取当日特征数据
         if "features" not in data:
             logger.warning(f"{date.date()} 没有特征数据")
             return []
-        
+
         features_df = data["features"]
-        
+
         if features_df is None or len(features_df) == 0:
             logger.warning(f"{date.date()} 特征数据为空")
             return []
-        
+
         # 过滤股票池
-        features_df = features_df[features_df['ts_code'].isin(universe)].copy()
-        
+        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
+
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
             return []
-        
+
         # 应用选股过滤（成交额/市值/金融股）
         features_df = self._apply_selection_filters(features_df)
 
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 选股过滤后无可选股票")
             return []
-        
+
         # 特征列一致性检查
         available_features = features_df.columns.tolist()
         try:
@@ -328,7 +323,7 @@ class MLSignal(Signal):
         except ValueError as e:
             logger.error(f"特征列一致性检查失败: {e}")
             raise
-        
+
         # 准备特征
         try:
             X = features_df[self.feature_columns].copy()
@@ -339,9 +334,9 @@ class MLSignal(Signal):
         # XGB/LGB 原生支持 NaN，不做 fillna
 
         # 预测（classification 模型使用 predict_proba 获取正类概率）
-        task = self.metadata.get('train_params', {}).get('task', 'regression')
-        
-        if task == 'classification' and hasattr(self.model, 'predict_proba'):
+        task = self.metadata.get("train_params", {}).get("task", "regression")
+
+        if task == "classification" and hasattr(self.model, "predict_proba"):
             # 分类模型：使用正类概率作为分数
             predictions = self.model.predict_proba(X)[:, 1]  # 取正类（标签=1）的概率
             if self.verbose:
@@ -349,45 +344,51 @@ class MLSignal(Signal):
         else:
             # 回归模型：使用预测值作为分数
             predictions = self.model.predict(X)
-            if self.verbose and task == 'classification':
-                logger.warning(f"模型声明为 classification，但无 predict_proba 方法，回退到 predict")
-        
-        features_df['ml_score'] = predictions
-        
+            if self.verbose and task == "classification":
+                logger.warning(
+                    f"模型声明为 classification，但无 predict_proba 方法，回退到 predict"
+                )
+
+        features_df["ml_score"] = predictions
+
         # 按预测分数排序，返回所有候选
-        features_df = features_df.sort_values('ml_score', ascending=False)
-        logger.info("  TOP预测概率抽样: {}".format(features_df[['ts_code', 'ml_score']].head(3).to_string(index=False).replace('\n', ' | ')))        
+        features_df = features_df.sort_values("ml_score", ascending=False)
+        logger.info(
+            "  TOP预测概率抽样: {}".format(
+                features_df[["ts_code", "ml_score"]]
+                .head(3)
+                .to_string(index=False)
+                .replace("\n", " | ")
+            )
+        )
 
         # 返回 (股票代码, 分数) 元组列表
-        ranked = list(zip(features_df['ts_code'].tolist(), features_df['ml_score'].tolist()))
-        
+        ranked = list(zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist()))
+
         logger.info(
-            f"  ML排序候选生成: {date.date()}, "#候选数 {len(ranked)}, "
+            f"  ML排序候选生成: {date.date()}, "  # 候选数 {len(ranked)}, "
             f"平均预测分数[{features_df['ml_score'].mean():.3f}], "
             f"最高/最低[{features_df['ml_score'].max():.3f}/{features_df['ml_score'].min():.3f}]"
         )
-        
+
         return ranked
-    
+
     def generate_with_features(
-        self,
-        date: pd.Timestamp,
-        universe: List[str],
-        features_df: pd.DataFrame
+        self, date: pd.Timestamp, universe: List[str], features_df: pd.DataFrame
     ) -> Dict[str, float]:
         """使用提供的特征数据生成信号（便捷方法）
-        
+
         Args:
             date: 当前日期
             universe: 股票池
             features_df: 特征 DataFrame
-            
+
         Returns:
             信号字典
         """
         data = {"features": features_df}
         return self.generate(date, universe, data)
-    
+
     def get_model_info(self) -> Dict:
         """获取模型信息
 
@@ -458,10 +459,10 @@ class EnsembleMLSignal(MLSignal):
         if self.model_b is None:
             if self.registry is None:
                 from ..ml import ModelRegistry
+
                 self.registry = ModelRegistry(models_dir=self.models_dir)
             self.model_b, self.metadata_b = self.registry.load_model(
-                version=self.model_version_b,
-                strict_version_check=True
+                version=self.model_version_b, strict_version_check=True
             )
             self.feature_columns_b = self.metadata_b["feature_columns"]
             logger.info(
@@ -471,8 +472,8 @@ class EnsembleMLSignal(MLSignal):
 
     def _predict_scores(self, X: pd.DataFrame, model, metadata) -> np.ndarray:
         """单模型预测，返回分数数组"""
-        task = metadata.get('train_params', {}).get('task', 'regression')
-        if task == 'classification' and hasattr(model, 'predict_proba'):
+        task = metadata.get("train_params", {}).get("task", "regression")
+        if task == "classification" and hasattr(model, "predict_proba"):
             return model.predict_proba(X)[:, 1]
         else:
             return model.predict(X)
@@ -488,12 +489,12 @@ class EnsembleMLSignal(MLSignal):
                 - avg_rank: pd.Series, 综合排名（值越小排名越靠前），用于选股排序
                 - blended_score: pd.Series, 加权原始分数（正数，有区分度），用于 score 加权
         """
-        # 模型A预测
-        X_a = features_df[self.feature_columns].fillna(0)
+        # 模型A预测（XGB/LGB 原生支持 NaN，不做 fillna）
+        X_a = features_df[self.feature_columns]
         scores_a = self._predict_scores(X_a, self.model, self.metadata)
 
         # 模型B预测（特征列可能不同）
-        X_b = features_df[self.feature_columns_b].fillna(0)
+        X_b = features_df[self.feature_columns_b]
         scores_b = self._predict_scores(X_b, self.model_b, self.metadata_b)
 
         s_a = pd.Series(scores_a, index=features_df.index)
@@ -518,12 +519,7 @@ class EnsembleMLSignal(MLSignal):
 
         return avg_rank, blended_score
 
-    def generate(
-        self,
-        date: pd.Timestamp,
-        universe: List[str],
-        data: Dict
-    ) -> Dict[str, float]:
+    def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 Ensemble 信号"""
         # 加载两个模型
         self._load_model()
@@ -540,7 +536,7 @@ class EnsembleMLSignal(MLSignal):
             return {}
 
         # 过滤股票池
-        features_df = features_df[features_df['ts_code'].isin(universe)].copy()
+        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
         if len(features_df) == 0:
             return {}
 
@@ -558,9 +554,9 @@ class EnsembleMLSignal(MLSignal):
         avg_rank, blended_score = self._ensemble_predict(features_df)
 
         # 按综合排名选 Top N（排名值越小越好）
-        features_df['ensemble_rank'] = avg_rank.values
-        features_df['blended_score'] = blended_score.values
-        features_df = features_df.sort_values('ensemble_rank', ascending=True)
+        features_df["ensemble_rank"] = avg_rank.values
+        features_df["blended_score"] = blended_score.values
+        features_df = features_df.sort_values("ensemble_rank", ascending=True)
         top_stocks = features_df.head(self.top_n)
 
         if self.verbose:
@@ -574,27 +570,22 @@ class EnsembleMLSignal(MLSignal):
         # 分配权重
         if self.weight_method == "equal":
             weight = 1.0 / len(top_stocks)
-            signals = {stock: weight for stock in top_stocks['ts_code'].tolist()}
+            signals = {stock: weight for stock in top_stocks["ts_code"].tolist()}
         elif self.weight_method == "score":
             # score 模式下用归一化加权分数作为权重
-            scores = top_stocks['blended_score'].values
+            scores = top_stocks["blended_score"].values
             total_score = scores.sum()
             if total_score > 0:
                 weights = scores / total_score
             else:
                 weights = np.full(len(scores), 1.0 / len(scores))
-            signals = dict(zip(top_stocks['ts_code'].tolist(), weights))
+            signals = dict(zip(top_stocks["ts_code"].tolist(), weights))
         else:
             raise ValueError(f"不支持的权重方法: {self.weight_method}")
 
         return signals
 
-    def generate_ranked(
-        self,
-        date: pd.Timestamp,
-        universe: List[str],
-        data: Dict
-    ) -> List[tuple]:
+    def generate_ranked(self, date: pd.Timestamp, universe: List[str], data: Dict) -> List[tuple]:
         """生成排序后的候选股票列表（集成版本）"""
         # 加载两个模型
         self._load_model()
@@ -607,7 +598,7 @@ class EnsembleMLSignal(MLSignal):
         if features_df is None or len(features_df) == 0:
             return []
 
-        features_df = features_df[features_df['ts_code'].isin(universe)].copy()
+        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
         if len(features_df) == 0:
             return []
 
@@ -621,9 +612,9 @@ class EnsembleMLSignal(MLSignal):
 
         # 集成预测
         avg_rank, blended_score = self._ensemble_predict(features_df)
-        features_df['ensemble_rank'] = avg_rank.values
-        features_df['blended_score'] = blended_score.values
-        features_df = features_df.sort_values('ensemble_rank', ascending=True)
+        features_df["ensemble_rank"] = avg_rank.values
+        features_df["blended_score"] = blended_score.values
+        features_df = features_df.sort_values("ensemble_rank", ascending=True)
 
         if self.verbose:
             logger.info(
@@ -634,10 +625,7 @@ class EnsembleMLSignal(MLSignal):
 
         # 返回 (股票代码, blended_score) — 归一化加权分数，正数且有区分度
         # 按 ensemble_rank 排序（已排好），score 用于下游 score 加权
-        ranked = list(zip(
-            features_df['ts_code'].tolist(),
-            features_df['blended_score'].tolist()
-        ))
+        ranked = list(zip(features_df["ts_code"].tolist(), features_df["blended_score"].tolist()))
         return ranked
 
     def get_model_info(self) -> Dict:
@@ -645,9 +633,9 @@ class EnsembleMLSignal(MLSignal):
         self._load_model()
         self._load_model_b()
         info = self.metadata.copy()
-        info['ensemble'] = True
-        info['model_a_version'] = self.metadata['version_str']
-        info['model_b_version'] = self.metadata_b['version_str']
-        info['ensemble_weight_a'] = self.ensemble_weight_a
-        info['ensemble_weight_b'] = self.ensemble_weight_b
+        info["ensemble"] = True
+        info["model_a_version"] = self.metadata["version_str"]
+        info["model_b_version"] = self.metadata_b["version_str"]
+        info["ensemble_weight_a"] = self.ensemble_weight_a
+        info["ensemble_weight_b"] = self.ensemble_weight_b
         return info

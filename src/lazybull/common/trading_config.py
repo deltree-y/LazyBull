@@ -5,11 +5,11 @@
 消除三套脚本之间的参数定义不一致。
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
-from ..risk.stop_loss import StopLossConfig
 from ..risk.equity_curve import EquityCurveConfig
+from ..risk.stop_loss import StopLossConfig
 
 
 @dataclass
@@ -44,9 +44,7 @@ class TradingConfig:
     equity_curve_drawdown_thresholds: List[float] = field(
         default_factory=lambda: [5.0, 10.0, 15.0, 20.0]
     )
-    equity_curve_exposure_levels: List[float] = field(
-        default_factory=lambda: [0.8, 0.6, 0.4, 0.2]
-    )
+    equity_curve_exposure_levels: List[float] = field(default_factory=lambda: [0.8, 0.6, 0.4, 0.2])
     equity_curve_ma_short: int = 5
     equity_curve_ma_long: int = 20
     equity_curve_recovery_mode: str = "gradual"
@@ -119,6 +117,7 @@ class TradingConfig:
 
 # ─────────────────── argparse 注册函数 ───────────────────
 
+
 def add_trading_args(parser, *, include_price: bool = False) -> None:
     """向 argparse parser 注册公共策略参数。
 
@@ -128,76 +127,143 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
                        （paper_trade 的 config 子命令需要，backtest 一般不需要）
     """
     # ── 模型 ──
-    parser.add_argument("--model-version", type=int, default=None,
-                        help="ML模型版本号（可选，默认最新版本）")
-    parser.add_argument("--model-version-b", type=int, default=None,
-                        help="第二个模型版本号（用于集成），指定后自动启用双模型 Ensemble")
-    parser.add_argument("--ensemble-weight-a", type=float, default=0.5,
-                        help="集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5")
+    parser.add_argument(
+        "--model-version", type=int, default=None, help="ML模型版本号（可选，默认最新版本）"
+    )
+    parser.add_argument(
+        "--model-version-b",
+        type=int,
+        default=None,
+        help="第二个模型版本号（用于集成），指定后自动启用双模型 Ensemble",
+    )
+    parser.add_argument(
+        "--ensemble-weight-a",
+        type=float,
+        default=0.5,
+        help="集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5",
+    )
 
     # ── 组合 ──
-    parser.add_argument("--top-n", type=int, default=30,
-                        help="持仓股票数（默认：30）")
-    parser.add_argument("--weight-method", type=str, default="equal",
-                        choices=["equal", "score"],
-                        help="权重分配方法（默认：equal）")
-    parser.add_argument("--rebalance-freq", type=int, default=None,
-                        help="调仓频率（交易日数）")
-    parser.add_argument("--max-per-industry", type=int, default=None,
-                        help="单行业最大持仓数量（默认：不限制）")
-    parser.add_argument("--max-weight-per-stock", type=float, default=None,
-                        help="单股最大权重，如 0.05 表示 5%%（默认：不限制）")
+    parser.add_argument("--top-n", type=int, default=30, help="持仓股票数（默认：30）")
+    parser.add_argument(
+        "--weight-method",
+        type=str,
+        default="equal",
+        choices=["equal", "score"],
+        help="权重分配方法（默认：equal）",
+    )
+    parser.add_argument(
+        "--rebalance-freq", type=int, default=20, help="调仓频率（交易日数），默认20"
+    )
+    parser.add_argument(
+        "--max-per-industry", type=int, default=None, help="单行业最大持仓数量（默认：不限制）"
+    )
+    parser.add_argument(
+        "--max-weight-per-stock",
+        type=float,
+        default=None,
+        help="单股最大权重，如 0.05 表示 5%%（默认：不限制）",
+    )
 
     # ── 股票池 ──
-    parser.add_argument("--exclude-st", action="store_true", default=True,
-                        help="排除ST股票（默认：启用）")
-    parser.add_argument("--no-exclude-st", action="store_false", dest="exclude_st",
-                        help="不排除ST股票")
-    parser.add_argument("--min-list-days", type=int, default=365,
-                        help="最少上市天数（默认：365）")
+    parser.add_argument(
+        "--exclude-st", action="store_true", default=True, help="排除ST股票（默认：启用）"
+    )
+    parser.add_argument(
+        "--no-exclude-st", action="store_false", dest="exclude_st", help="不排除ST股票"
+    )
+    parser.add_argument("--min-list-days", type=int, default=365, help="最少上市天数（默认：365）")
 
     # ── 止损 ──
-    parser.add_argument("--stop-loss-enabled", action="store_true", default=False,
-                        help="启用止损功能")
-    parser.add_argument("--stop-loss-drawdown-pct", type=float, default=30.0,
-                        help="回撤止损百分比（默认：30.0）")
-    parser.add_argument("--stop-loss-trailing-enabled", action="store_true", default=False,
-                        help="启用移动止损")
-    parser.add_argument("--stop-loss-trailing-pct", type=float, default=15.0,
-                        help="移动止损百分比（默认：15.0）")
-    parser.add_argument("--stop-loss-consecutive-limit-down", type=int, default=2,
-                        help="连续跌停触发天数（默认：2）")
+    parser.add_argument(
+        "--stop-loss-enabled", action="store_true", default=False, help="启用止损功能"
+    )
+    parser.add_argument(
+        "--stop-loss-drawdown-pct", type=float, default=30.0, help="回撤止损百分比（默认：30.0）"
+    )
+    parser.add_argument(
+        "--stop-loss-trailing-enabled", action="store_true", default=False, help="启用移动止损"
+    )
+    parser.add_argument(
+        "--stop-loss-trailing-pct", type=float, default=15.0, help="移动止损百分比（默认：15.0）"
+    )
+    parser.add_argument(
+        "--stop-loss-consecutive-limit-down",
+        type=int,
+        default=2,
+        help="连续跌停触发天数（默认：2）",
+    )
 
     # ── ECT ──
-    parser.add_argument("--equity-curve-enabled", action="store_true", default=False,
-                        help="启用权益曲线交易（ECT）功能")
-    parser.add_argument("--equity-curve-drawdown-thresholds", type=float, nargs="+",
-                        default=[5.0, 10.0, 15.0, 20.0],
-                        help="ECT 回撤阈值列表（百分比），默认：5.0 10.0 15.0 20.0")
-    parser.add_argument("--equity-curve-exposure-levels", type=float, nargs="+",
-                        default=[0.8, 0.6, 0.4, 0.2],
-                        help="ECT 对应仓位系数列表，默认：0.8 0.6 0.4 0.2")
-    parser.add_argument("--equity-curve-ma-short", type=int, default=5,
-                        help="ECT 短期均线窗口（默认：5）")
-    parser.add_argument("--equity-curve-ma-long", type=int, default=20,
-                        help="ECT 长期均线窗口（默认：20）")
-    parser.add_argument("--equity-curve-recovery-mode", type=str, default="gradual",
-                        choices=["gradual", "immediate"],
-                        help="ECT 恢复模式（默认：gradual）")
-    parser.add_argument("--equity-curve-recovery-step", type=float, default=0.25,
-                        help="ECT 逐步恢复步长（默认：0.25）")
-    parser.add_argument("--equity-curve-recovery-delay-periods", type=int, default=0,
-                        help="ECT 恢复等待周期数（默认：0）")
+    parser.add_argument(
+        "--equity-curve-enabled",
+        action="store_true",
+        default=False,
+        help="启用权益曲线交易（ECT）功能",
+    )
+    parser.add_argument(
+        "--equity-curve-drawdown-thresholds",
+        type=float,
+        nargs="+",
+        default=[5.0, 10.0, 15.0, 20.0],
+        help="ECT 回撤阈值列表（百分比），默认：5.0 10.0 15.0 20.0",
+    )
+    parser.add_argument(
+        "--equity-curve-exposure-levels",
+        type=float,
+        nargs="+",
+        default=[0.8, 0.6, 0.4, 0.2],
+        help="ECT 对应仓位系数列表，默认：0.8 0.6 0.4 0.2",
+    )
+    parser.add_argument(
+        "--equity-curve-ma-short", type=int, default=5, help="ECT 短期均线窗口（默认：5）"
+    )
+    parser.add_argument(
+        "--equity-curve-ma-long", type=int, default=20, help="ECT 长期均线窗口（默认：20）"
+    )
+    parser.add_argument(
+        "--equity-curve-recovery-mode",
+        type=str,
+        default="gradual",
+        choices=["gradual", "immediate"],
+        help="ECT 恢复模式（默认：gradual）",
+    )
+    parser.add_argument(
+        "--equity-curve-recovery-step",
+        type=float,
+        default=0.25,
+        help="ECT 逐步恢复步长（默认：0.25）",
+    )
+    parser.add_argument(
+        "--equity-curve-recovery-delay-periods",
+        type=int,
+        default=0,
+        help="ECT 恢复等待周期数（默认：0）",
+    )
 
     # ── paper_trade 专用 ──
     if include_price:
-        parser.add_argument("--buy-price", choices=["open", "close"], default="close",
-                            help="买入价格类型（默认：close）")
-        parser.add_argument("--sell-price", choices=["open", "close"], default="open",
-                            help="卖出价格类型（默认：open）")
-        parser.add_argument("--initial-capital", type=float, default=500000.0,
-                            help="初始资金（默认：500000）")
-        parser.add_argument("--horizon", type=int, default=20,
-                            help="特征构建的预测周期（天数），默认20")
-        parser.add_argument("--universe", choices=["mainboard", "all"], default="mainboard",
-                            help="股票池类型（默认：mainboard）")
+        parser.add_argument(
+            "--buy-price",
+            choices=["open", "close"],
+            default="close",
+            help="买入价格类型（默认：close）",
+        )
+        parser.add_argument(
+            "--sell-price",
+            choices=["open", "close"],
+            default="open",
+            help="卖出价格类型（默认：open）",
+        )
+        parser.add_argument(
+            "--initial-capital", type=float, default=500000.0, help="初始资金（默认：500000）"
+        )
+        parser.add_argument(
+            "--horizon", type=int, default=5, help="特征构建的预测周期（天数），默认5"
+        )
+        parser.add_argument(
+            "--universe",
+            choices=["mainboard", "all"],
+            default="mainboard",
+            help="股票池类型（默认：mainboard）",
+        )

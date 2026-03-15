@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.20.7] - 2026-03-16
+
+### 修复
+
+- **全局代码审查修复14个隐藏bug**（P0/P1/P2三级）
+  - **ml_signal.py**: score权重模式下负分股票占top_n槽位但权重为0，现在预先过滤负分股票
+  - **cleaner.py**: 上市天数默认值从999改为-1，防止未知上市日的股票误通过min_list_days过滤
+  - **train_core.py**: 训练/验证集分割delta间隔不足时添加warning日志，提示标签泄漏风险
+  - **engine.py**: 回测补齐候选数量从unfilled_count扩大为2倍buffer，解决不可交易候选消耗名额导致补齐不足
+  - **cleaner.py**: ST正则表达式"退"字匹配改为"退市"精确匹配，使用非捕获分组避免pandas warning
+  - **trading_config.py**: 统一dataclass和argparse默认值（horizon: 5, rebalance_freq: 20）
+  - **express.py/fund_portfolio.py**: 日期转换增加datetime类型检测，避免`.str[:8]`截断丢失天数
+  - **cleaner.py**: 涨跌停判断从相对容差(0.1%)改为绝对误差(0.01元)，避免高价股误判
+  - **eval_utils.py**: 类型注解`any`修正为`Any`
+  - **ml_signal.py**: ensemble预测移除fillna(0)，与单模型保持一致让XGBoost原生处理NaN
+  - **storage.py**: Parquet/CSV写入改为先写.tmp再rename的原子操作，防止中断导致文件损坏
+  - **fund_portfolio.py**: `_symbol_to_ts_code()`增加NaN/None防护
+  - **storage.py**: 日期格式校验改用datetime.strptime验证，覆盖2月30日等无效日期
+  - **cleaner.py**: 去重前按主键列排序，确保结果不依赖输入顺序
+
 ## [0.20.6] - 2026-03-15
 
 ### 修复
