@@ -444,6 +444,8 @@ class SimpleHandler(dts.ChatbotHandler):
             "trade": self.handle_trade,
             "model": self.handle_model,
             "help": self.handle_help,
+            "reboot": self.handle_reboot,
+            "reset-t0": self.handle_reset_t0,
         }
 
     async def process(self, callback):
@@ -566,9 +568,39 @@ class SimpleHandler(dts.ChatbotHandler):
             "ip\n"
             "  查看公网IP\n\n"
             "run [命令]\n"
-            "  执行shell命令"
+            "  执行shell命令\n\n"
+            "reset-t0\n"
+            "  重置交易数据恢复新账户\n\n"
+            "reboot\n"
+            "  重启系统"
         )
         self.reply_markdown("帮助", text, incoming)
+
+    def handle_reboot(self, _args, incoming):
+        """重启树莓派系统
+        用法: reboot
+        """
+        self.reply_text("系统即将重启...", incoming)
+        try:
+            subprocess.Popen(
+                ["sudo", "reboot"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            self.reply_text(f"重启失败: {e}", incoming)
+
+    def handle_reset_t0(self, _args, incoming):
+        """重置纸面交易，清空所有交易数据恢复为新账户
+        用法: reset-t0
+        """
+        try:
+            ps = PaperStorage()
+            ps.reset_t0()
+            self.reply_text("reset-t0 完成，账户已恢复初始状态", incoming)
+        except Exception as e:
+            self.reply_text(f"reset-t0 失败: {e}", incoming)
 
     def run_shell(self, cmd_list, incoming):
         """底层的安全执行逻辑"""

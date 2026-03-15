@@ -50,7 +50,7 @@ $rank_weight_topk_list   = @(50)
 $rank_weight_list        = @(3)
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
-$time_decay_half_life    = 4         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
+$time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
 
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
@@ -73,13 +73,13 @@ $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
 $industry_momentum_bottom_pct = 0.2     # 剔除排名后 X% 的行业（0~1），默认 0.2
 
 # ── 市场择时仓位管理 ─────────────────────────────────────────
-$market_regime                = $false       # $true 启用 | $false 禁用
+$market_regime                = $true       # $true 启用 | $false 禁用
 $market_regime_mode_list      = @("combined")  # binary | vol_target | trend | combined
 $market_regime_bear_threshold_list = @(-0.03)  # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
 $market_regime_bear_exposure  = 0.3            # binary 模式：熊市仓位系数（0~1）
 $market_regime_vol_target_list = @(0.2)       # vol_target/combined 模式：年化波动率目标
 $market_regime_trend_threshold = 1.0           # trend/combined 模式：mkt_ma_trend 低于此值降仓
-$market_regime_min_exposure    = 0.2           # 非 binary 模式：最低仓位下限
+$market_regime_min_exposure    = 0.18           # 非 binary 模式：最低仓位下限
 $market_regime_combine_method  = "min"         # combined 模式组合方式：min | multiply
 $market_regime_trend_guard     = $true        # combined 模式趋势保护：上行趋势跳过 vol 降仓
 $market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌时停止降仓，避免底部踏空

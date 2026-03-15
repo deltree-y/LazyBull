@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.19.0] - 2026-03-15
+
+### 新增
+
+- **钉钉机器人新增 reboot 指令** (bot_service.py)
+  - 支持通过钉钉发送 `reboot` 远程重启树莓派系统
+  - 使用 `sudo reboot` 执行，help 命令同步更新
+- **钉钉机器人新增 reset-t0 指令** (bot_service.py)
+  - 支持通过钉钉发送 `reset-t0` 远程重置纸面交易数据，恢复为新账户状态
+  - 等同于 `paper_trade.py adjust reset-t0` 操作
+
 ## [0.18.6] - 2026-03-14
 
 ### 优化
