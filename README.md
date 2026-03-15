@@ -28,7 +28,25 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.18.2)
+### 当前版本 (v0.20.3)
+
+**修复钉钉机器人消息丢失** (v0.20.3):
+- ✅ `SimpleHandler` 改用 `AsyncChatbotHandler`，`process()` 在线程池中执行，不再阻塞 event loop 导致断线
+
+**fund_portfolio 按季度分区存储** (v0.20.2):
+- ✅ fund_portfolio 从单文件改为按季度末日期分区Parquet存储，支持增量加载
+
+**批量下载优化** (v0.20.1):
+- ✅ 6个因子数据从逐股下载改为按日期/季度/月份批量下载，API调用次数降低1~2个数量级
+
+**新增高积分因子** (v0.20.0):
+- ✅ **筹码胜率因子** (cyq_perf): winner_rate、成本偏离度、筹码集中度、胜率变化率
+- ✅ **业绩快报因子** (express_vip): 营收/净利润增速、ROE、业绩惊喜（vs预告偏差）
+- ✅ **基金持仓因子** (fund_portfolio): 持股比例、基金数量及其季度环比变化
+- ✅ 3组因子独立开关: `--enable-cyq-features`, `--enable-express-features`, `--enable-fund-features`
+- ✅ 全链路支持: 下载、加载、特征构建、训练、回测、批量脚本
+
+### v0.18.2
 
 **修复因子数据自动下载不完整** (v0.18.2):
 - ✅ **修复**: fina_indicator/stk_holdernumber/forecast 首次运行时自动全量逐股下载（支持断点续传），而非仅下载单日公告

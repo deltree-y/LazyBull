@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.20.3] - 2026-03-15
+
+### 修复
+
+- **钉钉机器人消息丢失** — `SimpleHandler` 从 `ChatbotHandler` 改为 `AsyncChatbotHandler`，`process()` 在线程池中执行，不再阻塞 asyncio event loop 导致 WebSocket 心跳超时断线
+  - 去掉 `process()` 的 `async` 关键字（`AsyncChatbotHandler` 要求同步方法）
+  - `handle_trade` 去掉手动 `threading.Thread`（线程池已自动处理）
+  - 增加顶层异常捕获和消息日志，防止静默失败
+
+## [0.20.2] - 2026-03-15
+
+### 优化
+
+- **fund_portfolio 改为按季度分区存储** — 数据量巨大（近年单季度100万+条），从单文件改为按季度末日期分区Parquet存储
+  - `download_raw.py`: `download_by_period` 新增 `partition_by_period` 参数，fund_portfolio 每季度独立保存
+  - `loader.py`: `load_fund_portfolio` 支持 `start_date`/`end_date` 范围加载（`load_raw_by_date_range`）
+  - `ensure.py`: 新增 `_try_ensure_historical_fund_portfolio`，按季度分区补齐缺失数据（回溯2年），替代旧的单文件 `_try_download_fund_portfolio`
+
+## [0.20.1] - 2026-03-15
+
+### 优化
+
+- **6个因子数据批量下载优化** — 从逐股下载改为按日期/季度/月份批量下载，API调用次数降低1~2个数量级
+  - **cyq_perf**: 按 trade_date 逐日下载全市场（替代逐股），按日分区存储
+  - **fina_indicator**: 按 period（季度）批量下载全市场（替代逐股~5000次调用）
+  - **forecast**: 按 period（季度）批量下载全市场（替代逐股~5000次调用）
+  - **express**: 按 period（季度）批量下载全市场（替代逐股~5000次调用）
+  - **fund_portfolio**: 按 period（季度）批量下载全市场（替代逐基金~8000次调用）
+  - **stk_holdernumber**: 按月份批量下载全市场（单次限3000条，替代逐股~5000次调用）
+- **TuShare API 方法增强**
+  - `get_fina_indicator_by_date` / `get_forecast_by_date` 新增 period 参数
+  - `get_stk_holdernumber_by_date` 重构为 `get_stk_holdernumber`，支持 ts_code/ann_date/start_date/end_date
+- **ensure 全量下载优化**: 数据不足时的全量回退从逐股下载改为按季度/月份批量
+- **fund_portfolio ensure 自动下载**: 数据不足时自动按季度下载，不再仅提示离线下载
+
+## [0.20.0] - 2026-03-15
+
+### 新增
+
+- **筹码胜率因子 (cyq_perf)** — 5000积分API
+  - 新增因子模块 `src/lazybull/factors/cyq_perf.py`
+  - 特征: winner_rate, weight_avg_bias, cost_concentration, winner_rate_chg_5, winner_rate_chg_20
+  - CLI开关: `--enable-cyq-features`
+- **业绩快报因子 (express_vip)** — 5000积分API
+  - 新增因子模块 `src/lazybull/factors/express.py`
+  - 特征: express_revenue_yoy, express_profit_yoy, express_roe, express_surprise
+  - express_surprise 通过交叉引用 forecast 预告数据计算业绩惊喜
+  - CLI开关: `--enable-express-features`
+- **基金持仓因子 (fund_portfolio)** — 5000积分API
+  - 新增因子模块 `src/lazybull/factors/fund_portfolio.py`
+  - 特征: fund_hold_ratio, fund_hold_ratio_chg, fund_count, fund_count_chg
+  - 基金级数据聚合到个股级，按 ann_date point-in-time 对齐
+  - CLI开关: `--enable-fund-features`
+- **TuShare客户端新增3个API方法**: get_cyq_perf, get_express_vip, get_fund_portfolio
+- **DataLoader新增3个加载方法**: load_cyq_perf, load_express, load_fund_portfolio
+- **下载脚本支持**: download_raw.py 新增 cyq_perf/express/fund_portfolio 数据类型
+- **ensure自动补齐**: features/ensure.py 支持3组新因子的增量下载
+- **批量脚本开关**: batch_walk_forward.ps1 新增 $enable_cyq, $enable_fund, $enable_express
+- **全链路支持**: walk_forward.py, train_ml_model.py, build_clean_features.py 均支持新因子开关
+
 ## [0.19.3] - 2026-03-15
 
 ### 修复

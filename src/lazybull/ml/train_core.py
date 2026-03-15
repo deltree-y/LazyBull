@@ -64,6 +64,31 @@ ALT_FEATURE_COLUMNS = [
     "hot_rank_chg_5",          # 5日人气排名变动
 ]
 
+# 筹码胜率因子特征列（5000 积分）
+CYQ_FEATURE_COLUMNS = [
+    "winner_rate",             # 胜率
+    "weight_avg_bias",         # 加权平均成本偏离度
+    "cost_concentration",      # 筹码集中度
+    "winner_rate_chg_5",       # 5日胜率变化
+    "winner_rate_chg_20",      # 20日胜率变化
+]
+
+# 基金持仓因子特征列（5000 积分）
+FUND_FEATURE_COLUMNS = [
+    "fund_hold_ratio",         # 基金持股占流通股比例
+    "fund_hold_ratio_chg",     # 基金持股比例季度变化
+    "fund_count",              # 持仓基金数量
+    "fund_count_chg",          # 持仓基金数量季度变化
+]
+
+# 业绩快报因子特征列（5000 积分）
+EXPRESS_FEATURE_COLUMNS = [
+    "express_revenue_yoy",     # 营业收入同比增速
+    "express_profit_yoy",      # 净利润同比增速
+    "express_roe",             # 快报ROE
+    "express_surprise",        # 业绩惊喜
+]
+
 
 # ── 自定义早停 eval metric ──────────────────────────────────────
 def neg_rank_ic(y_true, y_pred):
@@ -214,6 +239,9 @@ def prepare_training_data(
     label_transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
     enable_fundamental_features: bool = False,
     enable_alt_features: bool = False,
+    enable_cyq_features: bool = False,
+    enable_fund_features: bool = False,
+    enable_express_features: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
 
@@ -333,6 +361,33 @@ def prepare_training_data(
             logger.info(f"启用另类数据因子: {available_alt}")
         else:
             logger.warning("enable_alt_features=True，但数据中未找到另类数据列，跳过")
+
+    # 筹码胜率因子（可选，5000 积分）
+    if enable_cyq_features:
+        available_cyq = [col for col in CYQ_FEATURE_COLUMNS if col in df.columns]
+        if available_cyq:
+            feature_columns.extend(available_cyq)
+            logger.info(f"启用筹码胜率因子: {available_cyq}")
+        else:
+            logger.warning("enable_cyq_features=True，但数据中未找到筹码胜率列，跳过")
+
+    # 基金持仓因子（可选，5000 积分）
+    if enable_fund_features:
+        available_fund = [col for col in FUND_FEATURE_COLUMNS if col in df.columns]
+        if available_fund:
+            feature_columns.extend(available_fund)
+            logger.info(f"启用基金持仓因子: {available_fund}")
+        else:
+            logger.warning("enable_fund_features=True，但数据中未找到基金持仓列，跳过")
+
+    # 业绩快报因子（可选，5000 积分）
+    if enable_express_features:
+        available_express = [col for col in EXPRESS_FEATURE_COLUMNS if col in df.columns]
+        if available_express:
+            feature_columns.extend(available_express)
+            logger.info(f"启用业绩快报因子: {available_express}")
+        else:
+            logger.warning("enable_express_features=True，但数据中未找到业绩快报列，跳过")
 
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个

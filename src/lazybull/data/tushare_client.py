@@ -73,22 +73,25 @@ class TushareClient:
         self,
         api_name: str,
         fields: Optional[str] = None,
+        skip_rate_limit: bool = False,
         **kwargs
     ) -> pd.DataFrame:
         """调用TuShare API
-        
+
         Args:
             api_name: API名称，如 'trade_cal', 'stock_basic'
             fields: 返回字段，逗号分隔
+            skip_rate_limit: 是否跳过限频等待（适用于无限频要求的接口）
             **kwargs: API参数
-            
+
         Returns:
             查询结果DataFrame
         """
         for attempt in range(self.max_retries):
             try:
                 # 限频等待
-                self._rate_limit_wait()
+                if not skip_rate_limit:
+                    self._rate_limit_wait()
                 
                 # 调用API
                 logger.debug(f"调用API: {api_name}, 参数: {kwargs}")
@@ -520,59 +523,162 @@ class TushareClient:
 
     def get_fina_indicator_by_date(
         self,
-        ann_date: str,
-        fields: Optional[str] = None
+        ann_date: Optional[str] = None,
+        period: Optional[str] = None,
+        fields: Optional[str] = None,
     ) -> pd.DataFrame:
-        """按公告日获取全市场财务指标（fina_indicator_vip，5000 积分）
+        """按公告日或报告期获取全市场财务指标（fina_indicator_vip，5000 积分）
 
         Args:
-            ann_date: 公告日期，格式 YYYYMMDD
+            ann_date: 公告日期，格式 YYYYMMDD（与 period 二选一）
+            period: 报告期，格式 YYYYMMDD，如 20231231（与 ann_date 二选一）
             fields: 返回字段，逗号分隔
 
         Returns:
-            当日有公告的全部股票财务指标 DataFrame
+            全市场财务指标 DataFrame
         """
         if fields is None:
             fields = (
                 "ts_code,ann_date,end_date,"
                 "roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy"
             )
-        return self.query(
-            "fina_indicator_vip",
-            ann_date=ann_date,
-            fields=fields,
-        )
+        kwargs: dict = {"fields": fields}
+        if ann_date is not None:
+            kwargs["ann_date"] = ann_date
+        if period is not None:
+            kwargs["period"] = period
+        return self.query("fina_indicator_vip", **kwargs)
 
     def get_forecast_by_date(
         self,
-        ann_date: str,
+        ann_date: Optional[str] = None,
+        period: Optional[str] = None,
     ) -> pd.DataFrame:
-        """按公告日获取全市场业绩预告（forecast_vip，5000 积分）
+        """按公告日或报告期获取全市场业绩预告（forecast_vip，5000 积分）
 
         Args:
-            ann_date: 公告日期，格式 YYYYMMDD
+            ann_date: 公告日期，格式 YYYYMMDD（与 period 二选一）
+            period: 报告期，格式 YYYYMMDD，如 20231231（与 ann_date 二选一）
 
         Returns:
-            当日有公告的全部股票业绩预告 DataFrame
+            全市场业绩预告 DataFrame
         """
-        return self.query(
-            "forecast_vip",
-            ann_date=ann_date,
-        )
+        kwargs: dict = {}
+        if ann_date is not None:
+            kwargs["ann_date"] = ann_date
+        if period is not None:
+            kwargs["period"] = period
+        return self.query("forecast_vip", **kwargs)
 
-    def get_stk_holdernumber_by_date(
+    def get_cyq_perf(
         self,
-        ann_date: str,
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> pd.DataFrame:
-        """按公告日获取全市场股东人数
+        """获取筹码胜率数据（cyq_perf，5000 积分）
+
+        支持两种查询方式：
+        1. 按 trade_date 获取全市场当日数据（推荐，单次获取所有股票）
+        2. 按 ts_code + start_date/end_date 获取单只股票历史数据
+
+        Args:
+            ts_code: 股票代码（可选）
+            trade_date: 交易日期，格式 YYYYMMDD（可选，与 ts_code 二选一）
+            start_date: 开始日期，格式 YYYYMMDD（配合 ts_code 使用）
+            end_date: 结束日期，格式 YYYYMMDD（配合 ts_code 使用）
+
+        Returns:
+            筹码胜率 DataFrame
+        """
+        kwargs = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if trade_date is not None:
+            kwargs["trade_date"] = trade_date
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        return self.query("cyq_perf", **kwargs)
+
+    def get_express_vip(
+        self,
+        ann_date: Optional[str] = None,
+        period: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """按公告日/报告期获取全市场业绩快报（express_vip，5000 积分）
 
         Args:
             ann_date: 公告日期，格式 YYYYMMDD
+            period: 报告期，格式 YYYYMMDD（如 20231231）
 
         Returns:
-            当日有公告的全部股票股东人数 DataFrame
+            业绩快报 DataFrame
         """
-        return self.query(
-            "stk_holdernumber",
-            ann_date=ann_date,
-        )
+        kwargs = {}
+        if ann_date is not None:
+            kwargs["ann_date"] = ann_date
+        if period is not None:
+            kwargs["period"] = period
+        return self.query("express_vip", **kwargs)
+
+    def get_fund_portfolio(
+        self,
+        ts_code: Optional[str] = None,
+        period: Optional[str] = None,
+        ann_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取公募基金持仓数据（fund_portfolio，5000 积分）
+
+        Args:
+            ts_code: 基金代码（按单只基金查询）
+            period: 报告期，格式 YYYYMMDD（如 20231231）
+            ann_date: 公告日期，格式 YYYYMMDD
+
+        Returns:
+            基金持仓 DataFrame
+        """
+        kwargs = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if period is not None:
+            kwargs["period"] = period
+        if ann_date is not None:
+            kwargs["ann_date"] = ann_date
+        return self.query("fund_portfolio", **kwargs)
+
+    def get_stk_holdernumber(
+        self,
+        ts_code: Optional[str] = None,
+        ann_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取股东人数数据
+
+        支持多种查询方式：
+        1. 按 ann_date 获取当日公告的全市场数据
+        2. 按 start_date/end_date 获取一段时间内全市场数据（单次限3000条）
+        3. 按 ts_code 获取单只股票历史数据
+
+        Args:
+            ts_code: 股票代码（可选）
+            ann_date: 公告日期，格式 YYYYMMDD（可选）
+            start_date: 开始日期，格式 YYYYMMDD（可选）
+            end_date: 结束日期，格式 YYYYMMDD（可选）
+
+        Returns:
+            股东人数 DataFrame
+        """
+        kwargs: dict = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if ann_date is not None:
+            kwargs["ann_date"] = ann_date
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        return self.query("stk_holdernumber", **kwargs)

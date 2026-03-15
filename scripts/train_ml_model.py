@@ -264,6 +264,27 @@ def main():
         help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
     )
 
+    # 筹码胜率因子
+    parser.add_argument(
+        "--enable-cyq-features",
+        action="store_true",
+        help="启用筹码胜率因子（winner_rate、成本偏离等）"
+    )
+
+    # 基金持仓因子
+    parser.add_argument(
+        "--enable-fund-features",
+        action="store_true",
+        help="启用基金持仓因子（持股比例、基金数量等）"
+    )
+
+    # 业绩快报因子
+    parser.add_argument(
+        "--enable-express-features",
+        action="store_true",
+        help="启用业绩快报因子（实际营收/净利润增速等）"
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -340,6 +361,9 @@ def main():
             df, actual_label_column, label_transform_fn=label_transform_fn,
             enable_fundamental_features=args.enable_fundamental_features,
             enable_alt_features=args.enable_alt_features,
+            enable_cyq_features=args.enable_cyq_features,
+            enable_fund_features=args.enable_fund_features,
+            enable_express_features=args.enable_express_features,
         )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
         if False:  # 默认不启用，后续可以改为参数控制

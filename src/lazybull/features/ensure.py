@@ -19,14 +19,12 @@ FEATURE_DATA_FUTURE_MONTHS = 1   # 特征数据未来月数
 HISTORICAL_DATA_MONTHS = 1       # 历史数据回看月数
 MAX_HISTORICAL_DAYS = 30         # 最多检查的历史交易日数
 
-# 逐股批量下载每批保存间隔（股票数）
-_BULK_SAVE_INTERVAL = 500
-
 # 因子数据最低记录数阈值，低于此值视为数据不足，触发全量下载
 # 这些因子是 point-in-time 查询，需要全量历史才有意义
 _MIN_FINA_RECORDS = 1000       # 财务指标：全量应有 10 万+ 条
 _MIN_HOLDER_RECORDS = 500      # 股东人数：全量应有数万条
 _MIN_FORECAST_RECORDS = 500    # 业绩预告：全量应有数万条
+_MIN_EXPRESS_RECORDS = 500        # 业绩快报：全量应有数万条
 
 
 def ensure_features_for_date(
@@ -172,7 +170,8 @@ def ensure_features_for_date(
             for d in trade_cal[trading_dates_mask]['cal_date'].tolist()
         ]
 
-        funda_today, margin_today, holder_today, earnings_today, hot_rank_today, missing_factors = (
+        (funda_today, margin_today, holder_today, earnings_today, hot_rank_today,
+         cyq_perf_today, express_today, fund_portfolio_today, missing_factors) = (
             _load_factor_data(loader, client, storage, trade_date, trading_dates_str,
                               start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d'))
         )
@@ -195,6 +194,9 @@ def ensure_features_for_date(
             holder_data=holder_today,
             earnings_data=earnings_today,
             hot_rank_data=hot_rank_today,
+            cyq_perf_data=cyq_perf_today,
+            express_data=express_today,
+            fund_portfolio_data=fund_portfolio_today,
         )
         
         # 9. 保存结果
@@ -392,8 +394,49 @@ def _load_factor_data(
     else:
         missing_factors.append("hot_rank（人气榜）")
 
+    # ── 筹码胜率（按日分区，同 margin_detail）──────────────────
+    cyq_perf_today = None
+    cyq_perf_df = _try_ensure_historical_cyq_perf(client, storage, trading_dates_str)
+    if cyq_perf_df is not None and len(cyq_perf_df) > 0:
+        from ..factors.cyq_perf import build_cyq_perf_lookup_by_date
+        cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, trading_dates_str)
+        cyq_perf_today = cyq_perf_lookup.get(trade_date)
+        logger.info(f"筹码胜率因子: 已加载 ({len(cyq_perf_df)} 条)")
+    else:
+        missing_factors.append("cyq_perf（筹码胜率）")
+
+    # ── 业绩快报 ──────────────────────────────────────────────
+    express_today = None
+    express_df = loader.load_express()
+    if express_df is None or len(express_df) < _MIN_EXPRESS_RECORDS:
+        express_df = _try_download_express(client, storage, trade_date)
+    if express_df is not None and len(express_df) > 0:
+        from ..factors.express import build_express_lookup_by_date
+        # 加载 forecast 数据用于计算 express_surprise
+        forecast_df_for_surprise = loader.load_forecast()
+        express_lookup = build_express_lookup_by_date(
+            express_df, trading_dates_str, forecast_df=forecast_df_for_surprise
+        )
+        express_today = express_lookup.get(trade_date)
+        logger.info(f"业绩快报因子: 已加载 ({len(express_df)} 条)")
+    else:
+        missing_factors.append("express（业绩快报）")
+
+    # ── 基金持仓（按季度分区）──────────────────────────────────
+    fund_portfolio_today = None
+    fund_portfolio_df = _try_ensure_historical_fund_portfolio(
+        client, storage, trading_dates_str,
+    )
+    if fund_portfolio_df is not None and len(fund_portfolio_df) > 0:
+        from ..factors.fund_portfolio import build_fund_portfolio_lookup_by_date
+        fund_lookup = build_fund_portfolio_lookup_by_date(fund_portfolio_df, trading_dates_str)
+        fund_portfolio_today = fund_lookup.get(trade_date)
+        logger.info(f"基金持仓因子: 已加载 ({len(fund_portfolio_df)} 条)")
+    else:
+        missing_factors.append("fund_portfolio（基金持仓）")
+
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 5
+    total = 8
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -404,7 +447,8 @@ def _load_factor_data(
     else:
         logger.info(f"因子数据覆盖: {total}/{total} 组全部加载")
 
-    return funda_today, margin_today, holder_today, earnings_today, hot_rank_today, missing_factors
+    return (funda_today, margin_today, holder_today, earnings_today, hot_rank_today,
+            cyq_perf_today, express_today, fund_portfolio_today, missing_factors)
 
 
 # ── 因子按日增量下载辅助函数 ──────────────────────────────────────
@@ -437,102 +481,6 @@ def _append_and_save_raw(
     return result
 
 
-def _bulk_download_per_stock(
-    client: TushareClient,
-    storage: Storage,
-    dataset_name: str,
-    api_name: str,
-    stock_codes: List[str],
-    fields: Optional[str] = None,
-    dedup_cols: Optional[List[str]] = None,
-) -> Optional[pd.DataFrame]:
-    """逐股批量下载因子数据（首次全量，支持断点续传）
-
-    当 raw 文件不存在或为空时，需要逐股下载全量历史数据。
-    这些因子（fina_indicator/stk_holdernumber/forecast）采用 point-in-time
-    查询，必须有全量历史才能通过 bisect 查找到 ann_date <= trade_date 的记录。
-
-    Args:
-        client: TushareClient 实例
-        storage: Storage 实例
-        dataset_name: 数据集名称
-        api_name: TuShare API 名称
-        stock_codes: 全部股票代码列表
-        fields: 返回字段
-        dedup_cols: 去重列
-
-    Returns:
-        下载并保存后的完整 DataFrame，或 None
-    """
-    # 断点续传：跳过已有数据的股票
-    existing_codes: Set[str] = set()
-    existing_df = storage.load_raw(dataset_name)
-    if existing_df is not None and len(existing_df) > 0:
-        existing_codes = set(existing_df["ts_code"].unique())
-        logger.info(f"[{dataset_name}] 已有 {len(existing_codes)} 只股票数据（断点续传）")
-
-    codes_to_download = [c for c in stock_codes if c not in existing_codes]
-    if not codes_to_download:
-        logger.info(f"[{dataset_name}] 所有股票数据已存在")
-        return existing_df
-
-    logger.info(
-        f"[{dataset_name}] 首次全量下载: 待下载 {len(codes_to_download)} 只股票 "
-        f"(共 {len(stock_codes)} 只)"
-    )
-
-    all_dfs: List[pd.DataFrame] = []
-    success = empty = errors = 0
-    t0 = time.time()
-
-    for i, ts_code in enumerate(codes_to_download, 1):
-        try:
-            kwargs = {"ts_code": ts_code}
-            if fields:
-                df = client.query(api_name, fields=fields, **kwargs)
-            else:
-                df = client.query(api_name, **kwargs)
-
-            if df is not None and len(df) > 0:
-                all_dfs.append(df)
-                success += 1
-            else:
-                empty += 1
-        except Exception as e:
-            errors += 1
-            logger.debug(f"[{dataset_name}] {ts_code} 失败: {e}")
-
-        if i % 100 == 0 or i == len(codes_to_download):
-            elapsed = time.time() - t0
-            speed = i / elapsed if elapsed > 0 else 0
-            remaining = (len(codes_to_download) - i) / speed if speed > 0 else 0
-            logger.info(
-                f"[{dataset_name}] [{i}/{len(codes_to_download)}] "
-                f"成功={success} 空={empty} 失败={errors} "
-                f"速度={speed:.0f}只/秒 剩余≈{remaining / 60:.1f}分钟"
-            )
-
-        # 每批保存中间结果，防止中断丢失
-        if i % _BULK_SAVE_INTERVAL == 0 and all_dfs:
-            existing_df = _save_merged_bulk(
-                storage, dataset_name, all_dfs, existing_df, dedup_cols
-            )
-            all_dfs = []
-
-    # 最终保存
-    if all_dfs:
-        existing_df = _save_merged_bulk(
-            storage, dataset_name, all_dfs, existing_df, dedup_cols
-        )
-
-    elapsed_total = time.time() - t0
-    logger.info(
-        f"[{dataset_name}] 全量下载完成: 成功={success} 空={empty} 失败={errors} "
-        f"耗时={elapsed_total / 60:.1f}分钟"
-    )
-    return existing_df
-
-
 def _save_merged_bulk(
     storage: Storage,
     dataset_name: str,
@@ -551,13 +499,193 @@ def _save_merged_bulk(
     return result
 
 
-def _get_stock_codes(storage: Storage) -> List[str]:
-    """从 stock_basic 获取全部股票代码列表"""
-    stock_basic = storage.load_raw("stock_basic")
-    if stock_basic is None or len(stock_basic) == 0:
-        logger.warning("未找到 stock_basic 数据，无法执行逐股下载")
-        return []
-    return sorted(stock_basic["ts_code"].unique().tolist())
+def _generate_quarter_periods(start_year: int, end_year: int) -> List[str]:
+    """生成从 start_year 到 end_year 的所有季度末日期"""
+    quarter_ends = ["0331", "0630", "0930", "1231"]
+    return [f"{y}{q}" for y in range(start_year, end_year + 1) for q in quarter_ends]
+
+
+def _query_with_pagination(
+    client: TushareClient,
+    api_name: str,
+    page_limit: int = 50000,
+    fields: Optional[str] = None,
+    **kwargs,
+) -> pd.DataFrame:
+    """带分页的 API 调用，自动检测并翻页获取全量数据"""
+    all_pages: List[pd.DataFrame] = []
+    offset = 0
+    while True:
+        df = client.pro.query(
+            api_name, fields=fields or "",
+            limit=page_limit, offset=offset, **kwargs,
+        )
+        if df is None or len(df) == 0:
+            break
+        all_pages.append(df)
+        if len(df) < page_limit:
+            break
+        offset += page_limit
+    if not all_pages:
+        return pd.DataFrame()
+    return pd.concat(all_pages, ignore_index=True)
+
+
+def _bulk_download_by_period(
+    client: TushareClient,
+    storage: Storage,
+    dataset_name: str,
+    api_name: str,
+    dedup_cols: List[str],
+    fields: Optional[str] = None,
+    start_year: int = 2012,
+) -> Optional[pd.DataFrame]:
+    """按报告期(period)批量下载全量数据（自动分页）
+
+    适用于 fina_indicator_vip, forecast_vip, express_vip, fund_portfolio。
+    每季度1次 API 调用，替代逐股下载。
+    当单季度数据超过上限时自动通过 offset 分页获取全量。
+
+    Args:
+        client: TushareClient 实例
+        storage: Storage 实例
+        dataset_name: 数据集名称
+        api_name: TuShare API 名称
+        dedup_cols: 去重列
+        fields: 返回字段（部分 API 需要）
+        start_year: 起始年份
+
+    Returns:
+        下载并保存后的完整 DataFrame，或 None
+    """
+    import datetime as _dt
+    current_year = _dt.datetime.now().year
+    periods = _generate_quarter_periods(start_year, current_year)
+
+    # 断点续传：跳过已有季度
+    existing_df = storage.load_raw(dataset_name)
+    existing_periods: Set[str] = set()
+    if existing_df is not None and len(existing_df) > 0:
+        if "end_date" in existing_df.columns:
+            existing_periods = set(
+                existing_df["end_date"].astype(str).str.replace("-", "").str[:8].unique()
+            )
+
+    periods_to_download = [p for p in periods if p not in existing_periods]
+    if not periods_to_download:
+        return existing_df
+
+    logger.info(
+        f"[{dataset_name}] 按季度批量下载: {len(periods_to_download)} 个季度"
+    )
+
+    all_dfs: List[pd.DataFrame] = []
+    success = empty = errors = 0
+    t0 = time.time()
+
+    for period in periods_to_download:
+        try:
+            df = _query_with_pagination(
+                client, api_name, fields=fields, period=period,
+            )
+            if df is not None and len(df) > 0:
+                all_dfs.append(df)
+                success += 1
+            else:
+                empty += 1
+        except Exception as e:
+            errors += 1
+            logger.debug(f"[{dataset_name}] {period} 失败: {e}")
+
+    if all_dfs:
+        existing_df = _save_merged_bulk(
+            storage, dataset_name, all_dfs, existing_df, dedup_cols
+        )
+
+    elapsed_total = time.time() - t0
+    logger.info(
+        f"[{dataset_name}] 全量下载完成: 成功={success} 空={empty} 失败={errors} "
+        f"耗时={elapsed_total:.0f}秒"
+    )
+    return existing_df
+
+
+def _bulk_download_stk_holdernumber(
+    client: TushareClient,
+    storage: Storage,
+    dedup_cols: Optional[List[str]] = None,
+    start_year: int = 2012,
+) -> Optional[pd.DataFrame]:
+    """按月批量下载股东人数全量数据（单次限3000条）
+
+    Args:
+        client: TushareClient 实例
+        storage: Storage 实例
+        dedup_cols: 去重列
+        start_year: 起始年份
+
+    Returns:
+        下载并保存后的完整 DataFrame，或 None
+    """
+    import calendar
+    import datetime as _dt
+
+    if dedup_cols is None:
+        dedup_cols = ["ts_code", "end_date"]
+
+    current = _dt.datetime.now()
+    # 生成月范围
+    month_ranges = []
+    dt = _dt.datetime(start_year, 1, 1)
+    while dt <= current:
+        m_start = dt.strftime("%Y%m%d")
+        last_day = calendar.monthrange(dt.year, dt.month)[1]
+        m_end_dt = dt.replace(day=last_day)
+        if m_end_dt > current:
+            m_end_dt = current
+        m_end = m_end_dt.strftime("%Y%m%d")
+        month_ranges.append((m_start, m_end))
+        if dt.month == 12:
+            dt = dt.replace(year=dt.year + 1, month=1, day=1)
+        else:
+            dt = dt.replace(month=dt.month + 1, day=1)
+
+    existing_df = storage.load_raw("stk_holdernumber")
+    logger.info(f"[stk_holdernumber] 按月批量下载: {len(month_ranges)} 个月")
+
+    all_dfs: List[pd.DataFrame] = []
+    success = empty = errors = 0
+    t0 = time.time()
+
+    for i, (m_start, m_end) in enumerate(month_ranges, 1):
+        try:
+            df = client.get_stk_holdernumber(start_date=m_start, end_date=m_end)
+            if df is not None and len(df) > 0:
+                all_dfs.append(df)
+                success += 1
+            else:
+                empty += 1
+        except Exception as e:
+            errors += 1
+            logger.debug(f"[stk_holdernumber] {m_start}~{m_end} 失败: {e}")
+
+        if i % 24 == 0 or i == len(month_ranges):
+            logger.info(
+                f"[stk_holdernumber] [{i}/{len(month_ranges)}] "
+                f"成功={success} 空={empty} 失败={errors}"
+            )
+
+    if all_dfs:
+        existing_df = _save_merged_bulk(
+            storage, "stk_holdernumber", all_dfs, existing_df, dedup_cols
+        )
+
+    elapsed_total = time.time() - t0
+    logger.info(
+        f"[stk_holdernumber] 全量下载完成: 成功={success} 空={empty} 失败={errors} "
+        f"耗时={elapsed_total:.0f}秒"
+    )
+    return existing_df
 
 
 def _try_download_fina_indicator(
@@ -593,22 +721,18 @@ def _try_download_fina_indicator(
             logger.warning(f"增量下载 fina_indicator 失败: {e}")
             return existing
 
-    # 全量下载（首次或数据不足）
-    stock_codes = _get_stock_codes(storage)
-    if not stock_codes:
-        return None
+    # 全量下载（首次或数据不足）— 按季度批量
     cnt = len(existing) if existing is not None else 0
     logger.info(
         f"财务指标数据不足 (当前 {cnt} 条, 阈值 {_MIN_FINA_RECORDS})，"
-        f"启动全量逐股下载..."
+        f"启动按季度批量下载..."
     )
-    return _bulk_download_per_stock(
+    return _bulk_download_by_period(
         client, storage,
         dataset_name="fina_indicator",
-        api_name="fina_indicator",
-        stock_codes=stock_codes,
-        fields="ts_code,ann_date,end_date,roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy",
+        api_name="fina_indicator_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
+        fields="ts_code,ann_date,end_date,roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy",
     )
 
 
@@ -627,7 +751,7 @@ def _try_download_stk_holdernumber(
     if existing is not None and len(existing) >= _MIN_HOLDER_RECORDS:
         try:
             logger.info(f"增量下载 stk_holdernumber (ann_date={trade_date})...")
-            new_df = client.get_stk_holdernumber_by_date(ann_date=trade_date)
+            new_df = client.get_stk_holdernumber(ann_date=trade_date)
             if new_df is not None and len(new_df) > 0:
                 result = _append_and_save_raw(
                     storage, "stk_holdernumber", new_df,
@@ -644,20 +768,14 @@ def _try_download_stk_holdernumber(
             logger.warning(f"增量下载 stk_holdernumber 失败: {e}")
             return existing
 
-    # 全量下载（首次或数据不足）
-    stock_codes = _get_stock_codes(storage)
-    if not stock_codes:
-        return None
+    # 全量下载（首次或数据不足）— 按月批量
     cnt = len(existing) if existing is not None else 0
     logger.info(
         f"股东人数数据不足 (当前 {cnt} 条, 阈值 {_MIN_HOLDER_RECORDS})，"
-        f"启动全量逐股下载..."
+        f"启动按月批量下载..."
     )
-    return _bulk_download_per_stock(
+    return _bulk_download_stk_holdernumber(
         client, storage,
-        dataset_name="stk_holdernumber",
-        api_name="stk_holdernumber",
-        stock_codes=stock_codes,
         dedup_cols=["ts_code", "end_date"],
     )
 
@@ -694,20 +812,16 @@ def _try_download_forecast(
             logger.warning(f"增量下载 forecast 失败: {e}")
             return existing
 
-    # 全量下载（首次或数据不足）
-    stock_codes = _get_stock_codes(storage)
-    if not stock_codes:
-        return None
+    # 全量下载（首次或数据不足）— 按季度批量
     cnt = len(existing) if existing is not None else 0
     logger.info(
         f"业绩预告数据不足 (当前 {cnt} 条, 阈值 {_MIN_FORECAST_RECORDS})，"
-        f"启动全量逐股下载..."
+        f"启动按季度批量下载..."
     )
-    return _bulk_download_per_stock(
+    return _bulk_download_by_period(
         client, storage,
         dataset_name="forecast",
-        api_name="forecast",
-        stock_codes=stock_codes,
+        api_name="forecast_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
     )
 
@@ -762,6 +876,155 @@ def _try_download_hot_rank(
     except Exception as e:
         logger.warning(f"增量下载 hot_rank 失败: {e}")
         return storage.load_raw("hot_rank")
+
+
+def _try_ensure_historical_cyq_perf(
+    client: TushareClient,
+    storage: Storage,
+    trading_dates_str: List[str],
+) -> Optional[pd.DataFrame]:
+    """补齐日期范围内缺失的筹码胜率历史数据
+
+    cyq_perf 按日分区存储，需要 20+ 天历史数据才能计算胜率变化率。
+    使用 trade_date 参数一次获取全市场当日数据。
+
+    Args:
+        client: TushareClient 实例
+        storage: Storage 实例
+        trading_dates_str: 需要覆盖的交易日列表（YYYYMMDD）
+
+    Returns:
+        合并后的 cyq_perf DataFrame，或 None
+    """
+    downloaded = 0
+    for dt in trading_dates_str:
+        if storage.is_data_exists("raw", "cyq_perf", dt):
+            continue
+        try:
+            df = client.get_cyq_perf(trade_date=dt)
+            if df is not None and not df.empty:
+                storage.save_raw_by_date(df, "cyq_perf", dt)
+                downloaded += 1
+        except Exception as e:
+            logger.debug(f"cyq_perf {dt} 下载失败: {e}")
+
+    if downloaded > 0:
+        logger.info(f"筹码胜率历史补齐: 新增 {downloaded} 个交易日")
+
+    # 重新加载完整范围
+    if trading_dates_str:
+        from ..data.loader import DataLoader
+
+        loader = DataLoader(storage)
+        return loader.load_cyq_perf(trading_dates_str[0], trading_dates_str[-1])
+    return None
+
+
+def _try_download_express(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+) -> Optional[pd.DataFrame]:
+    """下载业绩快报数据
+
+    数据充足：按公告日增量下载当日新快报。
+    数据不足：逐股全量下载。
+    """
+    existing = storage.load_raw("express")
+
+    if existing is not None and len(existing) >= _MIN_EXPRESS_RECORDS:
+        try:
+            logger.info(f"增量下载 express (ann_date={trade_date})...")
+            new_df = client.get_express_vip(ann_date=trade_date)
+            if new_df is not None and len(new_df) > 0:
+                result = _append_and_save_raw(
+                    storage, "express", new_df,
+                    dedup_cols=["ts_code", "end_date", "ann_date"],
+                )
+                logger.info(
+                    f"  express 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
+                )
+                return result
+            else:
+                logger.info(f"  express: {trade_date} 无新快报")
+                return existing
+        except Exception as e:
+            logger.warning(f"增量下载 express 失败: {e}")
+            return existing
+
+    # 全量下载 — 按季度批量
+    cnt = len(existing) if existing is not None else 0
+    logger.info(
+        f"业绩快报数据不足 (当前 {cnt} 条, 阈值 {_MIN_EXPRESS_RECORDS})，"
+        f"启动按季度批量下载..."
+    )
+    return _bulk_download_by_period(
+        client, storage,
+        dataset_name="express",
+        api_name="express_vip",
+        dedup_cols=["ts_code", "end_date", "ann_date"],
+    )
+
+
+def _try_ensure_historical_fund_portfolio(
+    client: TushareClient,
+    storage: Storage,
+    trading_dates_str: List[str],
+) -> Optional[pd.DataFrame]:
+    """补齐日期范围内所需的基金持仓季度分区数据
+
+    fund_portfolio 按季度（end_date=季度末）分区存储。
+    根据 trading_dates 覆盖的时间范围，向前回溯 2 年（因子需要历史持仓），
+    检查每个季度分区是否存在，缺失则通过 API 下载。
+
+    Args:
+        client: TushareClient 实例
+        storage: Storage 实例
+        trading_dates_str: 需要覆盖的交易日列表（YYYYMMDD）
+
+    Returns:
+        合并后的 fund_portfolio DataFrame，或 None
+    """
+    if not trading_dates_str:
+        return None
+
+    # 根据交易日范围确定需要的季度
+    import datetime as _dt
+
+    min_date = min(trading_dates_str)
+    max_date = max(trading_dates_str)
+    # 回溯 2 年获取历史持仓（基金持仓因子需要多季度数据）
+    start_year = int(min_date[:4]) - 2
+    end_year = int(max_date[:4])
+    periods = _generate_quarter_periods(start_year, end_year)
+
+    # 只保留 <= max_date 的季度（未来季度无数据）
+    periods = [p for p in periods if p <= max_date]
+
+    downloaded = 0
+    for period in periods:
+        if storage.is_data_exists("raw", "fund_portfolio", period):
+            continue
+        try:
+            df = _query_with_pagination(
+                client, "fund_portfolio", page_limit=8000, period=period,
+            )
+            if df is not None and len(df) > 0:
+                storage.save_raw_by_date(df, "fund_portfolio", period)
+                downloaded += 1
+        except Exception as e:
+            logger.debug(f"fund_portfolio {period} 下载失败: {e}")
+
+    if downloaded > 0:
+        logger.info(f"基金持仓历史补齐: 新增 {downloaded} 个季度")
+
+    # 加载完整范围
+    from ..data.loader import DataLoader
+
+    loader = DataLoader(storage)
+    # 从回溯起始年的第一个季度到最晚交易日
+    load_start = f"{start_year}0101"
+    return loader.load_fund_portfolio(load_start, max_date)
 
 
 # ── 申万行业分类自动下载 ─────────────────────────────────────────

@@ -344,6 +344,9 @@ def execute_split_training(
         df_train, actual_label_column, val_ratio=args.val_ratio, label_transform_fn=label_transform_fn,
         enable_fundamental_features=args.enable_fundamental_features,
         enable_alt_features=args.enable_alt_features,
+        enable_cyq_features=args.enable_cyq_features,
+        enable_fund_features=args.enable_fund_features,
+        enable_express_features=args.enable_express_features,
     )
 
     # 4.1. 构造样本权重（rank-weight + 时间衰减，可叠加）
@@ -740,6 +743,9 @@ def write_walk_forward_summary(
         "time_decay_half_life": args.time_decay_half_life,
         "enable_fundamental": args.enable_fundamental_features,
         "enable_alt": args.enable_alt_features,
+        "enable_cyq": args.enable_cyq_features,
+        "enable_fund": args.enable_fund_features,
+        "enable_express": args.enable_express_features,
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
@@ -1121,6 +1127,27 @@ def main():
         "--enable-alt-features",
         action="store_true",
         help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
+    )
+
+    # 筹码胜率因子（5000 积分）
+    parser.add_argument(
+        "--enable-cyq-features",
+        action="store_true",
+        help="启用筹码胜率因子（winner_rate、成本偏离、筹码集中度等）"
+    )
+
+    # 基金持仓因子（5000 积分）
+    parser.add_argument(
+        "--enable-fund-features",
+        action="store_true",
+        help="启用基金持仓因子（持股比例、基金数量及其变化）"
+    )
+
+    # 业绩快报因子（5000 积分）
+    parser.add_argument(
+        "--enable-express-features",
+        action="store_true",
+        help="启用业绩快报因子（实际营收/净利润增速、业绩惊喜等）"
     )
 
     # 其他参数

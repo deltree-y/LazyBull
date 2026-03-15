@@ -137,6 +137,9 @@ class FeatureBuilder:
         holder_data: Optional[pd.DataFrame] = None,
         earnings_data: Optional[pd.DataFrame] = None,
         hot_rank_data: Optional[pd.DataFrame] = None,
+        cyq_perf_data: Optional[pd.DataFrame] = None,
+        express_data: Optional[pd.DataFrame] = None,
+        fund_portfolio_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """构建单个交易日的截面特征和标签
 
@@ -158,6 +161,9 @@ class FeatureBuilder:
             holder_data: 股东人数因子（可选），当日数据
             earnings_data: 业绩预告/快报因子（可选），当日数据
             hot_rank_data: 人气榜因子（可选），当日数据
+            cyq_perf_data: 筹码胜率因子（可选），当日数据
+            express_data: 业绩快报因子（可选），当日数据
+            fund_portfolio_data: 基金持仓因子（可选），当日数据
 
         Returns:
             特征DataFrame，包含 trade_date, ts_code, 特征列, 标签列, 标记列
@@ -217,6 +223,9 @@ class FeatureBuilder:
             holder_data,
             earnings_data,
             hot_rank_data,
+            cyq_perf_data,
+            express_data,
+            fund_portfolio_data,
         )
         logger.debug(f"{trade_date} 基础特征计算完成: {len(features.columns.tolist())} 列")
 
@@ -541,6 +550,9 @@ class FeatureBuilder:
         holder_data: Optional[pd.DataFrame] = None,
         earnings_data: Optional[pd.DataFrame] = None,
         hot_rank_data: Optional[pd.DataFrame] = None,
+        cyq_perf_data: Optional[pd.DataFrame] = None,
+        express_data: Optional[pd.DataFrame] = None,
+        fund_portfolio_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """计算基础数值特征
 
@@ -669,6 +681,47 @@ class FeatureBuilder:
             for col in HOT_RANK_COLS:
                 if col not in features.columns:
                     features[col] = np.nan
+
+        # 筹码胜率
+        if cyq_perf_data is not None and len(cyq_perf_data) > 0:
+            # weight_avg_bias = (close - weight_avg) / weight_avg
+            if "weight_avg" in cyq_perf_data.columns and "close_adj" in features.columns:
+                cyq = cyq_perf_data.copy()
+                # 先合并获取 close_adj，再计算偏离度
+                cyq_with_close = cyq.merge(
+                    features[["ts_code", "close_adj"]], on="ts_code", how="left"
+                )
+                cyq_with_close["weight_avg_bias"] = np.where(
+                    cyq_with_close["weight_avg"] > 0,
+                    (cyq_with_close["close_adj"] - cyq_with_close["weight_avg"])
+                    / cyq_with_close["weight_avg"],
+                    np.nan,
+                )
+                from ..factors.cyq_perf import CYQ_PERF_COLS
+                merge_cols = [c for c in CYQ_PERF_COLS if c in cyq_with_close.columns]
+                features = features.merge(
+                    cyq_with_close[["ts_code"] + merge_cols], on="ts_code", how="left"
+                )
+            else:
+                merge_cols = [c for c in cyq_perf_data.columns
+                              if c != "ts_code" and c != "weight_avg"]
+                features = features.merge(
+                    cyq_perf_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+                )
+
+        # 业绩快报
+        if express_data is not None and len(express_data) > 0:
+            merge_cols = [c for c in express_data.columns if c != "ts_code"]
+            features = features.merge(
+                express_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+
+        # 基金持仓
+        if fund_portfolio_data is not None and len(fund_portfolio_data) > 0:
+            merge_cols = [c for c in fund_portfolio_data.columns if c != "ts_code"]
+            features = features.merge(
+                fund_portfolio_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
 
         return features
     

@@ -2,7 +2,6 @@ import sys, os
 import logging
 import subprocess
 import shlex  # 用于智能拆分字符串，处理包含引号的路径等复杂情况
-import threading
 import traceback
 from pathlib import Path
 
@@ -431,7 +430,7 @@ def execute_trade(trade_date: str) -> tuple[str, str]:
 # ===========================================================================
 # 钉钉消息处理器
 # ===========================================================================
-class SimpleHandler(dts.ChatbotHandler):
+class SimpleHandler(dts.AsyncChatbotHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # 注册表：key 为主命令，value 为对应的处理方法
@@ -449,31 +448,34 @@ class SimpleHandler(dts.ChatbotHandler):
             "reset-t0": self.handle_reset_t0,
         }
 
-    async def process(self, callback):
+    def process(self, callback):
+        """处理钉钉消息 — 在线程池中执行，不阻塞 event loop"""
         incoming = dts.ChatbotMessage.from_dict(callback.data)
         raw_content = incoming.text.content.strip()
-        
+        logging.info(f"收到消息: {raw_content}")
+
         # 1. 解析命令与参数
-        # 例如："run ls -l" -> parts = ['run', 'ls', '-l']
         try:
             parts = shlex.split(raw_content)
         except ValueError:
-            parts = raw_content.split() # 回退到普通拆分
+            parts = raw_content.split()
 
         if not parts:
             return AckMessage.STATUS_OK, 'Empty'
 
-        cmd = parts[0].lower()    # 主命令
-        args = parts[1:]          # 参数列表
+        cmd = parts[0].lower()
+        args = parts[1:]
 
-        # 2. 路由分发
+        # 2. 路由分发（顶层异常捕获，防止线程池任务静默失败）
         handler = self.commands.get(cmd)
-        
-        if handler:
-            # 执行对应的函数，并传入解析好的参数列表
-            handler(args, incoming)
-        else:
-            self.reply_text(f"未知命令: {cmd}\n输入 'help' 查看可用指令", incoming)
+        try:
+            if handler:
+                handler(args, incoming)
+            else:
+                self.reply_text(f"未知命令: {cmd}\n输入 'help' 查看可用指令", incoming)
+        except Exception as e:
+            logging.error(f"命令 '{cmd}' 执行异常: {traceback.format_exc()}")
+            self.reply_text(f"命令执行异常: {e}", incoming)
 
         return AckMessage.STATUS_OK, 'OK'
 
@@ -527,26 +529,22 @@ class SimpleHandler(dts.ChatbotHandler):
             trade_date = args[0]
         self.reply_text(f"开始执行交易 ({trade_date})，请稍候...", incoming)
 
-        def _run():
-            import time
-            start = time.monotonic()
-            try:
-                result_text, corrected_date = execute_trade(trade_date)
-                # 记录本次实际执行日期，供 trade next 推算下一交易日
-                PaperStorage().save_last_trade_date(corrected_date)
-                elapsed = time.monotonic() - start
-                result_text += f"\n\n(耗时: {elapsed:.0f}秒)"
-                self.reply_markdown("交易结果", result_text, incoming)
-            except Exception as e:
-                elapsed = time.monotonic() - start
-                tb = traceback.format_exc()
-                short_tb = "\n".join(tb.strip().split("\n")[-5:])
-                self.reply_text(
-                    f"交易执行失败 (耗时{elapsed:.0f}秒):\n{short_tb}", incoming
-                )
-
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
+        import time
+        start = time.monotonic()
+        try:
+            result_text, corrected_date = execute_trade(trade_date)
+            # 记录本次实际执行日期，供 trade next 推算下一交易日
+            PaperStorage().save_last_trade_date(corrected_date)
+            elapsed = time.monotonic() - start
+            result_text += f"\n\n(耗时: {elapsed:.0f}秒)"
+            self.reply_markdown("交易结果", result_text, incoming)
+        except Exception as e:
+            elapsed = time.monotonic() - start
+            tb = traceback.format_exc()
+            short_tb = "\n".join(tb.strip().split("\n")[-5:])
+            self.reply_text(
+                f"交易执行失败 (耗时{elapsed:.0f}秒):\n{short_tb}", incoming
+            )
 
     def handle_model(self, args, incoming):
         """查看当前使用的模型信息

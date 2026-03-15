@@ -178,6 +178,9 @@ def build_features_data(
     apply_industry_neutralization: bool = False,
     enable_fundamental: bool = False,
     enable_alt: bool = False,
+    enable_cyq: bool = False,
+    enable_fund: bool = False,
+    enable_express: bool = False,
 ) -> None:
     """构建features层数据
 
@@ -192,6 +195,9 @@ def build_features_data(
         apply_industry_neutralization: 是否应用行业中性化
         enable_fundamental: 是否启用基本面因子
         enable_alt: 是否启用另类数据因子
+        enable_cyq: 是否启用筹码胜率因子
+        enable_fund: 是否启用基金持仓因子
+        enable_express: 是否启用业绩快报因子
     """
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
@@ -341,6 +347,48 @@ def build_features_data(
         else:
             logger.warning("未找到人气榜数据，相关特征将为空")
 
+    # 加载筹码胜率数据（可选）
+    cyq_perf_lookup = None
+    if enable_cyq:
+        from src.lazybull.factors.cyq_perf import build_cyq_perf_lookup_by_date
+        cyq_perf_df = loader.load_cyq_perf()
+        if cyq_perf_df is not None:
+            logger.info(f"筹码胜率数据: {len(cyq_perf_df)} 条")
+            cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, trading_dates_str)
+        else:
+            logger.warning("未找到筹码胜率数据，相关特征将为空。"
+                         "请先运行: python scripts/download_raw.py --download cyq_perf")
+
+    # 加载基金持仓数据（可选）
+    fund_portfolio_lookup = None
+    if enable_fund:
+        from src.lazybull.factors.fund_portfolio import build_fund_portfolio_lookup_by_date
+        fund_portfolio_df = loader.load_fund_portfolio()
+        if fund_portfolio_df is not None:
+            logger.info(f"基金持仓数据: {len(fund_portfolio_df)} 条")
+            fund_portfolio_lookup = build_fund_portfolio_lookup_by_date(
+                fund_portfolio_df, trading_dates_str
+            )
+        else:
+            logger.warning("未找到基金持仓数据，相关特征将为空。"
+                         "请先运行: python scripts/download_raw.py --download fund_portfolio")
+
+    # 加载业绩快报数据（可选）
+    express_lookup = None
+    if enable_express:
+        from src.lazybull.factors.express import build_express_lookup_by_date
+        express_df = loader.load_express()
+        if express_df is not None:
+            logger.info(f"业绩快报数据: {len(express_df)} 条")
+            # 加载业绩预告数据用于计算业绩惊喜
+            forecast_df = loader.load_forecast()
+            express_lookup = build_express_lookup_by_date(
+                express_df, trading_dates_str, forecast_df=forecast_df
+            )
+        else:
+            logger.warning("未找到业绩快报数据，相关特征将为空。"
+                         "请先运行: python scripts/download_raw.py --download express")
+
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
 
@@ -374,6 +422,13 @@ def build_features_data(
             earnings_today = earnings_lookup.get(trade_date) if earnings_lookup else None
             hot_rank_today = hot_rank_lookup.get(trade_date) if hot_rank_lookup else None
 
+            # 获取当日高积分因子数据
+            cyq_perf_today = cyq_perf_lookup.get(trade_date) if cyq_perf_lookup else None
+            fund_portfolio_today = (
+                fund_portfolio_lookup.get(trade_date) if fund_portfolio_lookup else None
+            )
+            express_today = express_lookup.get(trade_date) if express_lookup else None
+
             # 构建特征
             features_df = builder.build_features_for_day(
                 trade_date=trade_date,
@@ -392,6 +447,9 @@ def build_features_data(
                 holder_data=holder_today,
                 earnings_data=earnings_today,
                 hot_rank_data=hot_rank_today,
+                cyq_perf_data=cyq_perf_today,
+                express_data=express_today,
+                fund_portfolio_data=fund_portfolio_today,
             )
             
             # 保存结果
@@ -473,6 +531,21 @@ def main():
         action="store_true",
         help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
     )
+    parser.add_argument(
+        "--enable-cyq-features",
+        action="store_true",
+        help="启用筹码胜率因子（winner_rate、成本偏离等）"
+    )
+    parser.add_argument(
+        "--enable-fund-features",
+        action="store_true",
+        help="启用基金持仓因子（持股比例、基金数量等）"
+    )
+    parser.add_argument(
+        "--enable-express-features",
+        action="store_true",
+        help="启用业绩快报因子（实际营收/净利润增速等）"
+    )
 
     args = parser.parse_args()
     
@@ -488,6 +561,9 @@ def main():
     logger.info(f"强制重新构建: {'是' if args.force else '否'}")
     logger.info(f"基本面因子: {'启用' if args.enable_fundamental_features else '禁用'}")
     logger.info(f"另类数据因子: {'启用' if args.enable_alt_features else '禁用'}")
+    logger.info(f"筹码胜率因子: {'启用' if args.enable_cyq_features else '禁用'}")
+    logger.info(f"基金持仓因子: {'启用' if args.enable_fund_features else '禁用'}")
+    logger.info(f"业绩快报因子: {'启用' if args.enable_express_features else '禁用'}")
     logger.info("=" * 60)
     
     try:
@@ -521,6 +597,9 @@ def main():
                 apply_industry_neutralization=args.enable_industry_neutralization,
                 enable_fundamental=args.enable_fundamental_features,
                 enable_alt=args.enable_alt_features,
+                enable_cyq=args.enable_cyq_features,
+                enable_fund=args.enable_fund_features,
+                enable_express=args.enable_express_features,
             )
         
         logger.info("=" * 60)
