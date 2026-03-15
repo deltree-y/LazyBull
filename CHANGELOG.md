@@ -2,12 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.19.3] - 2026-03-15
+
+### 修复
+
+- **trade next 连续执行卡在同一天** (bot_service.py, storage.py)
+  - 原因: 无成交的交易日 `last_update` 不更新，`next` 始终解析到同一天
+  - 修复: PaperStorage 新增独立的 `last_trade_date` 字段（state/last_trade_date.json），
+    与账户 `last_update` 完全解耦，仅供 `trade next` 推算下一交易日
+  - 每次 trade 执行后均记录 `last_trade_date`，reset-t0 时随 state 目录自动清理
+
 ## [0.19.1] - 2026-03-15
 
 ### 优化
 
 - **trade 命令支持 next 参数** (bot_service.py)
-  - 输入 `trade next` 自动获取下一个交易日（含今天）并执行交易
+  - 输入 `trade next` 自动获取下一个交易日并执行交易
 
 ## [0.19.0] - 2026-03-15
 

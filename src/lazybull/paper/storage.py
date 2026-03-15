@@ -422,6 +422,21 @@ class PaperStorage:
         
         return state
     
+    def save_last_trade_date(self, trade_date: str) -> None:
+        """保存最近执行交易的日期（供 trade next 等命令推算下一交易日）"""
+        file_path = self.state_path / "last_trade_date.json"
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump({'last_trade_date': trade_date}, f, ensure_ascii=False)
+
+    def load_last_trade_date(self) -> Optional[str]:
+        """读取最近执行交易的日期，不存在返回 None"""
+        file_path = self.state_path / "last_trade_date.json"
+        if not file_path.exists():
+            return None
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('last_trade_date')
+
     def save_instructions(self, trade_date: str, instructions: List[TradeInstruction]) -> None:
         """保存交易指令列表
         

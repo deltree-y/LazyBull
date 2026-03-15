@@ -328,8 +328,8 @@ def format_trade_result(
 # ---------------------------------------------------------------------------
 # 核心：执行交易逻辑（从 paper_trade.py run_main 提取）
 # ---------------------------------------------------------------------------
-def execute_trade(trade_date: str) -> str:
-    """执行交易流程，返回格式化结果文本
+def execute_trade(trade_date: str) -> tuple[str, str]:
+    """执行交易流程，返回 (格式化结果文本, 校正后交易日期)
 
     复用 paper_trade.py run_main 的核心逻辑，但不使用 logger 输出，
     而是收集结果后格式化为手机友好文本。
@@ -411,7 +411,7 @@ def execute_trade(trade_date: str) -> str:
     stock_names = _build_stock_names(loader)
 
     # 11. 格式化结果
-    return format_trade_result(
+    result_text = format_trade_result(
         trade_date=trade_date,
         corrected_date=corrected_date,
         stop_loss_actions=stop_loss_actions,
@@ -425,6 +425,7 @@ def execute_trade(trade_date: str) -> str:
         stock_names=stock_names,
         missing_factors=runner.missing_factors,
     )
+    return result_text, corrected_date
 
 
 # ===========================================================================
@@ -530,7 +531,9 @@ class SimpleHandler(dts.ChatbotHandler):
             import time
             start = time.monotonic()
             try:
-                result_text = execute_trade(trade_date)
+                result_text, corrected_date = execute_trade(trade_date)
+                # 记录本次实际执行日期，供 trade next 推算下一交易日
+                PaperStorage().save_last_trade_date(corrected_date)
                 elapsed = time.monotonic() - start
                 result_text += f"\n\n(耗时: {elapsed:.0f}秒)"
                 self.reply_markdown("交易结果", result_text, incoming)
@@ -612,7 +615,7 @@ class SimpleHandler(dts.ChatbotHandler):
     def _resolve_next_trade_date(self) -> str | None:
         """获取上次交易日之后的下一个交易日
 
-        基于账户 last_update 推算；若账户尚未执行过交易则回退到今天起。
+        基于 last_trade_date 推算；若无记录则回退到今天起。
         """
         try:
             storage = Storage()
@@ -622,16 +625,11 @@ class SimpleHandler(dts.ChatbotHandler):
                 return None
             trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
 
-            # 获取上次交易日期
-            ps = PaperStorage()
-            state = ps.load_account_state()
-            last_date = state.last_update if state and state.last_update else ""
+            last_date = PaperStorage().load_last_trade_date() or ""
 
             if last_date:
-                # 取 last_date 之后的第一个交易日（严格大于）
                 future = [d for d in trade_dates if d > last_date]
             else:
-                # 从未执行过，回退到今天起
                 today = pd.Timestamp.today().strftime('%Y%m%d')
                 future = [d for d in trade_dates if d >= today]
             return future[0] if future else None

@@ -70,10 +70,10 @@ $bt_weight_method        = "equal" # 权重方法：equal（等权）| score（�
 
 # ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
 $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
-$industry_momentum_bottom_pct = 0.2     # 剔除排名后 X% 的行业（0~1），默认 0.2
+$industry_momentum_bottom_pct = 0.5     # 剔除排名后 X% 的行业（0~1），默认 0.2
 
 # ── 市场择时仓位管理 ─────────────────────────────────────────
-$market_regime                = $true       # $true 启用 | $false 禁用
+$market_regime                = $false       # $true 启用 | $false 禁用
 $market_regime_mode_list      = @("combined")  # binary | vol_target | trend | combined
 $market_regime_bear_threshold_list = @(-0.03)  # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
 $market_regime_bear_exposure  = 0.3            # binary 模式：熊市仓位系数（0~1）
