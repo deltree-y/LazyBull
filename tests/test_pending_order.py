@@ -78,7 +78,7 @@ def test_get_orders_to_retry_normal(manager, base_date):
     )
     
     # 1天后，应该可以重试
-    retry_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=1))
+    retry_orders, expired_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=1))
     assert len(retry_orders) == 1
     assert retry_orders[0].stock == '000001.SZ'
 
@@ -106,7 +106,7 @@ def test_get_orders_to_retry_max_retry_exceeded(manager, base_date):
         )
     
     # retry_count = 4，超过 max_retry_count = 3
-    retry_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=4))
+    retry_orders, expired_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=4))
     assert len(retry_orders) == 0
     assert manager.get_pending_count() == 0
     
@@ -126,7 +126,7 @@ def test_get_orders_to_retry_max_days_exceeded(manager, base_date):
     )
     
     # 6天后，超过 max_retry_days = 5
-    retry_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=6))
+    retry_orders, expired_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=6))
     assert len(retry_orders) == 0
     assert manager.get_pending_count() == 0
     
@@ -145,7 +145,7 @@ def test_mark_success(manager, base_date):
         reason='涨停'
     )
     
-    manager.mark_success('000001.SZ', 'buy')
+    manager.mark_success(base_date + pd.Timedelta(days=1), '000001.SZ', 'buy')
     
     assert manager.get_pending_count() == 0
     assert not manager.has_order('000001.SZ', 'buy')
@@ -203,8 +203,8 @@ def test_multiple_orders(manager, base_date):
     
     assert manager.get_pending_count() == 3
     
-    # 获取可重试订单
-    retry_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=1))
+    # 获取可重试订单（sell 订单不会过期，始终在重试列表中）
+    retry_orders, expired_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=1))
     assert len(retry_orders) == 3
 
 

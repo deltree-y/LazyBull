@@ -172,15 +172,15 @@ def test_rebalance_freq_invalid_type():
         engine = BacktestEngine(
             universe=universe,
             signal=signal,
-            rebalance_freq=20,
+            rebalance_freq="20",
             verbose=False
         )
-    
+
     with pytest.raises(TypeError, match="调仓频率必须为整数类型"):
         engine = BacktestEngine(
             universe=universe,
             signal=signal,
-            rebalance_freq=5,
+            rebalance_freq=[5],
             verbose=False
         )
 

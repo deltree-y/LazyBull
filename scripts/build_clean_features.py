@@ -347,11 +347,11 @@ def build_features_data(
         else:
             logger.warning("未找到人气榜数据，相关特征将为空")
 
-    # 加载筹码胜率数据（可选）
+    # 加载筹码胜率数据（可选，按日分区存储，需传日期范围）
     cyq_perf_lookup = None
     if enable_cyq:
         from src.lazybull.factors.cyq_perf import build_cyq_perf_lookup_by_date
-        cyq_perf_df = loader.load_cyq_perf()
+        cyq_perf_df = loader.load_cyq_perf(start_date, end_date)
         if cyq_perf_df is not None:
             logger.info(f"筹码胜率数据: {len(cyq_perf_df)} 条")
             cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, trading_dates_str)
@@ -359,11 +359,11 @@ def build_features_data(
             logger.warning("未找到筹码胜率数据，相关特征将为空。"
                          "请先运行: python scripts/download_raw.py --download cyq_perf")
 
-    # 加载基金持仓数据（可选）
+    # 加载基金持仓数据（可选，按季度分区存储，需传日期范围）
     fund_portfolio_lookup = None
     if enable_fund:
         from src.lazybull.factors.fund_portfolio import build_fund_portfolio_lookup_by_date
-        fund_portfolio_df = loader.load_fund_portfolio()
+        fund_portfolio_df = loader.load_fund_portfolio(start_date, end_date)
         if fund_portfolio_df is not None:
             logger.info(f"基金持仓数据: {len(fund_portfolio_df)} 条")
             fund_portfolio_lookup = build_fund_portfolio_lookup_by_date(

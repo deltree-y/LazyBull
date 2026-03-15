@@ -210,13 +210,15 @@ def split_train_val_by_date(
     df_val = df[df[date_col].isin(val_dates_set)].copy()
 
     actual_train_n_dates = len(train_dates_set)
+    sorted_train_dates = sorted(train_dates_set)
+    sorted_val_dates = sorted(val_dates_set)
     stats = {
         "train_n_dates": actual_train_n_dates,   # 实际参与训练的日期数（已扣除末尾 delta 天间隔）
         "val_n_dates": len(val_dates_set),
-        "train_start_date": str(all_dates[0]) if n_train_dates > 0 else "N/A",
-        "train_end_date": str(all_dates[n_train_dates-delta - 1]) if n_train_dates > 0 else "N/A",
-        "val_start_date": str(all_dates[n_train_dates+delta]) if val_dates_set else "N/A",
-        "val_end_date": str(all_dates[-1]) if val_dates_set else "N/A",
+        "train_start_date": str(sorted_train_dates[0]) if sorted_train_dates else "N/A",
+        "train_end_date": str(sorted_train_dates[-1]) if sorted_train_dates else "N/A",
+        "val_start_date": str(sorted_val_dates[0]) if sorted_val_dates else "N/A",
+        "val_end_date": str(sorted_val_dates[-1]) if sorted_val_dates else "N/A",
     }
 
     logger.info(f"按 trade_date 粒度切分（共 {n_dates} 个交易日，delta={delta} 天间隔）:")

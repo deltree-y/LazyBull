@@ -96,7 +96,7 @@ def test_register_multiple_models(temp_models_dir):
         feature_columns=["f1", "f2"],
         label_column="y_ret_5",
         n_samples=500,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     # 注册第二个模型
@@ -109,7 +109,7 @@ def test_register_multiple_models(temp_models_dir):
         feature_columns=["f1", "f2", "f3"],
         label_column="y_ret_5",
         n_samples=600,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     assert version1 == 1
@@ -135,7 +135,7 @@ def test_load_latest_model(temp_models_dir):
         feature_columns=["f1", "f2"],
         label_column="y_ret_5",
         n_samples=500,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     model2 = MockModel()
@@ -147,7 +147,7 @@ def test_load_latest_model(temp_models_dir):
         feature_columns=["f1", "f2", "f3"],
         label_column="y_ret_5",
         n_samples=600,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     # 加载最新模型（不指定版本）
@@ -172,7 +172,7 @@ def test_load_specific_version(temp_models_dir):
         feature_columns=["f1", "f2"],
         label_column="y_ret_5",
         n_samples=500,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     model2 = MockModel()
@@ -184,7 +184,7 @@ def test_load_specific_version(temp_models_dir):
         feature_columns=["f1", "f2", "f3"],
         label_column="y_ret_5",
         n_samples=600,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     # 加载版本1
@@ -209,7 +209,7 @@ def test_load_nonexistent_version(temp_models_dir):
         feature_columns=["f1"],
         label_column="y_ret_5",
         n_samples=100,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     # 尝试加载不存在的版本
@@ -243,7 +243,7 @@ def test_get_latest_version(temp_models_dir):
         feature_columns=["f1"],
         label_column="y_ret_5",
         n_samples=100,
-        train_params={}
+        train_params={"n_estimators": 100}
     )
     
     assert registry.get_latest_version() == 1
@@ -267,7 +267,7 @@ def test_list_models(temp_models_dir):
             feature_columns=[f"f{i}"],
             label_column="y_ret_5",
             n_samples=100 * (i + 1),
-            train_params={}
+            train_params={"n_estimators": 100}
         )
     
     models = registry.list_models()

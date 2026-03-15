@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.20.5] - 2026-03-15
+
+### 修复
+
+- **修复41个失败测试** — 源代码经过多次功能迭代后，部分测试未同步更新导致接口不匹配
+  - 修复 `split_train_val_by_date` IndexError：当训练日期数 < delta 时索引越界，改用排序后的实际日期集合
+  - 更新 `test_walk_forward.py`：适配 `write_walk_forward_summary` 新增的 `args` 和 `wf_run_id` 参数
+  - 更新 `test_buy_replacement.py`：修正 DataLoader/Storage 的 mock 路径
+  - 更新 `test_pending_order.py`：适配 `mark_success` 新增 `success_date` 参数和 `get_orders_to_retry` 元组返回值
+  - 更新 `test_profit_tracking.py`：字段名 `profit_amount/profit_pct` → `pnl_profit_amount/pnl_profit_pct`
+  - 更新 `test_suspended_stock_handling.py`：适配 `AccountState`、`TradeInstruction`、`PendingSell` dataclass 等接口变更，补充 `_get_suspend_calendar` mock
+  - 更新 `test_trade_status.py`：适配缺失数据假定停牌的设计
+  - 更新 `test_cost.py`：适配默认佣金率和印花税率变更
+  - 更新 `test_market_and_new_features.py`：适配新增4个市场状态特征，跳过仅批量模式返回的特征
+  - 更新 `test_ml.py`/`test_multi_horizon_labels.py`：适配模型注册严格版本检查
+  - 更新 `test_new_features.py`：适配行业特征函数已注释的现状
+  - 更新 `test_rebalance_freq.py`：修正测试逻辑（传入非法类型而非合法整数）
+  - 更新 `test_position_completion.py`：适配有限候选池补齐策略
+
+## [0.20.4] - 2026-03-15
+
+### 修复
+
+- **build_clean_features 筹码胜率/基金持仓数据加载失败** — `load_cyq_perf()` 和 `load_fund_portfolio()` 未传日期范围参数，导致走单文件加载路径而非按日期分区加载，数据返回 None，构建出的特征文件缺失对应列
+  - 修改 `build_clean_features.py`: 传入 `start_date`/`end_date` 参数以正确使用 `load_raw_by_date_range`
+
 ## [0.20.3] - 2026-03-15
 
 ### 修复

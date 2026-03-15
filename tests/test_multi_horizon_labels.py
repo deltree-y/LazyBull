@@ -386,7 +386,7 @@ class TestBacktestLabelSelection:
             feature_columns=["feat1"],
             label_column="y_ret_5",
             n_samples=1000,
-            train_params={},
+            train_params={"n_estimators": 100},
             performance_metrics={}
         )
         

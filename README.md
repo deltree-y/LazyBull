@@ -28,7 +28,14 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.20.3)
+### 当前版本 (v0.20.5)
+
+**修复41个失败测试，同步测试代码与源代码接口** (v0.20.5):
+- 修复 `split_train_val_by_date` IndexError 源码bug
+- 更新13个测试文件以适配最新接口变更
+
+**修复特征构建时筹码胜率/基金持仓数据加载失败** (v0.20.4):
+- ✅ `build_clean_features.py` 中 `load_cyq_perf`/`load_fund_portfolio` 传入日期范围，正确使用分区加载
 
 **修复钉钉机器人消息丢失** (v0.20.3):
 - ✅ `SimpleHandler` 改用 `AsyncChatbotHandler`，`process()` 在线程池中执行，不再阻塞 event loop 导致断线

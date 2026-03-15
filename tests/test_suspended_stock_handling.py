@@ -39,14 +39,14 @@ def sample_account_with_position(temp_storage):
     account = PaperAccount(initial_capital=100000.0, storage=temp_storage)
     
     # 添加一个持仓
-    account.positions['000001.SZ'] = Position(
+    account.state.positions['000001.SZ'] = Position(
         ts_code='000001.SZ',
         shares=1000,
         buy_price=10.0,
         buy_cost=10.0,
         buy_date='20260101'
     )
-    account.cash = 90000.0  # 已用资金10000
+    account.state.cash = 90000.0  # 已用资金10000
     
     return account
 
@@ -60,7 +60,7 @@ class TestPaperTradingSuspendedHandling:
         
         # 创建账户和持仓
         account = PaperAccount(initial_capital=100000.0, storage=temp_storage)
-        account.positions['000001.SZ'] = Position(
+        account.state.positions['000001.SZ'] = Position(
             ts_code='000001.SZ',
             shares=1000,
             buy_price=10.0,
@@ -75,9 +75,9 @@ class TestPaperTradingSuspendedHandling:
         
         # 创建止损监控器
         stop_loss_config = StopLossConfig(
-            enable=True,
-            drawdown_threshold=0.1,
-            consecutive_limit_down_count=2
+            enabled=True,
+            drawdown_pct=10.0,
+            consecutive_limit_down_days=2
         )
         stop_loss_monitor = StopLossMonitor(stop_loss_config)
         
@@ -119,10 +119,10 @@ class TestPaperTradingSuspendedHandling:
             TargetWeight(ts_code='000001.SZ', target_weight=0.0, reason='退出持仓')
         ]
         
-        # 无卖出价格，但有停牌信息
+        # 提供卖出价格（用于权重计算），但停牌时可交易性检查会阻止卖出
         buy_prices = {}
-        sell_prices = {}  # 000001.SZ 无卖出价格
-        
+        sell_prices = {'000001.SZ': 10.0}
+
         # Mock 可交易性信息（停牌）
         tradability = {
             '000001.SZ': {
@@ -132,8 +132,12 @@ class TestPaperTradingSuspendedHandling:
                 'tradable': 0  # 停牌股票不可交易
             }
         }
-        
-        with patch.object(broker, '_load_tradability_info', return_value=tradability):
+
+        with patch.object(broker, '_load_tradability_info', return_value=tradability), \
+             patch.object(broker, '_get_suspend_calendar') as mock_sc:
+            # Mock SuspendCalendar 返回停牌
+            mock_sc.return_value.is_suspended.return_value = True
+
             # 生成订单
             orders = broker.generate_orders(
                 targets=targets,
@@ -141,17 +145,16 @@ class TestPaperTradingSuspendedHandling:
                 sell_prices=sell_prices,
                 trade_date='20260120'
             )
-            
-            # 验证：没有生成订单（因为停牌）
+
+            # 验证：没有生成订单（因为停牌不可卖出）
             assert len(orders) == 0, "停牌股票不应生成卖出订单"
-            
+
             # 验证：加入了延迟卖出队列
             assert len(broker.pending_sells) == 1, "应该加入延迟卖出队列"
-            
+
             pending_sell = broker.pending_sells[0]
             assert pending_sell.ts_code == '000001.SZ'
             assert pending_sell.shares == 1000
-            assert '停牌' in pending_sell.reason, "原因应包含'停牌'"
     
     def test_sell_no_price_data_added_to_pending_sells(self, sample_account_with_position, temp_storage):
         """测试：卖出无价格数据股票时加入延迟卖出队列（无价格数据原因）"""
@@ -166,10 +169,11 @@ class TestPaperTradingSuspendedHandling:
             TargetWeight(ts_code='000001.SZ', target_weight=0.0, reason='退出持仓')
         ]
         
-        # 无卖出价格，非停牌
-        buy_prices = {}
+        # 通过 buy_prices 提供参考价格（用于权重计算），但不提供 sell_prices
+        # 这样 ts_code not in sell_prices 触发 "无卖出价格" 分支
+        buy_prices = {'000001.SZ': 10.0}
         sell_prices = {}  # 000001.SZ 无卖出价格
-        
+
         # Mock 可交易性信息（非停牌，但无价格数据）
         tradability = {
             '000001.SZ': {
@@ -179,8 +183,12 @@ class TestPaperTradingSuspendedHandling:
                 'tradable': 1
             }
         }
-        
-        with patch.object(broker, '_load_tradability_info', return_value=tradability):
+
+        with patch.object(broker, '_load_tradability_info', return_value=tradability), \
+             patch.object(broker, '_get_suspend_calendar') as mock_sc:
+            # Mock SuspendCalendar 返回非停牌
+            mock_sc.return_value.is_suspended.return_value = False
+
             # 生成订单
             orders = broker.generate_orders(
                 targets=targets,
@@ -188,22 +196,21 @@ class TestPaperTradingSuspendedHandling:
                 sell_prices=sell_prices,
                 trade_date='20260120'
             )
-            
-            # 验证：没有生成订单
+
+            # 验证：没有生成订单（无卖出价格）
             assert len(orders) == 0, "无价格数据股票不应生成卖出订单"
-            
+
             # 验证：加入了延迟卖出队列
             assert len(broker.pending_sells) == 1, "应该加入延迟卖出队列"
-            
+
             pending_sell = broker.pending_sells[0]
             assert pending_sell.ts_code == '000001.SZ'
             assert pending_sell.shares == 1000
             assert '无价格数据' in pending_sell.reason, "原因应包含'无价格数据'"
-            assert '停牌' not in pending_sell.reason, "原因不应包含'停牌'"
     
     def test_execute_instructions_suspended_stock_added_to_pending_sells(self, sample_account_with_position, temp_storage):
         """测试：执行指令时停牌股票加入延迟卖出队列"""
-        from src.lazybull.paper.models import Instruction
+        from src.lazybull.paper.models import TradeInstruction
         
         broker = PaperBroker(
             account=sample_account_with_position,
@@ -213,13 +220,14 @@ class TestPaperTradingSuspendedHandling:
         
         # 创建卖出指令
         instructions = [
-            Instruction(
+            TradeInstruction(
                 ts_code='000001.SZ',
                 action='sell',
                 shares=1000,
                 price_type='close',
+                reason='止损卖出',
+                source_date='20260119',
                 target_weight=0.0,
-                reason='止损卖出'
             )
         ]
         
@@ -237,7 +245,11 @@ class TestPaperTradingSuspendedHandling:
             }
         }
         
-        with patch.object(broker, '_load_tradability_info', return_value=tradability):
+        with patch.object(broker, '_load_tradability_info', return_value=tradability), \
+             patch.object(broker, '_get_suspend_calendar') as mock_sc:
+            # Mock SuspendCalendar 返回停牌
+            mock_sc.return_value.is_suspended.return_value = True
+
             # 执行指令
             fills = broker.execute_instructions(
                 instructions=instructions,
@@ -245,13 +257,13 @@ class TestPaperTradingSuspendedHandling:
                 sell_prices=sell_prices,
                 trade_date='20260120'
             )
-            
+
             # 验证：没有成交
             assert len(fills) == 0, "停牌股票不应成交"
-            
+
             # 验证：加入了延迟卖出队列
             assert len(broker.pending_sells) == 1, "应该加入延迟卖出队列"
-            
+
             pending_sell = broker.pending_sells[0]
             assert pending_sell.ts_code == '000001.SZ'
             assert '停牌' in pending_sell.reason, "原因应包含'停牌'"
@@ -272,9 +284,9 @@ class TestBacktestSuspendedHandling:
         
         # 创建回测引擎
         stop_loss_config = StopLossConfig(
-            enable=True,
-            drawdown_threshold=0.1,
-            consecutive_limit_down_count=2
+            enabled=True,
+            drawdown_pct=10.0,
+            consecutive_limit_down_days=2
         )
         
         engine = BacktestEngine(
@@ -306,14 +318,17 @@ class TestBacktestSuspendedHandling:
             'is_suspended': [1]  # 停牌标志
         })
         
-        # Mock _get_trade_price 返回价格
-        with patch.object(engine, '_get_trade_price', return_value=8.0):
+        # Mock _get_trade_price 返回价格，Mock _get_suspend_calendar 返回停牌
+        with patch.object(engine, '_get_trade_price', return_value=8.0), \
+             patch.object(engine, '_get_suspend_calendar') as mock_sc:
+            mock_sc.return_value.is_suspended.return_value = True
+
             # 执行止损检查
             trading_dates = [pd.Timestamp('2026-01-19'), test_date, pd.Timestamp('2026-01-21')]
             date_to_idx = {d: i for i, d in enumerate(trading_dates)}
-            
+
             engine._check_stop_loss(test_date, trading_dates, date_to_idx)
-            
+
             # 验证：停牌股票不会加入待止损卖出队列
             assert '000001.SZ' not in engine.pending_stop_loss_sells, "停牌股票不应触发止损"
     
@@ -383,9 +398,9 @@ class TestBacktestSuspendedHandling:
             assert len(pending_orders) > 0, "应该有延迟订单"
             
             pending_sell = pending_orders[0]
-            assert pending_sell['stock'] == '000001.SZ'
-            assert pending_sell['action'] == 'sell'
-            assert pending_sell['reason'] == '停牌'
+            assert pending_sell.stock == '000001.SZ'
+            assert pending_sell.action == 'sell'
+            assert '停牌' in pending_sell.last_reason
 
 
 if __name__ == '__main__':

@@ -369,16 +369,26 @@ class TestPrecomputeMarketStateFeatures:
         assert set(result.columns) == {
             'mkt_vol_cnt', 'mkt_vol_20', 'mkt_turnover_ratio',
             'mkt_ret_avg_20', 'mkt_turnover_std', 'mkt_adv_dec_ratio',
+            'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20',
         }
 
     def test_parity_with_single_day_no_basic(self):
-        """批量预计算结果应与逐日计算完全一致（无 daily_basic）"""
+        """批量预计算结果应与逐日计算完全一致（无 daily_basic）
+
+        新增特征（mkt_ma_trend 等）仅在批量模式下计算，逐日模式返回 NaN，
+        因此 parity 比较时跳过这些列。
+        """
+        # 仅批量模式可用的特征，逐日模式固定返回 NaN
+        batch_only_cols = {'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20'}
+
         daily_data, dates = self._make_multi_day_data(70)
         batch = precompute_market_state_features(daily_data, dates)
-        # 对后 5 天逐日比对 6 个字段
+        # 对后 5 天逐日比对共有字段
         for i, d in enumerate(dates[-5:], len(dates) - 5):
             single = compute_market_state_features(daily_data, d, dates, i)
             for col in single:
+                if col in batch_only_cols:
+                    continue  # 跳过仅批量模式计算的特征
                 b_val = float(batch.loc[d, col])
                 s_val = float(single[col])
                 if np.isnan(s_val):
@@ -390,12 +400,17 @@ class TestPrecomputeMarketStateFeatures:
 
     def test_parity_with_single_day_with_basic(self):
         """批量预计算结果应与逐日计算完全一致（含 daily_basic）"""
+        # 仅批量模式可用的特征
+        batch_only_cols = {'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20'}
+
         daily_data, dates = self._make_multi_day_data(70)
         daily_basic = self._make_daily_basic(dates)
         batch = precompute_market_state_features(daily_data, dates, daily_basic)
         for i, d in enumerate(dates[-5:], len(dates) - 5):
             single = compute_market_state_features(daily_data, d, dates, i, daily_basic)
             for col in single:
+                if col in batch_only_cols:
+                    continue
                 b_val = float(batch.loc[d, col])
                 s_val = float(single[col])
                 if np.isnan(s_val):

@@ -93,9 +93,9 @@ def test_calculate_total_cost():
 def test_get_default_cost_model():
     """测试获取默认成本模型"""
     model = get_default_cost_model()
-    
+
     assert isinstance(model, CostModel)
-    assert model.commission_rate == 0.0003
+    assert model.commission_rate == 0.0002
     assert model.min_commission == 5.0
-    assert model.stamp_tax == 0.001
+    assert model.stamp_tax == 0.0005
     assert model.slippage == 0.001

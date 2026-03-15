@@ -249,9 +249,28 @@ class TestWalkForwardCSV:
             
             # 导入函数
             from scripts.walk_forward import write_walk_forward_summary
-            
+            import types
+
+            # 构造 mock args（包含函数内部需要的所有属性）
+            mock_args = types.SimpleNamespace(
+                wf_start_date="20200101", wf_end_date="20230630",
+                algorithm="xgboost", step=3, train_window_years=3,
+                test_window_months=3, val_ratio=0.2,
+                label_column="y_ret_5", task="regression",
+                label_transform="cs_zscore",
+                n_estimators=500, max_depth=6, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8,
+                min_child_weight=1, gamma=0, reg_alpha=0, reg_lambda=1,
+                early_stopping_rounds=50, early_stopping_metric="rmse",
+                rank_weight_enabled=False, rank_weight_topk=100, rank_weight=2.0,
+                time_decay_half_life=0,
+                enable_fundamental_features=False, enable_alt_features=False,
+                enable_cyq_features=False, enable_fund_features=False,
+                enable_express_features=False,
+            )
+
             # 写入文件
-            write_walk_forward_summary(results, output_path)
+            write_walk_forward_summary(results, output_path, mock_args, "wf_test_001")
             
             # 验证文件存在
             assert os.path.exists(output_path)

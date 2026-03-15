@@ -11,15 +11,15 @@ from src.lazybull.universe.base import Universe
 
 class MockUniverse(Universe):
     """模拟股票池"""
-    
-    def get_stocks(self, date):
+
+    def get_stocks(self, date, quote_data=None):
         """返回所有可用股票"""
         return ['000001.SZ']
 
 
 class MockSignal(Signal):
     """模拟信号生成器"""
-    
+
     def generate(self, date, universe, data):
         """生成信号"""
         if not universe:
@@ -95,13 +95,13 @@ def test_profit_tracking_in_sell_trades(price_data_with_profit, trading_dates):
     # 验证卖出交易包含新增字段
     for _, sell_trade in sell_trades.iterrows():
         assert 'buy_price' in sell_trade, "卖出交易应包含买入价格"
-        assert 'profit_amount' in sell_trade, "卖出交易应包含收益金额"
-        assert 'profit_pct' in sell_trade, "卖出交易应包含收益率"
+        assert 'pnl_profit_amount' in sell_trade, "卖出交易应包含收益金额"
+        assert 'pnl_profit_pct' in sell_trade, "卖出交易应包含收益率"
         
         # 验证字段值合理
         assert pd.notna(sell_trade['buy_price']), "买入价格不应为空"
-        assert pd.notna(sell_trade['profit_amount']), "收益金额不应为空"
-        assert pd.notna(sell_trade['profit_pct']), "收益率不应为空"
+        assert pd.notna(sell_trade['pnl_profit_amount']), "收益金额不应为空"
+        assert pd.notna(sell_trade['pnl_profit_pct']), "收益率不应为空"
 
 
 def test_profit_calculation_accuracy(price_data_with_profit, trading_dates):
@@ -141,8 +141,8 @@ def test_profit_calculation_accuracy(price_data_with_profit, trading_dates):
         buy_price = sell_trade['buy_price']
         shares = sell_trade['shares']
         sell_cost = sell_trade['cost']
-        profit_amount = sell_trade['profit_amount']
-        profit_pct = sell_trade['profit_pct']
+        pnl_profit_amount = sell_trade['pnl_profit_amount']
+        pnl_profit_pct = sell_trade['pnl_profit_pct']
         
         # 找到对应的买入交易
         buy_trade = trades_df[
@@ -158,13 +158,13 @@ def test_profit_calculation_accuracy(price_data_with_profit, trading_dates):
         buy_total_cost = buy_amount + buy_cost
         sell_proceeds = shares * sell_price - sell_cost
         expected_profit = sell_proceeds - buy_total_cost
-        expected_profit_pct = expected_profit / buy_total_cost
+        expected_pnl_profit_pct = expected_profit / buy_total_cost
         
         # 验证计算结果（允许小的浮点误差）
-        assert abs(profit_amount - expected_profit) < 0.01, \
-            f"收益金额计算错误: {profit_amount} vs {expected_profit}"
-        assert abs(profit_pct - expected_profit_pct) < 0.0001, \
-            f"收益率计算错误: {profit_pct} vs {expected_profit_pct}"
+        assert abs(pnl_profit_amount - expected_profit) < 0.01, \
+            f"收益金额计算错误: {pnl_profit_amount} vs {expected_profit}"
+        assert abs(pnl_profit_pct - expected_pnl_profit_pct) < 0.0001, \
+            f"收益率计算错误: {pnl_profit_pct} vs {expected_pnl_profit_pct}"
 
 
 def test_profit_with_price_increase(price_data_with_profit, trading_dates):
@@ -209,9 +209,9 @@ def test_profit_with_price_increase(price_data_with_profit, trading_dates):
         for _, sell_trade in sell_trades.iterrows():
             # 扣除成本后，收益可能为正或负，但这里价格涨幅较大，应该为正
             # 注意：由于有成本，小幅上涨可能仍为负
-            profit_amount = sell_trade['profit_amount']
+            pnl_profit_amount = sell_trade['pnl_profit_amount']
             # 至少验证字段存在且有值
-            assert pd.notna(profit_amount), "收益金额应该有值"
+            assert pd.notna(pnl_profit_amount), "收益金额应该有值"
 
 
 def test_profit_with_price_decrease(trading_dates):
@@ -254,7 +254,7 @@ def test_profit_with_price_decrease(trading_dates):
     # 价格下跌，应该有负收益（亏损）
     if len(sell_trades) > 0:
         for _, sell_trade in sell_trades.iterrows():
-            profit_amount = sell_trade['profit_amount']
+            pnl_profit_amount = sell_trade['pnl_profit_amount']
             # 价格下跌较大，应该为负
-            assert profit_amount < 0, "价格下跌应该产生亏损"
-            assert sell_trade['profit_pct'] < 0, "收益率应该为负"
+            assert pnl_profit_amount < 0, "价格下跌应该产生亏损"
+            assert sell_trade['pnl_profit_pct'] < 0, "收益率应该为负"

@@ -179,8 +179,8 @@ def test_retry_pending_buys_success(broker):
     broker.pending_buys = [pending_buy]
     
     # Mock 数据加载
-    with patch('src.lazybull.paper.broker.DataLoader') as MockLoader, \
-         patch('src.lazybull.paper.broker.Storage') as MockStorage:
+    with patch('src.lazybull.data.DataLoader') as MockLoader, \
+         patch('src.lazybull.data.Storage') as MockStorage:
         
         # Mock daily_data
         mock_loader = MockLoader.return_value
@@ -226,8 +226,8 @@ def test_retry_pending_buys_still_limit_up(broker):
     broker.pending_buys = [pending_buy]
     
     # Mock 数据加载
-    with patch('src.lazybull.paper.broker.DataLoader') as MockLoader, \
-         patch('src.lazybull.paper.broker.Storage') as MockStorage:
+    with patch('src.lazybull.data.DataLoader') as MockLoader, \
+         patch('src.lazybull.data.Storage') as MockStorage:
         
         # Mock daily_data
         mock_loader = MockLoader.return_value
@@ -273,8 +273,8 @@ def test_retry_pending_buys_max_attempts_exceeded(broker):
     broker.pending_buys = [pending_buy]
     
     # Mock 数据加载
-    with patch('src.lazybull.paper.broker.DataLoader') as MockLoader, \
-         patch('src.lazybull.paper.broker.Storage') as MockStorage:
+    with patch('src.lazybull.data.DataLoader') as MockLoader, \
+         patch('src.lazybull.data.Storage') as MockStorage:
         
         # Mock daily_data
         mock_loader = MockLoader.return_value
@@ -318,8 +318,8 @@ def test_retry_pending_buys_same_day_no_increment(broker):
     broker.pending_buys = [pending_buy]
     
     # Mock 数据加载
-    with patch('src.lazybull.paper.broker.DataLoader') as MockLoader, \
-         patch('src.lazybull.paper.broker.Storage') as MockStorage:
+    with patch('src.lazybull.data.DataLoader') as MockLoader, \
+         patch('src.lazybull.data.Storage') as MockStorage:
         
         # Mock daily_data
         mock_loader = MockLoader.return_value

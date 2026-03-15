@@ -39,8 +39,8 @@ def test_is_suspended_suspended(sample_quote_data):
 
 
 def test_is_suspended_missing_data(sample_quote_data):
-    """测试数据缺失情况"""
-    assert not is_suspended('999999.SZ', '20230110', sample_quote_data)
+    """测试数据缺失情况（未找到数据时假定停牌）"""
+    assert is_suspended('999999.SZ', '20230110', sample_quote_data)
 
 
 def test_is_limit_up_normal(sample_quote_data):
@@ -160,12 +160,12 @@ def test_get_trade_status_info_limit_down(sample_quote_data):
 
 
 def test_get_trade_status_info_missing(sample_quote_data):
-    """测试数据缺失情况"""
+    """测试数据缺失情况（未找到数据时假定停牌，不可买卖）"""
     info = get_trade_status_info('999999.SZ', '20230110', sample_quote_data)
-    assert not info['is_suspended']
+    assert info['is_suspended']
     assert not info['is_limit_up']
     assert not info['is_limit_down']
-    assert info['can_buy']
-    assert info['can_sell']
+    assert not info['can_buy']
+    assert not info['can_sell']
     assert info['close'] is None
     assert info['pct_chg'] is None
