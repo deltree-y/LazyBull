@@ -41,7 +41,7 @@ ensure_clean_data_for_date()
 常量定义：
 ```python
 FEATURE_DATA_HISTORY_MONTHS = 1  # 特征数据历史月数
-FEATURE_DATA_FUTURE_MONTHS = 1   # 特征数据未来月数
+FEATURE_DATA_FUTURE_MONTHS = 0   # 特征数据未来月数（禁止使用未来数据）
 HISTORICAL_DATA_MONTHS = 1       # 历史数据回看月数
 MAX_HISTORICAL_DAYS = 30         # 最多检查的历史交易日数
 ```

@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.20.8] - 2026-03-23
+
+### 修复
+
+- **features/ensure.py — 禁止下载和使用未来数据（前视偏差）**
+  - `end_dt` 从 `trade_date + 1个月` 改为 `trade_date`，`trading_dates_str` 不再包含未来交易日
+  - `_try_ensure_historical_cyq_perf` 调用前过滤日期 `<= trade_date`，防止下载未来筹码胜率数据
+  - `_try_ensure_historical_fund_portfolio` 调用前过滤日期 `<= trade_date`，防止下载未来季度基金持仓
+  - clean 日线数据（daily/daily_basic/moneyflow）加载范围截止到 `trade_date`
+  - `FEATURE_DATA_FUTURE_MONTHS` 常量从 1 改为 0
+
 ## [0.20.7] - 2026-03-16
 
 ### 修复

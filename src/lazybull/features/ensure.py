@@ -15,7 +15,9 @@ from .builder import FeatureBuilder
 
 # 常量定义
 FEATURE_DATA_HISTORY_MONTHS = 1  # 特征数据历史月数
-FEATURE_DATA_FUTURE_MONTHS = 1   # 特征数据未来月数
+# 注意: 纸面交易使用 require_label=False，标签为 NaN 不影响推理；
+# 此值必须为 0，避免下载/使用未来数据导致前视偏差。
+FEATURE_DATA_FUTURE_MONTHS = 0
 HISTORICAL_DATA_MONTHS = 1       # 历史数据回看月数
 MAX_HISTORICAL_DAYS = 30         # 最多检查的历史交易日数
 
@@ -100,13 +102,12 @@ def ensure_features_for_date(
             if not pd.api.types.is_datetime64_any_dtype(trade_cal['cal_date']):
                 trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
         
-        # 5. 加载 clean 日线数据（扩展范围以包含历史数据）
-        start_dt = pd.to_datetime(trade_date, format='%Y%m%d') - pd.DateOffset(
+        # 5. 加载 clean 日线数据（扩展范围以包含历史数据，不加载未来数据）
+        trade_dt = pd.to_datetime(trade_date, format='%Y%m%d')
+        start_dt = trade_dt - pd.DateOffset(
             months=FEATURE_DATA_HISTORY_MONTHS
         )
-        end_dt = pd.to_datetime(trade_date, format='%Y%m%d') + pd.DateOffset(
-            months=FEATURE_DATA_FUTURE_MONTHS
-        )
+        end_dt = trade_dt  # 严格截止到当前交易日，禁止使用未来数据
         
         daily_clean = loader.load_clean_daily(
             start_dt.strftime('%Y%m%d'),
@@ -396,7 +397,9 @@ def _load_factor_data(
 
     # ── 筹码胜率（按日分区，同 margin_detail）──────────────────
     cyq_perf_today = None
-    cyq_perf_df = _try_ensure_historical_cyq_perf(client, storage, trading_dates_str)
+    # 只补齐 <= trade_date 的历史分区（未来日期实盘不可获取）
+    cyq_perf_hist_dates = [d for d in trading_dates_str if d <= trade_date]
+    cyq_perf_df = _try_ensure_historical_cyq_perf(client, storage, cyq_perf_hist_dates)
     if cyq_perf_df is not None and len(cyq_perf_df) > 0:
         from ..factors.cyq_perf import build_cyq_perf_lookup_by_date
         cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, trading_dates_str)
@@ -424,8 +427,10 @@ def _load_factor_data(
 
     # ── 基金持仓（按季度分区）──────────────────────────────────
     fund_portfolio_today = None
+    # 只补齐 <= trade_date 的历史季度（未来季度实盘不可获取）
+    fund_hist_dates = [d for d in trading_dates_str if d <= trade_date]
     fund_portfolio_df = _try_ensure_historical_fund_portfolio(
-        client, storage, trading_dates_str,
+        client, storage, fund_hist_dates,
     )
     if fund_portfolio_df is not None and len(fund_portfolio_df) > 0:
         from ..factors.fund_portfolio import build_fund_portfolio_lookup_by_date
@@ -888,10 +893,13 @@ def _try_ensure_historical_cyq_perf(
     cyq_perf 按日分区存储，需要 20+ 天历史数据才能计算胜率变化率。
     使用 trade_date 参数一次获取全市场当日数据。
 
+    注意: 调用方必须确保 trading_dates_str 只包含 <= trade_date 的历史日期，
+    避免下载未来数据导致前视偏差。
+
     Args:
         client: TushareClient 实例
         storage: Storage 实例
-        trading_dates_str: 需要覆盖的交易日列表（YYYYMMDD）
+        trading_dates_str: 需要覆盖的交易日列表（YYYYMMDD，仅历史日期）
 
     Returns:
         合并后的 cyq_perf DataFrame，或 None
