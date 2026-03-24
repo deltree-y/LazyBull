@@ -1287,7 +1287,7 @@ def train_lightgbm_model(
         (model, train_params, train_metrics, val_metrics) 元组
     """
     try:
-        import lightgbm as lgb
+        import lightgbm as lgb  # type: ignore
     except ImportError:
         logger.error("需要安装 lightgbm: pip install lightgbm")
         raise

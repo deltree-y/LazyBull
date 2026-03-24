@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.22.3] - 2026-03-24
+
+### 优化
+
+- **基金持仓因子内存优化，消除175万行全量加载瓶颈**
+  - `_try_ensure_historical_fund_portfolio()` 改为逐分区加载+聚合，每次仅加载单季度数据（~44万行），聚合后立即释放
+  - `_aggregate_fund_portfolio()` 去掉冗余 `.copy()`，避免百万行级 DataFrame 复制
+  - `build_fund_portfolio_lookup_by_date()` 新增 `pre_aggregated` 参数，跳过重复聚合
+  - fund_portfolio 峰值内存从 ~280MB 降至 ~35MB
+
 ## [0.22.2] - 2026-03-24
 
 ### 优化

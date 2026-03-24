@@ -38,7 +38,8 @@ def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
         个股级汇总 DataFrame(stock_code, ann_date, end_date,
                             fund_hold_ratio, fund_count)
     """
-    df = raw_df.copy()
+    # 直接操作传入的 DataFrame（调用方保证传入独立副本或不再使用原始引用）
+    df = raw_df
 
     # 日期标准化（兼容 datetime 和字符串类型）
     for col in ["ann_date", "end_date"]:
@@ -72,12 +73,14 @@ def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
 def build_fund_portfolio_lookup_by_date(
     fund_portfolio_df: pd.DataFrame,
     trading_dates: List[str],
+    pre_aggregated: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """将基金持仓数据按 ann_date point-in-time 对齐到日频
 
     Args:
-        fund_portfolio_df: fund_portfolio 原始 DataFrame
+        fund_portfolio_df: fund_portfolio DataFrame（原始或已聚合）
         trading_dates: 交易日列表（YYYYMMDD 字符串，已排序）
+        pre_aggregated: 若为 True，表示传入的已是个股级聚合数据，跳过聚合步骤
 
     Returns:
         Dict[str, DataFrame]: {trade_date -> DataFrame(ts_code, fund_hold_ratio, ...)}
@@ -85,8 +88,8 @@ def build_fund_portfolio_lookup_by_date(
     if fund_portfolio_df is None or len(fund_portfolio_df) == 0:
         return {}
 
-    # 聚合到个股级
-    agg = _aggregate_fund_portfolio(fund_portfolio_df)
+    # 聚合到个股级（若已预聚合则跳过，节省内存）
+    agg = fund_portfolio_df if pre_aggregated else _aggregate_fund_portfolio(fund_portfolio_df)
     if len(agg) == 0:
         return {}
 

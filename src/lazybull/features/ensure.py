@@ -454,7 +454,9 @@ def _load_factor_data(
     )
     if fund_portfolio_df is not None and len(fund_portfolio_df) > 0:
         from ..factors.fund_portfolio import build_fund_portfolio_lookup_by_date
-        fund_lookup = build_fund_portfolio_lookup_by_date(fund_portfolio_df, trading_dates_str)
+        fund_lookup = build_fund_portfolio_lookup_by_date(
+            fund_portfolio_df, trading_dates_str, pre_aggregated=True
+        )
         fund_portfolio_today = fund_lookup.get(trade_date)
         logger.info(f"基金持仓因子: 已加载 ({len(fund_portfolio_df)} 条)")
     else:
@@ -998,13 +1000,25 @@ def _try_ensure_historical_fund_portfolio(
     if downloaded > 0:
         logger.info(f"基金持仓历史补齐: 新增 {downloaded} 个季度")
 
-    # 加载完整范围
-    from ..data.loader import DataLoader
+    # 逐分区加载+聚合，避免一次性加载全量原始数据（可达百万行级）
+    from ..factors.fund_portfolio import _aggregate_fund_portfolio
 
-    loader = DataLoader(storage)
-    # 从回溯起始年的第一个季度到最晚交易日
-    load_start = f"{start_year}0101"
-    return loader.load_fund_portfolio(load_start, max_date)
+    agg_dfs = []
+    for period in periods:
+        if not storage.is_data_exists("raw", "fund_portfolio", period):
+            continue
+        raw_df = storage.load_raw_by_date("fund_portfolio", period)
+        if raw_df is not None and len(raw_df) > 0:
+            agg = _aggregate_fund_portfolio(raw_df)
+            agg_dfs.append(agg)
+            del raw_df
+            gc.collect()
+
+    if not agg_dfs:
+        return None
+    result = pd.concat(agg_dfs, ignore_index=True)
+    logger.info(f"基金持仓: 逐分区聚合完成，{len(periods)} 个季度 → {len(result)} 条个股记录")
+    return result
 
 
 # ── 申万行业分类自动下载 ─────────────────────────────────────────
