@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.22.5] - 2026-03-24
+
+### 修复
+
+- **补位信号生成失败后无法重试的问题**
+  - 补位信号生成失败时（如 margin 数据不可用），failed_buy_targets 被 `clear_failed_buy_targets()` 清空导致信息丢失，且 T1 run_record 已保存，重新运行时幂等检查直接跳过
+  - 补位失败时将原始 failed_buy_targets 保存为 PendingBuy，确保失败目标不丢失
+  - T1 幂等检查后增加 pending_buys 检查：指令已执行但有待处理的补位计划时，仍执行补位买入
+
+## [0.22.4] - 2026-03-24
+
+### 修复
+
+- **纸面交易融资融券因子缺失导致推理失败**
+  - 当日 margin_detail 数据尚未发布时，`margin_lookup.get(trade_date)` 返回 None，builder 跳过 merge，features 完全缺失 `rzye_chg_5`/`rzye_chg_20`/`rqye_rzye_ratio` 列
+  - 新增当日数据额外重试下载逻辑：若查询表中无当日数据，单独调用 TuShare API 重试
+  - 重试仍失败时抛出 `RuntimeError`，阻止生成不完整的 features 文件，并输出明确错误信息提示用户稍后重试
+
 ## [0.22.3] - 2026-03-24
 
 ### 优化

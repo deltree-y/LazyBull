@@ -525,7 +525,43 @@ def _execute_t1_if_pending(
     
     # 检查幂等性
     if runner.paper_storage.check_run_exists("t1", trade_date):
-        logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
+        # T1 指令已执行，但仍检查是否有未完成的补位计划
+        pending_buys = runner.paper_storage.load_pending_buys()
+        if not pending_buys:
+            logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
+            return actions
+        logger.info(
+            f"T1 指令已执行，但有 {len(pending_buys)} 个补位计划待处理"
+        )
+        # 加载价格并处理补位（跳过指令执行）
+        buy_prices, sell_prices = runner._load_prices(
+            trade_date, config['buy_price'], config['sell_price']
+        )
+        if not buy_prices:
+            logger.error("无法加载价格数据，跳过补位处理")
+            return actions
+        replenishment_fills = runner._execute_pending_buys(
+            pending_buys, buy_prices, trade_date, config['buy_price']
+        )
+        if replenishment_fills:
+            for fill in replenishment_fills:
+                actions.append({
+                    'ts_code': fill.ts_code,
+                    'action': fill.action,
+                    'shares': fill.shares,
+                    'reason': fill.reason,
+                })
+            runner.account.update_last_date(trade_date)
+            runner.account.save_state()
+            all_prices = {**sell_prices, **buy_prices}
+            runner._record_nav(trade_date, all_prices)
+        # 检查是否有新的失败买入
+        new_failed = runner.broker.get_failed_buy_targets()
+        if new_failed:
+            max_attempt = max([pb.attempts for pb in pending_buys], default=0)
+            _handle_failed_buys(
+                runner, trade_date, config, new_failed, attempt_count=max_attempt
+            )
         return actions
 
     # 向前搜索未执行的交易指令（支持跳日期场景）
@@ -756,7 +792,24 @@ def _handle_failed_buys(
             logger.info(f"下一交易日 {next_trade_date} 将自动读取并执行补位买入（第 {next_attempt}/{MAX_REPLENISHMENT_ATTEMPTS} 次尝试）")
             logger.info(f"补位买入不会触发现有持仓的卖出")
         else:
-            logger.warning("无法生成补位目标，候选可能已耗尽")
+            # 补位信号生成失败（如 margin 数据不可用），保存原始失败目标以待重试
+            logger.warning("无法生成补位目标，将原始失败目标保存为补位计划以待重试")
+            from src.lazybull.paper.models import PendingBuy
+            fallback_pending = []
+            for target in failed_buy_targets:
+                fallback_pending.append(PendingBuy(
+                    ts_code=target.ts_code,
+                    target_weight=target.target_weight,
+                    reason=f"补位待重试-{target.reason}",
+                    create_date=trade_date,
+                    attempts=next_attempt,
+                    last_attempt_date="",
+                    original_signal_date=trade_date,
+                ))
+            runner.paper_storage.save_pending_buys(fallback_pending)
+            logger.info(
+                f"已保存 {len(fallback_pending)} 个失败目标到补位队列，下次运行将重试"
+            )
     else:
         logger.error("无法获取下一交易日，补位计划生成失败")
     

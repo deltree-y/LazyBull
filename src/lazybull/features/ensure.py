@@ -364,7 +364,32 @@ def _load_factor_data(
         from ..factors.margin import build_margin_lookup_by_date
         margin_lookup = build_margin_lookup_by_date(margin_detail, trading_dates_str)
         margin_today = margin_lookup.get(trade_date)
-        logger.info(f"融资融券因子: 已加载 ({len(margin_detail)} 条)")
+        # 当日 margin_detail 可能尚未发布，额外重试一次下载
+        if margin_today is None:
+            logger.warning(
+                f"融资融券: 当日 {trade_date} 数据不在查询表中，尝试单独下载..."
+            )
+            try:
+                df = client.query("margin_detail", trade_date=trade_date)
+                if df is not None and not df.empty:
+                    storage.save_raw_by_date(df, "margin_detail", trade_date)
+                    # 重新加载并构建（追加当日数据）
+                    margin_detail_full = loader.load_margin_detail(start_date, end_date)
+                    if margin_detail_full is not None and len(margin_detail_full) > 0:
+                        margin_lookup = build_margin_lookup_by_date(
+                            margin_detail_full, trading_dates_str
+                        )
+                        margin_today = margin_lookup.get(trade_date)
+                    margin_detail_full = None
+            except Exception as e:
+                logger.warning(f"融资融券: 当日数据下载重试失败: {e}")
+        if margin_today is not None:
+            logger.info(f"融资融券因子: 已加载 ({len(margin_detail)} 条)")
+        else:
+            raise RuntimeError(
+                f"融资融券因子: 无法获取当日 {trade_date} 的 margin_detail 数据。\n"
+                f"TuShare margin_detail 数据可能尚未发布，请稍后重试。"
+            )
     else:
         missing_factors.append("margin_detail（融资融券）")
     # 释放融资融券中间数据
