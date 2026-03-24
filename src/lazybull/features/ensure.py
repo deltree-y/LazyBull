@@ -199,7 +199,14 @@ def ensure_features_for_date(
             express_data=express_today,
             fund_portfolio_data=fund_portfolio_today,
         )
-        
+        # 释放不再需要的历史数据，降低保存时的内存占用
+        daily_clean = None
+        daily_basic_clean = None
+        moneyflow_clean = None
+        funda_today = margin_today = holder_today = earnings_today = None
+        cyq_perf_today = express_today = fund_portfolio_today = None
+        gc.collect()
+
         # 9. 保存结果
         if len(features_df) > 0:
             storage.save_cs_train_day(features_df, trade_date)#, has_label=builder.require_label)
@@ -966,8 +973,8 @@ def _try_ensure_historical_fund_portfolio(
 
     min_date = min(trading_dates_str)
     max_date = max(trading_dates_str)
-    # 回溯 2 年获取历史持仓（基金持仓因子需要多季度数据）
-    start_year = int(min_date[:4]) - 2
+    # 回溯 1 年获取历史持仓（point-in-time 只需最近季报，缩短以降低内存占用）
+    start_year = int(min_date[:4]) - 1
     end_year = int(max_date[:4])
     periods = _generate_quarter_periods(start_year, end_year)
 

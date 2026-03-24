@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.22.2] - 2026-03-24
+
+### 优化
+
+- **特征构建全链路内存优化（第二轮），进一步降低树莓派内存占用**
+  - 基金持仓回溯从2年缩短为1年，加载量减半
+  - 纸面交易（单日模式）跳过技术指标 dict 缓存构建，节省 ~15MB
+  - `build_features_for_day()` 返回后立即释放日线/因子数据
+  - 消除 `hist_data` 和 `_slice_by_trading_days` 中的冗余 `.copy()`
+  - 峰值内存从 ~250MB 降至 ~130MB
+
 ## [0.22.1] - 2026-03-24
 
 ### 优化

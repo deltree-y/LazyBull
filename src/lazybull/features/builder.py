@@ -381,7 +381,7 @@ class FeatureBuilder:
         warmup_start_idx = max(0, anchor_idx - warmup_days)
         # 过滤到 warmup 起始日（含）之后的所有交易日
         window_dates = set(trading_dates[warmup_start_idx:])
-        return daily_df[daily_df['trade_date'].isin(window_dates)].copy()
+        return daily_df[daily_df['trade_date'].isin(window_dates)]
 
     def _calculate_adj_close(
         self,
@@ -619,7 +619,7 @@ class FeatureBuilder:
             else:
                 hist_data = daily_adj[
                     daily_adj['trade_date'].isin(hist_dates)
-                ].copy()
+                ]
             
             # 按股票分组计算特征
             hist_features = self._calculate_window_features(
@@ -948,8 +948,11 @@ class FeatureBuilder:
                 daily_adj=daily_adj_for_cache,
                 vol_windows=self.lookback_windows,
             )
-            # 优化3：预计算完成后立即建立 trade_date→sub_df 字典，后续 O(1) 取值
-            if self._tech_factor_cache is not None and len(self._tech_factor_cache) > 0:
+            # 优化3：批量模式（_daily_adj_dict 已预计算）时建立 trade_date→sub_df 字典，O(1) 取值
+            # 纸面交易（单日模式）跳过 dict 构建以节省内存（~15 MB）
+            if (self._daily_adj_dict is not None
+                    and self._tech_factor_cache is not None
+                    and len(self._tech_factor_cache) > 0):
                 self._tech_factor_cache_dict = {
                     d: sub_df.reset_index(drop=True)
                     for d, sub_df in self._tech_factor_cache.groupby('trade_date', sort=False)
