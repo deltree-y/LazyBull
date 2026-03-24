@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.23.0] - 2026-03-25
+
+### 新增
+
+- **融资融券因子独立开关**
+  - 将融资融券因子（`rzye_chg_5`、`rzye_chg_20`、`rqye_rzye_ratio`、`margin_net_buy_ratio`）从另类数据因子（`enable_alt`）中剥离为独立开关
+  - `train_core.py` 新增 `MARGIN_FEATURE_COLUMNS` 常量和 `enable_margin_features` 参数
+  - `walk_forward.py`、`train_ml_model.py`、`build_clean_features.py` 新增 `--enable-margin-features` 命令行参数
+  - `batch_walk_forward.ps1` 新增 `$enable_margin` 开关变量
+  - `enable_alt` 仍控制股东人数和业绩预告因子，与融资融券因子互不影响
+
 ## [0.22.5] - 2026-03-24
 
 ### 修复

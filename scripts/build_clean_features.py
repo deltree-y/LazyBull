@@ -178,6 +178,7 @@ def build_features_data(
     apply_industry_neutralization: bool = False,
     enable_fundamental: bool = False,
     enable_alt: bool = False,
+    enable_margin: bool = False,
     enable_cyq: bool = False,
     enable_fund: bool = False,
     enable_express: bool = False,
@@ -195,6 +196,7 @@ def build_features_data(
         apply_industry_neutralization: 是否应用行业中性化
         enable_fundamental: 是否启用基本面因子
         enable_alt: 是否启用另类数据因子
+        enable_margin: 是否启用融资融券因子
         enable_cyq: 是否启用筹码胜率因子
         enable_fund: 是否启用基金持仓因子
         enable_express: 是否启用业绩快报因子
@@ -300,16 +302,11 @@ def build_features_data(
             logger.warning("未找到财务指标数据，基本面特征将被跳过。"
                          "请先运行: python scripts/download_raw.py --download fina_indicator")
 
-    # 加载另类数据（可选）
+    # 加载融资融券数据（可选，独立开关）
     margin_lookup = None
-    holder_lookup = None
-    earnings_lookup = None
-    if enable_alt:
+    if enable_margin:
         from src.lazybull.factors.margin import build_margin_lookup_by_date
-        from src.lazybull.factors.holder import build_holder_lookup_by_date
-        from src.lazybull.factors.earnings import build_earnings_lookup_by_date
 
-        # 融资融券（日频分区）
         margin_detail = loader.load_margin_detail(
             start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d')
         )
@@ -318,6 +315,13 @@ def build_features_data(
             margin_lookup = build_margin_lookup_by_date(margin_detail, trading_dates_str)
         else:
             logger.warning("未找到融资融券数据，相关特征将为空")
+
+    # 加载另类数据（可选）
+    holder_lookup = None
+    earnings_lookup = None
+    if enable_alt:
+        from src.lazybull.factors.holder import build_holder_lookup_by_date
+        from src.lazybull.factors.earnings import build_earnings_lookup_by_date
 
         # 股东人数
         stk_holdernumber = loader.load_stk_holdernumber()
@@ -516,7 +520,12 @@ def main():
     parser.add_argument(
         "--enable-alt-features",
         action="store_true",
-        help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
+        help="启用另类数据因子（股东人数、业绩预告等）"
+    )
+    parser.add_argument(
+        "--enable-margin-features",
+        action="store_true",
+        help="启用融资融券因子（融资余额变动、融券/融资比、净买入比等）"
     )
     parser.add_argument(
         "--enable-cyq-features",
@@ -548,6 +557,7 @@ def main():
     logger.info(f"强制重新构建: {'是' if args.force else '否'}")
     logger.info(f"基本面因子: {'启用' if args.enable_fundamental_features else '禁用'}")
     logger.info(f"另类数据因子: {'启用' if args.enable_alt_features else '禁用'}")
+    logger.info(f"融资融券因子: {'启用' if args.enable_margin_features else '禁用'}")
     logger.info(f"筹码胜率因子: {'启用' if args.enable_cyq_features else '禁用'}")
     logger.info(f"基金持仓因子: {'启用' if args.enable_fund_features else '禁用'}")
     logger.info(f"业绩快报因子: {'启用' if args.enable_express_features else '禁用'}")
@@ -584,6 +594,7 @@ def main():
                 apply_industry_neutralization=args.enable_industry_neutralization,
                 enable_fundamental=args.enable_fundamental_features,
                 enable_alt=args.enable_alt_features,
+                enable_margin=args.enable_margin_features,
                 enable_cyq=args.enable_cyq_features,
                 enable_fund=args.enable_fund_features,
                 enable_express=args.enable_express_features,

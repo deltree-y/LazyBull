@@ -46,13 +46,16 @@ FUNDAMENTAL_FEATURE_COLUMNS = [
     "zscore_q_gr_yoy",  # 单季度营收同比增速
 ]
 
-# 另类数据因子特征列
-ALT_FEATURE_COLUMNS = [
-    # 融资融券 (4)
+# 融资融券因子特征列
+MARGIN_FEATURE_COLUMNS = [
     "rzye_chg_5",  # 融资余额5日变动率
     "rzye_chg_20",  # 融资余额20日变动率
     "rqye_rzye_ratio",  # 融券/融资余额比
     "margin_net_buy_ratio",  # 融资净买入/成交额
+]
+
+# 另类数据因子特征列（不含融资融券）
+ALT_FEATURE_COLUMNS = [
     # 股东人数 (2)
     "holder_num_chg",  # 股东人数环比变动率
     "holder_num_chg_2q",  # 股东人数两期变动率
@@ -256,6 +259,7 @@ def prepare_training_data(
     label_transform_fn: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None,
     enable_fundamental_features: bool = False,
     enable_alt_features: bool = False,
+    enable_margin_features: bool = False,
     enable_cyq_features: bool = False,
     enable_fund_features: bool = False,
     enable_express_features: bool = False,
@@ -402,6 +406,15 @@ def prepare_training_data(
             logger.info(f"启用另类数据因子: {available_alt}")
         else:
             logger.warning("enable_alt_features=True，但数据中未找到另类数据列，跳过")
+
+    # 融资融券因子（可选）
+    if enable_margin_features:
+        available_margin = [col for col in MARGIN_FEATURE_COLUMNS if col in df.columns]
+        if available_margin:
+            feature_columns.extend(available_margin)
+            logger.info(f"启用融资融券因子: {available_margin}")
+        else:
+            logger.warning("enable_margin_features=True，但数据中未找到融资融券列，跳过")
 
     # 筹码胜率因子（可选，5000 积分）
     if enable_cyq_features:

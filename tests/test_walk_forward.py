@@ -265,6 +265,7 @@ class TestWalkForwardCSV:
                 rank_weight_enabled=False, rank_weight_topk=100, rank_weight=2.0,
                 time_decay_half_life=0,
                 enable_fundamental_features=False, enable_alt_features=False,
+                enable_margin_features=False,
                 enable_cyq_features=False, enable_fund_features=False,
                 enable_express_features=False,
             )

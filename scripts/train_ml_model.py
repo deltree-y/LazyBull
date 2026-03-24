@@ -261,7 +261,14 @@ def main():
     parser.add_argument(
         "--enable-alt-features",
         action="store_true",
-        help="启用另类数据因子（融资融券、股东人数、业绩预告、人气榜等）"
+        help="启用另类数据因子（股东人数、业绩预告等）"
+    )
+
+    # 融资融券因子
+    parser.add_argument(
+        "--enable-margin-features",
+        action="store_true",
+        help="启用融资融券因子（融资余额变动、融券/融资比、净买入比等）"
     )
 
     # 筹码胜率因子
@@ -361,6 +368,7 @@ def main():
             df, actual_label_column, label_transform_fn=label_transform_fn,
             enable_fundamental_features=args.enable_fundamental_features,
             enable_alt_features=args.enable_alt_features,
+            enable_margin_features=args.enable_margin_features,
             enable_cyq_features=args.enable_cyq_features,
             enable_fund_features=args.enable_fund_features,
             enable_express_features=args.enable_express_features,

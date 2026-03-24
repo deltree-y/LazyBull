@@ -58,8 +58,11 @@ $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接�
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
 $enable_fundamental      = $true  # $true 启用 | $false 禁用
 
-# ── 另类数据因子（融资融券、股东人数、业绩预告、人气榜）(0310添加)──────────
+# ── 另类数据因子（股东人数、业绩预告等）(0310添加)──────────────────
 $enable_alt              = $true  # $true 启用 | $false 禁用
+
+# ── 融资融券因子（通过 margin_detail 接口下载）────────────────────
+$enable_margin           = $true  # $true 启用 | $false 禁用
 
 # ── 筹码胜率因子（需5000+积分，需先下载 cyq_perf）─────────────────
 $enable_cyq              = $true  # $true 启用 | $false 禁用
@@ -214,6 +217,10 @@ foreach ($bt_top_n in $bt_top_n_list) {
 
     if ($enable_alt) {
         $pythonCmd += " --enable-alt-features"
+    }
+
+    if ($enable_margin) {
+        $pythonCmd += " --enable-margin-features"
     }
 
     if ($enable_cyq) {
