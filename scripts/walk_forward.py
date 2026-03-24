@@ -568,6 +568,285 @@ def execute_split_training(
     return result
 
 
+def execute_deploy_training(
+    deploy_train_end: str,
+    wf_run_id: str,
+    storage: Storage,
+    loader: DataLoader,
+    registry: ModelRegistry,
+    args,
+    topk_values: List[int],
+    trade_cal: pd.DataFrame,
+) -> Optional[Dict]:
+    """在 walk-forward 评估完成后，用最新数据训练部署模型
+
+    部署模型使用最后一个 split 的 test_end 作为 train_end，
+    使得模型能覆盖最新的可用数据，消除 walk-forward 评估模型的时间滞后。
+
+    与 execute_split_training 的区别：
+    - 不加载测试数据，不做 OOS 测试集评估
+    - 模型 metadata 中标记 is_deploy=True
+
+    Args:
+        deploy_train_end: 部署模型的训练结束日期（通常为最后split的test_end）
+        wf_run_id: walk-forward 运行ID
+        storage: Storage 实例
+        loader: DataLoader 实例
+        registry: ModelRegistry 实例
+        args: 命令行参数
+        topk_values: TopK 评估值列表
+        trade_cal: 交易日历 DataFrame
+
+    Returns:
+        包含训练结果的字典，失败返回 None
+    """
+    # 计算 train_start: deploy_train_end - train_window_years，对齐到交易日
+    all_trade_dates = trade_cal[
+        trade_cal["is_open"] == 1
+    ]["cal_date"].sort_values().tolist()
+
+    train_start_dt = datetime.strptime(deploy_train_end, "%Y%m%d") - relativedelta(
+        years=args.train_window_years
+    )
+    train_start_str = train_start_dt.strftime("%Y%m%d")
+
+    # 向后查找最近的交易日作为 train_start
+    train_start = None
+    for td in all_trade_dates:
+        if td >= train_start_str:
+            train_start = td
+            break
+    if train_start is None:
+        logger.error(f"无法找到有效的部署模型 train_start（目标: {train_start_str}）")
+        return None
+
+    # 向前查找最近的交易日作为 train_end
+    train_end = None
+    for td in reversed(all_trade_dates):
+        if td <= deploy_train_end:
+            train_end = td
+            break
+    if train_end is None:
+        logger.error(f"无法找到有效的部署模型 train_end（目标: {deploy_train_end}）")
+        return None
+
+    logger.info("=" * 80)
+    logger.info("部署模型训练（Deploy Training）")
+    logger.info(f"  训练区间: {train_start} 至 {train_end}")
+    logger.info(f"  （无测试区间，用于部署）")
+    logger.info("=" * 80)
+
+    # 1. 加载训练数据
+    df_train, train_days_count = load_features_data(
+        storage, loader, train_start, train_end
+    )
+    total_train_samples = len(df_train)
+
+    # 2. 应用标签变换
+    if args.task == "classification":
+        if args.pos_quantile is None and args.pos_topk is None:
+            raise ValueError("分类任务必须指定 --pos-quantile 或 --pos-topk")
+
+        df_train = generate_classification_labels(
+            df_train,
+            label_column=args.label_column,
+            pos_quantile=args.pos_quantile,
+            pos_topk=args.pos_topk,
+        )
+        binary_label_col = f"{args.label_column}_binary"
+        actual_label_column = binary_label_col
+    else:
+        actual_label_column = args.label_column
+
+    # 3. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
+    label_transform_fn = None
+    if args.task == "regression" and args.label_transform == "cs_zscore":
+        label_transform_fn = lambda d: transform_labels_cs_zscore(
+            d, label_column=actual_label_column, winsorize_p=args.winsorize_p
+        )
+    (
+        X_train, y_train, X_val, y_val,
+        feature_columns, df_train_split, df_val_split,
+        data_stats, df_val_split_original,
+    ) = prepare_training_data(
+        df_train,
+        actual_label_column,
+        val_ratio=args.val_ratio,
+        label_transform_fn=label_transform_fn,
+        enable_fundamental_features=args.enable_fundamental_features,
+        enable_alt_features=args.enable_alt_features,
+        enable_cyq_features=args.enable_cyq_features,
+        enable_fund_features=args.enable_fund_features,
+        enable_express_features=args.enable_express_features,
+    )
+
+    # 3.1. 构造样本权重（rank-weight + 时间衰减，可叠加）
+    rank_sample_weight = None
+    if args.rank_weight_enabled:
+        rank_sample_weight = build_rank_sample_weights(
+            df_train=df_train_split,
+            label_column=actual_label_column,
+            topk=args.rank_weight_topk,
+            top_weight=args.rank_weight,
+        )
+
+    # 3.2. 时间衰减权重
+    if args.time_decay_half_life > 0:
+        td_weights = build_time_decay_weights(
+            df_train=df_train_split,
+            half_life_years=args.time_decay_half_life,
+        )
+        if rank_sample_weight is not None:
+            rank_sample_weight = rank_sample_weight * td_weights
+        else:
+            rank_sample_weight = td_weights
+
+    # 4. 训练模型
+    skip_label_winsorize = args.task == "regression" and args.label_transform == "cs_zscore"
+
+    algorithm = getattr(args, "algorithm", "xgboost")
+    train_fn = train_lightgbm_model if algorithm == "lightgbm" else train_xgboost_model
+
+    extra_kwargs = {}
+    if algorithm == "lightgbm":
+        num_leaves_val = getattr(args, "num_leaves", None)
+        if num_leaves_val is not None:
+            extra_kwargs["num_leaves"] = num_leaves_val
+
+    if algorithm == "xgboost":
+        objective_type = getattr(args, "objective", "mse")
+        extra_kwargs["objective_type"] = objective_type
+        if objective_type == "lambdarank":
+            extra_kwargs["df_train_for_group"] = df_train_split
+            extra_kwargs["df_val_for_group"] = df_val_split
+
+    es_rounds = args.early_stopping_rounds if args.early_stopping_rounds else None
+
+    model, train_params, train_metrics, val_metrics = train_fn(
+        X_train, y_train, X_val, y_val,
+        task=args.task,
+        skip_label_winsorize=skip_label_winsorize,
+        scale_pos_weight=args.scale_pos_weight,
+        sample_weight=rank_sample_weight,
+        n_estimators=args.n_estimators,
+        max_depth=args.max_depth,
+        learning_rate=args.learning_rate,
+        subsample=args.subsample,
+        colsample_bytree=args.colsample_bytree,
+        random_state=args.random_state,
+        min_child_weight=args.min_child_weight,
+        reg_alpha=args.reg_alpha,
+        reg_lambda=args.reg_lambda,
+        gamma=args.gamma,
+        early_stopping_rounds=es_rounds,
+        early_stopping_metric=args.early_stopping_metric,
+        **extra_kwargs,
+    )
+
+    # 5. 验证集逐日评估
+    val_daily_metrics = {}
+    if len(df_val_split_original) > 0:
+        original_return_col = args.label_column
+        val_daily_metrics = evaluate_validation_daily(
+            model=model,
+            df_val=df_val_split_original,
+            feature_columns=feature_columns,
+            original_return_col=original_return_col,
+            task=args.task,
+            topk_values=topk_values,
+        )
+
+    # 6. 注册模型（与 wf 模型同一版本序列）
+    performance_metrics = {
+        "train": train_metrics,
+        "validation": val_metrics,
+        "validation_daily": val_daily_metrics,
+        "test": {},
+        "test_daily": {},
+    }
+
+    full_train_params = train_params.copy()
+    full_train_params.update({
+        "algorithm": algorithm,
+        "task": args.task,
+        "label_transform": args.label_transform if args.task == "regression" else None,
+        "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else None,
+        "pos_quantile": args.pos_quantile if args.task == "classification" else None,
+        "pos_topk": args.pos_topk if args.task == "classification" else None,
+        "scale_pos_weight_manual": args.scale_pos_weight is not None,
+        "is_deploy": True,
+    })
+
+    version = registry.register_model(
+        model=model,
+        model_type=f"{algorithm}_{args.task}_wf",
+        train_start_date=train_start,
+        train_end_date=train_end,
+        feature_columns=feature_columns,
+        label_column=args.label_column,
+        n_samples=len(X_train) + len(X_val),
+        train_params=full_train_params,
+        performance_metrics=performance_metrics,
+    )
+
+    logger.info(f"部署模型已注册: v{version}")
+
+    # 7. 记录训练运行日志到CSV
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    complete_data_stats = {
+        "trade_days_count": train_days_count,
+        "total_samples": total_train_samples,
+        "samples_after_filter": data_stats["samples_after_filter"],
+        "train_samples": len(X_train),
+        "val_samples": len(X_val),
+        "val_start_date": data_stats["val_start_date"],
+        "val_end_date": data_stats["val_end_date"],
+        "val_ratio": args.val_ratio,
+    }
+
+    run_record = create_training_run_record_from_training_session(
+        timestamp=timestamp,
+        start_date=train_start,
+        end_date=train_end,
+        label_column=args.label_column,
+        task=args.task,
+        model_version=version,
+        train_params=full_train_params,
+        data_stats=complete_data_stats,
+        performance_metrics=performance_metrics,
+        wf_run_id=wf_run_id,
+        split_index="deploy",
+        step_frequency=args.step,
+        test_start_date=None,
+        test_end_date=None,
+    )
+
+    csv_path = (
+        args.run_log_csv
+        if args.run_log_csv
+        else f"{args.data_root}/models/ml_train_runs.csv"
+    )
+    write_training_run_to_csv(run_record, csv_path)
+
+    logger.info(f"部署模型训练运行日志已记录到: {csv_path}")
+
+    return {
+        "split_index": "deploy",
+        "train_start": train_start,
+        "train_end": train_end,
+        "test_start": None,
+        "test_end": None,
+        "model_version": version,
+        "train_samples": len(X_train),
+        "val_samples": len(X_val),
+        "test_samples": 0,
+        "best_iteration": train_params.get("best_iteration"),
+        "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
+        "test_daily_metrics": {},
+    }
+
+
 def create_training_run_record_from_training_session(
     timestamp: str,
     start_date: str,
@@ -1307,6 +1586,14 @@ def main():
         help="回撤保护阈值：mkt_drawdown_20 低于此值时停止降仓，默认 -0.08（-8%%）"
     )
 
+    # 部署训练参数
+    parser.add_argument(
+        "--no-deploy-train",
+        action="store_true",
+        default=False,
+        help="禁用部署模型训练（默认开启：walk-forward完成后自动训练部署模型）"
+    )
+
     args = parser.parse_args()
 
     # 如果指定了 --label，则覆盖 --label-column
@@ -1452,8 +1739,33 @@ def main():
                 logger.error(traceback.format_exc())
                 logger.warning("继续执行下一个 split...")
                 continue
-        
-        # 3. 生成 walk-forward 汇总文件（统一输出到 raw/ 子目录）
+
+        # 3. 部署模型训练（使用最新可用数据）
+        if not args.no_deploy_train and len(results) > 0:
+            last_split = splits[-1]
+            deploy_train_end = last_split.test_end
+            logger.info("=" * 80)
+            logger.info("开始部署模型训练（使用最新可用数据）")
+            logger.info(f"  部署模型 train_end: {deploy_train_end}（最后split的test_end）")
+            logger.info("=" * 80)
+            try:
+                deploy_result = execute_deploy_training(
+                    deploy_train_end=deploy_train_end,
+                    wf_run_id=wf_run_id,
+                    storage=storage,
+                    loader=loader,
+                    registry=registry,
+                    args=args,
+                    topk_values=topk_values,
+                    trade_cal=trade_cal,
+                )
+                if deploy_result:
+                    logger.info(f"部署模型已注册: v{deploy_result['model_version']}")
+            except Exception as e:
+                logger.error(f"部署模型训练失败: {e}")
+                logger.error(traceback.format_exc())
+
+        # 4. 生成 walk-forward 汇总文件（统一输出到 raw/ 子目录）
         if len(results) > 0:
             if args.wf_summary_csv:
                 summary_csv_path = args.wf_summary_csv

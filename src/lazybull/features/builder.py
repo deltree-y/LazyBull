@@ -136,7 +136,6 @@ class FeatureBuilder:
         margin_data: Optional[pd.DataFrame] = None,
         holder_data: Optional[pd.DataFrame] = None,
         earnings_data: Optional[pd.DataFrame] = None,
-        hot_rank_data: Optional[pd.DataFrame] = None,
         cyq_perf_data: Optional[pd.DataFrame] = None,
         express_data: Optional[pd.DataFrame] = None,
         fund_portfolio_data: Optional[pd.DataFrame] = None,
@@ -160,7 +159,6 @@ class FeatureBuilder:
             margin_data: 融资融券因子（可选），当日数据
             holder_data: 股东人数因子（可选），当日数据
             earnings_data: 业绩预告/快报因子（可选），当日数据
-            hot_rank_data: 人气榜因子（可选），当日数据
             cyq_perf_data: 筹码胜率因子（可选），当日数据
             express_data: 业绩快报因子（可选），当日数据
             fund_portfolio_data: 基金持仓因子（可选），当日数据
@@ -222,7 +220,6 @@ class FeatureBuilder:
             margin_data,
             holder_data,
             earnings_data,
-            hot_rank_data,
             cyq_perf_data,
             express_data,
             fund_portfolio_data,
@@ -549,7 +546,6 @@ class FeatureBuilder:
         margin_data: Optional[pd.DataFrame] = None,
         holder_data: Optional[pd.DataFrame] = None,
         earnings_data: Optional[pd.DataFrame] = None,
-        hot_rank_data: Optional[pd.DataFrame] = None,
         cyq_perf_data: Optional[pd.DataFrame] = None,
         express_data: Optional[pd.DataFrame] = None,
         fund_portfolio_data: Optional[pd.DataFrame] = None,
@@ -668,19 +664,6 @@ class FeatureBuilder:
             features = features.merge(
                 earnings_data[["ts_code"] + merge_cols], on="ts_code", how="left"
             )
-
-        # 东财人气榜
-        if hot_rank_data is not None and len(hot_rank_data) > 0:
-            merge_cols = [c for c in hot_rank_data.columns if c != "ts_code"]
-            features = features.merge(
-                hot_rank_data[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
-        else:
-            # 数据不可用时仍创建列（NaN），保证特征 schema 一致
-            from ..factors.hot_rank import HOT_RANK_COLS
-            for col in HOT_RANK_COLS:
-                if col not in features.columns:
-                    features[col] = np.nan
 
         # 筹码胜率
         if cyq_perf_data is not None and len(cyq_perf_data) > 0:

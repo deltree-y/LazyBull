@@ -3,6 +3,7 @@
 提供确保 features 数据存在的封装函数
 """
 
+import gc
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -171,7 +172,7 @@ def ensure_features_for_date(
             for d in trade_cal[trading_dates_mask]['cal_date'].tolist()
         ]
 
-        (funda_today, margin_today, holder_today, earnings_today, hot_rank_today,
+        (funda_today, margin_today, holder_today, earnings_today,
          cyq_perf_today, express_today, fund_portfolio_today, missing_factors) = (
             _load_factor_data(loader, client, storage, trade_date, trading_dates_str,
                               start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d'))
@@ -194,7 +195,6 @@ def ensure_features_for_date(
             margin_data=margin_today,
             holder_data=holder_today,
             earnings_data=earnings_today,
-            hot_rank_data=hot_rank_today,
             cyq_perf_data=cyq_perf_today,
             express_data=express_today,
             fund_portfolio_data=fund_portfolio_today,
@@ -310,6 +310,9 @@ def _load_factor_data(
     尝试加载已有的 raw 因子数据并构建 lookup 表。
     若数据缺失，会自动通过 TuShare/AKShare 按日下载并追加到单文件。
 
+    内存优化：每个因子段落处理完后立即释放原始 DataFrame 和 lookup 字典，
+    配合 gc.collect() 确保在内存受限环境（如树莓派）下不会 OOM。
+
     Args:
         loader: DataLoader 实例
         client: TushareClient 实例（用于按日增量下载）
@@ -320,8 +323,8 @@ def _load_factor_data(
         end_date: 数据范围结束日期
 
     Returns:
-        (funda_today, margin_today, holder_today, earnings_today, hot_rank_today, missing_factors)
-        前 5 个元素为当日的 DataFrame 或 None，最后一个为缺失因子名称列表
+        (funda_today, margin_today, holder_today, earnings_today, missing_factors)
+        前 4 个元素为当日的 DataFrame 或 None，最后一个为缺失因子名称列表
     """
     missing_factors = []
 
@@ -338,6 +341,10 @@ def _load_factor_data(
         logger.info(f"基本面因子: 已加载 ({len(fina_indicator)} 条原始记录)")
     else:
         missing_factors.append("fina_indicator（基本面）")
+    # 释放基本面因子中间数据
+    fina_indicator = None
+    funda_lookup = None
+    gc.collect()
 
     # ── 融资融券 ────────────────────────────────────────────
     # margin 按日分区存储，且需要 20+ 天历史数据计算滚动变动率
@@ -353,6 +360,10 @@ def _load_factor_data(
         logger.info(f"融资融券因子: 已加载 ({len(margin_detail)} 条)")
     else:
         missing_factors.append("margin_detail（融资融券）")
+    # 释放融资融券中间数据
+    margin_detail = None
+    margin_lookup = None
+    gc.collect()
 
     # ── 股东人数 ────────────────────────────────────────────
     holder_today = None
@@ -366,6 +377,10 @@ def _load_factor_data(
         logger.info(f"股东人数因子: 已加载 ({len(stk_holdernumber)} 条)")
     else:
         missing_factors.append("stk_holdernumber（股东人数）")
+    # 释放股东人数中间数据
+    stk_holdernumber = None
+    holder_lookup = None
+    gc.collect()
 
     # ── 业绩预告 ────────────────────────────────────────────
     earnings_today = None
@@ -381,19 +396,9 @@ def _load_factor_data(
         logger.info(f"业绩预告因子: 已加载 ({len(forecast_df)} 条)")
     else:
         missing_factors.append("forecast（业绩预告）")
-
-    # ── 东财人气榜 ──────────────────────────────────────────
-    hot_rank_today = None
-    hot_rank_df = loader.load_hot_rank()
-    if hot_rank_df is None or len(hot_rank_df) == 0:
-        hot_rank_df = _try_download_hot_rank(storage)
-    if hot_rank_df is not None and len(hot_rank_df) > 0:
-        from ..factors.hot_rank import build_hot_rank_lookup_by_date
-        hot_rank_lookup = build_hot_rank_lookup_by_date(hot_rank_df, trading_dates_str)
-        hot_rank_today = hot_rank_lookup.get(trade_date)
-        logger.info(f"人气榜因子: 已加载 ({len(hot_rank_df)} 条)")
-    else:
-        missing_factors.append("hot_rank（人气榜）")
+    # 释放 earnings_lookup，保留 forecast_df 供业绩快报段复用
+    earnings_lookup = None
+    gc.collect()
 
     # ── 筹码胜率（按日分区，同 margin_detail）──────────────────
     cyq_perf_today = None
@@ -407,6 +412,10 @@ def _load_factor_data(
         logger.info(f"筹码胜率因子: 已加载 ({len(cyq_perf_df)} 条)")
     else:
         missing_factors.append("cyq_perf（筹码胜率）")
+    # 释放筹码胜率中间数据
+    cyq_perf_df = None
+    cyq_perf_lookup = None
+    gc.collect()
 
     # ── 业绩快报 ──────────────────────────────────────────────
     express_today = None
@@ -415,15 +424,19 @@ def _load_factor_data(
         express_df = _try_download_express(client, storage, trade_date)
     if express_df is not None and len(express_df) > 0:
         from ..factors.express import build_express_lookup_by_date
-        # 加载 forecast 数据用于计算 express_surprise
-        forecast_df_for_surprise = loader.load_forecast()
+        # 复用业绩预告段已加载的 forecast_df，避免重复磁盘读取
         express_lookup = build_express_lookup_by_date(
-            express_df, trading_dates_str, forecast_df=forecast_df_for_surprise
+            express_df, trading_dates_str, forecast_df=forecast_df
         )
         express_today = express_lookup.get(trade_date)
         logger.info(f"业绩快报因子: 已加载 ({len(express_df)} 条)")
     else:
         missing_factors.append("express（业绩快报）")
+    # 释放业绩快报 + forecast_df（业绩快报已用完，不再需要）
+    express_df = None
+    express_lookup = None
+    forecast_df = None
+    gc.collect()
 
     # ── 基金持仓（按季度分区）──────────────────────────────────
     fund_portfolio_today = None
@@ -439,9 +452,13 @@ def _load_factor_data(
         logger.info(f"基金持仓因子: 已加载 ({len(fund_portfolio_df)} 条)")
     else:
         missing_factors.append("fund_portfolio（基金持仓）")
+    # 释放基金持仓中间数据
+    fund_portfolio_df = None
+    fund_lookup = None
+    gc.collect()
 
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 8
+    total = 7
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -452,7 +469,7 @@ def _load_factor_data(
     else:
         logger.info(f"因子数据覆盖: {total}/{total} 组全部加载")
 
-    return (funda_today, margin_today, holder_today, earnings_today, hot_rank_today,
+    return (funda_today, margin_today, holder_today, earnings_today,
             cyq_perf_today, express_today, fund_portfolio_today, missing_factors)
 
 
@@ -831,58 +848,6 @@ def _try_download_forecast(
     )
 
 
-def _try_download_hot_rank(
-    storage: Storage,
-) -> Optional[pd.DataFrame]:
-    """尝试增量下载东财人气榜当日快照并追加保存"""
-    try:
-        import akshare as ak
-    except ImportError:
-        logger.warning("akshare 未安装，跳过人气榜下载")
-        return None
-
-    try:
-        logger.info("增量下载 hot_rank (当日全市场快照)...")
-        df = ak.stock_hot_rank_em()
-        if df is None or len(df) == 0:
-            logger.info("  hot_rank: 当日快照为空（非交易时段或节假日）")
-            return storage.load_raw("hot_rank")
-
-        # 标准化列名（AKShare 返回中文列名）
-        col_map = {}
-        for col in df.columns:
-            if "代码" in col:
-                col_map[col] = "symbol"
-            elif "排名" in col or "序号" in col:
-                col_map[col] = "hot_rank"
-        df = df.rename(columns=col_map)
-
-        if "symbol" not in df.columns or "hot_rank" not in df.columns:
-            logger.warning(f"  hot_rank 快照列名不匹配: {df.columns.tolist()}")
-            return storage.load_raw("hot_rank")
-
-        def to_ts_code(sym):
-            s = str(sym).zfill(6)
-            if s.startswith(("6", "9")):
-                return f"{s}.SH"
-            return f"{s}.SZ"
-
-        today = pd.Timestamp.now().strftime("%Y%m%d")
-        df["ts_code"] = df["symbol"].apply(to_ts_code)
-        df["trade_date"] = today
-        df = df[["ts_code", "trade_date", "hot_rank"]]
-
-        result = _append_and_save_raw(
-            storage, "hot_rank", df,
-            dedup_cols=["ts_code", "trade_date"],
-        )
-        logger.info(f"  hot_rank 增量: 新增 {len(df)} 条, 总计 {len(result)} 条")
-        return result
-    except Exception as e:
-        logger.warning(f"增量下载 hot_rank 失败: {e}")
-        return storage.load_raw("hot_rank")
-
-
 def _try_ensure_historical_cyq_perf(
     client: TushareClient,
     storage: Storage,
@@ -1159,7 +1124,6 @@ _REQUIRED_FACTOR_COLS = [
     "neu_ret_5",                                            # 行业中性化收益
     "alpha_industry_5",                                     # 行业 alpha
     "ind_momentum_rank",                                    # 行业动量
-    "hot_rank", "hot_rank_chg_5",                           # 东财人气榜
 ]
 
 

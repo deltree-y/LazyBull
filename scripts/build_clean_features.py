@@ -304,12 +304,10 @@ def build_features_data(
     margin_lookup = None
     holder_lookup = None
     earnings_lookup = None
-    hot_rank_lookup = None
     if enable_alt:
         from src.lazybull.factors.margin import build_margin_lookup_by_date
         from src.lazybull.factors.holder import build_holder_lookup_by_date
         from src.lazybull.factors.earnings import build_earnings_lookup_by_date
-        from src.lazybull.factors.hot_rank import build_hot_rank_lookup_by_date
 
         # 融资融券（日频分区）
         margin_detail = loader.load_margin_detail(
@@ -338,14 +336,6 @@ def build_features_data(
             )
         else:
             logger.warning("未找到业绩预告数据，相关特征将为空")
-
-        # 东财人气榜
-        hot_rank_df = loader.load_hot_rank()
-        if hot_rank_df is not None:
-            logger.info(f"人气榜数据: {len(hot_rank_df)} 条")
-            hot_rank_lookup = build_hot_rank_lookup_by_date(hot_rank_df, trading_dates_str)
-        else:
-            logger.warning("未找到人气榜数据，相关特征将为空")
 
     # 加载筹码胜率数据（可选，按日分区存储，需传日期范围）
     cyq_perf_lookup = None
@@ -420,8 +410,6 @@ def build_features_data(
             margin_today = margin_lookup.get(trade_date) if margin_lookup else None
             holder_today = holder_lookup.get(trade_date) if holder_lookup else None
             earnings_today = earnings_lookup.get(trade_date) if earnings_lookup else None
-            hot_rank_today = hot_rank_lookup.get(trade_date) if hot_rank_lookup else None
-
             # 获取当日高积分因子数据
             cyq_perf_today = cyq_perf_lookup.get(trade_date) if cyq_perf_lookup else None
             fund_portfolio_today = (
@@ -446,7 +434,6 @@ def build_features_data(
                 margin_data=margin_today,
                 holder_data=holder_today,
                 earnings_data=earnings_today,
-                hot_rank_data=hot_rank_today,
                 cyq_perf_data=cyq_perf_today,
                 express_data=express_today,
                 fund_portfolio_data=fund_portfolio_today,

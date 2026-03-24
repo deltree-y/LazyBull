@@ -17,7 +17,6 @@
     margin_detail    - 融资融券明细（Tushare，按日分区）
     stk_holdernumber - 股东人数（Tushare，按月全市场）
     forecast         - 业绩预告（Tushare forecast_vip，按季度全市场）
-    hot_rank         - 东财人气榜（AKShare，逐股下载）
     cyq_perf         - 筹码胜率（Tushare，按日分区）
     express          - 业绩快报（Tushare express_vip，按季度全市场）
     fund_portfolio   - 基金持仓（Tushare fund_portfolio，按季度全市场）
@@ -56,8 +55,7 @@ if TYPE_CHECKING:
 # 所有另类数据集名称
 ALT_DATASETS = [
     "fina_indicator", "margin_detail", "stk_holdernumber",
-    "forecast", "hot_rank",
-    "cyq_perf", "express", "fund_portfolio",
+    "forecast", "cyq_perf", "express", "fund_portfolio",
 ]
 
 
@@ -584,150 +582,6 @@ def download_stk_holdernumber(
     )
 
 
-def download_hot_rank(
-    storage: Storage,
-    stock_codes: List[str],
-    force: bool = False,
-) -> None:
-    """下载东财人气榜数据（AKShare）
-
-    策略：
-    1. 首次无数据 → 逐股调用 stock_hot_rank_detail_em 回填历史（慢，~3h）
-    2. 已有数据 → 调用 stock_hot_rank_em 拉取当日全市场快照（快，<10s）
-       然后 append 到已有数据
-    """
-    try:
-        import akshare as ak
-    except ImportError:
-        logger.error("请安装 akshare: pip install akshare")
-        return
-
-    existing_df = None
-    if not force:
-        existing_df = storage.load_raw("hot_rank")
-
-    has_history = existing_df is not None and len(existing_df) > 0
-
-    if has_history and not force:
-        # ── 增量模式：批量拉取当日快照 ────────────────────────
-        _download_hot_rank_daily_snapshot(ak, storage, existing_df)
-    else:
-        # ── 全量回填：逐股拉取历史 ────────────────────────────
-        _download_hot_rank_backfill(ak, storage, stock_codes, existing_df, force)
-
-
-def _download_hot_rank_daily_snapshot(ak, storage, existing_df):
-    """增量模式：一次 API 调用获取全市场当日人气排名"""
-    logger.info("[hot_rank] 增量模式：拉取当日全市场快照...")
-    try:
-        df = ak.stock_hot_rank_em()
-        if df is None or len(df) == 0:
-            logger.warning("[hot_rank] 当日快照为空（非交易时段或节假日）")
-            return
-
-        # 标准化列名（AKShare 返回中文列名）
-        col_map = {}
-        for col in df.columns:
-            if "代码" in col:
-                col_map[col] = "symbol"
-            elif "排名" in col or "序号" in col:
-                col_map[col] = "hot_rank"
-        df = df.rename(columns=col_map)
-
-        if "symbol" not in df.columns or "hot_rank" not in df.columns:
-            logger.warning(f"[hot_rank] 快照列名不匹配: {df.columns.tolist()}")
-            return
-
-        # 转换代码格式: 000001 -> 000001.SZ / 600000 -> 600000.SH
-        def to_ts_code(sym):
-            s = str(sym).zfill(6)
-            if s.startswith(("6", "9")):
-                return f"{s}.SH"
-            return f"{s}.SZ"
-
-        today = pd.Timestamp.now().strftime("%Y%m%d")
-        df["ts_code"] = df["symbol"].apply(to_ts_code)
-        df["trade_date"] = today
-        df = df[["ts_code", "trade_date", "hot_rank"]]
-
-        # 合并去重
-        result = pd.concat([existing_df, df], ignore_index=True)
-        result = result.drop_duplicates(subset=["ts_code", "trade_date"], keep="last")
-        storage.save_raw(result, "hot_rank", is_force=True)
-        logger.info(f"[hot_rank] 增量完成: 新增 {len(df)} 条, 总计 {len(result)} 条")
-
-    except Exception as e:
-        logger.error(f"[hot_rank] 快照下载失败: {e}")
-
-
-def _download_hot_rank_backfill(ak, storage, stock_codes, existing_df, force):
-    """全量回填：逐股拉取历史人气排名（首次使用，耗时较长）"""
-    existing_codes: Set[str] = set()
-    if not force and existing_df is not None and len(existing_df) > 0:
-        existing_codes = set(existing_df["ts_code"].unique())
-        logger.info(f"[hot_rank] 已有 {len(existing_codes)} 只股票数据（断点续传）")
-
-    codes_to_download = [c for c in stock_codes if c not in existing_codes]
-    if not codes_to_download:
-        logger.info("[hot_rank] 所有股票数据已存在，跳过")
-        return
-
-    logger.info(f"[hot_rank] 全量回填: 待下载 {len(codes_to_download)} 只股票（预计 3-4 小时）")
-
-    all_dfs: List[pd.DataFrame] = []
-    success = empty = errors = 0
-    t0 = time.time()
-
-    for i, ts_code in enumerate(codes_to_download, 1):
-        try:
-            # 转换代码格式: 000001.SZ -> SZ000001
-            code_num = ts_code.split(".")[0]
-            exchange = ts_code.split(".")[1]
-            symbol = f"{exchange}{code_num}"
-
-            df = ak.stock_hot_rank_detail_em(symbol=symbol)
-            if df is not None and len(df) > 0:
-                df = df.rename(columns={"时间": "trade_date", "排名": "hot_rank"})
-                df["ts_code"] = ts_code
-                df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
-                keep_cols = [c for c in ["ts_code", "trade_date", "hot_rank"] if c in df.columns]
-                df = df[keep_cols]
-                all_dfs.append(df)
-                success += 1
-            else:
-                empty += 1
-        except Exception as e:
-            errors += 1
-            if i <= 10 or i % 500 == 0:
-                logger.debug(f"[hot_rank] {ts_code} 无数据: {e}")
-
-        if i % 200 == 0 or i == len(codes_to_download):
-            elapsed = time.time() - t0
-            speed = i / elapsed if elapsed > 0 else 0
-            remaining = (len(codes_to_download) - i) / speed if speed > 0 else 0
-            logger.info(
-                f"[hot_rank] [{i}/{len(codes_to_download)}] "
-                f"成功={success} 空={empty} 失败={errors} "
-                f"剩余≈{remaining/60:.1f}分钟"
-            )
-
-        if i % 500 == 0 and all_dfs:
-            _save_merged(storage, "hot_rank", all_dfs, existing_df,
-                         dedup_cols=["ts_code", "trade_date"])
-
-        time.sleep(0.1)
-
-    if all_dfs:
-        _save_merged(storage, "hot_rank", all_dfs, existing_df,
-                     dedup_cols=["ts_code", "trade_date"])
-
-    elapsed_total = time.time() - t0
-    logger.info(
-        f"[hot_rank] 回填完成: 成功={success} 空={empty} 失败={errors} "
-        f"耗时={elapsed_total/60:.1f}分钟"
-    )
-
-
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -759,7 +613,7 @@ def main():
         default=None,
         help="指定下载的另类数据集，可多选。"
              "可选值: fina_indicator, margin_detail, stk_holdernumber, "
-             "forecast, hot_rank, cyq_perf, all_alt。"
+             "forecast, cyq_perf, express, fund_portfolio, all_alt。"
              "不指定时仅下载基础+日线数据"
     )
     parser.add_argument(
@@ -816,7 +670,7 @@ def main():
             download_set = set(ALT_DATASETS)
 
         if download_set:
-            # 加载股票列表（hot_rank 回填需要）
+            # 加载股票列表
             stock_basic = storage.load_raw("stock_basic")
             if stock_basic is None:
                 logger.error("未找到 stock_basic 数据，请先运行默认下载")
@@ -865,10 +719,6 @@ def main():
                     dedup_cols=["ts_code", "end_date", "ann_date"],
                     force=args.force,
                 )
-
-            # 东财人气榜（AKShare）
-            if "hot_rank" in download_set:
-                download_hot_rank(storage, stock_codes, force=args.force)
 
             # 筹码胜率（按日分区，5000 积分）
             if "cyq_perf" in download_set:

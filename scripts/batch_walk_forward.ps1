@@ -30,9 +30,9 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
+$max_depth_list          = @(3,4)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.008,0.012)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.015,0.02)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -69,6 +69,9 @@ $enable_fund             = $true  # $true 启用 | $false 禁用
 
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
 $enable_express          = $true  # $true 启用 | $false 禁用
+
+# ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
+$deploy_train            = $true   # $true 启用 | $false 禁用
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
@@ -255,6 +258,10 @@ foreach ($bt_top_n in $bt_top_n_list) {
 
     if ($industry_momentum_filter) {
         $pythonCmd += " --industry-momentum-filter --industry-momentum-bottom-pct $industry_momentum_bottom_pct"
+    }
+
+    if (-not $deploy_train) {
+        $pythonCmd += " --no-deploy-train"
     }
 
     Write-Host ""

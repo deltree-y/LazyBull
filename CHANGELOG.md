@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.22.1] - 2026-03-24
+
+### 优化
+
+- **因子加载内存优化，修复树莓派 OOM 死机问题**
+  - `_load_factor_data()` 每组因子处理完后立即释放原始 DataFrame 和 lookup 字典，配合 `gc.collect()` 强制回收
+  - 复用 `forecast_df` 避免业绩快报段重复从磁盘加载（节省 ~20MB）
+  - 峰值内存从 ~300MB 降至 ~170MB，树莓派 3B+（1GB RAM）可正常运行
+
+## [0.22.0] - 2026-03-24
+
+### 新增
+
+- **Walk-forward 部署模型自动训练**
+  - Walk-forward 所有 split 评估完成后，默认自动追加一次部署训练
+  - 部署模型的 train_end 取最后一个 split 的 test_end，消除 test_window_months 导致的时间滞后
+  - 模型注册到同一版本序列（`_wf`），metadata 中 `is_deploy=True` 标记区分
+  - 支持 `--no-deploy-train` 参数禁用部署训练
+  - `batch_walk_forward.ps1` 同步支持 `$deploy_train` 配置项
+
+## [0.21.1] - 2026-03-24
+
+### 移除
+
+- **删除人气排名因子（hot_rank, hot_rank_chg_5）**
+  - 因子重要性分析显示：100% 模型中 importance=0，对预测完全无贡献
+  - 移除涉及文件：`factors/hot_rank.py`（删除）、`builder.py`、`ensure.py`、`train_core.py`、`loader.py`、`build_clean_features.py`、`download_raw.py`
+  - ALT_FEATURE_COLUMNS 从 10 列缩减为 8 列
+  - `_REQUIRED_FACTOR_COLS` 缓存校验列表同步移除，旧缓存将自动重建
+
+## [0.21.0] - 2026-03-24
+
+### 新增
+
+- **因子重要性分析脚本 `scripts/analyze_factor_importance.py`**
+  - 从已训练的 XGBoost 模型中提取 `feature_importances_`，跨模型聚合分析
+  - 计算每个因子的平均/中位数重要性、排名、贡献占比、零值比例
+  - 按因子类别（动量/技术指标/流动性/估值等19类）分组统计
+  - 自动识别低价值因子（满足≥2项：低贡献 / 高零值率 / 排名靠后）
+  - 支持 `--last-n` 只分析最近 N 个模型，`--output` 指定输出路径
+  - 输出终端报告 + CSV 文件（`data/reports/factor_importance.csv`）
+
 ## [0.20.8] - 2026-03-23
 
 ### 修复

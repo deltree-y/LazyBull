@@ -520,13 +520,6 @@ class DataLoader:
                     df[col] = df[col].astype(str).str.replace("-", "").str[:8]
         return df
 
-    def load_hot_rank(self) -> Optional[pd.DataFrame]:
-        """加载东财人气榜数据（单文件）"""
-        df = self.storage.load_raw("hot_rank")
-        if df is None:
-            logger.warning("未找到人气榜数据")
-        return df
-
     def build_stock_names_dict(self) -> Dict[str, str]:
         """从 stock_basic 构建 {ts_code: name} 股票名称字典"""
         stock_names: Dict[str, str] = {}

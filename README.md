@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.20.8)
+### 当前版本 (v0.22.1)
+
+**因子加载内存优化** (v0.22.1):
+- 修复树莓派 3B+ 运行纸面交易时因内存不足死机的问题
+- `_load_factor_data()` 每组因子处理完后即时释放中间数据，峰值内存降低约 40%
+
+**Walk-forward 部署模型自动训练** (v0.22.0):
+- Walk-forward 完成后默认自动追加部署训练，使用最后 split 的 test_end 作为 train_end，消除模型时间滞后
+- 支持 `--no-deploy-train` 禁用，`batch_walk_forward.ps1` 同步支持
 
 **修复纸面交易下载和使用未来数据的前视偏差** (v0.20.8):
 - 修复 `ensure_features_for_date` 日期范围计算包含未来1个月交易日的问题
@@ -898,7 +906,8 @@ LazyBull/
 │   ├── update_basic_data.py   # 更新trade_cal和stock_basic
 │   ├── train_ml_model.py      # 训练 ML 模型
 │   ├── run_backtest.py        # 运行回测
-│   └── run_ml_backtest.py     # 运行 ML 信号回测
+│   ├── run_ml_backtest.py     # 运行 ML 信号回测
+│   └── analyze_factor_importance.py # 因子重要性分析
 ├── src/lazybull/              # 源代码
 │   ├── common/                # 通用模块
 │   │   ├── config.py          # 配置管理

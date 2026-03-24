@@ -59,9 +59,6 @@ ALT_FEATURE_COLUMNS = [
     # 业绩预告 (2)
     "forecast_type_score",  # 业绩预告类型评分
     "forecast_chg_mid",  # 业绩预告变动幅度中值
-    # 东财人气榜 (2)
-    "hot_rank",  # 人气排名
-    "hot_rank_chg_5",  # 5日人气排名变动
 ]
 
 # 筹码胜率因子特征列（5000 积分）
