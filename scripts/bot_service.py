@@ -3,7 +3,10 @@ import logging
 import subprocess
 import shlex  # 用于智能拆分字符串，处理包含引号的路径等复杂情况
 import traceback
+import threading
+import time
 from pathlib import Path
+from typing import Optional, Callable
 
 import requests  # type: ignore
 
@@ -335,18 +338,89 @@ def format_trade_result(
 
 
 # ---------------------------------------------------------------------------
+# 进度报告器：长时间任务定时向钉钉推送进度
+# ---------------------------------------------------------------------------
+class ProgressReporter:
+    """定时向钉钉发送进度消息，防止长时间任务无响应
+
+    用法:
+        reporter = ProgressReporter(reply_func, incoming, interval=60)
+        reporter.start()
+        reporter.update("步骤1: 加载数据")
+        ...
+        reporter.stop()
+    """
+
+    def __init__(self, reply_func, incoming, interval: int = 60):
+        self._reply = reply_func
+        self._incoming = incoming
+        self._interval = interval
+        self._step = "初始化"
+        self._start_time: float = 0
+        self._timer: Optional[threading.Timer] = None
+        self._stopped = False
+        self._lock = threading.Lock()
+
+    def update(self, step: str):
+        """更新当前步骤描述"""
+        with self._lock:
+            self._step = step
+
+    def start(self):
+        """启动定时报告"""
+        self._start_time = time.monotonic()
+        self._schedule()
+
+    def stop(self):
+        """停止定时报告"""
+        self._stopped = True
+        if self._timer:
+            self._timer.cancel()
+
+    def _schedule(self):
+        if self._stopped:
+            return
+        self._timer = threading.Timer(self._interval, self._tick)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _tick(self):
+        if self._stopped:
+            return
+        with self._lock:
+            elapsed = time.monotonic() - self._start_time
+            step = self._step
+        try:
+            self._reply(f"仍在执行中... ({elapsed:.0f}秒)\n当前: {step}", self._incoming)
+        except Exception:
+            pass
+        self._schedule()
+
+
+# ---------------------------------------------------------------------------
 # 核心：执行交易逻辑（从 paper_trade.py run_main 提取）
 # ---------------------------------------------------------------------------
-def execute_trade(trade_date: str) -> tuple[str, str]:
+def execute_trade(
+    trade_date: str, progress_callback: Optional[Callable[[str], None]] = None
+) -> tuple[str, str]:
     """执行交易流程，返回 (格式化结果文本, 校正后交易日期)
 
     复用 paper_trade.py run_main 的核心逻辑，但不使用 logger 输出，
     而是收集结果后格式化为手机友好文本。
+
+    Args:
+        trade_date: 交易日期
+        progress_callback: 可选的进度回调函数，接受一个字符串参数描述当前步骤
     """
+    def _report(step: str):
+        if progress_callback:
+            progress_callback(step)
+
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 
     # 1. 读取配置
+    _report("读取配置")
     storage = PaperStorage()
     config = storage.load_config()
     if config is None:
@@ -356,6 +430,7 @@ def execute_trade(trade_date: str) -> tuple[str, str]:
         config['horizon'] = 20  # 默认持仓周期20天
 
     # 2. 创建运行器（通过公共工厂函数创建 signal）
+    _report("创建运行器与信号")
     trading_config = TradingConfig.from_dict(config)
     signal = create_signal(trading_config) if trading_config.model_version_b is not None else None
 
@@ -368,6 +443,7 @@ def execute_trade(trade_date: str) -> tuple[str, str]:
 
     # 3. 校正交易日期
     corrected_date = runner._correct_trade_date(trade_date)
+    _report(f"校正交易日 → {corrected_date}")
 
     # 4. 创建止损监控器（通过 TradingConfig）
     stop_loss_config = trading_config.create_stop_loss_config() or StopLossConfig()
@@ -391,6 +467,7 @@ def execute_trade(trade_date: str) -> tuple[str, str]:
     from scripts.paper_trade import _check_stop_loss, _process_pending_sells
     from scripts.paper_trade import _execute_t1_if_pending, _execute_t0_if_rebalance_day
 
+    _report("止损检查")
     if config['stop_loss_enabled']:
         stop_loss_actions = _check_stop_loss(runner, stop_loss_monitor, corrected_date, config)
         sl_state = {
@@ -400,17 +477,21 @@ def execute_trade(trade_date: str) -> tuple[str, str]:
         storage.save_stop_loss_state(sl_state)
 
     # 6. 延迟卖出
+    _report("处理延迟卖出")
     pending_sell_actions = _process_pending_sells(runner, corrected_date, config)
 
     # 7. T1 执行
+    _report("执行 T1 指令")
     t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
 
-    # 8. T0 执行
+    # 8. T0 执行（最耗时：含数据下载、特征构建、模型推理）
+    _report("执行 T0（数据下载/特征构建/模型推理）")
     t0_targets, ect_exposure, ect_reason, t0_status = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
 
     # 9. 获取 T0 生成的明日交易指令（这是用户手工下单的依据）
+    _report("整理交易指令")
     t1_date = runner._get_next_trade_date(corrected_date)
     if t1_date:
         t0_instructions = runner.paper_storage.load_instructions(t1_date) or []
@@ -540,16 +621,23 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             trade_date = args[0]
         self.reply_text(f"开始执行交易 ({trade_date})，请稍候...", incoming)
 
-        import time
+        # 启动进度报告器，每60秒推送一次当前步骤
+        reporter = ProgressReporter(self.reply_text, incoming, interval=60)
+        reporter.start()
+
         start = time.monotonic()
         try:
-            result_text, corrected_date = execute_trade(trade_date)
+            result_text, corrected_date = execute_trade(
+                trade_date, progress_callback=reporter.update
+            )
+            reporter.stop()
             # 记录本次实际执行日期，供 trade next 推算下一交易日
             PaperStorage().save_last_trade_date(corrected_date)
             elapsed = time.monotonic() - start
             result_text += f"\n\n(耗时: {elapsed:.0f}秒)"
             self.reply_markdown("交易结果", result_text, incoming)
         except Exception as e:
+            reporter.stop()
             elapsed = time.monotonic() - start
             tb = traceback.format_exc()
             short_tb = "\n".join(tb.strip().split("\n")[-5:])

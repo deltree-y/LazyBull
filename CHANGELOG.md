@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.24.0] - 2026-03-25
+
+### 新增
+
+- **钉钉机器人长时间命令进度报告**
+  - 新增 `ProgressReporter` 类，在耗时命令执行期间每60秒自动向钉钉推送当前步骤和已用时间
+  - `execute_trade` 新增 `progress_callback` 参数，在各关键步骤（止损检查、T1执行、T0数据下载/特征构建/模型推理等）报告进度
+  - `handle_trade` 自动启动进度报告器，异常或完成时自动停止
+
 ## [0.23.0] - 2026-03-25
 
 ### 新增

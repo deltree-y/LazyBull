@@ -32,7 +32,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(4)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.012)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.008,0.01,0.014)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -62,7 +62,7 @@ $enable_fundamental      = $true  # $true 启用 | $false 禁用
 $enable_alt              = $true  # $true 启用 | $false 禁用
 
 # ── 融资融券因子（通过 margin_detail 接口下载）────────────────────
-$enable_margin           = $false  # $true 启用 | $false 禁用
+$enable_margin           = $true  # $true 启用 | $false 禁用
 
 # ── 筹码胜率因子（需5000+积分，需先下载 cyq_perf）─────────────────
 $enable_cyq              = $true  # $true 启用 | $false 禁用
