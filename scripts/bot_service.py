@@ -327,12 +327,51 @@ def format_trade_result(
             lines.append(f"{i}. {name}({t['ts_code']})")
             lines.append(f"   权{t['target_weight']:.2%}, 因{t['reason']}")
 
-    # --- 执行后持仓概要 ---
+    # --- 执行后持仓概要（含收益信息） ---
     lines.append("")
     lines.append("---")
     positions = runner.account.get_positions()
     cash = runner.account.get_cash()
     lines.append(f"持仓: {len(positions)}只 | 现金: {cash:,.0f}")
+
+    # 加载价格数据，计算收益
+    try:
+        loader = DataLoader(runner.storage, verbose=False)
+        daily_data = loader.load_clean_daily_by_date(corrected_date)
+        if daily_data is not None and not daily_data.empty:
+            prices = {}
+            for _, row in daily_data.iterrows():
+                prices[row['ts_code']] = row['close']
+
+            df = runner.broker.get_positions_detail(prices, corrected_date, stock_names)
+            if not df.empty:
+                total_cost = df['买入成本'].sum() + (df['持仓股数'] * df['买入均价']).sum()
+                total_value = df['当前市值'].sum()
+                total_profit = df['浮动盈亏'].sum()
+            else:
+                total_cost = 0
+                total_value = 0
+                total_profit = 0
+
+            total_assets = cash + total_value
+            p_storage = PaperStorage()
+            p_config = p_storage.load_config()
+            initial_capital = (
+                p_config.get('initial_capital', runner.account.initial_capital)
+                if p_config else runner.account.initial_capital
+            )
+            total_pnl_pct = (
+                (total_assets - initial_capital) / initial_capital * 100
+                if initial_capital > 0 else 0.0
+            )
+            round_pnl_pct = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+
+            t_sign = "+" if total_pnl_pct >= 0 else ""
+            r_sign = "+" if round_pnl_pct >= 0 else ""
+            lines.append(f"总资产: {total_assets:,.0f}")
+            lines.append(f"本轮: {r_sign}{round_pnl_pct:.2f}% | 总: {t_sign}{total_pnl_pct:.2f}%")
+    except Exception:
+        pass  # 价格数据不可用时静默跳过
 
     return _md_join(lines)
 

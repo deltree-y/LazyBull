@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.24.1] - 2026-03-25
+
+### 优化
+
+- **钉钉机器人交易结果增加收益信息**
+  - `format_trade_result()` 末尾新增总资产、本轮收益率和总收益率展示
+  - 与 `positions` 命令的收益计算逻辑保持一致
+  - 价格数据不可用时静默跳过，不影响原有输出
+
 ## [0.24.0] - 2026-03-25
 
 ### 新增
