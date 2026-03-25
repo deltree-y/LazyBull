@@ -541,35 +541,75 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         }
 
     def process(self, callback):
-        """处理钉钉消息 — 在线程池中执行，不阻塞 event loop"""
-        incoming = dts.ChatbotMessage.from_dict(callback.data)
-        raw_content = incoming.text.content.strip()
-        logging.info(f"收到消息: {raw_content}")
+        """处理钉钉消息 — 在线程池中执行，不阻塞 event loop
 
-        # 1. 解析命令与参数
+        整个方法包裹在顶层 try/except 中，确保任何异常都不会导致静默失败。
+        如果通过 Stream 回复失败，则降级到 Webhook 发送错误信息。
+        """
+        incoming = None
+        raw_content = "<未解析>"
         try:
-            parts = shlex.split(raw_content)
-        except ValueError:
-            parts = raw_content.split()
+            incoming = dts.ChatbotMessage.from_dict(callback.data)
+            raw_content = incoming.text.content.strip()
+            logging.info(f"收到消息: {raw_content}")
 
-        if not parts:
-            return AckMessage.STATUS_OK, 'Empty'
+            # 1. 解析命令与参数
+            try:
+                parts = shlex.split(raw_content)
+            except ValueError:
+                parts = raw_content.split()
 
-        cmd = parts[0].lower()
-        args = parts[1:]
+            if not parts:
+                return AckMessage.STATUS_OK, 'Empty'
 
-        # 2. 路由分发（顶层异常捕获，防止线程池任务静默失败）
-        handler = self.commands.get(cmd)
-        try:
-            if handler:
-                handler(args, incoming)
-            else:
-                self.reply_text(f"未知命令: {cmd}\n输入 'help' 查看可用指令", incoming)
+            cmd = parts[0].lower()
+            args = parts[1:]
+
+            # 2. 路由分发
+            handler = self.commands.get(cmd)
+            try:
+                if handler:
+                    handler(args, incoming)
+                else:
+                    self.reply_text(
+                        f"未知命令: {cmd}\n输入 'help' 查看可用指令", incoming
+                    )
+            except Exception as e:
+                logging.error(f"命令 '{cmd}' 执行异常: {traceback.format_exc()}")
+                self._safe_reply(f"命令 '{cmd}' 执行异常: {e}", incoming)
+
         except Exception as e:
-            logging.error(f"命令 '{cmd}' 执行异常: {traceback.format_exc()}")
-            self.reply_text(f"命令执行异常: {e}", incoming)
+            # 顶层兜底：消息解析失败或其他意外异常
+            logging.error(f"process 顶层异常: {traceback.format_exc()}")
+            self._safe_reply(
+                f"消息处理异常: {e}\n原始内容: {raw_content}", incoming
+            )
 
         return AckMessage.STATUS_OK, 'OK'
+
+    def _safe_reply(self, text: str, incoming):
+        """安全回复：先尝试 Stream 回复，失败则降级到 Webhook"""
+        # 尝试 Stream 回复
+        if incoming is not None:
+            try:
+                self.reply_text(text, incoming)
+                return
+            except Exception as e:
+                logging.error(f"Stream 回复失败: {e}")
+
+        # 降级到 Webhook
+        if DINGTALK_WEBHOOK:
+            try:
+                payload = {
+                    "msgtype": "text",
+                    "text": {"content": f"[Bot异常] {text}"},
+                }
+                requests.post(DINGTALK_WEBHOOK, json=payload, timeout=10)
+                logging.info("已通过 Webhook 发送异常通知")
+            except Exception as e2:
+                logging.error(f"Webhook 回复也失败: {e2}")
+        else:
+            logging.error(f"无法回复用户（Webhook 未配置）: {text}")
 
     # --- 处理函数定义 ---
 
@@ -602,7 +642,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             text = format_positions_mobile(runner, trade_date)
             self.reply_markdown("持仓概览", text, incoming)
         except Exception as e:
-            self.reply_text(f"查询持仓失败: {e}", incoming)
+            self._safe_reply(f"查询持仓失败: {e}", incoming)
 
     def handle_trade(self, args, incoming):
         """执行交易 — 异步执行，完成后返回结果
@@ -641,7 +681,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             elapsed = time.monotonic() - start
             tb = traceback.format_exc()
             short_tb = "\n".join(tb.strip().split("\n")[-5:])
-            self.reply_text(
+            self._safe_reply(
                 f"交易执行失败 (耗时{elapsed:.0f}秒):\n{short_tb}", incoming
             )
 
@@ -654,7 +694,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             text = format_model_info()
             self.reply_markdown("模型信息", text, incoming)
         except Exception as e:
-            self.reply_text(f"查询模型信息失败: {e}", incoming)
+            self._safe_reply(f"查询模型信息失败: {e}", incoming)
 
     def handle_help(self, args, incoming):
         """显示帮助信息"""
@@ -696,7 +736,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
                 stderr=subprocess.DEVNULL,
             )
         except Exception as e:
-            self.reply_text(f"重启失败: {e}", incoming)
+            self._safe_reply(f"重启失败: {e}", incoming)
 
     def handle_reset_t0(self, _args, incoming):
         """重置纸面交易，清空所有交易数据恢复为新账户
@@ -707,7 +747,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             ps.reset_t0()
             self.reply_text("reset-t0 完成，账户已恢复初始状态", incoming)
         except Exception as e:
-            self.reply_text(f"reset-t0 失败: {e}", incoming)
+            self._safe_reply(f"reset-t0 失败: {e}", incoming)
 
     def _resolve_next_trade_date(self) -> str | None:
         """获取上次交易日之后的下一个交易日
@@ -741,7 +781,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             output = result.stdout.strip() or result.stderr.strip() or "执行完毕（无输出）"
             self.reply_text(f"[{' '.join(cmd_list)}]:\n{output}", incoming)
         except Exception as e:
-            self.reply_text(f"执行失败: {str(e)}", incoming)
+            self._safe_reply(f"执行失败: {str(e)}", incoming)
 
 
 def _notify_startup():

@@ -11,6 +11,13 @@ All notable changes to this project will be documented in this file.
   - `execute_trade` 新增 `progress_callback` 参数，在各关键步骤（止损检查、T1执行、T0数据下载/特征构建/模型推理等）报告进度
   - `handle_trade` 自动启动进度报告器，异常或完成时自动停止
 
+### 修复
+
+- **钉钉机器人命令无响应问题**
+  - `process` 方法增加顶层 try/except，消息解析阶段的异常不再导致静默失败
+  - 新增 `_safe_reply` 方法：Stream 回复失败时自动降级到 Webhook 发送错误通知
+  - 所有 handler 的异常回复统一使用 `_safe_reply`，确保用户始终能收到反馈
+
 ## [0.23.0] - 2026-03-25
 
 ### 新增
