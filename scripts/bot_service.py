@@ -197,6 +197,7 @@ def format_trade_result(
     runner: PaperTradingRunner,
     stock_names: dict,
     missing_factors: list = None,
+    t0_status: str = "",
 ) -> str:
     """生成手机友好的交易执行结果 Markdown"""
     lines = []
@@ -217,6 +218,15 @@ def format_trade_result(
         lines.append("T1执行: 无待执行指令")
     if t0_targets:
         lines.append(f"T0信号: {len(t0_targets)}个新目标(明日执行)")
+    elif t0_status == "already_run":
+        lines.append("T0信号: 今日已执行过")
+    elif t0_status == "not_rebalance_day":
+        lines.append("T0信号: 非调仓日")
+    elif t0_status.startswith("error:"):
+        error_msg = t0_status[6:]
+        lines.append(f"T0信号: 执行失败 - {error_msg}")
+    elif t0_status == "no_targets":
+        lines.append("T0信号: 调仓日但未生成目标(数据可能不足)")
     else:
         lines.append("T0信号: 非调仓日或无新目标")
 
@@ -396,7 +406,7 @@ def execute_trade(trade_date: str) -> tuple[str, str]:
     t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
 
     # 8. T0 执行
-    t0_targets, ect_exposure, ect_reason = _execute_t0_if_rebalance_day(
+    t0_targets, ect_exposure, ect_reason, t0_status = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
 
@@ -423,6 +433,7 @@ def execute_trade(trade_date: str) -> tuple[str, str]:
         runner=runner,
         stock_names=stock_names,
         missing_factors=runner.missing_factors,
+        t0_status=t0_status,
     )
     return result_text, corrected_date
 

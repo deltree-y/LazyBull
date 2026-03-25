@@ -821,35 +821,35 @@ def _execute_t0_if_rebalance_day(
     runner: PaperTradingRunner,
     trade_date: str,
     config: dict
-) -> Tuple[List[Dict], float, str]:
+) -> Tuple[List[Dict], float, str, str]:
     """执行 T0（如果是调仓日）
-    
+
     Returns:
-        (T0 目标列表, ECT系数, ECT原因) 元组
+        (T0 目标列表, ECT系数, ECT原因, T0状态) 四元组
         - T0 目标列表: [{ts_code, target_weight, reason, score}, ...]
         - ECT系数: exposure_multiplier
         - ECT原因: ECT 计算原因
+        - T0状态: "already_run" / "not_rebalance_day" / "success" / "no_targets" / "error:..."
     """
     targets_info = []
     ect_exposure = 1.0
     ect_reason = "ECT 未启用"
-    
+
     # 检查幂等性
     if runner.paper_storage.check_run_exists("t0", trade_date):
         logger.info(f"T0 工作流已在 {trade_date} 执行过，跳过")
-        return targets_info, ect_exposure, ect_reason
-    
+        return targets_info, ect_exposure, ect_reason, "already_run"
+
     # 检查是否调仓日
     try:
         is_rebalance_day = runner._check_rebalance_day(trade_date, config['rebalance_freq'])
     except RuntimeError as e:
         logger.info(f"当前不是调仓日：{e}")
-        #logger.info("非调仓日允许执行卖出和T1，T0跳过")
-        return targets_info, ect_exposure, ect_reason
-    
+        return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
+
     if not is_rebalance_day:
         logger.info("非调仓日，跳过 T0")
-        return targets_info, ect_exposure, ect_reason
+        return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
     
     logger.info("当前是调仓日，执行 T0")
     
@@ -940,11 +940,13 @@ def _execute_t0_if_rebalance_day(
                             'score': None
                         })
         
+        t0_status = "success" if targets_info else "no_targets"
         logger.info(f"T0 执行完成：生成 {len(targets_info)} 个目标")
     except Exception as e:
         logger.error(f"T0 执行失败: {e}")
-    
-    return targets_info, ect_exposure, ect_reason
+        t0_status = f"error:{e}"
+
+    return targets_info, ect_exposure, ect_reason, t0_status
 
 
 def view_positions(args):
