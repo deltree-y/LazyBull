@@ -94,6 +94,26 @@ class FeatureBuilder:
                 f"require_label={require_label}"
             )
     
+    def clear_caches(self) -> None:
+        """释放所有内部缓存，降低内存占用
+
+        在特征构建完成并保存后调用，适用于内存受限环境（如树莓派）。
+        缓存会在下次 build_features_for_day 调用时按需重建。
+        """
+        cache_names = [
+            '_market_state_cache', '_tech_factor_cache',
+            '_tech_factor_cache_dict', '_trading_dates_cache',
+            '_trading_date_index', '_daily_adj_precomputed',
+            '_daily_adj_dict',
+        ]
+        cleared = []
+        for name in cache_names:
+            if getattr(self, name, None) is not None:
+                setattr(self, name, None)
+                cleared.append(name)
+        if cleared:
+            logger.debug(f"FeatureBuilder 缓存已释放: {', '.join(cleared)}")
+
     def precompute_daily_adj(self, daily_data: pd.DataFrame, adj_factor: pd.DataFrame) -> None:
         """预计算全量 daily_adj 并建立按交易日索引的字典（循环外调用一次）
 

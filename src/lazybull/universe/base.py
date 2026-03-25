@@ -178,55 +178,62 @@ class BasicUniverse(Universe):
         date: pd.Timestamp,
         quote_data: pd.DataFrame
     ) -> List[str]:
-        """过滤不可交易的股票（停牌、涨停）
-        
-        注意：此方法在Universe级别调用，使用T日数据。
-        但根据新的交易逻辑，涨跌停应该在信号生成后基于T+1日数据过滤。
-        因此这里只过滤停牌股票（如果配置了filter_suspended），
-        不过滤涨跌停股票（即使配置了filter_limit_stocks）。
-        
+        """过滤不可交易的股票（停牌）— 向量化版本
+
+        使用向量化 pandas 操作批量检查停牌状态，替代逐股循环调用。
+        仅过滤停牌股票，涨跌停过滤已移至信号生成阶段基于T+1数据。
+
         Args:
             stock_list: 股票代码列表
             date: 查询日期
             quote_data: 行情数据
-            
+
         Returns:
             过滤后的股票代码列表
         """
+        if not self.filter_suspended:
+            return stock_list
+
         trade_date_str = date.strftime('%Y%m%d')
-        filtered_stocks = []
-        filtered_count = {'停牌': 0}
-        
-        for stock in stock_list:
-            # 仅检查停牌状态（涨跌停过滤已移至信号生成阶段基于T+1数据）
-            if quote_data.empty:
-                # 行情数据为空，无法判断交易状态，保留股票
-                logger.warning(
-                    f"Universe过滤时行情数据为空，保留股票 {stock} 在 {date.date()}"
-                )
-                filtered_stocks.append(stock)
-                continue
-            tradeable, reason = is_tradeable(
-                stock, trade_date_str, quote_data, action='buy'
+
+        if quote_data.empty:
+            logger.warning(
+                f"Universe过滤时行情数据为空，保留全部 {len(stock_list)} 只股票 {date.date()}"
             )
-            
-            if tradeable:
-                filtered_stocks.append(stock)
-            else:
-                # 只过滤停牌股票
-                if reason == "停牌" and self.filter_suspended:
-                    filtered_count['停牌'] = filtered_count.get('停牌', 0) + 1
-                else:
-                    # 涨跌停不在此过滤，保留在股票池中
-                    filtered_stocks.append(stock)
-        
-        # 输出过滤日志
-        if sum(filtered_count.values()) > 0:
-            if self.verbose:
-                logger.info(
-                    f"Universe过滤 {date.date()}: 原始 {len(stock_list)} 只，"
-                    f"过滤停牌 {filtered_count['停牌']} 只，"
-                    f"最终 {len(filtered_stocks)} 只"
-                )
-        
+            return stock_list
+
+        # 向量化：取当日行情数据
+        date_data = quote_data[quote_data['trade_date'] == trade_date_str]
+
+        if date_data.empty:
+            logger.warning(f"Universe过滤时 {trade_date_str} 无行情数据，保留全部")
+            return stock_list
+
+        # 判断停牌：is_suspended == 1，或 vol <= 0 / NaN（备用方案）
+        if 'is_suspended' in date_data.columns:
+            suspended_mask = date_data['is_suspended'] == 1
+        elif 'vol' in date_data.columns:
+            suspended_mask = (date_data['vol'] <= 0) | (date_data['vol'].isna())
+        else:
+            return stock_list
+
+        suspended_stocks = set(date_data.loc[suspended_mask, 'ts_code'])
+        stocks_with_data = set(date_data['ts_code'])
+        stock_set = set(stock_list)
+
+        # 无行情数据的股票也视为停牌（与原 is_suspended 返回 True 一致）
+        no_data_stocks = stock_set - stocks_with_data
+        all_suspended = suspended_stocks | no_data_stocks
+
+        filtered_stocks = [s for s in stock_list if s not in all_suspended]
+        suspended_count = len(stock_set & all_suspended)
+
+        if suspended_count > 0 and self.verbose:
+            logger.info(
+                f"Universe过滤 {date.date()}: 原始 {len(stock_list)} 只，"
+                f"过滤停牌 {suspended_count} 只"
+                f"（其中无数据 {len(no_data_stocks)} 只），"
+                f"最终 {len(filtered_stocks)} 只"
+            )
+
         return filtered_stocks

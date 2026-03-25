@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.24.2] - 2026-03-25
+
+### 优化
+
+- **修复树莓派 T0 信号生成阶段挂死问题**
+  - 向量化 `_filter_untradeable_stocks`：将逐股 O(n×m) 循环替换为向量化 pandas 操作，Universe 停牌过滤从 ~60 秒降至 <1 秒
+  - 新增 `FeatureBuilder.clear_caches()`：特征构建完成后释放内部缓存（市场状态、技术指标等），回收 ~20-50 MB 内存
+  - 移除信号生成热路径上不必要的 `.copy()` 调用（runner/ml_signal），减少 ~10-15 MB 峰值内存
+  - 信号生成前执行 `gc.collect()`，确保孤儿对象回收后再进入模型加载/预测
+  - 模型加载和预测前增加诊断日志，便于定位未来可能的挂起问题
+
 ## [0.24.1] - 2026-03-25
 
 ### 优化

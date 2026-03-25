@@ -1,5 +1,6 @@
 """纸面交易运行器"""
 
+import gc
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -771,6 +772,8 @@ class PaperTradingRunner:
             force=False
         )
         self.missing_factors = missing
+        # 释放 FeatureBuilder 缓存，回收内存（纸面交易后续不再需要）
+        self.feature_builder.clear_caches()
         if not success:
             logger.error(f"无法获取 features 数据: {trade_date}")
             return []
@@ -789,7 +792,7 @@ class PaperTradingRunner:
 
         # 加载价格数据
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
-        signal_data = self.storage.load_cs_train_day(trade_date).copy()
+        signal_data = self.storage.load_cs_train_day(trade_date)
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {trade_date} 的日线数据")
             return []
@@ -824,6 +827,9 @@ class PaperTradingRunner:
         if max_per_industry and max_per_industry > 0:
             shenwan_industry = self.loader.load_shenwan_industry()
             industry_mapping = load_industry_mapping(shenwan_industry, verbose=True)
+
+        # 回收内存后再进入模型加载/预测（对内存受限设备如树莓派尤为重要）
+        gc.collect()
 
         # 生成信号
         try:
@@ -1427,7 +1433,7 @@ class PaperTradingRunner:
 
         # 3. 加载数据
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
-        signal_data = self.storage.load_cs_train_day(trade_date).copy()
+        signal_data = self.storage.load_cs_train_day(trade_date)
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {trade_date} 的日线数据")
             return []

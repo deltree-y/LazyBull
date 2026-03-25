@@ -75,6 +75,7 @@ class MLSignal(Signal):
     def _load_model(self) -> None:
         """加载模型（延迟加载）"""
         if self.model is None:
+            logger.info("开始加载ML模型...")
             self.registry = ModelRegistry(models_dir=self.models_dir)
             # 严格检查：拒绝旧模型
             self.model, self.metadata = self.registry.load_model(
@@ -179,8 +180,8 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 特征数据为空")
             return {}
 
-        # 过滤股票池
-        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
+        # 过滤股票池（布尔索引已创建新对象，无需 .copy()）
+        features_df = features_df[features_df["ts_code"].isin(universe)]
 
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
@@ -201,9 +202,9 @@ class MLSignal(Signal):
             logger.error(f"特征列一致性检查失败: {e}")
             raise
 
-        # 准备特征
+        # 准备特征（XGBoost 不修改输入，无需 .copy()）
         try:
-            X = features_df[self.feature_columns].copy()
+            X = features_df[self.feature_columns]
         except KeyError as e:
             logger.error(f"特征列缺失: {e}")
             return {}
@@ -213,6 +214,7 @@ class MLSignal(Signal):
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         model_type = self.metadata.get("model_type", "unknown")
         task = self.metadata.get("train_params", {}).get("task", "regression")
+        logger.info(f"开始模型预测: {len(X)} 只股票, {len(self.feature_columns)} 个特征")
 
         if task == "classification" and hasattr(self.model, "predict_proba"):
             # 分类模型：使用正类概率作为分数
@@ -302,8 +304,8 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 特征数据为空")
             return []
 
-        # 过滤股票池
-        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
+        # 过滤股票池（布尔索引已创建新对象，无需 .copy()）
+        features_df = features_df[features_df["ts_code"].isin(universe)]
 
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 股票池没有匹配的特征数据")
@@ -324,9 +326,9 @@ class MLSignal(Signal):
             logger.error(f"特征列一致性检查失败: {e}")
             raise
 
-        # 准备特征
+        # 准备特征（XGBoost 不修改输入，无需 .copy()）
         try:
-            X = features_df[self.feature_columns].copy()
+            X = features_df[self.feature_columns]
         except KeyError as e:
             logger.error(f"特征列缺失: {e}")
             return []
@@ -335,6 +337,7 @@ class MLSignal(Signal):
 
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         task = self.metadata.get("train_params", {}).get("task", "regression")
+        logger.info(f"开始模型预测(ranked): {len(X)} 只股票, {len(self.feature_columns)} 个特征")
 
         if task == "classification" and hasattr(self.model, "predict_proba"):
             # 分类模型：使用正类概率作为分数
@@ -535,8 +538,8 @@ class EnsembleMLSignal(MLSignal):
             logger.warning(f"{date.date()} 特征数据为空")
             return {}
 
-        # 过滤股票池
-        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
+        # 过滤股票池（布尔索引已创建新对象，无需 .copy()）
+        features_df = features_df[features_df["ts_code"].isin(universe)]
         if len(features_df) == 0:
             return {}
 
@@ -598,7 +601,7 @@ class EnsembleMLSignal(MLSignal):
         if features_df is None or len(features_df) == 0:
             return []
 
-        features_df = features_df[features_df["ts_code"].isin(universe)].copy()
+        features_df = features_df[features_df["ts_code"].isin(universe)]
         if len(features_df) == 0:
             return []
 
