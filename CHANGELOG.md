@@ -15,8 +15,9 @@ All notable changes to this project will be documented in this file.
 
 - **钉钉机器人命令无响应问题**
   - `process` 方法增加顶层 try/except，消息解析阶段的异常不再导致静默失败
-  - 新增 `_safe_reply` 方法：Stream 回复失败时自动降级到 Webhook 发送错误通知
-  - 所有 handler 的异常回复统一使用 `_safe_reply`，确保用户始终能收到反馈
+  - 新增 `_safe_reply` / `_safe_reply_markdown` 方法：带重试（指数退避）+ Webhook 降级
+  - 新增 `_ReplyFailureDetector`：拦截 dingtalk_stream 库内部吞掉的回复失败日志，触发重试
+  - **所有** reply 调用（不仅是异常回复）统一使用安全方法，确保用户始终能收到反馈
 
 ## [0.23.0] - 2026-03-25
 

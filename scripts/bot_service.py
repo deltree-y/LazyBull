@@ -519,6 +519,24 @@ def execute_trade(
     return result_text, corrected_date
 
 
+# ---------------------------------------------------------------------------
+# 日志拦截器：检测 dingtalk_stream 库内部吞掉的回复失败
+# ---------------------------------------------------------------------------
+class _ReplyFailureDetector(logging.Handler):
+    """临时挂载到 dingtalk_stream.handler logger，检测 reply 失败日志"""
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.failed = False
+        self.error_msg = ""
+
+    def emit(self, record: logging.LogRecord):
+        msg = record.getMessage()
+        if "reply" in msg.lower() and "failed" in msg.lower():
+            self.failed = True
+            self.error_msg = msg
+
+
 # ===========================================================================
 # 钉钉消息处理器
 # ===========================================================================
@@ -571,7 +589,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
                 if handler:
                     handler(args, incoming)
                 else:
-                    self.reply_text(
+                    self._safe_reply(
                         f"未知命令: {cmd}\n输入 'help' 查看可用指令", incoming
                     )
             except Exception as e:
@@ -587,29 +605,87 @@ class SimpleHandler(dts.AsyncChatbotHandler):
 
         return AckMessage.STATUS_OK, 'OK'
 
-    def _safe_reply(self, text: str, incoming):
-        """安全回复：先尝试 Stream 回复，失败则降级到 Webhook"""
-        # 尝试 Stream 回复
-        if incoming is not None:
-            try:
-                self.reply_text(text, incoming)
-                return
-            except Exception as e:
-                logging.error(f"Stream 回复失败: {e}")
+    def _safe_reply(self, text: str, incoming, max_retries: int = 2):
+        """安全回复文本：带重试 + Webhook 降级
 
-        # 降级到 Webhook
-        if DINGTALK_WEBHOOK:
+        dingtalk_stream 库的 reply_text 可能内部吞掉异常只打日志，
+        因此通过拦截 logging 记录来检测失败，并自动重试或降级到 Webhook。
+        """
+        if incoming is not None:
+            if self._try_stream_reply(
+                lambda: self.reply_text(text, incoming), max_retries
+            ):
+                return
+
+        # Stream 全部失败，降级到 Webhook
+        self._webhook_notify(text)
+
+    def _safe_reply_markdown(
+        self, title: str, text: str, incoming, max_retries: int = 2
+    ):
+        """安全回复 Markdown：带重试 + Webhook 降级"""
+        if incoming is not None:
+            if self._try_stream_reply(
+                lambda: self.reply_markdown(title, text, incoming), max_retries
+            ):
+                return
+
+        # Stream 全部失败，降级到 Webhook（Webhook 不支持 Markdown，发纯文本）
+        self._webhook_notify(f"[{title}]\n{text}")
+
+    def _try_stream_reply(self, reply_fn, max_retries: int) -> bool:
+        """尝试通过 Stream 回复，带重试
+
+        通过拦截 logging 检测库内部吞掉的异常。
+
+        Returns:
+            True 表示成功，False 表示所有重试均失败
+        """
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                wait = min(2 ** attempt, 8)
+                logging.info(f"Stream 回复重试 ({attempt}/{max_retries})，等待 {wait}s")
+                time.sleep(wait)
             try:
-                payload = {
-                    "msgtype": "text",
-                    "text": {"content": f"[Bot异常] {text}"},
-                }
-                requests.post(DINGTALK_WEBHOOK, json=payload, timeout=10)
-                logging.info("已通过 Webhook 发送异常通知")
-            except Exception as e2:
-                logging.error(f"Webhook 回复也失败: {e2}")
-        else:
+                # 拦截 dingtalk_stream 库的 error 日志来检测吞掉的异常
+                handler = _ReplyFailureDetector()
+                dt_logger = logging.getLogger("dingtalk_stream.handler")
+                dt_logger.addHandler(handler)
+                try:
+                    reply_fn()
+                finally:
+                    dt_logger.removeHandler(handler)
+
+                if not handler.failed:
+                    return True
+                logging.warning(
+                    f"Stream 回复被库内部标记为失败: {handler.error_msg}"
+                )
+            except Exception as e:
+                logging.warning(f"Stream 回复抛出异常: {e}")
+
+        return False
+
+    def _webhook_notify(self, text: str):
+        """通过 Webhook 发送消息（降级通道）"""
+        if not DINGTALK_WEBHOOK:
             logging.error(f"无法回复用户（Webhook 未配置）: {text}")
+            return
+        # 钉钉 Webhook 文本长度限制约 20000 字符，截断防止超限
+        if len(text) > 2000:
+            text = text[:1950] + "\n...(内容过长已截断)"
+        try:
+            payload = {
+                "msgtype": "text",
+                "text": {"content": f"[Webhook] {text}"},
+            }
+            resp = requests.post(DINGTALK_WEBHOOK, json=payload, timeout=15)
+            if resp.ok:
+                logging.info("已通过 Webhook 发送消息")
+            else:
+                logging.error(f"Webhook 发送失败: {resp.text}")
+        except Exception as e:
+            logging.error(f"Webhook 发送异常: {e}")
 
     # --- 处理函数定义 ---
 
@@ -618,12 +694,12 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         if args:
             self.run_shell(["ping", "-c", "4", args[0]], incoming)
         else:
-            self.reply_text("pong! (请提供 IP 地址以进行真实 ping)", incoming)
+            self._safe_reply("pong! (请提供 IP 地址以进行真实 ping)", incoming)
 
     def handle_run(self, args, incoming):
         """处理类似 'run ls -la' 的通用命令"""
         if not args:
-            self.reply_text("错误: 'run' 需要配合具体命令，如 'run ls'", incoming)
+            self._safe_reply("错误: 'run' 需要配合具体命令，如 'run ls'", incoming)
             return
         # 直接执行 args 里的内容
         self.run_shell(args, incoming)
@@ -640,7 +716,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         try:
             runner = PaperTradingRunner(verbose=False)
             text = format_positions_mobile(runner, trade_date)
-            self.reply_markdown("持仓概览", text, incoming)
+            self._safe_reply_markdown("持仓概览", text, incoming)
         except Exception as e:
             self._safe_reply(f"查询持仓失败: {e}", incoming)
 
@@ -649,20 +725,20 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         用法: trade <日期|next>  例: trade 20260304 / trade next
         """
         if not args:
-            self.reply_text("错误: 请指定交易日期或 next，如 trade 20260314", incoming)
+            self._safe_reply("错误: 请指定交易日期或 next，如 trade 20260314", incoming)
             return
 
         if args[0].lower() == "next":
             trade_date = self._resolve_next_trade_date()
             if trade_date is None:
-                self.reply_text("错误: 无法获取下一个交易日", incoming)
+                self._safe_reply("错误: 无法获取下一个交易日", incoming)
                 return
         else:
             trade_date = args[0]
-        self.reply_text(f"开始执行交易 ({trade_date})，请稍候...", incoming)
+        self._safe_reply(f"开始执行交易 ({trade_date})，请稍候...", incoming)
 
         # 启动进度报告器，每60秒推送一次当前步骤
-        reporter = ProgressReporter(self.reply_text, incoming, interval=60)
+        reporter = ProgressReporter(self._safe_reply, incoming, interval=60)
         reporter.start()
 
         start = time.monotonic()
@@ -675,7 +751,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             PaperStorage().save_last_trade_date(corrected_date)
             elapsed = time.monotonic() - start
             result_text += f"\n\n(耗时: {elapsed:.0f}秒)"
-            self.reply_markdown("交易结果", result_text, incoming)
+            self._safe_reply_markdown("交易结果", result_text, incoming)
         except Exception as e:
             reporter.stop()
             elapsed = time.monotonic() - start
@@ -692,7 +768,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         from scripts.paper_trade import format_model_info
         try:
             text = format_model_info()
-            self.reply_markdown("模型信息", text, incoming)
+            self._safe_reply_markdown("模型信息", text, incoming)
         except Exception as e:
             self._safe_reply(f"查询模型信息失败: {e}", incoming)
 
@@ -721,13 +797,13 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             "reboot\n"
             "  重启系统"
         )
-        self.reply_markdown("帮助", text, incoming)
+        self._safe_reply_markdown("帮助", text, incoming)
 
     def handle_reboot(self, _args, incoming):
         """重启树莓派系统
         用法: reboot
         """
-        self.reply_text("系统即将重启...", incoming)
+        self._safe_reply("系统即将重启...", incoming)
         try:
             subprocess.Popen(
                 ["sudo", "reboot"],
@@ -745,7 +821,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         try:
             ps = PaperStorage()
             ps.reset_t0()
-            self.reply_text("reset-t0 完成，账户已恢复初始状态", incoming)
+            self._safe_reply("reset-t0 完成，账户已恢复初始状态", incoming)
         except Exception as e:
             self._safe_reply(f"reset-t0 失败: {e}", incoming)
 
@@ -779,7 +855,7 @@ class SimpleHandler(dts.AsyncChatbotHandler):
             # 使用列表形式调用 subprocess 更加安全，避免 Shell 注入
             result = subprocess.run(cmd_list, capture_output=True, text=True, timeout=10)
             output = result.stdout.strip() or result.stderr.strip() or "执行完毕（无输出）"
-            self.reply_text(f"[{' '.join(cmd_list)}]:\n{output}", incoming)
+            self._safe_reply(f"[{' '.join(cmd_list)}]:\n{output}", incoming)
         except Exception as e:
             self._safe_reply(f"执行失败: {str(e)}", incoming)
 
