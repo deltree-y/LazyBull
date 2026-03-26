@@ -252,6 +252,110 @@ def split_train_val_by_date(
     return df_train, df_val, stats
 
 
+def filter_stable_features(
+    df_train: pd.DataFrame,
+    feature_columns: List[str],
+    label_column: str,
+    date_col: str = "trade_date",
+    n_splits: int = 3,
+    min_abs_ic: float = 0.02,
+) -> Tuple[List[str], Dict]:
+    """筛选在所有时间段截面IC方向一致且显著的特征
+
+    将训练集按时间等分成 n_splits 段，每段计算各特征与标签的截面 Spearman IC 均值。
+    仅保留所有段IC方向一致且平均 |IC| 超过阈值的特征。
+
+    Args:
+        df_train: 训练集 DataFrame（已完成标签变换）
+        feature_columns: 候选特征列名列表
+        label_column: 标签列名
+        date_col: 日期列名
+        n_splits: 将训练集按时间等分的段数，默认 3
+        min_abs_ic: 平均 |IC| 的最低阈值，默认 0.02
+
+    Returns:
+        (stable_features, filter_info) 元组：
+            - stable_features: 通过筛选的特征列名列表
+            - filter_info: 筛选统计信息字典
+    """
+    dates = sorted(df_train[date_col].unique())
+    n_dates = len(dates)
+    if n_dates < n_splits * 10:
+        logger.warning(
+            f"特征稳定性筛选: 训练集仅 {n_dates} 个交易日，不足以分成 {n_splits} 段，跳过筛选"
+        )
+        return feature_columns, {"skipped": True, "reason": "交易日不足"}
+
+    split_size = n_dates // n_splits
+
+    # 每个时段计算各特征的截面IC均值
+    ic_matrix: Dict[str, List[float]] = {col: [] for col in feature_columns}
+
+    for i in range(n_splits):
+        start = i * split_size
+        end = (i + 1) * split_size if i < n_splits - 1 else n_dates
+        split_dates = set(dates[start:end])
+        split_df = df_train[df_train[date_col].isin(split_dates)]
+
+        # 向量化计算：逐日 rank 后用 corr 算出各特征的截面IC
+        # 某些交易日某些特征值全相同（std=0），corr 返回 NaN 并触发 numpy 告警，
+        # 这是预期行为，NaN 已被跳过，抑制告警避免刷屏
+        daily_ics: Dict[str, List[float]] = {col: [] for col in feature_columns}
+        with np.errstate(divide="ignore", invalid="ignore"):
+            for _, group in split_df.groupby(date_col):
+                if len(group) < 30:
+                    continue
+                ranked = group[feature_columns + [label_column]].rank()
+                label_rank = ranked[label_column]
+                for col in feature_columns:
+                    corr = ranked[col].corr(label_rank)
+                    if not np.isnan(corr):
+                        daily_ics[col].append(corr)
+
+        for col in feature_columns:
+            ics = daily_ics[col]
+            ic_matrix[col].append(np.mean(ics) if ics else 0.0)
+
+    # 筛选条件：所有段IC符号一致 且 平均|IC| >= min_abs_ic
+    stable_features = []
+    removed_details = []
+    for col in feature_columns:
+        ics = ic_matrix[col]
+        nonzero_signs = [np.sign(ic) for ic in ics if abs(ic) > 1e-6]
+
+        if len(nonzero_signs) == 0:
+            removed_details.append((col, ics, "IC全为零"))
+            continue
+
+        all_same_sign = all(s == nonzero_signs[0] for s in nonzero_signs)
+        avg_abs_ic = np.mean([abs(ic) for ic in ics])
+
+        if all_same_sign and avg_abs_ic >= min_abs_ic:
+            stable_features.append(col)
+        else:
+            reason = "IC方向不一致" if not all_same_sign else f"|IC|={avg_abs_ic:.4f}<{min_abs_ic}"
+            removed_details.append((col, ics, reason))
+
+    filter_info = {
+        "skipped": False,
+        "total_features": len(feature_columns),
+        "stable_count": len(stable_features),
+        "removed_count": len(removed_details),
+        "removed_details": removed_details,
+    }
+
+    logger.info(
+        f"特征稳定性筛选: {len(feature_columns)} → {len(stable_features)} 个特征"
+        f"（移除 {len(removed_details)} 个不稳定特征）"
+    )
+    if removed_details:
+        for col, ics, reason in removed_details:
+            ic_str = ", ".join(f"{ic:+.4f}" for ic in ics)
+            logger.debug(f"  移除 {col}: [{ic_str}] — {reason}")
+
+    return stable_features, filter_info
+
+
 def prepare_training_data(
     df: pd.DataFrame,
     label_column: str = "neu_y_ret_20",
@@ -263,6 +367,7 @@ def prepare_training_data(
     enable_cyq_features: bool = False,
     enable_fund_features: bool = False,
     enable_express_features: bool = False,
+    feature_stability_filter: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
 
@@ -486,6 +591,15 @@ def prepare_training_data(
         if len(df_val_split) > 0:
             df_val_split = label_transform_fn(df_val_split)
 
+    # 特征稳定性筛选：移除跨时期IC方向不一致的特征
+    feature_filter_info = None
+    if feature_stability_filter:
+        feature_columns, feature_filter_info = filter_stable_features(
+            df_train=df_train_split,
+            feature_columns=feature_columns,
+            label_column=label_column,
+        )
+
     # 获取验证集的时间范围
     val_start_date = split_stats["val_start_date"]
     val_end_date = split_stats["val_end_date"]
@@ -508,6 +622,7 @@ def prepare_training_data(
         "samples_after_filter": samples_after_filter,
         "val_start_date": str(val_start_date),
         "val_end_date": str(val_end_date),
+        "feature_filter_info": feature_filter_info,
     }
 
     return (

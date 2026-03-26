@@ -1108,7 +1108,7 @@ class PaperBroker:
             # 如果天数太少（例如小于1天），返回 0
             if days < 1:
                 return 0.0
-            
+
             # 年化收益率: (total_value/initial_capital) ** (365/days) - 1
             annualized = (pow(current_value / initial_capital, 365.0 / days) - 1) * 100
             return annualized

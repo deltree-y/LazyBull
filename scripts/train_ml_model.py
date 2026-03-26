@@ -291,6 +291,11 @@ def main():
         action="store_true",
         help="启用业绩快报因子（实际营收/净利润增速等）"
     )
+    parser.add_argument(
+        "--feature-stability-filter",
+        action="store_true",
+        help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）"
+    )
 
     # 其他参数
     parser.add_argument(
@@ -372,6 +377,7 @@ def main():
             enable_cyq_features=args.enable_cyq_features,
             enable_fund_features=args.enable_fund_features,
             enable_express_features=args.enable_express_features,
+            feature_stability_filter=args.feature_stability_filter,
         )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
         if False:  # 默认不启用，后续可以改为参数控制

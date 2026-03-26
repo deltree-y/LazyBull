@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"   #20130101
-$wf_end_date             = "20251231"
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -46,7 +46,7 @@ $early_stopping_metric   = "auto" # 早停指标：auto（mae/auc）| rank_ic（
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(20,30,80)
+$rank_weight_topk_list   = @(50)
 $rank_weight_list        = @(3)
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
@@ -73,8 +73,14 @@ $enable_fund             = $true  # $true 启用 | $false 禁用
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
 $enable_express          = $true  # $true 启用 | $false 禁用
 
+# ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
+$feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
+
+# ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
+$ensemble_offsets          = 1      # 偏移月数（0=禁用, 1=±1个月→3模型）
+
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $true   # $true 启用 | $false 禁用
+$deploy_train            = $false   # $true 启用 | $false 禁用
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
@@ -233,6 +239,14 @@ foreach ($bt_top_n in $bt_top_n_list) {
 
     if ($enable_express) {
         $pythonCmd += " --enable-express-features"
+    }
+
+    if ($feature_stability_filter) {
+        $pythonCmd += " --feature-stability-filter"
+    }
+
+    if ($ensemble_offsets -gt 0) {
+        $pythonCmd += " --ensemble-offsets $ensemble_offsets"
     }
 
     if ($market_regime) {

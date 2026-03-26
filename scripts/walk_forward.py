@@ -31,7 +31,7 @@ import sys
 import traceback
 import uuid
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
@@ -62,6 +62,7 @@ from src.lazybull.ml.walk_forward_utils import (
     print_splits_summary,
     WalkForwardSplit
 )
+from src.lazybull.ml.ensemble import EnsembleModel
 from src.lazybull.ml.run_logger import (
     TrainingRunRecord,
     write_training_run_to_csv
@@ -275,82 +276,144 @@ def run_oos_backtest(
     return metrics
 
 
-def execute_split_training(
-    split: WalkForwardSplit,
-    wf_run_id: str,
+# ── 多偏移集成辅助函数 ────────────────────────────────────────────────
+
+
+def _align_to_trade_date(
+    date_str: str, trade_dates: List[str], forward: bool = True
+) -> str:
+    """将日期对齐到最近的交易日
+
+    Args:
+        date_str: 日期字符串 YYYYMMDD
+        trade_dates: 已排序的交易日列表
+        forward: True=向后找（最近的>=date），False=向前找（最近的<=date）
+
+    Returns:
+        对齐后的交易日字符串
+    """
+    if forward:
+        for td in trade_dates:
+            if td >= date_str:
+                return td
+        return trade_dates[-1]
+    else:
+        for td in reversed(trade_dates):
+            if td <= date_str:
+                return td
+        return trade_dates[0]
+
+
+def compute_offset_windows(
+    train_start: str,
+    train_end: str,
+    offset_months: int,
+    trade_cal: pd.DataFrame,
+) -> List[Tuple[str, str]]:
+    """计算多偏移训练窗口
+
+    生成原始窗口 + 前移 + 后移共3个训练窗口，用于多偏移集成训练。
+
+    Args:
+        train_start: 原始训练起始日期 YYYYMMDD
+        train_end: 原始训练结束日期 YYYYMMDD
+        offset_months: 偏移月数（如1表示±1个月）
+        trade_cal: 交易日历 DataFrame
+
+    Returns:
+        [(start, end), ...] — 原始窗口 + 前移 + 后移，共3个
+    """
+    all_dates = (
+        trade_cal[trade_cal["is_open"] == 1]["cal_date"].sort_values().tolist()
+    )
+    windows = [(train_start, train_end)]
+
+    for sign in [-1, 1]:
+        start_dt = datetime.strptime(train_start, "%Y%m%d") + relativedelta(
+            months=sign * offset_months
+        )
+        end_dt = datetime.strptime(train_end, "%Y%m%d") + relativedelta(
+            months=sign * offset_months
+        )
+        start_aligned = _align_to_trade_date(
+            start_dt.strftime("%Y%m%d"), all_dates, forward=True
+        )
+        end_aligned = _align_to_trade_date(
+            end_dt.strftime("%Y%m%d"), all_dates, forward=False
+        )
+        windows.append((start_aligned, end_aligned))
+
+    return windows
+
+
+def _train_model_on_window(
+    train_start: str,
+    train_end: str,
     storage: Storage,
     loader: DataLoader,
-    registry: ModelRegistry,
     args,
-    topk_values: List[int]
 ) -> Dict:
-    """执行单个 split 的训练
-    
+    """在指定训练窗口上训练单个模型
+
+    封装 load_features_data → 标签变换 → prepare_training_data →
+    样本权重 → 训练 的完整流程。
+
     Args:
-        split: WalkForwardSplit 对象
-        wf_run_id: walk-forward 运行ID
+        train_start: 训练起始日期
+        train_end: 训练结束日期
         storage: Storage 实例
         loader: DataLoader 实例
-        registry: ModelRegistry 实例
         args: 命令行参数
-        topk_values: TopK 评估值列表
-        
+
     Returns:
-        包含训练结果的字典
+        包含 model, feature_columns, train_params 等的字典
     """
-    logger.info("=" * 80)
-    logger.info(f"开始训练 Split {split.split_index}")
-    logger.info(f"  训练区间: {split.train_start} 至 {split.train_end}")
-    logger.info(f"  测试区间: {split.test_start} 至 {split.test_end}")
-    logger.info("=" * 80)
-    
     # 1. 加载训练数据
     df_train, train_days_count = load_features_data(
-        storage, loader, split.train_start, split.train_end
+        storage, loader, train_start, train_end
     )
     total_train_samples = len(df_train)
-    
-    # 2. 加载测试数据
-    df_test, test_days_count = load_features_data(
-        storage, loader, split.test_start, split.test_end
-    )
-    total_test_samples = len(df_test)
-    
-    # 3. 应用标签变换
+
+    # 2. 应用标签变换
     if args.task == "classification":
         if args.pos_quantile is None and args.pos_topk is None:
             raise ValueError("分类任务必须指定 --pos-quantile 或 --pos-topk")
-        
         df_train = generate_classification_labels(
             df_train,
             label_column=args.label_column,
             pos_quantile=args.pos_quantile,
-            pos_topk=args.pos_topk
+            pos_topk=args.pos_topk,
         )
         binary_label_col = f"{args.label_column}_binary"
         actual_label_column = binary_label_col
     else:
-        # 回归任务：标签变换（cs_zscore 在切分后各自独立变换，避免数据泄露）
         actual_label_column = args.label_column
 
-    # 4. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
-    # cs_zscore 回归任务：切分后对 train/val 各自独立变换，不共享截面统计量
+    # 3. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
     label_transform_fn = None
     if args.task == "regression" and args.label_transform == "cs_zscore":
         label_transform_fn = lambda d: transform_labels_cs_zscore(
             d, label_column=actual_label_column, winsorize_p=args.winsorize_p
         )
-    X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats, df_val_split_original = prepare_training_data(
-        df_train, actual_label_column, val_ratio=args.val_ratio, label_transform_fn=label_transform_fn,
+    (
+        X_train, y_train, X_val, y_val,
+        feature_columns, df_train_split, df_val_split,
+        data_stats, df_val_split_original,
+    ) = prepare_training_data(
+        df_train,
+        actual_label_column,
+        val_ratio=args.val_ratio,
+        label_transform_fn=label_transform_fn,
         enable_fundamental_features=args.enable_fundamental_features,
         enable_alt_features=args.enable_alt_features,
         enable_margin_features=args.enable_margin_features,
         enable_cyq_features=args.enable_cyq_features,
         enable_fund_features=args.enable_fund_features,
         enable_express_features=args.enable_express_features,
+        feature_stability_filter=args.feature_stability_filter,
     )
 
-    # 4.1. 构造样本权重（rank-weight + 时间衰减，可叠加）
+    # 4. 构造样本权重（rank-weight + 时间衰减，可叠加）
     rank_sample_weight = None
     if args.rank_weight_enabled:
         rank_sample_weight = build_rank_sample_weights(
@@ -359,8 +422,6 @@ def execute_split_training(
             topk=args.rank_weight_topk,
             top_weight=args.rank_weight,
         )
-
-    # 4.2. 时间衰减权重
     if args.time_decay_half_life > 0:
         td_weights = build_time_decay_weights(
             df_train=df_train_split,
@@ -372,28 +433,24 @@ def execute_split_training(
             rank_sample_weight = td_weights
 
     # 5. 训练模型
-    skip_label_winsorize = (args.task == "regression" and args.label_transform == "cs_zscore")
-
-    # 根据算法选择训练函数
-    algorithm = getattr(args, 'algorithm', 'xgboost')
+    skip_label_winsorize = (
+        args.task == "regression" and args.label_transform == "cs_zscore"
+    )
+    algorithm = getattr(args, "algorithm", "xgboost")
     train_fn = train_lightgbm_model if algorithm == "lightgbm" else train_xgboost_model
 
-    # num_leaves 仅 LightGBM 使用
     extra_kwargs = {}
     if algorithm == "lightgbm":
-        num_leaves_val = getattr(args, 'num_leaves', None)
+        num_leaves_val = getattr(args, "num_leaves", None)
         if num_leaves_val is not None:
             extra_kwargs["num_leaves"] = num_leaves_val
-
-    # LambdaRank 需要传入 DataFrame 用于按 trade_date 构造 qid 分组
     if algorithm == "xgboost":
-        objective_type = getattr(args, 'objective', 'mse')
+        objective_type = getattr(args, "objective", "mse")
         extra_kwargs["objective_type"] = objective_type
         if objective_type == "lambdarank":
             extra_kwargs["df_train_for_group"] = df_train_split
             extra_kwargs["df_val_for_group"] = df_val_split
 
-    # early_stopping_rounds=0 表示禁用早停
     es_rounds = args.early_stopping_rounds if args.early_stopping_rounds else None
 
     model, train_params, train_metrics, val_metrics = train_fn(
@@ -416,10 +473,130 @@ def execute_split_training(
         early_stopping_metric=args.early_stopping_metric,
         **extra_kwargs,
     )
-    
-    # 6. 验证集逐日评估（用于内部评估）
-    # 使用变换前的原始 val df（df_val_split_original），确保 TopK 收益以真实收益单位展示，
-    # 避免 cs_zscore 场景下 z-score 值（0~3）被误读为百分比收益
+
+    return {
+        "model": model,
+        "feature_columns": feature_columns,
+        "train_params": train_params,
+        "train_metrics": train_metrics,
+        "val_metrics": val_metrics,
+        "df_train_split": df_train_split,
+        "df_val_split": df_val_split,
+        "df_val_split_original": df_val_split_original,
+        "data_stats": data_stats,
+        "train_days_count": train_days_count,
+        "total_train_samples": total_train_samples,
+        "X_train_len": len(X_train),
+        "X_val_len": len(X_val),
+    }
+
+
+def execute_split_training(
+    split: WalkForwardSplit,
+    wf_run_id: str,
+    storage: Storage,
+    loader: DataLoader,
+    registry: ModelRegistry,
+    args,
+    topk_values: List[int],
+    trade_cal: Optional[pd.DataFrame] = None,
+) -> Dict:
+    """执行单个 split 的训练
+
+    支持多偏移集成：当 args.ensemble_offsets > 0 时，训练 3 个偏移模型并包装为
+    EnsembleModel，对外接口不变。
+
+    Args:
+        split: WalkForwardSplit 对象
+        wf_run_id: walk-forward 运行ID
+        storage: Storage 实例
+        loader: DataLoader 实例
+        registry: ModelRegistry 实例
+        args: 命令行参数
+        topk_values: TopK 评估值列表
+        trade_cal: 交易日历（多偏移集成需要）
+
+    Returns:
+        包含训练结果的字典
+    """
+    logger.info("=" * 80)
+    logger.info(f"开始训练 Split {split.split_index}")
+    logger.info(f"  训练区间: {split.train_start} 至 {split.train_end}")
+    logger.info(f"  测试区间: {split.test_start} 至 {split.test_end}")
+    logger.info("=" * 80)
+
+    # ── Phase 1: 训练模型 ──────────────────────────────────────────────
+    ensemble_offsets = getattr(args, "ensemble_offsets", 0)
+
+    if ensemble_offsets > 0 and trade_cal is not None:
+        # 多偏移集成训练
+        windows = compute_offset_windows(
+            split.train_start, split.train_end, ensemble_offsets, trade_cal
+        )
+        logger.info(
+            f"多偏移集成训练: {len(windows)}个窗口, 偏移±{ensemble_offsets}个月"
+        )
+
+        sub_models = []
+        base_result = None
+
+        for win_idx, (win_start, win_end) in enumerate(windows):
+            label = ["基础", "前移", "后移"][win_idx] if win_idx < 3 else f"偏移{win_idx}"
+            logger.info(
+                f"  子模型 {win_idx + 1}/{len(windows)}（{label}）: "
+                f"{win_start} ~ {win_end}"
+            )
+            tr = _train_model_on_window(win_start, win_end, storage, loader, args)
+            sub_models.append(tr["model"])
+
+            if win_idx == 0:
+                base_result = tr
+            else:
+                if set(tr["feature_columns"]) != set(base_result["feature_columns"]):
+                    logger.warning(
+                        f"  子模型 {win_idx + 1} 特征列数量"
+                        f"({len(tr['feature_columns'])}) "
+                        f"与基础模型({len(base_result['feature_columns'])})不一致"
+                    )
+
+        model = EnsembleModel(sub_models)
+        feature_columns = base_result["feature_columns"]
+        train_params = base_result["train_params"]
+        train_metrics = base_result["train_metrics"]
+        val_metrics = base_result["val_metrics"]
+        df_val_split_original = base_result["df_val_split_original"]
+        data_stats = base_result["data_stats"]
+        train_days_count = base_result["train_days_count"]
+        total_train_samples = base_result["total_train_samples"]
+        X_train_len = base_result["X_train_len"]
+        X_val_len = base_result["X_val_len"]
+
+        logger.info(f"集成模型创建完成: {model}")
+    else:
+        # 单模型训练（原始行为）
+        tr = _train_model_on_window(
+            split.train_start, split.train_end, storage, loader, args
+        )
+        model = tr["model"]
+        feature_columns = tr["feature_columns"]
+        train_params = tr["train_params"]
+        train_metrics = tr["train_metrics"]
+        val_metrics = tr["val_metrics"]
+        df_val_split_original = tr["df_val_split_original"]
+        data_stats = tr["data_stats"]
+        train_days_count = tr["train_days_count"]
+        total_train_samples = tr["total_train_samples"]
+        X_train_len = tr["X_train_len"]
+        X_val_len = tr["X_val_len"]
+
+    # ── Phase 2: 加载测试数据 ──────────────────────────────────────────
+    df_test, test_days_count = load_features_data(
+        storage, loader, split.test_start, split.test_end
+    )
+    total_test_samples = len(df_test)
+
+    # ── Phase 3: 验证集逐日评估 ────────────────────────────────────────
+    # 使用变换前的原始 val df（df_val_split_original），确保 TopK 收益以真实收益单位展示
     val_daily_metrics = {}
     if len(df_val_split_original) > 0:
         original_return_col = args.label_column
@@ -429,41 +606,41 @@ def execute_split_training(
             feature_columns=feature_columns,
             original_return_col=original_return_col,
             task=args.task,
-            topk_values=topk_values
+            topk_values=topk_values,
         )
-    
-    # 7. 样本外测试集评估（walk-forward 的核心）
+
+    # ── Phase 4: 样本外测试集评估（walk-forward 的核心）──────────────
     logger.info("=" * 60)
     logger.info("样本外测试集评估（OOS Evaluation）")
     logger.info("=" * 60)
-    
+
     # 准备测试数据
     df_test_eval = df_test.copy()
-    
+
     # 过滤测试集样本（与训练时一致：过滤 ST、停牌、涨停；跌停可买入，保留）
-    filter_columns = ['is_st', 'is_suspended', 'is_limit_up']
+    filter_columns = ["is_st", "is_suspended", "is_limit_up"]
     mask = pd.Series([True] * len(df_test_eval))
     for col in filter_columns:
         if col in df_test_eval.columns:
             mask = mask & (~df_test_eval[col].astype(bool))
     df_test_eval = df_test_eval[mask].copy()
-    
+
     # 移除标签为 NaN 的样本
     if args.label_column in df_test_eval.columns:
         df_test_eval = df_test_eval.dropna(subset=[args.label_column])
-    
+
     logger.info(f"测试集样本数（过滤后）: {len(df_test_eval)}")
-    
-    # 测试集预测（XGB/LGB 原生支持 NaN，不做 fillna）
+
+    # 测试集预测（EnsembleModel.predict 自动平均多模型）
     X_test_features = df_test_eval[feature_columns]
-    
+
     if args.task == "classification":
         y_test_pred_proba = model.predict_proba(X_test_features)[:, 1]
-        df_test_eval['pred_score'] = y_test_pred_proba
+        df_test_eval["pred_score"] = y_test_pred_proba
     else:
         y_test_pred = model.predict(X_test_features)
-        df_test_eval['pred_score'] = y_test_pred
-    
+        df_test_eval["pred_score"] = y_test_pred
+
     # 测试集逐日评估
     test_daily_metrics = evaluate_validation_daily(
         model=model,
@@ -471,20 +648,21 @@ def execute_split_training(
         feature_columns=feature_columns,
         original_return_col=args.label_column,
         task=args.task,
-        topk_values=topk_values
+        topk_values=topk_values,
     )
-    
-    # 8. 注册模型
+
+    # ── Phase 5: 注册模型 ─────────────────────────────────────────────
     # 准备性能指标（包含训练集、验证集、测试集）
     performance_metrics = {
         "train": train_metrics,
         "validation": val_metrics,
         "validation_daily": val_daily_metrics,
-        "test": {},  # 测试集的聚合指标
-        "test_daily": test_daily_metrics  # 测试集逐日评估
+        "test": {},
+        "test_daily": test_daily_metrics,
     }
-    
+
     # 准备完整的训练参数
+    algorithm = getattr(args, "algorithm", "xgboost")
     full_train_params = train_params.copy()
     full_train_params.update({
         "algorithm": algorithm,
@@ -493,10 +671,13 @@ def execute_split_training(
         "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else None,
         "pos_quantile": args.pos_quantile if args.task == "classification" else None,
         "pos_topk": args.pos_topk if args.task == "classification" else None,
-        "scale_pos_weight_manual": args.scale_pos_weight is not None
+        "scale_pos_weight_manual": args.scale_pos_weight is not None,
     })
-    
-    # 注册模型
+    if ensemble_offsets > 0:
+        full_train_params["ensemble_offsets"] = ensemble_offsets
+        full_train_params["ensemble_n_models"] = model.n_models
+
+    # 注册模型（EnsembleModel 通过 joblib 序列化，包含所有子模型）
     version = registry.register_model(
         model=model,
         model_type=f"{algorithm}_{args.task}_wf",
@@ -504,28 +685,38 @@ def execute_split_training(
         train_end_date=split.train_end,
         feature_columns=feature_columns,
         label_column=args.label_column,
-        n_samples=len(X_train) + len(X_val),
+        n_samples=X_train_len + X_val_len,
         train_params=full_train_params,
-        performance_metrics=performance_metrics
+        performance_metrics=performance_metrics,
     )
-    
+
     logger.info(f"模型已注册: v{version}")
-    
-    # 9. 记录训练运行日志到CSV
+
+    # ── Phase 6: 记录训练运行日志到CSV ─────────────────────────────────
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # 准备完整的数据统计
+
+    # 特征筛选信息
+    ffi = data_stats.get("feature_filter_info")
+    feature_filter_summary = {}
+    if ffi and not ffi.get("skipped", True):
+        feature_filter_summary = {
+            "feature_total": ffi["total_features"],
+            "feature_stable": ffi["stable_count"],
+            "feature_removed": ffi["removed_count"],
+        }
+
     complete_data_stats = {
         "trade_days_count": train_days_count,
         "total_samples": total_train_samples,
         "samples_after_filter": data_stats["samples_after_filter"],
-        "train_samples": len(X_train),
-        "val_samples": len(X_val),
+        "train_samples": X_train_len,
+        "val_samples": X_val_len,
         "val_start_date": data_stats["val_start_date"],
         "val_end_date": data_stats["val_end_date"],
-        "val_ratio": args.val_ratio
+        "val_ratio": args.val_ratio,
+        **feature_filter_summary,
     }
-    
+
     # 创建训练运行记录
     run_record = create_training_run_record_from_training_session(
         timestamp=timestamp,
@@ -541,15 +732,19 @@ def execute_split_training(
         split_index=split.split_index,
         step_frequency=args.step,
         test_start_date=split.test_start,
-        test_end_date=split.test_end
+        test_end_date=split.test_end,
     )
-    
+
     # 写入CSV
-    csv_path = args.run_log_csv if args.run_log_csv else f"{args.data_root}/models/ml_train_runs.csv"
+    csv_path = (
+        args.run_log_csv
+        if args.run_log_csv
+        else f"{args.data_root}/models/ml_train_runs.csv"
+    )
     write_training_run_to_csv(run_record, csv_path)
-    
+
     logger.info(f"训练运行日志已记录到: {csv_path}")
-    
+
     # 返回结果
     result = {
         "split_index": split.split_index,
@@ -558,14 +753,14 @@ def execute_split_training(
         "test_start": split.test_start,
         "test_end": split.test_end,
         "model_version": version,
-        "train_samples": len(X_train),
-        "val_samples": len(X_val),
+        "train_samples": X_train_len,
+        "val_samples": X_val_len,
         "test_samples": len(df_test_eval),
         "best_iteration": train_params.get("best_iteration"),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
-        "test_daily_metrics": test_daily_metrics
+        "test_daily_metrics": test_daily_metrics,
     }
-    
+
     return result
 
 
@@ -637,115 +832,59 @@ def execute_deploy_training(
     logger.info(f"  （无测试区间，用于部署）")
     logger.info("=" * 80)
 
-    # 1. 加载训练数据
-    df_train, train_days_count = load_features_data(
-        storage, loader, train_start, train_end
-    )
-    total_train_samples = len(df_train)
+    # ── 训练模型（支持多偏移集成）──────────────────────────────────────
+    ensemble_offsets = getattr(args, "ensemble_offsets", 0)
 
-    # 2. 应用标签变换
-    if args.task == "classification":
-        if args.pos_quantile is None and args.pos_topk is None:
-            raise ValueError("分类任务必须指定 --pos-quantile 或 --pos-topk")
-
-        df_train = generate_classification_labels(
-            df_train,
-            label_column=args.label_column,
-            pos_quantile=args.pos_quantile,
-            pos_topk=args.pos_topk,
+    if ensemble_offsets > 0:
+        windows = compute_offset_windows(
+            train_start, train_end, ensemble_offsets, trade_cal
         )
-        binary_label_col = f"{args.label_column}_binary"
-        actual_label_column = binary_label_col
+        logger.info(
+            f"部署模型多偏移集成训练: {len(windows)}个窗口, 偏移±{ensemble_offsets}个月"
+        )
+
+        sub_models = []
+        base_result = None
+
+        for win_idx, (win_start, win_end) in enumerate(windows):
+            label = ["基础", "前移", "后移"][win_idx] if win_idx < 3 else f"偏移{win_idx}"
+            logger.info(
+                f"  部署子模型 {win_idx + 1}/{len(windows)}（{label}）: "
+                f"{win_start} ~ {win_end}"
+            )
+            tr = _train_model_on_window(win_start, win_end, storage, loader, args)
+            sub_models.append(tr["model"])
+            if win_idx == 0:
+                base_result = tr
+
+        model = EnsembleModel(sub_models)
+        feature_columns = base_result["feature_columns"]
+        train_params = base_result["train_params"]
+        train_metrics = base_result["train_metrics"]
+        val_metrics = base_result["val_metrics"]
+        df_val_split_original = base_result["df_val_split_original"]
+        data_stats = base_result["data_stats"]
+        train_days_count = base_result["train_days_count"]
+        total_train_samples = base_result["total_train_samples"]
+        X_train_len = base_result["X_train_len"]
+        X_val_len = base_result["X_val_len"]
+
+        logger.info(f"部署集成模型创建完成: {model}")
     else:
-        actual_label_column = args.label_column
+        tr = _train_model_on_window(train_start, train_end, storage, loader, args)
+        model = tr["model"]
+        feature_columns = tr["feature_columns"]
+        train_params = tr["train_params"]
+        train_metrics = tr["train_metrics"]
+        val_metrics = tr["val_metrics"]
+        df_val_split_original = tr["df_val_split_original"]
+        data_stats = tr["data_stats"]
+        train_days_count = tr["train_days_count"]
+        total_train_samples = tr["total_train_samples"]
+        X_train_len = tr["X_train_len"]
+        X_val_len = tr["X_val_len"]
 
-    # 3. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
-    label_transform_fn = None
-    if args.task == "regression" and args.label_transform == "cs_zscore":
-        label_transform_fn = lambda d: transform_labels_cs_zscore(
-            d, label_column=actual_label_column, winsorize_p=args.winsorize_p
-        )
-    (
-        X_train, y_train, X_val, y_val,
-        feature_columns, df_train_split, df_val_split,
-        data_stats, df_val_split_original,
-    ) = prepare_training_data(
-        df_train,
-        actual_label_column,
-        val_ratio=args.val_ratio,
-        label_transform_fn=label_transform_fn,
-        enable_fundamental_features=args.enable_fundamental_features,
-        enable_alt_features=args.enable_alt_features,
-        enable_margin_features=args.enable_margin_features,
-        enable_cyq_features=args.enable_cyq_features,
-        enable_fund_features=args.enable_fund_features,
-        enable_express_features=args.enable_express_features,
-    )
-
-    # 3.1. 构造样本权重（rank-weight + 时间衰减，可叠加）
-    rank_sample_weight = None
-    if args.rank_weight_enabled:
-        rank_sample_weight = build_rank_sample_weights(
-            df_train=df_train_split,
-            label_column=actual_label_column,
-            topk=args.rank_weight_topk,
-            top_weight=args.rank_weight,
-        )
-
-    # 3.2. 时间衰减权重
-    if args.time_decay_half_life > 0:
-        td_weights = build_time_decay_weights(
-            df_train=df_train_split,
-            half_life_years=args.time_decay_half_life,
-        )
-        if rank_sample_weight is not None:
-            rank_sample_weight = rank_sample_weight * td_weights
-        else:
-            rank_sample_weight = td_weights
-
-    # 4. 训练模型
-    skip_label_winsorize = args.task == "regression" and args.label_transform == "cs_zscore"
-
-    algorithm = getattr(args, "algorithm", "xgboost")
-    train_fn = train_lightgbm_model if algorithm == "lightgbm" else train_xgboost_model
-
-    extra_kwargs = {}
-    if algorithm == "lightgbm":
-        num_leaves_val = getattr(args, "num_leaves", None)
-        if num_leaves_val is not None:
-            extra_kwargs["num_leaves"] = num_leaves_val
-
-    if algorithm == "xgboost":
-        objective_type = getattr(args, "objective", "mse")
-        extra_kwargs["objective_type"] = objective_type
-        if objective_type == "lambdarank":
-            extra_kwargs["df_train_for_group"] = df_train_split
-            extra_kwargs["df_val_for_group"] = df_val_split
-
-    es_rounds = args.early_stopping_rounds if args.early_stopping_rounds else None
-
-    model, train_params, train_metrics, val_metrics = train_fn(
-        X_train, y_train, X_val, y_val,
-        task=args.task,
-        skip_label_winsorize=skip_label_winsorize,
-        scale_pos_weight=args.scale_pos_weight,
-        sample_weight=rank_sample_weight,
-        n_estimators=args.n_estimators,
-        max_depth=args.max_depth,
-        learning_rate=args.learning_rate,
-        subsample=args.subsample,
-        colsample_bytree=args.colsample_bytree,
-        random_state=args.random_state,
-        min_child_weight=args.min_child_weight,
-        reg_alpha=args.reg_alpha,
-        reg_lambda=args.reg_lambda,
-        gamma=args.gamma,
-        early_stopping_rounds=es_rounds,
-        early_stopping_metric=args.early_stopping_metric,
-        **extra_kwargs,
-    )
-
-    # 5. 验证集逐日评估
+    # 验证集逐日评估
     val_daily_metrics = {}
     if len(df_val_split_original) > 0:
         original_return_col = args.label_column
@@ -767,6 +906,7 @@ def execute_deploy_training(
         "test_daily": {},
     }
 
+    algorithm = getattr(args, "algorithm", "xgboost")
     full_train_params = train_params.copy()
     full_train_params.update({
         "algorithm": algorithm,
@@ -778,6 +918,9 @@ def execute_deploy_training(
         "scale_pos_weight_manual": args.scale_pos_weight is not None,
         "is_deploy": True,
     })
+    if ensemble_offsets > 0:
+        full_train_params["ensemble_offsets"] = ensemble_offsets
+        full_train_params["ensemble_n_models"] = model.n_models
 
     version = registry.register_model(
         model=model,
@@ -786,7 +929,7 @@ def execute_deploy_training(
         train_end_date=train_end,
         feature_columns=feature_columns,
         label_column=args.label_column,
-        n_samples=len(X_train) + len(X_val),
+        n_samples=X_train_len + X_val_len,
         train_params=full_train_params,
         performance_metrics=performance_metrics,
     )
@@ -796,15 +939,26 @@ def execute_deploy_training(
     # 7. 记录训练运行日志到CSV
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # 特征筛选信息（部署模型路径）
+    ffi_deploy = data_stats.get("feature_filter_info")
+    ff_summary_deploy = {}
+    if ffi_deploy and not ffi_deploy.get("skipped", True):
+        ff_summary_deploy = {
+            "feature_total": ffi_deploy["total_features"],
+            "feature_stable": ffi_deploy["stable_count"],
+            "feature_removed": ffi_deploy["removed_count"],
+        }
+
     complete_data_stats = {
         "trade_days_count": train_days_count,
         "total_samples": total_train_samples,
         "samples_after_filter": data_stats["samples_after_filter"],
-        "train_samples": len(X_train),
-        "val_samples": len(X_val),
+        "train_samples": X_train_len,
+        "val_samples": X_val_len,
         "val_start_date": data_stats["val_start_date"],
         "val_end_date": data_stats["val_end_date"],
         "val_ratio": args.val_ratio,
+        **ff_summary_deploy,
     }
 
     run_record = create_training_run_record_from_training_session(
@@ -840,8 +994,8 @@ def execute_deploy_training(
         "test_start": None,
         "test_end": None,
         "model_version": version,
-        "train_samples": len(X_train),
-        "val_samples": len(X_val),
+        "train_samples": X_train_len,
+        "val_samples": X_val_len,
         "test_samples": 0,
         "best_iteration": train_params.get("best_iteration"),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
@@ -1028,6 +1182,8 @@ def write_walk_forward_summary(
         "enable_cyq": args.enable_cyq_features,
         "enable_fund": args.enable_fund_features,
         "enable_express": args.enable_express_features,
+        "feature_stability_filter": args.feature_stability_filter,
+        "ensemble_offsets": getattr(args, 'ensemble_offsets', 0),
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
@@ -1438,6 +1594,19 @@ def main():
         action="store_true",
         help="启用业绩快报因子（实际营收/净利润增速、业绩惊喜等）"
     )
+    parser.add_argument(
+        "--feature-stability-filter",
+        action="store_true",
+        help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）"
+    )
+
+    # 多偏移集成
+    parser.add_argument(
+        "--ensemble-offsets",
+        type=int,
+        default=0,
+        help="多偏移集成：偏移月数（0=禁用, 1=±1个月→3模型, 2=±2个月→3模型）"
+    )
 
     # 其他参数
     parser.add_argument(
@@ -1697,7 +1866,8 @@ def main():
                     loader=loader,
                     registry=registry,
                     args=args,
-                    topk_values=topk_values
+                    topk_values=topk_values,
+                    trade_cal=trade_cal,
                 )
 
                 # OOS 回测（每个 split 训练后运行真实回测）

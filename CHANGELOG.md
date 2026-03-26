@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.26.1] - 2026-03-26
+
+### 修复
+
+- **特征构建时 fund_portfolio/cyq_perf 数据加载范围不足**
+  - `build_clean_features.py` 中 `fund_portfolio` 使用精确日期范围加载，导致前序季度分区未被加载，point-in-time 查询在日期范围起始段无匹配 → fund 相关特征列缺失
+  - `cyq_perf` 同理，精确日期范围导致 `diff(5)`/`diff(20)` 衍生特征在起始段全为 NaN
+  - 修复：两者均改为使用7个月回溯的 `start_dt` 加载，与 `margin_detail` 的加载方式一致
+
+## [0.26.0] - 2026-03-26
+
+### 新增
+
+- **多偏移集成训练 (`--ensemble-offsets`)**
+  - 每个 walk-forward split 训练3个偏移模型（原始窗口 ± N个月），预测分数取平均
+  - 新增 `EnsembleModel` 包装器（`src/lazybull/ml/ensemble.py`），对外提供与单模型相同的 `predict()` 接口
+  - `MLSignal`、`BacktestEngine` 等下游代码无需修改，自动兼容
+  - 通过 `--ensemble-offsets N` CLI参数控制偏移月数（0=禁用，1=±1个月→3模型）
+  - `batch_walk_forward.ps1` 新增 `$ensemble_offsets` 变量，默认值 1
+  - walk-forward summary 中记录 `ensemble_offsets` 参数
+  - 部署模型训练同样支持多偏移集成
+  - 重构 `execute_split_training`/`execute_deploy_training`，提取 `_train_model_on_window()` 公共函数消除代码重复
+
+### 修改
+
+- `batch_walk_forward.ps1` 中 `$feature_stability_filter` 默认值改为 `$false`（实验验证效果不佳）
+
+## [0.25.0] - 2026-03-26
+
+### 新增
+
+- **特征稳定性筛选 (`--feature-stability-filter`)**
+  - 新增 `filter_stable_features()` 函数（`train_core.py`），在模型训练前自动筛选跨时期IC方向一致的特征
+  - 将训练集按时间等分成3段，逐段计算各特征的截面Spearman IC均值
+  - 仅保留所有段IC方向一致且平均|IC|≥0.02的特征，移除不稳定特征
+  - 通过 `--feature-stability-filter` CLI参数启用（`walk_forward.py` / `train_ml_model.py`）
+  - `batch_walk_forward.ps1` 新增 `$feature_stability_filter` 开关
+  - walk-forward summary 中记录筛选统计（feature_total/feature_stable/feature_removed）
+
 ## [0.24.2] - 2026-03-25
 
 ### 优化
