@@ -268,6 +268,7 @@ class TestWalkForwardCSV:
                 enable_margin_features=False,
                 enable_cyq_features=False, enable_fund_features=False,
                 enable_express_features=False,
+                feature_stability_filter=False,
             )
 
             # 写入文件

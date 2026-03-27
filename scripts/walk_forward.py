@@ -100,6 +100,7 @@ def run_oos_backtest(
     bt_weight_method: str = "equal",
     industry_momentum_filter: bool = False,
     industry_momentum_bottom_pct: float = 0.2,
+    stagger_tranches: int = 1,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测，返回组合级绩效指标
 
@@ -115,6 +116,7 @@ def run_oos_backtest(
         bt_top_n: 回测 Top N 持仓数
         bt_rebalance_freq: 调仓频率（None 则从 label 自动推断）
         data_root: 数据根目录
+        stagger_tranches: 分批调仓批次数（1=不分批）
 
     Returns:
         回测指标字典，键以 bt_ 前缀开头；无数据时返回空字典
@@ -212,6 +214,7 @@ def run_oos_backtest(
         market_regime_drawdown_threshold=market_regime_drawdown_threshold,
         industry_momentum_filter=industry_momentum_filter,
         industry_momentum_bottom_pct=industry_momentum_bottom_pct,
+        stagger_tranches=stagger_tranches,
     )
 
     trading_dates_ts = [pd.Timestamp(d) for d in trade_dates]
@@ -1201,6 +1204,7 @@ def write_walk_forward_summary(
         "market_regime_trend_guard": getattr(args, 'market_regime_trend_guard', True),
         "market_regime_drawdown_guard": getattr(args, 'market_regime_drawdown_guard', True),
         "market_regime_drawdown_threshold": getattr(args, 'market_regime_drawdown_threshold', None),
+        "stagger_tranches": getattr(args, 'stagger_tranches', 1),
     }
 
     # 提取每个 split 的关键指标
@@ -1669,6 +1673,14 @@ def main():
         help="回测权重分配方法：equal（等权）或 score（按预测分数加权），默认 equal"
     )
 
+    # 分批调仓
+    parser.add_argument(
+        "--stagger-tranches",
+        type=int,
+        default=1,
+        help="分批调仓批次数（默认1=不分批）。设为K时将资金分成K份错开调仓，降低时点风险"
+    )
+
     # 行业动量过滤
     parser.add_argument(
         "--industry-momentum-filter",
@@ -1801,6 +1813,8 @@ def main():
         logger.info(f"  回测时长: {args.oos_backtest_months} 个月")
         logger.info(f"  持仓 Top N: {args.bt_top_n}")
         logger.info(f"  调仓频率: {args.bt_rebalance_freq or '自动推断'}")
+        if args.stagger_tranches > 1:
+            logger.info(f"  分批调仓: {args.stagger_tranches} 批")
         if args.market_regime:
             regime_detail = f"mode={args.market_regime_mode}"
             if args.market_regime_mode == "binary":
@@ -1902,6 +1916,7 @@ def main():
                             bt_weight_method=args.bt_weight_method,
                             industry_momentum_filter=args.industry_momentum_filter,
                             industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,
+                            stagger_tranches=args.stagger_tranches,
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)

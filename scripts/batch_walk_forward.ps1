@@ -77,10 +77,13 @@ $enable_express          = $true  # $true 启用 | $false 禁用
 $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
-$ensemble_offsets          = 1      # 偏移月数（0=禁用, 1=±1个月→3模型）
+$ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
+
+# ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
+$stagger_tranches_list   = @(2,4)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
@@ -147,7 +150,8 @@ $totalTasks = $algorithm_list.Length *
               $market_regime_bear_threshold_list.Length *
               $market_regime_mode_list.Length *
               $market_regime_vol_target_list.Length *
-              $bt_top_n_list.Length
+              $bt_top_n_list.Length *
+              $stagger_tranches_list.Length
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -181,6 +185,7 @@ foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
 foreach ($market_regime_mode in $market_regime_mode_list) {
 foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
+foreach ($stagger_tranches in $stagger_tranches_list) {
 
     $count++
 
@@ -268,6 +273,10 @@ foreach ($bt_top_n in $bt_top_n_list) {
         }
     }
 
+    if ($stagger_tranches -gt 1) {
+        $pythonCmd += " --stagger-tranches $stagger_tranches"
+    }
+
     if ($oos_backtest) {
         $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method"
         if ($null -ne $bt_rebalance_freq) {
@@ -312,7 +321,7 @@ foreach ($bt_top_n in $bt_top_n_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（23 层）
+}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（24 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

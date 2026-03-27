@@ -25,6 +25,7 @@ class TradingConfig:
     top_n: int = 30
     weight_method: str = "equal"
     rebalance_freq: Optional[int] = 20
+    stagger_tranches: int = 1
     max_per_industry: Optional[int] = None
     max_weight_per_stock: Optional[float] = None
 
@@ -154,6 +155,10 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
     )
     parser.add_argument(
         "--rebalance-freq", type=int, default=20, help="调仓频率（交易日数），默认20"
+    )
+    parser.add_argument(
+        "--stagger-tranches", type=int, default=1,
+        help="分批调仓批次数（默认1=不分批）。设为K时资金分K份错开调仓，降低时点风险"
     )
     parser.add_argument(
         "--max-per-industry", type=int, default=None, help="单行业最大持仓数量（默认：不限制）"

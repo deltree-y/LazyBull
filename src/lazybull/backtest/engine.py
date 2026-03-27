@@ -59,6 +59,7 @@ class BacktestEngine:
         max_weight_per_stock: Optional[float] = None,  # 新增：单股最大权重
         max_per_industry: Optional[int] = None,  # 新增：单行业最大持仓数量
         stock_basic: Optional[pd.DataFrame] = None,  # 新增：股票基本信息（用于行业约束）
+        stagger_tranches: int = 1,  # 分批调仓批次数（1=不分批）
     ):
         """初始化回测引擎
 
@@ -89,6 +90,8 @@ class BacktestEngine:
             max_weight_per_stock: 单个股票最大权重（0-1），None 表示不启用限权，启用后会在信号生成时对权重进行限制并归一化
             max_per_industry: 单个行业最大持仓数量，None 或 0 表示不启用行业约束
             stock_basic: 股票基本信息 DataFrame（用于行业约束），必须包含 ts_code 和 industry 列
+            stagger_tranches: 分批调仓批次数，默认1（不分批）。设为K时将资金分成K份，
+                每份错开 rebalance_freq/K 天调仓，降低单次调仓时点风险
         """
         self.universe = universe
         self.signal = signal
@@ -135,6 +138,11 @@ class BacktestEngine:
         self.rebalance_freq = rebalance_freq
         self.sell_timing = sell_timing
         self.verbose = verbose
+
+        # 分批调仓参数
+        if stagger_tranches < 1:
+            raise ValueError(f"分批调仓批次数必须 >= 1，当前值: {stagger_tranches}")
+        self.stagger_tranches = stagger_tranches
 
         # 风险预算参数
         self.enable_risk_budget = enable_risk_budget
@@ -203,9 +211,10 @@ class BacktestEngine:
         # 存储价格数据用于交易状态检查
         self.price_data_cache: Optional[pd.DataFrame] = None
 
+        stagger_info = f", 分批调仓={self.stagger_tranches}批" if self.stagger_tranches > 1 else ""
         logger.info(
             f"回测引擎初始化完成: 初始资金={initial_capital}, "
-            f"调仓频率={self.rebalance_freq}, 持有期={self.holding_period}天, "
+            f"调仓频率={self.rebalance_freq}, 持有期={self.holding_period}天{stagger_info}, "
             f"卖出时机={self.sell_timing}, "
             f"风险预算={'启用' if enable_risk_budget else '禁用'}, "
             f"延迟订单={'启用' if enable_pending_order else '禁用'}, "
@@ -269,17 +278,22 @@ class BacktestEngine:
         # 缓存价格数据用于交易状态检查
         self.price_data_cache = price_data
 
-        # 获取调仓日期（信号生成日期）
+        # 获取调仓日期（信号生成日期）→ {日期: tranche_idx}
         signal_dates = self._get_rebalance_dates(trading_dates)
 
-        logger.info(f"数据准备完成, 调仓日期共 {len(signal_dates)} 天")
+        if self.stagger_tranches > 1:
+            logger.info(
+                f"数据准备完成, 调仓日期共 {len(signal_dates)} 天"
+                f"（{self.stagger_tranches} 批分批调仓）"
+            )
+        else:
+            logger.info(f"数据准备完成, 调仓日期共 {len(signal_dates)} 天")
 
         # 记录开始时间
         start_time = time.time()
 
         # 按日推进
         for idx, date in enumerate(trading_dates):
-            logger.info(f"回测进度: {idx + 1}/{total_days} 天, 日期: {date.date()}")
             # 处理延迟订单（先处理延迟订单，再处理新信号）
             if self.enable_pending_order:
                 self._process_pending_orders(date)
@@ -290,7 +304,11 @@ class BacktestEngine:
 
             # 判断是否为信号生成日
             if date in signal_dates:
-                self._generate_signal(date, trading_dates, price_data, date_to_idx)
+                tranche_idx = signal_dates[date]
+                self._generate_signal(
+                    date, trading_dates, price_data, date_to_idx,
+                    tranche_idx=tranche_idx,
+                )
 
             # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
             # TODO: 更正确的做法应该是在持有期计算中排除当天买入的股票, 此部分还待优化
@@ -310,6 +328,21 @@ class BacktestEngine:
 
             # 计算当日组合价值
             portfolio_value = self._calculate_portfolio_value(date)
+
+            # 输出回测进度（含持仓和收益信息）
+            total_return = (portfolio_value / self.initial_capital - 1) * 100
+            trading_days = idx + 1
+            ann_return = (
+                ((portfolio_value / self.initial_capital) ** (252 / trading_days) - 1) * 100
+                if trading_days > 0 else 0.0
+            )
+            logger.info(
+                f"回测进度: {trading_days}/{total_days} 天, "
+                f"日期: {date.date()}"
+                f"(持仓{len(self.positions)}, "
+                f"本轮:{total_return:+.2f}%, "
+                f"年化{ann_return:+.2f}%)"
+            )
 
             self.portfolio_values.append(
                 {
@@ -407,6 +440,7 @@ class BacktestEngine:
         trading_dates: List[pd.Timestamp],
         price_data: pd.DataFrame,
         date_to_idx: Dict,
+        tranche_idx: int = 0,
     ) -> None:
         """生成信号（在 T 日生成，T+1 日执行买入）
 
@@ -417,6 +451,7 @@ class BacktestEngine:
             trading_dates: 交易日列表
             price_data: 价格数据，包含行情信息
             date_to_idx: 日期到索引的映射
+            tranche_idx: 分批调仓的批次索引（0-based）
         """
         # 获取当日行情数据用于基础过滤（ST、停牌等基础过滤）
         trade_date_str = to_trade_date_str(date)
@@ -475,6 +510,27 @@ class BacktestEngine:
         # 扩展点：子类可覆盖此方法对候选列表做额外过滤
         ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
 
+        # 分批调仓时，排除已持仓的股票，避免不同 tranche 选到重复股票浪费预算
+        # stagger_tranches=1 时不需要：rebalance_freq == holding_period，旧持仓在 T+1 先卖后买
+        if self.stagger_tranches > 1 and self.positions:
+            existing_positions = set(self.positions.keys())
+            ranked_candidates_for_selection = [
+                (stock, score)
+                for stock, score in ranked_candidates
+                if stock not in existing_positions
+            ]
+            if self.verbose:
+                excluded = len(ranked_candidates) - len(ranked_candidates_for_selection)
+                if excluded > 0:
+                    logger.info(
+                        f"  排除已持仓股票: {excluded} 只 "
+                        f"(持仓 {len(existing_positions)} 只, "
+                        f"候选从 {len(ranked_candidates)} 缩减到 "
+                        f"{len(ranked_candidates_for_selection)})"
+                    )
+        else:
+            ranked_candidates_for_selection = ranked_candidates
+
         # 从排序候选中选择 top N 股票
         # 当启用仓位补齐功能时，不在信号生成阶段过滤 T+1 的涨停/停牌，
         # 而是在 T+1 执行买入时处理失败，并在 T+2 等日期补齐
@@ -492,12 +548,12 @@ class BacktestEngine:
         if self.enable_position_completion:
             # 启用补齐功能：直接选择 top N 股票，不检查 T+1 可交易性
             # 这样可以在 T+1 买入失败时触发补齐流程
-            for stock, score in ranked_candidates[:target_n]:
+            for stock, score in ranked_candidates_for_selection[:target_n]:
                 signals[stock] = score
                 candidates_checked += 1
         else:
             # 未启用补齐功能：保留原有逻辑，在 T+1 过滤不可交易股票并回填
-            for stock, score in ranked_candidates:
+            for stock, score in ranked_candidates_for_selection:
                 candidates_checked += 1
 
                 # 检查 T+1 日该股票是否可买入
@@ -587,17 +643,23 @@ class BacktestEngine:
             "signals": signals,
             "ranked_candidates": ranked_candidates if self.enable_position_completion else [],
             "target_n": target_n,
+            "tranche_idx": tranche_idx,
         }
 
-        if self.verbose:
+        # 分批调仓时始终打印信号生成汇总，便于确认各批次调度情况
+        if self.verbose or self.stagger_tranches > 1:
+            tranche_tag = (
+                f"[批次 {tranche_idx + 1}/{self.stagger_tranches}] "
+                if self.stagger_tranches > 1 else ""
+            )
             if self.enable_position_completion:
                 logger.info(
-                    f"  信号生成: {date.date()}, 选择 top {len(signals)}/{target_n} 股票（未检查 T+1 可交易性，将在买入时处理）, "
+                    f"  {tranche_tag}信号生成: {date.date()}, 选择 top {len(signals)}/{target_n} 股票（未检查 T+1 可交易性，将在买入时处理）, "
                     f"候选总数 {len(ranked_candidates)} 个"
                 )
             else:
                 logger.info(
-                    f"  信号生成: {date.date()}, 信号数 {len(signals)}/{target_n}, "
+                    f"  {tranche_tag}信号生成: {date.date()}, 信号数 {len(signals)}/{target_n}, "
                     f"检查候选 {candidates_checked} 个, "
                     f"过滤: 停牌 {filtered_reasons.get('停牌', 0)}, "
                     f"涨停 {filtered_reasons.get('涨停', 0)}, "
@@ -636,11 +698,18 @@ class BacktestEngine:
             signals = signal_data["signals"]
             ranked_candidates = signal_data.get("ranked_candidates", [])
             target_n = signal_data.get("target_n", len(signals))
+            tranche_idx = signal_data.get("tranche_idx", 0)
         else:
             # 旧格式兼容（当 enable_position_completion=False 或旧代码生成的信号）
             signals = signal_data
             ranked_candidates = []
             target_n = len(signals)
+            tranche_idx = 0
+
+        tranche_tag = (
+            f"[批次 {tranche_idx + 1}/{self.stagger_tranches}] "
+            if self.stagger_tranches > 1 else ""
+        )
 
         # 应用风险预算（波动率缩放）
         if self.enable_risk_budget:
@@ -673,6 +742,10 @@ class BacktestEngine:
         # 计算当前组合市值
         current_value = self._calculate_portfolio_value(date)
 
+        # 分批调仓时，每个 tranche 只使用 1/K 的组合价值
+        if self.stagger_tranches > 1:
+            current_value = current_value / self.stagger_tranches
+
         # 记录买入前的持仓数量
         positions_before = len(self.positions)
 
@@ -698,11 +771,10 @@ class BacktestEngine:
                     )
 
                     if not tradeable:
-                        if self.verbose:
-                            logger.info(
-                                f"  买入失败: {date.date()} {stock}, 原因: {reason}, "
-                                f"权重 {weight:.4f}, 将在后续交易日补齐"
-                            )
+                        logger.info(
+                            f"  {tranche_tag}买入失败: {date.date()} {stock}, 原因: {reason}, "
+                            f"权重 {weight:.4f}, 将在后续交易日补齐"
+                        )
                         continue  # 跳过该股票，不买入
 
                 # 可交易，执行买入
@@ -751,20 +823,21 @@ class BacktestEngine:
                     "signal_date": signal_date,  # 信号生成日（T日）
                     "first_attempt_date": date,  # T+1 日，第一次尝试买入的日期
                     "attempts": 0,  # 补齐尝试次数
+                    "tranche_idx": tranche_idx,  # 分批调仓批次索引
                 }
 
                 self.completion_stats["total_unfilled"] += 1
 
-                if self.verbose:
-                    logger.warning(
-                        f"  仓位未满: {date.date()}, 目标 {target_n} 只, 实际买入 {actually_bought} 只, "
-                        f"缺口槽位 {unfilled_count} 个, 未成交股票: {unfilled_stocks}, "
-                        f"将在接下来 {self.completion_window_days} 天内尝试补齐"
-                    )
+                logger.warning(
+                    f"  {tranche_tag}仓位未满: {date.date()}, 目标 {target_n} 只, 实际买入 {actually_bought} 只, "
+                    f"缺口槽位 {unfilled_count} 个, 未成交股票: {unfilled_stocks}, "
+                    f"将在接下来 {self.completion_window_days} 天内尝试补齐"
+                )
 
-        if self.verbose:
+        # 分批调仓时始终打印买入汇总，便于确认各批次执行情况
+        if self.verbose or self.stagger_tranches > 1:
             logger.info(
-                f"  买入执行: {date.date()}, 买入 {actually_bought} 只股票（信号日: {signal_date.date()}）"
+                f"  {tranche_tag}买入执行: {date.date()}, 买入 {actually_bought} 只股票（信号日: {signal_date.date()}）"
             )
 
     def _process_position_completion(
@@ -818,6 +891,11 @@ class BacktestEngine:
             target_n = slot_info["target_n"]
             attempts = slot_info["attempts"]
             original_signal_date = slot_info["signal_date"]  # T日
+            completion_tranche_idx = slot_info.get("tranche_idx", 0)
+            tranche_tag = (
+                f"[批次 {completion_tranche_idx + 1}/{self.stagger_tranches}] "
+                if self.stagger_tranches > 1 else ""
+            )
 
             # 计算已经过了多少个交易日（从 T+1 开始）
             first_attempt_idx = date_to_idx.get(first_attempt_date)
@@ -840,7 +918,7 @@ class BacktestEngine:
                 completed_signal_dates.append(signal_date)
 
                 logger.warning(
-                    f"补齐放弃: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"{tranche_tag}补齐放弃: {date.date()}, 信号日 {original_signal_date.date()}, "
                     f"已尝试 {attempts} 次补齐, 仍有 {unfilled_count} 个槽位未成交: {unfilled_stocks_str}, "
                     f"超过补齐窗口 {self.completion_window_days} 天，放弃补齐，对应权重持币"
                 )
@@ -850,7 +928,7 @@ class BacktestEngine:
             # 使用 D-1 日的数据重新生成候选股票列表
             if prev_date_quote.empty:
                 logger.warning(
-                    f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
                     f"上一交易日 {prev_date.date()} 无行情数据，无法生成候选"
                 )
                 continue
@@ -862,7 +940,7 @@ class BacktestEngine:
             extra_data = self._build_signal_data(prev_date)
             if extra_data is None:
                 logger.warning(
-                    f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
                     f"上一交易日 {prev_date.date()} 无可用数据（_build_signal_data 返回 None）"
                 )
                 continue
@@ -878,7 +956,7 @@ class BacktestEngine:
 
             if not new_ranked_candidates:
                 logger.warning(
-                    f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
                     f"基于 {prev_date.date()} 数据无候选股票"
                 )
                 continue
@@ -896,7 +974,7 @@ class BacktestEngine:
 
             if not stocks_to_try:
                 logger.warning(
-                    f"补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
                     f"基于 {prev_date.date()} 数据生成的候选均已持仓"
                 )
                 continue
@@ -904,8 +982,12 @@ class BacktestEngine:
             # 尝试按槽位补齐
             bought_stocks = []
             current_value = self._calculate_portfolio_value(date)
+            # 分批调仓时，补齐预算也要按 tranche 比例分配，与正常买入路径一致
+            if self.stagger_tranches > 1:
+                current_value = current_value / self.stagger_tranches
             remaining_unfilled_slots = []
             bought_stock_set = set()  # 跟踪已买入的股票，避免重复买入
+            untradeable_stocks = set()  # 当天不可交易的股票，跳过后续槽位的重复尝试
 
             # 逐个槽位尝试补齐
             for slot_weight_info in unfilled_slot_weights:
@@ -916,8 +998,8 @@ class BacktestEngine:
                 bought_for_this_slot = False
 
                 for stock, score in stocks_to_try:
-                    # 跳过已买入的股票
-                    if stock in bought_stock_set:
+                    # 跳过已买入或当天已确认不可交易的股票
+                    if stock in bought_stock_set or stock in untradeable_stocks:
                         continue
 
                     # 检查是否可交易（在当日 D）
@@ -926,10 +1008,12 @@ class BacktestEngine:
                     )
 
                     if not tradeable:
-                        logger.info(
-                            f"  补齐失败: {date.date()} (基于 {prev_date.date()} 数据), "
-                            f"槽位 {original_stock} (权重 {weight:.4f}) 尝试买入股票 {stock} 失败, 原因: {reason}"
-                        )
+                        untradeable_stocks.add(stock)
+                        if self.verbose:
+                            logger.info(
+                                f"  {tranche_tag}补齐跳过: {date.date()} 候选 {stock} "
+                                f"不可交易({reason})，后续槽位也将跳过"
+                            )
                         continue
 
                     # 可交易，尝试买入
@@ -945,10 +1029,10 @@ class BacktestEngine:
                         self.completion_stats["total_completed"] += 1
 
                         logger.info(
-                            f"  补齐成功: {date.date()} (基于 {prev_date.date()} 数据), "
-                            f"槽位 {original_stock} (权重 {weight:.4f}) 买入股票 {stock} 成功."
+                            f"  {tranche_tag}补齐成功: {date.date()} (基于 {prev_date.date()} 数据), "
+                            f"槽位 {original_stock} (权重 {weight:.4f}) 买入股票 {stock} 成功. "
                             f"信号日 {original_signal_date.date()}, 目标市值 {target_value:.2f}, "
-                            f"候选池大小 {len(stocks_to_try)-len(bought_stock_set)}/{unfilled_count}"
+                            f"已补齐 {len(bought_stocks)}/{unfilled_count}"
                         )
 
                         break
@@ -957,7 +1041,7 @@ class BacktestEngine:
                 if not bought_for_this_slot:
                     remaining_unfilled_slots.append(slot_weight_info)
                     logger.info(
-                        f"  补齐延迟: {date.date()}, 槽位 {original_stock} (权重 {weight:.4f}) "
+                        f"  {tranche_tag}补齐延迟: {date.date()}, 槽位 {original_stock} (权重 {weight:.4f}) "
                         f"在有限候选池 {len(stocks_to_try)} 只中未找到可买入股票，保留到下次"
                     )
 
@@ -970,7 +1054,7 @@ class BacktestEngine:
             if not remaining_unfilled_slots:
                 completed_signal_dates.append(signal_date)
                 logger.info(
-                    f"  补齐完成: {date.date()}, 信号日 {original_signal_date.date()}, "
+                    f"  {tranche_tag}补齐完成: {date.date()}, 信号日 {original_signal_date.date()}, "
                     f"本次补齐 {len(bought_stocks)} 只，仓位已满"
                 )
 
@@ -1015,9 +1099,9 @@ class BacktestEngine:
             if holding_days >= self.holding_period:
                 stocks_to_sell.append(stock)
 
-        if stocks_to_sell and self.verbose:
+        if stocks_to_sell:
             logger.info(
-                f"  卖出执行: {date.date()}, 尝试卖出 {len(stocks_to_sell)} 只股票（达到持有期）"
+                f"  卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票（达到持有期）"
             )
 
         # 执行卖出
@@ -1141,7 +1225,7 @@ class BacktestEngine:
             # 从待卖出队列中移除
             self.pending_stop_loss_sells.pop(stock, None)
 
-        if stocks_to_sell and self.verbose:
+        if stocks_to_sell:
             logger.info(
                 f"  止损卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票 "
                 f"（触发日: {trigger_date.date()}）"
@@ -1390,20 +1474,34 @@ class BacktestEngine:
 
         return adj_weights
 
-    def _get_rebalance_dates(self, trading_dates: List[pd.Timestamp]) -> List[pd.Timestamp]:
-        """获取调仓日期
+    def _get_rebalance_dates(
+        self, trading_dates: List[pd.Timestamp]
+    ) -> Dict[pd.Timestamp, int]:
+        """获取调仓日期及对应的 tranche 索引
 
         Args:
             trading_dates: 交易日列表
 
         Returns:
-            调仓日期列表
+            字典 {日期: tranche_idx}。stagger_tranches=1 时所有日期的 tranche 均为 0。
         """
-        # 仅支持整数天数
         n = self.rebalance_freq
         if n <= 0:
             raise ValueError(f"调仓频率必须为正整数，当前值: {n}")
-        return [trading_dates[i] for i in range(0, len(trading_dates), n)]
+
+        if self.stagger_tranches <= 1:
+            # 不分批：保持原有逻辑，所有调仓日 tranche=0
+            return {trading_dates[i]: 0 for i in range(0, len(trading_dates), n)}
+
+        # 分批调仓：K 个 tranche 各自错开 offset 天
+        k = self.stagger_tranches
+        offset = max(1, n // k)
+        schedule = {}
+        for t in range(k):
+            start = t * offset
+            for i in range(start, len(trading_dates), n):
+                schedule[trading_dates[i]] = t
+        return schedule
 
     def _process_pending_orders(self, date: pd.Timestamp) -> None:
         """处理延迟订单队列

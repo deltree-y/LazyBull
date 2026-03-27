@@ -74,14 +74,15 @@ def test_rebalance_freq_integer(mock_trading_dates, mock_price_data):
         verbose=False
     )
     
-    # 验证调仓日期数量
-    rebalance_dates = engine._get_rebalance_dates(mock_trading_dates)
+    # 验证调仓日期数量（返回 Dict[date, tranche_idx]）
+    rebalance_dict = engine._get_rebalance_dates(mock_trading_dates)
+    rebalance_dates = sorted(rebalance_dict.keys())
     expected_count = (len(mock_trading_dates) + 4) // 5  # 向上取整
     assert len(rebalance_dates) == expected_count
-    
+
     # 验证第一个调仓日是第一个交易日
     assert rebalance_dates[0] == mock_trading_dates[0]
-    
+
     # 验证调仓间隔
     for i in range(1, len(rebalance_dates)):
         # 找到两个调仓日在原列表中的索引
