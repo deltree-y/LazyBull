@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.30.0] - 2026-03-27
+
+### 新增
+
+- **整体持仓止盈 + 自动补位**
+  - `engine.py` 新增 `take_profit_threshold` 参数：当整体持仓浮盈率（市值加权，后复权口径）≥ 阈值时，
+    立即清空全部仓位并通过 `unfilled_slots` 机制在 T+1 日自动补位买入（重新进入调仓流程）
+  - `engine.py` 新增 `take_profit_refill` 参数：控制止盈后是否触发自动补位（默认开启）
+  - `engine.py` 新增内部状态 `_last_ranked_candidates` / `_last_signal_date`，在每次 `_generate_signal()` 时更新，供止盈补位选股使用
+  - 整体止盈优先级高于逐只盈亏判断（触发后直接清仓 return，跳过盈亏动态持仓逻辑）
+  - `walk_forward.py` 新增 CLI 参数 `--take-profit-threshold` / `--no-take-profit-refill`
+  - `batch_walk_forward.ps1` 新增 `$take_profit_threshold` / `$take_profit_refill` 配置项
+
+## [0.29.0] - 2026-03-27
+
+### 新增
+
+- **方案一：Market Regime MA250 长周期硬条件（系统性熊市保护）**
+  - `market_state.py` 新增 `mkt_ma250_ratio` 特征：全市场累积收益曲线 / MA250，< 1.0 表示大盘处于长期下行趋势
+  - `engine_ml.py` 新增参数 `market_regime_ma250_hard_stop / threshold / exposure`：
+    大盘跌破 MA250 时强制降至指定仓位（默认 0.0 = 完全空仓），优先级高于其他择时模式
+  - `walk_forward.py` 新增对应 CLI 参数 `--market-regime-ma250-hard-stop / threshold / exposure`
+  - `batch_walk_forward.ps1` 新增 `$market_regime_ma250_*` 配置项
+
+- **方案二：盈亏动态持仓时长**
+  - `engine.py` 新增 `enable_profit_based_holding` 参数，支持：
+    1. **亏损提前换出**：持仓达到持有期 `early_exit_holding_ratio` 比例且亏损超过阈值时提前换出
+    2. **盈利延续持有**：持有期满仍盈利超过阈值时，允许延续持有 `profit_extension_days` 天（趋势跟踪）
+  - `walk_forward.py` 新增对应 CLI 参数（`--enable-profit-based-holding` 等5个参数）
+  - `batch_walk_forward.ps1` 新增 `$enable_profit_based_holding` 等配置项
+
+## [0.28.8] - 2026-03-27
+
+### 新增
+
+- **Walk-forward OOS 回测支持配置初始资金**
+  - `walk_forward.py` 新增 `--bt-initial-capital` 参数（默认 100万），替换原有硬编码
+  - `batch_walk_forward.ps1` 新增 `$bt_initial_capital` 配置项
+
 ## [0.28.7] - 2026-03-27
 
 ### 优化

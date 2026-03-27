@@ -97,10 +97,21 @@ def run_oos_backtest(
     market_regime_trend_guard: bool = True,
     market_regime_drawdown_guard: bool = True,
     market_regime_drawdown_threshold: float = -0.08,
+    market_regime_ma250_hard_stop: bool = False,
+    market_regime_ma250_threshold: float = 1.0,
+    market_regime_ma250_exposure: float = 0.0,
     bt_weight_method: str = "equal",
     industry_momentum_filter: bool = False,
     industry_momentum_bottom_pct: float = 0.2,
     stagger_tranches: int = 1,
+    enable_profit_based_holding: bool = False,
+    early_exit_loss_threshold: float = -0.05,
+    early_exit_holding_ratio: float = 0.6,
+    profit_extension_threshold: float = 0.05,
+    profit_extension_days: int = 5,
+    take_profit_threshold: Optional[float] = None,
+    take_profit_refill: bool = True,
+    initial_capital: float = 1000000.0,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测，返回组合级绩效指标
 
@@ -194,7 +205,7 @@ def run_oos_backtest(
         universe=universe,
         signal=signal,
         features_by_date=features_by_date,
-        initial_capital=1000000.0,
+        initial_capital=initial_capital,
         cost_model=CostModel(),
         rebalance_freq=bt_rebalance_freq,
         sell_timing='open',
@@ -212,9 +223,19 @@ def run_oos_backtest(
         market_regime_trend_guard=market_regime_trend_guard,
         market_regime_drawdown_guard=market_regime_drawdown_guard,
         market_regime_drawdown_threshold=market_regime_drawdown_threshold,
+        market_regime_ma250_hard_stop=market_regime_ma250_hard_stop,
+        market_regime_ma250_threshold=market_regime_ma250_threshold,
+        market_regime_ma250_exposure=market_regime_ma250_exposure,
         industry_momentum_filter=industry_momentum_filter,
         industry_momentum_bottom_pct=industry_momentum_bottom_pct,
         stagger_tranches=stagger_tranches,
+        enable_profit_based_holding=enable_profit_based_holding,
+        early_exit_loss_threshold=early_exit_loss_threshold,
+        early_exit_holding_ratio=early_exit_holding_ratio,
+        profit_extension_threshold=profit_extension_threshold,
+        profit_extension_days=profit_extension_days,
+        take_profit_threshold=take_profit_threshold,
+        take_profit_refill=take_profit_refill,
     )
 
     trading_dates_ts = [pd.Timestamp(d) for d in trade_dates]
@@ -1204,7 +1225,17 @@ def write_walk_forward_summary(
         "market_regime_trend_guard": getattr(args, 'market_regime_trend_guard', True),
         "market_regime_drawdown_guard": getattr(args, 'market_regime_drawdown_guard', True),
         "market_regime_drawdown_threshold": getattr(args, 'market_regime_drawdown_threshold', None),
+        "market_regime_ma250_hard_stop": getattr(args, 'market_regime_ma250_hard_stop', False),
+        "market_regime_ma250_threshold": getattr(args, 'market_regime_ma250_threshold', 1.0),
+        "market_regime_ma250_exposure": getattr(args, 'market_regime_ma250_exposure', 0.0),
         "stagger_tranches": getattr(args, 'stagger_tranches', 1),
+        "enable_profit_based_holding": getattr(args, 'enable_profit_based_holding', False),
+        "early_exit_loss_threshold": getattr(args, 'early_exit_loss_threshold', -0.05),
+        "early_exit_holding_ratio": getattr(args, 'early_exit_holding_ratio', 0.6),
+        "profit_extension_threshold": getattr(args, 'profit_extension_threshold', 0.05),
+        "profit_extension_days": getattr(args, 'profit_extension_days', 5),
+        "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
+        "take_profit_refill": getattr(args, 'take_profit_refill', True),
     }
 
     # 提取每个 split 的关键指标
@@ -1673,6 +1704,14 @@ def main():
         help="回测权重分配方法：equal（等权）或 score（按预测分数加权），默认 equal"
     )
 
+    # 回测初始资金
+    parser.add_argument(
+        "--bt-initial-capital",
+        type=float,
+        default=1000000.0,
+        help="OOS 回测初始资金（默认：1000000）"
+    )
+
     # 分批调仓
     parser.add_argument(
         "--stagger-tranches",
@@ -1775,6 +1814,68 @@ def main():
         type=float,
         default=-0.08,
         help="回撤保护阈值：mkt_drawdown_20 低于此值时停止降仓，默认 -0.08（-8%%）"
+    )
+    parser.add_argument(
+        "--market-regime-ma250-hard-stop",
+        action="store_true",
+        default=False,
+        help="启用 MA250 长周期硬条件：大盘跌破 250 日均线时强制降至 ma250_exposure 仓位"
+    )
+    parser.add_argument(
+        "--market-regime-ma250-threshold",
+        type=float,
+        default=1.0,
+        help="MA250 硬条件触发阈值（mkt_ma250_ratio < 此值触发），默认 1.0"
+    )
+    parser.add_argument(
+        "--market-regime-ma250-exposure",
+        type=float,
+        default=0.0,
+        help="MA250 硬条件触发后的仓位系数，默认 0.0（完全空仓）"
+    )
+    # 盈亏动态持仓参数
+    parser.add_argument(
+        "--enable-profit-based-holding",
+        action="store_true",
+        default=False,
+        help="启用盈亏动态持仓：亏损提前换出 + 盈利延续持有"
+    )
+    parser.add_argument(
+        "--early-exit-loss-threshold",
+        type=float,
+        default=-0.05,
+        help="亏损提前换出阈值（盈亏率），默认 -0.05（亏损5%%）"
+    )
+    parser.add_argument(
+        "--early-exit-holding-ratio",
+        type=float,
+        default=0.6,
+        help="亏损提前换出最早触发时点（占持有期比例），默认 0.6"
+    )
+    parser.add_argument(
+        "--profit-extension-threshold",
+        type=float,
+        default=0.05,
+        help="盈利延续持有阈值（盈亏率），默认 0.05（盈利5%%）"
+    )
+    parser.add_argument(
+        "--profit-extension-days",
+        type=int,
+        default=5,
+        help="盈利延续持有的额外天数（交易日），默认 5"
+    )
+    parser.add_argument(
+        "--take-profit-threshold",
+        type=float,
+        default=None,
+        help="整体持仓止盈阈值（如 0.15 表示整体浮盈15%%时清仓，默认禁用）"
+    )
+    parser.add_argument(
+        "--no-take-profit-refill",
+        dest="take_profit_refill",
+        action="store_false",
+        default=True,
+        help="整体止盈后不触发补位买入（默认开启补位）"
     )
 
     # 部署训练参数
@@ -1913,10 +2014,21 @@ def main():
                             market_regime_trend_guard=args.market_regime_trend_guard,
                             market_regime_drawdown_guard=args.market_regime_drawdown_guard,
                             market_regime_drawdown_threshold=args.market_regime_drawdown_threshold,
+                            market_regime_ma250_hard_stop=args.market_regime_ma250_hard_stop,
+                            market_regime_ma250_threshold=args.market_regime_ma250_threshold,
+                            market_regime_ma250_exposure=args.market_regime_ma250_exposure,
                             bt_weight_method=args.bt_weight_method,
                             industry_momentum_filter=args.industry_momentum_filter,
                             industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,
                             stagger_tranches=args.stagger_tranches,
+                            enable_profit_based_holding=args.enable_profit_based_holding,
+                            early_exit_loss_threshold=args.early_exit_loss_threshold,
+                            early_exit_holding_ratio=args.early_exit_holding_ratio,
+                            profit_extension_threshold=args.profit_extension_threshold,
+                            profit_extension_days=args.profit_extension_days,
+                            take_profit_threshold=args.take_profit_threshold,
+                            take_profit_refill=args.take_profit_refill,
+                            initial_capital=args.bt_initial_capital,
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)

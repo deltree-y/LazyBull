@@ -7,6 +7,7 @@
 - mkt_ret_avg_20: 过去 20 日全市场平均收益率之和（仅 tradable==1）
 - mkt_turnover_std: 全市场换手率截面标准差（仅 tradable==1）
 - mkt_adv_dec_ratio: 过去 60 日涨跌家数比值滚动均值（仅 tradable==1）
+- mkt_ma250_ratio: 全市场累积收益曲线 / MA250，< 1.0 表示大盘处于长期下行趋势
 
 性能优化：批量构建时应使用 `precompute_market_state_features()` 一次性计算所有交易日，
 再通过 `FeatureBuilder` 实例缓存按日 O(1) 取值，避免逐日重复计算。
@@ -181,6 +182,7 @@ def compute_market_state_features(
         'mkt_drawdown_20': np.nan,
         'mkt_ret_avg_60': np.nan,
         'mkt_ret_vol_20': np.nan,
+        'mkt_ma250_ratio': np.nan,
     }
 
 
@@ -355,6 +357,12 @@ def precompute_market_state_features(
     # mkt_ret_vol_20: 近 20 日全市场日均收益的时间序列波动率（用于 vol targeting）
     mkt_ret_vol_20 = daily_stats['mean_ret'].rolling(window=20, min_periods=5).std()
 
+    # mkt_ma250_ratio: 全市场累积收益曲线 / MA250，< 1.0 表示大盘处于长期下行趋势
+    # min_periods=50：至少50日历史才计算（不足时填1.0，视为中性）
+    MA250 = 250
+    ma_250 = mkt_cumret.rolling(window=MA250, min_periods=50).mean()
+    mkt_ma250_ratio = (mkt_cumret / ma_250.replace(0, np.nan)).fillna(1.0)
+
     # --- 步骤 8：组装结果 DataFrame ---
     result = pd.DataFrame(
         {
@@ -368,6 +376,7 @@ def precompute_market_state_features(
             'mkt_drawdown_20': mkt_drawdown_20.values,
             'mkt_ret_avg_60': mkt_ret_avg_60.values,
             'mkt_ret_vol_20': mkt_ret_vol_20.values,
+            'mkt_ma250_ratio': mkt_ma250_ratio.values,
         },
         index=pd.Index(trading_dates, name='trade_date'),
     )

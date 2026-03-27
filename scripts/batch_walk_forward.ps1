@@ -30,9 +30,9 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(4)         # XGB推荐9, LGB推荐5
+$max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.011)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.008)      # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -55,6 +55,7 @@ $time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年�
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 
+###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
 $enable_fundamental      = $true  # $true 启用 | $false 禁用
 
@@ -73,6 +74,8 @@ $enable_fund             = $true  # $true 启用 | $false 禁用
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
 $enable_express          = $true  # $true 启用 | $false 禁用
 
+
+### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
 $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
 
@@ -82,8 +85,9 @@ $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3�
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
 
+### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(2,4)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
@@ -91,6 +95,7 @@ $oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 te
 $bt_top_n_list           = @(20)   # 回测持仓 Top N
 $bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
 $bt_weight_method        = "equal" # 权重方法：equal（等权）| score（按预测分数加权）
+$bt_initial_capital      = 1000000 # 回测初始资金（默认：100万）
 
 # ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
 $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
@@ -108,6 +113,22 @@ $market_regime_combine_method  = "min"         # combined 模式组合方式：m
 $market_regime_trend_guard     = $true        # combined 模式趋势保护：上行趋势跳过 vol 降仓
 $market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
 $market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
+
+# ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
+$market_regime_ma250_hard_stop = $false  # $true 启用 | $false 禁用
+$market_regime_ma250_threshold = 1.0     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
+$market_regime_ma250_exposure  = 0.0    # 触发后的仓位系数（0.0=完全空仓）
+
+# ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
+$enable_profit_based_holding  = $false  # $true 启用 | $false 禁用
+$early_exit_loss_threshold    = -0.05   # 亏损提前换出阈值（盈亏率，如 -0.05 = 亏损5%）
+$early_exit_holding_ratio     = 0.6     # 亏损提前换出最早触发时点（占持有期比例）
+$profit_extension_threshold   = 0.05    # 盈利延续持有阈值（如 0.05 = 盈利5%）
+$profit_extension_days        = 5       # 盈利延续持有的额外天数（交易日）
+
+# ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
+$take_profit_threshold        = 0.20   # $null=禁用, 0.15=整体浮盈15%时清仓
+$take_profit_refill           = $false   # $true=整体止盈后自动补位买入
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
@@ -273,12 +294,33 @@ foreach ($stagger_tranches in $stagger_tranches_list) {
         }
     }
 
+    if ($market_regime_ma250_hard_stop) {
+        $pythonCmd += " --market-regime-ma250-hard-stop" +
+                      " --market-regime-ma250-threshold $market_regime_ma250_threshold" +
+                      " --market-regime-ma250-exposure $market_regime_ma250_exposure"
+    }
+
+    if ($enable_profit_based_holding) {
+        $pythonCmd += " --enable-profit-based-holding" +
+                      " --early-exit-loss-threshold $early_exit_loss_threshold" +
+                      " --early-exit-holding-ratio $early_exit_holding_ratio" +
+                      " --profit-extension-threshold $profit_extension_threshold" +
+                      " --profit-extension-days $profit_extension_days"
+    }
+
+    if ($null -ne $take_profit_threshold) {
+        $pythonCmd += " --take-profit-threshold $take_profit_threshold"
+        if (-not $take_profit_refill) {
+            $pythonCmd += " --no-take-profit-refill"
+        }
+    }
+
     if ($stagger_tranches -gt 1) {
         $pythonCmd += " --stagger-tranches $stagger_tranches"
     }
 
     if ($oos_backtest) {
-        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method"
+        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method --bt-initial-capital $bt_initial_capital"
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
         }

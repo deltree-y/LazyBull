@@ -60,6 +60,13 @@ class BacktestEngine:
         max_per_industry: Optional[int] = None,  # 新增：单行业最大持仓数量
         stock_basic: Optional[pd.DataFrame] = None,  # 新增：股票基本信息（用于行业约束）
         stagger_tranches: int = 1,  # 分批调仓批次数（1=不分批）
+        enable_profit_based_holding: bool = False,  # 是否启用盈亏动态持仓时长
+        early_exit_loss_threshold: float = -0.05,  # 亏损提前换出阈值（达到持有期比例后生效）
+        early_exit_holding_ratio: float = 0.6,  # 亏损提前换出最早触发时点（持有期比例）
+        profit_extension_threshold: float = 0.05,  # 盈利延续持有阈值
+        profit_extension_days: int = 5,  # 盈利延续持有额外天数（交易日）
+        take_profit_threshold: Optional[float] = None,  # 整体持仓止盈阈值（None=禁用，如0.15=整体浮盈15%止盈）
+        take_profit_refill: bool = True,  # 整体止盈后是否触发自动补位买入
     ):
         """初始化回测引擎
 
@@ -92,6 +99,16 @@ class BacktestEngine:
             stock_basic: 股票基本信息 DataFrame（用于行业约束），必须包含 ts_code 和 industry 列
             stagger_tranches: 分批调仓批次数，默认1（不分批）。设为K时将资金分成K份，
                 每份错开 rebalance_freq/K 天调仓，降低单次调仓时点风险
+            enable_profit_based_holding: 是否启用盈亏动态持仓时长，默认False。
+                开启后在固定持有期基础上叠加两个规则：
+                1. 亏损提前换出：持有达到持有期的 early_exit_holding_ratio 且亏损超过
+                   early_exit_loss_threshold 时，提前换出（不等满持有期）
+                2. 盈利延续持有：持有期满时若盈利超过 profit_extension_threshold，
+                   允许延续持有 profit_extension_days 天（趋势跟踪）
+            early_exit_loss_threshold: 亏损提前换出的盈亏率阈值，默认 -0.05（亏损5%）
+            early_exit_holding_ratio: 亏损提前换出最早触发时点（占持有期比例），默认 0.6
+            profit_extension_threshold: 盈利延续持有的盈亏率阈值，默认 0.05（盈利5%）
+            profit_extension_days: 盈利延续持有的额外天数（交易日），默认 5
         """
         self.universe = universe
         self.signal = signal
@@ -143,6 +160,20 @@ class BacktestEngine:
         if stagger_tranches < 1:
             raise ValueError(f"分批调仓批次数必须 >= 1，当前值: {stagger_tranches}")
         self.stagger_tranches = stagger_tranches
+
+        # 盈亏动态持仓参数
+        self.enable_profit_based_holding = enable_profit_based_holding
+        self.early_exit_loss_threshold = early_exit_loss_threshold
+        self.early_exit_holding_ratio = early_exit_holding_ratio
+        self.profit_extension_threshold = profit_extension_threshold
+        self.profit_extension_days = profit_extension_days
+
+        # 整体持仓止盈参数
+        self.take_profit_threshold = take_profit_threshold
+        self.take_profit_refill = take_profit_refill
+        self._last_ranked_candidates: list = []  # 最近一次调仓的候选排序列表（止盈补位用）
+        self._last_signal_date: Optional[pd.Timestamp] = None  # 最近一次调仓日期
+        self._last_rebalance_nav: Optional[float] = None  # 上次调仓日组合净值（止盈基准 & 本调仓收益计算）
 
         # 风险预算参数
         self.enable_risk_budget = enable_risk_budget
@@ -336,10 +367,16 @@ class BacktestEngine:
                 ((portfolio_value / self.initial_capital) ** (252 / trading_days) - 1) * 100
                 if trading_days > 0 else 0.0
             )
+            rebalance_return_str = (
+                f"{(portfolio_value / self._last_rebalance_nav - 1) * 100:+.2f}%"
+                if self._last_rebalance_nav and self._last_rebalance_nav > 0
+                else "N/A"
+            )
             logger.info(
                 f"回测进度: {trading_days}/{total_days} 天, "
                 f"日期: {date.date()}"
                 f"(持仓{len(self.positions)}, "
+                f"本调仓:{rebalance_return_str}, "
                 f"本轮:{total_return:+.2f}%, "
                 f"年化{ann_return:+.2f}%)"
             )
@@ -453,6 +490,9 @@ class BacktestEngine:
             date_to_idx: 日期到索引的映射
             tranche_idx: 分批调仓的批次索引（0-based）
         """
+        # 记录调仓日组合净值，用于止盈基准和"本调仓收益"计算
+        self._last_rebalance_nav = self._calculate_portfolio_value(date)
+
         # 获取当日行情数据用于基础过滤（ST、停牌等基础过滤）
         trade_date_str = to_trade_date_str(date)
         date_quote = price_data[price_data["trade_date"] == trade_date_str]
@@ -645,6 +685,10 @@ class BacktestEngine:
             "target_n": target_n,
             "tranche_idx": tranche_idx,
         }
+
+        # 保存最近一次调仓候选列表，供整体止盈补位使用
+        self._last_ranked_candidates = list(ranked_candidates)
+        self._last_signal_date = date
 
         # 分批调仓时始终打印信号生成汇总，便于确认各批次调度情况
         if self.verbose or self.stagger_tranches > 1:
@@ -1078,6 +1122,52 @@ class BacktestEngine:
         if current_idx is None:
             return
 
+        # ── 整体持仓止盈检查（优先于逐只判断，触发则清仓并 return）──────────
+        # 盈亏基准：上次调仓日的组合净值（衡量"本轮调仓以来的盈利"）
+        if (self.take_profit_threshold is not None
+                and self.positions
+                and self._last_rebalance_nav is not None
+                and self._last_rebalance_nav > 0):
+            current_nav = self._calculate_portfolio_value(date)
+            portfolio_profit_rate = (current_nav - self._last_rebalance_nav) / self._last_rebalance_nav
+            if portfolio_profit_rate >= self.take_profit_threshold:
+                n_positions = len(self.positions)
+                stocks_to_sell = list(self.positions.keys())
+                logger.warning(
+                    f"  整体止盈触发: {date.date()}, 整体浮盈率={portfolio_profit_rate:.2%} "
+                    f">= 阈值={self.take_profit_threshold:.2%}, 清空 {n_positions} 只持仓"
+                )
+                for stock in stocks_to_sell:
+                    self._sell_stock(date, stock, sell_type="take_profit")
+                # 重置调仓基准 NAV（卖出后的现金净值），使"本调仓"从 0 重新计量
+                self._last_rebalance_nav = self._calculate_portfolio_value(date)
+                # 触发补位：将 n_positions 个空仓写入 unfilled_slots，T+1 日自动买入
+                if (self.take_profit_refill
+                        and self.enable_position_completion
+                        and self._last_ranked_candidates
+                        and date not in self.unfilled_slots):
+                    weight = 1.0 / n_positions if n_positions > 0 else 0.0
+                    unfilled_slot_weights = [
+                        {"stock": f"__tp_{i}__", "weight": weight, "filled": False}
+                        for i in range(n_positions)
+                    ]
+                    self.unfilled_slots[date] = {
+                        "unfilled_count": n_positions,
+                        "unfilled_slot_weights": unfilled_slot_weights,
+                        "target_n": n_positions,
+                        "ranked_candidates": list(self._last_ranked_candidates),
+                        "signal_date": self._last_signal_date or date,
+                        "first_attempt_date": date,
+                        "attempts": 0,
+                        "tranche_idx": 0,
+                    }
+                    logger.info(
+                        f"  整体止盈补位: 已写入 {n_positions} 个补位槽，T+1 日自动补仓"
+                        f"（候选池 {len(self._last_ranked_candidates)} 只）"
+                    )
+                return  # 已清仓，跳过后续逐只判断
+        # ── 整体止盈检查结束 ──────────────────────────────────────────
+
         for stock, info in self.positions.items():
             buy_date = info["buy_date"]
             buy_idx = date_to_idx.get(buy_date)
@@ -1095,9 +1185,32 @@ class BacktestEngine:
             # 计算持有天数（交易日）
             holding_days = current_idx - anchor_idx
 
-            # 达到持有期，执行卖出
-            if holding_days >= self.holding_period:
-                stocks_to_sell.append(stock)
+            if self.enable_profit_based_holding:
+                # 计算当前盈亏率（使用后复权价格口径）
+                current_pnl_price = self._get_pnl_price(date, stock)
+                if current_pnl_price is None:
+                    current_pnl_price = info.get("buy_trade_price")
+                buy_pnl_price = info.get("buy_pnl_price")
+                if current_pnl_price and buy_pnl_price and buy_pnl_price > 0:
+                    profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
+                else:
+                    profit_rate = 0.0
+
+                early_exit_holding = max(1, int(self.holding_period * self.early_exit_holding_ratio))
+
+                if holding_days >= self.holding_period:
+                    # 盈利延续持有：持有期满仍盈利，允许延续 profit_extension_days 天
+                    if (profit_rate >= self.profit_extension_threshold
+                            and holding_days < self.holding_period + self.profit_extension_days):
+                        continue  # 延续持有，跳过卖出
+                    stocks_to_sell.append(stock)
+                elif holding_days >= early_exit_holding and profit_rate <= self.early_exit_loss_threshold:
+                    # 亏损提前换出：达到持有期比例且亏损超过阈值时提前卖出
+                    stocks_to_sell.append(stock)
+            else:
+                # 原始逻辑：达到持有期才卖出
+                if holding_days >= self.holding_period:
+                    stocks_to_sell.append(stock)
 
         if stocks_to_sell:
             logger.info(

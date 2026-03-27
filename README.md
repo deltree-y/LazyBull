@@ -28,7 +28,20 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.28.7)
+### 当前版本 (v0.30.0)
+
+**整体持仓止盈** (v0.30.0):
+- 新增：`BacktestEngine` 支持整体持仓止盈（`take_profit_threshold`），
+  当所有持仓的整体浮盈率（市值加权，后复权口径）≥ 阈值时，立即清空全部仓位并在 T+1 日自动补位买入
+- `walk_forward.py`、`batch_walk_forward.ps1` 同步支持 `--take-profit-threshold` / `--no-take-profit-refill`
+
+**回测风控优化** (v0.29.0):
+- 新增：`mkt_ma250_ratio` 市场特征（大盘收益曲线 / MA250），用于识别系统性熊市
+- 新增：`BacktestEngineML` 支持 MA250 长周期硬条件（`market_regime_ma250_hard_stop`），
+  大盘跌破 250 日均线时强制降至指定仓位（默认完全空仓），优先级高于其他择时模式
+- 新增：`BacktestEngine` 支持盈亏动态持仓时长（`enable_profit_based_holding`），
+  亏损股提前换出 + 盈利股延续持有，提高换仓效率
+- `walk_forward.py`、`batch_walk_forward.ps1` 同步支持以上所有新参数
 
 **分批调仓** (v0.28.0):
 - 新增 `--stagger-tranches` 参数，将资金分为 K 份错开调仓，降低单次调仓时点风险
@@ -40,6 +53,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - 修复：仓位补齐不再对同一不可交易股票重复尝试，避免无效操作 (v0.28.5)
 - 优化：回测进度日志增加持仓数、本轮收益率、年化收益率 (v0.28.6)
 - 优化：卖出执行和止损卖出日志始终输出，不再受 verbose 控制 (v0.28.7)
+- 新增：`walk_forward.py` 支持 `--bt-initial-capital` 配置回测初始资金，`batch_walk_forward.ps1` 同步支持 (v0.28.8)
 
 **回撤归因分析** (v0.27.0):
 - 新增 `scripts/ana/analyze_drawdown.py`，基于 walk-forward 数据做多维回撤归因（信号质量/市场环境/转化效率/回撤段详情）

@@ -25,6 +25,11 @@ class BacktestEngineML(BacktestEngine):
     - vol_target: exposure = target_vol / annualized_vol，波动越大仓位越低
     - trend:      基于 mkt_ma_trend（MA20/MA60）线性降仓，下行趋势自动减仓
     - combined:   vol_target 与 trend 取最小值（或相乘），双重保护
+
+    MA250 硬条件（可选，market_regime_ma250_hard_stop=True）：
+    当大盘累积收益曲线低于 250 日均线（mkt_ma250_ratio < threshold）时，
+    强制将仓位降至 market_regime_ma250_exposure（默认 0.0，即完全空仓）。
+    此条件优先级高于其他择时模式，作为系统性熊市的"否决性"保护。
     """
 
     def __init__(
@@ -43,6 +48,9 @@ class BacktestEngineML(BacktestEngine):
         market_regime_drawdown_threshold: float = -0.08,
         industry_momentum_filter: bool = False,
         industry_momentum_bottom_pct: float = 0.2,
+        market_regime_ma250_hard_stop: bool = False,
+        market_regime_ma250_threshold: float = 1.0,
+        market_regime_ma250_exposure: float = 0.0,
         **kwargs,
     ):
         """初始化 ML 回测引擎
@@ -66,6 +74,12 @@ class BacktestEngineML(BacktestEngine):
                 mkt_drawdown_20 低于此值时视为已充分下跌，不再继续降仓
             industry_momentum_filter: 是否启用行业动量过滤（剔除弱势行业股票），默认 False
             industry_momentum_bottom_pct: 剔除行业动量排名后 X% 的行业（0~1），默认 0.2
+            market_regime_ma250_hard_stop: 是否启用 MA250 长周期硬条件，默认 False。
+                开启后当 mkt_ma250_ratio < threshold 时强制仓位降至 ma250_exposure，
+                优先级高于其他择时模式（system-level 否决条件）
+            market_regime_ma250_threshold: MA250 硬条件触发阈值（大盘收益曲线/MA250），
+                默认 1.0（即大盘跌破长期均线时触发）
+            market_regime_ma250_exposure: MA250 硬条件触发后的仓位系数，默认 0.0（完全空仓）
             **kwargs: 其他参数传递给父类 BacktestEngine
         """
         super().__init__(**kwargs)
@@ -84,6 +98,9 @@ class BacktestEngineML(BacktestEngine):
         self._last_regime_exposure = 1.0  # 上一次的仓位系数，用于检测变动
         self.industry_momentum_filter = industry_momentum_filter
         self.industry_momentum_bottom_pct = industry_momentum_bottom_pct
+        self.market_regime_ma250_hard_stop = market_regime_ma250_hard_stop
+        self.market_regime_ma250_threshold = market_regime_ma250_threshold
+        self.market_regime_ma250_exposure = market_regime_ma250_exposure
 
         regime_info = ""
         if market_regime_enabled:
@@ -106,9 +123,15 @@ class BacktestEngineML(BacktestEngine):
         ind_filter_info = ""
         if industry_momentum_filter:
             ind_filter_info = f", 行业动量过滤=开启(剔除后{industry_momentum_bottom_pct*100:.0f}%行业)"
+        ma250_info = ""
+        if market_regime_ma250_hard_stop:
+            ma250_info = (
+                f", MA250硬条件=开启(threshold={market_regime_ma250_threshold}, "
+                f"exposure={market_regime_ma250_exposure})"
+            )
         logger.info(
             f"ML 回测引擎初始化: 特征数据覆盖 {len(features_by_date)} 个交易日"
-            f"{regime_info}{ind_filter_info}"
+            f"{regime_info}{ind_filter_info}{ma250_info}"
         )
 
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
@@ -204,6 +227,19 @@ class BacktestEngineML(BacktestEngine):
         features_df = self.features_by_date.get(date_str)
         if features_df is None or len(features_df) == 0:
             return 1.0
+
+        # MA250 硬条件检查（优先级最高，超越其他择时模式）
+        if self.market_regime_ma250_hard_stop:
+            ma250_ratio = self._get_feature_scalar(features_df, 'mkt_ma250_ratio')
+            if not np.isnan(ma250_ratio) and ma250_ratio < self.market_regime_ma250_threshold:
+                exposure = self.market_regime_ma250_exposure
+                if abs(exposure - self._last_regime_exposure) > 1e-6:
+                    logger.warning(
+                        f"MA250硬条件触发: {date.date()}, "
+                        f"mkt_ma250_ratio={ma250_ratio:.3f} < {self.market_regime_ma250_threshold}, "
+                        f"强制仓位 {self._last_regime_exposure:.0%} → {exposure:.0%}"
+                    )
+                return exposure
 
         mode = self.market_regime_mode
 

@@ -1892,6 +1892,7 @@ class FeatureBuilder:
                 'mkt_ret_avg_20': np.nan,
                 'mkt_turnover_std': np.nan,
                 'mkt_adv_dec_ratio': np.nan,
+                'mkt_ma250_ratio': np.nan,
             }
 
         for feat_name, feat_val in mkt_features.items():

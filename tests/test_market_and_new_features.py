@@ -370,6 +370,7 @@ class TestPrecomputeMarketStateFeatures:
             'mkt_vol_cnt', 'mkt_vol_20', 'mkt_turnover_ratio',
             'mkt_ret_avg_20', 'mkt_turnover_std', 'mkt_adv_dec_ratio',
             'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20',
+            'mkt_ma250_ratio',
         }
 
     def test_parity_with_single_day_no_basic(self):
@@ -379,7 +380,7 @@ class TestPrecomputeMarketStateFeatures:
         因此 parity 比较时跳过这些列。
         """
         # 仅批量模式可用的特征，逐日模式固定返回 NaN
-        batch_only_cols = {'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20'}
+        batch_only_cols = {'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20', 'mkt_ma250_ratio'}
 
         daily_data, dates = self._make_multi_day_data(70)
         batch = precompute_market_state_features(daily_data, dates)
@@ -401,7 +402,7 @@ class TestPrecomputeMarketStateFeatures:
     def test_parity_with_single_day_with_basic(self):
         """批量预计算结果应与逐日计算完全一致（含 daily_basic）"""
         # 仅批量模式可用的特征
-        batch_only_cols = {'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20'}
+        batch_only_cols = {'mkt_ma_trend', 'mkt_drawdown_20', 'mkt_ret_avg_60', 'mkt_ret_vol_20', 'mkt_ma250_ratio'}
 
         daily_data, dates = self._make_multi_day_data(70)
         daily_basic = self._make_daily_basic(dates)
