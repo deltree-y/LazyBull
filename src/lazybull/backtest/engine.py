@@ -28,8 +28,9 @@ class BacktestEngine:
     交易规则：
     - T 日生成信号
     - T+1 日收盘价买入
-    - T+n 日卖出（n 为持有期，默认与调仓频率一致）
-      - 卖出时机可配置：收盘价（默认）或开盘价
+    - 持有期到期卖出：T+n 日开盘价卖出（n 为持有期）
+    - 条件卖出（亏损提前换出、整体止盈）：Tn 日检查 → Tn+1 日开盘价卖出
+    - 卖出时机可配置：开盘价（默认）或收盘价
     """
 
     # 常量：每年交易日数量（用于年化波动率计算）
@@ -51,7 +52,7 @@ class BacktestEngine:
         max_retry_count: int = 5,
         max_retry_days: int = 10,
         stop_loss_config: Optional[StopLossConfig] = None,
-        sell_timing: str = "close",
+        sell_timing: str = "open",
         enable_position_completion: bool = True,
         completion_window_days: int = 3,
         equity_curve_config: Optional[EquityCurveConfig] = None,
@@ -89,7 +90,7 @@ class BacktestEngine:
             max_retry_count: 延迟订单最大重试次数，默认5次
             max_retry_days: 延迟订单最大延迟天数，默认10天
             stop_loss_config: 止损配置，None 表示不启用止损功能（默认）
-            sell_timing: 卖出时机，'close' 表示 T+n 日收盘价卖出（默认），'open' 表示 T+n 日开盘价卖出
+            sell_timing: 卖出时机，'open' 表示开盘价卖出（默认），'close' 表示收盘价卖出
             enable_position_completion: 是否启用仓位补齐功能，默认True
             completion_window_days: 补齐窗口期（交易日），默认3天
             equity_curve_config: ECT（权益曲线交易）配置，None 表示不启用（默认）
@@ -219,6 +220,10 @@ class BacktestEngine:
         self.pending_stop_loss_sells: Dict[str, Dict] = (
             {}
         )  # {股票代码: {trigger_date, reason, trigger_type}} 待止损卖出队列
+        self.pending_condition_sells: Dict[str, Dict] = (
+            {}
+        )  # {股票代码: {trigger_date, sell_type}} 待条件卖出队列（亏损提前换出/整体止盈）
+        self._pending_take_profit_info: Optional[Dict] = None  # 止盈元数据（延迟到执行日处理）
         self.portfolio_values: List[Dict] = []  # 组合价值历史
         self.trades: List[Dict] = []  # 交易记录
 
@@ -342,15 +347,19 @@ class BacktestEngine:
                 )
 
             # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
-            # TODO: 更正确的做法应该是在持有期计算中排除当天买入的股票, 此部分还待优化
-            # 执行止损卖出（T+1 日执行）
+            # 执行止损卖出（Tn+1 执行）
             if self.stop_loss_monitor:
                 self._execute_pending_stop_loss_sells(date, trading_dates, date_to_idx)
 
-            # 检查并执行卖出操作（达到持有期）
+            # 执行条件卖出（Tn+1 执行：亏损提前换出、整体止盈）
+            self._execute_pending_condition_sells(date, trading_dates, date_to_idx)
+
+            # 检查卖出条件 + 执行持有期到期卖出
+            # - 持有期到期 / 盈利延续到期：预定事件，Tn 直接卖出
+            # - 亏损提前换出 / 整体止盈：写入 pending_condition_sells，Tn+1 执行
             self._check_and_sell(date, trading_dates, date_to_idx)
 
-            # 执行待执行的买入操作（T+1）
+            # 执行待执行的买入操作（Tn+1）
             self._execute_pending_buys(date, trading_dates, date_to_idx)
 
             # 处理仓位补齐（在补齐窗口期内尝试补齐未满仓位）
@@ -1109,7 +1118,10 @@ class BacktestEngine:
     def _check_and_sell(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
     ) -> None:
-        """检查并执行卖出操作（达到持有期 T+n）
+        """检查卖出条件并执行预定卖出
+
+        - 整体止盈、亏损提前换出：写入 pending_condition_sells 队列（Tn+1 执行）
+        - 持有期到期、盈利延续到期：直接执行卖出（预定事件）
 
         Args:
             date: 当前日期
@@ -1122,53 +1134,44 @@ class BacktestEngine:
         if current_idx is None:
             return
 
-        # ── 整体持仓止盈检查（优先于逐只判断，触发则清仓并 return）──────────
+        # 过滤已在待卖队列中的持仓（避免重复）
+        positions_to_check = {
+            stock: info for stock, info in self.positions.items()
+            if stock not in self.pending_condition_sells
+            and stock not in self.pending_stop_loss_sells
+        }
+
+        # ── 整体持仓止盈检查（Tn 检查，写入队列，Tn+1 执行）──────────
         # 盈亏基准：上次调仓日的组合净值（衡量"本轮调仓以来的盈利"）
         if (self.take_profit_threshold is not None
-                and self.positions
+                and positions_to_check
                 and self._last_rebalance_nav is not None
                 and self._last_rebalance_nav > 0):
             current_nav = self._calculate_portfolio_value(date)
             portfolio_profit_rate = (current_nav - self._last_rebalance_nav) / self._last_rebalance_nav
             if portfolio_profit_rate >= self.take_profit_threshold:
-                n_positions = len(self.positions)
-                stocks_to_sell = list(self.positions.keys())
+                n_positions = len(positions_to_check)
                 logger.warning(
                     f"  整体止盈触发: {date.date()}, 整体浮盈率={portfolio_profit_rate:.2%} "
-                    f">= 阈值={self.take_profit_threshold:.2%}, 清空 {n_positions} 只持仓"
+                    f">= 阈值={self.take_profit_threshold:.2%}, "
+                    f"{n_positions} 只持仓将在下一交易日卖出"
                 )
-                for stock in stocks_to_sell:
-                    self._sell_stock(date, stock, sell_type="take_profit")
-                # 重置调仓基准 NAV（卖出后的现金净值），使"本调仓"从 0 重新计量
-                self._last_rebalance_nav = self._calculate_portfolio_value(date)
-                # 触发补位：将 n_positions 个空仓写入 unfilled_slots，T+1 日自动买入
-                if (self.take_profit_refill
-                        and self.enable_position_completion
-                        and self._last_ranked_candidates
-                        and date not in self.unfilled_slots):
-                    weight = 1.0 / n_positions if n_positions > 0 else 0.0
-                    unfilled_slot_weights = [
-                        {"stock": f"__tp_{i}__", "weight": weight, "filled": False}
-                        for i in range(n_positions)
-                    ]
-                    self.unfilled_slots[date] = {
-                        "unfilled_count": n_positions,
-                        "unfilled_slot_weights": unfilled_slot_weights,
-                        "target_n": n_positions,
-                        "ranked_candidates": list(self._last_ranked_candidates),
-                        "signal_date": self._last_signal_date or date,
-                        "first_attempt_date": date,
-                        "attempts": 0,
-                        "tranche_idx": 0,
+                for stock in positions_to_check:
+                    self.pending_condition_sells[stock] = {
+                        "trigger_date": date,
+                        "sell_type": "take_profit",
                     }
-                    logger.info(
-                        f"  整体止盈补位: 已写入 {n_positions} 个补位槽，T+1 日自动补仓"
-                        f"（候选池 {len(self._last_ranked_candidates)} 只）"
-                    )
-                return  # 已清仓，跳过后续逐只判断
+                # 暂存止盈元数据，延迟到执行日处理补位和NAV重置
+                self._pending_take_profit_info = {
+                    "trigger_date": date,
+                    "n_positions": n_positions,
+                    "ranked_candidates": list(self._last_ranked_candidates),
+                    "signal_date": self._last_signal_date or date,
+                }
+                return  # 跳过后续逐只判断
         # ── 整体止盈检查结束 ──────────────────────────────────────────
 
-        for stock, info in self.positions.items():
+        for stock, info in positions_to_check.items():
             buy_date = info["buy_date"]
             buy_idx = date_to_idx.get(buy_date)
 
@@ -1202,11 +1205,25 @@ class BacktestEngine:
                     # 盈利延续持有：持有期满仍盈利，允许延续 profit_extension_days 天
                     if (profit_rate >= self.profit_extension_threshold
                             and holding_days < self.holding_period + self.profit_extension_days):
+                        logger.warning(
+                            f"  盈利延续持有: {stock} 持有{holding_days}天, "
+                            f"盈亏={profit_rate:.2%} >= 阈值={self.profit_extension_threshold:.2%}, "
+                            f"延续至最多 {self.holding_period + self.profit_extension_days} 天"
+                        )
                         continue  # 延续持有，跳过卖出
+                    # 持有期到期（含延续到期）→ 预定事件，直接执行
                     stocks_to_sell.append(stock)
                 elif holding_days >= early_exit_holding and profit_rate <= self.early_exit_loss_threshold:
-                    # 亏损提前换出：达到持有期比例且亏损超过阈值时提前卖出
-                    stocks_to_sell.append(stock)
+                    # 亏损提前换出 → 盘后发现，写入队列 Tn+1 执行
+                    logger.warning(
+                        f"  亏损提前换出: {stock} 持有{holding_days}天, "
+                        f"盈亏={profit_rate:.2%} <= 阈值={self.early_exit_loss_threshold:.2%}, "
+                        f"将在下一交易日卖出（正常持有期={self.holding_period}天）"
+                    )
+                    self.pending_condition_sells[stock] = {
+                        "trigger_date": date,
+                        "sell_type": "early_exit",
+                    }
             else:
                 # 原始逻辑：达到持有期才卖出
                 if holding_days >= self.holding_period:
@@ -1217,9 +1234,82 @@ class BacktestEngine:
                 f"  卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票（达到持有期）"
             )
 
-        # 执行卖出
+        # 执行持有期到期卖出（预定事件，Tn 直接执行）
         for stock in stocks_to_sell:
             self._sell_stock(date, stock, sell_type="holding_period")
+
+    def _execute_pending_condition_sells(
+        self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
+    ) -> None:
+        """执行待条件卖出操作（Tn+1 日执行，包括亏损提前换出和整体止盈）
+
+        Args:
+            date: 当前日期（执行日，Tn+1）
+            trading_dates: 交易日列表
+            date_to_idx: 日期到索引的映射
+        """
+        if not self.pending_condition_sells:
+            return
+
+        current_idx = date_to_idx.get(date)
+        if current_idx is None or current_idx == 0:
+            return
+
+        trigger_date = trading_dates[current_idx - 1]
+
+        # 筛选前一交易日触发的条件卖出
+        stocks_to_sell = [
+            (stock, info) for stock, info in list(self.pending_condition_sells.items())
+            if info["trigger_date"] == trigger_date
+        ]
+        if not stocks_to_sell:
+            return
+
+        # 执行卖出
+        for stock, info in stocks_to_sell:
+            if stock not in self.positions:
+                self.pending_condition_sells.pop(stock, None)
+                continue
+            self._sell_stock(date, stock, sell_type=info["sell_type"])
+            self.pending_condition_sells.pop(stock, None)
+
+        # 处理延迟的止盈元数据（补位 + NAV 重置）
+        if (self._pending_take_profit_info
+                and self._pending_take_profit_info["trigger_date"] == trigger_date):
+            tp = self._pending_take_profit_info
+            self._pending_take_profit_info = None
+            # 重置调仓基准 NAV（卖出后的现金净值），使"本调仓"从 0 重新计量
+            self._last_rebalance_nav = self._calculate_portfolio_value(date)
+            # 写入补位 unfilled_slots
+            n_positions = tp["n_positions"]
+            if (self.take_profit_refill
+                    and self.enable_position_completion
+                    and tp["ranked_candidates"]
+                    and tp["trigger_date"] not in self.unfilled_slots):
+                weight = 1.0 / n_positions if n_positions > 0 else 0.0
+                unfilled_slot_weights = [
+                    {"stock": f"__tp_{i}__", "weight": weight, "filled": False}
+                    for i in range(n_positions)
+                ]
+                self.unfilled_slots[tp["trigger_date"]] = {
+                    "unfilled_count": n_positions,
+                    "unfilled_slot_weights": unfilled_slot_weights,
+                    "target_n": n_positions,
+                    "ranked_candidates": list(tp["ranked_candidates"]),
+                    "signal_date": tp["signal_date"],
+                    "first_attempt_date": date,  # 执行日（Tn+1），补位从此日起算
+                    "attempts": 0,
+                    "tranche_idx": 0,
+                }
+                logger.info(
+                    f"  整体止盈补位: 已写入 {n_positions} 个补位槽，自动补仓"
+                    f"（候选池 {len(tp['ranked_candidates'])} 只）"
+                )
+
+        logger.info(
+            f"  条件卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只"
+            f"（触发日: {trigger_date.date()}）"
+        )
 
     def _check_stop_loss(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict

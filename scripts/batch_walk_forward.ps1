@@ -85,6 +85,13 @@ $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3�
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
 
+# ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
+# 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
+# start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
+# 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
+$skip_training           = $true   # $true 启用 | $false 禁用
+$start_model_version     = 7969    # 第一个 split 的模型版本号（$null = 不指定）
+
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
 $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
@@ -120,14 +127,14 @@ $market_regime_ma250_threshold = 1.0     # 触发阈值（大盘收益曲线/MA2
 $market_regime_ma250_exposure  = 0.0    # 触发后的仓位系数（0.0=完全空仓）
 
 # ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
-$enable_profit_based_holding  = $false  # $true 启用 | $false 禁用
-$early_exit_loss_threshold    = -0.05   # 亏损提前换出阈值（盈亏率，如 -0.05 = 亏损5%）
-$early_exit_holding_ratio     = 0.6     # 亏损提前换出最早触发时点（占持有期比例）
-$profit_extension_threshold   = 0.05    # 盈利延续持有阈值（如 0.05 = 盈利5%）
-$profit_extension_days        = 5       # 盈利延续持有的额外天数（交易日）
+$enable_profit_based_holding      = $true  # $true 启用 | $false 禁用
+$early_exit_loss_threshold_list   = @(-0.05,-0.06,-0.07,-0.08)  # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
+$early_exit_holding_ratio         = 0.6       # 亏损提前换出最早触发时点（占持有期比例）
+$profit_extension_threshold_list  = @(0.1)   # 盈利延续持有阈值（可多值，如 @(0.03, 0.05, 0.10)）
+$profit_extension_days            = 5         # 盈利延续持有的额外天数（交易日）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold        = 0.20   # $null=禁用, 0.15=整体浮盈15%时清仓
+$take_profit_threshold_list   = @(0.15)  # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
 $take_profit_refill           = $false   # $true=整体止盈后自动补位买入
 
 # ── 路径 ─────────────────────────────────────────────────────
@@ -172,7 +179,10 @@ $totalTasks = $algorithm_list.Length *
               $market_regime_mode_list.Length *
               $market_regime_vol_target_list.Length *
               $bt_top_n_list.Length *
-              $stagger_tranches_list.Length
+              $stagger_tranches_list.Length *
+              $early_exit_loss_threshold_list.Length *
+              $profit_extension_threshold_list.Length *
+              $take_profit_threshold_list.Length
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -207,6 +217,9 @@ foreach ($market_regime_mode in $market_regime_mode_list) {
 foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
 foreach ($stagger_tranches in $stagger_tranches_list) {
+foreach ($early_exit_loss_threshold in $early_exit_loss_threshold_list) {
+foreach ($profit_extension_threshold in $profit_extension_threshold_list) {
+foreach ($take_profit_threshold in $take_profit_threshold_list) {
 
     $count++
 
@@ -336,6 +349,13 @@ foreach ($stagger_tranches in $stagger_tranches_list) {
         $pythonCmd += " --no-deploy-train"
     }
 
+    if ($skip_training) {
+        $pythonCmd += " --skip-training"
+        if ($null -ne $start_model_version) {
+            $pythonCmd += " --start-model-version $start_model_version"
+        }
+    }
+
     Write-Host ""
     Write-Host "[任务 $count / $totalTasks]" -ForegroundColor Green
     Write-Host $pythonCmd -ForegroundColor Gray
@@ -363,7 +383,7 @@ foreach ($stagger_tranches in $stagger_tranches_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（24 层）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（27 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

@@ -107,9 +107,9 @@ def mock_trading_dates():
 
 
 def test_default_sell_timing_close(mock_price_data_with_open, mock_trading_dates):
-    """测试默认卖出时机为收盘价"""
-    
-    # 创建回测引擎（不指定 sell_timing，应默认为 'close'）
+    """测试默认卖出时机为开盘价（v0.31.0 起默认改为 open）"""
+
+    # 创建回测引擎（不指定 sell_timing，应默认为 'open'）
     universe = MockUniverse()
     signal = MockSignal()
     engine = BacktestEngine(
@@ -122,9 +122,9 @@ def test_default_sell_timing_close(mock_price_data_with_open, mock_trading_dates
         verbose=False,
         enable_pending_order=False  # 禁用延迟订单以简化测试
     )
-    
+
     # 验证默认值
-    assert engine.sell_timing == 'close'
+    assert engine.sell_timing == 'open'
     
     # 运行回测
     nav_curve = engine.run(
@@ -137,21 +137,20 @@ def test_default_sell_timing_close(mock_price_data_with_open, mock_trading_dates
     # 获取交易记录
     trades_df = engine.get_trades()
     
-    # 验证卖出交易都使用收盘价
+    # 验证卖出交易都使用开盘价（v0.31.0 起默认 open）
     sell_trades = trades_df[trades_df['action'] == 'sell']
     if len(sell_trades) > 0:
         for _, trade in sell_trades.iterrows():
             # 验证记录中的 sell_timing 字段
-            assert trade['sell_timing'] == 'close'
-            
-            # 验证价格是收盘价（带有小数部分 0.05）
-            # 收盘价格应该是 base + index * 0.1 + 0.05
+            assert trade['sell_timing'] == 'open'
+
+            # 验证价格是开盘价（mock数据中 open = base + index * 0.1）
             date = trade['date']
             date_idx = mock_trading_dates.index(date)
-            expected_close_price = 10.0 + date_idx * 0.1 + 0.05
-            
+            expected_open_price = 10.0 + date_idx * 0.1
+
             # 允许小的浮点误差
-            assert abs(trade['price'] - expected_close_price) < 0.01
+            assert abs(trade['price'] - expected_open_price) < 0.01
 
 
 def test_sell_timing_open(mock_price_data_with_open, mock_trading_dates):

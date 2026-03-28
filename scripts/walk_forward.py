@@ -288,10 +288,12 @@ def run_oos_backtest(
         metrics["bt_market_regime_mode"] = market_regime_mode
 
     logger.info(
+        f"{'#' * 80}\n"
         f"OOS回测结果: 总收益={total_return*100:.2f}%, "
         f"年化={annual_return*100:.2f}%, "
         f"最大回撤={max_drawdown*100:.2f}%, "
         f"夏普={sharpe:.2f}"
+        f"{'#' * 80}\n"
     )
 
     # 附带 nav_curve 用于串联全周期净值
@@ -1886,6 +1888,20 @@ def main():
         help="禁用部署模型训练（默认开启：walk-forward完成后自动训练部署模型）"
     )
 
+    # 跳过训练、复用已有模型（仅调参回测）
+    parser.add_argument(
+        "--skip-training",
+        action="store_true",
+        default=False,
+        help="跳过模型训练，直接使用已有模型做 OOS 回测（需配合 --start-model-version）"
+    )
+    parser.add_argument(
+        "--start-model-version",
+        type=int,
+        default=None,
+        help="skip-training 模式下第一个 split 对应的模型版本号，后续 split 依次 +1"
+    )
+
     args = parser.parse_args()
 
     # 如果指定了 --label，则覆盖 --label-column
@@ -1971,19 +1987,44 @@ def main():
         # 2. 执行每个 split 的训练
         results = []
         topk_values = [30, 100, 300]
-        
+
+        # skip-training 模式参数校验
+        skip_training = getattr(args, "skip_training", False)
+        start_model_version = getattr(args, "start_model_version", None)
+        if skip_training and start_model_version is None:
+            logger.error("--skip-training 模式必须指定 --start-model-version")
+            sys.exit(1)
+
         for split in splits:
             try:
-                result = execute_split_training(
-                    split=split,
-                    wf_run_id=wf_run_id,
-                    storage=storage,
-                    loader=loader,
-                    registry=registry,
-                    args=args,
-                    topk_values=topk_values,
-                    trade_cal=trade_cal,
-                )
+                if skip_training:
+                    # 跳过训练，直接用预设版本号构造 result
+                    model_version = start_model_version + split.split_index
+                    logger.info(
+                        f"[跳过训练] Split {split.split_index}: "
+                        f"使用已有模型 v{model_version}，"
+                        f"测试区间 {split.test_start} ~ {split.test_end}"
+                    )
+                    result = {
+                        "split_index": split.split_index,
+                        "train_start": split.train_start,
+                        "train_end": split.train_end,
+                        "test_start": split.test_start,
+                        "test_end": split.test_end,
+                        "model_version": model_version,
+                        "bt_metrics": {},
+                    }
+                else:
+                    result = execute_split_training(
+                        split=split,
+                        wf_run_id=wf_run_id,
+                        storage=storage,
+                        loader=loader,
+                        registry=registry,
+                        args=args,
+                        topk_values=topk_values,
+                        trade_cal=trade_cal,
+                    )
 
                 # OOS 回测（每个 split 训练后运行真实回测）
                 if args.oos_backtest and result.get("model_version"):
@@ -2048,7 +2089,7 @@ def main():
                 continue
 
         # 3. 部署模型训练（使用最新可用数据）
-        if not args.no_deploy_train and len(results) > 0:
+        if not args.no_deploy_train and not skip_training and len(results) > 0:
             last_split = splits[-1]
             deploy_train_end = last_split.test_end
             logger.info("=" * 80)

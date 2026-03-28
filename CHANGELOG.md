@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.31.1] - 2026-03-28
+
+### 优化
+
+- **walk_forward.py 新增跳过训练模式**
+  - 新增 `--skip-training` 参数：跳过模型训练，直接使用已有模型做 OOS 回测
+  - 新增 `--start-model-version` 参数：指定第一个 split 对应的模型版本号，后续 split 依次 +1
+  - skip-training 模式下自动跳过部署模型训练
+  - `batch_walk_forward.ps1` 新增 `$skip_training` / `$start_model_version` 配置项，适用于只调回测参数而无需重新训练的场景
+
+## [0.31.0] - 2026-03-28
+
+### 新增
+
+- **条件卖出 T+1 机制**
+  - 亏损提前换出、整体止盈从"Tn 检查 + Tn 执行"改为"Tn 检查 + Tn+1 执行"，符合 A 股 T+1 规则和纸面交易实际操作
+  - 新增 `pending_condition_sells` 待卖队列和 `_execute_pending_condition_sells()` 执行方法，参照止损 T+1 模式实现
+  - 持有期到期、盈利延续到期为预定事件，保持 Tn 直接执行不变
+  - `sell_timing` 参数默认值从 `"close"` 改为 `"open"`（Tn+1 开盘价卖出）
+
 ## [0.30.0] - 2026-03-27
 
 ### 新增
