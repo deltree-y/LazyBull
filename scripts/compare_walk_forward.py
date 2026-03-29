@@ -92,6 +92,15 @@ COL_NAMES = {
     "rank_weight_topk":           "rank权重TopK",
     "rank_weight":                "rank权重值",
     "algorithm":                  "算法",
+    # 盈亏动态持仓
+    "enable_profit_based_holding":  "盈亏动态持仓",
+    "early_exit_loss_threshold":    "早退亏损阈值",
+    "early_exit_holding_ratio":     "早退持仓比例",
+    "profit_extension_threshold":   "盈利延持阈值",
+    "profit_extension_days":        "盈利延持天数",
+    # 整体持仓止盈
+    "take_profit_threshold":        "整体止盈阈值",
+    "take_profit_refill":           "止盈后补仓",
 }
 
 # ---------------------------------------------------------------------------
@@ -107,6 +116,12 @@ PARAM_COLS = [
     "subsample", "colsample_bytree", "min_child_weight",
     "gamma", "reg_alpha", "reg_lambda",
     "rank_weight_enabled", "rank_weight_topk", "rank_weight",
+    # 盈亏动态持仓
+    "enable_profit_based_holding",
+    "early_exit_loss_threshold", "early_exit_holding_ratio",
+    "profit_extension_threshold", "profit_extension_days",
+    # 整体持仓止盈
+    "take_profit_threshold", "take_profit_refill",
 ]
 
 # ---------------------------------------------------------------------------

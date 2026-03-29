@@ -381,13 +381,13 @@ class BacktestEngine:
                 if self._last_rebalance_nav and self._last_rebalance_nav > 0
                 else "N/A"
             )
+            # 计算本轮调仓周期内的第几天（1-based）
+            cycle_day = idx % self.rebalance_freq + 1
             logger.info(
-                f"回测进度: {trading_days}/{total_days} 天, "
-                f"日期: {date.date()}"
-                f"(持仓{len(self.positions)}, "
-                f"本调仓:{rebalance_return_str}, "
-                f"本轮:{total_return:+.2f}%, "
-                f"年化{ann_return:+.2f}%)"
+                f"回测[{date.date()}]: {trading_days}/{total_days} 天 - "
+                f"本轮第[{cycle_day}/{self.rebalance_freq}]天, "
+                f"持仓[{len(self.positions)}]只, "
+                f"收益:本调仓/本轮/年化:{rebalance_return_str}/{total_return:+.2f}%/{ann_return:+.2f}%)"
             )
 
             self.portfolio_values.append(
@@ -887,11 +887,10 @@ class BacktestEngine:
                     f"将在接下来 {self.completion_window_days} 天内尝试补齐"
                 )
 
-        # 分批调仓时始终打印买入汇总，便于确认各批次执行情况
-        if self.verbose or self.stagger_tranches > 1:
-            logger.info(
-                f"  {tranche_tag}买入执行: {date.date()}, 买入 {actually_bought} 只股票（信号日: {signal_date.date()}）"
-            )
+        # 始终打印买入汇总，与卖出日志保持一致
+        logger.info(
+            f"  {tranche_tag}买入执行: {date.date()}, 买入 {actually_bought} 只股票（信号日: {signal_date.date()}）"
+        )
 
     def _process_position_completion(
         self,
@@ -1192,7 +1191,10 @@ class BacktestEngine:
                 # 计算当前盈亏率（使用后复权价格口径）
                 current_pnl_price = self._get_pnl_price(date, stock)
                 if current_pnl_price is None:
-                    current_pnl_price = info.get("buy_trade_price")
+                    # 停牌或无价格数据时，无法评估当前盈亏，跳过亏损提前换出检查
+                    # 注意：不能用 buy_trade_price 作为 fallback，因为它是不复权价格，
+                    # 与后复权的 buy_pnl_price 混用会导致盈亏率严重失真
+                    continue
                 buy_pnl_price = info.get("buy_pnl_price")
                 if current_pnl_price and buy_pnl_price and buy_pnl_price > 0:
                     profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price

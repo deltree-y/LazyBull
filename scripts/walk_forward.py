@@ -27,6 +27,7 @@ Walk-forward 滚动训练脚本
 """
 
 import argparse
+import re
 import sys
 import traceback
 import uuid
@@ -112,6 +113,7 @@ def run_oos_backtest(
     take_profit_threshold: Optional[float] = None,
     take_profit_refill: bool = True,
     initial_capital: float = 1000000.0,
+    split_num: Optional[int] = None,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测，返回组合级绩效指标
 
@@ -287,13 +289,15 @@ def run_oos_backtest(
         metrics["bt_market_regime"] = True
         metrics["bt_market_regime_mode"] = market_regime_mode
 
+    split_tag = f"Split {split_num} | " if split_num is not None else ""
     logger.info(
-        f"{'#' * 80}\n"
+        f"\n{'#' * 80}\n"
+        f"{split_tag}{bt_start}-{bt_end}\n"
         f"OOS回测结果: 总收益={total_return*100:.2f}%, "
         f"年化={annual_return*100:.2f}%, "
         f"最大回撤={max_drawdown*100:.2f}%, "
-        f"夏普={sharpe:.2f}"
-        f"{'#' * 80}\n"
+        f"夏普={sharpe:.2f} \n"
+        f"{'#' * 80}\n\n"
     )
 
     # 附带 nav_curve 用于串联全周期净值
@@ -1251,9 +1255,9 @@ def write_walk_forward_summary(
             "test_start": result["test_start"],
             "test_end": result["test_end"],
             "model_version": result["model_version"],
-            "train_samples": result["train_samples"],
-            "val_samples": result["val_samples"],
-            "test_samples": result["test_samples"],
+            "train_samples": result.get("train_samples"),
+            "val_samples": result.get("val_samples"),
+            "test_samples": result.get("test_samples"),
             "best_iteration": result.get("best_iteration"),
             "val_rankic_ir": result.get("val_rankic_ir"),
         }
@@ -1969,13 +1973,21 @@ def main():
         if trade_cal is None:
             trade_cal = loader.load_trade_cal()
         
+        # 推断调仓频率（与 run_oos_backtest 内逻辑保持一致）
+        if args.bt_rebalance_freq is not None:
+            _rebalance_freq = args.bt_rebalance_freq
+        else:
+            _match = re.search(r'(\d+)', args.label_column)
+            _rebalance_freq = int(_match.group(1)) if _match else 20
+
         splits = generate_walk_forward_splits(
             trade_cal=trade_cal,
             wf_start_date=args.wf_start_date,
             wf_end_date=args.wf_end_date,
             step_frequency=args.step,
             train_window_years=args.train_window_years,
-            test_window_months=args.test_window_months
+            test_window_months=args.test_window_months,
+            rebalance_freq=_rebalance_freq
         )
         
         if len(splits) == 0:
@@ -2070,6 +2082,7 @@ def main():
                             take_profit_threshold=args.take_profit_threshold,
                             take_profit_refill=args.take_profit_refill,
                             initial_capital=args.bt_initial_capital,
+                            split_num=split.split_index,
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)

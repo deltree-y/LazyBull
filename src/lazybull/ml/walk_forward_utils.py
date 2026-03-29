@@ -13,7 +13,7 @@ Walk-forward 切分工具模块
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 from loguru import logger
@@ -38,7 +38,8 @@ def generate_walk_forward_splits(
     wf_end_date: str,
     step_frequency: str = "quarterly",
     train_window_years: int = 5,
-    test_window_months: int = 6
+    test_window_months: int = 6,
+    rebalance_freq: Optional[int] = None
 ) -> List[WalkForwardSplit]:
     """生成 walk-forward 切分
     
@@ -59,8 +60,10 @@ def generate_walk_forward_splits(
         - 所有日期对齐到交易日（自动调整到最近的交易日）
         - train_end 是训练集的最后一天
         - test_start 是 train_end 的下一个交易日
-        - test_end 是 test_start 往后推 test_window_months 个月的最后一个交易日
+        - test_end 是 test_start 往后推 test_window_months 个月的最后一个交易日，
+          若提供 rebalance_freq，则进一步向后对齐到第一个不早于该日期的调仓日
         - 每次滚动，train_end 向前推进 step_frequency
+        - 最后一个 split 的 test_end 不超过 wf_end_date
     """
     logger.info(f"生成 walk-forward 切分...")
     logger.info(f"  起止日期: {wf_start_date} 至 {wf_end_date}")
@@ -192,7 +195,21 @@ def generate_walk_forward_splits(
         if test_end is None or test_end < test_start:
             logger.info(f"无法生成有效的测试区间（test_start={test_start}），停止生成切分")
             break
-        
+
+        # 若提供了调仓频率，将 test_end 向后对齐到第一个不早于当前 test_end 的调仓日
+        if rebalance_freq is not None and rebalance_freq > 0:
+            test_start_idx = all_trade_dates.index(test_start)
+            k = 1
+            while True:
+                rebal_idx = test_start_idx + k * rebalance_freq - 1
+                if rebal_idx >= len(all_trade_dates):
+                    break
+                candidate = all_trade_dates[rebal_idx]
+                if candidate >= test_end:
+                    test_end = candidate
+                    break
+                k += 1
+
         # 添加切分
         split = WalkForwardSplit(
             split_index=split_index,
@@ -215,10 +232,24 @@ def generate_walk_forward_splits(
             break
     
     logger.info(f"成功生成 {len(splits)} 个切分")
-    
+
     if len(splits) == 0:
         logger.warning("未生成任何切分，请检查参数设置（时间区间、窗口大小等）")
-    
+        return splits
+
+    # 将最后一个 split 的 test_end 限制在 wf_end_date（不允许超出）
+    wf_end_capped = find_nearest_trade_date(wf_end_date, direction="backward", date_list=all_trade_dates)
+    if wf_end_capped and splits[-1].test_end > wf_end_capped:
+        old_end = splits[-1].test_end
+        splits[-1] = WalkForwardSplit(
+            split_index=splits[-1].split_index,
+            train_start=splits[-1].train_start,
+            train_end=splits[-1].train_end,
+            test_start=splits[-1].test_start,
+            test_end=wf_end_capped
+        )
+        logger.info(f"  最后一个 split 的 test_end 从 {old_end} 限制到 {wf_end_capped}（wf_end_date）")
+
     return splits
 
 

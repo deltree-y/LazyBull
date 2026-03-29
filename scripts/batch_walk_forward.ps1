@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"   #20130101   #20130224
-$wf_end_date             = "20251231"   #20251231   #20260224
+$wf_start_date           = "20130224"   #20130101   #20130224
+$wf_end_date             = "20260224"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -89,8 +89,9 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 $start_model_version     = 7969    # 第一个 split 的模型版本号（$null = 不指定）
+                                   #7969:d3, 8137:d2
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -99,9 +100,9 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true   # $true 启用 | $false 禁用
 $oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(20)   # 回测持仓 Top N
+$bt_top_n_list           = @(17)   # 回测持仓 Top N
 $bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
-$bt_weight_method        = "equal" # 权重方法：equal（等权）| score（按预测分数加权）
+$bt_weight_method        = "score" # 权重方法：equal（等权）| score（按预测分数加权）
 $bt_initial_capital      = 1000000 # 回测初始资金（默认：100万）
 
 # ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
@@ -122,19 +123,19 @@ $market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌�
 $market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
-$market_regime_ma250_hard_stop = $false  # $true 启用 | $false 禁用
-$market_regime_ma250_threshold = 1.0     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
+$market_regime_ma250_hard_stop = $true  # $true 启用 | $false 禁用
+$market_regime_ma250_threshold = 0.85     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
 $market_regime_ma250_exposure  = 0.0    # 触发后的仓位系数（0.0=完全空仓）
 
 # ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
 $enable_profit_based_holding      = $true  # $true 启用 | $false 禁用
-$early_exit_loss_threshold_list   = @(-0.05,-0.06,-0.07,-0.08)  # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
-$early_exit_holding_ratio         = 0.6       # 亏损提前换出最早触发时点（占持有期比例）
-$profit_extension_threshold_list  = @(0.1)   # 盈利延续持有阈值（可多值，如 @(0.03, 0.05, 0.10)）
-$profit_extension_days            = 5         # 盈利延续持有的额外天数（交易日）
+$early_exit_loss_threshold_list   = @(-0.07) #-0.07 # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
+$early_exit_holding_ratio_list    = @(0.5)    #0.6  # 亏损提前换出最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
+$profit_extension_threshold_list  = @(0.1)   #0.1   # 盈利延续持有阈值（可多值，如 @(0.03, 0.05, 0.10)）
+$profit_extension_days_list       = @(3)     #5     # 盈利延续持有的额外天数（交易日，可多值，如 @(3, 5, 10)）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold_list   = @(0.15)  # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
+$take_profit_threshold_list   = @(0.15)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
 $take_profit_refill           = $false   # $true=整体止盈后自动补位买入
 
 # ── 路径 ─────────────────────────────────────────────────────
@@ -181,7 +182,9 @@ $totalTasks = $algorithm_list.Length *
               $bt_top_n_list.Length *
               $stagger_tranches_list.Length *
               $early_exit_loss_threshold_list.Length *
+              $early_exit_holding_ratio_list.Length *
               $profit_extension_threshold_list.Length *
+              $profit_extension_days_list.Length *
               $take_profit_threshold_list.Length
 
 Write-Host ""
@@ -218,7 +221,9 @@ foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
 foreach ($stagger_tranches in $stagger_tranches_list) {
 foreach ($early_exit_loss_threshold in $early_exit_loss_threshold_list) {
+foreach ($early_exit_holding_ratio in $early_exit_holding_ratio_list) {
 foreach ($profit_extension_threshold in $profit_extension_threshold_list) {
+foreach ($profit_extension_days in $profit_extension_days_list) {
 foreach ($take_profit_threshold in $take_profit_threshold_list) {
 
     $count++
@@ -383,7 +388,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（27 层）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（29 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

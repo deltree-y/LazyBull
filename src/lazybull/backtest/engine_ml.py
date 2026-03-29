@@ -241,6 +241,10 @@ class BacktestEngineML(BacktestEngine):
                     )
                 return exposure
 
+        # 若仅启用了 MA250 硬条件而未启用常规择时，此处直接返回满仓
+        if not self.market_regime_enabled:
+            return 1.0
+
         mode = self.market_regime_mode
 
         if mode == "binary":
@@ -334,7 +338,7 @@ class BacktestEngineML(BacktestEngine):
         在父类执行买入之前，将 pending_signals 中的权重乘以市场仓位系数。
         原理与 ECT（权益曲线交易）相同：权重之和 < 1 → 剩余资金留作现金。
         """
-        if self.market_regime_enabled:
+        if self.market_regime_enabled or self.market_regime_ma250_hard_stop:
             # 找到前一个交易日的信号（与父类逻辑一致）
             current_idx = date_to_idx.get(date)
             if current_idx is not None and current_idx > 0:

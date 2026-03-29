@@ -199,6 +199,48 @@ class TestWalkForwardSplits:
         # 测试空列表
         print_splits_summary([])  # 不应抛异常
 
+    def test_rebalance_freq_alignment(self, trade_cal):
+        """测试 rebalance_freq 对齐：test_end 应延迟到调仓日边界"""
+        rebalance_freq = 5
+        splits = generate_walk_forward_splits(
+            trade_cal=trade_cal,
+            wf_start_date="20190101",
+            wf_end_date="20221231",
+            step_frequency="quarterly",
+            train_window_years=2,
+            test_window_months=3,
+            rebalance_freq=rebalance_freq
+        )
+        assert len(splits) > 0
+
+        all_trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+
+        # 验证非最后一个 split 的 test_end 与 test_start 的交易日间隔是 rebalance_freq 的整数倍
+        for split in splits[:-1]:
+            test_start_idx = all_trade_dates.index(split.test_start)
+            test_end_idx = all_trade_dates.index(split.test_end)
+            interval = test_end_idx - test_start_idx + 1
+            assert interval % rebalance_freq == 0, (
+                f"split {split.split_index}: test 区间交易日数 {interval} 不是 rebalance_freq={rebalance_freq} 的整数倍"
+            )
+
+    def test_last_split_capped_by_wf_end_date(self, trade_cal):
+        """测试最后一个 split 的 test_end 不超过 wf_end_date"""
+        wf_end_date = "20221231"
+        splits = generate_walk_forward_splits(
+            trade_cal=trade_cal,
+            wf_start_date="20190101",
+            wf_end_date=wf_end_date,
+            step_frequency="quarterly",
+            train_window_years=2,
+            test_window_months=6,
+            rebalance_freq=5
+        )
+        assert len(splits) > 0
+        assert splits[-1].test_end <= wf_end_date, (
+            f"最后一个 split 的 test_end {splits[-1].test_end} 超出了 wf_end_date {wf_end_date}"
+        )
+
 
 class TestWalkForwardCSV:
     """测试 walk-forward 汇总CSV生成"""

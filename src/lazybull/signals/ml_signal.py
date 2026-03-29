@@ -111,9 +111,9 @@ class MLSignal(Signal):
         if "amount_ma20" in features_df.columns:
             amount_low = (features_df["amount_ma20"].fillna(0) < self.min_amount_ma20).sum()
             if amount_low > 0:
-                # logger.info(
-                #    f"选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
-                #    f"（={self.min_amount_ma20 / 100:.0f}万元）的 {amount_low} 只"
+                #logger.info(
+                #    f"  选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
+                #    f"（={self.min_amount_ma20 / 10:.0f}万元）的 {amount_low} 只"
                 # )
                 pass
             mask &= features_df["amount_ma20"].fillna(0) >= self.min_amount_ma20
@@ -125,10 +125,10 @@ class MLSignal(Signal):
             mv_low = (features_df["total_mv"] < self.min_total_mv).sum()
             mv_high = (features_df["total_mv"] > self.max_total_mv).sum()
             if mv_low + mv_high > 0:
-                # logger.info(
-                #    f"选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
-                #    f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
-                # )
+                #logger.info(
+                #   f"  选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
+                #   f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
+                #)
                 pass
             mask &= features_df["total_mv"].between(self.min_total_mv, self.max_total_mv)
         else:
@@ -143,13 +143,13 @@ class MLSignal(Signal):
             else:
                 fin_mask = features_df["sw_l1_code"].isin(self._FINANCIAL_SW_L1_CODES)
                 fin_count = fin_mask.sum()
-                if fin_count > 0:
-                    logger.info(f"选股过滤-金融股: 剔除银行/非银金融 {fin_count} 只")
+                #if fin_count > 0:
+                #    logger.info(f"  选股过滤-金融股: 剔除银行/非银金融 {fin_count} 只")
                 mask &= ~fin_mask
 
         result = features_df[mask].copy()
-        if self.verbose and (before - len(result)) > 0:
-            logger.info(f"选股过滤合计: {before} → {len(result)}（剔除 {before - len(result)} 只）")
+        if (before - len(result)) > 0:
+            logger.info(f"  选股过滤合计: {before} → {len(result)}（剔除 {before - len(result)} 只）")
         return result
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
@@ -337,7 +337,7 @@ class MLSignal(Signal):
 
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         task = self.metadata.get("train_params", {}).get("task", "regression")
-        logger.info(f"开始模型预测(ranked): {len(X)} 只股票, {len(self.feature_columns)} 个特征")
+        logger.info(f"  开始模型预测(ranked): {len(X)} 只股票, {len(self.feature_columns)} 个特征")
 
         if task == "classification" and hasattr(self.model, "predict_proba"):
             # 分类模型：使用正类概率作为分数
@@ -356,23 +356,24 @@ class MLSignal(Signal):
 
         # 按预测分数排序，返回所有候选
         features_df = features_df.sort_values("ml_score", ascending=False)
-        logger.info(
-            "  TOP预测概率抽样: {}".format(
-                features_df[["ts_code", "ml_score"]]
-                .head(3)
-                .to_string(index=False)
-                .replace("\n", " | ")
+        if False:
+            logger.info(
+                "  TOP预测概率抽样: {}".format(
+                    features_df[["ts_code", "ml_score"]]
+                    .head(3)
+                    .to_string(index=False)
+                    .replace("\n", " | ")
+                )
             )
-        )
 
         # 返回 (股票代码, 分数) 元组列表
         ranked = list(zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist()))
-
-        logger.info(
-            f"  ML排序候选生成: {date.date()}, "  # 候选数 {len(ranked)}, "
-            f"平均预测分数[{features_df['ml_score'].mean():.3f}], "
-            f"最高/最低[{features_df['ml_score'].max():.3f}/{features_df['ml_score'].min():.3f}]"
-        )
+        if False:
+            logger.info(
+                f"  ML排序候选生成: {date.date()}, "  # 候选数 {len(ranked)}, "
+                f"平均预测分数[{features_df['ml_score'].mean():.3f}], "
+                f"最高/最低[{features_df['ml_score'].max():.3f}/{features_df['ml_score'].min():.3f}]"
+            )
 
         return ranked
 

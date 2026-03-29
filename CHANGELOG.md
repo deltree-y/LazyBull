@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.31.4] - 2026-03-29
+
+### 修复
+
+- **MA250 硬条件单独开启时意外触发 binary 择时逻辑**
+  - `engine_ml.py` 在 `_get_market_regime_exposure` 中，MA250 检查未触发后、进入普通择时逻辑前，
+    增加 `if not self.market_regime_enabled: return 1.0` 守卫
+  - 根本原因：上一版修复将入口条件改为 `market_regime_enabled or market_regime_ma250_hard_stop`，
+    导致 MA250 未触发时会继续执行 binary/vol_target 等常规择时，`market_regime_bear_exposure=0.3`
+    被意外应用，表现为仓位始终被压到 30% 而与 `ma250_exposure` 设置无关
+
+## [0.31.3] - 2026-03-29
+
+### 修复
+
+- **MA250 硬条件在 `market_regime` 关闭时完全失效**
+  - `engine_ml.py` 修复 `_execute_pending_buys` 的入口条件：将 `if self.market_regime_enabled` 改为
+    `if self.market_regime_enabled or self.market_regime_ma250_hard_stop`
+  - 根本原因：MA250 硬条件的执行路径被包裹在 `market_regime_enabled` 判断内，单独开启
+    `--market-regime-ma250-hard-stop` 而不开启 `--market-regime` 时，代码完全不进入该分支，
+    导致无任何效果也无任何日志输出
+  - 修复后 MA250 硬条件可独立于其他择时模式单独使用，符合其"系统级否决性保护"的设计意图
+
+## [0.31.2] - 2026-03-29
+
+### 修复
+
+- **亏损提前换出误判停牌股票**
+  - `engine.py` 修复 `_check_and_sell` 中停牌股票盈亏率计算错误的 bug
+  - 根本原因：停牌日 `_get_pnl_price` 返回 None 时，错误地用不复权的 `buy_trade_price` 与后复权的 `buy_pnl_price` 比较，导致盈亏率严重失真（如算出 -66% 而实际未亏损）
+  - 修复方案：价格不可用（停牌）时直接 `continue` 跳过该股票的亏损检查，等复牌后再评估
+
 ## [0.31.1] - 2026-03-28
 
 ### 优化
