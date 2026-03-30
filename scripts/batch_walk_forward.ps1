@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130224"   #20130101   #20130224
-$wf_end_date             = "20260224"   #20251231   #20260224
+$wf_start_date           = "20130209"   #20130101   #20130224
+$wf_end_date             = "20260209"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -24,7 +24,7 @@ $test_window_months_list = @(6)             # 测试窗口月数（建议与标�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
+$label_list              = @("y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
@@ -89,9 +89,9 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
-$skip_training           = $false   # $true 启用 | $false 禁用
-$start_model_version     = 7969    # 第一个 split 的模型版本号（$null = 不指定）
-                                   #7969:d3, 8137:d2
+$skip_training           = $true   # $true 启用 | $false 禁用
+$start_model_version     = 8165    # 第一个 split 的模型版本号（$null = 不指定）
+                                   #7969/8151/8165:d3, 8137:d2
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -102,7 +102,7 @@ $oos_backtest            = $true   # $true 启用 | $false 禁用
 $oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 test_window_months
 $bt_top_n_list           = @(17)   # 回测持仓 Top N
 $bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
-$bt_weight_method        = "score" # 权重方法：equal（等权）| score（按预测分数加权）
+$bt_weight_method        = "score" # 权重方法："equal"（等权）| "score"（按预测分数加权）
 $bt_initial_capital      = 1000000 # 回测初始资金（默认：100万）
 
 # ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
@@ -115,17 +115,17 @@ $market_regime_mode_list      = @("combined")  # binary | vol_target | trend | c
 $market_regime_bear_threshold_list = @(-0.03)  # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
 $market_regime_bear_exposure  = 0.3            # binary 模式：熊市仓位系数（0~1）
 $market_regime_vol_target_list = @(0.2)       # vol_target/combined 模式：年化波动率目标
-$market_regime_trend_threshold = 1.0           # trend/combined 模式：mkt_ma_trend 低于此值降仓
-$market_regime_min_exposure    = 0.18           # 非 binary 模式：最低仓位下限
-$market_regime_combine_method  = "min"         # combined 模式组合方式：min | multiply
+$market_regime_trend_threshold = 1.0          # trend/combined 模式：mkt_ma_trend 低于此值降仓
+$market_regime_min_exposure    = 0.18         # 非 binary 模式：最低仓位下限
+$market_regime_combine_method  = "min"        # combined 模式组合方式：min | multiply
 $market_regime_trend_guard     = $true        # combined 模式趋势保护：上行趋势跳过 vol 降仓
 $market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
 $market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
 $market_regime_ma250_hard_stop = $true  # $true 启用 | $false 禁用
-$market_regime_ma250_threshold = 0.85     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
-$market_regime_ma250_exposure  = 0.0    # 触发后的仓位系数（0.0=完全空仓）
+$market_regime_ma250_threshold = 0.8     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
+$market_regime_ma250_exposure  = 0.2    # 触发后的仓位系数（0.0=完全空仓）
 
 # ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
 $enable_profit_based_holding      = $true  # $true 启用 | $false 禁用
@@ -135,7 +135,7 @@ $profit_extension_threshold_list  = @(0.1)   #0.1   # 盈利延续持有阈值�
 $profit_extension_days_list       = @(3)     #5     # 盈利延续持有的额外天数（交易日，可多值，如 @(3, 5, 10)）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold_list   = @(0.15)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
+$take_profit_threshold_list   = @(0.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
 $take_profit_refill           = $false   # $true=整体止盈后自动补位买入
 
 # ── 路径 ─────────────────────────────────────────────────────
