@@ -914,11 +914,12 @@ class FeatureBuilder:
             tech_indicator_cols = [
                 c for c in ['rsi_14', 'kdj_k', 'kdj_d', 'kdj_j',
                              'macd_dif', 'macd_dea', 'macd_hist',
-                             'bb_middle', 'bb_upper', 'bb_lower', 'bb_width', 'bb_pct']
+                             'bb_middle', 'bb_upper', 'bb_lower', 'bb_width', 'bb_pct',
+                             'atr_14', 'atr_pct_14']
                 if c in tech_today.columns
             ]
             if tech_indicator_cols and len(tech_today) > 0:
-                logger.debug("从预计算缓存获取技术指标（RSI/KDJ/MACD/布林带）...")
+                logger.debug("从预计算缓存获取技术指标（RSI/KDJ/MACD/布林带/ATR）...")
                 result = result.merge(
                     tech_today[['ts_code', 'trade_date'] + tech_indicator_cols],
                     on=['ts_code', 'trade_date'],

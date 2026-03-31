@@ -202,6 +202,77 @@ class BacktestEngineML(BacktestEngine):
 
         return filtered
 
+    # ── ATR 功能 hook 覆写 ────────────────────────────────────────────
+
+    def _build_position_extra_info(self, date: pd.Timestamp, stock: str) -> Dict:
+        """买入时从 features_by_date 读取买入日 ATR%，用于 ATR 动态止损
+
+        仅当 enable_profit_based_holding 且 use_atr_for_early_exit 同时开启时生效。
+        直接使用预计算的 atr_pct_14（=atr_14/close_adj），无需在运行时查询价格。
+        """
+        if not (self.enable_profit_based_holding and self.use_atr_for_early_exit):
+            return {}
+        date_str = date.strftime('%Y%m%d')
+        features_df = self.features_by_date.get(date_str)
+        if features_df is None or 'atr_pct_14' not in features_df.columns:
+            return {}
+        row = features_df[features_df['ts_code'] == stock]
+        if row.empty:
+            return {}
+        atr_pct = row['atr_pct_14'].iloc[0]
+        if pd.isna(atr_pct) or atr_pct <= 0:
+            return {}
+        return {'buy_atr_pct': float(atr_pct)}
+
+    def _normalize_signals(
+        self, signals: Dict[str, float], date: pd.Timestamp
+    ) -> Dict[str, float]:
+        """当 atr_position_sizing=True 时，按 1/ATR% 反比分配个股权重
+
+        ATR 低的股票获得更高权重（低波动拿更多），ATR 高的股票获得更低权重。
+        无 ATR 数据的股票补为平均 inv_atr，避免被完全排除出持仓。
+        若无任何有效 ATR 数据，回退到父类的 equal/score 权重方法。
+        """
+        if not self.atr_position_sizing:
+            return super()._normalize_signals(signals, date)
+
+        date_str = date.strftime('%Y%m%d')
+        features_df = self.features_by_date.get(date_str)
+
+        if features_df is None or 'atr_pct_14' not in features_df.columns:
+            logger.warning(f"ATR仓位缩放：{date.date()} 无 atr_pct_14 数据，回退到父类权重方法")
+            return super()._normalize_signals(signals, date)
+
+        inv_atr: Dict[str, float] = {}
+        for stock in signals:
+            row = features_df[features_df['ts_code'] == stock]
+            if row.empty:
+                continue
+            atr_pct = row['atr_pct_14'].iloc[0]
+            if pd.isna(atr_pct) or atr_pct <= 0:
+                continue
+            inv_atr[stock] = 1.0 / atr_pct
+
+        if not inv_atr:
+            logger.warning(f"ATR仓位缩放：{date.date()} 无有效 ATR，回退到父类权重方法")
+            return super()._normalize_signals(signals, date)
+
+        # 无 ATR 数据的股票补为平均 inv_atr，避免被完全排除
+        mean_inv = sum(inv_atr.values()) / len(inv_atr)
+        for stock in signals:
+            if stock not in inv_atr:
+                inv_atr[stock] = mean_inv
+
+        total = sum(inv_atr.values())
+        result = {stock: inv_atr[stock] / total for stock in signals}
+
+        if self.verbose:
+            sample = list(result.items())[:3]
+            weights_str = ", ".join(f"{s}: {w:.4f}" for s, w in sample)
+            logger.info(f"  权重方法: atr (1/ATR反比), 示例权重（前3只）: {weights_str}")
+
+        return result
+
     # ── 市场择时仓位管理 ──────────────────────────────────────────────
 
     def _get_feature_scalar(self, features_df: pd.DataFrame, col: str) -> float:

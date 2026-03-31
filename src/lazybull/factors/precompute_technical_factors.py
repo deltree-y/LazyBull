@@ -23,7 +23,7 @@ from .technical_indicators import (
     calculate_macd,
     calculate_rsi,
 )
-from .volatility import calculate_volatility
+from .volatility import calculate_atr, calculate_volatility
 
 # 技术指标所需最小历史天数（与 builder._add_advanced_factors 保持一致）
 _MIN_HIST_DAYS_FOR_TECH = 30
@@ -49,7 +49,7 @@ def precompute_technical_factors(
         宽表 DataFrame，包含列：
         ts_code、trade_date、rsi_14、kdj_k、kdj_d、kdj_j、
         macd_dif、macd_dea、macd_hist、bb_middle、bb_upper、bb_lower、
-        bb_width、bb_pct、volatility_5（及其他 vol_windows）
+        bb_width、bb_pct、volatility_5（及其他 vol_windows）、atr_14
         无法计算的列保留 NaN。
     """
     if vol_windows is None:
@@ -97,6 +97,19 @@ def precompute_technical_factors(
             logger.error(f"批量计算 KDJ 失败：{e}")
     else:
         logger.warning("precompute_technical_factors: 缺少 high_adj/low_adj/close_adj，跳过 KDJ 计算")
+
+    # ---- 步骤 3b：ATR(14) ----
+    if all(col in daily_adj.columns for col in ['high_adj', 'low_adj', 'close_adj']):
+        logger.debug("批量计算 ATR(14)...")
+        try:
+            atr_df = calculate_atr(daily_adj, window=14)
+            result = result.merge(
+                atr_df[['ts_code', 'trade_date', 'atr_14', 'atr_pct_14']],
+                on=['ts_code', 'trade_date'],
+                how='left',
+            )
+        except Exception as e:
+            logger.error(f"批量计算 ATR 失败：{e}")
 
     # ---- 步骤 4：MACD(12,26,9) ----
     if 'close_adj' in daily_adj.columns:

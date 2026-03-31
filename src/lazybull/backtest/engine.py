@@ -66,6 +66,9 @@ class BacktestEngine:
         early_exit_holding_ratio: float = 0.6,  # 亏损提前换出最早触发时点（持有期比例）
         profit_extension_threshold: float = 0.05,  # 盈利延续持有阈值
         profit_extension_days: int = 5,  # 盈利延续持有额外天数（交易日）
+        use_atr_for_early_exit: bool = False,  # 是否用个股 ATR 动态替代固定止损阈值
+        atr_multiplier: float = 2.0,  # ATR 倍数（亏损超过 N×ATR% 时触发提前换出）
+        atr_position_sizing: bool = False,  # 是否按 1/ATR 反比分配个股权重
         take_profit_threshold: Optional[float] = None,  # 整体持仓止盈阈值（None=禁用，如0.15=整体浮盈15%止盈）
         take_profit_refill: bool = True,  # 整体止盈后是否触发自动补位买入
     ):
@@ -168,6 +171,9 @@ class BacktestEngine:
         self.early_exit_holding_ratio = early_exit_holding_ratio
         self.profit_extension_threshold = profit_extension_threshold
         self.profit_extension_days = profit_extension_days
+        self.use_atr_for_early_exit = use_atr_for_early_exit
+        self.atr_multiplier = atr_multiplier
+        self.atr_position_sizing = atr_position_sizing
 
         # 整体持仓止盈参数
         self.take_profit_threshold = take_profit_threshold
@@ -642,36 +648,8 @@ class BacktestEngine:
                 )
             return
 
-        # 归一化权重（将分数转换为权重，使其和为 1）
-        # 使用 getattr 保证向后兼容（某些 Mock 信号对象可能没有 weight_method 属性）
-        weight_method = getattr(self.signal, "weight_method", "equal")
-
-        if weight_method == "equal":
-            # 等权
-            weight = 1.0 / len(signals)
-            signals = {stock: weight for stock in signals.keys()}
-
-            if self.verbose:
-                logger.info(f"  权重方法: equal (等权), 每只股票权重 {weight:.4f}")
-        else:
-            # 按分数加权
-            total_score = sum(signals.values())
-            if total_score > 0:
-                signals = {stock: score / total_score for stock, score in signals.items()}
-
-                if self.verbose:
-                    # 显示前3只股票的权重示例
-                    sample_stocks = list(signals.items())[:3]
-                    weights_str = ", ".join(
-                        [f"{stock}: {weight:.4f}" for stock, weight in sample_stocks]
-                    )
-                    logger.info(f"  权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}")
-            else:
-                # 如果所有分数都是0或负数，使用等权
-                weight = 1.0 / len(signals)
-                signals = {stock: weight for stock in signals.keys()}
-                if self.verbose:
-                    logger.warning(f"所有分数 <= 0，回退到等权分配，每只股票权重 {weight:.4f}")
+        # 归一化权重（子类可覆写 _normalize_signals 以实现 ATR 加权等策略）
+        signals = self._normalize_signals(signals, date)
 
         # 应用权重限制（如果启用）
         if self.max_weight_per_stock is not None:
@@ -1215,17 +1193,29 @@ class BacktestEngine:
                         continue  # 延续持有，跳过卖出
                     # 持有期到期（含延续到期）→ 预定事件，直接执行
                     stocks_to_sell.append(stock)
-                elif holding_days >= early_exit_holding and profit_rate <= self.early_exit_loss_threshold:
-                    # 亏损提前换出 → 盘后发现，写入队列 Tn+1 执行
-                    logger.warning(
-                        f"  亏损提前换出: {stock} 持有{holding_days}天, "
-                        f"盈亏={profit_rate:.2%} <= 阈值={self.early_exit_loss_threshold:.2%}, "
-                        f"将在下一交易日卖出（正常持有期={self.holding_period}天）"
-                    )
-                    self.pending_condition_sells[stock] = {
-                        "trigger_date": date,
-                        "sell_type": "early_exit",
-                    }
+                else:
+                    # 计算实际止损阈值（ATR 动态 or 固定）
+                    threshold = self.early_exit_loss_threshold
+                    threshold_desc = f"固定({threshold:.2%})"
+                    if self.use_atr_for_early_exit:
+                        buy_atr_pct = info.get("buy_atr_pct")
+                        if buy_atr_pct is not None and not np.isnan(buy_atr_pct):
+                            threshold = -self.atr_multiplier * buy_atr_pct
+                            threshold_desc = f"ATR动态({threshold:.2%})"
+                        else:
+                            threshold_desc += "(ATR缺失,用固定)"
+
+                    if holding_days >= early_exit_holding and profit_rate <= threshold:
+                        # 亏损提前换出 → 盘后发现，写入队列 Tn+1 执行
+                        logger.warning(
+                            f"  亏损提前换出: {stock} 持有{holding_days}天, "
+                            f"盈亏={profit_rate:.2%} <= 阈值={threshold_desc}, "
+                            f"将在下一交易日卖出（正常持有期={self.holding_period}天）"
+                        )
+                        self.pending_condition_sells[stock] = {
+                            "trigger_date": date,
+                            "sell_type": "early_exit",
+                        }
             else:
                 # 原始逻辑：达到持有期才卖出
                 if holding_days >= self.holding_period:
@@ -1822,6 +1812,46 @@ class BacktestEngine:
         # 可交易，直接买入
         self._buy_stock_direct(date, stock, target_value, signal_date=signal_date)
 
+    def _build_position_extra_info(self, date: pd.Timestamp, stock: str) -> Dict:
+        """买入时附加额外元数据到 positions 字典（子类可覆写）
+
+        默认返回空字典。engine_ml.py 覆写此方法以写入买入日 ATR 数据，
+        供 _check_holding_periods 中的 ATR 动态止损使用。
+        """
+        return {}
+
+    def _normalize_signals(
+        self, signals: Dict[str, float], date: pd.Timestamp
+    ) -> Dict[str, float]:
+        """将分数字典归一化为权重字典（子类可覆写以实现 ATR 加权等策略）
+
+        默认按 weight_method（equal/score）归一化。
+        engine_ml.py 覆写此方法以实现 1/ATR 反比权重。
+        """
+        weight_method = getattr(self.signal, "weight_method", "equal")
+
+        if weight_method == "equal":
+            weight = 1.0 / len(signals)
+            if self.verbose:
+                logger.info(f"  权重方法: equal (等权), 每只股票权重 {weight:.4f}")
+            return {stock: weight for stock in signals.keys()}
+        else:
+            total_score = sum(signals.values())
+            if total_score > 0:
+                result = {stock: score / total_score for stock, score in signals.items()}
+                if self.verbose:
+                    sample_stocks = list(result.items())[:3]
+                    weights_str = ", ".join(
+                        [f"{stock}: {weight:.4f}" for stock, weight in sample_stocks]
+                    )
+                    logger.info(f"  权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}")
+                return result
+            else:
+                weight = 1.0 / len(signals)
+                if self.verbose:
+                    logger.warning(f"所有分数 <= 0，回退到等权分配，每只股票权重 {weight:.4f}")
+                return {stock: weight for stock in signals.keys()}
+
     def _buy_stock_direct(
         self,
         date: pd.Timestamp,
@@ -1892,6 +1922,10 @@ class BacktestEngine:
             "buy_pnl_price": pnl_price,  # 绩效价格（后复权）
             "buy_cost_cash": total_cost_cash,  # 总现金支出（含手续费）
         }
+        # 子类可覆写 _build_position_extra_info 以附加额外元数据（如 ATR）
+        extra = self._build_position_extra_info(date, stock)
+        if extra:
+            self.positions[stock].update(extra)
 
         self.current_capital -= total_cost_cash
 

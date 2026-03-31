@@ -110,6 +110,9 @@ def run_oos_backtest(
     early_exit_holding_ratio: float = 0.6,
     profit_extension_threshold: float = 0.05,
     profit_extension_days: int = 5,
+    use_atr_for_early_exit: bool = False,
+    atr_multiplier: float = 2.0,
+    atr_position_sizing: bool = False,
     take_profit_threshold: Optional[float] = None,
     take_profit_refill: bool = True,
     initial_capital: float = 1000000.0,
@@ -236,6 +239,9 @@ def run_oos_backtest(
         early_exit_holding_ratio=early_exit_holding_ratio,
         profit_extension_threshold=profit_extension_threshold,
         profit_extension_days=profit_extension_days,
+        use_atr_for_early_exit=use_atr_for_early_exit,
+        atr_multiplier=atr_multiplier,
+        atr_position_sizing=atr_position_sizing,
         take_profit_threshold=take_profit_threshold,
         take_profit_refill=take_profit_refill,
     )
@@ -1240,6 +1246,9 @@ def write_walk_forward_summary(
         "early_exit_holding_ratio": getattr(args, 'early_exit_holding_ratio', 0.6),
         "profit_extension_threshold": getattr(args, 'profit_extension_threshold', 0.05),
         "profit_extension_days": getattr(args, 'profit_extension_days', 5),
+        "use_atr_for_early_exit": getattr(args, 'use_atr_for_early_exit', False),
+        "atr_multiplier": getattr(args, 'atr_multiplier', 2.0),
+        "atr_position_sizing": getattr(args, 'atr_position_sizing', False),
         "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
         "take_profit_refill": getattr(args, 'take_profit_refill', True),
     }
@@ -1871,6 +1880,24 @@ def main():
         help="盈利延续持有的额外天数（交易日），默认 5"
     )
     parser.add_argument(
+        "--use-atr-for-early-exit",
+        action="store_true",
+        default=False,
+        help="用个股 ATR 动态阈值替代固定 early_exit_loss_threshold（需同时开启 --enable-profit-based-holding）"
+    )
+    parser.add_argument(
+        "--atr-multiplier",
+        type=float,
+        default=2.0,
+        help="ATR 倍数，亏损超过 N×ATR%% 时提前换出，默认 2.0"
+    )
+    parser.add_argument(
+        "--atr-position-sizing",
+        action="store_true",
+        default=False,
+        help="按 1/ATR 反比分配个股权重（低波动股拿更多），与 --enable-profit-based-holding 独立"
+    )
+    parser.add_argument(
         "--take-profit-threshold",
         type=float,
         default=None,
@@ -2079,6 +2106,9 @@ def main():
                             early_exit_holding_ratio=args.early_exit_holding_ratio,
                             profit_extension_threshold=args.profit_extension_threshold,
                             profit_extension_days=args.profit_extension_days,
+                            use_atr_for_early_exit=args.use_atr_for_early_exit,
+                            atr_multiplier=args.atr_multiplier,
+                            atr_position_sizing=args.atr_position_sizing,
                             take_profit_threshold=args.take_profit_threshold,
                             take_profit_refill=args.take_profit_refill,
                             initial_capital=args.bt_initial_capital,

@@ -123,7 +123,7 @@ $market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌�
 $market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
-$market_regime_ma250_hard_stop = $true  # $true 启用 | $false 禁用
+$market_regime_ma250_hard_stop = $false  # $true 启用 | $false 禁用
 $market_regime_ma250_threshold = 0.8     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
 $market_regime_ma250_exposure  = 0.2    # 触发后的仓位系数（0.0=完全空仓）
 
@@ -133,6 +133,11 @@ $early_exit_loss_threshold_list   = @(-0.07) #-0.07 # 亏损提前换出阈值�
 $early_exit_holding_ratio_list    = @(0.5)    #0.6  # 亏损提前换出最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
 $profit_extension_threshold_list  = @(0.1)   #0.1   # 盈利延续持有阈值（可多值，如 @(0.03, 0.05, 0.10)）
 $profit_extension_days_list       = @(3)     #5     # 盈利延续持有的额外天数（交易日，可多值，如 @(3, 5, 10)）
+
+# ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
+$use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈值（需同时开启 $enable_profit_based_holding）
+$atr_multiplier_list              = @(2.8)   # ATR倍数（可多值，如 @(1.5, 2.0, 2.5)）
+$atr_position_sizing              = $false   # $true 启用 1/ATR 反比仓位缩放（低波动股拿更多）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
 $take_profit_threshold_list   = @(0.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
@@ -185,6 +190,7 @@ $totalTasks = $algorithm_list.Length *
               $early_exit_holding_ratio_list.Length *
               $profit_extension_threshold_list.Length *
               $profit_extension_days_list.Length *
+              $atr_multiplier_list.Length *
               $take_profit_threshold_list.Length
 
 Write-Host ""
@@ -224,6 +230,7 @@ foreach ($early_exit_loss_threshold in $early_exit_loss_threshold_list) {
 foreach ($early_exit_holding_ratio in $early_exit_holding_ratio_list) {
 foreach ($profit_extension_threshold in $profit_extension_threshold_list) {
 foreach ($profit_extension_days in $profit_extension_days_list) {
+foreach ($atr_multiplier in $atr_multiplier_list) {
 foreach ($take_profit_threshold in $take_profit_threshold_list) {
 
     $count++
@@ -326,6 +333,14 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
                       " --profit-extension-days $profit_extension_days"
     }
 
+    if ($use_atr_for_early_exit) {
+        $pythonCmd += " --use-atr-for-early-exit --atr-multiplier $atr_multiplier"
+    }
+
+    if ($atr_position_sizing) {
+        $pythonCmd += " --atr-position-sizing"
+    }
+
     if ($null -ne $take_profit_threshold) {
         $pythonCmd += " --take-profit-threshold $take_profit_threshold"
         if (-not $take_profit_refill) {
@@ -388,7 +403,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（29 层）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（30 层）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

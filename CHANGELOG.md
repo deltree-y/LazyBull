@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.32.0] - 2026-03-30
+
+### 新增
+
+- **ATR 动态止损阈值**（`use_atr_for_early_exit` / `atr_multiplier`）
+  - 用个股 ATR%（ATR÷收盘价）替代固定 `early_exit_loss_threshold`，亏损超过 N×ATR% 时提前换出
+  - 高波动股阈值更宽、低波动股更严，比固定 -5% 更有个性
+  - 需同时开启 `enable_profit_based_holding`
+- **ATR 仓位缩放**（`atr_position_sizing`）
+  - Top-N 入选后按 1/ATR% 反比分配个股权重，低波动股获得更高权重（类 risk parity）
+  - 独立开关，与盈亏动态持仓无依赖关系
+- **ATR 因子**（`atr_14`）
+  - `factors/volatility.py` 新增 `calculate_atr()` 函数（True Range 的 14 日滚动均值）
+  - `factors/precompute_technical_factors.py` 加入 ATR 预计算，输出 `atr_14` 列
+  - `features/builder.py` 将 `atr_14` 纳入特征，可供 ML 模型训练使用
+- **参数传递链**：`batch_walk_forward.ps1` → `walk_forward.py` → `BacktestEngineML` 完整打通
+  - `batch_walk_forward.ps1`：新增 `$use_atr_for_early_exit`、`$atr_multiplier_list`、`$atr_position_sizing`
+  - `walk_forward.py`：新增 argparse 参数 `--use-atr-for-early-exit`、`--atr-multiplier`、`--atr-position-sizing`
+  - `compare_walk_forward.py`：新增 ATR 参数的中文表头映射
+
 ## [0.31.4] - 2026-03-29
 
 ### 修复
