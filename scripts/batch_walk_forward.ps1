@@ -90,7 +90,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $true   # $true 启用 | $false 禁用
-$start_model_version     = 8165    # 第一个 split 的模型版本号（$null = 不指定）
+$start_model_version     = 7969    # 第一个 split 的模型版本号（$null = 不指定）
                                    #7969/8151/8165:d3, 8137:d2
 
 ### 以下为回测功能选择
@@ -123,9 +123,10 @@ $market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌�
 $market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
-$market_regime_ma250_hard_stop = $false  # $true 启用 | $false 禁用
-$market_regime_ma250_threshold = 0.8     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
-$market_regime_ma250_exposure  = 0.2    # 触发后的仓位系数（0.0=完全空仓）
+$market_regime_ma250_hard_stop = $true  # $true 启用 | $false 禁用
+$market_regime_ma250_threshold = 1     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
+$market_regime_ma250_exposure  = 1     # 触发后的仓位系数（0.0=完全空仓）
+$ma250_atr_scaling             = $true  # $true 启用 ATR 动态仓位缩放（仓位=base×MA(ATR,250)/CurrentATR）
 
 # ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
 $enable_profit_based_holding      = $true  # $true 启用 | $false 禁用
@@ -137,7 +138,6 @@ $profit_extension_days_list       = @(3)     #5     # 盈利延续持有的额�
 # ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
 $use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈值（需同时开启 $enable_profit_based_holding）
 $atr_multiplier_list              = @(2.8)   # ATR倍数（可多值，如 @(1.5, 2.0, 2.5)）
-$atr_position_sizing              = $false   # $true 启用 1/ATR 反比仓位缩放（低波动股拿更多）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
 $take_profit_threshold_list   = @(0.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
@@ -323,6 +323,9 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
         $pythonCmd += " --market-regime-ma250-hard-stop" +
                       " --market-regime-ma250-threshold $market_regime_ma250_threshold" +
                       " --market-regime-ma250-exposure $market_regime_ma250_exposure"
+        if ($ma250_atr_scaling) {
+            $pythonCmd += " --ma250-atr-scaling"
+        }
     }
 
     if ($enable_profit_based_holding) {
@@ -335,10 +338,6 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
 
     if ($use_atr_for_early_exit) {
         $pythonCmd += " --use-atr-for-early-exit --atr-multiplier $atr_multiplier"
-    }
-
-    if ($atr_position_sizing) {
-        $pythonCmd += " --atr-position-sizing"
     }
 
     if ($null -ne $take_profit_threshold) {

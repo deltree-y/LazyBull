@@ -190,6 +190,7 @@ def precompute_market_state_features(
     daily_data: pd.DataFrame,
     trading_dates: list,
     daily_basic_data: pd.DataFrame = None,
+    tech_factor_df: pd.DataFrame = None,
 ) -> pd.DataFrame:
     """批量预计算所有交易日的市场状态特征（高性能版本）
 
@@ -201,6 +202,8 @@ def precompute_market_state_features(
         daily_data: 全量历史日线数据（含 ts_code, trade_date, pct_chg/ret_1, vol, amount）
         trading_dates: 已排序的交易日列表（YYYYMMDD 格式）
         daily_basic_data: 全量历史每日指标数据（可选，含 circ_mv, turnover_rate_f 等）
+        tech_factor_df: 批量预计算的技术指标数据（可选，含 atr_pct_14），
+            用于计算市场级 ATR 特征（mkt_atr_pct, mkt_atr_pct_ma250）
 
     Returns:
         以 trade_date 为索引的 DataFrame，包含 6 个市场状态列：
@@ -363,6 +366,17 @@ def precompute_market_state_features(
     ma_250 = mkt_cumret.rolling(window=MA250, min_periods=50).mean()
     mkt_ma250_ratio = (mkt_cumret / ma_250.replace(0, np.nan)).fillna(1.0)
 
+    # --- 步骤 7.5：市场级 ATR 特征 ---
+    # 从技术指标预计算数据中提取每日 atr_pct_14 的截面中位数，用于 ATR 动态仓位缩放
+    trading_dates_index = pd.Index(trading_dates, name='trade_date')
+    if tech_factor_df is not None and 'atr_pct_14' in tech_factor_df.columns:
+        atr_daily_median = tech_factor_df.groupby('trade_date')['atr_pct_14'].median()
+        mkt_atr_pct = atr_daily_median.reindex(trading_dates).ffill()
+        mkt_atr_pct_ma250 = mkt_atr_pct.rolling(window=250, min_periods=50).mean()
+    else:
+        mkt_atr_pct = pd.Series(np.nan, index=trading_dates)
+        mkt_atr_pct_ma250 = pd.Series(np.nan, index=trading_dates)
+
     # --- 步骤 8：组装结果 DataFrame ---
     result = pd.DataFrame(
         {
@@ -377,8 +391,10 @@ def precompute_market_state_features(
             'mkt_ret_avg_60': mkt_ret_avg_60.values,
             'mkt_ret_vol_20': mkt_ret_vol_20.values,
             'mkt_ma250_ratio': mkt_ma250_ratio.values,
+            'mkt_atr_pct': mkt_atr_pct.values,
+            'mkt_atr_pct_ma250': mkt_atr_pct_ma250.values,
         },
-        index=pd.Index(trading_dates, name='trade_date'),
+        index=trading_dates_index,
     )
 
     logger.debug(

@@ -1170,6 +1170,8 @@ _REQUIRED_FACTOR_COLS = [
     "neu_ret_5",                                            # 行业中性化收益
     "alpha_industry_5",                                     # 行业 alpha
     "ind_momentum_rank",                                    # 行业动量
+    "mkt_atr_pct",                                          # 市场级 ATR 当前值
+    "mkt_atr_pct_ma250",                                    # 市场级 ATR 250 日均值
 ]
 
 

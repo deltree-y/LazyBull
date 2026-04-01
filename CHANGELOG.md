@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.35.0] - 2026-03-31
+
+### 新增
+
+- **每日回测进度日志新增持仓目标与当前仓位显示**
+  - `engine.py` 的每日进度日志从“持仓[当前持仓数]只”调整为“持仓/仓位[当前持仓数/目标持仓数]/[当前仓位%]”
+  - 当前仓位按当日股票市值占组合总资产比例计算，便于快速识别未满仓、风控降仓或现金沉淀
+  - 分批调仓时目标持仓数会按批次数自动放大，日志更符合组合整体视角
+  - 新增单元测试覆盖日志格式和分批调仓目标持仓数计算
+
+## [0.34.0] - 2026-03-31
+
+### 新增
+
+- **`build_clean_features.py` 新增 `--build-all` 参数**
+  - 一次性启用基本面、另类数据、融资融券、筹码胜率、基金持仓、业绩快报六类可选因子，避免手工逐个输入开关
+  - 保持行业中性化开关独立，不因 `--build-all` 隐式改变特征后处理逻辑
+  - 新增单元测试覆盖 `--build-all` 打开全部可选因子、以及不启用时保持原值不变的行为
+
+## [0.33.3] - 2026-03-31
+
+### 修复
+
+- **市场级 ATR 特征列未进入缓存失效判定，导致旧 features 持续缺列**
+  - `features/ensure.py` 将 `mkt_atr_pct`、`mkt_atr_pct_ma250` 加入 `_REQUIRED_FACTOR_COLS`
+  - `build_clean_features.py` 遇到旧 schema 时不再直接跳过，而是明确记录警告并自动重建
+  - 修复后旧版 `cs_train` 缓存不会再长期缺少市场级 ATR 列，避免 `engine_ml.py` 持续打印“缺少有效ATR数据”
+
+## [0.33.2] - 2026-03-31
+
+### 优化
+
+- **MA250 模块日志改为展示完整决策链**
+  - `engine_ml.py` 新增 MA250 日志格式化函数，明确输出 `ratio` 与 `threshold` 的比较结果、是否触发硬条件、`hard_stop_exposure`、`base_after_ma250`、`final_after_atr`
+  - ATR 缩放开启时追加输出 `scale`、`atr_ma250`、`atr_now`，避免 `base=20%, final=20%` 这类日志难以判断具体原因
+  - ATR 数据缺失时明确标注 `final_after_atr=base_after_ma250`，减少误读
+
+## [0.33.1] - 2026-03-31
+
+### 修复
+
+- **MA250 硬条件可观测性不足，导致开关看起来“无效”**
+  - `walk_forward.py` 在 OOS 回测前新增 MA250 阈值命中统计，分别输出交易日命中数与调仓信号日命中数
+  - 当 MA250 硬条件只命中过普通交易日、或完全没有命中调仓信号日时，明确输出提示日志，说明结果可能与关闭时接近
+  - `compare_walk_forward.py` 补充 `market_regime_ma250_hard_stop`、`market_regime_ma250_threshold`、`market_regime_ma250_exposure` 参数列，避免汇总表中丢失关键对比维度
+
+## [0.33.0] - 2026-03-31
+
+### 新增
+
+- **MA250 ATR 动态仓位缩放**（`market_regime_ma250_atr_scaling`）
+  - 在 MA250 模块中新增第二步 ATR 缩放：`仓位B = 基准A × MA(ATR,250) / CurrentATR`
+  - 市场级 ATR 使用每日全市场 atr_pct_14 截面中位数，抗异常值
+  - 高波动自动降仓、低波动允许恢复到满仓（上限 1.0，下限 min_exposure）
+  - 新增市场状态特征 `mkt_atr_pct`、`mkt_atr_pct_ma250`
+  - 参数传递：`--ma250-atr-scaling` argparse 参数，batch_walk_forward.ps1 / compare_walk_forward.py 同步更新
+
+### 移除
+
+- **ATR 仓位缩放**（`atr_position_sizing`）
+  - 删除个股层面 1/ATR 反比权重分配功能，由 MA250 ATR 整体仓位缩放替代
+  - 清理 engine.py、engine_ml.py、walk_forward.py、batch_walk_forward.ps1、compare_walk_forward.py 中的相关代码
+
 ## [0.32.0] - 2026-03-30
 
 ### 新增

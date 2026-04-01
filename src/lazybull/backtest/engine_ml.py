@@ -13,6 +13,57 @@ from ..common.date_utils import to_trade_date_str
 from .engine import BacktestEngine
 
 
+def _format_ma250_decision_log(
+    date: pd.Timestamp,
+    ma250_ratio: float,
+    threshold: float,
+    hard_stop_exposure: float,
+    base_exposure: float,
+    final_exposure: float,
+    ma250_triggered: bool,
+    atr_scaling_enabled: bool,
+    atr_ratio: Optional[float] = None,
+    mkt_atr: Optional[float] = None,
+    mkt_atr_ma250: Optional[float] = None,
+) -> str:
+    """格式化 MA250 模块日志，明确显示触发原因与两步仓位结果。"""
+    if np.isnan(ma250_ratio):
+        trigger_text = f"ratio=NaN, threshold={threshold:.3f}, 条件状态=未知"
+    elif ma250_triggered:
+        trigger_text = f"ratio={ma250_ratio:.3f} < threshold={threshold:.3f}, 触发硬条件"
+    else:
+        trigger_text = f"ratio={ma250_ratio:.3f} >= threshold={threshold:.3f}, 未触发硬条件"
+
+    has_valid_atr = (
+        atr_scaling_enabled
+        and atr_ratio is not None
+        and mkt_atr is not None
+        and mkt_atr_ma250 is not None
+        and not np.isnan(atr_ratio)
+        and not np.isnan(mkt_atr)
+        and not np.isnan(mkt_atr_ma250)
+        and mkt_atr > 0
+    )
+    if has_valid_atr:
+        atr_text = (
+            f"ATR缩放=开启(scale={atr_ratio:.3f}, "
+            f"atr_ma250={mkt_atr_ma250:.2%}, atr_now={mkt_atr:.2%})"
+        )
+    elif atr_scaling_enabled:
+        atr_text = "ATR缩放=开启(缺少有效ATR数据, final_after_atr=base_after_ma250)"
+    else:
+        atr_text = "ATR缩放=关闭"
+
+    return (
+        f"MA250模块: {date.date()}, "
+        f"{trigger_text}, "
+        f"hard_stop_exposure={hard_stop_exposure:.1%}, "
+        f"base_after_ma250={base_exposure:.1%}, "
+        f"final_after_atr={final_exposure:.1%}, "
+        f"{atr_text}"
+    )
+
+
 class BacktestEngineML(BacktestEngine):
     """支持 ML 信号的回测引擎
 
@@ -51,6 +102,7 @@ class BacktestEngineML(BacktestEngine):
         market_regime_ma250_hard_stop: bool = False,
         market_regime_ma250_threshold: float = 1.0,
         market_regime_ma250_exposure: float = 0.0,
+        market_regime_ma250_atr_scaling: bool = False,
         **kwargs,
     ):
         """初始化 ML 回测引擎
@@ -80,6 +132,9 @@ class BacktestEngineML(BacktestEngine):
             market_regime_ma250_threshold: MA250 硬条件触发阈值（大盘收益曲线/MA250），
                 默认 1.0（即大盘跌破长期均线时触发）
             market_regime_ma250_exposure: MA250 硬条件触发后的仓位系数，默认 0.0（完全空仓）
+            market_regime_ma250_atr_scaling: 是否在 MA250 模块中启用 ATR 动态仓位缩放，
+                默认 False。开启后仓位 = base × MA(ATR,250)/CurrentATR，
+                高波动降仓、低波动恢复（上限 1.0，下限 min_exposure）
             **kwargs: 其他参数传递给父类 BacktestEngine
         """
         super().__init__(**kwargs)
@@ -101,6 +156,13 @@ class BacktestEngineML(BacktestEngine):
         self.market_regime_ma250_hard_stop = market_regime_ma250_hard_stop
         self.market_regime_ma250_threshold = market_regime_ma250_threshold
         self.market_regime_ma250_exposure = market_regime_ma250_exposure
+        self.market_regime_ma250_atr_scaling = market_regime_ma250_atr_scaling
+
+        # 校验：ATR 缩放依赖 MA250 硬条件
+        if market_regime_ma250_atr_scaling and not market_regime_ma250_hard_stop:
+            logger.warning(
+                "ma250_atr_scaling=True 但 ma250_hard_stop=False，ATR 缩放不会生效"
+            )
 
         regime_info = ""
         if market_regime_enabled:
@@ -125,9 +187,10 @@ class BacktestEngineML(BacktestEngine):
             ind_filter_info = f", 行业动量过滤=开启(剔除后{industry_momentum_bottom_pct*100:.0f}%行业)"
         ma250_info = ""
         if market_regime_ma250_hard_stop:
+            atr_tag = ", ATR缩放=开启" if market_regime_ma250_atr_scaling else ""
             ma250_info = (
                 f", MA250硬条件=开启(threshold={market_regime_ma250_threshold}, "
-                f"exposure={market_regime_ma250_exposure})"
+                f"exposure={market_regime_ma250_exposure}{atr_tag})"
             )
         logger.info(
             f"ML 回测引擎初始化: 特征数据覆盖 {len(features_by_date)} 个交易日"
@@ -224,55 +287,6 @@ class BacktestEngineML(BacktestEngine):
             return {}
         return {'buy_atr_pct': float(atr_pct)}
 
-    def _normalize_signals(
-        self, signals: Dict[str, float], date: pd.Timestamp
-    ) -> Dict[str, float]:
-        """当 atr_position_sizing=True 时，按 1/ATR% 反比分配个股权重
-
-        ATR 低的股票获得更高权重（低波动拿更多），ATR 高的股票获得更低权重。
-        无 ATR 数据的股票补为平均 inv_atr，避免被完全排除出持仓。
-        若无任何有效 ATR 数据，回退到父类的 equal/score 权重方法。
-        """
-        if not self.atr_position_sizing:
-            return super()._normalize_signals(signals, date)
-
-        date_str = date.strftime('%Y%m%d')
-        features_df = self.features_by_date.get(date_str)
-
-        if features_df is None or 'atr_pct_14' not in features_df.columns:
-            logger.warning(f"ATR仓位缩放：{date.date()} 无 atr_pct_14 数据，回退到父类权重方法")
-            return super()._normalize_signals(signals, date)
-
-        inv_atr: Dict[str, float] = {}
-        for stock in signals:
-            row = features_df[features_df['ts_code'] == stock]
-            if row.empty:
-                continue
-            atr_pct = row['atr_pct_14'].iloc[0]
-            if pd.isna(atr_pct) or atr_pct <= 0:
-                continue
-            inv_atr[stock] = 1.0 / atr_pct
-
-        if not inv_atr:
-            logger.warning(f"ATR仓位缩放：{date.date()} 无有效 ATR，回退到父类权重方法")
-            return super()._normalize_signals(signals, date)
-
-        # 无 ATR 数据的股票补为平均 inv_atr，避免被完全排除
-        mean_inv = sum(inv_atr.values()) / len(inv_atr)
-        for stock in signals:
-            if stock not in inv_atr:
-                inv_atr[stock] = mean_inv
-
-        total = sum(inv_atr.values())
-        result = {stock: inv_atr[stock] / total for stock in signals}
-
-        if self.verbose:
-            sample = list(result.items())[:3]
-            weights_str = ", ".join(f"{s}: {w:.4f}" for s, w in sample)
-            logger.info(f"  权重方法: atr (1/ATR反比), 示例权重（前3只）: {weights_str}")
-
-        return result
-
     # ── 市场择时仓位管理 ──────────────────────────────────────────────
 
     def _get_feature_scalar(self, features_df: pd.DataFrame, col: str) -> float:
@@ -281,6 +295,24 @@ class BacktestEngineML(BacktestEngine):
             return np.nan
         val = features_df[col].iloc[0]
         return float(val) if not pd.isna(val) else np.nan
+
+    def _apply_ma250_atr_scaling(
+        self, base_exposure: float, features_df: pd.DataFrame
+    ) -> float:
+        """ATR 动态仓位缩放: B = clip(A * MA(ATR,250) / CurrentATR, min_exposure, 1.0)
+
+        高波动时 ratio<1 → 降仓；低波动时 ratio>1 → 允许仓位恢复到满仓但不超过 1.0。
+        无 ATR 数据时回退到 base_exposure。
+        """
+        mkt_atr = self._get_feature_scalar(features_df, 'mkt_atr_pct')
+        mkt_atr_ma250 = self._get_feature_scalar(features_df, 'mkt_atr_pct_ma250')
+
+        if np.isnan(mkt_atr) or np.isnan(mkt_atr_ma250) or mkt_atr <= 0:
+            return base_exposure
+
+        atr_ratio = mkt_atr_ma250 / mkt_atr
+        exposure = base_exposure * atr_ratio
+        return float(np.clip(exposure, self.market_regime_min_exposure, 1.0))
 
     def _get_market_regime_exposure(self, date: pd.Timestamp) -> float:
         """根据市场状态计算仓位系数
@@ -299,16 +331,52 @@ class BacktestEngineML(BacktestEngine):
         if features_df is None or len(features_df) == 0:
             return 1.0
 
-        # MA250 硬条件检查（优先级最高，超越其他择时模式）
+        # MA250 模块（优先级最高，超越其他择时模式）
         if self.market_regime_ma250_hard_stop:
             ma250_ratio = self._get_feature_scalar(features_df, 'mkt_ma250_ratio')
+
+            # 第一步：MA250 基准仓位 A
             if not np.isnan(ma250_ratio) and ma250_ratio < self.market_regime_ma250_threshold:
-                exposure = self.market_regime_ma250_exposure
+                base_exposure = self.market_regime_ma250_exposure
+                ma250_triggered = True
+            else:
+                base_exposure = 1.0
+                ma250_triggered = False
+
+            # 第二步：ATR 动态缩放 B = A * MA(ATR,250) / CurrentATR
+            atr_ratio = None
+            mkt_atr = None
+            mkt_atr_ma250 = None
+            if self.market_regime_ma250_atr_scaling:
+                mkt_atr = self._get_feature_scalar(features_df, 'mkt_atr_pct')
+                mkt_atr_ma250 = self._get_feature_scalar(features_df, 'mkt_atr_pct_ma250')
+                if (
+                    not np.isnan(mkt_atr)
+                    and not np.isnan(mkt_atr_ma250)
+                    and mkt_atr > 0
+                ):
+                    atr_ratio = mkt_atr_ma250 / mkt_atr
+                exposure = self._apply_ma250_atr_scaling(base_exposure, features_df)
+            else:
+                exposure = base_exposure
+
+            # MA250 触发或 ATR 缩放导致降仓时，短路返回（不进入其他择时模式）
+            if ma250_triggered or exposure < 1.0:
                 if abs(exposure - self._last_regime_exposure) > 1e-6:
                     logger.warning(
-                        f"MA250硬条件触发: {date.date()}, "
-                        f"mkt_ma250_ratio={ma250_ratio:.3f} < {self.market_regime_ma250_threshold}, "
-                        f"强制仓位 {self._last_regime_exposure:.0%} → {exposure:.0%}"
+                        _format_ma250_decision_log(
+                            date=date,
+                            ma250_ratio=ma250_ratio,
+                            threshold=self.market_regime_ma250_threshold,
+                            hard_stop_exposure=self.market_regime_ma250_exposure,
+                            base_exposure=base_exposure,
+                            final_exposure=exposure,
+                            ma250_triggered=ma250_triggered,
+                            atr_scaling_enabled=self.market_regime_ma250_atr_scaling,
+                            atr_ratio=atr_ratio,
+                            mkt_atr=mkt_atr,
+                            mkt_atr_ma250=mkt_atr_ma250,
+                        )
                     )
                 return exposure
 

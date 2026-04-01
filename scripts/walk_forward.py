@@ -75,6 +75,71 @@ warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched de
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*DataFrame concatenation with empty or all-NA entries.*")
 
 
+def summarize_ma250_signal_coverage(
+    trade_dates: List[str],
+    features_by_date: Dict[str, pd.DataFrame],
+    threshold: float,
+    rebalance_freq: int,
+    stagger_tranches: int = 1,
+) -> Dict[str, object]:
+    """统计 MA250 阈值在交易日与调仓信号日上的命中情况。"""
+    if rebalance_freq <= 0:
+        raise ValueError(f"rebalance_freq 必须为正整数，当前值: {rebalance_freq}")
+
+    sorted_trade_dates = sorted(trade_dates)
+
+    def get_ratio(trade_date: str) -> Optional[float]:
+        features_df = features_by_date.get(trade_date)
+        if features_df is None or len(features_df) == 0:
+            return None
+        if "mkt_ma250_ratio" not in features_df.columns:
+            return None
+        ratio = features_df["mkt_ma250_ratio"].iloc[0]
+        if pd.isna(ratio):
+            return None
+        return float(ratio)
+
+    hit_trade_dates = []
+    for trade_date in sorted_trade_dates:
+        ratio = get_ratio(trade_date)
+        if ratio is not None and ratio < threshold:
+            hit_trade_dates.append((trade_date, ratio))
+
+    if stagger_tranches <= 1:
+        signal_dates = sorted_trade_dates[::rebalance_freq]
+    else:
+        offset = max(1, rebalance_freq // stagger_tranches)
+        signal_date_set = set()
+        for tranche_idx in range(stagger_tranches):
+            start_idx = tranche_idx * offset
+            signal_date_set.update(sorted_trade_dates[start_idx::rebalance_freq])
+        signal_dates = sorted(signal_date_set)
+
+    hit_signal_dates = []
+    for trade_date in signal_dates:
+        ratio = get_ratio(trade_date)
+        if ratio is not None and ratio < threshold:
+            hit_signal_dates.append((trade_date, ratio))
+
+    first_hit_trade_date, first_hit_trade_ratio = (
+        hit_trade_dates[0] if hit_trade_dates else (None, None)
+    )
+    first_hit_signal_date, first_hit_signal_ratio = (
+        hit_signal_dates[0] if hit_signal_dates else (None, None)
+    )
+
+    return {
+        "trade_days": len(sorted_trade_dates),
+        "signal_days": len(signal_dates),
+        "hit_trade_days": len(hit_trade_dates),
+        "hit_signal_days": len(hit_signal_dates),
+        "first_hit_trade_date": first_hit_trade_date,
+        "first_hit_trade_ratio": first_hit_trade_ratio,
+        "first_hit_signal_date": first_hit_signal_date,
+        "first_hit_signal_ratio": first_hit_signal_ratio,
+    }
+
+
 def run_oos_backtest(
     model_version: int,
     bt_start: str,
@@ -101,6 +166,7 @@ def run_oos_backtest(
     market_regime_ma250_hard_stop: bool = False,
     market_regime_ma250_threshold: float = 1.0,
     market_regime_ma250_exposure: float = 0.0,
+    market_regime_ma250_atr_scaling: bool = False,
     bt_weight_method: str = "equal",
     industry_momentum_filter: bool = False,
     industry_momentum_bottom_pct: float = 0.2,
@@ -112,7 +178,6 @@ def run_oos_backtest(
     profit_extension_days: int = 5,
     use_atr_for_early_exit: bool = False,
     atr_multiplier: float = 2.0,
-    atr_position_sizing: bool = False,
     take_profit_threshold: Optional[float] = None,
     take_profit_refill: bool = True,
     initial_capital: float = 1000000.0,
@@ -205,6 +270,38 @@ def run_oos_backtest(
         match = re.search(r'(\d+)', label_column)
         bt_rebalance_freq = int(match.group(1)) if match else 20
 
+    if market_regime_ma250_hard_stop:
+        ma250_stats = summarize_ma250_signal_coverage(
+            trade_dates=trade_dates,
+            features_by_date=features_by_date,
+            threshold=market_regime_ma250_threshold,
+            rebalance_freq=bt_rebalance_freq,
+            stagger_tranches=stagger_tranches,
+        )
+        logger.info(
+            "MA250硬条件统计: "
+            f"threshold={market_regime_ma250_threshold}, "
+            f"交易日命中 {ma250_stats['hit_trade_days']}/{ma250_stats['trade_days']}, "
+            f"调仓信号日命中 {ma250_stats['hit_signal_days']}/{ma250_stats['signal_days']}"
+        )
+        if ma250_stats["first_hit_signal_date"] is not None:
+            logger.info(
+                "MA250硬条件首次命中调仓信号日: "
+                f"{ma250_stats['first_hit_signal_date']} "
+                f"(mkt_ma250_ratio={ma250_stats['first_hit_signal_ratio']:.3f})"
+            )
+        elif ma250_stats["first_hit_trade_date"] is not None:
+            logger.warning(
+                "MA250硬条件在当前 OOS 窗口仅命中过普通交易日，"
+                f"未命中调仓信号日；首次交易日命中为 {ma250_stats['first_hit_trade_date']} "
+                f"(mkt_ma250_ratio={ma250_stats['first_hit_trade_ratio']:.3f})"
+            )
+        elif ma250_stats["signal_days"] > 0:
+            logger.warning(
+                "MA250硬条件已开启，但当前 OOS 窗口没有任何调仓信号日命中；"
+                "回测结果可能与关闭时接近"
+            )
+
     # 5. 运行回测
     engine = BacktestEngineML(
         universe=universe,
@@ -231,6 +328,7 @@ def run_oos_backtest(
         market_regime_ma250_hard_stop=market_regime_ma250_hard_stop,
         market_regime_ma250_threshold=market_regime_ma250_threshold,
         market_regime_ma250_exposure=market_regime_ma250_exposure,
+        market_regime_ma250_atr_scaling=market_regime_ma250_atr_scaling,
         industry_momentum_filter=industry_momentum_filter,
         industry_momentum_bottom_pct=industry_momentum_bottom_pct,
         stagger_tranches=stagger_tranches,
@@ -241,7 +339,6 @@ def run_oos_backtest(
         profit_extension_days=profit_extension_days,
         use_atr_for_early_exit=use_atr_for_early_exit,
         atr_multiplier=atr_multiplier,
-        atr_position_sizing=atr_position_sizing,
         take_profit_threshold=take_profit_threshold,
         take_profit_refill=take_profit_refill,
     )
@@ -1240,6 +1337,7 @@ def write_walk_forward_summary(
         "market_regime_ma250_hard_stop": getattr(args, 'market_regime_ma250_hard_stop', False),
         "market_regime_ma250_threshold": getattr(args, 'market_regime_ma250_threshold', 1.0),
         "market_regime_ma250_exposure": getattr(args, 'market_regime_ma250_exposure', 0.0),
+        "market_regime_ma250_atr_scaling": getattr(args, 'market_regime_ma250_atr_scaling', False),
         "stagger_tranches": getattr(args, 'stagger_tranches', 1),
         "enable_profit_based_holding": getattr(args, 'enable_profit_based_holding', False),
         "early_exit_loss_threshold": getattr(args, 'early_exit_loss_threshold', -0.05),
@@ -1248,7 +1346,6 @@ def write_walk_forward_summary(
         "profit_extension_days": getattr(args, 'profit_extension_days', 5),
         "use_atr_for_early_exit": getattr(args, 'use_atr_for_early_exit', False),
         "atr_multiplier": getattr(args, 'atr_multiplier', 2.0),
-        "atr_position_sizing": getattr(args, 'atr_position_sizing', False),
         "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
         "take_profit_refill": getattr(args, 'take_profit_refill', True),
     }
@@ -1848,6 +1945,13 @@ def main():
         default=0.0,
         help="MA250 硬条件触发后的仓位系数，默认 0.0（完全空仓）"
     )
+    parser.add_argument(
+        "--ma250-atr-scaling",
+        action="store_true",
+        default=False,
+        dest="market_regime_ma250_atr_scaling",
+        help="MA250 模块启用 ATR 动态仓位缩放：仓位 = base × MA(ATR,250)/CurrentATR"
+    )
     # 盈亏动态持仓参数
     parser.add_argument(
         "--enable-profit-based-holding",
@@ -1890,12 +1994,6 @@ def main():
         type=float,
         default=2.0,
         help="ATR 倍数，亏损超过 N×ATR%% 时提前换出，默认 2.0"
-    )
-    parser.add_argument(
-        "--atr-position-sizing",
-        action="store_true",
-        default=False,
-        help="按 1/ATR 反比分配个股权重（低波动股拿更多），与 --enable-profit-based-holding 独立"
     )
     parser.add_argument(
         "--take-profit-threshold",
@@ -1973,6 +2071,8 @@ def main():
                     regime_detail += f", combine={args.market_regime_combine_method}, trend_guard={args.market_regime_trend_guard}"
                 regime_detail += f", dd_guard={args.market_regime_drawdown_guard}, dd_threshold={args.market_regime_drawdown_threshold}"
             logger.info(f"  市场择时: 开启 ({regime_detail})")
+        else:
+            logger.info(f"  市场择时: 关闭")
     logger.info(f"数据目录: {args.data_root}")
     
     try:
@@ -2097,6 +2197,7 @@ def main():
                             market_regime_ma250_hard_stop=args.market_regime_ma250_hard_stop,
                             market_regime_ma250_threshold=args.market_regime_ma250_threshold,
                             market_regime_ma250_exposure=args.market_regime_ma250_exposure,
+                            market_regime_ma250_atr_scaling=args.market_regime_ma250_atr_scaling,
                             bt_weight_method=args.bt_weight_method,
                             industry_momentum_filter=args.industry_momentum_filter,
                             industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,
@@ -2108,7 +2209,6 @@ def main():
                             profit_extension_days=args.profit_extension_days,
                             use_atr_for_early_exit=args.use_atr_for_early_exit,
                             atr_multiplier=args.atr_multiplier,
-                            atr_position_sizing=args.atr_position_sizing,
                             take_profit_threshold=args.take_profit_threshold,
                             take_profit_refill=args.take_profit_refill,
                             initial_capital=args.bt_initial_capital,

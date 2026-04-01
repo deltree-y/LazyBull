@@ -68,7 +68,6 @@ class BacktestEngine:
         profit_extension_days: int = 5,  # 盈利延续持有额外天数（交易日）
         use_atr_for_early_exit: bool = False,  # 是否用个股 ATR 动态替代固定止损阈值
         atr_multiplier: float = 2.0,  # ATR 倍数（亏损超过 N×ATR% 时触发提前换出）
-        atr_position_sizing: bool = False,  # 是否按 1/ATR 反比分配个股权重
         take_profit_threshold: Optional[float] = None,  # 整体持仓止盈阈值（None=禁用，如0.15=整体浮盈15%止盈）
         take_profit_refill: bool = True,  # 整体止盈后是否触发自动补位买入
     ):
@@ -173,8 +172,6 @@ class BacktestEngine:
         self.profit_extension_days = profit_extension_days
         self.use_atr_for_early_exit = use_atr_for_early_exit
         self.atr_multiplier = atr_multiplier
-        self.atr_position_sizing = atr_position_sizing
-
         # 整体持仓止盈参数
         self.take_profit_threshold = take_profit_threshold
         self.take_profit_refill = take_profit_refill
@@ -376,24 +373,17 @@ class BacktestEngine:
             portfolio_value = self._calculate_portfolio_value(date)
 
             # 输出回测进度（含持仓和收益信息）
-            total_return = (portfolio_value / self.initial_capital - 1) * 100
             trading_days = idx + 1
-            ann_return = (
-                ((portfolio_value / self.initial_capital) ** (252 / trading_days) - 1) * 100
-                if trading_days > 0 else 0.0
-            )
-            rebalance_return_str = (
-                f"{(portfolio_value / self._last_rebalance_nav - 1) * 100:+.2f}%"
-                if self._last_rebalance_nav and self._last_rebalance_nav > 0
-                else "N/A"
-            )
             # 计算本轮调仓周期内的第几天（1-based）
             cycle_day = idx % self.rebalance_freq + 1
             logger.info(
-                f"回测[{date.date()}]: {trading_days}/{total_days} 天 - "
-                f"本轮第[{cycle_day}/{self.rebalance_freq}]天, "
-                f"持仓[{len(self.positions)}]只, "
-                f"收益:本调仓/本轮/年化:{rebalance_return_str}/{total_return:+.2f}%/{ann_return:+.2f}%)"
+                self._format_daily_progress_log(
+                    date=date,
+                    trading_days=trading_days,
+                    total_days=total_days,
+                    cycle_day=cycle_day,
+                    portfolio_value=portfolio_value,
+                )
             )
 
             self.portfolio_values.append(
@@ -433,6 +423,53 @@ class BacktestEngine:
             )
 
         return nav_df
+
+    def _get_target_position_count(self) -> int:
+        """获取组合当前期望的目标持仓数。"""
+        target_n = getattr(self.signal, "top_n", None)
+        if isinstance(target_n, int) and target_n > 0:
+            return target_n * self.stagger_tranches
+        return len(self.positions)
+
+    def _calculate_current_exposure_pct(self, portfolio_value: float) -> float:
+        """按当日组合市值计算股票仓位比例。"""
+        if portfolio_value <= 0:
+            return 0.0
+
+        market_value = max(portfolio_value - self.current_capital, 0.0)
+        exposure_pct = market_value / portfolio_value * 100
+        return min(exposure_pct, 100.0)
+
+    def _format_daily_progress_log(
+        self,
+        date: pd.Timestamp,
+        trading_days: int,
+        total_days: int,
+        cycle_day: int,
+        portfolio_value: float,
+    ) -> str:
+        """格式化每日回测进度日志。"""
+        total_return = (portfolio_value / self.initial_capital - 1) * 100
+        ann_return = (
+            ((portfolio_value / self.initial_capital) ** (252 / trading_days) - 1) * 100
+            if trading_days > 0 else 0.0
+        )
+        rebalance_return_str = (
+            f"{(portfolio_value / self._last_rebalance_nav - 1) * 100:+.2f}%"
+            if self._last_rebalance_nav and self._last_rebalance_nav > 0
+            else "N/A"
+        )
+        target_position_count = self._get_target_position_count()
+        current_exposure_pct = self._calculate_current_exposure_pct(portfolio_value)
+
+        return (
+            f"回测[{date.date()}]: {trading_days}/{total_days} 天 - "
+            f"本轮第[{cycle_day}/{self.rebalance_freq}]天, "
+            f"持仓/仓位[{len(self.positions)}/{target_position_count}]/"
+            f"[{current_exposure_pct:.2f}%], "
+            f"收益:本调仓/本轮/年化:{rebalance_return_str}/"
+            f"{total_return:+.2f}%/{ann_return:+.2f}%)"
+        )
 
     def _build_nav_series(self, current_date: pd.Timestamp) -> Optional[pd.Series]:
         """构建用于 ECT 的历史 NAV 序列

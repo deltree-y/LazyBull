@@ -1868,6 +1868,7 @@ class FeatureBuilder:
                     daily_data=sliced_daily_adj,
                     trading_dates=trading_dates,
                     daily_basic_data=sliced_daily_basic,
+                    tech_factor_df=self._tech_factor_cache,
                 )
 
             # 按 trade_date O(1) 取值

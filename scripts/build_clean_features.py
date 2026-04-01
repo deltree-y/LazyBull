@@ -24,6 +24,27 @@ from loguru import logger
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataCleaner, DataLoader, Storage
 from src.lazybull.features import FeatureBuilder
+from src.lazybull.features.ensure import _check_features_schema
+
+
+OPTIONAL_FEATURE_FLAG_ATTRS = (
+    "enable_fundamental_features",
+    "enable_alt_features",
+    "enable_margin_features",
+    "enable_cyq_features",
+    "enable_fund_features",
+    "enable_express_features",
+)
+
+
+def apply_build_all_feature_flags(args: argparse.Namespace) -> argparse.Namespace:
+    """当 --build-all 启用时，统一打开全部可选因子开关。"""
+    if not getattr(args, "build_all", False):
+        return args
+
+    for attr in OPTIONAL_FEATURE_FLAG_ATTRS:
+        setattr(args, attr, True)
+    return args
 
 
 def build_clean_data(
@@ -401,9 +422,11 @@ def build_features_data(
         try:
             # 检查特征是否已存在
             if not force and storage.is_feature_exists(trade_date):
-                logger.info(f"  特征已存在，跳过")
-                skip_count += 1
-                continue
+                if _check_features_schema(storage, trade_date):
+                    logger.info(f"  特征已存在，跳过")
+                    skip_count += 1
+                    continue
+                logger.warning("  特征缓存缺少必要列，将重新构建")
             
             # 获取当日基本面数据
             funda_today = None
@@ -513,6 +536,11 @@ def main():
         help="预测时间窗口（交易日）（默认：20）"
     )
     parser.add_argument(
+        "--build-all",
+        action="store_true",
+        help="启用全部可选因子（基本面、另类数据、融资融券、筹码胜率、基金持仓、业绩快报；不含行业中性化）"
+    )
+    parser.add_argument(
         "--enable-fundamental-features",
         action="store_true",
         help="启用基本面因子（ROE、营收增速等），需先下载 fina_indicator 数据"
@@ -544,6 +572,7 @@ def main():
     )
 
     args = parser.parse_args()
+    args = apply_build_all_feature_flags(args)
     
     # 初始化日志
     setup_logger(log_level="INFO")
@@ -555,6 +584,7 @@ def main():
     logger.info(f"仅构建clean: {'是' if args.only_clean else '否'}")
     logger.info(f"仅构建features: {'是' if args.only_features else '否'}")
     logger.info(f"强制重新构建: {'是' if args.force else '否'}")
+    logger.info(f"全部可选因子: {'启用' if args.build_all else '禁用'}")
     logger.info(f"基本面因子: {'启用' if args.enable_fundamental_features else '禁用'}")
     logger.info(f"另类数据因子: {'启用' if args.enable_alt_features else '禁用'}")
     logger.info(f"融资融券因子: {'启用' if args.enable_margin_features else '禁用'}")
