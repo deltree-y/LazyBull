@@ -68,6 +68,8 @@ from src.lazybull.ml.run_logger import (
     TrainingRunRecord,
     write_training_run_to_csv
 )
+from src.lazybull.risk.equity_curve import create_equity_curve_config_from_dict
+from src.lazybull.risk.stop_loss import create_stop_loss_config_from_dict
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
@@ -152,6 +154,24 @@ def run_oos_backtest(
     bt_top_n: int = 30,
     bt_rebalance_freq: Optional[int] = None,
     data_root: str = "./data",
+    bt_exclude_st: bool = True,
+    bt_min_list_days: int = 365,
+    bt_sell_timing: str = "open",
+    bt_max_weight_per_stock: Optional[float] = None,
+    bt_max_per_industry: Optional[int] = None,
+    bt_stop_loss_enabled: bool = False,
+    bt_stop_loss_drawdown_pct: float = 30.0,
+    bt_stop_loss_trailing_enabled: bool = False,
+    bt_stop_loss_trailing_pct: float = 15.0,
+    bt_stop_loss_consecutive_limit_down: int = 2,
+    bt_equity_curve_enabled: bool = False,
+    bt_equity_curve_drawdown_thresholds: Optional[List[float]] = None,
+    bt_equity_curve_exposure_levels: Optional[List[float]] = None,
+    bt_equity_curve_ma_short: int = 5,
+    bt_equity_curve_ma_long: int = 20,
+    bt_equity_curve_recovery_mode: str = "gradual",
+    bt_equity_curve_recovery_step: float = 0.25,
+    bt_equity_curve_recovery_delay_periods: int = 0,
     market_regime_enabled: bool = False,
     market_regime_mode: str = "binary",
     market_regime_bear_threshold: float = -0.02,
@@ -248,11 +268,42 @@ def run_oos_backtest(
 
     logger.info(f"OOS回测数据: 日线={len(daily_data)}条, 特征={len(features_by_date)}日")
 
+    stop_loss_config = None
+    if bt_stop_loss_enabled:
+        stop_loss_config = create_stop_loss_config_from_dict(
+            {
+                "stop_loss_enabled": bt_stop_loss_enabled,
+                "stop_loss_drawdown_pct": bt_stop_loss_drawdown_pct,
+                "stop_loss_trailing_enabled": bt_stop_loss_trailing_enabled,
+                "stop_loss_trailing_pct": bt_stop_loss_trailing_pct,
+                "stop_loss_consecutive_limit_down": bt_stop_loss_consecutive_limit_down,
+            }
+        )
+
+    equity_curve_config = None
+    if bt_equity_curve_enabled:
+        equity_curve_config = create_equity_curve_config_from_dict(
+            {
+                "equity_curve_enabled": bt_equity_curve_enabled,
+                "equity_curve_drawdown_thresholds": (
+                    bt_equity_curve_drawdown_thresholds or [5.0, 10.0, 15.0, 20.0]
+                ),
+                "equity_curve_exposure_levels": (
+                    bt_equity_curve_exposure_levels or [0.8, 0.6, 0.4, 0.2]
+                ),
+                "equity_curve_ma_short": bt_equity_curve_ma_short,
+                "equity_curve_ma_long": bt_equity_curve_ma_long,
+                "equity_curve_recovery_mode": bt_equity_curve_recovery_mode,
+                "equity_curve_recovery_step": bt_equity_curve_recovery_step,
+                "equity_curve_recovery_delay_periods": bt_equity_curve_recovery_delay_periods,
+            }
+        )
+
     # 4. 创建回测组件
     universe = BasicUniverse(
         stock_basic=stock_basic,
-        exclude_st=True,
-        min_list_days=365,
+        exclude_st=bt_exclude_st,
+        min_list_days=bt_min_list_days,
         markets=['主板'],
         verbose=False,
     )
@@ -310,10 +361,16 @@ def run_oos_backtest(
         initial_capital=initial_capital,
         cost_model=CostModel(),
         rebalance_freq=bt_rebalance_freq,
-        sell_timing='open',
+        sell_timing=bt_sell_timing,
         enable_pending_order=True,
         completion_window_days=5,
         verbose=False,
+        stop_loss_config=stop_loss_config,
+        equity_curve_config=equity_curve_config,
+        data_storage=storage,
+        max_weight_per_stock=bt_max_weight_per_stock,
+        max_per_industry=bt_max_per_industry,
+        stock_basic=stock_basic,
         market_regime_enabled=market_regime_enabled,
         market_regime_mode=market_regime_mode,
         market_regime_bear_threshold=market_regime_bear_threshold,
@@ -1321,6 +1378,34 @@ def write_walk_forward_summary(
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
         "bt_weight_method": getattr(args, 'bt_weight_method', 'equal'),
+        "bt_sell_timing": getattr(args, 'bt_sell_timing', 'open'),
+        "bt_exclude_st": getattr(args, 'bt_exclude_st', True),
+        "bt_min_list_days": getattr(args, 'bt_min_list_days', 365),
+        "bt_max_weight_per_stock": getattr(args, 'bt_max_weight_per_stock', None),
+        "bt_max_per_industry": getattr(args, 'bt_max_per_industry', None),
+        "bt_stop_loss_enabled": getattr(args, 'bt_stop_loss_enabled', False),
+        "bt_stop_loss_drawdown_pct": getattr(args, 'bt_stop_loss_drawdown_pct', 30.0),
+        "bt_stop_loss_trailing_enabled": getattr(args, 'bt_stop_loss_trailing_enabled', False),
+        "bt_stop_loss_trailing_pct": getattr(args, 'bt_stop_loss_trailing_pct', 15.0),
+        "bt_stop_loss_consecutive_limit_down": getattr(
+            args, 'bt_stop_loss_consecutive_limit_down', 2
+        ),
+        "bt_equity_curve_enabled": getattr(args, 'bt_equity_curve_enabled', False),
+        "bt_equity_curve_drawdown_thresholds": getattr(
+            args, 'bt_equity_curve_drawdown_thresholds', [5.0, 10.0, 15.0, 20.0]
+        ),
+        "bt_equity_curve_exposure_levels": getattr(
+            args, 'bt_equity_curve_exposure_levels', [0.8, 0.6, 0.4, 0.2]
+        ),
+        "bt_equity_curve_ma_short": getattr(args, 'bt_equity_curve_ma_short', 5),
+        "bt_equity_curve_ma_long": getattr(args, 'bt_equity_curve_ma_long', 20),
+        "bt_equity_curve_recovery_mode": getattr(
+            args, 'bt_equity_curve_recovery_mode', 'gradual'
+        ),
+        "bt_equity_curve_recovery_step": getattr(args, 'bt_equity_curve_recovery_step', 0.25),
+        "bt_equity_curve_recovery_delay_periods": getattr(
+            args, 'bt_equity_curve_recovery_delay_periods', 0
+        ),
         "industry_momentum_filter": getattr(args, 'industry_momentum_filter', False),
         "industry_momentum_bottom_pct": getattr(args, 'industry_momentum_bottom_pct', 0.2),
         "market_regime": getattr(args, 'market_regime', False),
@@ -1823,6 +1908,129 @@ def main():
         default=1000000.0,
         help="OOS 回测初始资金（默认：1000000）"
     )
+    parser.add_argument(
+        "--bt-sell-timing",
+        type=str,
+        default="open",
+        choices=["open", "close"],
+        help="OOS 回测卖出时机：open 或 close，默认 open"
+    )
+    parser.add_argument(
+        "--bt-exclude-st",
+        action="store_true",
+        default=True,
+        dest="bt_exclude_st",
+        help="OOS 回测排除 ST 股票（默认开启）"
+    )
+    parser.add_argument(
+        "--bt-no-exclude-st",
+        action="store_false",
+        dest="bt_exclude_st",
+        help="OOS 回测不排除 ST 股票"
+    )
+    parser.add_argument(
+        "--bt-min-list-days",
+        type=int,
+        default=365,
+        help="OOS 回测最少上市天数，默认 365"
+    )
+    parser.add_argument(
+        "--bt-max-weight-per-stock",
+        type=float,
+        default=None,
+        help="OOS 回测单股最大权重（0~1），默认不限制"
+    )
+    parser.add_argument(
+        "--bt-max-per-industry",
+        type=int,
+        default=None,
+        help="OOS 回测单行业最大持仓数量，默认不限制"
+    )
+
+    # OOS 回测止损参数
+    parser.add_argument(
+        "--bt-stop-loss-enabled",
+        action="store_true",
+        default=False,
+        help="启用 OOS 回测止损功能"
+    )
+    parser.add_argument(
+        "--bt-stop-loss-drawdown-pct",
+        type=float,
+        default=30.0,
+        help="OOS 回测回撤止损阈值（%%），默认 30.0"
+    )
+    parser.add_argument(
+        "--bt-stop-loss-trailing-enabled",
+        action="store_true",
+        default=False,
+        help="启用 OOS 回测移动止损"
+    )
+    parser.add_argument(
+        "--bt-stop-loss-trailing-pct",
+        type=float,
+        default=15.0,
+        help="OOS 回测移动止损阈值（%%），默认 15.0"
+    )
+    parser.add_argument(
+        "--bt-stop-loss-consecutive-limit-down",
+        type=int,
+        default=2,
+        help="OOS 回测连续跌停止损天数，默认 2"
+    )
+
+    # OOS 回测 ECT 参数
+    parser.add_argument(
+        "--bt-equity-curve-enabled",
+        action="store_true",
+        default=False,
+        help="启用 OOS 回测权益曲线交易（ECT）"
+    )
+    parser.add_argument(
+        "--bt-equity-curve-drawdown-thresholds",
+        type=float,
+        nargs="+",
+        default=[5.0, 10.0, 15.0, 20.0],
+        help="OOS 回测 ECT 回撤阈值列表（%%），默认 5 10 15 20"
+    )
+    parser.add_argument(
+        "--bt-equity-curve-exposure-levels",
+        type=float,
+        nargs="+",
+        default=[0.8, 0.6, 0.4, 0.2],
+        help="OOS 回测 ECT 对应仓位系数列表，默认 0.8 0.6 0.4 0.2"
+    )
+    parser.add_argument(
+        "--bt-equity-curve-ma-short",
+        type=int,
+        default=5,
+        help="OOS 回测 ECT 短期均线窗口，默认 5"
+    )
+    parser.add_argument(
+        "--bt-equity-curve-ma-long",
+        type=int,
+        default=20,
+        help="OOS 回测 ECT 长期均线窗口，默认 20"
+    )
+    parser.add_argument(
+        "--bt-equity-curve-recovery-mode",
+        type=str,
+        default="gradual",
+        choices=["gradual", "immediate"],
+        help="OOS 回测 ECT 恢复模式，默认 gradual"
+    )
+    parser.add_argument(
+        "--bt-equity-curve-recovery-step",
+        type=float,
+        default=0.25,
+        help="OOS 回测 ECT 逐步恢复步长，默认 0.25"
+    )
+    parser.add_argument(
+        "--bt-equity-curve-recovery-delay-periods",
+        type=int,
+        default=0,
+        help="OOS 回测 ECT 恢复等待周期，默认 0"
+    )
 
     # 分批调仓
     parser.add_argument(
@@ -2058,7 +2266,31 @@ def main():
     if args.oos_backtest:
         logger.info(f"  回测时长: {args.oos_backtest_months} 个月")
         logger.info(f"  持仓 Top N: {args.bt_top_n}")
+        logger.info(f"  卖出时机: {args.bt_sell_timing}")
         logger.info(f"  调仓频率: {args.bt_rebalance_freq or '自动推断'}")
+        logger.info(f"  排除 ST: {'是' if args.bt_exclude_st else '否'}")
+        logger.info(f"  最少上市天数: {args.bt_min_list_days}")
+        if args.bt_max_weight_per_stock is not None:
+            logger.info(f"  单股最大权重: {args.bt_max_weight_per_stock:.2%}")
+        if args.bt_max_per_industry is not None:
+            logger.info(f"  单行业最大持仓数: {args.bt_max_per_industry}")
+        logger.info(f"  止损: {'启用' if args.bt_stop_loss_enabled else '关闭'}")
+        if args.bt_stop_loss_enabled:
+            logger.info(
+                f"    drawdown={args.bt_stop_loss_drawdown_pct}%, "
+                f"trailing={'开' if args.bt_stop_loss_trailing_enabled else '关'}, "
+                f"trailing_pct={args.bt_stop_loss_trailing_pct}%, "
+                f"consecutive_limit_down={args.bt_stop_loss_consecutive_limit_down}"
+            )
+        logger.info(f"  ECT: {'启用' if args.bt_equity_curve_enabled else '关闭'}")
+        if args.bt_equity_curve_enabled:
+            logger.info(
+                f"    drawdown_thresholds={args.bt_equity_curve_drawdown_thresholds}, "
+                f"exposures={args.bt_equity_curve_exposure_levels}, "
+                f"ma=({args.bt_equity_curve_ma_short},{args.bt_equity_curve_ma_long}), "
+                f"recovery={args.bt_equity_curve_recovery_mode}/"
+                f"{args.bt_equity_curve_recovery_step}/delay={args.bt_equity_curve_recovery_delay_periods}"
+            )
         if args.stagger_tranches > 1:
             logger.info(f"  分批调仓: {args.stagger_tranches} 批")
         if args.market_regime:
@@ -2183,6 +2415,24 @@ def main():
                             bt_top_n=args.bt_top_n,
                             bt_rebalance_freq=args.bt_rebalance_freq,
                             data_root=args.data_root,
+                            bt_exclude_st=args.bt_exclude_st,
+                            bt_min_list_days=args.bt_min_list_days,
+                            bt_sell_timing=args.bt_sell_timing,
+                            bt_max_weight_per_stock=args.bt_max_weight_per_stock,
+                            bt_max_per_industry=args.bt_max_per_industry,
+                            bt_stop_loss_enabled=args.bt_stop_loss_enabled,
+                            bt_stop_loss_drawdown_pct=args.bt_stop_loss_drawdown_pct,
+                            bt_stop_loss_trailing_enabled=args.bt_stop_loss_trailing_enabled,
+                            bt_stop_loss_trailing_pct=args.bt_stop_loss_trailing_pct,
+                            bt_stop_loss_consecutive_limit_down=args.bt_stop_loss_consecutive_limit_down,
+                            bt_equity_curve_enabled=args.bt_equity_curve_enabled,
+                            bt_equity_curve_drawdown_thresholds=args.bt_equity_curve_drawdown_thresholds,
+                            bt_equity_curve_exposure_levels=args.bt_equity_curve_exposure_levels,
+                            bt_equity_curve_ma_short=args.bt_equity_curve_ma_short,
+                            bt_equity_curve_ma_long=args.bt_equity_curve_ma_long,
+                            bt_equity_curve_recovery_mode=args.bt_equity_curve_recovery_mode,
+                            bt_equity_curve_recovery_step=args.bt_equity_curve_recovery_step,
+                            bt_equity_curve_recovery_delay_periods=args.bt_equity_curve_recovery_delay_periods,
                             market_regime_enabled=args.market_regime,
                             market_regime_mode=args.market_regime_mode,
                             market_regime_bear_threshold=args.market_regime_bear_threshold,

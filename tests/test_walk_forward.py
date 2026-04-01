@@ -311,6 +311,24 @@ class TestWalkForwardCSV:
                 enable_cyq_features=False, enable_fund_features=False,
                 enable_express_features=False,
                 feature_stability_filter=False,
+                bt_sell_timing="close",
+                bt_exclude_st=False,
+                bt_min_list_days=180,
+                bt_max_weight_per_stock=0.15,
+                bt_max_per_industry=2,
+                bt_stop_loss_enabled=True,
+                bt_stop_loss_drawdown_pct=18.0,
+                bt_stop_loss_trailing_enabled=True,
+                bt_stop_loss_trailing_pct=10.0,
+                bt_stop_loss_consecutive_limit_down=3,
+                bt_equity_curve_enabled=True,
+                bt_equity_curve_drawdown_thresholds=[6.0, 12.0],
+                bt_equity_curve_exposure_levels=[0.8, 0.5],
+                bt_equity_curve_ma_short=7,
+                bt_equity_curve_ma_long=21,
+                bt_equity_curve_recovery_mode="immediate",
+                bt_equity_curve_recovery_step=0.5,
+                bt_equity_curve_recovery_delay_periods=2,
             )
 
             # 写入文件
@@ -328,10 +346,24 @@ class TestWalkForwardCSV:
             assert "test_start" in df.columns
             assert "daily_rankic_mean" in df.columns
             assert "top30_return_mean" in df.columns
+            assert "bt_sell_timing" in df.columns
+            assert "bt_max_weight_per_stock" in df.columns
+            assert "bt_stop_loss_enabled" in df.columns
+            assert "bt_equity_curve_enabled" in df.columns
             
             # 验证数据正确
             assert df.loc[0, "split_index"] == 0
             assert df.loc[0, "daily_rankic_mean"] == 0.05
+            assert df.loc[0, "bt_sell_timing"] == "close"
+            assert str(df.loc[0, "bt_exclude_st"]).lower() == "false"
+            assert df.loc[0, "bt_min_list_days"] == 180
+            assert df.loc[0, "bt_max_weight_per_stock"] == 0.15
+            assert df.loc[0, "bt_max_per_industry"] == 2
+            assert str(df.loc[0, "bt_stop_loss_enabled"]).lower() == "true"
+            assert df.loc[0, "bt_stop_loss_drawdown_pct"] == 18.0
+            assert str(df.loc[0, "bt_equity_curve_enabled"]).lower() == "true"
+            assert "6.0" in str(df.loc[0, "bt_equity_curve_drawdown_thresholds"])
+            assert "0.8" in str(df.loc[0, "bt_equity_curve_exposure_levels"])
             assert df.loc[1, "split_index"] == 1
             assert df.loc[1, "daily_rankic_mean"] == 0.06
 

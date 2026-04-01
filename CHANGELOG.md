@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.37.0] - 2026-04-01
+
+### 新增
+
+- **Walk-forward 主链接入更多 OOS 回测参数，并同步支持批量实验**
+  - `walk_forward.py` 新增并透传 OOS 回测参数：`bt_sell_timing`、`bt_exclude_st`、`bt_min_list_days`、`bt_max_weight_per_stock`、`bt_max_per_industry`
+  - `walk_forward.py` 新增 OOS 止损与 ECT 参数透传：`bt_stop_loss_*`、`bt_equity_curve_*`，直接复用回测引擎已有能力
+  - `write_walk_forward_summary()` 新增写出上述参数，便于后续聚合分析
+  - `compare_walk_forward.py` 新增对应参数列，避免实验对比时丢失关键风控配置
+  - `batch_walk_forward.ps1` 新增对应批量扫描入口，可直接逐组实验卖出时机、单股/行业约束、止损与 ECT 组合
+  - 新增测试覆盖 walk-forward 汇总与 compare 参数列保留行为
+
 ## [0.36.0] - 2026-04-01
 
 ### 新增

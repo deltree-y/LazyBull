@@ -104,28 +104,50 @@ $bt_top_n_list           = @(17)   # 回测持仓 Top N
 $bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
 $bt_weight_method        = "score" # 权重方法："equal"（等权）| "score"（按预测分数加权）
 $bt_initial_capital      = 1000000 # 回测初始资金（默认：100万）
+$bt_sell_timing_list     = @("open") # 卖出时机：open | close
+$bt_exclude_st           = $true   # $true 排除 ST | $false 不排除
+$bt_min_list_days_list   = @(365)  # 最少上市天数
+$bt_max_weight_per_stock_list = @(0.15) # 单股最大权重，$null=不限制，如 @(0.15, 0.20)
+$bt_max_per_industry_list = @($null)     # 单行业最大持仓数，$null=不限制，如 @(2, 3)
+
+# ── OOS 止损（关闭时请保持各阈值列表为单值，避免重复任务）─────────
+$bt_stop_loss_enabled                 = $true  # $true 启用 | $false 禁用
+$bt_stop_loss_drawdown_pct_list       = @(30.0) # 回撤止损阈值（%）
+$bt_stop_loss_trailing_enabled        = $false  # $true 启用移动止损 | $false 禁用
+$bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
+$bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
+
+# ── OOS ECT 权益曲线交易（关闭时请保持相关列表为单值）────────────
+$bt_equity_curve_enabled                  = $false  # $true 启用 | $false 禁用
+$bt_equity_curve_drawdown_thresholds      = @(5.0, 10.0, 15.0, 20.0)
+$bt_equity_curve_exposure_levels          = @(0.8, 0.6, 0.4, 0.2)
+$bt_equity_curve_ma_short_list            = @(5)
+$bt_equity_curve_ma_long_list             = @(20)
+$bt_equity_curve_recovery_mode_list       = @("gradual") # gradual | immediate
+$bt_equity_curve_recovery_step_list       = @(0.25)
+$bt_equity_curve_recovery_delay_periods_list = @(0)
 
 # ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
 $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
 $industry_momentum_bottom_pct = 0.5     # 剔除排名后 X% 的行业（0~1），默认 0.2
 
 # ── 市场择时仓位管理 ─────────────────────────────────────────
-$market_regime                = $false       # $true 启用 | $false 禁用
-$market_regime_mode_list      = @("combined")  # binary | vol_target | trend | combined
+$market_regime                = $true       # $true 启用 | $false 禁用
+$market_regime_mode_list      = @("vol_target")  # binary | vol_target | trend | combined
 $market_regime_bear_threshold_list = @(-0.03)  # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
 $market_regime_bear_exposure  = 0.3            # binary 模式：熊市仓位系数（0~1）
 $market_regime_vol_target_list = @(0.2)       # vol_target/combined 模式：年化波动率目标
 $market_regime_trend_threshold = 1.0          # trend/combined 模式：mkt_ma_trend 低于此值降仓
-$market_regime_min_exposure    = 0.18         # 非 binary 模式：最低仓位下限
+$market_regime_min_exposure    = 0.2         # 非 binary 模式：最低仓位下限
 $market_regime_combine_method  = "min"        # combined 模式组合方式：min | multiply
 $market_regime_trend_guard     = $true        # combined 模式趋势保护：上行趋势跳过 vol 降仓
-$market_regime_drawdown_guard  = $true        # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
+$market_regime_drawdown_guard  = $false        # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
 $market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
 $market_regime_ma250_hard_stop = $true  # $true 启用 | $false 禁用
 $market_regime_ma250_threshold = 1     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
-$market_regime_ma250_exposure  = 0.8     # 触发后的仓位系数（0.0=完全空仓）
+$market_regime_ma250_exposure  = 1     # 触发后的仓位系数（0.0=完全空仓）
 $ma250_atr_scaling             = $true  # $true 启用 ATR 动态仓位缩放（仓位=base×MA(ATR,250)/CurrentATR）
 
 # ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
@@ -185,6 +207,18 @@ $totalTasks = $algorithm_list.Length *
               $market_regime_mode_list.Length *
               $market_regime_vol_target_list.Length *
               $bt_top_n_list.Length *
+              $bt_sell_timing_list.Length *
+              $bt_min_list_days_list.Length *
+              $bt_max_weight_per_stock_list.Length *
+              $bt_max_per_industry_list.Length *
+              $bt_stop_loss_drawdown_pct_list.Length *
+              $bt_stop_loss_trailing_pct_list.Length *
+              $bt_stop_loss_consecutive_limit_down_list.Length *
+              $bt_equity_curve_ma_short_list.Length *
+              $bt_equity_curve_ma_long_list.Length *
+              $bt_equity_curve_recovery_mode_list.Length *
+              $bt_equity_curve_recovery_step_list.Length *
+              $bt_equity_curve_recovery_delay_periods_list.Length *
               $stagger_tranches_list.Length *
               $early_exit_loss_threshold_list.Length *
               $early_exit_holding_ratio_list.Length *
@@ -225,6 +259,18 @@ foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
 foreach ($market_regime_mode in $market_regime_mode_list) {
 foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
+foreach ($bt_sell_timing in $bt_sell_timing_list) {
+foreach ($bt_min_list_days in $bt_min_list_days_list) {
+foreach ($bt_max_weight_per_stock in $bt_max_weight_per_stock_list) {
+foreach ($bt_max_per_industry in $bt_max_per_industry_list) {
+foreach ($bt_stop_loss_drawdown_pct in $bt_stop_loss_drawdown_pct_list) {
+foreach ($bt_stop_loss_trailing_pct in $bt_stop_loss_trailing_pct_list) {
+foreach ($bt_stop_loss_consecutive_limit_down in $bt_stop_loss_consecutive_limit_down_list) {
+foreach ($bt_equity_curve_ma_short in $bt_equity_curve_ma_short_list) {
+foreach ($bt_equity_curve_ma_long in $bt_equity_curve_ma_long_list) {
+foreach ($bt_equity_curve_recovery_mode in $bt_equity_curve_recovery_mode_list) {
+foreach ($bt_equity_curve_recovery_step in $bt_equity_curve_recovery_step_list) {
+foreach ($bt_equity_curve_recovery_delay_periods in $bt_equity_curve_recovery_delay_periods_list) {
 foreach ($stagger_tranches in $stagger_tranches_list) {
 foreach ($early_exit_loss_threshold in $early_exit_loss_threshold_list) {
 foreach ($early_exit_holding_ratio in $early_exit_holding_ratio_list) {
@@ -352,9 +398,38 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     }
 
     if ($oos_backtest) {
-        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method --bt-initial-capital $bt_initial_capital"
+        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method --bt-initial-capital $bt_initial_capital --bt-sell-timing $bt_sell_timing --bt-min-list-days $bt_min_list_days"
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
+        }
+        if (-not $bt_exclude_st) {
+            $pythonCmd += " --bt-no-exclude-st"
+        }
+        if ($null -ne $bt_max_weight_per_stock) {
+            $pythonCmd += " --bt-max-weight-per-stock $bt_max_weight_per_stock"
+        }
+        if ($null -ne $bt_max_per_industry) {
+            $pythonCmd += " --bt-max-per-industry $bt_max_per_industry"
+        }
+        if ($bt_stop_loss_enabled) {
+            $pythonCmd += " --bt-stop-loss-enabled" +
+                          " --bt-stop-loss-drawdown-pct $bt_stop_loss_drawdown_pct" +
+                          " --bt-stop-loss-consecutive-limit-down $bt_stop_loss_consecutive_limit_down"
+            if ($bt_stop_loss_trailing_enabled) {
+                $pythonCmd += " --bt-stop-loss-trailing-enabled --bt-stop-loss-trailing-pct $bt_stop_loss_trailing_pct"
+            }
+        }
+        if ($bt_equity_curve_enabled) {
+            $btEquityCurveDrawdownArgs = $bt_equity_curve_drawdown_thresholds -join " "
+            $btEquityCurveExposureArgs = $bt_equity_curve_exposure_levels -join " "
+            $pythonCmd += " --bt-equity-curve-enabled" +
+                          " --bt-equity-curve-drawdown-thresholds $btEquityCurveDrawdownArgs" +
+                          " --bt-equity-curve-exposure-levels $btEquityCurveExposureArgs" +
+                          " --bt-equity-curve-ma-short $bt_equity_curve_ma_short" +
+                          " --bt-equity-curve-ma-long $bt_equity_curve_ma_long" +
+                          " --bt-equity-curve-recovery-mode $bt_equity_curve_recovery_mode" +
+                          " --bt-equity-curve-recovery-step $bt_equity_curve_recovery_step" +
+                          " --bt-equity-curve-recovery-delay-periods $bt_equity_curve_recovery_delay_periods"
         }
     } else {
         $pythonCmd += " --no-oos-backtest"
@@ -402,7 +477,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（30 层）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

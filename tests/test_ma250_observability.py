@@ -69,6 +69,12 @@ class TestCompareWalkForwardMA250Columns:
                     "market_regime_ma250_threshold": 0.8,
                     "market_regime_ma250_exposure": 0.2,
                     "market_regime_ma250_atr_scaling": True,
+                    "bt_sell_timing": "close",
+                    "bt_min_list_days": 180,
+                    "bt_max_weight_per_stock": 0.15,
+                    "bt_stop_loss_enabled": True,
+                    "bt_equity_curve_enabled": True,
+                    "bt_equity_curve_recovery_mode": "immediate",
                 }
             ]
         )
@@ -79,10 +85,22 @@ class TestCompareWalkForwardMA250Columns:
         assert "MA250阈值" in result.columns
         assert "MA250仓位" in result.columns
         assert "MA250 ATR缩放" in result.columns
+        assert "回测卖出时机" in result.columns
+        assert "回测最少上市天数" in result.columns
+        assert "回测单股最大权重" in result.columns
+        assert "回测止损" in result.columns
+        assert "回测ECT" in result.columns
+        assert "回测ECT恢复模式" in result.columns
         assert result.loc[0, "MA250硬条件"] == True
         assert result.loc[0, "MA250阈值"] == 0.8
         assert result.loc[0, "MA250仓位"] == 0.2
         assert result.loc[0, "MA250 ATR缩放"] == True
+        assert result.loc[0, "回测卖出时机"] == "close"
+        assert result.loc[0, "回测最少上市天数"] == 180
+        assert result.loc[0, "回测单股最大权重"] == 0.15
+        assert result.loc[0, "回测止损"] == True
+        assert result.loc[0, "回测ECT"] == True
+        assert result.loc[0, "回测ECT恢复模式"] == "immediate"
 
 
 class TestMA250LogFormatting:
