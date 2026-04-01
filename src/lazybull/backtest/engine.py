@@ -376,6 +376,8 @@ class BacktestEngine:
             trading_days = idx + 1
             # 计算本轮调仓周期内的第几天（1-based）
             cycle_day = idx % self.rebalance_freq + 1
+            if cycle_day == 1:
+                logger.info("\n================================================ 新一轮回测 =================================================")
             logger.info(
                 self._format_daily_progress_log(
                     date=date,
@@ -440,6 +442,24 @@ class BacktestEngine:
         exposure_pct = market_value / portfolio_value * 100
         return min(exposure_pct, 100.0)
 
+    def _get_current_position_atr_stats(
+        self, date: pd.Timestamp
+    ) -> Optional[Tuple[float, float, float]]:
+        """获取当日持仓 ATR% 统计（子类可覆写）。"""
+        return None
+
+    def _format_current_position_atr_stats(self, date: pd.Timestamp) -> str:
+        """格式化当日持仓 ATR% 统计。"""
+        atr_stats = self._get_current_position_atr_stats(date)
+        if atr_stats is None:
+            return "ATR:[N/A/N/A/N/A]"
+
+        min_atr_pct, avg_atr_pct, max_atr_pct = atr_stats
+        return (
+            f"ATR:["
+            f"{min_atr_pct:.2%}/{avg_atr_pct:.2%}/{max_atr_pct:.2%}]"
+        )
+
     def _format_daily_progress_log(
         self,
         date: pd.Timestamp,
@@ -461,14 +481,16 @@ class BacktestEngine:
         )
         target_position_count = self._get_target_position_count()
         current_exposure_pct = self._calculate_current_exposure_pct(portfolio_value)
+        current_position_atr_stats = self._format_current_position_atr_stats(date)
 
         return (
-            f"回测[{date.date()}]: {trading_days}/{total_days} 天 - "
-            f"本轮第[{cycle_day}/{self.rebalance_freq}]天, "
-            f"持仓/仓位[{len(self.positions)}/{target_position_count}]/"
+            f"回测[{date.date()}]: {trading_days:0{len(str(total_days))}}/{total_days} 天 - "
+            f"本轮第[{cycle_day:0{len(str(self.rebalance_freq))}}/{self.rebalance_freq}]天, "
+            f"持仓/仓位[{len(self.positions):0{len(str(target_position_count))}}/{target_position_count}]/"
             f"[{current_exposure_pct:.2f}%], "
-            f"收益:本调仓/本轮/年化:{rebalance_return_str}/"
-            f"{total_return:+.2f}%/{ann_return:+.2f}%)"
+            f"收益:本调仓/本轮/年化:[{rebalance_return_str}/"
+            f"{total_return:+.2f}%/{ann_return:+.2f}%], "
+            f"{current_position_atr_stats}"
         )
 
     def _build_nav_series(self, current_date: pd.Timestamp) -> Optional[pd.Series]:

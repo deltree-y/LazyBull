@@ -125,7 +125,7 @@ $market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdow
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
 $market_regime_ma250_hard_stop = $true  # $true 启用 | $false 禁用
 $market_regime_ma250_threshold = 1     # 触发阈值（大盘收益曲线/MA250 < 此值触发）
-$market_regime_ma250_exposure  = 1     # 触发后的仓位系数（0.0=完全空仓）
+$market_regime_ma250_exposure  = 0.8     # 触发后的仓位系数（0.0=完全空仓）
 $ma250_atr_scaling             = $true  # $true 启用 ATR 动态仓位缩放（仓位=base×MA(ATR,250)/CurrentATR）
 
 # ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────

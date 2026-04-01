@@ -103,14 +103,11 @@ class TestMA250LogFormatting:
             mkt_atr_ma250=0.0213,
         )
 
-        assert "ratio=0.874 < threshold=0.950" in message
-        assert "触发硬条件" in message
-        assert "hard_stop_exposure=20.0%" in message
+        assert "MA250: 2024-08-12" in message
+        assert "ratio=0.874:触发控仓" in message
+        assert "ATR缩放=开启(scale=atr_ma250/atr_now=2.13%/2.14%=99.6%)" in message
         assert "base_after_ma250=20.0%" in message
-        assert "final_after_atr=20.0%" in message
-        assert "ATR缩放=开启(scale=0.996" in message
-        assert "atr_ma250=2.13%" in message
-        assert "atr_now=2.14%" in message
+        assert "final_after_atr=20.0%." in message
 
     def test_format_log_with_missing_atr_data(self):
         message = _format_ma250_decision_log(
@@ -124,10 +121,10 @@ class TestMA250LogFormatting:
             atr_scaling_enabled=True,
         )
 
-        assert "ratio=1.012 >= threshold=0.950" in message
-        assert "未触发硬条件" in message
+        assert "ratio=1.012:未触发控仓" in message
+        assert "ATR缩放=开启(缺少有效ATR数据)" in message
         assert "base_after_ma250=100.0%" in message
-        assert "缺少有效ATR数据" in message
+        assert "final_after_atr=100.0%." in message
 
 
 class TestMA250FeatureCacheSchema:

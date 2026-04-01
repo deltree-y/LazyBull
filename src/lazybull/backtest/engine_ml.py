@@ -26,13 +26,13 @@ def _format_ma250_decision_log(
     mkt_atr: Optional[float] = None,
     mkt_atr_ma250: Optional[float] = None,
 ) -> str:
-    """格式化 MA250 模块日志，明确显示触发原因与两步仓位结果。"""
+    """格式化 MA250 日志，突出控仓结果与 ATR 缩放计算式。"""
     if np.isnan(ma250_ratio):
-        trigger_text = f"ratio=NaN, threshold={threshold:.3f}, 条件状态=未知"
+        trigger_text = "ratio=NaN:状态未知"
     elif ma250_triggered:
-        trigger_text = f"ratio={ma250_ratio:.3f} < threshold={threshold:.3f}, 触发硬条件"
+        trigger_text = f"ratio={ma250_ratio:.3f}:触发控仓"
     else:
-        trigger_text = f"ratio={ma250_ratio:.3f} >= threshold={threshold:.3f}, 未触发硬条件"
+        trigger_text = f"ratio={ma250_ratio:.3f}:未触发控仓"
 
     has_valid_atr = (
         atr_scaling_enabled
@@ -46,21 +46,21 @@ def _format_ma250_decision_log(
     )
     if has_valid_atr:
         atr_text = (
-            f"ATR缩放=开启(scale={atr_ratio:.3f}, "
-            f"atr_ma250={mkt_atr_ma250:.2%}, atr_now={mkt_atr:.2%})"
+            "ATR缩放=开启("
+            f"scale=atr_ma250/atr_now={mkt_atr_ma250:.2%}/{mkt_atr:.2%}={atr_ratio:.1%}"
+            ")"
         )
     elif atr_scaling_enabled:
-        atr_text = "ATR缩放=开启(缺少有效ATR数据, final_after_atr=base_after_ma250)"
+        atr_text = "ATR缩放=开启(缺少有效ATR数据)"
     else:
         atr_text = "ATR缩放=关闭"
 
     return (
-        f"MA250模块: {date.date()}, "
+        f"  MA250: {date.date()}, "
         f"{trigger_text}, "
-        f"hard_stop_exposure={hard_stop_exposure:.1%}, "
+        f"{atr_text}, "
         f"base_after_ma250={base_exposure:.1%}, "
-        f"final_after_atr={final_exposure:.1%}, "
-        f"{atr_text}"
+        f"final_after_atr={final_exposure:.1%}."
     )
 
 
@@ -287,6 +287,32 @@ class BacktestEngineML(BacktestEngine):
             return {}
         return {'buy_atr_pct': float(atr_pct)}
 
+    def _get_current_position_atr_stats(
+        self, date: pd.Timestamp
+    ) -> Optional[tuple[float, float, float]]:
+        """获取当日持仓股票 atr_pct_14 的最小值、均值和最大值。"""
+        if not self.positions:
+            return None
+
+        date_str = date.strftime('%Y%m%d')
+        features_df = self.features_by_date.get(date_str)
+        if features_df is None or 'atr_pct_14' not in features_df.columns:
+            return None
+
+        position_codes = set(self.positions.keys())
+        atr_series = features_df.loc[
+            features_df['ts_code'].isin(position_codes), 'atr_pct_14'
+        ].dropna()
+        atr_series = atr_series[atr_series > 0]
+        if atr_series.empty:
+            return None
+
+        return (
+            float(atr_series.min()),
+            float(atr_series.mean()),
+            float(atr_series.max()),
+        )
+
     # ── 市场择时仓位管理 ──────────────────────────────────────────────
 
     def _get_feature_scalar(self, features_df: pd.DataFrame, col: str) -> float:
@@ -492,7 +518,7 @@ class BacktestEngineML(BacktestEngine):
                     if abs(exposure - prev) > 1e-6:
                         direction = "↓ 降仓" if exposure < prev else "↑ 加仓"
                         logger.warning(
-                            f"市场择时变动: {date.date()}, "
+                            f"  市场择时变动: {date.date()}, "
                             f"mode={self.market_regime_mode}, "
                             f"exposure {prev:.0%} → {exposure:.0%} ({direction})"
                         )
