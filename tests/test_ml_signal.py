@@ -290,6 +290,77 @@ def test_ml_signal_get_model_info(trained_model):
     assert info["n_samples"] == 1000
 
 
+def test_ml_signal_confidence_gate_scales_weights(trained_model):
+    """测试信号置信度门控会缩放权重并保留现金。"""
+    models_dir, version = trained_model
+
+    signal = MLSignal(
+        top_n=3,
+        model_version=version,
+        models_dir=models_dir,
+        weight_method="equal",
+        signal_confidence_gate_enabled=True,
+        signal_confidence_gate_thresholds=[0.0],
+        signal_confidence_gate_exposure_levels=[0.4],
+    )
+
+    date = pd.Timestamp("2023-06-15")
+    universe = ["000001.SZ", "000002.SZ", "000003.SZ", "600000.SH"]
+    features_df = pd.DataFrame(
+        {
+            "ts_code": universe,
+            "f1": [12, 9, 4, 1],
+            "f2": [1, 2, 3, 4],
+            "f3": [5, 6, 7, 8],
+        }
+    )
+
+    signals = signal.generate(date, universe, {"features": features_df})
+
+    assert len(signals) == 3
+    assert abs(sum(signals.values()) - 0.4) < 1e-6
+    for weight in signals.values():
+        assert abs(weight - (0.4 / 3)) < 1e-6
+
+    gate_state = signal.get_last_confidence_gate_state()
+    assert gate_state.enabled is True
+    assert gate_state.exposure == 0.4
+
+
+def test_ml_signal_confidence_gate_blocks_negative_regression_scores(trained_model):
+    """测试回归分数整体不为正时，门控直接持币。"""
+    models_dir, version = trained_model
+
+    signal = MLSignal(
+        top_n=3,
+        model_version=version,
+        models_dir=models_dir,
+        weight_method="equal",
+        signal_confidence_gate_enabled=True,
+        signal_confidence_gate_thresholds=[0.8, 1.2],
+        signal_confidence_gate_exposure_levels=[0.5, 1.0],
+    )
+
+    date = pd.Timestamp("2023-06-15")
+    universe = ["000001.SZ", "000002.SZ", "000003.SZ", "600000.SH"]
+    features_df = pd.DataFrame(
+        {
+            "ts_code": universe,
+            "f1": [-1, -3, -5, -7],
+            "f2": [1, 2, 3, 4],
+            "f3": [5, 6, 7, 8],
+        }
+    )
+
+    signals = signal.generate(date, universe, {"features": features_df})
+
+    assert signals == {}
+    gate_state = signal.get_last_confidence_gate_state()
+    assert gate_state.enabled is True
+    assert gate_state.exposure == 0.0
+    assert "无正向alpha" in gate_state.reason
+
+
 def test_ml_signal_top_n_larger_than_universe(trained_model):
     """测试 Top N 大于股票池大小的情况"""
     models_dir, version = trained_model

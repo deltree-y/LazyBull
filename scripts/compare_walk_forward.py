@@ -19,6 +19,7 @@ import argparse
 import sys
 import unicodedata
 from pathlib import Path
+from typing import Optional
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -55,6 +56,11 @@ COL_NAMES = {
     "oos_top300_median_mean":     "Top300中位收益均值",
     "oos_top300_win_rate":        "Top300胜率",
     # OOS 回测
+    "chain_cagr":                 "全周期CAGR",
+    "chain_total_return":         "全周期总收益",
+    "chain_max_drawdown":         "全周期链式最大回撤",
+    "chain_sharpe":               "全周期链式夏普",
+    "chain_trading_days":         "全周期链式交易日数",
     "bt_annual_return_mean":      "回测年化收益均值",
     "bt_sharpe_mean":             "回测夏普均值",
     "bt_max_drawdown_worst":      "回测最大回撤(最差)",
@@ -62,7 +68,14 @@ COL_NAMES = {
     "bt_win_rate":                "回测胜率",
     "bt_total_return_mean":       "回测总收益均值",
     "bt_volatility_mean":         "回测波动率均值",
+    "bt_signal_confidence_block_rate_mean": "门控持币率均值",
+    "bt_signal_confidence_avg_exposure_mean": "门控平均仓位",
+    "bt_signal_confidence_avg_score_mean": "门控平均置信度",
     "bt_sell_timing":             "回测卖出时机",
+    "signal_confidence_gate_enabled": "信号置信度门控",
+    "signal_confidence_gate_top_k": "门控TopK",
+    "signal_confidence_gate_thresholds": "门控阈值",
+    "signal_confidence_gate_exposure_levels": "门控仓位系数",
     "bt_exclude_st":              "回测排除ST",
     "bt_min_list_days":           "回测最少上市天数",
     "bt_max_weight_per_stock":    "回测单股最大权重",
@@ -141,6 +154,10 @@ PARAM_COLS = [
     "subsample", "colsample_bytree", "min_child_weight",
     "gamma", "reg_alpha", "reg_lambda",
     "rank_weight_enabled", "rank_weight_topk", "rank_weight",
+    "signal_confidence_gate_enabled",
+    "signal_confidence_gate_top_k",
+    "signal_confidence_gate_thresholds",
+    "signal_confidence_gate_exposure_levels",
     "bt_sell_timing", "bt_exclude_st", "bt_min_list_days",
     "bt_max_weight_per_stock", "bt_max_per_industry",
     "bt_stop_loss_enabled", "bt_stop_loss_drawdown_pct",
@@ -171,10 +188,10 @@ PARAM_COLS = [
 # ---------------------------------------------------------------------------
 SCORE_CONFIG = [
     # ── 回测指标（60%）：真实组合模拟，最直接反映参数优劣 ──────────
-    ("bt_annual_return_mean",     0.20, "high"),     # 回测年化收益均值：核心盈利能力
+    ("chain_cagr",               0.20, "high"),     # 全周期串联 CAGR：最终最该看的盈利能力
     ("bt_win_rate",               0.15, "high"),     # 回测胜率：各切分正收益占比
     ("bt_sharpe_mean",            0.15, "high"),     # 回测夏普均值：风险收益比
-    ("bt_max_drawdown_worst",     0.10, "high"),     # 回测最差回撤：风险下限（值为负，越大=回撤越小=越好）
+    ("chain_max_drawdown",        0.10, "high"),     # 全周期链式最大回撤：真实风险下限
     # ── 统计指标（32%）：辅助验证，防止回测过拟合 ─────────────────
     ("oos_cross_split_ir",        0.10, "high"),     # 跨切分IR：核心稳健性
     ("oos_top30_win_rate",        0.05, "high"),     # Top30胜率：策略持续性
@@ -186,6 +203,57 @@ SCORE_CONFIG = [
     # ── 训练质量（8%）：过拟合检测 ────────────────────────────────
     ("train_val_ir_gap",          0.08, "low"),      # 验证_OOS差距：过拟合风险（越小越好）
 ]
+
+
+def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str) -> dict:
+    """读取 chain_nav 并计算全周期指标。"""
+    empty = {
+        "chain_total_return": None,
+        "chain_cagr": None,
+        "chain_max_drawdown": None,
+        "chain_sharpe": None,
+        "chain_trading_days": None,
+    }
+    if raw_dir is None:
+        return empty
+
+    chain_path = raw_dir / f"chain_nav_{wf_run_id}.csv"
+    if not chain_path.exists():
+        return empty
+
+    try:
+        chain_df = pd.read_csv(chain_path, encoding="utf-8-sig")
+    except Exception as exc:
+        logger.warning(f"读取 chain_nav 失败: {chain_path.name} — {exc}")
+        return empty
+
+    if chain_df.empty or "nav" not in chain_df.columns:
+        return empty
+
+    nav = pd.to_numeric(chain_df["nav"], errors="coerce").dropna()
+    if nav.empty or nav.iloc[0] == 0:
+        return empty
+
+    trading_days = len(nav)
+    years = trading_days / 252 if trading_days > 0 else 0
+    total_return = nav.iloc[-1] / nav.iloc[0] - 1
+    cagr = (nav.iloc[-1] / nav.iloc[0]) ** (1 / years) - 1 if years > 0 else None
+    cummax = nav.cummax()
+    drawdown = (nav - cummax) / cummax
+    max_drawdown = drawdown.min() if not drawdown.empty else None
+    daily_ret = nav.pct_change().dropna()
+    volatility = daily_ret.std() * (252 ** 0.5) if len(daily_ret) > 1 else None
+    sharpe = None
+    if cagr is not None and volatility is not None and volatility > 0:
+        sharpe = (cagr - 0.03) / volatility
+
+    return {
+        "chain_total_return": round(total_return, 6),
+        "chain_cagr": round(cagr, 6) if cagr is not None else None,
+        "chain_max_drawdown": round(max_drawdown, 6) if max_drawdown is not None else None,
+        "chain_sharpe": round(sharpe, 4) if sharpe is not None else None,
+        "chain_trading_days": trading_days,
+    }
 
 
 def load_all_summaries(raw_dir: Path) -> pd.DataFrame:
@@ -316,9 +384,33 @@ def aggregate_run(group: pd.DataFrame) -> dict:
         row["bt_calmar_mean"]        = round(bt_cal.mean(), 4) if len(bt_cal) else None
         row["bt_volatility_mean"]    = round(bt_vol.mean(), 6) if len(bt_vol) else None
         row["bt_win_rate"]           = round((bt_ret > 0).mean(), 3) if len(bt_ret) else None
+        bt_gate_block = (
+            group["bt_signal_confidence_block_rate"].dropna()
+            if "bt_signal_confidence_block_rate" in group.columns else pd.Series(dtype=float)
+        )
+        bt_gate_exposure = (
+            group["bt_signal_confidence_avg_exposure"].dropna()
+            if "bt_signal_confidence_avg_exposure" in group.columns else pd.Series(dtype=float)
+        )
+        bt_gate_score = (
+            group["bt_signal_confidence_avg_score"].dropna()
+            if "bt_signal_confidence_avg_score" in group.columns else pd.Series(dtype=float)
+        )
+        row["bt_signal_confidence_block_rate_mean"] = (
+            round(bt_gate_block.mean(), 6) if len(bt_gate_block) else None
+        )
+        row["bt_signal_confidence_avg_exposure_mean"] = (
+            round(bt_gate_exposure.mean(), 6) if len(bt_gate_exposure) else None
+        )
+        row["bt_signal_confidence_avg_score_mean"] = (
+            round(bt_gate_score.mean(), 6) if len(bt_gate_score) else None
+        )
     else:
         for k in ["bt_total_return_mean", "bt_annual_return_mean", "bt_sharpe_mean",
-                   "bt_max_drawdown_worst", "bt_calmar_mean", "bt_volatility_mean", "bt_win_rate"]:
+                   "bt_max_drawdown_worst", "bt_calmar_mean", "bt_volatility_mean", "bt_win_rate",
+                   "bt_signal_confidence_block_rate_mean",
+                   "bt_signal_confidence_avg_exposure_mean",
+                   "bt_signal_confidence_avg_score_mean"]:
             row[k] = None
 
     # -----------------------------------------------------------------------
@@ -349,7 +441,7 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     return row
 
 
-def build_comparison_table(all_df: pd.DataFrame) -> pd.DataFrame:
+def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None) -> pd.DataFrame:
     """构建对比表（行=run，列=聚合指标+训练参数）"""
     if "wf_run_id" not in all_df.columns:
         logger.error("汇总CSV中缺少 wf_run_id 列，无法分组")
@@ -359,6 +451,7 @@ def build_comparison_table(all_df: pd.DataFrame) -> pd.DataFrame:
     for wf_run_id, group in all_df.groupby("wf_run_id", sort=False):
         # 聚合性能指标
         agg = aggregate_run(group)
+        agg.update(load_chain_metrics(raw_dir, wf_run_id))
         agg["wf_run_id"] = wf_run_id
 
         # 追加训练参数（取第一行即可，同一 run 内所有 split 参数相同）
@@ -379,8 +472,14 @@ def build_comparison_table(all_df: pd.DataFrame) -> pd.DataFrame:
 
     non_scored_metric_cols = [
         "n_splits", "model_version_range",
+        # 全周期串联补充
+        "chain_total_return", "chain_sharpe", "chain_trading_days",
         # 回测补充
-        "bt_calmar_mean", "bt_total_return_mean", "bt_volatility_mean",
+        "bt_annual_return_mean", "bt_calmar_mean", "bt_total_return_mean",
+        "bt_max_drawdown_worst", "bt_volatility_mean",
+        "bt_signal_confidence_block_rate_mean",
+        "bt_signal_confidence_avg_exposure_mean",
+        "bt_signal_confidence_avg_score_mean",
         # 统计补充
         "oos_rankic_ir_mean", "oos_rankic_ir_std",
         "oos_top100_median_mean", "oos_top100_win_rate",
@@ -462,7 +561,7 @@ def build_metric_descriptions() -> pd.DataFrame:
         ("综合评分", "综合得分",
          "跨实验百分位排名加权综合得分（0~100，越高越好）。"
          "对12个关键指标分别计算当前实验集内的百分位排名（0~1），再按权重求和×100。"
-         "权重配置（回测60%）：回测年化收益 20%、回测胜率 15%、回测夏普 15%、回测最差回撤 10%；"
+         "权重配置（回测60%）：全周期CAGR 20%、回测胜率 15%、回测夏普 15%、全周期链式最大回撤 10%；"
          "（统计32%）：跨切分IR 10%、Top30胜率 5%、Top30最差中位收益 5%、"
          "RankIC_IR趋势 5%、Top30中位收益 3%、Top30超额 2%、偏斜度 2%（绝对值低好）；"
          "（训练质量8%）：验证_OOS_IR差距 8%（低好）。"
@@ -486,12 +585,17 @@ def build_metric_descriptions() -> pd.DataFrame:
         ("OOS性能", "Top300中位收益均值",    "各切分每日Top300持仓20日收益中位数的跨切分均值；样本量大，统计更稳定但个股alpha被稀释",                                                               "越高越好"),
         ("OOS性能", "Top300胜率",           "各切分中Top300中位收益>0的占比",                                                                                                              "越高越好"),
         # ── OOS 回测指标 ──────────────────────────────────────────────────────
-        ("OOS回测", "回测年化收益均值",       "各切分OOS回测（真实组合模拟）年化收益率的跨切分均值，包含交易成本和调仓摩擦",                                                                            "越高越好"),
+        ("OOS回测", "全周期CAGR",            "基于 chain_nav 将所有 split 的 OOS 净值顺次串联后得到的全周期复利年化收益，更适合做最终策略筛选",                                                       "越高越好（优先看）"),
+        ("OOS回测", "全周期总收益",          "基于 chain_nav 串联后的起止总收益率，反映整轮 walk-forward 结束时的真实累计收益",                                                                      "越高越好"),
+        ("OOS回测", "全周期链式最大回撤",    "基于 chain_nav 串联后的全周期最大回撤，避免只看单个 split 的最差值而忽略跨 split 累计损失",                                                              "越接近0越好（优先看）"),
+        ("OOS回测", "全周期链式夏普",        "基于 chain_nav 串联后的全周期夏普比率，使用 3% 无风险利率与全周期日收益波动计算",                                                                      "越高越好"),
+        ("OOS回测", "全周期链式交易日数",    "chain_nav 串联后的交易日总数，用于判断 CAGR 计算口径和样本长度是否一致",                                                                            "参考"),
+        ("OOS回测", "回测年化收益均值",       "各切分 OOS 回测年化收益率的跨切分均值，适合做横向粗筛，但不等同于全周期 CAGR",                                                                      "越高越好（粗筛用）"),
         ("OOS回测", "回测夏普均值",          "各切分OOS回测夏普比率（年化收益-3%无风险利率/年化波动率）的跨切分均值",                                                                                "越高越好（>1.0为优秀）"),
-        ("OOS回测", "回测最大回撤(最差)",     "所有切分OOS回测中最大回撤的最差值（绝对值最大的回撤），衡量极端风险下限",                                                                                "越接近0越好（-30%以下需警惕）"),
+        ("OOS回测", "回测最大回撤(最差)",     "所有切分 OOS 回测中最大回撤的最差值（绝对值最大的单段回撤），用于观察最脆弱 split，但不等同于全周期链式回撤",                                        "越接近0越好（-30%以下需警惕）"),
         ("OOS回测", "回测Calmar均值",        "各切分年化收益/最大回撤的均值，衡量单位风险回报",                                                                                                   "越高越好（>1.0为良好）"),
-        ("OOS回测", "回测胜率",              "各切分OOS回测总收益>0的占比，衡量策略在不同历史时段的盈利稳健性",                                                                                     "越高越好（>0.7为优秀）"),
-        ("OOS回测", "回测总收益均值",         "各切分OOS回测期间总收益率的跨切分均值",                                                                                                           "越高越好"),
+        ("OOS回测", "回测胜率",              "各切分 OOS 回测总收益>0 的占比，衡量策略在不同历史时段的盈利稳健性",                                                                                 "越高越好（>0.7为优秀）"),
+        ("OOS回测", "回测总收益均值",         "各切分 OOS 回测期间总收益率的跨切分均值，适合观察 split 层面的平均水平，不等同于全周期累计收益",                                                      "越高越好"),
         ("OOS回测", "回测波动率均值",         "各切分OOS回测年化波动率的跨切分均值",                                                                                                             "越低越稳定"),
         # ── 训练质量指标 ──────────────────────────────────────────────────────
         ("训练质量", "验证集RankIC_IR均值",  "各切分内部验证集逐日RankIC IR的跨切分均值；验证集来自训练窗口末尾，反映模型在样本内末期的泛化能力",                                                      "越高越好"),
@@ -741,6 +845,9 @@ def print_comparison_table(df: pd.DataFrame) -> None:
         "综合得分",
         COL_NAMES["n_splits"],
         COL_NAMES["model_version_range"],
+        COL_NAMES["chain_cagr"],
+        COL_NAMES["chain_max_drawdown"],
+        COL_NAMES["chain_total_return"],
         COL_NAMES["oos_cross_split_ir"],
         COL_NAMES["oos_rankic_ir_mean"],
         COL_NAMES["oos_top30_win_rate"],
@@ -792,7 +899,7 @@ def main():
         return
 
     # 2. 构建对比表
-    comp_df = build_comparison_table(all_df)
+    comp_df = build_comparison_table(all_df, raw_dir=raw_dir)
     if comp_df.empty:
         logger.error("构建对比表失败，退出")
         return

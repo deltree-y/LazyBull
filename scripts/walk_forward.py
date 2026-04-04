@@ -154,6 +154,10 @@ def run_oos_backtest(
     bt_top_n: int = 30,
     bt_rebalance_freq: Optional[int] = None,
     data_root: str = "./data",
+    signal_confidence_gate_enabled: bool = False,
+    signal_confidence_gate_top_k: int = 10,
+    signal_confidence_gate_thresholds: Optional[List[float]] = None,
+    signal_confidence_gate_exposure_levels: Optional[List[float]] = None,
     bt_exclude_st: bool = True,
     bt_min_list_days: int = 365,
     bt_sell_timing: str = "open",
@@ -313,6 +317,10 @@ def run_oos_backtest(
         model_version=model_version,
         models_dir=f"{data_root}/models",
         weight_method=bt_weight_method,
+        signal_confidence_gate_enabled=signal_confidence_gate_enabled,
+        signal_confidence_gate_top_k=signal_confidence_gate_top_k,
+        signal_confidence_gate_thresholds=signal_confidence_gate_thresholds,
+        signal_confidence_gate_exposure_levels=signal_confidence_gate_exposure_levels,
         verbose=False,
     )
 
@@ -408,6 +416,7 @@ def run_oos_backtest(
         trading_dates=trading_dates_ts,
         price_data=price_data
     )
+    confidence_gate_stats = engine.get_confidence_gate_stats()
 
     # 6. 提取绩效指标
     if nav_curve is None or nav_curve.empty or 'nav' not in nav_curve.columns:
@@ -443,6 +452,13 @@ def run_oos_backtest(
         "bt_start": bt_start,
         "bt_end": bt_end,
         "bt_top_n": bt_top_n,
+        "bt_signal_confidence_signal_days": confidence_gate_stats["signal_days"],
+        "bt_signal_confidence_blocked_days": confidence_gate_stats["blocked_days"],
+        "bt_signal_confidence_block_rate": round(confidence_gate_stats["block_rate"], 6),
+        "bt_signal_confidence_avg_exposure": round(
+            confidence_gate_stats["avg_exposure"], 6
+        ),
+        "bt_signal_confidence_avg_score": round(confidence_gate_stats["avg_score"], 6),
     }
 
     if market_regime_enabled:
@@ -1378,6 +1394,14 @@ def write_walk_forward_summary(
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
         "bt_weight_method": getattr(args, 'bt_weight_method', 'equal'),
+        "signal_confidence_gate_enabled": getattr(args, 'signal_confidence_gate_enabled', False),
+        "signal_confidence_gate_top_k": getattr(args, 'signal_confidence_gate_top_k', 10),
+        "signal_confidence_gate_thresholds": getattr(
+            args, 'signal_confidence_gate_thresholds', [0.8, 1.2, 1.6]
+        ),
+        "signal_confidence_gate_exposure_levels": getattr(
+            args, 'signal_confidence_gate_exposure_levels', [0.3, 0.6, 1.0]
+        ),
         "bt_sell_timing": getattr(args, 'bt_sell_timing', 'open'),
         "bt_exclude_st": getattr(args, 'bt_exclude_st', True),
         "bt_min_list_days": getattr(args, 'bt_min_list_days', 365),
@@ -1900,6 +1924,32 @@ def main():
         choices=["equal", "score"],
         help="回测权重分配方法：equal（等权）或 score（按预测分数加权），默认 equal"
     )
+    parser.add_argument(
+        "--signal-confidence-gate-enabled",
+        action="store_true",
+        default=False,
+        help="启用信号置信度门控：低置信度时降仓或持币"
+    )
+    parser.add_argument(
+        "--signal-confidence-gate-top-k",
+        type=int,
+        default=10,
+        help="信号置信度评估使用的头部候选数量，默认 10"
+    )
+    parser.add_argument(
+        "--signal-confidence-gate-thresholds",
+        type=float,
+        nargs="+",
+        default=[0.8, 1.2, 1.6],
+        help="信号置信度阈值列表；低于首档时持币，默认 0.8 1.2 1.6"
+    )
+    parser.add_argument(
+        "--signal-confidence-gate-exposure-levels",
+        type=float,
+        nargs="+",
+        default=[0.3, 0.6, 1.0],
+        help="各信号置信度阈值对应的仓位系数，默认 0.3 0.6 1.0"
+    )
 
     # 回测初始资金
     parser.add_argument(
@@ -2268,6 +2318,15 @@ def main():
         logger.info(f"  持仓 Top N: {args.bt_top_n}")
         logger.info(f"  卖出时机: {args.bt_sell_timing}")
         logger.info(f"  调仓频率: {args.bt_rebalance_freq or '自动推断'}")
+        logger.info(
+            f"  信号置信度门控: {'启用' if args.signal_confidence_gate_enabled else '关闭'}"
+        )
+        if args.signal_confidence_gate_enabled:
+            logger.info(
+                f"    top_k={args.signal_confidence_gate_top_k}, "
+                f"thresholds={args.signal_confidence_gate_thresholds}, "
+                f"exposures={args.signal_confidence_gate_exposure_levels}"
+            )
         logger.info(f"  排除 ST: {'是' if args.bt_exclude_st else '否'}")
         logger.info(f"  最少上市天数: {args.bt_min_list_days}")
         if args.bt_max_weight_per_stock is not None:
@@ -2415,6 +2474,10 @@ def main():
                             bt_top_n=args.bt_top_n,
                             bt_rebalance_freq=args.bt_rebalance_freq,
                             data_root=args.data_root,
+                            signal_confidence_gate_enabled=args.signal_confidence_gate_enabled,
+                            signal_confidence_gate_top_k=args.signal_confidence_gate_top_k,
+                            signal_confidence_gate_thresholds=args.signal_confidence_gate_thresholds,
+                            signal_confidence_gate_exposure_levels=args.signal_confidence_gate_exposure_levels,
                             bt_exclude_st=args.bt_exclude_st,
                             bt_min_list_days=args.bt_min_list_days,
                             bt_sell_timing=args.bt_sell_timing,

@@ -1,12 +1,15 @@
 """测试 ML 回测引擎是否正确使用父类信号过滤逻辑"""
 
+import io
 import tempfile
 
 import numpy as np
 import pandas as pd
 import pytest
+from loguru import logger
 
 from src.lazybull.backtest import BacktestEngineML
+from src.lazybull.backtest.engine import _format_rebalance_decision_summary
 from src.lazybull.common.cost import CostModel
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.signals import MLSignal
@@ -284,3 +287,237 @@ def test_ml_engine_build_signal_data(trained_model, mock_features_by_date):
     assert data is None  # 应该返回 None
     
     print(f"\n✓ _build_signal_data 方法测试通过")
+
+
+def test_ml_backtest_confidence_gate_scales_pending_signal(
+    trained_model,
+    mock_stock_basic,
+    mock_price_data,
+    mock_features_by_date,
+):
+    """测试回测引擎会把信号置信度门控应用到最终待买权重。"""
+    models_dir, version = trained_model
+
+    signal = MLSignal(
+        top_n=2,
+        model_version=version,
+        models_dir=models_dir,
+        weight_method="equal",
+        signal_confidence_gate_enabled=True,
+        signal_confidence_gate_thresholds=[0.0],
+        signal_confidence_gate_exposure_levels=[0.4],
+    )
+
+    universe = BasicUniverse(
+        stock_basic=mock_stock_basic,
+        exclude_st=False,
+        min_list_days=0,
+        markets=['主板']
+    )
+
+    engine = BacktestEngineML(
+        features_by_date=mock_features_by_date,
+        universe=universe,
+        signal=signal,
+        initial_capital=100000.0,
+        cost_model=CostModel(),
+        rebalance_freq=1,
+        verbose=False,
+    )
+
+    trading_dates = [
+        pd.Timestamp('2023-06-01'),
+        pd.Timestamp('2023-06-02'),
+        pd.Timestamp('2023-06-05'),
+    ]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+
+    engine._generate_signal(
+        date=trading_dates[0],
+        trading_dates=trading_dates,
+        price_data=mock_price_data,
+        date_to_idx=date_to_idx,
+    )
+
+    pending = engine.pending_signals[trading_dates[0]]["signals"]
+    assert len(pending) == 2
+    assert abs(sum(pending.values()) - 0.4) < 1e-6
+
+    gate_stats = engine.get_confidence_gate_stats()
+    assert gate_stats["signal_days"] == 1
+    assert gate_stats["blocked_days"] == 0
+    assert abs(gate_stats["avg_exposure"] - 0.4) < 1e-6
+
+
+def test_format_rebalance_decision_summary_is_explicit():
+    """测试统一调仓决策摘要文案足够清晰且为单行。"""
+    trace = {
+        "signal_date": pd.Timestamp("2024-08-12"),
+        "target_n": 17,
+        "candidate_count": 1158,
+        "queued": True,
+        "signal_gate": {
+            "exposure": 0.6,
+            "summary": "score=0.124，达到阈值 0.080，目标仓位 60%",
+        },
+        "ect": {"exposure": 1.0, "summary": "未启用"},
+        "ma250": {"exposure": 1.0, "summary": "未启用"},
+        "market_regime": {
+            "exposure": 0.5,
+            "summary": "mode=vol_target, target_vol=20.0%, realized_vol=40.0%, 市场层=50.0%",
+        },
+        "market_layer_exposure": 0.5,
+        "final_target_exposure": 0.3,
+    }
+
+    message = _format_rebalance_decision_summary(
+        decision_trace=trace,
+        execution_date=pd.Timestamp("2024-08-13"),
+    )
+
+    assert "\n" not in message
+    assert "调仓决策摘要: 信号日 2024-08-12 | 执行=2024-08-13 | 候选/目标=1158/17" in message
+    assert "门控=60.0%[score=0.124, 档=0.080, 目标=60%]" in message
+    assert "ECT=100.0%[未启用]" in message
+    assert "市场=50.0%[mode=vol_target, target_vol=20.0%, realized_vol=40.0%]" in message
+    assert "最终=30.0%[60.0% x 100.0% x 50.0%, 进入待买队列]" in message
+
+
+def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
+    trained_model,
+    mock_stock_basic,
+    mock_price_data,
+    mock_features_by_date,
+):
+    """测试关闭详细日志时仍会输出统一的调仓决策摘要。"""
+    models_dir, version = trained_model
+
+    features_by_date = {
+        date_key: df.assign(mkt_ret_vol_20=0.2 / np.sqrt(252))
+        for date_key, df in mock_features_by_date.items()
+    }
+
+    signal = MLSignal(
+        top_n=2,
+        model_version=version,
+        models_dir=models_dir,
+        weight_method="equal",
+        signal_confidence_gate_enabled=True,
+        signal_confidence_gate_thresholds=[0.0],
+        signal_confidence_gate_exposure_levels=[0.4],
+    )
+
+    universe = BasicUniverse(
+        stock_basic=mock_stock_basic,
+        exclude_st=False,
+        min_list_days=0,
+        markets=["主板"],
+    )
+
+    engine = BacktestEngineML(
+        features_by_date=features_by_date,
+        universe=universe,
+        signal=signal,
+        initial_capital=100000.0,
+        cost_model=CostModel(),
+        rebalance_freq=1,
+        market_regime_enabled=True,
+        market_regime_mode="vol_target",
+        market_regime_vol_target=0.1,
+        market_regime_min_exposure=0.2,
+        verbose=False,
+    )
+
+    trading_dates = [
+        pd.Timestamp("2023-06-01"),
+        pd.Timestamp("2023-06-02"),
+        pd.Timestamp("2023-06-05"),
+    ]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+
+    stream = io.StringIO()
+    sink_id = logger.add(stream, format="{message}")
+    try:
+        engine._generate_signal(
+            date=trading_dates[0],
+            trading_dates=trading_dates,
+            price_data=mock_price_data,
+            date_to_idx=date_to_idx,
+        )
+        engine._prepare_price_index(mock_price_data)
+        engine.price_data_cache = mock_price_data
+        engine._execute_pending_buys(
+            date=trading_dates[1],
+            trading_dates=trading_dates,
+            date_to_idx=date_to_idx,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    output = stream.getvalue()
+    assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选/目标=5/2" in output
+    assert "门控=40.0%[score=0.000, top_mean=1.0200, baseline=1.0200, std=0.3124, 档=0.000, 目标=40%]" in output
+    assert "ECT=100.0%[未启用]" in output
+    assert "MA250/ATR=100.0%[未启用]" in output
+    assert "市场=50.0%[mode=vol_target, target_vol=10.0%, realized_vol=20.0%]" in output
+    assert "最终=20.0%[40.0% x 100.0% x 50.0%, 进入待买队列]" in output
+
+
+def test_ml_backtest_logs_blocked_rebalance_summary(
+    trained_model,
+    mock_stock_basic,
+    mock_price_data,
+    mock_features_by_date,
+):
+    """测试门控完全阻断时也会输出统一摘要。"""
+    models_dir, version = trained_model
+
+    signal = MLSignal(
+        top_n=2,
+        model_version=version,
+        models_dir=models_dir,
+        weight_method="equal",
+        signal_confidence_gate_enabled=True,
+        signal_confidence_gate_thresholds=[10.0],
+        signal_confidence_gate_exposure_levels=[0.4],
+    )
+
+    universe = BasicUniverse(
+        stock_basic=mock_stock_basic,
+        exclude_st=False,
+        min_list_days=0,
+        markets=["主板"],
+    )
+
+    engine = BacktestEngineML(
+        features_by_date=mock_features_by_date,
+        universe=universe,
+        signal=signal,
+        initial_capital=100000.0,
+        cost_model=CostModel(),
+        rebalance_freq=1,
+        verbose=False,
+    )
+
+    trading_dates = [
+        pd.Timestamp("2023-06-01"),
+        pd.Timestamp("2023-06-02"),
+    ]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+
+    stream = io.StringIO()
+    sink_id = logger.add(stream, format="{message}")
+    try:
+        engine._generate_signal(
+            date=trading_dates[0],
+            trading_dates=trading_dates,
+            price_data=mock_price_data,
+            date_to_idx=date_to_idx,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    output = stream.getvalue()
+    assert "调仓决策摘要: 信号日 2023-06-01 | 执行=- | 候选/目标=5/2" in output
+    assert "门控=0.0%" in output
+    assert "最终=0.0%[门控阻断, 本次不进入待买队列]" in output

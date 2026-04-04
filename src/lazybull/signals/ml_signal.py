@@ -4,6 +4,7 @@
 使用排序选股 Top N 方式
 """
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -12,6 +13,22 @@ from loguru import logger
 
 from ..ml import ModelRegistry
 from .base import Signal
+
+
+@dataclass
+class SignalConfidenceGateState:
+    """信号置信度门控状态。"""
+
+    enabled: bool = False
+    score: float = float("nan")
+    exposure: float = 1.0
+    candidate_count: int = 0
+    top_k: int = 0
+    top_mean: float = float("nan")
+    baseline_mean: float = float("nan")
+    score_std: float = float("nan")
+    hit_threshold: Optional[float] = None
+    reason: str = "未启用"
 
 
 class MLSignal(Signal):
@@ -29,6 +46,10 @@ class MLSignal(Signal):
         model_version: Optional[int] = None,
         models_dir: str = "./data/models",
         weight_method: str = "equal",
+        signal_confidence_gate_enabled: bool = False,
+        signal_confidence_gate_top_k: int = 10,
+        signal_confidence_gate_thresholds: Optional[List[float]] = None,
+        signal_confidence_gate_exposure_levels: Optional[List[float]] = None,
         min_amount_ma20: float = 50000.0,
         min_total_mv: float = 500000.0,
         max_total_mv: float = 15000000.0,
@@ -42,6 +63,10 @@ class MLSignal(Signal):
             model_version: 模型版本号，None 表示使用最新版本
             models_dir: 模型目录
             weight_method: 权重分配方法，"equal" 表示等权，"score" 表示按预测分数加权
+            signal_confidence_gate_enabled: 是否启用信号置信度门控，默认False
+            signal_confidence_gate_top_k: 置信度评估使用的头部股票数量，默认10
+            signal_confidence_gate_thresholds: 置信度阈值列表，低于首档时持币
+            signal_confidence_gate_exposure_levels: 各阈值对应的仓位系数列表
             min_amount_ma20: 20日均成交额下限（千元），默认50000（=5000万元）
             min_total_mv: 总市值下限（万元），默认500000（=50亿元）
             max_total_mv: 总市值上限（万元），默认15000000（=1500亿元）
@@ -53,6 +78,14 @@ class MLSignal(Signal):
         self.model_version = model_version
         self.models_dir = models_dir
         self.weight_method = weight_method
+        self.signal_confidence_gate_enabled = signal_confidence_gate_enabled
+        self.signal_confidence_gate_top_k = signal_confidence_gate_top_k
+        self.signal_confidence_gate_thresholds = (
+            signal_confidence_gate_thresholds or [0.8, 1.2, 1.6]
+        )
+        self.signal_confidence_gate_exposure_levels = (
+            signal_confidence_gate_exposure_levels or [0.3, 0.6, 1.0]
+        )
         self.min_amount_ma20 = min_amount_ma20
         self.min_total_mv = min_total_mv
         self.max_total_mv = max_total_mv
@@ -63,14 +96,209 @@ class MLSignal(Signal):
         self.metadata = None
         self.feature_columns = None
         self.registry = None  # 复用 registry 实例
+        self._last_confidence_gate_state = SignalConfidenceGateState()
+
+        self._validate_confidence_gate_params()
+
+        confidence_gate_info = ""
+        if self.signal_confidence_gate_enabled:
+            confidence_gate_info = (
+                ", confidence_gate="
+                f"enabled(top_k={self.signal_confidence_gate_top_k}, "
+                f"thresholds={self.signal_confidence_gate_thresholds}, "
+                f"exposures={self.signal_confidence_gate_exposure_levels})"
+            )
 
         logger.info(
             f"ML 信号初始化: top_n={top_n}, model_version={model_version}, "
             f"weight_method={weight_method}, "
             f"min_amount_ma20={min_amount_ma20:.0f}千元, "
             f"total_mv=[{min_total_mv/10000:.0f}亿,{max_total_mv/10000:.0f}亿], "
-            f"exclude_financial={exclude_financial}"
+            f"exclude_financial={exclude_financial}{confidence_gate_info}"
         )
+
+    def _validate_confidence_gate_params(self) -> None:
+        """校验信号置信度门控参数。"""
+        if self.signal_confidence_gate_top_k <= 0:
+            raise ValueError(
+                "signal_confidence_gate_top_k 必须为正整数，"
+                f"当前值: {self.signal_confidence_gate_top_k}"
+            )
+
+        if len(self.signal_confidence_gate_thresholds) != len(
+            self.signal_confidence_gate_exposure_levels
+        ):
+            raise ValueError(
+                "signal_confidence_gate_thresholds 与 "
+                "signal_confidence_gate_exposure_levels 长度必须一致"
+            )
+
+        for i in range(1, len(self.signal_confidence_gate_thresholds)):
+            if (
+                self.signal_confidence_gate_thresholds[i]
+                <= self.signal_confidence_gate_thresholds[i - 1]
+            ):
+                raise ValueError(
+                    "signal_confidence_gate_thresholds 必须严格递增: "
+                    f"{self.signal_confidence_gate_thresholds}"
+                )
+
+        last_exposure = -1.0
+        for exposure in self.signal_confidence_gate_exposure_levels:
+            if exposure < 0 or exposure > 1:
+                raise ValueError(
+                    "signal_confidence_gate_exposure_levels 必须在 [0, 1] 范围内: "
+                    f"{self.signal_confidence_gate_exposure_levels}"
+                )
+            if exposure < last_exposure:
+                raise ValueError(
+                    "signal_confidence_gate_exposure_levels 必须非递减: "
+                    f"{self.signal_confidence_gate_exposure_levels}"
+                )
+            last_exposure = exposure
+
+    def _get_primary_task(self) -> str:
+        """获取主模型任务类型。"""
+        if self.metadata is None:
+            return "regression"
+        return self.metadata.get("train_params", {}).get("task", "regression")
+
+    def _calculate_confidence_gate_state(
+        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
+    ) -> SignalConfidenceGateState:
+        """根据排序候选计算置信度门控状态。"""
+        if not self.signal_confidence_gate_enabled:
+            state = SignalConfidenceGateState(enabled=False, exposure=1.0, reason="未启用")
+            self._last_confidence_gate_state = state
+            return state
+
+        score_values = np.asarray([score for _, score in ranked_candidates], dtype=float)
+        score_values = score_values[np.isfinite(score_values)]
+
+        if len(score_values) == 0:
+            state = SignalConfidenceGateState(
+                enabled=True,
+                score=0.0,
+                exposure=0.0,
+                candidate_count=0,
+                top_k=0,
+                reason="无有效候选分数，持币",
+            )
+            self._last_confidence_gate_state = state
+            return state
+
+        top_k = min(self.signal_confidence_gate_top_k, len(score_values))
+        top_scores = score_values[:top_k]
+
+        if len(score_values) > top_k:
+            baseline_scores = score_values[top_k:min(len(score_values), top_k * 2)]
+            if len(baseline_scores) == 0:
+                baseline_scores = score_values[top_k:]
+        else:
+            baseline_scores = score_values
+
+        top_mean = float(np.mean(top_scores))
+        baseline_mean = float(np.mean(baseline_scores))
+        score_std = float(np.std(score_values))
+
+        confidence_score = 0.0
+        reason = "分数离散度过低，持币"
+        if score_std > 1e-12:
+            confidence_score = max(0.0, (top_mean - baseline_mean) / score_std)
+            reason = (
+                f"score={confidence_score:.3f}, top_mean={top_mean:.4f}, "
+                f"baseline={baseline_mean:.4f}, std={score_std:.4f}"
+            )
+
+        if self._get_primary_task() == "regression" and top_mean <= 0:
+            confidence_score = 0.0
+            reason = (
+                f"Top{top_k} 平均分={top_mean:.4f} <= 0，视为无正向alpha，持币"
+            )
+
+        exposure = 0.0
+        hit_threshold = None
+        for threshold, level in zip(
+            self.signal_confidence_gate_thresholds,
+            self.signal_confidence_gate_exposure_levels,
+        ):
+            if confidence_score >= threshold:
+                exposure = level
+                hit_threshold = threshold
+            else:
+                break
+
+        if hit_threshold is None:
+            reason = (
+                f"{reason}，未达到首档阈值 "
+                f"{self.signal_confidence_gate_thresholds[0]:.3f}"
+            )
+        else:
+            reason = (
+                f"{reason}，达到阈值 {hit_threshold:.3f}，"
+                f"目标仓位 {exposure:.0%}"
+            )
+
+        state = SignalConfidenceGateState(
+            enabled=True,
+            score=confidence_score,
+            exposure=exposure,
+            candidate_count=len(score_values),
+            top_k=top_k,
+            top_mean=top_mean,
+            baseline_mean=baseline_mean,
+            score_std=score_std,
+            hit_threshold=hit_threshold,
+            reason=reason,
+        )
+        self._last_confidence_gate_state = state
+        return state
+
+    def evaluate_confidence_gate(
+        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
+    ) -> SignalConfidenceGateState:
+        """对排序候选重新评估一次置信度门控。"""
+        return self._calculate_confidence_gate_state(ranked_candidates, date=date)
+
+    def apply_confidence_gate_to_weights(
+        self,
+        signals: Dict[str, float],
+        confidence_state: Optional[SignalConfidenceGateState] = None,
+        date: Optional[pd.Timestamp] = None,
+        emit_log: bool = True,
+    ) -> Dict[str, float]:
+        """将置信度门控结果应用到最终权重，允许留出现金。"""
+        if not signals:
+            return signals
+
+        state = confidence_state or self._last_confidence_gate_state
+        if not state.enabled:
+            return signals
+
+        date_label = date.date() if isinstance(date, pd.Timestamp) else date
+
+        if state.exposure <= 0:
+            if emit_log:
+                logger.warning(
+                    f"信号置信度门控: {date_label}, {state.reason}，本次持币"
+                )
+            return {}
+
+        if state.exposure < 1.0:
+            if emit_log:
+                logger.warning(
+                    f"信号置信度门控: {date_label}, {state.reason}，"
+                    f"仓位缩放到 {state.exposure:.0%}，剩余资金持币"
+                )
+            return {stock: weight * state.exposure for stock, weight in signals.items()}
+
+        if emit_log and self.verbose:
+            logger.info(f"信号置信度门控: {date_label}, {state.reason}，满仓通过")
+        return signals
+
+    def get_last_confidence_gate_state(self) -> SignalConfidenceGateState:
+        """返回最近一次评估的置信度门控状态。"""
+        return self._last_confidence_gate_state
 
     def _load_model(self) -> None:
         """加载模型（延迟加载）"""
@@ -233,6 +461,8 @@ class MLSignal(Signal):
 
         # 按预测分数排序，选择 Top N
         features_df = features_df.sort_values("ml_score", ascending=False)
+        ranked_candidates = list(zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist()))
+        confidence_state = self.evaluate_confidence_gate(ranked_candidates, date=date)
         top_stocks = features_df.head(self.top_n)
         logger.info(
             "  TOP预测概率抽样: {}".format(
@@ -268,6 +498,10 @@ class MLSignal(Signal):
                 signals = dict(zip(stocks, weights))
         else:
             raise ValueError(f"不支持的权重方法: {self.weight_method}")
+
+        signals = self.apply_confidence_gate_to_weights(
+            signals, confidence_state=confidence_state, date=date
+        )
 
         logger.debug(
             f"ML 信号生成完成: {date.date()}, 选择 {len(signals)} 只股票, "
@@ -368,6 +602,7 @@ class MLSignal(Signal):
 
         # 返回 (股票代码, 分数) 元组列表
         ranked = list(zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist()))
+        self.evaluate_confidence_gate(ranked, date=date)
         if False:
             logger.info(
                 f"  ML排序候选生成: {date.date()}, "  # 候选数 {len(ranked)}, "
@@ -418,6 +653,10 @@ class EnsembleMLSignal(MLSignal):
         top_n: int = 20,
         models_dir: str = "./data/models",
         weight_method: str = "equal",
+        signal_confidence_gate_enabled: bool = False,
+        signal_confidence_gate_top_k: int = 10,
+        signal_confidence_gate_thresholds: Optional[List[float]] = None,
+        signal_confidence_gate_exposure_levels: Optional[List[float]] = None,
         min_amount_ma20: float = 50000.0,
         min_total_mv: float = 500000.0,
         max_total_mv: float = 15000000.0,
@@ -438,6 +677,10 @@ class EnsembleMLSignal(MLSignal):
             model_version=model_version_a,
             models_dir=models_dir,
             weight_method=weight_method,
+            signal_confidence_gate_enabled=signal_confidence_gate_enabled,
+            signal_confidence_gate_top_k=signal_confidence_gate_top_k,
+            signal_confidence_gate_thresholds=signal_confidence_gate_thresholds,
+            signal_confidence_gate_exposure_levels=signal_confidence_gate_exposure_levels,
             min_amount_ma20=min_amount_ma20,
             min_total_mv=min_total_mv,
             max_total_mv=max_total_mv,
@@ -587,6 +830,14 @@ class EnsembleMLSignal(MLSignal):
         else:
             raise ValueError(f"不支持的权重方法: {self.weight_method}")
 
+        ranked_candidates = list(
+            zip(features_df["ts_code"].tolist(), features_df["blended_score"].tolist())
+        )
+        confidence_state = self.evaluate_confidence_gate(ranked_candidates, date=date)
+        signals = self.apply_confidence_gate_to_weights(
+            signals, confidence_state=confidence_state, date=date
+        )
+
         return signals
 
     def generate_ranked(self, date: pd.Timestamp, universe: List[str], data: Dict) -> List[tuple]:
@@ -630,6 +881,7 @@ class EnsembleMLSignal(MLSignal):
         # 返回 (股票代码, blended_score) — 归一化加权分数，正数且有区分度
         # 按 ensemble_rank 排序（已排好），score 用于下游 score 加权
         ranked = list(zip(features_df["ts_code"].tolist(), features_df["blended_score"].tolist()))
+        self.evaluate_confidence_gate(ranked, date=date)
         return ranked
 
     def get_model_info(self) -> Dict:

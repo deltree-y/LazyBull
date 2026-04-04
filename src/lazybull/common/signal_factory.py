@@ -37,6 +37,10 @@ def create_signal(
             top_n=config.top_n,
             models_dir=models_dir,
             weight_method=config.weight_method,
+            signal_confidence_gate_enabled=config.signal_confidence_gate_enabled,
+            signal_confidence_gate_top_k=config.signal_confidence_gate_top_k,
+            signal_confidence_gate_thresholds=config.signal_confidence_gate_thresholds,
+            signal_confidence_gate_exposure_levels=config.signal_confidence_gate_exposure_levels,
             verbose=verbose,
         )
         logger.info(
@@ -50,6 +54,10 @@ def create_signal(
             model_version=config.model_version,
             models_dir=models_dir,
             weight_method=config.weight_method,
+            signal_confidence_gate_enabled=config.signal_confidence_gate_enabled,
+            signal_confidence_gate_top_k=config.signal_confidence_gate_top_k,
+            signal_confidence_gate_thresholds=config.signal_confidence_gate_thresholds,
+            signal_confidence_gate_exposure_levels=config.signal_confidence_gate_exposure_levels,
             verbose=verbose,
         )
     return signal

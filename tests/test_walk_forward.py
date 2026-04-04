@@ -329,6 +329,10 @@ class TestWalkForwardCSV:
                 bt_equity_curve_recovery_mode="immediate",
                 bt_equity_curve_recovery_step=0.5,
                 bt_equity_curve_recovery_delay_periods=2,
+                signal_confidence_gate_enabled=True,
+                signal_confidence_gate_top_k=8,
+                signal_confidence_gate_thresholds=[0.1, 0.3],
+                signal_confidence_gate_exposure_levels=[0.4, 1.0],
             )
 
             # 写入文件
@@ -350,6 +354,10 @@ class TestWalkForwardCSV:
             assert "bt_max_weight_per_stock" in df.columns
             assert "bt_stop_loss_enabled" in df.columns
             assert "bt_equity_curve_enabled" in df.columns
+            assert "signal_confidence_gate_enabled" in df.columns
+            assert "signal_confidence_gate_top_k" in df.columns
+            assert "signal_confidence_gate_thresholds" in df.columns
+            assert "signal_confidence_gate_exposure_levels" in df.columns
             
             # 验证数据正确
             assert df.loc[0, "split_index"] == 0
@@ -364,6 +372,10 @@ class TestWalkForwardCSV:
             assert str(df.loc[0, "bt_equity_curve_enabled"]).lower() == "true"
             assert "6.0" in str(df.loc[0, "bt_equity_curve_drawdown_thresholds"])
             assert "0.8" in str(df.loc[0, "bt_equity_curve_exposure_levels"])
+            assert str(df.loc[0, "signal_confidence_gate_enabled"]).lower() == "true"
+            assert df.loc[0, "signal_confidence_gate_top_k"] == 8
+            assert "0.1" in str(df.loc[0, "signal_confidence_gate_thresholds"])
+            assert "0.4" in str(df.loc[0, "signal_confidence_gate_exposure_levels"])
             assert df.loc[1, "split_index"] == 1
             assert df.loc[1, "daily_rankic_mean"] == 0.06
 

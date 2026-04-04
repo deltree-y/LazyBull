@@ -3,7 +3,9 @@
 """MA250 可观测性相关测试。"""
 
 import tempfile
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from scripts.compare_walk_forward import build_comparison_table
@@ -69,6 +71,14 @@ class TestCompareWalkForwardMA250Columns:
                     "market_regime_ma250_threshold": 0.8,
                     "market_regime_ma250_exposure": 0.2,
                     "market_regime_ma250_atr_scaling": True,
+                    "signal_confidence_gate_enabled": True,
+                    "signal_confidence_gate_top_k": 8,
+                    "signal_confidence_gate_thresholds": "[0.1, 0.3]",
+                    "signal_confidence_gate_exposure_levels": "[0.4, 1.0]",
+                    "bt_total_return": 0.12,
+                    "bt_signal_confidence_block_rate": 0.25,
+                    "bt_signal_confidence_avg_exposure": 0.7,
+                    "bt_signal_confidence_avg_score": 0.18,
                     "bt_sell_timing": "close",
                     "bt_min_list_days": 180,
                     "bt_max_weight_per_stock": 0.15,
@@ -91,16 +101,83 @@ class TestCompareWalkForwardMA250Columns:
         assert "回测止损" in result.columns
         assert "回测ECT" in result.columns
         assert "回测ECT恢复模式" in result.columns
+        assert "信号置信度门控" in result.columns
+        assert "门控TopK" in result.columns
+        assert "门控阈值" in result.columns
+        assert "门控仓位系数" in result.columns
+        assert "门控持币率均值" in result.columns
+        assert "门控平均仓位" in result.columns
+        assert "门控平均置信度" in result.columns
         assert result.loc[0, "MA250硬条件"] == True
         assert result.loc[0, "MA250阈值"] == 0.8
         assert result.loc[0, "MA250仓位"] == 0.2
         assert result.loc[0, "MA250 ATR缩放"] == True
+        assert result.loc[0, "信号置信度门控"] == True
+        assert result.loc[0, "门控TopK"] == 8
+        assert result.loc[0, "门控阈值"] == "[0.1, 0.3]"
+        assert result.loc[0, "门控仓位系数"] == "[0.4, 1.0]"
+        assert result.loc[0, "门控持币率均值"] == 0.25
+        assert result.loc[0, "门控平均仓位"] == 0.7
+        assert result.loc[0, "门控平均置信度"] == 0.18
         assert result.loc[0, "回测卖出时机"] == "close"
         assert result.loc[0, "回测最少上市天数"] == 180
         assert result.loc[0, "回测单股最大权重"] == 0.15
         assert result.loc[0, "回测止损"] == True
         assert result.loc[0, "回测ECT"] == True
         assert result.loc[0, "回测ECT恢复模式"] == "immediate"
+
+
+class TestCompareWalkForwardChainMetrics:
+    """测试 compare 脚本输出全周期 chain 指标。"""
+
+    def test_build_comparison_table_adds_chain_metrics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_dir = Path(tmpdir)
+            nav_up = np.linspace(1.0, 1.2, 126)
+            nav_down = np.linspace(1.2, 1.08, 21)[1:]
+            nav_recover = np.linspace(1.08, 1.2, 107)[1:]
+            nav = np.concatenate([nav_up, nav_down, nav_recover])
+            pd.DataFrame(
+                {
+                    "date": list(range(len(nav))),
+                    "nav": nav,
+                    "split_index": [0] * len(nav),
+                }
+            ).to_csv(raw_dir / "chain_nav_wf_test_001.csv", index=False, encoding="utf-8-sig")
+
+            all_df = pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_test_001",
+                        "split_index": 0,
+                        "bt_total_return": 0.12,
+                        "bt_annual_return": 0.10,
+                        "bt_max_drawdown": -0.20,
+                        "bt_sharpe": 1.10,
+                    },
+                    {
+                        "wf_run_id": "wf_test_001",
+                        "split_index": 1,
+                        "bt_total_return": 0.08,
+                        "bt_annual_return": 0.07,
+                        "bt_max_drawdown": -0.12,
+                        "bt_sharpe": 0.90,
+                    },
+                ]
+            )
+
+            result = build_comparison_table(all_df, raw_dir=raw_dir)
+
+            assert "全周期CAGR" in result.columns
+            assert "全周期总收益" in result.columns
+            assert "全周期链式最大回撤" in result.columns
+            assert "全周期链式夏普" in result.columns
+            assert "全周期链式交易日数" in result.columns
+            assert abs(result.loc[0, "全周期总收益"] - 0.2) < 1e-6
+            assert abs(result.loc[0, "全周期CAGR"] - 0.2) < 1e-6
+            assert abs(result.loc[0, "全周期链式最大回撤"] + 0.1) < 1e-6
+            assert result.loc[0, "全周期链式交易日数"] == 252
+            assert pd.notna(result.loc[0, "全周期链式夏普"])
 
 
 class TestMA250LogFormatting:

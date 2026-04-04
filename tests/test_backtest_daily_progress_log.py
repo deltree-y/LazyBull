@@ -48,10 +48,10 @@ def test_daily_progress_log_includes_position_count_and_exposure():
         portfolio_value=115840.0,
     )
 
-    assert log_line.startswith("回测[2025-12-29]: 122/124 天 - 本轮第[2/20]天")
+    assert log_line.startswith("回测[2025-12-29]: 122/124 天 - 本轮第[02/20]天")
     assert "持仓/仓位[17/20]/[87.05%]" in log_line
     assert "收益:本调仓/本轮/年化:[+15.56%/+15.84%/+35.49%]" in log_line
-    assert "ATR(min/avg/max):[N/A/N/A/N/A]" in log_line
+    assert "ATR:[N/A/N/A/N/A]" in log_line
 
 
 def test_ml_daily_progress_log_includes_position_atr_summary():
@@ -82,7 +82,7 @@ def test_ml_daily_progress_log_includes_position_atr_summary():
         portfolio_value=100000.0,
     )
 
-    assert "ATR(min/avg/max):[1.23%/2.34%/3.45%]" in log_line
+    assert "ATR:[1.23%/2.34%/3.45%]" in log_line
 
 
 def test_target_position_count_scales_with_stagger_tranches():
@@ -135,3 +135,54 @@ def test_cycle_separator_logs_only_on_first_day(monkeypatch):
     )
 
     assert log_messages.count(separator_line) == 2
+
+
+def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
+    """新一轮分隔线应先于该轮首日的选股/信号日志输出。"""
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(top_n=5),
+        initial_capital=100000.0,
+        rebalance_freq=2,
+        verbose=False,
+        enable_pending_order=False,
+        enable_position_completion=False,
+    )
+
+    log_messages = []
+    separator_line = "\n================================================ 新一轮回测 ================================================="
+
+    monkeypatch.setattr(engine_module.logger, "info", lambda message: log_messages.append(str(message)))
+    monkeypatch.setattr(engine, "_prepare_price_index", lambda price_data: None)
+    monkeypatch.setattr(
+        engine,
+        "_get_rebalance_dates",
+        lambda trading_dates: {trading_dates[2]: 0},
+    )
+    monkeypatch.setattr(engine, "_calculate_portfolio_value", lambda date: 100000.0)
+    monkeypatch.setattr(engine, "_generate_nav_curve", lambda: pd.DataFrame())
+    monkeypatch.setattr(
+        engine,
+        "_generate_signal",
+        lambda *args, **kwargs: log_messages.append("SIGNAL_GENERATED"),
+    )
+
+    trading_dates = [
+        pd.Timestamp("2025-01-02"),
+        pd.Timestamp("2025-01-03"),
+        pd.Timestamp("2025-01-06"),
+    ]
+    price_data = pd.DataFrame(columns=["ts_code", "trade_date", "close"])
+
+    engine.run(
+        start_date=trading_dates[0],
+        end_date=trading_dates[-1],
+        trading_dates=trading_dates,
+        price_data=price_data,
+    )
+
+    separator_indices = [i for i, message in enumerate(log_messages) if message == separator_line]
+    signal_index = log_messages.index("SIGNAL_GENERATED")
+
+    assert len(separator_indices) == 2
+    assert separator_indices[1] < signal_index

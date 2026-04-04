@@ -24,6 +24,12 @@ class TradingConfig:
     # ── 组合 ──
     top_n: int = 30
     weight_method: str = "equal"
+    signal_confidence_gate_enabled: bool = False
+    signal_confidence_gate_top_k: int = 10
+    signal_confidence_gate_thresholds: List[float] = field(default_factory=lambda: [0.8, 1.2, 1.6])
+    signal_confidence_gate_exposure_levels: List[float] = field(
+        default_factory=lambda: [0.3, 0.6, 1.0]
+    )
     rebalance_freq: Optional[int] = 20
     stagger_tranches: int = 1
     max_per_industry: Optional[int] = None
@@ -152,6 +158,32 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         default="equal",
         choices=["equal", "score"],
         help="权重分配方法（默认：equal）",
+    )
+    parser.add_argument(
+        "--signal-confidence-gate-enabled",
+        action="store_true",
+        default=False,
+        help="启用信号置信度门控：低置信度时降仓或持币",
+    )
+    parser.add_argument(
+        "--signal-confidence-gate-top-k",
+        type=int,
+        default=10,
+        help="置信度评估使用的头部候选数量（默认：10）",
+    )
+    parser.add_argument(
+        "--signal-confidence-gate-thresholds",
+        type=float,
+        nargs="+",
+        default=[0.8, 1.2, 1.6],
+        help="信号置信度阈值列表；低于首档时持币，默认：0.8 1.2 1.6",
+    )
+    parser.add_argument(
+        "--signal-confidence-gate-exposure-levels",
+        type=float,
+        nargs="+",
+        default=[0.3, 0.6, 1.0],
+        help="各置信度阈值对应的仓位系数，默认：0.3 0.6 1.0",
     )
     parser.add_argument(
         "--rebalance-freq", type=int, default=20, help="调仓频率（交易日数），默认20"

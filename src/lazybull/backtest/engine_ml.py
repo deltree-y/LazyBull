@@ -157,6 +157,7 @@ class BacktestEngineML(BacktestEngine):
         self.market_regime_ma250_threshold = market_regime_ma250_threshold
         self.market_regime_ma250_exposure = market_regime_ma250_exposure
         self.market_regime_ma250_atr_scaling = market_regime_ma250_atr_scaling
+        self._last_market_regime_trace = self._build_default_market_trace()
 
         # 校验：ATR 缩放依赖 MA250 硬条件
         if market_regime_ma250_atr_scaling and not market_regime_ma250_hard_stop:
@@ -196,6 +197,77 @@ class BacktestEngineML(BacktestEngine):
             f"ML 回测引擎初始化: 特征数据覆盖 {len(features_by_date)} 个交易日"
             f"{regime_info}{ind_filter_info}{ma250_info}"
         )
+
+    def _build_default_market_trace(self) -> Dict:
+        """构建市场层默认摘要。"""
+        return {
+            "market_layer_exposure": 1.0,
+            "ma250": {
+                "enabled": self.market_regime_ma250_hard_stop,
+                "exposure": 1.0,
+                "summary": "待执行日评估" if self.market_regime_ma250_hard_stop else "未启用",
+            },
+            "market_regime": {
+                "enabled": self.market_regime_enabled,
+                "exposure": 1.0,
+                "summary": "待执行日评估" if self.market_regime_enabled else "未启用",
+            },
+        }
+
+    def _initialize_decision_trace_for_signal(self, decision_trace: Dict) -> Dict:
+        """补充市场层占位信息，供统一摘要使用。"""
+        market_trace = self._build_default_market_trace()
+        decision_trace["ma250"] = market_trace["ma250"]
+        decision_trace["market_regime"] = market_trace["market_regime"]
+        decision_trace["market_layer_exposure"] = market_trace["market_layer_exposure"]
+        return decision_trace
+
+    def _build_market_regime_summary(
+        self,
+        features_df: pd.DataFrame,
+        exposure: float,
+        drawdown_guard_triggered: bool = False,
+        drawdown: Optional[float] = None,
+    ) -> str:
+        """根据当前模式构造市场择时摘要。"""
+        mode = self.market_regime_mode
+        if mode == "binary":
+            mkt_ret = self._get_feature_scalar(features_df, "mkt_ret_avg_20")
+            base = (
+                f"mode=binary, mkt_ret_avg_20={mkt_ret:.2%}, "
+                f"bear_threshold={self.market_regime_bear_threshold:.2%}, 市场层={exposure:.1%}"
+                if not np.isnan(mkt_ret)
+                else f"mode=binary, mkt_ret_avg_20缺失，市场层={exposure:.1%}"
+            )
+        elif mode == "vol_target":
+            mkt_ret_vol = self._get_feature_scalar(features_df, "mkt_ret_vol_20")
+            if np.isnan(mkt_ret_vol) or mkt_ret_vol <= 0:
+                base = f"mode=vol_target, realized_vol缺失，市场层={exposure:.1%}"
+            else:
+                annualized_vol = mkt_ret_vol * np.sqrt(252)
+                base = (
+                    f"mode=vol_target, target_vol={self.market_regime_vol_target:.1%}, "
+                    f"realized_vol={annualized_vol:.1%}, 市场层={exposure:.1%}"
+                )
+        elif mode == "trend":
+            ma_trend = self._get_feature_scalar(features_df, "mkt_ma_trend")
+            base = (
+                f"mode=trend, mkt_ma_trend={ma_trend:.3f}, "
+                f"threshold={self.market_regime_trend_threshold:.3f}, 市场层={exposure:.1%}"
+                if not np.isnan(ma_trend)
+                else f"mode=trend, mkt_ma_trend缺失，市场层={exposure:.1%}"
+            )
+        else:
+            trend_exp = self._regime_trend(features_df)
+            vol_exp = self._regime_vol_target(features_df)
+            base = (
+                f"mode=combined, vol_exp={vol_exp:.1%}, trend_exp={trend_exp:.1%}, "
+                f"combine={self.market_regime_combine_method}, 市场层={exposure:.1%}"
+            )
+
+        if drawdown_guard_triggered and drawdown is not None and not np.isnan(drawdown):
+            base += f"，回撤保护触发(mkt_drawdown_20={drawdown:.1%})"
+        return base
 
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建信号数据（注入 ML 特征）
@@ -352,9 +424,15 @@ class BacktestEngineML(BacktestEngine):
         Returns:
             仓位系数，1.0 = 满仓，< 1.0 = 降仓
         """
+        trace = self._build_default_market_trace()
         date_str = date.strftime('%Y%m%d')
         features_df = self.features_by_date.get(date_str)
         if features_df is None or len(features_df) == 0:
+            if trace["ma250"]["enabled"]:
+                trace["ma250"]["summary"] = "缺少特征数据，按100.0%处理"
+            if trace["market_regime"]["enabled"]:
+                trace["market_regime"]["summary"] = "缺少特征数据，按100.0%处理"
+            self._last_market_regime_trace = trace
             return 1.0
 
         # MA250 模块（优先级最高，超越其他择时模式）
@@ -386,28 +464,64 @@ class BacktestEngineML(BacktestEngine):
             else:
                 exposure = base_exposure
 
+            if np.isnan(ma250_ratio):
+                ratio_text = "ratio=NaN"
+            else:
+                comparator = "<" if ma250_triggered else ">="
+                ratio_text = (
+                    f"ratio={ma250_ratio:.3f} {comparator} {self.market_regime_ma250_threshold:.3f}"
+                )
+
+            if (
+                self.market_regime_ma250_atr_scaling
+                and atr_ratio is not None
+                and mkt_atr is not None
+                and mkt_atr_ma250 is not None
+            ):
+                atr_text = (
+                    f"ATR缩放={mkt_atr_ma250:.2%}/{mkt_atr:.2%}={atr_ratio:.1%}"
+                )
+            elif self.market_regime_ma250_atr_scaling:
+                atr_text = "ATR缩放=缺少有效ATR数据"
+            else:
+                atr_text = "ATR缩放=关闭"
+
+            trace["ma250"] = {
+                "enabled": True,
+                "exposure": exposure,
+                "summary": (
+                    f"{ratio_text}，{'触发控仓' if ma250_triggered else '未触发硬条件'}，"
+                    f"base_after_ma250={base_exposure:.1%}，{atr_text}，市场层={exposure:.1%}"
+                ),
+            }
+
             # MA250 触发或 ATR 缩放导致降仓时，短路返回（不进入其他择时模式）
             if ma250_triggered or exposure < 1.0:
-                if abs(exposure - self._last_regime_exposure) > 1e-6:
-                    logger.warning(
-                        _format_ma250_decision_log(
-                            date=date,
-                            ma250_ratio=ma250_ratio,
-                            threshold=self.market_regime_ma250_threshold,
-                            hard_stop_exposure=self.market_regime_ma250_exposure,
-                            base_exposure=base_exposure,
-                            final_exposure=exposure,
-                            ma250_triggered=ma250_triggered,
-                            atr_scaling_enabled=self.market_regime_ma250_atr_scaling,
-                            atr_ratio=atr_ratio,
-                            mkt_atr=mkt_atr,
-                            mkt_atr_ma250=mkt_atr_ma250,
-                        )
-                    )
+                if self.market_regime_enabled:
+                    trace["market_regime"] = {
+                        "enabled": True,
+                        "exposure": 1.0,
+                        "summary": "跳过（MA250/ATR 已先行确定市场层仓位）",
+                    }
+                trace["market_layer_exposure"] = exposure
+                self._last_market_regime_trace = trace
                 return exposure
+        else:
+            trace["ma250"] = {
+                "enabled": False,
+                "exposure": 1.0,
+                "summary": "未启用",
+            }
 
         # 若仅启用了 MA250 硬条件而未启用常规择时，此处直接返回满仓
         if not self.market_regime_enabled:
+            trace["market_regime"] = {
+                "enabled": False,
+                "exposure": 1.0,
+                "summary": "未启用",
+            }
+            trace["market_layer_exposure"] = 1.0
+            self._last_market_regime_trace = trace
             return 1.0
 
         mode = self.market_regime_mode
@@ -425,14 +539,26 @@ class BacktestEngineML(BacktestEngine):
             exposure = self._regime_binary(features_df)
 
         # 回撤保护：已经大幅下跌时不再继续降仓，避免在底部减仓踏空反弹
+        drawdown = np.nan
+        drawdown_guard_triggered = False
         if self.market_regime_drawdown_guard and exposure < self._last_regime_exposure:
             drawdown = self._get_feature_scalar(features_df, 'mkt_drawdown_20')
             if not np.isnan(drawdown) and drawdown < self.market_regime_drawdown_threshold:
-                logger.warning(
-                    f"回撤保护触发: mkt_drawdown_20={drawdown:.1%} < {self.market_regime_drawdown_threshold:.0%}, "
-                    f"阻止降仓 {self._last_regime_exposure:.0%} → {exposure:.0%}，维持 {self._last_regime_exposure:.0%}"
-                )
-                return self._last_regime_exposure
+                drawdown_guard_triggered = True
+                exposure = self._last_regime_exposure
+
+        trace["market_regime"] = {
+            "enabled": True,
+            "exposure": exposure,
+            "summary": self._build_market_regime_summary(
+                features_df=features_df,
+                exposure=exposure,
+                drawdown_guard_triggered=drawdown_guard_triggered,
+                drawdown=drawdown,
+            ),
+        }
+        trace["market_layer_exposure"] = exposure
+        self._last_market_regime_trace = trace
 
         return exposure
 
@@ -513,15 +639,17 @@ class BacktestEngineML(BacktestEngine):
                 if signal_data is not None:
                     exposure = self._get_market_regime_exposure(signal_date)
 
-                    # 检测仓位变动并输出日志
-                    prev = self._last_regime_exposure
-                    if abs(exposure - prev) > 1e-6:
-                        direction = "↓ 降仓" if exposure < prev else "↑ 加仓"
-                        logger.warning(
-                            f"  市场择时变动: {date.date()}, "
-                            f"mode={self.market_regime_mode}, "
-                            f"exposure {prev:.0%} → {exposure:.0%} ({direction})"
+                    if isinstance(signal_data, dict) and "decision_trace" in signal_data:
+                        signal_data["decision_trace"]["ma250"] = self._last_market_regime_trace[
+                            "ma250"
+                        ]
+                        signal_data["decision_trace"]["market_regime"] = (
+                            self._last_market_regime_trace["market_regime"]
                         )
+                        signal_data["decision_trace"]["market_layer_exposure"] = (
+                            self._last_market_regime_trace["market_layer_exposure"]
+                        )
+
                     self._last_regime_exposure = exposure
 
                     if exposure < 1.0:
@@ -536,12 +664,6 @@ class BacktestEngineML(BacktestEngine):
                                 stock: w * exposure
                                 for stock, w in signal_data.items()
                             }
-                        if self.verbose:
-                            logger.info(
-                                f"  市场择时: {date.date()}, "
-                                f"mode={self.market_regime_mode}, "
-                                f"exposure={exposure:.2f}, 仓位降至 {exposure*100:.0f}%"
-                            )
 
         # 调用父类完成实际买入
         super()._execute_pending_buys(date, trading_dates, date_to_idx)

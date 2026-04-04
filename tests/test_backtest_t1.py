@@ -1,7 +1,10 @@
 """测试 T+1 交易规则的回测引擎"""
 
+import io
+
 import pandas as pd
 import pytest
+from loguru import logger
 
 from src.lazybull.backtest import BacktestEngine
 from src.lazybull.common.cost import CostModel
@@ -190,3 +193,57 @@ def test_position_tracking_with_buy_date(mock_price_data, mock_trading_dates):
         assert isinstance(info['buy_trade_price'], (int, float))
         assert isinstance(info['buy_pnl_price'], (int, float))
         assert isinstance(info['buy_cost_cash'], (int, float))
+
+
+def test_profit_extension_log_includes_expected_sell_date():
+    """盈利延续持有日志应打印延期后的预计卖出日期。"""
+
+    trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=6, freq='B')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        {
+            'ts_code': ['000001.SZ'] * len(trading_dates),
+            'trade_date': [date.strftime('%Y%m%d') for date in trading_dates],
+            'close': [10.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        }
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(),
+        rebalance_freq=1,
+        holding_period=2,
+        enable_profit_based_holding=True,
+        profit_extension_threshold=0.1,
+        profit_extension_days=2,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        verbose=False,
+    )
+    engine._prepare_price_index(price_data)
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 100,
+            'buy_date': trading_dates[1],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 0.0,
+        }
+    }
+
+    stream = io.StringIO()
+    sink_id = logger.add(stream, format='{message}')
+    try:
+        engine._check_and_sell(
+            date=trading_dates[3],
+            trading_dates=trading_dates,
+            date_to_idx=date_to_idx,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    output = stream.getvalue()
+    assert '盈利延续持有: 000001.SZ 持有2天' in output
+    assert '延续至最多 4 天, 预计卖出日期=2023-01-09' in output

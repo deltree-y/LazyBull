@@ -14,29 +14,30 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130209"   #20130101   #20130224
-$wf_end_date             = "20260209"   #20251231   #20260224
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
 $train_window_years_list = @(6)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
+$val_ratio_list          = @(0.2)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("y_ret_20")   # neu_y_ret_5 | neu_y_ret_10 | neu_y_ret_20 | y_ret_5 | y_ret_10 | y_ret_20
+$label_list              = @("y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
 $task_list               = @("regression")     # regression | classification
-$label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
+$label_transform_list    = @("raw", "cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 2000       # 固定：树数量上限（配合早停，不需要多组）
-$max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
+$n_estimators            = 2500       # 固定：树数量上限（配合早停，不需要多组）
+$max_depth_list          = @(3,5)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.008)      # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.003,0.005,0.007)     # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
-$reg_alpha_list          = @(0.05)       # XGB推荐0.05, LGB推荐0.1
+$reg_alpha_list          = @(0.05)      # XGB推荐0.05, LGB推荐0.1
 $reg_lambda_list         = @(1.0)       # XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
@@ -89,7 +90,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 $start_model_version     = 7969    # 第一个 split 的模型版本号（$null = 不指定）
                                    #7969/8151/8165:d3, 8137:d2
 
@@ -109,6 +110,16 @@ $bt_exclude_st           = $true   # $true 排除 ST | $false 不排除
 $bt_min_list_days_list   = @(365)  # 最少上市天数
 $bt_max_weight_per_stock_list = @(0.15) # 单股最大权重，$null=不限制，如 @(0.15, 0.20)
 $bt_max_per_industry_list = @($null)     # 单行业最大持仓数，$null=不限制，如 @(2, 3)
+
+# ── OOS 信号置信度门控（根据预测分数的置信度调整持仓，0402引入）────────────
+$signal_confidence_gate_enabled = $false  # $true 启用 | $false 禁用
+$signal_confidence_gate_top_k_list = @(20)
+$signal_confidence_gate_threshold_sets = @(
+    "0.01 0.02 0.10"
+)
+$signal_confidence_gate_exposure_sets = @(
+    "0.10 0.99 1.00"
+)
 
 # ── OOS 止损（关闭时请保持各阈值列表为单值，避免重复任务）─────────
 $bt_stop_loss_enabled                 = $true  # $true 启用 | $false 禁用
@@ -132,17 +143,17 @@ $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
 $industry_momentum_bottom_pct = 0.5     # 剔除排名后 X% 的行业（0~1），默认 0.2
 
 # ── 市场择时仓位管理 ─────────────────────────────────────────
-$market_regime                = $true       # $true 启用 | $false 禁用
+$market_regime                = $false       # $true 启用 | $false 禁用
 $market_regime_mode_list      = @("vol_target")  # binary | vol_target | trend | combined
-$market_regime_bear_threshold_list = @(-0.03)  # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
-$market_regime_bear_exposure  = 0.3            # binary 模式：熊市仓位系数（0~1）
-$market_regime_vol_target_list = @(0.2)       # vol_target/combined 模式：年化波动率目标
-$market_regime_trend_threshold = 1.0          # trend/combined 模式：mkt_ma_trend 低于此值降仓
-$market_regime_min_exposure    = 0.2         # 非 binary 模式：最低仓位下限
-$market_regime_combine_method  = "min"        # combined 模式组合方式：min | multiply
-$market_regime_trend_guard     = $true        # combined 模式趋势保护：上行趋势跳过 vol 降仓
-$market_regime_drawdown_guard  = $false        # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
-$market_regime_drawdown_threshold = -0.08     # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
+$market_regime_bear_threshold_list = @(-0.03)   # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
+$market_regime_bear_exposure  = 0.3             # binary 模式：熊市仓位系数（0~1）
+$market_regime_vol_target_list = @(0.20)   # 默认只围绕均衡区间做更窄扫描
+$market_regime_trend_threshold = 1.0            # trend/combined 模式：mkt_ma_trend 低于此值降仓
+$market_regime_min_exposure    = 0.2            # 非 binary 模式：最低仓位下限
+$market_regime_combine_method  = "min"          # combined 模式组合方式：min | multiply
+$market_regime_trend_guard     = $true          # combined 模式趋势保护：上行趋势跳过 vol 降仓
+$market_regime_drawdown_guard  = $false         # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
+$market_regime_drawdown_threshold = -0.08       # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
 $market_regime_ma250_hard_stop = $true  # $true 启用 | $false 禁用
@@ -155,11 +166,11 @@ $enable_profit_based_holding      = $true  # $true 启用 | $false 禁用
 $early_exit_loss_threshold_list   = @(-0.07) #-0.07 # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
 $early_exit_holding_ratio_list    = @(0.5)    #0.6  # 亏损提前换出最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
 $profit_extension_threshold_list  = @(0.1)   #0.1   # 盈利延续持有阈值（可多值，如 @(0.03, 0.05, 0.10)）
-$profit_extension_days_list       = @(3)     #5     # 盈利延续持有的额外天数（交易日，可多值，如 @(3, 5, 10)）
+$profit_extension_days_list       = @(2)     # baseline 对齐当前最佳防守型 run
 
 # ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
 $use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈值（需同时开启 $enable_profit_based_holding）
-$atr_multiplier_list              = @(2.8)   # ATR倍数（可多值，如 @(1.5, 2.0, 2.5)）
+$atr_multiplier_list              = @(2.8)   # baseline 对齐当前最佳防守型 run（仅启用 ATR 止损时生效）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
 $take_profit_threshold_list   = @(0.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
@@ -179,6 +190,35 @@ $shutdown_timeout_sec    = 600
 #  以下为执行逻辑（通常不需修改）
 # ============================================================
 
+$effective_label_list = $label_list
+if ($skip_training -and $label_list.Length -gt 1) {
+    Write-Host "[提示] skip-training 模式下标签不会切换模型，仅保留首个标签避免重复任务。" -ForegroundColor Yellow
+    $effective_label_list = @($label_list[0])
+}
+
+# 预生成门控扫描配置，避免关闭门控时无意义地展开笛卡尔积
+$signal_confidence_gate_scan_configs = @(
+    [PSCustomObject]@{
+        TopK = $null
+        Thresholds = $null
+        Exposures = $null
+    }
+)
+if ($signal_confidence_gate_enabled) {
+    $signal_confidence_gate_scan_configs = @()
+    foreach ($gateTopK in $signal_confidence_gate_top_k_list) {
+        foreach ($gateThresholds in $signal_confidence_gate_threshold_sets) {
+            foreach ($gateExposures in $signal_confidence_gate_exposure_sets) {
+                $signal_confidence_gate_scan_configs += [PSCustomObject]@{
+                    TopK = $gateTopK
+                    Thresholds = $gateThresholds
+                    Exposures = $gateExposures
+                }
+            }
+        }
+    }
+}
+
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
 $count      = 0
 $failed     = 0
@@ -188,7 +228,8 @@ $totalTasks = $algorithm_list.Length *
               $step_list.Length *
               $train_window_years_list.Length *
               $test_window_months_list.Length *
-              $label_list.Length *
+              $val_ratio_list.Length *
+              $effective_label_list.Length *
               $task_list.Length *
               $label_transform_list.Length *
               $objective_list.Length *
@@ -207,6 +248,7 @@ $totalTasks = $algorithm_list.Length *
               $market_regime_mode_list.Length *
               $market_regime_vol_target_list.Length *
               $bt_top_n_list.Length *
+              $signal_confidence_gate_scan_configs.Length *
               $bt_sell_timing_list.Length *
               $bt_min_list_days_list.Length *
               $bt_max_weight_per_stock_list.Length *
@@ -240,7 +282,8 @@ foreach ($algorithm in $algorithm_list) {
 foreach ($step in $step_list) {
 foreach ($train_window_years in $train_window_years_list) {
 foreach ($test_window_months in $test_window_months_list) {
-foreach ($label in $label_list) {
+foreach ($val_ratio in $val_ratio_list) {
+foreach ($label in $effective_label_list) {
 foreach ($task in $task_list) {
 foreach ($label_transform in $label_transform_list) {
 foreach ($objective in $objective_list) {
@@ -259,6 +302,7 @@ foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
 foreach ($market_regime_mode in $market_regime_mode_list) {
 foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
+foreach ($signal_confidence_gate_config in $signal_confidence_gate_scan_configs) {
 foreach ($bt_sell_timing in $bt_sell_timing_list) {
 foreach ($bt_min_list_days in $bt_min_list_days_list) {
 foreach ($bt_max_weight_per_stock in $bt_max_weight_per_stock_list) {
@@ -289,6 +333,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
                  " --step $step" +
                  " --train-window-years $train_window_years" +
                  " --test-window-months $test_window_months" +
+                 " --val-ratio $val_ratio" +
                  " --label $label" +
                  " --task $task" +
                  " --label-transform $label_transform" +
@@ -399,6 +444,12 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
 
     if ($oos_backtest) {
         $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method --bt-initial-capital $bt_initial_capital --bt-sell-timing $bt_sell_timing --bt-min-list-days $bt_min_list_days"
+        if ($signal_confidence_gate_enabled) {
+            $pythonCmd += " --signal-confidence-gate-enabled" +
+                          " --signal-confidence-gate-top-k $($signal_confidence_gate_config.TopK)" +
+                          " --signal-confidence-gate-thresholds $($signal_confidence_gate_config.Thresholds)" +
+                          " --signal-confidence-gate-exposure-levels $($signal_confidence_gate_config.Exposures)"
+        }
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
         }
@@ -477,7 +528,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

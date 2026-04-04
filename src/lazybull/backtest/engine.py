@@ -1,5 +1,6 @@
 """回测引擎"""
 
+import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
@@ -18,6 +19,125 @@ from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..signals.base import Signal
 from ..universe.base import Universe
+
+
+def _format_rebalance_decision_summary(
+    decision_trace: Dict,
+    execution_date: Optional[pd.Timestamp] = None,
+    tranche_tag: str = "",
+) -> str:
+    """格式化统一的调仓决策摘要日志。"""
+
+    def _to_optional_float(value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            if np.isnan(value):
+                return None
+        except TypeError:
+            return None
+        return float(value)
+
+    def _compact_summary(summary: Optional[str]) -> str:
+        if not summary:
+            return "-"
+
+        compact = str(summary).strip()
+        compact = compact.replace("，", ", ")
+        compact = compact.replace("达到阈值 ", "档=")
+        compact = compact.replace("未达到首档阈值 ", "未达首档=")
+        compact = compact.replace("目标仓位 ", "目标=")
+        compact = compact.replace("base_after_ma250=", "base=")
+        compact = compact.replace("final_after_atr=", "after_atr=")
+        compact = re.sub(r",?\s*市场层=[0-9.]+%", "", compact)
+        compact = re.sub(r"\s+", " ", compact)
+        return compact
+
+    def _fmt_exposure(value: Optional[float]) -> str:
+        if value is None:
+            return "N/A"
+        try:
+            if np.isnan(value):
+                return "N/A"
+        except TypeError:
+            return "N/A"
+        return f"{float(value):.1%}"
+
+    signal_date = decision_trace.get("signal_date")
+    signal_label = signal_date.date() if isinstance(signal_date, pd.Timestamp) else signal_date
+    execution_label = (
+        execution_date.date() if isinstance(execution_date, pd.Timestamp) else execution_date
+    )
+    candidate_count = decision_trace.get("candidate_count")
+    target_n = decision_trace.get("target_n", 0)
+    queued = bool(decision_trace.get("queued", execution_date is not None))
+
+    signal_gate = decision_trace.get("signal_gate", {})
+    ect = decision_trace.get("ect", {})
+    ma250 = decision_trace.get("ma250", {})
+    market_regime = decision_trace.get("market_regime", {})
+
+    signal_gate_exposure = _to_optional_float(signal_gate.get("exposure", 1.0))
+    ect_exposure = _to_optional_float(ect.get("exposure", 1.0))
+    ma250_exposure = _to_optional_float(ma250.get("exposure", 1.0))
+    market_regime_exposure = _to_optional_float(market_regime.get("exposure", 1.0))
+    market_layer_exposure = _to_optional_float(decision_trace.get("market_layer_exposure", 1.0))
+    computed_exposure = None
+    if (
+        signal_gate_exposure is not None
+        and ect_exposure is not None
+        and market_layer_exposure is not None
+    ):
+        computed_exposure = signal_gate_exposure * ect_exposure * market_layer_exposure
+    final_target_exposure = _to_optional_float(
+        decision_trace.get(
+            "final_target_exposure",
+            computed_exposure,
+        )
+    )
+
+    header = f"{tranche_tag}调仓决策摘要: 信号日 {signal_label}"
+    if execution_label is not None:
+        execution_text = execution_label
+    else:
+        execution_text = "-"
+
+    candidate_text = candidate_count if candidate_count is not None else "N/A"
+
+    final_action = "进入待买队列" if queued else "本次不进入待买队列"
+
+    if (
+        final_target_exposure is not None
+        and final_target_exposure <= 0
+        and signal_gate_exposure is not None
+        and signal_gate_exposure <= 0
+    ):
+        final_detail = f"门控阻断, {final_action}"
+    else:
+        final_detail = (
+            f"{_fmt_exposure(signal_gate_exposure)} x "
+            f"{_fmt_exposure(ect_exposure)} x "
+            f"{_fmt_exposure(market_layer_exposure)}, {final_action}"
+        )
+
+    return (
+        f"\n"
+        f"  {header} | 执行={execution_text} | 候选/目标={candidate_text}/{target_n}"
+        f"\n"
+        f" | 门控={_fmt_exposure(signal_gate_exposure)}"
+        f"[{_compact_summary(signal_gate.get('summary', '未启用'))}]"
+        f"\n"
+        f" | ECT={_fmt_exposure(ect_exposure)}"
+        f"[{_compact_summary(ect.get('summary', '未启用'))}]"
+        f"\n"
+        f" | MA250/ATR={_fmt_exposure(ma250_exposure)}"
+        f"[{_compact_summary(ma250.get('summary', '未启用'))}]"
+        f"\n"
+        f" | 市场={_fmt_exposure(market_regime_exposure)}"
+        f"[{_compact_summary(market_regime.get('summary', '未启用'))}]"
+        f"\n"
+        f" | 最终={_fmt_exposure(final_target_exposure)}[{final_detail}]"
+    )
 
 
 class BacktestEngine:
@@ -240,6 +360,7 @@ class BacktestEngine:
             "total_abandoned": 0,  # 累计放弃补齐次数
             "completion_attempts": 0,  # 累计补齐尝试次数
         }
+        self.confidence_gate_history: List[Dict] = []  # 信号置信度门控历史
 
         # 价格索引（在 run 时初始化）
         self.trade_price_index: Optional[pd.Series] = None  # 成交价格（不复权 close）
@@ -333,6 +454,11 @@ class BacktestEngine:
 
         # 按日推进
         for idx, date in enumerate(trading_dates):
+            # 计算本轮调仓周期内的第几天（1-based），并在新轮首日所有业务日志之前输出分隔线
+            cycle_day = idx % self.rebalance_freq + 1
+            if cycle_day == 1:
+                logger.info("\n================================================ 新一轮回测 =================================================")
+
             # 处理延迟订单（先处理延迟订单，再处理新信号）
             if self.enable_pending_order:
                 self._process_pending_orders(date)
@@ -374,10 +500,6 @@ class BacktestEngine:
 
             # 输出回测进度（含持仓和收益信息）
             trading_days = idx + 1
-            # 计算本轮调仓周期内的第几天（1-based）
-            cycle_day = idx % self.rebalance_freq + 1
-            if cycle_day == 1:
-                logger.info("\n================================================ 新一轮回测 =================================================")
             logger.info(
                 self._format_daily_progress_log(
                     date=date,
@@ -441,6 +563,94 @@ class BacktestEngine:
         market_value = max(portfolio_value - self.current_capital, 0.0)
         exposure_pct = market_value / portfolio_value * 100
         return min(exposure_pct, 100.0)
+
+    def _initialize_decision_trace_for_signal(self, decision_trace: Dict) -> Dict:
+        """扩展点：子类可补充市场层占位信息。"""
+        return decision_trace
+
+    def _build_signal_decision_trace(
+        self,
+        date: pd.Timestamp,
+        target_n: int,
+        candidate_count: int,
+        tranche_idx: int,
+        confidence_gate_state=None,
+    ) -> Dict:
+        """构建调仓决策摘要所需的状态。"""
+        gate_enabled = bool(
+            confidence_gate_state is not None
+            and getattr(confidence_gate_state, "enabled", False)
+        )
+        gate_exposure = (
+            float(getattr(confidence_gate_state, "exposure", 1.0))
+            if gate_enabled else 1.0
+        )
+        gate_summary = (
+            getattr(confidence_gate_state, "reason", "未启用")
+            if gate_enabled else "未启用"
+        )
+
+        trace = {
+            "signal_date": date,
+            "target_n": target_n,
+            "candidate_count": candidate_count,
+            "tranche_idx": tranche_idx,
+            "queued": False,
+            "signal_gate": {
+                "enabled": gate_enabled,
+                "exposure": gate_exposure,
+                "summary": gate_summary,
+            },
+            "ect": {
+                "enabled": self.equity_curve_monitor is not None,
+                "exposure": 1.0,
+                "summary": "待执行日评估" if self.equity_curve_monitor else "未启用",
+            },
+            "ma250": {
+                "enabled": False,
+                "exposure": 1.0,
+                "summary": "未启用",
+            },
+            "market_regime": {
+                "enabled": False,
+                "exposure": 1.0,
+                "summary": "未启用",
+            },
+            "market_layer_exposure": 1.0,
+            "final_target_exposure": gate_exposure,
+        }
+        return self._initialize_decision_trace_for_signal(trace)
+
+    def _mark_decision_trace_blocked(self, decision_trace: Dict) -> Dict:
+        """标记该信号未进入待买队列。"""
+        decision_trace["queued"] = False
+        decision_trace["final_target_exposure"] = 0.0
+        if decision_trace.get("ect", {}).get("enabled"):
+            decision_trace["ect"]["exposure"] = None
+            decision_trace["ect"]["summary"] = "未评估（信号门控已阻断）"
+        if decision_trace.get("ma250", {}).get("enabled"):
+            decision_trace["ma250"]["exposure"] = None
+            decision_trace["ma250"]["summary"] = "未评估（信号门控已阻断）"
+        if decision_trace.get("market_regime", {}).get("enabled"):
+            decision_trace["market_regime"]["exposure"] = None
+            decision_trace["market_regime"]["summary"] = "未评估（信号门控已阻断）"
+        decision_trace["market_layer_exposure"] = None
+        return decision_trace
+
+    def _log_rebalance_decision_summary(
+        self,
+        decision_trace: Dict,
+        execution_date: Optional[pd.Timestamp] = None,
+        tranche_tag: str = "",
+    ) -> None:
+        """统一输出调仓决策摘要。"""
+        logger.warning(
+            _format_rebalance_decision_summary(
+                decision_trace=decision_trace,
+                execution_date=execution_date,
+                tranche_tag=tranche_tag,
+            )
+        )
 
     def _get_current_position_atr_stats(
         self, date: pd.Timestamp
@@ -645,6 +855,29 @@ class BacktestEngine:
         else:
             ranked_candidates_for_selection = ranked_candidates
 
+        confidence_gate_state = None
+        if hasattr(self.signal, "evaluate_confidence_gate"):
+            confidence_gate_state = self.signal.evaluate_confidence_gate(
+                ranked_candidates_for_selection,
+                date=date,
+            )
+            if getattr(confidence_gate_state, "enabled", False):
+                self.confidence_gate_history.append(
+                    {
+                        "date": trade_date_str,
+                        "tranche_idx": tranche_idx,
+                        "score": confidence_gate_state.score,
+                        "exposure": confidence_gate_state.exposure,
+                        "candidate_count": confidence_gate_state.candidate_count,
+                        "top_k": confidence_gate_state.top_k,
+                        "top_mean": confidence_gate_state.top_mean,
+                        "baseline_mean": confidence_gate_state.baseline_mean,
+                        "score_std": confidence_gate_state.score_std,
+                        "hit_threshold": confidence_gate_state.hit_threshold,
+                        "reason": confidence_gate_state.reason,
+                    }
+                )
+
         # 从排序候选中选择 top N 股票
         # 当启用仓位补齐功能时，不在信号生成阶段过滤 T+1 的涨停/停牌，
         # 而是在 T+1 执行买入时处理失败，并在 T+2 等日期补齐
@@ -658,6 +891,14 @@ class BacktestEngine:
         else:
             # 如果信号生成器没有 top_n 属性，则使用所有候选
             target_n = len(ranked_candidates)
+
+        decision_trace = self._build_signal_decision_trace(
+            date=date,
+            target_n=target_n,
+            candidate_count=len(ranked_candidates_for_selection),
+            tranche_idx=tranche_idx,
+            confidence_gate_state=confidence_gate_state,
+        )
 
         if self.enable_position_completion:
             # 启用补齐功能：直接选择 top N 股票，不检查 T+1 可交易性
@@ -723,6 +964,22 @@ class BacktestEngine:
                     logger.warning(f"信号日 {date.date()} 权重限制后无有效权重，跳过")
                 return
 
+        if (
+            confidence_gate_state is not None
+            and hasattr(self.signal, "apply_confidence_gate_to_weights")
+        ):
+            signals = self.signal.apply_confidence_gate_to_weights(
+                signals,
+                confidence_state=confidence_gate_state,
+                date=date,
+                emit_log=False,
+            )
+
+            if not signals:
+                decision_trace = self._mark_decision_trace_blocked(decision_trace)
+                self._log_rebalance_decision_summary(decision_trace=decision_trace)
+                return
+
         # 保存信号，待 T+1 执行
         # 同时保存完整的排序候选列表用于补齐（如果启用补齐功能）
         self.pending_signals[date] = {
@@ -730,6 +987,7 @@ class BacktestEngine:
             "ranked_candidates": ranked_candidates if self.enable_position_completion else [],
             "target_n": target_n,
             "tranche_idx": tranche_idx,
+            "decision_trace": decision_trace,
         }
 
         # 保存最近一次调仓候选列表，供整体止盈补位使用
@@ -789,12 +1047,14 @@ class BacktestEngine:
             ranked_candidates = signal_data.get("ranked_candidates", [])
             target_n = signal_data.get("target_n", len(signals))
             tranche_idx = signal_data.get("tranche_idx", 0)
+            decision_trace = signal_data.get("decision_trace")
         else:
             # 旧格式兼容（当 enable_position_completion=False 或旧代码生成的信号）
             signals = signal_data
             ranked_candidates = []
             target_n = len(signals)
             tranche_idx = 0
+            decision_trace = None
 
         tranche_tag = (
             f"[批次 {tranche_idx + 1}/{self.stagger_tranches}] "
@@ -807,6 +1067,7 @@ class BacktestEngine:
 
         # 应用 ECT 仓位系数
         ect_exposure = 1.0
+        ect_reason = "未启用"
         if self.equity_curve_monitor:
             # 构建历史 NAV 序列
             nav_series = self._build_nav_series(date)
@@ -828,6 +1089,29 @@ class BacktestEngine:
 
                     if self.verbose:
                         logger.info(f"ECT 调整: 所有目标权重乘以系数 {ect_exposure:.2f}")
+
+        if decision_trace is None:
+            decision_trace = self._build_signal_decision_trace(
+                date=signal_date,
+                target_n=target_n,
+                candidate_count=len(ranked_candidates) if ranked_candidates else len(signals),
+                tranche_idx=tranche_idx,
+                confidence_gate_state=None,
+            )
+
+        decision_trace["ect"] = {
+            "enabled": self.equity_curve_monitor is not None,
+            "exposure": ect_exposure,
+            "summary": ect_reason if self.equity_curve_monitor else "未启用",
+        }
+        decision_trace["queued"] = True
+        decision_trace["final_target_exposure"] = float(sum(signals.values()))
+
+        self._log_rebalance_decision_summary(
+            decision_trace=decision_trace,
+            execution_date=date,
+            tranche_tag=tranche_tag,
+        )
 
         # 计算当前组合市值
         current_value = self._calculate_portfolio_value(date)
@@ -1244,10 +1528,18 @@ class BacktestEngine:
                     # 盈利延续持有：持有期满仍盈利，允许延续 profit_extension_days 天
                     if (profit_rate >= self.profit_extension_threshold
                             and holding_days < self.holding_period + self.profit_extension_days):
+                        max_holding_days = self.holding_period + self.profit_extension_days
+                        expected_sell_idx = anchor_idx + max_holding_days
+                        expected_sell_date = (
+                            trading_dates[expected_sell_idx].date()
+                            if expected_sell_idx < len(trading_dates)
+                            else "超出回测区间"
+                        )
                         logger.warning(
                             f"  盈利延续持有: {stock} 持有{holding_days}天, "
                             f"盈亏={profit_rate:.2%} >= 阈值={self.profit_extension_threshold:.2%}, "
-                            f"延续至最多 {self.holding_period + self.profit_extension_days} 天"
+                            f"延续至最多 {max_holding_days} 天, "
+                            f"预计卖出日期={expected_sell_date}"
                         )
                         continue  # 延续持有，跳过卖出
                     # 持有期到期（含延续到期）→ 预定事件，直接执行
@@ -2312,3 +2604,29 @@ class BacktestEngine:
             交易记录DataFrame
         """
         return pd.DataFrame(self.trades)
+
+    def get_confidence_gate_stats(self) -> Dict[str, float]:
+        """获取信号置信度门控统计。"""
+        if not self.confidence_gate_history:
+            return {
+                "signal_days": 0,
+                "blocked_days": 0,
+                "block_rate": 0.0,
+                "avg_exposure": 1.0,
+                "avg_score": 0.0,
+            }
+
+        history_df = pd.DataFrame(self.confidence_gate_history)
+        signal_days = int(len(history_df))
+        blocked_days = int((history_df["exposure"] <= 0).sum())
+        block_rate = blocked_days / signal_days if signal_days > 0 else 0.0
+        avg_exposure = float(history_df["exposure"].mean()) if signal_days > 0 else 1.0
+        avg_score = float(history_df["score"].mean()) if signal_days > 0 else 0.0
+
+        return {
+            "signal_days": signal_days,
+            "blocked_days": blocked_days,
+            "block_rate": block_rate,
+            "avg_exposure": avg_exposure,
+            "avg_score": avg_score,
+        }
