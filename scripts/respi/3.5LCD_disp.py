@@ -47,8 +47,8 @@ from src.lazybull.common.config import get_config    # noqa: E402
 FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 数据刷新间隔（秒），10分钟
-SCREENSAVER_RANGE_X = 10     # 屏保水平偏移范围（±像素）
-SCREENSAVER_RANGE_Y = 6      # 屏保垂直偏移范围（±像素）
+SCREENSAVER_RANGE_X = 4      # 屏保水平偏移范围（±像素）
+SCREENSAVER_RANGE_Y = 3      # 屏保垂直偏移范围（±像素）
 SCREENSAVER_INTERVAL = 60    # 屏保偏移更新间隔（秒）
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -384,11 +384,15 @@ class DisplayState:
 # 布局常量
 HEADER_H = 42          # 顶栏高度
 FOOTER_H = 34          # 底栏高度
+PANEL_MARGIN = 6       # 面板区左右外边距
 PANEL_TOP = 46         # 面板区顶部 y
-PANEL_H = 118          # 面板区高度（2行数据 + 内边距）
+PANEL_H = 118          # 面板区高度
 PANEL_GAP = 6          # 左右面板间距
-LEFT_W = 200           # 左面板宽度（总览 2×2）
-RIGHT_W = WIDTH - LEFT_W - PANEL_GAP - 12  # 右面板宽度（个股排名）
+PANEL_AREA_W = WIDTH - 2 * PANEL_MARGIN  # 面板总可用宽度 = 472
+LEFT_W = int(PANEL_AREA_W * 0.65)        # 左面板宽度 ≈ 306
+RIGHT_W = PANEL_AREA_W - LEFT_W - PANEL_GAP  # 右面板宽度 ≈ 160
+RIGHT_SUB_GAP = 4      # 右上/右下子面板间距
+RIGHT_SUB_H = (PANEL_H - RIGHT_SUB_GAP) // 2  # 每个子面板高度 = 57
 CHART_Y = PANEL_TOP + PANEL_H + 4  # 图表区起始 y
 CHART_H = HEIGHT - FOOTER_H - CHART_Y  # 图表区高度
 
@@ -398,10 +402,12 @@ def _render(state: DisplayState) -> None:
 
     布局：
       顶部状态栏（固定）
-      左面板（屏保偏移）：总览 2行×2列
+      左面板 65%（屏保偏移）：3行×2列
         行1: 持仓市值 | 浮盈率
         行2: 总资产   | 总盈亏率
-      右面板（屏保偏移）：盈利Top2 + 亏损Top2
+        行3: 持仓/仓位 | 年化收益
+      右上面板（屏保偏移）：盈利 Top2（右对齐）
+      右下面板（屏保偏移）：亏损 Top2（右对齐）
       图表区（固定）
       底部时间栏（固定）
     """
@@ -417,7 +423,7 @@ def _render(state: DisplayState) -> None:
     img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
     draw = ImageDraw.Draw(img)
 
-    font_val = _get_font(26)   # 数值
+    font_val = _get_font(24)   # 数值
     font_label = _get_font(13) # 标签
     font_rank = _get_font(13)  # 排名列表
     font_md = _get_font(20)    # 等待提示
@@ -434,8 +440,8 @@ def _render(state: DisplayState) -> None:
     rw = bbox[2] - bbox[0]
     draw.text((WIDTH - rw - 12, 12), header_right, fill=COLOR_YELLOW, font=font_label)
 
-    # ===== 左面板：总览（参与屏保偏移）=====
-    lp_x = 4 + ox
+    # ===== 左面板：总览 3行×2列（参与屏保偏移）=====
+    lp_x = PANEL_MARGIN + ox
     lp_y = PANEL_TOP + oy
     draw.rounded_rectangle(
         [lp_x, lp_y, lp_x + LEFT_W, lp_y + PANEL_H],
@@ -452,77 +458,83 @@ def _render(state: DisplayState) -> None:
         total_ast = summary['total_assets']
         flt_pct = summary['float_pnl_pct']
         gain_pct = summary['total_pnl_pct']
+        pos_count = summary['pos_count']
+        ann_pct = summary['annual_return_pct']
+        # 仓位 = 持仓市值 / 总资产
+        pos_ratio = int(mkt_val / total_ast * 100) if total_ast > 0 else 0
 
-        # 2行×2列，列宽各 LEFT_W/2
         col_w = LEFT_W // 2
-        pad = 10
+        pad = 8
+        row_h = (PANEL_H - 2 * pad) // 3
         cells = [
             # (行, 列, 标签, 值, 颜色)
             (0, 0, "持仓市值", _fmt_wan(mkt_val), COLOR_TEXT),
             (0, 1, "浮盈率", _fmt_pct(flt_pct), _pct_color(flt_pct)),
             (1, 0, "总资产", _fmt_wan(total_ast), COLOR_TEXT),
             (1, 1, "总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct)),
+            (2, 0, "持仓/仓位", f"{pos_count}/{pos_ratio}%", COLOR_TEXT),
+            (2, 1, "年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct)),
         ]
-        row_h = (PANEL_H - 2 * pad) // 2
         for r, c, label, value, color in cells:
             cx = lp_x + pad + c * col_w
             cy = lp_y + pad + r * row_h
             draw.text((cx, cy), label, fill=COLOR_LABEL, font=font_label)
-            draw.text((cx, cy + 16), value, fill=color, font=font_val)
+            draw.text((cx, cy + 15), value, fill=color, font=font_val)
 
-        # 左面板中间水平分隔线
-        sep_y = lp_y + pad + row_h
-        draw.line([(lp_x + pad, sep_y), (lp_x + LEFT_W - pad, sep_y)],
-                  fill=COLOR_DIVIDER, width=1)
+        # 行间水平分隔线
+        for i in range(1, 3):
+            sep_y = lp_y + pad + row_h * i
+            draw.line([(lp_x + pad, sep_y), (lp_x + LEFT_W - pad, sep_y)],
+                      fill=COLOR_DIVIDER, width=1)
 
     # ===== 右面板：个股盈亏排名（参与屏保偏移）=====
-    rp_x = 4 + LEFT_W + PANEL_GAP + ox
+    rp_x = PANEL_MARGIN + LEFT_W + PANEL_GAP + ox
     rp_y = PANEL_TOP + oy
+    rp_right = rp_x + RIGHT_W  # 右边界（用于右对齐）
+
+    # 右上子面板：盈利 Top2
     draw.rounded_rectangle(
-        [rp_x, rp_y, rp_x + RIGHT_W, rp_y + PANEL_H],
-        radius=6, fill=COLOR_PANEL_RIGHT
+        [rp_x, rp_y, rp_right, rp_y + RIGHT_SUB_H],
+        radius=5, fill=COLOR_PANEL_RIGHT
+    )
+    # 右下子面板：亏损 Top2
+    rp_y2 = rp_y + RIGHT_SUB_H + RIGHT_SUB_GAP
+    draw.rounded_rectangle(
+        [rp_x, rp_y2, rp_right, rp_y2 + RIGHT_SUB_H],
+        radius=5, fill=COLOR_PANEL_RIGHT
     )
 
-    pad = 8
-    inner_x = rp_x + pad
-    inner_y = rp_y + pad
+    pad = 6
+    line_h = 18
 
     if not rankings or len(rankings) < 2:
         txt = "暂无排名"
         bbox_r = draw.textbbox((0, 0), txt, font=font_label)
         tw = bbox_r[2] - bbox_r[0]
-        draw.text((rp_x + (RIGHT_W - tw) // 2, rp_y + PANEL_H // 2 - 8),
+        draw.text((rp_x + (RIGHT_W - tw) // 2, rp_y + RIGHT_SUB_H // 2 - 7),
                   txt, fill=COLOR_LABEL, font=font_label)
     else:
-        # 盈利前2 + 亏损前2
         top2 = rankings[:2]
         bottom2 = rankings[-2:] if len(rankings) >= 4 else rankings[-1:]
         # 避免重复（持仓少于4只时）
-        bottom2 = [s for s in bottom2 if s not in top2]
+        bottom2_codes = {s['code'] for s in top2}
+        bottom2 = [s for s in bottom2 if s['code'] not in bottom2_codes]
 
-        line_h = 20  # 每行高度
-        y_cur = inner_y
+        def _draw_rank_items(items, panel_y):
+            """右对齐绘制排名条目到指定子面板。"""
+            y = panel_y + pad
+            for s in items:
+                pct_str = _fmt_pct(s['pnl_pct'])
+                color = _pct_color(s['pnl_pct'])
+                line = f"{s['name']} {s['code']} {pct_str}"
+                bbox_l = draw.textbbox((0, 0), line, font=font_rank)
+                lw = bbox_l[2] - bbox_l[0]
+                draw.text((rp_right - pad - lw, y), line,
+                          fill=color, font=font_rank)
+                y += line_h
 
-        # 盈利标题
-        draw.text((inner_x, y_cur), "▲ 盈利", fill=COLOR_RED, font=font_label)
-        y_cur += line_h - 2
-        for s in top2:
-            pct_str = _fmt_pct(s['pnl_pct'])
-            line = f"{s['name']} {s['code']} {pct_str}"
-            draw.text((inner_x, y_cur), line,
-                      fill=_pct_color(s['pnl_pct']), font=font_rank)
-            y_cur += line_h
-
-        y_cur += 4
-        # 亏损标题
-        draw.text((inner_x, y_cur), "▼ 亏损", fill=COLOR_GREEN, font=font_label)
-        y_cur += line_h - 2
-        for s in bottom2:
-            pct_str = _fmt_pct(s['pnl_pct'])
-            line = f"{s['name']} {s['code']} {pct_str}"
-            draw.text((inner_x, y_cur), line,
-                      fill=_pct_color(s['pnl_pct']), font=font_rank)
-            y_cur += line_h
+        _draw_rank_items(top2, rp_y)
+        _draw_rank_items(bottom2, rp_y2)
 
     # ===== 图表区（固定）=====
     _draw_chart(draw, chart_data)
