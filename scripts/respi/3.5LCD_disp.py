@@ -389,7 +389,7 @@ PANEL_TOP = 46         # 面板区顶部 y
 PANEL_H = 118          # 面板区高度
 PANEL_GAP = 6          # 左右面板间距
 PANEL_AREA_W = WIDTH - 2 * PANEL_MARGIN  # 面板总可用宽度 = 472
-LEFT_W = int(PANEL_AREA_W * 0.65)        # 左面板宽度 ≈ 306
+LEFT_W = int(PANEL_AREA_W * 0.60)        # 左面板宽度 ≈ 280
 RIGHT_W = PANEL_AREA_W - LEFT_W - PANEL_GAP  # 右面板宽度 ≈ 160
 RIGHT_SUB_GAP = 4      # 右上/右下子面板间距
 RIGHT_SUB_H = (PANEL_H - RIGHT_SUB_GAP) // 2  # 每个子面板高度 = 57
@@ -402,10 +402,9 @@ def _render(state: DisplayState) -> None:
 
     布局：
       顶部状态栏（固定）
-      左面板 65%（屏保偏移）：3行×2列
-        行1: 持仓市值 | 浮盈率
-        行2: 总资产   | 总盈亏率
-        行3: 持仓/仓位 | 年化收益
+      左面板 60%（屏保偏移）：2行×3列
+        行1: 持仓市值 | 浮盈率   | 持仓/仓位
+        行2: 总资产   | 总盈亏率 | 年化收益
       右上面板（屏保偏移）：盈利 Top2（右对齐）
       右下面板（屏保偏移）：亏损 Top2（右对齐）
       图表区（固定）
@@ -440,7 +439,7 @@ def _render(state: DisplayState) -> None:
     rw = bbox[2] - bbox[0]
     draw.text((WIDTH - rw - 12, 12), header_right, fill=COLOR_YELLOW, font=font_label)
 
-    # ===== 左面板：总览 3行×2列（参与屏保偏移）=====
+    # ===== 左面板：总览 2行×3列（参与屏保偏移）=====
     lp_x = PANEL_MARGIN + ox
     lp_y = PANEL_TOP + oy
     draw.rounded_rectangle(
@@ -460,20 +459,19 @@ def _render(state: DisplayState) -> None:
         gain_pct = summary['total_pnl_pct']
         pos_count = summary['pos_count']
         ann_pct = summary['annual_return_pct']
-        # 仓位 = 持仓市值 / 总资产
         pos_ratio = int(mkt_val / total_ast * 100) if total_ast > 0 else 0
 
-        col_w = LEFT_W // 2
+        col_w = LEFT_W // 3
         pad = 8
-        row_h = (PANEL_H - 2 * pad) // 3
+        row_h = (PANEL_H - 2 * pad) // 2
         cells = [
             # (行, 列, 标签, 值, 颜色)
             (0, 0, "持仓市值", _fmt_wan(mkt_val), COLOR_TEXT),
             (0, 1, "浮盈率", _fmt_pct(flt_pct), _pct_color(flt_pct)),
+            (0, 2, "持仓/仓位", f"{pos_count}/{pos_ratio}%", COLOR_TEXT),
             (1, 0, "总资产", _fmt_wan(total_ast), COLOR_TEXT),
             (1, 1, "总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct)),
-            (2, 0, "持仓/仓位", f"{pos_count}/{pos_ratio}%", COLOR_TEXT),
-            (2, 1, "年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct)),
+            (1, 2, "年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct)),
         ]
         for r, c, label, value, color in cells:
             cx = lp_x + pad + c * col_w
@@ -482,10 +480,9 @@ def _render(state: DisplayState) -> None:
             draw.text((cx, cy + 15), value, fill=color, font=font_val)
 
         # 行间水平分隔线
-        for i in range(1, 3):
-            sep_y = lp_y + pad + row_h * i
-            draw.line([(lp_x + pad, sep_y), (lp_x + LEFT_W - pad, sep_y)],
-                      fill=COLOR_DIVIDER, width=1)
+        sep_y = lp_y + pad + row_h
+        draw.line([(lp_x + pad, sep_y), (lp_x + LEFT_W - pad, sep_y)],
+                  fill=COLOR_DIVIDER, width=1)
 
     # ===== 右面板：个股盈亏排名（参与屏保偏移）=====
     rp_x = PANEL_MARGIN + LEFT_W + PANEL_GAP + ox
