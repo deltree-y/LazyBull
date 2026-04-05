@@ -423,8 +423,9 @@ def _render(state: DisplayState) -> None:
     draw = ImageDraw.Draw(img)
 
     font_val = _get_font(24)   # 数值
+    font_val_sm = _get_font(20) # 数值（小号，持仓/仓位用）
     font_label = _get_font(13) # 标签
-    font_rank = _get_font(13)  # 排名列表
+    font_rank = _get_font(15)  # 排名列表
     font_md = _get_font(20)    # 等待提示
     font_footer = _get_font(16)
 
@@ -462,22 +463,22 @@ def _render(state: DisplayState) -> None:
         pos_ratio = int(mkt_val / total_ast * 100) if total_ast > 0 else 0
 
         col_w = LEFT_W // 3
-        pad = 8
+        pad = 7
         row_h = (PANEL_H - 2 * pad) // 2
         cells = [
-            # (行, 列, 标签, 值, 颜色)
-            (0, 0, "持仓市值", _fmt_wan(mkt_val), COLOR_TEXT),
-            (0, 1, "浮盈率", _fmt_pct(flt_pct), _pct_color(flt_pct)),
-            (0, 2, "持仓/仓位", f"{pos_count}/{pos_ratio}%", COLOR_TEXT),
-            (1, 0, "总资产", _fmt_wan(total_ast), COLOR_TEXT),
-            (1, 1, "总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct)),
-            (1, 2, "年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct)),
+            # (行, 列, 标签, 值, 颜色, 值字体)
+            (0, 0, "持仓市值", _fmt_wan(mkt_val), COLOR_TEXT, font_val),
+            (0, 1, "浮盈率", _fmt_pct(flt_pct), _pct_color(flt_pct), font_val),
+            (0, 2, "持仓/仓位", f"{pos_count}/{pos_ratio}%", COLOR_TEXT, font_val_sm),
+            (1, 0, "总资产", _fmt_wan(total_ast), COLOR_TEXT, font_val),
+            (1, 1, "总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct), font_val),
+            (1, 2, "年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct), font_val),
         ]
-        for r, c, label, value, color in cells:
+        for r, c, label, value, color, vfont in cells:
             cx = lp_x + pad + c * col_w
             cy = lp_y + pad + r * row_h
             draw.text((cx, cy), label, fill=COLOR_LABEL, font=font_label)
-            draw.text((cx, cy + 15), value, fill=color, font=font_val)
+            draw.text((cx, cy + 15), value, fill=color, font=vfont)
 
         # 行间水平分隔线
         sep_y = lp_y + pad + row_h
@@ -502,7 +503,7 @@ def _render(state: DisplayState) -> None:
     )
 
     pad = 6
-    line_h = 18
+    line_h = 20
 
     if not rankings or len(rankings) < 2:
         txt = "暂无排名"
