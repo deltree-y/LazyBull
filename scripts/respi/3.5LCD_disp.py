@@ -118,11 +118,11 @@ def _fmt_pct(value: float) -> str:
 
 
 def _pct_color(value: float) -> tuple:
-    """根据盈亏正负返回颜色。"""
+    """根据盈亏正负返回颜色（A股惯例：涨红跌绿）。"""
     if value > 0:
-        return COLOR_GREEN
-    elif value < 0:
         return COLOR_RED
+    elif value < 0:
+        return COLOR_GREEN
     return COLOR_TEXT
 
 
@@ -193,6 +193,9 @@ def _calc_days_to_rebalance() -> int | None:
 def _fetch_chart_data() -> Optional[dict]:
     """获取持仓周期内的上证指数和持仓组合涨跌幅数据。
 
+    基于账户持仓状态 + TuShare daily API 计算每日组合市值，
+    不依赖 NAV 记录（NAV 可能不完整）。
+
     Returns:
         dict: {
             'dates': list[str],          # 交易日期列表
@@ -216,25 +219,19 @@ def _fetch_chart_data() -> Optional[dict]:
     if not start_date:
         return None
 
+    # 获取账户持仓
+    account_state = paper_storage.load_account_state()
+    if account_state is None or not account_state.positions:
+        return None
+
+    positions = account_state.positions  # {ts_code: Position}
+    cash = account_state.cash
     today_str = datetime.now().strftime("%Y%m%d")
 
-    # 持仓组合净值
-    nav_df = paper_storage.load_all_nav()
-    if nav_df is None or nav_df.empty:
-        return None
-    nav_df = nav_df[nav_df['trade_date'] >= start_date].sort_values('trade_date')
-    if len(nav_df) < 2:
-        return None
-
-    base_nav = nav_df.iloc[0]['total_value']
-    if base_nav <= 0:
-        return None
-    portfolio_pct = ((nav_df['total_value'] / base_nav - 1) * 100).tolist()
-    dates = nav_df['trade_date'].tolist()
-
-    # 上证指数日线
     try:
         client = TushareClient(verbose=False)
+
+        # 上证指数日线（以此确定交易日序列）
         index_df = client.query(
             "index_daily", ts_code="000001.SH",
             start_date=start_date, end_date=today_str,
@@ -242,25 +239,44 @@ def _fetch_chart_data() -> Optional[dict]:
         )
         if index_df is None or index_df.empty:
             return None
-        index_map = dict(zip(index_df['trade_date'], index_df['close']))
+        index_df = index_df.sort_values('trade_date').reset_index(drop=True)
+        trade_dates = index_df['trade_date'].tolist()
+        if len(trade_dates) < 2:
+            return None
+
+        # 逐股获取日线收盘价
+        stock_closes: dict[str, dict[str, float]] = {}
+        for ts_code in positions:
+            df = client.query(
+                "daily", ts_code=ts_code,
+                start_date=start_date, end_date=today_str,
+                fields="trade_date,close"
+            )
+            if df is not None and not df.empty:
+                stock_closes[ts_code] = dict(zip(df['trade_date'], df['close']))
     except Exception:
         return None
 
-    # 按持仓净值的日期序列对齐上证数据
-    base_close = index_map.get(dates[0])
-    if base_close is None or base_close <= 0:
-        return None
+    # 计算每日组合市值
+    base_value: float | None = None
+    portfolio_pct: list[float] = []
+    for d in trade_dates:
+        market_value = 0.0
+        for ts_code, pos in positions.items():
+            closes = stock_closes.get(ts_code, {})
+            price = closes.get(d, pos.buy_price)  # 停牌等无数据时用买入价
+            market_value += price * pos.shares
+        total_value = market_value + cash
+        if base_value is None:
+            base_value = total_value
+        portfolio_pct.append((total_value / base_value - 1) * 100)
 
-    index_pct = []
-    last_pct = 0.0
-    for d in dates:
-        close = index_map.get(d)
-        if close is not None:
-            last_pct = (close / base_close - 1) * 100
-        index_pct.append(last_pct)
+    # 上证指数涨跌幅
+    base_close = index_df.iloc[0]['close']
+    index_pct = ((index_df['close'] / base_close - 1) * 100).tolist()
 
     return {
-        'dates': dates,
+        'dates': trade_dates,
         'index_pct': index_pct,
         'portfolio_pct': portfolio_pct,
     }
@@ -306,8 +322,12 @@ class DisplayState:
 # 布局常量
 HEADER_H = 42          # 顶栏高度
 FOOTER_H = 38          # 底栏高度
-DATA_ROW_Y = [50, 88, 126]  # 3行数据的基准 y（参与屏保偏移）
-CHART_Y = 178          # 图表区起始 y（固定）
+# 2行数据区：行1 y=50, 行2 y=104, 行高约50px（标签16px + 值30px）
+# 行2底部 = 104+18+30 = 152，偏移 ±6 后最大158，图表起始162，安全
+DATA_ROW_Y = [50, 104]
+DATA_DIVIDER_Y = 97    # 两行之间的分隔线 y 坐标（行1底部~96，行2顶部104）
+COL_X = [16, 176, 340]  # 3列起始 x
+CHART_Y = 162          # 图表区起始 y（固定）
 CHART_H = HEIGHT - FOOTER_H - CHART_Y  # 图表区高度
 
 
@@ -315,6 +335,9 @@ def _render(state: DisplayState) -> None:
     """将持仓摘要和图表渲染到 PIL Image 并写入 framebuffer。
 
     顶部状态栏、图表区和底部时间栏固定不动，仅数据行参与屏保偏移。
+    2行 × 3列布局：
+      行1: 持仓市值 | 浮盈率    | 持仓数量
+      行2: 总资产   | 总盈亏率  | 年化收益
     """
     with state.lock:
         summary = state.summary
@@ -327,8 +350,8 @@ def _render(state: DisplayState) -> None:
     img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
     draw = ImageDraw.Draw(img)
 
-    font_val = _get_font(24)   # 数值
-    font_sm = _get_font(14)    # 标签
+    font_val = _get_font(28)   # 数值（加大）
+    font_label = _get_font(14) # 标签
     font_md = _get_font(20)    # 中号（等待提示用）
     font_footer = _get_font(18)
 
@@ -338,18 +361,16 @@ def _render(state: DisplayState) -> None:
     days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}天"
     header_left = f"更新: {last_update_time}"
     header_right = f"距调仓: {days_str}"
-    draw.text((12, 11), header_left, fill=COLOR_YELLOW, font=font_sm)
-    bbox = draw.textbbox((0, 0), header_right, font=font_sm)
+    draw.text((12, 11), header_left, fill=COLOR_YELLOW, font=font_label)
+    bbox = draw.textbbox((0, 0), header_right, font=font_label)
     rw = bbox[2] - bbox[0]
-    draw.text((WIDTH - rw - 12, 11), header_right, fill=COLOR_YELLOW, font=font_sm)
+    draw.text((WIDTH - rw - 12, 11), header_right, fill=COLOR_YELLOW, font=font_label)
 
-    # ===== 数据区（参与屏保偏移）=====
-    # 行基准 y: 50, 88, 126，每行高度约38px（标签14px + 值24px）
-    # 最大底部 = 126+16+28 = 170，偏移 ±6 后范围 164~176，图表起始178，安全
+    # ===== 数据区（2行3列，参与屏保偏移）=====
     if summary is None:
         bbox_wait = draw.textbbox((0, 0), "等待数据...", font=font_md)
         ww = bbox_wait[2] - bbox_wait[0]
-        draw.text(((WIDTH - ww) // 2 + ox, 100 + oy), "等待数据...",
+        draw.text(((WIDTH - ww) // 2 + ox, 80 + oy), "等待数据...",
                   fill=COLOR_LABEL, font=font_md)
         _draw_chart(draw, chart_data)
         _draw_footer(draw, font_footer)
@@ -363,53 +384,33 @@ def _render(state: DisplayState) -> None:
     gain_pct = summary['total_pnl_pct']
     ann_pct = summary['annual_return_pct']
 
-    rows = [
-        {
-            'y': DATA_ROW_Y[0],
-            'left_label': "持仓市值(万)",
-            'left_value': _fmt_wan(mkt_val),
-            'left_color': COLOR_TEXT,
-            'right_label': "浮盈率",
-            'right_value': _fmt_pct(flt_pct),
-            'right_color': _pct_color(flt_pct),
-        },
-        {
-            'y': DATA_ROW_Y[1],
-            'left_label': "总资产(万)",
-            'left_value': _fmt_wan(total_ast),
-            'left_color': COLOR_TEXT,
-            'right_label': "总盈亏率",
-            'right_value': _fmt_pct(gain_pct),
-            'right_color': _pct_color(gain_pct),
-        },
-        {
-            'y': DATA_ROW_Y[2],
-            'left_label': "持仓数量",
-            'left_value': str(pos_count),
-            'left_color': COLOR_TEXT,
-            'right_label': "年化收益",
-            'right_value': _fmt_pct(ann_pct),
-            'right_color': _pct_color(ann_pct),
-        },
+    # 2行 × 3列数据定义
+    grid = [
+        # 行1
+        [
+            ("持仓市值", _fmt_wan(mkt_val), COLOR_TEXT),
+            ("浮盈率", _fmt_pct(flt_pct), _pct_color(flt_pct)),
+            ("持仓数量", str(pos_count), COLOR_TEXT),
+        ],
+        # 行2
+        [
+            ("总资产", _fmt_wan(total_ast), COLOR_TEXT),
+            ("总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct)),
+            ("年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct)),
+        ],
     ]
 
-    mid_x = WIDTH // 2
+    for row_idx, row_data in enumerate(grid):
+        y = DATA_ROW_Y[row_idx] + oy
+        for col_idx, (label, value, color) in enumerate(row_data):
+            x = COL_X[col_idx] + ox
+            draw.text((x, y), label, fill=COLOR_LABEL, font=font_label)
+            draw.text((x, y + 18), value, fill=color, font=font_val)
 
-    for row in rows:
-        y = row['y'] + oy
-        # 分隔线
-        draw.line([(20 + ox, y - 2), (WIDTH - 20 + ox, y - 2)],
-                  fill=COLOR_DIVIDER, width=1)
-        # 左侧
-        draw.text((20 + ox, y), row['left_label'],
-                  fill=COLOR_LABEL, font=font_sm)
-        draw.text((20 + ox, y + 16), row['left_value'],
-                  fill=row['left_color'], font=font_val)
-        # 右侧
-        draw.text((mid_x + 20 + ox, y), row['right_label'],
-                  fill=COLOR_LABEL, font=font_sm)
-        draw.text((mid_x + 20 + ox, y + 16), row['right_value'],
-                  fill=row['right_color'], font=font_val)
+    # 两行之间的分隔线
+    draw.line([(COL_X[0] + ox, DATA_DIVIDER_Y + oy),
+               (WIDTH - COL_X[0] + ox, DATA_DIVIDER_Y + oy)],
+              fill=COLOR_DIVIDER, width=1)
 
     # ===== 图表区（固定）=====
     _draw_chart(draw, chart_data)
