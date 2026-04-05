@@ -4,7 +4,10 @@
 树莓派 3.5寸 LCD 实时持仓显示
 
 适配微雪 3.5inch RPi LCD (C)，480x320 RGB565，通过 /dev/fb1 framebuffer 输出。
-每10分钟通过 Tushare realtime_quote 刷新持仓数据。
+
+架构：
+  数据线程：每10分钟获取实时行情（启动时立即获取一次，非交易日也能显示最近收盘数据）
+  显示线程：每秒刷新画面（底部时间实时更新），每60秒随机偏移显示位置（屏保防烧屏）
 
 屏幕布局（480x320）：
   顶部状态栏：更新时间 | 距调仓天数
@@ -12,7 +15,7 @@
     市值总额 / 浮盈率
     总资产  / 总盈亏率
     持仓数量 / 年化收益率
-  底部：当前日期时间
+  底部：当前日期 星期 时间（每秒刷新）
 
 自动息屏：23:00 - 6:00 写入全黑画面
 """
@@ -20,6 +23,7 @@
 import sys
 import time
 import signal
+import random
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -42,7 +46,11 @@ from src.lazybull.common.config import get_config    # noqa: E402
 # ---------- 常量 ----------
 FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
-REFRESH_INTERVAL = 600  # 秒，10分钟
+REFRESH_INTERVAL = 600       # 数据刷新间隔（秒），10分钟
+SCREENSAVER_RANGE = 10       # 屏保偏移范围（±像素）
+SCREENSAVER_INTERVAL = 60    # 屏保偏移更新间隔（秒）
+
+WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 # 颜色定义 (R, G, B)
 COLOR_BG = (15, 15, 25)            # 深色背景
@@ -56,7 +64,10 @@ COLOR_YELLOW = (255, 200, 50)      # 强调色
 COLOR_DIVIDER = (60, 60, 80)       # 分隔线
 
 
-# ---------- 字体加载 ----------
+# ---------- 字体加载（带缓存）----------
+
+_font_cache: dict = {}
+
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont:
     """加载中文字体，按优先级尝试多个路径。"""
@@ -74,6 +85,13 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
         except (OSError, IOError):
             continue
     return ImageFont.load_default()
+
+
+def _get_font(size: int) -> ImageFont.FreeTypeFont:
+    """获取字体（缓存，避免每秒重复加载磁盘）。"""
+    if size not in _font_cache:
+        _font_cache[size] = _load_font(size)
+    return _font_cache[size]
 
 
 # ---------- 格式化工具 ----------
@@ -185,35 +203,63 @@ def _is_market_open() -> bool:
             or afternoon_start <= current_time <= afternoon_end)
 
 
+# ---------- 共享显示状态 ----------
+
+class DisplayState:
+    """数据线程与显示线程之间的共享状态。"""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.summary: dict | None = None
+        self.update_time: str = "--:--"
+        self.days_to_rebalance: int | None = None
+        # 屏保偏移
+        self.offset_x: int = 0
+        self.offset_y: int = 0
+        self.is_screen_on: bool = True
+
+
 # ---------- 渲染逻辑 ----------
 
-def _render(summary: dict | None, last_update_time: str,
-            days_to_rebalance: int | None) -> None:
-    """将持仓摘要渲染到 PIL Image 并写入 framebuffer。"""
+def _render(state: DisplayState) -> None:
+    """将持仓摘要渲染到 PIL Image 并写入 framebuffer。
+
+    所有绘制坐标加上屏保偏移量 (offset_x, offset_y)。
+    """
+    with state.lock:
+        summary = state.summary
+        last_update_time = state.update_time
+        days_to_rebalance = state.days_to_rebalance
+        ox = state.offset_x
+        oy = state.offset_y
+
     img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
     draw = ImageDraw.Draw(img)
 
-    font_lg = _load_font(38)   # 大数字
-    font_md = _load_font(24)   # 中号
-    font_sm = _load_font(18)   # 小号/标签
+    font_lg = _get_font(38)   # 大数字
+    font_md = _get_font(24)   # 中号
+    font_sm = _get_font(18)   # 小号/标签
 
-    # ===== 顶部状态栏 (0~44) =====
-    draw.rectangle([0, 0, WIDTH, 44], fill=COLOR_HEADER_BG)
+    # ===== 顶部状态栏 =====
+    header_y = oy
+    draw.rectangle([0, header_y, WIDTH, header_y + 44], fill=COLOR_HEADER_BG)
 
     days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}天"
     header_left = f"更新: {last_update_time}"
     header_right = f"距调仓: {days_str}"
-    draw.text((12, 10), header_left, fill=COLOR_YELLOW, font=font_sm)
-    # 右对齐
+    draw.text((12 + ox, header_y + 10), header_left,
+              fill=COLOR_YELLOW, font=font_sm)
     bbox = draw.textbbox((0, 0), header_right, font=font_sm)
     rw = bbox[2] - bbox[0]
-    draw.text((WIDTH - rw - 12, 10), header_right, fill=COLOR_YELLOW, font=font_sm)
+    draw.text((WIDTH - rw - 12 + ox, header_y + 10), header_right,
+              fill=COLOR_YELLOW, font=font_sm)
 
     # ===== 主数据区域 =====
     if summary is None:
-        draw.text((WIDTH // 2 - 60, HEIGHT // 2 - 20), "等待数据...",
+        bbox_wait = draw.textbbox((0, 0), "等待数据...", font=font_md)
+        ww = bbox_wait[2] - bbox_wait[0]
+        draw.text(((WIDTH - ww) // 2 + ox, HEIGHT // 2 - 20 + oy), "等待数据...",
                   fill=COLOR_LABEL, font=font_md)
-        # 底部时间
         _draw_footer(draw, font_sm)
         _write_fb(img)
         return
@@ -225,8 +271,6 @@ def _render(summary: dict | None, last_update_time: str,
     gain_pct = summary['total_pnl_pct']
     ann_pct = summary['annual_return_pct']
 
-    # 三行数据，每行：标签 + 值(左) / 标签 + 值(右)
-    # 行1: y=60, 行2: y=140, 行3: y=220
     rows = [
         {
             'y': 60,
@@ -260,87 +304,116 @@ def _render(summary: dict | None, last_update_time: str,
     mid_x = WIDTH // 2
 
     for row in rows:
-        y = row['y']
+        y = row['y'] + oy
         # 分隔线
-        draw.line([(20, y - 4), (WIDTH - 20, y - 4)], fill=COLOR_DIVIDER, width=1)
-
+        draw.line([(20 + ox, y - 4), (WIDTH - 20 + ox, y - 4)],
+                  fill=COLOR_DIVIDER, width=1)
         # 左侧
-        draw.text((20, y), row['left_label'], fill=COLOR_LABEL, font=font_sm)
-        draw.text((20, y + 24), row['left_value'], fill=row['left_color'], font=font_lg)
-
+        draw.text((20 + ox, y), row['left_label'],
+                  fill=COLOR_LABEL, font=font_sm)
+        draw.text((20 + ox, y + 24), row['left_value'],
+                  fill=row['left_color'], font=font_lg)
         # 右侧
-        draw.text((mid_x + 20, y), row['right_label'], fill=COLOR_LABEL, font=font_sm)
-        draw.text((mid_x + 20, y + 24), row['right_value'],
+        draw.text((mid_x + 20 + ox, y), row['right_label'],
+                  fill=COLOR_LABEL, font=font_sm)
+        draw.text((mid_x + 20 + ox, y + 24), row['right_value'],
                   fill=row['right_color'], font=font_lg)
 
-    # ===== 底部状态栏 =====
+    # ===== 底部时间栏（固定位置，不参与屏保偏移）=====
     _draw_footer(draw, font_sm)
 
     _write_fb(img)
 
 
 def _draw_footer(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont) -> None:
-    """绘制底部时间栏。"""
+    """绘制底部时间栏（含星期几，固定在屏幕底部）。"""
     draw.rectangle([0, HEIGHT - 36, WIDTH, HEIGHT], fill=COLOR_FOOTER_BG)
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now()
+    weekday = WEEKDAY_NAMES[now.weekday()]
+    now_str = now.strftime(f"%Y-%m-%d {weekday} %H:%M:%S")
     bbox = draw.textbbox((0, 0), now_str, font=font)
     tw = bbox[2] - bbox[0]
     draw.text(((WIDTH - tw) // 2, HEIGHT - 30), now_str,
               fill=COLOR_TEXT, font=font)
 
 
-# ---------- 后台刷新线程 ----------
+# ---------- 数据获取线程 ----------
 
-def _worker(stop_event: threading.Event) -> None:
-    """每 REFRESH_INTERVAL 秒获取一次实时行情并更新显示。
+def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
+    """每 REFRESH_INTERVAL 秒获取一次实时行情，更新共享状态。
 
-    非交易时段（23:00-6:00）自动息屏，恢复后重新点亮。
-    数据获取失败时保留上次数据继续显示。
+    启动时立即获取一次（非交易日也会返回最近一个交易日的收盘数据）。
     """
     from paper_trade import get_realtime_portfolio_summary
 
-    is_screen_on = True
-    last_summary: dict | None = None
-    last_update_time = "--:--"
-    last_days_to_rebalance: int | None = None
+    def _fetch_data() -> None:
+        """获取行情和调仓天数，更新共享状态。"""
+        try:
+            summary = get_realtime_portfolio_summary()
+            if summary is not None:
+                with state.lock:
+                    state.summary = summary
+                    state.update_time = datetime.now().strftime("%H:%M")
+        except Exception:
+            pass
+
+        try:
+            days = _calc_days_to_rebalance()
+            if days is not None:
+                with state.lock:
+                    state.days_to_rebalance = days
+        except Exception:
+            pass
+
+    # 启动时立即获取一次（非交易日也能显示最近收盘数据）
+    _fetch_data()
+
+    while not stop_event.is_set():
+        stop_event.wait(REFRESH_INTERVAL)
+        if stop_event.is_set():
+            break
+
+        # 仅交易时段刷新实时数据
+        if _is_market_open():
+            _fetch_data()
+
+
+# ---------- 显示刷新线程 ----------
+
+def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
+    """每秒刷新画面，每 SCREENSAVER_INTERVAL 秒更新屏保偏移。
+
+    23:00-6:00 自动息屏。
+    """
+    last_offset_time = 0.0
 
     while not stop_event.is_set():
         hour = datetime.now().hour
 
         # ---- 息屏逻辑（23:00 - 6:00）----
         if hour >= 23 or hour < 6:
-            if is_screen_on:
+            if state.is_screen_on:
                 _clear_screen()
-                is_screen_on = False
-            stop_event.wait(60)
+                state.is_screen_on = False
+            stop_event.wait(10)
             continue
 
-        if not is_screen_on:
-            is_screen_on = True
+        if not state.is_screen_on:
+            state.is_screen_on = True
 
-        # ---- 获取实时数据 ----
-        try:
-            if _is_market_open():
-                summary = get_realtime_portfolio_summary()
-                if summary is not None:
-                    last_summary = summary
-                    last_update_time = datetime.now().strftime("%H:%M")
-        except Exception:
-            pass
+        # ---- 屏保：每分钟随机偏移 ----
+        now_ts = time.monotonic()
+        if now_ts - last_offset_time >= SCREENSAVER_INTERVAL:
+            with state.lock:
+                state.offset_x = random.randint(-SCREENSAVER_RANGE, SCREENSAVER_RANGE)
+                state.offset_y = random.randint(-SCREENSAVER_RANGE, SCREENSAVER_RANGE)
+            last_offset_time = now_ts
 
-        # ---- 计算距调仓剩余交易日 ----
-        try:
-            days = _calc_days_to_rebalance()
-            if days is not None:
-                last_days_to_rebalance = days
-        except Exception:
-            pass
+        # ---- 渲染（含实时时间）----
+        _render(state)
 
-        # ---- 渲染 ----
-        _render(last_summary, last_update_time, last_days_to_rebalance)
-
-        # ---- 等待下次刷新 ----
-        stop_event.wait(REFRESH_INTERVAL)
+        # ---- 每秒刷新 ----
+        stop_event.wait(1)
 
 
 # ---------- 入口 ----------
@@ -349,6 +422,7 @@ def main() -> None:
     setup_logger(log_level="WARNING")
     get_config()
 
+    state = DisplayState()
     stop_event = threading.Event()
 
     def _shutdown(sig, frame):  # noqa: ANN001
@@ -357,8 +431,13 @@ def main() -> None:
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    t = threading.Thread(target=_worker, args=(stop_event,), daemon=True)
-    t.start()
+    # 数据获取线程（10分钟间隔）
+    data_t = threading.Thread(target=_data_worker, args=(state, stop_event), daemon=True)
+    data_t.start()
+
+    # 显示刷新线程（每秒）
+    disp_t = threading.Thread(target=_display_worker, args=(state, stop_event), daemon=True)
+    disp_t.start()
 
     try:
         while not stop_event.is_set():
