@@ -47,6 +47,8 @@ from src.lazybull.common.config import get_config    # noqa: E402
 FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 数据刷新间隔（秒），10分钟
+BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
+BACKLIGHT_BRIGHTNESS = 40    # 背光亮度 0~100（默认40%，可按需调整）
 SCREENSAVER_RANGE_X = 4      # 屏保水平偏移范围（±像素）
 SCREENSAVER_RANGE_Y = 3      # 屏保垂直偏移范围（±像素）
 SCREENSAVER_INTERVAL = 60    # 屏保偏移更新间隔（秒）
@@ -126,6 +128,74 @@ def _pct_color(value: float) -> tuple:
     elif value < 0:
         return COLOR_GREEN
     return COLOR_TEXT
+
+
+# ---------- 背光控制 ----------
+
+_backlight_pwm = None
+
+
+def _init_backlight() -> None:
+    """初始化背光 PWM，设置为 BACKLIGHT_BRIGHTNESS 亮度。
+
+    优先尝试 sysfs 接口，失败则使用 RPi.GPIO 硬件 PWM。
+    在非树莓派环境静默跳过。
+    """
+    global _backlight_pwm
+
+    # 方式1：sysfs 背光接口
+    bl_path = "/sys/class/backlight/soc:backlight/brightness"
+    max_path = "/sys/class/backlight/soc:backlight/max_brightness"
+    try:
+        with open(max_path, "r") as f:
+            max_br = int(f.read().strip())
+        target = int(max_br * BACKLIGHT_BRIGHTNESS / 100)
+        with open(bl_path, "w") as f:
+            f.write(str(target))
+        return
+    except (FileNotFoundError, PermissionError, OSError):
+        pass
+
+    # 方式2：RPi.GPIO 硬件 PWM（GPIO 18）
+    try:
+        import RPi.GPIO as GPIO  # type: ignore
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(BACKLIGHT_PIN, GPIO.OUT)
+        _backlight_pwm = GPIO.PWM(BACKLIGHT_PIN, 1000)  # 1kHz
+        _backlight_pwm.start(BACKLIGHT_BRIGHTNESS)
+    except (ImportError, RuntimeError):
+        pass  # 非树莓派环境，静默跳过
+
+
+def _set_backlight(brightness: int) -> None:
+    """设置背光亮度（0~100）。"""
+    # sysfs
+    bl_path = "/sys/class/backlight/soc:backlight/brightness"
+    max_path = "/sys/class/backlight/soc:backlight/max_brightness"
+    try:
+        with open(max_path, "r") as f:
+            max_br = int(f.read().strip())
+        with open(bl_path, "w") as f:
+            f.write(str(int(max_br * brightness / 100)))
+        return
+    except (FileNotFoundError, PermissionError, OSError):
+        pass
+
+    # PWM
+    if _backlight_pwm is not None:
+        _backlight_pwm.ChangeDutyCycle(brightness)
+
+
+def _cleanup_backlight() -> None:
+    """清理背光 PWM 资源。"""
+    if _backlight_pwm is not None:
+        _backlight_pwm.stop()
+    try:
+        import RPi.GPIO as GPIO  # type: ignore
+        GPIO.cleanup(BACKLIGHT_PIN)
+    except (ImportError, RuntimeError):
+        pass
 
 
 # ---------- framebuffer 输出 ----------
@@ -382,19 +452,18 @@ class DisplayState:
 # ---------- 渲染逻辑 ----------
 
 # 布局常量
-HEADER_H = 42          # 顶栏高度
-FOOTER_H = 34          # 底栏高度
+HEADER_H = 30          # 顶栏高度（含时间、更新、调仓）
 PANEL_MARGIN = 6       # 面板区左右外边距
-PANEL_TOP = 46         # 面板区顶部 y
-PANEL_H = 118          # 面板区高度
+PANEL_TOP = 34         # 面板区顶部 y
+PANEL_H = 140          # 面板区高度（去掉底栏后加大）
 PANEL_GAP = 6          # 左右面板间距
-PANEL_AREA_W = WIDTH - 2 * PANEL_MARGIN  # 面板总可用宽度 = 472
+PANEL_AREA_W = WIDTH - 2 * PANEL_MARGIN  # 面板总可用宽度 = 468
 LEFT_W = int(PANEL_AREA_W * 0.60)        # 左面板宽度 ≈ 280
-RIGHT_W = PANEL_AREA_W - LEFT_W - PANEL_GAP  # 右面板宽度 ≈ 160
+RIGHT_W = PANEL_AREA_W - LEFT_W - PANEL_GAP  # 右面板宽度
 RIGHT_SUB_GAP = 4      # 右上/右下子面板间距
-RIGHT_SUB_H = (PANEL_H - RIGHT_SUB_GAP) // 2  # 每个子面板高度 = 57
+RIGHT_SUB_H = (PANEL_H - RIGHT_SUB_GAP) // 2  # 每个子面板高度 = 68
 CHART_Y = PANEL_TOP + PANEL_H + 4  # 图表区起始 y
-CHART_H = HEIGHT - FOOTER_H - CHART_Y  # 图表区高度
+CHART_H = HEIGHT - CHART_Y          # 图表区高度（底部到屏幕边缘）
 
 
 def _render(state: DisplayState) -> None:
@@ -405,8 +474,8 @@ def _render(state: DisplayState) -> None:
       左面板 60%（屏保偏移）：2行×3列
         行1: 持仓市值 | 浮盈率   | 持仓/仓位
         行2: 总资产   | 总盈亏率 | 年化收益
-      右上面板（屏保偏移）：盈利 Top2（右对齐）
-      右下面板（屏保偏移）：亏损 Top2（右对齐）
+      右上面板（屏保偏移）：盈利 Top3（右对齐）
+      右下面板（屏保偏移）：亏损 Top3（右对齐）
       图表区（固定）
       底部时间栏（固定）
     """
@@ -427,18 +496,27 @@ def _render(state: DisplayState) -> None:
     font_label = _get_font(13) # 标签
     font_rank = _get_font(15)  # 排名列表
     font_md = _get_font(20)    # 等待提示
-    font_footer = _get_font(16)
 
-    # ===== 顶部状态栏（固定）=====
+    # ===== 顶部状态栏（固定）：时间 | 更新 | 距调仓 =====
     draw.rectangle([0, 0, WIDTH, HEADER_H], fill=COLOR_HEADER_BG)
 
+    now = datetime.now()
+    weekday = WEEKDAY_NAMES[now.weekday()]
+    time_str = now.strftime(f"%m-%d {weekday} %H:%M:%S")
     days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}天"
-    header_left = f"更新: {last_update_time}"
-    header_right = f"距调仓: {days_str}"
-    draw.text((12, 12), header_left, fill=COLOR_YELLOW, font=font_label)
-    bbox = draw.textbbox((0, 0), header_right, font=font_label)
-    rw = bbox[2] - bbox[0]
-    draw.text((WIDTH - rw - 12, 12), header_right, fill=COLOR_YELLOW, font=font_label)
+    header_mid = f"更新:{last_update_time}"
+    header_right = f"调仓:{days_str}"
+
+    hy = (HEADER_H - 13) // 2  # 垂直居中（字体13px）
+    draw.text((8, hy), time_str, fill=COLOR_TEXT, font=font_label)
+    # 居中
+    bbox_m = draw.textbbox((0, 0), header_mid, font=font_label)
+    mw = bbox_m[2] - bbox_m[0]
+    draw.text(((WIDTH - mw) // 2, hy), header_mid, fill=COLOR_YELLOW, font=font_label)
+    # 右对齐
+    bbox_r = draw.textbbox((0, 0), header_right, font=font_label)
+    rw = bbox_r[2] - bbox_r[0]
+    draw.text((WIDTH - rw - 8, hy), header_right, fill=COLOR_YELLOW, font=font_label)
 
     # ===== 左面板：总览 2行×3列（参与屏保偏移）=====
     lp_x = PANEL_MARGIN + ox
@@ -474,9 +552,11 @@ def _render(state: DisplayState) -> None:
             (1, 1, "总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct), font_val),
             (1, 2, "年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct), font_val),
         ]
+        content_h = 15 + 24  # 标签到数值间距 + 数值字体高度
+        v_pad = (row_h - content_h) // 2  # 行内垂直居中偏移
         for r, c, label, value, color, vfont in cells:
             cx = lp_x + pad + c * col_w
-            cy = lp_y + pad + r * row_h
+            cy = lp_y + pad + r * row_h + v_pad
             draw.text((cx, cy), label, fill=COLOR_LABEL, font=font_label)
             draw.text((cx, cy + 15), value, fill=color, font=vfont)
 
@@ -490,12 +570,12 @@ def _render(state: DisplayState) -> None:
     rp_y = PANEL_TOP + oy
     rp_right = rp_x + RIGHT_W  # 右边界（用于右对齐）
 
-    # 右上子面板：盈利 Top2
+    # 右上子面板：盈利 Top3
     draw.rounded_rectangle(
         [rp_x, rp_y, rp_right, rp_y + RIGHT_SUB_H],
         radius=5, fill=COLOR_PANEL_RIGHT
     )
-    # 右下子面板：亏损 Top2
+    # 右下子面板：亏损 Top3
     rp_y2 = rp_y + RIGHT_SUB_H + RIGHT_SUB_GAP
     draw.rounded_rectangle(
         [rp_x, rp_y2, rp_right, rp_y2 + RIGHT_SUB_H],
@@ -512,11 +592,11 @@ def _render(state: DisplayState) -> None:
         draw.text((rp_x + (RIGHT_W - tw) // 2, rp_y + RIGHT_SUB_H // 2 - 7),
                   txt, fill=COLOR_LABEL, font=font_label)
     else:
-        top2 = rankings[:2]
-        bottom2 = rankings[-2:] if len(rankings) >= 4 else rankings[-1:]
-        # 避免重复（持仓少于4只时）
-        bottom2_codes = {s['code'] for s in top2}
-        bottom2 = [s for s in bottom2 if s['code'] not in bottom2_codes]
+        top3 = rankings[:3]
+        bottom3 = rankings[-3:] if len(rankings) >= 6 else rankings[len(top3):]
+        # 避免重复（持仓少于6只时）
+        top_codes = {s['code'] for s in top3}
+        bottom3 = [s for s in bottom3 if s['code'] not in top_codes]
 
         def _draw_rank_items(items, panel_y):
             """右对齐绘制排名条目到指定子面板。"""
@@ -531,14 +611,11 @@ def _render(state: DisplayState) -> None:
                           fill=color, font=font_rank)
                 y += line_h
 
-        _draw_rank_items(top2, rp_y)
-        _draw_rank_items(bottom2, rp_y2)
+        _draw_rank_items(top3, rp_y)
+        _draw_rank_items(bottom3, rp_y2)
 
     # ===== 图表区（固定）=====
     _draw_chart(draw, chart_data)
-
-    # ===== 底部时间栏（固定）=====
-    _draw_footer(draw, font_footer)
 
     _write_fb(img)
 
@@ -651,20 +728,6 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
               fill=COLOR_LABEL, font=font_xs)
 
 
-def _draw_footer(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont) -> None:
-    """绘制底部时间栏（含星期几，固定在屏幕底部）。"""
-    footer_y = HEIGHT - FOOTER_H
-    draw.rectangle([0, footer_y, WIDTH, HEIGHT], fill=COLOR_FOOTER_BG)
-    now = datetime.now()
-    weekday = WEEKDAY_NAMES[now.weekday()]
-    now_str = now.strftime(f"%Y-%m-%d {weekday} %H:%M:%S")
-    bbox = draw.textbbox((0, 0), now_str, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    draw.text(((WIDTH - tw) // 2, footer_y + (FOOTER_H - th) // 2), now_str,
-              fill=COLOR_TEXT, font=font)
-
-
 # ---------- 数据获取线程 ----------
 
 def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
@@ -738,11 +801,13 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
         if hour >= 23 or hour < 6:
             if state.is_screen_on:
                 _clear_screen()
+                _set_backlight(0)
                 state.is_screen_on = False
             stop_event.wait(10)
             continue
 
         if not state.is_screen_on:
+            _set_backlight(BACKLIGHT_BRIGHTNESS)
             state.is_screen_on = True
 
         # ---- 屏保：每分钟随机偏移数据区 ----
@@ -766,6 +831,8 @@ def main() -> None:
     setup_logger(log_level="WARNING")
     get_config()
 
+    _init_backlight()
+
     state = DisplayState()
     stop_event = threading.Event()
 
@@ -788,6 +855,7 @@ def main() -> None:
             time.sleep(1)
     finally:
         _clear_screen()
+        _cleanup_backlight()
 
 
 if __name__ == '__main__':
