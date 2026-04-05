@@ -47,7 +47,8 @@ from src.lazybull.common.config import get_config    # noqa: E402
 FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 数据刷新间隔（秒），10分钟
-SCREENSAVER_RANGE = 10       # 屏保偏移范围（±像素）
+SCREENSAVER_RANGE_X = 10     # 屏保水平偏移范围（±像素）
+SCREENSAVER_RANGE_Y = 8      # 屏保垂直偏移范围（±像素）
 SCREENSAVER_INTERVAL = 60    # 屏保偏移更新间隔（秒）
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -224,7 +225,8 @@ class DisplayState:
 def _render(state: DisplayState) -> None:
     """将持仓摘要渲染到 PIL Image 并写入 framebuffer。
 
-    所有绘制坐标加上屏保偏移量 (offset_x, offset_y)。
+    顶部状态栏和底部时间栏固定不动，仅中间三行数据参与屏保偏移。
+    数据行布局经过压缩，确保最大偏移时也不会被 footer 截断。
     """
     with state.lock:
         summary = state.summary
@@ -240,21 +242,20 @@ def _render(state: DisplayState) -> None:
     font_md = _get_font(24)   # 中号
     font_sm = _get_font(18)   # 小号/标签
 
-    # ===== 顶部状态栏 =====
-    header_y = oy
-    draw.rectangle([0, header_y, WIDTH, header_y + 44], fill=COLOR_HEADER_BG)
+    # ===== 顶部状态栏（固定位置）=====
+    draw.rectangle([0, 0, WIDTH, 44], fill=COLOR_HEADER_BG)
 
     days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}天"
     header_left = f"更新: {last_update_time}"
     header_right = f"距调仓: {days_str}"
-    draw.text((12 + ox, header_y + 10), header_left,
-              fill=COLOR_YELLOW, font=font_sm)
+    draw.text((12, 10), header_left, fill=COLOR_YELLOW, font=font_sm)
     bbox = draw.textbbox((0, 0), header_right, font=font_sm)
     rw = bbox[2] - bbox[0]
-    draw.text((WIDTH - rw - 12 + ox, header_y + 10), header_right,
-              fill=COLOR_YELLOW, font=font_sm)
+    draw.text((WIDTH - rw - 12, 10), header_right, fill=COLOR_YELLOW, font=font_sm)
 
-    # ===== 主数据区域 =====
+    # ===== 主数据区域（参与屏保偏移）=====
+    # 行基准 y: 56, 130, 204，最大底部 = 204+24+38 = 266
+    # 偏移 ±8 后范围 258~274，footer 起始 284，留有 10px 安全余量
     if summary is None:
         bbox_wait = draw.textbbox((0, 0), "等待数据...", font=font_md)
         ww = bbox_wait[2] - bbox_wait[0]
@@ -273,7 +274,7 @@ def _render(state: DisplayState) -> None:
 
     rows = [
         {
-            'y': 60,
+            'y': 56,
             'left_label': "持仓市值",
             'left_value': _fmt_wan(mkt_val),
             'left_color': COLOR_TEXT,
@@ -282,7 +283,7 @@ def _render(state: DisplayState) -> None:
             'right_color': _pct_color(flt_pct),
         },
         {
-            'y': 140,
+            'y': 130,
             'left_label': "总资产",
             'left_value': _fmt_wan(total_ast),
             'left_color': COLOR_TEXT,
@@ -291,7 +292,7 @@ def _render(state: DisplayState) -> None:
             'right_color': _pct_color(gain_pct),
         },
         {
-            'y': 220,
+            'y': 204,
             'left_label': "持仓数量",
             'left_value': str(pos_count),
             'left_color': COLOR_TEXT,
@@ -405,8 +406,8 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
         now_ts = time.monotonic()
         if now_ts - last_offset_time >= SCREENSAVER_INTERVAL:
             with state.lock:
-                state.offset_x = random.randint(-SCREENSAVER_RANGE, SCREENSAVER_RANGE)
-                state.offset_y = random.randint(-SCREENSAVER_RANGE, SCREENSAVER_RANGE)
+                state.offset_x = random.randint(-SCREENSAVER_RANGE_X, SCREENSAVER_RANGE_X)
+                state.offset_y = random.randint(-SCREENSAVER_RANGE_Y, SCREENSAVER_RANGE_Y)
             last_offset_time = now_ts
 
         # ---- 渲染（含实时时间）----
