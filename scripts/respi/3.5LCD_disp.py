@@ -65,6 +65,8 @@ COLOR_YELLOW = (255, 200, 50)      # 强调色
 COLOR_DIVIDER = (60, 60, 80)       # 分隔线
 COLOR_CHART_BG = (22, 22, 38)      # 图表背景
 COLOR_CHART_GRID = (45, 45, 65)    # 图表网格线
+COLOR_PANEL_LEFT = (25, 28, 48)    # 左面板背景（偏蓝）
+COLOR_PANEL_RIGHT = (28, 35, 38)   # 右面板背景（偏青）
 
 
 # ---------- 字体加载（带缓存）----------
@@ -282,6 +284,65 @@ def _fetch_chart_data() -> Optional[dict]:
     }
 
 
+# ---------- 个股盈亏排名 ----------
+
+def _fetch_stock_rankings() -> Optional[list]:
+    """获取个股盈亏排名（盈利前2 + 亏损前2）。
+
+    Returns:
+        list[dict]: 按盈亏排序的个股列表，每项包含:
+            name: str       - 股票名称
+            code: str       - 6位股票代码
+            pnl_pct: float  - 盈亏比率(%)
+        None: 数据不可用
+    """
+    from src.lazybull.paper import PaperStorage
+    from src.lazybull.data.tushare_client import TushareClient
+
+    paper_storage = PaperStorage(
+        root_path=str(project_root / "data" / "paper"), verbose=False
+    )
+    account_state = paper_storage.load_account_state()
+    if account_state is None or not account_state.positions:
+        return None
+
+    positions = account_state.positions
+    ts_codes_str = ','.join(positions.keys())
+
+    try:
+        client = TushareClient(verbose=False)
+        rt_df = client.get_realtime_quote(ts_codes_str)
+    except Exception:
+        return None
+
+    if rt_df is None or rt_df.empty:
+        return None
+
+    stocks = []
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('TS_CODE', ''))
+        name = str(row.get('NAME', ''))
+        price = row.get('PRICE', None)
+        if not ts_code or price is None:
+            continue
+        pos = positions.get(ts_code)
+        if pos is None:
+            continue
+        try:
+            current_price = float(price)
+        except (ValueError, TypeError):
+            continue
+        pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
+        code = ts_code.split('.')[0]
+        stocks.append({'name': name[:4], 'code': code, 'pnl_pct': pnl_pct})
+
+    if not stocks:
+        return None
+
+    stocks.sort(key=lambda x: x['pnl_pct'], reverse=True)
+    return stocks
+
+
 # ---------- 市场时间判断 ----------
 
 def _is_market_open() -> bool:
@@ -311,6 +372,7 @@ class DisplayState:
         self.update_time: str = "--:--"
         self.days_to_rebalance: int | None = None
         self.chart_data: dict | None = None
+        self.stock_rankings: list | None = None  # 个股盈亏排名
         # 屏保偏移（仅数据行参与）
         self.offset_x: int = 0
         self.offset_y: int = 0
@@ -321,39 +383,45 @@ class DisplayState:
 
 # 布局常量
 HEADER_H = 42          # 顶栏高度
-FOOTER_H = 38          # 底栏高度
-# 2行数据区：行1 y=48, 行2 y=110, 行高约50px（标签16px + 值28px）
-# 行1底部 ~98，分隔线104，行2底部 ~160，偏移 ±6 后最大166，图表起始168，安全
-DATA_ROW_Y = [48, 110]
-DATA_DIVIDER_Y = 104   # 两行之间的分隔线 y 坐标（行1底部~98，行2顶部110）
-COL_X = [16, 176, 340]  # 3列起始 x
-CHART_Y = 168          # 图表区起始 y（固定）
+FOOTER_H = 34          # 底栏高度
+PANEL_TOP = 46         # 面板区顶部 y
+PANEL_H = 118          # 面板区高度（2行数据 + 内边距）
+PANEL_GAP = 6          # 左右面板间距
+LEFT_W = 200           # 左面板宽度（总览 2×2）
+RIGHT_W = WIDTH - LEFT_W - PANEL_GAP - 12  # 右面板宽度（个股排名）
+CHART_Y = PANEL_TOP + PANEL_H + 4  # 图表区起始 y
 CHART_H = HEIGHT - FOOTER_H - CHART_Y  # 图表区高度
 
 
 def _render(state: DisplayState) -> None:
-    """将持仓摘要和图表渲染到 PIL Image 并写入 framebuffer。
+    """将持仓摘要、个股排名和图表渲染到 PIL Image 并写入 framebuffer。
 
-    顶部状态栏、图表区和底部时间栏固定不动，仅数据行参与屏保偏移。
-    2行 × 3列布局：
-      行1: 持仓市值 | 浮盈率    | 持仓数量
-      行2: 总资产   | 总盈亏率  | 年化收益
+    布局：
+      顶部状态栏（固定）
+      左面板（屏保偏移）：总览 2行×2列
+        行1: 持仓市值 | 浮盈率
+        行2: 总资产   | 总盈亏率
+      右面板（屏保偏移）：盈利Top2 + 亏损Top2
+      图表区（固定）
+      底部时间栏（固定）
     """
     with state.lock:
         summary = state.summary
         last_update_time = state.update_time
         days_to_rebalance = state.days_to_rebalance
         chart_data = state.chart_data
+        rankings = state.stock_rankings
         ox = state.offset_x
         oy = state.offset_y
 
     img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
     draw = ImageDraw.Draw(img)
 
-    font_val = _get_font(28)   # 数值（加大）
-    font_label = _get_font(14) # 标签
-    font_md = _get_font(20)    # 中号（等待提示用）
-    font_footer = _get_font(18)
+    font_val = _get_font(26)   # 数值
+    font_label = _get_font(13) # 标签
+    font_rank = _get_font(13)  # 排名列表
+    font_md = _get_font(20)    # 等待提示
+    font_footer = _get_font(16)
 
     # ===== 顶部状态栏（固定）=====
     draw.rectangle([0, 0, WIDTH, HEADER_H], fill=COLOR_HEADER_BG)
@@ -361,56 +429,100 @@ def _render(state: DisplayState) -> None:
     days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}天"
     header_left = f"更新: {last_update_time}"
     header_right = f"距调仓: {days_str}"
-    draw.text((12, 11), header_left, fill=COLOR_YELLOW, font=font_label)
+    draw.text((12, 12), header_left, fill=COLOR_YELLOW, font=font_label)
     bbox = draw.textbbox((0, 0), header_right, font=font_label)
     rw = bbox[2] - bbox[0]
-    draw.text((WIDTH - rw - 12, 11), header_right, fill=COLOR_YELLOW, font=font_label)
+    draw.text((WIDTH - rw - 12, 12), header_right, fill=COLOR_YELLOW, font=font_label)
 
-    # ===== 数据区（2行3列，参与屏保偏移）=====
+    # ===== 左面板：总览（参与屏保偏移）=====
+    lp_x = 4 + ox
+    lp_y = PANEL_TOP + oy
+    draw.rounded_rectangle(
+        [lp_x, lp_y, lp_x + LEFT_W, lp_y + PANEL_H],
+        radius=6, fill=COLOR_PANEL_LEFT
+    )
+
     if summary is None:
         bbox_wait = draw.textbbox((0, 0), "等待数据...", font=font_md)
         ww = bbox_wait[2] - bbox_wait[0]
-        draw.text(((WIDTH - ww) // 2 + ox, 80 + oy), "等待数据...",
-                  fill=COLOR_LABEL, font=font_md)
-        _draw_chart(draw, chart_data)
-        _draw_footer(draw, font_footer)
-        _write_fb(img)
-        return
+        draw.text((lp_x + (LEFT_W - ww) // 2, lp_y + PANEL_H // 2 - 12),
+                  "等待数据...", fill=COLOR_LABEL, font=font_md)
+    else:
+        mkt_val = summary['market_value']
+        total_ast = summary['total_assets']
+        flt_pct = summary['float_pnl_pct']
+        gain_pct = summary['total_pnl_pct']
 
-    pos_count = summary['pos_count']
-    mkt_val = summary['market_value']
-    total_ast = summary['total_assets']
-    flt_pct = summary['float_pnl_pct']
-    gain_pct = summary['total_pnl_pct']
-    ann_pct = summary['annual_return_pct']
+        # 2行×2列，列宽各 LEFT_W/2
+        col_w = LEFT_W // 2
+        pad = 10
+        cells = [
+            # (行, 列, 标签, 值, 颜色)
+            (0, 0, "持仓市值", _fmt_wan(mkt_val), COLOR_TEXT),
+            (0, 1, "浮盈率", _fmt_pct(flt_pct), _pct_color(flt_pct)),
+            (1, 0, "总资产", _fmt_wan(total_ast), COLOR_TEXT),
+            (1, 1, "总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct)),
+        ]
+        row_h = (PANEL_H - 2 * pad) // 2
+        for r, c, label, value, color in cells:
+            cx = lp_x + pad + c * col_w
+            cy = lp_y + pad + r * row_h
+            draw.text((cx, cy), label, fill=COLOR_LABEL, font=font_label)
+            draw.text((cx, cy + 16), value, fill=color, font=font_val)
 
-    # 2行 × 3列数据定义
-    grid = [
-        # 行1
-        [
-            ("持仓市值", _fmt_wan(mkt_val), COLOR_TEXT),
-            ("浮盈率", _fmt_pct(flt_pct), _pct_color(flt_pct)),
-            ("持仓数量", str(pos_count), COLOR_TEXT),
-        ],
-        # 行2
-        [
-            ("总资产", _fmt_wan(total_ast), COLOR_TEXT),
-            ("总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct)),
-            ("年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct)),
-        ],
-    ]
+        # 左面板中间水平分隔线
+        sep_y = lp_y + pad + row_h
+        draw.line([(lp_x + pad, sep_y), (lp_x + LEFT_W - pad, sep_y)],
+                  fill=COLOR_DIVIDER, width=1)
 
-    for row_idx, row_data in enumerate(grid):
-        y = DATA_ROW_Y[row_idx] + oy
-        for col_idx, (label, value, color) in enumerate(row_data):
-            x = COL_X[col_idx] + ox
-            draw.text((x, y), label, fill=COLOR_LABEL, font=font_label)
-            draw.text((x, y + 18), value, fill=color, font=font_val)
+    # ===== 右面板：个股盈亏排名（参与屏保偏移）=====
+    rp_x = 4 + LEFT_W + PANEL_GAP + ox
+    rp_y = PANEL_TOP + oy
+    draw.rounded_rectangle(
+        [rp_x, rp_y, rp_x + RIGHT_W, rp_y + PANEL_H],
+        radius=6, fill=COLOR_PANEL_RIGHT
+    )
 
-    # 两行之间的分隔线
-    draw.line([(COL_X[0] + ox, DATA_DIVIDER_Y + oy),
-               (WIDTH - COL_X[0] + ox, DATA_DIVIDER_Y + oy)],
-              fill=COLOR_DIVIDER, width=1)
+    pad = 8
+    inner_x = rp_x + pad
+    inner_y = rp_y + pad
+
+    if not rankings or len(rankings) < 2:
+        txt = "暂无排名"
+        bbox_r = draw.textbbox((0, 0), txt, font=font_label)
+        tw = bbox_r[2] - bbox_r[0]
+        draw.text((rp_x + (RIGHT_W - tw) // 2, rp_y + PANEL_H // 2 - 8),
+                  txt, fill=COLOR_LABEL, font=font_label)
+    else:
+        # 盈利前2 + 亏损前2
+        top2 = rankings[:2]
+        bottom2 = rankings[-2:] if len(rankings) >= 4 else rankings[-1:]
+        # 避免重复（持仓少于4只时）
+        bottom2 = [s for s in bottom2 if s not in top2]
+
+        line_h = 20  # 每行高度
+        y_cur = inner_y
+
+        # 盈利标题
+        draw.text((inner_x, y_cur), "▲ 盈利", fill=COLOR_RED, font=font_label)
+        y_cur += line_h - 2
+        for s in top2:
+            pct_str = _fmt_pct(s['pnl_pct'])
+            line = f"{s['name']} {s['code']} {pct_str}"
+            draw.text((inner_x, y_cur), line,
+                      fill=_pct_color(s['pnl_pct']), font=font_rank)
+            y_cur += line_h
+
+        y_cur += 4
+        # 亏损标题
+        draw.text((inner_x, y_cur), "▼ 亏损", fill=COLOR_GREEN, font=font_label)
+        y_cur += line_h - 2
+        for s in bottom2:
+            pct_str = _fmt_pct(s['pnl_pct'])
+            line = f"{s['name']} {s['code']} {pct_str}"
+            draw.text((inner_x, y_cur), line,
+                      fill=_pct_color(s['pnl_pct']), font=font_rank)
+            y_cur += line_h
 
     # ===== 图表区（固定）=====
     _draw_chart(draw, chart_data)
@@ -553,7 +665,7 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
     from paper_trade import get_realtime_portfolio_summary
 
     def _fetch_data() -> None:
-        """获取行情、调仓天数和图表数据，更新共享状态。"""
+        """获取行情、调仓天数、图表数据和个股排名，更新共享状态。"""
         try:
             summary = get_realtime_portfolio_summary()
             if summary is not None:
@@ -576,6 +688,14 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
             if cd is not None:
                 with state.lock:
                     state.chart_data = cd
+        except Exception:
+            pass
+
+        try:
+            ranks = _fetch_stock_rankings()
+            if ranks is not None:
+                with state.lock:
+                    state.stock_rankings = ranks
         except Exception:
             pass
 

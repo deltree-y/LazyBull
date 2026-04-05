@@ -21,7 +21,7 @@ $wf_end_date             = "20260209"   #20251231   #20260224
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
 $train_window_years_list = @(6)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
-$val_ratio_list          = @(0.08)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
+$val_ratio_list          = @(0.15)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
@@ -30,7 +30,7 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 5000         # 固定：树数量上限（配合早停，不需要多组）
+$n_estimators            = 20000         # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.005)     # XGB推荐0.005, LGB推荐0.005
