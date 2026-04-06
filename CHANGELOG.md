@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.40.0] - 2026-04-06
+
+### 新增
+
+- **信号入口门控 v2（composite 模式）——重新设计买入置信度门控公式**
+  - 新增 `signal_gate_mode` 参数，支持三种模式：`legacy`（旧公式）、`composite`（新公式）、`disabled`（关闭）
+  - **成本门控**（方案1）：预测收益低于交易成本 N 倍时直接持币，直接回答"这笔交易是否有正期望"
+  - **绝对收益质量分**（方案3A）：`abs_quality_score = clip(top_mean / cost, 0, 2)`，衡量绝对预测收益而非仅看相对分离度
+  - **百分位归一化**（方案3B）：用分离度在历史中的百分位替代不稳定的 `score_std` 归一化
+  - **自校准阈值**（方案3C）：基于 `composite_score` 历史分位自动决定仓位，消除手动调参问题
+  - 新增 `SignalConfidenceGateState` 字段：`abs_quality_score`、`separation_percentile`、`composite_score`、`cost_gate_passed`、`rolling_quality`
+
+- **滚动模型质量监控（方案2）——根据模型近期实际表现动态调仓**
+  - 新增 `signal_gate_quality_enabled` 参数，启用后追踪最近 N 个调仓周期的选股实际表现
+  - 计算滚动 hit rate（选股跑赢全市场中位数的比例），低于阈值时线性降仓
+  - 支持 EWM 半衰期平滑，模型"失灵"时自动收缩、恢复时自动放开
+  - Walk-forward 模型换代时自动重置预热期，给新模型信任期
+
+- **完整参数传递链路**
+  - `TradingConfig`、`signal_factory`、`walk_forward.py`、`run_ml_backtest.py`、`batch_walk_forward.ps1` 全部支持新参数
+  - `batch_walk_forward.ps1` 新增 `signal_gate_mode`、`signal_gate_cost_multiplier_list`、`signal_gate_quality_*` 参数区
+
+### 测试
+
+- 新增4个 composite 门控测试：成本门控阻断、高分数通过、历史缓冲区累积、disabled 模式
+- 全部 591 个测试通过（1个已有失败与本次无关）
+
 ## [0.39.0] - 2026-04-03
 
 ### 新增

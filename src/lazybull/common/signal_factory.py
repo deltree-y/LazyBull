@@ -8,9 +8,9 @@ from typing import Optional
 
 from loguru import logger
 
-from .trading_config import TradingConfig
-from ..signals.ml_signal import MLSignal, EnsembleMLSignal
 from ..signals.base import Signal
+from ..signals.ml_signal import EnsembleMLSignal, MLSignal
+from .trading_config import TradingConfig
 
 
 def create_signal(
@@ -29,6 +29,18 @@ def create_signal(
     Returns:
         Signal 实例
     """
+    # 公共门控参数
+    gate_kwargs = dict(
+        signal_confidence_gate_enabled=config.signal_confidence_gate_enabled,
+        signal_confidence_gate_top_k=config.signal_confidence_gate_top_k,
+        signal_confidence_gate_thresholds=config.signal_confidence_gate_thresholds,
+        signal_confidence_gate_exposure_levels=config.signal_confidence_gate_exposure_levels,
+        signal_gate_mode=config.signal_gate_mode,
+        signal_gate_cost_multiplier=config.signal_gate_cost_multiplier,
+        signal_gate_round_trip_cost=config.signal_gate_round_trip_cost,
+        signal_gate_percentile_warmup=config.signal_gate_percentile_warmup,
+    )
+
     if config.model_version_b is not None:
         signal = EnsembleMLSignal(
             model_version_a=config.model_version,
@@ -37,11 +49,8 @@ def create_signal(
             top_n=config.top_n,
             models_dir=models_dir,
             weight_method=config.weight_method,
-            signal_confidence_gate_enabled=config.signal_confidence_gate_enabled,
-            signal_confidence_gate_top_k=config.signal_confidence_gate_top_k,
-            signal_confidence_gate_thresholds=config.signal_confidence_gate_thresholds,
-            signal_confidence_gate_exposure_levels=config.signal_confidence_gate_exposure_levels,
             verbose=verbose,
+            **gate_kwargs,
         )
         logger.info(
             f"使用双模型集成: model_a=v{config.model_version}, "
@@ -54,10 +63,7 @@ def create_signal(
             model_version=config.model_version,
             models_dir=models_dir,
             weight_method=config.weight_method,
-            signal_confidence_gate_enabled=config.signal_confidence_gate_enabled,
-            signal_confidence_gate_top_k=config.signal_confidence_gate_top_k,
-            signal_confidence_gate_thresholds=config.signal_confidence_gate_thresholds,
-            signal_confidence_gate_exposure_levels=config.signal_confidence_gate_exposure_levels,
             verbose=verbose,
+            **gate_kwargs,
         )
     return signal

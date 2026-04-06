@@ -30,6 +30,13 @@ class SignalConfidenceGateState:
     hit_threshold: Optional[float] = None
     reason: str = "未启用"
 
+    # ── composite 模式新增字段 ──
+    abs_quality_score: float = float("nan")  # 绝对收益质量分
+    separation_percentile: float = float("nan")  # 分离度历史百分位
+    composite_score: float = float("nan")  # 综合得分
+    cost_gate_passed: bool = True  # 成本门控是否通过
+    rolling_quality: float = float("nan")  # 滚动模型质量（由engine注入）
+
 
 class MLSignal(Signal):
     """ML 信号生成器
@@ -50,6 +57,10 @@ class MLSignal(Signal):
         signal_confidence_gate_top_k: int = 10,
         signal_confidence_gate_thresholds: Optional[List[float]] = None,
         signal_confidence_gate_exposure_levels: Optional[List[float]] = None,
+        signal_gate_mode: str = "legacy",
+        signal_gate_cost_multiplier: float = 2.0,
+        signal_gate_round_trip_cost: float = 0.003,
+        signal_gate_percentile_warmup: int = 20,
         min_amount_ma20: float = 50000.0,
         min_total_mv: float = 500000.0,
         max_total_mv: float = 15000000.0,
@@ -67,6 +78,10 @@ class MLSignal(Signal):
             signal_confidence_gate_top_k: 置信度评估使用的头部股票数量，默认10
             signal_confidence_gate_thresholds: 置信度阈值列表，低于首档时持币
             signal_confidence_gate_exposure_levels: 各阈值对应的仓位系数列表
+            signal_gate_mode: 门控模式 "legacy"|"composite"|"disabled"
+            signal_gate_cost_multiplier: composite模式下预测收益至少覆盖成本的倍数
+            signal_gate_round_trip_cost: 往返交易成本估算
+            signal_gate_percentile_warmup: 百分位归一化预热期（调仓次数）
             min_amount_ma20: 20日均成交额下限（千元），默认50000（=5000万元）
             min_total_mv: 总市值下限（万元），默认500000（=50亿元）
             max_total_mv: 总市值上限（万元），默认15000000（=1500亿元）
@@ -80,12 +95,28 @@ class MLSignal(Signal):
         self.weight_method = weight_method
         self.signal_confidence_gate_enabled = signal_confidence_gate_enabled
         self.signal_confidence_gate_top_k = signal_confidence_gate_top_k
-        self.signal_confidence_gate_thresholds = (
-            signal_confidence_gate_thresholds or [0.8, 1.2, 1.6]
-        )
-        self.signal_confidence_gate_exposure_levels = (
-            signal_confidence_gate_exposure_levels or [0.3, 0.6, 1.0]
-        )
+        self.signal_confidence_gate_thresholds = signal_confidence_gate_thresholds or [
+            0.8,
+            1.2,
+            1.6,
+        ]
+        self.signal_confidence_gate_exposure_levels = signal_confidence_gate_exposure_levels or [
+            0.3,
+            0.6,
+            1.0,
+        ]
+        # composite 门控参数
+        self.signal_gate_mode = signal_gate_mode
+        self.signal_gate_cost_multiplier = signal_gate_cost_multiplier
+        self.signal_gate_round_trip_cost = signal_gate_round_trip_cost
+        self.signal_gate_percentile_warmup = signal_gate_percentile_warmup
+        # composite 门控历史缓冲区（用于百分位归一化和自校准阈值）
+        self._separation_history: List[float] = []
+        self._composite_score_history: List[float] = []
+        self._GATE_HISTORY_MAX_LEN = 60  # 最多保留60个调仓日的历史
+        # 跨 split 持久化质量监控状态（walk-forward 复用 signal 实例时保留）
+        self._persisted_quality_state: Optional[dict] = None
+
         self.min_amount_ma20 = min_amount_ma20
         self.min_total_mv = min_total_mv
         self.max_total_mv = max_total_mv
@@ -101,7 +132,14 @@ class MLSignal(Signal):
         self._validate_confidence_gate_params()
 
         confidence_gate_info = ""
-        if self.signal_confidence_gate_enabled:
+        if self.signal_gate_mode == "composite":
+            confidence_gate_info = (
+                f", gate=composite(cost_mult={self.signal_gate_cost_multiplier}, "
+                f"cost={self.signal_gate_round_trip_cost}, "
+                f"top_k={self.signal_confidence_gate_top_k}, "
+                f"warmup={self.signal_gate_percentile_warmup})"
+            )
+        elif self.signal_confidence_gate_enabled:
             confidence_gate_info = (
                 ", confidence_gate="
                 f"enabled(top_k={self.signal_confidence_gate_top_k}, "
@@ -119,43 +157,63 @@ class MLSignal(Signal):
 
     def _validate_confidence_gate_params(self) -> None:
         """校验信号置信度门控参数。"""
+        if self.signal_gate_mode not in ("legacy", "composite", "disabled"):
+            raise ValueError(
+                f"signal_gate_mode 必须为 'legacy'/'composite'/'disabled'，"
+                f"当前值: {self.signal_gate_mode}"
+            )
+
+        if self.signal_gate_mode == "composite":
+            if self.signal_gate_cost_multiplier <= 0:
+                raise ValueError(
+                    f"signal_gate_cost_multiplier 必须为正数，"
+                    f"当前值: {self.signal_gate_cost_multiplier}"
+                )
+            if self.signal_gate_round_trip_cost <= 0:
+                raise ValueError(
+                    f"signal_gate_round_trip_cost 必须为正数，"
+                    f"当前值: {self.signal_gate_round_trip_cost}"
+                )
+
         if self.signal_confidence_gate_top_k <= 0:
             raise ValueError(
                 "signal_confidence_gate_top_k 必须为正整数，"
                 f"当前值: {self.signal_confidence_gate_top_k}"
             )
 
-        if len(self.signal_confidence_gate_thresholds) != len(
-            self.signal_confidence_gate_exposure_levels
-        ):
-            raise ValueError(
-                "signal_confidence_gate_thresholds 与 "
-                "signal_confidence_gate_exposure_levels 长度必须一致"
-            )
-
-        for i in range(1, len(self.signal_confidence_gate_thresholds)):
-            if (
-                self.signal_confidence_gate_thresholds[i]
-                <= self.signal_confidence_gate_thresholds[i - 1]
+        # legacy 模式需要校验阈值和仓位列表
+        if self.signal_gate_mode == "legacy":
+            if len(self.signal_confidence_gate_thresholds) != len(
+                self.signal_confidence_gate_exposure_levels
             ):
                 raise ValueError(
-                    "signal_confidence_gate_thresholds 必须严格递增: "
-                    f"{self.signal_confidence_gate_thresholds}"
+                    "signal_confidence_gate_thresholds 与 "
+                    "signal_confidence_gate_exposure_levels 长度必须一致"
                 )
 
-        last_exposure = -1.0
-        for exposure in self.signal_confidence_gate_exposure_levels:
-            if exposure < 0 or exposure > 1:
-                raise ValueError(
-                    "signal_confidence_gate_exposure_levels 必须在 [0, 1] 范围内: "
-                    f"{self.signal_confidence_gate_exposure_levels}"
-                )
-            if exposure < last_exposure:
-                raise ValueError(
-                    "signal_confidence_gate_exposure_levels 必须非递减: "
-                    f"{self.signal_confidence_gate_exposure_levels}"
-                )
-            last_exposure = exposure
+            for i in range(1, len(self.signal_confidence_gate_thresholds)):
+                if (
+                    self.signal_confidence_gate_thresholds[i]
+                    <= self.signal_confidence_gate_thresholds[i - 1]
+                ):
+                    raise ValueError(
+                        "signal_confidence_gate_thresholds 必须严格递增: "
+                        f"{self.signal_confidence_gate_thresholds}"
+                    )
+
+            last_exposure = -1.0
+            for exposure in self.signal_confidence_gate_exposure_levels:
+                if exposure < 0 or exposure > 1:
+                    raise ValueError(
+                        "signal_confidence_gate_exposure_levels 必须在 [0, 1] 范围内: "
+                        f"{self.signal_confidence_gate_exposure_levels}"
+                    )
+                if exposure < last_exposure:
+                    raise ValueError(
+                        "signal_confidence_gate_exposure_levels 必须非递减: "
+                        f"{self.signal_confidence_gate_exposure_levels}"
+                    )
+                last_exposure = exposure
 
     def _get_primary_task(self) -> str:
         """获取主模型任务类型。"""
@@ -163,15 +221,40 @@ class MLSignal(Signal):
             return "regression"
         return self.metadata.get("train_params", {}).get("task", "regression")
 
+    def _get_label_transform(self) -> str:
+        """获取标签变换类型（影响预测分数的尺度）。"""
+        if self.metadata is None:
+            return "raw"
+        return self.metadata.get("train_params", {}).get("label_transform", "raw")
+
     def _calculate_confidence_gate_state(
         self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
     ) -> SignalConfidenceGateState:
-        """根据排序候选计算置信度门控状态。"""
+        """根据排序候选计算置信度门控状态，按 signal_gate_mode 路由。"""
+        # disabled 模式：完全跳过门控
+        if self.signal_gate_mode == "disabled":
+            state = SignalConfidenceGateState(
+                enabled=False, exposure=1.0, reason="门控已禁用(disabled)"
+            )
+            self._last_confidence_gate_state = state
+            return state
+
+        # composite 模式：使用新公式
+        if self.signal_gate_mode == "composite":
+            return self._compute_composite_gate_state(ranked_candidates, date=date)
+
+        # legacy 模式：保持原有逻辑
         if not self.signal_confidence_gate_enabled:
             state = SignalConfidenceGateState(enabled=False, exposure=1.0, reason="未启用")
             self._last_confidence_gate_state = state
             return state
 
+        return self._compute_legacy_gate_state(ranked_candidates, date=date)
+
+    def _compute_legacy_gate_state(
+        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
+    ) -> SignalConfidenceGateState:
+        """legacy 模式：原有的置信度门控逻辑。"""
         score_values = np.asarray([score for _, score in ranked_candidates], dtype=float)
         score_values = score_values[np.isfinite(score_values)]
 
@@ -191,7 +274,7 @@ class MLSignal(Signal):
         top_scores = score_values[:top_k]
 
         if len(score_values) > top_k:
-            baseline_scores = score_values[top_k:min(len(score_values), top_k * 2)]
+            baseline_scores = score_values[top_k : min(len(score_values), top_k * 2)]
             if len(baseline_scores) == 0:
                 baseline_scores = score_values[top_k:]
         else:
@@ -212,9 +295,7 @@ class MLSignal(Signal):
 
         if self._get_primary_task() == "regression" and top_mean <= 0:
             confidence_score = 0.0
-            reason = (
-                f"Top{top_k} 平均分={top_mean:.4f} <= 0，视为无正向alpha，持币"
-            )
+            reason = f"Top{top_k} 平均分={top_mean:.4f} <= 0，视为无正向alpha，持币"
 
         exposure = 0.0
         hit_threshold = None
@@ -229,15 +310,9 @@ class MLSignal(Signal):
                 break
 
         if hit_threshold is None:
-            reason = (
-                f"{reason}，未达到首档阈值 "
-                f"{self.signal_confidence_gate_thresholds[0]:.3f}"
-            )
+            reason = f"{reason}，未达到首档阈值 " f"{self.signal_confidence_gate_thresholds[0]:.3f}"
         else:
-            reason = (
-                f"{reason}，达到阈值 {hit_threshold:.3f}，"
-                f"目标仓位 {exposure:.0%}"
-            )
+            reason = f"{reason}，达到阈值 {hit_threshold:.3f}，" f"目标仓位 {exposure:.0%}"
 
         state = SignalConfidenceGateState(
             enabled=True,
@@ -249,6 +324,175 @@ class MLSignal(Signal):
             baseline_mean=baseline_mean,
             score_std=score_std,
             hit_threshold=hit_threshold,
+            reason=reason,
+        )
+        self._last_confidence_gate_state = state
+        return state
+
+    def _compute_composite_gate_state(
+        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
+    ) -> SignalConfidenceGateState:
+        """composite 模式：成本门控 + 绝对质量分 + 百分位归一化 + 自校准阈值。"""
+        score_values = np.asarray([score for _, score in ranked_candidates], dtype=float)
+        score_values = score_values[np.isfinite(score_values)]
+
+        if len(score_values) == 0:
+            state = SignalConfidenceGateState(
+                enabled=True,
+                score=0.0,
+                exposure=0.0,
+                candidate_count=0,
+                top_k=0,
+                cost_gate_passed=False,
+                reason="无有效候选分数，持币",
+            )
+            self._last_confidence_gate_state = state
+            return state
+
+        top_k = min(self.signal_confidence_gate_top_k, len(score_values))
+        top_scores = score_values[:top_k]
+
+        if len(score_values) > top_k:
+            baseline_end = min(len(score_values), top_k * 2)
+            baseline_scores = score_values[top_k:baseline_end]
+            if len(baseline_scores) == 0:
+                baseline_scores = score_values[top_k:]
+        else:
+            baseline_scores = score_values
+
+        top_mean = float(np.mean(top_scores))
+        baseline_mean = float(np.mean(baseline_scores))
+        score_std = float(np.std(score_values))
+
+        # 判断标签尺度：cs_zscore 标签的预测值是无量纲 z 分数，不能直接与交易成本比较
+        is_zscore_label = self._get_label_transform() == "cs_zscore"
+        is_regression = self._get_primary_task() == "regression"
+
+        # ── 方案1: 成本门控（硬门槛）──
+        cost_gate_passed = True
+        if is_regression:
+            if is_zscore_label:
+                # z 分数尺度：cost_multiplier 直接表示 top_mean 必须超过 score_std 的倍数
+                # 例如 cost_multiplier=0.3 表示 top_mean > 0.3 × score_std
+                # 典型范围：0.1（宽松）~ 1.0（严格）
+                cost_threshold = self.signal_gate_cost_multiplier * (score_std + 1e-8)
+                if top_mean < cost_threshold:
+                    cost_gate_passed = False
+                    reason = (
+                        f"成本门控未通过(z分数模式): top_mean={top_mean:.4f} < "
+                        f"{self.signal_gate_cost_multiplier}×std={cost_threshold:.4f}，"
+                        f"信号强度不足(std={score_std:.4f})，持币"
+                    )
+            else:
+                # 原始收益尺度：直接与交易成本比较
+                cost_threshold = self.signal_gate_cost_multiplier * self.signal_gate_round_trip_cost
+                if top_mean < cost_threshold:
+                    cost_gate_passed = False
+                    reason = (
+                        f"成本门控未通过: top_mean={top_mean:.4f} < "
+                        f"{self.signal_gate_cost_multiplier}×{self.signal_gate_round_trip_cost}"
+                        f"={cost_threshold:.4f}，预期收益不足以覆盖交易成本，持币"
+                    )
+
+        if not cost_gate_passed:
+            state = SignalConfidenceGateState(
+                enabled=True,
+                score=0.0,
+                exposure=0.0,
+                candidate_count=len(score_values),
+                top_k=top_k,
+                top_mean=top_mean,
+                baseline_mean=baseline_mean,
+                score_std=score_std,
+                abs_quality_score=0.0,
+                cost_gate_passed=False,
+                composite_score=0.0,
+                reason=reason,
+            )
+            self._last_confidence_gate_state = state
+            return state
+
+        # ── 方案3A: 绝对收益质量分 ──
+        # 用 sigmoid 风格映射，让 cost_multiplier 控制"半满分"位置：
+        # - 当 top_mean == cost_multiplier × 基准尺度 时，abs_quality_score ≈ 1.0（半满分）
+        # - top_mean 越高于该门槛，越趋近 2.0；越低于该门槛，越趋近 0
+        # - 不同 cost_multiplier 值移动这条 S 曲线，始终产生有区分度的连续值
+        if is_zscore_label:
+            midpoint = self.signal_gate_cost_multiplier * (score_std + 1e-8)
+        elif self.signal_gate_round_trip_cost > 0:
+            midpoint = self.signal_gate_cost_multiplier * self.signal_gate_round_trip_cost
+        else:
+            midpoint = 1e-8
+        # sigmoid 映射: 2 / (1 + exp(-k*(x/midpoint - 1)))
+        # k 控制曲线陡峭度，k=3 时在 midpoint 附近有良好区分度
+        ratio = top_mean / (midpoint + 1e-8)
+        abs_quality_score = float(2.0 / (1.0 + np.exp(-3.0 * (ratio - 1.0))))
+
+        # ── 方案3B: 分离度百分位归一化 ──
+        separation = top_mean - baseline_mean
+        self._separation_history.append(separation)
+        if len(self._separation_history) > self._GATE_HISTORY_MAX_LEN:
+            self._separation_history = self._separation_history[-self._GATE_HISTORY_MAX_LEN :]
+
+        # 预热期不足时使用保守默认
+        if len(self._separation_history) >= self.signal_gate_percentile_warmup:
+            hist_arr = np.asarray(self._separation_history)
+            # 当前separation在历史中的百分位（0~1）
+            sep_percentile = float(np.mean(hist_arr <= separation))
+        else:
+            # 预热期: 基于分离度正负做简单判断
+            sep_percentile = 0.5 if separation >= 0 else 0.3
+
+        # ── 综合得分 ──
+        composite_score = 0.5 * abs_quality_score + 0.5 * sep_percentile
+        self._composite_score_history.append(composite_score)
+        if len(self._composite_score_history) > self._GATE_HISTORY_MAX_LEN:
+            self._composite_score_history = self._composite_score_history[
+                -self._GATE_HISTORY_MAX_LEN :
+            ]
+
+        # ── 方案3C: 自校准阈值（基于历史分位决定仓位）──
+        if len(self._composite_score_history) >= self.signal_gate_percentile_warmup:
+            hist_scores = np.asarray(self._composite_score_history)
+            score_pct = float(np.mean(hist_scores <= composite_score))
+            if score_pct < 0.20:
+                exposure = 0.0  # 低于20%分位 → 持币
+            elif score_pct < 0.50:
+                exposure = 0.5  # 20%-50%分位 → 半仓
+            else:
+                exposure = 1.0  # 50%以上 → 满仓
+        else:
+            # 预热期: 只做成本门控（已在上方通过），其余放行
+            exposure = 1.0
+
+        reason_parts = [
+            f"composite={composite_score:.3f}",
+            f"abs_quality={abs_quality_score:.3f}",
+            f"sep_pct={sep_percentile:.2f}",
+            f"top_mean={top_mean:.4f}",
+            f"baseline={baseline_mean:.4f}",
+        ]
+        if exposure <= 0:
+            reason_parts.append("低于20%分位，持币")
+        elif exposure < 1.0:
+            reason_parts.append(f"中等分位，仓位{exposure:.0%}")
+        else:
+            reason_parts.append("满仓通过")
+        reason = "，".join(reason_parts)
+
+        state = SignalConfidenceGateState(
+            enabled=True,
+            score=composite_score,
+            exposure=exposure,
+            candidate_count=len(score_values),
+            top_k=top_k,
+            top_mean=top_mean,
+            baseline_mean=baseline_mean,
+            score_std=score_std,
+            abs_quality_score=abs_quality_score,
+            separation_percentile=sep_percentile,
+            composite_score=composite_score,
+            cost_gate_passed=cost_gate_passed,
             reason=reason,
         )
         self._last_confidence_gate_state = state
@@ -279,9 +523,7 @@ class MLSignal(Signal):
 
         if state.exposure <= 0:
             if emit_log:
-                logger.warning(
-                    f"信号置信度门控: {date_label}, {state.reason}，本次持币"
-                )
+                logger.warning(f"信号置信度门控: {date_label}, {state.reason}，本次持币")
             return {}
 
         if state.exposure < 1.0:
@@ -300,9 +542,36 @@ class MLSignal(Signal):
         """返回最近一次评估的置信度门控状态。"""
         return self._last_confidence_gate_state
 
+    def update_model_version(self, new_version: int) -> None:
+        """切换到新模型版本（walk-forward 跨 split 复用时调用）。
+
+        仅重置模型相关缓存，保留门控历史缓冲区（_separation_history、
+        _composite_score_history），以便百分位归一化和自校准阈值跨 split 积累。
+
+        Args:
+            new_version: 新模型版本号
+        """
+        if self.model_version == new_version and self.model is not None:
+            return  # 版本未变，无需切换
+        old_version = self.model_version
+        self.model_version = new_version
+        # 重置模型缓存，下次 generate 时触发延迟加载
+        self.model = None
+        self.metadata = None
+        self.feature_columns = None
+        logger.info(
+            f"MLSignal 切换模型: v{old_version} → v{new_version}，"
+            f"门控历史保留（separation={len(self._separation_history)}条，"
+            f"composite={len(self._composite_score_history)}条）"
+        )
+
     def _load_model(self) -> None:
         """加载模型（延迟加载）"""
         if self.model is None:
+            if self.model_version is None:
+                raise RuntimeError(
+                    "MLSignal.model_version 为 None，请在 generate 前调用 update_model_version()"
+                )
             logger.info("开始加载ML模型...")
             self.registry = ModelRegistry(models_dir=self.models_dir)
             # 严格检查：拒绝旧模型
@@ -339,7 +608,7 @@ class MLSignal(Signal):
         if "amount_ma20" in features_df.columns:
             amount_low = (features_df["amount_ma20"].fillna(0) < self.min_amount_ma20).sum()
             if amount_low > 0:
-                #logger.info(
+                # logger.info(
                 #    f"  选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
                 #    f"（={self.min_amount_ma20 / 10:.0f}万元）的 {amount_low} 只"
                 # )
@@ -353,10 +622,10 @@ class MLSignal(Signal):
             mv_low = (features_df["total_mv"] < self.min_total_mv).sum()
             mv_high = (features_df["total_mv"] > self.max_total_mv).sum()
             if mv_low + mv_high > 0:
-                #logger.info(
+                # logger.info(
                 #   f"  选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
                 #   f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
-                #)
+                # )
                 pass
             mask &= features_df["total_mv"].between(self.min_total_mv, self.max_total_mv)
         else:
@@ -371,13 +640,15 @@ class MLSignal(Signal):
             else:
                 fin_mask = features_df["sw_l1_code"].isin(self._FINANCIAL_SW_L1_CODES)
                 fin_count = fin_mask.sum()
-                #if fin_count > 0:
+                # if fin_count > 0:
                 #    logger.info(f"  选股过滤-金融股: 剔除银行/非银金融 {fin_count} 只")
                 mask &= ~fin_mask
 
         result = features_df[mask].copy()
         if (before - len(result)) > 0:
-            logger.info(f"  选股过滤合计: {before} → {len(result)}（剔除 {before - len(result)} 只）")
+            logger.info(
+                f"  选股过滤合计: {before} → {len(result)}（剔除 {before - len(result)} 只）"
+            )
         return result
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
@@ -461,7 +732,9 @@ class MLSignal(Signal):
 
         # 按预测分数排序，选择 Top N
         features_df = features_df.sort_values("ml_score", ascending=False)
-        ranked_candidates = list(zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist()))
+        ranked_candidates = list(
+            zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist())
+        )
         confidence_state = self.evaluate_confidence_gate(ranked_candidates, date=date)
         top_stocks = features_df.head(self.top_n)
         logger.info(
@@ -657,6 +930,10 @@ class EnsembleMLSignal(MLSignal):
         signal_confidence_gate_top_k: int = 10,
         signal_confidence_gate_thresholds: Optional[List[float]] = None,
         signal_confidence_gate_exposure_levels: Optional[List[float]] = None,
+        signal_gate_mode: str = "legacy",
+        signal_gate_cost_multiplier: float = 2.0,
+        signal_gate_round_trip_cost: float = 0.003,
+        signal_gate_percentile_warmup: int = 20,
         min_amount_ma20: float = 50000.0,
         min_total_mv: float = 500000.0,
         max_total_mv: float = 15000000.0,
@@ -681,6 +958,10 @@ class EnsembleMLSignal(MLSignal):
             signal_confidence_gate_top_k=signal_confidence_gate_top_k,
             signal_confidence_gate_thresholds=signal_confidence_gate_thresholds,
             signal_confidence_gate_exposure_levels=signal_confidence_gate_exposure_levels,
+            signal_gate_mode=signal_gate_mode,
+            signal_gate_cost_multiplier=signal_gate_cost_multiplier,
+            signal_gate_round_trip_cost=signal_gate_round_trip_cost,
+            signal_gate_percentile_warmup=signal_gate_percentile_warmup,
             min_amount_ma20=min_amount_ma20,
             min_total_mv=min_total_mv,
             max_total_mv=max_total_mv,
@@ -700,6 +981,24 @@ class EnsembleMLSignal(MLSignal):
             f"Ensemble 信号初始化: model_a=v{model_version_a}, model_b=v{model_version_b}, "
             f"weight_a={ensemble_weight_a:.2f}, weight_b={self.ensemble_weight_b:.2f}"
         )
+
+    def update_model_version(self, new_version_a: int, new_version_b: Optional[int] = None) -> None:
+        """切换到新模型版本（walk-forward 跨 split 复用时调用）。
+
+        保留门控历史缓冲区，仅重置模型 A/B 的缓存。
+
+        Args:
+            new_version_a: 新模型A版本号
+            new_version_b: 新模型B版本号（None 时保持不变）
+        """
+        super().update_model_version(new_version_a)
+        if new_version_b is not None and new_version_b != self.model_version_b:
+            old_b = self.model_version_b
+            self.model_version_b = new_version_b
+            self.model_b = None
+            self.metadata_b = None
+            self.feature_columns_b = None
+            logger.info(f"EnsembleMLSignal 切换模型B: v{old_b} → v{new_version_b}")
 
     def _load_model_b(self) -> None:
         """加载模型B（延迟加载）"""

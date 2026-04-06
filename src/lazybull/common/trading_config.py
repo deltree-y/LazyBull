@@ -30,6 +30,16 @@ class TradingConfig:
     signal_confidence_gate_exposure_levels: List[float] = field(
         default_factory=lambda: [0.3, 0.6, 1.0]
     )
+
+    # ── 信号入口门控 v2（composite 模式替代旧置信度门控）──
+    signal_gate_mode: str = "legacy"  # "legacy" 旧逻辑 | "composite" 新公式 | "disabled" 关闭
+    signal_gate_cost_multiplier: float = 2.0  # 预测收益至少覆盖成本的倍数
+    signal_gate_round_trip_cost: float = 0.003  # 往返交易成本估算（佣金+印花税+滑点）
+    signal_gate_quality_enabled: bool = False  # 是否启用滚动模型质量监控
+    signal_gate_quality_window: int = 5  # 回看调仓周期数
+    signal_gate_quality_threshold: float = 0.4  # 最低滚动hit rate
+    signal_gate_quality_halflife: int = 3  # EWM半衰期（调仓周期数）
+    signal_gate_percentile_warmup: int = 20  # 百分位归一化预热期（调仓次数）
     rebalance_freq: Optional[int] = 20
     stagger_tranches: int = 1
     max_per_industry: Optional[int] = None
@@ -185,12 +195,66 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         default=[0.3, 0.6, 1.0],
         help="各置信度阈值对应的仓位系数，默认：0.3 0.6 1.0",
     )
+
+    # ── 信号入口门控 v2 ──
+    parser.add_argument(
+        "--signal-gate-mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "composite", "disabled"],
+        help="信号入口门控模式：legacy=旧公式, composite=新公式(成本+百分位), disabled=关闭",
+    )
+    parser.add_argument(
+        "--signal-gate-cost-multiplier",
+        type=float,
+        default=2.0,
+        help="composite模式：预测收益至少覆盖交易成本的倍数（默认：2.0）",
+    )
+    parser.add_argument(
+        "--signal-gate-round-trip-cost",
+        type=float,
+        default=0.003,
+        help="composite模式：往返交易成本估算（默认：0.003=0.3%%）",
+    )
+    parser.add_argument(
+        "--signal-gate-quality-enabled",
+        action="store_true",
+        default=False,
+        help="启用滚动模型质量监控：跟踪最近N期模型预测实际表现",
+    )
+    parser.add_argument(
+        "--signal-gate-quality-window",
+        type=int,
+        default=5,
+        help="滚动质量监控回看的调仓周期数（默认：5）",
+    )
+    parser.add_argument(
+        "--signal-gate-quality-threshold",
+        type=float,
+        default=0.4,
+        help="滚动质量监控最低hit rate（默认：0.4）",
+    )
+    parser.add_argument(
+        "--signal-gate-quality-halflife",
+        type=int,
+        default=3,
+        help="滚动质量EWM半衰期（调仓周期数，默认：3）",
+    )
+    parser.add_argument(
+        "--signal-gate-percentile-warmup",
+        type=int,
+        default=20,
+        help="百分位归一化预热期（调仓次数，默认：20）",
+    )
+
     parser.add_argument(
         "--rebalance-freq", type=int, default=20, help="调仓频率（交易日数），默认20"
     )
     parser.add_argument(
-        "--stagger-tranches", type=int, default=1,
-        help="分批调仓批次数（默认1=不分批）。设为K时资金分K份错开调仓，降低时点风险"
+        "--stagger-tranches",
+        type=int,
+        default=1,
+        help="分批调仓批次数（默认1=不分批）。设为K时资金分K份错开调仓，降低时点风险",
     )
     parser.add_argument(
         "--max-per-industry", type=int, default=None, help="单行业最大持仓数量（默认：不限制）"
