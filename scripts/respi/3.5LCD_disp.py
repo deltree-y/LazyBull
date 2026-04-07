@@ -24,6 +24,7 @@ import time
 import signal
 import random
 import threading
+from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
 from datetime import time as dt_time
@@ -52,6 +53,16 @@ BACKLIGHT_BRIGHTNESS = 20    # 背光亮度 0~100（默认40%，可按需调整�
 SCREENSAVER_RANGE_X = 4      # 屏保水平偏移范围（±像素）
 SCREENSAVER_RANGE_Y = 3      # 屏保垂直偏移范围（±像素）
 SCREENSAVER_INTERVAL = 60    # 屏保偏移更新间隔（秒）
+INTRADAY_WINDOW_START = dt_time(8, 30)
+INTRADAY_WINDOW_END = dt_time(15, 30)
+INTRADAY_SLOT_MINUTES = 10
+INTRADAY_SLOT_COUNT = (
+    ((INTRADAY_WINDOW_END.hour * 60 + INTRADAY_WINDOW_END.minute)
+     - (INTRADAY_WINDOW_START.hour * 60 + INTRADAY_WINDOW_START.minute))
+    // INTRADAY_SLOT_MINUTES
+    + 1
+)
+SHANGHAI_INDEX_CODE = "000001.SH"
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -128,6 +139,184 @@ def _pct_color(value: float) -> tuple:
     elif value < 0:
         return COLOR_GREEN
     return COLOR_TEXT
+
+
+def _coerce_float(value: object) -> Optional[float]:
+    """尽力将值转为 float，失败则返回 None。"""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_mmdd(date_str: str) -> str:
+    """将 YYYYMMDD 转为 MM/DD。"""
+    return f"{date_str[4:6]}/{date_str[6:]}"
+
+
+def _format_display_time(now: datetime) -> str:
+    """格式化顶部显示时间，如 4月7日(周二) 14:40:32。"""
+    weekday = WEEKDAY_NAMES[now.weekday()]
+    return f"{now.month}月{now.day}日({weekday}) {now:%H:%M:%S}"
+
+
+def _resolve_cycle_slot_count(rebalance_freq: object, point_count: int) -> int:
+    """持仓周期图的 x 轴槽位数固定为 max(调仓周期, 当前持仓天数)。"""
+    slot_count = max(point_count, 2)
+    try:
+        slot_count = max(slot_count, int(rebalance_freq))
+    except (TypeError, ValueError):
+        pass
+    return slot_count
+
+
+def _build_cycle_chart_payload(
+    dates: list[str],
+    index_pct: list[float],
+    portfolio_pct: list[float],
+    rebalance_freq: object,
+    base_value: float,
+) -> Optional[dict]:
+    """构建持仓周期图负载，并固定 x 轴槽位。"""
+    point_count = min(len(dates), len(index_pct), len(portfolio_pct))
+    if point_count == 0:
+        return None
+
+    dates = dates[:point_count]
+    index_pct = index_pct[:point_count]
+    portfolio_pct = portfolio_pct[:point_count]
+    slot_count = _resolve_cycle_slot_count(rebalance_freq, point_count)
+
+    return {
+        'mode': 'cycle',
+        'dates': dates,
+        'index_pct': index_pct,
+        'portfolio_pct': portfolio_pct,
+        'slot_indices': list(range(point_count)),
+        'slot_count': slot_count,
+        'x_start_label': _format_mmdd(dates[0]),
+        'x_end_label': f"{slot_count}天" if slot_count > point_count else _format_mmdd(dates[-1]),
+        'index_label': '上证',
+        'portfolio_label': '持仓',
+        'base_value': base_value,
+    }
+
+
+def _get_intraday_slot_index(point_time: datetime) -> int:
+    """将盘中时间映射到固定的 10 分钟槽位。"""
+    start_minutes = INTRADAY_WINDOW_START.hour * 60 + INTRADAY_WINDOW_START.minute
+    current_minutes = point_time.hour * 60 + point_time.minute
+    slot_idx = (current_minutes - start_minutes) // INTRADAY_SLOT_MINUTES
+    return max(0, min(slot_idx, INTRADAY_SLOT_COUNT - 1))
+
+
+def _empty_intraday_chart(trade_date: str) -> dict:
+    """创建新的日内图负载。"""
+    return {
+        'mode': 'intraday',
+        'trade_date': trade_date,
+        'dates': [],
+        'index_pct': [],
+        'portfolio_pct': [],
+        'slot_indices': [],
+        'slot_count': INTRADAY_SLOT_COUNT,
+        'x_start_label': INTRADAY_WINDOW_START.strftime("%H:%M"),
+        'x_end_label': INTRADAY_WINDOW_END.strftime("%H:%M"),
+        'index_label': '上证日内',
+        'portfolio_label': '持仓周期',
+    }
+
+
+def _upsert_intraday_chart(
+    chart_data: Optional[dict],
+    point_time: datetime,
+    index_pct: float,
+    portfolio_pct: float,
+) -> dict:
+    """向固定槽位的日内图中追加或覆盖一个采样点。"""
+    trade_date = point_time.strftime("%Y%m%d")
+    if chart_data is None or chart_data.get('trade_date') != trade_date:
+        chart_data = _empty_intraday_chart(trade_date)
+
+    slot_indices = list(chart_data.get('slot_indices', []))
+    index_values = list(chart_data.get('index_pct', []))
+    portfolio_values = list(chart_data.get('portfolio_pct', []))
+    dates = list(chart_data.get('dates', []))
+    slot_idx = _get_intraday_slot_index(point_time)
+    point_label = point_time.strftime("%H:%M")
+
+    if slot_indices and slot_idx == slot_indices[-1]:
+        index_values[-1] = index_pct
+        portfolio_values[-1] = portfolio_pct
+        dates[-1] = point_label
+    elif slot_idx in slot_indices:
+        replace_idx = slot_indices.index(slot_idx)
+        index_values[replace_idx] = index_pct
+        portfolio_values[replace_idx] = portfolio_pct
+        dates[replace_idx] = point_label
+    else:
+        slot_indices.append(slot_idx)
+        index_values.append(index_pct)
+        portfolio_values.append(portfolio_pct)
+        dates.append(point_label)
+
+    return {
+        **chart_data,
+        'trade_date': trade_date,
+        'dates': dates,
+        'index_pct': index_values,
+        'portfolio_pct': portfolio_values,
+        'slot_indices': slot_indices,
+    }
+
+
+@lru_cache(maxsize=1)
+def _load_trade_date_set() -> frozenset[str]:
+    """加载交易日集合并缓存，失败时返回空集合。"""
+    from src.lazybull.data import DataLoader, Storage
+
+    try:
+        loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
+        trade_cal = loader.load_clean_trade_cal()
+        if trade_cal is None or trade_cal.empty:
+            return frozenset()
+        return frozenset(trade_cal.loc[trade_cal['is_open'] == 1, 'cal_date'].astype(str))
+    except Exception:
+        return frozenset()
+
+
+def _is_trade_day(now: Optional[datetime] = None) -> bool:
+    """判断当前日期是否为交易日。"""
+    current_dt = now or datetime.now()
+    trade_dates = _load_trade_date_set()
+    if trade_dates:
+        return current_dt.strftime("%Y%m%d") in trade_dates
+    return current_dt.weekday() < 5
+
+
+def _is_intraday_chart_window(now: Optional[datetime] = None) -> bool:
+    """判断是否处于盘中图显示与刷新窗口（交易日 8:30-15:30）。"""
+    current_dt = now or datetime.now()
+    if not _is_trade_day(current_dt):
+        return False
+    current_time = current_dt.time()
+    return INTRADAY_WINDOW_START <= current_time <= INTRADAY_WINDOW_END
+
+
+def _select_chart_data(
+    cycle_chart_data: Optional[dict],
+    intraday_chart_data: Optional[dict],
+    now: Optional[datetime] = None,
+) -> Optional[dict]:
+    """根据当前时段选择显示周期图或盘中图。"""
+    current_dt = now or datetime.now()
+    if (
+        intraday_chart_data is not None
+        and intraday_chart_data.get('trade_date') == current_dt.strftime("%Y%m%d")
+        and _is_intraday_chart_window(current_dt)
+    ):
+        return intraday_chart_data
+    return cycle_chart_data
 
 
 # ---------- 背光控制 ----------
@@ -222,7 +411,7 @@ def _clear_screen() -> None:
 
 # ---------- 调仓日计算 ----------
 
-def _calc_days_to_rebalance() -> int | None:
+def _calc_days_to_rebalance() -> Optional[int]:
     """计算距下次调仓还剩多少交易日。"""
     from src.lazybull.paper import PaperStorage
     from src.lazybull.data import DataLoader, Storage
@@ -262,7 +451,7 @@ def _calc_days_to_rebalance() -> int | None:
 
 # ---------- 图表数据获取 ----------
 
-def _fetch_chart_data() -> Optional[dict]:
+def _fetch_cycle_chart_data() -> Optional[dict]:
     """获取持仓周期内的上证指数和持仓组合涨跌幅数据。
 
     基于账户持仓状态 + TuShare daily API 计算每日组合市值，
@@ -288,6 +477,7 @@ def _fetch_chart_data() -> Optional[dict]:
     if rebalance_state is None:
         return None
     start_date = rebalance_state.get('last_rebalance_date')
+    rebalance_freq = rebalance_state.get('rebalance_freq')
     if not start_date:
         return None
 
@@ -313,7 +503,7 @@ def _fetch_chart_data() -> Optional[dict]:
             return None
         index_df = index_df.sort_values('trade_date').reset_index(drop=True)
         trade_dates = index_df['trade_date'].tolist()
-        if len(trade_dates) < 2:
+        if len(trade_dates) < 1:
             return None
 
         # 逐股获取日线收盘价
@@ -330,7 +520,7 @@ def _fetch_chart_data() -> Optional[dict]:
         return None
 
     # 计算每日组合市值
-    base_value: float | None = None
+    base_value: Optional[float] = None
     portfolio_pct: list[float] = []
     for d in trade_dates:
         market_value = 0.0
@@ -347,11 +537,13 @@ def _fetch_chart_data() -> Optional[dict]:
     base_close = index_df.iloc[0]['close']
     index_pct = ((index_df['close'] / base_close - 1) * 100).tolist()
 
-    return {
-        'dates': trade_dates,
-        'index_pct': index_pct,
-        'portfolio_pct': portfolio_pct,
-    }
+    return _build_cycle_chart_payload(
+        dates=trade_dates,
+        index_pct=index_pct,
+        portfolio_pct=portfolio_pct,
+        rebalance_freq=rebalance_freq,
+        base_value=base_value,
+    )
 
 
 # ---------- 个股盈亏排名 ----------
@@ -398,9 +590,8 @@ def _fetch_stock_rankings() -> Optional[list]:
         pos = positions.get(ts_code)
         if pos is None:
             continue
-        try:
-            current_price = float(price)
-        except (ValueError, TypeError):
+        current_price = _coerce_float(price)
+        if current_price is None:
             continue
         pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
         code = ts_code.split('.')[0]
@@ -413,22 +604,104 @@ def _fetch_stock_rankings() -> Optional[list]:
     return stocks
 
 
-# ---------- 市场时间判断 ----------
+# ---------- 日内图数据获取 ----------
 
-def _is_market_open() -> bool:
-    """判断当前是否在交易时段。"""
-    now = datetime.now()
-    if now.weekday() >= 5:
-        return False
+def _extract_index_pct_from_quote(rt_df) -> Optional[float]:
+    """从实时行情 DataFrame 中提取上证指数当日涨跌幅。"""
+    if rt_df is None or rt_df.empty:
+        return None
 
-    current_time = now.time()
-    morning_start = dt_time(9, 15)
-    morning_end = dt_time(11, 45)
-    afternoon_start = dt_time(12, 45)
-    afternoon_end = dt_time(15, 15)
+    row = rt_df.iloc[0]
+    price = _coerce_float(row.get('PRICE', row.get('price')))
+    pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
+    if price is None or pre_close in (None, 0):
+        return None
+    return (price / pre_close - 1) * 100
 
-    return (morning_start <= current_time <= morning_end
-            or afternoon_start <= current_time <= afternoon_end)
+
+def _extract_index_pct_from_akshare(df) -> Optional[float]:
+    """从 akshare 指数现货表中提取上证指数当日涨跌幅。"""
+    if df is None or df.empty:
+        return None
+
+    code_columns = ['代码', 'symbol', 'ts_code']
+    matched = None
+    for col in code_columns:
+        if col not in df.columns:
+            continue
+        code_series = df[col].astype(str)
+        mask = code_series.isin(['000001', 'sh000001', SHANGHAI_INDEX_CODE])
+        if mask.any():
+            matched = df.loc[mask].iloc[0]
+            break
+
+    if matched is None:
+        return None
+
+    pct = _coerce_float(matched.get('涨跌幅', matched.get('pct_chg')))
+    if pct is not None:
+        return pct
+
+    price = _coerce_float(matched.get('最新价', matched.get('最新')))
+    pre_close = _coerce_float(
+        matched.get('昨收', matched.get('昨收盘', matched.get('pre_close')))
+    )
+    if price is None or pre_close in (None, 0):
+        return None
+    return (price / pre_close - 1) * 100
+
+
+def _fetch_realtime_index_pct() -> Optional[float]:
+    """获取上证指数当日实时涨跌幅。"""
+    from src.lazybull.data.tushare_client import TushareClient
+
+    try:
+        client = TushareClient(verbose=False)
+        rt_df = client.get_realtime_quote(SHANGHAI_INDEX_CODE)
+        pct = _extract_index_pct_from_quote(rt_df)
+        if pct is not None:
+            return pct
+    except Exception:
+        pass
+
+    try:
+        import akshare as ak  # type: ignore
+
+        for getter_name in ('stock_zh_index_spot_em', 'stock_zh_index_spot_sina'):
+            getter = getattr(ak, getter_name, None)
+            if getter is None:
+                continue
+            pct = _extract_index_pct_from_akshare(getter())
+            if pct is not None:
+                return pct
+    except Exception:
+        pass
+
+    return None
+
+
+def _build_intraday_chart(
+    chart_data: Optional[dict],
+    summary: Optional[dict],
+    cycle_chart_data: Optional[dict],
+    point_time: Optional[datetime] = None,
+) -> Optional[dict]:
+    """基于当前总资产与上证实时涨跌幅构建盘中图。"""
+    if summary is None or cycle_chart_data is None:
+        return chart_data
+
+    total_assets = _coerce_float(summary.get('total_assets'))
+    base_value = _coerce_float(cycle_chart_data.get('base_value'))
+    if total_assets is None or base_value in (None, 0):
+        return chart_data
+
+    index_pct = _fetch_realtime_index_pct()
+    if index_pct is None:
+        return chart_data
+
+    current_time = point_time or datetime.now()
+    portfolio_pct = (total_assets / base_value - 1) * 100
+    return _upsert_intraday_chart(chart_data, current_time, index_pct, portfolio_pct)
 
 
 # ---------- 共享显示状态 ----------
@@ -438,11 +711,12 @@ class DisplayState:
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.summary: dict | None = None
+        self.summary: Optional[dict] = None
         self.update_time: str = "--:--"
-        self.days_to_rebalance: int | None = None
-        self.chart_data: dict | None = None
-        self.stock_rankings: list | None = None  # 个股盈亏排名
+        self.days_to_rebalance: Optional[int] = None
+        self.chart_data: Optional[dict] = None
+        self.intraday_chart_data: Optional[dict] = None
+        self.stock_rankings: Optional[list] = None  # 个股盈亏排名
         # 屏保偏移（仅数据行参与）
         self.offset_x: int = 0
         self.offset_y: int = 0
@@ -483,7 +757,8 @@ def _render(state: DisplayState) -> None:
         summary = state.summary
         last_update_time = state.update_time
         days_to_rebalance = state.days_to_rebalance
-        chart_data = state.chart_data
+        cycle_chart_data = state.chart_data
+        intraday_chart_data = state.intraday_chart_data
         rankings = state.stock_rankings
         ox = state.offset_x
         oy = state.offset_y
@@ -501,11 +776,11 @@ def _render(state: DisplayState) -> None:
     draw.rectangle([0, 0, WIDTH, HEADER_H], fill=COLOR_HEADER_BG)
 
     now = datetime.now()
-    weekday = WEEKDAY_NAMES[now.weekday()]
-    time_str = now.strftime(f"%m-%d {weekday} %H:%M:%S")
+    chart_data = _select_chart_data(cycle_chart_data, intraday_chart_data, now)
+    time_str = _format_display_time(now)
     days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}天"
     header_mid = f"更新:{last_update_time}"
-    header_right = f"调仓:{days_str}"
+    header_right = f"待调仓:{days_str}"
 
     hy = (HEADER_H - 13) // 2  # 垂直居中（字体13px）
     draw.text((8, hy), time_str, fill=COLOR_TEXT, font=font_label)
@@ -621,7 +896,7 @@ def _render(state: DisplayState) -> None:
 
 
 def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
-    """绘制持仓周期涨跌幅对比折线图。"""
+    """绘制持仓周期图或盘中图。"""
     chart_x = 10
     chart_w = WIDTH - 20
     font_xs = _get_font(11)
@@ -630,7 +905,7 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
     draw.rectangle([chart_x, CHART_Y, chart_x + chart_w, CHART_Y + CHART_H],
                    fill=COLOR_CHART_BG)
 
-    if not chart_data or len(chart_data.get('dates', [])) < 2:
+    if not chart_data:
         # 无数据提示
         txt = "暂无图表数据"
         bbox = draw.textbbox((0, 0), txt, font=_get_font(14))
@@ -639,10 +914,24 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
                   fill=COLOR_LABEL, font=_get_font(14))
         return
 
-    dates = chart_data['dates']
-    idx_pct = chart_data['index_pct']
-    ptf_pct = chart_data['portfolio_pct']
-    n = len(dates)
+    dates = list(chart_data.get('dates', []))
+    idx_pct = list(chart_data.get('index_pct', []))
+    ptf_pct = list(chart_data.get('portfolio_pct', []))
+    slot_indices = list(chart_data.get('slot_indices', range(len(idx_pct))))
+    n = min(len(dates), len(idx_pct), len(ptf_pct), len(slot_indices))
+    if n == 0:
+        txt = "暂无图表数据"
+        bbox = draw.textbbox((0, 0), txt, font=_get_font(14))
+        tw = bbox[2] - bbox[0]
+        draw.text(((WIDTH - tw) // 2, CHART_Y + CHART_H // 2 - 8), txt,
+                  fill=COLOR_LABEL, font=_get_font(14))
+        return
+
+    dates = dates[:n]
+    idx_pct = idx_pct[:n]
+    ptf_pct = ptf_pct[:n]
+    slot_indices = slot_indices[:n]
+    slot_count = max(int(chart_data.get('slot_count', n)), 2)
 
     # Y轴范围
     all_vals = idx_pct + ptf_pct
@@ -689,8 +978,8 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
     # 绘制折线
     def _to_points(values):
         pts = []
-        for i, v in enumerate(values):
-            px = cx + int(i / max(n - 1, 1) * cw)
+        for slot_idx, v in zip(slot_indices, values):
+            px = cx + int(slot_idx / max(slot_count - 1, 1) * cw)
             py = cy + ch - int((v - y_min) / y_range * ch)
             pts.append((px, py))
         return pts
@@ -702,25 +991,44 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
         draw.line([idx_pts[i], idx_pts[i + 1]], fill=COLOR_YELLOW, width=2)
     for i in range(n - 1):
         draw.line([ptf_pts[i], ptf_pts[i + 1]], fill=COLOR_GREEN, width=2)
+    if idx_pts:
+        px, py = idx_pts[-1]
+        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_YELLOW)
+    if ptf_pts:
+        px, py = ptf_pts[-1]
+        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_GREEN)
 
     # 图例 + 末尾数值
+    def _draw_legend_item(x: int, label: str, color: tuple, value: str) -> int:
+        draw.line([(x, ly + 6), (x + 14, ly + 6)], fill=color, width=2)
+        label_x = x + 18
+        draw.text((label_x, ly), label, fill=color, font=font_xs)
+        bbox_label = draw.textbbox((0, 0), label, font=font_xs)
+        value_x = label_x + (bbox_label[2] - bbox_label[0]) + 4
+        draw.text((value_x, ly), value, fill=color, font=font_xs)
+        bbox_value = draw.textbbox((0, 0), value, font=font_xs)
+        return value_x + (bbox_value[2] - bbox_value[0]) + 16
+
     lx = cx + 6
     ly = CHART_Y + 2
-    # 上证
-    draw.line([(lx, ly + 6), (lx + 14, ly + 6)], fill=COLOR_YELLOW, width=2)
-    draw.text((lx + 18, ly), "上证", fill=COLOR_YELLOW, font=font_xs)
     idx_last_str = f"{idx_pct[-1]:+.1f}%"
-    draw.text((lx + 50, ly), idx_last_str, fill=COLOR_YELLOW, font=font_xs)
-    # 持仓
-    sx = lx + 100
-    draw.line([(sx, ly + 6), (sx + 14, ly + 6)], fill=COLOR_GREEN, width=2)
-    draw.text((sx + 18, ly), "持仓", fill=COLOR_GREEN, font=font_xs)
     ptf_last_str = f"{ptf_pct[-1]:+.1f}%"
-    draw.text((sx + 50, ly), ptf_last_str, fill=COLOR_GREEN, font=font_xs)
+    legend_x = _draw_legend_item(
+        lx,
+        chart_data.get('index_label', '上证'),
+        COLOR_YELLOW,
+        idx_last_str,
+    )
+    _draw_legend_item(
+        legend_x,
+        chart_data.get('portfolio_label', '持仓'),
+        COLOR_GREEN,
+        ptf_last_str,
+    )
 
     # X轴：起止日期
-    start_label = f"{dates[0][4:6]}/{dates[0][6:]}"
-    end_label = f"{dates[-1][4:6]}/{dates[-1][6:]}"
+    start_label = str(chart_data.get('x_start_label', dates[0]))
+    end_label = str(chart_data.get('x_end_label', dates[-1]))
     draw.text((cx + 2, cy + ch + 1), start_label, fill=COLOR_LABEL, font=font_xs)
     bbox_end = draw.textbbox((0, 0), end_label, font=font_xs)
     ew = bbox_end[2] - bbox_end[0]
@@ -739,6 +1047,9 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
 
     def _fetch_data() -> None:
         """获取行情、调仓天数、图表数据和个股排名，更新共享状态。"""
+        summary = None
+        cycle_chart_data = None
+
         try:
             summary = get_realtime_portfolio_summary()
             if summary is not None:
@@ -757,12 +1068,27 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
             pass
 
         try:
-            cd = _fetch_chart_data()
-            if cd is not None:
+            cycle_chart_data = _fetch_cycle_chart_data()
+            if cycle_chart_data is not None:
                 with state.lock:
-                    state.chart_data = cd
+                    state.chart_data = cycle_chart_data
         except Exception:
             pass
+
+        if _is_intraday_chart_window() and summary is not None and cycle_chart_data is not None:
+            try:
+                with state.lock:
+                    current_intraday_chart = state.intraday_chart_data
+                intraday_chart_data = _build_intraday_chart(
+                    current_intraday_chart,
+                    summary,
+                    cycle_chart_data,
+                )
+                if intraday_chart_data is not None:
+                    with state.lock:
+                        state.intraday_chart_data = intraday_chart_data
+            except Exception:
+                pass
 
         try:
             ranks = _fetch_stock_rankings()
@@ -780,8 +1106,8 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         if stop_event.is_set():
             break
 
-        # 仅交易时段刷新实时数据
-        if _is_market_open():
+        # 仅在交易日 8:30-15:30 刷新实时数据
+        if _is_intraday_chart_window():
             _fetch_data()
 
 
