@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.45.4)
+### 当前版本 (v0.45.5)
+
+**树莓派 3.5 寸 LCD 启动测试页 + framebuffer 可切换** (v0.45.5):
+- 脚本启动后会先尝试写入一张 `LCD启动中` 测试页，并在 SSH 中打印当前目标 framebuffer 和系统可见的 `/dev/fb*` 列表，便于快速判断脚本是否已经进入显示链路
+- 新增环境变量 `LAZYBULL_LCD_FB_PATH`，可在树莓派上直接切换写入设备，例如 `LAZYBULL_LCD_FB_PATH=/dev/fb0 python ./scripts/respi/3.5LCD_disp.py`
+- 主程序、配置加载、背光初始化、线程启动等关键阶段都改为同步输出到 SSH，避免只看到一行启动消息
 
 **树莓派 3.5 寸 LCD 启动与 framebuffer 诊断增强** (v0.45.4):
 - 修复 `/dev/fb1` 写入失败被静默吞掉的问题；现在如果 framebuffer 设备不存在、权限不对或设备号变化，会把失败原因写到 stderr 和运行诊断日志

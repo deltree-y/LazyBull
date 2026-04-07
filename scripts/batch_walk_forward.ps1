@@ -91,7 +91,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $true   # $true 启用 | $false 禁用
-$start_model_version     = 7969    # 第一个 split 的模型版本号（$null = 不指定）
+$start_model_version     = 8165    # 第一个 split 的模型版本号（$null = 不指定）
                                    #7969/8165/8937:d3, 8137:d2
 
 ### 以下为回测功能选择

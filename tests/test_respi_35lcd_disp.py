@@ -59,9 +59,16 @@ def test_write_fb_reports_framebuffer_error(monkeypatch):
     module._write_fb(module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0)))
 
     assert messages
-    assert messages[0][0] == "fb_write_error"
-    assert module.FB_PATH in messages[0][1]
+    assert messages[0][0].startswith("fb_write_error::")
+    assert module.DEFAULT_FB_PATH in messages[0][1]
     assert "FileNotFoundError" in messages[0][1]
+
+
+def test_resolve_framebuffer_path_uses_env_override(monkeypatch):
+    monkeypatch.setenv("LAZYBULL_LCD_FB_PATH", "/dev/fb9")
+    module = _load_module()
+
+    assert module._resolve_framebuffer_path() == "/dev/fb9"
 
 
 def test_build_cycle_chart_payload_keeps_fixed_slots_before_holding_exceeds_period():

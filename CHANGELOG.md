@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.45.5] - 2026-04-07
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 启动阶段信息不足，仍难判断是否写到了错误 framebuffer**：
+  - `scripts/respi/3.5LCD_disp.py` 启动时新增 `LCD启动中` 测试页，先于正式渲染链路尝试写入 framebuffer，便于快速判断脚本是否已经进入显示阶段。
+  - 新增环境变量 `LAZYBULL_LCD_FB_PATH`，可直接覆盖默认的 `/dev/fb1`，用于驱动把 LCD 挂到 `/dev/fb0` 或其他 framebuffer 设备的场景。
+  - 主程序、配置加载、背光初始化、目标 framebuffer、线程启动等关键阶段现在都会同步输出到 stderr，便于通过 SSH 观察启动停在了哪一步。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增 framebuffer 环境变量覆盖测试。
+
 ## [0.45.4] - 2026-04-07
 
 ### 修复

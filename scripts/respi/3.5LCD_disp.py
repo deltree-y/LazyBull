@@ -26,6 +26,7 @@ import random
 import threading
 import json
 import tempfile
+import os
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
@@ -47,7 +48,7 @@ from src.lazybull.common.logger import setup_logger  # noqa: E402
 from src.lazybull.common.config import get_config    # noqa: E402
 
 # ---------- 常量 ----------
-FB_PATH = "/dev/fb1"
+DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 数据刷新间隔（秒），10分钟
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
@@ -218,6 +219,47 @@ def _describe_framebuffer_candidates() -> str:
     if not candidates:
         return "未发现 /dev/fb*"
     return ", ".join(candidates)
+
+
+def _resolve_framebuffer_path() -> str:
+    """解析当前应写入的 framebuffer 设备路径。"""
+    env_path = os.getenv("LAZYBULL_LCD_FB_PATH")
+    if env_path:
+        return env_path
+
+    if Path(DEFAULT_FB_PATH).exists():
+        return DEFAULT_FB_PATH
+
+    fallback_path = "/dev/fb0"
+    if Path(fallback_path).exists():
+        return fallback_path
+
+    return DEFAULT_FB_PATH
+
+
+def _render_bootstrap_screen(message: str) -> None:
+    """在正式进入刷新线程前先画一张启动测试页。"""
+    img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
+    draw = ImageDraw.Draw(img)
+    font_title = _get_font(24)
+    font_body = _get_font(16)
+    font_tip = _get_font(13)
+
+    title = "LCD启动中"
+    title_bbox = draw.textbbox((0, 0), title, font=font_title)
+    title_x = (WIDTH - (title_bbox[2] - title_bbox[0])) // 2
+    draw.text((title_x, 108), title, fill=COLOR_YELLOW, font=font_title)
+
+    body_bbox = draw.textbbox((0, 0), message, font=font_body)
+    body_x = (WIDTH - (body_bbox[2] - body_bbox[0])) // 2
+    draw.text((body_x, 148), message, fill=COLOR_TEXT, font=font_body)
+
+    fb_text = f"FB:{_resolve_framebuffer_path()}"
+    tip_bbox = draw.textbbox((0, 0), fb_text, font=font_tip)
+    tip_x = (WIDTH - (tip_bbox[2] - tip_bbox[0])) // 2
+    draw.text((tip_x, 188), fb_text, fill=COLOR_LABEL, font=font_tip)
+
+    _write_fb(img)
     
 
 def _format_error_lines(
@@ -580,7 +622,7 @@ def _init_backlight() -> None:
         target = int(max_br * BACKLIGHT_BRIGHTNESS / 100)
         with open(bl_path, "w") as f:
             f.write(str(target))
-        _emit_diag_once("backlight_sysfs_ok", "背光初始化完成: 使用 sysfs 接口", stderr=False)
+        _emit_diag_once("backlight_sysfs_ok", "背光初始化完成: 使用 sysfs 接口")
         return
     except (FileNotFoundError, PermissionError, OSError):
         pass
@@ -593,7 +635,7 @@ def _init_backlight() -> None:
         GPIO.setup(BACKLIGHT_PIN, GPIO.OUT)
         _backlight_pwm = GPIO.PWM(BACKLIGHT_PIN, 1000)  # 1kHz
         _backlight_pwm.start(BACKLIGHT_BRIGHTNESS)
-        _emit_diag_once("backlight_pwm_ok", "背光初始化完成: 使用 GPIO PWM", stderr=False)
+        _emit_diag_once("backlight_pwm_ok", "背光初始化完成: 使用 GPIO PWM")
     except (ImportError, RuntimeError):
         _emit_diag_once(
             "backlight_unavailable",
@@ -640,14 +682,18 @@ def _write_fb(img: Image.Image) -> None:
     g = (img_array[:, :, 1] >> 2) << 5
     b = img_array[:, :, 2] >> 3
     rgb565 = r | g | b
+    fb_path = _resolve_framebuffer_path()
     try:
-        with open(FB_PATH, "wb") as f:
+        with open(fb_path, "wb") as f:
             f.write(rgb565.tobytes())
-        _emit_diag_once("fb_write_ok", f"framebuffer 写入正常: {FB_PATH}", stderr=False)
+        _emit_diag_once(
+            f"fb_write_ok::{fb_path}",
+            f"framebuffer 写入正常: {fb_path} | 可用设备: {_describe_framebuffer_candidates()}",
+        )
     except Exception as exc:
         _emit_diag_once(
-            "fb_write_error",
-            f"framebuffer 写入失败: {FB_PATH} | {type(exc).__name__}: {exc} | 可用设备: {_describe_framebuffer_candidates()}",
+            f"fb_write_error::{fb_path}",
+            f"framebuffer 写入失败: {fb_path} | {type(exc).__name__}: {exc} | 可用设备: {_describe_framebuffer_candidates()}",
         )
 
 
@@ -1428,7 +1474,7 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
 
     启动时立即获取一次（非交易日也会返回最近一个交易日的收盘数据）。
     """
-    _emit_diag_once("data_worker_start", "数据线程已启动", stderr=False)
+    _emit_diag_once("data_worker_start", "数据线程已启动")
 
     try:
         from paper_trade import get_realtime_portfolio_summary
@@ -1521,7 +1567,7 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
     23:00-6:00 自动息屏。
     """
     last_offset_time = 0.0
-    _emit_diag_once("display_worker_start", "显示线程已启动", stderr=False)
+    _emit_diag_once("display_worker_start", "显示线程已启动")
 
     while not stop_event.is_set():
         try:
@@ -1569,11 +1615,20 @@ def main() -> None:
     _emit_diag("主程序启动")
     try:
         setup_logger(log_level="WARNING")
-        _emit_diag_once("logger_ready", "日志初始化完成", stderr=False)
+        _emit_diag_once("logger_ready", "日志初始化完成")
         get_config()
-        _emit_diag_once("config_ready", "配置加载完成", stderr=False)
+        _emit_diag_once("config_ready", "配置加载完成")
+
+        selected_fb = _resolve_framebuffer_path()
+        _emit_diag_once(
+            f"fb_target::{selected_fb}",
+            f"当前 framebuffer 目标: {selected_fb} | 可用设备: {_describe_framebuffer_candidates()}",
+        )
 
         _init_backlight()
+        _emit_diag_once("backlight_phase_done", "背光初始化阶段完成")
+        _render_bootstrap_screen("准备启动数据与显示线程")
+        _emit_diag_once("bootstrap_screen_written", "已尝试写入启动测试页")
 
         state = DisplayState()
         stop_event = threading.Event()
@@ -1592,7 +1647,7 @@ def main() -> None:
         # 显示刷新线程（每秒）
         disp_t = threading.Thread(target=_display_worker, args=(state, stop_event), daemon=True)
         disp_t.start()
-        _emit_diag_once("threads_started", "数据线程和显示线程已启动", stderr=False)
+        _emit_diag_once("threads_started", "数据线程和显示线程已启动")
 
         try:
             while not stop_event.is_set():
@@ -1600,7 +1655,7 @@ def main() -> None:
         finally:
             _clear_screen()
             _cleanup_backlight()
-            _emit_diag("主程序退出", stderr=False)
+            _emit_diag("主程序退出")
     except Exception as exc:
         _emit_diag(f"主程序启动失败: {type(exc).__name__}: {exc}")
         raise
