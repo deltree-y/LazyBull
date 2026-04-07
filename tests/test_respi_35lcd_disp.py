@@ -41,6 +41,29 @@ def test_format_error_lines_truncates_message_for_screen():
     assert lines[-1].endswith("…")
 
 
+def test_write_fb_reports_framebuffer_error(monkeypatch):
+    module = _load_module()
+    messages = []
+
+    monkeypatch.setattr(
+        module,
+        "_emit_diag_once",
+        lambda key, message, stderr=True: messages.append((key, message, stderr)),
+    )
+
+    def _raise_open(*args, **kwargs):
+        raise FileNotFoundError("fb missing")
+
+    monkeypatch.setattr("builtins.open", _raise_open)
+
+    module._write_fb(module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0)))
+
+    assert messages
+    assert messages[0][0] == "fb_write_error"
+    assert module.FB_PATH in messages[0][1]
+    assert "FileNotFoundError" in messages[0][1]
+
+
 def test_build_cycle_chart_payload_keeps_fixed_slots_before_holding_exceeds_period():
     module = _load_module()
 

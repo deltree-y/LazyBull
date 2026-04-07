@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.45.4] - 2026-04-07
+
+### 修复
+
+- **树莓派 3.5 寸 LCD framebuffer 打不开时静默黑屏且无输出**：
+  - `scripts/respi/3.5LCD_disp.py` 中 `_write_fb()` 原先会直接吞掉 `/dev/fb1` 写入异常，导致 framebuffer 不存在、权限不对或设备号变化时，现场表现为“屏幕始终黑屏，SSH 也看不到任何错误”。
+  - 修复后会把 framebuffer 写入失败原因输出到 stderr，并写入运行诊断日志，同时附带当前可见的 `/dev/fb*` 设备列表，便于确认驱动是否把 LCD 挂到了别的 framebuffer 号。
+- **树莓派 3.5 寸 LCD 启动早期缺少可追踪日志**：
+  - 新增 `data/paper/state/respi_35lcd_runtime.log` 运行诊断日志，覆盖主程序启动、配置加载、背光初始化、线程启动、自动息屏命中和线程异常退出等关键节点。
+  - 若项目状态目录不可写，则自动兜底到系统临时目录中的同名日志文件。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增 framebuffer 写入失败诊断测试。
+
 ## [0.45.3] - 2026-04-07
 
 ### 修复

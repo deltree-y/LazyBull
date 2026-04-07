@@ -25,6 +25,7 @@ import signal
 import random
 import threading
 import json
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
@@ -66,6 +67,7 @@ INTRADAY_SLOT_COUNT = (
 SHANGHAI_INDEX_CODE = "000001.SH"
 SHENZHEN_INDEX_CODE = "399001.SZ"
 INTRADAY_CHART_STATE_DIRNAME = "respi_35lcd_intraday"
+DIAG_LOG_FILENAME = "respi_35lcd_runtime.log"
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -88,6 +90,9 @@ COLOR_PANEL_RIGHT = (28, 35, 38)   # 右面板背景（偏青）
 COLOR_CHART_SHANGHAI = COLOR_YELLOW
 COLOR_CHART_SHENZHEN = COLOR_CYAN
 COLOR_CHART_HOLDINGS = COLOR_ORANGE
+
+_diag_lock = threading.Lock()
+_diag_once_keys: set[str] = set()
 
 
 # ---------- 字体加载（带缓存）----------
@@ -166,7 +171,55 @@ def _format_display_time(now: datetime) -> str:
     """格式化顶部显示时间，如 4月7日(周二) 14:40:32。"""
     weekday = WEEKDAY_NAMES[now.weekday()]
     return f"{now.month}月{now.day}日({weekday}) {now:%H:%M:%S}"
+
+
+def _get_diag_log_paths() -> list[Path]:
+    """返回诊断日志落盘路径，优先项目目录，失败时兜底系统临时目录。"""
+    primary = project_root / "data" / "paper" / "state" / DIAG_LOG_FILENAME
+    fallback = Path(tempfile.gettempdir()) / DIAG_LOG_FILENAME
+    if primary == fallback:
+        return [primary]
+    return [primary, fallback]
+
+
+def _emit_diag(message: str, stderr: bool = True) -> None:
+    """输出 LCD 运行诊断信息到文件，并尽量同步到 stderr。"""
+    line = f"{datetime.now():%Y-%m-%d %H:%M:%S} {message}"
+    for log_path in _get_diag_log_paths():
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+            break
+        except OSError:
+            continue
+    if stderr:
+        try:
+            print(f"[3.5LCD_disp] {message}", file=sys.stderr, flush=True)
+        except OSError:
+            pass
+
+
+def _emit_diag_once(key: str, message: str, stderr: bool = True) -> None:
+    """同一类诊断信息仅记录一次，避免持续刷屏。"""
+    with _diag_lock:
+        if key in _diag_once_keys:
+            return
+        _diag_once_keys.add(key)
+    _emit_diag(message, stderr=stderr)
+
+
+def _describe_framebuffer_candidates() -> str:
+    """返回当前系统可见的 framebuffer 设备列表。"""
+    try:
+        candidates = sorted(path.name for path in Path("/dev").glob("fb*"))
+    except OSError:
+        return "无法枚举 /dev/fb*"
+    if not candidates:
+        return "未发现 /dev/fb*"
+    return ", ".join(candidates)
     
+
 def _format_error_lines(
     message: str, line_width: int = 26, max_lines: int = 4
 ) -> list[str]:
@@ -527,6 +580,7 @@ def _init_backlight() -> None:
         target = int(max_br * BACKLIGHT_BRIGHTNESS / 100)
         with open(bl_path, "w") as f:
             f.write(str(target))
+        _emit_diag_once("backlight_sysfs_ok", "背光初始化完成: 使用 sysfs 接口", stderr=False)
         return
     except (FileNotFoundError, PermissionError, OSError):
         pass
@@ -539,8 +593,12 @@ def _init_backlight() -> None:
         GPIO.setup(BACKLIGHT_PIN, GPIO.OUT)
         _backlight_pwm = GPIO.PWM(BACKLIGHT_PIN, 1000)  # 1kHz
         _backlight_pwm.start(BACKLIGHT_BRIGHTNESS)
+        _emit_diag_once("backlight_pwm_ok", "背光初始化完成: 使用 GPIO PWM", stderr=False)
     except (ImportError, RuntimeError):
-        pass  # 非树莓派环境，静默跳过
+        _emit_diag_once(
+            "backlight_unavailable",
+            "背光初始化未生效: 未找到可用背光控制接口，若屏幕无背光请检查驱动/权限",
+        )
 
 
 def _set_backlight(brightness: int) -> None:
@@ -585,8 +643,12 @@ def _write_fb(img: Image.Image) -> None:
     try:
         with open(FB_PATH, "wb") as f:
             f.write(rgb565.tobytes())
-    except Exception:
-        pass
+        _emit_diag_once("fb_write_ok", f"framebuffer 写入正常: {FB_PATH}", stderr=False)
+    except Exception as exc:
+        _emit_diag_once(
+            "fb_write_error",
+            f"framebuffer 写入失败: {FB_PATH} | {type(exc).__name__}: {exc} | 可用设备: {_describe_framebuffer_candidates()}",
+        )
 
 
 def _clear_screen() -> None:
@@ -1366,84 +1428,89 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
 
     启动时立即获取一次（非交易日也会返回最近一个交易日的收盘数据）。
     """
-    from paper_trade import get_realtime_portfolio_summary
+    _emit_diag_once("data_worker_start", "数据线程已启动", stderr=False)
 
-    def _fetch_data(refresh_realtime: bool = True) -> None:
-        """获取行情、调仓天数、图表数据和个股排名，更新共享状态。"""
-        summary = None
-        cycle_chart_data = None
-        holdings_snapshot = None
+    try:
+        from paper_trade import get_realtime_portfolio_summary
 
-        if refresh_realtime:
+        def _fetch_data(refresh_realtime: bool = True) -> None:
+            """获取行情、调仓天数、图表数据和个股排名，更新共享状态。"""
+            summary = None
+            cycle_chart_data = None
+            holdings_snapshot = None
+
+            if refresh_realtime:
+                try:
+                    summary = get_realtime_portfolio_summary()
+                    if summary is not None:
+                        with state.lock:
+                            state.summary = summary
+                            state.update_time = datetime.now().strftime("%H:%M")
+                except Exception:
+                    pass
+
             try:
-                summary = get_realtime_portfolio_summary()
-                if summary is not None:
+                days = _calc_days_to_rebalance()
+                if days is not None:
                     with state.lock:
-                        state.summary = summary
-                        state.update_time = datetime.now().strftime("%H:%M")
+                        state.days_to_rebalance = days
             except Exception:
                 pass
 
-        try:
-            days = _calc_days_to_rebalance()
-            if days is not None:
-                with state.lock:
-                    state.days_to_rebalance = days
-        except Exception:
-            pass
-
-        try:
-            cycle_chart_data = _fetch_cycle_chart_data()
-            if cycle_chart_data is not None:
-                with state.lock:
-                    state.chart_data = cycle_chart_data
-        except Exception:
-            pass
-
-        if refresh_realtime:
             try:
-                holdings_snapshot = _fetch_realtime_holdings_snapshot()
-            except Exception:
-                holdings_snapshot = None
-
-        if refresh_realtime and holdings_snapshot is not None:
-            try:
-                with state.lock:
-                    current_intraday_chart = state.intraday_chart_data
-                intraday_chart_data = _build_intraday_chart(
-                    current_intraday_chart,
-                    holdings_snapshot,
-                )
-                if intraday_chart_data is not None:
+                cycle_chart_data = _fetch_cycle_chart_data()
+                if cycle_chart_data is not None:
                     with state.lock:
-                        state.intraday_chart_data = intraday_chart_data
-                    _save_intraday_chart(intraday_chart_data)
+                        state.chart_data = cycle_chart_data
             except Exception:
                 pass
 
-        if refresh_realtime:
-            try:
-                ranks = _build_stock_rankings(holdings_snapshot)
-                if ranks is not None:
+            if refresh_realtime:
+                try:
+                    holdings_snapshot = _fetch_realtime_holdings_snapshot()
+                except Exception:
+                    holdings_snapshot = None
+
+            if refresh_realtime and holdings_snapshot is not None:
+                try:
                     with state.lock:
-                        state.stock_rankings = ranks
-            except Exception:
-                pass
+                        current_intraday_chart = state.intraday_chart_data
+                    intraday_chart_data = _build_intraday_chart(
+                        current_intraday_chart,
+                        holdings_snapshot,
+                    )
+                    if intraday_chart_data is not None:
+                        with state.lock:
+                            state.intraday_chart_data = intraday_chart_data
+                        _save_intraday_chart(intraday_chart_data)
+                except Exception:
+                    pass
 
-    # 启动时立即获取一次（非交易日也能显示最近收盘数据）
-    _fetch_data(refresh_realtime=True)
+            if refresh_realtime:
+                try:
+                    ranks = _build_stock_rankings(holdings_snapshot)
+                    if ranks is not None:
+                        with state.lock:
+                            state.stock_rankings = ranks
+                except Exception:
+                    pass
 
-    while not stop_event.is_set():
-        stop_event.wait(REFRESH_INTERVAL)
-        if stop_event.is_set():
-            break
+        # 启动时立即获取一次（非交易日也能显示最近收盘数据）
+        _fetch_data(refresh_realtime=True)
 
-        # 周期图始终按 10 分钟刷新；实时行情只在盘中刷新
-        with state.lock:
-            current_cycle_chart = state.chart_data
-        refresh_policy = _get_refresh_policy(current_cycle_chart)
-        if refresh_policy['refresh_cycle'] or refresh_policy['refresh_realtime']:
-            _fetch_data(refresh_realtime=bool(refresh_policy['refresh_realtime']))
+        while not stop_event.is_set():
+            stop_event.wait(REFRESH_INTERVAL)
+            if stop_event.is_set():
+                break
+
+            # 周期图始终按 10 分钟刷新；实时行情只在盘中刷新
+            with state.lock:
+                current_cycle_chart = state.chart_data
+            refresh_policy = _get_refresh_policy(current_cycle_chart)
+            if refresh_policy['refresh_cycle'] or refresh_policy['refresh_realtime']:
+                _fetch_data(refresh_realtime=bool(refresh_policy['refresh_realtime']))
+    except Exception as exc:
+        _emit_diag(f"数据线程异常退出: {type(exc).__name__}: {exc}")
 
 
 # ---------- 显示刷新线程 ----------
@@ -1454,6 +1521,7 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
     23:00-6:00 自动息屏。
     """
     last_offset_time = 0.0
+    _emit_diag_once("display_worker_start", "显示线程已启动", stderr=False)
 
     while not stop_event.is_set():
         try:
@@ -1461,6 +1529,10 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
 
             # ---- 息屏逻辑（23:00 - 6:00）----
             if hour >= 23 or hour < 6:
+                _emit_diag_once(
+                    "sleep_window_active",
+                    f"当前命中自动息屏时段({hour:02d}:xx)，LCD 将保持黑屏直到 06:00",
+                )
                 if state.is_screen_on:
                     _clear_screen()
                     _set_backlight(0)
@@ -1494,34 +1566,44 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
 # ---------- 入口 ----------
 
 def main() -> None:
-    setup_logger(log_level="WARNING")
-    get_config()
-
-    _init_backlight()
-
-    state = DisplayState()
-    stop_event = threading.Event()
-
-    def _shutdown(sig, frame):  # noqa: ANN001
-        stop_event.set()
-
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-
-    # 数据获取线程（10分钟间隔）
-    data_t = threading.Thread(target=_data_worker, args=(state, stop_event), daemon=True)
-    data_t.start()
-
-    # 显示刷新线程（每秒）
-    disp_t = threading.Thread(target=_display_worker, args=(state, stop_event), daemon=True)
-    disp_t.start()
-
+    _emit_diag("主程序启动")
     try:
-        while not stop_event.is_set():
-            time.sleep(1)
-    finally:
-        _clear_screen()
-        _cleanup_backlight()
+        setup_logger(log_level="WARNING")
+        _emit_diag_once("logger_ready", "日志初始化完成", stderr=False)
+        get_config()
+        _emit_diag_once("config_ready", "配置加载完成", stderr=False)
+
+        _init_backlight()
+
+        state = DisplayState()
+        stop_event = threading.Event()
+
+        def _shutdown(sig, frame):  # noqa: ANN001
+            _emit_diag(f"收到退出信号: {sig}", stderr=False)
+            stop_event.set()
+
+        signal.signal(signal.SIGINT, _shutdown)
+        signal.signal(signal.SIGTERM, _shutdown)
+
+        # 数据获取线程（10分钟间隔）
+        data_t = threading.Thread(target=_data_worker, args=(state, stop_event), daemon=True)
+        data_t.start()
+
+        # 显示刷新线程（每秒）
+        disp_t = threading.Thread(target=_display_worker, args=(state, stop_event), daemon=True)
+        disp_t.start()
+        _emit_diag_once("threads_started", "数据线程和显示线程已启动", stderr=False)
+
+        try:
+            while not stop_event.is_set():
+                time.sleep(1)
+        finally:
+            _clear_screen()
+            _cleanup_backlight()
+            _emit_diag("主程序退出", stderr=False)
+    except Exception as exc:
+        _emit_diag(f"主程序启动失败: {type(exc).__name__}: {exc}")
+        raise
 
 
 if __name__ == '__main__':

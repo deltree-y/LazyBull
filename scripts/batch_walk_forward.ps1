@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"   #20130101   #20130224
-$wf_end_date             = "20251231"   #20251231   #20260224
+$wf_start_date           = "20130209"   #20130101   #20130224
+$wf_end_date             = "20260209"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -195,7 +195,7 @@ $take_profit_refill           = $false   # $true=整体止盈后自动补位买�
 # $true  = 启用：当持仓全部清零或 cycle_day>=holding_period 且仍有残留盈利延续持仓时，
 #          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
 # $false = 禁用：严格等待下一个预定调仓日
-$enable_early_rebalance_on_empty = $false
+$enable_early_rebalance_on_empty = $true
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
