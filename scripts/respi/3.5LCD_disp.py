@@ -436,12 +436,54 @@ def _select_chart_data(
     return cycle_chart_data
 
 
-def _get_refresh_policy(now: Optional[datetime] = None) -> dict:
+def _get_cycle_last_data_date(cycle_chart_data: Optional[dict]) -> Optional[str]:
+    """返回周期图最后一个数据日（YYYYMMDD）。"""
+    if not cycle_chart_data:
+        return None
+    dates = cycle_chart_data.get('dates', [])
+    if not isinstance(dates, list) or not dates:
+        return None
+    last_date = str(dates[-1])
+    if len(last_date) == 8 and last_date.isdigit():
+        return last_date
+    return None
+
+
+def _format_cycle_last_data_label(cycle_chart_data: Optional[dict]) -> Optional[str]:
+    """格式化周期图最后数据日角标。"""
+    last_date = _get_cycle_last_data_date(cycle_chart_data)
+    if last_date is None:
+        return None
+    return f"周期图最后数据日:{_format_mmdd(last_date)}"
+
+
+def _get_refresh_policy(
+    cycle_chart_data: Optional[dict], now: Optional[datetime] = None
+) -> dict:
     """返回当前时段的数据刷新策略。"""
     current_dt = now or datetime.now()
+    if _is_intraday_chart_window(current_dt):
+        return {
+            'refresh_cycle': True,
+            'refresh_realtime': True,
+        }
+
+    if not _is_trade_day(current_dt):
+        return {
+            'refresh_cycle': False,
+            'refresh_realtime': False,
+        }
+
+    if current_dt.time() <= INTRADAY_WINDOW_END:
+        return {
+            'refresh_cycle': False,
+            'refresh_realtime': False,
+        }
+
+    has_today_cycle_data = _get_cycle_last_data_date(cycle_chart_data) == current_dt.strftime("%Y%m%d")
     return {
-        'refresh_cycle': True,
-        'refresh_realtime': _is_intraday_chart_window(current_dt),
+        'refresh_cycle': not has_today_cycle_data,
+        'refresh_realtime': False,
     }
 
 
@@ -1107,12 +1149,17 @@ def _render(state: DisplayState) -> None:
         _draw_rank_items(bottom3, rp_y2)
 
     # ===== 图表区（固定）=====
-    _draw_chart(draw, chart_data)
+    cycle_last_data_label = _format_cycle_last_data_label(cycle_chart_data)
+    _draw_chart(draw, chart_data, cycle_last_data_label)
 
     _write_fb(img)
 
 
-def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
+def _draw_chart(
+    draw: ImageDraw.ImageDraw,
+    chart_data: Optional[dict],
+    cycle_last_data_label: Optional[str] = None,
+) -> None:
     """绘制持仓周期图或盘中图。"""
     chart_x = 10
     chart_w = WIDTH - 20
@@ -1258,6 +1305,16 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
         ptf_last_str,
     )
 
+    if cycle_last_data_label:
+        bbox_last = draw.textbbox((0, 0), cycle_last_data_label, font=font_xs)
+        last_w = bbox_last[2] - bbox_last[0]
+        draw.text(
+            (chart_x + chart_w - last_w - 4, CHART_Y + 2),
+            cycle_last_data_label,
+            fill=COLOR_LABEL,
+            font=font_xs,
+        )
+
     # X轴：起止日期
     start_label = str(chart_data.get('x_start_label', dates[0]))
     end_label = str(chart_data.get('x_end_label', dates[-1]))
@@ -1348,7 +1405,9 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
             break
 
         # 周期图始终按 10 分钟刷新；实时行情只在盘中刷新
-        refresh_policy = _get_refresh_policy()
+        with state.lock:
+            current_cycle_chart = state.chart_data
+        refresh_policy = _get_refresh_policy(current_cycle_chart)
         if refresh_policy['refresh_cycle'] or refresh_policy['refresh_realtime']:
             _fetch_data(refresh_realtime=bool(refresh_policy['refresh_realtime']))
 

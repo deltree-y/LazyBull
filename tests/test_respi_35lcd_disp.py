@@ -169,14 +169,50 @@ def test_select_chart_data_switches_by_intraday_window(monkeypatch):
     assert module._select_chart_data(cycle_chart, intraday_chart, point_time)["mode"] == "cycle"
 
 
-def test_get_refresh_policy_keeps_cycle_refresh_outside_intraday(monkeypatch):
+def test_format_cycle_last_data_label_uses_last_cycle_date():
+    module = _load_module()
+
+    label = module._format_cycle_last_data_label(
+        {"dates": ["20260401", "20260407"]}
+    )
+
+    assert label == "周期图最后数据日:04/07"
+
+
+def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):
     module = _load_module()
 
     monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
-    outside_policy = module._get_refresh_policy(datetime(2026, 4, 7, 20, 0, 0))
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+
+    refresh_waiting = module._get_refresh_policy(
+        {"dates": ["20260401", "20260406"]},
+        datetime(2026, 4, 7, 20, 0, 0),
+    )
+    refresh_done = module._get_refresh_policy(
+        {"dates": ["20260401", "20260407"]},
+        datetime(2026, 4, 7, 20, 0, 0),
+    )
+
+    assert refresh_waiting == {"refresh_cycle": True, "refresh_realtime": False}
+    assert refresh_done == {"refresh_cycle": False, "refresh_realtime": False}
+
+
+def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatch):
+    module = _load_module()
+
+    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+    outside_policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260406"]},
+        datetime(2026, 4, 7, 20, 0, 0),
+    )
 
     monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: True)
-    intraday_policy = module._get_refresh_policy(datetime(2026, 4, 7, 10, 0, 0))
+    intraday_policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260407"]},
+        datetime(2026, 4, 7, 10, 0, 0),
+    )
 
     assert outside_policy == {"refresh_cycle": True, "refresh_realtime": False}
     assert intraday_policy == {"refresh_cycle": True, "refresh_realtime": True}
