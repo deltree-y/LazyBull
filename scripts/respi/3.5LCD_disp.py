@@ -436,6 +436,15 @@ def _select_chart_data(
     return cycle_chart_data
 
 
+def _get_refresh_policy(now: Optional[datetime] = None) -> dict:
+    """返回当前时段的数据刷新策略。"""
+    current_dt = now or datetime.now()
+    return {
+        'refresh_cycle': True,
+        'refresh_realtime': _is_intraday_chart_window(current_dt),
+    }
+
+
 # ---------- 背光控制 ----------
 
 _backlight_pwm = None
@@ -1268,20 +1277,21 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
     """
     from paper_trade import get_realtime_portfolio_summary
 
-    def _fetch_data() -> None:
+    def _fetch_data(refresh_realtime: bool = True) -> None:
         """获取行情、调仓天数、图表数据和个股排名，更新共享状态。"""
         summary = None
         cycle_chart_data = None
         holdings_snapshot = None
 
-        try:
-            summary = get_realtime_portfolio_summary()
-            if summary is not None:
-                with state.lock:
-                    state.summary = summary
-                    state.update_time = datetime.now().strftime("%H:%M")
-        except Exception:
-            pass
+        if refresh_realtime:
+            try:
+                summary = get_realtime_portfolio_summary()
+                if summary is not None:
+                    with state.lock:
+                        state.summary = summary
+                        state.update_time = datetime.now().strftime("%H:%M")
+            except Exception:
+                pass
 
         try:
             days = _calc_days_to_rebalance()
@@ -1299,12 +1309,13 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         except Exception:
             pass
 
-        try:
-            holdings_snapshot = _fetch_realtime_holdings_snapshot()
-        except Exception:
-            holdings_snapshot = None
+        if refresh_realtime:
+            try:
+                holdings_snapshot = _fetch_realtime_holdings_snapshot()
+            except Exception:
+                holdings_snapshot = None
 
-        if _is_intraday_chart_window() and holdings_snapshot is not None:
+        if refresh_realtime and holdings_snapshot is not None:
             try:
                 with state.lock:
                     current_intraday_chart = state.intraday_chart_data
@@ -1319,25 +1330,27 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
             except Exception:
                 pass
 
-        try:
-            ranks = _build_stock_rankings(holdings_snapshot)
-            if ranks is not None:
-                with state.lock:
-                    state.stock_rankings = ranks
-        except Exception:
-            pass
+        if refresh_realtime:
+            try:
+                ranks = _build_stock_rankings(holdings_snapshot)
+                if ranks is not None:
+                    with state.lock:
+                        state.stock_rankings = ranks
+            except Exception:
+                pass
 
     # 启动时立即获取一次（非交易日也能显示最近收盘数据）
-    _fetch_data()
+    _fetch_data(refresh_realtime=True)
 
     while not stop_event.is_set():
         stop_event.wait(REFRESH_INTERVAL)
         if stop_event.is_set():
             break
 
-        # 仅在交易日 8:30-15:30 刷新实时数据
-        if _is_intraday_chart_window():
-            _fetch_data()
+        # 周期图始终按 10 分钟刷新；实时行情只在盘中刷新
+        refresh_policy = _get_refresh_policy()
+        if refresh_policy['refresh_cycle'] or refresh_policy['refresh_realtime']:
+            _fetch_data(refresh_realtime=bool(refresh_policy['refresh_realtime']))
 
 
 # ---------- 显示刷新线程 ----------

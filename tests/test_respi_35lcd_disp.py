@@ -167,3 +167,16 @@ def test_select_chart_data_switches_by_intraday_window(monkeypatch):
 
     monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
     assert module._select_chart_data(cycle_chart, intraday_chart, point_time)["mode"] == "cycle"
+
+
+def test_get_refresh_policy_keeps_cycle_refresh_outside_intraday(monkeypatch):
+    module = _load_module()
+
+    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
+    outside_policy = module._get_refresh_policy(datetime(2026, 4, 7, 20, 0, 0))
+
+    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: True)
+    intraday_policy = module._get_refresh_policy(datetime(2026, 4, 7, 10, 0, 0))
+
+    assert outside_policy == {"refresh_cycle": True, "refresh_realtime": False}
+    assert intraday_policy == {"refresh_cycle": True, "refresh_realtime": True}
