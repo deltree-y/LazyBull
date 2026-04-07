@@ -71,6 +71,19 @@ def test_resolve_framebuffer_path_uses_env_override(monkeypatch):
     assert module._resolve_framebuffer_path() == "/dev/fb9"
 
 
+def test_is_trade_day_uses_weekday_fallback_without_loading_calendar(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_trade_date_set_cache", None)
+
+    def _should_not_load():
+        raise AssertionError("首帧判断不应触发交易日历加载")
+
+    monkeypatch.setattr(module, "_load_trade_date_set", _should_not_load)
+
+    assert module._is_trade_day(datetime(2026, 4, 7, 10, 0, 0)) is True
+    assert module._is_trade_day(datetime(2026, 4, 11, 10, 0, 0)) is False
+
+
 def test_build_cycle_chart_payload_keeps_fixed_slots_before_holding_exceeds_period():
     module = _load_module()
 

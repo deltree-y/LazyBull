@@ -27,7 +27,6 @@ import threading
 import json
 import tempfile
 import os
-from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
 from datetime import time as dt_time
@@ -500,25 +499,48 @@ def _load_intraday_chart(now: Optional[datetime] = None) -> Optional[dict]:
     return _normalize_intraday_chart(payload, trade_date=trade_date)
 
 
-@lru_cache(maxsize=1)
+_trade_date_set_cache: Optional[frozenset[str]] = None
+_trade_date_set_lock = threading.Lock()
+
+
 def _load_trade_date_set() -> frozenset[str]:
     """加载交易日集合并缓存，失败时返回空集合。"""
-    from src.lazybull.data import DataLoader, Storage
+    global _trade_date_set_cache
 
-    try:
-        loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
-        trade_cal = loader.load_clean_trade_cal()
-        if trade_cal is None or trade_cal.empty:
-            return frozenset()
-        return frozenset(trade_cal.loc[trade_cal['is_open'] == 1, 'cal_date'].astype(str))
-    except Exception:
-        return frozenset()
+    if _trade_date_set_cache is not None:
+        return _trade_date_set_cache
+
+    with _trade_date_set_lock:
+        if _trade_date_set_cache is not None:
+            return _trade_date_set_cache
+
+        result = frozenset()
+        try:
+            from src.lazybull.data import DataLoader, Storage
+
+            loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
+            trade_cal = loader.load_clean_trade_cal()
+            if trade_cal is not None and not trade_cal.empty:
+                result = frozenset(trade_cal.loc[trade_cal['is_open'] == 1, 'cal_date'].astype(str))
+        except Exception:
+            result = frozenset()
+
+        _trade_date_set_cache = result
+        return _trade_date_set_cache
 
 
-def _is_trade_day(now: Optional[datetime] = None) -> bool:
-    """判断当前日期是否为交易日。"""
+def _get_cached_trade_date_set() -> Optional[frozenset[str]]:
+    """返回已加载的交易日集合；若尚未加载则返回 None。"""
+    return _trade_date_set_cache
+
+
+def _is_trade_day(now: Optional[datetime] = None, allow_load: bool = False) -> bool:
+    """判断当前日期是否为交易日。
+
+    默认不在显示线程首帧触发交易日历加载，避免与数据线程导入过程互相阻塞。
+    """
     current_dt = now or datetime.now()
-    trade_dates = _load_trade_date_set()
+    trade_dates = _load_trade_date_set() if allow_load else _get_cached_trade_date_set()
     if trade_dates:
         return current_dt.strftime("%Y%m%d") in trade_dates
     return current_dt.weekday() < 5
@@ -1599,7 +1621,9 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
                 last_offset_time = now_ts
 
             # ---- 渲染（含实时时间）----
+            _emit_diag_once("render_first_frame_start", "显示线程开始首帧渲染")
             _render(state)
+            _emit_diag_once("render_first_frame_done", "显示线程已写出首帧")
 
             # ---- 每秒刷新 ----
             stop_event.wait(1)
