@@ -40,10 +40,14 @@ class TradingConfig:
     signal_gate_quality_threshold: float = 0.4  # 最低滚动hit rate
     signal_gate_quality_halflife: int = 3  # EWM半衰期（调仓周期数）
     signal_gate_percentile_warmup: int = 20  # 百分位归一化预热期（调仓次数）
+    signal_gate_dynamic_topn: bool = False  # 是否启用动态 Top-N（按置信度调整选股数量）
+    signal_gate_topn_high_multiplier: float = 0.6  # 高置信度时缩减选股数量的系数（<1，集中持股）
+    signal_gate_topn_low_multiplier: float = 1.5  # 低置信度时扩大选股数量的系数（>1，分散持股）
     rebalance_freq: Optional[int] = 20
     stagger_tranches: int = 1
     max_per_industry: Optional[int] = None
     max_weight_per_stock: Optional[float] = None
+    enable_early_rebalance_on_empty: bool = True  # 空仓时提前触发新一轮调仓
 
     # ── 股票池 ──
     exclude_st: bool = True
@@ -245,6 +249,24 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=int,
         default=20,
         help="百分位归一化预热期（调仓次数，默认：20）",
+    )
+    parser.add_argument(
+        "--signal-gate-dynamic-topn",
+        action="store_true",
+        default=False,
+        help="启用动态Top-N：高置信度时集中选股，低置信度时分散选股",
+    )
+    parser.add_argument(
+        "--signal-gate-topn-high-multiplier",
+        type=float,
+        default=0.6,
+        help="动态Top-N高置信度缩减系数（默认：0.6，即top_n×0.6）",
+    )
+    parser.add_argument(
+        "--signal-gate-topn-low-multiplier",
+        type=float,
+        default=1.5,
+        help="动态Top-N低置信度扩大系数（默认：1.5，即top_n×1.5）",
     )
 
     parser.add_argument(

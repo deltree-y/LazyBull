@@ -28,7 +28,20 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.40.0)
+### 当前版本 (v0.42.2)
+
+**空仓/持有期拖尾提前调仓** (v0.42.0):
+- 扩展 `enable_early_rebalance_on_empty` 语义：除空仓场景外，新增"持有期拖尾"触发路径
+- 当 `cycle_day >= holding_period` 且仍有残留盈利延续持仓时，尝试生成新一轮信号
+- 决策规则：`残留仓位占比 + 新信号权重合计 <= 100%` 方可入待买队列，否则继续等待
+- 无论通过或拒绝均打印清晰评估日志
+- `walk_forward.py` 新增 `--no-early-rebalance-on-empty` 开关；`batch_walk_forward.ps1` 新增 `$enable_early_rebalance_on_empty` 参数区
+
+**空仓提前调仓** (v0.41.0):
+- 新增：`enable_early_rebalance_on_empty` 参数，默认启用
+- 当持仓为空且无待执行信号/补位时，立即触发新一轮信号生成（T+1 买入），无需等待预定调仓日
+- 解决门控阻断、整体止盈清仓、止损清完持仓等场景下资金空转问题
+- 与 `take_profit_refill` 补位机制协调，补位优先
 
 **信号入口门控 v2 + 滚动模型质量监控** (v0.40.0):
 - 新增：`signal_gate_mode` 参数支持 `legacy`/`composite`/`disabled` 三种门控模式

@@ -167,6 +167,9 @@ def run_oos_backtest(
     signal_gate_quality_threshold: float = 0.4,
     signal_gate_quality_halflife: int = 3,
     signal_gate_percentile_warmup: int = 20,
+    signal_gate_dynamic_topn: bool = False,
+    signal_gate_topn_high_multiplier: float = 0.6,
+    signal_gate_topn_low_multiplier: float = 1.5,
     bt_exclude_st: bool = True,
     bt_min_list_days: int = 365,
     bt_sell_timing: str = "open",
@@ -213,6 +216,7 @@ def run_oos_backtest(
     atr_multiplier: float = 2.0,
     take_profit_threshold: Optional[float] = None,
     take_profit_refill: bool = True,
+    enable_early_rebalance_on_empty: bool = True,
     initial_capital: float = 1000000.0,
     split_num: Optional[int] = None,
 ) -> Dict:
@@ -424,10 +428,14 @@ def run_oos_backtest(
         atr_multiplier=atr_multiplier,
         take_profit_threshold=take_profit_threshold,
         take_profit_refill=take_profit_refill,
+        enable_early_rebalance_on_empty=enable_early_rebalance_on_empty,
         signal_gate_quality_enabled=signal_gate_quality_enabled,
         signal_gate_quality_window=signal_gate_quality_window,
         signal_gate_quality_threshold=signal_gate_quality_threshold,
         signal_gate_quality_halflife=signal_gate_quality_halflife,
+        signal_gate_dynamic_topn=signal_gate_dynamic_topn,
+        signal_gate_topn_high_multiplier=signal_gate_topn_high_multiplier,
+        signal_gate_topn_low_multiplier=signal_gate_topn_low_multiplier,
     )
 
     # 从持久化 signal 恢复质量监控状态（跨 split 积累，避免每次重置预热期）
@@ -1457,6 +1465,9 @@ def write_walk_forward_summary(
         "signal_gate_quality_threshold": getattr(args, 'signal_gate_quality_threshold', 0.4),
         "signal_gate_quality_halflife": getattr(args, 'signal_gate_quality_halflife', 3),
         "signal_gate_percentile_warmup": getattr(args, 'signal_gate_percentile_warmup', 20),
+        "signal_gate_dynamic_topn": getattr(args, 'signal_gate_dynamic_topn', False),
+        "signal_gate_topn_high_multiplier": getattr(args, 'signal_gate_topn_high_multiplier', 0.6),
+        "signal_gate_topn_low_multiplier": getattr(args, 'signal_gate_topn_low_multiplier', 1.5),
         "bt_sell_timing": getattr(args, 'bt_sell_timing', 'open'),
         "bt_exclude_st": getattr(args, 'bt_exclude_st', True),
         "bt_min_list_days": getattr(args, 'bt_min_list_days', 365),
@@ -1512,6 +1523,7 @@ def write_walk_forward_summary(
         "atr_multiplier": getattr(args, 'atr_multiplier', 2.0),
         "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
         "take_profit_refill": getattr(args, 'take_profit_refill', True),
+        "enable_early_rebalance_on_empty": getattr(args, 'enable_early_rebalance_on_empty', True),
     }
 
     # 提取每个 split 的关键指标
@@ -2040,6 +2052,18 @@ def main():
         "--signal-gate-percentile-warmup", type=int, default=20,
         help="百分位归一化预热期（调仓次数，默认：20）"
     )
+    parser.add_argument(
+        "--signal-gate-dynamic-topn", action="store_true", default=False,
+        help="启用动态Top-N：高置信度时集中选股，低置信度时分散选股"
+    )
+    parser.add_argument(
+        "--signal-gate-topn-high-multiplier", type=float, default=0.6,
+        help="动态Top-N高置信度缩减系数（默认：0.6）"
+    )
+    parser.add_argument(
+        "--signal-gate-topn-low-multiplier", type=float, default=1.5,
+        help="动态Top-N低置信度扩大系数（默认：1.5）"
+    )
 
     # 回测初始资金
     parser.add_argument(
@@ -2356,6 +2380,13 @@ def main():
         default=True,
         help="整体止盈后不触发补位买入（默认开启补位）"
     )
+    parser.add_argument(
+        "--no-early-rebalance-on-empty",
+        dest="enable_early_rebalance_on_empty",
+        action="store_false",
+        default=True,
+        help="禁用空仓/持有期拖尾时的提前调仓（默认启用：仓位清空或持有期满后残留盈利延续持仓时提前触发新一轮T0）"
+    )
 
     # 部署训练参数
     parser.add_argument(
@@ -2612,6 +2643,9 @@ def main():
                             signal_gate_quality_threshold=args.signal_gate_quality_threshold,
                             signal_gate_quality_halflife=args.signal_gate_quality_halflife,
                             signal_gate_percentile_warmup=args.signal_gate_percentile_warmup,
+                            signal_gate_dynamic_topn=args.signal_gate_dynamic_topn,
+                            signal_gate_topn_high_multiplier=args.signal_gate_topn_high_multiplier,
+                            signal_gate_topn_low_multiplier=args.signal_gate_topn_low_multiplier,
                             bt_exclude_st=args.bt_exclude_st,
                             bt_min_list_days=args.bt_min_list_days,
                             bt_sell_timing=args.bt_sell_timing,
@@ -2658,6 +2692,7 @@ def main():
                             atr_multiplier=args.atr_multiplier,
                             take_profit_threshold=args.take_profit_threshold,
                             take_profit_refill=args.take_profit_refill,
+                            enable_early_rebalance_on_empty=args.enable_early_rebalance_on_empty,
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,
                         )

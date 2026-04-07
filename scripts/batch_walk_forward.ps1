@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130209"   #20130101   #20130224
-$wf_end_date             = "20260209"   #20251231   #20260224
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -91,7 +91,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $true   # $true 启用 | $false 禁用
-$start_model_version     = 8165    # 第一个 split 的模型版本号（$null = 不指定）
+$start_model_version     = 7969    # 第一个 split 的模型版本号（$null = 不指定）
                                    #7969/8165/8937:d3, 8137:d2
 
 ### 以下为回测功能选择
@@ -99,17 +99,17 @@ $start_model_version     = 8165    # 第一个 split 的模型版本号（$null 
 $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
-$oos_backtest            = $true   # $true 启用 | $false 禁用
-$oos_backtest_months     = 0       # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(17)   # 回测持仓 Top N
-$bt_rebalance_freq       = $null   # 调仓频率（$null 表示从标签自动推断）
-$bt_weight_method        = "score" # 权重方法："equal"（等权）| "score"（按预测分数加权）
-$bt_initial_capital      = 1000000 # 回测初始资金（默认：100万）
-$bt_sell_timing_list     = @("open") # 卖出时机：open | close
-$bt_exclude_st           = $true   # $true 排除 ST | $false 不排除
-$bt_min_list_days_list   = @(365)  # 最少上市天数
-$bt_max_weight_per_stock_list = @(0.15) # 单股最大权重，$null=不限制，如 @(0.15, 0.20)
-$bt_max_per_industry_list = @($null)     # 单行业最大持仓数，$null=不限制，如 @(2, 3)
+$oos_backtest            = $true            # $true 启用 | $false 禁用
+$oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
+$bt_top_n_list           = @(17)            # 回测持仓 Top N
+$bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
+$bt_weight_method        = "score"          # 权重方法："equal"（等权）| "score"（按预测分数加权）
+$bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
+$bt_sell_timing_list     = @("open")        # 卖出时机：open | close
+$bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
+$bt_min_list_days_list   = @(365)           # 最少上市天数
+$bt_max_weight_per_stock_list = @(0.15)     # 单股最大权重，$null=不限制，如 @(0.15, 0.20)
+$bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null=不限制，如 @(2, 3)
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
 $signal_gate_mode = "composite"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
@@ -120,6 +120,11 @@ $signal_gate_quality_enabled = $true            # 滚动模型质量监控: $tru
 $signal_gate_quality_window_list = @(3)         # 滚动质量回看调仓周期数
 $signal_gate_quality_threshold_list = @(0.4)    # 滚动质量最低 hit rate
 $signal_gate_quality_halflife = 4               # 滚动质量 EWM 半衰期
+
+# ── OOS 动态 Top-N（按置信度调整选股数量, 0406引入）─────────────────────────────
+$signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用
+$signal_gate_topn_high_multiplier = 0.6         # 高置信度缩减系数（<1，集中持股，如 top_n=17 → 10只）
+$signal_gate_topn_low_multiplier  = 1.5         # 中低置信度扩大系数（>1，分散持股，如 top_n=17 → 25只）
 
 # ── OOS 旧版置信度门控（signal_gate_mode="legacy" 时生效）────────────
 $signal_confidence_gate_enabled = $false  # $true 启用 | $false 禁用（仅 legacy 模式）
@@ -185,6 +190,12 @@ $atr_multiplier_list              = @(2.8)   # baseline 对齐当前最佳防守
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
 $take_profit_threshold_list   = @(0.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
 $take_profit_refill           = $false   # $true=整体止盈后自动补位买入
+
+# ── 空仓/持有期拖尾提前调仓 ────────────────────────────────────
+# $true  = 启用：当持仓全部清零或 cycle_day>=holding_period 且仍有残留盈利延续持仓时，
+#          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
+# $false = 禁用：严格等待下一个预定调仓日
+$enable_early_rebalance_on_empty = $false
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
@@ -454,6 +465,10 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
         }
     }
 
+    if (-not $enable_early_rebalance_on_empty) {
+        $pythonCmd += " --no-early-rebalance-on-empty"
+    }
+
     if ($stagger_tranches -gt 1) {
         $pythonCmd += " --stagger-tranches $stagger_tranches"
     }
@@ -478,6 +493,11 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
                           " --signal-gate-quality-window $signal_gate_quality_window" +
                           " --signal-gate-quality-threshold $signal_gate_quality_threshold" +
                           " --signal-gate-quality-halflife $signal_gate_quality_halflife"
+        }
+        if ($signal_gate_dynamic_topn) {
+            $pythonCmd += " --signal-gate-dynamic-topn" +
+                          " --signal-gate-topn-high-multiplier $signal_gate_topn_high_multiplier" +
+                          " --signal-gate-topn-low-multiplier $signal_gate_topn_low_multiplier"
         }
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"

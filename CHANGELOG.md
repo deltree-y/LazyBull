@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.42.2] - 2026-04-07
+
+### 修复
+
+- **提前调仓污染门控/质量计算基准（补全 v0.42.1 遗漏字段）**：v0.42.1 仅快照了 `_separation_history`、`_composite_score_history`、`confidence_gate_history`、`_last_ranked_candidates`、`_signal_tracking` 是否包含当日 key，但 `_generate_signal` 还会修改以下状态，导致开/关 `enable_early_rebalance_on_empty` 时门控指标仍有漂移（实测 2026-02-06 `composite` 1.308 vs 1.292、`sep_pct` 0.62 vs 0.58、`hit_rate` 0.50 vs 0.61）：
+  - `self._last_rebalance_nav`：每次调用都被重置为当前 NAV
+  - `self._signal_tracking`：`_evaluate_expired_signal_quality` 会**删除**过期 key（仅判断"是否包含当日 key"无法还原删除）
+  - `self._prediction_quality_history`：`_update_prediction_quality` 会追加质量记录
+  - `self._rolling_quality_score` / `self._quality_warmup_remaining`：滚动质量评分与暖机倒计时
+  
+  修复：将 `_snapshot_early_rebalance_state` / `_restore_early_rebalance_state` 升级为对上述字段做完整深拷贝/还原（`_signal_tracking` 用 `dict` 全量拷贝而非长度标记），确保提前调仓拒绝路径完全无副作用。
+
+## [0.42.1] - 2026-04-07
+
+### 修复
+
+- **提前调仓污染门控/质量计算基准**：`enable_early_rebalance_on_empty` 开启时，提前调仓尝试即使被门控阻断或拖尾拒绝，`_separation_history`、`_composite_score_history`、`confidence_gate_history`、`_signal_tracking` 等历史缓冲仍会追加条目，导致百分位归一化和滚动 hit_rate 的基准被"投机性评估"污染。表现为开/关同一开关时，正常调仓日的 `composite`、`sep_pct`、`quality hit_rate` 出现漂移。
+  修复：新增 `_snapshot_early_rebalance_state` / `_restore_early_rebalance_state` 辅助方法；提前调仓 `_generate_signal` 调用前快照相关状态，信号若未真正入 `pending_signals` 则回滚所有追加条目。这样开/关该开关对正常调仓日的门控/质量计算完全一致。
+
+## [0.42.0] - 2026-04-07
+
+### 新增
+
+- **持有期拖尾提前调仓（Early Rebalance on Holding Period Exceeded）**
+  - 扩展 `enable_early_rebalance_on_empty` 开关的语义：除空仓场景外，新增"持有期拖尾"触发路径
+  - 触发条件：`cycle_day >= holding_period` 且仍有残留持仓（通常为盈利延续持有的股票）
+  - 决策规则：调用 `_generate_signal` 生成新一轮目标仓位，校验 `残留仓位占比 + 新信号权重合计 <= 100%`
+    - 满足 → 信号入 `pending_signals`，T+1 买入，新旧持仓并存，旧盈利延续股票继续按原到期日卖出
+    - 超过 → 撤回信号，继续等待残留持仓到期，次日再评估
+  - 无论通过或拒绝均打印清晰日志：`持有期拖尾提前调仓评估/通过/拒绝`，含残留占比、新信号权重、合计占比
+  - `walk_forward.py` 新增 `--no-early-rebalance-on-empty` CLI 开关
+  - `batch_walk_forward.ps1` 新增 `$enable_early_rebalance_on_empty` 参数区
+
+## [0.41.2] - 2026-04-07
+
+### 修复
+
+- **cycle_day 日志在门控阻断期间错误推进**：原 `cycle_day = idx % rebalance_freq + 1` 基于固定节奏，门控连续阻断导致持仓为空时 `cycle_day` 仍在每天推进（如显示 `本轮第[04/20]天`）。
+  修复：引入 `_cycle_anchor_idx` 跟踪当前调仓周期起点，仅在"信号成功进入待买队列"（正常调仓日或空仓提前调仓）时才更新 anchor 并输出新一轮分隔线。语义变更：分隔线从"每 `rebalance_freq` 天固定输出"改为"每次信号成功入队列时输出"，更贴近"新一轮真正开始"的含义。
+
+## [0.41.1] - 2026-04-07
+
+### 修复
+
+- **空仓提前调仓节奏冲突**：提前调仓成功后，原预定的调仓日仍会触发重复信号生成（导致"刚买完又调仓"）。
+  修复：提前调仓成功后自动清理 `signal_dates` 中未来一个 `holding_period` 周期内的原预定调仓日，确保调仓节奏从提前触发日重新计算。
+
+## [0.41.0] - 2026-04-07
+
+### 新增
+
+- **空仓提前调仓（Early Rebalance on Empty Position）——空仓时立即触发下一轮T0**
+  - 新增 `enable_early_rebalance_on_empty` 参数（`BacktestEngine` 和 `TradingConfig`），默认启用
+  - 主循环在每日卖出/买入执行完毕后检测：若持仓为空、无待执行信号、无活跃补齐槽位且当日非正常调仓日，立即调用 `_generate_signal()` 生成新一轮信号，T+1 执行买入
+  - 解决场景：门控阻断导致持仓到期后空仓、整体止盈清仓、止损清完持仓等情况下，原先需傻等到下一个预定调仓日才重新入场，现在次日即可重新尝试建仓
+  - 与现有 `take_profit_refill` 补位机制协调：补位槽有活跃条目时不会触发提前调仓，补位优先
+  - 门控阻断时次日会自动再次尝试，直到门控放行或到达正常调仓日，行为自洽
+  - 分批调仓场景下使用 `tranche_idx=0` 触发主批次
+
+### 修复
+
+- 修复提前调仓触发后，原预定调仓日仍会再次触发信号生成导致"刚买完又调仓"的问题：
+  提前调仓成功后自动清理未来一个 `holding_period` 周期内的原预定调仓日，确保调仓节奏从提前触发日重新计算
+
+### 测试
+
+- `test_cycle_separator_is_logged_before_new_cycle_signal` 显式禁用该功能以保持原测试语义
+- 全部 595 个测试通过（3个已有失败与本次无关）
+
 ## [0.40.0] - 2026-04-06
 
 ### 新增

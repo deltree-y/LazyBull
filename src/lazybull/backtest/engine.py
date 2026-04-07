@@ -77,6 +77,7 @@ def _format_rebalance_decision_summary(
     ect = decision_trace.get("ect", {})
     ma250 = decision_trace.get("ma250", {})
     market_regime = decision_trace.get("market_regime", {})
+    dynamic_topn = decision_trace.get("dynamic_topn", {})
 
     signal_gate_exposure = _to_optional_float(signal_gate.get("exposure", 1.0))
     signal_gate_quality_exposure = _to_optional_float(signal_gate.get("quality_exposure", 1.0))
@@ -105,6 +106,14 @@ def _format_rebalance_decision_summary(
         execution_text = "-"
 
     candidate_text = candidate_count if candidate_count is not None else "N/A"
+
+    # 动态 Top-N 显示
+    if dynamic_topn.get("enabled") and dynamic_topn.get("reason"):
+        base_n = dynamic_topn.get("base_n", target_n)
+        effective_n = dynamic_topn.get("effective_n", target_n)
+        topn_text = f"目标={effective_n}(基准={base_n}, {dynamic_topn['reason']})"
+    else:
+        topn_text = f"目标={target_n}"
 
     final_action = "进入待买队列" if queued else "本次不进入待买队列"
 
@@ -153,7 +162,7 @@ def _format_rebalance_decision_summary(
 
     return (
         f"\n"
-        f"  {header} | 执行={execution_text} | 候选/目标={candidate_text}/{target_n}"
+        f"  {header} | 执行={execution_text} | 候选={candidate_text} | {topn_text}"
         f"\n"
         f"{gate_line}"
         f"\n"
@@ -226,6 +235,10 @@ class BacktestEngine:
         signal_gate_quality_window: int = 5,  # 回看调仓周期数
         signal_gate_quality_threshold: float = 0.4,  # 最低滚动hit rate
         signal_gate_quality_halflife: int = 3,  # EWM半衰期
+        signal_gate_dynamic_topn: bool = False,  # 是否启用动态Top-N
+        signal_gate_topn_high_multiplier: float = 0.6,  # 高置信度缩减系数（<1）
+        signal_gate_topn_low_multiplier: float = 1.5,  # 低置信度扩大系数（>1）
+        enable_early_rebalance_on_empty: bool = True,  # 空仓时是否提前触发新一轮调仓
     ):
         """初始化回测引擎
 
@@ -331,6 +344,7 @@ class BacktestEngine:
         # 整体持仓止盈参数
         self.take_profit_threshold = take_profit_threshold
         self.take_profit_refill = take_profit_refill
+        self.enable_early_rebalance_on_empty = enable_early_rebalance_on_empty
         self._last_ranked_candidates: list = []  # 最近一次调仓的候选排序列表（止盈补位用）
         self._last_signal_date: Optional[pd.Timestamp] = None  # 最近一次调仓日期
         self._last_rebalance_nav: Optional[float] = (
@@ -385,6 +399,7 @@ class BacktestEngine:
             {}
         )  # {股票代码: {trigger_date, sell_type}} 待条件卖出队列（亏损提前换出/整体止盈）
         self._pending_take_profit_info: Optional[Dict] = None  # 止盈元数据（延迟到执行日处理）
+        self._cycle_anchor_idx: int = 0  # 当前调仓周期起点 idx（用于 cycle_day 日志显示）
         self.portfolio_values: List[Dict] = []  # 组合价值历史
         self.trades: List[Dict] = []  # 交易记录
 
@@ -405,6 +420,10 @@ class BacktestEngine:
         self.signal_gate_quality_window = signal_gate_quality_window
         self.signal_gate_quality_threshold = signal_gate_quality_threshold
         self.signal_gate_quality_halflife = signal_gate_quality_halflife
+        # ── 动态 Top-N ──
+        self.signal_gate_dynamic_topn = signal_gate_dynamic_topn
+        self.signal_gate_topn_high_multiplier = signal_gate_topn_high_multiplier
+        self.signal_gate_topn_low_multiplier = signal_gate_topn_low_multiplier
         self._prediction_quality_history: List[Dict] = []
         self._rolling_quality_score: float = 1.0  # 默认满分（预热期不干预）
         self._quality_warmup_remaining: int = signal_gate_quality_window  # 预热计数
@@ -430,6 +449,7 @@ class BacktestEngine:
             f"仓位补齐={'启用' if enable_position_completion else '禁用'}, "
             f"补齐窗口={completion_window_days}天, "
             f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
+            f"空仓提前调仓={'启用' if enable_early_rebalance_on_empty else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
         sell_price_type = "开盘价" if self.sell_timing == "open" else "收盘价"
@@ -502,13 +522,18 @@ class BacktestEngine:
         start_time = time.time()
 
         # 按日推进
+        # _cycle_anchor_idx 是当前调仓周期的"第1天"在 trading_dates 中的 idx
+        # 初始为 0（第一天即第1轮的第1天）；每次信号成功入队列时重置为信号日 idx
+        # 这样门控连续阻断的空仓期不会推进 cycle_day
+        self._cycle_anchor_idx = 0
+        cycle_separator = (
+            "\n================================================ 新一轮回测 ================================================="
+        )
         for idx, date in enumerate(trading_dates):
-            # 计算本轮调仓周期内的第几天（1-based），并在新轮首日所有业务日志之前输出分隔线
-            cycle_day = idx % self.rebalance_freq + 1
-            if cycle_day == 1:
-                logger.info(
-                    "\n================================================ 新一轮回测 ================================================="
-                )
+            # 新一轮首日：输出分隔线（在所有业务日志之前）
+            if idx == self._cycle_anchor_idx:
+                logger.info(cycle_separator)
+            cycle_day = idx - self._cycle_anchor_idx + 1
 
             # 处理延迟订单（先处理延迟订单，再处理新信号）
             if self.enable_pending_order:
@@ -528,6 +553,11 @@ class BacktestEngine:
                     date_to_idx,
                     tranche_idx=tranche_idx,
                 )
+                # 信号成功入队列 → 本日即为新周期第1天，更新 anchor 并输出分隔线
+                if date in self.pending_signals and idx != self._cycle_anchor_idx:
+                    self._cycle_anchor_idx = idx
+                    cycle_day = 1
+                    logger.info(cycle_separator)
 
             # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
             # 执行止损卖出（Tn+1 执行）
@@ -544,6 +574,114 @@ class BacktestEngine:
 
             # 执行待执行的买入操作（Tn+1）
             self._execute_pending_buys(date, trading_dates, date_to_idx)
+
+            # 空仓提前调仓 / 盈利延续拖尾提前调仓：
+            # 场景 A（空仓）：持仓全部卖出，资金闲置 → 立即触发新一轮信号
+            # 场景 B（盈利延续拖尾）：cycle_day >= holding_period 但仍有残留持仓（通常为盈利延续）
+            #   → 若"残留持仓占比 + 新信号目标仓位 ≤ 100%"，则提前启动新一轮；否则继续等待
+            early_rebalance_guards_ok = (
+                self.enable_early_rebalance_on_empty
+                and not self.pending_signals
+                and not any(
+                    slot_info.get("unfilled_count", 0) > 0
+                    for slot_info in self.unfilled_slots.values()
+                )
+                and date not in signal_dates
+            )
+
+            is_empty_position = not self.positions
+            is_holding_period_exceeded = (
+                bool(self.positions) and cycle_day >= self.holding_period
+            )
+
+            if early_rebalance_guards_ok and (is_empty_position or is_holding_period_exceeded):
+                if is_empty_position:
+                    logger.warning(
+                        f"  空仓提前调仓触发: {date.date()}, "
+                        f"仓位为空且无待执行信号，提前生成新一轮信号（T+1执行买入）"
+                    )
+                else:
+                    # 盈利延续拖尾场景：打印当前残留持仓占比
+                    current_nav = self._calculate_portfolio_value(date)
+                    residual_market_value = current_nav - self.current_capital
+                    residual_ratio = (
+                        residual_market_value / current_nav if current_nav > 0 else 0.0
+                    )
+                    logger.warning(
+                        f"  持有期拖尾提前调仓评估: {date.date()}, "
+                        f"cycle_day={cycle_day}>={self.holding_period}, "
+                        f"残留持仓 {len(self.positions)} 只, "
+                        f"占比={residual_ratio:.2%}，尝试生成新一轮信号"
+                    )
+
+                # 快照历史状态：提前调仓若未真正入队列则回滚，避免污染门控/质量计算基准
+                # 仅快照评估过程会追加的字段，保证启用/禁用该开关对正常调仓日的门控计算完全一致
+                gate_history_snapshot = self._snapshot_early_rebalance_state(date)
+
+                self._generate_signal(
+                    date,
+                    trading_dates,
+                    price_data,
+                    date_to_idx,
+                    tranche_idx=0,
+                )
+
+                # 盈利延续拖尾场景：需额外校验 "残留仓位 + 新信号仓位 ≤ 100%"
+                # 若不满足，撤回本次信号，继续等待残留持仓到期
+                signal_accepted = date in self.pending_signals
+                if signal_accepted and is_holding_period_exceeded:
+                    current_nav = self._calculate_portfolio_value(date)
+                    residual_market_value = current_nav - self.current_capital
+                    residual_ratio = (
+                        residual_market_value / current_nav if current_nav > 0 else 0.0
+                    )
+                    new_signal_weight_sum = sum(
+                        self.pending_signals[date].get("signals", {}).values()
+                    )
+                    combined_ratio = residual_ratio + new_signal_weight_sum
+                    if combined_ratio > 1.0 + 1e-9:
+                        # 超过上限，撤回信号
+                        del self.pending_signals[date]
+                        signal_accepted = False
+                        logger.warning(
+                            f"  持有期拖尾提前调仓拒绝: {date.date()}, "
+                            f"残留仓位 {residual_ratio:.2%} + 新信号仓位 "
+                            f"{new_signal_weight_sum:.2%} = {combined_ratio:.2%} > 100%，"
+                            f"本次不入队列，继续等待残留持仓到期"
+                        )
+                    else:
+                        logger.info(
+                            f"  持有期拖尾提前调仓通过: {date.date()}, "
+                            f"残留仓位 {residual_ratio:.2%} + 新信号仓位 "
+                            f"{new_signal_weight_sum:.2%} = {combined_ratio:.2%} ≤ 100%，"
+                            f"信号进入待买队列（T+1执行买入）"
+                        )
+
+                # 信号未真正入队列（门控阻断或拖尾拒绝）→ 回滚历史快照，避免污染基准
+                if not signal_accepted:
+                    self._restore_early_rebalance_state(date, gate_history_snapshot)
+
+                # 信号真正入队列后，才更新节奏并清理预定调仓日
+                if signal_accepted:
+                    # 清除接下来一个持有期内的原预定调仓日，避免"刚买完又调仓"
+                    next_rebalance_cutoff_idx = idx + self.holding_period
+                    stale_dates = [
+                        d
+                        for d in list(signal_dates.keys())
+                        if idx < date_to_idx.get(d, -1) <= next_rebalance_cutoff_idx
+                    ]
+                    for d in stale_dates:
+                        del signal_dates[d]
+                    if stale_dates:
+                        logger.info(
+                            f"  已清除未来 {len(stale_dates)} 个预定调仓日（至 {stale_dates[-1].date()}），"
+                            f"避免重复调仓"
+                        )
+                    # 信号成功入队列 → 本日即为新周期第1天，更新 anchor 并输出分隔线
+                    if idx != self._cycle_anchor_idx:
+                        self._cycle_anchor_idx = idx
+                        cycle_day = 1
+                        logger.info(cycle_separator)
 
             # 处理仓位补齐（在补齐窗口期内尝试补齐未满仓位）
             if self.enable_position_completion:
@@ -941,10 +1079,46 @@ class BacktestEngine:
 
         # 获取目标数量（从信号生成器获取）
         if hasattr(self.signal, "top_n"):
-            target_n = self.signal.top_n
+            base_n = self.signal.top_n
         else:
-            # 如果信号生成器没有 top_n 属性，则使用所有候选
-            target_n = len(ranked_candidates)
+            base_n = len(ranked_candidates)
+
+        # 动态 Top-N：根据门控置信度调整选股数量
+        # 高置信度 → 集中（缩减），低置信度 → 分散（扩大）
+        dynamic_topn_reason = None
+        if (
+            self.signal_gate_dynamic_topn
+            and confidence_gate_state is not None
+            and getattr(confidence_gate_state, "enabled", False)
+        ):
+            gate_exposure = getattr(confidence_gate_state, "exposure", 1.0)
+            if gate_exposure >= 1.0:
+                # 高置信度：集中持股
+                target_n = max(3, int(round(base_n * self.signal_gate_topn_high_multiplier)))
+                dynamic_topn_reason = (
+                    f"高置信度(exposure={gate_exposure:.0%})→集中"
+                    f"({base_n}×{self.signal_gate_topn_high_multiplier}={target_n}只)"
+                )
+            elif gate_exposure <= 0:
+                # 门控阻断，target_n 保持 base_n（后续门控会清零信号）
+                target_n = base_n
+                dynamic_topn_reason = "门控阻断，top-N不生效"
+            else:
+                # 中低置信度：分散持股，按 exposure 线性插值
+                # exposure 越低 → multiplier 越大（趋向 low_multiplier）
+                multiplier = 1.0 + (1.0 - gate_exposure) * (
+                    self.signal_gate_topn_low_multiplier - 1.0
+                )
+                target_n = min(
+                    len(ranked_candidates_for_selection),
+                    max(base_n, int(round(base_n * multiplier))),
+                )
+                dynamic_topn_reason = (
+                    f"中低置信度(exposure={gate_exposure:.0%})→分散"
+                    f"({base_n}×{multiplier:.2f}={target_n}只)"
+                )
+        else:
+            target_n = base_n
 
         decision_trace = self._build_signal_decision_trace(
             date=date,
@@ -953,6 +1127,13 @@ class BacktestEngine:
             tranche_idx=tranche_idx,
             confidence_gate_state=confidence_gate_state,
         )
+        # 将动态 Top-N 信息写入 decision_trace
+        decision_trace["dynamic_topn"] = {
+            "enabled": self.signal_gate_dynamic_topn,
+            "base_n": base_n,
+            "effective_n": target_n,
+            "reason": dynamic_topn_reason,
+        }
 
         if self.enable_position_completion:
             # 启用补齐功能：直接选择 top N 股票，不检查 T+1 可交易性
@@ -2724,6 +2905,83 @@ class BacktestEngine:
             "avg_exposure": avg_exposure,
             "avg_score": avg_score,
         }
+
+    # ── 提前调仓历史快照/回滚（避免污染门控和质量监控基准）──
+
+    def _snapshot_early_rebalance_state(self, date: pd.Timestamp) -> Dict:
+        """快照提前调仓可能污染的历史缓冲区状态（仅记录长度/标记），用于失败时回滚。
+
+        返回的快照用于：提前调仓信号若未入 pending_signals（门控阻断或拖尾拒绝），
+        需回滚 evaluate_confidence_gate 和 _record_signal_for_quality_tracking 追加的历史条目，
+        确保"是否启用该开关"不会影响正常调仓日的门控/质量计算基准。
+        """
+        snapshot = {
+            "confidence_gate_history_len": len(self.confidence_gate_history),
+            "last_ranked_candidates": list(self._last_ranked_candidates),
+            "last_signal_date": self._last_signal_date,
+            # 完整深拷贝 _signal_tracking（_evaluate_expired_signal_quality 会删除过期键）
+            "signal_tracking": {k: dict(v) for k, v in self._signal_tracking.items()},
+            # _generate_signal 第 966 行会重置基准 NAV
+            "last_rebalance_nav": getattr(self, "_last_rebalance_nav", None),
+            # _evaluate_expired_signal_quality → _update_prediction_quality 会追加质量历史
+            "prediction_quality_history": list(
+                getattr(self, "_prediction_quality_history", [])
+            ),
+            "rolling_quality_score": getattr(self, "_rolling_quality_score", None),
+            "quality_warmup_remaining": getattr(self, "_quality_warmup_remaining", None),
+        }
+        # 快照信号生成器侧的门控历史缓冲
+        if hasattr(self.signal, "_separation_history"):
+            snapshot["separation_history_len"] = len(self.signal._separation_history)
+        if hasattr(self.signal, "_composite_score_history"):
+            snapshot["composite_score_history_len"] = len(self.signal._composite_score_history)
+        return snapshot
+
+    def _restore_early_rebalance_state(self, date: pd.Timestamp, snapshot: Dict) -> None:
+        """回滚提前调仓过程中追加的历史条目，使状态恢复到 _generate_signal 调用之前。"""
+        # 回滚 confidence_gate_history
+        target_len = snapshot["confidence_gate_history_len"]
+        if len(self.confidence_gate_history) > target_len:
+            del self.confidence_gate_history[target_len:]
+
+        # 回滚信号生成器侧的门控历史缓冲
+        if "separation_history_len" in snapshot and hasattr(
+            self.signal, "_separation_history"
+        ):
+            target = snapshot["separation_history_len"]
+            if len(self.signal._separation_history) > target:
+                del self.signal._separation_history[target:]
+        if "composite_score_history_len" in snapshot and hasattr(
+            self.signal, "_composite_score_history"
+        ):
+            target = snapshot["composite_score_history_len"]
+            if len(self.signal._composite_score_history) > target:
+                del self.signal._composite_score_history[target:]
+
+        # 完整还原 _signal_tracking（覆盖 _evaluate_expired_signal_quality 的删除和新增）
+        self._signal_tracking = {k: dict(v) for k, v in snapshot["signal_tracking"].items()}
+
+        # 还原 _last_rebalance_nav（_generate_signal 会无条件重置）
+        if snapshot["last_rebalance_nav"] is not None:
+            self._last_rebalance_nav = snapshot["last_rebalance_nav"]
+
+        # 还原滚动质量监控状态（_update_prediction_quality 会修改）
+        if snapshot["prediction_quality_history"] is not None and hasattr(
+            self, "_prediction_quality_history"
+        ):
+            self._prediction_quality_history = list(snapshot["prediction_quality_history"])
+        if snapshot["rolling_quality_score"] is not None and hasattr(
+            self, "_rolling_quality_score"
+        ):
+            self._rolling_quality_score = snapshot["rolling_quality_score"]
+        if snapshot["quality_warmup_remaining"] is not None and hasattr(
+            self, "_quality_warmup_remaining"
+        ):
+            self._quality_warmup_remaining = snapshot["quality_warmup_remaining"]
+
+        # 回滚止盈补位用的候选快照
+        self._last_ranked_candidates = snapshot["last_ranked_candidates"]
+        self._last_signal_date = snapshot["last_signal_date"]
 
     # ── 滚动模型质量监控 ──
 

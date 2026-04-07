@@ -100,7 +100,7 @@ def test_target_position_count_scales_with_stagger_tranches():
 
 
 def test_cycle_separator_logs_only_on_first_day(monkeypatch):
-    """每轮分隔线只应在本轮第1天前输出一次。"""
+    """新一轮分隔线只在回测首日 + 每次信号成功入队列时输出一次。"""
     engine = BacktestEngine(
         universe=MockUniverse(),
         signal=MockSignal(top_n=5),
@@ -109,6 +109,7 @@ def test_cycle_separator_logs_only_on_first_day(monkeypatch):
         verbose=False,
         enable_pending_order=False,
         enable_position_completion=False,
+        enable_early_rebalance_on_empty=False,
     )
 
     log_messages = []
@@ -116,9 +117,19 @@ def test_cycle_separator_logs_only_on_first_day(monkeypatch):
 
     monkeypatch.setattr(engine_module.logger, "info", lambda message: log_messages.append(str(message)))
     monkeypatch.setattr(engine, "_prepare_price_index", lambda price_data: None)
-    monkeypatch.setattr(engine, "_get_rebalance_dates", lambda trading_dates: {})
+    # 在 trading_dates[2] 设一个信号日，让信号进入 pending_signals 触发新一轮分隔线
+    monkeypatch.setattr(
+        engine,
+        "_get_rebalance_dates",
+        lambda trading_dates: {trading_dates[2]: 0},
+    )
     monkeypatch.setattr(engine, "_calculate_portfolio_value", lambda date: 100000.0)
     monkeypatch.setattr(engine, "_generate_nav_curve", lambda: pd.DataFrame())
+
+    def fake_generate_signal(date, *args, **kwargs):
+        engine.pending_signals[date] = {"signals": {}, "ranked_candidates": [], "target_n": 0, "tranche_idx": 0, "decision_trace": {}}
+
+    monkeypatch.setattr(engine, "_generate_signal", fake_generate_signal)
 
     trading_dates = [
         pd.Timestamp("2025-01-02"),
@@ -134,11 +145,12 @@ def test_cycle_separator_logs_only_on_first_day(monkeypatch):
         price_data=price_data,
     )
 
+    # 首日1次 + 信号日重置1次 = 2次
     assert log_messages.count(separator_line) == 2
 
 
 def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
-    """新一轮分隔线应先于该轮首日的选股/信号日志输出。"""
+    """新一轮分隔线应在信号成功入队列后输出（新语义：anchor 基于信号成功而非预定调仓日）。"""
     engine = BacktestEngine(
         universe=MockUniverse(),
         signal=MockSignal(top_n=5),
@@ -147,6 +159,7 @@ def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
         verbose=False,
         enable_pending_order=False,
         enable_position_completion=False,
+        enable_early_rebalance_on_empty=False,
     )
 
     log_messages = []
@@ -161,11 +174,11 @@ def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
     )
     monkeypatch.setattr(engine, "_calculate_portfolio_value", lambda date: 100000.0)
     monkeypatch.setattr(engine, "_generate_nav_curve", lambda: pd.DataFrame())
-    monkeypatch.setattr(
-        engine,
-        "_generate_signal",
-        lambda *args, **kwargs: log_messages.append("SIGNAL_GENERATED"),
-    )
+    def fake_generate_signal(date, *args, **kwargs):
+        log_messages.append("SIGNAL_GENERATED")
+        engine.pending_signals[date] = {"signals": {}, "ranked_candidates": [], "target_n": 0, "tranche_idx": 0, "decision_trace": {}}
+
+    monkeypatch.setattr(engine, "_generate_signal", fake_generate_signal)
 
     trading_dates = [
         pd.Timestamp("2025-01-02"),
@@ -184,5 +197,7 @@ def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
     separator_indices = [i for i, message in enumerate(log_messages) if message == separator_line]
     signal_index = log_messages.index("SIGNAL_GENERATED")
 
+    # 首日1次 + 信号日入队列后1次 = 2次
     assert len(separator_indices) == 2
-    assert separator_indices[1] < signal_index
+    # 第二次分隔线在信号日志之后（新语义：anchor 更新发生在 _generate_signal 之后）
+    assert separator_indices[1] > signal_index
