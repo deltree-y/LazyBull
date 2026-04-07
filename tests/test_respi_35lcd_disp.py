@@ -71,6 +71,16 @@ def test_resolve_framebuffer_path_uses_env_override(monkeypatch):
     assert module._resolve_framebuffer_path() == "/dev/fb9"
 
 
+def test_layout_constants_use_taller_header_and_narrower_left_panel():
+    module = _load_module()
+
+    assert module.HEADER_H == 34
+    assert module.HEADER_TIME_FONT_SIZE > module.HEADER_META_FONT_SIZE
+    assert module.PANEL_TOP == module.HEADER_H + 4
+    assert module.LEFT_W == int(module.PANEL_AREA_W * 0.55)
+    assert module.RIGHT_W == module.PANEL_AREA_W - module.LEFT_W - module.PANEL_GAP
+
+
 def test_is_trade_day_uses_weekday_fallback_without_loading_calendar(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_trade_date_set_cache", None)

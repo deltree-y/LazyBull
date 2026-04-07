@@ -51,7 +51,7 @@ DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 数据刷新间隔（秒），10分钟
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
-BACKLIGHT_BRIGHTNESS = 20    # 背光亮度 0~100（默认40%，可按需调整）
+BACKLIGHT_BRIGHTNESS = 10    # 背光亮度 0~100（默认40%，可按需调整）
 SCREENSAVER_RANGE_X = 4      # 屏保水平偏移范围（±像素）
 SCREENSAVER_RANGE_Y = 3      # 屏保垂直偏移范围（±像素）
 SCREENSAVER_INTERVAL = 60    # 屏保偏移更新间隔（秒）
@@ -1149,13 +1149,15 @@ class DisplayState:
 # ---------- 渲染逻辑 ----------
 
 # 布局常量
-HEADER_H = 30          # 顶栏高度（含时间、更新、调仓）
+HEADER_H = 34          # 顶栏高度（含时间、更新、调仓）
+HEADER_TIME_FONT_SIZE = 15
+HEADER_META_FONT_SIZE = 15
 PANEL_MARGIN = 6       # 面板区左右外边距
-PANEL_TOP = 34         # 面板区顶部 y
+PANEL_TOP = HEADER_H + 4  # 面板区顶部 y，给顶栏留出更大时间字号空间
 PANEL_H = 140          # 面板区高度（去掉底栏后加大）
 PANEL_GAP = 6          # 左右面板间距
 PANEL_AREA_W = WIDTH - 2 * PANEL_MARGIN  # 面板总可用宽度 = 468
-LEFT_W = int(PANEL_AREA_W * 0.60)        # 左面板宽度 ≈ 280
+LEFT_W = int(PANEL_AREA_W * 0.55)        # 左面板宽度，略收窄给右侧排行更多空间
 RIGHT_W = PANEL_AREA_W - LEFT_W - PANEL_GAP  # 右面板宽度
 RIGHT_SUB_GAP = 4      # 右上/右下子面板间距
 RIGHT_SUB_H = (PANEL_H - RIGHT_SUB_GAP) // 2  # 每个子面板高度 = 68
@@ -1168,7 +1170,7 @@ def _render(state: DisplayState) -> None:
 
     布局：
       顶部状态栏（固定）
-      左面板 60%（屏保偏移）：2行×3列
+            左面板 55%（屏保偏移）：2行×3列
         行1: 持仓市值 | 浮盈率   | 持仓/仓位
         行2: 总资产   | 总盈亏率 | 年化收益
       右上面板（屏保偏移）：盈利 Top3（右对齐）
@@ -1191,7 +1193,8 @@ def _render(state: DisplayState) -> None:
 
     font_val = _get_font(24)   # 数值
     font_val_sm = _get_font(20) # 数值（小号，持仓/仓位用）
-    font_label = _get_font(13) # 标签
+    font_label = _get_font(HEADER_META_FONT_SIZE) # 标签
+    font_header_time = _get_font(HEADER_TIME_FONT_SIZE)
     font_rank = _get_font(15)  # 排名列表
     font_md = _get_font(20)    # 等待提示
 
@@ -1205,16 +1208,21 @@ def _render(state: DisplayState) -> None:
     header_mid = f"更新:{last_update_time}"
     header_right = f"待调仓:{days_str}"
 
-    hy = (HEADER_H - 13) // 2  # 垂直居中（字体13px）
-    draw.text((8, hy), time_str, fill=COLOR_TEXT, font=font_label)
+    time_bbox = draw.textbbox((0, 0), time_str, font=font_header_time)
+    time_h = time_bbox[3] - time_bbox[1]
+    time_y = (HEADER_H - time_h) // 2 - 1
+    meta_bbox = draw.textbbox((0, 0), header_mid, font=font_label)
+    meta_h = meta_bbox[3] - meta_bbox[1]
+    meta_y = (HEADER_H - meta_h) // 2
+
+    draw.text((8, time_y), time_str, fill=COLOR_TEXT, font=font_header_time)
     # 居中
-    bbox_m = draw.textbbox((0, 0), header_mid, font=font_label)
-    mw = bbox_m[2] - bbox_m[0]
-    draw.text(((WIDTH - mw) // 2, hy), header_mid, fill=COLOR_YELLOW, font=font_label)
+    mw = meta_bbox[2] - meta_bbox[0]
+    draw.text(((WIDTH - mw) // 2, meta_y), header_mid, fill=COLOR_YELLOW, font=font_label)
     # 右对齐
     bbox_r = draw.textbbox((0, 0), header_right, font=font_label)
     rw = bbox_r[2] - bbox_r[0]
-    draw.text((WIDTH - rw - 8, hy), header_right, fill=COLOR_YELLOW, font=font_label)
+    draw.text((WIDTH - rw - 8, meta_y), header_right, fill=COLOR_YELLOW, font=font_label)
 
     # ===== 左面板：总览 2行×3列（参与屏保偏移）=====
     lp_x = PANEL_MARGIN + ox
