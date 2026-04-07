@@ -34,6 +34,7 @@ def test_build_cycle_chart_payload_keeps_fixed_slots_before_holding_exceeds_peri
     payload = module._build_cycle_chart_payload(
         dates=[f"202604{day:02d}" for day in range(1, 12)],
         index_pct=[float(i) for i in range(11)],
+        shenzhen_pct=[float(i) * 0.8 for i in range(11)],
         portfolio_pct=[float(i) * 0.5 for i in range(11)],
         rebalance_freq=20,
         base_value=100.0,
@@ -43,6 +44,8 @@ def test_build_cycle_chart_payload_keeps_fixed_slots_before_holding_exceeds_peri
     assert payload["slot_count"] == 20
     assert payload["slot_indices"][-1] == 10
     assert payload["x_end_label"] == "20天"
+    assert round(payload["shenzhen_pct"][3], 4) == 2.4
+    assert payload["shenzhen_label"] == "深证"
 
 
 def test_build_cycle_chart_payload_expands_slots_after_holding_exceeds_period():
@@ -51,6 +54,7 @@ def test_build_cycle_chart_payload_expands_slots_after_holding_exceeds_period():
     payload = module._build_cycle_chart_payload(
         dates=[f"202604{day:02d}" for day in range(1, 24)],
         index_pct=[float(i) for i in range(23)],
+        shenzhen_pct=[float(i) * 0.8 for i in range(23)],
         portfolio_pct=[float(i) * 0.5 for i in range(23)],
         rebalance_freq=20,
         base_value=100.0,
@@ -68,28 +72,33 @@ def test_upsert_intraday_chart_uses_fixed_slots_and_replaces_same_slot():
         None,
         datetime(2026, 4, 7, 8, 34, 0),
         index_pct=0.5,
+        shenzhen_pct=0.3,
         portfolio_pct=1.2,
     )
     chart = module._upsert_intraday_chart(
         chart,
         datetime(2026, 4, 7, 8, 39, 0),
         index_pct=0.8,
+        shenzhen_pct=0.6,
         portfolio_pct=1.5,
     )
     chart = module._upsert_intraday_chart(
         chart,
         datetime(2026, 4, 7, 8, 41, 0),
         index_pct=1.1,
+        shenzhen_pct=0.9,
         portfolio_pct=1.8,
     )
 
     assert chart["slot_count"] == module.INTRADAY_SLOT_COUNT
     assert chart["slot_indices"] == [0, 1]
     assert chart["index_pct"] == [0.8, 1.1]
+    assert chart["shenzhen_pct"] == [0.6, 0.9]
     assert chart["portfolio_pct"] == [1.5, 1.8]
     assert chart["x_start_label"] == "08:30"
     assert chart["x_end_label"] == "15:30"
     assert chart["portfolio_label"] == "持仓当日"
+    assert chart["shenzhen_label"] == "深证日内"
 
 
 def test_compute_holdings_intraday_pct_uses_pre_close_weighting():
@@ -122,12 +131,14 @@ def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypa
         None,
         datetime(2026, 4, 7, 9, 0, 0),
         index_pct=0.6,
+        shenzhen_pct=0.4,
         portfolio_pct=1.1,
     )
     chart = module._upsert_intraday_chart(
         chart,
         datetime(2026, 4, 7, 9, 10, 0),
         index_pct=0.9,
+        shenzhen_pct=0.7,
         portfolio_pct=1.3,
     )
 
@@ -138,6 +149,7 @@ def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypa
     assert restored is not None
     assert restored["slot_indices"] == [3, 4]
     assert restored["index_pct"] == [0.6, 0.9]
+    assert restored["shenzhen_pct"] == [0.4, 0.7]
     assert restored["portfolio_pct"] == [1.1, 1.3]
     assert next_day is None
     assert module._get_intraday_chart_state_path("20260407").exists()

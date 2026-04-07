@@ -13,7 +13,7 @@
   顶部状态栏（固定）：更新时间 | 距调仓天数
   数据区（屏保偏移）：
     市值 / 浮盈率 | 总资产 / 总盈亏率 | 持仓 / 年化收益
-  图表区（固定）：持仓周期内上证指数 vs 持仓组合涨跌幅
+    图表区（固定）：持仓周期内上证/深证指数 vs 持仓组合涨跌幅
   底部时间栏（固定）：日期 星期 时间（每秒刷新）
 
 自动息屏：23:00 - 6:00 写入全黑画面
@@ -64,6 +64,7 @@ INTRADAY_SLOT_COUNT = (
     + 1
 )
 SHANGHAI_INDEX_CODE = "000001.SH"
+SHENZHEN_INDEX_CODE = "399001.SZ"
 INTRADAY_CHART_STATE_DIRNAME = "respi_35lcd_intraday"
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -77,11 +78,16 @@ COLOR_LABEL = (140, 140, 160)      # 标签文字（灰色）
 COLOR_GREEN = (50, 205, 50)        # 涨 / 正收益
 COLOR_RED = (220, 50, 50)          # 跌 / 负收益
 COLOR_YELLOW = (255, 200, 50)      # 强调色
+COLOR_ORANGE = (255, 150, 60)      # 橘黄色（持仓折线）
+COLOR_CYAN = (70, 205, 255)        # 青蓝色（深证折线）
 COLOR_DIVIDER = (60, 60, 80)       # 分隔线
 COLOR_CHART_BG = (22, 22, 38)      # 图表背景
 COLOR_CHART_GRID = (45, 45, 65)    # 图表网格线
 COLOR_PANEL_LEFT = (25, 28, 48)    # 左面板背景（偏蓝）
 COLOR_PANEL_RIGHT = (28, 35, 38)   # 右面板背景（偏青）
+COLOR_CHART_SHANGHAI = COLOR_YELLOW
+COLOR_CHART_SHENZHEN = COLOR_CYAN
+COLOR_CHART_HOLDINGS = COLOR_ORANGE
 
 
 # ---------- 字体加载（带缓存）----------
@@ -175,17 +181,19 @@ def _resolve_cycle_slot_count(rebalance_freq: object, point_count: int) -> int:
 def _build_cycle_chart_payload(
     dates: list[str],
     index_pct: list[float],
+    shenzhen_pct: list[float],
     portfolio_pct: list[float],
     rebalance_freq: object,
     base_value: float,
 ) -> Optional[dict]:
     """构建持仓周期图负载，并固定 x 轴槽位。"""
-    point_count = min(len(dates), len(index_pct), len(portfolio_pct))
+    point_count = min(len(dates), len(index_pct), len(shenzhen_pct), len(portfolio_pct))
     if point_count == 0:
         return None
 
     dates = dates[:point_count]
     index_pct = index_pct[:point_count]
+    shenzhen_pct = shenzhen_pct[:point_count]
     portfolio_pct = portfolio_pct[:point_count]
     slot_count = _resolve_cycle_slot_count(rebalance_freq, point_count)
 
@@ -193,12 +201,14 @@ def _build_cycle_chart_payload(
         'mode': 'cycle',
         'dates': dates,
         'index_pct': index_pct,
+        'shenzhen_pct': shenzhen_pct,
         'portfolio_pct': portfolio_pct,
         'slot_indices': list(range(point_count)),
         'slot_count': slot_count,
         'x_start_label': _format_mmdd(dates[0]),
         'x_end_label': f"{slot_count}天" if slot_count > point_count else _format_mmdd(dates[-1]),
         'index_label': '上证',
+        'shenzhen_label': '深证',
         'portfolio_label': '持仓',
         'base_value': base_value,
     }
@@ -219,12 +229,14 @@ def _empty_intraday_chart(trade_date: str) -> dict:
         'trade_date': trade_date,
         'dates': [],
         'index_pct': [],
+        'shenzhen_pct': [],
         'portfolio_pct': [],
         'slot_indices': [],
         'slot_count': INTRADAY_SLOT_COUNT,
         'x_start_label': INTRADAY_WINDOW_START.strftime("%H:%M"),
         'x_end_label': INTRADAY_WINDOW_END.strftime("%H:%M"),
         'index_label': '上证日内',
+        'shenzhen_label': '深证日内',
         'portfolio_label': '持仓当日',
     }
 
@@ -233,6 +245,7 @@ def _upsert_intraday_chart(
     chart_data: Optional[dict],
     point_time: datetime,
     index_pct: float,
+    shenzhen_pct: float,
     portfolio_pct: float,
 ) -> dict:
     """向固定槽位的日内图中追加或覆盖一个采样点。"""
@@ -242,23 +255,34 @@ def _upsert_intraday_chart(
 
     slot_indices = list(chart_data.get('slot_indices', []))
     index_values = list(chart_data.get('index_pct', []))
+    shenzhen_values = list(chart_data.get('shenzhen_pct', []))
     portfolio_values = list(chart_data.get('portfolio_pct', []))
     dates = list(chart_data.get('dates', []))
+    if len(slot_indices) != len(index_values) or len(slot_indices) != len(shenzhen_values) or len(slot_indices) != len(portfolio_values) or len(slot_indices) != len(dates):
+        chart_data = _empty_intraday_chart(trade_date)
+        slot_indices = []
+        index_values = []
+        shenzhen_values = []
+        portfolio_values = []
+        dates = []
     slot_idx = _get_intraday_slot_index(point_time)
     point_label = point_time.strftime("%H:%M")
 
     if slot_indices and slot_idx == slot_indices[-1]:
         index_values[-1] = index_pct
+        shenzhen_values[-1] = shenzhen_pct
         portfolio_values[-1] = portfolio_pct
         dates[-1] = point_label
     elif slot_idx in slot_indices:
         replace_idx = slot_indices.index(slot_idx)
         index_values[replace_idx] = index_pct
+        shenzhen_values[replace_idx] = shenzhen_pct
         portfolio_values[replace_idx] = portfolio_pct
         dates[replace_idx] = point_label
     else:
         slot_indices.append(slot_idx)
         index_values.append(index_pct)
+        shenzhen_values.append(shenzhen_pct)
         portfolio_values.append(portfolio_pct)
         dates.append(point_label)
 
@@ -267,6 +291,7 @@ def _upsert_intraday_chart(
         'trade_date': trade_date,
         'dates': dates,
         'index_pct': index_values,
+        'shenzhen_pct': shenzhen_values,
         'portfolio_pct': portfolio_values,
         'slot_indices': slot_indices,
     }
@@ -296,14 +321,15 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
     normalized = _empty_intraday_chart(payload_trade_date)
     raw_dates = chart_data.get('dates', [])
     raw_index = chart_data.get('index_pct', [])
+    raw_shenzhen = chart_data.get('shenzhen_pct', [])
     raw_portfolio = chart_data.get('portfolio_pct', [])
     raw_slots = chart_data.get('slot_indices', [])
-    if not all(isinstance(items, list) for items in (raw_dates, raw_index, raw_portfolio, raw_slots)):
+    if not all(isinstance(items, list) for items in (raw_dates, raw_index, raw_shenzhen, raw_portfolio, raw_slots)):
         return normalized
 
-    dedup_points: dict[int, tuple[str, float, float]] = {}
-    for label, index_val, portfolio_val, slot_idx in zip(
-        raw_dates, raw_index, raw_portfolio, raw_slots
+    dedup_points: dict[int, tuple[str, float, float, float]] = {}
+    for label, index_val, shenzhen_val, portfolio_val, slot_idx in zip(
+        raw_dates, raw_index, raw_shenzhen, raw_portfolio, raw_slots
     ):
         try:
             slot_int = int(slot_idx)
@@ -312,15 +338,17 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
         if slot_int < 0 or slot_int >= INTRADAY_SLOT_COUNT:
             continue
         index_float = _coerce_float(index_val)
+        shenzhen_float = _coerce_float(shenzhen_val)
         portfolio_float = _coerce_float(portfolio_val)
-        if index_float is None or portfolio_float is None:
+        if index_float is None or shenzhen_float is None or portfolio_float is None:
             continue
-        dedup_points[slot_int] = (str(label), index_float, portfolio_float)
+        dedup_points[slot_int] = (str(label), index_float, shenzhen_float, portfolio_float)
 
     for slot_int in sorted(dedup_points):
-        label, index_float, portfolio_float = dedup_points[slot_int]
+        label, index_float, shenzhen_float, portfolio_float = dedup_points[slot_int]
         normalized['dates'].append(label)
         normalized['index_pct'].append(index_float)
+        normalized['shenzhen_pct'].append(shenzhen_float)
         normalized['portfolio_pct'].append(portfolio_float)
         normalized['slot_indices'].append(slot_int)
 
@@ -541,7 +569,7 @@ def _calc_days_to_rebalance() -> Optional[int]:
 # ---------- 图表数据获取 ----------
 
 def _fetch_cycle_chart_data() -> Optional[dict]:
-    """获取持仓周期内的上证指数和持仓组合涨跌幅数据。
+    """获取持仓周期内的上证/深证指数和持仓组合涨跌幅数据。
 
     基于账户持仓状态 + TuShare daily API 计算每日组合市值，
     不依赖 NAV 记录（NAV 可能不完整）。
@@ -550,6 +578,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         dict: {
             'dates': list[str],          # 交易日期列表
             'index_pct': list[float],    # 上证指数累计涨跌幅(%)
+            'shenzhen_pct': list[float], # 深证指数累计涨跌幅(%)
             'portfolio_pct': list[float] # 持仓组合累计涨跌幅(%)
         }
         None: 数据不可用
@@ -582,16 +611,24 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     try:
         client = TushareClient(verbose=False)
 
-        # 上证指数日线（以此确定交易日序列）
-        index_df = client.query(
-            "index_daily", ts_code="000001.SH",
+        # 上证与深证指数日线（以此确定交易日序列）
+        shanghai_df = client.query(
+            "index_daily", ts_code=SHANGHAI_INDEX_CODE,
             start_date=start_date, end_date=today_str,
             fields="trade_date,close"
         )
-        if index_df is None or index_df.empty:
+        shenzhen_df = client.query(
+            "index_daily", ts_code=SHENZHEN_INDEX_CODE,
+            start_date=start_date, end_date=today_str,
+            fields="trade_date,close"
+        )
+        if shanghai_df is None or shanghai_df.empty or shenzhen_df is None or shenzhen_df.empty:
             return None
-        index_df = index_df.sort_values('trade_date').reset_index(drop=True)
-        trade_dates = index_df['trade_date'].tolist()
+        shanghai_df = shanghai_df.sort_values('trade_date').reset_index(drop=True)
+        shenzhen_df = shenzhen_df.sort_values('trade_date').reset_index(drop=True)
+        shanghai_close_map = dict(zip(shanghai_df['trade_date'], shanghai_df['close']))
+        shenzhen_close_map = dict(zip(shenzhen_df['trade_date'], shenzhen_df['close']))
+        trade_dates = [d for d in shanghai_df['trade_date'].tolist() if d in shenzhen_close_map]
         if len(trade_dates) < 1:
             return None
 
@@ -622,13 +659,16 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
             base_value = total_value
         portfolio_pct.append((total_value / base_value - 1) * 100)
 
-    # 上证指数涨跌幅
-    base_close = index_df.iloc[0]['close']
-    index_pct = ((index_df['close'] / base_close - 1) * 100).tolist()
+    # 上证/深证指数涨跌幅
+    shanghai_base_close = shanghai_close_map[trade_dates[0]]
+    shenzhen_base_close = shenzhen_close_map[trade_dates[0]]
+    index_pct = [(shanghai_close_map[d] / shanghai_base_close - 1) * 100 for d in trade_dates]
+    shenzhen_pct = [(shenzhen_close_map[d] / shenzhen_base_close - 1) * 100 for d in trade_dates]
 
     return _build_cycle_chart_payload(
         dates=trade_dates,
         index_pct=index_pct,
+        shenzhen_pct=shenzhen_pct,
         portfolio_pct=portfolio_pct,
         rebalance_freq=rebalance_freq,
         base_value=base_value,
@@ -716,12 +756,10 @@ def _fetch_stock_rankings() -> Optional[list]:
 
 # ---------- 日内图数据获取 ----------
 
-def _extract_index_pct_from_quote(rt_df) -> Optional[float]:
-    """从实时行情 DataFrame 中提取上证指数当日涨跌幅。"""
-    if rt_df is None or rt_df.empty:
+def _extract_pct_from_quote_row(row) -> Optional[float]:
+    """从单条实时行情记录中提取当日涨跌幅。"""
+    if row is None:
         return None
-
-    row = rt_df.iloc[0]
     price = _coerce_float(row.get('PRICE', row.get('price')))
     pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
     if price is None or pre_close in (None, 0):
@@ -729,18 +767,23 @@ def _extract_index_pct_from_quote(rt_df) -> Optional[float]:
     return (price / pre_close - 1) * 100
 
 
-def _extract_index_pct_from_akshare(df) -> Optional[float]:
-    """从 akshare 指数现货表中提取上证指数当日涨跌幅。"""
+def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
+    """从 akshare 指数现货表中提取指定指数当日涨跌幅。"""
     if df is None or df.empty:
         return None
 
     code_columns = ['代码', 'symbol', 'ts_code']
     matched = None
+    target_aliases = {target_code}
+    if target_code == SHANGHAI_INDEX_CODE:
+        target_aliases.update({'000001', 'sh000001'})
+    elif target_code == SHENZHEN_INDEX_CODE:
+        target_aliases.update({'399001', 'sz399001'})
     for col in code_columns:
         if col not in df.columns:
             continue
         code_series = df[col].astype(str)
-        mask = code_series.isin(['000001', 'sh000001', SHANGHAI_INDEX_CODE])
+        mask = code_series.isin(target_aliases)
         if mask.any():
             matched = df.loc[mask].iloc[0]
             break
@@ -761,16 +804,25 @@ def _extract_index_pct_from_akshare(df) -> Optional[float]:
     return (price / pre_close - 1) * 100
 
 
-def _fetch_realtime_index_pct() -> Optional[float]:
-    """获取上证指数当日实时涨跌幅。"""
+def _fetch_realtime_index_pcts() -> dict[str, float]:
+    """获取上证与深证指数当日实时涨跌幅。"""
     from src.lazybull.data.tushare_client import TushareClient
+
+    pct_map: dict[str, float] = {}
 
     try:
         client = TushareClient(verbose=False)
-        rt_df = client.get_realtime_quote(SHANGHAI_INDEX_CODE)
-        pct = _extract_index_pct_from_quote(rt_df)
-        if pct is not None:
-            return pct
+        rt_df = client.get_realtime_quote(f"{SHANGHAI_INDEX_CODE},{SHENZHEN_INDEX_CODE}")
+        if rt_df is not None and not rt_df.empty:
+            for _, row in rt_df.iterrows():
+                ts_code = str(row.get('TS_CODE', row.get('ts_code', '')))
+                if ts_code not in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
+                    continue
+                pct = _extract_pct_from_quote_row(row)
+                if pct is not None:
+                    pct_map[ts_code] = pct
+        if len(pct_map) == 2:
+            return pct_map
     except Exception:
         pass
 
@@ -781,13 +833,19 @@ def _fetch_realtime_index_pct() -> Optional[float]:
             getter = getattr(ak, getter_name, None)
             if getter is None:
                 continue
-            pct = _extract_index_pct_from_akshare(getter())
-            if pct is not None:
-                return pct
+            df = getter()
+            for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
+                if code in pct_map:
+                    continue
+                pct = _extract_index_pct_from_akshare(df, code)
+                if pct is not None:
+                    pct_map[code] = pct
+            if len(pct_map) == 2:
+                break
     except Exception:
         pass
 
-    return None
+    return pct_map
 
 
 def _compute_holdings_intraday_pct(snapshot: Optional[dict]) -> Optional[float]:
@@ -833,17 +891,25 @@ def _build_intraday_chart(
     snapshot: Optional[dict],
     point_time: Optional[datetime] = None,
 ) -> Optional[dict]:
-    """基于上证实时涨跌与持仓股当日实时涨跌构建盘中图。"""
+    """基于上证/深证实时涨跌与持仓股当日实时涨跌构建盘中图。"""
     if snapshot is None:
         return chart_data
 
-    index_pct = _fetch_realtime_index_pct()
+    index_pct_map = _fetch_realtime_index_pcts()
     holdings_pct = _compute_holdings_intraday_pct(snapshot)
-    if index_pct is None or holdings_pct is None:
+    shanghai_pct = index_pct_map.get(SHANGHAI_INDEX_CODE)
+    shenzhen_pct = index_pct_map.get(SHENZHEN_INDEX_CODE)
+    if shanghai_pct is None or shenzhen_pct is None or holdings_pct is None:
         return chart_data
 
     current_time = point_time or datetime.now()
-    return _upsert_intraday_chart(chart_data, current_time, index_pct, holdings_pct)
+    return _upsert_intraday_chart(
+        chart_data,
+        current_time,
+        shanghai_pct,
+        shenzhen_pct,
+        holdings_pct,
+    )
 
 
 # ---------- 共享显示状态 ----------
@@ -1058,9 +1124,10 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
 
     dates = list(chart_data.get('dates', []))
     idx_pct = list(chart_data.get('index_pct', []))
+    sz_pct = list(chart_data.get('shenzhen_pct', []))
     ptf_pct = list(chart_data.get('portfolio_pct', []))
     slot_indices = list(chart_data.get('slot_indices', range(len(idx_pct))))
-    n = min(len(dates), len(idx_pct), len(ptf_pct), len(slot_indices))
+    n = min(len(dates), len(idx_pct), len(sz_pct), len(ptf_pct), len(slot_indices))
     if n == 0:
         txt = "暂无图表数据"
         bbox = draw.textbbox((0, 0), txt, font=_get_font(14))
@@ -1071,12 +1138,13 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
 
     dates = dates[:n]
     idx_pct = idx_pct[:n]
+    sz_pct = sz_pct[:n]
     ptf_pct = ptf_pct[:n]
     slot_indices = slot_indices[:n]
     slot_count = max(int(chart_data.get('slot_count', n)), 2)
 
     # Y轴范围
-    all_vals = idx_pct + ptf_pct
+    all_vals = idx_pct + sz_pct + ptf_pct
     y_min = min(all_vals)
     y_max = max(all_vals)
     y_margin = max((y_max - y_min) * 0.15, 0.5)
@@ -1127,18 +1195,24 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
         return pts
 
     idx_pts = _to_points(idx_pct)
+    sz_pts = _to_points(sz_pct)
     ptf_pts = _to_points(ptf_pct)
 
     for i in range(n - 1):
-        draw.line([idx_pts[i], idx_pts[i + 1]], fill=COLOR_YELLOW, width=2)
+        draw.line([idx_pts[i], idx_pts[i + 1]], fill=COLOR_CHART_SHANGHAI, width=2)
     for i in range(n - 1):
-        draw.line([ptf_pts[i], ptf_pts[i + 1]], fill=COLOR_GREEN, width=2)
+        draw.line([sz_pts[i], sz_pts[i + 1]], fill=COLOR_CHART_SHENZHEN, width=2)
+    for i in range(n - 1):
+        draw.line([ptf_pts[i], ptf_pts[i + 1]], fill=COLOR_CHART_HOLDINGS, width=2)
     if idx_pts:
         px, py = idx_pts[-1]
-        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_YELLOW)
+        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_CHART_SHANGHAI)
+    if sz_pts:
+        px, py = sz_pts[-1]
+        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_CHART_SHENZHEN)
     if ptf_pts:
         px, py = ptf_pts[-1]
-        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_GREEN)
+        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_CHART_HOLDINGS)
 
     # 图例 + 末尾数值
     def _draw_legend_item(x: int, label: str, color: tuple, value: str) -> int:
@@ -1154,17 +1228,24 @@ def _draw_chart(draw: ImageDraw.ImageDraw, chart_data: Optional[dict]) -> None:
     lx = cx + 6
     ly = CHART_Y + 2
     idx_last_str = f"{idx_pct[-1]:+.1f}%"
+    sz_last_str = f"{sz_pct[-1]:+.1f}%"
     ptf_last_str = f"{ptf_pct[-1]:+.1f}%"
     legend_x = _draw_legend_item(
         lx,
         chart_data.get('index_label', '上证'),
-        COLOR_YELLOW,
+        COLOR_CHART_SHANGHAI,
         idx_last_str,
+    )
+    legend_x = _draw_legend_item(
+        legend_x,
+        chart_data.get('shenzhen_label', '深证'),
+        COLOR_CHART_SHENZHEN,
+        sz_last_str,
     )
     _draw_legend_item(
         legend_x,
         chart_data.get('portfolio_label', '持仓'),
-        COLOR_GREEN,
+        COLOR_CHART_HOLDINGS,
         ptf_last_str,
     )
 
