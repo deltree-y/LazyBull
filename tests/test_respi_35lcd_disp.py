@@ -27,6 +27,19 @@ def test_format_display_time_uses_new_chinese_style():
 
     assert formatted == "4月7日(周二) 14:40:32"
 
+def test_format_error_lines_truncates_message_for_screen():
+    module = _load_module()
+
+    lines = module._format_error_lines(
+        "RuntimeError: something went wrong while rendering the lcd framebuffer",
+        line_width=12,
+        max_lines=3,
+    )
+
+    assert len(lines) == 3
+    assert lines[0] == "RuntimeError"
+    assert lines[-1].endswith("…")
+
 
 def test_build_cycle_chart_payload_keeps_fixed_slots_before_holding_exceeds_period():
     module = _load_module()

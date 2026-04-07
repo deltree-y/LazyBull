@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.45.3] - 2026-04-07
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 显示线程异常时静默黑屏**：
+  - `scripts/respi/3.5LCD_disp.py` 的显示线程原先若在 `_render()` 内抛异常，会直接停止刷新，现场表现为“执行后没反应、屏幕没有任何内容”。
+  - 修复后显示线程会捕获异常，并把 `LCD显示异常` 和异常摘要直接画到屏幕上，同时向终端输出简短错误信息，避免无提示黑屏。
+- **回测信号生成时排除已持仓股票，避免槽位被"重复买入"浪费**：
+  - `src/lazybull/backtest/engine.py` 中原本仅在 `stagger_tranches > 1`（分批调仓）时排除已持仓股票。
+  - 在"空仓/持有期拖尾提前调仓"场景下，残留持仓未到期，信号仍会选中它们，T+1 买入时被 `_buy_stock_direct` 的"已在持仓中"分支跳过，导致槽位浪费、实际持仓数低于目标。
+  - 修复后无条件从候选中排除 `self.positions` 里的股票，让后续候选顶上空出的槽位；常规 `rebalance_freq == holding_period` 场景等效于"先卖后买"的结果，不影响正常换手逻辑。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增错误消息裁剪格式测试。
+
 ## [0.45.2] - 2026-04-07
 
 ### 修复

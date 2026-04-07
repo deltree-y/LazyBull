@@ -1026,9 +1026,13 @@ class BacktestEngine:
         # 扩展点：子类可覆盖此方法对候选列表做额外过滤
         ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
 
-        # 分批调仓时，排除已持仓的股票，避免不同 tranche 选到重复股票浪费预算
-        # stagger_tranches=1 时不需要：rebalance_freq == holding_period，旧持仓在 T+1 先卖后买
-        if self.stagger_tranches > 1 and self.positions:
+        # 排除已持仓的股票，避免信号中出现 T+1 仍在持仓的股票，导致买入被"已在持仓中"跳过、
+        # 浪费槽位。适用于：
+        # 1) 分批调仓（stagger_tranches>1），避免不同 tranche 选到重复股票浪费预算
+        # 2) 持有期拖尾/空仓提前调仓场景：残留持仓未到期时，若不过滤会导致信号命中重复买入分支
+        # 3) 常规 rebalance_freq == holding_period 场景：旧持仓在 T+1 到期卖出，T0 时排除也无害
+        #    （排除后的槽位由后续候选顶上，等效于"先卖后买"的结果）
+        if self.positions:
             existing_positions = set(self.positions.keys())
             ranked_candidates_for_selection = [
                 (stock, score)

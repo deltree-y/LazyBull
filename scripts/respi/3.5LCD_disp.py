@@ -166,6 +166,24 @@ def _format_display_time(now: datetime) -> str:
     """格式化顶部显示时间，如 4月7日(周二) 14:40:32。"""
     weekday = WEEKDAY_NAMES[now.weekday()]
     return f"{now.month}月{now.day}日({weekday}) {now:%H:%M:%S}"
+    
+def _format_error_lines(
+    message: str, line_width: int = 26, max_lines: int = 4
+) -> list[str]:
+    """将错误消息裁剪成适合屏幕显示的多行文本。"""
+    text = (message or "未知异常").replace("\n", " ").strip()
+    if not text:
+        text = "未知异常"
+
+    lines = []
+    remain = text
+    while remain and len(lines) < max_lines:
+        lines.append(remain[:line_width])
+        remain = remain[line_width:]
+
+    if remain and lines:
+        lines[-1] = lines[-1][:-1] + "…"
+    return lines
 
 
 def _resolve_cycle_slot_count(rebalance_freq: object, point_count: int) -> int:
@@ -574,6 +592,22 @@ def _write_fb(img: Image.Image) -> None:
 def _clear_screen() -> None:
     """写入全黑画面（息屏用）。"""
     img = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+    _write_fb(img)
+    
+def _render_error_screen(message: str) -> None:
+    """在屏幕上直接显示异常信息，避免无提示黑屏。"""
+    img = Image.new("RGB", (WIDTH, HEIGHT), (28, 12, 12))
+    draw = ImageDraw.Draw(img)
+    font_title = _get_font(22)
+    font_body = _get_font(16)
+    font_time = _get_font(12)
+
+    draw.text((12, 14), "LCD显示异常", fill=(255, 130, 130), font=font_title)
+    y = 54
+    for line in _format_error_lines(message):
+        draw.text((12, y), line, fill=COLOR_TEXT, font=font_body)
+        y += 24
+    draw.text((12, HEIGHT - 22), datetime.now().strftime("%H:%M:%S"), fill=COLOR_LABEL, font=font_time)
     _write_fb(img)
 
 
@@ -1422,34 +1456,39 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
     last_offset_time = 0.0
 
     while not stop_event.is_set():
-        hour = datetime.now().hour
+        try:
+            hour = datetime.now().hour
 
-        # ---- 息屏逻辑（23:00 - 6:00）----
-        if hour >= 23 or hour < 6:
-            if state.is_screen_on:
-                _clear_screen()
-                _set_backlight(0)
-                state.is_screen_on = False
-            stop_event.wait(10)
-            continue
+            # ---- 息屏逻辑（23:00 - 6:00）----
+            if hour >= 23 or hour < 6:
+                if state.is_screen_on:
+                    _clear_screen()
+                    _set_backlight(0)
+                    state.is_screen_on = False
+                stop_event.wait(10)
+                continue
 
-        if not state.is_screen_on:
-            _set_backlight(BACKLIGHT_BRIGHTNESS)
-            state.is_screen_on = True
+            if not state.is_screen_on:
+                _set_backlight(BACKLIGHT_BRIGHTNESS)
+                state.is_screen_on = True
 
-        # ---- 屏保：每分钟随机偏移数据区 ----
-        now_ts = time.monotonic()
-        if now_ts - last_offset_time >= SCREENSAVER_INTERVAL:
-            with state.lock:
-                state.offset_x = random.randint(-SCREENSAVER_RANGE_X, SCREENSAVER_RANGE_X)
-                state.offset_y = random.randint(-SCREENSAVER_RANGE_Y, SCREENSAVER_RANGE_Y)
-            last_offset_time = now_ts
+            # ---- 屏保：每分钟随机偏移数据区 ----
+            now_ts = time.monotonic()
+            if now_ts - last_offset_time >= SCREENSAVER_INTERVAL:
+                with state.lock:
+                    state.offset_x = random.randint(-SCREENSAVER_RANGE_X, SCREENSAVER_RANGE_X)
+                    state.offset_y = random.randint(-SCREENSAVER_RANGE_Y, SCREENSAVER_RANGE_Y)
+                last_offset_time = now_ts
 
-        # ---- 渲染（含实时时间）----
-        _render(state)
+            # ---- 渲染（含实时时间）----
+            _render(state)
 
-        # ---- 每秒刷新 ----
-        stop_event.wait(1)
+            # ---- 每秒刷新 ----
+            stop_event.wait(1)
+        except Exception as exc:
+            _render_error_screen(f"{type(exc).__name__}: {exc}")
+            print(f"[3.5LCD_disp] 渲染异常: {type(exc).__name__}: {exc}", file=sys.stderr)
+            stop_event.wait(2)
 
 
 # ---------- 入口 ----------
