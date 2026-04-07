@@ -1,6 +1,9 @@
 import importlib.util
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+
+import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -86,6 +89,58 @@ def test_upsert_intraday_chart_uses_fixed_slots_and_replaces_same_slot():
     assert chart["portfolio_pct"] == [1.5, 1.8]
     assert chart["x_start_label"] == "08:30"
     assert chart["x_end_label"] == "15:30"
+    assert chart["portfolio_label"] == "持仓当日"
+
+
+def test_compute_holdings_intraday_pct_uses_pre_close_weighting():
+    module = _load_module()
+
+    snapshot = {
+        "positions": {
+            "000001.SZ": SimpleNamespace(shares=100),
+            "000002.SZ": SimpleNamespace(shares=200),
+        },
+        "quotes": pd.DataFrame(
+            [
+                {"TS_CODE": "000001.SZ", "PRICE": 11.0, "PRE_CLOSE": 10.0},
+                {"TS_CODE": "000002.SZ", "PRICE": 18.0, "PRE_CLOSE": 20.0},
+            ]
+        ),
+    }
+
+    pct = module._compute_holdings_intraday_pct(snapshot)
+
+    assert pct is not None
+    assert round(pct, 4) == round(((11.0 * 100 + 18.0 * 200) / (10.0 * 100 + 20.0 * 200) - 1) * 100, 4)
+
+
+def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "project_root", tmp_path)
+
+    chart = module._upsert_intraday_chart(
+        None,
+        datetime(2026, 4, 7, 9, 0, 0),
+        index_pct=0.6,
+        portfolio_pct=1.1,
+    )
+    chart = module._upsert_intraday_chart(
+        chart,
+        datetime(2026, 4, 7, 9, 10, 0),
+        index_pct=0.9,
+        portfolio_pct=1.3,
+    )
+
+    module._save_intraday_chart(chart)
+    restored = module._load_intraday_chart(now=datetime(2026, 4, 7, 14, 0, 0))
+    next_day = module._load_intraday_chart(now=datetime(2026, 4, 8, 9, 30, 0))
+
+    assert restored is not None
+    assert restored["slot_indices"] == [3, 4]
+    assert restored["index_pct"] == [0.6, 0.9]
+    assert restored["portfolio_pct"] == [1.1, 1.3]
+    assert next_day is None
+    assert module._get_intraday_chart_state_path("20260407").exists()
 
 
 def test_select_chart_data_switches_by_intraday_window(monkeypatch):

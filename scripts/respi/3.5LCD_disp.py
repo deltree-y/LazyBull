@@ -24,6 +24,7 @@ import time
 import signal
 import random
 import threading
+import json
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
@@ -63,6 +64,7 @@ INTRADAY_SLOT_COUNT = (
     + 1
 )
 SHANGHAI_INDEX_CODE = "000001.SH"
+INTRADAY_CHART_STATE_DIRNAME = "respi_35lcd_intraday"
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -223,7 +225,7 @@ def _empty_intraday_chart(trade_date: str) -> dict:
         'x_start_label': INTRADAY_WINDOW_START.strftime("%H:%M"),
         'x_end_label': INTRADAY_WINDOW_END.strftime("%H:%M"),
         'index_label': '上证日内',
-        'portfolio_label': '持仓周期',
+        'portfolio_label': '持仓当日',
     }
 
 
@@ -268,6 +270,93 @@ def _upsert_intraday_chart(
         'portfolio_pct': portfolio_values,
         'slot_indices': slot_indices,
     }
+
+
+def _get_intraday_chart_state_dir() -> Path:
+    """返回 3.5 寸 LCD 日内图持久化目录。"""
+    return project_root / "data" / "paper" / "state" / INTRADAY_CHART_STATE_DIRNAME
+
+
+def _get_intraday_chart_state_path(trade_date: str) -> Path:
+    """返回指定交易日的日内图持久化文件路径。"""
+    return _get_intraday_chart_state_dir() / f"{trade_date}.json"
+
+
+def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = None) -> Optional[dict]:
+    """规范化日内图持久化数据。"""
+    if not isinstance(chart_data, dict):
+        return None
+
+    payload_trade_date = str(chart_data.get('trade_date', ''))
+    if not payload_trade_date:
+        return None
+    if trade_date is not None and payload_trade_date != trade_date:
+        return None
+
+    normalized = _empty_intraday_chart(payload_trade_date)
+    raw_dates = chart_data.get('dates', [])
+    raw_index = chart_data.get('index_pct', [])
+    raw_portfolio = chart_data.get('portfolio_pct', [])
+    raw_slots = chart_data.get('slot_indices', [])
+    if not all(isinstance(items, list) for items in (raw_dates, raw_index, raw_portfolio, raw_slots)):
+        return normalized
+
+    dedup_points: dict[int, tuple[str, float, float]] = {}
+    for label, index_val, portfolio_val, slot_idx in zip(
+        raw_dates, raw_index, raw_portfolio, raw_slots
+    ):
+        try:
+            slot_int = int(slot_idx)
+        except (TypeError, ValueError):
+            continue
+        if slot_int < 0 or slot_int >= INTRADAY_SLOT_COUNT:
+            continue
+        index_float = _coerce_float(index_val)
+        portfolio_float = _coerce_float(portfolio_val)
+        if index_float is None or portfolio_float is None:
+            continue
+        dedup_points[slot_int] = (str(label), index_float, portfolio_float)
+
+    for slot_int in sorted(dedup_points):
+        label, index_float, portfolio_float = dedup_points[slot_int]
+        normalized['dates'].append(label)
+        normalized['index_pct'].append(index_float)
+        normalized['portfolio_pct'].append(portfolio_float)
+        normalized['slot_indices'].append(slot_int)
+
+    return normalized
+
+
+def _save_intraday_chart(chart_data: Optional[dict]) -> None:
+    """将当日日内图历史点持久化到 data/paper/state。"""
+    normalized = _normalize_intraday_chart(chart_data)
+    if normalized is None:
+        return
+
+    state_dir = _get_intraday_chart_state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    file_path = _get_intraday_chart_state_path(normalized['trade_date'])
+    tmp_path = file_path.with_suffix(".json.tmp")
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(normalized, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(file_path)
+
+
+def _load_intraday_chart(now: Optional[datetime] = None) -> Optional[dict]:
+    """读取当日日内图历史点，脚本重启后可续接。"""
+    current_dt = now or datetime.now()
+    trade_date = current_dt.strftime("%Y%m%d")
+    file_path = _get_intraday_chart_state_path(trade_date)
+    if not file_path.exists():
+        return None
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    return _normalize_intraday_chart(payload, trade_date=trade_date)
 
 
 @lru_cache(maxsize=1)
@@ -548,16 +637,8 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
 # ---------- 个股盈亏排名 ----------
 
-def _fetch_stock_rankings() -> Optional[list]:
-    """获取个股盈亏排名（盈利前2 + 亏损前2）。
-
-    Returns:
-        list[dict]: 按盈亏排序的个股列表，每项包含:
-            name: str       - 股票名称
-            code: str       - 6位股票代码
-            pnl_pct: float  - 盈亏比率(%)
-        None: 数据不可用
-    """
+def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
+    """获取当前持仓实时行情快照。"""
     from src.lazybull.paper import PaperStorage
     from src.lazybull.data.tushare_client import TushareClient
 
@@ -577,6 +658,22 @@ def _fetch_stock_rankings() -> Optional[list]:
     except Exception:
         return None
 
+    if rt_df is None or rt_df.empty:
+        return None
+
+    return {
+        'positions': positions,
+        'quotes': rt_df,
+    }
+
+
+def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
+    """基于实时快照构建个股总盈亏排名（按持仓成本）。"""
+    if snapshot is None:
+        return None
+
+    positions = snapshot.get('positions', {})
+    rt_df = snapshot.get('quotes')
     if rt_df is None or rt_df.empty:
         return None
 
@@ -602,6 +699,19 @@ def _fetch_stock_rankings() -> Optional[list]:
 
     stocks.sort(key=lambda x: x['pnl_pct'], reverse=True)
     return stocks
+
+
+def _fetch_stock_rankings() -> Optional[list]:
+    """获取个股盈亏排名（盈利前2 + 亏损前2）。
+
+    Returns:
+        list[dict]: 按盈亏排序的个股列表，每项包含:
+            name: str       - 股票名称
+            code: str       - 6位股票代码
+            pnl_pct: float  - 盈亏比率(%)
+        None: 数据不可用
+    """
+    return _build_stock_rankings(_fetch_realtime_holdings_snapshot())
 
 
 # ---------- 日内图数据获取 ----------
@@ -680,28 +790,60 @@ def _fetch_realtime_index_pct() -> Optional[float]:
     return None
 
 
+def _compute_holdings_intraday_pct(snapshot: Optional[dict]) -> Optional[float]:
+    """计算当前持仓股票相对昨收的实时涨跌幅（不含现金）。"""
+    if snapshot is None:
+        return None
+
+    positions = snapshot.get('positions', {})
+    rt_df = snapshot.get('quotes')
+    if rt_df is None or rt_df.empty or not positions:
+        return None
+
+    quote_map = {}
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('TS_CODE', ''))
+        if ts_code:
+            quote_map[ts_code] = row
+
+    current_value = 0.0
+    prev_close_value = 0.0
+    valid_count = 0
+    for ts_code, pos in positions.items():
+        row = quote_map.get(ts_code)
+        if row is None:
+            continue
+        current_price = _coerce_float(row.get('PRICE', row.get('price')))
+        pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
+        if pre_close in (None, 0):
+            continue
+        if current_price is None:
+            current_price = pre_close
+        current_value += current_price * pos.shares
+        prev_close_value += pre_close * pos.shares
+        valid_count += 1
+
+    if valid_count == 0 or prev_close_value <= 0:
+        return None
+    return (current_value / prev_close_value - 1) * 100
+
+
 def _build_intraday_chart(
     chart_data: Optional[dict],
-    summary: Optional[dict],
-    cycle_chart_data: Optional[dict],
+    snapshot: Optional[dict],
     point_time: Optional[datetime] = None,
 ) -> Optional[dict]:
-    """基于当前总资产与上证实时涨跌幅构建盘中图。"""
-    if summary is None or cycle_chart_data is None:
-        return chart_data
-
-    total_assets = _coerce_float(summary.get('total_assets'))
-    base_value = _coerce_float(cycle_chart_data.get('base_value'))
-    if total_assets is None or base_value in (None, 0):
+    """基于上证实时涨跌与持仓股当日实时涨跌构建盘中图。"""
+    if snapshot is None:
         return chart_data
 
     index_pct = _fetch_realtime_index_pct()
-    if index_pct is None:
+    holdings_pct = _compute_holdings_intraday_pct(snapshot)
+    if index_pct is None or holdings_pct is None:
         return chart_data
 
     current_time = point_time or datetime.now()
-    portfolio_pct = (total_assets / base_value - 1) * 100
-    return _upsert_intraday_chart(chart_data, current_time, index_pct, portfolio_pct)
+    return _upsert_intraday_chart(chart_data, current_time, index_pct, holdings_pct)
 
 
 # ---------- 共享显示状态 ----------
@@ -715,7 +857,7 @@ class DisplayState:
         self.update_time: str = "--:--"
         self.days_to_rebalance: Optional[int] = None
         self.chart_data: Optional[dict] = None
-        self.intraday_chart_data: Optional[dict] = None
+        self.intraday_chart_data: Optional[dict] = _load_intraday_chart()
         self.stock_rankings: Optional[list] = None  # 个股盈亏排名
         # 屏保偏移（仅数据行参与）
         self.offset_x: int = 0
@@ -1049,6 +1191,7 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         """获取行情、调仓天数、图表数据和个股排名，更新共享状态。"""
         summary = None
         cycle_chart_data = None
+        holdings_snapshot = None
 
         try:
             summary = get_realtime_portfolio_summary()
@@ -1075,23 +1218,28 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         except Exception:
             pass
 
-        if _is_intraday_chart_window() and summary is not None and cycle_chart_data is not None:
+        try:
+            holdings_snapshot = _fetch_realtime_holdings_snapshot()
+        except Exception:
+            holdings_snapshot = None
+
+        if _is_intraday_chart_window() and holdings_snapshot is not None:
             try:
                 with state.lock:
                     current_intraday_chart = state.intraday_chart_data
                 intraday_chart_data = _build_intraday_chart(
                     current_intraday_chart,
-                    summary,
-                    cycle_chart_data,
+                    holdings_snapshot,
                 )
                 if intraday_chart_data is not None:
                     with state.lock:
                         state.intraday_chart_data = intraday_chart_data
+                    _save_intraday_chart(intraday_chart_data)
             except Exception:
                 pass
 
         try:
-            ranks = _fetch_stock_rankings()
+            ranks = _build_stock_rankings(holdings_snapshot)
             if ranks is not None:
                 with state.lock:
                     state.stock_rankings = ranks
