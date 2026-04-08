@@ -43,6 +43,16 @@ class TradingConfig:
     signal_gate_dynamic_topn: bool = False  # 是否启用动态 Top-N（按置信度调整选股数量）
     signal_gate_topn_high_multiplier: float = 0.6  # 高置信度时缩减选股数量的系数（<1，集中持股）
     signal_gate_topn_low_multiplier: float = 1.5  # 低置信度时扩大选股数量的系数（>1，分散持股）
+
+    # ── 换手率约束（持仓保留奖励）──
+    holding_bonus_enabled: bool = False  # 是否启用持仓保留奖励（降低换手率）
+    holding_bonus_sigma: float = 0.5  # 保留奖励幅度（截面分数标准差的倍数）
+
+    # ── 市场自适应 Top-N ──
+    market_adaptive_topn_enabled: bool = False  # 是否启用市场状态自适应选股数量
+    market_adaptive_topn_bull_factor: float = 0.7  # 趋势向上时集中系数（<1）
+    market_adaptive_topn_bear_factor: float = 1.5  # 趋势向下/震荡时分散系数（>1）
+
     rebalance_freq: Optional[int] = 20
     stagger_tranches: int = 1
     max_per_industry: Optional[int] = None
@@ -267,6 +277,40 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=float,
         default=1.5,
         help="动态Top-N低置信度扩大系数（默认：1.5，即top_n×1.5）",
+    )
+
+    # ── 换手率约束（持仓保留奖励）──
+    parser.add_argument(
+        "--holding-bonus-enabled",
+        action="store_true",
+        default=False,
+        help="启用持仓保留奖励：对已持仓股票给予分数加成，降低不必要换手",
+    )
+    parser.add_argument(
+        "--holding-bonus-sigma",
+        type=float,
+        default=0.5,
+        help="持仓保留奖励幅度，截面分数标准差的倍数（默认：0.5）",
+    )
+
+    # ── 市场自适应 Top-N ──
+    parser.add_argument(
+        "--market-adaptive-topn-enabled",
+        action="store_true",
+        default=False,
+        help="启用市场状态自适应选股数量：趋势市集中、震荡市分散",
+    )
+    parser.add_argument(
+        "--market-adaptive-topn-bull-factor",
+        type=float,
+        default=0.7,
+        help="趋势向上时集中系数（默认：0.7，即top_n×0.7）",
+    )
+    parser.add_argument(
+        "--market-adaptive-topn-bear-factor",
+        type=float,
+        default=1.5,
+        help="趋势向下/震荡时分散系数（默认：1.5，即top_n×1.5）",
     )
 
     parser.add_argument(

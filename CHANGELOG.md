@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.46.1] - 2026-04-08
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 日内图异常点过滤**：`scripts/respi/3.5LCD_disp.py` 在计算日内持仓收益时，遇到 `PRICE<=0` 或明显异常实时价会回退到昨收；指数与持仓的异常涨跌幅不会再写入日内图，避免单个坏点把整张图压扁。
+- **树莓派 3.5 寸 LCD 日内历史脏点清洗**：加载当天 `data/paper/state/respi_35lcd_intraday/YYYYMMDD.json` 时会过滤异常百分比点，已经持久化的坏数据不会继续影响当天图表缩放。
+- **树莓派 3.5 寸 LCD 顶部图例拥挤**：日内图例改为短标签 `上证 / 深证 / 持仓`，并且日内模式不再显示 `周期图最后数据日` 角标，避免顶部文字重叠。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增 0 价回退、历史异常点清洗、日内隐藏周期角标测试，并同步当前 LCD 布局常量断言。
+
+## [0.46.0] - 2026-04-07
+
+### 新增
+
+- **持仓保留奖励（Holding Bonus）**：调仓时对已持仓股票在截面分数上加分（bonus = sigma × 截面std），降低不必要的换手。保留的持仓自动延续持有期，不产生交易成本。通过 `--holding-bonus-enabled` / `--holding-bonus-sigma` 控制。
+- **市场自适应 Top-N（Market Adaptive Top-N）**：根据 `mkt_ret_avg_20` 判断市场趋势，牛市缩减选股数量（集中持股），熊市扩大选股数量（分散持股）。通过 `--market-adaptive-topn-enabled` / `--market-adaptive-topn-bull-factor` / `--market-adaptive-topn-bear-factor` 控制。
+- **TradingConfig**：新增 5 个参数字段 `holding_bonus_enabled/sigma`、`market_adaptive_topn_enabled/bull_factor/bear_factor`，并注册对应 CLI 参数。
+- **batch_walk_forward.ps1**：新增两组开关变量，可独立控制持仓奖励和市场自适应 Top-N。
+- **run_ml_backtest.py**：支持传递持仓奖励和市场自适应 Top-N 参数到 BacktestEngineML。
+
+### 测试
+
+- 新增 `tests/test_holding_bonus_and_adaptive_topn.py`（21 个测试用例），覆盖持仓奖励加分/延续、市场自适应因子计算（牛市/熊市/缺失/NaN）、组合功能集成、TradingConfig 默认值。
+
 ## [0.45.7] - 2026-04-07
 
 ### 优化

@@ -75,9 +75,9 @@ def test_layout_constants_use_taller_header_and_narrower_left_panel():
     module = _load_module()
 
     assert module.HEADER_H == 34
-    assert module.HEADER_TIME_FONT_SIZE > module.HEADER_META_FONT_SIZE
+    assert module.HEADER_TIME_FONT_SIZE >= module.HEADER_META_FONT_SIZE
     assert module.PANEL_TOP == module.HEADER_H + 4
-    assert module.LEFT_W == int(module.PANEL_AREA_W * 0.55)
+    assert module.LEFT_W == int(module.PANEL_AREA_W * 0.575)
     assert module.RIGHT_W == module.PANEL_AREA_W - module.LEFT_W - module.PANEL_GAP
 
 
@@ -163,8 +163,8 @@ def test_upsert_intraday_chart_uses_fixed_slots_and_replaces_same_slot():
     assert chart["portfolio_pct"] == [1.5, 1.8]
     assert chart["x_start_label"] == "08:30"
     assert chart["x_end_label"] == "15:30"
-    assert chart["portfolio_label"] == "持仓当日"
-    assert chart["shenzhen_label"] == "深证日内"
+    assert chart["portfolio_label"] == "持仓"
+    assert chart["shenzhen_label"] == "深证"
 
 
 def test_compute_holdings_intraday_pct_uses_pre_close_weighting():
@@ -187,6 +187,50 @@ def test_compute_holdings_intraday_pct_uses_pre_close_weighting():
 
     assert pct is not None
     assert round(pct, 4) == round(((11.0 * 100 + 18.0 * 200) / (10.0 * 100 + 20.0 * 200) - 1) * 100, 4)
+
+
+def test_compute_holdings_intraday_pct_falls_back_to_pre_close_for_invalid_price():
+    module = _load_module()
+
+    snapshot = {
+        "positions": {
+            "000001.SZ": SimpleNamespace(shares=100),
+            "000002.SZ": SimpleNamespace(shares=100),
+        },
+        "quotes": pd.DataFrame(
+            [
+                {"TS_CODE": "000001.SZ", "PRICE": 0.0, "PRE_CLOSE": 10.0},
+                {"TS_CODE": "000002.SZ", "PRICE": 22.0, "PRE_CLOSE": 20.0},
+            ]
+        ),
+    }
+
+    pct = module._compute_holdings_intraday_pct(snapshot)
+
+    assert pct is not None
+    assert round(pct, 4) == round(((10.0 * 100 + 22.0 * 100) / (10.0 * 100 + 20.0 * 100) - 1) * 100, 4)
+
+
+def test_normalize_intraday_chart_drops_abnormal_points():
+    module = _load_module()
+
+    normalized = module._normalize_intraday_chart(
+        {
+            "trade_date": "20260407",
+            "dates": ["09:00", "09:10", "09:20"],
+            "index_pct": [0.6, 99.0, 0.8],
+            "shenzhen_pct": [0.4, 0.5, 0.6],
+            "portfolio_pct": [1.1, 1.2, -80.0],
+            "slot_indices": [3, 4, 5],
+        }
+    )
+
+    assert normalized is not None
+    assert normalized["slot_indices"] == [3]
+    assert normalized["dates"] == ["09:00"]
+    assert normalized["index_pct"] == [0.6]
+    assert normalized["shenzhen_pct"] == [0.4]
+    assert normalized["portfolio_pct"] == [1.1]
 
 
 def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypatch):
@@ -243,6 +287,44 @@ def test_format_cycle_last_data_label_uses_last_cycle_date():
     )
 
     assert label == "周期图最后数据日:04/07"
+
+
+def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
+    module = _load_module()
+    captured = {}
+    intraday_chart = module._upsert_intraday_chart(
+        None,
+        datetime(2026, 4, 7, 9, 0, 0),
+        index_pct=0.5,
+        shenzhen_pct=0.3,
+        portfolio_pct=0.8,
+    )
+    state = SimpleNamespace(
+        lock=module.threading.Lock(),
+        summary=None,
+        update_time="14:40",
+        days_to_rebalance=1,
+        chart_data={"mode": "cycle", "dates": ["20260401", "20260407"]},
+        intraday_chart_data=intraday_chart,
+        stock_rankings=None,
+        offset_x=0,
+        offset_y=0,
+    )
+
+    monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: intraday)
+    monkeypatch.setattr(module, "_format_cycle_last_data_label", lambda chart: "周期图最后数据日:04/07")
+    monkeypatch.setattr(
+        module,
+        "_draw_chart",
+        lambda draw, chart_data, cycle_last_data_label=None: captured.update(
+            {"mode": chart_data.get("mode"), "label": cycle_last_data_label}
+        ),
+    )
+    monkeypatch.setattr(module, "_write_fb", lambda img: None)
+
+    module._render(state)
+
+    assert captured == {"mode": "intraday", "label": None}
 
 
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):

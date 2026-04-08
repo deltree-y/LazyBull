@@ -64,6 +64,9 @@ INTRADAY_SLOT_COUNT = (
     // INTRADAY_SLOT_MINUTES
     + 1
 )
+INTRADAY_INDEX_PCT_ABS_LIMIT = 20.0
+INTRADAY_PORTFOLIO_PCT_ABS_LIMIT = 35.0
+INTRADAY_STOCK_PCT_ABS_LIMIT = 35.0
 SHANGHAI_INDEX_CODE = "000001.SH"
 SHENZHEN_INDEX_CODE = "399001.SZ"
 INTRADAY_CHART_STATE_DIRNAME = "respi_35lcd_intraday"
@@ -171,6 +174,32 @@ def _format_display_time(now: datetime) -> str:
     """格式化顶部显示时间，如 4月7日(周二) 14:40:32。"""
     weekday = WEEKDAY_NAMES[now.weekday()]
     return f"{now.month}月{now.day}日({weekday}) {now:%H:%M:%S}"
+
+
+def _sanitize_intraday_pct(value: object, abs_limit: float) -> Optional[float]:
+    """校验日内涨跌幅，过滤 NaN、无穷和明显脏点。"""
+    pct = _coerce_float(value)
+    if pct is None or not np.isfinite(pct):
+        return None
+    if abs(pct) > abs_limit:
+        return None
+    return pct
+
+
+def _normalize_intraday_price(price: object, pre_close: object, abs_limit: float) -> Optional[float]:
+    """规范化实时价；异常或无效价格回退到昨收，避免生成脏点。"""
+    pre_close_float = _coerce_float(pre_close)
+    if pre_close_float is None or not np.isfinite(pre_close_float) or pre_close_float <= 0:
+        return None
+
+    price_float = _coerce_float(price)
+    if price_float is None or not np.isfinite(price_float) or price_float <= 0:
+        return pre_close_float
+
+    pct = (price_float / pre_close_float - 1) * 100
+    if _sanitize_intraday_pct(pct, abs_limit) is None:
+        return pre_close_float
+    return price_float
 
 
 def _get_diag_log_paths() -> list[Path]:
@@ -347,9 +376,9 @@ def _empty_intraday_chart(trade_date: str) -> dict:
         'slot_count': INTRADAY_SLOT_COUNT,
         'x_start_label': INTRADAY_WINDOW_START.strftime("%H:%M"),
         'x_end_label': INTRADAY_WINDOW_END.strftime("%H:%M"),
-        'index_label': '上证日内',
-        'shenzhen_label': '深证日内',
-        'portfolio_label': '持仓当日',
+        'index_label': '上证',
+        'shenzhen_label': '深证',
+        'portfolio_label': '持仓',
     }
 
 
@@ -449,9 +478,12 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
             continue
         if slot_int < 0 or slot_int >= INTRADAY_SLOT_COUNT:
             continue
-        index_float = _coerce_float(index_val)
-        shenzhen_float = _coerce_float(shenzhen_val)
-        portfolio_float = _coerce_float(portfolio_val)
+        index_float = _sanitize_intraday_pct(index_val, INTRADAY_INDEX_PCT_ABS_LIMIT)
+        shenzhen_float = _sanitize_intraday_pct(shenzhen_val, INTRADAY_INDEX_PCT_ABS_LIMIT)
+        portfolio_float = _sanitize_intraday_pct(
+            portfolio_val,
+            INTRADAY_PORTFOLIO_PCT_ABS_LIMIT,
+        )
         if index_float is None or shenzhen_float is None or portfolio_float is None:
             continue
         dedup_points[slot_int] = (str(label), index_float, shenzhen_float, portfolio_float)
@@ -977,9 +1009,12 @@ def _extract_pct_from_quote_row(row) -> Optional[float]:
         return None
     price = _coerce_float(row.get('PRICE', row.get('price')))
     pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
-    if price is None or pre_close in (None, 0):
+    if price is None or not np.isfinite(price) or price <= 0 or pre_close in (None, 0):
         return None
-    return (price / pre_close - 1) * 100
+    return _sanitize_intraday_pct(
+        (price / pre_close - 1) * 100,
+        INTRADAY_INDEX_PCT_ABS_LIMIT,
+    )
 
 
 def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
@@ -1008,15 +1043,18 @@ def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
 
     pct = _coerce_float(matched.get('涨跌幅', matched.get('pct_chg')))
     if pct is not None:
-        return pct
+        return _sanitize_intraday_pct(pct, INTRADAY_INDEX_PCT_ABS_LIMIT)
 
     price = _coerce_float(matched.get('最新价', matched.get('最新')))
     pre_close = _coerce_float(
         matched.get('昨收', matched.get('昨收盘', matched.get('pre_close')))
     )
-    if price is None or pre_close in (None, 0):
+    if price is None or not np.isfinite(price) or price <= 0 or pre_close in (None, 0):
         return None
-    return (price / pre_close - 1) * 100
+    return _sanitize_intraday_pct(
+        (price / pre_close - 1) * 100,
+        INTRADAY_INDEX_PCT_ABS_LIMIT,
+    )
 
 
 def _fetch_realtime_index_pcts() -> dict[str, float]:
@@ -1086,19 +1124,24 @@ def _compute_holdings_intraday_pct(snapshot: Optional[dict]) -> Optional[float]:
         row = quote_map.get(ts_code)
         if row is None:
             continue
-        current_price = _coerce_float(row.get('PRICE', row.get('price')))
         pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
-        if pre_close in (None, 0):
+        current_price = _normalize_intraday_price(
+            row.get('PRICE', row.get('price')),
+            pre_close,
+            INTRADAY_STOCK_PCT_ABS_LIMIT,
+        )
+        if pre_close in (None, 0) or current_price is None:
             continue
-        if current_price is None:
-            current_price = pre_close
         current_value += current_price * pos.shares
         prev_close_value += pre_close * pos.shares
         valid_count += 1
 
     if valid_count == 0 or prev_close_value <= 0:
         return None
-    return (current_value / prev_close_value - 1) * 100
+    return _sanitize_intraday_pct(
+        (current_value / prev_close_value - 1) * 100,
+        INTRADAY_PORTFOLIO_PCT_ABS_LIMIT,
+    )
 
 
 def _build_intraday_chart(
@@ -1114,7 +1157,11 @@ def _build_intraday_chart(
     holdings_pct = _compute_holdings_intraday_pct(snapshot)
     shanghai_pct = index_pct_map.get(SHANGHAI_INDEX_CODE)
     shenzhen_pct = index_pct_map.get(SHENZHEN_INDEX_CODE)
-    if shanghai_pct is None or shenzhen_pct is None or holdings_pct is None:
+    if (
+        shanghai_pct is None
+        or shenzhen_pct is None
+        or holdings_pct is None
+    ):
         return chart_data
 
     current_time = point_time or datetime.now()
@@ -1157,7 +1204,7 @@ PANEL_TOP = HEADER_H + 4  # 面板区顶部 y，给顶栏留出更大时间字�
 PANEL_H = 140          # 面板区高度（去掉底栏后加大）
 PANEL_GAP = 6          # 左右面板间距
 PANEL_AREA_W = WIDTH - 2 * PANEL_MARGIN  # 面板总可用宽度 = 468
-LEFT_W = int(PANEL_AREA_W * 0.55)        # 左面板宽度，略收窄给右侧排行更多空间
+LEFT_W = int(PANEL_AREA_W * 0.575)        # 左面板宽度，略收窄给右侧排行更多空间
 RIGHT_W = PANEL_AREA_W - LEFT_W - PANEL_GAP  # 右面板宽度
 RIGHT_SUB_GAP = 4      # 右上/右下子面板间距
 RIGHT_SUB_H = (PANEL_H - RIGHT_SUB_GAP) // 2  # 每个子面板高度 = 68
@@ -1321,7 +1368,9 @@ def _render(state: DisplayState) -> None:
         _draw_rank_items(bottom3, rp_y2)
 
     # ===== 图表区（固定）=====
-    cycle_last_data_label = _format_cycle_last_data_label(cycle_chart_data)
+    cycle_last_data_label = None
+    if chart_data is not None and chart_data.get('mode') == 'cycle':
+        cycle_last_data_label = _format_cycle_last_data_label(cycle_chart_data)
     _draw_chart(draw, chart_data, cycle_last_data_label)
 
     _write_fb(img)

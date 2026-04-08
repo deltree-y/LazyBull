@@ -238,6 +238,11 @@ class BacktestEngine:
         signal_gate_dynamic_topn: bool = False,  # 是否启用动态Top-N
         signal_gate_topn_high_multiplier: float = 0.6,  # 高置信度缩减系数（<1）
         signal_gate_topn_low_multiplier: float = 1.5,  # 低置信度扩大系数（>1）
+        holding_bonus_enabled: bool = False,  # 是否启用持仓保留奖励（降低换手率）
+        holding_bonus_sigma: float = 0.5,  # 保留奖励幅度（截面分数标准差的倍数）
+        market_adaptive_topn_enabled: bool = False,  # 是否启用市场状态自适应选股数量
+        market_adaptive_topn_bull_factor: float = 0.7,  # 趋势向上时集中系数（<1）
+        market_adaptive_topn_bear_factor: float = 1.5,  # 趋势向下/震荡时分散系数（>1）
         enable_early_rebalance_on_empty: bool = True,  # 空仓时是否提前触发新一轮调仓
     ):
         """初始化回测引擎
@@ -424,6 +429,13 @@ class BacktestEngine:
         self.signal_gate_dynamic_topn = signal_gate_dynamic_topn
         self.signal_gate_topn_high_multiplier = signal_gate_topn_high_multiplier
         self.signal_gate_topn_low_multiplier = signal_gate_topn_low_multiplier
+        # ── 换手率约束（持仓保留奖励）──
+        self.holding_bonus_enabled = holding_bonus_enabled
+        self.holding_bonus_sigma = holding_bonus_sigma
+        # ── 市场自适应 Top-N ──
+        self.market_adaptive_topn_enabled = market_adaptive_topn_enabled
+        self.market_adaptive_topn_bull_factor = market_adaptive_topn_bull_factor
+        self.market_adaptive_topn_bear_factor = market_adaptive_topn_bear_factor
         self._prediction_quality_history: List[Dict] = []
         self._rolling_quality_score: float = 1.0  # 默认满分（预热期不干预）
         self._quality_warmup_remaining: int = signal_gate_quality_window  # 预热计数
@@ -943,6 +955,53 @@ class BacktestEngine:
         """
         return ranked_candidates
 
+    def _extend_holding_period(
+        self,
+        stock: str,
+        signal_date: pd.Timestamp,
+        trading_dates: List[pd.Timestamp],
+        date_to_idx: Dict,
+    ) -> None:
+        """延续持有：重置持有期起点为 T+1（下一交易日），不产生交易成本。
+
+        当持仓保留奖励启用时，仍在 Top-N 中的已持仓股票不会被卖出再买入，
+        而是直接延续持有并重置持有期计时器。
+
+        Args:
+            stock: 股票代码
+            signal_date: 信号生成日期（T 日）
+            trading_dates: 交易日列表
+            date_to_idx: 日期到索引的映射
+        """
+        if stock not in self.positions:
+            return
+        current_idx = date_to_idx.get(signal_date)
+        if current_idx is None or current_idx + 1 >= len(trading_dates):
+            return
+        new_buy_date = trading_dates[current_idx + 1]  # T+1 作为新的持有期起点
+        old_buy_date = self.positions[stock]["buy_date"]
+        self.positions[stock]["buy_date"] = new_buy_date
+        self.positions[stock]["signal_date"] = signal_date
+        if self.verbose:
+            logger.debug(
+                f"  持仓延续: {stock} 持有期重置 "
+                f"({old_buy_date.date()} → {new_buy_date.date()})"
+            )
+
+    def _compute_market_adaptive_topn_factor(self, date: pd.Timestamp) -> float:
+        """根据市场状态计算自适应选股倍数。
+
+        基类默认返回 1.0（无调整）。子类（如 BacktestEngineML）可重写此方法，
+        从特征数据中读取市场状态指标进行调整。
+
+        Args:
+            date: 当前日期
+
+        Returns:
+            选股数量乘数（<1 集中，>1 分散，1.0 不调整）
+        """
+        return 1.0
+
     def _generate_signal(
         self,
         date: pd.Timestamp,
@@ -1026,19 +1085,44 @@ class BacktestEngine:
         # 扩展点：子类可覆盖此方法对候选列表做额外过滤
         ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
 
-        # 排除已持仓的股票，避免信号中出现 T+1 仍在持仓的股票，导致买入被"已在持仓中"跳过、
-        # 浪费槽位。适用于：
-        # 1) 分批调仓（stagger_tranches>1），避免不同 tranche 选到重复股票浪费预算
-        # 2) 持有期拖尾/空仓提前调仓场景：残留持仓未到期时，若不过滤会导致信号命中重复买入分支
-        # 3) 常规 rebalance_freq == holding_period 场景：旧持仓在 T+1 到期卖出，T0 时排除也无害
-        #    （排除后的槽位由后续候选顶上，等效于"先卖后买"的结果）
-        if self.positions:
-            existing_positions = set(self.positions.keys())
+        # ── 持仓处理：排除或奖励 ──
+        existing_positions = set(self.positions.keys()) if self.positions else set()
+        ranked_candidates_for_gate = ranked_candidates  # 用于置信度门控（不含奖励）
+
+        if self.holding_bonus_enabled and existing_positions:
+            # 换手率约束模式：对已持仓股票加分，不排除
+            scores_array = np.array([s for _, s in ranked_candidates])
+            score_std = float(np.std(scores_array)) if len(scores_array) > 1 else 0.0
+            bonus = self.holding_bonus_sigma * score_std
+            bonus_count = sum(1 for stock, _ in ranked_candidates if stock in existing_positions)
+
+            # 含奖励的候选列表用于选股
+            ranked_candidates_for_selection = sorted(
+                [
+                    (stock, score + bonus) if stock in existing_positions else (stock, score)
+                    for stock, score in ranked_candidates
+                ],
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            # 门控评估排除已持仓（不受 bonus 影响，保持原有评估逻辑）
+            ranked_candidates_for_gate = [
+                (stock, score) for stock, score in ranked_candidates
+                if stock not in existing_positions
+            ]
+            if self.verbose and bonus_count > 0:
+                logger.info(
+                    f"  换手率约束: {bonus_count} 只持仓获得加分 "
+                    f"(bonus={bonus:.4f}, sigma={self.holding_bonus_sigma}×std={score_std:.4f})"
+                )
+        elif existing_positions:
+            # 原有逻辑：排除已持仓的股票
             ranked_candidates_for_selection = [
                 (stock, score)
                 for stock, score in ranked_candidates
                 if stock not in existing_positions
             ]
+            ranked_candidates_for_gate = ranked_candidates_for_selection
             if self.verbose:
                 excluded = len(ranked_candidates) - len(ranked_candidates_for_selection)
                 if excluded > 0:
@@ -1054,7 +1138,7 @@ class BacktestEngine:
         confidence_gate_state = None
         if hasattr(self.signal, "evaluate_confidence_gate"):
             confidence_gate_state = self.signal.evaluate_confidence_gate(
-                ranked_candidates_for_selection,
+                ranked_candidates_for_gate,
                 date=date,
             )
             if getattr(confidence_gate_state, "enabled", False):
@@ -1124,6 +1208,20 @@ class BacktestEngine:
         else:
             target_n = base_n
 
+        # 市场自适应 Top-N：根据市场状态调整选股数量
+        # 趋势向上 → 集中（缩减），趋势向下/震荡 → 分散（扩大）
+        market_adaptive_topn_reason = None
+        if self.market_adaptive_topn_enabled:
+            factor = self._compute_market_adaptive_topn_factor(date)
+            if factor != 1.0:
+                old_target = target_n
+                target_n = max(3, int(round(target_n * factor)))
+                market_adaptive_topn_reason = (
+                    f"市场自适应(factor={factor:.2f})→{old_target}→{target_n}只"
+                )
+                if self.verbose:
+                    logger.info(f"  {market_adaptive_topn_reason}")
+
         decision_trace = self._build_signal_decision_trace(
             date=date,
             target_n=target_n,
@@ -1138,15 +1236,41 @@ class BacktestEngine:
             "effective_n": target_n,
             "reason": dynamic_topn_reason,
         }
+        decision_trace["market_adaptive_topn"] = {
+            "enabled": self.market_adaptive_topn_enabled,
+            "reason": market_adaptive_topn_reason,
+        }
+        decision_trace["holding_bonus"] = {
+            "enabled": self.holding_bonus_enabled,
+        }
 
-        if self.enable_position_completion:
+        if self.holding_bonus_enabled and existing_positions:
+            # 换手率约束模式：区分保留持仓和新买入
+            held_kept = []
+            for stock, score in ranked_candidates_for_selection[:target_n]:
+                if stock in existing_positions:
+                    held_kept.append(stock)
+                else:
+                    signals[stock] = score
+                    candidates_checked += 1
+            # 延续保留的持仓（重置持有期起点为 T+1）
+            for stock in held_kept:
+                self._extend_holding_period(stock, date, trading_dates, date_to_idx)
+            if held_kept and self.verbose:
+                logger.info(
+                    f"  持仓保留: {len(held_kept)} 只仍在Top-{target_n}中，"
+                    f"延续持有 ({', '.join(held_kept[:5])}"
+                    f"{'...' if len(held_kept) > 5 else ''})"
+                )
+            decision_trace["holding_bonus"]["kept_count"] = len(held_kept)
+            decision_trace["holding_bonus"]["new_buy_count"] = len(signals)
+        elif self.enable_position_completion:
             # 启用补齐功能：直接选择 top N 股票，不检查 T+1 可交易性
             # 这样可以在 T+1 买入失败时触发补齐流程
             for stock, score in ranked_candidates_for_selection[:target_n]:
                 signals[stock] = score
                 candidates_checked += 1
         else:
-            # 未启用补齐功能：保留原有逻辑，在 T+1 过滤不可交易股票并回填
             for stock, score in ranked_candidates_for_selection:
                 candidates_checked += 1
 

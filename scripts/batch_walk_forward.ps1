@@ -126,6 +126,15 @@ $signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用
 $signal_gate_topn_high_multiplier = 0.6         # 高置信度缩减系数（<1，集中持股，如 top_n=17 → 10只）
 $signal_gate_topn_low_multiplier  = 1.5         # 中低置信度扩大系数（>1，分散持股，如 top_n=17 → 25只）
 
+# ── OOS 换手率约束（持仓保留奖励, 0407引入）─────────────────────────────────────
+$holding_bonus_enabled = $false                 # $true 启用 | $false 禁用（对已持仓股票给予分数加成，降低换手）
+$holding_bonus_sigma   = 0.5                    # 奖励幅度（截面分数标准差的倍数，0.3~1.0）
+
+# ── OOS 市场自适应 Top-N（根据市场状态调整选股数量, 0407引入）──────────────────────
+$market_adaptive_topn_enabled     = $false       # $true 启用 | $false 禁用（趋势市集中、震荡市分散）
+$market_adaptive_topn_bull_factor = 0.7          # 趋势向上时集中系数（<1，如 top_n=17 → 12只）
+$market_adaptive_topn_bear_factor = 1.5          # 趋势向下/震荡时分散系数（>1，如 top_n=17 → 25只）
+
 # ── OOS 旧版置信度门控（signal_gate_mode="legacy" 时生效）────────────
 $signal_confidence_gate_enabled = $false  # $true 启用 | $false 禁用（仅 legacy 模式）
 $signal_confidence_gate_top_k_list = @(20)
@@ -498,6 +507,15 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
             $pythonCmd += " --signal-gate-dynamic-topn" +
                           " --signal-gate-topn-high-multiplier $signal_gate_topn_high_multiplier" +
                           " --signal-gate-topn-low-multiplier $signal_gate_topn_low_multiplier"
+        }
+        if ($holding_bonus_enabled) {
+            $pythonCmd += " --holding-bonus-enabled" +
+                          " --holding-bonus-sigma $holding_bonus_sigma"
+        }
+        if ($market_adaptive_topn_enabled) {
+            $pythonCmd += " --market-adaptive-topn-enabled" +
+                          " --market-adaptive-topn-bull-factor $market_adaptive_topn_bull_factor" +
+                          " --market-adaptive-topn-bear-factor $market_adaptive_topn_bear_factor"
         }
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
