@@ -364,3 +364,30 @@ def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatc
 
     assert outside_policy == {"refresh_cycle": True, "refresh_realtime": False}
     assert intraday_policy == {"refresh_cycle": True, "refresh_realtime": True}
+
+
+def test_get_data_worker_wait_seconds_keeps_regular_interval_away_from_close(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+
+    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 14, 0, 0))
+
+    assert wait_seconds == float(module.REFRESH_INTERVAL)
+
+
+def test_get_data_worker_wait_seconds_shortens_before_cycle_switch(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+
+    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 15, 29, 58))
+
+    assert wait_seconds == 3.0
+
+
+def test_get_data_worker_wait_seconds_wakes_immediately_after_1530_fetch(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+
+    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 15, 30, 0))
+
+    assert wait_seconds == 1.0

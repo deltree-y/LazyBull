@@ -654,6 +654,28 @@ def _get_refresh_policy(
     }
 
 
+def _get_data_worker_wait_seconds(now: Optional[datetime] = None) -> float:
+    """返回数据线程下次唤醒间隔。
+
+    常规情况下按 10 分钟轮询；若即将跨过 15:30 的图表切换边界，
+    则缩短本次等待，确保离开日内窗口后立刻补一次周期图刷新。
+    """
+    current_dt = now or datetime.now()
+    wait_seconds = float(REFRESH_INTERVAL)
+
+    if not _is_trade_day(current_dt):
+        return wait_seconds
+
+    if current_dt.time() > INTRADAY_WINDOW_END:
+        return wait_seconds
+
+    intraday_end_dt = datetime.combine(current_dt.date(), INTRADAY_WINDOW_END)
+    seconds_to_boundary = (intraday_end_dt - current_dt).total_seconds() + 1.0
+    if seconds_to_boundary <= 0:
+        return 1.0
+    return min(wait_seconds, max(1.0, seconds_to_boundary))
+
+
 # ---------- 背光控制 ----------
 
 _backlight_pwm = None
@@ -1624,7 +1646,8 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         _fetch_data(refresh_realtime=True)
 
         while not stop_event.is_set():
-            stop_event.wait(REFRESH_INTERVAL)
+            wait_seconds = _get_data_worker_wait_seconds()
+            stop_event.wait(wait_seconds)
             if stop_event.is_set():
                 break
 

@@ -83,6 +83,16 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
+# ── 因子增强（开盘强度/日内波动结构/委托不平衡, 0408引入）───────
+$enable_enhanced           = $false  # $true 启用 | $false 禁用
+
+# ── 多特征子集集成（动量 vs 基本面 vs 资金流 3模型加权融合, 0408引入）
+$subset_ensemble           = $false  # $true 启用 | $false 禁用
+
+# ── 模型质量监控与降级（val_rankic_ir低于阈值时回退上一合格模型, 0408引入）
+$model_quality_enabled     = $false  # $true 启用 | $false 禁用
+$model_quality_ir_threshold = 0.03   # 降级阈值
+
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
 
@@ -101,7 +111,7 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(17)            # 回测持仓 Top N
+$bt_top_n_list           = @(15)            # 回测持仓 Top N
 $bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
 $bt_weight_method        = "score"          # 权重方法："equal"（等权）| "score"（按预测分数加权）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
@@ -425,6 +435,18 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
 
     if ($ensemble_offsets -gt 0) {
         $pythonCmd += " --ensemble-offsets $ensemble_offsets"
+    }
+
+    if ($enable_enhanced) {
+        $pythonCmd += " --enable-enhanced-features"
+    }
+
+    if ($subset_ensemble) {
+        $pythonCmd += " --subset-ensemble"
+    }
+
+    if ($model_quality_enabled) {
+        $pythonCmd += " --model-quality-enabled --model-quality-ir-threshold $model_quality_ir_threshold"
     }
 
     if ($market_regime) {

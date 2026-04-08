@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.47.0] - 2026-04-08
+
+### 新增
+
+- **2.2 因子增强**（`--enable-enhanced-features`）：新增3个短线alpha因子
+  - `opening_strength`（开盘强度）= open / pre_close - 1
+  - `intraday_vol_structure`（日内波动结构）= (high - open) / (open - low)
+  - `order_imbalance`（委托不平衡）= (buy_elg - sell_elg) / (buy_elg + sell_elg)，含5/20日滚动均值
+  - 新因子经行业z-score标准化后加入训练特征
+- **2.1 多特征子集集成**（`--subset-ensemble`）：训练3个独立模型（动量/基本面/资金流），加权融合预测
+  - `SubsetEnsembleModel` 包装器：每个子模型使用各自特征子集预测，加权平均
+  - 3类特征子集定义：`SUBSET_MOMENTUM_FEATURES`（技术动量19+）、`SUBSET_FUNDAMENTAL_FEATURES`（基本面价值6+）、`SUBSET_CAPITAL_FLOW_FEATURES`（资金博弈8+）
+  - `get_subset_ensemble_configs()` 根据可用数据和启用的因子类别自动生成子集配置
+  - `_train_subset_ensemble_on_window()` 一次加载数据、训练3个子模型并包装
+- **3.3 模型质量监控与降级**（`--model-quality-enabled`）：训练质量不达标时自动回退上一合格模型
+  - 当 `val_rankic_ir` < 阈值（默认 0.03）时，跳过当前模型，使用上一期合格模型做OOS回测
+  - 支持连续降级（多个split质量不佳时持续使用最后一个好模型）
+  - walk-forward完成时汇报降级次数
+
+### 变更
+
+- **删除 EnsembleMLSignal**：清理已废弃的双模型信号类（`ml_signal.py`、`signals/__init__.py`、`signal_factory.py`、`run_ml_backtest.py`），统一使用 `MLSignal`。`SubsetEnsembleModel` 对 `MLSignal` 透明，通过标准 `predict(X)` 接口即可。
+- **batch_walk_forward.ps1**：新增 `$enable_enhanced`、`$subset_ensemble`、`$model_quality_enabled`、`$model_quality_ir_threshold` 开关
+- **walk_forward_summary**：输出中新增 `enable_enhanced_features`、`subset_ensemble`、`model_quality_enabled`、`model_quality_ir_threshold` 字段
+
+### 测试
+
+- 新增 `tests/test_p1_optimizations.py`：16个测试覆盖增强因子常量、SubsetEnsembleModel预测/权重/特征并集、子集配置生成、模型降级逻辑（5种场景）
+
+## [0.46.2] - 2026-04-08
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 收盘切图后的周期图延迟刷新**：`scripts/respi/3.5LCD_disp.py` 的数据线程原先只按脚本启动时刻每 600 秒轮询。虽然 0.46.1 已修复“收盘后继续检查直到拿到当天周期图数据”，但在 15:30 切图边界并不会立刻再拉一次周期图，因此切换瞬间仍可能显示 t-1 缓存。
+- 本次新增 `_get_data_worker_wait_seconds()`，在接近 15:30 时缩短等待时间，并在离开日内窗口后立即补一次周期图刷新，尽快把周期图推进到当天数据。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增数据线程等待时序测试，覆盖常规轮询、15:30 前缩短等待和 15:30 后立即唤醒三个场景。
+
 ## [0.46.1] - 2026-04-08
 
 ### 修复

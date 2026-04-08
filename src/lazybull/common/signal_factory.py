@@ -9,7 +9,7 @@ from typing import Optional
 from loguru import logger
 
 from ..signals.base import Signal
-from ..signals.ml_signal import EnsembleMLSignal, MLSignal
+from ..signals.ml_signal import MLSignal
 from .trading_config import TradingConfig
 
 
@@ -19,7 +19,7 @@ def create_signal(
     models_dir: str = "./data/models",
     verbose: bool = False,
 ) -> Signal:
-    """根据 TradingConfig 创建 MLSignal 或 EnsembleMLSignal。
+    """根据 TradingConfig 创建 MLSignal。
 
     Args:
         config: 统一策略参数
@@ -41,29 +41,12 @@ def create_signal(
         signal_gate_percentile_warmup=config.signal_gate_percentile_warmup,
     )
 
-    if config.model_version_b is not None:
-        signal = EnsembleMLSignal(
-            model_version_a=config.model_version,
-            model_version_b=config.model_version_b,
-            ensemble_weight_a=config.ensemble_weight_a,
-            top_n=config.top_n,
-            models_dir=models_dir,
-            weight_method=config.weight_method,
-            verbose=verbose,
-            **gate_kwargs,
-        )
-        logger.info(
-            f"使用双模型集成: model_a=v{config.model_version}, "
-            f"model_b=v{config.model_version_b}, "
-            f"weight_a={config.ensemble_weight_a}"
-        )
-    else:
-        signal = MLSignal(
-            top_n=config.top_n,
-            model_version=config.model_version,
-            models_dir=models_dir,
-            weight_method=config.weight_method,
-            verbose=verbose,
-            **gate_kwargs,
-        )
+    signal = MLSignal(
+        top_n=config.top_n,
+        model_version=config.model_version,
+        models_dir=models_dir,
+        weight_method=config.weight_method,
+        verbose=verbose,
+        **gate_kwargs,
+    )
     return signal

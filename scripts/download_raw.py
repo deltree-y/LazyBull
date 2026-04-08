@@ -25,10 +25,13 @@
     # 默认：下载基础数据 + 日线数据
     python scripts/download_raw.py
 
+    # 一键全量：日线 + 全部另类数据（推荐首次初始化使用）
+    python scripts/download_raw.py --all
+
     # 下载特定另类数据
     python scripts/download_raw.py --download fina_indicator margin_detail
 
-    # 下载全部另类数据
+    # 下载全部另类数据（不含日线）
     python scripts/download_raw.py --download all_alt
 """
 
@@ -617,6 +620,12 @@ def main():
              "不指定时仅下载基础+日线数据"
     )
     parser.add_argument(
+        "--all",
+        action="store_true",
+        default=False,
+        help="下载日线数据 + 全部另类数据（除 basic 外的所有数据集，等效于 --download all_alt 并同时下载日线）"
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="（兼容旧参数）等效于不加 --force 的默认断点续传行为"
@@ -635,6 +644,7 @@ def main():
     logger.info(f"仅下载基础数据: {'是' if args.only_basic else '否'}")
     logger.info(f"强制重新下载: {'是' if args.force else '否'}")
     logger.info(f"另类数据集: {args.download or '无'}")
+    logger.info(f"全量下载: {'是' if args.all else '否'}")
     logger.info("=" * 60)
     
     try:
@@ -659,8 +669,16 @@ def main():
         # ── 另类数据下载 ──────────────────────────────────────────
         download_set = set(args.download) if args.download else set()
 
-        # 未指定 --download 时默认下载日线数据；指定了则只下载另类数据
-        if not download_set:
+        # --all：下载日线 + 全部另类数据集
+        if args.all:
+            download_set = set(ALT_DATASETS)
+            download_daily_data(
+                client, storage, trade_cal,
+                args.start_date, args.end_date,
+                force=args.force
+            )
+        elif not download_set:
+            # 未指定 --download 时默认下载日线数据；指定了则只下载另类数据
             download_daily_data(
                 client, storage, trade_cal,
                 args.start_date, args.end_date,

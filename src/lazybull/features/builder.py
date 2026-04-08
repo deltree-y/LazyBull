@@ -619,7 +619,31 @@ class FeatureBuilder:
         )
         features.rename(columns={'pct_chg': 'ret_1'}, inplace=True)
         features['ret_1'] = features['ret_1'] / 100.0  # 转换为小数
-        
+
+        # 开盘强度（隔夜情绪代理）: open / pre_close - 1
+        if 'open' in current_data.columns and 'pre_close' in current_data.columns:
+            _open = current_data[['ts_code', 'open', 'pre_close']].copy()
+            _open['opening_strength'] = np.where(
+                _open['pre_close'] > 0,
+                _open['open'] / _open['pre_close'] - 1,
+                np.nan,
+            )
+            features = features.merge(
+                _open[['ts_code', 'opening_strength']], on='ts_code', how='left'
+            )
+
+        # 日内波动结构（多空力量对比）: (high - open) / (open - low)
+        if all(c in current_data.columns for c in ['high', 'open', 'low']):
+            _hloc = current_data[['ts_code', 'high', 'open', 'low']].copy()
+            _up = _hloc['high'] - _hloc['open']
+            _down = _hloc['open'] - _hloc['low']
+            _hloc['intraday_vol_structure'] = np.where(
+                _down > 1e-6, _up / _down, np.nan,
+            )
+            features = features.merge(
+                _hloc[['ts_code', 'intraday_vol_structure']], on='ts_code', how='left'
+            )
+
         # 计算回看特征
         for window in self.lookback_windows:
             # 以全量交易日历为锚点，向前回溯恰好 window 个交易日
@@ -1129,7 +1153,20 @@ class FeatureBuilder:
                 on='ts_code',
                 how='left'
             )
-        
+
+            # 订单失衡（特大单）: (buy_elg - sell_elg) / (buy_elg + sell_elg)
+            _total = moneyflow_today['buy_elg_amount'] + moneyflow_today['sell_elg_amount']
+            moneyflow_today['order_imbalance'] = np.where(
+                _total > 1e-6,
+                (moneyflow_today['buy_elg_amount'] - moneyflow_today['sell_elg_amount']) / _total,
+                np.nan,
+            )
+            features = features.merge(
+                moneyflow_today[['ts_code', 'order_imbalance']],
+                on='ts_code',
+                how='left'
+            )
+
         # 计算 rolling 特征（窗口 5, 20）
         for window in [5, 20]:
             # 以全量交易日历为锚点，向前回溯恰好 window 个交易日
@@ -1162,7 +1199,14 @@ class FeatureBuilder:
                 hist_moneyflow['elg_net_amount'] = (
                     hist_moneyflow['buy_elg_amount'] - hist_moneyflow['sell_elg_amount']
                 )
-            
+                # 历史订单失衡
+                _total = hist_moneyflow['buy_elg_amount'] + hist_moneyflow['sell_elg_amount']
+                hist_moneyflow['order_imbalance'] = np.where(
+                    _total > 1e-6,
+                    (hist_moneyflow['buy_elg_amount'] - hist_moneyflow['sell_elg_amount']) / _total,
+                    np.nan,
+                )
+
             # 按股票分组计算 rolling 特征
             # 只对存在的列进行聚合
             agg_dict = {}
@@ -1172,6 +1216,8 @@ class FeatureBuilder:
                 agg_dict['lg_net_amount'] = ['sum']
             if 'elg_net_amount' in hist_moneyflow.columns:
                 agg_dict['elg_net_amount'] = ['sum']
+            if 'order_imbalance' in hist_moneyflow.columns:
+                agg_dict['order_imbalance'] = ['mean']
             
             if not agg_dict:
                 # 没有可聚合的列，跳过
@@ -1726,6 +1772,8 @@ class FeatureBuilder:
             'elg_net_amount_sum_20', 'acceleration', 'macd_hist', 'bb_width',
             # 基本面因子（季度数据前向填充，启用时才存在）
             'roe_waa', 'or_yoy', 'netprofit_yoy', 'debt_to_assets', 'q_gr_yoy',
+            # 增强因子：开盘强度、日内波动结构、订单失衡
+            'opening_strength', 'intraday_vol_structure', 'order_imbalance',
         ]
         existing_zscore_columns = [col for col in zscore_columns if col in result.columns]
         for window in self.lookback_windows:

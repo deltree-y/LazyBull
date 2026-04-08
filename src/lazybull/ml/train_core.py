@@ -89,6 +89,131 @@ EXPRESS_FEATURE_COLUMNS = [
     "express_surprise",  # 业绩惊喜
 ]
 
+# 增强因子特征列（从已有日线/moneyflow数据计算，无需额外积分）
+ENHANCED_FEATURE_COLUMNS = [
+    "zscore_opening_strength",       # 开盘强度（隔夜情绪代理）
+    "zscore_intraday_vol_structure",  # 日内波动结构（多空力量对比）
+    "zscore_order_imbalance",        # 特大单订单失衡
+    "order_imbalance_mean_5",        # 5日订单失衡均值
+    "order_imbalance_mean_20",       # 20日订单失衡均值
+]
+
+# ── 多模型集成：特征子集定义 ──────────────────────────────────────
+# 市场环境特征（共享，所有子集都包含）
+_SHARED_MARKET_FEATURES = [
+    "mkt_adv_dec_ratio",
+    "mkt_ret_avg_20",
+    "mkt_turnover_std",
+    "mkt_vol_20",
+    "list_days",
+]
+
+# 子集1：动量技术（趋势 + 技术指标 + 波动形态）
+SUBSET_MOMENTUM_FEATURES = [
+    "neu_ret_1", "neu_ret_5", "neu_ret_20",
+    "alpha_industry_5", "alpha_industry_20",
+    "ind_ret_avg", "ind_momentum_rank",
+    "zscore_ma_deviation_20", "zscore_acceleration", "zscore_macd_hist", "bb_pct",
+    "zscore_volatility_5", "zscore_volatility_20", "amplitude",
+    "zscore_bb_width", "upper_shadow", "lower_shadow",
+    "rsi_14", "kdj_j", "spec_score",
+]
+
+# 子集2：基本面价值（估值 + 质量 + 基本面 + 业绩）
+SUBSET_FUNDAMENTAL_FEATURES = [
+    "zscore_size", "zscore_bp", "zscore_dv_ttm", "zscore_pe_ttm", "is_loss",
+    "neu_ret_20",  # 保留中期动量作为锚点
+]
+
+# 子集3：资金博弈（流动性 + 资金流 + 融资融券 + 筹码）
+SUBSET_CAPITAL_FLOW_FEATURES = [
+    "zscore_turnover_rate", "vol_ratio_20", "vol_burst_20",
+    "zscore_amount_ma20", "zscore_net_mf_amount",
+    "zscore_elg_net_amount_sum_20", "lg_net_amount_sum_5",
+    "neu_ret_1",  # 保留短期反转作为锚点
+]
+
+
+def get_subset_ensemble_configs(
+    df: pd.DataFrame,
+    enable_fundamental_features: bool = False,
+    enable_alt_features: bool = False,
+    enable_margin_features: bool = False,
+    enable_cyq_features: bool = False,
+    enable_fund_features: bool = False,
+    enable_express_features: bool = False,
+    enable_enhanced_features: bool = False,
+) -> List[Dict]:
+    """生成多模型子集集成的特征配置
+
+    每个子集 = 核心特征 + 市场共享特征 + 关联的可选因子类别
+    仅保留数据中实际存在的列。
+
+    Args:
+        df: 特征 DataFrame（用于检查列是否存在）
+        enable_*: 各可选因子开关
+
+    Returns:
+        子集配置列表，每个元素为 {"name": str, "features": List[str]}
+    """
+    available = set(df.columns)
+
+    def _filter(cols):
+        return [c for c in cols if c in available]
+
+    shared = _filter(_SHARED_MARKET_FEATURES)
+
+    # 子集1：动量技术
+    momentum_cols = _filter(SUBSET_MOMENTUM_FEATURES) + shared
+    if enable_enhanced_features:
+        momentum_cols += _filter([
+            "zscore_opening_strength", "zscore_intraday_vol_structure",
+        ])
+
+    # 子集2：基本面价值
+    fundamental_cols = _filter(SUBSET_FUNDAMENTAL_FEATURES) + shared
+    if enable_fundamental_features:
+        fundamental_cols += _filter(FUNDAMENTAL_FEATURE_COLUMNS)
+    if enable_express_features:
+        fundamental_cols += _filter(EXPRESS_FEATURE_COLUMNS)
+    if enable_fund_features:
+        fundamental_cols += _filter(FUND_FEATURE_COLUMNS)
+    if enable_alt_features:
+        fundamental_cols += _filter(ALT_FEATURE_COLUMNS)
+
+    # 子集3：资金博弈
+    capital_cols = _filter(SUBSET_CAPITAL_FLOW_FEATURES) + shared
+    if enable_margin_features:
+        capital_cols += _filter(MARGIN_FEATURE_COLUMNS)
+    if enable_cyq_features:
+        capital_cols += _filter(CYQ_FEATURE_COLUMNS)
+    if enable_enhanced_features:
+        capital_cols += _filter([
+            "zscore_order_imbalance", "order_imbalance_mean_5", "order_imbalance_mean_20",
+        ])
+
+    # 去重保序
+    def _dedup(cols):
+        seen = set()
+        out = []
+        for c in cols:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out
+
+    configs = [
+        {"name": "momentum", "features": _dedup(momentum_cols)},
+        {"name": "fundamental", "features": _dedup(fundamental_cols)},
+        {"name": "capital_flow", "features": _dedup(capital_cols)},
+    ]
+
+    from loguru import logger
+    for cfg in configs:
+        logger.info(f"子集 [{cfg['name']}]: {len(cfg['features'])} 个特征")
+
+    return configs
+
 
 # ── 自定义早停 eval metric ──────────────────────────────────────
 def neg_rank_ic(y_true, y_pred):
@@ -367,6 +492,7 @@ def prepare_training_data(
     enable_cyq_features: bool = False,
     enable_fund_features: bool = False,
     enable_express_features: bool = False,
+    enable_enhanced_features: bool = False,
     feature_stability_filter: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
@@ -547,6 +673,15 @@ def prepare_training_data(
             logger.info(f"启用业绩快报因子: {available_express}")
         else:
             logger.warning("enable_express_features=True，但数据中未找到业绩快报列，跳过")
+
+    # 增强因子（可选，从已有数据计算）
+    if enable_enhanced_features:
+        available_enhanced = [col for col in ENHANCED_FEATURE_COLUMNS if col in df.columns]
+        if available_enhanced:
+            feature_columns.extend(available_enhanced)
+            logger.info(f"启用增强因子: {available_enhanced}")
+        else:
+            logger.warning("enable_enhanced_features=True，但数据中未找到增强因子列，跳过")
 
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个

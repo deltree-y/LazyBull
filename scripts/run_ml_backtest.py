@@ -43,7 +43,7 @@ from src.lazybull.common.logger import setup_logger
 from src.lazybull.common.trading_config import TradingConfig, add_trading_args
 from src.lazybull.common.signal_factory import create_signal
 from src.lazybull.data import DataLoader, Storage
-from src.lazybull.signals import MLSignal, EnsembleMLSignal
+from src.lazybull.signals import MLSignal
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.risk.stop_loss import StopLossConfig, create_stop_loss_config_from_dict
 from src.lazybull.risk.equity_curve import EquityCurveConfig, create_equity_curve_config_from_dict
