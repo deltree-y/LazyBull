@@ -52,6 +52,7 @@ DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
 REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒），2分钟
+POST_CLOSE_INTRADAY_GRACE_SECONDS = 600  # 收盘后继续补齐日内尾点的宽限时长（秒）
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
 BACKLIGHT_BRIGHTNESS = 10    # 背光亮度 0~100（默认40%，可按需调整）
 SCREENSAVER_RANGE_X = 4      # 屏保水平偏移范围（±像素）
@@ -863,11 +864,7 @@ def _select_chart_data(
 ) -> Optional[dict]:
     """根据当前时段选择显示周期图或盘中图。"""
     current_dt = now or datetime.now()
-    if (
-        intraday_chart_data is not None
-        and intraday_chart_data.get('trade_date') == current_dt.strftime("%Y%m%d")
-        and _is_intraday_chart_window(current_dt)
-    ):
+    if _should_show_intraday_chart(cycle_chart_data, intraday_chart_data, current_dt):
         return intraday_chart_data
     return cycle_chart_data
 
@@ -906,8 +903,53 @@ def _has_cycle_data_for_target(
     return last_date >= target_cycle_date
 
 
+def _has_intraday_chart_for_today(
+    intraday_chart_data: Optional[dict],
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断是否已经有当日日内图数据。"""
+    if intraday_chart_data is None:
+        return False
+    current_dt = now or datetime.now()
+    return intraday_chart_data.get('trade_date') == current_dt.strftime("%Y%m%d")
+
+
+def _is_intraday_chart_complete(
+    intraday_chart_data: Optional[dict],
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断当日日内图是否已经补齐收盘最后一个槽位。"""
+    if not _has_intraday_chart_for_today(intraday_chart_data, now):
+        return False
+
+    slot_indices = intraday_chart_data.get('slot_indices', [])
+    if not isinstance(slot_indices, list) or not slot_indices:
+        return False
+    return int(slot_indices[-1]) >= INTRADAY_SLOT_COUNT - 1
+
+
+def _should_show_intraday_chart(
+    cycle_chart_data: Optional[dict],
+    intraday_chart_data: Optional[dict],
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断当前是否应继续显示日内图。"""
+    current_dt = now or datetime.now()
+    if not _has_intraday_chart_for_today(intraday_chart_data, current_dt):
+        return False
+    if _is_intraday_chart_window(current_dt):
+        return True
+    if not _is_trade_day(current_dt, allow_load=True):
+        return False
+
+    target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
+    return not _has_cycle_data_for_target(cycle_chart_data, target_cycle_date)
+
+
 def _get_refresh_policy(
-    cycle_chart_data: Optional[dict], now: Optional[datetime] = None
+    cycle_chart_data: Optional[dict],
+    intraday_chart_data: Optional[dict] = None,
+    now: Optional[datetime] = None,
 ) -> dict:
     """返回当前时段的数据刷新策略。"""
     current_dt = now or datetime.now()
@@ -919,9 +961,15 @@ def _get_refresh_policy(
         }
 
     target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
+    need_cycle_refresh = not _has_cycle_data_for_target(cycle_chart_data, target_cycle_date)
+    need_intraday_completion = (
+        _is_trade_day(current_dt, allow_load=True)
+        and current_dt.strftime("%Y%m%d") == target_cycle_date
+        and not _is_intraday_chart_complete(intraday_chart_data, current_dt)
+    )
     return {
-        'refresh_cycle': not _has_cycle_data_for_target(cycle_chart_data, target_cycle_date),
-        'refresh_realtime': False,
+        'refresh_cycle': need_cycle_refresh,
+        'refresh_realtime': need_intraday_completion,
     }
 
 
@@ -955,8 +1003,10 @@ def _is_realtime_refresh_due(
     """判断盘中实时面板是否应立即刷新。"""
     current_dt = now or datetime.now()
     session_key = _get_realtime_session_key(current_dt)
-    if not refresh_allowed or session_key is None:
+    if not refresh_allowed:
         return False, session_key
+    if session_key is None:
+        return _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt), None
     if last_session_key != session_key:
         return True, session_key
     return _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt), session_key
@@ -981,7 +1031,11 @@ def _is_cycle_refresh_due(
     return _is_interval_due(last_refresh_at, REFRESH_INTERVAL, current_dt), target_cycle_date
 
 
-def _get_data_worker_wait_seconds(now: Optional[datetime] = None) -> float:
+def _get_data_worker_wait_seconds(
+    now: Optional[datetime] = None,
+    cycle_chart_data: Optional[dict] = None,
+    intraday_chart_data: Optional[dict] = None,
+) -> float:
     """返回数据线程下次唤醒间隔。
 
     盘中按 2 分钟节奏唤醒，非交易时段按 10 分钟节奏唤醒；若即将跨过
@@ -990,7 +1044,9 @@ def _get_data_worker_wait_seconds(now: Optional[datetime] = None) -> float:
     """
     current_dt = now or datetime.now()
     wait_seconds = float(
-        REALTIME_REFRESH_INTERVAL if _is_realtime_quote_window(current_dt) else REFRESH_INTERVAL
+        REALTIME_REFRESH_INTERVAL
+        if _should_keep_realtime_completion_active(cycle_chart_data, intraday_chart_data, current_dt)
+        else REFRESH_INTERVAL
     )
 
     if not _is_trade_day(current_dt):
@@ -1023,6 +1079,43 @@ def _get_data_worker_wait_seconds(now: Optional[datetime] = None) -> float:
     if seconds_to_boundary <= 0:
         return 1.0
     return min(wait_seconds, max(1.0, seconds_to_boundary))
+
+
+def _get_snapshot_quote_time(snapshot: Optional[dict]) -> Optional[datetime]:
+    """从实时快照中解析行情时间，优先用于收盘后补齐最后一格。"""
+    if snapshot is None:
+        return None
+
+    trade_date = str(snapshot.get('current_date', '')).strip()
+    if len(trade_date) != 8 or not trade_date.isdigit():
+        return None
+
+    rt_df = snapshot.get('quotes')
+    if rt_df is None or rt_df.empty:
+        return None
+
+    quote_time_text = ''
+    for _, row in rt_df.iterrows():
+        candidate = str(row.get('TIME', row.get('time', ''))).strip()
+        if candidate:
+            quote_time_text = candidate[:8]
+            break
+
+    if not quote_time_text:
+        return None
+
+    for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d %H:%M"):
+        try:
+            point_time = datetime.strptime(f"{trade_date} {quote_time_text}", fmt)
+            break
+        except ValueError:
+            point_time = None
+    if point_time is None:
+        return None
+
+    if not (INTRADAY_WINDOW_START <= point_time.time() <= INTRADAY_WINDOW_END):
+        return None
+    return point_time
 
 
 # ---------- 背光控制 ----------
@@ -1674,8 +1767,8 @@ def _build_intraday_chart(
     point_time: Optional[datetime] = None,
 ) -> Optional[dict]:
     """基于上证/深证实时涨跌与持仓股当日实时涨跌构建盘中图。"""
-    current_time = point_time or datetime.now()
-    if snapshot is None or not _is_realtime_quote_window(current_time):
+    current_time = point_time or _get_snapshot_quote_time(snapshot) or datetime.now()
+    if snapshot is None or not (INTRADAY_WINDOW_START <= current_time.time() <= INTRADAY_WINDOW_END):
         return chart_data
 
     index_pct_map = _fetch_realtime_index_pcts(snapshot)
@@ -1696,6 +1789,30 @@ def _build_intraday_chart(
         shenzhen_pct,
         holdings_pct,
     )
+
+
+def _should_keep_realtime_completion_active(
+    cycle_chart_data: Optional[dict],
+    intraday_chart_data: Optional[dict],
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断收盘后是否仍需继续补齐日内图最后一格。"""
+    current_dt = now or datetime.now()
+    if _is_realtime_quote_window(current_dt):
+        return True
+    if not _is_trade_day(current_dt, allow_load=True):
+        return False
+    target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
+    if target_cycle_date != current_dt.strftime("%Y%m%d"):
+        return False
+    close_deadline = datetime.combine(current_dt.date(), INTRADAY_WINDOW_END) + timedelta(
+        seconds=POST_CLOSE_INTRADAY_GRACE_SECONDS
+    )
+    if current_dt > close_deadline:
+        return False
+    if _has_cycle_data_for_target(cycle_chart_data, target_cycle_date):
+        return False
+    return not _is_intraday_chart_complete(intraday_chart_data, current_dt)
 
 
 def _refresh_display_state(
@@ -2147,7 +2264,13 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         last_cycle_target_date = _get_target_cycle_data_date(startup_dt, allow_load=True)
 
         while not stop_event.is_set():
-            wait_seconds = _get_data_worker_wait_seconds()
+            with state.lock:
+                current_cycle_chart = state.chart_data
+                current_intraday_chart = state.intraday_chart_data
+            wait_seconds = _get_data_worker_wait_seconds(
+                cycle_chart_data=current_cycle_chart,
+                intraday_chart_data=current_intraday_chart,
+            )
             stop_event.wait(wait_seconds)
             if stop_event.is_set():
                 break
@@ -2155,7 +2278,12 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
             current_dt = datetime.now()
             with state.lock:
                 current_cycle_chart = state.chart_data
-            refresh_policy = _get_refresh_policy(current_cycle_chart, current_dt)
+                current_intraday_chart = state.intraday_chart_data
+            refresh_policy = _get_refresh_policy(
+                current_cycle_chart,
+                intraday_chart_data=current_intraday_chart,
+                now=current_dt,
+            )
             refresh_realtime, realtime_session_key = _is_realtime_refresh_due(
                 bool(refresh_policy['refresh_realtime']),
                 last_realtime_refresh_at,

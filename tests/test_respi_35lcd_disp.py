@@ -504,7 +504,7 @@ def test_fetch_realtime_index_pcts_prefers_snapshot_data():
 def test_select_chart_data_switches_by_intraday_window(monkeypatch):
     module = _load_module()
 
-    cycle_chart = {"mode": "cycle"}
+    cycle_chart = {"mode": "cycle", "dates": ["20260407"]}
     intraday_chart = {"mode": "intraday", "trade_date": "20260407"}
     point_time = datetime(2026, 4, 7, 14, 40, 0)
 
@@ -512,7 +512,37 @@ def test_select_chart_data_switches_by_intraday_window(monkeypatch):
     assert module._select_chart_data(cycle_chart, intraday_chart, point_time)["mode"] == "intraday"
 
     monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
-    assert module._select_chart_data(cycle_chart, intraday_chart, point_time)["mode"] == "cycle"
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+    assert module._select_chart_data(
+        cycle_chart,
+        intraday_chart,
+        datetime(2026, 4, 7, 15, 1, 0),
+    )["mode"] == "cycle"
+
+
+def test_select_chart_data_keeps_intraday_after_close_until_cycle_updates(monkeypatch):
+    module = _load_module()
+
+    cycle_chart = {"mode": "cycle", "dates": ["20260401", "20260406"]}
+    intraday_chart = {"mode": "intraday", "trade_date": "20260407", "slot_indices": [0, 25]}
+    point_time = datetime(2026, 4, 7, 15, 1, 0)
+
+    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    selected = module._select_chart_data(cycle_chart, intraday_chart, point_time)
+
+    assert selected is intraday_chart
 
 
 def test_is_intraday_chart_window_starts_after_open(monkeypatch):
@@ -525,11 +555,10 @@ def test_is_intraday_chart_window_starts_after_open(monkeypatch):
 
 def test_build_intraday_chart_skips_pre_open_snapshot(monkeypatch):
     module = _load_module()
-    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
     monkeypatch.setattr(
         module,
         "_fetch_realtime_index_pcts",
-        lambda: {module.SHANGHAI_INDEX_CODE: 0.1, module.SHENZHEN_INDEX_CODE: 0.2},
+        lambda snapshot=None: {module.SHANGHAI_INDEX_CODE: 0.1, module.SHENZHEN_INDEX_CODE: 0.2},
     )
     monkeypatch.setattr(module, "_compute_holdings_intraday_pct", lambda snapshot: 0.3)
 
@@ -540,6 +569,37 @@ def test_build_intraday_chart_skips_pre_open_snapshot(monkeypatch):
     )
 
     assert chart is None
+
+
+def test_build_intraday_chart_uses_snapshot_quote_time_after_close(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_fetch_realtime_index_pcts",
+        lambda snapshot=None: {
+            module.SHANGHAI_INDEX_CODE: 0.1,
+            module.SHENZHEN_INDEX_CODE: 0.2,
+        },
+    )
+    monkeypatch.setattr(module, "_compute_holdings_intraday_pct", lambda snapshot: 0.3)
+
+    chart = module._build_intraday_chart(
+        None,
+        {
+            "current_date": "20260407",
+            "positions": {"000001.SZ": SimpleNamespace(shares=100)},
+            "quotes": pd.DataFrame(
+                [
+                    {"TS_CODE": "000001.SZ", "PRICE": 11.0, "PRE_CLOSE": 10.0, "TIME": "15:00:00"}
+                ]
+            ),
+        },
+        point_time=None,
+    )
+
+    assert chart is not None
+    assert chart["slot_indices"] == [module.INTRADAY_SLOT_COUNT - 1]
+    assert chart["dates"] == ["15:00"]
 
 
 def test_format_cycle_last_data_label_uses_last_cycle_date():
@@ -593,6 +653,7 @@ def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
     monkeypatch.setattr(
         module,
         "_get_target_cycle_data_date",
@@ -615,6 +676,7 @@ def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeyp
 def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
     monkeypatch.setattr(
         module,
         "_get_target_cycle_data_date",
@@ -635,9 +697,48 @@ def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatc
     assert intraday_policy == {"refresh_cycle": False, "refresh_realtime": True}
 
 
+def test_get_refresh_policy_keeps_realtime_refresh_after_close_until_intraday_complete(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260406"]},
+        intraday_chart_data={"trade_date": "20260407", "slot_indices": [0, 24]},
+        now=datetime(2026, 4, 7, 15, 1, 0),
+    )
+
+    assert policy == {"refresh_cycle": True, "refresh_realtime": True}
+
+
+def test_get_refresh_policy_stops_realtime_after_intraday_complete(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260406"]},
+        intraday_chart_data={"trade_date": "20260407", "slot_indices": [0, 25]},
+        now=datetime(2026, 4, 7, 15, 1, 0),
+    )
+
+    assert policy == {"refresh_cycle": True, "refresh_realtime": False}
+
+
 def test_get_refresh_policy_pauses_realtime_during_lunch(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
     monkeypatch.setattr(
         module,
         "_get_target_cycle_data_date",
@@ -663,11 +764,30 @@ def test_get_data_worker_wait_seconds_keeps_regular_interval_away_from_close(mon
 
 def test_get_data_worker_wait_seconds_keeps_ten_minutes_outside_trading(monkeypatch):
     module = _load_module()
-    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
 
     wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 20, 0, 0))
 
     assert wait_seconds == float(module.REFRESH_INTERVAL)
+
+
+def test_get_data_worker_wait_seconds_keeps_short_interval_during_post_close_completion(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260408",
+    )
+
+    wait_seconds = module._get_data_worker_wait_seconds(
+        datetime(2026, 4, 8, 15, 1, 0),
+        cycle_chart_data={"dates": ["20260401", "20260407"]},
+        intraday_chart_data={"trade_date": "20260408", "slot_indices": [0, 24]},
+    )
+
+    assert wait_seconds == float(module.REALTIME_REFRESH_INTERVAL)
 
 
 def test_get_data_worker_wait_seconds_shortens_before_cycle_switch(monkeypatch):
@@ -732,6 +852,20 @@ def test_is_realtime_refresh_due_respects_new_session_and_two_minute_interval(mo
     assert session_key == "20260407-am"
     assert not_due_yet is False
     assert due_after_interval is True
+
+
+def test_is_realtime_refresh_due_continues_interval_after_close_when_allowed():
+    module = _load_module()
+
+    due_now, session_key = module._is_realtime_refresh_due(
+        True,
+        datetime(2026, 4, 7, 15, 0, 0),
+        "20260407-pm",
+        datetime(2026, 4, 7, 15, 2, 0),
+    )
+
+    assert due_now is True
+    assert session_key is None
 
 
 def test_is_cycle_refresh_due_refreshes_immediately_when_target_trade_day_changes(monkeypatch):
