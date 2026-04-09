@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.47.1] - 2026-04-09
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 日内图首点不是零**：`scripts/respi/3.5LCD_disp.py` 原先直接使用“相对昨收的当日涨跌幅”绘制日内图，因此首个点会带着隔夜跳空，不符合“仅比较盘中变化”的口径。
+- 本次新增日内图首点归零逻辑：持久化与内存中同时保留 `raw_*` 原始当日涨跌幅，以及 `index_pct/shenzhen_pct/portfolio_pct` 三条按首个有效点归零后的显示序列，三条线都会从 0 开始。
+- 兼容旧版日内 JSON：加载旧文件时会把历史 `index_pct/shenzhen_pct/portfolio_pct` 当作原始值重建，不需要手动清文件。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增旧版持久化载荷归零重建测试，并同步覆盖日内图追加、清洗和恢复后的 `raw_*` / 显示值双序列断言。
+
 ## [0.47.0] - 2026-04-08
 
 ### 新增

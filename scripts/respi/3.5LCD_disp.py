@@ -369,6 +369,9 @@ def _empty_intraday_chart(trade_date: str) -> dict:
         'mode': 'intraday',
         'trade_date': trade_date,
         'dates': [],
+        'raw_index_pct': [],
+        'raw_shenzhen_pct': [],
+        'raw_portfolio_pct': [],
         'index_pct': [],
         'shenzhen_pct': [],
         'portfolio_pct': [],
@@ -379,6 +382,43 @@ def _empty_intraday_chart(trade_date: str) -> dict:
         'index_label': '上证',
         'shenzhen_label': '深证',
         'portfolio_label': '持仓',
+    }
+
+
+def _rebase_intraday_values(values: list[float]) -> list[float]:
+    """将日内序列改写为相对首个有效点的变化量。"""
+    if not values:
+        return []
+
+    base_value = values[0]
+    rebased_values: list[float] = []
+    for value in values:
+        rebased = round(value - base_value, 6)
+        rebased_values.append(0.0 if abs(rebased) < 1e-9 else rebased)
+    return rebased_values
+
+
+def _compose_intraday_chart(
+    chart_data: dict,
+    trade_date: str,
+    dates: list[str],
+    slot_indices: list[int],
+    raw_index_values: list[float],
+    raw_shenzhen_values: list[float],
+    raw_portfolio_values: list[float],
+) -> dict:
+    """生成日内图负载，同时保留原始值和首点归零后的显示值。"""
+    return {
+        **chart_data,
+        'trade_date': trade_date,
+        'dates': dates,
+        'raw_index_pct': raw_index_values,
+        'raw_shenzhen_pct': raw_shenzhen_values,
+        'raw_portfolio_pct': raw_portfolio_values,
+        'index_pct': _rebase_intraday_values(raw_index_values),
+        'shenzhen_pct': _rebase_intraday_values(raw_shenzhen_values),
+        'portfolio_pct': _rebase_intraday_values(raw_portfolio_values),
+        'slot_indices': slot_indices,
     }
 
 
@@ -395,47 +435,56 @@ def _upsert_intraday_chart(
         chart_data = _empty_intraday_chart(trade_date)
 
     slot_indices = list(chart_data.get('slot_indices', []))
-    index_values = list(chart_data.get('index_pct', []))
-    shenzhen_values = list(chart_data.get('shenzhen_pct', []))
-    portfolio_values = list(chart_data.get('portfolio_pct', []))
+    raw_index_values = list(chart_data.get('raw_index_pct', chart_data.get('index_pct', [])))
+    raw_shenzhen_values = list(
+        chart_data.get('raw_shenzhen_pct', chart_data.get('shenzhen_pct', []))
+    )
+    raw_portfolio_values = list(
+        chart_data.get('raw_portfolio_pct', chart_data.get('portfolio_pct', []))
+    )
     dates = list(chart_data.get('dates', []))
-    if len(slot_indices) != len(index_values) or len(slot_indices) != len(shenzhen_values) or len(slot_indices) != len(portfolio_values) or len(slot_indices) != len(dates):
+    if (
+        len(slot_indices) != len(raw_index_values)
+        or len(slot_indices) != len(raw_shenzhen_values)
+        or len(slot_indices) != len(raw_portfolio_values)
+        or len(slot_indices) != len(dates)
+    ):
         chart_data = _empty_intraday_chart(trade_date)
         slot_indices = []
-        index_values = []
-        shenzhen_values = []
-        portfolio_values = []
+        raw_index_values = []
+        raw_shenzhen_values = []
+        raw_portfolio_values = []
         dates = []
     slot_idx = _get_intraday_slot_index(point_time)
     point_label = point_time.strftime("%H:%M")
 
     if slot_indices and slot_idx == slot_indices[-1]:
-        index_values[-1] = index_pct
-        shenzhen_values[-1] = shenzhen_pct
-        portfolio_values[-1] = portfolio_pct
+        raw_index_values[-1] = index_pct
+        raw_shenzhen_values[-1] = shenzhen_pct
+        raw_portfolio_values[-1] = portfolio_pct
         dates[-1] = point_label
     elif slot_idx in slot_indices:
         replace_idx = slot_indices.index(slot_idx)
-        index_values[replace_idx] = index_pct
-        shenzhen_values[replace_idx] = shenzhen_pct
-        portfolio_values[replace_idx] = portfolio_pct
+        raw_index_values[replace_idx] = index_pct
+        raw_shenzhen_values[replace_idx] = shenzhen_pct
+        raw_portfolio_values[replace_idx] = portfolio_pct
         dates[replace_idx] = point_label
     else:
         slot_indices.append(slot_idx)
-        index_values.append(index_pct)
-        shenzhen_values.append(shenzhen_pct)
-        portfolio_values.append(portfolio_pct)
+        raw_index_values.append(index_pct)
+        raw_shenzhen_values.append(shenzhen_pct)
+        raw_portfolio_values.append(portfolio_pct)
         dates.append(point_label)
 
-    return {
-        **chart_data,
-        'trade_date': trade_date,
-        'dates': dates,
-        'index_pct': index_values,
-        'shenzhen_pct': shenzhen_values,
-        'portfolio_pct': portfolio_values,
-        'slot_indices': slot_indices,
-    }
+    return _compose_intraday_chart(
+        chart_data,
+        trade_date,
+        dates,
+        slot_indices,
+        raw_index_values,
+        raw_shenzhen_values,
+        raw_portfolio_values,
+    )
 
 
 def _get_intraday_chart_state_dir() -> Path:
@@ -461,9 +510,9 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
 
     normalized = _empty_intraday_chart(payload_trade_date)
     raw_dates = chart_data.get('dates', [])
-    raw_index = chart_data.get('index_pct', [])
-    raw_shenzhen = chart_data.get('shenzhen_pct', [])
-    raw_portfolio = chart_data.get('portfolio_pct', [])
+    raw_index = chart_data.get('raw_index_pct', chart_data.get('index_pct', []))
+    raw_shenzhen = chart_data.get('raw_shenzhen_pct', chart_data.get('shenzhen_pct', []))
+    raw_portfolio = chart_data.get('raw_portfolio_pct', chart_data.get('portfolio_pct', []))
     raw_slots = chart_data.get('slot_indices', [])
     if not all(isinstance(items, list) for items in (raw_dates, raw_index, raw_shenzhen, raw_portfolio, raw_slots)):
         return normalized
@@ -491,12 +540,20 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
     for slot_int in sorted(dedup_points):
         label, index_float, shenzhen_float, portfolio_float = dedup_points[slot_int]
         normalized['dates'].append(label)
-        normalized['index_pct'].append(index_float)
-        normalized['shenzhen_pct'].append(shenzhen_float)
-        normalized['portfolio_pct'].append(portfolio_float)
+        normalized['raw_index_pct'].append(index_float)
+        normalized['raw_shenzhen_pct'].append(shenzhen_float)
+        normalized['raw_portfolio_pct'].append(portfolio_float)
         normalized['slot_indices'].append(slot_int)
 
-    return normalized
+    return _compose_intraday_chart(
+        normalized,
+        payload_trade_date,
+        list(normalized['dates']),
+        list(normalized['slot_indices']),
+        list(normalized['raw_index_pct']),
+        list(normalized['raw_shenzhen_pct']),
+        list(normalized['raw_portfolio_pct']),
+    )
 
 
 def _save_intraday_chart(chart_data: Optional[dict]) -> None:

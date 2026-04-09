@@ -100,7 +100,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 $start_model_version     = 8165    # 第一个 split 的模型版本号（$null = 不指定）
                                    #7969/8165/8937:d3, 8137:d2
 
@@ -148,12 +148,8 @@ $market_adaptive_topn_bear_factor = 1.5          # 趋势向下/震荡时分散�
 # ── OOS 旧版置信度门控（signal_gate_mode="legacy" 时生效）────────────
 $signal_confidence_gate_enabled = $false  # $true 启用 | $false 禁用（仅 legacy 模式）
 $signal_confidence_gate_top_k_list = @(20)
-$signal_confidence_gate_threshold_sets = @(
-    "0.01 0.02 0.10"
-)
-$signal_confidence_gate_exposure_sets = @(
-    "0.10 0.99 1.00"
-)
+$signal_confidence_gate_threshold_sets = @( "0.01 0.02 0.10" )
+$signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
 # ── OOS 止损（关闭时请保持各阈值列表为单值，避免重复任务）─────────
 $bt_stop_loss_enabled                 = $true  # $true 启用 | $false 禁用
