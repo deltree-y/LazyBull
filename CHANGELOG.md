@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.47.5] - 2026-04-09
+
+### 优化
+
+- **树莓派 3.5 寸 LCD 指数实时行情并入同一轮 snapshot**：`scripts/respi/3.5LCD_disp.py` 的 `_fetch_realtime_holdings_snapshot()` 现在会把上证和深证指数代码一起并入同一轮 `realtime_quote` 请求，日内图优先直接使用 snapshot 中解析出的指数涨跌幅，避免每次实时刷新再额外请求一次指数实时接口。
+- **周期图新增同日缓存**：`scripts/respi/3.5LCD_disp.py` 的 `_fetch_cycle_chart_data()` 现在会按“自然日 + 目标交易日 + 调仓起点 + 账户持仓状态”缓存已经构建好的周期图 payload；同一天内重复刷新会直接复用缓存，减少重复 `daily` 和 `index_daily` 调用。
+- **收盘补抓保持可重试**：只有当缓存结果已经覆盖“当前应有的最近交易日”时才会落缓存；如果收盘后当天日线数据尚未可用，周期图不会缓存缺失结果，10 分钟补抓仍会继续查询直到数据出现。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增“同一轮 snapshot 合并指数行情”“优先复用 snapshot 指数涨跌幅”“周期图同日缓存命中”“收盘后目标交易日未齐时继续重试”等回归断言。
+
+## [0.47.4] - 2026-04-09
+
+### 优化
+
+- **树莓派 3.5 寸 LCD 持仓实时行情去重复用**：`scripts/respi/3.5LCD_disp.py` 之前会分别为摘要、个股排行和日内图各取一轮持仓实时行情；本次改为先获取一份共享持仓快照，再复用于三块面板，避免同一次刷新里重复拉取持仓 `realtime_quote`。
+- **盘中与非交易时段分频刷新**：盘中有效交易时段内，摘要/排行/日内图改为每 2 分钟刷新一次；周期图及非交易时段补数仍按 10 分钟节奏执行，但仅在尚未拿到“最近一个应有交易日”数据时才会继续尝试。
+- **提取可复用的摘要计算 helper**：`scripts/paper_trade.py` 新增基于已获取行情 DataFrame 计算实时摘要的 helper，LCD 脚本可直接复用，保持市值、浮盈率、总盈亏率和年化收益口径一致。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增共享快照复用、盘中 2 分钟刷新、目标交易日切换立即补抓、周末缺数重试等断言。
+- 保留并通过 `tests/test_paper_trade_realtime_summary.py`，确认摘要在 `PRICE<=0` 时仍会回退 `PRE_CLOSE`。
+
 ## [0.47.3] - 2026-04-09
 
 ### 修复

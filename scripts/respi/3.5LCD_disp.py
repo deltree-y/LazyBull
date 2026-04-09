@@ -6,7 +6,7 @@
 适配微雪 3.5inch RPi LCD (C)，480x320 RGB565，通过 /dev/fb1 framebuffer 输出。
 
 架构：
-  数据线程：每10分钟获取实时行情+图表数据（启动时立即获取一次）
+    数据线程：盘中每2分钟刷新摘要/排行/日内图，周期图与非交易时段补数按10分钟按需获取（启动时立即获取一次）
   显示线程：每秒刷新画面（底部时间实时更新），每60秒随机偏移数据区（屏保防烧屏）
 
 屏幕布局（480x320）：
@@ -27,8 +27,9 @@ import threading
 import json
 import tempfile
 import os
+import copy
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import time as dt_time
 from typing import Optional
 
@@ -49,7 +50,8 @@ from src.lazybull.common.config import get_config    # noqa: E402
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
-REFRESH_INTERVAL = 600       # 数据刷新间隔（秒），10分钟
+REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
+REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒），2分钟
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
 BACKLIGHT_BRIGHTNESS = 10    # 背光亮度 0~100（默认40%，可按需调整）
 SCREENSAVER_RANGE_X = 4      # 屏保水平偏移范围（±像素）
@@ -609,38 +611,57 @@ def _load_intraday_chart(now: Optional[datetime] = None) -> Optional[dict]:
 
 
 _trade_date_set_cache: Optional[frozenset[str]] = None
+_trade_dates_cache: Optional[tuple[str, ...]] = None
 _trade_date_set_lock = threading.Lock()
 
 
-def _load_trade_date_set() -> frozenset[str]:
-    """加载交易日集合并缓存，失败时返回空集合。"""
-    global _trade_date_set_cache
+def _load_trade_dates() -> tuple[str, ...]:
+    """加载交易日列表并缓存，失败时返回空元组。"""
+    global _trade_date_set_cache, _trade_dates_cache
 
-    if _trade_date_set_cache is not None:
-        return _trade_date_set_cache
+    if _trade_dates_cache is not None:
+        return _trade_dates_cache
 
     with _trade_date_set_lock:
-        if _trade_date_set_cache is not None:
-            return _trade_date_set_cache
+        if _trade_dates_cache is not None:
+            return _trade_dates_cache
 
-        result = frozenset()
+        result: tuple[str, ...] = ()
         try:
             from src.lazybull.data import DataLoader, Storage
 
             loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
             trade_cal = loader.load_clean_trade_cal()
             if trade_cal is not None and not trade_cal.empty:
-                result = frozenset(trade_cal.loc[trade_cal['is_open'] == 1, 'cal_date'].astype(str))
+                result = tuple(
+                    trade_cal.loc[trade_cal['is_open'] == 1, 'cal_date']
+                    .astype(str)
+                    .sort_values()
+                    .tolist()
+                )
         except Exception:
-            result = frozenset()
+            result = ()
 
-        _trade_date_set_cache = result
+        _trade_dates_cache = result
+        _trade_date_set_cache = frozenset(result)
+        return _trade_dates_cache
+
+
+def _load_trade_date_set() -> frozenset[str]:
+    """加载交易日集合并缓存，失败时返回空集合。"""
+    if _trade_date_set_cache is not None:
         return _trade_date_set_cache
+    return frozenset(_load_trade_dates())
 
 
 def _get_cached_trade_date_set() -> Optional[frozenset[str]]:
     """返回已加载的交易日集合；若尚未加载则返回 None。"""
     return _trade_date_set_cache
+
+
+def _get_cached_trade_dates() -> Optional[tuple[str, ...]]:
+    """返回已加载的交易日列表；若尚未加载则返回 None。"""
+    return _trade_dates_cache
 
 
 def _is_trade_day(now: Optional[datetime] = None, allow_load: bool = False) -> bool:
@@ -675,6 +696,39 @@ def _is_realtime_quote_window(now: Optional[datetime] = None) -> bool:
         A_SHARE_MORNING_OPEN <= current_time <= A_SHARE_MORNING_CLOSE
         or A_SHARE_AFTERNOON_OPEN <= current_time <= A_SHARE_AFTERNOON_CLOSE
     )
+
+
+def _get_target_cycle_data_date(
+    now: Optional[datetime] = None,
+    allow_load: bool = False,
+) -> Optional[str]:
+    """返回当前应具备的最近一个交易日周期图数据日期。"""
+    current_dt = now or datetime.now()
+    today_str = current_dt.strftime("%Y%m%d")
+    trade_dates = _load_trade_dates() if allow_load else _get_cached_trade_dates()
+
+    if trade_dates:
+        if today_str in trade_dates:
+            today_index = trade_dates.index(today_str)
+            if current_dt.time() >= INTRADAY_WINDOW_END:
+                return today_str
+            if today_index > 0:
+                return trade_dates[today_index - 1]
+            return None
+        return next(
+            (trade_date for trade_date in reversed(trade_dates) if trade_date < today_str),
+            None,
+        )
+
+    if current_dt.weekday() >= 5:
+        days_back = current_dt.weekday() - 4
+        return (current_dt - timedelta(days=days_back)).strftime("%Y%m%d")
+
+    if current_dt.time() >= INTRADAY_WINDOW_END:
+        return today_str
+
+    prev_business_days = 3 if current_dt.weekday() == 0 else 1
+    return (current_dt - timedelta(days=prev_business_days)).strftime("%Y%m%d")
 
 
 def _select_chart_data(
@@ -714,45 +768,105 @@ def _format_cycle_last_data_label(cycle_chart_data: Optional[dict]) -> Optional[
     return f"周期图最后数据日:{_format_mmdd(last_date)}"
 
 
+def _has_cycle_data_for_target(
+    cycle_chart_data: Optional[dict],
+    target_cycle_date: Optional[str],
+) -> bool:
+    """判断周期图是否已经覆盖目标交易日。"""
+    if target_cycle_date is None:
+        return False
+    last_date = _get_cycle_last_data_date(cycle_chart_data)
+    if last_date is None:
+        return False
+    return last_date >= target_cycle_date
+
+
 def _get_refresh_policy(
     cycle_chart_data: Optional[dict], now: Optional[datetime] = None
 ) -> dict:
     """返回当前时段的数据刷新策略。"""
     current_dt = now or datetime.now()
-    if _is_intraday_chart_window(current_dt):
-        realtime_active = _is_realtime_quote_window(current_dt)
-        return {
-            'refresh_cycle': realtime_active,
-            'refresh_realtime': realtime_active,
-        }
-
-    if not _is_trade_day(current_dt):
+    realtime_active = _is_realtime_quote_window(current_dt)
+    if realtime_active:
         return {
             'refresh_cycle': False,
-            'refresh_realtime': False,
+            'refresh_realtime': True,
         }
 
-    if current_dt.time() <= INTRADAY_WINDOW_END:
-        return {
-            'refresh_cycle': False,
-            'refresh_realtime': False,
-        }
-
-    has_today_cycle_data = _get_cycle_last_data_date(cycle_chart_data) == current_dt.strftime("%Y%m%d")
+    target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
     return {
-        'refresh_cycle': not has_today_cycle_data,
+        'refresh_cycle': not _has_cycle_data_for_target(cycle_chart_data, target_cycle_date),
         'refresh_realtime': False,
     }
+
+
+def _get_realtime_session_key(now: Optional[datetime] = None) -> Optional[str]:
+    """返回当前实时行情窗口标识，用于开盘和午后开盘时立即刷新。"""
+    current_dt = now or datetime.now()
+    if not _is_realtime_quote_window(current_dt):
+        return None
+    session = "am" if current_dt.time() <= A_SHARE_MORNING_CLOSE else "pm"
+    return f"{current_dt:%Y%m%d}-{session}"
+
+
+def _is_interval_due(
+    last_refresh_at: Optional[datetime],
+    interval_seconds: int,
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断距离上次刷新是否已达到指定间隔。"""
+    if last_refresh_at is None:
+        return True
+    current_dt = now or datetime.now()
+    return (current_dt - last_refresh_at).total_seconds() >= float(interval_seconds)
+
+
+def _is_realtime_refresh_due(
+    refresh_allowed: bool,
+    last_refresh_at: Optional[datetime],
+    last_session_key: Optional[str],
+    now: Optional[datetime] = None,
+) -> tuple[bool, Optional[str]]:
+    """判断盘中实时面板是否应立即刷新。"""
+    current_dt = now or datetime.now()
+    session_key = _get_realtime_session_key(current_dt)
+    if not refresh_allowed or session_key is None:
+        return False, session_key
+    if last_session_key != session_key:
+        return True, session_key
+    return _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt), session_key
+
+
+def _is_cycle_refresh_due(
+    cycle_chart_data: Optional[dict],
+    refresh_allowed: bool,
+    last_refresh_at: Optional[datetime],
+    last_target_date: Optional[str],
+    now: Optional[datetime] = None,
+) -> tuple[bool, Optional[str]]:
+    """判断周期图是否应补抓最近一个交易日数据。"""
+    current_dt = now or datetime.now()
+    target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
+    if not refresh_allowed or target_cycle_date is None:
+        return False, target_cycle_date
+    if _has_cycle_data_for_target(cycle_chart_data, target_cycle_date):
+        return False, target_cycle_date
+    if last_target_date != target_cycle_date:
+        return True, target_cycle_date
+    return _is_interval_due(last_refresh_at, REFRESH_INTERVAL, current_dt), target_cycle_date
 
 
 def _get_data_worker_wait_seconds(now: Optional[datetime] = None) -> float:
     """返回数据线程下次唤醒间隔。
 
-    常规情况下按 10 分钟轮询；若即将跨过开盘、午休结束或收盘切图边界，
+    盘中按 2 分钟节奏唤醒，非交易时段按 10 分钟节奏唤醒；若即将跨过
+    开盘、午休结束或收盘切图边界，
     则缩短本次等待，确保关键时点能尽快刷新。
     """
     current_dt = now or datetime.now()
-    wait_seconds = float(REFRESH_INTERVAL)
+    wait_seconds = float(
+        REALTIME_REFRESH_INTERVAL if _is_realtime_quote_window(current_dt) else REFRESH_INTERVAL
+    )
 
     if not _is_trade_day(current_dt):
         return wait_seconds
@@ -947,6 +1061,72 @@ def _calc_days_to_rebalance() -> Optional[int]:
 
 # ---------- 图表数据获取 ----------
 
+_cycle_chart_cache_lock = threading.Lock()
+_cycle_chart_cache_scope_date: Optional[str] = None
+_cycle_chart_cache: dict[tuple, dict] = {}
+
+
+def _sync_cycle_chart_cache_scope(cache_scope_date: str) -> None:
+    """按自然日维护周期图缓存作用域，跨天时自动清空。"""
+    global _cycle_chart_cache_scope_date
+
+    if _cycle_chart_cache_scope_date == cache_scope_date:
+        return
+
+    _cycle_chart_cache.clear()
+    _cycle_chart_cache_scope_date = cache_scope_date
+
+
+def _build_cycle_chart_cache_key(
+    cache_scope_date: str,
+    target_cycle_date: Optional[str],
+    start_date: str,
+    rebalance_freq: object,
+    cash: object,
+    positions: dict,
+) -> tuple:
+    """构建周期图当日缓存键，状态变化时自动失效。"""
+    cash_float = _coerce_float(cash)
+    if cash_float is None:
+        cash_float = 0.0
+
+    positions_signature = tuple(
+        sorted(
+            (
+                ts_code,
+                int(getattr(pos, 'shares', 0)),
+                round(float(getattr(pos, 'buy_price', 0.0)), 6),
+            )
+            for ts_code, pos in positions.items()
+        )
+    )
+
+    return (
+        cache_scope_date,
+        target_cycle_date or "",
+        str(start_date),
+        str(rebalance_freq),
+        round(cash_float, 6),
+        positions_signature,
+    )
+
+
+def _get_cached_cycle_chart_data(cache_key: tuple, cache_scope_date: str) -> Optional[dict]:
+    """读取周期图当日缓存。"""
+    with _cycle_chart_cache_lock:
+        _sync_cycle_chart_cache_scope(cache_scope_date)
+        cached = _cycle_chart_cache.get(cache_key)
+        if cached is None:
+            return None
+        return copy.deepcopy(cached)
+
+
+def _save_cycle_chart_data_cache(cache_key: tuple, cache_scope_date: str, chart_data: dict) -> None:
+    """保存周期图当日缓存。"""
+    with _cycle_chart_cache_lock:
+        _sync_cycle_chart_cache_scope(cache_scope_date)
+        _cycle_chart_cache[cache_key] = copy.deepcopy(chart_data)
+
 def _fetch_cycle_chart_data() -> Optional[dict]:
     """获取持仓周期内的上证/深证指数和持仓组合涨跌幅数据。
 
@@ -985,7 +1165,21 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
     positions = account_state.positions  # {ts_code: Position}
     cash = account_state.cash
-    today_str = datetime.now().strftime("%Y%m%d")
+    current_dt = datetime.now()
+    today_str = current_dt.strftime("%Y%m%d")
+    cache_scope_date = today_str
+    target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
+    cycle_cache_key = _build_cycle_chart_cache_key(
+        cache_scope_date,
+        target_cycle_date,
+        start_date,
+        rebalance_freq,
+        cash,
+        positions,
+    )
+    cached_chart_data = _get_cached_cycle_chart_data(cycle_cache_key, cache_scope_date)
+    if cached_chart_data is not None:
+        return cached_chart_data
 
     try:
         client = TushareClient(verbose=False)
@@ -1044,7 +1238,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     index_pct = [(shanghai_close_map[d] / shanghai_base_close - 1) * 100 for d in trade_dates]
     shenzhen_pct = [(shenzhen_close_map[d] / shenzhen_base_close - 1) * 100 for d in trade_dates]
 
-    return _build_cycle_chart_payload(
+    chart_data = _build_cycle_chart_payload(
         dates=trade_dates,
         index_pct=index_pct,
         shenzhen_pct=shenzhen_pct,
@@ -1053,37 +1247,90 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         base_value=base_value,
     )
 
+    if chart_data is not None and (
+        target_cycle_date is None or _has_cycle_data_for_target(chart_data, target_cycle_date)
+    ):
+        _save_cycle_chart_data_cache(cycle_cache_key, cache_scope_date, chart_data)
+
+    return chart_data
+
 
 # ---------- 个股盈亏排名 ----------
 
 def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     """获取当前持仓实时行情快照。"""
-    from src.lazybull.paper import PaperStorage
+    from src.lazybull.paper import PaperStorage, PaperTradingRunner
     from src.lazybull.data.tushare_client import TushareClient
 
+    runner = PaperTradingRunner(verbose=False)
+    positions = runner.account.get_positions()
+    cash = runner.account.get_cash()
     paper_storage = PaperStorage(
         root_path=str(project_root / "data" / "paper"), verbose=False
     )
-    account_state = paper_storage.load_account_state()
-    if account_state is None or not account_state.positions:
-        return None
+    config = paper_storage.load_config()
+    initial_capital = (
+        config.get('initial_capital', runner.account.initial_capital)
+        if config else runner.account.initial_capital
+    )
+    annualized_return_func = getattr(runner.broker, '_calculate_annualized_return', None)
+    if not callable(annualized_return_func):
+        annualized_return_func = None
 
-    positions = account_state.positions
-    ts_codes_str = ','.join(positions.keys())
+    snapshot = {
+        'positions': positions,
+        'cash': cash,
+        'initial_capital': initial_capital,
+        'current_date': datetime.now().strftime("%Y%m%d"),
+        'annualized_return_func': annualized_return_func,
+        'index_pct_map': {},
+        'quotes': None,
+    }
+
+    if not positions:
+        return snapshot
+
+    ts_codes = list(positions.keys()) + [SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE]
+    ts_codes_str = ','.join(dict.fromkeys(ts_codes))
 
     try:
         client = TushareClient(verbose=False)
         rt_df = client.get_realtime_quote(ts_codes_str)
     except Exception:
-        return None
+        return snapshot
 
     if rt_df is None or rt_df.empty:
+        return snapshot
+
+    snapshot['quotes'] = rt_df
+    snapshot['index_pct_map'] = _extract_index_pct_map_from_quote_df(rt_df)
+    return snapshot
+
+
+def _build_realtime_portfolio_summary(snapshot: Optional[dict]) -> Optional[dict]:
+    """基于实时快照构建持仓摘要，复用已获取的持仓行情。"""
+    if snapshot is None:
         return None
 
-    return {
-        'positions': positions,
-        'quotes': rt_df,
-    }
+    from paper_trade import build_realtime_portfolio_summary_from_quotes
+
+    cash = _coerce_float(snapshot.get('cash'))
+    initial_capital = _coerce_float(snapshot.get('initial_capital'))
+    if cash is None or initial_capital is None:
+        return None
+
+    annualized_return_func = snapshot.get('annualized_return_func')
+    if not callable(annualized_return_func):
+        annualized_return_func = None
+
+    return build_realtime_portfolio_summary_from_quotes(
+        positions=snapshot.get('positions', {}),
+        cash=cash,
+        initial_capital=initial_capital,
+        current_date=str(snapshot.get('current_date', datetime.now().strftime("%Y%m%d"))),
+        rt_df=snapshot.get('quotes'),
+        annualized_return_func=annualized_return_func,
+    )
 
 
 def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
@@ -1153,6 +1400,23 @@ def _extract_pct_from_quote_row(row) -> Optional[float]:
     )
 
 
+def _extract_index_pct_map_from_quote_df(rt_df) -> dict[str, float]:
+    """从实时行情表中提取上证与深证当日涨跌幅。"""
+    pct_map: dict[str, float] = {}
+    if rt_df is None or rt_df.empty:
+        return pct_map
+
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('TS_CODE', row.get('ts_code', '')))
+        if ts_code not in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
+            continue
+        pct = _extract_pct_from_quote_row(row)
+        if pct is not None:
+            pct_map[ts_code] = pct
+
+    return pct_map
+
+
 def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
     """从 akshare 指数现货表中提取指定指数当日涨跌幅。"""
     if df is None or df.empty:
@@ -1193,27 +1457,26 @@ def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
     )
 
 
-def _fetch_realtime_index_pcts() -> dict[str, float]:
+def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, float]:
     """获取上证与深证指数当日实时涨跌幅。"""
-    from src.lazybull.data.tushare_client import TushareClient
-
     pct_map: dict[str, float] = {}
 
-    try:
-        client = TushareClient(verbose=False)
-        rt_df = client.get_realtime_quote(f"{SHANGHAI_INDEX_CODE},{SHENZHEN_INDEX_CODE}")
-        if rt_df is not None and not rt_df.empty:
-            for _, row in rt_df.iterrows():
-                ts_code = str(row.get('TS_CODE', row.get('ts_code', '')))
-                if ts_code not in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
-                    continue
-                pct = _extract_pct_from_quote_row(row)
+    if snapshot is not None:
+        snapshot_pct_map = snapshot.get('index_pct_map')
+        if isinstance(snapshot_pct_map, dict):
+            for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
+                pct = _sanitize_intraday_pct(
+                    snapshot_pct_map.get(code),
+                    INTRADAY_INDEX_PCT_ABS_LIMIT,
+                )
                 if pct is not None:
-                    pct_map[ts_code] = pct
+                    pct_map[code] = pct
+        if len(pct_map) < 2:
+            pct_map.update(
+                _extract_index_pct_map_from_quote_df(snapshot.get('quotes'))
+            )
         if len(pct_map) == 2:
             return pct_map
-    except Exception:
-        pass
 
     try:
         import akshare as ak  # type: ignore
@@ -1290,7 +1553,7 @@ def _build_intraday_chart(
     if snapshot is None or not _is_realtime_quote_window(current_time):
         return chart_data
 
-    index_pct_map = _fetch_realtime_index_pcts()
+    index_pct_map = _fetch_realtime_index_pcts(snapshot)
     holdings_pct = _compute_holdings_intraday_pct(snapshot)
     shanghai_pct = index_pct_map.get(SHANGHAI_INDEX_CODE)
     shenzhen_pct = index_pct_map.get(SHENZHEN_INDEX_CODE)
@@ -1308,6 +1571,69 @@ def _build_intraday_chart(
         shenzhen_pct,
         holdings_pct,
     )
+
+
+def _refresh_display_state(
+    state: "DisplayState",
+    refresh_realtime: bool = False,
+    refresh_cycle: bool = False,
+) -> None:
+    """按需刷新共享显示状态。"""
+    holdings_snapshot = None
+
+    if refresh_realtime:
+        try:
+            holdings_snapshot = _fetch_realtime_holdings_snapshot()
+        except Exception:
+            holdings_snapshot = None
+
+        try:
+            summary = _build_realtime_portfolio_summary(holdings_snapshot)
+            if summary is not None:
+                with state.lock:
+                    state.summary = summary
+                    state.update_time = datetime.now().strftime("%H:%M")
+        except Exception:
+            pass
+
+        try:
+            with state.lock:
+                current_intraday_chart = state.intraday_chart_data
+            intraday_chart_data = _build_intraday_chart(
+                current_intraday_chart,
+                holdings_snapshot,
+            )
+            if intraday_chart_data is not None:
+                with state.lock:
+                    state.intraday_chart_data = intraday_chart_data
+                _save_intraday_chart(intraday_chart_data)
+        except Exception:
+            pass
+
+        try:
+            ranks = _build_stock_rankings(holdings_snapshot)
+            if ranks is not None:
+                with state.lock:
+                    state.stock_rankings = ranks
+        except Exception:
+            pass
+
+    try:
+        days = _calc_days_to_rebalance()
+        if days is not None:
+            with state.lock:
+                state.days_to_rebalance = days
+    except Exception:
+        pass
+
+    if refresh_cycle:
+        try:
+            cycle_chart_data = _fetch_cycle_chart_data()
+            if cycle_chart_data is not None:
+                with state.lock:
+                    state.chart_data = cycle_chart_data
+        except Exception:
+            pass
 
 
 # ---------- 共享显示状态 ----------
@@ -1685,79 +2011,20 @@ def _draw_chart(
 # ---------- 数据获取线程 ----------
 
 def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
-    """每 REFRESH_INTERVAL 秒获取一次实时行情和图表数据，更新共享状态。
+    """按分频策略获取实时行情和图表数据，更新共享状态。
 
     启动时立即获取一次（非交易日也会返回最近一个交易日的收盘数据）。
     """
     _emit_diag_once("data_worker_start", "数据线程已启动")
 
     try:
-        from paper_trade import get_realtime_portfolio_summary
-
-        def _fetch_data(refresh_realtime: bool = True) -> None:
-            """获取行情、调仓天数、图表数据和个股排名，更新共享状态。"""
-            summary = None
-            cycle_chart_data = None
-            holdings_snapshot = None
-
-            if refresh_realtime:
-                try:
-                    summary = get_realtime_portfolio_summary()
-                    if summary is not None:
-                        with state.lock:
-                            state.summary = summary
-                            state.update_time = datetime.now().strftime("%H:%M")
-                except Exception:
-                    pass
-
-            try:
-                days = _calc_days_to_rebalance()
-                if days is not None:
-                    with state.lock:
-                        state.days_to_rebalance = days
-            except Exception:
-                pass
-
-            try:
-                cycle_chart_data = _fetch_cycle_chart_data()
-                if cycle_chart_data is not None:
-                    with state.lock:
-                        state.chart_data = cycle_chart_data
-            except Exception:
-                pass
-
-            if refresh_realtime:
-                try:
-                    holdings_snapshot = _fetch_realtime_holdings_snapshot()
-                except Exception:
-                    holdings_snapshot = None
-
-            if refresh_realtime and holdings_snapshot is not None:
-                try:
-                    with state.lock:
-                        current_intraday_chart = state.intraday_chart_data
-                    intraday_chart_data = _build_intraday_chart(
-                        current_intraday_chart,
-                        holdings_snapshot,
-                    )
-                    if intraday_chart_data is not None:
-                        with state.lock:
-                            state.intraday_chart_data = intraday_chart_data
-                        _save_intraday_chart(intraday_chart_data)
-                except Exception:
-                    pass
-
-            if refresh_realtime:
-                try:
-                    ranks = _build_stock_rankings(holdings_snapshot)
-                    if ranks is not None:
-                        with state.lock:
-                            state.stock_rankings = ranks
-                except Exception:
-                    pass
-
         # 启动时立即获取一次（非交易日也能显示最近收盘数据）
-        _fetch_data(refresh_realtime=True)
+        startup_dt = datetime.now()
+        _refresh_display_state(state, refresh_realtime=True, refresh_cycle=True)
+        last_realtime_refresh_at: Optional[datetime] = startup_dt
+        last_realtime_session_key = _get_realtime_session_key(startup_dt)
+        last_cycle_refresh_at: Optional[datetime] = startup_dt
+        last_cycle_target_date = _get_target_cycle_data_date(startup_dt, allow_load=True)
 
         while not stop_event.is_set():
             wait_seconds = _get_data_worker_wait_seconds()
@@ -1765,12 +2032,36 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
             if stop_event.is_set():
                 break
 
-            # 周期图始终按 10 分钟刷新；实时行情只在盘中刷新
+            current_dt = datetime.now()
             with state.lock:
                 current_cycle_chart = state.chart_data
-            refresh_policy = _get_refresh_policy(current_cycle_chart)
-            if refresh_policy['refresh_cycle'] or refresh_policy['refresh_realtime']:
-                _fetch_data(refresh_realtime=bool(refresh_policy['refresh_realtime']))
+            refresh_policy = _get_refresh_policy(current_cycle_chart, current_dt)
+            refresh_realtime, realtime_session_key = _is_realtime_refresh_due(
+                bool(refresh_policy['refresh_realtime']),
+                last_realtime_refresh_at,
+                last_realtime_session_key,
+                current_dt,
+            )
+            refresh_cycle, cycle_target_date = _is_cycle_refresh_due(
+                current_cycle_chart,
+                bool(refresh_policy['refresh_cycle']),
+                last_cycle_refresh_at,
+                last_cycle_target_date,
+                current_dt,
+            )
+
+            if refresh_cycle or refresh_realtime:
+                _refresh_display_state(
+                    state,
+                    refresh_realtime=refresh_realtime,
+                    refresh_cycle=refresh_cycle,
+                )
+                if refresh_realtime:
+                    last_realtime_refresh_at = current_dt
+                    last_realtime_session_key = realtime_session_key
+                if refresh_cycle:
+                    last_cycle_refresh_at = current_dt
+                    last_cycle_target_date = cycle_target_date
     except Exception as exc:
         _emit_diag(f"数据线程异常退出: {type(exc).__name__}: {exc}")
 
@@ -1858,7 +2149,7 @@ def main() -> None:
         signal.signal(signal.SIGINT, _shutdown)
         signal.signal(signal.SIGTERM, _shutdown)
 
-        # 数据获取线程（10分钟间隔）
+        # 数据获取线程（盘中实时 2 分钟，周期图与补数 10 分钟按需）
         data_t = threading.Thread(target=_data_worker, args=(state, stop_event), daemon=True)
         data_t.start()
 

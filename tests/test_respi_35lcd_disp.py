@@ -345,6 +345,79 @@ def test_build_stock_rankings_falls_back_to_pre_close_for_invalid_price():
     assert round(rankings[0]["pnl_pct"], 4) == 10.0
 
 
+def test_fetch_realtime_holdings_snapshot_merges_index_quotes_into_single_request(monkeypatch):
+    module = _load_module()
+    captured = {}
+
+    class DummyRunner:
+        def __init__(self, verbose=False):
+            self.account = SimpleNamespace(
+                initial_capital=100000.0,
+                get_positions=lambda: {
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                },
+                get_cash=lambda: 5000.0,
+            )
+            self.broker = SimpleNamespace(
+                _calculate_annualized_return=lambda initial, total, current_date: 0.0
+            )
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_config(self):
+            return {"initial_capital": 100000.0}
+
+    class DummyClient:
+        def __init__(self, verbose=False):
+            pass
+
+        def get_realtime_quote(self, ts_codes_str):
+            captured["ts_codes_str"] = ts_codes_str
+            return pd.DataFrame(
+                [
+                    {"TS_CODE": "000001.SZ", "PRICE": 11.0, "PRE_CLOSE": 10.0, "TIME": "09:32:00"},
+                    {"TS_CODE": module.SHANGHAI_INDEX_CODE, "PRICE": 3015.0, "PRE_CLOSE": 3000.0, "TIME": "09:32:00"},
+                    {"TS_CODE": module.SHENZHEN_INDEX_CODE, "PRICE": 9980.0, "PRE_CLOSE": 10000.0, "TIME": "09:32:00"},
+                ]
+            )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperTradingRunner", DummyRunner)
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+
+    snapshot = module._fetch_realtime_holdings_snapshot()
+
+    assert snapshot is not None
+    assert captured["ts_codes_str"].split(",") == [
+        "000001.SZ",
+        module.SHANGHAI_INDEX_CODE,
+        module.SHENZHEN_INDEX_CODE,
+    ]
+    assert snapshot["quotes"] is not None
+    assert round(snapshot["index_pct_map"][module.SHANGHAI_INDEX_CODE], 4) == 0.5
+    assert round(snapshot["index_pct_map"][module.SHENZHEN_INDEX_CODE], 4) == -0.2
+
+
+def test_fetch_realtime_index_pcts_prefers_snapshot_data():
+    module = _load_module()
+
+    pct_map = module._fetch_realtime_index_pcts(
+        {
+            "index_pct_map": {
+                module.SHANGHAI_INDEX_CODE: 0.7,
+                module.SHENZHEN_INDEX_CODE: -0.4,
+            }
+        }
+    )
+
+    assert pct_map == {
+        module.SHANGHAI_INDEX_CODE: 0.7,
+        module.SHENZHEN_INDEX_CODE: -0.4,
+    }
+
+
 def test_select_chart_data_switches_by_intraday_window(monkeypatch):
     module = _load_module()
 
@@ -436,9 +509,12 @@ def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
 
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):
     module = _load_module()
-
-    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
-    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
 
     refresh_waiting = module._get_refresh_policy(
         {"dates": ["20260401", "20260406"]},
@@ -455,15 +531,17 @@ def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeyp
 
 def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatch):
     module = _load_module()
-
-    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
-    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
     outside_policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260406"]},
         datetime(2026, 4, 7, 20, 0, 0),
     )
 
-    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: True)
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: True)
     intraday_policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260407"]},
@@ -471,13 +549,17 @@ def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatc
     )
 
     assert outside_policy == {"refresh_cycle": True, "refresh_realtime": False}
-    assert intraday_policy == {"refresh_cycle": True, "refresh_realtime": True}
+    assert intraday_policy == {"refresh_cycle": False, "refresh_realtime": True}
 
 
 def test_get_refresh_policy_pauses_realtime_during_lunch(monkeypatch):
     module = _load_module()
-    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: True)
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260406",
+    )
 
     policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260407"]},
@@ -492,6 +574,15 @@ def test_get_data_worker_wait_seconds_keeps_regular_interval_away_from_close(mon
     monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
 
     wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 14, 0, 0))
+
+    assert wait_seconds == float(module.REALTIME_REFRESH_INTERVAL)
+
+
+def test_get_data_worker_wait_seconds_keeps_ten_minutes_outside_trading(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+
+    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 20, 0, 0))
 
     assert wait_seconds == float(module.REFRESH_INTERVAL)
 
@@ -512,3 +603,256 @@ def test_get_data_worker_wait_seconds_wakes_immediately_after_1500_fetch(monkeyp
     wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 15, 0, 0))
 
     assert wait_seconds == 1.0
+
+
+def test_get_refresh_policy_retries_latest_trade_day_on_weekend_when_missing(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260410",
+    )
+
+    policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260409"]},
+        datetime(2026, 4, 11, 20, 0, 0),
+    )
+
+    assert policy == {"refresh_cycle": True, "refresh_realtime": False}
+
+
+def test_is_realtime_refresh_due_respects_new_session_and_two_minute_interval(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+
+    due_on_open, session_key = module._is_realtime_refresh_due(
+        True,
+        datetime(2026, 4, 7, 9, 29, 0),
+        None,
+        datetime(2026, 4, 7, 9, 30, 0),
+    )
+    not_due_yet, _ = module._is_realtime_refresh_due(
+        True,
+        datetime(2026, 4, 7, 9, 30, 0),
+        session_key,
+        datetime(2026, 4, 7, 9, 31, 59),
+    )
+    due_after_interval, _ = module._is_realtime_refresh_due(
+        True,
+        datetime(2026, 4, 7, 9, 30, 0),
+        session_key,
+        datetime(2026, 4, 7, 9, 32, 0),
+    )
+
+    assert due_on_open is True
+    assert session_key == "20260407-am"
+    assert not_due_yet is False
+    assert due_after_interval is True
+
+
+def test_is_cycle_refresh_due_refreshes_immediately_when_target_trade_day_changes(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260408",
+    )
+
+    due_now, target_date = module._is_cycle_refresh_due(
+        {"dates": ["20260401", "20260407"]},
+        True,
+        datetime(2026, 4, 8, 14, 58, 0),
+        "20260407",
+        datetime(2026, 4, 8, 15, 0, 1),
+    )
+
+    assert due_now is True
+    assert target_date == "20260408"
+
+
+def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkeypatch):
+    module = _load_module()
+    query_calls = []
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_rebalance_state(self):
+            return {"last_rebalance_date": "20260401", "rebalance_freq": 5}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={"000001.SZ": SimpleNamespace(shares=100, buy_price=10.0)},
+                cash=5000.0,
+            )
+
+    class DummyClient:
+        def __init__(self, verbose=False):
+            pass
+
+        def query(self, api_name, **kwargs):
+            query_calls.append((api_name, kwargs.get("ts_code")))
+            if api_name == "index_daily":
+                closes = [3000.0, 3030.0] if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE else [10000.0, 10100.0]
+                return pd.DataFrame(
+                    {
+                        "trade_date": ["20260401", "20260407"],
+                        "close": closes,
+                    }
+                )
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260401", "20260407"],
+                    "close": [10.0, 11.0],
+                }
+            )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    first_chart = module._fetch_cycle_chart_data()
+    second_chart = module._fetch_cycle_chart_data()
+
+    assert first_chart is not None
+    assert second_chart is not None
+    assert len(query_calls) == 3
+    assert first_chart == second_chart
+
+
+def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeypatch):
+    module = _load_module()
+    query_call_count = {"value": 0}
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_rebalance_state(self):
+            return {"last_rebalance_date": "20260401", "rebalance_freq": 5}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={"000001.SZ": SimpleNamespace(shares=100, buy_price=10.0)},
+                cash=5000.0,
+            )
+
+    class DummyClient:
+        def __init__(self, verbose=False):
+            pass
+
+        def query(self, api_name, **kwargs):
+            fetch_round = query_call_count["value"] // 3
+            query_call_count["value"] += 1
+            if api_name == "index_daily":
+                trade_dates = ["20260401", "20260407"] if fetch_round == 0 else ["20260401", "20260408"]
+                closes = [3000.0, 3030.0] if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE else [10000.0, 10100.0]
+                return pd.DataFrame(
+                    {
+                        "trade_date": trade_dates,
+                        "close": closes,
+                    }
+                )
+            trade_dates = ["20260401", "20260407"] if fetch_round == 0 else ["20260401", "20260408"]
+            closes = [10.0, 11.0] if fetch_round == 0 else [10.0, 11.5]
+            return pd.DataFrame(
+                {
+                    "trade_date": trade_dates,
+                    "close": closes,
+                }
+            )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260408",
+    )
+
+    first_chart = module._fetch_cycle_chart_data()
+    second_chart = module._fetch_cycle_chart_data()
+    third_chart = module._fetch_cycle_chart_data()
+
+    assert first_chart is not None
+    assert second_chart is not None
+    assert third_chart is not None
+    assert first_chart["dates"][-1] == "20260407"
+    assert second_chart["dates"][-1] == "20260408"
+    assert third_chart["dates"][-1] == "20260408"
+    assert query_call_count["value"] == 6
+
+
+def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+    snapshot = {
+        "positions": {"000001.SZ": SimpleNamespace(shares=100, buy_price=10.0)},
+        "cash": 5000.0,
+        "initial_capital": 100000.0,
+        "current_date": "20260407",
+        "annualized_return_func": None,
+        "quotes": pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "000001.SZ",
+                    "PRICE": 11.0,
+                    "PRE_CLOSE": 10.5,
+                    "TIME": "09:32:00",
+                }
+            ]
+        ),
+    }
+    fetch_calls = []
+    seen_snapshots = []
+
+    monkeypatch.setattr(
+        module,
+        "_fetch_realtime_holdings_snapshot",
+        lambda: fetch_calls.append(True) or snapshot,
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_realtime_portfolio_summary",
+        lambda payload: seen_snapshots.append(("summary", payload))
+        or {
+            "market_value": 1100.0,
+            "total_assets": 6100.0,
+            "float_pnl_pct": 10.0,
+            "total_pnl_pct": -93.9,
+            "annual_return_pct": 0.0,
+            "pos_count": 1,
+            "quote_time": "09:32:00",
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_stock_rankings",
+        lambda payload: seen_snapshots.append(("rank", payload))
+        or [{"name": "平安", "code": "000001", "pnl_pct": 10.0}],
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_intraday_chart",
+        lambda chart_data, payload, point_time=None: seen_snapshots.append(("intraday", payload))
+        or {"mode": "intraday", "dates": ["09:32"]},
+    )
+    monkeypatch.setattr(module, "_save_intraday_chart", lambda chart: None)
+    monkeypatch.setattr(module, "_calc_days_to_rebalance", lambda: 3)
+
+    module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
+
+    assert len(fetch_calls) == 1
+    assert [name for name, _ in seen_snapshots] == ["summary", "intraday", "rank"]
+    assert all(payload is snapshot for _, payload in seen_snapshots)
+    assert state.summary is not None
+    assert state.stock_rankings == [{"name": "平安", "code": "000001", "pnl_pct": 10.0}]
+    assert state.intraday_chart_data == {"mode": "intraday", "dates": ["09:32"]}
+    assert state.days_to_rebalance == 3
+    assert state.update_time != "--:--"

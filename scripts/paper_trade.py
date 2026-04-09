@@ -19,7 +19,7 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
@@ -1319,6 +1319,110 @@ def run_real(args):
         _print_realtime_profit_only(runner, prices, current_date, display_time)
 
 
+def _resolve_realtime_quote_price(row, fallback_price: float) -> float:
+    """规范化实时价格；盘前/无效价格回退昨收，仍无效则回退买入价。"""
+    price = row.get('PRICE', row.get('price'))
+    pre_close = row.get('PRE_CLOSE', row.get('pre_close'))
+    try:
+        price_float = float(price)
+    except (ValueError, TypeError):
+        price_float = None
+    try:
+        pre_close_float = float(pre_close)
+    except (ValueError, TypeError):
+        pre_close_float = None
+
+    if pre_close_float is not None and (not math.isfinite(pre_close_float) or pre_close_float <= 0):
+        pre_close_float = None
+    if price_float is not None and (not math.isfinite(price_float) or price_float <= 0):
+        price_float = None
+
+    if price_float is not None:
+        return price_float
+    if pre_close_float is not None:
+        return pre_close_float
+    return fallback_price
+
+
+def build_realtime_portfolio_summary_from_quotes(
+    positions: Dict[str, object],
+    cash: float,
+    initial_capital: float,
+    current_date: str,
+    rt_df: Optional[pd.DataFrame],
+    annualized_return_func: Optional[Callable[[float, float, str], Optional[float]]] = None,
+) -> Optional[Dict]:
+    """基于已获取的实时行情 DataFrame 计算持仓摘要。"""
+    if not positions:
+        total_assets = cash
+        total_pnl_pct = (
+            (total_assets - initial_capital) / initial_capital * 100
+            if initial_capital > 0 else 0.0
+        )
+        return {
+            'pos_count': 0,
+            'market_value': 0.0,
+            'total_assets': total_assets,
+            'float_pnl_pct': 0.0,
+            'total_pnl_pct': total_pnl_pct,
+            'annual_return_pct': 0.0,
+            'quote_time': '',
+        }
+
+    if rt_df is None or rt_df.empty:
+        return None
+
+    prices: Dict[str, float] = {}
+    quote_time = ""
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('TS_CODE', ''))
+        if ts_code:
+            pos = positions.get(ts_code)
+            fallback_price = getattr(pos, 'buy_price', 0.0) if pos is not None else 0.0
+            prices[ts_code] = _resolve_realtime_quote_price(row, fallback_price)
+        if not quote_time:
+            t = row.get('TIME', '')
+            if t:
+                quote_time = str(t)
+
+    market_value = 0.0
+    total_float_pnl = 0.0
+    total_buy_value = 0.0
+    for ts_code, pos in positions.items():
+        current_price = prices.get(ts_code, getattr(pos, 'buy_price', 0.0))
+        buy_price = getattr(pos, 'buy_price', 0.0)
+        shares = getattr(pos, 'shares', 0)
+        market_value += current_price * shares
+        total_float_pnl += (current_price - buy_price) * shares
+        total_buy_value += buy_price * shares
+
+    float_pnl_pct = (total_float_pnl / total_buy_value * 100) if total_buy_value > 0 else 0.0
+    total_assets = cash + market_value
+    total_pnl_pct = (
+        (total_assets - initial_capital) / initial_capital * 100
+        if initial_capital > 0 else 0.0
+    )
+
+    annual_return_pct = 0.0
+    try:
+        if annualized_return_func is not None:
+            result = annualized_return_func(initial_capital, total_assets, current_date)
+            if result is not None:
+                annual_return_pct = float(result)
+    except Exception:
+        pass
+
+    return {
+        'pos_count': len(positions),
+        'market_value': market_value,
+        'total_assets': total_assets,
+        'float_pnl_pct': float_pnl_pct,
+        'total_pnl_pct': total_pnl_pct,
+        'annual_return_pct': annual_return_pct,
+        'quote_time': quote_time,
+    }
+
+
 def get_realtime_portfolio_summary() -> Optional[Dict]:
     """获取实时持仓摘要，供树莓派 LED 显示使用。
 
@@ -1353,20 +1457,13 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     current_date = pd.Timestamp.today().strftime('%Y%m%d')
 
     if not positions:
-        total_assets = cash
-        total_pnl_pct = (
-            (total_assets - initial_capital) / initial_capital * 100
-            if initial_capital > 0 else 0.0
+        return build_realtime_portfolio_summary_from_quotes(
+            positions=positions,
+            cash=cash,
+            initial_capital=initial_capital,
+            current_date=current_date,
+            rt_df=None,
         )
-        return {
-            'pos_count': 0,
-            'market_value': 0.0,
-            'total_assets': total_assets,
-            'float_pnl_pct': 0.0,
-            'total_pnl_pct': total_pnl_pct,
-            'annual_return_pct': 0.0,
-            'quote_time': '',
-        }
 
     ts_codes_str = ','.join(positions.keys())
     try:
@@ -1379,80 +1476,18 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     if rt_df is None or rt_df.empty:
         return None
 
-    def _resolve_quote_price(row, fallback_price: float) -> float:
-        """规范化实时价格；盘前/无效价格回退昨收，仍无效则回退买入价。"""
-        price = row.get('PRICE', row.get('price'))
-        pre_close = row.get('PRE_CLOSE', row.get('pre_close'))
-        try:
-            price_float = float(price)
-        except (ValueError, TypeError):
-            price_float = None
-        try:
-            pre_close_float = float(pre_close)
-        except (ValueError, TypeError):
-            pre_close_float = None
+    annualized_return_func = getattr(runner.broker, '_calculate_annualized_return', None)
+    if not callable(annualized_return_func):
+        annualized_return_func = None
 
-        if pre_close_float is not None and (not math.isfinite(pre_close_float) or pre_close_float <= 0):
-            pre_close_float = None
-        if price_float is not None and (not math.isfinite(price_float) or price_float <= 0):
-            price_float = None
-
-        if price_float is not None:
-            return price_float
-        if pre_close_float is not None:
-            return pre_close_float
-        return fallback_price
-
-    prices: Dict[str, float] = {}
-    quote_time = ""
-    for _, row in rt_df.iterrows():
-        ts_code = str(row.get('TS_CODE', ''))
-        if ts_code:
-            pos = positions.get(ts_code)
-            fallback_price = pos.buy_price if pos is not None else 0.0
-            prices[ts_code] = _resolve_quote_price(row, fallback_price)
-        if not quote_time:
-            t = row.get('TIME', '')
-            if t:
-                quote_time = str(t)
-
-    # 计算市值和浮盈（基于买入均价）
-    market_value = 0.0
-    total_float_pnl = 0.0
-    total_buy_value = 0.0
-    for ts_code, pos in positions.items():
-        current_price = prices.get(ts_code, pos.buy_price)
-        market_value += current_price * pos.shares
-        total_float_pnl += (current_price - pos.buy_price) * pos.shares
-        total_buy_value += pos.buy_price * pos.shares
-
-    float_pnl_pct = (total_float_pnl / total_buy_value * 100) if total_buy_value > 0 else 0.0
-    total_assets = cash + market_value
-    total_pnl_pct = (
-        (total_assets - initial_capital) / initial_capital * 100
-        if initial_capital > 0 else 0.0
+    return build_realtime_portfolio_summary_from_quotes(
+        positions=positions,
+        cash=cash,
+        initial_capital=initial_capital,
+        current_date=current_date,
+        rt_df=rt_df,
+        annualized_return_func=annualized_return_func,
     )
-
-    annual_return_pct = 0.0
-    try:
-        if hasattr(runner.broker, '_calculate_annualized_return'):
-            result = runner.broker._calculate_annualized_return(
-                initial_capital, total_assets, current_date
-            )
-            if result is not None:
-                annual_return_pct = float(result)
-    except Exception:
-        pass
-
-    return {
-        'pos_count': len(positions),
-        'market_value': market_value,
-        'total_assets': total_assets,
-        'float_pnl_pct': float_pnl_pct,
-        'total_pnl_pct': total_pnl_pct,
-        'annual_return_pct': annual_return_pct,
-        'quote_time': quote_time,
-    }
 
 
 def run_reset_t0(args):
