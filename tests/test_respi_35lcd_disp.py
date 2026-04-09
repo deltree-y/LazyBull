@@ -170,6 +170,89 @@ def test_upsert_intraday_chart_uses_fixed_slots_and_replaces_same_slot():
     assert chart["shenzhen_label"] == "深证"
 
 
+def test_intraday_slots_collapse_lunch_break_into_continuous_line():
+    module = _load_module()
+
+    chart = module._upsert_intraday_chart(
+        None,
+        datetime(2026, 4, 7, 11, 30, 0),
+        index_pct=0.5,
+        shenzhen_pct=0.3,
+        portfolio_pct=1.2,
+    )
+    chart = module._upsert_intraday_chart(
+        chart,
+        datetime(2026, 4, 7, 13, 0, 0),
+        index_pct=0.8,
+        shenzhen_pct=0.6,
+        portfolio_pct=1.5,
+    )
+
+    assert module.INTRADAY_SLOT_COUNT == 26
+    assert chart["slot_indices"] == [12, 13]
+
+
+def test_chart_y_range_always_keeps_zero_reference_visible():
+    module = _load_module()
+
+    positive_y_min, positive_y_max = module._get_chart_y_range([1.2, 1.8, 2.1])
+    negative_y_min, negative_y_max = module._get_chart_y_range([-2.1, -1.3, -0.8])
+
+    assert positive_y_min < 0 < positive_y_max
+    assert negative_y_min < 0 < negative_y_max
+
+
+def test_draw_chart_shows_lunch_marker_and_zero_label_for_intraday():
+    module = _load_module()
+    chart = module._upsert_intraday_chart(
+        None,
+        datetime(2026, 4, 7, 11, 30, 0),
+        index_pct=0.5,
+        shenzhen_pct=0.3,
+        portfolio_pct=1.2,
+    )
+    chart = module._upsert_intraday_chart(
+        chart,
+        datetime(2026, 4, 7, 13, 0, 0),
+        index_pct=0.8,
+        shenzhen_pct=0.6,
+        portfolio_pct=1.5,
+    )
+
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    real_draw = module.ImageDraw.Draw(image)
+    captured_texts = []
+    captured_lines = []
+
+    class DrawProxy:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            captured_lines.append(kwargs.get("fill"))
+            return real_draw.line(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            captured_texts.append((position, text, kwargs.get("fill")))
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+        def ellipse(self, *args, **kwargs):
+            return real_draw.ellipse(*args, **kwargs)
+
+    module._draw_chart(DrawProxy(), chart)
+
+    assert any(text == "午休" for _, text, _ in captured_texts)
+    assert any(text == "0%" for _, text, _ in captured_texts)
+    assert module.COLOR_CHART_BREAK in captured_lines
+    assert module.COLOR_CHART_ZERO_LINE in captured_lines
+
+
 def test_compute_holdings_intraday_pct_uses_pre_close_weighting():
     module = _load_module()
 

@@ -64,12 +64,19 @@ A_SHARE_AFTERNOON_CLOSE = dt_time(15, 0)
 INTRADAY_WINDOW_START = A_SHARE_MORNING_OPEN
 INTRADAY_WINDOW_END = A_SHARE_AFTERNOON_CLOSE
 INTRADAY_SLOT_MINUTES = 10
-INTRADAY_SLOT_COUNT = (
-    ((INTRADAY_WINDOW_END.hour * 60 + INTRADAY_WINDOW_END.minute)
-     - (INTRADAY_WINDOW_START.hour * 60 + INTRADAY_WINDOW_START.minute))
+INTRADAY_MORNING_SLOT_COUNT = (
+    ((A_SHARE_MORNING_CLOSE.hour * 60 + A_SHARE_MORNING_CLOSE.minute)
+     - (A_SHARE_MORNING_OPEN.hour * 60 + A_SHARE_MORNING_OPEN.minute))
     // INTRADAY_SLOT_MINUTES
     + 1
 )
+INTRADAY_AFTERNOON_SLOT_COUNT = (
+    ((A_SHARE_AFTERNOON_CLOSE.hour * 60 + A_SHARE_AFTERNOON_CLOSE.minute)
+     - (A_SHARE_AFTERNOON_OPEN.hour * 60 + A_SHARE_AFTERNOON_OPEN.minute))
+    // INTRADAY_SLOT_MINUTES
+    + 1
+)
+INTRADAY_SLOT_COUNT = INTRADAY_MORNING_SLOT_COUNT + INTRADAY_AFTERNOON_SLOT_COUNT
 INTRADAY_INDEX_PCT_ABS_LIMIT = 20.0
 INTRADAY_PORTFOLIO_PCT_ABS_LIMIT = 35.0
 INTRADAY_STOCK_PCT_ABS_LIMIT = 35.0
@@ -94,6 +101,8 @@ COLOR_CYAN = (70, 205, 255)        # 青蓝色（深证折线）
 COLOR_DIVIDER = (60, 60, 80)       # 分隔线
 COLOR_CHART_BG = (22, 22, 38)      # 图表背景
 COLOR_CHART_GRID = (45, 45, 65)    # 图表网格线
+COLOR_CHART_BREAK = (78, 88, 108)  # 午休分隔标记
+COLOR_CHART_ZERO_LINE = (122, 162, 198)  # 0%参考线
 COLOR_PANEL_LEFT = (25, 28, 48)    # 左面板背景（偏蓝）
 COLOR_PANEL_RIGHT = (28, 35, 38)   # 右面板背景（偏青）
 COLOR_CHART_SHANGHAI = COLOR_YELLOW
@@ -394,11 +403,127 @@ def _build_cycle_chart_payload(
 
 
 def _get_intraday_slot_index(point_time: datetime) -> int:
-    """将盘中时间映射到固定的 10 分钟槽位。"""
-    start_minutes = INTRADAY_WINDOW_START.hour * 60 + INTRADAY_WINDOW_START.minute
+    """将盘中时间映射到固定的 10 分钟槽位，并折叠午休时段。"""
     current_minutes = point_time.hour * 60 + point_time.minute
-    slot_idx = (current_minutes - start_minutes) // INTRADAY_SLOT_MINUTES
+
+    morning_open_minutes = A_SHARE_MORNING_OPEN.hour * 60 + A_SHARE_MORNING_OPEN.minute
+    morning_close_minutes = A_SHARE_MORNING_CLOSE.hour * 60 + A_SHARE_MORNING_CLOSE.minute
+    afternoon_open_minutes = A_SHARE_AFTERNOON_OPEN.hour * 60 + A_SHARE_AFTERNOON_OPEN.minute
+
+    if current_minutes <= morning_close_minutes:
+        slot_idx = (current_minutes - morning_open_minutes) // INTRADAY_SLOT_MINUTES
+    else:
+        slot_idx = INTRADAY_MORNING_SLOT_COUNT + (
+            (current_minutes - afternoon_open_minutes) // INTRADAY_SLOT_MINUTES
+        )
+
     return max(0, min(slot_idx, INTRADAY_SLOT_COUNT - 1))
+
+
+def _get_chart_y_range(values: list[float]) -> tuple[float, float]:
+    """计算图表 y 轴范围，并始终保证 0% 参考线可见。"""
+    if not values:
+        return -1.0, 1.0
+
+    value_min = min(values)
+    value_max = max(values)
+    y_min = min(value_min, 0.0)
+    y_max = max(value_max, 0.0)
+    y_margin = max((y_max - y_min) * 0.15, 0.5)
+    y_min -= y_margin
+    y_max += y_margin
+    if y_max - y_min < 0.01:
+        y_min -= 0.5
+        y_max += 0.5
+    return y_min, y_max
+
+
+def _get_intraday_break_slot_position(chart_data: Optional[dict]) -> Optional[float]:
+    """返回午休折叠边界所在的虚拟槽位位置。"""
+    if not isinstance(chart_data, dict) or chart_data.get('mode') != 'intraday':
+        return None
+    return float(INTRADAY_MORNING_SLOT_COUNT) - 0.5
+
+
+def _draw_vertical_dashed_line(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    top_y: int,
+    bottom_y: int,
+    color: tuple,
+    segment_length: int = 3,
+    gap_length: int = 3,
+) -> None:
+    """绘制一条竖向虚线。"""
+    current_y = top_y
+    while current_y <= bottom_y:
+        end_y = min(current_y + segment_length - 1, bottom_y)
+        draw.line([(x, current_y), (x, end_y)], fill=color, width=1)
+        current_y += segment_length + gap_length
+
+
+def _draw_intraday_break_marker(
+    draw: ImageDraw.ImageDraw,
+    chart_data: Optional[dict],
+    cx: int,
+    cy: int,
+    cw: int,
+    ch: int,
+    slot_count: int,
+    font_xs: ImageFont.FreeTypeFont,
+) -> None:
+    """在日内图中绘制午休折叠分隔标记。"""
+    break_slot_position = _get_intraday_break_slot_position(chart_data)
+    if break_slot_position is None or slot_count < 2:
+        return
+
+    break_px = cx + int(break_slot_position / max(slot_count - 1, 1) * cw)
+    _draw_vertical_dashed_line(
+        draw,
+        break_px,
+        cy + 2,
+        cy + ch - 2,
+        COLOR_CHART_BREAK,
+    )
+
+    lunch_label = "午休"
+    bbox = draw.textbbox((0, 0), lunch_label, font=font_xs)
+    label_w = bbox[2] - bbox[0]
+    label_x = max(cx + 2, min(break_px - label_w // 2, cx + cw - label_w - 2))
+    draw.text((label_x, cy + ch + 1), lunch_label, fill=COLOR_CHART_BREAK, font=font_xs)
+
+
+def _draw_zero_reference_line(
+    draw: ImageDraw.ImageDraw,
+    cx: int,
+    cy: int,
+    cw: int,
+    ch: int,
+    y_min: float,
+    y_range: float,
+    font_xs: ImageFont.FreeTypeFont,
+) -> None:
+    """绘制 0% 参考线及标签。"""
+    zero_py = cy + ch - int((0 - y_min) / y_range * ch)
+    draw.line(
+        [(cx + 1, zero_py), (cx + cw - 1, zero_py)],
+        fill=COLOR_CHART_ZERO_LINE,
+        width=1,
+    )
+
+    zero_label = "0%"
+    bbox = draw.textbbox((0, 0), zero_label, font=font_xs)
+    label_w = bbox[2] - bbox[0]
+    label_h = bbox[3] - bbox[1]
+    tag_x = cx + 4
+    tag_y = max(cy + 2, min(zero_py - label_h - 2, cy + ch - label_h - 2))
+    draw.rounded_rectangle(
+        [tag_x, tag_y, tag_x + label_w + 6, tag_y + label_h + 2],
+        radius=2,
+        fill=COLOR_CHART_BG,
+        outline=COLOR_CHART_ZERO_LINE,
+    )
+    draw.text((tag_x + 3, tag_y), zero_label, fill=COLOR_CHART_ZERO_LINE, font=font_xs)
 
 
 def _empty_intraday_chart(trade_date: str) -> dict:
@@ -1884,11 +2009,7 @@ def _draw_chart(
 
     # Y轴范围
     all_vals = idx_pct + sz_pct + ptf_pct
-    y_min = min(all_vals)
-    y_max = max(all_vals)
-    y_margin = max((y_max - y_min) * 0.15, 0.5)
-    y_min -= y_margin
-    y_max += y_margin
+    y_min, y_max = _get_chart_y_range(all_vals)
     y_range = y_max - y_min
     if y_range < 0.01:
         y_range = 1.0
@@ -1905,17 +2026,13 @@ def _draw_chart(
     # 绘制边框
     draw.rectangle([cx, cy, cx + cw, cy + ch], outline=COLOR_DIVIDER)
 
-    # 零线
-    if y_min < 0 < y_max:
-        zero_py = cy + ch - int((0 - y_min) / y_range * ch)
-        draw.line([(cx + 1, zero_py), (cx + cw - 1, zero_py)],
-                  fill=COLOR_DIVIDER, width=1)
-
     # 水平网格（3条）
     for i in range(1, 4):
         gy = cy + ch * i // 4
         draw.line([(cx + 1, gy), (cx + cw - 1, gy)],
                   fill=COLOR_CHART_GRID, width=1)
+
+    _draw_intraday_break_marker(draw, chart_data, cx, cy, cw, ch, slot_count, font_xs)
 
     # Y轴标签（上/中/下）
     for val, align_top in [(y_max, True), ((y_max + y_min) / 2, False), (y_min, False)]:
@@ -1952,6 +2069,9 @@ def _draw_chart(
     if ptf_pts:
         px, py = ptf_pts[-1]
         draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_CHART_HOLDINGS)
+
+    if y_min <= 0 <= y_max:
+        _draw_zero_reference_line(draw, cx, cy, cw, ch, y_min, y_range, font_xs)
 
     # 图例 + 末尾数值
     def _draw_legend_item(x: int, label: str, color: tuple, value: str) -> int:
