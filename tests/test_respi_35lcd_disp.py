@@ -161,9 +161,9 @@ def test_upsert_intraday_chart_uses_fixed_slots_and_replaces_same_slot():
     assert chart["raw_index_pct"] == [0.8, 1.1]
     assert chart["raw_shenzhen_pct"] == [0.6, 0.9]
     assert chart["raw_portfolio_pct"] == [1.5, 1.8]
-    assert chart["index_pct"] == [0.0, 0.3]
-    assert chart["shenzhen_pct"] == [0.0, 0.3]
-    assert chart["portfolio_pct"] == [0.0, 0.3]
+    assert chart["index_pct"] == [0.8, 1.1]
+    assert chart["shenzhen_pct"] == [0.6, 0.9]
+    assert chart["portfolio_pct"] == [1.5, 1.8]
     assert chart["x_start_label"] == "09:30"
     assert chart["x_end_label"] == "15:00"
     assert chart["portfolio_label"] == "持仓"
@@ -234,9 +234,9 @@ def test_normalize_intraday_chart_drops_abnormal_points():
     assert normalized["raw_index_pct"] == [0.6]
     assert normalized["raw_shenzhen_pct"] == [0.4]
     assert normalized["raw_portfolio_pct"] == [1.1]
-    assert normalized["index_pct"] == [0.0]
-    assert normalized["shenzhen_pct"] == [0.0]
-    assert normalized["portfolio_pct"] == [0.0]
+    assert normalized["index_pct"] == [0.6]
+    assert normalized["shenzhen_pct"] == [0.4]
+    assert normalized["portfolio_pct"] == [1.1]
 
 
 def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypatch):
@@ -267,14 +267,14 @@ def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypa
     assert restored["raw_index_pct"] == [0.6, 0.9]
     assert restored["raw_shenzhen_pct"] == [0.4, 0.7]
     assert restored["raw_portfolio_pct"] == [1.1, 1.3]
-    assert restored["index_pct"] == [0.0, 0.3]
-    assert restored["shenzhen_pct"] == [0.0, 0.3]
-    assert restored["portfolio_pct"] == [0.0, 0.2]
+    assert restored["index_pct"] == [0.6, 0.9]
+    assert restored["shenzhen_pct"] == [0.4, 0.7]
+    assert restored["portfolio_pct"] == [1.1, 1.3]
     assert next_day is None
     assert module._get_intraday_chart_state_path("20260407").exists()
 
 
-def test_normalize_intraday_chart_rebases_legacy_payload_to_zero_start():
+def test_normalize_intraday_chart_keeps_previous_close_based_legacy_payload():
     module = _load_module()
 
     normalized = module._normalize_intraday_chart(
@@ -292,9 +292,9 @@ def test_normalize_intraday_chart_rebases_legacy_payload_to_zero_start():
     assert normalized["raw_index_pct"] == [0.8, 1.1]
     assert normalized["raw_shenzhen_pct"] == [0.6, 0.9]
     assert normalized["raw_portfolio_pct"] == [1.5, 1.8]
-    assert normalized["index_pct"] == [0.0, 0.3]
-    assert normalized["shenzhen_pct"] == [0.0, 0.3]
-    assert normalized["portfolio_pct"] == [0.0, 0.3]
+    assert normalized["index_pct"] == [0.8, 1.1]
+    assert normalized["shenzhen_pct"] == [0.6, 0.9]
+    assert normalized["portfolio_pct"] == [1.5, 1.8]
 
 
 def test_normalize_intraday_chart_drops_pre_open_legacy_points():

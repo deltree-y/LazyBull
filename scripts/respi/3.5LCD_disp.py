@@ -421,19 +421,6 @@ def _empty_intraday_chart(trade_date: str) -> dict:
     }
 
 
-def _rebase_intraday_values(values: list[float]) -> list[float]:
-    """将日内序列改写为相对首个有效点的变化量。"""
-    if not values:
-        return []
-
-    base_value = values[0]
-    rebased_values: list[float] = []
-    for value in values:
-        rebased = round(value - base_value, 6)
-        rebased_values.append(0.0 if abs(rebased) < 1e-9 else rebased)
-    return rebased_values
-
-
 def _compose_intraday_chart(
     chart_data: dict,
     trade_date: str,
@@ -451,9 +438,9 @@ def _compose_intraday_chart(
         'raw_index_pct': raw_index_values,
         'raw_shenzhen_pct': raw_shenzhen_values,
         'raw_portfolio_pct': raw_portfolio_values,
-        'index_pct': _rebase_intraday_values(raw_index_values),
-        'shenzhen_pct': _rebase_intraday_values(raw_shenzhen_values),
-        'portfolio_pct': _rebase_intraday_values(raw_portfolio_values),
+        'index_pct': list(raw_index_values),
+        'shenzhen_pct': list(raw_shenzhen_values),
+        'portfolio_pct': list(raw_portfolio_values),
         'slot_indices': slot_indices,
     }
 

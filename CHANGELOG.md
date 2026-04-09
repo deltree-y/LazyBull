@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.47.3] - 2026-04-09
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 日内图收益基准错误**：0.47.1 为了让首点归零，把日内显示序列改成了“相对当日首个有效点”的变化量，视觉效果接近按开盘价计算，不符合以昨日收盘价为基准的日收益口径。
+- 本次恢复前收基准显示：`scripts/respi/3.5LCD_disp.py` 中的 `index_pct/shenzhen_pct/portfolio_pct` 重新直接使用原始当日涨跌幅，和 `raw_*` 字段保持一致，不再按首点重写。
+- 旧版日内持久化 JSON 继续兼容：加载时仍会补齐 `raw_*` 字段，但显示值不再被重映射到 0 起点。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，把日内图追加、持久化恢复和旧版载荷兼容断言切回前收基准口径。
+
 ## [0.47.2] - 2026-04-09
 
 ### 修复
