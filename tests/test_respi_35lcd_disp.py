@@ -27,6 +27,14 @@ def test_format_display_time_uses_new_chinese_style():
 
     assert formatted == "4月7日(周二) 14:40:32"
 
+
+def test_format_rebalance_status_shows_next_date_and_clamps_negative_days():
+    module = _load_module()
+
+    formatted = module._format_rebalance_status("20260410", -2)
+
+    assert formatted == "下次调仓:04/10/剩0天"
+
 def test_format_error_lines_truncates_message_for_screen():
     module = _load_module()
 
@@ -251,6 +259,40 @@ def test_draw_chart_shows_lunch_marker_and_zero_label_for_intraday():
     assert any(text == "0%" for _, text, _ in captured_texts)
     assert module.COLOR_CHART_BREAK in captured_lines
     assert module.COLOR_CHART_ZERO_LINE in captured_lines
+
+
+def test_draw_zero_reference_line_applies_offset():
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    real_draw = module.ImageDraw.Draw(image)
+    captured_lines = []
+
+    class DrawProxy:
+        def line(self, points, *args, **kwargs):
+            captured_lines.append(points)
+            return real_draw.line(points, *args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def text(self, *args, **kwargs):
+            return real_draw.text(*args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+    module._draw_zero_reference_line(
+        DrawProxy(),
+        cx=20,
+        cy=40,
+        cw=100,
+        ch=40,
+        y_min=-2.0,
+        y_range=4.0,
+        font_xs=module._get_font(11),
+    )
+
+    assert captured_lines[0] == [(21, 61), (119, 61)]
 
 
 def test_compute_holdings_intraday_pct_uses_pre_close_weighting():
@@ -609,7 +651,7 @@ def test_format_cycle_last_data_label_uses_last_cycle_date():
         {"dates": ["20260401", "20260407"]}
     )
 
-    assert label == "周期图最后数据日:04/07"
+    assert label == "数据日:04/07"
 
 
 def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
@@ -635,7 +677,7 @@ def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
     )
 
     monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: intraday)
-    monkeypatch.setattr(module, "_format_cycle_last_data_label", lambda chart: "周期图最后数据日:04/07")
+    monkeypatch.setattr(module, "_format_cycle_last_data_label", lambda chart: "数据日:04/07")
     monkeypatch.setattr(
         module,
         "_draw_chart",
@@ -648,6 +690,54 @@ def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
     module._render(state)
 
     assert captured == {"mode": "intraday", "label": None}
+
+
+def test_render_shows_updating_text_and_new_rebalance_status(monkeypatch):
+    module = _load_module()
+    captured_texts = []
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    real_draw = module.ImageDraw.Draw(image)
+
+    class DrawProxy:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            captured_texts.append(text)
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            return real_draw.line(*args, **kwargs)
+
+    state = SimpleNamespace(
+        lock=module.threading.Lock(),
+        summary=None,
+        update_time="14:40",
+        is_updating=True,
+        next_rebalance_date="20260410",
+        days_to_rebalance=2,
+        chart_data=None,
+        intraday_chart_data=None,
+        stock_rankings=None,
+        offset_x=0,
+        offset_y=0,
+    )
+
+    monkeypatch.setattr(module.ImageDraw, "Draw", lambda img: DrawProxy())
+    monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: None)
+    monkeypatch.setattr(module, "_draw_chart", lambda draw, chart_data, cycle_last_data_label=None: None)
+    monkeypatch.setattr(module, "_write_fb", lambda img: None)
+
+    module._render(state)
+
+    assert "更新中..." in captured_texts
+    assert "下次调仓:04/10/剩2天" in captured_texts
 
 
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):
@@ -1032,7 +1122,7 @@ def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
     monkeypatch.setattr(
         module,
         "_fetch_realtime_holdings_snapshot",
-        lambda: fetch_calls.append(True) or snapshot,
+        lambda: fetch_calls.append(state.is_updating) or snapshot,
     )
     monkeypatch.setattr(
         module,
@@ -1061,15 +1151,17 @@ def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
         or {"mode": "intraday", "dates": ["09:32"]},
     )
     monkeypatch.setattr(module, "_save_intraday_chart", lambda chart: None)
-    monkeypatch.setattr(module, "_calc_days_to_rebalance", lambda: 3)
+    monkeypatch.setattr(module, "_calc_rebalance_status", lambda: ("20260410", 3))
 
     module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
 
-    assert len(fetch_calls) == 1
+    assert fetch_calls == [True]
     assert [name for name, _ in seen_snapshots] == ["summary", "intraday", "rank"]
     assert all(payload is snapshot for _, payload in seen_snapshots)
     assert state.summary is not None
     assert state.stock_rankings == [{"name": "平安", "code": "000001", "pnl_pct": 10.0}]
     assert state.intraday_chart_data == {"mode": "intraday", "dates": ["09:32"]}
+    assert state.next_rebalance_date == "20260410"
     assert state.days_to_rebalance == 3
+    assert state.is_updating is False
     assert state.update_time != "--:--"

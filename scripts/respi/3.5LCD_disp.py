@@ -103,12 +103,13 @@ COLOR_DIVIDER = (60, 60, 80)       # 分隔线
 COLOR_CHART_BG = (22, 22, 38)      # 图表背景
 COLOR_CHART_GRID = (45, 45, 65)    # 图表网格线
 COLOR_CHART_BREAK = (78, 88, 108)  # 午休分隔标记
-COLOR_CHART_ZERO_LINE = (122, 162, 198)  # 0%参考线
+COLOR_CHART_ZERO_LINE = (255, 255, 255)  # 0%参考线
 COLOR_PANEL_LEFT = (25, 28, 48)    # 左面板背景（偏蓝）
 COLOR_PANEL_RIGHT = (28, 35, 38)   # 右面板背景（偏青）
 COLOR_CHART_SHANGHAI = COLOR_YELLOW
 COLOR_CHART_SHENZHEN = COLOR_CYAN
 COLOR_CHART_HOLDINGS = COLOR_ORANGE
+ZERO_LINE_Y_OFFSET = 1
 
 _diag_lock = threading.Lock()
 _diag_once_keys: set[str] = set()
@@ -190,6 +191,21 @@ def _format_display_time(now: datetime) -> str:
     """格式化顶部显示时间，如 4月7日(周二) 14:40:32。"""
     weekday = WEEKDAY_NAMES[now.weekday()]
     return f"{now.month}月{now.day}日({weekday}) {now:%H:%M:%S}"
+
+
+def _format_rebalance_status(next_rebalance_date: Optional[str], days_to_rebalance: Optional[int]) -> str:
+    """格式化顶部下次调仓文案。"""
+    if next_rebalance_date and len(next_rebalance_date) == 8 and next_rebalance_date.isdigit():
+        date_str = _format_mmdd(next_rebalance_date)
+    else:
+        date_str = "--/--"
+
+    if days_to_rebalance is None:
+        days_str = "--"
+    else:
+        days_str = str(max(int(days_to_rebalance), 0))
+
+    return f"下次调仓:{date_str}/剩{days_str}天"
 
 
 def _sanitize_intraday_pct(value: object, abs_limit: float) -> Optional[float]:
@@ -505,7 +521,8 @@ def _draw_zero_reference_line(
     font_xs: ImageFont.FreeTypeFont,
 ) -> None:
     """绘制 0% 参考线及标签。"""
-    zero_py = cy + ch - int((0 - y_min) / y_range * ch)
+    zero_py = cy + ch - int((0 - y_min) / y_range * ch) + ZERO_LINE_Y_OFFSET
+    zero_py = max(cy + 1, min(zero_py, cy + ch - 1))
     draw.line(
         [(cx + 1, zero_py), (cx + cw - 1, zero_py)],
         fill=COLOR_CHART_ZERO_LINE,
@@ -887,7 +904,7 @@ def _format_cycle_last_data_label(cycle_chart_data: Optional[dict]) -> Optional[
     last_date = _get_cycle_last_data_date(cycle_chart_data)
     if last_date is None:
         return None
-    return f"周期图最后数据日:{_format_mmdd(last_date)}"
+    return f"数据日:{_format_mmdd(last_date)}"
 
 
 def _has_cycle_data_for_target(
@@ -1239,8 +1256,8 @@ def _render_error_screen(message: str) -> None:
 
 # ---------- 调仓日计算 ----------
 
-def _calc_days_to_rebalance() -> Optional[int]:
-    """计算距下次调仓还剩多少交易日。"""
+def _calc_rebalance_status() -> tuple[Optional[str], Optional[int]]:
+    """计算下次调仓日期及剩余交易日。"""
     from src.lazybull.paper import PaperStorage
     from src.lazybull.data import DataLoader, Storage
 
@@ -1248,18 +1265,19 @@ def _calc_days_to_rebalance() -> Optional[int]:
         root_path=str(project_root / "data" / "paper")
     ).load_rebalance_state()
     if rebalance_state is None:
-        return None
+        return None, None
 
     last_rebalance_date = rebalance_state.get('last_rebalance_date')
     rebalance_freq = rebalance_state.get('rebalance_freq')
     if not last_rebalance_date or not rebalance_freq:
-        return None
+        return None, None
 
     try:
+        rebalance_freq_int = int(rebalance_freq)
         loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
         trade_cal = loader.load_clean_trade_cal()
         if trade_cal is None:
-            return None
+            return None, None
 
         trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
 
@@ -1268,13 +1286,22 @@ def _calc_days_to_rebalance() -> Optional[int]:
             (d for d in reversed(trade_dates) if d <= today_str), None
         )
         if current_date is None:
-            return None
+            return None, None
 
         last_idx = trade_dates.index(last_rebalance_date)
         current_idx = trade_dates.index(current_date)
-        return rebalance_freq - (current_idx - last_idx)
+        next_idx = last_idx + rebalance_freq_int
+        next_rebalance_date = trade_dates[next_idx] if next_idx < len(trade_dates) else None
+        days_to_rebalance = max(next_idx - current_idx, 0)
+        return next_rebalance_date, days_to_rebalance
     except Exception:
-        return None
+        return None, None
+
+
+def _calc_days_to_rebalance() -> Optional[int]:
+    """兼容旧调用，仅返回距下次调仓还剩多少交易日。"""
+    _, days_to_rebalance = _calc_rebalance_status()
+    return days_to_rebalance
 
 
 # ---------- 图表数据获取 ----------
@@ -1821,7 +1848,11 @@ def _refresh_display_state(
     refresh_cycle: bool = False,
 ) -> None:
     """按需刷新共享显示状态。"""
+    with state.lock:
+        state.is_updating = refresh_realtime or refresh_cycle
+
     holdings_snapshot = None
+    update_time_changed = False
 
     if refresh_realtime:
         try:
@@ -1834,7 +1865,7 @@ def _refresh_display_state(
             if summary is not None:
                 with state.lock:
                     state.summary = summary
-                    state.update_time = datetime.now().strftime("%H:%M")
+                update_time_changed = True
         except Exception:
             pass
 
@@ -1861,10 +1892,10 @@ def _refresh_display_state(
             pass
 
     try:
-        days = _calc_days_to_rebalance()
-        if days is not None:
-            with state.lock:
-                state.days_to_rebalance = days
+        next_rebalance_date, days_to_rebalance = _calc_rebalance_status()
+        with state.lock:
+            state.next_rebalance_date = next_rebalance_date
+            state.days_to_rebalance = days_to_rebalance
     except Exception:
         pass
 
@@ -1874,8 +1905,14 @@ def _refresh_display_state(
             if cycle_chart_data is not None:
                 with state.lock:
                     state.chart_data = cycle_chart_data
+                update_time_changed = True
         except Exception:
             pass
+
+    with state.lock:
+        if update_time_changed:
+            state.update_time = datetime.now().strftime("%H:%M")
+        state.is_updating = False
 
 
 # ---------- 共享显示状态 ----------
@@ -1887,6 +1924,8 @@ class DisplayState:
         self.lock = threading.Lock()
         self.summary: Optional[dict] = None
         self.update_time: str = "--:--"
+        self.is_updating: bool = False
+        self.next_rebalance_date: Optional[str] = None
         self.days_to_rebalance: Optional[int] = None
         self.chart_data: Optional[dict] = None
         self.intraday_chart_data: Optional[dict] = _load_intraday_chart()
@@ -1932,6 +1971,8 @@ def _render(state: DisplayState) -> None:
     with state.lock:
         summary = state.summary
         last_update_time = state.update_time
+        is_updating = getattr(state, 'is_updating', False)
+        next_rebalance_date = getattr(state, 'next_rebalance_date', None)
         days_to_rebalance = state.days_to_rebalance
         cycle_chart_data = state.chart_data
         intraday_chart_data = state.intraday_chart_data
@@ -1949,15 +1990,14 @@ def _render(state: DisplayState) -> None:
     font_rank = _get_font(15)  # 排名列表
     font_md = _get_font(20)    # 等待提示
 
-    # ===== 顶部状态栏（固定）：时间 | 更新 | 距调仓 =====
+    # ===== 顶部状态栏（固定）：时间 | 更新 | 下次调仓 =====
     draw.rectangle([0, 0, WIDTH, HEADER_H], fill=COLOR_HEADER_BG)
 
     now = datetime.now()
     chart_data = _select_chart_data(cycle_chart_data, intraday_chart_data, now)
     time_str = _format_display_time(now)
-    days_str = "--" if days_to_rebalance is None else f"{days_to_rebalance}天"
-    header_mid = f"更新:{last_update_time}"
-    header_right = f"待调仓:{days_str}"
+    header_mid = "更新中..." if is_updating else f"更新:{last_update_time}"
+    header_right = _format_rebalance_status(next_rebalance_date, days_to_rebalance)
 
     time_bbox = draw.textbbox((0, 0), time_str, font=font_header_time)
     time_h = time_bbox[3] - time_bbox[1]
