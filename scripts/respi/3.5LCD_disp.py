@@ -55,8 +55,12 @@ BACKLIGHT_BRIGHTNESS = 10    # 背光亮度 0~100（默认40%，可按需调整�
 SCREENSAVER_RANGE_X = 4      # 屏保水平偏移范围（±像素）
 SCREENSAVER_RANGE_Y = 3      # 屏保垂直偏移范围（±像素）
 SCREENSAVER_INTERVAL = 60    # 屏保偏移更新间隔（秒）
-INTRADAY_WINDOW_START = dt_time(8, 30)
-INTRADAY_WINDOW_END = dt_time(15, 30)
+A_SHARE_MORNING_OPEN = dt_time(9, 30)
+A_SHARE_MORNING_CLOSE = dt_time(11, 30)
+A_SHARE_AFTERNOON_OPEN = dt_time(13, 0)
+A_SHARE_AFTERNOON_CLOSE = dt_time(15, 0)
+INTRADAY_WINDOW_START = A_SHARE_MORNING_OPEN
+INTRADAY_WINDOW_END = A_SHARE_AFTERNOON_CLOSE
 INTRADAY_SLOT_MINUTES = 10
 INTRADAY_SLOT_COUNT = (
     ((INTRADAY_WINDOW_END.hour * 60 + INTRADAY_WINDOW_END.minute)
@@ -200,6 +204,38 @@ def _normalize_intraday_price(price: object, pre_close: object, abs_limit: float
     if _sanitize_intraday_pct(pct, abs_limit) is None:
         return pre_close_float
     return price_float
+
+
+def _parse_intraday_point_time(trade_date: str, label: object) -> Optional[datetime]:
+    """解析日内点标签时间，兼容 HH:MM 和 HH:MM:SS。"""
+    label_text = str(label).strip()
+    if len(label_text) >= 5:
+        label_text = label_text[:5]
+    try:
+        return datetime.strptime(f"{trade_date} {label_text}", "%Y%m%d %H:%M")
+    except ValueError:
+        return None
+
+
+def _resolve_intraday_slot_index(
+    trade_date: str,
+    label: object,
+    slot_idx: object,
+) -> Optional[int]:
+    """解析或修正日内槽位，兼容旧版持久化文件并过滤盘前点。"""
+    point_time = _parse_intraday_point_time(trade_date, label)
+    if point_time is not None:
+        if not (INTRADAY_WINDOW_START <= point_time.time() <= INTRADAY_WINDOW_END):
+            return None
+        return _get_intraday_slot_index(point_time)
+
+    try:
+        slot_int = int(slot_idx)
+    except (TypeError, ValueError):
+        return None
+    if slot_int < 0 or slot_int >= INTRADAY_SLOT_COUNT:
+        return None
+    return slot_int
 
 
 def _get_diag_log_paths() -> list[Path]:
@@ -521,11 +557,8 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
     for label, index_val, shenzhen_val, portfolio_val, slot_idx in zip(
         raw_dates, raw_index, raw_shenzhen, raw_portfolio, raw_slots
     ):
-        try:
-            slot_int = int(slot_idx)
-        except (TypeError, ValueError):
-            continue
-        if slot_int < 0 or slot_int >= INTRADAY_SLOT_COUNT:
+        slot_int = _resolve_intraday_slot_index(payload_trade_date, label, slot_idx)
+        if slot_int is None:
             continue
         index_float = _sanitize_intraday_pct(index_val, INTRADAY_INDEX_PCT_ABS_LIMIT)
         shenzhen_float = _sanitize_intraday_pct(shenzhen_val, INTRADAY_INDEX_PCT_ABS_LIMIT)
@@ -636,12 +669,25 @@ def _is_trade_day(now: Optional[datetime] = None, allow_load: bool = False) -> b
 
 
 def _is_intraday_chart_window(now: Optional[datetime] = None) -> bool:
-    """判断是否处于盘中图显示与刷新窗口（交易日 8:30-15:30）。"""
+    """判断是否处于盘中图显示窗口（交易日 9:30-15:00）。"""
     current_dt = now or datetime.now()
     if not _is_trade_day(current_dt):
         return False
     current_time = current_dt.time()
     return INTRADAY_WINDOW_START <= current_time <= INTRADAY_WINDOW_END
+
+
+def _is_realtime_quote_window(now: Optional[datetime] = None) -> bool:
+    """判断当前是否处于可用实时行情窗口。"""
+    current_dt = now or datetime.now()
+    if not _is_trade_day(current_dt):
+        return False
+
+    current_time = current_dt.time()
+    return (
+        A_SHARE_MORNING_OPEN <= current_time <= A_SHARE_MORNING_CLOSE
+        or A_SHARE_AFTERNOON_OPEN <= current_time <= A_SHARE_AFTERNOON_CLOSE
+    )
 
 
 def _select_chart_data(
@@ -687,9 +733,10 @@ def _get_refresh_policy(
     """返回当前时段的数据刷新策略。"""
     current_dt = now or datetime.now()
     if _is_intraday_chart_window(current_dt):
+        realtime_active = _is_realtime_quote_window(current_dt)
         return {
-            'refresh_cycle': True,
-            'refresh_realtime': True,
+            'refresh_cycle': realtime_active,
+            'refresh_realtime': realtime_active,
         }
 
     if not _is_trade_day(current_dt):
@@ -714,8 +761,8 @@ def _get_refresh_policy(
 def _get_data_worker_wait_seconds(now: Optional[datetime] = None) -> float:
     """返回数据线程下次唤醒间隔。
 
-    常规情况下按 10 分钟轮询；若即将跨过 15:30 的图表切换边界，
-    则缩短本次等待，确保离开日内窗口后立刻补一次周期图刷新。
+    常规情况下按 10 分钟轮询；若即将跨过开盘、午休结束或收盘切图边界，
+    则缩短本次等待，确保关键时点能尽快刷新。
     """
     current_dt = now or datetime.now()
     wait_seconds = float(REFRESH_INTERVAL)
@@ -723,11 +770,30 @@ def _get_data_worker_wait_seconds(now: Optional[datetime] = None) -> float:
     if not _is_trade_day(current_dt):
         return wait_seconds
 
-    if current_dt.time() > INTRADAY_WINDOW_END:
+    current_time = current_dt.time()
+    if A_SHARE_MORNING_CLOSE < current_time < A_SHARE_AFTERNOON_OPEN:
+        afternoon_open_dt = datetime.combine(current_dt.date(), A_SHARE_AFTERNOON_OPEN)
+        seconds_to_boundary = (afternoon_open_dt - current_dt).total_seconds() + 1.0
+        return max(1.0, seconds_to_boundary)
+
+    boundary_times = [
+        INTRADAY_WINDOW_START,
+        A_SHARE_MORNING_CLOSE,
+        A_SHARE_AFTERNOON_OPEN,
+        INTRADAY_WINDOW_END,
+    ]
+    future_boundaries = [
+        datetime.combine(current_dt.date(), boundary_time)
+        for boundary_time in boundary_times
+        if boundary_time >= current_time
+    ]
+    if not future_boundaries:
         return wait_seconds
 
-    intraday_end_dt = datetime.combine(current_dt.date(), INTRADAY_WINDOW_END)
-    seconds_to_boundary = (intraday_end_dt - current_dt).total_seconds() + 1.0
+    seconds_to_boundary = min(
+        (boundary_dt - current_dt).total_seconds() + 1.0
+        for boundary_dt in future_boundaries
+    )
     if seconds_to_boundary <= 0:
         return 1.0
     return min(wait_seconds, max(1.0, seconds_to_boundary))
@@ -1053,8 +1119,12 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
         pos = positions.get(ts_code)
         if pos is None:
             continue
-        current_price = _coerce_float(price)
-        if current_price is None:
+        current_price = _normalize_intraday_price(
+            price,
+            row.get('PRE_CLOSE', row.get('pre_close')),
+            INTRADAY_STOCK_PCT_ABS_LIMIT,
+        )
+        if current_price is None or pos.buy_price <= 0:
             continue
         pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
         code = ts_code.split('.')[0]
@@ -1229,7 +1299,8 @@ def _build_intraday_chart(
     point_time: Optional[datetime] = None,
 ) -> Optional[dict]:
     """基于上证/深证实时涨跌与持仓股当日实时涨跌构建盘中图。"""
-    if snapshot is None:
+    current_time = point_time or datetime.now()
+    if snapshot is None or not _is_realtime_quote_window(current_time):
         return chart_data
 
     index_pct_map = _fetch_realtime_index_pcts()
@@ -1243,7 +1314,6 @@ def _build_intraday_chart(
     ):
         return chart_data
 
-    current_time = point_time or datetime.now()
     return _upsert_intraday_chart(
         chart_data,
         current_time,

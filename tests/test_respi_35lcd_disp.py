@@ -136,21 +136,21 @@ def test_upsert_intraday_chart_uses_fixed_slots_and_replaces_same_slot():
 
     chart = module._upsert_intraday_chart(
         None,
-        datetime(2026, 4, 7, 8, 34, 0),
+        datetime(2026, 4, 7, 9, 34, 0),
         index_pct=0.5,
         shenzhen_pct=0.3,
         portfolio_pct=1.2,
     )
     chart = module._upsert_intraday_chart(
         chart,
-        datetime(2026, 4, 7, 8, 39, 0),
+        datetime(2026, 4, 7, 9, 39, 0),
         index_pct=0.8,
         shenzhen_pct=0.6,
         portfolio_pct=1.5,
     )
     chart = module._upsert_intraday_chart(
         chart,
-        datetime(2026, 4, 7, 8, 41, 0),
+        datetime(2026, 4, 7, 9, 41, 0),
         index_pct=1.1,
         shenzhen_pct=0.9,
         portfolio_pct=1.8,
@@ -164,8 +164,8 @@ def test_upsert_intraday_chart_uses_fixed_slots_and_replaces_same_slot():
     assert chart["index_pct"] == [0.0, 0.3]
     assert chart["shenzhen_pct"] == [0.0, 0.3]
     assert chart["portfolio_pct"] == [0.0, 0.3]
-    assert chart["x_start_label"] == "08:30"
-    assert chart["x_end_label"] == "15:30"
+    assert chart["x_start_label"] == "09:30"
+    assert chart["x_end_label"] == "15:00"
     assert chart["portfolio_label"] == "持仓"
     assert chart["shenzhen_label"] == "深证"
 
@@ -220,17 +220,17 @@ def test_normalize_intraday_chart_drops_abnormal_points():
     normalized = module._normalize_intraday_chart(
         {
             "trade_date": "20260407",
-            "dates": ["09:00", "09:10", "09:20"],
+            "dates": ["09:30", "09:40", "09:50"],
             "index_pct": [0.6, 99.0, 0.8],
             "shenzhen_pct": [0.4, 0.5, 0.6],
             "portfolio_pct": [1.1, 1.2, -80.0],
-            "slot_indices": [3, 4, 5],
+            "slot_indices": [0, 1, 2],
         }
     )
 
     assert normalized is not None
-    assert normalized["slot_indices"] == [3]
-    assert normalized["dates"] == ["09:00"]
+    assert normalized["slot_indices"] == [0]
+    assert normalized["dates"] == ["09:30"]
     assert normalized["raw_index_pct"] == [0.6]
     assert normalized["raw_shenzhen_pct"] == [0.4]
     assert normalized["raw_portfolio_pct"] == [1.1]
@@ -245,14 +245,14 @@ def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypa
 
     chart = module._upsert_intraday_chart(
         None,
-        datetime(2026, 4, 7, 9, 0, 0),
+        datetime(2026, 4, 7, 9, 30, 0),
         index_pct=0.6,
         shenzhen_pct=0.4,
         portfolio_pct=1.1,
     )
     chart = module._upsert_intraday_chart(
         chart,
-        datetime(2026, 4, 7, 9, 10, 0),
+        datetime(2026, 4, 7, 9, 40, 0),
         index_pct=0.9,
         shenzhen_pct=0.7,
         portfolio_pct=1.3,
@@ -263,7 +263,7 @@ def test_intraday_chart_persistence_restores_same_day_history(tmp_path, monkeypa
     next_day = module._load_intraday_chart(now=datetime(2026, 4, 8, 9, 30, 0))
 
     assert restored is not None
-    assert restored["slot_indices"] == [3, 4]
+    assert restored["slot_indices"] == [0, 1]
     assert restored["raw_index_pct"] == [0.6, 0.9]
     assert restored["raw_shenzhen_pct"] == [0.4, 0.7]
     assert restored["raw_portfolio_pct"] == [1.1, 1.3]
@@ -280,11 +280,11 @@ def test_normalize_intraday_chart_rebases_legacy_payload_to_zero_start():
     normalized = module._normalize_intraday_chart(
         {
             "trade_date": "20260407",
-            "dates": ["09:00", "09:10"],
+            "dates": ["09:30", "09:40"],
             "index_pct": [0.8, 1.1],
             "shenzhen_pct": [0.6, 0.9],
             "portfolio_pct": [1.5, 1.8],
-            "slot_indices": [3, 4],
+            "slot_indices": [0, 1],
         }
     )
 
@@ -295,6 +295,54 @@ def test_normalize_intraday_chart_rebases_legacy_payload_to_zero_start():
     assert normalized["index_pct"] == [0.0, 0.3]
     assert normalized["shenzhen_pct"] == [0.0, 0.3]
     assert normalized["portfolio_pct"] == [0.0, 0.3]
+
+
+def test_normalize_intraday_chart_drops_pre_open_legacy_points():
+    module = _load_module()
+
+    normalized = module._normalize_intraday_chart(
+        {
+            "trade_date": "20260407",
+            "dates": ["09:05", "09:30", "09:40"],
+            "index_pct": [-2.7, 0.0, -0.3],
+            "shenzhen_pct": [-4.8, 0.0, -0.4],
+            "portfolio_pct": [-3.5, 0.0, -0.2],
+            "slot_indices": [3, 6, 7],
+        }
+    )
+
+    assert normalized is not None
+    assert normalized["dates"] == ["09:30", "09:40"]
+    assert normalized["slot_indices"] == [0, 1]
+    assert normalized["raw_index_pct"] == [0.0, -0.3]
+    assert normalized["index_pct"] == [0.0, -0.3]
+
+
+def test_build_stock_rankings_falls_back_to_pre_close_for_invalid_price():
+    module = _load_module()
+
+    rankings = module._build_stock_rankings(
+        {
+            "positions": {
+                "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+            },
+            "quotes": pd.DataFrame(
+                [
+                    {
+                        "TS_CODE": "000001.SZ",
+                        "NAME": "平安银行",
+                        "PRICE": 0.0,
+                        "PRE_CLOSE": 11.0,
+                    }
+                ]
+            ),
+        }
+    )
+
+    assert rankings is not None
+    assert len(rankings) == 1
+    assert rankings[0]["code"] == "000001"
+    assert round(rankings[0]["pnl_pct"], 4) == 10.0
 
 
 def test_select_chart_data_switches_by_intraday_window(monkeypatch):
@@ -309,6 +357,33 @@ def test_select_chart_data_switches_by_intraday_window(monkeypatch):
 
     monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: False)
     assert module._select_chart_data(cycle_chart, intraday_chart, point_time)["mode"] == "cycle"
+
+
+def test_is_intraday_chart_window_starts_after_open(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
+
+    assert module._is_intraday_chart_window(datetime(2026, 4, 7, 9, 5, 0)) is False
+    assert module._is_intraday_chart_window(datetime(2026, 4, 7, 9, 30, 0)) is True
+
+
+def test_build_intraday_chart_skips_pre_open_snapshot(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(
+        module,
+        "_fetch_realtime_index_pcts",
+        lambda: {module.SHANGHAI_INDEX_CODE: 0.1, module.SHENZHEN_INDEX_CODE: 0.2},
+    )
+    monkeypatch.setattr(module, "_compute_holdings_intraday_pct", lambda snapshot: 0.3)
+
+    chart = module._build_intraday_chart(
+        None,
+        {"positions": {}, "quotes": pd.DataFrame()},
+        point_time=datetime(2026, 4, 7, 9, 5, 0),
+    )
+
+    assert chart is None
 
 
 def test_format_cycle_last_data_label_uses_last_cycle_date():
@@ -389,6 +464,7 @@ def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatc
     )
 
     monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: True)
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: True)
     intraday_policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260407"]},
         datetime(2026, 4, 7, 10, 0, 0),
@@ -396,6 +472,19 @@ def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatc
 
     assert outside_policy == {"refresh_cycle": True, "refresh_realtime": False}
     assert intraday_policy == {"refresh_cycle": True, "refresh_realtime": True}
+
+
+def test_get_refresh_policy_pauses_realtime_during_lunch(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_intraday_chart_window", lambda now=None: True)
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+
+    policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260407"]},
+        datetime(2026, 4, 7, 12, 0, 0),
+    )
+
+    assert policy == {"refresh_cycle": False, "refresh_realtime": False}
 
 
 def test_get_data_worker_wait_seconds_keeps_regular_interval_away_from_close(monkeypatch):
@@ -411,15 +500,15 @@ def test_get_data_worker_wait_seconds_shortens_before_cycle_switch(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
 
-    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 15, 29, 58))
+    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 14, 59, 58))
 
     assert wait_seconds == 3.0
 
 
-def test_get_data_worker_wait_seconds_wakes_immediately_after_1530_fetch(monkeypatch):
+def test_get_data_worker_wait_seconds_wakes_immediately_after_1500_fetch(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_trade_day", lambda now=None: True)
 
-    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 15, 30, 0))
+    wait_seconds = module._get_data_worker_wait_seconds(datetime(2026, 4, 8, 15, 0, 0))
 
     assert wait_seconds == 1.0

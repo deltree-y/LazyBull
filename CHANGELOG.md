@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.47.2] - 2026-04-09
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 盘前误显示实时异常值**：`scripts/respi/3.5LCD_disp.py` 之前把 8:30-15:30 统统当成盘中窗口，且数据线程启动时会立刻拉一次实时 summary/排行；盘前 `PRICE=0` 或无效报价会把总览和个股排行打成 `-100%`。
+- 本次把日内图显示窗口调整为 9:30-15:00，并新增有效实时行情窗口判断；盘前不再生成日内点，午休时段也不会继续刷实时数据。
+- `scripts/paper_trade.py` 的 `get_realtime_portfolio_summary()` 与 `scripts/respi/3.5LCD_disp.py` 的个股排行构建，现在在 `PRICE<=0` 时会回退到 `PRE_CLOSE`，避免盘前把持仓市值算成 0。
+- 兼容旧版盘前日内 JSON：`_normalize_intraday_chart()` 现在会按时间标签重算槽位，并丢弃 9:30 之前的历史点。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增盘前旧点清理、盘前不生成日内图、排行昨收回退、午休暂停实时刷新测试，并同步 9:30-15:00 的新窗口断言。
+- 新增 `tests/test_paper_trade_realtime_summary.py`，覆盖实时 summary 在 `PRICE<=0` 时回退 `PRE_CLOSE` 的场景。
+
 ## [0.47.1] - 2026-04-09
 
 ### 修复

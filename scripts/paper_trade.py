@@ -16,6 +16,7 @@
 """
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -1378,16 +1379,38 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     if rt_df is None or rt_df.empty:
         return None
 
+    def _resolve_quote_price(row, fallback_price: float) -> float:
+        """规范化实时价格；盘前/无效价格回退昨收，仍无效则回退买入价。"""
+        price = row.get('PRICE', row.get('price'))
+        pre_close = row.get('PRE_CLOSE', row.get('pre_close'))
+        try:
+            price_float = float(price)
+        except (ValueError, TypeError):
+            price_float = None
+        try:
+            pre_close_float = float(pre_close)
+        except (ValueError, TypeError):
+            pre_close_float = None
+
+        if pre_close_float is not None and (not math.isfinite(pre_close_float) or pre_close_float <= 0):
+            pre_close_float = None
+        if price_float is not None and (not math.isfinite(price_float) or price_float <= 0):
+            price_float = None
+
+        if price_float is not None:
+            return price_float
+        if pre_close_float is not None:
+            return pre_close_float
+        return fallback_price
+
     prices: Dict[str, float] = {}
     quote_time = ""
     for _, row in rt_df.iterrows():
         ts_code = str(row.get('TS_CODE', ''))
-        price = row.get('PRICE', None)
-        if ts_code and price is not None:
-            try:
-                prices[ts_code] = float(price)
-            except (ValueError, TypeError):
-                pass
+        if ts_code:
+            pos = positions.get(ts_code)
+            fallback_price = pos.buy_price if pos is not None else 0.0
+            prices[ts_code] = _resolve_quote_price(row, fallback_price)
         if not quote_time:
             t = row.get('TIME', '')
             if t:
