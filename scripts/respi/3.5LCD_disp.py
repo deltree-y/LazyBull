@@ -52,6 +52,7 @@ DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
 REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒），2分钟
+MORNING_CLOSE_INTRADAY_GRACE_SECONDS = 120  # 午休前补齐 11:30 最后一格的宽限时长（秒）
 POST_CLOSE_INTRADAY_GRACE_SECONDS = 600  # 收盘后继续补齐日内尾点的宽限时长（秒）
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
 BACKLIGHT_BRIGHTNESS = 10    # 背光亮度 0~100（默认40%，可按需调整）
@@ -191,6 +192,27 @@ def _format_display_time(now: datetime) -> str:
     """格式化顶部显示时间，如 4月7日(周二) 14:40:32。"""
     weekday = WEEKDAY_NAMES[now.weekday()]
     return f"{now.month}月{now.day}日({weekday}) {now:%H:%M:%S}"
+
+
+def _format_quote_update_time(summary: Optional[dict]) -> Optional[str]:
+    """从摘要中提取顶部“更新:HH:MM”应显示的行情时间。"""
+    if not isinstance(summary, dict):
+        return None
+
+    quote_time = str(summary.get('quote_time', '')).strip()
+    if not quote_time:
+        return None
+
+    parts = quote_time.split(':')
+    if len(parts) < 2:
+        return None
+
+    hour_text = parts[0].strip()
+    minute_text = parts[1].strip()
+    if not (hour_text.isdigit() and minute_text.isdigit()):
+        return None
+
+    return f"{int(hour_text):02d}:{int(minute_text):02d}"
 
 
 def _format_rebalance_status(next_rebalance_date: Optional[str], days_to_rebalance: Optional[int]) -> str:
@@ -945,6 +967,20 @@ def _is_intraday_chart_complete(
     return int(slot_indices[-1]) >= INTRADAY_SLOT_COUNT - 1
 
 
+def _is_morning_intraday_chart_complete(
+    intraday_chart_data: Optional[dict],
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断当日日内图是否已经补齐上午 11:30 最后一格。"""
+    if not _has_intraday_chart_for_today(intraday_chart_data, now):
+        return False
+
+    slot_indices = intraday_chart_data.get('slot_indices', [])
+    if not isinstance(slot_indices, list) or not slot_indices:
+        return False
+    return int(slot_indices[-1]) >= INTRADAY_MORNING_SLOT_COUNT - 1
+
+
 def _should_show_intraday_chart(
     cycle_chart_data: Optional[dict],
     intraday_chart_data: Optional[dict],
@@ -977,6 +1013,11 @@ def _get_refresh_policy(
             'refresh_realtime': True,
         }
 
+    need_morning_completion = _should_keep_morning_close_completion_active(
+        intraday_chart_data,
+        current_dt,
+    )
+
     target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
     need_cycle_refresh = not _has_cycle_data_for_target(cycle_chart_data, target_cycle_date)
     need_intraday_completion = (
@@ -986,7 +1027,7 @@ def _get_refresh_policy(
     )
     return {
         'refresh_cycle': need_cycle_refresh,
-        'refresh_realtime': need_intraday_completion,
+        'refresh_realtime': need_intraday_completion or need_morning_completion,
     }
 
 
@@ -1022,6 +1063,13 @@ def _is_realtime_refresh_due(
     session_key = _get_realtime_session_key(current_dt)
     if not refresh_allowed:
         return False, session_key
+    morning_close_dt = datetime.combine(current_dt.date(), A_SHARE_MORNING_CLOSE)
+    morning_close_deadline = morning_close_dt + timedelta(seconds=MORNING_CLOSE_INTRADAY_GRACE_SECONDS)
+    if (
+        last_refresh_at is not None
+        and last_refresh_at < morning_close_dt <= current_dt <= morning_close_deadline
+    ):
+        return True, session_key
     if session_key is None:
         return _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt), None
     if last_session_key != session_key:
@@ -1060,9 +1108,16 @@ def _get_data_worker_wait_seconds(
     则缩短本次等待，确保关键时点能尽快刷新。
     """
     current_dt = now or datetime.now()
+    morning_close_completion_active = _should_keep_morning_close_completion_active(
+        intraday_chart_data,
+        current_dt,
+    )
     wait_seconds = float(
         REALTIME_REFRESH_INTERVAL
-        if _should_keep_realtime_completion_active(cycle_chart_data, intraday_chart_data, current_dt)
+        if (
+            morning_close_completion_active
+            or _should_keep_realtime_completion_active(cycle_chart_data, intraday_chart_data, current_dt)
+        )
         else REFRESH_INTERVAL
     )
 
@@ -1070,7 +1125,7 @@ def _get_data_worker_wait_seconds(
         return wait_seconds
 
     current_time = current_dt.time()
-    if A_SHARE_MORNING_CLOSE < current_time < A_SHARE_AFTERNOON_OPEN:
+    if A_SHARE_MORNING_CLOSE < current_time < A_SHARE_AFTERNOON_OPEN and not morning_close_completion_active:
         afternoon_open_dt = datetime.combine(current_dt.date(), A_SHARE_AFTERNOON_OPEN)
         seconds_to_boundary = (afternoon_open_dt - current_dt).total_seconds() + 1.0
         return max(1.0, seconds_to_boundary)
@@ -1842,6 +1897,23 @@ def _should_keep_realtime_completion_active(
     return not _is_intraday_chart_complete(intraday_chart_data, current_dt)
 
 
+def _should_keep_morning_close_completion_active(
+    intraday_chart_data: Optional[dict],
+    now: Optional[datetime] = None,
+) -> bool:
+    """判断午休开始后是否仍需补齐上午 11:30 最后一格。"""
+    current_dt = now or datetime.now()
+    if not _is_trade_day(current_dt, allow_load=True):
+        return False
+
+    morning_close_dt = datetime.combine(current_dt.date(), A_SHARE_MORNING_CLOSE)
+    grace_deadline = morning_close_dt + timedelta(seconds=MORNING_CLOSE_INTRADAY_GRACE_SECONDS)
+    if not (morning_close_dt < current_dt <= grace_deadline):
+        return False
+
+    return not _is_morning_intraday_chart_complete(intraday_chart_data, current_dt)
+
+
 def _refresh_display_state(
     state: "DisplayState",
     refresh_realtime: bool = False,
@@ -1852,7 +1924,7 @@ def _refresh_display_state(
         state.is_updating = refresh_realtime or refresh_cycle
 
     holdings_snapshot = None
-    update_time_changed = False
+    latest_update_time: Optional[str] = None
 
     if refresh_realtime:
         try:
@@ -1865,7 +1937,7 @@ def _refresh_display_state(
             if summary is not None:
                 with state.lock:
                     state.summary = summary
-                update_time_changed = True
+                latest_update_time = _format_quote_update_time(summary) or datetime.now().strftime("%H:%M")
         except Exception:
             pass
 
@@ -1905,13 +1977,14 @@ def _refresh_display_state(
             if cycle_chart_data is not None:
                 with state.lock:
                     state.chart_data = cycle_chart_data
-                update_time_changed = True
+                if latest_update_time is None:
+                    latest_update_time = datetime.now().strftime("%H:%M")
         except Exception:
             pass
 
     with state.lock:
-        if update_time_changed:
-            state.update_time = datetime.now().strftime("%H:%M")
+        if latest_update_time is not None:
+            state.update_time = latest_update_time
         state.is_updating = False
 
 
