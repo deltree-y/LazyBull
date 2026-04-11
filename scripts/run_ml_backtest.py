@@ -180,9 +180,6 @@ def run_ml_backtest(
     stock_basic: pd.DataFrame = None,
     holding_bonus_enabled: bool = False,
     holding_bonus_sigma: float = 0.5,
-    market_adaptive_topn_enabled: bool = False,
-    market_adaptive_topn_bull_factor: float = 0.7,
-    market_adaptive_topn_bear_factor: float = 1.5,
 ) -> tuple:
     """运行 ML 信号回测
     
@@ -205,9 +202,6 @@ def run_ml_backtest(
         stock_basic: 股票基本信息 DataFrame（用于行业约束，可选）
         holding_bonus_enabled: 是否启用持仓奖励（降低换手）
         holding_bonus_sigma: 持仓奖励强度（标准差倍数）
-        market_adaptive_topn_enabled: 是否启用市场自适应 Top-N
-        market_adaptive_topn_bull_factor: 牛市 Top-N 缩放因子
-        market_adaptive_topn_bear_factor: 熊市 Top-N 缩放因子
         
     Returns:
         (nav_curve, trades) 元组
@@ -232,9 +226,6 @@ def run_ml_backtest(
         stock_basic=stock_basic,
         holding_bonus_enabled=holding_bonus_enabled,
         holding_bonus_sigma=holding_bonus_sigma,
-        market_adaptive_topn_enabled=market_adaptive_topn_enabled,
-        market_adaptive_topn_bull_factor=market_adaptive_topn_bull_factor,
-        market_adaptive_topn_bear_factor=market_adaptive_topn_bear_factor,
     )
     
     # 运行回测
@@ -950,9 +941,6 @@ def main():
             stock_basic=stock_basic,
             holding_bonus_enabled=trading_config.holding_bonus_enabled,
             holding_bonus_sigma=trading_config.holding_bonus_sigma,
-            market_adaptive_topn_enabled=trading_config.market_adaptive_topn_enabled,
-            market_adaptive_topn_bull_factor=trading_config.market_adaptive_topn_bull_factor,
-            market_adaptive_topn_bear_factor=trading_config.market_adaptive_topn_bear_factor,
         )
         
         # 7. 生成报告

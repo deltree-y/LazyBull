@@ -240,9 +240,6 @@ class BacktestEngine:
         signal_gate_topn_low_multiplier: float = 1.5,  # 低置信度扩大系数（>1）
         holding_bonus_enabled: bool = False,  # 是否启用持仓保留奖励（降低换手率）
         holding_bonus_sigma: float = 0.5,  # 保留奖励幅度（截面分数标准差的倍数）
-        market_adaptive_topn_enabled: bool = False,  # 是否启用市场状态自适应选股数量
-        market_adaptive_topn_bull_factor: float = 0.7,  # 趋势向上时集中系数（<1）
-        market_adaptive_topn_bear_factor: float = 1.5,  # 趋势向下/震荡时分散系数（>1）
         enable_early_rebalance_on_empty: bool = True,  # 空仓时是否提前触发新一轮调仓
     ):
         """初始化回测引擎
@@ -432,10 +429,6 @@ class BacktestEngine:
         # ── 换手率约束（持仓保留奖励）──
         self.holding_bonus_enabled = holding_bonus_enabled
         self.holding_bonus_sigma = holding_bonus_sigma
-        # ── 市场自适应 Top-N ──
-        self.market_adaptive_topn_enabled = market_adaptive_topn_enabled
-        self.market_adaptive_topn_bull_factor = market_adaptive_topn_bull_factor
-        self.market_adaptive_topn_bear_factor = market_adaptive_topn_bear_factor
         self._prediction_quality_history: List[Dict] = []
         self._rolling_quality_score: float = 1.0  # 默认满分（预热期不干预）
         self._quality_warmup_remaining: int = signal_gate_quality_window  # 预热计数
@@ -988,20 +981,6 @@ class BacktestEngine:
                 f"({old_buy_date.date()} → {new_buy_date.date()})"
             )
 
-    def _compute_market_adaptive_topn_factor(self, date: pd.Timestamp) -> float:
-        """根据市场状态计算自适应选股倍数。
-
-        基类默认返回 1.0（无调整）。子类（如 BacktestEngineML）可重写此方法，
-        从特征数据中读取市场状态指标进行调整。
-
-        Args:
-            date: 当前日期
-
-        Returns:
-            选股数量乘数（<1 集中，>1 分散，1.0 不调整）
-        """
-        return 1.0
-
     def _generate_signal(
         self,
         date: pd.Timestamp,
@@ -1208,20 +1187,6 @@ class BacktestEngine:
         else:
             target_n = base_n
 
-        # 市场自适应 Top-N：根据市场状态调整选股数量
-        # 趋势向上 → 集中（缩减），趋势向下/震荡 → 分散（扩大）
-        market_adaptive_topn_reason = None
-        if self.market_adaptive_topn_enabled:
-            factor = self._compute_market_adaptive_topn_factor(date)
-            if factor != 1.0:
-                old_target = target_n
-                target_n = max(3, int(round(target_n * factor)))
-                market_adaptive_topn_reason = (
-                    f"市场自适应(factor={factor:.2f})→{old_target}→{target_n}只"
-                )
-                if self.verbose:
-                    logger.info(f"  {market_adaptive_topn_reason}")
-
         decision_trace = self._build_signal_decision_trace(
             date=date,
             target_n=target_n,
@@ -1235,10 +1200,6 @@ class BacktestEngine:
             "base_n": base_n,
             "effective_n": target_n,
             "reason": dynamic_topn_reason,
-        }
-        decision_trace["market_adaptive_topn"] = {
-            "enabled": self.market_adaptive_topn_enabled,
-            "reason": market_adaptive_topn_reason,
         }
         decision_trace["holding_bonus"] = {
             "enabled": self.holding_bonus_enabled,

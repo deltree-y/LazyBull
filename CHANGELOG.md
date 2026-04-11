@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.47.12] - 2026-04-10
+
+### 移除
+
+- **多特征子集集成（SubsetEnsembleModel）**：完整移除 `SubsetEnsembleModel` 类、`_SHARED_MARKET_FEATURES`/`SUBSET_MOMENTUM_FEATURES`/`SUBSET_FUNDAMENTAL_FEATURES`/`SUBSET_CAPITAL_FLOW_FEATURES` 常量、`get_subset_ensemble_configs()` 函数、`_train_subset_ensemble_on_window()` 训练流程及所有 `--subset-ensemble` 参数。XGBoost 单模型通过跨特征交互天然优于分拆子集后融合，实测验证效果负向。
+- **模型质量监控与降级**：移除 `--model-quality-enabled` / `--model-quality-ir-threshold` 参数及 walk-forward 主循环中的质量检查与降级逻辑。阈值概念在 walk-forward 场景中价值有限（每个模型仅用于一个测试期）。
+- **市场自适应 Top-N**：移除 `TradingConfig` 中 `market_adaptive_topn_*` 三个字段、`BacktestEngine._compute_market_adaptive_topn_factor()` 基类方法与 `BacktestEngineML` 重写、信号生成中的调整逻辑、`--market-adaptive-topn-*` 参数及 `batch_walk_forward.ps1` 中对应开关。
+
+### 测试
+
+- `test_p1_optimizations.py` 仅保留 `TestEnhancedFeatures`（因子增强测试），移除 `TestSubsetEnsembleModel`/`TestSubsetConfigs`/`TestModelQualityDegradation`。
+- `test_holding_bonus_and_adaptive_topn.py` 仅保留持仓保留奖励相关测试，移除 `TestMarketAdaptiveTopN`/`TestMarketAdaptiveTopNIntegration`/`TestCombinedFeatures` 及 TradingConfig 中自适应 Top-N 字段断言。
+
 ## [0.47.11] - 2026-04-10
 
 ### 优化

@@ -48,11 +48,6 @@ class TradingConfig:
     holding_bonus_enabled: bool = False  # 是否启用持仓保留奖励（降低换手率）
     holding_bonus_sigma: float = 0.5  # 保留奖励幅度（截面分数标准差的倍数）
 
-    # ── 市场自适应 Top-N ──
-    market_adaptive_topn_enabled: bool = False  # 是否启用市场状态自适应选股数量
-    market_adaptive_topn_bull_factor: float = 0.7  # 趋势向上时集中系数（<1）
-    market_adaptive_topn_bear_factor: float = 1.5  # 趋势向下/震荡时分散系数（>1）
-
     rebalance_freq: Optional[int] = 20
     stagger_tranches: int = 1
     max_per_industry: Optional[int] = None

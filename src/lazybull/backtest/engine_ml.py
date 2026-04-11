@@ -269,33 +269,6 @@ class BacktestEngineML(BacktestEngine):
             base += f"，回撤保护触发(mkt_drawdown_20={drawdown:.1%})"
         return base
 
-    def _compute_market_adaptive_topn_factor(self, date: pd.Timestamp) -> float:
-        """根据市场状态计算自适应选股倍数。
-
-        使用 mkt_ret_avg_20（近20日累积平均收益）判断市场趋势：
-        - mkt_ret_avg_20 > 0: 趋势向上 → 乘以 bull_factor（<1，集中持股）
-        - mkt_ret_avg_20 <= 0: 趋势向下/震荡 → 乘以 bear_factor（>1，分散持股）
-
-        Args:
-            date: 当前日期
-
-        Returns:
-            选股数量乘数
-        """
-        date_str = to_trade_date_str(date)
-        features_df = self.features_by_date.get(date_str)
-        if features_df is None or len(features_df) == 0:
-            return 1.0
-        if "mkt_ret_avg_20" not in features_df.columns:
-            return 1.0
-        mkt_ret = float(features_df["mkt_ret_avg_20"].iloc[0])
-        if np.isnan(mkt_ret):
-            return 1.0
-        if mkt_ret > 0:
-            return self.market_adaptive_topn_bull_factor
-        else:
-            return self.market_adaptive_topn_bear_factor
-
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建信号数据（注入 ML 特征）
 

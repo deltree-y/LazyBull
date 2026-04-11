@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"   #20130101   #20130224
-$wf_end_date             = "20251231"   #20251231   #20260224
+$wf_start_date           = "20130209"   #20130101   #20130224
+$wf_end_date             = "20260209"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -83,15 +83,9 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
-# ── 因子增强（开盘强度/日内波动结构/委托不平衡, 0408引入）───────
+# 0408引入
+# ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
 $enable_enhanced           = $true # $true 启用 | $false 禁用
-
-# ── 多特征子集集成（动量 vs 基本面 vs 资金流 3模型加权融合, 0408引入）
-$subset_ensemble           = $false  # $true 启用 | $false 禁用
-
-# ── 模型质量监控与降级（val_rankic_ir低于阈值时回退上一合格模型, 0408引入）
-$model_quality_enabled     = $false  # $true 启用 | $false 禁用
-$model_quality_ir_threshold = 0.15   # 降级阈值
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
@@ -141,11 +135,6 @@ $signal_gate_topn_low_multiplier  = 1.5         # 中低置信度扩大系数（
 # ── OOS 换手率约束（持仓保留奖励, 0407引入）─────────────────────────────────────
 $holding_bonus_enabled = $false                 # $true 启用 | $false 禁用（对已持仓股票给予分数加成，降低换手）
 $holding_bonus_sigma   = 0.5                    # 奖励幅度（截面分数标准差的倍数，0.3~1.0）
-
-# ── OOS 市场自适应 Top-N（根据市场状态调整选股数量, 0407引入）──────────────────────
-$market_adaptive_topn_enabled     = $false       # $true 启用 | $false 禁用（趋势市集中、震荡市分散）
-$market_adaptive_topn_bull_factor = 0.7          # 趋势向上时集中系数（<1，如 top_n=17 → 12只）
-$market_adaptive_topn_bear_factor = 1.5          # 趋势向下/震荡时分散系数（>1，如 top_n=17 → 25只）
 
 # ── OOS 旧版置信度门控（signal_gate_mode="legacy" 时生效）────────────
 $signal_confidence_gate_enabled = $false  # $true 启用 | $false 禁用（仅 legacy 模式）
@@ -439,14 +428,6 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
         $pythonCmd += " --enable-enhanced-features"
     }
 
-    if ($subset_ensemble) {
-        $pythonCmd += " --subset-ensemble"
-    }
-
-    if ($model_quality_enabled) {
-        $pythonCmd += " --model-quality-enabled --model-quality-ir-threshold $model_quality_ir_threshold"
-    }
-
     if ($market_regime) {
         $pythonCmd += " --market-regime" +
                       " --market-regime-mode $market_regime_mode" +
@@ -531,11 +512,6 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
         if ($holding_bonus_enabled) {
             $pythonCmd += " --holding-bonus-enabled" +
                           " --holding-bonus-sigma $holding_bonus_sigma"
-        }
-        if ($market_adaptive_topn_enabled) {
-            $pythonCmd += " --market-adaptive-topn-enabled" +
-                          " --market-adaptive-topn-bull-factor $market_adaptive_topn_bull_factor" +
-                          " --market-adaptive-topn-bear-factor $market_adaptive_topn_bear_factor"
         }
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"

@@ -63,7 +63,7 @@ from src.lazybull.ml.walk_forward_utils import (
     print_splits_summary,
     WalkForwardSplit
 )
-from src.lazybull.ml.ensemble import EnsembleModel, SubsetEnsembleModel
+from src.lazybull.ml.ensemble import EnsembleModel
 from src.lazybull.ml.run_logger import (
     TrainingRunRecord,
     write_training_run_to_csv
@@ -172,9 +172,6 @@ def run_oos_backtest(
     signal_gate_topn_low_multiplier: float = 1.5,
     holding_bonus_enabled: bool = False,
     holding_bonus_sigma: float = 0.5,
-    market_adaptive_topn_enabled: bool = False,
-    market_adaptive_topn_bull_factor: float = 0.7,
-    market_adaptive_topn_bear_factor: float = 1.5,
     bt_exclude_st: bool = True,
     bt_min_list_days: int = 365,
     bt_sell_timing: str = "open",
@@ -443,9 +440,6 @@ def run_oos_backtest(
         signal_gate_topn_low_multiplier=signal_gate_topn_low_multiplier,
         holding_bonus_enabled=holding_bonus_enabled,
         holding_bonus_sigma=holding_bonus_sigma,
-        market_adaptive_topn_enabled=market_adaptive_topn_enabled,
-        market_adaptive_topn_bull_factor=market_adaptive_topn_bull_factor,
-        market_adaptive_topn_bear_factor=market_adaptive_topn_bear_factor,
     )
 
     # 从持久化 signal 恢复质量监控状态（跨 split 积累，避免每次重置预热期）
@@ -763,239 +757,6 @@ def _train_model_on_window(
     }
 
 
-def _train_subset_ensemble_on_window(
-    train_start: str,
-    train_end: str,
-    storage: Storage,
-    loader: DataLoader,
-    args,
-) -> Dict:
-    """在指定训练窗口上训练多特征子集集成模型
-
-    加载一次训练数据，为每个子集独立准备特征 + 训练 XGBoost，
-    最终包装为 SubsetEnsembleModel。
-
-    Args:
-        train_start: 训练起始日期
-        train_end: 训练结束日期
-        storage: Storage 实例
-        loader: DataLoader 实例
-        args: 命令行参数
-
-    Returns:
-        与 _train_model_on_window 相同结构的字典
-    """
-    from src.lazybull.ml.train_core import get_subset_ensemble_configs
-
-    # 1. 加载训练数据（只加载一次）
-    df_train, train_days_count = load_features_data(
-        storage, loader, train_start, train_end
-    )
-    total_train_samples = len(df_train)
-
-    # 2. 标签准备
-    if args.task == "classification":
-        if args.pos_quantile is None and args.pos_topk is None:
-            raise ValueError("分类任务必须指定 --pos-quantile 或 --pos-topk")
-        df_train = generate_classification_labels(
-            df_train,
-            label_column=args.label_column,
-            pos_quantile=args.pos_quantile,
-            pos_topk=args.pos_topk,
-        )
-        binary_label_col = f"{args.label_column}_binary"
-        actual_label_column = binary_label_col
-    else:
-        actual_label_column = args.label_column
-
-    # 3. 生成子集配置
-    subset_configs = get_subset_ensemble_configs(
-        df_train,
-        enable_fundamental_features=args.enable_fundamental_features,
-        enable_alt_features=args.enable_alt_features,
-        enable_margin_features=args.enable_margin_features,
-        enable_cyq_features=args.enable_cyq_features,
-        enable_fund_features=args.enable_fund_features,
-        enable_express_features=args.enable_express_features,
-        enable_enhanced_features=getattr(args, "enable_enhanced_features", False),
-    )
-
-    # 4. 标签变换函数
-    label_transform_fn = None
-    if args.task == "regression" and args.label_transform == "cs_zscore":
-        label_transform_fn = lambda d: transform_labels_cs_zscore(
-            d, label_column=actual_label_column, winsorize_p=args.winsorize_p
-        )
-
-    # 5. 通用训练参数
-    skip_label_winsorize = (
-        args.task == "regression" and args.label_transform == "cs_zscore"
-    )
-    algorithm = getattr(args, "algorithm", "xgboost")
-    train_fn = train_lightgbm_model if algorithm == "lightgbm" else train_xgboost_model
-    es_rounds = args.early_stopping_rounds if args.early_stopping_rounds else None
-
-    # 6. 逐子集训练
-    sub_models = []
-    sub_feature_columns = []
-    sub_names = []
-    sub_val_ics = []  # 每个子模型的验证集 RankIC，用于动态权重
-    base_result_info = None  # 保存第一个子集的辅助信息
-
-    for cfg in subset_configs:
-        subset_name = cfg["name"]
-        subset_features = cfg["features"]
-        logger.info(f"  训练子集模型 [{subset_name}]: {len(subset_features)} 个特征")
-
-        # 过滤可训练样本
-        filter_columns = ["is_st", "is_suspended", "is_limit_up"]
-        mask = pd.Series([True] * len(df_train), index=df_train.index)
-        for col in filter_columns:
-            if col in df_train.columns:
-                mask = mask & (~df_train[col].astype(bool))
-        df_filtered = df_train[mask].copy()
-        df_filtered = df_filtered.dropna(subset=[actual_label_column])
-
-        # 按日期切分 train/val
-        from src.lazybull.ml.train_core import split_train_val_by_date
-        try:
-            inferred_horizon = int(actual_label_column.rstrip("d").split("_")[-1])
-        except (ValueError, IndexError):
-            inferred_horizon = 20
-        label_delta = max(inferred_horizon, 5)
-
-        df_train_split, df_val_split, split_stats = split_train_val_by_date(
-            df_filtered, val_ratio=args.val_ratio, delta=label_delta
-        )
-        df_val_split_original = df_val_split.copy()
-
-        if label_transform_fn is not None:
-            df_train_split = label_transform_fn(df_train_split)
-            if len(df_val_split) > 0:
-                df_val_split = label_transform_fn(df_val_split)
-
-        # 子集特征提取
-        available_features = [c for c in subset_features if c in df_train_split.columns]
-        X_train = df_train_split[available_features].copy()
-        y_train = df_train_split[actual_label_column].copy()
-        X_val = df_val_split[available_features].copy()
-        y_val = df_val_split[actual_label_column].copy()
-
-        # 样本权重
-        rank_sample_weight = None
-        if args.rank_weight_enabled:
-            rank_sample_weight = build_rank_sample_weights(
-                df_train=df_train_split,
-                label_column=actual_label_column,
-                topk=args.rank_weight_topk,
-                top_weight=args.rank_weight,
-            )
-        if args.time_decay_half_life > 0:
-            td_weights = build_time_decay_weights(
-                df_train=df_train_split,
-                half_life_years=args.time_decay_half_life,
-            )
-            if rank_sample_weight is not None:
-                rank_sample_weight = rank_sample_weight * td_weights
-            else:
-                rank_sample_weight = td_weights
-
-        # 训练
-        extra_kwargs = {}
-        if algorithm == "lightgbm":
-            num_leaves_val = getattr(args, "num_leaves", None)
-            if num_leaves_val is not None:
-                extra_kwargs["num_leaves"] = num_leaves_val
-        if algorithm == "xgboost":
-            objective_type = getattr(args, "objective", "mse")
-            extra_kwargs["objective_type"] = objective_type
-            if objective_type == "lambdarank":
-                extra_kwargs["df_train_for_group"] = df_train_split
-                extra_kwargs["df_val_for_group"] = df_val_split
-
-        model_i, train_params_i, train_metrics_i, val_metrics_i = train_fn(
-            X_train, y_train, X_val, y_val,
-            task=args.task,
-            skip_label_winsorize=skip_label_winsorize,
-            scale_pos_weight=args.scale_pos_weight,
-            sample_weight=rank_sample_weight,
-            n_estimators=args.n_estimators,
-            max_depth=args.max_depth,
-            learning_rate=args.learning_rate,
-            subsample=args.subsample,
-            colsample_bytree=args.colsample_bytree,
-            random_state=args.random_state,
-            min_child_weight=args.min_child_weight,
-            reg_alpha=args.reg_alpha,
-            reg_lambda=args.reg_lambda,
-            gamma=args.gamma,
-            early_stopping_rounds=es_rounds,
-            early_stopping_metric=args.early_stopping_metric,
-            **extra_kwargs,
-        )
-
-        sub_models.append(model_i)
-        sub_feature_columns.append(available_features)
-        sub_names.append(subset_name)
-        sub_val_ics.append(val_metrics_i.get("rank_ic", None))  # 收集验证 RankIC 用于动态权重
-
-        if base_result_info is None:
-            base_result_info = {
-                "train_params": train_params_i,
-                "train_metrics": train_metrics_i,
-                "val_metrics": val_metrics_i,
-                "df_val_split_original": df_val_split_original,
-                "data_stats": {
-                    "samples_after_filter": len(df_filtered),
-                    "val_start_date": split_stats["val_start_date"],
-                    "val_end_date": split_stats["val_end_date"],
-                },
-                "X_train_len": len(X_train),
-                "X_val_len": len(X_val),
-            }
-
-        logger.info(
-            f"  子集 [{subset_name}] 训练完成: "
-            f"特征={len(available_features)}, "
-            f"val_rank_ic={val_metrics_i.get('rank_ic', 'N/A')}"
-        )
-
-    # 7. 按验证集 RankIC 动态确定子模型权重（正 IC 作为权重，全零时退化为等权）
-    dynamic_weights = [max(ic, 0.0) if ic is not None else 1.0 for ic in sub_val_ics]
-    if sum(dynamic_weights) == 0:
-        dynamic_weights = None  # 退化为等权
-    else:
-        logger.info(
-            "子集动态权重（按验证RankIC）: "
-            + ", ".join(f"{n}={w:.4f}" for n, w in zip(sub_names, dynamic_weights))
-        )
-
-    # 8. 包装为 SubsetEnsembleModel
-    ensemble_model = SubsetEnsembleModel(
-        sub_models=sub_models,
-        sub_feature_columns=sub_feature_columns,
-        sub_names=sub_names,
-        weights=dynamic_weights,
-    )
-    logger.info(f"子集集成模型创建完成: {ensemble_model}")
-
-    return {
-        "model": ensemble_model,
-        "feature_columns": ensemble_model.all_feature_columns,
-        "train_params": base_result_info["train_params"],
-        "train_metrics": base_result_info["train_metrics"],
-        "val_metrics": base_result_info["val_metrics"],
-        "df_train_split": None,  # 子集集成不返回单一 train_split
-        "df_val_split": None,
-        "df_val_split_original": base_result_info["df_val_split_original"],
-        "data_stats": base_result_info["data_stats"],
-        "train_days_count": train_days_count,
-        "total_train_samples": total_train_samples,
-        "X_train_len": base_result_info["X_train_len"],
-        "X_val_len": base_result_info["X_val_len"],
-    }
-
-
 def execute_split_training(
     split: WalkForwardSplit,
     wf_run_id: str,
@@ -1032,27 +793,8 @@ def execute_split_training(
 
     # ── Phase 1: 训练模型 ──────────────────────────────────────────────
     ensemble_offsets = getattr(args, "ensemble_offsets", 0)
-    subset_ensemble = getattr(args, "subset_ensemble", False)
 
-    if subset_ensemble:
-        # 多特征子集集成训练（动量 vs 基本面 vs 资金流）
-        logger.info("多特征子集集成训练模式")
-        tr = _train_subset_ensemble_on_window(
-            split.train_start, split.train_end, storage, loader, args
-        )
-        model = tr["model"]
-        feature_columns = tr["feature_columns"]
-        train_params = tr["train_params"]
-        train_metrics = tr["train_metrics"]
-        val_metrics = tr["val_metrics"]
-        df_val_split_original = tr["df_val_split_original"]
-        data_stats = tr["data_stats"]
-        train_days_count = tr["train_days_count"]
-        total_train_samples = tr["total_train_samples"]
-        X_train_len = tr["X_train_len"]
-        X_val_len = tr["X_val_len"]
-
-    elif ensemble_offsets > 0 and trade_cal is not None:
+    if ensemble_offsets > 0 and trade_cal is not None:
         # 多偏移集成训练
         windows = compute_offset_windows(
             split.train_start, split.train_end, ensemble_offsets, trade_cal
@@ -1200,11 +942,6 @@ def execute_split_training(
     if ensemble_offsets > 0:
         full_train_params["ensemble_offsets"] = ensemble_offsets
         full_train_params["ensemble_n_models"] = model.n_models
-    if subset_ensemble:
-        full_train_params["subset_ensemble"] = True
-        full_train_params["subset_n_models"] = model.n_models
-        if hasattr(model, "sub_names"):
-            full_train_params["subset_names"] = model.sub_names
 
     # 注册模型（EnsembleModel 通过 joblib 序列化，包含所有子模型）
     version = registry.register_model(
@@ -1361,30 +1098,10 @@ def execute_deploy_training(
     logger.info(f"  （无测试区间，用于部署）")
     logger.info("=" * 80)
 
-    # ── 训练模型（支持多偏移集成/多子集集成）────────────────────────────
+    # ── 训练模型（支持多偏移集成）──────────────────────────────────────
     ensemble_offsets = getattr(args, "ensemble_offsets", 0)
-    subset_ensemble = getattr(args, "subset_ensemble", False)
 
-    if subset_ensemble:
-        # 多特征子集集成训练
-        logger.info("部署模型多特征子集集成训练模式")
-        tr = _train_subset_ensemble_on_window(
-            train_start, train_end, storage, loader, args
-        )
-        model = tr["model"]
-        feature_columns = tr["feature_columns"]
-        train_params = tr["train_params"]
-        train_metrics = tr["train_metrics"]
-        val_metrics = tr["val_metrics"]
-        df_val_split_original = tr["df_val_split_original"]
-        data_stats = tr["data_stats"]
-        train_days_count = tr["train_days_count"]
-        total_train_samples = tr["total_train_samples"]
-        X_train_len = tr["X_train_len"]
-        X_val_len = tr["X_val_len"]
-        logger.info(f"部署子集集成模型创建完成: {model}")
-
-    elif ensemble_offsets > 0:
+    if ensemble_offsets > 0:
         windows = compute_offset_windows(
             train_start, train_end, ensemble_offsets, trade_cal
         )
@@ -1470,10 +1187,6 @@ def execute_deploy_training(
     if ensemble_offsets > 0:
         full_train_params["ensemble_offsets"] = ensemble_offsets
         full_train_params["ensemble_n_models"] = model.n_models
-    subset_ensemble = getattr(args, "subset_ensemble", False)
-    if subset_ensemble:
-        full_train_params["subset_ensemble"] = True
-        full_train_params["subset_n_models"] = model.n_models
 
     version = registry.register_model(
         model=model,
@@ -1738,9 +1451,6 @@ def write_walk_forward_summary(
         "feature_stability_filter": args.feature_stability_filter,
         "ensemble_offsets": getattr(args, 'ensemble_offsets', 0),
         "enable_enhanced_features": getattr(args, 'enable_enhanced_features', False),
-        "subset_ensemble": getattr(args, 'subset_ensemble', False),
-        "model_quality_enabled": getattr(args, 'model_quality_enabled', False),
-        "model_quality_ir_threshold": getattr(args, 'model_quality_ir_threshold', 0.03),
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
@@ -1766,9 +1476,6 @@ def write_walk_forward_summary(
         "signal_gate_topn_low_multiplier": getattr(args, 'signal_gate_topn_low_multiplier', 1.5),
         "holding_bonus_enabled": getattr(args, 'holding_bonus_enabled', False),
         "holding_bonus_sigma": getattr(args, 'holding_bonus_sigma', 0.5),
-        "market_adaptive_topn_enabled": getattr(args, 'market_adaptive_topn_enabled', False),
-        "market_adaptive_topn_bull_factor": getattr(args, 'market_adaptive_topn_bull_factor', 0.7),
-        "market_adaptive_topn_bear_factor": getattr(args, 'market_adaptive_topn_bear_factor', 1.5),
         "bt_sell_timing": getattr(args, 'bt_sell_timing', 'open'),
         "bt_exclude_st": getattr(args, 'bt_exclude_st', True),
         "bt_min_list_days": getattr(args, 'bt_min_list_days', 365),
@@ -2240,28 +1947,6 @@ def main():
         help="启用增强因子（开盘强度、日内波动结构、委托不平衡）"
     )
 
-    # 多特征子集集成（2.1）
-    parser.add_argument(
-        "--subset-ensemble",
-        action="store_true",
-        default=False,
-        help="启用多特征子集集成训练（动量 vs 基本面 vs 资金流，3模型加权融合）"
-    )
-
-    # 模型质量监控与降级（3.3）
-    parser.add_argument(
-        "--model-quality-enabled",
-        action="store_true",
-        default=False,
-        help="启用模型质量监控：val_rankic_ir低于阈值时回退使用上一合格模型"
-    )
-    parser.add_argument(
-        "--model-quality-ir-threshold",
-        type=float,
-        default=0.03,
-        help="模型降级阈值：val_rankic_ir低于此值触发降级（默认 0.03）"
-    )
-
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -2402,18 +2087,6 @@ def main():
     parser.add_argument(
         "--holding-bonus-sigma", type=float, default=0.5,
         help="持仓保留奖励幅度（截面分数标准差的倍数，默认：0.5）"
-    )
-    parser.add_argument(
-        "--market-adaptive-topn-enabled", action="store_true", default=False,
-        help="启用市场自适应Top-N：牛市集中选股，熊市分散选股（默认：关闭）"
-    )
-    parser.add_argument(
-        "--market-adaptive-topn-bull-factor", type=float, default=0.7,
-        help="市场自适应Top-N牛市缩减系数（默认：0.7）"
-    )
-    parser.add_argument(
-        "--market-adaptive-topn-bear-factor", type=float, default=1.5,
-        help="市场自适应Top-N熊市扩散系数（默认：1.5）"
     )
 
     # 回测初始资金
@@ -2782,12 +2455,6 @@ def main():
     logger.info(f"早停: rounds={args.early_stopping_rounds if args.early_stopping_rounds else '禁用'}, metric={args.early_stopping_metric}")
     if args.enable_enhanced_features:
         logger.info("因子增强: 启用（开盘强度、日内波动结构、委托不平衡）")
-    if args.subset_ensemble:
-        logger.info("多特征子集集成: 启用（动量 vs 基本面 vs 资金流）")
-    if args.model_quality_enabled:
-        logger.info(
-            f"模型质量监控: 启用（IR阈值={args.model_quality_ir_threshold}）"
-        )
     # oos_backtest_months=0 表示自动对齐 test_window_months
     if args.oos_backtest_months <= 0:
         args.oos_backtest_months = args.test_window_months
@@ -2940,14 +2607,6 @@ def main():
                 f"将跨 {len(splits)} 个 split 积累门控历史"
             )
 
-        # 模型质量监控: 跟踪上一个质量合格的模型版本
-        model_quality_enabled = getattr(args, "model_quality_enabled", False)
-        model_quality_ir_threshold = getattr(
-            args, "model_quality_ir_threshold", 0.03
-        )
-        prev_good_model_version = None
-        degradation_count = 0
-
         for split in splits:
             try:
                 if skip_training:
@@ -2978,36 +2637,6 @@ def main():
                         topk_values=topk_values,
                         trade_cal=trade_cal,
                     )
-
-                # ── 模型质量监控与降级 ─────────────────────────────────
-                if model_quality_enabled and not skip_training:
-                    val_ir = result.get("val_rankic_ir")
-                    current_version = result.get("model_version")
-                    if val_ir is not None and val_ir < model_quality_ir_threshold:
-                        if prev_good_model_version is not None:
-                            degradation_count += 1
-                            logger.warning(
-                                f"[模型降级] Split {split.split_index}: "
-                                f"val_rankic_ir={val_ir:.4f} < "
-                                f"阈值{model_quality_ir_threshold}, "
-                                f"回退使用 v{prev_good_model_version} "
-                                f"(累计降级 {degradation_count} 次)"
-                            )
-                            result["original_model_version"] = current_version
-                            result["model_version"] = prev_good_model_version
-                            result["model_degraded"] = True
-                        else:
-                            logger.warning(
-                                f"[模型质量] Split {split.split_index}: "
-                                f"val_rankic_ir={val_ir:.4f} < "
-                                f"阈值{model_quality_ir_threshold}, "
-                                f"但无可用历史模型，继续使用当前模型 v{current_version}"
-                            )
-                            # 即使质量不佳也作为可用基准
-                            prev_good_model_version = current_version
-                    else:
-                        # 质量合格，更新为最新可用好模型
-                        prev_good_model_version = current_version
 
                 # OOS 回测（每个 split 训练后运行真实回测）
                 if args.oos_backtest and result.get("model_version"):
@@ -3045,9 +2674,6 @@ def main():
                             signal_gate_topn_low_multiplier=args.signal_gate_topn_low_multiplier,
                             holding_bonus_enabled=args.holding_bonus_enabled,
                             holding_bonus_sigma=args.holding_bonus_sigma,
-                            market_adaptive_topn_enabled=args.market_adaptive_topn_enabled,
-                            market_adaptive_topn_bull_factor=args.market_adaptive_topn_bull_factor,
-                            market_adaptive_topn_bear_factor=args.market_adaptive_topn_bear_factor,
                             bt_exclude_st=args.bt_exclude_st,
                             bt_min_list_days=args.bt_min_list_days,
                             bt_sell_timing=args.bt_sell_timing,
@@ -3158,8 +2784,6 @@ def main():
         logger.info("Walk-forward 滚动训练完成！")
         logger.info(f"  成功完成: {len(results)} / {len(splits)} 个切分")
         logger.info(f"  运行ID: {wf_run_id}")
-        if model_quality_enabled and degradation_count > 0:
-            logger.info(f"  模型降级: {degradation_count} 次触发回退")
         logger.info("=" * 80)
         
     except Exception as e:
