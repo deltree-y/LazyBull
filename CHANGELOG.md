@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.49.0] - 2026-04-11
+
+### 新增
+
+- **背光调节脚本默认显示亮度测试画面**：`scripts/respi/set_backlight.py` 在成功设置亮度后，现在会默认往 framebuffer 写入一张高对比度测试图，包含彩条、灰度条和棋盘块，便于在树莓派现场直接肉眼判断亮度是否合适。
+- **预览参数可控**：新增 `--no-preview`、`--fb-path`、`--fb-width`、`--fb-height` 参数。默认会写预览图；如果只想静默调亮度，可以显式加 `--no-preview`。
+
+### 测试
+
+- 更新 `tests/test_respi_set_backlight.py`，新增测试图 framebuffer 数据生成、`main` 默认写入 preview、`--no-preview` 关闭 preview 等回归断言。
+
 ## [0.48.2] - 2026-04-11
 
 ### 修复

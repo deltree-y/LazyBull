@@ -24,6 +24,16 @@ def test_percent_to_sysfs_value_scales_by_max_brightness():
     assert raw_value == 63
 
 
+def test_build_preview_framebuffer_bytes_has_expected_size_and_color_variation():
+    module = _load_module()
+
+    payload = module._build_preview_framebuffer_bytes(width=16, height=12)
+
+    assert len(payload) == 16 * 12 * 2
+    colors = {payload[index:index + 2] for index in range(0, len(payload), 2)}
+    assert len(colors) >= 6
+
+
 def test_discover_sysfs_backlights_returns_available_devices(tmp_path):
     module = _load_module()
     backlight_root = tmp_path / "backlight"
@@ -215,3 +225,45 @@ def test_main_reads_discovered_sysfs_backlight_when_default_path_missing(capsys,
     assert exit_code == 0
     assert "当前背光: 20%" in captured.out
     assert "背光节点: display0" in captured.out
+
+
+def test_main_writes_preview_by_default_when_setting_brightness(monkeypatch, capsys):
+    module = _load_module()
+    preview_calls = []
+
+    monkeypatch.setattr(
+        module,
+        "set_backlight",
+        lambda *args, **kwargs: {"method": "sysfs", "percent": 10, "raw_value": 25, "max_brightness": 255},
+    )
+    monkeypatch.setattr(
+        module,
+        "_write_preview_pattern",
+        lambda **kwargs: preview_calls.append(kwargs) or {"fb_path": "/dev/fb1", "width": 480, "height": 320},
+    )
+
+    exit_code = module.main(["10"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert len(preview_calls) == 1
+    assert "已写入亮度测试画面" in captured.out
+
+
+def test_main_skips_preview_when_no_preview_is_set(monkeypatch):
+    module = _load_module()
+
+    monkeypatch.setattr(
+        module,
+        "set_backlight",
+        lambda *args, **kwargs: {"method": "sysfs", "percent": 10, "raw_value": 25, "max_brightness": 255},
+    )
+    monkeypatch.setattr(
+        module,
+        "_write_preview_pattern",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("不应写入测试画面")),
+    )
+
+    exit_code = module.main(["10", "--no-preview"])
+
+    assert exit_code == 0

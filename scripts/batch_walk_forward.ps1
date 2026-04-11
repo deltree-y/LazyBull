@@ -200,7 +200,7 @@ $use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈�
 $atr_multiplier_list              = @(2.8)   # baseline 对齐当前最佳防守型 run（仅启用 ATR 止损时生效）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold_list   = @(1.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
+$take_profit_threshold_list   = @(0.2,0.3,0.4,0.5,0.6)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
 $take_profit_refill           = $false   # $true=整体止盈后自动补位买入
 
 # ── 空仓/持有期拖尾提前调仓 ────────────────────────────────────

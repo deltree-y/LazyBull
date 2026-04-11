@@ -11,6 +11,9 @@ from typing import Optional, Sequence
 DEFAULT_SYSFS_ROOT = Path("/sys/class/backlight")
 DEFAULT_SYSFS_BRIGHTNESS_PATH = DEFAULT_SYSFS_ROOT / "soc:backlight" / "brightness"
 DEFAULT_SYSFS_MAX_PATH = DEFAULT_SYSFS_ROOT / "soc:backlight" / "max_brightness"
+DEFAULT_FB_PATH = Path("/dev/fb1")
+DEFAULT_FB_WIDTH = 480
+DEFAULT_FB_HEIGHT = 320
 DEFAULT_PWM_PIN = 18
 DEFAULT_PWM_FREQUENCY = 1000
 DEFAULT_LGPIO_CHIP = 0
@@ -31,6 +34,75 @@ def _brightness_arg(value: str) -> int:
 def _percent_to_sysfs_value(percent: int, max_brightness: int) -> int:
     """将百分比亮度换算为 sysfs 原始值。"""
     return int(max_brightness * percent / 100)
+
+
+def _rgb888_to_rgb565_value(red: int, green: int, blue: int) -> int:
+    """将 RGB888 颜色转换为 RGB565。"""
+    return ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+
+
+def _build_preview_framebuffer_bytes(
+    width: int = DEFAULT_FB_WIDTH,
+    height: int = DEFAULT_FB_HEIGHT,
+) -> bytes:
+    """构建亮度测试图，便于肉眼观察背光效果。"""
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"framebuffer 尺寸非法: {width}x{height}")
+
+    color_bars = [
+        (255, 255, 255),
+        (255, 255, 0),
+        (0, 255, 255),
+        (0, 255, 0),
+        (255, 0, 255),
+        (255, 0, 0),
+        (0, 0, 255),
+        (0, 0, 0),
+    ]
+    top_end = height * 5 // 8
+    middle_end = height * 4 // 5
+    checker_cell = max(min(width, height) // 16, 8)
+
+    payload = bytearray(width * height * 2)
+    cursor = 0
+    for y in range(height):
+        for x in range(width):
+            if y < top_end:
+                color_index = min(len(color_bars) - 1, x * len(color_bars) // width)
+                red, green, blue = color_bars[color_index]
+            elif y < middle_end:
+                gray = int(255 * x / max(width - 1, 1))
+                red, green, blue = gray, gray, gray
+            else:
+                base_colors = [(255, 96, 96), (96, 255, 96), (96, 96, 255)]
+                band_index = min(len(base_colors) - 1, x * len(base_colors) // width)
+                base_red, base_green, base_blue = base_colors[band_index]
+                scale = 1.0 if ((x // checker_cell) + ((y - middle_end) // checker_cell)) % 2 == 0 else 0.35
+                red = int(base_red * scale)
+                green = int(base_green * scale)
+                blue = int(base_blue * scale)
+
+            rgb565 = _rgb888_to_rgb565_value(red, green, blue)
+            payload[cursor:cursor + 2] = int(rgb565).to_bytes(2, byteorder="little", signed=False)
+            cursor += 2
+
+    return bytes(payload)
+
+
+def _write_preview_pattern(
+    fb_path: Path = DEFAULT_FB_PATH,
+    width: int = DEFAULT_FB_WIDTH,
+    height: int = DEFAULT_FB_HEIGHT,
+) -> dict:
+    """将亮度测试图写入 framebuffer。"""
+    payload = _build_preview_framebuffer_bytes(width=width, height=height)
+    fb_path.write_bytes(payload)
+    return {
+        "fb_path": str(fb_path),
+        "width": width,
+        "height": height,
+        "bytes": len(payload),
+    }
 
 
 def _discover_sysfs_backlights(backlight_root: Path = DEFAULT_SYSFS_ROOT) -> list[dict]:
@@ -438,6 +510,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="只读取当前 sysfs 背光值，不写入",
     )
     parser.add_argument(
+        "--no-preview",
+        action="store_true",
+        help="设置亮度后不写入默认测试画面",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="列出当前检测到的 sysfs 背光节点",
@@ -486,6 +563,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_SYSFS_MAX_PATH),
         help="sysfs max_brightness 节点路径",
     )
+    parser.add_argument(
+        "--fb-path",
+        default=str(DEFAULT_FB_PATH),
+        help=f"测试画面写入的 framebuffer 路径，默认 {DEFAULT_FB_PATH}",
+    )
+    parser.add_argument(
+        "--fb-width",
+        type=int,
+        default=DEFAULT_FB_WIDTH,
+        help=f"测试画面的 framebuffer 宽度，默认 {DEFAULT_FB_WIDTH}",
+    )
+    parser.add_argument(
+        "--fb-height",
+        type=int,
+        default=DEFAULT_FB_HEIGHT,
+        help=f"测试画面的 framebuffer 高度，默认 {DEFAULT_FB_HEIGHT}",
+    )
     return parser
 
 
@@ -511,6 +605,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     brightness_path = Path(args.sysfs_brightness_path)
     max_path = Path(args.sysfs_max_path)
     backlight_root = Path(args.backlight_root)
+    fb_path = Path(args.fb_path)
 
     if args.list:
         _print_available_backlights(backlight_root)
@@ -559,6 +654,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _print_available_backlights(backlight_root)
         return 1
 
+    if not args.no_preview:
+        try:
+            preview = _write_preview_pattern(
+                fb_path=fb_path,
+                width=args.fb_width,
+                height=args.fb_height,
+            )
+            print(
+                f"已写入亮度测试画面: {preview['fb_path']} "
+                f"({preview['width']}x{preview['height']})"
+            )
+        except Exception as exc:
+            print(f"警告: 背光已设置，但测试画面写入失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+
     if result["method"] == "sysfs":
         print(
             f"已通过 sysfs 设置背光为 {result['percent']}% "
@@ -566,7 +675,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         if result.get("backlight_name"):
             print(f"背光节点: {result['backlight_name']}")
-        print(f"写入节点: {result['brightness_path']}")
+        if result.get("brightness_path"):
+            print(f"写入节点: {result['brightness_path']}")
         return 0
 
     print(
