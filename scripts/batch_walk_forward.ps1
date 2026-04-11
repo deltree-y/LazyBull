@@ -193,7 +193,7 @@ $profit_extension_days_list       = @(2)        # baseline 对齐当前最佳防
 # ── 盈利延续判据模式(新) ──
 #   pnl=单一浮盈率(兼容原行为) | strength=5维度强势度评分 | disabled=关闭延续
 $profit_extension_mode_list              = @('strength')     # 可多值如 @('pnl','strength')
-$profit_extension_strength_threshold_list = @(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)      # strength 模式延续阈值 [0,1]
+$profit_extension_strength_threshold_list = @(0.65,0.7,0.75)      # strength 模式延续阈值 [0,1]
 
 # ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
 $use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈值（需同时开启 $enable_profit_based_holding）

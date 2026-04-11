@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.48.1] - 2026-04-11
+
+### 修复
+
+- **背光脚本不再只认固定的 `soc:backlight` 节点**：`scripts/respi/set_backlight.py` 现在会自动扫描 `/sys/class/backlight` 下所有可用设备，并优先选中发现到的真实背光节点；如果你的树莓派驱动导出的不是 `soc:backlight`，`--read` 和默认 `auto` 模式也能正常命中。
+- **PWM 后端新增 direct `lgpio` 支持**：当没有 sysfs 背光节点时，脚本现在会先尝试 `lgpio` 直接 claim GPIO 并发送 PWM，再回退到 `RPi.GPIO`；比之前只走 `RPi.GPIO` 更适合 Bookworm / `rpi-lgpio` 环境。
+- **增加现场排障能力**：新增 `--list`、`--backlight-root`、`--backlight-name`、`--gpiochip` 参数，便于在树莓派现场先枚举节点、再指定具体设备或 gpiochip 测试。
+
+### 测试
+
+- 更新 `tests/test_respi_set_backlight.py`，新增“自动发现非默认背光节点”“PWM 优先使用 lgpio 并在失败时回退 RPi.GPIO”“`main --read` 在默认路径缺失时仍能命中扫描到的节点”等回归断言。
+
 ## [0.48.0] - 2026-04-11
 
 ### 新增
