@@ -214,6 +214,9 @@ def run_oos_backtest(
     early_exit_holding_ratio: float = 0.6,
     profit_extension_threshold: float = 0.05,
     profit_extension_days: int = 5,
+    profit_extension_mode: str = "pnl",
+    profit_extension_strength_threshold: float = 0.6,
+    profit_extension_strength_weights: Optional[Dict[str, float]] = None,
     use_atr_for_early_exit: bool = False,
     atr_multiplier: float = 2.0,
     take_profit_threshold: Optional[float] = None,
@@ -426,6 +429,9 @@ def run_oos_backtest(
         early_exit_holding_ratio=early_exit_holding_ratio,
         profit_extension_threshold=profit_extension_threshold,
         profit_extension_days=profit_extension_days,
+        profit_extension_mode=profit_extension_mode,
+        profit_extension_strength_threshold=profit_extension_strength_threshold,
+        profit_extension_strength_weights=profit_extension_strength_weights,
         use_atr_for_early_exit=use_atr_for_early_exit,
         atr_multiplier=atr_multiplier,
         take_profit_threshold=take_profit_threshold,
@@ -1527,6 +1533,8 @@ def write_walk_forward_summary(
         "early_exit_holding_ratio": getattr(args, 'early_exit_holding_ratio', 0.6),
         "profit_extension_threshold": getattr(args, 'profit_extension_threshold', 0.05),
         "profit_extension_days": getattr(args, 'profit_extension_days', 5),
+        "profit_extension_mode": getattr(args, 'profit_extension_mode', 'pnl'),
+        "profit_extension_strength_threshold": getattr(args, 'profit_extension_strength_threshold', 0.6),
         "use_atr_for_early_exit": getattr(args, 'use_atr_for_early_exit', False),
         "atr_multiplier": getattr(args, 'atr_multiplier', 2.0),
         "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
@@ -2380,6 +2388,19 @@ def main():
         help="盈利延续持有的额外天数（交易日），默认 5"
     )
     parser.add_argument(
+        "--profit-extension-mode",
+        type=str,
+        default="pnl",
+        choices=["pnl", "strength", "disabled"],
+        help="盈利延续持有判据模式: pnl=单一浮盈率(默认,兼容原行为) | strength=5维度强势度评分 | disabled=关闭延续"
+    )
+    parser.add_argument(
+        "--profit-extension-strength-threshold",
+        type=float,
+        default=0.6,
+        help="strength 模式下的延续阈值 [0,1]，默认 0.6"
+    )
+    parser.add_argument(
         "--use-atr-for-early-exit",
         action="store_true",
         default=False,
@@ -2716,6 +2737,9 @@ def main():
                             early_exit_holding_ratio=args.early_exit_holding_ratio,
                             profit_extension_threshold=args.profit_extension_threshold,
                             profit_extension_days=args.profit_extension_days,
+                            profit_extension_mode=getattr(args, 'profit_extension_mode', 'pnl'),
+                            profit_extension_strength_threshold=getattr(args, 'profit_extension_strength_threshold', 0.6),
+                            profit_extension_strength_weights=getattr(args, 'profit_extension_strength_weights', None),
                             use_atr_for_early_exit=args.use_atr_for_early_exit,
                             atr_multiplier=args.atr_multiplier,
                             take_profit_threshold=args.take_profit_threshold,

@@ -25,7 +25,7 @@ $val_ratio_list          = @(0.1)           # 训练数据内部验证集比例�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
+$label_list              = @("neu_y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
@@ -94,7 +94,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 $start_model_version     = 9461    # 第一个 split 的模型版本号（$null = 不指定）
                                    #d3(0101):7969/9430(no enh)/9416(enh)
                                    #d3(0209):8165/9446(no enh)/9461(enh)
@@ -186,8 +186,14 @@ $ma250_atr_scaling             = $true      # $true 启用 ATR 动态仓位缩�
 $enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
 $early_exit_loss_threshold_list   = @(-0.07)    #-0.07 # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
 $early_exit_holding_ratio_list    = @(0.5)      #0.6  # 亏损提前换出最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
-$profit_extension_threshold_list  = @(0.1)      #0.1   # 盈利延续持有阈值（可多值，如 @(0.03, 0.05, 0.10)）
+$profit_extension_threshold_list  = @(0.1)      #0.1   # 盈利延续持有阈值（pnl模式，可多值，如 @(0.03, 0.05, 0.10)）
 $profit_extension_days_list       = @(2)        # baseline 对齐当前最佳防守型 run
+
+# 0411新增strength
+# ── 盈利延续判据模式(新) ──
+#   pnl=单一浮盈率(兼容原行为) | strength=5维度强势度评分 | disabled=关闭延续
+$profit_extension_mode_list              = @('strength')     # 可多值如 @('pnl','strength')
+$profit_extension_strength_threshold_list = @(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)      # strength 模式延续阈值 [0,1]
 
 # ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
 $use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈值（需同时开启 $enable_profit_based_holding）
@@ -296,6 +302,8 @@ $totalTasks = $algorithm_list.Length *
               $early_exit_holding_ratio_list.Length *
               $profit_extension_threshold_list.Length *
               $profit_extension_days_list.Length *
+              $profit_extension_mode_list.Length *
+              $profit_extension_strength_threshold_list.Length *
               $atr_multiplier_list.Length *
               $take_profit_threshold_list.Length
 
@@ -353,6 +361,8 @@ foreach ($early_exit_loss_threshold in $early_exit_loss_threshold_list) {
 foreach ($early_exit_holding_ratio in $early_exit_holding_ratio_list) {
 foreach ($profit_extension_threshold in $profit_extension_threshold_list) {
 foreach ($profit_extension_days in $profit_extension_days_list) {
+foreach ($profit_extension_mode in $profit_extension_mode_list) {
+foreach ($profit_extension_strength_threshold in $profit_extension_strength_threshold_list) {
 foreach ($atr_multiplier in $atr_multiplier_list) {
 foreach ($take_profit_threshold in $take_profit_threshold_list) {
 
@@ -461,7 +471,9 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
                       " --early-exit-loss-threshold $early_exit_loss_threshold" +
                       " --early-exit-holding-ratio $early_exit_holding_ratio" +
                       " --profit-extension-threshold $profit_extension_threshold" +
-                      " --profit-extension-days $profit_extension_days"
+                      " --profit-extension-days $profit_extension_days" +
+                      " --profit-extension-mode $profit_extension_mode" +
+                      " --profit-extension-strength-threshold $profit_extension_strength_threshold"
     }
 
     if ($use_atr_for_early_exit) {
@@ -591,7 +603,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

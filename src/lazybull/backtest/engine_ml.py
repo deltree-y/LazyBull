@@ -359,6 +359,23 @@ class BacktestEngineML(BacktestEngine):
             return {}
         return {'buy_atr_pct': float(atr_pct)}
 
+    def _get_holding_features_row(
+        self, date: pd.Timestamp, stock: str
+    ) -> Optional[pd.Series]:
+        """覆写基类 hook:从 features_by_date 读取持仓股票的截面特征行
+
+        供 HoldingStrengthScorer 在 profit_extension_mode='strength' 时使用。
+        缺失时返回 None,scorer 会降级到中位分。
+        """
+        date_str = date.strftime('%Y%m%d')
+        features_df = self.features_by_date.get(date_str)
+        if features_df is None or features_df.empty:
+            return None
+        mask = features_df['ts_code'] == stock
+        if not mask.any():
+            return None
+        return features_df.loc[mask].iloc[0]
+
     def _get_current_position_atr_stats(
         self, date: pd.Timestamp
     ) -> Optional[tuple[float, float, float]]:

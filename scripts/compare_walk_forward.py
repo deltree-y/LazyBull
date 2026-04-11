@@ -129,6 +129,8 @@ COL_NAMES = {
     "early_exit_holding_ratio":     "早退持仓比例",
     "profit_extension_threshold":   "盈利延持阈值",
     "profit_extension_days":        "盈利延持天数",
+    "profit_extension_mode":        "盈利延持模式",
+    "profit_extension_strength_threshold": "强势度阈值",
     # ATR 动态阈值与仓位缩放
     "use_atr_for_early_exit":       "ATR动态阈值",
     "atr_multiplier":               "ATR倍数",
@@ -171,6 +173,7 @@ PARAM_COLS = [
     "enable_profit_based_holding",
     "early_exit_loss_threshold", "early_exit_holding_ratio",
     "profit_extension_threshold", "profit_extension_days",
+    "profit_extension_mode", "profit_extension_strength_threshold",
     # ATR 动态阈值与仓位缩放
     "use_atr_for_early_exit", "atr_multiplier",
     "market_regime_ma250_hard_stop", "market_regime_ma250_threshold",

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.48.0] - 2026-04-11
+
+### 新增
+
+- **树莓派 LCD 独立背光调节脚本**：新增 `scripts/respi/set_backlight.py`，支持通过命令行传入 `0~100` 亮度百分比，方便在树莓派上单独试背光，不必启动完整 LCD 显示程序。
+- **自动选择背光控制方式**：脚本默认优先使用 sysfs 背光节点 `/sys/class/backlight/soc:backlight/brightness`；若节点不可用，可切换为 GPIO PWM 模式（默认 GPIO 18 / 1000Hz）。
+- **支持读取当前亮度**：可通过 `--read` 直接查看当前 sysfs 背光原始值和百分比，便于现场摸清屏幕亮度到底如何调。
+
+### 测试
+
+- 新增 `tests/test_respi_set_backlight.py`，覆盖 sysfs 亮度换算、当前亮度读取、auto 模式优先走 sysfs、sysfs 不可用时回退 PWM 等行为。
+
 ## [0.47.12] - 2026-04-10
 
 ### 移除

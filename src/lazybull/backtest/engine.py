@@ -20,6 +20,7 @@ from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..signals.base import Signal
 from ..universe.base import Universe
+from .holding_strength import HoldingStrengthScorer, HoldingStrengthWeights
 
 
 def _format_rebalance_decision_summary(
@@ -225,6 +226,9 @@ class BacktestEngine:
         early_exit_holding_ratio: float = 0.6,  # 亏损提前换出最早触发时点（持有期比例）
         profit_extension_threshold: float = 0.05,  # 盈利延续持有阈值
         profit_extension_days: int = 5,  # 盈利延续持有额外天数（交易日）
+        profit_extension_mode: str = "pnl",  # "pnl"=原浮盈单维判据 | "strength"=多维度强势度 | "disabled"=关闭
+        profit_extension_strength_threshold: float = 0.6,  # strength 模式下的延续阈值 [0,1]
+        profit_extension_strength_weights: Optional[Dict[str, float]] = None,  # 强势度 5 维度权重
         use_atr_for_early_exit: bool = False,  # 是否用个股 ATR 动态替代固定止损阈值
         atr_multiplier: float = 2.0,  # ATR 倍数（亏损超过 N×ATR% 时触发提前换出）
         take_profit_threshold: Optional[
@@ -343,6 +347,29 @@ class BacktestEngine:
         self.profit_extension_days = profit_extension_days
         self.use_atr_for_early_exit = use_atr_for_early_exit
         self.atr_multiplier = atr_multiplier
+        # ── 盈利延续持有模式（多维度强势度评分）──
+        if profit_extension_mode not in ("pnl", "strength", "disabled"):
+            raise ValueError(
+                f"profit_extension_mode 必须为 pnl|strength|disabled，当前值: {profit_extension_mode}"
+            )
+        self.profit_extension_mode = profit_extension_mode
+        self.profit_extension_strength_threshold = profit_extension_strength_threshold
+        self.profit_extension_strength_weights = profit_extension_strength_weights
+        self.holding_strength_scorer: Optional[HoldingStrengthScorer] = None
+        if profit_extension_mode == "strength":
+            weights_obj = HoldingStrengthWeights.from_dict(profit_extension_strength_weights)
+            self.holding_strength_scorer = HoldingStrengthScorer(self, weights_obj)
+            logger.info(
+                f"盈利延续持有模式=strength, 阈值={profit_extension_strength_threshold:.2f}, "
+                f"权重={weights_obj.normalize().as_dict()}"
+            )
+        elif profit_extension_mode == "disabled":
+            logger.info("盈利延续持有模式=disabled, 持有期满直接卖出")
+        else:
+            logger.info(
+                f"盈利延续持有模式=pnl(原浮盈单维), 阈值={profit_extension_threshold:.2%}, "
+                f"延续天数={profit_extension_days}"
+            )
         # 整体持仓止盈参数
         self.take_profit_threshold = take_profit_threshold
         self.take_profit_refill = take_profit_refill
@@ -980,6 +1007,16 @@ class BacktestEngine:
                 f"  持仓延续: {stock} 持有期重置 "
                 f"({old_buy_date.date()} → {new_buy_date.date()})"
             )
+
+    def _get_holding_features_row(
+        self, date: pd.Timestamp, stock: str
+    ) -> Optional[pd.Series]:
+        """持仓强势度评分数据源 hook
+
+        基类无特征数据,返回 None。BacktestEngineML 子类会从 features_by_date
+        读取对应股票的截面特征行并返回。
+        """
+        return None
 
     def _generate_signal(
         self,
@@ -1886,11 +1923,52 @@ class BacktestEngine:
                 )
 
                 if holding_days >= self.holding_period:
-                    # 盈利延续持有：持有期满仍盈利，允许延续 profit_extension_days 天
-                    if (
-                        profit_rate >= self.profit_extension_threshold
-                        and holding_days < self.holding_period + self.profit_extension_days
-                    ):
+                    # ── 盈利延续持有决策 ─────────────────────────────
+                    # 根据 profit_extension_mode 分派到不同判据:
+                    #  - pnl:      原浮盈率 >= profit_extension_threshold(向后兼容)
+                    #  - strength: 多维度强势度评分 >= profit_extension_strength_threshold
+                    #  - disabled: 不延续,直接卖出
+                    should_extend = False
+                    extend_log_detail = ""
+                    within_extension_window = (
+                        holding_days < self.holding_period + self.profit_extension_days
+                    )
+
+                    if self.profit_extension_mode == "disabled":
+                        should_extend = False
+                    elif self.profit_extension_mode == "strength":
+                        if within_extension_window and self.holding_strength_scorer is not None:
+                            breakdown = self.holding_strength_scorer.score(
+                                stock=stock,
+                                date=date,
+                                position_info=info,
+                                profit_rate=profit_rate,
+                            )
+                            if breakdown.total >= self.profit_extension_strength_threshold:
+                                should_extend = True
+                                extend_log_detail = (
+                                    f"强势度={breakdown.total:.3f} "
+                                    f">= 阈值={self.profit_extension_strength_threshold:.2f}, "
+                                    f"{breakdown.to_log_str()}"
+                                )
+                            else:
+                                extend_log_detail = (
+                                    f"强势度={breakdown.total:.3f} "
+                                    f"< 阈值={self.profit_extension_strength_threshold:.2f}, "
+                                    f"{breakdown.to_log_str()}"
+                                )
+                    else:  # pnl 模式(默认,向后兼容)
+                        if (
+                            profit_rate >= self.profit_extension_threshold
+                            and within_extension_window
+                        ):
+                            should_extend = True
+                            extend_log_detail = (
+                                f"盈亏={profit_rate:.2%} "
+                                f">= 阈值={self.profit_extension_threshold:.2%}"
+                            )
+
+                    if should_extend:
                         max_holding_days = self.holding_period + self.profit_extension_days
                         expected_sell_idx = anchor_idx + max_holding_days
                         expected_sell_date = (
@@ -1899,12 +1977,24 @@ class BacktestEngine:
                             else "超出回测区间"
                         )
                         logger.warning(
-                            f"  盈利延续持有: {stock} 持有{holding_days}天, "
-                            f"盈亏={profit_rate:.2%} >= 阈值={self.profit_extension_threshold:.2%}, "
+                            f"  盈利延续持有[{self.profit_extension_mode}]: "
+                            f"{stock} 持有{holding_days}天, {extend_log_detail}, "
                             f"延续至最多 {max_holding_days} 天, "
                             f"预计卖出日期={expected_sell_date}"
                         )
                         continue  # 延续持有，跳过卖出
+
+                    # strength 模式下打印未延续的分项评分(便于归因)
+                    if (
+                        self.profit_extension_mode == "strength"
+                        and extend_log_detail
+                        and self.verbose
+                    ):
+                        logger.info(
+                            f"  持有期满不延续[strength]: {stock} 持有{holding_days}天, "
+                            f"{extend_log_detail}"
+                        )
+
                     # 持有期到期（含延续到期）→ 预定事件，直接执行
                     stocks_to_sell.append(stock)
                 else:

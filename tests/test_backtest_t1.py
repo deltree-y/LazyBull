@@ -245,5 +245,5 @@ def test_profit_extension_log_includes_expected_sell_date():
         logger.remove(sink_id)
 
     output = stream.getvalue()
-    assert '盈利延续持有: 000001.SZ 持有2天' in output
+    assert '盈利延续持有[pnl]: 000001.SZ 持有2天' in output
     assert '延续至最多 4 天, 预计卖出日期=2023-01-09' in output

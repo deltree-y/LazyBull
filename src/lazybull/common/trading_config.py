@@ -48,6 +48,20 @@ class TradingConfig:
     holding_bonus_enabled: bool = False  # 是否启用持仓保留奖励（降低换手率）
     holding_bonus_sigma: float = 0.5  # 保留奖励幅度（截面分数标准差的倍数）
 
+    # ── 盈利延续持有模式（强势度评分）──
+    # pnl=原单一浮盈判据(向后兼容,默认) | strength=多维度强势度评分 | disabled=关闭延续机制
+    profit_extension_mode: str = "pnl"
+    profit_extension_strength_threshold: float = 0.6  # strength 模式延续阈值 [0, 1]
+    profit_extension_strength_weights: Dict[str, float] = field(
+        default_factory=lambda: {
+            "ml_score": 0.30,
+            "momentum": 0.25,
+            "technical": 0.15,
+            "fund_flow": 0.15,
+            "drawdown": 0.15,
+        }
+    )
+
     rebalance_freq: Optional[int] = 20
     stagger_tranches: int = 1
     max_per_industry: Optional[int] = None
@@ -102,9 +116,29 @@ class TradingConfig:
         """从 argparse Namespace 构建 TradingConfig。
 
         只取 TradingConfig 中定义的字段，忽略其余 CLI 参数。
+        额外处理：将 profit_extension_strength_w_* 5 个独立 CLI 权重参数
+        合并为 profit_extension_strength_weights 字典字段。
         """
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
-        d = {k: v for k, v in vars(args).items() if k in valid_keys}
+        args_dict = vars(args)
+        d = {k: v for k, v in args_dict.items() if k in valid_keys}
+
+        # 合并盈利延续持有强势度权重（5 个 CLI 参数 → dict 字段）
+        weight_keys = (
+            "profit_extension_strength_w_ml",
+            "profit_extension_strength_w_momentum",
+            "profit_extension_strength_w_technical",
+            "profit_extension_strength_w_fund",
+            "profit_extension_strength_w_drawdown",
+        )
+        if any(k in args_dict for k in weight_keys):
+            d["profit_extension_strength_weights"] = {
+                "ml_score": float(args_dict.get("profit_extension_strength_w_ml", 0.30)),
+                "momentum": float(args_dict.get("profit_extension_strength_w_momentum", 0.25)),
+                "technical": float(args_dict.get("profit_extension_strength_w_technical", 0.15)),
+                "fund_flow": float(args_dict.get("profit_extension_strength_w_fund", 0.15)),
+                "drawdown": float(args_dict.get("profit_extension_strength_w_drawdown", 0.15)),
+            }
         return cls(**d)
 
     def to_dict(self) -> dict:
@@ -286,6 +320,56 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=float,
         default=0.5,
         help="持仓保留奖励幅度，截面分数标准差的倍数（默认：0.5）",
+    )
+
+    # ── 盈利延续持有模式（强势度评分）──
+    parser.add_argument(
+        "--profit-extension-mode",
+        type=str,
+        default="pnl",
+        choices=["pnl", "strength", "disabled"],
+        help=(
+            "盈利延续持有判据模式："
+            "pnl=原单一浮盈判据(默认,兼容)；"
+            "strength=多维度强势度评分(ML+动量+技术+资金+回撤)；"
+            "disabled=关闭延续机制"
+        ),
+    )
+    parser.add_argument(
+        "--profit-extension-strength-threshold",
+        type=float,
+        default=0.6,
+        help="strength 模式的延续阈值 [0,1]，高于此值才延续持有（默认：0.6）",
+    )
+    parser.add_argument(
+        "--profit-extension-strength-w-ml",
+        type=float,
+        default=0.30,
+        help="strength 模式 ML 分数维度权重（默认：0.30）",
+    )
+    parser.add_argument(
+        "--profit-extension-strength-w-momentum",
+        type=float,
+        default=0.25,
+        help="strength 模式 动量维度权重（默认：0.25）",
+    )
+    parser.add_argument(
+        "--profit-extension-strength-w-technical",
+        type=float,
+        default=0.15,
+        help="strength 模式 技术维度权重（默认：0.15）",
+    )
+    parser.add_argument(
+        "--profit-extension-strength-w-fund",
+        type=float,
+        default=0.15,
+        help="strength 模式 资金筹码维度权重（默认：0.15）",
+    )
+    parser.add_argument(
+        "--profit-extension-strength-w-drawdown",
+        type=float,
+        default=0.15,
+        help="strength 模式 回撤距离维度权重（默认：0.15）",
     )
 
     # ── 市场自适应 Top-N ──

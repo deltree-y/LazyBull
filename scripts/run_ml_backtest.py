@@ -180,6 +180,9 @@ def run_ml_backtest(
     stock_basic: pd.DataFrame = None,
     holding_bonus_enabled: bool = False,
     holding_bonus_sigma: float = 0.5,
+    profit_extension_mode: str = "pnl",
+    profit_extension_strength_threshold: float = 0.6,
+    profit_extension_strength_weights: dict = None,
 ) -> tuple:
     """运行 ML 信号回测
     
@@ -226,8 +229,11 @@ def run_ml_backtest(
         stock_basic=stock_basic,
         holding_bonus_enabled=holding_bonus_enabled,
         holding_bonus_sigma=holding_bonus_sigma,
+        profit_extension_mode=profit_extension_mode,
+        profit_extension_strength_threshold=profit_extension_strength_threshold,
+        profit_extension_strength_weights=profit_extension_strength_weights,
     )
-    
+
     # 运行回测
     nav_curve = engine.run(
         start_date=pd.Timestamp(start_date),
@@ -941,6 +947,9 @@ def main():
             stock_basic=stock_basic,
             holding_bonus_enabled=trading_config.holding_bonus_enabled,
             holding_bonus_sigma=trading_config.holding_bonus_sigma,
+            profit_extension_mode=trading_config.profit_extension_mode,
+            profit_extension_strength_threshold=trading_config.profit_extension_strength_threshold,
+            profit_extension_strength_weights=trading_config.profit_extension_strength_weights,
         )
         
         # 7. 生成报告

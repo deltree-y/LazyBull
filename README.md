@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.47.10)
+### 当前版本 (v0.48.0)
+
+**树莓派 LCD 独立背光调节脚本** (v0.48.0):
+- 新增 `scripts/respi/set_backlight.py`，可以单独调树莓派 LCD 背光，不需要先启动 `3.5LCD_disp.py`
+- 默认优先走 sysfs 背光节点；如果你的屏幕驱动没有挂出 sysfs 节点，也可以用 `--method pwm` 切到 GPIO PWM 方式测试亮度
+- 常用示例：`python scripts/respi/set_backlight.py 20`、`python scripts/respi/set_backlight.py --read`、`python scripts/respi/set_backlight.py 15 --method pwm`
 
 **树莓派 3.5 寸 LCD 午休前 11:30 尾点补齐修复** (v0.47.10):
 - 日内图现在会在跨过 11:30 边界后保留一个很短的补尾窗口；如果上午最后一次常规轮询停在 11:29 左右，数据线程仍会立即再尝试一次，把上午收盘前的最后一个 10 分钟槽位补齐
