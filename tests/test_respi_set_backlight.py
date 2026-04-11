@@ -147,6 +147,38 @@ def test_set_pwm_backlight_falls_back_to_rpi_gpio_when_lgpio_fails(monkeypatch):
     assert result is marker
 
 
+def test_update_pwm_backlight_state_updates_lgpio_backend():
+    module = _load_module()
+    calls = []
+
+    class DummyLgpio:
+        def tx_pwm(self, handle, pin, frequency, duty_cycle):
+            calls.append((handle, pin, frequency, duty_cycle))
+
+    state = {
+        "backend": "lgpio",
+        "handle": 3,
+        "pin": 18,
+        "frequency": 1000,
+        "lgpio_module": DummyLgpio(),
+        "percent": 10,
+    }
+
+    updated = module.update_pwm_backlight_state(state, 25)
+
+    assert updated["percent"] == 25
+    assert calls == [(3, 18, 1000, 25.0)]
+
+
+def test_cleanup_backlight_state_runs_cleanup_callback():
+    module = _load_module()
+    called = []
+
+    module.cleanup_backlight_state({"cleanup": lambda: called.append(True)})
+
+    assert called == [True]
+
+
 def test_main_reads_current_sysfs_backlight(capsys, tmp_path):
     module = _load_module()
     brightness_path = tmp_path / "brightness"

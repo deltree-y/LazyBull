@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.48.1)
+### 当前版本 (v0.48.2)
+
+**树莓派 3.5 寸 LCD 主脚本背光路径与独立脚本对齐** (v0.48.2):
+- `scripts/respi/3.5LCD_disp.py` 的背光控制现在直接复用 `scripts/respi/set_backlight.py` 同一套 helper，因此主显示脚本和你单独调亮度时走的是完全一致的后端选择逻辑
+- 如果树莓派没有 `/sys/class/backlight` 节点，主 LCD 进程也会和独立脚本一样优先走 `lgpio` PWM，而不再卡在旧的 `RPi.GPIO` 路径上
+- 这意味着只要你单独执行 `python scripts/respi/set_backlight.py 10` 能成功，主脚本理论上也会用同样的方式设置到相同亮度
 
 **树莓派 LCD 背光脚本节点自动发现 + lgpio 回退** (v0.48.1):
 - `scripts/respi/set_backlight.py` 不再只认固定的 `soc:backlight` 路径，而是会自动扫描 `/sys/class/backlight` 下所有可用背光设备；如果你的屏幕驱动导出的节点名不同，`--read` 和默认 `auto` 模式也能直接命中

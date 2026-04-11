@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.48.2] - 2026-04-11
+
+### 修复
+
+- **主 LCD 脚本的背光控制改为复用已验证的 helper**：`scripts/respi/3.5LCD_disp.py` 不再继续保留“固定 sysfs 节点 + RPi.GPIO.PWM”的旧实现，而是改为直接复用 `scripts/respi/set_backlight.py` 中已经验证过的背光 helper。
+- **3.5LCD_disp.py 现已支持 sysfs 自动发现与 lgpio PWM**：在没有 `/sys/class/backlight` 节点时，主 LCD 进程会和独立调光脚本一样优先尝试 `lgpio`，并在亮屏/息屏切换时更新同一份 PWM 状态，而不是继续依赖只在部分环境可用的旧 GPIO 路径。
+- **背光资源清理统一**：主 LCD 脚本退出时现在会通过统一 cleanup 入口释放 PWM/backlight 状态，避免主脚本与独立调光脚本走两套不同的资源释放逻辑。
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py`，新增主 LCD 脚本“初始化背光走 helper”“更新已有 PWM 状态”“退出时清理 helper 状态”等回归断言。
+- 更新 `tests/test_respi_set_backlight.py`，新增 PWM 状态更新与 cleanup 的 helper 测试。
+
 ## [0.48.1] - 2026-04-11
 
 ### 修复

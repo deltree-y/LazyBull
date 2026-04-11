@@ -87,6 +87,69 @@ def test_resolve_framebuffer_path_uses_env_override(monkeypatch):
     assert module._resolve_framebuffer_path() == "/dev/fb9"
 
 
+def test_init_backlight_uses_helper_and_records_state(monkeypatch):
+    module = _load_module()
+    messages = []
+
+    monkeypatch.setattr(
+        module,
+        "_emit_diag_once",
+        lambda key, message, stderr=True: messages.append((key, message)),
+    )
+    monkeypatch.setattr(
+        module,
+        "_set_backlight_helper",
+        lambda *args, **kwargs: {
+            "method": "pwm",
+            "backend": "lgpio",
+            "percent": 10,
+            "pin": 18,
+            "frequency": 1000,
+        },
+    )
+
+    module._backlight_state = None
+    module._init_backlight()
+
+    assert module._backlight_state is not None
+    assert module._backlight_state["backend"] == "lgpio"
+    assert messages[-1] == ("backlight_pwm_ok", "背光初始化完成: 使用 lgpio PWM")
+
+
+def test_set_backlight_updates_existing_pwm_state(monkeypatch):
+    module = _load_module()
+    state = {"method": "pwm", "backend": "lgpio", "percent": 10}
+    updates = []
+
+    monkeypatch.setattr(
+        module,
+        "_update_pwm_backlight_state_helper",
+        lambda current_state, brightness: updates.append((current_state, brightness)) or current_state,
+    )
+
+    module._backlight_state = state
+    module._set_backlight(5)
+
+    assert updates == [(state, 5)]
+
+
+def test_cleanup_backlight_uses_helper_cleanup(monkeypatch):
+    module = _load_module()
+    cleaned = []
+
+    monkeypatch.setattr(
+        module,
+        "_cleanup_backlight_state_helper",
+        lambda state: cleaned.append(state),
+    )
+
+    module._backlight_state = {"method": "pwm", "backend": "lgpio"}
+    module._cleanup_backlight()
+
+    assert cleaned == [{"method": "pwm", "backend": "lgpio"}]
+    assert module._backlight_state is None
+
+
 def test_layout_constants_use_taller_header_and_narrower_left_panel():
     module = _load_module()
 

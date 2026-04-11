@@ -46,6 +46,9 @@ sys.path.insert(0, str(scripts_dir))
 # ---------- 项目日志 ----------
 from src.lazybull.common.logger import setup_logger  # noqa: E402
 from src.lazybull.common.config import get_config    # noqa: E402
+from respi.set_backlight import cleanup_backlight_state as _cleanup_backlight_state_helper  # noqa: E402
+from respi.set_backlight import set_backlight as _set_backlight_helper  # noqa: E402
+from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backlight_state_helper  # noqa: E402
 
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
@@ -1192,75 +1195,79 @@ def _get_snapshot_quote_time(snapshot: Optional[dict]) -> Optional[datetime]:
 
 # ---------- 背光控制 ----------
 
-_backlight_pwm = None
+_backlight_state: Optional[dict] = None
 
 
 def _init_backlight() -> None:
     """初始化背光 PWM，设置为 BACKLIGHT_BRIGHTNESS 亮度。
 
-    优先尝试 sysfs 接口，失败则使用 RPi.GPIO 硬件 PWM。
+    优先尝试 sysfs 接口，失败则回退到 PWM（优先 lgpio）。
     在非树莓派环境静默跳过。
     """
-    global _backlight_pwm
+    global _backlight_state
 
-    # 方式1：sysfs 背光接口
-    bl_path = "/sys/class/backlight/soc:backlight/brightness"
-    max_path = "/sys/class/backlight/soc:backlight/max_brightness"
     try:
-        with open(max_path, "r") as f:
-            max_br = int(f.read().strip())
-        target = int(max_br * BACKLIGHT_BRIGHTNESS / 100)
-        with open(bl_path, "w") as f:
-            f.write(str(target))
-        _emit_diag_once("backlight_sysfs_ok", "背光初始化完成: 使用 sysfs 接口")
-        return
-    except (FileNotFoundError, PermissionError, OSError):
-        pass
+        _backlight_state = _set_backlight_helper(
+            BACKLIGHT_BRIGHTNESS,
+            method="auto",
+            pin=BACKLIGHT_PIN,
+            frequency=1000,
+        )
+        if _backlight_state.get("method") == "sysfs":
+            backlight_name = _backlight_state.get("backlight_name")
+            if backlight_name:
+                _emit_diag_once(
+                    "backlight_sysfs_ok",
+                    f"背光初始化完成: 使用 sysfs 接口({backlight_name})",
+                )
+            else:
+                _emit_diag_once("backlight_sysfs_ok", "背光初始化完成: 使用 sysfs 接口")
+            return
 
-    # 方式2：RPi.GPIO 硬件 PWM（GPIO 18）
-    try:
-        import RPi.GPIO as GPIO  # type: ignore
-        GPIO.setwarnings(False)
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(BACKLIGHT_PIN, GPIO.OUT)
-        _backlight_pwm = GPIO.PWM(BACKLIGHT_PIN, 1000)  # 1kHz
-        _backlight_pwm.start(BACKLIGHT_BRIGHTNESS)
-        _emit_diag_once("backlight_pwm_ok", "背光初始化完成: 使用 GPIO PWM")
-    except (ImportError, RuntimeError):
+        backend = _backlight_state.get("backend", "pwm")
+        _emit_diag_once("backlight_pwm_ok", f"背光初始化完成: 使用 {backend} PWM")
+    except Exception as exc:
+        _backlight_state = None
         _emit_diag_once(
             "backlight_unavailable",
-            "背光初始化未生效: 未找到可用背光控制接口，若屏幕无背光请检查驱动/权限",
+            f"背光初始化未生效: {type(exc).__name__}: {exc}，若屏幕无背光请检查驱动/权限",
         )
 
 
 def _set_backlight(brightness: int) -> None:
     """设置背光亮度（0~100）。"""
-    # sysfs
-    bl_path = "/sys/class/backlight/soc:backlight/brightness"
-    max_path = "/sys/class/backlight/soc:backlight/max_brightness"
-    try:
-        with open(max_path, "r") as f:
-            max_br = int(f.read().strip())
-        with open(bl_path, "w") as f:
-            f.write(str(int(max_br * brightness / 100)))
-        return
-    except (FileNotFoundError, PermissionError, OSError):
-        pass
+    global _backlight_state
 
-    # PWM
-    if _backlight_pwm is not None:
-        _backlight_pwm.ChangeDutyCycle(brightness)
+    try:
+        if isinstance(_backlight_state, dict):
+            if _backlight_state.get("method") == "pwm":
+                _update_pwm_backlight_state_helper(_backlight_state, brightness)
+                return
+
+            _backlight_state = _set_backlight_helper(
+                brightness,
+                method="sysfs",
+                backlight_name=_backlight_state.get("backlight_name"),
+                pin=BACKLIGHT_PIN,
+                frequency=1000,
+            )
+            return
+
+        _backlight_state = _set_backlight_helper(
+            brightness,
+            method="auto",
+            pin=BACKLIGHT_PIN,
+            frequency=1000,
+        )
+    except Exception:
+        pass
 
 
 def _cleanup_backlight() -> None:
     """清理背光 PWM 资源。"""
-    if _backlight_pwm is not None:
-        _backlight_pwm.stop()
-    try:
-        import RPi.GPIO as GPIO  # type: ignore
-        GPIO.cleanup(BACKLIGHT_PIN)
-    except (ImportError, RuntimeError):
-        pass
+    global _backlight_state
+    _cleanup_backlight_state_helper(_backlight_state)
+    _backlight_state = None
 
 
 # ---------- framebuffer 输出 ----------

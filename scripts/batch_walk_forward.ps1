@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130209"   #20130101   #20130224
-$wf_end_date             = "20260209"   #20251231   #20260224
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -95,7 +95,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $true   # $true 启用 | $false 禁用
-$start_model_version     = 9461    # 第一个 split 的模型版本号（$null = 不指定）
+$start_model_version     = 9416    # 第一个 split 的模型版本号（$null = 不指定）
                                    #d3(0101):7969/9430(no enh)/9416(enh)
                                    #d3(0209):8165/9446(no enh)/9461(enh)
                                    #d2:8137
@@ -193,14 +193,14 @@ $profit_extension_days_list       = @(2)        # baseline 对齐当前最佳防
 # ── 盈利延续判据模式(新) ──
 #   pnl=单一浮盈率(兼容原行为) | strength=5维度强势度评分 | disabled=关闭延续
 $profit_extension_mode_list              = @('strength')     # 可多值如 @('pnl','strength')
-$profit_extension_strength_threshold_list = @(0.65,0.7,0.75)      # strength 模式延续阈值 [0,1]
+$profit_extension_strength_threshold_list = @(0.75)      # strength 模式延续阈值 [0,1]
 
 # ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
 $use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈值（需同时开启 $enable_profit_based_holding）
 $atr_multiplier_list              = @(2.8)   # baseline 对齐当前最佳防守型 run（仅启用 ATR 止损时生效）
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold_list   = @(0.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
+$take_profit_threshold_list   = @(1.30)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
 $take_profit_refill           = $false   # $true=整体止盈后自动补位买入
 
 # ── 空仓/持有期拖尾提前调仓 ────────────────────────────────────

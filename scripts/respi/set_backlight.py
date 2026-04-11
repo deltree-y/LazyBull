@@ -229,6 +229,8 @@ def _set_lgpio_backlight(
         "pin": pin,
         "frequency": frequency,
         "gpiochip": gpiochip,
+        "handle": handle,
+        "lgpio_module": lgpio,
         "cleanup": _cleanup,
     }
 
@@ -264,8 +266,42 @@ def _set_rpi_gpio_backlight(
         "percent": percent,
         "pin": pin,
         "frequency": frequency,
+        "gpio_module": gpio,
+        "pwm": pwm,
         "cleanup": _cleanup,
     }
+
+
+def update_pwm_backlight_state(state: dict, percent: int) -> dict:
+    """更新已初始化的 PWM 背光状态。"""
+    backend = state.get("backend")
+
+    if backend == "lgpio":
+        lgpio = state["lgpio_module"]
+        handle = state["handle"]
+        pin = state["pin"]
+        frequency = state["frequency"]
+        lgpio.tx_pwm(handle, pin, frequency, float(percent))
+        state["percent"] = percent
+        return state
+
+    if backend == "rpi-gpio":
+        pwm = state["pwm"]
+        pwm.ChangeDutyCycle(percent)
+        state["percent"] = percent
+        return state
+
+    raise RuntimeError(f"不支持更新的 PWM 背光后端: {backend}")
+
+
+def cleanup_backlight_state(state: Optional[dict]) -> None:
+    """清理背光状态占用的资源。"""
+    if not isinstance(state, dict):
+        return
+
+    cleanup = state.get("cleanup")
+    if callable(cleanup):
+        cleanup()
 
 
 def _set_pwm_backlight(
