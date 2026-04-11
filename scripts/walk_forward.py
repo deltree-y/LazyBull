@@ -839,6 +839,7 @@ def _train_subset_ensemble_on_window(
     sub_models = []
     sub_feature_columns = []
     sub_names = []
+    sub_val_ics = []  # 每个子模型的验证集 RankIC，用于动态权重
     base_result_info = None  # 保存第一个子集的辅助信息
 
     for cfg in subset_configs:
@@ -936,6 +937,7 @@ def _train_subset_ensemble_on_window(
         sub_models.append(model_i)
         sub_feature_columns.append(available_features)
         sub_names.append(subset_name)
+        sub_val_ics.append(val_metrics_i.get("rank_ic", None))  # 收集验证 RankIC 用于动态权重
 
         if base_result_info is None:
             base_result_info = {
@@ -958,11 +960,22 @@ def _train_subset_ensemble_on_window(
             f"val_rank_ic={val_metrics_i.get('rank_ic', 'N/A')}"
         )
 
-    # 7. 包装为 SubsetEnsembleModel
+    # 7. 按验证集 RankIC 动态确定子模型权重（正 IC 作为权重，全零时退化为等权）
+    dynamic_weights = [max(ic, 0.0) if ic is not None else 1.0 for ic in sub_val_ics]
+    if sum(dynamic_weights) == 0:
+        dynamic_weights = None  # 退化为等权
+    else:
+        logger.info(
+            "子集动态权重（按验证RankIC）: "
+            + ", ".join(f"{n}={w:.4f}" for n, w in zip(sub_names, dynamic_weights))
+        )
+
+    # 8. 包装为 SubsetEnsembleModel
     ensemble_model = SubsetEnsembleModel(
         sub_models=sub_models,
         sub_feature_columns=sub_feature_columns,
         sub_names=sub_names,
+        weights=dynamic_weights,
     )
     logger.info(f"子集集成模型创建完成: {ensemble_model}")
 

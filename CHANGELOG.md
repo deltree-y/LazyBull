@@ -2,7 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.47.10] - 2026-04-10
+## [0.47.11] - 2026-04-10
+
+### 优化
+
+- **SubsetEnsembleModel 基本面子集增强**：`SUBSET_FUNDAMENTAL_FEATURES` 从 6 个扬展到 16 个，将 `FUNDAMENTAL_FEATURE_COLUMNS` 的 5 个财务质量因子（ROE/营收增速/净利润增速/负债率/单季度增速）直接内嵌为核心，不再与 `enable_fundamental_features` 开关耦合；并背诅加入行业动量锚点（ind_ret_avg/alpha_industry_20/ind_momentum_rank）、短期动量锚点（neu_ret_5）和综合评分（spec_score）。解决了基本面子集特征过少导致等权融合时被低 IC 子模型拉低整体排序质量的问题。
+- **SubsetEnsembleModel 动态权重**：`_train_subset_ensemble_on_window` 改为收集每个子模型验证集 RankIC，按正 IC 値动态权重传入 `SubsetEnsembleModel`（替代原等权方案）；验证 IC 全部为负或无效时自动退化为等权。
 
 ### 修复
 

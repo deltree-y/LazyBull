@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130209"   #20130101   #20130224
-$wf_end_date             = "20260209"   #20251231   #20260224
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -25,12 +25,12 @@ $val_ratio_list          = @(0.1)           # 训练数据内部验证集比例�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
+$label_list              = @("y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 1500         # 固定：树数量上限（配合早停，不需要多组）
+$n_estimators            = 2000         # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.008)     # XGB推荐0.005, LGB推荐0.005
@@ -84,14 +84,14 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡, 0408引入）───────
-$enable_enhanced           = $false  # $true 启用 | $false 禁用
+$enable_enhanced           = $true # $true 启用 | $false 禁用
 
 # ── 多特征子集集成（动量 vs 基本面 vs 资金流 3模型加权融合, 0408引入）
 $subset_ensemble           = $false  # $true 启用 | $false 禁用
 
 # ── 模型质量监控与降级（val_rankic_ir低于阈值时回退上一合格模型, 0408引入）
 $model_quality_enabled     = $false  # $true 启用 | $false 禁用
-$model_quality_ir_threshold = 0.03   # 降级阈值
+$model_quality_ir_threshold = 0.15   # 降级阈值
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
@@ -101,8 +101,10 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $false   # $true 启用 | $false 禁用
-$start_model_version     = 8165    # 第一个 split 的模型版本号（$null = 不指定）
-                                   #7969/8165/8937:d3, 8137:d2
+$start_model_version     = 9461    # 第一个 split 的模型版本号（$null = 不指定）
+                                   #d3(0101):7969/9430(no enh)/9416(enh)
+                                   #d3(0209):8165/9446(no enh)/9461(enh)
+                                   #d2:8137
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -111,7 +113,7 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(15)            # 回测持仓 Top N
+$bt_top_n_list           = @(22)            # 回测持仓 Top N
 $bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
 $bt_weight_method        = "score"          # 权重方法："equal"（等权）| "score"（按预测分数加权）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
@@ -188,7 +190,7 @@ $market_regime_drawdown_threshold = -0.08       # 回撤保护阈值：mkt_drawd
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
 $market_regime_ma250_hard_stop = $true      # $true 启用 | $false 禁用
 $market_regime_ma250_threshold = 1          # 触发阈值（大盘收益曲线/MA250 < 此值触发）
-$market_regime_ma250_exposure  = 0.8        # 触发后的仓位系数（0.0=完全空仓）
+$market_regime_ma250_exposure  = 0.9        # 触发后的仓位系数（0.0=完全空仓）
 $ma250_atr_scaling             = $true      # $true 启用 ATR 动态仓位缩放（仓位=base×MA(ATR,250)/CurrentATR）
 
 # ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────

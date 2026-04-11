@@ -120,9 +120,18 @@ SUBSET_MOMENTUM_FEATURES = [
 ]
 
 # 子集2：基本面价值（估值 + 质量 + 基本面 + 业绩）
+# 注意：将 FUNDAMENTAL_FEATURE_COLUMNS 的财务质量列直接内嵌为核心，不再依赖 enable_fundamental_features 开关
 SUBSET_FUNDAMENTAL_FEATURES = [
+    # 估值因子（核心）
     "zscore_size", "zscore_bp", "zscore_dv_ttm", "zscore_pe_ttm", "is_loss",
-    "neu_ret_20",  # 保留中期动量作为锚点
+    # 财务质量因子（原 FUNDAMENTAL_FEATURE_COLUMNS，内嵌为核心）
+    "zscore_roe_waa", "zscore_or_yoy", "zscore_netprofit_yoy",
+    "zscore_debt_to_assets", "zscore_q_gr_yoy",
+    # 行业相对因子（价值股跨行业分布广，需行业动量锚）
+    "ind_ret_avg", "alpha_industry_20", "ind_momentum_rank",
+    # 动量锚点（价值 + 动量组合）
+    "neu_ret_20", "neu_ret_5",
+    "spec_score",  # 综合评分（含估值信号）
 ]
 
 # 子集3：资金博弈（流动性 + 资金流 + 融资融券 + 筹码）
