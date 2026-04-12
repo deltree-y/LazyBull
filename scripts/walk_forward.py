@@ -219,6 +219,9 @@ def run_oos_backtest(
     profit_extension_strength_weights: Optional[Dict[str, float]] = None,
     use_atr_for_early_exit: bool = False,
     atr_multiplier: float = 2.0,
+    early_exit_mode: str = "disabled",
+    early_exit_strength_protect_threshold: float = 0.55,
+    early_exit_max_reprieves: int = 2,
     take_profit_threshold: Optional[float] = None,
     take_profit_refill: bool = True,
     enable_early_rebalance_on_empty: bool = True,
@@ -434,6 +437,9 @@ def run_oos_backtest(
         profit_extension_strength_weights=profit_extension_strength_weights,
         use_atr_for_early_exit=use_atr_for_early_exit,
         atr_multiplier=atr_multiplier,
+        early_exit_mode=early_exit_mode,
+        early_exit_strength_protect_threshold=early_exit_strength_protect_threshold,
+        early_exit_max_reprieves=early_exit_max_reprieves,
         take_profit_threshold=take_profit_threshold,
         take_profit_refill=take_profit_refill,
         enable_early_rebalance_on_empty=enable_early_rebalance_on_empty,
@@ -1537,6 +1543,9 @@ def write_walk_forward_summary(
         "profit_extension_strength_threshold": getattr(args, 'profit_extension_strength_threshold', 0.6),
         "use_atr_for_early_exit": getattr(args, 'use_atr_for_early_exit', False),
         "atr_multiplier": getattr(args, 'atr_multiplier', 2.0),
+        "early_exit_mode": getattr(args, 'early_exit_mode', 'disabled'),
+        "early_exit_strength_protect_threshold": getattr(args, 'early_exit_strength_protect_threshold', 0.55),
+        "early_exit_max_reprieves": getattr(args, 'early_exit_max_reprieves', 2),
         "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
         "take_profit_refill": getattr(args, 'take_profit_refill', True),
         "enable_early_rebalance_on_empty": getattr(args, 'enable_early_rebalance_on_empty', True),
@@ -2413,6 +2422,25 @@ def main():
         help="ATR 倍数，亏损超过 N×ATR%% 时提前换出，默认 2.0"
     )
     parser.add_argument(
+        "--early-exit-mode",
+        type=str,
+        default="disabled",
+        choices=["disabled", "strength_veto"],
+        help="亏损提前换出模式: disabled=原硬卖(默认), strength_veto=二次确认门控"
+    )
+    parser.add_argument(
+        "--early-exit-strength-protect-threshold",
+        type=float,
+        default=0.55,
+        help="strength_veto 模式下的保护阈值，评分>=此值时否决卖出，默认 0.55"
+    )
+    parser.add_argument(
+        "--early-exit-max-reprieves",
+        type=int,
+        default=2,
+        help="strength_veto 模式下单只股票最多缓刑次数，默认 2"
+    )
+    parser.add_argument(
         "--take-profit-threshold",
         type=float,
         default=None,
@@ -2742,6 +2770,9 @@ def main():
                             profit_extension_strength_weights=getattr(args, 'profit_extension_strength_weights', None),
                             use_atr_for_early_exit=args.use_atr_for_early_exit,
                             atr_multiplier=args.atr_multiplier,
+                            early_exit_mode=getattr(args, 'early_exit_mode', 'disabled'),
+                            early_exit_strength_protect_threshold=getattr(args, 'early_exit_strength_protect_threshold', 0.55),
+                            early_exit_max_reprieves=getattr(args, 'early_exit_max_reprieves', 2),
                             take_profit_threshold=args.take_profit_threshold,
                             take_profit_refill=args.take_profit_refill,
                             enable_early_rebalance_on_empty=args.enable_early_rebalance_on_empty,

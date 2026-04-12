@@ -47,6 +47,7 @@ sys.path.insert(0, str(scripts_dir))
 from src.lazybull.common.logger import setup_logger  # noqa: E402
 from src.lazybull.common.config import get_config    # noqa: E402
 from respi.set_backlight import cleanup_backlight_state as _cleanup_backlight_state_helper  # noqa: E402
+from respi.set_backlight import get_pwm_hardware_note as _get_pwm_hardware_note_helper  # noqa: E402
 from respi.set_backlight import set_backlight as _set_backlight_helper  # noqa: E402
 from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backlight_state_helper  # noqa: E402
 
@@ -1226,6 +1227,10 @@ def _init_backlight() -> None:
 
         backend = _backlight_state.get("backend", "pwm")
         _emit_diag_once("backlight_pwm_ok", f"背光初始化完成: 使用 {backend} PWM")
+        _emit_diag_once(
+            "backlight_pwm_hardware_note",
+            _get_pwm_hardware_note_helper(_backlight_state.get("pin", BACKLIGHT_PIN)),
+        )
     except Exception as exc:
         _backlight_state = None
         _emit_diag_once(

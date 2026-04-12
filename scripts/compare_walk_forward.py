@@ -134,6 +134,10 @@ COL_NAMES = {
     # ATR 动态阈值与仓位缩放
     "use_atr_for_early_exit":       "ATR动态阈值",
     "atr_multiplier":               "ATR倍数",
+    # 亏损提前换出二次确认
+    "early_exit_mode":                        "早退模式",
+    "early_exit_strength_protect_threshold":   "早退保护阈值",
+    "early_exit_max_reprieves":               "早退最大缓刑",
     "market_regime_ma250_hard_stop": "MA250硬条件",
     "market_regime_ma250_threshold": "MA250阈值",
     "market_regime_ma250_exposure":  "MA250仓位",
@@ -176,6 +180,8 @@ PARAM_COLS = [
     "profit_extension_mode", "profit_extension_strength_threshold",
     # ATR 动态阈值与仓位缩放
     "use_atr_for_early_exit", "atr_multiplier",
+    # 亏损提前换出二次确认
+    "early_exit_mode", "early_exit_strength_protect_threshold", "early_exit_max_reprieves",
     "market_regime_ma250_hard_stop", "market_regime_ma250_threshold",
     "market_regime_ma250_exposure", "market_regime_ma250_atr_scaling",
     # 整体持仓止盈

@@ -318,6 +318,11 @@ class TestCheckAndSellExtension:
         engine.early_exit_holding_ratio = 0.6
         engine.atr_multiplier = 2.0
         engine.enable_profit_based_holding = True
+        engine.early_exit_mode = "disabled"
+        engine.early_exit_strength_protect_threshold = 0.55
+        engine.early_exit_max_reprieves = 2
+        engine.early_exit_strength_scorer = None
+        engine._early_exit_reprieve_counts = {}
         # 风控相关
         engine.stop_loss_manager = None
         engine.equity_curve_manager = None
@@ -456,3 +461,111 @@ class TestCheckAndSellExtension:
                 profit_extension_mode="bad_mode",
                 verbose=False,
             )
+
+
+# ── 6. early_exit_mode 校验与 strength_veto 构造测试 ─────────────────
+
+
+class TestEarlyExitModeValidation:
+    """early_exit_mode 构造参数校验"""
+
+    def _make_universe_and_signal(self):
+        from src.lazybull.common.cost import CostModel
+        from src.lazybull.universe import BasicUniverse
+
+        stock_basic = pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "symbol": ["000001"],
+                "name": ["股票A"],
+                "market": ["主板"],
+                "list_date": ["20200101"],
+            }
+        )
+        universe = BasicUniverse(
+            stock_basic=stock_basic,
+            exclude_st=False,
+            min_list_days=0,
+            markets=["主板"],
+        )
+        signal = MagicMock()
+        signal.top_n = 1
+        signal.universe = universe
+        cost_model = CostModel()
+        return universe, signal, cost_model
+
+    def test_invalid_early_exit_mode_raises(self):
+        """非法 early_exit_mode 应抛 ValueError"""
+        universe, signal, cost_model = self._make_universe_and_signal()
+        with pytest.raises(ValueError, match="early_exit_mode"):
+            BacktestEngine(
+                universe=universe,
+                signal=signal,
+                initial_capital=100000.0,
+                cost_model=cost_model,
+                rebalance_freq=5,
+                early_exit_mode="bad_mode",
+                verbose=False,
+            )
+
+    def test_disabled_mode_no_scorer(self):
+        """disabled 模式不创建 early_exit_strength_scorer"""
+        universe, signal, cost_model = self._make_universe_and_signal()
+        engine = BacktestEngine(
+            universe=universe,
+            signal=signal,
+            initial_capital=100000.0,
+            cost_model=cost_model,
+            rebalance_freq=5,
+            early_exit_mode="disabled",
+            verbose=False,
+        )
+        assert engine.early_exit_mode == "disabled"
+        assert engine.early_exit_strength_scorer is None
+        assert engine._early_exit_reprieve_counts == {}
+
+    def test_strength_veto_creates_scorer(self):
+        """strength_veto 模式应创建独立的 scorer，使用 early_exit 专用权重"""
+        universe, signal, cost_model = self._make_universe_and_signal()
+        engine = BacktestEngine(
+            universe=universe,
+            signal=signal,
+            initial_capital=100000.0,
+            cost_model=cost_model,
+            rebalance_freq=5,
+            early_exit_mode="strength_veto",
+            early_exit_strength_protect_threshold=0.50,
+            early_exit_max_reprieves=3,
+            verbose=False,
+        )
+        assert engine.early_exit_mode == "strength_veto"
+        assert engine.early_exit_strength_scorer is not None
+        assert isinstance(engine.early_exit_strength_scorer, HoldingStrengthScorer)
+        assert engine.early_exit_strength_protect_threshold == 0.50
+        assert engine.early_exit_max_reprieves == 3
+        # early_exit 专用权重：drawdown 归零
+        assert abs(engine.early_exit_strength_scorer.weights.drawdown) < 1e-9
+
+    def test_strength_veto_independent_of_profit_extension(self):
+        """strength_veto 的 scorer 应独立于 profit_extension 的 scorer"""
+        universe, signal, cost_model = self._make_universe_and_signal()
+        engine = BacktestEngine(
+            universe=universe,
+            signal=signal,
+            initial_capital=100000.0,
+            cost_model=cost_model,
+            rebalance_freq=5,
+            profit_extension_mode="strength",
+            profit_extension_strength_threshold=0.60,
+            early_exit_mode="strength_veto",
+            early_exit_strength_protect_threshold=0.55,
+            verbose=False,
+        )
+        # 两个 scorer 应独立存在
+        assert engine.holding_strength_scorer is not None
+        assert engine.early_exit_strength_scorer is not None
+        assert engine.holding_strength_scorer is not engine.early_exit_strength_scorer
+        # profit_extension 的 drawdown 权重应保持默认(0.15)
+        assert engine.holding_strength_scorer.weights.drawdown > 0.1
+        # early_exit 的 drawdown 权重应为 0
+        assert abs(engine.early_exit_strength_scorer.weights.drawdown) < 1e-9

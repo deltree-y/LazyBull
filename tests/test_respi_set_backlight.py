@@ -34,6 +34,15 @@ def test_build_preview_framebuffer_bytes_has_expected_size_and_color_variation()
     assert len(colors) >= 6
 
 
+def test_get_pwm_hardware_note_mentions_solder_requirement_for_gpio18():
+    module = _load_module()
+
+    note = module.get_pwm_hardware_note(18)
+
+    assert "焊" in note
+    assert "GPIO18" in note
+
+
 def test_discover_sysfs_backlights_returns_available_devices(tmp_path):
     module = _load_module()
     backlight_root = tmp_path / "backlight"
@@ -267,3 +276,26 @@ def test_main_skips_preview_when_no_preview_is_set(monkeypatch):
     exit_code = module.main(["10", "--no-preview"])
 
     assert exit_code == 0
+
+
+def test_main_prints_pwm_hardware_note(monkeypatch, capsys):
+    module = _load_module()
+
+    monkeypatch.setattr(
+        module,
+        "set_backlight",
+        lambda *args, **kwargs: {"method": "pwm", "backend": "lgpio", "percent": 10, "pin": 18, "frequency": 1000},
+    )
+    monkeypatch.setattr(
+        module,
+        "_write_preview_pattern",
+        lambda **kwargs: {"fb_path": "/dev/fb1", "width": 480, "height": 320},
+    )
+    monkeypatch.setattr(module, "_hold_pwm_session", lambda result: None)
+
+    exit_code = module.main(["10"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "焊" in captured.out
+    assert "GPIO18" in captured.out

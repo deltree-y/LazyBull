@@ -17,6 +17,10 @@ DEFAULT_FB_HEIGHT = 320
 DEFAULT_PWM_PIN = 18
 DEFAULT_PWM_FREQUENCY = 1000
 DEFAULT_LGPIO_CHIP = 0
+WAVESHARE_35C_PWM_HARDWARE_NOTE = (
+    "注意: 微雪 3.5inch RPi LCD (C) 官方说明需要先用 0R 电阻或焊锡接通背光控制焊盘，"
+    "GPIO18 的 PWM 调光才会真正生效；否则命令可能显示成功，但屏幕亮度不会变化。"
+)
 
 
 def _brightness_arg(value: str) -> int:
@@ -103,6 +107,13 @@ def _write_preview_pattern(
         "height": height,
         "bytes": len(payload),
     }
+
+
+def get_pwm_hardware_note(pin: int = DEFAULT_PWM_PIN) -> str:
+    """返回 PWM 调背光的硬件前提说明。"""
+    if pin == 18:
+        return WAVESHARE_35C_PWM_HARDWARE_NOTE
+    return f"注意: 当前使用 GPIO {pin} 做 PWM 背光，请确认该引脚已实际连接到屏幕背光控制电路。"
 
 
 def _discover_sysfs_backlights(backlight_root: Path = DEFAULT_SYSFS_ROOT) -> list[dict]:
@@ -683,6 +694,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"已通过 PWM 设置背光为 {result['percent']}% "
         f"(backend {result['backend']}, GPIO {result['pin']}, {result['frequency']}Hz)"
     )
+    print(get_pwm_hardware_note(result.get("pin", DEFAULT_PWM_PIN)))
     _hold_pwm_session(result)
     return 0
 

@@ -28,7 +28,24 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.49.0)
+### 当前版本 (v0.51.0)
+
+**亏损提前换仓二次确认门控 strength_veto** (v0.51.0):
+- 亏损提前换出（early_exit）新增 `early_exit_mode` 参数，支持 `disabled`（原硬卖，默认兼容）和 `strength_veto`（二次确认门控）两种模式
+- strength_veto 模式下，触发亏损阈值后用 `HoldingStrengthScorer` 评分，评分高于保护阈值时否决卖出（"缓刑"），防止把"暂时回调但趋势仍在"的股票过早换出
+- 通过 `early_exit_max_reprieves`（默认 2）限制最大缓刑次数，防止无限拖延
+- walk_forward / batch_walk_forward / compare_walk_forward 全链路透传，支持扫参对比
+
+**盈利延续持有判据升级为多维度强势度评分** (v0.50.0):
+- 原 `profit_extension_threshold` 单一浮盈率判据升级为可配置的 `profit_extension_mode`，支持 pnl（默认兼容）/ strength（5 维度强势度评分）/ disabled 三种模式
+- strength 模式综合 5 个维度：ML 分数 30% + 动量加速 25% + 技术强度 15% + 资金筹码 15% + 回撤距离 15%，评分 ≥ 阈值（默认 0.6）才延续持有
+- 完全向后兼容：默认 `mode="pnl"` 保持原有行为，显式启用 `--profit-extension-mode strength` 才激活新机制
+- walk_forward / batch_walk_forward 全链路透传，支持扫参对比 pnl/strength 两种模式
+
+**树莓派背光调节的硬件前提提示** (v0.49.1):
+- 针对微雪 3.5inch RPi LCD (C)，脚本现在会明确提示一个关键硬件前提：官方要求先用 0R 电阻或焊锡接通背光控制焊盘，GPIO18 的 PWM 调光才会真正生效
+- 如果这一步硬件改动没有做，即使 `scripts/respi/set_backlight.py` 输出“已通过 PWM 设置背光为 5%/10%/100%”，屏幕亮度也可能完全不变
+- `scripts/respi/3.5LCD_disp.py` 现在也会输出同样的说明，因此主脚本与独立脚本在这个问题上的结论是一致的
 
 **树莓派背光调节脚本默认显示亮度测试图** (v0.49.0):
 - `scripts/respi/set_backlight.py` 在成功设置亮度后，默认会向 framebuffer 写入一张高对比度测试图，包含彩条、灰度条和棋盘块，方便你直接盯着屏幕看亮度变化

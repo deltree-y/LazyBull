@@ -231,6 +231,9 @@ class BacktestEngine:
         profit_extension_strength_weights: Optional[Dict[str, float]] = None,  # 强势度 5 维度权重
         use_atr_for_early_exit: bool = False,  # 是否用个股 ATR 动态替代固定止损阈值
         atr_multiplier: float = 2.0,  # ATR 倍数（亏损超过 N×ATR% 时触发提前换出）
+        early_exit_mode: str = "disabled",  # "disabled"=原硬卖 | "strength_veto"=二次确认门控
+        early_exit_strength_protect_threshold: float = 0.55,  # strength >= 此值时否决卖出
+        early_exit_max_reprieves: int = 2,  # 单只股票最多缓刑次数
         take_profit_threshold: Optional[
             float
         ] = None,  # 整体持仓止盈阈值（None=禁用，如0.15=整体浮盈15%止盈）
@@ -285,6 +288,13 @@ class BacktestEngine:
                    允许延续持有 profit_extension_days 天（趋势跟踪）
             early_exit_loss_threshold: 亏损提前换出的盈亏率阈值，默认 -0.05（亏损5%）
             early_exit_holding_ratio: 亏损提前换出最早触发时点（占持有期比例），默认 0.6
+            early_exit_mode: 亏损提前换出模式。"disabled"=原硬卖（默认），
+                "strength_veto"=触发后用 HoldingStrengthScorer 二次确认，
+                评分高于保护阈值时否决卖出（缓刑）
+            early_exit_strength_protect_threshold: strength_veto 模式下的保护阈值，
+                评分 >= 此值时否决卖出，默认 0.55
+            early_exit_max_reprieves: strength_veto 模式下单只股票最多缓刑次数，
+                防止无限拖延，默认 2
             profit_extension_threshold: 盈利延续持有的盈亏率阈值，默认 0.05（盈利5%）
             profit_extension_days: 盈利延续持有的额外天数（交易日），默认 5
         """
@@ -347,6 +357,30 @@ class BacktestEngine:
         self.profit_extension_days = profit_extension_days
         self.use_atr_for_early_exit = use_atr_for_early_exit
         self.atr_multiplier = atr_multiplier
+        # ── 亏损提前换出二次确认（strength_veto）──
+        if early_exit_mode not in ("disabled", "strength_veto"):
+            raise ValueError(
+                f"early_exit_mode 必须为 disabled|strength_veto，当前值: {early_exit_mode}"
+            )
+        self.early_exit_mode = early_exit_mode
+        self.early_exit_strength_protect_threshold = early_exit_strength_protect_threshold
+        self.early_exit_max_reprieves = early_exit_max_reprieves
+        self.early_exit_strength_scorer: Optional[HoldingStrengthScorer] = None
+        self._early_exit_reprieve_counts: Dict[str, int] = {}
+        if early_exit_mode == "strength_veto":
+            # early_exit 专用权重：drawdown 归零（已知亏损，信息量低），
+            # 侧重 ML 分数和动量（模型是否看好、趋势是否恢复）
+            ee_weights = HoldingStrengthWeights(
+                ml_score=0.35, momentum=0.30, technical=0.20,
+                fund_flow=0.15, drawdown=0.00,
+            )
+            self.early_exit_strength_scorer = HoldingStrengthScorer(self, ee_weights)
+            logger.info(
+                f"亏损提前换出模式=strength_veto, "
+                f"保护阈值={early_exit_strength_protect_threshold:.2f}, "
+                f"最大缓刑次数={early_exit_max_reprieves}, "
+                f"权重={ee_weights.normalize().as_dict()}"
+            )
         # ── 盈利延续持有模式（多维度强势度评分）──
         if profit_extension_mode not in ("pnl", "strength", "disabled"):
             raise ValueError(
@@ -2010,6 +2044,40 @@ class BacktestEngine:
                             threshold_desc += "(ATR缺失,用固定)"
 
                     if holding_days >= early_exit_holding and profit_rate <= threshold:
+                        # strength_veto 二次确认：评分高于保护阈值时否决卖出（缓刑）
+                        if (
+                            self.early_exit_mode == "strength_veto"
+                            and self.early_exit_strength_scorer is not None
+                        ):
+                            reprieve_count = self._early_exit_reprieve_counts.get(
+                                stock, 0
+                            )
+                            if reprieve_count < self.early_exit_max_reprieves:
+                                breakdown = self.early_exit_strength_scorer.score(
+                                    stock=stock,
+                                    date=date,
+                                    position_info=info,
+                                    profit_rate=profit_rate,
+                                )
+                                if (
+                                    breakdown.total
+                                    >= self.early_exit_strength_protect_threshold
+                                ):
+                                    self._early_exit_reprieve_counts[stock] = (
+                                        reprieve_count + 1
+                                    )
+                                    logger.warning(
+                                        f"  亏损换出否决[strength_veto]: {stock} "
+                                        f"持有{holding_days}天, "
+                                        f"盈亏={profit_rate:.2%} <= {threshold_desc}, "
+                                        f"但强势度={breakdown.total:.3f} >= "
+                                        f"{self.early_exit_strength_protect_threshold:.2f}"
+                                        f", 缓刑({reprieve_count + 1}/"
+                                        f"{self.early_exit_max_reprieves}), "
+                                        f"{breakdown.to_log_str()}"
+                                    )
+                                    continue  # 否决卖出，跳过
+
                         # 亏损提前换出 → 盘后发现，写入队列 Tn+1 执行
                         logger.warning(
                             f"  亏损提前换出: {stock} 持有{holding_days}天, "
@@ -2976,6 +3044,9 @@ class BacktestEngine:
         # 更新持仓和资金
         del self.positions[stock]
         self.current_capital += sell_proceeds
+
+        # 清理亏损提前换出的缓刑计数
+        self._early_exit_reprieve_counts.pop(stock, None)
 
         # 如果是止损卖出，清理止损监控器中的持仓状态
         if sell_type == "stop_loss" and self.stop_loss_monitor:

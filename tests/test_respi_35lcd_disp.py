@@ -113,7 +113,8 @@ def test_init_backlight_uses_helper_and_records_state(monkeypatch):
 
     assert module._backlight_state is not None
     assert module._backlight_state["backend"] == "lgpio"
-    assert messages[-1] == ("backlight_pwm_ok", "背光初始化完成: 使用 lgpio PWM")
+    assert ("backlight_pwm_ok", "背光初始化完成: 使用 lgpio PWM") in messages
+    assert any(key == "backlight_pwm_hardware_note" and "焊" in message for key, message in messages)
 
 
 def test_set_backlight_updates_existing_pwm_state(monkeypatch):

@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.51.0] - 2026-04-12
+
+### 新增
+
+- **亏损提前换仓二次确认门控（strength_veto）**：原 `early_exit_loss_threshold` 触发后直接硬卖，现新增 `early_exit_mode` 参数支持二次确认：
+  - `disabled`（默认，向后兼容）：保留原有"跌破阈值即卖"的逻辑
+  - `strength_veto`：触发亏损阈值后调用 `HoldingStrengthScorer` 评分，评分 ≥ `early_exit_strength_protect_threshold`（默认 0.55）时否决卖出（"缓刑"），给暂时回调但趋势仍在的股票一次观察机会
+- **缓刑次数兜底**：通过 `early_exit_max_reprieves`（默认 2）限制单只股票最大缓刑次数，防止无限拖延
+- **early_exit 专用权重**：复用 `HoldingStrengthScorer` 但采用独立权重（ml_score=0.35, momentum=0.30, technical=0.20, fund_flow=0.15, drawdown=0.00），drawdown 归零因触发时已知亏损，侧重"模型是否看好"和"趋势是否恢复"
+- **全链路透传**：walk_forward.py 新增 3 个 CLI 参数（`--early-exit-mode`、`--early-exit-strength-protect-threshold`、`--early-exit-max-reprieves`），batch_walk_forward.ps1 和 compare_walk_forward.py 同步支持参数扫描和对比报表
+
+### 测试
+
+- 新增 4 个 `TestEarlyExitModeValidation` 测试：校验非法 mode、disabled 无 scorer、strength_veto 创建独立 scorer、与 profit_extension scorer 互不干扰
+- 全部 78 个回测引擎相关测试通过，无回归
+
+## [0.50.0] - 2026-04-12
+
+### 新增
+
+- **盈利延续持有判据升级为多维度强势度评分**：原 `profit_extension_threshold` 单一浮盈率判据升级为可配置的 `profit_extension_mode`，支持三种模式：
+  - `pnl`（默认，向后兼容）：保留原浮盈率 ≥ 阈值即延续的逻辑
+  - `strength`：通过新建的 `HoldingStrengthScorer` 综合 5 个维度评分（ML 分数 30% + 动量加速 25% + 技术强度 15% + 资金筹码 15% + 回撤距离 15%），评分 ≥ `profit_extension_strength_threshold`（默认 0.6）才延续持有
+  - `disabled`：持有期满直接卖出，不做延续
+- **新文件 [src/lazybull/backtest/holding_strength.py](src/lazybull/backtest/holding_strength.py)**：包含 `HoldingStrengthWeights`（权重 dataclass，自动归一化）、`HoldingStrengthBreakdown`（评分分解，含日志格式化）、`HoldingStrengthScorer`（评分器，复用 features_by_date 中已有因子，不重复计算；缺失维度优雅降级到中位 0.5）。
+- **TradingConfig 新增 3 个字段** + 对应 CLI 参数：`profit_extension_mode`、`profit_extension_strength_threshold`、`profit_extension_strength_weights`（5 个权重独立 CLI: `--profit-extension-strength-w-ml/momentum/technical/fund/drawdown`）。
+- **engine_ml.py 覆写 `_get_holding_features_row` hook**：从 `features_by_date` 读取持仓股票当日截面特征行供 scorer 使用；基类 `BacktestEngine` 默认返回 None。
+- **walk_forward.py / run_ml_backtest.py / batch_walk_forward.ps1 / compare_walk_forward.py 全链路透传**：支持 walk-forward 扫参对比 pnl/strength 两种模式，对比报表新增「盈利延持模式」「强势度阈值」两列。
+
+### 测试
+
+- 新建 [tests/test_holding_strength.py](tests/test_holding_strength.py)：覆盖权重归一化、评分分解日志、5 维度子评分（强势/弱势股票对比、ML 百分位排序、ATR 放大惩罚）、engine `__init__` 三种 mode 的校验与 scorer 注入，共 17 个测试全部通过。
+- 更新 [tests/test_backtest_t1.py](tests/test_backtest_t1.py)：日志格式因新增 `[mode]` 标签变更，同步断言文案。
+- 完整回归测试 690 通过（不含本变更前已存在的 3 个 `test_ml_backtest_engine.py` 失败用例）。
+
+### 设计要点
+
+- **完全向后兼容**：默认 `mode="pnl"` 保持原有行为，已有 walk-forward 实验基线不变；启用 `--profit-extension-mode strength` 才激活新机制
+- **保留原浮盈维度**：浮盈率从"单一唯一判据"降格为"5 维度之一，权重 15%"，配合 ATR 波动率调整
+- **不引入非调仓日卖出**：与 `stop_loss` / `take_profit_threshold` 职责边界清晰，仅改造持有期满的延续判据
+- **轻量评分**：每只股票独立评分，使用经验阈值 + sigmoid 映射，不做截面 z-score（避免对全市场的批量依赖）
+
+## [0.49.1] - 2026-04-11
+
+### 修复
+
+- **背光脚本补充官方硬件前提提示**：`scripts/respi/set_backlight.py` 在通过 PWM 路径成功设置亮度后，现在会明确提示微雪 3.5inch RPi LCD (C) 需要先用 0R 电阻或焊锡接通背光控制焊盘，否则 GPIO18 的 PWM 命令可能显示成功，但亮度不会变化。
+- **主 LCD 脚本同步输出相同提示**：`scripts/respi/3.5LCD_disp.py` 初始化到 PWM 背光路径时，也会记录同样的硬件说明，避免把“软件调用成功但亮度不变”误判成主脚本逻辑问题。
+
+### 测试
+
+- 更新 `tests/test_respi_set_backlight.py`，新增 PWM 硬件说明文案与 `main` 输出断言。
+- 更新 `tests/test_respi_35lcd_disp.py`，同步覆盖主 LCD 脚本初始化 PWM 路径时的硬件提示日志。
+
 ## [0.49.0] - 2026-04-11
 
 ### 新增
