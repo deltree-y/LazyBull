@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.51.1] - 2026-04-12
+
+### 修复
+
+- **止损除零保护**：`StopLossMonitor.check_stop_loss` 新增 `buy_price <= 0` 前置检查；`check_stop_loss_for_positions` 中 `buy_price` 默认值为 0 时提前跳过，避免除零崩溃
+- **ECT 回撤除零保护**：`EquityCurveTrader.calculate_exposure` 新增 `current_max <= 0` 检查，防止 NAV 异常时除零
+- **信号权重除零保护**：`MLSignal.generate_ranked` 中 score 加权时新增 `scores.sum() < 1e-12` 回退等权，防止极小正分数导致 inf 权重
+- **权重归一化空字典保护**：`BacktestEngine._normalize_signals` 新增空字典提前返回，防止 `1.0 / len(signals)` 除零
+- **训练集标签泄漏防护加强**：`split_train_val_by_date` 在数据不足以保留 delta 间隔时，改为放弃验证集（返回空 DataFrame）而非使用有泄漏风险的数据
+- **置信度门控空列表校验**：legacy 模式下新增 thresholds/exposure_levels 非空校验，避免配置为空列表时信号被永久阻断
+- **因子除零阈值加强**：`FeatureBuilder` 中 `weight_avg_bias`、`opening_strength`、`vol_ratio` 的分母检查从 `> 0` 改为 `> 1e-6`，防止极小正数导致极值
+- **盈亏率 NaN 显式检查**：亏损提前换出的盈亏率计算新增 `pd.isna(buy_pnl_price)` 检查，避免依赖 NaN 的隐式布尔行为
+
+### 测试
+
+- 新增 `test_delta_too_large_drops_val` 测试：验证 delta 大于数据量时验证集正确为空
+- 调整 4 个 date_split 测试用例适配新的标签泄漏防护逻辑
+- 全部 702 个测试通过，无回归
+
 ## [0.51.0] - 2026-04-12
 
 ### 新增

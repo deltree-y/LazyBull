@@ -89,7 +89,12 @@ class StopLossMonitor:
         """
         if not self.config.enabled:
             return False, None, None
-        
+
+        # 0. 买入价有效性检查
+        if buy_price <= 0:
+            logger.warning(f"  {stock} 买入价无效（{buy_price}），跳过止损检查")
+            return False, None, None
+
         # 1. 检查回撤止损（从买入成本）
         drawdown_from_cost = (current_price - buy_price) / buy_price * 100
         if drawdown_from_cost <= -self.config.drawdown_pct:

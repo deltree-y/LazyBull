@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130209"   #20130101   #20130224
-$wf_end_date             = "20260209"   #20251231   #20260224
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -30,10 +30,10 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 2000         # 固定：树数量上限（配合早停，不需要多组）
+$n_estimators            = 1000         # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.008)     # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.012)     # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -81,7 +81,7 @@ $enable_express          = $true  # $true 启用 | $false 禁用
 $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
-$ensemble_offsets          = 1      # 偏移月数（0=禁用, 1=±1个月→3模型）
+$ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
@@ -94,7 +94,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 $start_model_version     = 9461    # 第一个 split 的模型版本号（$null = 不指定）
                                    #d3(0101):7969/9430(no enh)/9416(enh)
                                    #d3(0209):8165/9446(no enh)/9461(enh)/9601(ofst+1)
@@ -203,8 +203,8 @@ $atr_multiplier_list              = @(2.8)   # baseline 对齐当前最佳防守
 # ── 亏损提前换出二次确认（strength_veto 门控）──────────────────────
 #   disabled=原硬卖(默认) | strength_veto=触发后用强势度评分二次确认,评分高时否决卖出(缓刑)
 $early_exit_mode_list                        = @('strength_veto')   # 可多值如 @('disabled','strength_veto')
-$early_exit_strength_protect_threshold_list   = @(0.1,0.2,0.3,0.4,0.5,0.55,0.6,0.7,0.8,0.9,1)        # strength_veto 保护阈值 [0,1]
-$early_exit_max_reprieves_list               = @(1,2,3)            # 单只股票最多缓刑次数
+$early_exit_strength_protect_threshold_list   = @(0.1)        # strength_veto 保护阈值 [0,1]
+$early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
 $take_profit_threshold_list   = @(0.3)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)

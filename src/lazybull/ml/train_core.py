@@ -220,18 +220,24 @@ def split_train_val_by_date(
     if n_train_dates > delta:
         train_dates_set = set(all_dates[: n_train_dates - delta])
     else:
+        # 训练日期数不足以扣除 delta 间隔，训练集将无隔离带
+        logger.warning(
+            f"训练/验证集分割: 训练日期数({n_train_dates}) <= delta({delta})，"
+            f"无法从训练集末尾扣除隔离带，训练集保持完整"
+        )
         train_dates_set = set(all_dates[:n_train_dates])
 
     if n_train_dates + delta < n_dates:
         val_dates_set = set(all_dates[n_train_dates + delta :])
     else:
-        # 数据不足以保留完整 delta 间隔，训练/验证集之间可能存在标签泄漏
-        logger.warning(
+        # 数据不足以保留完整 delta 间隔，存在标签泄漏风险
+        # 为避免训练结果不可靠，返回空验证集而非使用有泄漏的数据
+        logger.error(
             f"训练/验证集分割: 数据不足以保留 {delta} 天间隔 "
             f"(总日期={n_dates}, 训练={n_train_dates}, delta={delta})，"
-            f"验证集紧跟训练集末尾，存在标签泄漏风险"
+            f"放弃验证集以避免标签泄漏"
         )
-        val_dates_set = set(all_dates[n_train_dates:])
+        val_dates_set = set()
 
     df_train = df[df[date_col].isin(train_dates_set)].copy()
     df_val = df[df[date_col].isin(val_dates_set)].copy()

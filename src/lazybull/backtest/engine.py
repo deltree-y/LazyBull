@@ -1947,7 +1947,12 @@ class BacktestEngine:
                     # 与后复权的 buy_pnl_price 混用会导致盈亏率严重失真
                     continue
                 buy_pnl_price = info.get("buy_pnl_price")
-                if current_pnl_price and buy_pnl_price and buy_pnl_price > 0:
+                if (
+                    current_pnl_price
+                    and buy_pnl_price
+                    and not pd.isna(buy_pnl_price)
+                    and buy_pnl_price > 0
+                ):
                     profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
                 else:
                     profit_rate = 0.0
@@ -2701,6 +2706,9 @@ class BacktestEngine:
         默认按 weight_method（equal/score）归一化。
         engine_ml.py 覆写此方法以实现 1/ATR 反比权重。
         """
+        if not signals:
+            return {}
+
         weight_method = getattr(self.signal, "weight_method", "equal")
 
         if weight_method == "equal":

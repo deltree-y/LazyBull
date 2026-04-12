@@ -48,19 +48,19 @@ class TestSplitTrainValByDate:
         assert train_dates & val_dates == set(), "训练集与验证集的日期集合不应有交叉"
 
     def test_all_samples_preserved(self):
-        """切分后样本总数等于原始样本数"""
+        """切分后样本总数等于原始样本数（delta=0 时无隔离带，全部样本被分配）"""
         df = _make_df(n_dates=10, stocks_per_date=5)
-        df_train, df_val, _ = split_train_val_by_date(df, val_ratio=0.2)
+        df_train, df_val, _ = split_train_val_by_date(df, val_ratio=0.2, delta=0)
 
         assert len(df_train) + len(df_val) == len(df)
 
     def test_val_ratio_approximately_correct(self):
-        """验证集日期数量约为 ceil(n_dates * val_ratio)"""
+        """验证集日期数量约为 ceil(n_dates * val_ratio)（delta=0 时无隔离带）"""
         import math
         n_dates = 20
         val_ratio = 0.2
         df = _make_df(n_dates=n_dates, stocks_per_date=3)
-        _, df_val, stats = split_train_val_by_date(df, val_ratio=val_ratio)
+        _, df_val, stats = split_train_val_by_date(df, val_ratio=val_ratio, delta=0)
 
         expected_val_dates = math.ceil(n_dates * val_ratio)
         assert stats["val_n_dates"] == expected_val_dates, (
@@ -96,9 +96,9 @@ class TestSplitTrainValByDate:
         assert stats["train_n_dates"] == 0
 
     def test_single_date(self):
-        """只有一个交易日时，全部样本归入验证集"""
+        """只有一个交易日时，全部样本归入验证集（delta=0 时）"""
         df = _make_df(n_dates=1, stocks_per_date=5)
-        df_train, df_val, stats = split_train_val_by_date(df, val_ratio=0.2)
+        df_train, df_val, stats = split_train_val_by_date(df, val_ratio=0.2, delta=0)
 
         # 只有1个交易日，验证集至少包含1个交易日
         assert stats["val_n_dates"] >= 1
@@ -106,6 +106,17 @@ class TestSplitTrainValByDate:
         train_dates = set(df_train["trade_date"].unique())
         val_dates = set(df_val["trade_date"].unique())
         assert train_dates & val_dates == set()
+
+    def test_delta_too_large_drops_val(self):
+        """当 delta 大于数据量时，验证集应为空以避免标签泄漏"""
+        df = _make_df(n_dates=10, stocks_per_date=5)
+        df_train, df_val, stats = split_train_val_by_date(df, val_ratio=0.2, delta=20)
+
+        # delta=20 > n_dates=10，验证集应为空
+        assert stats["val_n_dates"] == 0
+        assert len(df_val) == 0
+        # 训练集仍有数据
+        assert len(df_train) > 0
 
     def test_custom_date_col(self):
         """支持自定义日期列名"""
@@ -225,10 +236,10 @@ class TestCsZscoreNoLeakage:
         )
 
     def test_split_train_val_date_sets_disjoint_with_transform(self):
-        """按日期切分后，train/val 日期不交叉，各自变换独立"""
+        """按日期切分后，train/val 日期不交叉，各自变换独立（delta=0 时无隔离带）"""
         df = _make_df(n_dates=20, stocks_per_date=8)
 
-        df_train, df_val, stats = split_train_val_by_date(df, val_ratio=0.2)
+        df_train, df_val, stats = split_train_val_by_date(df, val_ratio=0.2, delta=0)
 
         # 应用 cs_zscore 变换（各自独立）
         df_train_t = transform_labels_cs_zscore(df_train, label_column="label", winsorize_p=0.0)

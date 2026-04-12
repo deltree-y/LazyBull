@@ -624,7 +624,7 @@ class FeatureBuilder:
         if 'open' in current_data.columns and 'pre_close' in current_data.columns:
             _open = current_data[['ts_code', 'open', 'pre_close']].copy()
             _open['opening_strength'] = np.where(
-                _open['pre_close'] > 0,
+                _open['pre_close'] > 1e-6,
                 _open['open'] / _open['pre_close'] - 1,
                 np.nan,
             )
@@ -719,7 +719,7 @@ class FeatureBuilder:
                     features[["ts_code", "close_adj"]], on="ts_code", how="left"
                 )
                 cyq_with_close["weight_avg_bias"] = np.where(
-                    cyq_with_close["weight_avg"] > 0,
+                    cyq_with_close["weight_avg"] > 1e-6,
                     (cyq_with_close["close_adj"] - cyq_with_close["weight_avg"])
                     / cyq_with_close["weight_avg"],
                     np.nan,
@@ -818,7 +818,7 @@ class FeatureBuilder:
         
         # 使用向量化操作计算比率（带除零保护）
         window_features[f'vol_ratio_{window}'] = np.where(
-            window_features['mean_vol'] > 0,
+            window_features['mean_vol'] > 1e-6,
             window_features['vol'] / window_features['mean_vol'],
             np.nan
         )

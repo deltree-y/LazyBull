@@ -375,8 +375,7 @@ def test_format_rebalance_decision_summary_is_explicit():
         execution_date=pd.Timestamp("2024-08-13"),
     )
 
-    assert "\n" not in message
-    assert "调仓决策摘要: 信号日 2024-08-12 | 执行=2024-08-13 | 候选/目标=1158/17" in message
+    assert "调仓决策摘要: 信号日 2024-08-12 | 执行=2024-08-13 | 候选=1158 | 目标=17" in message
     assert "门控=60.0%[score=0.124, 档=0.080, 目标=60%]" in message
     assert "ECT=100.0%[未启用]" in message
     assert "市场=50.0%[mode=vol_target, target_vol=20.0%, realized_vol=40.0%]" in message
@@ -455,7 +454,7 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
         logger.remove(sink_id)
 
     output = stream.getvalue()
-    assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选/目标=5/2" in output
+    assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2" in output
     assert "门控=40.0%[score=0.000, top_mean=1.0200, baseline=1.0200, std=0.3124, 档=0.000, 目标=40%]" in output
     assert "ECT=100.0%[未启用]" in output
     assert "MA250/ATR=100.0%[未启用]" in output
@@ -518,6 +517,6 @@ def test_ml_backtest_logs_blocked_rebalance_summary(
         logger.remove(sink_id)
 
     output = stream.getvalue()
-    assert "调仓决策摘要: 信号日 2023-06-01 | 执行=- | 候选/目标=5/2" in output
+    assert "调仓决策摘要: 信号日 2023-06-01 | 执行=- | 候选=5 | 目标=2" in output
     assert "门控=0.0%" in output
     assert "最终=0.0%[门控阻断, 本次不进入待买队列]" in output

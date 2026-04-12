@@ -183,6 +183,14 @@ class MLSignal(Signal):
 
         # legacy 模式需要校验阈值和仓位列表
         if self.signal_gate_mode == "legacy":
+            if len(self.signal_confidence_gate_thresholds) == 0:
+                raise ValueError(
+                    "legacy 模式下 signal_confidence_gate_thresholds 不能为空列表"
+                )
+            if len(self.signal_confidence_gate_exposure_levels) == 0:
+                raise ValueError(
+                    "legacy 模式下 signal_confidence_gate_exposure_levels 不能为空列表"
+                )
             if len(self.signal_confidence_gate_thresholds) != len(
                 self.signal_confidence_gate_exposure_levels
             ):
@@ -766,9 +774,14 @@ class MLSignal(Signal):
                 # 归一化正分数为权重（使用向量化操作）
                 scores = positive_stocks["ml_score"].values
                 stocks = positive_stocks["ts_code"].values
-                weights = scores / scores.sum()
-
-                signals = dict(zip(stocks, weights))
+                scores_sum = scores.sum()
+                if scores_sum < 1e-12:
+                    # 所有正分数极小，浮点精度不足，回退到等权
+                    weight = 1.0 / len(positive_stocks)
+                    signals = {stock: weight for stock in stocks}
+                else:
+                    weights = scores / scores_sum
+                    signals = dict(zip(stocks, weights))
         else:
             raise ValueError(f"不支持的权重方法: {self.weight_method}")
 

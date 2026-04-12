@@ -96,6 +96,11 @@ def check_positions_stop_loss(
         else:
             buy_price = 0
 
+        if buy_price is None or buy_price <= 0:
+            if verbose:
+                logger.warning(f"股票 {ts_code} 买入价无效（{buy_price}），跳过止损检查")
+            continue
+
         # ── 调用 StopLossMonitor 核心判断 ──
         triggered, trigger_type, reason = stop_loss_monitor.check_stop_loss(
             ts_code,

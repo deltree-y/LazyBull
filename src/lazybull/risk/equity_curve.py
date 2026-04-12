@@ -136,6 +136,9 @@ class EquityCurveMonitor:
         # 1. 计算回撤
         rolling_max = nav_history.expanding().max()
         current_max = rolling_max.iloc[-1]
+        if current_max <= 0:
+            logger.warning(f"NAV 最大值无效（{current_max}），返回默认仓位系数 1.0")
+            return 1.0, f"NAV 最大值无效（{current_max}）"
         drawdown_pct = (current_nav - current_max) / current_max * 100  # 转为百分比
         
         # 2. 根据回撤确定基础仓位系数
