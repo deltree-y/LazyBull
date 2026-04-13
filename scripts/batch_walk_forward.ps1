@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"   #20130101   #20130224
-$wf_end_date             = "20251231"   #20251231   #20260224
+$wf_start_date           = "20130209"   #20130101   #20130224
+$wf_end_date             = "20260209"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -30,7 +30,7 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 1000         # 固定：树数量上限（配合早停，不需要多组）
+$n_estimators            = 500         # 固定：树数量上限（配合早停，不需要多组）
 $max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.012)     # XGB推荐0.005, LGB推荐0.005
@@ -42,7 +42,7 @@ $reg_lambda_list         = @(1.0)       # XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds   = 500          # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树）
+$early_stopping_rounds   = 1000          # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树）
 $early_stopping_metric   = "auto"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
@@ -207,8 +207,8 @@ $early_exit_strength_protect_threshold_list   = @(0.1)        # strength_veto �
 $early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
 
 # ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold_list   = @(0.3)  #0.15 # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
-$take_profit_refill           = $false   # $true=整体止盈后自动补位买入
+$take_profit_threshold_list   = @(0.3)      # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
+$take_profit_refill           = $false      # $true=整体止盈后自动补位买入
 
 # ── 空仓/持有期拖尾提前调仓 ────────────────────────────────────
 # $true  = 启用：当持仓全部清零或 cycle_day>=holding_period 且仍有残留盈利延续持仓时，

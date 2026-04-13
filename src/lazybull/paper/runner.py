@@ -1,8 +1,9 @@
 """纸面交易运行器"""
 
 import gc
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -199,54 +200,57 @@ class PaperTradingRunner:
         buy_price_type: str,
         sell_price_type: str,
         current_prices: Dict[str, float],
-        source_date: str
+        source_date: str,
+        protected_stocks: Optional[set] = None,
     ) -> List[TradeInstruction]:
         """从目标权重生成明确的交易指令
-        
+
         Args:
             targets: 目标权重列表
             buy_price_type: 买入价格类型 open/close
             sell_price_type: 卖出价格类型 open/close
             current_prices: 当前价格字典
             source_date: 源日期（T0日期）
-            
+            protected_stocks: 盈利延续保护的股票集合，跳过卖出指令生成
+
         Returns:
             交易指令列表
         """
         instructions = []
-        
+        protected_stocks = protected_stocks or set()
+
         # 目标权重字典
         target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
-        
+
         # 当前持仓
         current_positions = self.account.get_positions()
-        
+
         # 使用账户总资金计算
         import yaml
         with open("configs/base.yaml", "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        
+
         #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
         total_capital = self.account.get_total_value(current_prices) * (1 - cfg['costs']['capital_retention_ratio'])  # 乘以系数以留出现金空间，避免过度买入
-        
+
         # 合并所有股票（目标+持仓）
         all_stocks = set(target_weights.keys()) | set(current_positions.keys())
-        
+
         for ts_code in all_stocks:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
             pos = current_positions.get(ts_code)
             current_shares = pos.shares if pos else 0
-            
+
             # 获取价格
             price = current_prices.get(ts_code, 0.0)
             if price <= 0:
                 logger.warning(f"股票 {ts_code} 无价格数据，跳过生成指令")
                 continue
-            
+
             # 计算目标股数
             target_value = total_capital * target_weight
             target_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
-            
+
             # 判断操作类型
             if target_shares > current_shares:
                 # 买入或加仓
@@ -262,13 +266,21 @@ class PaperTradingRunner:
                         target_weight=target_weight
                     ))
             elif target_shares < current_shares:
+                # 盈利延续保护：跳过卖出指令
+                if ts_code in protected_stocks:
+                    logger.info(
+                        f"盈利延续保护: {ts_code} 跳过卖出指令"
+                        f" (当前{current_shares}股, 目标{target_shares}股)"
+                    )
+                    continue
+
                 # 卖出或减仓
                 # 如果是清仓（目标权重为0），必须卖出全部
                 if target_weight == 0:
                     shares = current_shares
                 else:
                     shares = (current_shares - target_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
-                
+
                 if shares > 0:
                     instructions.append(TradeInstruction(
                         ts_code=ts_code,
@@ -279,7 +291,7 @@ class PaperTradingRunner:
                         source_date=source_date,
                         target_weight=target_weight
                     ))
-        
+
         logger.info(f"生成 {len(instructions)} 条交易指令")
         return instructions
     
@@ -296,6 +308,11 @@ class PaperTradingRunner:
         max_weight_per_stock: Optional[float] = None,
         exclude_st: bool = True,
         min_list_days: int = 365,
+        industry_momentum_filter: bool = False,
+        industry_momentum_bottom_pct: float = 0.5,
+        holding_bonus_enabled: bool = False,
+        holding_bonus_sigma: float = 0.5,
+        protected_stocks: Optional[set] = None,
     ) -> None:
         """T0工作流：拉取数据 + 生成T1待执行目标
 
@@ -311,6 +328,7 @@ class PaperTradingRunner:
             max_weight_per_stock: 单股最大权重（可选）
             exclude_st: 是否排除ST股票
             min_list_days: 最少上市天数
+            protected_stocks: 盈利延续保护的股票集合（跳过卖出）
         """
         # 1. 校正交易日期
         corrected_date = self._correct_trade_date(trade_date)
@@ -348,6 +366,10 @@ class PaperTradingRunner:
             max_weight_per_stock=max_weight_per_stock,
             exclude_st=exclude_st,
             min_list_days=min_list_days,
+            industry_momentum_filter=industry_momentum_filter,
+            industry_momentum_bottom_pct=industry_momentum_bottom_pct,
+            holding_bonus_enabled=holding_bonus_enabled,
+            holding_bonus_sigma=holding_bonus_sigma,
         )
         
         if not targets:
@@ -372,7 +394,8 @@ class PaperTradingRunner:
             buy_price_type=buy_price_type,
             sell_price_type=sell_price_type,
             current_prices=current_prices,
-            source_date=corrected_date
+            source_date=corrected_date,
+            protected_stocks=protected_stocks,
         )
         
         if not instructions:
@@ -743,6 +766,10 @@ class PaperTradingRunner:
         max_weight_per_stock: Optional[float] = None,
         exclude_st: bool = True,
         min_list_days: int = 365,
+        industry_momentum_filter: bool = False,
+        industry_momentum_bottom_pct: float = 0.5,
+        holding_bonus_enabled: bool = False,
+        holding_bonus_sigma: float = 0.5,
     ) -> List[TargetWeight]:
         """生成信号
 
@@ -792,11 +819,11 @@ class PaperTradingRunner:
 
         # 加载价格数据
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
-        signal_data = self.storage.load_cs_train_day(trade_date)
+        signal_data = self.storage.load_cs_train_day(trade_date, subdir="cs_infer")
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {trade_date} 的日线数据")
             return []
-        
+
         # 获取股票列表
         date_ts = pd.Timestamp(trade_date)
         stocks = universe.get_stocks(date_ts, daily_data)
@@ -844,6 +871,10 @@ class PaperTradingRunner:
                     buy_price_type,
                     max_per_industry=max_per_industry,
                     industry_mapping=industry_mapping,
+                    industry_momentum_filter=industry_momentum_filter,
+                    industry_momentum_bottom_pct=industry_momentum_bottom_pct,
+                    holding_bonus_enabled=holding_bonus_enabled,
+                    holding_bonus_sigma=holding_bonus_sigma,
                 )
             else:
                 # 其他情况（score加权或非MLSignal），使用原有逻辑
@@ -890,8 +921,12 @@ class PaperTradingRunner:
         buy_price_type: str,
         max_per_industry: Optional[int] = None,
         industry_mapping: Optional[Dict[str, str]] = None,
+        industry_momentum_filter: bool = False,
+        industry_momentum_bottom_pct: float = 0.5,
+        holding_bonus_enabled: bool = False,
+        holding_bonus_sigma: float = 0.5,
     ) -> Dict[str, float]:
-        """等权策略下生成信号（含行业约束 + 一手可买约束和顺延补足）
+        """等权策略下生成信号（含行业约束 + 行业动量过滤 + 持仓保留奖励 + 一手可买约束和顺延补足）
 
         对等权策略启用"一手可买约束"：如果按资金分配给某股票的金额不足以买入100股（1手），
         则跳过该股票并从候选中顺延选择下一只，直到凑足top_n个可买股票或候选耗尽。
@@ -932,6 +967,47 @@ class PaperTradingRunner:
                 verbose=True,
             )
             logger.info(f"行业约束后候选数: {len(ranked_candidates)} (原始 {original_count})")
+
+        # 行业动量过滤
+        if industry_momentum_filter and industry_momentum_bottom_pct > 0:
+            before = len(ranked_candidates)
+            ranked_candidates = self._filter_industry_momentum(
+                ranked_candidates,
+                signal_data,
+                industry_momentum_bottom_pct,
+                verbose=self.verbose,
+            )
+            if len(ranked_candidates) < before:
+                logger.info(
+                    f"行业动量过滤后候选数: {len(ranked_candidates)}"
+                    f" (过滤前 {before})"
+                )
+
+        # 持仓保留奖励（降低换手率）
+        if holding_bonus_enabled and ranked_candidates:
+            existing_positions = set(self.account.get_positions().keys())
+            if existing_positions:
+                scores = [s for _, s in ranked_candidates]
+                score_std = float(np.std(scores)) if len(scores) > 1 else 0.0
+                if score_std > 0:
+                    bonus = holding_bonus_sigma * score_std
+                    adjusted = []
+                    bonus_count = 0
+                    for stock, score in ranked_candidates:
+                        if stock in existing_positions:
+                            adjusted.append((stock, score + bonus))
+                            bonus_count += 1
+                        else:
+                            adjusted.append((stock, score))
+                    # 重新排序
+                    ranked_candidates = sorted(
+                        adjusted, key=lambda x: x[1], reverse=True
+                    )
+                    if bonus_count > 0:
+                        logger.info(
+                            f"持仓保留奖励: 为 {bonus_count} 只已持仓股票"
+                            f" 加分 {bonus:.4f} (sigma={holding_bonus_sigma})"
+                        )
 
         logger.info(f"等权+一手约束: 排序候选数 {len(ranked_candidates)}")
         
@@ -1115,6 +1191,549 @@ class PaperTradingRunner:
         
         return buy_prices, sell_prices
     
+    # ─────────────── 市场择时仓位管理 ───────────────
+
+    @staticmethod
+    def _get_feature_scalar(features_df: pd.DataFrame, col: str) -> float:
+        """从特征 DataFrame 取广播到所有行的标量值（首行），缺失返回 NaN"""
+        if col not in features_df.columns:
+            return np.nan
+        val = features_df[col].iloc[0]
+        return float(val) if not pd.isna(val) else np.nan
+
+    def compute_market_regime_exposure(
+        self, trade_date: str, config: dict
+    ) -> Tuple[float, str]:
+        """根据市场状态计算仓位系数
+
+        复用回测引擎 BacktestEngineML 的 4 种择时模式逻辑，
+        从 cs_infer 特征中提取市场级标量计算仓位。
+
+        Args:
+            trade_date: 交易日期 YYYYMMDD
+            config: 配置字典（含 market_regime_* 字段）
+
+        Returns:
+            (exposure, reason) — 仓位系数 [0, 1] 和原因描述
+        """
+        # 加载 cs_infer 特征
+        features_df = self.storage.load_features_by_date(
+            trade_date, subdir="cs_infer"
+        )
+        if features_df is None or len(features_df) == 0:
+            return 1.0, "缺少特征数据，按满仓处理"
+
+        min_exposure = config.get("market_regime_min_exposure", 0.2)
+
+        # ── MA250 硬条件（优先级最高）──
+        if config.get("market_regime_ma250_hard_stop", False):
+            ma250_ratio = self._get_feature_scalar(features_df, "mkt_ma250_ratio")
+            ma250_threshold = config.get("market_regime_ma250_threshold", 1.0)
+            ma250_exposure_cfg = config.get("market_regime_ma250_exposure", 0.0)
+
+            if not np.isnan(ma250_ratio) and ma250_ratio < ma250_threshold:
+                base_exposure = ma250_exposure_cfg
+                triggered = True
+            else:
+                base_exposure = 1.0
+                triggered = False
+
+            # ATR 动态缩放
+            if config.get("market_regime_ma250_atr_scaling", False):
+                exposure = self._apply_ma250_atr_scaling(
+                    base_exposure, features_df, min_exposure
+                )
+            else:
+                exposure = base_exposure
+
+            if triggered or exposure < 1.0:
+                reason = (
+                    f"MA250硬条件: ratio={ma250_ratio:.3f}"
+                    f" {'<' if triggered else '>='} {ma250_threshold}，"
+                    f"仓位={exposure:.1%}"
+                )
+                return exposure, reason
+
+        # ── 常规市场择时 ──
+        if not config.get("market_regime_enabled", False):
+            return 1.0, "市场择时未启用"
+
+        mode = config.get("market_regime_mode", "binary")
+
+        if mode == "binary":
+            exposure = self._regime_binary(features_df, config)
+        elif mode == "vol_target":
+            exposure = self._regime_vol_target(features_df, config)
+        elif mode == "trend":
+            exposure = self._regime_trend(features_df, config)
+        elif mode == "combined":
+            exposure = self._regime_combined(features_df, config)
+        else:
+            logger.warning(f"未知 market_regime_mode={mode}，回退到 binary")
+            exposure = self._regime_binary(features_df, config)
+
+        # 回撤保护
+        if config.get("market_regime_drawdown_guard", False) and exposure < 1.0:
+            drawdown = self._get_feature_scalar(features_df, "mkt_drawdown_20")
+            dd_threshold = config.get("market_regime_drawdown_threshold", -0.08)
+            if not np.isnan(drawdown) and drawdown < dd_threshold:
+                exposure = 1.0
+                return exposure, (
+                    f"回撤保护触发: mkt_drawdown_20={drawdown:.2%}"
+                    f" < {dd_threshold:.2%}，恢复满仓"
+                )
+
+        reason = f"市场择时({mode}): 仓位={exposure:.1%}"
+        return exposure, reason
+
+    @staticmethod
+    def _apply_ma250_atr_scaling(
+        base_exposure: float,
+        features_df: pd.DataFrame,
+        min_exposure: float,
+    ) -> float:
+        """ATR 动态仓位缩放: clip(base * MA(ATR,250) / CurrentATR, min, 1.0)"""
+        mkt_atr = PaperTradingRunner._get_feature_scalar(
+            features_df, "mkt_atr_pct"
+        )
+        mkt_atr_ma250 = PaperTradingRunner._get_feature_scalar(
+            features_df, "mkt_atr_pct_ma250"
+        )
+        if np.isnan(mkt_atr) or np.isnan(mkt_atr_ma250) or mkt_atr <= 0:
+            return base_exposure
+        atr_ratio = mkt_atr_ma250 / mkt_atr
+        return float(np.clip(base_exposure * atr_ratio, min_exposure, 1.0))
+
+    @staticmethod
+    def _regime_binary(features_df: pd.DataFrame, config: dict) -> float:
+        """二值模式：mkt_ret_avg_20 < threshold → bear_exposure，否则满仓"""
+        mkt_ret = PaperTradingRunner._get_feature_scalar(
+            features_df, "mkt_ret_avg_20"
+        )
+        if np.isnan(mkt_ret):
+            return 1.0
+        threshold = config.get("market_regime_bear_threshold", -0.02)
+        if mkt_ret < threshold:
+            return config.get("market_regime_bear_exposure", 0.3)
+        return 1.0
+
+    @staticmethod
+    def _regime_vol_target(features_df: pd.DataFrame, config: dict) -> float:
+        """波动率目标模式：target_vol / realized_vol"""
+        mkt_ret_vol = PaperTradingRunner._get_feature_scalar(
+            features_df, "mkt_ret_vol_20"
+        )
+        if np.isnan(mkt_ret_vol) or mkt_ret_vol <= 0:
+            return 1.0
+        annualized_vol = mkt_ret_vol * np.sqrt(252)
+        vol_target = config.get("market_regime_vol_target", 0.15)
+        min_exp = config.get("market_regime_min_exposure", 0.2)
+        return float(np.clip(vol_target / annualized_vol, min_exp, 1.0))
+
+    @staticmethod
+    def _regime_trend(features_df: pd.DataFrame, config: dict) -> float:
+        """趋势模式：基于 mkt_ma_trend 线性降仓"""
+        ma_trend = PaperTradingRunner._get_feature_scalar(
+            features_df, "mkt_ma_trend"
+        )
+        if np.isnan(ma_trend):
+            return 1.0
+        threshold = config.get("market_regime_trend_threshold", 1.0)
+        if ma_trend >= threshold:
+            return 1.0
+        min_exp = config.get("market_regime_min_exposure", 0.2)
+        return float(np.clip(ma_trend / threshold, min_exp, 1.0))
+
+    # ─────────────── 行业动量过滤 ───────────────
+
+    @staticmethod
+    def _filter_industry_momentum(
+        ranked_candidates: list,
+        signal_data: pd.DataFrame,
+        bottom_pct: float,
+        verbose: bool = True,
+    ) -> list:
+        """剔除弱势行业的股票
+
+        利用 cs_infer 中的 ind_momentum_rank（行业动量百分位排名，0~1）
+        过滤掉排名 < bottom_pct 的行业的所有股票。
+
+        Args:
+            ranked_candidates: [(ts_code, score), ...] 排序候选列表
+            signal_data: cs_infer 特征 DataFrame
+            bottom_pct: 剔除排名后 X% 的行业（0~1）
+            verbose: 是否输出日志
+
+        Returns:
+            过滤后的排序候选列表
+        """
+        if signal_data is None or "ind_momentum_rank" not in signal_data.columns:
+            return ranked_candidates
+
+        rank_map = dict(
+            zip(signal_data["ts_code"], signal_data["ind_momentum_rank"])
+        )
+
+        filtered = []
+        removed = 0
+        for stock, score in ranked_candidates:
+            rank = rank_map.get(stock)
+            if rank is not None and rank < bottom_pct:
+                removed += 1
+                continue
+            filtered.append((stock, score))
+
+        if removed > 0 and verbose:
+            logger.info(
+                f"  行业动量过滤: 剔除 {removed} 只弱势行业股票"
+                f" (bottom {bottom_pct * 100:.0f}%)"
+            )
+
+        return filtered
+
+    # ─────────────── 盈利延续持有 / 亏损提前换出 ───────────────
+
+    def evaluate_profit_extension(
+        self, trade_date: str, config: dict
+    ) -> set:
+        """评估哪些持仓满足盈利延续条件，在 T0 生成卖出指令时保护这些股票
+
+        Args:
+            trade_date: 当前交易日期
+            config: 配置字典
+
+        Returns:
+            需保护（不卖出）的 ts_code 集合
+        """
+        if not config.get("enable_profit_based_holding", False):
+            return set()
+
+        mode = config.get("profit_extension_mode", "pnl")
+        if mode == "disabled":
+            return set()
+
+        positions = self.account.get_positions()
+        if not positions:
+            return set()
+
+        # 加载价格
+        daily_data = self.loader.load_clean_daily_by_date(trade_date)
+        if daily_data is None or daily_data.empty:
+            return set()
+        price_map = {}
+        for _, row in daily_data.iterrows():
+            price_map[row["ts_code"]] = row.get("close", 0.0)
+
+        # 计算持有交易日数
+        rebalance_freq = config.get("rebalance_freq", 20)
+        extension_threshold = config.get("profit_extension_threshold", 0.05)
+        extension_days = config.get("profit_extension_days", 5)
+        max_hold = rebalance_freq + extension_days
+
+        trade_cal = self.loader.load_clean_trade_cal()
+        trade_dates_list = []
+        if trade_cal is not None:
+            trade_dates_list = trade_cal[
+                trade_cal["is_open"] == 1
+            ]["cal_date"].tolist()
+
+        protected = set()
+        for ts_code, pos in positions.items():
+            price = price_map.get(ts_code, 0.0)
+            if price <= 0 or pos.buy_price <= 0:
+                continue
+            profit_rate = (price - pos.buy_price) / pos.buy_price
+
+            # 计算持有天数
+            holding_days = self._calc_holding_days(
+                pos.buy_date, trade_date, trade_dates_list
+            )
+
+            # 尚未到持有期，不需要延续保护（本来就不会卖）
+            if holding_days < rebalance_freq:
+                continue
+
+            # 已超过最大延续天数
+            if holding_days >= max_hold:
+                continue
+
+            if mode == "pnl":
+                if profit_rate >= extension_threshold:
+                    protected.add(ts_code)
+                    logger.info(
+                        f"  盈利延续保护(pnl): {ts_code}"
+                        f" 浮盈={profit_rate:.2%} >= {extension_threshold:.2%},"
+                        f" 持有{holding_days}天(上限{max_hold}天)"
+                    )
+            elif mode == "strength":
+                breakdown = self._score_holding_strength(
+                    ts_code, trade_date, pos, profit_rate, config
+                )
+                threshold = config.get(
+                    "profit_extension_strength_threshold", 0.6
+                )
+                if breakdown is not None and breakdown.total >= threshold:
+                    protected.add(ts_code)
+                    logger.info(
+                        f"  盈利延续保护(strength): {ts_code}"
+                        f" score={breakdown.total:.3f} >= {threshold},"
+                        f" pnl={profit_rate:.2%}, {breakdown.to_log_str()}"
+                    )
+        return protected
+
+    def evaluate_early_exit(
+        self, trade_date: str, config: dict
+    ) -> list:
+        """评估哪些持仓满足亏损提前换出条件
+
+        Args:
+            trade_date: 当前交易日期
+            config: 配置字典
+
+        Returns:
+            需提前卖出的 [{ts_code, shares, reason, can_execute}] 列表
+        """
+        if not config.get("enable_profit_based_holding", False):
+            return []
+
+        positions = self.account.get_positions()
+        if not positions:
+            return []
+
+        loss_threshold = config.get("early_exit_loss_threshold", -0.05)
+        holding_ratio = config.get("early_exit_holding_ratio", 0.5)
+        rebalance_freq = config.get("rebalance_freq", 20)
+        min_hold = int(rebalance_freq * holding_ratio)
+
+        early_exit_mode = config.get("early_exit_mode", "disabled")
+        protect_threshold = config.get(
+            "early_exit_strength_protect_threshold", 0.55
+        )
+        max_reprieves = config.get("early_exit_max_reprieves", 2)
+
+        # 加载价格
+        daily_data = self.loader.load_clean_daily_by_date(trade_date)
+        if daily_data is None or daily_data.empty:
+            return []
+        price_map = {}
+        for _, row in daily_data.iterrows():
+            price_map[row["ts_code"]] = row.get("close", 0.0)
+
+        trade_cal = self.loader.load_clean_trade_cal()
+        trade_dates_list = []
+        if trade_cal is not None:
+            trade_dates_list = trade_cal[
+                trade_cal["is_open"] == 1
+            ]["cal_date"].tolist()
+
+        # 加载缓刑状态
+        early_exit_state = self.paper_storage.load_early_exit_state()
+        reprieve_counts = early_exit_state.get("reprieve_counts", {})
+
+        actions = []
+        state_changed = False
+
+        for ts_code, pos in positions.items():
+            price = price_map.get(ts_code, 0.0)
+            if price <= 0 or pos.buy_price <= 0:
+                continue
+            profit_rate = (price - pos.buy_price) / pos.buy_price
+
+            holding_days = self._calc_holding_days(
+                pos.buy_date, trade_date, trade_dates_list
+            )
+
+            # 未达到最低持有天数，不检查
+            if holding_days < min_hold:
+                continue
+
+            # 判断是否触发亏损阈值（支持 ATR 动态阈值）
+            effective_threshold = loss_threshold
+            if config.get("use_atr_for_early_exit", False):
+                buy_atr = getattr(pos, "buy_atr_pct", 0.0)
+                if buy_atr > 0:
+                    # ATR 动态阈值 = -multiplier × buy_atr_pct
+                    atr_multiplier = config.get("early_exit_atr_multiplier", 2.0)
+                    effective_threshold = -atr_multiplier * buy_atr
+                    effective_threshold = max(effective_threshold, loss_threshold)
+
+            if profit_rate > effective_threshold:
+                # 清除该股票的缓刑计数（已脱离亏损区间）
+                if ts_code in reprieve_counts:
+                    del reprieve_counts[ts_code]
+                    state_changed = True
+                continue
+
+            # 触发亏损提前换出
+            if early_exit_mode == "strength_veto":
+                current_reprieves = reprieve_counts.get(ts_code, 0)
+                if current_reprieves < max_reprieves:
+                    breakdown = self._score_holding_strength(
+                        ts_code, trade_date, pos, profit_rate, config,
+                        for_early_exit=True,
+                    )
+                    if (
+                        breakdown is not None
+                        and breakdown.total >= protect_threshold
+                    ):
+                        reprieve_counts[ts_code] = current_reprieves + 1
+                        state_changed = True
+                        logger.info(
+                            f"  亏损换出否决(缓刑): {ts_code}"
+                            f" score={breakdown.total:.3f}"
+                            f" >= {protect_threshold},"
+                            f" pnl={profit_rate:.2%},"
+                            f" 缓刑{current_reprieves + 1}/{max_reprieves}"
+                        )
+                        continue
+
+            # 执行卖出
+            sell_shares = (pos.shares // 100) * 100
+            reason = (
+                f"亏损提前换出: pnl={profit_rate:.2%}"
+                f" <= {effective_threshold:.2%},"
+                f" 持有{holding_days}天(>={min_hold}天)"
+            )
+            actions.append({
+                "ts_code": ts_code,
+                "shares": sell_shares,
+                "reason": reason,
+                "can_execute": True,
+            })
+            logger.info(f"  {reason} → 卖出 {ts_code} {sell_shares}股")
+
+            # 清除缓刑计数
+            if ts_code in reprieve_counts:
+                del reprieve_counts[ts_code]
+                state_changed = True
+
+        # 保存缓刑状态
+        if state_changed:
+            self.paper_storage.save_early_exit_state(
+                {"reprieve_counts": reprieve_counts}
+            )
+
+        return actions
+
+    def _score_holding_strength(
+        self,
+        ts_code: str,
+        trade_date: str,
+        pos,
+        profit_rate: float,
+        config: dict,
+        for_early_exit: bool = False,
+    ):
+        """使用 HoldingStrengthScorer 对持仓评分
+
+        通过适配器对象提供 scorer 所需的 engine 接口。
+
+        Args:
+            for_early_exit: 亏损换出评分时将 drawdown 权重置 0
+        """
+        from ..backtest.holding_strength import (
+            HoldingStrengthScorer,
+            HoldingStrengthWeights,
+        )
+
+        # 加载特征数据
+        features_df = self.storage.load_features_by_date(
+            trade_date, subdir="cs_infer"
+        )
+
+        # 构建 engine 适配器
+        class _EngineAdapter:
+            """为 HoldingStrengthScorer 提供最小化 engine 接口"""
+
+            def __init__(self, features_df, ranked_candidates):
+                self._features_df = features_df
+                self._last_ranked_candidates = ranked_candidates or []
+                self._last_signal_date = pd.Timestamp(trade_date)
+
+            def _get_holding_features_row(self, date, stock):
+                if self._features_df is None:
+                    return None
+                mask = self._features_df["ts_code"] == stock
+                if mask.any():
+                    return self._features_df.loc[mask].iloc[0]
+                return None
+
+        # 获取 ML ranked candidates（如有）
+        ranked_candidates = None
+        if hasattr(self.signal, "generate_ranked") and isinstance(
+            self.signal, MLSignal
+        ):
+            try:
+                ranked_candidates = getattr(
+                    self.signal, "_last_ranked_candidates", None
+                )
+            except Exception:
+                pass
+
+        adapter = _EngineAdapter(features_df, ranked_candidates)
+
+        # 构建权重
+        weight_dict = config.get("profit_extension_strength_weights", None)
+        weights = HoldingStrengthWeights.from_dict(weight_dict)
+
+        # 亏损换出评分时将 drawdown 权重置0（已知亏损信息量低）
+        if for_early_exit:
+            weights = HoldingStrengthWeights(
+                ml_score=weights.ml_score,
+                momentum=weights.momentum,
+                technical=weights.technical,
+                fund_flow=weights.fund_flow,
+                drawdown=0.0,
+            )
+
+        scorer = HoldingStrengthScorer(adapter, weights)
+
+        # 构建 position_info 字典
+        position_info = {
+            "buy_atr_pct": getattr(pos, "buy_atr_pct", None),
+        }
+
+        try:
+            return scorer.score(
+                stock=ts_code,
+                date=pd.Timestamp(trade_date),
+                position_info=position_info,
+                profit_rate=profit_rate,
+            )
+        except Exception as exc:
+            logger.warning(f"强势度评分失败 {ts_code}: {exc}")
+            return None
+
+    @staticmethod
+    def _calc_holding_days(
+        buy_date: str, current_date: str, trade_dates_list: list
+    ) -> int:
+        """计算两个日期之间的交易日数"""
+        try:
+            buy_idx = trade_dates_list.index(buy_date)
+            cur_idx = trade_dates_list.index(current_date)
+            return cur_idx - buy_idx
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _regime_combined(features_df: pd.DataFrame, config: dict) -> float:
+        """组合模式：vol_target + trend 双重保护"""
+        trend_exp = PaperTradingRunner._regime_trend(features_df, config)
+
+        # 趋势保护：上行趋势时跳过 vol_target
+        if config.get("market_regime_trend_guard", True) and trend_exp >= 1.0:
+            return 1.0
+
+        vol_exp = PaperTradingRunner._regime_vol_target(features_df, config)
+        combine = config.get("market_regime_combine_method", "min")
+        if combine == "multiply":
+            combined = vol_exp * trend_exp
+        else:
+            combined = min(vol_exp, trend_exp)
+        min_exp = config.get("market_regime_min_exposure", 0.2)
+        return float(np.clip(combined, min_exp, 1.0))
+
     def _record_nav(self, trade_date: str, prices: Dict[str, float]) -> None:
         """记录净值
         
@@ -1433,7 +2052,7 @@ class PaperTradingRunner:
 
         # 3. 加载数据
         daily_data = self.loader.load_clean_daily_by_date(trade_date)
-        signal_data = self.storage.load_cs_train_day(trade_date)
+        signal_data = self.storage.load_cs_train_day(trade_date, subdir="cs_infer")
         if daily_data is None or daily_data.empty:
             logger.error(f"无法加载 {trade_date} 的日线数据")
             return []

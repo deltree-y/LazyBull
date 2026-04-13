@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.52.0] - 2026-04-13
+
+### 新增
+
+- **纸面交易功能对齐回测引擎**：将回测中已验证的多项高级功能移植到纸面交易，所有新参数均支持通过 `paper_trade.py config` 持久化，默认值与 `batch_walk_forward.ps1` 保持一致：
+  - **市场择时仓位管理**：支持 binary/vol_target/trend/combined 4 种模式 + MA250 硬条件 + 回撤保护 + ATR 缩放，与 ECT 系数相乘得到最终仓位系数
+  - **行业动量过滤**：在信号排序后、选取 Top-N 前，剔除行业动量排名后 `industry_momentum_bottom_pct` 的弱势行业股票
+  - **持仓保留奖励**：对已持仓股票的 ML 分数加上 `holding_bonus_sigma × 截面标准差`，降低不必要换手
+  - **盈利延续持有**：T0 生成卖出指令前，检查即将被卖出的持仓是否满足延续条件（pnl/strength 两种模式），满足则跳过卖出指令
+  - **亏损提前换出 + strength_veto**：每日运行时评估持仓亏损情况，支持 ATR 动态阈值；strength_veto 模式下评分高于保护阈值时给予缓刑
+  - **ATR 动态止损**：Position 新增 `buy_atr_pct` 字段，T1 买入时自动记录 ATR；亏损换出可使用 ATR 动态阈值替代固定阈值
+  - **动态 Top-N 参数穿透**：统一使用 `create_signal(TradingConfig)` 创建信号，确保门控参数完整传递
+- **TradingConfig 新增 ~27 个字段**：市场择时（15）、行业动量（2）、盈亏动态持仓（5）、亏损换出（3）、ATR 止损（2），均注册到 argparse
+- **PaperStorage 新增缓刑状态持久化**：`save_early_exit_state()` / `load_early_exit_state()` 方法，支持 strength_veto 缓刑次数跨日持久化
+
+### 测试
+
+- 全部 702 个测试通过，无回归
+
+## [0.51.2] - 2026-04-12
+
+### 修复
+
+- **特征存储路径隔离**：纸面交易（推理）生成的特征文件存到独立目录 `cs_infer/`，与训练用 `cs_train/` 物理隔离，杜绝纸面交易先生成的无标签文件被训练路径误认为有效缓存的问题
+- **build_clean_features.py require_label 恢复为 True**：批量构建特征时恢复标签非空过滤，尾部无标签样本不再混入训练数据
+- **moneyflow 加载清理**：删除 `build_clean_features.py` 中已过时的 `AttributeError` fallback 分支及裸 `except:`，直接调用 `loader.load_clean_moneyflow`
+- **特征缓存 schema 检查增强**：`_REQUIRED_FACTOR_COLS` 新增基本面、股东人数、业绩预告、筹码胜率、基金持仓、业绩快报的代表性列，确保旧缓存缺少高积分因子时能自动触发重建
+
 ## [0.51.1] - 2026-04-12
 
 ### 修复

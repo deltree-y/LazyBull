@@ -248,6 +248,18 @@ def run_main(args):
     logger.info(f"  特征预测周期（horizon）: {config['horizon']} 天")
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
+    if config.get('market_regime_enabled') or config.get('market_regime_ma250_hard_stop'):
+        logger.info(
+            f"  市场择时: 启用 (模式={config.get('market_regime_mode', 'binary')}"
+            f", MA250={'启用' if config.get('market_regime_ma250_hard_stop') else '关闭'})"
+        )
+    if config.get('industry_momentum_filter'):
+        logger.info(f"  行业动量过滤: 启用 (剔除后{config.get('industry_momentum_bottom_pct', 0.2):.0%})")
+    if config.get('enable_profit_based_holding'):
+        logger.info(
+            f"  盈亏动态持仓: 启用 (延续模式={config.get('profit_extension_mode', 'pnl')}"
+            f", 亏损换出={config.get('early_exit_mode', 'disabled')})"
+        )
     if config.get('max_per_industry'):
         logger.info(f"  单行业最大持仓: {config['max_per_industry']}")
     if config.get('max_weight_per_stock'):
@@ -256,9 +268,9 @@ def run_main(args):
     logger.info(f"  最少上市天数: {config.get('min_list_days', 365)}")
     logger.info("=" * 80)
     
-    # 2. 创建运行器（通过公共工厂函数创建 signal）
+    # 2. 创建运行器（统一通过工厂函数创建 signal，确保门控参数穿透）
     trading_config = TradingConfig.from_dict(config)
-    signal = create_signal(trading_config) if trading_config.model_version_b is not None else None
+    signal = create_signal(trading_config)
 
     runner = PaperTradingRunner(
         signal=signal,
@@ -307,6 +319,20 @@ def run_main(args):
         storage.save_stop_loss_state(sl_state)
     else:
         logger.info("止损功能未启用，跳过")
+
+    # 5.5. 亏损提前换出检查
+    logger.info("")
+    logger.info("-" * 80)
+    logger.info("步骤1.5: 检查亏损提前换出")
+    logger.info("-" * 80)
+
+    if (
+        config.get("enable_profit_based_holding", False)
+        and config.get("early_exit_mode", "disabled") != "disabled"
+    ):
+        _check_early_exit(runner, corrected_date, config)
+    else:
+        logger.info("亏损提前换出未启用，跳过")
 
     # 6. 执行延迟卖出队列
     logger.info("")
@@ -412,6 +438,48 @@ def _check_stop_loss(
             )
             runner.broker.pending_sells.append(pending_sell)
             runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
+
+    return actions
+
+
+def _check_early_exit(
+    runner: PaperTradingRunner,
+    trade_date: str,
+    config: dict,
+) -> List[Dict]:
+    """检查亏损提前换出触发
+
+    与止损类似，触发后将卖出指令加入延迟卖出队列（T+1 执行）。
+
+    Returns:
+        换出动作列表 [{ts_code, shares, reason, can_execute}, ...]
+    """
+    actions = runner.evaluate_early_exit(trade_date, config)
+
+    if not actions:
+        logger.info("无持仓触发亏损提前换出")
+        return actions
+
+    # 将换出动作写入延迟卖出队列
+    from src.lazybull.paper.models import PendingSell
+
+    for act in actions:
+        pending_sell = PendingSell(
+            ts_code=act["ts_code"],
+            shares=act["shares"],
+            target_weight=0.0,
+            reason=act["reason"],
+            create_date=trade_date,
+            attempts=0,
+        )
+        runner.broker.pending_sells.append(pending_sell)
+        logger.info(
+            f"亏损提前换出 → 加入延迟卖出队列: {act['ts_code']}"
+            f" {act['shares']}股"
+        )
+
+    runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
+    logger.info(f"亏损提前换出检查完成：{len(actions)} 只股票触发")
 
     return actions
 
@@ -885,6 +953,43 @@ def _execute_t0_if_rebalance_day(
         
         logger.info("-" * 80)
     
+    # 计算市场择时仓位系数
+    market_regime_exposure = 1.0
+    market_regime_reason = "市场择时未启用"
+    if config.get("market_regime_enabled", False) or config.get(
+        "market_regime_ma250_hard_stop", False
+    ):
+        logger.info("-" * 80)
+        logger.info("计算市场择时仓位系数")
+        logger.info("-" * 80)
+        market_regime_exposure, market_regime_reason = (
+            runner.compute_market_regime_exposure(trade_date, config)
+        )
+        logger.info(f"市场择时: {market_regime_reason}")
+        logger.info(f"市场择时仓位系数: {market_regime_exposure:.2f}")
+        logger.info("-" * 80)
+
+    # 综合仓位系数 = ECT × 市场择时
+    final_exposure = ect_exposure * market_regime_exposure
+    if final_exposure < 1.0:
+        logger.info(
+            f"综合仓位系数: {final_exposure:.2f}"
+            f" (ECT={ect_exposure:.2f} × 市场择时={market_regime_exposure:.2f})"
+        )
+
+    # 计算盈利延续保护（在生成指令前确定哪些持仓不卖出）
+    protected_stocks = set()
+    if config.get("enable_profit_based_holding", False):
+        logger.info("-" * 80)
+        logger.info("计算盈利延续保护")
+        logger.info("-" * 80)
+        protected_stocks = runner.evaluate_profit_extension(trade_date, config)
+        if protected_stocks:
+            logger.info(f"盈利延续保护: {len(protected_stocks)} 只股票 → {protected_stocks}")
+        else:
+            logger.info("无持仓满足盈利延续条件")
+        logger.info("-" * 80)
+
     # 执行 T0
     try:
         runner.run_t0(
@@ -899,37 +1004,51 @@ def _execute_t0_if_rebalance_day(
             max_weight_per_stock=config.get('max_weight_per_stock'),
             exclude_st=config.get('exclude_st', True),
             min_list_days=config.get('min_list_days', 365),
+            industry_momentum_filter=config.get('industry_momentum_filter', False),
+            industry_momentum_bottom_pct=config.get('industry_momentum_bottom_pct', 0.5),
+            holding_bonus_enabled=config.get('holding_bonus_enabled', False),
+            holding_bonus_sigma=config.get('holding_bonus_sigma', 0.5),
+            protected_stocks=protected_stocks,
         )
-        
+
         # 获取下一交易日
         t1_date = runner._get_next_trade_date(trade_date)
         if t1_date:
             # 读取生成的交易指令
             instructions = runner.paper_storage.load_instructions(t1_date)
             if instructions:
-                # 应用 ECT 系数到目标权重（仅对买入指令调整股数）
-                if ect_exposure < 1.0:
-                    logger.info(f"应用 ECT 系数 {ect_exposure:.2f} 到买入指令")
+                # 应用综合仓位系数到买入指令（ECT × 市场择时）
+                if final_exposure < 1.0:
+                    logger.info(
+                        f"应用综合仓位系数 {final_exposure:.2f} 到买入指令"
+                        f" (ECT={ect_exposure:.2f}, 市场择时={market_regime_exposure:.2f})"
+                    )
                     valid_instructions = []
                     for inst in instructions:
                         if inst.action == 'buy':
                             original_shares = inst.shares
-                            inst.shares = int(inst.shares * ect_exposure)
+                            inst.shares = int(inst.shares * final_exposure)
                             # 确保是100的倍数
                             inst.shares = (inst.shares // 100) * 100
-                            
+
                             # 如果调整后股数为0，跳过该指令
                             if inst.shares == 0:
-                                logger.warning(f"ECT调整后 {inst.ts_code} 股数为0，跳过该买入指令（原 {original_shares} 股）")
+                                logger.warning(
+                                    f"仓位调整后 {inst.ts_code} 股数为0，"
+                                    f"跳过该买入指令（原 {original_shares} 股）"
+                                )
                                 continue
-                                
+
                             if inst.shares != original_shares:
-                                inst.reason = f"{inst.reason} (ECT调整: {original_shares} -> {inst.shares}股)"
+                                inst.reason = (
+                                    f"{inst.reason} (仓位调整:"
+                                    f" {original_shares} -> {inst.shares}股)"
+                                )
                         valid_instructions.append(inst)
                     
                     # 重新保存调整后的指令（仅保存有效指令）
                     runner.paper_storage.save_instructions(t1_date, valid_instructions)
-                    logger.info(f"已将 ECT 系数应用到买入指令：{len(valid_instructions)}/{len(instructions)} 条有效")
+                    logger.info(f"已将仓位系数应用到买入指令：{len(valid_instructions)}/{len(instructions)} 条有效")
                 
                 # 收集目标信息用于显示（仅买入指令）
                 for inst in instructions:

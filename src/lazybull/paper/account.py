@@ -119,10 +119,11 @@ class PaperAccount:
         buy_cost: float,
         buy_date: str,
         status: str = "持有",
-        notes: str = ""
+        notes: str = "",
+        buy_atr_pct: float = 0.0,
     ) -> None:
         """增加持仓
-        
+
         Args:
             ts_code: 股票代码
             shares: 股数
@@ -131,6 +132,7 @@ class PaperAccount:
             buy_date: 买入日期 YYYYMMDD
             status: 持仓状态
             notes: 备注信息
+            buy_atr_pct: 买入时 ATR 百分比（用于 ATR 动态止损）
         """
         if ts_code in self.state.positions:
             # 已有持仓，累加
@@ -138,7 +140,7 @@ class PaperAccount:
             total_shares = pos.shares + shares
             total_cost = pos.buy_cost + buy_cost
             avg_price = (pos.buy_price * pos.shares + buy_price * shares) / total_shares
-            
+
             self.state.positions[ts_code] = Position(
                 ts_code=ts_code,
                 shares=total_shares,
@@ -146,7 +148,8 @@ class PaperAccount:
                 buy_cost=total_cost,
                 buy_date=buy_date,  # 更新为最新买入日期
                 status=status,
-                notes=notes
+                notes=notes,
+                buy_atr_pct=buy_atr_pct if buy_atr_pct > 0 else getattr(pos, 'buy_atr_pct', 0.0),
             )
             logger.debug(f"累加持仓 {ts_code}: {shares} 股，总持仓: {total_shares} 股")
         else:
@@ -158,7 +161,8 @@ class PaperAccount:
                 buy_cost=buy_cost,
                 buy_date=buy_date,
                 status=status,
-                notes=notes
+                notes=notes,
+                buy_atr_pct=buy_atr_pct,
             )
             logger.debug(f"新建持仓 {ts_code}: {shares} 股")
     

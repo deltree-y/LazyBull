@@ -368,35 +368,44 @@ class Storage:
             raise ValueError(f"不支持的日期格式: {date_str}，应为YYYYMMDD或YYYY-MM-DD")
 
     def save_cs_train_day(
-        self, df: pd.DataFrame, trade_date: str, format: str = "parquet", has_label: bool = True
+        self,
+        df: pd.DataFrame,
+        trade_date: str,
+        format: str = "parquet",
+        has_label: bool = True,
+        subdir: str = "cs_train",
     ) -> None:
-        """保存单日截面训练数据
+        """保存单日截面数据
 
         Args:
             df: 数据DataFrame
             trade_date: 交易日期，格式YYYYMMDD
             format: 文件格式，parquet/csv
             has_label: 是否包含标签列数据(有标签才保存,否则会造成垃圾数据)，默认为True
+            subdir: 子目录名称，训练用 "cs_train"（默认），推理用 "cs_infer"
         """
         if has_label:
-            cs_train_path = self.features_path / "cs_train"
-            cs_train_path.mkdir(parents=True, exist_ok=True)
-            self._save_data(df, cs_train_path / trade_date, format)
+            target_path = self.features_path / subdir
+            target_path.mkdir(parents=True, exist_ok=True)
+            self._save_data(df, target_path / trade_date, format)
         else:
             logger.info("保存截面训练数据时未包含标签列，跳过保存操作")
 
-    def load_cs_train_day(self, trade_date: str, format: str = "parquet") -> Optional[pd.DataFrame]:
-        """加载单日截面训练数据
+    def load_cs_train_day(
+        self, trade_date: str, format: str = "parquet", subdir: str = "cs_train"
+    ) -> Optional[pd.DataFrame]:
+        """加载单日截面数据
 
         Args:
             trade_date: 交易日期，格式YYYYMMDD
             format: 文件格式
+            subdir: 子目录名称，训练用 "cs_train"（默认），推理用 "cs_infer"
 
         Returns:
             数据DataFrame，不存在返回None
         """
-        cs_train_path = self.features_path / "cs_train"
-        return self._load_data(cs_train_path / trade_date, format)
+        target_path = self.features_path / subdir
+        return self._load_data(target_path / trade_date, format)
 
     def check_basic_data_freshness(self, name: str, required_end_date: str) -> bool:
         """检查基础数据（trade_cal或stock_basic）是否足够新
@@ -441,18 +450,21 @@ class Storage:
 
         return False
 
-    def is_feature_exists(self, trade_date: str, format: str = "parquet") -> bool:
+    def is_feature_exists(
+        self, trade_date: str, format: str = "parquet", subdir: str = "cs_train"
+    ) -> bool:
         """判断特征数据是否存在
 
         Args:
             trade_date: 交易日期，格式YYYYMMDD
             format: 文件格式
+            subdir: 子目录名称，训练用 "cs_train"（默认），推理用 "cs_infer"
 
         Returns:
             True表示存在，False表示不存在
         """
-        cs_train_path = self.features_path / "cs_train"
-        path = cs_train_path / trade_date
+        target_path = self.features_path / subdir
+        path = target_path / trade_date
 
         if format == "parquet":
             file_path = path.with_suffix(".parquet")

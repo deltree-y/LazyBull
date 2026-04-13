@@ -58,9 +58,12 @@ def ensure_features_for_date(
         - success: 是否成功构建 features
         - missing_factors: 缺失的因子数据名称列表（空列表表示全部加载）
     """
+    # 纸面交易/推理场景使用独立的 cs_infer 子目录，避免与训练数据交叉污染
+    _INFER_SUBDIR = "cs_infer"
+
     # 检查是否已存在（同时校验关键因子列，防止旧缓存缺失列）
-    if not force and storage.is_feature_exists(trade_date):
-        if _check_features_schema(storage, trade_date):
+    if not force and storage.is_feature_exists(trade_date, subdir=_INFER_SUBDIR):
+        if _check_features_schema(storage, trade_date, subdir=_INFER_SUBDIR):
             logger.debug(f"features 数据已存在: {trade_date}")
             return True, []
         else:
@@ -209,7 +212,7 @@ def ensure_features_for_date(
 
         # 9. 保存结果
         if len(features_df) > 0:
-            storage.save_cs_train_day(features_df, trade_date)#, has_label=builder.require_label)
+            storage.save_cs_train_day(features_df, trade_date, subdir=_INFER_SUBDIR)
             logger.info(f"已保存 features 数据: {len(features_df)} 条")
             return True, missing_factors
         else:
@@ -1163,7 +1166,7 @@ def _try_ensure_historical_margin(
 # ── Features 缓存完整性校验 ──────────────────────────────────────
 
 # 已缓存 features 必须包含的因子列（缺失则触发重建）
-# 包含融资融券 + 行业中性化特征，确保旧缓存被自动淘汰
+# 每个因子组至少一个代表性列，确保旧缓存或因子组缺失时自动淘汰
 _REQUIRED_FACTOR_COLS = [
     "rzye_chg_5", "rzye_chg_20", "rqye_rzye_ratio",       # 融资融券
     "zscore_bp", "zscore_dv_ttm", "zscore_amount_ma20",    # 截面 z-score
@@ -1172,10 +1175,18 @@ _REQUIRED_FACTOR_COLS = [
     "ind_momentum_rank",                                    # 行业动量
     "mkt_atr_pct",                                          # 市场级 ATR 当前值
     "mkt_atr_pct_ma250",                                    # 市场级 ATR 250 日均值
+    "roe_waa",                                              # 基本面因子
+    "holder_num_chg",                                       # 股东人数因子
+    "forecast_type_score",                                  # 业绩预告因子
+    "winner_rate",                                          # 筹码胜率因子
+    "fund_hold_ratio",                                      # 基金持仓因子
+    "express_revenue_yoy",                                  # 业绩快报因子
 ]
 
 
-def _check_features_schema(storage: Storage, trade_date: str) -> bool:
+def _check_features_schema(
+    storage: Storage, trade_date: str, subdir: str = "cs_train"
+) -> bool:
     """快速检查已缓存 features 是否包含必要的因子列
 
     仅读取 Parquet schema（不加载数据），开销极低。
@@ -1183,8 +1194,8 @@ def _check_features_schema(storage: Storage, trade_date: str) -> bool:
     """
     import pyarrow.parquet as pq
 
-    cs_train_path = storage.features_path / "cs_train"
-    file_path = cs_train_path / f"{trade_date}.parquet"
+    target_path = storage.features_path / subdir
+    file_path = target_path / f"{trade_date}.parquet"
     if not file_path.exists():
         return False
 

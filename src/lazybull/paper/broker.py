@@ -639,7 +639,19 @@ class PaperBroker:
         # 2. 再执行买入指令
         buy_instructions = [i for i in instructions if i.action == 'buy']
         failed_buy_targets = []  # 记录买入失败的目标
-        
+
+        # 预加载 ATR 数据（如果可用）
+        atr_map = {}
+        try:
+            from ..data import Storage as DataStorage
+            ds = self.data_storage or DataStorage()
+            features_df = ds.load_features_by_date(trade_date, subdir="cs_infer")
+            if features_df is not None and "atr_pct_14" in features_df.columns:
+                for _, row in features_df.iterrows():
+                    atr_map[row["ts_code"]] = float(row["atr_pct_14"])
+        except Exception:
+            pass  # ATR 加载失败不影响正常买入
+
         for inst in buy_instructions:
             ts_code = inst.ts_code
             target_shares = inst.shares
@@ -707,8 +719,11 @@ class PaperBroker:
                 current_weight=0.0,  # 指令模式不需要权重
                 reason=reason
             )
-            
-            fill = self._execute_single_order(order, trade_date, price_type)
+
+            fill = self._execute_single_order(
+                order, trade_date, price_type,
+                buy_atr_pct=atr_map.get(ts_code, 0.0),
+            )
             if fill:
                 fills.append(fill)
                 # 打印执行详情
@@ -754,34 +769,36 @@ class PaperBroker:
         self,
         order: Order,
         trade_date: str,
-        price_type: str
+        price_type: str,
+        buy_atr_pct: float = 0.0,
     ) -> Optional[Fill]:
         """执行单个订单
-        
+
         Args:
             order: 订单
             trade_date: 交易日期
             price_type: 价格类型 open/close
-            
+            buy_atr_pct: 买入时 ATR 百分比（仅买入时使用）
+
         Returns:
             成交记录，失败返回None
         """
         # 使用订单中的参考价格（已根据价格类型设置）
         price = order.price
         amount = order.shares * price
-        
+
         if order.action == 'buy':
             # 计算买入成本
             commission = self.cost_model.calculate_commission(amount)
             slippage = self.cost_model.calculate_slippage(amount)
             total_cost = commission + slippage
-            
+
             # 检查现金是否足够
             total_required = amount + total_cost
             if total_required > self.account.get_cash():
                 logger.warning(f"现金不足，取消买入 {order.ts_code}")
                 return None
-            
+
             # 更新账户
             self.account.update_cash(-total_required)
             self.account.add_position(
@@ -789,7 +806,8 @@ class PaperBroker:
                 shares=order.shares,
                 buy_price=price,
                 buy_cost=total_cost,
-                buy_date=trade_date
+                buy_date=trade_date,
+                buy_atr_pct=buy_atr_pct,
             )
             
             # 创建成交记录

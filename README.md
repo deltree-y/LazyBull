@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.51.1)
+### 当前版本 (v0.52.0)
+
+**纸面交易功能对齐回测引擎** (v0.52.0):
+- 将回测中已验证的高级功能移植到纸面交易：市场择时仓位管理（4 种模式 + MA250 + 回撤保护）、行业动量过滤、持仓保留奖励、盈利延续持有（pnl/strength）、亏损提前换出（支持 strength_veto 缓刑 + ATR 动态阈值）
+- 所有新参数支持通过 `paper_trade.py config` 持久化，默认值与 `batch_walk_forward.ps1` 保持一致
+- Position 新增 `buy_atr_pct` 字段，T1 买入自动记录 ATR 用于动态止损
+- 统一使用 `create_signal(TradingConfig)` 创建信号，确保门控参数完整穿透
 
 **亏损提前换仓二次确认门控 strength_veto** (v0.51.0):
 - 亏损提前换出（early_exit）新增 `early_exit_mode` 参数，支持 `disabled`（原硬卖，默认兼容）和 `strength_veto`（二次确认门控）两种模式

@@ -62,7 +62,8 @@ class PaperStorage:
                 'shares': pos.shares,
                 'buy_price': pos.buy_price,
                 'buy_cost': pos.buy_cost,
-                'buy_date': pos.buy_date
+                'buy_date': pos.buy_date,
+                'buy_atr_pct': getattr(pos, 'buy_atr_pct', 0.0),
             }
         
         with open(file_path, 'w', encoding='utf-8') as f:
@@ -93,7 +94,8 @@ class PaperStorage:
                 shares=pos_dict['shares'],
                 buy_price=pos_dict['buy_price'],
                 buy_cost=pos_dict['buy_cost'],
-                buy_date=pos_dict['buy_date']
+                buy_date=pos_dict['buy_date'],
+                buy_atr_pct=pos_dict.get('buy_atr_pct', 0.0),
             )
         
         state = AccountState(
@@ -436,6 +438,35 @@ class PaperStorage:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         return data.get('last_trade_date')
+
+    def save_early_exit_state(self, state: dict) -> None:
+        """保存亏损提前换出的缓刑状态
+
+        Args:
+            state: 缓刑状态字典，如 {"reprieve_counts": {"000001.SZ": 1}}
+        """
+        file_path = self.state_path / "early_exit_state.json"
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+
+        logger.debug(f"保存亏损换出缓刑状态: {file_path}")
+
+    def load_early_exit_state(self) -> dict:
+        """读取亏损提前换出的缓刑状态
+
+        Returns:
+            缓刑状态字典，不存在返回空字典
+        """
+        file_path = self.state_path / "early_exit_state.json"
+
+        if not file_path.exists():
+            return {}
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+
+        return state
 
     def save_instructions(self, trade_date: str, instructions: List[TradeInstruction]) -> None:
         """保存交易指令列表

@@ -91,6 +91,43 @@ class TradingConfig:
     equity_curve_recovery_step: float = 0.25
     equity_curve_recovery_delay_periods: int = 0
 
+    # ── 市场择时仓位管理 ──
+    market_regime_enabled: bool = False  # 是否启用市场择时
+    market_regime_mode: str = "vol_target"  # binary|vol_target|trend|combined
+    market_regime_bear_threshold: float = -0.03  # binary: mkt_ret_avg_20 低于此值判定熊市
+    market_regime_bear_exposure: float = 0.3  # binary: 熊市仓位系数（0~1）
+    market_regime_vol_target: float = 0.20  # vol_target/combined: 年化波动率目标
+    market_regime_trend_threshold: float = 1.0  # trend/combined: mkt_ma_trend 降仓阈值
+    market_regime_min_exposure: float = 0.2  # 非binary模式最低仓位下限
+    market_regime_combine_method: str = "min"  # combined: min|multiply
+    market_regime_trend_guard: bool = True  # combined: 上行趋势跳过vol降仓
+    market_regime_drawdown_guard: bool = False  # 回撤保护：已大幅下跌时停止降仓
+    market_regime_drawdown_threshold: float = -0.08  # 回撤保护阈值
+    market_regime_ma250_hard_stop: bool = True  # MA250长周期硬条件
+    market_regime_ma250_threshold: float = 1.0  # MA250触发阈值
+    market_regime_ma250_exposure: float = 0.9  # MA250触发后仓位系数
+    market_regime_ma250_atr_scaling: bool = True  # ATR动态仓位缩放
+
+    # ── 行业动量过滤 ──
+    industry_momentum_filter: bool = False  # 是否启用行业动量过滤
+    industry_momentum_bottom_pct: float = 0.5  # 剔除排名后X%的行业
+
+    # ── 盈亏动态持仓 ──
+    enable_profit_based_holding: bool = True  # 是否启用盈亏动态持仓
+    early_exit_loss_threshold: float = -0.07  # 亏损提前换出阈值
+    early_exit_holding_ratio: float = 0.5  # 最早触发时点（占持有期比例）
+    profit_extension_threshold: float = 0.1  # 盈利延续持有阈值（pnl模式）
+    profit_extension_days: int = 2  # 盈利延续额外天数
+
+    # ── 亏损提前换出二次确认（strength_veto 门控）──
+    early_exit_mode: str = "strength_veto"  # disabled|strength_veto
+    early_exit_strength_protect_threshold: float = 0.1  # strength_veto保护阈值
+    early_exit_max_reprieves: int = 1  # 单只股票最多缓刑次数
+
+    # ── ATR 动态止损 ──
+    use_atr_for_early_exit: bool = False  # 用ATR替代固定阈值
+    early_exit_atr_multiplier: float = 2.0  # ATR 动态止损乘数
+
     # ── 其他（仅 paper_trade 使用，backtest 不需要） ──
     buy_price: str = "close"
     sell_price: str = "open"
@@ -485,6 +522,216 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=int,
         default=0,
         help="ECT 恢复等待周期数（默认：0）",
+    )
+
+    # ── 市场择时仓位管理 ──
+    parser.add_argument(
+        "--market-regime-enabled",
+        action="store_true",
+        default=False,
+        help="启用市场择时仓位管理",
+    )
+    parser.add_argument(
+        "--market-regime-mode",
+        type=str,
+        default="vol_target",
+        choices=["binary", "vol_target", "trend", "combined"],
+        help="市场择时模式（默认：vol_target）",
+    )
+    parser.add_argument(
+        "--market-regime-bear-threshold",
+        type=float,
+        default=-0.03,
+        help="binary模式：mkt_ret_avg_20低于此值判定熊市（默认：-0.03）",
+    )
+    parser.add_argument(
+        "--market-regime-bear-exposure",
+        type=float,
+        default=0.3,
+        help="binary模式：熊市仓位系数（默认：0.3）",
+    )
+    parser.add_argument(
+        "--market-regime-vol-target",
+        type=float,
+        default=0.20,
+        help="vol_target/combined模式：年化波动率目标（默认：0.20）",
+    )
+    parser.add_argument(
+        "--market-regime-trend-threshold",
+        type=float,
+        default=1.0,
+        help="trend/combined模式：mkt_ma_trend降仓阈值（默认：1.0）",
+    )
+    parser.add_argument(
+        "--market-regime-min-exposure",
+        type=float,
+        default=0.2,
+        help="非binary模式最低仓位下限（默认：0.2）",
+    )
+    parser.add_argument(
+        "--market-regime-combine-method",
+        type=str,
+        default="min",
+        choices=["min", "multiply"],
+        help="combined模式组合方式（默认：min）",
+    )
+    parser.add_argument(
+        "--market-regime-trend-guard",
+        action="store_true",
+        default=True,
+        dest="market_regime_trend_guard",
+        help="combined模式：上行趋势跳过vol降仓（默认：启用）",
+    )
+    parser.add_argument(
+        "--no-market-regime-trend-guard",
+        action="store_false",
+        dest="market_regime_trend_guard",
+        help="combined模式：关闭趋势保护",
+    )
+    parser.add_argument(
+        "--market-regime-drawdown-guard",
+        action="store_true",
+        default=False,
+        dest="market_regime_drawdown_guard",
+        help="回撤保护：已大幅下跌时停止降仓",
+    )
+    parser.add_argument(
+        "--no-market-regime-drawdown-guard",
+        action="store_false",
+        dest="market_regime_drawdown_guard",
+        help="关闭回撤保护",
+    )
+    parser.add_argument(
+        "--market-regime-drawdown-threshold",
+        type=float,
+        default=-0.08,
+        help="回撤保护阈值（默认：-0.08）",
+    )
+    parser.add_argument(
+        "--market-regime-ma250-hard-stop",
+        action="store_true",
+        default=True,
+        dest="market_regime_ma250_hard_stop",
+        help="启用MA250长周期硬条件（默认：启用）",
+    )
+    parser.add_argument(
+        "--no-market-regime-ma250-hard-stop",
+        action="store_false",
+        dest="market_regime_ma250_hard_stop",
+        help="关闭MA250硬条件",
+    )
+    parser.add_argument(
+        "--market-regime-ma250-threshold",
+        type=float,
+        default=1.0,
+        help="MA250触发阈值（默认：1.0）",
+    )
+    parser.add_argument(
+        "--market-regime-ma250-exposure",
+        type=float,
+        default=0.9,
+        help="MA250触发后仓位系数（默认：0.9）",
+    )
+    parser.add_argument(
+        "--market-regime-ma250-atr-scaling",
+        action="store_true",
+        default=True,
+        dest="market_regime_ma250_atr_scaling",
+        help="MA250启用ATR动态仓位缩放（默认：启用）",
+    )
+    parser.add_argument(
+        "--no-market-regime-ma250-atr-scaling",
+        action="store_false",
+        dest="market_regime_ma250_atr_scaling",
+        help="关闭MA250 ATR缩放",
+    )
+
+    # ── 行业动量过滤 ──
+    parser.add_argument(
+        "--industry-momentum-filter",
+        action="store_true",
+        default=False,
+        help="启用行业动量过滤：剔除弱势行业股票",
+    )
+    parser.add_argument(
+        "--industry-momentum-bottom-pct",
+        type=float,
+        default=0.5,
+        help="剔除行业动量排名后X%%的行业（默认：0.5）",
+    )
+
+    # ── 盈亏动态持仓 ──
+    parser.add_argument(
+        "--enable-profit-based-holding",
+        action="store_true",
+        default=True,
+        dest="enable_profit_based_holding",
+        help="启用盈亏动态持仓（默认：启用）",
+    )
+    parser.add_argument(
+        "--no-profit-based-holding",
+        action="store_false",
+        dest="enable_profit_based_holding",
+        help="关闭盈亏动态持仓",
+    )
+    parser.add_argument(
+        "--early-exit-loss-threshold",
+        type=float,
+        default=-0.07,
+        help="亏损提前换出阈值（默认：-0.07）",
+    )
+    parser.add_argument(
+        "--early-exit-holding-ratio",
+        type=float,
+        default=0.5,
+        help="亏损提前换出最早触发时点，占持有期比例（默认：0.5）",
+    )
+    parser.add_argument(
+        "--profit-extension-threshold",
+        type=float,
+        default=0.1,
+        help="盈利延续持有阈值，pnl模式（默认：0.1）",
+    )
+    parser.add_argument(
+        "--profit-extension-days",
+        type=int,
+        default=2,
+        help="盈利延续额外交易日数（默认：2）",
+    )
+
+    # ── 亏损提前换出二次确认（strength_veto）──
+    parser.add_argument(
+        "--early-exit-mode",
+        type=str,
+        default="strength_veto",
+        choices=["disabled", "strength_veto"],
+        help="亏损提前换出模式：disabled=直接卖出, strength_veto=二次确认（默认：strength_veto）",
+    )
+    parser.add_argument(
+        "--early-exit-strength-protect-threshold",
+        type=float,
+        default=0.1,
+        help="strength_veto保护阈值 [0,1]（默认：0.1）",
+    )
+    parser.add_argument(
+        "--early-exit-max-reprieves",
+        type=int,
+        default=1,
+        help="单只股票最多缓刑次数（默认：1）",
+    )
+
+    # ── ATR 动态止损 ──
+    parser.add_argument(
+        "--use-atr-for-early-exit",
+        action="store_true",
+        default=False,
+        help="用ATR动态阈值替代固定early_exit_loss_threshold",
+    )
+    parser.add_argument(
+        "--early-exit-atr-multiplier",
+        type=float,
+        default=2.0,
+        help="ATR动态止损乘数（默认2.0）",
     )
 
     # ── paper_trade 专用 ──

@@ -283,31 +283,14 @@ def build_features_data(
         logger.warning("未找到 daily_basic 数据，价值红利特征将为空")
     
     # 加载 moneyflow 数据
-    try:
-        moneyflow_clean = loader.load_clean_moneyflow(
-            start_dt.strftime('%Y%m%d'),
-            end_dt.strftime('%Y%m%d')
-        )
-        if moneyflow_clean is not None:
-            logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
-        else:
-            logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
-    except AttributeError:
-        # DataLoader 可能还没有 load_clean_moneyflow 方法
-        logger.warning("DataLoader 不支持 load_clean_moneyflow，尝试直接从 storage 加载")
-        moneyflow_clean = None
-        # 从 storage 按日期范围加载
-        try:
-            moneyflow_clean = storage.load_clean_by_date_range(
-                "moneyflow",
-                start_dt.strftime('%Y-%m-%d'),
-                end_dt.strftime('%Y-%m-%d')
-            )
-            if moneyflow_clean is not None:
-                logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
-        except:
-            logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
-            moneyflow_clean = None
+    moneyflow_clean = loader.load_clean_moneyflow(
+        start_dt.strftime('%Y%m%d'),
+        end_dt.strftime('%Y%m%d')
+    )
+    if moneyflow_clean is not None:
+        logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
+    else:
+        logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
     
     # 加载基本面数据（可选）
     fundamental_lookup = None
@@ -602,7 +585,7 @@ def main():
         builder = FeatureBuilder(
             min_list_days=args.min_list_days,
             horizon=args.horizon,
-            require_label=False,
+            require_label=True,
         )
         
         # 构建clean数据

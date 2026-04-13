@@ -23,6 +23,7 @@ class Position:
     buy_date: str  # 买入日期 YYYYMMDD
     status: str = "持有"  # 持仓状态：持有、延迟卖出等
     notes: str = ""  # 备注信息
+    buy_atr_pct: float = 0.0  # 买入时的 ATR 百分比（用于 ATR 动态止损）
     
     def get_holding_days(self, current_date: str) -> int:
         """计算持有天数（自然日）

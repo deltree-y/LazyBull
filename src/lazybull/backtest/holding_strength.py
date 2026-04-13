@@ -29,10 +29,13 @@ from loguru import logger
 
 def _sigmoid(x: float, slope: float = 1.0) -> float:
     """sigmoid 压缩到 [0, 1],slope 控制陡峭度"""
-    try:
-        return 1.0 / (1.0 + np.exp(-slope * x))
-    except OverflowError:
-        return 0.0 if x < 0 else 1.0
+    z = slope * x
+    # clamp 防止 np.exp 溢出产生 RuntimeWarning（numpy 溢出不抛 OverflowError）
+    if z > 500:
+        return 1.0
+    if z < -500:
+        return 0.0
+    return 1.0 / (1.0 + np.exp(-z))
 
 
 def _safe_get(row: Optional[pd.Series], col: str, default: float = np.nan) -> float:
