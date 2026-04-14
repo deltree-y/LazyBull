@@ -1501,7 +1501,7 @@ class FeatureBuilder:
         - 剔除 ST (is_st=1)
         - 剔除上市 < min_list_days 自然日（默认365天≈12个月）
         - 剔除停牌 (is_suspended=1)
-        - 剔除标签缺失 (所有 y_ret_* 为空) - 仅当 require_label=True 时
+        - 剔除标签缺失 (任一 y_ret_* 为空) - 仅当 require_label=True 时
         - 涨跌停不剔除，仅标记
 
         注：成交额/市值/金融股过滤在 MLSignal._apply_selection_filters 中执行，
@@ -1539,13 +1539,13 @@ class FeatureBuilder:
         )
 
         if self.require_label:
-            label_mask = pd.Series([False] * len(df), index=df.index)
+            label_mask = pd.Series([True] * len(df), index=df.index)
             for horizon in self.horizons:
                 label_col = f'y_ret_{horizon}'
                 if label_col in df.columns:
-                    label_mask = label_mask | df[label_col].notna()
+                    label_mask = label_mask & df[label_col].notna()
             filter_mask = filter_mask & label_mask
-            logger.info("require_label=True, 将过滤所有标签均缺失的样本")
+            logger.info("require_label=True, 将过滤任一标签缺失的样本")
         else:
             logger.info("require_label=False, 保留标签缺失样本（实盘/推理模式）")
 

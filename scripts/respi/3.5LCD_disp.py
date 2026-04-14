@@ -263,12 +263,74 @@ def _normalize_intraday_price(price: object, pre_close: object, abs_limit: float
 def _parse_intraday_point_time(trade_date: str, label: object) -> Optional[datetime]:
     """解析日内点标签时间，兼容 HH:MM 和 HH:MM:SS。"""
     label_text = str(label).strip()
-    if len(label_text) >= 5:
-        label_text = label_text[:5]
-    try:
-        return datetime.strptime(f"{trade_date} {label_text}", "%Y%m%d %H:%M")
-    except ValueError:
+    if not label_text:
         return None
+
+    label_text = label_text[:8]
+    for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d %H:%M"):
+        try:
+            return datetime.strptime(f"{trade_date} {label_text}", fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_intraday_trading_time(point_time: datetime) -> bool:
+    """判断时间点是否落在 A 股实际盘中交易时段。"""
+    current_time = point_time.time()
+    return (
+        A_SHARE_MORNING_OPEN <= current_time <= A_SHARE_MORNING_CLOSE
+        or A_SHARE_AFTERNOON_OPEN <= current_time <= A_SHARE_AFTERNOON_CLOSE
+    )
+
+
+def _format_intraday_point_label(point_time: datetime) -> str:
+    """格式化日内点标签，秒级时间保留到持久化层。"""
+    if point_time.second:
+        return point_time.strftime("%H:%M:%S")
+    return point_time.strftime("%H:%M")
+
+
+def _get_intraday_x_position(point_time: datetime) -> float:
+    """按真实盘中时间计算折叠午休后的横坐标位置。"""
+    current_seconds = point_time.hour * 3600 + point_time.minute * 60 + point_time.second
+    morning_open_seconds = A_SHARE_MORNING_OPEN.hour * 3600 + A_SHARE_MORNING_OPEN.minute * 60
+    morning_close_seconds = A_SHARE_MORNING_CLOSE.hour * 3600 + A_SHARE_MORNING_CLOSE.minute * 60
+    afternoon_open_seconds = A_SHARE_AFTERNOON_OPEN.hour * 3600 + A_SHARE_AFTERNOON_OPEN.minute * 60
+
+    if current_seconds <= morning_close_seconds:
+        offset_minutes = (current_seconds - morning_open_seconds) / 60.0
+        position = offset_minutes / INTRADAY_SLOT_MINUTES
+    else:
+        offset_minutes = (current_seconds - afternoon_open_seconds) / 60.0
+        position = INTRADAY_MORNING_SLOT_COUNT + offset_minutes / INTRADAY_SLOT_MINUTES
+
+    return max(0.0, min(position, float(INTRADAY_SLOT_COUNT - 1)))
+
+
+def _resolve_intraday_point_axis(
+    trade_date: str,
+    label: object,
+    slot_idx: object,
+) -> Optional[tuple[int, float, str]]:
+    """解析日内点的槽位与绘图横坐标，兼容旧版持久化数据。"""
+    point_time = _parse_intraday_point_time(trade_date, label)
+    if point_time is not None:
+        if not _is_intraday_trading_time(point_time):
+            return None
+        return (
+            _get_intraday_slot_index(point_time),
+            _get_intraday_x_position(point_time),
+            _format_intraday_point_label(point_time),
+        )
+
+    try:
+        slot_int = int(slot_idx)
+    except (TypeError, ValueError):
+        return None
+    if slot_int < 0 or slot_int >= INTRADAY_SLOT_COUNT:
+        return None
+    return slot_int, float(slot_int), str(label).strip()
 
 
 def _resolve_intraday_slot_index(
@@ -277,18 +339,10 @@ def _resolve_intraday_slot_index(
     slot_idx: object,
 ) -> Optional[int]:
     """解析或修正日内槽位，兼容旧版持久化文件并过滤盘前点。"""
-    point_time = _parse_intraday_point_time(trade_date, label)
-    if point_time is not None:
-        if not (INTRADAY_WINDOW_START <= point_time.time() <= INTRADAY_WINDOW_END):
-            return None
-        return _get_intraday_slot_index(point_time)
-
-    try:
-        slot_int = int(slot_idx)
-    except (TypeError, ValueError):
+    resolved = _resolve_intraday_point_axis(trade_date, label, slot_idx)
+    if resolved is None:
         return None
-    if slot_int < 0 or slot_int >= INTRADAY_SLOT_COUNT:
-        return None
+    slot_int, _, _ = resolved
     return slot_int
 
 
@@ -576,6 +630,7 @@ def _empty_intraday_chart(trade_date: str) -> dict:
         'mode': 'intraday',
         'trade_date': trade_date,
         'dates': [],
+        'x_positions': [],
         'raw_index_pct': [],
         'raw_shenzhen_pct': [],
         'raw_portfolio_pct': [],
@@ -596,6 +651,7 @@ def _compose_intraday_chart(
     chart_data: dict,
     trade_date: str,
     dates: list[str],
+    x_positions: list[float],
     slot_indices: list[int],
     raw_index_values: list[float],
     raw_shenzhen_values: list[float],
@@ -606,6 +662,7 @@ def _compose_intraday_chart(
         **chart_data,
         'trade_date': trade_date,
         'dates': dates,
+        'x_positions': x_positions,
         'raw_index_pct': raw_index_values,
         'raw_shenzhen_pct': raw_shenzhen_values,
         'raw_portfolio_pct': raw_portfolio_values,
@@ -623,12 +680,13 @@ def _upsert_intraday_chart(
     shenzhen_pct: float,
     portfolio_pct: float,
 ) -> dict:
-    """向固定槽位的日内图中追加或覆盖一个采样点。"""
+    """向日内图追加一个采样点，保留每次刷新历史。"""
     trade_date = point_time.strftime("%Y%m%d")
     if chart_data is None or chart_data.get('trade_date') != trade_date:
         chart_data = _empty_intraday_chart(trade_date)
 
     slot_indices = list(chart_data.get('slot_indices', []))
+    x_positions = list(chart_data.get('x_positions', []))
     raw_index_values = list(chart_data.get('raw_index_pct', chart_data.get('index_pct', [])))
     raw_shenzhen_values = list(
         chart_data.get('raw_shenzhen_pct', chart_data.get('shenzhen_pct', []))
@@ -637,43 +695,40 @@ def _upsert_intraday_chart(
         chart_data.get('raw_portfolio_pct', chart_data.get('portfolio_pct', []))
     )
     dates = list(chart_data.get('dates', []))
+    if not x_positions and len(slot_indices) == len(dates):
+        for label, slot_idx in zip(dates, slot_indices):
+            resolved = _resolve_intraday_point_axis(trade_date, label, slot_idx)
+            x_positions.append(float(slot_idx) if resolved is None else resolved[1])
     if (
         len(slot_indices) != len(raw_index_values)
         or len(slot_indices) != len(raw_shenzhen_values)
         or len(slot_indices) != len(raw_portfolio_values)
         or len(slot_indices) != len(dates)
+        or len(slot_indices) != len(x_positions)
     ):
         chart_data = _empty_intraday_chart(trade_date)
         slot_indices = []
+        x_positions = []
         raw_index_values = []
         raw_shenzhen_values = []
         raw_portfolio_values = []
         dates = []
     slot_idx = _get_intraday_slot_index(point_time)
-    point_label = point_time.strftime("%H:%M")
+    point_label = _format_intraday_point_label(point_time)
+    x_position = _get_intraday_x_position(point_time)
 
-    if slot_indices and slot_idx == slot_indices[-1]:
-        raw_index_values[-1] = index_pct
-        raw_shenzhen_values[-1] = shenzhen_pct
-        raw_portfolio_values[-1] = portfolio_pct
-        dates[-1] = point_label
-    elif slot_idx in slot_indices:
-        replace_idx = slot_indices.index(slot_idx)
-        raw_index_values[replace_idx] = index_pct
-        raw_shenzhen_values[replace_idx] = shenzhen_pct
-        raw_portfolio_values[replace_idx] = portfolio_pct
-        dates[replace_idx] = point_label
-    else:
-        slot_indices.append(slot_idx)
-        raw_index_values.append(index_pct)
-        raw_shenzhen_values.append(shenzhen_pct)
-        raw_portfolio_values.append(portfolio_pct)
-        dates.append(point_label)
+    slot_indices.append(slot_idx)
+    x_positions.append(x_position)
+    raw_index_values.append(index_pct)
+    raw_shenzhen_values.append(shenzhen_pct)
+    raw_portfolio_values.append(portfolio_pct)
+    dates.append(point_label)
 
     return _compose_intraday_chart(
         chart_data,
         trade_date,
         dates,
+        x_positions,
         slot_indices,
         raw_index_values,
         raw_shenzhen_values,
@@ -711,13 +766,14 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
     if not all(isinstance(items, list) for items in (raw_dates, raw_index, raw_shenzhen, raw_portfolio, raw_slots)):
         return normalized
 
-    dedup_points: dict[int, tuple[str, float, float, float]] = {}
-    for label, index_val, shenzhen_val, portfolio_val, slot_idx in zip(
-        raw_dates, raw_index, raw_shenzhen, raw_portfolio, raw_slots
+    normalized_points: list[tuple[float, int, str, float, float, float]] = []
+    for original_idx, (label, index_val, shenzhen_val, portfolio_val, slot_idx) in enumerate(
+        zip(raw_dates, raw_index, raw_shenzhen, raw_portfolio, raw_slots)
     ):
-        slot_int = _resolve_intraday_slot_index(payload_trade_date, label, slot_idx)
-        if slot_int is None:
+        resolved_axis = _resolve_intraday_point_axis(payload_trade_date, label, slot_idx)
+        if resolved_axis is None:
             continue
+        slot_int, x_position, normalized_label = resolved_axis
         index_float = _sanitize_intraday_pct(index_val, INTRADAY_INDEX_PCT_ABS_LIMIT)
         shenzhen_float = _sanitize_intraday_pct(shenzhen_val, INTRADAY_INDEX_PCT_ABS_LIMIT)
         portfolio_float = _sanitize_intraday_pct(
@@ -726,11 +782,23 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
         )
         if index_float is None or shenzhen_float is None or portfolio_float is None:
             continue
-        dedup_points[slot_int] = (str(label), index_float, shenzhen_float, portfolio_float)
+        normalized_points.append(
+            (
+                x_position,
+                original_idx,
+                normalized_label,
+                slot_int,
+                index_float,
+                shenzhen_float,
+                portfolio_float,
+            )
+        )
 
-    for slot_int in sorted(dedup_points):
-        label, index_float, shenzhen_float, portfolio_float = dedup_points[slot_int]
+    normalized_points.sort(key=lambda item: (item[0], item[1]))
+
+    for x_position, _, label, slot_int, index_float, shenzhen_float, portfolio_float in normalized_points:
         normalized['dates'].append(label)
+        normalized['x_positions'].append(x_position)
         normalized['raw_index_pct'].append(index_float)
         normalized['raw_shenzhen_pct'].append(shenzhen_float)
         normalized['raw_portfolio_pct'].append(portfolio_float)
@@ -740,6 +808,7 @@ def _normalize_intraday_chart(chart_data: object, trade_date: Optional[str] = No
         normalized,
         payload_trade_date,
         list(normalized['dates']),
+        list(normalized['x_positions']),
         list(normalized['slot_indices']),
         list(normalized['raw_index_pct']),
         list(normalized['raw_shenzhen_pct']),
@@ -1862,7 +1931,7 @@ def _build_intraday_chart(
 ) -> Optional[dict]:
     """基于上证/深证实时涨跌与持仓股当日实时涨跌构建盘中图。"""
     current_time = point_time or _get_snapshot_quote_time(snapshot) or datetime.now()
-    if snapshot is None or not (INTRADAY_WINDOW_START <= current_time.time() <= INTRADAY_WINDOW_END):
+    if snapshot is None or not _is_intraday_trading_time(current_time):
         return chart_data
 
     index_pct_map = _fetch_realtime_index_pcts(snapshot)
@@ -2233,7 +2302,10 @@ def _draw_chart(
     sz_pct = list(chart_data.get('shenzhen_pct', []))
     ptf_pct = list(chart_data.get('portfolio_pct', []))
     slot_indices = list(chart_data.get('slot_indices', range(len(idx_pct))))
-    n = min(len(dates), len(idx_pct), len(sz_pct), len(ptf_pct), len(slot_indices))
+    x_positions = chart_data.get('x_positions', slot_indices)
+    if not isinstance(x_positions, list):
+        x_positions = slot_indices
+    n = min(len(dates), len(idx_pct), len(sz_pct), len(ptf_pct), len(slot_indices), len(x_positions))
     if n == 0:
         txt = "暂无图表数据"
         bbox = draw.textbbox((0, 0), txt, font=_get_font(14))
@@ -2247,6 +2319,7 @@ def _draw_chart(
     sz_pct = sz_pct[:n]
     ptf_pct = ptf_pct[:n]
     slot_indices = slot_indices[:n]
+    x_positions = x_positions[:n]
     slot_count = max(int(chart_data.get('slot_count', n)), 2)
 
     # Y轴范围
@@ -2286,8 +2359,8 @@ def _draw_chart(
     # 绘制折线
     def _to_points(values):
         pts = []
-        for slot_idx, v in zip(slot_indices, values):
-            px = cx + int(slot_idx / max(slot_count - 1, 1) * cw)
+        for x_position, v in zip(x_positions, values):
+            px = cx + int(float(x_position) / max(slot_count - 1, 1) * cw)
             py = cy + ch - int((v - y_min) / y_range * ch)
             pts.append((px, py))
         return pts

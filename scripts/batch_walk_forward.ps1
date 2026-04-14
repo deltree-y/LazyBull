@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130209"   #20130101   #20130224
-$wf_end_date             = "20260209"   #20251231   #20260224
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -30,10 +30,10 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators            = 500         # 固定：树数量上限（配合早停，不需要多组）
+$n_estimators_list       = @(900, 1000, 1100)      # 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.012)     # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.011,0.012,0.013)     # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
 $min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
@@ -42,7 +42,7 @@ $reg_lambda_list         = @(1.0)       # XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds   = 1000          # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树）
+$early_stopping_rounds   = 500          # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树）
 $early_stopping_metric   = "auto"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
@@ -265,6 +265,7 @@ $failed     = 0
 
 # 计算总任务数（各列表长度的笛卡尔积）
 $totalTasks = $algorithm_list.Length *
+              $n_estimators_list.Length *
               $step_list.Length *
               $train_window_years_list.Length *
               $test_window_months_list.Length *
@@ -335,6 +336,7 @@ foreach ($label in $effective_label_list) {
 foreach ($task in $task_list) {
 foreach ($label_transform in $label_transform_list) {
 foreach ($objective in $objective_list) {
+foreach ($n_estimators in $n_estimators_list) {
 foreach ($max_depth in $max_depth_list) {
 foreach ($num_leaves in $num_leaves_list) {
 foreach ($learning_rate in $learning_rate_list) {
@@ -622,7 +624,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

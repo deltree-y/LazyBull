@@ -9,9 +9,9 @@ from src.lazybull.features import FeatureBuilder
 @pytest.fixture
 def mock_trade_cal():
     """模拟交易日历"""
-    # 创建20个连续交易日
-    dates = pd.date_range('2023-01-01', periods=20, freq='B')  # Business days
-    
+    # 创建50个连续交易日（确保中间日期有足够的前后窗口覆盖 max(horizons)=20）
+    dates = pd.date_range('2023-01-01', periods=50, freq='B')  # Business days
+
     return pd.DataFrame({
         'exchange': ['SSE'] * len(dates),
         'cal_date': dates.strftime('%Y%m%d').tolist(),
@@ -32,7 +32,7 @@ def mock_stock_basic():
 @pytest.fixture
 def mock_daily_data():
     """模拟日线行情数据"""
-    dates = pd.date_range('2023-01-01', periods=20, freq='B')
+    dates = pd.date_range('2023-01-01', periods=50, freq='B')
     stocks = ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH']
     
     data = []
@@ -64,7 +64,7 @@ def mock_daily_data():
 @pytest.fixture
 def mock_adj_factor():
     """模拟复权因子"""
-    dates = pd.date_range('2023-01-01', periods=20, freq='B')
+    dates = pd.date_range('2023-01-01', periods=50, freq='B')
     stocks = ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH']
     
     data = []
@@ -98,7 +98,7 @@ class TestFeatureBuilder:
         
         trading_dates = builder._get_trading_dates(mock_trade_cal)
         
-        assert len(trading_dates) == 20
+        assert len(trading_dates) == 50
         assert trading_dates == sorted(trading_dates)
         assert trading_dates[0] < trading_dates[-1]
     

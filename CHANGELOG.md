@@ -2,7 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.53.0] - 2026-04-14
+
+### 新增
+
+- **树莓派 3.5 寸 LCD 日内图改为每次刷新都记点**：`scripts/respi/3.5LCD_disp.py` 的日内图不再按 10 分钟槽位覆盖同槽位内的新值，而是保留每一轮实时刷新采样点；同一 10 分钟内的多次刷新也会完整保存在当日历史中
+- **日内图横坐标改为按真实盘中时间展开**：在继续折叠午休区间的前提下，新增基于真实盘中时间的 `x_positions`，因此同槽位内的多个点会沿 x 轴展开，折线会比原来更细、更接近实际刷新节奏
+- **日内图持久化兼容升级**：重启脚本后加载当日历史时不再按槽位去重，旧版仅有 `slot_indices` 的持久化文件仍兼容；如果标签里带秒级时间，也会一并保留下来
+
+### 测试
+
+- 调整 `tests/test_respi_35lcd_disp.py` 的日内图测试，覆盖“同槽位多次刷新保留多点”“持久化读回不再去重”“旧版 payload 兼容归一化”
+
 ## [0.52.0] - 2026-04-13
+
+### 修复
+
+- **特征存储路径隔离**：纸面交易（推理）生成的特征文件存到独立目录 `cs_infer/`，与训练用 `cs_train/` 物理隔离，杜绝纸面交易先生成的无标签文件被训练路径误认为有效缓存的问题
+- **build_clean_features.py require_label 恢复为 True**：批量构建特征时恢复标签非空过滤，尾部无标签样本不再混入训练数据
+- **标签过滤逻辑从 OR 改为 AND**：`require_label=True` 时，原逻辑为"任一标签非空即保留"（OR），现改为"全部标签均非空才保留"（AND），确保 `y_ret_5/10/20` 均有值，避免部分 horizon 的训练集混入 NaN 标签
+- **moneyflow 加载清理**：删除 `build_clean_features.py` 中已过时的 `AttributeError` fallback 分支及裸 `except:`，直接调用 `loader.load_clean_moneyflow`
+- **特征缓存 schema 检查增强**：`_REQUIRED_FACTOR_COLS` 新增基本面、股东人数、业绩预告、筹码胜率、基金持仓、业绩快报的代表性列，确保旧缓存缺少高积分因子时能自动触发重建
 
 ### 新增
 
