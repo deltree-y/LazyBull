@@ -1,5 +1,5 @@
 import importlib.util
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -282,6 +282,46 @@ def test_chart_y_range_always_keeps_zero_reference_visible():
 
     assert positive_y_min < 0 < positive_y_max
     assert negative_y_min < 0 < negative_y_max
+
+
+def test_smooth_intraday_series_for_display_preserves_endpoints_and_softens_jitter():
+    module = _load_module()
+
+    smoothed = module._smooth_intraday_series_for_display([0.0, 1.0, -1.0, 1.0, 0.0])
+
+    assert smoothed == [0.0, 0.25, 0.0, 0.25, 0.0]
+
+
+def test_draw_chart_supports_antialiased_intraday_rendering_on_real_image():
+    module = _load_module()
+    chart = module._upsert_intraday_chart(
+        None,
+        datetime(2026, 4, 7, 9, 34, 0),
+        index_pct=0.5,
+        shenzhen_pct=0.3,
+        portfolio_pct=1.2,
+    )
+    chart = module._upsert_intraday_chart(
+        chart,
+        datetime(2026, 4, 7, 9, 36, 0),
+        index_pct=0.6,
+        shenzhen_pct=0.2,
+        portfolio_pct=1.1,
+    )
+    chart = module._upsert_intraday_chart(
+        chart,
+        datetime(2026, 4, 7, 9, 38, 0),
+        index_pct=0.4,
+        shenzhen_pct=0.5,
+        portfolio_pct=1.3,
+    )
+
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    draw = module.ImageDraw.Draw(image)
+
+    module._draw_chart(draw, chart)
+
+    assert image.getbbox() is not None
 
 
 def test_draw_chart_shows_lunch_marker_and_zero_label_for_intraday():
@@ -1025,9 +1065,10 @@ def test_get_refresh_policy_retries_latest_trade_day_on_weekend_when_missing(mon
     assert policy == {"refresh_cycle": True, "refresh_realtime": False}
 
 
-def test_is_realtime_refresh_due_respects_new_session_and_two_minute_interval(monkeypatch):
+def test_is_realtime_refresh_due_respects_new_session_and_refresh_interval(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    last_refresh_at = datetime(2026, 4, 7, 9, 30, 0)
 
     due_on_open, session_key = module._is_realtime_refresh_due(
         True,
@@ -1037,15 +1078,15 @@ def test_is_realtime_refresh_due_respects_new_session_and_two_minute_interval(mo
     )
     not_due_yet, _ = module._is_realtime_refresh_due(
         True,
-        datetime(2026, 4, 7, 9, 30, 0),
+        last_refresh_at,
         session_key,
-        datetime(2026, 4, 7, 9, 31, 59),
+        last_refresh_at + timedelta(seconds=module.REALTIME_REFRESH_INTERVAL - 1),
     )
     due_after_interval, _ = module._is_realtime_refresh_due(
         True,
-        datetime(2026, 4, 7, 9, 30, 0),
+        last_refresh_at,
         session_key,
-        datetime(2026, 4, 7, 9, 32, 0),
+        last_refresh_at + timedelta(seconds=module.REALTIME_REFRESH_INTERVAL),
     )
 
     assert due_on_open is True

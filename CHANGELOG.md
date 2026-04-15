@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.54.0] - 2026-04-15
+
+### 新增
+
+- **树莓派 3.5 寸 LCD 日内图轻度平滑显示**：`scripts/respi/3.5LCD_disp.py` 在日内图渲染前会对显示值做很轻的三点平滑，仅影响画线外观，不改实时采样、持久化历史和顶部数值
+- **树莓派 3.5 寸 LCD 折线抗锯齿渲染**：图表折线现在会先在更高分辨率的小画布上绘制，再缩回图表区域，从而减轻高频刷新后明显的小锯齿感
+
+### 测试
+
+- 新增 `tests/test_respi_35lcd_disp.py` 中的平滑 helper 测试和真实 `ImageDraw` 抗锯齿渲染测试
+
 ## [0.53.0] - 2026-04-14
 
 ### 新增

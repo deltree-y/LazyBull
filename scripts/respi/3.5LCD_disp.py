@@ -55,7 +55,7 @@ from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backli
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 60  # 盘中摘要/排行/日内图刷新间隔（秒），2分钟
+REALTIME_REFRESH_INTERVAL = 90  # 盘中摘要/排行/日内图刷新间隔（秒）
 MORNING_CLOSE_INTRADAY_GRACE_SECONDS = 120  # 午休前补齐 11:30 最后一格的宽限时长（秒）
 POST_CLOSE_INTRADAY_GRACE_SECONDS = 600  # 收盘后继续补齐日内尾点的宽限时长（秒）
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
@@ -588,6 +588,80 @@ def _draw_intraday_break_marker(
     label_w = bbox[2] - bbox[0]
     label_x = max(cx + 2, min(break_px - label_w // 2, cx + cw - label_w - 2))
     draw.text((label_x, cy + ch + 1), lunch_label, fill=COLOR_CHART_BREAK, font=font_xs)
+
+
+def _smooth_intraday_series_for_display(values: list[float]) -> list[float]:
+    """对日内图做轻度三点平滑，仅影响显示，不改原始数据。"""
+    if len(values) < 3:
+        return list(values)
+
+    smoothed = list(values)
+    for idx in range(1, len(values) - 1):
+        smoothed[idx] = (values[idx - 1] + values[idx] * 2.0 + values[idx + 1]) / 4.0
+    return smoothed
+
+
+def _draw_chart_series(
+    draw: ImageDraw.ImageDraw,
+    series_points: list[tuple[list[tuple[float, float]], tuple[int, int, int]]],
+    cx: int,
+    cy: int,
+    cw: int,
+    ch: int,
+) -> None:
+    """绘制图表折线；有底层图像时使用超采样以减轻锯齿。"""
+    point_radius = 2
+    line_width = 2
+
+    base_image = getattr(draw, "_image", None)
+    if not isinstance(base_image, Image.Image):
+        for points, color in series_points:
+            for idx in range(len(points) - 1):
+                draw.line([points[idx], points[idx + 1]], fill=color, width=line_width)
+            if points:
+                px, py = points[-1]
+                draw.ellipse(
+                    [px - point_radius, py - point_radius, px + point_radius, py + point_radius],
+                    fill=color,
+                )
+        return
+
+    scale = 3
+    pad = 3
+    overlay = Image.new(
+        "RGBA",
+        ((cw + pad * 2) * scale, (ch + pad * 2) * scale),
+        (0, 0, 0, 0),
+    )
+    overlay_draw = ImageDraw.Draw(overlay)
+
+    for points, color in series_points:
+        rgba_color = color + (255,)
+        scaled_points = [
+            ((px - cx + pad) * scale, (py - cy + pad) * scale)
+            for px, py in points
+        ]
+        for idx in range(len(scaled_points) - 1):
+            overlay_draw.line(
+                [scaled_points[idx], scaled_points[idx + 1]],
+                fill=rgba_color,
+                width=line_width * scale,
+            )
+        if scaled_points:
+            px, py = scaled_points[-1]
+            overlay_draw.ellipse(
+                [
+                    px - point_radius * scale,
+                    py - point_radius * scale,
+                    px + point_radius * scale,
+                    py + point_radius * scale,
+                ],
+                fill=rgba_color,
+            )
+
+    resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+    smoothed_overlay = overlay.resize((cw + pad * 2, ch + pad * 2), resample=resampling)
+    base_image.paste(smoothed_overlay, (cx - pad, cy - pad), smoothed_overlay)
 
 
 def _draw_zero_reference_line(
@@ -2321,6 +2395,12 @@ def _draw_chart(
     slot_indices = slot_indices[:n]
     x_positions = x_positions[:n]
     slot_count = max(int(chart_data.get('slot_count', n)), 2)
+    chart_mode = str(chart_data.get('mode', ''))
+
+    if chart_mode == 'intraday':
+        idx_pct = _smooth_intraday_series_for_display(idx_pct)
+        sz_pct = _smooth_intraday_series_for_display(sz_pct)
+        ptf_pct = _smooth_intraday_series_for_display(ptf_pct)
 
     # Y轴范围
     all_vals = idx_pct + sz_pct + ptf_pct
@@ -2360,8 +2440,8 @@ def _draw_chart(
     def _to_points(values):
         pts = []
         for x_position, v in zip(x_positions, values):
-            px = cx + int(float(x_position) / max(slot_count - 1, 1) * cw)
-            py = cy + ch - int((v - y_min) / y_range * ch)
+            px = cx + float(x_position) / max(slot_count - 1, 1) * cw
+            py = cy + ch - (v - y_min) / y_range * ch
             pts.append((px, py))
         return pts
 
@@ -2369,21 +2449,18 @@ def _draw_chart(
     sz_pts = _to_points(sz_pct)
     ptf_pts = _to_points(ptf_pct)
 
-    for i in range(n - 1):
-        draw.line([idx_pts[i], idx_pts[i + 1]], fill=COLOR_CHART_SHANGHAI, width=2)
-    for i in range(n - 1):
-        draw.line([sz_pts[i], sz_pts[i + 1]], fill=COLOR_CHART_SHENZHEN, width=2)
-    for i in range(n - 1):
-        draw.line([ptf_pts[i], ptf_pts[i + 1]], fill=COLOR_CHART_HOLDINGS, width=2)
-    if idx_pts:
-        px, py = idx_pts[-1]
-        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_CHART_SHANGHAI)
-    if sz_pts:
-        px, py = sz_pts[-1]
-        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_CHART_SHENZHEN)
-    if ptf_pts:
-        px, py = ptf_pts[-1]
-        draw.ellipse([px - 2, py - 2, px + 2, py + 2], fill=COLOR_CHART_HOLDINGS)
+    _draw_chart_series(
+        draw,
+        [
+            (idx_pts, COLOR_CHART_SHANGHAI),
+            (sz_pts, COLOR_CHART_SHENZHEN),
+            (ptf_pts, COLOR_CHART_HOLDINGS),
+        ],
+        cx,
+        cy,
+        cw,
+        ch,
+    )
 
     if y_min <= 0 <= y_max:
         _draw_zero_reference_line(draw, cx, cy, cw, ch, y_min, y_range, font_xs)
