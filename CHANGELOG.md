@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.54.1] - 2026-04-15
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 日内图边界点显示对齐**：在 `scripts/respi/3.5LCD_disp.py` 的显示层新增边界吸附，`11:30` 与 `13:00` 会贴住午休虚线，`15:00` 会贴住最右侧边界，避免日内折线在关键时点看起来“还差一点点”
+
+### 测试
+
+- 新增 `tests/test_respi_35lcd_disp.py` 中的边界吸附测试，覆盖午休分隔线与收盘边界的显示坐标修正
+
 ## [0.54.0] - 2026-04-15
 
 ### 新增

@@ -664,6 +664,40 @@ def _draw_chart_series(
     base_image.paste(smoothed_overlay, (cx - pad, cy - pad), smoothed_overlay)
 
 
+def _get_intraday_display_x_positions(
+    chart_data: Optional[dict],
+    dates: list[str],
+    slot_indices: list[int],
+    x_positions: list[float],
+) -> list[float]:
+    """返回用于绘制的日内图横坐标，边界时刻吸附到视觉边界。"""
+    display_positions = [float(position) for position in x_positions]
+    if not isinstance(chart_data, dict) or chart_data.get('mode') != 'intraday':
+        return display_positions
+
+    trade_date = str(chart_data.get('trade_date', '')).strip()
+    if len(trade_date) != 8 or len(display_positions) != len(dates):
+        return display_positions
+
+    break_position = float(INTRADAY_MORNING_SLOT_COUNT) - 0.5
+    close_position = float(INTRADAY_SLOT_COUNT - 1)
+    boundary_times = {
+        A_SHARE_MORNING_CLOSE: break_position,
+        A_SHARE_AFTERNOON_OPEN: break_position,
+        A_SHARE_AFTERNOON_CLOSE: close_position,
+    }
+
+    for idx, label in enumerate(dates):
+        point_time = _parse_intraday_point_time(trade_date, label)
+        if point_time is None:
+            continue
+        snapped_position = boundary_times.get(point_time.time())
+        if snapped_position is not None:
+            display_positions[idx] = snapped_position
+
+    return display_positions
+
+
 def _draw_zero_reference_line(
     draw: ImageDraw.ImageDraw,
     cx: int,
@@ -2394,6 +2428,12 @@ def _draw_chart(
     ptf_pct = ptf_pct[:n]
     slot_indices = slot_indices[:n]
     x_positions = x_positions[:n]
+    display_x_positions = _get_intraday_display_x_positions(
+        chart_data,
+        dates,
+        slot_indices,
+        x_positions,
+    )
     slot_count = max(int(chart_data.get('slot_count', n)), 2)
     chart_mode = str(chart_data.get('mode', ''))
 
@@ -2439,7 +2479,7 @@ def _draw_chart(
     # 绘制折线
     def _to_points(values):
         pts = []
-        for x_position, v in zip(x_positions, values):
+        for x_position, v in zip(display_x_positions, values):
             px = cx + float(x_position) / max(slot_count - 1, 1) * cw
             py = cy + ch - (v - y_min) / y_range * ch
             pts.append((px, py))

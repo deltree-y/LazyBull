@@ -292,6 +292,23 @@ def test_smooth_intraday_series_for_display_preserves_endpoints_and_softens_jitt
     assert smoothed == [0.0, 0.25, 0.0, 0.25, 0.0]
 
 
+def test_get_intraday_display_x_positions_snaps_session_boundaries():
+    module = _load_module()
+
+    chart = {
+        "mode": "intraday",
+        "trade_date": "20260407",
+    }
+    display_x_positions = module._get_intraday_display_x_positions(
+        chart,
+        ["11:30", "13:00", "15:00"],
+        [module.INTRADAY_MORNING_SLOT_COUNT - 1, module.INTRADAY_MORNING_SLOT_COUNT, module.INTRADAY_SLOT_COUNT - 1],
+        [12.0, 13.0, 24.95],
+    )
+
+    assert display_x_positions == [12.5, 12.5, float(module.INTRADAY_SLOT_COUNT - 1)]
+
+
 def test_draw_chart_supports_antialiased_intraday_rendering_on_real_image():
     module = _load_module()
     chart = module._upsert_intraday_chart(
