@@ -30,15 +30,15 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(900, 1000, 1100)      # 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(1000)      # 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.011,0.012,0.013)     # XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.012)     # XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
-$min_child_weight_list   = @(150)       # XGB推荐150, LGB推荐200
+$min_child_weight_list   = @(125,175)       # XGB推荐150, LGB推荐200
 $reg_alpha_list          = @(0.05)      # XGB推荐0.05, LGB推荐0.1
-$reg_lambda_list         = @(1.0)       # XGB推荐1.0, LGB推荐5.0
+$reg_lambda_list         = @(5)       # XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────

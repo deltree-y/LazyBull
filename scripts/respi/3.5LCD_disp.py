@@ -55,7 +55,7 @@ from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backli
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒），2分钟
+REALTIME_REFRESH_INTERVAL = 60  # 盘中摘要/排行/日内图刷新间隔（秒），2分钟
 MORNING_CLOSE_INTRADAY_GRACE_SECONDS = 120  # 午休前补齐 11:30 最后一格的宽限时长（秒）
 POST_CLOSE_INTRADAY_GRACE_SECONDS = 600  # 收盘后继续补齐日内尾点的宽限时长（秒）
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
