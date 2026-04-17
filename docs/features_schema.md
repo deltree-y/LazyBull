@@ -101,25 +101,26 @@
 | alpha_industry_10 | float | 10日行业alpha | ret_10(t) - mean_by_industry(ret_10(t)) |
 | alpha_industry_20 | float | 20日行业alpha | ret_20(t) - mean_by_industry(ret_20(t)) |
 
-**申万行业分类字段（v0.12.0 切换为二级行业）**：
+**申万行业分类字段（v0.55.2 起支持项目级主口径配置，默认二级）**：
 
 | 字段名 | 类型 | 说明 | 数据来源 |
 |--------|------|------|----------|
-| sw_industry | str | 申万**二级**行业名称（如 `银行I`） | TuShare index_classify（level=2）+ index_member |
-| sw_industry_code | str | 申万**二级**行业指数代码（如 `110101`） | TuShare index_classify（level=2） |
-| sw_industry_id | int | 申万**二级**行业整数编码（稳定映射） | 基于 sw_industry 排序生成 |
+| sw_industry | str | 申万主行业名称（由 `industry.shenwan_level` 决定，默认二级） | TuShare index_classify（L3 数据源）+ index_member |
+| sw_industry_code | str | 申万主行业指数代码（由 `industry.shenwan_level` 决定） | TuShare index_classify（L3 数据源） |
+| sw_industry_id | int | 申万主行业整数编码（稳定映射） | 基于 sw_industry 排序生成 |
 
 **字段命名变更历史**：
 
 | 版本 | 旧字段名 | 新字段名 | 行业层级 |
 |---|---|---|---|
 | v0.10.0-v0.11.0 | sw_code / sw_name / industry_id | — | 一级（~30个） |
-| v0.12.0+ | — | sw_industry_code / sw_industry / sw_industry_id | 二级（~100个） |
+| v0.12.0-v0.55.1 | — | sw_industry_code / sw_industry / sw_industry_id | 固定二级（~100个） |
+| v0.55.2+ | — | sw_industry_code / sw_industry / sw_industry_id | 项目配置决定（默认二级） |
 
 **说明**：
-- v0.12.0 起使用申万**二级**行业分类（SW2021版本），粒度更细，中性化效果更好
+- v0.55.2 起通过 `configs/base.yaml` 的 `industry.shenwan_level` 统一指定主行业层级，支持 `l1` / `l2` / `l3`，默认 `l2`
 - v0.11.0 及更早版本的旧字段（`sw_code`/`sw_name`/`industry_id`）不再出现在 FeatureBuilder 输出中
-- 申万行业数据通过 `scripts/update_basic_data.py --only-shenwan` 更新（需传入 level=2 参数）
+- 申万行业数据通过 `scripts/update_basic_data.py --only-shenwan` 更新，当前主流程使用 L3 数据源并在特征阶段映射到统一主口径
 - sw_industry_id 编码稳定：同一 sw_industry 名称始终映射到相同的整数ID
 - 中性化分组字段：`sw_industry`（原为 `sw_name`）
 
@@ -214,7 +215,7 @@ LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
 **通用规则**：
 - **统计范围**：仅使用 `tradable==1` 的样本计算行业统计量（均值/标准差）
 - **小样本处理**：当行业内可交易样本数 < 5 时，回退使用全市场统计量
-- **行业列**：基于 `sw_industry`（申万**二级**行业名称，v0.12.0+）进行分组
+- **行业列**：基于 `sw_industry`（项目统一主行业名称，默认申万二级）进行分组
 - **启用方式**：在 FeatureBuilder 中设置 `apply_industry_neutralization=True`
 
 **使用建议**：
@@ -262,11 +263,11 @@ LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
 
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
-| sw_industry | str | 申万二级行业名称（主字段，用于训练/回测/纸交统一分组） |
-| sw_industry_code | str | 申万二级行业指数代码 |
-| sw_industry_id | int | 二级行业稳定整数编码（基于名称排序） |
-| sw_l2 | str | 申万二级行业名称（显式别名，与 sw_industry 一致） |
-| sw_l2_code | str | 申万二级行业指数代码（显式别名，与 sw_industry_code 一致） |
+| sw_industry | str | 申万主行业名称（主字段，由 `industry.shenwan_level` 决定，默认 L2） |
+| sw_industry_code | str | 申万主行业指数代码 |
+| sw_industry_id | int | 主行业稳定整数编码（基于名称排序） |
+| sw_l2 | str | 申万二级行业名称（显式保留字段） |
+| sw_l2_code | str | 申万二级行业指数代码（显式保留字段） |
 | sw_l2_id | int | 二级行业稳定整数编码 |
 | sw_l3 | str | 申万三级行业名称（保留更细粒度信息供分析/调试） |
 | sw_l3_code | str | 申万三级行业指数代码 |
@@ -274,17 +275,17 @@ LazyBull 支持两类行业中性化，分别适用于不同类型的数据：
 | sw_l1_code | str | 申万一级行业指数代码 |
 | sw_l1_id | int | 一级行业稳定整数编码 |
 
-**字段映射关系**：`sw_industry*` 始终对应系统统一主口径（当前 = L2），`sw_l3*` 保留更细粒度行业，`sw_l1*` 用于更粗粒度回退与解释。
+**字段映射关系**：`sw_industry*` 始终对应系统统一主口径（由 `industry.shenwan_level` 决定，默认 = L2），`sw_l3*` 保留更细粒度行业，`sw_l1*` 用于更粗粒度回退与解释。
 
 #### 15. 分层回退中性化规则 (v0.13.0新增)
 
 中性化（`apply_industry_neutralization=True`）执行策略：
 
-1. **检测 L2/L1 层级信息**：若 `sw_industry_code`、`sw_l1_code` 均存在，启用分层路径；否则退化为单层 `sw_industry` 分组。
+1. **检测主口径所需层级信息**：根据 `industry.shenwan_level` 选择分层路径；若缺少所需 code 列，则退化为单层 `sw_industry` 分组。
 2. **分组逻辑（每列独立判断）**：
-   - 二级行业内 `tradable==1` 样本数 ≥ `min_group_size(=5)` → 使用二级行业统计量
-   - 否则检查一级：一级行业内 `tradable==1` 样本数 ≥ 5 → 使用一级行业统计量
-   - 一级仍不足 → 使用全市场（所有 `tradable==1` 样本）统计量
+   - `l3`：三级行业内 `tradable==1` 样本数 ≥ `min_group_size(=5)` → 使用三级统计量；否则回退到二级，再回退到一级，最后回退到全市场
+   - `l2`：二级行业内 `tradable==1` 样本数 ≥ `min_group_size(=5)` → 使用二级统计量；否则回退到一级，再回退到全市场
+   - `l1`：一级行业内 `tradable==1` 样本数 ≥ `min_group_size(=5)` → 使用一级统计量；否则回退到全市场
 3. **统计过程无前瞻**：仅使用当日截面数据。
 4. **命名规范**：去均值输出 `neu_` 前缀；Z-Score 输出 `zscore_` 前缀。
 

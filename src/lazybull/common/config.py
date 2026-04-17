@@ -149,3 +149,89 @@ def init_config(config_path: str) -> Config:
     global _global_config
     _global_config = Config(config_path)
     return _global_config
+
+
+def normalize_shenwan_level(level: Optional[str], default: str = "l2") -> str:
+    """标准化申万行业层级配置。
+
+    Args:
+        level: 原始层级值，允许为 None
+        default: 当 level 为空时使用的默认值
+
+    Returns:
+        标准化后的层级字符串（l1/l2/l3）
+
+    Raises:
+        ValueError: 当层级值不在支持范围内时抛出
+    """
+    normalized = str(level or default).strip().lower()
+    if normalized not in {"l1", "l2", "l3"}:
+        raise ValueError(
+            f"shenwan_level 仅支持 'l1'、'l2'、'l3'，当前值: {level}"
+        )
+    return normalized
+
+
+def get_shenwan_level(default: str = "l2") -> str:
+    """从项目级配置获取申万行业主口径层级。"""
+    config = get_config()
+    return normalize_shenwan_level(config.get("industry.shenwan_level", default), default=default)
+
+
+def get_data_root(default: str = "./data") -> str:
+    """从项目级配置获取数据根目录。"""
+    config = get_config()
+    return str(config.get("data.root", default))
+
+
+def get_data_path(name: str, default: Optional[str] = None) -> str:
+    """从项目级配置获取数据子目录。"""
+    config = get_config()
+    root = Path(get_data_root())
+    fallback = default or str(root / name)
+    configured = config.get(f"data.{name}")
+    if configured is None:
+        return fallback
+
+    normalized = str(configured).replace("\\", "/")
+    default_templates = {f"./data/{name}", f"data/{name}"}
+    if normalized in default_templates:
+        return str(root / name)
+    return str(configured)
+
+
+def get_paper_root(default: Optional[str] = None) -> str:
+    """获取纸面交易数据目录，默认派生自 data.root/paper。"""
+    fallback = default or str(Path(get_data_root()) / "paper")
+    return str(get_config().get("data.paper", fallback))
+
+
+def get_models_root(default: Optional[str] = None) -> str:
+    """获取模型目录，默认派生自 data.root/models。"""
+    return default or str(Path(get_data_root()) / "models")
+
+
+def get_reports_root(default: Optional[str] = None) -> str:
+    """获取报告目录，优先读取 data.reports。"""
+    return get_data_path("reports", default=default)
+
+
+def get_tushare_settings() -> Dict[str, Any]:
+    """获取 TuShare 默认配置。"""
+    config = get_config()
+    return {
+        "max_retries": int(config.get("tushare.max_retries", 3)),
+        "retry_delay": float(config.get("tushare.retry_delay", 1.0)),
+        "rate_limit": int(config.get("tushare.rate_limit", 200)),
+    }
+
+
+def get_cost_settings() -> Dict[str, float]:
+    """获取交易成本默认配置。"""
+    config = get_config()
+    return {
+        "commission_rate": float(config.get("costs.commission_rate", 0.0001954)),
+        "min_commission": float(config.get("costs.min_commission", 5.0)),
+        "stamp_tax": float(config.get("costs.stamp_tax", 0.0005)),
+        "slippage": float(config.get("costs.slippage", 0.0005)),
+    }

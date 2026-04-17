@@ -1,16 +1,19 @@
-"""测试申万行业主字段统一为申万二级。
+"""测试申万行业主字段默认使用申万二级，并支持按配置切换。
 
 验证：
-- FeatureBuilder._merge_shenwan_industry() 以 L2 为主字段输出
+- FeatureBuilder._merge_shenwan_industry() 在 L2 配置下以 L2 为主字段输出
     sw_industry / sw_industry_code / sw_industry_id，并保留 L2/L3/L1 层级字段
+- FeatureBuilder._merge_shenwan_industry() 支持切换到 L1/L3 主字段
 - sw_industry_id 编码稳定（相同名称始终映射到相同整数）
 - _apply_industry_neutralization() 使用 sw_industry 进行分组中性化
 - DataCleaner.clean_shenwan_industry() 默认 level_str='l3'，旧式 level_str='l2' 向后兼容
 """
 
+import src.lazybull.common.config as config_module
 import pandas as pd
 import pytest
 
+from src.lazybull.common.config import Config
 from src.lazybull.data import DataCleaner
 from src.lazybull.features.builder import FeatureBuilder
 
@@ -60,7 +63,7 @@ class TestMergeShenwanIndustry:
 
     def test_output_columns_renamed(self, mock_features_df, mock_shenwan_industry_clean_l3):
         """合并后应输出 sw_industry / sw_industry_code / sw_industry_id（映射 L2）。"""
-        builder = FeatureBuilder()
+        builder = FeatureBuilder(shenwan_level="l2")
         result = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
 
         # L2 主字段存在
@@ -89,7 +92,7 @@ class TestMergeShenwanIndustry:
 
     def test_sw_industry_maps_to_l2(self, mock_features_df, mock_shenwan_industry_clean_l3):
         """sw_industry 应包含 L2 行业名称，L3 保留在 sw_l3 中。"""
-        builder = FeatureBuilder()
+        builder = FeatureBuilder(shenwan_level="l2")
         result = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
 
         bank_stocks = result[result['ts_code'].isin(['000001.SZ', '000002.SZ'])]
@@ -98,9 +101,69 @@ class TestMergeShenwanIndustry:
         # L1 应为一级行业名
         assert (bank_stocks['sw_l1'] == '银行').all(), "银行股 sw_l1 应为 '银行'"
 
+    @pytest.mark.parametrize(
+        ("level", "expected_industry", "expected_code"),
+        [
+            ("l1", "银行", "110000"),
+            ("l2", "国有银行", "110100"),
+            ("l3", "国有大型银行", "110101"),
+        ],
+    )
+    def test_sw_industry_can_switch_levels(
+        self,
+        mock_features_df,
+        mock_shenwan_industry_clean_l3,
+        level,
+        expected_industry,
+        expected_code,
+    ):
+        """显式指定 shenwan_level 时，主行业字段应映射到对应层级。"""
+        builder = FeatureBuilder(shenwan_level=level)
+        result = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
+
+        bank_stock = result[result['ts_code'] == '000001.SZ'].iloc[0]
+        assert bank_stock['sw_industry'] == expected_industry
+        assert bank_stock['sw_industry_code'] == expected_code
+
+    def test_default_level_reads_project_config(
+        self,
+        monkeypatch,
+        mock_features_df,
+        mock_shenwan_industry_clean_l3,
+    ):
+        """未显式传参时，应读取项目配置中的 industry.shenwan_level。"""
+        config = Config()
+        config.set("industry.shenwan_level", "l3")
+        monkeypatch.setattr(config_module, "_global_config", config)
+
+        builder = FeatureBuilder()
+        result = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
+
+        bank_stock = result[result['ts_code'] == '000001.SZ'].iloc[0]
+        assert bank_stock['sw_industry'] == '国有大型银行'
+        assert bank_stock['sw_industry_code'] == '110101'
+
+    def test_explicit_level_overrides_project_config(
+        self,
+        monkeypatch,
+        mock_features_df,
+        mock_shenwan_industry_clean_l3,
+    ):
+        """显式传入 shenwan_level 时，应优先于项目配置。"""
+        config = Config()
+        config.set("industry.shenwan_level", "l3")
+        monkeypatch.setattr(config_module, "_global_config", config)
+
+        builder = FeatureBuilder(shenwan_level="l1")
+        result = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
+
+        bank_stock = result[result['ts_code'] == '000001.SZ'].iloc[0]
+        assert bank_stock['sw_industry'] == '银行'
+        assert bank_stock['sw_industry_code'] == '110000'
+
     def test_sw_industry_id_stable(self, mock_features_df, mock_shenwan_industry_clean_l3):
         """sw_industry_id 编码应稳定：相同 L2 名称始终映射到相同整数。"""
-        builder = FeatureBuilder()
+        builder = FeatureBuilder(shenwan_level="l2")
         result1 = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
         result2 = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
 
@@ -114,14 +177,14 @@ class TestMergeShenwanIndustry:
 
     def test_no_shenwan_data_returns_original(self, mock_features_df):
         """当申万行业数据为空时，返回原始 DataFrame，不抛出异常"""
-        builder = FeatureBuilder()
+        builder = FeatureBuilder(shenwan_level="l2")
         result = builder._merge_shenwan_industry(mock_features_df, pd.DataFrame())
         assert len(result) == len(mock_features_df)
         assert 'sw_industry' not in result.columns
 
     def test_missing_required_columns_returns_original(self, mock_features_df):
         """当申万行业数据缺少必要字段时，返回原始 DataFrame"""
-        builder = FeatureBuilder()
+        builder = FeatureBuilder(shenwan_level="l2")
         bad_sw = pd.DataFrame({'ts_code': ['000001.SZ']})  # 只有 ts_code
         result = builder._merge_shenwan_industry(mock_features_df, bad_sw)
         assert 'sw_industry' not in result.columns
@@ -149,7 +212,7 @@ class TestApplyIndustryNeutralization:
 
     def test_uses_sw_industry_column(self):
         """中性化应基于 sw_industry 列分组"""
-        builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
+        builder = FeatureBuilder(horizons=[20], lookback_windows=[5], shenwan_level="l2")
         features = self._make_features_with_industry()
         result = builder._apply_industry_neutralization(features)
 
@@ -158,7 +221,7 @@ class TestApplyIndustryNeutralization:
 
     def test_missing_sw_industry_returns_unchanged(self):
         """当 sw_industry 列不存在时，返回原始 DataFrame（不报错）"""
-        builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
+        builder = FeatureBuilder(horizons=[20], lookback_windows=[5], shenwan_level="l2")
         features = pd.DataFrame({
             'ts_code': ['000001.SZ', '000002.SZ'],
             'trade_date': ['20230102'] * 2,
@@ -171,7 +234,7 @@ class TestApplyIndustryNeutralization:
 
     def test_demean_within_industry(self):
         """验证行业内去均值后，各行业内均值接近0"""
-        builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
+        builder = FeatureBuilder(horizons=[20], lookback_windows=[5], shenwan_level="l2")
         features = self._make_features_with_industry()
         result = builder._apply_industry_neutralization(features)
 

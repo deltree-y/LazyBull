@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.config import get_models_root
 from ..ml import ModelRegistry
 from .base import Signal
 
@@ -51,7 +52,7 @@ class MLSignal(Signal):
         self,
         top_n: int = 20,
         model_version: Optional[int] = None,
-        models_dir: str = "./data/models",
+        models_dir: Optional[str] = None,
         weight_method: str = "equal",
         signal_confidence_gate_enabled: bool = False,
         signal_confidence_gate_top_k: int = 10,
@@ -91,7 +92,7 @@ class MLSignal(Signal):
         super().__init__("ml_signal")
         self.top_n = top_n
         self.model_version = model_version
-        self.models_dir = models_dir
+        self.models_dir = models_dir or get_models_root()
         self.weight_method = weight_method
         self.signal_confidence_gate_enabled = signal_confidence_gate_enabled
         self.signal_confidence_gate_top_k = signal_confidence_gate_top_k

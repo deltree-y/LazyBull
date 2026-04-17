@@ -42,7 +42,7 @@ from device import OledDevice, CMD  # type: ignore # noqa: E402
 
 # ---------- 项目日志 ----------
 from src.lazybull.common.logger import setup_logger  # noqa: E402
-from src.lazybull.common.config import get_config    # noqa: E402
+from src.lazybull.common.config import get_config, get_data_root, get_paper_root    # noqa: E402
 
 # ---------- 常量 ----------
 REFRESH_INTERVAL = 600  # 秒，10 分钟
@@ -81,7 +81,7 @@ def _calc_days_to_rebalance() -> int | None:
     from src.lazybull.data import DataLoader, Storage
 
     rebalance_state = PaperStorage(
-        root_path=str(project_root / "data" / "paper")
+        root_path=get_paper_root()
     ).load_rebalance_state()
     if rebalance_state is None:
         return None
@@ -92,7 +92,7 @@ def _calc_days_to_rebalance() -> int | None:
         return None
 
     try:
-        loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
+        loader = DataLoader(storage=Storage(root_path=get_data_root()))
         trade_cal = loader.load_clean_trade_cal()
         if trade_cal is None:
             return None

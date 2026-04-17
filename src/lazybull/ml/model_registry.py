@@ -13,6 +13,8 @@ from typing import Dict, List, Optional
 
 import joblib
 from loguru import logger
+
+from ..common.config import get_models_root
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="xgboost")
 
@@ -22,13 +24,13 @@ class ModelRegistry:
     管理模型版本和元数据，自动维护版本号递增
     """
     
-    def __init__(self, models_dir: str = "./data/models"):
+    def __init__(self, models_dir: Optional[str] = None):
         """初始化模型注册表
         
         Args:
             models_dir: 模型存储目录
         """
-        self.models_dir = Path(models_dir)
+        self.models_dir = Path(models_dir or get_models_root())
         self.models_dir.mkdir(parents=True, exist_ok=True)
         
         self.registry_file = self.models_dir / "model_registry.json"

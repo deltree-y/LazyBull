@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from ..common.config import get_paper_root
 from .models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight, TradeInstruction
 
 
@@ -16,14 +17,14 @@ class PaperStorage:
     负责持久化和读取纸面交易的各类数据
     """
     
-    def __init__(self, root_path: str = "./data/paper", verbose: bool = False):
+    def __init__(self, root_path: Optional[str] = None, verbose: bool = False):
         """初始化纸面交易存储
         
         Args:
-            root_path: 数据根目录
+            root_path: 数据根目录；未传时默认使用 data.root/paper
             verbose: 是否输出详细日志
         """
-        self.root_path = Path(root_path)
+        self.root_path = Path(root_path or get_paper_root())
         self.state_path = self.root_path / "state"
         self.trades_path = self.root_path / "trades"
         self.nav_path = self.root_path / "nav"

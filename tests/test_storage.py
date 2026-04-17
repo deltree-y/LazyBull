@@ -6,7 +6,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import src.lazybull.common.config as config_module
+
+from src.lazybull.common.config import Config
 from src.lazybull.data.storage import Storage
+from src.lazybull.paper.storage import PaperStorage
 
 
 @pytest.fixture
@@ -38,6 +42,41 @@ class TestStorageBasic:
         assert temp_storage.clean_path.exists()
         assert temp_storage.features_path.exists()
         assert temp_storage.reports_path.exists()
+
+    def test_init_uses_project_config(self, monkeypatch, tmp_path):
+        """未显式传 root_path 时应读取项目配置的数据路径。"""
+        config = Config()
+        data_root = tmp_path / "data_root"
+        raw_path = tmp_path / "raw_zone"
+        clean_path = tmp_path / "clean_zone"
+        features_path = tmp_path / "features_zone"
+        reports_path = tmp_path / "reports_zone"
+        config.set("data.root", str(data_root))
+        config.set("data.raw", str(raw_path))
+        config.set("data.clean", str(clean_path))
+        config.set("data.features", str(features_path))
+        config.set("data.reports", str(reports_path))
+        monkeypatch.setattr(config_module, "_global_config", config)
+
+        storage = Storage()
+
+        assert storage.root_path == data_root
+        assert storage.raw_path == raw_path
+        assert storage.clean_path == clean_path
+        assert storage.features_path == features_path
+        assert storage.reports_path == reports_path
+
+    def test_paper_storage_default_root_follows_data_root(self, monkeypatch, tmp_path):
+        """PaperStorage 默认目录应派生自 data.root/paper。"""
+        config = Config()
+        data_root = tmp_path / "paper_data_root"
+        config.set("data.root", str(data_root))
+        monkeypatch.setattr(config_module, "_global_config", config)
+
+        storage = PaperStorage()
+
+        assert storage.root_path == data_root / "paper"
+        assert storage.state_path.exists()
     
     def test_save_and_load_raw(self, temp_storage, sample_data):
         """测试保存和加载原始数据（非分区）"""
@@ -183,3 +222,46 @@ class TestTushareClient:
         # 验证旧参数不存在
         assert 'suspend_date' not in params
         assert 'resume_date' not in params
+
+    def test_init_uses_project_config(self, monkeypatch):
+        """TushareClient 未显式传参时应读取项目配置默认值。"""
+        from src.lazybull.data import tushare_client as tushare_client_module
+
+        config = Config()
+        config.set("tushare.max_retries", 9)
+        config.set("tushare.retry_delay", 3.5)
+        config.set("tushare.rate_limit", 77)
+        monkeypatch.setattr(config_module, "_global_config", config)
+        monkeypatch.setenv("TS_TOKEN", "fake-token")
+        monkeypatch.setattr(tushare_client_module.ts, "set_token", lambda token: None)
+        monkeypatch.setattr(tushare_client_module.ts, "pro_api", lambda: object())
+
+        client = tushare_client_module.TushareClient(verbose=False)
+
+        assert client.max_retries == 9
+        assert client.retry_delay == 3.5
+        assert client.rate_limit == 77
+
+    def test_init_explicit_args_override_project_config(self, monkeypatch):
+        """显式传入 TuShare 参数时应优先于项目配置。"""
+        from src.lazybull.data import tushare_client as tushare_client_module
+
+        config = Config()
+        config.set("tushare.max_retries", 9)
+        config.set("tushare.retry_delay", 3.5)
+        config.set("tushare.rate_limit", 77)
+        monkeypatch.setattr(config_module, "_global_config", config)
+        monkeypatch.setenv("TS_TOKEN", "fake-token")
+        monkeypatch.setattr(tushare_client_module.ts, "set_token", lambda token: None)
+        monkeypatch.setattr(tushare_client_module.ts, "pro_api", lambda: object())
+
+        client = tushare_client_module.TushareClient(
+            max_retries=2,
+            retry_delay=0.5,
+            rate_limit=33,
+            verbose=False,
+        )
+
+        assert client.max_retries == 2
+        assert client.retry_delay == 0.5
+        assert client.rate_limit == 33

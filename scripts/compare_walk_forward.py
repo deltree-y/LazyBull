@@ -30,6 +30,7 @@ from loguru import logger
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.hyperlink import Hyperlink
 
+from src.lazybull.common.config import get_data_root
 from src.lazybull.common.logger import setup_logger
 
 
@@ -896,15 +897,21 @@ def print_comparison_table(df: pd.DataFrame) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Walk-forward 实验对比分析")
-    parser.add_argument("--data-root", type=str, default="./data", help="数据根目录，默认 ./data")
+    parser.add_argument(
+        "--data-root",
+        type=str,
+        default=None,
+        help="数据根目录；未指定时使用 configs/base.yaml 中的 data.root",
+    )
     parser.add_argument("--raw-dir",   type=str, default=None,     help="walk_forward 汇总CSV目录，默认 {data_root}/walk_forward/raw")
     parser.add_argument("--output",    type=str, default=None,     help="对比Excel输出路径，默认 {data_root}/walk_forward/wf_comparison.xlsx")
     args = parser.parse_args()
 
     setup_logger()
 
-    raw_dir     = Path(args.raw_dir) if args.raw_dir else Path(args.data_root) / "walk_forward" / "raw"
-    output_path = Path(args.output)  if args.output  else Path(args.data_root) / "walk_forward" / "wf_comparison.xlsx"
+    effective_data_root = Path(args.data_root or get_data_root())
+    raw_dir     = Path(args.raw_dir) if args.raw_dir else effective_data_root / "walk_forward" / "raw"
+    output_path = Path(args.output)  if args.output  else effective_data_root / "walk_forward" / "wf_comparison.xlsx"
 
     logger.info("=" * 70)
     logger.info("Walk-forward 实验对比分析")

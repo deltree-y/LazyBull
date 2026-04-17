@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.55.3] - 2026-04-17
+
+### 修复
+
+- **`configs/base.yaml` 重新收口为真实默认值入口**：仅保留当前已接线的数据路径、TuShare、`industry.shenwan_level` 和交易成本配置，移除未实际驱动主流程的日志、回测、止损等历史段落，避免配置歧义
+- **共享层默认值统一读取项目配置**：`Storage`、`PaperStorage`、`TushareClient`、`CostModel`、`ModelRegistry`、`Reporter`、`MLSignal` 及 `create_signal()` 的默认路径/参数现统一从 `configs/base.yaml` 派生；显式传参时仍优先于项目配置
+- **训练/回测/分析脚本的 `--data-root` 改为“未指定时走 base.yaml”**：`train_ml_model.py`、`run_ml_backtest.py`、`walk_forward.py`、`compare_walk_forward.py`、`analyze_factor_importance.py` 与纸面交易相关脚本不再把 `./data` 写死为脚本级默认值
+- **树莓派显示脚本改为跟随项目配置目录**：`respi_disp_real.py` 和 `3.5LCD_disp.py` 不再硬编码 `project_root/data` 与 `project_root/data/paper`
+- **runtime 覆盖示例去除死配置**：`runtime_local.yaml`、`runtime_cloud.yaml` 仅保留当前仍有意义的路径/TuShare 覆盖示例，避免把未自动接线的旧段落误认为运行时默认值
+
+### 测试
+
+- 新增项目级数据路径、模型/报告目录、交易成本与 TuShare 默认值测试；配置/成本/存储/行业相关聚焦测试共 80 个用例通过
+
+## [0.55.2] - 2026-04-17
+
+### 修复
+
+- **行业主口径升级为项目统一配置**：新增 `configs/base.yaml` 中的 `industry.shenwan_level` 项目级配置，支持 `l1` / `l2` / `l3`，默认 `l2`；训练、回测、纸面交易不再各自写死行业层级
+- **`FeatureBuilder` 默认读取项目级行业口径**：`sw_industry*` 主字段不再固定绑定二级行业，而是按 `industry.shenwan_level` 映射到统一主口径；显式传入 `shenwan_level` 时优先于项目配置
+- **行业中性化按主口径自适应回退**：`FeatureBuilder._apply_industry_neutralization()` 现按主口径自动选择 `L3→L2→L1→全市场`、`L2→L1→全市场` 或 `L1→全市场` 路径
+- **行业约束与项目主口径对齐**：`load_industry_mapping()` 默认读取同一项目配置，回测和纸面交易的 `max_per_industry` 与特征构建、行业动量使用统一行业层级
+
+### 测试
+
+- 新增项目配置默认值、显式层级覆盖、行业约束层级切换相关测试；行业配置与行业约束聚焦测试共 51 个用例通过
+
 ## [0.55.1] - 2026-04-16
 
 ### 修复

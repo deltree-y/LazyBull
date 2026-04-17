@@ -44,6 +44,7 @@ import pandas as pd
 import numpy as np
 from loguru import logger
 
+from src.lazybull.common.config import get_data_root, get_models_root
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
@@ -153,7 +154,7 @@ def run_oos_backtest(
     label_column: str,
     bt_top_n: int = 30,
     bt_rebalance_freq: Optional[int] = None,
-    data_root: str = "./data",
+    data_root: Optional[str] = None,
     persistent_signal=None,
     signal_confidence_gate_enabled: bool = False,
     signal_confidence_gate_top_k: int = 10,
@@ -258,6 +259,8 @@ def run_oos_backtest(
     from src.lazybull.signals import MLSignal
     from src.lazybull.universe import BasicUniverse
 
+    data_root = data_root or get_data_root()
+
     logger.info(f"OOS 回测: {bt_start} ~ {bt_end}（模型 v{model_version}, Top{bt_top_n}）")
 
     # 1. 加载日线数据
@@ -346,7 +349,7 @@ def run_oos_backtest(
         signal = MLSignal(
             top_n=bt_top_n,
             model_version=model_version,
-            models_dir=f"{data_root}/models",
+            models_dir=get_models_root(str(Path(data_root) / "models") if data_root else None),
             weight_method=bt_weight_method,
             signal_confidence_gate_enabled=signal_confidence_gate_enabled,
             signal_confidence_gate_top_k=signal_confidence_gate_top_k,
@@ -1983,8 +1986,8 @@ def main():
     parser.add_argument(
         "--data-root",
         type=str,
-        default="./data",
-        help="数据根目录，默认 ./data"
+        default=None,
+        help="数据根目录；未指定时使用 configs/base.yaml 中的 data.* 配置"
     )
     parser.add_argument(
         "--run-log-csv",
@@ -2618,13 +2621,16 @@ def main():
             logger.info(f"  市场择时: 开启 ({regime_detail})")
         else:
             logger.info(f"  市场择时: 关闭")
-    logger.info(f"数据目录: {args.data_root}")
+    effective_data_root = args.data_root or get_data_root()
+    logger.info(f"数据目录: {effective_data_root}")
     
     try:
         # 初始化组件
         storage = Storage(root_path=args.data_root)
         loader = DataLoader(storage)
-        registry = ModelRegistry(models_dir=f"{args.data_root}/models")
+        registry = ModelRegistry(
+            models_dir=get_models_root(str(Path(args.data_root) / "models") if args.data_root else None)
+        )
 
         # 加载股票基本信息（OOS 回测需要）
         stock_basic = None
@@ -2687,7 +2693,9 @@ def main():
             persistent_signal = MLSignal(
                 top_n=args.bt_top_n,
                 model_version=None,  # 首次 split 时通过 update_model_version 设置
-                models_dir=f"{args.data_root}/models",
+                models_dir=get_models_root(
+                    str(Path(args.data_root) / "models") if args.data_root else None
+                ),
                 weight_method=args.bt_weight_method,
                 signal_confidence_gate_enabled=args.signal_confidence_gate_enabled,
                 signal_confidence_gate_top_k=args.signal_confidence_gate_top_k,
@@ -2879,7 +2887,12 @@ def main():
             if args.wf_summary_csv:
                 summary_csv_path = args.wf_summary_csv
             else:
-                summary_csv_path = f"{args.data_root}/walk_forward/raw/walk_forward_summary_{wf_run_id}.csv"
+                summary_csv_path = str(
+                    Path(args.data_root or get_data_root())
+                    / "walk_forward"
+                    / "raw"
+                    / f"walk_forward_summary_{wf_run_id}.csv"
+                )
 
             write_walk_forward_summary(results, summary_csv_path, args, wf_run_id)
 

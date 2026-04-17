@@ -1,5 +1,5 @@
 # 基础配置文件
-# 定义项目通用配置项
+# 定义项目当前真实生效的通用默认配置
 
 # 数据路径
 data:
@@ -8,19 +8,6 @@ data:
   clean: "./data/clean"
   features: "./data/features"
   reports: "./data/reports"
-  # 存储配置
-  storage:
-    partition_format: "YYYY-MM-DD"  # 分区日期格式
-    # 注意：现已统一使用partitioned存储
-    # - trade_cal和stock_basic：单文件存储
-    # - 其他数据（daily等）：按日期分区存储
-
-# 日志配置
-logging:
-  level: "INFO"
-  format: "{time:HH:mm:ss} |{level}| {name}:{function}:{line} - {message}"
-  rotation: "100 MB"
-  retention: "30 days"
 
 # TuShare配置
 tushare:
@@ -28,20 +15,9 @@ tushare:
   retry_delay: 1  # 秒
   rate_limit: 200  # 每分钟请求数
 
-# 回测基础配置
-backtest:
-  start_date: "20200101"
-  end_date: "20231231"
-  initial_capital: 500000  # 初始资金50万
-  benchmark: "000300.SH"  # 沪深300
-  rebalance_frequency: 5  # 调仓频率（交易日数），例如5表示每5个交易日调仓一次
-  top_n: 5  # 选股数量
-  exclude_st: true  # 排除ST股票
-  # 分批调仓配置
-  batch_rebalance_enabled: false  # 是否启用分批调仓，默认关闭
-  batch_size: 5  # 每批调整的股票数量
-  batch_freq: 5  # 分批频率（交易日数），例如5表示每5个交易日执行一批
-  batch_strategy: "rank_based"  # 分批策略：rank_based=优先换出排名最差的，random=随机
+# 行业配置
+industry:
+  shenwan_level: "l2"  # 项目统一主行业口径：l1 | l2 | l3
 
 # 交易成本配置
 costs:
@@ -49,18 +25,3 @@ costs:
   min_commission: 5  # 最小佣金，元
   stamp_tax: 0.0005  # 印花税，仅卖出
   slippage: 0.0005  # 滑点
-  capital_retention_ratio: 0.00  # 整体买入时保留的资金比例，默认5%，避免过度买入导致后续无法补位
-  pendding_capital_retention_ratio: 0.3  # 补位买入时保留的资金比例，默认5%，避免过度买入导致后续无法补位
-
-# 止损配置
-stop_loss:
-  enabled: false  # 是否启用止损功能，默认关闭
-  # 回撤止损
-  drawdown_pct: 20.0  # 从买入成本回撤超过N%触发止损，默认20%
-  # 移动止损
-  trailing_enabled: false  # 是否启用移动止损，默认关闭
-  trailing_pct: 15.0  # 从最高点回撤超过N%触发止损，默认15%
-  # 连续跌停止损
-  consecutive_limit_down: 2  # 连续N天跌停触发止损，默认2天
-  # 触发后操作
-  post_action: "hold_cash"  # 触发后操作：hold_cash=持币等待，buy_alternative=补买备选

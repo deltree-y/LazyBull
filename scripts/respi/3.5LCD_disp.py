@@ -45,7 +45,7 @@ sys.path.insert(0, str(scripts_dir))
 
 # ---------- 项目日志 ----------
 from src.lazybull.common.logger import setup_logger  # noqa: E402
-from src.lazybull.common.config import get_config    # noqa: E402
+from src.lazybull.common.config import get_config, get_data_root, get_paper_root    # noqa: E402
 from respi.set_backlight import cleanup_backlight_state as _cleanup_backlight_state_helper  # noqa: E402
 from respi.set_backlight import get_pwm_hardware_note as _get_pwm_hardware_note_helper  # noqa: E402
 from respi.set_backlight import set_backlight as _set_backlight_helper  # noqa: E402
@@ -348,7 +348,7 @@ def _resolve_intraday_slot_index(
 
 def _get_diag_log_paths() -> list[Path]:
     """返回诊断日志落盘路径，优先项目目录，失败时兜底系统临时目录。"""
-    primary = project_root / "data" / "paper" / "state" / DIAG_LOG_FILENAME
+    primary = Path(get_paper_root()) / "state" / DIAG_LOG_FILENAME
     fallback = Path(tempfile.gettempdir()) / DIAG_LOG_FILENAME
     if primary == fallback:
         return [primary]
@@ -846,7 +846,7 @@ def _upsert_intraday_chart(
 
 def _get_intraday_chart_state_dir() -> Path:
     """返回 3.5 寸 LCD 日内图持久化目录。"""
-    return project_root / "data" / "paper" / "state" / INTRADAY_CHART_STATE_DIRNAME
+    return Path(get_paper_root()) / "state" / INTRADAY_CHART_STATE_DIRNAME
 
 
 def _get_intraday_chart_state_path(trade_date: str) -> Path:
@@ -976,7 +976,7 @@ def _load_trade_dates() -> tuple[str, ...]:
         try:
             from src.lazybull.data import DataLoader, Storage
 
-            loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
+            loader = DataLoader(storage=Storage(root_path=get_data_root()))
             trade_cal = loader.load_clean_trade_cal()
             if trade_cal is not None and not trade_cal.empty:
                 result = tuple(
@@ -1506,7 +1506,7 @@ def _calc_rebalance_status() -> tuple[Optional[str], Optional[int]]:
     from src.lazybull.data import DataLoader, Storage
 
     rebalance_state = PaperStorage(
-        root_path=str(project_root / "data" / "paper")
+        root_path=get_paper_root()
     ).load_rebalance_state()
     if rebalance_state is None:
         return None, None
@@ -1518,7 +1518,7 @@ def _calc_rebalance_status() -> tuple[Optional[str], Optional[int]]:
 
     try:
         rebalance_freq_int = int(rebalance_freq)
-        loader = DataLoader(storage=Storage(root_path=str(project_root / "data")))
+        loader = DataLoader(storage=Storage(root_path=get_data_root()))
         trade_cal = loader.load_clean_trade_cal()
         if trade_cal is None:
             return None, None
@@ -1635,7 +1635,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     from src.lazybull.data.tushare_client import TushareClient
 
     paper_storage = PaperStorage(
-        root_path=str(project_root / "data" / "paper"), verbose=False
+        root_path=get_paper_root(), verbose=False
     )
 
     # 获取上次调仓日期作为周期起点
@@ -1755,7 +1755,7 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     positions = runner.account.get_positions()
     cash = runner.account.get_cash()
     paper_storage = PaperStorage(
-        root_path=str(project_root / "data" / "paper"), verbose=False
+        root_path=get_paper_root(), verbose=False
     )
     config = paper_storage.load_config()
     initial_capital = (

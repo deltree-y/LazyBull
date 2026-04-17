@@ -3,20 +3,25 @@
 提供基于行业的持仓数量约束功能，用于组合构建中的行业分散化管理。
 """
 
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 from loguru import logger
 
+from ..common.config import get_shenwan_level, normalize_shenwan_level
+
 
 def load_industry_mapping(
-    shenwan_industry: pd.DataFrame, verbose: bool = False
+    shenwan_industry: pd.DataFrame,
+    verbose: bool = False,
+    shenwan_level: Optional[str] = None,
 ) -> Dict[str, str]:
     """从申万行业分类数据加载行业映射
 
     Args:
         shenwan_industry: 申万行业分类 DataFrame，必须包含 ts_code 列
-            以及 sw_industry/sw_l2/sw_name/sw_l3 中至少一列
+            以及 sw_industry/sw_l1/sw_l2/sw_l3/sw_name 中至少一列
         verbose: 是否输出详细日志
+        shenwan_level: 主行业口径层级，支持 l1/l2/l3；未传时从项目配置读取
 
     Returns:
         行业映射字典 {股票代码: 行业名称}，行业缺失的股票映射到 "未知行业"
@@ -32,8 +37,29 @@ def load_industry_mapping(
     if 'ts_code' not in shenwan_industry.columns:
         raise ValueError("shenwan_industry 必须包含 ts_code 列")
 
-    if not {'sw_industry', 'sw_l2', 'sw_name', 'sw_l3'}.intersection(shenwan_industry.columns):
-        raise ValueError("shenwan_industry 必须包含 sw_industry、sw_l2、sw_name 或 sw_l3 列")
+    if not {'sw_industry', 'sw_l1', 'sw_l2', 'sw_name', 'sw_l3'}.intersection(shenwan_industry.columns):
+        raise ValueError("shenwan_industry 必须包含 sw_industry、sw_l1、sw_l2、sw_name 或 sw_l3 列")
+
+    resolved_level = (
+        normalize_shenwan_level(shenwan_level)
+        if shenwan_level is not None
+        else get_shenwan_level()
+    )
+    preferred_columns = {
+        'l1': ['sw_l1', 'sw_industry', 'sw_name', 'sw_l2', 'sw_l3'],
+        'l2': ['sw_l2', 'sw_industry', 'sw_name', 'sw_l3', 'sw_l1'],
+        'l3': ['sw_l3', 'sw_industry', 'sw_l2', 'sw_name', 'sw_l1'],
+    }
+    selected_column = next(
+        (col for col in preferred_columns[resolved_level] if col in shenwan_industry.columns),
+        None,
+    )
+
+    if selected_column is None:
+        raise ValueError("shenwan_industry 缺少可用的行业名称列")
+
+    if verbose:
+        logger.info(f"行业映射使用申万{resolved_level.upper()}主口径列: {selected_column}")
 
     # 构建映射：将 NaN/None 映射为 "未知行业"
     industry_mapping = {}
@@ -41,7 +67,7 @@ def load_industry_mapping(
 
     for _, row in shenwan_industry.iterrows():
         ts_code = row['ts_code']
-        industry = row.get('sw_industry') or row.get('sw_l2') or row.get('sw_name') or row.get('sw_l3')
+        industry = row.get(selected_column)
         
         # 处理缺失值
         if pd.isna(industry) or industry == '' or industry is None:

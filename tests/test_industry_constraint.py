@@ -1,7 +1,10 @@
 """行业约束模块测试"""
 
+import src.lazybull.common.config as config_module
 import pytest
 import pandas as pd
+
+from src.lazybull.common.config import Config
 from src.lazybull.portfolio.industry_constraint import (
     load_industry_mapping,
     apply_industry_constraint
@@ -59,6 +62,47 @@ def test_load_industry_mapping_missing_columns():
 
     with pytest.raises(ValueError, match="必须包含 ts_code"):
         load_industry_mapping(stock_basic)
+
+
+@pytest.mark.parametrize(
+    ("level", "expected_a", "expected_b"),
+    [
+        ("l1", "银行", "银行"),
+        ("l2", "国有银行", "股份制银行"),
+        ("l3", "国有大型银行", "中小银行"),
+    ],
+)
+def test_load_industry_mapping_respects_shenwan_level(level, expected_a, expected_b):
+    """应按指定的申万层级构建行业映射。"""
+    stock_basic = pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ'],
+        'sw_l1': ['银行', '银行'],
+        'sw_l2': ['国有银行', '股份制银行'],
+        'sw_l3': ['国有大型银行', '中小银行'],
+    })
+
+    mapping = load_industry_mapping(stock_basic, shenwan_level=level)
+
+    assert mapping['000001.SZ'] == expected_a
+    assert mapping['000002.SZ'] == expected_b
+
+
+def test_load_industry_mapping_default_reads_project_config(monkeypatch):
+    """未显式传层级时，应读取项目配置中的 industry.shenwan_level。"""
+    stock_basic = pd.DataFrame({
+        'ts_code': ['000001.SZ', '000002.SZ'],
+        'sw_l1': ['银行', '银行'],
+        'sw_l2': ['国有银行', '股份制银行'],
+        'sw_l3': ['国有大型银行', '中小银行'],
+    })
+    config = Config()
+    config.set('industry.shenwan_level', 'l1')
+    monkeypatch.setattr(config_module, '_global_config', config)
+
+    mapping = load_industry_mapping(stock_basic)
+
+    assert mapping['000001.SZ'] == '银行'
+    assert mapping['000002.SZ'] == '银行'
 
 
 def test_apply_industry_constraint_basic():

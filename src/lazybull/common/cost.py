@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from .config import get_cost_settings
+
 
 class CostModel:
     """交易成本模型
@@ -11,10 +13,10 @@ class CostModel:
     
     def __init__(
         self,
-        commission_rate: float = 0.0001954, # 佣金费率（买卖双向）
-        min_commission: float = 5.0,        # 最小佣金（元）
-        stamp_tax: float = 0.0005,          # 印花税（仅卖出）
-        slippage: float = 0.0005,           # 滑点比率
+        commission_rate: Optional[float] = None,
+        min_commission: Optional[float] = None,
+        stamp_tax: Optional[float] = None,
+        slippage: Optional[float] = None,
     ):
         """初始化成本模型
         
@@ -24,10 +26,15 @@ class CostModel:
             stamp_tax: 印花税（仅卖出）
             slippage: 滑点比率
         """
-        self.commission_rate = commission_rate
-        self.min_commission = min_commission
-        self.stamp_tax = stamp_tax
-        self.slippage = slippage
+        defaults = get_cost_settings()
+        self.commission_rate = (
+            commission_rate if commission_rate is not None else defaults["commission_rate"]
+        )
+        self.min_commission = (
+            min_commission if min_commission is not None else defaults["min_commission"]
+        )
+        self.stamp_tax = stamp_tax if stamp_tax is not None else defaults["stamp_tax"]
+        self.slippage = slippage if slippage is not None else defaults["slippage"]
     
     def calculate_commission(self, amount: float) -> float:
         """计算佣金
@@ -104,16 +111,5 @@ class CostModel:
 
 
 def get_default_cost_model() -> CostModel:
-    """获取默认成本模型（用于回测仿真，采用较保守的成本假设）
-
-    参数说明：
-        commission_rate=0.0002: 典型零售佣金（万二）
-        stamp_tax=0.0005:       当前印花税（2023年后调降至千分之零点五，仅卖出方向）
-        slippage=0.001:         双边滑点（千一），适用于中等流动性股票
-    """
-    return CostModel(
-        commission_rate=0.0002,
-        min_commission=5.0,
-        stamp_tax=0.0005,
-        slippage=0.001
-    )
+    """获取项目默认成本模型（默认值来自 configs/base.yaml）。"""
+    return CostModel()

@@ -38,6 +38,7 @@ import csv
 from loguru import logger
 
 from src.lazybull.backtest import BacktestEngine, BacktestEngineML, Reporter
+from src.lazybull.common.config import get_models_root, get_reports_root
 from src.lazybull.common.cost import CostModel
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.common.trading_config import TradingConfig, add_trading_args
@@ -758,8 +759,12 @@ def main():
     parser.add_argument("--sell-timing", type=str, default="open",
                         choices=["open", "close"],
                         help="卖出时机，默认 open")
-    parser.add_argument("--data-root", type=str, default="./data",
-                        help="数据根目录，默认 ./data")
+    parser.add_argument(
+        "--data-root",
+        type=str,
+        default=None,
+        help="数据根目录；未指定时使用 configs/base.yaml 中的 data.* 配置",
+    )
     parser.add_argument("--output-name", type=str, default="ml_backtest",
                         help="报告输出名称，默认 ml_backtest")
 
@@ -784,7 +789,9 @@ def main():
     # 初始化组件以加载模型元数据
     from src.lazybull.ml import ModelRegistry
     storage = Storage(root_path=args.data_root)
-    registry = ModelRegistry(models_dir=f"{args.data_root}/models")
+    models_dir = get_models_root(str(Path(args.data_root) / "models") if args.data_root else None)
+    reports_dir = get_reports_root(str(Path(args.data_root) / "reports") if args.data_root else None)
+    registry = ModelRegistry(models_dir=models_dir)
     
     # 加载模型元数据以获取 label_column
     try:
@@ -912,7 +919,7 @@ def main():
         )
 
         # 4. 创建 ML 信号（通过公共工厂函数）
-        signal = create_signal(trading_config, models_dir=f"{args.data_root}/models")
+        signal = create_signal(trading_config, models_dir=models_dir)
         
         # 打印模型信息
         model_info = signal.get_model_info()
@@ -968,12 +975,12 @@ def main():
         )
 
         # 7. 生成报告
-        reporter = Reporter(output_dir=f"{args.data_root}/reports")
+        reporter = Reporter(output_dir=reports_dir)
         stats = reporter.generate_report(nav_curve, trades, output_name=args.output_name)
         
         logger.info("=" * 60)
         logger.info("回测完成！")
-        logger.info(f"报告已保存到: {args.data_root}/reports/")
+        logger.info(f"报告已保存到: {reports_dir}")
         logger.info("=" * 60)
 
         # ------------------ 追加交易记录到累加文件 ------------------
@@ -1054,7 +1061,7 @@ def main():
                     features_by_date=features_by_date,
                     trading_dates=trading_dates,
                     label_column=selected_label,
-                    output_dir=f"{args.data_root}/reports",
+                    output_dir=reports_dir,
                     output_name=args.output_name,
                     n_groups=args.eval_groups,
                     topk=eval_topk,

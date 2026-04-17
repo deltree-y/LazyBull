@@ -34,6 +34,7 @@ import numpy as np
 from loguru import logger
 from sklearn.metrics import mean_squared_error, r2_score
 
+from src.lazybull.common.config import get_data_root, get_models_root
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.common.feature_utils import (
     drop_high_correlation_features,
@@ -301,8 +302,8 @@ def main():
     parser.add_argument(
         "--data-root",
         type=str,
-        default="./data",
-        help="数据根目录，默认 ./data"
+        default=None,
+        help="数据根目录；未指定时使用 configs/base.yaml 中的 data.* 配置"
     )
     parser.add_argument(
         "--run-log-csv",
@@ -326,7 +327,8 @@ def main():
     logger.info(f"训练算法: {args.algorithm}")
     logger.info(f"训练日期区间: {args.start_date} 至 {args.end_date}")
     logger.info(f"标签列: {args.label_column}")
-    logger.info(f"数据目录: {args.data_root}")
+    effective_data_root = args.data_root or get_data_root()
+    logger.info(f"数据目录: {effective_data_root}")
     logger.info(
         f"rank-weight: {'已启用' if args.rank_weight_enabled else '已禁用'} "
         f"（topk={args.rank_weight_topk}, weight={args.rank_weight}）"
@@ -336,7 +338,9 @@ def main():
         # 初始化组件
         storage = Storage(root_path=args.data_root)
         loader = DataLoader(storage)
-        registry = ModelRegistry(models_dir=f"{args.data_root}/models")
+        registry = ModelRegistry(
+            models_dir=get_models_root(str(Path(args.data_root) / "models") if args.data_root else None)
+        )
         
         # 1. 加载特征数据
         df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)

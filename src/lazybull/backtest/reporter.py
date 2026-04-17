@@ -6,17 +6,19 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
+from ..common.config import get_reports_root
+
 
 class Reporter:
     """回测报告生成器"""
     
-    def __init__(self, output_dir: str = "./data/reports"):
+    def __init__(self, output_dir: Optional[str] = None):
         """初始化报告生成器
         
         Args:
             output_dir: 报告输出目录
         """
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path(output_dir or get_reports_root())
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def generate_report(

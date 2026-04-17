@@ -6,6 +6,8 @@ from typing import List, Optional
 import pandas as pd
 from loguru import logger
 
+from ..common.config import get_data_path, get_data_root
+
 
 class Storage:
     """数据存储类
@@ -14,11 +16,11 @@ class Storage:
     支持按日期分区存储raw和clean数据
     """
 
-    def __init__(self, root_path: str = "./data", verbose: bool = False):
+    def __init__(self, root_path: Optional[str] = None, verbose: bool = False):
         """初始化存储
 
         Args:
-            root_path: 数据根目录
+            root_path: 数据根目录；未传时使用项目配置中的 data.root / data.*
             verbose: 是否输出详细日志
 
         注意：
@@ -27,11 +29,18 @@ class Storage:
             - clean层数据使用按日期分区存储
             - features层数据使用按日期分区存储
         """
-        self.root_path = Path(root_path)
-        self.raw_path = self.root_path / "raw"
-        self.clean_path = self.root_path / "clean"
-        self.features_path = self.root_path / "features"
-        self.reports_path = self.root_path / "reports"
+        if root_path is None:
+            self.root_path = Path(get_data_root())
+            self.raw_path = Path(get_data_path("raw", str(self.root_path / "raw")))
+            self.clean_path = Path(get_data_path("clean", str(self.root_path / "clean")))
+            self.features_path = Path(get_data_path("features", str(self.root_path / "features")))
+            self.reports_path = Path(get_data_path("reports", str(self.root_path / "reports")))
+        else:
+            self.root_path = Path(root_path)
+            self.raw_path = self.root_path / "raw"
+            self.clean_path = self.root_path / "clean"
+            self.features_path = self.root_path / "features"
+            self.reports_path = self.root_path / "reports"
         self.verbose = verbose
 
         # 确保目录存在

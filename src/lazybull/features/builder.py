@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.config import get_shenwan_level, normalize_shenwan_level
 from ..common.date_utils import normalize_date_columns, to_trade_date_str
 from ..factors import (
     calculate_rsi,
@@ -53,6 +54,7 @@ class FeatureBuilder:
         horizons: List[int] = None,
         lookback_windows: List[int] = None,
         require_label: bool = True,
+        shenwan_level: Optional[str] = None,
         verbose: bool = False,
     ):
         """初始化特征构建器
@@ -63,6 +65,7 @@ class FeatureBuilder:
             horizons: 预测时间窗口列表（交易日），默认[5, 10, 20]，生成多个标签 y_ret_5, y_ret_10, y_ret_20
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
             require_label: 是否要求标签非空，默认True（训练/回测模式）；设为False用于实盘/推理模式
+            shenwan_level: 主行业口径层级，支持 l1/l2/l3；未传时从项目配置读取
             verbose: 是否输出详细日志
         """
         self.min_list_days = min_list_days
@@ -72,6 +75,11 @@ class FeatureBuilder:
         self.horizon = horizon if horizon in self.horizons else self.horizons[0]
         self.lookback_windows = lookback_windows or [5, 10, 20]
         self.require_label = require_label
+        self.shenwan_level = (
+            normalize_shenwan_level(shenwan_level)
+            if shenwan_level is not None
+            else get_shenwan_level()
+        )
         self.verbose = verbose
         # 实例级缓存：批量预计算的市场状态特征（首次调用时触发，后续 O(1) 取值）
         self._market_state_cache: Optional[pd.DataFrame] = None
@@ -91,7 +99,7 @@ class FeatureBuilder:
             logger.info(
                 f"特征构建器初始化: min_list_days={min_list_days}, "
                 f"horizons={self.horizons}, lookback_windows={self.lookback_windows}, "
-                f"require_label={require_label}"
+                f"require_label={require_label}, shenwan_level={self.shenwan_level}"
             )
     
     def clear_caches(self) -> None:
@@ -1560,12 +1568,12 @@ class FeatureBuilder:
         features: pd.DataFrame,
         shenwan_industry: pd.DataFrame,
     ) -> pd.DataFrame:
-        """合并申万行业分类信息（统一主行业口径为申万二级）。
+        """合并申万行业分类信息（主行业口径由项目配置决定）。
 
         新式 L3 格式（优先）：shenwan_industry 含 sw_l3_code、sw_l3 列，同时含
         sw_l2_code/sw_l2、sw_l1_code/sw_l1 列，产出：
-          - sw_industry / sw_industry_code / sw_industry_id（统一映射到 L2）
-          - sw_l2 / sw_l2_code / sw_l2_id（与 sw_industry* 保持一致）
+                    - sw_industry / sw_industry_code / sw_industry_id（映射到配置指定层级）
+                    - sw_l2 / sw_l2_code / sw_l2_id（保留二级行业字段）
           - sw_l3 / sw_l3_code（保留更细粒度行业，供分析/调试）
           - sw_l1 / sw_l1_code / sw_l1_id
 
@@ -1608,18 +1616,55 @@ class FeatureBuilder:
                 how="left",
             )
 
-            # 统一主行业字段：始终绑定到申万二级，训练/回测/纸交全部使用这一口径。
-            if "sw_l2_code" in result.columns and result["sw_l2_code"].notna().any():
-                result["sw_industry_code"] = result["sw_l2_code"]
-            elif "sw_l3_code" in result.columns:
-                logger.warning("申万行业数据缺少 sw_l2_code，sw_industry_code 临时回退到 sw_l3_code")
-                result["sw_industry_code"] = result["sw_l3_code"]
+            level_to_name_col = {
+                "l1": "sw_l1",
+                "l2": "sw_l2",
+                "l3": "sw_l3",
+            }
+            level_to_code_col = {
+                "l1": "sw_l1_code",
+                "l2": "sw_l2_code",
+                "l3": "sw_l3_code",
+            }
+            fallback_levels = {
+                "l1": ["l2", "l3"],
+                "l2": ["l3", "l1"],
+                "l3": ["l2", "l1"],
+            }
 
-            if "sw_l2" in result.columns and result["sw_l2"].notna().any():
-                result["sw_industry"] = result["sw_l2"]
-            elif "sw_l3" in result.columns:
-                logger.warning("申万行业数据缺少 sw_l2，sw_industry 临时回退到 sw_l3")
-                result["sw_industry"] = result["sw_l3"]
+            selected_name_col = level_to_name_col[self.shenwan_level]
+            selected_code_col = level_to_code_col[self.shenwan_level]
+            selected_level = self.shenwan_level
+
+            if (
+                selected_name_col not in result.columns
+                or not result[selected_name_col].notna().any()
+                or selected_code_col not in result.columns
+                or not result[selected_code_col].notna().any()
+            ):
+                for fallback_level in fallback_levels[self.shenwan_level]:
+                    fallback_name_col = level_to_name_col[fallback_level]
+                    fallback_code_col = level_to_code_col[fallback_level]
+                    if (
+                        fallback_name_col in result.columns
+                        and result[fallback_name_col].notna().any()
+                        and fallback_code_col in result.columns
+                        and result[fallback_code_col].notna().any()
+                    ):
+                        logger.warning(
+                            f"申万行业数据缺少 {selected_name_col}/{selected_code_col}，"
+                            f"sw_industry 临时回退到 {fallback_level}"
+                        )
+                        selected_name_col = fallback_name_col
+                        selected_code_col = fallback_code_col
+                        selected_level = fallback_level
+                        break
+
+            if selected_code_col in result.columns and result[selected_code_col].notna().any():
+                result["sw_industry_code"] = result[selected_code_col]
+
+            if selected_name_col in result.columns and result[selected_name_col].notna().any():
+                result["sw_industry"] = result[selected_name_col]
 
             if "sw_industry" in result.columns:
                 id_dict = generate_industry_encoding(result["sw_industry"])
@@ -1635,7 +1680,9 @@ class FeatureBuilder:
 
             if self.verbose:
                 industry_counts = result.get("sw_industry", pd.Series()).value_counts()
-                logger.info(f"申万二级行业分布（前5）：\n{industry_counts.head()}")
+                logger.info(
+                    f"申万{selected_level.upper()}主行业分布（前5）：\n{industry_counts.head()}"
+                )
 
             return result
 
@@ -1672,10 +1719,13 @@ class FeatureBuilder:
     ) -> pd.DataFrame:
         """应用行业中性化（包含去均值和Z-Score两类）
 
-        sw_industry 已统一绑定到申万二级行业。
+        sw_industry 已统一绑定到当前配置指定的申万行业层级。
 
-        当数据包含二级/一级层级信息（sw_industry_code、sw_l1_code）时，
-        使用分层回退中性化（L2→L1→全市场）；否则退化为单层 sw_industry 中性化。
+        当数据包含更高一级回退所需信息时，使用分层回退中性化：
+        - l3: L3→L2→L1→全市场
+        - l2: L2→L1→全市场
+        - l1: L1→全市场
+        否则退化为单层 sw_industry 中性化。
 
         对指定的列进行行业中性化：
         1. 去均值（demean）：收益率/标签列，neu_ 前缀
@@ -1706,11 +1756,20 @@ class FeatureBuilder:
 
         result = features.copy()
 
-        # 判断是否有二级/一级分层信息
-        has_hierarchy = all(
-            col in result.columns
-            for col in ['sw_industry_code', 'sw_l1_code']
-        )
+        hierarchy_label = f"{self.shenwan_level.upper()}→全市场"
+        hierarchy_cols = None
+        if self.shenwan_level == "l3" and all(
+            col in result.columns for col in ["sw_industry_code", "sw_l2_code", "sw_l1_code"]
+        ):
+            hierarchy_cols = ("sw_industry_code", "sw_l2_code", "sw_l1_code")
+            hierarchy_label = "L3→L2→L1→全市场"
+        elif self.shenwan_level == "l2" and all(
+            col in result.columns for col in ["sw_industry_code", "sw_l1_code"]
+        ):
+            hierarchy_cols = ("sw_industry_code", "sw_l1_code", "__missing_l1__")
+            hierarchy_label = "L2→L1→全市场"
+
+        has_hierarchy = hierarchy_cols is not None
 
         # ========================================
         # 1. 去均值（demean）中性化：收益率/标签列
@@ -1731,16 +1790,15 @@ class FeatureBuilder:
         if len(demean_columns) > 0:
             if has_hierarchy:
                 logger.info(
-                    f"开始分层回退行业去均值（L2→L1→全市场）：{len(demean_columns)} 个列"
+                    f"开始分层回退行业去均值（{hierarchy_label}）：{len(demean_columns)} 个列"
                 )
                 try:
-                    # 复用分层实现：primary=申万二级，fallback=申万一级，再兜底到全市场
                     result = hierarchical_demean(
                         result,
                         columns=demean_columns,
-                        l3_col='sw_industry_code',
-                        l2_col='sw_l1_code',
-                        l1_col='sw_l1_code',
+                        l3_col=hierarchy_cols[0],
+                        l2_col=hierarchy_cols[1],
+                        l1_col=hierarchy_cols[2],
                         tradable_col='tradable',
                         min_group_size=5,
                         prefix='neu_',
@@ -1792,16 +1850,15 @@ class FeatureBuilder:
         if len(existing_zscore_columns) > 0:
             if has_hierarchy:
                 logger.info(
-                    f"开始分层回退行业内 Z-Score（L2→L1→全市场）：{len(existing_zscore_columns)} 个特征"
+                    f"开始分层回退行业内 Z-Score（{hierarchy_label}）：{len(existing_zscore_columns)} 个特征"
                 )
                 try:
-                    # 复用分层实现：primary=申万二级，fallback=申万一级，再兜底到全市场
                     result = hierarchical_zscore(
                         result,
                         columns=existing_zscore_columns,
-                        l3_col='sw_industry_code',
-                        l2_col='sw_l1_code',
-                        l1_col='sw_l1_code',
+                        l3_col=hierarchy_cols[0],
+                        l2_col=hierarchy_cols[1],
+                        l1_col=hierarchy_cols[2],
                         tradable_col='tradable',
                         min_group_size=5,
                         prefix='zscore_',

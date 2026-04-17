@@ -270,7 +270,7 @@ class TestHierarchicalDemean:
 # ---------------------------------------------------------------------------
 
 class TestFeatureBuilderHierarchicalNeutralization:
-    """测试 FeatureBuilder._apply_industry_neutralization 在 L2 主口径下使用分层路径。"""
+    """测试 FeatureBuilder._apply_industry_neutralization 在 L2 配置下使用分层路径。"""
 
     def _make_l2_features(self, n=10):
         """构造含 L2/L1 层级信息的特征 DataFrame。"""
@@ -296,7 +296,7 @@ class TestFeatureBuilderHierarchicalNeutralization:
 
     def test_uses_hierarchical_path_when_l2_info_present(self):
         """当 sw_industry_code/sw_l1_code 存在时，应走二级到一级的回退路径。"""
-        builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
+        builder = FeatureBuilder(horizons=[20], lookback_windows=[5], shenwan_level="l2")
         features = self._make_l2_features(n=10)
         result = builder._apply_industry_neutralization(features)
 
@@ -306,7 +306,7 @@ class TestFeatureBuilderHierarchicalNeutralization:
 
     def test_hierarchical_demean_result_in_industry_mean_near_zero(self):
         """每个二级行业内（样本数 >=5）去均值后均值应接近 0。"""
-        builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
+        builder = FeatureBuilder(horizons=[20], lookback_windows=[5], shenwan_level="l2")
         features = self._make_l2_features(n=10)
         result = builder._apply_industry_neutralization(features)
 
@@ -319,7 +319,7 @@ class TestFeatureBuilderHierarchicalNeutralization:
 
     def test_fallback_to_single_level_when_no_l3_codes(self):
         """当 DataFrame 中没有 sw_l2_code/sw_l1_code 时，回退到单层中性化"""
-        builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
+        builder = FeatureBuilder(horizons=[20], lookback_windows=[5], shenwan_level="l2")
         features = pd.DataFrame({
             'ts_code': [f'{i:06d}.SZ' for i in range(10)],
             'trade_date': ['20230101'] * 10,

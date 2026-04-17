@@ -2,7 +2,19 @@
 
 import pytest
 
-from src.lazybull.common.config import Config
+import src.lazybull.common.config as config_module
+
+from src.lazybull.common.config import (
+    Config,
+    get_cost_settings,
+    get_data_path,
+    get_data_root,
+    get_models_root,
+    get_paper_root,
+    get_reports_root,
+    get_tushare_settings,
+    normalize_shenwan_level,
+)
 
 
 def test_config_init():
@@ -49,3 +61,48 @@ def test_config_get_env(monkeypatch):
     
     assert config.get_env("TEST_VAR") == "test_value"
     assert config.get_env("NOT_EXIST", "default") == "default"
+
+
+def test_normalize_shenwan_level():
+    """测试申万行业层级标准化"""
+    assert normalize_shenwan_level(None) == "l2"
+    assert normalize_shenwan_level("L1") == "l1"
+    assert normalize_shenwan_level(" l3 ") == "l3"
+
+    with pytest.raises(ValueError, match="仅支持"):
+        normalize_shenwan_level("foo")
+
+
+def test_project_default_helpers(monkeypatch, tmp_path):
+    """测试项目级默认配置 helper。"""
+    config = Config()
+    data_root = tmp_path / "custom_data"
+    config.set("data.root", str(data_root))
+    config.set("data.raw", "./data/raw")
+    config.set("data.clean", str(tmp_path / "clean_area"))
+    config.set("tushare.max_retries", 7)
+    config.set("tushare.retry_delay", 2.5)
+    config.set("tushare.rate_limit", 123)
+    config.set("costs.commission_rate", 0.0004)
+    config.set("costs.min_commission", 6.0)
+    config.set("costs.stamp_tax", 0.0006)
+    config.set("costs.slippage", 0.0007)
+    monkeypatch.setattr(config_module, "_global_config", config)
+
+    assert get_data_root() == str(data_root)
+    assert get_data_path("raw") == str(data_root / "raw")
+    assert get_data_path("clean") == str(tmp_path / "clean_area")
+    assert get_models_root() == str(data_root / "models")
+    assert get_reports_root() == str(data_root / "reports")
+    assert get_paper_root() == str(data_root / "paper")
+    assert get_tushare_settings() == {
+        "max_retries": 7,
+        "retry_delay": 2.5,
+        "rate_limit": 123,
+    }
+    assert get_cost_settings() == {
+        "commission_rate": 0.0004,
+        "min_commission": 6.0,
+        "stamp_tax": 0.0006,
+        "slippage": 0.0007,
+    }

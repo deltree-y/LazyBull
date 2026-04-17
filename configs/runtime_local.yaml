@@ -1,23 +1,8 @@
-# 本地运行时配置
-# 用于开发环境
+# 本地运行时覆盖示例
+# 注意：默认流程不会自动加载本文件，如需生效请显式 merge
 
-# 覆盖数据路径
 data:
   root: "./data"
 
-# 覆盖日志配置
-logging:
-  level: "DEBUG"
-  sink: "logs/local.log"
-
-# 开发模式
-dev_mode: true
-
-# 回测配置（测试用小范围）
-backtest:
-  start_date: "20230101"
-  end_date: "20231231"
-  
-# TuShare限频（本地开发建议保守）
 tushare:
-  rate_limit: 100  # 降低请求频率
+  rate_limit: 100  # 本地开发可适当保守

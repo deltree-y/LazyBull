@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from src.lazybull.common.config import get_data_root, get_reports_root
 from src.lazybull.common.logger import setup_logger
 
 # ── 因子分类映射 ──────────────────────────────────────────────────
@@ -369,8 +370,8 @@ def main():
     parser.add_argument(
         "--data-root",
         type=str,
-        default="./data",
-        help="数据根目录 (默认: ./data)",
+        default=None,
+        help="数据根目录；未指定时使用 configs/base.yaml 中的 data.root",
     )
     parser.add_argument(
         "--last-n",
@@ -388,8 +389,12 @@ def main():
 
     setup_logger("INFO")
 
-    data_root = Path(args.data_root)
+    data_root = Path(args.data_root or get_data_root())
     models_dir = data_root / "models"
+    output_path = args.output or str(
+        Path(get_reports_root(str(data_root / "reports") if args.data_root else None))
+        / "factor_importance.csv"
+    )
     registry_file = models_dir / "model_registry.json"
 
     if not registry_file.exists():

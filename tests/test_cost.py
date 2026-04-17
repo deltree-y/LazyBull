@@ -2,6 +2,9 @@
 
 import pytest
 
+import src.lazybull.common.config as config_module
+
+from src.lazybull.common.config import Config
 from src.lazybull.common.cost import CostModel, get_default_cost_model
 
 
@@ -95,7 +98,41 @@ def test_get_default_cost_model():
     model = get_default_cost_model()
 
     assert isinstance(model, CostModel)
-    assert model.commission_rate == 0.0002
+    assert model.commission_rate == 0.0001954
     assert model.min_commission == 5.0
     assert model.stamp_tax == 0.0005
-    assert model.slippage == 0.001
+    assert model.slippage == 0.0005
+
+
+def test_cost_model_uses_project_config_defaults(monkeypatch):
+    """测试 CostModel 默认值来自项目配置。"""
+    config = Config()
+    config.set("costs.commission_rate", 0.00042)
+    config.set("costs.min_commission", 7.0)
+    config.set("costs.stamp_tax", 0.00066)
+    config.set("costs.slippage", 0.00088)
+    monkeypatch.setattr(config_module, "_global_config", config)
+
+    model = CostModel()
+
+    assert model.commission_rate == 0.00042
+    assert model.min_commission == 7.0
+    assert model.stamp_tax == 0.00066
+    assert model.slippage == 0.00088
+
+
+def test_get_default_cost_model_uses_project_config(monkeypatch):
+    """测试 get_default_cost_model 与项目配置保持一致。"""
+    config = Config()
+    config.set("costs.commission_rate", 0.00031)
+    config.set("costs.min_commission", 8.0)
+    config.set("costs.stamp_tax", 0.00051)
+    config.set("costs.slippage", 0.00091)
+    monkeypatch.setattr(config_module, "_global_config", config)
+
+    model = get_default_cost_model()
+
+    assert model.commission_rate == 0.00031
+    assert model.min_commission == 8.0
+    assert model.stamp_tax == 0.00051
+    assert model.slippage == 0.00091

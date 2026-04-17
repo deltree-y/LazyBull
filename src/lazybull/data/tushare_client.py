@@ -8,6 +8,8 @@ import pandas as pd
 import tushare as ts
 from loguru import logger
 
+from ..common.config import get_tushare_settings
+
 
 class TushareClient:
     """TuShare Pro API客户端
@@ -18,9 +20,9 @@ class TushareClient:
     def __init__(
         self,
         token: Optional[str] = None,
-        max_retries: int = 3,
-        retry_delay: float = 1.0,
-        rate_limit: int = 200,
+        max_retries: Optional[int] = None,
+        retry_delay: Optional[float] = None,
+        rate_limit: Optional[int] = None,
         verbose: bool = True,
     ):
         """初始化TuShare客户端
@@ -46,19 +48,20 @@ class TushareClient:
         self.pro = ts.pro_api()
         
         # 配置参数
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self.rate_limit = rate_limit
+        defaults = get_tushare_settings()
+        self.max_retries = max_retries if max_retries is not None else defaults["max_retries"]
+        self.retry_delay = retry_delay if retry_delay is not None else defaults["retry_delay"]
+        self.rate_limit = rate_limit if rate_limit is not None else defaults["rate_limit"]
         
         # 参数验证
-        if rate_limit <= 0:
-            raise ValueError(f"rate_limit 必须大于0，当前值: {rate_limit}")
+        if self.rate_limit <= 0:
+            raise ValueError(f"rate_limit 必须大于0，当前值: {self.rate_limit}")
         
         # 限频控制
         self._last_request_time = 0.0
-        self._request_interval = 60.0 / rate_limit  # 每次请求最小间隔
+        self._request_interval = 60.0 / self.rate_limit  # 每次请求最小间隔
         if verbose:
-            logger.info(f"TuShare客户端初始化成功，限频: {rate_limit}次/分钟")
+            logger.info(f"TuShare客户端初始化成功，限频: {self.rate_limit}次/分钟")
         self.verbose = verbose
     
     def _rate_limit_wait(self) -> None:

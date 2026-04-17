@@ -28,7 +28,7 @@ sys.path.insert(0, str(project_root))
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.common.config import get_config
+from src.lazybull.common.config import get_config, get_models_root
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.common.print_table import format_row
 from src.lazybull.common.trading_config import TradingConfig, add_trading_args
@@ -44,7 +44,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 
 
-def format_model_info(models_dir: str = "./data/models") -> str:
+def format_model_info(models_dir: Optional[str] = None) -> str:
     """获取当前配置使用的模型信息
 
     Args:
@@ -58,7 +58,7 @@ def format_model_info(models_dir: str = "./data/models") -> str:
     if not config:
         return "未找到配置文件，请先运行 config 命令设置配置。"
 
-    registry = ModelRegistry(models_dir=models_dir)
+    registry = ModelRegistry(models_dir=models_dir or get_models_root())
     models = registry.list_models()
 
     if not models:

@@ -613,15 +613,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
   后续逐日仅按索引取一行，兼容 `build_features.py` 和 `build_clean_features.py` 两条链路。
 - ✅ **输出口径不变**：6 个市场状态特征数值与旧实现完全一致（精度 < 1e-9），无需重新回测。
 
-**申万行业多层字段 + 二级主口径中性化**:
+**申万行业多层字段 + 项目级主口径配置**:
 - ✅ **申万行业数据保留 L1/L2/L3 三层字段**：下载与清洗结果仍保留三级明细，便于解释和扩展
   - 行业映射表统一为单张表，包含 L1/L2/L3 三层字段
-  - FeatureBuilder 主字段（`sw_industry*`）统一绑定到申万二级；同时保留 `sw_l3*` / `sw_l1*` 辅助字段
-  - `update_basic_data.py --only-shenwan` 继续按 L3 数据源下载，再在特征阶段统一主口径到 L2
-- ✅ **L2→L1→全市场分层回退中性化**：样本不足时按层级回退，保证稳健性
-  - 二级行业内 `tradable==1` 样本数 < `min_group_size(=5)` → 回退到一级统计
-  - 一级仍不足 → 回退到全市场统计
-  - 训练/回测/纸面交易统一使用二级主行业口径，避免二级/三级混用
+  - FeatureBuilder 主字段（`sw_industry*`）统一绑定到 `configs/base.yaml` 的 `industry.shenwan_level`；默认 `l2`，同时保留 `sw_l3*` / `sw_l1*` 辅助字段
+  - `update_basic_data.py --only-shenwan` 继续按 L3 数据源下载，再在特征阶段映射为系统统一主口径
+- ✅ **行业中性化按主口径自适应回退**：样本不足时按层级回退，保证稳健性
+  - `l3`：三级行业内 `tradable==1` 样本不足 → 回退到二级，再回退到一级，最后回退到全市场
+  - `l2`：二级行业内 `tradable==1` 样本不足 → 回退到一级，再回退到全市场
+  - `l1`：一级行业内 `tradable==1` 样本不足 → 直接回退到全市场
+  - 训练、回测、纸面交易统一读取同一个项目配置，避免行业口径再次混用
 
 **新增个股特征与市场状态特征** (v0.12.1 新增):
 - ✅ **新增个股特征（4个）**：
@@ -1550,14 +1551,13 @@ stats = reporter.generate_report(nav_curve, trades)
 
 ### 配置文件层级
 
-配置采用继承机制，后加载的配置会覆盖先加载的：
+默认运行时仅自动加载 `configs/base.yaml`。如需使用其他 YAML 覆盖，需要在代码中显式调用 `merge_config()` 或自行指定配置文件。
 
 ```
-base.yaml (基础配置)
-  ↓
-strategy_dividend_value.yaml (策略配置)
-  ↓
-runtime_local.yaml 或 runtime_cloud.yaml (运行时配置)
+base.yaml (默认自动加载)
+
+runtime_local.yaml / runtime_cloud.yaml
+  └─ 手工覆盖示例，不会被默认流程自动合并
 ```
 
 ### 主要配置项
@@ -1566,19 +1566,30 @@ runtime_local.yaml 或 runtime_cloud.yaml (运行时配置)
 # configs/base.yaml
 data:
   root: "./data"
+  raw: "./data/raw"
+  clean: "./data/clean"
+  features: "./data/features"
+  reports: "./data/reports"
 
-backtest:
-  start_date: "20200101"
-  end_date: "20231231"
-  initial_capital: 1000000
-  rebalance_frequency: 5  # 每5个交易日调仓一次
+tushare:
+  max_retries: 3
+  retry_delay: 1
+  rate_limit: 200
+
+industry:
+  shenwan_level: "l2"  # 支持 l1 / l2 / l3
 
 costs:
-  commission_rate: 0.0003    # 万3佣金
+  commission_rate: 0.0001954
   min_commission: 5          # 最低5元
-  stamp_tax: 0.001           # 千1印花税
-  slippage: 0.001            # 0.1%滑点
+  stamp_tax: 0.0005
+  slippage: 0.0005
 ```
+
+说明：
+- 未显式传入 `--data-root` 时，训练、回测、walk-forward、因子分析、纸面交易与树莓派显示脚本都会使用 `configs/base.yaml` 中的项目默认路径。
+- `data.root`、`data.raw`、`data.clean`、`data.features`、`data.reports` 为当前真实接线的数据目录配置；模型目录与纸面交易目录默认分别派生为 `data.root/models` 与 `data.root/paper`。
+- 命令行显式指定路径或参数时，仍优先于项目配置。
 
 ---
 

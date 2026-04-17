@@ -8,6 +8,7 @@ from typing import Optional
 
 from loguru import logger
 
+from .config import get_models_root
 from ..signals.base import Signal
 from ..signals.ml_signal import MLSignal
 from .trading_config import TradingConfig
@@ -16,7 +17,7 @@ from .trading_config import TradingConfig
 def create_signal(
     config: TradingConfig,
     *,
-    models_dir: str = "./data/models",
+    models_dir: Optional[str] = None,
     verbose: bool = False,
 ) -> Signal:
     """根据 TradingConfig 创建 MLSignal。
@@ -44,7 +45,7 @@ def create_signal(
     signal = MLSignal(
         top_n=config.top_n,
         model_version=config.model_version,
-        models_dir=models_dir,
+        models_dir=models_dir or get_models_root(),
         weight_method=config.weight_method,
         verbose=verbose,
         **gate_kwargs,

@@ -40,8 +40,8 @@ class PaperTradingRunner:
         self,
         signal: Optional[Signal] = None,
         initial_capital: float = 500000.0,
-        data_root: str = "./data",
-        paper_root: str = "./data/paper",
+        data_root: Optional[str] = None,
+        paper_root: Optional[str] = None,
         weight_method: str = "equal",
         horizon: int = 5,
         verbose: bool = True,
@@ -51,8 +51,8 @@ class PaperTradingRunner:
         Args:
             signal: 信号生成器（可选）
             initial_capital: 初始资金
-            data_root: 数据根目录
-            paper_root: 纸面交易数据目录
+            data_root: 数据根目录，未传时使用项目配置 data.root
+            paper_root: 纸面交易数据目录，未传时默认使用 data.root/paper
             weight_method: 权重分配方法，"equal"表示等权，"score"表示按分数加权
             horizon: 特征构建的预测周期（天数），用于生成 y_ret_N 特征，默认 5
             verbose: 是否输出详细日志
