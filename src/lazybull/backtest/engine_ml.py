@@ -99,6 +99,8 @@ class BacktestEngineML(BacktestEngine):
         market_regime_drawdown_threshold: float = -0.08,
         industry_momentum_filter: bool = False,
         industry_momentum_bottom_pct: float = 0.2,
+        industry_rotation_enhanced: bool = False,
+        industry_rotation_alpha: float = 0.3,
         market_regime_ma250_hard_stop: bool = False,
         market_regime_ma250_threshold: float = 1.0,
         market_regime_ma250_exposure: float = 0.0,
@@ -153,6 +155,8 @@ class BacktestEngineML(BacktestEngine):
         self._last_regime_exposure = 1.0  # 上一次的仓位系数，用于检测变动
         self.industry_momentum_filter = industry_momentum_filter
         self.industry_momentum_bottom_pct = industry_momentum_bottom_pct
+        self.industry_rotation_enhanced = industry_rotation_enhanced
+        self.industry_rotation_alpha = industry_rotation_alpha
         self.market_regime_ma250_hard_stop = market_regime_ma250_hard_stop
         self.market_regime_ma250_threshold = market_regime_ma250_threshold
         self.market_regime_ma250_exposure = market_regime_ma250_exposure
@@ -186,6 +190,8 @@ class BacktestEngineML(BacktestEngine):
         ind_filter_info = ""
         if industry_momentum_filter:
             ind_filter_info = f", 行业动量过滤=开启(剔除后{industry_momentum_bottom_pct*100:.0f}%行业)"
+        if industry_rotation_enhanced:
+            ind_filter_info += f", 行业轮动加权=开启(alpha={industry_rotation_alpha})"
         ma250_info = ""
         if market_regime_ma250_hard_stop:
             atr_tag = ", ATR缩放=开启" if market_regime_ma250_atr_scaling else ""
@@ -294,48 +300,76 @@ class BacktestEngineML(BacktestEngine):
         # 返回特征数据字典
         return {"features": features_df}
 
-    # ── 行业动量过滤 ────────────────────────────────────────────────
+    # ── 行业动量过滤 & 行业轮动加权 ──────────────────────────────────
 
     def _post_filter_candidates(
         self, ranked_candidates: list, date: pd.Timestamp
     ) -> list:
-        """剔除弱势行业的股票，剩余候选自动补位到 top_n
+        """对候选列表做行业维度的过滤和/或加权
 
-        利用 features_by_date 中的 ind_momentum_rank（行业动量百分位排名，0~1）
-        过滤掉排名 < bottom_pct 的行业的所有股票。由于候选列表远多于 top_n，
-        过滤后父类仍从前 N 个候选中选取，自动实现补位。
+        两个独立开关:
+        1. industry_momentum_filter: 硬过滤 — 剔除弱势行业(ind_momentum_rank < bottom_pct)
+        2. industry_rotation_enhanced: 软加权 — 按行业动量排名对分数做乘性调整
+           adjusted_score = score × (1 + alpha × (rank - 0.5))
+           其中 rank ∈ [0,1],alpha 控制加权强度:
+             - 最强行业(rank=1): 分数 × (1 + 0.5α)
+             - 中位行业(rank=0.5): 分数不变
+             - 最弱行业(rank=0): 分数 × (1 - 0.5α)
+           调整后重新排序,弱势行业中的超强个股仍有机会入选。
         """
-        if not self.industry_momentum_filter:
-            return ranked_candidates
-
         date_str = date.strftime('%Y%m%d')
         features_df = self.features_by_date.get(date_str)
-        if features_df is None or 'ind_momentum_rank' not in features_df.columns:
-            return ranked_candidates
 
-        # 构建 {ts_code: ind_momentum_rank} 查找表
-        rank_map = dict(zip(
-            features_df['ts_code'],
-            features_df['ind_momentum_rank'],
-        ))
+        # 步骤1: 行业动量硬过滤
+        if self.industry_momentum_filter:
+            if features_df is not None and 'ind_momentum_rank' in features_df.columns:
+                rank_map = dict(zip(
+                    features_df['ts_code'],
+                    features_df['ind_momentum_rank'],
+                ))
+                threshold = self.industry_momentum_bottom_pct
+                filtered = []
+                removed = 0
+                for stock, score in ranked_candidates:
+                    rank = rank_map.get(stock)
+                    if rank is not None and rank < threshold:
+                        removed += 1
+                        continue
+                    filtered.append((stock, score))
+                if removed > 0 and self.verbose:
+                    logger.info(
+                        f"  行业动量过滤: {date.date()}, "
+                        f"剔除 {removed} 只弱势行业股票 (bottom {threshold*100:.0f}%)"
+                    )
+                ranked_candidates = filtered
 
-        threshold = self.industry_momentum_bottom_pct
-        filtered = []
-        removed = 0
-        for stock, score in ranked_candidates:
-            rank = rank_map.get(stock)
-            if rank is not None and rank < threshold:
-                removed += 1
-                continue
-            filtered.append((stock, score))
+        # 步骤2: 行业轮动加权
+        if self.industry_rotation_enhanced:
+            if features_df is not None and 'ind_momentum_rank' in features_df.columns:
+                rank_map = dict(zip(
+                    features_df['ts_code'],
+                    features_df['ind_momentum_rank'],
+                ))
+                alpha = self.industry_rotation_alpha
+                adjusted = []
+                for stock, score in ranked_candidates:
+                    rank = rank_map.get(stock)
+                    if rank is not None and not np.isnan(rank):
+                        # rank ∈ [0,1], 中位 0.5 → 不调整
+                        multiplier = 1.0 + alpha * (rank - 0.5)
+                        adjusted.append((stock, score * multiplier))
+                    else:
+                        adjusted.append((stock, score))
+                # 重新按调整后分数降序排列
+                adjusted.sort(key=lambda x: x[1], reverse=True)
+                if self.verbose:
+                    logger.info(
+                        f"  行业轮动加权: {date.date()}, alpha={alpha}, "
+                        f"候选 {len(adjusted)} 只"
+                    )
+                ranked_candidates = adjusted
 
-        if removed > 0 and self.verbose:
-            logger.info(
-                f"  行业动量过滤: {date.date()}, "
-                f"剔除 {removed} 只弱势行业股票 (bottom {threshold*100:.0f}%)"
-            )
-
-        return filtered
+        return ranked_candidates
 
     # ── ATR 功能 hook 覆写 ────────────────────────────────────────────
 

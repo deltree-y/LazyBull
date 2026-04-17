@@ -6,7 +6,7 @@
 - L1 不足样本 → 全市场回退
 - 仅 tradable==1 参与统计
 - hierarchical_zscore 与 hierarchical_demean 正确性
-- FeatureBuilder._apply_industry_neutralization 在 L3 数据下使用分层路径
+- FeatureBuilder._apply_industry_neutralization 在当前实现中使用 L2 主口径回退路径
 """
 
 import numpy as np
@@ -270,23 +270,22 @@ class TestHierarchicalDemean:
 # ---------------------------------------------------------------------------
 
 class TestFeatureBuilderHierarchicalNeutralization:
-    """测试 FeatureBuilder._apply_industry_neutralization 在 L3 数据下使用分层路径"""
+    """测试 FeatureBuilder._apply_industry_neutralization 在 L2 主口径下使用分层路径。"""
 
-    def _make_l3_features(self, n=10):
-        """构造含 L3 层级信息的特征 DataFrame"""
+    def _make_l2_features(self, n=10):
+        """构造含 L2/L1 层级信息的特征 DataFrame。"""
         rng = np.random.default_rng(99)
         rows = []
         for i in range(n):
-            l3 = 'L3A' if i < n // 2 else 'L3B'
-            l2 = 'L2A'
+            l2 = 'L2A' if i < n // 2 else 'L2B'
             l1 = 'L1A'
             rows.append({
                 'ts_code': f'{i:06d}.SZ',
                 'trade_date': '20230101',
                 'y_ret_20': float(rng.normal(0, 0.05)),
                 'ret_5': float(rng.normal(0, 0.02)),
-                'sw_industry': l3,
-                'sw_industry_code': l3,
+                'sw_industry': l2,
+                'sw_industry_code': l2,
                 'sw_l2': l2,
                 'sw_l2_code': l2,
                 'sw_l1': l1,
@@ -295,10 +294,10 @@ class TestFeatureBuilderHierarchicalNeutralization:
             })
         return pd.DataFrame(rows)
 
-    def test_uses_hierarchical_path_when_l3_info_present(self):
-        """当 sw_industry_code/sw_l2_code/sw_l1_code 均存在时，应走分层回退路径"""
+    def test_uses_hierarchical_path_when_l2_info_present(self):
+        """当 sw_industry_code/sw_l1_code 存在时，应走二级到一级的回退路径。"""
         builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
-        features = self._make_l3_features(n=10)
+        features = self._make_l2_features(n=10)
         result = builder._apply_industry_neutralization(features)
 
         # 应生成 neu_ 列（去均值）
@@ -306,17 +305,17 @@ class TestFeatureBuilderHierarchicalNeutralization:
         assert 'neu_ret_5' in result.columns
 
     def test_hierarchical_demean_result_in_industry_mean_near_zero(self):
-        """每个 L3 行业内（样本数 >=5）去均值后均值应接近 0"""
+        """每个二级行业内（样本数 >=5）去均值后均值应接近 0。"""
         builder = FeatureBuilder(horizons=[20], lookback_windows=[5])
-        features = self._make_l3_features(n=10)
+        features = self._make_l2_features(n=10)
         result = builder._apply_industry_neutralization(features)
 
         if 'neu_y_ret_20' in result.columns:
-            for l3 in features['sw_industry_code'].unique():
-                grp = result[result['sw_industry_code'] == l3]['neu_y_ret_20'].dropna()
+            for industry_code in features['sw_industry_code'].unique():
+                grp = result[result['sw_industry_code'] == industry_code]['neu_y_ret_20'].dropna()
                 if len(grp) >= 5:
                     assert abs(float(grp.mean())) < 1e-9, \
-                        f"L3 行业 {l3} 去均值后均值应接近 0，实际={grp.mean()}"
+                        f"二级行业 {industry_code} 去均值后均值应接近 0，实际={grp.mean()}"
 
     def test_fallback_to_single_level_when_no_l3_codes(self):
         """当 DataFrame 中没有 sw_l2_code/sw_l1_code 时，回退到单层中性化"""

@@ -1,8 +1,8 @@
-"""测试申万行业字段切换（升级到三级 L3）
+"""测试申万行业主字段统一为申万二级。
 
 验证：
-- FeatureBuilder._merge_shenwan_industry() 以 L3 为主字段输出
-  sw_industry / sw_industry_code / sw_industry_id，并同时输出 L2/L1 层级字段
+- FeatureBuilder._merge_shenwan_industry() 以 L2 为主字段输出
+    sw_industry / sw_industry_code / sw_industry_id，并保留 L2/L3/L1 层级字段
 - sw_industry_id 编码稳定（相同名称始终映射到相同整数）
 - _apply_industry_neutralization() 使用 sw_industry 进行分组中性化
 - DataCleaner.clean_shenwan_industry() 默认 level_str='l3'，旧式 level_str='l2' 向后兼容
@@ -52,26 +52,30 @@ def mock_features_df():
 
 
 # ---------------------------------------------------------------------------
-# 1. 测试 _merge_shenwan_industry 输出字段（L3 格式）
+# 1. 测试 _merge_shenwan_industry 输出字段（L2 主字段）
 # ---------------------------------------------------------------------------
 
 class TestMergeShenwanIndustry:
-    """测试 FeatureBuilder._merge_shenwan_industry 输出字段（L3 格式）"""
+    """测试 FeatureBuilder._merge_shenwan_industry 输出字段（L2 主字段）"""
 
     def test_output_columns_renamed(self, mock_features_df, mock_shenwan_industry_clean_l3):
-        """合并后应输出 sw_industry / sw_industry_code / sw_industry_id（映射 L3）"""
+        """合并后应输出 sw_industry / sw_industry_code / sw_industry_id（映射 L2）。"""
         builder = FeatureBuilder()
         result = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
 
-        # L3 主字段存在
+        # L2 主字段存在
         assert 'sw_industry' in result.columns, "缺少 sw_industry 列"
         assert 'sw_industry_code' in result.columns, "缺少 sw_industry_code 列"
         assert 'sw_industry_id' in result.columns, "缺少 sw_industry_id 列"
 
-        # L2 辅助字段存在
+        # L2 显式字段存在
         assert 'sw_l2' in result.columns, "缺少 sw_l2 列"
         assert 'sw_l2_code' in result.columns, "缺少 sw_l2_code 列"
         assert 'sw_l2_id' in result.columns, "缺少 sw_l2_id 列"
+
+        # L3 细粒度字段保留
+        assert 'sw_l3' in result.columns, "缺少 sw_l3 列"
+        assert 'sw_l3_code' in result.columns, "缺少 sw_l3_code 列"
 
         # L1 辅助字段存在
         assert 'sw_l1' in result.columns, "缺少 sw_l1 列"
@@ -83,29 +87,30 @@ class TestMergeShenwanIndustry:
         assert 'sw_code' not in result.columns, "旧字段 sw_code 不应出现"
         assert 'industry_id' not in result.columns, "旧字段 industry_id 不应出现"
 
-    def test_sw_industry_maps_to_l3(self, mock_features_df, mock_shenwan_industry_clean_l3):
-        """sw_industry 应包含 L3 行业名称（而非 L1/L2）"""
+    def test_sw_industry_maps_to_l2(self, mock_features_df, mock_shenwan_industry_clean_l3):
+        """sw_industry 应包含 L2 行业名称，L3 保留在 sw_l3 中。"""
         builder = FeatureBuilder()
         result = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
 
         bank_stocks = result[result['ts_code'].isin(['000001.SZ', '000002.SZ'])]
-        assert (bank_stocks['sw_industry'] == '国有大型银行').all(), "银行股 sw_industry 应为 L3 名称"
+        assert (bank_stocks['sw_industry'] == '国有银行').all(), "银行股 sw_industry 应为 L2 名称"
+        assert (bank_stocks['sw_l3'] == '国有大型银行').all(), "银行股 sw_l3 应保留 L3 名称"
         # L1 应为一级行业名
         assert (bank_stocks['sw_l1'] == '银行').all(), "银行股 sw_l1 应为 '银行'"
 
     def test_sw_industry_id_stable(self, mock_features_df, mock_shenwan_industry_clean_l3):
-        """sw_industry_id 编码应稳定：相同名称始终映射到相同整数"""
+        """sw_industry_id 编码应稳定：相同 L2 名称始终映射到相同整数。"""
         builder = FeatureBuilder()
         result1 = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
         result2 = builder._merge_shenwan_industry(mock_features_df, mock_shenwan_industry_clean_l3)
 
         assert (result1['sw_industry_id'] == result2['sw_industry_id']).all()
 
-        ids_bank = result1[result1['sw_industry'] == '国有大型银行']['sw_industry_id'].unique()
-        ids_chem = result1[result1['sw_industry'] == '基础化学原料']['sw_industry_id'].unique()
-        assert len(ids_bank) == 1, "同一 L3 行业内 sw_industry_id 应唯一"
-        assert len(ids_chem) == 1, "同一 L3 行业内 sw_industry_id 应唯一"
-        assert ids_bank[0] != ids_chem[0], "不同 L3 行业的 sw_industry_id 应不同"
+        ids_bank = result1[result1['sw_industry'] == '国有银行']['sw_industry_id'].unique()
+        ids_chem = result1[result1['sw_industry'] == '化学原料']['sw_industry_id'].unique()
+        assert len(ids_bank) == 1, "同一 L2 行业内 sw_industry_id 应唯一"
+        assert len(ids_chem) == 1, "同一 L2 行业内 sw_industry_id 应唯一"
+        assert ids_bank[0] != ids_chem[0], "不同 L2 行业的 sw_industry_id 应不同"
 
     def test_no_shenwan_data_returns_original(self, mock_features_df):
         """当申万行业数据为空时，返回原始 DataFrame，不抛出异常"""

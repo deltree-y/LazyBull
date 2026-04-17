@@ -108,9 +108,16 @@ class TradingConfig:
     market_regime_ma250_exposure: float = 0.9  # MA250触发后仓位系数
     market_regime_ma250_atr_scaling: bool = True  # ATR动态仓位缩放
 
-    # ── 行业动量过滤 ──
-    industry_momentum_filter: bool = False  # 是否启用行业动量过滤
+    # ── 行业动量过滤 & 行业轮动加权 ──
+    industry_momentum_filter: bool = False  # 是否启用行业动量过滤（硬过滤弱势行业）
     industry_momentum_bottom_pct: float = 0.5  # 剔除排名后X%的行业
+    industry_rotation_enhanced: bool = False  # 是否启用行业轮动加权（按行业动量排名调整分数）
+    industry_rotation_alpha: float = 0.3  # 行业轮动加权强度(0=不调整,1=强调整)
+
+    # ── 仓位管理模式 ──
+    position_sizing: str = "equal"  # equal|score|kelly|half_kelly
+    kelly_vol_window: int = 60  # Kelly 波动率估计窗口（交易日）
+    kelly_max_leverage: float = 0.25  # 单只股票 Kelly 仓位上限（占总资产）
 
     # ── 盈亏动态持仓 ──
     enable_profit_based_holding: bool = True  # 是否启用盈亏动态持仓
@@ -646,7 +653,7 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         help="关闭MA250 ATR缩放",
     )
 
-    # ── 行业动量过滤 ──
+    # ── 行业动量过滤 & 行业轮动加权 ──
     parser.add_argument(
         "--industry-momentum-filter",
         action="store_true",
@@ -658,6 +665,39 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=float,
         default=0.5,
         help="剔除行业动量排名后X%%的行业（默认：0.5）",
+    )
+    parser.add_argument(
+        "--industry-rotation-enhanced",
+        action="store_true",
+        default=False,
+        help="启用行业轮动加权：按行业动量排名对候选分数做乘性调整（强势加分、弱势扣分）",
+    )
+    parser.add_argument(
+        "--industry-rotation-alpha",
+        type=float,
+        default=0.3,
+        help="行业轮动加权强度（0=不调整, 1=强调整），默认 0.3",
+    )
+
+    # ── 仓位管理模式 ──
+    parser.add_argument(
+        "--position-sizing",
+        type=str,
+        default="equal",
+        choices=["equal", "score", "kelly", "half_kelly"],
+        help="仓位管理模式: equal=等权, score=按分数, kelly=Kelly最优, half_kelly=半Kelly(更保守)",
+    )
+    parser.add_argument(
+        "--kelly-vol-window",
+        type=int,
+        default=60,
+        help="Kelly 波动率估计窗口（交易日），默认 60",
+    )
+    parser.add_argument(
+        "--kelly-max-leverage",
+        type=float,
+        default=0.25,
+        help="Kelly 单只股票仓位上限（占总资产），默认 0.25",
     )
 
     # ── 盈亏动态持仓 ──

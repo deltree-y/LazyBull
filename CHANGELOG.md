@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.55.1] - 2026-04-16
+
+### 修复
+
+- **行业主口径统一为申万二级**：`FeatureBuilder._merge_shenwan_industry()` 现将 `sw_industry*` 主字段统一绑定到申万二级行业；L3 明细继续保留在 `sw_l3*` 字段中，避免训练、回测、纸面交易在主行业口径上继续混用二级/三级
+- **`ind_momentum_rank` 改为基于申万二级生成**：行业 alpha、行业动量绝对值和百分位排名统一按 `sw_industry` 计算；重建 features 后，训练、回测和纸面交易读取到的 `ind_momentum_rank` 将全部对应申万二级
+- **行业约束映射与主字段对齐**：`industry_constraint.py` 优先使用统一主字段 `sw_industry`，使回测和纸面交易的单行业持仓约束与训练特征使用同一套申万二级口径
+- **训练侧行业中性化统一到二级主口径**：`FeatureBuilder._apply_industry_neutralization()` 现使用 `L2→L1→全市场` 的回退路径，不再把三级行业作为训练主分组口径
+
+### 测试
+
+- 更新行业字段映射与分层中性化相关测试，覆盖申万二级主口径下的特征构建与行业约束行为
+
+## [0.55.0] - 2026-04-16
+
+### 新增
+
+- **行业轮动加权**：`engine_ml.py` 的 `_post_filter_candidates` 新增步骤2——按行业动量排名对候选分数做乘性调整（`adjusted_score = score × (1 + alpha × (rank - 0.5))`），独立于已有的硬过滤开关，弱势行业中的超强个股仍有机会入选
+- **Kelly / 半 Kelly 仓位管理**：`engine.py` 的 `_normalize_signals` 支持 4 种模式（`equal`/`score`/`kelly`/`half_kelly`），Kelly 公式 `f* = μ/σ²` 利用 ML 分数作为超额收益代理、近期价格方差估计波动率，并 clip 到 `kelly_max_leverage` 上限；缺失波动率或负分数的股票优雅回退到中位 Kelly 值
+- **TradingConfig 新增 5 个参数**：`industry_rotation_enhanced`、`industry_rotation_alpha`、`position_sizing`、`kelly_vol_window`、`kelly_max_leverage`，支持 CLI 传参
+- **batch_walk_forward.ps1 新增独立扫参开关**：行业轮动加权（`$industry_rotation_enhanced` + `$industry_rotation_alpha_list`）和仓位管理模式（`$position_sizing_list` + `$kelly_max_leverage_list`）可独立组合扫描
+- **compare_walk_forward.py 新增展示列**：对比 Excel 中展示行业轮动加权和仓位管理相关参数
+
+### 测试
+
+- 新增 `tests/test_industry_rotation_and_kelly.py`（21 个测试用例），覆盖行业轮动加权、Kelly 仓位计算、参数校验、TradingConfig 字段
+
 ## [0.54.1] - 2026-04-15
 
 ### 修复

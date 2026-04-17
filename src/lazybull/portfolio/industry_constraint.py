@@ -15,7 +15,7 @@ def load_industry_mapping(
 
     Args:
         shenwan_industry: 申万行业分类 DataFrame，必须包含 ts_code 列
-            以及 sw_l2/sw_industry/sw_name/sw_l3 中至少一列
+            以及 sw_industry/sw_l2/sw_name/sw_l3 中至少一列
         verbose: 是否输出详细日志
 
     Returns:
@@ -32,8 +32,8 @@ def load_industry_mapping(
     if 'ts_code' not in shenwan_industry.columns:
         raise ValueError("shenwan_industry 必须包含 ts_code 列")
 
-    if not {'sw_name', 'sw_industry', 'sw_l3'}.intersection(shenwan_industry.columns):
-        raise ValueError("shenwan_industry 必须包含 sw_industry、sw_name 或 sw_l3 列")
+    if not {'sw_industry', 'sw_l2', 'sw_name', 'sw_l3'}.intersection(shenwan_industry.columns):
+        raise ValueError("shenwan_industry 必须包含 sw_industry、sw_l2、sw_name 或 sw_l3 列")
 
     # 构建映射：将 NaN/None 映射为 "未知行业"
     industry_mapping = {}
@@ -41,7 +41,7 @@ def load_industry_mapping(
 
     for _, row in shenwan_industry.iterrows():
         ts_code = row['ts_code']
-        industry = row.get('sw_l2') or row.get('sw_industry') or row.get('sw_name') or row.get('sw_l3')  # 优先使用申万二级行业
+        industry = row.get('sw_industry') or row.get('sw_l2') or row.get('sw_name') or row.get('sw_l3')
         
         # 处理缺失值
         if pd.isna(industry) or industry == '' or industry is None:

@@ -1558,25 +1558,19 @@ class FeatureBuilder:
     def _merge_shenwan_industry(
         self,
         features: pd.DataFrame,
-        shenwan_industry: pd.DataFrame
+        shenwan_industry: pd.DataFrame,
     ) -> pd.DataFrame:
-        """合并申万行业分类信息（支持 L3 三级与旧式 L2 两种格式）
+        """合并申万行业分类信息（统一主行业口径为申万二级）。
 
         新式 L3 格式（优先）：shenwan_industry 含 sw_l3_code、sw_l3 列，同时含
-          sw_l2_code/sw_l2、sw_l1_code/sw_l1 列，产出：
-          - sw_industry / sw_industry_code / sw_industry_id（映射到 L3）
-          - sw_l2 / sw_l2_code / sw_l2_id
+        sw_l2_code/sw_l2、sw_l1_code/sw_l1 列，产出：
+          - sw_industry / sw_industry_code / sw_industry_id（统一映射到 L2）
+          - sw_l2 / sw_l2_code / sw_l2_id（与 sw_industry* 保持一致）
+          - sw_l3 / sw_l3_code（保留更细粒度行业，供分析/调试）
           - sw_l1 / sw_l1_code / sw_l1_id
 
         旧式 L2 格式（兼容）：shenwan_industry 含 sw_code、sw_name 列，产出：
           - sw_industry / sw_industry_code / sw_industry_id
-
-        Args:
-            features: 特征DataFrame
-            shenwan_industry: 申万行业分类DataFrame
-
-        Returns:
-            合并了行业信息的DataFrame
         """
         from ..factors.industry import generate_industry_encoding
 
@@ -1585,17 +1579,24 @@ class FeatureBuilder:
             return features
 
         sw_cols = shenwan_industry.columns.tolist()
-
-        # ---- 新式 L3 格式检测 ----
-        is_l3_format = ('sw_l3_code' in sw_cols or 'sw_l3' in sw_cols)
+        is_l3_format = "sw_l3_code" in sw_cols or "sw_l3" in sw_cols
 
         if is_l3_format:
-            # 确定实际存在的列
-            l3_cols = [c for c in ['sw_l3_code', 'sw_l3', 'sw_l2_code', 'sw_l2',
-                                    'sw_l1_code', 'sw_l1', 'in_date']
-                       if c in sw_cols]
-            merge_cols = ['ts_code'] + l3_cols
-            existing_merge_cols = [c for c in merge_cols if c in sw_cols]
+            l3_cols = [
+                col
+                for col in [
+                    "sw_l3_code",
+                    "sw_l3",
+                    "sw_l2_code",
+                    "sw_l2",
+                    "sw_l1_code",
+                    "sw_l1",
+                    "in_date",
+                ]
+                if col in sw_cols
+            ]
+            merge_cols = ["ts_code"] + l3_cols
+            existing_merge_cols = [col for col in merge_cols if col in sw_cols]
 
             if len(existing_merge_cols) < 2:
                 logger.warning(f"申万 L3 数据缺少必要字段，现有列：{sw_cols}")
@@ -1603,61 +1604,65 @@ class FeatureBuilder:
 
             result = features.merge(
                 shenwan_industry[existing_merge_cols],
-                on='ts_code',
-                how='left'
+                on="ts_code",
+                how="left",
             )
 
-            # L3 → sw_industry*
-            if 'sw_l3_code' in result.columns:
-                result = result.rename(columns={'sw_l3_code': 'sw_industry_code'})
-            if 'sw_l3' in result.columns:
-                result = result.rename(columns={'sw_l3': 'sw_industry'})
+            # 统一主行业字段：始终绑定到申万二级，训练/回测/纸交全部使用这一口径。
+            if "sw_l2_code" in result.columns and result["sw_l2_code"].notna().any():
+                result["sw_industry_code"] = result["sw_l2_code"]
+            elif "sw_l3_code" in result.columns:
+                logger.warning("申万行业数据缺少 sw_l2_code，sw_industry_code 临时回退到 sw_l3_code")
+                result["sw_industry_code"] = result["sw_l3_code"]
 
-            # 生成 sw_industry_id
-            if 'sw_industry' in result.columns:
-                id_dict = generate_industry_encoding(result['sw_industry'])
-                result['sw_industry_id'] = result['sw_industry'].map(id_dict)
+            if "sw_l2" in result.columns and result["sw_l2"].notna().any():
+                result["sw_industry"] = result["sw_l2"]
+            elif "sw_l3" in result.columns:
+                logger.warning("申万行业数据缺少 sw_l2，sw_industry 临时回退到 sw_l3")
+                result["sw_industry"] = result["sw_l3"]
 
-            # 生成 sw_l2_id
-            if 'sw_l2' in result.columns:
-                id_dict_l2 = generate_industry_encoding(result['sw_l2'])
-                result['sw_l2_id'] = result['sw_l2'].map(id_dict_l2)
+            if "sw_industry" in result.columns:
+                id_dict = generate_industry_encoding(result["sw_industry"])
+                result["sw_industry_id"] = result["sw_industry"].map(id_dict)
 
-            # 生成 sw_l1_id
-            if 'sw_l1' in result.columns:
-                id_dict_l1 = generate_industry_encoding(result['sw_l1'])
-                result['sw_l1_id'] = result['sw_l1'].map(id_dict_l1)
+            if "sw_l2" in result.columns:
+                id_dict_l2 = generate_industry_encoding(result["sw_l2"])
+                result["sw_l2_id"] = result["sw_l2"].map(id_dict_l2)
+
+            if "sw_l1" in result.columns:
+                id_dict_l1 = generate_industry_encoding(result["sw_l1"])
+                result["sw_l1_id"] = result["sw_l1"].map(id_dict_l1)
 
             if self.verbose:
-                industry_counts = result.get('sw_industry', pd.Series()).value_counts()
-                logger.info(f"申万三级行业分布（前5）：\n{industry_counts.head()}")
+                industry_counts = result.get("sw_industry", pd.Series()).value_counts()
+                logger.info(f"申万二级行业分布（前5）：\n{industry_counts.head()}")
 
-        else:
-            # ---- 旧式 L2/L1 格式 ----
-            industry_cols = ['ts_code', 'sw_code', 'sw_name']
-            existing_cols = [col for col in industry_cols if col in sw_cols]
+            return result
 
-            if len(existing_cols) < 2:
-                logger.warning(f"申万行业数据缺少必要字段，现有列：{sw_cols}")
-                return features
+        industry_cols = ["ts_code", "sw_code", "sw_name"]
+        existing_cols = [col for col in industry_cols if col in sw_cols]
 
-            result = features.merge(
-                shenwan_industry[existing_cols],
-                on='ts_code',
-                how='left'
-            )
+        if len(existing_cols) < 2:
+            logger.warning(f"申万行业数据缺少必要字段，现有列：{sw_cols}")
+            return features
 
-            rename_map = {}
-            if 'sw_name' in result.columns:
-                rename_map['sw_name'] = 'sw_industry'
-            if 'sw_code' in result.columns:
-                rename_map['sw_code'] = 'sw_industry_code'
-            if rename_map:
-                result = result.rename(columns=rename_map)
+        result = features.merge(
+            shenwan_industry[existing_cols],
+            on="ts_code",
+            how="left",
+        )
 
-            if 'sw_industry' in result.columns:
-                id_dict = generate_industry_encoding(result['sw_industry'])
-                result['sw_industry_id'] = result['sw_industry'].map(id_dict)
+        rename_map = {}
+        if "sw_name" in result.columns:
+            rename_map["sw_name"] = "sw_industry"
+        if "sw_code" in result.columns:
+            rename_map["sw_code"] = "sw_industry_code"
+        if rename_map:
+            result = result.rename(columns=rename_map)
+
+        if "sw_industry" in result.columns:
+            id_dict = generate_industry_encoding(result["sw_industry"])
+            result["sw_industry_id"] = result["sw_industry"].map(id_dict)
 
         return result
     
@@ -1667,15 +1672,17 @@ class FeatureBuilder:
     ) -> pd.DataFrame:
         """应用行业中性化（包含去均值和Z-Score两类）
 
-        当数据包含 L3 层级信息（sw_industry_code、sw_l2_code、sw_l1_code）时，
-        使用分层回退中性化（L3→L2→L1→全市场）；否则退化为单层 sw_industry 中性化。
+        sw_industry 已统一绑定到申万二级行业。
+
+        当数据包含二级/一级层级信息（sw_industry_code、sw_l1_code）时，
+        使用分层回退中性化（L2→L1→全市场）；否则退化为单层 sw_industry 中性化。
 
         对指定的列进行行业中性化：
         1. 去均值（demean）：收益率/标签列，neu_ 前缀
         2. Z-Score：指标/特征列，zscore_ 前缀
 
         Args:
-            features: 特征DataFrame，需包含 sw_industry 列（及可选的 sw_l2_code、sw_l1_code）
+            features: 特征DataFrame，需包含 sw_industry 列（及可选的 sw_industry_code、sw_l1_code）
 
         Returns:
             添加了行业中性化列的DataFrame
@@ -1699,10 +1706,10 @@ class FeatureBuilder:
 
         result = features.copy()
 
-        # 判断是否有 L3 分层信息
+        # 判断是否有二级/一级分层信息
         has_hierarchy = all(
             col in result.columns
-            for col in ['sw_industry_code', 'sw_l2_code', 'sw_l1_code']
+            for col in ['sw_industry_code', 'sw_l1_code']
         )
 
         # ========================================
@@ -1724,14 +1731,15 @@ class FeatureBuilder:
         if len(demean_columns) > 0:
             if has_hierarchy:
                 logger.info(
-                    f"开始分层回退行业去均值（L3→L2→L1→全市场）：{len(demean_columns)} 个列"
+                    f"开始分层回退行业去均值（L2→L1→全市场）：{len(demean_columns)} 个列"
                 )
                 try:
+                    # 复用分层实现：primary=申万二级，fallback=申万一级，再兜底到全市场
                     result = hierarchical_demean(
                         result,
                         columns=demean_columns,
                         l3_col='sw_industry_code',
-                        l2_col='sw_l2_code',
+                        l2_col='sw_l1_code',
                         l1_col='sw_l1_code',
                         tradable_col='tradable',
                         min_group_size=5,
@@ -1784,14 +1792,15 @@ class FeatureBuilder:
         if len(existing_zscore_columns) > 0:
             if has_hierarchy:
                 logger.info(
-                    f"开始分层回退行业内 Z-Score（L3→L2→L1→全市场）：{len(existing_zscore_columns)} 个特征"
+                    f"开始分层回退行业内 Z-Score（L2→L1→全市场）：{len(existing_zscore_columns)} 个特征"
                 )
                 try:
+                    # 复用分层实现：primary=申万二级，fallback=申万一级，再兜底到全市场
                     result = hierarchical_zscore(
                         result,
                         columns=existing_zscore_columns,
                         l3_col='sw_industry_code',
-                        l2_col='sw_l2_code',
+                        l2_col='sw_l1_code',
                         l1_col='sw_l1_code',
                         tradable_col='tradable',
                         min_group_size=5,

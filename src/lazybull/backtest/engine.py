@@ -247,6 +247,9 @@ class BacktestEngine:
         signal_gate_topn_low_multiplier: float = 1.5,  # 低置信度扩大系数（>1）
         holding_bonus_enabled: bool = False,  # 是否启用持仓保留奖励（降低换手率）
         holding_bonus_sigma: float = 0.5,  # 保留奖励幅度（截面分数标准差的倍数）
+        position_sizing: str = "equal",  # 仓位管理: equal|score|kelly|half_kelly
+        kelly_vol_window: int = 60,  # Kelly 波动率估计窗口（交易日）
+        kelly_max_leverage: float = 0.25,  # 单只股票 Kelly 仓位上限（占总资产）
         enable_early_rebalance_on_empty: bool = True,  # 空仓时是否提前触发新一轮调仓
     ):
         """初始化回测引擎
@@ -490,6 +493,20 @@ class BacktestEngine:
         # ── 换手率约束（持仓保留奖励）──
         self.holding_bonus_enabled = holding_bonus_enabled
         self.holding_bonus_sigma = holding_bonus_sigma
+        # Kelly 仓位管理参数
+        if position_sizing not in ("equal", "score", "kelly", "half_kelly"):
+            raise ValueError(
+                f"position_sizing 必须为 equal|score|kelly|half_kelly，"
+                f"当前值: {position_sizing}"
+            )
+        self.position_sizing = position_sizing
+        self.kelly_vol_window = kelly_vol_window
+        self.kelly_max_leverage = kelly_max_leverage
+        if position_sizing in ("kelly", "half_kelly"):
+            logger.info(
+                f"仓位管理模式={position_sizing}, 波动率窗口={kelly_vol_window}, "
+                f"单股上限={kelly_max_leverage:.2f}"
+            )
         self._prediction_quality_history: List[Dict] = []
         self._rolling_quality_score: float = 1.0  # 默认满分（预热期不干预）
         self._quality_warmup_remaining: int = signal_gate_quality_window  # 预热计数
@@ -2701,22 +2718,31 @@ class BacktestEngine:
         return {}
 
     def _normalize_signals(self, signals: Dict[str, float], date: pd.Timestamp) -> Dict[str, float]:
-        """将分数字典归一化为权重字典（子类可覆写以实现 ATR 加权等策略）
+        """将分数字典归一化为权重字典
 
-        默认按 weight_method（equal/score）归一化。
-        engine_ml.py 覆写此方法以实现 1/ATR 反比权重。
+        支持 4 种模式（由 self.position_sizing 控制）:
+        - equal: 等权
+        - score: 按预测分数线性加权
+        - kelly: Kelly 最优仓位（基于分数 × 波动率估计）
+        - half_kelly: 半 Kelly（Kelly 仓位的 50%，更保守）
+
+        Kelly 公式: f* = μ / σ², 其中:
+        - μ: 预期超额收益（用 ML 分数代理）
+        - σ²: 收益率方差（从近期价格数据估计）
+        最终 clip 到 [0, kelly_max_leverage], 再归一化总和为 1.0。
         """
         if not signals:
             return {}
 
-        weight_method = getattr(self.signal, "weight_method", "equal")
+        sizing = self.position_sizing
 
-        if weight_method == "equal":
+        if sizing == "equal":
             weight = 1.0 / len(signals)
             if self.verbose:
                 logger.info(f"  权重方法: equal (等权), 每只股票权重 {weight:.4f}")
             return {stock: weight for stock in signals.keys()}
-        else:
+
+        elif sizing == "score":
             total_score = sum(signals.values())
             if total_score > 0:
                 result = {stock: score / total_score for stock, score in signals.items()}
@@ -2725,13 +2751,125 @@ class BacktestEngine:
                     weights_str = ", ".join(
                         [f"{stock}: {weight:.4f}" for stock, weight in sample_stocks]
                     )
-                    logger.info(f"  权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}")
+                    logger.info(
+                        f"  权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}"
+                    )
                 return result
             else:
                 weight = 1.0 / len(signals)
                 if self.verbose:
-                    logger.warning(f"所有分数 <= 0，回退到等权分配，每只股票权重 {weight:.4f}")
+                    logger.warning(
+                        f"所有分数 <= 0，回退到等权分配，每只股票权重 {weight:.4f}"
+                    )
                 return {stock: weight for stock in signals.keys()}
+
+        elif sizing in ("kelly", "half_kelly"):
+            return self._kelly_weights(signals, date, half=(sizing == "half_kelly"))
+
+        else:
+            weight = 1.0 / len(signals)
+            return {stock: weight for stock in signals.keys()}
+
+    def _kelly_weights(
+        self,
+        signals: Dict[str, float],
+        date: pd.Timestamp,
+        half: bool = False,
+    ) -> Dict[str, float]:
+        """计算 Kelly / 半 Kelly 仓位权重
+
+        对每只股票:
+        1. μ = ML 预测分数（作为预期超额收益的代理）
+        2. σ² = 近 kelly_vol_window 日收益率方差（从 price_data 估计）
+        3. f* = μ / σ², clip 到 [0, kelly_max_leverage]
+        4. 半 Kelly: f* × 0.5
+        5. 所有 f* 归一化总和为 1.0
+
+        如果无法估计波动率,则该股票回退到平均权重。
+        """
+        raw_kelly = {}
+        fallback_stocks = []
+
+        for stock, score in signals.items():
+            if score <= 0:
+                fallback_stocks.append(stock)
+                continue
+
+            vol_sq = self._estimate_stock_variance(stock, date)
+            if vol_sq is None or vol_sq <= 0:
+                fallback_stocks.append(stock)
+                continue
+
+            # Kelly 公式: f* = μ / σ²
+            f_star = score / vol_sq
+            f_star = min(f_star, self.kelly_max_leverage)
+            f_star = max(f_star, 0.0)
+            if half:
+                f_star *= 0.5
+            raw_kelly[stock] = f_star
+
+        # 对 fallback 股票分配一个中位 kelly 值
+        if raw_kelly:
+            median_kelly = float(np.median(list(raw_kelly.values())))
+        else:
+            median_kelly = 1.0 / max(len(signals), 1)
+
+        for stock in fallback_stocks:
+            raw_kelly[stock] = median_kelly
+
+        # 归一化总和为 1.0
+        total = sum(raw_kelly.values())
+        if total <= 0:
+            weight = 1.0 / len(signals)
+            return {stock: weight for stock in signals.keys()}
+
+        result = {stock: w / total for stock, w in raw_kelly.items()}
+
+        if self.verbose:
+            mode_name = "half_kelly" if half else "kelly"
+            sample = list(result.items())[:3]
+            weights_str = ", ".join([f"{s}: {w:.4f}" for s, w in sample])
+            logger.info(
+                f"  权重方法: {mode_name}, 示例权重（前3只）: {weights_str}, "
+                f"fallback={len(fallback_stocks)}只"
+            )
+        return result
+
+    def _estimate_stock_variance(
+        self, stock: str, date: pd.Timestamp
+    ) -> Optional[float]:
+        """估计股票近期收益率方差,供 Kelly 仓位计算使用
+
+        从 price_data_cache 中取近 kelly_vol_window 日收盘价,计算日收益率方差。
+        数据不足时返回 None。
+        """
+        if self.price_data_cache is None:
+            return None
+
+        date_str = to_trade_date_str(date)
+        stock_data = self.price_data_cache[
+            (self.price_data_cache["ts_code"] == stock)
+            & (self.price_data_cache["trade_date"] <= date_str)
+        ]
+
+        if len(stock_data) < 20:
+            return None
+
+        # 取最近 kelly_vol_window 条
+        stock_data = stock_data.sort_values("trade_date").tail(self.kelly_vol_window)
+
+        # 优先使用后复权价格
+        price_col = "close_adj" if "close_adj" in stock_data.columns else "close"
+        prices = stock_data[price_col].values.astype(float)
+        prices = prices[~np.isnan(prices)]
+        if len(prices) < 10:
+            return None
+
+        log_returns = np.diff(np.log(prices))
+        if len(log_returns) < 5:
+            return None
+
+        return float(np.var(log_returns))
 
     def _buy_stock_direct(
         self,

@@ -208,6 +208,11 @@ def run_oos_backtest(
     bt_weight_method: str = "equal",
     industry_momentum_filter: bool = False,
     industry_momentum_bottom_pct: float = 0.2,
+    industry_rotation_enhanced: bool = False,
+    industry_rotation_alpha: float = 0.3,
+    position_sizing: str = "equal",
+    kelly_vol_window: int = 60,
+    kelly_max_leverage: float = 0.25,
     stagger_tranches: int = 1,
     enable_profit_based_holding: bool = False,
     early_exit_loss_threshold: float = -0.05,
@@ -426,7 +431,12 @@ def run_oos_backtest(
         market_regime_ma250_atr_scaling=market_regime_ma250_atr_scaling,
         industry_momentum_filter=industry_momentum_filter,
         industry_momentum_bottom_pct=industry_momentum_bottom_pct,
+        industry_rotation_enhanced=industry_rotation_enhanced,
+        industry_rotation_alpha=industry_rotation_alpha,
         stagger_tranches=stagger_tranches,
+        position_sizing=position_sizing,
+        kelly_vol_window=kelly_vol_window,
+        kelly_max_leverage=kelly_max_leverage,
         enable_profit_based_holding=enable_profit_based_holding,
         early_exit_loss_threshold=early_exit_loss_threshold,
         early_exit_holding_ratio=early_exit_holding_ratio,
@@ -1518,6 +1528,11 @@ def write_walk_forward_summary(
         ),
         "industry_momentum_filter": getattr(args, 'industry_momentum_filter', False),
         "industry_momentum_bottom_pct": getattr(args, 'industry_momentum_bottom_pct', 0.2),
+        "industry_rotation_enhanced": getattr(args, 'industry_rotation_enhanced', False),
+        "industry_rotation_alpha": getattr(args, 'industry_rotation_alpha', 0.3),
+        "position_sizing": getattr(args, 'position_sizing', 'equal'),
+        "kelly_vol_window": getattr(args, 'kelly_vol_window', 60),
+        "kelly_max_leverage": getattr(args, 'kelly_max_leverage', 0.25),
         "market_regime": getattr(args, 'market_regime', False),
         "market_regime_bear_threshold": getattr(args, 'market_regime_bear_threshold', None),
         "market_regime_bear_exposure": getattr(args, 'market_regime_bear_exposure', None),
@@ -2258,6 +2273,39 @@ def main():
         default=0.2,
         help="行业动量过滤阈值：剔除排名后 X%% 的行业（0~1），默认 0.2（后20%%）"
     )
+    parser.add_argument(
+        "--industry-rotation-enhanced",
+        action="store_true",
+        default=False,
+        help="启用行业轮动加权：按行业动量排名对候选分数做乘性调整（强势加分、弱势扣分）"
+    )
+    parser.add_argument(
+        "--industry-rotation-alpha",
+        type=float,
+        default=0.3,
+        help="行业轮动加权强度（0=不调整, 1=强调整），默认 0.3"
+    )
+
+    # 仓位管理模式
+    parser.add_argument(
+        "--position-sizing",
+        type=str,
+        default="equal",
+        choices=["equal", "score", "kelly", "half_kelly"],
+        help="仓位管理模式: equal=等权, score=按分数, kelly=Kelly最优, half_kelly=半Kelly"
+    )
+    parser.add_argument(
+        "--kelly-vol-window",
+        type=int,
+        default=60,
+        help="Kelly 波动率估计窗口（交易日），默认 60"
+    )
+    parser.add_argument(
+        "--kelly-max-leverage",
+        type=float,
+        default=0.25,
+        help="Kelly 单只股票仓位上限（占总资产），默认 0.25"
+    )
 
     # 市场择时仓位管理参数
     parser.add_argument(
@@ -2759,6 +2807,11 @@ def main():
                             bt_weight_method=args.bt_weight_method,
                             industry_momentum_filter=args.industry_momentum_filter,
                             industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,
+                            industry_rotation_enhanced=getattr(args, 'industry_rotation_enhanced', False),
+                            industry_rotation_alpha=getattr(args, 'industry_rotation_alpha', 0.3),
+                            position_sizing=getattr(args, 'position_sizing', 'equal'),
+                            kelly_vol_window=getattr(args, 'kelly_vol_window', 60),
+                            kelly_max_leverage=getattr(args, 'kelly_max_leverage', 0.25),
                             stagger_tranches=args.stagger_tranches,
                             enable_profit_based_holding=args.enable_profit_based_holding,
                             early_exit_loss_threshold=args.early_exit_loss_threshold,

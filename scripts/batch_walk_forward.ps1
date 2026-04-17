@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"   #20130101   #20130224
-$wf_end_date             = "20251231"   #20251231   #20260224
+$wf_start_date           = "20130209"   #20130101   #20130224
+$wf_end_date             = "20260209"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -30,19 +30,19 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(1000)      # 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(3)         # XGB推荐9, LGB推荐5
+$n_estimators_list       = @(1000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.012)     #. XGB推荐0.005, LGB推荐0.005
-$subsample_list          = @(0.8)       # XGB推荐0.8, LGB推荐0.7
-$colsample_bytree_list   = @(0.3)       # XGB/LGB均推荐0.3
+$subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
+$colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
-$reg_alpha_list          = @(0.025, 0.075, 0.1, 0.15)      # XGB推荐0.05, LGB推荐0.1
+$reg_alpha_list          = @(0.05)      #. XGB推荐0.05, LGB推荐0.1
 $reg_lambda_list         = @(5)         #. XGB推荐1.0, LGB推荐5.0
-$gamma_list              = @(0.5)       # 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
+$gamma_list              = @(0)         #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds   = 500          # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树）
+$early_stopping_rounds_list = @(650)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "auto"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
@@ -95,7 +95,9 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $false   # $true 启用 | $false 禁用
-$start_model_version     = 9461    # 第一个 split 的模型版本号（$null = 不指定）
+#$start_model_version     = 10816    # 0224
+$start_model_version     = 10830    # 0101
+#$start_model_version     = 10802    # 0209
                                    #d3(0101):7969/9430(no enh)/9416(enh)
                                    #d3(0209):8165/9446(no enh)/9461(enh)/9601(ofst+1)
                                    #d2:8137
@@ -162,6 +164,15 @@ $bt_equity_curve_recovery_delay_periods_list = @(0)
 # ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
 $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
 $industry_momentum_bottom_pct = 0.5     # 剔除排名后 X% 的行业（0~1），默认 0.2
+
+# ── 行业轮动加权（按行业动量排名对候选分数做乘性调整）─────────────
+$industry_rotation_enhanced       = $false     # $true 启用 | $false 禁用（独立于上方硬过滤）
+$industry_rotation_alpha_list     = @(0.3)#1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0)     # 加权强度（可多值，如 @(0.1, 0.3, 0.5)）
+
+# ── 仓位管理模式（Kelly / 半 Kelly）──────────────────────────────
+$position_sizing_list             = @('half_kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
+$kelly_vol_window                 = 60         # Kelly 波动率窗口（交易日）
+$kelly_max_leverage_list          = @(0.15)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── 市场择时仓位管理 ─────────────────────────────────────────
 $market_regime                = $false       # $true 启用 | $false 禁用
@@ -266,6 +277,7 @@ $failed     = 0
 # 计算总任务数（各列表长度的笛卡尔积）
 $totalTasks = $algorithm_list.Length *
               $n_estimators_list.Length *
+              $early_stopping_rounds_list.Length *
               $step_list.Length *
               $train_window_years_list.Length *
               $test_window_months_list.Length *
@@ -316,7 +328,10 @@ $totalTasks = $algorithm_list.Length *
               $early_exit_mode_list.Length *
               $early_exit_strength_protect_threshold_list.Length *
               $early_exit_max_reprieves_list.Length *
-              $take_profit_threshold_list.Length
+              $take_profit_threshold_list.Length *
+              $industry_rotation_alpha_list.Length *
+              $position_sizing_list.Length *
+              $kelly_max_leverage_list.Length
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -337,6 +352,7 @@ foreach ($task in $task_list) {
 foreach ($label_transform in $label_transform_list) {
 foreach ($objective in $objective_list) {
 foreach ($n_estimators in $n_estimators_list) {
+foreach ($early_stopping_rounds in $early_stopping_rounds_list) {
 foreach ($max_depth in $max_depth_list) {
 foreach ($num_leaves in $num_leaves_list) {
 foreach ($learning_rate in $learning_rate_list) {
@@ -380,6 +396,9 @@ foreach ($early_exit_mode in $early_exit_mode_list) {
 foreach ($early_exit_strength_protect_threshold in $early_exit_strength_protect_threshold_list) {
 foreach ($early_exit_max_reprieves in $early_exit_max_reprieves_list) {
 foreach ($take_profit_threshold in $take_profit_threshold_list) {
+foreach ($industry_rotation_alpha in $industry_rotation_alpha_list) {
+foreach ($position_sizing in $position_sizing_list) {
+foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     $count++
 
@@ -586,6 +605,17 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
         $pythonCmd += " --industry-momentum-filter --industry-momentum-bottom-pct $industry_momentum_bottom_pct"
     }
 
+    if ($industry_rotation_enhanced) {
+        $pythonCmd += " --industry-rotation-enhanced --industry-rotation-alpha $industry_rotation_alpha"
+    }
+
+    if ($position_sizing -ne 'equal') {
+        $pythonCmd += " --position-sizing $position_sizing"
+        if ($position_sizing -eq 'kelly' -or $position_sizing -eq 'half_kelly') {
+            $pythonCmd += " --kelly-vol-window $kelly_vol_window --kelly-max-leverage $kelly_max_leverage"
+        }
+    }
+
     if (-not $deploy_train) {
         $pythonCmd += " --no-deploy-train"
     }
@@ -624,7 +654,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

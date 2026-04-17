@@ -138,6 +138,13 @@ COL_NAMES = {
     "early_exit_mode":                        "早退模式",
     "early_exit_strength_protect_threshold":   "早退保护阈值",
     "early_exit_max_reprieves":               "早退最大缓刑",
+    # 行业轮动加权
+    "industry_rotation_enhanced":    "行业轮动加权",
+    "industry_rotation_alpha":       "轮动Alpha",
+    # 仓位管理
+    "position_sizing":               "仓位模式",
+    "kelly_vol_window":              "Kelly波动窗口",
+    "kelly_max_leverage":            "Kelly仓位上限",
     "market_regime_ma250_hard_stop": "MA250硬条件",
     "market_regime_ma250_threshold": "MA250阈值",
     "market_regime_ma250_exposure":  "MA250仓位",
@@ -182,6 +189,10 @@ PARAM_COLS = [
     "use_atr_for_early_exit", "atr_multiplier",
     # 亏损提前换出二次确认
     "early_exit_mode", "early_exit_strength_protect_threshold", "early_exit_max_reprieves",
+    # 行业轮动加权
+    "industry_rotation_enhanced", "industry_rotation_alpha",
+    # 仓位管理
+    "position_sizing", "kelly_vol_window", "kelly_max_leverage",
     "market_regime_ma250_hard_stop", "market_regime_ma250_threshold",
     "market_regime_ma250_exposure", "market_regime_ma250_atr_scaling",
     # 整体持仓止盈

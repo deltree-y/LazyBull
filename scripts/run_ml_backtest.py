@@ -183,6 +183,11 @@ def run_ml_backtest(
     profit_extension_mode: str = "pnl",
     profit_extension_strength_threshold: float = 0.6,
     profit_extension_strength_weights: dict = None,
+    industry_rotation_enhanced: bool = False,
+    industry_rotation_alpha: float = 0.3,
+    position_sizing: str = "equal",
+    kelly_vol_window: int = 60,
+    kelly_max_leverage: float = 0.25,
 ) -> tuple:
     """运行 ML 信号回测
     
@@ -232,6 +237,11 @@ def run_ml_backtest(
         profit_extension_mode=profit_extension_mode,
         profit_extension_strength_threshold=profit_extension_strength_threshold,
         profit_extension_strength_weights=profit_extension_strength_weights,
+        industry_rotation_enhanced=industry_rotation_enhanced,
+        industry_rotation_alpha=industry_rotation_alpha,
+        position_sizing=position_sizing,
+        kelly_vol_window=kelly_vol_window,
+        kelly_max_leverage=kelly_max_leverage,
     )
 
     # 运行回测
@@ -950,8 +960,13 @@ def main():
             profit_extension_mode=trading_config.profit_extension_mode,
             profit_extension_strength_threshold=trading_config.profit_extension_strength_threshold,
             profit_extension_strength_weights=trading_config.profit_extension_strength_weights,
+            industry_rotation_enhanced=trading_config.industry_rotation_enhanced,
+            industry_rotation_alpha=trading_config.industry_rotation_alpha,
+            position_sizing=trading_config.position_sizing,
+            kelly_vol_window=trading_config.kelly_vol_window,
+            kelly_max_leverage=trading_config.kelly_max_leverage,
         )
-        
+
         # 7. 生成报告
         reporter = Reporter(output_dir=f"{args.data_root}/reports")
         stats = reporter.generate_report(nav_curve, trades, output_name=args.output_name)
