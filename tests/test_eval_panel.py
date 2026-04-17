@@ -158,7 +158,6 @@ def test_evaluate_daily(trained_model, tmp_path):
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         verbose=False
     )
     

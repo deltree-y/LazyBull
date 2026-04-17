@@ -54,7 +54,6 @@ def test_ml_signal_init():
 
     assert signal.top_n == 50
     assert signal.model_version == 1
-    assert signal.weight_method == "equal"
     assert signal.model is None  # 延迟加载
 
 
@@ -75,11 +74,11 @@ def test_ml_signal_load_model(trained_model):
     assert signal.feature_columns == ["f1", "f2", "f3"]
 
 
-def test_ml_signal_generate_equal_weight(trained_model):
-    """测试生成等权信号"""
+def test_ml_signal_generate_scores(trained_model):
+    """测试 generate() 返回原始 ml_score（非归一化），供引擎层统一做权重分配"""
     models_dir, version = trained_model
 
-    signal = MLSignal(top_n=5, model_version=version, models_dir=models_dir, weight_method="equal")
+    signal = MLSignal(top_n=5, model_version=version, models_dir=models_dir)
 
     # 准备测试数据
     date = pd.Timestamp("2023-06-15")
@@ -98,7 +97,7 @@ def test_ml_signal_generate_equal_weight(trained_model):
     features_df = pd.DataFrame(
         {
             "ts_code": universe,
-            "f1": [10, 8, 12, 6, 15, 5, 9, 7],  # 预测值会基于此列
+            "f1": [10, 8, 12, 6, 15, 5, 9, 7],
             "f2": np.random.randn(8),
             "f3": np.random.randn(8),
         }
@@ -109,20 +108,19 @@ def test_ml_signal_generate_equal_weight(trained_model):
     # 生成信号
     signals = signal.generate(date, universe, data)
 
-    # 验证结果
-    assert len(signals) == 5  # Top 5
-    assert abs(sum(signals.values()) - 1.0) < 1e-6  # 权重和为1
-
-    # 等权，每只股票权重应该是 1/5 = 0.2
-    for weight in signals.values():
-        assert abs(weight - 0.2) < 1e-6
+    # 验证结果：返回 Top 5，分数为正数（非归一化权重）
+    assert len(signals) == 5
+    for score in signals.values():
+        assert score > 0, "generate() 应返回正数原始分数"
+    # 总和不等于 1（原始分数，非归一化）
+    assert sum(signals.values()) > 1.0
 
 
 def test_ml_signal_generate_score_weight(trained_model):
     """测试生成按分数加权的信号"""
     models_dir, version = trained_model
 
-    signal = MLSignal(top_n=3, model_version=version, models_dir=models_dir, weight_method="score")
+    signal = MLSignal(top_n=3, model_version=version, models_dir=models_dir)
 
     # 准备测试数据
     date = pd.Timestamp("2023-06-15")
@@ -142,24 +140,23 @@ def test_ml_signal_generate_score_weight(trained_model):
     # 生成信号
     signals = signal.generate(date, universe, data)
 
-    # 验证结果
-    assert len(signals) == 3  # Top 3
-    assert abs(sum(signals.values()) - 1.0) < 1e-6  # 权重和为1
+    # 验证结果：返回 Top 3 原始分数
+    assert len(signals) == 3
 
-    # 分数高的股票权重应该更大
+    # 分数高的股票值应该更大
     # f1=[10, 5, 8] -> 预测值=[1.0, 0.5, 0.8]
     # 应该选择 000001.SZ, 000003.SZ, 000002.SZ
     assert "000001.SZ" in signals
     assert "000003.SZ" in signals
     assert "000002.SZ" in signals
 
-    # 验证权重不相等（非等权）
-    weights = list(signals.values())
-    assert len(set(weights)) > 1, "score权重应该产生不同的权重值，而不是等权"
+    # 验证分数不相等（原始 ml_score 因输入不同而各异）
+    scores = list(signals.values())
+    assert len(set(scores)) > 1, "原始分数应该各不相同"
 
-    # 验证权重大小关系：000001.SZ > 000003.SZ > 000002.SZ
-    assert signals["000001.SZ"] > signals["000003.SZ"], "分数更高的股票权重应该更大"
-    assert signals["000003.SZ"] > signals["000002.SZ"], "分数更高的股票权重应该更大"
+    # 验证分数大小关系：000001.SZ > 000003.SZ > 000002.SZ
+    assert signals["000001.SZ"] > signals["000003.SZ"], "分数更高的股票值应该更大"
+    assert signals["000003.SZ"] > signals["000002.SZ"], "分数更高的股票值应该更大"
 
 
 def test_ml_signal_generate_no_features(trained_model):
@@ -245,7 +242,7 @@ def test_ml_signal_generate_with_features_method(trained_model):
     signals = signal.generate_with_features(date, universe, features_df)
 
     assert len(signals) == 3
-    assert abs(sum(signals.values()) - 1.0) < 1e-6
+    assert all(v > 0 for v in signals.values()), "generate() 应返回正数原始分数"
 
 
 def test_ml_signal_get_model_info(trained_model):
@@ -270,7 +267,6 @@ def test_ml_signal_confidence_gate_scales_weights(trained_model):
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_confidence_gate_enabled=True,
         signal_confidence_gate_thresholds=[0.0],
         signal_confidence_gate_exposure_levels=[0.4],
@@ -287,12 +283,16 @@ def test_ml_signal_confidence_gate_scales_weights(trained_model):
         }
     )
 
+    # 先获取不带门控的原始分数，再验证门控缩放比例
+    signal_no_gate = MLSignal(top_n=3, model_version=version, models_dir=models_dir)
+    raw_signals = signal_no_gate.generate(date, universe, {"features": features_df})
+
     signals = signal.generate(date, universe, {"features": features_df})
 
     assert len(signals) == 3
-    assert abs(sum(signals.values()) - 0.4) < 1e-6
-    for weight in signals.values():
-        assert abs(weight - (0.4 / 3)) < 1e-6
+    # 置信度门控 exposure=0.4，每个分数应缩放为原始的 40%
+    for stock, score in signals.items():
+        assert abs(score - raw_signals[stock] * 0.4) < 1e-6
 
     gate_state = signal.get_last_confidence_gate_state()
     assert gate_state.enabled is True
@@ -307,7 +307,6 @@ def test_ml_signal_confidence_gate_blocks_negative_regression_scores(trained_mod
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_confidence_gate_enabled=True,
         signal_confidence_gate_thresholds=[0.8, 1.2],
         signal_confidence_gate_exposure_levels=[0.5, 1.0],
@@ -341,7 +340,6 @@ def test_ml_signal_composite_gate_cost_blocks(trained_model):
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_gate_mode="composite",
         signal_gate_cost_multiplier=2.0,
         signal_gate_round_trip_cost=0.003,  # 成本0.3%，阈值0.6%
@@ -377,7 +375,6 @@ def test_ml_signal_composite_gate_passes_with_high_scores(trained_model):
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_gate_mode="composite",
         signal_gate_cost_multiplier=2.0,
         signal_gate_round_trip_cost=0.003,
@@ -401,7 +398,7 @@ def test_ml_signal_composite_gate_passes_with_high_scores(trained_model):
 
     # 预热期内成本门控通过后，exposure=1.0（默认放行）
     assert len(signals) == 3
-    assert abs(sum(signals.values()) - 1.0) < 1e-6
+    assert all(v > 0 for v in signals.values()), "generate() 应返回正数原始分数"
     gate_state = signal.get_last_confidence_gate_state()
     assert gate_state.enabled is True
     assert gate_state.cost_gate_passed is True
@@ -416,7 +413,6 @@ def test_ml_signal_composite_gate_accumulates_history(trained_model):
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_gate_mode="composite",
         signal_gate_cost_multiplier=2.0,
         signal_gate_round_trip_cost=0.003,
@@ -454,7 +450,6 @@ def test_ml_signal_disabled_gate_mode(trained_model):
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_gate_mode="disabled",
     )
 
@@ -498,7 +493,6 @@ def test_ml_signal_update_model_version_preserves_history(trained_model):
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_gate_mode="composite",
         signal_gate_cost_multiplier=2.0,
         signal_gate_round_trip_cost=0.003,
@@ -665,4 +659,4 @@ def test_ml_signal_top_n_larger_than_universe(trained_model):
 
     # 应该返回所有5只股票
     assert len(signals) == 5
-    assert abs(sum(signals.values()) - 1.0) < 1e-6
+    assert all(v > 0 for v in signals.values()), "generate() 应返回正数原始分数"

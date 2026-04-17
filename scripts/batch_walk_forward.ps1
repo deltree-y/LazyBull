@@ -30,7 +30,7 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(1000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(500,1500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.012)     #. XGB推荐0.005, LGB推荐0.005
@@ -111,13 +111,18 @@ $oos_backtest            = $true            # $true 启用 | $false 禁用
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 $bt_top_n_list           = @(22)            # 回测持仓 Top N
 $bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
-$bt_weight_method        = "score"          # 权重方法："equal"（等权）| "score"（按预测分数加权）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
 $bt_min_list_days_list   = @(365)           # 最少上市天数
 $bt_max_weight_per_stock_list = @(0.15)     # 单股最大权重，$null=不限制，如 @(0.15, 0.20)
 $bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null=不限制，如 @(2, 3)
+
+# ── 仓位管理模式──────────────────────────────
+$position_sizing_list             = @('half_kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
+$kelly_vol_window                 = 60         # Kelly 波动率窗口（交易日）
+$kelly_max_leverage_list          = @(0.15)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
+
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
 $signal_gate_mode = "composite"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
@@ -168,11 +173,6 @@ $industry_momentum_bottom_pct = 0.5     # 剔除排名后 X% 的行业（0~1）�
 # ── 行业轮动加权（按行业动量排名对候选分数做乘性调整）─────────────
 $industry_rotation_enhanced       = $false     # $true 启用 | $false 禁用（独立于上方硬过滤）
 $industry_rotation_alpha_list     = @(0.3)#1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0)     # 加权强度（可多值，如 @(0.1, 0.3, 0.5)）
-
-# ── 仓位管理模式（Kelly / 半 Kelly）──────────────────────────────
-$position_sizing_list             = @('half_kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
-$kelly_vol_window                 = 60         # Kelly 波动率窗口（交易日）
-$kelly_max_leverage_list          = @(0.15)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── 市场择时仓位管理 ─────────────────────────────────────────
 $market_regime                = $false       # $true 启用 | $false 禁用
@@ -536,7 +536,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     }
 
     if ($oos_backtest) {
-        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-weight-method $bt_weight_method --bt-initial-capital $bt_initial_capital --bt-sell-timing $bt_sell_timing --bt-min-list-days $bt_min_list_days"
+        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-initial-capital $bt_initial_capital --bt-sell-timing $bt_sell_timing --bt-min-list-days $bt_min_list_days"
         # 信号入口门控 v2
         $pythonCmd += " --signal-gate-mode $signal_gate_mode"
         if ($signal_gate_mode -eq "composite") {

@@ -21,7 +21,6 @@ def mock_runner():
                 initial_capital=100000.0,
                 data_root=tmpdir,
                 paper_root=tmpdir,
-                weight_method="equal",
                 verbose=False
             )
             yield runner
@@ -66,7 +65,7 @@ def test_equal_weight_lot_constraint_basic(mock_runner):
     mock_runner.signal.generate_ranked.return_value = ranked_candidates
     
     # 调用测试方法
-    result = mock_runner._generate_equal_weight_with_lot_constraint(
+    result = mock_runner._generate_ranked_with_lot_constraint(
         date, stocks, signal_data, daily_data, top_n, buy_price_type
     )
     
@@ -76,11 +75,12 @@ def test_equal_weight_lot_constraint_basic(mock_runner):
     assert '000002.SZ' in result
     assert '000003.SZ' in result
     assert '600000.SH' in result
-    
-    # 验证等权分配
+
+    # 验证返回原始分数（与 ranked_candidates 一致）
     assert len(result) == 3
-    for weight in result.values():
-        assert abs(weight - 1.0/3) < 1e-6
+    assert abs(result['000002.SZ'] - 0.8) < 1e-6
+    assert abs(result['000003.SZ'] - 0.7) < 1e-6
+    assert abs(result['600000.SH'] - 0.6) < 1e-6
 
 
 def test_equal_weight_lot_constraint_insufficient_candidates(mock_runner):
@@ -111,14 +111,14 @@ def test_equal_weight_lot_constraint_insufficient_candidates(mock_runner):
     mock_runner.signal = MagicMock(spec=MLSignal)
     mock_runner.signal.generate_ranked.return_value = ranked_candidates
     
-    result = mock_runner._generate_equal_weight_with_lot_constraint(
+    result = mock_runner._generate_ranked_with_lot_constraint(
         date, stocks, signal_data, daily_data, top_n, buy_price_type
     )
     
-    # 应该返回所有3只可买股票，而不是5只
+    # 应该返回所有3只可买股票，原始分数为正数
     assert len(result) == 3
-    for weight in result.values():
-        assert abs(weight - 1.0/3) < 1e-6
+    for score in result.values():
+        assert score > 0
 
 
 def test_equal_weight_lot_constraint_all_too_expensive(mock_runner):
@@ -149,7 +149,7 @@ def test_equal_weight_lot_constraint_all_too_expensive(mock_runner):
     mock_runner.signal = MagicMock(spec=MLSignal)
     mock_runner.signal.generate_ranked.return_value = ranked_candidates
     
-    result = mock_runner._generate_equal_weight_with_lot_constraint(
+    result = mock_runner._generate_ranked_with_lot_constraint(
         date, stocks, signal_data, daily_data, top_n, buy_price_type
     )
     
@@ -185,7 +185,7 @@ def test_equal_weight_lot_constraint_with_open_price(mock_runner):
     mock_runner.signal = MagicMock(spec=MLSignal)
     mock_runner.signal.generate_ranked.return_value = ranked_candidates
     
-    result = mock_runner._generate_equal_weight_with_lot_constraint(
+    result = mock_runner._generate_ranked_with_lot_constraint(
         date, stocks, signal_data, daily_data, top_n, buy_price_type
     )
     
@@ -225,7 +225,7 @@ def test_equal_weight_lot_constraint_missing_price_data(mock_runner):
     mock_runner.signal = MagicMock(spec=MLSignal)
     mock_runner.signal.generate_ranked.return_value = ranked_candidates
     
-    result = mock_runner._generate_equal_weight_with_lot_constraint(
+    result = mock_runner._generate_ranked_with_lot_constraint(
         date, stocks, signal_data, daily_data, top_n, buy_price_type
     )
     
@@ -265,7 +265,7 @@ def test_equal_weight_lot_constraint_boundary_case(mock_runner):
     mock_runner.signal = MagicMock(spec=MLSignal)
     mock_runner.signal.generate_ranked.return_value = ranked_candidates
     
-    result = mock_runner._generate_equal_weight_with_lot_constraint(
+    result = mock_runner._generate_ranked_with_lot_constraint(
         date, stocks, signal_data, daily_data, top_n, buy_price_type
     )
     

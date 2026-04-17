@@ -137,7 +137,6 @@ class TestHoldingBonus:
             top_n=2,
             model_version=version,
             models_dir=models_dir,
-            weight_method="equal",
         )
         universe = BasicUniverse(
             stock_basic=mock_stock_basic,
@@ -196,7 +195,6 @@ class TestHoldingBonus:
             top_n=2,
             model_version=version,
             models_dir=models_dir,
-            weight_method="equal",
         )
         universe = BasicUniverse(
             stock_basic=mock_stock_basic,
@@ -249,7 +247,6 @@ class TestHoldingBonus:
             top_n=2,
             model_version=version,
             models_dir=models_dir,
-            weight_method="equal",
         )
         universe = BasicUniverse(
             stock_basic=mock_stock_basic,

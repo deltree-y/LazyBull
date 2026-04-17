@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.55.4] - 2026-04-17
+
+### 优化
+
+- **统一仓位管理参数**：删除与 `position_sizing` 功能重叠的 `weight_method` / `bt_weight_method` 参数
+  - `MLSignal.generate()` 不再做权重归一化，固定输出原始 ml_score（正分数），权重分配统一交由引擎层 `_normalize_signals` 处理
+  - `BacktestEngine._normalize_signals` 补充 `position_sizing="score"` 分支实现（原为 fallback 等权）
+  - `PaperTradingRunner` 新增 `_normalize_signals` 方法，支持 `equal` / `score` 两种模式（kelly 回退到 score）
+  - 删除 `TradingConfig.weight_method` 字段和 `--weight-method` CLI 参数，`run_ml_backtest.py` / `walk_forward.py` / `paper_trade.py` / `batch_backtest.ps1` / `batch_walk_forward.ps1` 全部统一使用 `position_sizing`
+
 ## [0.55.3] - 2026-04-17
 
 ### 修复

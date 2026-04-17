@@ -34,7 +34,7 @@ def _append_dict_to_csv(file_path: Path, row: dict, fieldnames: list = None):
 def _generate_run_id(args) -> str:
     """生成唯一的回测ID"""
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    params_str = f"{args.start_date}_{args.end_date}_{args.model_version}_{args.top_n}_{args.weight_method}_{args.rebalance_freq}_{args.initial_capital}_{args.sell_timing}"
+    params_str = f"{args.start_date}_{args.end_date}_{args.model_version}_{args.top_n}_{args.position_sizing}_{args.rebalance_freq}_{args.initial_capital}_{args.sell_timing}"
     params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
     return f"{timestamp}_{params_hash}"
 
@@ -133,7 +133,7 @@ class TestMLBacktestTradesRuns:
             "结束日期": "20231231",
             "模型版本": "最新版本",
             "TopN": 5,
-            "权重方法": "equal",
+            "仓位管理": "equal",
             "调仓频率": 10,
             "初始资金": 500000.0,
             "卖出时机": "open",
@@ -157,7 +157,7 @@ class TestMLBacktestTradesRuns:
             "结束日期",
             "模型版本",
             "TopN",
-            "权重方法",
+            "仓位管理",
             "调仓频率",
             "初始资金",
             "卖出时机"
@@ -169,7 +169,7 @@ class TestMLBacktestTradesRuns:
         # 验证数据正确
         assert df.iloc[0]["模型版本"] == "最新版本"
         assert df.iloc[0]["TopN"] == 5
-        assert df.iloc[0]["权重方法"] == "equal"
+        assert df.iloc[0]["仓位管理"] == "equal"
         assert df.iloc[0]["操作"] == "买入"
     
     def test_generate_run_id_uniqueness(self):
@@ -182,10 +182,10 @@ class TestMLBacktestTradesRuns:
             end_date="20231231",
             model_version=1,
             top_n=5,
-            weight_method="equal",
             rebalance_freq=10,
             initial_capital=500000.0,
-            sell_timing="open"
+            sell_timing="open",
+            position_sizing='equal'
         )
         
         args2 = argparse.Namespace(
@@ -193,10 +193,10 @@ class TestMLBacktestTradesRuns:
             end_date="20231231",
             model_version=2,  # 不同的模型版本
             top_n=5,
-            weight_method="equal",
             rebalance_freq=10,
             initial_capital=500000.0,
-            sell_timing="open"
+            sell_timing="open",
+            position_sizing='equal'
         )
         
         # 生成ID
@@ -263,10 +263,10 @@ class TestMLBacktestTradesRuns:
             end_date="20231231",
             model_version=None,
             top_n=5,
-            weight_method="equal",
             rebalance_freq=10,
             initial_capital=500000.0,
-            sell_timing="open"
+            sell_timing="open",
+            position_sizing='equal'
         )
         
         class MockReporter:
@@ -370,10 +370,10 @@ class TestMLBacktestTradesRuns:
             end_date="20231231",
             model_version=1,
             top_n=5,
-            weight_method="equal",
             rebalance_freq=10,
             initial_capital=500000.0,
-            sell_timing="open"
+            sell_timing="open",
+            position_sizing='equal'
         )
         
         class MockReporter:

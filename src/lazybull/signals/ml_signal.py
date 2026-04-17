@@ -53,7 +53,6 @@ class MLSignal(Signal):
         top_n: int = 20,
         model_version: Optional[int] = None,
         models_dir: Optional[str] = None,
-        weight_method: str = "equal",
         signal_confidence_gate_enabled: bool = False,
         signal_confidence_gate_top_k: int = 10,
         signal_confidence_gate_thresholds: Optional[List[float]] = None,
@@ -74,7 +73,6 @@ class MLSignal(Signal):
             top_n: 选择 Top N 只股票
             model_version: 模型版本号，None 表示使用最新版本
             models_dir: 模型目录
-            weight_method: 权重分配方法，"equal" 表示等权，"score" 表示按预测分数加权
             signal_confidence_gate_enabled: 是否启用信号置信度门控，默认False
             signal_confidence_gate_top_k: 置信度评估使用的头部股票数量，默认10
             signal_confidence_gate_thresholds: 置信度阈值列表，低于首档时持币
@@ -93,7 +91,6 @@ class MLSignal(Signal):
         self.top_n = top_n
         self.model_version = model_version
         self.models_dir = models_dir or get_models_root()
-        self.weight_method = weight_method
         self.signal_confidence_gate_enabled = signal_confidence_gate_enabled
         self.signal_confidence_gate_top_k = signal_confidence_gate_top_k
         self.signal_confidence_gate_thresholds = signal_confidence_gate_thresholds or [
@@ -150,7 +147,6 @@ class MLSignal(Signal):
 
         logger.info(
             f"ML 信号初始化: top_n={top_n}, model_version={model_version}, "
-            f"weight_method={weight_method}, "
             f"min_amount_ma20={min_amount_ma20:.0f}千元, "
             f"total_mv=[{min_total_mv/10000:.0f}亿,{max_total_mv/10000:.0f}亿], "
             f"exclude_financial={exclude_financial}{confidence_gate_info}"
@@ -759,32 +755,16 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 没有有效的预测结果")
             return {}
 
-        # 分配权重
-        if self.weight_method == "equal":
-            # 等权
+        # 输出原始 ml_score（供引擎层 _normalize_signals 统一做权重分配）
+        # 正分数原样输出；全为负/零时回退到等权（避免引擎层收到无意义负值）
+        positive_stocks = top_stocks[top_stocks["ml_score"] > 0]
+        if len(positive_stocks) == 0:
             weight = 1.0 / len(top_stocks)
             signals = {stock: weight for stock in top_stocks["ts_code"].tolist()}
-        elif self.weight_method == "score":
-            # 按预测分数加权 — 先过滤负分股票，避免占位但权重为0
-            positive_stocks = top_stocks[top_stocks["ml_score"] > 0]
-            if len(positive_stocks) == 0:
-                # 所有分数都是负数或零，回退到等权
-                weight = 1.0 / len(top_stocks)
-                signals = {stock: weight for stock in top_stocks["ts_code"].tolist()}
-            else:
-                # 归一化正分数为权重（使用向量化操作）
-                scores = positive_stocks["ml_score"].values
-                stocks = positive_stocks["ts_code"].values
-                scores_sum = scores.sum()
-                if scores_sum < 1e-12:
-                    # 所有正分数极小，浮点精度不足，回退到等权
-                    weight = 1.0 / len(positive_stocks)
-                    signals = {stock: weight for stock in stocks}
-                else:
-                    weights = scores / scores_sum
-                    signals = dict(zip(stocks, weights))
         else:
-            raise ValueError(f"不支持的权重方法: {self.weight_method}")
+            scores = positive_stocks["ml_score"].values
+            stocks = positive_stocks["ts_code"].values
+            signals = dict(zip(stocks, scores.tolist()))
 
         signals = self.apply_confidence_gate_to_weights(
             signals, confidence_state=confidence_state, date=date

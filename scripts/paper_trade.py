@@ -10,7 +10,7 @@
 - adjust reset-t0 子命令：重置T0日并清空延迟交易订单
 
 示例：
-  python scripts/paper_trade.py config --buy-price close --sell-price close --top-n 5 --initial-capital 500000 --rebalance-freq 5 --weight-method equal
+  python scripts/paper_trade.py config --buy-price close --sell-price close --top-n 5 --initial-capital 500000 --rebalance-freq 5 --position-sizing equal
   python scripts/paper_trade.py run --trade-date 20260121
   python scripts/paper_trade.py positions --trade-date 20260122
 """
@@ -232,19 +232,17 @@ def run_main(args):
     # 允许命令行参数覆盖配置
     if args.model_version is not None:
         config['model_version'] = args.model_version
-    if args.weight_method is not None:
-        config['weight_method'] = args.weight_method
-    
+
     # 设置默认 horizon，如果配置中不存在
     if 'horizon' not in config:
         config['horizon'] = 20  # 默认持仓周期20天
-    
+
     logger.info("使用配置：")
     logger.info(f"  买入价格类型: {config['buy_price']}")
     logger.info(f"  卖出价格类型: {config['sell_price']}")
     logger.info(f"  持仓数: {config['top_n']}")
     logger.info(f"  调仓频率: {config['rebalance_freq']} 个交易日")
-    logger.info(f"  权重方法: {config['weight_method']}")
+    logger.info(f"  仓位管理: {config.get('position_sizing', 'equal')}")
     logger.info(f"  特征预测周期（horizon）: {config['horizon']} 天")
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
@@ -275,7 +273,7 @@ def run_main(args):
     runner = PaperTradingRunner(
         signal=signal,
         initial_capital=config['initial_capital'],
-        weight_method=config['weight_method'],
+        position_sizing=config.get('position_sizing', 'equal'),
         horizon=config['horizon'],
     )
 
@@ -1656,12 +1654,6 @@ def main():
         type=int,
         help='ML模型版本（覆盖配置）'
     )
-    run_parser.add_argument(
-        '--weight-method',
-        choices=['equal', 'score'],
-        help='权重分配方法（覆盖配置）'
-    )
-    
     # model-info 子命令
     subparsers.add_parser(
         'model-info',

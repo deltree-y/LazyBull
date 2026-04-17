@@ -82,7 +82,7 @@ def test_stop_loss_t1_execution(trained_model, mock_stock_basic):
         top_n=2,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal"
+
     )
     
     # 创建股票池
@@ -237,7 +237,7 @@ def test_stop_loss_no_duplicate_trigger(trained_model, mock_stock_basic):
         top_n=1,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal"
+
     )
     
     universe = BasicUniverse(
@@ -340,7 +340,7 @@ def test_backward_compatibility_no_stop_loss(trained_model, mock_stock_basic):
         top_n=2,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal"
+
     )
     
     universe = BasicUniverse(

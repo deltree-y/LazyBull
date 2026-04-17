@@ -46,7 +46,6 @@ def create_signal(
         top_n=config.top_n,
         model_version=config.model_version,
         models_dir=models_dir or get_models_root(),
-        weight_method=config.weight_method,
         verbose=verbose,
         **gate_kwargs,
     )

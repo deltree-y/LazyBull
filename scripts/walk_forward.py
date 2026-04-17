@@ -206,7 +206,6 @@ def run_oos_backtest(
     market_regime_ma250_threshold: float = 1.0,
     market_regime_ma250_exposure: float = 0.0,
     market_regime_ma250_atr_scaling: bool = False,
-    bt_weight_method: str = "equal",
     industry_momentum_filter: bool = False,
     industry_momentum_bottom_pct: float = 0.2,
     industry_rotation_enhanced: bool = False,
@@ -350,7 +349,6 @@ def run_oos_backtest(
             top_n=bt_top_n,
             model_version=model_version,
             models_dir=get_models_root(str(Path(data_root) / "models") if data_root else None),
-            weight_method=bt_weight_method,
             signal_confidence_gate_enabled=signal_confidence_gate_enabled,
             signal_confidence_gate_top_k=signal_confidence_gate_top_k,
             signal_confidence_gate_thresholds=signal_confidence_gate_thresholds,
@@ -1479,7 +1477,6 @@ def write_walk_forward_summary(
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
-        "bt_weight_method": getattr(args, 'bt_weight_method', 'equal'),
         "signal_confidence_gate_enabled": getattr(args, 'signal_confidence_gate_enabled', False),
         "signal_confidence_gate_top_k": getattr(args, 'signal_confidence_gate_top_k', 10),
         "signal_confidence_gate_thresholds": getattr(
@@ -2034,14 +2031,6 @@ def main():
         help="OOS 回测调仓频率（交易日），默认从标签自动推断"
     )
 
-    # 回测权重方法
-    parser.add_argument(
-        "--bt-weight-method",
-        type=str,
-        default="equal",
-        choices=["equal", "score"],
-        help="回测权重分配方法：equal（等权）或 score（按预测分数加权），默认 equal"
-    )
     parser.add_argument(
         "--signal-confidence-gate-enabled",
         action="store_true",
@@ -2696,7 +2685,6 @@ def main():
                 models_dir=get_models_root(
                     str(Path(args.data_root) / "models") if args.data_root else None
                 ),
-                weight_method=args.bt_weight_method,
                 signal_confidence_gate_enabled=args.signal_confidence_gate_enabled,
                 signal_confidence_gate_top_k=args.signal_confidence_gate_top_k,
                 signal_confidence_gate_thresholds=args.signal_confidence_gate_thresholds,
@@ -2812,7 +2800,6 @@ def main():
                             market_regime_ma250_threshold=args.market_regime_ma250_threshold,
                             market_regime_ma250_exposure=args.market_regime_ma250_exposure,
                             market_regime_ma250_atr_scaling=args.market_regime_ma250_atr_scaling,
-                            bt_weight_method=args.bt_weight_method,
                             industry_momentum_filter=args.industry_momentum_filter,
                             industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,
                             industry_rotation_enhanced=getattr(args, 'industry_rotation_enhanced', False),

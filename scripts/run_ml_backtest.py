@@ -295,7 +295,7 @@ def _generate_run_id(args) -> str:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     
     # 将关键参数拼接成字符串并计算hash
-    params_str = f"{args.start_date}_{args.end_date}_{args.model_version}_{args.top_n}_{args.weight_method}_{args.rebalance_freq}_{args.initial_capital}_{args.sell_timing}"
+    params_str = f"{args.start_date}_{args.end_date}_{args.model_version}_{args.top_n}_{args.position_sizing}_{args.rebalance_freq}_{args.initial_capital}_{args.sell_timing}"
     params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
     
     return f"{timestamp}_{params_hash}"
@@ -336,7 +336,7 @@ def _append_trades_to_cumulative_file(
             "结束日期",
             "模型版本",
             "TopN",
-            "权重方法",
+            "仓位管理",
             "调仓频率",
             "初始资金",
             "卖出时机",
@@ -418,7 +418,7 @@ def _append_trades_to_cumulative_file(
                 "结束日期": args.end_date,
                 "模型版本": model_version_str,
                 "TopN": args.top_n,
-                "权重方法": args.weight_method,
+                "仓位管理": args.position_sizing,
                 "调仓频率": args.rebalance_freq,
                 "初始资金": args.initial_capital,
                 "卖出时机": args.sell_timing,
@@ -711,7 +711,7 @@ def export_evaluation_panel(
             '标签列': label_column,
             '模型版本': args.model_version if args and args.model_version is not None else '最新版本',
             'TopN': args.top_n if args else None,
-            '权重方法': args.weight_method if args else None,
+            '仓位管理': args.position_sizing if args else None,
             '调仓频率': args.rebalance_freq if args else None,
             '初始资金': args.initial_capital if args else None,
             '卖出时机': args.sell_timing if args else None,
@@ -864,7 +864,7 @@ def main():
     logger.info(f"调仓频率: {args.rebalance_freq} 个交易日")
     logger.info(f"模型版本: {args.model_version or '最新版本'}")
     logger.info(f"Top N: {args.top_n}")
-    logger.info(f"权重方法: {args.weight_method}")
+    logger.info(f"仓位管理: {args.position_sizing}")
     if args.max_weight_per_stock is not None:
         logger.info(f"单股最大权重: {args.max_weight_per_stock:.2%}")
     if args.max_per_industry is not None and args.max_per_industry > 0:
@@ -1001,7 +1001,7 @@ def main():
                 "end_date": args.end_date,
                 "model_version": args.model_version if args.model_version is not None else "latest",
                 "top_n": args.top_n,
-                "weight_method": args.weight_method,
+                "position_sizing": args.position_sizing,
                 "rebalance_freq": args.rebalance_freq,
                 "initial_capital": args.initial_capital,
                 "sell_timing": args.sell_timing,
@@ -1037,7 +1037,7 @@ def main():
 
             # 指定列顺序，保证稳定性；如果需要新增字段请在这里同步修改
             fieldnames = [
-                "run_time", "start_date", "end_date", "model_version", "top_n", "weight_method",
+                "run_time", "start_date", "end_date", "model_version", "top_n", "position_sizing",
                 "rebalance_freq", "initial_capital", "sell_timing", "stop_loss_enabled",
                 "report_name", "nav_final", "total_return", "max_drawdown", "sharpe"
             ]

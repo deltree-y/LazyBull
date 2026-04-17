@@ -27,7 +27,7 @@ def test_save_and_load_config(temp_paper_storage):
         'top_n': 5,
         'initial_capital': 500000.0,
         'rebalance_freq': 5,
-        'weight_method': 'equal',
+        'position_sizing': 'equal',
         'model_version': None,
         'stop_loss_enabled': True,
         'stop_loss_drawdown_pct': 20.0,
@@ -213,7 +213,7 @@ def test_config_command_integration(temp_paper_storage):
         'top_n': 10,
         'initial_capital': 1000000.0,
         'rebalance_freq': 10,
-        'weight_method': 'score',
+        'position_sizing': 'score',
         'model_version': 1,
         'stop_loss_enabled': True,
         'stop_loss_drawdown_pct': 15.0,
@@ -231,7 +231,7 @@ def test_config_command_integration(temp_paper_storage):
     
     # 读取并验证
     loaded_config = temp_paper_storage.load_config()
-    assert loaded_config['weight_method'] == 'score'
+    assert loaded_config['position_sizing'] == 'score'
     assert loaded_config['model_version'] == 1
 
 
@@ -445,7 +445,7 @@ def test_config_with_all_parameters():
         'top_n',
         'initial_capital',
         'rebalance_freq',
-        'weight_method',
+        'position_sizing',
         'model_version',
         'stop_loss_enabled',
         'stop_loss_drawdown_pct',
@@ -461,7 +461,7 @@ def test_config_with_all_parameters():
         'top_n': 5,
         'initial_capital': 500000.0,
         'rebalance_freq': 5,
-        'weight_method': 'equal',
+        'position_sizing': 'equal',
         'model_version': None,
         'stop_loss_enabled': False,
         'stop_loss_drawdown_pct': 20.0,

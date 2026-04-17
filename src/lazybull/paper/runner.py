@@ -42,18 +42,18 @@ class PaperTradingRunner:
         initial_capital: float = 500000.0,
         data_root: Optional[str] = None,
         paper_root: Optional[str] = None,
-        weight_method: str = "equal",
+        position_sizing: str = "equal",
         horizon: int = 5,
         verbose: bool = True,
     ):
         """初始化运行器
-        
+
         Args:
             signal: 信号生成器（可选）
             initial_capital: 初始资金
             data_root: 数据根目录，未传时使用项目配置 data.root
             paper_root: 纸面交易数据目录，未传时默认使用 data.root/paper
-            weight_method: 权重分配方法，"equal"表示等权，"score"表示按分数加权
+            position_sizing: 仓位管理模式，equal|score（纸面交易不支持kelly）
             horizon: 特征构建的预测周期（天数），用于生成 y_ret_N 特征，默认 5
             verbose: 是否输出详细日志
         """
@@ -66,8 +66,8 @@ class PaperTradingRunner:
         self.broker = PaperBroker(self.account, storage=self.paper_storage, verbose=verbose, data_storage=self.storage)
         
         # 初始化信号生成器
-        self.signal = signal 
-        self.weight_method = weight_method
+        self.signal = signal
+        self.position_sizing = position_sizing
         
         # 初始化数据加载器
         self.loader = DataLoader(self.storage, verbose=verbose)
@@ -353,7 +353,6 @@ class PaperTradingRunner:
         self.signal = self.signal or MLSignal(
             top_n=top_n,
             model_version=model_version,
-            weight_method=self.weight_method,
             verbose=False,
         )
         targets = self._generate_signals(
@@ -839,9 +838,8 @@ class PaperTradingRunner:
             # 使用默认的ML信号
             if model_version is not None:
                 self.signal = MLSignal(
-                    top_n=top_n, 
+                    top_n=top_n,
                     model_version=model_version,
-                    weight_method=self.weight_method,
                     verbose=False,
                 )
             else:
@@ -858,11 +856,11 @@ class PaperTradingRunner:
         # 回收内存后再进入模型加载/预测（对内存受限设备如树莓派尤为重要）
         gc.collect()
 
-        # 生成信号
+        # 生成信号（原始分数字典，权重归一化由 _normalize_signals 统一处理）
         try:
-            # 如果是等权策略且信号生成器是MLSignal，则使用generate_ranked获取排序候选并应用一手可买约束
-            if self.weight_method == "equal" and isinstance(self.signal, MLSignal):
-                signal_dict = self._generate_equal_weight_with_lot_constraint(
+            if isinstance(self.signal, MLSignal):
+                # MLSignal：使用 generate_ranked 获取排序候选，并应用一手可买约束
+                raw_scores = self._generate_ranked_with_lot_constraint(
                     date_ts,
                     stocks,
                     signal_data,
@@ -877,12 +875,12 @@ class PaperTradingRunner:
                     holding_bonus_sigma=holding_bonus_sigma,
                 )
             else:
-                # 其他情况（score加权或非MLSignal），使用原有逻辑
-                signal_dict = self.signal.generate(
+                raw_scores = self.signal.generate(
                     date_ts,
                     stocks,
                     {'features': signal_data}
                 )
+            signal_dict = self._normalize_signals(raw_scores)
         except Exception as e:
             logger.error(f"信号生成失败: {e}")
             return []
@@ -911,7 +909,7 @@ class PaperTradingRunner:
         
         return targets
     
-    def _generate_equal_weight_with_lot_constraint(
+    def _generate_ranked_with_lot_constraint(
         self,
         date: pd.Timestamp,
         stocks: List[str],
@@ -926,10 +924,10 @@ class PaperTradingRunner:
         holding_bonus_enabled: bool = False,
         holding_bonus_sigma: float = 0.5,
     ) -> Dict[str, float]:
-        """等权策略下生成信号（含行业约束 + 行业动量过滤 + 持仓保留奖励 + 一手可买约束和顺延补足）
+        """生成原始分数字典（含行业约束 + 行业动量过滤 + 持仓保留奖励 + 一手可买约束顺延补足）
 
-        对等权策略启用"一手可买约束"：如果按资金分配给某股票的金额不足以买入100股（1手），
-        则跳过该股票并从候选中顺延选择下一只，直到凑足top_n个可买股票或候选耗尽。
+        返回原始 ml_score（非归一化权重），权重归一化由 _normalize_signals 统一处理。
+        一手约束：按等权分配金额估算，不足1手的候选被跳过并顺延。
 
         Args:
             date: 当前日期
@@ -942,7 +940,7 @@ class PaperTradingRunner:
             industry_mapping: 行业映射字典（可选）
 
         Returns:
-            信号字典 {股票代码: 权重}
+            原始分数字典 {股票代码: ml_score}
         """
         # 使用 generate_ranked 获取完整排序候选列表
         ranked_candidates = self.signal.generate_ranked(
@@ -1028,64 +1026,81 @@ class PaperTradingRunner:
         total_capital = self.account.initial_capital
         equal_weight_value = total_capital / top_n
         
-        # 从排序候选中筛选可买至少1手的股票
-        selected_stocks = []
+        # 从排序候选中筛选可买至少1手的股票，保留原始分数
+        selected = []  # List[Tuple[str, float]]
         skipped_stocks = []
-        
+
         for ts_code, score in ranked_candidates:
-            # 检查是否已凑足 top_n
-            if len(selected_stocks) >= top_n:
+            if len(selected) >= top_n:
                 break
-            
-            # 获取价格
+
             price = price_map.get(ts_code)
             if price is None or price <= 0:
-                # 无价格数据，跳过
                 skipped_stocks.append((ts_code, "无价格数据"))
                 continue
-            
-            # 计算可买股数（向下取整到100的倍数）
+
             affordable_shares = int(equal_weight_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
-            
             if affordable_shares < SHARE_LOT_SIZE:
-                # 不足1手，跳过并记录
                 skipped_stocks.append((ts_code, f"不足1手(价格={price:.2f}, 可买={affordable_shares}股)"))
                 continue
-            
-            # 可买至少1手，加入选中列表
-            selected_stocks.append(ts_code)
-        
-        # 日志输出
-        final_count = len(selected_stocks)
+
+            selected.append((ts_code, score))
+
+        final_count = len(selected)
         skipped_count = len(skipped_stocks)
-        
+
         logger.info(
-            f"等权+一手约束: 最终目标数 {final_count}, "
+            f"一手约束筛选: 最终目标数 {final_count}, "
             f"跳过 {skipped_count} 只 (原始候选 {original_count})"
         )
-        
+
         if skipped_count > 0:
-            # 输出若干示例（最多5个）
             examples = skipped_stocks[:5]
             for ts_code, reason in examples:
                 logger.info(f"  跳过示例: {ts_code} - {reason}")
             if skipped_count > 5:
                 logger.info(f"  ... 及其他 {skipped_count - 5} 只")
-        
+
         if final_count < top_n:
             logger.warning(
-                f"等权+一手约束: 候选不足，目标 {top_n} 只，实际仅 {final_count} 只可选"
+                f"一手约束筛选: 候选不足，目标 {top_n} 只，实际仅 {final_count} 只可选"
             )
-        
-        # 构建等权信号字典
+
         if final_count == 0:
             return {}
-        
-        weight = 1.0 / final_count
-        signal_dict = {ts_code: weight for ts_code in selected_stocks}
-        
-        return signal_dict
-    
+
+        return {ts_code: score for ts_code, score in selected}
+
+    def _normalize_signals(self, signals: Dict[str, float]) -> Dict[str, float]:
+        """根据 position_sizing 将原始分数转换为归一化权重字典
+
+        支持 equal（等权）和 score（按分数加权）两种模式。
+        纸面交易不支持 kelly（无历史价格序列），配置为 kelly 时回退到 score。
+        """
+        if not signals:
+            return {}
+
+        sizing = self.position_sizing
+
+        if sizing == "equal":
+            weight = 1.0 / len(signals)
+            return {stock: weight for stock in signals}
+
+        # score 模式（kelly/half_kelly 也回退到此）
+        if sizing not in ("equal", "score"):
+            logger.warning(
+                f"纸面交易不支持 position_sizing='{sizing}'，回退到 score 加权"
+            )
+        positive = {s: v for s, v in signals.items() if v > 0}
+        if not positive:
+            weight = 1.0 / len(signals)
+            return {stock: weight for stock in signals}
+        total = sum(positive.values())
+        if total < 1e-12:
+            weight = 1.0 / len(positive)
+            return {stock: weight for stock in positive}
+        return {stock: score / total for stock, score in positive.items()}
+
     def _create_universe(
         self, stock_basic: pd.DataFrame, universe_type: str,
         exclude_st: bool = True, min_list_days: int = 365,
@@ -2077,7 +2092,6 @@ class PaperTradingRunner:
                 self.signal = MLSignal(
                     top_n=failed_count,
                     model_version=model_version,
-                    weight_method=self.weight_method,
                     verbose=False,
                 )
             else:
@@ -2094,8 +2108,7 @@ class PaperTradingRunner:
         # 6. 生成排序候选（使用与T0相同的逻辑）
         try:
             if isinstance(self.signal, MLSignal):
-                # 使用等权+一手约束逻辑
-                signal_dict = self._generate_equal_weight_with_lot_constraint(
+                raw_scores = self._generate_ranked_with_lot_constraint(
                     date_ts,
                     stocks,
                     signal_data,
@@ -2106,11 +2119,12 @@ class PaperTradingRunner:
                     industry_mapping=industry_mapping,
                 )
             else:
-                signal_dict = self.signal.generate(
+                raw_scores = self.signal.generate(
                     date_ts,
                     stocks,
                     {'features': signal_data}
                 )
+            signal_dict = self._normalize_signals(raw_scores)
         except Exception as e:
             logger.error(f"补位信号生成失败: {e}")
             return []

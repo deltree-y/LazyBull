@@ -136,7 +136,6 @@ def test_ml_backtest_uses_parent_filtering_logic(
         top_n=3,
         model_version=version,
         models_dir=models_dir,
-        weight_method="score"
     )
     
     # 创建股票池
@@ -302,7 +301,6 @@ def test_ml_backtest_confidence_gate_scales_pending_signal(
         top_n=2,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_confidence_gate_enabled=True,
         signal_confidence_gate_thresholds=[0.0],
         signal_confidence_gate_exposure_levels=[0.4],
@@ -400,7 +398,6 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
         top_n=2,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_confidence_gate_enabled=True,
         signal_confidence_gate_thresholds=[0.0],
         signal_confidence_gate_exposure_levels=[0.4],
@@ -475,7 +472,6 @@ def test_ml_backtest_logs_blocked_rebalance_summary(
         top_n=2,
         model_version=version,
         models_dir=models_dir,
-        weight_method="equal",
         signal_confidence_gate_enabled=True,
         signal_confidence_gate_thresholds=[10.0],
         signal_confidence_gate_exposure_levels=[0.4],

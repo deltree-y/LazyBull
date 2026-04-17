@@ -23,7 +23,6 @@ class TradingConfig:
 
     # ── 组合 ──
     top_n: int = 30
-    weight_method: str = "equal"
     signal_confidence_gate_enabled: bool = False
     signal_confidence_gate_top_k: int = 10
     signal_confidence_gate_thresholds: List[float] = field(default_factory=lambda: [0.8, 1.2, 1.6])
@@ -249,13 +248,6 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
 
     # ── 组合 ──
     parser.add_argument("--top-n", type=int, default=30, help="持仓股票数（默认：30）")
-    parser.add_argument(
-        "--weight-method",
-        type=str,
-        default="equal",
-        choices=["equal", "score"],
-        help="权重分配方法（默认：equal）",
-    )
     parser.add_argument(
         "--signal-confidence-gate-enabled",
         action="store_true",

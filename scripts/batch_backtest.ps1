@@ -26,7 +26,7 @@ $ensemble_weight_a       = 0.5                # 集成时模型A的排名权重�
 $top_n_list              = @(30)              # 持股数量
 $freq_list               = @(20)              # 调仓频率（交易日天数）
 $sell_timing             = "open"             # 卖出时机：open | close
-$weight_method           = "score"            # 权重方法：equal | score
+$position_sizing         = "score"            # 仓位管理：equal | score | kelly | half_kelly
 
 # ── 组合约束 ────────────────────────────────────────────────
 $max_weight_per_stock    = 0.04               # 单票最大权重，$null 表示不限
@@ -92,7 +92,7 @@ while ($currentDate -le $endDate) {
                          " --top-n $topn" +
                          " --rebalance-freq $freq" +
                          " --sell-timing $sell_timing" +
-                         " --weight-method $weight_method" +
+                         " --position-sizing $position_sizing" +
                          " --output-name $output_name"
 
             # 集成模型
