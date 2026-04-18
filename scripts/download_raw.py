@@ -20,6 +20,9 @@
     cyq_perf         - 筹码胜率（Tushare，按日分区）
     express          - 业绩快报（Tushare express_vip，按季度全市场）
     fund_portfolio   - 基金持仓（Tushare fund_portfolio，按季度全市场）
+    moneyflow_hsgt   - 北向资金（Tushare moneyflow_hsgt，按日分区，市场级广播）
+    top_list         - 龙虎榜（Tushare top_list，按日分区，无数据存空占位）
+    report_rc        - 一致预期研报（Tushare report_rc，按年分页增量）
 
 使用示例：
     # 默认：下载基础数据 + 日线数据
@@ -59,6 +62,7 @@ if TYPE_CHECKING:
 ALT_DATASETS = [
     "fina_indicator", "margin_detail", "stk_holdernumber",
     "forecast", "cyq_perf", "express", "fund_portfolio",
+    "moneyflow_hsgt", "top_list", "report_rc",
 ]
 
 
@@ -585,6 +589,174 @@ def download_stk_holdernumber(
     )
 
 
+def download_moneyflow_hsgt(
+    client: TushareClient,
+    storage: Storage,
+    trade_cal: pd.DataFrame,
+    start_date: str,
+    end_date: str,
+    force: bool = False,
+) -> None:
+    """下载北向资金（按日分区, 市场级单条记录）"""
+    trading_dates = trade_cal[
+        (trade_cal["cal_date"] >= start_date)
+        & (trade_cal["cal_date"] <= end_date)
+        & (trade_cal["is_open"] == 1)
+    ]["cal_date"].tolist()
+
+    logger.info(f"[moneyflow_hsgt] {len(trading_dates)} 个交易日, 分段批量下载 (接口单次上限 300 条)")
+
+    # 接口单次上限约 300 条 (~14 个月交易日), 按半年切段拉取
+    all_dfs: List[pd.DataFrame] = []
+    seg_starts = _generate_month_periods(start_date, end_date)
+    # 合并成半年段: 每 6 个月一段
+    segments: List[tuple] = []
+    i = 0
+    while i < len(seg_starts):
+        seg_start = seg_starts[i][0]
+        j = min(i + 5, len(seg_starts) - 1)
+        seg_end = seg_starts[j][1]
+        segments.append((seg_start, seg_end))
+        i = j + 1
+
+    for s, e in segments:
+        try:
+            df = client.get_moneyflow_hsgt(start_date=s, end_date=e)
+            if df is not None and len(df) > 0:
+                all_dfs.append(df)
+                logger.info(f"  [moneyflow_hsgt] {s}~{e}: {len(df)} 条")
+            else:
+                logger.debug(f"  [moneyflow_hsgt] {s}~{e}: 无数据")
+        except Exception as ex:
+            logger.warning(f"[moneyflow_hsgt] {s}~{e} 失败: {ex}")
+
+    if not all_dfs:
+        logger.warning("[moneyflow_hsgt] 全部分段返回空数据")
+        return
+
+    merged = pd.concat(all_dfs, ignore_index=True)
+    merged["trade_date"] = merged["trade_date"].astype(str)
+    merged = merged.drop_duplicates(subset=["trade_date"], keep="last")
+
+    success = skip = 0
+    for td in trading_dates:
+        if not force and storage.is_data_exists("raw", "moneyflow_hsgt", td):
+            skip += 1
+            continue
+        sub = merged[merged["trade_date"] == td]
+        if len(sub) > 0:
+            storage.save_raw_by_date(sub, "moneyflow_hsgt", td)
+            success += 1
+
+    logger.info(f"[moneyflow_hsgt] 完成: 新下载={success} 跳过={skip}")
+
+
+def download_top_list(
+    client: TushareClient,
+    storage: Storage,
+    trade_cal: pd.DataFrame,
+    start_date: str,
+    end_date: str,
+    force: bool = False,
+) -> None:
+    """下载龙虎榜（按日分区, 无数据存空占位避免重复下载）"""
+    trading_dates = trade_cal[
+        (trade_cal["cal_date"] >= start_date)
+        & (trade_cal["cal_date"] <= end_date)
+        & (trade_cal["is_open"] == 1)
+    ]["cal_date"].tolist()
+
+    logger.info(f"[top_list] {len(trading_dates)} 个交易日")
+    success = skip = empty = errors = 0
+
+    for i, td in enumerate(trading_dates, 1):
+        try:
+            if not force and storage.is_data_exists("raw", "top_list", td):
+                skip += 1
+                continue
+            df = client.get_top_list(trade_date=td)
+            if df is not None and len(df) > 0:
+                storage.save_raw_by_date(df, "top_list", td)
+                success += 1
+            else:
+                # 无数据存空占位
+                storage.save_raw_by_date(
+                    pd.DataFrame(columns=[
+                        "trade_date", "ts_code", "net_amount",
+                        "net_rate", "amount_rate", "reason",
+                    ]),
+                    "top_list", td,
+                )
+                empty += 1
+        except Exception as e:
+            errors += 1
+            logger.warning(f"[top_list] {td} 失败: {e}")
+
+        if i % 100 == 0 or i == len(trading_dates):
+            logger.info(
+                f"[top_list] [{i}/{len(trading_dates)}] "
+                f"新下载={success} 空占位={empty} 跳过={skip} 失败={errors}"
+            )
+
+    logger.info(
+        f"[top_list] 完成: 新下载={success} 空占位={empty} 跳过={skip} 失败={errors}"
+    )
+
+
+def download_report_rc(
+    client: TushareClient,
+    storage: Storage,
+    start_date: str,
+    end_date: str,
+    force: bool = False,
+) -> None:
+    """下载一致预期研报（按年分页增量, 合并单文件）"""
+    existing_df = None
+    existing_years: Set[str] = set()
+    if not force:
+        existing_df = storage.load_raw("report_rc")
+        if existing_df is not None and len(existing_df) > 0 and "report_date" in existing_df.columns:
+            existing_years = set(
+                existing_df["report_date"].astype(str).str[:4].unique()
+            )
+            logger.info(f"[report_rc] 已有 {len(existing_df)} 条数据, 覆盖 {len(existing_years)} 年")
+
+    start_year = int(start_date[:4])
+    end_year = int(end_date[:4])
+    years_to_download = [str(y) for y in range(start_year, end_year + 1) if str(y) not in existing_years]
+
+    if not years_to_download:
+        logger.info("[report_rc] 所有年份已存在, 跳过。如需重下请加 --force")
+        return
+
+    logger.info(f"[report_rc] 按年批量下载: {len(years_to_download)} 年 ({years_to_download[0]}~{years_to_download[-1]})")
+
+    all_dfs: List[pd.DataFrame] = []
+    success = empty = errors = 0
+    for y in years_to_download:
+        y_start = max(f"{y}0101", start_date)
+        y_end = min(f"{y}1231", end_date)
+        try:
+            df = client.get_report_rc(start_date=y_start, end_date=y_end)
+            if df is not None and len(df) > 0:
+                all_dfs.append(df)
+                success += 1
+                logger.info(f"  [report_rc] {y}: {len(df)} 条")
+            else:
+                empty += 1
+        except Exception as e:
+            errors += 1
+            logger.warning(f"[report_rc] {y} 失败: {e}")
+
+    if all_dfs:
+        _save_merged(
+            storage, "report_rc", all_dfs, existing_df,
+            dedup_cols=["ts_code", "report_date", "org_name", "author_name"],
+        )
+
+    logger.info(f"[report_rc] 完成: 成功={success} 空={empty} 失败={errors}")
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -616,7 +788,8 @@ def main():
         default=None,
         help="指定下载的另类数据集，可多选。"
              "可选值: fina_indicator, margin_detail, stk_holdernumber, "
-             "forecast, cyq_perf, express, fund_portfolio, all_alt。"
+             "forecast, cyq_perf, express, fund_portfolio, "
+             "moneyflow_hsgt, top_list, report_rc, all_alt。"
              "不指定时仅下载基础+日线数据"
     )
     parser.add_argument(
@@ -770,6 +943,30 @@ def main():
                     force=args.force,
                     page_limit=8000,  # fund_portfolio API 单次上限8000条
                     partition_by_period=True,
+                )
+
+            # 北向资金（按日分区, 市场级广播）
+            if "moneyflow_hsgt" in download_set:
+                download_moneyflow_hsgt(
+                    client, storage, trade_cal,
+                    args.start_date, args.end_date,
+                    force=args.force,
+                )
+
+            # 龙虎榜（按日分区）
+            if "top_list" in download_set:
+                download_top_list(
+                    client, storage, trade_cal,
+                    args.start_date, args.end_date,
+                    force=args.force,
+                )
+
+            # 一致预期研报（按年分页增量）
+            if "report_rc" in download_set:
+                download_report_rc(
+                    client, storage,
+                    args.start_date, args.end_date,
+                    force=args.force,
                 )
 
         logger.info("=" * 60)

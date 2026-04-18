@@ -89,6 +89,37 @@ EXPRESS_FEATURE_COLUMNS = [
     "express_surprise",  # 业绩惊喜
 ]
 
+# 北向资金因子特征列（市场级, 广播到全部 ts_code）
+NORTH_FEATURE_COLUMNS = [
+    "north_flow",  # 当日北向净流入（亿元）
+    "north_flow_ma5",  # 5日移动均值
+    "north_flow_ma20",  # 20日移动均值
+    "north_flow_z20",  # 20日滚动 z-score
+    "north_flow_sum5",  # 5日累计净流入
+    "north_flow_sign_streak",  # 连续同方向天数
+]
+
+# 龙虎榜因子特征列（稀疏, 未上榜填 0）
+LHB_FEATURE_COLUMNS = [
+    "lhb_on_list",  # 当日是否上榜
+    "lhb_net_amount",  # 龙虎榜净买入额
+    "lhb_net_rate",  # 净买入占流通市值比
+    "lhb_amount_rate",  # 龙虎榜成交占比
+    "lhb_up_days_20",  # 近 20 日累计上榜次数
+    "lhb_net_sum_5",  # 近 5 日净买入累计
+    "lhb_net_sum_20",  # 近 20 日净买入累计
+    "lhb_reason_count",  # 当日上榜理由数
+]
+
+# 一致预期因子特征列（分析师研报聚合）
+CONSENSUS_FEATURE_COLUMNS = [
+    "cons_analyst_count_30d",  # 近 30 日覆盖的研报数
+    "cons_eps_mean_fy1",  # 近 90 日 FY1 EPS 预测均值
+    "cons_eps_revision_30d",  # 近 30 日 EPS 预测修正率
+    "cons_target_price_mid",  # 近 90 日目标价中值
+    "cons_rating_score",  # 近 90 日平均评级得分
+]
+
 # 增强因子特征列（从已有日线/moneyflow数据计算，无需额外积分）
 ENHANCED_FEATURE_COLUMNS = [
     "zscore_opening_strength",       # 开盘强度（隔夜情绪代理）
@@ -383,6 +414,9 @@ def prepare_training_data(
     enable_fund_features: bool = False,
     enable_express_features: bool = False,
     enable_enhanced_features: bool = False,
+    enable_north_features: bool = False,
+    enable_lhb_features: bool = False,
+    enable_consensus_features: bool = False,
     feature_stability_filter: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
@@ -572,6 +606,33 @@ def prepare_training_data(
             logger.info(f"启用增强因子: {available_enhanced}")
         else:
             logger.warning("enable_enhanced_features=True，但数据中未找到增强因子列，跳过")
+
+    # 北向资金因子（可选, 市场级, 广播到全部 ts_code）
+    if enable_north_features:
+        available_north = [col for col in NORTH_FEATURE_COLUMNS if col in df.columns]
+        if available_north:
+            feature_columns.extend(available_north)
+            logger.info(f"启用北向资金因子: {available_north}")
+        else:
+            logger.warning("enable_north_features=True，但数据中未找到北向资金列，跳过")
+
+    # 龙虎榜因子（可选, 稀疏, 未上榜填 0）
+    if enable_lhb_features:
+        available_lhb = [col for col in LHB_FEATURE_COLUMNS if col in df.columns]
+        if available_lhb:
+            feature_columns.extend(available_lhb)
+            logger.info(f"启用龙虎榜因子: {available_lhb}")
+        else:
+            logger.warning("enable_lhb_features=True，但数据中未找到龙虎榜列，跳过")
+
+    # 一致预期因子（可选, 分析师研报聚合）
+    if enable_consensus_features:
+        available_cons = [col for col in CONSENSUS_FEATURE_COLUMNS if col in df.columns]
+        if available_cons:
+            feature_columns.extend(available_cons)
+            logger.info(f"启用一致预期因子: {available_cons}")
+        else:
+            logger.warning("enable_consensus_features=True，但数据中未找到一致预期列，跳过")
 
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个

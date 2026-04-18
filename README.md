@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.55.0)
+### 当前版本 (v0.56.0)
+
+**另类因子扩展 — 北向资金 / 龙虎榜 / 一致预期** (v0.56.0):
+- 新增 3 大另类因子模块，三者各自配备独立开关（默认关闭，保持基线行为）
+  - **北向资金（north_flow）**：`moneyflow_hsgt` 市场级日度净流入，广播后做 5/20 日均、20 日 z-score、连续同方向天数等截面变换
+  - **龙虎榜（lhb）**：`top_list` 个股日频上榜数据，同日多次上榜聚合，辅以 5/20 日滚动净额与 20 日上榜次数
+  - **一致预期（consensus）**：`report_rc` 研报滚动聚合，90 日分析师覆盖 / FY1 EPS 均值 / 30 日 EPS 修订比例 / 目标价 / 评级五档量化
+- 开关贯通：`batch_walk_forward.ps1` 新增 `$enable_north / $enable_lhb / $enable_consensus`；`walk_forward.py / train_ml_model.py / build_clean_features.py` 新增 `--enable-{north,lhb,consensus}-features`；`build_clean_features.py --build-all` 自动覆盖新 3 个因子
+- 自动补齐：`features/ensure.py` 按日分区（hsgt / top_list）与按年分页（report_rc）增量下载
 
 **行业轮动加权 + Kelly/半Kelly 仓位管理** (v0.55.0):
 - 行业轮动加权：按行业动量排名对候选股票分数做乘性调整，强势行业股票获得分数加成，弱势行业分数下调但超强个股仍可入选（独立于硬过滤开关）

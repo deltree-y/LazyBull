@@ -499,6 +499,55 @@ class DataLoader:
                     df[col] = df[col].astype(str).str.replace("-", "").str[:8]
         return df
 
+    def load_moneyflow_hsgt(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Optional[pd.DataFrame]:
+        """加载沪深股通资金流向（按日分区存储）"""
+        if start_date and end_date:
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            df = self.storage.load_raw_by_date_range(
+                "moneyflow_hsgt", start_str, end_str
+            )
+        else:
+            df = self.storage.load_raw("moneyflow_hsgt")
+        if df is None:
+            logger.warning("未找到北向资金数据")
+        elif "trade_date" in df.columns:
+            df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+        return df
+
+    def load_top_list(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Optional[pd.DataFrame]:
+        """加载龙虎榜数据（按日分区存储）"""
+        if start_date and end_date:
+            start_str = self._normalize_date(start_date)
+            end_str = self._normalize_date(end_date)
+            df = self.storage.load_raw_by_date_range("top_list", start_str, end_str)
+        else:
+            df = self.storage.load_raw("top_list")
+        if df is None:
+            logger.warning("未找到龙虎榜数据")
+        elif "trade_date" in df.columns:
+            df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+        return df
+
+    def load_report_rc(self) -> Optional[pd.DataFrame]:
+        """加载卖方一致预期研报数据（单文件）"""
+        df = self.storage.load_raw("report_rc")
+        if df is None:
+            logger.warning("未找到一致预期研报数据")
+        elif "report_date" in df.columns:
+            df["report_date"] = (
+                df["report_date"].astype(str).str.replace("-", "").str[:8]
+            )
+        return df
+
     def load_fund_portfolio(
         self,
         start_date: Optional[str] = None,

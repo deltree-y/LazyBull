@@ -34,6 +34,9 @@ OPTIONAL_FEATURE_FLAG_ATTRS = (
     "enable_cyq_features",
     "enable_fund_features",
     "enable_express_features",
+    "enable_north_features",
+    "enable_lhb_features",
+    "enable_consensus_features",
 )
 
 
@@ -203,6 +206,9 @@ def build_features_data(
     enable_cyq: bool = False,
     enable_fund: bool = False,
     enable_express: bool = False,
+    enable_north: bool = False,
+    enable_lhb: bool = False,
+    enable_consensus: bool = False,
 ) -> None:
     """构建features层数据
 
@@ -221,6 +227,9 @@ def build_features_data(
         enable_cyq: 是否启用筹码胜率因子
         enable_fund: 是否启用基金持仓因子
         enable_express: 是否启用业绩快报因子
+        enable_north: 是否启用北向资金因子
+        enable_lhb: 是否启用龙虎榜因子
+        enable_consensus: 是否启用一致预期因子
     """
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
@@ -387,6 +396,39 @@ def build_features_data(
             logger.warning("未找到业绩快报数据，相关特征将为空。"
                          "请先运行: python scripts/download_raw.py --download express")
 
+    # 加载北向资金数据（可选，市场级广播）
+    north_flow_lookup = None
+    if enable_north:
+        from src.lazybull.factors.north_flow import build_north_flow_lookup_by_date
+        hsgt_df = loader.load_moneyflow_hsgt(start_dt.strftime('%Y%m%d'), end_date)
+        if hsgt_df is not None:
+            logger.info(f"北向资金数据: {len(hsgt_df)} 条")
+            north_flow_lookup = build_north_flow_lookup_by_date(hsgt_df, trading_dates_str)
+        else:
+            logger.warning("未找到北向资金数据，相关特征将为空")
+
+    # 加载龙虎榜数据（可选）
+    lhb_lookup = None
+    if enable_lhb:
+        from src.lazybull.factors.lhb import build_lhb_lookup_by_date
+        top_list_df = loader.load_top_list(start_dt.strftime('%Y%m%d'), end_date)
+        if top_list_df is not None:
+            logger.info(f"龙虎榜数据: {len(top_list_df)} 条")
+            lhb_lookup = build_lhb_lookup_by_date(top_list_df, trading_dates_str)
+        else:
+            logger.warning("未找到龙虎榜数据，相关特征将为空")
+
+    # 加载一致预期数据（可选）
+    consensus_lookup = None
+    if enable_consensus:
+        from src.lazybull.factors.consensus import build_consensus_lookup_by_date
+        report_rc_df = loader.load_report_rc()
+        if report_rc_df is not None:
+            logger.info(f"一致预期研报数据: {len(report_rc_df)} 条")
+            consensus_lookup = build_consensus_lookup_by_date(report_rc_df, trading_dates_str)
+        else:
+            logger.warning("未找到一致预期研报数据，相关特征将为空")
+
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
 
@@ -426,6 +468,10 @@ def build_features_data(
                 fund_portfolio_lookup.get(trade_date) if fund_portfolio_lookup else None
             )
             express_today = express_lookup.get(trade_date) if express_lookup else None
+            # 获取当日 C1/C2/C3 数据
+            north_flow_today = north_flow_lookup.get(trade_date) if north_flow_lookup else None
+            lhb_today = lhb_lookup.get(trade_date) if lhb_lookup else None
+            consensus_today = consensus_lookup.get(trade_date) if consensus_lookup else None
 
             # 构建特征
             features_df = builder.build_features_for_day(
@@ -447,6 +493,9 @@ def build_features_data(
                 cyq_perf_data=cyq_perf_today,
                 express_data=express_today,
                 fund_portfolio_data=fund_portfolio_today,
+                north_flow_data=north_flow_today,
+                lhb_data=lhb_today,
+                consensus_data=consensus_today,
             )
             
             # 保存结果
@@ -521,7 +570,7 @@ def main():
     parser.add_argument(
         "--build-all",
         action="store_true",
-        help="启用全部可选因子（基本面、另类数据、融资融券、筹码胜率、基金持仓、业绩快报；不含行业中性化）"
+        help="启用全部可选因子（基本面、另类数据、融资融券、筹码胜率、基金持仓、业绩快报、北向资金、龙虎榜、一致预期；不含行业中性化）"
     )
     parser.add_argument(
         "--enable-fundamental-features",
@@ -553,6 +602,21 @@ def main():
         action="store_true",
         help="启用业绩快报因子（实际营收/净利润增速等）"
     )
+    parser.add_argument(
+        "--enable-north-features",
+        action="store_true",
+        help="启用北向资金因子（moneyflow_hsgt 市场级广播）"
+    )
+    parser.add_argument(
+        "--enable-lhb-features",
+        action="store_true",
+        help="启用龙虎榜因子（top_list 个股级）"
+    )
+    parser.add_argument(
+        "--enable-consensus-features",
+        action="store_true",
+        help="启用一致预期因子（report_rc 研报滚动聚合）"
+    )
 
     args = parser.parse_args()
     args = apply_build_all_feature_flags(args)
@@ -574,6 +638,9 @@ def main():
     logger.info(f"筹码胜率因子: {'启用' if args.enable_cyq_features else '禁用'}")
     logger.info(f"基金持仓因子: {'启用' if args.enable_fund_features else '禁用'}")
     logger.info(f"业绩快报因子: {'启用' if args.enable_express_features else '禁用'}")
+    logger.info(f"北向资金因子: {'启用' if args.enable_north_features else '禁用'}")
+    logger.info(f"龙虎榜因子: {'启用' if args.enable_lhb_features else '禁用'}")
+    logger.info(f"一致预期因子: {'启用' if args.enable_consensus_features else '禁用'}")
     logger.info("=" * 60)
     
     try:
@@ -611,6 +678,9 @@ def main():
                 enable_cyq=args.enable_cyq_features,
                 enable_fund=args.enable_fund_features,
                 enable_express=args.enable_express_features,
+                enable_north=args.enable_north_features,
+                enable_lhb=args.enable_lhb_features,
+                enable_consensus=args.enable_consensus_features,
             )
         
         logger.info("=" * 60)

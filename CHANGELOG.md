@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.56.0] - 2026-04-18
+
+### 新增
+
+- **接入 C1/C2/C3 三大另类因子（北向资金 / 龙虎榜 / 一致预期）**，用于扩充 alpha 来源多样性
+  - **北向资金（north_flow）**：TuShare `moneyflow_hsgt` 接口，市场级日度净流入（港股通/陆股通），广播到全样本后做 5/20 日滚动均值、20 日 z-score、连续同方向天数（sign_streak）等变换。6 个特征：`north_flow / _ma5 / _ma20 / _z20 / _sum5 / _sign_streak`
+  - **龙虎榜（lhb）**：TuShare `top_list` 接口，个股日频上榜记录，按 `(trade_date, ts_code)` 聚合净买入、上榜理由数，再做 5/20 日滚动净额、20 日上榜次数。8 个特征：`lhb_on_list / _net_amount / _net_rate / _amount_rate / _up_days_20 / _net_sum_5 / _net_sum_20 / _reason_count`
+  - **一致预期（consensus）**：TuShare `report_rc` 接口，研报滚动聚合（90 日窗分析师覆盖、FY1 EPS 均值、30 日 EPS 修订比例、目标价中位、评级五档量化）。5 个特征：`cons_analyst_count_30d / cons_eps_mean_fy1 / cons_eps_revision_30d / cons_target_price_mid / cons_rating_score`
+  - **独立开关**：三类因子各自配备 `$enable_north / $enable_lhb / $enable_consensus` 开关（默认 `$false`，保持基线），贯通 PowerShell 批处理 → Python CLI (`--enable-{north,lhb,consensus}-features`) → `FeatureBuilder.build_features_for_day()` 新增可选参数 `north_flow_data / lhb_data / consensus_data`
+  - **自动补齐链路**：`features/ensure.py` `_load_factor_data` 新增 3 段增量下载逻辑（moneyflow_hsgt 按日分区 / top_list 按日分区 / report_rc 按年分页），返回元组从 8 元素扩展到 11 元素
+  - **train_core 因子前缀登记**：`NORTH_FEATURE_COLUMNS / LHB_FEATURE_COLUMNS / CONSENSUS_FEATURE_COLUMNS` 常量与 `prepare_training_data` 对应布尔开关
+  - **`build_clean_features.py --build-all`** 已同步覆盖新 3 个因子（`OPTIONAL_FEATURE_FLAG_ATTRS` 扩展）
+  - **`download_raw.py`** 新增 3 个数据集下载入口（`moneyflow_hsgt` 按区间批量 + `top_list` 按日分区空占位 + `report_rc` 按年分页增量），`ALT_DATASETS` / `--download` / `--all` 均已覆盖
+  - **单元测试**：`tests/test_factor_north_flow.py / test_factor_lhb.py / test_factor_consensus.py` 共 13 条用例
+
 ## [0.55.5] - 2026-04-18
 
 ### 修复

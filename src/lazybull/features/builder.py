@@ -167,6 +167,9 @@ class FeatureBuilder:
         cyq_perf_data: Optional[pd.DataFrame] = None,
         express_data: Optional[pd.DataFrame] = None,
         fund_portfolio_data: Optional[pd.DataFrame] = None,
+        north_flow_data: Optional[Dict[str, float]] = None,
+        lhb_data: Optional[pd.DataFrame] = None,
+        consensus_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """构建单个交易日的截面特征和标签
 
@@ -251,6 +254,9 @@ class FeatureBuilder:
             cyq_perf_data,
             express_data,
             fund_portfolio_data,
+            north_flow_data,
+            lhb_data,
+            consensus_data,
         )
         logger.debug(f"{trade_date} 基础特征计算完成: {len(features.columns.tolist())} 列")
 
@@ -577,6 +583,9 @@ class FeatureBuilder:
         cyq_perf_data: Optional[pd.DataFrame] = None,
         express_data: Optional[pd.DataFrame] = None,
         fund_portfolio_data: Optional[pd.DataFrame] = None,
+        north_flow_data: Optional[Dict[str, float]] = None,
+        lhb_data: Optional[pd.DataFrame] = None,
+        consensus_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """计算基础数值特征
 
@@ -756,6 +765,29 @@ class FeatureBuilder:
             merge_cols = [c for c in fund_portfolio_data.columns if c != "ts_code"]
             features = features.merge(
                 fund_portfolio_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+
+        # 北向资金（市场级 -> 广播到全部 ts_code）
+        if north_flow_data is not None and len(north_flow_data) > 0:
+            for col, val in north_flow_data.items():
+                features[col] = val
+
+        # 龙虎榜（个股级, 稀疏, 未上榜填 0）
+        if lhb_data is not None and len(lhb_data) > 0:
+            from ..factors.lhb import LHB_COLS
+            merge_cols = [c for c in lhb_data.columns if c != "ts_code"]
+            features = features.merge(
+                lhb_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+            for col in LHB_COLS:
+                if col in features.columns:
+                    features[col] = features[col].fillna(0.0)
+
+        # 一致预期（个股级, 覆盖度低, 未覆盖保留 NaN 由模型自动处理）
+        if consensus_data is not None and len(consensus_data) > 0:
+            merge_cols = [c for c in consensus_data.columns if c != "ts_code"]
+            features = features.merge(
+                consensus_data[["ts_code"] + merge_cols], on="ts_code", how="left"
             )
 
         return features

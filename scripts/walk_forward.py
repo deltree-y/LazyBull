@@ -699,6 +699,9 @@ def _train_model_on_window(
         enable_fund_features=args.enable_fund_features,
         enable_express_features=args.enable_express_features,
         enable_enhanced_features=getattr(args, "enable_enhanced_features", False),
+        enable_north_features=getattr(args, "enable_north_features", False),
+        enable_lhb_features=getattr(args, "enable_lhb_features", False),
+        enable_consensus_features=getattr(args, "enable_consensus_features", False),
         feature_stability_filter=args.feature_stability_filter,
     )
 
@@ -1474,6 +1477,9 @@ def write_walk_forward_summary(
         "feature_stability_filter": args.feature_stability_filter,
         "ensemble_offsets": getattr(args, 'ensemble_offsets', 0),
         "enable_enhanced_features": getattr(args, 'enable_enhanced_features', False),
+        "enable_north_features": getattr(args, 'enable_north_features', False),
+        "enable_lhb_features": getattr(args, 'enable_lhb_features', False),
+        "enable_consensus_features": getattr(args, 'enable_consensus_features', False),
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
@@ -1977,6 +1983,30 @@ def main():
         action="store_true",
         default=False,
         help="启用增强因子（开盘强度、日内波动结构、委托不平衡）"
+    )
+
+    # 北向资金因子
+    parser.add_argument(
+        "--enable-north-features",
+        action="store_true",
+        default=False,
+        help="启用北向资金因子（moneyflow_hsgt, 市场级广播）"
+    )
+
+    # 龙虎榜因子
+    parser.add_argument(
+        "--enable-lhb-features",
+        action="store_true",
+        default=False,
+        help="启用龙虎榜因子（top_list, 稀疏数据未上榜填 0）"
+    )
+
+    # 一致预期因子
+    parser.add_argument(
+        "--enable-consensus-features",
+        action="store_true",
+        default=False,
+        help="启用卖方一致预期因子（report_rc, 滚动 30/60/90 日聚合）"
     )
 
     # 其他参数

@@ -292,6 +292,31 @@ def main():
         action="store_true",
         help="启用业绩快报因子（实际营收/净利润增速等）"
     )
+
+    # 北向资金因子
+    parser.add_argument(
+        "--enable-north-features",
+        action="store_true",
+        default=False,
+        help="启用北向资金因子（moneyflow_hsgt, 市场级广播）"
+    )
+
+    # 龙虎榜因子
+    parser.add_argument(
+        "--enable-lhb-features",
+        action="store_true",
+        default=False,
+        help="启用龙虎榜因子（top_list, 稀疏数据未上榜填 0）"
+    )
+
+    # 一致预期因子
+    parser.add_argument(
+        "--enable-consensus-features",
+        action="store_true",
+        default=False,
+        help="启用卖方一致预期因子（report_rc, 滚动 30/60/90 日聚合）"
+    )
+
     parser.add_argument(
         "--feature-stability-filter",
         action="store_true",
@@ -381,6 +406,9 @@ def main():
             enable_cyq_features=args.enable_cyq_features,
             enable_fund_features=args.enable_fund_features,
             enable_express_features=args.enable_express_features,
+            enable_north_features=getattr(args, "enable_north_features", False),
+            enable_lhb_features=getattr(args, "enable_lhb_features", False),
+            enable_consensus_features=getattr(args, "enable_consensus_features", False),
             feature_stability_filter=args.feature_stability_filter,
         )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）

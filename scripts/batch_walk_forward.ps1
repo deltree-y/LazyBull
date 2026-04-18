@@ -75,6 +75,15 @@ $enable_fund             = $true  # $true 启用 | $false 禁用
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
 $enable_express          = $true  # $true 启用 | $false 禁用
 
+# ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
+$enable_north            = $false  # $true 启用 | $false 禁用
+
+# ── 龙虎榜因子（top_list 个股级, 2000+积分）──────────────────────
+$enable_lhb              = $false  # $true 启用 | $false 禁用
+
+# ── 一致预期因子（report_rc 研报滚动聚合, 2000+积分）──────────────
+$enable_consensus        = $false  # $true 启用 | $false 禁用
+
 
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
@@ -458,6 +467,18 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($enable_express) {
         $pythonCmd += " --enable-express-features"
+    }
+
+    if ($enable_north) {
+        $pythonCmd += " --enable-north-features"
+    }
+
+    if ($enable_lhb) {
+        $pythonCmd += " --enable-lhb-features"
+    }
+
+    if ($enable_consensus) {
+        $pythonCmd += " --enable-consensus-features"
     }
 
     if ($feature_stability_filter) {

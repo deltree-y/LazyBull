@@ -28,6 +28,7 @@ _MIN_FINA_RECORDS = 1000       # 财务指标：全量应有 10 万+ 条
 _MIN_HOLDER_RECORDS = 500      # 股东人数：全量应有数万条
 _MIN_FORECAST_RECORDS = 500    # 业绩预告：全量应有数万条
 _MIN_EXPRESS_RECORDS = 500        # 业绩快报：全量应有数万条
+_MIN_REPORT_RC_RECORDS = 1000     # 一致预期研报：全量应有数万条
 
 
 def ensure_features_for_date(
@@ -176,7 +177,8 @@ def ensure_features_for_date(
         ]
 
         (funda_today, margin_today, holder_today, earnings_today,
-         cyq_perf_today, express_today, fund_portfolio_today, missing_factors) = (
+         cyq_perf_today, express_today, fund_portfolio_today,
+         north_flow_today, lhb_today, consensus_today, missing_factors) = (
             _load_factor_data(loader, client, storage, trade_date, trading_dates_str,
                               start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d'))
         )
@@ -201,6 +203,9 @@ def ensure_features_for_date(
             cyq_perf_data=cyq_perf_today,
             express_data=express_today,
             fund_portfolio_data=fund_portfolio_today,
+            north_flow_data=north_flow_today,
+            lhb_data=lhb_today,
+            consensus_data=consensus_today,
         )
         # 释放不再需要的历史数据，降低保存时的内存占用
         daily_clean = None
@@ -208,6 +213,7 @@ def ensure_features_for_date(
         moneyflow_clean = None
         funda_today = margin_today = holder_today = earnings_today = None
         cyq_perf_today = express_today = fund_portfolio_today = None
+        north_flow_today = lhb_today = consensus_today = None
         gc.collect()
 
         # 9. 保存结果
@@ -494,8 +500,58 @@ def _load_factor_data(
     fund_lookup = None
     gc.collect()
 
+    # ── 北向资金（按日分区，市场级广播）──────────────────────────
+    north_flow_today = None
+    north_hist_dates = [d for d in trading_dates_str if d <= trade_date]
+    hsgt_df = _try_ensure_historical_moneyflow_hsgt(client, storage, north_hist_dates)
+    if hsgt_df is not None and len(hsgt_df) > 0:
+        from ..factors.north_flow import build_north_flow_lookup_by_date
+        north_lookup = build_north_flow_lookup_by_date(hsgt_df, trading_dates_str)
+        north_flow_today = north_lookup.get(trade_date)
+        if north_flow_today is not None:
+            logger.info(f"北向资金因子: 已加载 ({len(hsgt_df)} 条)")
+        else:
+            missing_factors.append("moneyflow_hsgt（北向资金）")
+    else:
+        missing_factors.append("moneyflow_hsgt（北向资金）")
+    hsgt_df = None
+    north_lookup = None
+    gc.collect()
+
+    # ── 龙虎榜（按日分区）──────────────────────────────────────
+    lhb_today = None
+    lhb_hist_dates = [d for d in trading_dates_str if d <= trade_date]
+    top_list_df = _try_ensure_historical_top_list(client, storage, lhb_hist_dates)
+    if top_list_df is not None and len(top_list_df) > 0:
+        from ..factors.lhb import build_lhb_lookup_by_date
+        lhb_lookup = build_lhb_lookup_by_date(top_list_df, trading_dates_str)
+        lhb_today = lhb_lookup.get(trade_date)
+        logger.info(f"龙虎榜因子: 已加载 ({len(top_list_df)} 条)")
+    else:
+        # 龙虎榜稀疏, 无数据不视为错误, 只记缺失标签
+        missing_factors.append("top_list（龙虎榜）")
+    top_list_df = None
+    lhb_lookup = None
+    gc.collect()
+
+    # ── 一致预期（单文件, 按 report_date 增量）───────────────────
+    consensus_today = None
+    report_rc_df = loader.load_report_rc()
+    if report_rc_df is None or len(report_rc_df) < _MIN_REPORT_RC_RECORDS:
+        report_rc_df = _try_download_report_rc(client, storage, trade_date)
+    if report_rc_df is not None and len(report_rc_df) > 0:
+        from ..factors.consensus import build_consensus_lookup_by_date
+        cons_lookup = build_consensus_lookup_by_date(report_rc_df, trading_dates_str)
+        consensus_today = cons_lookup.get(trade_date)
+        logger.info(f"一致预期因子: 已加载 ({len(report_rc_df)} 条)")
+    else:
+        missing_factors.append("report_rc（一致预期）")
+    report_rc_df = None
+    cons_lookup = None
+    gc.collect()
+
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 7
+    total = 10
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -507,7 +563,8 @@ def _load_factor_data(
         logger.info(f"因子数据覆盖: {total}/{total} 组全部加载")
 
     return (funda_today, margin_today, holder_today, earnings_today,
-            cyq_perf_today, express_today, fund_portfolio_today, missing_factors)
+            cyq_perf_today, express_today, fund_portfolio_today,
+            north_flow_today, lhb_today, consensus_today, missing_factors)
 
 
 # ── 因子按日增量下载辅助函数 ──────────────────────────────────────
@@ -1161,6 +1218,187 @@ def _try_ensure_historical_margin(
         loader = DataLoader(storage)
         return loader.load_margin_detail(trading_dates_str[0], trading_dates_str[-1])
     return None
+
+
+# ── 北向资金 / 龙虎榜 / 一致预期 历史数据补齐 ────────────────────
+
+
+def _try_ensure_historical_moneyflow_hsgt(
+    client: TushareClient,
+    storage: Storage,
+    trading_dates_str: List[str],
+) -> Optional[pd.DataFrame]:
+    """补齐日期范围内缺失的北向资金历史数据
+
+    moneyflow_hsgt 按日分区存储, 需要 20+ 天历史才能计算 z-score 与 streak。
+    支持单次按 start_date/end_date 批量拉取（优于逐日循环）。
+
+    Args:
+        client: TushareClient 实例
+        storage: Storage 实例
+        trading_dates_str: 需要覆盖的交易日列表（YYYYMMDD, 仅历史日期）
+
+    Returns:
+        合并后的 moneyflow_hsgt DataFrame, 或 None
+    """
+    if not trading_dates_str:
+        return None
+
+    missing_dates = [
+        dt for dt in trading_dates_str
+        if not storage.is_data_exists("raw", "moneyflow_hsgt", dt)
+    ]
+    if missing_dates:
+        # moneyflow_hsgt 单次返回上限 300 条 (约 14 个月), 需按半年分段拉取以覆盖长历史
+        missing_set = set(missing_dates)
+        seg_start = missing_dates[0]
+        seg_end = missing_dates[-1]
+        # 生成半年段 (从 seg_start 往后, 每 6 个日历月一段)
+        from datetime import datetime, timedelta
+        segments: List[tuple] = []
+        cursor = datetime.strptime(seg_start, "%Y%m%d")
+        end_dt = datetime.strptime(seg_end, "%Y%m%d")
+        while cursor <= end_dt:
+            nxt = cursor + timedelta(days=180)
+            if nxt > end_dt:
+                nxt = end_dt
+            segments.append((cursor.strftime("%Y%m%d"), nxt.strftime("%Y%m%d")))
+            cursor = nxt + timedelta(days=1)
+
+        saved = 0
+        for s, e in segments:
+            try:
+                df = client.get_moneyflow_hsgt(start_date=s, end_date=e)
+                if df is None or df.empty:
+                    continue
+                df["trade_date"] = (
+                    df["trade_date"].astype(str).str.replace("-", "").str[:8]
+                )
+                for dt, grp in df.groupby("trade_date"):
+                    if dt in missing_set:
+                        storage.save_raw_by_date(grp, "moneyflow_hsgt", dt)
+                        saved += 1
+            except Exception as e:
+                logger.warning(f"北向资金 {s}~{e} 分段下载失败: {e}")
+        if saved > 0:
+            logger.info(f"北向资金历史补齐: 新增 {saved} 个交易日")
+
+    from ..data.loader import DataLoader
+    loader = DataLoader(storage)
+    return loader.load_moneyflow_hsgt(
+        trading_dates_str[0], trading_dates_str[-1]
+    )
+
+
+def _try_ensure_historical_top_list(
+    client: TushareClient,
+    storage: Storage,
+    trading_dates_str: List[str],
+) -> Optional[pd.DataFrame]:
+    """补齐日期范围内缺失的龙虎榜历史数据
+
+    top_list 按日分区, 稀疏数据（大多数日期只有个位数到几十条）。
+    逐日循环下载, 下载失败或空记录都保存空标记以避免重复尝试。
+
+    Args:
+        client: TushareClient 实例
+        storage: Storage 实例
+        trading_dates_str: 需要覆盖的交易日列表（YYYYMMDD, 仅历史日期）
+
+    Returns:
+        合并后的 top_list DataFrame, 或 None
+    """
+    if not trading_dates_str:
+        return None
+
+    downloaded = 0
+    for dt in trading_dates_str:
+        if storage.is_data_exists("raw", "top_list", dt):
+            continue
+        try:
+            df = client.get_top_list(trade_date=dt)
+            if df is not None and not df.empty:
+                storage.save_raw_by_date(df, "top_list", dt)
+                downloaded += 1
+            else:
+                # 当日无上榜股票, 保存空 DataFrame 占位避免重复下载
+                storage.save_raw_by_date(
+                    pd.DataFrame({"trade_date": [dt]}), "top_list", dt,
+                )
+        except Exception as e:
+            logger.debug(f"top_list {dt} 下载失败: {e}")
+
+    if downloaded > 0:
+        logger.info(f"龙虎榜历史补齐: 新增 {downloaded} 个交易日")
+
+    from ..data.loader import DataLoader
+    loader = DataLoader(storage)
+    return loader.load_top_list(trading_dates_str[0], trading_dates_str[-1])
+
+
+def _try_download_report_rc(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+) -> Optional[pd.DataFrame]:
+    """下载一致预期研报数据
+
+    数据充足（>= 阈值）: 按 report_date 增量下载当日新研报。
+    数据不足或不存在: 按年份批量回溯下载（report_rc 每次返回 2000 条, 需分页）。
+    """
+    existing = storage.load_raw("report_rc")
+
+    if existing is not None and len(existing) >= _MIN_REPORT_RC_RECORDS:
+        try:
+            logger.info(f"增量下载 report_rc (report_date={trade_date})...")
+            new_df = client.get_report_rc(report_date=trade_date)
+            if new_df is not None and len(new_df) > 0:
+                result = _append_and_save_raw(
+                    storage, "report_rc", new_df,
+                    dedup_cols=["ts_code", "report_date", "org_name", "quarter"],
+                )
+                logger.info(
+                    f"  report_rc 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
+                )
+                return result
+            else:
+                logger.info(f"  report_rc: {trade_date} 无新研报")
+                return existing
+        except Exception as e:
+            logger.warning(f"增量下载 report_rc 失败: {e}")
+            return existing
+
+    # 全量下载 — 按年分页
+    cnt = len(existing) if existing is not None else 0
+    logger.info(
+        f"一致预期数据不足 (当前 {cnt} 条, 阈值 {_MIN_REPORT_RC_RECORDS})，"
+        f"启动按年批量下载..."
+    )
+    import datetime as _dt
+    current_year = _dt.datetime.now().year
+    all_pages: List[pd.DataFrame] = []
+    for year in range(current_year - 5, current_year + 1):
+        try:
+            df = _query_with_pagination(
+                client,
+                "report_rc",
+                start_date=f"{year}0101",
+                end_date=f"{year}1231",
+            )
+            if df is not None and len(df) > 0:
+                all_pages.append(df)
+                logger.info(f"  report_rc {year} 年: {len(df)} 条")
+        except Exception as e:
+            logger.warning(f"  report_rc {year} 年下载失败: {e}")
+    if not all_pages:
+        return existing
+    merged = pd.concat(all_pages, ignore_index=True)
+    result = _append_and_save_raw(
+        storage, "report_rc", merged,
+        dedup_cols=["ts_code", "report_date", "org_name", "quarter"],
+    )
+    logger.info(f"一致预期全量下载完成: 总计 {len(result)} 条")
+    return result
 
 
 # ── Features 缓存完整性校验 ──────────────────────────────────────

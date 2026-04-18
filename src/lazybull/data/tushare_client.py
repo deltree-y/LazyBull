@@ -64,19 +64,26 @@ class TushareClient:
             logger.info(f"TuShare客户端初始化成功，限频: {self.rate_limit}次/分钟")
         self.verbose = verbose
     
-    def _rate_limit_wait(self) -> None:
-        """执行限频等待"""
+    def _rate_limit_wait(self, override_interval: Optional[float] = None) -> None:
+        """执行限频等待
+
+        Args:
+            override_interval: 若提供, 则本次等待使用此最小间隔 (秒) 覆盖全局设置,
+                用于官方无明示限频的接口 (如 top_list) 局部提速。
+        """
+        interval = override_interval if override_interval is not None else self._request_interval
         elapsed = time.time() - self._last_request_time
-        if elapsed < self._request_interval:
-            wait_time = self._request_interval - elapsed
+        if elapsed < interval:
+            wait_time = interval - elapsed
             time.sleep(wait_time)
         self._last_request_time = time.time()
-    
+
     def query(
         self,
         api_name: str,
         fields: Optional[str] = None,
         skip_rate_limit: bool = False,
+        rate_limit_override: Optional[int] = None,
         **kwargs
     ) -> pd.DataFrame:
         """调用TuShare API
@@ -94,7 +101,10 @@ class TushareClient:
             try:
                 # 限频等待
                 if not skip_rate_limit:
-                    self._rate_limit_wait()
+                    override = None
+                    if rate_limit_override is not None and rate_limit_override > 0:
+                        override = 60.0 / rate_limit_override
+                    self._rate_limit_wait(override_interval=override)
                 
                 # 调用API
                 logger.debug(f"调用API: {api_name}, 参数: {kwargs}")
@@ -685,3 +695,121 @@ class TushareClient:
         if end_date is not None:
             kwargs["end_date"] = end_date
         return self.query("stk_holdernumber", **kwargs)
+
+    def get_moneyflow_hsgt(
+        self,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取沪深股通资金流向（moneyflow_hsgt，2000 积分）
+
+        市场级日度数据，返回沪股通/深股通当日整体买卖与净流入，
+        用作北向资金宏观因子（广播到全部 ts_code）。
+
+        Args:
+            trade_date: 交易日期，格式 YYYYMMDD（可选）
+            start_date: 开始日期，格式 YYYYMMDD（可选）
+            end_date: 结束日期，格式 YYYYMMDD（可选）
+
+        Returns:
+            DataFrame，主要字段：
+            - trade_date: 交易日期
+            - ggt_ss: 港股通（上海）
+            - ggt_sz: 港股通（深圳）
+            - hgt: 沪股通（亿元）
+            - sgt: 深股通（亿元）
+            - north_money: 北向资金净流入（亿元）
+            - south_money: 南向资金净流入（亿元）
+        """
+        kwargs: dict = {}
+        if trade_date is not None:
+            kwargs["trade_date"] = trade_date
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        return self.query("moneyflow_hsgt", **kwargs)
+
+    def get_top_list(
+        self,
+        trade_date: Optional[str] = None,
+        ts_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取龙虎榜个股明细（top_list，2000 积分）
+
+        Args:
+            trade_date: 交易日期，格式 YYYYMMDD（可选）
+            ts_code: 股票代码（可选）
+            start_date: 开始日期，格式 YYYYMMDD（可选）
+            end_date: 结束日期，格式 YYYYMMDD（可选）
+
+        Returns:
+            DataFrame，主要字段：
+            - trade_date, ts_code, name, close
+            - pct_change: 涨跌幅
+            - turnover_rate: 换手率
+            - amount: 总成交额
+            - l_sell/l_buy: 龙虎榜卖/买入额
+            - l_amount: 龙虎榜成交额
+            - net_amount: 龙虎榜净买入额
+            - net_rate: 龙虎榜净买入额占比
+            - amount_rate: 龙虎榜成交额占比
+            - float_values: 当日流通市值
+            - reason: 上榜理由
+        """
+        kwargs: dict = {}
+        if trade_date is not None:
+            kwargs["trade_date"] = trade_date
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        # 官方未明示限频, 局部放宽到 1000 次/分钟 (60ms/次), 加速历史批量下载
+        return self.query("top_list", rate_limit_override=60, **kwargs)
+
+    def get_report_rc(
+        self,
+        ts_code: Optional[str] = None,
+        report_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取卖方研报一致预期（report_rc，2000 积分）
+
+        Args:
+            ts_code: 股票代码（可选）
+            report_date: 研报日期，格式 YYYYMMDD（可选）
+            start_date: 报告日期起（可选）
+            end_date: 报告日期止（可选）
+
+        Returns:
+            DataFrame，主要字段：
+            - ts_code, name
+            - report_date: 研报日期
+            - report_title, report_type
+            - classify, org_name, author_name
+            - quarter: 预测季度
+            - op_rt: 预测营收增长率
+            - op_pr: 预测营收
+            - tp: 预测净利润
+            - np: 预测净利润
+            - eps: 每股收益预测
+            - pe/rd/roe/ev_ebitda: 估值/收益指标
+            - rating: 评级
+            - max_price, min_price: 预测价格区间
+        """
+        kwargs: dict = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if report_date is not None:
+            kwargs["report_date"] = report_date
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        return self.query("report_rc", **kwargs)
