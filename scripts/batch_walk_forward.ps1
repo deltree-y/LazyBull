@@ -14,8 +14,8 @@
 # ============================================================
 
 # ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130209"   #20130101   #20130224
-$wf_end_date             = "20260209"   #20251231   #20260224
+$wf_start_date           = "20130101"   #20130101   #20130224
+$wf_end_date             = "20251231"   #20251231   #20260224
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -30,8 +30,8 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(500,1500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
+$n_estimators_list       = @(1000,2000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$max_depth_list          = @(3,4)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.012)     #. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
@@ -96,7 +96,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $false   # $true 启用 | $false 禁用
 #$start_model_version     = 10816    # 0224
-$start_model_version     = 10830    # 0101
+$start_model_version     = 10858    # 0101
 #$start_model_version     = 10802    # 0209
                                    #d3(0101):7969/9430(no enh)/9416(enh)
                                    #d3(0209):8165/9446(no enh)/9461(enh)/9601(ofst+1)
@@ -119,10 +119,10 @@ $bt_max_weight_per_stock_list = @(0.15)     # 单股最大权重，$null=不限�
 $bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null=不限制，如 @(2, 3)
 
 # ── 仓位管理模式──────────────────────────────
-$position_sizing_list             = @('half_kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
+# equal：等权 | score：按分数比例 | kelly：凯利公式 | half_kelly：半凯利（更稳健）
+$position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
 $kelly_vol_window                 = 60         # Kelly 波动率窗口（交易日）
 $kelly_max_leverage_list          = @(0.15)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
-
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
 $signal_gate_mode = "composite"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭

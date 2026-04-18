@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.55.5] - 2026-04-18
+
+### 修复
+
+- **Kelly/半Kelly 仓位权重重新设计**：彻底修复两个问题
+  - **问题1（kelly = half_kelly）**：原实现 `f* *= 0.5` 对所有股票乘以相同常数，归一化后比例不变，两种模式结果完全相同。修复：`half_kelly` 改为 `50% kelly权重 + 50% 等权` 的混合模式，使其真正比 kelly 更保守
+  - **问题2（量级不匹配导致全部 clip 等权）**：原始 ML 分数（0.5~0.9）直接除以方差（0.0001~0.001），`f*` ≈ 500~9000 全被 `kelly_max_leverage` clip 到相同值。修复：改用**分数百分位排名**（0~1）作为 μ，`f* = score_rank / σ²`，量级匹配且保留截面排序信息
+
 ## [0.55.4] - 2026-04-17
 
 ### 优化

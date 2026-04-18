@@ -311,31 +311,42 @@ class TestKellyWeights:
         total = sum(result.values())
         assert abs(total - 1.0) < 1e-9, f"Kelly 权重总和应为 1.0, 实际: {total}"
 
-    def test_half_kelly_is_half(self):
-        """half_kelly 模式的原始 f* 应为 kelly 的一半"""
-        engine_kelly = _make_engine_with_price_cache(position_sizing="kelly")
-        engine_half = _make_engine_with_price_cache(position_sizing="half_kelly")
+    def test_half_kelly_is_more_conservative_than_kelly(self):
+        """half_kelly 应比 kelly 更保守（权重更接近等权）"""
+        # 设极高上限避免截断抹平差异
+        engine_kelly = _make_engine_with_price_cache(
+            position_sizing="kelly", kelly_max_leverage=10000.0
+        )
+        engine_half = _make_engine_with_price_cache(
+            position_sizing="half_kelly", kelly_max_leverage=10000.0
+        )
 
-        signals = {"000001.SZ": 0.05, "000002.SZ": 0.03}
+        # 高分低波动股 000001.SZ 在 kelly 中权重最高
+        signals = {"000001.SZ": 0.08, "000002.SZ": 0.02}
         date = pd.Timestamp("2023-04-01")
 
-        # 由于归一化后总和都是 1.0,但 f* 之间的比例关系应保持
-        # half_kelly 相当于对所有 f* 乘 0.5 再归一化 → 权重比例与 kelly 完全相同
         result_kelly = engine_kelly._normalize_signals(signals, date)
         result_half = engine_half._normalize_signals(signals, date)
 
-        # 归一化后比例应一致（因为 ×0.5 是全局的,再归一化后比例不变）
+        # half_kelly = 50% kelly + 50% 等权，高分股权重应介于 kelly 和等权之间
+        high_score_stock = "000001.SZ"
+        eq_weight = 0.5  # 2只股票等权
+        assert result_kelly[high_score_stock] > eq_weight, \
+            "kelly 高分低波动股权重应高于等权"
+        assert result_half[high_score_stock] < result_kelly[high_score_stock], \
+            "half_kelly 高分股权重应小于 kelly（更接近等权）"
+        assert result_half[high_score_stock] > eq_weight - 1e-9, \
+            "half_kelly 高分股权重应不低于等权"
+        # 两者权重不应完全相同
         for stock in signals:
-            assert abs(result_kelly[stock] - result_half[stock]) < 1e-9
+            assert abs(result_kelly[stock] - result_half[stock]) > 1e-6, \
+                "kelly 和 half_kelly 权重不应完全相同"
 
     def test_kelly_low_vol_gets_higher_weight(self):
-        """低波动股票在 Kelly 中应获得更高的仓位"""
-        # 设极高上限避免 max_leverage 截断抹平差异
-        # 注: f* = μ/σ² 量级很大(分数~0.05, 方差~1e-4 → f*~500)
+        """相同分数下，低波动股票在 Kelly 中应获得更高的仓位（标准 Kelly：f* = rank/σ²）"""
         engine = _make_engine_with_price_cache(
             position_sizing="kelly", kelly_max_leverage=10000.0,
         )
-        # 给所有股票相同分数,波动率差异导致权重差异
         signals = {
             "000001.SZ": 0.05,   # 低波动
             "000002.SZ": 0.05,   # 高波动
@@ -343,9 +354,9 @@ class TestKellyWeights:
         date = pd.Timestamp("2023-04-01")
         result = engine._normalize_signals(signals, date)
 
-        # 低波动(000001.SZ)应有更高权重(f* = μ/σ², σ²小 → f*大)
+        # 低波动(000001.SZ)应有更高权重（f* = rank/σ²，σ²小 → f*大）
         assert result["000001.SZ"] > result["000002.SZ"], \
-            "相同分数下,低波动股票应获得更高 Kelly 权重"
+            "相同分数下，低波动股票应获得更高 Kelly 权重"
 
     def test_kelly_negative_score_fallback(self):
         """负分数的股票应走 fallback (中位 Kelly 值)"""

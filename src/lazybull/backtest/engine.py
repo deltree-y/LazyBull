@@ -502,6 +502,7 @@ class BacktestEngine:
         self.position_sizing = position_sizing
         self.kelly_vol_window = kelly_vol_window
         self.kelly_max_leverage = kelly_max_leverage
+        self._normalize_log_count = 0  # 权重诊断日志计数，只打印前5次
         if position_sizing in ("kelly", "half_kelly"):
             logger.info(
                 f"仓位管理模式={position_sizing}, 波动率窗口={kelly_vol_window}, "
@@ -2738,22 +2739,37 @@ class BacktestEngine:
 
         if sizing == "equal":
             weight = 1.0 / len(signals)
-            if self.verbose:
-                logger.info(f"  权重方法: equal (等权), 每只股票权重 {weight:.4f}")
+            if self._normalize_log_count < 5:
+                scores = list(signals.values())
+                s_max, s_min = max(scores), min(scores)
+                logger.info(
+                    f"  [权重诊断 {self._normalize_log_count + 1}/5] equal, "
+                    f"n={len(signals)}, 每只权重={weight:.4f}, "
+                    f"分数范围=[{s_min:.4f}, {s_max:.4f}], 分数差距={s_max - s_min:.4f}"
+                )
+                self._normalize_log_count += 1
             return {stock: weight for stock in signals.keys()}
 
         elif sizing == "score":
             total_score = sum(signals.values())
             if total_score > 0:
                 result = {stock: score / total_score for stock, score in signals.items()}
-                if self.verbose:
-                    sample_stocks = list(result.items())[:3]
+                if self._normalize_log_count < 5:
+                    weights = sorted(result.values(), reverse=True)
+                    w_max, w_min = weights[0], weights[-1]
+                    eq_weight = 1.0 / len(result)
+                    concentration = w_max / eq_weight
+                    sample_stocks = sorted(result.items(), key=lambda x: x[1], reverse=True)[:3]
                     weights_str = ", ".join(
                         [f"{stock}: {weight:.4f}" for stock, weight in sample_stocks]
                     )
                     logger.info(
-                        f"  权重方法: score (按分数加权), 示例权重（前3只）: {weights_str}"
+                        f"  [权重诊断 {self._normalize_log_count + 1}/5] score, "
+                        f"n={len(result)}, 等权基准={eq_weight:.4f}, "
+                        f"最高={w_max:.4f}({concentration:.1f}x), 最低={w_min:.4f}, "
+                        f"示例（前3）: {weights_str}"
                     )
+                    self._normalize_log_count += 1
                 return result
             else:
                 weight = 1.0 / len(signals)
@@ -2778,52 +2794,93 @@ class BacktestEngine:
     ) -> Dict[str, float]:
         """计算 Kelly / 半 Kelly 仓位权重
 
+        f* = score_rank / σ²，分数排名为主项，波动率负相关（低波动 → 更高权重）。
+
         对每只股票:
-        1. μ = ML 预测分数（作为预期超额收益的代理）
-        2. σ² = 近 kelly_vol_window 日收益率方差（从 price_data 估计）
-        3. f* = μ / σ², clip 到 [0, kelly_max_leverage]
-        4. 半 Kelly: f* × 0.5
-        5. 所有 f* 归一化总和为 1.0
+        1. score_rank = 分数百分位排名（0~1），量级稳定，避免原始分数与 σ² 量级不匹配
+        2. f* = score_rank / σ²（分数高 + 波动低 → 权重高）
+        3. 半 Kelly: 归一化后与等权混合（50% kelly + 50% 等权），比 kelly 更保守
+        4. 归一化总和为 1.0，再按 kelly_max_leverage 做单股上限限制
 
-        如果无法估计波动率,则该股票回退到平均权重。
+        如果无法估计波动率，该股票仅用分数排名权重（等同 score 模式）。
         """
-        raw_kelly = {}
+        n = len(signals)
+        if n == 0:
+            return {}
+
+        # 计算分数百分位排名（0~1），分数最高的股票 rank=1，最低的 rank=1/n
+        positive_stocks = {s: v for s, v in signals.items() if v > 0}
+        if not positive_stocks:
+            weight = 1.0 / n
+            return {stock: weight for stock in signals}
+
+        sorted_stocks = sorted(positive_stocks.items(), key=lambda x: x[1])
+        m = len(sorted_stocks)
+        score_ranks = {stock: (i + 1) / m for i, (stock, _) in enumerate(sorted_stocks)}
+
+        # 计算每只股票的 1/σ²（无数据时用截面中位数）
+        vol_adjusts = {}
         fallback_stocks = []
-
-        for stock, score in signals.items():
-            if score <= 0:
-                fallback_stocks.append(stock)
-                continue
-
+        for stock in positive_stocks:
             vol_sq = self._estimate_stock_variance(stock, date)
-            if vol_sq is None or vol_sq <= 0:
+            if vol_sq is not None and vol_sq > 0:
+                vol_adjusts[stock] = 1.0 / float(vol_sq)
+            else:
                 fallback_stocks.append(stock)
-                continue
 
-            # Kelly 公式: f* = μ / σ²
-            f_star = score / vol_sq
-            f_star = min(f_star, self.kelly_max_leverage)
-            f_star = max(f_star, 0.0)
-            if half:
-                f_star *= 0.5
-            raw_kelly[stock] = f_star
+        if vol_adjusts:
+            median_vol_adj = float(np.median(list(vol_adjusts.values())))
+        else:
+            median_vol_adj = 1.0
+        for stock in fallback_stocks:
+            vol_adjusts[stock] = median_vol_adj
 
-        # 对 fallback 股票分配一个中位 kelly 值
+        # f* = score_rank / σ²（标准 Kelly，低波动股获更高权重）
+        raw_kelly = {
+            stock: score_ranks[stock] * vol_adjusts[stock]
+            for stock in positive_stocks
+        }
+
+        # fallback 股票（score <= 0）分配中位 kelly 值
         if raw_kelly:
             median_kelly = float(np.median(list(raw_kelly.values())))
         else:
-            median_kelly = 1.0 / max(len(signals), 1)
-
-        for stock in fallback_stocks:
-            raw_kelly[stock] = median_kelly
+            median_kelly = 1.0 / n
+        for stock in signals:
+            if stock not in raw_kelly:
+                raw_kelly[stock] = median_kelly
 
         # 归一化总和为 1.0
         total = sum(raw_kelly.values())
         if total <= 0:
-            weight = 1.0 / len(signals)
-            return {stock: weight for stock in signals.keys()}
+            weight = 1.0 / n
+            return {stock: weight for stock in signals}
+        kelly_weights = {stock: w / total for stock, w in raw_kelly.items()}
 
-        result = {stock: w / total for stock, w in raw_kelly.items()}
+        # half_kelly: 50% kelly 权重 + 50% 等权，更保守，同时确保两种模式结果不同
+        if half:
+            eq_weight = 1.0 / n
+            kelly_weights = {
+                stock: 0.5 * w + 0.5 * eq_weight
+                for stock, w in kelly_weights.items()
+            }
+            # 重新归一化（理论上和已为1，防浮点误差）
+            total2 = sum(kelly_weights.values())
+            if total2 > 0:
+                kelly_weights = {s: w / total2 for s, w in kelly_weights.items()}
+
+        result = kelly_weights
+
+        # 按 kelly_max_leverage 做单股权重上限（迭代重归一化）
+        if self.kelly_max_leverage < 1.0:
+            for _ in range(10):
+                capped = {s: min(w, self.kelly_max_leverage) for s, w in result.items()}
+                cap_total = sum(capped.values())
+                if cap_total <= 0:
+                    break
+                result = {s: w / cap_total for s, w in capped.items()}
+                if all(w <= self.kelly_max_leverage + 1e-9 for w in result.values()):
+                    break
 
         if self.verbose:
             mode_name = "half_kelly" if half else "kelly"

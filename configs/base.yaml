@@ -17,7 +17,7 @@ tushare:
 
 # 行业配置
 industry:
-  shenwan_level: "l2"  # 项目统一主行业口径：l1 | l2 | l3
+  shenwan_level: "l1"  # 项目统一主行业口径：l1 | l2 | l3
 
 # 交易成本配置
 costs:
