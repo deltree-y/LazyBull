@@ -225,11 +225,19 @@ def download_daily_data(
 
 
 def _save_merged(storage, dataset_name, new_dfs, existing_df, dedup_cols):
-    """合并新旧数据并保存"""
-    result = pd.concat(new_dfs, ignore_index=True)
-    if existing_df is not None and len(existing_df) > 0:
-        result = pd.concat([existing_df, result], ignore_index=True)
-    if dedup_cols:
+    """合并新旧数据并保存
+
+    过滤掉空 DataFrame 以规避 pandas FutureWarning:
+    concat 时若某个片段整体为空或全 NA, 未来版本的 dtype 推断行为会变化。
+    """
+    new_dfs = [d for d in new_dfs if d is not None and len(d) > 0]
+    if not new_dfs:
+        result = existing_df if existing_df is not None else pd.DataFrame()
+    else:
+        result = pd.concat(new_dfs, ignore_index=True)
+        if existing_df is not None and len(existing_df) > 0:
+            result = pd.concat([existing_df, result], ignore_index=True)
+    if dedup_cols and len(result) > 0:
         result = result.drop_duplicates(subset=dedup_cols, keep="last")
     storage.save_raw(result, dataset_name, is_force=True)
     logger.info(f"[{dataset_name}] 已保存: {len(result)} 条记录")

@@ -50,10 +50,11 @@ class FeatureBuilder:
     def __init__(
         self,
         min_list_days: int = 365,
-        horizon: int = 5,
-        horizons: List[int] = None,
-        lookback_windows: List[int] = None,
+        horizon: Optional[int] = None,
+        horizons: Optional[List[int]] = None,
+        lookback_windows: Optional[List[int]] = None,
         require_label: bool = True,
+        label_filter_mode: str = "all",
         shenwan_level: Optional[str] = None,
         verbose: bool = False,
     ):
@@ -61,20 +62,31 @@ class FeatureBuilder:
 
         Args:
             min_list_days: 最小上市自然日天数，默认365天（约12个月）
-            horizon: 预测时间窗口（交易日），默认5天（自 0.5.0 版本起已废弃，请使用 horizons 参数）
+            horizon: 主 horizon（交易日），label_filter_mode="single" 时按此列过滤；未指定时使用 horizons[0]
             horizons: 预测时间窗口列表（交易日），默认[5, 10, 20]，生成多个标签 y_ret_5, y_ret_10, y_ret_20
             lookback_windows: 回看窗口列表，用于计算历史特征，默认[5, 10, 20]
             require_label: 是否要求标签非空，默认True（训练/回测模式）；设为False用于实盘/推理模式
+            label_filter_mode: 标签过滤模式，"single"=只按主 horizon 非空过滤，
+                "all"=AND 过滤所有 horizons 列都非空（默认，保持历史行为）
             shenwan_level: 主行业口径层级，支持 l1/l2/l3；未传时从项目配置读取
             verbose: 是否输出详细日志
         """
+        if label_filter_mode not in ("single", "all"):
+            raise ValueError(
+                f"label_filter_mode 必须是 'single' 或 'all'，传入：{label_filter_mode}"
+            )
         self.min_list_days = min_list_days
-        # 如果 horizons 未指定，则使用旧参数 horizon 或默认值
         self.horizons = horizons or [5, 10, 20]
-        # 保留旧参数向后兼容
-        self.horizon = horizon if horizon in self.horizons else self.horizons[0]
+        # 若传入 horizon 但不在 horizons 中，追加并告警，避免静默回退踩坑
+        if horizon is not None and horizon not in self.horizons:
+            logger.warning(
+                f"传入 horizon={horizon} 不在 horizons={self.horizons} 中，自动追加"
+            )
+            self.horizons = sorted(set(self.horizons) | {horizon})
+        self.horizon = horizon if horizon is not None else self.horizons[0]
         self.lookback_windows = lookback_windows or [5, 10, 20]
         self.require_label = require_label
+        self.label_filter_mode = label_filter_mode
         self.shenwan_level = (
             normalize_shenwan_level(shenwan_level)
             if shenwan_level is not None
@@ -768,27 +780,44 @@ class FeatureBuilder:
             )
 
         # 北向资金（市场级 -> 广播到全部 ts_code）
-        if north_flow_data is not None and len(north_flow_data) > 0:
-            for col, val in north_flow_data.items():
-                features[col] = val
+        # 语义: 上层传入 None 表示未启用; 传入空 dict/DataFrame 表示启用但当日缺数据,
+        # 此时仍写出 NaN 占位列, 保证训练/推理特征 schema 一致 (避免 north 列时有时无)
+        from ..factors.north_flow import NORTH_COLS as _NORTH_COLS
+        if north_flow_data is not None:
+            if len(north_flow_data) > 0:
+                for col, val in north_flow_data.items():
+                    features[col] = val
+            else:
+                for col in _NORTH_COLS:
+                    features[col] = float("nan")
 
         # 龙虎榜（个股级, 稀疏, 未上榜填 0）
-        if lhb_data is not None and len(lhb_data) > 0:
-            from ..factors.lhb import LHB_COLS
-            merge_cols = [c for c in lhb_data.columns if c != "ts_code"]
-            features = features.merge(
-                lhb_data[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
-            for col in LHB_COLS:
-                if col in features.columns:
-                    features[col] = features[col].fillna(0.0)
+        from ..factors.lhb import LHB_COLS as _LHB_COLS
+        if lhb_data is not None:
+            if len(lhb_data) > 0:
+                merge_cols = [c for c in lhb_data.columns if c != "ts_code"]
+                features = features.merge(
+                    lhb_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+                )
+                for col in _LHB_COLS:
+                    if col in features.columns:
+                        features[col] = features[col].fillna(0.0)
+            else:
+                # 启用但当日全市场无龙虎榜数据 -> 6 列填 0 (语义上未上榜)
+                for col in _LHB_COLS:
+                    features[col] = 0.0
 
         # 一致预期（个股级, 覆盖度低, 未覆盖保留 NaN 由模型自动处理）
-        if consensus_data is not None and len(consensus_data) > 0:
-            merge_cols = [c for c in consensus_data.columns if c != "ts_code"]
-            features = features.merge(
-                consensus_data[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
+        from ..factors.consensus import CONS_COLS as _CONS_COLS
+        if consensus_data is not None:
+            if len(consensus_data) > 0:
+                merge_cols = [c for c in consensus_data.columns if c != "ts_code"]
+                features = features.merge(
+                    consensus_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+                )
+            else:
+                for col in _CONS_COLS:
+                    features[col] = float("nan")
 
         return features
     
@@ -1541,7 +1570,9 @@ class FeatureBuilder:
         - 剔除 ST (is_st=1)
         - 剔除上市 < min_list_days 自然日（默认365天≈12个月）
         - 剔除停牌 (is_suspended=1)
-        - 剔除标签缺失 (任一 y_ret_* 为空) - 仅当 require_label=True 时
+        - 剔除标签缺失 - 仅当 require_label=True 时
+          * label_filter_mode="single": 仅要求主 horizon 对应的 y_ret_N 非空
+          * label_filter_mode="all": 要求所有 horizons 对应的 y_ret_N 同时非空（AND）
         - 涨跌停不剔除，仅标记
 
         注：成交额/市值/金融股过滤在 MLSignal._apply_selection_filters 中执行，
@@ -1579,13 +1610,31 @@ class FeatureBuilder:
         )
 
         if self.require_label:
-            label_mask = pd.Series([True] * len(df), index=df.index)
-            for horizon in self.horizons:
-                label_col = f'y_ret_{horizon}'
-                if label_col in df.columns:
-                    label_mask = label_mask & df[label_col].notna()
+            if self.label_filter_mode == "single":
+                primary_col = f'y_ret_{self.horizon}'
+                if primary_col in df.columns:
+                    label_mask = df[primary_col].notna()
+                    logger.info(
+                        f"require_label=True [single], 按主 horizon={self.horizon} "
+                        f"过滤 {primary_col} 缺失的样本"
+                    )
+                else:
+                    label_mask = pd.Series([True] * len(df), index=df.index)
+                    logger.warning(
+                        f"require_label=True [single], 主 horizon 列 {primary_col} 不存在，"
+                        f"跳过标签过滤"
+                    )
+            else:
+                label_mask = pd.Series([True] * len(df), index=df.index)
+                for horizon in self.horizons:
+                    label_col = f'y_ret_{horizon}'
+                    if label_col in df.columns:
+                        label_mask = label_mask & df[label_col].notna()
+                logger.info(
+                    f"require_label=True [all], 要求 horizons={self.horizons} "
+                    f"对应标签同时非空（AND）"
+                )
             filter_mask = filter_mask & label_mask
-            logger.info("require_label=True, 将过滤任一标签缺失的样本")
         else:
             logger.info("require_label=False, 保留标签缺失样本（实盘/推理模式）")
 

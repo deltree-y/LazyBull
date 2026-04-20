@@ -13,11 +13,11 @@ data:
 tushare:
   max_retries: 3
   retry_delay: 1  # 秒
-  rate_limit: 200  # 每分钟请求数
+  rate_limit: 500  # 每分钟请求数
 
 # 行业配置
 industry:
-  shenwan_level: "l2"  # 项目统一主行业口径：l1 | l2 | l3
+  shenwan_level: "l3"  # 项目统一主行业口径：l1 | l2 | l3
 
 # 交易成本配置
 costs:

@@ -30,19 +30,19 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(1000,2000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(2000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3,4)         #. XGB推荐9, LGB推荐5
-$num_leaves_list         = @(63)        # 仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.012)     #. XGB推荐0.005, LGB推荐0.005
+$num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
+$learning_rate_list      = @(0.008)     #. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
 $reg_alpha_list          = @(0.05)      #. XGB推荐0.05, LGB推荐0.1
 $reg_lambda_list         = @(5)         #. XGB推荐1.0, LGB推荐5.0
-$gamma_list              = @(0)         #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
+$gamma_list              = @(0.5)       #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(650)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "auto"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
@@ -76,12 +76,12 @@ $enable_fund             = $true  # $true 启用 | $false 禁用
 $enable_express          = $true  # $true 启用 | $false 禁用
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
-$enable_north            = $false  # $true 启用 | $false 禁用
+$enable_north            = $true  # $true 启用 | $false 禁用
 
 # ── 龙虎榜因子（top_list 个股级, 2000+积分）──────────────────────
-$enable_lhb              = $false  # $true 启用 | $false 禁用
+$enable_lhb              = $true  # $true 启用 | $false 禁用
 
-# ── 一致预期因子（report_rc 研报滚动聚合, 2000+积分）──────────────
+# ── 一致预期因子（report_rc 研报滚动聚合, 8000积分）──────────────
 $enable_consensus        = $false  # $true 启用 | $false 禁用
 
 
@@ -105,7 +105,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 # 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
 $skip_training           = $false   # $true 启用 | $false 禁用
 #$start_model_version     = 10816    # 0224
-$start_model_version     = 10858    # 0101
+$start_model_version     = 11114    # 0101
 #$start_model_version     = 10802    # 0209
                                    #d3(0101):7969/9430(no enh)/9416(enh)
                                    #d3(0209):8165/9446(no enh)/9461(enh)/9601(ofst+1)
@@ -118,7 +118,7 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(22)            # 回测持仓 Top N
+$bt_top_n_list           = @(20)            # 回测持仓 Top N
 $bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
@@ -142,6 +142,29 @@ $signal_gate_quality_enabled = $true            # 滚动模型质量监控: $tru
 $signal_gate_quality_window_list = @(3)         # 滚动质量回看调仓周期数
 $signal_gate_quality_threshold_list = @(0.4)    # 滚动质量最低 hit rate
 $signal_gate_quality_halflife = 4               # 滚动质量 EWM 半衰期
+
+# ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
+$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
+$early_exit_loss_threshold_list   = @(-0.07)    #-0.07 # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
+$early_exit_holding_ratio_list    = @(0.6)      #0.6???  # 亏损提前换出最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
+$profit_extension_threshold_list  = @(0.1)      #0.1   # 盈利延续持有阈值（pnl模式，可多值，如 @(0.03, 0.05, 0.10)）
+$profit_extension_days_list       = @(5)        #5??? baseline 对齐当前最佳防守型 run
+
+# ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
+$take_profit_threshold_list   = @(0.15)      #0.15??? 可多值，$null=禁用，如 @($null, 0.15, 0.20)
+$take_profit_refill           = $false      # $true=整体止盈后自动补位买入
+
+# ── 空仓/持有期拖尾提前调仓 ────────────────────────────────────
+# $true  = 启用：当持仓全部清零或 cycle_day>=holding_period 且仍有残留盈利延续持仓时，
+#          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
+# $false = 禁用：严格等待下一个预定调仓日
+$enable_early_rebalance_on_empty = $true
+
+# ── MA250 长周期硬条件（系统性熊市保护, 门控）─────────────────────────
+$market_regime_ma250_hard_stop = $false      # $true 启用 | $false 禁用
+$market_regime_ma250_threshold = 1          # 触发阈值（大盘收益曲线/MA250 < 此值触发）
+$market_regime_ma250_exposure  = 0.9        # 触发后的仓位系数（0.0=完全空仓）
+$ma250_atr_scaling             = $true      # $true 启用 ATR 动态仓位缩放（仓位=base×MA(ATR,250)/CurrentATR）
 
 # ── OOS 动态 Top-N（按置信度调整选股数量, 0406引入）─────────────────────────────
 $signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用
@@ -196,23 +219,10 @@ $market_regime_trend_guard     = $true          # combined 模式趋势保护：
 $market_regime_drawdown_guard  = $false         # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
 $market_regime_drawdown_threshold = -0.08       # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
 
-# ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
-$market_regime_ma250_hard_stop = $true      # $true 启用 | $false 禁用
-$market_regime_ma250_threshold = 1          # 触发阈值（大盘收益曲线/MA250 < 此值触发）
-$market_regime_ma250_exposure  = 0.9        # 触发后的仓位系数（0.0=完全空仓）
-$ma250_atr_scaling             = $true      # $true 启用 ATR 动态仓位缩放（仓位=base×MA(ATR,250)/CurrentATR）
-
-# ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
-$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
-$early_exit_loss_threshold_list   = @(-0.07)    #-0.07 # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
-$early_exit_holding_ratio_list    = @(0.5)      #0.6  # 亏损提前换出最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
-$profit_extension_threshold_list  = @(0.1)      #0.1   # 盈利延续持有阈值（pnl模式，可多值，如 @(0.03, 0.05, 0.10)）
-$profit_extension_days_list       = @(2)        # baseline 对齐当前最佳防守型 run
-
 # 0411新增strength
 # ── 盈利延续判据模式(新) ──
 #   pnl=单一浮盈率(兼容原行为) | strength=5维度强势度评分 | disabled=关闭延续
-$profit_extension_mode_list              = @('strength')     # 可多值如 @('pnl','strength')
+$profit_extension_mode_list              = @('disabled')     # 可多值如 @('pnl','strength')
 $profit_extension_strength_threshold_list = @(0.75)      # strength 模式延续阈值 [0,1]
 
 # ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
@@ -222,19 +232,9 @@ $atr_multiplier_list              = @(2.8)   # baseline 对齐当前最佳防守
 # 0412新增strength_veto
 # ── 亏损提前换出二次确认（strength_veto 门控）──────────────────────
 #   disabled=原硬卖(默认) | strength_veto=触发后用强势度评分二次确认,评分高时否决卖出(缓刑)
-$early_exit_mode_list                        = @('strength_veto')   # 可多值如 @('disabled','strength_veto')
+$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled','strength_veto')
 $early_exit_strength_protect_threshold_list   = @(0.1)        # strength_veto 保护阈值 [0,1]
 $early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
-
-# ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold_list   = @(0.3)      # 可多值，$null=禁用，如 @($null, 0.15, 0.20)
-$take_profit_refill           = $false      # $true=整体止盈后自动补位买入
-
-# ── 空仓/持有期拖尾提前调仓 ────────────────────────────────────
-# $true  = 启用：当持仓全部清零或 cycle_day>=holding_period 且仍有残留盈利延续持仓时，
-#          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
-# $false = 禁用：严格等待下一个预定调仓日
-$enable_early_rebalance_on_empty = $true
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"

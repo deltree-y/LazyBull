@@ -377,7 +377,10 @@ def test_format_rebalance_decision_summary_is_explicit():
     assert "门控=60.0%[score=0.124, 档=0.080, 目标=60%]" in message
     assert "ECT=100.0%[未启用]" in message
     assert "市场=50.0%[mode=vol_target, target_vol=20.0%, realized_vol=40.0%]" in message
-    assert "最终=30.0%[60.0% x 100.0% x 50.0%, 进入待买队列]" in message
+    assert (
+        "最终=30.0%[信号门控=60.0% x 质量=100.0% x ECT=100.0% x 市场层=50.0%, 进入待买队列]"
+        in message
+    )
 
 
 def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
@@ -456,7 +459,10 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
     assert "ECT=100.0%[未启用]" in output
     assert "MA250/ATR=100.0%[未启用]" in output
     assert "市场=50.0%[mode=vol_target, target_vol=10.0%, realized_vol=20.0%]" in output
-    assert "最终=20.0%[40.0% x 100.0% x 50.0%, 进入待买队列]" in output
+    assert (
+        "最终=20.0%[信号门控=40.0% x 质量=100.0% x ECT=100.0% x 市场层=50.0%, 进入待买队列]"
+        in output
+    )
 
 
 def test_ml_backtest_logs_blocked_rebalance_summary(

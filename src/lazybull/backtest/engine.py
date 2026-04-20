@@ -118,6 +118,13 @@ def _format_rebalance_decision_summary(
 
     final_action = "进入待买队列" if queued else "本次不进入待买队列"
 
+    # 构建门控行：综合显示 composite exposure + quality exposure + 最终门控系数
+    gate_composite_exposure = signal_gate_exposure if signal_gate_exposure is not None else 1.0
+    gate_quality_exposure = (
+        signal_gate_quality_exposure if signal_gate_quality_exposure is not None else 1.0
+    )
+    gate_final_exposure = gate_composite_exposure * gate_quality_exposure
+
     if (
         final_target_exposure is not None
         and final_target_exposure <= 0
@@ -126,18 +133,14 @@ def _format_rebalance_decision_summary(
     ):
         final_detail = f"门控阻断, {final_action}"
     else:
+        # 最终 = 信号门控(composite) x 质量系数 x ECT x 市场层
+        # 完整展开所有参与相乘的分项，避免出现与分项乘积不符的"神秘"结果
         final_detail = (
-            f"{_fmt_exposure(signal_gate_exposure)} x "
-            f"{_fmt_exposure(ect_exposure)} x "
-            f"{_fmt_exposure(market_layer_exposure)}, {final_action}"
+            f"信号门控={_fmt_exposure(gate_composite_exposure)} x "
+            f"质量={_fmt_exposure(gate_quality_exposure)} x "
+            f"ECT={_fmt_exposure(ect_exposure)} x "
+            f"市场层={_fmt_exposure(market_layer_exposure)}, {final_action}"
         )
-
-    # 构建门控行：综合显示 composite exposure + quality exposure + 最终门控系数
-    gate_composite_exposure = signal_gate_exposure if signal_gate_exposure is not None else 1.0
-    gate_quality_exposure = (
-        signal_gate_quality_exposure if signal_gate_quality_exposure is not None else 1.0
-    )
-    gate_final_exposure = gate_composite_exposure * gate_quality_exposure
     gate_summary_text = _compact_summary(signal_gate.get("summary", "未启用"))
     # 质量监控相关字段（始终显示）
     quality_score = signal_gate.get("quality_score")
@@ -177,6 +180,62 @@ def _format_rebalance_decision_summary(
         f"[{_compact_summary(market_regime.get('summary', '未启用'))}]"
         f"\n"
         f" | 最终={_fmt_exposure(final_target_exposure)}[{final_detail}]"
+    )
+
+
+def _format_buy_execution_stock_list(entries: List[Dict], include_reason: bool = False) -> str:
+    """格式化调仓买入股票列表。"""
+
+    if not entries:
+        return "-"
+
+    parts = []
+    for entry in entries:
+        stock = str(entry["stock"])
+        reason = entry.get("reason")
+
+        stock_text = stock
+        if include_reason and reason:
+            stock_text = f"{stock_text}({reason})"
+        parts.append(stock_text)
+
+    return ", ".join(parts)
+
+
+def _sum_buy_execution_weights(entries: List[Dict]) -> float:
+    """汇总调仓买入资金占比。"""
+
+    return float(sum(float(entry.get("weight", 0.0)) for entry in entries))
+
+
+def _format_buy_execution_summary(
+    signal_date: pd.Timestamp,
+    execution_date: pd.Timestamp,
+    planned_buys: List[Dict],
+    successful_buys: List[Dict],
+    failed_buys: List[Dict],
+    inherited_position_count: int,
+    inherited_position_weight: float,
+    tranche_tag: str = "",
+) -> str:
+    """格式化调仓买入执行汇总日志。"""
+
+    planned_weight = _sum_buy_execution_weights(planned_buys)
+    successful_weight = _sum_buy_execution_weights(successful_buys)
+    failed_weight = _sum_buy_execution_weights(failed_buys)
+
+    return (
+        f"\n"
+        f"{tranche_tag}调仓买入汇总: 执行日 {execution_date.date()} | 信号日 {signal_date.date()} | "
+        f"计划={len(planned_buys)} | 计划资金占比={planned_weight:.2%} | "
+        f"继承上轮={inherited_position_count} | 继承资金占比={inherited_position_weight:.2%} | "
+        f"成功={len(successful_buys)} | 失败={len(failed_buys)}\n"
+        f"{tranche_tag}成功仓位: 数量={len(successful_buys)} | "
+        f"股票=[{_format_buy_execution_stock_list(successful_buys)}] | "
+        f"资金占比={successful_weight:.2%}\n"
+        f"{tranche_tag}失败仓位: 数量={len(failed_buys)} | "
+        f"股票=[{_format_buy_execution_stock_list(failed_buys, include_reason=True)}] | "
+        f"资金占比={failed_weight:.2%}\n"
     )
 
 
@@ -1313,6 +1372,7 @@ class BacktestEngine:
                     f"{'...' if len(held_kept) > 5 else ''})"
                 )
             decision_trace["holding_bonus"]["kept_count"] = len(held_kept)
+            decision_trace["holding_bonus"]["kept_stocks"] = list(held_kept)
             decision_trace["holding_bonus"]["new_buy_count"] = len(signals)
         elif self.enable_position_completion:
             # 启用补齐功能：直接选择 top N 股票，不检查 T+1 可交易性
@@ -1556,14 +1616,67 @@ class BacktestEngine:
         )
 
         # 计算当前组合市值
-        current_value = self._calculate_portfolio_value(date)
+        portfolio_value = self._calculate_portfolio_value(date)
+        current_value = portfolio_value
 
         # 分批调仓时，每个 tranche 只使用 1/K 的组合价值
         if self.stagger_tranches > 1:
             current_value = current_value / self.stagger_tranches
 
-        # 记录买入前的持仓数量
-        positions_before = len(self.positions)
+        planned_buys: List[Dict] = []
+        successful_buys: List[Dict] = []
+        failed_buys: List[Dict] = []
+        holding_bonus_state = decision_trace.get("holding_bonus", {}) if decision_trace else {}
+        inherited_stocks = list(holding_bonus_state.get("kept_stocks", []))
+        inherited_position_count = int(
+            holding_bonus_state.get("kept_count", len(inherited_stocks))
+        )
+
+        def _build_buy_detail(stock: str, target_value: float) -> Dict:
+            actual_weight = float(target_value / portfolio_value) if portfolio_value > 0 else 0.0
+            return {"stock": stock, "weight": actual_weight}
+
+        def _get_position_weight(stock: str) -> float:
+            if portfolio_value <= 0 or stock not in self.positions:
+                return 0.0
+
+            info = self.positions[stock]
+            shares = info.get("shares", 0)
+            trade_price = self._get_trade_price(date, stock)
+            if trade_price is None:
+                trade_price = info.get("last_known_price")
+                if trade_price is None:
+                    trade_price = info.get("buy_trade_price", 0.0)
+            else:
+                info["last_known_price"] = trade_price
+
+            return float(shares * trade_price / portfolio_value) if trade_price else 0.0
+
+        inherited_position_weight = float(sum(_get_position_weight(stock) for stock in inherited_stocks))
+
+        def _record_buy_execution(buy_detail: Dict, stock: str, target_value: float) -> None:
+            trades_before = len(self.trades)
+            already_holding = stock in self.positions
+
+            self._buy_stock(date, stock, target_value, signal_date=signal_date)
+
+            trade_executed = (
+                len(self.trades) > trades_before
+                and self.trades[-1].get("action") == "buy"
+                and self.trades[-1].get("stock") == stock
+                and self.trades[-1].get("date") == date
+            )
+
+            if trade_executed:
+                successful_buys.append(buy_detail.copy())
+                return
+
+            failed_buys.append(
+                {
+                    **buy_detail,
+                    "reason": "已持仓" if already_holding else "未成交",
+                }
+            )
 
         # 当启用补齐功能时，需要检查可交易性，因为信号生成时未检查 T+1 可交易性
         # 当未启用补齐功能时，信号生成时已经过滤，可以直接买入
@@ -1579,6 +1692,8 @@ class BacktestEngine:
             # 买入信号中的股票，检查可交易性
             for stock, weight in signals.items():
                 target_value = current_value * weight
+                buy_detail = _build_buy_detail(stock, target_value)
+                planned_buys.append(buy_detail.copy())
 
                 # 检查可交易性
                 if not date_quote.empty:
@@ -1587,6 +1702,7 @@ class BacktestEngine:
                     )
 
                     if not tradeable:
+                        failed_buys.append({**buy_detail, "reason": reason})
                         logger.info(
                             f"  {tranche_tag}买入失败: {date.date()} {stock}, 原因: {reason}, "
                             f"权重 {weight:.4f}, 将在后续交易日补齐"
@@ -1594,16 +1710,17 @@ class BacktestEngine:
                         continue  # 跳过该股票，不买入
 
                 # 可交易，执行买入
-                self._buy_stock(date, stock, target_value, signal_date=signal_date)
+                _record_buy_execution(buy_detail, stock, target_value)
         else:
             # 未启用补齐功能，直接买入（信号生成时已过滤）
             for stock, weight in signals.items():
                 target_value = current_value * weight
-                self._buy_stock(date, stock, target_value, signal_date=signal_date)
+                buy_detail = _build_buy_detail(stock, target_value)
+                planned_buys.append(buy_detail.copy())
+                _record_buy_execution(buy_detail, stock, target_value)
 
         # 记录买入后的持仓数量
-        positions_after = len(self.positions)
-        actually_bought = positions_after - positions_before
+        actually_bought = len(successful_buys)
 
         # 如果启用补齐功能，检查是否有未成交的槽位
         # 修复：应该对比 target_n 而非 len(signals)，因为 signals 可能已经过滤或调整
@@ -1649,6 +1766,19 @@ class BacktestEngine:
                     f"缺口槽位 {unfilled_count} 个, 未成交股票: {unfilled_stocks}, "
                     f"将在接下来 {self.completion_window_days} 天内尝试补齐"
                 )
+
+        logger.warning(
+            _format_buy_execution_summary(
+                signal_date=signal_date,
+                execution_date=date,
+                planned_buys=planned_buys,
+                successful_buys=successful_buys,
+                failed_buys=failed_buys,
+                inherited_position_count=inherited_position_count,
+                inherited_position_weight=inherited_position_weight,
+                tranche_tag=tranche_tag,
+            )
+        )
 
         # 始终打印买入汇总，与卖出日志保持一致
         logger.info(

@@ -469,9 +469,23 @@ def build_features_data(
             )
             express_today = express_lookup.get(trade_date) if express_lookup else None
             # 获取当日 C1/C2/C3 数据
-            north_flow_today = north_flow_lookup.get(trade_date) if north_flow_lookup else None
-            lhb_today = lhb_lookup.get(trade_date) if lhb_lookup else None
-            consensus_today = consensus_lookup.get(trade_date) if consensus_lookup else None
+            # 语义: 启用 (lookup 非 None) 时, 即使当日缺数据也传空容器, 保证特征 schema 一致
+            if north_flow_lookup is not None:
+                north_flow_today = north_flow_lookup.get(trade_date) or {}
+            else:
+                north_flow_today = None
+            if lhb_lookup is not None:
+                lhb_today = lhb_lookup.get(trade_date)
+                if lhb_today is None:
+                    lhb_today = pd.DataFrame()
+            else:
+                lhb_today = None
+            if consensus_lookup is not None:
+                consensus_today = consensus_lookup.get(trade_date)
+                if consensus_today is None:
+                    consensus_today = pd.DataFrame()
+            else:
+                consensus_today = None
 
             # 构建特征
             features_df = builder.build_features_for_day(
@@ -561,11 +575,21 @@ def main():
         default=365,
         help="最小上市自然日天数（默认：365，约12个月）"
     )
-    parser.add_argument(
+    horizon_group = parser.add_mutually_exclusive_group(required=True)
+    horizon_group.add_argument(
         "--horizon",
         type=int,
-        default=20,
-        help="预测时间窗口（交易日）（默认：20）"
+        default=None,
+        help="单 horizon 模式：按此主标签 y_ret_N 非空过滤样本（如 --horizon 20）。"
+             "仍生成 y_ret_5/10/20 三列标签，仅过滤时只看主 horizon"
+    )
+    horizon_group.add_argument(
+        "--horizons",
+        type=int,
+        nargs="+",
+        default=None,
+        help="多 horizon 模式：按 AND 过滤，要求给定 horizons 对应的所有标签同时非空"
+             "（如 --horizons 5 10 20）"
     )
     parser.add_argument(
         "--build-all",
@@ -641,19 +665,35 @@ def main():
     logger.info(f"北向资金因子: {'启用' if args.enable_north_features else '禁用'}")
     logger.info(f"龙虎榜因子: {'启用' if args.enable_lhb_features else '禁用'}")
     logger.info(f"一致预期因子: {'启用' if args.enable_consensus_features else '禁用'}")
+    if args.horizon is not None:
+        logger.info(f"标签过滤模式: single (主 horizon={args.horizon})")
+    else:
+        logger.info(f"标签过滤模式: all (horizons={args.horizons})")
     logger.info("=" * 60)
-    
+
     try:
         # 初始化组件
         storage = Storage()
         loader = DataLoader(storage)
         shenwan_industry = loader.load_shenwan_industry()
         cleaner = DataCleaner()
-        builder = FeatureBuilder(
-            min_list_days=args.min_list_days,
-            horizon=args.horizon,
-            require_label=True,
-        )
+        if args.horizon is not None:
+            # 单值模式：生成全部标准标签列，仅按主 horizon 过滤
+            builder = FeatureBuilder(
+                min_list_days=args.min_list_days,
+                horizon=args.horizon,
+                horizons=[5, 10, 20],
+                require_label=True,
+                label_filter_mode="single",
+            )
+        else:
+            # 多值模式：生成用户指定的标签列，AND 过滤
+            builder = FeatureBuilder(
+                min_list_days=args.min_list_days,
+                horizons=args.horizons,
+                require_label=True,
+                label_filter_mode="all",
+            )
         
         # 构建clean数据
         if not args.only_features:

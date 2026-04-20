@@ -698,7 +698,18 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 选股过滤后无可选股票")
             return {}
 
-        # 特征列一致性检查
+        # 特征列一致性检查 (缺失列以 NaN 自动补齐, 由 XGBoost/LightGBM 原生 NaN 处理)
+        # 适用于另类因子 (如 north_flow / consensus) 在历史早期无数据导致的列缺失
+        required_features = set(self.metadata.get("feature_columns", []))
+        missing = required_features - set(features_df.columns)
+        if missing:
+            import numpy as np
+            logger.debug(
+                f"推理特征缺失 {len(missing)} 列, 自动补 NaN: "
+                f"{sorted(list(missing))[:5]}{'...' if len(missing) > 5 else ''}"
+            )
+            for col in missing:
+                features_df[col] = np.nan
         available_features = features_df.columns.tolist()
         try:
             self.registry.check_feature_consistency(self.metadata, available_features)
@@ -819,7 +830,18 @@ class MLSignal(Signal):
             logger.warning(f"{date.date()} 选股过滤后无可选股票")
             return []
 
-        # 特征列一致性检查
+        # 特征列一致性检查 (缺失列以 NaN 自动补齐, 由 XGBoost/LightGBM 原生 NaN 处理)
+        # 适用于另类因子 (如 north_flow / consensus) 在历史早期无数据导致的列缺失
+        required_features = set(self.metadata.get("feature_columns", []))
+        missing = required_features - set(features_df.columns)
+        if missing:
+            import numpy as np
+            logger.debug(
+                f"推理特征缺失 {len(missing)} 列, 自动补 NaN: "
+                f"{sorted(list(missing))[:5]}{'...' if len(missing) > 5 else ''}"
+            )
+            for col in missing:
+                features_df[col] = np.nan
         available_features = features_df.columns.tolist()
         try:
             self.registry.check_feature_consistency(self.metadata, available_features)

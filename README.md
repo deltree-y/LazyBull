@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.56.0)
+### 当前版本 (v0.56.3)
+
+**修复调仓决策摘要"最终"行显示与计算不一致** (v0.56.3):
+- 原先"最终"行仅展示 `信号门控 x ECT x 市场层`，漏掉质量系数，导致显示的乘积与实际 `final_target_exposure` 对不上（例如 `45.8%[50.0% x 100.0% x 100.0%]`）
+- 修复后完整展开所有参与相乘的分项为 `信号门控=xx% x 质量=xx% x ECT=xx% x 市场层=xx%`，确保计算链条透明且与最终数值自洽
+
+**调仓买入 warning 三行汇总日志** (v0.56.2):
+- walk_forward / run_ml_backtest 共用的回测引擎会在每个 T+1 调仓买入日输出 3 行 warning 汇总日志：首行展示计划买入数、计划资金占比、继承上轮持仓数量与资金占比，以及成功/失败数量
+- 第二、三行分别展示成功仓位和失败仓位，格式统一为“数量 + 股票号列表 + 总资金占比”；失败项会保留涨停、停牌等原因，便于扫日志时快速定位问题
 
 **另类因子扩展 — 北向资金 / 龙虎榜 / 一致预期** (v0.56.0):
 - 新增 3 大另类因子模块，三者各自配备独立开关（默认关闭，保持基线行为）
@@ -1025,16 +1033,20 @@ LazyBull 提供三种数据处理模式，适应不同使用场景：
 python scripts/download_raw.py --start-date 20230101 --end-date 20231231
 
 # 步骤2: 构建clean和features（假设raw已存在）
-python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
+# --horizon / --horizons 二选一必填：
+#   --horizon 20         : 单值模式，仅按主 horizon 对应的 y_ret_20 非空过滤（推荐，保留停牌导致的辅助标签缺失样本）
+#   --horizons 5 10 20   : 多值模式，AND 过滤，要求所有 horizons 对应 y_ret_N 同时非空
+# 两种模式下生成的特征文件都包含 y_ret_5/10/20 三列，schema 一致
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20
 
 # 或者只构建clean
-python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-clean
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-clean --horizon 20
 
 # 或者只构建features（假设clean已存在）
-python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-features
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-features --horizon 20
 
 # 强制重新构建
-python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --force
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --force --horizon 20
 ```
 
 #### 模式二：仅更新基础数据
@@ -1343,8 +1355,8 @@ LazyBull/
 # 第一步：下载raw数据
 python scripts/download_raw.py --start-date 20230101 --end-date 20231231
 
-# 第二步：构建clean和features
-python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
+# 第二步：构建clean和features（--horizon 20 走单值过滤；如需 AND 过滤用 --horizons 5 10 20）
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20
 ```
 
 #### 定期更新基础数据

@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.56.4] - 2026-04-20
+
+### 优化
+
+- **特征构建支持单值/多值两种标签过滤模式**：`scripts/build_clean_features.py` 将 `--horizon` 改为 `--horizon`（single）与 `--horizons`（all，AND 语义）互斥参数组，`required=True` 强制二选一
+  - `--horizon 20`：新增 single 模式，仅按主 horizon 对应的 `y_ret_20` 非空过滤样本，仍生成 `y_ret_5/10/20` 三列标签，schema 不变
+  - `--horizons 5 10 20`：保持 all 模式（AND 过滤，现有行为）
+  - **修复停牌样本被 AND 过滤误丢的问题**：例如 T 日样本 T+10 停牌导致 `y_ret_10=NaN`，但 `y_ret_5/20` 均有值，single 模式下可保留该样本，恢复因停牌被无谓丢弃的训练数据
+- [src/lazybull/features/builder.py](src/lazybull/features/builder.py)：`FeatureBuilder.__init__` 新增 `label_filter_mode` 参数（默认 `"all"`，向后兼容），`_apply_filters` 按模式分支执行
+- [src/lazybull/features/builder.py](src/lazybull/features/builder.py)：`__init__` 新增防御性告警——当传入 `horizon` 不在 `horizons` 列表中时，日志警告并自动追加，避免静默回退到 `horizons[0]` 的坑
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py)：更新缺数提示的推荐命令字符串，补充 `--horizon 20` 参数以匹配新的必填要求
+
+### 测试
+
+- 新增 [tests/test_builder_label_filter_mode.py](tests/test_builder_label_filter_mode.py)：覆盖 single/all 双模式在停牌场景下的过滤差异、默认模式兼容性、参数校验与 horizon 自动追加逻辑
+
+## [0.56.3] - 2026-04-20
+
+### 修复
+
+- **调仓决策摘要"最终"行显示与计算结果不一致**：原先 `final_detail` 仅展示 `信号门控 x ECT x 市场层`，却未包含质量系数，导致 `final_target_exposure = 信号门控 x 质量` 与分项乘积对不上（例如 `45.8%[50.0% x 100.0% x 100.0%]`）
+- 修改 [engine.py:_format_rebalance_decision_summary](src/lazybull/backtest/engine.py)，完整展开所有参与相乘的分项为 `信号门控=xx% x 质量=xx% x ECT=xx% x 市场层=xx%`，确保显示的计算链条与最终数值一致
+
+### 测试
+
+- 更新 `test_format_rebalance_decision_summary_is_explicit` 与 `test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false` 断言以匹配新格式
+
+## [0.56.2] - 2026-04-19
+
+### 优化
+
+- **walk_forward 调仓买入 warning 汇总日志改为三行格式**：首行展示计划买入数、计划资金占比、继承上轮持仓数量与资金占比，以及成功/失败数量；后两行分别展示成功仓位与失败仓位
+- **成功/失败仓位按股票列表展示**：成功与失败行改为“数量 + 股票号列表 + 总资金占比”，失败项继续保留涨停、停牌等原因标记，减少每只股票逐个仓位打印的噪音
+
+### 测试
+
+- 更新调仓买入 warning 汇总日志测试，覆盖三行格式、继承上轮统计与成功/失败资金占比输出
+
+## [0.56.1] - 2026-04-19
+
+### 优化
+
+- **walk_forward 调仓买入新增 warning 汇总日志**：`BacktestEngine._execute_pending_buys()` 现在会在每个 T+1 调仓买入日统一输出一条更醒目的 warning 日志，展示计划买入数、成功数、失败数，以及每只股票对应的目标仓位
+- **失败明细直接带原因**：启用仓位补齐时，失败仓位明细会直接标注涨停、停牌等不可买入原因，便于快速定位当轮未满仓来源
+
+### 测试
+
+- 新增调仓买入 warning 汇总日志测试，覆盖计划/成功/失败数量与仓位明细输出
+
 ## [0.56.0] - 2026-04-18
 
 ### 新增

@@ -141,7 +141,7 @@ def ensure_features_for_date(
                 f"新模型训练需要资金流向特征，请先补齐 moneyflow 数据。\n"
                 f"推荐步骤：\n"
                 f"  1. 下载 raw moneyflow: python scripts/download_raw.py --data-type moneyflow --start-date {start_dt.strftime('%Y%m%d')} --end-date {end_dt.strftime('%Y%m%d')}\n"
-                f"  2. 构建 clean moneyflow: python scripts/build_clean_features.py --start-date {start_dt.strftime('%Y%m%d')} --end-date {end_dt.strftime('%Y%m%d')}"
+                f"  2. 构建 clean moneyflow: python scripts/build_clean_features.py --start-date {start_dt.strftime('%Y%m%d')} --end-date {end_dt.strftime('%Y%m%d')} --horizon 20"
             )
             return False, []
 
@@ -501,17 +501,19 @@ def _load_factor_data(
     gc.collect()
 
     # ── 北向资金（按日分区，市场级广播）──────────────────────────
-    north_flow_today = None
+    # 启用语义: 默认传空 dict (启用占位), 仅当全市场无任何历史数据时才回退 None
+    north_flow_today = {}
     north_hist_dates = [d for d in trading_dates_str if d <= trade_date]
     hsgt_df = _try_ensure_historical_moneyflow_hsgt(client, storage, north_hist_dates)
     if hsgt_df is not None and len(hsgt_df) > 0:
         from ..factors.north_flow import build_north_flow_lookup_by_date
         north_lookup = build_north_flow_lookup_by_date(hsgt_df, trading_dates_str)
-        north_flow_today = north_lookup.get(trade_date)
-        if north_flow_today is not None:
+        cur = north_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            north_flow_today = cur
             logger.info(f"北向资金因子: 已加载 ({len(hsgt_df)} 条)")
         else:
-            missing_factors.append("moneyflow_hsgt（北向资金）")
+            missing_factors.append("moneyflow_hsgt（北向资金, 当日无数据, 占位 NaN）")
     else:
         missing_factors.append("moneyflow_hsgt（北向资金）")
     hsgt_df = None
@@ -519,13 +521,15 @@ def _load_factor_data(
     gc.collect()
 
     # ── 龙虎榜（按日分区）──────────────────────────────────────
-    lhb_today = None
+    lhb_today = pd.DataFrame()
     lhb_hist_dates = [d for d in trading_dates_str if d <= trade_date]
     top_list_df = _try_ensure_historical_top_list(client, storage, lhb_hist_dates)
     if top_list_df is not None and len(top_list_df) > 0:
         from ..factors.lhb import build_lhb_lookup_by_date
         lhb_lookup = build_lhb_lookup_by_date(top_list_df, trading_dates_str)
-        lhb_today = lhb_lookup.get(trade_date)
+        cur = lhb_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            lhb_today = cur
         logger.info(f"龙虎榜因子: 已加载 ({len(top_list_df)} 条)")
     else:
         # 龙虎榜稀疏, 无数据不视为错误, 只记缺失标签
@@ -535,14 +539,16 @@ def _load_factor_data(
     gc.collect()
 
     # ── 一致预期（单文件, 按 report_date 增量）───────────────────
-    consensus_today = None
+    consensus_today = pd.DataFrame()
     report_rc_df = loader.load_report_rc()
     if report_rc_df is None or len(report_rc_df) < _MIN_REPORT_RC_RECORDS:
         report_rc_df = _try_download_report_rc(client, storage, trade_date)
     if report_rc_df is not None and len(report_rc_df) > 0:
         from ..factors.consensus import build_consensus_lookup_by_date
         cons_lookup = build_consensus_lookup_by_date(report_rc_df, trading_dates_str)
-        consensus_today = cons_lookup.get(trade_date)
+        cur = cons_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            consensus_today = cur
         logger.info(f"一致预期因子: 已加载 ({len(report_rc_df)} 条)")
     else:
         missing_factors.append("report_rc（一致预期）")

@@ -200,13 +200,13 @@ class Storage:
         start_str = self._format_date(start_date)
         end_str = self._format_date(end_date)
 
-        # 收集所有符合条件的文件
+        # 收集所有符合条件的文件 (过滤空 DataFrame 避免 pandas concat FutureWarning)
         dfs = []
         for file_path in sorted(partition_dir.glob(f"*.{format}")):
             date_part = file_path.stem  # 文件名（不含扩展名）
             if start_str <= date_part <= end_str:
                 df = self._load_data(partition_dir / date_part, format)
-                if df is not None:
+                if df is not None and len(df) > 0:
                     dfs.append(df)
 
         if not dfs:
@@ -285,13 +285,13 @@ class Storage:
         start_str = self._format_date(start_date)
         end_str = self._format_date(end_date)
 
-        # 收集所有符合条件的文件
+        # 收集所有符合条件的文件 (过滤空 DataFrame 避免 pandas concat FutureWarning)
         dfs = []
         for file_path in sorted(partition_dir.glob(f"*.{format}")):
             date_part = file_path.stem  # 文件名（不含扩展名）
             if start_str <= date_part <= end_str:
                 df = self._load_data(partition_dir / date_part, format)
-                if df is not None:
+                if df is not None and len(df) > 0:
                     dfs.append(df)
 
         if not dfs:
