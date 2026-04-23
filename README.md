@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.59.0)
+### 当前版本 (v0.59.1)
+
+**抑制 storage.py 中 pandas concat FutureWarning** (v0.59.1):
+- `load_raw_by_date_range` / `load_clean_by_date_range` 在合并多日分区时，pandas 1.5+ 对含 all-NA 列的 concat 会输出 FutureWarning（典型场景：龙虎榜 `reason` 字段在某些日子整列为 NaN）
+- 用 `warnings.catch_warnings()` 局部抑制该特定 message，对其他 warning 无影响；对结果数据正确性无影响
 
 **y_ret_N 标签语义对齐回测节奏** (v0.59.0):
 - 旧公式 `close_adj(T+N) / close_adj(T) - 1` 假设 T 收盘买/T+N 收盘卖, 与回测引擎的 "T+1 收盘买入 → T+1+holding_period 开盘卖出" 不一致

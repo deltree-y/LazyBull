@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.59.1] - 2026-04-23
+
+### 修复
+
+- **抑制 storage.py 中 pandas concat FutureWarning** ([storage.py](src/lazybull/data/storage.py)):
+  - `load_raw_by_date_range` / `load_clean_by_date_range` 在合并多日分区数据时，pandas 1.5+ 对含 all-NA 列的 concat 会输出 `FutureWarning`（典型场景：龙虎榜 `reason` 字段在某些日子整列为 NaN，北向资金在非交易日的占位记录等）
+  - 在两处 `pd.concat` 调用外用 `warnings.catch_warnings()` 局部抑制该特定 message 的 FutureWarning，对其他 warning 无影响
+  - 该警告对结果数据正确性无影响，待 pandas 2.x 默认行为变更后再统一适配
+
 ## [0.59.0] - 2026-04-23
 
 ### 变更

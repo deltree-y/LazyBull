@@ -1,5 +1,6 @@
 """数据存储模块"""
 
+import warnings
 from pathlib import Path
 from typing import List, Optional
 
@@ -214,7 +215,18 @@ class Storage:
             return None
 
         # 合并所有数据
-        result = pd.concat(dfs, ignore_index=True)
+        # 抑制 pandas 1.5+ 在 concat 含 all-NA 列时的 FutureWarning：
+        # 占位/空数据日（如龙虎榜无榜单日）保存的是 0 行 DataFrame，
+        # 此处虽已按 len(df) > 0 过滤零行，但部分有效分区中某些列整列为 NaN
+        # （如龙虎榜的 reason 字段在某些日子全部缺失）仍会触发该警告。
+        # 该警告对结果无影响，待 pandas 2.x 行为变更后再统一适配。
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=FutureWarning,
+                message=".*DataFrame concatenation with empty or all-NA entries.*",
+            )
+            result = pd.concat(dfs, ignore_index=True)
         logger.info(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
         return result
 
@@ -299,7 +311,18 @@ class Storage:
             return None
 
         # 合并所有数据
-        result = pd.concat(dfs, ignore_index=True)
+        # 抑制 pandas 1.5+ 在 concat 含 all-NA 列时的 FutureWarning：
+        # 占位/空数据日（如龙虎榜无榜单日）保存的是 0 行 DataFrame，
+        # 此处虽已按 len(df) > 0 过滤零行，但部分有效分区中某些列整列为 NaN
+        # （如龙虎榜的 reason 字段在某些日子全部缺失）仍会触发该警告。
+        # 该警告对结果无影响，待 pandas 2.x 行为变更后再统一适配。
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=FutureWarning,
+                message=".*DataFrame concatenation with empty or all-NA entries.*",
+            )
+            result = pd.concat(dfs, ignore_index=True)
         logger.info(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
         return result
 
