@@ -1,8 +1,9 @@
 """TuShare数据接口客户端"""
 
 import os
+import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import tushare as ts
@@ -11,12 +12,26 @@ from loguru import logger
 from ..common.config import get_tushare_settings
 
 
-class TushareClient:
-    """TuShare Pro API客户端
-    
-    封装TuShare接口调用，提供限频和重试机制
+def _is_rate_limit_error(err_msg: str, keywords: List[str]) -> bool:
+    """判断异常消息是否为 TuShare 限流错误。
+
+    仅对限流错误做长等待; 其他错误(如 token 无效、接口不存在、网络短暂抖动)
+    只做 retry_delay 的短等, 避免浪费时间。
     """
-    
+    if not err_msg:
+        return False
+    msg_lower = err_msg.lower()
+    return any(kw in msg_lower for kw in keywords)
+
+
+class TushareClient:
+    """TuShare Pro API 客户端
+
+    封装 TuShare 接口调用, 提供:
+    - 线程安全的令牌桶限频 (全局 QPS 严格受 rate_limit 限制, 支持多线程共享)
+    - 限流感知的重试: 仅对限流错误使用 retry_rate_limit_sleep 长等, 其他错误短等
+    """
+
     def __init__(
         self,
         token: Optional[str] = None,
@@ -25,16 +40,16 @@ class TushareClient:
         rate_limit: Optional[int] = None,
         verbose: bool = True,
     ):
-        """初始化TuShare客户端
-        
+        """初始化 TuShare 客户端
+
         Args:
-            token: TuShare token，如不提供则从环境变量TS_TOKEN读取
+            token: TuShare token, 如不提供则从环境变量 TS_TOKEN 读取
             max_retries: 最大重试次数
-            retry_delay: 重试延迟（秒）
-            rate_limit: 每分钟请求限制
+            retry_delay: 非限流错误的重试基础延迟 (秒)
+            rate_limit: 每分钟请求上限
             verbose: 是否输出详细日志
         """
-        # 获取token
+        # 获取 token
         self.token = token or os.getenv("TS_TOKEN")
         if not self.token:
             raise ValueError(
@@ -42,41 +57,52 @@ class TushareClient:
                 "请设置环境变量 TS_TOKEN 或创建 .env 文件。\n"
                 "获取token: https://tushare.pro/register"
             )
-        
-        # 设置token
+
+        # 设置 token
         ts.set_token(self.token)
         self.pro = ts.pro_api()
-        
+
         # 配置参数
         defaults = get_tushare_settings()
         self.max_retries = max_retries if max_retries is not None else defaults["max_retries"]
         self.retry_delay = retry_delay if retry_delay is not None else defaults["retry_delay"]
         self.rate_limit = rate_limit if rate_limit is not None else defaults["rate_limit"]
-        
+        self._rate_limit_keywords: List[str] = defaults["rate_limit_error_keywords"]
+        self._retry_rate_limit_sleep: float = defaults["retry_rate_limit_sleep"]
+
         # 参数验证
         if self.rate_limit <= 0:
-            raise ValueError(f"rate_limit 必须大于0，当前值: {self.rate_limit}")
-        
-        # 限频控制
+            raise ValueError(f"rate_limit 必须大于0, 当前值: {self.rate_limit}")
+
+        # 线程安全的限频控制: 令牌桶思路, 通过锁保护 _last_request_time
+        # 多线程调用时, 所有线程共享同一限频队列, 真实 QPS 不会超过 rate_limit
+        self._request_interval = 60.0 / self.rate_limit
         self._last_request_time = 0.0
-        self._request_interval = 60.0 / self.rate_limit  # 每次请求最小间隔
+        self._rate_limit_lock = threading.Lock()
+
         if verbose:
-            logger.info(f"TuShare客户端初始化成功，限频: {self.rate_limit}次/分钟")
+            logger.info(
+                f"TuShare客户端初始化成功, 限频: {self.rate_limit}次/分钟 "
+                f"(线程安全令牌桶), 限流重试等待: {self._retry_rate_limit_sleep}s"
+            )
         self.verbose = verbose
-    
+
     def _rate_limit_wait(self, override_interval: Optional[float] = None) -> None:
-        """执行限频等待
+        """执行限频等待 (线程安全)。
+
+        多线程调用时, 所有调用排队经过同一把锁, 保证全局 QPS 受 rate_limit 严格控制。
+        并发提速来自"请求已发出、等待响应"期间其他线程可以继续排队, 网络等待并行化。
 
         Args:
-            override_interval: 若提供, 则本次等待使用此最小间隔 (秒) 覆盖全局设置,
-                用于官方无明示限频的接口 (如 top_list) 局部提速。
+            override_interval: 若提供, 则本次等待使用此最小间隔 (秒), 用于官方
+                无明示限频的接口 (如 top_list) 局部提速。
         """
         interval = override_interval if override_interval is not None else self._request_interval
-        elapsed = time.time() - self._last_request_time
-        if elapsed < interval:
-            wait_time = interval - elapsed
-            time.sleep(wait_time)
-        self._last_request_time = time.time()
+        with self._rate_limit_lock:
+            elapsed = time.time() - self._last_request_time
+            if elapsed < interval:
+                time.sleep(interval - elapsed)
+            self._last_request_time = time.time()
 
     def query(
         self,
@@ -86,45 +112,53 @@ class TushareClient:
         rate_limit_override: Optional[int] = None,
         **kwargs
     ) -> pd.DataFrame:
-        """调用TuShare API
+        """调用 TuShare API
 
         Args:
-            api_name: API名称，如 'trade_cal', 'stock_basic'
-            fields: 返回字段，逗号分隔
-            skip_rate_limit: 是否跳过限频等待（适用于无限频要求的接口）
-            **kwargs: API参数
+            api_name: API 名称
+            fields: 返回字段, 逗号分隔
+            skip_rate_limit: 是否跳过限频等待 (适用于无限频要求的接口)
+            rate_limit_override: 本次调用的临时限频 (次/分钟)
+            **kwargs: API 参数
 
         Returns:
-            查询结果DataFrame
+            查询结果 DataFrame
         """
+        last_err: Optional[Exception] = None
         for attempt in range(self.max_retries):
             try:
-                # 限频等待
                 if not skip_rate_limit:
                     override = None
                     if rate_limit_override is not None and rate_limit_override > 0:
                         override = 60.0 / rate_limit_override
                     self._rate_limit_wait(override_interval=override)
-                
-                # 调用API
+
                 logger.debug(f"调用API: {api_name}, 参数: {kwargs}")
                 df = self.pro.query(api_name, fields=fields, **kwargs)
-                
                 logger.debug(f"API {api_name} 返回 {len(df)} 条记录")
                 return df
-                
+
             except Exception as e:
+                last_err = e
+                err_msg = str(e)
+                is_rl = _is_rate_limit_error(err_msg, self._rate_limit_keywords)
                 logger.warning(
                     f"API调用失败 ({attempt + 1}/{self.max_retries}): {api_name}, "
-                    f"错误: {str(e)}"
+                    f"{'[限流]' if is_rl else '[其它]'} {err_msg}"
                 )
-                
+
                 if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay * (attempt + 1))
+                    # 限流错误: 长等, 让服务端限流窗口过去
+                    # 其它错误: 短等 (固定 retry_delay, 不做指数退避, 避免雪球)
+                    wait = self._retry_rate_limit_sleep if is_rl else self.retry_delay
+                    time.sleep(wait)
                 else:
                     logger.error(f"API调用最终失败: {api_name}")
                     raise
-        
+
+        # 理论不会到这里; 兜底抛出最后一个错误
+        if last_err is not None:
+            raise last_err
         return pd.DataFrame()
     
     def get_trade_cal(

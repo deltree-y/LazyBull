@@ -655,12 +655,13 @@ def prepare_training_data(
         raise ValueError("没有可用的训练样本")
 
     # 从标签列名自动推断 delta（例如 neu_y_ret_20 -> horizon=20，y_ret_5 -> horizon=5）
-    # delta 是训练集末尾与验证集开头之间的交易日间隔，需 >= 标签 horizon 以防止标签泄露
+    # delta 是训练集末尾与验证集开头之间的交易日间隔，需 >= 标签实际跨越的交易日数以防止标签泄露
+    # 当前标签语义为 T+1 收盘买入 / T+1+N 开盘卖出，实际跨越 N+1 个交易日，故 +1
     try:
         inferred_horizon = int(label_column.rstrip("d").split("_")[-1])
     except (ValueError, IndexError):
         inferred_horizon = 20
-    label_delta = max(inferred_horizon, 5)  # 最少 5 个交易日间隔
+    label_delta = max(inferred_horizon + 1, 5)  # 最少 5 个交易日间隔
 
     # 按 trade_date 粒度切分训练集和验证集（确保同日样本不被拆分到两侧）
     df_train_split, df_val_split, split_stats = split_train_val_by_date(

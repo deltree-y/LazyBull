@@ -72,6 +72,7 @@ data/paper/*
 !data/paper/.gitkeep
 data/walk_forward/*
 !data/walk_forward/.gitkeep
+data_f1b7bac
 
 # Logs
 *.log

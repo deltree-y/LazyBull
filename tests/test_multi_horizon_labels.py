@@ -45,11 +45,16 @@ def mock_daily_data():
             pre_close = base_price
             pct_chg = ((close - pre_close) / pre_close) * 100
             
+            # 模拟开盘价（与收盘价稍有差异，便于验证新标签 open_adj 取值）
+            open_price = base_price * (1 + 0.005 * ((date.day + i) % 10 - 5))
+
             data.append({
                 'ts_code': stock,
                 'trade_date': date_str,
+                'open': open_price,
                 'close': close,
-                'close_adj': close,  # clean 层已包含复权价格
+                'open_adj': open_price,  # clean 层已包含复权价格
+                'close_adj': close,
                 'pre_close': pre_close,
                 'pct_chg': pct_chg,
                 'vol': 1000000,
@@ -159,26 +164,27 @@ class TestMultiHorizonLabels:
             stock_basic=mock_stock_basic
         )
         
-        # 手动验证第一只股票的标签
+        # 手动验证第一只股票的标签（新语义：T+1 收盘买入 / T+1+N 开盘卖出）
         stock = features.iloc[0]['ts_code']
-        
-        # 获取 t 时刻价格
-        price_t = mock_daily_data[
-            (mock_daily_data['trade_date'] == trade_date) &
+
+        # 买入价：T+1 收盘价（trade_date 在 index=5，T+1 即 index=6）
+        buy_date = mock_trade_cal.iloc[6]['cal_date']
+        buy_price = mock_daily_data[
+            (mock_daily_data['trade_date'] == buy_date) &
             (mock_daily_data['ts_code'] == stock)
         ]['close_adj'].iloc[0]
-        
-        # 获取 t+5 时刻价格
-        future_date = mock_trade_cal.iloc[10]['cal_date']  # 5+5=10
-        price_t5 = mock_daily_data[
-            (mock_daily_data['trade_date'] == future_date) &
+
+        # 卖出价：T+1+5 开盘价（index=11）
+        sell_date = mock_trade_cal.iloc[11]['cal_date']
+        sell_price = mock_daily_data[
+            (mock_daily_data['trade_date'] == sell_date) &
             (mock_daily_data['ts_code'] == stock)
-        ]['close_adj'].iloc[0]
-        
+        ]['open_adj'].iloc[0]
+
         # 计算预期收益率
-        expected_ret = (price_t5 / price_t) - 1
+        expected_ret = (sell_price / buy_price) - 1
         actual_ret = features.iloc[0]['y_ret_5']
-        
+
         # 验证（允许小误差）
         assert abs(actual_ret - expected_ret) < 1e-6
     
@@ -215,10 +221,15 @@ class TestMultiHorizonLabels:
         mock_daily_data,
         mock_adj_factor
     ):
-        """测试过滤逻辑：至少一个标签非空"""
-        builder = FeatureBuilder(horizons=[5, 10, 20], require_label=True)
-        
-        # 使用倒数第 8 个交易日（y_ret_20 会缺失，但 y_ret_5/10 存在）
+        """测试过滤逻辑：至少一个标签非空（single 模式按主 horizon 过滤）"""
+        builder = FeatureBuilder(
+            horizons=[5, 10, 20],
+            horizon=5,
+            require_label=True,
+            label_filter_mode="single",
+        )
+
+        # 使用倒数第 8 个交易日（y_ret_20 会缺失，但 y_ret_5 存在）
         trade_date = mock_trade_cal.iloc[-8]['cal_date']
         
         features = builder.build_features_for_day(

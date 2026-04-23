@@ -2,7 +2,76 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.56.4] - 2026-04-20
+## [0.59.0] - 2026-04-23
+
+### 变更
+
+- **y_ret_N 标签语义对齐回测节奏** ([builder.py](src/lazybull/features/builder.py)):
+  - 旧公式: `y_ret_N = close_adj(T+N) / close_adj(T) - 1` (T 收盘买 / T+N 收盘卖, 与回测引擎不一致)
+  - 新公式: `y_ret_N = open_adj(T+1+N) / close_adj(T+1) - 1` (T+1 收盘买 / T+1+N 开盘卖)
+  - 严格对齐回测引擎实际成交节奏 (`engine.py:600` "T 日生成信号 → T+1 日收盘价买入 → T+holding_period 日 sell_timing 卖出", 默认 `sell_timing="open"`), 消除训练-回测之间的成交价口径偏差
+  - **影响**: 旧的 `data/features/cs_train/` 特征文件标签语义已变, 需要删除并重新跑 `python scripts/build_clean_features.py` 重建; 基于旧标签训练的模型不再可比
+- **train_core.py 防泄露 delta 调整** ([train_core.py:660](src/lazybull/ml/train_core.py#L660)):
+  - 新标签实际跨越 N+1 个交易日 (T+1 收盘 → T+1+N 开盘), 验证集切分间隔从 `max(horizon, 5)` 改为 `max(horizon + 1, 5)`, 杜绝隔夜跳空对截面排序的潜在泄露
+- **测试更新** ([tests/test_features.py](tests/test_features.py)): mock_daily_data 补充 `open` 列, `test_forward_returns_calculation_correctness` 断言公式同步为新标签语义
+
+## [0.58.0] - 2026-04-23
+
+### 新增
+
+- **下载并发 + 限流感知重试**: raw 数据下载从串行升级为可配置并发, 预计 2012-2026 全量下载从 24h+ 压缩到 4-6h
+  - **线程安全令牌桶** ([tushare_client.py](src/lazybull/data/tushare_client.py)): `_rate_limit_wait` 用 `threading.Lock` 保护 `_last_request_time`, 多线程共享同一限频队列; 全局 QPS 始终受 `rate_limit` 严格约束, 不会超过 TuShare 配额
+  - **限流感知重试**: 新增 `_is_rate_limit_error` 识别错误消息中的"每分钟/访问/频次/rate/limit/429"等关键字。命中限流 → 长等 `retry_rate_limit_sleep`(默认 15s, 让服务端限流窗口过去); 其他错误 → 固定 `retry_delay` 短等。彻底消除原先"token 错误也走 1+2+3=6 秒指数退避"的雪球效应
+  - **按日并发** ([download_raw.py](scripts/download_raw.py)): 新增 `_run_concurrent` 执行器, 把"按交易日拉取"的 `daily` / `margin_detail` / `cyq_perf` / `top_list` 分发到线程池。`ErrorCollector` / `ProgressTracker` / 计数器全部加锁, 线程安全
+  - **两级降级开关**:
+    - `configs/base.yaml` → `tushare.download_concurrency: 4` 全局默认, 改 `1` 即退化回串行
+    - 命令行 `python scripts/download_raw.py --concurrency 1` 临时覆盖, 排障时无需改配置
+- **base.yaml 新增 tushare 配置项** ([base.yaml](configs/base.yaml)):
+  - `rate_limit: 700` (从 500 调高, 8000 积分官方上限实测可承受; 若观察到限流频繁触发可回调至 500)
+  - `download_concurrency: 4` (并发线程数, 主限瓶颈仍是 rate_limit 而非线程数)
+  - `rate_limit_error_keywords: [每分钟, 访问, 频次, rate, limit, 频率, 429, 超过]` (限流识别词表)
+  - `retry_rate_limit_sleep: 15` (命中限流关键字的重试等待秒数)
+
+### 优化
+
+- **download_raw.py 启动日志**: 新增"并发线程数 / 限频 / 限流重试等待"三行运行参数展示, 方便事后排障时从日志直接看出跑的是哪套参数
+
+## [0.57.0] - 2026-04-23
+
+### 新增
+
+- **download_raw.py 全量重写**: 下载流程加入统一错误汇总、ETA 进度估算与多项隐患修复
+  - **错误汇总**: 新增 `ErrorCollector`, 所有下载函数的单条失败都记录到全局收集器, 脚本结束时在总结页统一打印"按数据集分组的全部错误清单", 无人值守场景下运行完查日志即可定位; `finally` 保证即使中途异常/Ctrl+C 也会打印
+  - **ETA 进度**: 新增 `ProgressTracker`, 基于已完成项的平均耗时估算剩余时间, 每 N 项打印一次 `elapsed / rate / ETA / 预计完成时刻`, 取代原"逐日 7 行日志"的噪声输出
+  - **退出码**: 0=全部成功, 1=初始化/未预期异常, 3=存在错误项但脚本跑完, 130=用户中断, 便于批量脚本判断
+
+### 修复
+
+- **#1 默认 `--end-date` 硬编码未来日期**: 改为 `datetime.now().strftime("%Y%m%d")`, 避免日历过期/截断
+- **#2 trade_cal 短窗口调用截断历史**: `download_basic_data` 改为"拉取并集窗口 + 合并旧数据去重排序"后保存, 小窗口调用不会抹掉历史日历
+- **#3 moneyflow_hsgt 断点续传失效**: 先筛出真正待下载的交易日, 再基于缺失日期首末计算半年分段, 不再"全段批量重拉 + 逐日 skip"浪费 API
+- **#4 moneyflow 强制依赖静默降级**: 返回空或异常时视为当日失败, 通过 `ErrorCollector` 记录并在总结页明确报错
+- **#5 日线单日 6 接口非原子性**: 改为"先全部拉到内存, 任一失败整日不落盘"。避免"`daily` 成功但 `daily_basic` 失败 → 只有半个日子 → `is_data_exists` 跳过 → 永久缺失"
+- **#6 字符串日期字典序比较**: `_generate_quarter_periods` / 日期参数校验改用 `_to_int_date`, 强制 8 位 YYYYMMDD 数值比较
+- **#7 `_query_with_pagination` 整页多余空请求**: 恰好整页时用 `limit=1` 探测下页, 不再浪费一次 `page_limit` 调用
+- **#8 `report_rc` --force 语义不一致**: force 模式下丢弃 `existing_df`, 与其他函数行为统一
+- **#9 `_save_merged` dedup 顺序不明**: 新增 `sort_cols` 参数, dedup 前先排序, `keep="last"` 语义明确(保留最新 `ann_date`)
+- **#10 `--resume` 死参数**: help 文案明确标注"等价于默认断点续传, 无需单独指定"
+- **#11 `KeyboardInterrupt` 被当成未知异常**: 单独捕获, 退出码 130, 并在 `finally` 里打印已累积的错误汇总
+- **#12 `stock_basic` 仅拉 L 导致生存者偏差**: 改为同时拉 `L/D/P` 三种状态并合并去重, 回测历史区间可覆盖已退市股票
+- **#13 空交易日列表可能除零**: `download_daily_data` 等函数在 `trading_dates` 为空时提前返回
+
+### 性能
+
+- **下载慢根因分析 (2012-2026 全量耗时 24h+)**:
+  - `rate_limit=500/分钟` (120ms/次) × 6 接口 × 3350 日 ≈ 40 分钟理论下限, 实测 24h+ 主因是
+    TuShare 服务端限流触发客户端 `retry_delay * attempt` 指数退避 (1+2=3 秒/次)
+  - 冷门接口共享同一 `_request_interval`, 无法按接口细分
+  - 每日 7 行 logger.info 在 PowerShell stdout 下本身累计耗时
+- **本次优化**:
+  - 日线改为原子批处理, 每日最多 1 次失败 = 1 次进度 tick, 日志量下降约 80%
+  - ProgressTracker 聚合打印, 日线/日 100 天/底层接口 1 行日志
+  - 后续可进一步提速的建议(未在本版本实施, 需评估限流): rate_limit 提升到 700/分钟、识别限流错误后再长等避免对 404/token 错误做指数退避、按接口并发
 
 ### 优化
 

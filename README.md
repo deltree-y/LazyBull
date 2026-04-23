@@ -28,7 +28,25 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.56.3)
+### 当前版本 (v0.59.0)
+
+**y_ret_N 标签语义对齐回测节奏** (v0.59.0):
+- 旧公式 `close_adj(T+N) / close_adj(T) - 1` 假设 T 收盘买/T+N 收盘卖, 与回测引擎的 "T+1 收盘买入 → T+1+holding_period 开盘卖出" 不一致
+- 新公式 `y_ret_N = open_adj(T+1+N) / close_adj(T+1) - 1`, 严格对齐回测引擎的实际成交价口径, 消除训练-回测之间的隐性偏差
+- 配套调整: `train_core.py` 验证集切分 delta 由 `max(horizon, 5)` 改为 `max(horizon + 1, 5)`, 杜绝隔夜跳空潜在泄露
+- 旧的 `data/features/cs_train/` 标签语义已变, 需删除并重跑 `build_clean_features.py` 重建
+
+**下载并发 + 限流感知重试** (v0.58.0):
+- **线程安全令牌桶**: `TushareClient._rate_limit_wait` 加锁, 多线程共享同一限频队列, 全局 QPS 受 `rate_limit` 严格约束, 不会超过 TuShare 官方配额
+- **限流感知重试**: 识别"每分钟/访问/频次/rate/limit/429"等关键字 → 长等 `retry_rate_limit_sleep` (默认 15s); 其他错误 → 短等固定 `retry_delay`。消除原先 1+2+3=6 秒指数退避的雪球效应
+- **按日并发**: `daily` / `margin_detail` / `cyq_perf` / `top_list` 并发下载, 预计 2012-2026 全量下载从 24h+ 压缩到 4-6h
+- **两级降级**: `base.yaml → tushare.download_concurrency: 4` 全局; `--concurrency 1` 临时覆盖; 触发限流时改 1 即退化回串行
+
+**download_raw.py 全量重写 — 错误汇总 + ETA 进度 + 多项隐患修复** (v0.57.0):
+- **错误汇总**: 新增全局 `ErrorCollector`, 单条失败不中断, 脚本结束时在总结页统一列出所有错误, 无人值守场景可离线查日志; `finally` 保证异常/Ctrl+C 也会打印
+- **ETA 进度**: 新增 `ProgressTracker`, 基于已完成项平均耗时估算剩余时间, 每 N 项打印 `elapsed / rate / ETA / 预计完成时刻`; 日线日志量下降约 80%
+- **13 项隐患修复**: 默认 end-date 硬编码未来日期、trade_cal 短窗口截断历史、moneyflow_hsgt 断点续传失效、日线 6 接口非原子性(半日缺失永久化)、moneyflow 强制依赖静默降级、字符串日期字典序比较、分页多余空请求、report_rc force 语义不一致、dedup 顺序不明、stock_basic 生存者偏差(仅拉 L)、KeyboardInterrupt 未单独处理 等
+- **退出码规范化**: 0/1/3/130 分别对应成功/初始化异常/有错误项/用户中断
 
 **修复调仓决策摘要"最终"行显示与计算不一致** (v0.56.3):
 - 原先"最终"行仅展示 `信号门控 x ECT x 市场层`，漏掉质量系数，导致显示的乘积与实际 `final_target_exposure` 对不上（例如 `45.8%[50.0% x 100.0% x 100.0%]`）
@@ -1138,7 +1156,7 @@ python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
 
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
-- 标签为 `y_ret_5`（未来 5 日收益率）
+- 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）
 - **训练时自动切分验证集**（默认最后 20% 时间作为验证集）
 - **训练结束后打印验证集评估结果**（MSE、RMSE、R2、IC、RankIC）
 - **使用早停机制**（early_stopping_rounds=30）防止过拟合

@@ -48,9 +48,13 @@ def mock_daily_data():
             # 第三只股票在某些日期停牌（成交量为0）
             vol = 0 if (stock == '600000.SH' and date.day % 5 == 0) else 1000000
             
+            # 模拟开盘价（与收盘价稍有差异，便于测试 open_adj 取值）
+            open_price = base_price * (1 + 0.005 * i)
+
             data.append({
                 'ts_code': stock,
                 'trade_date': date_str,
+                'open': open_price,
                 'close': close,
                 'pre_close': pre_close,
                 'pct_chg': pct_chg,
@@ -161,11 +165,13 @@ class TestFeatureBuilder:
         daily_adj = builder._calculate_adj_close(mock_daily_data, mock_adj_factor)
         
         trade_date = trading_dates[0]
-        future_date = trading_dates[5]  # 第5个后续交易日
-        
+        # 标签语义：T+1 收盘买入，T+1+N 开盘卖出
+        buy_date = trading_dates[1]   # T+1
+        sell_date = trading_dates[6]  # T+1+5
+
         current_idx = 0
         current_data = daily_adj[daily_adj['trade_date'] == trade_date].copy()
-        
+
         labels = builder._calculate_forward_returns(
             current_data,
             daily_adj,
@@ -173,22 +179,22 @@ class TestFeatureBuilder:
             trading_dates,
             current_idx
         )
-        
+
         # 手动验证第一只股票的收益计算
         stock = '000001.SZ'
-        current_price = daily_adj[
-            (daily_adj['trade_date'] == trade_date) & 
+        buy_price = daily_adj[
+            (daily_adj['trade_date'] == buy_date) &
             (daily_adj['ts_code'] == stock)
         ]['close_adj'].iloc[0]
-        
-        future_price = daily_adj[
-            (daily_adj['trade_date'] == future_date) & 
+
+        sell_price = daily_adj[
+            (daily_adj['trade_date'] == sell_date) &
             (daily_adj['ts_code'] == stock)
-        ]['close_adj'].iloc[0]
-        
-        expected_return = (future_price / current_price) - 1
+        ]['open_adj'].iloc[0]
+
+        expected_return = (sell_price / buy_price) - 1
         actual_return = labels[labels['ts_code'] == stock]['y_ret_5'].iloc[0]
-        
+
         assert abs(actual_return - expected_return) < 1e-6
     
     def test_forward_returns_insufficient_future_dates(

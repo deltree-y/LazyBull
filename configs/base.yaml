@@ -12,12 +12,20 @@ data:
 # TuShare配置
 tushare:
   max_retries: 3
-  retry_delay: 1  # 秒
-  rate_limit: 500  # 每分钟请求数
+  retry_delay: 1  # 基础重试延迟(秒), 仅对非限流错误使用固定短等
+  rate_limit: 500  # 每分钟请求数上限(全局限频令牌桶, 所有并发线程共享)
+  # 下载并发数: 同一秒内允许的最大线程数
+  # 注意: 并发仅加速"网络等待", 总 QPS 仍被 rate_limit 严格限制, 所以不会超过 TuShare 官方配额
+  # 若观察到限流频繁触发, 手动改回 1 即可退回串行下载
+  download_concurrency: 4
+  # 限流错误识别: 匹配以下子串(不区分大小写)的错误视为限流, 触发长等 retry_rate_limit_sleep
+  # 其它错误(如 token 无效/网络不通)使用 retry_delay 的短等, 避免无谓等待
+  rate_limit_error_keywords: ["每分钟", "访问", "频次", "rate", "limit", "频率", "429", "超过"]
+  retry_rate_limit_sleep: 15  # 限流错误时的等待秒数(TuShare 限流窗口 ~1 分钟, 等待可让服务端解锁)
 
 # 行业配置
 industry:
-  shenwan_level: "l3"  # 项目统一主行业口径：l1 | l2 | l3
+  shenwan_level: "l2"  # 项目统一主行业口径：l1 | l2 | l3
 
 # 交易成本配置
 costs:

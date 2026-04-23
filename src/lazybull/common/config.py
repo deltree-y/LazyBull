@@ -217,12 +217,26 @@ def get_reports_root(default: Optional[str] = None) -> str:
 
 
 def get_tushare_settings() -> Dict[str, Any]:
-    """获取 TuShare 默认配置。"""
+    """获取 TuShare 默认配置。
+
+    Returns:
+        max_retries / retry_delay / rate_limit : 基础限频参数
+        download_concurrency : 下载脚本的并发线程数 (1=串行)
+        rate_limit_error_keywords : 识别"限流"异常的错误关键字
+        retry_rate_limit_sleep : 命中限流关键字时的长等秒数
+    """
     config = get_config()
+    kw = config.get(
+        "tushare.rate_limit_error_keywords",
+        ["每分钟", "访问", "频次", "rate", "limit", "频率", "429", "超过"],
+    )
     return {
         "max_retries": int(config.get("tushare.max_retries", 3)),
         "retry_delay": float(config.get("tushare.retry_delay", 1.0)),
-        "rate_limit": int(config.get("tushare.rate_limit", 200)),
+        "rate_limit": int(config.get("tushare.rate_limit", 500)),
+        "download_concurrency": int(config.get("tushare.download_concurrency", 1)),
+        "rate_limit_error_keywords": [str(k).lower() for k in kw],
+        "retry_rate_limit_sleep": float(config.get("tushare.retry_rate_limit_sleep", 15.0)),
     }
 
 

@@ -508,75 +508,100 @@ class FeatureBuilder:
         current_idx: int
     ) -> pd.DataFrame:
         """计算未来N日收益标签（支持多个 horizon）
-        
+
+        标签语义对齐回测/纸面交易节奏：
+        - T 日（信号日）生成信号
+        - T+1 日收盘买入（close_adj）
+        - T+1+N 日开盘卖出（open_adj）
+        - 公式：y_ret_N = open_adj(T+1+N) / close_adj(T+1) - 1
+
         Args:
-            current_data: 当日数据
+            current_data: 当日数据（仅用于 trade_date/ts_code 索引）
             daily_adj: 全部日线数据（含后复权价）
-            trade_date: 当前交易日
+            trade_date: 当前交易日（信号日 T）
             trading_dates: 交易日序列
             current_idx: 当前交易日在序列中的索引
-            
+
         Returns:
             包含多个标签的DataFrame（y_ret_5, y_ret_10, y_ret_20等）
         """
-        # 初始化结果DataFrame
-        result = current_data[['trade_date', 'ts_code', 'close_adj']].copy()
-        
+        # 初始化结果DataFrame（close_adj 仅作占位，最后会丢弃）
+        result = current_data[['trade_date', 'ts_code']].copy()
+
+        # 检查 T+1 是否存在；不存在则所有 horizon 标签置 NaN
+        if current_idx + 1 >= len(trading_dates):
+            logger.warning(f"{trade_date} 后续无 T+1 交易日，所有 y_ret_* 标签为空")
+            for horizon in self.horizons:
+                result[f'y_ret_{horizon}'] = np.nan
+            return result
+
+        # 取 T+1 收盘价作为买入价
+        buy_date = trading_dates[current_idx + 1]
+        if self._daily_adj_dict is not None:
+            _buy_sub = self._daily_adj_dict.get(buy_date)
+            if _buy_sub is not None:
+                buy_data = _buy_sub[['ts_code', 'close_adj']].copy()
+            else:
+                buy_data = pd.DataFrame(columns=['ts_code', 'close_adj'])
+        else:
+            buy_data = daily_adj[daily_adj['trade_date'] == buy_date][
+                ['ts_code', 'close_adj']
+            ].copy()
+        buy_data.rename(columns={'close_adj': 'buy_close_adj'}, inplace=True)
+        result = result.merge(buy_data, on='ts_code', how='left')
+
         # 为每个 horizon 计算标签
         for horizon in self.horizons:
             label_col = f'y_ret_{horizon}'
-            
-            # 检查是否有足够的未来交易日
-            if current_idx + horizon >= len(trading_dates):
-                logger.warning(f"{trade_date} 后续交易日不足 {horizon} 天，{label_col} 标签为空")
+
+            # 检查 T+1+N 是否存在
+            sell_idx = current_idx + 1 + horizon
+            if sell_idx >= len(trading_dates):
+                logger.warning(
+                    f"{trade_date} 后续交易日不足 {horizon + 1} 天（T+1+{horizon} 越界），"
+                    f"{label_col} 标签为空"
+                )
                 result[label_col] = np.nan
                 continue
-            
-            # 获取未来第N个交易日
-            future_date = trading_dates[current_idx + horizon]
-            
-            # 获取未来收盘价（优化4：优先 O(1) 字典取值，否则全量过滤）
+
+            # 取 T+1+N 开盘价作为卖出价
+            sell_date = trading_dates[sell_idx]
             if self._daily_adj_dict is not None:
-                _future_sub = self._daily_adj_dict.get(future_date)
-                if _future_sub is not None:
-                    future_data = _future_sub[['ts_code', 'close_adj']].copy()
+                _sell_sub = self._daily_adj_dict.get(sell_date)
+                if _sell_sub is not None:
+                    sell_data = _sell_sub[['ts_code', 'open_adj']].copy()
                 else:
-                    future_data = pd.DataFrame(columns=['ts_code', 'close_adj'])
+                    sell_data = pd.DataFrame(columns=['ts_code', 'open_adj'])
             else:
-                future_data = daily_adj[daily_adj['trade_date'] == future_date][
-                    ['ts_code', 'close_adj']
+                sell_data = daily_adj[daily_adj['trade_date'] == sell_date][
+                    ['ts_code', 'open_adj']
                 ].copy()
-            future_data.rename(columns={'close_adj': f'close_adj_future_{horizon}'}, inplace=True)
-            
-            # 合并当前和未来数据
-            result = result.merge(
-                future_data,
-                on='ts_code',
-                how='left'
-            )
-            
-            # 计算收益率: (close_adj_future / close_adj) - 1
-            # 添加除零保护：过滤掉收盘价为0或极小的样本
-            valid_mask = result['close_adj'] > 1e-6
-            future_col = f'close_adj_future_{horizon}'
+            sell_col = f'sell_open_adj_{horizon}'
+            sell_data.rename(columns={'open_adj': sell_col}, inplace=True)
+            result = result.merge(sell_data, on='ts_code', how='left')
+
+            # 计算收益率: open_adj(T+1+N) / close_adj(T+1) - 1
+            # 除零保护：过滤掉买入价为0或极小的样本
+            valid_mask = result['buy_close_adj'] > 1e-6
             result.loc[valid_mask, label_col] = (
-                result.loc[valid_mask, future_col] / result.loc[valid_mask, 'close_adj']
+                result.loc[valid_mask, sell_col] / result.loc[valid_mask, 'buy_close_adj']
             ) - 1
             result.loc[~valid_mask, label_col] = np.nan
-            
+
             # 删除中间列
-            result.drop(columns=[future_col], inplace=True)
-            
+            result.drop(columns=[sell_col], inplace=True)
+
             # 记录缺失标签的样本数
             missing_labels = result[label_col].isna().sum()
             if missing_labels > 0:
                 logger.warning(
-                    f"{trade_date} 有 {missing_labels} 个样本缺失 {label_col}（未来{horizon}日收盘价缺失）"
+                    f"{trade_date} 有 {missing_labels} 个样本缺失 {label_col}"
+                    f"（T+1 收盘价或 T+1+{horizon} 开盘价缺失）"
                 )
-        
-        # 删除 close_adj 列
-        result.drop(columns=['close_adj'], inplace=True)
-        
+
+        # 删除中间列
+        result.drop(columns=['buy_close_adj'], inplace=True)
+
         return result
     
     def _calculate_features(
