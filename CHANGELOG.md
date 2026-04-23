@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.59.3] - 2026-04-23
+
+### 优化
+
+- **精简每日特征构建日志** ([builder.py](src/lazybull/features/builder.py)):
+  - 删除 `开始构建 {trade_date} 的特征` 冗余日志（上游 `build_clean_features.py` 已有更醒目的分隔条 ETA 日志）
+  - 将 3 个 horizon 的 `y_ret_N` 缺失 warning 合并为一行汇总：`{date} 标签缺失统计（...）: y_ret_5=52, y_ret_10=72, y_ret_20=106`
+  - 日志行数由 4 行缩减为 0~1 行（无缺失时不打印）
+
+## [0.59.2] - 2026-04-23
+
+### 优化
+
+- **特征构建进度日志增加 ETA 与分隔** ([build_clean_features.py](scripts/build_clean_features.py)):
+  - 每日特征构建开始的日志前增加换行与 `=====` 分隔条，作为生成一个 feature 文件的明显起始标志，便于在长日志中快速定位
+  - 基于已处理日期的平均耗时线性外推，附带打印"预计完成"绝对时间（`YYYY-MM-DD HH:MM:SS`），首轮显示"计算中"
+
 ## [0.59.1] - 2026-04-23
 
 ### 修复

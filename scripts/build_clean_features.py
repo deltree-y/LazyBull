@@ -12,6 +12,8 @@
 
 import argparse
 import sys
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # 添加项目路径
@@ -440,9 +442,23 @@ def build_features_data(
     success_count = 0
     skip_count = 0
     error_count = 0
-    
+
+    total_dates = len(trading_dates_str)
+    loop_start_ts = time.time()
+
     for i, trade_date in enumerate(trading_dates_str, 1):
-        logger.info(f"[{i}/{len(trading_dates_str)}] ({i/len(trading_dates_str):.1%}) 构建 {trade_date} 特征...")
+        # 预估完成时间：基于已处理的日期平均耗时线性外推
+        elapsed = time.time() - loop_start_ts
+        if i > 1 and elapsed > 0:
+            avg_per_date = elapsed / (i - 1)
+            remaining = avg_per_date * (total_dates - i + 1)
+            eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            eta_str = "计算中"
+        logger.info(
+            f"\n===== [{i}/{total_dates}] ({i/total_dates:.1%}) 构建 {trade_date} 特征 "
+            f"| 预计完成: {eta_str} ====="
+        )
         
         try:
             # 检查特征是否已存在

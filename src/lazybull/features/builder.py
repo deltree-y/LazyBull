@@ -209,8 +209,7 @@ class FeatureBuilder:
         Returns:
             特征DataFrame，包含 trade_date, ts_code, 特征列, 标签列, 标记列
         """
-        logger.info(f"开始构建 {trade_date} 的特征")
-        
+
         # 1. 获取交易日序列（有缓存则 O(1) 返回）
         trading_dates = self._get_trading_dates(trade_cal)
 
@@ -550,7 +549,8 @@ class FeatureBuilder:
         buy_data.rename(columns={'close_adj': 'buy_close_adj'}, inplace=True)
         result = result.merge(buy_data, on='ts_code', how='left')
 
-        # 为每个 horizon 计算标签
+        # 为每个 horizon 计算标签（缺失统计汇总为一行日志）
+        missing_summary = []
         for horizon in self.horizons:
             label_col = f'y_ret_{horizon}'
 
@@ -591,13 +591,16 @@ class FeatureBuilder:
             # 删除中间列
             result.drop(columns=[sell_col], inplace=True)
 
-            # 记录缺失标签的样本数
-            missing_labels = result[label_col].isna().sum()
+            # 记录缺失标签的样本数（汇总到 missing_summary，循环外输出一行）
+            missing_labels = int(result[label_col].isna().sum())
             if missing_labels > 0:
-                logger.warning(
-                    f"{trade_date} 有 {missing_labels} 个样本缺失 {label_col}"
-                    f"（T+1 收盘价或 T+1+{horizon} 开盘价缺失）"
-                )
+                missing_summary.append(f"{label_col}={missing_labels}")
+
+        if missing_summary:
+            logger.warning(
+                f"{trade_date} 标签缺失统计（T+1 收盘价或 T+1+N 开盘价缺失）: "
+                + ", ".join(missing_summary)
+            )
 
         # 删除中间列
         result.drop(columns=['buy_close_adj'], inplace=True)

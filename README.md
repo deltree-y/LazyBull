@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.59.1)
+### 当前版本 (v0.59.3)
+
+**精简每日特征构建日志** (v0.59.3):
+- 删除 `开始构建 {trade_date} 的特征` 冗余行（上游已有更醒目的分隔条 ETA 日志）
+- 3 个 horizon 的 `y_ret_N` 缺失 warning 合并为一行汇总，日志行数由 4 行降至 0~1 行
+
+**特征构建进度日志增加 ETA 与分隔** (v0.59.2):
+- `scripts/build_clean_features.py` 每日特征构建起始日志前增加换行与 `=====` 分隔条，作为生成一个 feature 文件的明显起点标志
+- 基于已处理日期平均耗时线性外推，附带打印"预计完成"绝对时间，便于长任务安排下游工作
 
 **抑制 storage.py 中 pandas concat FutureWarning** (v0.59.1):
 - `load_raw_by_date_range` / `load_clean_by_date_range` 在合并多日分区时，pandas 1.5+ 对含 all-NA 列的 concat 会输出 FutureWarning（典型场景：龙虎榜 `reason` 字段在某些日子整列为 NaN）
