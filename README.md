@@ -28,7 +28,23 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.60.0)
+### 当前版本 (v0.60.4)
+
+**raw 空目录也会生成占位报表** (v0.60.4):
+- 无参 `compare_walk_forward.py` 在 `data/walk_forward/raw` 没有 summary 文件时，仍会生成 `data/walk_forward/wf_comparison_raw.xlsx`
+- 占位文件会标明“无可用数据”，从而保证 batch 结束后 `raw / batches` 两份报表路径都存在
+
+**跨时间段稳定性汇总按批次隔离 + batch 自动刷新两份总表** (v0.60.3):
+- `wf_comparison_batches.xlsx` 的 `跨时间段稳定性` sheet 现在会按 `batch_run_id` 分开汇总；同参数重复跑两次 batch 不会再只剩一个批次ID
+- `scripts/batch_walk_forward.ps1` 在生成当前批次的 `wf_comparison.xlsx` 后，会继续自动刷新 `data/walk_forward/wf_comparison_raw.xlsx` 与 `data/walk_forward/wf_comparison_batches.xlsx`
+
+**compare_walk_forward 无参自动扫描 raw 与 batches** (v0.60.2):
+- 直接执行 `py .\scripts\compare_walk_forward.py` 时，脚本会自动扫描 `data/walk_forward/raw` 与 `data/walk_forward/batches/*/raw`
+- 默认分别生成 `data/walk_forward/wf_comparison_raw.xlsx` 与 `data/walk_forward/wf_comparison_batches.xlsx`，不再要求手工传 `--raw-dir`
+
+**wf_comparison.xlsx 恢复输出到固定目录** (v0.60.1):
+- `scripts/batch_walk_forward.ps1` 仍将本批次原始结果写入 `data/walk_forward/batches/<batch_id>/raw/`，保证 compare 只汇总本批次
+- 最终对比 Excel 改回输出到 `data/walk_forward/wf_comparison.xlsx`，不再跟随批次目录变化
 
 **walk_forward batch 支持多时间段与批次隔离汇总** (v0.60.0):
 - `scripts/batch_walk_forward.ps1` 新增 `wf_period_configs`，可在同一批次内配置多组时间段；`skip_training` 下每个时间段独立配置 `StartModelVersion`

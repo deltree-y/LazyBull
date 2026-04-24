@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.60.4] - 2026-04-24
+
+### 优化
+
+- **compare_walk_forward 无数据来源也生成占位报表** ([compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 无参自动扫描模式下，即使 `data/walk_forward/raw` 当前没有 summary 文件，也会生成 `wf_comparison_raw.xlsx`
+  - 占位报表会明确写出“无可用数据”，保证 batch 运行后 `raw / batches` 两份报表路径始终存在
+
+### 测试
+
+- **补充空 raw 目录占位报表测试** ([test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 校验 raw 为空、batches 有数据时，无参 compare 仍会生成 `wf_comparison_raw.xlsx`
+
+## [0.60.3] - 2026-04-24
+
+### 修复
+
+- **compare_walk_forward 跨时间段稳定性汇总按批次隔离** ([compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 同参数但不同 `batch_run_id` 的结果不再被错误合并到同一行稳定性汇总里
+  - `wf_comparison_batches.xlsx` 的 `跨时间段稳定性` sheet 现在会为每次 batch 运行分别保留独立批次ID与时间段列表
+
+### 优化
+
+- **batch_walk_forward 运行后自动刷新 raw / batches 两份总表** ([batch_walk_forward.ps1](scripts/batch_walk_forward.ps1)):
+  - 保留当前批次 `wf_comparison.xlsx` 输出不变
+  - 额外自动执行一次无参 compare，刷新 `data/walk_forward/wf_comparison_raw.xlsx` 与 `data/walk_forward/wf_comparison_batches.xlsx`
+
+### 测试
+
+- **补充批次隔离回归测试** ([test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 校验相同参数跨两个不同 batch 时，稳定性汇总会生成两行而不是被折叠为一行
+
+## [0.60.2] - 2026-04-24
+
+### 优化
+
+- **compare_walk_forward 无参自动扫描 raw 与 batches** ([compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 直接执行 `py .\scripts\compare_walk_forward.py` 时，不再只读取 `data/walk_forward/raw`
+  - 脚本现在会自动扫描 `data/walk_forward/raw` 与 `data/walk_forward/batches/*/raw`
+  - 默认分别输出 `data/walk_forward/wf_comparison_raw.xlsx` 与 `data/walk_forward/wf_comparison_batches.xlsx`，避免要求手工指定 `--raw-dir`
+
+### 测试
+
+- **补充 compare 无参自动发现测试** ([test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 校验临时 `data_root` 下同时存在 raw 与 batches 时，会自动生成两份对比 Excel
+
+## [0.60.1] - 2026-04-24
+
+### 优化
+
+- **batch_walk_forward 恢复固定对比 Excel 输出路径** ([batch_walk_forward.ps1](scripts/batch_walk_forward.ps1)):
+  - 保持本批次 `summary / chain_nav` 仍写入 `data/walk_forward/batches/<batch_id>/raw/`，继续隔离历史批次原始结果
+  - 最终 `wf_comparison.xlsx` 改回输出到 `data/walk_forward/wf_comparison.xlsx`，便于沿用原有查找路径和人工查看习惯
+
 ## [0.60.0] - 2026-04-24
 
 ### 新增

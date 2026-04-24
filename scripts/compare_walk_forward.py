@@ -4,10 +4,10 @@
 Walk-forward 实验对比脚本
 
 功能：
-- 读取 data/walk_forward/raw/ 下所有汇总CSV（每次 walk_forward 运行生成一个）
+- 无参时自动扫描 data/walk_forward/raw/ 与 data/walk_forward/batches/*/raw/ 两类来源
 - 按 wf_run_id 分组，跨 split 聚合各项指标
 - 生成对比表格（行=实验，列=聚合指标+训练参数）
-- 输出到 data/walk_forward/wf_comparison.csv
+- 输出到 Excel 文件
 
 使用示例：
     python scripts/compare_walk_forward.py
@@ -32,6 +32,15 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 
 from src.lazybull.common.config import get_data_root
 from src.lazybull.common.logger import setup_logger
+
+
+SUMMARY_CSV_DTYPE = {
+    "wf_run_id": str,
+    "batch_run_id": str,
+    "batch_period_label": str,
+    "wf_start_date": str,
+    "wf_end_date": str,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +256,7 @@ SCORE_CONFIG = [
 ]
 
 
-def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str) -> dict:
+def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str, source_dir: Optional[Path] = None) -> dict:
     """读取 chain_nav 并计算全周期指标。"""
     empty = {
         "chain_total_return": None,
@@ -256,10 +265,11 @@ def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str) -> dict:
         "chain_sharpe": None,
         "chain_trading_days": None,
     }
-    if raw_dir is None:
+    effective_raw_dir = source_dir or raw_dir
+    if effective_raw_dir is None:
         return empty
 
-    chain_path = raw_dir / f"chain_nav_{wf_run_id}.csv"
+    chain_path = effective_raw_dir / f"chain_nav_{wf_run_id}.csv"
     if not chain_path.exists():
         return empty
 
@@ -298,29 +308,33 @@ def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str) -> dict:
     }
 
 
-def load_all_summaries(raw_dir: Path) -> pd.DataFrame:
-    """加载 raw/ 目录下所有 walk_forward 汇总 CSV"""
-    csv_files = sorted(raw_dir.glob("walk_forward_summary_*.csv"))
+def load_all_summaries_from_raw_dirs(raw_dirs: list[Path]) -> pd.DataFrame:
+    """从一个或多个 raw 目录加载 walk_forward 汇总 CSV。"""
+    existing_raw_dirs = [Path(raw_dir) for raw_dir in raw_dirs if Path(raw_dir).exists()]
+    if len(existing_raw_dirs) == 0:
+        logger.warning("未找到任何可用汇总目录")
+        return pd.DataFrame()
+
+    csv_files: list[tuple[Path, Path]] = []
+    for raw_dir in existing_raw_dirs:
+        csv_files.extend((raw_dir, csv_file) for csv_file in sorted(raw_dir.glob("walk_forward_summary_*.csv")))
+
     if len(csv_files) == 0:
-        logger.warning(f"未找到任何汇总CSV: {raw_dir}")
+        joined_dirs = ", ".join(str(raw_dir) for raw_dir in existing_raw_dirs)
+        logger.warning(f"未找到任何汇总CSV: {joined_dirs}")
         return pd.DataFrame()
 
     logger.info(f"找到 {len(csv_files)} 个汇总CSV文件")
     frames = []
-    for f in csv_files:
+    for raw_dir, f in csv_files:
         try:
             df = pd.read_csv(
                 f,
                 encoding="utf-8-sig",
-                dtype={
-                    "wf_run_id": str,
-                    "batch_run_id": str,
-                    "batch_period_label": str,
-                    "wf_start_date": str,
-                    "wf_end_date": str,
-                },
+                dtype=SUMMARY_CSV_DTYPE,
             )
             df["_source_file"] = f.name
+            df["_source_dir"] = str(raw_dir)
             frames.append(df)
             logger.debug(f"  已加载: {f.name}（{len(df)} 行）")
         except Exception as e:
@@ -332,6 +346,36 @@ def load_all_summaries(raw_dir: Path) -> pd.DataFrame:
     all_df = pd.concat(frames, ignore_index=True)
     logger.info(f"合并后总行数: {len(all_df)}，unique wf_run_id: {all_df['wf_run_id'].nunique() if 'wf_run_id' in all_df.columns else '?'}")
     return all_df
+
+
+def load_all_summaries(raw_dir: Path) -> pd.DataFrame:
+    """兼容旧调用：从单个 raw 目录加载汇总CSV。"""
+    return load_all_summaries_from_raw_dirs([raw_dir])
+
+
+def build_auto_compare_jobs(data_root: Path) -> list[dict]:
+    """构建无参模式下的自动扫描任务。"""
+    walk_forward_root = data_root / "walk_forward"
+    raw_dir = walk_forward_root / "raw"
+    batches_root = walk_forward_root / "batches"
+    batch_raw_dirs = sorted(path for path in batches_root.glob("*/raw") if path.is_dir()) if batches_root.exists() else []
+
+    jobs = [
+        {
+            "label": "raw",
+            "raw_dirs": [raw_dir],
+            "output_path": walk_forward_root / "wf_comparison_raw.xlsx",
+        }
+    ]
+    if batch_raw_dirs:
+        jobs.append(
+            {
+                "label": "batches",
+                "raw_dirs": batch_raw_dirs,
+                "output_path": walk_forward_root / "wf_comparison_batches.xlsx",
+            }
+        )
+    return jobs
 
 
 def aggregate_run(group: pd.DataFrame) -> dict:
@@ -501,9 +545,15 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
 
     rows = []
     for wf_run_id, group in all_df.groupby("wf_run_id", sort=False):
+        source_dir = None
+        if "_source_dir" in group.columns:
+            source_values = group["_source_dir"].dropna().astype(str)
+            if len(source_values):
+                source_dir = Path(source_values.iloc[0])
+
         # 聚合性能指标
         agg = aggregate_run(group)
-        agg.update(load_chain_metrics(raw_dir, wf_run_id))
+        agg.update(load_chain_metrics(raw_dir, wf_run_id, source_dir=source_dir))
         agg["wf_run_id"] = wf_run_id
 
         # 追加训练参数（取第一行即可，同一 run 内所有 split 参数相同）
@@ -576,7 +626,6 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
 
     varying_cols = {
         COL_NAMES["wf_run_id"],
-        COL_NAMES["batch_run_id"],
         COL_NAMES["wf_start_date"],
         COL_NAMES["wf_end_date"],
         COL_NAMES["batch_period_label"],
@@ -626,8 +675,6 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         )
 
         row = {col: group.iloc[0][col] for col in group_cols}
-        if COL_NAMES["batch_run_id"] in group.columns:
-            row[COL_NAMES["batch_run_id"]] = group.iloc[0][COL_NAMES["batch_run_id"]]
         row.update(
             {
                 COL_NAMES["period_count"]: len(group),
@@ -654,7 +701,6 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     ordered_cols = [
-        COL_NAMES["batch_run_id"],
         COL_NAMES["period_count"],
         COL_NAMES["period_labels"],
         COL_NAMES["stability_score"],
@@ -671,7 +717,8 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         COL_NAMES["oos_cross_split_ir_std"],
         COL_NAMES["bt_win_rate_mean"],
         COL_NAMES["bt_win_rate_min"],
-    ] + group_cols
+    ]
+    ordered_cols += [col for col in group_cols if col not in ordered_cols]
     result = pd.DataFrame(rows)
     result = result[[col for col in ordered_cols if col in result.columns]]
     result = result.sort_values(
@@ -1052,6 +1099,90 @@ def print_comparison_table(df: pd.DataFrame) -> None:
     logger.info("\n" + df[show_cols].to_string(index=True))
 
 
+def write_empty_report(output_path: Path, source_label: str) -> None:
+    """为无数据来源生成占位 Excel，保证固定输出文件存在。"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    placeholder_df = pd.DataFrame(
+        {
+            "状态": ["无可用数据"],
+            "来源": [source_label],
+            "说明": ["当前来源目录下未找到 walk_forward_summary_*.csv"],
+        }
+    )
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        placeholder_df.to_excel(writer, sheet_name="实验对比", index=False)
+
+
+def generate_comparison_report(
+    raw_dirs: list[Path],
+    output_path: Path,
+    source_label: str,
+    write_empty_output: bool = False,
+) -> bool:
+    """加载指定来源的汇总CSV并写出对比 Excel。"""
+    logger.info("-" * 70)
+    logger.info(f"来源标签:   {source_label}")
+    if len(raw_dirs) == 1:
+        logger.info(f"汇总CSV目录: {raw_dirs[0]}")
+    else:
+        logger.info(f"汇总CSV目录: 共 {len(raw_dirs)} 个 raw 目录（来源: {source_label}）")
+    logger.info(f"输出路径:     {output_path}")
+
+    all_df = load_all_summaries_from_raw_dirs(raw_dirs)
+    if all_df.empty:
+        logger.warning(f"[{source_label}] 没有可用数据，跳过")
+        if write_empty_output:
+            write_empty_report(output_path, source_label)
+            logger.info(f"[{source_label}] 已生成空白占位文件: {output_path}")
+            return True
+        return False
+
+    comp_df = build_comparison_table(all_df)
+    if comp_df.empty:
+        logger.warning(f"[{source_label}] 构建对比表失败，跳过")
+        return False
+
+    comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+    logger.info(
+        f"综合得分计算完成（参与评分指标数: {sum(1 for k, _, _ in SCORE_CONFIG if COL_NAMES.get(k) in comp_df.columns)}）"
+    )
+
+    desc_df = build_metric_descriptions()
+    split_df = build_split_detail_table(all_df)
+    logger.info(f"逐Split明细表: {len(split_df)} 行")
+    period_stability_df = build_period_stability_table(comp_df)
+    logger.info(f"跨时间段稳定性表: {len(period_stability_df)} 行")
+    comp_df = sort_by_run_time(comp_df)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        comp_df.to_excel(writer, sheet_name="实验对比", index=False)
+        if not period_stability_df.empty:
+            period_stability_df.to_excel(writer, sheet_name="跨时间段稳定性", index=False)
+        desc_df.to_excel(writer, sheet_name="指标说明", index=False)
+        if not split_df.empty:
+            split_df.to_excel(writer, sheet_name="逐Split明细", index=False)
+        format_excel_output(writer.book, desc_df)
+    logger.info(f"[{source_label}] 对比表已保存: {output_path}（{len(comp_df)} 个实验）")
+    return True
+
+
+def run_auto_compare_jobs(data_root: Path) -> list[Path]:
+    """无参模式：自动扫描 raw 与 batches 两类来源。"""
+    output_paths: list[Path] = []
+    jobs = build_auto_compare_jobs(data_root)
+    logger.info("无参模式：自动扫描 raw 与 batches 目录")
+    for job in jobs:
+        if generate_comparison_report(
+            job["raw_dirs"],
+            job["output_path"],
+            job["label"],
+            write_empty_output=True,
+        ):
+            output_paths.append(job["output_path"])
+    return output_paths
+
+
 def main():
     parser = argparse.ArgumentParser(description="Walk-forward 实验对比分析")
     parser.add_argument(
@@ -1067,59 +1198,23 @@ def main():
     setup_logger()
 
     effective_data_root = Path(args.data_root or get_data_root())
-    raw_dir     = Path(args.raw_dir) if args.raw_dir else effective_data_root / "walk_forward" / "raw"
-    output_path = Path(args.output)  if args.output  else effective_data_root / "walk_forward" / "wf_comparison.xlsx"
 
     logger.info("=" * 70)
     logger.info("Walk-forward 实验对比分析")
     logger.info("=" * 70)
-    logger.info(f"汇总CSV目录: {raw_dir}")
-    logger.info(f"输出路径:     {output_path}")
 
-    # 1. 加载所有汇总CSV
-    all_df = load_all_summaries(raw_dir)
-    if all_df.empty:
-        logger.error("没有可用数据，退出")
-        return
-
-    # 2. 构建对比表
-    comp_df = build_comparison_table(all_df, raw_dir=raw_dir)
-    if comp_df.empty:
-        logger.error("构建对比表失败，退出")
-        return
-
-    # 3. 计算综合得分并插入为第二列（运行ID 之后）
-    comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
-    logger.info(f"综合得分计算完成（参与评分指标数: {sum(1 for k,_,_ in SCORE_CONFIG if COL_NAMES.get(k) in comp_df.columns)}）")
-
-    # 4. 构建指标说明表
-    desc_df = build_metric_descriptions()
-
-    # 5. 构建逐 split 明细表
-    split_df = build_split_detail_table(all_df)
-    logger.info(f"逐Split明细表: {len(split_df)} 行")
-
-    # 6. 构建跨时间段稳定性表
-    period_stability_df = build_period_stability_table(comp_df)
-    logger.info(f"跨时间段稳定性表: {len(period_stability_df)} 行")
-
-    # 7. 按运行时间降序排列（最近的排在最前面）
-    comp_df = sort_by_run_time(comp_df)
-
-    # 8. 输出 Excel（三到四个 sheet），并应用格式化
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        comp_df.to_excel(writer, sheet_name="实验对比", index=False)
-        if not period_stability_df.empty:
-            period_stability_df.to_excel(writer, sheet_name="跨时间段稳定性", index=False)
-        desc_df.to_excel(writer, sheet_name="指标说明", index=False)
-        if not split_df.empty:
-            split_df.to_excel(writer, sheet_name="逐Split明细", index=False)
-        format_excel_output(writer.book, desc_df)
-    logger.info(f"对比表已保存: {output_path}（{len(comp_df)} 个实验，共{len(writer.book.sheetnames)}个sheet）")
-
-    # 7. 控制台打印精简版
-    #print_comparison_table(comp_df)
+    if args.raw_dir is None and args.output is None:
+        output_paths = run_auto_compare_jobs(effective_data_root)
+        if len(output_paths) == 0:
+            logger.error("raw 与 batches 均没有可用数据，退出")
+            return
+        logger.info(f"自动扫描完成，共生成 {len(output_paths)} 个对比文件")
+    else:
+        raw_dir = Path(args.raw_dir) if args.raw_dir else effective_data_root / "walk_forward" / "raw"
+        output_path = Path(args.output) if args.output else effective_data_root / "walk_forward" / "wf_comparison.xlsx"
+        if not generate_comparison_report([raw_dir], output_path, "single"):
+            logger.error("没有可用数据，退出")
+            return
 
     logger.info("=" * 70)
 

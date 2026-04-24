@@ -9,9 +9,11 @@ import numpy as np
 import pandas as pd
 
 from scripts.compare_walk_forward import (
+    build_auto_compare_jobs,
     build_comparison_table,
     build_period_stability_table,
     compute_composite_score,
+    run_auto_compare_jobs,
 )
 from scripts.walk_forward import summarize_ma250_signal_coverage
 from src.lazybull.backtest.engine_ml import _format_ma250_decision_log
@@ -302,6 +304,212 @@ class TestCompareWalkForwardPeriodStability:
         assert pd.notna(result.loc[0, "综合得分均值"])
         assert pd.notna(result.loc[0, "跨时间段跨切分IR标准差"])
         assert result.loc[0, "时间段稳定性分"] <= 100
+
+    def test_build_period_stability_table_keeps_batches_separate(self):
+        all_df = pd.DataFrame(
+            [
+                {
+                    "wf_run_id": "wf_test_001",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.12,
+                    "daily_rankic_ir": 0.60,
+                },
+                {
+                    "wf_run_id": "wf_test_002",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.08,
+                    "daily_rankic_ir": 0.45,
+                },
+                {
+                    "wf_run_id": "wf_test_003",
+                    "batch_run_id": "wf_batch_002",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.11,
+                    "daily_rankic_ir": 0.58,
+                },
+                {
+                    "wf_run_id": "wf_test_004",
+                    "batch_run_id": "wf_batch_002",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.07,
+                    "daily_rankic_ir": 0.40,
+                },
+            ]
+        )
+
+        comp_df = build_comparison_table(all_df)
+        comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+
+        result = build_period_stability_table(comp_df)
+
+        assert len(result) == 2
+        assert sorted(result["批次ID"].tolist()) == ["wf_batch_001", "wf_batch_002"]
+        assert (result["时间段数"] == 2).all()
+
+
+class TestCompareWalkForwardAutoDiscovery:
+    """测试 compare 脚本无参时自动扫描 raw 与 batches。"""
+
+    def test_run_auto_compare_jobs_generates_raw_and_batches_reports(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_root = Path(tmpdir)
+            raw_dir = data_root / "walk_forward" / "raw"
+            batch_raw_dir = data_root / "walk_forward" / "batches" / "wf_batch_001" / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            batch_raw_dir.mkdir(parents=True, exist_ok=True)
+
+            pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_raw_001",
+                        "split_index": 0,
+                        "bt_total_return": 0.05,
+                        "bt_annual_return": 0.08,
+                        "bt_max_drawdown": -0.10,
+                        "bt_sharpe": 1.0,
+                    }
+                ]
+            ).to_csv(raw_dir / "walk_forward_summary_raw_0001.csv", index=False, encoding="utf-8-sig")
+            pd.DataFrame(
+                {
+                    "date": [1, 2, 3],
+                    "nav": [1.0, 1.02, 1.05],
+                }
+            ).to_csv(raw_dir / "chain_nav_wf_raw_001.csv", index=False, encoding="utf-8-sig")
+
+            pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_batch_001",
+                        "batch_run_id": "wf_batch_001",
+                        "batch_period_label": "0101",
+                        "split_index": 0,
+                        "bt_total_return": 0.06,
+                        "bt_annual_return": 0.09,
+                        "bt_max_drawdown": -0.09,
+                        "bt_sharpe": 1.1,
+                    }
+                ]
+            ).to_csv(
+                batch_raw_dir / "walk_forward_summary_0101_0001.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
+            pd.DataFrame(
+                {
+                    "date": [1, 2, 3],
+                    "nav": [1.0, 1.03, 1.06],
+                }
+            ).to_csv(batch_raw_dir / "chain_nav_wf_batch_001.csv", index=False, encoding="utf-8-sig")
+
+            jobs = build_auto_compare_jobs(data_root)
+
+            assert len(jobs) == 2
+            assert jobs[0]["output_path"].name == "wf_comparison_raw.xlsx"
+            assert jobs[1]["output_path"].name == "wf_comparison_batches.xlsx"
+
+            output_paths = run_auto_compare_jobs(data_root)
+            raw_output = data_root / "walk_forward" / "wf_comparison_raw.xlsx"
+            batch_output = data_root / "walk_forward" / "wf_comparison_batches.xlsx"
+
+            assert raw_output in output_paths
+            assert batch_output in output_paths
+            assert raw_output.exists()
+            assert batch_output.exists()
+
+            raw_report = pd.read_excel(raw_output, sheet_name="实验对比")
+            batch_report = pd.read_excel(batch_output, sheet_name="实验对比")
+
+            assert len(raw_report) == 1
+            assert len(batch_report) == 1
+            assert raw_report.loc[0, "运行ID"] == "wf_raw_001"
+            assert batch_report.loc[0, "运行ID"] == "wf_batch_001"
+
+    def test_run_auto_compare_jobs_writes_placeholder_when_raw_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_root = Path(tmpdir)
+            raw_dir = data_root / "walk_forward" / "raw"
+            batch_raw_dir = data_root / "walk_forward" / "batches" / "wf_batch_001" / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            batch_raw_dir.mkdir(parents=True, exist_ok=True)
+
+            pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_batch_001",
+                        "batch_run_id": "wf_batch_001",
+                        "batch_period_label": "0101",
+                        "split_index": 0,
+                        "bt_total_return": 0.06,
+                        "bt_annual_return": 0.09,
+                        "bt_max_drawdown": -0.09,
+                        "bt_sharpe": 1.1,
+                    }
+                ]
+            ).to_csv(
+                batch_raw_dir / "walk_forward_summary_0101_0001.csv",
+                index=False,
+                encoding="utf-8-sig",
+            )
+
+            output_paths = run_auto_compare_jobs(data_root)
+            raw_output = data_root / "walk_forward" / "wf_comparison_raw.xlsx"
+            batch_output = data_root / "walk_forward" / "wf_comparison_batches.xlsx"
+
+            assert raw_output in output_paths
+            assert batch_output in output_paths
+            assert raw_output.exists()
+            assert batch_output.exists()
+
+            raw_report = pd.read_excel(raw_output, sheet_name="实验对比")
+            assert raw_report.loc[0, "状态"] == "无可用数据"
+            assert raw_report.loc[0, "来源"] == "raw"
 
 
 class TestMA250LogFormatting:

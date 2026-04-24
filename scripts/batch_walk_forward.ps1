@@ -324,7 +324,7 @@ if ($normalized_wf_period_configs.Count -eq 0) {
 $batch_run_id = "wf_batch_{0}" -f (Get-Date -Format "yyyyMMdd_HHmmss")
 $batch_output_root = Join-Path $data_root ("walk_forward\batches\{0}" -f $batch_run_id)
 $batch_raw_dir = Join-Path $batch_output_root "raw"
-$batch_compare_output = Join-Path $batch_output_root "wf_comparison.xlsx"
+$batch_compare_output = Join-Path $data_root "walk_forward\wf_comparison.xlsx"
 New-Item -ItemType Directory -Path $batch_raw_dir -Force | Out-Null
 
 $periodSummary = ($normalized_wf_period_configs | ForEach-Object {
@@ -756,6 +756,10 @@ if ($run_compare_after) {
     Write-Host "[汇总对比] 正在汇总本批次结果（含跨时间段稳定性）..." -ForegroundColor Green
     py .\scripts\compare_walk_forward.py --raw-dir "$batch_raw_dir" --output "$batch_compare_output"
     Write-Host "[汇总对比] 完成，输出: $batch_compare_output" -ForegroundColor Green
+
+    Write-Host "[汇总对比] 正在刷新 raw / batches 两份总表 ..." -ForegroundColor Green
+    py .\scripts\compare_walk_forward.py --data-root $data_root
+    Write-Host "[汇总对比] 完成，输出: $data_root\walk_forward\wf_comparison_raw.xlsx / wf_comparison_batches.xlsx" -ForegroundColor Green
 }
 
 # ── 倒计时关机（可选）────────────────────────────────────────
