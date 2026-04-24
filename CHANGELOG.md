@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.60.0] - 2026-04-24
+
+### 新增
+
+- **walk_forward 批量实验支持多时间段批次** ([batch_walk_forward.ps1](scripts/batch_walk_forward.ps1), [walk_forward.py](scripts/walk_forward.py)):
+  - `scripts/batch_walk_forward.ps1` 新增 `wf_period_configs` 时间段对象列表，可在同一批次内同时扫描多组 `WfStartDate/WfEndDate`
+  - `skip_training` 模式下不再共用一个全局 `start_model_version`，而是改为每个时间段单独配置 `StartModelVersion`，避免跨时间段复用错误模型序列
+  - 批量运行会把本批次 summary / chain_nav 输出到 `data/walk_forward/batches/<batch_id>/raw/`，与历史批次隔离，避免 compare 混入旧实验
+
+### 优化
+
+- **compare_walk_forward 增加本批次跨时间段稳定性汇总** ([compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 批量脚本调用 compare 时只读取当前批次 raw 目录，`wf_comparison.xlsx` 不再混入历史 raw 下的旧实验
+  - Excel 新增 `跨时间段稳定性` sheet，按“相同参数组合、不同时间段”聚合，输出时间段数、时间段列表、综合得分均值/标准差、跨时间段 CAGR/回撤/跨切分 IR 统计与稳定性分
+  - `compare_walk_forward.py` 读取 summary 时显式保留 `batch_run_id / batch_period_label / wf_start_date / wf_end_date` 字符串列，并增强综合评分对 `None`/字符串数值列的容错
+
+### 测试
+
+- **补充批次元数据与跨时间段稳定性测试** ([test_walk_forward.py](tests/test_walk_forward.py), [test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 校验 walk_forward summary 会写出 `batch_run_id / batch_period_label`
+  - 校验 compare 汇总表保留批次字段，并能对同参数的多时间段结果生成稳定性汇总
+
 ## [0.59.3] - 2026-04-23
 
 ### 优化

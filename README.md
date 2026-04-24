@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.59.3)
+### 当前版本 (v0.60.0)
+
+**walk_forward batch 支持多时间段与批次隔离汇总** (v0.60.0):
+- `scripts/batch_walk_forward.ps1` 新增 `wf_period_configs`，可在同一批次内配置多组时间段；`skip_training` 下每个时间段独立配置 `StartModelVersion`
+- 批量运行产物改为写入 `data/walk_forward/batches/<batch_id>/raw/`，随后仅对当前批次运行 `compare_walk_forward.py`，不再混入历史 raw 实验
+- `compare_walk_forward.py` 新增 `跨时间段稳定性` sheet，按相同参数组合聚合不同时间段表现，输出时间段列表、综合得分均值/标准差、跨时间段 CAGR/回撤/跨切分 IR 与稳定性分
 
 **精简每日特征构建日志** (v0.59.3):
 - 删除 `开始构建 {trade_date} 的特征` 冗余行（上游已有更醒目的分隔条 ETA 日志）

@@ -8,7 +8,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.compare_walk_forward import build_comparison_table
+from scripts.compare_walk_forward import (
+    build_comparison_table,
+    build_period_stability_table,
+    compute_composite_score,
+)
 from scripts.walk_forward import summarize_ma250_signal_coverage
 from src.lazybull.backtest.engine_ml import _format_ma250_decision_log
 from src.lazybull.data import Storage
@@ -66,6 +70,8 @@ class TestCompareWalkForwardMA250Columns:
             [
                 {
                     "wf_run_id": "wf_test_001",
+                        "batch_run_id": "wf_batch_001",
+                        "batch_period_label": "0101",
                     "split_index": 0,
                     "market_regime_ma250_hard_stop": True,
                     "market_regime_ma250_threshold": 0.8,
@@ -91,6 +97,8 @@ class TestCompareWalkForwardMA250Columns:
 
         result = build_comparison_table(all_df)
 
+        assert "批次ID" in result.columns
+        assert "批次时间段" in result.columns
         assert "MA250硬条件" in result.columns
         assert "MA250阈值" in result.columns
         assert "MA250仓位" in result.columns
@@ -109,6 +117,8 @@ class TestCompareWalkForwardMA250Columns:
         assert "门控平均仓位" in result.columns
         assert "门控平均置信度" in result.columns
         assert result.loc[0, "MA250硬条件"] == True
+        assert result.loc[0, "批次ID"] == "wf_batch_001"
+        assert result.loc[0, "批次时间段"] == "0101"
         assert result.loc[0, "MA250阈值"] == 0.8
         assert result.loc[0, "MA250仓位"] == 0.2
         assert result.loc[0, "MA250 ATR缩放"] == True
@@ -178,6 +188,120 @@ class TestCompareWalkForwardChainMetrics:
             assert abs(result.loc[0, "全周期链式最大回撤"] + 0.1) < 1e-6
             assert result.loc[0, "全周期链式交易日数"] == 252
             assert pd.notna(result.loc[0, "全周期链式夏普"])
+
+
+class TestCompareWalkForwardPeriodStability:
+    """测试 compare 脚本的跨时间段稳定性汇总。"""
+
+    def test_build_period_stability_table_groups_same_params_across_periods(self):
+        all_df = pd.DataFrame(
+            [
+                {
+                    "wf_run_id": "wf_test_001",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.12,
+                    "daily_rankic_ir": 0.60,
+                },
+                {
+                    "wf_run_id": "wf_test_001",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 1,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.10,
+                    "daily_rankic_ir": 0.50,
+                },
+                {
+                    "wf_run_id": "wf_test_002",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.08,
+                    "daily_rankic_ir": 0.45,
+                },
+                {
+                    "wf_run_id": "wf_test_002",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 1,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.06,
+                    "daily_rankic_ir": 0.35,
+                },
+                {
+                    "wf_run_id": "wf_test_003",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0301",
+                    "wf_start_date": "20140101",
+                    "wf_end_date": "20211231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 5,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_total_return": 0.10,
+                    "daily_rankic_ir": 0.20,
+                },
+            ]
+        )
+
+        comp_df = build_comparison_table(all_df)
+        comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+
+        result = build_period_stability_table(comp_df)
+
+        assert len(result) == 1
+        assert result.loc[0, "时间段数"] == 2
+        assert result.loc[0, "时间段列表"] == "0101 | 0209"
+        assert result.loc[0, "最大深度"] == 3
+        assert result.loc[0, "批次ID"] == "wf_batch_001"
+        assert pd.notna(result.loc[0, "综合得分均值"])
+        assert pd.notna(result.loc[0, "跨时间段跨切分IR标准差"])
+        assert result.loc[0, "时间段稳定性分"] <= 100
 
 
 class TestMA250LogFormatting:

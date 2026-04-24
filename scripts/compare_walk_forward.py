@@ -40,6 +40,8 @@ from src.lazybull.common.logger import setup_logger
 COL_NAMES = {
     # 标识
     "wf_run_id":                  "运行ID",
+    "batch_run_id":               "批次ID",
+    "batch_period_label":         "批次时间段",
     # OOS 性能
     "n_splits":                   "切分数",
     "model_version_range":        "模型版本范围",
@@ -101,6 +103,23 @@ COL_NAMES = {
     "best_iter_min":              "最佳迭代最小值",
     "best_iter_max":              "最佳迭代最大值",
     "best_iter_std":              "最佳迭代标准差",
+    # 跨时间段稳定性
+    "period_count":               "时间段数",
+    "period_labels":              "时间段列表",
+    "score_mean":                 "综合得分均值",
+    "score_std":                  "综合得分标准差",
+    "score_min":                  "综合得分最差",
+    "score_max":                  "综合得分最佳",
+    "chain_cagr_mean":            "跨时间段CAGR均值",
+    "chain_cagr_std":             "跨时间段CAGR标准差",
+    "chain_cagr_min":             "跨时间段CAGR最差",
+    "chain_max_drawdown_mean":    "跨时间段回撤均值",
+    "chain_max_drawdown_worst":   "跨时间段回撤最差",
+    "oos_cross_split_ir_mean":    "跨时间段跨切分IR均值",
+    "oos_cross_split_ir_std":     "跨时间段跨切分IR标准差",
+    "bt_win_rate_mean":           "跨时间段回测胜率均值",
+    "bt_win_rate_min":            "跨时间段回测胜率最差",
+    "stability_score":            "时间段稳定性分",
     # 训练参数
     "wf_start_date":              "WF起始日期",
     "wf_end_date":                "WF结束日期",
@@ -160,6 +179,8 @@ COL_NAMES = {
 # ---------------------------------------------------------------------------
 PARAM_COLS = [
     "wf_run_id",
+    "batch_run_id",
+    "batch_period_label",
     "algorithm",
     "wf_start_date", "wf_end_date", "step",
     "train_window_years", "test_window_months", "val_ratio",
@@ -288,7 +309,17 @@ def load_all_summaries(raw_dir: Path) -> pd.DataFrame:
     frames = []
     for f in csv_files:
         try:
-            df = pd.read_csv(f, encoding="utf-8-sig")
+            df = pd.read_csv(
+                f,
+                encoding="utf-8-sig",
+                dtype={
+                    "wf_run_id": str,
+                    "batch_run_id": str,
+                    "batch_period_label": str,
+                    "wf_start_date": str,
+                    "wf_end_date": str,
+                },
+            )
             df["_source_file"] = f.name
             frames.append(df)
             logger.debug(f"  已加载: {f.name}（{len(df)} 行）")
@@ -525,6 +556,132 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
     return df
 
 
+def _build_period_label(row: pd.Series) -> str:
+    """优先使用批量脚本传入的时间段标签，否则退回到起止日期。"""
+    batch_period_label = row.get(COL_NAMES["batch_period_label"])
+    if pd.notna(batch_period_label) and str(batch_period_label).strip():
+        return str(batch_period_label)
+
+    wf_start = row.get(COL_NAMES["wf_start_date"])
+    wf_end = row.get(COL_NAMES["wf_end_date"])
+    if pd.notna(wf_start) and pd.notna(wf_end):
+        return f"{wf_start}~{wf_end}"
+    return "未标注"
+
+
+def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
+    """按参数组合跨时间段聚合，输出稳定性汇总。"""
+    if comp_df.empty:
+        return pd.DataFrame()
+
+    varying_cols = {
+        COL_NAMES["wf_run_id"],
+        COL_NAMES["batch_run_id"],
+        COL_NAMES["wf_start_date"],
+        COL_NAMES["wf_end_date"],
+        COL_NAMES["batch_period_label"],
+    }
+    metric_cols = {
+        "综合得分",
+        COL_NAMES["chain_cagr"],
+        COL_NAMES["chain_max_drawdown"],
+        COL_NAMES["oos_cross_split_ir"],
+        COL_NAMES["bt_win_rate"],
+    }
+    group_cols = []
+    for key in PARAM_COLS:
+        if key == "wf_run_id":
+            continue
+        col = COL_NAMES.get(key)
+        if col and col in comp_df.columns and col not in varying_cols and col not in metric_cols:
+            group_cols.append(col)
+
+    if not group_cols:
+        return pd.DataFrame()
+
+    working_df = comp_df.copy()
+    working_df["__时间段标签"] = working_df.apply(_build_period_label, axis=1)
+
+    rows = []
+    for _, group in working_df.groupby(group_cols, dropna=False, sort=False):
+        if len(group) <= 1:
+            continue
+
+        score_series = pd.to_numeric(group.get("综合得分"), errors="coerce")
+        cagr_series = pd.to_numeric(group.get(COL_NAMES["chain_cagr"]), errors="coerce")
+        drawdown_series = pd.to_numeric(group.get(COL_NAMES["chain_max_drawdown"]), errors="coerce")
+        ir_series = pd.to_numeric(group.get(COL_NAMES["oos_cross_split_ir"]), errors="coerce")
+        win_rate_series = pd.to_numeric(group.get(COL_NAMES["bt_win_rate"]), errors="coerce")
+
+        score_std = score_series.std()
+        cagr_std = cagr_series.std()
+        ir_std = ir_series.std()
+
+        score_penalty = 0.0 if pd.isna(score_std) else min(max(score_std / 20.0, 0.0), 1.0)
+        cagr_penalty = 0.0 if pd.isna(cagr_std) else min(max(cagr_std / 0.2, 0.0), 1.0)
+        ir_penalty = 0.0 if pd.isna(ir_std) else min(max(ir_std / 1.0, 0.0), 1.0)
+        stability_score = round(
+            (1 - (0.4 * score_penalty + 0.3 * cagr_penalty + 0.3 * ir_penalty)) * 100,
+            1,
+        )
+
+        row = {col: group.iloc[0][col] for col in group_cols}
+        if COL_NAMES["batch_run_id"] in group.columns:
+            row[COL_NAMES["batch_run_id"]] = group.iloc[0][COL_NAMES["batch_run_id"]]
+        row.update(
+            {
+                COL_NAMES["period_count"]: len(group),
+                COL_NAMES["period_labels"]: " | ".join(group["__时间段标签"].astype(str).tolist()),
+                COL_NAMES["score_mean"]: round(score_series.mean(), 2) if score_series.notna().any() else None,
+                COL_NAMES["score_std"]: round(score_std, 2) if pd.notna(score_std) else None,
+                COL_NAMES["score_min"]: round(score_series.min(), 2) if score_series.notna().any() else None,
+                COL_NAMES["score_max"]: round(score_series.max(), 2) if score_series.notna().any() else None,
+                COL_NAMES["chain_cagr_mean"]: round(cagr_series.mean(), 6) if cagr_series.notna().any() else None,
+                COL_NAMES["chain_cagr_std"]: round(cagr_std, 6) if pd.notna(cagr_std) else None,
+                COL_NAMES["chain_cagr_min"]: round(cagr_series.min(), 6) if cagr_series.notna().any() else None,
+                COL_NAMES["chain_max_drawdown_mean"]: round(drawdown_series.mean(), 6) if drawdown_series.notna().any() else None,
+                COL_NAMES["chain_max_drawdown_worst"]: round(drawdown_series.min(), 6) if drawdown_series.notna().any() else None,
+                COL_NAMES["oos_cross_split_ir_mean"]: round(ir_series.mean(), 4) if ir_series.notna().any() else None,
+                COL_NAMES["oos_cross_split_ir_std"]: round(ir_std, 4) if pd.notna(ir_std) else None,
+                COL_NAMES["bt_win_rate_mean"]: round(win_rate_series.mean(), 4) if win_rate_series.notna().any() else None,
+                COL_NAMES["bt_win_rate_min"]: round(win_rate_series.min(), 4) if win_rate_series.notna().any() else None,
+                COL_NAMES["stability_score"]: max(stability_score, 0.0),
+            }
+        )
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    ordered_cols = [
+        COL_NAMES["batch_run_id"],
+        COL_NAMES["period_count"],
+        COL_NAMES["period_labels"],
+        COL_NAMES["stability_score"],
+        COL_NAMES["score_mean"],
+        COL_NAMES["score_std"],
+        COL_NAMES["score_min"],
+        COL_NAMES["score_max"],
+        COL_NAMES["chain_cagr_mean"],
+        COL_NAMES["chain_cagr_std"],
+        COL_NAMES["chain_cagr_min"],
+        COL_NAMES["chain_max_drawdown_mean"],
+        COL_NAMES["chain_max_drawdown_worst"],
+        COL_NAMES["oos_cross_split_ir_mean"],
+        COL_NAMES["oos_cross_split_ir_std"],
+        COL_NAMES["bt_win_rate_mean"],
+        COL_NAMES["bt_win_rate_min"],
+    ] + group_cols
+    result = pd.DataFrame(rows)
+    result = result[[col for col in ordered_cols if col in result.columns]]
+    result = result.sort_values(
+        [COL_NAMES["stability_score"], COL_NAMES["score_mean"]],
+        ascending=[False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+    return result
+
+
 def compute_composite_score(df: pd.DataFrame) -> pd.Series:
     """计算综合得分（0~100，越高越好）
 
@@ -547,7 +704,7 @@ def compute_composite_score(df: pd.DataFrame) -> pd.Series:
         if col is None or col not in df.columns:
             continue
 
-        s = df[col].copy()
+        s = pd.to_numeric(df[col], errors="coerce")
 
         if direction == "abs_low":
             s = s.abs()
@@ -822,7 +979,7 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
             col_letter_fill[cell.column_letter] = score_cn_fills[str(cell.value)]
 
     # ── 全局字体、冻结、列宽、绿色背景 ──────────────────────────────────
-    all_sheets = [s for s in ["实验对比", "指标说明", "逐Split明细"] if s in wb.sheetnames]
+    all_sheets = [s for s in ["实验对比", "跨时间段稳定性", "指标说明", "逐Split明细"] if s in wb.sheetnames]
     for sheet_name in all_sheets:
         ws = wb[sheet_name]
         ws.freeze_panes = "A2"
@@ -942,13 +1099,19 @@ def main():
     split_df = build_split_detail_table(all_df)
     logger.info(f"逐Split明细表: {len(split_df)} 行")
 
-    # 6. 按运行时间降序排列（最近的排在最前面）
+    # 6. 构建跨时间段稳定性表
+    period_stability_df = build_period_stability_table(comp_df)
+    logger.info(f"跨时间段稳定性表: {len(period_stability_df)} 行")
+
+    # 7. 按运行时间降序排列（最近的排在最前面）
     comp_df = sort_by_run_time(comp_df)
 
-    # 7. 输出 Excel（三个 sheet），并应用格式化
+    # 8. 输出 Excel（三到四个 sheet），并应用格式化
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         comp_df.to_excel(writer, sheet_name="实验对比", index=False)
+        if not period_stability_df.empty:
+            period_stability_df.to_excel(writer, sheet_name="跨时间段稳定性", index=False)
         desc_df.to_excel(writer, sheet_name="指标说明", index=False)
         if not split_df.empty:
             split_df.to_excel(writer, sheet_name="逐Split明细", index=False)

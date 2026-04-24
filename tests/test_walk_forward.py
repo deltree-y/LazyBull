@@ -296,6 +296,8 @@ class TestWalkForwardCSV:
             # 构造 mock args（包含函数内部需要的所有属性）
             mock_args = types.SimpleNamespace(
                 wf_start_date="20200101", wf_end_date="20230630",
+                batch_run_id="wf_batch_test_001",
+                batch_period_label="0101",
                 algorithm="xgboost", step=3, train_window_years=3,
                 test_window_months=3, val_ratio=0.2,
                 label_column="y_ret_5", task="regression",
@@ -358,6 +360,8 @@ class TestWalkForwardCSV:
             assert "signal_confidence_gate_top_k" in df.columns
             assert "signal_confidence_gate_thresholds" in df.columns
             assert "signal_confidence_gate_exposure_levels" in df.columns
+            assert "batch_run_id" in df.columns
+            assert "batch_period_label" in df.columns
             
             # 验证数据正确
             assert df.loc[0, "split_index"] == 0
@@ -376,6 +380,8 @@ class TestWalkForwardCSV:
             assert df.loc[0, "signal_confidence_gate_top_k"] == 8
             assert "0.1" in str(df.loc[0, "signal_confidence_gate_thresholds"])
             assert "0.4" in str(df.loc[0, "signal_confidence_gate_exposure_levels"])
+            assert df.loc[0, "batch_run_id"] == "wf_batch_test_001"
+            assert str(df.loc[0, "batch_period_label"]).zfill(4) == "0101"
             assert df.loc[1, "split_index"] == 1
             assert df.loc[1, "daily_rankic_mean"] == 0.06
 

@@ -1442,6 +1442,8 @@ def write_walk_forward_summary(
     # 训练参数（所有 split 共享，写入每行方便后续对比脚本独立使用）
     train_params_cols = {
         "wf_run_id": wf_run_id,
+        "batch_run_id": getattr(args, 'batch_run_id', None),
+        "batch_period_label": getattr(args, 'batch_period_label', None),
         "wf_start_date": args.wf_start_date,
         "wf_end_date": args.wf_end_date,
         "algorithm": args.algorithm,
@@ -2027,6 +2029,18 @@ def main():
         type=str,
         default=None,
         help="walk-forward 汇总CSV路径，默认为 {data_root}/walk_forward/walk_forward_summary.csv"
+    )
+    parser.add_argument(
+        "--batch-run-id",
+        type=str,
+        default=None,
+        help="批量脚本生成的批次ID，仅用于汇总追踪"
+    )
+    parser.add_argument(
+        "--batch-period-label",
+        type=str,
+        default=None,
+        help="批量脚本传入的时间段标签，仅用于汇总追踪"
     )
     
     # OOS 回测参数

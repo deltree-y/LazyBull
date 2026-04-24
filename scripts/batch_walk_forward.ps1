@@ -13,9 +13,28 @@
 #  参数配置区（修改这里控制实验组合）
 # ============================================================
 
-# ── Walk-forward 时间范围（固定，两端通常不需要多组）───────────
-$wf_start_date           = "20130101"   #20130101   #20130224
-$wf_end_date             = "20251231"   #20251231   #20260224
+# ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
+# 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
+$skip_training           = $false   # $true 启用 | $false 禁用
+
+# ── Walk-forward 时间段配置（支持多组）───────────────────────
+# Label                : 时间段标签，仅用于日志/汇总展示
+# WfStartDate/WfEndDate: 传给 walk_forward.py 的整体时间范围
+# StartModelVersion    : skip-training 模式下该时间段首个 split 对应模型版本号
+$wf_period_configs = @(
+    [PSCustomObject]@{
+        Label = "0101"
+        WfStartDate = "20130101"
+        WfEndDate = "20251231"
+        StartModelVersion = 11114
+    }
+    [PSCustomObject]@{
+        Label = "0209"
+        WfStartDate = "20130209"
+        WfEndDate = "20260209"
+        StartModelVersion = 10802
+    }
+)
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
@@ -33,7 +52,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators_list       = @(1500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.025)     #. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.01)     #. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -76,14 +95,16 @@ $enable_fund             = $true  # $true 启用 | $false 禁用
 $enable_express          = $true  # $true 启用 | $false 禁用
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
-$enable_north            = $true  # $true 启用 | $false 禁用
+$enable_north            = $false  # $true 启用 | $false 禁用
+#实测:打开后CAGR下降约6%, 回撤上升8%
 
 # ── 龙虎榜因子（top_list 个股级, 2000+积分）──────────────────────
 $enable_lhb              = $true  # $true 启用 | $false 禁用
+#实测:打开后CAGR提升约4%, 回撤提升约5%
 
 # ── 一致预期因子（report_rc 研报滚动聚合, 8000积分）──────────────
-$enable_consensus        = $false  # $true 启用 | $false 禁用
-
+$enable_consensus        = $true  # $true 启用 | $false 禁用
+#实测:打开后CAGR提升约2%, 回撤无明显变化
 
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
@@ -95,21 +116,10 @@ $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3�
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
 $enable_enhanced           = $true # $true 启用 | $false 禁用
+#关闭后CAGR下降约8%, 回撤上升约4%
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
-
-# ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
-# 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-# start_model_version：第一个 split 对应的模型版本号，后续 split 依次 +1
-# 例如：已有模型 v10~v24（共15个split），设 $start_model_version = 10
-$skip_training           = $false   # $true 启用 | $false 禁用
-#$start_model_version     = 10816    # 0224
-$start_model_version     = 11114    # 0101
-#$start_model_version     = 10802    # 0209
-                                   #d3(0101):7969/9430(no enh)/9416(enh)
-                                   #d3(0209):8165/9446(no enh)/9461(enh)/9601(ofst+1)
-                                   #d2:8137
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -279,12 +289,55 @@ if ($signal_confidence_gate_enabled) {
     }
 }
 
+$normalized_wf_period_configs = @()
+$wfPeriodIndex = 0
+foreach ($wfPeriod in $wf_period_configs) {
+    $wfPeriodIndex++
+    $periodLabel = if ($wfPeriod.PSObject.Properties.Name -contains 'Label' -and -not [string]::IsNullOrWhiteSpace([string]$wfPeriod.Label)) {
+        [string]$wfPeriod.Label
+    } else {
+        "period_$wfPeriodIndex"
+    }
+    $periodStart = [string]$wfPeriod.WfStartDate
+    $periodEnd = [string]$wfPeriod.WfEndDate
+    $periodStartModelVersion = $wfPeriod.StartModelVersion
+
+    if ([string]::IsNullOrWhiteSpace($periodStart) -or [string]::IsNullOrWhiteSpace($periodEnd)) {
+        throw "wf_period_configs[$($wfPeriodIndex - 1)] 缺少 WfStartDate 或 WfEndDate"
+    }
+    if ($skip_training -and $null -eq $periodStartModelVersion) {
+        throw "skip-training 模式要求每个时间段都设置 StartModelVersion，缺失时间段: $periodLabel"
+    }
+
+    $normalized_wf_period_configs += [PSCustomObject]@{
+        Label = $periodLabel
+        WfStartDate = $periodStart
+        WfEndDate = $periodEnd
+        StartModelVersion = $periodStartModelVersion
+    }
+}
+
+if ($normalized_wf_period_configs.Count -eq 0) {
+    throw "wf_period_configs 不能为空"
+}
+
+$batch_run_id = "wf_batch_{0}" -f (Get-Date -Format "yyyyMMdd_HHmmss")
+$batch_output_root = Join-Path $data_root ("walk_forward\batches\{0}" -f $batch_run_id)
+$batch_raw_dir = Join-Path $batch_output_root "raw"
+$batch_compare_output = Join-Path $batch_output_root "wf_comparison.xlsx"
+New-Item -ItemType Directory -Path $batch_raw_dir -Force | Out-Null
+
+$periodSummary = ($normalized_wf_period_configs | ForEach-Object {
+    "{0}:{1}~{2}" -f $_.Label, $_.WfStartDate, $_.WfEndDate
+}) -join "; "
+
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
 $count      = 0
 $failed     = 0
 
 # 计算总任务数（各列表长度的笛卡尔积）
-$totalTasks = $algorithm_list.Length *
+$totalTasks = $normalized_wf_period_configs.Length *
+              $algorithm_list.Length *
               $n_estimators_list.Length *
               $early_stopping_rounds_list.Length *
               $step_list.Length *
@@ -345,12 +398,16 @@ $totalTasks = $algorithm_list.Length *
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host "  Walk-forward 批量实验" -ForegroundColor Cyan
-Write-Host "  WF 区间    : $wf_start_date ~ $wf_end_date" -ForegroundColor Cyan
+Write-Host "  批次ID     : $batch_run_id" -ForegroundColor Cyan
+Write-Host "  时间段数   : $($normalized_wf_period_configs.Count)" -ForegroundColor Cyan
+Write-Host "  时间段列表 : $periodSummary" -ForegroundColor Cyan
 Write-Host "  总任务数   : $totalTasks" -ForegroundColor Cyan
 Write-Host "  数据目录   : $data_root" -ForegroundColor Cyan
+Write-Host "  批次目录   : $batch_output_root" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
 
+foreach ($wfPeriod in $normalized_wf_period_configs) {
 foreach ($algorithm in $algorithm_list) {
 foreach ($step in $step_list) {
 foreach ($train_window_years in $train_window_years_list) {
@@ -410,6 +467,11 @@ foreach ($position_sizing in $position_sizing_list) {
 foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     $count++
+    $wf_start_date = $wfPeriod.WfStartDate
+    $wf_end_date = $wfPeriod.WfEndDate
+    $period_label = $wfPeriod.Label
+    $start_model_version = $wfPeriod.StartModelVersion
+    $summary_csv_path = Join-Path $batch_raw_dir ("walk_forward_summary_{0}_{1:D4}.csv" -f $period_label, $count)
 
     # 构建命令字符串
     $pythonCmd = "py .\scripts\walk_forward.py" +
@@ -439,7 +501,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --data-root $data_root" +
                  " --early-stopping-rounds $early_stopping_rounds" +
                  " --early-stopping-metric $early_stopping_metric" +
-                 " --time-decay-half-life $time_decay_half_life"
+                 " --time-decay-half-life $time_decay_half_life" +
+                 " --batch-run-id $batch_run_id" +
+                 " --batch-period-label $period_label" +
+                 " --wf-summary-csv `"$summary_csv_path`""
 
     if (-not $rank_weight_enabled) {
         $pythonCmd += " --no-rank-weight"
@@ -649,7 +714,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     }
 
     Write-Host ""
-    Write-Host "[任务 $count / $totalTasks]" -ForegroundColor Green
+    Write-Host "[任务 $count / $totalTasks][时间段 $period_label][$wf_start_date ~ $wf_end_date]" -ForegroundColor Green
     Write-Host $pythonCmd -ForegroundColor Gray
     Write-Host ""
 
@@ -675,7 +740,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()
@@ -688,9 +753,9 @@ Write-Host "========================================================" -Foregroun
 # ── 自动汇总对比 ──────────────────────────────────────────────
 if ($run_compare_after) {
     Write-Host ""
-    Write-Host "[汇总对比] 正在运行 compare_walk_forward.py ..." -ForegroundColor Green
-    py .\scripts\compare_walk_forward.py --data-root $data_root
-    Write-Host "[汇总对比] 完成，输出: $data_root\walk_forward\wf_comparison.xlsx" -ForegroundColor Green
+    Write-Host "[汇总对比] 正在汇总本批次结果（含跨时间段稳定性）..." -ForegroundColor Green
+    py .\scripts\compare_walk_forward.py --raw-dir "$batch_raw_dir" --output "$batch_compare_output"
+    Write-Host "[汇总对比] 完成，输出: $batch_compare_output" -ForegroundColor Green
 }
 
 # ── 倒计时关机（可选）────────────────────────────────────────
