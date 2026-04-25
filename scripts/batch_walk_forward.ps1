@@ -52,7 +52,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators_list       = @(1500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.01)     #. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.009)     #. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -61,7 +61,7 @@ $reg_lambda_list         = @(5)         #. XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(700)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "auto"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
@@ -127,6 +127,7 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
+# 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 $bt_top_n_list           = @(20)            # 回测持仓 Top N
 $bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
@@ -134,72 +135,108 @@ $bt_initial_capital      = 1000000          # 回测初始资金（默认：100�
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
 $bt_min_list_days_list   = @(365)           # 最少上市天数
-$bt_max_weight_per_stock_list = @(0.15)     # 单股最大权重，$null=不限制，如 @(0.15, 0.20)
-$bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null=不限制，如 @(2, 3)
+# 以下组合约束也仅在 $oos_backtest = $true 时生效
+$bt_max_weight_per_stock_list = @(0.15)     # 单股最大权重，$null = 不限制，如 @(0.15, 0.20)
+$bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null = 不限制，如 @(2, 3)
 
-# ── 仓位管理模式──────────────────────────────
+# ── OOS 仓位管理模式（仅在 $oos_backtest = $true 时参与回测）──────
 # equal：等权 | score：按分数比例 | kelly：凯利公式 | half_kelly：半凯利（更稳健）
+# 仅当 mode 为 kelly / half_kelly 时，Kelly 参数才会真正生效
 $position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
 $kelly_vol_window                 = 60         # Kelly 波动率窗口（交易日）
 $kelly_max_leverage_list          = @(0.15)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
 $signal_gate_mode = "composite"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
+# 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
 $signal_gate_cost_multiplier_list = @(0.3)      # composite: 门控严格度扫描
 $signal_gate_round_trip_cost = 0.003            # composite: 往返交易成本估算（佣金+印花税+滑点，仅原始收益模式使用）
 $signal_gate_percentile_warmup = 5              # composite: 百分位归一化预热期（调仓次数）
-$signal_gate_quality_enabled = $true            # 滚动模型质量监控: $true 启用 | $false 禁用
+
+# 滚动模型质量监控子开关：仅在开启时才使用以下质量参数
+$signal_gate_quality_enabled = $true            # $true 启用 | $false 禁用
 $signal_gate_quality_window_list = @(3)         # 滚动质量回看调仓周期数
 $signal_gate_quality_threshold_list = @(0.4)    # 滚动质量最低 hit rate
 $signal_gate_quality_halflife = 4               # 滚动质量 EWM 半衰期
 
-# ── 盈亏动态持仓（提高换仓效率）──────────────────────────────────
-$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
-$early_exit_loss_threshold_list   = @(-0.07)    #-0.07 # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
-$early_exit_holding_ratio_list    = @(0.6)      #0.6???  # 亏损提前换出最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
-$profit_extension_threshold_list  = @(0.1)      #0.1   # 盈利延续持有阈值（pnl模式，可多值，如 @(0.03, 0.05, 0.10)）
-$profit_extension_days_list       = @(5)        #5??? baseline 对齐当前最佳防守型 run
-
-# ── 整体持仓止盈（整体浮盈达到目标后清仓并补位）──────────────────
-$take_profit_threshold_list   = @(0.15)      #0.15??? 可多值，$null=禁用，如 @($null, 0.15, 0.20)
-$take_profit_refill           = $false      # $true=整体止盈后自动补位买入
-
-# ── 空仓/持有期拖尾提前调仓 ────────────────────────────────────
-# $true  = 启用：当持仓全部清零或 cycle_day>=holding_period 且仍有残留盈利延续持仓时，
-#          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
-# $false = 禁用：严格等待下一个预定调仓日
-$enable_early_rebalance_on_empty = $true
-
-# ── MA250 长周期硬条件（系统性熊市保护, 门控）─────────────────────────
-$market_regime_ma250_hard_stop = $false      # $true 启用 | $false 禁用
-$market_regime_ma250_threshold = 1          # 触发阈值（大盘收益曲线/MA250 < 此值触发）
-$market_regime_ma250_exposure  = 0.9        # 触发后的仓位系数（0.0=完全空仓）
-$ma250_atr_scaling             = $true      # $true 启用 ATR 动态仓位缩放（仓位=base×MA(ATR,250)/CurrentATR）
-
-# ── OOS 动态 Top-N（按置信度调整选股数量, 0406引入）─────────────────────────────
+# 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
 $signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用
 $signal_gate_topn_high_multiplier = 0.6         # 高置信度缩减系数（<1，集中持股，如 top_n=17 → 10只）
 $signal_gate_topn_low_multiplier  = 1.5         # 中低置信度扩大系数（>1，分散持股，如 top_n=17 → 25只）
 
-# ── OOS 换手率约束（持仓保留奖励, 0407引入）─────────────────────────────────────
-$holding_bonus_enabled = $false                 # $true 启用 | $false 禁用（对已持仓股票给予分数加成，降低换手）
+# 持仓保留奖励子开关：仅在开启时对已持仓股票给予分数加成，降低换手
+$holding_bonus_enabled = $false                 # $true 启用 | $false 禁用
 $holding_bonus_sigma   = 0.5                    # 奖励幅度（截面分数标准差的倍数，0.3~1.0）
 
-# ── OOS 旧版置信度门控（signal_gate_mode="legacy" 时生效）────────────
-$signal_confidence_gate_enabled = $false  # $true 启用 | $false 禁用（仅 legacy 模式）
+# 旧版置信度门控子开关：仅在 $signal_gate_mode = "legacy" 且开关为 $true 时生效
+$signal_confidence_gate_enabled = $false
 $signal_confidence_gate_top_k_list = @(20)
 $signal_confidence_gate_threshold_sets = @( "0.01 0.02 0.10" )
 $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
-# ── OOS 止损（关闭时请保持各阈值列表为单值，避免重复任务）─────────
-$bt_stop_loss_enabled                 = $true  # $true 启用 | $false 禁用
-$bt_stop_loss_drawdown_pct_list       = @(30.0) # 回撤止损阈值（%）
-$bt_stop_loss_trailing_enabled        = $false  # $true 启用移动止损 | $false 禁用
-$bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
-$bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
+# ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
+$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
+# 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
-# ── OOS ECT 权益曲线交易（关闭时请保持相关列表为单值）────────────
+# 1) 亏损提前换出：持有达到 early_exit_holding_ratio × 持有期后，
+#    若收益率 <= early_exit_loss_threshold，则提前换出
+$early_exit_loss_threshold_list   = @(-0.07)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
+$early_exit_holding_ratio_list    = @(0.6)      # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
+
+# 2) 盈利延续持有：仅在持有期满后进入该分支
+#    pnl      = 浮盈率判据（兼容原行为）
+#    strength = 5 维强势度评分判据
+#    disabled = 持有期满直接卖出，不做延续
+$profit_extension_mode_list = @('disabled')     # 可多值如 @('pnl', 'strength', 'disabled')
+# 仅在 $profit_extension_mode_list 扫到 "pnl" 时生效
+$profit_extension_threshold_list  = @(0.1)      # 盈利延续阈值（浮盈率，可多值，如 @(0.03, 0.05, 0.10)）
+$profit_extension_days_list       = @(5)        # 额外延续天数（交易日）
+# 仅在 $profit_extension_mode_list 扫到 "strength" 时生效
+$profit_extension_strength_threshold_list = @(0.75) # strength 模式延续阈值 [0,1]
+
+# 3) ATR 动态亏损阈值：在亏损提前换出分支中，用 ATR 替代固定亏损阈值
+#    需同时满足 $enable_profit_based_holding = $true 且 $use_atr_for_early_exit = $true
+$use_atr_for_early_exit           = $false   # $true 启用 | $false 禁用
+$atr_multiplier_list              = @(2.8)   # ATR 倍数（仅启用 ATR 止损时生效）
+
+# 4) 亏损提前换出二次确认：仅在 early_exit 条件已触发后再做一次强势度否决
+#    disabled      = 原硬卖
+#    strength_veto = 评分高于保护阈值时否决卖出（缓刑）
+$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled', 'strength_veto')
+# 仅在 $early_exit_mode_list 扫到 'strength_veto' 时生效
+$early_exit_strength_protect_threshold_list   = @(0.1)         # strength_veto 保护阈值 [0,1]
+$early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
+
+# ── 整体持仓止盈（独立于 $enable_profit_based_holding）──────────────
+$take_profit_threshold_list   = @(0.15)      # 可多值；$null = 禁用，如 @($null, 0.15, 0.20)
+# 仅在 $take_profit_threshold_list 不为 $null 时，$take_profit_refill 才有意义
+$take_profit_refill           = $false       # $true = 整体止盈后自动补位买入
+
+# ── 空仓/持有期拖尾提前调仓（独立开关，常与盈利延续/整体止盈联动）────
+# $true  = 启用：当持仓全部清零或 cycle_day >= holding_period 且仍有残留盈利延续持仓时，
+#          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
+# $false = 禁用：严格等待下一个预定调仓日
+$enable_early_rebalance_on_empty = $true
+
+# ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
+$market_regime_ma250_hard_stop = $false      # $true 启用 | $false 禁用
+# 以下参数仅在 $market_regime_ma250_hard_stop = $true 时生效
+$market_regime_ma250_threshold = 1           # 触发阈值（大盘收益曲线 / MA250 < 此值触发）
+$market_regime_ma250_exposure  = 0.9         # 触发后的仓位系数（0.0 = 完全空仓）
+$ma250_atr_scaling             = $true       # $true 启用 ATR 动态仓位缩放（仓位 = base × MA(ATR,250) / CurrentATR）
+
+# ── OOS 止损（总开关）────────────────────────────────────────
+$bt_stop_loss_enabled                 = $true   # $true 启用 | $false 禁用
+# 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
+$bt_stop_loss_drawdown_pct_list       = @(30.0) # 回撤止损阈值（%）
+$bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
+$bt_stop_loss_trailing_enabled        = $false  # 移动止损子开关：$true 启用 | $false 禁用
+# 仅在 $bt_stop_loss_enabled = $true 且 $bt_stop_loss_trailing_enabled = $true 时生效
+$bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
+
+# ── OOS ECT 权益曲线交易（总开关）────────────────────────────
 $bt_equity_curve_enabled                  = $false  # $true 启用 | $false 禁用
+# 以下参数仅在 $bt_equity_curve_enabled = $true 时生效
 $bt_equity_curve_drawdown_thresholds      = @(5.0, 10.0, 15.0, 20.0)
 $bt_equity_curve_exposure_levels          = @(0.8, 0.6, 0.4, 0.2)
 $bt_equity_curve_ma_short_list            = @(5)
@@ -208,43 +245,32 @@ $bt_equity_curve_recovery_mode_list       = @("gradual") # gradual | immediate
 $bt_equity_curve_recovery_step_list       = @(0.25)
 $bt_equity_curve_recovery_delay_periods_list = @(0)
 
-# ── 行业动量过滤（剔除弱势行业股票，自动补位）──────────────────
+# ── 行业动量过滤（总开关）────────────────────────────────────
 $industry_momentum_filter     = $false  # $true 启用 | $false 禁用
+# 仅在 $industry_momentum_filter = $true 时生效
 $industry_momentum_bottom_pct = 0.5     # 剔除排名后 X% 的行业（0~1），默认 0.2
 
-# ── 行业轮动加权（按行业动量排名对候选分数做乘性调整）─────────────
+# ── 行业轮动加权（总开关）────────────────────────────────────
 $industry_rotation_enhanced       = $false     # $true 启用 | $false 禁用（独立于上方硬过滤）
+# 仅在 $industry_rotation_enhanced = $true 时生效
 $industry_rotation_alpha_list     = @(0.3)#1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0)     # 加权强度（可多值，如 @(0.1, 0.3, 0.5)）
 
-# ── 市场择时仓位管理 ─────────────────────────────────────────
-$market_regime                = $false       # $true 启用 | $false 禁用
+# ── 市场择时仓位管理（总开关）────────────────────────────────
+$market_regime                = $false            # $true 启用 | $false 禁用
+# 以下参数仅在 $market_regime = $true 时生效
 $market_regime_mode_list      = @("vol_target")  # binary | vol_target | trend | combined
-$market_regime_bear_threshold_list = @(-0.03)   # binary 模式：mkt_ret_avg_20 低于此值判定为熊市
-$market_regime_bear_exposure  = 0.3             # binary 模式：熊市仓位系数（0~1）
-$market_regime_vol_target_list = @(0.20)   # 默认只围绕均衡区间做更窄扫描
-$market_regime_trend_threshold = 1.0            # trend/combined 模式：mkt_ma_trend 低于此值降仓
-$market_regime_min_exposure    = 0.2            # 非 binary 模式：最低仓位下限
+# 仅在 mode = binary 时，bear_threshold / bear_exposure 真正决定熊市降仓
+$market_regime_bear_threshold_list = @(-0.03)    # mkt_ret_avg_20 低于此值判定为熊市
+$market_regime_bear_exposure  = 0.3              # binary 模式熊市仓位系数（0~1）
+# vol_target / combined 模式会使用 vol_target；trend / combined 模式会使用 trend_threshold
+$market_regime_vol_target_list = @(0.20)         # 默认只围绕均衡区间做更窄扫描
+$market_regime_trend_threshold = 1.0             # trend / combined 模式：mkt_ma_trend 低于此值降仓
+$market_regime_min_exposure    = 0.2             # 非 binary 模式：最低仓位下限
 $market_regime_combine_method  = "min"          # combined 模式组合方式：min | multiply
-$market_regime_trend_guard     = $true          # combined 模式趋势保护：上行趋势跳过 vol 降仓
-$market_regime_drawdown_guard  = $false         # 回撤保护：已大幅下跌时停止降仓，避免底部踏空
-$market_regime_drawdown_threshold = -0.08       # 回撤保护阈值：mkt_drawdown_20 低于此值停止降仓
-
-# 0411新增strength
-# ── 盈利延续判据模式(新) ──
-#   pnl=单一浮盈率(兼容原行为) | strength=5维度强势度评分 | disabled=关闭延续
-$profit_extension_mode_list              = @('disabled')     # 可多值如 @('pnl','strength')
-$profit_extension_strength_threshold_list = @(0.75)      # strength 模式延续阈值 [0,1]
-
-# ── ATR 动态阈值与仓位缩放（需先构建含 atr_14 的特征）──────────────
-$use_atr_for_early_exit           = $false   # $true 启用 ATR 动态止损阈值（需同时开启 $enable_profit_based_holding）
-$atr_multiplier_list              = @(2.8)   # baseline 对齐当前最佳防守型 run（仅启用 ATR 止损时生效）
-
-# 0412新增strength_veto
-# ── 亏损提前换出二次确认（strength_veto 门控）──────────────────────
-#   disabled=原硬卖(默认) | strength_veto=触发后用强势度评分二次确认,评分高时否决卖出(缓刑)
-$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled','strength_veto')
-$early_exit_strength_protect_threshold_list   = @(0.1)        # strength_veto 保护阈值 [0,1]
-$early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
+$market_regime_trend_guard     = $true           # combined 模式趋势保护：上行趋势跳过 vol 降仓
+$market_regime_drawdown_guard  = $false          # 回撤保护子开关：已大幅下跌时停止降仓，避免底部踏空
+# 仅在 $market_regime_drawdown_guard = $true 时生效
+$market_regime_drawdown_threshold = -0.08        # mkt_drawdown_20 低于此值停止降仓
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"

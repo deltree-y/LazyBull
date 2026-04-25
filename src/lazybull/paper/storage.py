@@ -5,10 +5,360 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
+import yaml
 from loguru import logger
 
 from ..common.config import get_paper_root
+from ..common.trading_config import TradingConfig
 from .models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight, TradeInstruction
+
+
+CONFIG_SECTION_LAYOUT = [
+    (
+        "model",
+        "模型与集成配置",
+        [
+            "model_version 为主模型版本，null 表示读取最新注册模型。",
+            "model_version_b 非 null 时启用双模型集成，ensemble_weight_a 表示模型 A 权重。",
+        ],
+        ["model_version", "model_version_b", "ensemble_weight_a"],
+    ),
+    (
+        "signal_gate",
+        "信号入口门控与动态 Top-N",
+        [
+            "统一管理旧版置信度门控、composite 门控、滚动质量监控和动态 Top-N。",
+            "signal_gate_mode 可选 legacy / composite / disabled。",
+        ],
+        [
+            "signal_confidence_gate_enabled",
+            "signal_confidence_gate_top_k",
+            "signal_confidence_gate_thresholds",
+            "signal_confidence_gate_exposure_levels",
+            "signal_gate_mode",
+            "signal_gate_cost_multiplier",
+            "signal_gate_round_trip_cost",
+            "signal_gate_quality_enabled",
+            "signal_gate_quality_window",
+            "signal_gate_quality_threshold",
+            "signal_gate_quality_halflife",
+            "signal_gate_percentile_warmup",
+            "signal_gate_dynamic_topn",
+            "signal_gate_topn_high_multiplier",
+            "signal_gate_topn_low_multiplier",
+        ],
+    ),
+    (
+        "portfolio",
+        "组合约束与调仓节奏",
+        [
+            "top_n 为目标持仓数，rebalance_freq 为调仓频率（交易日）。",
+            "max_per_industry / max_weight_per_stock 用于行业和个股约束。",
+        ],
+        [
+            "top_n",
+            "rebalance_freq",
+            "stagger_tranches",
+            "max_per_industry",
+            "max_weight_per_stock",
+            "enable_early_rebalance_on_empty",
+            "exclude_st",
+            "min_list_days",
+        ],
+    ),
+    (
+        "holding_management",
+        "持仓保留奖励与盈亏动态持仓",
+        [
+            "holding_bonus_* 用于降低换手；profit_extension_* / early_exit_* 用于盈利延续和亏损换出。",
+            "profit_extension_mode 可选 pnl / strength / disabled。",
+        ],
+        [
+            "holding_bonus_enabled",
+            "holding_bonus_sigma",
+            "enable_profit_based_holding",
+            "profit_extension_mode",
+            "profit_extension_strength_threshold",
+            "profit_extension_strength_weights",
+            "early_exit_loss_threshold",
+            "early_exit_holding_ratio",
+            "profit_extension_threshold",
+            "profit_extension_days",
+            "early_exit_mode",
+            "early_exit_strength_protect_threshold",
+            "early_exit_max_reprieves",
+            "use_atr_for_early_exit",
+            "atr_multiplier",
+            "take_profit_threshold",
+            "take_profit_refill",
+        ],
+    ),
+    (
+        "stop_loss",
+        "止损参数",
+        [
+            "stop_loss_enabled 为总开关，支持回撤止损、移动止损和连续跌停止损。",
+        ],
+        [
+            "stop_loss_enabled",
+            "stop_loss_drawdown_pct",
+            "stop_loss_trailing_enabled",
+            "stop_loss_trailing_pct",
+            "stop_loss_consecutive_limit_down",
+        ],
+    ),
+    (
+        "equity_curve",
+        "权益曲线交易（ECT）",
+        [
+            "drawdown_thresholds 和 exposure_levels 需要一一对应。",
+        ],
+        [
+            "equity_curve_enabled",
+            "equity_curve_drawdown_thresholds",
+            "equity_curve_exposure_levels",
+            "equity_curve_ma_short",
+            "equity_curve_ma_long",
+            "equity_curve_recovery_mode",
+            "equity_curve_recovery_step",
+            "equity_curve_recovery_delay_periods",
+        ],
+    ),
+    (
+        "market_regime",
+        "市场择时仓位管理",
+        [
+            "market_regime_mode 可选 binary / vol_target / trend / combined。",
+            "MA250 硬条件和 ATR 缩放也在本段统一配置。",
+        ],
+        [
+            "market_regime_enabled",
+            "market_regime_mode",
+            "market_regime_bear_threshold",
+            "market_regime_bear_exposure",
+            "market_regime_vol_target",
+            "market_regime_trend_threshold",
+            "market_regime_min_exposure",
+            "market_regime_combine_method",
+            "market_regime_trend_guard",
+            "market_regime_drawdown_guard",
+            "market_regime_drawdown_threshold",
+            "market_regime_ma250_hard_stop",
+            "market_regime_ma250_threshold",
+            "market_regime_ma250_exposure",
+            "market_regime_ma250_atr_scaling",
+        ],
+    ),
+    (
+        "industry",
+        "行业过滤与行业轮动加权",
+        [
+            "industry_momentum_filter 为硬过滤；industry_rotation_enhanced 为软加权。",
+        ],
+        [
+            "industry_momentum_filter",
+            "industry_momentum_bottom_pct",
+            "industry_rotation_enhanced",
+            "industry_rotation_alpha",
+        ],
+    ),
+    (
+        "position_management",
+        "仓位管理模式",
+        [
+            "position_sizing 可选 equal / score / kelly / half_kelly。",
+            "Kelly 模式使用 kelly_vol_window 和 kelly_max_leverage。",
+        ],
+        ["position_sizing", "kelly_vol_window", "kelly_max_leverage"],
+    ),
+    (
+        "paper_trade",
+        "纸面交易执行参数",
+        [
+            "buy_price / sell_price 控制 T0/T1 默认价格口径。",
+            "horizon 需要与模型标签周期保持一致。",
+        ],
+        ["buy_price", "sell_price", "initial_capital", "horizon", "universe"],
+    ),
+]
+
+CONFIG_SECTION_NAMES = {section_name for section_name, _, _, _ in CONFIG_SECTION_LAYOUT}
+CONFIG_FIELD_NAMES = {
+    field_name
+    for _, _, _, field_names in CONFIG_SECTION_LAYOUT
+    for field_name in field_names
+}
+
+CONFIG_SECTION_RENDER_GROUPS = {
+    "model": [
+        ("基础模型参数（始终生效）", ["model_version"]),
+        (
+            "以下参数仅在 model_version_b 非 null 时生效",
+            ["model_version_b", "ensemble_weight_a"],
+        ),
+    ],
+    "signal_gate": [
+        ("门控模式总开关（disabled 表示整体关闭）", ["signal_gate_mode"]),
+        (
+            "以下参数在 signal_gate_mode=legacy / composite 时都会参与头部候选评估",
+            ["signal_confidence_gate_top_k"],
+        ),
+        (
+            "以下参数仅在 signal_gate_mode=legacy 时生效",
+            [
+                "signal_confidence_gate_enabled",
+                "signal_confidence_gate_thresholds",
+                "signal_confidence_gate_exposure_levels",
+            ],
+        ),
+        (
+            "以下参数仅在 signal_gate_mode=composite 时生效",
+            [
+                "signal_gate_cost_multiplier",
+                "signal_gate_round_trip_cost",
+                "signal_gate_percentile_warmup",
+            ],
+        ),
+        (
+            "滚动质量监控子开关（window / threshold / halflife 仅在 enabled=true 时生效）",
+            [
+                "signal_gate_quality_enabled",
+                "signal_gate_quality_window",
+                "signal_gate_quality_threshold",
+                "signal_gate_quality_halflife",
+            ],
+        ),
+        (
+            "动态 Top-N 子开关（乘数仅在 enabled=true 时生效）",
+            [
+                "signal_gate_dynamic_topn",
+                "signal_gate_topn_high_multiplier",
+                "signal_gate_topn_low_multiplier",
+            ],
+        ),
+    ],
+    "portfolio": [("基础组合参数（始终生效）", CONFIG_SECTION_LAYOUT[2][3])],
+    "holding_management": [
+        (
+            "持仓保留奖励子开关（sigma 仅在 enabled=true 时生效）",
+            ["holding_bonus_enabled", "holding_bonus_sigma"],
+        ),
+        (
+            "盈亏动态持仓总开关（关闭后以下盈利延续 / 亏损换出参数不生效）",
+            ["enable_profit_based_holding"],
+        ),
+        (
+            "以下参数仅在 enable_profit_based_holding=true 时生效",
+            ["profit_extension_mode", "early_exit_loss_threshold", "early_exit_holding_ratio", "early_exit_mode"],
+        ),
+        (
+            "以下参数仅在 profit_extension_mode=pnl 时生效",
+            ["profit_extension_threshold", "profit_extension_days"],
+        ),
+        (
+            "以下参数仅在 profit_extension_mode=strength 时生效",
+            ["profit_extension_strength_threshold", "profit_extension_strength_weights"],
+        ),
+        (
+            "以下参数仅在 early_exit_mode=strength_veto 时生效",
+            ["early_exit_strength_protect_threshold", "early_exit_max_reprieves"],
+        ),
+        (
+            "ATR 动态阈值子开关（atr_multiplier 仅在 enabled=true 时生效）",
+            ["use_atr_for_early_exit", "atr_multiplier"],
+        ),
+        (
+            "整体止盈（独立于 enable_profit_based_holding）",
+            ["take_profit_threshold", "take_profit_refill"],
+        ),
+    ],
+    "stop_loss": [
+        (
+            "止损总开关（关闭后以下止损参数整体不生效）",
+            [
+                "stop_loss_enabled",
+                "stop_loss_drawdown_pct",
+                "stop_loss_consecutive_limit_down",
+            ],
+        ),
+        (
+            "移动止损子开关（trailing_pct 仅在 enabled=true 时生效）",
+            ["stop_loss_trailing_enabled", "stop_loss_trailing_pct"],
+        ),
+    ],
+    "equity_curve": [
+        (
+            "ECT 总开关（关闭后以下参数整体不生效）",
+            [
+                "equity_curve_enabled",
+                "equity_curve_drawdown_thresholds",
+                "equity_curve_exposure_levels",
+                "equity_curve_ma_short",
+                "equity_curve_ma_long",
+                "equity_curve_recovery_mode",
+                "equity_curve_recovery_step",
+                "equity_curve_recovery_delay_periods",
+            ],
+        )
+    ],
+    "market_regime": [
+        (
+            "市场择时总开关（关闭后以下 binary / vol_target / trend / combined 参数不生效）",
+            ["market_regime_enabled", "market_regime_mode"],
+        ),
+        (
+            "以下参数在 market_regime_enabled=true 且 mode=binary 时生效",
+            ["market_regime_bear_threshold", "market_regime_bear_exposure"],
+        ),
+        (
+            "以下参数在 market_regime_enabled=true 且 mode=vol_target 时生效",
+            ["market_regime_vol_target"],
+        ),
+        (
+            "以下参数在 market_regime_enabled=true 且 mode=trend / combined 时生效",
+            [
+                "market_regime_trend_threshold",
+                "market_regime_min_exposure",
+                "market_regime_trend_guard",
+            ],
+        ),
+        (
+            "以下参数在 market_regime_enabled=true 且 mode=combined 时生效",
+            ["market_regime_combine_method"],
+        ),
+        (
+            "回撤保护子开关（drawdown_threshold 仅在 enabled=true 时生效）",
+            ["market_regime_drawdown_guard", "market_regime_drawdown_threshold"],
+        ),
+        (
+            "MA250 独立开关（可在 market_regime_enabled=false 时单独生效）",
+            [
+                "market_regime_ma250_hard_stop",
+                "market_regime_ma250_threshold",
+                "market_regime_ma250_exposure",
+                "market_regime_ma250_atr_scaling",
+            ],
+        ),
+    ],
+    "industry": [
+        (
+            "行业动量过滤子开关（bottom_pct 仅在 enabled=true 时生效）",
+            ["industry_momentum_filter", "industry_momentum_bottom_pct"],
+        ),
+        (
+            "行业轮动加权子开关（alpha 仅在 enabled=true 时生效）",
+            ["industry_rotation_enhanced", "industry_rotation_alpha"],
+        ),
+    ],
+    "position_management": [
+        ("仓位管理模式（始终生效）", ["position_sizing"]),
+        (
+            "以下参数仅在 position_sizing=kelly / half_kelly 时生效",
+            ["kelly_vol_window", "kelly_max_leverage"],
+        ),
+    ],
+    "paper_trade": [("基础执行参数（始终生效）", CONFIG_SECTION_LAYOUT[9][3])],
+}
 
 
 class PaperStorage:
@@ -372,12 +722,134 @@ class PaperStorage:
         Args:
             config: 配置字典
         """
-        file_path = self.root_path / "config.json"
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        
-        logger.info(f"保存全局配置: {file_path}")
+        normalized_config = self._normalize_config(config)
+        self._write_yaml_config(normalized_config)
+        logger.info(f"保存全局配置: {self.root_path / 'config.yaml'}")
+
+    def _render_config_yaml(self, config: dict) -> str:
+        """渲染带中文注释的 YAML 配置模板。"""
+        lines = [
+            "# 纸面交易主配置（仅保留纸面交易实际可用参数）",
+            "# 说明：优先编辑本文件；paper_trade.py config 命令会按相同的开关分组刷新本模板。",
+            "# 说明：同一开关控制的参数会紧跟在该开关后面，便于判断当前是否生效。",
+            "",
+        ]
+
+        for section_name, section_title, section_comments, field_names in CONFIG_SECTION_LAYOUT:
+            section_config = {
+                field_name: config[field_name]
+                for field_name in field_names
+                if field_name in config
+            }
+            if not section_config:
+                continue
+
+            lines.append("# =============================================================================")
+            lines.append(f"# {section_title}")
+            lines.append("# =============================================================================")
+            for comment in section_comments:
+                lines.append(f"# {comment}")
+            lines.append(f"{section_name}:")
+
+            rendered_fields = set()
+            render_groups = CONFIG_SECTION_RENDER_GROUPS.get(
+                section_name, [("基础参数（始终生效）", field_names)]
+            )
+            for group_index, (group_comment, group_field_names) in enumerate(render_groups):
+                present_fields = [
+                    field_name
+                    for field_name in group_field_names
+                    if field_name in section_config and field_name not in rendered_fields
+                ]
+                if not present_fields:
+                    continue
+                if group_index > 0:
+                    lines.append("")
+                if group_comment:
+                    lines.append(f"  # {group_comment}")
+                for field_name in present_fields:
+                    dumped_field = yaml.safe_dump(
+                        {field_name: section_config[field_name]},
+                        allow_unicode=True,
+                        sort_keys=False,
+                        default_flow_style=False,
+                    ).rstrip()
+                    for line in dumped_field.splitlines():
+                        lines.append(f"  {line}")
+                    rendered_fields.add(field_name)
+
+            remaining_fields = [
+                field_name for field_name in field_names if field_name in section_config and field_name not in rendered_fields
+            ]
+            if remaining_fields:
+                if rendered_fields:
+                    lines.append("")
+                lines.append("  # 其他基础参数")
+                for field_name in remaining_fields:
+                    dumped_field = yaml.safe_dump(
+                        {field_name: section_config[field_name]},
+                        allow_unicode=True,
+                        sort_keys=False,
+                        default_flow_style=False,
+                    ).rstrip()
+                    for line in dumped_field.splitlines():
+                        lines.append(f"  {line}")
+            lines.append("")
+
+        extra_config = {
+            key: value
+            for key, value in config.items()
+            if key not in CONFIG_FIELD_NAMES
+        }
+        if extra_config:
+            lines.append("# =============================================================================")
+            lines.append("# 兼容扩展字段")
+            lines.append("# =============================================================================")
+            lines.append("# 非 TradingConfig 标准字段会放在这里，避免手工新增字段被覆盖。")
+            lines.append("extra:")
+            dumped_extra = yaml.safe_dump(
+                extra_config,
+                allow_unicode=True,
+                sort_keys=False,
+                default_flow_style=False,
+            ).rstrip()
+            for line in dumped_extra.splitlines():
+                lines.append(f"  {line}")
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
+
+    def _write_yaml_config(self, config: dict) -> None:
+        """写入带注释的 YAML 主配置文件。"""
+        file_path = self.root_path / "config.yaml"
+        file_path.write_text(self._render_config_yaml(config), encoding="utf-8")
+
+    def _flatten_grouped_config(self, config: dict) -> dict:
+        """将分段 YAML 配置展平为 TradingConfig 兼容的扁平字典。"""
+        if not isinstance(config, dict):
+            return {}
+
+        flattened = {}
+        for key, value in config.items():
+            if key in CONFIG_SECTION_NAMES.union({"extra"}) and isinstance(value, dict):
+                flattened.update(value)
+            else:
+                flattened[key] = value
+        return flattened
+
+    def _normalize_config(self, config: dict) -> dict:
+        """将配置补齐为完整 TradingConfig 视图。"""
+        normalized = self._flatten_grouped_config(config)
+        if "position_sizing" not in normalized and "weight_method" in normalized:
+            normalized["position_sizing"] = normalized["weight_method"]
+
+        trading_config = TradingConfig.from_dict(normalized).to_dict()
+        extra_keys = {
+            key: value
+            for key, value in normalized.items()
+            if key not in trading_config and key != "weight_method"
+        }
+        return {**trading_config, **extra_keys}
     
     def load_config(self) -> Optional[dict]:
         """读取全局配置
@@ -385,16 +857,14 @@ class PaperStorage:
         Returns:
             配置字典，不存在返回None
         """
-        file_path = self.root_path / "config.json"
-        
-        if not file_path.exists():
+        yaml_path = self.root_path / "config.yaml"
+        if not yaml_path.exists():
             return None
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        
-        #logger.info(f"读取全局配置: {file_path}")
-        return config
+
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
+
+        return self._normalize_config(config)
     
     def save_stop_loss_state(self, state: dict) -> None:
         """保存止损监控状态
@@ -468,6 +938,25 @@ class PaperStorage:
             state = json.load(f)
 
         return state
+
+    def save_strategy_state(self, state: dict) -> None:
+        """保存纸面交易的策略运行状态。"""
+        file_path = self.state_path / "strategy_state.json"
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+
+        logger.debug(f"保存策略状态: {file_path}")
+
+    def load_strategy_state(self) -> dict:
+        """读取纸面交易的策略运行状态。"""
+        file_path = self.state_path / "strategy_state.json"
+
+        if not file_path.exists():
+            return {}
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
 
     def save_instructions(self, trade_date: str, instructions: List[TradeInstruction]) -> None:
         """保存交易指令列表
@@ -721,6 +1210,14 @@ class PaperStorage:
             logger.info("清空延迟卖出队列")
         else:
             logger.info("延迟卖出队列文件不存在，跳过")
+
+        # 6.5 清空策略状态
+        strategy_state_file = self.state_path / "strategy_state.json"
+        if strategy_state_file.exists():
+            strategy_state_file.unlink()
+            logger.info("清空策略状态")
+        else:
+            logger.info("策略状态文件不存在，跳过")
         
         # 7. 回滚 rebalance_state.json
         rebalance_state = self.load_rebalance_state()

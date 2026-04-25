@@ -132,7 +132,11 @@ class TradingConfig:
 
     # ── ATR 动态止损 ──
     use_atr_for_early_exit: bool = False  # 用ATR替代固定阈值
-    early_exit_atr_multiplier: float = 2.0  # ATR 动态止损乘数
+    atr_multiplier: float = 2.0  # ATR 动态止损乘数
+
+    # ── 整体止盈 ──
+    take_profit_threshold: Optional[float] = None  # 整体浮盈阈值（None=禁用）
+    take_profit_refill: bool = True  # 整体止盈后是否自动补位
 
     # ── 其他（仅 paper_trade 使用，backtest 不需要） ──
     buy_price: str = "close"
@@ -151,7 +155,13 @@ class TradingConfig:
         对缺失的键使用 dataclass 默认值。
         """
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered = {k: v for k, v in d.items() if k in valid_keys}
+        normalized = dict(d)
+        if "position_sizing" not in normalized and "weight_method" in normalized:
+            normalized["position_sizing"] = normalized["weight_method"]
+        # 向后兼容旧字段名
+        if "atr_multiplier" not in normalized and "early_exit_atr_multiplier" in normalized:
+            normalized["atr_multiplier"] = normalized["early_exit_atr_multiplier"]
+        filtered = {k: v for k, v in normalized.items() if k in valid_keys}
         return cls(**filtered)
 
     @classmethod
@@ -164,6 +174,9 @@ class TradingConfig:
         """
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         args_dict = vars(args)
+        if "atr_multiplier" not in args_dict and "early_exit_atr_multiplier" in args_dict:
+            args_dict["atr_multiplier"] = args_dict["early_exit_atr_multiplier"]
+
         d = {k: v for k, v in args_dict.items() if k in valid_keys}
 
         # 合并盈利延续持有强势度权重（5 个 CLI 参数 → dict 字段）
@@ -760,10 +773,34 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         help="用ATR动态阈值替代固定early_exit_loss_threshold",
     )
     parser.add_argument(
+        "--atr-multiplier",
         "--early-exit-atr-multiplier",
+        dest="atr_multiplier",
         type=float,
         default=2.0,
         help="ATR动态止损乘数（默认2.0）",
+    )
+
+    # ── 整体止盈 ──
+    parser.add_argument(
+        "--take-profit-threshold",
+        type=float,
+        default=None,
+        help="整体持仓止盈阈值（如 0.15 表示整体浮盈15%%时清仓，默认禁用）",
+    )
+    parser.add_argument(
+        "--no-take-profit-refill",
+        dest="take_profit_refill",
+        action="store_false",
+        default=True,
+        help="整体止盈后不触发补位买入（默认开启补位）",
+    )
+    parser.add_argument(
+        "--no-early-rebalance-on-empty",
+        dest="enable_early_rebalance_on_empty",
+        action="store_false",
+        default=True,
+        help="禁用空仓/持有期拖尾时的提前调仓（默认启用）",
     )
 
     # ── paper_trade 专用 ──

@@ -512,7 +512,7 @@ def test_reset_t0_full_rollback(temp_storage_for_reset_t0):
     nav_file = storage.nav_path / "nav.parquet"
     assert not nav_file.exists()
 
-    # config.json 仍然存在
+    # config.yaml 仍然存在
     config = storage.load_config()
     assert config is not None
     assert config['initial_capital'] == 100000.0

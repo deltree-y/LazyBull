@@ -56,7 +56,7 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
     storage = PaperStorage()
     config = storage.load_config()
     if not config:
-        return "未找到配置文件，请先运行 config 命令设置配置。"
+        return "未找到配置文件，请先编辑 data/paper/config.yaml 或运行 config 命令设置配置。"
 
     registry = ModelRegistry(models_dir=models_dir or get_models_root())
     models = registry.list_models()
@@ -225,7 +225,7 @@ def run_main(args):
     config = storage.load_config()
     
     if config is None:
-        logger.error("未找到配置文件，请先运行 config 命令设置配置")
+        logger.error("未找到配置文件，请先编辑 data/paper/config.yaml 或运行 config 命令设置配置")
         logger.error("示例: python scripts/paper_trade.py config --buy-price close --sell-price close --top-n 5")
         sys.exit(1)
     
@@ -331,6 +331,12 @@ def run_main(args):
         _check_early_exit(runner, corrected_date, config)
     else:
         logger.info("亏损提前换出未启用，跳过")
+
+    logger.info("")
+    logger.info("-" * 80)
+    logger.info("步骤1.75: 检查整体止盈")
+    logger.info("-" * 80)
+    _check_take_profit(runner, corrected_date, config)
 
     # 6. 执行延迟卖出队列
     logger.info("")
@@ -482,6 +488,89 @@ def _check_early_exit(
     return actions
 
 
+def _check_take_profit(
+    runner: PaperTradingRunner,
+    trade_date: str,
+    config: dict,
+) -> List[Dict]:
+    """检查整体止盈触发，命中后写入延迟卖出队列。"""
+    threshold = config.get("take_profit_threshold")
+    if threshold is None:
+        logger.info("整体止盈未启用，跳过")
+        return []
+
+    positions = runner.account.get_positions()
+    if not positions:
+        logger.info("当前无持仓，跳过整体止盈检查")
+        return []
+
+    strategy_state = runner.paper_storage.load_strategy_state()
+    last_rebalance_nav = strategy_state.get("last_rebalance_nav")
+    if not last_rebalance_nav or last_rebalance_nav <= 0:
+        logger.info("整体止盈基准净值缺失，跳过")
+        return []
+
+    buy_prices, sell_prices = runner._load_prices(
+        trade_date, config["buy_price"], config["sell_price"]
+    )
+    all_prices = {**sell_prices, **buy_prices}
+    if not all_prices:
+        logger.warning("无法加载整体止盈所需价格数据，跳过")
+        return []
+
+    current_nav = runner.account.get_total_value(all_prices)
+    profit_rate = (current_nav - last_rebalance_nav) / last_rebalance_nav
+    if profit_rate < threshold:
+        logger.info(
+            f"整体止盈未触发: 本轮收益率={profit_rate:.2%}, 阈值={threshold:.2%}"
+        )
+        return []
+
+    from src.lazybull.paper.models import PendingSell
+
+    existing_pending = {sell.ts_code for sell in runner.broker.pending_sells}
+    actions = []
+    for ts_code, pos in positions.items():
+        if ts_code in existing_pending:
+            continue
+        sell_shares = (pos.shares // 100) * 100
+        if sell_shares <= 0:
+            continue
+        reason = f"整体止盈: 本轮收益率={profit_rate:.2%} >= {threshold:.2%}"
+        runner.broker.pending_sells.append(
+            PendingSell(
+                ts_code=ts_code,
+                shares=sell_shares,
+                target_weight=0.0,
+                reason=reason,
+                create_date=trade_date,
+                attempts=0,
+            )
+        )
+        actions.append(
+            {
+                "ts_code": ts_code,
+                "shares": sell_shares,
+                "reason": reason,
+                "can_execute": True,
+            }
+        )
+
+    if not actions:
+        logger.info("整体止盈无新增延迟卖出指令")
+        return []
+
+    strategy_state["pending_take_profit_trigger_date"] = trade_date
+    if not config.get("take_profit_refill", True):
+        strategy_state["take_profit_block_t0_date"] = runner._get_next_trade_date(trade_date)
+    runner.paper_storage.save_strategy_state(strategy_state)
+    runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
+    logger.warning(
+        f"整体止盈触发: 本轮收益率={profit_rate:.2%}, 已加入 {len(actions)} 条延迟卖出指令"
+    )
+    return actions
+
+
 def _process_pending_sells(
     runner: PaperTradingRunner,
     trade_date: str,
@@ -524,6 +613,13 @@ def _process_pending_sells(
         buy_prices, sell_prices = runner._load_prices(trade_date, config['buy_price'], config['sell_price'])
         all_prices = {**sell_prices, **buy_prices}
         runner._record_nav(trade_date, all_prices)
+
+        if any("整体止盈" in (fill.reason or "") for fill in fills):
+            strategy_state = runner.paper_storage.load_strategy_state()
+            strategy_state['last_rebalance_nav'] = runner.account.get_total_value(all_prices)
+            strategy_state['last_take_profit_date'] = trade_date
+            strategy_state.pop('pending_take_profit_trigger_date', None)
+            runner.paper_storage.save_strategy_state(strategy_state)
     
     logger.info(f"延迟卖出处理完成：成交 {len(fills)} 笔，剩余 {len(runner.broker.pending_sells)} 笔")
     return actions
@@ -824,6 +920,7 @@ def _handle_failed_buys(
     # 获取下一交易日
     next_trade_date = runner._get_next_trade_date(trade_date)
     if next_trade_date:
+        trading_config = TradingConfig.from_dict(config)
         # 基于当日 Tn 数据重新生成补位信号，用于下一交易日 Tn+1 买入
         replacement_targets = runner.generate_replacement_targets(
             trade_date=trade_date,
@@ -835,6 +932,7 @@ def _handle_failed_buys(
             max_per_industry=config.get('max_per_industry'),
             exclude_st=config.get('exclude_st', True),
             min_list_days=config.get('min_list_days', 365),
+            trading_config=trading_config,
         )
         
         if replacement_targets:
@@ -907,16 +1005,46 @@ def _execute_t0_if_rebalance_day(
         logger.info(f"T0 工作流已在 {trade_date} 执行过，跳过")
         return targets_info, ect_exposure, ect_reason, "already_run"
 
+    trading_config = TradingConfig.from_dict(config)
+    strategy_state = runner.paper_storage.load_strategy_state()
+    take_profit_block_t0_date = strategy_state.get("take_profit_block_t0_date")
+    if take_profit_block_t0_date == trade_date:
+        logger.info("整体止盈且关闭自动补仓，本日不触发空仓提前调仓")
+        strategy_state.pop("take_profit_block_t0_date", None)
+        runner.paper_storage.save_strategy_state(strategy_state)
+
+    pending_instruction = runner.paper_storage.find_pending_instructions(trade_date)
+    pending_buys = runner.paper_storage.load_pending_buys()
+    allow_early_rebalance = (
+        config.get("enable_early_rebalance_on_empty", True)
+        and take_profit_block_t0_date != trade_date
+        and not runner.account.get_positions()
+        and not runner.broker.pending_sells
+        and not pending_buys
+        and pending_instruction is None
+    )
+
     # 检查是否调仓日
     try:
         is_rebalance_day = runner._check_rebalance_day(trade_date, config['rebalance_freq'])
     except RuntimeError as e:
-        logger.info(f"当前不是调仓日：{e}")
-        return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
+        if allow_early_rebalance:
+            logger.warning(f"当前不是调仓日，但满足空仓提前调仓条件：{e}")
+            is_rebalance_day = True
+        else:
+            logger.info(f"当前不是调仓日：{e}")
+            return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
 
     if not is_rebalance_day:
-        logger.info("非调仓日，跳过 T0")
-        return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
+        if allow_early_rebalance:
+            logger.warning("非调仓日，但当前空仓，提前执行 T0")
+            is_rebalance_day = True
+        else:
+            logger.info("非调仓日，跳过 T0")
+            return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
+
+    if allow_early_rebalance:
+        logger.warning("空仓提前调仓触发，执行 T0")
     
     logger.info("当前是调仓日，执行 T0")
     
@@ -1006,6 +1134,8 @@ def _execute_t0_if_rebalance_day(
             industry_momentum_bottom_pct=config.get('industry_momentum_bottom_pct', 0.5),
             holding_bonus_enabled=config.get('holding_bonus_enabled', False),
             holding_bonus_sigma=config.get('holding_bonus_sigma', 0.5),
+            trading_config=trading_config,
+            force_rebalance=allow_early_rebalance,
             protected_stocks=protected_stocks,
         )
 
@@ -1615,7 +1745,7 @@ def run_reset_t0(args):
     logger.info("重置纸面交易：清空所有交易数据，恢复为新账户")
     logger.info("=" * 80)
 
-    # 执行重置（清空所有数据，仅保留 config.json）
+    # 执行重置（清空所有数据，仅保留 config.yaml）
     storage.reset_t0()
 
     logger.info("")

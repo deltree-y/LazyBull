@@ -38,6 +38,10 @@ import csv
 from loguru import logger
 
 from src.lazybull.backtest import BacktestEngine, BacktestEngineML, Reporter
+from src.lazybull.common.backtest_runtime import (
+    create_backtest_engine_from_config,
+    infer_rebalance_freq_from_label,
+)
 from src.lazybull.common.config import get_models_root, get_reports_root
 from src.lazybull.common.cost import CostModel
 from src.lazybull.common.logger import setup_logger
@@ -189,6 +193,28 @@ def run_ml_backtest(
     position_sizing: str = "equal",
     kelly_vol_window: int = 60,
     kelly_max_leverage: float = 0.25,
+    enable_profit_based_holding: bool = True,
+    early_exit_loss_threshold: float = -0.07,
+    early_exit_holding_ratio: float = 0.5,
+    profit_extension_threshold: float = 0.1,
+    profit_extension_days: int = 2,
+    use_atr_for_early_exit: bool = False,
+    atr_multiplier: float = 2.0,
+    early_exit_mode: str = "strength_veto",
+    early_exit_strength_protect_threshold: float = 0.1,
+    early_exit_max_reprieves: int = 1,
+    take_profit_threshold: float = None,
+    take_profit_refill: bool = True,
+    enable_early_rebalance_on_empty: bool = True,
+    signal_gate_quality_enabled: bool = False,
+    signal_gate_quality_window: int = 5,
+    signal_gate_quality_threshold: float = 0.4,
+    signal_gate_quality_halflife: int = 3,
+    signal_gate_dynamic_topn: bool = False,
+    signal_gate_topn_high_multiplier: float = 0.6,
+    signal_gate_topn_low_multiplier: float = 1.5,
+    trading_config: TradingConfig = None,
+    data_storage: Storage = None,
 ) -> tuple:
     """运行 ML 信号回测
     
@@ -217,22 +243,58 @@ def run_ml_backtest(
     """
     logger.info("开始运行 ML 信号回测...")
     
-    # 创建回测引擎（需要稍作调整以支持特征数据）
-    engine = BacktestEngineML(
-        universe=universe,
-        signal=signal,
-        features_by_date=features_by_date,
+    effective_config = trading_config or TradingConfig(
+        top_n=getattr(signal, "top_n", 30),
         initial_capital=initial_capital,
-        cost_model=cost_model or CostModel(),
         rebalance_freq=rebalance_freq,
         stagger_tranches=stagger_tranches,
-        stop_loss_config=stop_loss_config,
-        equity_curve_config=equity_curve_config,
-        sell_timing=sell_timing,
-        completion_window_days=5,
         max_weight_per_stock=max_weight_per_stock,
         max_per_industry=max_per_industry,
-        stock_basic=stock_basic,
+        stop_loss_enabled=bool(stop_loss_config and stop_loss_config.enabled),
+        stop_loss_drawdown_pct=(
+            stop_loss_config.drawdown_pct if stop_loss_config and stop_loss_config.enabled else 30.0
+        ),
+        stop_loss_trailing_enabled=(
+            stop_loss_config.trailing_stop_enabled
+            if stop_loss_config and stop_loss_config.enabled
+            else False
+        ),
+        stop_loss_trailing_pct=(
+            stop_loss_config.trailing_stop_pct if stop_loss_config and stop_loss_config.enabled else 15.0
+        ),
+        stop_loss_consecutive_limit_down=(
+            stop_loss_config.consecutive_limit_down_days
+            if stop_loss_config and stop_loss_config.enabled
+            else 2
+        ),
+        equity_curve_enabled=bool(equity_curve_config and equity_curve_config.enabled),
+        equity_curve_drawdown_thresholds=(
+            equity_curve_config.drawdown_thresholds
+            if equity_curve_config and equity_curve_config.enabled
+            else [5.0, 10.0, 15.0, 20.0]
+        ),
+        equity_curve_exposure_levels=(
+            equity_curve_config.exposure_levels
+            if equity_curve_config and equity_curve_config.enabled
+            else [0.8, 0.6, 0.4, 0.2]
+        ),
+        equity_curve_ma_short=(
+            equity_curve_config.ma_short_window if equity_curve_config and equity_curve_config.enabled else 5
+        ),
+        equity_curve_ma_long=(
+            equity_curve_config.ma_long_window if equity_curve_config and equity_curve_config.enabled else 20
+        ),
+        equity_curve_recovery_mode=(
+            equity_curve_config.recovery_mode if equity_curve_config and equity_curve_config.enabled else "gradual"
+        ),
+        equity_curve_recovery_step=(
+            equity_curve_config.recovery_step if equity_curve_config and equity_curve_config.enabled else 0.25
+        ),
+        equity_curve_recovery_delay_periods=(
+            equity_curve_config.recovery_delay_periods
+            if equity_curve_config and equity_curve_config.enabled
+            else 0
+        ),
         holding_bonus_enabled=holding_bonus_enabled,
         holding_bonus_sigma=holding_bonus_sigma,
         profit_extension_mode=profit_extension_mode,
@@ -243,6 +305,43 @@ def run_ml_backtest(
         position_sizing=position_sizing,
         kelly_vol_window=kelly_vol_window,
         kelly_max_leverage=kelly_max_leverage,
+        enable_profit_based_holding=enable_profit_based_holding,
+        early_exit_loss_threshold=early_exit_loss_threshold,
+        early_exit_holding_ratio=early_exit_holding_ratio,
+        profit_extension_threshold=profit_extension_threshold,
+        profit_extension_days=profit_extension_days,
+        use_atr_for_early_exit=use_atr_for_early_exit,
+        atr_multiplier=atr_multiplier,
+        early_exit_mode=early_exit_mode,
+        early_exit_strength_protect_threshold=early_exit_strength_protect_threshold,
+        early_exit_max_reprieves=early_exit_max_reprieves,
+        take_profit_threshold=take_profit_threshold,
+        take_profit_refill=take_profit_refill,
+        enable_early_rebalance_on_empty=enable_early_rebalance_on_empty,
+        signal_gate_quality_enabled=signal_gate_quality_enabled,
+        signal_gate_quality_window=signal_gate_quality_window,
+        signal_gate_quality_threshold=signal_gate_quality_threshold,
+        signal_gate_quality_halflife=signal_gate_quality_halflife,
+        signal_gate_dynamic_topn=signal_gate_dynamic_topn,
+        signal_gate_topn_high_multiplier=signal_gate_topn_high_multiplier,
+        signal_gate_topn_low_multiplier=signal_gate_topn_low_multiplier,
+        sell_price=sell_timing,
+    )
+
+    # 共享引擎工厂：确保与 walk_forward 使用同一套策略参数透传逻辑
+    engine = create_backtest_engine_from_config(
+        trading_config=effective_config,
+        universe=universe,
+        signal=signal,
+        features_by_date=features_by_date,
+        stock_basic=stock_basic,
+        data_storage=data_storage,
+        initial_capital=initial_capital,
+        sell_timing=sell_timing,
+        verbose=False,
+        completion_window_days=5,
+        enable_pending_order=True,
+        cost_model=cost_model or CostModel(),
     )
 
     # 运行回测
@@ -839,20 +938,7 @@ def main():
     # 处理 rebalance_freq 参数：若未指定，根据 label 自动设置
     if args.rebalance_freq is None:
         # 从 label 中提取数字作为默认调仓频率
-        if selected_label == 'y_ret_5':
-            args.rebalance_freq = 5
-        elif selected_label == 'y_ret_10':
-            args.rebalance_freq = 10
-        elif selected_label == 'y_ret_20':
-            args.rebalance_freq = 20
-        else:
-            # 如果是其他标签，尝试从名称中提取数字
-            import re
-            match = re.search(r'(\d+)', selected_label)
-            if match:
-                args.rebalance_freq = int(match.group(1))
-            else:
-                args.rebalance_freq = 10  # 默认值
+        args.rebalance_freq = infer_rebalance_freq_from_label(selected_label, default=10)
         logger.info(f"未指定 --rebalance-freq 参数，根据标签 {selected_label} 自动设置为: {args.rebalance_freq}")
     
     logger.info("=" * 60)
@@ -885,6 +971,18 @@ def main():
         logger.info(f"  - 恢复模式: {args.equity_curve_recovery_mode}")
         logger.info(f"  - 恢复步长: {args.equity_curve_recovery_step}")
         logger.info(f"  - 恢复等待周期: {args.equity_curve_recovery_delay_periods} 个调仓周期")
+    if args.take_profit_threshold is not None:
+        logger.info(f"整体止盈: 启用 (threshold={args.take_profit_threshold:.2%}, refill={'启用' if args.take_profit_refill else '关闭'})")
+    if args.signal_gate_quality_enabled:
+        logger.info(
+            f"滚动质量监控: 启用 (window={args.signal_gate_quality_window}, "
+            f"threshold={args.signal_gate_quality_threshold}, halflife={args.signal_gate_quality_halflife})"
+        )
+    if args.signal_gate_dynamic_topn:
+        logger.info(
+            f"动态Top-N: 启用 (high={args.signal_gate_topn_high_multiplier}, "
+            f"low={args.signal_gate_topn_low_multiplier})"
+        )
 
     # 构建统一策略配置
     trading_config = TradingConfig.from_args(args)
@@ -972,6 +1070,28 @@ def main():
             position_sizing=trading_config.position_sizing,
             kelly_vol_window=trading_config.kelly_vol_window,
             kelly_max_leverage=trading_config.kelly_max_leverage,
+            enable_profit_based_holding=trading_config.enable_profit_based_holding,
+            early_exit_loss_threshold=trading_config.early_exit_loss_threshold,
+            early_exit_holding_ratio=trading_config.early_exit_holding_ratio,
+            profit_extension_threshold=trading_config.profit_extension_threshold,
+            profit_extension_days=trading_config.profit_extension_days,
+            use_atr_for_early_exit=trading_config.use_atr_for_early_exit,
+            atr_multiplier=trading_config.atr_multiplier,
+            early_exit_mode=trading_config.early_exit_mode,
+            early_exit_strength_protect_threshold=trading_config.early_exit_strength_protect_threshold,
+            early_exit_max_reprieves=trading_config.early_exit_max_reprieves,
+            take_profit_threshold=trading_config.take_profit_threshold,
+            take_profit_refill=trading_config.take_profit_refill,
+            enable_early_rebalance_on_empty=trading_config.enable_early_rebalance_on_empty,
+            signal_gate_quality_enabled=trading_config.signal_gate_quality_enabled,
+            signal_gate_quality_window=trading_config.signal_gate_quality_window,
+            signal_gate_quality_threshold=trading_config.signal_gate_quality_threshold,
+            signal_gate_quality_halflife=trading_config.signal_gate_quality_halflife,
+            signal_gate_dynamic_topn=trading_config.signal_gate_dynamic_topn,
+            signal_gate_topn_high_multiplier=trading_config.signal_gate_topn_high_multiplier,
+            signal_gate_topn_low_multiplier=trading_config.signal_gate_topn_low_multiplier,
+            trading_config=trading_config,
+            data_storage=storage,
         )
 
         # 7. 生成报告

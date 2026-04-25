@@ -10,6 +10,7 @@ from loguru import logger
 
 from .config import get_models_root
 from ..signals.base import Signal
+from ..signals.ensemble_signal import EnsembleSignal
 from ..signals.ml_signal import MLSignal
 from .trading_config import TradingConfig
 
@@ -42,11 +43,32 @@ def create_signal(
         signal_gate_percentile_warmup=config.signal_gate_percentile_warmup,
     )
 
-    signal = MLSignal(
+    resolved_models_dir = models_dir or get_models_root()
+
+    signal_a = MLSignal(
         top_n=config.top_n,
         model_version=config.model_version,
-        models_dir=models_dir or get_models_root(),
+        models_dir=resolved_models_dir,
         verbose=verbose,
         **gate_kwargs,
     )
-    return signal
+
+    if config.model_version_b is None:
+        return signal_a
+
+    signal_b = MLSignal(
+        top_n=config.top_n,
+        model_version=config.model_version_b,
+        models_dir=resolved_models_dir,
+        verbose=verbose,
+        **gate_kwargs,
+    )
+    logger.info(
+        f"创建双模型集成信号: A=v{config.model_version}, "
+        f"B=v{config.model_version_b}, weight_a={config.ensemble_weight_a:.2f}"
+    )
+    return EnsembleSignal(
+        signal_a,
+        signal_b,
+        weight_a=config.ensemble_weight_a,
+    )

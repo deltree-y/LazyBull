@@ -299,6 +299,7 @@ class TestCompareWalkForwardPeriodStability:
         assert len(result) == 1
         assert result.loc[0, "时间段数"] == 2
         assert result.loc[0, "时间段列表"] == "0101 | 0209"
+        assert result.loc[0, "运行ID列表"] == "0101:wf_test_001 | 0209:wf_test_002"
         assert result.loc[0, "最大深度"] == 3
         assert result.loc[0, "批次ID"] == "wf_batch_001"
         assert pd.notna(result.loc[0, "综合得分均值"])
@@ -391,6 +392,12 @@ class TestCompareWalkForwardPeriodStability:
         assert len(result) == 2
         assert sorted(result["批次ID"].tolist()) == ["wf_batch_001", "wf_batch_002"]
         assert (result["时间段数"] == 2).all()
+        expected_run_id_lists = {
+            "wf_batch_001": "0101:wf_test_001 | 0209:wf_test_002",
+            "wf_batch_002": "0101:wf_test_003 | 0209:wf_test_004",
+        }
+        for _, row in result.iterrows():
+            assert row["运行ID列表"] == expected_run_id_lists[row["批次ID"]]
 
 
 class TestCompareWalkForwardAutoDiscovery:

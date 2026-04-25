@@ -1,13 +1,15 @@
 """纸面交易运行器"""
 
 import gc
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
 from ..common.print_table import format_row
+from ..common.trading_config import TradingConfig
 from ..data import (
     DataCleaner,
     DataLoader,
@@ -83,8 +85,297 @@ class PaperTradingRunner:
         self.horizon = horizon  # 保存 horizon 供其他地方使用
         self.verbose = verbose
         self.missing_factors: list = []  # 缺失的因子数据名称列表
+        self._strategy_state: dict = self.paper_storage.load_strategy_state()
+        self._trade_dates_cache: Optional[List[str]] = None
+        self._kelly_cache_date: Optional[str] = None
+        self._kelly_cache_df: Optional[pd.DataFrame] = None
         # 确保基础数据存在（如交易日历、股票基本信息等）
         #ensure_basic_data(self.storage, self.loader, self.cleaner, self.client)
+
+    def _ensure_strategy_state(
+        self, trading_config: Optional[TradingConfig] = None
+    ) -> dict:
+        """初始化并返回策略运行状态。"""
+        state = self._strategy_state or {}
+        state.setdefault("prediction_quality_history", [])
+        state.setdefault("signal_tracking", {})
+        state.setdefault("rolling_quality_score", 1.0)
+        warmup_default = (
+            trading_config.signal_gate_quality_window
+            if trading_config is not None
+            else 0
+        )
+        state.setdefault("quality_warmup_remaining", warmup_default)
+        state.setdefault("last_rebalance_nav", None)
+        state.setdefault("last_take_profit_date", None)
+        self._strategy_state = state
+        return state
+
+    def _save_strategy_state(self) -> None:
+        """持久化策略运行状态。"""
+        self.paper_storage.save_strategy_state(self._strategy_state)
+
+    def _get_open_trade_dates(self) -> List[str]:
+        """返回开市交易日列表（带简单缓存）。"""
+        if self._trade_dates_cache is None:
+            trade_cal = self.loader.load_clean_trade_cal()
+            if trade_cal is None or trade_cal.empty:
+                return []
+            self._trade_dates_cache = (
+                trade_cal.loc[trade_cal["is_open"] == 1, "cal_date"].astype(str).tolist()
+            )
+        return self._trade_dates_cache
+
+    def _load_kelly_window_data(self, trade_date: str) -> Optional[pd.DataFrame]:
+        """加载 Kelly 波动率估计所需的近窗价格数据。"""
+        if self._kelly_cache_date == trade_date and self._kelly_cache_df is not None:
+            return self._kelly_cache_df
+
+        trade_dates = self._get_open_trade_dates()
+        if trade_date not in trade_dates:
+            return None
+
+        current_idx = trade_dates.index(trade_date)
+        start_idx = max(0, current_idx - max(self.horizon, 20, 2 * 60))
+        start_date = trade_dates[start_idx]
+        daily_df = self.loader.load_clean_daily(start_date=start_date, end_date=trade_date)
+        self._kelly_cache_date = trade_date
+        self._kelly_cache_df = daily_df
+        return daily_df
+
+    def _estimate_stock_variance(self, stock: str, trade_date: str) -> Optional[float]:
+        """估计股票近期收益率方差，供 Kelly 仓位计算使用。"""
+        daily_df = self._load_kelly_window_data(trade_date)
+        if daily_df is None or daily_df.empty:
+            return None
+
+        stock_df = daily_df[daily_df["ts_code"] == stock].sort_values("trade_date")
+        if len(stock_df) < 20:
+            return None
+
+        stock_df = stock_df.tail(max(20, min(self.horizon * 3, 120), 60))
+        price_col = "close_adj" if "close_adj" in stock_df.columns else "close"
+        prices = stock_df[price_col].astype(float).to_numpy()
+        prices = prices[np.isfinite(prices) & (prices > 0)]
+        if len(prices) < 10:
+            return None
+
+        log_returns = np.diff(np.log(prices))
+        if len(log_returns) < 5:
+            return None
+
+        return float(np.var(log_returns))
+
+    def _kelly_weights(
+        self,
+        signals: Dict[str, float],
+        trade_date: str,
+        half: bool = False,
+    ) -> Dict[str, float]:
+        """计算 Kelly / 半 Kelly 仓位权重。"""
+        n = len(signals)
+        if n == 0:
+            return {}
+
+        positive_stocks = {stock: score for stock, score in signals.items() if score > 0}
+        if not positive_stocks:
+            weight = 1.0 / n
+            return {stock: weight for stock in signals}
+
+        sorted_stocks = sorted(positive_stocks.items(), key=lambda item: item[1])
+        score_ranks = {
+            stock: (idx + 1) / len(sorted_stocks)
+            for idx, (stock, _) in enumerate(sorted_stocks)
+        }
+
+        vol_adjusts = {}
+        fallback_stocks = []
+        for stock in positive_stocks:
+            vol_sq = self._estimate_stock_variance(stock, trade_date)
+            if vol_sq is not None and vol_sq > 0:
+                vol_adjusts[stock] = 1.0 / float(vol_sq)
+            else:
+                fallback_stocks.append(stock)
+
+        median_vol_adj = (
+            float(np.median(list(vol_adjusts.values()))) if vol_adjusts else 1.0
+        )
+        for stock in fallback_stocks:
+            vol_adjusts[stock] = median_vol_adj
+
+        raw_kelly = {
+            stock: score_ranks[stock] * vol_adjusts[stock]
+            for stock in positive_stocks
+        }
+        median_kelly = (
+            float(np.median(list(raw_kelly.values()))) if raw_kelly else 1.0 / n
+        )
+        for stock in signals:
+            if stock not in raw_kelly:
+                raw_kelly[stock] = median_kelly
+
+        total = sum(raw_kelly.values())
+        if total <= 0:
+            weight = 1.0 / n
+            return {stock: weight for stock in signals}
+        result = {stock: weight / total for stock, weight in raw_kelly.items()}
+
+        if half:
+            eq_weight = 1.0 / n
+            result = {
+                stock: 0.5 * weight + 0.5 * eq_weight
+                for stock, weight in result.items()
+            }
+            total = sum(result.values())
+            if total > 0:
+                result = {stock: weight / total for stock, weight in result.items()}
+
+        max_leverage = getattr(self, "kelly_max_leverage", 1.0)
+        if max_leverage < 1.0:
+            for _ in range(10):
+                capped = {stock: min(weight, max_leverage) for stock, weight in result.items()}
+                cap_total = sum(capped.values())
+                if cap_total <= 0:
+                    break
+                result = {stock: weight / cap_total for stock, weight in capped.items()}
+                if all(weight <= max_leverage + 1e-9 for weight in result.values()):
+                    break
+
+        return result
+
+    def _record_signal_for_quality_tracking(
+        self,
+        trade_date: str,
+        selected_stocks: List[str],
+        predicted_mean: float,
+    ) -> None:
+        """记录当前调仓选股，供后续滚动质量评估。"""
+        state = self._ensure_strategy_state()
+        state["signal_tracking"][trade_date] = {
+            "stocks": list(selected_stocks),
+            "predicted_mean": float(predicted_mean),
+            "date": trade_date,
+        }
+
+    def _update_prediction_quality(
+        self,
+        signal_date: str,
+        selected_stocks: List[str],
+        sell_date: str,
+        trading_config: TradingConfig,
+    ) -> None:
+        """评估一轮信号的实际表现并更新滚动质量分数。"""
+        state = self._ensure_strategy_state(trading_config)
+        start_date = signal_date
+        price_data = self.loader.load_clean_daily(start_date=start_date, end_date=sell_date)
+        if price_data is None or price_data.empty or "trade_date" not in price_data.columns:
+            return
+
+        trade_dates = sorted(price_data["trade_date"].astype(str).unique())
+        if signal_date not in trade_dates:
+            return
+        signal_pos = trade_dates.index(signal_date)
+        buy_pos = signal_pos + 1
+        if buy_pos >= len(trade_dates):
+            return
+        buy_date = trade_dates[buy_pos]
+
+        price_col = "close_adj" if "close_adj" in price_data.columns else "close"
+        buy_prices = price_data.loc[
+            price_data["trade_date"].astype(str) == buy_date, ["ts_code", price_col]
+        ].set_index("ts_code")[price_col]
+        sell_prices = price_data.loc[
+            price_data["trade_date"].astype(str) == sell_date, ["ts_code", price_col]
+        ].set_index("ts_code")[price_col]
+        if buy_prices.empty or sell_prices.empty:
+            return
+
+        selected_returns = []
+        for stock in selected_stocks:
+            if stock in buy_prices.index and stock in sell_prices.index:
+                buy_price = float(buy_prices[stock])
+                sell_price = float(sell_prices[stock])
+                if buy_price > 0:
+                    selected_returns.append(sell_price / buy_price - 1.0)
+
+        common_stocks = buy_prices.index.intersection(sell_prices.index)
+        all_returns = (
+            sell_prices[common_stocks] / buy_prices[common_stocks] - 1.0
+        ).dropna()
+        if not selected_returns or all_returns.empty:
+            return
+
+        universe_median = float(all_returns.median())
+        beat_count = sum(1 for ret in selected_returns if ret > universe_median)
+        hit_rate = beat_count / len(selected_returns)
+        history = state["prediction_quality_history"]
+        history.append(
+            {
+                "signal_date": signal_date,
+                "sell_date": sell_date,
+                "hit_rate": hit_rate,
+                "selected_count": len(selected_returns),
+                "selected_mean_return": float(np.mean(selected_returns)),
+                "universe_median_return": universe_median,
+                "beat_count": beat_count,
+            }
+        )
+
+        if state["quality_warmup_remaining"] > 0:
+            state["quality_warmup_remaining"] -= 1
+
+        recent = history[-trading_config.signal_gate_quality_window :]
+        if recent:
+            hit_series = pd.Series([entry["hit_rate"] for entry in recent])
+            state["rolling_quality_score"] = float(
+                hit_series.ewm(
+                    halflife=trading_config.signal_gate_quality_halflife,
+                    min_periods=1,
+                ).mean().iloc[-1]
+            )
+
+    def _evaluate_expired_signal_quality(
+        self,
+        current_date: str,
+        trading_config: TradingConfig,
+    ) -> None:
+        """在新一轮调仓前，评估已到期信号的实际表现。"""
+        state = self._ensure_strategy_state(trading_config)
+        signal_tracking = state.get("signal_tracking", {})
+        if not signal_tracking:
+            return
+
+        trade_dates = self._get_open_trade_dates()
+        expired_dates = []
+        for signal_date, tracking_info in list(signal_tracking.items()):
+            holding_days = self._calc_holding_days(signal_date, current_date, trade_dates)
+            if holding_days < trading_config.rebalance_freq:
+                continue
+            self._update_prediction_quality(
+                signal_date=signal_date,
+                selected_stocks=list(tracking_info.get("stocks", [])),
+                sell_date=current_date,
+                trading_config=trading_config,
+            )
+            expired_dates.append(signal_date)
+
+        for signal_date in expired_dates:
+            signal_tracking.pop(signal_date, None)
+
+    def _get_rolling_quality_exposure(self, trading_config: TradingConfig) -> float:
+        """根据滚动质量分数返回当前仓位系数。"""
+        if not trading_config.signal_gate_quality_enabled:
+            return 1.0
+
+        state = self._ensure_strategy_state(trading_config)
+        if state["quality_warmup_remaining"] > 0:
+            return 1.0
+
+        rolling_score = float(state.get("rolling_quality_score", 1.0))
+        if rolling_score >= trading_config.signal_gate_quality_threshold:
+            return 1.0
+
+        return max(0.2, rolling_score / trading_config.signal_gate_quality_threshold)
     
     def _correct_trade_date(self, input_date: str) -> str:
         """校正交易日期：非交易日自动滚动到下一交易日
@@ -312,6 +603,8 @@ class PaperTradingRunner:
         industry_momentum_bottom_pct: float = 0.5,
         holding_bonus_enabled: bool = False,
         holding_bonus_sigma: float = 0.5,
+        trading_config: Optional[TradingConfig] = None,
+        force_rebalance: bool = False,
         protected_stocks: Optional[set] = None,
     ) -> None:
         """T0工作流：拉取数据 + 生成T1待执行目标
@@ -330,6 +623,26 @@ class PaperTradingRunner:
             min_list_days: 最少上市天数
             protected_stocks: 盈利延续保护的股票集合（跳过卖出）
         """
+        effective_config = trading_config or TradingConfig(
+            buy_price=buy_price_type,
+            sell_price=sell_price_type,
+            universe=universe_type,
+            top_n=top_n,
+            model_version=model_version,
+            rebalance_freq=rebalance_freq,
+            max_per_industry=max_per_industry,
+            max_weight_per_stock=max_weight_per_stock,
+            exclude_st=exclude_st,
+            min_list_days=min_list_days,
+            industry_momentum_filter=industry_momentum_filter,
+            industry_momentum_bottom_pct=industry_momentum_bottom_pct,
+            holding_bonus_enabled=holding_bonus_enabled,
+            holding_bonus_sigma=holding_bonus_sigma,
+        )
+        self.position_sizing = effective_config.position_sizing
+        self.kelly_vol_window = effective_config.kelly_vol_window
+        self.kelly_max_leverage = effective_config.kelly_max_leverage
+
         # 1. 校正交易日期
         corrected_date = self._correct_trade_date(trade_date)
         
@@ -341,34 +654,47 @@ class PaperTradingRunner:
             )
         
         # 3. 检查调仓日
-        self._check_rebalance_day(corrected_date, rebalance_freq)
+        if force_rebalance:
+            logger.warning(f"强制执行 T0，跳过调仓日校验: {corrected_date}")
+        else:
+            self._check_rebalance_day(corrected_date, effective_config.rebalance_freq)
         
         logger.info("=" * 80)
         logger.info(f"开始T0工作流 - {corrected_date}")
         logger.info("=" * 80)
-        logger.info(f"调仓频率: {rebalance_freq} 个交易日")
+        logger.info(f"调仓频率: {effective_config.rebalance_freq} 个交易日")
         
         # 4. 生成信号（ensure_features_for_date 内部自动下载缺失的 raw/clean 数据）
         logger.info("步骤2: 生成信号")
         self.signal = self.signal or MLSignal(
-            top_n=top_n,
-            model_version=model_version,
+            top_n=effective_config.top_n,
+            model_version=effective_config.model_version,
             verbose=False,
         )
+        if hasattr(self.signal, "top_n"):
+            self.signal.top_n = effective_config.top_n
+        if effective_config.model_version_b is not None and hasattr(self.signal, "update_versions"):
+            self.signal.update_versions(
+                effective_config.model_version,
+                effective_config.model_version_b,
+            )
+        elif effective_config.model_version is not None and hasattr(self.signal, "update_model_version"):
+            self.signal.update_model_version(effective_config.model_version)
         targets = self._generate_signals(
             corrected_date,
-            universe_type=universe_type,
-            top_n=top_n,
-            model_version=model_version,
-            buy_price_type=buy_price_type,
-            max_per_industry=max_per_industry,
-            max_weight_per_stock=max_weight_per_stock,
-            exclude_st=exclude_st,
-            min_list_days=min_list_days,
-            industry_momentum_filter=industry_momentum_filter,
-            industry_momentum_bottom_pct=industry_momentum_bottom_pct,
-            holding_bonus_enabled=holding_bonus_enabled,
-            holding_bonus_sigma=holding_bonus_sigma,
+            universe_type=effective_config.universe,
+            top_n=effective_config.top_n,
+            model_version=effective_config.model_version,
+            buy_price_type=effective_config.buy_price,
+            max_per_industry=effective_config.max_per_industry,
+            max_weight_per_stock=effective_config.max_weight_per_stock,
+            exclude_st=effective_config.exclude_st,
+            min_list_days=effective_config.min_list_days,
+            industry_momentum_filter=effective_config.industry_momentum_filter,
+            industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
+            holding_bonus_enabled=effective_config.holding_bonus_enabled,
+            holding_bonus_sigma=effective_config.holding_bonus_sigma,
+            trading_config=effective_config,
         )
         
         if not targets:
@@ -415,9 +741,13 @@ class PaperTradingRunner:
         # 8. 更新调仓状态
         rebalance_state = {
             'last_rebalance_date': corrected_date,
-            'rebalance_freq': rebalance_freq
+            'rebalance_freq': effective_config.rebalance_freq
         }
         self.paper_storage.save_rebalance_state(rebalance_state)
+
+        state = self._ensure_strategy_state(effective_config)
+        state['last_rebalance_nav'] = self.account.get_total_value(current_prices)
+        self._save_strategy_state()
         
         # 9. 保存执行记录
         run_record = {
@@ -427,7 +757,7 @@ class PaperTradingRunner:
             'universe_type': universe_type,
             'top_n': top_n,
             'model_version': model_version,
-            'rebalance_freq': rebalance_freq,
+            'rebalance_freq': effective_config.rebalance_freq,
             'targets_count': len(targets),
             'instructions_count': len(instructions),
             'timestamp': pd.Timestamp.now().isoformat()
@@ -769,6 +1099,7 @@ class PaperTradingRunner:
         industry_momentum_bottom_pct: float = 0.5,
         holding_bonus_enabled: bool = False,
         holding_bonus_sigma: float = 0.5,
+        trading_config: Optional[TradingConfig] = None,
     ) -> List[TargetWeight]:
         """生成信号
 
@@ -786,6 +1117,22 @@ class PaperTradingRunner:
         Returns:
             目标权重列表
         """
+        effective_config = trading_config or TradingConfig(
+            buy_price=buy_price_type,
+            universe=universe_type,
+            top_n=top_n,
+            model_version=model_version,
+            max_per_industry=max_per_industry,
+            max_weight_per_stock=max_weight_per_stock,
+            exclude_st=exclude_st,
+            min_list_days=min_list_days,
+            industry_momentum_filter=industry_momentum_filter,
+            industry_momentum_bottom_pct=industry_momentum_bottom_pct,
+            holding_bonus_enabled=holding_bonus_enabled,
+            holding_bonus_sigma=holding_bonus_sigma,
+            position_sizing=self.position_sizing,
+        )
+
         # 确保 features 数据存在
         logger.info(f"检查并确保 features 数据存在: {trade_date}")
         success, missing = ensure_features_for_date(
@@ -838,14 +1185,28 @@ class PaperTradingRunner:
             # 使用默认的ML信号
             if model_version is not None:
                 self.signal = MLSignal(
-                    top_n=top_n,
-                    model_version=model_version,
+                    top_n=effective_config.top_n,
+                    model_version=effective_config.model_version,
                     verbose=False,
                 )
             else:
                 logger.warning("未指定信号生成器，使用等权")
                 from ..signals.base import EqualWeightSignal
-                self.signal = EqualWeightSignal(top_n=top_n)
+                self.signal = EqualWeightSignal(top_n=effective_config.top_n)
+        elif hasattr(self.signal, "top_n"):
+            self.signal.top_n = effective_config.top_n
+            if (
+                effective_config.model_version_b is not None
+                and hasattr(self.signal, "update_versions")
+            ):
+                self.signal.update_versions(
+                    effective_config.model_version,
+                    effective_config.model_version_b,
+                )
+            elif effective_config.model_version is not None and hasattr(
+                self.signal, "update_model_version"
+            ):
+                self.signal.update_model_version(effective_config.model_version)
         
         # 加载行业映射（如果启用行业约束）
         industry_mapping = {}
@@ -856,23 +1217,31 @@ class PaperTradingRunner:
         # 回收内存后再进入模型加载/预测（对内存受限设备如树莓派尤为重要）
         gc.collect()
 
+        if effective_config.signal_gate_quality_enabled:
+            self._evaluate_expired_signal_quality(trade_date, effective_config)
+
         # 生成信号（原始分数字典，权重归一化由 _normalize_signals 统一处理）
         try:
-            if isinstance(self.signal, MLSignal):
+            if hasattr(self.signal, "generate_ranked"):
                 # MLSignal：使用 generate_ranked 获取排序候选，并应用一手可买约束
-                raw_scores = self._generate_ranked_with_lot_constraint(
+                raw_scores, signal_meta = self._generate_ranked_with_lot_constraint(
                     date_ts,
                     stocks,
                     signal_data,
                     daily_data,
-                    top_n,
+                    effective_config.top_n,
                     buy_price_type,
-                    max_per_industry=max_per_industry,
+                    max_per_industry=effective_config.max_per_industry,
                     industry_mapping=industry_mapping,
-                    industry_momentum_filter=industry_momentum_filter,
-                    industry_momentum_bottom_pct=industry_momentum_bottom_pct,
-                    holding_bonus_enabled=holding_bonus_enabled,
-                    holding_bonus_sigma=holding_bonus_sigma,
+                    industry_momentum_filter=effective_config.industry_momentum_filter,
+                    industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
+                    holding_bonus_enabled=effective_config.holding_bonus_enabled,
+                    holding_bonus_sigma=effective_config.holding_bonus_sigma,
+                    industry_rotation_enhanced=effective_config.industry_rotation_enhanced,
+                    industry_rotation_alpha=effective_config.industry_rotation_alpha,
+                    trading_config=effective_config,
+                    existing_positions=set(self.account.get_positions().keys()),
+                    return_meta=True,
                 )
             else:
                 raw_scores = self.signal.generate(
@@ -880,17 +1249,57 @@ class PaperTradingRunner:
                     stocks,
                     {'features': signal_data}
                 )
-            signal_dict = self._normalize_signals(raw_scores)
+                signal_meta = {}
+
+            signal_dict = self._normalize_signals(raw_scores, trade_date)
+
+            confidence_state = signal_meta.get('confidence_gate_state')
+            if hasattr(self.signal, "apply_confidence_gate_to_weights") and confidence_state is not None:
+                signal_dict = self.signal.apply_confidence_gate_to_weights(
+                    signal_dict,
+                    confidence_state=confidence_state,
+                    date=date_ts,
+                    emit_log=True,
+                )
+
+            if effective_config.signal_gate_quality_enabled and signal_dict:
+                predicted_mean = (
+                    confidence_state.top_mean
+                    if confidence_state is not None
+                    and getattr(confidence_state, 'top_mean', None) is not None
+                    and np.isfinite(confidence_state.top_mean)
+                    else float(np.mean(list(raw_scores.values())))
+                )
+                self._record_signal_for_quality_tracking(
+                    trade_date,
+                    list(raw_scores.keys()),
+                    predicted_mean,
+                )
+                quality_exposure = self._get_rolling_quality_exposure(effective_config)
+                if quality_exposure < 1.0:
+                    signal_dict = {
+                        stock: weight * quality_exposure
+                        for stock, weight in signal_dict.items()
+                    }
+                    logger.warning(
+                        f"滚动质量监控降仓: score={self._strategy_state.get('rolling_quality_score', 1.0):.3f}, "
+                        f"quality_exposure={quality_exposure:.2f}"
+                    )
         except Exception as e:
             logger.error(f"信号生成失败: {e}")
             return []
 
+        if not signal_dict:
+            self._save_strategy_state()
+            logger.warning("门控后无有效目标权重")
+            return []
+
         # 应用单股最大权重限制
-        if max_weight_per_stock is not None and signal_dict:
+        if effective_config.max_weight_per_stock is not None and signal_dict:
             from ..portfolio import cap_and_normalize_weights
             signal_dict = cap_and_normalize_weights(
                 signal_dict,
-                max_weight_per_stock=max_weight_per_stock,
+                max_weight_per_stock=effective_config.max_weight_per_stock,
                 verbose=True,
             )
 
@@ -906,6 +1315,8 @@ class PaperTradingRunner:
         
         # 打印 T0 详细信息
         self._print_t0_targets(targets, stock_basic, daily_data)
+
+        self._save_strategy_state()
         
         return targets
     
@@ -923,7 +1334,12 @@ class PaperTradingRunner:
         industry_momentum_bottom_pct: float = 0.5,
         holding_bonus_enabled: bool = False,
         holding_bonus_sigma: float = 0.5,
-    ) -> Dict[str, float]:
+        industry_rotation_enhanced: bool = False,
+        industry_rotation_alpha: float = 0.3,
+        trading_config: Optional[TradingConfig] = None,
+        existing_positions: Optional[set] = None,
+        return_meta: bool = False,
+    ) -> Union[Dict[str, float], Tuple[Dict[str, float], Dict[str, object]]]:
         """生成原始分数字典（含行业约束 + 行业动量过滤 + 持仓保留奖励 + 一手可买约束顺延补足）
 
         返回原始 ml_score（非归一化权重），权重归一化由 _normalize_signals 统一处理。
@@ -940,8 +1356,10 @@ class PaperTradingRunner:
             industry_mapping: 行业映射字典（可选）
 
         Returns:
-            原始分数字典 {股票代码: ml_score}
+            原始分数字典，若 return_meta=True 则额外返回信号元信息
         """
+        existing_positions = existing_positions or set()
+
         # 使用 generate_ranked 获取完整排序候选列表
         ranked_candidates = self.signal.generate_ranked(
             date,
@@ -981,9 +1399,26 @@ class PaperTradingRunner:
                     f" (过滤前 {before})"
                 )
 
+        if industry_rotation_enhanced and ranked_candidates:
+            if signal_data is not None and 'ind_momentum_rank' in signal_data.columns:
+                rank_map = dict(zip(signal_data['ts_code'], signal_data['ind_momentum_rank']))
+                adjusted = []
+                for ts_code, score in ranked_candidates:
+                    rank = rank_map.get(ts_code)
+                    if rank is not None and not pd.isna(rank):
+                        multiplier = 1.0 + industry_rotation_alpha * (float(rank) - 0.5)
+                        adjusted.append((ts_code, score * multiplier))
+                    else:
+                        adjusted.append((ts_code, score))
+                adjusted.sort(key=lambda item: item[1], reverse=True)
+                ranked_candidates = adjusted
+                logger.info(
+                    f"行业轮动加权后候选数: {len(ranked_candidates)} "
+                    f"(alpha={industry_rotation_alpha})"
+                )
+
         # 持仓保留奖励（降低换手率）
         if holding_bonus_enabled and ranked_candidates:
-            existing_positions = set(self.account.get_positions().keys())
             if existing_positions:
                 scores = [s for _, s in ranked_candidates]
                 score_std = float(np.std(scores)) if len(scores) > 1 else 0.0
@@ -1008,6 +1443,36 @@ class PaperTradingRunner:
                         )
 
         logger.info(f"等权+一手约束: 排序候选数 {len(ranked_candidates)}")
+
+        confidence_gate_state = None
+        target_n = top_n
+        if hasattr(self.signal, 'evaluate_confidence_gate'):
+            confidence_gate_state = self.signal.evaluate_confidence_gate(
+                ranked_candidates,
+                date=date,
+            )
+            if (
+                trading_config is not None
+                and trading_config.signal_gate_dynamic_topn
+                and getattr(confidence_gate_state, 'enabled', False)
+            ):
+                gate_exposure = getattr(confidence_gate_state, 'exposure', 1.0)
+                if gate_exposure >= 1.0:
+                    target_n = max(
+                        3,
+                        int(round(top_n * trading_config.signal_gate_topn_high_multiplier)),
+                    )
+                elif gate_exposure > 0:
+                    multiplier = 1.0 + (1.0 - gate_exposure) * (
+                        trading_config.signal_gate_topn_low_multiplier - 1.0
+                    )
+                    target_n = min(
+                        len(ranked_candidates),
+                        max(top_n, int(round(top_n * multiplier))),
+                    )
+                logger.info(
+                    f"动态Top-N: base={top_n}, effective={target_n}, exposure={gate_exposure:.2f}"
+                )
         
         # 构建价格映射（使用 buy_price_type 指定的价格列）
         price_col = buy_price_type  # 'open' 或 'close'
@@ -1023,16 +1488,22 @@ class PaperTradingRunner:
                 price_map[ts_code] = price
         
         # 计算每只股票的等权分配金额
-        total_capital = self.account.initial_capital
-        equal_weight_value = total_capital / top_n
+        total_capital = self.account.get_total_value(price_map)
+        if total_capital <= 0:
+            total_capital = self.account.initial_capital
+        equal_weight_value = total_capital / max(target_n, 1)
         
         # 从排序候选中筛选可买至少1手的股票，保留原始分数
         selected = []  # List[Tuple[str, float]]
         skipped_stocks = []
 
         for ts_code, score in ranked_candidates:
-            if len(selected) >= top_n:
+            if len(selected) >= target_n:
                 break
+
+            if ts_code in existing_positions:
+                selected.append((ts_code, score))
+                continue
 
             price = price_map.get(ts_code)
             if price is None or price <= 0:
@@ -1061,21 +1532,32 @@ class PaperTradingRunner:
             if skipped_count > 5:
                 logger.info(f"  ... 及其他 {skipped_count - 5} 只")
 
-        if final_count < top_n:
+        if final_count < target_n:
             logger.warning(
-                f"一手约束筛选: 候选不足，目标 {top_n} 只，实际仅 {final_count} 只可选"
+                f"一手约束筛选: 候选不足，目标 {target_n} 只，实际仅 {final_count} 只可选"
             )
 
         if final_count == 0:
-            return {}
+            result = {}
+            meta = {
+                'confidence_gate_state': confidence_gate_state,
+                'target_n': target_n,
+                'ranked_candidates': ranked_candidates,
+            }
+            return (result, meta) if return_meta else result
 
-        return {ts_code: score for ts_code, score in selected}
+        result = {ts_code: score for ts_code, score in selected}
+        meta = {
+            'confidence_gate_state': confidence_gate_state,
+            'target_n': target_n,
+            'ranked_candidates': ranked_candidates,
+        }
+        return (result, meta) if return_meta else result
 
-    def _normalize_signals(self, signals: Dict[str, float]) -> Dict[str, float]:
+    def _normalize_signals(self, signals: Dict[str, float], trade_date: str) -> Dict[str, float]:
         """根据 position_sizing 将原始分数转换为归一化权重字典
 
-        支持 equal（等权）和 score（按分数加权）两种模式。
-        纸面交易不支持 kelly（无历史价格序列），配置为 kelly 时回退到 score。
+        支持 equal、score、kelly、half_kelly 四种模式。
         """
         if not signals:
             return {}
@@ -1086,11 +1568,11 @@ class PaperTradingRunner:
             weight = 1.0 / len(signals)
             return {stock: weight for stock in signals}
 
-        # score 模式（kelly/half_kelly 也回退到此）
-        if sizing not in ("equal", "score"):
-            logger.warning(
-                f"纸面交易不支持 position_sizing='{sizing}'，回退到 score 加权"
-            )
+        if sizing in ("kelly", "half_kelly"):
+            return self._kelly_weights(signals, trade_date, half=(sizing == "half_kelly"))
+
+        if sizing != "score":
+            logger.warning(f"未知 position_sizing='{sizing}'，回退到 score 加权")
         positive = {s: v for s, v in signals.items() if v > 0}
         if not positive:
             weight = 1.0 / len(signals)
@@ -1675,9 +2157,7 @@ class PaperTradingRunner:
 
         # 获取 ML ranked candidates（如有）
         ranked_candidates = None
-        if hasattr(self.signal, "generate_ranked") and isinstance(
-            self.signal, MLSignal
-        ):
+        if hasattr(self.signal, "generate_ranked"):
             try:
                 ranked_candidates = getattr(
                     self.signal, "_last_ranked_candidates", None
@@ -2008,6 +2488,7 @@ class PaperTradingRunner:
         max_per_industry: Optional[int] = None,
         exclude_st: bool = True,
         min_list_days: int = 365,
+        trading_config: Optional[TradingConfig] = None,
     ) -> List[TargetWeight]:
         """生成补位目标（当买入失败时使用）
 
@@ -2086,18 +2567,43 @@ class PaperTradingRunner:
         
         logger.info(f"股票池大小（排除持仓）: {len(stocks)}")
         
+        effective_config = trading_config or TradingConfig(
+            buy_price=buy_price_type,
+            universe=universe_type,
+            top_n=failed_count,
+            model_version=model_version,
+            max_per_industry=max_per_industry,
+            exclude_st=exclude_st,
+            min_list_days=min_list_days,
+            position_sizing=self.position_sizing,
+        )
+
         # 5. 使用信号生成器获取排序候选
         if self.signal is None:
             if model_version is not None:
                 self.signal = MLSignal(
-                    top_n=failed_count,
-                    model_version=model_version,
+                    top_n=effective_config.top_n,
+                    model_version=effective_config.model_version,
                     verbose=False,
                 )
             else:
                 logger.warning("未指定信号生成器，使用等权")
                 from ..signals.base import EqualWeightSignal
-                self.signal = EqualWeightSignal(top_n=failed_count)
+                self.signal = EqualWeightSignal(top_n=effective_config.top_n)
+        elif hasattr(self.signal, "top_n"):
+            self.signal.top_n = effective_config.top_n
+            if (
+                effective_config.model_version_b is not None
+                and hasattr(self.signal, "update_versions")
+            ):
+                self.signal.update_versions(
+                    effective_config.model_version,
+                    effective_config.model_version_b,
+                )
+            elif effective_config.model_version is not None and hasattr(
+                self.signal, "update_model_version"
+            ):
+                self.signal.update_model_version(effective_config.model_version)
         
         # 加载行业映射（如果启用行业约束）
         industry_mapping = {}
@@ -2107,16 +2613,25 @@ class PaperTradingRunner:
 
         # 6. 生成排序候选（使用与T0相同的逻辑）
         try:
-            if isinstance(self.signal, MLSignal):
-                raw_scores = self._generate_ranked_with_lot_constraint(
+            if hasattr(self.signal, "generate_ranked"):
+                raw_scores, signal_meta = self._generate_ranked_with_lot_constraint(
                     date_ts,
                     stocks,
                     signal_data,
                     daily_data,
-                    failed_count,
+                    effective_config.top_n,
                     buy_price_type,
-                    max_per_industry=max_per_industry,
+                    max_per_industry=effective_config.max_per_industry,
                     industry_mapping=industry_mapping,
+                    industry_momentum_filter=effective_config.industry_momentum_filter,
+                    industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
+                    holding_bonus_enabled=False,
+                    holding_bonus_sigma=effective_config.holding_bonus_sigma,
+                    industry_rotation_enhanced=effective_config.industry_rotation_enhanced,
+                    industry_rotation_alpha=effective_config.industry_rotation_alpha,
+                    trading_config=effective_config,
+                    existing_positions=current_positions,
+                    return_meta=True,
                 )
             else:
                 raw_scores = self.signal.generate(
@@ -2124,9 +2639,23 @@ class PaperTradingRunner:
                     stocks,
                     {'features': signal_data}
                 )
-            signal_dict = self._normalize_signals(raw_scores)
+                signal_meta = {}
+
+            signal_dict = self._normalize_signals(raw_scores, trade_date)
+            confidence_state = signal_meta.get('confidence_gate_state')
+            if hasattr(self.signal, "apply_confidence_gate_to_weights") and confidence_state is not None:
+                signal_dict = self.signal.apply_confidence_gate_to_weights(
+                    signal_dict,
+                    confidence_state=confidence_state,
+                    date=date_ts,
+                    emit_log=True,
+                )
         except Exception as e:
             logger.error(f"补位信号生成失败: {e}")
+            return []
+
+        if not signal_dict:
+            logger.warning("补位门控后无有效目标")
             return []
         
         # 7. 转换为目标权重

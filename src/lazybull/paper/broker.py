@@ -1189,6 +1189,14 @@ class PaperBroker:
         remaining_sells = []
         
         for ps in self.pending_sells:
+            if ps.create_date >= trade_date:
+                logger.info(
+                    f"股票 {ps.ts_code} 延迟卖出于 {ps.create_date} 创建，"
+                    f"按 T+1 规则等待后续交易日执行"
+                )
+                remaining_sells.append(ps)
+                continue
+
             # 检查是否同日重复执行：若 last_attempt_date == trade_date，则不增加 attempts
             if ps.last_attempt_date == trade_date:
                 logger.info(

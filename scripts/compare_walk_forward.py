@@ -115,6 +115,7 @@ COL_NAMES = {
     # 跨时间段稳定性
     "period_count":               "时间段数",
     "period_labels":              "时间段列表",
+    "run_id_list":                "运行ID列表",
     "score_mean":                 "综合得分均值",
     "score_std":                  "综合得分标准差",
     "score_min":                  "综合得分最差",
@@ -656,6 +657,12 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         if len(group) <= 1:
             continue
 
+        ordered_group = group.sort_values(
+            ["__时间段标签", COL_NAMES["wf_run_id"]],
+            ascending=[True, True],
+            na_position="last",
+        )
+
         score_series = pd.to_numeric(group.get("综合得分"), errors="coerce")
         cagr_series = pd.to_numeric(group.get(COL_NAMES["chain_cagr"]), errors="coerce")
         drawdown_series = pd.to_numeric(group.get(COL_NAMES["chain_max_drawdown"]), errors="coerce")
@@ -678,7 +685,14 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         row.update(
             {
                 COL_NAMES["period_count"]: len(group),
-                COL_NAMES["period_labels"]: " | ".join(group["__时间段标签"].astype(str).tolist()),
+                COL_NAMES["period_labels"]: " | ".join(ordered_group["__时间段标签"].astype(str).tolist()),
+                COL_NAMES["run_id_list"]: " | ".join(
+                    f"{period}:{run_id}"
+                    for period, run_id in zip(
+                        ordered_group["__时间段标签"].astype(str),
+                        ordered_group[COL_NAMES["wf_run_id"]].astype(str),
+                    )
+                ),
                 COL_NAMES["score_mean"]: round(score_series.mean(), 2) if score_series.notna().any() else None,
                 COL_NAMES["score_std"]: round(score_std, 2) if pd.notna(score_std) else None,
                 COL_NAMES["score_min"]: round(score_series.min(), 2) if score_series.notna().any() else None,
@@ -703,6 +717,7 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     ordered_cols = [
         COL_NAMES["period_count"],
         COL_NAMES["period_labels"],
+        COL_NAMES["run_id_list"],
         COL_NAMES["stability_score"],
         COL_NAMES["score_mean"],
         COL_NAMES["score_std"],

@@ -45,7 +45,15 @@ import numpy as np
 from loguru import logger
 
 from src.lazybull.common.config import get_data_root, get_models_root
+from src.lazybull.common.backtest_runtime import (
+    create_backtest_engine_from_config,
+    create_or_reuse_signal,
+    infer_rebalance_freq_from_label,
+    persist_signal_quality_state,
+    restore_signal_quality_state,
+)
 from src.lazybull.common.logger import setup_logger
+from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.train_core import (
@@ -69,9 +77,6 @@ from src.lazybull.ml.run_logger import (
     TrainingRunRecord,
     write_training_run_to_csv
 )
-from src.lazybull.risk.equity_curve import create_equity_curve_config_from_dict
-from src.lazybull.risk.stop_loss import create_stop_loss_config_from_dict
-
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 # test 期延伸到数据末尾时，标签列（如 y_ret_20）在最近 N 个交易日全为 NaN，concat 时触发此警告
@@ -252,10 +257,6 @@ def run_oos_backtest(
     Returns:
         回测指标字典，键以 bt_ 前缀开头；无数据时返回空字典
     """
-    import re
-    from src.lazybull.backtest import BacktestEngineML
-    from src.lazybull.common.cost import CostModel
-    from src.lazybull.signals import MLSignal
     from src.lazybull.universe import BasicUniverse
 
     data_root = data_root or get_data_root()
@@ -300,36 +301,98 @@ def run_oos_backtest(
 
     logger.info(f"OOS回测数据: 日线={len(daily_data)}条, 特征={len(features_by_date)}日")
 
-    stop_loss_config = None
-    if bt_stop_loss_enabled:
-        stop_loss_config = create_stop_loss_config_from_dict(
-            {
-                "stop_loss_enabled": bt_stop_loss_enabled,
-                "stop_loss_drawdown_pct": bt_stop_loss_drawdown_pct,
-                "stop_loss_trailing_enabled": bt_stop_loss_trailing_enabled,
-                "stop_loss_trailing_pct": bt_stop_loss_trailing_pct,
-                "stop_loss_consecutive_limit_down": bt_stop_loss_consecutive_limit_down,
-            }
-        )
-
-    equity_curve_config = None
-    if bt_equity_curve_enabled:
-        equity_curve_config = create_equity_curve_config_from_dict(
-            {
-                "equity_curve_enabled": bt_equity_curve_enabled,
-                "equity_curve_drawdown_thresholds": (
-                    bt_equity_curve_drawdown_thresholds or [5.0, 10.0, 15.0, 20.0]
-                ),
-                "equity_curve_exposure_levels": (
-                    bt_equity_curve_exposure_levels or [0.8, 0.6, 0.4, 0.2]
-                ),
-                "equity_curve_ma_short": bt_equity_curve_ma_short,
-                "equity_curve_ma_long": bt_equity_curve_ma_long,
-                "equity_curve_recovery_mode": bt_equity_curve_recovery_mode,
-                "equity_curve_recovery_step": bt_equity_curve_recovery_step,
-                "equity_curve_recovery_delay_periods": bt_equity_curve_recovery_delay_periods,
-            }
-        )
+    effective_config = TradingConfig(
+        model_version=model_version,
+        top_n=bt_top_n,
+        signal_confidence_gate_enabled=signal_confidence_gate_enabled,
+        signal_confidence_gate_top_k=signal_confidence_gate_top_k,
+        signal_confidence_gate_thresholds=(
+            signal_confidence_gate_thresholds or [0.8, 1.2, 1.6]
+        ),
+        signal_confidence_gate_exposure_levels=(
+            signal_confidence_gate_exposure_levels or [0.3, 0.6, 1.0]
+        ),
+        signal_gate_mode=signal_gate_mode,
+        signal_gate_cost_multiplier=signal_gate_cost_multiplier,
+        signal_gate_round_trip_cost=signal_gate_round_trip_cost,
+        signal_gate_quality_enabled=signal_gate_quality_enabled,
+        signal_gate_quality_window=signal_gate_quality_window,
+        signal_gate_quality_threshold=signal_gate_quality_threshold,
+        signal_gate_quality_halflife=signal_gate_quality_halflife,
+        signal_gate_percentile_warmup=signal_gate_percentile_warmup,
+        signal_gate_dynamic_topn=signal_gate_dynamic_topn,
+        signal_gate_topn_high_multiplier=signal_gate_topn_high_multiplier,
+        signal_gate_topn_low_multiplier=signal_gate_topn_low_multiplier,
+        holding_bonus_enabled=holding_bonus_enabled,
+        holding_bonus_sigma=holding_bonus_sigma,
+        rebalance_freq=(
+            bt_rebalance_freq
+            if bt_rebalance_freq is not None
+            else infer_rebalance_freq_from_label(label_column)
+        ),
+        stagger_tranches=stagger_tranches,
+        max_per_industry=bt_max_per_industry,
+        max_weight_per_stock=bt_max_weight_per_stock,
+        enable_early_rebalance_on_empty=enable_early_rebalance_on_empty,
+        exclude_st=bt_exclude_st,
+        min_list_days=bt_min_list_days,
+        stop_loss_enabled=bt_stop_loss_enabled,
+        stop_loss_drawdown_pct=bt_stop_loss_drawdown_pct,
+        stop_loss_trailing_enabled=bt_stop_loss_trailing_enabled,
+        stop_loss_trailing_pct=bt_stop_loss_trailing_pct,
+        stop_loss_consecutive_limit_down=bt_stop_loss_consecutive_limit_down,
+        equity_curve_enabled=bt_equity_curve_enabled,
+        equity_curve_drawdown_thresholds=(
+            bt_equity_curve_drawdown_thresholds or [5.0, 10.0, 15.0, 20.0]
+        ),
+        equity_curve_exposure_levels=(
+            bt_equity_curve_exposure_levels or [0.8, 0.6, 0.4, 0.2]
+        ),
+        equity_curve_ma_short=bt_equity_curve_ma_short,
+        equity_curve_ma_long=bt_equity_curve_ma_long,
+        equity_curve_recovery_mode=bt_equity_curve_recovery_mode,
+        equity_curve_recovery_step=bt_equity_curve_recovery_step,
+        equity_curve_recovery_delay_periods=bt_equity_curve_recovery_delay_periods,
+        market_regime_enabled=market_regime_enabled,
+        market_regime_mode=market_regime_mode,
+        market_regime_bear_threshold=market_regime_bear_threshold,
+        market_regime_bear_exposure=market_regime_bear_exposure,
+        market_regime_vol_target=market_regime_vol_target,
+        market_regime_trend_threshold=market_regime_trend_threshold,
+        market_regime_min_exposure=market_regime_min_exposure,
+        market_regime_combine_method=market_regime_combine_method,
+        market_regime_trend_guard=market_regime_trend_guard,
+        market_regime_drawdown_guard=market_regime_drawdown_guard,
+        market_regime_drawdown_threshold=market_regime_drawdown_threshold,
+        market_regime_ma250_hard_stop=market_regime_ma250_hard_stop,
+        market_regime_ma250_threshold=market_regime_ma250_threshold,
+        market_regime_ma250_exposure=market_regime_ma250_exposure,
+        market_regime_ma250_atr_scaling=market_regime_ma250_atr_scaling,
+        industry_momentum_filter=industry_momentum_filter,
+        industry_momentum_bottom_pct=industry_momentum_bottom_pct,
+        industry_rotation_enhanced=industry_rotation_enhanced,
+        industry_rotation_alpha=industry_rotation_alpha,
+        position_sizing=position_sizing,
+        kelly_vol_window=kelly_vol_window,
+        kelly_max_leverage=kelly_max_leverage,
+        enable_profit_based_holding=enable_profit_based_holding,
+        early_exit_loss_threshold=early_exit_loss_threshold,
+        early_exit_holding_ratio=early_exit_holding_ratio,
+        profit_extension_threshold=profit_extension_threshold,
+        profit_extension_days=profit_extension_days,
+        profit_extension_mode=profit_extension_mode,
+        profit_extension_strength_threshold=profit_extension_strength_threshold,
+        profit_extension_strength_weights=profit_extension_strength_weights,
+        use_atr_for_early_exit=use_atr_for_early_exit,
+        atr_multiplier=atr_multiplier,
+        early_exit_mode=early_exit_mode,
+        early_exit_strength_protect_threshold=early_exit_strength_protect_threshold,
+        early_exit_max_reprieves=early_exit_max_reprieves,
+        take_profit_threshold=take_profit_threshold,
+        take_profit_refill=take_profit_refill,
+        initial_capital=initial_capital,
+        sell_price=bt_sell_timing,
+    )
 
     # 4. 创建回测组件
     universe = BasicUniverse(
@@ -340,30 +403,15 @@ def run_oos_backtest(
         verbose=False,
     )
 
-    if persistent_signal is not None:
-        # 跨 split 复用：仅切换模型版本，保留门控历史缓冲区
-        persistent_signal.update_model_version(model_version)
-        signal = persistent_signal
-    else:
-        signal = MLSignal(
-            top_n=bt_top_n,
-            model_version=model_version,
-            models_dir=get_models_root(str(Path(data_root) / "models") if data_root else None),
-            signal_confidence_gate_enabled=signal_confidence_gate_enabled,
-            signal_confidence_gate_top_k=signal_confidence_gate_top_k,
-            signal_confidence_gate_thresholds=signal_confidence_gate_thresholds,
-            signal_confidence_gate_exposure_levels=signal_confidence_gate_exposure_levels,
-            signal_gate_mode=signal_gate_mode,
-            signal_gate_cost_multiplier=signal_gate_cost_multiplier,
-            signal_gate_round_trip_cost=signal_gate_round_trip_cost,
-            signal_gate_percentile_warmup=signal_gate_percentile_warmup,
-            verbose=False,
-        )
+    signal = create_or_reuse_signal(
+        effective_config,
+        data_root=data_root,
+        persistent_signal=persistent_signal,
+        verbose=False,
+    )
 
     # 自动推断调仓频率
-    if bt_rebalance_freq is None:
-        match = re.search(r'(\d+)', label_column)
-        bt_rebalance_freq = int(match.group(1)) if match else 20
+    bt_rebalance_freq = effective_config.rebalance_freq
 
     if market_regime_ma250_hard_stop:
         ma250_stats = summarize_ma250_signal_coverage(
@@ -398,84 +446,23 @@ def run_oos_backtest(
             )
 
     # 5. 运行回测
-    engine = BacktestEngineML(
+    engine = create_backtest_engine_from_config(
+        trading_config=effective_config,
         universe=universe,
         signal=signal,
         features_by_date=features_by_date,
-        initial_capital=initial_capital,
-        cost_model=CostModel(),
-        rebalance_freq=bt_rebalance_freq,
-        sell_timing=bt_sell_timing,
-        enable_pending_order=True,
-        completion_window_days=5,
-        verbose=False,
-        stop_loss_config=stop_loss_config,
-        equity_curve_config=equity_curve_config,
-        data_storage=storage,
-        max_weight_per_stock=bt_max_weight_per_stock,
-        max_per_industry=bt_max_per_industry,
         stock_basic=stock_basic,
-        market_regime_enabled=market_regime_enabled,
-        market_regime_mode=market_regime_mode,
-        market_regime_bear_threshold=market_regime_bear_threshold,
-        market_regime_bear_exposure=market_regime_bear_exposure,
-        market_regime_vol_target=market_regime_vol_target,
-        market_regime_trend_threshold=market_regime_trend_threshold,
-        market_regime_min_exposure=market_regime_min_exposure,
-        market_regime_combine_method=market_regime_combine_method,
-        market_regime_trend_guard=market_regime_trend_guard,
-        market_regime_drawdown_guard=market_regime_drawdown_guard,
-        market_regime_drawdown_threshold=market_regime_drawdown_threshold,
-        market_regime_ma250_hard_stop=market_regime_ma250_hard_stop,
-        market_regime_ma250_threshold=market_regime_ma250_threshold,
-        market_regime_ma250_exposure=market_regime_ma250_exposure,
-        market_regime_ma250_atr_scaling=market_regime_ma250_atr_scaling,
-        industry_momentum_filter=industry_momentum_filter,
-        industry_momentum_bottom_pct=industry_momentum_bottom_pct,
-        industry_rotation_enhanced=industry_rotation_enhanced,
-        industry_rotation_alpha=industry_rotation_alpha,
-        stagger_tranches=stagger_tranches,
-        position_sizing=position_sizing,
-        kelly_vol_window=kelly_vol_window,
-        kelly_max_leverage=kelly_max_leverage,
-        enable_profit_based_holding=enable_profit_based_holding,
-        early_exit_loss_threshold=early_exit_loss_threshold,
-        early_exit_holding_ratio=early_exit_holding_ratio,
-        profit_extension_threshold=profit_extension_threshold,
-        profit_extension_days=profit_extension_days,
-        profit_extension_mode=profit_extension_mode,
-        profit_extension_strength_threshold=profit_extension_strength_threshold,
-        profit_extension_strength_weights=profit_extension_strength_weights,
-        use_atr_for_early_exit=use_atr_for_early_exit,
-        atr_multiplier=atr_multiplier,
-        early_exit_mode=early_exit_mode,
-        early_exit_strength_protect_threshold=early_exit_strength_protect_threshold,
-        early_exit_max_reprieves=early_exit_max_reprieves,
-        take_profit_threshold=take_profit_threshold,
-        take_profit_refill=take_profit_refill,
-        enable_early_rebalance_on_empty=enable_early_rebalance_on_empty,
-        signal_gate_quality_enabled=signal_gate_quality_enabled,
-        signal_gate_quality_window=signal_gate_quality_window,
-        signal_gate_quality_threshold=signal_gate_quality_threshold,
-        signal_gate_quality_halflife=signal_gate_quality_halflife,
-        signal_gate_dynamic_topn=signal_gate_dynamic_topn,
-        signal_gate_topn_high_multiplier=signal_gate_topn_high_multiplier,
-        signal_gate_topn_low_multiplier=signal_gate_topn_low_multiplier,
-        holding_bonus_enabled=holding_bonus_enabled,
-        holding_bonus_sigma=holding_bonus_sigma,
+        data_storage=storage,
+        initial_capital=initial_capital,
+        sell_timing=bt_sell_timing,
+        verbose=False,
+        completion_window_days=5,
+        enable_pending_order=True,
     )
 
     # 从持久化 signal 恢复质量监控状态（跨 split 积累，避免每次重置预热期）
-    if persistent_signal is not None and signal_gate_quality_enabled:
-        state = persistent_signal._persisted_quality_state
-        if state is not None:
-            engine._prediction_quality_history = list(state["history"])
-            engine._rolling_quality_score = state["score"]
-            engine._quality_warmup_remaining = state["warmup_remaining"]
-            logger.info(
-                f"质量监控状态已恢复: {len(state['history'])}条历史, "
-                f"score={state['score']:.3f}, warmup_remaining={state['warmup_remaining']}"
-            )
+    if persistent_signal is not None:
+        restore_signal_quality_state(engine, persistent_signal)
 
     trading_dates_ts = [pd.Timestamp(d) for d in trade_dates]
 
@@ -487,16 +474,8 @@ def run_oos_backtest(
     )
 
     # 回测结束后将质量监控状态保存到持久化 signal，供下一个 split 继续
-    if persistent_signal is not None and signal_gate_quality_enabled:
-        persistent_signal._persisted_quality_state = {
-            "history": list(engine._prediction_quality_history),
-            "score": engine._rolling_quality_score,
-            "warmup_remaining": engine._quality_warmup_remaining,
-        }
-        logger.info(
-            f"质量监控状态已保存: {len(engine._prediction_quality_history)}条历史, "
-            f"score={engine._rolling_quality_score:.3f}"
-        )
+    if persistent_signal is not None:
+        persist_signal_quality_state(engine, persistent_signal)
 
     confidence_gate_stats = engine.get_confidence_gate_stats()
 

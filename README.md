@@ -28,7 +28,39 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.60.4)
+### 当前版本 (v0.63.3)
+
+**batch_walk_forward 参数区按开关关系重排** (v0.63.3):
+- `scripts/batch_walk_forward.ps1` 现在会把某个总开关和它真正控制的参数放在一起展示，例如盈亏动态持仓、ATR 动态阈值、strength_veto、止损、ECT、动态 Top-N、行业过滤、市场择时等
+- 每组参数旁都补了“仅在何种开关 / 模式下生效”的中文注释，便于直接判断哪些参数当前有效、哪些只是备用扫描项
+
+**纸面交易配置按开关控制关系分组展示** (v0.63.2):
+- `data/paper/config.yaml` 现在会把某个开关和它真正控制的参数放在同一小段里，例如止损、ECT、市场择时、行业过滤、盈利延续、动态 Top-N 等
+- `paper_trade.py config` 刷新 YAML 模板时也会保持这种“开关在前、受控参数紧跟”的排布，便于直接判断哪些参数当前有效
+
+**纸面交易仅保留 YAML 主配置** (v0.63.1):
+- `data/paper/config.yaml` 现在是唯一需要维护的纸面交易配置文件
+- `PaperStorage.load_config()` 不再回退读取 `config.json`，`paper_trade.py config` 也不再生成 JSON 快照
+- `reset_t0` 后保留的也是 `config.yaml`，配置目录更干净
+
+**纸面交易主配置切换为带中文注释的 YAML 模板** (v0.63.0):
+- `data/paper/config.yaml` 现在是纸面交易的主配置入口，按模型、门控、组合、止损、ECT、择时、行业、仓位管理等模块分段展示，并带中文注释
+- `PaperStorage.load_config()` 会优先读取 `config.yaml`
+- `paper_trade.py config` 保存时也会同步刷新这份 YAML 模板，便于你按 `batch_walk_forward.ps1` 风格长期维护
+
+**纸面交易支持直接编辑全量配置文件** (v0.62.0):
+- 核心配置已迁移到更适合手工编辑的 `data/paper/config.yaml`
+- `PaperStorage.load_config()` 会自动兼容旧版 `weight_method` 字段并补齐缺失的新参数，避免因为 CLI 漏参导致配置不完整
+- `paper_trade.py run` 在找不到配置时也会明确提示直接编辑 `data/paper/config.yaml`
+
+**单次回测 / walk_forward / 纸面交易策略参数与运行时进一步对齐** (v0.61.0):
+- `scripts/run_ml_backtest.py` 与 `scripts/walk_forward.py` 现在共用统一的回测运行时工厂，单次回测不再维护一套独立的 BacktestEngineML 长参数透传
+- 纸面交易接入 `TradingConfig` 统一透传、滚动质量监控、动态 Top-N、行业轮动加权、Kelly/半Kelly、整体止盈、空仓提前调仓，并恢复延迟卖出的 T+1 语义
+- 公共 signal 工厂现已支持 `model_version_b + ensemble_weight_a` 双模型加权集成，单次回测和纸面交易可直接复用
+
+**跨时间段稳定性汇总新增运行ID列表** (v0.60.5):
+- `wf_comparison_batches.xlsx` 的 `跨时间段稳定性` sheet 现在直接输出 `运行ID列表`
+- 格式为 `批次时间段:运行ID`，例如 `0101:wf_xxx | 0209:wf_yyy`，可直接从稳定性汇总定位到底层 run
 
 **raw 空目录也会生成占位报表** (v0.60.4):
 - 无参 `compare_walk_forward.py` 在 `data/walk_forward/raw` 没有 summary 文件时，仍会生成 `data/walk_forward/wf_comparison_raw.xlsx`
@@ -765,6 +797,8 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 **纸面交易**:
 ```bash
+# 方式1：直接编辑 data/paper/config.yaml（推荐，分段+中文注释）
+
 # 配置 ECT 参数
 python scripts/paper_trade.py config \
   --buy-price close --sell-price close \

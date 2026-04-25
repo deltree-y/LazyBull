@@ -1,6 +1,5 @@
 """测试纸面交易新CLI功能"""
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -49,11 +48,43 @@ def test_save_and_load_config(temp_paper_storage):
     assert loaded_config['stop_loss_enabled'] is True
     assert loaded_config['stop_loss_drawdown_pct'] == 20.0
 
+    yaml_path = Path(temp_paper_storage.root_path) / 'config.yaml'
+    assert yaml_path.exists()
+    yaml_text = yaml_path.read_text(encoding='utf-8')
+    assert '# 模型与集成配置' in yaml_text
+    assert 'model:' in yaml_text
+    assert 'paper_trade:' in yaml_text
+    assert '以下参数仅在 model_version_b 非 null 时生效' in yaml_text
+    assert '止损总开关（关闭后以下止损参数整体不生效）' in yaml_text
+
+    json_path = Path(temp_paper_storage.root_path) / 'config.json'
+    assert not json_path.exists()
+
 
 def test_load_config_not_exist(temp_paper_storage):
     """测试读取不存在的配置"""
     config = temp_paper_storage.load_config()
     assert config is None
+
+
+def test_load_grouped_yaml_config(temp_paper_storage):
+    """测试分段 YAML 配置可直接加载为扁平配置视图"""
+    yaml_text = """# 纸面交易模板\nmodel:\n  model_version: 99\n  model_version_b: null\n  ensemble_weight_a: 0.5\nsignal_gate:\n  signal_gate_mode: composite\n  signal_gate_quality_enabled: true\nportfolio:\n  top_n: 12\n  rebalance_freq: 10\n  max_per_industry: 2\nholding_management:\n  take_profit_threshold: 0.18\n  take_profit_refill: false\nposition_management:\n  position_sizing: half_kelly\n  kelly_vol_window: 80\n  kelly_max_leverage: 0.2\npaper_trade:\n  buy_price: open\n  sell_price: close\n  initial_capital: 888888.0\n  horizon: 20\n  universe: mainboard\n"""
+
+    yaml_path = Path(temp_paper_storage.root_path) / 'config.yaml'
+    yaml_path.write_text(yaml_text, encoding='utf-8')
+
+    loaded_config = temp_paper_storage.load_config()
+
+    assert loaded_config is not None
+    assert loaded_config['model_version'] == 99
+    assert loaded_config['signal_gate_mode'] == 'composite'
+    assert loaded_config['signal_gate_quality_enabled'] is True
+    assert loaded_config['top_n'] == 12
+    assert loaded_config['position_sizing'] == 'half_kelly'
+    assert loaded_config['take_profit_threshold'] == 0.18
+    assert loaded_config['take_profit_refill'] is False
+    assert loaded_config['initial_capital'] == 888888.0
 
 
 def test_save_and_load_stop_loss_state(temp_paper_storage):
@@ -226,7 +257,7 @@ def test_config_command_integration(temp_paper_storage):
     temp_paper_storage.save_config(config)
     
     # 验证配置文件存在
-    config_path = Path(temp_paper_storage.root_path) / "config.json"
+    config_path = Path(temp_paper_storage.root_path) / "config.yaml"
     assert config_path.exists()
     
     # 读取并验证

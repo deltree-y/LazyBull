@@ -2,6 +2,120 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.63.3] - 2026-04-25
+
+### 优化
+
+- **batch_walk_forward 参数区按开关控制关系重排并补充中文说明** ([scripts/batch_walk_forward.ps1](scripts/batch_walk_forward.ps1)):
+  - 将 OOS 回测、信号门控、盈亏动态持仓、ATR 子开关、strength_veto、整体止盈、MA250、止损、ECT、行业过滤、行业轮动、市场择时等参数，按“总开关在前、受控参数紧跟”的方式重新排布
+  - 为每组参数补充“仅在什么开关/模式下生效”的中文注释，减少无效扫描和参数误读
+
+### 验证
+
+- **完成脚本语法校验** ([scripts/batch_walk_forward.ps1](scripts/batch_walk_forward.ps1)):
+  - 使用 PowerShell 语法解析器确认重排后脚本可正常解析
+
+## [0.63.2] - 2026-04-25
+
+### 优化
+
+- **纸面交易 YAML 配置按开关控制关系分组展示** ([storage.py](src/lazybull/paper/storage.py), [config.yaml](data/paper/config.yaml)):
+  - `data/paper/config.yaml` 现在会把“开关本身”和“仅在该开关开启时生效的参数”放在同一小段里，便于直接判断哪些参数当前有效
+  - `PaperStorage.save_config()` 生成的 YAML 模板也同步采用相同分组方式，避免后续刷新模板后又回到旧的平铺布局
+
+### 测试
+
+- **补充配置模板分组文案断言** ([test_paper_trading_cli.py](tests/test_paper_trading_cli.py)):
+  - 校验保存配置后生成的 YAML 模板包含“模型集成子开关”和“止损总开关”分组提示
+
+## [0.63.1] - 2026-04-25
+
+### 优化
+
+- **纸面交易仅保留 YAML 配置文件** ([storage.py](src/lazybull/paper/storage.py), [paper_trade.py](scripts/paper_trade.py), [config.yaml](data/paper/config.yaml)):
+  - `PaperStorage.load_config()` 现在只读取 `data/paper/config.yaml`
+  - `PaperStorage.save_config()` 不再生成 `config.json` 快照
+  - `reset_t0`、脚本提示和模板注释统一改为仅保留 `config.yaml`
+
+### 测试
+
+- **同步移除 JSON 兼容断言** ([test_paper_trading_cli.py](tests/test_paper_trading_cli.py), [test_adjust_truncate.py](tests/test_adjust_truncate.py)):
+  - 校验保存配置后不再生成 `config.json`
+  - 校验 reset 后仍保留的是 YAML 主配置
+
+## [0.63.0] - 2026-04-25
+
+### 新增
+
+- **纸面交易主配置切换为带中文注释的 YAML 模板** ([config.yaml](data/paper/config.yaml), [storage.py](src/lazybull/paper/storage.py), [paper_trade.py](scripts/paper_trade.py)):
+  - 新增 `data/paper/config.yaml` 作为纸面交易主配置入口，按模型、门控、组合、择时、止损、ECT、行业、仓位管理等模块分段展示，并带中文注释
+  - `PaperStorage.load_config()` 现优先读取 `config.yaml`，仍兼容旧版 `config.json`
+  - `PaperStorage.save_config()` 现在会同步写出带注释的 YAML 模板与 `config.json` 兼容快照，便于手工维护和兼容旧流程
+
+### 测试
+
+- **补充纸面交易 YAML 配置加载与模板写出测试** ([test_paper_trading_cli.py](tests/test_paper_trading_cli.py)):
+  - 校验保存配置后会生成分段注释的 `config.yaml`
+  - 校验分段 YAML 可以直接加载为扁平配置视图
+
+## [0.62.0] - 2026-04-25
+
+### 新增
+
+- **纸面交易支持直接手工维护全量配置文件** ([storage.py](src/lazybull/paper/storage.py), [trading_config.py](src/lazybull/common/trading_config.py), [paper_trade.py](scripts/paper_trade.py), [config.json](data/paper/config.json)):
+  - `PaperStorage.load_config()` 现在会自动补齐 `TradingConfig` 默认参数，并兼容旧版 `weight_method -> position_sizing` 字段映射
+  - `PaperStorage.save_config()` 会写出完整配置面，后续可直接编辑 `data/paper/config.json`，不必再依赖长串 `paper_trade.py config --xxx` 命令
+  - 仓库内现有纸面交易配置已升级为全量模板，便于按 `batch_walk_forward.ps1` 风格逐项填写和调整
+
+### 测试
+
+- **补充纸面交易旧配置自动升级测试** ([test_paper_trading_cli.py](tests/test_paper_trading_cli.py)):
+  - 校验旧版 `config.json` 缺少新参数时，读取后会自动补齐完整默认值并迁移旧字段名
+
+## [0.61.0] - 2026-04-25
+
+### 新增
+
+- **单次回测 / walk_forward 共享统一回测运行时** ([run_ml_backtest.py](scripts/run_ml_backtest.py), [walk_forward.py](scripts/walk_forward.py), [backtest_runtime.py](src/lazybull/common/backtest_runtime.py)):
+  - 抽出统一的 `TradingConfig -> BacktestEngineML` 构造工厂，单次回测与 walk_forward OOS 回测改为共用同一套策略参数映射、signal 创建与滚动质量状态恢复逻辑
+  - `run_ml_backtest.py` 现在与 walk_forward 一样支持并透传整体止盈、滚动质量监控、动态 Top-N、行业轮动加权、Kelly/半Kelly、空仓提前调仓等参数
+
+- **纸面交易策略链补齐到 walk_forward 主策略面** ([paper_trade.py](scripts/paper_trade.py), [runner.py](src/lazybull/paper/runner.py), [broker.py](src/lazybull/paper/broker.py), [storage.py](src/lazybull/paper/storage.py)):
+  - `PaperTradingRunner` 新增统一策略状态持久化，接入滚动质量监控、动态 Top-N、行业轮动加权、Kelly/半Kelly 仓位管理、整体止盈、空仓提前调仓
+  - 纸面交易延迟卖出恢复为真正的 T+1 语义，整体止盈支持 `take_profit_refill` 控制是否允许次日自动回补
+  - `paper_trade.py` 与补位链路改为透传 `TradingConfig`，减少脚本层与 runner 层手工拆参
+
+- **公共 signal 工厂支持双模型加权集成** ([signal_factory.py](src/lazybull/common/signal_factory.py), [ensemble_signal.py](src/lazybull/signals/ensemble_signal.py)):
+  - `model_version_b` + `ensemble_weight_a` 现在会创建统一的双模型集成 signal，单次回测和纸面交易可直接消费该参数组合
+
+### 测试
+
+- **补充并通过本次改造相关测试切片**:
+  - `tests/test_equal_weight_lot_constraint.py`
+  - `tests/test_pending_buy_estimation.py`
+  - `tests/test_replenishment_no_sell.py`
+  - `tests/test_holding_bonus_and_adaptive_topn.py`
+  - `tests/test_industry_rotation_and_kelly.py`
+  - `tests/test_paper_trading_cli.py`
+  - `tests/test_paper_trade_realtime_summary.py`
+  - `tests/test_suspended_stock_handling.py`
+  - `tests/test_walk_forward.py`
+  - `tests/test_market_and_new_features.py`
+
+## [0.60.5] - 2026-04-25
+
+### 优化
+
+- **跨时间段稳定性汇总新增运行ID列表列** ([compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - `wf_comparison_batches.xlsx` 的 `跨时间段稳定性` sheet 新增 `运行ID列表`
+  - 每个稳定性分组会按 `批次时间段:运行ID` 的格式输出映射，例如 `0101:wf_xxx | 0209:wf_yyy`
+  - 这样可以直接从稳定性汇总回溯到底层 run，无需再去 `实验对比` sheet 手工反查
+
+### 测试
+
+- **补充运行ID列表列断言** ([test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 校验稳定性汇总在单批次和多批次场景下都会输出正确的 `运行ID列表`
+
 ## [0.60.4] - 2026-04-24
 
 ### 优化
