@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.64.0] - 2026-04-25
+
+### 新增
+
+- **paper_trade 与 bot_service 共用纸面交易运行时与展示层** ([runtime.py](src/lazybull/paper/runtime.py), [reporting.py](src/lazybull/paper/reporting.py), [paper_trade.py](scripts/paper_trade.py), [bot_service.py](scripts/bot_service.py)):
+  - 新增 `src/lazybull/paper/runtime.py`，统一承载纸面交易日执行编排，完整覆盖止损、亏损提前换出、整体止盈、延迟卖出、T1、T0 与明日指令整理
+  - 新增 `src/lazybull/paper/reporting.py`，统一承载模型信息、持仓快照、手机 Markdown 持仓展示与交易结果展示
+  - `scripts/paper_trade.py run` 改为调用共享运行时，`scripts/bot_service.py trade / positions / model` 也改为复用同一层，不再各自维护一套交易步骤和格式化逻辑
+  - `scripts/bot_service.py` 新增 `paper <paper_trade 子命令...>` 透传入口，低频 CLI 子命令可直接远程复用，无需再额外补机器人专用接线
+
+### 测试
+
+- **完成共享运行时与 CLI 相关验证**:
+  - `d:/my_pro/LazyBull/.venv/Scripts/python.exe -m pytest tests/test_paper_trade_runtime.py tests/test_suspended_stock_handling.py`
+  - `d:/my_pro/LazyBull/.venv/Scripts/python.exe -m pytest tests/test_paper_trading_cli.py`
+  - `d:/my_pro/LazyBull/.venv/Scripts/python.exe -m py_compile scripts/paper_trade.py scripts/bot_service.py src/lazybull/paper/runtime.py src/lazybull/paper/reporting.py`
+
 ## [0.63.3] - 2026-04-25
 
 ### 优化

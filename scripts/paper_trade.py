@@ -25,21 +25,37 @@ from typing import Callable, Dict, List, Optional, Tuple
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import warnings
+
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.common.config import get_config, get_models_root
+from src.lazybull.common.config import get_config
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.common.print_table import format_row
 from src.lazybull.common.trading_config import TradingConfig, add_trading_args
-from src.lazybull.common.signal_factory import create_signal
 from src.lazybull.data import DataLoader, Storage
-from src.lazybull.ml import ModelRegistry
-from src.lazybull.paper import PaperTradingRunner, PaperStorage
-from src.lazybull.risk.stop_loss import StopLossConfig, StopLossMonitor
-from src.lazybull.risk.stop_loss_checker import check_positions_stop_loss
-from src.lazybull.risk.equity_curve import EquityCurveConfig, EquityCurveMonitor, create_equity_curve_config_from_dict
-import warnings
+from src.lazybull.paper import (
+    PaperStorage,
+    PaperTradingRunner,
+    create_paper_trade_runtime,
+    execute_trade_workflow,
+)
+from src.lazybull.paper import format_model_info as shared_format_model_info
+from src.lazybull.paper import (
+    load_position_snapshot,
+)
+from src.lazybull.paper.runtime import _check_early_exit as shared_check_early_exit
+from src.lazybull.paper.runtime import _check_stop_loss as shared_check_stop_loss
+from src.lazybull.paper.runtime import _check_take_profit as shared_check_take_profit
+from src.lazybull.paper.runtime import (
+    _execute_t0_if_rebalance_day as shared_execute_t0_if_rebalance_day,
+)
+from src.lazybull.paper.runtime import _execute_t1_if_pending as shared_execute_t1_if_pending
+from src.lazybull.paper.runtime import _handle_failed_buys as shared_handle_failed_buys
+from src.lazybull.paper.runtime import _process_pending_buys as shared_process_pending_buys
+from src.lazybull.paper.runtime import _process_pending_sells as shared_process_pending_sells
+
 # 匹配告警信息中的关键字符串，设置为 ignore
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 
@@ -53,121 +69,7 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
     Returns:
         格式化的模型信息文本
     """
-    storage = PaperStorage()
-    config = storage.load_config()
-    if not config:
-        return "未找到配置文件，请先编辑 data/paper/config.yaml 或运行 config 命令设置配置。"
-
-    registry = ModelRegistry(models_dir=models_dir or get_models_root())
-    models = registry.list_models()
-
-    if not models:
-        return "没有已注册的模型。请先使用 train_ml_model.py 训练模型。"
-
-    lines = []
-
-    # 从配置中读取版本
-    target_version = config.get('model_version')
-
-    # 查找目标模型
-    target_meta = None
-    if target_version is not None:
-        for m in models:
-            if m['version'] == target_version:
-                target_meta = m
-                break
-    else:
-        # 配置中未指定版本，使用最新
-        target_meta = models[-1]
-
-    if target_meta is None:
-        return f"未找到版本 {target_version} 的模型。可用版本: {[m['version'] for m in models]}"
-
-    # 显示当前使用的模型详情
-    version_label = target_meta['version_str']
-    if target_version is None:
-        version_label += " (最新)"
-    lines.append(f"当前模型: {version_label}")
-    lines.append(f"  模型类型: {target_meta.get('model_type', '未知')}")
-    lines.append(f"  训练区间: {target_meta.get('train_start_date', '?')} ~ {target_meta.get('train_end_date', '?')}")
-    lines.append(f"  特征数量: {target_meta.get('feature_count', '?')}")
-    lines.append(f"  训练样本: {target_meta.get('n_samples', '?')}")
-    lines.append(f"  标签列: {target_meta.get('label_column', '?')}")
-    lines.append(f"  创建时间: {target_meta.get('created_at', '?')}")
-
-    # 训练参数
-    train_params = target_meta.get('train_params', {})
-    if train_params:
-        lines.append(f"  训练参数:")
-        for k, v in train_params.items():
-            lines.append(f"    {k}: {v}")
-
-    # 性能指标（只显示关键摘要）
-    perf = target_meta.get('performance_metrics', {})
-    if perf:
-        lines.append(f"  性能指标:")
-        # 优先显示 validation 和 test 中的关键指标
-        for split in ['validation', 'test']:
-            split_data = perf.get(split, {})
-            if isinstance(split_data, dict) and split_data:
-                ic = split_data.get('ic') or split_data.get('rank_ic')
-                r2 = split_data.get('r2')
-                rmse = split_data.get('rmse')
-                parts = []
-                if ic is not None:
-                    parts.append(f"IC={ic:.4f}")
-                rank_ic = split_data.get('rank_ic')
-                if rank_ic is not None:
-                    parts.append(f"RankIC={rank_ic:.4f}")
-                if r2 is not None:
-                    parts.append(f"R2={r2:.4f}")
-                if rmse is not None:
-                    parts.append(f"RMSE={rmse:.4f}")
-                if parts:
-                    lines.append(f"    {split}: {', '.join(parts)}")
-        # validation_daily 关键指标
-        vd = perf.get('validation_daily', {})
-        if isinstance(vd, dict) and vd:
-            rankic_mean = vd.get('daily_rankic_mean')
-            rankic_ir = vd.get('daily_rankic_ir')
-            top30_ret = vd.get('top30_return_mean')
-            parts = []
-            if rankic_mean is not None:
-                parts.append(f"DailyRankIC={rankic_mean:.4f}")
-            if rankic_ir is not None:
-                parts.append(f"IR={rankic_ir:.4f}")
-            if top30_ret is not None:
-                parts.append(f"Top30Ret={top30_ret:.4f}")
-            if parts:
-                lines.append(f"    validation_daily: {', '.join(parts)}")
-        # test_daily 关键指标
-        td = perf.get('test_daily', {})
-        if isinstance(td, dict) and td:
-            rankic_mean = td.get('daily_rankic_mean')
-            rankic_ir = td.get('daily_rankic_ir')
-            top30_ret = td.get('top30_return_mean')
-            parts = []
-            if rankic_mean is not None:
-                parts.append(f"DailyRankIC={rankic_mean:.4f}")
-            if rankic_ir is not None:
-                parts.append(f"IR={rankic_ir:.4f}")
-            if top30_ret is not None:
-                parts.append(f"Top30Ret={top30_ret:.4f}")
-            if parts:
-                lines.append(f"    test_daily: {', '.join(parts)}")
-
-    # 双模型集成信息
-    storage = PaperStorage()
-    config = storage.load_config()
-    if config and config.get('model_version_b') is not None:
-        mv_b = config['model_version_b']
-        weight_a = config.get('ensemble_weight_a', 0.5)
-        lines.append("")
-        lines.append(f"集成模式: 双模型 Ensemble")
-        lines.append(f"  模型A: v{config.get('model_version', '最新')} (权重 {weight_a})")
-        lines.append(f"  模型B: v{mv_b} (权重 {1 - weight_a})")
-
-    return "\n".join(lines)
+    return shared_format_model_info(models_dir=models_dir)
 
 
 def run_model_info(_args):
@@ -196,20 +98,20 @@ def run_config(args):
     # 保存配置
     storage = PaperStorage()
     storage.save_config(config)
-    
+
     logger.info("配置已保存成功！")
     logger.info("")
     logger.info("当前配置：")
     logger.info("-" * 80)
-    
+
     # 格式化输出
     widths = [30, 50]
-    aligns = ['left', 'left']
-    
+    aligns = ["left", "left"]
+
     for key, value in config.items():
         row = [key, str(value)]
         logger.info(format_row(row, widths, aligns))
-    
+
     logger.info("=" * 80)
 
 
@@ -219,23 +121,17 @@ def run_main(args):
     logger.info("纸面交易自动运行")
     logger.info("=" * 80)
     logger.info(f"交易日期: {args.trade_date}")
-    
-    # 1. 读取配置
-    storage = PaperStorage()
-    config = storage.load_config()
-    
-    if config is None:
-        logger.error("未找到配置文件，请先编辑 data/paper/config.yaml 或运行 config 命令设置配置")
-        logger.error("示例: python scripts/paper_trade.py config --buy-price close --sell-price close --top-n 5")
-        sys.exit(1)
-    
-    # 允许命令行参数覆盖配置
-    if args.model_version is not None:
-        config['model_version'] = args.model_version
 
-    # 设置默认 horizon，如果配置中不存在
-    if 'horizon' not in config:
-        config['horizon'] = 20  # 默认持仓周期20天
+    try:
+        runtime = create_paper_trade_runtime(args.model_version)
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        logger.error(
+            "示例: python scripts/paper_trade.py config --buy-price close --sell-price close --top-n 5"
+        )
+        sys.exit(1)
+
+    config = runtime.config
 
     logger.info("使用配置：")
     logger.info(f"  买入价格类型: {config['buy_price']}")
@@ -246,204 +142,51 @@ def run_main(args):
     logger.info(f"  特征预测周期（horizon）: {config['horizon']} 天")
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
-    if config.get('market_regime_enabled') or config.get('market_regime_ma250_hard_stop'):
+    if config.get("market_regime_enabled") or config.get("market_regime_ma250_hard_stop"):
         logger.info(
             f"  市场择时: 启用 (模式={config.get('market_regime_mode', 'binary')}"
             f", MA250={'启用' if config.get('market_regime_ma250_hard_stop') else '关闭'})"
         )
-    if config.get('industry_momentum_filter'):
-        logger.info(f"  行业动量过滤: 启用 (剔除后{config.get('industry_momentum_bottom_pct', 0.2):.0%})")
-    if config.get('enable_profit_based_holding'):
+    if config.get("industry_momentum_filter"):
+        logger.info(
+            f"  行业动量过滤: 启用 (剔除后{config.get('industry_momentum_bottom_pct', 0.2):.0%})"
+        )
+    if config.get("enable_profit_based_holding"):
         logger.info(
             f"  盈亏动态持仓: 启用 (延续模式={config.get('profit_extension_mode', 'pnl')}"
             f", 亏损换出={config.get('early_exit_mode', 'disabled')})"
         )
-    if config.get('max_per_industry'):
+    if config.get("max_per_industry"):
         logger.info(f"  单行业最大持仓: {config['max_per_industry']}")
-    if config.get('max_weight_per_stock'):
+    if config.get("max_weight_per_stock"):
         logger.info(f"  单股最大权重: {config['max_weight_per_stock']:.2%}")
     logger.info(f"  排除ST: {config.get('exclude_st', True)}")
     logger.info(f"  最少上市天数: {config.get('min_list_days', 365)}")
     logger.info("=" * 80)
-    
-    # 2. 创建运行器（统一通过工厂函数创建 signal，确保门控参数穿透）
-    trading_config = TradingConfig.from_dict(config)
-    signal = create_signal(trading_config)
 
-    runner = PaperTradingRunner(
-        signal=signal,
-        initial_capital=config['initial_capital'],
-        position_sizing=config.get('position_sizing', 'equal'),
-        horizon=config['horizon'],
-    )
+    try:
+        result = execute_trade_workflow(args.trade_date, runtime=runtime)
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        sys.exit(1)
 
-    # 3. 校正交易日期
-    corrected_date = runner._correct_trade_date(args.trade_date)
-
-    # 4. 日期回退检测
-    account_state = storage.load_account_state()
-    if account_state and account_state.last_update:
-        if corrected_date < account_state.last_update:
-            logger.error(
-                f"日期回退：输入日期 {corrected_date} 早于账户最后更新日期 {account_state.last_update}，"
-                f"不允许回退执行"
-            )
-            sys.exit(1)
-    
-    # 4. 创建止损监控器（通过 TradingConfig）
-    stop_loss_config = trading_config.create_stop_loss_config() or StopLossConfig()
-    stop_loss_monitor = StopLossMonitor(stop_loss_config)
-    
-    # 加载止损状态
-    sl_state = storage.load_stop_loss_state()
-    if sl_state:
-        stop_loss_monitor.position_high_prices = sl_state.get('position_high_prices', {})
-        stop_loss_monitor.consecutive_limit_down_days = sl_state.get('consecutive_limit_down_days', {})
-    
-    # 5. 执行止损检查
-    logger.info("")
-    logger.info("-" * 80)
-    logger.info("步骤1: 检查止损触发")
-    logger.info("-" * 80)
-
-    if config['stop_loss_enabled']:
-        _check_stop_loss(runner, stop_loss_monitor, corrected_date, config)
-
-        # 保存止损状态
-        sl_state = {
-            'position_high_prices': stop_loss_monitor.position_high_prices,
-            'consecutive_limit_down_days': stop_loss_monitor.consecutive_limit_down_days
-        }
-        storage.save_stop_loss_state(sl_state)
-    else:
-        logger.info("止损功能未启用，跳过")
-
-    # 5.5. 亏损提前换出检查
-    logger.info("")
-    logger.info("-" * 80)
-    logger.info("步骤1.5: 检查亏损提前换出")
-    logger.info("-" * 80)
-
-    if (
-        config.get("enable_profit_based_holding", False)
-        and config.get("early_exit_mode", "disabled") != "disabled"
-    ):
-        _check_early_exit(runner, corrected_date, config)
-    else:
-        logger.info("亏损提前换出未启用，跳过")
-
-    logger.info("")
-    logger.info("-" * 80)
-    logger.info("步骤1.75: 检查整体止盈")
-    logger.info("-" * 80)
-    _check_take_profit(runner, corrected_date, config)
-
-    # 6. 执行延迟卖出队列
-    logger.info("")
-    logger.info("-" * 80)
-    logger.info("步骤2: 处理延迟卖出队列")
-    logger.info("-" * 80)
-
-    _process_pending_sells(runner, corrected_date, config)
-
-    # 7. 执行 T1（如果有待执行目标）
-    logger.info("")
-    logger.info("-" * 80)
-    logger.info("步骤3: 检查并执行 T1")
-    logger.info("-" * 80)
-
-    _execute_t1_if_pending(runner, corrected_date, config)
-
-    # 8. 判断是否调仓日并执行 T0
-    logger.info("")
-    logger.info("-" * 80)
-    logger.info("步骤4: 检查是否调仓日并执行 T0")
-    logger.info("-" * 80)
-
-    _execute_t0_if_rebalance_day(runner, corrected_date, config)
-
-    # 9. 打印持仓
-    print_positions(corrected_date)
+    print_positions(result.corrected_date, runner=result.runner)
 
     logger.info("=" * 120)
-    logger.info(f"运行完成 - {corrected_date}, 下个交易日: [{runner._get_next_trade_date(corrected_date)}]")
+    logger.info(
+        f"运行完成 - {result.corrected_date}, 下个交易日: [{result.runner._get_next_trade_date(result.corrected_date)}]"
+    )
     logger.info("=" * 120)
 
 
 def _check_stop_loss(
     runner: PaperTradingRunner,
-    stop_loss_monitor: StopLossMonitor,
+    stop_loss_monitor,
     trade_date: str,
-    config: dict
+    config: dict,
 ) -> List[Dict]:
-    """检查止损触发（委托公共模块 check_positions_stop_loss）
-
-    Returns:
-        止损动作列表 [{ts_code, shares, reason, can_execute}, ...]
-    """
-    from src.lazybull.common.suspend_calendar import SuspendCalendar
-
-    actions = []
-
-    positions = runner.account.get_positions()
-    if not positions:
-        logger.info("当前无持仓，跳过止损检查")
-        return actions
-
-    # 加载价格数据
-    loader = DataLoader(runner.storage)
-    daily_data = loader.load_clean_daily_by_date(trade_date)
-    if daily_data is None or daily_data.empty:
-        logger.warning(f"无法加载 {trade_date} 的价格数据，跳过止损检查")
-        return actions
-
-    # 构建价格字典和跌停信息
-    prices = {}
-    limit_down_info = {}
-    for _, row in daily_data.iterrows():
-        ts_code = row['ts_code']
-        prices[ts_code] = row.get('close', 0.0)
-        limit_down_info[ts_code] = row.get('is_limit_down', 0) == 1
-
-    # 初始化停牌日历
-    suspend_calendar = SuspendCalendar(runner.storage)
-
-    # 调用公共止损检查
-    sl_actions = check_positions_stop_loss(
-        positions=positions,
-        stop_loss_monitor=stop_loss_monitor,
-        prices=prices,
-        limit_down_info=limit_down_info,
-        suspend_calendar=suspend_calendar,
-        trade_date=trade_date,
-    )
-
-    # 转换为脚本层格式，并处理跌停延迟卖出队列
-    for sl in sl_actions:
-        pos = positions.get(sl.ts_code)
-        sell_shares = (pos.shares // 100) * 100 if pos else 0
-
-        actions.append({
-            'ts_code': sl.ts_code,
-            'shares': sell_shares,
-            'reason': sl.reason,
-            'can_execute': sl.can_execute,
-        })
-
-        if sl.is_limit_down:
-            from src.lazybull.paper.models import PendingSell
-            pending_sell = PendingSell(
-                ts_code=sl.ts_code,
-                shares=sell_shares,
-                target_weight=0.0,
-                reason=f"止损-{sl.reason}",
-                create_date=trade_date,
-                attempts=0,
-            )
-            runner.broker.pending_sells.append(pending_sell)
-            runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
-
-    return actions
+    """检查止损触发。"""
+    return shared_check_stop_loss(runner, stop_loss_monitor, trade_date, config)
 
 
 def _check_early_exit(
@@ -451,41 +194,8 @@ def _check_early_exit(
     trade_date: str,
     config: dict,
 ) -> List[Dict]:
-    """检查亏损提前换出触发
-
-    与止损类似，触发后将卖出指令加入延迟卖出队列（T+1 执行）。
-
-    Returns:
-        换出动作列表 [{ts_code, shares, reason, can_execute}, ...]
-    """
-    actions = runner.evaluate_early_exit(trade_date, config)
-
-    if not actions:
-        logger.info("无持仓触发亏损提前换出")
-        return actions
-
-    # 将换出动作写入延迟卖出队列
-    from src.lazybull.paper.models import PendingSell
-
-    for act in actions:
-        pending_sell = PendingSell(
-            ts_code=act["ts_code"],
-            shares=act["shares"],
-            target_weight=0.0,
-            reason=act["reason"],
-            create_date=trade_date,
-            attempts=0,
-        )
-        runner.broker.pending_sells.append(pending_sell)
-        logger.info(
-            f"亏损提前换出 → 加入延迟卖出队列: {act['ts_code']}"
-            f" {act['shares']}股"
-        )
-
-    runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
-    logger.info(f"亏损提前换出检查完成：{len(actions)} 只股票触发")
-
-    return actions
+    """检查亏损提前换出触发。"""
+    return shared_check_early_exit(runner, trade_date, config)
 
 
 def _check_take_profit(
@@ -493,395 +203,35 @@ def _check_take_profit(
     trade_date: str,
     config: dict,
 ) -> List[Dict]:
-    """检查整体止盈触发，命中后写入延迟卖出队列。"""
-    threshold = config.get("take_profit_threshold")
-    if threshold is None:
-        logger.info("整体止盈未启用，跳过")
-        return []
-
-    positions = runner.account.get_positions()
-    if not positions:
-        logger.info("当前无持仓，跳过整体止盈检查")
-        return []
-
-    strategy_state = runner.paper_storage.load_strategy_state()
-    last_rebalance_nav = strategy_state.get("last_rebalance_nav")
-    if not last_rebalance_nav or last_rebalance_nav <= 0:
-        logger.info("整体止盈基准净值缺失，跳过")
-        return []
-
-    buy_prices, sell_prices = runner._load_prices(
-        trade_date, config["buy_price"], config["sell_price"]
-    )
-    all_prices = {**sell_prices, **buy_prices}
-    if not all_prices:
-        logger.warning("无法加载整体止盈所需价格数据，跳过")
-        return []
-
-    current_nav = runner.account.get_total_value(all_prices)
-    profit_rate = (current_nav - last_rebalance_nav) / last_rebalance_nav
-    if profit_rate < threshold:
-        logger.info(
-            f"整体止盈未触发: 本轮收益率={profit_rate:.2%}, 阈值={threshold:.2%}"
-        )
-        return []
-
-    from src.lazybull.paper.models import PendingSell
-
-    existing_pending = {sell.ts_code for sell in runner.broker.pending_sells}
-    actions = []
-    for ts_code, pos in positions.items():
-        if ts_code in existing_pending:
-            continue
-        sell_shares = (pos.shares // 100) * 100
-        if sell_shares <= 0:
-            continue
-        reason = f"整体止盈: 本轮收益率={profit_rate:.2%} >= {threshold:.2%}"
-        runner.broker.pending_sells.append(
-            PendingSell(
-                ts_code=ts_code,
-                shares=sell_shares,
-                target_weight=0.0,
-                reason=reason,
-                create_date=trade_date,
-                attempts=0,
-            )
-        )
-        actions.append(
-            {
-                "ts_code": ts_code,
-                "shares": sell_shares,
-                "reason": reason,
-                "can_execute": True,
-            }
-        )
-
-    if not actions:
-        logger.info("整体止盈无新增延迟卖出指令")
-        return []
-
-    strategy_state["pending_take_profit_trigger_date"] = trade_date
-    if not config.get("take_profit_refill", True):
-        strategy_state["take_profit_block_t0_date"] = runner._get_next_trade_date(trade_date)
-    runner.paper_storage.save_strategy_state(strategy_state)
-    runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
-    logger.warning(
-        f"整体止盈触发: 本轮收益率={profit_rate:.2%}, 已加入 {len(actions)} 条延迟卖出指令"
-    )
-    return actions
+    """检查整体止盈触发。"""
+    return shared_check_take_profit(runner, trade_date, config)
 
 
 def _process_pending_sells(
     runner: PaperTradingRunner,
     trade_date: str,
-    config: dict
+    config: dict,
 ) -> List[Dict]:
-    """处理延迟卖出队列
-    
-    Returns:
-        延迟卖出动作列表 [{ts_code, shares, reason, status}, ...]
-    """
-    actions = []
-    
-    # 重试延迟卖出
-    fills = runner.broker.retry_pending_sells(trade_date, config['sell_price'])
-    
-    # 收集仍在队列中的订单
-    for ps in runner.broker.pending_sells:
-        actions.append({
-            'ts_code': ps.ts_code,
-            'shares': ps.shares,
-            'reason': ps.reason,
-            'status': f'不可卖出（尝试次数: {ps.attempts}）'
-        })
-    
-    # 收集已成交的订单
-    for fill in fills:
-        actions.append({
-            'ts_code': fill.ts_code,
-            'shares': fill.shares,
-            'reason': fill.reason,
-            'status': '已成交'
-        })
-    
-    if fills:
-        # 更新账户状态和净值
-        runner.account.update_last_date(trade_date)
-        runner.account.save_state()
-        
-        # 加载价格
-        buy_prices, sell_prices = runner._load_prices(trade_date, config['buy_price'], config['sell_price'])
-        all_prices = {**sell_prices, **buy_prices}
-        runner._record_nav(trade_date, all_prices)
-
-        if any("整体止盈" in (fill.reason or "") for fill in fills):
-            strategy_state = runner.paper_storage.load_strategy_state()
-            strategy_state['last_rebalance_nav'] = runner.account.get_total_value(all_prices)
-            strategy_state['last_take_profit_date'] = trade_date
-            strategy_state.pop('pending_take_profit_trigger_date', None)
-            runner.paper_storage.save_strategy_state(strategy_state)
-    
-    logger.info(f"延迟卖出处理完成：成交 {len(fills)} 笔，剩余 {len(runner.broker.pending_sells)} 笔")
-    return actions
+    """处理延迟卖出队列。"""
+    return shared_process_pending_sells(runner, trade_date, config)
 
 
 def _process_pending_buys(
     runner: PaperTradingRunner,
     trade_date: str,
-    config: dict
+    config: dict,
 ) -> List[Dict]:
-    """处理延迟买入队列（补位计划）
-    
-    Returns:
-        延迟买入动作列表 [{ts_code, target_weight, reason, status}, ...]
-    """
-    actions = []
-    
-    # 重试延迟买入
-    fills, remaining_buys = runner.broker.retry_pending_buys(trade_date, config['buy_price'])
-    
-    # 收集仍在队列中的订单
-    for pb in remaining_buys:
-        actions.append({
-            'ts_code': pb.ts_code,
-            'target_weight': pb.target_weight,
-            'reason': pb.reason,
-            'status': f'不可买入（尝试次数: {pb.attempts}/5）'
-        })
-    
-    # 收集已成交的订单
-    for fill in fills:
-        actions.append({
-            'ts_code': fill.ts_code,
-            'target_weight': 0.0,
-            'reason': fill.reason,
-            'status': '已成交'
-        })
-    
-    if fills:
-        # 更新账户状态和净值
-        runner.account.update_last_date(trade_date)
-        runner.account.save_state()
-        
-        # 加载价格
-        buy_prices, sell_prices = runner._load_prices(trade_date, config['buy_price'], config['sell_price'])
-        all_prices = {**sell_prices, **buy_prices}
-        runner._record_nav(trade_date, all_prices)
-    
-    logger.info(f"延迟买入处理完成：成交 {len(fills)} 笔，剩余 {len(remaining_buys)} 笔")
-    return actions
+    """处理延迟买入队列。"""
+    return shared_process_pending_buys(runner, trade_date, config)
 
 
 def _execute_t1_if_pending(
     runner: PaperTradingRunner,
     trade_date: str,
-    config: dict
+    config: dict,
 ) -> List[Dict]:
-    """执行 T1（如果有交易指令或补位买入计划）
-    
-    执行 instructions（指令驱动）和 pending_buys（补位队列）
-    
-    Returns:
-        T1 动作列表 [{ts_code, action, shares, reason}, ...]
-    """
-    actions = []
-    
-    # 检查幂等性
-    if runner.paper_storage.check_run_exists("t1", trade_date):
-        # T1 指令已执行，但仍检查是否有未完成的补位计划
-        pending_buys = runner.paper_storage.load_pending_buys()
-        if not pending_buys:
-            logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
-            return actions
-        logger.info(
-            f"T1 指令已执行，但有 {len(pending_buys)} 个补位计划待处理"
-        )
-        # 加载价格并处理补位（跳过指令执行）
-        buy_prices, sell_prices = runner._load_prices(
-            trade_date, config['buy_price'], config['sell_price']
-        )
-        if not buy_prices:
-            logger.error("无法加载价格数据，跳过补位处理")
-            return actions
-        replenishment_fills = runner._execute_pending_buys(
-            pending_buys, buy_prices, trade_date, config['buy_price']
-        )
-        if replenishment_fills:
-            for fill in replenishment_fills:
-                actions.append({
-                    'ts_code': fill.ts_code,
-                    'action': fill.action,
-                    'shares': fill.shares,
-                    'reason': fill.reason,
-                })
-            runner.account.update_last_date(trade_date)
-            runner.account.save_state()
-            all_prices = {**sell_prices, **buy_prices}
-            runner._record_nav(trade_date, all_prices)
-        # 检查是否有新的失败买入
-        new_failed = runner.broker.get_failed_buy_targets()
-        if new_failed:
-            max_attempt = max([pb.attempts for pb in pending_buys], default=0)
-            _handle_failed_buys(
-                runner, trade_date, config, new_failed, attempt_count=max_attempt
-            )
-        return actions
-
-    # 向前搜索未执行的交易指令（支持跳日期场景）
-    instructions = None
-    inst_date = trade_date
-    found = runner.paper_storage.find_pending_instructions(trade_date)
-    if found:
-        inst_date, instructions = found
-        if inst_date != trade_date:
-            # 检查是否过期：信号日期与当前日期间隔 >= rebalance_freq * 0.5
-            source_date = instructions[0].source_date if instructions else inst_date
-            try:
-                trade_cal = runner.loader.load_clean_trade_cal()
-                trade_dates_list = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
-                src_idx = trade_dates_list.index(source_date)
-                cur_idx = trade_dates_list.index(trade_date)
-                gap = cur_idx - src_idx
-                threshold = int(config['rebalance_freq'] * 0.5)
-                if gap >= threshold:
-                    logger.warning(
-                        f"发现 {inst_date} 的未执行指令（信号日 {source_date}），"
-                        f"但距今已 {gap} 个交易日，超过阈值 {threshold}（rebalance_freq*0.5），"
-                        f"指令已过期，丢弃"
-                    )
-                    # 标记过期指令为已执行，防止后续重复拾取
-                    runner.paper_storage.save_run_record("t1", inst_date, {
-                        'trade_date': inst_date,
-                        'note': f'指令过期丢弃（距信号日 {gap} 个交易日，阈值 {threshold}）',
-                        'expired': True,
-                        'timestamp': pd.Timestamp.now().isoformat()
-                    })
-                    instructions = None
-                else:
-                    logger.info(
-                        f"发现 {inst_date} 的未执行指令（延迟 {gap} 个交易日），"
-                        f"将在 {trade_date} 补充执行"
-                    )
-            except (ValueError, Exception) as e:
-                logger.warning(f"检查指令过期失败: {e}，按原日期执行")
-
-    # 检查是否有补位买入计划
-    pending_buys = runner.paper_storage.load_pending_buys()
-
-    if not instructions and not pending_buys:
-        logger.info(f"未找到 {trade_date} 的交易指令或补位买入计划，跳过 T1")
-        return actions
-    
-    # 输出清晰的模式标识
-    if instructions:
-        logger.info("=" * 80)
-        logger.info(f"【T1 指令驱动】读取到 {len(instructions)} 条交易指令")
-        logger.info("=" * 80)
-    
-    if pending_buys:
-        logger.info(f"找到 {len(pending_buys)} 个补位买入计划（将在指令执行后处理）")
-    
-    # 加载价格数据
-    buy_prices, sell_prices = runner._load_prices(trade_date, config['buy_price'], config['sell_price'])
-    
-    if not buy_prices and not sell_prices:
-        logger.error("无法加载价格数据，跳过 T1")
-        return actions
-    
-    fills_count = 0
-    orders_count = 0
-    
-    # 执行交易指令
-    if instructions:
-        logger.info("执行交易指令")
-        fills = runner.broker.execute_instructions(
-            instructions,
-            buy_prices,
-            sell_prices,
-            trade_date
-        )
-        fills_count += len(fills) if fills else 0
-        orders_count += len(instructions)
-        
-        # 收集动作
-        for fill in fills:
-            actions.append({
-                'ts_code': fill.ts_code,
-                'action': fill.action,
-                'shares': fill.shares,
-                'reason': fill.reason
-            })
-        
-        logger.info(f"指令执行完成：{len(instructions)} 条指令，{len(fills)} 笔成交")
-    
-    # 获取买入失败的目标
-    failed_buy_targets = runner.broker.get_failed_buy_targets()
-
-    # 处理买入失败：生成补位计划
-    if failed_buy_targets:
-        _handle_failed_buys(runner, trade_date, config, failed_buy_targets, attempt_count=0)
-    
-    # 处理补位买入（如果有pending_buys）
-    if pending_buys:
-        logger.info("执行补位买入计划")
-        replenishment_fills = runner._execute_pending_buys(
-            pending_buys,
-            buy_prices,
-            trade_date,
-            config['buy_price']
-        )
-        
-        if replenishment_fills:
-            fills_count += len(replenishment_fills)
-            orders_count += len(replenishment_fills)
-            
-            # 收集动作
-            for fill in replenishment_fills:
-                actions.append({
-                    'ts_code': fill.ts_code,
-                    'action': fill.action,
-                    'shares': fill.shares,
-                    'reason': fill.reason
-                })
-        
-        # 检查是否有新的失败买入（从_execute_pending_buys生成）
-        new_failed_buy_targets = runner.broker.get_failed_buy_targets()
-        if new_failed_buy_targets:
-            # 获取当前最大尝试次数（从pending_buys中获取）
-            max_attempt = max([pb.attempts for pb in pending_buys], default=0)
-            _handle_failed_buys(runner, trade_date, config, new_failed_buy_targets, attempt_count=max_attempt)
-    
-    # 更新账户状态
-    if fills_count > 0:
-        runner.account.update_last_date(trade_date)
-        runner.account.save_state()
-        
-        # 记录净值
-        all_prices = {**sell_prices, **buy_prices}
-        runner._record_nav(trade_date, all_prices)
-    
-    # 保存执行记录
-    if instructions or pending_buys:
-        run_record = {
-            'trade_date': trade_date,
-            'buy_price_type': config['buy_price'],
-            'sell_price_type': config['sell_price'],
-            'instructions_count': len(instructions) if instructions else 0,
-            'pending_buys_count': len(pending_buys) if pending_buys else 0,
-            'orders_count': orders_count,
-            'fills_count': fills_count,
-            'timestamp': pd.Timestamp.now().isoformat()
-        }
-        runner.paper_storage.save_run_record("t1", trade_date, run_record)
-        # 如果指令来自其他日期，也标记原日期已执行，防止重复拾取
-        if inst_date != trade_date and instructions:
-            runner.paper_storage.save_run_record("t1", inst_date, {
-                **run_record,
-                'note': f'指令延迟执行，实际执行日期 {trade_date}'
-            })
-    
-    logger.info(f"T1 执行完成：{len(actions)} 个订单")
-    return actions
+    """执行 T1（如果有交易指令或补位买入计划）。"""
+    return shared_execute_t1_if_pending(runner, trade_date, config)
 
 
 def _handle_failed_buys(
@@ -889,355 +239,45 @@ def _handle_failed_buys(
     trade_date: str,
     config: dict,
     failed_buy_targets: List,
-    attempt_count: int
+    attempt_count: int,
 ) -> None:
-    """处理买入失败：生成补位计划
-    
-    Args:
-        runner: 运行器
-        trade_date: 当前交易日期
-        config: 配置
-        failed_buy_targets: 失败的买入目标列表
-        attempt_count: 当前尝试次数
-    """
-    MAX_REPLENISHMENT_ATTEMPTS = 5
-    
-    logger.info("")
-    logger.info("=" * 80)
-    logger.info(f"检测到 {len(failed_buy_targets)} 个买入失败目标")
-    
-    # 检查补位尝试次数
-    next_attempt = attempt_count + 1
-    if next_attempt > MAX_REPLENISHMENT_ATTEMPTS:
-        logger.warning(f"补位尝试次数已达上限 ({MAX_REPLENISHMENT_ATTEMPTS})，不再继续补位")
-        logger.info("=" * 80)
-        runner.broker.clear_failed_buy_targets()
-        return
-    
-    logger.info(f"基于当日 {trade_date} 数据重新生成下一交易日补位目标（第 {next_attempt} 次补位尝试）")
-    logger.info("=" * 80)
-    
-    # 获取下一交易日
-    next_trade_date = runner._get_next_trade_date(trade_date)
-    if next_trade_date:
-        trading_config = TradingConfig.from_dict(config)
-        # 基于当日 Tn 数据重新生成补位信号，用于下一交易日 Tn+1 买入
-        replacement_targets = runner.generate_replacement_targets(
-            trade_date=trade_date,
-            failed_count=len(failed_buy_targets),
-            universe_type=config['universe'],
-            model_version=config.get('model_version'),
-            buy_price_type=config['buy_price'],
-            original_signal_date=trade_date,
-            max_per_industry=config.get('max_per_industry'),
-            exclude_st=config.get('exclude_st', True),
-            min_list_days=config.get('min_list_days', 365),
-            trading_config=trading_config,
-        )
-        
-        if replacement_targets:
-            # 转换为 PendingBuy 对象（增量买入计划）
-            from src.lazybull.paper.models import PendingBuy
-            pending_buys = []
-            for target in replacement_targets:
-                pending_buys.append(PendingBuy(
-                    ts_code=target.ts_code,
-                    target_weight=target.target_weight,
-                    reason=target.reason,
-                    create_date=trade_date,
-                    attempts=next_attempt,
-                    last_attempt_date="",
-                    original_signal_date=trade_date
-                ))
-            
-            # 保存到 pending_buys 队列
-            runner.paper_storage.save_pending_buys(pending_buys)
-            
-            logger.info(f"已生成 {len(replacement_targets)} 个补位目标，保存到独立的补位买入队列")
-            logger.info(f"下一交易日 {next_trade_date} 将自动读取并执行补位买入（第 {next_attempt}/{MAX_REPLENISHMENT_ATTEMPTS} 次尝试）")
-            logger.info(f"补位买入不会触发现有持仓的卖出")
-        else:
-            # 补位信号生成失败（如 margin 数据不可用），保存原始失败目标以待重试
-            logger.warning("无法生成补位目标，将原始失败目标保存为补位计划以待重试")
-            from src.lazybull.paper.models import PendingBuy
-            fallback_pending = []
-            for target in failed_buy_targets:
-                fallback_pending.append(PendingBuy(
-                    ts_code=target.ts_code,
-                    target_weight=target.target_weight,
-                    reason=f"补位待重试-{target.reason}",
-                    create_date=trade_date,
-                    attempts=next_attempt,
-                    last_attempt_date="",
-                    original_signal_date=trade_date,
-                ))
-            runner.paper_storage.save_pending_buys(fallback_pending)
-            logger.info(
-                f"已保存 {len(fallback_pending)} 个失败目标到补位队列，下次运行将重试"
-            )
-    else:
-        logger.error("无法获取下一交易日，补位计划生成失败")
-    
-    # 清空失败目标列表
-    runner.broker.clear_failed_buy_targets()
+    """处理买入失败：生成补位计划。"""
+    shared_handle_failed_buys(runner, trade_date, config, failed_buy_targets, attempt_count)
 
 
 def _execute_t0_if_rebalance_day(
     runner: PaperTradingRunner,
     trade_date: str,
-    config: dict
+    config: dict,
 ) -> Tuple[List[Dict], float, str, str]:
-    """执行 T0（如果是调仓日）
-
-    Returns:
-        (T0 目标列表, ECT系数, ECT原因, T0状态) 四元组
-        - T0 目标列表: [{ts_code, target_weight, reason, score}, ...]
-        - ECT系数: exposure_multiplier
-        - ECT原因: ECT 计算原因
-        - T0状态: "already_run" / "not_rebalance_day" / "success" / "no_targets" / "error:..."
-    """
-    targets_info = []
-    ect_exposure = 1.0
-    ect_reason = "ECT 未启用"
-
-    # 检查幂等性
-    if runner.paper_storage.check_run_exists("t0", trade_date):
-        logger.info(f"T0 工作流已在 {trade_date} 执行过，跳过")
-        return targets_info, ect_exposure, ect_reason, "already_run"
-
-    trading_config = TradingConfig.from_dict(config)
-    strategy_state = runner.paper_storage.load_strategy_state()
-    take_profit_block_t0_date = strategy_state.get("take_profit_block_t0_date")
-    if take_profit_block_t0_date == trade_date:
-        logger.info("整体止盈且关闭自动补仓，本日不触发空仓提前调仓")
-        strategy_state.pop("take_profit_block_t0_date", None)
-        runner.paper_storage.save_strategy_state(strategy_state)
-
-    pending_instruction = runner.paper_storage.find_pending_instructions(trade_date)
-    pending_buys = runner.paper_storage.load_pending_buys()
-    allow_early_rebalance = (
-        config.get("enable_early_rebalance_on_empty", True)
-        and take_profit_block_t0_date != trade_date
-        and not runner.account.get_positions()
-        and not runner.broker.pending_sells
-        and not pending_buys
-        and pending_instruction is None
-    )
-
-    # 检查是否调仓日
-    try:
-        is_rebalance_day = runner._check_rebalance_day(trade_date, config['rebalance_freq'])
-    except RuntimeError as e:
-        if allow_early_rebalance:
-            logger.warning(f"当前不是调仓日，但满足空仓提前调仓条件：{e}")
-            is_rebalance_day = True
-        else:
-            logger.info(f"当前不是调仓日：{e}")
-            return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
-
-    if not is_rebalance_day:
-        if allow_early_rebalance:
-            logger.warning("非调仓日，但当前空仓，提前执行 T0")
-            is_rebalance_day = True
-        else:
-            logger.info("非调仓日，跳过 T0")
-            return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
-
-    if allow_early_rebalance:
-        logger.warning("空仓提前调仓触发，执行 T0")
-    
-    logger.info("当前是调仓日，执行 T0")
-    
-    # 计算 ECT 系数（在生成信号前计算）
-    if config.get('equity_curve_enabled', False):
-        logger.info("-" * 80)
-        logger.info("计算 ECT 仓位系数")
-        logger.info("-" * 80)
-        
-        # 创建 ECT 配置和监控器
-        ect_config = create_equity_curve_config_from_dict(config)
-        ect_monitor = EquityCurveMonitor(ect_config)
-        
-        # 加载历史 NAV
-        nav_df = runner.paper_storage.load_all_nav()
-        if nav_df is not None and len(nav_df) > 0:
-            # 转为 Series (index=date, values=nav)
-            nav_series = nav_df.set_index('trade_date')['nav']
-            
-            # 计算 exposure
-            ect_exposure, ect_reason = ect_monitor.calculate_exposure(
-                nav_series, 
-                current_date=trade_date
-            )
-            
-            logger.info(f"ECT 计算结果: {ect_reason}")
-            logger.info(f"ECT 仓位系数: {ect_exposure:.2f}")
-        else:
-            logger.warning("NAV 历史为空，使用默认系数 1.0")
-            ect_exposure = 1.0
-            ect_reason = "NAV 历史为空"
-        
-        logger.info("-" * 80)
-    
-    # 计算市场择时仓位系数
-    market_regime_exposure = 1.0
-    market_regime_reason = "市场择时未启用"
-    if config.get("market_regime_enabled", False) or config.get(
-        "market_regime_ma250_hard_stop", False
-    ):
-        logger.info("-" * 80)
-        logger.info("计算市场择时仓位系数")
-        logger.info("-" * 80)
-        market_regime_exposure, market_regime_reason = (
-            runner.compute_market_regime_exposure(trade_date, config)
-        )
-        logger.info(f"市场择时: {market_regime_reason}")
-        logger.info(f"市场择时仓位系数: {market_regime_exposure:.2f}")
-        logger.info("-" * 80)
-
-    # 综合仓位系数 = ECT × 市场择时
-    final_exposure = ect_exposure * market_regime_exposure
-    if final_exposure < 1.0:
-        logger.info(
-            f"综合仓位系数: {final_exposure:.2f}"
-            f" (ECT={ect_exposure:.2f} × 市场择时={market_regime_exposure:.2f})"
-        )
-
-    # 计算盈利延续保护（在生成指令前确定哪些持仓不卖出）
-    protected_stocks = set()
-    if config.get("enable_profit_based_holding", False):
-        logger.info("-" * 80)
-        logger.info("计算盈利延续保护")
-        logger.info("-" * 80)
-        protected_stocks = runner.evaluate_profit_extension(trade_date, config)
-        if protected_stocks:
-            logger.info(f"盈利延续保护: {len(protected_stocks)} 只股票 → {protected_stocks}")
-        else:
-            logger.info("无持仓满足盈利延续条件")
-        logger.info("-" * 80)
-
-    # 执行 T0
-    try:
-        runner.run_t0(
-            trade_date=trade_date,
-            buy_price_type=config['buy_price'],
-            sell_price_type=config['sell_price'],
-            universe_type=config['universe'],
-            top_n=config['top_n'],
-            model_version=config.get('model_version'),
-            rebalance_freq=config['rebalance_freq'],
-            max_per_industry=config.get('max_per_industry'),
-            max_weight_per_stock=config.get('max_weight_per_stock'),
-            exclude_st=config.get('exclude_st', True),
-            min_list_days=config.get('min_list_days', 365),
-            industry_momentum_filter=config.get('industry_momentum_filter', False),
-            industry_momentum_bottom_pct=config.get('industry_momentum_bottom_pct', 0.5),
-            holding_bonus_enabled=config.get('holding_bonus_enabled', False),
-            holding_bonus_sigma=config.get('holding_bonus_sigma', 0.5),
-            trading_config=trading_config,
-            force_rebalance=allow_early_rebalance,
-            protected_stocks=protected_stocks,
-        )
-
-        # 获取下一交易日
-        t1_date = runner._get_next_trade_date(trade_date)
-        if t1_date:
-            # 读取生成的交易指令
-            instructions = runner.paper_storage.load_instructions(t1_date)
-            if instructions:
-                # 应用综合仓位系数到买入指令（ECT × 市场择时）
-                if final_exposure < 1.0:
-                    logger.info(
-                        f"应用综合仓位系数 {final_exposure:.2f} 到买入指令"
-                        f" (ECT={ect_exposure:.2f}, 市场择时={market_regime_exposure:.2f})"
-                    )
-                    valid_instructions = []
-                    for inst in instructions:
-                        if inst.action == 'buy':
-                            original_shares = inst.shares
-                            inst.shares = int(inst.shares * final_exposure)
-                            # 确保是100的倍数
-                            inst.shares = (inst.shares // 100) * 100
-
-                            # 如果调整后股数为0，跳过该指令
-                            if inst.shares == 0:
-                                logger.warning(
-                                    f"仓位调整后 {inst.ts_code} 股数为0，"
-                                    f"跳过该买入指令（原 {original_shares} 股）"
-                                )
-                                continue
-
-                            if inst.shares != original_shares:
-                                inst.reason = (
-                                    f"{inst.reason} (仓位调整:"
-                                    f" {original_shares} -> {inst.shares}股)"
-                                )
-                        valid_instructions.append(inst)
-                    
-                    # 重新保存调整后的指令（仅保存有效指令）
-                    runner.paper_storage.save_instructions(t1_date, valid_instructions)
-                    logger.info(f"已将仓位系数应用到买入指令：{len(valid_instructions)}/{len(instructions)} 条有效")
-                
-                # 收集目标信息用于显示（仅买入指令）
-                for inst in instructions:
-                    if inst.action == 'buy':
-                        targets_info.append({
-                            'ts_code': inst.ts_code,
-                            'target_weight': inst.target_weight,
-                            'reason': inst.reason,
-                            'score': None
-                        })
-        
-        t0_status = "success" if targets_info else "no_targets"
-        logger.info(f"T0 执行完成：生成 {len(targets_info)} 个目标")
-    except Exception as e:
-        logger.error(f"T0 执行失败: {e}")
-        t0_status = f"error:{e}"
-
-    return targets_info, ect_exposure, ect_reason, t0_status
+    """执行 T0（如果是调仓日）。"""
+    return shared_execute_t0_if_rebalance_day(runner, trade_date, config)
 
 
 def view_positions(args):
-    """查看当前持仓"""
+    """查看当前持仓。"""
     logger.info("=" * 80)
     logger.info("查看纸面交易持仓")
     print_positions(args.trade_date)
-    
 
-def print_positions(trade_date: str):
+
+def print_positions(trade_date: str, runner: Optional[PaperTradingRunner] = None):
+    """打印当前持仓。"""
     logger.info("=" * 80)
     logger.info(f"[{trade_date}]持仓情况")
     logger.info("=" * 80)
-    # 读取配置（可选，用于获取一些参数）
-    #storage = PaperStorage()
-    #config = storage.load_config()
-    
-    # 创建运行器
-    runner = PaperTradingRunner(verbose=False)
-    
-    try:
-        # 加载价格数据
-        loader = DataLoader(runner.storage, verbose=False)
-        
-        daily_data = loader.load_clean_daily_by_date(trade_date)
-        if daily_data is None or daily_data.empty:
-            logger.error(f"无法加载 {trade_date} 的价格数据")
-            sys.exit(1)
-        
-        # 构建价格字典（使用收盘价）
-        prices = {}
-        for _, row in daily_data.iterrows():
-            prices[row['ts_code']] = row['close']
-        
-        # 从 stock_basic 构建股票名称字典（使用 DataLoader 公共方法）
-        stock_names = loader.build_stock_names_dict()
 
-        # 打印持仓明细（传入股票名称字典）
-        runner.broker.print_positions_summary(prices, trade_date, stock_names=stock_names)
-        
-    except Exception as e:
-        logger.exception(f"打印持仓失败: {e}")
+    try:
+        snapshot = load_position_snapshot(trade_date, runner=runner)
+        snapshot.runner.broker.print_positions_summary(
+            snapshot.prices,
+            trade_date,
+            stock_names=snapshot.stock_names,
+        )
+    except Exception as exc:
+        logger.exception(f"打印持仓失败: {exc}")
         sys.exit(1)
+
 
 def run_adjust_delete_position(args):
     """删除持仓并按成本价释放资金"""
@@ -1246,45 +286,45 @@ def run_adjust_delete_position(args):
     logger.info("=" * 80)
     logger.info(f"Cut-off 日期: {args.trade_date}")
     logger.info(f"股票代码: {args.ts_code}")
-    
+
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
-    
+
     if account_state is None:
         logger.error("账户状态文件不存在，无法执行修正")
         sys.exit(1)
-    
+
     # 检查持仓是否存在
     if args.ts_code not in account_state.positions:
         logger.error(f"持仓 {args.ts_code} 不存在，无法删除")
         sys.exit(1)
-    
+
     position = account_state.positions[args.ts_code]
-    
+
     # 按买入价格释放资金
     released_cash = position.shares * position.buy_price
     account_state.cash += released_cash
-    
+
     # 删除持仓
     del account_state.positions[args.ts_code]
-    
+
     logger.info(f"删除持仓: {args.ts_code}")
     logger.info(f"  股数: {position.shares}")
     logger.info(f"  买入价格: {position.buy_price:.2f}")
     logger.info(f"  释放资金: {released_cash:,.2f}")
     logger.info(f"  更新后现金: {account_state.cash:,.2f}")
-    
+
     # 设置 last_update 为 cut-off 日期
     account_state.last_update = args.trade_date
-    
+
     # 保存账户状态
     storage.save_account_state(account_state)
-    
+
     # 执行清理
     logger.info("")
     storage.truncate_since(args.trade_date)
-    
+
     logger.info("")
     logger.info("持仓删除完成")
     logger.info("=" * 80)
@@ -1299,51 +339,51 @@ def run_adjust_update_position(args):
     logger.info(f"股票代码: {args.ts_code}")
     logger.info(f"新股数: {args.shares}")
     logger.info(f"新买入价格: {args.buy_price:.2f}")
-    
+
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
-    
+
     if account_state is None:
         logger.error("账户状态文件不存在，无法执行修正")
         sys.exit(1)
-    
+
     # 检查持仓是否存在
     if args.ts_code not in account_state.positions:
         logger.error(f"持仓 {args.ts_code} 不存在，无法更新")
         sys.exit(1)
-    
+
     position = account_state.positions[args.ts_code]
-    
+
     # 计算现金变动
     old_cost = position.shares * position.buy_price
     new_cost = args.shares * args.buy_price
     delta_cash = old_cost - new_cost
-    
+
     logger.info(f"旧持仓: {position.shares} 股 @ {position.buy_price:.2f} = {old_cost:,.2f}")
     logger.info(f"新持仓: {args.shares} 股 @ {args.buy_price:.2f} = {new_cost:,.2f}")
     logger.info(f"现金变动: {delta_cash:+,.2f}")
-    
+
     # 更新现金
     account_state.cash += delta_cash
-    
+
     # 更新持仓
     position.shares = args.shares
     position.buy_price = args.buy_price
     position.buy_cost = args.shares * args.buy_price
-    
+
     logger.info(f"更新后现金: {account_state.cash:,.2f}")
-    
+
     # 设置 last_update 为 cut-off 日期
     account_state.last_update = args.trade_date
-    
+
     # 保存账户状态
     storage.save_account_state(account_state)
-    
+
     # 执行清理
     logger.info("")
     storage.truncate_since(args.trade_date)
-    
+
     logger.info("")
     logger.info("持仓更新完成")
     logger.info("=" * 80)
@@ -1358,62 +398,62 @@ def run_adjust_add_shares(args):
     logger.info(f"股票代码: {args.ts_code}")
     logger.info(f"加仓股数: {args.shares}")
     logger.info(f"加仓价格: {args.price:.2f}")
-    
+
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
-    
+
     if account_state is None:
         logger.error("账户状态文件不存在，无法执行修正")
         sys.exit(1)
-    
+
     # 检查持仓是否存在
     if args.ts_code not in account_state.positions:
         logger.error(f"持仓 {args.ts_code} 不存在，无法加仓")
         logger.error("提示：add-shares 仅允许对已存在持仓加仓")
         logger.error("      如需新建持仓，请使用 update-position 命令")
         sys.exit(1)
-    
+
     position = account_state.positions[args.ts_code]
-    
+
     # 计算加仓成本
     add_cost = args.shares * args.price
-    
+
     # 检查现金是否足够
     if add_cost > account_state.cash:
         logger.error(f"现金不足：需要 {add_cost:,.2f}，可用 {account_state.cash:,.2f}")
         sys.exit(1)
-    
+
     # 扣减现金
     account_state.cash -= add_cost
-    
+
     # 加权更新买入价格
     old_shares = position.shares
     old_buy_price = position.buy_price
     new_total_shares = old_shares + args.shares
     new_buy_price = (old_buy_price * old_shares + args.price * args.shares) / new_total_shares
-    
+
     logger.info(f"旧持仓: {old_shares} 股 @ {old_buy_price:.2f}")
     logger.info(f"加仓: {args.shares} 股 @ {args.price:.2f}")
     logger.info(f"新持仓: {new_total_shares} 股 @ {new_buy_price:.2f}")
     logger.info(f"现金变动: -{add_cost:,.2f}")
     logger.info(f"更新后现金: {account_state.cash:,.2f}")
-    
+
     # 更新持仓
     position.shares = new_total_shares
     position.buy_price = new_buy_price
     position.buy_cost = new_total_shares * new_buy_price
-    
+
     # 设置 last_update 为 cut-off 日期
     account_state.last_update = args.trade_date
-    
+
     # 保存账户状态
     storage.save_account_state(account_state)
-    
+
     # 执行清理
     logger.info("")
     storage.truncate_since(args.trade_date)
-    
+
     logger.info("")
     logger.info("加仓完成")
     logger.info("=" * 80)
@@ -1426,44 +466,41 @@ def run_adjust_cash(args):
     logger.info("=" * 80)
     logger.info(f"Cut-off 日期: {args.trade_date}")
     logger.info(f"新现金金额: {args.set:,.2f}")
-    
+
     # 加载账户
     storage = PaperStorage()
     account_state = storage.load_account_state()
-    
+
     if account_state is None:
         logger.error("账户状态文件不存在，无法执行修正")
         sys.exit(1)
-    
+
     old_cash = account_state.cash
-    
+
     # 设置现金
     account_state.cash = args.set
-    
+
     logger.info(f"旧现金: {old_cash:,.2f}")
     logger.info(f"新现金: {account_state.cash:,.2f}")
     logger.info(f"变动: {account_state.cash - old_cash:+,.2f}")
-    
+
     # 设置 last_update 为 cut-off 日期
     account_state.last_update = args.trade_date
-    
+
     # 保存账户状态
     storage.save_account_state(account_state)
-    
+
     # 执行清理
     logger.info("")
     storage.truncate_since(args.trade_date)
-    
+
     logger.info("")
     logger.info("现金设置完成")
     logger.info("=" * 80)
 
 
 def _print_realtime_profit_only(
-    runner: 'PaperTradingRunner',
-    prices: Dict[str, float],
-    current_date: str,
-    display_time: str
+    runner: "PaperTradingRunner", prices: Dict[str, float], current_date: str, display_time: str
 ) -> None:
     """打印精简版实时收益统计"""
     df = runner.broker.get_positions_detail(prices, current_date)
@@ -1471,9 +508,9 @@ def _print_realtime_profit_only(
         logger.info(f"[{display_time}] 当前无持仓")
         return
 
-    total_cost = df['买入成本'].sum() + (df['持仓股数'] * df['买入均价']).sum()
-    total_value = df['当前市值'].sum()
-    total_profit = df['浮动盈亏'].sum()
+    total_cost = df["买入成本"].sum() + (df["持仓股数"] * df["买入均价"]).sum()
+    total_value = df["当前市值"].sum()
+    total_profit = df["浮动盈亏"].sum()
     profit_rate = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
 
     cash = runner.account.get_cash()
@@ -1482,12 +519,12 @@ def _print_realtime_profit_only(
     storage = PaperStorage()
     config = storage.load_config()
     initial_capital = (
-        config.get('initial_capital', runner.account.initial_capital)
-        if config else runner.account.initial_capital
+        config.get("initial_capital", runner.account.initial_capital)
+        if config
+        else runner.account.initial_capital
     )
     total_pnl_pct = (
-        (total_assets - initial_capital) / initial_capital * 100
-        if initial_capital > 0 else 0.0
+        (total_assets - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
     )
 
     annualized = runner.broker._calculate_annualized_return(
@@ -1517,7 +554,7 @@ def run_real(args):
         logger.info("当前无持仓")
         return
 
-    ts_codes = ','.join(positions.keys())
+    ts_codes = ",".join(positions.keys())
 
     try:
         client = TushareClient(verbose=False)
@@ -1534,15 +571,15 @@ def run_real(args):
     prices: Dict[str, float] = {}
     quote_time = ""
     for _, row in rt_df.iterrows():
-        ts_code = str(row.get('TS_CODE', ''))
-        price = row.get('PRICE', None)
+        ts_code = str(row.get("TS_CODE", ""))
+        price = row.get("PRICE", None)
         if ts_code and price is not None:
             try:
                 prices[ts_code] = float(price)
             except (ValueError, TypeError):
                 pass
         if not quote_time:
-            t = row.get('TIME', '')
+            t = row.get("TIME", "")
             if t:
                 quote_time = str(t)
 
@@ -1551,8 +588,8 @@ def run_real(args):
     if missing:
         logger.warning(f"以下持仓未获取到实时行情: {', '.join(missing)}")
 
-    current_date = pd.Timestamp.today().strftime('%Y%m%d')
-    display_time = quote_time or pd.Timestamp.now().strftime('%H:%M:%S')
+    current_date = pd.Timestamp.today().strftime("%Y%m%d")
+    display_time = quote_time or pd.Timestamp.now().strftime("%H:%M:%S")
 
     if not args.ret_profit_only:
         loader = DataLoader(runner.storage, verbose=False)
@@ -1568,8 +605,8 @@ def run_real(args):
 
 def _resolve_realtime_quote_price(row, fallback_price: float) -> float:
     """规范化实时价格；盘前/无效价格回退昨收，仍无效则回退买入价。"""
-    price = row.get('PRICE', row.get('price'))
-    pre_close = row.get('PRE_CLOSE', row.get('pre_close'))
+    price = row.get("PRICE", row.get("price"))
+    pre_close = row.get("PRE_CLOSE", row.get("pre_close"))
     try:
         price_float = float(price)
     except (ValueError, TypeError):
@@ -1603,17 +640,16 @@ def build_realtime_portfolio_summary_from_quotes(
     if not positions:
         total_assets = cash
         total_pnl_pct = (
-            (total_assets - initial_capital) / initial_capital * 100
-            if initial_capital > 0 else 0.0
+            (total_assets - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
         )
         return {
-            'pos_count': 0,
-            'market_value': 0.0,
-            'total_assets': total_assets,
-            'float_pnl_pct': 0.0,
-            'total_pnl_pct': total_pnl_pct,
-            'annual_return_pct': 0.0,
-            'quote_time': '',
+            "pos_count": 0,
+            "market_value": 0.0,
+            "total_assets": total_assets,
+            "float_pnl_pct": 0.0,
+            "total_pnl_pct": total_pnl_pct,
+            "annual_return_pct": 0.0,
+            "quote_time": "",
         }
 
     if rt_df is None or rt_df.empty:
@@ -1622,13 +658,13 @@ def build_realtime_portfolio_summary_from_quotes(
     prices: Dict[str, float] = {}
     quote_time = ""
     for _, row in rt_df.iterrows():
-        ts_code = str(row.get('TS_CODE', ''))
+        ts_code = str(row.get("TS_CODE", ""))
         if ts_code:
             pos = positions.get(ts_code)
-            fallback_price = getattr(pos, 'buy_price', 0.0) if pos is not None else 0.0
+            fallback_price = getattr(pos, "buy_price", 0.0) if pos is not None else 0.0
             prices[ts_code] = _resolve_realtime_quote_price(row, fallback_price)
         if not quote_time:
-            t = row.get('TIME', '')
+            t = row.get("TIME", "")
             if t:
                 quote_time = str(t)
 
@@ -1636,9 +672,9 @@ def build_realtime_portfolio_summary_from_quotes(
     total_float_pnl = 0.0
     total_buy_value = 0.0
     for ts_code, pos in positions.items():
-        current_price = prices.get(ts_code, getattr(pos, 'buy_price', 0.0))
-        buy_price = getattr(pos, 'buy_price', 0.0)
-        shares = getattr(pos, 'shares', 0)
+        current_price = prices.get(ts_code, getattr(pos, "buy_price", 0.0))
+        buy_price = getattr(pos, "buy_price", 0.0)
+        shares = getattr(pos, "shares", 0)
         market_value += current_price * shares
         total_float_pnl += (current_price - buy_price) * shares
         total_buy_value += buy_price * shares
@@ -1646,8 +682,7 @@ def build_realtime_portfolio_summary_from_quotes(
     float_pnl_pct = (total_float_pnl / total_buy_value * 100) if total_buy_value > 0 else 0.0
     total_assets = cash + market_value
     total_pnl_pct = (
-        (total_assets - initial_capital) / initial_capital * 100
-        if initial_capital > 0 else 0.0
+        (total_assets - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
     )
 
     annual_return_pct = 0.0
@@ -1660,13 +695,13 @@ def build_realtime_portfolio_summary_from_quotes(
         pass
 
     return {
-        'pos_count': len(positions),
-        'market_value': market_value,
-        'total_assets': total_assets,
-        'float_pnl_pct': float_pnl_pct,
-        'total_pnl_pct': total_pnl_pct,
-        'annual_return_pct': annual_return_pct,
-        'quote_time': quote_time,
+        "pos_count": len(positions),
+        "market_value": market_value,
+        "total_assets": total_assets,
+        "float_pnl_pct": float_pnl_pct,
+        "total_pnl_pct": total_pnl_pct,
+        "annual_return_pct": annual_return_pct,
+        "quote_time": quote_time,
     }
 
 
@@ -1697,11 +732,12 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     storage = PaperStorage()
     config = storage.load_config()
     initial_capital = (
-        config.get('initial_capital', runner.account.initial_capital)
-        if config else runner.account.initial_capital
+        config.get("initial_capital", runner.account.initial_capital)
+        if config
+        else runner.account.initial_capital
     )
 
-    current_date = pd.Timestamp.today().strftime('%Y%m%d')
+    current_date = pd.Timestamp.today().strftime("%Y%m%d")
 
     if not positions:
         return build_realtime_portfolio_summary_from_quotes(
@@ -1712,7 +748,7 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
             rt_df=None,
         )
 
-    ts_codes_str = ','.join(positions.keys())
+    ts_codes_str = ",".join(positions.keys())
     try:
         client = TushareClient(verbose=False)
         rt_df = client.get_realtime_quote(ts_codes_str)
@@ -1723,7 +759,7 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     if rt_df is None or rt_df.empty:
         return None
 
-    annualized_return_func = getattr(runner.broker, '_calculate_annualized_return', None)
+    annualized_return_func = getattr(runner.broker, "_calculate_annualized_return", None)
     if not callable(annualized_return_func):
         annualized_return_func = None
 
@@ -1757,198 +793,120 @@ def main():
     """主函数"""
     parser = argparse.ArgumentParser(
         description="纸面交易命令行工具（重构版）",
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    
-    subparsers = parser.add_subparsers(dest='command', help='子命令')
-    
-    # config 子命令 — 使用公共参数注册函数
-    config_parser = subparsers.add_parser(
-        'config',
-        help='设置全局配置（持久化）'
-    )
-    add_trading_args(config_parser, include_price=True)
-    
-    # run 子命令
-    run_parser = subparsers.add_parser(
-        'run',
-        help='每日运行入口，自动编排执行各项动作'
-    )
-    run_parser.add_argument(
-        '--trade-date',
-        default=pd.Timestamp.today().strftime('%Y%m%d'),
-        help='交易日期，格式YYYYMMDD（默认：当前日期）'
-    )
-    run_parser.add_argument(
-        '--model-version',
-        type=int,
-        help='ML模型版本（覆盖配置）'
-    )
-    # model-info 子命令
-    subparsers.add_parser(
-        'model-info',
-        help='查看当前使用的模型信息'
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
+    subparsers = parser.add_subparsers(dest="command", help="子命令")
+
+    # config 子命令 — 使用公共参数注册函数
+    config_parser = subparsers.add_parser("config", help="设置全局配置（持久化）")
+    add_trading_args(config_parser, include_price=True)
+
+    # run 子命令
+    run_parser = subparsers.add_parser("run", help="每日运行入口，自动编排执行各项动作")
+    run_parser.add_argument(
+        "--trade-date",
+        default=pd.Timestamp.today().strftime("%Y%m%d"),
+        help="交易日期，格式YYYYMMDD（默认：当前日期）",
+    )
+    run_parser.add_argument("--model-version", type=int, help="ML模型版本（覆盖配置）")
+    # model-info 子命令
+    subparsers.add_parser("model-info", help="查看当前使用的模型信息")
+
     # positions 子命令
-    pos_parser = subparsers.add_parser(
-        'positions',
-        help='查看当前持仓明细'
-    )
+    pos_parser = subparsers.add_parser("positions", help="查看当前持仓明细")
     pos_parser.add_argument(
-        '--trade-date',
-        required=True,
-        help='参考交易日期（用于获取当前价格），格式YYYYMMDD'
+        "--trade-date", required=True, help="参考交易日期（用于获取当前价格），格式YYYYMMDD"
     )
-    
+
     # real 子命令
-    real_parser = subparsers.add_parser(
-        'real',
-        help='实时行情：获取持仓的实时数据并展示'
-    )
+    real_parser = subparsers.add_parser("real", help="实时行情：获取持仓的实时数据并展示")
     real_parser.add_argument(
-        '--ret-profit-only',
-        action='store_true',
-        help='仅显示收益统计（精简单行输出）'
+        "--ret-profit-only", action="store_true", help="仅显示收益统计（精简单行输出）"
     )
 
     # adjust 子命令
     adjust_parser = subparsers.add_parser(
-        'adjust',
-        help='手工修正账户状态（修正发生在 cut-off 日期的 run 之前）'
+        "adjust", help="手工修正账户状态（修正发生在 cut-off 日期的 run 之前）"
     )
-    adjust_subparsers = adjust_parser.add_subparsers(dest='adjust_command', help='修正类型')
-    
+    adjust_subparsers = adjust_parser.add_subparsers(dest="adjust_command", help="修正类型")
+
     # adjust delete-position
     delete_pos_parser = adjust_subparsers.add_parser(
-        'delete-position',
-        help='删除持仓并按买入价格释放资金'
+        "delete-position", help="删除持仓并按买入价格释放资金"
     )
     delete_pos_parser.add_argument(
-        '--trade-date',
-        required=True,
-        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+        "--trade-date", required=True, help="Cut-off 日期（修正生效的日期），格式YYYYMMDD"
     )
-    delete_pos_parser.add_argument(
-        '--ts-code',
-        required=True,
-        help='股票代码'
-    )
-    
+    delete_pos_parser.add_argument("--ts-code", required=True, help="股票代码")
+
     # adjust update-position
     update_pos_parser = adjust_subparsers.add_parser(
-        'update-position',
-        help='更新持仓股数和买入价格'
+        "update-position", help="更新持仓股数和买入价格"
     )
     update_pos_parser.add_argument(
-        '--trade-date',
-        required=True,
-        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+        "--trade-date", required=True, help="Cut-off 日期（修正生效的日期），格式YYYYMMDD"
     )
-    update_pos_parser.add_argument(
-        '--ts-code',
-        required=True,
-        help='股票代码'
-    )
-    update_pos_parser.add_argument(
-        '--shares',
-        type=int,
-        required=True,
-        help='新持仓股数'
-    )
-    update_pos_parser.add_argument(
-        '--buy-price',
-        type=float,
-        required=True,
-        help='新买入价格'
-    )
-    
+    update_pos_parser.add_argument("--ts-code", required=True, help="股票代码")
+    update_pos_parser.add_argument("--shares", type=int, required=True, help="新持仓股数")
+    update_pos_parser.add_argument("--buy-price", type=float, required=True, help="新买入价格")
+
     # adjust add-shares
-    add_shares_parser = adjust_subparsers.add_parser(
-        'add-shares',
-        help='对已有持仓加仓'
-    )
+    add_shares_parser = adjust_subparsers.add_parser("add-shares", help="对已有持仓加仓")
     add_shares_parser.add_argument(
-        '--trade-date',
-        required=True,
-        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+        "--trade-date", required=True, help="Cut-off 日期（修正生效的日期），格式YYYYMMDD"
     )
-    add_shares_parser.add_argument(
-        '--ts-code',
-        required=True,
-        help='股票代码'
-    )
-    add_shares_parser.add_argument(
-        '--shares',
-        type=int,
-        required=True,
-        help='加仓股数'
-    )
-    add_shares_parser.add_argument(
-        '--price',
-        type=float,
-        required=True,
-        help='加仓价格'
-    )
-    
+    add_shares_parser.add_argument("--ts-code", required=True, help="股票代码")
+    add_shares_parser.add_argument("--shares", type=int, required=True, help="加仓股数")
+    add_shares_parser.add_argument("--price", type=float, required=True, help="加仓价格")
+
     # adjust reset-t0
     adjust_subparsers.add_parser(
-        'reset-t0',
-        help='重置最新T0日并清空所有延迟交易订单（允许重新执行T0）'
+        "reset-t0", help="重置最新T0日并清空所有延迟交易订单（允许重新执行T0）"
     )
 
     # adjust cash
-    cash_parser = adjust_subparsers.add_parser(
-        'cash',
-        help='设置账户现金'
-    )
+    cash_parser = adjust_subparsers.add_parser("cash", help="设置账户现金")
     cash_parser.add_argument(
-        '--trade-date',
-        required=True,
-        help='Cut-off 日期（修正生效的日期），格式YYYYMMDD'
+        "--trade-date", required=True, help="Cut-off 日期（修正生效的日期），格式YYYYMMDD"
     )
-    cash_parser.add_argument(
-        '--set',
-        type=float,
-        required=True,
-        help='新现金金额'
-    )
-    
+    cash_parser.add_argument("--set", type=float, required=True, help="新现金金额")
+
     args = parser.parse_args()
-    
+
     if args.command is None:
         parser.print_help()
         sys.exit(1)
-    
+
     # 初始化日志
     setup_logger(log_level="INFO")
     get_config()  # 确保配置已加载
-    
+
     # 执行命令
-    if args.command == 'config':
+    if args.command == "config":
         run_config(args)
-    elif args.command == 'model-info':
+    elif args.command == "model-info":
         run_model_info(args)
-    elif args.command == 'run':
+    elif args.command == "run":
         run_main(args)
-    elif args.command == 'positions':
+    elif args.command == "positions":
         view_positions(args)
-    elif args.command == 'real':
+    elif args.command == "real":
         run_real(args)
-    elif args.command == 'adjust':
+    elif args.command == "adjust":
         if args.adjust_command is None:
             adjust_parser.print_help()
             sys.exit(1)
-        
-        if args.adjust_command == 'delete-position':
+
+        if args.adjust_command == "delete-position":
             run_adjust_delete_position(args)
-        elif args.adjust_command == 'update-position':
+        elif args.adjust_command == "update-position":
             run_adjust_update_position(args)
-        elif args.adjust_command == 'add-shares':
+        elif args.adjust_command == "add-shares":
             run_adjust_add_shares(args)
-        elif args.adjust_command == 'cash':
+        elif args.adjust_command == "cash":
             run_adjust_cash(args)
-        elif args.adjust_command == 'reset-t0':
+        elif args.adjust_command == "reset-t0":
             run_reset_t0(args)
         else:
             logger.error(f"未知的 adjust 子命令: {args.adjust_command}")

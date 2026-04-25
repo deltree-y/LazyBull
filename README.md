@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.63.3)
+### 当前版本 (v0.64.0)
+
+**paper_trade 与 bot_service 共用纸面交易运行时** (v0.64.0):
+- `src/lazybull/paper/runtime.py` 现在统一承载纸面交易日执行编排，完整覆盖止损、亏损提前换出、整体止盈、延迟卖出、T1、T0 与明日指令整理
+- `src/lazybull/paper/reporting.py` 现在统一承载模型信息、持仓快照、手机 Markdown 持仓展示与交易结果展示，`paper_trade.py` 与 `bot_service.py` 直接复用
+- `bot_service.py trade / positions / model` 不再维护独立逻辑；`paper <paper_trade 子命令...>` 还可直接透传低频 CLI 子命令，减少后续同步维护成本
 
 **batch_walk_forward 参数区按开关关系重排** (v0.63.3):
 - `scripts/batch_walk_forward.ps1` 现在会把某个总开关和它真正控制的参数放在一起展示，例如盈亏动态持仓、ATR 动态阈值、strength_veto、止损、ECT、动态 Top-N、行业过滤、市场择时等
