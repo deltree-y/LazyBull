@@ -17,10 +17,12 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
+from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.paper import PaperStorage
 from src.lazybull.paper.broker import PaperBroker
 from src.lazybull.paper.account import PaperAccount
 from src.lazybull.paper.models import Fill, Order, PendingBuy, PendingSell, TargetWeight
+from src.lazybull.paper.runner import PaperTradingRunner
 
 
 @pytest.fixture
@@ -357,3 +359,99 @@ def test_clear_failed_buy_targets(broker):
     broker.clear_failed_buy_targets()
     
     assert len(broker.get_failed_buy_targets()) == 0
+
+
+def test_generate_replacement_targets_respects_failed_count_with_trading_config(monkeypatch):
+    """测试传入完整 trading_config 时，补位数量仍受失败数限制。"""
+
+    class DummySignal:
+        def __init__(self):
+            self.top_n = None
+            self.model_version = None
+
+        def update_model_version(self, new_version):
+            self.model_version = new_version
+
+        def generate_ranked(self, *args, **kwargs):
+            return []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=500000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        runner.signal = DummySignal()
+
+        stock_basic = pd.DataFrame(
+            {
+                'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ'],
+                'name': ['测试1', '测试2', '测试3', '测试4'],
+                'market': ['主板', '主板', '主板', '主板'],
+                'list_date': ['20200101', '20200101', '20200101', '20200101'],
+            }
+        )
+        daily_data = pd.DataFrame(
+            {
+                'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ'],
+                'close': [10.0, 11.0, 12.0, 13.0],
+            }
+        )
+        signal_data = pd.DataFrame(
+            {
+                'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ'],
+                'feature_a': [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+
+        monkeypatch.setattr(
+            'src.lazybull.paper.runner.ensure_features_for_date',
+            lambda *args, **kwargs: (True, []),
+        )
+        runner.loader.load_clean_stock_basic = Mock(return_value=stock_basic)
+        runner.loader.load_clean_daily_by_date = Mock(return_value=daily_data)
+        runner.storage.load_cs_train_day = Mock(return_value=signal_data)
+
+        mock_universe = Mock()
+        mock_universe.get_stocks.return_value = stock_basic['ts_code'].tolist()
+        runner._create_universe = Mock(return_value=mock_universe)
+        runner._print_replacement_targets = Mock()
+
+        seen = {}
+
+        def fake_generate_ranked(*args, **kwargs):
+            seen['top_n'] = args[4]
+            return (
+                {
+                    '000001.SZ': 0.9,
+                    '000002.SZ': 0.8,
+                    '000003.SZ': 0.7,
+                    '000004.SZ': 0.6,
+                },
+                {},
+            )
+
+        runner._generate_ranked_with_lot_constraint = Mock(side_effect=fake_generate_ranked)
+
+        trading_config = TradingConfig(
+            top_n=20,
+            model_version=12962,
+            position_sizing='equal',
+        )
+
+        targets = runner.generate_replacement_targets(
+            trade_date='20260325',
+            failed_count=2,
+            universe_type='mainboard',
+            model_version=12962,
+            buy_price_type='close',
+            trading_config=trading_config,
+        )
+
+        assert seen['top_n'] == 2
+        assert runner.signal.top_n == 2
+        assert len(targets) == 2
+        assert [target.ts_code for target in targets] == ['000001.SZ', '000002.SZ']

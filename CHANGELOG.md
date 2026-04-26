@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.4] - 2026-04-26
+
+### 修复
+
+- **纸面交易补位买入不再沿用主仓 top_n 扩大持仓数** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `generate_replacement_targets()` 在传入完整 `TradingConfig` 时，会显式把补位选股的 `top_n` 覆盖为失败缺口数，不再错误沿用主配置里的 `top_n=20`
+  - 增加补位目标数量保护，若下游门控或候选筛选返回数量超过缺口数，会在保存 `pending_buys` 前截断到缺口数，避免 2 个失败目标被扩成 20 个补位计划，随后把持仓数推高到 33 只之类的异常状态
+
+### 测试
+
+- **补充补位数量受失败数限制的回归测试** ([tests/test_buy_replacement.py](tests/test_buy_replacement.py)):
+  - 校验传入完整 `TradingConfig(top_n=20)` 生成 2 个补位时，内部选股仍按 `failed_count=2` 执行，并且最终只返回 2 个补位目标
+
 ## [0.66.3] - 2026-04-26
 
 ### 修复

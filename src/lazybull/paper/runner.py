@@ -1,6 +1,7 @@
 """纸面交易运行器"""
 
 import gc
+from dataclasses import replace
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -2615,16 +2616,37 @@ class PaperTradingRunner:
         
         logger.info(f"股票池大小（排除持仓）: {len(stocks)}")
         
-        effective_config = trading_config or TradingConfig(
-            buy_price=buy_price_type,
-            universe=universe_type,
-            top_n=failed_count,
-            model_version=model_version,
-            max_per_industry=max_per_industry,
-            exclude_st=exclude_st,
-            min_list_days=min_list_days,
-            position_sizing=self.position_sizing,
-        )
+        if trading_config is not None:
+            effective_config = replace(
+                trading_config,
+                buy_price=buy_price_type,
+                universe=universe_type,
+                top_n=failed_count,
+                model_version=(
+                    model_version
+                    if model_version is not None
+                    else trading_config.model_version
+                ),
+                max_per_industry=(
+                    max_per_industry
+                    if max_per_industry is not None
+                    else trading_config.max_per_industry
+                ),
+                exclude_st=exclude_st,
+                min_list_days=min_list_days,
+                position_sizing=self.position_sizing,
+            )
+        else:
+            effective_config = TradingConfig(
+                buy_price=buy_price_type,
+                universe=universe_type,
+                top_n=failed_count,
+                model_version=model_version,
+                max_per_industry=max_per_industry,
+                exclude_st=exclude_st,
+                min_list_days=min_list_days,
+                position_sizing=self.position_sizing,
+            )
 
         # 5. 使用信号生成器获取排序候选
         if self.signal is None:
@@ -2714,6 +2736,13 @@ class PaperTradingRunner:
             trade_date
         )
         
+        if len(targets) > failed_count:
+            logger.warning(
+                f"补位目标数量 {len(targets)} 超过缺口数 {failed_count}，"
+                f"已截断为前 {failed_count} 个"
+            )
+            targets = targets[:failed_count]
+
         # 8. 修改reason以标识补位来源
         for target in targets:
             target.reason = f"补位-{target.reason}"
