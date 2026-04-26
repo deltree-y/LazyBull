@@ -171,7 +171,11 @@ def load_position_snapshot(
     total_pnl_pct = (
         (total_assets - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
     )
-    round_pnl_pct = total_profit / total_cost * 100 if total_cost > 0 else 0.0
+    round_pnl_pct, _, _ = active_runner.broker.calculate_round_pnl_metrics(
+        total_assets=float(total_assets),
+        total_cost=float(total_cost),
+        total_profit=float(total_profit),
+    )
 
     return PaperPositionSnapshot(
         trade_date=corrected_trade_date,

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.11] - 2026-04-26
+
+### 修复
+
+- **paper_trade 的本轮盈亏改为优先使用“上次调仓总资产 -> 当前总资产”口径** ([src/lazybull/paper/broker.py](src/lazybull/paper/broker.py), [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py)):
+  - `PaperBroker` 新增统一口径方法 `calculate_round_pnl_metrics()`：若策略状态里存在 `last_rebalance_nav`，本轮收益率按总资产变化计算，自动覆盖“本轮中已卖出（已实现）盈亏”
+  - 缺少 `last_rebalance_nav` 时会自动回退到旧口径（当前持仓浮盈 / 当前持仓成本），保持历史数据兼容性
+  - `print_positions_summary()` 与共享展示层 `load_position_snapshot()` 现在复用同一计算逻辑，避免 CLI 与钉钉展示口径不一致
+
+### 测试
+
+- **补充本轮盈亏口径回归测试** ([tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - 校验存在 `last_rebalance_nav` 时，本轮收益率按总资产口径计算（可纳入已实现盈亏）
+  - 校验缺少策略状态时，仍按旧的持仓浮盈口径回退
+
 ## [0.66.10] - 2026-04-26
 
 ### 修复

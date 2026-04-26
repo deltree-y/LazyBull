@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.10)
+### 当前版本 (v0.66.11)
+
+**paper_trade 的“本轮盈亏”现已纳入本轮内已实现盈亏** (v0.66.11):
+- [src/lazybull/paper/broker.py](src/lazybull/paper/broker.py) 新增统一口径 `calculate_round_pnl_metrics()`：优先使用 `last_rebalance_nav -> 当前总资产` 计算本轮收益率，因此本轮中因止损、提前换出或止盈而卖出的已实现盈亏会被正确计入
+- [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py) 复用同一口径，CLI 持仓打印与共享展示（如钉钉摘要）不再出现本轮收益率定义不一致
+- 当历史状态里没有 `last_rebalance_nav` 时会自动回退旧公式（当前持仓浮盈 / 当前持仓成本），保证旧账户数据可直接兼容
 
 **paper_trade 的基金持仓季度补齐现在会走轻量读取和缓存** (v0.66.10):
 - [src/lazybull/data/storage.py](src/lazybull/data/storage.py) 现在支持按列读取分区 parquet，[src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 在补齐 `fund_portfolio` 时只会读取聚合真正需要的 5 列，不再整表进内存

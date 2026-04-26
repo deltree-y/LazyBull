@@ -34,6 +34,12 @@ $wf_period_configs = @(
         WfEndDate = "20260209"
         StartModelVersion = 12949
     }
+    [PSCustomObject]@{
+        Label = "0324"
+        WfStartDate = "20130324"
+        WfEndDate = "20260324"
+        StartModelVersion = 12949
+    }
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────

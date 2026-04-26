@@ -1056,9 +1056,15 @@ class PaperBroker:
         else:
             # 如果配置不存在，使用账户的 initial_capital
             initial_capital = self.account.initial_capital
-        # 本轮盈亏
-        round_profit =  (total_profit / total_cost * 100) if total_cost > 0 else 0.0
-        logger.info(f"本轮盈亏: {round_profit:,.2f}% ({total_cost:,.2f} -> {total_profit+total_cost:,.2f})")
+        # 本轮盈亏（优先使用“上次调仓总资产 -> 当前总资产”口径，缺失时回退旧口径）
+        round_profit, round_start_value, round_current_value = self.calculate_round_pnl_metrics(
+            total_assets=total_assets,
+            total_cost=total_cost,
+            total_profit=total_profit,
+        )
+        logger.info(
+            f"本轮盈亏: {round_profit:,.2f}% ({round_start_value:,.2f} -> {round_current_value:,.2f})"
+        )
 
         # 新增：总盈亏百分比
         total_profit_pct = ((total_assets - initial_capital) / initial_capital * 100) if initial_capital > 0 else 0.0
@@ -1078,6 +1084,45 @@ class PaperBroker:
             logger.info(f"年化收益率: 无法计算（缺少账户起始日期）")
         
         logger.info("=" * 140)
+
+    def calculate_round_pnl_metrics(
+        self,
+        total_assets: float,
+        total_cost: float,
+        total_profit: float,
+    ) -> tuple[float, float, float]:
+        """计算本轮盈亏口径。
+
+        优先口径：
+            使用策略状态中的 last_rebalance_nav 作为本轮起点，
+            本轮盈亏 = (当前总资产 - 本轮起点总资产) / 本轮起点总资产。
+        回退口径（兼容旧数据）：
+            若缺少 last_rebalance_nav，则沿用“当前持仓浮盈/持仓成本”口径。
+
+        Args:
+            total_assets: 当前总资产（现金 + 持仓市值）
+            total_cost: 当前持仓成本（买入金额 + 买入手续费）
+            total_profit: 当前持仓浮动盈亏
+
+        Returns:
+            (本轮盈亏百分比, 起点值, 当前值)
+        """
+        strategy_state = self.storage.load_strategy_state()
+        if isinstance(strategy_state, dict):
+            last_rebalance_nav = strategy_state.get("last_rebalance_nav")
+            if last_rebalance_nav is not None:
+                try:
+                    start_value = float(last_rebalance_nav)
+                except (TypeError, ValueError):
+                    start_value = 0.0
+                if start_value > 0:
+                    round_profit = (total_assets - start_value) / start_value * 100
+                    return round_profit, start_value, total_assets
+
+        # 兼容旧口径：仅按当前持仓浮盈计算
+        current_value = total_cost + total_profit
+        round_profit = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+        return round_profit, total_cost, current_value
     
     def _calculate_annualized_return(
         self, 

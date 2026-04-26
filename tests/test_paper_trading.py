@@ -316,6 +316,47 @@ def test_account_get_position_weight(sample_account, sample_prices):
     assert abs(weight - expected_weight) < 1e-6
 
 
+def test_round_pnl_prefers_total_assets_since_last_rebalance():
+    """测试本轮盈亏优先使用上次调仓总资产口径（可覆盖已实现盈亏）。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account=account, storage=storage, verbose=False)
+
+        # 模拟本轮起点总资产
+        storage.save_strategy_state({"last_rebalance_nav": 100000.0})
+
+        # 场景：本轮内已有部分仓位卖出并转为现金，当前总资产 103000
+        # 旧口径(仅当前持仓浮盈)会得到 10%，新口径应为 3%
+        round_pnl_pct, round_start, round_current = broker.calculate_round_pnl_metrics(
+            total_assets=103000.0,
+            total_cost=30000.0,
+            total_profit=3000.0,
+        )
+
+        assert round_pnl_pct == pytest.approx(3.0)
+        assert round_start == pytest.approx(100000.0)
+        assert round_current == pytest.approx(103000.0)
+
+
+def test_round_pnl_falls_back_to_legacy_cost_based_formula():
+    """测试缺少策略状态时回退到旧的持仓浮盈口径。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account=account, storage=storage, verbose=False)
+
+        round_pnl_pct, round_start, round_current = broker.calculate_round_pnl_metrics(
+            total_assets=103000.0,
+            total_cost=30000.0,
+            total_profit=3000.0,
+        )
+
+        assert round_pnl_pct == pytest.approx(10.0)
+        assert round_start == pytest.approx(30000.0)
+        assert round_current == pytest.approx(33000.0)
+
+
 def test_broker_generate_orders_new_position():
     """测试生成订单：新建仓位"""
     with tempfile.TemporaryDirectory() as tmpdir:
