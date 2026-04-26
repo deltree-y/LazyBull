@@ -518,6 +518,21 @@ def test_reset_t0_full_rollback(temp_storage_for_reset_t0):
     assert config['initial_capital'] == 100000.0
 
 
+def test_reset_t0_clears_nested_state_directories(temp_storage_for_reset_t0):
+    """测试 reset_t0 会递归清理 state 下的树莓派缓存子目录。"""
+    storage = temp_storage_for_reset_t0
+
+    storage.save_config({'initial_capital': 100000.0})
+    intraday_dir = storage.state_path / 'respi_35lcd_intraday'
+    intraday_dir.mkdir(parents=True, exist_ok=True)
+    intraday_file = intraday_dir / '20260426.json'
+    intraday_file.write_text('{"trade_date": "20260426"}', encoding='utf-8')
+
+    storage.reset_t0()
+
+    assert not intraday_dir.exists()
+
+
 def test_reset_t0_no_records():
     """测试 reset_t0 无任何T0运行记录"""
     with tempfile.TemporaryDirectory() as tmpdir:

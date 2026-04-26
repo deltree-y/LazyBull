@@ -1,6 +1,7 @@
 """纸面交易存储模块"""
 
 import json
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -1063,7 +1064,7 @@ class PaperStorage:
         """重置纸面交易，清空所有交易数据恢复为新账户状态
 
         清空账户状态、成交记录、净值、运行记录、交易指令、延迟订单等，
-        仅保留 config.json 配置文件。账户现金重置为 config 中的 initial_capital。
+        仅保留 config.yaml 配置文件。账户现金重置为 config 中的 initial_capital。
 
         Args:
             t0_date: 仅用于日志显示（可选，默认自动查找最新）
@@ -1091,9 +1092,11 @@ class PaperStorage:
             self.instructions_path,
         ]
         for dir_path in dirs_to_clean:
-            for f in dir_path.iterdir():
-                if f.is_file():
-                    f.unlink()
+            for entry in dir_path.iterdir():
+                if entry.is_file():
+                    entry.unlink()
+                elif entry.is_dir():
+                    shutil.rmtree(entry)
             logger.info(f"已清空: {dir_path.name}/")
 
         # 重建空账户状态

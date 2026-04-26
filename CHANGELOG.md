@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.3] - 2026-04-26
+
+### 修复
+
+- **reset-t0 会递归清理树莓派大屏缓存子目录** ([src/lazybull/paper/storage.py](src/lazybull/paper/storage.py)):
+  - `PaperStorage.reset_t0()` 不再只删除 `state/` 根目录下的直接文件，而是会递归清理 `state/`、`trades/`、`nav/`、`runs/`、`pending_*`、`instructions/` 下的嵌套子目录
+  - 这会一并删除 `data/paper/state/respi_35lcd_intraday/` 里的日内图历史 JSON，避免 `paper_trade adjust reset-t0` 后树莓派大屏在重启甚至断电重启后仍加载旧折线
+
+### 测试
+
+- **补充 reset-t0 清理树莓派缓存回归测试** ([tests/test_adjust_truncate.py](tests/test_adjust_truncate.py)):
+  - 校验 `reset_t0()` 会删除 `state/respi_35lcd_intraday/` 这类嵌套缓存目录
+
 ## [0.66.2] - 2026-04-26
 
 ### 修复

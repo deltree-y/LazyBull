@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.2)
+### 当前版本 (v0.66.3)
+
+**reset-t0 现在会清掉树莓派大屏缓存的日内图历史** (v0.66.3):
+- `src/lazybull/paper/storage.py` 的 `reset_t0()` 已改为递归清理运行目录下的嵌套子目录，不再只删除 `state/` 根目录的直接文件
+- 因此 `data/paper/state/respi_35lcd_intraday/` 里的树莓派日内图 JSON 也会被一并删除，断电重启后不会再把 reset 前的旧折线重新加载出来
+- 这次修复对应的现象是：`paper_trade adjust reset-t0` 后，即使重启大屏脚本或整机断电重启，也不应再看到上一轮缓存下来的旧画线
 
 **paper_trade 现已支持 next 交易日解析并持久化最近执行日** (v0.66.2):
 - `src/lazybull/paper/runner.py` 现在会在共享运行时内部直接解析 `trade_date=next`，优先使用最近执行日，其次回退到账户最后更新日，再回退到从今天起的最近交易日
