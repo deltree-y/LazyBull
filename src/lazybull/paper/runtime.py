@@ -136,13 +136,10 @@ def execute_trade_workflow(
 
     _report("亏损提前换出检查")
     early_exit_actions: List[Dict[str, object]] = []
-    if (
-        bool(config.get("enable_profit_based_holding", False))
-        and str(config.get("early_exit_mode", "disabled")) != "disabled"
-    ):
+    if bool(config.get("enable_profit_based_holding", False)):
         early_exit_actions = _check_early_exit(runner, corrected_date, config)
     else:
-        logger.info("亏损提前换出未启用，跳过")
+        logger.info("盈亏动态持仓未启用，跳过亏损提前换出")
 
     _report("整体止盈检查")
     take_profit_actions = _check_take_profit(runner, corrected_date, config)
@@ -856,13 +853,15 @@ def _execute_t0_if_rebalance_day(
     protected_stocks = set()
     if bool(config.get("enable_profit_based_holding", False)):
         logger.info("-" * 80)
-        logger.info("计算盈利延续保护")
-        logger.info("-" * 80)
-        protected_stocks = runner.evaluate_profit_extension(trade_date, config)
-        if protected_stocks:
-            logger.info(f"盈利延续保护: {len(protected_stocks)} 只股票 → {protected_stocks}")
+        if str(config.get("profit_extension_mode", "pnl")) == "disabled":
+            logger.info("盈利延续模式未启用，跳过")
         else:
-            logger.info("无持仓满足盈利延续条件")
+            logger.info("计算盈利延续保护")
+            protected_stocks = runner.evaluate_profit_extension(trade_date, config)
+            if protected_stocks:
+                logger.info(f"盈利延续保护: {len(protected_stocks)} 只股票 → {protected_stocks}")
+            else:
+                logger.info("无持仓满足盈利延续条件")
         logger.info("-" * 80)
 
     try:

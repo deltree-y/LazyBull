@@ -28,7 +28,22 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.4)
+### 当前版本 (v0.66.7)
+
+**paper_trade 的 early_exit_mode=disabled 现已恢复为“原硬卖”语义** (v0.66.7):
+- [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 现在只受 `enable_profit_based_holding` 总开关控制；当 `early_exit_mode=disabled` 时，仍会执行 `early_exit_loss_threshold + early_exit_holding_ratio` 的基础亏损提前换出检查，不再把整个 early_exit 分支直接跳过
+- [scripts/paper_trade.py](scripts/paper_trade.py) 的启动摘要里，`early_exit_mode=disabled` 现在会显示为“亏损换出=原硬卖”，不再把 `disabled` 误读成“关闭提前换出”
+- [src/lazybull/paper/storage.py](src/lazybull/paper/storage.py)、[data/paper/config.yaml](data/paper/config.yaml) 与 [scripts/batch_walk_forward.ps1](scripts/batch_walk_forward.ps1) 也已经同步改成“基础阈值在前、二次确认子开关在后”的说明结构，明确 `early_exit_loss_threshold / early_exit_holding_ratio` 受 `enable_profit_based_holding` 控制，而 `early_exit_mode` 只控制 `strength_veto` 保护分支
+
+**walk_forward 与 paper_trade 的亏损提前换出默认值现已对齐** (v0.66.6):
+- [src/lazybull/common/trading_config.py](src/lazybull/common/trading_config.py) 里公共 `TradingConfig` 和 CLI 的 `early_exit_mode` 默认值已经统一改为 `disabled`，不再与回测引擎默认值和 paper 配置模板打架
+- [scripts/batch_walk_forward.ps1](scripts/batch_walk_forward.ps1) 现在会在启用盈亏动态持仓时始终显式传递 `--early-exit-mode`，即使当前实验配置选的是 `disabled`，也不会再因为参数省略而回退到公共默认值
+- 这次修复对应的现象是：batch 配置区里明明写着 `early_exit_mode_list = @('disabled')`，walk_forward 却仍然按照 `early_exit_loss_threshold` 在持有 12 天时触发提前换出
+
+**纸面交易门控现在既会生效，也更容易观察** (v0.66.5):
+- [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 现已把单股限权放到门控之前，与 backtest 链路保持一致；当设置 max_weight_per_stock 时，composite/legacy 门控与滚动质量降仓不再被后续归一化重新抬回满仓
+- [src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py) 在 paper 路径下遇到“满仓通过”时也会打印门控摘要，不再只有持币或半仓才有门控日志
+- [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 现在会在盈利延续模式为 disabled 时显式打印跳过原因，避免把“总开关打开但子模式关闭”误读为功能没接上
 
 **纸面交易补位买入不再错误放大持仓数** (v0.66.4):
 - `src/lazybull/paper/runner.py` 的 `generate_replacement_targets()` 现在会在补位场景显式按失败缺口数覆盖 `top_n`，不再因为传入整套 `TradingConfig` 而继续沿用主仓配置里的 `top_n=20`

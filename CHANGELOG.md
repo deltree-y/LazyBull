@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.7] - 2026-04-26
+
+### 修复
+
+- **paper_trade 的 early_exit_mode=disabled 语义现已与 backtest 对齐** ([src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py), [scripts/paper_trade.py](scripts/paper_trade.py)):
+  - 纸面交易共享运行时现在只受 `enable_profit_based_holding` 总开关控制；当 `early_exit_mode=disabled` 时，仍会执行 `early_exit_loss_threshold + early_exit_holding_ratio` 的基础亏损提前换出检查，语义恢复为“原硬卖”而不是“整段跳过”
+  - 纸面交易启动日志中的 `亏损换出=disabled` 现已改写为 `亏损换出=原硬卖`，避免把 `disabled` 误读成“关闭亏损提前换出”
+
+- **paper 配置模板与 batch 参数区改为按真实控制关系展示** ([src/lazybull/paper/storage.py](src/lazybull/paper/storage.py), [data/paper/config.yaml](data/paper/config.yaml), [scripts/batch_walk_forward.ps1](scripts/batch_walk_forward.ps1)):
+  - `early_exit_loss_threshold` 与 `early_exit_holding_ratio` 现在被明确标记为“启用 `enable_profit_based_holding` 后始终生效的基础阈值”
+  - `early_exit_mode` 被明确标记为“二次确认子开关”，仅控制 `strength_veto` 保护分支，不再和基础阈值混排，减少“参数开着却看起来像没生效”的配置歧义
+
+### 测试
+
+- **补充 paper runtime disabled 模式与 YAML 注释回归测试** ([tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py), [tests/test_paper_trading_cli.py](tests/test_paper_trading_cli.py)):
+  - 校验 `early_exit_mode=disabled` 时，paper 仍会执行基础亏损提前换出检查
+  - 校验 `PaperStorage.save_config()` 生成的 YAML 模板包含新的基础阈值 / 二次确认分组注释
+
+## [0.66.6] - 2026-04-26
+
+### 修复
+
+- **walk_forward / batch_walk_forward 的亏损提前换出默认值与 paper_trade 对齐** ([src/lazybull/common/trading_config.py](src/lazybull/common/trading_config.py), [scripts/batch_walk_forward.ps1](scripts/batch_walk_forward.ps1)):
+  - `TradingConfig` 与公共 CLI 的 `early_exit_mode` 默认值改为 `disabled`，与回测引擎默认值和 paper 配置模板一致，不再在未显式传参时悄悄回退到 `strength_veto`
+  - `batch_walk_forward.ps1` 现在会在启用盈亏动态持仓时始终显式透传 `--early-exit-mode`，即使脚本里选择的是 `disabled`，也不会再因为省略参数而落回公共 CLI 默认值
+  - 这修复了“batch 脚本里写着 `early_exit_mode_list=@('disabled')`，walk_forward 实际却按 `early_exit_loss_threshold` 触发提前换出”的接线不一致问题
+
+### 测试
+
+- **补充 TradingConfig 默认 early_exit_mode 回归断言** ([tests/test_holding_strength.py](tests/test_holding_strength.py)):
+  - 校验默认 `TradingConfig()` 现在为 `early_exit_mode='disabled'`，避免公共默认值再次偏离回测引擎与 paper 配置
+
+## [0.66.5] - 2026-04-26
+
+### 修复
+
+- **纸面交易信号门控不再被单股限权归一化吞掉** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py), [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - paper 链路现在与 backtest 保持一致，先做单股限权，再应用 composite/legacy 门控与滚动质量降仓，避免 max_weight_per_stock 把降仓后的总权重重新归一化回满仓
+  - paper 路径在门控“满仓通过”时也会显式打印门控结果，不再只在持币或半仓时有门控日志
+  - 盈利延续总开关打开但 profit_extension_mode=disabled 时，现在会直接打印“盈利延续模式未启用，跳过”，避免误解为功能已运行但没有命中
+
+### 测试
+
+- **补充纸面交易门控保留仓位与日志回归测试** ([tests/test_buy_replacement.py](tests/test_buy_replacement.py)):
+  - 校验在存在 max_weight_per_stock 时，半仓门控后的目标权重总和仍保留 0.5，不会被后续限权归一化抹掉
+  - 校验门控满仓通过时，在 emit_log=True 下也会输出门控日志
+
 ## [0.66.4] - 2026-04-26
 
 ### 修复

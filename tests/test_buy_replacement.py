@@ -23,6 +23,7 @@ from src.lazybull.paper.broker import PaperBroker
 from src.lazybull.paper.account import PaperAccount
 from src.lazybull.paper.models import Fill, Order, PendingBuy, PendingSell, TargetWeight
 from src.lazybull.paper.runner import PaperTradingRunner
+from src.lazybull.signals.ml_signal import MLSignal, SignalConfidenceGateState
 
 
 @pytest.fixture
@@ -455,3 +456,96 @@ def test_generate_replacement_targets_respects_failed_count_with_trading_config(
         assert runner.signal.top_n == 2
         assert len(targets) == 2
         assert [target.ts_code for target in targets] == ['000001.SZ', '000002.SZ']
+
+
+def test_generate_signals_preserves_gate_exposure_with_weight_cap(monkeypatch):
+    """测试存在单股上限时，门控降仓不会被后续归一化抹掉。"""
+
+    class DummySignal:
+        def __init__(self):
+            self.top_n = None
+
+        def generate_ranked(self, *args, **kwargs):
+            return []
+
+        def apply_confidence_gate_to_weights(self, signals, confidence_state=None, **kwargs):
+            exposure = getattr(confidence_state, 'exposure', 1.0)
+            return {stock: weight * exposure for stock, weight in signals.items()}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=500000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        runner.signal = DummySignal()
+
+        stock_codes = [f'{i:06d}.SZ' for i in range(10)]
+        stock_basic = pd.DataFrame(
+            {
+                'ts_code': stock_codes,
+                'name': [f'测试{i}' for i in range(10)],
+                'market': ['主板'] * 10,
+                'list_date': ['20200101'] * 10,
+            }
+        )
+        daily_data = pd.DataFrame(
+            {
+                'ts_code': stock_codes,
+                'close': [10.0 + i for i in range(10)],
+            }
+        )
+        signal_data = pd.DataFrame(
+            {
+                'ts_code': stock_codes,
+                'feature_a': [float(i) for i in range(10)],
+            }
+        )
+
+        monkeypatch.setattr(
+            'src.lazybull.paper.runner.ensure_features_for_date',
+            lambda *args, **kwargs: (True, []),
+        )
+        runner.loader.load_clean_stock_basic = Mock(return_value=stock_basic)
+        runner.loader.load_clean_daily_by_date = Mock(return_value=daily_data)
+        runner.storage.load_cs_train_day = Mock(return_value=signal_data)
+
+        mock_universe = Mock()
+        mock_universe.get_stocks.return_value = stock_codes
+        runner._create_universe = Mock(return_value=mock_universe)
+        gate_state = SignalConfidenceGateState(enabled=True, exposure=0.5, reason='测试半仓')
+        runner._generate_ranked_with_lot_constraint = Mock(
+            return_value=({code: 1.0 for code in stock_codes}, {'confidence_gate_state': gate_state})
+        )
+        runner._print_t0_targets = Mock()
+
+        targets = runner._generate_signals(
+            trade_date='20260324',
+            top_n=10,
+            buy_price_type='close',
+            max_weight_per_stock=0.15,
+        )
+
+        assert len(targets) == 10
+        assert abs(sum(target.target_weight for target in targets) - 0.5) < 1e-9
+        assert all(abs(target.target_weight - 0.05) < 1e-9 for target in targets)
+
+
+def test_confidence_gate_full_pass_emits_log_when_emit_log_true():
+    """测试门控满仓通过时，paper 路径也会打印门控结果。"""
+    signal = MLSignal(top_n=5, signal_gate_mode='composite', verbose=False)
+    state = SignalConfidenceGateState(enabled=True, exposure=1.0, reason='测试满仓通过')
+
+    with patch('src.lazybull.signals.ml_signal.logger.info') as mock_info:
+        result = signal.apply_confidence_gate_to_weights(
+            {'000001.SZ': 0.2, '000002.SZ': 0.3},
+            confidence_state=state,
+            date='20260324',
+            emit_log=True,
+        )
+
+    assert result == {'000001.SZ': 0.2, '000002.SZ': 0.3}
+    mock_info.assert_called_once_with('信号置信度门控: 20260324, 测试满仓通过，满仓通过')

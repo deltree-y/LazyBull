@@ -126,7 +126,7 @@ class TradingConfig:
     profit_extension_days: int = 2  # 盈利延续额外天数
 
     # ── 亏损提前换出二次确认（strength_veto 门控）──
-    early_exit_mode: str = "strength_veto"  # disabled|strength_veto
+    early_exit_mode: str = "disabled"  # disabled|strength_veto
     early_exit_strength_protect_threshold: float = 0.1  # strength_veto保护阈值
     early_exit_max_reprieves: int = 1  # 单只股票最多缓刑次数
 
@@ -748,9 +748,9 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
     parser.add_argument(
         "--early-exit-mode",
         type=str,
-        default="strength_veto",
+        default="disabled",
         choices=["disabled", "strength_veto"],
-        help="亏损提前换出模式：disabled=直接卖出, strength_veto=二次确认（默认：strength_veto）",
+        help="亏损提前换出模式：disabled=直接卖出, strength_veto=二次确认（默认：disabled）",
     )
     parser.add_argument(
         "--early-exit-strength-protect-threshold",

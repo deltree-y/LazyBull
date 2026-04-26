@@ -539,7 +539,7 @@ class MLSignal(Signal):
                 )
             return {stock: weight * state.exposure for stock, weight in signals.items()}
 
-        if emit_log and self.verbose:
+        if emit_log:
             logger.info(f"信号置信度门控: {date_label}, {state.reason}，满仓通过")
         return signals
 

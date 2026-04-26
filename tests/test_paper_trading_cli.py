@@ -56,6 +56,8 @@ def test_save_and_load_config(temp_paper_storage):
     assert 'paper_trade:' in yaml_text
     assert '以下参数仅在 model_version_b 非 null 时生效' in yaml_text
     assert '止损总开关（关闭后以下止损参数整体不生效）' in yaml_text
+    assert '亏损提前换出基础阈值（enable_profit_based_holding=true 时始终生效）' in yaml_text
+    assert '亏损提前换出二次确认子开关（disabled=原硬卖，strength_veto=启用二次确认）' in yaml_text
 
     json_path = Path(temp_paper_storage.root_path) / 'config.json'
     assert not json_path.exists()

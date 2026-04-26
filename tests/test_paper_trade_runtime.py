@@ -100,6 +100,73 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
     storage.save_last_trade_date.assert_called_once_with("20260120")
 
 
+def test_execute_trade_workflow_still_checks_early_exit_in_disabled_mode(monkeypatch):
+    """early_exit_mode=disabled 仍应执行基础亏损提前换出（原硬卖）。"""
+    runner = MagicMock()
+    runner._correct_trade_date.return_value = "20260120"
+    runner._get_next_trade_date.return_value = None
+    runner.missing_factors = []
+    runner.paper_storage.load_instructions.return_value = []
+
+    storage = MagicMock()
+    storage.load_account_state.return_value = None
+    storage.load_stop_loss_state.return_value = None
+
+    trading_config = MagicMock()
+    trading_config.create_stop_loss_config.return_value = None
+
+    context = PaperTradeRuntimeContext(
+        storage=storage,
+        config={
+            "stop_loss_enabled": False,
+            "enable_profit_based_holding": True,
+            "early_exit_mode": "disabled",
+            "take_profit_threshold": None,
+            "buy_price": "close",
+            "sell_price": "close",
+        },
+        trading_config=trading_config,
+        runner=runner,
+    )
+
+    call_order = []
+
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime.StopLossMonitor",
+        lambda *_args, **_kwargs: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._check_early_exit",
+        lambda *_args, **_kwargs: call_order.append("early_exit")
+        or [{"ts_code": "000002.SZ"}],
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._check_take_profit",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._process_pending_sells",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._execute_t1_if_pending",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
+        lambda *_args, **_kwargs: ([], 1.0, "ECT 未启用", "not_rebalance_day"),
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime.DataLoader",
+        lambda *_args, **_kwargs: MagicMock(build_stock_names_dict=lambda: {}),
+    )
+
+    result = execute_trade_workflow("20260120", runtime=context)
+
+    assert call_order == ["early_exit"]
+    assert result.early_exit_actions == [{"ts_code": "000002.SZ"}]
+
+
 def test_format_trade_result_includes_profit_management_sections():
     """交易结果 Markdown 应包含新增的提前换出与整体止盈摘要。"""
     runner = MagicMock()

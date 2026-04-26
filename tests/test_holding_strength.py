@@ -289,6 +289,7 @@ class TestEngineModeValidation:
 
         tc = TradingConfig()
         assert tc.profit_extension_mode == "pnl"
+        assert tc.early_exit_mode == "disabled"
         assert tc.profit_extension_strength_threshold == 0.6
         # 默认权重总和应为 1.0
         total = sum(tc.profit_extension_strength_weights.values())

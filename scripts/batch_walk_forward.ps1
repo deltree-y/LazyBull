@@ -155,9 +155,9 @@ $signal_gate_percentile_warmup = 5              # composite: 百分位归一化�
 
 # 滚动模型质量监控子开关：仅在开启时才使用以下质量参数
 $signal_gate_quality_enabled = $true            # $true 启用 | $false 禁用
-$signal_gate_quality_window_list = @(1,2,3,4,5,6,7,8,9)         #3 滚动质量回看调仓周期数
-$signal_gate_quality_threshold_list = @(0.2,0.3,0.4,0.5,0.6,0.7)    #0.4 滚动质量最低 hit rate
-$signal_gate_quality_halflife = 4               #4 滚动质量 EWM 半衰期
+$signal_gate_quality_window_list = @(1,2,3,4,5,6,7,8,9)         #2 滚动质量回看调仓周期数
+$signal_gate_quality_threshold_list = @(0.2,0.3,0.4,0.5,0.6,0.7)    #0.5 滚动质量最低 hit rate
+$signal_gate_quality_halflife = 3               #4 滚动质量 EWM 半衰期
 
 # 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
 $signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用
@@ -178,12 +178,27 @@ $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 $enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
 # 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
-# 1) 亏损提前换出：持有达到 early_exit_holding_ratio × 持有期后，
+# 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，
 #    若收益率 <= early_exit_loss_threshold，则提前换出
+#    注意：这两个阈值在 $enable_profit_based_holding = $true 时始终生效，
+#    不受 $early_exit_mode_list = @('disabled') 影响；disabled 表示原硬卖。
 $early_exit_loss_threshold_list   = @(-0.07)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
 $early_exit_holding_ratio_list    = @(0.6)      # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
 
-# 2) 盈利延续持有：仅在持有期满后进入该分支
+# 2) 亏损提前换出二次确认：仅在 early_exit 条件已触发后再做一次强势度否决
+#    disabled      = 原硬卖
+#    strength_veto = 评分高于保护阈值时否决卖出（缓刑）
+$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled', 'strength_veto')
+# 仅在 $early_exit_mode_list 扫到 'strength_veto' 时生效
+$early_exit_strength_protect_threshold_list   = @(0.1)         # strength_veto 保护阈值 [0,1]
+$early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
+
+# 3) ATR 动态亏损阈值：在亏损提前换出分支中，用 ATR 替代固定亏损阈值
+#    需同时满足 $enable_profit_based_holding = $true 且 $use_atr_for_early_exit = $true
+$use_atr_for_early_exit           = $false   # $true 启用 | $false 禁用
+$atr_multiplier_list              = @(2.8)   # ATR 倍数（仅启用 ATR 止损时生效）
+
+# 4) 盈利延续持有：仅在持有期满后进入该分支
 #    pnl      = 浮盈率判据（兼容原行为）
 #    strength = 5 维强势度评分判据
 #    disabled = 持有期满直接卖出，不做延续
@@ -193,19 +208,6 @@ $profit_extension_threshold_list  = @(0.1)      # 盈利延续阈值（浮盈率
 $profit_extension_days_list       = @(5)        # 额外延续天数（交易日）
 # 仅在 $profit_extension_mode_list 扫到 "strength" 时生效
 $profit_extension_strength_threshold_list = @(0.75) # strength 模式延续阈值 [0,1]
-
-# 3) ATR 动态亏损阈值：在亏损提前换出分支中，用 ATR 替代固定亏损阈值
-#    需同时满足 $enable_profit_based_holding = $true 且 $use_atr_for_early_exit = $true
-$use_atr_for_early_exit           = $false   # $true 启用 | $false 禁用
-$atr_multiplier_list              = @(2.8)   # ATR 倍数（仅启用 ATR 止损时生效）
-
-# 4) 亏损提前换出二次确认：仅在 early_exit 条件已触发后再做一次强势度否决
-#    disabled      = 原硬卖
-#    strength_veto = 评分高于保护阈值时否决卖出（缓刑）
-$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled', 'strength_veto')
-# 仅在 $early_exit_mode_list 扫到 'strength_veto' 时生效
-$early_exit_strength_protect_threshold_list   = @(0.1)         # strength_veto 保护阈值 [0,1]
-$early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
 
 # ── 整体持仓止盈（独立于 $enable_profit_based_holding）──────────────
 $take_profit_threshold_list   = @(0.15)      # 可多值；$null = 禁用，如 @($null, 0.15, 0.20)
@@ -616,6 +618,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $pythonCmd += " --enable-profit-based-holding" +
                       " --early-exit-loss-threshold $early_exit_loss_threshold" +
                       " --early-exit-holding-ratio $early_exit_holding_ratio" +
+                      " --early-exit-mode $early_exit_mode" +
                       " --profit-extension-threshold $profit_extension_threshold" +
                       " --profit-extension-days $profit_extension_days" +
                       " --profit-extension-mode $profit_extension_mode" +
@@ -626,9 +629,8 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $pythonCmd += " --use-atr-for-early-exit --atr-multiplier $atr_multiplier"
     }
 
-    if ($early_exit_mode -ne 'disabled') {
-        $pythonCmd += " --early-exit-mode $early_exit_mode" +
-                      " --early-exit-strength-protect-threshold $early_exit_strength_protect_threshold" +
+    if ($enable_profit_based_holding -and $early_exit_mode -ne 'disabled') {
+        $pythonCmd += " --early-exit-strength-protect-threshold $early_exit_strength_protect_threshold" +
                       " --early-exit-max-reprieves $early_exit_max_reprieves"
     }
 

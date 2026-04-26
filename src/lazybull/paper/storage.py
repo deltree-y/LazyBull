@@ -71,25 +71,26 @@ CONFIG_SECTION_LAYOUT = [
         "holding_management",
         "持仓保留奖励与盈亏动态持仓",
         [
-            "holding_bonus_* 用于降低换手；profit_extension_* / early_exit_* 用于盈利延续和亏损换出。",
+            "holding_bonus_* 用于降低换手；early_exit_* / profit_extension_* 分别控制亏损提前换出和盈利延续。",
+            "注意：early_exit_mode=disabled 表示原硬卖，不是关闭亏损提前换出。",
             "profit_extension_mode 可选 pnl / strength / disabled。",
         ],
         [
             "holding_bonus_enabled",
             "holding_bonus_sigma",
             "enable_profit_based_holding",
-            "profit_extension_mode",
-            "profit_extension_strength_threshold",
-            "profit_extension_strength_weights",
             "early_exit_loss_threshold",
             "early_exit_holding_ratio",
-            "profit_extension_threshold",
-            "profit_extension_days",
             "early_exit_mode",
             "early_exit_strength_protect_threshold",
             "early_exit_max_reprieves",
             "use_atr_for_early_exit",
             "atr_multiplier",
+            "profit_extension_mode",
+            "profit_extension_threshold",
+            "profit_extension_days",
+            "profit_extension_strength_threshold",
+            "profit_extension_strength_weights",
             "take_profit_threshold",
             "take_profit_refill",
         ],
@@ -249,8 +250,24 @@ CONFIG_SECTION_RENDER_GROUPS = {
             ["enable_profit_based_holding"],
         ),
         (
-            "以下参数仅在 enable_profit_based_holding=true 时生效",
-            ["profit_extension_mode", "early_exit_loss_threshold", "early_exit_holding_ratio", "early_exit_mode"],
+            "亏损提前换出基础阈值（enable_profit_based_holding=true 时始终生效）",
+            ["early_exit_loss_threshold", "early_exit_holding_ratio"],
+        ),
+        (
+            "亏损提前换出二次确认子开关（disabled=原硬卖，strength_veto=启用二次确认）",
+            ["early_exit_mode"],
+        ),
+        (
+            "以下参数仅在 early_exit_mode=strength_veto 时生效",
+            ["early_exit_strength_protect_threshold", "early_exit_max_reprieves"],
+        ),
+        (
+            "ATR 动态阈值子开关（仅在 enable_profit_based_holding=true 且 use_atr_for_early_exit=true 时生效）",
+            ["use_atr_for_early_exit", "atr_multiplier"],
+        ),
+        (
+            "盈利延续子开关（disabled=关闭延续；仅在 enable_profit_based_holding=true 时生效）",
+            ["profit_extension_mode"],
         ),
         (
             "以下参数仅在 profit_extension_mode=pnl 时生效",
@@ -259,14 +276,6 @@ CONFIG_SECTION_RENDER_GROUPS = {
         (
             "以下参数仅在 profit_extension_mode=strength 时生效",
             ["profit_extension_strength_threshold", "profit_extension_strength_weights"],
-        ),
-        (
-            "以下参数仅在 early_exit_mode=strength_veto 时生效",
-            ["early_exit_strength_protect_threshold", "early_exit_max_reprieves"],
-        ),
-        (
-            "ATR 动态阈值子开关（atr_multiplier 仅在 enabled=true 时生效）",
-            ["use_atr_for_early_exit", "atr_multiplier"],
         ),
         (
             "整体止盈（独立于 enable_profit_based_holding）",

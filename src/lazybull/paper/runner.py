@@ -1302,6 +1302,16 @@ class PaperTradingRunner:
 
             signal_dict = self._normalize_signals(raw_scores, trade_date)
 
+            # 与 backtest 保持一致：先做单股限权，再应用门控/降仓，避免后续归一化抹掉留仓位效果。
+            if effective_config.max_weight_per_stock is not None and signal_dict:
+                from ..portfolio import cap_and_normalize_weights
+
+                signal_dict = cap_and_normalize_weights(
+                    signal_dict,
+                    max_weight_per_stock=effective_config.max_weight_per_stock,
+                    verbose=True,
+                )
+
             confidence_state = signal_meta.get('confidence_gate_state')
             if hasattr(self.signal, "apply_confidence_gate_to_weights") and confidence_state is not None:
                 signal_dict = self.signal.apply_confidence_gate_to_weights(
@@ -1342,15 +1352,6 @@ class PaperTradingRunner:
             self._save_strategy_state()
             logger.warning("门控后无有效目标权重")
             return []
-
-        # 应用单股最大权重限制
-        if effective_config.max_weight_per_stock is not None and signal_dict:
-            from ..portfolio import cap_and_normalize_weights
-            signal_dict = cap_and_normalize_weights(
-                signal_dict,
-                max_weight_per_stock=effective_config.max_weight_per_stock,
-                verbose=True,
-            )
 
         # 转换为目标权重，并增强信息
         targets = self._enhance_target_info(

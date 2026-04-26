@@ -152,9 +152,11 @@ def run_main(args):
             f"  行业动量过滤: 启用 (剔除后{config.get('industry_momentum_bottom_pct', 0.2):.0%})"
         )
     if config.get("enable_profit_based_holding"):
+        early_exit_mode = str(config.get('early_exit_mode', 'disabled'))
+        early_exit_text = '原硬卖' if early_exit_mode == 'disabled' else early_exit_mode
         logger.info(
             f"  盈亏动态持仓: 启用 (延续模式={config.get('profit_extension_mode', 'pnl')}"
-            f", 亏损换出={config.get('early_exit_mode', 'disabled')})"
+            f", 亏损换出={early_exit_text})"
         )
     if config.get("max_per_industry"):
         logger.info(f"  单行业最大持仓: {config['max_per_industry']}")
