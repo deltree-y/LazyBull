@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.8] - 2026-04-26
+
+### 修复
+
+- **paper_trade 的 T0 因子补齐改为仅物化目标交易日输出** ([src/lazybull/features/ensure.py](src/lazybull/features/ensure.py)):
+  - `_load_factor_data()` 现在仍会加载构建因子所需的历史原始数据，但不再为整段历史交易日批量构建 `date -> DataFrame` 查询表，只会为 `trade_date` 当天生成截面结果
+  - 这显著降低了树莓派运行 `paper_trade` 时在基本面、股东人数、业绩预告、业绩快报、基金持仓、一致预期等 point-in-time 因子上的 CPU 与内存峰值，减少在“股东人数因子”附近长时间卡住甚至死机的概率
+
+### 测试
+
+- **补充 ensure 单日因子输出回归测试** ([tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)):
+  - 校验 `_load_factor_data()` 调用各因子构建器时只传入 `[trade_date]` 作为输出日期列表，避免后续重构把整段历史输出重新带回来
+
 ## [0.66.7] - 2026-04-26
 
 ### 修复

@@ -343,6 +343,9 @@ def _load_factor_data(
         前 4 个元素为当日的 DataFrame 或 None，最后一个为缺失因子名称列表
     """
     missing_factors = []
+    # 纸面交易 T0 仅消费当日因子截面；历史窗口仍通过原始数据加载提供，
+    # 无需为整段 trading_dates 物化完整的 date -> DataFrame 查询表。
+    factor_output_dates = [trade_date]
 
     # ── 基本面因子 ──────────────────────────────────────────
     funda_today = None
@@ -352,7 +355,7 @@ def _load_factor_data(
         fina_indicator = _try_download_fina_indicator(client, storage, trade_date)
     if fina_indicator is not None and len(fina_indicator) > 0:
         from ..factors.fundamental import build_fundamental_lookup_by_date
-        funda_lookup = build_fundamental_lookup_by_date(fina_indicator, trading_dates_str)
+        funda_lookup = build_fundamental_lookup_by_date(fina_indicator, factor_output_dates)
         funda_today = funda_lookup.get(trade_date)
         logger.info(f"基本面因子: 已加载 ({len(fina_indicator)} 条原始记录)")
     else:
@@ -371,7 +374,7 @@ def _load_factor_data(
     margin_detail = loader.load_margin_detail(start_date, end_date)
     if margin_detail is not None and len(margin_detail) > 0:
         from ..factors.margin import build_margin_lookup_by_date
-        margin_lookup = build_margin_lookup_by_date(margin_detail, trading_dates_str)
+        margin_lookup = build_margin_lookup_by_date(margin_detail, factor_output_dates)
         margin_today = margin_lookup.get(trade_date)
         # 当日 margin_detail 可能尚未发布，额外重试一次下载
         if margin_today is None:
@@ -386,7 +389,7 @@ def _load_factor_data(
                     margin_detail_full = loader.load_margin_detail(start_date, end_date)
                     if margin_detail_full is not None and len(margin_detail_full) > 0:
                         margin_lookup = build_margin_lookup_by_date(
-                            margin_detail_full, trading_dates_str
+                            margin_detail_full, factor_output_dates
                         )
                         margin_today = margin_lookup.get(trade_date)
                     margin_detail_full = None
@@ -413,7 +416,7 @@ def _load_factor_data(
         stk_holdernumber = _try_download_stk_holdernumber(client, storage, trade_date)
     if stk_holdernumber is not None and len(stk_holdernumber) > 0:
         from ..factors.holder import build_holder_lookup_by_date
-        holder_lookup = build_holder_lookup_by_date(stk_holdernumber, trading_dates_str)
+        holder_lookup = build_holder_lookup_by_date(stk_holdernumber, factor_output_dates)
         holder_today = holder_lookup.get(trade_date)
         logger.info(f"股东人数因子: 已加载 ({len(stk_holdernumber)} 条)")
     else:
@@ -431,7 +434,7 @@ def _load_factor_data(
     if forecast_df is not None and len(forecast_df) > 0:
         from ..factors.earnings import build_earnings_lookup_by_date
         earnings_lookup = build_earnings_lookup_by_date(
-            forecast_df, trading_dates_str
+            forecast_df, factor_output_dates
         )
         earnings_today = earnings_lookup.get(trade_date)
         logger.info(f"业绩预告因子: 已加载 ({len(forecast_df)} 条)")
@@ -448,7 +451,7 @@ def _load_factor_data(
     cyq_perf_df = _try_ensure_historical_cyq_perf(client, storage, cyq_perf_hist_dates)
     if cyq_perf_df is not None and len(cyq_perf_df) > 0:
         from ..factors.cyq_perf import build_cyq_perf_lookup_by_date
-        cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, trading_dates_str)
+        cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, factor_output_dates)
         cyq_perf_today = cyq_perf_lookup.get(trade_date)
         logger.info(f"筹码胜率因子: 已加载 ({len(cyq_perf_df)} 条)")
     else:
@@ -467,7 +470,7 @@ def _load_factor_data(
         from ..factors.express import build_express_lookup_by_date
         # 复用业绩预告段已加载的 forecast_df，避免重复磁盘读取
         express_lookup = build_express_lookup_by_date(
-            express_df, trading_dates_str, forecast_df=forecast_df
+            express_df, factor_output_dates, forecast_df=forecast_df
         )
         express_today = express_lookup.get(trade_date)
         logger.info(f"业绩快报因子: 已加载 ({len(express_df)} 条)")
@@ -489,7 +492,7 @@ def _load_factor_data(
     if fund_portfolio_df is not None and len(fund_portfolio_df) > 0:
         from ..factors.fund_portfolio import build_fund_portfolio_lookup_by_date
         fund_lookup = build_fund_portfolio_lookup_by_date(
-            fund_portfolio_df, trading_dates_str, pre_aggregated=True
+            fund_portfolio_df, factor_output_dates, pre_aggregated=True
         )
         fund_portfolio_today = fund_lookup.get(trade_date)
         logger.info(f"基金持仓因子: 已加载 ({len(fund_portfolio_df)} 条)")
@@ -507,7 +510,7 @@ def _load_factor_data(
     hsgt_df = _try_ensure_historical_moneyflow_hsgt(client, storage, north_hist_dates)
     if hsgt_df is not None and len(hsgt_df) > 0:
         from ..factors.north_flow import build_north_flow_lookup_by_date
-        north_lookup = build_north_flow_lookup_by_date(hsgt_df, trading_dates_str)
+        north_lookup = build_north_flow_lookup_by_date(hsgt_df, factor_output_dates)
         cur = north_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
             north_flow_today = cur
@@ -526,7 +529,7 @@ def _load_factor_data(
     top_list_df = _try_ensure_historical_top_list(client, storage, lhb_hist_dates)
     if top_list_df is not None and len(top_list_df) > 0:
         from ..factors.lhb import build_lhb_lookup_by_date
-        lhb_lookup = build_lhb_lookup_by_date(top_list_df, trading_dates_str)
+        lhb_lookup = build_lhb_lookup_by_date(top_list_df, factor_output_dates)
         cur = lhb_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
             lhb_today = cur
@@ -545,7 +548,7 @@ def _load_factor_data(
         report_rc_df = _try_download_report_rc(client, storage, trade_date)
     if report_rc_df is not None and len(report_rc_df) > 0:
         from ..factors.consensus import build_consensus_lookup_by_date
-        cons_lookup = build_consensus_lookup_by_date(report_rc_df, trading_dates_str)
+        cons_lookup = build_consensus_lookup_by_date(report_rc_df, factor_output_dates)
         cur = cons_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
             consensus_today = cur

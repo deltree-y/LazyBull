@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -119,7 +119,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 #关闭后CAGR下降约8%, 回撤上升约4%
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $false   # $true 启用 | $false 禁用
+$deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -147,16 +147,17 @@ $kelly_vol_window                 = 60         # Kelly 波动率窗口（交易�
 $kelly_max_leverage_list          = @(0.1)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
-$signal_gate_mode = "composite"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
+# 0426这里应为composite
+$signal_gate_mode = "disabled"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
 # 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
 $signal_gate_cost_multiplier_list = @(0.7)      #0.3 composite: 门控严格度扫描
 $signal_gate_round_trip_cost = 0.003            # composite: 往返交易成本估算（佣金+印花税+滑点，仅原始收益模式使用）
 $signal_gate_percentile_warmup = 5              # composite: 百分位归一化预热期（调仓次数）
 
 # 滚动模型质量监控子开关：仅在开启时才使用以下质量参数
-$signal_gate_quality_enabled = $true            # $true 启用 | $false 禁用
-$signal_gate_quality_window_list = @(1,2,3,4,5,6,7,8,9)         #2 滚动质量回看调仓周期数
-$signal_gate_quality_threshold_list = @(0.2,0.3,0.4,0.5,0.6,0.7)    #0.5 滚动质量最低 hit rate
+$signal_gate_quality_enabled = $false            # $true 启用 | $false 禁用
+$signal_gate_quality_window_list = @(2)         #2 滚动质量回看调仓周期数
+$signal_gate_quality_threshold_list = @(0.5)    #0.5 滚动质量最低 hit rate
 $signal_gate_quality_halflife = 3               #4 滚动质量 EWM 半衰期
 
 # 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
@@ -175,7 +176,8 @@ $signal_confidence_gate_threshold_sets = @( "0.01 0.02 0.10" )
 $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
 # ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
-$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
+# 0426这里应为true
+$enable_profit_based_holding      = $false       # $true 启用 | $false 禁用
 # 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
 # 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，
@@ -210,7 +212,8 @@ $profit_extension_days_list       = @(5)        # 额外延续天数（交易日
 $profit_extension_strength_threshold_list = @(0.75) # strength 模式延续阈值 [0,1]
 
 # ── 整体持仓止盈（独立于 $enable_profit_based_holding）──────────────
-$take_profit_threshold_list   = @(0.15)      # 可多值；$null = 禁用，如 @($null, 0.15, 0.20)
+# 0426这里应为0.15
+$take_profit_threshold_list   = @($null)      # 可多值；$null = 禁用，如 @($null, 0.15, 0.20)
 # 仅在 $take_profit_threshold_list 不为 $null 时，$take_profit_refill 才有意义
 $take_profit_refill           = $false       # $true = 整体止盈后自动补位买入
 
@@ -218,7 +221,8 @@ $take_profit_refill           = $false       # $true = 整体止盈后自动补�
 # $true  = 启用：当持仓全部清零或 cycle_day >= holding_period 且仍有残留盈利延续持仓时，
 #          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
 # $false = 禁用：严格等待下一个预定调仓日
-$enable_early_rebalance_on_empty = $true
+# 0426这里应为true
+$enable_early_rebalance_on_empty = $false
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
 $market_regime_ma250_hard_stop = $false      # $true 启用 | $false 禁用
@@ -228,7 +232,8 @@ $market_regime_ma250_exposure  = 0.9         # 触发后的仓位系数（0.0 = 
 $ma250_atr_scaling             = $true       # $true 启用 ATR 动态仓位缩放（仓位 = base × MA(ATR,250) / CurrentATR）
 
 # ── OOS 止损（总开关）────────────────────────────────────────
-$bt_stop_loss_enabled                 = $true   # $true 启用 | $false 禁用
+# 0426这里应为true
+$bt_stop_loss_enabled                 = $false   # $true 启用 | $false 禁用
 # 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
 $bt_stop_loss_drawdown_pct_list       = @(30.0) # 回撤止损阈值（%）
 $bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数

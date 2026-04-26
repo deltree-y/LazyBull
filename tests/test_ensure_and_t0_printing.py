@@ -1,5 +1,6 @@
 """测试数据确保和 T0 打印增强功能"""
 
+import importlib
 import tempfile
 from unittest.mock import MagicMock, Mock, patch
 
@@ -12,6 +13,7 @@ from src.lazybull.data.ensure import (
     ensure_clean_data_for_date,
     ensure_raw_data_for_date,
 )
+import src.lazybull.features.ensure as ensure_module
 from src.lazybull.features import FeatureBuilder, ensure_features_for_date
 from src.lazybull.paper import PaperAccount, PaperStorage, TargetWeight
 from src.lazybull.paper.runner import PaperTradingRunner
@@ -252,6 +254,111 @@ def test_correct_trade_date_supports_next_with_last_trade_date(monkeypatch):
         monkeypatch.setattr(runner.paper_storage, 'load_last_trade_date', lambda: '20260325')
 
         assert runner._correct_trade_date('next') == '20260326'
+
+
+def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
+    """测试 _load_factor_data 只为目标交易日构建因子查询表输出。"""
+    trade_date = '20260422'
+    trading_dates = ['20260418', '20260421', trade_date]
+    stub_df = pd.DataFrame({'ts_code': ['000001.SZ']})
+    captured_dates = {}
+
+    for attr in [
+        '_MIN_FINA_RECORDS',
+        '_MIN_HOLDER_RECORDS',
+        '_MIN_FORECAST_RECORDS',
+        '_MIN_EXPRESS_RECORDS',
+        '_MIN_REPORT_RC_RECORDS',
+    ]:
+        monkeypatch.setattr(ensure_module, attr, 1)
+
+    monkeypatch.setattr(
+        ensure_module,
+        '_try_ensure_historical_margin',
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        ensure_module,
+        '_try_ensure_historical_cyq_perf',
+        lambda *args, **kwargs: stub_df,
+    )
+    monkeypatch.setattr(
+        ensure_module,
+        '_try_ensure_historical_fund_portfolio',
+        lambda *args, **kwargs: stub_df,
+    )
+    monkeypatch.setattr(
+        ensure_module,
+        '_try_ensure_historical_moneyflow_hsgt',
+        lambda *args, **kwargs: stub_df,
+    )
+    monkeypatch.setattr(
+        ensure_module,
+        '_try_ensure_historical_top_list',
+        lambda *args, **kwargs: stub_df,
+    )
+
+    def _record_builder(name):
+        def _builder(_df, output_dates, *args, **kwargs):
+            captured_dates[name] = list(output_dates)
+            return {trade_date: stub_df}
+
+        return _builder
+
+    builder_targets = [
+        ('src.lazybull.factors.fundamental', 'build_fundamental_lookup_by_date', 'fundamental'),
+        ('src.lazybull.factors.margin', 'build_margin_lookup_by_date', 'margin'),
+        ('src.lazybull.factors.holder', 'build_holder_lookup_by_date', 'holder'),
+        ('src.lazybull.factors.earnings', 'build_earnings_lookup_by_date', 'earnings'),
+        ('src.lazybull.factors.cyq_perf', 'build_cyq_perf_lookup_by_date', 'cyq_perf'),
+        ('src.lazybull.factors.express', 'build_express_lookup_by_date', 'express'),
+        ('src.lazybull.factors.fund_portfolio', 'build_fund_portfolio_lookup_by_date', 'fund_portfolio'),
+        ('src.lazybull.factors.north_flow', 'build_north_flow_lookup_by_date', 'north_flow'),
+        ('src.lazybull.factors.lhb', 'build_lhb_lookup_by_date', 'lhb'),
+        ('src.lazybull.factors.consensus', 'build_consensus_lookup_by_date', 'consensus'),
+    ]
+    expected_names = {item[2] for item in builder_targets}
+
+    for module_path, attr_name, name in builder_targets:
+        monkeypatch.setattr(
+            importlib.import_module(module_path),
+            attr_name,
+            _record_builder(name),
+        )
+
+    class StubLoader:
+        def load_fina_indicator(self):
+            return stub_df
+
+        def load_margin_detail(self, start_date, end_date):
+            return stub_df
+
+        def load_stk_holdernumber(self):
+            return stub_df
+
+        def load_forecast(self):
+            return stub_df
+
+        def load_express(self):
+            return stub_df
+
+        def load_report_rc(self):
+            return stub_df
+
+    result = ensure_module._load_factor_data(
+        loader=StubLoader(),
+        client=Mock(),
+        storage=Mock(),
+        trade_date=trade_date,
+        trading_dates_str=trading_dates,
+        start_date='20260401',
+        end_date=trade_date,
+    )
+
+    assert set(captured_dates.keys()) == expected_names
+    assert result[-1] == []
+    for output_dates in captured_dates.values():
+        assert output_dates == [trade_date]
 
 
 if __name__ == "__main__":

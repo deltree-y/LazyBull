@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.7)
+### 当前版本 (v0.66.8)
+
+**paper_trade 在树莓派上的 T0 因子补齐更轻量了** (v0.66.8):
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 现在仍会加载计算所需的历史原始数据，但不会再为整段历史交易日批量物化完整的因子查询表，而是只为目标 `trade_date` 生成当天截面
+- 这次优化重点覆盖基本面、股东人数、业绩预告、业绩快报、基金持仓、北向资金、龙虎榜、一致预期等因子加载链路，能明显降低树莓派在 T0 流程“步骤2: 生成信号”阶段的 CPU 与内存峰值
+- [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py) 新增了回归测试，约束 ensure 层保持“只输出目标交易日”的调用方式
 
 **paper_trade 的 early_exit_mode=disabled 现已恢复为“原硬卖”语义** (v0.66.7):
 - [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 现在只受 `enable_profit_based_holding` 总开关控制；当 `early_exit_mode=disabled` 时，仍会执行 `early_exit_loss_threshold + early_exit_holding_ratio` 的基础亏损提前换出检查，不再把整个 early_exit 分支直接跳过
