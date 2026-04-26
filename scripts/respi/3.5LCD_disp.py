@@ -7,14 +7,16 @@
 
 架构：
     数据线程：盘中每2分钟刷新摘要/排行/日内图，周期图与非交易时段补数按10分钟按需获取（启动时立即获取一次）
-  显示线程：每秒刷新画面（底部时间实时更新），每60秒随机偏移数据区（屏保防烧屏）
+    显示线程：每秒刷新画面（底部时间实时更新，顶部 CPU/内存双血条每2秒采样一次），
+                            每60秒随机偏移数据区（屏保防烧屏）
 
 屏幕布局（480x320）：
-  顶部状态栏（固定）：更新时间 | 距调仓天数
-  数据区（屏保偏移）：
+    顶部状态栏（固定）：更新时间 | 距调仓天数
+    顶栏底部占用一整行：5px 左右的双血条（左 CPU，占右内存）
+        数据区（屏保偏移）：
     市值 / 浮盈率 | 总资产 / 总盈亏率 | 持仓 / 年化收益
     图表区（固定）：持仓周期内上证/深证指数 vs 持仓组合涨跌幅
-  底部时间栏（固定）：日期 星期 时间（每秒刷新）
+        底部时间栏（固定）：日期 星期 时间（每秒刷新）
 
 自动息屏：23:00 - 6:00 写入全黑画面
 """
@@ -56,6 +58,8 @@ DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
 REALTIME_REFRESH_INTERVAL = 90  # 盘中摘要/排行/日内图刷新间隔（秒）
+USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
+CPU_USAGE_STALE_RESET_SECONDS = 10.0  # 息屏恢复后避免拿超长时间窗平均值
 MORNING_CLOSE_INTRADAY_GRACE_SECONDS = 120  # 午休前补齐 11:30 最后一格的宽限时长（秒）
 POST_CLOSE_INTRADAY_GRACE_SECONDS = 600  # 收盘后继续补齐日内尾点的宽限时长（秒）
 BACKLIGHT_PIN = 18           # 背光 GPIO 引脚（硬件 PWM）
@@ -115,6 +119,11 @@ COLOR_CHART_SHANGHAI = COLOR_YELLOW
 COLOR_CHART_SHENZHEN = COLOR_CYAN
 COLOR_CHART_HOLDINGS = COLOR_ORANGE
 ZERO_LINE_Y_OFFSET = 1
+COLOR_USAGE_BAR_OUTLINE = (132, 140, 168)
+COLOR_USAGE_BAR_EMPTY = (55, 58, 82)
+COLOR_USAGE_BAR_LOW = (75, 205, 105)
+COLOR_USAGE_BAR_MID = (240, 190, 82)
+COLOR_USAGE_BAR_HIGH = (225, 95, 95)
 
 _diag_lock = threading.Lock()
 _diag_once_keys: set[str] = set()
@@ -177,6 +186,225 @@ def _pct_color(value: float) -> tuple:
     elif value < 0:
         return COLOR_GREEN
     return COLOR_TEXT
+
+
+def _read_cpu_stat_sample() -> Optional[tuple[int, int]]:
+    """读取 /proc/stat 的总 tick 与 idle tick。"""
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as handle:
+            first_line = handle.readline().strip()
+    except OSError:
+        return None
+
+    parts = first_line.split()
+    if len(parts) < 5 or parts[0] != "cpu":
+        return None
+
+    try:
+        values = [int(value) for value in parts[1:]]
+    except ValueError:
+        return None
+
+    total_ticks = sum(values)
+    idle_ticks = values[3] + (values[4] if len(values) > 4 else 0)
+    return total_ticks, idle_ticks
+
+
+def _calc_cpu_usage_pct(
+    previous_sample: tuple[int, int],
+    current_sample: tuple[int, int],
+) -> Optional[float]:
+    """基于两次 /proc/stat 采样计算 CPU 占用率。"""
+    prev_total, prev_idle = previous_sample
+    curr_total, curr_idle = current_sample
+    total_delta = curr_total - prev_total
+    idle_delta = curr_idle - prev_idle
+    if total_delta <= 0 or idle_delta < 0:
+        return None
+
+    usage_pct = (total_delta - idle_delta) / total_delta * 100.0
+    return max(0.0, min(100.0, usage_pct))
+
+
+def _read_memory_usage_pct() -> Optional[float]:
+    """读取 /proc/meminfo 并计算当前内存占用率。"""
+    values: dict[str, int] = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                key = parts[0].rstrip(":")
+                try:
+                    values[key] = int(parts[1])
+                except ValueError:
+                    continue
+    except OSError:
+        return None
+
+    total_kb = values.get("MemTotal")
+    if not total_kb or total_kb <= 0:
+        return None
+
+    available_kb = values.get("MemAvailable")
+    if available_kb is None:
+        available_kb = (
+            values.get("MemFree", 0)
+            + values.get("Buffers", 0)
+            + values.get("Cached", 0)
+            + values.get("SReclaimable", 0)
+            - values.get("Shmem", 0)
+        )
+
+    available_kb = max(0, min(total_kb, available_kb))
+    used_kb = total_kb - available_kb
+    usage_pct = used_kb / total_kb * 100.0
+    return max(0.0, min(100.0, usage_pct))
+
+
+def _refresh_system_usage_sample(
+    state: "DisplayState",
+    now_ts: Optional[float] = None,
+) -> tuple[float, float]:
+    """按固定节流周期刷新 CPU 与内存占用率缓存。"""
+    sample_ts = now_ts if now_ts is not None else time.monotonic()
+
+    with state.lock:
+        previous_sample = getattr(state, "cpu_usage_sample", None)
+        previous_sampled_at = getattr(state, "usage_sampled_at", 0.0)
+        previous_cpu_usage_pct = float(getattr(state, "cpu_usage_pct", 0.0) or 0.0)
+        previous_memory_usage_pct = float(getattr(state, "memory_usage_pct", 0.0) or 0.0)
+
+    if (
+        previous_sample is not None
+        and sample_ts - previous_sampled_at < USAGE_REFRESH_INTERVAL
+    ):
+        return previous_cpu_usage_pct, previous_memory_usage_pct
+
+    current_sample = _read_cpu_stat_sample()
+    current_memory_usage_pct = _read_memory_usage_pct()
+    if current_sample is None:
+        if current_memory_usage_pct is None:
+            return previous_cpu_usage_pct, previous_memory_usage_pct
+
+    cpu_usage_pct = previous_cpu_usage_pct
+    memory_usage_pct = previous_memory_usage_pct
+    if current_memory_usage_pct is not None:
+        memory_usage_pct = current_memory_usage_pct
+
+    elapsed_seconds = sample_ts - previous_sampled_at
+    if (
+        previous_sample is not None
+        and current_sample is not None
+        and 0.0 < elapsed_seconds <= CPU_USAGE_STALE_RESET_SECONDS
+    ):
+        computed_usage_pct = _calc_cpu_usage_pct(previous_sample, current_sample)
+        if computed_usage_pct is not None:
+            cpu_usage_pct = computed_usage_pct
+
+    with state.lock:
+        if current_sample is not None:
+            state.cpu_usage_sample = current_sample
+        if current_sample is not None or current_memory_usage_pct is not None:
+            state.usage_sampled_at = sample_ts
+        state.cpu_usage_pct = cpu_usage_pct
+        state.memory_usage_pct = memory_usage_pct
+
+    return cpu_usage_pct, memory_usage_pct
+
+
+def _get_usage_bar_fill_color(usage_pct: float) -> tuple[int, int, int]:
+    """根据占用率返回绿黄红分段颜色。"""
+    if usage_pct >= 80.0:
+        return COLOR_USAGE_BAR_HIGH
+    if usage_pct >= 55.0:
+        return COLOR_USAGE_BAR_MID
+    return COLOR_USAGE_BAR_LOW
+
+
+def _draw_usage_bar_section(
+    draw: ImageDraw.ImageDraw,
+    x0: int,
+    x1: int,
+    y0: int,
+    y1: int,
+    usage_pct: float,
+) -> None:
+    """在单个分区中绘制一段占用率填充。"""
+    section_width = max(0, x1 - x0 + 1)
+    fill_width = int(round(section_width * max(0.0, min(100.0, float(usage_pct))) / 100.0))
+    if usage_pct > 0.0 and fill_width == 0:
+        fill_width = 1
+    if fill_width <= 0:
+        return
+
+    fill_x1 = x0 + fill_width - 1
+    if fill_width >= 3:
+        draw.rounded_rectangle(
+            [x0, y0, fill_x1, y1],
+            radius=1,
+            fill=_get_usage_bar_fill_color(usage_pct),
+        )
+        return
+
+    draw.rectangle(
+        [x0, y0, fill_x1, y1],
+        fill=_get_usage_bar_fill_color(usage_pct),
+    )
+
+
+def _draw_system_usage_bar(
+    draw: ImageDraw.ImageDraw,
+    cpu_usage_pct: float,
+    memory_usage_pct: float,
+) -> None:
+    """在顶栏底部绘制左右双槽血条：左 CPU，右内存。"""
+    body_height = USAGE_BAR_H
+    bar_y0 = HEADER_H - USAGE_BAR_BOTTOM_GAP - body_height
+    bar_y1 = bar_y0 + body_height - 1
+    body_x0 = USAGE_BAR_MARGIN_X
+    body_x1 = WIDTH - USAGE_BAR_MARGIN_X - USAGE_BAR_CAP_W - 2
+    cap_x0 = body_x1 + 2
+    cap_y0 = bar_y0 + 1
+    cap_x1 = cap_x0 + USAGE_BAR_CAP_W - 1
+    cap_y1 = bar_y1 - 1
+
+    draw.rounded_rectangle(
+        [body_x0, bar_y0, body_x1, bar_y1],
+        radius=2,
+        fill=COLOR_USAGE_BAR_EMPTY,
+        outline=COLOR_USAGE_BAR_OUTLINE,
+    )
+    draw.rounded_rectangle(
+        [cap_x0, cap_y0, cap_x1, cap_y1],
+        radius=1,
+        fill=COLOR_USAGE_BAR_EMPTY,
+        outline=COLOR_USAGE_BAR_OUTLINE,
+    )
+
+    inner_x0 = body_x0 + 2
+    inner_y0 = bar_y0 + 1
+    inner_x1 = body_x1 - 2
+    inner_y1 = bar_y1 - 1
+    divider_left = inner_x0 + (inner_x1 - inner_x0 + 1) // 2 - USAGE_BAR_SECTION_GAP // 2
+    divider_right = divider_left + USAGE_BAR_SECTION_GAP - 1
+    left_x0 = inner_x0
+    left_x1 = divider_left - 1
+    right_x0 = divider_right + 1
+    right_x1 = inner_x1
+
+    draw.line(
+        [(divider_left - 1, inner_y0), (divider_left - 1, inner_y1)],
+        fill=COLOR_USAGE_BAR_OUTLINE,
+    )
+    draw.line(
+        [(divider_right + 1, inner_y0), (divider_right + 1, inner_y1)],
+        fill=COLOR_USAGE_BAR_OUTLINE,
+    )
+
+    _draw_usage_bar_section(draw, left_x0, left_x1, inner_y0, inner_y1, cpu_usage_pct)
+    _draw_usage_bar_section(draw, right_x0, right_x1, inner_y0, inner_y1, memory_usage_pct)
 
 
 def _coerce_float(value: object) -> Optional[float]:
@@ -2192,6 +2420,10 @@ class DisplayState:
         self.chart_data: Optional[dict] = None
         self.intraday_chart_data: Optional[dict] = _load_intraday_chart()
         self.stock_rankings: Optional[list] = None  # 个股盈亏排名
+        self.cpu_usage_pct: float = 0.0
+        self.memory_usage_pct: float = 0.0
+        self.cpu_usage_sample: Optional[tuple[int, int]] = None
+        self.usage_sampled_at: float = 0.0
         # 屏保偏移（仅数据行参与）
         self.offset_x: int = 0
         self.offset_y: int = 0
@@ -2204,6 +2436,11 @@ class DisplayState:
 HEADER_H = 34          # 顶栏高度（含时间、更新、调仓）
 HEADER_TIME_FONT_SIZE = 15
 HEADER_META_FONT_SIZE = 15
+USAGE_BAR_H = 5
+USAGE_BAR_MARGIN_X = 8
+USAGE_BAR_CAP_W = 4
+USAGE_BAR_SECTION_GAP = 4
+USAGE_BAR_BOTTOM_GAP = 1
 PANEL_MARGIN = 6       # 面板区左右外边距
 PANEL_TOP = HEADER_H + 4  # 面板区顶部 y，给顶栏留出更大时间字号空间
 PANEL_H = 140          # 面板区高度（去掉底栏后加大）
@@ -2230,6 +2467,8 @@ def _render(state: DisplayState) -> None:
       图表区（固定）
       底部时间栏（固定）
     """
+    cpu_usage_pct, memory_usage_pct = _refresh_system_usage_sample(state)
+
     with state.lock:
         summary = state.summary
         last_update_time = state.update_time
@@ -2252,7 +2491,7 @@ def _render(state: DisplayState) -> None:
     font_rank = _get_font(15)  # 排名列表
     font_md = _get_font(20)    # 等待提示
 
-    # ===== 顶部状态栏（固定）：时间 | 更新 | 下次调仓 =====
+    # ===== 顶部状态栏（固定）：时间 | 更新 | 下次调仓 + CPU/内存双血条 =====
     draw.rectangle([0, 0, WIDTH, HEADER_H], fill=COLOR_HEADER_BG)
 
     now = datetime.now()
@@ -2263,10 +2502,11 @@ def _render(state: DisplayState) -> None:
 
     time_bbox = draw.textbbox((0, 0), time_str, font=font_header_time)
     time_h = time_bbox[3] - time_bbox[1]
-    time_y = (HEADER_H - time_h) // 2 - 1
+    header_text_area_h = HEADER_H - USAGE_BAR_H - USAGE_BAR_BOTTOM_GAP - 1
+    time_y = max(1, (header_text_area_h - time_h) // 2 - 2)
     meta_bbox = draw.textbbox((0, 0), header_mid, font=font_label)
     meta_h = meta_bbox[3] - meta_bbox[1]
-    meta_y = (HEADER_H - meta_h) // 2
+    meta_y = max(1, (header_text_area_h - meta_h) // 2 - 1)
 
     draw.text((8, time_y), time_str, fill=COLOR_TEXT, font=font_header_time)
     # 居中
@@ -2276,6 +2516,7 @@ def _render(state: DisplayState) -> None:
     bbox_r = draw.textbbox((0, 0), header_right, font=font_label)
     rw = bbox_r[2] - bbox_r[0]
     draw.text((WIDTH - rw - 8, meta_y), header_right, fill=COLOR_YELLOW, font=font_label)
+    _draw_system_usage_bar(draw, cpu_usage_pct, memory_usage_pct)
 
     # ===== 左面板：总览 2行×3列（参与屏保偏移）=====
     lp_x = PANEL_MARGIN + ox
@@ -2658,6 +2899,11 @@ def _display_worker(state: DisplayState, stop_event: threading.Event) -> None:
 
             if not state.is_screen_on:
                 _set_backlight(BACKLIGHT_BRIGHTNESS)
+                with state.lock:
+                    state.cpu_usage_pct = 0.0
+                    state.memory_usage_pct = 0.0
+                    state.cpu_usage_sample = None
+                    state.usage_sampled_at = 0.0
                 state.is_screen_on = True
 
             # ---- 屏保：每分钟随机偏移数据区 ----

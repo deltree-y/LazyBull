@@ -155,10 +155,74 @@ def test_layout_constants_use_taller_header_and_narrower_left_panel():
     module = _load_module()
 
     assert module.HEADER_H == 34
+    assert module.USAGE_BAR_H == 5
+    assert module.USAGE_BAR_BOTTOM_GAP == 1
+    assert module.USAGE_BAR_SECTION_GAP >= 2
     assert module.HEADER_TIME_FONT_SIZE >= module.HEADER_META_FONT_SIZE
     assert module.PANEL_TOP == module.HEADER_H + 4
     assert module.LEFT_W == int(module.PANEL_AREA_W * 0.575)
     assert module.RIGHT_W == module.PANEL_AREA_W - module.LEFT_W - module.PANEL_GAP
+
+
+def test_refresh_system_usage_sample_throttles_to_two_seconds(monkeypatch):
+    module = _load_module()
+    cpu_calls = []
+    cpu_samples = [(100, 40), (140, 52)]
+    memory_calls = []
+    memory_samples = [48.0, 62.5]
+
+    def _fake_read_cpu_stat_sample():
+        sample = cpu_samples[len(cpu_calls)]
+        cpu_calls.append(sample)
+        return sample
+
+    def _fake_read_memory_usage_pct():
+        memory_pct = memory_samples[len(memory_calls)]
+        memory_calls.append(memory_pct)
+        return memory_pct
+
+    monkeypatch.setattr(module, "_read_cpu_stat_sample", _fake_read_cpu_stat_sample)
+    monkeypatch.setattr(module, "_read_memory_usage_pct", _fake_read_memory_usage_pct)
+
+    state = module.DisplayState()
+
+    assert module._refresh_system_usage_sample(state, now_ts=0.0) == (0.0, 48.0)
+    assert module._refresh_system_usage_sample(state, now_ts=1.9) == (0.0, 48.0)
+
+    cpu_usage_pct, memory_usage_pct = module._refresh_system_usage_sample(state, now_ts=2.0)
+
+    assert cpu_calls == [(100, 40), (140, 52)]
+    assert memory_calls == [48.0, 62.5]
+    assert round(cpu_usage_pct, 4) == 70.0
+    assert round(memory_usage_pct, 4) == 62.5
+    assert round(state.cpu_usage_pct, 4) == 70.0
+    assert round(state.memory_usage_pct, 4) == 62.5
+
+
+def test_draw_system_usage_bar_fills_left_and_right_portions_with_independent_colors():
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), module.COLOR_HEADER_BG)
+    draw = module.ImageDraw.Draw(image)
+
+    module._draw_system_usage_bar(draw, 30.0, 85.0)
+
+    body_x1 = module.WIDTH - module.USAGE_BAR_MARGIN_X - module.USAGE_BAR_CAP_W - 2
+    inner_x0 = module.USAGE_BAR_MARGIN_X + 2
+    inner_x1 = body_x1 - 2
+    divider_left = inner_x0 + (inner_x1 - inner_x0 + 1) // 2 - module.USAGE_BAR_SECTION_GAP // 2
+    divider_right = divider_left + module.USAGE_BAR_SECTION_GAP - 1
+    left_x0 = inner_x0
+    left_x1 = divider_left - 1
+    right_x0 = divider_right + 1
+    right_x1 = inner_x1
+    inner_y = module.HEADER_H - module.USAGE_BAR_BOTTOM_GAP - module.USAGE_BAR_H + 2
+    left_fill_x = left_x0 + max(2, (left_x1 - left_x0) // 5)
+    left_empty_x = min(left_x1 - 2, left_x0 + int(round((left_x1 - left_x0 + 1) * 0.6)))
+    right_fill_x = right_x0 + max(2, (right_x1 - right_x0) // 2)
+
+    assert image.getpixel((left_fill_x, inner_y)) == module.COLOR_USAGE_BAR_LOW
+    assert image.getpixel((left_empty_x, inner_y)) == module.COLOR_USAGE_BAR_EMPTY
+    assert image.getpixel((right_fill_x, inner_y)) == module.COLOR_USAGE_BAR_HIGH
 
 
 def test_is_trade_day_uses_weekday_fallback_without_loading_calendar(monkeypatch):

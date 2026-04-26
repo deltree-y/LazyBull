@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.0] - 2026-04-26
+
+### 新增
+
+- **树莓派 3.5 寸 LCD 顶栏新增 CPU/内存双槽血条** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 顶部状态栏文字整体上移，顶栏底部预留出一整条约 5px 的手机电量样式双槽血条，左侧显示 CPU 占用率，右侧显示内存占用率
+  - CPU 与内存占用率共用显示线程内的 2 秒节流采样；CPU 从 `/proc/stat` 取样，内存从 `/proc/meminfo` 读取，不影响原有摘要、排行和图表的数据刷新频率
+  - 两个分槽都采用统一的绿黄红分段阈值显示；自动息屏恢复后会重置采样基准，避免首帧误用跨长时间窗的旧值
+
+### 测试
+
+- **补充 CPU/内存双槽血条定向回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 校验顶栏布局常量为双槽血条预留固定高度与分槽间距
+  - 校验 CPU/内存共用的 2 秒采样节流，以及左右分槽各自的颜色填充逻辑
+
 ## [0.64.2] - 2026-04-26
 
 ### 修复
