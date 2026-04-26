@@ -399,6 +399,107 @@ class TestCompareWalkForwardPeriodStability:
         for _, row in result.iterrows():
             assert row["运行ID列表"] == expected_run_id_lists[row["批次ID"]]
 
+    def test_build_period_stability_table_separates_bt_top_n(self):
+        all_df = pd.DataFrame(
+            [
+                {
+                    "wf_run_id": "wf_test_001",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.12,
+                    "daily_rankic_ir": 0.60,
+                },
+                {
+                    "wf_run_id": "wf_test_002",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.08,
+                    "daily_rankic_ir": 0.45,
+                },
+                {
+                    "wf_run_id": "wf_test_003",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 30,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.10,
+                    "daily_rankic_ir": 0.58,
+                },
+                {
+                    "wf_run_id": "wf_test_004",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 30,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.07,
+                    "daily_rankic_ir": 0.40,
+                },
+            ]
+        )
+
+        comp_df = build_comparison_table(all_df)
+        comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+
+        result = build_period_stability_table(comp_df)
+
+        assert len(result) == 2
+        assert sorted(result["回测TopN"].tolist()) == [20, 30]
+        assert (result["时间段数"] == 2).all()
+        expected_run_id_lists = {
+            20: "0101:wf_test_001 | 0209:wf_test_002",
+            30: "0101:wf_test_003 | 0209:wf_test_004",
+        }
+        for _, row in result.iterrows():
+            assert row["运行ID列表"] == expected_run_id_lists[row["回测TopN"]]
+
 
 class TestCompareWalkForwardAutoDiscovery:
     """测试 compare 脚本无参时自动扫描 raw 与 batches。"""

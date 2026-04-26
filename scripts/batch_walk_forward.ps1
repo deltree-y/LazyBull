@@ -144,20 +144,20 @@ $bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null =
 # 仅当 mode 为 kelly / half_kelly 时，Kelly 参数才会真正生效
 $position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
 $kelly_vol_window                 = 60         # Kelly 波动率窗口（交易日）
-$kelly_max_leverage_list          = @(0.15)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
+$kelly_max_leverage_list          = @(0.1)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
 $signal_gate_mode = "composite"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
 # 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
-$signal_gate_cost_multiplier_list = @(0.3)      # composite: 门控严格度扫描
+$signal_gate_cost_multiplier_list = @(0.7)      #0.3 composite: 门控严格度扫描
 $signal_gate_round_trip_cost = 0.003            # composite: 往返交易成本估算（佣金+印花税+滑点，仅原始收益模式使用）
 $signal_gate_percentile_warmup = 5              # composite: 百分位归一化预热期（调仓次数）
 
 # 滚动模型质量监控子开关：仅在开启时才使用以下质量参数
 $signal_gate_quality_enabled = $true            # $true 启用 | $false 禁用
-$signal_gate_quality_window_list = @(3)         # 滚动质量回看调仓周期数
-$signal_gate_quality_threshold_list = @(0.4)    # 滚动质量最低 hit rate
-$signal_gate_quality_halflife = 4               # 滚动质量 EWM 半衰期
+$signal_gate_quality_window_list = @(1,2,3,4,5,6,7,8,9)         #3 滚动质量回看调仓周期数
+$signal_gate_quality_threshold_list = @(0.2,0.3,0.4,0.5,0.6,0.7)    #0.4 滚动质量最低 hit rate
+$signal_gate_quality_halflife = 4               #4 滚动质量 EWM 半衰期
 
 # 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
 $signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用

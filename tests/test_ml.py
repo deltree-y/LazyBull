@@ -3,6 +3,7 @@
 import json
 import tempfile
 from pathlib import Path
+from typing import Dict
 
 import joblib
 import numpy as np
@@ -66,8 +67,12 @@ def test_register_model(temp_models_dir):
     # 验证模型文件存在
     model_file = Path(temp_models_dir) / "v1_model.joblib"
     features_file = Path(temp_models_dir) / "v1_features.json"
+    metadata_file = Path(temp_models_dir) / "v1_metadata.json"
+    latest_version_file = Path(temp_models_dir) / "latest_model_version.txt"
     assert model_file.exists()
     assert features_file.exists()
+    assert metadata_file.exists()
+    assert latest_version_file.exists()
     
     # 验证特征文件内容
     with open(features_file, 'r') as f:
@@ -80,6 +85,158 @@ def test_register_model(temp_models_dir):
     assert models[0]["version"] == 1
     assert models[0]["model_type"] == "xgboost"
     assert models[0]["n_samples"] == 1000
+
+
+def test_load_specific_version_without_registry_file_uses_metadata_sidecar(temp_models_dir):
+    """测试指定版本可仅依赖旁路元数据加载。"""
+    registry = ModelRegistry(models_dir=temp_models_dir)
+    model = MockModel()
+
+    registry.register_model(
+        model=model,
+        model_type="xgboost",
+        train_start_date="20230101",
+        train_end_date="20231231",
+        feature_columns=["feature1", "feature2"],
+        label_column="y_ret_5",
+        n_samples=1000,
+        train_params={"n_estimators": 100, "max_depth": 6},
+    )
+
+    registry_file = Path(temp_models_dir) / "model_registry.json"
+    registry_file.unlink()
+
+    reloaded_registry = ModelRegistry(models_dir=temp_models_dir)
+    loaded_model, metadata = reloaded_registry.load_model(version=1)
+
+    assert loaded_model is not None
+    assert metadata["version"] == 1
+    assert metadata["feature_columns"] == ["feature1", "feature2"]
+
+
+def test_load_specific_version_streams_large_registry_without_full_load(temp_models_dir, monkeypatch):
+    """测试旧模型在无旁路文件时可按版本流式读取注册表。"""
+    models_dir = Path(temp_models_dir)
+    model = MockModel()
+    joblib.dump(model, models_dir / "v1_model.joblib")
+    joblib.dump(model, models_dir / "v2_model.joblib")
+
+    with open(models_dir / "v1_features.json", 'w', encoding='utf-8') as f:
+        json.dump(["feature1", "feature2"], f, ensure_ascii=False, indent=2)
+    with open(models_dir / "v2_features.json", 'w', encoding='utf-8') as f:
+        json.dump(["feature1", "feature2", "feature3"], f, ensure_ascii=False, indent=2)
+
+    metadata_v1 = {
+        "version": 1,
+        "version_str": "v1",
+        "model_type": "xgboost",
+        "model_file": "v1_model.joblib",
+        "features_file": "v1_features.json",
+        "train_start_date": "20230101",
+        "train_end_date": "20231231",
+        "feature_count": 2,
+        "label_column": "y_ret_5",
+        "n_samples": 1000,
+        "train_params": {"n_estimators": 100, "task": "regression"},
+        "performance_metrics": {},
+        "created_at": "2026-04-25 21:22:30",
+    }
+    metadata_v2 = {
+        "version": 2,
+        "version_str": "v2",
+        "model_type": "xgboost",
+        "model_file": "v2_model.joblib",
+        "features_file": "v2_features.json",
+        "train_start_date": "20240101",
+        "train_end_date": "20241231",
+        "feature_count": 3,
+        "label_column": "y_ret_5",
+        "n_samples": 1200,
+        "train_params": {"n_estimators": 120, "task": "regression"},
+        "performance_metrics": {},
+        "created_at": "2026-04-25 21:25:30",
+    }
+    with open(models_dir / "model_registry.json", 'w', encoding='utf-8') as f:
+        json.dump(
+            {"models": [metadata_v1, metadata_v2], "next_version": 3},
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    registry = ModelRegistry(models_dir=temp_models_dir)
+
+    def _unexpected_full_load() -> Dict:
+        raise AssertionError("指定版本加载不应回退到完整注册表加载")
+
+    monkeypatch.setattr(registry, "_ensure_registry_loaded", _unexpected_full_load)
+
+    loaded_model, loaded_metadata = registry.load_model(version=1)
+
+    assert loaded_model is not None
+    assert loaded_metadata["version"] == 1
+    assert loaded_metadata["feature_columns"] == ["feature1", "feature2"]
+
+
+def test_load_latest_version_uses_registry_tail_without_full_load(temp_models_dir, monkeypatch):
+    """测试加载最新版本可先通过注册表尾部读取版本号。"""
+    models_dir = Path(temp_models_dir)
+    model = MockModel()
+    joblib.dump(model, models_dir / "v2_model.joblib")
+
+    with open(models_dir / "v2_features.json", 'w', encoding='utf-8') as f:
+        json.dump(["feature1", "feature2", "feature3"], f, ensure_ascii=False, indent=2)
+
+    metadata_v1 = {
+        "version": 1,
+        "version_str": "v1",
+        "model_type": "xgboost",
+        "model_file": "v1_model.joblib",
+        "features_file": "v1_features.json",
+        "train_start_date": "20220101",
+        "train_end_date": "20221231",
+        "feature_count": 1,
+        "label_column": "y_ret_5",
+        "n_samples": 100,
+        "train_params": {"n_estimators": 50, "task": "regression"},
+        "performance_metrics": {},
+        "created_at": "2026-04-25 21:19:01",
+    }
+    metadata_v2 = {
+        "version": 2,
+        "version_str": "v2",
+        "model_type": "xgboost",
+        "model_file": "v2_model.joblib",
+        "features_file": "v2_features.json",
+        "train_start_date": "20230101",
+        "train_end_date": "20231231",
+        "feature_count": 3,
+        "label_column": "y_ret_5",
+        "n_samples": 1000,
+        "train_params": {"n_estimators": 100, "task": "regression"},
+        "performance_metrics": {},
+        "created_at": "2026-04-25 21:22:30",
+    }
+    with open(models_dir / "model_registry.json", 'w', encoding='utf-8') as f:
+        json.dump(
+            {"models": [metadata_v1, metadata_v2], "next_version": 3},
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    registry = ModelRegistry(models_dir=temp_models_dir)
+
+    def _unexpected_full_load() -> Dict:
+        raise AssertionError("加载最新版本不应先回退到完整注册表加载")
+
+    monkeypatch.setattr(registry, "_ensure_registry_loaded", _unexpected_full_load)
+
+    loaded_model, loaded_metadata = registry.load_model()
+
+    assert loaded_model is not None
+    assert loaded_metadata["version"] == 2
+    assert loaded_metadata["feature_columns"] == ["feature1", "feature2", "feature3"]
 
 
 def test_register_multiple_models(temp_models_dir):

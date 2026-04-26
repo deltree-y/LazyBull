@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.64.2] - 2026-04-26
+
+### 修复
+
+- **模型注册表改为按需加载并增加单模型 metadata 旁路** ([model_registry.py](src/lazybull/ml/model_registry.py)):
+  - `ModelRegistry` 不再在初始化时无条件整包读取 `model_registry.json`，指定版本推理会优先读取 `v*_metadata.json`
+  - 对只有旧版 `model_registry.json` 的模型目录，新增按版本流式提取单条 metadata 的兼容路径，避免树莓派等慢存储环境在 `paper_trade` 首次懒加载时卡在 90MB 级注册表解析
+
+### 测试
+
+- **补充模型注册表快速加载回归测试** ([test_ml.py](tests/test_ml.py)):
+  - 校验无注册表文件时仍可通过 metadata 旁路加载指定版本
+  - 校验指定版本和最新版本加载不会先回退到完整注册表解析
+
+## [0.64.1] - 2026-04-25
+
+### 修复
+
+- **跨时间段稳定性汇总补齐回测参数分组键** ([compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - `compare_walk_forward.py` 现在会把 `bt_top_n`、signal gate v2、市场择时、因子开关、分批调仓等 summary 已写出的训练/回测参数一并纳入对比表与跨时间段稳定性分组键
+  - 修复 `wf_comparison_batches.xlsx` 的 `跨时间段稳定性` sheet 在 `skip_training` 扫描 `bt_top_n` 等参数时，误把不同参数组合合并成同一行的问题
+
+### 测试
+
+- **补充跨时间段稳定性 TopN 分组回归测试** ([test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 校验同批次下不同 `bt_top_n` 会生成独立稳定性记录，不再错误折叠
+
 ## [0.64.0] - 2026-04-25
 
 ### 新增

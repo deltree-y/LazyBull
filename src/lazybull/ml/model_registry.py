@@ -7,6 +7,8 @@
 """
 
 import json
+import re
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -15,8 +17,9 @@ import joblib
 from loguru import logger
 
 from ..common.config import get_models_root
-import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning, module="xgboost")
+
 
 class ModelRegistry:
     """模型注册表
@@ -32,11 +35,134 @@ class ModelRegistry:
         """
         self.models_dir = Path(models_dir or get_models_root())
         self.models_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.registry_file = self.models_dir / "model_registry.json"
-        self.registry = self._load_registry()
-        
+        self.latest_version_file = self.models_dir / "latest_model_version.txt"
+        self.registry: Optional[Dict] = None
+
         logger.info(f"模型注册表初始化完成: {self.models_dir}")
+
+    def _ensure_registry_loaded(self) -> Dict:
+        """按需加载完整注册表。"""
+        if self.registry is None:
+            self.registry = self._load_registry()
+        return self.registry
+
+    def _metadata_file(self, version: int) -> Path:
+        """返回单模型元数据旁路文件路径。"""
+        return self.models_dir / f"v{version}_metadata.json"
+
+    def _load_metadata_sidecar(self, version: int) -> Optional[Dict]:
+        """优先读取单模型元数据，避免整包加载大注册表。"""
+        metadata_file = self._metadata_file(version)
+        if not metadata_file.exists():
+            return None
+
+        with open(metadata_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    def _save_metadata_sidecar(self, metadata: Dict) -> None:
+        """保存单模型元数据旁路文件。"""
+        version = metadata.get("version")
+        if version is None:
+            return
+
+        metadata_file = self._metadata_file(int(version))
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    def _read_latest_version_file(self) -> Optional[int]:
+        """读取最新版本旁路文件。"""
+        if not self.latest_version_file.exists():
+            return None
+
+        raw_value = self.latest_version_file.read_text(encoding='utf-8').strip()
+        if not raw_value:
+            return None
+
+        try:
+            return int(raw_value)
+        except ValueError:
+            logger.warning(
+                f"最新模型版本旁路文件损坏，忽略: {self.latest_version_file}"
+            )
+            return None
+
+    def _save_latest_version_file(self, version: int) -> None:
+        """保存最新版本旁路文件。"""
+        self.latest_version_file.write_text(str(version), encoding='utf-8')
+
+    def _load_next_version_from_registry_tail(self) -> Optional[int]:
+        """从注册表尾部快速读取 next_version。"""
+        if not self.registry_file.exists():
+            return None
+
+        file_size = self.registry_file.stat().st_size
+        tail_size = min(file_size, 8192)
+
+        with open(self.registry_file, 'rb') as f:
+            if file_size > tail_size:
+                f.seek(-tail_size, 2)
+            tail_text = f.read().decode('utf-8', errors='ignore')
+
+        match = re.search(r'"next_version"\s*:\s*(\d+)', tail_text)
+        if match is None:
+            return None
+
+        return int(match.group(1))
+
+    def _extract_metadata_from_registry(self, version: int) -> Optional[Dict]:
+        """从大注册表中按版本流式提取单条元数据。"""
+        if not self.registry_file.exists():
+            return None
+
+        target_line = f'"version": {version},'
+        previous_line = ""
+
+        with open(self.registry_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip() != target_line:
+                    previous_line = line
+                    continue
+
+                collected_lines = [previous_line if previous_line.strip() == "{" else "{\n", line]
+                brace_balance = 1 + line.count("{") - line.count("}")
+
+                for next_line in f:
+                    collected_lines.append(next_line)
+                    brace_balance += next_line.count("{") - next_line.count("}")
+                    if brace_balance == 0:
+                        metadata_text = "".join(collected_lines).rstrip()
+                        if metadata_text.endswith(","):
+                            metadata_text = metadata_text[:-1]
+
+                        metadata = json.loads(metadata_text)
+                        if metadata.get("version") == version:
+                            return metadata
+                        return None
+
+                break
+
+        return None
+
+    def _load_metadata(self, version: int) -> Optional[Dict]:
+        """按版本读取元数据，优先走快速旁路。"""
+        metadata = self._load_metadata_sidecar(version)
+        if metadata is not None:
+            return metadata
+
+        metadata = self._extract_metadata_from_registry(version)
+        if metadata is not None:
+            self._save_metadata_sidecar(metadata)
+            return metadata
+
+        registry = self._ensure_registry_loaded()
+        for candidate in registry.get("models", []):
+            if candidate.get("version") == version:
+                self._save_metadata_sidecar(candidate)
+                return candidate
+
+        return None
     
     def _load_registry(self) -> Dict:
         """加载注册表文件
@@ -52,8 +178,14 @@ class ModelRegistry:
     
     def _save_registry(self) -> None:
         """保存注册表到文件"""
+        registry = self._ensure_registry_loaded()
         with open(self.registry_file, 'w', encoding='utf-8') as f:
-            json.dump(self.registry, f, ensure_ascii=False, indent=2)
+            json.dump(registry, f, ensure_ascii=False, indent=2)
+
+        latest_version = self.get_latest_version()
+        if latest_version is not None:
+            self._save_latest_version_file(latest_version)
+
         logger.debug(f"注册表已保存: {self.registry_file}")
     
     def get_next_version(self) -> int:
@@ -62,7 +194,8 @@ class ModelRegistry:
         Returns:
             版本号
         """
-        return self.registry.get("next_version", 1)
+        registry = self._ensure_registry_loaded()
+        return registry.get("next_version", 1)
     
     def register_model(
         self,
@@ -121,10 +254,14 @@ class ModelRegistry:
             "performance_metrics": performance_metrics or {},
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+
+        self._save_metadata_sidecar(metadata)
+        self._save_latest_version_file(version)
         
         # 更新注册表
-        self.registry["models"].append(metadata)
-        self.registry["next_version"] = version + 1
+        registry = self._ensure_registry_loaded()
+        registry["models"].append(metadata)
+        registry["next_version"] = version + 1
         self._save_registry()
         
         logger.info(
@@ -148,26 +285,21 @@ class ModelRegistry:
         Raises:
             ValueError: 当 strict_version_check=True 且模型缺少新版本必需元数据时
         """
-        if not self.registry["models"]:
-            raise ValueError("没有已注册的模型。请先使用 train_ml_model.py 训练模型。")
-        
         if version is None:
-            # 加载最新版本
-            metadata = self.registry["models"][-1]
-        else:
-            # 加载指定版本
-            metadata = None
-            for m in self.registry["models"]:
-                if m["version"] == version:
-                    metadata = m
-                    break
-            
-            if metadata is None:
-                available_versions = [m["version"] for m in self.registry["models"]]
-                raise ValueError(
-                    f"未找到版本 {version} 的模型。"
-                    f"可用版本: {available_versions}"
-                )
+            latest_version = self.get_latest_version()
+            if latest_version is None:
+                raise ValueError("没有已注册的模型。请先使用 train_ml_model.py 训练模型。")
+            version = latest_version
+
+        metadata = self._load_metadata(version)
+        if metadata is None:
+            available_versions = [m["version"] for m in self.list_models()]
+            raise ValueError(
+                f"未找到版本 {version} 的模型。"
+                f"可用版本: {available_versions}"
+            )
+
+        metadata = dict(metadata)
         
         # 严格模式：检查新版本必需的元数据字段
         if strict_version_check:
@@ -260,7 +392,8 @@ class ModelRegistry:
         Returns:
             模型元数据列表
         """
-        return self.registry["models"]
+        registry = self._ensure_registry_loaded()
+        return registry["models"]
     
     def get_latest_version(self) -> Optional[int]:
         """获取最新模型版本号
@@ -268,6 +401,20 @@ class ModelRegistry:
         Returns:
             最新版本号，如果没有模型则返回 None
         """
-        if not self.registry["models"]:
+        latest_version = self._read_latest_version_file()
+        if latest_version is not None:
+            return latest_version
+
+        next_version = self._load_next_version_from_registry_tail()
+        if next_version is not None and next_version > 1:
+            latest_version = next_version - 1
+            self._save_latest_version_file(latest_version)
+            return latest_version
+
+        registry = self._ensure_registry_loaded()
+        if not registry["models"]:
             return None
-        return self.registry["models"][-1]["version"]
+
+        latest_version = registry["models"][-1]["version"]
+        self._save_latest_version_file(latest_version)
+        return latest_version

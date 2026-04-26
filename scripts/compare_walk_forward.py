@@ -142,6 +142,7 @@ COL_NAMES = {
     "label_transform":            "标签变换",
     "n_estimators":               "树数量",
     "max_depth":                  "最大深度",
+    "num_leaves":                 "LGB叶子数",
     "learning_rate":              "学习率",
     "subsample":                  "样本采样比",
     "colsample_bytree":           "特征采样比",
@@ -149,10 +150,40 @@ COL_NAMES = {
     "gamma":                      "gamma",
     "reg_alpha":                  "L1正则",
     "reg_lambda":                 "L2正则",
+    "early_stopping_rounds":      "早停轮数",
+    "early_stopping_metric":      "早停指标",
     "rank_weight_enabled":        "rank权重启用",
     "rank_weight_topk":           "rank权重TopK",
     "rank_weight":                "rank权重值",
     "algorithm":                  "算法",
+    "enable_fundamental":         "基本面因子",
+    "enable_alt":                 "另类因子",
+    "enable_margin":              "融资融券因子",
+    "enable_cyq":                 "筹码胜率因子",
+    "enable_fund":                "基金持仓因子",
+    "enable_express":             "业绩快报因子",
+    "feature_stability_filter":   "特征稳定性筛选",
+    "ensemble_offsets":           "多偏移集成",
+    "enable_enhanced_features":   "增强因子",
+    "enable_north_features":      "北向资金因子",
+    "enable_lhb_features":        "龙虎榜因子",
+    "enable_consensus_features":  "一致预期因子",
+    "oos_backtest":               "OOS回测",
+    "oos_backtest_months":        "OOS回测月数",
+    "bt_top_n":                   "回测TopN",
+    "signal_gate_mode":           "信号门控模式",
+    "signal_gate_cost_multiplier": "门控成本倍数",
+    "signal_gate_round_trip_cost": "门控往返成本",
+    "signal_gate_quality_enabled": "门控质量监控",
+    "signal_gate_quality_window": "门控质量窗口",
+    "signal_gate_quality_threshold": "门控质量阈值",
+    "signal_gate_quality_halflife": "门控质量半衰期",
+    "signal_gate_percentile_warmup": "门控百分位预热",
+    "signal_gate_dynamic_topn":   "动态TopN",
+    "signal_gate_topn_high_multiplier": "高置信TopN系数",
+    "signal_gate_topn_low_multiplier": "低置信TopN系数",
+    "holding_bonus_enabled":      "持仓奖励",
+    "holding_bonus_sigma":        "持仓奖励Sigma",
     # 盈亏动态持仓
     "enable_profit_based_holding":  "盈亏动态持仓",
     "early_exit_loss_threshold":    "早退亏损阈值",
@@ -171,17 +202,32 @@ COL_NAMES = {
     # 行业轮动加权
     "industry_rotation_enhanced":    "行业轮动加权",
     "industry_rotation_alpha":       "轮动Alpha",
+    "industry_momentum_filter":      "行业动量过滤",
+    "industry_momentum_bottom_pct":  "行业动量过滤比例",
     # 仓位管理
     "position_sizing":               "仓位模式",
     "kelly_vol_window":              "Kelly波动窗口",
     "kelly_max_leverage":            "Kelly仓位上限",
+    "market_regime":                 "市场择时",
+    "market_regime_bear_threshold":  "熊市阈值",
+    "market_regime_bear_exposure":   "熊市仓位",
+    "market_regime_mode":            "市场择时模式",
+    "market_regime_vol_target":      "波动率目标",
+    "market_regime_trend_threshold": "趋势阈值",
+    "market_regime_min_exposure":    "最低仓位",
+    "market_regime_combine_method":  "择时组合方式",
+    "market_regime_trend_guard":     "趋势保护",
+    "market_regime_drawdown_guard":  "回撤保护",
+    "market_regime_drawdown_threshold": "回撤保护阈值",
     "market_regime_ma250_hard_stop": "MA250硬条件",
     "market_regime_ma250_threshold": "MA250阈值",
     "market_regime_ma250_exposure":  "MA250仓位",
     "market_regime_ma250_atr_scaling": "MA250 ATR缩放",
+    "stagger_tranches":             "分批调仓批数",
     # 整体持仓止盈
     "take_profit_threshold":        "整体止盈阈值",
     "take_profit_refill":           "止盈后补仓",
+    "enable_early_rebalance_on_empty": "空仓提前调仓",
 }
 
 # ---------------------------------------------------------------------------
@@ -195,14 +241,26 @@ PARAM_COLS = [
     "wf_start_date", "wf_end_date", "step",
     "train_window_years", "test_window_months", "val_ratio",
     "label_column", "task", "label_transform",
-    "n_estimators", "max_depth", "learning_rate",
+    "n_estimators", "max_depth", "num_leaves", "learning_rate",
     "subsample", "colsample_bytree", "min_child_weight",
     "gamma", "reg_alpha", "reg_lambda",
+    "early_stopping_rounds", "early_stopping_metric",
     "rank_weight_enabled", "rank_weight_topk", "rank_weight",
+    "enable_fundamental", "enable_alt", "enable_margin", "enable_cyq",
+    "enable_fund", "enable_express", "feature_stability_filter",
+    "ensemble_offsets", "enable_enhanced_features", "enable_north_features",
+    "enable_lhb_features", "enable_consensus_features",
+    "oos_backtest", "oos_backtest_months", "bt_top_n",
     "signal_confidence_gate_enabled",
     "signal_confidence_gate_top_k",
     "signal_confidence_gate_thresholds",
     "signal_confidence_gate_exposure_levels",
+    "signal_gate_mode", "signal_gate_cost_multiplier", "signal_gate_round_trip_cost",
+    "signal_gate_quality_enabled", "signal_gate_quality_window",
+    "signal_gate_quality_threshold", "signal_gate_quality_halflife",
+    "signal_gate_percentile_warmup", "signal_gate_dynamic_topn",
+    "signal_gate_topn_high_multiplier", "signal_gate_topn_low_multiplier",
+    "holding_bonus_enabled", "holding_bonus_sigma",
     "bt_sell_timing", "bt_exclude_st", "bt_min_list_days",
     "bt_max_weight_per_stock", "bt_max_per_industry",
     "bt_stop_loss_enabled", "bt_stop_loss_drawdown_pct",
@@ -222,13 +280,21 @@ PARAM_COLS = [
     # 亏损提前换出二次确认
     "early_exit_mode", "early_exit_strength_protect_threshold", "early_exit_max_reprieves",
     # 行业轮动加权
+    "industry_momentum_filter", "industry_momentum_bottom_pct",
     "industry_rotation_enhanced", "industry_rotation_alpha",
     # 仓位管理
     "position_sizing", "kelly_vol_window", "kelly_max_leverage",
+    "market_regime", "market_regime_bear_threshold", "market_regime_bear_exposure",
+    "market_regime_mode", "market_regime_vol_target",
+    "market_regime_trend_threshold", "market_regime_min_exposure",
+    "market_regime_combine_method", "market_regime_trend_guard",
+    "market_regime_drawdown_guard", "market_regime_drawdown_threshold",
     "market_regime_ma250_hard_stop", "market_regime_ma250_threshold",
     "market_regime_ma250_exposure", "market_regime_ma250_atr_scaling",
+    "stagger_tranches",
     # 整体持仓止盈
     "take_profit_threshold", "take_profit_refill",
+    "enable_early_rebalance_on_empty",
 ]
 
 # ---------------------------------------------------------------------------
@@ -642,7 +708,7 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     for key in PARAM_COLS:
         if key == "wf_run_id":
             continue
-        col = COL_NAMES.get(key)
+        col = COL_NAMES.get(key, key)
         if col and col in comp_df.columns and col not in varying_cols and col not in metric_cols:
             group_cols.append(col)
 

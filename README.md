@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.64.0)
+### 当前版本 (v0.64.2)
+
+**模型注册表按需加载，避免纸面交易首次推理卡在大 JSON** (v0.64.2):
+- `src/lazybull/ml/model_registry.py` 现在会优先读取 `v*_metadata.json` 与 `latest_model_version.txt` 旁路文件，指定版本加载不再默认整包解析 `model_registry.json`
+- 对旧模型也增加了按 version 流式提取 metadata 的兼容路径，树莓派这类慢存储环境下，`paper_trade` 首次懒加载模型时不会再先卡在 90MB 级注册表读取上
+
+**跨时间段稳定性汇总补齐参数分组键** (v0.64.1):
+- `scripts/compare_walk_forward.py` 现在会把 `bt_top_n`、signal gate v2、市场择时、因子开关、分批调仓等 summary 已写出的参数一并带入 `实验对比` 和 `跨时间段稳定性` 汇总
+- `wf_comparison_batches.xlsx` 的 `跨时间段稳定性` sheet 不会再把不同 `bt_top_n` 或其他遗漏的扫描参数误合并为同一条记录
 
 **paper_trade 与 bot_service 共用纸面交易运行时** (v0.64.0):
 - `src/lazybull/paper/runtime.py` 现在统一承载纸面交易日执行编排，完整覆盖止损、亏损提前换出、整体止盈、延迟卖出、T1、T0 与明日指令整理
