@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.2] - 2026-04-26
+
+### 修复
+
+- **paper_trade 共享运行时支持解析 next 交易日** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py), [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py), [scripts/paper_trade.py](scripts/paper_trade.py)):
+  - `PaperTradingRunner._correct_trade_date()` 现在会先解析 `next`，优先基于 `last_trade_date`，缺失时回退到账户 `last_update`，再回退到“从今天起的最近交易日”
+  - 共享 `execute_trade_workflow()` 现在会持久化本次实际执行日，后续 `paper_trade run --trade-date next` 与持仓查看都能复用同一条 next 推算链路
+  - `load_position_snapshot()` 和 CLI 持仓打印也改为展示解析后的真实交易日，不再把字面量 `next` 传到底层数据加载
+
+### 测试
+
+- **补充 next 交易日解析回归测试** ([tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py), [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py)):
+  - 校验 `next` 会解析为上次执行日后的下一个交易日
+  - 校验共享运行时执行完成后会写回最近执行日，供后续 `next` 继续推算
+
+## [0.66.1] - 2026-04-26
+
+### 修复
+
+- **paper_trade 成本配置缺键不再导致 T0/补位流程崩溃** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [src/lazybull/common/config.py](src/lazybull/common/config.py), [configs/base.yaml](configs/base.yaml)):
+  - `PaperTradingRunner` 不再直接读取 `configs/base.yaml` 并硬索引 `costs.capital_retention_ratio` / `costs.pendding_capital_retention_ratio`，统一改走公共成本配置读取并对缺失键回退默认值
+  - 补齐 `configs/base.yaml` 中两个资金保留比例默认项，其中 T0 保留比例默认 `0.0`，补位保留比例默认 `0.3`，避免 `adjust reset-t0` 后重新执行 `paper_trade next` 时在步骤3生成交易指令阶段因缺键报错
+
+### 测试
+
+- **补充纸面交易成本配置缺键回归测试** ([tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)):
+  - 校验缺少 `capital_retention_ratio` 时，T0 指令生成仍会使用默认值继续执行，不再抛出 KeyError
+
 ## [0.66.0] - 2026-04-26
 
 ### 新增

@@ -248,4 +248,8 @@ def get_cost_settings() -> Dict[str, float]:
         "min_commission": float(config.get("costs.min_commission", 5.0)),
         "stamp_tax": float(config.get("costs.stamp_tax", 0.0005)),
         "slippage": float(config.get("costs.slippage", 0.0005)),
+        "capital_retention_ratio": float(config.get("costs.capital_retention_ratio", 0.0)),
+        "pendding_capital_retention_ratio": float(
+            config.get("costs.pendding_capital_retention_ratio", 0.3)
+        ),
     }

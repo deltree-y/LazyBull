@@ -202,5 +202,57 @@ def test_enhance_target_info():
         assert '权重=0.2000' in targets[0].reason
 
 
+def test_generate_instructions_missing_capital_retention_ratio_uses_default(monkeypatch):
+    """测试缺少 capital_retention_ratio 时仍可生成 T0 指令。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=100000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        monkeypatch.setattr('src.lazybull.paper.runner.get_cost_settings', lambda: {})
+
+        instructions = runner._generate_instructions(
+            targets=[TargetWeight(ts_code='000001.SZ', target_weight=0.5, reason='测试信号')],
+            buy_price_type='close',
+            sell_price_type='open',
+            current_prices={'000001.SZ': 10.0},
+            source_date='20260325',
+        )
+
+        assert len(instructions) == 1
+        assert instructions[0].action == 'buy'
+        assert instructions[0].shares == 5000
+
+
+def test_correct_trade_date_supports_next_with_last_trade_date(monkeypatch):
+    """测试 next 会解析为上次执行日后的下一个交易日。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=100000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        monkeypatch.setattr(
+            runner.loader,
+            'load_clean_trade_cal',
+            lambda: pd.DataFrame(
+                {
+                    'cal_date': ['20260325', '20260326', '20260327'],
+                    'is_open': [1, 1, 1],
+                }
+            ),
+        )
+        monkeypatch.setattr(runner.paper_storage, 'load_last_trade_date', lambda: '20260325')
+
+        assert runner._correct_trade_date('next') == '20260326'
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

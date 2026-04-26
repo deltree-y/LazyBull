@@ -167,6 +167,7 @@ def execute_trade_workflow(
     _report("加载股票名称")
     loader = DataLoader(runner.storage, verbose=False)
     stock_names = loader.build_stock_names_dict()
+    storage.save_last_trade_date(corrected_date)
 
     return PaperTradeExecutionResult(
         requested_date=trade_date,

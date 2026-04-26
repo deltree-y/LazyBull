@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.config import get_cost_settings
 from ..common.print_table import format_row
 from ..common.trading_config import TradingConfig
 from ..data import (
@@ -91,6 +92,14 @@ class PaperTradingRunner:
         self._kelly_cache_df: Optional[pd.DataFrame] = None
         # 确保基础数据存在（如交易日历、股票基本信息等）
         #ensure_basic_data(self.storage, self.loader, self.cleaner, self.client)
+
+    def _get_cost_setting(self, key: str, default: float) -> float:
+        """读取成本配置，缺失时回退到默认值。"""
+        try:
+            return float(get_cost_settings().get(key, default))
+        except (TypeError, ValueError):
+            logger.warning(f"成本配置 {key} 非法，回退为默认值 {default}")
+            return default
 
     def _ensure_strategy_state(
         self, trading_config: Optional[TradingConfig] = None
@@ -387,34 +396,75 @@ class PaperTradingRunner:
             校正后的交易日期 YYYYMMDD
         """
         try:
+            normalized_input = str(input_date).strip()
+            if normalized_input.lower() == "next":
+                normalized_input = self._resolve_next_requested_trade_date()
+            if len(normalized_input) == 10 and normalized_input[4] == "-" and normalized_input[7] == "-":
+                normalized_input = normalized_input.replace("-", "")
+
             trade_cal = self.loader.load_clean_trade_cal()
             if trade_cal is None:
                 logger.error("无法加载交易日历")
-                return input_date
+                return normalized_input
             
             # 筛选开市日
-            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].astype(str).tolist()
             
             # 检查输入日期是否为交易日
-            if input_date in trade_dates:
-                return input_date
+            if normalized_input in trade_dates:
+                return normalized_input
             
             # 找到输入日期后的第一个交易日
             for date in trade_dates:
-                if date > input_date:
+                if date > normalized_input:
                     logger.warning(
-                        f"输入日期 {input_date} 不是交易日，"
+                        f"输入日期 {normalized_input} 不是交易日，"
                         f"已自动校正到下一交易日: {date}"
                     )
                     return date
             
             # 如果没有找到后续交易日，返回原日期（可能是未来日期）
-            logger.warning(f"未找到 {input_date} 之后的交易日，使用原日期")
-            return input_date
+            logger.warning(f"未找到 {normalized_input} 之后的交易日，使用原日期")
+            return normalized_input
             
         except Exception as e:
             logger.error(f"校正交易日期失败: {e}")
-            return input_date
+            return str(input_date).strip()
+
+    def _resolve_next_requested_trade_date(self) -> str:
+        """将 next 解析为最近执行日之后的下一个交易日。"""
+        trade_cal = self.loader.load_clean_trade_cal()
+        if trade_cal is None:
+            logger.error("无法加载交易日历，next 回退为原始输入")
+            return "next"
+
+        trade_dates = trade_cal[trade_cal["is_open"] == 1]["cal_date"].astype(str).tolist()
+        if not trade_dates:
+            logger.warning("交易日历为空，next 回退为原始输入")
+            return "next"
+
+        last_trade_date = self.paper_storage.load_last_trade_date() or ""
+        if not last_trade_date:
+            account_state = self.paper_storage.load_account_state()
+            if account_state and account_state.last_update:
+                last_trade_date = str(account_state.last_update)
+
+        if last_trade_date:
+            future_dates = [date for date in trade_dates if date > last_trade_date]
+            if future_dates:
+                resolved_date = future_dates[0]
+                logger.info(f"trade_date=next 解析为上次执行日 {last_trade_date} 之后的 {resolved_date}")
+                return resolved_date
+
+        today = pd.Timestamp.today().strftime("%Y%m%d")
+        future_dates = [date for date in trade_dates if date >= today]
+        if future_dates:
+            resolved_date = future_dates[0]
+            logger.info(f"trade_date=next 解析为从今日起的最近交易日 {resolved_date}")
+            return resolved_date
+
+        logger.warning("未找到可用交易日，next 回退为原始输入")
+        return "next"
     
     def _check_rebalance_day(
         self, 
@@ -517,12 +567,10 @@ class PaperTradingRunner:
         current_positions = self.account.get_positions()
 
         # 使用账户总资金计算
-        import yaml
-        with open("configs/base.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+        capital_retention_ratio = self._get_cost_setting("capital_retention_ratio", 0.0)
 
         #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
-        total_capital = self.account.get_total_value(current_prices) * (1 - cfg['costs']['capital_retention_ratio'])  # 乘以系数以留出现金空间，避免过度买入
+        total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
 
         # 合并所有股票（目标+持仓）
         all_stocks = set(target_weights.keys()) | set(current_positions.keys())
@@ -965,11 +1013,11 @@ class PaperTradingRunner:
         all_prices = buy_prices
         total_value = self.account.get_total_value(all_prices)
         #算算手头还有多少现金
-        import yaml
-        with open("configs/base.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+        pendding_capital_retention_ratio = self._get_cost_setting(
+            "pendding_capital_retention_ratio", 0.3
+        )
 
-        total_cash = self.account.get_cash() * (1 - cfg['costs']['pendding_capital_retention_ratio'])  # 留出一定现金空间，避免过度买入导致后续无法补位
+        total_cash = self.account.get_cash() * (1 - pendding_capital_retention_ratio)  # 留出一定现金空间，避免过度买入导致后续无法补位
         available_cash = total_cash / len(pending_buys)  # 简单平均分配现金到每个补位目标
         
         fills = []
@@ -1030,7 +1078,7 @@ class PaperTradingRunner:
                 price=buy_prices[ts_code],
                 target_weight=pending_buy.target_weight,
                 total_pending_count=len(pending_buys),
-                pendding_capital_retention_ratio=cfg['costs']['pendding_capital_retention_ratio']
+                pendding_capital_retention_ratio=pendding_capital_retention_ratio
             )
             
             if buy_shares <= 0:
@@ -2708,10 +2756,9 @@ class PaperTradingRunner:
                 price_map[row['ts_code']] = row.get('close', 0.0)
         
         # 加载配置以获取资金保留比例
-        import yaml
-        with open("configs/base.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        pendding_capital_retention_ratio = cfg['costs']['pendding_capital_retention_ratio']
+        pendding_capital_retention_ratio = self._get_cost_setting(
+            "pendding_capital_retention_ratio", 0.3
+        )
         
         # 打印表头
         logger.info("=" * 120)

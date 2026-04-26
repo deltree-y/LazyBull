@@ -134,14 +134,17 @@ def load_position_snapshot(
 ) -> PaperPositionSnapshot:
     """加载持仓快照。"""
     active_runner = runner or PaperTradingRunner(verbose=False)
+    corrected_trade_date = active_runner._correct_trade_date(trade_date)
     loader = DataLoader(active_runner.storage, verbose=False)
-    daily_data = loader.load_clean_daily_by_date(trade_date)
+    daily_data = loader.load_clean_daily_by_date(corrected_trade_date)
     if daily_data is None or daily_data.empty:
-        raise ValueError(f"无法加载 {trade_date} 的价格数据")
+        raise ValueError(f"无法加载 {corrected_trade_date} 的价格数据")
 
     prices = {row["ts_code"]: row["close"] for _, row in daily_data.iterrows()}
     stock_names = loader.build_stock_names_dict()
-    positions_df = active_runner.broker.get_positions_detail(prices, trade_date, stock_names)
+    positions_df = active_runner.broker.get_positions_detail(
+        prices, corrected_trade_date, stock_names
+    )
 
     storage = PaperStorage()
     config = storage.load_config()
@@ -171,7 +174,7 @@ def load_position_snapshot(
     round_pnl_pct = total_profit / total_cost * 100 if total_cost > 0 else 0.0
 
     return PaperPositionSnapshot(
-        trade_date=trade_date,
+        trade_date=corrected_trade_date,
         runner=active_runner,
         stock_names=stock_names,
         prices=prices,
@@ -184,7 +187,7 @@ def load_position_snapshot(
         round_pnl_pct=round_pnl_pct,
         total_pnl_pct=total_pnl_pct,
         initial_capital=float(initial_capital),
-        rebalance_info=_get_rebalance_status(trade_date),
+        rebalance_info=_get_rebalance_status(corrected_trade_date),
     )
 
 
@@ -205,7 +208,7 @@ def format_positions_mobile(
     round_sign = "+" if snapshot.round_pnl_pct >= 0 else ""
 
     lines = [
-        f"持仓概览 ({trade_date})",
+        f"持仓概览 ({snapshot.trade_date})",
         f"总资产: {snapshot.total_assets:,.0f}",
         f"现金: {snapshot.cash:,.0f} | 市值: {snapshot.total_value:,.0f}",
         f"本轮: {round_sign}{snapshot.round_pnl_pct:.2f}% | 总: {total_sign}{snapshot.total_pnl_pct:.2f}%",

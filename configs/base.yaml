@@ -33,3 +33,5 @@ costs:
   min_commission: 5  # 最小佣金，元
   stamp_tax: 0.0005  # 印花税，仅卖出
   slippage: 0.0005  # 滑点
+  capital_retention_ratio: 0.0  # T0 目标仓位计算时预留现金比例，默认不预留
+  pendding_capital_retention_ratio: 0.3  # 补位买入时预留现金比例，默认30%

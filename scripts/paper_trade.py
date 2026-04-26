@@ -263,15 +263,14 @@ def view_positions(args):
 
 def print_positions(trade_date: str, runner: Optional[PaperTradingRunner] = None):
     """打印当前持仓。"""
-    logger.info("=" * 80)
-    logger.info(f"[{trade_date}]持仓情况")
-    logger.info("=" * 80)
-
     try:
         snapshot = load_position_snapshot(trade_date, runner=runner)
+        logger.info("=" * 80)
+        logger.info(f"[{snapshot.trade_date}]持仓情况")
+        logger.info("=" * 80)
         snapshot.runner.broker.print_positions_summary(
             snapshot.prices,
-            trade_date,
+            snapshot.trade_date,
             stock_names=snapshot.stock_names,
         )
     except Exception as exc:

@@ -97,6 +97,7 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
     assert result.stock_names == {"000001.SZ": "平安银行"}
     assert result.missing_factors == ["moneyflow_hsgt"]
     storage.save_stop_loss_state.assert_called_once()
+    storage.save_last_trade_date.assert_called_once_with("20260120")
 
 
 def test_format_trade_result_includes_profit_management_sections():

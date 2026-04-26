@@ -28,7 +28,17 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.0)
+### 当前版本 (v0.66.2)
+
+**paper_trade 现已支持 next 交易日解析并持久化最近执行日** (v0.66.2):
+- `src/lazybull/paper/runner.py` 现在会在共享运行时内部直接解析 `trade_date=next`，优先使用最近执行日，其次回退到账户最后更新日，再回退到从今天起的最近交易日
+- `src/lazybull/paper/runtime.py` 执行完成后会保存本次实际交易日，因此后续继续执行 `paper_trade run --trade-date next` 时不会再把字面量 `next` 传入数据补齐和价格加载链路
+- `src/lazybull/paper/reporting.py` 与 `scripts/paper_trade.py` 的持仓打印也会显示解析后的真实日期，不再出现 `[next]持仓情况` 或 `不支持的日期格式: next`
+
+**paper_trade 成本配置缺键兜底，reset-t0 后 next 不再在 T0 阶段报错** (v0.66.1):
+- `src/lazybull/paper/runner.py` 不再直接手读 `configs/base.yaml` 并硬索引 `capital_retention_ratio` / `pendding_capital_retention_ratio`，统一改走公共成本配置读取
+- 当 `configs/base.yaml` 缺少这些键时，现在会自动回退到安全默认值：T0 `capital_retention_ratio=0.0`，补位 `pendding_capital_retention_ratio=0.3`
+- `configs/base.yaml` 已补齐这两个默认项，因此 `paper_trade adjust reset-t0` 后重新执行 `paper_trade next` 不会再在“步骤3: 生成交易指令”阶段因缺键中断
 
 **树莓派 3.5 寸 LCD 顶栏升级为 CPU/内存双槽血条** (v0.66.0):
 - `scripts/respi/3.5LCD_disp.py` 的顶部状态栏文字继续上移 2-3 像素，顶栏底部整整一行现在是一条约 5px 高的手机电量样式双槽血条，左侧是 CPU，占右侧是内存，依然不显示额外字符说明
