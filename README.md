@@ -28,7 +28,17 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.8)
+### 当前版本 (v0.66.10)
+
+**paper_trade 的基金持仓季度补齐现在会走轻量读取和缓存** (v0.66.10):
+- [src/lazybull/data/storage.py](src/lazybull/data/storage.py) 现在支持按列读取分区 parquet，[src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 在补齐 `fund_portfolio` 时只会读取聚合真正需要的 5 列，不再整表进内存
+- [src/lazybull/factors/fund_portfolio.py](src/lazybull/factors/fund_portfolio.py) 会先把季度原始明细瘦身到最小列集再聚合，同时把个股级季度结果缓存到 `data/raw/fund_portfolio_agg/`
+- 这一步主要是压低树莓派在 T0 最后阶段处理 `fund_portfolio` 季度大分区时的内存峰值，避免在“基金持仓历史补齐”之后直接被撑爆
+
+**paper_trade 的单日 point-in-time 因子现在会直接取快照** (v0.66.9):
+- [src/lazybull/factors/fundamental.py](src/lazybull/factors/fundamental.py)、[src/lazybull/factors/holder.py](src/lazybull/factors/holder.py)、[src/lazybull/factors/earnings.py](src/lazybull/factors/earnings.py)、[src/lazybull/factors/express.py](src/lazybull/factors/express.py)、[src/lazybull/factors/fund_portfolio.py](src/lazybull/factors/fund_portfolio.py) 在 `trading_dates` 只有目标交易日时，都会直接基于可见公告取每只股票的最新记录，不再走逐股票 Python 列表回放
+- 这比上一版只把输出日期缩到 1 天更进一步，连单日场景内部的 Python 双层循环也一并避开，尤其针对树莓派上基本面、股东人数、业绩预告这几段的长时间卡顿
+- [tests/test_single_day_factor_snapshots.py](tests/test_single_day_factor_snapshots.py) 新增了单日快照与多日查询一致性回归测试，保证优化不改 point-in-time 语义
 
 **paper_trade 在树莓派上的 T0 因子补齐更轻量了** (v0.66.8):
 - [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 现在仍会加载计算所需的历史原始数据，但不会再为整段历史交易日批量物化完整的因子查询表，而是只为目标 `trade_date` 生成当天截面

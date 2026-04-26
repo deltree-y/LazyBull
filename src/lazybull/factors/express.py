@@ -130,51 +130,71 @@ def build_express_lookup_by_date(
             for _, row in fc.iterrows():
                 fc_lookup.setdefault(row["ts_code"], {})[row["end_date"]] = row["forecast_chg_mid"]
 
-    # 构建每只股票的 ann_date 排序列表
-    stock_records: Dict[str, list] = {}
-    for ts_code, grp in ex.groupby("ts_code"):
-        records = []
-        for _, row in grp.iterrows():
-            revenue_yoy = row.get("revenue_yoy", np.nan)
-            profit_yoy = row.get("yoy_net_profit", np.nan)
-            roe = row.get("diluted_roe", np.nan)
-
-            # express_surprise = 实际净利润增速 - 预告预期增速
-            surprise = np.nan
-            end_date = row.get("end_date", "")
-            if pd.notna(profit_yoy) and ts_code in fc_lookup and end_date in fc_lookup[ts_code]:
-                surprise = profit_yoy - fc_lookup[ts_code][end_date]
-
-            records.append(
-                {
-                    "ann_date": row["ann_date"],
-                    "express_revenue_yoy": revenue_yoy,
-                    "express_profit_yoy": profit_yoy,
-                    "express_roe": roe,
-                    "express_surprise": surprise,
-                }
+    ex["express_surprise"] = np.nan
+    for ts_code, end_lookup in fc_lookup.items():
+        stock_mask = ex["ts_code"] == ts_code
+        if not stock_mask.any():
+            continue
+        mapped = ex.loc[stock_mask, "end_date"].map(end_lookup)
+        profit_yoy = ex.loc[stock_mask, "yoy_net_profit"]
+        valid_mask = mapped.notna() & profit_yoy.notna()
+        if valid_mask.any():
+            ex.loc[stock_mask, "express_surprise"] = np.where(
+                valid_mask,
+                profit_yoy - mapped,
+                np.nan,
             )
-        stock_records[ts_code] = records
+
+    if len(trading_dates) == 1:
+        trade_date = trading_dates[0]
+        visible = ex[ex["ann_date"] <= trade_date].sort_values(["ts_code", "ann_date"])
+        if visible.empty:
+            result = {trade_date: pd.DataFrame(columns=["ts_code"] + EXPRESS_COLS)}
+        else:
+            latest = visible.drop_duplicates(subset=["ts_code"], keep="last").copy()
+            day_df = (
+                latest.assign(
+                    express_revenue_yoy=latest["revenue_yoy"],
+                    express_profit_yoy=latest["yoy_net_profit"],
+                    express_roe=latest["diluted_roe"],
+                )[["ts_code"] + EXPRESS_COLS]
+                .reset_index(drop=True)
+            )
+            result = {trade_date: day_df}
+        logger.info(f"业绩快报查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
+        return result
+
+    # 构建每只股票的 ann_date 排序列表
+    stock_ann_dates: Dict[str, list] = {}
+    stock_values: Dict[str, list] = {}
+    for ts_code, grp in ex.groupby("ts_code"):
+        grp = grp.sort_values("ann_date")
+        stock_ann_dates[ts_code] = grp["ann_date"].tolist()
+        stock_values[ts_code] = grp[[
+            "revenue_yoy",
+            "yoy_net_profit",
+            "diluted_roe",
+            "express_surprise",
+        ]].values.tolist()
 
     # 对每个交易日做 point-in-time 查询
     result: Dict[str, pd.DataFrame] = {}
-    all_codes = set(stock_records.keys())
+    all_codes = set(stock_ann_dates.keys())
 
     for trade_date in trading_dates:
         rows = []
         for ts_code in all_codes:
-            recs = stock_records[ts_code]
-            ann_dates = [r["ann_date"] for r in recs]
+            ann_dates = stock_ann_dates[ts_code]
             idx = bisect.bisect_right(ann_dates, trade_date) - 1
             if idx >= 0:
-                r = recs[idx]
+                values = stock_values[ts_code][idx]
                 rows.append(
                     {
                         "ts_code": ts_code,
-                        "express_revenue_yoy": r["express_revenue_yoy"],
-                        "express_profit_yoy": r["express_profit_yoy"],
-                        "express_roe": r["express_roe"],
-                        "express_surprise": r["express_surprise"],
+                        "express_revenue_yoy": values[0],
+                        "express_profit_yoy": values[1],
+                        "express_roe": values[2],
+                        "express_surprise": values[3],
                     }
                 )
         if rows:

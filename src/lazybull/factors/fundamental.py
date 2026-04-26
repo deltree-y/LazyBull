@@ -58,8 +58,26 @@ def build_fundamental_lookup_by_date(
     # 对增长率类指标做 winsorize 截断极端值
     _winsorize_growth_cols(df)
 
-    # 构建每只股票的 (ann_date, values) 有序列表
     available_cols = [c for c in FUNDA_COLS if c in df.columns]
+
+    logger.info(f"基本面查询表构建: {df['ts_code'].nunique()} 只股票, {len(trading_dates)} 个交易日")
+
+    if len(trading_dates) == 1:
+        trade_date = trading_dates[0]
+        visible = df[df['ann_date'] <= trade_date].sort_values(['ts_code', 'ann_date'])
+        if visible.empty:
+            result_dict = {trade_date: pd.DataFrame(columns=['ts_code'] + available_cols)}
+        else:
+            day_df = (
+                visible.drop_duplicates(subset=['ts_code'], keep='last')
+                [['ts_code'] + available_cols]
+                .reset_index(drop=True)
+            )
+            result_dict = {trade_date: day_df}
+        logger.info(f"基本面日频查询表构建完成: {len(result_dict)} 个交易日")
+        return result_dict
+
+    # 构建每只股票的 (ann_date, values) 有序列表
     stock_reports = {}  # {ts_code: [(ann_date, val1, val2, ...)]}
     stock_ann_dates = {}  # {ts_code: [ann_date1, ann_date2, ...]}
 
@@ -71,7 +89,6 @@ def build_fundamental_lookup_by_date(
         stock_ann_dates[ts_code] = ann_dates
 
     all_stocks = list(stock_reports.keys())
-    logger.info(f"基本面查询表构建: {len(all_stocks)} 只股票, {len(trading_dates)} 个交易日")
 
     # 构建每日查询表
     result_dict = {}

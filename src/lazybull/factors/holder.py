@@ -60,32 +60,42 @@ def build_holder_lookup_by_date(
     df["holder_num_chg"] = (df["holder_num"] - df["holder_num_prev"]) / df["holder_num_prev"].replace(0, np.nan)
     df["holder_num_chg_2q"] = (df["holder_num"] - df["holder_num_prev2"]) / df["holder_num_prev2"].replace(0, np.nan)
 
+    if len(trading_dates) == 1:
+        trade_date = trading_dates[0]
+        visible = df[df["ann_date"] <= trade_date].sort_values(["ts_code", "ann_date"])
+        if visible.empty:
+            result = {trade_date: pd.DataFrame(columns=["ts_code"] + HOLDER_COLS)}
+        else:
+            day_df = (
+                visible.drop_duplicates(subset=["ts_code"], keep="last")
+                [["ts_code"] + HOLDER_COLS]
+                .reset_index(drop=True)
+            )
+            result = {trade_date: day_df}
+        logger.info(f"股东人数查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
+        return result
+
     # 构建每只股票的 ann_date 排序列表，用于 point-in-time 二分查找
-    stock_records: Dict[str, list] = {}
+    stock_ann_dates: Dict[str, list] = {}
+    stock_values: Dict[str, list] = {}
     for ts_code, grp in df.groupby("ts_code"):
-        records = []
-        for _, row in grp.iterrows():
-            records.append({
-                "ann_date": row["ann_date"],
-                "holder_num_chg": row["holder_num_chg"],
-                "holder_num_chg_2q": row["holder_num_chg_2q"],
-            })
-        stock_records[ts_code] = records
+        grp = grp.sort_values("ann_date")
+        stock_ann_dates[ts_code] = grp["ann_date"].tolist()
+        stock_values[ts_code] = grp[HOLDER_COLS].values.tolist()
 
     # 对每个交易日查询
     result: Dict[str, pd.DataFrame] = {}
     for trade_date in trading_dates:
         rows = []
-        for ts_code, records in stock_records.items():
+        for ts_code, ann_dates in stock_ann_dates.items():
             # 二分查找 ann_date <= trade_date 的最新记录
-            ann_dates = [r["ann_date"] for r in records]
             idx = bisect.bisect_right(ann_dates, trade_date) - 1
             if idx >= 0:
-                r = records[idx]
+                values = stock_values[ts_code][idx]
                 rows.append({
                     "ts_code": ts_code,
-                    "holder_num_chg": r["holder_num_chg"],
-                    "holder_num_chg_2q": r["holder_num_chg_2q"],
+                    "holder_num_chg": values[0],
+                    "holder_num_chg_2q": values[1],
                 })
         if rows:
             result[trade_date] = pd.DataFrame(rows)

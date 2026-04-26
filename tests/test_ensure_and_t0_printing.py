@@ -361,5 +361,65 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         assert output_dates == [trade_date]
 
 
+def test_try_ensure_historical_fund_portfolio_builds_and_reuses_agg_cache(
+    monkeypatch, temp_storage
+):
+    """测试基金持仓历史补齐会写入并复用季度聚合缓存。"""
+    period = "20260331"
+    raw_df = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.OF",
+                "symbol": "000001",
+                "ann_date": "20260420",
+                "end_date": period,
+                "stk_float_ratio": 1.2,
+                "mkv": 1000,
+                "amount": 100,
+            },
+            {
+                "ts_code": "000002.OF",
+                "symbol": "000001",
+                "ann_date": "20260421",
+                "end_date": period,
+                "stk_float_ratio": 0.8,
+                "mkv": 900,
+                "amount": 90,
+            },
+        ]
+    )
+    temp_storage.save_raw_by_date(raw_df, "fund_portfolio", period)
+
+    monkeypatch.setattr(ensure_module, "_generate_quarter_periods", lambda *_args: [period])
+    monkeypatch.setattr(ensure_module, "_query_with_pagination", lambda *args, **kwargs: pd.DataFrame())
+
+    result = ensure_module._try_ensure_historical_fund_portfolio(
+        client=Mock(),
+        storage=temp_storage,
+        trading_dates_str=["20260422"],
+    )
+
+    assert result is not None
+    assert temp_storage.is_data_exists("raw", "fund_portfolio_agg", period)
+
+    original_load = temp_storage.load_raw_by_date
+
+    def guarded_load(name, trade_date, format="parquet", columns=None):
+        if name == "fund_portfolio":
+            raise AssertionError("存在聚合缓存时不应再回读原始季度明细")
+        return original_load(name, trade_date, format=format, columns=columns)
+
+    monkeypatch.setattr(temp_storage, "load_raw_by_date", guarded_load)
+
+    cached = ensure_module._try_ensure_historical_fund_portfolio(
+        client=Mock(),
+        storage=temp_storage,
+        trading_dates_str=["20260422"],
+    )
+
+    assert cached is not None
+    assert len(cached) == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

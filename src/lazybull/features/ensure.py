@@ -1095,17 +1095,32 @@ def _try_ensure_historical_fund_portfolio(
         logger.info(f"基金持仓历史补齐: 新增 {downloaded} 个季度")
 
     # 逐分区加载+聚合，避免一次性加载全量原始数据（可达百万行级）
-    from ..factors.fund_portfolio import _aggregate_fund_portfolio
+    from ..factors.fund_portfolio import FUND_PORTFOLIO_RAW_COLS, _aggregate_fund_portfolio
 
     agg_dfs = []
+    agg_dataset_name = "fund_portfolio_agg"
     for period in periods:
-        if not storage.is_data_exists("raw", "fund_portfolio", period):
+        agg = None
+        if storage.is_data_exists("raw", agg_dataset_name, period):
+            agg = storage.load_raw_by_date(agg_dataset_name, period)
+        elif not storage.is_data_exists("raw", "fund_portfolio", period):
             continue
-        raw_df = storage.load_raw_by_date("fund_portfolio", period)
-        if raw_df is not None and len(raw_df) > 0:
-            agg = _aggregate_fund_portfolio(raw_df)
+        else:
+            raw_df = storage.load_raw_by_date(
+                "fund_portfolio",
+                period,
+                columns=FUND_PORTFOLIO_RAW_COLS,
+            )
+            if raw_df is not None and len(raw_df) > 0:
+                agg = _aggregate_fund_portfolio(raw_df)
+                if agg is not None and len(agg) > 0:
+                    storage.save_raw_by_date(agg, agg_dataset_name, period)
+            raw_df = None
+            gc.collect()
+
+        if agg is not None and len(agg) > 0:
             agg_dfs.append(agg)
-            del raw_df
+            agg = None
             gc.collect()
 
     if not agg_dfs:

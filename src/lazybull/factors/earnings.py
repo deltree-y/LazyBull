@@ -79,15 +79,32 @@ def build_earnings_lookup_by_date(
         fc = fc.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
         fc = fc.sort_values(["ts_code", "ann_date"])
 
+        if len(trading_dates) == 1:
+            trade_date = trading_dates[0]
+            visible = fc[fc["ann_date"] <= trade_date].sort_values(["ts_code", "ann_date"])
+            if visible.empty:
+                result = {trade_date: pd.DataFrame(columns=["ts_code"] + EARNINGS_COLS)}
+            else:
+                day_df = (
+                    visible.drop_duplicates(subset=["ts_code"], keep="last")
+                    [["ts_code"] + EARNINGS_COLS]
+                    .reset_index(drop=True)
+                )
+                result = {trade_date: day_df}
+            logger.info(f"业绩预告查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
+            return result
+
+        stock_ann_dates: Dict[str, list] = {}
+        stock_values: Dict[str, list] = {}
         for ts_code, grp in fc.groupby("ts_code"):
-            fc_records[ts_code] = [
-                {
-                    "ann_date": row["ann_date"],
-                    "forecast_type_score": row["forecast_type_score"],
-                    "forecast_chg_mid": row["forecast_chg_mid"],
-                }
-                for _, row in grp.iterrows()
-            ]
+            grp = grp.sort_values("ann_date")
+            stock_ann_dates[ts_code] = grp["ann_date"].tolist()
+            stock_values[ts_code] = grp[EARNINGS_COLS].values.tolist()
+
+        fc_records = {
+            ts_code: (stock_ann_dates[ts_code], stock_values[ts_code])
+            for ts_code in stock_ann_dates
+        }
 
     # ── 对每个交易日做 point-in-time 查询 ───────────────────────
     all_codes = set(fc_records.keys())
@@ -101,13 +118,11 @@ def build_earnings_lookup_by_date(
 
             # 预告查询
             if ts_code in fc_records:
-                recs = fc_records[ts_code]
-                ann_dates = [r["ann_date"] for r in recs]
+                ann_dates, values = fc_records[ts_code]
                 idx = bisect.bisect_right(ann_dates, trade_date) - 1
                 if idx >= 0:
-                    r = recs[idx]
-                    row["forecast_type_score"] = r["forecast_type_score"]
-                    row["forecast_chg_mid"] = r["forecast_chg_mid"]
+                    row["forecast_type_score"] = values[idx][0]
+                    row["forecast_chg_mid"] = values[idx][1]
                     has_data = True
 
             if has_data:

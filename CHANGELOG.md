@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.10] - 2026-04-26
+
+### 修复
+
+- **paper_trade 的基金持仓历史补齐改为最小列读取并带季度聚合缓存** ([src/lazybull/data/storage.py](src/lazybull/data/storage.py), [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py), [src/lazybull/factors/fund_portfolio.py](src/lazybull/factors/fund_portfolio.py)):
+  - `Storage.load_raw_by_date()` 现在支持可选列裁剪，`fund_portfolio` 历史补齐在读取季度原始分区时只会加载聚合真正需要的 `ts_code/symbol/ann_date/end_date/stk_float_ratio` 五列，不再把整张季度明细表全部读入内存
+  - `_aggregate_fund_portfolio()` 现在会在聚合前先瘦身到最小必需列，避免 `mkv/amount` 等无关宽列在树莓派内存里继续占位
+  - `_try_ensure_historical_fund_portfolio()` 新增 `raw/fund_portfolio_agg/` 季度聚合缓存；首次运行会把季度原始明细聚合成个股级缓存，后续 `paper_trade` 重跑时将直接复用缓存，不再反复把大季度明细重新拉进内存
+  - 这主要针对 `fund_portfolio 20260331.parquet` 这类 10 万级季度分区在树莓派上把 T0 最后一步内存顶爆的问题
+
+### 测试
+
+- **补充基金持仓最小列聚合与缓存复用回归测试** ([tests/test_fund_portfolio_factor.py](tests/test_fund_portfolio_factor.py), [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)):
+  - 校验 `_aggregate_fund_portfolio()` 在只提供最小必需列时仍能正确聚合
+  - 校验 `_try_ensure_historical_fund_portfolio()` 会生成并复用季度聚合缓存，避免缓存存在时再次回读原始季度明细
+
+## [0.66.9] - 2026-04-26
+
+### 修复
+
+- **paper_trade 的单日 point-in-time 因子改为走快照快速路径** ([src/lazybull/factors/fundamental.py](src/lazybull/factors/fundamental.py), [src/lazybull/factors/holder.py](src/lazybull/factors/holder.py), [src/lazybull/factors/earnings.py](src/lazybull/factors/earnings.py), [src/lazybull/factors/express.py](src/lazybull/factors/express.py), [src/lazybull/factors/fund_portfolio.py](src/lazybull/factors/fund_portfolio.py)):
+  - 当 `trading_dates` 只有 `trade_date` 当天时，基本面、股东人数、业绩预告、业绩快报、基金持仓不再走“逐股票构造 Python 列表 + bisect 回放”的通用路径，而是直接基于 `ann_date <= trade_date` 的可见记录向量化提取每只股票的最新快照
+  - 多日路径也去掉了内层重复构造 `ann_dates` 列表的开销，减少树莓派在 point-in-time 因子阶段的纯 Python 循环负担
+  - 这进一步降低了 `paper_trade` 在 T0 工作流“步骤2: 生成信号”阶段卡在基本面 / 股东人数 / 业绩预告 / 业绩快报 / 基金持仓上的耗时风险
+
+### 测试
+
+- **补充单日快照与多日查询一致性回归测试** ([tests/test_single_day_factor_snapshots.py](tests/test_single_day_factor_snapshots.py)):
+  - 校验 fundamental / holder / earnings / express / fund_portfolio 在单日快照快速路径下，与原多日 point-in-time 查询在同一目标交易日上的结果保持一致
+
 ## [0.66.8] - 2026-04-26
 
 ### 修复

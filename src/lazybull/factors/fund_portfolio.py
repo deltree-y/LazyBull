@@ -25,6 +25,14 @@ FUND_PORTFOLIO_COLS = [
     "fund_count_chg",  # 持仓基金数量季度变化
 ]
 
+FUND_PORTFOLIO_RAW_COLS = [
+    "ts_code",
+    "symbol",
+    "ann_date",
+    "end_date",
+    "stk_float_ratio",
+]
+
 
 def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
     """将基金级持仓数据聚合到个股级
@@ -38,8 +46,16 @@ def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
         个股级汇总 DataFrame(stock_code, ann_date, end_date,
                             fund_hold_ratio, fund_count)
     """
-    # 直接操作传入的 DataFrame（调用方保证传入独立副本或不再使用原始引用）
-    df = raw_df
+    available_cols = [c for c in FUND_PORTFOLIO_RAW_COLS if c in raw_df.columns]
+    missing_cols = set(FUND_PORTFOLIO_RAW_COLS) - set(available_cols)
+    if missing_cols:
+        logger.warning(f"fund_portfolio 聚合缺少必要列: {sorted(missing_cols)}")
+        return pd.DataFrame(
+            columns=["symbol", "end_date", "fund_hold_ratio", "fund_count", "ann_date"]
+        )
+
+    # 只保留聚合所需列，避免季度原始明细在内存中保留无关宽列。
+    df = raw_df.loc[:, available_cols].copy()
 
     # 日期标准化（兼容 datetime 和字符串类型）
     for col in ["ann_date", "end_date"]:
@@ -50,9 +66,7 @@ def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
                 df[col] = df[col].astype(str).str.replace("-", "").str[:8]
 
     # 数值列转换
-    for col in ["stk_float_ratio", "mkv", "amount"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["stk_float_ratio"] = pd.to_numeric(df["stk_float_ratio"], errors="coerce")
 
     df = df.dropna(subset=["symbol", "end_date"])
 
@@ -101,43 +115,48 @@ def build_fund_portfolio_lookup_by_date(
     agg["fund_hold_ratio_chg"] = agg["fund_hold_ratio"] - agg["fund_hold_ratio_prev"]
     agg["fund_count_chg"] = agg["fund_count"] - agg["fund_count_prev"]
 
+    if len(trading_dates) == 1:
+        trade_date = trading_dates[0]
+        visible = agg[agg["ann_date"] <= trade_date].sort_values(["symbol", "ann_date"])
+        if visible.empty:
+            result = {trade_date: pd.DataFrame(columns=["ts_code"] + FUND_PORTFOLIO_COLS)}
+        else:
+            latest = visible.drop_duplicates(subset=["symbol"], keep="last").copy()
+            latest["ts_code"] = latest["symbol"].map(_symbol_to_ts_code)
+            latest = latest.dropna(subset=["ts_code"])
+            day_df = latest[["ts_code"] + FUND_PORTFOLIO_COLS].reset_index(drop=True)
+            result = {trade_date: day_df}
+        logger.info(f"基金持仓查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
+        return result
+
     # 构建每只股票的 ann_date 排序列表，用于 bisect
-    stock_records: Dict[str, list] = {}
+    stock_ann_dates: Dict[str, list] = {}
+    stock_values: Dict[str, list] = {}
     for symbol, grp in agg.groupby("symbol"):
         # symbol 是6位数字，需要转换为 ts_code 格式
         ts_code = _symbol_to_ts_code(symbol)
         if ts_code is None:
             continue
-        records = []
-        for _, row in grp.sort_values("ann_date").iterrows():
-            records.append(
-                {
-                    "ann_date": row["ann_date"],
-                    "fund_hold_ratio": row["fund_hold_ratio"],
-                    "fund_hold_ratio_chg": row["fund_hold_ratio_chg"],
-                    "fund_count": row["fund_count"],
-                    "fund_count_chg": row["fund_count_chg"],
-                }
-            )
-        stock_records[ts_code] = records
+        grp = grp.sort_values("ann_date")
+        stock_ann_dates[ts_code] = grp["ann_date"].tolist()
+        stock_values[ts_code] = grp[FUND_PORTFOLIO_COLS].values.tolist()
 
     # 对每个交易日做 point-in-time 查询
     result: Dict[str, pd.DataFrame] = {}
 
     for trade_date in trading_dates:
         rows = []
-        for ts_code, records in stock_records.items():
-            ann_dates = [r["ann_date"] for r in records]
+        for ts_code, ann_dates in stock_ann_dates.items():
             idx = bisect.bisect_right(ann_dates, trade_date) - 1
             if idx >= 0:
-                r = records[idx]
+                values = stock_values[ts_code][idx]
                 rows.append(
                     {
                         "ts_code": ts_code,
-                        "fund_hold_ratio": r["fund_hold_ratio"],
-                        "fund_hold_ratio_chg": r["fund_hold_ratio_chg"],
-                        "fund_count": r["fund_count"],
-                        "fund_count_chg": r["fund_count_chg"],
+                        "fund_hold_ratio": values[0],
+                        "fund_hold_ratio_chg": values[1],
+                        "fund_count": values[2],
+                        "fund_count_chg": values[3],
                     }
                 )
         if rows:

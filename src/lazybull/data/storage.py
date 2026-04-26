@@ -158,7 +158,11 @@ class Storage:
         self._save_data(df, partition_path / date_str, format)
 
     def load_raw_by_date(
-        self, name: str, trade_date: str, format: str = "parquet"
+        self,
+        name: str,
+        trade_date: str,
+        format: str = "parquet",
+        columns: Optional[List[str]] = None,
     ) -> Optional[pd.DataFrame]:
         """加载按日期分区的原始数据
 
@@ -166,6 +170,7 @@ class Storage:
             name: 数据类型名称
             trade_date: 交易日期，格式YYYYMMDD或YYYY-MM-DD
             format: 文件格式
+            columns: 仅读取指定列（仅 parquet/csv 支持）
 
         Returns:
             数据DataFrame，不存在返回None
@@ -175,7 +180,7 @@ class Storage:
 
         # 尝试从分区目录加载
         partition_path = self.raw_path / name / date_str
-        return self._load_data(partition_path, format)
+        return self._load_data(partition_path, format, columns=columns)
 
     def load_raw_by_date_range(
         self, name: str, start_date: str, end_date: str, format: str = "parquet"
@@ -556,12 +561,18 @@ class Storage:
 
         logger.info(f"数据已保存: {file_path} ({len(df)} 条记录)")
 
-    def _load_data(self, path: Path, format: str) -> Optional[pd.DataFrame]:
+    def _load_data(
+        self,
+        path: Path,
+        format: str,
+        columns: Optional[List[str]] = None,
+    ) -> Optional[pd.DataFrame]:
         """加载数据
 
         Args:
             path: 文件路径（不含扩展名）
             format: 文件格式
+            columns: 仅读取指定列（仅 parquet/csv 支持）
 
         Returns:
             数据DataFrame，不存在返回None
@@ -579,9 +590,12 @@ class Storage:
 
         try:
             if format == "parquet":
-                df = pd.read_parquet(file_path)
+                df = pd.read_parquet(file_path, columns=columns)
             else:
-                df = pd.read_csv(file_path)
+                if columns is not None:
+                    df = pd.read_csv(file_path, usecols=columns)
+                else:
+                    df = pd.read_csv(file_path)
 
             logger.debug(f"数据已加载: {file_path} ({len(df)} 条记录)")
             return df

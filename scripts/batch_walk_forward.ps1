@@ -158,7 +158,7 @@ $signal_gate_percentile_warmup = 5              # composite: 百分位归一化�
 $signal_gate_quality_enabled = $false            # $true 启用 | $false 禁用
 $signal_gate_quality_window_list = @(2)         #2 滚动质量回看调仓周期数
 $signal_gate_quality_threshold_list = @(0.5)    #0.5 滚动质量最低 hit rate
-$signal_gate_quality_halflife = 3               #4 滚动质量 EWM 半衰期
+$signal_gate_quality_halflife = 4               #4 滚动质量 EWM 半衰期
 
 # 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
 $signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用

@@ -130,6 +130,15 @@ class TestAggregateFundPortfolio:
         q2_001 = agg[(agg["symbol"] == "000001") & (agg["end_date"] == "20230630")]
         assert q2_001.iloc[0]["ann_date"] == "20230825"
 
+    def test_aggregation_with_minimal_columns(self, mock_fund_portfolio_data):
+        """只保留聚合必要列时仍能正确汇总。"""
+        slim = mock_fund_portfolio_data[["ts_code", "symbol", "ann_date", "end_date", "stk_float_ratio"]]
+        agg = _aggregate_fund_portfolio(slim)
+        q3_001 = agg[(agg["symbol"] == "000001") & (agg["end_date"] == "20230930")]
+        assert len(q3_001) == 1
+        assert q3_001.iloc[0]["fund_hold_ratio"] == pytest.approx(5.3)
+        assert q3_001.iloc[0]["fund_count"] == 3
+
 
 class TestBuildFundPortfolioLookup:
     """build_fund_portfolio_lookup_by_date 单元测试"""
