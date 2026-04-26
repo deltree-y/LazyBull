@@ -46,6 +46,21 @@ class PaperAccount:
             # 首次创建账户后立即保存状态，确保后续可以加载
             self.save_state()
         else:
+            # 兼容历史状态：若账户处于“初始空状态”（无持仓、未开始交易），
+            # 但现金与当前配置初始资金不一致，则自动按当前配置同步，
+            # 避免 reset-t0 后修改配置导致 45w/50w 两套基准并存。
+            if (
+                not self.state.positions
+                and not self.state.last_update
+                and abs(float(self.state.cash) - float(initial_capital)) > 1e-6
+            ):
+                old_cash = float(self.state.cash)
+                self.state.cash = float(initial_capital)
+                self.save_state()
+                logger.warning(
+                    f"检测到空账户现金与配置初始资金不一致，已自动同步: "
+                    f"{old_cash:,.2f} -> {self.state.cash:,.2f}"
+                )
             if verbose:
                 logger.info(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")
     

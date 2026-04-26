@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.11)
+### 当前版本 (v0.66.12)
+
+**paper 空账户会自动对齐当前初始资金，避免 45w/50w 双基准** (v0.66.12):
+- [src/lazybull/paper/account.py](src/lazybull/paper/account.py) 在加载“无持仓且 last_update 为空”的空账户状态时，会检查现金与当前配置 `initial_capital` 是否一致；不一致会自动同步并保存
+- 这能覆盖 `reset-t0` 前后配置变更或旧状态残留导致的基准漂移，避免日志中“本轮按 450000，总盈亏按 500000”这种并存现象
+- [tests/test_paper_trading.py](tests/test_paper_trading.py) 新增回归测试，约束该行为不被后续改动回退
 
 **paper_trade 的“本轮盈亏”现已纳入本轮内已实现盈亏** (v0.66.11):
 - [src/lazybull/paper/broker.py](src/lazybull/paper/broker.py) 新增统一口径 `calculate_round_pnl_metrics()`：优先使用 `last_rebalance_nav -> 当前总资产` 计算本轮收益率，因此本轮中因止损、提前换出或止盈而卖出的已实现盈亏会被正确计入

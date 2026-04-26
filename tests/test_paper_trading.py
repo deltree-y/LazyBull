@@ -233,6 +233,26 @@ def test_account_initialization(sample_account):
     assert len(sample_account.get_positions()) == 0
 
 
+def test_account_initialization_syncs_empty_state_cash_to_initial_capital():
+    """测试空账户旧状态会自动同步到当前初始资金。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        storage.save_account_state(
+            AccountState(
+                cash=450000.0,
+                positions={},
+                last_update="",
+            )
+        )
+
+        account = PaperAccount(initial_capital=500000.0, storage=storage)
+        assert account.get_cash() == pytest.approx(500000.0)
+
+        reloaded = storage.load_account_state()
+        assert reloaded is not None
+        assert reloaded.cash == pytest.approx(500000.0)
+
+
 def test_account_update_cash(sample_account):
     """测试更新现金"""
     sample_account.update_cash(-10000.0)

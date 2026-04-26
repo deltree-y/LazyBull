@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.12] - 2026-04-26
+
+### 修复
+
+- **paper 空账户初始化会自动对齐当前配置初始资金，避免 45w/50w 基准并存** ([src/lazybull/paper/account.py](src/lazybull/paper/account.py)):
+  - 当加载到的账户状态满足“无持仓 + last_update 为空”的初始空状态时，若 `account.cash` 与当前配置 `initial_capital` 不一致，会自动同步为配置值并落盘
+  - 这样可覆盖 `reset-t0` 前后配置切换或历史状态残留导致的空账户现金基准漂移，避免运行日志中同时出现 450,000 与 500,000 两套初始基准
+
+### 测试
+
+- **补充空账户初始资金自动同步回归测试** ([tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - 校验空账户旧状态现金为 450,000、当前配置初始资金为 500,000 时，`PaperAccount` 初始化后会自动同步到 500,000 并持久化
+
 ## [0.66.11] - 2026-04-26
 
 ### 修复
