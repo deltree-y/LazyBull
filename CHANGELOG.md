@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.67.6] - 2026-04-29
+
+### 修复
+
+- **3.5 寸 LCD 脚本清理未使用日线函数并调整图例顺序** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 删除未被调用的中证800 AKShare 日线函数及其 DataFrame 解析函数，避免保留无效回退链路
+  - 折线图图例顺序调整为 `上 / 深 / 中 / 持`
+  - 同步消除对应区域潜在语法问题，脚本已通过语法编译检查
+
 ## [0.67.5] - 2026-04-29
 
 ### 修复

@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.67.5)
+### 当前版本 (v0.67.6)
+
+**树莓派 3.5 寸 LCD 图例顺序与中证800日线残留逻辑已清理** (v0.67.6):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 折线图图例顺序调整为 `上 / 深 / 中 / 持`
+- 删除未被调用的中证800 AKShare 日线函数与解析函数，避免误导为仍存在日线兜底链路
+- 脚本已通过语法编译检查，3.5LCD 回归测试通过
 
 **树莓派 3.5 寸 LCD 实时指数链路已改为仅使用新浪接口** (v0.67.5):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 上证/深证实时获取仅调用 AKShare `stock_zh_index_spot_sina`

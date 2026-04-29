@@ -2433,120 +2433,6 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
     return pct_sanitized
 
 
-def _fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str) -> dict[str, float]:
-    """使用 AKShare 获取中证800日线收盘价，返回 YYYYMMDD -> close。"""
-    try:
-        import akshare as ak  # type: ignore
-    except Exception:
-        _emit_diag_once(
-            "akshare_daily_import_error",
-            "AKShare导入失败，无法获取中证800日线",
-        )
-        return {}
-
-    index_hist_getter = getattr(ak, 'index_zh_a_hist', None)
-    if callable(index_hist_getter):
-        try:
-            df = index_hist_getter(
-                symbol='000906',
-                period='daily',
-                start_date=start_date,
-                end_date=end_date,
-            )
-            close_map = _extract_daily_close_map_from_akshare_df(df)
-            if close_map:
-                return close_map
-        except Exception:
-            _emit_diag_once(
-                "akshare_daily_index_zh_a_hist_error",
-                "AKShare index_zh_a_hist 拉取中证800日线失败",
-            )
-    else:
-        _emit_diag_once(
-            "akshare_daily_index_zh_a_hist_missing",
-            "AKShare缺少 index_zh_a_hist 接口，尝试回退到 stock_zh_index_daily_em",
-            stderr=False,
-        )
-
-    daily_getter = getattr(ak, 'stock_zh_index_daily_em', None)
-    if callable(daily_getter):
-        try:
-            df = daily_getter(symbol='sh000906')
-            close_map = _extract_daily_close_map_from_akshare_df(df)
-            if close_map:
-                return {
-                    trade_date: close
-                    for trade_date, close in close_map.items()
-                    if start_date <= trade_date <= end_date
-                }
-        except Exception:
-            _emit_diag_once(
-                "akshare_daily_stock_zh_index_daily_em_error",
-                "AKShare stock_zh_index_daily_em 拉取中证800日线失败",
-            )
-    else:
-        _emit_diag_once(
-            "akshare_daily_stock_zh_index_daily_em_missing",
-            "AKShare缺少 stock_zh_index_daily_em 接口",
-            stderr=False,
-        )
-
-    _emit_diag_once(
-        "akshare_daily_csi800_empty",
-        f"AKShare未返回中证800日线数据: start={start_date}, end={end_date}",
-    )
-
-    return {}
-
-
-def _extract_daily_close_map_from_akshare_df(df) -> dict[str, float]:
-    """将 AKShare 指数日线 DataFrame 归一化为 YYYYMMDD -> close。"""
-    if df is None or getattr(df, 'empty', True):
-        _emit_diag_once(
-            "akshare_daily_dataframe_empty",
-            "AKShare日线接口返回空DataFrame",
-            stderr=False,
-        )
-        return {}
-
-    date_col = None
-    close_col = None
-    for candidate in ('日期', 'date', 'trade_date'):
-        if candidate in df.columns:
-            date_col = candidate
-            break
-    for candidate in ('收盘', 'close', '收盘价'):
-        if candidate in df.columns:
-            close_col = candidate
-            break
-    if date_col is None or close_col is None:
-        _emit_diag_once(
-            "akshare_daily_columns_missing",
-            f"AKShare日线字段不匹配，无法解析日期/收盘列: {list(df.columns)}",
-        )
-        return {}
-
-    result: dict[str, float] = {}
-    for _, row in df.iterrows():
-        raw_date = str(row.get(date_col, '')).strip()
-        if not raw_date:
-            continue
-        try:
-            trade_date = pd.to_datetime(raw_date).strftime('%Y%m%d')
-        except Exception:
-            raw_digits = ''.join(ch for ch in raw_date if ch.isdigit())
-            if len(raw_digits) != 8:
-                continue
-            trade_date = raw_digits
-
-        close = _coerce_float(row.get(close_col))
-        if close is None or not np.isfinite(close) or close <= 0:
-            continue
-        result[trade_date] = close
-
-    return result
-
-
 def _compute_holdings_intraday_pct(snapshot: Optional[dict]) -> Optional[float]:
     """计算当前持仓股票相对昨收的实时涨跌幅（不含现金）。"""
     if snapshot is None:
@@ -3148,18 +3034,16 @@ def _draw_chart(
     )
     legend_x = _draw_legend_item(
         legend_x,
+        _short_legend_label(chart_data.get('csi800_label', '中证800')),
+        COLOR_CHART_CSI800,
+        f"{csi800_pct[-1]:+.1f}%",
+    ) if csi800_available else legend_x
+    _draw_legend_item(
+        legend_x,
         _short_legend_label(chart_data.get('portfolio_label', '持仓')),
         COLOR_CHART_HOLDINGS,
         ptf_last_str,
     )
-    if csi800_available:
-        csi800_last_str = f"{csi800_pct[-1]:+.1f}%"
-        _draw_legend_item(
-            legend_x,
-            _short_legend_label(chart_data.get('csi800_label', '中证800')),
-            COLOR_CHART_CSI800,
-            csi800_last_str,
-        )
 
     if cycle_last_data_label:
         bbox_last = draw.textbbox((0, 0), cycle_last_data_label, font=font_xs)
