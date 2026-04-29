@@ -522,6 +522,49 @@ def test_draw_chart_shows_lunch_marker_and_zero_label_for_intraday():
     assert module.COLOR_CHART_ZERO_LINE in captured_lines
 
 
+def test_draw_chart_legacy_intraday_without_csi800_does_not_draw_white_series():
+    module = _load_module()
+    chart = {
+        "mode": "intraday",
+        "trade_date": "20260407",
+        "dates": ["09:30", "09:40", "09:50"],
+        "index_pct": [0.2, 0.3, 0.5],
+        "shenzhen_pct": [0.1, 0.2, 0.4],
+        "portfolio_pct": [0.0, 0.1, 0.2],
+        "slot_indices": [0, 1, 2],
+        "x_positions": [0.0, 1.0, 2.0],
+        "slot_count": module.INTRADAY_SLOT_COUNT,
+    }
+
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    real_draw = module.ImageDraw.Draw(image)
+    captured_line_colors = []
+
+    class DrawProxy:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            captured_line_colors.append(kwargs.get("fill"))
+            return real_draw.line(*args, **kwargs)
+
+        def text(self, *args, **kwargs):
+            return real_draw.text(*args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+        def ellipse(self, *args, **kwargs):
+            return real_draw.ellipse(*args, **kwargs)
+
+    module._draw_chart(DrawProxy(), chart)
+
+    assert module.COLOR_CHART_CSI800 not in captured_line_colors
+
+
 def test_draw_zero_reference_line_applies_offset():
     module = _load_module()
     image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
@@ -909,6 +952,39 @@ def test_build_intraday_chart_uses_snapshot_quote_time_after_close(monkeypatch):
     assert chart is not None
     assert chart["slot_indices"] == [module.INTRADAY_SLOT_COUNT - 1]
     assert chart["dates"] == ["15:00"]
+
+
+def test_build_intraday_chart_keeps_refreshing_when_csi800_temporarily_missing(monkeypatch):
+    module = _load_module()
+    chart = module._upsert_intraday_chart(
+        None,
+        datetime(2026, 4, 7, 9, 30, 0),
+        index_pct=0.1,
+        shenzhen_pct=0.2,
+        portfolio_pct=0.3,
+        csi800_pct=0.4,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_fetch_realtime_index_pcts",
+        lambda snapshot=None: {
+            module.SHANGHAI_INDEX_CODE: 0.5,
+            module.SHENZHEN_INDEX_CODE: 0.6,
+            # 故意缺失 CSI800，模拟 AKShare 暂时不可用
+        },
+    )
+    monkeypatch.setattr(module, "_compute_holdings_intraday_pct", lambda snapshot: 0.7)
+
+    updated = module._build_intraday_chart(
+        chart,
+        {"positions": {"000001.SZ": SimpleNamespace(shares=100)}, "quotes": pd.DataFrame()},
+        point_time=datetime(2026, 4, 7, 9, 40, 0),
+    )
+
+    assert updated is not None
+    assert len(updated["dates"]) == 2
+    assert updated["raw_csi800_pct"][-1] == 0.4
 
 
 def test_format_cycle_last_data_label_uses_last_cycle_date():

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.67.2] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 增强中证800 AKShare取数诊断日志，便于异机排查** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 为实时现货链路补充接口级日志：接口缺失、接口调用异常、代码未命中、价格字段无效、最终缺失代码汇总
+  - 为日线链路补充接口级日志：`index_zh_a_hist` / `stock_zh_index_daily_em` 接口缺失或异常、DataFrame 为空、字段不匹配、最终无数据
+  - 以上日志会写入 `data/paper/state/respi_35lcd_runtime.log`（失败时回退系统临时目录），用于在树莓派环境确认真实失败点
+
+## [0.67.1] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 中证800接入后的两处显示异常修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 修复“白线覆盖黄线”问题：旧日内缓存缺失 `csi800_pct` 时，不再把中证800序列回退为上证序列进行绘制，避免图上只看见白/蓝/橙三条线
+  - 修复“13:00 后不再刷新”问题：当 AKShare 临时未返回中证800实时涨跌幅时，不再整次跳过盘中追加，而是沿用上一采样点的中证800值，保证上证/深证/持仓曲线持续刷新
+
+### 测试
+
+- **补充中证800异常场景回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 legacy 日内图缺失 `csi800_pct` 时不绘制白线的断言
+  - 新增中证800实时值临时缺失时，盘中图仍继续追加新点的断言
+
 ## [0.67.0] - 2026-04-29
 
 ### 新增

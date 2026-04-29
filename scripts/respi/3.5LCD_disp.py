@@ -2221,6 +2221,11 @@ def _extract_index_pct_map_from_quote_df(rt_df) -> dict[str, float]:
 def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
     """从 akshare 指数现货表中提取指定指数当日涨跌幅。"""
     if df is None or df.empty:
+        _emit_diag_once(
+            f"akshare_spot_empty::{target_code}",
+            f"AKShare现货表为空，无法提取指数涨跌幅: {target_code}",
+            stderr=False,
+        )
         return None
 
     code_columns = ['代码', 'symbol', 'ts_code']
@@ -2242,6 +2247,11 @@ def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
             break
 
     if matched is None:
+        _emit_diag_once(
+            f"akshare_spot_code_missing::{target_code}",
+            f"AKShare现货表未命中指数代码: {target_code} | 可用列: {list(df.columns)}",
+            stderr=False,
+        )
         return None
 
     pct = _coerce_float(matched.get('涨跌幅', matched.get('pct_chg')))
@@ -2253,6 +2263,11 @@ def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
         matched.get('昨收', matched.get('昨收盘', matched.get('pre_close')))
     )
     if price is None or not np.isfinite(price) or price <= 0 or pre_close in (None, 0):
+        _emit_diag_once(
+            f"akshare_spot_price_invalid::{target_code}",
+            f"AKShare现货记录缺少有效价格/昨收，无法计算涨跌幅: {target_code}",
+            stderr=False,
+        )
         return None
     return _sanitize_intraday_pct(
         (price / pre_close - 1) * 100,
@@ -2287,8 +2302,20 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
         for getter_name in ('stock_zh_index_spot_em', 'stock_zh_index_spot_sina'):
             getter = getattr(ak, getter_name, None)
             if getter is None:
+                _emit_diag_once(
+                    f"akshare_spot_getter_missing::{getter_name}",
+                    f"AKShare实时接口不存在: {getter_name}",
+                    stderr=False,
+                )
                 continue
-            df = getter()
+            try:
+                df = getter()
+            except Exception as exc:
+                _emit_diag_once(
+                    f"akshare_spot_getter_error::{getter_name}",
+                    f"AKShare实时接口调用失败: {getter_name} | {type(exc).__name__}: {exc}",
+                )
+                continue
             for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
                 if code in pct_map:
                     continue
@@ -2298,7 +2325,21 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
             if len(pct_map) == 3:
                 break
     except Exception:
-        pass
+        _emit_diag_once(
+            "akshare_spot_import_or_loop_error",
+            "AKShare实时指数获取主流程异常，已回退现有数据",
+        )
+
+    missing_codes = [
+        code for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE)
+        if code not in pct_map
+    ]
+    if missing_codes:
+        _emit_diag_once(
+            "akshare_spot_missing_codes",
+            f"实时指数涨跌幅缺失代码: {missing_codes} | 已获取: {sorted(pct_map.keys())}",
+            stderr=False,
+        )
 
     return pct_map
 
@@ -2308,6 +2349,10 @@ def _fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str) -> dic
     try:
         import akshare as ak  # type: ignore
     except Exception:
+        _emit_diag_once(
+            "akshare_daily_import_error",
+            "AKShare导入失败，无法获取中证800日线",
+        )
         return {}
 
     index_hist_getter = getattr(ak, 'index_zh_a_hist', None)
@@ -2323,7 +2368,16 @@ def _fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str) -> dic
             if close_map:
                 return close_map
         except Exception:
-            pass
+            _emit_diag_once(
+                "akshare_daily_index_zh_a_hist_error",
+                "AKShare index_zh_a_hist 拉取中证800日线失败",
+            )
+    else:
+        _emit_diag_once(
+            "akshare_daily_index_zh_a_hist_missing",
+            "AKShare缺少 index_zh_a_hist 接口，尝试回退到 stock_zh_index_daily_em",
+            stderr=False,
+        )
 
     daily_getter = getattr(ak, 'stock_zh_index_daily_em', None)
     if callable(daily_getter):
@@ -2337,7 +2391,21 @@ def _fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str) -> dic
                     if start_date <= trade_date <= end_date
                 }
         except Exception:
-            pass
+            _emit_diag_once(
+                "akshare_daily_stock_zh_index_daily_em_error",
+                "AKShare stock_zh_index_daily_em 拉取中证800日线失败",
+            )
+    else:
+        _emit_diag_once(
+            "akshare_daily_stock_zh_index_daily_em_missing",
+            "AKShare缺少 stock_zh_index_daily_em 接口",
+            stderr=False,
+        )
+
+    _emit_diag_once(
+        "akshare_daily_csi800_empty",
+        f"AKShare未返回中证800日线数据: start={start_date}, end={end_date}",
+    )
 
     return {}
 
@@ -2345,6 +2413,11 @@ def _fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str) -> dic
 def _extract_daily_close_map_from_akshare_df(df) -> dict[str, float]:
     """将 AKShare 指数日线 DataFrame 归一化为 YYYYMMDD -> close。"""
     if df is None or getattr(df, 'empty', True):
+        _emit_diag_once(
+            "akshare_daily_dataframe_empty",
+            "AKShare日线接口返回空DataFrame",
+            stderr=False,
+        )
         return {}
 
     date_col = None
@@ -2358,6 +2431,10 @@ def _extract_daily_close_map_from_akshare_df(df) -> dict[str, float]:
             close_col = candidate
             break
     if date_col is None or close_col is None:
+        _emit_diag_once(
+            "akshare_daily_columns_missing",
+            f"AKShare日线字段不匹配，无法解析日期/收盘列: {list(df.columns)}",
+        )
         return {}
 
     result: dict[str, float] = {}
@@ -2439,13 +2516,22 @@ def _build_intraday_chart(
     shanghai_pct = index_pct_map.get(SHANGHAI_INDEX_CODE)
     shenzhen_pct = index_pct_map.get(SHENZHEN_INDEX_CODE)
     csi800_pct = index_pct_map.get(CSI800_INDEX_CODE)
+
+    # 中证800偶发取数失败时，沿用上一采样点，避免整次盘中刷新被短路
+    if csi800_pct is None and isinstance(chart_data, dict):
+        raw_csi800 = chart_data.get('raw_csi800_pct', chart_data.get('csi800_pct', []))
+        if isinstance(raw_csi800, list) and raw_csi800:
+            csi800_pct = _sanitize_intraday_pct(raw_csi800[-1], INTRADAY_INDEX_PCT_ABS_LIMIT)
+
     if (
         shanghai_pct is None
         or shenzhen_pct is None
-        or csi800_pct is None
         or holdings_pct is None
     ):
         return chart_data
+
+    if csi800_pct is None:
+        csi800_pct = shanghai_pct
 
     return _upsert_intraday_chart(
         chart_data,
@@ -2825,7 +2911,7 @@ def _draw_chart(
     dates = list(chart_data.get('dates', []))
     idx_pct = list(chart_data.get('index_pct', []))
     sz_pct = list(chart_data.get('shenzhen_pct', []))
-    csi800_pct = list(chart_data.get('csi800_pct', idx_pct))
+    csi800_pct = list(chart_data.get('csi800_pct', []))
     ptf_pct = list(chart_data.get('portfolio_pct', []))
     slot_indices = list(chart_data.get('slot_indices', range(len(idx_pct))))
     x_positions = chart_data.get('x_positions', slot_indices)
@@ -2835,7 +2921,6 @@ def _draw_chart(
         len(dates),
         len(idx_pct),
         len(sz_pct),
-        len(csi800_pct),
         len(ptf_pct),
         len(slot_indices),
         len(x_positions),
@@ -2851,7 +2936,8 @@ def _draw_chart(
     dates = dates[:n]
     idx_pct = idx_pct[:n]
     sz_pct = sz_pct[:n]
-    csi800_pct = csi800_pct[:n]
+    csi800_available = len(csi800_pct) >= n and n > 0
+    csi800_pct = csi800_pct[:n] if csi800_available else []
     ptf_pct = ptf_pct[:n]
     slot_indices = slot_indices[:n]
     x_positions = x_positions[:n]
@@ -2867,11 +2953,14 @@ def _draw_chart(
     if chart_mode == 'intraday':
         idx_pct = _smooth_intraday_series_for_display(idx_pct)
         sz_pct = _smooth_intraday_series_for_display(sz_pct)
-        csi800_pct = _smooth_intraday_series_for_display(csi800_pct)
+        if csi800_available:
+            csi800_pct = _smooth_intraday_series_for_display(csi800_pct)
         ptf_pct = _smooth_intraday_series_for_display(ptf_pct)
 
     # Y轴范围
-    all_vals = idx_pct + sz_pct + csi800_pct + ptf_pct
+    all_vals = idx_pct + sz_pct + ptf_pct
+    if csi800_available:
+        all_vals += csi800_pct
     y_min, y_max = _get_chart_y_range(all_vals)
     y_range = y_max - y_min
     if y_range < 0.01:
@@ -2915,22 +3004,18 @@ def _draw_chart(
 
     idx_pts = _to_points(idx_pct)
     sz_pts = _to_points(sz_pct)
-    csi800_pts = _to_points(csi800_pct)
+    csi800_pts = _to_points(csi800_pct) if csi800_available else []
     ptf_pts = _to_points(ptf_pct)
 
-    _draw_chart_series(
-        draw,
-        [
-            (idx_pts, COLOR_CHART_SHANGHAI),
-            (sz_pts, COLOR_CHART_SHENZHEN),
-            (ptf_pts, COLOR_CHART_HOLDINGS),
-            (csi800_pts, COLOR_CHART_CSI800),
-        ],
-        cx,
-        cy,
-        cw,
-        ch,
-    )
+    series_points = [
+        (idx_pts, COLOR_CHART_SHANGHAI),
+        (sz_pts, COLOR_CHART_SHENZHEN),
+        (ptf_pts, COLOR_CHART_HOLDINGS),
+    ]
+    if csi800_available:
+        series_points.append((csi800_pts, COLOR_CHART_CSI800))
+
+    _draw_chart_series(draw, series_points, cx, cy, cw, ch)
 
     if y_min <= 0 <= y_max:
         _draw_zero_reference_line(draw, cx, cy, cw, ch, y_min, y_range, font_xs)
@@ -2959,7 +3044,6 @@ def _draw_chart(
     ly = CHART_Y + 2
     idx_last_str = f"{idx_pct[-1]:+.1f}%"
     sz_last_str = f"{sz_pct[-1]:+.1f}%"
-    csi800_last_str = f"{csi800_pct[-1]:+.1f}%"
     ptf_last_str = f"{ptf_pct[-1]:+.1f}%"
     legend_x = _draw_legend_item(
         lx,
@@ -2979,12 +3063,14 @@ def _draw_chart(
         COLOR_CHART_HOLDINGS,
         ptf_last_str,
     )
-    _draw_legend_item(
-        legend_x,
-        _short_legend_label(chart_data.get('csi800_label', '中证800')),
-        COLOR_CHART_CSI800,
-        csi800_last_str,
-    )
+    if csi800_available:
+        csi800_last_str = f"{csi800_pct[-1]:+.1f}%"
+        _draw_legend_item(
+            legend_x,
+            _short_legend_label(chart_data.get('csi800_label', '中证800')),
+            COLOR_CHART_CSI800,
+            csi800_last_str,
+        )
 
     if cycle_last_data_label:
         bbox_last = draw.textbbox((0, 0), cycle_last_data_label, font=font_xs)

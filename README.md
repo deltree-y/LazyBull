@@ -28,7 +28,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.67.0)
+### 当前版本 (v0.67.2)
+
+**树莓派 3.5 寸 LCD 的中证800 AKShare 取数诊断日志已增强** (v0.67.2):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 为中证800实时与日线取数补充了接口级失败日志（接口缺失、调用异常、代码未命中、字段不匹配、空结果）
+- 运行日志落盘到 `data/paper/state/respi_35lcd_runtime.log`（失败时自动回退到系统临时目录），便于在树莓派上直接定位为何“拿不到中证800”
+
+**树莓派 3.5 寸 LCD 中证800折线显示与盘中刷新稳定性修复** (v0.67.1):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 修复了旧缓存缺少 `csi800_pct` 时白线覆盖黄线的问题：现在不会再把中证800线回退成上证线来画
+- 同时修复了 AKShare 临时缺少中证800实时值导致盘中整次跳过追加的问题：会沿用上一采样点的中证800值，保证 13:00 后盘中曲线持续刷新
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 已新增对应回归测试
 
 **树莓派 3.5 寸 LCD 下方图表新增中证800折线（AKShare）** (v0.67.0):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 现在在下方图表区域显示第 4 条中证800折线，颜色为亮白色；并与原有 3 条线保持相同刷新频率
