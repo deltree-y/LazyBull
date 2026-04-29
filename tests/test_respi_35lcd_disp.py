@@ -733,6 +733,45 @@ def test_build_industry_panel_aggregates_counts_tops_and_contribution(monkeypatc
     assert "top_negative" not in finance_item
 
 
+def test_build_industry_panel_intraday_uses_pre_close_instead_of_buy_price(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_industry_mapping",
+        lambda: {"000001.SZ": "银行"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_levels_mapping",
+        lambda: {"000001.SZ": ("金融", "银行", "城商行")},
+    )
+
+    snapshot = {
+        "positions": {
+            "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+        },
+        "quotes": pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "000001.SZ",
+                    "PRICE": 11.0,
+                    "PRE_CLOSE": 12.0,
+                }
+            ]
+        ),
+    }
+
+    cycle_panel = module._build_industry_panel(snapshot, mode="cycle")
+    intraday_panel = module._build_industry_panel(snapshot, mode="intraday")
+
+    assert cycle_panel is not None
+    assert intraday_panel is not None
+    # 周期口径: (11-10)*100
+    assert round(cycle_panel["total_pnl_amount"], 4) == 100.0
+    # 盘内口径: (11-12)*100
+    assert round(intraday_panel["total_pnl_amount"], 4) == -100.0
+
+
 def test_normalize_intraday_chart_drops_abnormal_points():
     module = _load_module()
 
@@ -1969,8 +2008,8 @@ def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
     monkeypatch.setattr(
         module,
         "_build_industry_panel",
-        lambda payload: seen_snapshots.append(("industry", payload))
-        or {"industries": [{"industry": "银行"}]},
+        lambda payload, mode="cycle": seen_snapshots.append((f"industry-{mode}", payload))
+        or {"industries": [{"industry": "银行"}], "mode": mode},
     )
     monkeypatch.setattr(
         module,
@@ -1984,11 +2023,19 @@ def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
     module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
 
     assert fetch_calls == [True]
-    assert [name for name, _ in seen_snapshots] == ["summary", "intraday", "rank", "industry"]
+    assert [name for name, _ in seen_snapshots] == [
+        "summary",
+        "intraday",
+        "rank",
+        "industry-cycle",
+        "industry-intraday",
+    ]
     assert all(payload is snapshot for _, payload in seen_snapshots)
     assert state.summary is not None
     assert state.stock_rankings == [{"name": "平安", "code": "000001", "pnl_pct": 10.0}]
-    assert state.industry_panel == {"industries": [{"industry": "银行"}]}
+    assert state.industry_panel == {"industries": [{"industry": "银行"}], "mode": "cycle"}
+    assert state.industry_panel_cycle == {"industries": [{"industry": "银行"}], "mode": "cycle"}
+    assert state.industry_panel_intraday == {"industries": [{"industry": "银行"}], "mode": "intraday"}
     assert state.intraday_chart_data == {"mode": "intraday", "dates": ["09:32"]}
     assert state.next_rebalance_date == "20260410"
     assert state.days_to_rebalance == 3

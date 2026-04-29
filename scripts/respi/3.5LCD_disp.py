@@ -604,8 +604,12 @@ def _value_color(value: float) -> tuple[int, int, int]:
     return COLOR_TEXT
 
 
-def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
-    """基于实时持仓快照构建行业统计面板数据。"""
+def _build_industry_panel(snapshot: Optional[dict], mode: str = "cycle") -> Optional[dict]:
+    """基于实时持仓快照构建行业统计面板数据。
+
+    mode='cycle'：盘外/持仓周期口径，基于买入成本
+    mode='intraday'：盘内当日口径，基于昨收
+    """
     if snapshot is None:
         return None
 
@@ -614,8 +618,52 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
     if rt_df is None or rt_df.empty or not positions:
         return None
 
-    industry_mapping = _get_shenwan_industry_mapping()
     industry_levels_mapping = _get_shenwan_levels_mapping()
+    price_map: dict[str, float] = {}
+    pre_close_map: dict[str, float] = {}
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('TS_CODE', row.get('ts_code', ''))).strip()
+        if not ts_code:
+            continue
+        pos = positions.get(ts_code)
+        if pos is None or getattr(pos, 'buy_price', 0) <= 0:
+            continue
+
+        current_price = _normalize_intraday_price(
+            row.get('PRICE', row.get('price')),
+            row.get('PRE_CLOSE', row.get('pre_close')),
+            INTRADAY_STOCK_PCT_ABS_LIMIT,
+        )
+        if current_price is None:
+            continue
+        price_map[ts_code] = current_price
+        pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
+        if pre_close is not None and pre_close > 0:
+            pre_close_map[ts_code] = pre_close
+
+    return _build_industry_panel_from_prices(
+        positions,
+        price_map,
+        industry_levels_mapping,
+        pre_close_map=pre_close_map,
+        mode=mode,
+    )
+
+
+def _build_industry_panel_from_prices(
+    positions: dict,
+    price_map: dict[str, float],
+    industry_levels_mapping: Optional[dict[str, tuple[str, str, str]]] = None,
+    pre_close_map: Optional[dict[str, float]] = None,
+    mode: str = "cycle",
+) -> Optional[dict]:
+    """基于持仓与价格映射构建行业统计面板（按申万L1聚合）。"""
+    if not positions:
+        return None
+
+    if industry_levels_mapping is None:
+        industry_levels_mapping = _get_shenwan_levels_mapping()
+
     industry_stats: dict[str, dict] = {}
     total_positive = 0
     total_negative = 0
@@ -635,29 +683,23 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
         l2_set.add(level_tuple[1] or '未知行业')
         l3_set.add(level_tuple[2] or '未知行业')
 
-    for _, row in rt_df.iterrows():
-        ts_code = str(row.get('TS_CODE', row.get('ts_code', ''))).strip()
-        if not ts_code:
-            continue
-        pos = positions.get(ts_code)
-        if pos is None or getattr(pos, 'buy_price', 0) <= 0:
-            continue
-
-        current_price = _normalize_intraday_price(
-            row.get('PRICE', row.get('price')),
-            row.get('PRE_CLOSE', row.get('pre_close')),
-            INTRADAY_STOCK_PCT_ABS_LIMIT,
-        )
-        if current_price is None:
-            continue
-
+    for ts_code, pos in positions.items():
         shares = _coerce_float(getattr(pos, 'shares', 0))
         buy_price = _coerce_float(getattr(pos, 'buy_price', 0))
         if shares is None or buy_price is None or shares <= 0 or buy_price <= 0:
             continue
 
-        pnl_pct = (current_price - buy_price) / buy_price * 100.0
-        pnl_amount = (current_price - buy_price) * shares
+        current_price = price_map.get(ts_code, buy_price)
+        pre_close = None if pre_close_map is None else pre_close_map.get(ts_code)
+        if mode == "intraday":
+            if pre_close is None or pre_close <= 0:
+                continue
+            base_price = pre_close
+        else:
+            base_price = buy_price
+
+        pnl_pct = (current_price - base_price) / base_price * 100.0
+        pnl_amount = (current_price - base_price) * shares
         total_pnl_amount += pnl_amount
 
         if pnl_pct > 0:
@@ -666,10 +708,9 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
             total_negative += 1
 
         level_tuple = industry_levels_mapping.get(ts_code)
-        if level_tuple is not None:
-            industry_name = level_tuple[0] or '未知行业'
-        else:
-            industry_name = industry_mapping.get(ts_code, '未知行业')
+        industry_name = level_tuple[0] if level_tuple else '未知行业'
+        if not industry_name:
+            industry_name = '未知行业'
         item = industry_stats.setdefault(
             industry_name,
             {
@@ -2857,10 +2898,15 @@ def _refresh_display_state(
             pass
 
         try:
-            industry_panel = _build_industry_panel(holdings_snapshot)
-            if industry_panel is not None:
+            industry_panel_cycle = _build_industry_panel(holdings_snapshot, mode="cycle")
+            industry_panel_intraday = _build_industry_panel(holdings_snapshot, mode="intraday")
+            if industry_panel_cycle is not None or industry_panel_intraday is not None:
                 with state.lock:
-                    state.industry_panel = industry_panel
+                    if industry_panel_cycle is not None:
+                        state.industry_panel = industry_panel_cycle
+                        state.industry_panel_cycle = industry_panel_cycle
+                    if industry_panel_intraday is not None:
+                        state.industry_panel_intraday = industry_panel_intraday
         except Exception:
             pass
 
@@ -2905,6 +2951,8 @@ class DisplayState:
         self.intraday_chart_data: Optional[dict] = _load_intraday_chart()
         self.stock_rankings: Optional[list] = None  # 个股盈亏排名
         self.industry_panel: Optional[dict] = None  # 行业收益统计
+        self.industry_panel_cycle: Optional[dict] = None  # 盘外/持仓周期口径
+        self.industry_panel_intraday: Optional[dict] = None  # 盘内当日口径
         self.cpu_usage_pct: float = 0.0
         self.memory_usage_pct: float = 0.0
         self.cpu_usage_sample: Optional[tuple[int, int]] = None
@@ -2963,7 +3011,8 @@ def _render(state: DisplayState) -> None:
         cycle_chart_data = state.chart_data
         intraday_chart_data = state.intraday_chart_data
         rankings = state.stock_rankings
-        industry_panel = getattr(state, 'industry_panel', None)
+        industry_panel_cycle = getattr(state, 'industry_panel_cycle', getattr(state, 'industry_panel', None))
+        industry_panel_intraday = getattr(state, 'industry_panel_intraday', None)
         ox = state.offset_x
         oy = state.offset_y
 
@@ -3113,6 +3162,11 @@ def _render(state: DisplayState) -> None:
     cycle_last_data_label = None
     if chart_data is not None and chart_data.get('mode') == 'cycle':
         cycle_last_data_label = _format_cycle_last_data_label(cycle_chart_data)
+    chart_mode = str(chart_data.get('mode', '')) if isinstance(chart_data, dict) else ''
+    if chart_mode == 'intraday':
+        industry_panel = industry_panel_intraday or industry_panel_cycle
+    else:
+        industry_panel = industry_panel_cycle or industry_panel_intraday
     _draw_chart_panel(draw, chart_data, cycle_last_data_label, industry_panel)
 
     _write_fb(img)

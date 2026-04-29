@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.68.6] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 行业页补齐盘内当日口径，并与图表模式一致切换** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 行业统计新增双口径：
+    - `cycle`（盘外/持仓周期）继续基于买入成本计算
+    - `intraday`（盘内当日）改为基于昨收 `PRE_CLOSE` 计算
+  - 刷新阶段同时构建两套行业面板（盘外与盘内），渲染阶段按当前图表模式选择对应面板，避免口径混用
+  - 修复盘内口径实现中的变量作用域问题，改为通过 `pre_close_map` 显式传递昨收基准
+
+### 测试
+
+- **更新 3.5 寸 LCD 行业口径回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 刷新状态测试改为断言双口径面板均被构建并写入状态
+  - 新增“盘内按昨收、盘外按买入价”专项断言，覆盖同一持仓在两种口径下盈亏符号差异
+
 ## [0.68.5] - 2026-04-29
 
 ### 修复
