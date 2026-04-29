@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.67.3] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 的中证800数据源按运行环境优化切换** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 盘中中证800实时涨跌幅改为按 `stock_zh_index_spot` 接口获取，匹配树莓派实测可用链路
+  - 盘外中证800日线改为通过 TuShare `index_daily(ts_code=000906.SH)` 获取，避免 AKShare 东财日线链路不可达时周期图缺失
+  - 保留并增强了实时/日线接口失败日志，便于继续在异机环境排查
+
+### 测试
+
+- **同步更新 3.5 寸 LCD 中证800数据源回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 周期图缓存测试改为覆盖 TuShare 三指数（日线）查询路径
+  - 调整查询计数断言以匹配新增中证800日线查询
+
 ## [0.67.2] - 2026-04-29
 
 ### 修复

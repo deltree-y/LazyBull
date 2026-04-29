@@ -1986,20 +1986,34 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
             start_date=start_date, end_date=today_str,
             fields="trade_date,close"
         )
-        if shanghai_df is None or shanghai_df.empty or shenzhen_df is None or shenzhen_df.empty:
+        csi800_df = client.query(
+            "index_daily", ts_code=CSI800_INDEX_CODE,
+            start_date=start_date, end_date=today_str,
+            fields="trade_date,close"
+        )
+        if (
+            shanghai_df is None
+            or shanghai_df.empty
+            or shenzhen_df is None
+            or shenzhen_df.empty
+            or csi800_df is None
+            or csi800_df.empty
+        ):
+            _emit_diag_once(
+                "tushare_index_daily_empty_for_cycle_chart",
+                "周期图指数日线缺失（上证/深证/中证800至少一项为空），无法构建周期图",
+            )
             return None
         shanghai_df = shanghai_df.sort_values('trade_date').reset_index(drop=True)
         shenzhen_df = shenzhen_df.sort_values('trade_date').reset_index(drop=True)
+        csi800_df = csi800_df.sort_values('trade_date').reset_index(drop=True)
         shanghai_close_map = dict(zip(shanghai_df['trade_date'], shanghai_df['close']))
         shenzhen_close_map = dict(zip(shenzhen_df['trade_date'], shenzhen_df['close']))
-        trade_dates = [d for d in shanghai_df['trade_date'].tolist() if d in shenzhen_close_map]
-        if len(trade_dates) < 1:
-            return None
-
-        csi800_close_map = _fetch_csi800_daily_close_map_akshare(start_date=start_date, end_date=today_str)
-        if not csi800_close_map:
-            return None
-        trade_dates = [d for d in trade_dates if d in csi800_close_map]
+        csi800_close_map = dict(zip(csi800_df['trade_date'], csi800_df['close']))
+        trade_dates = [
+            d for d in shanghai_df['trade_date'].tolist()
+            if d in shenzhen_close_map and d in csi800_close_map
+        ]
         if len(trade_dates) < 1:
             return None
 
@@ -2299,6 +2313,7 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
     try:
         import akshare as ak  # type: ignore
 
+        # 上证/深证保留原先实时源尝试逻辑
         for getter_name in ('stock_zh_index_spot_em', 'stock_zh_index_spot_sina'):
             getter = getattr(ak, getter_name, None)
             if getter is None:
@@ -2316,14 +2331,20 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
                     f"AKShare实时接口调用失败: {getter_name} | {type(exc).__name__}: {exc}",
                 )
                 continue
-            for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
+            for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
                 if code in pct_map:
                     continue
                 pct = _extract_index_pct_from_akshare(df, code)
                 if pct is not None:
                     pct_map[code] = pct
-            if len(pct_map) == 3:
+            if SHANGHAI_INDEX_CODE in pct_map and SHENZHEN_INDEX_CODE in pct_map:
                 break
+
+        # 中证800按用户要求改走 stock_zh_index_spot
+        if CSI800_INDEX_CODE not in pct_map:
+            csi800_pct = _fetch_csi800_realtime_pct_akshare()
+            if csi800_pct is not None:
+                pct_map[CSI800_INDEX_CODE] = csi800_pct
     except Exception:
         _emit_diag_once(
             "akshare_spot_import_or_loop_error",
@@ -2342,6 +2363,78 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
         )
 
     return pct_map
+
+
+def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
+    """按 stock_zh_index_spot 接口获取中证800实时涨跌幅。"""
+    try:
+        import akshare as ak  # type: ignore
+    except Exception as exc:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_import_error",
+            f"AKShare导入失败，无法获取中证800实时涨跌幅 | {type(exc).__name__}: {exc}",
+        )
+        return None
+
+    getter = getattr(ak, 'stock_zh_index_spot', None)
+    if getter is None:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_missing",
+            "AKShare缺少 stock_zh_index_spot 接口，无法按指定链路获取中证800实时行情",
+        )
+        return None
+
+    try:
+        df = getter()
+    except Exception as exc:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_error",
+            f"AKShare实时接口调用失败: stock_zh_index_spot | {type(exc).__name__}: {exc}",
+        )
+        return None
+
+    if df is None or df.empty:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_empty",
+            "AKShare stock_zh_index_spot 返回空数据，无法提取中证800",
+        )
+        return None
+
+    code_col = next((col for col in ('代码', 'symbol', 'ts_code') if col in df.columns), None)
+    if code_col is None:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_code_col_missing",
+            f"AKShare stock_zh_index_spot 缺少代码列，当前列: {list(df.columns)}",
+        )
+        return None
+
+    code_series = df[code_col].astype(str)
+    matched = df.loc[code_series.isin({'000906', 'sh000906', '000906.SH'})]
+    if matched.empty:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_000906_missing",
+            "AKShare stock_zh_index_spot 未找到中证800(000906)",
+            stderr=False,
+        )
+        return None
+
+    row = matched.iloc[0]
+    pct = _coerce_float(row.get('涨跌幅', row.get('pct_chg')))
+    if pct is None:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_pct_missing",
+            "AKShare stock_zh_index_spot 命中000906但缺少涨跌幅字段",
+        )
+        return None
+
+    pct_sanitized = _sanitize_intraday_pct(pct, INTRADAY_INDEX_PCT_ABS_LIMIT)
+    if pct_sanitized is None:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_pct_invalid",
+            f"AKShare stock_zh_index_spot 000906涨跌幅异常: {pct}",
+            stderr=False,
+        )
+    return pct_sanitized
 
 
 def _fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str) -> dict[str, float]:

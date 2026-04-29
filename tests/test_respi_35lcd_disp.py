@@ -836,6 +836,7 @@ def test_fetch_realtime_holdings_snapshot_merges_index_quotes_into_single_reques
 
 def test_fetch_realtime_index_pcts_prefers_snapshot_data():
     module = _load_module()
+    module._emit_diag_once = lambda *args, **kwargs: None
 
     pct_map = module._fetch_realtime_index_pcts(
         {
@@ -1391,7 +1392,12 @@ def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkey
         def query(self, api_name, **kwargs):
             query_calls.append((api_name, kwargs.get("ts_code")))
             if api_name == "index_daily":
-                closes = [3000.0, 3030.0] if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE else [10000.0, 10100.0]
+                if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE:
+                    closes = [3000.0, 3030.0]
+                elif kwargs.get("ts_code") == module.SHENZHEN_INDEX_CODE:
+                    closes = [10000.0, 10100.0]
+                else:
+                    closes = [5000.0, 5050.0]
                 return pd.DataFrame(
                     {
                         "trade_date": ["20260401", "20260407"],
@@ -1409,14 +1415,6 @@ def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkey
     monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
     monkeypatch.setattr(
         module,
-        "_fetch_csi800_daily_close_map_akshare",
-        lambda start_date, end_date: {
-            "20260401": 5000.0,
-            "20260407": 5050.0,
-        },
-    )
-    monkeypatch.setattr(
-        module,
         "_get_target_cycle_data_date",
         lambda now=None, allow_load=False: "20260407",
     )
@@ -1426,7 +1424,7 @@ def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkey
 
     assert first_chart is not None
     assert second_chart is not None
-    assert len(query_calls) == 3
+    assert len(query_calls) == 4
     assert first_chart == second_chart
 
 
@@ -1452,11 +1450,16 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
             pass
 
         def query(self, api_name, **kwargs):
-            fetch_round = query_call_count["value"] // 3
+            fetch_round = query_call_count["value"] // 4
             query_call_count["value"] += 1
             if api_name == "index_daily":
                 trade_dates = ["20260401", "20260407"] if fetch_round == 0 else ["20260401", "20260408"]
-                closes = [3000.0, 3030.0] if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE else [10000.0, 10100.0]
+                if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE:
+                    closes = [3000.0, 3030.0] if fetch_round == 0 else [3000.0, 3040.0]
+                elif kwargs.get("ts_code") == module.SHENZHEN_INDEX_CODE:
+                    closes = [10000.0, 10100.0] if fetch_round == 0 else [10000.0, 10150.0]
+                else:
+                    closes = [5000.0, 5050.0] if fetch_round == 0 else [5000.0, 5100.0]
                 return pd.DataFrame(
                     {
                         "trade_date": trade_dates,
@@ -1474,21 +1477,6 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
 
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
     monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
-    csi800_calls = {"value": 0}
-
-    def _fake_fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str):
-        csi800_calls["value"] += 1
-        if csi800_calls["value"] == 1:
-            return {
-                "20260401": 5000.0,
-                "20260407": 5050.0,
-            }
-        return {
-            "20260401": 5000.0,
-            "20260408": 5100.0,
-        }
-
-    monkeypatch.setattr(module, "_fetch_csi800_daily_close_map_akshare", _fake_fetch_csi800_daily_close_map_akshare)
     monkeypatch.setattr(
         module,
         "_get_target_cycle_data_date",
@@ -1505,7 +1493,7 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
     assert first_chart["dates"][-1] == "20260407"
     assert second_chart["dates"][-1] == "20260408"
     assert third_chart["dates"][-1] == "20260408"
-    assert query_call_count["value"] == 6
+    assert query_call_count["value"] == 8
 
 
 def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
