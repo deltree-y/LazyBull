@@ -1186,6 +1186,54 @@ def test_draw_chart_panel_switches_between_chart_and_industry(monkeypatch):
     assert called == {"chart": 1, "industry": 1}
 
 
+def test_draw_industry_panel_uses_explicit_top_labels_for_positive_and_negative():
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    real_draw = module.ImageDraw.Draw(image)
+    captured_texts = []
+
+    class DrawProxy:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            captured_texts.append(str(text))
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+    panel = {
+        "total_positive": 1,
+        "total_negative": 1,
+        "position_count": 2,
+        "industries": [
+            {
+                "industry": "银行",
+                "positive_count": 1,
+                "negative_count": 1,
+                "contribution_ratio": 12.3,
+                "pnl_amount": 100.0,
+                "top_positive": {"name": "平安", "pnl_pct": 3.2},
+                "top_negative": {"name": "招商", "pnl_pct": -2.4},
+            }
+        ],
+    }
+
+    module._draw_industry_panel(
+        DrawProxy(),
+        panel,
+        panel_x=10,
+        panel_y=100,
+        panel_w=460,
+        panel_h=120,
+    )
+
+    assert any(text.startswith("正TOP1:") for text in captured_texts)
+    assert any(text.startswith("负TOP1:") for text in captured_texts)
+    assert not any(text.strip() in {"- --", "+--"} for text in captured_texts)
+
+
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)

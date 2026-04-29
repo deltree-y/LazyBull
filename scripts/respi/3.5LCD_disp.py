@@ -3286,6 +3286,10 @@ def _draw_industry_panel(
     row_height = 35
     max_rows = max(1, (panel_h - 22) // row_height)
     industries = list(industry_panel.get('industries', []))[:max_rows]
+    left_top_x = panel_x + 6
+    right_top_x = panel_x + panel_w // 2 + 8
+    stat_x = panel_x + 108
+
     for idx, item in enumerate(industries):
         y = row_top + idx * row_height
         industry_name = str(item.get('industry', '未知行业'))[:10]
@@ -3295,24 +3299,20 @@ def _draw_industry_panel(
         industry_pnl_amount = float(item.get('pnl_amount', 0.0))
         name_color = _industry_name_color(industry_pnl_amount)
 
-        draw.text((panel_x + 6, y), industry_name, fill=name_color, font=font_body)
+        draw.text((left_top_x, y), industry_name, fill=name_color, font=font_body)
         summary_line = f"+{positive_count}/-{negative_count}  贡献:{contribution_ratio:+.1f}%"
-        draw.text((panel_x + 100, y), summary_line, fill=COLOR_LABEL, font=font_small)
+        draw.text((stat_x, y), summary_line, fill=COLOR_LABEL, font=font_small)
 
         top_positive = item.get('top_positive')
         top_negative = item.get('top_negative')
-        top_positive_text = "+--"
-        top_negative_text = "- --"
+        top_positive_text = "正TOP1: 无"
+        top_negative_text = "负TOP1: 无"
         if isinstance(top_positive, dict):
-            top_positive_text = (
-                f"+{top_positive.get('name', '')}{top_positive.get('pnl_pct', 0.0):+.1f}%"
-            )
+            top_positive_text = f"正TOP1:{top_positive.get('name', '')}{_fmt_pct(float(top_positive.get('pnl_pct', 0.0)))}"
         if isinstance(top_negative, dict):
-            top_negative_text = (
-                f"-{top_negative.get('name', '')}{top_negative.get('pnl_pct', 0.0):+.1f}%"
-            )
-        draw.text((panel_x + 6, y + 16), top_positive_text, fill=COLOR_RED, font=font_small)
-        draw.text((panel_x + panel_w // 2, y + 16), top_negative_text, fill=COLOR_GREEN, font=font_small)
+            top_negative_text = f"负TOP1:{top_negative.get('name', '')}{_fmt_pct(float(top_negative.get('pnl_pct', 0.0)))}"
+        draw.text((left_top_x, y + 16), top_positive_text, fill=COLOR_RED, font=font_small)
+        draw.text((right_top_x, y + 16), top_negative_text, fill=COLOR_GREEN, font=font_small)
 
 
 def _draw_chart_panel(
