@@ -143,6 +143,8 @@ _diag_lock = threading.Lock()
 _diag_once_keys: set[str] = set()
 _industry_mapping_cache_lock = threading.Lock()
 _industry_mapping_cache: dict[str, dict[str, str]] = {}
+_industry_levels_cache_lock = threading.Lock()
+_industry_levels_cache: Optional[dict[str, tuple[str, str, str]]] = None
 
 
 # ---------- 字体加载（带缓存）----------
@@ -533,6 +535,75 @@ def _industry_name_color(contribution_pnl: float) -> tuple[int, int, int]:
     return COLOR_TEXT
 
 
+def _get_shenwan_levels_mapping() -> dict[str, tuple[str, str, str]]:
+    """获取 ts_code 到申万 L1/L2/L3 名称的映射（缓存）。"""
+    global _industry_levels_cache
+
+    with _industry_levels_cache_lock:
+        if _industry_levels_cache is not None:
+            return _industry_levels_cache
+
+    result: dict[str, tuple[str, str, str]] = {}
+    try:
+        from src.lazybull.data import DataLoader, Storage
+
+        loader = DataLoader(storage=Storage(root_path=get_data_root()))
+        shenwan_industry = loader.load_shenwan_industry()
+        if shenwan_industry is not None and not shenwan_industry.empty:
+            for _, row in shenwan_industry.iterrows():
+                ts_code = str(row.get('ts_code', '')).strip()
+                if not ts_code:
+                    continue
+
+                l1 = str(row.get('sw_l1', row.get('sw_name', '未知行业')) or '未知行业')
+                l2 = str(
+                    row.get(
+                        'sw_l2',
+                        row.get('sw_industry', row.get('sw_name', '未知行业')),
+                    )
+                    or '未知行业'
+                )
+                l3 = str(
+                    row.get(
+                        'sw_l3',
+                        row.get('sw_industry', row.get('sw_name', '未知行业')),
+                    )
+                    or '未知行业'
+                )
+                result[ts_code] = (l1, l2, l3)
+    except Exception:
+        result = {}
+
+    with _industry_levels_cache_lock:
+        _industry_levels_cache = result
+    return result
+
+
+def _draw_text_segments(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    segments: list[tuple[str, tuple[int, int, int]]],
+    font: ImageFont.FreeTypeFont,
+) -> int:
+    """按分段颜色绘制文本，并返回绘制结束 x 坐标。"""
+    current_x = x
+    for text, color in segments:
+        draw.text((current_x, y), text, fill=color, font=font)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        current_x += bbox[2] - bbox[0]
+    return current_x
+
+
+def _value_color(value: float) -> tuple[int, int, int]:
+    """正红负绿零白。"""
+    if value > 0:
+        return COLOR_RED
+    if value < 0:
+        return COLOR_GREEN
+    return COLOR_TEXT
+
+
 def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
     """基于实时持仓快照构建行业统计面板数据。"""
     if snapshot is None:
@@ -544,10 +615,25 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
         return None
 
     industry_mapping = _get_shenwan_industry_mapping()
+    industry_levels_mapping = _get_shenwan_levels_mapping()
     industry_stats: dict[str, dict] = {}
     total_positive = 0
     total_negative = 0
     total_pnl_amount = 0.0
+
+    l1_set: set[str] = set()
+    l2_set: set[str] = set()
+    l3_set: set[str] = set()
+    for ts_code in positions.keys():
+        level_tuple = industry_levels_mapping.get(ts_code)
+        if level_tuple is None:
+            l1_set.add('未知行业')
+            l2_set.add('未知行业')
+            l3_set.add('未知行业')
+            continue
+        l1_set.add(level_tuple[0] or '未知行业')
+        l2_set.add(level_tuple[1] or '未知行业')
+        l3_set.add(level_tuple[2] or '未知行业')
 
     for _, row in rt_df.iterrows():
         ts_code = str(row.get('TS_CODE', row.get('ts_code', ''))).strip()
@@ -621,6 +707,9 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
         'total_negative': total_negative,
         'position_count': len(positions),
         'total_pnl_amount': total_pnl_amount,
+        'l1_industry_count': len(l1_set),
+        'l2_industry_count': len(l2_set),
+        'l3_industry_count': len(l3_set),
         'industries': industries,
     }
 
@@ -3245,9 +3334,9 @@ def _draw_industry_panel(
 ) -> None:
     """在图表区域绘制行业统计页。"""
     draw.rectangle([panel_x, panel_y, panel_x + panel_w, panel_y + panel_h], fill=COLOR_CHART_BG)
-    font_title = _get_font(13)
-    font_body = _get_font(12)
-    font_small = _get_font(11)
+    font_title = _get_font(14)
+    font_body = _get_font(13)
+    font_small = _get_font(12)
 
     if not industry_panel or not industry_panel.get('industries'):
         tip = "暂无行业统计数据"
@@ -3264,38 +3353,74 @@ def _draw_industry_panel(
     total_positive = int(industry_panel.get('total_positive', 0))
     total_negative = int(industry_panel.get('total_negative', 0))
     position_count = int(industry_panel.get('position_count', 0))
+    l1_count = int(industry_panel.get('l1_industry_count', 0))
+    l2_count = int(industry_panel.get('l2_industry_count', 0))
+    l3_count = int(industry_panel.get('l3_industry_count', 0))
     industries_all = list(industry_panel.get('industries', []))
     total_industries = len(industries_all)
 
-    row_top = panel_y + 20
-    row_height = 18
-    max_rows = max(1, (panel_h - 24) // row_height)
-    page_count = max(1, (total_industries + max_rows - 1) // max_rows)
+    row_top = panel_y + 22
+    rows_per_col = 5
+    col_count = 2
+    per_page = rows_per_col * col_count
+    page_count = max(1, (total_industries + per_page - 1) // per_page)
     if duration_seconds > 0:
         seconds_per_page = max(1.0, duration_seconds / page_count)
     else:
         seconds_per_page = 1.0
     page_idx = int(max(0.0, elapsed_seconds) / seconds_per_page) % page_count
-    start_idx = page_idx * max_rows
-    industries = industries_all[start_idx:start_idx + max_rows]
+    start_idx = page_idx * per_page
+    industries = industries_all[start_idx:start_idx + per_page]
 
-    title = (
-        f"行业概览 涨:{total_positive} 跌:{total_negative} "
-        f"持仓:{position_count} 行业:{total_industries}"
+    left_title = f"行业1/2/3:{l1_count}/{l2_count}/{l3_count}"
+    draw.text((panel_x + 6, panel_y + 2), left_title, fill=COLOR_TEXT, font=font_title)
+
+    right_label = "正/负收益股票数量:"
+    right_x = panel_x + panel_w // 2 + 6
+    current_x = _draw_text_segments(
+        draw,
+        right_x,
+        panel_y + 2,
+        [(right_label, COLOR_LABEL)],
+        font_title,
     )
-    draw.text((panel_x + 6, panel_y + 2), title, fill=COLOR_TEXT, font=font_title)
+    _draw_text_segments(
+        draw,
+        current_x,
+        panel_y + 2,
+        [
+            (f"+{total_positive}", _value_color(float(total_positive))),
+            ("/", COLOR_LABEL),
+            (f"-{total_negative}", _value_color(float(-total_negative))),
+        ],
+        font_title,
+    )
 
     if page_count > 1:
         page_text = f"页 {page_idx + 1}/{page_count}"
         bbox = draw.textbbox((0, 0), page_text, font=font_small)
         page_w = bbox[2] - bbox[0]
-        draw.text((panel_x + panel_w - page_w - 6, panel_y + 3), page_text, fill=COLOR_LABEL, font=font_small)
+        draw.text((panel_x + panel_w - page_w - 6, panel_y + panel_h - 16), page_text, fill=COLOR_LABEL, font=font_small)
 
-    name_x = panel_x + 6
-    stat_x = panel_x + 128
+    content_h = max(1, panel_h - 28)
+    row_h = max(16, content_h // rows_per_col)
+    col_w = panel_w // 2
+    name_x_left = panel_x + 6
+    metric_x_left = panel_x + 74
+    name_x_right = panel_x + col_w + 6
+    metric_x_right = panel_x + col_w + 74
 
     for idx, item in enumerate(industries):
-        y = row_top + idx * row_height
+        col_idx = idx // rows_per_col
+        row_idx = idx % rows_per_col
+        y = row_top + row_idx * row_h
+        if col_idx == 0:
+            name_x = name_x_left
+            metric_x = metric_x_left
+        else:
+            name_x = name_x_right
+            metric_x = metric_x_right
+
         industry_name = str(item.get('industry', '未知行业'))[:10]
         positive_count = int(item.get('positive_count', 0))
         negative_count = int(item.get('negative_count', 0))
@@ -3304,8 +3429,19 @@ def _draw_industry_panel(
         name_color = _industry_name_color(industry_pnl_amount)
 
         draw.text((name_x, y), industry_name, fill=name_color, font=font_body)
-        summary_line = f"正:{positive_count} 负:{negative_count} 贡献:{contribution_ratio:+.1f}%"
-        draw.text((stat_x, y), summary_line, fill=COLOR_LABEL, font=font_small)
+        _draw_text_segments(
+            draw,
+            metric_x,
+            y,
+            [
+                (f"+{positive_count}", _value_color(float(positive_count))),
+                ("/", COLOR_LABEL),
+                (f"-{negative_count}", _value_color(float(-negative_count))),
+                ("/", COLOR_LABEL),
+                (f"{contribution_ratio:+.1f}%", _value_color(contribution_ratio)),
+            ],
+            font_small,
+        )
 
 
 def _draw_chart_panel(

@@ -676,6 +676,15 @@ def test_build_industry_panel_aggregates_counts_tops_and_contribution(monkeypatc
             "000003.SZ": "电子",
         },
     )
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_levels_mapping",
+        lambda: {
+            "000001.SZ": ("金融", "银行", "城商行"),
+            "000002.SZ": ("金融", "银行", "股份行"),
+            "000003.SZ": ("科技", "电子", "消费电子"),
+        },
+    )
 
     panel = module._build_industry_panel(
         {
@@ -698,6 +707,9 @@ def test_build_industry_panel_aggregates_counts_tops_and_contribution(monkeypatc
     assert panel["total_positive"] == 2
     assert panel["total_negative"] == 1
     assert panel["position_count"] == 3
+    assert panel["l1_industry_count"] == 2
+    assert panel["l2_industry_count"] == 2
+    assert panel["l3_industry_count"] == 3
     bank_item = next(item for item in panel["industries"] if item["industry"] == "银行")
     assert bank_item["positive_count"] == 1
     assert bank_item["negative_count"] == 1
@@ -1207,6 +1219,9 @@ def test_draw_industry_panel_shows_summary_rows_without_top_stock_fields():
         "total_positive": 1,
         "total_negative": 1,
         "position_count": 2,
+        "l1_industry_count": 1,
+        "l2_industry_count": 1,
+        "l3_industry_count": 1,
         "industries": [
             {
                 "industry": "银行",
@@ -1227,9 +1242,11 @@ def test_draw_industry_panel_shows_summary_rows_without_top_stock_fields():
         panel_h=120,
     )
 
-    assert any(text.startswith("行业概览") for text in captured_texts)
+    assert any(text.startswith("行业1/2/3:") for text in captured_texts)
     assert any(text == "银行" for text in captured_texts)
-    assert any("正:1 负:1" in text and "贡献:+12.3%" in text for text in captured_texts)
+    assert any(text == "+1" for text in captured_texts)
+    assert any(text == "-1" for text in captured_texts)
+    assert any(text == "+12.3%" for text in captured_texts)
 
 
 def test_draw_industry_panel_paginates_to_cover_all_industries():
@@ -1240,6 +1257,9 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         "total_positive": 6,
         "total_negative": 6,
         "position_count": 12,
+        "l1_industry_count": 3,
+        "l2_industry_count": 6,
+        "l3_industry_count": 12,
         "industries": [
             {
                 "industry": f"行业{i}",
@@ -1323,7 +1343,7 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
     assert any(text.startswith("页 1/") for text in captured_page_1)
     assert any(text.startswith("页 2/") for text in captured_page_2)
     assert any(text == "行业0" for text in captured_page_1)
-    assert any(text.startswith("页 3/") for text in captured_page_last)
+    assert any(text.startswith("页 2/") for text in captured_page_last)
     assert any(text == "行业11" for text in captured_page_last)
 
 
