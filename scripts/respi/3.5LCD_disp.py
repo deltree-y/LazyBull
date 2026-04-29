@@ -2313,32 +2313,28 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
     try:
         import akshare as ak  # type: ignore
 
-        # 上证/深证保留原先实时源尝试逻辑
-        for getter_name in ('stock_zh_index_spot_em', 'stock_zh_index_spot_sina'):
-            getter = getattr(ak, getter_name, None)
-            if getter is None:
-                _emit_diag_once(
-                    f"akshare_spot_getter_missing::{getter_name}",
-                    f"AKShare实时接口不存在: {getter_name}",
-                    stderr=False,
-                )
-                continue
+        getter_name = 'stock_zh_index_spot_sina'
+        getter = getattr(ak, getter_name, None)
+        if getter is None:
+            _emit_diag_once(
+                f"akshare_spot_getter_missing::{getter_name}",
+                f"AKShare实时接口不存在: {getter_name}",
+                stderr=False,
+            )
+        else:
             try:
                 df = getter()
+                for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
+                    if code in pct_map:
+                        continue
+                    pct = _extract_index_pct_from_akshare(df, code)
+                    if pct is not None:
+                        pct_map[code] = pct
             except Exception as exc:
                 _emit_diag_once(
                     f"akshare_spot_getter_error::{getter_name}",
                     f"AKShare实时接口调用失败: {getter_name} | {type(exc).__name__}: {exc}",
                 )
-                continue
-            for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
-                if code in pct_map:
-                    continue
-                pct = _extract_index_pct_from_akshare(df, code)
-                if pct is not None:
-                    pct_map[code] = pct
-            if SHANGHAI_INDEX_CODE in pct_map and SHENZHEN_INDEX_CODE in pct_map:
-                break
 
         # 中证800按用户要求改走 stock_zh_index_spot
         if CSI800_INDEX_CODE not in pct_map:
@@ -2376,47 +2372,27 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
         )
         return None
 
-    # 优先按用户指定链路：stock_zh_index_spot_sina
-    df = None
     getter_sina = getattr(ak, 'stock_zh_index_spot_sina', None)
-    if getter_sina is not None:
-        try:
-            df = getter_sina()
-        except Exception as exc:
-            _emit_diag_once(
-                "akshare_spot_stock_zh_index_spot_sina_error",
-                f"AKShare实时接口调用失败: stock_zh_index_spot_sina | {type(exc).__name__}: {exc}",
-            )
-            df = None
-    else:
+    if getter_sina is None:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_sina_missing",
-            "AKShare缺少 stock_zh_index_spot_sina 接口，尝试兼容回退",
+            "AKShare缺少 stock_zh_index_spot_sina 接口，无法按指定链路获取中证800实时行情",
         )
+        return None
 
-    # 兼容回退（避免不同 akshare 版本接口差异）
-    if df is None:
-        getter_fallback = getattr(ak, 'stock_zh_index_spot', None)
-        if getter_fallback is not None:
-            try:
-                df = getter_fallback()
-            except Exception as exc:
-                _emit_diag_once(
-                    "akshare_spot_stock_zh_index_spot_error",
-                    f"AKShare实时接口调用失败: stock_zh_index_spot | {type(exc).__name__}: {exc}",
-                )
-                return None
-        else:
-            _emit_diag_once(
-                "akshare_spot_stock_zh_index_spot_missing",
-                "AKShare缺少 stock_zh_index_spot 接口，无法按指定链路获取中证800实时行情",
-            )
-            return None
+    try:
+        df = getter_sina()
+    except Exception as exc:
+        _emit_diag_once(
+            "akshare_spot_stock_zh_index_spot_sina_error",
+            f"AKShare实时接口调用失败: stock_zh_index_spot_sina | {type(exc).__name__}: {exc}",
+        )
+        return None
 
     if df is None or df.empty:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_empty",
-            "AKShare stock_zh_index_spot 返回空数据，无法提取中证800",
+            "AKShare stock_zh_index_spot_sina 返回空数据，无法提取中证800",
         )
         return None
 
@@ -2424,7 +2400,7 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
     if code_col is None:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_code_col_missing",
-            f"AKShare stock_zh_index_spot 缺少代码列，当前列: {list(df.columns)}",
+            f"AKShare stock_zh_index_spot_sina 缺少代码列，当前列: {list(df.columns)}",
         )
         return None
 
@@ -2433,7 +2409,7 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
     if matched.empty:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_000906_missing",
-            "AKShare stock_zh_index_spot 未找到中证800(000906)",
+            "AKShare stock_zh_index_spot_sina 未找到中证800(000906)",
             stderr=False,
         )
         return None
@@ -2443,7 +2419,7 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
     if pct is None:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_pct_missing",
-            "AKShare stock_zh_index_spot 命中000906但缺少涨跌幅字段",
+            "AKShare stock_zh_index_spot_sina 命中000906但缺少涨跌幅字段",
         )
         return None
 
@@ -2451,7 +2427,7 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
     if pct_sanitized is None:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_pct_invalid",
-            f"AKShare stock_zh_index_spot 000906涨跌幅异常: {pct}",
+            f"AKShare stock_zh_index_spot_sina 000906涨跌幅异常: {pct}",
             stderr=False,
         )
     return pct_sanitized

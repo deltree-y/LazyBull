@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.67.5] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 实时指数链路改为仅使用 AKShare 新浪接口** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 上证/深证实时涨跌幅获取改为只调用 `stock_zh_index_spot_sina`，不再尝试 `stock_zh_index_spot_em`
+  - 中证800实时涨跌幅获取改为只调用 `stock_zh_index_spot_sina`，不再回退到 `stock_zh_index_spot`
+  - 相关诊断日志文案同步为新浪单链路，避免误导为东财或回退链路
+
 ## [0.67.4] - 2026-04-29
 
 ### 修复
