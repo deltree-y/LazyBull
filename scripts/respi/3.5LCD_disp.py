@@ -587,7 +587,6 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
                 'positive_count': 0,
                 'negative_count': 0,
                 'pnl_amount': 0.0,
-                'stocks': [],
             },
         )
         item['pnl_amount'] += pnl_amount
@@ -596,25 +595,11 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
         elif pnl_pct < 0:
             item['negative_count'] += 1
 
-        stock_name = str(row.get('NAME', row.get('name', ''))).strip() or ts_code.split('.')[0]
-        item['stocks'].append(
-            {
-                'name': stock_name[:4],
-                'code': ts_code.split('.')[0],
-                'pnl_pct': pnl_pct,
-            }
-        )
-
     if not industry_stats:
         return None
 
     industries = []
     for _, info in industry_stats.items():
-        stocks = info['stocks']
-        positive_stocks = [stock for stock in stocks if stock['pnl_pct'] > 0]
-        negative_stocks = [stock for stock in stocks if stock['pnl_pct'] < 0]
-        top_positive = max(positive_stocks, key=lambda stock: stock['pnl_pct']) if positive_stocks else None
-        top_negative = min(negative_stocks, key=lambda stock: stock['pnl_pct']) if negative_stocks else None
         contribution_ratio = 0.0
         if abs(total_pnl_amount) > 1e-8:
             contribution_ratio = info['pnl_amount'] / total_pnl_amount * 100.0
@@ -626,8 +611,6 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
                 'negative_count': info['negative_count'],
                 'pnl_amount': info['pnl_amount'],
                 'contribution_ratio': contribution_ratio,
-                'top_positive': top_positive,
-                'top_negative': top_negative,
             }
         )
 
@@ -3257,6 +3240,8 @@ def _draw_industry_panel(
     panel_y: int,
     panel_w: int,
     panel_h: int,
+    elapsed_seconds: float = 0.0,
+    duration_seconds: float = CHART_PAGE_INDUSTRY_SECONDS,
 ) -> None:
     """在图表区域绘制行业统计页。"""
     draw.rectangle([panel_x, panel_y, panel_x + panel_w, panel_y + panel_h], fill=COLOR_CHART_BG)
@@ -3279,16 +3264,35 @@ def _draw_industry_panel(
     total_positive = int(industry_panel.get('total_positive', 0))
     total_negative = int(industry_panel.get('total_negative', 0))
     position_count = int(industry_panel.get('position_count', 0))
-    title = f"行业概览  涨:{total_positive}  跌:{total_negative}  持仓:{position_count}"
-    draw.text((panel_x + 6, panel_y + 2), title, fill=COLOR_TEXT, font=font_title)
+    industries_all = list(industry_panel.get('industries', []))
+    total_industries = len(industries_all)
 
     row_top = panel_y + 20
-    row_height = 35
-    max_rows = max(1, (panel_h - 22) // row_height)
-    industries = list(industry_panel.get('industries', []))[:max_rows]
-    left_top_x = panel_x + 6
-    right_top_x = panel_x + panel_w // 2 + 8
-    stat_x = panel_x + 108
+    row_height = 18
+    max_rows = max(1, (panel_h - 24) // row_height)
+    page_count = max(1, (total_industries + max_rows - 1) // max_rows)
+    if duration_seconds > 0:
+        seconds_per_page = max(1.0, duration_seconds / page_count)
+    else:
+        seconds_per_page = 1.0
+    page_idx = int(max(0.0, elapsed_seconds) / seconds_per_page) % page_count
+    start_idx = page_idx * max_rows
+    industries = industries_all[start_idx:start_idx + max_rows]
+
+    title = (
+        f"行业概览 涨:{total_positive} 跌:{total_negative} "
+        f"持仓:{position_count} 行业:{total_industries}"
+    )
+    draw.text((panel_x + 6, panel_y + 2), title, fill=COLOR_TEXT, font=font_title)
+
+    if page_count > 1:
+        page_text = f"页 {page_idx + 1}/{page_count}"
+        bbox = draw.textbbox((0, 0), page_text, font=font_small)
+        page_w = bbox[2] - bbox[0]
+        draw.text((panel_x + panel_w - page_w - 6, panel_y + 3), page_text, fill=COLOR_LABEL, font=font_small)
+
+    name_x = panel_x + 6
+    stat_x = panel_x + 128
 
     for idx, item in enumerate(industries):
         y = row_top + idx * row_height
@@ -3299,20 +3303,9 @@ def _draw_industry_panel(
         industry_pnl_amount = float(item.get('pnl_amount', 0.0))
         name_color = _industry_name_color(industry_pnl_amount)
 
-        draw.text((left_top_x, y), industry_name, fill=name_color, font=font_body)
-        summary_line = f"+{positive_count}/-{negative_count}  贡献:{contribution_ratio:+.1f}%"
+        draw.text((name_x, y), industry_name, fill=name_color, font=font_body)
+        summary_line = f"正:{positive_count} 负:{negative_count} 贡献:{contribution_ratio:+.1f}%"
         draw.text((stat_x, y), summary_line, fill=COLOR_LABEL, font=font_small)
-
-        top_positive = item.get('top_positive')
-        top_negative = item.get('top_negative')
-        top_positive_text = "正TOP1: 无"
-        top_negative_text = "负TOP1: 无"
-        if isinstance(top_positive, dict):
-            top_positive_text = f"正TOP1:{top_positive.get('name', '')}{_fmt_pct(float(top_positive.get('pnl_pct', 0.0)))}"
-        if isinstance(top_negative, dict):
-            top_negative_text = f"负TOP1:{top_negative.get('name', '')}{_fmt_pct(float(top_negative.get('pnl_pct', 0.0)))}"
-        draw.text((left_top_x, y + 16), top_positive_text, fill=COLOR_RED, font=font_small)
-        draw.text((right_top_x, y + 16), top_negative_text, fill=COLOR_GREEN, font=font_small)
 
 
 def _draw_chart_panel(
@@ -3345,7 +3338,16 @@ def _draw_chart_panel(
     content_top = progress_y1 + 2
     content_h = HEIGHT - content_top
     if page_name == "industry":
-        _draw_industry_panel(draw, industry_panel, chart_x, content_top, chart_w, content_h)
+        _draw_industry_panel(
+            draw,
+            industry_panel,
+            chart_x,
+            content_top,
+            chart_w,
+            content_h,
+            elapsed_seconds=elapsed,
+            duration_seconds=duration,
+        )
         return
 
     _draw_chart(

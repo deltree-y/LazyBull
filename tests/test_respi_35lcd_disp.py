@@ -701,8 +701,8 @@ def test_build_industry_panel_aggregates_counts_tops_and_contribution(monkeypatc
     bank_item = next(item for item in panel["industries"] if item["industry"] == "银行")
     assert bank_item["positive_count"] == 1
     assert bank_item["negative_count"] == 1
-    assert bank_item["top_positive"]["code"] == "000001"
-    assert bank_item["top_negative"]["code"] == "000002"
+    assert "top_positive" not in bank_item
+    assert "top_negative" not in bank_item
 
 
 def test_normalize_intraday_chart_drops_abnormal_points():
@@ -1186,7 +1186,7 @@ def test_draw_chart_panel_switches_between_chart_and_industry(monkeypatch):
     assert called == {"chart": 1, "industry": 1}
 
 
-def test_draw_industry_panel_uses_explicit_top_labels_for_positive_and_negative():
+def test_draw_industry_panel_shows_summary_rows_without_top_stock_fields():
     module = _load_module()
     image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
     real_draw = module.ImageDraw.Draw(image)
@@ -1214,8 +1214,6 @@ def test_draw_industry_panel_uses_explicit_top_labels_for_positive_and_negative(
                 "negative_count": 1,
                 "contribution_ratio": 12.3,
                 "pnl_amount": 100.0,
-                "top_positive": {"name": "平安", "pnl_pct": 3.2},
-                "top_negative": {"name": "招商", "pnl_pct": -2.4},
             }
         ],
     }
@@ -1229,9 +1227,104 @@ def test_draw_industry_panel_uses_explicit_top_labels_for_positive_and_negative(
         panel_h=120,
     )
 
-    assert any(text.startswith("正TOP1:") for text in captured_texts)
-    assert any(text.startswith("负TOP1:") for text in captured_texts)
-    assert not any(text.strip() in {"- --", "+--"} for text in captured_texts)
+    assert any(text.startswith("行业概览") for text in captured_texts)
+    assert any(text == "银行" for text in captured_texts)
+    assert any("正:1 负:1" in text and "贡献:+12.3%" in text for text in captured_texts)
+
+
+def test_draw_industry_panel_paginates_to_cover_all_industries():
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    real_draw = module.ImageDraw.Draw(image)
+    panel = {
+        "total_positive": 6,
+        "total_negative": 6,
+        "position_count": 12,
+        "industries": [
+            {
+                "industry": f"行业{i}",
+                "positive_count": 1,
+                "negative_count": 1,
+                "contribution_ratio": float(i),
+                "pnl_amount": float(i),
+            }
+            for i in range(12)
+        ],
+    }
+
+    captured_page_1 = []
+    captured_page_2 = []
+    captured_page_last = []
+
+    class DrawProxyPage1:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            captured_page_1.append(str(text))
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+    class DrawProxyPage2:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            captured_page_2.append(str(text))
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+    class DrawProxyPageLast:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            captured_page_last.append(str(text))
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+    module._draw_industry_panel(
+        DrawProxyPage1(),
+        panel,
+        panel_x=10,
+        panel_y=100,
+        panel_w=460,
+        panel_h=120,
+        elapsed_seconds=0.0,
+        duration_seconds=20.0,
+    )
+    module._draw_industry_panel(
+        DrawProxyPage2(),
+        panel,
+        panel_x=10,
+        panel_y=100,
+        panel_w=460,
+        panel_h=120,
+        elapsed_seconds=10.0,
+        duration_seconds=20.0,
+    )
+    module._draw_industry_panel(
+        DrawProxyPageLast(),
+        panel,
+        panel_x=10,
+        panel_y=100,
+        panel_w=460,
+        panel_h=120,
+        elapsed_seconds=19.0,
+        duration_seconds=20.0,
+    )
+
+    assert any(text.startswith("页 1/") for text in captured_page_1)
+    assert any(text.startswith("页 2/") for text in captured_page_2)
+    assert any(text == "行业0" for text in captured_page_1)
+    assert any(text.startswith("页 3/") for text in captured_page_last)
+    assert any(text == "行业11" for text in captured_page_last)
 
 
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):

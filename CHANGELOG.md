@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.68.1] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 行业页改为“全行业汇总分页显示”，避免仅显示少量行业** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 行业页移除行业内 `TOP1/BOTTOM1` 个股展示，改为仅保留每个行业的 3 项核心信息：
+    - 正收益股票数量
+    - 负收益股票数量
+    - 行业盈利对总盈利的贡献比例
+  - 当持仓行业数量超过单页可显示行数时，行业页在 20 秒展示窗口内自动分页轮播，并显示页码，确保可覆盖全部持仓行业
+  - 行业汇总统计构建阶段同步去除 `TOP` 个股计算，减少无效计算开销
+
+### 测试
+
+- **更新 3.5 寸 LCD 行业页回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 调整行业统计结构断言，移除对 `top_positive/top_negative` 字段依赖
+  - 新增行业页汇总行文案测试（正/负数量与贡献比例）
+  - 新增行业页分页覆盖测试，验证跨页可见全部行业
+
 ## [0.68.0] - 2026-04-29
 
 ### 新增
