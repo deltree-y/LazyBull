@@ -79,7 +79,7 @@ $rank_weight_list        = @(3)     #3
 $time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
 
 # ── 目标函数 ─────────────────────────────────────────────────
-$objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
+$objective_list          = @("lambdarank")  # mse | lambdarank（排序学习，直接优化股票排序）
 
 ###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───

@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.67.0] - 2026-04-29
+
+### 新增
+
+- **树莓派 3.5 寸 LCD 下方图表新增中证800折线（亮白色）并复用盘内/盘外切换策略** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 图表从 3 条线扩展为 4 条线：上证、深证、持仓、中证800，其中中证800折线颜色为亮白色
+  - 刷新频率与既有三条线完全一致，继续复用现有数据线程节奏（盘中实时刷新，盘外按周期补齐）
+  - 显示策略保持一致：盘内显示当日日内线，盘外显示周期日线
+  - 图例横向空间压缩：图例线段缩短，标签统一展示为 `上 / 深 / 持 / 中`
+  - 中证800数据接入 AKShare：
+    - 日线通过 AKShare 拉取并参与周期图构建
+    - 盘中涨跌幅通过 AKShare 现货接口拉取并参与日内图构建
+
+### 测试
+
+- **补充 3.5 寸 LCD 中证800折线回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增周期图 payload 包含 `csi800_pct` 的断言
+  - 新增/更新日内图写入 `raw_csi800_pct` 与 `csi800_pct` 的断言
+  - 更新周期图缓存相关测试，补齐中证800 AKShare 数据 mock
+
 ## [0.66.13] - 2026-04-29
 
 ### 修复

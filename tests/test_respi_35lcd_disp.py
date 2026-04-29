@@ -305,6 +305,24 @@ def test_build_cycle_chart_payload_expands_slots_after_holding_exceeds_period():
     assert payload["x_end_label"] == "04/23"
 
 
+def test_build_cycle_chart_payload_includes_csi800_series():
+    module = _load_module()
+
+    payload = module._build_cycle_chart_payload(
+        dates=[f"202604{day:02d}" for day in range(1, 6)],
+        index_pct=[0.0, 0.5, 1.0, 1.5, 2.0],
+        shenzhen_pct=[0.0, 0.4, 0.8, 1.2, 1.6],
+        csi800_pct=[0.0, 0.3, 0.6, 0.9, 1.2],
+        portfolio_pct=[0.0, 0.2, 0.5, 0.7, 1.0],
+        rebalance_freq=5,
+        base_value=100.0,
+    )
+
+    assert payload is not None
+    assert payload["csi800_pct"] == [0.0, 0.3, 0.6, 0.9, 1.2]
+    assert payload["csi800_label"] == "中证800"
+
+
 def test_upsert_intraday_chart_keeps_every_refresh_point_with_time_based_x_axis():
     module = _load_module()
 
@@ -335,14 +353,32 @@ def test_upsert_intraday_chart_keeps_every_refresh_point_with_time_based_x_axis(
     assert chart["x_positions"] == [0.4, 0.9, 1.1]
     assert chart["raw_index_pct"] == [0.5, 0.8, 1.1]
     assert chart["raw_shenzhen_pct"] == [0.3, 0.6, 0.9]
+    assert chart["raw_csi800_pct"] == [0.3, 0.6, 0.9]
     assert chart["raw_portfolio_pct"] == [1.2, 1.5, 1.8]
     assert chart["index_pct"] == [0.5, 0.8, 1.1]
     assert chart["shenzhen_pct"] == [0.3, 0.6, 0.9]
+    assert chart["csi800_pct"] == [0.3, 0.6, 0.9]
     assert chart["portfolio_pct"] == [1.2, 1.5, 1.8]
     assert chart["x_start_label"] == "09:30"
     assert chart["x_end_label"] == "15:00"
     assert chart["portfolio_label"] == "持仓"
     assert chart["shenzhen_label"] == "深证"
+
+
+def test_upsert_intraday_chart_accepts_explicit_csi800_pct():
+    module = _load_module()
+
+    chart = module._upsert_intraday_chart(
+        None,
+        datetime(2026, 4, 7, 9, 34, 0),
+        index_pct=0.5,
+        shenzhen_pct=0.3,
+        portfolio_pct=1.2,
+        csi800_pct=0.4,
+    )
+
+    assert chart["raw_csi800_pct"] == [0.4]
+    assert chart["csi800_pct"] == [0.4]
 
 
 def test_intraday_slots_collapse_lunch_break_into_continuous_line():
@@ -851,6 +887,7 @@ def test_build_intraday_chart_uses_snapshot_quote_time_after_close(monkeypatch):
         lambda snapshot=None: {
             module.SHANGHAI_INDEX_CODE: 0.1,
             module.SHENZHEN_INDEX_CODE: 0.2,
+            module.CSI800_INDEX_CODE: 0.15,
         },
     )
     monkeypatch.setattr(module, "_compute_holdings_intraday_pct", lambda snapshot: 0.3)
@@ -1296,6 +1333,14 @@ def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkey
     monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
     monkeypatch.setattr(
         module,
+        "_fetch_csi800_daily_close_map_akshare",
+        lambda start_date, end_date: {
+            "20260401": 5000.0,
+            "20260407": 5050.0,
+        },
+    )
+    monkeypatch.setattr(
+        module,
         "_get_target_cycle_data_date",
         lambda now=None, allow_load=False: "20260407",
     )
@@ -1353,6 +1398,21 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
 
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
     monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    csi800_calls = {"value": 0}
+
+    def _fake_fetch_csi800_daily_close_map_akshare(start_date: str, end_date: str):
+        csi800_calls["value"] += 1
+        if csi800_calls["value"] == 1:
+            return {
+                "20260401": 5000.0,
+                "20260407": 5050.0,
+            }
+        return {
+            "20260401": 5000.0,
+            "20260408": 5100.0,
+        }
+
+    monkeypatch.setattr(module, "_fetch_csi800_daily_close_map_akshare", _fake_fetch_csi800_daily_close_map_akshare)
     monkeypatch.setattr(
         module,
         "_get_target_cycle_data_date",
