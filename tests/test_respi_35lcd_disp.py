@@ -43,6 +43,36 @@ def test_format_quote_update_time_prefers_quote_time_hour_and_minute():
 
     assert formatted == "11:30"
 
+
+def test_pick_fitting_font_shrinks_annual_return_when_text_is_too_wide(monkeypatch):
+    module = _load_module()
+
+    class _FakeDraw:
+        @staticmethod
+        def textbbox(_xy, text, font):
+            width = len(text) * font["size"]
+            return (0, 0, width, font["size"])
+
+    monkeypatch.setattr(module, "_get_font", lambda size: {"size": size})
+
+    fitted_font = module._pick_fitting_font(
+        _FakeDraw(),
+        "+123.4%",
+        preferred_size=24,
+        min_size=16,
+        max_width=120,
+    )
+    default_font = module._pick_fitting_font(
+        _FakeDraw(),
+        "+9.9%",
+        preferred_size=24,
+        min_size=16,
+        max_width=120,
+    )
+
+    assert fitted_font["size"] == 17
+    assert default_font["size"] == 24
+
 def test_format_error_lines_truncates_message_for_screen():
     module = _load_module()
 

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.66.13] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 的年化收益超长时会自动缩小字号** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 左侧总览面板里的“年化收益”不再固定使用 24 号字体，而是按当前列宽自适应挑选可容纳的字号
+  - 当收益率达到 `+123.4%` 这类 3 位数以上场景时，会自动降到更小字号，避免数值越过单元格右边界
+
+### 测试
+
+- **补充 3.5 寸 LCD 年化收益缩字回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 校验 `_pick_fitting_font()` 在 `+123.4%` 这类超宽文本下会返回更小字号，而普通宽度文本仍保持默认字号
+
 ## [0.66.12] - 2026-04-26
 
 ### 修复

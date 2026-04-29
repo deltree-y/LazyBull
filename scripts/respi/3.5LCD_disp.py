@@ -159,6 +159,27 @@ def _get_font(size: int) -> ImageFont.FreeTypeFont:
     return _font_cache[size]
 
 
+def _pick_fitting_font(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    preferred_size: int,
+    min_size: int,
+    max_width: int,
+) -> ImageFont.FreeTypeFont:
+    """按最大可用宽度选择字号，优先保留较大的字体。"""
+    if max_width <= 0:
+        return _get_font(preferred_size)
+
+    for size in range(preferred_size, min_size - 1, -1):
+        font = _get_font(size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        if text_width <= max_width:
+            return font
+
+    return _get_font(min_size)
+
+
 # ---------- 格式化工具 ----------
 
 def _fmt_wan(value: float) -> str:
@@ -2543,6 +2564,15 @@ def _render(state: DisplayState) -> None:
         col_w = LEFT_W // 3
         pad = 7
         row_h = (PANEL_H - 2 * pad) // 2
+        annual_return_text = _fmt_pct(ann_pct)
+        annual_return_font = _pick_fitting_font(
+            draw,
+            annual_return_text,
+            preferred_size=24,
+            min_size=16,
+            max_width=col_w - pad - 4,
+        )
+
         cells = [
             # (行, 列, 标签, 值, 颜色, 值字体)
             (0, 0, "持仓市值", _fmt_wan(mkt_val), COLOR_TEXT, font_val),
@@ -2550,7 +2580,7 @@ def _render(state: DisplayState) -> None:
             (0, 2, "持仓/仓位", f"{pos_count}/{pos_ratio}%", COLOR_TEXT, font_val_sm),
             (1, 0, "总资产", _fmt_wan(total_ast), COLOR_TEXT, font_val),
             (1, 1, "总盈亏率", _fmt_pct(gain_pct), _pct_color(gain_pct), font_val),
-            (1, 2, "年化收益", _fmt_pct(ann_pct), _pct_color(ann_pct), font_val),
+            (1, 2, "年化收益", annual_return_text, _pct_color(ann_pct), annual_return_font),
         ]
         content_h = 15 + 24  # 标签到数值间距 + 数值字体高度
         v_pad = (row_h - content_h) // 2  # 行内垂直居中偏移

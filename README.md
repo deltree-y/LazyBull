@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.66.12)
+### 当前版本 (v0.66.13)
+
+**树莓派 3.5 寸 LCD 的年化收益会按宽度自动缩小字号** (v0.66.13):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 现在只对左侧总览面板的“年化收益”单元格启用宽度自适应字号；当数值像 `+123.4%` 这样超过当前列宽时，会自动下调字号，避免文字伸出格子
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 新增回归测试，约束超宽收益率文本会触发缩字，而普通宽度场景仍保留默认字号
 
 **paper 空账户会自动对齐当前初始资金，避免 45w/50w 双基准** (v0.66.12):
 - [src/lazybull/paper/account.py](src/lazybull/paper/account.py) 在加载“无持仓且 last_update 为空”的空账户状态时，会检查现金与当前配置 `initial_capital` 是否一致；不一致会自动同步并保存

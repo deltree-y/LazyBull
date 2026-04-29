@@ -58,7 +58,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators_list       = @(1500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.006,0.012,0.015)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.015)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -72,8 +72,8 @@ $early_stopping_metric   = "auto"       # 早停指标：auto（mae/auc）| rank
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(50)
-$rank_weight_list        = @(3)
+$rank_weight_topk_list   = @(50)         #50
+$rank_weight_list        = @(3)     #3
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
 $time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
@@ -84,18 +84,22 @@ $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接�
 ###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
 $enable_fundamental      = $true  # $true 启用 | $false 禁用
+# 0428:关闭后CAGR下降约3%, 回撤增加约2%
 
 # ── 另类数据因子（股东人数、业绩预告等）(0310添加)──────────────────
 $enable_alt              = $true  # $true 启用 | $false 禁用
 
 # ── 融资融券因子（通过 margin_detail 接口下载）────────────────────
 $enable_margin           = $true  # $true 启用 | $false 禁用
+# 0428:关闭后CAGR下降约3%, 回撤基本不变
 
 # ── 筹码胜率因子（需5000+积分，需先下载 cyq_perf）─────────────────
 $enable_cyq              = $true  # $true 启用 | $false 禁用
+# 0428:关闭后CAGR下降约3%, 回撤基本不变
 
 # ── 基金持仓因子（需5000+积分，需先下载 fund_portfolio）──────────
-$enable_fund             = $true  # $true 启用 | $false 禁用
+$enable_fund             = $false  # $true 启用 | $false 禁用
+#改为false似乎可以提升少量收益并减少少量回撤, 并提升稳定效果
 
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
 $enable_express          = $true  # $true 启用 | $false 禁用
@@ -122,7 +126,7 @@ $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3�
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
 $enable_enhanced           = $true # $true 启用 | $false 禁用
-#关闭后CAGR下降约8%, 回撤上升约4%
+# 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $true   # $true 启用 | $false 禁用
