@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.68.6)
+### 当前版本 (v0.68.7)
+
+**树莓派 3.5 寸 LCD 行业页贡献口径与零值配色优化** (v0.68.7):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 行业贡献比例新增口径标记：盘外 `cycle_total_pnl`、盘内 `intraday_total_pnl`
+- 行业页在盘内模式下明确按当日总盈亏计算贡献比例，盘外模式继续按持仓周期总盈亏计算
+- 行业页 `0` 值（行业名/明细数值）由白色调整为浅灰，降低“0”视觉突兀感
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 新增对应口径与配色回归测试
 
 **树莓派 3.5 寸 LCD 行业页补齐盘内/盘外双口径统计** (v0.68.6):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 行业统计新增双口径：盘外继续按持仓周期（买入成本）计算，盘内改为按当日口径（昨收）计算

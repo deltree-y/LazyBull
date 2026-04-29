@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.68.7] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 行业页贡献口径与零值配色优化** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 行业贡献比例新增口径标记：
+    - `cycle_total_pnl`（盘外/持仓周期总盈亏）
+    - `intraday_total_pnl`（盘内当日总盈亏）
+  - 盘内行业页贡献比例明确按“当日总盈亏”计算，盘外继续按“持仓周期总盈亏”计算
+  - 行业页 `0` 值配色由白色调整为更柔和的浅灰色，降低视觉刺眼感（行业名与明细数值统一）
+
+### 测试
+
+- **更新 3.5 寸 LCD 行业口径与颜色回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `_value_color` 的零值浅灰断言
+  - 新增盘内/盘外贡献比例基准口径断言
+
 ## [0.68.6] - 2026-04-29
 
 ### 修复

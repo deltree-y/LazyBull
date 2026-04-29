@@ -58,12 +58,20 @@ def test_get_chart_panel_cycle_state_follows_40_20_ratio():
     assert duration == 30.0
 
 
-def test_industry_name_color_uses_red_green_white_by_contribution_sign():
+def test_industry_name_color_uses_red_green_light_gray_by_contribution_sign():
     module = _load_module()
 
     assert module._industry_name_color(10.0) == module.COLOR_RED
     assert module._industry_name_color(-0.5) == module.COLOR_GREEN
-    assert module._industry_name_color(0.0) == module.COLOR_TEXT
+    assert module._industry_name_color(0.0) == module.COLOR_NEUTRAL
+
+
+def test_value_color_uses_light_gray_for_zero():
+    module = _load_module()
+
+    assert module._value_color(1.0) == module.COLOR_RED
+    assert module._value_color(-1.0) == module.COLOR_GREEN
+    assert module._value_color(0.0) == module.COLOR_NEUTRAL
 
 
 def test_pick_fitting_font_shrinks_annual_return_when_text_is_too_wide(monkeypatch):
@@ -770,6 +778,54 @@ def test_build_industry_panel_intraday_uses_pre_close_instead_of_buy_price(monke
     assert round(cycle_panel["total_pnl_amount"], 4) == 100.0
     # 盘内口径: (11-12)*100
     assert round(intraday_panel["total_pnl_amount"], 4) == -100.0
+
+
+def test_build_industry_panel_intraday_contribution_uses_intraday_total(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_industry_mapping",
+        lambda: {"000001.SZ": "银行", "000002.SZ": "电子"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_levels_mapping",
+        lambda: {
+            "000001.SZ": ("金融", "银行", "城商行"),
+            "000002.SZ": ("科技", "电子", "半导体"),
+        },
+    )
+
+    snapshot = {
+        "positions": {
+            "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+            "000002.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+        },
+        "quotes": pd.DataFrame(
+            [
+                {"TS_CODE": "000001.SZ", "PRICE": 11.0, "PRE_CLOSE": 12.0},
+                {"TS_CODE": "000002.SZ", "PRICE": 10.5, "PRE_CLOSE": 10.0},
+            ]
+        ),
+    }
+
+    cycle_panel = module._build_industry_panel(snapshot, mode="cycle")
+    intraday_panel = module._build_industry_panel(snapshot, mode="intraday")
+
+    assert cycle_panel is not None
+    assert intraday_panel is not None
+    assert cycle_panel["contribution_basis"] == "cycle_total_pnl"
+    assert intraday_panel["contribution_basis"] == "intraday_total_pnl"
+
+    cycle_by_industry = {item["industry"]: item for item in cycle_panel["industries"]}
+    intraday_by_industry = {item["industry"]: item for item in intraday_panel["industries"]}
+
+    assert round(cycle_panel["total_pnl_amount"], 4) == 150.0
+    assert round(intraday_panel["total_pnl_amount"], 4) == -50.0
+    assert round(cycle_by_industry["金融"]["contribution_ratio"], 1) == 66.7
+    assert round(cycle_by_industry["科技"]["contribution_ratio"], 1) == 33.3
+    assert round(intraday_by_industry["金融"]["contribution_ratio"], 1) == 200.0
+    assert round(intraday_by_industry["科技"]["contribution_ratio"], 1) == -100.0
 
 
 def test_normalize_intraday_chart_drops_abnormal_points():

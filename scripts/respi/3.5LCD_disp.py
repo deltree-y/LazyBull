@@ -114,6 +114,7 @@ COLOR_HEADER_BG = (30, 30, 50)     # 顶栏背景
 COLOR_FOOTER_BG = (30, 30, 50)     # 底栏背景
 COLOR_TEXT = (220, 220, 220)       # 主文字
 COLOR_LABEL = (140, 140, 160)      # 标签文字（灰色）
+COLOR_NEUTRAL = (188, 192, 206)    # 中性数值（浅灰，弱化 0 值视觉）
 COLOR_GREEN = (50, 205, 50)        # 涨 / 正收益
 COLOR_RED = (220, 50, 50)          # 跌 / 负收益
 COLOR_YELLOW = (170, 130, 255)     # 强调色（上证折线）
@@ -527,12 +528,12 @@ def _get_shenwan_industry_mapping() -> dict[str, str]:
 
 
 def _industry_name_color(contribution_pnl: float) -> tuple[int, int, int]:
-    """行业贡献为正红、负绿、零白。"""
+    """行业贡献为正红、负绿、零浅灰。"""
     if contribution_pnl > 0:
         return COLOR_RED
     if contribution_pnl < 0:
         return COLOR_GREEN
-    return COLOR_TEXT
+    return COLOR_NEUTRAL
 
 
 def _get_shenwan_levels_mapping() -> dict[str, tuple[str, str, str]]:
@@ -596,12 +597,12 @@ def _draw_text_segments(
 
 
 def _value_color(value: float) -> tuple[int, int, int]:
-    """正红负绿零白。"""
+    """正红负绿零浅灰。"""
     if value > 0:
         return COLOR_RED
     if value < 0:
         return COLOR_GREEN
-    return COLOR_TEXT
+    return COLOR_NEUTRAL
 
 
 def _build_industry_panel(snapshot: Optional[dict], mode: str = "cycle") -> Optional[dict]:
@@ -730,9 +731,11 @@ def _build_industry_panel_from_prices(
         return None
 
     industries = []
+    contribution_basis = "intraday_total_pnl" if mode == "intraday" else "cycle_total_pnl"
     for _, info in industry_stats.items():
         contribution_ratio = 0.0
         if abs(total_pnl_amount) > 1e-8:
+            # 盘内口径按当日总盈亏，盘外口径按持仓周期总盈亏；均由 mode 对应的 total_pnl_amount 提供。
             contribution_ratio = info['pnl_amount'] / total_pnl_amount * 100.0
 
         industries.append(
@@ -752,6 +755,7 @@ def _build_industry_panel_from_prices(
         'total_negative': total_negative,
         'position_count': len(positions),
         'total_pnl_amount': total_pnl_amount,
+        'contribution_basis': contribution_basis,
         'l1_industry_count': len(l1_set),
         'l2_industry_count': len(l2_set),
         'l3_industry_count': len(l3_set),
