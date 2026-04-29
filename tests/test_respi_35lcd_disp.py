@@ -44,6 +44,28 @@ def test_format_quote_update_time_prefers_quote_time_hour_and_minute():
     assert formatted == "11:30"
 
 
+def test_get_chart_panel_cycle_state_follows_40_20_ratio():
+    module = _load_module()
+
+    page, elapsed, duration = module._get_chart_panel_cycle_state(now_ts=5.0)
+    assert page == "chart"
+    assert elapsed == 5.0
+    assert duration == 40.0
+
+    page, elapsed, duration = module._get_chart_panel_cycle_state(now_ts=45.0)
+    assert page == "industry"
+    assert elapsed == 5.0
+    assert duration == 20.0
+
+
+def test_industry_name_color_uses_red_green_white_by_contribution_sign():
+    module = _load_module()
+
+    assert module._industry_name_color(10.0) == module.COLOR_RED
+    assert module._industry_name_color(-0.5) == module.COLOR_GREEN
+    assert module._industry_name_color(0.0) == module.COLOR_TEXT
+
+
 def test_pick_fitting_font_shrinks_annual_return_when_text_is_too_wide(monkeypatch):
     module = _load_module()
 
@@ -643,6 +665,46 @@ def test_compute_holdings_intraday_pct_falls_back_to_pre_close_for_invalid_price
     assert round(pct, 4) == round(((10.0 * 100 + 22.0 * 100) / (10.0 * 100 + 20.0 * 100) - 1) * 100, 4)
 
 
+def test_build_industry_panel_aggregates_counts_tops_and_contribution(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_industry_mapping",
+        lambda: {
+            "000001.SZ": "银行",
+            "000002.SZ": "银行",
+            "000003.SZ": "电子",
+        },
+    )
+
+    panel = module._build_industry_panel(
+        {
+            "positions": {
+                "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                "000002.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                "000003.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+            },
+            "quotes": pd.DataFrame(
+                [
+                    {"TS_CODE": "000001.SZ", "NAME": "平安银行", "PRICE": 11.0, "PRE_CLOSE": 10.5},
+                    {"TS_CODE": "000002.SZ", "NAME": "招商银行", "PRICE": 9.0, "PRE_CLOSE": 9.5},
+                    {"TS_CODE": "000003.SZ", "NAME": "立讯精密", "PRICE": 10.5, "PRE_CLOSE": 10.2},
+                ]
+            ),
+        }
+    )
+
+    assert panel is not None
+    assert panel["total_positive"] == 2
+    assert panel["total_negative"] == 1
+    assert panel["position_count"] == 3
+    bank_item = next(item for item in panel["industries"] if item["industry"] == "银行")
+    assert bank_item["positive_count"] == 1
+    assert bank_item["negative_count"] == 1
+    assert bank_item["top_positive"]["code"] == "000001"
+    assert bank_item["top_negative"]["code"] == "000002"
+
+
 def test_normalize_intraday_chart_drops_abnormal_points():
     module = _load_module()
 
@@ -1022,8 +1084,8 @@ def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
     monkeypatch.setattr(module, "_format_cycle_last_data_label", lambda chart: "数据日:04/07")
     monkeypatch.setattr(
         module,
-        "_draw_chart",
-        lambda draw, chart_data, cycle_last_data_label=None: captured.update(
+        "_draw_chart_panel",
+        lambda draw, chart_data, cycle_last_data_label=None, industry_panel=None: captured.update(
             {"mode": chart_data.get("mode"), "label": cycle_last_data_label}
         ),
     )
@@ -1073,13 +1135,55 @@ def test_render_shows_updating_text_and_new_rebalance_status(monkeypatch):
 
     monkeypatch.setattr(module.ImageDraw, "Draw", lambda img: DrawProxy())
     monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: None)
-    monkeypatch.setattr(module, "_draw_chart", lambda draw, chart_data, cycle_last_data_label=None: None)
+    monkeypatch.setattr(
+        module,
+        "_draw_chart_panel",
+        lambda draw, chart_data, cycle_last_data_label=None, industry_panel=None: None,
+    )
     monkeypatch.setattr(module, "_write_fb", lambda img: None)
 
     module._render(state)
 
     assert "更新中..." in captured_texts
     assert "下次调仓:04/10/剩2天" in captured_texts
+
+
+def test_draw_chart_panel_switches_between_chart_and_industry(monkeypatch):
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    draw = module.ImageDraw.Draw(image)
+    called = {"chart": 0, "industry": 0}
+
+    monkeypatch.setattr(
+        module,
+        "_draw_chart",
+        lambda *args, **kwargs: called.__setitem__("chart", called["chart"] + 1),
+    )
+    monkeypatch.setattr(
+        module,
+        "_draw_industry_panel",
+        lambda *args, **kwargs: called.__setitem__("industry", called["industry"] + 1),
+    )
+
+    monkeypatch.setattr(module, "_get_chart_panel_cycle_state", lambda now_ts=None: ("chart", 10.0, 40.0))
+    module._draw_chart_panel(
+        draw,
+        {
+            "dates": ["20260407"],
+            "index_pct": [0.1],
+            "shenzhen_pct": [0.1],
+            "portfolio_pct": [0.1],
+            "slot_indices": [0],
+            "slot_count": 2,
+        },
+        None,
+        None,
+    )
+
+    monkeypatch.setattr(module, "_get_chart_panel_cycle_state", lambda now_ts=None: ("industry", 5.0, 20.0))
+    module._draw_chart_panel(draw, None, None, {"industries": []})
+
+    assert called == {"chart": 1, "industry": 1}
 
 
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):
@@ -1544,6 +1648,12 @@ def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
     )
     monkeypatch.setattr(
         module,
+        "_build_industry_panel",
+        lambda payload: seen_snapshots.append(("industry", payload))
+        or {"industries": [{"industry": "银行"}]},
+    )
+    monkeypatch.setattr(
+        module,
         "_build_intraday_chart",
         lambda chart_data, payload, point_time=None: seen_snapshots.append(("intraday", payload))
         or {"mode": "intraday", "dates": ["09:32"]},
@@ -1554,10 +1664,11 @@ def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
     module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
 
     assert fetch_calls == [True]
-    assert [name for name, _ in seen_snapshots] == ["summary", "intraday", "rank"]
+    assert [name for name, _ in seen_snapshots] == ["summary", "intraday", "rank", "industry"]
     assert all(payload is snapshot for _, payload in seen_snapshots)
     assert state.summary is not None
     assert state.stock_rankings == [{"name": "平安", "code": "000001", "pnl_pct": 10.0}]
+    assert state.industry_panel == {"industries": [{"industry": "银行"}]}
     assert state.intraday_chart_data == {"mode": "intraday", "dates": ["09:32"]}
     assert state.next_rebalance_date == "20260410"
     assert state.days_to_rebalance == 3

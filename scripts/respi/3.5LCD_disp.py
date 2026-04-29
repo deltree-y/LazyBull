@@ -47,7 +47,13 @@ sys.path.insert(0, str(scripts_dir))
 
 # ---------- 项目日志 ----------
 from src.lazybull.common.logger import setup_logger  # noqa: E402
-from src.lazybull.common.config import get_config, get_data_root, get_paper_root    # noqa: E402
+from src.lazybull.common.config import (  # noqa: E402
+    get_config,
+    get_data_root,
+    get_paper_root,
+    get_shenwan_level,
+)
+from src.lazybull.portfolio.industry_constraint import load_industry_mapping  # noqa: E402
 from respi.set_backlight import cleanup_backlight_state as _cleanup_backlight_state_helper  # noqa: E402
 from respi.set_backlight import get_pwm_hardware_note as _get_pwm_hardware_note_helper  # noqa: E402
 from respi.set_backlight import set_backlight as _set_backlight_helper  # noqa: E402
@@ -95,6 +101,10 @@ SHENZHEN_INDEX_CODE = "399001.SZ"
 CSI800_INDEX_CODE = "000906.SH"
 INTRADAY_CHART_STATE_DIRNAME = "respi_35lcd_intraday"
 DIAG_LOG_FILENAME = "respi_35lcd_runtime.log"
+CHART_PAGE_CHART_SECONDS = 40.0
+CHART_PAGE_INDUSTRY_SECONDS = 20.0
+CHART_PAGE_CYCLE_SECONDS = CHART_PAGE_CHART_SECONDS + CHART_PAGE_INDUSTRY_SECONDS
+CHART_PROGRESS_BAR_H = 3
 
 WEEKDAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
@@ -114,6 +124,8 @@ COLOR_CHART_BG = (22, 22, 38)      # 图表背景
 COLOR_CHART_GRID = (45, 45, 65)    # 图表网格线
 COLOR_CHART_BREAK = (78, 88, 108)  # 午休分隔标记
 COLOR_CHART_ZERO_LINE = (140, 135, 120)  # 0%参考线
+COLOR_PROGRESS_BAR_BG = (36, 40, 60)
+COLOR_PROGRESS_BAR_FILL = (240, 184, 72)
 COLOR_PANEL_LEFT = (25, 28, 48)    # 左面板背景（偏蓝）
 COLOR_PANEL_RIGHT = (28, 35, 38)   # 右面板背景（偏青）
 COLOR_CHART_SHANGHAI = COLOR_YELLOW
@@ -129,6 +141,8 @@ COLOR_USAGE_BAR_HIGH = (225, 95, 95)
 
 _diag_lock = threading.Lock()
 _diag_once_keys: set[str] = set()
+_industry_mapping_cache_lock = threading.Lock()
+_industry_mapping_cache: dict[str, dict[str, str]] = {}
 
 
 # ---------- 字体加载（带缓存）----------
@@ -468,6 +482,164 @@ def _format_quote_update_time(summary: Optional[dict]) -> Optional[str]:
         return None
 
     return f"{int(hour_text):02d}:{int(minute_text):02d}"
+
+
+def _get_chart_panel_cycle_state(now_ts: Optional[float] = None) -> tuple[str, float, float]:
+    """返回图表区轮播页状态。"""
+    current_ts = now_ts if now_ts is not None else time.monotonic()
+    phase = current_ts % CHART_PAGE_CYCLE_SECONDS
+    if phase < CHART_PAGE_CHART_SECONDS:
+        return "chart", phase, CHART_PAGE_CHART_SECONDS
+    elapsed = phase - CHART_PAGE_CHART_SECONDS
+    return "industry", elapsed, CHART_PAGE_INDUSTRY_SECONDS
+
+
+def _get_shenwan_industry_mapping() -> dict[str, str]:
+    """按配置的申万主口径获取 ts_code -> 行业名称映射（带进程内缓存）。"""
+    shenwan_level = get_shenwan_level()
+
+    with _industry_mapping_cache_lock:
+        cached_mapping = _industry_mapping_cache.get(shenwan_level)
+    if cached_mapping is not None:
+        return cached_mapping
+
+    try:
+        from src.lazybull.data import DataLoader, Storage
+
+        loader = DataLoader(storage=Storage(root_path=get_data_root()))
+        shenwan_industry = loader.load_shenwan_industry()
+        if shenwan_industry is None or shenwan_industry.empty:
+            mapping: dict[str, str] = {}
+        else:
+            mapping = load_industry_mapping(
+                shenwan_industry=shenwan_industry,
+                verbose=False,
+                shenwan_level=shenwan_level,
+            )
+    except Exception:
+        mapping = {}
+
+    with _industry_mapping_cache_lock:
+        _industry_mapping_cache[shenwan_level] = mapping
+    return mapping
+
+
+def _industry_name_color(contribution_pnl: float) -> tuple[int, int, int]:
+    """行业贡献为正红、负绿、零白。"""
+    if contribution_pnl > 0:
+        return COLOR_RED
+    if contribution_pnl < 0:
+        return COLOR_GREEN
+    return COLOR_TEXT
+
+
+def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
+    """基于实时持仓快照构建行业统计面板数据。"""
+    if snapshot is None:
+        return None
+
+    positions = snapshot.get('positions', {})
+    rt_df = snapshot.get('quotes')
+    if rt_df is None or rt_df.empty or not positions:
+        return None
+
+    industry_mapping = _get_shenwan_industry_mapping()
+    industry_stats: dict[str, dict] = {}
+    total_positive = 0
+    total_negative = 0
+    total_pnl_amount = 0.0
+
+    for _, row in rt_df.iterrows():
+        ts_code = str(row.get('TS_CODE', row.get('ts_code', ''))).strip()
+        if not ts_code:
+            continue
+        pos = positions.get(ts_code)
+        if pos is None or getattr(pos, 'buy_price', 0) <= 0:
+            continue
+
+        current_price = _normalize_intraday_price(
+            row.get('PRICE', row.get('price')),
+            row.get('PRE_CLOSE', row.get('pre_close')),
+            INTRADAY_STOCK_PCT_ABS_LIMIT,
+        )
+        if current_price is None:
+            continue
+
+        shares = _coerce_float(getattr(pos, 'shares', 0))
+        buy_price = _coerce_float(getattr(pos, 'buy_price', 0))
+        if shares is None or buy_price is None or shares <= 0 or buy_price <= 0:
+            continue
+
+        pnl_pct = (current_price - buy_price) / buy_price * 100.0
+        pnl_amount = (current_price - buy_price) * shares
+        total_pnl_amount += pnl_amount
+
+        if pnl_pct > 0:
+            total_positive += 1
+        elif pnl_pct < 0:
+            total_negative += 1
+
+        industry_name = industry_mapping.get(ts_code, '未知行业')
+        item = industry_stats.setdefault(
+            industry_name,
+            {
+                'industry': industry_name,
+                'positive_count': 0,
+                'negative_count': 0,
+                'pnl_amount': 0.0,
+                'stocks': [],
+            },
+        )
+        item['pnl_amount'] += pnl_amount
+        if pnl_pct > 0:
+            item['positive_count'] += 1
+        elif pnl_pct < 0:
+            item['negative_count'] += 1
+
+        stock_name = str(row.get('NAME', row.get('name', ''))).strip() or ts_code.split('.')[0]
+        item['stocks'].append(
+            {
+                'name': stock_name[:4],
+                'code': ts_code.split('.')[0],
+                'pnl_pct': pnl_pct,
+            }
+        )
+
+    if not industry_stats:
+        return None
+
+    industries = []
+    for _, info in industry_stats.items():
+        stocks = info['stocks']
+        positive_stocks = [stock for stock in stocks if stock['pnl_pct'] > 0]
+        negative_stocks = [stock for stock in stocks if stock['pnl_pct'] < 0]
+        top_positive = max(positive_stocks, key=lambda stock: stock['pnl_pct']) if positive_stocks else None
+        top_negative = min(negative_stocks, key=lambda stock: stock['pnl_pct']) if negative_stocks else None
+        contribution_ratio = 0.0
+        if abs(total_pnl_amount) > 1e-8:
+            contribution_ratio = info['pnl_amount'] / total_pnl_amount * 100.0
+
+        industries.append(
+            {
+                'industry': info['industry'],
+                'positive_count': info['positive_count'],
+                'negative_count': info['negative_count'],
+                'pnl_amount': info['pnl_amount'],
+                'contribution_ratio': contribution_ratio,
+                'top_positive': top_positive,
+                'top_negative': top_negative,
+            }
+        )
+
+    industries.sort(key=lambda item: (abs(item['pnl_amount']), item['industry']), reverse=True)
+
+    return {
+        'total_positive': total_positive,
+        'total_negative': total_negative,
+        'position_count': len(positions),
+        'total_pnl_amount': total_pnl_amount,
+        'industries': industries,
+    }
 
 
 def _format_rebalance_status(next_rebalance_date: Optional[str], days_to_rebalance: Optional[int]) -> str:
@@ -2608,6 +2780,14 @@ def _refresh_display_state(
         except Exception:
             pass
 
+        try:
+            industry_panel = _build_industry_panel(holdings_snapshot)
+            if industry_panel is not None:
+                with state.lock:
+                    state.industry_panel = industry_panel
+        except Exception:
+            pass
+
     try:
         next_rebalance_date, days_to_rebalance = _calc_rebalance_status()
         with state.lock:
@@ -2648,6 +2828,7 @@ class DisplayState:
         self.chart_data: Optional[dict] = None
         self.intraday_chart_data: Optional[dict] = _load_intraday_chart()
         self.stock_rankings: Optional[list] = None  # 个股盈亏排名
+        self.industry_panel: Optional[dict] = None  # 行业收益统计
         self.cpu_usage_pct: float = 0.0
         self.memory_usage_pct: float = 0.0
         self.cpu_usage_sample: Optional[tuple[int, int]] = None
@@ -2706,6 +2887,7 @@ def _render(state: DisplayState) -> None:
         cycle_chart_data = state.chart_data
         intraday_chart_data = state.intraday_chart_data
         rankings = state.stock_rankings
+        industry_panel = getattr(state, 'industry_panel', None)
         ox = state.offset_x
         oy = state.offset_y
 
@@ -2855,7 +3037,7 @@ def _render(state: DisplayState) -> None:
     cycle_last_data_label = None
     if chart_data is not None and chart_data.get('mode') == 'cycle':
         cycle_last_data_label = _format_cycle_last_data_label(cycle_chart_data)
-    _draw_chart(draw, chart_data, cycle_last_data_label)
+    _draw_chart_panel(draw, chart_data, cycle_last_data_label, industry_panel)
 
     _write_fb(img)
 
@@ -2864,14 +3046,17 @@ def _draw_chart(
     draw: ImageDraw.ImageDraw,
     chart_data: Optional[dict],
     cycle_last_data_label: Optional[str] = None,
+    chart_top: int = CHART_Y,
+    chart_height: int = CHART_H,
 ) -> None:
     """绘制持仓周期图或盘中图。"""
+    chart_height = max(40, int(chart_height))
     chart_x = 10
     chart_w = WIDTH - 20
     font_xs = _get_font(11)
 
     # 图表区背景
-    draw.rectangle([chart_x, CHART_Y, chart_x + chart_w, CHART_Y + CHART_H],
+    draw.rectangle([chart_x, chart_top, chart_x + chart_w, chart_top + chart_height],
                    fill=COLOR_CHART_BG)
 
     if not chart_data:
@@ -2879,7 +3064,7 @@ def _draw_chart(
         txt = "暂无图表数据"
         bbox = draw.textbbox((0, 0), txt, font=_get_font(14))
         tw = bbox[2] - bbox[0]
-        draw.text(((WIDTH - tw) // 2, CHART_Y + CHART_H // 2 - 8), txt,
+        draw.text(((WIDTH - tw) // 2, chart_top + chart_height // 2 - 8), txt,
                   fill=COLOR_LABEL, font=_get_font(14))
         return
 
@@ -2904,7 +3089,7 @@ def _draw_chart(
         txt = "暂无图表数据"
         bbox = draw.textbbox((0, 0), txt, font=_get_font(14))
         tw = bbox[2] - bbox[0]
-        draw.text(((WIDTH - tw) // 2, CHART_Y + CHART_H // 2 - 8), txt,
+        draw.text(((WIDTH - tw) // 2, chart_top + chart_height // 2 - 8), txt,
                   fill=COLOR_LABEL, font=_get_font(14))
         return
 
@@ -2946,9 +3131,9 @@ def _draw_chart(
     legend_h = 16      # 顶部图例高度
     bottom_pad = 4
     cx = chart_x + label_w
-    cy = CHART_Y + legend_h
+    cy = chart_top + legend_h
     cw = chart_w - label_w - 6
-    ch = CHART_H - legend_h - bottom_pad
+    ch = max(26, chart_height - legend_h - bottom_pad)
 
     # 绘制边框
     draw.rectangle([cx, cy, cx + cw, cy + ch], outline=COLOR_DIVIDER)
@@ -3016,7 +3201,7 @@ def _draw_chart(
         return value_x + (bbox_value[2] - bbox_value[0]) + 8
 
     lx = cx + 6
-    ly = CHART_Y + 2
+    ly = chart_top + 2
     idx_last_str = f"{idx_pct[-1]:+.1f}%"
     sz_last_str = f"{sz_pct[-1]:+.1f}%"
     ptf_last_str = f"{ptf_pct[-1]:+.1f}%"
@@ -3049,7 +3234,7 @@ def _draw_chart(
         bbox_last = draw.textbbox((0, 0), cycle_last_data_label, font=font_xs)
         last_w = bbox_last[2] - bbox_last[0]
         draw.text(
-            (chart_x + chart_w - last_w - 4, CHART_Y + 2),
+            (chart_x + chart_w - last_w - 4, chart_top + 2),
             cycle_last_data_label,
             fill=COLOR_LABEL,
             font=font_xs,
@@ -3063,6 +3248,113 @@ def _draw_chart(
     ew = bbox_end[2] - bbox_end[0]
     draw.text((cx + cw - ew - 2, cy + ch + 1), end_label,
               fill=COLOR_LABEL, font=font_xs)
+
+
+def _draw_industry_panel(
+    draw: ImageDraw.ImageDraw,
+    industry_panel: Optional[dict],
+    panel_x: int,
+    panel_y: int,
+    panel_w: int,
+    panel_h: int,
+) -> None:
+    """在图表区域绘制行业统计页。"""
+    draw.rectangle([panel_x, panel_y, panel_x + panel_w, panel_y + panel_h], fill=COLOR_CHART_BG)
+    font_title = _get_font(13)
+    font_body = _get_font(12)
+    font_small = _get_font(11)
+
+    if not industry_panel or not industry_panel.get('industries'):
+        tip = "暂无行业统计数据"
+        bbox = draw.textbbox((0, 0), tip, font=font_title)
+        tip_w = bbox[2] - bbox[0]
+        draw.text(
+            (panel_x + (panel_w - tip_w) // 2, panel_y + panel_h // 2 - 8),
+            tip,
+            fill=COLOR_LABEL,
+            font=font_title,
+        )
+        return
+
+    total_positive = int(industry_panel.get('total_positive', 0))
+    total_negative = int(industry_panel.get('total_negative', 0))
+    position_count = int(industry_panel.get('position_count', 0))
+    title = f"行业概览  涨:{total_positive}  跌:{total_negative}  持仓:{position_count}"
+    draw.text((panel_x + 6, panel_y + 2), title, fill=COLOR_TEXT, font=font_title)
+
+    row_top = panel_y + 20
+    row_height = 35
+    max_rows = max(1, (panel_h - 22) // row_height)
+    industries = list(industry_panel.get('industries', []))[:max_rows]
+    for idx, item in enumerate(industries):
+        y = row_top + idx * row_height
+        industry_name = str(item.get('industry', '未知行业'))[:10]
+        positive_count = int(item.get('positive_count', 0))
+        negative_count = int(item.get('negative_count', 0))
+        contribution_ratio = float(item.get('contribution_ratio', 0.0))
+        industry_pnl_amount = float(item.get('pnl_amount', 0.0))
+        name_color = _industry_name_color(industry_pnl_amount)
+
+        draw.text((panel_x + 6, y), industry_name, fill=name_color, font=font_body)
+        summary_line = f"+{positive_count}/-{negative_count}  贡献:{contribution_ratio:+.1f}%"
+        draw.text((panel_x + 100, y), summary_line, fill=COLOR_LABEL, font=font_small)
+
+        top_positive = item.get('top_positive')
+        top_negative = item.get('top_negative')
+        top_positive_text = "+--"
+        top_negative_text = "- --"
+        if isinstance(top_positive, dict):
+            top_positive_text = (
+                f"+{top_positive.get('name', '')}{top_positive.get('pnl_pct', 0.0):+.1f}%"
+            )
+        if isinstance(top_negative, dict):
+            top_negative_text = (
+                f"-{top_negative.get('name', '')}{top_negative.get('pnl_pct', 0.0):+.1f}%"
+            )
+        draw.text((panel_x + 6, y + 16), top_positive_text, fill=COLOR_RED, font=font_small)
+        draw.text((panel_x + panel_w // 2, y + 16), top_negative_text, fill=COLOR_GREEN, font=font_small)
+
+
+def _draw_chart_panel(
+    draw: ImageDraw.ImageDraw,
+    chart_data: Optional[dict],
+    cycle_last_data_label: Optional[str],
+    industry_panel: Optional[dict],
+) -> None:
+    """绘制图表区域轮播页（图表页/行业统计页）与顶部进度条。"""
+    chart_x = 10
+    chart_w = WIDTH - 20
+    page_name, elapsed, duration = _get_chart_panel_cycle_state()
+
+    progress_y0 = CHART_Y
+    progress_y1 = progress_y0 + CHART_PROGRESS_BAR_H - 1
+    draw.rectangle([chart_x, progress_y0, chart_x + chart_w, progress_y1], fill=COLOR_PROGRESS_BAR_BG)
+    if duration > 0:
+        ratio = max(0.0, min(1.0, elapsed / duration))
+    else:
+        ratio = 0.0
+    fill_width = int(round(chart_w * ratio))
+    if ratio > 0 and fill_width <= 0:
+        fill_width = 1
+    if fill_width > 0:
+        draw.rectangle(
+            [chart_x, progress_y0, chart_x + fill_width - 1, progress_y1],
+            fill=COLOR_PROGRESS_BAR_FILL,
+        )
+
+    content_top = progress_y1 + 2
+    content_h = HEIGHT - content_top
+    if page_name == "industry":
+        _draw_industry_panel(draw, industry_panel, chart_x, content_top, chart_w, content_h)
+        return
+
+    _draw_chart(
+        draw,
+        chart_data,
+        cycle_last_data_label=cycle_last_data_label,
+        chart_top=content_top,
+        chart_height=content_h,
+    )
 
 
 # ---------- 数据获取线程 ----------
