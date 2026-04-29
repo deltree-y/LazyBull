@@ -50,12 +50,12 @@ def test_get_chart_panel_cycle_state_follows_40_20_ratio():
     page, elapsed, duration = module._get_chart_panel_cycle_state(now_ts=5.0)
     assert page == "chart"
     assert elapsed == 5.0
-    assert duration == 40.0
+    assert duration == 30.0
 
-    page, elapsed, duration = module._get_chart_panel_cycle_state(now_ts=45.0)
+    page, elapsed, duration = module._get_chart_panel_cycle_state(now_ts=35.0)
     assert page == "industry"
     assert elapsed == 5.0
-    assert duration == 20.0
+    assert duration == 30.0
 
 
 def test_industry_name_color_uses_red_green_white_by_contribution_sign():
@@ -275,6 +275,18 @@ def test_draw_system_usage_bar_fills_left_and_right_portions_with_independent_co
     assert image.getpixel((left_fill_x, inner_y)) == module.COLOR_USAGE_BAR_LOW
     assert image.getpixel((left_empty_x, inner_y)) == module.COLOR_USAGE_BAR_EMPTY
     assert image.getpixel((right_fill_x, inner_y)) == module.COLOR_USAGE_BAR_HIGH
+
+
+def test_draw_system_usage_bar_has_no_outline_border():
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), module.COLOR_HEADER_BG)
+    draw = module.ImageDraw.Draw(image)
+
+    module._draw_system_usage_bar(draw, 30.0, 85.0)
+
+    body_y0 = module.HEADER_H - module.USAGE_BAR_BOTTOM_GAP - module.USAGE_BAR_H
+    body_x0 = module.USAGE_BAR_MARGIN_X
+    assert image.getpixel((body_x0, body_y0)) != module.COLOR_USAGE_BAR_OUTLINE
 
 
 def test_is_trade_day_uses_weekday_fallback_without_loading_calendar(monkeypatch):
@@ -522,6 +534,9 @@ def test_draw_chart_shows_lunch_marker_and_zero_label_for_intraday():
         def rounded_rectangle(self, *args, **kwargs):
             return real_draw.rounded_rectangle(*args, **kwargs)
 
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
         def line(self, *args, **kwargs):
             captured_lines.append(kwargs.get("fill"))
             return real_draw.line(*args, **kwargs)
@@ -710,6 +725,7 @@ def test_build_industry_panel_aggregates_counts_tops_and_contribution(monkeypatc
     assert panel["l1_industry_count"] == 2
     assert panel["l2_industry_count"] == 2
     assert panel["l3_industry_count"] == 3
+    assert panel["industries"][0]["industry"] == "电子"
     bank_item = next(item for item in panel["industries"] if item["industry"] == "银行")
     assert bank_item["positive_count"] == 1
     assert bank_item["negative_count"] == 1
@@ -1177,7 +1193,7 @@ def test_draw_chart_panel_switches_between_chart_and_industry(monkeypatch):
         lambda *args, **kwargs: called.__setitem__("industry", called["industry"] + 1),
     )
 
-    monkeypatch.setattr(module, "_get_chart_panel_cycle_state", lambda now_ts=None: ("chart", 10.0, 40.0))
+    monkeypatch.setattr(module, "_get_chart_panel_cycle_state", lambda now_ts=None: ("chart", 10.0, 30.0))
     module._draw_chart_panel(
         draw,
         {
@@ -1192,7 +1208,7 @@ def test_draw_chart_panel_switches_between_chart_and_industry(monkeypatch):
         None,
     )
 
-    monkeypatch.setattr(module, "_get_chart_panel_cycle_state", lambda now_ts=None: ("industry", 5.0, 20.0))
+    monkeypatch.setattr(module, "_get_chart_panel_cycle_state", lambda now_ts=None: ("industry", 5.0, 30.0))
     module._draw_chart_panel(draw, None, None, {"industries": []})
 
     assert called == {"chart": 1, "industry": 1}
@@ -1207,6 +1223,12 @@ def test_draw_industry_panel_shows_summary_rows_without_top_stock_fields():
     class DrawProxy:
         def rectangle(self, *args, **kwargs):
             return real_draw.rectangle(*args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            return real_draw.line(*args, **kwargs)
 
         def text(self, position, text, *args, **kwargs):
             captured_texts.append(str(text))
@@ -1249,6 +1271,39 @@ def test_draw_industry_panel_shows_summary_rows_without_top_stock_fields():
     assert any(text == "+12.3%" for text in captured_texts)
 
 
+def test_draw_industry_panel_draws_table_and_thicker_middle_divider():
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    draw = module.ImageDraw.Draw(image)
+    panel = {
+        "total_positive": 2,
+        "total_negative": 1,
+        "position_count": 3,
+        "l1_industry_count": 2,
+        "l2_industry_count": 2,
+        "l3_industry_count": 3,
+        "industries": [
+            {
+                "industry": "银行",
+                "positive_count": 1,
+                "negative_count": 1,
+                "contribution_ratio": 12.3,
+                "pnl_amount": 100.0,
+            }
+        ],
+    }
+
+    panel_x = 10
+    panel_y = 100
+    panel_w = 460
+    panel_h = 120
+    module._draw_industry_panel(draw, panel, panel_x, panel_y, panel_w, panel_h)
+
+    col_w = panel_w // 2
+    divider_x = panel_x + col_w
+    assert image.getpixel((divider_x, panel_y + 40)) == module.COLOR_INDUSTRY_TABLE_LINE
+
+
 def test_draw_industry_panel_paginates_to_cover_all_industries():
     module = _load_module()
     image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
@@ -1280,6 +1335,12 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         def rectangle(self, *args, **kwargs):
             return real_draw.rectangle(*args, **kwargs)
 
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            return real_draw.line(*args, **kwargs)
+
         def text(self, position, text, *args, **kwargs):
             captured_page_1.append(str(text))
             return real_draw.text(position, text, *args, **kwargs)
@@ -1291,6 +1352,12 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         def rectangle(self, *args, **kwargs):
             return real_draw.rectangle(*args, **kwargs)
 
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            return real_draw.line(*args, **kwargs)
+
         def text(self, position, text, *args, **kwargs):
             captured_page_2.append(str(text))
             return real_draw.text(position, text, *args, **kwargs)
@@ -1301,6 +1368,12 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
     class DrawProxyPageLast:
         def rectangle(self, *args, **kwargs):
             return real_draw.rectangle(*args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            return real_draw.line(*args, **kwargs)
 
         def text(self, position, text, *args, **kwargs):
             captured_page_last.append(str(text))
@@ -1317,7 +1390,7 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         panel_w=460,
         panel_h=120,
         elapsed_seconds=0.0,
-        duration_seconds=20.0,
+        duration_seconds=30.0,
     )
     module._draw_industry_panel(
         DrawProxyPage2(),
@@ -1326,8 +1399,8 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         panel_y=100,
         panel_w=460,
         panel_h=120,
-        elapsed_seconds=10.0,
-        duration_seconds=20.0,
+        elapsed_seconds=16.0,
+        duration_seconds=30.0,
     )
     module._draw_industry_panel(
         DrawProxyPageLast(),
@@ -1336,8 +1409,8 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         panel_y=100,
         panel_w=460,
         panel_h=120,
-        elapsed_seconds=19.0,
-        duration_seconds=20.0,
+        elapsed_seconds=29.0,
+        duration_seconds=30.0,
     )
 
     assert any(text.startswith("页 1/") for text in captured_page_1)

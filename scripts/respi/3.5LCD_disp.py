@@ -101,8 +101,8 @@ SHENZHEN_INDEX_CODE = "399001.SZ"
 CSI800_INDEX_CODE = "000906.SH"
 INTRADAY_CHART_STATE_DIRNAME = "respi_35lcd_intraday"
 DIAG_LOG_FILENAME = "respi_35lcd_runtime.log"
-CHART_PAGE_CHART_SECONDS = 40.0
-CHART_PAGE_INDUSTRY_SECONDS = 20.0
+CHART_PAGE_CHART_SECONDS = 30.0
+CHART_PAGE_INDUSTRY_SECONDS = 30.0
 CHART_PAGE_CYCLE_SECONDS = CHART_PAGE_CHART_SECONDS + CHART_PAGE_INDUSTRY_SECONDS
 CHART_PROGRESS_BAR_H = 3
 
@@ -126,6 +126,8 @@ COLOR_CHART_BREAK = (78, 88, 108)  # 午休分隔标记
 COLOR_CHART_ZERO_LINE = (140, 135, 120)  # 0%参考线
 COLOR_PROGRESS_BAR_BG = (36, 40, 60)
 COLOR_PROGRESS_BAR_FILL = (240, 184, 72)
+COLOR_INDUSTRY_HEADER_BG = (46, 52, 74)
+COLOR_INDUSTRY_TABLE_LINE = (86, 94, 122)
 COLOR_PANEL_LEFT = (25, 28, 48)    # 左面板背景（偏蓝）
 COLOR_PANEL_RIGHT = (28, 35, 38)   # 右面板背景（偏青）
 COLOR_CHART_SHANGHAI = COLOR_YELLOW
@@ -413,13 +415,11 @@ def _draw_system_usage_bar(
         [body_x0, bar_y0, body_x1, bar_y1],
         radius=2,
         fill=COLOR_USAGE_BAR_EMPTY,
-        outline=COLOR_USAGE_BAR_OUTLINE,
     )
     draw.rounded_rectangle(
         [cap_x0, cap_y0, cap_x1, cap_y1],
         radius=1,
         fill=COLOR_USAGE_BAR_EMPTY,
-        outline=COLOR_USAGE_BAR_OUTLINE,
     )
 
     inner_x0 = body_x0 + 2
@@ -435,11 +435,11 @@ def _draw_system_usage_bar(
 
     draw.line(
         [(divider_left - 1, inner_y0), (divider_left - 1, inner_y1)],
-        fill=COLOR_USAGE_BAR_OUTLINE,
+        fill=COLOR_USAGE_BAR_EMPTY,
     )
     draw.line(
         [(divider_right + 1, inner_y0), (divider_right + 1, inner_y1)],
-        fill=COLOR_USAGE_BAR_OUTLINE,
+        fill=COLOR_USAGE_BAR_EMPTY,
     )
 
     _draw_usage_bar_section(draw, left_x0, left_x1, inner_y0, inner_y1, cpu_usage_pct)
@@ -700,7 +700,7 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
             }
         )
 
-    industries.sort(key=lambda item: (abs(item['pnl_amount']), item['industry']), reverse=True)
+    industries.sort(key=lambda item: (item['pnl_amount'], item['industry']), reverse=True)
 
     return {
         'total_positive': total_positive,
@@ -3359,7 +3359,7 @@ def _draw_industry_panel(
     industries_all = list(industry_panel.get('industries', []))
     total_industries = len(industries_all)
 
-    row_top = panel_y + 22
+    row_top = panel_y + 24
     rows_per_col = 5
     col_count = 2
     per_page = rows_per_col * col_count
@@ -3371,6 +3371,13 @@ def _draw_industry_panel(
     page_idx = int(max(0.0, elapsed_seconds) / seconds_per_page) % page_count
     start_idx = page_idx * per_page
     industries = industries_all[start_idx:start_idx + per_page]
+
+    header_h = 18
+    draw.rounded_rectangle(
+        [panel_x + 2, panel_y + 1, panel_x + panel_w - 2, panel_y + header_h],
+        radius=3,
+        fill=COLOR_INDUSTRY_HEADER_BG,
+    )
 
     left_title = f"行业1/2/3:{l1_count}/{l2_count}/{l3_count}"
     draw.text((panel_x + 6, panel_y + 2), left_title, fill=COLOR_TEXT, font=font_title)
@@ -3402,13 +3409,36 @@ def _draw_industry_panel(
         page_w = bbox[2] - bbox[0]
         draw.text((panel_x + panel_w - page_w - 6, panel_y + panel_h - 16), page_text, fill=COLOR_LABEL, font=font_small)
 
-    content_h = max(1, panel_h - 28)
+    content_h = max(1, panel_h - 30)
     row_h = max(16, content_h // rows_per_col)
     col_w = panel_w // 2
-    name_x_left = panel_x + 6
-    metric_x_left = panel_x + 74
-    name_x_right = panel_x + col_w + 6
-    metric_x_right = panel_x + col_w + 74
+    name_x_left = panel_x + 8
+    metric_x_left = panel_x + 94
+    name_x_right = panel_x + col_w + 8
+    metric_x_right = panel_x + col_w + 94
+
+    table_top = row_top - 2
+    table_bottom = min(panel_y + panel_h - 18, table_top + rows_per_col * row_h + 2)
+    draw.rectangle(
+        [panel_x + 3, table_top, panel_x + panel_w - 3, table_bottom],
+        outline=COLOR_INDUSTRY_TABLE_LINE,
+        width=1,
+    )
+
+    divider_x = panel_x + col_w
+    draw.line(
+        [(divider_x, table_top), (divider_x, table_bottom)],
+        fill=COLOR_INDUSTRY_TABLE_LINE,
+        width=2,
+    )
+
+    for row_idx in range(1, rows_per_col):
+        y = table_top + row_idx * row_h
+        draw.line(
+            [(panel_x + 3, y), (panel_x + panel_w - 3, y)],
+            fill=COLOR_INDUSTRY_TABLE_LINE,
+            width=1,
+        )
 
     for idx, item in enumerate(industries):
         col_idx = idx // rows_per_col
@@ -3421,7 +3451,7 @@ def _draw_industry_panel(
             name_x = name_x_right
             metric_x = metric_x_right
 
-        industry_name = str(item.get('industry', '未知行业'))[:10]
+        industry_name = str(item.get('industry', '未知行业'))[:12]
         positive_count = int(item.get('positive_count', 0))
         negative_count = int(item.get('negative_count', 0))
         contribution_ratio = float(item.get('contribution_ratio', 0.0))
