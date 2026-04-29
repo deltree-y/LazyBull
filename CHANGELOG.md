@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.67.4] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 的中证800实时链路改为 AKShare 新浪接口优先** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 中证800盘中实时涨跌幅优先通过 `stock_zh_index_spot_sina()` 获取，并按 `sh000906`（兼容 `000906` / `000906.SH`）匹配
+  - 当新浪接口在当前运行环境不可用时，自动回退到 `stock_zh_index_spot`，维持兼容性
+  - 保留并复用现有失败诊断日志键，便于继续定位异机代理与接口可用性问题
+
+### 测试
+
+- **修正中证800补抓后的实时快照断言** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 放宽 `test_fetch_realtime_index_pcts_prefers_snapshot_data` 断言，仅校验上证/深证快照值，允许函数在快照缺失中证800时返回补抓结果
+
 ## [0.67.3] - 2026-04-29
 
 ### 修复

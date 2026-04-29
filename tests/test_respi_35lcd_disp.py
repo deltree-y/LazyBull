@@ -847,10 +847,8 @@ def test_fetch_realtime_index_pcts_prefers_snapshot_data():
         }
     )
 
-    assert pct_map == {
-        module.SHANGHAI_INDEX_CODE: 0.7,
-        module.SHENZHEN_INDEX_CODE: -0.4,
-    }
+    assert pct_map[module.SHANGHAI_INDEX_CODE] == 0.7
+    assert pct_map[module.SHENZHEN_INDEX_CODE] == -0.4
 
 
 def test_select_chart_data_switches_by_intraday_window(monkeypatch):

@@ -2366,7 +2366,7 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
 
 
 def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
-    """按 stock_zh_index_spot 接口获取中证800实时涨跌幅。"""
+    """按 stock_zh_index_spot_sina 接口获取中证800实时涨跌幅。"""
     try:
         import akshare as ak  # type: ignore
     except Exception as exc:
@@ -2376,22 +2376,42 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
         )
         return None
 
-    getter = getattr(ak, 'stock_zh_index_spot', None)
-    if getter is None:
+    # 优先按用户指定链路：stock_zh_index_spot_sina
+    df = None
+    getter_sina = getattr(ak, 'stock_zh_index_spot_sina', None)
+    if getter_sina is not None:
+        try:
+            df = getter_sina()
+        except Exception as exc:
+            _emit_diag_once(
+                "akshare_spot_stock_zh_index_spot_sina_error",
+                f"AKShare实时接口调用失败: stock_zh_index_spot_sina | {type(exc).__name__}: {exc}",
+            )
+            df = None
+    else:
         _emit_diag_once(
-            "akshare_spot_stock_zh_index_spot_missing",
-            "AKShare缺少 stock_zh_index_spot 接口，无法按指定链路获取中证800实时行情",
+            "akshare_spot_stock_zh_index_spot_sina_missing",
+            "AKShare缺少 stock_zh_index_spot_sina 接口，尝试兼容回退",
         )
-        return None
 
-    try:
-        df = getter()
-    except Exception as exc:
-        _emit_diag_once(
-            "akshare_spot_stock_zh_index_spot_error",
-            f"AKShare实时接口调用失败: stock_zh_index_spot | {type(exc).__name__}: {exc}",
-        )
-        return None
+    # 兼容回退（避免不同 akshare 版本接口差异）
+    if df is None:
+        getter_fallback = getattr(ak, 'stock_zh_index_spot', None)
+        if getter_fallback is not None:
+            try:
+                df = getter_fallback()
+            except Exception as exc:
+                _emit_diag_once(
+                    "akshare_spot_stock_zh_index_spot_error",
+                    f"AKShare实时接口调用失败: stock_zh_index_spot | {type(exc).__name__}: {exc}",
+                )
+                return None
+        else:
+            _emit_diag_once(
+                "akshare_spot_stock_zh_index_spot_missing",
+                "AKShare缺少 stock_zh_index_spot 接口，无法按指定链路获取中证800实时行情",
+            )
+            return None
 
     if df is None or df.empty:
         _emit_diag_once(
@@ -2409,7 +2429,7 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
         return None
 
     code_series = df[code_col].astype(str)
-    matched = df.loc[code_series.isin({'000906', 'sh000906', '000906.SH'})]
+    matched = df.loc[code_series.isin({'sh000906', '000906', '000906.SH'})]
     if matched.empty:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_000906_missing",

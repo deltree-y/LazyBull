@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.67.3)
+### 当前版本 (v0.67.4)
+
+**树莓派 3.5 寸 LCD 的中证800实时接口已切换为新浪链路优先** (v0.67.4):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 中证800盘中实时涨跌幅现在优先使用 AKShare `stock_zh_index_spot_sina()`，并按 `sh000906`（兼容 `000906` / `000906.SH`）匹配
+- 若新浪实时接口在当前环境不可用，会自动回退到 `stock_zh_index_spot`，保持兼容
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 已同步修正实时快照断言，允许中证800在快照缺失时由补抓路径返回
 
 **树莓派 3.5 寸 LCD 的中证800数据源已按实测可用链路调整** (v0.67.3):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 盘中中证800实时数据改为使用 AKShare `stock_zh_index_spot` 接口
