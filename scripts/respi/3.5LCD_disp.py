@@ -3368,12 +3368,31 @@ def _draw_industry_panel(
     rows_per_col = 4
     col_count = 2
     per_page = rows_per_col * col_count
-    page_count = max(1, (total_industries + per_page - 1) // per_page)
-    if duration_seconds > 0:
-        seconds_per_page = max(1.0, duration_seconds / page_count)
+    page_sizes = []
+    if total_industries <= 0:
+        page_sizes = [0]
     else:
-        seconds_per_page = 1.0
-    page_idx = int(max(0.0, elapsed_seconds) / seconds_per_page) % page_count
+        remain = total_industries
+        while remain > 0:
+            page_sizes.append(min(per_page, remain))
+            remain -= per_page
+    page_count = max(1, len(page_sizes))
+
+    # 多页时按页内行业数量占比分配该轮展示时长。
+    if duration_seconds > 0 and total_industries > 0:
+        page_durations = [duration_seconds * size / total_industries for size in page_sizes]
+    else:
+        page_durations = [max(1.0, duration_seconds)] * page_count
+
+    elapsed_norm = max(0.0, elapsed_seconds)
+    page_idx = page_count - 1
+    acc = 0.0
+    for idx, seconds in enumerate(page_durations):
+        acc += seconds
+        if elapsed_norm < acc:
+            page_idx = idx
+            break
+
     start_idx = page_idx * per_page
     industries = industries_all[start_idx:start_idx + per_page]
 
@@ -3417,16 +3436,18 @@ def _draw_industry_panel(
         font_title,
     )
 
-    content_h = max(1, panel_h - 30)
-    row_h = max(16, content_h // rows_per_col)
+    table_top = row_top - 2
+    table_bottom_limit = panel_y + panel_h - 6
+    available_h = max(rows_per_col * 16, table_bottom_limit - table_top)
+    row_h = max(16, available_h // rows_per_col)
+    table_bottom = table_top + rows_per_col * row_h
+
     col_w = panel_w // 2
     name_x_left = panel_x + 8
     metric_x_left = panel_x + 94
     name_x_right = panel_x + col_w + 8
     metric_x_right = panel_x + col_w + 94
 
-    table_top = row_top - 2
-    table_bottom = min(panel_y + panel_h - 18, table_top + rows_per_col * row_h + 2)
     draw.rectangle(
         [panel_x + 3, table_top, panel_x + panel_w - 3, table_bottom],
         outline=COLOR_INDUSTRY_TABLE_LINE,

@@ -1399,7 +1399,7 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         panel_y=100,
         panel_w=460,
         panel_h=120,
-        elapsed_seconds=16.0,
+        elapsed_seconds=19.0,
         duration_seconds=30.0,
     )
     module._draw_industry_panel(
@@ -1409,15 +1409,101 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         panel_y=100,
         panel_w=460,
         panel_h=120,
-        elapsed_seconds=29.0,
+        elapsed_seconds=21.0,
         duration_seconds=30.0,
     )
 
     assert any(text.startswith("页1/") for text in captured_page_1)
-    assert any(text.startswith("页2/") for text in captured_page_2)
+    assert any(text.startswith("页1/") for text in captured_page_2)
     assert any(text == "行业0" for text in captured_page_1)
     assert any(text.startswith("页2/") for text in captured_page_last)
     assert any(text == "行业11" for text in captured_page_last)
+
+
+def test_draw_industry_panel_page_duration_is_proportional_to_page_size():
+    module = _load_module()
+    image = module.Image.new("RGB", (module.WIDTH, module.HEIGHT), (0, 0, 0))
+    real_draw = module.ImageDraw.Draw(image)
+    panel = {
+        "total_positive": 6,
+        "total_negative": 6,
+        "position_count": 12,
+        "l1_industry_count": 3,
+        "l2_industry_count": 6,
+        "l3_industry_count": 12,
+        "industries": [
+            {
+                "industry": f"行业{i}",
+                "positive_count": 1,
+                "negative_count": 1,
+                "contribution_ratio": float(i),
+                "pnl_amount": float(i),
+            }
+            for i in range(12)
+        ],
+    }
+
+    early_texts = []
+    late_texts = []
+
+    class DrawProxyEarly:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            return real_draw.line(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            early_texts.append(str(text))
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+    class DrawProxyLate:
+        def rectangle(self, *args, **kwargs):
+            return real_draw.rectangle(*args, **kwargs)
+
+        def rounded_rectangle(self, *args, **kwargs):
+            return real_draw.rounded_rectangle(*args, **kwargs)
+
+        def line(self, *args, **kwargs):
+            return real_draw.line(*args, **kwargs)
+
+        def text(self, position, text, *args, **kwargs):
+            late_texts.append(str(text))
+            return real_draw.text(position, text, *args, **kwargs)
+
+        def textbbox(self, *args, **kwargs):
+            return real_draw.textbbox(*args, **kwargs)
+
+    # 12 个行业，8+4 分页，30 秒窗口下应分配为 20 秒 + 10 秒。
+    module._draw_industry_panel(
+        DrawProxyEarly(),
+        panel,
+        panel_x=10,
+        panel_y=100,
+        panel_w=460,
+        panel_h=120,
+        elapsed_seconds=19.9,
+        duration_seconds=30.0,
+    )
+    module._draw_industry_panel(
+        DrawProxyLate(),
+        panel,
+        panel_x=10,
+        panel_y=100,
+        panel_w=460,
+        panel_h=120,
+        elapsed_seconds=20.1,
+        duration_seconds=30.0,
+    )
+
+    assert any(text.startswith("页1/") for text in early_texts)
+    assert any(text.startswith("页2/") for text in late_texts)
 
 
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):

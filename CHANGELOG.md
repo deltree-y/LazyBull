@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.68.5] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 行业页表格行高与分页时长逻辑修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 修复行业表格最后一行视觉高度偏小问题，统一各行等高
+  - 多页行业展示时，页内停留时长改为按该页行业数量占比分配
+    - 例如 12 只行业（每页 8/4）在 30 秒窗口下按 20 秒/10 秒分配
+
+### 测试
+
+- **新增/更新 3.5 寸 LCD 分页时长与表格布局回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 更新分页断言，覆盖比例时长下的页切换时刻
+  - 新增 8:4 分页在 30 秒窗口下 `20s/10s` 分配断言
+
 ## [0.68.4] - 2026-04-29
 
 ### 修复
