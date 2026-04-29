@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.68.4] - 2026-04-29
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 行业页进一步按可读性优化** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 行业页页码改为显示在首行最右侧，字号缩小
+  - 行业表格每列由 5 行调整为 4 行（2 列共 8 行/页）
+  - 释放出的空间用于增大表格内文字字号，提升远距可读性
+  - 行业统计口径改为按申万 L1 聚合
+  - 首行左右统计区间距压缩，避免信息挤压
+
+### 测试
+
+- **更新 3.5 寸 LCD 行业页回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 同步 L1 聚合排序断言
+  - 同步页码文案（首行右侧）断言
+  - 同步 4 行布局下分页覆盖断言
+
 ## [0.68.3] - 2026-04-29
 
 ### 修复

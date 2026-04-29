@@ -665,7 +665,11 @@ def _build_industry_panel(snapshot: Optional[dict]) -> Optional[dict]:
         elif pnl_pct < 0:
             total_negative += 1
 
-        industry_name = industry_mapping.get(ts_code, '未知行业')
+        level_tuple = industry_levels_mapping.get(ts_code)
+        if level_tuple is not None:
+            industry_name = level_tuple[0] or '未知行业'
+        else:
+            industry_name = industry_mapping.get(ts_code, '未知行业')
         item = industry_stats.setdefault(
             industry_name,
             {
@@ -3335,8 +3339,9 @@ def _draw_industry_panel(
     """在图表区域绘制行业统计页。"""
     draw.rectangle([panel_x, panel_y, panel_x + panel_w, panel_y + panel_h], fill=COLOR_CHART_BG)
     font_title = _get_font(14)
-    font_body = _get_font(13)
-    font_small = _get_font(12)
+    font_body = _get_font(15)
+    font_small = _get_font(14)
+    font_page = _get_font(10)
 
     if not industry_panel or not industry_panel.get('industries'):
         tip = "暂无行业统计数据"
@@ -3360,7 +3365,7 @@ def _draw_industry_panel(
     total_industries = len(industries_all)
 
     row_top = panel_y + 24
-    rows_per_col = 5
+    rows_per_col = 4
     col_count = 2
     per_page = rows_per_col * col_count
     page_count = max(1, (total_industries + per_page - 1) // per_page)
@@ -3382,8 +3387,17 @@ def _draw_industry_panel(
     left_title = f"行业1/2/3:{l1_count}/{l2_count}/{l3_count}"
     draw.text((panel_x + 6, panel_y + 2), left_title, fill=COLOR_TEXT, font=font_title)
 
+    if page_count > 1:
+        page_text = f"页{page_idx + 1}/{page_count}"
+        bbox_page = draw.textbbox((0, 0), page_text, font=font_page)
+        page_w = bbox_page[2] - bbox_page[0]
+        draw.text((panel_x + panel_w - page_w - 6, panel_y + 4), page_text, fill=COLOR_LABEL, font=font_page)
+
     right_label = "正/负收益股票数量:"
-    right_x = panel_x + panel_w // 2 + 6
+    left_bbox = draw.textbbox((0, 0), left_title, font=font_title)
+    left_w = left_bbox[2] - left_bbox[0]
+    right_x = max(panel_x + left_w + 16, panel_x + panel_w // 2 - 8)
+    right_x = min(right_x, panel_x + panel_w - 180)
     current_x = _draw_text_segments(
         draw,
         right_x,
@@ -3402,12 +3416,6 @@ def _draw_industry_panel(
         ],
         font_title,
     )
-
-    if page_count > 1:
-        page_text = f"页 {page_idx + 1}/{page_count}"
-        bbox = draw.textbbox((0, 0), page_text, font=font_small)
-        page_w = bbox[2] - bbox[0]
-        draw.text((panel_x + panel_w - page_w - 6, panel_y + panel_h - 16), page_text, fill=COLOR_LABEL, font=font_small)
 
     content_h = max(1, panel_h - 30)
     row_h = max(16, content_h // rows_per_col)
@@ -3451,7 +3459,7 @@ def _draw_industry_panel(
             name_x = name_x_right
             metric_x = metric_x_right
 
-        industry_name = str(item.get('industry', '未知行业'))[:12]
+        industry_name = str(item.get('industry', '未知行业'))[:14]
         positive_count = int(item.get('positive_count', 0))
         negative_count = int(item.get('negative_count', 0))
         contribution_ratio = float(item.get('contribution_ratio', 0.0))
@@ -3470,7 +3478,7 @@ def _draw_industry_panel(
                 ("/", COLOR_LABEL),
                 (f"{contribution_ratio:+.1f}%", _value_color(contribution_ratio)),
             ],
-            font_small,
+            font_body,
         )
 
 

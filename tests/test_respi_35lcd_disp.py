@@ -725,12 +725,12 @@ def test_build_industry_panel_aggregates_counts_tops_and_contribution(monkeypatc
     assert panel["l1_industry_count"] == 2
     assert panel["l2_industry_count"] == 2
     assert panel["l3_industry_count"] == 3
-    assert panel["industries"][0]["industry"] == "电子"
-    bank_item = next(item for item in panel["industries"] if item["industry"] == "银行")
-    assert bank_item["positive_count"] == 1
-    assert bank_item["negative_count"] == 1
-    assert "top_positive" not in bank_item
-    assert "top_negative" not in bank_item
+    assert panel["industries"][0]["industry"] == "科技"
+    finance_item = next(item for item in panel["industries"] if item["industry"] == "金融")
+    assert finance_item["positive_count"] == 1
+    assert finance_item["negative_count"] == 1
+    assert "top_positive" not in finance_item
+    assert "top_negative" not in finance_item
 
 
 def test_normalize_intraday_chart_drops_abnormal_points():
@@ -1246,7 +1246,7 @@ def test_draw_industry_panel_shows_summary_rows_without_top_stock_fields():
         "l3_industry_count": 1,
         "industries": [
             {
-                "industry": "银行",
+                "industry": "金融",
                 "positive_count": 1,
                 "negative_count": 1,
                 "contribution_ratio": 12.3,
@@ -1265,7 +1265,7 @@ def test_draw_industry_panel_shows_summary_rows_without_top_stock_fields():
     )
 
     assert any(text.startswith("行业1/2/3:") for text in captured_texts)
-    assert any(text == "银行" for text in captured_texts)
+    assert any(text == "金融" for text in captured_texts)
     assert any(text == "+1" for text in captured_texts)
     assert any(text == "-1" for text in captured_texts)
     assert any(text == "+12.3%" for text in captured_texts)
@@ -1413,10 +1413,10 @@ def test_draw_industry_panel_paginates_to_cover_all_industries():
         duration_seconds=30.0,
     )
 
-    assert any(text.startswith("页 1/") for text in captured_page_1)
-    assert any(text.startswith("页 2/") for text in captured_page_2)
+    assert any(text.startswith("页1/") for text in captured_page_1)
+    assert any(text.startswith("页2/") for text in captured_page_2)
     assert any(text == "行业0" for text in captured_page_1)
-    assert any(text.startswith("页 2/") for text in captured_page_last)
+    assert any(text.startswith("页2/") for text in captured_page_last)
     assert any(text == "行业11" for text in captured_page_last)
 
 
