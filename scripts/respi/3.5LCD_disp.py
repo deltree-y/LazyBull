@@ -703,7 +703,7 @@ def _build_industry_panel_from_prices(
         pnl_amount = (current_price - base_price) * shares
         total_pnl_amount += pnl_amount
 
-        if pnl_pct > 0:
+        if pnl_pct >= 0:
             total_positive += 1
         elif pnl_pct < 0:
             total_negative += 1
@@ -722,7 +722,7 @@ def _build_industry_panel_from_prices(
             },
         )
         item['pnl_amount'] += pnl_amount
-        if pnl_pct > 0:
+        if pnl_pct >= 0:
             item['positive_count'] += 1
         elif pnl_pct < 0:
             item['negative_count'] += 1

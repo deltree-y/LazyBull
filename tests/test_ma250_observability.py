@@ -3,6 +3,7 @@
 """MA250 可观测性相关测试。"""
 
 import tempfile
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ from scripts.compare_walk_forward import (
     build_comparison_table,
     build_period_stability_table,
     compute_composite_score,
+    load_all_summaries_from_raw_dirs,
     run_auto_compare_jobs,
 )
 from scripts.walk_forward import summarize_ma250_signal_coverage
@@ -190,6 +192,129 @@ class TestCompareWalkForwardChainMetrics:
             assert abs(result.loc[0, "全周期链式最大回撤"] + 0.1) < 1e-6
             assert result.loc[0, "全周期链式交易日数"] == 252
             assert pd.notna(result.loc[0, "全周期链式夏普"])
+
+
+class TestCompareWalkForwardSummarySanitize:
+    """测试 compare 读取历史 summary 时会清洗失效参数。"""
+
+    def test_load_all_summaries_from_raw_dirs_sanitizes_legacy_defaults(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_dir = Path(tmpdir) / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+
+            pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_old_1",
+                        "split_index": 0,
+                        "oos_backtest": True,
+                        "signal_gate_mode": "disabled",
+                        "signal_confidence_gate_enabled": True,
+                        "signal_confidence_gate_top_k": 8,
+                        "signal_gate_dynamic_topn": True,
+                        "signal_gate_topn_high_multiplier": 0.5,
+                        "signal_gate_topn_low_multiplier": 1.6,
+                        "enable_profit_based_holding": False,
+                        "profit_extension_mode": "pnl",
+                        "profit_extension_days": 5,
+                        "market_regime": True,
+                        "market_regime_mode": "binary",
+                        "market_regime_drawdown_guard": True,
+                        "market_regime_drawdown_threshold": -0.09,
+                    },
+                    {
+                        "wf_run_id": "wf_old_2",
+                        "split_index": 0,
+                        "oos_backtest": True,
+                        "signal_gate_mode": "composite",
+                        "signal_confidence_gate_enabled": False,
+                        "signal_confidence_gate_top_k": 12,
+                        "signal_confidence_gate_thresholds": "[0.1, 0.3]",
+                        "signal_confidence_gate_exposure_levels": "[0.4, 1.0]",
+                        "signal_gate_cost_multiplier": 1.8,
+                        "signal_gate_round_trip_cost": 0.004,
+                        "signal_gate_percentile_warmup": 9,
+                        "market_regime": True,
+                        "market_regime_mode": "combined",
+                        "market_regime_drawdown_guard": False,
+                        "market_regime_drawdown_threshold": -0.08,
+                    },
+                ]
+            ).to_csv(raw_dir / "walk_forward_summary_legacy.csv", index=False, encoding="utf-8-sig")
+
+            loaded = load_all_summaries_from_raw_dirs([raw_dir])
+
+            row1 = loaded.loc[loaded["wf_run_id"] == "wf_old_1"].iloc[0]
+            row2 = loaded.loc[loaded["wf_run_id"] == "wf_old_2"].iloc[0]
+
+            assert pd.isna(row1["signal_confidence_gate_top_k"])
+            assert pd.isna(row1["signal_gate_dynamic_topn"])
+            assert pd.isna(row1["signal_gate_topn_high_multiplier"])
+            assert pd.isna(row1["signal_gate_topn_low_multiplier"])
+            assert pd.isna(row1["profit_extension_mode"])
+            assert pd.isna(row1["profit_extension_days"])
+            assert str(row1["market_regime_drawdown_guard"]).lower() == "true"
+            assert row1["market_regime_drawdown_threshold"] == -0.09
+
+            assert row2["signal_confidence_gate_top_k"] == 12
+            assert pd.isna(row2["signal_confidence_gate_enabled"])
+            assert pd.isna(row2["signal_confidence_gate_thresholds"])
+            assert pd.isna(row2["signal_confidence_gate_exposure_levels"])
+            assert pd.isna(row2["market_regime_drawdown_threshold"])
+
+    def test_load_all_summaries_from_raw_dirs_avoids_concat_futurewarning(self):
+        """多个 summary 在局部列全 NA 时，拼接不应再触发 pandas FutureWarning。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_dir = Path(tmpdir) / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+
+            pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_a",
+                        "split_index": 0,
+                        "oos_backtest": True,
+                        "enable_profit_based_holding": False,
+                        "profit_extension_mode": "pnl",
+                        "profit_extension_days": 5,
+                        "market_regime": True,
+                        "market_regime_mode": "combined",
+                        "market_regime_drawdown_guard": False,
+                        "market_regime_drawdown_threshold": -0.08,
+                    }
+                ]
+            ).to_csv(raw_dir / "walk_forward_summary_a.csv", index=False, encoding="utf-8-sig")
+
+            pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_b",
+                        "split_index": 0,
+                        "oos_backtest": True,
+                        "enable_profit_based_holding": True,
+                        "profit_extension_mode": "strength",
+                        "profit_extension_strength_threshold": 0.75,
+                        "market_regime": True,
+                        "market_regime_mode": "combined",
+                        "market_regime_drawdown_guard": True,
+                        "market_regime_drawdown_threshold": -0.12,
+                    }
+                ]
+            ).to_csv(raw_dir / "walk_forward_summary_b.csv", index=False, encoding="utf-8-sig")
+
+            warnings.simplefilter("always", FutureWarning)
+            with warnings.catch_warnings(record=True) as caught:
+                loaded = load_all_summaries_from_raw_dirs([raw_dir])
+
+            future_warnings = [w for w in caught if issubclass(w.category, FutureWarning)]
+            assert not future_warnings
+            assert len(loaded) == 2
+            row_a = loaded.loc[loaded["wf_run_id"] == "wf_a"].iloc[0]
+            row_b = loaded.loc[loaded["wf_run_id"] == "wf_b"].iloc[0]
+            assert pd.isna(row_a["profit_extension_mode"])
+            assert row_b["profit_extension_mode"] == "strength"
+            assert pd.isna(row_a["market_regime_drawdown_threshold"])
+            assert row_b["market_regime_drawdown_threshold"] == -0.12
 
 
 class TestCompareWalkForwardPeriodStability:

@@ -32,7 +32,7 @@ import sys
 import traceback
 import uuid
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple
+from typing import Any, Optional, List, Dict, Tuple
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
@@ -1418,6 +1418,267 @@ def write_walk_forward_summary(
 
     logger.info(f"生成 walk-forward 汇总文件: {output_path}")
 
+    def _sanitize_train_params(raw_params: Dict[str, Any]) -> Dict[str, Any]:
+        """将未启用功能对应的子参数清空，避免 compare 表出现误导性默认值。"""
+        params = dict(raw_params)
+
+        def clear(*keys: str) -> None:
+            for key in keys:
+                if key in params:
+                    params[key] = None
+
+        if not params.get("oos_backtest"):
+            clear(
+                "oos_backtest_months",
+                "bt_top_n",
+                "signal_confidence_gate_enabled",
+                "signal_confidence_gate_top_k",
+                "signal_confidence_gate_thresholds",
+                "signal_confidence_gate_exposure_levels",
+                "signal_gate_mode",
+                "signal_gate_cost_multiplier",
+                "signal_gate_round_trip_cost",
+                "signal_gate_quality_enabled",
+                "signal_gate_quality_window",
+                "signal_gate_quality_threshold",
+                "signal_gate_quality_halflife",
+                "signal_gate_percentile_warmup",
+                "signal_gate_dynamic_topn",
+                "signal_gate_topn_high_multiplier",
+                "signal_gate_topn_low_multiplier",
+                "holding_bonus_enabled",
+                "holding_bonus_sigma",
+                "bt_sell_timing",
+                "bt_exclude_st",
+                "bt_min_list_days",
+                "bt_max_weight_per_stock",
+                "bt_max_per_industry",
+                "bt_stop_loss_enabled",
+                "bt_stop_loss_drawdown_pct",
+                "bt_stop_loss_trailing_enabled",
+                "bt_stop_loss_trailing_pct",
+                "bt_stop_loss_consecutive_limit_down",
+                "bt_equity_curve_enabled",
+                "bt_equity_curve_drawdown_thresholds",
+                "bt_equity_curve_exposure_levels",
+                "bt_equity_curve_ma_short",
+                "bt_equity_curve_ma_long",
+                "bt_equity_curve_recovery_mode",
+                "bt_equity_curve_recovery_step",
+                "bt_equity_curve_recovery_delay_periods",
+                "industry_momentum_filter",
+                "industry_momentum_bottom_pct",
+                "industry_rotation_enhanced",
+                "industry_rotation_alpha",
+                "position_sizing",
+                "kelly_vol_window",
+                "kelly_max_leverage",
+                "market_regime",
+                "market_regime_bear_threshold",
+                "market_regime_bear_exposure",
+                "market_regime_mode",
+                "market_regime_vol_target",
+                "market_regime_trend_threshold",
+                "market_regime_min_exposure",
+                "market_regime_combine_method",
+                "market_regime_trend_guard",
+                "market_regime_drawdown_guard",
+                "market_regime_drawdown_threshold",
+                "market_regime_ma250_hard_stop",
+                "market_regime_ma250_threshold",
+                "market_regime_ma250_exposure",
+                "market_regime_ma250_atr_scaling",
+                "stagger_tranches",
+                "enable_profit_based_holding",
+                "early_exit_loss_threshold",
+                "early_exit_holding_ratio",
+                "profit_extension_threshold",
+                "profit_extension_days",
+                "profit_extension_mode",
+                "profit_extension_strength_threshold",
+                "use_atr_for_early_exit",
+                "atr_multiplier",
+                "early_exit_mode",
+                "early_exit_strength_protect_threshold",
+                "early_exit_max_reprieves",
+                "take_profit_threshold",
+                "take_profit_refill",
+                "enable_early_rebalance_on_empty",
+            )
+            return params
+
+        signal_gate_mode = params.get("signal_gate_mode")
+        signal_gate_active = signal_gate_mode == "composite" or (
+            signal_gate_mode == "legacy" and params.get("signal_confidence_gate_enabled")
+        )
+
+        if signal_gate_mode not in ("legacy", "composite"):
+            clear("signal_confidence_gate_top_k")
+
+        if signal_gate_mode != "legacy":
+            clear(
+                "signal_confidence_gate_enabled",
+                "signal_confidence_gate_thresholds",
+                "signal_confidence_gate_exposure_levels",
+            )
+        elif not params.get("signal_confidence_gate_enabled"):
+            clear(
+                "signal_confidence_gate_top_k",
+                "signal_confidence_gate_thresholds",
+                "signal_confidence_gate_exposure_levels",
+            )
+
+        if signal_gate_mode != "composite":
+            clear(
+                "signal_gate_cost_multiplier",
+                "signal_gate_round_trip_cost",
+                "signal_gate_percentile_warmup",
+            )
+
+        if not params.get("signal_gate_quality_enabled"):
+            clear(
+                "signal_gate_quality_window",
+                "signal_gate_quality_threshold",
+                "signal_gate_quality_halflife",
+            )
+
+        if not signal_gate_active:
+            clear(
+                "signal_gate_dynamic_topn",
+                "signal_gate_topn_high_multiplier",
+                "signal_gate_topn_low_multiplier",
+            )
+        elif not params.get("signal_gate_dynamic_topn"):
+            clear(
+                "signal_gate_topn_high_multiplier",
+                "signal_gate_topn_low_multiplier",
+            )
+
+        if not params.get("holding_bonus_enabled"):
+            clear("holding_bonus_sigma")
+
+        if not params.get("bt_stop_loss_enabled"):
+            clear(
+                "bt_stop_loss_drawdown_pct",
+                "bt_stop_loss_trailing_enabled",
+                "bt_stop_loss_trailing_pct",
+                "bt_stop_loss_consecutive_limit_down",
+            )
+        elif not params.get("bt_stop_loss_trailing_enabled"):
+            clear("bt_stop_loss_trailing_pct")
+
+        if not params.get("bt_equity_curve_enabled"):
+            clear(
+                "bt_equity_curve_drawdown_thresholds",
+                "bt_equity_curve_exposure_levels",
+                "bt_equity_curve_ma_short",
+                "bt_equity_curve_ma_long",
+                "bt_equity_curve_recovery_mode",
+                "bt_equity_curve_recovery_step",
+                "bt_equity_curve_recovery_delay_periods",
+            )
+
+        if not params.get("industry_momentum_filter"):
+            clear("industry_momentum_bottom_pct")
+
+        if not params.get("industry_rotation_enhanced"):
+            clear("industry_rotation_alpha")
+
+        if params.get("position_sizing") not in ("kelly", "half_kelly"):
+            clear("kelly_vol_window", "kelly_max_leverage")
+
+        if not params.get("market_regime"):
+            clear(
+                "market_regime_bear_threshold",
+                "market_regime_bear_exposure",
+                "market_regime_mode",
+                "market_regime_vol_target",
+                "market_regime_trend_threshold",
+                "market_regime_min_exposure",
+                "market_regime_combine_method",
+                "market_regime_trend_guard",
+                "market_regime_drawdown_guard",
+                "market_regime_drawdown_threshold",
+            )
+        else:
+            market_regime_mode = params.get("market_regime_mode")
+            if market_regime_mode == "binary":
+                clear(
+                    "market_regime_vol_target",
+                    "market_regime_trend_threshold",
+                    "market_regime_min_exposure",
+                    "market_regime_combine_method",
+                    "market_regime_trend_guard",
+                )
+            elif market_regime_mode == "vol_target":
+                clear(
+                    "market_regime_bear_threshold",
+                    "market_regime_bear_exposure",
+                    "market_regime_trend_threshold",
+                    "market_regime_combine_method",
+                    "market_regime_trend_guard",
+                )
+            elif market_regime_mode == "trend":
+                clear(
+                    "market_regime_bear_threshold",
+                    "market_regime_bear_exposure",
+                    "market_regime_vol_target",
+                    "market_regime_combine_method",
+                    "market_regime_trend_guard",
+                )
+            elif market_regime_mode == "combined":
+                clear(
+                    "market_regime_bear_threshold",
+                    "market_regime_bear_exposure",
+                )
+
+        if not params.get("market_regime_ma250_hard_stop"):
+            clear(
+                "market_regime_ma250_threshold",
+                "market_regime_ma250_exposure",
+                "market_regime_ma250_atr_scaling",
+            )
+
+        if not params.get("market_regime_drawdown_guard"):
+            clear("market_regime_drawdown_threshold")
+
+        if not params.get("enable_profit_based_holding"):
+            clear(
+                "early_exit_loss_threshold",
+                "early_exit_holding_ratio",
+                "profit_extension_threshold",
+                "profit_extension_days",
+                "profit_extension_mode",
+                "profit_extension_strength_threshold",
+                "use_atr_for_early_exit",
+                "atr_multiplier",
+                "early_exit_mode",
+                "early_exit_strength_protect_threshold",
+                "early_exit_max_reprieves",
+            )
+        else:
+            profit_extension_mode = params.get("profit_extension_mode")
+            if profit_extension_mode != "pnl":
+                clear("profit_extension_threshold")
+            if profit_extension_mode != "strength":
+                clear("profit_extension_strength_threshold")
+            if profit_extension_mode == "disabled":
+                clear("profit_extension_days")
+
+            if not params.get("use_atr_for_early_exit"):
+                clear("atr_multiplier")
+
+            if params.get("early_exit_mode") != "strength_veto":
+                clear(
+                    "early_exit_strength_protect_threshold",
+                    "early_exit_max_reprieves",
+                )
+
+        if params.get("take_profit_threshold") is None:
+            clear("take_profit_refill")
+
+        return params
+
     # 训练参数（所有 split 共享，写入每行方便后续对比脚本独立使用）
     train_params_cols = {
         "wf_run_id": wf_run_id,
@@ -1552,6 +1813,7 @@ def write_walk_forward_summary(
         "take_profit_refill": getattr(args, 'take_profit_refill', True),
         "enable_early_rebalance_on_empty": getattr(args, 'enable_early_rebalance_on_empty', True),
     }
+    train_params_cols = _sanitize_train_params(train_params_cols)
 
     # 提取每个 split 的关键指标
     summary_rows = []

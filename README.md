@@ -28,7 +28,25 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.68.7)
+### 当前版本 (v0.68.8)
+
+**树莓派 3.5 寸 LCD 行业页计数口径调整（平盘计入正收益）** (v0.68.8):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 行业页顶部 `正/负收益股票数量` 中，`0` 收益股票改为计入正收益（`+`）
+- 行业内每行 `+x/-y` 的计数规则同步调整为平盘计入 `+`
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 新增平盘计入正收益回归测试
+
+**compare 汇总时避免全 NA 条件列触发 pandas FutureWarning** (v0.68.9):
+- [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py) 在合并多个 walk-forward summary CSV 前，会先按单个 frame 排除全 NA 列，再在拼接后按原列顺序补回
+- 这样保留了当前 compare 输出语义，同时修复批量扫描历史 batch 时 `pd.concat(frames)` 重复输出 FutureWarning 的问题
+- [tests/test_ma250_observability.py](tests/test_ma250_observability.py) 新增回归测试，约束局部全 NA 条件列参与汇总时不再告警
+
+**walk-forward / compare 参数展示按实际生效状态清洗，避免默认值误导** (v0.68.8):
+- [scripts/walk_forward.py](scripts/walk_forward.py) 在写 summary CSV 时，会根据 OOS 总开关、父开关和模式开关清空未生效子参数
+- [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py) 在读取历史 raw summary 时也会执行同一套清洗，重新生成 compare 表即可纠正旧 batch 的误导性默认值
+- 修复 `enable_profit_based_holding=false` 却显示 `profit_extension_mode=pnl` 一类记录
+- 同时修复 `signal_gate_mode=composite` 下 `signal_confidence_gate_top_k` 被误清空，以及信号门控失活时 `dynamic Top-N`、回撤保护关闭时 `drawdown_threshold` 仍显示的问题
+- 修复 `market_regime_mode=binary` 下 `drawdown_guard` 被误清空的问题
+- [tests/test_walk_forward.py](tests/test_walk_forward.py) 新增/更新回归测试覆盖上述场景
 
 **树莓派 3.5 寸 LCD 行业页贡献口径与零值配色优化** (v0.68.7):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 行业贡献比例新增口径标记：盘外 `cycle_total_pnl`、盘内 `intraday_total_pnl`

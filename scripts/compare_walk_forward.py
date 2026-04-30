@@ -129,6 +129,8 @@ COL_NAMES = {
     "oos_cross_split_ir_std":     "跨时间段跨切分IR标准差",
     "bt_win_rate_mean":           "跨时间段回测胜率均值",
     "bt_win_rate_min":            "跨时间段回测胜率最差",
+    "chain_sharpe_mean":          "跨时间段夏普均值",
+    "chain_sharpe_std":           "跨时间段夏普标准差",
     "stability_score":            "时间段稳定性分",
     # 训练参数
     "wf_start_date":              "WF起始日期",
@@ -297,6 +299,332 @@ PARAM_COLS = [
     "enable_early_rebalance_on_empty",
 ]
 
+
+def _is_missing_param_value(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("", "nan", "none", "null")
+    try:
+        return bool(pd.isna(value))
+    except Exception:
+        return False
+
+
+def _is_true_param_value(value) -> bool:
+    if _is_missing_param_value(value):
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "y"):
+            return True
+        if normalized in ("false", "0", "no", "n"):
+            return False
+    return bool(value)
+
+
+def _normalize_param_text(value) -> Optional[str]:
+    if _is_missing_param_value(value):
+        return None
+    return str(value).strip()
+
+
+def _sanitize_summary_train_params(raw_params: dict) -> dict:
+    """兼容历史 summary：按参数是否实际生效清空旧默认值。"""
+    params = dict(raw_params)
+
+    def clear(*keys: str) -> None:
+        for key in keys:
+            if key in params:
+                params[key] = None
+
+    if not _is_true_param_value(params.get("oos_backtest")):
+        clear(
+            "oos_backtest_months",
+            "bt_top_n",
+            "signal_confidence_gate_enabled",
+            "signal_confidence_gate_top_k",
+            "signal_confidence_gate_thresholds",
+            "signal_confidence_gate_exposure_levels",
+            "signal_gate_mode",
+            "signal_gate_cost_multiplier",
+            "signal_gate_round_trip_cost",
+            "signal_gate_quality_enabled",
+            "signal_gate_quality_window",
+            "signal_gate_quality_threshold",
+            "signal_gate_quality_halflife",
+            "signal_gate_percentile_warmup",
+            "signal_gate_dynamic_topn",
+            "signal_gate_topn_high_multiplier",
+            "signal_gate_topn_low_multiplier",
+            "holding_bonus_enabled",
+            "holding_bonus_sigma",
+            "bt_sell_timing",
+            "bt_exclude_st",
+            "bt_min_list_days",
+            "bt_max_weight_per_stock",
+            "bt_max_per_industry",
+            "bt_stop_loss_enabled",
+            "bt_stop_loss_drawdown_pct",
+            "bt_stop_loss_trailing_enabled",
+            "bt_stop_loss_trailing_pct",
+            "bt_stop_loss_consecutive_limit_down",
+            "bt_equity_curve_enabled",
+            "bt_equity_curve_drawdown_thresholds",
+            "bt_equity_curve_exposure_levels",
+            "bt_equity_curve_ma_short",
+            "bt_equity_curve_ma_long",
+            "bt_equity_curve_recovery_mode",
+            "bt_equity_curve_recovery_step",
+            "bt_equity_curve_recovery_delay_periods",
+            "industry_momentum_filter",
+            "industry_momentum_bottom_pct",
+            "industry_rotation_enhanced",
+            "industry_rotation_alpha",
+            "position_sizing",
+            "kelly_vol_window",
+            "kelly_max_leverage",
+            "market_regime",
+            "market_regime_bear_threshold",
+            "market_regime_bear_exposure",
+            "market_regime_mode",
+            "market_regime_vol_target",
+            "market_regime_trend_threshold",
+            "market_regime_min_exposure",
+            "market_regime_combine_method",
+            "market_regime_trend_guard",
+            "market_regime_drawdown_guard",
+            "market_regime_drawdown_threshold",
+            "market_regime_ma250_hard_stop",
+            "market_regime_ma250_threshold",
+            "market_regime_ma250_exposure",
+            "market_regime_ma250_atr_scaling",
+            "stagger_tranches",
+            "enable_profit_based_holding",
+            "early_exit_loss_threshold",
+            "early_exit_holding_ratio",
+            "profit_extension_threshold",
+            "profit_extension_days",
+            "profit_extension_mode",
+            "profit_extension_strength_threshold",
+            "use_atr_for_early_exit",
+            "atr_multiplier",
+            "early_exit_mode",
+            "early_exit_strength_protect_threshold",
+            "early_exit_max_reprieves",
+            "take_profit_threshold",
+            "take_profit_refill",
+            "enable_early_rebalance_on_empty",
+        )
+        return params
+
+    signal_gate_mode = _normalize_param_text(params.get("signal_gate_mode"))
+    signal_confidence_gate_enabled = _is_true_param_value(
+        params.get("signal_confidence_gate_enabled")
+    )
+    signal_gate_active = signal_gate_mode == "composite" or (
+        signal_gate_mode == "legacy" and signal_confidence_gate_enabled
+    )
+
+    if signal_gate_mode not in ("legacy", "composite"):
+        clear("signal_confidence_gate_top_k")
+
+    if signal_gate_mode != "legacy":
+        clear(
+            "signal_confidence_gate_enabled",
+            "signal_confidence_gate_thresholds",
+            "signal_confidence_gate_exposure_levels",
+        )
+    elif not signal_confidence_gate_enabled:
+        clear(
+            "signal_confidence_gate_top_k",
+            "signal_confidence_gate_thresholds",
+            "signal_confidence_gate_exposure_levels",
+        )
+
+    if signal_gate_mode != "composite":
+        clear(
+            "signal_gate_cost_multiplier",
+            "signal_gate_round_trip_cost",
+            "signal_gate_percentile_warmup",
+        )
+
+    if not _is_true_param_value(params.get("signal_gate_quality_enabled")):
+        clear(
+            "signal_gate_quality_window",
+            "signal_gate_quality_threshold",
+            "signal_gate_quality_halflife",
+        )
+
+    if not signal_gate_active:
+        clear(
+            "signal_gate_dynamic_topn",
+            "signal_gate_topn_high_multiplier",
+            "signal_gate_topn_low_multiplier",
+        )
+    elif not _is_true_param_value(params.get("signal_gate_dynamic_topn")):
+        clear(
+            "signal_gate_topn_high_multiplier",
+            "signal_gate_topn_low_multiplier",
+        )
+
+    if not _is_true_param_value(params.get("holding_bonus_enabled")):
+        clear("holding_bonus_sigma")
+
+    if not _is_true_param_value(params.get("bt_stop_loss_enabled")):
+        clear(
+            "bt_stop_loss_drawdown_pct",
+            "bt_stop_loss_trailing_enabled",
+            "bt_stop_loss_trailing_pct",
+            "bt_stop_loss_consecutive_limit_down",
+        )
+    elif not _is_true_param_value(params.get("bt_stop_loss_trailing_enabled")):
+        clear("bt_stop_loss_trailing_pct")
+
+    if not _is_true_param_value(params.get("bt_equity_curve_enabled")):
+        clear(
+            "bt_equity_curve_drawdown_thresholds",
+            "bt_equity_curve_exposure_levels",
+            "bt_equity_curve_ma_short",
+            "bt_equity_curve_ma_long",
+            "bt_equity_curve_recovery_mode",
+            "bt_equity_curve_recovery_step",
+            "bt_equity_curve_recovery_delay_periods",
+        )
+
+    if not _is_true_param_value(params.get("industry_momentum_filter")):
+        clear("industry_momentum_bottom_pct")
+
+    if not _is_true_param_value(params.get("industry_rotation_enhanced")):
+        clear("industry_rotation_alpha")
+
+    if _normalize_param_text(params.get("position_sizing")) not in ("kelly", "half_kelly"):
+        clear("kelly_vol_window", "kelly_max_leverage")
+
+    if not _is_true_param_value(params.get("market_regime")):
+        clear(
+            "market_regime_bear_threshold",
+            "market_regime_bear_exposure",
+            "market_regime_mode",
+            "market_regime_vol_target",
+            "market_regime_trend_threshold",
+            "market_regime_min_exposure",
+            "market_regime_combine_method",
+            "market_regime_trend_guard",
+            "market_regime_drawdown_guard",
+            "market_regime_drawdown_threshold",
+        )
+    else:
+        market_regime_mode = _normalize_param_text(params.get("market_regime_mode"))
+        if market_regime_mode == "binary":
+            clear(
+                "market_regime_vol_target",
+                "market_regime_trend_threshold",
+                "market_regime_min_exposure",
+                "market_regime_combine_method",
+                "market_regime_trend_guard",
+            )
+        elif market_regime_mode == "vol_target":
+            clear(
+                "market_regime_bear_threshold",
+                "market_regime_bear_exposure",
+                "market_regime_trend_threshold",
+                "market_regime_combine_method",
+                "market_regime_trend_guard",
+            )
+        elif market_regime_mode == "trend":
+            clear(
+                "market_regime_bear_threshold",
+                "market_regime_bear_exposure",
+                "market_regime_vol_target",
+                "market_regime_combine_method",
+                "market_regime_trend_guard",
+            )
+        elif market_regime_mode == "combined":
+            clear(
+                "market_regime_bear_threshold",
+                "market_regime_bear_exposure",
+            )
+
+    if not _is_true_param_value(params.get("market_regime_ma250_hard_stop")):
+        clear(
+            "market_regime_ma250_threshold",
+            "market_regime_ma250_exposure",
+            "market_regime_ma250_atr_scaling",
+        )
+
+    if not _is_true_param_value(params.get("market_regime_drawdown_guard")):
+        clear("market_regime_drawdown_threshold")
+
+    if not _is_true_param_value(params.get("enable_profit_based_holding")):
+        clear(
+            "early_exit_loss_threshold",
+            "early_exit_holding_ratio",
+            "profit_extension_threshold",
+            "profit_extension_days",
+            "profit_extension_mode",
+            "profit_extension_strength_threshold",
+            "use_atr_for_early_exit",
+            "atr_multiplier",
+            "early_exit_mode",
+            "early_exit_strength_protect_threshold",
+            "early_exit_max_reprieves",
+        )
+    else:
+        profit_extension_mode = _normalize_param_text(params.get("profit_extension_mode"))
+        if profit_extension_mode != "pnl":
+            clear("profit_extension_threshold")
+        if profit_extension_mode != "strength":
+            clear("profit_extension_strength_threshold")
+        if profit_extension_mode == "disabled":
+            clear("profit_extension_days")
+
+        if not _is_true_param_value(params.get("use_atr_for_early_exit")):
+            clear("atr_multiplier")
+
+        if _normalize_param_text(params.get("early_exit_mode")) != "strength_veto":
+            clear(
+                "early_exit_strength_protect_threshold",
+                "early_exit_max_reprieves",
+            )
+
+    if _is_missing_param_value(params.get("take_profit_threshold")):
+        clear("take_profit_refill")
+
+    return params
+
+
+def _sanitize_summary_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    sanitized_rows = [_sanitize_summary_train_params(row.to_dict()) for _, row in df.iterrows()]
+    return pd.DataFrame(sanitized_rows, columns=df.columns)
+
+
+def _concat_summary_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """按旧语义拼接 summary，避免 pandas 对全 NA 列发出 FutureWarning。"""
+    if not frames:
+        return pd.DataFrame()
+
+    ordered_columns: list[str] = []
+    for frame in frames:
+        for col in frame.columns:
+            if col not in ordered_columns:
+                ordered_columns.append(col)
+
+    prepared_frames = []
+    for frame in frames:
+        if frame.empty:
+            continue
+        # 显式排除单个 frame 内全 NA 列，保持 pandas 旧版 concat 的 dtype 推断语义。
+        prepared_frames.append(frame.dropna(axis=1, how="all"))
+
+    if not prepared_frames:
+        return pd.DataFrame(columns=ordered_columns)
+
+    all_df = pd.concat(prepared_frames, ignore_index=True)
+    return all_df.reindex(columns=ordered_columns)
+
 # ---------------------------------------------------------------------------
 # 综合得分配置：(英文列键, 权重, 方向)
 #   "high"    → 值越大越好
@@ -400,6 +728,7 @@ def load_all_summaries_from_raw_dirs(raw_dirs: list[Path]) -> pd.DataFrame:
                 encoding="utf-8-sig",
                 dtype=SUMMARY_CSV_DTYPE,
             )
+            df = _sanitize_summary_frame(df)
             df["_source_file"] = f.name
             df["_source_dir"] = str(raw_dir)
             frames.append(df)
@@ -410,7 +739,7 @@ def load_all_summaries_from_raw_dirs(raw_dirs: list[Path]) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
 
-    all_df = pd.concat(frames, ignore_index=True)
+    all_df = _concat_summary_frames(frames)
     logger.info(f"合并后总行数: {len(all_df)}，unique wf_run_id: {all_df['wf_run_id'].nunique() if 'wf_run_id' in all_df.columns else '?'}")
     return all_df
 
@@ -701,6 +1030,7 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         "综合得分",
         COL_NAMES["chain_cagr"],
         COL_NAMES["chain_max_drawdown"],
+        COL_NAMES["chain_sharpe"],
         COL_NAMES["oos_cross_split_ir"],
         COL_NAMES["bt_win_rate"],
     }
@@ -734,6 +1064,7 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         drawdown_series = pd.to_numeric(group.get(COL_NAMES["chain_max_drawdown"]), errors="coerce")
         ir_series = pd.to_numeric(group.get(COL_NAMES["oos_cross_split_ir"]), errors="coerce")
         win_rate_series = pd.to_numeric(group.get(COL_NAMES["bt_win_rate"]), errors="coerce")
+        sharpe_series = pd.to_numeric(group.get(COL_NAMES["chain_sharpe"]), errors="coerce")
 
         score_std = score_series.std()
         cagr_std = cagr_series.std()
@@ -772,6 +1103,8 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
                 COL_NAMES["oos_cross_split_ir_std"]: round(ir_std, 4) if pd.notna(ir_std) else None,
                 COL_NAMES["bt_win_rate_mean"]: round(win_rate_series.mean(), 4) if win_rate_series.notna().any() else None,
                 COL_NAMES["bt_win_rate_min"]: round(win_rate_series.min(), 4) if win_rate_series.notna().any() else None,
+                COL_NAMES["chain_sharpe_mean"]: round(sharpe_series.mean(), 4) if sharpe_series.notna().any() else None,
+                COL_NAMES["chain_sharpe_std"]: round(sharpe_series.std(), 4) if sharpe_series.notna().sum() > 1 else None,
                 COL_NAMES["stability_score"]: max(stability_score, 0.0),
             }
         )
@@ -798,15 +1131,38 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         COL_NAMES["oos_cross_split_ir_std"],
         COL_NAMES["bt_win_rate_mean"],
         COL_NAMES["bt_win_rate_min"],
+        COL_NAMES["chain_sharpe_mean"],
+        COL_NAMES["chain_sharpe_std"],
     ]
     ordered_cols += [col for col in group_cols if col not in ordered_cols]
     result = pd.DataFrame(rows)
     result = result[[col for col in ordered_cols if col in result.columns]]
-    result = result.sort_values(
-        [COL_NAMES["stability_score"], COL_NAMES["score_mean"]],
-        ascending=[False, False],
-        na_position="last",
-    ).reset_index(drop=True)
+
+    # 从 run_id_list 中提取最大时间戳（格式: 时间段:wf_YYYYMMDD_HHMMSS_xxx），
+    # 最近执行的批次排在最前面
+    run_id_list_col = COL_NAMES["run_id_list"]
+
+    def _max_run_ts(run_id_list_str: str) -> str:
+        """提取一行 run_id_list 中最大的时间戳（YYYYMMDDHHMMSS）。"""
+        max_ts = ""
+        for token in str(run_id_list_str).split("|"):
+            # token 格式: '时间段:wf_YYYYMMDD_HHMMSS_hash'
+            colon_idx = token.find(":")
+            if colon_idx == -1:
+                continue
+            run_id = token[colon_idx + 1 :].strip()
+            parts = run_id.split("_")
+            if len(parts) >= 3:
+                ts = parts[1] + parts[2]  # YYYYMMDDHHMMSS
+                if ts > max_ts:
+                    max_ts = ts
+        return max_ts
+
+    if run_id_list_col in result.columns:
+        result["_sort_ts"] = result[run_id_list_col].map(_max_run_ts)
+        result = result.sort_values("_sort_ts", ascending=False, na_position="last")
+        result = result.drop(columns=["_sort_ts"])
+    result = result.reset_index(drop=True)
     return result
 
 

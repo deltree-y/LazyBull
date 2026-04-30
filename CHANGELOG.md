@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.68.8] - 2026-04-30
+
+### 修复
+
+- **树莓派 3.5 寸 LCD 行业页计数口径调整：平盘计入正收益** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 行业页顶部 `正/负收益股票数量` 的统计中，`0` 收益股票改为并入正收益（`+`）
+  - 行业内明细 `+x/-y` 同步采用相同规则，避免“持仓总数与正负合计”不一致的感知偏差
+
+### 测试
+
+- **更新 3.5 寸 LCD 行业页计数回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增“平盘持仓计入正收益”断言，覆盖总计与行业内计数
+
+## [0.68.9] - 2026-04-29
+
+### 修复
+
+- **compare 汇总时避免全 NA 条件列触发 pandas FutureWarning** ([scripts/compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 汇总多个 walk-forward summary CSV 前，会先按单个 frame 排除全 NA 列，再在拼接后按原列顺序补回，保持当前输出语义不变
+  - 修复批量 compare 扫描大量历史 batch 时，`pd.concat(frames)` 因条件参数列局部全 NA 而重复输出 FutureWarning 的问题
+
+### 测试
+
+- **新增 compare summary 拼接告警回归测试** ([tests/test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 覆盖局部全 NA 列参与历史 summary 合并时不再触发 FutureWarning
+
+## [0.68.8] - 2026-04-29
+
+### 修复
+
+- **walk-forward / compare 参数展示改为按实际生效状态处理，避免默认值误导** ([scripts/walk_forward.py](scripts/walk_forward.py), [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 写入新 summary CSV 时，会根据 OOS 总开关、父开关和模式开关统一清空未生效的子参数
+  - compare 在读取历史 raw summary 时也会执行同一套清洗，重新出表即可纠正旧 batch 的误导性默认值，无需先全量重跑历史 walk-forward
+  - 修复 `enable_profit_based_holding=false` 但仍显示 `profit_extension_mode=pnl` 一类误导性记录
+  - 修复 `signal_gate_mode=composite` 时 `signal_confidence_gate_top_k` 被误清空的问题
+  - 修复信号门控失活时 `dynamic Top-N` 仍显示，以及 `market_regime_drawdown_guard=false` 时 `drawdown_threshold` 仍保留的问题
+  - 修复 `market_regime_mode=binary` 下 `drawdown_guard` 被误清空的问题
+
+### 测试
+
+- **补充 walk-forward summary 条件参数回归测试** ([tests/test_walk_forward.py](tests/test_walk_forward.py)):
+  - 覆盖未启用父开关时的子参数清空逻辑
+  - 覆盖 composite 模式下 `top_k` 保留与回撤保护阈值清空逻辑
+
 ## [0.68.7] - 2026-04-29
 
 ### 修复

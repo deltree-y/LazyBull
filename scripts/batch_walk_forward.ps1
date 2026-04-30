@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -26,19 +26,19 @@ $wf_period_configs = @(
         Label = "0101"
         WfStartDate = "20130101"
         WfEndDate = "20251231"
-        StartModelVersion = 12935
+        StartModelVersion = 14388
     }
     [PSCustomObject]@{
         Label = "0209"
         WfStartDate = "20130209"
         WfEndDate = "20260209"
-        StartModelVersion = 12949
+        StartModelVersion = 14403
     }
     [PSCustomObject]@{
         Label = "0324"
         WfStartDate = "20130324"
         WfEndDate = "20260324"
-        StartModelVersion = 12949
+        StartModelVersion = 14418
     }
 )
 
@@ -160,14 +160,14 @@ $kelly_max_leverage_list          = @(0.1)    # Kelly 单股仓位上限（可�
 # 0426这里应为composite
 $signal_gate_mode = "disabled"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
 # 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
-$signal_gate_cost_multiplier_list = @(0.7)      #0.3 composite: 门控严格度扫描
+$signal_gate_cost_multiplier_list = @(0.6)      #0.3 composite: 门控严格度扫描
 $signal_gate_round_trip_cost = 0.003            # composite: 往返交易成本估算（佣金+印花税+滑点，仅原始收益模式使用）
 $signal_gate_percentile_warmup = 5              # composite: 百分位归一化预热期（调仓次数）
 
 # 滚动模型质量监控子开关：仅在开启时才使用以下质量参数
 $signal_gate_quality_enabled = $false            # $true 启用 | $false 禁用
-$signal_gate_quality_window_list = @(2)         #2 滚动质量回看调仓周期数
-$signal_gate_quality_threshold_list = @(0.5)    #0.5 滚动质量最低 hit rate
+$signal_gate_quality_window_list = @(3)         #2 滚动质量回看调仓周期数
+$signal_gate_quality_threshold_list = @(0.6)    #0.5 滚动质量最低 hit rate
 $signal_gate_quality_halflife = 4               #4 滚动质量 EWM 半衰期
 
 # 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
@@ -187,23 +187,24 @@ $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
 # ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
 # 0426这里应为true
-$enable_profit_based_holding      = $false       # $true 启用 | $false 禁用
+$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
 # 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
 # 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，
 #    若收益率 <= early_exit_loss_threshold，则提前换出
 #    注意：这两个阈值在 $enable_profit_based_holding = $true 时始终生效，
 #    不受 $early_exit_mode_list = @('disabled') 影响；disabled 表示原硬卖。
-$early_exit_loss_threshold_list   = @(-0.07)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
-$early_exit_holding_ratio_list    = @(0.6)      # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
+$early_exit_holding_ratio_list    = @(0.5)        # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
+$early_exit_loss_threshold_list   = @(-0.09)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
+# 0429这个似乎不开比较好, early_exit_holding_ratio设置为1就是关闭
 
 # 2) 亏损提前换出二次确认：仅在 early_exit 条件已触发后再做一次强势度否决
 #    disabled      = 原硬卖
 #    strength_veto = 评分高于保护阈值时否决卖出（缓刑）
-$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled', 'strength_veto')
+$early_exit_mode_list                        = @('strength_veto')   # 可多值如 @('disabled', 'strength_veto')
 # 仅在 $early_exit_mode_list 扫到 'strength_veto' 时生效
-$early_exit_strength_protect_threshold_list   = @(0.1)         # strength_veto 保护阈值 [0,1]
-$early_exit_max_reprieves_list               = @(1)            # 单只股票最多缓刑次数
+$early_exit_strength_protect_threshold_list   = @(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)         # strength_veto 保护阈值 [0,1]
+$early_exit_max_reprieves_list               = @(1,2,3)            # 单只股票最多缓刑次数
 
 # 3) ATR 动态亏损阈值：在亏损提前换出分支中，用 ATR 替代固定亏损阈值
 #    需同时满足 $enable_profit_based_holding = $true 且 $use_atr_for_early_exit = $true

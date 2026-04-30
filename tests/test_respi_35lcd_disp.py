@@ -828,6 +828,42 @@ def test_build_industry_panel_intraday_contribution_uses_intraday_total(monkeypa
     assert round(intraday_by_industry["科技"]["contribution_ratio"], 1) == -100.0
 
 
+def test_build_industry_panel_counts_flat_position_as_positive(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_levels_mapping",
+        lambda: {
+            "000001.SZ": ("金融", "银行", "城商行"),
+            "000002.SZ": ("科技", "电子", "半导体"),
+        },
+    )
+
+    panel = module._build_industry_panel(
+        {
+            "positions": {
+                "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                "000002.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+            },
+            "quotes": pd.DataFrame(
+                [
+                    {"TS_CODE": "000001.SZ", "PRICE": 10.0, "PRE_CLOSE": 10.0},
+                    {"TS_CODE": "000002.SZ", "PRICE": 9.8, "PRE_CLOSE": 10.0},
+                ]
+            ),
+        },
+        mode="cycle",
+    )
+
+    assert panel is not None
+    assert panel["position_count"] == 2
+    assert panel["total_positive"] == 1
+    assert panel["total_negative"] == 1
+    by_industry = {item["industry"]: item for item in panel["industries"]}
+    assert by_industry["金融"]["positive_count"] == 1
+    assert by_industry["金融"]["negative_count"] == 0
+
+
 def test_normalize_intraday_chart_drops_abnormal_points():
     module = _load_module()
 
