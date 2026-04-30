@@ -51,7 +51,8 @@ def test_daily_progress_log_includes_position_count_and_exposure():
 
     assert log_line.startswith("回测[2025-12-29]: 122/124 天 - 本轮第[02/20]天")
     assert "持仓/仓位[17/20]/[87.05%]" in log_line
-    assert "收益:本调仓/本轮/年化:[+15.56%/+15.84%/+35.49%]" in log_line
+    # 年化收益改为简单年化公式: 15.84% / (122/252) = 32.72%
+    assert "收益:本调仓/本轮/年化:[+15.56%/+15.84%/+32.72%]" in log_line
     assert "ATR:[N/A/N/A/N/A]" in log_line
 
 

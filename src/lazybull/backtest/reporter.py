@@ -156,10 +156,10 @@ class Reporter:
         drawdown = (pd.Series(nav_values) - cummax) / cummax
         max_drawdown = drawdown.min()
         
-        # 年化收益率（简化计算）
+        # 年化收益率（简单年化，不假设收益再投入）
         trading_days = len(nav_curve)
         years = trading_days / 252
-        annual_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
+        annual_return = (total_return / years) if years > 0 else 0
         
         # 波动率（年化）
         daily_returns = nav_curve['nav'].pct_change().dropna()

@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.69.0] - 2026-04-30
+
+### 修复
+
+- **统一所有模块的年化收益计算为简单年化公式** ([src/lazybull/backtest](src/lazybull/backtest), [scripts/walk_forward.py](scripts/walk_forward.py), [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - **回测报告** ([reporter.py](src/lazybull/backtest/reporter.py#L159)): 年化收益从CAGR改为简单年化
+  - **回测进度日志** ([engine.py](src/lazybull/backtest/engine.py#L1012)): 实时年化收益按简单年化计算
+  - **滚动训练指标** ([walk_forward.py](scripts/walk_forward.py#L496)): 单个split的年化收益为简单年化
+  - **全周期CAGR** ([walk_forward.py](scripts/walk_forward.py#L1913)): 链式净值的年化收益为简单年化
+  - **对比实验** ([compare_walk_forward.py](scripts/compare_walk_forward.py#L680)): 全周期年化收益为简单年化
+  - **公式**: 年化收益率 = 总收益 / 年份数 = (当前值 / 初始值 - 1) / (交易天数 / 252)
+  - **影响**: 回测报告、纸面交易和LCD显示的年化收益现统一为简单年化，更准确反映实际投资情况（不假设复利再投入）
+
+### 测试
+
+- **93个相关测试通过**: 3.5LCD、纸面交易、walk-forward对比测试全部验证通过
+
+## [0.68.9] - 2026-04-30
+
+### 修复
+
+- **纸面交易年化收益率计算改为简单年化** ([src/lazybull/paper/broker.py](src/lazybull/paper/broker.py#L1127)):
+  - 原使用复利年化公式（CAGR），假设收益自动再投入
+  - 改为简单年化公式：`年化收益(%) = (当前总资产 - 初始资金) / 初始资金 × 365 / 持有天数 × 100`
+  - 更准确反映实际交易情况（浮盈未被重新投入本金）
+  - 影响：LCD 显示的"年化收益"和 paper_trade API 返回的 `annual_return_pct` 会显示更保守的收益率
+
 ## [0.68.8] - 2026-04-30
 
 ### 修复

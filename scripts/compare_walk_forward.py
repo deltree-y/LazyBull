@@ -684,7 +684,8 @@ def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str, source_dir: Opti
     trading_days = len(nav)
     years = trading_days / 252 if trading_days > 0 else 0
     total_return = nav.iloc[-1] / nav.iloc[0] - 1
-    cagr = (nav.iloc[-1] / nav.iloc[0]) ** (1 / years) - 1 if years > 0 else None
+    # 简单年化收益率（不假设收益再投入）
+    cagr = (total_return / years) if years > 0 else None
     cummax = nav.cummax()
     drawdown = (nav - cummax) / cummax
     max_drawdown = drawdown.min() if not drawdown.empty else None

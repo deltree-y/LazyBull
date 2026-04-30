@@ -1010,11 +1010,9 @@ class BacktestEngine:
     ) -> str:
         """格式化每日回测进度日志。"""
         total_return = (portfolio_value / self.initial_capital - 1) * 100
-        ann_return = (
-            ((portfolio_value / self.initial_capital) ** (252 / trading_days) - 1) * 100
-            if trading_days > 0
-            else 0.0
-        )
+        # 简单年化收益率（不假设收益再投入）
+        simple_annual = (total_return / 100) * (252 / trading_days) * 100 if trading_days > 0 else 0.0
+        ann_return = simple_annual
         rebalance_return_str = (
             f"{(portfolio_value / self._last_rebalance_nav - 1) * 100:+.2f}%"
             if self._last_rebalance_nav and self._last_rebalance_nav > 0

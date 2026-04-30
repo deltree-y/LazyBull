@@ -493,7 +493,8 @@ def run_oos_backtest(
 
     trading_days = len(nav_curve)
     years = trading_days / 252
-    annual_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
+    # 简单年化收益率（不假设收益再投入）
+    annual_return = (total_return / years) if years > 0 else 0
 
     daily_returns = nav_curve['nav'].pct_change().dropna()
     volatility = daily_returns.std() * (252 ** 0.5)
@@ -1910,7 +1911,9 @@ def chain_nav_splits(
     total_return = cumulative_nav - 1.0
     trading_days = len(df_chain)
     years = trading_days / 252 if trading_days > 0 else 1
-    cagr = (cumulative_nav ** (1 / years) - 1) if years > 0 else 0
+    # 简单年化收益率（不假设收益再投入）
+    total_return_chain = cumulative_nav - 1.0
+    cagr = (total_return_chain / years) if years > 0 else 0
     cummax = df_chain['nav'].cummax()
     drawdown = (df_chain['nav'] - cummax) / cummax
     max_dd = drawdown.min()
