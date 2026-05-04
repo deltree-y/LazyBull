@@ -899,6 +899,10 @@ class MLSignal(Signal):
                 f"最高/最低[{features_df['ml_score'].max():.3f}/{features_df['ml_score'].min():.3f}]"
             )
 
+        # 缓存本次完整排序候选列表，供持仓强势度评分（_score_holding_strength）查询 ml_raw_score
+        # 与回测行为对齐：回测 engine 在 _generate_signal 末尾缓存 _last_ranked_candidates
+        self._last_ranked_candidates = ranked
+
         return ranked
 
     def generate_with_features(

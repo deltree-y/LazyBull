@@ -21,6 +21,7 @@ class Position:
     buy_price: float  # 买入价格
     buy_cost: float  # 买入成本（含手续费）
     buy_date: str  # 买入日期 YYYYMMDD
+    buy_pnl_price: float = 0.0  # 买入绩效价格（后复权口径）
     status: str = "持有"  # 持仓状态：持有、延迟卖出等
     notes: str = ""  # 备注信息
     buy_atr_pct: float = 0.0  # 买入时的 ATR 百分比（用于 ATR 动态止损）

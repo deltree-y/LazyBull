@@ -47,6 +47,7 @@ class PaperTradeExecutionResult:
     ect_exposure: float = 1.0
     ect_reason: str = "ECT 未启用"
     t0_status: str = "not_rebalance_day"
+    protected_stocks: List[str] = field(default_factory=list)
     stock_names: Dict[str, str] = field(default_factory=dict)
     missing_factors: List[str] = field(default_factory=list)
 
@@ -151,7 +152,7 @@ def execute_trade_workflow(
     t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
 
     _report("执行 T0")
-    t0_targets, ect_exposure, ect_reason, t0_status = _execute_t0_if_rebalance_day(
+    t0_targets, ect_exposure, ect_reason, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
 
@@ -183,6 +184,7 @@ def execute_trade_workflow(
         ect_exposure=ect_exposure,
         ect_reason=ect_reason,
         t0_status=t0_status,
+        protected_stocks=protected_stocks,
         stock_names=stock_names,
         missing_factors=list(runner.missing_factors),
     )
@@ -557,8 +559,38 @@ def _execute_t1_if_pending(
                 logger.warning(f"检查指令过期失败: {exc}，按原日期执行")
 
     pending_buys = runner.paper_storage.load_pending_buys()
+
+    # 对齐回测：持有期到期/盈利延续按日评估，不依赖是否调仓日
+    instruction_list: List[TradeInstruction] = list(instructions) if instructions else []
+    existing_sell_stocks = {
+        inst.ts_code for inst in instruction_list if getattr(inst, "action", "") == "sell"
+    }
+    if bool(config.get("enable_profit_based_holding", False)):
+        _, holding_sell_actions = runner.evaluate_holding_period_actions(
+            trade_date,
+            config,
+            exclude_stocks=existing_sell_stocks,
+        )
+        if holding_sell_actions:
+            for action in holding_sell_actions:
+                instruction_list.append(
+                    TradeInstruction(
+                        ts_code=str(action["ts_code"]),
+                        action="sell",
+                        shares=int(action["shares"]),
+                        price_type=str(config["sell_price"]),
+                        reason=str(action["reason"]),
+                        source_date=trade_date,
+                        target_weight=0.0,
+                    )
+                )
+            logger.info(
+                f"持有期到期卖出评估: 新增 {len(holding_sell_actions)} 条当日卖出指令"
+            )
+
+    instructions = instruction_list if instruction_list else None
     if not instructions and not pending_buys:
-        logger.info(f"未找到 {trade_date} 的交易指令或补位买入计划，跳过 T1")
+        logger.info(f"未找到 {trade_date} 的交易指令、持有期到期卖出或补位买入计划，跳过 T1")
         return actions
 
     if instructions:
@@ -754,15 +786,16 @@ def _execute_t0_if_rebalance_day(
     runner: PaperTradingRunner,
     trade_date: str,
     config: Dict[str, object],
-) -> Tuple[List[Dict[str, object]], float, str, str]:
+) -> Tuple[List[Dict[str, object]], float, str, str, List[str]]:
     """执行 T0（如果是调仓日）。"""
     targets_info: List[Dict[str, object]] = []
     ect_exposure = 1.0
     ect_reason = "ECT 未启用"
+    protected_stock_list: List[str] = []
 
     if runner.paper_storage.check_run_exists("t0", trade_date):
         logger.info(f"T0 工作流已在 {trade_date} 执行过，跳过")
-        return targets_info, ect_exposure, ect_reason, "already_run"
+        return targets_info, ect_exposure, ect_reason, "already_run", protected_stock_list
 
     trading_config = TradingConfig.from_dict(config)
     strategy_state = runner.paper_storage.load_strategy_state()
@@ -791,7 +824,7 @@ def _execute_t0_if_rebalance_day(
             is_rebalance_day = True
         else:
             logger.info(f"当前不是调仓日：{exc}")
-            return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
+            return targets_info, ect_exposure, ect_reason, "not_rebalance_day", protected_stock_list
 
     if not is_rebalance_day:
         if allow_early_rebalance:
@@ -799,7 +832,7 @@ def _execute_t0_if_rebalance_day(
             is_rebalance_day = True
         else:
             logger.info("非调仓日，跳过 T0")
-            return targets_info, ect_exposure, ect_reason, "not_rebalance_day"
+            return targets_info, ect_exposure, ect_reason, "not_rebalance_day", protected_stock_list
 
     if allow_early_rebalance:
         logger.warning("空仓提前调仓触发，执行 T0")
@@ -858,6 +891,7 @@ def _execute_t0_if_rebalance_day(
         else:
             logger.info("计算盈利延续保护")
             protected_stocks = runner.evaluate_profit_extension(trade_date, config)
+            protected_stock_list = sorted(protected_stocks)
             if protected_stocks:
                 logger.info(f"盈利延续保护: {len(protected_stocks)} 只股票 → {protected_stocks}")
             else:
@@ -937,4 +971,4 @@ def _execute_t0_if_rebalance_day(
         logger.error(f"T0 执行失败: {exc}")
         t0_status = f"error:{exc}"
 
-    return targets_info, ect_exposure, ect_reason, t0_status
+    return targets_info, ect_exposure, ect_reason, t0_status, protected_stock_list

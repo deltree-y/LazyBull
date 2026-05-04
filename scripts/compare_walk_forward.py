@@ -1016,6 +1016,17 @@ def _build_period_label(row: pd.Series) -> str:
     return "未标注"
 
 
+def _extract_run_timestamp(run_id: str) -> str:
+    """从 wf_run_id 中提取时间戳（YYYYMMDDHHMMSS），用于判定最新 run。"""
+    parts = str(run_id).strip().split("_")
+    if len(parts) < 3:
+        return ""
+    date_part, time_part = parts[1], parts[2]
+    if len(date_part) == 8 and len(time_part) == 6 and date_part.isdigit() and time_part.isdigit():
+        return date_part + time_part
+    return ""
+
+
 def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     """按参数组合跨时间段聚合，输出稳定性汇总。"""
     if comp_df.empty:
@@ -1048,6 +1059,17 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
 
     working_df = comp_df.copy()
     working_df["__时间段标签"] = working_df.apply(_build_period_label, axis=1)
+    run_id_col = COL_NAMES["wf_run_id"]
+    working_df["__run_ts"] = working_df[run_id_col].map(_extract_run_timestamp)
+
+    # 同一参数组、同一时间段可能会有多次重复 run（例如扫描了未生效参数）。
+    # 这里先按 run 时间戳倒序去重，只保留每个时间段最新的一条，避免时间段数被重复放大。
+    dedup_subset = group_cols + ["__时间段标签"]
+    working_df = working_df.sort_values(
+        ["__run_ts", run_id_col],
+        ascending=[False, False],
+        na_position="last",
+    ).drop_duplicates(subset=dedup_subset, keep="first")
 
     rows = []
     for _, group in working_df.groupby(group_cols, dropna=False, sort=False):

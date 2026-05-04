@@ -800,6 +800,12 @@ class PaperBroker:
                 return None
 
             # 更新账户
+            buy_pnl_price = self._resolve_buy_pnl_price(
+                ts_code=order.ts_code,
+                trade_date=trade_date,
+                price_type=price_type,
+                fallback_price=price,
+            )
             self.account.update_cash(-total_required)
             self.account.add_position(
                 ts_code=order.ts_code,
@@ -807,6 +813,7 @@ class PaperBroker:
                 buy_price=price,
                 buy_cost=total_cost,
                 buy_date=trade_date,
+                buy_pnl_price=buy_pnl_price,
                 buy_atr_pct=buy_atr_pct,
             )
             
@@ -862,6 +869,47 @@ class PaperBroker:
         self.storage.append_trade(fill)
         
         return fill
+
+    def _resolve_buy_pnl_price(
+        self,
+        ts_code: str,
+        trade_date: str,
+        price_type: str,
+        fallback_price: float,
+    ) -> float:
+        """解析买入绩效价格（后复权），失败时回退成交价。"""
+        if fallback_price <= 0:
+            return 0.0
+
+        try:
+            from ..data import DataLoader
+
+            if self.data_storage is None:
+                return float(fallback_price)
+
+            loader = DataLoader(self.data_storage, verbose=False)
+            daily_df = loader.load_clean_daily_by_date(trade_date)
+            if daily_df is None or daily_df.empty:
+                return float(fallback_price)
+
+            stock_df = daily_df[daily_df["ts_code"] == ts_code]
+            if stock_df.empty:
+                return float(fallback_price)
+
+            row = stock_df.iloc[0]
+            if str(price_type) == "open":
+                candidates = ["open_adj", "open", "close_adj", "close"]
+            else:
+                candidates = ["close_adj", "close", "open_adj", "open"]
+
+            for col in candidates:
+                value = row.get(col)
+                if value is not None and not pd.isna(value) and float(value) > 0:
+                    return float(value)
+        except Exception:
+            return float(fallback_price)
+
+        return float(fallback_price)
     
     def _calculate_execution_stats(
         self,
@@ -1260,6 +1308,16 @@ class PaperBroker:
             pos = self.account.get_position(ps.ts_code)
             if not pos or pos.shares == 0:
                 logger.info(f"股票 {ps.ts_code} 已无持仓，移除延迟卖出订单")
+                continue
+
+            # 检查是否为 pending_sell 创建后新建的仓位（避免误卖）
+            # 场景：T0 触发亏损换出 pending_sell，T1 同日先执行持有期卖出再买入新仓，
+            # 下一日重试时 buy_date >= create_date 说明是新仓，不应被旧卖单触发
+            if pos.buy_date >= ps.create_date:
+                logger.info(
+                    f"股票 {ps.ts_code} 当前持仓(买入日={pos.buy_date})晚于延迟卖出"
+                    f"创建日({ps.create_date})，跳过旧卖单，视为已处理"
+                )
                 continue
             
             # 检查价格数据

@@ -160,7 +160,7 @@ $kelly_max_leverage_list          = @(0.1)    # Kelly 单股仓位上限（可�
 # 0426这里应为composite
 $signal_gate_mode = "disabled"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
 # 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
-$signal_gate_cost_multiplier_list = @(0.6)      #0.3 composite: 门控严格度扫描
+$signal_gate_cost_multiplier_list = @(1.0)      #0.3 composite: 门控严格度扫描
 $signal_gate_round_trip_cost = 0.003            # composite: 往返交易成本估算（佣金+印花税+滑点，仅原始收益模式使用）
 $signal_gate_percentile_warmup = 5              # composite: 百分位归一化预热期（调仓次数）
 
@@ -194,33 +194,39 @@ $enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
 #    若收益率 <= early_exit_loss_threshold，则提前换出
 #    注意：这两个阈值在 $enable_profit_based_holding = $true 时始终生效，
 #    不受 $early_exit_mode_list = @('disabled') 影响；disabled 表示原硬卖。
-$early_exit_holding_ratio_list    = @(0.5)        # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
+$early_exit_holding_ratio_list    = @(1)        # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
 $early_exit_loss_threshold_list   = @(-0.09)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
 # 0429这个似乎不开比较好, early_exit_holding_ratio设置为1就是关闭
 
 # 2) 亏损提前换出二次确认：仅在 early_exit 条件已触发后再做一次强势度否决
 #    disabled      = 原硬卖
 #    strength_veto = 评分高于保护阈值时否决卖出（缓刑）
-$early_exit_mode_list                        = @('strength_veto')   # 可多值如 @('disabled', 'strength_veto')
+$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled', 'strength_veto')
 # 仅在 $early_exit_mode_list 扫到 'strength_veto' 时生效
-$early_exit_strength_protect_threshold_list   = @(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)         # strength_veto 保护阈值 [0,1]
-$early_exit_max_reprieves_list               = @(1,2,3)            # 单只股票最多缓刑次数
+$early_exit_strength_protect_threshold_list   = @(0.1)         # strength_veto 保护阈值 [0,1]
+$early_exit_max_reprieves_list               = @(3)            # 单只股票最多缓刑次数
 
 # 3) ATR 动态亏损阈值：在亏损提前换出分支中，用 ATR 替代固定亏损阈值
 #    需同时满足 $enable_profit_based_holding = $true 且 $use_atr_for_early_exit = $true
 $use_atr_for_early_exit           = $false   # $true 启用 | $false 禁用
-$atr_multiplier_list              = @(2.8)   # ATR 倍数（仅启用 ATR 止损时生效）
+$atr_multiplier_list              = @(2)   # ATR 倍数（仅启用 ATR 止损时生效）
+# 0430效果都不好, 收益和回测都变差
 
 # 4) 盈利延续持有：仅在持有期满后进入该分支
 #    pnl      = 浮盈率判据（兼容原行为）
 #    strength = 5 维强势度评分判据
 #    disabled = 持有期满直接卖出，不做延续
-$profit_extension_mode_list = @('disabled')     # 可多值如 @('pnl', 'strength', 'disabled')
+$profit_extension_mode_list = @('strength')     # 可多值如 @('pnl', 'strength', 'disabled')
+# 在 $profit_extension_mode_list 扫到 "pnl" 或 "strength" 时生效
+$profit_extension_days_list       = @(20)        # 额外延续天数（交易日）
+
 # 仅在 $profit_extension_mode_list 扫到 "pnl" 时生效
-$profit_extension_threshold_list  = @(0.1)      # 盈利延续阈值（浮盈率，可多值，如 @(0.03, 0.05, 0.10)）
-$profit_extension_days_list       = @(5)        # 额外延续天数（交易日）
+$profit_extension_threshold_list  = @(0.04)      # 盈利延续阈值（浮盈率，可多值，如 @(0.03, 0.05, 0.10)）
+# 0430 0.04/20:43%(33%)年化,-31%(-31)回撤
+
 # 仅在 $profit_extension_mode_list 扫到 "strength" 时生效
-$profit_extension_strength_threshold_list = @(0.75) # strength 模式延续阈值 [0,1]
+$profit_extension_strength_threshold_list = @(0.56) # strength 模式延续阈值 [0,1]
+# 0503 0.56/20:49%(38%),-25%(-28%); 0.6/20:45%(29%)年化,-28%(-32%)回撤
 
 # ── 整体持仓止盈（独立于 $enable_profit_based_holding）──────────────
 # 0426这里应为0.15
@@ -233,21 +239,21 @@ $take_profit_refill           = $false       # $true = 整体止盈后自动补�
 #          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
 # $false = 禁用：严格等待下一个预定调仓日
 # 0426这里应为true
-$enable_early_rebalance_on_empty = $false
+$enable_early_rebalance_on_empty_list = @($true)  # 可多值如 @($false, $true)
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
 $market_regime_ma250_hard_stop = $false      # $true 启用 | $false 禁用
 # 以下参数仅在 $market_regime_ma250_hard_stop = $true 时生效
-$market_regime_ma250_threshold = 1           # 触发阈值（大盘收益曲线 / MA250 < 此值触发）
-$market_regime_ma250_exposure  = 0.9         # 触发后的仓位系数（0.0 = 完全空仓）
+$market_regime_ma250_threshold_list = @(1)   # 触发阈值（大盘收益曲线 / MA250 < 此值触发）
+$market_regime_ma250_exposure_list  = @(0.9) # 触发后的仓位系数（0.0 = 完全空仓）
 $ma250_atr_scaling             = $true       # $true 启用 ATR 动态仓位缩放（仓位 = base × MA(ATR,250) / CurrentATR）
 
 # ── OOS 止损（总开关）────────────────────────────────────────
 # 0426这里应为true
 $bt_stop_loss_enabled                 = $false   # $true 启用 | $false 禁用
 # 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
-$bt_stop_loss_drawdown_pct_list       = @(30.0) # 回撤止损阈值（%）
-$bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
+$bt_stop_loss_drawdown_pct_list       = @(50) # 回撤止损阈值（%）
+$bt_stop_loss_consecutive_limit_down_list = @(4) # 连续跌停止损天数
 $bt_stop_loss_trailing_enabled        = $false  # 移动止损子开关：$true 启用 | $false 禁用
 # 仅在 $bt_stop_loss_enabled = $true 且 $bt_stop_loss_trailing_enabled = $true 时生效
 $bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
@@ -406,6 +412,8 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $market_regime_bear_threshold_list.Length *
               $market_regime_mode_list.Length *
               $market_regime_vol_target_list.Length *
+              $market_regime_ma250_threshold_list.Length *
+              $market_regime_ma250_exposure_list.Length *
               $bt_top_n_list.Length *
               $signal_gate_cost_multiplier_list.Length *
               $signal_gate_quality_window_list.Length *
@@ -435,6 +443,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $early_exit_strength_protect_threshold_list.Length *
               $early_exit_max_reprieves_list.Length *
               $take_profit_threshold_list.Length *
+              $enable_early_rebalance_on_empty_list.Length *
               $industry_rotation_alpha_list.Length *
               $position_sizing_list.Length *
               $kelly_max_leverage_list.Length
@@ -477,6 +486,8 @@ foreach ($rank_weight in $rank_weight_list) {
 foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
 foreach ($market_regime_mode in $market_regime_mode_list) {
 foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
+foreach ($market_regime_ma250_threshold in $market_regime_ma250_threshold_list) {
+foreach ($market_regime_ma250_exposure in $market_regime_ma250_exposure_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
 foreach ($signal_gate_cost_multiplier in $signal_gate_cost_multiplier_list) {
 foreach ($signal_gate_quality_window in $signal_gate_quality_window_list) {
@@ -506,6 +517,7 @@ foreach ($early_exit_mode in $early_exit_mode_list) {
 foreach ($early_exit_strength_protect_threshold in $early_exit_strength_protect_threshold_list) {
 foreach ($early_exit_max_reprieves in $early_exit_max_reprieves_list) {
 foreach ($take_profit_threshold in $take_profit_threshold_list) {
+foreach ($enable_early_rebalance_on_empty in $enable_early_rebalance_on_empty_list) {
 foreach ($industry_rotation_alpha in $industry_rotation_alpha_list) {
 foreach ($position_sizing in $position_sizing_list) {
 foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
@@ -784,7 +796,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

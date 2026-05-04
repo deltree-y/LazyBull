@@ -1,10 +1,14 @@
 """测试纸面交易模块"""
 
+import io
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from loguru import logger
 
 from src.lazybull.common.cost import CostModel
 from src.lazybull.paper import (
@@ -14,6 +18,7 @@ from src.lazybull.paper import (
     Order,
     PaperAccount,
     PaperBroker,
+    PaperTradingRunner,
     PaperStorage,
     Position,
     TargetWeight,
@@ -203,6 +208,130 @@ def test_storage_append_trade(temp_storage):
     assert len(trades_df) == 1
     assert trades_df.iloc[0]['ts_code'] == '000001.SZ'
     assert trades_df.iloc[0]['action'] == 'buy'
+
+
+def test_evaluate_profit_extension_strength_logs_warning():
+    """strength 模式命中盈利延续保护时应输出 warning 日志。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+    runner.account = MagicMock()
+    runner.loader = MagicMock()
+
+    position = Position(
+        ts_code='000001.SZ',
+        shares=100,
+        buy_price=10.0,
+        buy_cost=5.0,
+        buy_date='20260120',
+    )
+    runner.account.get_positions.return_value = {'000001.SZ': position}
+    runner.loader.load_clean_daily_by_date.return_value = pd.DataFrame(
+        [{'ts_code': '000001.SZ', 'close': 11.0}]
+    )
+    runner.loader.load_clean_trade_cal.return_value = pd.DataFrame(
+        {
+            'cal_date': ['20260120', '20260121'],
+            'is_open': [1, 1],
+        }
+    )
+    runner._score_holding_strength = MagicMock(
+        return_value=SimpleNamespace(
+            total=0.72,
+            to_log_str=lambda: 'total=0.720 [ml=0.70 mom=0.60 tech=0.50 fund=0.40 dd=0.80] pnl=10.00%',
+        )
+    )
+
+    config = {
+        'enable_profit_based_holding': True,
+        'profit_extension_mode': 'strength',
+        'profit_extension_strength_threshold': 0.56,
+        'rebalance_freq': 1,
+        'profit_extension_days': 20,
+    }
+
+    stream = io.StringIO()
+    sink_id = logger.add(stream, level='WARNING', format='{level}|{message}')
+    try:
+        protected = runner.evaluate_profit_extension('20260121', config)
+    finally:
+        logger.remove(sink_id)
+
+    output = stream.getvalue()
+    assert protected == {'000001.SZ'}
+    assert 'WARNING|盈利延续保护(strength): 000001.SZ' in output
+    assert '强势度=0.720 >= 阈值=0.560' in output
+
+
+def test_score_holding_strength_uses_load_cs_train_day_interface():
+    """Storage 仅提供 load_cs_train_day 时，strength 评分不应抛 AttributeError。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+    runner.storage = MagicMock()
+    runner.signal = MagicMock()
+    runner.signal.generate_ranked = MagicMock()
+    runner.signal._last_ranked_candidates = []
+    runner.storage.load_cs_train_day.return_value = pd.DataFrame(
+        [{'ts_code': '000001.SZ'}]
+    )
+
+    position = Position(
+        ts_code='000001.SZ',
+        shares=100,
+        buy_price=10.0,
+        buy_cost=5.0,
+        buy_date='20260120',
+    )
+
+    result = runner._score_holding_strength(
+        ts_code='000001.SZ',
+        trade_date='20260121',
+        pos=position,
+        profit_rate=0.02,
+        config={'profit_extension_strength_weights': None},
+    )
+
+    runner.storage.load_cs_train_day.assert_called_once_with('20260121', subdir='cs_infer')
+    assert result is not None
+
+
+def test_print_t0_targets_marks_protected_stocks_as_retained():
+    """T0 目标详情中，盈利延续保护股票应显示为保留而非清仓。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+    runner.account = MagicMock()
+    runner._get_cost_setting = MagicMock(return_value=0.0)
+
+    protected_position = Position(
+        ts_code='000001.SZ',
+        shares=1000,
+        buy_price=10.0,
+        buy_cost=5.0,
+        buy_date='20260120',
+    )
+    runner.account.get_positions.return_value = {'000001.SZ': protected_position}
+    runner.account.get_total_value.return_value = 10000.0
+
+    stock_basic = pd.DataFrame(
+        [{'ts_code': '000001.SZ', 'name': '平安银行'}]
+    )
+    daily_data = pd.DataFrame(
+        [{'ts_code': '000001.SZ', 'close': 10.0}]
+    )
+
+    stream = io.StringIO()
+    sink_id = logger.add(stream, format='{message}')
+    try:
+        runner._print_t0_targets(
+            targets=[],
+            stock_basic=stock_basic,
+            daily_data=daily_data,
+            protected_stocks={'000001.SZ'},
+        )
+    finally:
+        logger.remove(sink_id)
+
+    output = stream.getvalue()
+    assert '000001.SZ' in output
+    assert '保留' in output
+    assert '盈利延续保护（原目标: 清仓）' in output
+    assert '清仓         10.00' not in output
 
 
 def test_storage_append_nav(temp_storage):

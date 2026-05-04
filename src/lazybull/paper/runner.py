@@ -547,10 +547,13 @@ class PaperTradingRunner:
     ) -> List[TradeInstruction]:
         """从目标权重生成明确的交易指令
 
+        说明：与回测对齐后，纸面交易卖出主路径由"持有期/条件驱动"负责。
+        本方法仅负责按目标权重生成买入/加仓指令，不再基于目标权重生成减仓/清仓卖出。
+
         Args:
             targets: 目标权重列表
             buy_price_type: 买入价格类型 open/close
-            sell_price_type: 卖出价格类型 open/close
+            sell_price_type: 卖出价格类型 open/close（保留参数，兼容接口）
             current_prices: 当前价格字典
             source_date: 源日期（T0日期）
             protected_stocks: 盈利延续保护的股票集合，跳过卖出指令生成
@@ -560,6 +563,7 @@ class PaperTradingRunner:
         """
         instructions = []
         protected_stocks = protected_stocks or set()
+        del sell_price_type, protected_stocks
 
         # 目标权重字典
         target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
@@ -573,8 +577,8 @@ class PaperTradingRunner:
         #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
         total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
 
-        # 合并所有股票（目标+持仓）
-        all_stocks = set(target_weights.keys()) | set(current_positions.keys())
+        # 仅处理目标股票买入/加仓
+        all_stocks = set(target_weights.keys())
 
         for ts_code in all_stocks:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
@@ -605,32 +609,8 @@ class PaperTradingRunner:
                         source_date=source_date,
                         target_weight=target_weight
                     ))
-            elif target_shares < current_shares:
-                # 盈利延续保护：跳过卖出指令
-                if ts_code in protected_stocks:
-                    logger.info(
-                        f"盈利延续保护: {ts_code} 跳过卖出指令"
-                        f" (当前{current_shares}股, 目标{target_shares}股)"
-                    )
-                    continue
-
-                # 卖出或减仓
-                # 如果是清仓（目标权重为0），必须卖出全部
-                if target_weight == 0:
-                    shares = current_shares
-                else:
-                    shares = (current_shares - target_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
-
-                if shares > 0:
-                    instructions.append(TradeInstruction(
-                        ts_code=ts_code,
-                        action='sell',
-                        shares=shares,
-                        price_type=sell_price_type,
-                        reason=reason if target_weight > 0 else "退出持仓",
-                        source_date=source_date,
-                        target_weight=target_weight
-                    ))
+            # target_shares <= current_shares 时不生成卖出指令：
+            # 卖出统一由持有期到期/条件触发路径处理。
 
         logger.info(f"生成 {len(instructions)} 条交易指令")
         return instructions
@@ -743,6 +723,7 @@ class PaperTradingRunner:
             industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
             holding_bonus_enabled=effective_config.holding_bonus_enabled,
             holding_bonus_sigma=effective_config.holding_bonus_sigma,
+            protected_stocks=protected_stocks,
             trading_config=effective_config,
         )
         
@@ -1148,6 +1129,7 @@ class PaperTradingRunner:
         industry_momentum_bottom_pct: float = 0.5,
         holding_bonus_enabled: bool = False,
         holding_bonus_sigma: float = 0.5,
+        protected_stocks: Optional[set] = None,
         trading_config: Optional[TradingConfig] = None,
     ) -> List[TargetWeight]:
         """生成信号
@@ -1162,6 +1144,7 @@ class PaperTradingRunner:
             max_weight_per_stock: 单股最大权重（可选）
             exclude_st: 是否排除ST股票
             min_list_days: 最少上市天数
+            protected_stocks: 盈利延续保护股票集合（仅用于展示，默认空）
 
         Returns:
             目标权重列表
@@ -1353,6 +1336,15 @@ class PaperTradingRunner:
             logger.warning("门控后无有效目标权重")
             return []
 
+        # 与回测对齐：持仓保留奖励命中的留仓，在 T0 将持有期锚点重置到 T+1
+        if effective_config.holding_bonus_enabled:
+            kept_stocks = set(self.account.get_positions().keys()) & set(signal_dict.keys())
+            if kept_stocks:
+                self._reset_holding_anchor_for_kept_positions(
+                    trade_date,
+                    sorted(kept_stocks),
+                )
+
         # 转换为目标权重，并增强信息
         targets = self._enhance_target_info(
             signal_dict,
@@ -1363,8 +1355,13 @@ class PaperTradingRunner:
         
         logger.info(f"生成 {len(targets)} 个目标权重")
         
-        # 打印 T0 详细信息
-        self._print_t0_targets(targets, stock_basic, daily_data)
+        # 打印 T0 详细信息（与最终指令生成口径保持一致）
+        self._print_t0_targets(
+            targets,
+            stock_basic,
+            daily_data,
+            protected_stocks=protected_stocks,
+        )
 
         self._save_strategy_state()
         
@@ -1764,7 +1761,7 @@ class PaperTradingRunner:
             (exposure, reason) — 仓位系数 [0, 1] 和原因描述
         """
         # 加载 cs_infer 特征
-        features_df = self.storage.load_features_by_date(
+        features_df = self.storage.load_cs_train_day(
             trade_date, subdir="cs_infer"
         )
         if features_df is None or len(features_df) == 0:
@@ -1963,13 +1960,10 @@ class PaperTradingRunner:
         if not positions:
             return set()
 
-        # 加载价格
-        daily_data = self.loader.load_clean_daily_by_date(trade_date)
-        if daily_data is None or daily_data.empty:
+        # 加载绩效价格（后复权）
+        pnl_price_map = self._build_pnl_price_map_for_date(trade_date, price_type="close")
+        if not pnl_price_map:
             return set()
-        price_map = {}
-        for _, row in daily_data.iterrows():
-            price_map[row["ts_code"]] = row.get("close", 0.0)
 
         # 计算持有交易日数
         rebalance_freq = config.get("rebalance_freq", 20)
@@ -1984,12 +1978,20 @@ class PaperTradingRunner:
                 trade_cal["is_open"] == 1
             ]["cal_date"].tolist()
 
+        buy_pnl_price_type = str(config.get("buy_price", "close"))
+        buy_pnl_cache: Dict[str, Dict[str, float]] = {}
+
         protected = set()
         for ts_code, pos in positions.items():
-            price = price_map.get(ts_code, 0.0)
-            if price <= 0 or pos.buy_price <= 0:
+            current_pnl_price = pnl_price_map.get(ts_code, 0.0)
+            buy_pnl_price = self._resolve_buy_pnl_price_for_position(
+                pos,
+                buy_price_type=buy_pnl_price_type,
+                cache=buy_pnl_cache,
+            )
+            if current_pnl_price <= 0 or buy_pnl_price <= 0:
                 continue
-            profit_rate = (price - pos.buy_price) / pos.buy_price
+            profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
 
             # 计算持有天数
             holding_days = self._calc_holding_days(
@@ -2021,12 +2023,159 @@ class PaperTradingRunner:
                 )
                 if breakdown is not None and breakdown.total >= threshold:
                     protected.add(ts_code)
-                    logger.info(
-                        f"  盈利延续保护(strength): {ts_code}"
-                        f" score={breakdown.total:.3f} >= {threshold},"
-                        f" pnl={profit_rate:.2%}, {breakdown.to_log_str()}"
+                    logger.warning(
+                        f"盈利延续保护(strength): {ts_code} "
+                        f"强势度={breakdown.total:.3f} >= 阈值={threshold:.3f}, "
+                        f"pnl={profit_rate:.2%}, {breakdown.to_log_str()}"
                     )
         return protected
+
+    def evaluate_holding_period_actions(
+        self,
+        trade_date: str,
+        config: dict,
+        exclude_stocks: Optional[set] = None,
+    ) -> Tuple[set, list]:
+        """按交易日评估持有期到期卖出与盈利延续（对齐回测口径）
+
+        该方法用于每日执行链路：
+        - 到期且满足延续条件 -> 保护持有（不卖）
+        - 到期且不满足延续条件 -> 生成当日卖出动作
+
+        Args:
+            trade_date: 当前交易日期
+            config: 配置字典
+            exclude_stocks: 需跳过评估的股票集合（如已有卖出指令）
+
+        Returns:
+            (protected_stocks, sell_actions)
+        """
+        if not config.get("enable_profit_based_holding", False):
+            return set(), []
+
+        mode = str(config.get("profit_extension_mode", "pnl"))
+        positions = self.account.get_positions()
+        if not positions:
+            return set(), []
+
+        exclude_stocks = exclude_stocks or set()
+
+        pnl_price_map = self._build_pnl_price_map_for_date(trade_date, price_type="close")
+        if not pnl_price_map:
+            return set(), []
+
+        trade_cal = self.loader.load_clean_trade_cal()
+        trade_dates_list = []
+        if trade_cal is not None:
+            trade_dates_list = trade_cal[trade_cal["is_open"] == 1]["cal_date"].tolist()
+
+        buy_pnl_price_type = str(config.get("buy_price", "close"))
+        buy_pnl_cache: Dict[str, Dict[str, float]] = {}
+
+        rebalance_freq = int(config.get("rebalance_freq", 20))
+        extension_threshold = float(config.get("profit_extension_threshold", 0.05))
+        extension_days = int(config.get("profit_extension_days", 5))
+        max_hold = rebalance_freq + extension_days
+
+        protected = set()
+        sell_actions = []
+
+        for ts_code, pos in positions.items():
+            if ts_code in exclude_stocks:
+                continue
+
+            # 与回测一致：基于交易日持有天数判定是否到期
+            holding_days = self._calc_holding_days(pos.buy_date, trade_date, trade_dates_list)
+            if holding_days < rebalance_freq:
+                continue
+
+            current_pnl_price = pnl_price_map.get(ts_code, 0.0)
+            buy_pnl_price = self._resolve_buy_pnl_price_for_position(
+                pos,
+                buy_price_type=buy_pnl_price_type,
+                cache=buy_pnl_cache,
+            )
+            if current_pnl_price <= 0 or buy_pnl_price <= 0:
+                continue
+            profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
+
+            within_extension_window = holding_days < max_hold
+            should_extend = False
+            extend_log_detail = ""
+
+            if mode == "disabled":
+                should_extend = False
+                extend_log_detail = "模式=disabled"
+            elif mode == "strength":
+                if within_extension_window:
+                    breakdown = self._score_holding_strength(
+                        ts_code, trade_date, pos, profit_rate, config
+                    )
+                    threshold = float(config.get("profit_extension_strength_threshold", 0.6))
+                    if breakdown is not None and breakdown.total >= threshold:
+                        should_extend = True
+                        extend_log_detail = (
+                            f"强势度={breakdown.total:.3f} >= 阈值={threshold:.3f}, "
+                            f"pnl={profit_rate:.2%}, {breakdown.to_log_str()}"
+                        )
+                    elif breakdown is not None:
+                        extend_log_detail = (
+                            f"强势度={breakdown.total:.3f} < 阈值={threshold:.3f}, "
+                            f"pnl={profit_rate:.2%}, {breakdown.to_log_str()}"
+                        )
+                    else:
+                        extend_log_detail = (
+                            f"强势度缺失, 阈值={threshold:.3f}, pnl={profit_rate:.2%}"
+                        )
+                else:
+                    extend_log_detail = (
+                        f"超过延续窗口(持有{holding_days}天, 上限{max_hold}天), "
+                        f"pnl={profit_rate:.2%}"
+                    )
+            else:  # pnl
+                if within_extension_window and profit_rate >= extension_threshold:
+                    should_extend = True
+                    extend_log_detail = (
+                        f"盈亏={profit_rate:.2%} >= 阈值={extension_threshold:.2%}"
+                    )
+                elif within_extension_window:
+                    extend_log_detail = (
+                        f"盈亏={profit_rate:.2%} < 阈值={extension_threshold:.2%}"
+                    )
+                else:
+                    extend_log_detail = (
+                        f"超过延续窗口(持有{holding_days}天, 上限{max_hold}天), "
+                        f"盈亏={profit_rate:.2%}"
+                    )
+
+            if should_extend:
+                protected.add(ts_code)
+                logger.warning(
+                    f"  盈利延续持有[{mode}]: {ts_code} 持有{holding_days}天, {extend_log_detail}"
+                )
+                continue
+
+            sell_shares = (pos.shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            if sell_shares <= 0:
+                continue
+
+            reason = (
+                f"持有期到期不延续[{mode}]: 持有{holding_days}天, {extend_log_detail}"
+                if within_extension_window
+                else f"盈利延续到期[{mode}]: 持有{holding_days}天, {extend_log_detail}"
+            )
+            sell_actions.append(
+                {
+                    "ts_code": ts_code,
+                    "shares": sell_shares,
+                    "reason": reason,
+                    "can_execute": True,
+                }
+            )
+            if self.verbose:
+                logger.info(f"  {reason} -> 卖出 {ts_code} {sell_shares}股")
+
+        return protected, sell_actions
 
     def evaluate_early_exit(
         self, trade_date: str, config: dict
@@ -2058,13 +2207,12 @@ class PaperTradingRunner:
         )
         max_reprieves = config.get("early_exit_max_reprieves", 2)
 
-        # 加载价格
-        daily_data = self.loader.load_clean_daily_by_date(trade_date)
-        if daily_data is None or daily_data.empty:
+        pnl_price_map = self._build_pnl_price_map_for_date(trade_date, price_type="close")
+        if not pnl_price_map:
             return []
-        price_map = {}
-        for _, row in daily_data.iterrows():
-            price_map[row["ts_code"]] = row.get("close", 0.0)
+
+        buy_pnl_price_type = str(config.get("buy_price", "close"))
+        buy_pnl_cache: Dict[str, Dict[str, float]] = {}
 
         trade_cal = self.loader.load_clean_trade_cal()
         trade_dates_list = []
@@ -2081,10 +2229,15 @@ class PaperTradingRunner:
         state_changed = False
 
         for ts_code, pos in positions.items():
-            price = price_map.get(ts_code, 0.0)
-            if price <= 0 or pos.buy_price <= 0:
+            current_pnl_price = pnl_price_map.get(ts_code, 0.0)
+            buy_pnl_price = self._resolve_buy_pnl_price_for_position(
+                pos,
+                buy_price_type=buy_pnl_price_type,
+                cache=buy_pnl_cache,
+            )
+            if current_pnl_price <= 0 or buy_pnl_price <= 0:
                 continue
-            profit_rate = (price - pos.buy_price) / pos.buy_price
+            profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
 
             holding_days = self._calc_holding_days(
                 pos.buy_date, trade_date, trade_dates_list
@@ -2184,7 +2337,7 @@ class PaperTradingRunner:
         )
 
         # 加载特征数据
-        features_df = self.storage.load_features_by_date(
+        features_df = self.storage.load_cs_train_day(
             trade_date, subdir="cs_infer"
         )
 
@@ -2261,6 +2414,54 @@ class PaperTradingRunner:
         except ValueError:
             return 0
 
+    def _build_pnl_price_map_for_date(
+        self,
+        trade_date: str,
+        price_type: str = "close",
+    ) -> Dict[str, float]:
+        """构建某交易日的绩效价格映射（优先后复权）。"""
+        daily_data = self.loader.load_clean_daily_by_date(trade_date)
+        if daily_data is None or daily_data.empty:
+            return {}
+
+        if str(price_type) == "open":
+            candidates = ["open_adj", "open", "close_adj", "close"]
+        else:
+            candidates = ["close_adj", "close", "open_adj", "open"]
+
+        result: Dict[str, float] = {}
+        for _, row in daily_data.iterrows():
+            ts_code = row["ts_code"]
+            value = 0.0
+            for col in candidates:
+                col_val = row.get(col)
+                if col_val is not None and not pd.isna(col_val) and float(col_val) > 0:
+                    value = float(col_val)
+                    break
+            if value > 0:
+                result[ts_code] = value
+        return result
+
+    def _resolve_buy_pnl_price_for_position(
+        self,
+        pos,
+        buy_price_type: str,
+        cache: Dict[str, Dict[str, float]],
+    ) -> float:
+        """解析持仓买入绩效价（优先持仓快照中的 buy_pnl_price）。"""
+        buy_pnl_price = float(getattr(pos, "buy_pnl_price", 0.0) or 0.0)
+        if buy_pnl_price > 0:
+            return buy_pnl_price
+
+        buy_date = getattr(pos, "buy_date", "")
+        if not buy_date:
+            return 0.0
+
+        if buy_date not in cache:
+            cache[buy_date] = self._build_pnl_price_map_for_date(buy_date, buy_price_type)
+
+        return float(cache[buy_date].get(pos.ts_code, 0.0) or 0.0)
+
     @staticmethod
     def _regime_combined(features_df: pd.DataFrame, config: dict) -> float:
         """组合模式：vol_target + trend 双重保护"""
@@ -2331,6 +2532,43 @@ class PaperTradingRunner:
         except Exception as e:
             logger.error(f"获取下一个交易日失败: {e}")
             return None
+
+    def _reset_holding_anchor_for_kept_positions(
+        self,
+        trade_date: str,
+        kept_stocks: List[str],
+    ) -> None:
+        """将持仓保留奖励命中的留仓持有期锚点重置为 T+1（与回测一致）。"""
+        if not kept_stocks:
+            return
+
+        next_trade_date = self._get_next_trade_date(trade_date)
+        if not next_trade_date:
+            logger.warning("无法重置持有期锚点：未找到下一交易日")
+            return
+
+        positions = self.account.get_positions()
+        reset_count = 0
+        for ts_code in kept_stocks:
+            pos = positions.get(ts_code)
+            if pos is None:
+                continue
+            old_buy_date = str(getattr(pos, "buy_date", ""))
+            if old_buy_date == next_trade_date:
+                continue
+            pos.buy_date = next_trade_date
+            reset_count += 1
+            if self.verbose:
+                logger.info(
+                    f"持仓保留延续：{ts_code} 持有期起点重置 "
+                    f"({old_buy_date} -> {next_trade_date})"
+                )
+
+        if reset_count > 0:
+            self.account.save_state()
+            logger.info(
+                f"持仓保留延续：已重置 {reset_count} 只持仓的持有期起点到 {next_trade_date}"
+            )
     
     def _enhance_target_info(
         self,
@@ -2383,7 +2621,8 @@ class PaperTradingRunner:
         self,
         targets: List[TargetWeight],
         stock_basic: pd.DataFrame,
-        daily_data: pd.DataFrame
+        daily_data: pd.DataFrame,
+        protected_stocks: Optional[set] = None,
     ) -> None:
         """打印 T0 目标详细信息（包含买入/减仓/清仓）
         
@@ -2394,7 +2633,10 @@ class PaperTradingRunner:
             stock_basic: 股票基本信息
             daily_data: 日线数据
         """
-        if not targets:
+        protected_stocks = protected_stocks or set()
+
+        current_positions = self.account.get_positions()
+        if not targets and not current_positions:
             logger.info("无 T0 目标")
             return
         
@@ -2411,10 +2653,10 @@ class PaperTradingRunner:
                 price_map[row['ts_code']] = row.get('close', 0.0)
         
         # 获取当前持仓
-        current_positions = self.account.get_positions()
         
-        # 使用账户总资金计算
-        total_capital = self.account.initial_capital
+        # 与最终指令生成保持一致：按当前总资产并考虑现金保留比例
+        capital_retention_ratio = self._get_cost_setting("capital_retention_ratio", 0.0)
+        total_capital = self.account.get_total_value(price_map) * (1 - capital_retention_ratio)
         
         # 准备表格列宽和对齐
         widths = [12, 10, 6, 10, 10, 30]
@@ -2433,7 +2675,7 @@ class PaperTradingRunner:
         
         # 1. 初始化存储列表和计数器
         rows_to_print = []
-        stats = {"清仓": 0, "减仓": 0, "加仓": 0, "买入": 0}
+        stats = {"保留": 0, "清仓": 0, "减仓": 0, "加仓": 0, "买入": 0}
 
         for ts_code in all_stocks:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
@@ -2454,26 +2696,32 @@ class PaperTradingRunner:
                 direction = "买入" if current_shares == 0 else "加仓"
                 suggested_shares = (target_shares - current_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
             elif target_shares < current_shares:
-                direction = "清仓" if target_shares == 0 else "减仓"
-                suggested_shares = (current_shares - target_shares) // SHARE_LOT_SIZE * SHARE_LOT_SIZE
+                raw_direction = "清仓" if target_shares == 0 else "减仓"
+                direction = "保留"
+                suggested_shares = 0
+                if ts_code in protected_stocks:
+                    reason_text = f"盈利延续保护（原目标: {raw_direction}）"
+                else:
+                    reason_text = f"持有期/条件驱动卖出（原目标: {raw_direction}）"
             else:
                 continue
 
-            if suggested_shares <= 0:
+            if suggested_shares <= 0 and direction != "保留":
                 continue
             
             # 统计数量
             if direction in stats:
                 stats[direction] += 1
             
-            reason_text = reason if reason else "信号生成"
+            if direction != "保留":
+                reason_text = reason if reason else "信号生成"
             rows_to_print.append({
                 'data': [ts_code, name, direction, f"{price:.2f}", str(suggested_shares), reason_text],
                 'direction': direction
             })
 
-        # 2. 按照指定顺序排序：清仓 > 减仓 > 加仓 > 买入
-        priority = {"清仓": 0, "减仓": 1, "加仓": 2, "买入": 3}
+        # 2. 按照指定顺序排序：保留 > 加仓 > 买入
+        priority = {"保留": 0, "加仓": 1, "买入": 2}
         rows_to_print.sort(key=lambda x: priority.get(x['direction'], 99))
 
         # 3. 打印表格行
@@ -2482,7 +2730,10 @@ class PaperTradingRunner:
         
         # 4. 打印统计摘要
         logger.info("-" * SEPARATOR_LENGTH)
-        stats_str = f"【操作统计】 清仓: {stats['清仓']} | 减仓: {stats['减仓']} | 加仓: {stats['加仓']} | 买入: {stats['买入']}"
+        stats_str = (
+            f"【操作统计】 保留: {stats['保留']} | "
+            f"加仓: {stats['加仓']} | 买入: {stats['买入']}"
+        )
         logger.info(stats_str)
         
         logger.info("=" * SEPARATOR_LENGTH)

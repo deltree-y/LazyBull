@@ -424,6 +424,7 @@ class PaperStorage:
                 'buy_price': pos.buy_price,
                 'buy_cost': pos.buy_cost,
                 'buy_date': pos.buy_date,
+                'buy_pnl_price': getattr(pos, 'buy_pnl_price', 0.0),
                 'buy_atr_pct': getattr(pos, 'buy_atr_pct', 0.0),
             }
         
@@ -456,6 +457,7 @@ class PaperStorage:
                 buy_price=pos_dict['buy_price'],
                 buy_cost=pos_dict['buy_cost'],
                 buy_date=pos_dict['buy_date'],
+                buy_pnl_price=pos_dict.get('buy_pnl_price', 0.0),
                 buy_atr_pct=pos_dict.get('buy_atr_pct', 0.0),
             )
         

@@ -133,6 +133,7 @@ class PaperAccount:
         buy_price: float,
         buy_cost: float,
         buy_date: str,
+        buy_pnl_price: float = 0.0,
         status: str = "持有",
         notes: str = "",
         buy_atr_pct: float = 0.0,
@@ -162,6 +163,11 @@ class PaperAccount:
                 buy_price=avg_price,
                 buy_cost=total_cost,
                 buy_date=buy_date,  # 更新为最新买入日期
+                buy_pnl_price=(
+                    buy_pnl_price
+                    if buy_pnl_price > 0
+                    else getattr(pos, "buy_pnl_price", 0.0)
+                ),
                 status=status,
                 notes=notes,
                 buy_atr_pct=buy_atr_pct if buy_atr_pct > 0 else getattr(pos, 'buy_atr_pct', 0.0),
@@ -175,6 +181,7 @@ class PaperAccount:
                 buy_price=buy_price,
                 buy_cost=buy_cost,
                 buy_date=buy_date,
+                buy_pnl_price=buy_pnl_price,
                 status=status,
                 notes=notes,
                 buy_atr_pct=buy_atr_pct,
@@ -213,6 +220,7 @@ class PaperAccount:
                 buy_price=pos.buy_price,
                 buy_cost=remaining_cost,
                 buy_date=pos.buy_date,
+                buy_pnl_price=getattr(pos, "buy_pnl_price", 0.0),
                 status=pos.status,
                 notes=pos.notes
             )

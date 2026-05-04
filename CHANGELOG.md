@@ -2,6 +2,155 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.69.11] - 2026-05-04
+
+### 修复
+
+- **MLSignal.generate_ranked 缓存 `_last_ranked_candidates` 供纸面持仓强势度评分使用** ([src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py)):
+  - 纸面 `_score_holding_strength` 通过 `signal._last_ranked_candidates` 查询持仓股 ml_raw_score
+  - 原先 MLSignal 未设置该属性，导致所有持仓的 `raw=0.000`、ml 维度降级为 acceleration 估算值
+  - 与回测对齐：回测 engine 在 `_generate_signal` 末尾缓存完整候选列表，持仓股 raw 有真实预测分
+  - 修复后 strength 评分从被系统性低估恢复正确，持仓延续决策更准确
+
+- **pending_sells 重试跳过创建日当天或之后新买入的仓位（BUG修复）** ([src/lazybull/paper/broker.py](src/lazybull/paper/broker.py)):
+  - 场景：T0 亏损换出将 A 股加入 pending_sells(create_date=D)，T1 同日先通过持有期路径卖出 A 的大仓，再按新信号买入 A 的小仓(buy_date=D)
+  - 旧代码：下一日重试 pending_sells 时，发现 A 有持仓即卖出，错误卖掉了新建仓位
+  - 修复：在 `retry_pending_sells` 中检查 `pos.buy_date >= ps.create_date`，满足则说明是新仓，跳过旧卖单
+  - 此 BUG 导致纸面额外减仓，累计影响不可忽视
+
+## [0.69.11] - 2026-05-04
+
+### 修复
+
+- **MLSignal.generate_ranked 缓存 `_last_ranked_candidates` 供纸面持仓强势度评分使用** ([src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py)):
+  - 纸面 `_score_holding_strength` 通过 `signal._last_ranked_candidates` 查询持仓股 ml_raw_score
+  - 原先 MLSignal 未设置该属性，导致所有持仓的 `raw=0.000`、ml 维度降级为 acceleration 估算值
+  - 与回测对齐：回测 engine 在 `_generate_signal` 末尾缓存完整候选列表，持仓股 raw 有真实预测分
+  - 修复后 strength 评分从被系统性低估恢复正确，持仓延续决策更准确
+
+- **pending_sells 重试跳过创建日当天或之后新买入的仓位（BUG修复）** ([src/lazybull/paper/broker.py](src/lazybull/paper/broker.py)):
+  - 场景：T0 亏损换出将 A 股加入 pending_sells(create_date=D)，T1 同日先通过持有期路径卖出 A 的大仓，再按新信号买入 A 的小仓(buy_date=D)
+  - 旧代码：下一日重试 pending_sells 时，发现 A 有持仓即卖出，错误卖掉了新建仓位
+  - 修复：在 `retry_pending_sells` 中检查 `pos.buy_date >= ps.create_date`，满足则说明是新仓，跳过旧卖单
+  - 此 BUG 导致纸面额外减仓，累计影响不可忽视
+
+## [0.69.10] - 2026-05-04
+
+### 修复
+
+- **持仓保留奖励命中后将持有期锚点重置到 T+1，避免延续后提前到期卖出** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py)):
+  - 在 `_generate_signals()` 中，当 `holding_bonus_enabled` 且留仓命中时，新增锚点重置流程
+  - 新增 `_reset_holding_anchor_for_kept_positions()`，将留仓 `buy_date` 从旧值推进到 T+1，并持久化账户状态
+  - 对齐回测 `_extend_holding_period()` 语义，修复“延续持有但持有期起点未后移”导致的持有窗口偏短问题
+
+### 测试
+
+- **新增持仓保留奖励锚点重置回归测试** ([tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py)):
+  - 覆盖“留仓命中后 buy_date 重置到 T+1”以及账户状态持久化
+
+## [0.69.9] - 2026-05-04
+
+### 修复
+
+- **纸面交易卖出主路径对齐回测，并统一盈亏口径为后复权绩效价** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [src/lazybull/paper/broker.py](src/lazybull/paper/broker.py), [src/lazybull/paper/account.py](src/lazybull/paper/account.py), [src/lazybull/paper/models.py](src/lazybull/paper/models.py), [src/lazybull/paper/storage.py](src/lazybull/paper/storage.py)):
+  - `PaperTradingRunner._generate_instructions()` 调整为仅生成买入/加仓，目标权重减仓/清仓不再直接下卖单
+  - 卖出统一走“持有期到期/条件触发（盈利延续、提前换出等）”路径，避免与回测实现分叉
+  - `evaluate_profit_extension()` / `evaluate_holding_period_actions()` / `evaluate_early_exit()` 统一以后复权绩效价计算 `profit_rate`
+  - 买入成交时记录 `buy_pnl_price`，并在账户状态序列化中持久化，保证跨日盈亏计算口径稳定
+  - T0 目标详情展示同步改为“保留（持有期/条件驱动卖出）”，避免展示与实际执行冲突
+
+### 测试
+
+- **新增回测-纸面同窗口决策对齐测试与后复权口径测试** ([tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py)):
+  - 覆盖“目标减仓不再生成直接卖出指令”
+  - 覆盖“盈利延续判定使用后复权绩效价”
+  - 覆盖“同区间下回测与纸面对盈利延续决策一致”
+
+## [0.69.8] - 2026-05-04
+
+### 修复
+
+- **纸面交易按日执行“持有期到期/盈利延续”评估，避免仅调仓日触发造成与回测偏离** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - 新增 `PaperTradingRunner.evaluate_holding_period_actions()`，按交易日评估到期卖出与盈利延续（`pnl/strength/disabled`）
+  - 将该评估接入 `runtime._execute_t1_if_pending()`：即使当日无调仓指令，也会执行持有期到期卖出
+  - 解决纸面交易中“盈利延续几乎仅在调仓日少量触发”的口径偏差，缩小与回测实现差异
+
+### 测试
+
+- **新增持有期对齐回归测试** ([tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py)):
+  - 覆盖“非调仓日也可触发 strength 延续”
+  - 覆盖“无调仓指令时 T1 仍执行持有期到期卖出”
+
+## [0.69.7] - 2026-05-04
+
+
+### 修复
+
+- **修复纸面交易 T0 路径 `protected_stocks` 未定义导致执行失败** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - 为 `_generate_signals()` 增加 `protected_stocks` 可选参数，并在 `run_t0()` 中透传
+  - 修复日志报错 `T0 执行失败: name 'protected_stocks' is not defined`
+  - 保持盈利延续保护展示链路可用，不影响最终指令生成
+
+## [0.69.6] - 2026-05-04
+
+### 修复
+
+- **钉钉机器人交易结果新增“盈利延续保护”紧凑展示** ([src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py), [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py), [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py)):
+  - 共享运行时结果新增 `protected_stocks`，将 T0 阶段命中的盈利延续保护名单透传到展示层
+  - `format_trade_result()` 在钉钉 Markdown 中新增紧凑的 `--- 盈利延续保护 ---` 区块，列出被保护保留的股票
+  - 为适应钉钉消息长度限制，最多展示前 8 只，超出时追加“其余 N 只已省略”
+
+## [0.69.5] - 2026-05-04
+
+### 修复
+
+- **T0 目标详情展示与盈利延续保护后的最终指令对齐** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - `T0 建仓目标详情` 现在会识别 `protected_stocks`，对被盈利延续保护的持仓显示为 `保留`，不再误报为 `清仓/减仓`
+  - 打印目标股数时改为复用与最终指令一致的总资产/现金保留比例口径，降低展示与真实指令不一致的概率
+  - 修复“无新目标但有受保护持仓”时日志提前返回的问题
+  - 新增回归测试，约束受保护股票在详情表中显示为 `保留`
+
+## [0.69.4] - 2026-05-04
+
+### 修复
+
+- **修复纸面交易 strength 路径读取特征时报 AttributeError** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - 将纸面交易运行器中两处不存在的 `Storage.load_features_by_date(...)` 调用改为现有接口 `Storage.load_cs_train_day(..., subdir="cs_infer")`
+  - 修复在 T0 阶段“计算盈利延续保护”时触发 `AttributeError: 'Storage' object has no attribute 'load_features_by_date'` 的问题
+  - 新增回归测试，约束 strength 评分路径使用 `load_cs_train_day`，避免同类接口名漂移再次引发运行时异常
+
+## [0.69.3] - 2026-05-04
+
+### 修复
+
+- **纸面交易中盈利延续 strength 命中保护时改为 warning 日志，提升可见性** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - `evaluate_profit_extension()` 在 `profit_extension_mode=strength` 且强势度达到阈值时，日志级别由 `info` 提升为 `warning`
+  - 日志文案显式展示 `强势度 >= 阈值`，更容易在纸面交易执行输出中识别“因盈利延续而未卖出”的持仓
+  - 新增回归测试，约束该 warning 日志持续存在
+
+## [0.69.2] - 2026-05-04
+
+### 修复
+
+- **batch walk-forward 支持扫描 MA250 硬条件阈值与仓位，并在对比 xlsx 中保留参数列** ([scripts/batch_walk_forward.ps1](scripts/batch_walk_forward.ps1), [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py), [scripts/walk_forward.py](scripts/walk_forward.py)):
+  - 将 `market_regime_ma250_threshold` 与 `market_regime_ma250_exposure` 从单值参数改为列表扫描参数，纳入批量任务笛卡尔积
+  - 在批量循环中逐组合透传 `--market-regime-ma250-threshold/--market-regime-ma250-exposure`
+  - 汇总链路沿用现有 summary/compare 参数列映射，生成的对比 xlsx 可直接看到两列参数值
+
+## [0.69.1] - 2026-04-30
+
+### 修复
+
+- **compare 跨时间段稳定性汇总去重：同一参数组同一时间段仅保留最新 run** ([scripts/compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 修复 `wf_comparison_batches.xlsx` 中“时间段列表/运行ID列表”被同一时间段重复 run 放大（例如出现大量 `0101 | 0101 | ...`）的问题
+  - 在稳定性聚合前，按 `参数组 + 时间段标签` 去重，并基于 `wf_run_id` 时间戳保留最新执行结果
+  - 使 `时间段数` 回到预期口径（每个参数组按不同 `wf_period_configs` 统计）
+
+### 测试
+
+- **新增跨时间段稳定性去重回归测试** ([tests/test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 覆盖同一批次同一时间段存在重复 run 时，仅保留最新 run 参与稳定性统计
+
 ## [0.69.0] - 2026-04-30
 
 ### 修复

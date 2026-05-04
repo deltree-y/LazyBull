@@ -271,6 +271,9 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
     else:
         lines.append("T0信号: 非调仓日或无新目标")
 
+    if result.protected_stocks:
+        lines.append(f"盈利延续保护: {len(result.protected_stocks)}只")
+
     if result.ect_reason and "未启用" not in result.ect_reason and "为空" not in result.ect_reason:
         lines.append(f"ECT系数: {result.ect_exposure:.2f} ({result.ect_reason})")
 
@@ -288,6 +291,7 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
     _append_trigger_section(lines, "止损卖出", result.stop_loss_actions, result.stock_names)
     _append_trigger_section(lines, "亏损提前换出", result.early_exit_actions, result.stock_names)
     _append_trigger_section(lines, "整体止盈", result.take_profit_actions, result.stock_names)
+    _append_protected_section(lines, result.protected_stocks, result.stock_names)
 
     if result.pending_sell_actions:
         lines.append("")
@@ -398,6 +402,26 @@ def _extract_weight(reason: str, target_weight: float = 0.0) -> str:
     if match:
         return f"权{float(match.group(1)):.2%}"
     return ""
+
+
+def _append_protected_section(
+    lines: List[str], protected_stocks: List[str], stock_names: Dict[str, str]
+) -> None:
+    """追加盈利延续保护区块（钉钉端保持紧凑，避免消息过长）。"""
+    if not protected_stocks:
+        return
+
+    max_items = 8
+    lines.append("")
+    lines.append("--- 盈利延续保护 ---")
+    for index, ts_code in enumerate(protected_stocks[:max_items], 1):
+        name = stock_names.get(ts_code, "")
+        label = f"{name}({ts_code})" if name else ts_code
+        lines.append(f"{index}. {label}")
+
+    remaining = len(protected_stocks) - max_items
+    if remaining > 0:
+        lines.append(f"其余 {remaining} 只已省略")
 
 
 def _get_rebalance_status(trade_date: str) -> str:

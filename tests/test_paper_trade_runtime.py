@@ -74,6 +74,7 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
             0.8,
             "ECT测试",
             "success",
+            ["000007.SZ"],
         ),
     )
 
@@ -94,6 +95,7 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
     assert result.pending_sell_actions == [{"ts_code": "000004.SZ"}]
     assert result.t1_actions == [{"ts_code": "000005.SZ", "action": "buy"}]
     assert result.t0_status == "success"
+    assert result.protected_stocks == ["000007.SZ"]
     assert result.stock_names == {"000001.SZ": "平安银行"}
     assert result.missing_factors == ["moneyflow_hsgt"]
     storage.save_stop_loss_state.assert_called_once()
@@ -154,7 +156,7 @@ def test_execute_trade_workflow_still_checks_early_exit_in_disabled_mode(monkeyp
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
-        lambda *_args, **_kwargs: ([], 1.0, "ECT 未启用", "not_rebalance_day"),
+        lambda *_args, **_kwargs: ([], 1.0, "ECT 未启用", "not_rebalance_day", []),
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime.DataLoader",
@@ -196,10 +198,13 @@ def test_format_trade_result_includes_profit_management_sections():
         ect_exposure=0.7,
         ect_reason="ECT 回撤保护",
         t0_status="not_rebalance_day",
+        protected_stocks=["000004.SZ", "000005.SZ"],
         stock_names={
             "000001.SZ": "平安银行",
             "000002.SZ": "万科A",
             "000003.SZ": "招商银行",
+            "000004.SZ": "豫园股份",
+            "000005.SZ": "中国软件",
         },
     )
 
@@ -207,6 +212,9 @@ def test_format_trade_result_includes_profit_management_sections():
 
     assert "提前换出: 1笔" in text
     assert "整体止盈: 1笔" in text
+    assert "盈利延续保护: 2只" in text
     assert "--- 亏损提前换出 ---" in text
     assert "--- 整体止盈 ---" in text
+    assert "--- 盈利延续保护 ---" in text
+    assert "1. 豫园股份(000004.SZ)" in text
     assert "ECT系数: 0.70 (ECT 回撤保护)" in text
