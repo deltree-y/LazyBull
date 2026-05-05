@@ -11,6 +11,7 @@ from loguru import logger
 
 from ..common.config import get_cost_settings
 from ..common.print_table import format_row
+from ..common.trade_status import is_tradeable
 from ..common.trading_config import TradingConfig
 from ..data import (
     DataCleaner,
@@ -565,8 +566,10 @@ class PaperTradingRunner:
         protected_stocks = protected_stocks or set()
         del sell_price_type, protected_stocks
 
-        # 目标权重字典
+        # 目标权重字典（供快速查找）
         target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
+        # 保持与信号输出一致的顺序，避免 set 无序遍历导致现金受限时结果不稳定
+        ordered_target_codes = [t.ts_code for t in targets]
 
         # 当前持仓
         current_positions = self.account.get_positions()
@@ -577,10 +580,8 @@ class PaperTradingRunner:
         #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
         total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
 
-        # 仅处理目标股票买入/加仓
-        all_stocks = set(target_weights.keys())
-
-        for ts_code in all_stocks:
+        # 仅处理目标股票买入/加仓（按目标顺序）
+        for ts_code in ordered_target_codes:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
             pos = current_positions.get(ts_code)
             current_shares = pos.shares if pos else 0
@@ -960,13 +961,82 @@ class PaperTradingRunner:
         buy_shares = int(target_value / price / 100) * 100
         
         return buy_shares
+
+    def _estimate_pending_buy_shares_backtest_style(
+        self,
+        ts_code: str,
+        price: float,
+        target_weight: float,
+        current_total_value: float,
+    ) -> int:
+        """按回测口径估算补位买入股数。
+
+        回测补位的买入目标金额为 current_total_value * slot_weight，
+        再按 A 股一手约束取整，若现金不足则按剩余现金缩量。
+        """
+        buy_shares, _ = self._analyze_pending_buy_shares_backtest_style(
+            ts_code=ts_code,
+            price=price,
+            target_weight=target_weight,
+            current_total_value=current_total_value,
+        )
+        return buy_shares
+
+    def _analyze_pending_buy_shares_backtest_style(
+        self,
+        ts_code: str,
+        price: float,
+        target_weight: float,
+        current_total_value: float,
+    ) -> Tuple[int, str]:
+        """按回测口径估算补位买入股数，并返回拒绝原因。"""
+        if price <= 0 or target_weight <= 0 or current_total_value <= 0:
+            if price <= 0:
+                return 0, "无有效价格"
+            if target_weight <= 0:
+                return 0, "槽位权重<=0"
+            return 0, "组合总资产<=0"
+
+        target_value = current_total_value * target_weight
+        buy_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+        if buy_shares < SHARE_LOT_SIZE:
+            return 0, "目标金额不足一手"
+
+        cash = self.account.get_cash()
+        if cash <= 0:
+            return 0, "现金不足"
+
+        amount = buy_shares * price
+        buy_cost = self.broker.cost_model.calculate_buy_cost(amount)
+        if amount + buy_cost <= cash:
+            return buy_shares, "可买入"
+
+        # 对齐回测：现金不足时按剩余现金缩量买入，而非直接放弃
+        if cash <= buy_cost:
+            return 0, "现金不足(连手续费都不够)"
+
+        buy_shares = int((cash - buy_cost) / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+        if buy_shares < SHARE_LOT_SIZE:
+            return 0, "现金不足(缩量后不足一手)"
+
+        while buy_shares >= SHARE_LOT_SIZE:
+            amount = buy_shares * price
+            buy_cost = self.broker.cost_model.calculate_buy_cost(amount)
+            if amount + buy_cost <= cash:
+                return buy_shares, "可买入(缩量)"
+            buy_shares -= SHARE_LOT_SIZE
+
+        return 0, "现金不足(含费用)"
     
     def _execute_pending_buys(
         self,
         pending_buys: List,
         buy_prices: Dict[str, float],
         trade_date: str,
-        buy_price_type: str = 'close'
+        buy_price_type: str = 'close',
+        universe_type: str = 'mainboard',
+        exclude_st: bool = True,
+        min_list_days: int = 365,
     ) -> List:
         """执行补位买入计划（仅买入，不触发卖出）
         
@@ -979,7 +1049,7 @@ class PaperTradingRunner:
         Returns:
             成交记录列表
         """
-        from .models import Fill, Order, PendingBuy, TargetWeight
+        from .models import Fill, Order
         
         MAX_REPLENISHMENT_ATTEMPTS = 5
         
@@ -987,24 +1057,100 @@ class PaperTradingRunner:
         logger.info(f"执行补位买入计划 - {trade_date}")
         logger.info(f"待处理补位: {len(pending_buys)} 个")
         logger.info("=" * 80)
-        
-        # 加载可交易性信息
-        tradability = self.broker._load_tradability_info(trade_date)
-        
-        # 计算总资产
-        all_prices = buy_prices
-        total_value = self.account.get_total_value(all_prices)
-        #算算手头还有多少现金
-        pendding_capital_retention_ratio = self._get_cost_setting(
-            "pendding_capital_retention_ratio", 0.3
-        )
 
-        total_cash = self.account.get_cash() * (1 - pendding_capital_retention_ratio)  # 留出一定现金空间，避免过度买入导致后续无法补位
-        available_cash = total_cash / len(pending_buys)  # 简单平均分配现金到每个补位目标
-        
+        # 当日行情用于可交易性检查（与回测 is_tradeable 对齐）
+        date_quote = self.loader.load_clean_daily_by_date(trade_date)
+        if date_quote is None:
+            date_quote = pd.DataFrame()
+
+        # 对齐回测：基于上一交易日重算候选池，并限制为「槽位数*2」
+        slot_count = len(pending_buys)
+        candidate_buffer = slot_count * 2
+        prev_trade_date = self._get_prev_trade_date(trade_date)
+
+        candidate_codes: List[str] = []
+        if prev_trade_date and self.signal is not None and hasattr(self.signal, "generate_ranked"):
+            signal_data = self.storage.load_cs_train_day(prev_trade_date, subdir="cs_infer")
+            if signal_data is None or signal_data.empty:
+                ok, missing = ensure_features_for_date(
+                    self.storage,
+                    self.loader,
+                    self.feature_builder,
+                    self.cleaner,
+                    self.client,
+                    prev_trade_date,
+                    force=False,
+                )
+                self.missing_factors = missing
+                if ok:
+                    signal_data = self.storage.load_cs_train_day(prev_trade_date, subdir="cs_infer")
+
+            if signal_data is not None and not signal_data.empty:
+                try:
+                    existing_positions = set(self.account.get_positions().keys())
+
+                    stocks: List[str] = []
+                    stock_basic = self.loader.load_clean_stock_basic()
+                    prev_daily_data = self.loader.load_clean_daily_by_date(prev_trade_date)
+                    if (
+                        stock_basic is not None
+                        and not stock_basic.empty
+                        and prev_daily_data is not None
+                        and not prev_daily_data.empty
+                    ):
+                        universe = self._create_universe(
+                            stock_basic,
+                            universe_type,
+                            exclude_st=exclude_st,
+                            min_list_days=min_list_days,
+                        )
+                        stocks = universe.get_stocks(pd.Timestamp(prev_trade_date), prev_daily_data)
+
+                    # 回退路径：股票池构建失败时，退回到特征文件内全量股票
+                    if not stocks:
+                        stocks = signal_data["ts_code"].dropna().astype(str).unique().tolist()
+
+                    stocks = [s for s in stocks if s not in existing_positions]
+
+                    ranked_candidates = self.signal.generate_ranked(
+                        pd.Timestamp(prev_trade_date),
+                        stocks,
+                        {"features": signal_data},
+                    )
+
+                    for ts_code, _ in ranked_candidates:
+                        if ts_code in existing_positions:
+                            continue
+                        candidate_codes.append(ts_code)
+                        if len(candidate_codes) >= candidate_buffer:
+                            break
+
+                    if candidate_codes:
+                        logger.info(
+                            f"补位候选池已重算: 基于 {prev_trade_date}, "
+                            f"有限候选 {len(candidate_codes)} 只（槽位 {slot_count}）"
+                        )
+                except Exception as exc:
+                    logger.warning(f"补位候选池重算失败，回退队列代码模式: {exc}")
+
+        # 回退路径：候选池重算失败时，沿用旧的队列代码顺序
+        if not candidate_codes:
+            candidate_codes = [pb.ts_code for pb in pending_buys if pb.ts_code]
+            logger.warning(
+                f"补位候选池为空，回退为队列代码模式（{len(candidate_codes)} 只）"
+            )
+
         fills = []
         updated_pending_buys = []
-        failed_buy_targets = []
+        bought_stock_set = set()
+        untradeable_stock_set = set()
+
+        # 对齐回测：槽位目标金额基于当日组合总资产（非“补位均分现金”）
+        current_total_value = self.account.get_total_value(buy_prices)
+        if current_total_value <= 0:
+            current_total_value = float(getattr(self.account, "initial_capital", 0.0) or 0.0)
+        # 与 broker 路径保持一致：补位买入也要满足最小买入后市值阈值
+        min_buy_value_threshold = self.broker._get_min_buy_value_threshold(buy_prices)
         
         for pending_buy in pending_buys:
             # 检查是否超过尝试次数
@@ -1020,91 +1166,99 @@ class PaperTradingRunner:
                 updated_pending_buys.append(pending_buy)
                 continue
             
-            ts_code = pending_buy.ts_code
-            
-            # 检查是否已持仓
-            if ts_code in self.account.get_positions():
-                logger.info(f"补位 {ts_code} 已在持仓中，跳过")
-                continue
-            
-            # 检查价格数据
-            if ts_code not in buy_prices:
-                logger.warning(f"补位 {ts_code} 无买入价格数据，记录失败并继续尝试")
-                pending_buy.attempts += 1
-                pending_buy.last_attempt_date = trade_date
-                failed_buy_targets.append(TargetWeight(
+            slot_code = pending_buy.ts_code
+            filled_for_slot = False
+            slot_reason_counter: Dict[str, int] = {}
+
+            def _record_slot_reason(reason_text: str, stock_code: Optional[str] = None) -> None:
+                slot_reason_counter[reason_text] = slot_reason_counter.get(reason_text, 0) + 1
+
+            for ts_code in candidate_codes:
+                if ts_code in bought_stock_set:
+                    _record_slot_reason("当日已被其他槽位买入", ts_code)
+                    continue
+                if ts_code in untradeable_stock_set:
+                    _record_slot_reason("当日不可交易(已缓存)", ts_code)
+                    continue
+                if ts_code in self.account.get_positions():
+                    _record_slot_reason("已持仓", ts_code)
+                    continue
+                price = buy_prices.get(ts_code)
+                if price is None or price <= 0:
+                    _record_slot_reason("无价格数据", ts_code)
+                    continue
+
+                tradeable, reason = is_tradeable(ts_code, trade_date, date_quote, action="buy")
+                if not tradeable:
+                    untradeable_stock_set.add(ts_code)
+                    _record_slot_reason(f"不可交易({reason})", ts_code)
+                    continue
+
+                buy_shares, share_reason = self._analyze_pending_buy_shares_backtest_style(
                     ts_code=ts_code,
+                    price=price,
                     target_weight=pending_buy.target_weight,
-                    reason=f"{pending_buy.reason}（无价格数据）"
-                ))
-                updated_pending_buys.append(pending_buy)
-                continue
-            
-            # 检查可交易性
-            can_buy, buy_reason = self.broker._check_can_buy(ts_code, tradability)
-            if not can_buy:
-                logger.warning(f"补位 {ts_code} 不可买入: {buy_reason}，记录失败并继续尝试")
-                pending_buy.attempts += 1
-                pending_buy.last_attempt_date = trade_date
-                failed_buy_targets.append(TargetWeight(
+                    current_total_value=current_total_value,
+                )
+                if buy_shares <= 0:
+                    _record_slot_reason(f"资金/股数约束({share_reason})", ts_code)
+                    continue
+
+                actual_buy_value = buy_shares * price
+                if min_buy_value_threshold > 0 and actual_buy_value < min_buy_value_threshold:
+                    _record_slot_reason("买入后市值过小", ts_code)
+                    continue
+
+                order = Order(
                     ts_code=ts_code,
+                    action='buy',
+                    shares=buy_shares,
+                    price=price,
                     target_weight=pending_buy.target_weight,
-                    reason=f"{pending_buy.reason}（{buy_reason}）"
-                ))
-                updated_pending_buys.append(pending_buy)
-                continue
-            
-            # 使用统一的估算方法计算买入股数
-            buy_shares = self._estimate_pending_buy_shares(
-                ts_code=ts_code,
-                price=buy_prices[ts_code],
-                target_weight=pending_buy.target_weight,
-                total_pending_count=len(pending_buys),
-                pendding_capital_retention_ratio=pendding_capital_retention_ratio
-            )
-            
-            if buy_shares <= 0:
-                logger.warning(f"补位 {ts_code} 不足一手，记录失败并继续尝试")
-                pending_buy.attempts += 1
-                pending_buy.last_attempt_date = trade_date
-                failed_buy_targets.append(TargetWeight(
-                    ts_code=ts_code,
-                    target_weight=pending_buy.target_weight,
-                    reason=f"{pending_buy.reason}（不足一手）"
-                ))
-                updated_pending_buys.append(pending_buy)
-                continue
-            
-            # 创建订单
-            order = Order(
-                ts_code=ts_code,
-                action='buy',
-                shares=buy_shares,
-                price=buy_prices[ts_code],
-                target_weight=pending_buy.target_weight,
-                current_weight=0.0,
-                reason=pending_buy.reason
-            )
-            
-            # 执行订单
-            #logger.info(f"补位买入: {ts_code}, {buy_shares} 股, 目标权重 {pending_buy.target_weight:.2%}, 预估成本 {target_value:.2f}")
-            fill = self.broker._execute_single_order(order, trade_date, buy_price_type)
-            
-            if fill:
-                fills.append(fill)
-                logger.info(f"补位成功: {ts_code}, 买入 {fill.shares} 股, 成交价 {fill.price:.2f}, 成交金额 {fill.shares * fill.price:.2f}")
-                # 补位成功，不再保留在队列中
-            else:
-                logger.warning(f"补位执行失败: {ts_code}, ")
+                    current_weight=0.0,
+                    reason=pending_buy.reason,
+                )
+
+                fill = self.broker._execute_single_order(order, trade_date, buy_price_type)
+                if fill:
+                    fills.append(fill)
+                    bought_stock_set.add(ts_code)
+                    filled_for_slot = True
+                    if prev_trade_date:
+                        logger.info(
+                            f"补位成功: {trade_date} (基于 {prev_trade_date} 数据), "
+                            f"槽位 {slot_code} (权重 {pending_buy.target_weight:.4f}) "
+                            f"买入股票 {ts_code} 成功"
+                        )
+                    else:
+                        logger.info(
+                            f"补位成功: 槽位 {slot_code} 买入股票 {ts_code}, "
+                            f"买入 {fill.shares} 股, 成交价 {fill.price:.2f}"
+                        )
+                    break
+                _record_slot_reason("下单失败(执行层拒单)", ts_code)
+
+            if not filled_for_slot:
                 pending_buy.attempts += 1
                 pending_buy.last_attempt_date = trade_date
                 updated_pending_buys.append(pending_buy)
-        
-        # 如果有新的失败买入，生成新的补位计划
-        if failed_buy_targets:
-            logger.info(f"补位执行失败 {len(failed_buy_targets)} 个，将生成新的补位计划")
-            # 将失败的目标记录到broker，供后续处理
-            self.broker._failed_buy_targets = failed_buy_targets
+                reason_summary = "、".join(
+                    [
+                        f"{reason}:{count}"
+                        for reason, count in sorted(
+                            slot_reason_counter.items(),
+                            key=lambda item: item[1],
+                            reverse=True,
+                        )[:4]
+                    ]
+                )
+                if not reason_summary:
+                    reason_summary = "候选全部不匹配"
+                logger.info(
+                    f"补位延迟: {trade_date}, 槽位 {slot_code} (权重 {pending_buy.target_weight:.4f}) "
+                    f"候选池 {len(candidate_codes)} 只未匹配，"
+                    f"原因[{reason_summary}]，下次重试"
+                )
         
         # 保存更新后的补位队列
         self.paper_storage.save_pending_buys(updated_pending_buys)
@@ -1489,6 +1643,22 @@ class PaperTradingRunner:
                             f" 加分 {bonus:.4f} (sigma={holding_bonus_sigma})"
                         )
 
+        # 对齐目标行为：holding_bonus=false 时，T0 选股应完全排除已持仓，
+        # 避免为已持仓股票生成“补差买单”。
+        if (not holding_bonus_enabled) and existing_positions and ranked_candidates:
+            before = len(ranked_candidates)
+            ranked_candidates = [
+                (ts_code, score)
+                for ts_code, score in ranked_candidates
+                if ts_code not in existing_positions
+            ]
+            excluded = before - len(ranked_candidates)
+            if excluded > 0:
+                logger.info(
+                    f"holding_bonus关闭：排除已持仓候选 {excluded} 只，"
+                    f"候选数 {before} -> {len(ranked_candidates)}"
+                )
+
         logger.info(f"等权+一手约束: 排序候选数 {len(ranked_candidates)}")
 
         confidence_gate_state = None
@@ -1548,7 +1718,7 @@ class PaperTradingRunner:
             if len(selected) >= target_n:
                 break
 
-            if ts_code in existing_positions:
+            if holding_bonus_enabled and ts_code in existing_positions:
                 selected.append((ts_code, score))
                 continue
 
@@ -2058,6 +2228,28 @@ class PaperTradingRunner:
         if not positions:
             return set(), []
 
+        # 与回测对齐：strength 模式按日评估时需确保当日 cs_infer 可用，
+        # 否则 momentum/technical/fund_flow 会因缺特征退化为 0.5。
+        if mode == "strength":
+            try:
+                success, missing = ensure_features_for_date(
+                    self.storage,
+                    self.loader,
+                    self.feature_builder,
+                    self.cleaner,
+                    self.client,
+                    trade_date,
+                    force=False,
+                )
+                self.missing_factors = missing
+                self.feature_builder.clear_caches()
+                if not success:
+                    logger.warning(
+                        f"strength 评估当日特征补齐失败: {trade_date}，将使用降级评分"
+                    )
+            except Exception as exc:
+                logger.warning(f"strength 评估特征补齐异常: {trade_date}, {exc}")
+
         exclude_stocks = exclude_stocks or set()
 
         pnl_price_map = self._build_pnl_price_map_for_date(trade_date, price_type="close")
@@ -2245,6 +2437,12 @@ class PaperTradingRunner:
 
             # 未达到最低持有天数，不检查
             if holding_days < min_hold:
+                continue
+
+            # 与回测一致：亏损提前换出仅在正常持有期内生效。
+            # 到达/超过持有期后应由持有期到期 + 盈利延续逻辑决策，
+            # 避免同一交易日被提前换出路径抢跑。
+            if holding_days >= int(rebalance_freq):
                 continue
 
             # 判断是否触发亏损阈值（支持 ATR 动态阈值）
@@ -2531,6 +2729,32 @@ class PaperTradingRunner:
             return None
         except Exception as e:
             logger.error(f"获取下一个交易日失败: {e}")
+            return None
+
+    def _get_prev_trade_date(self, trade_date: str) -> Optional[str]:
+        """获取上一个交易日。
+
+        Args:
+            trade_date: 当前交易日 YYYYMMDD
+
+        Returns:
+            上一个交易日 YYYYMMDD，不存在返回None
+        """
+        try:
+            trade_cal = self.loader.load_clean_trade_cal()
+            if trade_cal is None:
+                logger.error("无法加载交易日历")
+                return None
+
+            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+            for i, date in enumerate(trade_dates):
+                if date == trade_date and i - 1 >= 0:
+                    return trade_dates[i - 1]
+
+            logger.warning(f"未找到 {trade_date} 的上一个交易日")
+            return None
+        except Exception as e:
+            logger.error(f"获取上一个交易日失败: {e}")
             return None
 
     def _reset_holding_anchor_for_kept_positions(

@@ -15,12 +15,14 @@ from ..data.ensure import ensure_basic_data, ensure_clean_data_for_date
 from .builder import FeatureBuilder
 
 # 常量定义
-FEATURE_DATA_HISTORY_MONTHS = 1  # 特征数据历史月数
-# 注意: 纸面交易使用 require_label=False，标签为 NaN 不影响推理；
-# 此值必须为 0，避免下载/使用未来数据导致前视偏差。
-FEATURE_DATA_FUTURE_MONTHS = 0
-HISTORICAL_DATA_MONTHS = 1       # 历史数据回看月数
-MAX_HISTORICAL_DAYS = 30         # 最多检查的历史交易日数
+# 与 build_clean_features.py 保持一致：
+# - 过去约 7 个月用于覆盖 120 交易日 warmup
+# - 向后扩展 1 个月保持离线构建口径（require_label=False 时不会因标签使用未来数据）
+FEATURE_DATA_HISTORY_MONTHS = 7
+FEATURE_DATA_FUTURE_MONTHS = 1
+HISTORICAL_DATA_MONTHS = FEATURE_DATA_HISTORY_MONTHS
+# 最多检查最近 N 个交易日 clean 分区，确保 warmup 期间缺口可被自动补齐
+MAX_HISTORICAL_DAYS = 180
 
 # 因子数据最低记录数阈值，低于此值视为数据不足，触发全量下载
 # 这些因子是 point-in-time 查询，需要全量历史才有意义
@@ -107,12 +109,14 @@ def ensure_features_for_date(
             if not pd.api.types.is_datetime64_any_dtype(trade_cal['cal_date']):
                 trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
         
-        # 5. 加载 clean 日线数据（扩展范围以包含历史数据，不加载未来数据）
+        # 5. 加载 clean 日线数据（与 build_clean_features 口径对齐）
         trade_dt = pd.to_datetime(trade_date, format='%Y%m%d')
         start_dt = trade_dt - pd.DateOffset(
             months=FEATURE_DATA_HISTORY_MONTHS
         )
-        end_dt = trade_dt  # 严格截止到当前交易日，禁止使用未来数据
+        end_dt = trade_dt + pd.DateOffset(
+            months=FEATURE_DATA_FUTURE_MONTHS
+        )
         
         daily_clean = loader.load_clean_daily(
             start_dt.strftime('%Y%m%d'),
@@ -134,19 +138,14 @@ def ensure_features_for_date(
             logger.error(f"缺少 clean 日线数据: {trade_date}")
             return False, []
         
-        # 强制检查 moneyflow 数据（新模型必须依赖）
+        # 与 build_clean_features 对齐：moneyflow 缺失只告警，不在 ensure 阶段中断
         if moneyflow_clean is None or moneyflow_clean.empty:
-            logger.error(
-                f"缺少 clean moneyflow 数据: {trade_date}\n"
-                f"新模型训练需要资金流向特征，请先补齐 moneyflow 数据。\n"
-                f"推荐步骤：\n"
-                f"  1. 下载 raw moneyflow: python scripts/download_raw.py --data-type moneyflow --start-date {start_dt.strftime('%Y%m%d')} --end-date {end_dt.strftime('%Y%m%d')}\n"
-                f"  2. 构建 clean moneyflow: python scripts/build_clean_features.py --start-date {start_dt.strftime('%Y%m%d')} --end-date {end_dt.strftime('%Y%m%d')} --horizon 20"
-            )
-            return False, []
+            logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
 
         logger.info(f"clean 日线数据: {len(daily_clean)} 条记录")
-        logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
+        logger.info(
+            f"clean moneyflow 数据: {len(moneyflow_clean) if moneyflow_clean is not None else 0} 条记录"
+        )
 
         # 6. 加载申万行业分类数据（缺失则自动下载）
         shenwan_industry = loader.load_shenwan_industry()
@@ -183,12 +182,16 @@ def ensure_features_for_date(
                               start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d'))
         )
 
-        # 8. 构建特征（无需传递 adj_factor，clean 数据已包含复权价格）
+        # 与 build_clean_features 对齐：循环外预计算 daily_adj 与日期索引缓存
+        adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+        builder.precompute_daily_adj(daily_clean, adj_factor)
+
+        # 8. 构建特征（adj_factor 传空列结构，复权价来自 clean 日线）
         features_df = builder.build_features_for_day(
             trade_date=trade_date,
             trade_cal=trade_cal,
             daily_data=daily_clean,
-            adj_factor=pd.DataFrame(),  # 空 DataFrame，clean 数据已包含复权价格
+            adj_factor=adj_factor,
             stock_basic=stock_basic,
             daily_basic_data=daily_basic_clean,
             moneyflow_data=moneyflow_clean,
@@ -240,8 +243,8 @@ def _ensure_historical_clean_data(
 ) -> bool:
     """确保历史 clean 数据存在
     
-    Features 构建需要历史数据来计算动量、均值等特征
-    这里确保过去一个月的交易日数据存在
+    Features 构建需要历史数据来计算动量、均值等特征。
+    这里按与 build_clean_features 一致的 warmup 窗口补齐历史 clean 数据。
     
     Args:
         storage: Storage 实例
@@ -265,7 +268,7 @@ def _ensure_historical_clean_data(
         if not pd.api.types.is_datetime64_any_dtype(trade_cal['cal_date']):
             trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
     
-    # 获取过去一个月的交易日
+    # 获取 warmup 窗口内的历史交易日
     start_dt = pd.to_datetime(trade_date, format='%Y%m%d') - pd.DateOffset(
         months=HISTORICAL_DATA_MONTHS
     )

@@ -142,6 +142,7 @@ class TradingConfig:
     buy_price: str = "close"
     sell_price: str = "open"
     initial_capital: float = 500000.0
+    min_buy_value_ratio: float = 0.2  # 买入后最小持仓市值占“平均仓位市值”比例（0=关闭）
     horizon: int = 5
     universe: str = "mainboard"
 
@@ -819,6 +820,12 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         )
         parser.add_argument(
             "--initial-capital", type=float, default=500000.0, help="初始资金（默认：500000）"
+        )
+        parser.add_argument(
+            "--min-buy-value-ratio",
+            type=float,
+            default=0.2,
+            help="买入后最小持仓市值占平均仓位市值比例（默认：0.2，设为0可关闭）",
         )
         parser.add_argument(
             "--horizon", type=int, default=5, help="特征构建的预测周期（天数），默认5"

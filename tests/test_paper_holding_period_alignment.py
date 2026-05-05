@@ -329,3 +329,108 @@ def test_end_to_end_decision_alignment_with_backtest_on_same_window():
         protected, sell_actions = runner.evaluate_holding_period_actions("20240104", cfg)
         assert protected == {"000001.SZ"}
         assert sell_actions == []
+
+
+def test_early_exit_should_not_trigger_after_holding_period_reached():
+    """到达持有期后，亏损提前换出应让位于到期/延续路径（对齐回测）。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        runner = _build_runner(tmpdir)
+
+        runner.account.state.positions = {
+            "000001.SZ": Position(
+                ts_code="000001.SZ",
+                shares=100,
+                buy_price=10.0,
+                buy_cost=1.0,
+                buy_date="20240102",
+                buy_pnl_price=100.0,
+            )
+        }
+
+        # 当日亏损（95/100=-5%），若未加边界会触发 early_exit
+        runner.loader.load_clean_daily_by_date = MagicMock(
+            return_value=pd.DataFrame(
+                [{"ts_code": "000001.SZ", "close": 9.5, "close_adj": 95.0}]
+            )
+        )
+        runner.loader.load_clean_trade_cal = MagicMock(
+            return_value=pd.DataFrame(
+                [
+                    {"cal_date": "20240102", "is_open": 1},
+                    {"cal_date": "20240103", "is_open": 1},
+                    {"cal_date": "20240104", "is_open": 1},
+                ]
+            )
+        )
+
+        cfg = {
+            "enable_profit_based_holding": True,
+            "rebalance_freq": 2,
+            "early_exit_holding_ratio": 0.5,
+            "early_exit_loss_threshold": -0.03,
+            "buy_price": "close",
+            "early_exit_mode": "disabled",
+        }
+
+        actions = runner.evaluate_early_exit("20240104", cfg)
+        assert actions == []
+
+
+def test_holding_strength_should_ensure_features_before_daily_evaluation(monkeypatch):
+    """strength 模式按日评估前应先 ensure 当日 features。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        runner = _build_runner(tmpdir)
+
+        runner.account.state.positions = {
+            "000001.SZ": Position(
+                ts_code="000001.SZ",
+                shares=100,
+                buy_price=10.0,
+                buy_cost=1.0,
+                buy_date="20240102",
+                buy_pnl_price=100.0,
+            )
+        }
+
+        runner.loader.load_clean_daily_by_date = MagicMock(
+            return_value=pd.DataFrame([{"ts_code": "000001.SZ", "close": 112.0, "close_adj": 112.0}])
+        )
+        runner.loader.load_clean_trade_cal = MagicMock(
+            return_value=pd.DataFrame(
+                [
+                    {"cal_date": "20240102", "is_open": 1},
+                    {"cal_date": "20240103", "is_open": 1},
+                    {"cal_date": "20240104", "is_open": 1},
+                ]
+            )
+        )
+        runner._score_holding_strength = MagicMock(
+            return_value=type(
+                "Breakdown",
+                (object,),
+                {"total": 0.8, "to_log_str": lambda self: "ok"},
+            )()
+        )
+
+        ensure_called = {"count": 0}
+
+        def _fake_ensure(*_args, **_kwargs):
+            ensure_called["count"] += 1
+            return True, []
+
+        monkeypatch.setattr("src.lazybull.paper.runner.ensure_features_for_date", _fake_ensure)
+
+        cfg = {
+            "enable_profit_based_holding": True,
+            "profit_extension_mode": "strength",
+            "profit_extension_strength_threshold": 0.56,
+            "rebalance_freq": 2,
+            "profit_extension_days": 3,
+            "buy_price": "close",
+        }
+
+        protected, sell_actions = runner.evaluate_holding_period_actions("20240104", cfg)
+
+        assert ensure_called["count"] == 1
+        assert protected == {"000001.SZ"}
+        assert sell_actions == []

@@ -273,3 +273,57 @@ def test_equal_weight_lot_constraint_boundary_case(mock_runner):
     assert '000001.SZ' in result
     assert '000002.SZ' not in result
     assert len(result) == 1
+
+
+def test_equal_weight_lot_constraint_excludes_existing_positions_when_holding_bonus_disabled(
+    mock_runner,
+):
+    """holding_bonus 关闭时，已持仓股票应被完全排除，不生成补差买单目标。"""
+    date = pd.Timestamp('20260201')
+    stocks = ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ']
+    top_n = 3
+    buy_price_type = 'close'
+
+    signal_data = pd.DataFrame(
+        {
+            'ts_code': stocks,
+            'feature1': [1, 2, 3, 4],
+        }
+    )
+
+    daily_data = pd.DataFrame(
+        {
+            'ts_code': stocks,
+            'close': [10.0, 10.0, 10.0, 10.0],
+            'open': [10.0, 10.0, 10.0, 10.0],
+        }
+    )
+
+    # 排名前两只恰好是已有持仓
+    ranked_candidates = [
+        ('000001.SZ', 0.95),
+        ('000002.SZ', 0.90),
+        ('000003.SZ', 0.85),
+        ('000004.SZ', 0.80),
+    ]
+
+    mock_runner.signal = MagicMock(spec=MLSignal)
+    mock_runner.signal.generate_ranked.return_value = ranked_candidates
+
+    result = mock_runner._generate_ranked_with_lot_constraint(
+        date,
+        stocks,
+        signal_data,
+        daily_data,
+        top_n,
+        buy_price_type,
+        holding_bonus_enabled=False,
+        existing_positions={'000001.SZ', '000002.SZ'},
+    )
+
+    # 已持仓必须被排除，目标仅来自非持仓股票
+    assert '000001.SZ' not in result
+    assert '000002.SZ' not in result
+    assert '000003.SZ' in result
+    assert '000004.SZ' in result
+    assert len(result) == 2

@@ -2,6 +2,302 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.70.11] - 2026-05-05
+
+### 修复
+
+- **修复批量纸面交易脚本的 PowerShell 未认可动词告警** ([scripts/batch_paper_trade.ps1](scripts/batch_paper_trade.ps1)):
+  - 将函数名 `Parse-DateText` 重命名为 `Get-DateFromText`
+  - 同步更新调用点，消除 PSScriptAnalyzer 的 `UseApprovedVerbs` 告警
+
+## [0.70.10] - 2026-05-05
+
+### 修复
+
+- **修复补位真实执行路径漏掉最小买入后市值阈值的问题** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `T1` 阶段补位实际执行走 `PaperTradingRunner._execute_pending_buys()`，此前未做 `min_buy_value_ratio` 阈值拦截
+  - 现已在候选股可买股数计算后增加阈值校验：`买入后市值 >= (总资产 / top_n) * min_buy_value_ratio`
+  - 低于阈值时不下单，保留为补位延迟，避免出现 100 股几百元碎仓
+
+### 测试
+
+- **新增补位真实执行路径回归测试** ([tests/test_buy_replacement.py](tests/test_buy_replacement.py)):
+  - `test_execute_pending_buys_skip_tiny_buy_value_by_ratio`
+
+## [0.70.8] - 2026-05-05
+
+## [0.70.9] - 2026-05-05
+
+### 修复
+
+- **纸面交易新增最小买入后市值阈值，避免出现几百元碎仓买入** ([src/lazybull/paper/broker.py](src/lazybull/paper/broker.py), [src/lazybull/common/trading_config.py](src/lazybull/common/trading_config.py), [src/lazybull/paper/storage.py](src/lazybull/paper/storage.py), [scripts/paper_trade.py](scripts/paper_trade.py)):
+  - 新增配置 `min_buy_value_ratio`（默认 `0.2`，设为 `0` 可关闭）
+  - 阈值定义：`最小买入后市值 = (总资产 / top_n) * min_buy_value_ratio`
+  - 在三条路径统一生效：T0 生成订单买入、T1 指令买入、补位重试买入
+  - 当买入后市值低于阈值时跳过买入并保留现金，不再生成过小持仓
+
+### 测试
+
+- **新增最小买入后市值阈值回归测试** ([tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - `test_broker_execute_instructions_skip_tiny_buy_value_by_ratio`
+  - `test_broker_retry_pending_buys_keeps_order_when_value_too_small`
+
+## [0.70.8] - 2026-05-05
+
+### 修复
+
+- **补位延迟日志简化为单句摘要，移除示例明细** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - 保留核心信息：交易日、槽位、候选池数量、原因汇总、下次重试
+  - 移除冗长的 `示例[...]` 内容，避免日志过长影响阅读
+
+### 测试
+
+- **纸面交易相关回归通过**:
+  - `tests/test_paper_trading.py`
+  - `tests/test_paper_trade_runtime.py`
+
+## [0.70.5] - 2026-05-05
+
+### 修复
+
+- **纸面持仓表“剩余D”纳入延期持有窗口计算** ([src/lazybull/paper/broker.py](src/lazybull/paper/broker.py)):
+  - 旧逻辑仅按 `rebalance_freq` 计算 `剩余D`
+  - 新逻辑在 `enable_profit_based_holding=true` 且 `profit_extension_mode!=disabled` 时，按
+    `rebalance_freq + profit_extension_days` 作为可持有上限计算剩余
+  - 示例口径：`剩余D = max(0, (rebalance_freq + extension_days) - 持有交易日)`
+
+### 测试
+
+- **新增延期持有剩余天数回归测试** ([tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - `test_broker_positions_remaining_includes_extension_days`
+  - 验证开启盈利延续时，`剩余D` 会包含 `profit_extension_days`
+
+## [0.70.7] - 2026-05-05
+
+### 修复
+
+- **补位延迟日志增加原因统计，明确区分现金不足与其他拒绝原因** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `_execute_pending_buys()` 在槽位补位失败时输出原因聚合与示例股票
+  - 新增 `_analyze_pending_buy_shares_backtest_style()`，对“目标金额不足一手 / 现金不足 / 手续费不足 / 缩量后不足一手”等资金约束场景给出明确判定
+  - 修复效果：日志中的“未找到可买入股票”从笼统描述升级为可解释的分项原因，便于快速定位是否由现金导致
+
+### 测试
+
+- **补位执行与运行时相关回归通过**:
+  - `tests/test_buy_replacement.py`
+  - `tests/test_paper_trade_runtime.py`
+
+## [0.70.6] - 2026-05-05
+
+### 修复
+
+- **纸面补位队列改为保留“未成交槽位”原始权重** ([src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - `_handle_failed_buys()` 不再在 T1 预先重算替代股票并重置权重
+  - 改为直接保存失败买入槽位（`ts_code` + `target_weight`），下一交易日再按 D-1 数据重算候选
+  - 修复效果：避免补位目标被重算为等权，执行口径与回测 `unfilled_slot_weights` 一致
+
+- **纸面补位买入金额改为回测同款“组合价值×槽位权重”** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - 新增 `_estimate_pending_buy_shares_backtest_style()`，补位目标金额按 `current_total_value * target_weight`
+  - 现金不足时按剩余现金缩量买入，而非按“补位均分现金+保留比例”估算
+  - 修复效果：补位仓位规模与回测一致，不再出现补位金额系统性偏小
+
+- **纸面补位候选池重算增加交易日股票池约束并统一可交易性判定** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py), [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - `_execute_pending_buys()` 在 D-1 候选重算时使用 `universe/exclude_st/min_list_days` 配置构建股票池
+  - 补位可交易性检查统一走 `common.trade_status.is_tradeable()`
+  - 修复效果：候选来源与交易状态判定更贴近回测补齐路径
+
+### 测试
+
+- **更新补位执行对齐测试** ([tests/test_buy_replacement.py](tests/test_buy_replacement.py)):
+  - `test_execute_pending_buys_uses_limited_candidate_pool_by_previous_day` 增加回测口径股数断言（`2500` 股）
+  - 显式注入 D-1/当日行情与股票池，稳定覆盖补位执行路径
+- **新增补位队列权重保留测试** ([tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py)):
+  - `test_handle_failed_buys_preserves_original_slot_weight`
+
+## [0.70.5] - 2026-05-05
+
+### 修复
+
+- **纸面补位执行改为回测同款"有限候选池逐槽位匹配"** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `_execute_pending_buys()` 基于上一交易日重算候选池，候选数限制为"槽位数×2"，再逐槽匹配
+  - 排除已持仓、已买入和不可交易的候选，保持与回测 `_process_position_completion` 逻辑一致
+  - 候选重算失败时保留回退路径（使用队列代码模式），保证异常场景可用性
+  - 新增 `_get_prev_trade_date()` 辅助方法
+  - 修复效果：减少"纸面一次性补满所有槽位 vs 回测逐日有限补齐"导致的持仓数量大幅分叉
+
+- **纸面 T0 在 `holding_bonus=false` 时完全排除已持仓股票** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `_generate_ranked_with_lot_constraint()` `holding_bonus_enabled=False` 时先移除 `existing_positions`
+  - 修复效果：不再给已持仓股票生成补差买单
+
+### 测试
+
+- **新增补位算法对齐回归测试** ([tests/test_buy_replacement.py](tests/test_buy_replacement.py)):
+  - `test_execute_pending_buys_uses_limited_candidate_pool_by_previous_day`：验证两槽位基于前一日候选池各买一只不重复股票
+- **新增 `holding_bonus=false` 排除持仓回归测试** ([tests/test_equal_weight_lot_constraint.py](tests/test_equal_weight_lot_constraint.py)):
+  - `test_equal_weight_lot_constraint_excludes_existing_positions_when_holding_bonus_disabled`
+
+## [0.70.4] - 2026-05-05
+
+### 修复
+
+- **纸面持仓表“持有天数”改为交易日口径，并新增“持有剩余”列** ([src/lazybull/paper/broker.py](src/lazybull/paper/broker.py)):
+  - `get_positions_detail()` 优先按交易日历计算持有天数（不含买入当日），交易日历缺失时回退自然日
+  - 按 `rebalance_freq` 实时计算每只持仓“持有剩余”交易日：`max(0, rebalance_freq - holding_days)`
+  - 持仓汇总表头与行渲染同步扩展为 11 列，新增“持有交易日/持有剩余”展示
+
+### 测试
+
+- **更新纸面持仓明细相关断言** ([tests/test_paper_trading.py](tests/test_paper_trading.py)):
+  - 持有天数断言改为交易日口径
+  - 新增“持有剩余”字段断言
+
+## [0.70.3] - 2026-05-05
+
+### 修复
+
+- **批量纸面交易脚本输出文案恢复中文** ([scripts/batch_paper_trade.ps1](scripts/batch_paper_trade.ps1)):
+  - 脚本注释、提示日志、错误信息统一改为中文
+  - 保留已验证稳定的 `trade-date=next` 推进逻辑与 `py -c` 引号安全写法
+
+## [0.70.2] - 2026-05-05
+
+### 修复
+
+- **批量纸面交易改为 next 交易日推进，避免仅按周末过滤导致的非交易日误判** ([scripts/batch_paper_trade.ps1](scripts/batch_paper_trade.ps1)):
+  - 首次执行使用 `--trade-date <start_date>`，后续统一使用 `--trade-date next`
+  - 通过 `data/clean/trade_cal.parquet` 解析下一开市日，确保停止边界不超过 `end_date`
+  - 保留脚本内配置区输入方式（`start_date/end_date/reset_t0_before_run`）
+
+## [0.70.1] - 2026-05-05
+
+### 修复
+
+- **简化纸面交易批量脚本输入方式** ([scripts/batch_paper_trade.ps1](scripts/batch_paper_trade.ps1)):
+  - 移除命令行参数 `-StartDate/-EndDate/-ResetT0`
+  - 改为脚本内“参数配置区”直接填写 `$start_date`、`$end_date`、`$reset_t0_before_run`
+  - 保留原有日期校验、周末跳过、进度/ETA、失败统计与退出码行为
+
+## [0.70.0] - 2026-05-05
+
+### 新增
+
+- **新增纸面交易批量执行脚本** ([scripts/batch_paper_trade.ps1](scripts/batch_paper_trade.ps1)):
+  - 支持 `-ResetT0` 开关：控制开始执行前是否先调用 `paper_trade.py adjust reset-t0`
+  - 支持 `-StartDate` 与 `-EndDate` 参数：按日期区间逐日批量执行 `paper_trade.py run --trade-date`
+  - 默认仅执行周一到周五，并输出进度、ETA、失败统计与退出码（有失败时返回非 0）
+
+## [0.69.18] - 2026-05-05
+
+### 修复
+
+- **纸面 T0 在 `holding_bonus=false` 时完全排除已持仓股票，避免生成补差买单** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `_generate_ranked_with_lot_constraint()` 在候选筛选阶段新增分流：当 `holding_bonus_enabled=False` 时先移除 `existing_positions`
+  - 一手约束循环中仅在 `holding_bonus_enabled=True` 时才允许已持仓股票直接入选
+  - 修复效果：调仓日不再出现“先卖后小额买回同一只已持仓股票”的补差指令
+
+### 测试
+
+- **新增回归测试** ([tests/test_equal_weight_lot_constraint.py](tests/test_equal_weight_lot_constraint.py)):
+  - `test_equal_weight_lot_constraint_excludes_existing_positions_when_holding_bonus_disabled`
+  - 验证 `holding_bonus=false` 时，已持仓股票不会出现在 T0 目标中
+
+## [0.69.17] - 2026-05-05
+
+### 修复
+
+- **修复 ranked_candidates 因保存条件过严而漏落盘，导致后续持仓评分 `ml_raw=0`** ([src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - 持久化条件由“`t0_status=success` 且 `_last_signal_date` 与当日严格匹配”调整为“`t0_status=success` 且候选池非空”
+  - 避免 `_last_signal_date` 类型/格式差异（例如非 `pd.Timestamp`）导致候选池文件未保存
+  - 直接修复现象：`data/paper/state/ranked_candidates.json` 缺失时，次日 `strength` 评分会大面积 `raw=0.000`
+
+### 测试
+
+- **回归验证通过**:
+  - `tests/test_paper_trade_runtime.py`
+  - `tests/test_paper_holding_period_alignment.py`
+
+## [0.69.16] - 2026-05-05
+
+### 修复
+
+- **修复非调仓日 ranked_candidates 被补位流程覆盖，导致持仓 strength 评分失真** ([src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - `execute_trade_workflow()` 仅在 `t0_status=success` 且 `signal._last_signal_date == corrected_date` 时保存 ranked_candidates
+  - 避免非调仓日（如仅执行 T1 + 补位）把“补位候选池”误写成下一日持仓评分基准，导致 `ml_raw=0` 大面积出现
+
+- **修复 strength 按日评估未确保当日特征导致分项退化为 0.5** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - 在 `evaluate_holding_period_actions()` 的 `profit_extension_mode=strength` 路径中，先执行 `ensure_features_for_date(trade_date)`
+  - 缺失当日 `cs_infer` 时不再静默退化，优先补齐后再评分，减少 `mom/tech/fund=0.50` 的系统性偏差
+
+### 测试
+
+- **新增 runtime ranked_candidates 持久化边界测试** ([tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py)):
+  - 覆盖“非调仓日不保存 ranked_candidates”
+  - 覆盖“T0 成功且信号日期匹配时保存 ranked_candidates”
+
+- **新增 strength 评估前特征补齐测试** ([tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py)):
+  - 覆盖 `evaluate_holding_period_actions()` 在 `strength` 模式下会先 ensure 当日特征
+
+## [0.69.15] - 2026-05-05
+
+### 修复
+
+- **纸面 T0 买入指令顺序改为按目标顺序生成，消除 set 无序导致的现金受限漂移** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `_generate_instructions()` 不再使用 `set(target_weights.keys())` 遍历目标股票
+  - 改为按 `targets` 原始顺序生成买入/加仓指令，保持与信号排名顺序一致
+  - 在现金不足场景下，成交先后将可复现，减少纸面与回测在同日因执行顺序差异造成的持仓数量/成分偏移
+
+### 测试
+
+- **新增 T0 指令顺序回归测试** ([tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)):
+  - 覆盖 `_generate_instructions()` 输出买单顺序与 `targets` 输入顺序一致
+
+## [0.69.14] - 2026-05-05
+
+### 修复
+
+- **纸面交易 early_exit 触发区间对齐回测，避免到期日抢跑卖出** ([src/lazybull/paper/runner.py](src/lazybull/paper/runner.py)):
+  - `evaluate_early_exit()` 新增持有期边界：仅在 `holding_days < rebalance_freq` 时评估亏损提前换出
+  - 到达/超过持有期后，提前换出让位于“持有期到期 + 盈利延续”路径，避免同一交易日先入 `pending_sells` 再做延续判定导致的执行分叉
+  - 预期效果：减少回测与纸面在持有期到期窗口（如你反馈的后续调仓日）出现的大规模卖出差异
+
+- **runtime 恢复 ranked_candidates 增加格式校验，避免异常返回中断工作流** ([src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - `execute_trade_workflow()` 在恢复 `ranked_candidates` 时，仅对 `(candidates, signal_date)` 二元组执行解包
+  - 当返回值为异常结构时改为 warning 并跳过恢复，避免 `ValueError` 中断当日执行
+
+### 测试
+
+- **新增 early_exit 持有期边界回归测试** ([tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py)):
+  - 覆盖“到达持有期后即使亏损，也不应再触发 early_exit”
+
+## [0.69.13] - 2026-05-05
+
+### 修复
+
+- **ensure 构建 cs_infer 口径与 build_clean_features 对齐（除标签过滤外）** ([src/lazybull/features/ensure.py](src/lazybull/features/ensure.py)):
+  - 历史窗口从 1 个月调整为与离线构建一致的 `7` 个月 warmup，并保持向后扩展 `1` 个月的数据加载口径
+  - `ensure_features_for_date()` 新增 `builder.precompute_daily_adj(...)` 预计算路径，与离线构建的特征预热流程保持一致
+  - 历史 clean 分区补齐窗口扩展为 warmup 口径（最多检查最近 180 个交易日），降低历史缺口导致的技术因子偏移
+  - moneyflow 缺失处理与离线构建对齐为“告警但不中断”，避免 ensure 与离线流程的异常语义分叉
+  - 目标效果：同日期同模型下，纸面 `cs_infer` 与回测 `cs_train` 的输入口径更一致，减少 TopN 候选分叉
+
+### 测试
+
+- **新增 ensure 构建窗口与预计算路径回归测试** ([tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)):
+  - 覆盖 `7个月 warmup + 1个月扩展` 的 clean 数据加载窗口
+  - 覆盖 `builder.precompute_daily_adj(...)` 调用
+  - 覆盖 moneyflow 缺失时 ensure 不中断的兼容路径
+
+## [0.69.12] - 2026-05-04
+
+### 修复
+
+- **纸面交易跨运行持久化 ranked_candidates 供 T1 持仓评分使用（根本修复）** ([src/lazybull/paper/storage.py](src/lazybull/paper/storage.py), [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py)):
+  - 根本原因：纸面交易每次 `python scripts/paper_trade.py run` 都会创建全新的 signal 实例，导致前一个 T0 的 `_last_ranked_candidates` 丢失
+  - 结果：T1 执行 `_score_holding_strength` 时无法获取真实 ml_raw_score，导致 ml 维度降级计算（用 acceleration + alpha_industry 近似），导致 ml 分数显著偏低
+  - 修复方案：在 PaperStorage 中新增 `save_ranked_candidates()` 和 `load_ranked_candidates()` 方法，持久化存储到 `data/paper/state/ranked_candidates.json`
+  - 执行流程改进：T1 前恢复前一个 T0 的 ranked_candidates，T0 后保存本轮的 ranked_candidates 供下一个 T1 使用
+  - 验证结果：纸面 ml 维度分数和 raw_score 恢复与回测一致
+
 ## [0.69.11] - 2026-05-04
 
 ### 修复

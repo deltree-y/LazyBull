@@ -12,7 +12,7 @@ from ..data import DataLoader
 from ..risk.equity_curve import EquityCurveMonitor, create_equity_curve_config_from_dict
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
-from .models import PendingBuy, PendingSell, TradeInstruction
+from .models import PendingBuy, PendingSell, TargetWeight, TradeInstruction
 from .runner import PaperTradingRunner
 from .storage import PaperStorage
 
@@ -148,6 +148,17 @@ def execute_trade_workflow(
     _report("处理延迟卖出")
     pending_sell_actions = _process_pending_sells(runner, corrected_date, config)
 
+    # 恢复上一个 T0 生成的 ranked_candidates（如有），供 T1 持仓评分使用
+    _report("恢复排序候选")
+    rc_loaded = storage.load_ranked_candidates()
+    if isinstance(rc_loaded, tuple) and len(rc_loaded) == 2:
+        ranked_candidates, signal_date = rc_loaded
+        runner.signal._last_ranked_candidates = ranked_candidates
+        runner.signal._last_signal_date = pd.Timestamp(signal_date)
+        logger.info(f"已恢复 ranked_candidates: signal_date={signal_date}, count={len(ranked_candidates)}")
+    elif rc_loaded:
+        logger.warning(f"ranked_candidates 格式异常，跳过恢复: {type(rc_loaded)}")
+
     _report("执行 T1 指令")
     t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
 
@@ -155,6 +166,20 @@ def execute_trade_workflow(
     t0_targets, ect_exposure, ect_reason, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
+
+    # 仅在本日真实执行 T0 时保存 ranked_candidates，
+    # 避免非调仓日因补位流程临时调用 generate_ranked 覆盖持久化候选池。
+    # 注意：不再强依赖 _last_signal_date 类型/格式匹配，防止漏保存。
+    if (
+        t0_status == "success"
+        and hasattr(runner.signal, "_last_ranked_candidates")
+        and runner.signal._last_ranked_candidates
+    ):
+        logger.info("保存本轮 ranked_candidates 供下一个 T1 使用")
+        storage.save_ranked_candidates(
+            runner.signal._last_ranked_candidates,
+            corrected_date,
+        )
 
     _report("整理明日指令")
     t0_instructions: List[TradeInstruction] = []
@@ -497,6 +522,9 @@ def _execute_t1_if_pending(
             buy_prices,
             trade_date,
             str(config["buy_price"]),
+            universe_type=str(config.get("universe", "mainboard")),
+            exclude_st=bool(config.get("exclude_st", True)),
+            min_list_days=int(config.get("min_list_days", 365)),
         )
         if replenishment_fills:
             for fill in replenishment_fills:
@@ -642,6 +670,9 @@ def _execute_t1_if_pending(
             buy_prices,
             trade_date,
             str(config["buy_price"]),
+            universe_type=str(config.get("universe", "mainboard")),
+            exclude_st=bool(config.get("exclude_st", True)),
+            min_list_days=int(config.get("min_list_days", 365)),
         )
         if replenishment_fills:
             fills_count += len(replenishment_fills)
@@ -700,10 +731,14 @@ def _handle_failed_buys(
     runner: PaperTradingRunner,
     trade_date: str,
     config: Dict[str, object],
-    failed_buy_targets: List[TradeInstruction],
+    failed_buy_targets: List[TargetWeight],
     attempt_count: int,
 ) -> None:
-    """处理买入失败并生成补位计划。"""
+    """处理买入失败并生成补位计划。
+
+    对齐回测：补位队列保留"未成交槽位"的原始权重，
+    不在 T1 预先重算替代股票，实际候选在下一交易日按 D-1 数据重算。
+    """
     max_replenishment_attempts = 5
 
     logger.info("")
@@ -718,64 +753,39 @@ def _handle_failed_buys(
         return
 
     logger.info(
-        f"基于当日 {trade_date} 数据重新生成下一交易日补位目标（第 {next_attempt} 次补位尝试）"
+        f"记录当日 {trade_date} 未成交槽位，下一交易日按回测口径执行补位（第 {next_attempt} 次尝试）"
     )
     logger.info("=" * 80)
 
     next_trade_date = runner._get_next_trade_date(trade_date)
     if next_trade_date:
-        trading_config = TradingConfig.from_dict(config)
-        replacement_targets = runner.generate_replacement_targets(
-            trade_date=trade_date,
-            failed_count=len(failed_buy_targets),
-            universe_type=str(config["universe"]),
-            model_version=config.get("model_version"),
-            buy_price_type=str(config["buy_price"]),
-            original_signal_date=trade_date,
-            max_per_industry=config.get("max_per_industry"),
-            exclude_st=bool(config.get("exclude_st", True)),
-            min_list_days=int(config.get("min_list_days", 365)),
-            trading_config=trading_config,
-        )
+        pending_buys: List[PendingBuy] = []
+        fallback_weight = 1.0 / max(len(failed_buy_targets), 1)
+        for target in failed_buy_targets:
+            slot_weight = float(getattr(target, "target_weight", 0.0) or 0.0)
+            if slot_weight <= 0:
+                slot_weight = fallback_weight
 
-        if replacement_targets:
-            pending_buys = []
-            for target in replacement_targets:
-                pending_buys.append(
-                    PendingBuy(
-                        ts_code=target.ts_code,
-                        target_weight=target.target_weight,
-                        reason=target.reason,
-                        create_date=trade_date,
-                        attempts=next_attempt,
-                        last_attempt_date="",
-                        original_signal_date=trade_date,
-                    )
+            pending_buys.append(
+                PendingBuy(
+                    ts_code=str(getattr(target, "ts_code", "")),
+                    target_weight=slot_weight,
+                    reason=f"补位槽位-{getattr(target, 'reason', '买入失败')}",
+                    create_date=trade_date,
+                    attempts=next_attempt,
+                    last_attempt_date="",
+                    original_signal_date=str(
+                        getattr(target, "original_signal_date", trade_date) or trade_date
+                    ),
                 )
-
-            runner.paper_storage.save_pending_buys(pending_buys)
-            logger.info(f"已生成 {len(replacement_targets)} 个补位目标，保存到独立的补位买入队列")
-            logger.info(
-                f"下一交易日 {next_trade_date} 将自动读取并执行补位买入（第 {next_attempt}/{max_replenishment_attempts} 次尝试）"
             )
-            logger.info("补位买入不会触发现有持仓的卖出")
-        else:
-            logger.warning("无法生成补位目标，将原始失败目标保存为补位计划以待重试")
-            fallback_pending = []
-            for target in failed_buy_targets:
-                fallback_pending.append(
-                    PendingBuy(
-                        ts_code=target.ts_code,
-                        target_weight=target.target_weight,
-                        reason=f"补位待重试-{target.reason}",
-                        create_date=trade_date,
-                        attempts=next_attempt,
-                        last_attempt_date="",
-                        original_signal_date=trade_date,
-                    )
-                )
-            runner.paper_storage.save_pending_buys(fallback_pending)
-            logger.info(f"已保存 {len(fallback_pending)} 个失败目标到补位队列，下次运行将重试")
+
+        runner.paper_storage.save_pending_buys(pending_buys)
+        logger.info(f"已保存 {len(pending_buys)} 个未成交槽位到补位队列（保留原始槽位权重）")
+        logger.info(
+            f"下一交易日 {next_trade_date} 将自动读取并执行补位买入（第 {next_attempt}/{max_replenishment_attempts} 次尝试）"
+        )
+        logger.info("补位买入不会触发现有持仓的卖出")
     else:
         logger.error("无法获取下一交易日，补位计划生成失败")
 

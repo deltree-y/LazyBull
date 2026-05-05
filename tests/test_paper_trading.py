@@ -4,7 +4,7 @@ import io
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -18,6 +18,7 @@ from src.lazybull.paper import (
     Order,
     PaperAccount,
     PaperBroker,
+    PendingBuy,
     PaperTradingRunner,
     PaperStorage,
     Position,
@@ -714,7 +715,8 @@ def test_broker_get_positions_detail(sample_account, sample_prices):
         # 股票代码现在包含名称，不传stock_names时显示为 ts_code(na)
         assert df.iloc[0]['股票代码'] == '000001.SZ(na)'
         assert df.iloc[0]['持仓股数'] == 1000
-        assert df.iloc[0]['持有天数'] == 7
+        assert df.iloc[0]['持有天数'] == 5
+        assert df.iloc[0]['持有剩余'] == 15
         assert df.iloc[0]['状态'] == '持有'
 
 
@@ -1163,7 +1165,43 @@ def test_broker_positions_with_stock_names():
         assert len(df) == 1
         assert df.iloc[0]['股票代码'] == '000001.SZ(平安银行)'
         assert df.iloc[0]['持仓股数'] == 1000
-        assert df.iloc[0]['持有天数'] == 7
+        assert df.iloc[0]['持有天数'] == 5
+        assert df.iloc[0]['持有剩余'] == 15
+
+
+def test_broker_positions_remaining_includes_extension_days():
+    """测试开启盈利延续时，持有剩余计入延期持有天数。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        account = PaperAccount(initial_capital=100000.0, storage=storage)
+        broker = PaperBroker(account, storage=storage)
+
+        storage.save_config(
+            {
+                'rebalance_freq': 20,
+                'enable_profit_based_holding': True,
+                'profit_extension_mode': 'pnl',
+                'profit_extension_days': 5,
+            }
+        )
+
+        account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115',
+            status='持有'
+        )
+
+        prices = {'000001.SZ': 12.0}
+        df = broker.get_positions_detail(prices, current_date='20260122')
+
+        # 交易日口径下 20260115 -> 20260122 为 5 天（不含买入当日）
+        # 持有上限 = 20 + 5 = 25，剩余 = 25 - 5 = 20
+        assert len(df) == 1
+        assert df.iloc[0]['持有天数'] == 5
+        assert df.iloc[0]['持有剩余'] == 20
 
 
 def test_broker_positions_without_stock_names():
@@ -1552,6 +1590,142 @@ def test_broker_execute_instructions_insufficient_cash_less_than_one_lot():
         # 验证进入补位队列
         assert len(broker._failed_buy_targets) > 0
         assert broker._failed_buy_targets[0].ts_code == '000001.SZ'
+
+
+def test_broker_execute_instructions_skip_tiny_buy_value_by_ratio():
+    """测试最小买入市值比例会阻止小仓位买入（保留现金）。"""
+    from src.lazybull.paper import TradeInstruction
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        storage.save_config(
+            {
+                "top_n": 20,
+                "min_buy_value_ratio": 0.2,
+                "buy_price": "close",
+                "sell_price": "open",
+            }
+        )
+        account = PaperAccount(initial_capital=1000000.0, storage=storage)
+
+        # 构造“总资产高、可用现金低”的场景，模拟卖出后现金不足以形成合理仓位
+        account.add_position(
+            ts_code="600000.SH",
+            shares=100000,
+            buy_price=10.0,
+            buy_cost=0.0,
+            buy_date="20260120",
+        )
+        account.update_cash(-1000000.0)
+
+        broker = PaperBroker(account, storage=storage)
+        instructions = [
+            TradeInstruction(
+                ts_code="600000.SH",
+                action="sell",
+                shares=200,
+                price_type="open",
+                reason="腾挪现金",
+                source_date="20260121",
+                target_weight=0.0,
+            ),
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="buy",
+                shares=300,
+                price_type="close",
+                reason="建仓",
+                source_date="20260121",
+                target_weight=0.05,
+            ),
+        ]
+
+        buy_prices = {"000001.SZ": 4.0, "600000.SH": 10.0}
+        sell_prices = {"600000.SH": 10.0, "000001.SZ": 4.0}
+
+        with patch.object(broker, "_load_tradability_info") as mock_tradability:
+            mock_tradability.return_value = {
+                "600000.SH": {
+                    "is_suspended": 0,
+                    "is_limit_up": 0,
+                    "is_limit_down": 0,
+                    "tradable": 1,
+                },
+                "000001.SZ": {
+                    "is_suspended": 0,
+                    "is_limit_up": 0,
+                    "is_limit_down": 0,
+                    "tradable": 1,
+                },
+            }
+            fills = broker.execute_instructions(instructions, buy_prices, sell_prices, "20260122")
+
+        # 仅成交卖出，小仓位买入被最小市值阈值拦截
+        assert len(fills) == 1
+        assert fills[0].action == "sell"
+        assert account.get_position("000001.SZ") is None
+        assert broker._failed_buy_targets
+        assert "买入后市值过小" in broker._failed_buy_targets[0].reason
+
+
+def test_broker_retry_pending_buys_keeps_order_when_value_too_small():
+    """测试补位重试在买入后市值过小时保留订单。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        storage.save_config(
+            {
+                "top_n": 20,
+                "min_buy_value_ratio": 0.2,
+            }
+        )
+        account = PaperAccount(initial_capital=1000000.0, storage=storage)
+        account.add_position(
+            ts_code="600000.SH",
+            shares=100000,
+            buy_price=10.0,
+            buy_cost=0.0,
+            buy_date="20260120",
+        )
+        account.update_cash(-970000.0)  # 留出少量现金，触发小仓位
+
+        broker = PaperBroker(account, storage=storage, verbose=False)
+        broker.pending_buys = [
+            PendingBuy(
+                ts_code="000001.SZ",
+                target_weight=0.05,
+                reason="补位测试",
+                create_date="20260121",
+                attempts=1,
+                last_attempt_date="20260122",
+                original_signal_date="20260120",
+            )
+        ]
+
+        with patch("src.lazybull.data.DataLoader") as MockLoader, patch(
+            "src.lazybull.data.Storage"
+        ) as MockStorage:
+            mock_loader = MockLoader.return_value
+            mock_loader.load_clean_daily_by_date.return_value = pd.DataFrame(
+                {
+                    "ts_code": ["000001.SZ", "600000.SH"],
+                    "close": [10.0, 10.0],
+                }
+            )
+
+            with patch.object(broker, "_load_tradability_info") as mock_tradability:
+                mock_tradability.return_value = {
+                    "000001.SZ": {
+                        "is_suspended": 0,
+                        "is_limit_up": 0,
+                        "is_limit_down": 0,
+                        "tradable": 1,
+                    }
+                }
+                fills, remaining = broker.retry_pending_buys("20260123", "close")
+
+        assert len(fills) == 0
+        assert len(remaining) == 1
+        assert remaining[0].ts_code == "000001.SZ"
 
 
 def test_broker_execute_instructions_clearance_full_shares():

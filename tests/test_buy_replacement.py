@@ -549,3 +549,187 @@ def test_confidence_gate_full_pass_emits_log_when_emit_log_true():
 
     assert result == {'000001.SZ': 0.2, '000002.SZ': 0.3}
     mock_info.assert_called_once_with('信号置信度门控: 20260324, 测试满仓通过，满仓通过')
+
+
+def test_execute_pending_buys_uses_limited_candidate_pool_by_previous_day(monkeypatch):
+    """补位应基于上一交易日重算候选池，并按槽位逐个匹配买入。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=500000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        class DummySignal:
+            def generate_ranked(self, *args, **kwargs):
+                # 故意返回包含已持仓和可买候选，验证过滤与逐槽位分配
+                return [
+                    ('000001.SZ', 0.99),  # 已持仓，应跳过
+                    ('000002.SZ', 0.95),
+                    ('000003.SZ', 0.90),
+                    ('000004.SZ', 0.85),
+                    ('000005.SZ', 0.80),
+                ]
+
+        runner.signal = DummySignal()
+
+        # 预置一个已持仓，验证候选池会排除
+        runner.account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=10.0,
+            buy_date='20260120',
+            buy_pnl_price=10.0,
+        )
+
+        # 两个槽位 -> 有限候选池大小应为 4
+        pending_buys = [
+            PendingBuy(
+                ts_code='SLOT_A',
+                target_weight=0.05,
+                reason='补位-槽位A',
+                create_date='20260121',
+                attempts=1,
+                last_attempt_date='',
+                original_signal_date='20260120',
+            ),
+            PendingBuy(
+                ts_code='SLOT_B',
+                target_weight=0.05,
+                reason='补位-槽位B',
+                create_date='20260121',
+                attempts=1,
+                last_attempt_date='',
+                original_signal_date='20260120',
+            ),
+        ]
+
+        # 上一交易日与特征数据
+        monkeypatch.setattr(runner, '_get_prev_trade_date', lambda _: '20260122')
+        runner.storage.load_cs_train_day = Mock(
+            return_value=pd.DataFrame({'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ', '000005.SZ']})
+        )
+        runner.loader.load_clean_stock_basic = Mock(return_value=pd.DataFrame({'dummy': [1]}))
+        mock_universe = Mock()
+        mock_universe.get_stocks.return_value = ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ', '000005.SZ']
+        runner._create_universe = Mock(return_value=mock_universe)
+
+        prev_daily = pd.DataFrame(
+            {
+                'ts_code': ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ', '000005.SZ'],
+                'trade_date': ['20260122'] * 5,
+            }
+        )
+        trade_daily = pd.DataFrame(
+            {
+                'ts_code': ['000002.SZ', '000003.SZ', '000004.SZ', '000005.SZ'],
+                'trade_date': ['20260123'] * 4,
+                'is_suspended': [0, 0, 0, 0],
+                'is_limit_up': [0, 0, 0, 0],
+                'is_limit_down': [0, 0, 0, 0],
+            }
+        )
+
+        def _mock_load_daily(date: str):
+            if date == '20260122':
+                return prev_daily
+            if date == '20260123':
+                return trade_daily
+            return pd.DataFrame()
+
+        runner.loader.load_clean_daily_by_date = Mock(side_effect=_mock_load_daily)
+
+        # 当日可买价格
+        buy_prices = {
+            '000002.SZ': 10.0,
+            '000003.SZ': 10.0,
+            '000004.SZ': 10.0,
+            '000005.SZ': 10.0,
+        }
+
+        # 可交易性全部放行
+        runner.broker._load_tradability_info = Mock(return_value={})
+
+        fills = runner._execute_pending_buys(
+            pending_buys=pending_buys,
+            buy_prices=buy_prices,
+            trade_date='20260123',
+            buy_price_type='close',
+        )
+
+        # 两个槽位应各补齐一只，不重复且来自重算候选池前部
+        assert len(fills) == 2
+        bought_codes = [f.ts_code for f in fills]
+        assert bought_codes == ['000002.SZ', '000003.SZ']
+        # 股数应按回测口径估算：current_total_value(约510000) * 0.05 / 10 -> 2500 股
+        assert [f.shares for f in fills] == [2500, 2500]
+
+        # 成功后补位队列应清空
+        remaining = runner.paper_storage.load_pending_buys()
+        assert len(remaining) == 0
+
+
+def test_execute_pending_buys_skip_tiny_buy_value_by_ratio():
+    """补位路径在现金缩量后仍应拦截过小市值买入。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=1_000_000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        # 配置最小买入后市值阈值：总资产/top_n*ratio = 1_000_400/20*0.2 ≈ 10004
+        runner.paper_storage.save_config({"top_n": 20, "min_buy_value_ratio": 0.2})
+
+        # 构造“总资产高、现金低”的场景，触发缩量到一手后再走阈值拦截
+        runner.account.add_position(
+            ts_code='600000.SH',
+            shares=100000,
+            buy_price=10.0,
+            buy_cost=0.0,
+            buy_date='20260120',
+            buy_pnl_price=10.0,
+        )
+        runner.account.state.cash = 400.0
+        runner.account.save_state()
+
+        pending_buys = [
+            PendingBuy(
+                ts_code='601916.SH',
+                target_weight=0.05,
+                reason='补位-信号生成',
+                create_date='20260121',
+                attempts=0,
+                last_attempt_date='',
+                original_signal_date='20260120',
+            )
+        ]
+
+        buy_prices = {
+            '600000.SH': 10.0,
+            '601916.SH': 2.46,
+        }
+        runner.loader.load_clean_daily_by_date = Mock(return_value=pd.DataFrame())
+
+        with patch('src.lazybull.paper.runner.is_tradeable', return_value=(True, '可交易')):
+            fills = runner._execute_pending_buys(
+                pending_buys=pending_buys,
+                buy_prices=buy_prices,
+                trade_date='20260123',
+                buy_price_type='close',
+            )
+
+        # 缩量后可买一手(100股，约246元)，但低于阈值，应被拦截并保留在补位队列
+        assert fills == []
+        assert runner.account.get_position('601916.SH') is None
+
+        remaining = runner.paper_storage.load_pending_buys()
+        assert len(remaining) == 1
+        assert remaining[0].ts_code == '601916.SH'
+        assert remaining[0].attempts == 1
+        assert remaining[0].last_attempt_date == '20260123'

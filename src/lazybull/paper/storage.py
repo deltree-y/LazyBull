@@ -178,9 +178,17 @@ CONFIG_SECTION_LAYOUT = [
         "纸面交易执行参数",
         [
             "buy_price / sell_price 控制 T0/T1 默认价格口径。",
+            "min_buy_value_ratio 控制最小买入后持仓市值阈值（按平均仓位市值比例）。",
             "horizon 需要与模型标签周期保持一致。",
         ],
-        ["buy_price", "sell_price", "initial_capital", "horizon", "universe"],
+        [
+            "buy_price",
+            "sell_price",
+            "initial_capital",
+            "min_buy_value_ratio",
+            "horizon",
+            "universe",
+        ],
     ),
 ]
 
@@ -1028,6 +1036,44 @@ class PaperStorage:
         
         logger.info(f"读取交易指令: {file_path} ({len(instructions)} 条)")
         return instructions
+
+    def save_ranked_candidates(self, ranked_candidates: List[tuple], signal_date: str) -> None:
+        """保存 T0 生成的排序候选列表，供 T1 恢复使用
+        
+        Args:
+            ranked_candidates: [(ts_code, ml_score), ...] 列表
+            signal_date: 信号生成日期 YYYYMMDD
+        """
+        file_path = self.state_path / "ranked_candidates.json"
+        data = {
+            "signal_date": signal_date,
+            "candidates": ranked_candidates
+        }
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        logger.debug(f"保存 ranked_candidates: signal_date={signal_date}, count={len(ranked_candidates)}")
+
+    def load_ranked_candidates(self) -> Optional[tuple]:
+        """加载上一个 T0 生成的排序候选列表
+        
+        Returns:
+            (ranked_candidates, signal_date) 元组，不存在返回 None
+            其中 ranked_candidates 是 [(ts_code, ml_score), ...] 列表
+        """
+        file_path = self.state_path / "ranked_candidates.json"
+        if not file_path.exists():
+            return None
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            candidates = data.get("candidates", [])
+            signal_date = data.get("signal_date", "")
+            logger.debug(f"加载 ranked_candidates: signal_date={signal_date}, count={len(candidates)}")
+            return (candidates, signal_date)
+        except Exception as exc:
+            logger.warning(f"加载 ranked_candidates 失败: {exc}")
+            return None
     
     def find_pending_instructions(self, before_date: str) -> Optional[tuple]:
         """查找 <= before_date 且未执行的最新交易指令

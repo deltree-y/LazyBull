@@ -230,6 +230,42 @@ def test_generate_instructions_missing_capital_retention_ratio_uses_default(monk
         assert instructions[0].shares == 5000
 
 
+def test_generate_instructions_keeps_target_order_for_buys(monkeypatch):
+    """测试 _generate_instructions 生成买单顺序与 targets 顺序一致。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=100000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        monkeypatch.setattr('src.lazybull.paper.runner.get_cost_settings', lambda: {})
+
+        targets = [
+            TargetWeight(ts_code='000003.SZ', target_weight=0.34, reason='r3'),
+            TargetWeight(ts_code='000001.SZ', target_weight=0.33, reason='r1'),
+            TargetWeight(ts_code='000002.SZ', target_weight=0.33, reason='r2'),
+        ]
+        current_prices = {
+            '000001.SZ': 10.0,
+            '000002.SZ': 10.0,
+            '000003.SZ': 10.0,
+        }
+
+        instructions = runner._generate_instructions(
+            targets=targets,
+            buy_price_type='close',
+            sell_price_type='open',
+            current_prices=current_prices,
+            source_date='20260325',
+        )
+
+        buy_codes = [inst.ts_code for inst in instructions if inst.action == 'buy']
+        assert buy_codes == ['000003.SZ', '000001.SZ', '000002.SZ']
+
+
 def test_correct_trade_date_supports_next_with_last_trade_date(monkeypatch):
     """测试 next 会解析为上次执行日后的下一个交易日。"""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -419,6 +455,122 @@ def test_try_ensure_historical_fund_portfolio_builds_and_reuses_agg_cache(
 
     assert cached is not None
     assert len(cached) == 1
+
+
+def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
+    """测试 ensure_features_for_date 对齐离线构建窗口并调用 precompute。"""
+    trade_date = "20250121"
+    trade_dt = pd.Timestamp(trade_date)
+
+    expected_start = (
+        trade_dt - pd.DateOffset(months=ensure_module.FEATURE_DATA_HISTORY_MONTHS)
+    ).strftime("%Y%m%d")
+    expected_end = (
+        trade_dt + pd.DateOffset(months=ensure_module.FEATURE_DATA_FUTURE_MONTHS)
+    ).strftime("%Y%m%d")
+
+    trade_cal = pd.DataFrame(
+        {
+            "cal_date": pd.date_range("2024-05-01", "2025-03-31", freq="B"),
+            "is_open": 1,
+        }
+    )
+    stock_basic = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "name": ["测试股票"],
+            "list_date": ["20200101"],
+            "market": ["主板"],
+        }
+    )
+    daily_df = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "trade_date": [trade_date],
+            "close": [10.0],
+            "close_adj": [10.0],
+            "open": [10.0],
+            "open_adj": [10.0],
+            "vol": [10000],
+            "amount": [100000],
+            "pct_chg": [0.0],
+            "pre_close": [10.0],
+        }
+    )
+
+    storage = Mock(spec=Storage)
+    storage.is_feature_exists.return_value = False
+
+    loader = Mock(spec=DataLoader)
+    loader.load_clean_trade_cal.return_value = trade_cal
+    loader.load_clean_stock_basic.return_value = stock_basic
+    loader.load_clean_daily.return_value = daily_df
+    loader.load_clean_daily_basic.return_value = pd.DataFrame()
+    # 覆盖“moneyflow 缺失仅告警”路径
+    loader.load_clean_moneyflow.return_value = None
+    loader.load_shenwan_industry.return_value = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "sw_l1": ["测试行业"],
+            "sw_l1_code": ["801000"],
+        }
+    )
+
+    builder = Mock(spec=FeatureBuilder)
+    builder.build_features_for_day.return_value = pd.DataFrame(
+        {
+            "trade_date": [trade_date],
+            "ts_code": ["000001.SZ"],
+            "close": [10.0],
+        }
+    )
+
+    monkeypatch.setattr(ensure_module, "ensure_basic_data", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        ensure_module,
+        "ensure_clean_data_for_date",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        ensure_module,
+        "_ensure_historical_clean_data",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        ensure_module,
+        "_load_factor_data",
+        lambda *args, **kwargs: (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            [],
+        ),
+    )
+
+    success, missing = ensure_features_for_date(
+        storage=storage,
+        loader=loader,
+        builder=builder,
+        cleaner=Mock(spec=DataCleaner),
+        client=Mock(spec=TushareClient),
+        trade_date=trade_date,
+        force=False,
+    )
+
+    assert success is True
+    assert missing == []
+    loader.load_clean_daily.assert_called_once_with(expected_start, expected_end)
+    loader.load_clean_daily_basic.assert_called_once_with(expected_start, expected_end)
+    loader.load_clean_moneyflow.assert_called_once_with(expected_start, expected_end)
+    builder.precompute_daily_adj.assert_called_once()
+    storage.save_cs_train_day.assert_called_once()
 
 
 if __name__ == "__main__":

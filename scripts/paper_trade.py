@@ -93,10 +93,17 @@ def run_config(args):
 
     # 通过 TradingConfig 统一构建配置
     trading_config = TradingConfig.from_args(args)
-    config = trading_config.to_dict()
+    new_config = trading_config.to_dict()
 
-    # 保存配置
+    # 加载已有配置作为基础，仅覆盖与默认值不同的字段（即用户明确指定的参数）
     storage = PaperStorage()
+    existing_config = storage.load_config() or {}
+    default_config = TradingConfig().to_dict()
+    config = dict(existing_config)
+    for k, v in new_config.items():
+        if v != default_config.get(k):
+            config[k] = v
+
     storage.save_config(config)
 
     logger.info("配置已保存成功！")
@@ -140,6 +147,9 @@ def run_main(args):
     logger.info(f"  调仓频率: {config['rebalance_freq']} 个交易日")
     logger.info(f"  仓位管理: {config.get('position_sizing', 'equal')}")
     logger.info(f"  特征预测周期（horizon）: {config['horizon']} 天")
+    logger.info(
+        f"  最小买入市值比例: {config.get('min_buy_value_ratio', 0.2):.0%}（相对平均仓位）"
+    )
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
     if config.get("market_regime_enabled") or config.get("market_regime_ma250_hard_stop"):

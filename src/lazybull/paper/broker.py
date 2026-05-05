@@ -42,9 +42,9 @@ class PaperBroker:
         self.data_storage = data_storage  # 保存数据存储实例
         self.order_table_widths = [12, 6, 10, 10, 8, 8, 10, 12, 10, 10, 10, 10, 15]
         self.order_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
-        # 持仓表列：股票代码(名称)、股数、当前价格、买入均价、买入日期、持有天数、当前市值、浮盈、收益率(%)、状态
-        self.positions_table_widths = [20, 8, 10, 10, 12, 8, 12, 12, 12, 8]
-        self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
+        # 持仓表列：股票代码(名称)、股数、当前价格、买入均价、买入日期、持有交易日、持有剩余、当前市值、浮盈、收益率(%)、状态
+        self.positions_table_widths = [20, 8, 10, 10, 12, 10, 10, 12, 12, 12, 8]
+        self.positions_table_aligns = ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left', 'left']
         self.verbose = verbose
         # 加载延迟卖出队列
         self.pending_sells = self.storage.load_pending_sells()
@@ -54,6 +54,8 @@ class PaperBroker:
         self._failed_buy_targets = []
         # 停牌日历实例（延迟创建）
         self._suspend_calendar = None
+        # 交易日历缓存（开市日列表）
+        self._open_trade_dates: Optional[List[str]] = None
 
     def _get_suspend_calendar(self):
         """获取停牌日历实例（延迟创建）"""
@@ -68,6 +70,64 @@ class PaperBroker:
             self._suspend_calendar = SuspendCalendar(self.data_storage)
         
         return self._suspend_calendar
+
+    def _get_open_trade_dates(self) -> List[str]:
+        """获取开市交易日列表（带缓存）。"""
+        if self._open_trade_dates is not None:
+            return self._open_trade_dates
+
+        try:
+            from ..data import DataLoader, Storage
+
+            data_storage = self.data_storage if self.data_storage is not None else Storage()
+            loader = DataLoader(data_storage, verbose=False)
+            trade_cal = loader.load_clean_trade_cal()
+            if trade_cal is None or trade_cal.empty:
+                self._open_trade_dates = []
+            else:
+                self._open_trade_dates = (
+                    trade_cal.loc[trade_cal["is_open"] == 1, "cal_date"].astype(str).tolist()
+                )
+        except Exception:
+            self._open_trade_dates = []
+
+        return self._open_trade_dates
+
+    @staticmethod
+    def _calc_holding_trade_days(buy_date: str, current_date: str, trade_dates_list: List[str]) -> int:
+        """按交易日口径计算持有天数（不含买入当日）。"""
+        if not buy_date or not current_date:
+            return 0
+        try:
+            buy_idx = trade_dates_list.index(str(buy_date))
+            cur_idx = trade_dates_list.index(str(current_date))
+            return max(0, cur_idx - buy_idx)
+        except ValueError:
+            return 0
+
+    def _estimate_total_assets_with_price_map(self, price_map: Dict[str, float]) -> float:
+        """估算当前总资产（价格缺失时回退买入价）。"""
+        total_assets = float(self.account.get_cash())
+        for ts_code, pos in self.account.get_positions().items():
+            ref_price = float(price_map.get(ts_code, 0.0))
+            if ref_price <= 0:
+                ref_price = float(pos.buy_price)
+            total_assets += float(pos.shares) * ref_price
+        return total_assets
+
+    def _get_min_buy_value_threshold(self, price_map: Dict[str, float]) -> float:
+        """计算最小买入后持仓市值阈值。"""
+        config = self.storage.load_config() or {}
+        ratio = float(config.get("min_buy_value_ratio", 0.2) or 0.0)
+        top_n = int(config.get("top_n", 30) or 0)
+        if ratio <= 0 or top_n <= 0:
+            return 0.0
+
+        total_assets = self._estimate_total_assets_with_price_map(price_map)
+        if total_assets <= 0:
+            return 0.0
+        avg_position_value = total_assets / float(top_n)
+        return avg_position_value * ratio
     
 
     
@@ -239,6 +299,11 @@ class PaperBroker:
         
         # 2. 买入订单：目标持有但当前没有，或目标权重增加
         failed_buy_targets = []  # 记录买入失败的目标（用于补位）
+        min_buy_value_threshold = 0.0
+        config = self.storage.load_config() or {}
+        ratio = float(config.get("min_buy_value_ratio", 0.2) or 0.0)
+        if ratio > 0:
+            min_buy_value_threshold = (total_value / float(max(1, int(config.get("top_n", 30) or 30)))) * ratio
         
         for ts_code in target_stocks:
             target_weight, reason = target_weights[ts_code]
@@ -292,6 +357,23 @@ class PaperBroker:
                 
                 # 计算股数（向下取整到100的倍数）
                 buy_shares = int(buy_value / buy_prices[ts_code] / 100) * 100
+
+                # 防止生成过小仓位：买入后市值需达到“平均仓位市值×比例”
+                if buy_shares > 0 and min_buy_value_threshold > 0:
+                    actual_buy_value = buy_shares * buy_prices[ts_code]
+                    if actual_buy_value < min_buy_value_threshold:
+                        logger.warning(
+                            f"股票 {ts_code} 买入后市值 {actual_buy_value:.2f} 低于阈值 "
+                            f"{min_buy_value_threshold:.2f}（ratio={ratio:.2f}），跳过买入"
+                        )
+                        failed_buy_targets.append(
+                            TargetWeight(
+                                ts_code=ts_code,
+                                target_weight=target_weight,
+                                reason=f"{reason}（买入后市值过小）",
+                            )
+                        )
+                        continue
                 
                 if buy_shares > 0:
                     orders.append(Order(
@@ -639,6 +721,8 @@ class PaperBroker:
         # 2. 再执行买入指令
         buy_instructions = [i for i in instructions if i.action == 'buy']
         failed_buy_targets = []  # 记录买入失败的目标
+        price_map_for_threshold = {**sell_prices, **buy_prices}
+        min_buy_value_threshold = self._get_min_buy_value_threshold(price_map_for_threshold)
 
         # 预加载 ATR 数据（如果可用）
         atr_map = {}
@@ -710,6 +794,21 @@ class PaperBroker:
                 actual_shares = target_shares
             
             # 创建订单并执行
+            actual_buy_value = actual_shares * price
+            if min_buy_value_threshold > 0 and actual_buy_value < min_buy_value_threshold:
+                logger.warning(
+                    f"股票 {ts_code} 买入后市值 {actual_buy_value:.2f} 低于阈值 "
+                    f"{min_buy_value_threshold:.2f}，加入补位计划"
+                )
+                failed_buy_targets.append(
+                    TargetWeight(
+                        ts_code=ts_code,
+                        target_weight=inst.target_weight,
+                        reason=f"{reason}（买入后市值过小）",
+                    )
+                )
+                continue
+
             order = Order(
                 ts_code=ts_code,
                 action='buy',
@@ -1010,6 +1109,15 @@ class PaperBroker:
             return pd.DataFrame()
         
         details = []
+        trade_dates_list = self._get_open_trade_dates() if current_date else []
+        config = self.storage.load_config() or {}
+        rebalance_freq = int(config.get('rebalance_freq', 20))
+        extension_days = int(config.get('profit_extension_days', 5))
+        extension_enabled = bool(config.get('enable_profit_based_holding', False))
+        extension_mode = str(config.get('profit_extension_mode', 'pnl'))
+        max_holding_days = rebalance_freq
+        if extension_enabled and extension_mode != 'disabled':
+            max_holding_days += max(0, extension_days)
         for ts_code, pos in positions.items():
             current_price = current_prices.get(ts_code, 0.0)
             current_value = pos.shares * current_price
@@ -1017,10 +1125,19 @@ class PaperBroker:
             profit = current_value - cost_value
             profit_rate = (profit / cost_value * 100) if cost_value > 0 else 0.0
             
-            # 计算持有天数
+            # 计算持有交易日（缺失交易日历时回退自然日）
             holding_days = 0
             if current_date:
-                holding_days = pos.get_holding_days(current_date)
+                if trade_dates_list:
+                    holding_days = self._calc_holding_trade_days(
+                        pos.buy_date,
+                        current_date,
+                        trade_dates_list,
+                    )
+                else:
+                    holding_days = pos.get_holding_days(current_date)
+            # 剩余天数按“可持有上限”计算：基础持有期 +（可选）盈利延续天数
+            holding_remaining = max(0, max_holding_days - holding_days)
             
             # 构建股票代码显示（包含名称）
             stock_name = stock_names.get(ts_code, 'na') if stock_names else 'na'
@@ -1034,6 +1151,7 @@ class PaperBroker:
                 '买入成本': pos.buy_cost,  # 内部仍保留用于计算
                 '买入日期': pos.buy_date,
                 '持有天数': holding_days,
+                '持有剩余': holding_remaining,
                 '当前市值': current_value,
                 '浮动盈亏': profit,
                 '收益率(%)': profit_rate,
@@ -1060,8 +1178,8 @@ class PaperBroker:
             logger.info("=" * 80)
             return
         
-        # 打印表头（新列顺序：股票代码、股数、当前价格、买入均价、买入日期、持有天数、当前市值、浮盈、收益率(%)、状态）
-        header = ["股票代码", "股数", "当前价格", "买入均价", "买入日期", "持有天数", "当前市值", "浮盈", "收益率(%)", "状态"]
+        # 打印表头（新列顺序：股票代码、股数、当前价格、买入均价、买入日期、持有交易日、持有剩余、当前市值、浮盈、收益率(%)、状态）
+        header = ["股票代码", "股数", "当前价格", "买入均价", "买入日期", "持有D", "剩余D", "当前市值", "浮盈", "收益率(%)", "状态"]
         logger.info(format_row(header, self.positions_table_widths, ['left'] * len(self.positions_table_widths)))
 
         logger.info("-" * 140)
@@ -1073,7 +1191,7 @@ class PaperBroker:
             row_data = [
                 row['股票代码'], row['持仓股数'], 
                 f"{row['当前价格']:.2f}", f"{row['买入均价']:.2f}",
-                row['买入日期'], row['持有天数'],
+                row['买入日期'], row['持有天数'], row['持有剩余'],
                 f"{row['当前市值']:.2f}", 
                 f"{row['浮动盈亏']:.2f}", f"{row['收益率(%)']:.2f}",
                 row['状态']
@@ -1089,7 +1207,7 @@ class PaperBroker:
         
         logger.info("-" * 140)
         logger.info(f"{'合计(' + str(len(df)) + ')':<18} {df['持仓股数'].sum():<8} {'':<10} {'':<10} "
-                   f"{'':<12} {'':<8} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<12.2f}")
+                   f"{'':<12} {'':<10} {'':<10} {total_value:<12.2f} {total_profit:<12.2f} {total_profit_rate:<12.2f}")
         logger.info("=" * 140)
         logger.info(f"账户现金: {self.account.get_cash():,.2f}")
         logger.info(f"持仓市值: {total_value:,.2f}")
@@ -1434,6 +1552,7 @@ class PaperBroker:
         fills = []
         remaining_buys = []
         expired_buys = []
+        min_buy_value_threshold = self._get_min_buy_value_threshold(buy_prices)
         
         for pb in self.pending_buys:
             # 检查是否同日重复执行：若 last_attempt_date == trade_date，则不增加 attempts
@@ -1493,6 +1612,15 @@ class PaperBroker:
             
             if buy_shares < 100:
                 logger.warning(f"股票 {pb.ts_code} 不足一手（可买{buy_shares}股），保留订单")
+                remaining_buys.append(pb)
+                continue
+
+            actual_buy_value = buy_shares * price
+            if min_buy_value_threshold > 0 and actual_buy_value < min_buy_value_threshold:
+                logger.warning(
+                    f"股票 {pb.ts_code} 买入后市值 {actual_buy_value:.2f} 低于阈值 "
+                    f"{min_buy_value_threshold:.2f}，保留订单"
+                )
                 remaining_buys.append(pb)
                 continue
             
