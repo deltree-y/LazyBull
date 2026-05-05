@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.0] - 2026-05-05
+
+### 新增
+
+- **walk-forward 输入模型切换为“split数量 + 最终日期”反推切分** ([src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py), [scripts/walk_forward.py](scripts/walk_forward.py)):
+  - 新增 `generate_walk_forward_splits_by_count(...)`，根据 `split_count + final_date + step/window` 自动反推每个 split 的训练/测试区间
+  - `walk_forward.py` CLI 改为 `--split-count` 与 `--final-date`（移除 `--wf-start-date/--wf-end-date`）
+  - 保留 summary 中 `wf_start_date/wf_end_date` 推导字段（用于 compare 兼容），并新增 `split_count/final_date`
+
+- **批量脚本同步新输入参数模型** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - 时间段配置由 `WfStartDate/WfEndDate` 改为 `SplitCount/FinalDate`
+  - 命令透传改为 `--split-count/--final-date`
+
+- **compare 脚本兼容新参数列展示** ([scripts/compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - 增加 `split_count/final_date` 列识别、参数透传与中文展示
+
+### 修复
+
+- **避免出现最后 split 无效区间（`test_start > test_end`）导致部署训练与最后 split 训练完全重叠的问题** ([src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py), [scripts/walk_forward.py](scripts/walk_forward.py)):
+  - 取消“末尾强制截断”式生成方式，改为按最终日期反推并保证每个 split 区间有效
+  - 新增部署训练与最后 split 训练区间冲突校验，冲突时直接报错终止
+
+### 测试
+
+- **更新 walk-forward 与 compare 相关测试并通过**:
+  - [tests/test_walk_forward.py](tests/test_walk_forward.py) 新增按数量反推切分测试与参数校验测试
+  - [tests/test_ma250_observability.py](tests/test_ma250_observability.py) 回归通过（验证 compare 兼容）
+
+## [0.70.12] - 2026-05-05
+
+### 修复
+
+- **walk-forward 切分汇总增加部署训练日期展示** ([src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py), [scripts/walk_forward.py](scripts/walk_forward.py)):
+  - 新增 `resolve_deploy_train_window(...)`，统一按交易日历解析部署训练区间（train_start/train_end）
+  - `print_splits_summary(...)` 支持在切分表尾追加“部署训练”行，展示部署训练开始/结束日期
+  - `scripts/walk_forward.py` 在打印切分汇总前提前解析并传入部署训练区间，开局即可看到最终部署训练日期
+
+### 测试
+
+- **更新 walk-forward 相关测试** ([tests/test_walk_forward.py](tests/test_walk_forward.py)):
+  - 增加 `resolve_deploy_train_window` 的交易日对齐断言
+  - 覆盖 `print_splits_summary` 传入部署训练日期时的不异常路径
+
 ## [0.70.11] - 2026-05-05
 
 ### 修复

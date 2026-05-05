@@ -19,7 +19,9 @@ import os
 
 from src.lazybull.ml.walk_forward_utils import (
     generate_walk_forward_splits,
+    generate_walk_forward_splits_by_count,
     print_splits_summary,
+    resolve_deploy_train_window,
     WalkForwardSplit
 )
 from src.lazybull.ml.run_logger import TrainingRunRecord, write_training_run_to_csv
@@ -194,10 +196,31 @@ class TestWalkForwardSplits:
         
         # 只测试不抛异常
         print_splits_summary(splits)
+        deploy_train_start, deploy_train_end = resolve_deploy_train_window(
+            trade_cal=trade_cal,
+            deploy_train_end=splits[-1].test_end,
+            train_window_years=2,
+        )
+        print_splits_summary(
+            splits,
+            deploy_train_start=deploy_train_start,
+            deploy_train_end=deploy_train_end,
+        )
         assert len(splits) > 0
         
         # 测试空列表
         print_splits_summary([])  # 不应抛异常
+
+    def test_resolve_deploy_train_window(self, trade_cal):
+        """测试部署训练区间解析与交易日对齐"""
+        train_start, train_end = resolve_deploy_train_window(
+            trade_cal=trade_cal,
+            deploy_train_end="20221231",  # 非交易日（周六）
+            train_window_years=2,
+        )
+
+        assert train_start == "20201231"
+        assert train_end == "20221230"
 
     def test_rebalance_freq_alignment(self, trade_cal):
         """测试 rebalance_freq 对齐：test_end 应延迟到调仓日边界"""
@@ -240,6 +263,39 @@ class TestWalkForwardSplits:
         assert splits[-1].test_end <= wf_end_date, (
             f"最后一个 split 的 test_end {splits[-1].test_end} 超出了 wf_end_date {wf_end_date}"
         )
+
+    def test_generate_splits_by_count(self, trade_cal):
+        """测试按 split 数量 + final_date 反推切分"""
+        splits = generate_walk_forward_splits_by_count(
+            trade_cal=trade_cal,
+            split_count=6,
+            final_date="20221231",
+            step_frequency="quarterly",
+            train_window_years=2,
+            test_window_months=3,
+            rebalance_freq=5,
+        )
+
+        assert len(splits) == 6
+        assert [s.split_index for s in splits] == list(range(6))
+        assert splits[-1].test_end <= "20221231"
+
+        for split in splits:
+            assert split.train_start < split.train_end
+            assert split.test_start > split.train_end
+            assert split.test_start <= split.test_end
+
+    def test_generate_splits_by_count_invalid_split_count(self, trade_cal):
+        """测试按数量反推时 split_count 参数校验"""
+        with pytest.raises(ValueError, match="split_count"):
+            generate_walk_forward_splits_by_count(
+                trade_cal=trade_cal,
+                split_count=0,
+                final_date="20221231",
+                step_frequency="quarterly",
+                train_window_years=2,
+                test_window_months=3,
+            )
 
 
 class TestWalkForwardCSV:

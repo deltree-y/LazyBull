@@ -12,17 +12,17 @@ Walk-forward 滚动训练脚本
 
 使用示例：
     # 使用默认参数（季度滚动，5年训练窗口，6个月测试窗口）
-    python scripts/walk_forward.py --wf-start-date 20180101 --wf-end-date 20231231
+    python scripts/walk_forward.py --split-count 12 --final-date 20231231
     
     # 指定按月度滚动
-    python scripts/walk_forward.py --wf-start-date 20180101 --wf-end-date 20231231 --step monthly
+    python scripts/walk_forward.py --split-count 24 --final-date 20231231 --step monthly
     
     # 自定义窗口大小
-    python scripts/walk_forward.py --wf-start-date 20180101 --wf-end-date 20231231 \
+    python scripts/walk_forward.py --split-count 12 --final-date 20231231 \
         --train-window-years 3 --test-window-months 3
     
     # 透传训练参数
-    python scripts/walk_forward.py --wf-start-date 20180101 --wf-end-date 20231231 \
+    python scripts/walk_forward.py --split-count 12 --final-date 20231231 \
         --task classification --pos-topk 300 --label y_ret_20
 """
 
@@ -68,8 +68,9 @@ from src.lazybull.ml.train_core import (
     build_time_decay_weights,
 )
 from src.lazybull.ml.walk_forward_utils import (
-    generate_walk_forward_splits,
+    generate_walk_forward_splits_by_count,
     print_splits_summary,
+    resolve_deploy_train_window,
     WalkForwardSplit
 )
 from src.lazybull.ml.ensemble import EnsembleModel
@@ -1068,32 +1069,22 @@ def execute_deploy_training(
     Returns:
         包含训练结果的字典，失败返回 None
     """
-    # 计算 train_start: deploy_train_end - train_window_years，对齐到交易日
-    all_trade_dates = trade_cal[
-        trade_cal["is_open"] == 1
-    ]["cal_date"].sort_values().tolist()
-
+    # 计算 train_start/train_end 并对齐到交易日
     train_start_dt = datetime.strptime(deploy_train_end, "%Y%m%d") - relativedelta(
         years=args.train_window_years
     )
     train_start_str = train_start_dt.strftime("%Y%m%d")
 
-    # 向后查找最近的交易日作为 train_start
-    train_start = None
-    for td in all_trade_dates:
-        if td >= train_start_str:
-            train_start = td
-            break
+    train_start, train_end = resolve_deploy_train_window(
+        trade_cal=trade_cal,
+        deploy_train_end=deploy_train_end,
+        train_window_years=args.train_window_years,
+    )
+
     if train_start is None:
         logger.error(f"无法找到有效的部署模型 train_start（目标: {train_start_str}）")
         return None
 
-    # 向前查找最近的交易日作为 train_end
-    train_end = None
-    for td in reversed(all_trade_dates):
-        if td <= deploy_train_end:
-            train_end = td
-            break
     if train_end is None:
         logger.error(f"无法找到有效的部署模型 train_end（目标: {deploy_train_end}）")
         return None
@@ -1680,13 +1671,18 @@ def write_walk_forward_summary(
 
         return params
 
+    derived_wf_start_date = getattr(args, "wf_start_date", results[0]["train_start"])
+    derived_wf_end_date = getattr(args, "wf_end_date", results[-1]["test_end"])
+
     # 训练参数（所有 split 共享，写入每行方便后续对比脚本独立使用）
     train_params_cols = {
         "wf_run_id": wf_run_id,
         "batch_run_id": getattr(args, 'batch_run_id', None),
         "batch_period_label": getattr(args, 'batch_period_label', None),
-        "wf_start_date": args.wf_start_date,
-        "wf_end_date": args.wf_end_date,
+        "split_count": getattr(args, 'split_count', len(results)),
+        "final_date": getattr(args, 'final_date', derived_wf_end_date),
+        "wf_start_date": derived_wf_start_date,
+        "wf_end_date": derived_wf_end_date,
         "algorithm": args.algorithm,
         "step": args.step,
         "train_window_years": args.train_window_years,
@@ -1943,16 +1939,20 @@ def main():
     
     # Walk-forward 参数
     parser.add_argument(
-        "--wf-start-date",
-        type=str,
+        "--split-count",
+        type=int,
         required=True,
-        help="walk-forward 起始日期，格式 YYYYMMDD"
+        help="切分数量（正整数）"
     )
     parser.add_argument(
-        "--wf-end-date",
+        "--final-date",
         type=str,
         required=True,
-        help="walk-forward 结束日期，格式 YYYYMMDD"
+        help=(
+            "最终日期，格式 YYYYMMDD。"
+            "若启用部署训练，表示部署训练数据最后一天；"
+            "若禁用部署训练，表示最后一个 split 测试结束日期"
+        )
     )
     parser.add_argument(
         "--step",
@@ -2823,7 +2823,8 @@ def main():
     logger.info("=" * 80)
     logger.info("Walk-forward 滚动训练")
     logger.info("=" * 80)
-    logger.info(f"Walk-forward 时间区间: {args.wf_start_date} 至 {args.wf_end_date}")
+    logger.info(f"切分数量: {args.split_count}")
+    logger.info(f"最终日期: {args.final_date}")
     logger.info(f"滚动频率: {args.step}")
     logger.info(f"训练窗口: {args.train_window_years} 年")
     logger.info(f"测试窗口: {args.test_window_months} 个月")
@@ -2935,25 +2936,27 @@ def main():
             _match = re.search(r'(\d+)', args.label_column)
             _rebalance_freq = int(_match.group(1)) if _match else 20
 
-        splits = generate_walk_forward_splits(
+        splits = generate_walk_forward_splits_by_count(
             trade_cal=trade_cal,
-            wf_start_date=args.wf_start_date,
-            wf_end_date=args.wf_end_date,
+            split_count=args.split_count,
+            final_date=args.final_date,
             step_frequency=args.step,
             train_window_years=args.train_window_years,
             test_window_months=args.test_window_months,
-            rebalance_freq=_rebalance_freq
+            rebalance_freq=_rebalance_freq,
         )
         
         if len(splits) == 0:
             logger.error("未生成任何切分，请检查参数设置")
             sys.exit(1)
-        
-        print_splits_summary(splits)
-        
-        # 2. 执行每个 split 的训练
-        results = []
-        topk_values = [30, 100, 300]
+
+        # 兼容汇总与对比脚本：写入推导出的 WF 覆盖区间
+        args.wf_start_date = splits[0].train_start
+        args.wf_end_date = splits[-1].test_end
+        logger.info(
+            f"推导区间: {args.wf_start_date} 至 {args.wf_end_date} "
+            f"（由 split_count={args.split_count}, final_date={args.final_date} 反推）"
+        )
 
         # skip-training 模式参数校验
         skip_training = getattr(args, "skip_training", False)
@@ -2961,6 +2964,51 @@ def main():
         if skip_training and start_model_version is None:
             logger.error("--skip-training 模式必须指定 --start-model-version")
             sys.exit(1)
+
+        deploy_train_start = None
+        deploy_train_end_for_run = None
+        if not args.no_deploy_train and not skip_training:
+            deploy_train_start, deploy_train_end_for_run = resolve_deploy_train_window(
+                trade_cal=trade_cal,
+                deploy_train_end=args.final_date,
+                train_window_years=args.train_window_years,
+            )
+
+            if deploy_train_start is None or deploy_train_end_for_run is None:
+                logger.warning(
+                    f"部署训练区间解析失败，无法在切分汇总中展示（目标train_end={args.final_date}）"
+                )
+                deploy_train_start = None
+                deploy_train_end_for_run = None
+            else:
+                last_split = splits[-1]
+                if (
+                    deploy_train_start == last_split.train_start
+                    and deploy_train_end_for_run == last_split.train_end
+                ):
+                    logger.error(
+                        "部署训练区间与最后一个 split 的训练区间完全重叠，"
+                        "请调整 split_count 或 final_date 后重试"
+                    )
+                    sys.exit(1)
+
+                if deploy_train_end_for_run <= last_split.train_end:
+                    logger.error(
+                        f"部署训练结束日({deploy_train_end_for_run}) 不晚于"
+                        f"最后一个 split 训练结束日({last_split.train_end})，"
+                        "会造成训练区间冲突，请调整 final_date"
+                    )
+                    sys.exit(1)
+
+        print_splits_summary(
+            splits,
+            deploy_train_start=deploy_train_start,
+            deploy_train_end=deploy_train_end_for_run,
+        )
+        
+        # 2. 执行每个 split 的训练
+        results = []
+        topk_values = [30, 100, 300]
 
         # 创建跨 split 持久化 signal（仅 OOS 回测时使用）
         # 作用：门控历史缓冲区在 split 间累积，百分位归一化/自校准阈值能够完成预热
@@ -3134,28 +3182,32 @@ def main():
 
         # 3. 部署模型训练（使用最新可用数据）
         if not args.no_deploy_train and not skip_training and len(results) > 0:
-            last_split = splits[-1]
-            deploy_train_end = last_split.test_end
+            if deploy_train_end_for_run is None:
+                logger.error("部署训练区间未成功解析，跳过部署模型训练")
+                deploy_train_end = None
+            else:
+                deploy_train_end = deploy_train_end_for_run
             logger.info("=" * 80)
             logger.info("开始部署模型训练（使用最新可用数据）")
-            logger.info(f"  部署模型 train_end: {deploy_train_end}（最后split的test_end）")
+            logger.info(f"  部署模型 train_end: {deploy_train_end}（由 final_date 对齐）")
             logger.info("=" * 80)
-            try:
-                deploy_result = execute_deploy_training(
-                    deploy_train_end=deploy_train_end,
-                    wf_run_id=wf_run_id,
-                    storage=storage,
-                    loader=loader,
-                    registry=registry,
-                    args=args,
-                    topk_values=topk_values,
-                    trade_cal=trade_cal,
-                )
-                if deploy_result:
-                    logger.info(f"部署模型已注册: v{deploy_result['model_version']}")
-            except Exception as e:
-                logger.error(f"部署模型训练失败: {e}")
-                logger.error(traceback.format_exc())
+            if deploy_train_end is not None:
+                try:
+                    deploy_result = execute_deploy_training(
+                        deploy_train_end=deploy_train_end,
+                        wf_run_id=wf_run_id,
+                        storage=storage,
+                        loader=loader,
+                        registry=registry,
+                        args=args,
+                        topk_values=topk_values,
+                        trade_cal=trade_cal,
+                    )
+                    if deploy_result:
+                        logger.info(f"部署模型已注册: v{deploy_result['model_version']}")
+                except Exception as e:
+                    logger.error(f"部署模型训练失败: {e}")
+                    logger.error(traceback.format_exc())
 
         # 4. 生成 walk-forward 汇总文件（统一输出到 raw/ 子目录）
         if len(results) > 0:

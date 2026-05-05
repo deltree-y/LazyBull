@@ -15,31 +15,32 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
-# WfStartDate/WfEndDate: 传给 walk_forward.py 的整体时间范围
+# SplitCount           : 训练切分数量
+# FinalDate            : 最终日期（启用部署训练时=部署训练数据最后一天；禁用部署训练时=最后split测试结束日）
 # StartModelVersion    : skip-training 模式下该时间段首个 split 对应模型版本号
 $wf_period_configs = @(
     [PSCustomObject]@{
-        Label = "0101"
-        WfStartDate = "20130101"
-        WfEndDate = "20251231"
+        Label = "0430"
+        SplitCount = 14
+        FinalDate = "20260430"
         StartModelVersion = 14388
     }
-    [PSCustomObject]@{
-        Label = "0209"
-        WfStartDate = "20130209"
-        WfEndDate = "20260209"
-        StartModelVersion = 14403
-    }
-    [PSCustomObject]@{
-        Label = "0324"
-        WfStartDate = "20130324"
-        WfEndDate = "20260324"
-        StartModelVersion = 14418
-    }
+    #[PSCustomObject]@{
+    #    Label = "0209"
+    #    SplitCount = 14
+    #    FinalDate = "20260209"
+    #    StartModelVersion = 14403
+    #}
+    #[PSCustomObject]@{
+    #    Label = "0324"
+    #    SplitCount = 14
+    #    FinalDate = "20260324"
+    #    StartModelVersion = 14418
+    #}
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
@@ -348,12 +349,12 @@ foreach ($wfPeriod in $wf_period_configs) {
     } else {
         "period_$wfPeriodIndex"
     }
-    $periodStart = [string]$wfPeriod.WfStartDate
-    $periodEnd = [string]$wfPeriod.WfEndDate
+    $periodSplitCount = [int]$wfPeriod.SplitCount
+    $periodFinalDate = [string]$wfPeriod.FinalDate
     $periodStartModelVersion = $wfPeriod.StartModelVersion
 
-    if ([string]::IsNullOrWhiteSpace($periodStart) -or [string]::IsNullOrWhiteSpace($periodEnd)) {
-        throw "wf_period_configs[$($wfPeriodIndex - 1)] 缺少 WfStartDate 或 WfEndDate"
+    if ($periodSplitCount -le 0 -or [string]::IsNullOrWhiteSpace($periodFinalDate)) {
+        throw "wf_period_configs[$($wfPeriodIndex - 1)] 缺少有效的 SplitCount 或 FinalDate"
     }
     if ($skip_training -and $null -eq $periodStartModelVersion) {
         throw "skip-training 模式要求每个时间段都设置 StartModelVersion，缺失时间段: $periodLabel"
@@ -361,8 +362,8 @@ foreach ($wfPeriod in $wf_period_configs) {
 
     $normalized_wf_period_configs += [PSCustomObject]@{
         Label = $periodLabel
-        WfStartDate = $periodStart
-        WfEndDate = $periodEnd
+        SplitCount = $periodSplitCount
+        FinalDate = $periodFinalDate
         StartModelVersion = $periodStartModelVersion
     }
 }
@@ -378,7 +379,7 @@ $batch_compare_output = Join-Path $data_root "walk_forward\wf_comparison.xlsx"
 New-Item -ItemType Directory -Path $batch_raw_dir -Force | Out-Null
 
 $periodSummary = ($normalized_wf_period_configs | ForEach-Object {
-    "{0}:{1}~{2}" -f $_.Label, $_.WfStartDate, $_.WfEndDate
+    "{0}:split={1}, final={2}" -f $_.Label, $_.SplitCount, $_.FinalDate
 }) -join "; "
 
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
@@ -523,8 +524,8 @@ foreach ($position_sizing in $position_sizing_list) {
 foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     $count++
-    $wf_start_date = $wfPeriod.WfStartDate
-    $wf_end_date = $wfPeriod.WfEndDate
+    $split_count = $wfPeriod.SplitCount
+    $final_date = $wfPeriod.FinalDate
     $period_label = $wfPeriod.Label
     $start_model_version = $wfPeriod.StartModelVersion
     $summary_csv_path = Join-Path $batch_raw_dir ("walk_forward_summary_{0}_{1:D4}.csv" -f $period_label, $count)
@@ -532,8 +533,8 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     # 构建命令字符串
     $pythonCmd = "py .\scripts\walk_forward.py" +
                  " --algorithm $algorithm" +
-                 " --wf-start-date $wf_start_date" +
-                 " --wf-end-date $wf_end_date" +
+                 " --split-count $split_count" +
+                 " --final-date $final_date" +
                  " --step $step" +
                  " --train-window-years $train_window_years" +
                  " --test-window-months $test_window_months" +
@@ -770,7 +771,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     }
 
     Write-Host ""
-    Write-Host "[任务 $count / $totalTasks][时间段 $period_label][$wf_start_date ~ $wf_end_date]" -ForegroundColor Green
+    Write-Host "[任务 $count / $totalTasks][时间段 $period_label][split=$split_count, final=$final_date]" -ForegroundColor Green
     Write-Host $pythonCmd -ForegroundColor Gray
     Write-Host ""
 

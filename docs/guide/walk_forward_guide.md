@@ -29,8 +29,8 @@ Walk-forward（滚动训练）是一种模型评估方法，用于模拟实盘�
 
 ```bash
 python scripts/walk_forward.py \
-    --wf-start-date 20180101 \
-    --wf-end-date 20231231
+    --split-count 12 \
+    --final-date 20231231
 ```
 
 这将使用默认配置：
@@ -51,8 +51,8 @@ python scripts/walk_forward.py --help
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `--wf-start-date` | str | 必填 | walk-forward 起始日期（YYYYMMDD） |
-| `--wf-end-date` | str | 必填 | walk-forward 结束日期（YYYYMMDD） |
+| `--split-count` | int | 必填 | 切分数量（正整数） |
+| `--final-date` | str | 必填 | 最终日期（YYYYMMDD）。启用部署训练时表示部署训练数据最后一天；禁用部署训练时表示最后一个 split 测试结束日 |
 | `--step` | str | quarterly | 滚动频率：monthly（月度）、quarterly（季度）、semiannual（半年） |
 | `--train-window-years` | int | 5 | 训练窗口长度（年） |
 | `--test-window-months` | int | 6 | 测试窗口长度（月） |
@@ -79,8 +79,8 @@ python scripts/walk_forward.py --help
 
 ```bash
 python scripts/walk_forward.py \
-    --wf-start-date 20200101 \
-    --wf-end-date 20231231 \
+    --split-count 24 \
+    --final-date 20231231 \
     --step monthly \
     --train-window-years 3 \
     --test-window-months 1
@@ -95,8 +95,8 @@ python scripts/walk_forward.py \
 
 ```bash
 python scripts/walk_forward.py \
-    --wf-start-date 20180101 \
-    --wf-end-date 20231231 \
+    --split-count 12 \
+    --final-date 20231231 \
     --task classification \
     --pos-topk 300 \
     --label y_ret_20
@@ -110,8 +110,8 @@ python scripts/walk_forward.py \
 
 ```bash
 python scripts/walk_forward.py \
-    --wf-start-date 20180101 \
-    --wf-end-date 20231231 \
+    --split-count 12 \
+    --final-date 20231231 \
     --task regression \
     --label-transform cs_zscore \
     --label y_ret_20
@@ -125,8 +125,8 @@ python scripts/walk_forward.py \
 
 ```bash
 python scripts/walk_forward.py \
-    --wf-start-date 20180101 \
-    --wf-end-date 20231231 \
+    --split-count 12 \
+    --final-date 20231231 \
     --n-estimators 300 \
     --max-depth 10 \
     --learning-rate 0.03 \

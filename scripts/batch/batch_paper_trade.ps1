@@ -5,8 +5,8 @@
 # =========================
 # Config
 # =========================
-$start_date = "20240812"
-$end_date = "20250212"#"20250212"#"20240909"
+$start_date = "20260325" #"20240812"
+$end_date = "20260430"#"20250212"#"20240909"
 $reset_t0_before_run = $true
 
 Set-StrictMode -Version Latest

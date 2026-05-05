@@ -253,11 +253,250 @@ def generate_walk_forward_splits(
     return splits
 
 
-def print_splits_summary(splits: List[WalkForwardSplit]) -> None:
+def generate_walk_forward_splits_by_count(
+    trade_cal: pd.DataFrame,
+    split_count: int,
+    final_date: str,
+    step_frequency: str = "quarterly",
+    train_window_years: int = 5,
+    test_window_months: int = 6,
+    rebalance_freq: Optional[int] = None,
+) -> List[WalkForwardSplit]:
+    """按切分数量和最终日期反推 walk-forward 切分。
+
+    Args:
+        trade_cal: 交易日历 DataFrame（包含 cal_date, is_open 列）
+        split_count: 切分数量（必须 > 0）
+        final_date: 最终日期（YYYYMMDD）
+        step_frequency: 滚动频率（"monthly"|"quarterly"|"semiannual"）
+        train_window_years: 训练窗口年数
+        test_window_months: 测试窗口月数
+        rebalance_freq: 调仓频率（交易日）。若提供则将 test_end 向后对齐到调仓边界
+
+    Returns:
+        WalkForwardSplit 列表（按 split_index 升序）
+
+    Note:
+        - 不做“末尾强制截断”补丁，避免出现 test_start > test_end 的无效切分
+        - 最后一段 split 的 test_end 会尽量贴近 final_date 且不超过 final_date
+    """
+    if split_count <= 0:
+        raise ValueError(f"split_count 必须为正整数，当前值: {split_count}")
+
+    step_months_map = {
+        "monthly": 1,
+        "quarterly": 3,
+        "semiannual": 6,
+    }
+    if step_frequency not in step_months_map:
+        raise ValueError(
+            f"不支持的 step_frequency: {step_frequency}，请使用 monthly, quarterly 或 semiannual"
+        )
+
+    all_trade_dates = trade_cal[
+        trade_cal['is_open'] == 1
+    ]['cal_date'].sort_values().tolist()
+    if len(all_trade_dates) == 0:
+        raise ValueError("交易日历为空，无法生成切分")
+
+    step_months = step_months_map[step_frequency]
+
+    def to_datetime(date_str: str) -> datetime:
+        return datetime.strptime(date_str, "%Y%m%d")
+
+    def to_date_str(dt: datetime) -> str:
+        return dt.strftime("%Y%m%d")
+
+    def find_nearest_trade_date(target_date_str: str, direction: str) -> Optional[str]:
+        if target_date_str in all_trade_dates:
+            return target_date_str
+
+        if direction == "forward":
+            for td in all_trade_dates:
+                if td >= target_date_str:
+                    return td
+            return None
+
+        for td in reversed(all_trade_dates):
+            if td <= target_date_str:
+                return td
+        return None
+
+    def build_split_from_train_end(train_end: str) -> Optional[Tuple[str, str, str]]:
+        """根据 train_end 计算 train_start/test_start/test_end。"""
+        try:
+            train_end_idx = all_trade_dates.index(train_end)
+        except ValueError:
+            return None
+
+        if train_end_idx + 1 >= len(all_trade_dates):
+            return None
+
+        test_start = all_trade_dates[train_end_idx + 1]
+
+        # test_end 先按窗口长度回溯（与正向逻辑保持一致）
+        test_end_dt = to_datetime(test_start) + relativedelta(months=test_window_months)
+        test_end = find_nearest_trade_date(to_date_str(test_end_dt), direction="backward")
+
+        if test_end is None or test_end < test_start:
+            return None
+
+        # 若提供调仓频率，将 test_end 向后对齐到第一个不早于当前 test_end 的调仓日
+        if rebalance_freq is not None and rebalance_freq > 0:
+            test_start_idx = all_trade_dates.index(test_start)
+            k = 1
+            while True:
+                rebal_idx = test_start_idx + k * rebalance_freq - 1
+                if rebal_idx >= len(all_trade_dates):
+                    break
+                candidate = all_trade_dates[rebal_idx]
+                if candidate >= test_end:
+                    test_end = candidate
+                    break
+                k += 1
+
+        train_start_dt = to_datetime(train_end) - relativedelta(years=train_window_years)
+        train_start = find_nearest_trade_date(to_date_str(train_start_dt), direction="forward")
+
+        if train_start is None or train_start >= train_end:
+            return None
+
+        return train_start, test_start, test_end
+
+    aligned_final_date = find_nearest_trade_date(final_date, direction="backward")
+    if aligned_final_date is None:
+        raise ValueError(f"无法将 final_date 对齐到交易日: {final_date}")
+
+    final_idx = all_trade_dates.index(aligned_final_date)
+
+    # 搜索“最后一个 split”的 train_end：要求其 test_end <= aligned_final_date
+    last_train_end = None
+    for idx in range(final_idx - 1, -1, -1):
+        candidate_train_end = all_trade_dates[idx]
+        built = build_split_from_train_end(candidate_train_end)
+        if built is None:
+            continue
+        _, test_start, test_end = built
+        if test_start <= test_end and test_end <= aligned_final_date:
+            last_train_end = candidate_train_end
+            break
+
+    if last_train_end is None:
+        raise ValueError(
+            f"无法在 final_date={final_date} 前找到有效的最后一个 split，请检查窗口参数"
+        )
+
+    reverse_splits: List[WalkForwardSplit] = []
+    current_train_end = last_train_end
+
+    for rev_idx in range(split_count):
+        built = build_split_from_train_end(current_train_end)
+        if built is None:
+            raise ValueError(f"无法构造有效 split（train_end={current_train_end}）")
+
+        train_start, test_start, test_end = built
+
+        if rev_idx == 0 and test_end > aligned_final_date:
+            raise ValueError(
+                f"最后一个 split 的 test_end={test_end} 超出 final_date={aligned_final_date}"
+            )
+
+        split_index = split_count - 1 - rev_idx
+        reverse_splits.append(
+            WalkForwardSplit(
+                split_index=split_index,
+                train_start=train_start,
+                train_end=current_train_end,
+                test_start=test_start,
+                test_end=test_end,
+            )
+        )
+
+        if rev_idx == split_count - 1:
+            break
+
+        prev_train_end_target = to_datetime(current_train_end) - relativedelta(months=step_months)
+        prev_train_end = find_nearest_trade_date(to_date_str(prev_train_end_target), direction="backward")
+        if prev_train_end is None:
+            raise ValueError(
+                f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
+            )
+
+        if prev_train_end >= current_train_end:
+            current_idx = all_trade_dates.index(current_train_end)
+            if current_idx == 0:
+                raise ValueError(
+                    f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
+                )
+            prev_train_end = all_trade_dates[current_idx - 1]
+
+        current_train_end = prev_train_end
+
+    splits = sorted(reverse_splits, key=lambda x: x.split_index)
+
+    logger.info(f"成功生成 {len(splits)} 个切分（按数量反推）")
+    if len(splits) > 0:
+        logger.info(
+            f"  末尾约束: final_date={final_date}（对齐后={aligned_final_date}）, "
+            f"last_split.test_end={splits[-1].test_end}"
+        )
+
+    return splits
+
+
+def resolve_deploy_train_window(
+    trade_cal: pd.DataFrame,
+    deploy_train_end: str,
+    train_window_years: int,
+) -> Tuple[Optional[str], Optional[str]]:
+    """解析部署模型训练区间并对齐到交易日。
+
+    Args:
+        trade_cal: 交易日历 DataFrame（包含 cal_date, is_open 列）
+        deploy_train_end: 部署训练目标结束日期（YYYYMMDD）
+        train_window_years: 训练窗口年数
+
+    Returns:
+        (train_start, train_end)；任一无法解析时返回 None
+    """
+    all_trade_dates = trade_cal[
+        trade_cal['is_open'] == 1
+    ]['cal_date'].sort_values().tolist()
+
+    if len(all_trade_dates) == 0:
+        return None, None
+
+    train_start_dt = datetime.strptime(deploy_train_end, "%Y%m%d") - relativedelta(
+        years=train_window_years
+    )
+    train_start_str = train_start_dt.strftime("%Y%m%d")
+
+    train_start = None
+    for td in all_trade_dates:
+        if td >= train_start_str:
+            train_start = td
+            break
+
+    train_end = None
+    for td in reversed(all_trade_dates):
+        if td <= deploy_train_end:
+            train_end = td
+            break
+
+    return train_start, train_end
+
+
+def print_splits_summary(
+    splits: List[WalkForwardSplit],
+    deploy_train_start: Optional[str] = None,
+    deploy_train_end: Optional[str] = None,
+) -> None:
     """打印切分汇总信息
     
     Args:
         splits: WalkForwardSplit 列表
+        deploy_train_start: 部署训练开始日期（可选）
+        deploy_train_end: 部署训练结束日期（可选）
     """
     if len(splits) == 0:
         logger.info("没有切分可以打印")
@@ -276,6 +515,16 @@ def print_splits_summary(splits: List[WalkForwardSplit]) -> None:
             f"{split.train_end:<12} "
             f"{split.test_start:<12} "
             f"{split.test_end:<12}"
+        )
+
+    if deploy_train_start and deploy_train_end:
+        logger.info("-" * 80)
+        logger.info(
+            f"{'部署训练':<6} "
+            f"{deploy_train_start:<12} "
+            f"{deploy_train_end:<12} "
+            f"{'-':<12} "
+            f"{'-':<12}"
         )
     
     logger.info("=" * 80)

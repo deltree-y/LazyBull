@@ -38,6 +38,8 @@ SUMMARY_CSV_DTYPE = {
     "wf_run_id": str,
     "batch_run_id": str,
     "batch_period_label": str,
+    "split_count": str,
+    "final_date": str,
     "wf_start_date": str,
     "wf_end_date": str,
 }
@@ -51,6 +53,8 @@ COL_NAMES = {
     "wf_run_id":                  "运行ID",
     "batch_run_id":               "批次ID",
     "batch_period_label":         "批次时间段",
+    "split_count":                "切分数量",
+    "final_date":                 "最终日期",
     # OOS 性能
     "n_splits":                   "切分数",
     "model_version_range":        "模型版本范围",
@@ -133,6 +137,8 @@ COL_NAMES = {
     "chain_sharpe_std":           "跨时间段夏普标准差",
     "stability_score":            "时间段稳定性分",
     # 训练参数
+    "split_count":                "切分数量",
+    "final_date":                 "最终日期",
     "wf_start_date":              "WF起始日期",
     "wf_end_date":                "WF结束日期",
     "step":                       "滚动频率",
@@ -240,6 +246,7 @@ PARAM_COLS = [
     "batch_run_id",
     "batch_period_label",
     "algorithm",
+    "split_count", "final_date",
     "wf_start_date", "wf_end_date", "step",
     "train_window_years", "test_window_months", "val_ratio",
     "label_column", "task", "label_transform",

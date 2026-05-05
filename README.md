@@ -28,7 +28,18 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.70.11)
+### 当前版本 (v0.71.0)
+
+**walk-forward 输入改为“split数量 + 最终日期”自动反推切分** (v0.71.0):
+- [scripts/walk_forward.py](scripts/walk_forward.py) CLI 改为 `--split-count` + `--final-date`，按配置自动反推每个 split 的训练/测试区间
+- [src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py) 新增 `generate_walk_forward_splits_by_count(...)`，避免末尾无效 split（`test_start > test_end`）
+- [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 同步改为 `SplitCount/FinalDate` 配置与新参数透传
+- [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py) 增加 `split_count/final_date` 列展示，保持对比输出可读
+
+**walk-forward 切分汇总增加部署训练日期展示** (v0.70.12):
+- [src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py) 新增 `resolve_deploy_train_window(...)`，统一按交易日对齐部署训练区间
+- [src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py) 的 `print_splits_summary(...)` 支持追加“部署训练”日期行
+- [scripts/walk_forward.py](scripts/walk_forward.py) 在一开始打印切分时同步展示最终部署训练的开始/结束日期
 
 **修复批量纸面交易脚本 PowerShell 未认可动词告警** (v0.70.11):
 - [scripts/batch_paper_trade.ps1](scripts/batch_paper_trade.ps1) 将 `Parse-DateText` 重命名为 `Get-DateFromText`
