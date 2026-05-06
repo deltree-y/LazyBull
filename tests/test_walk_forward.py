@@ -285,6 +285,14 @@ class TestWalkForwardSplits:
             assert split.test_start > split.train_end
             assert split.test_start <= split.test_end
 
+        # 相邻 split 的测试区间应严格不重叠
+        for i in range(len(splits) - 1):
+            assert splits[i].test_end < splits[i + 1].test_start, (
+                f"split {i} 与 split {i+1} 测试区间重叠: "
+                f"{splits[i].test_start}-{splits[i].test_end} vs "
+                f"{splits[i+1].test_start}-{splits[i+1].test_end}"
+            )
+
     def test_generate_splits_by_count_invalid_split_count(self, trade_cal):
         """测试按数量反推时 split_count 参数校验"""
         with pytest.raises(ValueError, match="split_count"):

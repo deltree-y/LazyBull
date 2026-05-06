@@ -2370,17 +2370,31 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     from src.lazybull.paper import PaperStorage, PaperTradingRunner
     from src.lazybull.data.tushare_client import TushareClient
 
-    runner = PaperTradingRunner(verbose=False)
+    paper_root = get_paper_root()
+    paper_storage = PaperStorage(
+        root_path=paper_root, verbose=False
+    )
+    config = paper_storage.load_config() or {}
+
+    try:
+        initial_capital = float(config.get('initial_capital', 500000.0))
+    except (TypeError, ValueError):
+        initial_capital = 500000.0
+
+    try:
+        horizon = int(config.get('horizon', 20))
+    except (TypeError, ValueError):
+        horizon = 20
+
+    runner = PaperTradingRunner(
+        initial_capital=initial_capital,
+        paper_root=paper_root,
+        position_sizing=str(config.get('position_sizing', 'equal')),
+        horizon=horizon,
+        verbose=False,
+    )
     positions = runner.account.get_positions()
     cash = runner.account.get_cash()
-    paper_storage = PaperStorage(
-        root_path=get_paper_root(), verbose=False
-    )
-    config = paper_storage.load_config()
-    initial_capital = (
-        config.get('initial_capital', runner.account.initial_capital)
-        if config else runner.account.initial_capital
-    )
     annualized_return_func = getattr(runner.broker, '_calculate_annualized_return', None)
     if not callable(annualized_return_func):
         annualized_return_func = None

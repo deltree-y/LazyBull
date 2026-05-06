@@ -554,11 +554,36 @@ def _print_realtime_profit_only(
     )
 
 
+def _create_realtime_runner() -> Tuple[PaperTradingRunner, Dict]:
+    """创建实时查询所需的 runner，并对齐持久化配置中的初始资金口径。"""
+    storage = PaperStorage()
+    config = storage.load_config() or {}
+
+    try:
+        initial_capital = float(config.get("initial_capital", 500000.0))
+    except (TypeError, ValueError):
+        initial_capital = 500000.0
+
+    try:
+        horizon = int(config.get("horizon", 20))
+    except (TypeError, ValueError):
+        horizon = 20
+
+    position_sizing = str(config.get("position_sizing", "equal"))
+    runner = PaperTradingRunner(
+        initial_capital=initial_capital,
+        position_sizing=position_sizing,
+        horizon=horizon,
+        verbose=False,
+    )
+    return runner, config
+
+
 def run_real(args):
     """实时行情命令：获取持仓实时数据并展示"""
     from src.lazybull.data.tushare_client import TushareClient
 
-    runner = PaperTradingRunner(verbose=False)
+    runner, _ = _create_realtime_runner()
     positions = runner.account.get_positions()
 
     if not positions:
@@ -736,17 +761,14 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
     """
     from src.lazybull.data.tushare_client import TushareClient
 
-    runner = PaperTradingRunner(verbose=False)
+    runner, config = _create_realtime_runner()
     positions = runner.account.get_positions()
     cash = runner.account.get_cash()
 
-    storage = PaperStorage()
-    config = storage.load_config()
-    initial_capital = (
-        config.get("initial_capital", runner.account.initial_capital)
-        if config
-        else runner.account.initial_capital
-    )
+    try:
+        initial_capital = float(config.get("initial_capital", runner.account.initial_capital))
+    except (TypeError, ValueError):
+        initial_capital = float(runner.account.initial_capital)
 
     current_date = pd.Timestamp.today().strftime("%Y%m%d")
 

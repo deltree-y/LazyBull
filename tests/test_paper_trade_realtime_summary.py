@@ -23,9 +23,9 @@ def test_get_realtime_portfolio_summary_falls_back_to_pre_close(monkeypatch):
     module = _load_module()
 
     class DummyRunner:
-        def __init__(self, verbose=False):
+        def __init__(self, initial_capital=500000.0, position_sizing="equal", horizon=20, verbose=False):
             self.account = SimpleNamespace(
-                initial_capital=100000.0,
+                initial_capital=initial_capital,
                 get_positions=lambda: {
                     "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
                 },
@@ -66,3 +66,42 @@ def test_get_realtime_portfolio_summary_falls_back_to_pre_close(monkeypatch):
     assert summary["total_assets"] == 6100.0
     assert round(summary["float_pnl_pct"], 4) == 10.0
     assert summary["quote_time"] == "09:01:00"
+
+
+def test_get_realtime_portfolio_summary_uses_config_initial_capital(monkeypatch):
+    module = _load_module()
+
+    captured = {}
+
+    class DummyRunner:
+        def __init__(self, initial_capital=500000.0, position_sizing="equal", horizon=20, verbose=False):
+            captured["initial_capital"] = initial_capital
+            captured["position_sizing"] = position_sizing
+            captured["horizon"] = horizon
+            self.account = SimpleNamespace(
+                initial_capital=initial_capital,
+                get_positions=lambda: {},
+                get_cash=lambda: initial_capital,
+            )
+            self.broker = SimpleNamespace(
+                _calculate_annualized_return=lambda initial, total, current_date: 0.0
+            )
+
+    class DummyStorage:
+        def load_config(self):
+            return {
+                "initial_capital": 650000.0,
+                "position_sizing": "score",
+                "horizon": 20,
+            }
+
+    monkeypatch.setattr(module, "PaperTradingRunner", DummyRunner)
+    monkeypatch.setattr(module, "PaperStorage", DummyStorage)
+
+    summary = module.get_realtime_portfolio_summary()
+
+    assert summary is not None
+    assert summary["total_assets"] == 650000.0
+    assert captured["initial_capital"] == 650000.0
+    assert captured["position_sizing"] == "score"
+    assert captured["horizon"] == 20

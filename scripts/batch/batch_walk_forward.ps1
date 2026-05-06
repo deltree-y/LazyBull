@@ -26,7 +26,7 @@ $wf_period_configs = @(
     [PSCustomObject]@{
         Label = "0430"
         SplitCount = 14
-        FinalDate = "20260430"
+        FinalDate = "20260331"
         StartModelVersion = 14388
     }
     #[PSCustomObject]@{

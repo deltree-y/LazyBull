@@ -322,7 +322,19 @@ def generate_walk_forward_splits_by_count(
                 return td
         return None
 
-    def build_split_from_train_end(train_end: str) -> Optional[Tuple[str, str, str]]:
+    def previous_trade_date(date_str: str) -> Optional[str]:
+        try:
+            idx = all_trade_dates.index(date_str)
+        except ValueError:
+            return None
+        if idx <= 0:
+            return None
+        return all_trade_dates[idx - 1]
+
+    def build_split_from_train_end(
+        train_end: str,
+        test_end_upper_bound: Optional[str] = None,
+    ) -> Optional[Tuple[str, str, str]]:
         """根据 train_end 计算 train_start/test_start/test_end。"""
         try:
             train_end_idx = all_trade_dates.index(train_end)
@@ -341,6 +353,9 @@ def generate_walk_forward_splits_by_count(
         if test_end is None or test_end < test_start:
             return None
 
+        if test_end_upper_bound is not None and test_end > test_end_upper_bound:
+            return None
+
         # 若提供调仓频率，将 test_end 向后对齐到第一个不早于当前 test_end 的调仓日
         if rebalance_freq is not None and rebalance_freq > 0:
             test_start_idx = all_trade_dates.index(test_start)
@@ -355,6 +370,9 @@ def generate_walk_forward_splits_by_count(
                     break
                 k += 1
 
+            if test_end_upper_bound is not None and test_end > test_end_upper_bound:
+                return None
+
         train_start_dt = to_datetime(train_end) - relativedelta(years=train_window_years)
         train_start = find_nearest_trade_date(to_date_str(train_start_dt), direction="forward")
 
@@ -363,43 +381,84 @@ def generate_walk_forward_splits_by_count(
 
         return train_start, test_start, test_end
 
+    def find_latest_valid_train_end(
+        search_start: str,
+        test_end_upper_bound: str,
+    ) -> Tuple[str, Tuple[str, str, str]]:
+        try:
+            start_idx = all_trade_dates.index(search_start)
+        except ValueError:
+            aligned_search_start = find_nearest_trade_date(search_start, direction="backward")
+            if aligned_search_start is None:
+                raise ValueError(f"无法对齐 train_end 搜索起点: {search_start}")
+            start_idx = all_trade_dates.index(aligned_search_start)
+
+        for idx in range(start_idx, -1, -1):
+            candidate_train_end = all_trade_dates[idx]
+            built = build_split_from_train_end(candidate_train_end, test_end_upper_bound)
+            if built is None:
+                continue
+
+            train_start, test_start, test_end = built
+            if train_start < candidate_train_end and test_start <= test_end:
+                return candidate_train_end, built
+
+        raise ValueError(
+            f"无法在 train_end<={search_start} 且 test_end<={test_end_upper_bound} 条件下找到有效切分"
+        )
+
     aligned_final_date = find_nearest_trade_date(final_date, direction="backward")
     if aligned_final_date is None:
         raise ValueError(f"无法将 final_date 对齐到交易日: {final_date}")
 
-    final_idx = all_trade_dates.index(aligned_final_date)
-
-    # 搜索“最后一个 split”的 train_end：要求其 test_end <= aligned_final_date
-    last_train_end = None
-    for idx in range(final_idx - 1, -1, -1):
-        candidate_train_end = all_trade_dates[idx]
-        built = build_split_from_train_end(candidate_train_end)
-        if built is None:
-            continue
-        _, test_start, test_end = built
-        if test_start <= test_end and test_end <= aligned_final_date:
-            last_train_end = candidate_train_end
-            break
-
-    if last_train_end is None:
+    reverse_splits: List[WalkForwardSplit] = []
+    # 从最后一个 split 开始，向前逐段回推并确保测试区间不重叠
+    latest_search_start = previous_trade_date(aligned_final_date)
+    if latest_search_start is None:
         raise ValueError(
-            f"无法在 final_date={final_date} 前找到有效的最后一个 split，请检查窗口参数"
+            f"final_date={aligned_final_date} 之前没有可用交易日，无法生成切分"
         )
 
-    reverse_splits: List[WalkForwardSplit] = []
-    current_train_end = last_train_end
+    current_train_end, current_built = find_latest_valid_train_end(
+        search_start=latest_search_start,
+        test_end_upper_bound=aligned_final_date,
+    )
+    newer_split_test_start = None
 
     for rev_idx in range(split_count):
-        built = build_split_from_train_end(current_train_end)
-        if built is None:
-            raise ValueError(f"无法构造有效 split（train_end={current_train_end}）")
+        if rev_idx > 0:
+            if newer_split_test_start is None:
+                raise ValueError("内部状态错误：缺少下一段 test_start 上界")
 
-        train_start, test_start, test_end = built
+            no_overlap_upper_bound = previous_trade_date(newer_split_test_start)
+            if no_overlap_upper_bound is None:
+                raise ValueError(
+                    "切分数量过大：无法为更早 split 提供不重叠测试区间"
+                )
 
-        if rev_idx == 0 and test_end > aligned_final_date:
-            raise ValueError(
-                f"最后一个 split 的 test_end={test_end} 超出 final_date={aligned_final_date}"
+            prev_train_end_target = to_datetime(current_train_end) - relativedelta(months=step_months)
+            prev_train_end_target_str = to_date_str(prev_train_end_target)
+            search_start = find_nearest_trade_date(prev_train_end_target_str, direction="backward")
+
+            if search_start is None:
+                raise ValueError(
+                    f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
+                )
+
+            if search_start >= current_train_end:
+                search_start = previous_trade_date(current_train_end)
+                if search_start is None:
+                    raise ValueError(
+                        f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
+                    )
+
+            current_train_end, current_built = find_latest_valid_train_end(
+                search_start=search_start,
+                test_end_upper_bound=no_overlap_upper_bound,
             )
+
+        train_start, test_start, test_end = current_built
+        newer_split_test_start = test_start
 
         split_index = split_count - 1 - rev_idx
         reverse_splits.append(
@@ -411,26 +470,6 @@ def generate_walk_forward_splits_by_count(
                 test_end=test_end,
             )
         )
-
-        if rev_idx == split_count - 1:
-            break
-
-        prev_train_end_target = to_datetime(current_train_end) - relativedelta(months=step_months)
-        prev_train_end = find_nearest_trade_date(to_date_str(prev_train_end_target), direction="backward")
-        if prev_train_end is None:
-            raise ValueError(
-                f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
-            )
-
-        if prev_train_end >= current_train_end:
-            current_idx = all_trade_dates.index(current_train_end)
-            if current_idx == 0:
-                raise ValueError(
-                    f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
-                )
-            prev_train_end = all_trade_dates[current_idx - 1]
-
-        current_train_end = prev_train_end
 
     splits = sorted(reverse_splits, key=lambda x: x.split_index)
 

@@ -28,7 +28,21 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.0)
+### 当前版本 (v0.71.2)
+
+**修复实时摘要/树莓派显示路径错误回写空账户初始资金** (v0.71.2):
+- [scripts/paper_trade.py](scripts/paper_trade.py) 新增 `_create_realtime_runner()`，`run_real` 与 `get_realtime_portfolio_summary()` 统一先读取纸面配置，再按配置初始化 `PaperTradingRunner`
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 的 `_fetch_realtime_holdings_snapshot()` 同步按配置 `initial_capital/position_sizing/horizon` 初始化 runner
+- 修复效果：当 `data/paper/config.yaml` 中 `initial_capital` 非 500000 时，实时摘要与树莓派总资产显示不再把空账户现金回写为默认值
+
+**新增回归测试覆盖实时初始资金口径** (v0.71.2):
+- [tests/test_paper_trade_realtime_summary.py](tests/test_paper_trade_realtime_summary.py) 新增 `test_get_realtime_portfolio_summary_uses_config_initial_capital`
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 更新 DummyRunner 初始化签名，覆盖 LCD 快照路径参数透传
+
+**walk-forward 反推切分消除相邻测试区间重叠** (v0.71.1):
+- [src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py) 的 `generate_walk_forward_splits_by_count(...)` 改为“逐段带上界搜索”：每段 `test_end` 受下一段 `test_start` 前一交易日约束
+- 生成结果保证相邻 split 满足 `prev.test_end < next.test_start`，避免 OOS 测试窗口重叠
+- [tests/test_walk_forward.py](tests/test_walk_forward.py) 新增相邻测试区间不重叠断言
 
 **walk-forward 输入改为“split数量 + 最终日期”自动反推切分** (v0.71.0):
 - [scripts/walk_forward.py](scripts/walk_forward.py) CLI 改为 `--split-count` + `--final-date`，按配置自动反推每个 split 的训练/测试区间

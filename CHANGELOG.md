@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.2] - 2026-05-06
+
+### 修复
+
+- **修复实时摘要/树莓派显示路径会把空账户现金错误回写为默认 500000** ([scripts/paper_trade.py](scripts/paper_trade.py), [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_create_realtime_runner()`，实时查询路径统一先读取 `data/paper/config.yaml`，再按配置初始化 `PaperTradingRunner`
+  - `get_realtime_portfolio_summary()` 与 `run_real` 改为复用该初始化流程，避免默认初始资金覆盖空账户现金
+  - `3.5LCD` 快照路径 `_fetch_realtime_holdings_snapshot()` 同步按配置 `initial_capital/position_sizing/horizon` 初始化 runner，保证显示口径与主交易链路一致
+
+### 测试
+
+- **新增与更新回归测试** ([tests/test_paper_trade_realtime_summary.py](tests/test_paper_trade_realtime_summary.py), [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `test_get_realtime_portfolio_summary_uses_config_initial_capital`
+  - 更新 DummyRunner 初始化签名，覆盖实时摘要与 LCD 快照初始化参数路径
+
+## [0.71.1] - 2026-05-05
+
+### 修复
+
+- **按数量反推切分时消除相邻 split 测试区间重叠** ([src/lazybull/ml/walk_forward_utils.py](src/lazybull/ml/walk_forward_utils.py), [scripts/walk_forward.py](scripts/walk_forward.py)):
+  - `generate_walk_forward_splits_by_count(...)` 改为“逐段带上界反推”：每个更早 split 在搜索 `train_end` 时，要求 `test_end <= 下一段test_start的前一交易日`
+  - 在保持 `step/window/rebalance` 约束的前提下，优先搜索最晚可用 `train_end`，从源头抵消测试区间重叠
+  - 结果保证相邻 split 满足 `prev.test_end < next.test_start`，不再出现 OOS 时间重叠
+
+### 测试
+
+- **新增相邻测试区间不重叠断言并通过** ([tests/test_walk_forward.py](tests/test_walk_forward.py)):
+  - `test_generate_splits_by_count` 增加严格断言：相邻 split 的测试区间必须不重叠
+
 ## [0.71.0] - 2026-05-05
 
 ### 新增

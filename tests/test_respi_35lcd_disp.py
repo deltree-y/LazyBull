@@ -1005,9 +1005,16 @@ def test_fetch_realtime_holdings_snapshot_merges_index_quotes_into_single_reques
     captured = {}
 
     class DummyRunner:
-        def __init__(self, verbose=False):
+        def __init__(
+            self,
+            initial_capital=500000.0,
+            paper_root=None,
+            position_sizing="equal",
+            horizon=20,
+            verbose=False,
+        ):
             self.account = SimpleNamespace(
-                initial_capital=100000.0,
+                initial_capital=initial_capital,
                 get_positions=lambda: {
                     "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
                 },
