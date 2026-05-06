@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.3] - 2026-05-06
+
+### 修复
+
+- **公告/研报类因子增量补齐从“单日点查”升级为“日期区间补齐”** ([src/lazybull/features/ensure.py](src/lazybull/features/ensure.py)):
+  - 新增 `_incremental_catchup_by_calendar_date(...)`，基于本地 `ann_date/report_date` 最大值补齐到目标 `trade_date` 的自然日区间（包含非交易日）
+  - `fina_indicator/stk_holdernumber/forecast/express/report_rc` 五类增量路径统一接入区间补齐，避免仅查 `trade_date` 单点导致周末/非调仓日公告长期漏入库
+  - 保留原有全量回补策略：数据不足时仍按季度/月度/年度批量回补
+
+### 测试
+
+- **新增公告类区间补齐回归测试** ([tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)):
+  - 新增自然日补齐测试，验证会补齐周末公告（非交易日）
+  - 新增参数化测试，验证 `fina_indicator/stk_holdernumber/forecast/express/report_rc` 五类增量函数均走区间补齐入口
+
 ## [0.71.2] - 2026-05-06
 
 ### 修复

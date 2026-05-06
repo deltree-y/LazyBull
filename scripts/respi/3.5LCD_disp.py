@@ -2310,6 +2310,11 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         if len(trade_dates) < 1:
             return None
 
+        # T0 为信号生成日（调仓日），股票于 T1 才实际买入，跳过 T0 让折线图从 T1 开始
+        # 这样 T1 作为起点 = 原点（0%），避免多画一天导致 T1 当日已偏离原点
+        if len(trade_dates) > 1 and trade_dates[0] == start_date:
+            trade_dates = trade_dates[1:]
+
         # 逐股获取日线收盘价
         stock_closes: dict[str, dict[str, float]] = {}
         for ts_code in positions:

@@ -5,7 +5,7 @@
 
 import gc
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -627,6 +627,131 @@ def _save_merged_bulk(
     return result
 
 
+def _normalize_date_str(date_value: object) -> Optional[str]:
+    """将日期值标准化为 YYYYMMDD 字符串。"""
+    if pd.isna(date_value):
+        return None
+    date_str = str(date_value).strip()
+    if not date_str:
+        return None
+    date_str = date_str.replace("-", "")[:8]
+    if len(date_str) != 8 or not date_str.isdigit():
+        return None
+    return date_str
+
+
+def _get_latest_date(df: Optional[pd.DataFrame], date_col: str) -> Optional[str]:
+    """从 DataFrame 中提取指定日期列的最大日期（YYYYMMDD）。"""
+    if df is None or len(df) == 0 or date_col not in df.columns:
+        return None
+    dates = df[date_col].map(_normalize_date_str).dropna()
+    if dates.empty:
+        return None
+    return str(dates.max())
+
+
+def _iter_calendar_dates(start_date: str, end_date: str) -> List[str]:
+    """生成闭区间 [start_date, end_date] 的自然日列表（YYYYMMDD）。"""
+    try:
+        start_ts = pd.to_datetime(start_date, format="%Y%m%d")
+        end_ts = pd.to_datetime(end_date, format="%Y%m%d")
+    except Exception:
+        return []
+    if start_ts > end_ts:
+        return []
+    return [d.strftime("%Y%m%d") for d in pd.date_range(start_ts, end_ts, freq="D")]
+
+
+def _incremental_catchup_by_calendar_date(
+    storage: Storage,
+    dataset_name: str,
+    existing_df: Optional[pd.DataFrame],
+    trade_date: str,
+    date_col: str,
+    dedup_cols: List[str],
+    fetch_by_date: Callable[[str], Optional[pd.DataFrame]],
+) -> Optional[pd.DataFrame]:
+    """按自然日补齐公告/事件类增量数据，避免只查单日导致漏数。
+
+    适用于 ann_date/report_date 这类“可能在非交易日发布”的数据。
+    """
+    if existing_df is None or len(existing_df) == 0:
+        return existing_df
+
+    target_date = _normalize_date_str(trade_date)
+    if target_date is None:
+        logger.warning(f"[{dataset_name}] 无法解析 trade_date={trade_date}，跳过增量补齐")
+        return existing_df
+
+    latest_date = _get_latest_date(existing_df, date_col)
+    if latest_date is None:
+        logger.warning(
+            f"[{dataset_name}] 本地数据缺少有效 {date_col}，无法执行区间补齐，保持现有数据"
+        )
+        return existing_df
+
+    if latest_date >= target_date:
+        logger.info(
+            f"[{dataset_name}] 本地最新 {date_col}={latest_date}，已覆盖目标日期 {target_date}"
+        )
+        return existing_df
+
+    start_date = (
+        pd.to_datetime(latest_date, format="%Y%m%d") + pd.Timedelta(days=1)
+    ).strftime("%Y%m%d")
+    pending_dates = _iter_calendar_dates(start_date, target_date)
+    if not pending_dates:
+        return existing_df
+
+    logger.info(
+        f"[{dataset_name}] 区间增量补齐: {date_col} {start_date}~{target_date} "
+        f"(共 {len(pending_dates)} 天)"
+    )
+
+    new_dfs: List[pd.DataFrame] = []
+    success_days = 0
+    empty_days = 0
+    failed_days = 0
+
+    for idx, cur_date in enumerate(pending_dates, 1):
+        try:
+            day_df = fetch_by_date(cur_date)
+            if day_df is not None and len(day_df) > 0:
+                new_dfs.append(day_df)
+                success_days += 1
+            else:
+                empty_days += 1
+        except Exception as e:
+            failed_days += 1
+            logger.warning(f"[{dataset_name}] {date_col}={cur_date} 增量下载失败: {e}")
+
+        if idx % 30 == 0 or idx == len(pending_dates):
+            logger.info(
+                f"[{dataset_name}] 增量进度 {idx}/{len(pending_dates)} "
+                f"(有数据={success_days}, 空={empty_days}, 失败={failed_days})"
+            )
+
+    if not new_dfs:
+        logger.info(
+            f"[{dataset_name}] 区间增量完成: 无新增记录 "
+            f"(空={empty_days}, 失败={failed_days})"
+        )
+        return existing_df
+
+    new_merged = pd.concat(new_dfs, ignore_index=True)
+    result = _append_and_save_raw(
+        storage,
+        dataset_name,
+        new_merged,
+        dedup_cols=dedup_cols,
+    )
+    logger.info(
+        f"[{dataset_name}] 区间增量完成: 新增 {len(new_merged)} 条, "
+        f"总计 {len(result)} 条"
+    )
+    return result
+
+
 def _generate_quarter_periods(start_year: int, end_year: int) -> List[str]:
     """生成从 start_year 到 end_year 的所有季度末日期"""
     quarter_ends = ["0331", "0630", "0930", "1231"]
@@ -823,28 +948,23 @@ def _try_download_fina_indicator(
 ) -> Optional[pd.DataFrame]:
     """下载财务指标数据
 
-    数据充足（>= 阈值）：按公告日增量下载当日新公告。
+    数据充足（>= 阈值）：按公告日区间补齐增量公告。
     数据不足或不存在：逐股全量下载全部历史财务指标。
     """
     existing = storage.load_raw("fina_indicator")
 
     if existing is not None and len(existing) >= _MIN_FINA_RECORDS:
-        # 增量模式：数据量充足，按公告日下载
+        # 增量模式：数据量充足，按公告日区间补齐
         try:
-            logger.info(f"增量下载 fina_indicator (ann_date={trade_date})...")
-            new_df = client.get_fina_indicator_by_date(ann_date=trade_date)
-            if new_df is not None and len(new_df) > 0:
-                result = _append_and_save_raw(
-                    storage, "fina_indicator", new_df,
-                    dedup_cols=["ts_code", "end_date", "ann_date"],
-                )
-                logger.info(
-                    f"  fina_indicator 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
-                )
-                return result
-            else:
-                logger.info(f"  fina_indicator: {trade_date} 无新公告")
-                return existing
+            return _incremental_catchup_by_calendar_date(
+                storage=storage,
+                dataset_name="fina_indicator",
+                existing_df=existing,
+                trade_date=trade_date,
+                date_col="ann_date",
+                dedup_cols=["ts_code", "end_date", "ann_date"],
+                fetch_by_date=lambda d: client.get_fina_indicator_by_date(ann_date=d),
+            )
         except Exception as e:
             logger.warning(f"增量下载 fina_indicator 失败: {e}")
             return existing
@@ -871,27 +991,22 @@ def _try_download_stk_holdernumber(
 ) -> Optional[pd.DataFrame]:
     """下载股东人数数据
 
-    数据充足（>= 阈值）：按公告日增量下载。
+    数据充足（>= 阈值）：按公告日区间补齐增量。
     数据不足或不存在：逐股全量下载。
     """
     existing = storage.load_raw("stk_holdernumber")
 
     if existing is not None and len(existing) >= _MIN_HOLDER_RECORDS:
         try:
-            logger.info(f"增量下载 stk_holdernumber (ann_date={trade_date})...")
-            new_df = client.get_stk_holdernumber(ann_date=trade_date)
-            if new_df is not None and len(new_df) > 0:
-                result = _append_and_save_raw(
-                    storage, "stk_holdernumber", new_df,
-                    dedup_cols=["ts_code", "end_date"],
-                )
-                logger.info(
-                    f"  stk_holdernumber 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
-                )
-                return result
-            else:
-                logger.info(f"  stk_holdernumber: {trade_date} 无新公告")
-                return existing
+            return _incremental_catchup_by_calendar_date(
+                storage=storage,
+                dataset_name="stk_holdernumber",
+                existing_df=existing,
+                trade_date=trade_date,
+                date_col="ann_date",
+                dedup_cols=["ts_code", "end_date"],
+                fetch_by_date=lambda d: client.get_stk_holdernumber(ann_date=d),
+            )
         except Exception as e:
             logger.warning(f"增量下载 stk_holdernumber 失败: {e}")
             return existing
@@ -915,27 +1030,22 @@ def _try_download_forecast(
 ) -> Optional[pd.DataFrame]:
     """下载业绩预告数据
 
-    数据充足（>= 阈值）：按公告日增量下载。
+    数据充足（>= 阈值）：按公告日区间补齐增量。
     数据不足或不存在：逐股全量下载。
     """
     existing = storage.load_raw("forecast")
 
     if existing is not None and len(existing) >= _MIN_FORECAST_RECORDS:
         try:
-            logger.info(f"增量下载 forecast (ann_date={trade_date})...")
-            new_df = client.get_forecast_by_date(ann_date=trade_date)
-            if new_df is not None and len(new_df) > 0:
-                result = _append_and_save_raw(
-                    storage, "forecast", new_df,
-                    dedup_cols=["ts_code", "end_date", "ann_date"],
-                )
-                logger.info(
-                    f"  forecast 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
-                )
-                return result
-            else:
-                logger.info(f"  forecast: {trade_date} 无新公告")
-                return existing
+            return _incremental_catchup_by_calendar_date(
+                storage=storage,
+                dataset_name="forecast",
+                existing_df=existing,
+                trade_date=trade_date,
+                date_col="ann_date",
+                dedup_cols=["ts_code", "end_date", "ann_date"],
+                fetch_by_date=lambda d: client.get_forecast_by_date(ann_date=d),
+            )
         except Exception as e:
             logger.warning(f"增量下载 forecast 失败: {e}")
             return existing
@@ -1006,27 +1116,22 @@ def _try_download_express(
 ) -> Optional[pd.DataFrame]:
     """下载业绩快报数据
 
-    数据充足：按公告日增量下载当日新快报。
+    数据充足：按公告日区间补齐增量快报。
     数据不足：逐股全量下载。
     """
     existing = storage.load_raw("express")
 
     if existing is not None and len(existing) >= _MIN_EXPRESS_RECORDS:
         try:
-            logger.info(f"增量下载 express (ann_date={trade_date})...")
-            new_df = client.get_express_vip(ann_date=trade_date)
-            if new_df is not None and len(new_df) > 0:
-                result = _append_and_save_raw(
-                    storage, "express", new_df,
-                    dedup_cols=["ts_code", "end_date", "ann_date"],
-                )
-                logger.info(
-                    f"  express 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
-                )
-                return result
-            else:
-                logger.info(f"  express: {trade_date} 无新快报")
-                return existing
+            return _incremental_catchup_by_calendar_date(
+                storage=storage,
+                dataset_name="express",
+                existing_df=existing,
+                trade_date=trade_date,
+                date_col="ann_date",
+                dedup_cols=["ts_code", "end_date", "ann_date"],
+                fetch_by_date=lambda d: client.get_express_vip(ann_date=d),
+            )
         except Exception as e:
             logger.warning(f"增量下载 express 失败: {e}")
             return existing
@@ -1370,27 +1475,22 @@ def _try_download_report_rc(
 ) -> Optional[pd.DataFrame]:
     """下载一致预期研报数据
 
-    数据充足（>= 阈值）: 按 report_date 增量下载当日新研报。
+    数据充足（>= 阈值）: 按 report_date 区间补齐增量研报。
     数据不足或不存在: 按年份批量回溯下载（report_rc 每次返回 2000 条, 需分页）。
     """
     existing = storage.load_raw("report_rc")
 
     if existing is not None and len(existing) >= _MIN_REPORT_RC_RECORDS:
         try:
-            logger.info(f"增量下载 report_rc (report_date={trade_date})...")
-            new_df = client.get_report_rc(report_date=trade_date)
-            if new_df is not None and len(new_df) > 0:
-                result = _append_and_save_raw(
-                    storage, "report_rc", new_df,
-                    dedup_cols=["ts_code", "report_date", "org_name", "quarter"],
-                )
-                logger.info(
-                    f"  report_rc 增量: 新增 {len(new_df)} 条, 总计 {len(result)} 条"
-                )
-                return result
-            else:
-                logger.info(f"  report_rc: {trade_date} 无新研报")
-                return existing
+            return _incremental_catchup_by_calendar_date(
+                storage=storage,
+                dataset_name="report_rc",
+                existing_df=existing,
+                trade_date=trade_date,
+                date_col="report_date",
+                dedup_cols=["ts_code", "report_date", "org_name", "quarter"],
+                fetch_by_date=lambda d: client.get_report_rc(report_date=d),
+            )
         except Exception as e:
             logger.warning(f"增量下载 report_rc 失败: {e}")
             return existing

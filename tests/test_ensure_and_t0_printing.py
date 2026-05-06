@@ -573,5 +573,131 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
     storage.save_cs_train_day.assert_called_once()
 
 
+def test_incremental_catchup_by_calendar_date_covers_weekend_announcements(temp_storage):
+    """测试公告类增量会按自然日补齐（含周末），而非只查交易日单点。"""
+    existing = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "end_date": "20260331",
+                "ann_date": "20260410",
+                "revenue": 1.0,
+            }
+        ]
+    )
+    temp_storage.save_raw(existing, "express", is_force=True)
+
+    queried_dates = []
+
+    def _fetch_by_date(ann_date: str) -> pd.DataFrame:
+        queried_dates.append(ann_date)
+        if ann_date == "20260411":
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000002.SZ",
+                        "end_date": "20260331",
+                        "ann_date": "20260411",
+                        "revenue": 2.0,
+                    }
+                ]
+            )
+        if ann_date == "20260413":
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000003.SZ",
+                        "end_date": "20260331",
+                        "ann_date": "20260413",
+                        "revenue": 3.0,
+                    }
+                ]
+            )
+        return pd.DataFrame()
+
+    result = ensure_module._incremental_catchup_by_calendar_date(
+        storage=temp_storage,
+        dataset_name="express",
+        existing_df=temp_storage.load_raw("express"),
+        trade_date="20260413",
+        date_col="ann_date",
+        dedup_cols=["ts_code", "end_date", "ann_date"],
+        fetch_by_date=_fetch_by_date,
+    )
+
+    assert queried_dates == ["20260411", "20260412", "20260413"]
+    assert result is not None
+    ann_dates = result["ann_date"].astype(str).str.replace("-", "").str[:8]
+    assert ann_dates.max() == "20260413"
+    assert (ann_dates == "20260411").any()
+
+
+@pytest.mark.parametrize(
+    "func_name,dataset_name,threshold_attr,date_col",
+    [
+        ("_try_download_fina_indicator", "fina_indicator", "_MIN_FINA_RECORDS", "ann_date"),
+        (
+            "_try_download_stk_holdernumber",
+            "stk_holdernumber",
+            "_MIN_HOLDER_RECORDS",
+            "ann_date",
+        ),
+        ("_try_download_forecast", "forecast", "_MIN_FORECAST_RECORDS", "ann_date"),
+        ("_try_download_express", "express", "_MIN_EXPRESS_RECORDS", "ann_date"),
+        ("_try_download_report_rc", "report_rc", "_MIN_REPORT_RC_RECORDS", "report_date"),
+    ],
+)
+def test_incremental_download_functions_delegate_to_range_catchup(
+    monkeypatch,
+    temp_storage,
+    func_name,
+    dataset_name,
+    threshold_attr,
+    date_col,
+):
+    """测试公告/研报类增量下载统一走“日期区间补齐”入口。"""
+    if date_col == "report_date":
+        existing = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20260410",
+                    "org_name": "测试机构",
+                    "quarter": "2026Q1",
+                }
+            ]
+        )
+    else:
+        existing = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20260410",
+                    "end_date": "20260331",
+                }
+            ]
+        )
+
+    temp_storage.save_raw(existing, dataset_name, is_force=True)
+    monkeypatch.setattr(ensure_module, threshold_attr, 1)
+
+    captured = {}
+
+    def _fake_catchup(**kwargs):
+        captured.update(kwargs)
+        return kwargs["existing_df"]
+
+    monkeypatch.setattr(ensure_module, "_incremental_catchup_by_calendar_date", _fake_catchup)
+
+    client = Mock(spec=TushareClient)
+    func = getattr(ensure_module, func_name)
+    result = func(client=client, storage=temp_storage, trade_date="20260430")
+
+    assert result is not None
+    assert captured["dataset_name"] == dataset_name
+    assert captured["date_col"] == date_col
+    assert captured["trade_date"] == "20260430"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

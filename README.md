@@ -28,7 +28,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.2)
+### 当前版本 (v0.71.3)
+
+**公告/研报类因子增量补齐升级为“日期区间补齐”** (v0.71.3):
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 新增 `_incremental_catchup_by_calendar_date(...)`，根据本地最大 `ann_date/report_date` 自动补齐到目标交易日
+- `fina_indicator/stk_holdernumber/forecast/express/report_rc` 五类增量路径统一改为区间补齐，不再仅查询 `ann_date=trade_date` 或 `report_date=trade_date` 单点
+- 修复效果：周末/节假日公告不会因“仅在调仓日触发单点增量”而长期停留在旧日期
+
+**新增回归测试覆盖公告类区间补齐** (v0.71.3):
+- [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py) 新增自然日补齐测试，验证会补齐非交易日公告
+- 同文件新增参数化测试，覆盖 `fina_indicator/stk_holdernumber/forecast/express/report_rc` 五类增量函数都走区间补齐入口
 
 **修复实时摘要/树莓派显示路径错误回写空账户初始资金** (v0.71.2):
 - [scripts/paper_trade.py](scripts/paper_trade.py) 新增 `_create_realtime_runner()`，`run_real` 与 `get_realtime_portfolio_summary()` 统一先读取纸面配置，再按配置初始化 `PaperTradingRunner`
