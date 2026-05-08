@@ -1101,6 +1101,60 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_tushare_emp
     assert snapshot["quotes"].iloc[0]["TS_CODE"] == "000001.SZ"
 
 
+def test_fetch_realtime_holdings_snapshot_builds_annualized_func_from_config(monkeypatch):
+    module = _load_module()
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_config(self):
+            return {
+                "initial_capital": 6000.0,
+                "account_start_date": "20250101",
+            }
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                },
+                cash=5000.0,
+            )
+
+        def load_all_nav(self):
+            return None
+
+    class DummyClient:
+        def __init__(self, verbose=False):
+            pass
+
+        def get_realtime_quote(self, ts_codes_str):
+            return pd.DataFrame(
+                [
+                    {
+                        "TS_CODE": "000001.SZ",
+                        "NAME": "平安银行",
+                        "PRICE": 12.0,
+                        "PRE_CLOSE": 11.5,
+                        "TIME": "10:05:00",
+                    }
+                ]
+            )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+
+    snapshot = module._fetch_realtime_holdings_snapshot()
+    assert snapshot is not None
+    assert callable(snapshot.get("annualized_return_func"))
+
+    summary = module._build_realtime_portfolio_summary(snapshot)
+    assert summary is not None
+    assert summary["total_pnl_pct"] > 0
+    assert summary["annual_return_pct"] > 0
+
+
 def test_fetch_realtime_index_pcts_prefers_snapshot_data():
     module = _load_module()
     module._emit_diag_once = lambda *args, **kwargs: None
@@ -2266,6 +2320,27 @@ def test_refresh_display_state_clears_update_step_after_done(monkeypatch):
 
     assert state.is_updating is False
     assert state.update_step == ""
+
+
+def test_refresh_display_state_updates_time_when_summary_missing(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+
+    snapshot = {
+        "quote_source": "T",
+        "positions": {},
+        "quotes": pd.DataFrame(),
+    }
+    monkeypatch.setattr(module, "_fetch_realtime_holdings_snapshot", lambda: snapshot)
+    monkeypatch.setattr(module, "_build_realtime_portfolio_summary", lambda payload: None)
+    monkeypatch.setattr(module, "_build_intraday_chart", lambda chart_data, payload: chart_data)
+    monkeypatch.setattr(module, "_build_stock_rankings", lambda payload: None)
+    monkeypatch.setattr(module, "_build_industry_panel", lambda payload, mode="cycle": None)
+    monkeypatch.setattr(module, "_calc_rebalance_status", lambda: ("20260510", 2))
+
+    module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
+
+    assert state.update_time != "--:--"
 
 
 def test_render_watchdog_resets_stuck_updating_state(monkeypatch):

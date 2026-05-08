@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.10] - 2026-05-08
+
+### 修复
+
+- **修复 3.5LCD 轻量快照路径下年化收益固定为 0.0%** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 在 `_fetch_realtime_holdings_snapshot()` 中恢复年化计算函数构建逻辑
+  - 账户起始日优先读取 `config.account_start_date`，缺失时回退读取 NAV 最早交易日
+  - 轻量快照模式下仍可得到有效 `annual_return_pct`，不再因函数置空而固定显示 0.0%
+
+- **修复顶部偶发长期显示 `更新:--:--`** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 实时快照成功后即刷新 `latest_update_time`，即使摘要构建失败也不再保留 `--:--`
+
+### 测试
+
+- **新增年化与更新时间兜底回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `test_fetch_realtime_holdings_snapshot_builds_annualized_func_from_config`
+  - 新增 `test_refresh_display_state_updates_time_when_summary_missing`
+
 ## [0.71.9] - 2026-05-08
 
 ### 优化

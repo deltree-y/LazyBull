@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.9)
+### 当前版本 (v0.71.10)
+
+**修复“总盈亏有值但年化收益为0.0%”与“更新:--:--”问题** (v0.71.10):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 在轻量快照路径下恢复年化收益函数构建（起始日优先 `account_start_date`，其次 NAV 最早日）
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 实时快照成功后即刷新顶部更新时间，避免摘要失败时长期显示 `--:--`
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 新增年化计算与更新时间兜底回归测试
 
 **顶部刷新状态支持显示实时数据源标记 `[T]/[A]`** (v0.71.9):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 更新中显示 `更:<步骤>[T/A]`，更新完成显示 `更新:HH:MM[T/A]`

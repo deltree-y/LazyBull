@@ -2524,7 +2524,39 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
         cash = _coerce_float(getattr(account_state, 'cash', initial_capital))
         if cash is None:
             cash = initial_capital
-    annualized_return_func = None
+
+    account_start_date = str(config.get('account_start_date', '') or '').strip()
+    if not account_start_date:
+        try:
+            nav_df = paper_storage.load_all_nav()
+            if nav_df is not None and len(nav_df) > 0 and 'trade_date' in nav_df.columns:
+                first_trade_date = str(nav_df['trade_date'].iloc[0]).strip()
+                if first_trade_date.isdigit() and len(first_trade_date) == 8:
+                    account_start_date = first_trade_date
+        except Exception:
+            account_start_date = ''
+
+    def _annualized_return_from_snapshot(
+        initial_capital_value: float,
+        current_value: float,
+        current_date: str,
+    ) -> Optional[float]:
+        if current_value <= 0 or initial_capital_value <= 0:
+            return 0.0
+        if not account_start_date or not current_date:
+            return None
+        try:
+            start_dt = pd.to_datetime(account_start_date, format='%Y%m%d')
+            current_dt = pd.to_datetime(str(current_date), format='%Y%m%d')
+            days = int((current_dt - start_dt).days)
+            if days < 1:
+                return 0.0
+            total_profit = current_value - initial_capital_value
+            return (total_profit / initial_capital_value) * (365.0 / days) * 100
+        except Exception:
+            return None
+
+    annualized_return_func = _annualized_return_from_snapshot
 
     snapshot = {
         'positions': positions,
@@ -3038,6 +3070,8 @@ def _refresh_display_state(
                     source = str(holdings_snapshot.get('quote_source', '')).strip().upper()
                     with state.lock:
                         state.quote_source_tag = source if source in ('T', 'A') else '-'
+                    # 即便摘要计算失败，也至少更新时间戳，避免长期显示 --:--
+                    latest_update_time = datetime.now().strftime("%H:%M")
             except Exception:
                 holdings_snapshot = None
 
