@@ -63,9 +63,10 @@ from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backli
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒）
+REALTIME_REFRESH_INTERVAL = 90  # 盘中摘要/排行/日内图刷新间隔（秒）
 REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 18.0  # 单次实时快照抓取超时（秒）
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 12.0  # 单次盘中图构建超时（秒）
+UPDATE_STUCK_RESET_SECONDS = 30.0  # 顶栏更新状态强制脱困阈值（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
 CPU_USAGE_STALE_RESET_SECONDS = 10.0  # 息屏恢复后避免拿超长时间窗平均值
 MORNING_CLOSE_INTRADAY_GRACE_SECONDS = 120  # 午休前补齐 11:30 最后一格的宽限时长（秒）
@@ -2407,7 +2408,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
 def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     """获取当前持仓实时行情快照。"""
-    from src.lazybull.paper import PaperStorage, PaperTradingRunner
+    from src.lazybull.paper import PaperStorage
     from src.lazybull.data.tushare_client import TushareClient
 
     paper_root = get_paper_root()
@@ -2426,18 +2427,16 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     except (TypeError, ValueError):
         horizon = 20
 
-    runner = PaperTradingRunner(
-        initial_capital=initial_capital,
-        paper_root=paper_root,
-        position_sizing=str(config.get('position_sizing', 'equal')),
-        horizon=horizon,
-        verbose=False,
-    )
-    positions = runner.account.get_positions()
-    cash = runner.account.get_cash()
-    annualized_return_func = getattr(runner.broker, '_calculate_annualized_return', None)
-    if not callable(annualized_return_func):
-        annualized_return_func = None
+    account_state = paper_storage.load_account_state()
+    if account_state is None:
+        positions = {}
+        cash = initial_capital
+    else:
+        positions = getattr(account_state, 'positions', {}) or {}
+        cash = _coerce_float(getattr(account_state, 'cash', initial_capital))
+        if cash is None:
+            cash = initial_capital
+    annualized_return_func = None
 
     snapshot = {
         'positions': positions,
@@ -2915,6 +2914,7 @@ def _refresh_display_state(
     with state.lock:
         state.is_updating = refresh_realtime or refresh_cycle
         state.update_step = "刷新中"
+        state.update_started_at = time.monotonic()
 
     holdings_snapshot = None
     latest_update_time: Optional[str] = None
@@ -3017,6 +3017,7 @@ def _refresh_display_state(
             if latest_update_time is not None:
                 state.update_time = latest_update_time
             state.update_step = ""
+            state.update_started_at = 0.0
             state.is_updating = False
 
 
@@ -3031,6 +3032,7 @@ class DisplayState:
         self.update_time: str = "--:--"
         self.is_updating: bool = False
         self.update_step: str = ""
+        self.update_started_at: float = 0.0
         self.next_rebalance_date: Optional[str] = None
         self.days_to_rebalance: Optional[int] = None
         self.chart_data: Optional[dict] = None
@@ -3093,6 +3095,7 @@ def _render(state: DisplayState) -> None:
         last_update_time = state.update_time
         is_updating = getattr(state, 'is_updating', False)
         update_step = str(getattr(state, 'update_step', '') or '')
+        update_started_at = float(getattr(state, 'update_started_at', 0.0) or 0.0)
         next_rebalance_date = getattr(state, 'next_rebalance_date', None)
         days_to_rebalance = state.days_to_rebalance
         cycle_chart_data = state.chart_data
@@ -3102,6 +3105,26 @@ def _render(state: DisplayState) -> None:
         industry_panel_intraday = getattr(state, 'industry_panel_intraday', None)
         ox = state.offset_x
         oy = state.offset_y
+
+    force_reset = False
+    stuck_step = update_step[:5] or "未知"
+    elapsed = 0.0
+    if is_updating and update_started_at > 0:
+        elapsed = max(0.0, time.monotonic() - update_started_at)
+        if elapsed > UPDATE_STUCK_RESET_SECONDS:
+            force_reset = True
+
+    if force_reset:
+        with state.lock:
+            state.is_updating = False
+            state.update_step = ""
+            state.update_started_at = 0.0
+            is_updating = False
+            update_step = ""
+        _emit_diag(
+            f"刷新状态超时脱困: step={stuck_step} 持续{elapsed:.1f}s，已自动复位顶部状态",
+            stderr=False,
+        )
 
     img = Image.new("RGB", (WIDTH, HEIGHT), COLOR_BG)
     draw = ImageDraw.Draw(img)

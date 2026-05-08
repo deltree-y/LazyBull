@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.7] - 2026-05-08
+
+### 修复
+
+- **修复树莓派 3.5LCD 顶栏长时间停留在“更:抓快照”** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - `REALTIME_REFRESH_INTERVAL` 恢复为 `90` 秒，避免被意外改成 `120` 秒后体感刷新变慢
+  - `_fetch_realtime_holdings_snapshot()` 改为直接读取 `PaperStorage.load_account_state()`，移除每轮刷新都初始化 `PaperTradingRunner` 的重路径
+  - 新增 `update_started_at` 与 `UPDATE_STUCK_RESET_SECONDS` 看门狗，若更新状态超时会自动复位顶栏，避免界面长期卡在某一步骤
+
+### 测试
+
+- **新增/更新抓快照卡顿回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 更新快照测试以覆盖 `load_account_state()` 路径
+  - 新增 `test_render_watchdog_resets_stuck_updating_state`
+
 ## [0.71.6] - 2026-05-08
 
 ### 修复

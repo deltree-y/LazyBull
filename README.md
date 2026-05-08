@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.6)
+### 当前版本 (v0.71.7)
+
+**修复树莓派 3.5LCD“更:抓快照”长时间卡住问题** (v0.71.7):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 将盘中刷新间隔恢复为 `90` 秒（此前被改成 `120` 秒）
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 的 `_fetch_realtime_holdings_snapshot()` 改为直接读取账户状态文件，移除每轮初始化 `PaperTradingRunner` 的重链路
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增更新状态看门狗，超过阈值自动复位“更新中”状态
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 新增看门狗复位测试并更新快照路径测试
 
 **优化树莓派 3.5LCD 顶部刷新状态可观测性（步骤名 + 小字体）** (v0.71.6):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 顶部中间状态改为显示实时步骤名（最大 5 个汉字）

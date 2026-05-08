@@ -1005,32 +1005,20 @@ def test_fetch_realtime_holdings_snapshot_merges_index_quotes_into_single_reques
     module = _load_module()
     captured = {}
 
-    class DummyRunner:
-        def __init__(
-            self,
-            initial_capital=500000.0,
-            paper_root=None,
-            position_sizing="equal",
-            horizon=20,
-            verbose=False,
-        ):
-            self.account = SimpleNamespace(
-                initial_capital=initial_capital,
-                get_positions=lambda: {
-                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
-                },
-                get_cash=lambda: 5000.0,
-            )
-            self.broker = SimpleNamespace(
-                _calculate_annualized_return=lambda initial, total, current_date: 0.0
-            )
-
     class DummyStorage:
         def __init__(self, root_path=None, verbose=False):
             pass
 
         def load_config(self):
             return {"initial_capital": 100000.0}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                },
+                cash=5000.0,
+            )
 
     class DummyClient:
         def __init__(self, verbose=False):
@@ -1046,7 +1034,6 @@ def test_fetch_realtime_holdings_snapshot_merges_index_quotes_into_single_reques
                 ]
             )
 
-    monkeypatch.setattr("src.lazybull.paper.PaperTradingRunner", DummyRunner)
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
     monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
 
@@ -2228,3 +2215,24 @@ def test_refresh_display_state_clears_update_step_after_done(monkeypatch):
 
     assert state.is_updating is False
     assert state.update_step == ""
+
+
+def test_render_watchdog_resets_stuck_updating_state(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+    state.is_updating = True
+    state.update_step = "抓快照"
+    state.update_started_at = time.monotonic() - (module.UPDATE_STUCK_RESET_SECONDS + 5.0)
+
+    monkeypatch.setattr(module, "_write_fb", lambda img: None)
+    monkeypatch.setattr(module, "_refresh_system_usage_sample", lambda _state: (0.0, 0.0))
+    monkeypatch.setattr(module, "_draw_system_usage_bar", lambda draw, cpu, mem: None)
+    monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: None)
+    monkeypatch.setattr(module, "_draw_chart_panel", lambda draw, chart_data, cycle_label, industry_panel: None)
+    monkeypatch.setattr(module, "_emit_diag", lambda *args, **kwargs: None)
+
+    module._render(state)
+
+    assert state.is_updating is False
+    assert state.update_step == ""
+    assert state.update_started_at == 0.0
