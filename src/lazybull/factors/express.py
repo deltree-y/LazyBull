@@ -14,12 +14,12 @@
 关键防前视：只用 ann_date（公告日），不用 end_date（报告期末）。
 """
 
-import bisect
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from .announcement_utils import build_latest_announcement_lookup_by_date
 
 
 def _compute_revenue_yoy(ex: pd.DataFrame) -> None:
@@ -65,6 +65,8 @@ EXPRESS_COLS = [
     "express_roe",  # 快报加权ROE
     "express_surprise",  # 业绩惊喜（净利润增速 vs 上期预告偏差）
 ]
+
+EXPRESS_FRESHNESS_COL = "express_freshness_days"
 
 
 def build_express_lookup_by_date(
@@ -145,60 +147,16 @@ def build_express_lookup_by_date(
                 np.nan,
             )
 
-    if len(trading_dates) == 1:
-        trade_date = trading_dates[0]
-        visible = ex[ex["ann_date"] <= trade_date].sort_values(["ts_code", "ann_date"])
-        if visible.empty:
-            result = {trade_date: pd.DataFrame(columns=["ts_code"] + EXPRESS_COLS)}
-        else:
-            latest = visible.drop_duplicates(subset=["ts_code"], keep="last").copy()
-            day_df = (
-                latest.assign(
-                    express_revenue_yoy=latest["revenue_yoy"],
-                    express_profit_yoy=latest["yoy_net_profit"],
-                    express_roe=latest["diluted_roe"],
-                )[["ts_code"] + EXPRESS_COLS]
-                .reset_index(drop=True)
-            )
-            result = {trade_date: day_df}
-        logger.info(f"业绩快报查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-        return result
+    factor_df = ex.assign(
+        express_revenue_yoy=ex["revenue_yoy"],
+        express_profit_yoy=ex["yoy_net_profit"],
+        express_roe=ex["diluted_roe"],
+    )[["ts_code", "ann_date"] + EXPRESS_COLS]
 
-    # 构建每只股票的 ann_date 排序列表
-    stock_ann_dates: Dict[str, list] = {}
-    stock_values: Dict[str, list] = {}
-    for ts_code, grp in ex.groupby("ts_code"):
-        grp = grp.sort_values("ann_date")
-        stock_ann_dates[ts_code] = grp["ann_date"].tolist()
-        stock_values[ts_code] = grp[[
-            "revenue_yoy",
-            "yoy_net_profit",
-            "diluted_roe",
-            "express_surprise",
-        ]].values.tolist()
-
-    # 对每个交易日做 point-in-time 查询
-    result: Dict[str, pd.DataFrame] = {}
-    all_codes = set(stock_ann_dates.keys())
-
-    for trade_date in trading_dates:
-        rows = []
-        for ts_code in all_codes:
-            ann_dates = stock_ann_dates[ts_code]
-            idx = bisect.bisect_right(ann_dates, trade_date) - 1
-            if idx >= 0:
-                values = stock_values[ts_code][idx]
-                rows.append(
-                    {
-                        "ts_code": ts_code,
-                        "express_revenue_yoy": values[0],
-                        "express_profit_yoy": values[1],
-                        "express_roe": values[2],
-                        "express_surprise": values[3],
-                    }
-                )
-        if rows:
-            result[trade_date] = pd.DataFrame(rows)
-
-    logger.info(f"业绩快报查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-    return result
+    return build_latest_announcement_lookup_by_date(
+        factor_df,
+        trading_dates,
+        value_cols=EXPRESS_COLS,
+        freshness_col=EXPRESS_FRESHNESS_COL,
+        log_name="业绩快报",
+    )

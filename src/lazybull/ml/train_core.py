@@ -44,6 +44,7 @@ FUNDAMENTAL_FEATURE_COLUMNS = [
     "zscore_netprofit_yoy",  # 净利润同比增速
     "zscore_debt_to_assets",  # 资产负债率
     "zscore_q_gr_yoy",  # 单季度营收同比增速
+    "fundamental_freshness_days",  # 最近一次基本面公告距当日天数
 ]
 
 # 融资融券因子特征列
@@ -59,9 +60,11 @@ ALT_FEATURE_COLUMNS = [
     # 股东人数 (2)
     "holder_num_chg",  # 股东人数环比变动率
     "holder_num_chg_2q",  # 股东人数两期变动率
+    "holder_freshness_days",  # 最近一次股东人数公告距当日天数
     # 业绩预告 (2)
     "forecast_type_score",  # 业绩预告类型评分
     "forecast_chg_mid",  # 业绩预告变动幅度中值
+    "forecast_freshness_days",  # 最近一次业绩预告公告距当日天数
 ]
 
 # 筹码胜率因子特征列（5000 积分）
@@ -79,6 +82,7 @@ FUND_FEATURE_COLUMNS = [
     "fund_hold_ratio_chg",  # 基金持股比例季度变化
     "fund_count",  # 持仓基金数量
     "fund_count_chg",  # 持仓基金数量季度变化
+    "fund_portfolio_freshness_days",  # 最近一次基金持仓公告距当日天数
 ]
 
 # 业绩快报因子特征列（5000 积分）
@@ -87,6 +91,7 @@ EXPRESS_FEATURE_COLUMNS = [
     "express_profit_yoy",  # 净利润同比增速
     "express_roe",  # 快报ROE
     "express_surprise",  # 业绩惊喜
+    "express_freshness_days",  # 最近一次业绩快报公告距当日天数
 ]
 
 # 北向资金因子特征列（市场级, 广播到全部 ts_code）

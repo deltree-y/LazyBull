@@ -28,7 +28,18 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.3)
+### 当前版本 (v0.71.4)
+
+**公告型 PIT 因子新增 freshness 特征，不再把“过期”硬编码进数据层** (v0.71.4):
+- [src/lazybull/factors/announcement_utils.py](src/lazybull/factors/announcement_utils.py) 新增公告型公共 helper，统一处理 `ann_date` point-in-time 查询并输出 freshness
+- [src/lazybull/factors/express.py](src/lazybull/factors/express.py), [src/lazybull/factors/fundamental.py](src/lazybull/factors/fundamental.py), [src/lazybull/factors/holder.py](src/lazybull/factors/holder.py), [src/lazybull/factors/fund_portfolio.py](src/lazybull/factors/fund_portfolio.py), [src/lazybull/factors/earnings.py](src/lazybull/factors/earnings.py) 五类公告因子新增 `freshness_days` 列
+- [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 将上述 freshness 列接入显式特征清单，让模型自行学习陈旧公告的折价
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 将 freshness 纳入 features 缓存 schema 校验，旧的 `cs_train/cs_infer` 文件缺这些列时会自动重建
+- 当前语义：旧公告值仍可见，但模型能区分“刚公告”和“很久没更新”的样本
+
+**新增公告因子 freshness 回归测试** (v0.71.4):
+- [tests/test_announcement_factor_freshness.py](tests/test_announcement_factor_freshness.py) 覆盖 `express/fundamental/holder/fund_portfolio/earnings` 五类公告因子的 freshness 行为
+- [tests/test_ma250_observability.py](tests/test_ma250_observability.py) 新增缓存 schema 测试，验证缺 freshness 的旧 features 文件会自动触发重建
 
 **公告/研报类因子增量补齐升级为“日期区间补齐”** (v0.71.3):
 - [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 新增 `_incremental_catchup_by_calendar_date(...)`，根据本地最大 `ann_date/report_date` 自动补齐到目标交易日

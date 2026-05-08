@@ -10,18 +10,20 @@
 - 股东人数下降 → 筹码集中 → 看多信号
 """
 
-import bisect
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from .announcement_utils import build_latest_announcement_lookup_by_date
 
 
 HOLDER_COLS = [
     "holder_num_chg",      # 股东人数环比变动率
     "holder_num_chg_2q",   # 两期变动率
 ]
+
+HOLDER_FRESHNESS_COL = "holder_freshness_days"
 
 
 def build_holder_lookup_by_date(
@@ -60,45 +62,11 @@ def build_holder_lookup_by_date(
     df["holder_num_chg"] = (df["holder_num"] - df["holder_num_prev"]) / df["holder_num_prev"].replace(0, np.nan)
     df["holder_num_chg_2q"] = (df["holder_num"] - df["holder_num_prev2"]) / df["holder_num_prev2"].replace(0, np.nan)
 
-    if len(trading_dates) == 1:
-        trade_date = trading_dates[0]
-        visible = df[df["ann_date"] <= trade_date].sort_values(["ts_code", "ann_date"])
-        if visible.empty:
-            result = {trade_date: pd.DataFrame(columns=["ts_code"] + HOLDER_COLS)}
-        else:
-            day_df = (
-                visible.drop_duplicates(subset=["ts_code"], keep="last")
-                [["ts_code"] + HOLDER_COLS]
-                .reset_index(drop=True)
-            )
-            result = {trade_date: day_df}
-        logger.info(f"股东人数查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-        return result
-
-    # 构建每只股票的 ann_date 排序列表，用于 point-in-time 二分查找
-    stock_ann_dates: Dict[str, list] = {}
-    stock_values: Dict[str, list] = {}
-    for ts_code, grp in df.groupby("ts_code"):
-        grp = grp.sort_values("ann_date")
-        stock_ann_dates[ts_code] = grp["ann_date"].tolist()
-        stock_values[ts_code] = grp[HOLDER_COLS].values.tolist()
-
-    # 对每个交易日查询
-    result: Dict[str, pd.DataFrame] = {}
-    for trade_date in trading_dates:
-        rows = []
-        for ts_code, ann_dates in stock_ann_dates.items():
-            # 二分查找 ann_date <= trade_date 的最新记录
-            idx = bisect.bisect_right(ann_dates, trade_date) - 1
-            if idx >= 0:
-                values = stock_values[ts_code][idx]
-                rows.append({
-                    "ts_code": ts_code,
-                    "holder_num_chg": values[0],
-                    "holder_num_chg_2q": values[1],
-                })
-        if rows:
-            result[trade_date] = pd.DataFrame(rows)
-
-    logger.info(f"股东人数查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-    return result
+    factor_df = df[["ts_code", "ann_date"] + HOLDER_COLS].copy()
+    return build_latest_announcement_lookup_by_date(
+        factor_df,
+        trading_dates,
+        value_cols=HOLDER_COLS,
+        freshness_col=HOLDER_FRESHNESS_COL,
+        log_name="股东人数",
+    )

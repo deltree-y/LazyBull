@@ -10,12 +10,12 @@
 公告后前向填充，直到被同一报告期的新公告或下一报告期覆盖。
 """
 
-import bisect
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+
+from .announcement_utils import build_latest_announcement_lookup_by_date
 
 
 # 业绩预告类型 → 评分
@@ -36,6 +36,8 @@ EARNINGS_COLS = [
     "forecast_chg_mid",
 ]
 
+EARNINGS_FRESHNESS_COL = "forecast_freshness_days"
+
 
 def build_earnings_lookup_by_date(
     forecast_df: pd.DataFrame,
@@ -52,8 +54,6 @@ def build_earnings_lookup_by_date(
         Dict[str, DataFrame]: {trade_date -> DataFrame(ts_code, forecast_type_score, ...)}
     """
     # ── 处理业绩预告 ────────────────────────────────────────────
-    fc_records: Dict[str, list] = {}  # ts_code -> [{ann_date, score, chg_mid}]
-
     if forecast_df is not None and len(forecast_df) > 0:
         fc = forecast_df.copy()
         fc["ann_date"] = fc["ann_date"].astype(str).str.replace("-", "").str[:8]
@@ -79,57 +79,13 @@ def build_earnings_lookup_by_date(
         fc = fc.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
         fc = fc.sort_values(["ts_code", "ann_date"])
 
-        if len(trading_dates) == 1:
-            trade_date = trading_dates[0]
-            visible = fc[fc["ann_date"] <= trade_date].sort_values(["ts_code", "ann_date"])
-            if visible.empty:
-                result = {trade_date: pd.DataFrame(columns=["ts_code"] + EARNINGS_COLS)}
-            else:
-                day_df = (
-                    visible.drop_duplicates(subset=["ts_code"], keep="last")
-                    [["ts_code"] + EARNINGS_COLS]
-                    .reset_index(drop=True)
-                )
-                result = {trade_date: day_df}
-            logger.info(f"业绩预告查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-            return result
+        factor_df = fc[["ts_code", "ann_date"] + EARNINGS_COLS].copy()
+        return build_latest_announcement_lookup_by_date(
+            factor_df,
+            trading_dates,
+            value_cols=EARNINGS_COLS,
+            freshness_col=EARNINGS_FRESHNESS_COL,
+            log_name="业绩预告",
+        )
 
-        stock_ann_dates: Dict[str, list] = {}
-        stock_values: Dict[str, list] = {}
-        for ts_code, grp in fc.groupby("ts_code"):
-            grp = grp.sort_values("ann_date")
-            stock_ann_dates[ts_code] = grp["ann_date"].tolist()
-            stock_values[ts_code] = grp[EARNINGS_COLS].values.tolist()
-
-        fc_records = {
-            ts_code: (stock_ann_dates[ts_code], stock_values[ts_code])
-            for ts_code in stock_ann_dates
-        }
-
-    # ── 对每个交易日做 point-in-time 查询 ───────────────────────
-    all_codes = set(fc_records.keys())
-    result: Dict[str, pd.DataFrame] = {}
-
-    for trade_date in trading_dates:
-        rows = []
-        for ts_code in all_codes:
-            row = {"ts_code": ts_code}
-            has_data = False
-
-            # 预告查询
-            if ts_code in fc_records:
-                ann_dates, values = fc_records[ts_code]
-                idx = bisect.bisect_right(ann_dates, trade_date) - 1
-                if idx >= 0:
-                    row["forecast_type_score"] = values[idx][0]
-                    row["forecast_chg_mid"] = values[idx][1]
-                    has_data = True
-
-            if has_data:
-                rows.append(row)
-
-        if rows:
-            result[trade_date] = pd.DataFrame(rows)
-
-    logger.info(f"业绩预告查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-    return result
+    return {}

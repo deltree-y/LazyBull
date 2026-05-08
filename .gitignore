@@ -49,6 +49,10 @@ htmlcov/
 .claude/
 CLAUDE.md
 
+#github
+.github/
+copilot-instructions.md
+
 # Markdownlint configuration
 .markdownlint.json
 

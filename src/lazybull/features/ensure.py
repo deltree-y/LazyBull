@@ -1541,11 +1541,16 @@ _REQUIRED_FACTOR_COLS = [
     "mkt_atr_pct",                                          # 市场级 ATR 当前值
     "mkt_atr_pct_ma250",                                    # 市场级 ATR 250 日均值
     "roe_waa",                                              # 基本面因子
+    "fundamental_freshness_days",                           # 基本面 freshness
     "holder_num_chg",                                       # 股东人数因子
+    "holder_freshness_days",                                # 股东人数 freshness
     "forecast_type_score",                                  # 业绩预告因子
+    "forecast_freshness_days",                              # 业绩预告 freshness
     "winner_rate",                                          # 筹码胜率因子
     "fund_hold_ratio",                                      # 基金持仓因子
+    "fund_portfolio_freshness_days",                        # 基金持仓 freshness
     "express_revenue_yoy",                                  # 业绩快报因子
+    "express_freshness_days",                               # 业绩快报 freshness
 ]
 
 

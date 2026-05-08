@@ -167,5 +167,5 @@ class TestBuildExpressLookup:
         lookup = build_express_lookup_by_date(mock_express_data, trading_dates_express)
         df = lookup["20231031"]
         for col in ["ts_code", "express_revenue_yoy", "express_profit_yoy",
-                     "express_roe", "express_surprise"]:
+                     "express_roe", "express_surprise", "express_freshness_days"]:
             assert col in df.columns

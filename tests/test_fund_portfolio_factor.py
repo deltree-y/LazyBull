@@ -229,5 +229,5 @@ class TestBuildFundPortfolioLookup:
         )
         df = lookup["20230826"]
         for col in ["ts_code", "fund_hold_ratio", "fund_hold_ratio_chg",
-                     "fund_count", "fund_count_chg"]:
+                     "fund_count", "fund_count_chg", "fund_portfolio_freshness_days"]:
             assert col in df.columns

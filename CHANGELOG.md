@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.4] - 2026-05-07
+
+### 修复
+
+- **公告型 PIT 因子改为显式输出 freshness 特征，而不是硬截止旧公告** ([src/lazybull/factors/announcement_utils.py](src/lazybull/factors/announcement_utils.py), [src/lazybull/factors/express.py](src/lazybull/factors/express.py), [src/lazybull/factors/fundamental.py](src/lazybull/factors/fundamental.py), [src/lazybull/factors/holder.py](src/lazybull/factors/holder.py), [src/lazybull/factors/fund_portfolio.py](src/lazybull/factors/fund_portfolio.py), [src/lazybull/factors/earnings.py](src/lazybull/factors/earnings.py), [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py)):
+  - 新增公告型公共 helper，统一按 `ann_date <= trade_date` 取最后一条已公告记录
+  - 对 `express/fundamental/holder/fund_portfolio/earnings` 五类公告因子新增 `freshness_days` 特征，显式表示距最近公告的自然日天数
+  - 保留原公告值不做硬过期，让模型自行学习陈旧信息折价，避免把阈值规则硬编码进数据层
+  - [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 的 features schema 校验已纳入 freshness 列，旧的 `cs_train/cs_infer` 缓存缺少这些列时会自动触发重建
+
+### 测试
+
+- **新增公告因子 freshness 回归测试** ([tests/test_announcement_factor_freshness.py](tests/test_announcement_factor_freshness.py)):
+  - 覆盖 `express/fundamental/holder/fund_portfolio/earnings` 五类公告因子
+  - 验证旧公告值会继续保留，同时 `freshness_days` 会随交易日递增
+- **新增 features 缓存 schema 的 freshness 校验测试** ([tests/test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 验证旧缓存缺少 freshness 列时会被判定为无效
+  - 验证包含 freshness 列的缓存可继续复用
+
 ## [0.71.3] - 2026-05-06
 
 ### 修复

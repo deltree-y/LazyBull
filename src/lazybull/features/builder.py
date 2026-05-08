@@ -1364,7 +1364,7 @@ class FeatureBuilder:
             logger.debug(f"{trade_date} 没有基本面数据，跳过")
             return features
 
-        merge_cols = ['ts_code'] + [c for c in FUNDA_COLS if c in fundamental_data.columns]
+        merge_cols = ['ts_code'] + [c for c in fundamental_data.columns if c != 'ts_code']
         features = features.merge(
             fundamental_data[merge_cols],
             on='ts_code',

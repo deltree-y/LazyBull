@@ -11,12 +11,13 @@
 - fund_count_chg 捕捉"拥挤度"变化（人多→可能过热，人少→可能冷门价值）
 """
 
-import bisect
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
 from loguru import logger
+
+from .announcement_utils import build_latest_announcement_lookup_by_date
 
 FUND_PORTFOLIO_COLS = [
     "fund_hold_ratio",  # 基金持股占流通股比例（全基金汇总）
@@ -24,6 +25,8 @@ FUND_PORTFOLIO_COLS = [
     "fund_count",  # 持仓基金数量
     "fund_count_chg",  # 持仓基金数量季度变化
 ]
+
+FUND_PORTFOLIO_FRESHNESS_COL = "fund_portfolio_freshness_days"
 
 FUND_PORTFOLIO_RAW_COLS = [
     "ts_code",
@@ -115,55 +118,16 @@ def build_fund_portfolio_lookup_by_date(
     agg["fund_hold_ratio_chg"] = agg["fund_hold_ratio"] - agg["fund_hold_ratio_prev"]
     agg["fund_count_chg"] = agg["fund_count"] - agg["fund_count_prev"]
 
-    if len(trading_dates) == 1:
-        trade_date = trading_dates[0]
-        visible = agg[agg["ann_date"] <= trade_date].sort_values(["symbol", "ann_date"])
-        if visible.empty:
-            result = {trade_date: pd.DataFrame(columns=["ts_code"] + FUND_PORTFOLIO_COLS)}
-        else:
-            latest = visible.drop_duplicates(subset=["symbol"], keep="last").copy()
-            latest["ts_code"] = latest["symbol"].map(_symbol_to_ts_code)
-            latest = latest.dropna(subset=["ts_code"])
-            day_df = latest[["ts_code"] + FUND_PORTFOLIO_COLS].reset_index(drop=True)
-            result = {trade_date: day_df}
-        logger.info(f"基金持仓查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-        return result
-
-    # 构建每只股票的 ann_date 排序列表，用于 bisect
-    stock_ann_dates: Dict[str, list] = {}
-    stock_values: Dict[str, list] = {}
-    for symbol, grp in agg.groupby("symbol"):
-        # symbol 是6位数字，需要转换为 ts_code 格式
-        ts_code = _symbol_to_ts_code(symbol)
-        if ts_code is None:
-            continue
-        grp = grp.sort_values("ann_date")
-        stock_ann_dates[ts_code] = grp["ann_date"].tolist()
-        stock_values[ts_code] = grp[FUND_PORTFOLIO_COLS].values.tolist()
-
-    # 对每个交易日做 point-in-time 查询
-    result: Dict[str, pd.DataFrame] = {}
-
-    for trade_date in trading_dates:
-        rows = []
-        for ts_code, ann_dates in stock_ann_dates.items():
-            idx = bisect.bisect_right(ann_dates, trade_date) - 1
-            if idx >= 0:
-                values = stock_values[ts_code][idx]
-                rows.append(
-                    {
-                        "ts_code": ts_code,
-                        "fund_hold_ratio": values[0],
-                        "fund_hold_ratio_chg": values[1],
-                        "fund_count": values[2],
-                        "fund_count_chg": values[3],
-                    }
-                )
-        if rows:
-            result[trade_date] = pd.DataFrame(rows)
-
-    logger.info(f"基金持仓查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
-    return result
+    agg["ts_code"] = agg["symbol"].map(_symbol_to_ts_code)
+    agg = agg.dropna(subset=["ts_code", "ann_date"])
+    factor_df = agg[["ts_code", "ann_date"] + FUND_PORTFOLIO_COLS].copy()
+    return build_latest_announcement_lookup_by_date(
+        factor_df,
+        trading_dates,
+        value_cols=FUND_PORTFOLIO_COLS,
+        freshness_col=FUND_PORTFOLIO_FRESHNESS_COL,
+        log_name="基金持仓",
+    )
 
 
 def _symbol_to_ts_code(symbol: str) -> str:

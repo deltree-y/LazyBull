@@ -9,16 +9,18 @@
 - 对每个交易日，找到每只股票最近一次已公告的季报数据
 """
 
-import bisect
 from typing import Dict, List
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
+from .announcement_utils import build_latest_announcement_lookup_by_date
+
 
 # 基本面因子列名
 FUNDA_COLS = ['roe_waa', 'or_yoy', 'netprofit_yoy', 'debt_to_assets', 'q_gr_yoy']
+FUNDAMENTAL_FRESHNESS_COL = 'fundamental_freshness_days'
 
 
 def build_fundamental_lookup_by_date(
@@ -62,51 +64,14 @@ def build_fundamental_lookup_by_date(
 
     logger.info(f"基本面查询表构建: {df['ts_code'].nunique()} 只股票, {len(trading_dates)} 个交易日")
 
-    if len(trading_dates) == 1:
-        trade_date = trading_dates[0]
-        visible = df[df['ann_date'] <= trade_date].sort_values(['ts_code', 'ann_date'])
-        if visible.empty:
-            result_dict = {trade_date: pd.DataFrame(columns=['ts_code'] + available_cols)}
-        else:
-            day_df = (
-                visible.drop_duplicates(subset=['ts_code'], keep='last')
-                [['ts_code'] + available_cols]
-                .reset_index(drop=True)
-            )
-            result_dict = {trade_date: day_df}
-        logger.info(f"基本面日频查询表构建完成: {len(result_dict)} 个交易日")
-        return result_dict
-
-    # 构建每只股票的 (ann_date, values) 有序列表
-    stock_reports = {}  # {ts_code: [(ann_date, val1, val2, ...)]}
-    stock_ann_dates = {}  # {ts_code: [ann_date1, ann_date2, ...]}
-
-    for ts_code, group in df.groupby('ts_code'):
-        group = group.sort_values('ann_date')
-        ann_dates = group['ann_date'].tolist()
-        values = group[available_cols].values.tolist()
-        stock_reports[ts_code] = values
-        stock_ann_dates[ts_code] = ann_dates
-
-    all_stocks = list(stock_reports.keys())
-
-    # 构建每日查询表
-    result_dict = {}
-    for trade_date in trading_dates:
-        rows = []
-        for ts_code in all_stocks:
-            ann_dates = stock_ann_dates[ts_code]
-            # 二分查找：找到 ann_date <= trade_date 的最后一个
-            idx = bisect.bisect_right(ann_dates, trade_date) - 1
-            if idx >= 0:
-                rows.append([ts_code] + stock_reports[ts_code][idx])
-
-        if rows:
-            day_df = pd.DataFrame(rows, columns=['ts_code'] + available_cols)
-        else:
-            day_df = pd.DataFrame(columns=['ts_code'] + available_cols)
-        result_dict[trade_date] = day_df
-
+    factor_df = df[['ts_code', 'ann_date'] + available_cols].copy()
+    result_dict = build_latest_announcement_lookup_by_date(
+        factor_df,
+        trading_dates,
+        value_cols=available_cols,
+        freshness_col=FUNDAMENTAL_FRESHNESS_COL,
+        log_name='基本面',
+    )
     logger.info(f"基本面日频查询表构建完成: {len(result_dict)} 个交易日")
     return result_dict
 

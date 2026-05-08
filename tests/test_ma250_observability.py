@@ -882,3 +882,34 @@ class TestMA250FeatureCacheSchema:
             storage.save_cs_train_day(df, "20240813")
 
             assert _check_features_schema(storage, "20240813") is True
+
+
+class TestAnnouncementFreshnessCacheSchema:
+    """测试 freshness 特征被纳入缓存完整性校验。"""
+
+    def test_schema_check_rejects_cache_missing_freshness_cols(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(root_path=tmpdir, verbose=False)
+            cols = [
+                col
+                for col in _REQUIRED_FACTOR_COLS
+                if col not in {
+                    "fundamental_freshness_days",
+                    "holder_freshness_days",
+                    "forecast_freshness_days",
+                    "fund_portfolio_freshness_days",
+                    "express_freshness_days",
+                }
+            ]
+            df = pd.DataFrame({col: [0.1] for col in cols})
+            storage.save_cs_train_day(df, "20240814")
+
+            assert _check_features_schema(storage, "20240814") is False
+
+    def test_schema_check_accepts_cache_with_freshness_cols(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(root_path=tmpdir, verbose=False)
+            df = pd.DataFrame({col: [0.1] for col in _REQUIRED_FACTOR_COLS})
+            storage.save_cs_train_day(df, "20240815")
+
+            assert _check_features_schema(storage, "20240815") is True
