@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.19] - 2026-05-08
+
+### 修复
+
+- **修复 3.5LCD“快照成功但排行为空”的代码匹配问题，并增强定位日志** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_normalize_ts_code_key()`，对持仓与快照代码进行统一归一化（支持大小写、带/不带后缀）
+  - `_build_stock_rankings()` 增加代码归一化匹配兜底，避免因 `SH/SZ` 格式差异导致全量 miss
+  - 新增排行匹配统计日志与未命中样本日志，便于现场快速判断是否为代码口径问题
+  - 持仓为空或快照为空时输出明确分支日志，提升故障可观测性
+
+### 测试
+
+- **新增排行代码格式兼容回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - `test_build_stock_rankings_matches_codes_when_quote_without_suffix`
+
 ## [0.71.18] - 2026-05-08
 
 ### 优化

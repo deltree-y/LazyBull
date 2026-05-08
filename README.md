@@ -28,7 +28,14 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.18)
+### 当前版本 (v0.71.19)
+
+**3.5LCD 排行匹配增强与诊断日志补强** (v0.71.19):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增代码归一化匹配（支持持仓与快照代码在大小写、带不带后缀时自动对齐）
+- 排行构建新增匹配统计日志与未命中样本日志，便于快速确认是否为 `SH/SZ` 后缀导致 miss
+- 当持仓或快照为空时，输出明确的分支日志，避免仅看到“排行为空”但无法定位
+
+### 当前版本历史 (v0.71.18)
 
 **3.5LCD 盘内个股实时行情改为 efinance 主源 + AKShare 兜底** (v0.71.18):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增 `efinance` 个股快照主链路，优先调用 `ef.stock.get_latest_quote(...)`

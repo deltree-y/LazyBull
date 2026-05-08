@@ -1055,6 +1055,33 @@ def test_build_stock_rankings_falls_back_to_pre_close_for_invalid_price():
     assert round(rankings[0]["pnl_pct"], 4) == 10.0
 
 
+def test_build_stock_rankings_matches_codes_when_quote_without_suffix():
+    module = _load_module()
+
+    rankings = module._build_stock_rankings(
+        {
+            "positions": {
+                "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+            },
+            "quotes": pd.DataFrame(
+                [
+                    {
+                        "TS_CODE": "000001",
+                        "NAME": "平安银行",
+                        "PRICE": 10.5,
+                        "PRE_CLOSE": 10.2,
+                    }
+                ]
+            ),
+        }
+    )
+
+    assert rankings is not None
+    assert len(rankings) == 1
+    assert rankings[0]["code"] == "000001"
+    assert round(rankings[0]["pnl_pct"], 4) == 5.0
+
+
 def test_fetch_realtime_holdings_snapshot_prefers_efinance_over_akshare(monkeypatch):
     module = _load_module()
 

@@ -2549,6 +2549,29 @@ def _normalize_stock_codes(ts_codes: list[str]) -> set[str]:
     }
 
 
+def _normalize_ts_code_key(ts_code: object) -> str:
+    """将代码归一化为大写 ts_code（如 600000.SH），用于持仓与快照匹配。"""
+    text = str(ts_code or '').strip().upper()
+    if not text:
+        return ''
+    if '.' in text:
+        code, suffix = text.split('.', 1)
+        code = code.strip()
+        suffix = suffix.strip()
+        if code and suffix:
+            return f"{code}.{suffix}"
+        return ''
+    if not text.isdigit():
+        return ''
+    if text.startswith('6'):
+        return f"{text}.SH"
+    if text.startswith(('0', '3')):
+        return f"{text}.SZ"
+    if text.startswith(('8', '4')):
+        return f"{text}.BJ"
+    return text
+
+
 def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFrame]:
     """使用 efinance 获取持仓实时行情，返回统一字段 DataFrame。"""
     if not ts_codes:
@@ -2912,19 +2935,45 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
 
     positions = snapshot.get('positions', {})
     rt_df = snapshot.get('quotes')
+    if not positions:
+        _emit_diag("排行构建跳过: 持仓为空")
+        return None
     if rt_df is None or rt_df.empty:
+        _emit_diag("排行构建跳过: 快照行情为空")
         return None
 
+    normalized_position_map: dict[str, object] = {}
+    for pos_key, pos in positions.items():
+        normalized_key = _normalize_ts_code_key(pos_key)
+        if normalized_key:
+            normalized_position_map[normalized_key] = pos
+        bare_code = str(pos_key).split('.')[0].strip()
+        bare_normalized_key = _normalize_ts_code_key(bare_code)
+        if bare_normalized_key:
+            normalized_position_map.setdefault(bare_normalized_key, pos)
+
     stocks = []
+    rt_total = 0
+    rt_valid_code_price = 0
+    matched_rows = 0
+    unmatched_samples: list[str] = []
     for _, row in rt_df.iterrows():
-        ts_code = str(row.get('TS_CODE', ''))
+        rt_total += 1
+        ts_code = str(row.get('TS_CODE', row.get('ts_code', ''))).strip()
         name = str(row.get('NAME', ''))
         price = row.get('PRICE', None)
         if not ts_code or price is None:
             continue
+        rt_valid_code_price += 1
+        normalized_rt_code = _normalize_ts_code_key(ts_code)
         pos = positions.get(ts_code)
+        if pos is None and normalized_rt_code:
+            pos = normalized_position_map.get(normalized_rt_code)
         if pos is None:
+            if len(unmatched_samples) < 5:
+                unmatched_samples.append(f"{ts_code}->{normalized_rt_code or '-'}")
             continue
+        matched_rows += 1
         current_price = _normalize_intraday_price(
             price,
             row.get('PRE_CLOSE', row.get('pre_close')),
@@ -2936,7 +2985,19 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
         code = ts_code.split('.')[0]
         stocks.append({'name': name[:4], 'code': code, 'pnl_pct': pnl_pct})
 
+    _trace_diag(
+        "排行匹配统计: "
+        f"rt_total={rt_total}, rt_valid={rt_valid_code_price}, matched={matched_rows}, "
+        f"positions={len(positions)}, position_aliases={len(normalized_position_map)}"
+    )
+
     if not stocks:
+        position_samples = list(positions.keys())[:5]
+        _emit_diag(
+            "排行构建无结果: "
+            f"matched={matched_rows}, rt_valid={rt_valid_code_price}, "
+            f"sample_rt_unmatched={unmatched_samples}, sample_pos_keys={position_samples}"
+        )
         return None
 
     stocks.sort(key=lambda x: x['pnl_pct'], reverse=True)
