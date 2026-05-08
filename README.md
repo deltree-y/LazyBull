@@ -30,10 +30,10 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ### 当前版本 (v0.71.11)
 
-**修复 batches 对比表“跨时间段稳定性”遗漏最新批次问题** (v0.71.11):
-- [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py) 在跨时间段稳定性分组中将 `split_count/final_date` 归类为时间段维度，不再作为参数维度分组
-- 修复后，同一批次不同时间段不会再被拆成单条分组导致被过滤
-- [tests/test_ma250_observability.py](tests/test_ma250_observability.py) 新增回归测试 `test_build_period_stability_table_ignores_split_count_and_final_date`
+**修复树莓派启动后数据全空（持仓摘要不显示）** (v0.71.11):
+- `_build_realtime_portfolio_summary` 在函数内部用 `__file__` 推导 `scripts/` 绝对路径并插入 `sys.path`，修复非项目根目录运行时 `from paper_trade import ...` 静默失败、summary 始终为 None 的问题
+
+### 当前版本历史 (v0.71.10)
 
 **修复“总盈亏有值但年化收益为0.0%”与“更新:--:--”问题** (v0.71.10):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 在轻量快照路径下恢复年化收益函数构建（起始日优先 `account_start_date`，其次 NAV 最早日）

@@ -2606,6 +2606,13 @@ def _build_realtime_portfolio_summary(snapshot: Optional[dict]) -> Optional[dict
     if snapshot is None:
         return None
 
+    # paper_trade.py 在 scripts/ 目录，用 __file__ 推导绝对路径后插入 sys.path，
+    # 确保树莓派上无论从哪个工作目录运行都能正确找到该模块。
+    import sys
+    import pathlib as _pathlib
+    _scripts_dir = str(_pathlib.Path(__file__).parent.parent)
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
     from paper_trade import build_realtime_portfolio_summary_from_quotes
 
     cash = _coerce_float(snapshot.get('cash'))
