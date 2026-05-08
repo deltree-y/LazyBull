@@ -70,13 +70,13 @@ def _resolve_realtime_snapshot_timeout_seconds() -> float:
             return float(str(raw).strip())
         except (TypeError, ValueError):
             pass
-    return 240.0
+    return 50.0
 
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 180  # 盘中摘要/排行/日内图刷新间隔（秒）
+REALTIME_REFRESH_INTERVAL = 60  # 盘中摘要/排行/日内图刷新间隔（秒）
 REALTIME_SNAPSHOT_TIMEOUT_SECONDS = _resolve_realtime_snapshot_timeout_seconds()
 try:
     REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = float(
@@ -2540,17 +2540,110 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
 # ---------- 个股盈亏排名 ----------
 
+def _normalize_stock_codes(ts_codes: list[str]) -> set[str]:
+    """将 ts_code 列表标准化为 6 位股票代码集合（过滤指数等非股票代码）。"""
+    return {
+        str(ts_code).split('.')[0].strip()
+        for ts_code in ts_codes
+        if str(ts_code).strip() and str(ts_code).split('.')[0].strip().isdigit()
+    }
+
+
+def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFrame]:
+    """使用 efinance 获取持仓实时行情，返回统一字段 DataFrame。"""
+    if not ts_codes:
+        return None
+
+    stock_codes = _normalize_stock_codes(ts_codes)
+    if not stock_codes:
+        _trace_diag("E快照跳过: 传入代码为空或均非股票代码")
+        return None
+
+    fetch_started_at = time.monotonic()
+    _trace_diag(f"E快照开始: req_stocks={len(stock_codes)}")
+
+    try:
+        import efinance as ef  # type: ignore
+    except Exception:
+        _emit_diag_once(
+            "efinance_holdings_import_error",
+            "efinance导入失败，无法作为实时快照主来源",
+            stderr=False,
+        )
+        return None
+
+    try:
+        with _fetch_network_context():
+            df = ef.stock.get_latest_quote(sorted(stock_codes))
+    except Exception as exc:
+        _emit_diag(
+            "E快照失败: "
+            f"{type(exc).__name__}: {exc} | proxy_bypass={_should_bypass_proxy_for_fetch()}"
+        )
+        return None
+
+    if df is None or df.empty:
+        _emit_diag_once(
+            "efinance_holdings_empty",
+            "efinance持仓快照返回空数据，尝试回退AKShare",
+            stderr=False,
+        )
+        return None
+
+    code_col = next((c for c in ('代码', 'symbol', 'ts_code', 'TS_CODE') if c in df.columns), None)
+    name_col = next((c for c in ('名称', 'name', 'NAME') if c in df.columns), None)
+    price_col = next((c for c in ('最新价', '现价', 'price', 'PRICE') if c in df.columns), None)
+    pre_close_col = next((c for c in ('昨收', '昨收价', '昨收盘', 'pre_close', 'PRE_CLOSE') if c in df.columns), None)
+    time_col = next((c for c in ('更新时间', '时间', 'time', 'TIME') if c in df.columns), None)
+
+    if code_col is None or price_col is None:
+        _emit_diag_once(
+            "efinance_holdings_columns_missing",
+            f"efinance持仓快照缺少关键列，当前列: {list(df.columns)}",
+            stderr=False,
+        )
+        return None
+
+    now_time = datetime.now().strftime("%H:%M:%S")
+    rows = []
+    for _, row in df.iterrows():
+        code = str(row.get(code_col, '')).strip()
+        if code not in stock_codes:
+            continue
+        ts_code = f"{code}.SH" if code.startswith('6') else f"{code}.SZ"
+        time_text = str(row.get(time_col, now_time)) if time_col else now_time
+        if " " in time_text:
+            time_text = time_text.split(" ")[-1]
+        rows.append(
+            {
+                'TS_CODE': ts_code,
+                'NAME': str(row.get(name_col, '')) if name_col else '',
+                'PRICE': row.get(price_col),
+                'PRE_CLOSE': row.get(pre_close_col) if pre_close_col else None,
+                'TIME': time_text,
+            }
+        )
+
+    if not rows:
+        _emit_diag(
+            "E快照为空: "
+            f"req_stocks={len(stock_codes)}，接口返回行命中0，可能是代码映射或接口返回口径变化"
+        )
+        return None
+
+    _trace_diag(
+        "E快照成功: "
+        f"hit_rows={len(rows)}, cost={time.monotonic() - fetch_started_at:.2f}s"
+    )
+    return pd.DataFrame(rows)
+
+
 def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame]:
     """使用 AKShare 获取持仓实时行情，返回统一字段 DataFrame。"""
     if not ts_codes:
         return None
 
-    # 仅处理股票代码，过滤指数代码
-    stock_codes = {
-        str(ts_code).split('.')[0].strip()
-        for ts_code in ts_codes
-        if str(ts_code).strip() and str(ts_code).split('.')[0].strip().isdigit()
-    }
+    stock_codes = _normalize_stock_codes(ts_codes)
     if not stock_codes:
         _trace_diag("AK快照跳过: 传入代码为空或均非股票代码")
         return None
@@ -2750,37 +2843,20 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
 
     try:
         fetch_started_at = time.monotonic()
-        ts_codes = list(positions.keys()) + [SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE]
-        rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
-        quote_source = 'A'
+        rt_df = _fetch_realtime_quotes_efinance(list(positions.keys()))
+        quote_source = 'E'
 
         if rt_df is None or rt_df.empty:
-            _emit_diag("抓快照: AKShare无可用数据，开始尝试TuShare兜底")
-            # AKShare 不可用时兜底 TuShare，避免盘中全空。
-            ts_codes_str = ','.join(dict.fromkeys(ts_codes))
-            try:
-                from src.lazybull.data.tushare_client import TushareClient
+            _emit_diag("抓快照: efinance无可用数据，开始尝试AKShare兜底")
+            rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
+            quote_source = 'A'
 
-                with _fetch_network_context():
-                    client = TushareClient(verbose=False)
-                    rt_df = client.get_realtime_quote(ts_codes_str)
-            except Exception:
-                _emit_diag("抓快照: TuShare兜底调用异常")
-                rt_df = None
-
-            if rt_df is None or rt_df.empty:
-                _emit_diag(
-                    "抓快照失败: AKShare与TuShare均无可用行情，"
-                    f"positions={len(positions)}, proxy_bypass={_should_bypass_proxy_for_fetch()}"
-                )
-                return snapshot
-
-            quote_source = 'T'
-            _emit_diag_once(
-                "realtime_snapshot_fallback_tushare",
-                "实时快照已回退到 TuShare 数据源",
-                stderr=False,
+        if rt_df is None or rt_df.empty:
+            _emit_diag(
+                "抓快照失败: efinance与AKShare均无可用行情，"
+                f"positions={len(positions)}, proxy_bypass={_should_bypass_proxy_for_fetch()}"
             )
+            return snapshot
 
         snapshot['quotes'] = rt_df
         snapshot['quote_source'] = quote_source

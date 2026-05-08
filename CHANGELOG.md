@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.18] - 2026-05-08
+
+### 优化
+
+- **3.5LCD 盘内个股实时行情链路切换为 efinance 主源、AKShare 兜底** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_fetch_realtime_quotes_efinance()`，优先使用 `ef.stock.get_latest_quote(...)` 获取持仓个股实时报价
+  - `_fetch_realtime_holdings_snapshot()` 改为 `E(efinance) -> A(akshare)` 双源链路，移除 TuShare 实时兜底
+  - 保持上证/深证/中证800 的实时获取链路不变（仍由现有指数接口逻辑处理）
+
+### 测试
+
+- **更新个股实时快照回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - `test_fetch_realtime_holdings_snapshot_prefers_efinance_over_akshare`
+  - `test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_efinance_empty`
+  - `test_fetch_realtime_holdings_snapshot_returns_empty_when_efinance_and_akshare_unavailable`
+
 ## [0.71.17] - 2026-05-08
 
 ### 优化

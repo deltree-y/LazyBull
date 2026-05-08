@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "lazybull"
-version = "0.71.17"
+version = "0.71.18"
 description = "A股量化研究与回测框架 - 专注价值红利策略"
 authors = ["deltree-y"]
 packages = [{include = "lazybull", from = "src"}]
@@ -16,6 +16,7 @@ pyarrow = "^10.0.0"
 loguru = "^0.6.0"
 tushare = "^1.2.89"
 akshare = "^1.17.78"
+efinance = "^0.5.5.2"
 xgboost = "^1.7.0"
 scikit-learn = "^1.2.0"
 joblib = "^1.2.0"

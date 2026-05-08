@@ -28,7 +28,14 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.17)
+### 当前版本 (v0.71.18)
+
+**3.5LCD 盘内个股实时行情改为 efinance 主源 + AKShare 兜底** (v0.71.18):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增 `efinance` 个股快照主链路，优先调用 `ef.stock.get_latest_quote(...)`
+- 实时持仓快照链路调整为 `E(efinance) -> A(akshare)`，不再走 TuShare 实时兜底
+- 上证/深证/中证800 的实时获取链路保持现状不变
+
+### 当前版本历史 (v0.71.17)
 
 **3.5LCD 快照超时配置简化为单变量直读** (v0.71.17):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 仅支持 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS`

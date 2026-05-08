@@ -32,12 +32,17 @@ def test_snapshot_timeout_reads_single_env_key(monkeypatch):
 
 
 def test_snapshot_timeout_ignores_legacy_env_key(monkeypatch):
-    monkeypatch.delenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.setenv("REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "120")
+    # 先拿“仅主变量为空且无旧变量”时的基准值，再验证设置旧变量不应改变结果。
+    monkeypatch.setenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "")
+    monkeypatch.delenv("REALTIME_SNAPSHOT_TIMEOUT_SECONDS", raising=False)
+    baseline_module = _load_module()
+    baseline_timeout = baseline_module.REALTIME_SNAPSHOT_TIMEOUT_SECONDS
 
+    monkeypatch.setenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "")
+    monkeypatch.setenv("REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "120")
     module = _load_module()
 
-    assert module.REALTIME_SNAPSHOT_TIMEOUT_SECONDS == 60.0
+    assert module.REALTIME_SNAPSHOT_TIMEOUT_SECONDS == baseline_timeout
 
 
 def test_fetch_network_context_temporarily_clears_proxy_env(monkeypatch):
@@ -1050,7 +1055,7 @@ def test_build_stock_rankings_falls_back_to_pre_close_for_invalid_price():
     assert round(rankings[0]["pnl_pct"], 4) == 10.0
 
 
-def test_fetch_realtime_holdings_snapshot_prefers_akshare_over_tushare(monkeypatch):
+def test_fetch_realtime_holdings_snapshot_prefers_efinance_over_akshare(monkeypatch):
     module = _load_module()
 
     class DummyStorage:
@@ -1068,11 +1073,7 @@ def test_fetch_realtime_holdings_snapshot_prefers_akshare_over_tushare(monkeypat
                 cash=5000.0,
             )
 
-    class DummyClient:
-        def __init__(self, verbose=False):
-            raise AssertionError("AKShare可用时不应触发TuShare兜底")
-
-    akshare_df = pd.DataFrame(
+    efinance_df = pd.DataFrame(
         [
             {
                 "TS_CODE": "000001.SZ",
@@ -1085,7 +1086,54 @@ def test_fetch_realtime_holdings_snapshot_prefers_akshare_over_tushare(monkeypat
     )
 
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
-    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", lambda ts_codes: efinance_df)
+    monkeypatch.setattr(
+        module,
+        "_fetch_realtime_quotes_akshare",
+        lambda ts_codes: (_ for _ in ()).throw(AssertionError("efinance可用时不应触发AKShare兜底")),
+    )
+
+    snapshot = module._fetch_realtime_holdings_snapshot()
+
+    assert snapshot is not None
+    assert snapshot["quotes"] is not None
+    assert snapshot["quote_source"] == "E"
+    assert len(snapshot["quotes"]) == 1
+    assert snapshot["quotes"].iloc[0]["TS_CODE"] == "000001.SZ"
+
+
+def test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_efinance_empty(monkeypatch):
+    module = _load_module()
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_config(self):
+            return {"initial_capital": 100000.0}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                },
+                cash=5000.0,
+            )
+
+    akshare_df = pd.DataFrame(
+        [
+            {
+                "TS_CODE": "000001.SZ",
+                "NAME": "平安银行",
+                "PRICE": 11.0,
+                "PRE_CLOSE": 10.0,
+                "TIME": "09:35:00",
+            }
+        ]
+    )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", lambda ts_codes: pd.DataFrame())
     monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: akshare_df)
 
     snapshot = module._fetch_realtime_holdings_snapshot()
@@ -1097,9 +1145,8 @@ def test_fetch_realtime_holdings_snapshot_prefers_akshare_over_tushare(monkeypat
     assert snapshot["quotes"].iloc[0]["TS_CODE"] == "000001.SZ"
 
 
-def test_fetch_realtime_holdings_snapshot_falls_back_to_tushare_with_index_batch(monkeypatch):
+def test_fetch_realtime_holdings_snapshot_returns_empty_when_efinance_and_akshare_unavailable(monkeypatch):
     module = _load_module()
-    captured = {}
 
     class DummyStorage:
         def __init__(self, root_path=None, verbose=False):
@@ -1116,84 +1163,15 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_tushare_with_index_batch
                 cash=5000.0,
             )
 
-    class DummyClient:
-        def __init__(self, verbose=False):
-            pass
-
-        def get_realtime_quote(self, ts_codes_str):
-            captured["ts_codes_str"] = ts_codes_str
-            return pd.DataFrame(
-                [
-                    {"TS_CODE": "000001.SZ", "PRICE": 11.0, "PRE_CLOSE": 10.0, "TIME": "09:32:00"},
-                    {"TS_CODE": module.SHANGHAI_INDEX_CODE, "PRICE": 3015.0, "PRE_CLOSE": 3000.0, "TIME": "09:32:00"},
-                    {"TS_CODE": module.SHENZHEN_INDEX_CODE, "PRICE": 9980.0, "PRE_CLOSE": 10000.0, "TIME": "09:32:00"},
-                ]
-            )
-
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
-    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", lambda ts_codes: None)
     monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: None)
 
     snapshot = module._fetch_realtime_holdings_snapshot()
 
     assert snapshot is not None
-    assert captured["ts_codes_str"].split(",") == [
-        "000001.SZ",
-        module.SHANGHAI_INDEX_CODE,
-        module.SHENZHEN_INDEX_CODE,
-    ]
-    assert snapshot["quotes"] is not None
-    assert snapshot["quote_source"] == "T"
-    assert round(snapshot["index_pct_map"][module.SHANGHAI_INDEX_CODE], 4) == 0.5
-    assert round(snapshot["index_pct_map"][module.SHENZHEN_INDEX_CODE], 4) == -0.2
-
-
-def test_fetch_realtime_holdings_snapshot_falls_back_to_tushare_when_akshare_empty(monkeypatch):
-    module = _load_module()
-
-    class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
-            pass
-
-        def load_config(self):
-            return {"initial_capital": 100000.0}
-
-        def load_account_state(self):
-            return SimpleNamespace(
-                positions={
-                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
-                },
-                cash=5000.0,
-            )
-
-    class DummyClient:
-        def __init__(self, verbose=False):
-            pass
-
-        def get_realtime_quote(self, ts_codes_str):
-            return pd.DataFrame(
-                [
-                    {
-                        "TS_CODE": "000001.SZ",
-                        "NAME": "平安银行",
-                        "PRICE": 11.0,
-                        "PRE_CLOSE": 10.0,
-                        "TIME": "09:35:00",
-                    }
-                ]
-            )
-
-    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
-    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
-    monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: pd.DataFrame())
-
-    snapshot = module._fetch_realtime_holdings_snapshot()
-
-    assert snapshot is not None
-    assert snapshot["quotes"] is not None
-    assert snapshot["quote_source"] == "T"
-    assert len(snapshot["quotes"]) == 1
-    assert snapshot["quotes"].iloc[0]["TS_CODE"] == "000001.SZ"
+    assert snapshot["quotes"] is None
+    assert snapshot["quote_source"] == "-"
 
 
 def test_fetch_realtime_holdings_snapshot_builds_annualized_func_from_config(monkeypatch):

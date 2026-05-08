@@ -13,6 +13,7 @@ pyarrow>=10.0.0
 loguru>=0.6.0
 tushare>=1.2.89
 akshare>=1.17.78
+efinance>=0.5.5.2
 tqdm>=4.64.0
 
 # Machine Learning dependencies
