@@ -28,7 +28,21 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.13)
+### 当前版本 (v0.71.15)
+
+**3.5LCD 新增分阶段诊断日志（定位上半区空白）** (v0.71.15):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 在刷新主流程记录开始/结束日志，明确 `summary/rank/industry/cycle_chart` 是否更新成功
+- 新增 AKShare/TuShare 快照链路日志（开始、失败原因、兜底切换、耗时）
+- 新增数据线程调度决策日志，便于判断是“策略未触发刷新”还是“抓数失败”
+
+### 当前版本历史 (v0.71.14)
+
+**3.5LCD 实时快照超时默认提升到 60 秒** (v0.71.14):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 将 `REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 默认值从 18 秒提高到 60 秒
+- 新增环境变量 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 可按现场网络质量调整超时阈值
+- 增加最小 5 秒下限保护，防止误配置导致超时过短
+
+### 当前版本历史 (v0.71.13)
 
 **3.5LCD 抓数阶段临时绕开代理（抓完即恢复）** (v0.71.13):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增 `_fetch_network_context()`，仅在数据抓取调用期间禁用代理

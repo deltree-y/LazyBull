@@ -66,7 +66,15 @@ DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
 REALTIME_REFRESH_INTERVAL = 90  # 盘中摘要/排行/日内图刷新间隔（秒）
-REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 18.0  # 单次实时快照抓取超时（秒）
+# 单次实时快照抓取超时（秒），默认 60，可通过环境变量覆盖
+try:
+    REALTIME_SNAPSHOT_TIMEOUT_SECONDS = float(
+        os.getenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "60")
+    )
+except (TypeError, ValueError):
+    REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 120.0
+if REALTIME_SNAPSHOT_TIMEOUT_SECONDS < 5.0:
+    REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 5.0
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 12.0  # 单次盘中图构建超时（秒）
 UPDATE_STUCK_RESET_SECONDS = 30.0  # 顶栏更新状态强制脱困阈值（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
@@ -171,6 +179,18 @@ def _should_bypass_proxy_for_fetch() -> bool:
     """判断抓数阶段是否临时禁用代理。"""
     raw = str(os.getenv("LAZYBULL_FETCH_BYPASS_PROXY", "1")).strip().lower()
     return raw not in {"0", "false", "off", "no"}
+
+
+def _is_runtime_trace_enabled() -> bool:
+    """是否启用运行时诊断追踪日志。"""
+    raw = str(os.getenv("LAZYBULL_LCD_TRACE", "1")).strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
+def _trace_diag(message: str) -> None:
+    """按开关输出运行时追踪日志。"""
+    if _is_runtime_trace_enabled():
+        _emit_diag(message, stderr=True)
 
 
 @contextmanager
@@ -2344,8 +2364,10 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     )
     cached_chart_data = _get_cached_cycle_chart_data(cycle_cache_key, cache_scope_date)
     if cached_chart_data is not None:
+        _trace_diag("抓周期命中缓存，跳过网络抓取")
         return cached_chart_data
 
+    fetch_started_at = time.monotonic()
     try:
         with _fetch_network_context():
             client = TushareClient(verbose=False)
@@ -2408,7 +2430,12 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
                 )
             if df is not None and not df.empty:
                 stock_closes[ts_code] = dict(zip(df['trade_date'], df['close']))
-    except Exception:
+    except Exception as exc:
+        _emit_diag(
+            "抓周期失败: "
+            f"{type(exc).__name__}: {exc} | "
+            f"proxy_bypass={_should_bypass_proxy_for_fetch()}"
+        )
         return None
 
     # 计算每日组合市值
@@ -2448,6 +2475,12 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     ):
         _save_cycle_chart_data_cache(cycle_cache_key, cache_scope_date, chart_data)
 
+    _trace_diag(
+        "抓周期完成: "
+        f"trade_dates={len(trade_dates)}, stocks={len(positions)}, "
+        f"cost={time.monotonic() - fetch_started_at:.2f}s"
+    )
+
     return chart_data
 
 
@@ -2465,7 +2498,11 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
         if str(ts_code).strip() and str(ts_code).split('.')[0].strip().isdigit()
     }
     if not stock_codes:
+        _trace_diag("AK快照跳过: 传入代码为空或均非股票代码")
         return None
+
+    fetch_started_at = time.monotonic()
+    _trace_diag(f"AK快照开始: req_stocks={len(stock_codes)}")
 
     try:
         import akshare as ak  # type: ignore
@@ -2492,6 +2529,10 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
         with _fetch_network_context():
             df = getter()
     except Exception as exc:
+        _emit_diag(
+            "AK快照失败: "
+            f"{type(exc).__name__}: {exc} | proxy_bypass={_should_bypass_proxy_for_fetch()}"
+        )
         _emit_diag_once(
             "akshare_holdings_getter_error",
             f"AKShare持仓快照接口调用失败: {type(exc).__name__}: {exc}",
@@ -2538,7 +2579,15 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
         )
 
     if not rows:
+        _emit_diag(
+            "AK快照为空: "
+            f"req_stocks={len(stock_codes)}，接口返回行命中0，可能是代码映射或接口返回口径变化"
+        )
         return None
+    _trace_diag(
+        "AK快照成功: "
+        f"hit_rows={len(rows)}, cost={time.monotonic() - fetch_started_at:.2f}s"
+    )
     return pd.DataFrame(rows)
 
 def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
@@ -2616,13 +2665,16 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     }
 
     if not positions:
+        _trace_diag("抓快照跳过: 当前无持仓")
         return snapshot
 
+    fetch_started_at = time.monotonic()
     ts_codes = list(positions.keys()) + [SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE]
     rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
     quote_source = 'A'
 
     if rt_df is None or rt_df.empty:
+        _emit_diag("抓快照: AKShare无可用数据，开始尝试TuShare兜底")
         # AKShare 不可用时兜底 TuShare，避免盘中全空。
         ts_codes_str = ','.join(dict.fromkeys(ts_codes))
         try:
@@ -2632,9 +2684,14 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
                 client = TushareClient(verbose=False)
                 rt_df = client.get_realtime_quote(ts_codes_str)
         except Exception:
+            _emit_diag("抓快照: TuShare兜底调用异常")
             rt_df = None
 
         if rt_df is None or rt_df.empty:
+            _emit_diag(
+                "抓快照失败: AKShare与TuShare均无可用行情，"
+                f"positions={len(positions)}, proxy_bypass={_should_bypass_proxy_for_fetch()}"
+            )
             return snapshot
 
         quote_source = 'T'
@@ -2647,6 +2704,11 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     snapshot['quotes'] = rt_df
     snapshot['quote_source'] = quote_source
     snapshot['index_pct_map'] = _extract_index_pct_map_from_quote_df(rt_df)
+    _trace_diag(
+        "抓快照成功: "
+        f"source={quote_source}, rows={len(rt_df)}, positions={len(positions)}, "
+        f"cost={time.monotonic() - fetch_started_at:.2f}s"
+    )
     return snapshot
 
 
@@ -3102,6 +3164,12 @@ def _refresh_display_state(
     refresh_cycle: bool = False,
 ) -> None:
     """按需刷新共享显示状态。"""
+    _trace_diag(
+        "刷新开始: "
+        f"realtime={refresh_realtime}, cycle={refresh_cycle}, "
+        f"snapshot_timeout={REALTIME_SNAPSHOT_TIMEOUT_SECONDS:.1f}s, "
+        f"proxy_bypass={_should_bypass_proxy_for_fetch()}"
+    )
     with state.lock:
         state.is_updating = refresh_realtime or refresh_cycle
         state.update_step = "刷新中"
@@ -3125,12 +3193,23 @@ def _refresh_display_state(
                     ),
                 )
                 if isinstance(holdings_snapshot, dict):
+                    pos_count = len(holdings_snapshot.get('positions', {}) or {})
+                    quote_df = holdings_snapshot.get('quotes')
+                    quote_rows = int(len(quote_df)) if quote_df is not None else 0
+                    _trace_diag(
+                        "抓快照完成: "
+                        f"source={holdings_snapshot.get('quote_source', '-')}, "
+                        f"positions={pos_count}, quote_rows={quote_rows}"
+                    )
                     source = str(holdings_snapshot.get('quote_source', '')).strip().upper()
                     with state.lock:
                         state.quote_source_tag = source if source in ('T', 'A') else '-'
                     # 即便摘要计算失败，也至少更新时间戳，避免长期显示 --:--
                     latest_update_time = datetime.now().strftime("%H:%M")
+                else:
+                    _emit_diag("抓快照结果为空（超时或异常），本轮实时面板将沿用旧值")
             except Exception:
+                _emit_diag("抓快照阶段异常，已跳过本轮实时面板刷新")
                 holdings_snapshot = None
 
             try:
@@ -3141,8 +3220,18 @@ def _refresh_display_state(
                     with state.lock:
                         state.summary = summary
                     latest_update_time = _format_quote_update_time(summary) or datetime.now().strftime("%H:%M")
+                    _trace_diag(
+                        "摘要更新成功: "
+                        f"pos_count={summary.get('pos_count')}, quote_time={summary.get('quote_time', '')}"
+                    )
+                else:
+                    q_rows = 0
+                    if isinstance(holdings_snapshot, dict):
+                        q_df = holdings_snapshot.get('quotes')
+                        q_rows = int(len(q_df)) if q_df is not None else 0
+                    _emit_diag(f"摘要为空: snapshot_quote_rows={q_rows}")
             except Exception:
-                pass
+                _emit_diag("算摘要阶段异常，摘要保持上次有效值")
 
             try:
                 with state.lock:
@@ -3169,8 +3258,11 @@ def _refresh_display_state(
                 if ranks is not None:
                     with state.lock:
                         state.stock_rankings = ranks
+                    _trace_diag(f"排行更新成功: rows={len(ranks)}")
+                else:
+                    _emit_diag("排行为空: 快照缺少可用持仓行情")
             except Exception:
-                pass
+                _emit_diag("算排行阶段异常，排行保持上次有效值")
 
             try:
                 with state.lock:
@@ -3184,8 +3276,15 @@ def _refresh_display_state(
                             state.industry_panel_cycle = industry_panel_cycle
                         if industry_panel_intraday is not None:
                             state.industry_panel_intraday = industry_panel_intraday
+                    _trace_diag(
+                        "行业更新成功: "
+                        f"cycle={'Y' if industry_panel_cycle is not None else 'N'}, "
+                        f"intraday={'Y' if industry_panel_intraday is not None else 'N'}"
+                    )
+                else:
+                    _emit_diag("行业统计为空: 快照缺少可用持仓行情")
             except Exception:
-                pass
+                _emit_diag("算行业阶段异常，行业统计保持上次有效值")
 
         try:
             with state.lock:
@@ -3207,8 +3306,14 @@ def _refresh_display_state(
                         state.chart_data = cycle_chart_data
                     if latest_update_time is None:
                         latest_update_time = datetime.now().strftime("%H:%M")
+                    _trace_diag(
+                        "周期图更新成功: "
+                        f"points={len(cycle_chart_data.get('dates', []) or [])}"
+                    )
+                else:
+                    _emit_diag("抓周期返回空数据，周期图保持上次有效值")
             except Exception:
-                pass
+                _emit_diag("抓周期阶段异常，周期图保持上次有效值")
     finally:
         with state.lock:
             if latest_update_time is not None:
@@ -3216,6 +3321,16 @@ def _refresh_display_state(
             state.update_step = ""
             state.update_started_at = 0.0
             state.is_updating = False
+            summary_ready = state.summary is not None
+            rank_ready = state.stock_rankings is not None
+            industry_ready = state.industry_panel is not None
+            chart_ready = state.chart_data is not None
+            update_time = state.update_time
+        _trace_diag(
+            "刷新结束: "
+            f"update_time={update_time}, summary={summary_ready}, "
+            f"rank={rank_ready}, industry={industry_ready}, cycle_chart={chart_ready}"
+        )
 
 
 # ---------- 共享显示状态 ----------
@@ -3930,6 +4045,13 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
     启动时立即获取一次（非交易日也会返回最近一个交易日的收盘数据）。
     """
     _emit_diag_once("data_worker_start", "数据线程已启动")
+    _emit_diag_once(
+        "fetch_proxy_mode_once",
+        "抓数代理模式: "
+        f"bypass={_should_bypass_proxy_for_fetch()} "
+        "(可用 LAZYBULL_FETCH_BYPASS_PROXY=0 关闭)",
+        stderr=False,
+    )
 
     try:
         # 启动时立即获取一次（非交易日也能显示最近收盘数据）
@@ -3975,6 +4097,13 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
                 current_dt,
             )
 
+            _trace_diag(
+                "调度决策: "
+                f"policy(realtime={refresh_policy['refresh_realtime']},cycle={refresh_policy['refresh_cycle']}), "
+                f"due(realtime={refresh_realtime},cycle={refresh_cycle}), "
+                f"session={realtime_session_key}, target_cycle={cycle_target_date}, wait={wait_seconds:.1f}s"
+            )
+
             if refresh_cycle or refresh_realtime:
                 _refresh_display_state(
                     state,
@@ -3987,6 +4116,8 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
                 if refresh_cycle:
                     last_cycle_refresh_at = current_dt
                     last_cycle_target_date = cycle_target_date
+            else:
+                _trace_diag("本轮无需刷新，继续等待下一轮调度")
     except Exception as exc:
         _emit_diag(f"数据线程异常退出: {type(exc).__name__}: {exc}")
 

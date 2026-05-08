@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.15] - 2026-05-08
+
+### 优化
+
+- **3.5LCD 新增分阶段诊断日志，定位“折线图有值但上半区为空”问题** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 刷新主流程新增开始/结束日志，输出 `summary/rank/industry/cycle_chart` 是否成功更新
+  - 快照链路新增关键日志：AKShare 开始/成功/失败、TuShare 兜底启动与失败原因、最终快照来源与耗时
+  - 周期图抓取新增命中缓存与异常细节日志，便于区分“策略未刷新”与“网络抓取失败”
+  - 数据线程新增调度决策日志：`policy`、`due`、`session`、`target_cycle`、`wait_seconds`
+
+### 测试
+
+- **核心刷新链路回归通过** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - `refresh_display_state` / `fetch_realtime_holdings_snapshot` / `fetch_cycle_chart_data` / `fetch_network_context` 相关用例通过
+
+## [0.71.14] - 2026-05-08
+
+### 优化
+
+- **3.5LCD 实时快照超时阈值提升并支持环境变量配置** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - `REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 默认值由 `18` 秒提升到 `60` 秒
+  - 新增环境变量 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS`，支持按现场网络质量自定义
+  - 增加下限保护（最小 `5` 秒），避免误配置导致过小超时
+
+### 测试
+
+- **超时与快照回归测试通过** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - `test_call_with_timeout_returns_fallback_on_timeout`
+  - `test_refresh_display_state_timeout_does_not_stuck_updating`
+  - `fetch_realtime_holdings_snapshot` 相关用例
+
 ## [0.71.13] - 2026-05-08
 
 ### 修复
