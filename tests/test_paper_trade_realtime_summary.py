@@ -105,3 +105,39 @@ def test_get_realtime_portfolio_summary_uses_config_initial_capital(monkeypatch)
     assert captured["initial_capital"] == 650000.0
     assert captured["position_sizing"] == "score"
     assert captured["horizon"] == 20
+
+
+def test_build_realtime_portfolio_summary_from_quotes_uses_latest_quote_time():
+    module = _load_module()
+
+    positions = {
+        "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+        "000002.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+    }
+    rt_df = pd.DataFrame(
+        [
+            {
+                "TS_CODE": "000001.SZ",
+                "PRICE": 10.5,
+                "PRE_CLOSE": 10.3,
+                "TIME": "09:01:00",
+            },
+            {
+                "TS_CODE": "000002.SZ",
+                "PRICE": 10.8,
+                "PRE_CLOSE": 10.4,
+                "TIME": "09:08:12",
+            },
+        ]
+    )
+
+    summary = module.build_realtime_portfolio_summary_from_quotes(
+        positions=positions,
+        cash=1000.0,
+        initial_capital=100000.0,
+        current_date="20260508",
+        rt_df=rt_df,
+    )
+
+    assert summary is not None
+    assert summary["quote_time"] == "09:08:12"

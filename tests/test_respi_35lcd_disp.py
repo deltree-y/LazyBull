@@ -1,4 +1,5 @@
 import importlib.util
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -2140,3 +2141,49 @@ def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
     assert state.days_to_rebalance == 3
     assert state.is_updating is False
     assert state.update_time == "11:30"
+
+
+def test_call_with_timeout_returns_fallback_on_timeout(monkeypatch):
+    module = _load_module()
+    messages = []
+
+    monkeypatch.setattr(
+        module,
+        "_emit_diag_once",
+        lambda key, message, stderr=True: messages.append((key, message)),
+    )
+
+    def _slow_call():
+        time.sleep(0.05)
+        return 1
+
+    result = module._call_with_timeout(
+        _slow_call,
+        timeout_seconds=0.001,
+        fallback=99,
+        timeout_diag_key="timeout-key",
+        timeout_diag_message="timeout-message",
+    )
+
+    assert result == 99
+    assert messages == [("timeout-key", "timeout-message")]
+
+
+def test_refresh_display_state_timeout_does_not_stuck_updating(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+
+    monkeypatch.setattr(module, "REALTIME_SNAPSHOT_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(module, "_calc_rebalance_status", lambda: ("20260510", 2))
+
+    def _slow_snapshot():
+        time.sleep(0.05)
+        return None
+
+    monkeypatch.setattr(module, "_fetch_realtime_holdings_snapshot", _slow_snapshot)
+
+    module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
+
+    assert state.is_updating is False
+    assert state.next_rebalance_date == "20260510"
+    assert state.days_to_rebalance == 2

@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.5] - 2026-05-08
+
+### 修复
+
+- **修复树莓派 3.5LCD 盘中刷新偶发长时间卡在“更新中”** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_call_with_timeout(...)` 超时保护，给实时快照抓取与盘中图构建增加超时上限
+  - 当外部实时接口阻塞时，本轮刷新快速回退到上次有效数据，不再把数据线程长期卡死
+  - `_refresh_display_state(...)` 增加 `finally` 兜底，确保 `state.is_updating` 一定会复位为 `False`
+
+- **修复顶部“更新:HH:MM”偶发明显滞后** ([scripts/paper_trade.py](scripts/paper_trade.py), [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_extract_latest_quote_time(...)`，从整批实时行情中提取最新 `TIME`
+  - `run_real` 与 `build_realtime_portfolio_summary_from_quotes(...)` 改为使用最新时间，不再使用首行时间
+
+### 测试
+
+- **新增实时刷新超时回退与时间戳回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py), [tests/test_paper_trade_realtime_summary.py](tests/test_paper_trade_realtime_summary.py)):
+  - 新增 `_call_with_timeout(...)` 超时回退测试
+  - 新增 `_refresh_display_state(...)` 在超时场景下不会卡住 `is_updating` 的测试
+  - 新增实时摘要 `quote_time` 取最新行情时间的测试
+
 ## [0.71.4] - 2026-05-07
 
 ### 修复

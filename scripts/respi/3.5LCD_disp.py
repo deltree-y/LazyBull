@@ -64,6 +64,8 @@ DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
 REALTIME_REFRESH_INTERVAL = 90  # 盘中摘要/排行/日内图刷新间隔（秒）
+REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 18.0  # 单次实时快照抓取超时（秒）
+REALTIME_INTRADAY_TIMEOUT_SECONDS = 12.0  # 单次盘中图构建超时（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
 CPU_USAGE_STALE_RESET_SECONDS = 10.0  # 息屏恢复后避免拿超长时间窗平均值
 MORNING_CLOSE_INTRADAY_GRACE_SECONDS = 120  # 午休前补齐 11:30 最后一格的宽限时长（秒）
@@ -924,6 +926,39 @@ def _emit_diag_once(key: str, message: str, stderr: bool = True) -> None:
             return
         _diag_once_keys.add(key)
     _emit_diag(message, stderr=stderr)
+
+
+def _call_with_timeout(
+    func,
+    timeout_seconds: float,
+    fallback=None,
+    timeout_diag_key: Optional[str] = None,
+    timeout_diag_message: Optional[str] = None,
+):
+    """在后台线程执行函数并施加超时，超时时快速返回 fallback。"""
+    result = {
+        "value": fallback,
+        "error": None,
+    }
+
+    def _runner() -> None:
+        try:
+            result["value"] = func()
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = exc
+
+    worker = threading.Thread(target=_runner, daemon=True)
+    worker.start()
+    worker.join(max(float(timeout_seconds), 0.01))
+
+    if worker.is_alive():
+        if timeout_diag_key and timeout_diag_message:
+            _emit_diag_once(timeout_diag_key, timeout_diag_message)
+        return fallback
+
+    if result["error"] is not None:
+        raise result["error"]
+    return result["value"]
 
 
 def _describe_framebuffer_candidates() -> str:
@@ -2883,79 +2918,91 @@ def _refresh_display_state(
     holdings_snapshot = None
     latest_update_time: Optional[str] = None
 
-    if refresh_realtime:
-        try:
-            holdings_snapshot = _fetch_realtime_holdings_snapshot()
-        except Exception:
-            holdings_snapshot = None
-
-        try:
-            summary = _build_realtime_portfolio_summary(holdings_snapshot)
-            if summary is not None:
-                with state.lock:
-                    state.summary = summary
-                latest_update_time = _format_quote_update_time(summary) or datetime.now().strftime("%H:%M")
-        except Exception:
-            pass
-
-        try:
-            with state.lock:
-                current_intraday_chart = state.intraday_chart_data
-            intraday_chart_data = _build_intraday_chart(
-                current_intraday_chart,
-                holdings_snapshot,
-            )
-            if intraday_chart_data is not None:
-                with state.lock:
-                    state.intraday_chart_data = intraday_chart_data
-                _save_intraday_chart(intraday_chart_data)
-        except Exception:
-            pass
-
-        try:
-            ranks = _build_stock_rankings(holdings_snapshot)
-            if ranks is not None:
-                with state.lock:
-                    state.stock_rankings = ranks
-        except Exception:
-            pass
-
-        try:
-            industry_panel_cycle = _build_industry_panel(holdings_snapshot, mode="cycle")
-            industry_panel_intraday = _build_industry_panel(holdings_snapshot, mode="intraday")
-            if industry_panel_cycle is not None or industry_panel_intraday is not None:
-                with state.lock:
-                    if industry_panel_cycle is not None:
-                        state.industry_panel = industry_panel_cycle
-                        state.industry_panel_cycle = industry_panel_cycle
-                    if industry_panel_intraday is not None:
-                        state.industry_panel_intraday = industry_panel_intraday
-        except Exception:
-            pass
-
     try:
-        next_rebalance_date, days_to_rebalance = _calc_rebalance_status()
-        with state.lock:
-            state.next_rebalance_date = next_rebalance_date
-            state.days_to_rebalance = days_to_rebalance
-    except Exception:
-        pass
+        if refresh_realtime:
+            try:
+                holdings_snapshot = _call_with_timeout(
+                    _fetch_realtime_holdings_snapshot,
+                    REALTIME_SNAPSHOT_TIMEOUT_SECONDS,
+                    fallback=None,
+                    timeout_diag_key="realtime_holdings_snapshot_timeout",
+                    timeout_diag_message=(
+                        "实时快照抓取超时，已跳过本轮刷新并保留上次有效数据显示"
+                    ),
+                )
+            except Exception:
+                holdings_snapshot = None
 
-    if refresh_cycle:
-        try:
-            cycle_chart_data = _fetch_cycle_chart_data()
-            if cycle_chart_data is not None:
+            try:
+                summary = _build_realtime_portfolio_summary(holdings_snapshot)
+                if summary is not None:
+                    with state.lock:
+                        state.summary = summary
+                    latest_update_time = _format_quote_update_time(summary) or datetime.now().strftime("%H:%M")
+            except Exception:
+                pass
+
+            try:
                 with state.lock:
-                    state.chart_data = cycle_chart_data
-                if latest_update_time is None:
-                    latest_update_time = datetime.now().strftime("%H:%M")
+                    current_intraday_chart = state.intraday_chart_data
+                intraday_chart_data = _call_with_timeout(
+                    lambda: _build_intraday_chart(current_intraday_chart, holdings_snapshot),
+                    REALTIME_INTRADAY_TIMEOUT_SECONDS,
+                    fallback=current_intraday_chart,
+                    timeout_diag_key="realtime_intraday_chart_timeout",
+                    timeout_diag_message="盘中图构建超时，已保留上次盘中图数据",
+                )
+                if intraday_chart_data is not None:
+                    with state.lock:
+                        state.intraday_chart_data = intraday_chart_data
+                    _save_intraday_chart(intraday_chart_data)
+            except Exception:
+                pass
+
+            try:
+                ranks = _build_stock_rankings(holdings_snapshot)
+                if ranks is not None:
+                    with state.lock:
+                        state.stock_rankings = ranks
+            except Exception:
+                pass
+
+            try:
+                industry_panel_cycle = _build_industry_panel(holdings_snapshot, mode="cycle")
+                industry_panel_intraday = _build_industry_panel(holdings_snapshot, mode="intraday")
+                if industry_panel_cycle is not None or industry_panel_intraday is not None:
+                    with state.lock:
+                        if industry_panel_cycle is not None:
+                            state.industry_panel = industry_panel_cycle
+                            state.industry_panel_cycle = industry_panel_cycle
+                        if industry_panel_intraday is not None:
+                            state.industry_panel_intraday = industry_panel_intraday
+            except Exception:
+                pass
+
+        try:
+            next_rebalance_date, days_to_rebalance = _calc_rebalance_status()
+            with state.lock:
+                state.next_rebalance_date = next_rebalance_date
+                state.days_to_rebalance = days_to_rebalance
         except Exception:
             pass
 
-    with state.lock:
-        if latest_update_time is not None:
-            state.update_time = latest_update_time
-        state.is_updating = False
+        if refresh_cycle:
+            try:
+                cycle_chart_data = _fetch_cycle_chart_data()
+                if cycle_chart_data is not None:
+                    with state.lock:
+                        state.chart_data = cycle_chart_data
+                    if latest_update_time is None:
+                        latest_update_time = datetime.now().strftime("%H:%M")
+            except Exception:
+                pass
+    finally:
+        with state.lock:
+            if latest_update_time is not None:
+                state.update_time = latest_update_time
+            state.is_updating = False
 
 
 # ---------- 共享显示状态 ----------

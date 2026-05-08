@@ -603,9 +603,8 @@ def run_real(args):
         logger.error("实时行情数据为空")
         return
 
-    # 构建价格字典，记录报价时间（realtime_quote 返回大写列名）
+    # 构建价格字典（realtime_quote 返回大写列名）
     prices: Dict[str, float] = {}
-    quote_time = ""
     for _, row in rt_df.iterrows():
         ts_code = str(row.get("TS_CODE", ""))
         price = row.get("PRICE", None)
@@ -614,10 +613,6 @@ def run_real(args):
                 prices[ts_code] = float(price)
             except (ValueError, TypeError):
                 pass
-        if not quote_time:
-            t = row.get("TIME", "")
-            if t:
-                quote_time = str(t)
 
     # 警告缺失行情的持仓
     missing = [c for c in positions if c not in prices]
@@ -625,6 +620,7 @@ def run_real(args):
         logger.warning(f"以下持仓未获取到实时行情: {', '.join(missing)}")
 
     current_date = pd.Timestamp.today().strftime("%Y%m%d")
+    quote_time = _extract_latest_quote_time(rt_df)
     display_time = quote_time or pd.Timestamp.now().strftime("%H:%M:%S")
 
     if not args.ret_profit_only:
@@ -664,6 +660,42 @@ def _resolve_realtime_quote_price(row, fallback_price: float) -> float:
     return fallback_price
 
 
+def _extract_latest_quote_time(rt_df: Optional[pd.DataFrame]) -> str:
+    """从实时行情表提取最新 TIME（HH:MM:SS）。"""
+    if rt_df is None or rt_df.empty:
+        return ""
+
+    latest_seconds = -1
+    latest_time = ""
+    for _, row in rt_df.iterrows():
+        quote_time_raw = str(row.get("TIME", "")).strip()
+        if not quote_time_raw:
+            continue
+
+        parts = quote_time_raw.split(":")
+        if len(parts) < 2:
+            continue
+
+        hour_text = parts[0].strip()
+        minute_text = parts[1].strip()
+        second_text = parts[2].strip() if len(parts) >= 3 else "0"
+        if not (hour_text.isdigit() and minute_text.isdigit() and second_text.isdigit()):
+            continue
+
+        hour = int(hour_text)
+        minute = int(minute_text)
+        second = int(second_text)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+            continue
+
+        total_seconds = hour * 3600 + minute * 60 + second
+        if total_seconds >= latest_seconds:
+            latest_seconds = total_seconds
+            latest_time = f"{hour:02d}:{minute:02d}:{second:02d}"
+
+    return latest_time
+
+
 def build_realtime_portfolio_summary_from_quotes(
     positions: Dict[str, object],
     cash: float,
@@ -692,17 +724,13 @@ def build_realtime_portfolio_summary_from_quotes(
         return None
 
     prices: Dict[str, float] = {}
-    quote_time = ""
+    quote_time = _extract_latest_quote_time(rt_df)
     for _, row in rt_df.iterrows():
         ts_code = str(row.get("TS_CODE", ""))
         if ts_code:
             pos = positions.get(ts_code)
             fallback_price = getattr(pos, "buy_price", 0.0) if pos is not None else 0.0
             prices[ts_code] = _resolve_realtime_quote_price(row, fallback_price)
-        if not quote_time:
-            t = row.get("TIME", "")
-            if t:
-                quote_time = str(t)
 
     market_value = 0.0
     total_float_pnl = 0.0

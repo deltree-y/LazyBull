@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.4)
+### 当前版本 (v0.71.5)
+
+**修复树莓派 3.5LCD 盘中刷新卡住与更新时间滞后问题** (v0.71.5):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增 `_call_with_timeout(...)`，为实时快照抓取与盘中图构建增加超时保护
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 的 `_refresh_display_state(...)` 增加 `finally` 兜底，保证刷新结束后 `is_updating` 必然复位
+- [scripts/paper_trade.py](scripts/paper_trade.py) 新增 `_extract_latest_quote_time(...)`，顶部更新时间改为使用整批行情里的最新 `TIME`
+- 修复效果：外部实时接口偶发阻塞时不再长期显示“更新中”，且“更新:HH:MM”不再因首行旧时间而明显滞后
 
 **公告型 PIT 因子新增 freshness 特征，不再把“过期”硬编码进数据层** (v0.71.4):
 - [src/lazybull/factors/announcement_utils.py](src/lazybull/factors/announcement_utils.py) 新增公告型公共 helper，统一处理 `ann_date` point-in-time 查询并输出 freshness
