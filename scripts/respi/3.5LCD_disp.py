@@ -70,7 +70,7 @@ def _resolve_realtime_snapshot_timeout_seconds() -> float:
             return float(str(raw).strip())
         except (TypeError, ValueError):
             pass
-    return 120.0
+    return 240.0
 
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
