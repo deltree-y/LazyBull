@@ -1046,8 +1046,59 @@ def test_fetch_realtime_holdings_snapshot_merges_index_quotes_into_single_reques
         module.SHENZHEN_INDEX_CODE,
     ]
     assert snapshot["quotes"] is not None
+    assert snapshot["quote_source"] == "T"
     assert round(snapshot["index_pct_map"][module.SHANGHAI_INDEX_CODE], 4) == 0.5
     assert round(snapshot["index_pct_map"][module.SHENZHEN_INDEX_CODE], 4) == -0.2
+
+
+def test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_tushare_empty(monkeypatch):
+    module = _load_module()
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_config(self):
+            return {"initial_capital": 100000.0}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                },
+                cash=5000.0,
+            )
+
+    class DummyClient:
+        def __init__(self, verbose=False):
+            pass
+
+        def get_realtime_quote(self, ts_codes_str):
+            return pd.DataFrame()
+
+    fallback_df = pd.DataFrame(
+        [
+            {
+                "TS_CODE": "000001.SZ",
+                "NAME": "平安银行",
+                "PRICE": 11.0,
+                "PRE_CLOSE": 10.0,
+                "TIME": "09:35:00",
+            }
+        ]
+    )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: fallback_df)
+
+    snapshot = module._fetch_realtime_holdings_snapshot()
+
+    assert snapshot is not None
+    assert snapshot["quotes"] is not None
+    assert snapshot["quote_source"] == "A"
+    assert len(snapshot["quotes"]) == 1
+    assert snapshot["quotes"].iloc[0]["TS_CODE"] == "000001.SZ"
 
 
 def test_fetch_realtime_index_pcts_prefers_snapshot_data():
@@ -2236,3 +2287,28 @@ def test_render_watchdog_resets_stuck_updating_state(monkeypatch):
     assert state.is_updating is False
     assert state.update_step == ""
     assert state.update_started_at == 0.0
+
+
+def test_render_header_shows_source_tag(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+    state.is_updating = True
+    state.update_step = "抓快照"
+    state.quote_source_tag = "A"
+
+    captured = []
+
+    def _capture_text(self, xy, text, fill=None, font=None, anchor=None, *args, **kwargs):
+        captured.append(str(text))
+        return None
+
+    monkeypatch.setattr(module.ImageDraw.ImageDraw, "text", _capture_text)
+    monkeypatch.setattr(module, "_write_fb", lambda img: None)
+    monkeypatch.setattr(module, "_refresh_system_usage_sample", lambda _state: (0.0, 0.0))
+    monkeypatch.setattr(module, "_draw_system_usage_bar", lambda draw, cpu, mem: None)
+    monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: None)
+    monkeypatch.setattr(module, "_draw_chart_panel", lambda draw, chart_data, cycle_label, industry_panel: None)
+
+    module._render(state)
+
+    assert "更:抓快照[A]" in captured

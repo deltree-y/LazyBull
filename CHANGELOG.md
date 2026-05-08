@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.9] - 2026-05-08
+
+### 优化
+
+- **顶部刷新状态新增实时数据源标记** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 更新中显示改为 `更:<步骤>[T/A]`，更新完成显示 `更新:HH:MM[T/A]`
+  - `T` 表示 TuShare 主源，`A` 表示 AKShare 回退源
+  - 快照结构新增 `quote_source` 字段并透传到渲染状态
+
+### 测试
+
+- **新增来源标记回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `test_render_header_shows_source_tag`
+  - 现有快照测试新增 `quote_source` 断言（主源 `T` / 回退 `A`）
+
+## [0.71.8] - 2026-05-08
+
+### 修复
+
+- **修复“抓快照可脱困但数据仍不刷新”的场景** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_fetch_realtime_quotes_akshare(...)` 作为快照回退数据源
+  - 当 `TushareClient.get_realtime_quote(...)` 异常或返回空表时，自动回退到 AKShare 持仓实时行情
+  - 保持字段口径统一为 `TS_CODE/NAME/PRICE/PRE_CLOSE/TIME`，确保摘要/排行链路可继续更新
+
+### 测试
+
+- **新增快照回退回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_tushare_empty`
+
 ## [0.71.7] - 2026-05-08
 
 ### 修复

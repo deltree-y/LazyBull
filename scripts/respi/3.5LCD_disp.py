@@ -36,6 +36,7 @@ from datetime import time as dt_time
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
 # ---------- 路径设置 ----------
@@ -2406,6 +2407,93 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
 # ---------- 个股盈亏排名 ----------
 
+def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame]:
+    """使用 AKShare 获取持仓实时行情，返回统一字段 DataFrame。"""
+    if not ts_codes:
+        return None
+
+    # 仅处理股票代码，过滤指数代码
+    stock_codes = {
+        str(ts_code).split('.')[0].strip()
+        for ts_code in ts_codes
+        if str(ts_code).strip() and str(ts_code).split('.')[0].strip().isdigit()
+    }
+    if not stock_codes:
+        return None
+
+    try:
+        import akshare as ak  # type: ignore
+    except Exception:
+        _emit_diag_once(
+            "akshare_holdings_import_error",
+            "AKShare导入失败，无法作为实时快照回退来源",
+            stderr=False,
+        )
+        return None
+
+    getter = getattr(ak, 'stock_zh_a_spot_em', None)
+    if getter is None:
+        getter = getattr(ak, 'stock_zh_a_spot', None)
+    if getter is None:
+        _emit_diag_once(
+            "akshare_holdings_getter_missing",
+            "AKShare缺少 stock_zh_a_spot_em/stock_zh_a_spot，无法回退持仓快照",
+            stderr=False,
+        )
+        return None
+
+    try:
+        df = getter()
+    except Exception as exc:
+        _emit_diag_once(
+            "akshare_holdings_getter_error",
+            f"AKShare持仓快照接口调用失败: {type(exc).__name__}: {exc}",
+        )
+        return None
+
+    if df is None or df.empty:
+        _emit_diag_once(
+            "akshare_holdings_empty",
+            "AKShare持仓快照返回空数据，无法回退实时行情",
+            stderr=False,
+        )
+        return None
+
+    code_col = next((c for c in ('代码', 'symbol', 'ts_code', 'TS_CODE') if c in df.columns), None)
+    name_col = next((c for c in ('名称', 'name', 'NAME') if c in df.columns), None)
+    price_col = next((c for c in ('最新价', '现价', 'price', 'PRICE') if c in df.columns), None)
+    pre_close_col = next((c for c in ('昨收', '昨收价', 'pre_close', 'PRE_CLOSE') if c in df.columns), None)
+    time_col = next((c for c in ('时间', '更新时间', 'time', 'TIME') if c in df.columns), None)
+
+    if code_col is None or price_col is None:
+        _emit_diag_once(
+            "akshare_holdings_columns_missing",
+            f"AKShare持仓快照缺少关键列，当前列: {list(df.columns)}",
+            stderr=False,
+        )
+        return None
+
+    now_time = datetime.now().strftime("%H:%M:%S")
+    rows = []
+    for _, row in df.iterrows():
+        code = str(row.get(code_col, '')).strip()
+        if code not in stock_codes:
+            continue
+        ts_code = f"{code}.SH" if code.startswith('6') else f"{code}.SZ"
+        rows.append(
+            {
+                'TS_CODE': ts_code,
+                'NAME': str(row.get(name_col, '')) if name_col else '',
+                'PRICE': row.get(price_col),
+                'PRE_CLOSE': row.get(pre_close_col) if pre_close_col else None,
+                'TIME': str(row.get(time_col, now_time)) if time_col else now_time,
+            }
+        )
+
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
+
 def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     """获取当前持仓实时行情快照。"""
     from src.lazybull.paper import PaperStorage
@@ -2444,6 +2532,7 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
         'initial_capital': initial_capital,
         'current_date': datetime.now().strftime("%Y%m%d"),
         'annualized_return_func': annualized_return_func,
+        'quote_source': '-',
         'index_pct_map': {},
         'quotes': None,
     }
@@ -2458,12 +2547,24 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
         client = TushareClient(verbose=False)
         rt_df = client.get_realtime_quote(ts_codes_str)
     except Exception:
-        return snapshot
+        rt_df = None
 
+    quote_source = 'T'
     if rt_df is None or rt_df.empty:
-        return snapshot
+        # TuShare 失败时回退 AKShare，优先保证屏幕数据可刷新
+        rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
+        if rt_df is not None and not rt_df.empty:
+            quote_source = 'A'
+            _emit_diag_once(
+                "realtime_snapshot_fallback_akshare",
+                "实时快照已回退到 AKShare 数据源",
+                stderr=False,
+            )
+        else:
+            return snapshot
 
     snapshot['quotes'] = rt_df
+    snapshot['quote_source'] = quote_source
     snapshot['index_pct_map'] = _extract_index_pct_map_from_quote_df(rt_df)
     return snapshot
 
@@ -2933,6 +3034,10 @@ def _refresh_display_state(
                         "实时快照抓取超时，已跳过本轮刷新并保留上次有效数据显示"
                     ),
                 )
+                if isinstance(holdings_snapshot, dict):
+                    source = str(holdings_snapshot.get('quote_source', '')).strip().upper()
+                    with state.lock:
+                        state.quote_source_tag = source if source in ('T', 'A') else '-'
             except Exception:
                 holdings_snapshot = None
 
@@ -3033,6 +3138,7 @@ class DisplayState:
         self.is_updating: bool = False
         self.update_step: str = ""
         self.update_started_at: float = 0.0
+        self.quote_source_tag: str = "-"
         self.next_rebalance_date: Optional[str] = None
         self.days_to_rebalance: Optional[int] = None
         self.chart_data: Optional[dict] = None
@@ -3096,6 +3202,7 @@ def _render(state: DisplayState) -> None:
         is_updating = getattr(state, 'is_updating', False)
         update_step = str(getattr(state, 'update_step', '') or '')
         update_started_at = float(getattr(state, 'update_started_at', 0.0) or 0.0)
+        quote_source_tag = str(getattr(state, 'quote_source_tag', '-') or '-').upper()
         next_rebalance_date = getattr(state, 'next_rebalance_date', None)
         days_to_rebalance = state.days_to_rebalance
         cycle_chart_data = state.chart_data
@@ -3142,7 +3249,12 @@ def _render(state: DisplayState) -> None:
     now = datetime.now()
     chart_data = _select_chart_data(cycle_chart_data, intraday_chart_data, now)
     time_str = _format_display_time(now)
-    header_mid = f"更:{update_step[:5] or '刷新中'}" if is_updating else f"更新:{last_update_time}"
+    source_suffix = f"[{quote_source_tag}]" if quote_source_tag in ('T', 'A') else ""
+    header_mid = (
+        f"更:{update_step[:5] or '刷新中'}{source_suffix}"
+        if is_updating
+        else f"更新:{last_update_time}{source_suffix}"
+    )
     header_right = _format_rebalance_status(next_rebalance_date, days_to_rebalance)
 
     time_bbox = draw.textbbox((0, 0), time_str, font=font_header_time)

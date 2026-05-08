@@ -28,7 +28,19 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.7)
+### 当前版本 (v0.71.9)
+
+**顶部刷新状态支持显示实时数据源标记 `[T]/[A]`** (v0.71.9):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 更新中显示 `更:<步骤>[T/A]`，更新完成显示 `更新:HH:MM[T/A]`
+- `T` 表示 TuShare 主源，`A` 表示 AKShare 回退源
+- 快照结构新增 `quote_source` 字段并透传到渲染状态
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 新增来源标记显示与来源断言测试
+
+**修复“抓快照可恢复但数据不更新”问题（新增数据源回退）** (v0.71.8):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增 `_fetch_realtime_quotes_akshare(...)`
+- 当 TuShare 实时快照异常或空数据时，自动回退 AKShare 持仓行情，继续驱动摘要/排行更新
+- 回退数据统一映射到 `TS_CODE/NAME/PRICE/PRE_CLOSE/TIME`，不改变后续显示与计算逻辑
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 新增快照回退回归测试
 
 **修复树莓派 3.5LCD“更:抓快照”长时间卡住问题** (v0.71.7):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 将盘中刷新间隔恢复为 `90` 秒（此前被改成 `120` 秒）
