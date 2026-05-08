@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.13] - 2026-05-08
+
+### 修复
+
+- **3.5LCD 抓数阶段支持临时绕开代理，结束后自动恢复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_fetch_network_context()`：进入抓数调用前临时清空代理变量并设置 `NO_PROXY=*`，调用结束立即恢复原代理环境
+  - 覆盖 AKShare 持仓快照、AKShare 指数现货、TuShare 实时兜底、TuShare `index_daily/daily` 周期图抓数链路
+  - 解决代理握手/读取超时导致的实时快照与周期图抓取失败问题
+
+### 配置
+
+- 新增环境变量 `LAZYBULL_FETCH_BYPASS_PROXY`（默认 `1`）:
+  - `1/true/on`：抓数阶段绕过代理（默认）
+  - `0/false/off`：保持原有代理行为
+
 ## [0.71.12] - 2026-05-08
 
 ### 修复

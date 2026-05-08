@@ -30,6 +30,7 @@ import json
 import tempfile
 import os
 import copy
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
 from datetime import time as dt_time
@@ -148,10 +149,53 @@ COLOR_USAGE_BAR_HIGH = (225, 95, 95)
 
 _diag_lock = threading.Lock()
 _diag_once_keys: set[str] = set()
+_proxy_guard_lock = threading.RLock()
 _industry_mapping_cache_lock = threading.Lock()
 _industry_mapping_cache: dict[str, dict[str, str]] = {}
 _industry_levels_cache_lock = threading.Lock()
 _industry_levels_cache: Optional[dict[str, tuple[str, str, str]]] = None
+
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+)
+
+
+def _should_bypass_proxy_for_fetch() -> bool:
+    """判断抓数阶段是否临时禁用代理。"""
+    raw = str(os.getenv("LAZYBULL_FETCH_BYPASS_PROXY", "1")).strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
+@contextmanager
+def _fetch_network_context():
+    """抓数专用网络上下文：按配置临时禁用代理，退出时恢复。"""
+    if not _should_bypass_proxy_for_fetch():
+        yield
+        return
+
+    with _proxy_guard_lock:
+        backup = {k: os.environ.get(k) for k in _PROXY_ENV_KEYS}
+        try:
+            for key in _PROXY_ENV_KEYS:
+                os.environ.pop(key, None)
+            # requests/urllib 在 NO_PROXY=* 下会直接绕过代理
+            os.environ["NO_PROXY"] = "*"
+            os.environ["no_proxy"] = "*"
+            yield
+        finally:
+            for key in _PROXY_ENV_KEYS:
+                value = backup.get(key)
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 # ---------- 字体加载（带缓存）----------
@@ -2303,24 +2347,25 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         return cached_chart_data
 
     try:
-        client = TushareClient(verbose=False)
+        with _fetch_network_context():
+            client = TushareClient(verbose=False)
 
-        # 上证与深证指数日线（以此确定交易日序列）
-        shanghai_df = client.query(
-            "index_daily", ts_code=SHANGHAI_INDEX_CODE,
-            start_date=start_date, end_date=today_str,
-            fields="trade_date,close"
-        )
-        shenzhen_df = client.query(
-            "index_daily", ts_code=SHENZHEN_INDEX_CODE,
-            start_date=start_date, end_date=today_str,
-            fields="trade_date,close"
-        )
-        csi800_df = client.query(
-            "index_daily", ts_code=CSI800_INDEX_CODE,
-            start_date=start_date, end_date=today_str,
-            fields="trade_date,close"
-        )
+            # 上证与深证指数日线（以此确定交易日序列）
+            shanghai_df = client.query(
+                "index_daily", ts_code=SHANGHAI_INDEX_CODE,
+                start_date=start_date, end_date=today_str,
+                fields="trade_date,close"
+            )
+            shenzhen_df = client.query(
+                "index_daily", ts_code=SHENZHEN_INDEX_CODE,
+                start_date=start_date, end_date=today_str,
+                fields="trade_date,close"
+            )
+            csi800_df = client.query(
+                "index_daily", ts_code=CSI800_INDEX_CODE,
+                start_date=start_date, end_date=today_str,
+                fields="trade_date,close"
+            )
         if (
             shanghai_df is None
             or shanghai_df.empty
@@ -2355,11 +2400,12 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         # 逐股获取日线收盘价
         stock_closes: dict[str, dict[str, float]] = {}
         for ts_code in positions:
-            df = client.query(
-                "daily", ts_code=ts_code,
-                start_date=start_date, end_date=today_str,
-                fields="trade_date,close"
-            )
+            with _fetch_network_context():
+                df = client.query(
+                    "daily", ts_code=ts_code,
+                    start_date=start_date, end_date=today_str,
+                    fields="trade_date,close"
+                )
             if df is not None and not df.empty:
                 stock_closes[ts_code] = dict(zip(df['trade_date'], df['close']))
     except Exception:
@@ -2443,7 +2489,8 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
         return None
 
     try:
-        df = getter()
+        with _fetch_network_context():
+            df = getter()
     except Exception as exc:
         _emit_diag_once(
             "akshare_holdings_getter_error",
@@ -2581,8 +2628,9 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
         try:
             from src.lazybull.data.tushare_client import TushareClient
 
-            client = TushareClient(verbose=False)
-            rt_df = client.get_realtime_quote(ts_codes_str)
+            with _fetch_network_context():
+                client = TushareClient(verbose=False)
+                rt_df = client.get_realtime_quote(ts_codes_str)
         except Exception:
             rt_df = None
 
@@ -2810,7 +2858,8 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
             )
         else:
             try:
-                df = getter()
+                with _fetch_network_context():
+                    df = getter()
                 for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
                     if code in pct_map:
                         continue
@@ -2868,7 +2917,8 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
         return None
 
     try:
-        df = getter_sina()
+        with _fetch_network_context():
+            df = getter_sina()
     except Exception as exc:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_sina_error",

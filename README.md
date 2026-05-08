@@ -28,7 +28,14 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.12)
+### 当前版本 (v0.71.13)
+
+**3.5LCD 抓数阶段临时绕开代理（抓完即恢复）** (v0.71.13):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 新增 `_fetch_network_context()`，仅在数据抓取调用期间禁用代理
+- 覆盖 AKShare 实时快照/指数与 TuShare 实时/日线抓数，降低代理超时对屏幕刷新的影响
+- 支持 `LAZYBULL_FETCH_BYPASS_PROXY` 开关（默认开启绕过）
+
+### 当前版本历史 (v0.71.12)
 
 **树莓派实时快照改为 AKShare 主源（TuShare 兜底）** (v0.71.12):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 的 `_fetch_realtime_holdings_snapshot` 调整为先拉 AKShare 实时行情

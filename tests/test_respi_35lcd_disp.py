@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,6 +20,36 @@ def _load_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_fetch_network_context_temporarily_clears_proxy_env(monkeypatch):
+    module = _load_module()
+
+    monkeypatch.setenv("LAZYBULL_FETCH_BYPASS_PROXY", "1")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.local:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.local:8080")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+
+    with module._fetch_network_context():
+        assert os.environ.get("HTTP_PROXY") is None
+        assert os.environ.get("HTTPS_PROXY") is None
+        assert os.environ.get("NO_PROXY") == "*"
+
+    assert os.environ.get("HTTP_PROXY") == "http://proxy.local:8080"
+    assert os.environ.get("HTTPS_PROXY") == "http://proxy.local:8080"
+    assert os.environ.get("NO_PROXY") is None
+
+
+def test_fetch_network_context_respects_disable_switch(monkeypatch):
+    module = _load_module()
+
+    monkeypatch.setenv("LAZYBULL_FETCH_BYPASS_PROXY", "0")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.local:8080")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+
+    with module._fetch_network_context():
+        assert os.environ.get("HTTP_PROXY") == "http://proxy.local:8080"
+        assert os.environ.get("NO_PROXY") == "127.0.0.1,localhost"
 
 
 def test_format_display_time_uses_new_chinese_style():
