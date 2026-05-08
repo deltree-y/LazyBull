@@ -28,7 +28,14 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.11)
+### 当前版本 (v0.71.12)
+
+**树莓派实时快照改为 AKShare 主源（TuShare 兜底）** (v0.71.12):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 的 `_fetch_realtime_holdings_snapshot` 调整为先拉 AKShare 实时行情
+- AKShare 不可用或空数据时才回退 TuShare，避免 TuShare 实时接口能力变化导致上半区长期空白
+- [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 已更新为 `A` 主 `T` 备链路测试
+
+### 当前版本历史 (v0.71.11)
 
 **修复树莓派启动后数据全空（持仓摘要不显示）** (v0.71.11):
 - `_build_realtime_portfolio_summary` 在函数内部用 `__file__` 推导 `scripts/` 绝对路径并插入 `sys.path`，修复非项目根目录运行时 `from paper_trade import ...` 静默失败、summary 始终为 None 的问题

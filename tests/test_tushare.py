@@ -23,11 +23,11 @@ def main():
     """主函数"""
     get_config()  # 确保配置已加载
     client = TushareClient()
-    #df = client.get_realtime_quote("600036.SH")
+    df = client.get_realtime_quote("600036.SH, 002915.SZ, 002543.SZ, 603071.SH")
     #df = client.pro.query('cyq_perf', trade_date='20251231')
     #df = client.pro.query('stk_holdernumber', start_date='20250101', end_date='20251231')
     #df = client.pro.query('fund_portfolio', period='20251231')
-    df = client.pro.query('express_vip', ann_date='20260430')
+    #df = client.pro.query('express_vip', ann_date='20260430')
     print(df)
 
 if __name__ == "__main__":

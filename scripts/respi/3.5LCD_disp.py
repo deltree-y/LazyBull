@@ -2497,7 +2497,6 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
 def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     """获取当前持仓实时行情快照。"""
     from src.lazybull.paper import PaperStorage
-    from src.lazybull.data.tushare_client import TushareClient
 
     paper_root = get_paper_root()
     paper_storage = PaperStorage(
@@ -2573,27 +2572,29 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
         return snapshot
 
     ts_codes = list(positions.keys()) + [SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE]
-    ts_codes_str = ','.join(dict.fromkeys(ts_codes))
+    rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
+    quote_source = 'A'
 
-    try:
-        client = TushareClient(verbose=False)
-        rt_df = client.get_realtime_quote(ts_codes_str)
-    except Exception:
-        rt_df = None
-
-    quote_source = 'T'
     if rt_df is None or rt_df.empty:
-        # TuShare 失败时回退 AKShare，优先保证屏幕数据可刷新
-        rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
-        if rt_df is not None and not rt_df.empty:
-            quote_source = 'A'
-            _emit_diag_once(
-                "realtime_snapshot_fallback_akshare",
-                "实时快照已回退到 AKShare 数据源",
-                stderr=False,
-            )
-        else:
+        # AKShare 不可用时兜底 TuShare，避免盘中全空。
+        ts_codes_str = ','.join(dict.fromkeys(ts_codes))
+        try:
+            from src.lazybull.data.tushare_client import TushareClient
+
+            client = TushareClient(verbose=False)
+            rt_df = client.get_realtime_quote(ts_codes_str)
+        except Exception:
+            rt_df = None
+
+        if rt_df is None or rt_df.empty:
             return snapshot
+
+        quote_source = 'T'
+        _emit_diag_once(
+            "realtime_snapshot_fallback_tushare",
+            "实时快照已回退到 TuShare 数据源",
+            stderr=False,
+        )
 
     snapshot['quotes'] = rt_df
     snapshot['quote_source'] = quote_source

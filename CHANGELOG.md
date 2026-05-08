@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.12] - 2026-05-08
+
+### 修复
+
+- **实时持仓快照改为 AKShare 主源，TuShare 兜底** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - `_fetch_realtime_holdings_snapshot()` 调整为先走 AKShare `stock_zh_a_spot_em/stock_zh_a_spot`
+  - 当 AKShare 异常或空结果时，再回退 TuShare `get_realtime_quote`
+  - 解决 TuShare 实时接口能力变化后，屏幕上半区长期“等待数据/暂无排名/暂无行业统计数据”的问题
+
+### 测试
+
+- **更新实时快照链路测试为 A 主 T 备语义** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `test_fetch_realtime_holdings_snapshot_prefers_akshare_over_tushare`
+  - 新增/调整 TuShare 兜底批量指数请求与年化用例，覆盖 AKShare 不可用场景
+
 ## [0.71.11] - 2026-05-08
 
 ### 修复
