@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.11] - 2026-05-08
+
+### 修复
+
+- **修复 batches 对比表“跨时间段稳定性”遗漏最新批次的问题** ([scripts/compare_walk_forward.py](scripts/compare_walk_forward.py)):
+  - `build_period_stability_table(...)` 的分组逻辑将 `split_count/final_date` 视为时间段维度，不再当作参数维度参与分组
+  - 避免同一批次不同时间段因 `final_date` 不同被拆成单条分组后被 `len(group) <= 1` 过滤
+  - 真实数据验证：`wf_comparison_batches.xlsx` 中“跨时间段稳定性”行数由 170 恢复到 172
+
+### 测试
+
+- **新增稳定性分组回归测试** ([tests/test_ma250_observability.py](tests/test_ma250_observability.py)):
+  - 新增 `test_build_period_stability_table_ignores_split_count_and_final_date`
+  - 验证不同时间段 `split_count/final_date` 不同的情况下，仍能正确聚合到同一参数组
+
 ## [0.71.10] - 2026-05-08
 
 ### 修复

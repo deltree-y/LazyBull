@@ -697,6 +697,62 @@ class TestCompareWalkForwardPeriodStability:
             "0101:wf_20260430_115053_new002 | 0209:wf_20260430_114958_run003"
         )
 
+    def test_build_period_stability_table_ignores_split_count_and_final_date(self):
+        all_df = pd.DataFrame(
+            [
+                {
+                    "wf_run_id": "wf_20260508_120000_run001",
+                    "batch_run_id": "wf_batch_20260508_001",
+                    "batch_period_label": "0101",
+                    "split_count": "14",
+                    "final_date": "20251231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "bt_total_return": 0.12,
+                    "daily_rankic_ir": 0.50,
+                },
+                {
+                    "wf_run_id": "wf_20260508_121500_run002",
+                    "batch_run_id": "wf_batch_20260508_001",
+                    "batch_period_label": "0209",
+                    "split_count": "13",
+                    "final_date": "20260209",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "bt_total_return": 0.10,
+                    "daily_rankic_ir": 0.45,
+                },
+            ]
+        )
+
+        comp_df = build_comparison_table(all_df)
+        comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+
+        result = build_period_stability_table(comp_df)
+
+        assert len(result) == 1
+        assert result.loc[0, "时间段数"] == 2
+        assert result.loc[0, "时间段列表"] == "0101 | 0209"
+        assert result.loc[0, "运行ID列表"] == (
+            "0101:wf_20260508_120000_run001 | 0209:wf_20260508_121500_run002"
+        )
+
 
 class TestCompareWalkForwardAutoDiscovery:
     """测试 compare 脚本无参时自动扫描 raw 与 batches。"""

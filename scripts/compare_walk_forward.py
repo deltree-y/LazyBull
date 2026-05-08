@@ -1044,6 +1044,8 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         COL_NAMES["wf_start_date"],
         COL_NAMES["wf_end_date"],
         COL_NAMES["batch_period_label"],
+        COL_NAMES["split_count"],
+        COL_NAMES["final_date"],
     }
     metric_cols = {
         "综合得分",
