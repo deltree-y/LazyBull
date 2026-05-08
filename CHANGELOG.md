@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.6] - 2026-05-08
+
+### 修复
+
+- **优化树莓派 3.5LCD 顶部刷新状态可观测性** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 顶部中间状态从固定“更新中...”改为显示实时步骤名，步骤名限制为最多 5 个汉字
+  - 刷新链路按阶段写入短步骤名：`抓快照/算摘要/盘中图/算排行/算行业/算调仓/抓周期`
+  - 刷新结束统一清空步骤名，避免界面残留过期阶段信息
+
+- **缩小顶部元信息字体，适配小屏状态栏空间** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - `HEADER_META_FONT_SIZE` 从 `15` 调整为 `13`
+
+### 测试
+
+- **新增步骤名显示与清理回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `test_render_header_uses_short_update_step`
+  - 新增 `test_refresh_display_state_clears_update_step_after_done`
+
 ## [0.71.5] - 2026-05-08
 
 ### 修复

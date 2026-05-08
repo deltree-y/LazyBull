@@ -2187,3 +2187,44 @@ def test_refresh_display_state_timeout_does_not_stuck_updating(monkeypatch):
     assert state.is_updating is False
     assert state.next_rebalance_date == "20260510"
     assert state.days_to_rebalance == 2
+
+
+def test_render_header_uses_short_update_step(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+    state.is_updating = True
+    state.update_step = "抓快照阶段很长"
+
+    captured = []
+
+    def _capture_text(self, xy, text, fill=None, font=None, anchor=None, *args, **kwargs):
+        captured.append(str(text))
+        return None
+
+    monkeypatch.setattr(module.ImageDraw.ImageDraw, "text", _capture_text)
+    monkeypatch.setattr(module, "_write_fb", lambda img: None)
+    monkeypatch.setattr(module, "_refresh_system_usage_sample", lambda _state: (0.0, 0.0))
+    monkeypatch.setattr(module, "_draw_system_usage_bar", lambda draw, cpu, mem: None)
+    monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: None)
+    monkeypatch.setattr(module, "_draw_chart_panel", lambda draw, chart_data, cycle_label, industry_panel: None)
+
+    module._render(state)
+
+    assert "更:抓快照阶段" in captured
+
+
+def test_refresh_display_state_clears_update_step_after_done(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+
+    monkeypatch.setattr(module, "_fetch_realtime_holdings_snapshot", lambda: None)
+    monkeypatch.setattr(module, "_build_realtime_portfolio_summary", lambda snapshot: None)
+    monkeypatch.setattr(module, "_build_intraday_chart", lambda chart_data, snapshot: chart_data)
+    monkeypatch.setattr(module, "_build_stock_rankings", lambda snapshot: None)
+    monkeypatch.setattr(module, "_build_industry_panel", lambda snapshot, mode="cycle": None)
+    monkeypatch.setattr(module, "_calc_rebalance_status", lambda: ("20260510", 2))
+
+    module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
+
+    assert state.is_updating is False
+    assert state.update_step == ""

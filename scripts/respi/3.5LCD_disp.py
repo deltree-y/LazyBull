@@ -63,7 +63,7 @@ from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backli
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 90  # 盘中摘要/排行/日内图刷新间隔（秒）
+REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒）
 REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 18.0  # 单次实时快照抓取超时（秒）
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 12.0  # 单次盘中图构建超时（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
@@ -2914,6 +2914,7 @@ def _refresh_display_state(
     """按需刷新共享显示状态。"""
     with state.lock:
         state.is_updating = refresh_realtime or refresh_cycle
+        state.update_step = "刷新中"
 
     holdings_snapshot = None
     latest_update_time: Optional[str] = None
@@ -2921,6 +2922,8 @@ def _refresh_display_state(
     try:
         if refresh_realtime:
             try:
+                with state.lock:
+                    state.update_step = "抓快照"
                 holdings_snapshot = _call_with_timeout(
                     _fetch_realtime_holdings_snapshot,
                     REALTIME_SNAPSHOT_TIMEOUT_SECONDS,
@@ -2934,6 +2937,8 @@ def _refresh_display_state(
                 holdings_snapshot = None
 
             try:
+                with state.lock:
+                    state.update_step = "算摘要"
                 summary = _build_realtime_portfolio_summary(holdings_snapshot)
                 if summary is not None:
                     with state.lock:
@@ -2945,6 +2950,7 @@ def _refresh_display_state(
             try:
                 with state.lock:
                     current_intraday_chart = state.intraday_chart_data
+                    state.update_step = "盘中图"
                 intraday_chart_data = _call_with_timeout(
                     lambda: _build_intraday_chart(current_intraday_chart, holdings_snapshot),
                     REALTIME_INTRADAY_TIMEOUT_SECONDS,
@@ -2960,6 +2966,8 @@ def _refresh_display_state(
                 pass
 
             try:
+                with state.lock:
+                    state.update_step = "算排行"
                 ranks = _build_stock_rankings(holdings_snapshot)
                 if ranks is not None:
                     with state.lock:
@@ -2968,6 +2976,8 @@ def _refresh_display_state(
                 pass
 
             try:
+                with state.lock:
+                    state.update_step = "算行业"
                 industry_panel_cycle = _build_industry_panel(holdings_snapshot, mode="cycle")
                 industry_panel_intraday = _build_industry_panel(holdings_snapshot, mode="intraday")
                 if industry_panel_cycle is not None or industry_panel_intraday is not None:
@@ -2981,6 +2991,8 @@ def _refresh_display_state(
                 pass
 
         try:
+            with state.lock:
+                state.update_step = "算调仓"
             next_rebalance_date, days_to_rebalance = _calc_rebalance_status()
             with state.lock:
                 state.next_rebalance_date = next_rebalance_date
@@ -2990,6 +3002,8 @@ def _refresh_display_state(
 
         if refresh_cycle:
             try:
+                with state.lock:
+                    state.update_step = "抓周期"
                 cycle_chart_data = _fetch_cycle_chart_data()
                 if cycle_chart_data is not None:
                     with state.lock:
@@ -3002,6 +3016,7 @@ def _refresh_display_state(
         with state.lock:
             if latest_update_time is not None:
                 state.update_time = latest_update_time
+            state.update_step = ""
             state.is_updating = False
 
 
@@ -3015,6 +3030,7 @@ class DisplayState:
         self.summary: Optional[dict] = None
         self.update_time: str = "--:--"
         self.is_updating: bool = False
+        self.update_step: str = ""
         self.next_rebalance_date: Optional[str] = None
         self.days_to_rebalance: Optional[int] = None
         self.chart_data: Optional[dict] = None
@@ -3038,7 +3054,7 @@ class DisplayState:
 # 布局常量
 HEADER_H = 34          # 顶栏高度（含时间、更新、调仓）
 HEADER_TIME_FONT_SIZE = 15
-HEADER_META_FONT_SIZE = 15
+HEADER_META_FONT_SIZE = 13
 USAGE_BAR_H = 5
 USAGE_BAR_MARGIN_X = 8
 USAGE_BAR_CAP_W = 4
@@ -3076,6 +3092,7 @@ def _render(state: DisplayState) -> None:
         summary = state.summary
         last_update_time = state.update_time
         is_updating = getattr(state, 'is_updating', False)
+        update_step = str(getattr(state, 'update_step', '') or '')
         next_rebalance_date = getattr(state, 'next_rebalance_date', None)
         days_to_rebalance = state.days_to_rebalance
         cycle_chart_data = state.chart_data
@@ -3102,7 +3119,7 @@ def _render(state: DisplayState) -> None:
     now = datetime.now()
     chart_data = _select_chart_data(cycle_chart_data, intraday_chart_data, now)
     time_str = _format_display_time(now)
-    header_mid = "更新中..." if is_updating else f"更新:{last_update_time}"
+    header_mid = f"更:{update_step[:5] or '刷新中'}" if is_updating else f"更新:{last_update_time}"
     header_right = _format_rebalance_status(next_rebalance_date, days_to_rebalance)
 
     time_bbox = draw.textbbox((0, 0), time_str, font=font_header_time)
