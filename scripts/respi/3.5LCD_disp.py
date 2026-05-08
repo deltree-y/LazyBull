@@ -87,6 +87,8 @@ except (TypeError, ValueError):
 if REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS < 60.0:
     REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = 60.0
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 12.0  # 单次盘中图构建超时（秒）
+EFINANCE_RETRY_COUNT = 1  # efinance 失败后的重试次数（总尝试次数=1+重试次数）
+EFINANCE_RETRY_MIN_INTERVAL_SECONDS = 2.0  # efinance 重试最小间隔（秒）
 UPDATE_STUCK_RESET_SECONDS = 30.0  # 顶栏更新状态强制脱困阈值（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
 CPU_USAGE_STALE_RESET_SECONDS = 10.0  # 息屏恢复后避免拿超长时间窗平均值
@@ -2572,6 +2574,34 @@ def _normalize_ts_code_key(ts_code: object) -> str:
     return text
 
 
+def _extract_stock_code6(value: object) -> str:
+    """从多种代码口径中提取 6 位股票代码（如 sh600000、1.600000、600000.SH）。"""
+    text = str(value or '').strip().upper()
+    if not text:
+        return ''
+
+    if text.startswith(('SH', 'SZ', 'BJ')) and len(text) >= 8:
+        candidate = text[2:8]
+        if candidate.isdigit():
+            return candidate
+
+    if '.' in text:
+        parts = [part.strip() for part in text.split('.') if part.strip()]
+        for part in reversed(parts):
+            if len(part) == 6 and part.isdigit():
+                return part
+
+    if len(text) == 6 and text.isdigit():
+        return text
+
+    if len(text) > 6:
+        tail = text[-6:]
+        if tail.isdigit():
+            return tail
+
+    return ''
+
+
 def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFrame]:
     """使用 efinance 获取持仓实时行情，返回统一字段 DataFrame。"""
     if not ts_codes:
@@ -2595,14 +2625,33 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
         )
         return None
 
-    try:
-        with _fetch_network_context():
-            df = ef.stock.get_latest_quote(sorted(stock_codes))
-    except Exception as exc:
-        _emit_diag(
-            "E快照失败: "
-            f"{type(exc).__name__}: {exc} | proxy_bypass={_should_bypass_proxy_for_fetch()}"
-        )
+    df = None
+    last_exc: Optional[Exception] = None
+    total_attempts = EFINANCE_RETRY_COUNT + 1
+    for attempt_idx in range(total_attempts):
+        attempt_no = attempt_idx + 1
+        try:
+            with _fetch_network_context():
+                df = ef.stock.get_latest_quote(sorted(stock_codes))
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            _emit_diag(
+                "E快照失败: "
+                f"attempt={attempt_no}/{total_attempts}, {type(exc).__name__}: {exc} | "
+                f"proxy_bypass={_should_bypass_proxy_for_fetch()}"
+            )
+            if attempt_idx >= EFINANCE_RETRY_COUNT:
+                return None
+            retry_wait = max(2.0, float(EFINANCE_RETRY_MIN_INTERVAL_SECONDS))
+            _trace_diag(
+                "E快照重试等待: "
+                f"wait={retry_wait:.1f}s, next_attempt={attempt_no + 1}/{total_attempts}"
+            )
+            time.sleep(retry_wait)
+
+    if last_exc is not None:
         return None
 
     if df is None or df.empty:
@@ -2751,11 +2800,20 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
 
     now_time = datetime.now().strftime("%H:%M:%S")
     rows = []
+    unmatched_samples: list[str] = []
+    raw_code_samples: list[str] = []
     for _, row in df.iterrows():
-        code = str(row.get(code_col, '')).strip()
+        raw_code = str(row.get(code_col, '')).strip()
+        code = _extract_stock_code6(raw_code)
+        if raw_code and len(raw_code_samples) < 5:
+            raw_code_samples.append(raw_code)
         if code not in stock_codes:
+            if raw_code and len(unmatched_samples) < 5:
+                unmatched_samples.append(f"{raw_code}->{code or '-'}")
             continue
-        ts_code = f"{code}.SH" if code.startswith('6') else f"{code}.SZ"
+        ts_code = _normalize_ts_code_key(code)
+        if not ts_code:
+            continue
         rows.append(
             {
                 'TS_CODE': ts_code,
@@ -2769,7 +2827,9 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
     if not rows:
         _emit_diag(
             "AK快照为空: "
-            f"req_stocks={len(stock_codes)}，接口返回行命中0，可能是代码映射或接口返回口径变化"
+            f"req_stocks={len(stock_codes)}，接口返回行命中0，可能是代码映射或接口返回口径变化 | "
+            f"code_col={code_col}, sample_raw_codes={raw_code_samples}, "
+            f"sample_unmatched={unmatched_samples}, sample_req={sorted(stock_codes)[:5]}"
         )
         return None
     _trace_diag(

@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1199,6 +1200,80 @@ def test_fetch_realtime_holdings_snapshot_returns_empty_when_efinance_and_akshar
     assert snapshot is not None
     assert snapshot["quotes"] is None
     assert snapshot["quote_source"] == "-"
+
+
+def test_fetch_realtime_quotes_akshare_matches_symbol_prefixed_codes(monkeypatch):
+    module = _load_module()
+
+    class DummyAK:
+        @staticmethod
+        def stock_zh_a_spot():
+            return pd.DataFrame(
+                [
+                    {
+                        "symbol": "sz000001",
+                        "名称": "平安银行",
+                        "最新价": 11.0,
+                        "昨收": 10.0,
+                        "时间": "09:35:00",
+                    },
+                    {
+                        "symbol": "sh600746",
+                        "名称": "江苏索普",
+                        "最新价": 8.0,
+                        "昨收": 7.8,
+                        "时间": "09:35:00",
+                    },
+                ]
+            )
+
+    monkeypatch.setitem(sys.modules, "akshare", DummyAK)
+
+    quotes = module._fetch_realtime_quotes_akshare(["000001.SZ", "600746.SH"])
+
+    assert quotes is not None
+    assert len(quotes) == 2
+    assert set(quotes["TS_CODE"].tolist()) == {"000001.SZ", "600746.SH"}
+
+
+def test_fetch_realtime_quotes_efinance_retry_waits_at_least_two_seconds(monkeypatch):
+    module = _load_module()
+
+    class DummyStockApi:
+        call_count = 0
+
+        @classmethod
+        def get_latest_quote(cls, codes):
+            cls.call_count += 1
+            if cls.call_count == 1:
+                raise ConnectionError("temporary efinance failure")
+            return pd.DataFrame(
+                [
+                    {
+                        "代码": "000001",
+                        "名称": "平安银行",
+                        "最新价": 11.0,
+                        "昨收": 10.0,
+                        "更新时间": "09:35:00",
+                    }
+                ]
+            )
+
+    class DummyEF:
+        stock = DummyStockApi
+
+    sleep_calls = []
+
+    monkeypatch.setitem(sys.modules, "efinance", DummyEF)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    quotes = module._fetch_realtime_quotes_efinance(["000001.SZ"])
+
+    assert quotes is not None
+    assert len(quotes) == 1
+    assert DummyStockApi.call_count == 2
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] >= 2.0
 
 
 def test_fetch_realtime_holdings_snapshot_builds_annualized_func_from_config(monkeypatch):

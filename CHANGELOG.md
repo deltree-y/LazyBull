@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.21] - 2026-05-08
+
+### 修复
+
+- **修复 3.5LCD efinance 重试间隔过短风险，确保重试至少间隔 2 秒** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `EFINANCE_RETRY_COUNT=1`（总尝试最多 2 次）
+  - 新增 `EFINANCE_RETRY_MIN_INTERVAL_SECONDS=2.0`，并在重试前强制执行最小 2 秒等待
+  - 失败日志新增 `attempt=x/y`，重试日志输出 `wait` 与下一次尝试序号
+
+### 测试
+
+- **新增 efinance 重试间隔回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - `test_fetch_realtime_quotes_efinance_retry_waits_at_least_two_seconds`
+
+## [0.71.20] - 2026-05-08
+
+### 修复
+
+- **修复 3.5LCD 中 AKShare 回退链路“有全市场数据但持仓命中0条”问题** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_extract_stock_code6()`，兼容 `symbol/secid/ts_code` 等多种代码口径（如 `sh600000`、`1.600000`、`600000.SH`）
+  - `_fetch_realtime_quotes_akshare()` 改为先提取 6 位代码再匹配请求持仓，避免代码格式差异导致全量 miss
+  - AK 命中 0 条时补充诊断信息：`code_col`、原始代码样本、未命中样本、请求样本
+
+### 测试
+
+- **新增 AKShare 代码口径兼容回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - `test_fetch_realtime_quotes_akshare_matches_symbol_prefixed_codes`
+
 ## [0.71.19] - 2026-05-08
 
 ### 修复
