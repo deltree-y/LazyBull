@@ -22,6 +22,24 @@ def _load_module():
     return module
 
 
+def test_snapshot_timeout_reads_single_env_key(monkeypatch):
+    monkeypatch.setenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "120")
+    monkeypatch.delenv("REALTIME_SNAPSHOT_TIMEOUT_SECONDS", raising=False)
+
+    module = _load_module()
+
+    assert module.REALTIME_SNAPSHOT_TIMEOUT_SECONDS == 120.0
+
+
+def test_snapshot_timeout_ignores_legacy_env_key(monkeypatch):
+    monkeypatch.delenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "120")
+
+    module = _load_module()
+
+    assert module.REALTIME_SNAPSHOT_TIMEOUT_SECONDS == 60.0
+
+
 def test_fetch_network_context_temporarily_clears_proxy_env(monkeypatch):
     module = _load_module()
 
@@ -2353,6 +2371,68 @@ def test_refresh_display_state_timeout_does_not_stuck_updating(monkeypatch):
     assert state.is_updating is False
     assert state.next_rebalance_date == "20260510"
     assert state.days_to_rebalance == 2
+
+
+def test_refresh_display_state_uses_cached_snapshot_when_timeout(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+
+    cached_snapshot = {
+        "quote_source": "A",
+        "positions": {"000001.SZ": SimpleNamespace(shares=100, buy_price=10.0)},
+        "quotes": pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "000001.SZ",
+                    "NAME": "平安银行",
+                    "PRICE": 11.0,
+                    "PRE_CLOSE": 10.5,
+                    "TIME": "10:01:00",
+                }
+            ]
+        ),
+    }
+
+    monkeypatch.setattr(module, "REALTIME_SNAPSHOT_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(module, "_fetch_realtime_holdings_snapshot", lambda: time.sleep(0.05) or None)
+    monkeypatch.setattr(module, "_get_cached_holdings_snapshot", lambda max_age_seconds=None: cached_snapshot)
+    monkeypatch.setattr(
+        module,
+        "_build_realtime_portfolio_summary",
+        lambda payload: {
+            "market_value": 1100.0,
+            "total_assets": 6100.0,
+            "float_pnl_pct": 10.0,
+            "total_pnl_pct": -93.9,
+            "annual_return_pct": 0.0,
+            "pos_count": 1,
+            "quote_time": "10:01:00",
+        }
+        if payload is not None
+        else None,
+    )
+    monkeypatch.setattr(module, "_build_intraday_chart", lambda chart_data, payload, point_time=None: chart_data)
+    monkeypatch.setattr(module, "_save_intraday_chart", lambda chart: None)
+    monkeypatch.setattr(
+        module,
+        "_build_stock_rankings",
+        lambda payload: [{"name": "平安", "code": "000001", "pnl_pct": 10.0}] if payload else None,
+    )
+    monkeypatch.setattr(
+        module,
+        "_build_industry_panel",
+        lambda payload, mode="cycle": {"industries": [{"industry": "银行"}], "mode": mode}
+        if payload
+        else None,
+    )
+    monkeypatch.setattr(module, "_calc_rebalance_status", lambda: ("20260510", 2))
+
+    module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
+
+    assert state.summary is not None
+    assert state.stock_rankings is not None
+    assert state.industry_panel is not None
+    assert state.quote_source_tag == "A"
 
 
 def test_render_header_uses_short_update_step(monkeypatch):

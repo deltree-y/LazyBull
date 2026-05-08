@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.17] - 2026-05-08
+
+### 优化
+
+- **3.5LCD 快照超时配置简化为单变量直读** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 仅读取 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS`
+  - 移除 `REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 旧变量兼容读取
+  - 移除最小 5 秒下限，按配置值原样生效
+  - 启动日志改为固定说明单变量与默认值（`default=60.0s`）
+
+### 测试
+
+- **更新快照超时配置测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - `test_snapshot_timeout_reads_single_env_key`
+  - `test_snapshot_timeout_ignores_legacy_env_key`
+
+## [0.71.16] - 2026-05-08
+
+### 修复
+
+- **修复“快照超时后上半区长期空白”与“配置120秒未生效”问题** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 快照超时配置兼容读取 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 与 `REALTIME_SNAPSHOT_TIMEOUT_SECONDS`
+  - 启动日志输出快照超时配置来源，便于确认现场配置是否生效
+  - 实时快照新增成功缓存；当本轮超时/异常时自动回退最近有效快照，避免摘要/排行/行业持续为空
+  - AKShare 快照接口优先尝试 `stock_zh_a_spot`，并保留 `stock_zh_a_spot_em` 兜底，降低全市场分页耗时影响
+  - 增加超时命中日志（timeout/elapsed/func）用于核对真实超时点
+
+### 测试
+
+- **新增与更新快照链路回归测试** ([tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)):
+  - 新增 `test_snapshot_timeout_reads_legacy_env_key`
+  - 新增 `test_refresh_display_state_uses_cached_snapshot_when_timeout`
+  - `fetch_realtime_holdings_snapshot` / `fetch_network_context` / `refresh_display_state` 相关用例通过
+
 ## [0.71.15] - 2026-05-08
 
 ### 优化

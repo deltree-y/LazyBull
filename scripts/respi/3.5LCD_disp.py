@@ -61,20 +61,31 @@ from respi.set_backlight import get_pwm_hardware_note as _get_pwm_hardware_note_
 from respi.set_backlight import set_backlight as _set_backlight_helper  # noqa: E402
 from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backlight_state_helper  # noqa: E402
 
+
+def _resolve_realtime_snapshot_timeout_seconds() -> float:
+    """解析实时快照超时秒数，仅支持单一环境变量。"""
+    raw = os.getenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return float(str(raw).strip())
+        except (TypeError, ValueError):
+            pass
+    return 120.0
+
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 90  # 盘中摘要/排行/日内图刷新间隔（秒）
-# 单次实时快照抓取超时（秒），默认 60，可通过环境变量覆盖
+REALTIME_REFRESH_INTERVAL = 180  # 盘中摘要/排行/日内图刷新间隔（秒）
+REALTIME_SNAPSHOT_TIMEOUT_SECONDS = _resolve_realtime_snapshot_timeout_seconds()
 try:
-    REALTIME_SNAPSHOT_TIMEOUT_SECONDS = float(
-        os.getenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "60")
+    REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = float(
+        os.getenv("LAZYBULL_REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS", "1800")
     )
 except (TypeError, ValueError):
-    REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 120.0
-if REALTIME_SNAPSHOT_TIMEOUT_SECONDS < 5.0:
-    REALTIME_SNAPSHOT_TIMEOUT_SECONDS = 5.0
+    REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = 1800.0
+if REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS < 60.0:
+    REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = 60.0
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 12.0  # 单次盘中图构建超时（秒）
 UPDATE_STUCK_RESET_SECONDS = 30.0  # 顶栏更新状态强制脱困阈值（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
@@ -158,6 +169,10 @@ COLOR_USAGE_BAR_HIGH = (225, 95, 95)
 _diag_lock = threading.Lock()
 _diag_once_keys: set[str] = set()
 _proxy_guard_lock = threading.RLock()
+_snapshot_cache_lock = threading.Lock()
+_snapshot_fetch_lock = threading.Lock()
+_latest_holdings_snapshot_cache: Optional[dict] = None
+_latest_holdings_snapshot_cached_at: float = 0.0
 _industry_mapping_cache_lock = threading.Lock()
 _industry_mapping_cache: dict[str, dict[str, str]] = {}
 _industry_levels_cache_lock = threading.Lock()
@@ -191,6 +206,39 @@ def _trace_diag(message: str) -> None:
     """按开关输出运行时追踪日志。"""
     if _is_runtime_trace_enabled():
         _emit_diag(message, stderr=True)
+
+
+def _set_cached_holdings_snapshot(snapshot: Optional[dict]) -> None:
+    """更新最近一次有效持仓快照缓存。"""
+    if not isinstance(snapshot, dict):
+        return
+    quote_df = snapshot.get("quotes")
+    if quote_df is None or getattr(quote_df, "empty", True):
+        return
+
+    with _snapshot_cache_lock:
+        global _latest_holdings_snapshot_cache
+        global _latest_holdings_snapshot_cached_at
+        _latest_holdings_snapshot_cache = copy.deepcopy(snapshot)
+        _latest_holdings_snapshot_cached_at = time.monotonic()
+
+
+def _get_cached_holdings_snapshot(max_age_seconds: Optional[float] = None) -> Optional[dict]:
+    """读取最近一次有效持仓快照缓存（按年龄过滤）。"""
+    age_limit = (
+        float(max_age_seconds)
+        if max_age_seconds is not None
+        else REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS
+    )
+    with _snapshot_cache_lock:
+        cached = _latest_holdings_snapshot_cache
+        cached_at = _latest_holdings_snapshot_cached_at
+        if cached is None or cached_at <= 0:
+            return None
+        age = time.monotonic() - cached_at
+        if age > age_limit:
+            return None
+        return copy.deepcopy(cached)
 
 
 @contextmanager
@@ -1002,6 +1050,7 @@ def _call_with_timeout(
     timeout_diag_message: Optional[str] = None,
 ):
     """在后台线程执行函数并施加超时，超时时快速返回 fallback。"""
+    started_at = time.monotonic()
     result = {
         "value": fallback,
         "error": None,
@@ -1018,6 +1067,11 @@ def _call_with_timeout(
     worker.join(max(float(timeout_seconds), 0.01))
 
     if worker.is_alive():
+        elapsed = time.monotonic() - started_at
+        _trace_diag(
+            "超时命中: "
+            f"timeout={float(timeout_seconds):.2f}s, elapsed={elapsed:.2f}s, func={getattr(func, '__name__', 'anonymous')}"
+        )
         if timeout_diag_key and timeout_diag_message:
             _emit_diag_once(timeout_diag_key, timeout_diag_message)
         return fallback
@@ -2514,10 +2568,13 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
         )
         return None
 
-    getter = getattr(ak, 'stock_zh_a_spot_em', None)
-    if getter is None:
-        getter = getattr(ak, 'stock_zh_a_spot', None)
-    if getter is None:
+    getter_candidates: list[tuple[str, object]] = []
+    for getter_name in ("stock_zh_a_spot", "stock_zh_a_spot_em"):
+        getter = getattr(ak, getter_name, None)
+        if getter is not None:
+            getter_candidates.append((getter_name, getter))
+
+    if not getter_candidates:
         _emit_diag_once(
             "akshare_holdings_getter_missing",
             "AKShare缺少 stock_zh_a_spot_em/stock_zh_a_spot，无法回退持仓快照",
@@ -2525,19 +2582,34 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
         )
         return None
 
-    try:
-        with _fetch_network_context():
-            df = getter()
-    except Exception as exc:
-        _emit_diag(
-            "AK快照失败: "
-            f"{type(exc).__name__}: {exc} | proxy_bypass={_should_bypass_proxy_for_fetch()}"
-        )
-        _emit_diag_once(
-            "akshare_holdings_getter_error",
-            f"AKShare持仓快照接口调用失败: {type(exc).__name__}: {exc}",
-        )
-        return None
+    df = None
+    for getter_name, getter in getter_candidates:
+        _trace_diag(f"AK快照尝试接口: {getter_name}")
+        if getter_name == "stock_zh_a_spot_em":
+            _emit_diag_once(
+                "akshare_holdings_spot_em_progress_hint",
+                "AKShare stock_zh_a_spot_em 为全市场分页抓取，进度条如 24/58 中的 58 表示总分页数",
+                stderr=False,
+            )
+        try:
+            with _fetch_network_context():
+                df = getter()
+        except Exception as exc:
+            _emit_diag(
+                "AK快照失败: "
+                f"api={getter_name}, {type(exc).__name__}: {exc} | "
+                f"proxy_bypass={_should_bypass_proxy_for_fetch()}"
+            )
+            df = None
+            continue
+
+        if df is None or df.empty:
+            _emit_diag(f"AK快照空返回: api={getter_name}")
+            df = None
+            continue
+
+        _trace_diag(f"AK快照接口命中: api={getter_name}, rows={len(df)}")
+        break
 
     if df is None or df.empty:
         _emit_diag_once(
@@ -2668,48 +2740,60 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
         _trace_diag("抓快照跳过: 当前无持仓")
         return snapshot
 
-    fetch_started_at = time.monotonic()
-    ts_codes = list(positions.keys()) + [SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE]
-    rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
-    quote_source = 'A'
+    if not _snapshot_fetch_lock.acquire(blocking=False):
+        cached_snapshot = _get_cached_holdings_snapshot()
+        if cached_snapshot is not None:
+            _emit_diag("抓快照请求合并: 上一轮仍在执行，已复用最近缓存快照")
+            return cached_snapshot
+        _emit_diag("抓快照请求合并: 上一轮仍在执行且暂无缓存可用")
+        return snapshot
 
-    if rt_df is None or rt_df.empty:
-        _emit_diag("抓快照: AKShare无可用数据，开始尝试TuShare兜底")
-        # AKShare 不可用时兜底 TuShare，避免盘中全空。
-        ts_codes_str = ','.join(dict.fromkeys(ts_codes))
-        try:
-            from src.lazybull.data.tushare_client import TushareClient
-
-            with _fetch_network_context():
-                client = TushareClient(verbose=False)
-                rt_df = client.get_realtime_quote(ts_codes_str)
-        except Exception:
-            _emit_diag("抓快照: TuShare兜底调用异常")
-            rt_df = None
+    try:
+        fetch_started_at = time.monotonic()
+        ts_codes = list(positions.keys()) + [SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE]
+        rt_df = _fetch_realtime_quotes_akshare(list(positions.keys()))
+        quote_source = 'A'
 
         if rt_df is None or rt_df.empty:
-            _emit_diag(
-                "抓快照失败: AKShare与TuShare均无可用行情，"
-                f"positions={len(positions)}, proxy_bypass={_should_bypass_proxy_for_fetch()}"
+            _emit_diag("抓快照: AKShare无可用数据，开始尝试TuShare兜底")
+            # AKShare 不可用时兜底 TuShare，避免盘中全空。
+            ts_codes_str = ','.join(dict.fromkeys(ts_codes))
+            try:
+                from src.lazybull.data.tushare_client import TushareClient
+
+                with _fetch_network_context():
+                    client = TushareClient(verbose=False)
+                    rt_df = client.get_realtime_quote(ts_codes_str)
+            except Exception:
+                _emit_diag("抓快照: TuShare兜底调用异常")
+                rt_df = None
+
+            if rt_df is None or rt_df.empty:
+                _emit_diag(
+                    "抓快照失败: AKShare与TuShare均无可用行情，"
+                    f"positions={len(positions)}, proxy_bypass={_should_bypass_proxy_for_fetch()}"
+                )
+                return snapshot
+
+            quote_source = 'T'
+            _emit_diag_once(
+                "realtime_snapshot_fallback_tushare",
+                "实时快照已回退到 TuShare 数据源",
+                stderr=False,
             )
-            return snapshot
 
-        quote_source = 'T'
-        _emit_diag_once(
-            "realtime_snapshot_fallback_tushare",
-            "实时快照已回退到 TuShare 数据源",
-            stderr=False,
+        snapshot['quotes'] = rt_df
+        snapshot['quote_source'] = quote_source
+        snapshot['index_pct_map'] = _extract_index_pct_map_from_quote_df(rt_df)
+        _set_cached_holdings_snapshot(snapshot)
+        _trace_diag(
+            "抓快照成功: "
+            f"source={quote_source}, rows={len(rt_df)}, positions={len(positions)}, "
+            f"cost={time.monotonic() - fetch_started_at:.2f}s"
         )
-
-    snapshot['quotes'] = rt_df
-    snapshot['quote_source'] = quote_source
-    snapshot['index_pct_map'] = _extract_index_pct_map_from_quote_df(rt_df)
-    _trace_diag(
-        "抓快照成功: "
-        f"source={quote_source}, rows={len(rt_df)}, positions={len(positions)}, "
-        f"cost={time.monotonic() - fetch_started_at:.2f}s"
-    )
-    return snapshot
+        return snapshot
+    finally:
+        _snapshot_fetch_lock.release()
 
 
 def _build_realtime_portfolio_summary(snapshot: Optional[dict]) -> Optional[dict]:
@@ -3207,7 +3291,21 @@ def _refresh_display_state(
                     # 即便摘要计算失败，也至少更新时间戳，避免长期显示 --:--
                     latest_update_time = datetime.now().strftime("%H:%M")
                 else:
-                    _emit_diag("抓快照结果为空（超时或异常），本轮实时面板将沿用旧值")
+                    cached_snapshot = _get_cached_holdings_snapshot()
+                    if isinstance(cached_snapshot, dict):
+                        holdings_snapshot = cached_snapshot
+                        cached_source = str(cached_snapshot.get('quote_source', '-')).strip().upper()
+                        cached_quote_df = cached_snapshot.get('quotes')
+                        cached_rows = int(len(cached_quote_df)) if cached_quote_df is not None else 0
+                        with state.lock:
+                            state.quote_source_tag = cached_source if cached_source in ('T', 'A') else '-'
+                        latest_update_time = datetime.now().strftime("%H:%M")
+                        _emit_diag(
+                            "抓快照结果为空（超时或异常），"
+                            f"已回退使用最近缓存快照: source={cached_source}, quote_rows={cached_rows}"
+                        )
+                    else:
+                        _emit_diag("抓快照结果为空（超时或异常），本轮实时面板将沿用旧值")
             except Exception:
                 _emit_diag("抓快照阶段异常，已跳过本轮实时面板刷新")
                 holdings_snapshot = None
@@ -4050,6 +4148,13 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         "抓数代理模式: "
         f"bypass={_should_bypass_proxy_for_fetch()} "
         "(可用 LAZYBULL_FETCH_BYPASS_PROXY=0 关闭)",
+        stderr=False,
+    )
+    _emit_diag_once(
+        "snapshot_timeout_config_once",
+        "快照超时配置: "
+        f"{REALTIME_SNAPSHOT_TIMEOUT_SECONDS:.1f}s "
+        "(env=LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS, default=60.0s)",
         stderr=False,
     )
 

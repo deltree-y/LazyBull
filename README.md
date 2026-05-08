@@ -28,7 +28,23 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.15)
+### 当前版本 (v0.71.17)
+
+**3.5LCD 快照超时配置简化为单变量直读** (v0.71.17):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 仅支持 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS`
+- 移除 `REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 旧变量兼容读取
+- 移除最小 5 秒下限保护，按配置值直接生效
+- 启动日志固定输出单变量与默认值说明（`default=60.0s`）
+
+### 当前版本历史 (v0.71.16)
+
+**修复快照超时导致上半区空白，并兼容120秒旧配置名** (v0.71.16):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 兼容读取 `REALTIME_SNAPSHOT_TIMEOUT_SECONDS`（旧）与 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS`（新）
+- 启动日志会明确打印快照超时配置来源，避免“明明配了120秒却仍按60秒执行”的误判
+- 快照超时/异常时自动回退最近有效快照缓存，避免摘要/排行/行业持续为空
+- AKShare 快照优先尝试 `stock_zh_a_spot`，并对 `stock_zh_a_spot_em` 的分页进度含义给出日志提示
+
+### 当前版本历史 (v0.71.15)
 
 **3.5LCD 新增分阶段诊断日志（定位上半区空白）** (v0.71.15):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 在刷新主流程记录开始/结束日志，明确 `summary/rank/industry/cycle_chart` 是否更新成功
