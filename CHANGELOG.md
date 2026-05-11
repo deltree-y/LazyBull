@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.35] - 2026-05-11
+
+### 修复
+
+- **3.5LCD 指数抓取可观测性增强与超时定位修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增后台指数刷新全链路日志：触发、开始、主接口调用、返回行数、结束耗时
+  - 后台指数刷新增加独立超时配置 `LAZYBULL_REALTIME_INDEX_ASYNC_TIMEOUT_SECONDS`（默认60秒）
+  - 后台指数刷新命中超时时，明确打印“后台指数抓取超时”而非静默重试
+  - 上一轮指数刷新未结束时，新增“后台指数刷新跳过”日志，避免看起来像无输出重启
+
 ## [0.71.34] - 2026-05-11
 
 ### 修复

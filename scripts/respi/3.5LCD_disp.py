@@ -96,6 +96,17 @@ def _resolve_efinance_read_timeout_seconds() -> float:
             pass
     return 30.0
 
+
+def _resolve_realtime_index_async_timeout_seconds() -> float:
+    """解析后台指数抓取超时。"""
+    raw = os.getenv("LAZYBULL_REALTIME_INDEX_ASYNC_TIMEOUT_SECONDS")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return max(float(str(raw).strip()), 10.0)
+        except (TypeError, ValueError):
+            pass
+    return 60.0
+
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
@@ -111,6 +122,7 @@ except (TypeError, ValueError):
 if REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS < 60.0:
     REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = 60.0
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 20.0  # 单次盘中图构建超时（秒）
+REALTIME_INDEX_ASYNC_TIMEOUT_SECONDS = _resolve_realtime_index_async_timeout_seconds()
 EFINANCE_RETRY_COUNT = 1  # efinance 失败后的重试次数（总尝试次数=1+重试次数）
 EFINANCE_RETRY_MIN_INTERVAL_SECONDS = 2.0  # efinance 重试最小间隔（秒）
 EFINANCE_CONNECT_TIMEOUT_SECONDS = _resolve_efinance_connect_timeout_seconds()
@@ -308,11 +320,27 @@ def _get_cached_realtime_index_pcts(max_age_seconds: float = 900.0) -> dict[str,
 def _refresh_realtime_index_pcts_async() -> None:
     """后台刷新实时指数缓存，避免阻塞快照主流程。"""
     if not _realtime_index_fetch_lock.acquire(blocking=False):
+        _trace_diag("后台指数刷新跳过: 上一轮仍在执行")
         return
 
     def _runner() -> None:
         try:
-            pct_map = _fetch_realtime_index_pcts_from_akshare()
+            _trace_diag(
+                f"后台指数刷新开始: timeout={REALTIME_INDEX_ASYNC_TIMEOUT_SECONDS:.1f}s"
+            )
+            timeout_sentinel = object()
+            pct_map = _call_with_timeout(
+                _fetch_realtime_index_pcts_from_akshare,
+                REALTIME_INDEX_ASYNC_TIMEOUT_SECONDS,
+                fallback=timeout_sentinel,
+            )
+            if pct_map is timeout_sentinel:
+                _emit_diag(
+                    "后台指数抓取超时: "
+                    f"timeout={REALTIME_INDEX_ASYNC_TIMEOUT_SECONDS:.1f}s，"
+                    "本轮沿用已有指数缓存"
+                )
+                return
             if pct_map:
                 _set_cached_realtime_index_pcts(pct_map)
                 _trace_diag(
@@ -3413,6 +3441,8 @@ def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
 def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
     """使用 AKShare 拉取实时指数涨跌幅。"""
     pct_map: dict[str, float] = {}
+    fetch_started_at = time.monotonic()
+    _trace_diag("指数抓取开始: source=AKShare")
 
     try:
         import akshare as ak  # type: ignore
@@ -3427,8 +3457,11 @@ def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
             )
         else:
             try:
+                _trace_diag(f"指数主接口调用: api={getter_name}")
                 with _fetch_network_context():
                     df = getter()
+                row_count = 0 if df is None else int(len(df))
+                _trace_diag(f"指数主接口返回: api={getter_name}, rows={row_count}")
                 for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
                     if code in pct_map:
                         continue
@@ -3443,6 +3476,7 @@ def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
 
         # 中证800按用户要求改走 stock_zh_index_spot
         if CSI800_INDEX_CODE not in pct_map:
+            _trace_diag("指数补抓开始: code=000906.SH")
             csi800_pct = _fetch_csi800_realtime_pct_akshare()
             if csi800_pct is not None:
                 pct_map[CSI800_INDEX_CODE] = csi800_pct
@@ -3451,6 +3485,11 @@ def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
             "akshare_spot_import_or_loop_error",
             "AKShare实时指数获取主流程异常，已回退现有数据",
         )
+
+    _trace_diag(
+        "指数抓取结束: "
+        f"codes={sorted(pct_map.keys())}, cost={time.monotonic() - fetch_started_at:.2f}s"
+    )
 
     return pct_map
 
@@ -3488,6 +3527,10 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
             pct_map[code] = pct
 
     if len(pct_map) < 3:
+        _trace_diag(
+            "指数缓存不足，触发后台刷新: "
+            f"current_codes={sorted(pct_map.keys())}"
+        )
         _refresh_realtime_index_pcts_async()
 
     missing_codes = [
@@ -3506,6 +3549,8 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
 
 def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
     """按 stock_zh_index_spot_sina 接口获取中证800实时涨跌幅。"""
+    fetch_started_at = time.monotonic()
+    _trace_diag("中证800抓取开始: api=stock_zh_index_spot_sina")
     try:
         import akshare as ak  # type: ignore
     except Exception as exc:
@@ -3526,6 +3571,8 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
     try:
         with _fetch_network_context():
             df = getter_sina()
+        row_count = 0 if df is None else int(len(df))
+        _trace_diag(f"中证800主接口返回: rows={row_count}")
     except Exception as exc:
         _emit_diag_once(
             "akshare_spot_stock_zh_index_spot_sina_error",
@@ -3574,6 +3621,10 @@ def _fetch_csi800_realtime_pct_akshare() -> Optional[float]:
             f"AKShare stock_zh_index_spot_sina 000906涨跌幅异常: {pct}",
             stderr=False,
         )
+    _trace_diag(
+        "中证800抓取结束: "
+        f"pct={pct_sanitized}, cost={time.monotonic() - fetch_started_at:.2f}s"
+    )
     return pct_sanitized
 
 
