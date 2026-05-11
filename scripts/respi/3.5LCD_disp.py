@@ -63,19 +63,38 @@ from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backli
 
 
 def _resolve_realtime_snapshot_timeout_seconds() -> float:
-    """解析实时快照超时秒数，仅支持单一环境变量。
-
-    说明：设置为 10 秒，让 UI 快速超时并用缓存数据渲染，不被慢数据源阻塞。
-    后台线程会继续异步获取，缓存有 30 分钟有效期。即使数据源需要 3-5 分钟，
-    也只在第一次超时后略等，后续刷新都会用缓存数据显示，不卡 UI。
-    """
+    """解析实时快照总超时秒数，并限制最小值避免过短截断。"""
     raw = os.getenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS")
     if raw is not None and str(raw).strip() != "":
         try:
-            return float(str(raw).strip())
+            parsed = float(str(raw).strip())
+            # 低于 30 秒会频繁中断慢源抓取，导致每轮都重来。
+            return max(parsed, 30.0)
         except (TypeError, ValueError):
             pass
-    return 20.0  # 改为 10 秒，避免被慢数据源阻塞
+    return 45.0
+
+
+def _resolve_efinance_connect_timeout_seconds() -> float:
+    """解析 efinance 连接超时。"""
+    raw = os.getenv("LAZYBULL_EFINANCE_CONNECT_TIMEOUT_SECONDS")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return max(float(str(raw).strip()), 3.0)
+        except (TypeError, ValueError):
+            pass
+    return 8.0
+
+
+def _resolve_efinance_read_timeout_seconds() -> float:
+    """解析 efinance 读取超时，默认拉长到 30 秒。"""
+    raw = os.getenv("LAZYBULL_EFINANCE_READ_TIMEOUT_SECONDS")
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return max(float(str(raw).strip()), 10.0)
+        except (TypeError, ValueError):
+            pass
+    return 30.0
 
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
@@ -94,8 +113,8 @@ if REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS < 60.0:
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 20.0  # 单次盘中图构建超时（秒）
 EFINANCE_RETRY_COUNT = 1  # efinance 失败后的重试次数（总尝试次数=1+重试次数）
 EFINANCE_RETRY_MIN_INTERVAL_SECONDS = 2.0  # efinance 重试最小间隔（秒）
-EFINANCE_CONNECT_TIMEOUT_SECONDS = 8.0  # efinance 连接超时（秒）
-EFINANCE_READ_TIMEOUT_SECONDS = 10.0  # efinance 读取超时（秒）
+EFINANCE_CONNECT_TIMEOUT_SECONDS = _resolve_efinance_connect_timeout_seconds()
+EFINANCE_READ_TIMEOUT_SECONDS = _resolve_efinance_read_timeout_seconds()
 EFINANCE_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1"  # 伪装手机UA避免风控
 UPDATE_STUCK_RESET_SECONDS = 30.0  # 顶栏更新状态强制脱困阈值（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
@@ -3694,6 +3713,7 @@ def _refresh_display_state(
         "刷新开始: "
         f"realtime={refresh_realtime}, cycle={refresh_cycle}, "
         f"snapshot_timeout={REALTIME_SNAPSHOT_TIMEOUT_SECONDS:.1f}s, "
+        f"ef_timeout=({EFINANCE_CONNECT_TIMEOUT_SECONDS:.1f}s,{EFINANCE_READ_TIMEOUT_SECONDS:.1f}s), "
         f"proxy_bypass={_should_bypass_proxy_for_fetch()}"
     )
     with state.lock:

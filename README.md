@@ -28,7 +28,17 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.33)
+### 当前版本 (v0.71.34)
+
+**3.5LCD 超时配置快速修复** (v0.71.34):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 将实时快照总超时增加最小值保护（>=30秒），防止被10秒误截断
+- efinance 连接/读取超时改为环境变量可配置：`LAZYBULL_EFINANCE_CONNECT_TIMEOUT_SECONDS`、`LAZYBULL_EFINANCE_READ_TIMEOUT_SECONDS`
+- efinance 读取超时默认值提升到30秒，减少慢网络下的过早中断
+- 刷新日志新增 `ef_timeout`，直接显示当前生效超时参数
+
+### 当前版本历史 (v0.71.33)
+
+### 当前版本历史 (v0.71.33)
 
 **3.5LCD 排行、行业与指数抓取链路修复** (v0.71.33):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 将排行与行业的持仓周期口径价格从“依赖昨收”改为“昨收缺失时仍可直接使用现价”，修复持仓快照里已有现价但排行为空的问题

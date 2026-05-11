@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.34] - 2026-05-11
+
+### 修复
+
+- **3.5LCD 超时配置快速修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 实时快照总超时 `LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 增加最小值保护（>=30秒），避免被误设为10秒导致每轮提前中断
+  - efinance 读取超时改为可配置 `LAZYBULL_EFINANCE_READ_TIMEOUT_SECONDS`，默认从10秒提升到30秒
+  - efinance 连接超时改为可配置 `LAZYBULL_EFINANCE_CONNECT_TIMEOUT_SECONDS`，默认8秒
+  - 刷新开始日志新增 `ef_timeout` 打印，直接显示当前生效的 efinance 超时值
+
 ## [0.71.33] - 2026-05-11
 
 ### 修复
