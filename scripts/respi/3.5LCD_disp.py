@@ -2889,6 +2889,7 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
     name_col = next((c for c in ('名称', 'name', 'NAME') if c in df.columns), None)
     price_col = next((c for c in ('最新价', '现价', 'price', 'PRICE') if c in df.columns), None)
     pre_close_col = next((c for c in ('昨收', '昨收价', '昨收盘', 'pre_close', 'PRE_CLOSE') if c in df.columns), None)
+    pct_col = next((c for c in ('涨跌幅', 'pct_chg', 'PCT_CHG', '涨跌幅%') if c in df.columns), None)
     time_col = next((c for c in ('更新时间', '时间', 'time', 'TIME') if c in df.columns), None)
 
     if code_col is None or price_col is None:
@@ -2915,6 +2916,7 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
                 'NAME': str(row.get(name_col, '')) if name_col else '',
                 'PRICE': row.get(price_col),
                 'PRE_CLOSE': row.get(pre_close_col) if pre_close_col else None,
+                'PCT_CHG': row.get(pct_col) if pct_col else None,
                 'TIME': time_text,
             }
         )
@@ -3011,6 +3013,7 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
     name_col = next((c for c in ('名称', 'name', 'NAME') if c in df.columns), None)
     price_col = next((c for c in ('最新价', '现价', 'price', 'PRICE') if c in df.columns), None)
     pre_close_col = next((c for c in ('昨收', '昨收价', 'pre_close', 'PRE_CLOSE') if c in df.columns), None)
+    pct_col = next((c for c in ('涨跌幅', 'pct_chg', 'PCT_CHG', '涨跌幅%') if c in df.columns), None)
     time_col = next((c for c in ('时间', '更新时间', 'time', 'TIME') if c in df.columns), None)
 
     if code_col is None or price_col is None:
@@ -3043,6 +3046,7 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
                 'NAME': str(row.get(name_col, '')) if name_col else '',
                 'PRICE': row.get(price_col),
                 'PRE_CLOSE': row.get(pre_close_col) if pre_close_col else None,
+                'PCT_CHG': row.get(pct_col) if pct_col else None,
                 'TIME': str(row.get(time_col, now_time)) if time_col else now_time,
             }
         )
@@ -3354,6 +3358,12 @@ def _extract_pct_from_quote_row(row) -> Optional[float]:
     """从单条实时行情记录中提取当日涨跌幅。"""
     if row is None:
         return None
+    pct_direct = _sanitize_intraday_pct(
+        row.get('PCT_CHG', row.get('pct_chg')),
+        INTRADAY_INDEX_PCT_ABS_LIMIT,
+    )
+    if pct_direct is not None:
+        return pct_direct
     price = _coerce_float(row.get('PRICE', row.get('price')))
     pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
     if price is None or not np.isfinite(price) or price <= 0 or pre_close in (None, 0):
@@ -3362,6 +3372,26 @@ def _extract_pct_from_quote_row(row) -> Optional[float]:
         (price / pre_close - 1) * 100,
         INTRADAY_INDEX_PCT_ABS_LIMIT,
     )
+
+
+def _derive_pre_close_from_price_and_pct(price: object, pct_chg: object) -> Optional[float]:
+    """根据现价与涨跌幅反推昨收。"""
+    price_float = _coerce_float(price)
+    pct_float = _sanitize_intraday_pct(pct_chg, INTRADAY_STOCK_PCT_ABS_LIMIT)
+    if (
+        price_float is None
+        or not np.isfinite(price_float)
+        or price_float <= 0
+        or pct_float is None
+    ):
+        return None
+    ratio = 1.0 + pct_float / 100.0
+    if abs(ratio) < 1e-8:
+        return None
+    pre_close = price_float / ratio
+    if not np.isfinite(pre_close) or pre_close <= 0:
+        return None
+    return pre_close
 
 
 def _extract_index_pct_map_from_quote_df(rt_df) -> dict[str, float]:
@@ -3647,13 +3677,29 @@ def _compute_holdings_intraday_pct(snapshot: Optional[dict]) -> Optional[float]:
     current_value = 0.0
     prev_close_value = 0.0
     valid_count = 0
+    pre_close_derived_count = 0
+    pre_close_missing_count = 0
     for ts_code, pos in positions.items():
         row = quote_map.get(ts_code)
         if row is None:
             continue
+        current_price = _coerce_float(row.get('PRICE', row.get('price')))
+        if current_price is None or not np.isfinite(current_price) or current_price <= 0:
+            continue
+
         pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
+        if pre_close is None or pre_close <= 0:
+            pre_close = _derive_pre_close_from_price_and_pct(
+                current_price,
+                row.get('PCT_CHG', row.get('pct_chg')),
+            )
+            if pre_close is None:
+                pre_close_missing_count += 1
+                continue
+            pre_close_derived_count += 1
+
         current_price = _normalize_intraday_price(
-            row.get('PRICE', row.get('price')),
+            current_price,
             pre_close,
             INTRADAY_STOCK_PCT_ABS_LIMIT,
         )
@@ -3664,7 +3710,18 @@ def _compute_holdings_intraday_pct(snapshot: Optional[dict]) -> Optional[float]:
         valid_count += 1
 
     if valid_count == 0 or prev_close_value <= 0:
+        _trace_diag(
+            "盘中收益计算失败: "
+            f"valid=0, derived_pre_close={pre_close_derived_count}, "
+            f"missing_pre_close={pre_close_missing_count}, positions={len(positions)}"
+        )
         return None
+    if pre_close_derived_count > 0:
+        _trace_diag(
+            "盘中收益计算: "
+            f"derived_pre_close={pre_close_derived_count}, "
+            f"missing_pre_close={pre_close_missing_count}, valid={valid_count}"
+        )
     return _sanitize_intraday_pct(
         (current_value / prev_close_value - 1) * 100,
         INTRADAY_PORTFOLIO_PCT_ABS_LIMIT,
@@ -3698,6 +3755,14 @@ def _build_intraday_chart(
         or shenzhen_pct is None
         or holdings_pct is None
     ):
+        quote_rows = 0
+        if isinstance(snapshot, dict):
+            quote_df = snapshot.get('quotes')
+            quote_rows = 0 if quote_df is None else int(len(quote_df))
+        _trace_diag(
+            "盘中图跳过: "
+            f"sh={shanghai_pct}, sz={shenzhen_pct}, hold={holdings_pct}, quote_rows={quote_rows}"
+        )
         return chart_data
 
     if csi800_pct is None:

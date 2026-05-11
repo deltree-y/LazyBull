@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.36] - 2026-05-11
+
+### 修复
+
+- **3.5LCD 盘中折线图不刷新修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 实时快照标准化新增 `PCT_CHG` 字段（efinance 与 AKShare 链路均保留）
+  - 持仓盘中收益计算在 `PRE_CLOSE` 缺失时，支持通过“现价+涨跌幅”反推昨收，避免 `holdings_pct=None` 导致日内图整轮跳过
+  - 日内图新增跳过原因日志（打印 sh/sz/hold 与 quote_rows），便于快速定位未刷新原因
+  - 新增盘中收益计算诊断日志，区分“昨收反推成功”与“昨收缺失且无法反推”
+
 ## [0.71.35] - 2026-05-11
 
 ### 修复
