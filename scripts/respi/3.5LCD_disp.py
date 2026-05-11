@@ -123,6 +123,7 @@ if REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS < 60.0:
     REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = 60.0
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 20.0  # 单次盘中图构建超时（秒）
 REALTIME_INDEX_ASYNC_TIMEOUT_SECONDS = _resolve_realtime_index_async_timeout_seconds()
+REALTIME_RETRY_WAIT_SECONDS = 15.0  # 实时抓取失败且无缓存时的快速重试间隔（秒）
 EFINANCE_RETRY_COUNT = 1  # efinance 失败后的重试次数（总尝试次数=1+重试次数）
 EFINANCE_RETRY_MIN_INTERVAL_SECONDS = 2.0  # efinance 重试最小间隔（秒）
 EFINANCE_CONNECT_TIMEOUT_SECONDS = _resolve_efinance_connect_timeout_seconds()
@@ -4744,15 +4745,20 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
         last_realtime_session_key = _get_realtime_session_key(startup_dt)
         last_cycle_refresh_at: Optional[datetime] = startup_dt
         last_cycle_target_date = _get_target_cycle_data_date(startup_dt, allow_load=True)
+        next_wait_override: Optional[float] = None
 
         while not stop_event.is_set():
             with state.lock:
                 current_cycle_chart = state.chart_data
                 current_intraday_chart = state.intraday_chart_data
-            wait_seconds = _get_data_worker_wait_seconds(
-                cycle_chart_data=current_cycle_chart,
-                intraday_chart_data=current_intraday_chart,
-            )
+            if next_wait_override is not None:
+                wait_seconds = float(next_wait_override)
+                next_wait_override = None
+            else:
+                wait_seconds = _get_data_worker_wait_seconds(
+                    cycle_chart_data=current_cycle_chart,
+                    intraday_chart_data=current_intraday_chart,
+                )
             stop_event.wait(wait_seconds)
             if stop_event.is_set():
                 break
@@ -4796,6 +4802,13 @@ def _data_worker(state: DisplayState, stop_event: threading.Event) -> None:
                 if refresh_realtime:
                     last_realtime_refresh_at = current_dt
                     last_realtime_session_key = realtime_session_key
+                    cached_snapshot = _get_cached_holdings_snapshot()
+                    if not isinstance(cached_snapshot, dict):
+                        next_wait_override = float(REALTIME_RETRY_WAIT_SECONDS)
+                        _emit_diag(
+                            "实时抓取未命中有效快照，"
+                            f"将于{REALTIME_RETRY_WAIT_SECONDS:.0f}s后快速重试"
+                        )
                 if refresh_cycle:
                     last_cycle_refresh_at = current_dt
                     last_cycle_target_date = cycle_target_date
