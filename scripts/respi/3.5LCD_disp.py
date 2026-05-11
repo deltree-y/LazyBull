@@ -81,7 +81,7 @@ def _resolve_realtime_snapshot_timeout_seconds() -> float:
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒，从300缩短到120以应对代理延迟）
+REALTIME_REFRESH_INTERVAL = 60  # 盘中摘要/排行/日内图刷新间隔（秒，从300缩短到120以应对代理延迟）
 REALTIME_SNAPSHOT_TIMEOUT_SECONDS = _resolve_realtime_snapshot_timeout_seconds()
 try:
     REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = float(
@@ -312,7 +312,7 @@ def _configure_efinance_session() -> None:
         
         # 尝试将 session 注入到 efinance 全局
         # efinance 的 requests 调用可能会用到全局的 requests.Session
-        import efinance as ef
+        import efinance as ef  # type: ignore
         if hasattr(ef, 'requests'):
             ef.requests.Session = lambda: session
         
