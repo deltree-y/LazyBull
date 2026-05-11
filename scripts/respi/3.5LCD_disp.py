@@ -81,7 +81,7 @@ def _resolve_realtime_snapshot_timeout_seconds() -> float:
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒，从300缩短到120以应对代理延迟）
+REALTIME_REFRESH_INTERVAL = 180  # 盘中摘要/排行/日内图刷新间隔（秒，从300缩短到120以应对代理延迟）
 REALTIME_SNAPSHOT_TIMEOUT_SECONDS = _resolve_realtime_snapshot_timeout_seconds()
 try:
     REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = float(
@@ -183,6 +183,10 @@ _snapshot_cache_lock = threading.Lock()
 _snapshot_fetch_lock = threading.Lock()
 _latest_holdings_snapshot_cache: Optional[dict] = None
 _latest_holdings_snapshot_cached_at: float = 0.0
+_realtime_index_cache_lock = threading.Lock()
+_realtime_index_fetch_lock = threading.Lock()
+_latest_realtime_index_pct_cache: dict[str, float] = {}
+_latest_realtime_index_pct_cached_at: float = 0.0
 _industry_mapping_cache_lock = threading.Lock()
 _industry_mapping_cache: dict[str, dict[str, str]] = {}
 _industry_levels_cache_lock = threading.Lock()
@@ -249,6 +253,60 @@ def _get_cached_holdings_snapshot(max_age_seconds: Optional[float] = None) -> Op
         if age > age_limit:
             return None
         return copy.deepcopy(cached)
+
+
+def _set_cached_realtime_index_pcts(pct_map: Optional[dict[str, float]]) -> None:
+    """更新最近一次有效的实时指数涨跌幅缓存。"""
+    if not isinstance(pct_map, dict):
+        return
+
+    normalized: dict[str, float] = {}
+    for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
+        pct = _sanitize_intraday_pct(pct_map.get(code), INTRADAY_INDEX_PCT_ABS_LIMIT)
+        if pct is not None:
+            normalized[code] = pct
+    if not normalized:
+        return
+
+    with _realtime_index_cache_lock:
+        global _latest_realtime_index_pct_cache
+        global _latest_realtime_index_pct_cached_at
+        _latest_realtime_index_pct_cache = dict(normalized)
+        _latest_realtime_index_pct_cached_at = time.monotonic()
+
+
+def _get_cached_realtime_index_pcts(max_age_seconds: float = 900.0) -> dict[str, float]:
+    """读取最近一次有效的实时指数涨跌幅缓存。"""
+    with _realtime_index_cache_lock:
+        if not _latest_realtime_index_pct_cache or _latest_realtime_index_pct_cached_at <= 0:
+            return {}
+        age = time.monotonic() - _latest_realtime_index_pct_cached_at
+        if age > float(max_age_seconds):
+            return {}
+        return dict(_latest_realtime_index_pct_cache)
+
+
+def _refresh_realtime_index_pcts_async() -> None:
+    """后台刷新实时指数缓存，避免阻塞快照主流程。"""
+    if not _realtime_index_fetch_lock.acquire(blocking=False):
+        return
+
+    def _runner() -> None:
+        try:
+            pct_map = _fetch_realtime_index_pcts_from_akshare()
+            if pct_map:
+                _set_cached_realtime_index_pcts(pct_map)
+                _trace_diag(
+                    f"后台指数缓存更新成功: codes={sorted(pct_map.keys())}"
+                )
+            else:
+                _trace_diag("后台指数缓存更新为空")
+        except Exception as exc:  # noqa: BLE001
+            _emit_diag(f"后台指数缓存更新失败: {type(exc).__name__}: {exc}")
+        finally:
+            _realtime_index_fetch_lock.release()
+
+    threading.Thread(target=_runner, daemon=True).start()
 
 
 @contextmanager
@@ -798,6 +856,16 @@ def _build_industry_panel(snapshot: Optional[dict], mode: str = "cycle") -> Opti
         return None
 
     industry_levels_mapping = _get_shenwan_levels_mapping()
+    normalized_position_map: dict[str, object] = {}
+    for pos_key, pos in positions.items():
+        normalized_key = _normalize_ts_code_key(pos_key)
+        if normalized_key:
+            normalized_position_map[normalized_key] = pos
+        bare_code = str(pos_key).split('.')[0].strip()
+        bare_normalized_key = _normalize_ts_code_key(bare_code)
+        if bare_normalized_key:
+            normalized_position_map.setdefault(bare_normalized_key, pos)
+
     price_map: dict[str, float] = {}
     pre_close_map: dict[str, float] = {}
     for _, row in rt_df.iterrows():
@@ -805,14 +873,24 @@ def _build_industry_panel(snapshot: Optional[dict], mode: str = "cycle") -> Opti
         if not ts_code:
             continue
         pos = positions.get(ts_code)
+        normalized_rt_code = _normalize_ts_code_key(ts_code)
+        if pos is None and normalized_rt_code:
+            pos = normalized_position_map.get(normalized_rt_code)
         if pos is None or getattr(pos, 'buy_price', 0) <= 0:
             continue
 
-        current_price = _normalize_intraday_price(
-            row.get('PRICE', row.get('price')),
-            row.get('PRE_CLOSE', row.get('pre_close')),
-            INTRADAY_STOCK_PCT_ABS_LIMIT,
-        )
+        if mode == "intraday":
+            current_price = _normalize_intraday_price(
+                row.get('PRICE', row.get('price')),
+                row.get('PRE_CLOSE', row.get('pre_close')),
+                INTRADAY_STOCK_PCT_ABS_LIMIT,
+            )
+        else:
+            current_price = _normalize_cycle_price(
+                row.get('PRICE', row.get('price')),
+                row.get('PRE_CLOSE', row.get('pre_close')),
+                INTRADAY_STOCK_PCT_ABS_LIMIT,
+            )
         if current_price is None:
             continue
         price_map[ts_code] = current_price
@@ -868,7 +946,9 @@ def _build_industry_panel_from_prices(
         if shares is None or buy_price is None or shares <= 0 or buy_price <= 0:
             continue
 
-        current_price = price_map.get(ts_code, buy_price)
+        current_price = price_map.get(ts_code)
+        if current_price is None:
+            continue
         pre_close = None if pre_close_map is None else pre_close_map.get(ts_code)
         if mode == "intraday":
             if pre_close is None or pre_close <= 0:
@@ -975,6 +1055,22 @@ def _normalize_intraday_price(price: object, pre_close: object, abs_limit: float
     price_float = _coerce_float(price)
     if price_float is None or not np.isfinite(price_float) or price_float <= 0:
         return pre_close_float
+
+    pct = (price_float / pre_close_float - 1) * 100
+    if _sanitize_intraday_pct(pct, abs_limit) is None:
+        return pre_close_float
+    return price_float
+
+
+def _normalize_cycle_price(price: object, pre_close: object, abs_limit: float) -> Optional[float]:
+    """规范化成本口径实时价；昨收缺失时仍允许使用现价。"""
+    price_float = _coerce_float(price)
+    if price_float is None or not np.isfinite(price_float) or price_float <= 0:
+        return None
+
+    pre_close_float = _coerce_float(pre_close)
+    if pre_close_float is None or not np.isfinite(pre_close_float) or pre_close_float <= 0:
+        return price_float
 
     pct = (price_float / pre_close_float - 1) * 100
     if _sanitize_intraday_pct(pct, abs_limit) is None:
@@ -3023,15 +3119,23 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
 
         snapshot['quotes'] = rt_df
         snapshot['quote_source'] = quote_source
-        # 先从持仓行情尝试提取指数数据（通常持仓行情不含指数代码，命中为空）
         index_pct_map = _extract_index_pct_map_from_quote_df(rt_df)
-        # 主动抓取指数行情，在快照阶段（240s超时）完成，避免在盘中图12s超时窗口内阻塞
-        if len(index_pct_map) < 3:
-            fetched = _fetch_realtime_index_pcts()
-            index_pct_map.update(fetched)
-            _trace_diag(
-                f"快照阶段已预取指数行情: codes={sorted(index_pct_map.keys())}"
+        cached_index_pct_map = _get_cached_realtime_index_pcts()
+        for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
+            if code in index_pct_map:
+                continue
+            pct = _sanitize_intraday_pct(
+                cached_index_pct_map.get(code),
+                INTRADAY_INDEX_PCT_ABS_LIMIT,
             )
+            if pct is not None:
+                index_pct_map[code] = pct
+        if len(index_pct_map) < 3:
+            _trace_diag(
+                "快照阶段指数未补全，已切后台刷新: "
+                f"cached_codes={sorted(index_pct_map.keys())}"
+            )
+            _refresh_realtime_index_pcts_async()
         snapshot['index_pct_map'] = index_pct_map
         _set_cached_holdings_snapshot(snapshot)
         _trace_diag(
@@ -3109,6 +3213,7 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
     buy_price_invalid = 0  # 新增: 统计 buy_price 无效的行数
     unmatched_samples: list[str] = []
     failed_pnl_samples: list[tuple] = []  # 新增: 记录计算失败的样本
+    sample_rank_inputs: list[tuple] = []
     for _, row in rt_df.iterrows():
         rt_total += 1
         ts_code = str(row.get('TS_CODE', row.get('ts_code', ''))).strip()
@@ -3127,11 +3232,21 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
             continue
         matched_rows += 1
         pre_close = row.get('PRE_CLOSE', row.get('pre_close'))
-        current_price = _normalize_intraday_price(
+        current_price = _normalize_cycle_price(
             price,
             pre_close,
             INTRADAY_STOCK_PCT_ABS_LIMIT,
         )
+        if len(sample_rank_inputs) < 5:
+            sample_rank_inputs.append(
+                (
+                    ts_code,
+                    _coerce_float(price),
+                    _coerce_float(pre_close),
+                    current_price,
+                    _coerce_float(getattr(pos, 'buy_price', None)),
+                )
+            )
         if current_price is None:  # 新增: 统计 current_price 为空的情况
             pnl_calc_failed += 1
             if len(failed_pnl_samples) < 3:
@@ -3155,6 +3270,8 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
         f"rt_total={rt_total}, rt_valid={rt_valid_code_price}, matched={matched_rows}, "
         f"positions={len(positions)}, position_aliases={len(normalized_position_map)}"
     )
+    if sample_rank_inputs:
+        _trace_diag(f"排行样本: {sample_rank_inputs}")
 
     if not stocks:
         position_samples = list(positions.keys())[:5]
@@ -3274,26 +3391,9 @@ def _extract_index_pct_from_akshare(df, target_code: str) -> Optional[float]:
     )
 
 
-def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, float]:
-    """获取上证、深证与中证800当日实时涨跌幅。"""
+def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
+    """使用 AKShare 拉取实时指数涨跌幅。"""
     pct_map: dict[str, float] = {}
-
-    if snapshot is not None:
-        snapshot_pct_map = snapshot.get('index_pct_map')
-        if isinstance(snapshot_pct_map, dict):
-            for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
-                pct = _sanitize_intraday_pct(
-                    snapshot_pct_map.get(code),
-                    INTRADAY_INDEX_PCT_ABS_LIMIT,
-                )
-                if pct is not None:
-                    pct_map[code] = pct
-        if len(pct_map) < 3:
-            pct_map.update(
-                _extract_index_pct_map_from_quote_df(snapshot.get('quotes'))
-            )
-        if len(pct_map) == 3:
-            return pct_map
 
     try:
         import akshare as ak  # type: ignore
@@ -3332,6 +3432,44 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
             "akshare_spot_import_or_loop_error",
             "AKShare实时指数获取主流程异常，已回退现有数据",
         )
+
+    return pct_map
+
+
+def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, float]:
+    """获取上证、深证与中证800当日实时涨跌幅。"""
+    pct_map: dict[str, float] = {}
+
+    if snapshot is not None:
+        snapshot_pct_map = snapshot.get('index_pct_map')
+        if isinstance(snapshot_pct_map, dict):
+            for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
+                pct = _sanitize_intraday_pct(
+                    snapshot_pct_map.get(code),
+                    INTRADAY_INDEX_PCT_ABS_LIMIT,
+                )
+                if pct is not None:
+                    pct_map[code] = pct
+        if len(pct_map) < 3:
+            pct_map.update(
+                _extract_index_pct_map_from_quote_df(snapshot.get('quotes'))
+            )
+        if len(pct_map) == 3:
+            return pct_map
+
+    cached_pct_map = _get_cached_realtime_index_pcts()
+    for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
+        if code in pct_map:
+            continue
+        pct = _sanitize_intraday_pct(
+            cached_pct_map.get(code),
+            INTRADAY_INDEX_PCT_ABS_LIMIT,
+        )
+        if pct is not None:
+            pct_map[code] = pct
+
+    if len(pct_map) < 3:
+        _refresh_realtime_index_pcts_async()
 
     missing_codes = [
         code for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE)

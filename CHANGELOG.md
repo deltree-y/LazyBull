@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.33] - 2026-05-11
+
+### 修复
+
+- **3.5LCD 排行、行业与指数抓取根因修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 排行改为使用成本口径实时价，昨收缺失时仍可用现价计算持仓盈亏，修复 matched=20 但排行为空的问题
+  - 排行新增样本日志，打印 ts_code、price、pre_close、current_price、buy_price，便于现场核对输入值
+  - 行业面板 cycle 口径不再在缺少实时价时回退买入价，修复行业表格全部显示 0% 的问题
+  - 指数涨跌幅改为缓存优先、后台刷新，移除实时快照主路径上的同步 AKShare 指数抓取，避免每轮抓到 70%-80% 就被外层超时打断后重头开始
+
 ## [0.71.32] - 2026-05-11
 
 ### 修复
