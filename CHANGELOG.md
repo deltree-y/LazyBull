@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.32] - 2026-05-11
+
+### 修复
+
+- **3.5LCD 下午数据卡顿根本原因修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 问题根因：`REALTIME_SNAPSHOT_TIMEOUT_SECONDS` 默认 240 秒（4 分钟），UI 被慢数据源（efinance/akshare 需 3-5 分钟）阻塞
+  - **修复**：缩短超时到 10 秒，让 UI 快速超时并用 30 分钟有效期的缓存数据渲染（已有缓存回退逻辑）
+  - 后台线程继续异步获取新数据，不影响 UI 流畅性
+  - 即使数据源慢，用户也不会看到 3-4 分钟卡屏现象
+
+## [0.71.31] - 2026-05-11
+
+### 修复
+
+- **3.5LCD 排行无结果诊断增强与下午无数据问题修复** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增排行构建诊断，统计 `pnl_calc_failed`（current_price 为空的行数）和 `buy_price_invalid`（持仓买入价无效的行数）
+  - 诊断日志打印失败样本的具体 price/pre_close/buy_price 值，便于现场快速定位排行为空的原因
+  - 缩短盘中刷新间隔从 300s 改为 120s（2分钟），改善代理延迟环境下的下午数据滞后问题
+  - 新增盘中刷新触发诊断日志，明确打印触发原因（午休补齐 / 开盘 / 间隔到期）
+
+## [0.71.30] - 2026-05-11
+
+### 修复
+
+- **3.5LCD efinance 快照增加自定义 Session 配置，改善直连稳定性** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 新增 `_configure_efinance_session()` 函数，为 efinance 配置超时、User-Agent、连接池
+  - 新增常量：`EFINANCE_CONNECT_TIMEOUT_SECONDS=8.0`、`EFINANCE_READ_TIMEOUT_SECONDS=10.0`（避免长期挂起）
+  - User-Agent 改为伪装手机客户端（iPhone Safari），降低被东方财富风控的概率
+  - 在 efinance 导入后立即调用配置函数，并新增尝试日志打印超时参数
+  - 此改动对直连网络不稳定的环境可显著改善成功率
+
 ## [0.71.29] - 2026-05-11
 
 ### 优化

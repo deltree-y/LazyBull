@@ -63,20 +63,25 @@ from respi.set_backlight import update_pwm_backlight_state as _update_pwm_backli
 
 
 def _resolve_realtime_snapshot_timeout_seconds() -> float:
-    """解析实时快照超时秒数，仅支持单一环境变量。"""
+    """解析实时快照超时秒数，仅支持单一环境变量。
+
+    说明：设置为 10 秒，让 UI 快速超时并用缓存数据渲染，不被慢数据源阻塞。
+    后台线程会继续异步获取，缓存有 30 分钟有效期。即使数据源需要 3-5 分钟，
+    也只在第一次超时后略等，后续刷新都会用缓存数据显示，不卡 UI。
+    """
     raw = os.getenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS")
     if raw is not None and str(raw).strip() != "":
         try:
             return float(str(raw).strip())
         except (TypeError, ValueError):
             pass
-    return 240.0
+    return 10.0  # 改为 10 秒，避免被慢数据源阻塞
 
 # ---------- 常量 ----------
 DEFAULT_FB_PATH = "/dev/fb1"
 WIDTH, HEIGHT = 480, 320
 REFRESH_INTERVAL = 600       # 周期图/非交易时段补数间隔（秒），10分钟
-REALTIME_REFRESH_INTERVAL = 300  # 盘中摘要/排行/日内图刷新间隔（秒）
+REALTIME_REFRESH_INTERVAL = 120  # 盘中摘要/排行/日内图刷新间隔（秒，从300缩短到120以应对代理延迟）
 REALTIME_SNAPSHOT_TIMEOUT_SECONDS = _resolve_realtime_snapshot_timeout_seconds()
 try:
     REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS = float(
@@ -89,6 +94,9 @@ if REALTIME_SNAPSHOT_CACHE_MAX_AGE_SECONDS < 60.0:
 REALTIME_INTRADAY_TIMEOUT_SECONDS = 12.0  # 单次盘中图构建超时（秒）
 EFINANCE_RETRY_COUNT = 1  # efinance 失败后的重试次数（总尝试次数=1+重试次数）
 EFINANCE_RETRY_MIN_INTERVAL_SECONDS = 2.0  # efinance 重试最小间隔（秒）
+EFINANCE_CONNECT_TIMEOUT_SECONDS = 8.0  # efinance 连接超时（秒）
+EFINANCE_READ_TIMEOUT_SECONDS = 10.0  # efinance 读取超时（秒）
+EFINANCE_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1"  # 伪装手机UA避免风控
 UPDATE_STUCK_RESET_SECONDS = 30.0  # 顶栏更新状态强制脱困阈值（秒）
 USAGE_REFRESH_INTERVAL = 2.0  # 顶部 CPU/内存双血条采样间隔（秒）
 CPU_USAGE_STALE_RESET_SECONDS = 10.0  # 息屏恢复后避免拿超长时间窗平均值
@@ -266,6 +274,58 @@ def _fetch_network_context():
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+
+def _configure_efinance_session() -> None:
+    """为 efinance 配置自定义 requests Session，增强网络稳定性。
+    
+    配置内容：
+    - 设置连接/读取超时，避免长期挂起
+    - 配置 User-Agent 伪装成手机客户端，降低被风控风险
+    - 配置连接池和重试机制
+    """
+    try:
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        # 创建自定义 session
+        session = requests.Session()
+        
+        # 配置超时和 User-Agent
+        session.timeout = (EFINANCE_CONNECT_TIMEOUT_SECONDS, EFINANCE_READ_TIMEOUT_SECONDS)
+        session.headers.update({
+            'User-Agent': EFINANCE_USER_AGENT,
+        })
+        
+        # 配置连接池：减少连接复用，降低断连风险
+        adapter_config = HTTPAdapter(
+            pool_connections=5,
+            pool_maxsize=5,
+            max_retries=Retry(
+                total=0,  # 由 efinance 外层控制重试
+                backoff_factor=0.5,
+            )
+        )
+        session.mount('http://', adapter_config)
+        session.mount('https://', adapter_config)
+        
+        # 尝试将 session 注入到 efinance 全局
+        # efinance 的 requests 调用可能会用到全局的 requests.Session
+        import efinance as ef
+        if hasattr(ef, 'requests'):
+            ef.requests.Session = lambda: session
+        
+        _emit_diag_once(
+            "efinance_session_configured",
+            f"efinance Session 配置完成: timeout=({EFINANCE_CONNECT_TIMEOUT_SECONDS:.1f}s,{EFINANCE_READ_TIMEOUT_SECONDS:.1f}s), "
+            f"pool_size=5, User-Agent=iPhone"
+        )
+    except Exception as exc:
+        _emit_diag_once(
+            "efinance_session_config_error",
+            f"efinance Session 配置失败: {type(exc).__name__}: {exc}"
+        )
 
 
 # ---------- 字体加载（带缓存）----------
@@ -2001,12 +2061,24 @@ def _is_realtime_refresh_due(
         last_refresh_at is not None
         and last_refresh_at < morning_close_dt <= current_dt <= morning_close_deadline
     ):
+        _trace_diag(
+            f"盘中刷新触发: 午休补齐窗口, current={current_dt.strftime('%H:%M:%S')}"
+        )
         return True, session_key
     if session_key is None:
-        return _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt), None
+        is_due = _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt)
+        return is_due, None
     if last_session_key != session_key:
+        _trace_diag(
+            f"盘中刷新触发: 开盘/午后开盘切换, session={last_session_key}->{session_key}"
+        )
         return True, session_key
-    return _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt), session_key
+    is_due = _is_interval_due(last_refresh_at, REALTIME_REFRESH_INTERVAL, current_dt)
+    if is_due:
+        _trace_diag(
+            f"盘中刷新触发: 间隔到期({REALTIME_REFRESH_INTERVAL}s)"
+        )
+    return is_due, session_key
 
 
 def _is_cycle_refresh_due(
@@ -2626,6 +2698,9 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
         )
         return None
 
+    # 为 efinance 配置自定义 Session，增强网络稳定性
+    _configure_efinance_session()
+
     df = None
     last_exc: Optional[Exception] = None
     total_attempts = EFINANCE_RETRY_COUNT + 1
@@ -2633,6 +2708,10 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
         attempt_no = attempt_idx + 1
         try:
             with _fetch_network_context():
+                _trace_diag(
+                    f"E快照尝试: attempt={attempt_no}/{total_attempts}, "
+                    f"timeout={EFINANCE_CONNECT_TIMEOUT_SECONDS}s+{EFINANCE_READ_TIMEOUT_SECONDS}s"
+                )
                 df = ef.stock.get_latest_quote(sorted(stock_codes))
             last_exc = None
             break
@@ -3026,7 +3105,10 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
     rt_total = 0
     rt_valid_code_price = 0
     matched_rows = 0
+    pnl_calc_failed = 0  # 新增: 统计 pnl 计算失败的行数
+    buy_price_invalid = 0  # 新增: 统计 buy_price 无效的行数
     unmatched_samples: list[str] = []
+    failed_pnl_samples: list[tuple] = []  # 新增: 记录计算失败的样本
     for _, row in rt_df.iterrows():
         rt_total += 1
         ts_code = str(row.get('TS_CODE', row.get('ts_code', ''))).strip()
@@ -3044,12 +3126,25 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
                 unmatched_samples.append(f"{ts_code}->{normalized_rt_code or '-'}")
             continue
         matched_rows += 1
+        pre_close = row.get('PRE_CLOSE', row.get('pre_close'))
         current_price = _normalize_intraday_price(
             price,
-            row.get('PRE_CLOSE', row.get('pre_close')),
+            pre_close,
             INTRADAY_STOCK_PCT_ABS_LIMIT,
         )
-        if current_price is None or pos.buy_price <= 0:
+        if current_price is None:  # 新增: 统计 current_price 为空的情况
+            pnl_calc_failed += 1
+            if len(failed_pnl_samples) < 3:
+                failed_pnl_samples.append(
+                    (ts_code, price, pre_close, "current_price=None")
+                )
+            continue
+        if pos.buy_price <= 0:  # 新增: 统计 buy_price 无效的情况
+            buy_price_invalid += 1
+            if len(failed_pnl_samples) < 3:
+                failed_pnl_samples.append(
+                    (ts_code, price, pre_close, f"buy_price={pos.buy_price}")
+                )
             continue
         pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
         code = ts_code.split('.')[0]
@@ -3066,7 +3161,9 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
         _emit_diag(
             "排行构建无结果: "
             f"matched={matched_rows}, rt_valid={rt_valid_code_price}, "
-            f"sample_rt_unmatched={unmatched_samples}, sample_pos_keys={position_samples}"
+            f"pnl_calc_failed={pnl_calc_failed}, buy_price_invalid={buy_price_invalid}, "
+            f"sample_rt_unmatched={unmatched_samples}, sample_pos_keys={position_samples}, "
+            f"failed_pnl_samples={failed_pnl_samples}"
         )
         return None
 
