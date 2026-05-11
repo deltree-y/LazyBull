@@ -15,38 +15,43 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
 # SplitCount           : 训练切分数量
 # FinalDate            : 最终日期（启用部署训练时=部署训练数据最后一天；禁用部署训练时=最后split测试结束日）
+# ContinueDays         : 连续执行天数；>1 时会从 FinalDate 起按自然日逐日向后推进展开，并自动顺延到最近后一交易日
 # StartModelVersion    : skip-training 模式下该时间段首个 split 对应模型版本号
 $wf_period_configs = @(
-    [PSCustomObject]@{
-        Label = "0430"
-        SplitCount = 14
-        FinalDate = "20260331"
-        StartModelVersion = 14388
-    }
+    #[PSCustomObject]@{
+    #    Label = "0430"
+    #    SplitCount = 14
+    #    FinalDate = "20260331"
+    #    ContinueDays = 1
+    #    StartModelVersion = 15034
+    #}
     [PSCustomObject]@{
         Label = "0101"
-        SplitCount = 14
+        SplitCount = 13
         FinalDate = "20251231"
-        StartModelVersion = 14403
+        ContinueDays = 90
+        StartModelVersion = 15071
     }
-    [PSCustomObject]@{
-        Label = "0209"
-        SplitCount = 14
-        FinalDate = "20260209"
-        StartModelVersion = 14403
-    }
-    [PSCustomObject]@{
-        Label = "0324"
-        SplitCount = 14
-        FinalDate = "20260324"
-        StartModelVersion = 14418
-    }
+    #[PSCustomObject]@{
+    #    Label = "0209"
+    #    SplitCount = 14
+    #    FinalDate = "20260209"
+    #    ContinueDays = 1
+    #    StartModelVersion = 15097
+    #}
+    #[PSCustomObject]@{
+    #    Label = "0324"
+    #    SplitCount = 14
+    #    FinalDate = "20260324"
+    #    ContinueDays = 1
+    #    StartModelVersion = 15125
+    #}
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
@@ -63,9 +68,9 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(4,5)         #. XGB推荐9, LGB推荐5
+$max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.0125,0.0175)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.0175)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -140,7 +145,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(1,2)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -201,8 +206,8 @@ $enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
 #    若收益率 <= early_exit_loss_threshold，则提前换出
 #    注意：这两个阈值在 $enable_profit_based_holding = $true 时始终生效，
 #    不受 $early_exit_mode_list = @('disabled') 影响；disabled 表示原硬卖。
-$early_exit_holding_ratio_list    = @(1)        # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
-$early_exit_loss_threshold_list   = @(-0.09)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
+$early_exit_holding_ratio_list    = @(0.8)        # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
+$early_exit_loss_threshold_list   = @(-0.15)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
 # 0429这个似乎不开比较好, early_exit_holding_ratio设置为1就是关闭
 
 # 2) 亏损提前换出二次确认：仅在 early_exit 条件已触发后再做一次强势度否决
@@ -216,7 +221,7 @@ $early_exit_max_reprieves_list               = @(3)            # 单只股票最
 # 3) ATR 动态亏损阈值：在亏损提前换出分支中，用 ATR 替代固定亏损阈值
 #    需同时满足 $enable_profit_based_holding = $true 且 $use_atr_for_early_exit = $true
 $use_atr_for_early_exit           = $false   # $true 启用 | $false 禁用
-$atr_multiplier_list              = @(2)   # ATR 倍数（仅启用 ATR 止损时生效）
+$atr_multiplier_list              = @(2.5)   # ATR 倍数（仅启用 ATR 止损时生效）
 # 0430效果都不好, 收益和回测都变差
 
 # 4) 盈利延续持有：仅在持有期满后进入该分支
@@ -346,10 +351,69 @@ if ($signal_confidence_gate_enabled) {
     }
 }
 
+function Get-NextOrSameTradeDate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Date,
+        [Parameter(Mandatory = $true)]
+        [string[]]$TradeDates
+    )
+
+    foreach ($tradeDate in $TradeDates) {
+        if ($tradeDate -ge $Date) {
+            return $tradeDate
+        }
+    }
+
+    throw "日期 $Date 晚于交易日历可用范围，无法顺延到有效交易日"
+}
+
 $normalized_wf_period_configs = @()
 $wfPeriodIndex = 0
+if (-not (Test-Path $data_root)) {
+    throw "数据目录不存在: $data_root"
+}
+
+$resolvedDataRoot = (Resolve-Path $data_root).Path
+$tradeCalLoaderScript = @"
+import sys
+from pathlib import Path
+
+project_root = Path.cwd()
+sys.path.insert(0, str(project_root))
+
+from src.lazybull.data import DataLoader, Storage
+
+storage = Storage(root_path=r'''$resolvedDataRoot''')
+loader = DataLoader(storage)
+trade_cal = loader.load_clean_trade_cal()
+if trade_cal is None:
+    trade_cal = loader.load_trade_cal()
+
+if trade_cal is None or len(trade_cal) == 0:
+    raise SystemExit("无法通过 DataLoader 读取交易日历")
+
+required_cols = {"cal_date", "is_open"}
+if not required_cols.issubset(trade_cal.columns):
+    missing = ", ".join(sorted(required_cols.difference(trade_cal.columns)))
+    raise SystemExit(f"交易日历缺少必要列: {missing}")
+
+cal_dates = trade_cal["cal_date"].astype(str).str.replace("-", "", regex=False).str.slice(0, 8)
+is_open = trade_cal["is_open"].astype(str)
+open_trade_dates = sorted(cal_dates[is_open == "1"].dropna().unique().tolist())
+for trade_date in open_trade_dates:
+    print(trade_date)
+"@
+
+$openTradeDates = @($tradeCalLoaderScript | py -)
+
+if ($openTradeDates.Count -eq 0) {
+    throw "交易日历中不存在开市日: $resolvedDataRoot"
+}
+
 foreach ($wfPeriod in $wf_period_configs) {
     $wfPeriodIndex++
+    $seenAlignedFinalDates = [System.Collections.Generic.HashSet[string]]::new()
     $periodLabel = if ($wfPeriod.PSObject.Properties.Name -contains 'Label' -and -not [string]::IsNullOrWhiteSpace([string]$wfPeriod.Label)) {
         [string]$wfPeriod.Label
     } else {
@@ -357,20 +421,43 @@ foreach ($wfPeriod in $wf_period_configs) {
     }
     $periodSplitCount = [int]$wfPeriod.SplitCount
     $periodFinalDate = [string]$wfPeriod.FinalDate
+    $periodContinueDays = if (
+        $wfPeriod.PSObject.Properties.Name -contains 'ContinueDays' -and
+        -not [string]::IsNullOrWhiteSpace([string]$wfPeriod.ContinueDays)
+    ) {
+        [int]$wfPeriod.ContinueDays
+    } else {
+        1
+    }
     $periodStartModelVersion = $wfPeriod.StartModelVersion
 
     if ($periodSplitCount -le 0 -or [string]::IsNullOrWhiteSpace($periodFinalDate)) {
         throw "wf_period_configs[$($wfPeriodIndex - 1)] 缺少有效的 SplitCount 或 FinalDate"
     }
+    if ($periodContinueDays -le 0) {
+        throw "wf_period_configs[$($wfPeriodIndex - 1)] 的 ContinueDays 必须大于 0"
+    }
     if ($skip_training -and $null -eq $periodStartModelVersion) {
         throw "skip-training 模式要求每个时间段都设置 StartModelVersion，缺失时间段: $periodLabel"
     }
 
-    $normalized_wf_period_configs += [PSCustomObject]@{
-        Label = $periodLabel
-        SplitCount = $periodSplitCount
-        FinalDate = $periodFinalDate
-        StartModelVersion = $periodStartModelVersion
+    for ($continueOffset = 0; $continueOffset -lt $periodContinueDays; $continueOffset++) {
+        $candidateFinalDate = (
+            [datetime]::ParseExact($periodFinalDate, 'yyyyMMdd', $null)
+        ).AddDays($continueOffset).ToString('yyyyMMdd')
+        $alignedFinalDate = Get-NextOrSameTradeDate -Date $candidateFinalDate -TradeDates $openTradeDates
+        if (-not $seenAlignedFinalDates.Add($alignedFinalDate)) {
+            continue
+        }
+
+        $normalized_wf_period_configs += [PSCustomObject]@{
+            Label = $periodLabel
+            SplitCount = $periodSplitCount
+            FinalDate = $alignedFinalDate
+            ContinueDays = $periodContinueDays
+            ContinueOffset = $continueOffset
+            StartModelVersion = $periodStartModelVersion
+        }
     }
 }
 
@@ -385,7 +472,11 @@ $batch_compare_output = Join-Path $data_root "walk_forward\wf_comparison.xlsx"
 New-Item -ItemType Directory -Path $batch_raw_dir -Force | Out-Null
 
 $periodSummary = ($normalized_wf_period_configs | ForEach-Object {
-    "{0}:split={1}, final={2}" -f $_.Label, $_.SplitCount, $_.FinalDate
+    if ($_.ContinueDays -gt 1) {
+        "{0}:split={1}, final={2}, day={3}/{4}" -f $_.Label, $_.SplitCount, $_.FinalDate, ($_.ContinueOffset + 1), $_.ContinueDays
+    } else {
+        "{0}:split={1}, final={2}" -f $_.Label, $_.SplitCount, $_.FinalDate
+    }
 }) -join "; "
 
 $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
@@ -533,6 +624,13 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     $split_count = $wfPeriod.SplitCount
     $final_date = $wfPeriod.FinalDate
     $period_label = $wfPeriod.Label
+    $continue_days = $wfPeriod.ContinueDays
+    $continue_offset = $wfPeriod.ContinueOffset
+    $batch_period_label = if ($continue_days -gt 1) {
+        "{0}_{1}" -f $period_label, $final_date
+    } else {
+        $period_label
+    }
     $start_model_version = $wfPeriod.StartModelVersion
     $summary_csv_path = Join-Path $batch_raw_dir ("walk_forward_summary_{0}_{1:D4}.csv" -f $period_label, $count)
 
@@ -566,7 +664,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --early-stopping-metric $early_stopping_metric" +
                  " --time-decay-half-life $time_decay_half_life" +
                  " --batch-run-id $batch_run_id" +
-                 " --batch-period-label $period_label" +
+                 " --batch-period-label $batch_period_label" +
                  " --wf-summary-csv `"$summary_csv_path`""
 
     if (-not $rank_weight_enabled) {
@@ -777,7 +875,11 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     }
 
     Write-Host ""
-    Write-Host "[任务 $count / $totalTasks][时间段 $period_label][split=$split_count, final=$final_date]" -ForegroundColor Green
+    if ($continue_days -gt 1) {
+        Write-Host "[任务 $count / $totalTasks][时间段 $period_label][split=$split_count, final=$final_date][day=$($continue_offset + 1)/$continue_days]" -ForegroundColor Green
+    } else {
+        Write-Host "[任务 $count / $totalTasks][时间段 $period_label][split=$split_count, final=$final_date]" -ForegroundColor Green
+    }
     Write-Host $pythonCmd -ForegroundColor Gray
     Write-Host ""
 

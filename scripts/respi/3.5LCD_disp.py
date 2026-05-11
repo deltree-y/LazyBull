@@ -2943,7 +2943,16 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
 
         snapshot['quotes'] = rt_df
         snapshot['quote_source'] = quote_source
-        snapshot['index_pct_map'] = _extract_index_pct_map_from_quote_df(rt_df)
+        # 先从持仓行情尝试提取指数数据（通常持仓行情不含指数代码，命中为空）
+        index_pct_map = _extract_index_pct_map_from_quote_df(rt_df)
+        # 主动抓取指数行情，在快照阶段（240s超时）完成，避免在盘中图12s超时窗口内阻塞
+        if len(index_pct_map) < 3:
+            fetched = _fetch_realtime_index_pcts()
+            index_pct_map.update(fetched)
+            _trace_diag(
+                f"快照阶段已预取指数行情: codes={sorted(index_pct_map.keys())}"
+            )
+        snapshot['index_pct_map'] = index_pct_map
         _set_cached_holdings_snapshot(snapshot)
         _trace_diag(
             "抓快照成功: "

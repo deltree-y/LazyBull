@@ -28,7 +28,47 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.21)
+### 当前版本 (v0.71.27)
+
+**ContinueDays 改为向后推进，并修复跨时间段稳定性缺失** (v0.71.27):
+- [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 的 ContinueDays 展开改为从 FinalDate 起逐日向后推进
+- 非交易日继续顺延到最近后一交易日
+- 多天展开时自动使用带 final_date 的 batch_period_label，确保 `wf_comparison_batches.xlsx` 的跨时间段稳定性能产生记录
+
+### 当前版本历史 (v0.71.26)
+
+**batch walk-forward 修复多行 Python 内嵌调用的引号解析问题** (v0.71.26):
+- [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 不再用 `py -c` 传递多行 Python，而是改为通过标准输入传给 `py -`
+- 修复 Windows PowerShell 下中文字符串与多行脚本触发的 `SyntaxError`
+
+### 当前版本历史 (v0.71.25)
+
+**batch walk-forward 改为走项目统一交易日历读取链路** (v0.71.25):
+- [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 不再硬编码读取 `data/clean/trade_cal.csv`
+- 改为通过项目 `Storage` / `DataLoader` 读取交易日历，兼容当前 `trade_cal.parquet` 存储格式
+- 避免因为底层文件格式不是 csv 而导致脚本启动即失败
+
+### 当前版本历史 (v0.71.24)
+
+**batch walk-forward 连续展开结果按最终交易日去重** (v0.71.24):
+- [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 对 `ContinueDays` 展开后顺延得到的最终 `FinalDate` 做去重
+- 多个候选自然日若映射到同一个交易日，只保留一条任务，避免重复执行
+
+### 当前版本历史 (v0.71.23)
+
+**batch walk-forward 非交易日改为顺延到后一交易日** (v0.71.23):
+- [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 对 `ContinueDays` 展开后的候选 `FinalDate`，若命中非交易日，现改为顺延到最近后一交易日
+- 避免把训练终点错误回退到更早历史交易日
+
+### 当前版本历史 (v0.71.22)
+
+**batch walk-forward 支持 FinalDate 连续多日展开** (v0.71.22):
+- [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 的 `wf_period_configs` 新增 `ContinueDays`
+- 同一组时间段配置可从 `FinalDate` 开始按自然日回退展开多个任务，例如 `ContinueDays=2` 会额外包含前一天的 `FinalDate`
+- 若展开后的日期命中非交易日，脚本会自动对齐到交易日
+- `skip-training` 模式下不同 `FinalDate` 共用同一组 `StartModelVersion` 起点，不再因多日展开而改动模型编号
+
+### 当前版本历史 (v0.71.21)
 
 **3.5LCD efinance 重试间隔下限修复** (v0.71.21):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 对 efinance 快照增加有限重试（总尝试最多2次）

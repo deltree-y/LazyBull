@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.28] - 2026-05-11
+
+### 修复
+
+- **修复树莓派大屏盘中不显示分钟折线图问题** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 根因：`snapshot['index_pct_map']` 由持仓行情 df 提取，因持仓 df 不含指数代码故始终为空；`_build_intraday_chart` 在 12s 超时窗口内触发 `ak.stock_zh_index_spot_sina()` 网络请求（耗时远超 30s），每次超时返回原值 `None`，导致日内图永远无法建立，`_should_show_intraday_chart` 始终返回 `False`，大屏全天只显示周期（每日）折线图
+  - 修复：在快照抓取阶段（240s 超时）主动调用 `_fetch_realtime_index_pcts()` 预取上证/深证/中证800数据并写入 `snapshot['index_pct_map']`；`_build_intraday_chart` 内再次调用时可直接从 snapshot 读取，无需额外网络请求
+
+## [0.71.27] - 2026-05-10
+
+### 修复
+
+- **修正 ContinueDays 展开方向为向后推进日期** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - 展开候选日期改为 `FinalDate + continueOffset`，不再向历史方向回退
+  - 非交易日仍保持顺延到最近后一交易日
+
+- **修复 `wf_comparison_batches.xlsx` 跨时间段稳定性无记录问题** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - 多天展开时将 `batch_period_label` 自动拼接 `final_date`（如 `0101_20260102`）
+  - 避免 compare 聚合阶段把不同最终日期误判为同一时间段并去重掉
+
+## [0.71.26] - 2026-05-10
+
+### 修复
+
+- **修复 batch walk-forward 中多行 Python 通过 `py -c` 调用时的引号解析问题** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - 交易日历读取脚本改为通过标准输入喂给 `py -`
+  - 避免中文字符串和多行代码在 PowerShell/Windows 参数解析中被截断，导致 `SyntaxError`
+
+## [0.71.25] - 2026-05-10
+
+### 修复
+
+- **batch walk-forward 改为通过项目 DataLoader/Storage 读取交易日历** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - 移除对 `data/clean/trade_cal.csv` 的硬编码依赖
+  - 改为复用项目统一的 `Storage` / `DataLoader` 读取 `trade_cal`
+  - 兼容当前实际存储格式 `trade_cal.parquet`，避免脚本因文件扩展名变化启动失败
+
+## [0.71.24] - 2026-05-10
+
+### 修复
+
+- **batch walk-forward 在 ContinueDays 展开后按最终交易日去重** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - 若多个候选自然日顺延后映射到同一个交易日，只保留一条任务
+  - 避免周末、节假日或长假场景下重复执行相同 `FinalDate`
+
+## [0.71.23] - 2026-05-10
+
+### 修复
+
+- **修正 batch walk-forward 的非交易日对齐方向为后一交易日** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - `ContinueDays` 展开后的候选 `FinalDate` 若命中非交易日，现改为顺延到最近后一交易日
+  - 避免将周末/节假日错误回退到更早交易日，导致训练终点落到历史更早样本
+
+## [0.71.22] - 2026-05-10
+
+### 优化
+
+- **batch walk-forward 支持按 FinalDate 连续展开多日任务，并自动对齐交易日** ([scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1)):
+  - `wf_period_configs` 新增可选字段 `ContinueDays`，默认值为 `1`
+  - 同一时间段可从 `FinalDate` 起按自然日连续回退展开多个 walk-forward 任务
+  - 若展开后的日期落在非交易日，会自动对齐到交易日
+  - `skip-training` 模式下多日展开任务共用同一个 `StartModelVersion` 起点，不因 `FinalDate` 变化而改动模型编号
+
 ## [0.71.21] - 2026-05-08
 
 ### 修复
