@@ -2614,6 +2614,7 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
 
     fetch_started_at = time.monotonic()
     _trace_diag(f"E快照开始: req_stocks={len(stock_codes)}")
+    _trace_diag(f"E快照请求代码: stock_codes={sorted(stock_codes)}")
 
     try:
         import efinance as ef  # type: ignore

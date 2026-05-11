@@ -28,7 +28,19 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.27)
+### 当前版本 (v0.71.29)
+
+**3.5LCD efinance 快照新增请求代码日志** (v0.71.29):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 在 `ef.stock.get_latest_quote(...)` 调用前新增 `E快照请求代码` 诊断日志
+- 日志直接打印 `sorted(stock_codes)`，便于现场核对传入代码集合是否符合预期
+
+### 当前版本历史 (v0.71.28)
+
+**修复树莓派大屏盘中不显示分钟折线图问题** (v0.71.28):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 在快照抓取阶段主动预取上证/深证/中证800实时涨跌幅并写入 `snapshot['index_pct_map']`
+- 避免 `_build_intraday_chart` 在 12 秒超时窗口内重复触发慢速指数接口请求，导致日内图长期构建失败
+
+### 当前版本历史 (v0.71.27)
 
 **ContinueDays 改为向后推进，并修复跨时间段稳定性缺失** (v0.71.27):
 - [scripts/batch/batch_walk_forward.ps1](scripts/batch/batch_walk_forward.ps1) 的 ContinueDays 展开改为从 FinalDate 起逐日向后推进

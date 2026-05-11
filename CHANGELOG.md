@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.29] - 2026-05-11
+
+### 优化
+
+- **3.5LCD efinance 快照新增请求代码日志，便于定位代码口径问题** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - 在 `ef.stock.get_latest_quote(...)` 调用前新增 `E快照请求代码` 诊断日志
+  - 日志直接打印 `sorted(stock_codes)` 的实际内容，便于现场核对传入代码集合
+
 ## [0.71.28] - 2026-05-11
 
 ### 修复

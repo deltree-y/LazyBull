@@ -145,7 +145,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(1,2)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(4)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
