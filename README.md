@@ -28,7 +28,14 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.36)
+### 当前版本 (v0.71.37)
+
+**3.5LCD 指数抓取单次调用优化** (v0.71.37):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 单次调用 `stock_zh_index_spot_sina` 直接提取上证/深证/中证800
+- 正常路径下指数抓取调用次数从 2 次降到 1 次
+- 仅在单次返回未命中中证800时触发兜底二次请求，兼顾性能与稳定性
+
+### 当前版本历史 (v0.71.36)
 
 **3.5LCD 盘中折线图不刷新修复** (v0.71.36):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 在实时快照中新增 `PCT_CHG` 字段，兼容 `PRE_CLOSE` 缺失场景

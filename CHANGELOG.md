@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.37] - 2026-05-11
+
+### 优化
+
+- **3.5LCD 指数抓取单次调用优化** ([scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py)):
+  - `stock_zh_index_spot_sina` 单次返回中同时提取上证/深证/中证800，正常路径从“2次请求”降为“1次请求”
+  - 仅当单次返回未命中中证800时，才触发兜底二次请求，保留异常场景稳健性
+  - 指数补抓日志新增 `mode=fallback` 标记，便于区分是否命中兜底路径
+
 ## [0.71.36] - 2026-05-11
 
 ### 修复

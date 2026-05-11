@@ -3492,7 +3492,7 @@ def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
                     df = getter()
                 row_count = 0 if df is None else int(len(df))
                 _trace_diag(f"指数主接口返回: api={getter_name}, rows={row_count}")
-                for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE):
+                for code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
                     if code in pct_map:
                         continue
                     pct = _extract_index_pct_from_akshare(df, code)
@@ -3504,9 +3504,9 @@ def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
                     f"AKShare实时接口调用失败: {getter_name} | {type(exc).__name__}: {exc}",
                 )
 
-        # 中证800按用户要求改走 stock_zh_index_spot
+        # 单次抓取未命中中证800时再兜底二次请求，兼顾性能与稳健性。
         if CSI800_INDEX_CODE not in pct_map:
-            _trace_diag("指数补抓开始: code=000906.SH")
+            _trace_diag("指数补抓开始: code=000906.SH, mode=fallback")
             csi800_pct = _fetch_csi800_realtime_pct_akshare()
             if csi800_pct is not None:
                 pct_map[CSI800_INDEX_CODE] = csi800_pct
