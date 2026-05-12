@@ -233,6 +233,9 @@ def run_oos_backtest(
     early_exit_mode: str = "disabled",
     early_exit_strength_protect_threshold: float = 0.55,
     early_exit_max_reprieves: int = 2,
+    time_stop_loss_enabled: bool = True,
+    time_stop_loss_days: int = 15,
+    time_stop_loss_profit_ratio: float = -0.02,
     take_profit_threshold: Optional[float] = None,
     take_profit_refill: bool = True,
     enable_early_rebalance_on_empty: bool = True,
@@ -391,6 +394,9 @@ def run_oos_backtest(
         early_exit_max_reprieves=early_exit_max_reprieves,
         take_profit_threshold=take_profit_threshold,
         take_profit_refill=take_profit_refill,
+        time_stop_loss_enabled=time_stop_loss_enabled,
+        time_stop_loss_days=time_stop_loss_days,
+        time_stop_loss_profit_ratio=time_stop_loss_profit_ratio,
         initial_capital=initial_capital,
         sell_price=bt_sell_timing,
     )
@@ -1647,6 +1653,9 @@ def write_walk_forward_summary(
                 "early_exit_mode",
                 "early_exit_strength_protect_threshold",
                 "early_exit_max_reprieves",
+                "time_stop_loss_enabled",
+                "time_stop_loss_days",
+                "time_stop_loss_profit_ratio",
             )
         else:
             profit_extension_mode = params.get("profit_extension_mode")
@@ -1665,6 +1674,9 @@ def write_walk_forward_summary(
                     "early_exit_strength_protect_threshold",
                     "early_exit_max_reprieves",
                 )
+
+            if not params.get("time_stop_loss_enabled"):
+                clear("time_stop_loss_days", "time_stop_loss_profit_ratio")
 
         if params.get("take_profit_threshold") is None:
             clear("take_profit_refill")
@@ -1803,6 +1815,9 @@ def write_walk_forward_summary(
         "profit_extension_strength_threshold": getattr(args, 'profit_extension_strength_threshold', 0.6),
         "use_atr_for_early_exit": getattr(args, 'use_atr_for_early_exit', False),
         "atr_multiplier": getattr(args, 'atr_multiplier', 2.0),
+        "time_stop_loss_enabled": getattr(args, 'time_stop_loss_enabled', True),
+        "time_stop_loss_days": getattr(args, 'time_stop_loss_days', 15),
+        "time_stop_loss_profit_ratio": getattr(args, 'time_stop_loss_profit_ratio', -0.02),
         "early_exit_mode": getattr(args, 'early_exit_mode', 'disabled'),
         "early_exit_strength_protect_threshold": getattr(args, 'early_exit_strength_protect_threshold', 0.55),
         "early_exit_max_reprieves": getattr(args, 'early_exit_max_reprieves', 2),
@@ -2750,6 +2765,30 @@ def main():
         help="ATR 倍数，亏损超过 N×ATR%% 时提前换出，默认 2.0"
     )
     parser.add_argument(
+        "--time-stop-loss-enabled",
+        action="store_true",
+        default=True,
+        help="启用时间止损：持仓超限未达盈利要求时提前换出（需同时开启 --enable-profit-based-holding）"
+    )
+    parser.add_argument(
+        "--no-time-stop-loss",
+        dest="time_stop_loss_enabled",
+        action="store_false",
+        help="关闭时间止损"
+    )
+    parser.add_argument(
+        "--time-stop-loss-days",
+        type=int,
+        default=15,
+        help="时间止损最低持有天数（交易日），默认 15"
+    )
+    parser.add_argument(
+        "--time-stop-loss-profit-ratio",
+        type=float,
+        default=-0.02,
+        help="时间止损利润阈值，当前盈亏低于此值时触发，默认 -0.02（-2%%）"
+    )
+    parser.add_argument(
         "--early-exit-mode",
         type=str,
         default="disabled",
@@ -3159,6 +3198,9 @@ def main():
                             early_exit_max_reprieves=getattr(args, 'early_exit_max_reprieves', 2),
                             take_profit_threshold=args.take_profit_threshold,
                             take_profit_refill=args.take_profit_refill,
+                            time_stop_loss_enabled=args.time_stop_loss_enabled,
+                            time_stop_loss_days=args.time_stop_loss_days,
+                            time_stop_loss_profit_ratio=args.time_stop_loss_profit_ratio,
                             enable_early_rebalance_on_empty=args.enable_early_rebalance_on_empty,
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,

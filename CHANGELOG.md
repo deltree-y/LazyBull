@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.39] - 2026-05-12
+
+### 新增
+
+- **时间止损功能** ([src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py)):
+  - 新增"时间止损"机制：持仓超过指定天数后仍未达到最低盈利要求，视为"死钱"触发提前换出
+  - 新增三个配置参数：`time_stop_loss_enabled`（总开关）、`time_stop_loss_days`（最低持有天数）、`time_stop_loss_profit_ratio`（利润阈值）
+  - 与现有 `strength_veto` 二次确认机制兼容：触发时间止损后可用强势度评分否决卖出（缓刑）
+  - 卖出类型标记为 `time_stop_loss`，执行链路与 `early_exit` 对齐（Tn 检查 → Tn+1 开盘卖出）
+  - 参数完整透传链路：`TradingConfig` → `walk_forward.py` → `backtest_runtime.py` → `BacktestEngineML` → `BacktestEngine`
+  - `batch_walk_forward.ps1` 新增 `$time_stop_loss_enabled`、`$time_stop_loss_days_list`、`$time_stop_loss_profit_ratio_list` 扫描参数
+
 ## [0.71.38] - 2026-05-11
 
 ### 修复

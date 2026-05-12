@@ -35,23 +35,23 @@ $wf_period_configs = @(
         Label = "0101"
         SplitCount = 13
         FinalDate = "20251231"
-        ContinueDays = 90
+        ContinueDays = 7
         StartModelVersion = 15071
     }
-    #[PSCustomObject]@{
-    #    Label = "0209"
-    #    SplitCount = 14
-    #    FinalDate = "20260209"
-    #    ContinueDays = 1
-    #    StartModelVersion = 15097
-    #}
-    #[PSCustomObject]@{
-    #    Label = "0324"
-    #    SplitCount = 14
-    #    FinalDate = "20260324"
-    #    ContinueDays = 1
-    #    StartModelVersion = 15125
-    #}
+    [PSCustomObject]@{
+        Label = "0209"
+        SplitCount = 14
+        FinalDate = "20260209"
+        ContinueDays = 7
+        StartModelVersion = 15097
+    }
+    [PSCustomObject]@{
+        Label = "0324"
+        SplitCount = 14
+        FinalDate = "20260324"
+        ContinueDays = 7
+        StartModelVersion = 15125
+    }
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
@@ -145,7 +145,7 @@ $deploy_train            = $false   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(2,4)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -153,7 +153,7 @@ $oos_backtest            = $true            # $true 启用 | $false 禁用
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 $bt_top_n_list           = @(20)            # 回测持仓 Top N
 $bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
-$bt_initial_capital      = 2000000          # 回测初始资金（默认：100万）
+$bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
 $bt_min_list_days_list   = @(365)           # 最少上市天数
@@ -224,7 +224,14 @@ $use_atr_for_early_exit           = $false   # $true 启用 | $false 禁用
 $atr_multiplier_list              = @(2.5)   # ATR 倍数（仅启用 ATR 止损时生效）
 # 0430效果都不好, 收益和回测都变差
 
-# 4) 盈利延续持有：仅在持有期满后进入该分支
+# 4) 时间止损：持仓超过指定天数后仍未达到最低盈利要求，视为"死钱"触发提前换出0512
+#    需同时满足 $enable_profit_based_holding = $true 且 $time_stop_loss_enabled = $true
+$time_stop_loss_enabled        = $false   # $true 启用 | $false 禁用
+# 以下参数仅在 $time_stop_loss_enabled = $true 时生效
+$time_stop_loss_days_list      = @(15)    # 触发时间止损的最低持有天数（交易日）
+$time_stop_loss_profit_ratio_list = @(-0.02) # 时间止损利润阈值（当前盈亏低于此值触发，如-0.02=-2%）
+
+# 5) 盈利延续持有：仅在持有期满后进入该分支
 #    pnl      = 浮盈率判据（兼容原行为）
 #    strength = 5 维强势度评分判据
 #    disabled = 持有期满直接卖出，不做延续
@@ -537,6 +544,8 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $profit_extension_mode_list.Length *
               $profit_extension_strength_threshold_list.Length *
               $atr_multiplier_list.Length *
+              $time_stop_loss_days_list.Length *
+              $time_stop_loss_profit_ratio_list.Length *
               $early_exit_mode_list.Length *
               $early_exit_strength_protect_threshold_list.Length *
               $early_exit_max_reprieves_list.Length *
@@ -611,6 +620,8 @@ foreach ($profit_extension_days in $profit_extension_days_list) {
 foreach ($profit_extension_mode in $profit_extension_mode_list) {
 foreach ($profit_extension_strength_threshold in $profit_extension_strength_threshold_list) {
 foreach ($atr_multiplier in $atr_multiplier_list) {
+foreach ($time_stop_loss_days in $time_stop_loss_days_list) {
+foreach ($time_stop_loss_profit_ratio in $time_stop_loss_profit_ratio_list) {
 foreach ($early_exit_mode in $early_exit_mode_list) {
 foreach ($early_exit_strength_protect_threshold in $early_exit_strength_protect_threshold_list) {
 foreach ($early_exit_max_reprieves in $early_exit_max_reprieves_list) {
@@ -762,6 +773,14 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $pythonCmd += " --use-atr-for-early-exit --atr-multiplier $atr_multiplier"
     }
 
+    if ($time_stop_loss_enabled) {
+        $pythonCmd += " --time-stop-loss-enabled" +
+                      " --time-stop-loss-days $time_stop_loss_days" +
+                      " --time-stop-loss-profit-ratio $time_stop_loss_profit_ratio"
+    } else {
+        $pythonCmd += " --no-time-stop-loss"
+    }
+
     if ($enable_profit_based_holding -and $early_exit_mode -ne 'disabled') {
         $pythonCmd += " --early-exit-strength-protect-threshold $early_exit_strength_protect_threshold" +
                       " --early-exit-max-reprieves $early_exit_max_reprieves"
@@ -905,7 +924,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

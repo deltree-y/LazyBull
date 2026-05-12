@@ -297,6 +297,9 @@ class BacktestEngine:
             float
         ] = None,  # 整体持仓止盈阈值（None=禁用，如0.15=整体浮盈15%止盈）
         take_profit_refill: bool = True,  # 整体止盈后是否触发自动补位买入
+        time_stop_loss_enabled: bool = True,  # 是否启用时间止损（持仓超限未达盈利要求提前换出）
+        time_stop_loss_days: int = 15,  # 时间止损触发最低持有天数（交易日）
+        time_stop_loss_profit_ratio: float = -0.02,  # 时间止损利润阈值（当前盈亏低于此值触发）
         signal_gate_quality_enabled: bool = False,  # 是否启用滚动模型质量监控
         signal_gate_quality_window: int = 5,  # 回看调仓周期数
         signal_gate_quality_threshold: float = 0.4,  # 最低滚动hit rate
@@ -469,6 +472,10 @@ class BacktestEngine:
         # 整体持仓止盈参数
         self.take_profit_threshold = take_profit_threshold
         self.take_profit_refill = take_profit_refill
+        # 时间止损参数
+        self.time_stop_loss_enabled = time_stop_loss_enabled
+        self.time_stop_loss_days = time_stop_loss_days
+        self.time_stop_loss_profit_ratio = time_stop_loss_profit_ratio
         self.enable_early_rebalance_on_empty = enable_early_rebalance_on_empty
         self._last_ranked_candidates: list = []  # 最近一次调仓的候选排序列表（止盈补位用）
         self._last_signal_date: Optional[pd.Timestamp] = None  # 最近一次调仓日期
@@ -592,6 +599,8 @@ class BacktestEngine:
             f"仓位补齐={'启用' if enable_position_completion else '禁用'}, "
             f"补齐窗口={completion_window_days}天, "
             f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
+            f"时间止损={'启用' if time_stop_loss_enabled else '禁用'}"
+            f"({time_stop_loss_days}天, {time_stop_loss_profit_ratio:.0%})" if time_stop_loss_enabled else "", ", "
             f"空仓提前调仓={'启用' if enable_early_rebalance_on_empty else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
@@ -2239,6 +2248,61 @@ class BacktestEngine:
                             "trigger_date": date,
                             "sell_type": "early_exit",
                         }
+
+                    # ── 时间止损：持仓超过指定天数后仍未达到最低盈利要求 → 提前换出 ──
+                    if (
+                        self.time_stop_loss_enabled
+                        and stock not in self.pending_condition_sells
+                        and holding_days >= self.time_stop_loss_days
+                        and holding_days >= early_exit_holding
+                    ):
+                        if profit_rate < self.time_stop_loss_profit_ratio:
+                            # strength_veto 二次确认（共用 early_exit_strength_scorer）
+                            if (
+                                self.early_exit_mode == "strength_veto"
+                                and self.early_exit_strength_scorer is not None
+                            ):
+                                reprieve_count = self._early_exit_reprieve_counts.get(
+                                    stock, 0
+                                )
+                                if reprieve_count < self.early_exit_max_reprieves:
+                                    breakdown = self.early_exit_strength_scorer.score(
+                                        stock=stock,
+                                        date=date,
+                                        position_info=info,
+                                        profit_rate=profit_rate,
+                                    )
+                                    if (
+                                        breakdown.total
+                                        >= self.early_exit_strength_protect_threshold
+                                    ):
+                                        self._early_exit_reprieve_counts[stock] = (
+                                            reprieve_count + 1
+                                        )
+                                        logger.warning(
+                                            f"  时间止损否决[strength_veto]: {stock} "
+                                            f"持有{holding_days}天, "
+                                            f"盈亏={profit_rate:.2%} < "
+                                            f"时间止损阈值={self.time_stop_loss_profit_ratio:.2%}, "
+                                            f"但强势度={breakdown.total:.3f} >= "
+                                            f"{self.early_exit_strength_protect_threshold:.2f}"
+                                            f", 缓刑({reprieve_count + 1}/"
+                                            f"{self.early_exit_max_reprieves}), "
+                                            f"{breakdown.to_log_str()}"
+                                        )
+                                        continue  # 否决卖出
+
+                            logger.warning(
+                                f"  时间止损触发: {stock} 持有{holding_days}天 >= "
+                                f"{self.time_stop_loss_days}天, "
+                                f"盈亏={profit_rate:.2%} < "
+                                f"时间止损阈值={self.time_stop_loss_profit_ratio:.2%}, "
+                                f"将在下一交易日卖出（正常持有期={self.holding_period}天）"
+                            )
+                            self.pending_condition_sells[stock] = {
+                                "trigger_date": date,
+                                "sell_type": "time_stop_loss",
+                            }
             else:
                 # 原始逻辑：达到持有期才卖出
                 if holding_days >= self.holding_period:

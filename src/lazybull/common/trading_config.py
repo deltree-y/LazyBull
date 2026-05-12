@@ -134,6 +134,13 @@ class TradingConfig:
     use_atr_for_early_exit: bool = False  # 用ATR替代固定阈值
     atr_multiplier: float = 2.0  # ATR 动态止损乘数
 
+    # ── 时间止损 ──
+    # 持仓超过指定天数后仍未达到最低盈利要求，视为"死钱"触发提前换出
+    # 本功能独立于 enable_profit_based_holding，但需在 enable_profit_based_holding=True 时生效
+    time_stop_loss_enabled: bool = True  # 是否启用时间止损
+    time_stop_loss_days: int = 15  # 触发时间止损的最低持有天数（交易日）
+    time_stop_loss_profit_ratio: float = -0.02  # 时间止损利润阈值（当前盈亏低于此值触发）
+
     # ── 整体止盈 ──
     take_profit_threshold: Optional[float] = None  # 整体浮盈阈值（None=禁用）
     take_profit_refill: bool = True  # 整体止盈后是否自动补位
@@ -780,6 +787,32 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=float,
         default=2.0,
         help="ATR动态止损乘数（默认2.0）",
+    )
+
+    # ── 时间止损 ──
+    parser.add_argument(
+        "--time-stop-loss-enabled",
+        action="store_true",
+        default=True,
+        help="启用时间止损：持仓超限未达盈利要求时提前换出",
+    )
+    parser.add_argument(
+        "--no-time-stop-loss",
+        dest="time_stop_loss_enabled",
+        action="store_false",
+        help="关闭时间止损",
+    )
+    parser.add_argument(
+        "--time-stop-loss-days",
+        type=int,
+        default=15,
+        help="时间止损最低持有天数（交易日），默认15",
+    )
+    parser.add_argument(
+        "--time-stop-loss-profit-ratio",
+        type=float,
+        default=-0.02,
+        help="时间止损利润阈值，当前盈亏低于此值时触发，默认-0.02（-2%%）",
     )
 
     # ── 整体止盈 ──
