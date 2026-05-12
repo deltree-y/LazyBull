@@ -196,6 +196,18 @@ def test_write_fb_reports_framebuffer_error(monkeypatch):
     assert "FileNotFoundError" in messages[0][1]
 
 
+def test_emit_diag_uses_timestamp_prefix_for_stderr(monkeypatch, capsys, tmp_path):
+    module = _load_module()
+    monkeypatch.setattr(module, "_get_diag_log_paths", lambda: [tmp_path / "diag.log"])
+
+    module._emit_diag("行业更新成功: cycle=Y, intraday=Y", stderr=True)
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("[")
+    assert captured.err[1:9].count(":") == 2
+    assert captured.err.endswith("行业更新成功: cycle=Y, intraday=Y\n")
+
+
 def test_resolve_framebuffer_path_uses_env_override(monkeypatch):
     monkeypatch.setenv("LAZYBULL_LCD_FB_PATH", "/dev/fb9")
     module = _load_module()
@@ -880,8 +892,55 @@ def test_build_industry_panel_intraday_contribution_uses_intraday_total(monkeypa
     assert round(intraday_panel["total_pnl_amount"], 4) == -50.0
     assert round(cycle_by_industry["金融"]["contribution_ratio"], 1) == 66.7
     assert round(cycle_by_industry["科技"]["contribution_ratio"], 1) == 33.3
-    assert round(intraday_by_industry["金融"]["contribution_ratio"], 1) == 200.0
-    assert round(intraday_by_industry["科技"]["contribution_ratio"], 1) == -100.0
+    assert round(intraday_by_industry["金融"]["contribution_ratio"], 1) == -100.0
+    assert round(intraday_by_industry["科技"]["contribution_ratio"], 1) == 100.0
+
+
+def test_build_industry_panel_contribution_normalizes_positive_and_negative_separately(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_levels_mapping",
+        lambda: {
+            "000001.SZ": ("金融", "银行", "城商行"),
+            "000002.SZ": ("科技", "电子", "半导体"),
+            "000003.SZ": ("消费", "食品饮料", "白酒"),
+            "000004.SZ": ("医药", "化学制药", "创新药"),
+        },
+    )
+
+    panel = module._build_industry_panel(
+        {
+            "positions": {
+                "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                "000002.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                "000003.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                "000004.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+            },
+            "quotes": pd.DataFrame(
+                [
+                    {"TS_CODE": "000001.SZ", "PRICE": 11.5, "PRE_CLOSE": 11.0},
+                    {"TS_CODE": "000002.SZ", "PRICE": 11.0, "PRE_CLOSE": 10.8},
+                    {"TS_CODE": "000003.SZ", "PRICE": 9.0, "PRE_CLOSE": 9.2},
+                    {"TS_CODE": "000004.SZ", "PRICE": 9.5, "PRE_CLOSE": 9.7},
+                ]
+            ),
+        },
+        mode="cycle",
+    )
+
+    assert panel is not None
+    by_industry = {item["industry"]: item for item in panel["industries"]}
+    positive_sum = (
+        max(by_industry["金融"]["contribution_ratio"], 0.0)
+        + max(by_industry["科技"]["contribution_ratio"], 0.0)
+    )
+    negative_sum = (
+        min(by_industry["消费"]["contribution_ratio"], 0.0)
+        + min(by_industry["医药"]["contribution_ratio"], 0.0)
+    )
+    assert round(positive_sum, 4) == 100.0
+    assert round(negative_sum, 4) == -100.0
 
 
 def test_build_industry_panel_counts_flat_position_as_positive(monkeypatch):

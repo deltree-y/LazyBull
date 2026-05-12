@@ -28,7 +28,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.46)
+### 当前版本 (v0.71.48)
+
+**3.5LCD 行业贡献比例口径优化** (v0.71.48):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 行业页贡献比例改为正负方向分别归一化
+- 正收益行业贡献比例合计 `+100%`，负收益行业贡献比例合计 `-100%`
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 对应回归用例
+
+**3.5LCD 诊断日志时间戳化** (v0.71.47):
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 的 stderr 诊断输出前缀改为 `[%H:%M:%S]`，更便于现场按时间追日志
+- 新增 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 回归用例，覆盖 stderr 前缀格式
 
 **一致预期修正告警修复** (v0.71.46):
 - [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 新增 `_safe_nanmean`，修复窗口内全 NaN 时的 `RuntimeWarning: Mean of empty slice`

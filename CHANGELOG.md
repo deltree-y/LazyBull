@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.48] - 2026-05-12
+
+### 修复
+
+- **树莓派行业贡献比例口径优化**：`scripts/respi/3.5LCD_disp.py` 的行业页贡献比例改为按正负方向分别归一化
+- 正收益行业贡献比例合计固定为 `+100%`，负收益行业贡献比例合计固定为 `-100%`，避免跨正负抵消导致单行业绝对值超过 100% 的困惑
+
+### 测试
+
+- 更新 `tests/test_respi_35lcd_disp.py` 行业贡献比例断言，并新增正负分组归一化回归用例
+
+## [0.71.47] - 2026-05-12
+
+### 修复
+
+- **3.5LCD 诊断日志前缀时间戳化**：`scripts/respi/3.5LCD_disp.py` 的 stderr 诊断输出由固定脚本名改为 `[%H:%M:%S]` 时间戳前缀，便于直接按日志时间定位现场刷新时序
+- 新增 `tests/test_respi_35lcd_disp.py` 回归用例，覆盖 stderr 前缀格式
+
 ## [0.71.46] - 2026-05-12
 
 ### 修复

@@ -1036,20 +1036,26 @@ def _build_industry_panel_from_prices(
     if not industry_stats:
         return None
 
+    positive_total_pnl_amount = sum(max(float(info['pnl_amount']), 0.0) for info in industry_stats.values())
+    negative_total_pnl_amount_abs = sum(max(-float(info['pnl_amount']), 0.0) for info in industry_stats.values())
+
     industries = []
     contribution_basis = "intraday_total_pnl" if mode == "intraday" else "cycle_total_pnl"
     for _, info in industry_stats.items():
+        pnl_amount = float(info['pnl_amount'])
         contribution_ratio = 0.0
-        if abs(total_pnl_amount) > 1e-8:
-            # 盘内口径按当日总盈亏，盘外口径按持仓周期总盈亏；均由 mode 对应的 total_pnl_amount 提供。
-            contribution_ratio = info['pnl_amount'] / total_pnl_amount * 100.0
+        # 贡献比例改为按正负方向分别归一化：正行业合计 +100%，负行业合计 -100%。
+        if pnl_amount > 0 and positive_total_pnl_amount > 1e-8:
+            contribution_ratio = pnl_amount / positive_total_pnl_amount * 100.0
+        elif pnl_amount < 0 and negative_total_pnl_amount_abs > 1e-8:
+            contribution_ratio = -((-pnl_amount) / negative_total_pnl_amount_abs * 100.0)
 
         industries.append(
             {
                 'industry': info['industry'],
                 'positive_count': info['positive_count'],
                 'negative_count': info['negative_count'],
-                'pnl_amount': info['pnl_amount'],
+                'pnl_amount': pnl_amount,
                 'contribution_ratio': contribution_ratio,
             }
         )
@@ -1234,7 +1240,7 @@ def _emit_diag(message: str, stderr: bool = True) -> None:
             continue
     if stderr:
         try:
-            print(f"[3.5LCD_disp] {message}", file=sys.stderr, flush=True)
+            print(f"[{datetime.now():%H:%M:%S}] {message}", file=sys.stderr, flush=True)
         except OSError:
             pass
 
