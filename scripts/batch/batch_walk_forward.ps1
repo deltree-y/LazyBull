@@ -35,21 +35,21 @@ $wf_period_configs = @(
         Label = "0101"
         SplitCount = 13
         FinalDate = "20251231"
-        ContinueDays = 7
+        ContinueDays = 1
         StartModelVersion = 15071
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
         FinalDate = "20260209"
-        ContinueDays = 7
+        ContinueDays = 1
         StartModelVersion = 15097
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
         FinalDate = "20260324"
-        ContinueDays = 7
+        ContinueDays = 1
         StartModelVersion = 15125
     }
 )

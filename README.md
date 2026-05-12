@@ -28,7 +28,21 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.48)
+### 当前版本 (v0.71.52)
+
+**3.5LCD 图表中文乱码恢复** (v0.71.52):
+- [scripts/respi/lcd35/charting.py](scripts/respi/lcd35/charting.py) 恢复被编码破坏的中文注释、docstring 与屏幕文案
+- 保留拆分后的现有逻辑与函数结构，只修正文本文字层
+
+**3.5LCD 显示入口与模块命名整理** (v0.71.51):
+- [scripts/respi/lcd35_display.py](scripts/respi/lcd35_display.py) 成为新的 3.5LCD 主入口，命名更正常，也更适合后续直接引用
+- [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 退化为历史兼容壳，继续兼容旧命令和旧测试
+- [scripts/respi/lcd35](scripts/respi/lcd35) 目录去掉数字前缀，并把运行时进一步拆成状态、渲染、应用三层职责
+
+**3.5LCD 共享加载与告警收敛** (v0.71.51):
+- 主入口保持共享命名空间装配，兼顾旧测试 monkeypatch 与环境变量重读
+- 行业、图表、系统 IO 和渲染页补齐显式依赖后，编辑器告警和运行时 NameError 一并收敛
+- 行业面板计数改为只统计已知行业，避免未知行业污染展示口径
 
 **3.5LCD 行业贡献比例口径优化** (v0.71.48):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 行业页贡献比例改为正负方向分别归一化

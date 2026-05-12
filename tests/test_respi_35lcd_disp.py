@@ -14,13 +14,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def _load_module():
     spec = importlib.util.spec_from_file_location(
-        "lcd_35_disp",
-        PROJECT_ROOT / "scripts" / "respi" / "3.5LCD_disp.py",
+        "lcd35_display",
+        PROJECT_ROOT / "scripts" / "respi" / "lcd35_display.py",
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_legacy_entrypoint_remains_loadable():
+    spec = importlib.util.spec_from_file_location(
+        "lcd35_display_legacy",
+        PROJECT_ROOT / "scripts" / "respi" / "3.5LCD_disp.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    assert hasattr(module, "main")
 
 
 def test_snapshot_timeout_reads_single_env_key(monkeypatch):
