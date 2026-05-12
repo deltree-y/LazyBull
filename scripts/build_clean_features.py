@@ -39,6 +39,8 @@ OPTIONAL_FEATURE_FLAG_ATTRS = (
     "enable_north_features",
     "enable_lhb_features",
     "enable_consensus_features",
+    "enable_cashflow_quality_features",
+    "enable_consensus_revision_features",
 )
 
 
@@ -211,6 +213,8 @@ def build_features_data(
     enable_north: bool = False,
     enable_lhb: bool = False,
     enable_consensus: bool = False,
+    enable_cashflow_quality: bool = False,
+    enable_consensus_revision: bool = False,
 ) -> None:
     """构建features层数据
 
@@ -232,6 +236,8 @@ def build_features_data(
         enable_north: 是否启用北向资金因子
         enable_lhb: 是否启用龙虎榜因子
         enable_consensus: 是否启用一致预期因子
+        enable_cashflow_quality: 是否启用现金流质量因子
+        enable_consensus_revision: 是否启用一致预期修正因子
     """
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
@@ -282,6 +288,12 @@ def build_features_data(
         raise ValueError("缺少clean层daily数据")
     
     logger.info(f"clean日线数据: {len(daily_clean)} 条记录")
+
+    daily_close_lookup = {
+        trade_date: grp[["ts_code", "close_adj"]].copy()
+        for trade_date, grp in daily_clean.groupby("trade_date", sort=False)
+        if "close_adj" in grp.columns
+    }
     
     # 加载 daily_basic 数据
     daily_basic_clean = loader.load_clean_daily_basic(
@@ -422,6 +434,7 @@ def build_features_data(
 
     # 加载一致预期数据（可选）
     consensus_lookup = None
+    report_rc_df = None
     if enable_consensus:
         from src.lazybull.factors.consensus import build_consensus_lookup_by_date
         report_rc_df = loader.load_report_rc()
@@ -430,6 +443,42 @@ def build_features_data(
             consensus_lookup = build_consensus_lookup_by_date(report_rc_df, trading_dates_str)
         else:
             logger.warning("未找到一致预期研报数据，相关特征将为空")
+
+    # 加载现金流质量因子（可选）
+    cashflow_lookup = None
+    if enable_cashflow_quality:
+        from src.lazybull.factors.cashflow_quality import build_cashflow_quality_lookup_by_date
+
+        cashflow_df = loader.load_cashflow()
+        if cashflow_df is not None:
+            logger.info(f"现金流量表数据: {len(cashflow_df)} 条")
+            cashflow_lookup = build_cashflow_quality_lookup_by_date(
+                cashflow_df,
+                trading_dates_str,
+            )
+        else:
+            logger.warning("未找到现金流量表数据，相关特征将为空。"
+                         "请先运行: python scripts/download_raw.py --download cashflow")
+
+    # 加载一致预期修正因子（可选）
+    consensus_revision_lookup = None
+    if enable_consensus_revision:
+        from src.lazybull.factors.consensus_revision import (
+            build_consensus_revision_lookup_by_date,
+        )
+
+        if report_rc_df is None:
+            report_rc_df = loader.load_report_rc()
+        if report_rc_df is not None:
+            logger.info(f"一致预期修正输入数据(report_rc): {len(report_rc_df)} 条")
+            consensus_revision_lookup = build_consensus_revision_lookup_by_date(
+                report_rc_df,
+                trading_dates_str,
+                daily_data_lookup=daily_close_lookup,
+            )
+        else:
+            logger.warning("未找到一致预期研报数据，修正因子将为空。"
+                         "请先运行: python scripts/download_raw.py --download report_rc")
 
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
@@ -502,6 +551,18 @@ def build_features_data(
                     consensus_today = pd.DataFrame()
             else:
                 consensus_today = None
+            if cashflow_lookup is not None:
+                cashflow_today = cashflow_lookup.get(trade_date)
+                if cashflow_today is None:
+                    cashflow_today = pd.DataFrame()
+            else:
+                cashflow_today = None
+            if consensus_revision_lookup is not None:
+                consensus_revision_today = consensus_revision_lookup.get(trade_date)
+                if consensus_revision_today is None:
+                    consensus_revision_today = pd.DataFrame()
+            else:
+                consensus_revision_today = None
 
             # 构建特征
             features_df = builder.build_features_for_day(
@@ -526,6 +587,8 @@ def build_features_data(
                 north_flow_data=north_flow_today,
                 lhb_data=lhb_today,
                 consensus_data=consensus_today,
+                cashflow_data=cashflow_today,
+                consensus_revision_data=consensus_revision_today,
             )
             
             # 保存结果
@@ -657,6 +720,16 @@ def main():
         action="store_true",
         help="启用一致预期因子（report_rc 研报滚动聚合）"
     )
+    parser.add_argument(
+        "--enable-cashflow-quality-features",
+        action="store_true",
+        help="启用现金流质量因子（需 cashflow 接口，2000 积分，需先下载 cashflow 数据）"
+    )
+    parser.add_argument(
+        "--enable-consensus-revision-features",
+        action="store_true",
+        help="启用一致预期修正因子（基于已有 report_rc 构建时序修正信号，无需额外下载）"
+    )
 
     args = parser.parse_args()
     args = apply_build_all_feature_flags(args)
@@ -681,6 +754,8 @@ def main():
     logger.info(f"北向资金因子: {'启用' if args.enable_north_features else '禁用'}")
     logger.info(f"龙虎榜因子: {'启用' if args.enable_lhb_features else '禁用'}")
     logger.info(f"一致预期因子: {'启用' if args.enable_consensus_features else '禁用'}")
+    logger.info(f"现金流质量因子: {'启用' if args.enable_cashflow_quality_features else '禁用'}")
+    logger.info(f"一致预期修正因子: {'启用' if args.enable_consensus_revision_features else '禁用'}")
     if args.horizon is not None:
         logger.info(f"标签过滤模式: single (主 horizon={args.horizon})")
     else:
@@ -737,6 +812,8 @@ def main():
                 enable_north=args.enable_north_features,
                 enable_lhb=args.enable_lhb_features,
                 enable_consensus=args.enable_consensus_features,
+                enable_cashflow_quality=args.enable_cashflow_quality_features,
+                enable_consensus_revision=args.enable_consensus_revision_features,
             )
         
         logger.info("=" * 60)

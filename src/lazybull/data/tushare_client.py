@@ -557,7 +557,11 @@ class TushareClient:
         if fields is None:
             fields = (
                 "ts_code,ann_date,end_date,"
-                "roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy"
+                "roe_waa,roe_dt,roa,or_yoy,netprofit_yoy,"
+                "profit_dedt,q_gr_yoy,equity_yoy,"
+                "grossprofit_margin,netprofit_margin,"
+                "debt_to_assets,current_ratio,quick_ratio,"
+                "cf_sales,cf_nm,goodwill,assets_turn,inv_turn"
             )
 
         return self.query(
@@ -587,7 +591,11 @@ class TushareClient:
         if fields is None:
             fields = (
                 "ts_code,ann_date,end_date,"
-                "roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy"
+                "roe_waa,roe_dt,roa,or_yoy,netprofit_yoy,"
+                "profit_dedt,q_gr_yoy,equity_yoy,"
+                "grossprofit_margin,netprofit_margin,"
+                "debt_to_assets,current_ratio,quick_ratio,"
+                "cf_sales,cf_nm,goodwill,assets_turn,inv_turn"
             )
         kwargs: dict = {"fields": fields}
         if ann_date is not None:
@@ -595,6 +603,73 @@ class TushareClient:
         if period is not None:
             kwargs["period"] = period
         return self.query("fina_indicator_vip", **kwargs)
+
+    def get_cashflow(
+        self,
+        ts_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        fields: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取现金流量表数据（cashflow，2000 积分）
+
+        用于构建经营现金流质量、自由现金流等因子。
+
+        Args:
+            ts_code: 股票代码（可选，不传则按报告期查全市场）
+            start_date: 报告期开始日期，格式 YYYYMMDD
+            end_date: 报告期结束日期，格式 YYYYMMDD
+            fields: 返回字段，逗号分隔
+
+        Returns:
+            现金流量表 DataFrame
+        """
+        if fields is None:
+            fields = (
+                "ts_code,ann_date,f_ann_date,end_date,"
+                "net_profit,"
+                "c_fr_sale_sg,"
+                "n_cashflow_act,"
+                "c_pay_for_assets,"
+                "st_cash_out_act,"
+                "n_cashflow_inv_act,"
+                "free_cashflow"
+            )
+        kwargs: dict = {"fields": fields}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        return self.query("cashflow", **kwargs)
+
+    def get_cashflow_by_period(
+        self,
+        period: str,
+        fields: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """按报告期获取全市场现金流量表（cashflow_vip，5000 积分）
+
+        Args:
+            period: 报告期，格式 YYYYMMDD，如 20231231
+            fields: 返回字段，逗号分隔
+
+        Returns:
+            全市场现金流量表 DataFrame
+        """
+        if fields is None:
+            fields = (
+                "ts_code,ann_date,f_ann_date,end_date,"
+                "net_profit,"
+                "c_fr_sale_sg,"
+                "n_cashflow_act,"
+                "c_pay_for_assets,"
+                "st_cash_out_act,"
+                "n_cashflow_inv_act,"
+                "free_cashflow"
+            )
+        return self.query("cashflow_vip", fields=fields, period=period)
 
     def get_forecast_by_date(
         self,

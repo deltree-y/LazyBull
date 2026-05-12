@@ -39,11 +39,29 @@ from src.lazybull.ml.eval_utils import (
 
 # 基本面因子特征列（行业 z-score 后的列名）
 FUNDAMENTAL_FEATURE_COLUMNS = [
-    "zscore_roe_waa",  # 加权平均ROE
-    "zscore_or_yoy",  # 营业收入同比增速
-    "zscore_netprofit_yoy",  # 净利润同比增速
-    "zscore_debt_to_assets",  # 资产负债率
-    "zscore_q_gr_yoy",  # 单季度营收同比增速
+    # 盈利能力（原始5个 + 新增5个）
+    "zscore_roe_waa",              # 加权平均ROE
+    "zscore_roe_dt",               # 扣非ROE（新版）
+    "zscore_roa",                  # 总资产收益率（新版）
+    "zscore_or_yoy",               # 营业收入同比增速
+    "zscore_netprofit_yoy",        # 净利润同比增速
+    "zscore_profit_dedt",          # 扣非净利润（新版，需zscore后从profit_dedt_yoy得到）
+    "zscore_q_gr_yoy",             # 单季度营收同比增速
+    "zscore_equity_yoy",           # 净资产同比增长率（新版）
+    "zscore_grossprofit_margin",   # 毛利率（新版）
+    "zscore_netprofit_margin",     # 净利率（新版）
+    # 盈利质量（2个新版）
+    "zscore_cf_sales",             # 经营现金流/营业收入（新版）
+    "zscore_cf_nm",                # 经营现金流/净利润（新版）
+    # 偿债/流动性（原有1个 + 新增2个）
+    "zscore_debt_to_assets",       # 资产负债率
+    "zscore_current_ratio",        # 流动比率（新版）
+    "zscore_quick_ratio",          # 速动比率（新版）
+    # 商誉风险 + 运营效率（3个新版）
+    "zscore_goodwill",             # 商誉净额（新版）
+    "zscore_assets_turn",          # 总资产周转率（新版）
+    "zscore_inv_turn",             # 存货周转率（新版）
+    # 新鲜度
     "fundamental_freshness_days",  # 最近一次基本面公告距当日天数
 ]
 
@@ -132,6 +150,27 @@ ENHANCED_FEATURE_COLUMNS = [
     "zscore_order_imbalance",        # 特大单订单失衡
     "order_imbalance_mean_5",        # 5日订单失衡均值
     "order_imbalance_mean_20",       # 20日订单失衡均值
+]
+
+# 现金流质量因子特征列（需 cashflow 接口，2000 积分）
+CASHFLOW_QUALITY_FEATURE_COLUMNS = [
+    "zscore_ocf_to_revenue",         # OCF / 营业收入（现金含量）
+    "zscore_ocf_to_profit",          # OCF / 净利润（利润质量）
+    "zscore_fcf_yield",              # 自由现金流 / 总市值（现金回报率）
+    "zscore_capex_to_ocf",           # 资本支出 / OCF
+    "cashflow_freshness_days",       # 最近一次现金流公告距当日天数
+]
+
+# 一致预期修正因子特征列（基于已有 report_rc 构建时序信号）
+CONSENSUS_REVISION_FEATURE_COLUMNS = [
+    "zscore_cons_eps_revision_accel",     # EPS 修正加速度
+    "zscore_cons_eps_dispersion",         # 分析师分歧度（负向预警）
+    "zscore_cons_eps_dispersion_chg",     # 分歧度月度变化
+    "zscore_cons_target_upside",          # 目标价上行空间
+    "zscore_cons_target_upside_chg",      # 目标价上行空间月度变化
+    "zscore_cons_analyst_count_chg",      # 覆盖分析师数变化
+    "zscore_cons_rating_upgrade_ratio",   # 评级上调比例
+    "cons_revision_freshness_days",       # 最近一次研报距当日天数
 ]
 
 
@@ -422,6 +461,8 @@ def prepare_training_data(
     enable_north_features: bool = False,
     enable_lhb_features: bool = False,
     enable_consensus_features: bool = False,
+    enable_cashflow_quality_features: bool = False,
+    enable_consensus_revision_features: bool = False,
     feature_stability_filter: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
@@ -638,6 +679,30 @@ def prepare_training_data(
             logger.info(f"启用一致预期因子: {available_cons}")
         else:
             logger.warning("enable_consensus_features=True，但数据中未找到一致预期列，跳过")
+
+    # 现金流质量因子（可选，需 cashflow 接口，2000 积分）
+    if enable_cashflow_quality_features:
+        available_cfq = [col for col in CASHFLOW_QUALITY_FEATURE_COLUMNS if col in df.columns]
+        if available_cfq:
+            feature_columns.extend(available_cfq)
+            logger.info(f"启用现金流质量因子: {available_cfq}")
+        else:
+            logger.warning(
+                "enable_cashflow_quality_features=True，但数据中未找到现金流质量列，跳过"
+            )
+
+    # 一致预期修正因子（可选，基于已有 report_rc 构建时序修正信号）
+    if enable_consensus_revision_features:
+        available_cr = [
+            col for col in CONSENSUS_REVISION_FEATURE_COLUMNS if col in df.columns
+        ]
+        if available_cr:
+            feature_columns.extend(available_cr)
+            logger.info(f"启用一致预期修正因子: {available_cr}")
+        else:
+            logger.warning(
+                "enable_consensus_revision_features=True，但数据中未找到一致预期修正列，跳过"
+            )
 
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个

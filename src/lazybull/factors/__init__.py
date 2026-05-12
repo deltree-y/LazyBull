@@ -42,6 +42,8 @@ from .market_state import compute_market_state_features, precompute_market_state
 from .precompute_technical_factors import precompute_technical_factors
 from .returns import compute_ret_1
 from .fundamental import build_fundamental_lookup_by_date, FUNDA_COLS
+from .cashflow_quality import build_cashflow_quality_lookup_by_date, CASHFLOW_COLS
+from .consensus_revision import build_consensus_revision_lookup_by_date, CONSENSUS_REVISION_COLS
 
 __all__ = [
     # 技术指标
@@ -75,4 +77,10 @@ __all__ = [
     # 基本面因子
     'build_fundamental_lookup_by_date',
     'FUNDA_COLS',
+    # 现金流质量因子
+    'build_cashflow_quality_lookup_by_date',
+    'CASHFLOW_COLS',
+    # 一致预期修正因子
+    'build_consensus_revision_lookup_by_date',
+    'CONSENSUS_REVISION_COLS',
 ]

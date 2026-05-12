@@ -182,6 +182,8 @@ class FeatureBuilder:
         north_flow_data: Optional[Dict[str, float]] = None,
         lhb_data: Optional[pd.DataFrame] = None,
         consensus_data: Optional[pd.DataFrame] = None,
+        cashflow_data: Optional[pd.DataFrame] = None,
+        consensus_revision_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """构建单个交易日的截面特征和标签
 
@@ -268,6 +270,8 @@ class FeatureBuilder:
             north_flow_data,
             lhb_data,
             consensus_data,
+            cashflow_data,
+            consensus_revision_data,
         )
         logger.debug(f"{trade_date} 基础特征计算完成: {len(features.columns.tolist())} 列")
 
@@ -626,6 +630,8 @@ class FeatureBuilder:
         north_flow_data: Optional[Dict[str, float]] = None,
         lhb_data: Optional[pd.DataFrame] = None,
         consensus_data: Optional[pd.DataFrame] = None,
+        cashflow_data: Optional[pd.DataFrame] = None,
+        consensus_revision_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """计算基础数值特征
 
@@ -846,6 +852,47 @@ class FeatureBuilder:
             else:
                 for col in _CONS_COLS:
                     features[col] = float("nan")
+
+        # 现金流质量因子（个股级，季度前向填充）
+        from ..factors.cashflow_quality import (
+            CASHFLOW_COLS as _CFQ_COLS,
+            CASHFLOW_FRESHNESS_COL as _CFQ_FRESH_COL,
+        )
+        if cashflow_data is not None and len(cashflow_data) > 0:
+            merge_cols = [c for c in cashflow_data.columns if c != "ts_code"]
+            features = features.merge(
+                cashflow_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+            # 计算 fcf_yield（需要 total_mv）
+            if "fcf" in features.columns and "total_mv" in features.columns:
+                features["fcf_yield"] = np.where(
+                    features["total_mv"] > 1e-6,
+                    features["fcf"] / features["total_mv"],
+                    np.nan,
+                )
+        else:
+            for col in _CFQ_COLS:
+                if col not in features.columns:
+                    features[col] = float("nan")
+            if _CFQ_FRESH_COL not in features.columns:
+                features[_CFQ_FRESH_COL] = float("nan")
+
+        # 一致预期修正因子（个股级，基于 report_rc 时序构建）
+        from ..factors.consensus_revision import (
+            CONSENSUS_REVISION_COLS as _CR_COLS,
+            CONSENSUS_REVISION_FRESHNESS_COL as _CR_FRESH_COL,
+        )
+        if consensus_revision_data is not None and len(consensus_revision_data) > 0:
+            merge_cols = [c for c in consensus_revision_data.columns if c != "ts_code"]
+            features = features.merge(
+                consensus_revision_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+        else:
+            for col in _CR_COLS:
+                if col not in features.columns:
+                    features[col] = float("nan")
+            if _CR_FRESH_COL not in features.columns:
+                features[_CR_FRESH_COL] = float("nan")
 
         return features
     
@@ -1946,9 +1993,22 @@ class FeatureBuilder:
             'volatility_20', 'net_mf_amount', 'ma_deviation_20',
             'elg_net_amount_sum_20', 'acceleration', 'macd_hist', 'bb_width',
             # 基本面因子（季度数据前向填充，启用时才存在）
-            'roe_waa', 'or_yoy', 'netprofit_yoy', 'debt_to_assets', 'q_gr_yoy',
+            'roe_waa', 'roe_dt', 'roa',
+            'or_yoy', 'netprofit_yoy', 'profit_dedt',
+            'q_gr_yoy', 'equity_yoy',
+            'grossprofit_margin', 'netprofit_margin',
+            'debt_to_assets', 'current_ratio', 'quick_ratio',
+            'cf_sales', 'cf_nm', 'goodwill',
+            'assets_turn', 'inv_turn',
             # 增强因子：开盘强度、日内波动结构、订单失衡
             'opening_strength', 'intraday_vol_structure', 'order_imbalance',
+            # 现金流质量因子
+            'ocf_to_revenue', 'ocf_to_profit', 'capex_to_ocf',
+            # 一致预期修正因子
+            'cons_eps_revision_accel', 'cons_eps_dispersion',
+            'cons_eps_dispersion_chg', 'cons_target_upside',
+            'cons_target_upside_chg', 'cons_analyst_count_chg',
+            'cons_rating_upgrade_ratio',
         ]
         existing_zscore_columns = [col for col in zscore_columns if col in result.columns]
         for window in self.lookback_windows:

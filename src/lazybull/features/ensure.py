@@ -31,6 +31,7 @@ _MIN_HOLDER_RECORDS = 500      # 股东人数：全量应有数万条
 _MIN_FORECAST_RECORDS = 500    # 业绩预告：全量应有数万条
 _MIN_EXPRESS_RECORDS = 500        # 业绩快报：全量应有数万条
 _MIN_REPORT_RC_RECORDS = 1000     # 一致预期研报：全量应有数万条
+_MIN_CASHFLOW_RECORDS = 1000      # 现金流量表：全量应有数万条
 
 
 def ensure_features_for_date(
@@ -175,11 +176,20 @@ def ensure_features_for_date(
             for d in trade_cal[trading_dates_mask]['cal_date'].tolist()
         ]
 
+        daily_close_lookup = {
+            d: grp[["ts_code", "close_adj"]].copy()
+            for d, grp in daily_clean.groupby("trade_date", sort=False)
+            if "close_adj" in grp.columns
+        }
+
         (funda_today, margin_today, holder_today, earnings_today,
          cyq_perf_today, express_today, fund_portfolio_today,
-         north_flow_today, lhb_today, consensus_today, missing_factors) = (
+         north_flow_today, lhb_today, consensus_today,
+         cashflow_today, consensus_revision_today,
+         missing_factors) = (
             _load_factor_data(loader, client, storage, trade_date, trading_dates_str,
-                              start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d'))
+                              start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d'),
+                              daily_close_lookup=daily_close_lookup)
         )
 
         # 与 build_clean_features 对齐：循环外预计算 daily_adj 与日期索引缓存
@@ -209,14 +219,18 @@ def ensure_features_for_date(
             north_flow_data=north_flow_today,
             lhb_data=lhb_today,
             consensus_data=consensus_today,
+            cashflow_data=cashflow_today,
+            consensus_revision_data=consensus_revision_today,
         )
         # 释放不再需要的历史数据，降低保存时的内存占用
         daily_clean = None
+        daily_close_lookup = None
         daily_basic_clean = None
         moneyflow_clean = None
         funda_today = margin_today = holder_today = earnings_today = None
         cyq_perf_today = express_today = fund_portfolio_today = None
         north_flow_today = lhb_today = consensus_today = None
+        cashflow_today = consensus_revision_today = None
         gc.collect()
 
         # 9. 保存结果
@@ -323,6 +337,7 @@ def _load_factor_data(
     trading_dates_str: List[str],
     start_date: str,
     end_date: str,
+    daily_close_lookup: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> tuple:
     """加载因子数据（基本面 + 另类数据）
 
@@ -342,8 +357,8 @@ def _load_factor_data(
         end_date: 数据范围结束日期
 
     Returns:
-        (funda_today, margin_today, holder_today, earnings_today, missing_factors)
-        前 4 个元素为当日的 DataFrame 或 None，最后一个为缺失因子名称列表
+        因子当日截面与缺失列表元组。
+        最后一个元素为缺失因子名称列表，其余元素为各因子当日 DataFrame/字典。
     """
     missing_factors = []
     # 纸面交易 T0 仅消费当日因子截面；历史窗口仍通过原始数据加载提供，
@@ -562,8 +577,48 @@ def _load_factor_data(
     cons_lookup = None
     gc.collect()
 
+    # ── 现金流质量（单文件，按 ann_date 增量）──────────────────────
+    cashflow_today = pd.DataFrame()
+    cashflow_df = loader.load_cashflow()
+    if cashflow_df is None or len(cashflow_df) < _MIN_CASHFLOW_RECORDS:
+        cashflow_df = _try_download_cashflow(client, storage, trade_date)
+    if cashflow_df is not None and len(cashflow_df) > 0:
+        from ..factors.cashflow_quality import build_cashflow_quality_lookup_by_date
+
+        cashflow_lookup = build_cashflow_quality_lookup_by_date(cashflow_df, factor_output_dates)
+        cur = cashflow_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            cashflow_today = cur
+        logger.info(f"现金流质量因子: 已加载 ({len(cashflow_df)} 条)")
+    else:
+        missing_factors.append("cashflow（现金流质量）")
+    cashflow_df = None
+    cashflow_lookup = None
+    gc.collect()
+
+    # ── 一致预期修正（基于 report_rc，无额外下载）─────────────────
+    consensus_revision_today = pd.DataFrame()
+    report_rc_for_revision = loader.load_report_rc()
+    if report_rc_for_revision is not None and len(report_rc_for_revision) > 0:
+        from ..factors.consensus_revision import build_consensus_revision_lookup_by_date
+
+        revision_lookup = build_consensus_revision_lookup_by_date(
+            report_rc_for_revision,
+            factor_output_dates,
+            daily_data_lookup=daily_close_lookup,
+        )
+        cur = revision_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            consensus_revision_today = cur
+        logger.info(f"一致预期修正因子: 已加载 ({len(report_rc_for_revision)} 条 report_rc)")
+    else:
+        missing_factors.append("consensus_revision（一致预期修正）")
+    report_rc_for_revision = None
+    revision_lookup = None
+    gc.collect()
+
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 10
+    total = 12
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -576,7 +631,9 @@ def _load_factor_data(
 
     return (funda_today, margin_today, holder_today, earnings_today,
             cyq_perf_today, express_today, fund_portfolio_today,
-            north_flow_today, lhb_today, consensus_today, missing_factors)
+            north_flow_today, lhb_today, consensus_today,
+            cashflow_today, consensus_revision_today,
+            missing_factors)
 
 
 # ── 因子按日增量下载辅助函数 ──────────────────────────────────────
@@ -980,7 +1037,49 @@ def _try_download_fina_indicator(
         dataset_name="fina_indicator",
         api_name="fina_indicator_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
-        fields="ts_code,ann_date,end_date,roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy",
+        fields=None,
+    )
+
+
+def _try_download_cashflow(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+) -> Optional[pd.DataFrame]:
+    """下载现金流量表数据
+
+    数据充足（>= 阈值）：按公告日区间补齐增量。
+    数据不足或不存在：按季度批量下载全量。
+    """
+    existing = storage.load_raw("cashflow")
+
+    if existing is not None and len(existing) >= _MIN_CASHFLOW_RECORDS:
+        try:
+            return _incremental_catchup_by_calendar_date(
+                storage=storage,
+                dataset_name="cashflow",
+                existing_df=existing,
+                trade_date=trade_date,
+                date_col="ann_date",
+                dedup_cols=["ts_code", "end_date", "ann_date"],
+                fetch_by_date=lambda d: client.query("cashflow_vip", ann_date=d),
+            )
+        except Exception as e:
+            logger.warning(f"增量下载 cashflow 失败: {e}")
+            return existing
+
+    cnt = len(existing) if existing is not None else 0
+    logger.info(
+        f"现金流量表数据不足 (当前 {cnt} 条, 阈值 {_MIN_CASHFLOW_RECORDS})，"
+        f"启动按季度批量下载..."
+    )
+    return _bulk_download_by_period(
+        client,
+        storage,
+        dataset_name="cashflow",
+        api_name="cashflow_vip",
+        dedup_cols=["ts_code", "end_date", "ann_date"],
+        fields=None,
     )
 
 
@@ -1541,6 +1640,7 @@ _REQUIRED_FACTOR_COLS = [
     "mkt_atr_pct",                                          # 市场级 ATR 当前值
     "mkt_atr_pct_ma250",                                    # 市场级 ATR 250 日均值
     "roe_waa",                                              # 基本面因子
+    "grossprofit_margin",                                   # 基本面扩展因子（利润率）
     "fundamental_freshness_days",                           # 基本面 freshness
     "holder_num_chg",                                       # 股东人数因子
     "holder_freshness_days",                                # 股东人数 freshness
@@ -1551,6 +1651,8 @@ _REQUIRED_FACTOR_COLS = [
     "fund_portfolio_freshness_days",                        # 基金持仓 freshness
     "express_revenue_yoy",                                  # 业绩快报因子
     "express_freshness_days",                               # 业绩快报 freshness
+    "cashflow_freshness_days",                              # 现金流质量 freshness
+    "cons_revision_freshness_days",                         # 一致预期修正 freshness
 ]
 
 

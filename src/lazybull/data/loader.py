@@ -499,6 +499,17 @@ class DataLoader:
                     df[col] = df[col].astype(str).str.replace("-", "").str[:8]
         return df
 
+    def load_cashflow(self) -> Optional[pd.DataFrame]:
+        """加载现金流量表数据（单文件）"""
+        df = self.storage.load_raw("cashflow")
+        if df is None:
+            logger.warning("未找到现金流量表数据")
+        else:
+            for col in ["ann_date", "end_date", "f_ann_date"]:
+                if col in df.columns:
+                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+        return df
+
     def load_moneyflow_hsgt(
         self,
         start_date: Optional[str] = None,

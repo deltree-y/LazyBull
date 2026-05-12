@@ -19,7 +19,21 @@ from .announcement_utils import build_latest_announcement_lookup_by_date
 
 
 # 基本面因子列名
-FUNDA_COLS = ['roe_waa', 'or_yoy', 'netprofit_yoy', 'debt_to_assets', 'q_gr_yoy']
+FUNDA_COLS = [
+    # 盈利能力（5+5=10）
+    'roe_waa', 'roe_dt', 'roa',                    # ROE/ROA 体系
+    'or_yoy', 'netprofit_yoy', 'profit_dedt',      # 增速体系
+    'q_gr_yoy', 'equity_yoy',                       # 单季增速 + 净资产增长
+    'grossprofit_margin', 'netprofit_margin',       # 利润率体系
+    # 盈利质量（2）
+    'cf_sales', 'cf_nm',                            # 经营现金流/营收, /净利润
+    # 偿债/流动性（2+1=3）
+    'debt_to_assets', 'current_ratio', 'quick_ratio',
+    # 商誉风险（1）
+    'goodwill',                                      # 商誉（需后续处理为 goodwill/equity）
+    # 运营效率（2）
+    'assets_turn', 'inv_turn',
+]
 FUNDAMENTAL_FRESHNESS_COL = 'fundamental_freshness_days'
 
 
@@ -82,7 +96,7 @@ def _winsorize_growth_cols(df: pd.DataFrame) -> None:
     增长率类指标（or_yoy, netprofit_yoy, q_gr_yoy）可能出现极端值
     （如扭亏为盈导致 >10000%），截断到 1%~99% 分位。
     """
-    growth_cols = ['or_yoy', 'netprofit_yoy', 'q_gr_yoy']
+    growth_cols = ['or_yoy', 'netprofit_yoy', 'q_gr_yoy', 'profit_dedt', 'equity_yoy']
     for col in growth_cols:
         if col not in df.columns:
             continue

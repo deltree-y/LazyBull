@@ -2270,6 +2270,22 @@ def main():
         help="启用卖方一致预期因子（report_rc, 滚动 30/60/90 日聚合）"
     )
 
+    # 现金流质量因子（需 cashflow 接口，2000 积分）
+    parser.add_argument(
+        "--enable-cashflow-quality-features",
+        action="store_true",
+        default=False,
+        help="启用现金流质量因子（需先下载 cashflow 数据）"
+    )
+
+    # 一致预期修正因子（基于已有 report_rc 构建时序修正信号）
+    parser.add_argument(
+        "--enable-consensus-revision-features",
+        action="store_true",
+        default=False,
+        help="启用一致预期修正因子（EPS修正加速度/分歧度等时序信号）"
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",

@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 ALT_DATASETS = [
     "fina_indicator", "margin_detail", "stk_holdernumber",
     "forecast", "cyq_perf", "express", "fund_portfolio",
-    "moneyflow_hsgt", "top_list", "report_rc",
+    "moneyflow_hsgt", "top_list", "report_rc", "cashflow",
 ]
 
 # 日线组需要保持原子性的子数据集（任一失败即视为当日失败，不写盘任一）
@@ -959,6 +959,26 @@ def download_report_rc(
     logger.info(f"[report_rc] 完成: 成功={success} 空={empty}")
 
 
+def download_cashflow(
+    client: TushareClient,
+    storage: Storage,
+    start_date: str,
+    end_date: str,
+    force: bool = False,
+) -> None:
+    """下载现金流量表数据 (cashflow_vip, 5000积分)。按报告期批量下载全市场数据。"""
+    download_by_period(
+        client, storage,
+        dataset_name="cashflow",
+        api_name="cashflow_vip",
+        start_date=start_date, end_date=end_date,
+        dedup_cols=["ts_code", "end_date", "ann_date"],
+        fields=None,
+        force=force,
+        sort_cols=["end_date", "ann_date"],
+    )
+
+
 # ────────────────────────────────────────────────────────────────────
 # main
 # ────────────────────────────────────────────────────────────────────
@@ -983,7 +1003,7 @@ def main():
         "--download", nargs="*", default=None,
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
              "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
-             "moneyflow_hsgt, top_list, report_rc, all_alt。不指定时仅下基础+日线"
+             "moneyflow_hsgt, top_list, report_rc, cashflow, all_alt。不指定时仅下基础+日线"
     )
     parser.add_argument("--all", action="store_true", default=False,
                         help="下载日线 + 全部另类数据")
@@ -1082,7 +1102,7 @@ def main():
                         api_name="fina_indicator_vip",
                         start_date=args.start_date, end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date", "ann_date"],
-                        fields="ts_code,ann_date,end_date,roe_waa,or_yoy,netprofit_yoy,debt_to_assets,q_gr_yoy",
+                        fields=None,
                         force=args.force,
                         sort_cols=["ann_date", "end_date"],
                     )
@@ -1155,6 +1175,12 @@ def main():
 
                 if "report_rc" in download_set:
                     download_report_rc(
+                        client, storage,
+                        args.start_date, args.end_date, force=args.force,
+                    )
+
+                if "cashflow" in download_set:
+                    download_cashflow(
                         client, storage,
                         args.start_date, args.end_date, force=args.force,
                     )

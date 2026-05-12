@@ -140,6 +140,12 @@ $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3�
 $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
+# ── 现金流质量因子（需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
+$enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
+
+# ── 一致预期修正因子（基于已有 report_rc 构建时序修正信号，无需额外下载）─
+$enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
+
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
 
@@ -728,6 +734,14 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($enable_enhanced) {
         $pythonCmd += " --enable-enhanced-features"
+    }
+
+    if ($enable_cashflow_quality) {
+        $pythonCmd += " --enable-cashflow-quality-features"
+    }
+
+    if ($enable_consensus_revision) {
+        $pythonCmd += " --enable-consensus-revision-features"
     }
 
     if ($market_regime) {

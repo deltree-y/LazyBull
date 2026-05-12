@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.38)
+### 当前版本 (v0.71.42)
+
+**新增因子接线补齐与口径对齐** (v0.71.42):
+- [scripts/build_clean_features.py](scripts/build_clean_features.py) 补齐 `cashflow_quality` 与 `consensus_revision` 的实际加载、lookup 构建与传参
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 补齐 `cs_infer` 自动补齐链路中的 cashflow / consensus_revision
+- [src/lazybull/features/builder.py](src/lazybull/features/builder.py) 当当日无数据时补齐 freshness 占位列，确保 schema 稳定
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) `fina_indicator_vip` 下载改为全字段，覆盖新增基本面因子
+
+### 当前版本历史 (v0.71.38)
 
 **3.5LCD 盘后重启空面板快速重试修复** (v0.71.38):
 - [scripts/respi/3.5LCD_disp.py](scripts/respi/3.5LCD_disp.py) 当实时抓取失败且无可用快照时，改为 15 秒快速重试，而非等待常规 180/600 秒

@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.42] - 2026-05-12
+
+### 修复
+
+- **cashflow / consensus_revision 接线补齐**：补齐 `build_clean_features.py` 对 `--enable-cashflow-quality-features` 与 `--enable-consensus-revision-features` 的实际数据加载与 `FeatureBuilder` 传参，修复“仅有开关和日志、无实际生效”的问题
+- **纸面交易 ensure 链路补齐新增因子**：`features/ensure.py` 新增 cashflow 自动补齐与构建、consensus_revision 构建，并将两者透传到 `build_features_for_day`，保证 `cs_infer` 与训练侧口径一致
+- **schema 稳定性增强**：`FeatureBuilder` 在 cashflow / consensus_revision 当日无数据时也会补齐 freshness 占位列，避免列时有时无
+- **fina_indicator 全字段补齐**：`features/ensure.py` 下载 `fina_indicator_vip` 时改为 `fields=None`，不再只拉 5 列，确保新增基本面因子可用
+- **缓存完整性校验升级**：`_REQUIRED_FACTOR_COLS` 新增 `grossprofit_margin`、`cashflow_freshness_days`、`cons_revision_freshness_days`，旧缓存缺列可自动触发重建
+
+### 测试
+
+- 新增 `tests/test_factor_wiring_cashflow_consensus_revision.py`：
+  - 校验 `_REQUIRED_FACTOR_COLS` 包含新增关键列
+  - 校验 `DataLoader.load_cashflow()` 的日期列标准化行为
+
+## [0.71.41] - 2026-05-12
+
+### 修复
+
+- **fina_indicator 下载仅含 5 列**：`download_raw.py` 中硬编码了旧版 5 字段列表，覆盖了 `tushare_client.py` 的扩展默认值。改为 `fields=None` 让 TuShare 返回全部可用字段（18 列）
+- **cashflow 下载失败（必填 ts_code）**：`cashflow` 是单股票接口，全市场查询需使用 `cashflow_vip`（5000 积分）。新增 `tushare_client.get_cashflow_by_period()` 方法，`download_raw.py` 改为通过 `download_by_period` 调用
+
+## [0.71.40] - 2026-05-12
+
+### 新增
+
+- **基本面因子大幅扩展（13 个新因子，零额外积分）**:
+  - `fina_indicator` 字段从 5 个扩展到 18 个：新增 ROE 扣非/ROA/毛利率/净利率/扣非净利润增速/净资产增长/流动比率/速动比率/经营现金流比/商誉/总资产周转率/存货周转率
+  - 因子覆盖维度从 1 个（基础盈利）扩展为 5 个：盈利能力/盈利质量/偿债风险/商誉风险/运营效率
+  - 修改文件：`tushare_client.py`（扩展 fields）、`fundamental.py`（扩展 FUNDA_COLS）、`builder.py`（zscore_columns）、`train_core.py`（FUNDAMENTAL_FEATURE_COLUMNS）
+
+- **现金流质量因子模块（5 个新因子，2000 积分）**:
+  - 新增 `factors/cashflow_quality.py`：基于现金流量表构建 OCF/营收、OCF/净利润、FCF yield、capex/OCF 等质量因子
+  - 新增 `tushare_client.get_cashflow()` 接口
+  - `download_raw.py` 新增 `--download cashflow` 开关，`--all` 包含
+  - `build_clean_features.py` 新增 `--enable-cashflow-quality-features` 开关，`--build-all` 包含
+  - `batch_walk_forward.ps1` 新增 `$enable_cashflow_quality` 独立开关
+
+- **一致预期修正因子模块（7 个新因子，基于已有 report_rc）**:
+  - 新增 `factors/consensus_revision.py`：构建 EPS 修正加速度/分歧度/分歧度变化/目标价上行空间/覆盖分析师变化/评级上调比例等时序修正信号
+  - `build_clean_features.py` 新增 `--enable-consensus-revision-features` 开关，`--build-all` 包含
+  - `batch_walk_forward.ps1` 新增 `$enable_consensus_revision` 独立开关
+  - 无需额外积分：完全基于已有 `report_rc` 数据（2000 积分接口已接入）
+
+- **新增因子总计**：13（基本面扩展）+ 5（现金流质量）+ 7（一致预期修正）= **25 个新因子**
+- **积分成本**：2000（cashflow 新接口），其余 23 个因子零额外积分
+
 ## [0.71.39] - 2026-05-12
 
 ### 新增
