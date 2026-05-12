@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.46] - 2026-05-12
+
+### 修复
+
+- **一致预期修正因子告警修复**：修复 `consensus_revision` 在目标价窗口“非空但全 NaN”场景下触发 `RuntimeWarning: Mean of empty slice` 的问题
+- 新增 `_safe_nanmean` 安全均值函数，对空数组/全 NaN 数组返回 `NaN`，避免运行期告警刷屏
+
+### 测试
+
+- 更新 `tests/test_factor_consensus_revision.py`：新增“目标价窗口全 NaN”回归用例，验证不告警且输出为 `NaN`
+
+## [0.71.45] - 2026-05-12
+
+### 优化
+
+- **一致预期修正因子二次提速**：构建流程由“按交易日遍历全股票”改为“按股票遍历活跃交易日窗口”，并使用 `searchsorted` 进行窗口定位，显著减少 DataFrame 布尔过滤开销
+- **目标价计算热点优化**：预构建 `close_adj` 哈希索引（`trade_date -> ts_code -> close_adj`），替代循环内逐日逐股 DataFrame 过滤
+- **进度日志粒度优化**：进度日志改为按股票批次输出（每 200 只打印一次），长耗时阶段可持续观察推进情况
+
+## [0.71.44] - 2026-05-12
+
+### 优化
+
+- **一致预期修正因子构建提速**：`consensus_revision` 构建过程改为预分组复用（避免按交易日重复 `groupby`），并按 `report_date` 覆盖范围裁剪有效交易日，显著降低全历史构建耗时
+- **构建可观测性增强**：新增一致预期修正因子阶段进度日志（每 50 个交易日打印一次），避免长时间无日志被误判为卡死
+
+## [0.71.43] - 2026-05-12
+
+### 修复
+
+- **一致预期修正因子双口径兼容**：`consensus_revision` 新增 report_rc 字段映射兼容，支持 `rec_fore_Netprofit/rec_target` 与 `np/tp + max_price/min_price` 两套口径，避免因列名差异导致全时段空因子
+- **目标价字段回退增强**：当 `rec_target` 缺失时，自动使用 `max_price/min_price` 的中位口径构建 `cons_target_upside` 与相关变化因子
+
+### 测试
+
+- 新增 `tests/test_factor_consensus_revision.py`：
+  - 校验 `rec_*` 口径可正常构建一致预期修正因子
+  - 校验 `np/tp + max/min` 口径可正常构建一致预期修正因子
+
 ## [0.71.42] - 2026-05-12
 
 ### 修复

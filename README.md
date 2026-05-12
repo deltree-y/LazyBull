@@ -28,7 +28,26 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.42)
+### 当前版本 (v0.71.46)
+
+**一致预期修正告警修复** (v0.71.46):
+- [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 新增 `_safe_nanmean`，修复窗口内全 NaN 时的 `RuntimeWarning: Mean of empty slice`
+- 新增 [tests/test_factor_consensus_revision.py](tests/test_factor_consensus_revision.py) 回归用例，覆盖“目标价窗口全 NaN”场景
+
+**一致预期修正二次提速** (v0.71.45):
+- [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 改为按股票遍历活跃交易日窗口，并使用 `searchsorted` 做窗口定位
+- 预构建 `close_adj` 哈希索引，避免循环内逐日逐股筛选 DataFrame
+- 进度日志改为按股票批次输出，长耗时阶段可持续看到推进
+
+**一致预期修正构建性能优化** (v0.71.44):
+- [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 预先按股票分组复用，避免按交易日重复 `groupby` 带来的高耗时
+- 新增有效交易日范围裁剪（基于 report_date 覆盖区间），减少无效日期遍历
+- 新增阶段进度日志（每 50 个交易日打印），避免长时间无输出
+
+**一致预期修正因子双口径兼容修复** (v0.71.43):
+- [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 同时支持 `rec_fore_Netprofit/rec_target` 与 `np/tp` 字段口径
+- 当 `rec_target` 缺失时，自动回退使用 `max_price/min_price` 构建目标价相关因子
+- 新增 [tests/test_factor_consensus_revision.py](tests/test_factor_consensus_revision.py) 回归测试，覆盖 `rec_*` 与 `np/tp + max/min` 两套口径
 
 **新增因子接线补齐与口径对齐** (v0.71.42):
 - [scripts/build_clean_features.py](scripts/build_clean_features.py) 补齐 `cashflow_quality` 与 `consensus_revision` 的实际加载、lookup 构建与传参
