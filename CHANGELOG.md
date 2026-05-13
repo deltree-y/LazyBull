@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.59] - 2026-05-13
+
+### 修复
+
+- **树莓派 3.5LCD 周期图兼容旧状态数值类型**：在 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 中，周期图计算前会统一归一化 `cash`、`shares`、`buy_price` 以及日线 `close/trade_date`，避免旧 `account.json` 或脏数据把收盘后周期图构建阶段炸掉，导致下半区长期停留在分时图。
+- **周期图异常日志补充具体错误信息**：同文件中“抓周期阶段异常”日志现在会携带异常类型和消息，便于在树莓派上直接定位具体失败点。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)，新增旧状态数值字段为字符串时，周期图仍能正常构建的回归测试。
+
 ## [0.71.58] - 2026-05-13
 
 ### 修复

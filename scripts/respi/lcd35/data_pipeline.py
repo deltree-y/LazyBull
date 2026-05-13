@@ -3,6 +3,62 @@ from scripts.respi.lcd35.core import *  # noqa: F401,F403
 from scripts.respi.lcd35.charting import *  # noqa: F401,F403
 
 
+def _normalize_cycle_trade_date(date_value: object) -> Optional[str]:
+    """将周期图日期统一规范为 YYYYMMDD 字符串。"""
+    text = str(date_value or "").strip().replace("-", "")
+    if len(text) < 8:
+        return None
+    text = text[:8]
+    return text if text.isdigit() else None
+
+
+def _build_cycle_close_map(df: Optional[pd.DataFrame]) -> dict[str, float]:
+    """从日线 DataFrame 提取 {trade_date: close} 映射，过滤脏值。"""
+    if (
+        df is None
+        or df.empty
+        or 'trade_date' not in df.columns
+        or 'close' not in df.columns
+    ):
+        return {}
+
+    close_map: dict[str, float] = {}
+    for trade_date, close in zip(df['trade_date'].tolist(), df['close'].tolist()):
+        trade_date_norm = _normalize_cycle_trade_date(trade_date)
+        close_float = _coerce_float(close)
+        if (
+            trade_date_norm is None
+            or close_float is None
+            or not np.isfinite(close_float)
+            or close_float <= 0
+        ):
+            continue
+        close_map[trade_date_norm] = close_float
+    return close_map
+
+
+def _normalize_cycle_positions(positions: dict) -> dict[str, dict[str, float]]:
+    """将账户持仓归一化为周期图计算可直接消费的数值结构。"""
+    normalized: dict[str, dict[str, float]] = {}
+    for ts_code, pos in positions.items():
+        shares_float = _coerce_float(getattr(pos, 'shares', 0))
+        if shares_float is None or not np.isfinite(shares_float):
+            continue
+        shares = int(shares_float)
+        if shares <= 0:
+            continue
+
+        buy_price_float = _coerce_float(getattr(pos, 'buy_price', 0.0))
+        if buy_price_float is None or not np.isfinite(buy_price_float) or buy_price_float <= 0:
+            buy_price_float = 0.0
+
+        normalized[ts_code] = {
+            'shares': shares,
+            'buy_price': buy_price_float,
+        }
+    return normalized
+
+
 def _fetch_cycle_chart_data() -> Optional[dict]:
     """获取持仓周期内的上证/深证/中证800指数和持仓组合涨跌幅数据。
 
@@ -41,7 +97,15 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         return None
 
     positions = account_state.positions  # {ts_code: Position}
+    normalized_positions = _normalize_cycle_positions(positions)
+    if not normalized_positions:
+        _emit_diag("抓周期无有效持仓：持仓数值字段不可用，周期图跳过")
+        return None
+
     cash = account_state.cash
+    cash_float = _coerce_float(cash)
+    if cash_float is None or not np.isfinite(cash_float):
+        cash_float = 0.0
     current_dt = datetime.now()
     today_str = current_dt.strftime("%Y%m%d")
     cache_scope_date = today_str
@@ -96,11 +160,11 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         shanghai_df = shanghai_df.sort_values('trade_date').reset_index(drop=True)
         shenzhen_df = shenzhen_df.sort_values('trade_date').reset_index(drop=True)
         csi800_df = csi800_df.sort_values('trade_date').reset_index(drop=True)
-        shanghai_close_map = dict(zip(shanghai_df['trade_date'], shanghai_df['close']))
-        shenzhen_close_map = dict(zip(shenzhen_df['trade_date'], shenzhen_df['close']))
-        csi800_close_map = dict(zip(csi800_df['trade_date'], csi800_df['close']))
+        shanghai_close_map = _build_cycle_close_map(shanghai_df)
+        shenzhen_close_map = _build_cycle_close_map(shenzhen_df)
+        csi800_close_map = _build_cycle_close_map(csi800_df)
         trade_dates = [
-            d for d in shanghai_df['trade_date'].tolist()
+            d for d in shanghai_df['trade_date'].map(_normalize_cycle_trade_date).dropna().tolist()
             if d in shenzhen_close_map and d in csi800_close_map
         ]
         if len(trade_dates) < 1:
@@ -113,7 +177,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
         # 逐股获取日线收盘价
         stock_closes: dict[str, dict[str, float]] = {}
-        for ts_code in positions:
+        for ts_code in normalized_positions:
             with _fetch_network_context():
                 df = client.query(
                     "daily", ts_code=ts_code,
@@ -121,7 +185,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
                     fields="trade_date,close"
                 )
             if df is not None and not df.empty:
-                stock_closes[ts_code] = dict(zip(df['trade_date'], df['close']))
+                stock_closes[ts_code] = _build_cycle_close_map(df)
     except Exception as exc:
         _emit_diag(
             "抓周期失败: "
@@ -135,14 +199,20 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     portfolio_pct: list[float] = []
     for d in trade_dates:
         market_value = 0.0
-        for ts_code, pos in positions.items():
+        for ts_code, pos in normalized_positions.items():
             closes = stock_closes.get(ts_code, {})
-            price = closes.get(d, pos.buy_price)  # 停牌等无数据时用买入价
-            market_value += price * pos.shares
-        total_value = market_value + cash
+            price = closes.get(d, pos['buy_price'])  # 停牌等无数据时回退到买入价
+            price_float = _coerce_float(price)
+            if price_float is None or not np.isfinite(price_float) or price_float <= 0:
+                continue
+            market_value += price_float * pos['shares']
+        total_value = market_value + cash_float
         if base_value is None:
             base_value = total_value
-        portfolio_pct.append((total_value / base_value - 1) * 100)
+        if base_value is None or abs(base_value) < 1e-12:
+            portfolio_pct.append(0.0)
+        else:
+            portfolio_pct.append((total_value / base_value - 1) * 100)
 
     # 上证/深证指数涨跌幅
     shanghai_base_close = shanghai_close_map[trade_dates[0]]
@@ -169,7 +239,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
     _trace_diag(
         "抓周期完成: "
-        f"trade_dates={len(trade_dates)}, stocks={len(positions)}, "
+        f"trade_dates={len(trade_dates)}, stocks={len(normalized_positions)}, "
         f"cost={time.monotonic() - fetch_started_at:.2f}s"
     )
 
@@ -1409,8 +1479,11 @@ def _refresh_display_state(
                     )
                 else:
                     _emit_diag("抓周期返回空数据，周期图保持上次有效值")
-            except Exception:
-                _emit_diag("抓周期阶段异常，周期图保持上次有效值")
+            except Exception as exc:
+                _emit_diag(
+                    "抓周期阶段异常: "
+                    f"{type(exc).__name__}: {exc}，周期图保持上次有效值"
+                )
     finally:
         with state.lock:
             if latest_update_time is not None:

@@ -2431,6 +2431,69 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
     assert query_call_count["value"] == 8
 
 
+def test_fetch_cycle_chart_data_tolerates_string_account_numbers(monkeypatch):
+    module = _load_module()
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_rebalance_state(self):
+            return {"last_rebalance_date": "20260401", "rebalance_freq": "5"}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares="100", buy_price="10.0"),
+                    "000002.SZ": SimpleNamespace(shares="200", buy_price="20.0"),
+                },
+                cash="5000.0",
+            )
+
+    class DummyClient:
+        def __init__(self, verbose=False):
+            pass
+
+        def query(self, api_name, **kwargs):
+            if api_name == "index_daily":
+                if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE:
+                    closes = [3000.0, 3030.0]
+                elif kwargs.get("ts_code") == module.SHENZHEN_INDEX_CODE:
+                    closes = [10000.0, 10150.0]
+                else:
+                    closes = [5000.0, 5075.0]
+                return pd.DataFrame(
+                    {
+                        "trade_date": ["20260401", "20260407"],
+                        "close": closes,
+                    }
+                )
+            if kwargs.get("ts_code") == "000001.SZ":
+                closes = [10.0, 11.0]
+            else:
+                closes = [20.0, 22.0]
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260401", "20260407"],
+                    "close": closes,
+                }
+            )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    chart = module._fetch_cycle_chart_data()
+
+    assert chart is not None
+    assert chart["dates"] == ["20260407"]
+    assert chart["portfolio_pct"] == [0.0]
+
+
 def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):
     module = _load_module()
     state = module.DisplayState()

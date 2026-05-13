@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.58)
+### 当前版本 (v0.71.59)
+
+**树莓派 3.5LCD 周期图旧状态兼容修复** (v0.71.59):
+- [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 在周期图计算前会统一归一化 `cash`、`shares`、`buy_price` 与日线 `close/trade_date`，避免旧状态文件中的字符串数值或脏值导致收盘后周期图构建异常
+- 同文件中的“抓周期阶段异常”日志现在会带上异常类型和异常消息，树莓派现场日志可以直接看出具体失败点，而不是只看到笼统的阶段失败
+- 新增 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 回归测试，覆盖旧状态数值字段为字符串时周期图仍能正常生成
 
 **一致预期 freshness 特征补齐** (v0.71.58):
 - [src/lazybull/factors/consensus.py](src/lazybull/factors/consensus.py) 为 report_rc 一致预期聚合新增 `consensus_freshness_days`，表示最近一次可见研报距当日的天数
