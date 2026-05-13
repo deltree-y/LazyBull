@@ -11,6 +11,7 @@ import pandas as pd
 from loguru import logger
 
 from ..data import DataCleaner, DataLoader, Storage, TushareClient
+from ..data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS
 from ..data.ensure import ensure_basic_data, ensure_clean_data_for_date
 from .builder import FeatureBuilder
 
@@ -32,6 +33,7 @@ _MIN_FORECAST_RECORDS = 500    # 业绩预告：全量应有数万条
 _MIN_EXPRESS_RECORDS = 500        # 业绩快报：全量应有数万条
 _MIN_REPORT_RC_RECORDS = 1000     # 一致预期研报：全量应有数万条
 _MIN_CASHFLOW_RECORDS = 1000      # 现金流量表：全量应有数万条
+_FINA_REQUIRED_RAW_COLS = ["q_gr_yoy", "q_ocf_to_sales", "int_to_talcap", "inv_turn"]
 
 
 def ensure_features_for_date(
@@ -367,7 +369,7 @@ def _load_factor_data(
 
     # ── 基本面因子 ──────────────────────────────────────────
     funda_today = None
-    fina_indicator = loader.load_fina_indicator()
+    fina_indicator = loader.load_fina_indicator(start_date=trade_date, end_date=trade_date)
     # 数据不存在、或记录过少（之前单日增量下载的残留）均触发全量下载
     if fina_indicator is None or len(fina_indicator) < _MIN_FINA_RECORDS:
         fina_indicator = _try_download_fina_indicator(client, storage, trade_date)
@@ -579,7 +581,7 @@ def _load_factor_data(
 
     # ── 现金流质量（单文件，按 ann_date 增量）──────────────────────
     cashflow_today = pd.DataFrame()
-    cashflow_df = loader.load_cashflow()
+    cashflow_df = loader.load_cashflow(start_date=trade_date, end_date=trade_date)
     if cashflow_df is None or len(cashflow_df) < _MIN_CASHFLOW_RECORDS:
         cashflow_df = _try_download_cashflow(client, storage, trade_date)
     if cashflow_df is not None and len(cashflow_df) > 0:
@@ -682,6 +684,73 @@ def _save_merged_bulk(
     storage.save_raw(result, dataset_name, is_force=True)
     logger.info(f"[{dataset_name}] 已保存: {len(result)} 条记录")
     return result
+
+
+def _merge_refreshed_rows(
+    existing_df: pd.DataFrame,
+    refreshed_df: pd.DataFrame,
+    dedup_cols: List[str],
+) -> pd.DataFrame:
+    """按主键将刷新结果补回旧表，保留旧表中的其他列。"""
+    existing = existing_df.drop_duplicates(subset=dedup_cols, keep="last").set_index(dedup_cols)
+    refreshed = refreshed_df.drop_duplicates(subset=dedup_cols, keep="last").set_index(dedup_cols)
+
+    full_index = existing.index.union(refreshed.index)
+    existing = existing.reindex(full_index)
+    refreshed = refreshed.reindex(full_index)
+
+    for col in refreshed.columns:
+        if col in existing.columns:
+            existing[col] = refreshed[col].combine_first(existing[col])
+        else:
+            existing[col] = refreshed[col]
+
+    return existing.reset_index()
+
+
+def _refresh_existing_period_rows(
+    client: TushareClient,
+    storage: Storage,
+    dataset_name: str,
+    api_name: str,
+    existing_df: Optional[pd.DataFrame],
+    dedup_cols: List[str],
+    fields: str,
+    period_col: str = "end_date",
+) -> Optional[pd.DataFrame]:
+    """对已有 period 数据按季度重拉，回补旧 schema 缺列。"""
+    if existing_df is None or len(existing_df) == 0 or period_col not in existing_df.columns:
+        return existing_df
+
+    refresh_periods = sorted(
+        {
+            period
+            for period in existing_df[period_col].map(_normalize_date_str).dropna().tolist()
+            if period
+        }
+    )
+    if not refresh_periods:
+        return existing_df
+
+    logger.info(f"[{dataset_name}] 检测到旧 schema，按季度回补 {len(refresh_periods)} 个 period")
+    refreshed_dfs: List[pd.DataFrame] = []
+    for period in refresh_periods:
+        try:
+            df = _query_with_pagination(client, api_name, fields=fields, period=period)
+            if df is not None and len(df) > 0:
+                refreshed_dfs.append(df)
+        except Exception as e:
+            logger.warning(f"[{dataset_name}] period={period} schema 回补失败: {e}")
+
+    if not refreshed_dfs:
+        logger.warning(f"[{dataset_name}] schema 回补未获取到任何数据，保留旧表")
+        return existing_df
+
+    refreshed_df = pd.concat(refreshed_dfs, ignore_index=True)
+    merged_df = _merge_refreshed_rows(existing_df, refreshed_df, dedup_cols)
+    storage.save_raw(merged_df, dataset_name, is_force=True)
+    logger.info(f"[{dataset_name}] schema 回补完成: {len(merged_df)} 条记录")
+    return merged_df
 
 
 def _normalize_date_str(date_value: object) -> Optional[str]:
@@ -849,6 +918,7 @@ def _bulk_download_by_period(
     dedup_cols: List[str],
     fields: Optional[str] = None,
     start_year: int = 2012,
+    partition_by_period: bool = False,
 ) -> Optional[pd.DataFrame]:
     """按报告期(period)批量下载全量数据（自动分页）
 
@@ -873,13 +943,20 @@ def _bulk_download_by_period(
     periods = _generate_quarter_periods(start_year, current_year)
 
     # 断点续传：跳过已有季度
-    existing_df = storage.load_raw(dataset_name)
+    existing_df = None
     existing_periods: Set[str] = set()
-    if existing_df is not None and len(existing_df) > 0:
-        if "end_date" in existing_df.columns:
-            existing_periods = set(
-                existing_df["end_date"].astype(str).str.replace("-", "").str[:8].unique()
-            )
+    if partition_by_period:
+        existing_periods = {
+            partition.replace("-", "")
+            for partition in storage.list_partitions("raw", dataset_name)
+        }
+    else:
+        existing_df = storage.load_raw(dataset_name)
+        if existing_df is not None and len(existing_df) > 0:
+            if "end_date" in existing_df.columns:
+                existing_periods = set(
+                    existing_df["end_date"].astype(str).str.replace("-", "").str[:8].unique()
+                )
 
     periods_to_download = [p for p in periods if p not in existing_periods]
     if not periods_to_download:
@@ -899,7 +976,10 @@ def _bulk_download_by_period(
                 client, api_name, fields=fields, period=period,
             )
             if df is not None and len(df) > 0:
-                all_dfs.append(df)
+                if partition_by_period:
+                    storage.save_raw_by_date(df, dataset_name, period)
+                else:
+                    all_dfs.append(df)
                 success += 1
             else:
                 empty += 1
@@ -907,7 +987,7 @@ def _bulk_download_by_period(
             errors += 1
             logger.debug(f"[{dataset_name}] {period} 失败: {e}")
 
-    if all_dfs:
+    if not partition_by_period and all_dfs:
         existing_df = _save_merged_bulk(
             storage, dataset_name, all_dfs, existing_df, dedup_cols
         )
@@ -1011,6 +1091,24 @@ def _try_download_fina_indicator(
     existing = storage.load_raw("fina_indicator")
 
     if existing is not None and len(existing) >= _MIN_FINA_RECORDS:
+        missing_schema_cols = [c for c in _FINA_REQUIRED_RAW_COLS if c not in existing.columns]
+        if missing_schema_cols:
+            logger.info(
+                "财务指标数据缺少关键列，先执行历史 schema 回补: "
+                + ", ".join(missing_schema_cols)
+            )
+            repaired = _refresh_existing_period_rows(
+                client=client,
+                storage=storage,
+                dataset_name="fina_indicator",
+                api_name="fina_indicator_vip",
+                existing_df=existing,
+                dedup_cols=["ts_code", "end_date", "ann_date"],
+                fields=FINA_INDICATOR_DEFAULT_FIELDS,
+            )
+            if repaired is not None:
+                existing = repaired
+
         # 增量模式：数据量充足，按公告日区间补齐
         try:
             return _incremental_catchup_by_calendar_date(
@@ -1032,13 +1130,15 @@ def _try_download_fina_indicator(
         f"财务指标数据不足 (当前 {cnt} 条, 阈值 {_MIN_FINA_RECORDS})，"
         f"启动按季度批量下载..."
     )
-    return _bulk_download_by_period(
+    _bulk_download_by_period(
         client, storage,
         dataset_name="fina_indicator",
         api_name="fina_indicator_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
-        fields=None,
+        fields=FINA_INDICATOR_DEFAULT_FIELDS,
+        partition_by_period=True,
     )
+    return DataLoader(storage).load_fina_indicator(start_date=trade_date, end_date=trade_date)
 
 
 def _try_download_cashflow(
@@ -1073,14 +1173,16 @@ def _try_download_cashflow(
         f"现金流量表数据不足 (当前 {cnt} 条, 阈值 {_MIN_CASHFLOW_RECORDS})，"
         f"启动按季度批量下载..."
     )
-    return _bulk_download_by_period(
+    _bulk_download_by_period(
         client,
         storage,
         dataset_name="cashflow",
         api_name="cashflow_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
         fields=None,
+        partition_by_period=True,
     )
+    return DataLoader(storage).load_cashflow(start_date=trade_date, end_date=trade_date)
 
 
 def _try_download_stk_holdernumber(
@@ -1640,7 +1742,12 @@ _REQUIRED_FACTOR_COLS = [
     "mkt_atr_pct",                                          # 市场级 ATR 当前值
     "mkt_atr_pct_ma250",                                    # 市场级 ATR 250 日均值
     "roe_waa",                                              # 基本面因子
+    "q_gr_yoy",                                             # 基本面单季增速
+    "cf_sales",                                             # 基本面现金流/营收
+    "cf_nm",                                                # 基本面现金流/净利润
     "grossprofit_margin",                                   # 基本面扩展因子（利润率）
+    "int_to_talcap",                                        # 无形资产/总资本比
+    "inv_turn",                                             # 存货周转率
     "fundamental_freshness_days",                           # 基本面 freshness
     "holder_num_chg",                                       # 股东人数因子
     "holder_freshness_days",                                # 股东人数 freshness
@@ -1651,6 +1758,7 @@ _REQUIRED_FACTOR_COLS = [
     "fund_portfolio_freshness_days",                        # 基金持仓 freshness
     "express_revenue_yoy",                                  # 业绩快报因子
     "express_freshness_days",                               # 业绩快报 freshness
+    "consensus_freshness_days",                             # 一致预期 freshness
     "cashflow_freshness_days",                              # 现金流质量 freshness
     "cons_revision_freshness_days",                         # 一致预期修正 freshness
 ]

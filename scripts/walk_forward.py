@@ -689,6 +689,12 @@ def _train_model_on_window(
         enable_north_features=getattr(args, "enable_north_features", False),
         enable_lhb_features=getattr(args, "enable_lhb_features", False),
         enable_consensus_features=getattr(args, "enable_consensus_features", False),
+        enable_cashflow_quality_features=getattr(
+            args, "enable_cashflow_quality_features", False
+        ),
+        enable_consensus_revision_features=getattr(
+            args, "enable_consensus_revision_features", False
+        ),
         feature_stability_filter=args.feature_stability_filter,
     )
 
@@ -951,6 +957,12 @@ def execute_split_training(
         "pos_quantile": args.pos_quantile if args.task == "classification" else None,
         "pos_topk": args.pos_topk if args.task == "classification" else None,
         "scale_pos_weight_manual": args.scale_pos_weight is not None,
+        "enable_cashflow_quality_features": getattr(
+            args, "enable_cashflow_quality_features", False
+        ),
+        "enable_consensus_revision_features": getattr(
+            args, "enable_consensus_revision_features", False
+        ),
     })
     if ensemble_offsets > 0:
         full_train_params["ensemble_offsets"] = ensemble_offsets
@@ -1186,6 +1198,12 @@ def execute_deploy_training(
         "pos_topk": args.pos_topk if args.task == "classification" else None,
         "scale_pos_weight_manual": args.scale_pos_weight is not None,
         "is_deploy": True,
+        "enable_cashflow_quality_features": getattr(
+            args, "enable_cashflow_quality_features", False
+        ),
+        "enable_consensus_revision_features": getattr(
+            args, "enable_consensus_revision_features", False
+        ),
     })
     if ensemble_offsets > 0:
         full_train_params["ensemble_offsets"] = ensemble_offsets
@@ -1731,6 +1749,12 @@ def write_walk_forward_summary(
         "enable_north_features": getattr(args, 'enable_north_features', False),
         "enable_lhb_features": getattr(args, 'enable_lhb_features', False),
         "enable_consensus_features": getattr(args, 'enable_consensus_features', False),
+        "enable_cashflow_quality_features": getattr(
+            args, 'enable_cashflow_quality_features', False
+        ),
+        "enable_consensus_revision_features": getattr(
+            args, 'enable_consensus_revision_features', False
+        ),
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),

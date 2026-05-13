@@ -319,7 +319,7 @@ def build_features_data(
     fundamental_lookup = None
     if enable_fundamental:
         from src.lazybull.factors.fundamental import build_fundamental_lookup_by_date
-        fina_indicator = loader.load_fina_indicator()
+        fina_indicator = loader.load_fina_indicator(start_date, end_date)
         if fina_indicator is not None:
             logger.info("构建基本面日频查询表...")
             fundamental_lookup = build_fundamental_lookup_by_date(
@@ -449,7 +449,7 @@ def build_features_data(
     if enable_cashflow_quality:
         from src.lazybull.factors.cashflow_quality import build_cashflow_quality_lookup_by_date
 
-        cashflow_df = loader.load_cashflow()
+        cashflow_df = loader.load_cashflow(start_date, end_date)
         if cashflow_df is not None:
             logger.info(f"现金流量表数据: {len(cashflow_df)} 条")
             cashflow_lookup = build_cashflow_quality_lookup_by_date(

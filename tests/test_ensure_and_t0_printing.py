@@ -301,6 +301,7 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
 
     for attr in [
         '_MIN_FINA_RECORDS',
+        '_MIN_CASHFLOW_RECORDS',
         '_MIN_HOLDER_RECORDS',
         '_MIN_FORECAST_RECORDS',
         '_MIN_EXPRESS_RECORDS',
@@ -352,6 +353,8 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         ('src.lazybull.factors.north_flow', 'build_north_flow_lookup_by_date', 'north_flow'),
         ('src.lazybull.factors.lhb', 'build_lhb_lookup_by_date', 'lhb'),
         ('src.lazybull.factors.consensus', 'build_consensus_lookup_by_date', 'consensus'),
+        ('src.lazybull.factors.cashflow_quality', 'build_cashflow_quality_lookup_by_date', 'cashflow'),
+        ('src.lazybull.factors.consensus_revision', 'build_consensus_revision_lookup_by_date', 'consensus_revision'),
     ]
     expected_names = {item[2] for item in builder_targets}
 
@@ -363,7 +366,7 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         )
 
     class StubLoader:
-        def load_fina_indicator(self):
+        def load_fina_indicator(self, start_date=None, end_date=None):
             return stub_df
 
         def load_margin_detail(self, start_date, end_date):
@@ -379,6 +382,9 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
             return stub_df
 
         def load_report_rc(self):
+            return stub_df
+
+        def load_cashflow(self, start_date=None, end_date=None):
             return stub_df
 
     result = ensure_module._load_factor_data(

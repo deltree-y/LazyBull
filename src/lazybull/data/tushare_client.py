@@ -12,6 +12,16 @@ from loguru import logger
 from ..common.config import get_tushare_settings
 
 
+FINA_INDICATOR_DEFAULT_FIELDS = (
+    "ts_code,ann_date,end_date,"
+    "roe_waa,roe_dt,roa,or_yoy,netprofit_yoy,"
+    "profit_dedt,q_gr_yoy,equity_yoy,"
+    "grossprofit_margin,netprofit_margin,"
+    "debt_to_assets,current_ratio,quick_ratio,"
+    "q_ocf_to_sales,int_to_talcap,assets_turn,inv_turn"
+)
+
+
 def _is_rate_limit_error(err_msg: str, keywords: List[str]) -> bool:
     """判断异常消息是否为 TuShare 限流错误。
 
@@ -555,14 +565,7 @@ class TushareClient:
             财务指标 DataFrame
         """
         if fields is None:
-            fields = (
-                "ts_code,ann_date,end_date,"
-                "roe_waa,roe_dt,roa,or_yoy,netprofit_yoy,"
-                "profit_dedt,q_gr_yoy,equity_yoy,"
-                "grossprofit_margin,netprofit_margin,"
-                "debt_to_assets,current_ratio,quick_ratio,"
-                "cf_sales,cf_nm,goodwill,assets_turn,inv_turn"
-            )
+            fields = FINA_INDICATOR_DEFAULT_FIELDS
 
         return self.query(
             "fina_indicator",
@@ -589,14 +592,7 @@ class TushareClient:
             全市场财务指标 DataFrame
         """
         if fields is None:
-            fields = (
-                "ts_code,ann_date,end_date,"
-                "roe_waa,roe_dt,roa,or_yoy,netprofit_yoy,"
-                "profit_dedt,q_gr_yoy,equity_yoy,"
-                "grossprofit_margin,netprofit_margin,"
-                "debt_to_assets,current_ratio,quick_ratio,"
-                "cf_sales,cf_nm,goodwill,assets_turn,inv_turn"
-            )
+            fields = FINA_INDICATOR_DEFAULT_FIELDS
         kwargs: dict = {"fields": fields}
         if ann_date is not None:
             kwargs["ann_date"] = ann_date

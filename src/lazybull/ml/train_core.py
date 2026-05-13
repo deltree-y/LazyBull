@@ -57,8 +57,8 @@ FUNDAMENTAL_FEATURE_COLUMNS = [
     "zscore_debt_to_assets",       # 资产负债率
     "zscore_current_ratio",        # 流动比率（新版）
     "zscore_quick_ratio",          # 速动比率（新版）
-    # 商誉风险 + 运营效率（3个新版）
-    "zscore_goodwill",             # 商誉净额（新版）
+    # 无形资产风险代理 + 运营效率（3个新版）
+    "zscore_int_to_talcap",        # 无形资产/总资本比（替代 goodwill）
     "zscore_assets_turn",          # 总资产周转率（新版）
     "zscore_inv_turn",             # 存货周转率（新版）
     # 新鲜度
@@ -141,6 +141,7 @@ CONSENSUS_FEATURE_COLUMNS = [
     "cons_eps_revision_30d",  # 近 30 日 EPS 预测修正率
     "cons_target_price_mid",  # 近 90 日目标价中值
     "cons_rating_score",  # 近 90 日平均评级得分
+    "consensus_freshness_days",  # 最近一次研报距当日天数
 ]
 
 # 增强因子特征列（从已有日线/moneyflow数据计算，无需额外积分）

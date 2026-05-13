@@ -29,11 +29,12 @@ FUNDA_COLS = [
     'cf_sales', 'cf_nm',                            # 经营现金流/营收, /净利润
     # 偿债/流动性（2+1=3）
     'debt_to_assets', 'current_ratio', 'quick_ratio',
-    # 商誉风险（1）
-    'goodwill',                                      # 商誉（需后续处理为 goodwill/equity）
+    # 无形资产风险（1）
+    'int_to_talcap',                                 # 无形资产/总资本比（商誉风险代理）
     # 运营效率（2）
     'assets_turn', 'inv_turn',
 ]
+FUNDA_AUX_COLS = ['q_ocf_to_sales']
 FUNDAMENTAL_FRESHNESS_COL = 'fundamental_freshness_days'
 
 
@@ -67,22 +68,29 @@ def build_fundamental_lookup_by_date(
     df = df.drop_duplicates(subset=['ts_code', 'end_date'], keep='last')
 
     # 确保数值列为 float
-    for col in FUNDA_COLS:
+    for col in FUNDA_COLS + FUNDA_AUX_COLS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    if 'q_ocf_to_sales' in df.columns:
+        if 'cf_sales' in df.columns:
+            df['cf_sales'] = df['cf_sales'].combine_first(df['q_ocf_to_sales'])
+        else:
+            df['cf_sales'] = df['q_ocf_to_sales']
 
     # 对增长率类指标做 winsorize 截断极端值
     _winsorize_growth_cols(df)
 
     available_cols = [c for c in FUNDA_COLS if c in df.columns]
+    available_aux_cols = [c for c in FUNDA_AUX_COLS if c in df.columns]
 
     logger.info(f"基本面查询表构建: {df['ts_code'].nunique()} 只股票, {len(trading_dates)} 个交易日")
 
-    factor_df = df[['ts_code', 'ann_date'] + available_cols].copy()
+    factor_df = df[['ts_code', 'ann_date'] + available_cols + available_aux_cols].copy()
     result_dict = build_latest_announcement_lookup_by_date(
         factor_df,
         trading_dates,
-        value_cols=available_cols,
+        value_cols=available_cols + available_aux_cols,
         freshness_col=FUNDAMENTAL_FRESHNESS_COL,
         log_name='基本面',
     )

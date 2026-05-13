@@ -1,6 +1,6 @@
 """数据加载模块"""
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -165,6 +165,38 @@ class DataLoader:
         if len(date_str) == 8:  # YYYYMMDD
             return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
         return date_str
+
+    def _load_quarter_partitioned_raw(
+        self,
+        name: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        lookback_years: int = 1,
+        columns: Optional[List[str]] = None,
+    ) -> Optional[pd.DataFrame]:
+        """加载按季度分区的公告型原始数据。"""
+        if not hasattr(self.storage, "list_partitions"):
+            return None
+        partitions = self.storage.list_partitions("raw", name)
+        if not partitions:
+            return None
+
+        if start_date and end_date:
+            start_norm = self._normalize_date(start_date)
+            end_norm = self._normalize_date(end_date)
+            start_year = pd.to_datetime(start_norm).year - lookback_years
+            range_start = f"{start_year}-01-01"
+            range_end = end_norm
+        else:
+            range_start = partitions[0]
+            range_end = partitions[-1]
+
+        return self.storage.load_raw_by_date_range(
+            name,
+            range_start,
+            range_end,
+            columns=columns,
+        )
     
     def get_trading_dates(self, start_date: str, end_date: str) -> list:
         """获取指定范围内的交易日列表
@@ -406,14 +438,26 @@ class DataLoader:
             )
         return df
 
-    def load_fina_indicator(self) -> Optional[pd.DataFrame]:
+    def load_fina_indicator(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        lookback_years: int = 1,
+    ) -> Optional[pd.DataFrame]:
         """加载财务指标数据（fina_indicator）
 
         Returns:
             财务指标DataFrame，包含 ts_code, ann_date, end_date, roe_waa 等字段。
             不存在返回 None。
         """
-        df = self.storage.load_raw("fina_indicator")
+        df = self._load_quarter_partitioned_raw(
+            "fina_indicator",
+            start_date=start_date,
+            end_date=end_date,
+            lookback_years=lookback_years,
+        )
+        if df is None:
+            df = self.storage.load_raw("fina_indicator")
         if df is None:
             logger.warning(
                 "未找到财务指标数据！\n"
@@ -499,9 +543,21 @@ class DataLoader:
                     df[col] = df[col].astype(str).str.replace("-", "").str[:8]
         return df
 
-    def load_cashflow(self) -> Optional[pd.DataFrame]:
+    def load_cashflow(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        lookback_years: int = 1,
+    ) -> Optional[pd.DataFrame]:
         """加载现金流量表数据（单文件）"""
-        df = self.storage.load_raw("cashflow")
+        df = self._load_quarter_partitioned_raw(
+            "cashflow",
+            start_date=start_date,
+            end_date=end_date,
+            lookback_years=lookback_years,
+        )
+        if df is None:
+            df = self.storage.load_raw("cashflow")
         if df is None:
             logger.warning("未找到现金流量表数据")
         else:

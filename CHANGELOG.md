@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.58] - 2026-05-13
+
+### 修复
+
+- **一致预期补齐 freshness 特征**：在 [src/lazybull/factors/consensus.py](src/lazybull/factors/consensus.py) 新增 `consensus_freshness_days`，按 `report_date -> trade_date` 计算最近一次可见研报距当日天数，并在 [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 接入训练特征列。
+- **一致预期空数据日补 freshness 占位**：在 [src/lazybull/features/builder.py](src/lazybull/features/builder.py) 中，当一致预期启用但当日无研报命中时，补齐 `consensus_freshness_days` 的 NaN 占位；同时在 [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 纳入 features schema 必需列，便于旧缓存识别并重建。
+
+### 测试
+
+- 更新 [tests/test_factor_consensus.py](tests/test_factor_consensus.py)，覆盖一致预期 freshness 数值和空数据占位。
+- 更新 [tests/test_factor_wiring_cashflow_consensus_revision.py](tests/test_factor_wiring_cashflow_consensus_revision.py)，覆盖 schema 必需列包含 `consensus_freshness_days`。
+
+## [0.71.57] - 2026-05-13
+
+### 修复
+
+- **fina_indicator / cashflow 改为季度分区 + 窗口读取**：在 [src/lazybull/data/loader.py](src/lazybull/data/loader.py) 为公告型季度数据新增窗口读取逻辑，优先加载所需窗口覆盖的季度分区，并保留旧单文件回退兼容，避免 paper_trade 与特征构建阶段反复整表读取。
+- **paper_trade / ensure 共用链路切到窗口读取**：在 [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 中，基本面与现金流质量因子改为按目标交易日窗口读取；首次全量补数则按季度分区落盘后再回读窗口数据。
+- **download_raw 支持季度分区写入**：在 [scripts/download_raw.py](scripts/download_raw.py) 中，`fina_indicator` 与 `cashflow` 的全量下载改为按报告期季度分区保存，其中 `fina_indicator` 继续强制显式请求字段，避免回退到默认 schema。
+- **离线特征构建改为按窗口消费 raw**：在 [scripts/build_clean_features.py](scripts/build_clean_features.py) 中，基本面与现金流质量原始数据改为按构建区间窗口读取，降低大文件增长后的读取成本。
+
+### 测试
+
+- 新增 [tests/test_announcement_partition_window_loading.py](tests/test_announcement_partition_window_loading.py)，覆盖 `fina_indicator` / `cashflow` 的季度分区窗口读取。
+- 更新 [tests/test_factor_wiring_cashflow_consensus_revision.py](tests/test_factor_wiring_cashflow_consensus_revision.py) 与 [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)，验证 ensure/download 路径切到季度分区后仍能正确构建单日因子。
+
+## [0.71.56] - 2026-05-13
+
+### 修复
+
+- **fina_indicator 全量下载强制显式请求字段**：在 [src/lazybull/data/tushare_client.py](src/lazybull/data/tushare_client.py) 抽取 `FINA_INDICATOR_DEFAULT_FIELDS`，并在 [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 的全量季度下载中强制透传，修复 `q_gr_yoy` / `inv_turn` 因默认 schema 被漏拉的问题。
+- **旧版 raw schema 自动检测与按季度回补**：当 [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 检测到历史 `fina_indicator` 缺少关键列时，会先按已有报告期重拉并补回旧表，再继续增量公告补齐；该逻辑同时覆盖 paper_trade 缺数据时触发的 ensure 链路。
+- **拿不到的基本面字段改为稳定代理列**：将 [src/lazybull/factors/fundamental.py](src/lazybull/factors/fundamental.py) 与 [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 中无法稳定获取的字段替换为可稳定落地的代理实现：`cf_sales -> q_ocf_to_sales`、`cf_nm -> ocf_to_profit 回填`、`goodwill -> int_to_talcap`。
+- **特征构建阶段补回基本面代理列**：在 [src/lazybull/features/builder.py](src/lazybull/features/builder.py) 中新增基本面代理列回填逻辑，并补齐 `fcf_yield`、`int_to_talcap` 等行业中性化输出，确保训练侧 `zscore_cf_sales` / `zscore_cf_nm` / `zscore_int_to_talcap` 可稳定生成。
+
+### 测试
+
+- 更新 [tests/test_factor_wiring_cashflow_consensus_revision.py](tests/test_factor_wiring_cashflow_consensus_revision.py)：新增全量下载显式 fields、旧 schema 回补、基本面代理列回填与中性化输出回归测试。
+- 结合 [tests/test_training_feature_flag_forwarding.py](tests/test_training_feature_flag_forwarding.py) 与 [tests/test_ma250_observability.py](tests/test_ma250_observability.py) 的相关用例，验证训练入口透传、特征 schema 缺列检测与回归链路均通过。
+
+## [0.71.55] - 2026-05-13
+
+### 修复
+
+- **训练入口新增因子开关透传补齐**：在 [scripts/walk_forward.py](scripts/walk_forward.py) 与 [scripts/train_ml_model.py](scripts/train_ml_model.py) 补齐 `enable_cashflow_quality_features` / `enable_consensus_revision_features` 向 `prepare_training_data()` 的透传，修复命令行已开启但训练特征列数量不变的问题。
+- **训练脚本参数定义补齐**：为 [scripts/train_ml_model.py](scripts/train_ml_model.py) 新增 `--enable-cashflow-quality-features` 与 `--enable-consensus-revision-features` CLI 参数，并将两者写入模型训练元数据与 walk-forward 汇总参数，便于回溯实验配置。
+- **现金流质量 z-score 列补齐**：在 [src/lazybull/features/builder.py](src/lazybull/features/builder.py) 的行业中性化白名单中补回 `fcf_yield`，修复 `zscore_fcf_yield` 在现有 `cs_train`/`cs_infer` 缓存中长期缺失的问题。
+
+### 测试
+
+- 新增 [tests/test_training_feature_flag_forwarding.py](tests/test_training_feature_flag_forwarding.py)：
+  - 校验 [scripts/walk_forward.py](scripts/walk_forward.py) 会将 `cashflow_quality` / `consensus_revision` 开关继续透传到训练选列层。
+  - 校验 [scripts/train_ml_model.py](scripts/train_ml_model.py) 能解析新 CLI 参数并继续透传到训练选列层。
+- 更新 [tests/test_factor_wiring_cashflow_consensus_revision.py](tests/test_factor_wiring_cashflow_consensus_revision.py)：新增 `zscore_fcf_yield` 生成回归用例，防止现金流质量因子白名单再次漏列。
+
 ## [0.71.54] - 2026-05-13
 
 ### 修复

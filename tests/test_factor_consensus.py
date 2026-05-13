@@ -2,8 +2,10 @@
 
 import pandas as pd
 
+from src.lazybull.features import FeatureBuilder
 from src.lazybull.factors.consensus import (
     CONS_COLS,
+    CONSENSUS_FRESHNESS_COL,
     build_consensus_lookup_by_date,
 )
 
@@ -24,6 +26,50 @@ def _make_report_rc_df() -> pd.DataFrame:
              "eps": 0.50, "max_price": 8.0, "min_price": 7.0, "rating": "中性"},
         ]
     )
+
+
+def _make_builder_inputs():
+    dates = pd.date_range("2024-01-01", periods=40, freq="B")
+    trade_cal = pd.DataFrame(
+        {
+            "cal_date": dates.strftime("%Y%m%d"),
+            "is_open": [1] * len(dates),
+        }
+    )
+    daily_rows = []
+    adj_rows = []
+    for idx, date in enumerate(dates):
+        trade_date = date.strftime("%Y%m%d")
+        close = 10.0 + idx * 0.1
+        pre_close = 10.0 + (idx - 1) * 0.1 if idx > 0 else 10.0
+        daily_rows.append(
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": trade_date,
+                "open": pre_close * 1.001,
+                "close": close,
+                "pre_close": pre_close,
+                "pct_chg": (close / pre_close - 1.0) * 100.0 if pre_close > 0 else 0.0,
+                "vol": 1000000,
+                "amount": 1000000 * close,
+            }
+        )
+        adj_rows.append(
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": trade_date,
+                "adj_factor": 1.0,
+            }
+        )
+
+    stock_basic = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "name": ["平安银行"],
+            "list_date": ["20100101"],
+        }
+    )
+    return trade_cal, pd.DataFrame(daily_rows), pd.DataFrame(adj_rows), stock_basic
 
 
 def test_consensus_lookup_basic():
@@ -63,6 +109,34 @@ def test_consensus_analyst_count_window():
     r1 = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
     # 近 30 日 (2/14 - 3/15) 000001 只有 20240310 一条
     assert r1["cons_analyst_count_30d"] == 1.0
+
+
+def test_consensus_freshness_days():
+    df = _make_report_rc_df()
+    result = build_consensus_lookup_by_date(df, ["20240315"])
+    frame = result["20240315"]
+    row = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
+
+    assert CONSENSUS_FRESHNESS_COL in frame.columns
+    assert row[CONSENSUS_FRESHNESS_COL] == 5
+
+
+def test_builder_adds_consensus_freshness_placeholder_when_enabled_but_empty():
+    trade_cal, daily_data, adj_factor, stock_basic = _make_builder_inputs()
+    builder = FeatureBuilder(min_list_days=0, require_label=False)
+    trade_date = trade_cal["cal_date"].iloc[25]
+
+    result = builder.build_features_for_day(
+        trade_date=trade_date,
+        trade_cal=trade_cal,
+        daily_data=daily_data,
+        adj_factor=adj_factor,
+        stock_basic=stock_basic,
+        consensus_data=pd.DataFrame(),
+    )
+
+    assert CONSENSUS_FRESHNESS_COL in result.columns
+    assert result[CONSENSUS_FRESHNESS_COL].isna().all()
 
 
 def test_consensus_empty():

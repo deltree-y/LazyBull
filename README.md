@@ -28,7 +28,31 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.54)
+### 当前版本 (v0.71.58)
+
+**一致预期 freshness 特征补齐** (v0.71.58):
+- [src/lazybull/factors/consensus.py](src/lazybull/factors/consensus.py) 为 report_rc 一致预期聚合新增 `consensus_freshness_days`，表示最近一次可见研报距当日的天数
+- [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 已将该列接入一致预期训练特征清单
+- [src/lazybull/features/builder.py](src/lazybull/features/builder.py) 在一致预期启用但当日无研报数据时补 NaN 占位，避免 freshness 列时有时无
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 将其纳入特征 schema 校验，旧缓存缺列时会触发重建
+
+**fina_indicator / cashflow 季度分区与窗口读取** (v0.71.57):
+- [scripts/download_raw.py](scripts/download_raw.py) 将 `fina_indicator` 与 `cashflow` 的全量 raw 下载切到按季度分区落盘，`fina_indicator` 继续强制显式请求字段
+- [src/lazybull/data/loader.py](src/lazybull/data/loader.py) 为这两类公告型季度数据增加“按窗口读取、旧单文件回退”的加载逻辑，避免 paper_trade 与构建特征时反复整表读取
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 与 [scripts/build_clean_features.py](scripts/build_clean_features.py) 已接到新窗口读取路径，覆盖 paper_trade 缺数自动补齐和离线特征构建两条主链路
+- 新增 [tests/test_announcement_partition_window_loading.py](tests/test_announcement_partition_window_loading.py) 并扩展相关 ensure 回归测试，验证季度分区读写闭环
+
+**fina_indicator 显式字段与基本面代理列修复** (v0.71.56):
+- [src/lazybull/data/tushare_client.py](src/lazybull/data/tushare_client.py) 抽取 `FINA_INDICATOR_DEFAULT_FIELDS`，并由 [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 在全量下载和旧 schema 回补时强制显式请求，修复 `q_gr_yoy` / `inv_turn` 被默认 schema 漏拉的问题
+- [src/lazybull/features/ensure.py](src/lazybull/features/ensure.py) 在检测到旧版 `fina_indicator` raw 缺关键列时，会先按已有报告期回补后再继续增量补齐；paper_trade 走同一条 ensure 链路，因此自动下载也同步修复
+- [src/lazybull/factors/fundamental.py](src/lazybull/factors/fundamental.py)、[src/lazybull/features/builder.py](src/lazybull/features/builder.py)、[src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 将无法稳定获取的 `cf_sales` / `cf_nm` / `goodwill` 替换为可稳定落地的代理实现，并补齐训练侧对应 zscore 列
+- 新增/扩展回归测试，覆盖训练入口透传、fina_indicator 全量下载显式字段、旧 schema 回补和基本面代理列回填
+
+**训练入口新增因子开关透传修复** (v0.71.55):
+- [scripts/walk_forward.py](scripts/walk_forward.py) 补齐 `cashflow_quality` / `consensus_revision` 到训练选列层的透传，修复 batch 命令已带开关但特征数不变的问题
+- [scripts/train_ml_model.py](scripts/train_ml_model.py) 新增 `--enable-cashflow-quality-features` 与 `--enable-consensus-revision-features` 参数，并同步透传到训练选列层
+- [src/lazybull/features/builder.py](src/lazybull/features/builder.py) 在行业中性化白名单中补回 `fcf_yield`，修复 `zscore_fcf_yield` 长期未写入特征文件的问题
+- 新增 [tests/test_training_feature_flag_forwarding.py](tests/test_training_feature_flag_forwarding.py) 回归测试，覆盖 walk-forward 与单次训练两条入口链路
 
 **3.5LCD 渲染线程屏幕状态字段修复** (v0.71.54):
 - [scripts/respi/lcd35/state.py](scripts/respi/lcd35/state.py) 为 `DisplayState` 补回 `is_screen_on` 默认值

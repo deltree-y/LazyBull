@@ -318,6 +318,20 @@ def main():
     )
 
     parser.add_argument(
+        "--enable-cashflow-quality-features",
+        action="store_true",
+        default=False,
+        help="启用现金流质量因子（需先下载 cashflow 数据）"
+    )
+
+    parser.add_argument(
+        "--enable-consensus-revision-features",
+        action="store_true",
+        default=False,
+        help="启用一致预期修正因子（EPS修正加速度/分歧度等时序信号）"
+    )
+
+    parser.add_argument(
         "--feature-stability-filter",
         action="store_true",
         help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）"
@@ -409,6 +423,12 @@ def main():
             enable_north_features=getattr(args, "enable_north_features", False),
             enable_lhb_features=getattr(args, "enable_lhb_features", False),
             enable_consensus_features=getattr(args, "enable_consensus_features", False),
+            enable_cashflow_quality_features=getattr(
+                args, "enable_cashflow_quality_features", False
+            ),
+            enable_consensus_revision_features=getattr(
+                args, "enable_consensus_revision_features", False
+            ),
             feature_stability_filter=args.feature_stability_filter,
         )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
@@ -515,6 +535,12 @@ def main():
             "rank_weight_enabled": args.rank_weight_enabled,
             "rank_weight_topk": args.rank_weight_topk if args.rank_weight_enabled else None,
             "rank_weight": args.rank_weight if args.rank_weight_enabled else None,
+            "enable_cashflow_quality_features": getattr(
+                args, "enable_cashflow_quality_features", False
+            ),
+            "enable_consensus_revision_features": getattr(
+                args, "enable_consensus_revision_features", False
+            ),
         })
         
         # 4. 注册模型

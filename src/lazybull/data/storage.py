@@ -183,7 +183,12 @@ class Storage:
         return self._load_data(partition_path, format, columns=columns)
 
     def load_raw_by_date_range(
-        self, name: str, start_date: str, end_date: str, format: str = "parquet"
+        self,
+        name: str,
+        start_date: str,
+        end_date: str,
+        format: str = "parquet",
+        columns: Optional[List[str]] = None,
     ) -> Optional[pd.DataFrame]:
         """加载日期范围内的原始数据
 
@@ -192,6 +197,7 @@ class Storage:
             start_date: 开始日期，格式YYYYMMDD或YYYY-MM-DD
             end_date: 结束日期，格式YYYYMMDD或YYYY-MM-DD
             format: 文件格式
+            columns: 仅读取指定列（仅 parquet/csv 支持）
 
         Returns:
             合并后的数据DataFrame，不存在返回None
@@ -211,7 +217,7 @@ class Storage:
         for file_path in sorted(partition_dir.glob(f"*.{format}")):
             date_part = file_path.stem  # 文件名（不含扩展名）
             if start_str <= date_part <= end_str:
-                df = self._load_data(partition_dir / date_part, format)
+                df = self._load_data(partition_dir / date_part, format, columns=columns)
                 if df is not None and len(df) > 0:
                     dfs.append(df)
 

@@ -842,16 +842,21 @@ class FeatureBuilder:
                     features[col] = 0.0
 
         # 一致预期（个股级, 覆盖度低, 未覆盖保留 NaN 由模型自动处理）
-        from ..factors.consensus import CONS_COLS as _CONS_COLS
-        if consensus_data is not None:
-            if len(consensus_data) > 0:
-                merge_cols = [c for c in consensus_data.columns if c != "ts_code"]
-                features = features.merge(
-                    consensus_data[["ts_code"] + merge_cols], on="ts_code", how="left"
-                )
-            else:
-                for col in _CONS_COLS:
+        from ..factors.consensus import (
+            CONS_COLS as _CONS_COLS,
+            CONSENSUS_FRESHNESS_COL as _CONS_FRESH_COL,
+        )
+        if consensus_data is not None and len(consensus_data) > 0:
+            merge_cols = [c for c in consensus_data.columns if c != "ts_code"]
+            features = features.merge(
+                consensus_data[["ts_code"] + merge_cols], on="ts_code", how="left"
+            )
+        else:
+            for col in _CONS_COLS:
+                if col not in features.columns:
                     features[col] = float("nan")
+        if _CONS_FRESH_COL not in features.columns:
+            features[_CONS_FRESH_COL] = float("nan")
 
         # 现金流质量因子（个股级，季度前向填充）
         from ..factors.cashflow_quality import (
@@ -877,6 +882,8 @@ class FeatureBuilder:
             if _CFQ_FRESH_COL not in features.columns:
                 features[_CFQ_FRESH_COL] = float("nan")
 
+        features = self._backfill_fundamental_proxy_features(features)
+
         # 一致预期修正因子（个股级，基于 report_rc 时序构建）
         from ..factors.consensus_revision import (
             CONSENSUS_REVISION_COLS as _CR_COLS,
@@ -893,6 +900,22 @@ class FeatureBuilder:
                     features[col] = float("nan")
             if _CR_FRESH_COL not in features.columns:
                 features[_CR_FRESH_COL] = float("nan")
+
+        return features
+
+    def _backfill_fundamental_proxy_features(self, features: pd.DataFrame) -> pd.DataFrame:
+        """用可稳定获取的字段回填基本面代理列。"""
+        if "cf_sales" not in features.columns:
+            features["cf_sales"] = np.nan
+        if "q_ocf_to_sales" in features.columns:
+            features["cf_sales"] = features["cf_sales"].combine_first(features["q_ocf_to_sales"])
+        if "ocf_to_revenue" in features.columns:
+            features["cf_sales"] = features["cf_sales"].combine_first(features["ocf_to_revenue"])
+
+        if "cf_nm" not in features.columns:
+            features["cf_nm"] = np.nan
+        if "ocf_to_profit" in features.columns:
+            features["cf_nm"] = features["cf_nm"].combine_first(features["ocf_to_profit"])
 
         return features
     
@@ -1998,12 +2021,12 @@ class FeatureBuilder:
             'q_gr_yoy', 'equity_yoy',
             'grossprofit_margin', 'netprofit_margin',
             'debt_to_assets', 'current_ratio', 'quick_ratio',
-            'cf_sales', 'cf_nm', 'goodwill',
+            'cf_sales', 'cf_nm', 'int_to_talcap',
             'assets_turn', 'inv_turn',
             # 增强因子：开盘强度、日内波动结构、订单失衡
             'opening_strength', 'intraday_vol_structure', 'order_imbalance',
             # 现金流质量因子
-            'ocf_to_revenue', 'ocf_to_profit', 'capex_to_ocf',
+            'ocf_to_revenue', 'ocf_to_profit', 'fcf_yield', 'capex_to_ocf',
             # 一致预期修正因子
             'cons_eps_revision_accel', 'cons_eps_dispersion',
             'cons_eps_dispersion_chg', 'cons_target_upside',

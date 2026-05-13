@@ -42,6 +42,7 @@ from loguru import logger
 from src.lazybull.common.config import get_config, get_tushare_settings
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import Storage, TushareClient
+from src.lazybull.data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -975,6 +976,7 @@ def download_cashflow(
         dedup_cols=["ts_code", "end_date", "ann_date"],
         fields=None,
         force=force,
+        partition_by_period=True,
         sort_cols=["end_date", "ann_date"],
     )
 
@@ -1102,8 +1104,9 @@ def main():
                         api_name="fina_indicator_vip",
                         start_date=args.start_date, end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date", "ann_date"],
-                        fields=None,
+                        fields=FINA_INDICATOR_DEFAULT_FIELDS,
                         force=args.force,
+                        partition_by_period=True,
                         sort_cols=["ann_date", "end_date"],
                     )
 

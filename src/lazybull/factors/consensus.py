@@ -36,6 +36,8 @@ CONS_COLS = [
     "cons_rating_score",
 ]
 
+CONSENSUS_FRESHNESS_COL = "consensus_freshness_days"
+
 _RATING_MAP = {
     # 覆盖常见中文评级 + 常见英文评级, 未命中返回 3.0 (中性)
     "买入": 5.0, "强烈推荐": 5.0, "Buy": 5.0, "强推": 5.0,
@@ -69,7 +71,7 @@ def build_consensus_lookup_by_date(
         trading_dates: 交易日列表 (YYYYMMDD 字符串, 已排序)
 
     Returns:
-        Dict[trade_date -> DataFrame(ts_code, cons_*)]
+        Dict[trade_date -> DataFrame(ts_code, cons_*, consensus_freshness_days)]
     """
     if report_rc_df is None or len(report_rc_df) == 0:
         logger.warning("一致预期因子: 输入数据为空")
@@ -143,8 +145,17 @@ def build_consensus_lookup_by_date(
         rev.name = "cons_eps_revision_30d"
         agg = agg.join(rev, how="left")
 
+        latest_report = visible.groupby("ts_code")["_rd_dt"].max().rename(CONSENSUS_FRESHNESS_COL)
+        agg = agg.join(latest_report, how="left")
+
         agg = agg.reset_index()
+        if CONSENSUS_FRESHNESS_COL in agg.columns:
+            agg[CONSENSUS_FRESHNESS_COL] = (
+                td_dt - pd.to_datetime(agg[CONSENSUS_FRESHNESS_COL], errors="coerce")
+            ).dt.days
         keep_cols = ["ts_code"] + [c for c in CONS_COLS if c in agg.columns]
+        if CONSENSUS_FRESHNESS_COL in agg.columns:
+            keep_cols.append(CONSENSUS_FRESHNESS_COL)
         result[td] = agg[keep_cols].reset_index(drop=True)
 
     logger.info(f"一致预期因子查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日")
