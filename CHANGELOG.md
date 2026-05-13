@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.53] - 2026-05-13
+
+### 修复
+
+- **3.5LCD 主入口启动路径前置注入**：在 [scripts/respi/lcd35_display.py](scripts/respi/lcd35_display.py) 中将项目根目录与 `scripts` 目录注入 `sys.path` 的时机前移到组件加载前，修复 `nohup python ./scripts/respi/lcd35_display.py` 场景下 `_context.py` 首次导入即报 `ModuleNotFoundError: No module named 'src'`。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)：新增入口路径自举回归用例，验证在 `sys.path` 不含项目根目录时仍能成功加载主入口。
+
 ## [0.71.52] - 2026-05-12
 
 ### 修复

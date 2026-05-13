@@ -12,6 +12,19 @@ import sys as _sys
 import types as _types
 
 
+def _prepend_sys_path(path: Path) -> None:
+    """确保关键路径优先可导入，避免从子目录启动时找不到 src 包。"""
+    normalized = str(path.resolve())
+    if normalized not in _sys.path:
+        _sys.path.insert(0, normalized)
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPTS_DIR = _PROJECT_ROOT / "scripts"
+_prepend_sys_path(_PROJECT_ROOT)
+_prepend_sys_path(_SCRIPTS_DIR)
+
+
 _COMPONENT_DIR = Path(__file__).with_name("lcd35")
 _COMPONENT_MODULES = [
     "_context",
@@ -44,6 +57,9 @@ del _component_code
 del _component_module
 del _COMPONENT_MODULES
 del _COMPONENT_DIR
+del _prepend_sys_path
+del _PROJECT_ROOT
+del _SCRIPTS_DIR
 del _sys
 del _types
 _gc.collect()

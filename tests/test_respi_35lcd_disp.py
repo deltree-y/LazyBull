@@ -35,6 +35,36 @@ def test_legacy_entrypoint_remains_loadable():
     assert hasattr(module, "main")
 
 
+def test_main_entrypoint_bootstraps_project_root_for_src_import(monkeypatch):
+    pruned_path = []
+    project_root_resolved = PROJECT_ROOT.resolve()
+    for candidate in list(sys.path):
+        if not candidate:
+            continue
+        try:
+            if Path(candidate).resolve() == project_root_resolved:
+                continue
+        except OSError:
+            pass
+        pruned_path.append(candidate)
+
+    monkeypatch.setattr(sys, "path", pruned_path)
+
+    _load_module()
+
+    resolved_paths = set()
+    for candidate in sys.path:
+        if not candidate:
+            continue
+        try:
+            resolved_paths.add(Path(candidate).resolve())
+        except OSError:
+            continue
+
+    assert project_root_resolved in resolved_paths
+    assert (PROJECT_ROOT / "scripts").resolve() in resolved_paths
+
+
 def test_snapshot_timeout_reads_single_env_key(monkeypatch):
     monkeypatch.setenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "120")
     monkeypatch.delenv("REALTIME_SNAPSHOT_TIMEOUT_SECONDS", raising=False)

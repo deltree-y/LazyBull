@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.52)
+### 当前版本 (v0.71.53)
+
+**3.5LCD 主入口 src 导入修复** (v0.71.53):
+- [scripts/respi/lcd35_display.py](scripts/respi/lcd35_display.py) 在加载 `_context` 之前先注入项目根目录与 `scripts` 目录到 `sys.path`
+- 修复树莓派上使用 `nohup python ./scripts/respi/lcd35_display.py` 时，启动阶段报 `ModuleNotFoundError: No module named 'src'`
+- 新增 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 回归用例，覆盖缺少项目根路径时的入口自举导入
 
 **3.5LCD 图表中文乱码恢复** (v0.71.52):
 - [scripts/respi/lcd35/charting.py](scripts/respi/lcd35/charting.py) 恢复被编码破坏的中文注释、docstring 与屏幕文案

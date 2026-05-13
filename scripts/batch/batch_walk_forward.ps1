@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -128,6 +128,12 @@ $enable_lhb              = $true  # $true 启用 | $false 禁用
 $enable_consensus        = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约2%, 回撤无明显变化
 
+# ── 一致预期修正因子（基于已有 report_rc 构建时序修正信号，无需额外下载）─
+$enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
+
+# ── 现金流质量因子（需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
+$enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
+
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
 $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
@@ -139,12 +145,6 @@ $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3�
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
 $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
-
-# ── 现金流质量因子（需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
-$enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
-
-# ── 一致预期修正因子（基于已有 report_rc 构建时序修正信号，无需额外下载）─
-$enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
 $deploy_train            = $false   # $true 启用 | $false 禁用
