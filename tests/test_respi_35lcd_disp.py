@@ -2104,6 +2104,44 @@ def test_get_refresh_policy_stops_realtime_after_intraday_complete(monkeypatch):
     assert policy == {"refresh_cycle": True, "refresh_realtime": False}
 
 
+def test_get_refresh_policy_stops_post_close_realtime_once_cycle_catches_up(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260407"]},
+        intraday_chart_data={"trade_date": "20260407", "slot_indices": [0, 24]},
+        now=datetime(2026, 4, 7, 15, 1, 0),
+    )
+
+    assert policy == {"refresh_cycle": False, "refresh_realtime": False}
+
+
+def test_get_refresh_policy_stops_post_close_realtime_after_grace_deadline(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    policy = module._get_refresh_policy(
+        {"dates": ["20260401", "20260406"]},
+        intraday_chart_data={"trade_date": "20260407", "slot_indices": [0, 24]},
+        now=datetime(2026, 4, 7, 15, 11, 0),
+    )
+
+    assert policy == {"refresh_cycle": True, "refresh_realtime": False}
+
+
 def test_get_refresh_policy_pauses_realtime_during_lunch(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)

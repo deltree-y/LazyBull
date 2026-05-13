@@ -1107,10 +1107,10 @@ def _get_refresh_policy(
 
     target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
     need_cycle_refresh = not _has_cycle_data_for_target(cycle_chart_data, target_cycle_date)
-    need_intraday_completion = (
-        _is_trade_day(current_dt, allow_load=True)
-        and current_dt.strftime("%Y%m%d") == target_cycle_date
-        and not _is_intraday_chart_complete(intraday_chart_data, current_dt)
+    need_intraday_completion = _should_keep_realtime_completion_active(
+        cycle_chart_data,
+        intraday_chart_data,
+        current_dt,
     )
     return {
         'refresh_cycle': need_cycle_refresh,

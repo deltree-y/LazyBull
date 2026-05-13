@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.60] - 2026-05-13
+
+### 修复
+
+- **树莓派 3.5LCD 盘后周期图追平后停止重复抓取**：在 [scripts/respi/lcd35/charting.py](scripts/respi/lcd35/charting.py) 中，`_get_refresh_policy()` 改为直接复用盘后实时补齐 helper，修复“周期图已经覆盖到当日目标交易日后，仍按 10 分钟继续发起实时抓取”的问题。
+- **盘后宽限期结束后不再继续实时补尾点**：同一路径下，`refresh_policy` 现在与等待间隔逻辑保持一致；即使日内最后一格仍未补齐，只要超过收盘宽限窗口，也会停止实时抓取，仅保留必要的周期图补抓。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)，新增“周期图追平后停止盘后实时抓取”和“收盘宽限期结束后停止实时抓取”两条回归测试。
+
 ## [0.71.59] - 2026-05-13
 
 ### 修复
