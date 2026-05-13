@@ -556,6 +556,153 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
     )
     return pd.DataFrame(rows)
 
+
+def _fetch_daily_snapshot_from_tushare(
+    positions: dict,
+    target_trade_date: str,
+) -> Optional[dict]:
+    """在盘后或非实时报价窗口内，用日线合成持仓快照。"""
+    from src.lazybull.data.tushare_client import TushareClient
+
+    if not positions or not target_trade_date:
+        return None
+
+    quote_rows: list[dict] = []
+    index_pct_map: dict[str, float] = {}
+    fallback_time = "15:00:00"
+
+    try:
+        with _fetch_network_context():
+            client = TushareClient(verbose=False)
+
+            for ts_code, pos in positions.items():
+                df = client.query(
+                    "daily",
+                    ts_code=ts_code,
+                    start_date=target_trade_date,
+                    end_date=target_trade_date,
+                    fields="ts_code,trade_date,close,pre_close,pct_chg",
+                )
+                close_float: Optional[float] = None
+                pre_close_float: Optional[float] = None
+                pct_float: float = 0.0
+
+                if df is not None and not df.empty:
+                    row = df.sort_values("trade_date").iloc[-1]
+                    close_float = _coerce_float(row.get("close"))
+                    pre_close_float = _coerce_float(row.get("pre_close"))
+                    pct_raw = _coerce_float(row.get("pct_chg"))
+                    if pct_raw is not None and np.isfinite(pct_raw):
+                        pct_float = float(pct_raw)
+
+                buy_price_float = _coerce_float(getattr(pos, "buy_price", 0.0))
+                if (
+                    close_float is None
+                    or not np.isfinite(close_float)
+                    or close_float <= 0
+                ):
+                    close_float = buy_price_float
+                if (
+                    pre_close_float is None
+                    or not np.isfinite(pre_close_float)
+                    or pre_close_float <= 0
+                ):
+                    pre_close_float = close_float
+                if close_float is None or close_float <= 0:
+                    continue
+                if pre_close_float and pre_close_float > 0:
+                    pct_float = (close_float / pre_close_float - 1.0) * 100.0
+
+                quote_rows.append(
+                    {
+                        "TS_CODE": ts_code,
+                        "NAME": str(ts_code).split(".")[0],
+                        "PRICE": float(close_float),
+                        "PRE_CLOSE": float(pre_close_float),
+                        "PCT_CHG": float(pct_float),
+                        "TIME": fallback_time,
+                    }
+                )
+
+            window_start = (
+                pd.to_datetime(target_trade_date, format="%Y%m%d") - timedelta(days=7)
+            ).strftime("%Y%m%d")
+            for index_code in (SHANGHAI_INDEX_CODE, SHENZHEN_INDEX_CODE, CSI800_INDEX_CODE):
+                df = client.query(
+                    "index_daily",
+                    ts_code=index_code,
+                    start_date=window_start,
+                    end_date=target_trade_date,
+                    fields="trade_date,close",
+                )
+                if df is None or df.empty:
+                    continue
+                df = df.sort_values("trade_date").reset_index(drop=True)
+                close_values = [_coerce_float(value) for value in df.get("close", []).tolist()]
+                close_values = [
+                    value
+                    for value in close_values
+                    if value is not None and np.isfinite(value) and value > 0
+                ]
+                if not close_values:
+                    continue
+                last_close = close_values[-1]
+                prev_close = close_values[-2] if len(close_values) >= 2 else last_close
+                if prev_close is None or prev_close <= 0:
+                    pct_float = 0.0
+                else:
+                    pct_float = (last_close / prev_close - 1.0) * 100.0
+                pct_sanitized = _sanitize_intraday_pct(pct_float, INTRADAY_INDEX_PCT_ABS_LIMIT)
+                if pct_sanitized is not None:
+                    index_pct_map[index_code] = pct_sanitized
+    except Exception as exc:
+        _emit_diag(
+            "日线快照回退失败: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return None
+
+    if not quote_rows:
+        return None
+
+    return {
+        "quotes": pd.DataFrame(quote_rows),
+        "index_pct_map": index_pct_map,
+        "trade_date": target_trade_date,
+    }
+
+
+def _build_post_close_daily_snapshot(
+    snapshot: dict,
+    now: Optional[datetime] = None,
+) -> Optional[dict]:
+    """当实时快照缺失时，尝试用目标交易日收盘数据补全持仓快照。"""
+    if not isinstance(snapshot, dict):
+        return None
+
+    current_dt = now or datetime.now()
+    if _is_realtime_quote_window(current_dt):
+        return None
+
+    positions = snapshot.get("positions", {})
+    if not positions:
+        return None
+
+    target_trade_date = _get_target_cycle_data_date(current_dt, allow_load=True)
+    if not target_trade_date:
+        return None
+
+    fallback_payload = _fetch_daily_snapshot_from_tushare(positions, target_trade_date)
+    if fallback_payload is None:
+        return None
+
+    merged_snapshot = dict(snapshot)
+    merged_snapshot["quotes"] = fallback_payload["quotes"]
+    merged_snapshot["index_pct_map"] = fallback_payload.get("index_pct_map", {})
+    merged_snapshot["quote_source"] = "D"
+    merged_snapshot["current_date"] = str(fallback_payload.get("trade_date", target_trade_date))
+    return merged_snapshot
+
 def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     """获取当前持仓实时行情快照。"""
     from src.lazybull.paper import PaperStorage
@@ -653,6 +800,14 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
             quote_source = 'A'
 
         if rt_df is None or rt_df.empty:
+            fallback_snapshot = _build_post_close_daily_snapshot(snapshot)
+            if fallback_snapshot is not None:
+                _set_cached_holdings_snapshot(fallback_snapshot)
+                _trace_diag(
+                    "抓快照回退成功: "
+                    f"source=D, rows={len(fallback_snapshot['quotes'])}, positions={len(positions)}"
+                )
+                return fallback_snapshot
             _emit_diag(
                 "抓快照失败: efinance与AKShare均无可用行情，"
                 f"positions={len(positions)}, proxy_bypass={_should_bypass_proxy_for_fetch()}"
@@ -1356,7 +1511,7 @@ def _refresh_display_state(
                     )
                     source = str(holdings_snapshot.get('quote_source', '')).strip().upper()
                     with state.lock:
-                        state.quote_source_tag = source if source in ('T', 'A') else '-'
+                        state.quote_source_tag = source if source in ('T', 'A', 'D') else '-'
                     # 即便摘要计算失败，也至少更新时间戳，避免长期显示 --:--
                     latest_update_time = datetime.now().strftime("%H:%M")
                 else:
@@ -1367,7 +1522,7 @@ def _refresh_display_state(
                         cached_quote_df = cached_snapshot.get('quotes')
                         cached_rows = int(len(cached_quote_df)) if cached_quote_df is not None else 0
                         with state.lock:
-                            state.quote_source_tag = cached_source if cached_source in ('T', 'A') else '-'
+                            state.quote_source_tag = cached_source if cached_source in ('T', 'A', 'D') else '-'
                         latest_update_time = datetime.now().strftime("%H:%M")
                         _emit_diag(
                             "抓快照结果为空（超时或异常），"

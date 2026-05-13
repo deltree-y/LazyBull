@@ -1304,12 +1304,176 @@ def test_fetch_realtime_holdings_snapshot_returns_empty_when_efinance_and_akshar
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
     monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", lambda ts_codes: None)
     monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: None)
+    monkeypatch.setattr(module, "_build_post_close_daily_snapshot", lambda snapshot, now=None: None)
 
     snapshot = module._fetch_realtime_holdings_snapshot()
 
     assert snapshot is not None
     assert snapshot["quotes"] is None
     assert snapshot["quote_source"] == "-"
+
+
+def test_fetch_realtime_holdings_snapshot_falls_back_to_daily_close_post_close(monkeypatch):
+    module = _load_module()
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_config(self):
+            return {"initial_capital": 100000.0}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                    "000002.SZ": SimpleNamespace(shares=200, buy_price=20.0),
+                },
+                cash=5000.0,
+            )
+
+    class DummyClient:
+        def __init__(self, verbose=False):
+            pass
+
+        def query(self, api_name, **kwargs):
+            if api_name == "daily":
+                if kwargs.get("ts_code") == "000001.SZ":
+                    return pd.DataFrame(
+                        [
+                            {
+                                "ts_code": "000001.SZ",
+                                "trade_date": "20260407",
+                                "close": 11.0,
+                                "pre_close": 10.5,
+                                "pct_chg": 4.7619,
+                            }
+                        ]
+                    )
+                return pd.DataFrame(
+                    [
+                        {
+                            "ts_code": "000002.SZ",
+                            "trade_date": "20260407",
+                            "close": 19.0,
+                            "pre_close": 20.0,
+                            "pct_chg": -5.0,
+                        }
+                    ]
+                )
+            if kwargs.get("ts_code") == module.SHANGHAI_INDEX_CODE:
+                closes = [3000.0, 3030.0]
+            elif kwargs.get("ts_code") == module.SHENZHEN_INDEX_CODE:
+                closes = [10000.0, 10100.0]
+            else:
+                closes = [5000.0, 5100.0]
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260403", "20260407"],
+                    "close": closes,
+                }
+            )
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr("src.lazybull.data.tushare_client.TushareClient", DummyClient)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", lambda ts_codes: None)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: None)
+    monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
+    monkeypatch.setattr(
+        module,
+        "_get_target_cycle_data_date",
+        lambda now=None, allow_load=False: "20260407",
+    )
+
+    snapshot = module._fetch_realtime_holdings_snapshot()
+
+    assert snapshot is not None
+    assert snapshot["quote_source"] == "D"
+    assert snapshot["current_date"] == "20260407"
+    assert snapshot["quotes"] is not None
+    assert list(snapshot["quotes"]["TS_CODE"]) == ["000001.SZ", "000002.SZ"]
+    assert list(snapshot["quotes"]["TIME"]) == ["15:00:00", "15:00:00"]
+    assert round(snapshot["index_pct_map"][module.SHANGHAI_INDEX_CODE], 6) == 1.0
+    assert round(snapshot["index_pct_map"][module.SHENZHEN_INDEX_CODE], 6) == 1.0
+    assert round(snapshot["index_pct_map"][module.CSI800_INDEX_CODE], 6) == 2.0
+
+
+def test_refresh_display_state_populates_panels_from_daily_fallback_snapshot(monkeypatch):
+    module = _load_module()
+    state = module.DisplayState()
+    fallback_snapshot = {
+        "positions": {
+            "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+            "000002.SZ": SimpleNamespace(shares=200, buy_price=20.0),
+        },
+        "cash": 5000.0,
+        "initial_capital": 100000.0,
+        "current_date": "20260407",
+        "annualized_return_func": None,
+        "quote_source": "D",
+        "index_pct_map": {
+            module.SHANGHAI_INDEX_CODE: 1.0,
+            module.SHENZHEN_INDEX_CODE: 1.0,
+            module.CSI800_INDEX_CODE: 2.0,
+        },
+        "quotes": pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "000001.SZ",
+                    "NAME": "000001",
+                    "PRICE": 11.0,
+                    "PRE_CLOSE": 10.5,
+                    "PCT_CHG": 4.7619,
+                    "TIME": "15:00:00",
+                },
+                {
+                    "TS_CODE": "000002.SZ",
+                    "NAME": "000002",
+                    "PRICE": 19.0,
+                    "PRE_CLOSE": 20.0,
+                    "PCT_CHG": -5.0,
+                    "TIME": "15:00:00",
+                },
+            ]
+        ),
+    }
+
+    monkeypatch.setattr(module, "_fetch_realtime_holdings_snapshot", lambda: fallback_snapshot)
+    monkeypatch.setattr(
+        module,
+        "_build_industry_panel",
+        lambda snapshot, mode="cycle": {
+            "mode": mode,
+            "industries": [
+                {
+                    "industry": "银行",
+                    "positive_count": 1,
+                    "negative_count": 0,
+                    "pnl_amount": 100.0,
+                    "contribution_ratio": 100.0,
+                }
+            ],
+            "total_positive": 1,
+            "total_negative": 0,
+            "position_count": 2,
+            "l1_industry_count": 1,
+            "l2_industry_count": 1,
+            "l3_industry_count": 1,
+            "total_pnl_amount": 100.0,
+            "contribution_basis": "cycle_total_pnl",
+        },
+    )
+    monkeypatch.setattr(module, "_calc_rebalance_status", lambda: ("20260410", 2))
+    monkeypatch.setattr(module, "_fetch_cycle_chart_data", lambda: None)
+
+    module._refresh_display_state(state, refresh_realtime=True, refresh_cycle=False)
+
+    assert state.summary is not None
+    assert state.stock_rankings is not None
+    assert len(state.stock_rankings) == 2
+    assert state.industry_panel is not None
+    assert state.quote_source_tag == "D"
+    assert state.update_time == "15:00"
 
 
 def test_fetch_realtime_quotes_akshare_matches_symbol_prefixed_codes(monkeypatch):

@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.61] - 2026-05-14
+
+### 修复
+
+- **树莓派 3.5LCD 盘后重启后摘要/排行/行业面板为空**：在 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 中，为 `_fetch_realtime_holdings_snapshot()` 增加盘后日线 fallback。当 efinance 与 AKShare 均拿不到实时快照时，会改用目标交易日的个股日线与指数日线合成持仓快照，重启后仍可恢复左侧摘要、右侧排行和行业统计。
+- **盘后来源标识增加 D**：在 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 与 [scripts/respi/lcd35/rendering.py](scripts/respi/lcd35/rendering.py) 中，新增 `D` 来源标识，表示当前面板使用收盘日线数据而非实时快照。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)，新增盘后日线 fallback 快照构建测试，以及重启后 `refresh_display_state()` 能恢复摘要/排行/行业面板的回归测试。
+
 ## [0.71.60] - 2026-05-13
 
 ### 修复

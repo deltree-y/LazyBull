@@ -103,7 +103,7 @@ def _render(state: DisplayState) -> None:
     now = datetime.now()
     chart_data = _select_chart_data(cycle_chart_data, intraday_chart_data, now)
     time_str = _format_display_time(now)
-    source_suffix = f"[{quote_source_tag}]" if quote_source_tag in ('T', 'A') else ""
+    source_suffix = f"[{quote_source_tag}]" if quote_source_tag in ('T', 'A', 'D') else ""
     header_mid = (
         f"更:{update_step[:5] or '刷新中'}{source_suffix}"
         if is_updating
