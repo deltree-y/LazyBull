@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.54] - 2026-05-13
+
+### 修复
+
+- **3.5LCD 渲染线程屏幕状态字段补齐**：在 [scripts/respi/lcd35/state.py](scripts/respi/lcd35/state.py) 为 `DisplayState` 补回 `is_screen_on` 默认字段，修复树莓派启动后显示线程循环报 `AttributeError: 'DisplayState' object has no attribute 'is_screen_on'` 的问题。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)：新增 `DisplayState` 默认亮屏字段回归用例，避免后续拆分回归。
+
 ## [0.71.53] - 2026-05-13
 
 ### 修复

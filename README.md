@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.53)
+### 当前版本 (v0.71.54)
+
+**3.5LCD 渲染线程屏幕状态字段修复** (v0.71.54):
+- [scripts/respi/lcd35/state.py](scripts/respi/lcd35/state.py) 为 `DisplayState` 补回 `is_screen_on` 默认值
+- 修复树莓派启动后显示线程持续报错 `AttributeError: 'DisplayState' object has no attribute 'is_screen_on'` 并无法正常渲染的问题
+- 新增 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 回归用例，覆盖默认亮屏状态字段
 
 **3.5LCD 主入口 src 导入修复** (v0.71.53):
 - [scripts/respi/lcd35_display.py](scripts/respi/lcd35_display.py) 在加载 `_context` 之前先注入项目根目录与 `scripts` 目录到 `sys.path`

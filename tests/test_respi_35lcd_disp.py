@@ -74,6 +74,15 @@ def test_snapshot_timeout_reads_single_env_key(monkeypatch):
     assert module.REALTIME_SNAPSHOT_TIMEOUT_SECONDS == 120.0
 
 
+def test_display_state_defaults_screen_on_for_display_worker():
+    module = _load_module()
+
+    state = module.DisplayState()
+
+    assert hasattr(state, "is_screen_on")
+    assert state.is_screen_on is True
+
+
 def test_snapshot_timeout_ignores_legacy_env_key(monkeypatch):
     # 先拿“仅主变量为空且无旧变量”时的基准值，再验证设置旧变量不应改变结果。
     monkeypatch.setenv("LAZYBULL_REALTIME_SNAPSHOT_TIMEOUT_SECONDS", "")

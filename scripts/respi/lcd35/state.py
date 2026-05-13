@@ -13,6 +13,8 @@ class DisplayState:
         self.update_step: str = ""
         self.update_started_at: float = 0.0
         self.quote_source_tag: str = "-"
+        # 默认亮屏，进入自动息屏时段后由显示线程切换为 False。
+        self.is_screen_on: bool = True
         self.next_rebalance_date: Optional[str] = None
         self.days_to_rebalance: Optional[int] = None
         self.chart_data: Optional[dict] = None
