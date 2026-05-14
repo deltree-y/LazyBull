@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.64] - 2026-05-14
+
+### 修复
+
+- **树莓派 3.5LCD 盘内指数完整缓存不续刷**：在 [scripts/respi/lcd35/core.py](scripts/respi/lcd35/core.py) 与 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 中，实时指数缓存现在即使代码齐全，只要超过一个盘中刷新周期也会重新触发后台刷新，不再把完整缓存长时间误当成新数据。
+- **持仓快照开始前并行预热指数刷新**：同路径下，`_fetch_realtime_holdings_snapshot()` 现在会在快照抓取前先检查指数缓存是否过期，并行启动后台指数刷新；这样本轮持仓快照在大多数情况下就能直接合入新指数值，而不是等下一轮才更新。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)，新增“完整但过期的指数缓存仍会触发刷新”和“持仓快照先预热指数刷新再抓行情”的回归测试。
+
 ## [0.71.63] - 2026-05-14
 
 ### 修复

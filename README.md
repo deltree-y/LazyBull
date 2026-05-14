@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.63)
+### 当前版本 (v0.71.64)
+
+**树莓派 3.5LCD 盘内指数刷新时机修复** (v0.71.64):
+- [scripts/respi/lcd35/core.py](scripts/respi/lcd35/core.py) 与 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 现在会把“指数缓存是否过期”作为独立条件判断，完整缓存也会按盘中刷新节奏续刷
+- 持仓快照开始前会先并行预热后台指数刷新，因此本轮更有机会直接拿到新指数值，减少盘内指数线“慢一拍”的现象
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 回归测试，覆盖完整缓存续刷和快照前预热两种场景
 
 **树莓派 3.5LCD 盘内行业统计口径修复** (v0.71.63):
 - [scripts/respi/lcd35/industry.py](scripts/respi/lcd35/industry.py) 在盘内行业面板计算时，如果实时快照缺少 `PRE_CLOSE`，会改用 `PCT_CHG` 反推昨收，避免把大量个股直接排除在盘内统计之外

@@ -818,6 +818,12 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
             )
             return preferred_snapshot
 
+    if _is_realtime_index_cache_stale(float(REALTIME_REFRESH_INTERVAL)):
+        _trace_diag(
+            "快照开始前指数缓存已过期，启动并行后台刷新"
+        )
+        _refresh_realtime_index_pcts_async()
+
     if not _snapshot_fetch_lock.acquire(blocking=False):
         cached_snapshot = _get_cached_holdings_snapshot()
         if cached_snapshot is not None:
@@ -1210,6 +1216,7 @@ def _fetch_realtime_index_pcts_from_akshare() -> dict[str, float]:
 def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, float]:
     """获取上证、深证与中证800当日实时涨跌幅。"""
     pct_map: dict[str, float] = {}
+    cache_stale = _is_realtime_index_cache_stale(float(REALTIME_REFRESH_INTERVAL))
 
     if snapshot is not None:
         snapshot_pct_map = snapshot.get('index_pct_map')
@@ -1239,10 +1246,10 @@ def _fetch_realtime_index_pcts(snapshot: Optional[dict] = None) -> dict[str, flo
         if pct is not None:
             pct_map[code] = pct
 
-    if len(pct_map) < 3:
+    if len(pct_map) < 3 or cache_stale:
         _trace_diag(
-            "指数缓存不足，触发后台刷新: "
-            f"current_codes={sorted(pct_map.keys())}"
+            "指数缓存需刷新，触发后台刷新: "
+            f"current_codes={sorted(pct_map.keys())}, cache_stale={cache_stale}"
         )
         _refresh_realtime_index_pcts_async()
 

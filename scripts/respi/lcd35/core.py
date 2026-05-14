@@ -339,6 +339,20 @@ def _get_cached_realtime_index_pcts(max_age_seconds: float = 900.0) -> dict[str,
         return dict(_latest_realtime_index_pct_cache)
 
 
+def _is_realtime_index_cache_stale(max_age_seconds: Optional[float] = None) -> bool:
+    """判断实时指数缓存是否已过期。"""
+    age_limit = (
+        float(max_age_seconds)
+        if max_age_seconds is not None
+        else float(REALTIME_REFRESH_INTERVAL)
+    )
+    with _realtime_index_cache_lock:
+        if _latest_realtime_index_pct_cached_at <= 0:
+            return True
+        age = time.monotonic() - _latest_realtime_index_pct_cached_at
+        return age > age_limit
+
+
 def _refresh_realtime_index_pcts_async() -> None:
     """后台刷新实时指数缓存，避免阻塞快照主流程。"""
     if not _realtime_index_fetch_lock.acquire(blocking=False):

@@ -1711,6 +1711,101 @@ def test_fetch_realtime_index_pcts_prefers_snapshot_data():
     assert pct_map[module.SHENZHEN_INDEX_CODE] == -0.4
 
 
+def test_fetch_realtime_index_pcts_triggers_async_refresh_when_complete_cache_is_stale(monkeypatch):
+    module = _load_module()
+    module._emit_diag_once = lambda *args, **kwargs: None
+    async_calls = []
+
+    monkeypatch.setattr(
+        module,
+        "_get_cached_realtime_index_pcts",
+        lambda max_age_seconds=900.0: {
+            module.SHANGHAI_INDEX_CODE: 0.7,
+            module.SHENZHEN_INDEX_CODE: -0.4,
+            module.CSI800_INDEX_CODE: 0.2,
+        },
+    )
+    monkeypatch.setattr(module, "_is_realtime_index_cache_stale", lambda max_age_seconds=None: True)
+    monkeypatch.setattr(module, "_refresh_realtime_index_pcts_async", lambda: async_calls.append("refresh"))
+
+    pct_map = module._fetch_realtime_index_pcts({"quotes": pd.DataFrame()})
+
+    assert pct_map[module.SHANGHAI_INDEX_CODE] == 0.7
+    assert pct_map[module.SHENZHEN_INDEX_CODE] == -0.4
+    assert pct_map[module.CSI800_INDEX_CODE] == 0.2
+    assert async_calls == ["refresh"]
+
+
+def test_fetch_realtime_holdings_snapshot_prewarms_index_refresh_before_quote_fetch(monkeypatch):
+    module = _load_module()
+    call_order = []
+    refresh_state = {"started": False}
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_config(self):
+            return {"initial_capital": 100000.0}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                },
+                cash=5000.0,
+            )
+
+        def load_all_nav(self):
+            return None
+
+    def fake_refresh_async():
+        call_order.append("refresh")
+        refresh_state["started"] = True
+
+    def fake_fetch_quotes(ts_codes):
+        call_order.append("quotes")
+        assert refresh_state["started"] is True
+        return pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "000001.SZ",
+                    "NAME": "平安银行",
+                    "PRICE": 11.0,
+                    "PRE_CLOSE": 10.5,
+                    "TIME": "10:05:00",
+                }
+            ]
+        )
+
+    def fake_get_cached_index_pcts(max_age_seconds=900.0):
+        if refresh_state["started"]:
+            return {
+                module.SHANGHAI_INDEX_CODE: 0.7,
+                module.SHENZHEN_INDEX_CODE: -0.4,
+                module.CSI800_INDEX_CODE: 0.2,
+            }
+        return {}
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr(module, "_should_prefer_daily_holdings_snapshot", lambda now=None: False)
+    monkeypatch.setattr(module, "_is_realtime_index_cache_stale", lambda max_age_seconds=None: True)
+    monkeypatch.setattr(module, "_refresh_realtime_index_pcts_async", fake_refresh_async)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", fake_fetch_quotes)
+    monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: None)
+    monkeypatch.setattr(module, "_get_cached_realtime_index_pcts", fake_get_cached_index_pcts)
+
+    snapshot = module._fetch_realtime_holdings_snapshot()
+
+    assert snapshot is not None
+    assert call_order[:2] == ["refresh", "quotes"]
+    assert snapshot["index_pct_map"] == {
+        module.SHANGHAI_INDEX_CODE: 0.7,
+        module.SHENZHEN_INDEX_CODE: -0.4,
+        module.CSI800_INDEX_CODE: 0.2,
+    }
+
+
 def test_select_chart_data_switches_by_intraday_window(monkeypatch):
     module = _load_module()
 
