@@ -1315,6 +1315,7 @@ def test_fetch_realtime_holdings_snapshot_returns_empty_when_efinance_and_akshar
 
 def test_fetch_realtime_holdings_snapshot_falls_back_to_daily_close_post_close(monkeypatch):
     module = _load_module()
+    query_calls = []
 
     class DummyStorage:
         def __init__(self, root_path=None, verbose=False):
@@ -1337,21 +1338,17 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_daily_close_post_close(m
             pass
 
         def query(self, api_name, **kwargs):
+            query_calls.append((api_name, kwargs.get("ts_code"), kwargs.get("trade_date")))
             if api_name == "daily":
-                if kwargs.get("ts_code") == "000001.SZ":
-                    return pd.DataFrame(
-                        [
-                            {
-                                "ts_code": "000001.SZ",
-                                "trade_date": "20260407",
-                                "close": 11.0,
-                                "pre_close": 10.5,
-                                "pct_chg": 4.7619,
-                            }
-                        ]
-                    )
                 return pd.DataFrame(
                     [
+                        {
+                            "ts_code": "000001.SZ",
+                            "trade_date": "20260407",
+                            "close": 11.0,
+                            "pre_close": 10.5,
+                            "pct_chg": 4.7619,
+                        },
                         {
                             "ts_code": "000002.SZ",
                             "trade_date": "20260407",
@@ -1396,6 +1393,67 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_daily_close_post_close(m
     assert round(snapshot["index_pct_map"][module.SHANGHAI_INDEX_CODE], 6) == 1.0
     assert round(snapshot["index_pct_map"][module.SHENZHEN_INDEX_CODE], 6) == 1.0
     assert round(snapshot["index_pct_map"][module.CSI800_INDEX_CODE], 6) == 2.0
+    assert query_calls.count(("daily", None, "20260407")) == 1
+
+
+def test_fetch_realtime_holdings_snapshot_prefers_daily_snapshot_before_open(monkeypatch):
+    module = _load_module()
+
+    class DummyStorage:
+        def __init__(self, root_path=None, verbose=False):
+            pass
+
+        def load_config(self):
+            return {"initial_capital": 100000.0}
+
+        def load_account_state(self):
+            return SimpleNamespace(
+                positions={
+                    "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+                },
+                cash=5000.0,
+            )
+
+    fallback_snapshot = {
+        "positions": {"000001.SZ": SimpleNamespace(shares=100, buy_price=10.0)},
+        "cash": 5000.0,
+        "initial_capital": 100000.0,
+        "current_date": "20260407",
+        "annualized_return_func": None,
+        "quote_source": "D",
+        "index_pct_map": {},
+        "quotes": pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "000001.SZ",
+                    "NAME": "000001",
+                    "PRICE": 11.0,
+                    "PRE_CLOSE": 10.5,
+                    "PCT_CHG": 4.7619,
+                    "TIME": "15:00:00",
+                }
+            ]
+        ),
+    }
+
+    monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr(module, "_should_prefer_daily_holdings_snapshot", lambda now=None: True)
+    monkeypatch.setattr(module, "_build_post_close_daily_snapshot", lambda snapshot, now=None: fallback_snapshot)
+    monkeypatch.setattr(
+        module,
+        "_fetch_realtime_quotes_efinance",
+        lambda ts_codes: (_ for _ in ()).throw(AssertionError("不应触发 efinance")),
+    )
+    monkeypatch.setattr(
+        module,
+        "_fetch_realtime_quotes_akshare",
+        lambda ts_codes: (_ for _ in ()).throw(AssertionError("不应触发 AKShare")),
+    )
+
+    snapshot = module._fetch_realtime_holdings_snapshot()
+
+    assert snapshot is fallback_snapshot
+    assert snapshot["quote_source"] == "D"
 
 
 def test_refresh_display_state_populates_panels_from_daily_fallback_snapshot(monkeypatch):
@@ -2304,6 +2362,15 @@ def test_get_refresh_policy_stops_post_close_realtime_after_grace_deadline(monke
     )
 
     assert policy == {"refresh_cycle": True, "refresh_realtime": False}
+
+
+def test_should_prefer_daily_holdings_snapshot_only_before_open_and_after_close(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "_is_trade_day", lambda now=None, allow_load=False: True)
+
+    assert module._should_prefer_daily_holdings_snapshot(datetime(2026, 4, 7, 8, 0, 0)) is True
+    assert module._should_prefer_daily_holdings_snapshot(datetime(2026, 4, 7, 12, 0, 0)) is False
+    assert module._should_prefer_daily_holdings_snapshot(datetime(2026, 4, 7, 15, 1, 0)) is True
 
 
 def test_get_refresh_policy_pauses_realtime_during_lunch(monkeypatch):

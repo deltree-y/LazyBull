@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.61)
+### 当前版本 (v0.71.62)
+
+**树莓派 3.5LCD 盘前/盘后启动快照短路修复** (v0.71.62):
+- [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 在盘前、盘后和非交易日会直接优先使用收盘日线快照，不再先卡在 efinance 或 AKShare 的慢路径上
+- 同文件里的日线 fallback 已收缩为 1 次全市场 `daily` 加 3 次 `index_daily`，启动恢复速度明显快于逐股查询
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py) 回归测试，覆盖盘前短路和单次 `daily` 查询行为
 
 **树莓派 3.5LCD 盘后重启面板恢复修复** (v0.71.61):
 - [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 在盘后或非实时窗口内，如果 efinance 与 AKShare 都拿不到快照，会自动改用目标交易日的个股日线和指数日线合成持仓快照

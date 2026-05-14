@@ -557,6 +557,16 @@ def _fetch_realtime_quotes_akshare(ts_codes: list[str]) -> Optional[pd.DataFrame
     return pd.DataFrame(rows)
 
 
+def _should_prefer_daily_holdings_snapshot(now: Optional[datetime] = None) -> bool:
+    """判断当前是否应优先使用收盘日线快照而非实时接口。"""
+    current_dt = now or datetime.now()
+    if not _is_trade_day(current_dt, allow_load=True):
+        return True
+
+    current_time = current_dt.time()
+    return current_time < A_SHARE_MORNING_OPEN or current_time > INTRADAY_WINDOW_END
+
+
 def _fetch_daily_snapshot_from_tushare(
     positions: dict,
     target_trade_date: str,
@@ -574,21 +584,31 @@ def _fetch_daily_snapshot_from_tushare(
     try:
         with _fetch_network_context():
             client = TushareClient(verbose=False)
+            stock_df = client.query(
+                "daily",
+                trade_date=target_trade_date,
+                fields="ts_code,trade_date,close,pre_close,pct_chg",
+            )
+            if stock_df is None or stock_df.empty:
+                return None
+
+            stock_row_map: dict[str, object] = {}
+            for _, row in stock_df.iterrows():
+                ts_code = _normalize_ts_code_key(row.get("ts_code", ""))
+                if ts_code:
+                    stock_row_map[ts_code] = row
+
+            matched_position_count = 0
 
             for ts_code, pos in positions.items():
-                df = client.query(
-                    "daily",
-                    ts_code=ts_code,
-                    start_date=target_trade_date,
-                    end_date=target_trade_date,
-                    fields="ts_code,trade_date,close,pre_close,pct_chg",
-                )
+                normalized_ts_code = _normalize_ts_code_key(ts_code)
+                row = stock_row_map.get(normalized_ts_code)
                 close_float: Optional[float] = None
                 pre_close_float: Optional[float] = None
                 pct_float: float = 0.0
 
-                if df is not None and not df.empty:
-                    row = df.sort_values("trade_date").iloc[-1]
+                if row is not None:
+                    matched_position_count += 1
                     close_float = _coerce_float(row.get("close"))
                     pre_close_float = _coerce_float(row.get("pre_close"))
                     pct_raw = _coerce_float(row.get("pct_chg"))
@@ -624,6 +644,9 @@ def _fetch_daily_snapshot_from_tushare(
                     }
                 )
 
+            if matched_position_count <= 0:
+                return None
+
             window_start = (
                 pd.to_datetime(target_trade_date, format="%Y%m%d") - timedelta(days=7)
             ).strftime("%Y%m%d")
@@ -638,20 +661,23 @@ def _fetch_daily_snapshot_from_tushare(
                 if df is None or df.empty:
                     continue
                 df = df.sort_values("trade_date").reset_index(drop=True)
-                close_values = [_coerce_float(value) for value in df.get("close", []).tolist()]
-                close_values = [
-                    value
-                    for value in close_values
-                    if value is not None and np.isfinite(value) and value > 0
-                ]
-                if not close_values:
+                close_map = _build_cycle_close_map(df)
+                target_close = close_map.get(target_trade_date)
+                if target_close is None:
                     continue
-                last_close = close_values[-1]
-                prev_close = close_values[-2] if len(close_values) >= 2 else last_close
+
+                prev_close: Optional[float] = None
+                for trade_date in reversed(df.get("trade_date", []).tolist()):
+                    trade_date_norm = _normalize_cycle_trade_date(trade_date)
+                    if trade_date_norm is None or trade_date_norm >= target_trade_date:
+                        continue
+                    prev_close = close_map.get(trade_date_norm)
+                    if prev_close is not None:
+                        break
                 if prev_close is None or prev_close <= 0:
                     pct_float = 0.0
                 else:
-                    pct_float = (last_close / prev_close - 1.0) * 100.0
+                    pct_float = (target_close / prev_close - 1.0) * 100.0
                 pct_sanitized = _sanitize_intraday_pct(pct_float, INTRADAY_INDEX_PCT_ABS_LIMIT)
                 if pct_sanitized is not None:
                     index_pct_map[index_code] = pct_sanitized
@@ -780,6 +806,17 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     if not positions:
         _trace_diag("抓快照跳过: 当前无持仓")
         return snapshot
+
+    current_dt = datetime.now()
+    if _should_prefer_daily_holdings_snapshot(current_dt):
+        preferred_snapshot = _build_post_close_daily_snapshot(snapshot, current_dt)
+        if preferred_snapshot is not None:
+            _set_cached_holdings_snapshot(preferred_snapshot)
+            _trace_diag(
+                "抓快照优先日线回退: "
+                f"source=D, rows={len(preferred_snapshot.get('quotes', []))}, positions={len(positions)}"
+            )
+            return preferred_snapshot
 
     if not _snapshot_fetch_lock.acquire(blocking=False):
         cached_snapshot = _get_cached_holdings_snapshot()

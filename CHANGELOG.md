@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.62] - 2026-05-14
+
+### 修复
+
+- **树莓派 3.5LCD 盘前/盘后启动先卡 AKShare 导致面板空白**：在 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 中，`_fetch_realtime_holdings_snapshot()` 现在会在盘前、盘后和非交易日优先走收盘日线快照，不再先尝试 efinance/AKShare 后再超时回退。
+- **盘后日线 fallback 查询提速**：同文件中的 `_fetch_daily_snapshot_from_tushare()` 改为一次性按 `trade_date` 拉取全市场 `daily` 后再过滤持仓，并保留 3 次指数 `index_daily` 查询，避免按持仓逐股请求把启动时间拖到超时阈值附近。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)，新增“仅盘前/盘后优先日线快照”与“盘前启动不触发 efinance/AKShare”回归测试，并校验日线 fallback 走单次全市场 `daily` 查询。
+
 ## [0.71.61] - 2026-05-14
 
 ### 修复
