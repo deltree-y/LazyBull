@@ -898,6 +898,41 @@ def test_build_industry_panel_intraday_uses_pre_close_instead_of_buy_price(monke
     # 盘内口径: (11-12)*100
     assert round(intraday_panel["total_pnl_amount"], 4) == -100.0
 
+def test_build_industry_panel_intraday_derives_pre_close_from_pct_chg_when_missing(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_industry_mapping",
+        lambda: {"000001.SZ": "银行"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_shenwan_levels_mapping",
+        lambda: {"000001.SZ": ("金融", "银行", "城商行")},
+    )
+
+    snapshot = {
+        "positions": {
+            "000001.SZ": SimpleNamespace(shares=100, buy_price=10.0),
+        },
+        "quotes": pd.DataFrame(
+            [
+                {
+                    "TS_CODE": "000001.SZ",
+                    "PRICE": 11.0,
+                    "PCT_CHG": -8.3333333333,
+                }
+            ]
+        ),
+    }
+
+    intraday_panel = module._build_industry_panel(snapshot, mode="intraday")
+
+    assert intraday_panel is not None
+    assert intraday_panel["total_positive"] == 0
+    assert intraday_panel["total_negative"] == 1
+    assert round(intraday_panel["total_pnl_amount"], 4) == -100.0
+
 
 def test_build_industry_panel_intraday_contribution_uses_intraday_total(monkeypatch):
     module = _load_module()
@@ -1857,6 +1892,38 @@ def test_render_hides_cycle_last_data_label_in_intraday_mode(monkeypatch):
     module._render(state)
 
     assert captured == {"mode": "intraday", "label": None}
+
+def test_render_intraday_does_not_fallback_to_cycle_industry_panel(monkeypatch):
+    module = _load_module()
+    captured = {}
+    intraday_chart = {"mode": "intraday", "trade_date": "20260407", "slot_indices": [0]}
+    state = SimpleNamespace(
+        lock=module.threading.Lock(),
+        summary=None,
+        update_time="14:40",
+        days_to_rebalance=1,
+        chart_data={"mode": "cycle", "dates": ["20260401", "20260407"]},
+        intraday_chart_data=intraday_chart,
+        stock_rankings=None,
+        industry_panel_cycle={"industries": [{"industry": "金融"}], "contribution_basis": "cycle_total_pnl"},
+        industry_panel_intraday=None,
+        offset_x=0,
+        offset_y=0,
+    )
+
+    monkeypatch.setattr(module, "_select_chart_data", lambda cycle, intraday, now: intraday)
+    monkeypatch.setattr(
+        module,
+        "_draw_chart_panel",
+        lambda draw, chart_data, cycle_last_data_label=None, industry_panel=None: captured.update(
+            {"mode": chart_data.get("mode"), "industry_panel": industry_panel}
+        ),
+    )
+    monkeypatch.setattr(module, "_write_fb", lambda img: None)
+
+    module._render(state)
+
+    assert captured == {"mode": "intraday", "industry_panel": None}
 
 
 def test_render_shows_updating_text_and_new_rebalance_status(monkeypatch):

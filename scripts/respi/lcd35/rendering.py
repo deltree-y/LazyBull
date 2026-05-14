@@ -240,7 +240,7 @@ def _render(state: DisplayState) -> None:
         cycle_last_data_label = _format_cycle_last_data_label(cycle_chart_data)
     chart_mode = str(chart_data.get('mode', '')) if isinstance(chart_data, dict) else ''
     if chart_mode == 'intraday':
-        industry_panel = industry_panel_intraday or industry_panel_cycle
+        industry_panel = industry_panel_intraday
     else:
         industry_panel = industry_panel_cycle or industry_panel_intraday
     _draw_chart_panel(draw, chart_data, cycle_last_data_label, industry_panel)

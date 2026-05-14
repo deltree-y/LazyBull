@@ -19,6 +19,29 @@ def _value_color(value: float) -> tuple[int, int, int]:
         return COLOR_GREEN
     return COLOR_NEUTRAL
 
+def _derive_intraday_pre_close(price: object, pct_chg: object) -> Optional[float]:
+    """在昨收缺失时，依据现价与涨跌幅反推昨收。"""
+    price_float = _coerce_float(price)
+    pct_float = _coerce_float(pct_chg)
+    if (
+        price_float is None
+        or not np.isfinite(price_float)
+        or price_float <= 0
+        or pct_float is None
+        or not np.isfinite(pct_float)
+        or abs(pct_float) > INTRADAY_STOCK_PCT_ABS_LIMIT
+    ):
+        return None
+
+    ratio = 1.0 + pct_float / 100.0
+    if abs(ratio) < 1e-8:
+        return None
+
+    pre_close = price_float / ratio
+    if not np.isfinite(pre_close) or pre_close <= 0:
+        return None
+    return pre_close
+
 
 def _build_industry_panel(snapshot: Optional[dict], mode: str = "cycle") -> Optional[dict]:
     """基于实时持仓快照构建行业统计面板数据。
@@ -61,22 +84,28 @@ def _build_industry_panel(snapshot: Optional[dict], mode: str = "cycle") -> Opti
         if pos is None or getattr(pos, 'buy_price', 0) <= 0:
             continue
 
+        pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
+        if pre_close is None or pre_close <= 0:
+            pre_close = _derive_intraday_pre_close(
+                row.get('PRICE', row.get('price')),
+                row.get('PCT_CHG', row.get('pct_chg')),
+            )
+
         if mode == "intraday":
             current_price = _normalize_intraday_price(
                 row.get('PRICE', row.get('price')),
-                row.get('PRE_CLOSE', row.get('pre_close')),
+                pre_close,
                 INTRADAY_STOCK_PCT_ABS_LIMIT,
             )
         else:
             current_price = _normalize_cycle_price(
                 row.get('PRICE', row.get('price')),
-                row.get('PRE_CLOSE', row.get('pre_close')),
+                pre_close,
                 INTRADAY_STOCK_PCT_ABS_LIMIT,
             )
         if current_price is None:
             continue
         price_map[ts_code] = current_price
-        pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
         if pre_close is not None and pre_close > 0:
             pre_close_map[ts_code] = pre_close
 

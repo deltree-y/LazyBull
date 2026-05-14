@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.63] - 2026-05-14
+
+### 修复
+
+- **树莓派 3.5LCD 盘内行业统计昨收缺失时误回退到周期口径**：在 [scripts/respi/lcd35/industry.py](scripts/respi/lcd35/industry.py) 中，盘内行业面板现在会在 `PRE_CLOSE` 缺失时根据 `PRICE + PCT_CHG` 反推昨收，避免大量个股被直接跳过导致盘内行业面板算不出来。
+- **盘中行业页不再回退展示周期行业收益**：在 [scripts/respi/lcd35/rendering.py](scripts/respi/lcd35/rendering.py) 中，盘中图模式下若盘内行业面板不可用，将显示为空而不是退回 `cycle` 行业面板，避免“盘内看起来一片红”的误导。
+
+### 测试
+
+- 更新 [tests/test_respi_35lcd_disp.py](tests/test_respi_35lcd_disp.py)，新增“缺昨收但有涨跌幅时仍可计算盘内行业面板”以及“盘中渲染不回退到周期行业面板”两条回归测试。
+
 ## [0.71.62] - 2026-05-14
 
 ### 修复
