@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.64)
+### 当前版本 (v0.71.65)
+
+**一致预期弱因子裁剪与口径重构** (v0.71.65):
+- [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py)、[src/lazybull/features/builder.py](src/lazybull/features/builder.py) 与 [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 已移除 5 条长期零权重的一致预期修正训练列，只保留仍有信息量的分歧度、覆盖变化与 freshness
+- [src/lazybull/factors/lhb.py](src/lazybull/factors/lhb.py) 将 `lhb_net_sum_20` 重写为基于真实交易日窗口的龙虎榜净买入强度累计，避免事件窗口和交易日窗口混淆
+- [src/lazybull/factors/consensus.py](src/lazybull/factors/consensus.py) 将 `cons_eps_revision_30d` 改为“近 30 日 vs 前 90 日基线”的中值修正率；[src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 将 `cons_analyst_count_chg` 改为近 60 日与此前 60 日的非重叠覆盖密度变化
+- 更新 [tests/test_factor_lhb.py](tests/test_factor_lhb.py)、[tests/test_factor_consensus.py](tests/test_factor_consensus.py) 与 [tests/test_factor_consensus_revision.py](tests/test_factor_consensus_revision.py) 回归测试，覆盖新口径
 
 **树莓派 3.5LCD 盘内指数刷新时机修复** (v0.71.64):
 - [scripts/respi/lcd35/core.py](scripts/respi/lcd35/core.py) 与 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 现在会把“指数缓存是否过期”作为独立条件判断，完整缓存也会按盘中刷新节奏续刷

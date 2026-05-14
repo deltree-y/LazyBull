@@ -12,7 +12,7 @@
 因子说明：
 - cons_analyst_count_30d: 近 30 日覆盖的研报数
 - cons_eps_mean_fy1: 近 90 日 FY1 每股收益预测均值
-- cons_eps_revision_30d: 近 30 日 EPS 预测中值相对于前 30 日的变化率
+- cons_eps_revision_30d: 近 30 日 EPS 预测中值相对于此前 90 日基线的变化率
 - cons_target_price_mid: 近 90 日目标价中值 (max/min 均值)
 - cons_rating_score: 近 90 日评级得分 (买入=5, 增持=4, 中性=3, 减持=2, 卖出=1)
 
@@ -112,7 +112,7 @@ def build_consensus_lookup_by_date(
             continue
         window_90 = td_dt - pd.Timedelta(days=90)
         window_30 = td_dt - pd.Timedelta(days=30)
-        window_60 = td_dt - pd.Timedelta(days=60)
+        window_120 = td_dt - pd.Timedelta(days=120)
 
         visible = df[df["_rd_dt"] <= td_dt]
         if visible.empty:
@@ -135,9 +135,9 @@ def build_consensus_lookup_by_date(
         agg = agg.join(count30, how="left")
         agg["cons_analyst_count_30d"] = agg["cons_analyst_count_30d"].fillna(0.0)
 
-        # EPS 修正率: 最近 30 日 eps 中值 vs 前 30 日 eps 中值
+        # EPS 修正率: 最近 30 日 eps 中值 vs 此前 90 日基线中值
         prev_win = visible[
-            (visible["_rd_dt"] > window_60) & (visible["_rd_dt"] <= window_30)
+            (visible["_rd_dt"] > window_120) & (visible["_rd_dt"] <= window_30)
         ]
         recent_med = win30.groupby("ts_code")["eps"].median()
         prev_med = prev_win.groupby("ts_code")["eps"].median()

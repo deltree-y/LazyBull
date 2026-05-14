@@ -2028,10 +2028,7 @@ class FeatureBuilder:
             # 现金流质量因子
             'ocf_to_revenue', 'ocf_to_profit', 'fcf_yield', 'capex_to_ocf',
             # 一致预期修正因子
-            'cons_eps_revision_accel', 'cons_eps_dispersion',
-            'cons_eps_dispersion_chg', 'cons_target_upside',
-            'cons_target_upside_chg', 'cons_analyst_count_chg',
-            'cons_rating_upgrade_ratio',
+            'cons_eps_dispersion', 'cons_analyst_count_chg',
         ]
         existing_zscore_columns = [col for col in zscore_columns if col in result.columns]
         for window in self.lookback_windows:
