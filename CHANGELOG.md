@@ -2,19 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.71.65] - 2026-05-14
-
-### 修复
-
-- **训练侧移除长期零权重的一致预期修正列**：在 [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py)、[src/lazybull/features/builder.py](src/lazybull/features/builder.py) 与 [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 中，删除 `zscore_cons_eps_revision_accel`、`zscore_cons_eps_dispersion_chg`、`zscore_cons_target_upside`、`zscore_cons_target_upside_chg`、`zscore_cons_rating_upgrade_ratio` 这 5 条长期全零的训练链路，只保留仍有信息量的分歧度、覆盖变化与 freshness。
-- **龙虎榜 20 日累计改为真实交易日强度窗口**：在 [src/lazybull/factors/lhb.py](src/lazybull/factors/lhb.py) 中，`lhb_net_sum_20` 不再把最近 20 次上榜事件误当成最近 20 个交易日，而是按真实交易日滚动累计 `lhb_net_rate`，让信号表达从裸金额改成可比的净买入强度。
-- **基础一致预期 EPS 修正口径改为“近 30 日 vs 前 90 日基线”**：在 [src/lazybull/factors/consensus.py](src/lazybull/factors/consensus.py) 中，`cons_eps_revision_30d` 由“近 30 日 vs 前 30 日”调整为“近 30 日 vs 此前 90 日基线中值”，降低稀疏研报下的噪声。
-- **分析师覆盖变化改为非重叠密度窗口**：在 [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 中，`cons_analyst_count_chg` 由重叠窗口的简单条数变化，改为近 60 日与此前 60 日的非重叠覆盖密度变化，避免窗口重叠把信号相互抵消。
-
-### 测试
-
-- 更新 [tests/test_factor_lhb.py](tests/test_factor_lhb.py)、[tests/test_factor_consensus.py](tests/test_factor_consensus.py) 与 [tests/test_factor_consensus_revision.py](tests/test_factor_consensus_revision.py)，覆盖新的 20 日 LHB 强度累计、EPS 修正基线口径和分析师覆盖密度变化回归用例。
-
 ## [0.71.64] - 2026-05-14
 
 ### 修复

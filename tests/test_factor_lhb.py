@@ -69,14 +69,6 @@ def test_lhb_rolling_up_days():
     assert row["lhb_up_days_20"] == 2.0
 
 
-def test_lhb_net_sum_20_uses_trading_day_window_and_net_rate_intensity():
-    df = _make_top_list_df()
-    result = build_lhb_lookup_by_date(df, ["20240102", "20240103", "20240104"])
-    row = result["20240103"][result["20240103"]["ts_code"] == "000001.SZ"].iloc[0]
-    # 20240102 聚合后 net_rate = (0.02 + 0.01) / 2 = 0.015，20240103 net_rate = 0.005
-    assert abs(row["lhb_net_sum_20"] - 0.02) < 1e-12
-
-
 def test_lhb_empty():
     assert build_lhb_lookup_by_date(pd.DataFrame(), ["20240102"]) == {}
     assert build_lhb_lookup_by_date(None, ["20240102"]) == {}

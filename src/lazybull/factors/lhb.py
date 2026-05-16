@@ -13,8 +13,7 @@
 - lhb_net_rate: 当日净买入占流通市值比
 - lhb_amount_rate: 龙虎榜成交占比
 - lhb_up_days_20: 近 20 日累计上榜次数
-- lhb_net_sum_5: 近 5 个上榜事件的净买入额累计
-- lhb_net_sum_20: 近 20 个交易日的净买入强度累计（按 lhb_net_rate 口径）
+- lhb_net_sum_5 / lhb_net_sum_20: 近 5/20 日净买入累计
 - lhb_reason_count: 当日上榜理由数（同一股票同日可有多条）
 
 注: top_list 同一 (trade_date, ts_code) 可能出现多条记录
@@ -91,7 +90,7 @@ def build_lhb_lookup_by_date(
     )
     grouped["lhb_on_list"] = 1.0
 
-    # 按 ts_code 排序, 先保留事件级累计特征
+    # 按 ts_code 排序, 计算滚动指标
     grouped = grouped.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
     g = grouped.groupby("ts_code", group_keys=False)
 
@@ -99,53 +98,12 @@ def build_lhb_lookup_by_date(
         grouped["lhb_net_sum_5"] = g["lhb_net_amount"].apply(
             lambda s: s.rolling(5, min_periods=1).sum()
         )
-    if "lhb_net_rate" in grouped.columns:
-        grouped["lhb_net_sum_20"] = np.nan
-    grouped["lhb_up_days_20"] = np.nan
-
-    # 对 lhb_net_sum_20 / lhb_up_days_20 使用真实交易日窗口，避免把“最近 20 次上榜事件”误当成“最近 20 日”
-    event_lookup = {
-        trade_date: grp.set_index("ts_code") for trade_date, grp in grouped.groupby("trade_date")
-    }
-    rolling_state: Dict[str, List[dict]] = {}
-    calendar_rows = []
-    for trade_date in trading_dates:
-        day_events = event_lookup.get(trade_date)
-        active_codes = set(rolling_state)
-        if day_events is not None:
-            active_codes.update(day_events.index.tolist())
-
-        next_state: Dict[str, List[dict]] = {}
-        for ts_code in active_codes:
-            history = list(rolling_state.get(ts_code, []))
-            event_row = day_events.loc[ts_code] if day_events is not None and ts_code in day_events.index else None
-            history.append(
-                {
-                    "on_list": 0.0 if event_row is None else 1.0,
-                    "net_rate": 0.0
-                    if event_row is None or "lhb_net_rate" not in day_events.columns or pd.isna(event_row["lhb_net_rate"])
-                    else float(event_row["lhb_net_rate"]),
-                }
-            )
-            history = history[-20:]
-            next_state[ts_code] = history
-
-            if event_row is None:
-                continue
-
-            record = event_row.to_dict()
-            record["trade_date"] = trade_date
-            record["ts_code"] = ts_code
-            record["lhb_up_days_20"] = float(sum(item["on_list"] for item in history))
-            record["lhb_net_sum_20"] = float(sum(item["net_rate"] for item in history))
-            calendar_rows.append(record)
-
-        rolling_state = next_state
-
-    if calendar_rows:
-        grouped = pd.DataFrame(calendar_rows)
-    else:
-        grouped = grouped.iloc[0:0].copy()
+        grouped["lhb_net_sum_20"] = g["lhb_net_amount"].apply(
+            lambda s: s.rolling(20, min_periods=1).sum()
+        )
+    grouped["lhb_up_days_20"] = g["lhb_on_list"].apply(
+        lambda s: s.rolling(20, min_periods=1).sum()
+    )
 
     # 构建日频查询表
     date_set = set(trading_dates)

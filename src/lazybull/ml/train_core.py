@@ -164,8 +164,13 @@ CASHFLOW_QUALITY_FEATURE_COLUMNS = [
 
 # 一致预期修正因子特征列（基于已有 report_rc 构建时序信号）
 CONSENSUS_REVISION_FEATURE_COLUMNS = [
+    "zscore_cons_eps_revision_accel",     # EPS 修正加速度
     "zscore_cons_eps_dispersion",         # 分析师分歧度（负向预警）
+    "zscore_cons_eps_dispersion_chg",     # 分歧度月度变化
+    "zscore_cons_target_upside",          # 目标价上行空间
+    "zscore_cons_target_upside_chg",      # 目标价上行空间月度变化
     "zscore_cons_analyst_count_chg",      # 覆盖分析师数变化
+    "zscore_cons_rating_upgrade_ratio",   # 评级上调比例
     "cons_revision_freshness_days",       # 最近一次研报距当日天数
 ]
 

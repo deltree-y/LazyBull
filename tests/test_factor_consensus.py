@@ -14,7 +14,7 @@ def _make_report_rc_df() -> pd.DataFrame:
     # 两只股票, 覆盖近 90 日内多条研报
     return pd.DataFrame(
         [
-            # 000001: 老研报 (此前 90 日基线) + 近 30 日研报
+            # 000001: 老研报 (60 天前) + 近 30 日研报
             {"ts_code": "000001.SZ", "report_date": "20240110",
              "eps": 1.00, "max_price": 15.0, "min_price": 13.0, "rating": "买入"},
             {"ts_code": "000001.SZ", "report_date": "20240210",
@@ -87,9 +87,10 @@ def test_consensus_eps_revision():
     result = build_consensus_lookup_by_date(df, ["20240315"])
     frame = result["20240315"]
     row = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
-    # 近 30 日 (2/14 - 3/15): 有 20240310 (eps=1.25)
-    # 此前 90 日基线 (11/16 - 2/14]: 有 20240110 / 20240210，基线中值 = 1.05
-    assert abs(row["cons_eps_revision_30d"] - (1.25 - 1.05) / 1.05) < 1e-6
+    # 近 30 日 (2/13 - 3/15): 有 20240310 (eps=1.25)
+    # 前 30 日 (1/14 - 2/13): 有 20240210 (eps=1.10)
+    # revision = (1.25 - 1.10) / 1.10
+    assert abs(row["cons_eps_revision_30d"] - (1.25 - 1.10) / 1.10) < 1e-6
 
 
 def test_consensus_rating_score_mapping():
