@@ -572,7 +572,21 @@ def main():
                 "val_samples": len(X_val),
                 "val_start_date": data_stats["val_start_date"],
                 "val_end_date": data_stats["val_end_date"],
-                "val_ratio": 0.2  # 默认值，如果需要可以改为参数
+                "val_ratio": 0.2,  # 默认值，如果需要可以改为参数
+                "val_raw_start_date": data_stats.get("val_raw_start_date", data_stats["val_start_date"]),
+                "val_raw_end_date": data_stats.get("val_raw_end_date", data_stats["val_end_date"]),
+                "val_raw_n_dates": data_stats.get("val_raw_n_dates", 0),
+                "val_raw_samples": data_stats.get("val_raw_samples", 0),
+                "val_es_start_date": data_stats.get("val_es_start_date", data_stats["val_start_date"]),
+                "val_es_end_date": data_stats.get("val_es_end_date", data_stats["val_end_date"]),
+                "val_es_n_dates": data_stats.get("val_es_n_dates", 0),
+                "val_es_samples": data_stats.get("val_es_samples", len(X_val)),
+                "val_embargo_days": data_stats.get("val_embargo_days", 0),
+                "val_embargo_days_applied": data_stats.get("val_embargo_days_applied", 0),
+                "val_embargo_n_dates": data_stats.get("val_embargo_n_dates", 0),
+                "val_embargo_samples": data_stats.get("val_embargo_samples", 0),
+                "val_embargo_start_date": data_stats.get("val_embargo_start_date", "N/A"),
+                "val_embargo_end_date": data_stats.get("val_embargo_end_date", "N/A"),
             }
             
             # 创建训练运行记录

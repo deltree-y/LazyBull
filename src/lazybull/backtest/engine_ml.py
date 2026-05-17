@@ -228,6 +228,25 @@ class BacktestEngineML(BacktestEngine):
         decision_trace["market_layer_exposure"] = market_trace["market_layer_exposure"]
         return decision_trace
 
+    def _finalize_decision_trace_for_signal_day(
+        self, decision_trace: Dict, signal_date: pd.Timestamp
+    ) -> Dict:
+        """在信号日预填市场择时摘要，避免统一摘要退回占位文案。"""
+        if not (self.market_regime_enabled or self.market_regime_ma250_hard_stop):
+            return decision_trace
+
+        self._get_market_regime_exposure(signal_date)
+        decision_trace["ma250"] = self._last_market_regime_trace["ma250"]
+        decision_trace["market_regime"] = self._last_market_regime_trace["market_regime"]
+        decision_trace["market_layer_exposure"] = self._last_market_regime_trace[
+            "market_layer_exposure"
+        ]
+        final_target = decision_trace.get("final_target_exposure")
+        market_layer = self._last_market_regime_trace["market_layer_exposure"]
+        if final_target is not None:
+            decision_trace["final_target_exposure"] = float(final_target) * float(market_layer)
+        return decision_trace
+
     def _build_market_regime_summary(
         self,
         features_df: pd.DataFrame,

@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import pandas as pd
 from loguru import logger
 
@@ -52,7 +52,8 @@ class PendingOrderManager:
     def __init__(
         self,
         max_retry_count: int = 5,
-        max_retry_days: int = 10
+        max_retry_days: int = 10,
+        event_sink: Optional[Callable[[Dict], None]] = None,
     ):
         """初始化延迟订单管理器
         
@@ -62,6 +63,7 @@ class PendingOrderManager:
         """
         self.max_retry_count = max_retry_count
         self.max_retry_days = max_retry_days
+        self.event_sink = event_sink
         
         # 延迟订单队列：按股票代码和操作类型分组
         # key: (stock, action), value: PendingOrder
@@ -120,10 +122,21 @@ class PendingOrderManager:
             )
             self.pending_orders[key] = order
             self.total_added += 1
-            logger.info(
-                f"  添加延迟订单: {stock} {action} "
-                f"(信号日期: {signal_date.date()}, 原因: {reason})"
-            )
+            if self.event_sink is not None:
+                self.event_sink(
+                    {
+                        "type": "added",
+                        "stock": stock,
+                        "action": action,
+                        "signal_date": signal_date,
+                        "reason": reason,
+                    }
+                )
+            else:
+                logger.info(
+                    f"  添加延迟订单: {stock} {action} "
+                    f"(信号日期: {signal_date.date()}, 原因: {reason})"
+                )
     
     def get_orders_to_retry(self, current_date: pd.Timestamp) -> Tuple[List[PendingOrder], List[PendingOrder]]:
         """获取当前应重试的订单列表
@@ -151,10 +164,21 @@ class PendingOrderManager:
 
             # buy 订单：检查是否超过最大重试次数
             if order.retry_count > self.max_retry_count:
-                logger.info(
-                    f"延迟买入订单超过最大重试次数，放弃: {order.stock} "
-                    f"(重试次数: {order.retry_count}, 最大重试: {self.max_retry_count})"
-                )
+                if self.event_sink is not None:
+                    self.event_sink(
+                        {
+                            "type": "expired_retry",
+                            "stock": order.stock,
+                            "action": order.action,
+                            "retry_count": int(order.retry_count),
+                            "max_retry_count": int(self.max_retry_count),
+                        }
+                    )
+                else:
+                    logger.info(
+                        f"延迟买入订单超过最大重试次数，放弃: {order.stock} "
+                        f"(重试次数: {order.retry_count}, 最大重试: {self.max_retry_count})"
+                    )
                 expired_keys.append(key)
                 expired_orders.append(order)
                 self.total_expired += 1
@@ -163,10 +187,21 @@ class PendingOrderManager:
             # buy 订单：检查是否超过最大延迟天数（简化：使用自然日计算）
             days_elapsed = (current_date - order.create_date).days
             if days_elapsed > self.max_retry_days:
-                logger.info(
-                    f"延迟买入订单超过最大延迟天数，放弃: {order.stock} "
-                    f"(已延迟: {days_elapsed}天, 最大延迟: {self.max_retry_days}天)"
-                )
+                if self.event_sink is not None:
+                    self.event_sink(
+                        {
+                            "type": "expired_days",
+                            "stock": order.stock,
+                            "action": order.action,
+                            "delay_days": int(days_elapsed),
+                            "max_retry_days": int(self.max_retry_days),
+                        }
+                    )
+                else:
+                    logger.info(
+                        f"延迟买入订单超过最大延迟天数，放弃: {order.stock} "
+                        f"(已延迟: {days_elapsed}天, 最大延迟: {self.max_retry_days}天)"
+                    )
                 expired_keys.append(key)
                 expired_orders.append(order)
                 self.total_expired += 1
@@ -190,11 +225,22 @@ class PendingOrderManager:
         key = (stock, action)
         if key in self.pending_orders:
             order = self.pending_orders[key]
-            logger.info(
-                f"  延迟订单执行成功: {stock} {action} "
-                f"(重试次数: {order.retry_count}, "
-                f"延迟天数: {(success_date - order.create_date).days})"
-            )
+            if self.event_sink is not None:
+                self.event_sink(
+                    {
+                        "type": "success",
+                        "stock": stock,
+                        "action": action,
+                        "retry_count": int(order.retry_count),
+                        "delay_days": int((success_date - order.create_date).days),
+                    }
+                )
+            else:
+                logger.info(
+                    f"  延迟订单执行成功: {stock} {action} "
+                    f"(重试次数: {order.retry_count}, "
+                    f"延迟天数: {(success_date - order.create_date).days})"
+                )
             del self.pending_orders[key]
             self.total_succeeded += 1
     

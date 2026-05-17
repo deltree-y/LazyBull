@@ -5,7 +5,6 @@ import src.lazybull.backtest.engine as engine_module
 
 from src.lazybull.backtest import BacktestEngine
 from src.lazybull.backtest.engine_ml import BacktestEngineML
-from src.lazybull.common.cost import CostModel
 from src.lazybull.signals.base import Signal
 from src.lazybull.universe.base import Universe
 
@@ -29,7 +28,7 @@ class MockSignal(Signal):
 
 
 def test_daily_progress_log_includes_position_count_and_exposure():
-    """每日回测日志应展示当前持仓数、目标持仓数、仓位比例和 ATR 占位符。"""
+    """每日回测日志应展示仓位、买卖数量和收益摘要。"""
     engine = BacktestEngine(
         universe=MockUniverse(),
         signal=MockSignal(top_n=20),
@@ -47,17 +46,20 @@ def test_daily_progress_log_includes_position_count_and_exposure():
         total_days=124,
         cycle_day=2,
         portfolio_value=115840.0,
+        buy_count=3,
+        sell_count=1,
     )
 
-    assert log_line.startswith("回测[2025-12-29]: 122/124 天 - 本轮第[02/20]天")
+    assert log_line.startswith("回测[2025-12-29]: 122/124 天 | 本轮[02/20]")
     assert "持仓/仓位[17/20]/[87.05%]" in log_line
+    assert "买/卖[3/1]" in log_line
     # 年化收益改为简单年化公式: 15.84% / (122/252) = 32.72%
-    assert "收益:本调仓/本轮/年化:[+15.56%/+15.84%/+32.72%]" in log_line
-    assert "ATR:[N/A/N/A/N/A]" in log_line
+    assert "收益[本调仓/本轮/年化]=[+15.56%/+15.84%/+32.72%]" in log_line
+    assert "ATR:" not in log_line
 
 
-def test_ml_daily_progress_log_includes_position_atr_summary():
-    """ML 回测日志应展示当前持仓股票的 atr_pct_14 统计。"""
+def test_ml_daily_progress_log_no_longer_shows_atr_summary():
+    """ML 回测日志也不再展示 ATR 摘要。"""
     engine = BacktestEngineML(
         features_by_date={
             "20251229": pd.DataFrame(
@@ -84,7 +86,8 @@ def test_ml_daily_progress_log_includes_position_atr_summary():
         portfolio_value=100000.0,
     )
 
-    assert "ATR:[1.23%/2.34%/3.45%]" in log_line
+    assert "买/卖[0/0]" in log_line
+    assert "ATR:" not in log_line
 
 
 def test_target_position_count_scales_with_stagger_tranches():
@@ -117,7 +120,11 @@ def test_cycle_separator_logs_only_on_first_day(monkeypatch):
     log_messages = []
     separator_line = "\n================================================ 新一轮回测 ================================================="
 
-    monkeypatch.setattr(engine_module.logger, "info", lambda message: log_messages.append(str(message)))
+    monkeypatch.setattr(
+        engine,
+        "_emit_immediate_log",
+        lambda level, message, colors=False: log_messages.append(str(message)),
+    )
     monkeypatch.setattr(engine, "_prepare_price_index", lambda price_data: None)
     # 在 trading_dates[2] 设一个信号日，让信号进入 pending_signals 触发新一轮分隔线
     monkeypatch.setattr(
@@ -167,7 +174,11 @@ def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
     log_messages = []
     separator_line = "\n================================================ 新一轮回测 ================================================="
 
-    monkeypatch.setattr(engine_module.logger, "info", lambda message: log_messages.append(str(message)))
+    monkeypatch.setattr(
+        engine,
+        "_emit_immediate_log",
+        lambda level, message, colors=False: log_messages.append(str(message)),
+    )
     monkeypatch.setattr(engine, "_prepare_price_index", lambda price_data: None)
     monkeypatch.setattr(
         engine,
@@ -205,169 +216,292 @@ def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
     assert separator_indices[1] > signal_index
 
 
-def test_rebalance_buy_warning_log_uses_three_line_summary_format(monkeypatch):
-    """调仓买入 warning 日志应按三行展示汇总、成功和失败信息。"""
+def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
+    """单日回测应先输出总结，再输出调仓决策摘要、交易两行，最后回放缓冲细节。"""
 
-    signal_date = pd.Timestamp("2023-01-02")
-    buy_date = pd.Timestamp("2023-01-03")
+    trade_date = pd.Timestamp("2025-01-02")
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(top_n=5),
+        initial_capital=100000.0,
+        rebalance_freq=5,
+        completion_window_days=5,
+        verbose=False,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        enable_early_rebalance_on_empty=False,
+    )
+
+    emitted_messages = []
+    monkeypatch.setattr(
+        engine,
+        "_emit_immediate_log",
+        lambda level, message, colors=False: emitted_messages.append((level, str(message), colors)),
+    )
+    monkeypatch.setattr(engine, "_prepare_price_index", lambda price_data: None)
+    monkeypatch.setattr(engine, "_get_rebalance_dates", lambda trading_dates: {})
+    monkeypatch.setattr(engine, "_generate_nav_curve", lambda: pd.DataFrame())
+    monkeypatch.setattr(engine, "_calculate_portfolio_value", lambda date: 100000.0)
+
+    def fake_check_and_sell(date, trading_dates, date_to_idx):
+        engine_module.logger.info("调仓决策摘要: 信号日 2025-01-02 | 执行=2025-01-03 | 候选=5 | 目标=2")
+        engine.trades.append(
+            {
+                "date": date,
+                "stock": "000002.SZ",
+                "action": "sell",
+                "buy_date": pd.Timestamp("2024-12-30"),
+                "pnl_profit_pct": -0.021,
+            }
+        )
+        engine_module.logger.info("调试细节日志")
+
+    def fake_execute_pending_buys(date, trading_dates, date_to_idx):
+        engine.trades.append({"date": date, "stock": "000001.SZ", "action": "buy"})
+
+    monkeypatch.setattr(engine, "_check_and_sell", fake_check_and_sell)
+    monkeypatch.setattr(engine, "_execute_pending_buys", fake_execute_pending_buys)
+
+    engine.run(
+        start_date=trade_date,
+        end_date=trade_date,
+        trading_dates=[trade_date],
+        price_data=pd.DataFrame(columns=["ts_code", "trade_date", "close"]),
+    )
+
+    summary_index = next(
+        i for i, (_, message, _) in enumerate(emitted_messages) if "回测[2025-01-02]" in message
+    )
+    decision_index = next(
+        i
+        for i, (_, message, _) in enumerate(emitted_messages)
+        if "调仓决策摘要: 信号日 2025-01-02 | 执行=2025-01-03 | 候选=5 | 目标=2" in message
+    )
+    buy_index = next(
+        i for i, (_, message, _) in enumerate(emitted_messages) if "交易: 买1[000001.SZ(0d,+0.0%)]" in message
+    )
+    sell_index = next(
+        i for i, (_, message, _) in enumerate(emitted_messages) if "交易: 卖1[000002.SZ(0d,-2.1%)]" in message
+    )
+    detail_index = next(
+        i for i, (_, message, _) in enumerate(emitted_messages) if "调试细节日志" in message
+    )
+
+    assert summary_index < decision_index < buy_index < sell_index < detail_index
+    assert emitted_messages[detail_index][1].startswith("  调试细节日志")
+
+
+def test_run_emits_compact_daily_warning_summaries_as_plain_lines(monkeypatch):
+    """压缩类事件应按日级白色单行展示。"""
+
+    trade_date = pd.Timestamp("2025-01-02")
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(top_n=5),
+        initial_capital=100000.0,
+        rebalance_freq=5,
+        completion_window_days=5,
+        verbose=False,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        enable_early_rebalance_on_empty=False,
+    )
+
+    emitted_messages = []
+    monkeypatch.setattr(
+        engine,
+        "_emit_immediate_log",
+        lambda level, message, colors=False: emitted_messages.append((level, str(message), colors)),
+    )
+    monkeypatch.setattr(engine, "_prepare_price_index", lambda price_data: None)
+    monkeypatch.setattr(engine, "_get_rebalance_dates", lambda trading_dates: {})
+    monkeypatch.setattr(engine, "_generate_nav_curve", lambda: pd.DataFrame())
+    monkeypatch.setattr(engine, "_calculate_portfolio_value", lambda date: 100000.0)
+
+    def fake_check_and_sell(date, trading_dates, date_to_idx):
+        engine._record_take_profit_summary(0.061, 0.05, 3)
+        engine._record_early_exit_trigger("002380.SZ", 4, -0.1906)
+        engine._record_pending_order_event(
+            {"type": "added", "stock": "002701.SZ", "action": "sell", "reason": "跌停"}
+        )
+        engine._record_pending_order_event(
+            {"type": "added", "stock": "000938.SZ", "action": "sell", "reason": "跌停"}
+        )
+        engine._record_pending_order_event(
+            {"type": "success", "stock": "002701.SZ", "action": "sell", "retry_count": 1, "delay_days": 1}
+        )
+        engine._record_pending_order_event(
+            {"type": "success", "stock": "000938.SZ", "action": "sell", "retry_count": 1, "delay_days": 1}
+        )
+        engine._record_pending_order_event(
+            {
+                "type": "expired_retry",
+                "stock": "300001.SZ",
+                "action": "buy",
+                "retry_count": 4,
+                "max_retry_count": 3,
+            }
+        )
+        engine._record_pending_order_event(
+            {
+                "type": "expired_days",
+                "stock": "300002.SZ",
+                "action": "buy",
+                "delay_days": 6,
+                "max_retry_days": 5,
+            }
+        )
+        engine._record_time_stop_loss_trigger("000001.SZ", 15, -0.031)
+        engine._record_time_stop_loss_veto("000002.SZ", 16, -0.025, 0.81)
+        engine_module.logger.info("调试细节日志")
+
+    def fake_execute_pending_buys(date, trading_dates, date_to_idx):
+        engine._record_early_rebalance_summary("空仓触发", "无持仓, 新信号入队")
+        engine._record_duplicate_buy_skip("000506.SZ", pd.Timestamp("2025-08-28"))
+        engine._record_position_unfilled_summary(
+            tranche_tag="",
+            target_n=20,
+            actually_bought=3,
+            unfilled_count=17,
+            unfilled_stocks=[
+                "002458.SZ",
+                "600926.SH",
+                "002670.SZ",
+                "601231.SH",
+                "002440.SZ",
+                "002746.SZ",
+                "601198.SH",
+            ],
+        )
+        engine._record_completion_abandoned_summary(
+            tranche_tag="",
+            original_signal_date=pd.Timestamp("2021-01-18"),
+            attempts=4,
+            unfilled_stocks=["603444.SH", "601186.SH"],
+        )
+        engine._record_completion_skip("当日无行情", "当日无行情")
+        engine._record_completion_skip("前日无行情", "信号日2021-01-18")
+        engine._record_completion_skip("无数据", "批2 信号日2021-01-19")
+        engine._record_completion_skip("无候选", "信号日2021-01-20")
+        engine._record_completion_skip("候选已持仓", "批2 信号日2021-01-21")
+        engine._record_completion_skip("候选不可交易", "603444.SH(涨停)")
+        engine._record_completion_skip("候选不可交易", "601186.SH(停牌)")
+
+    monkeypatch.setattr(engine, "_check_and_sell", fake_check_and_sell)
+    monkeypatch.setattr(engine, "_execute_pending_buys", fake_execute_pending_buys)
+
+    engine.run(
+        start_date=trade_date,
+        end_date=trade_date,
+        trading_dates=[trade_date],
+        price_data=pd.DataFrame(columns=["ts_code", "trade_date", "close"]),
+    )
+
+    early_rebalance = next(item for item in emitted_messages if "提前调仓:" in item[1])
+    duplicate_buy = next(item for item in emitted_messages if "重复买入跳过:" in item[1])
+    position_unfilled = next(item for item in emitted_messages if "仓位未满:" in item[1])
+    completion_skipped = next(item for item in emitted_messages if "补齐跳过:" in item[1])
+    completion_abandoned = next(item for item in emitted_messages if "补齐放弃:" in item[1])
+    early_exit = next(item for item in emitted_messages if "亏损换出:" in item[1])
+    pending_order_added = next(item for item in emitted_messages if "延迟订单: " in item[1])
+    pending_order_success = next(item for item in emitted_messages if "延迟订单成交: " in item[1])
+    pending_order_expired = next(item for item in emitted_messages if "延迟订单放弃: " in item[1])
+    take_profit = next(item for item in emitted_messages if "整体止盈:" in item[1])
+    time_stop_loss = next(item for item in emitted_messages if "时间止损:" in item[1])
+    detail_index = next(i for i, item in enumerate(emitted_messages) if "调试细节日志" in item[1])
+    early_index = emitted_messages.index(early_rebalance)
+    duplicate_buy_index = emitted_messages.index(duplicate_buy)
+    position_unfilled_index = emitted_messages.index(position_unfilled)
+    completion_skipped_index = emitted_messages.index(completion_skipped)
+    completion_abandoned_index = emitted_messages.index(completion_abandoned)
+    early_exit_index = emitted_messages.index(early_exit)
+    pending_order_added_index = emitted_messages.index(pending_order_added)
+    pending_order_success_index = emitted_messages.index(pending_order_success)
+    pending_order_expired_index = emitted_messages.index(pending_order_expired)
+    take_profit_index = emitted_messages.index(take_profit)
+    time_stop_loss_index = emitted_messages.index(time_stop_loss)
+
+    assert early_rebalance == ("INFO", "  提前调仓: 空仓触发[无持仓, 新信号入队]", False)
+    assert duplicate_buy == (
+        "INFO",
+        "  重复买入跳过: 1只[000506.SZ(2025-08-28)]",
+        False,
+    )
+    assert position_unfilled == (
+        "INFO",
+        "  仓位未满: 目标20/实买3/待补17[002458.SZ, 600926.SH, 002670.SZ, 601231.SH, 002440.SZ, 002746.SZ, ...+1]/5天",
+        False,
+    )
+    assert completion_skipped == (
+        "INFO",
+        "  补齐跳过: 当日无行情1 | 前日无行情1[信号日2021-01-18] | 无数据1[批2 信号日2021-01-19] | 无候选1[信号日2021-01-20] | 候选已持仓1[批2 信号日2021-01-21] | 候选不可交易2[603444.SH(涨停), 601186.SH(停牌)]",
+        False,
+    )
+    assert completion_abandoned == (
+        "INFO",
+        "  补齐放弃: 信号日2021-01-18/尝试4次/剩2[603444.SH, 601186.SH]",
+        False,
+    )
+    assert early_exit == (
+        "INFO",
+        "  亏损换出: 触发1[002380.SZ(4d,-19.1%)]",
+        False,
+    )
+    assert pending_order_added == (
+        "INFO",
+        "  延迟订单: 新增卖2[002701.SZ(跌停), 000938.SZ(跌停)]",
+        False,
+    )
+    assert pending_order_success == (
+        "INFO",
+        "  延迟订单成交: 成功卖2[002701.SZ(重1,延1d), 000938.SZ(重1,延1d)]",
+        False,
+    )
+    assert pending_order_expired == (
+        "INFO",
+        "  延迟订单放弃: 超次买1[300001.SZ(重4>3)] | 超期买1[300002.SZ(延6d>5d)]",
+        False,
+    )
+    assert take_profit == ("INFO", "  整体止盈: 触发[+6.1%>=+5.0%, 3只次日卖出]", False)
+    assert (
+        time_stop_loss
+        == (
+            "INFO",
+            "  时间止损: 触发1[000001.SZ(15d,-3.1%)] | 否决1[000002.SZ(16d,-2.5%,0.81)]",
+            False,
+        )
+    )
+    assert early_index < detail_index
+    assert duplicate_buy_index < detail_index
+    assert position_unfilled_index < detail_index
+    assert completion_skipped_index < detail_index
+    assert completion_abandoned_index < detail_index
+    assert early_exit_index < detail_index
+    assert pending_order_added_index < detail_index
+    assert pending_order_success_index < detail_index
+    assert pending_order_expired_index < detail_index
+    assert take_profit_index < detail_index
+    assert time_stop_loss_index < detail_index
+
+
+def test_profit_extension_summary_shows_more_items():
+    """盈利延续摘要应展示更多股票后再折叠。"""
 
     engine = BacktestEngine(
         universe=MockUniverse(),
-        signal=MockSignal(top_n=3),
+        signal=MockSignal(top_n=5),
         initial_capital=100000.0,
-        cost_model=CostModel(
-            commission_rate=0,
-            min_commission=0,
-            stamp_tax=0,
-            slippage=0,
-        ),
-        rebalance_freq=10,
+        rebalance_freq=5,
         verbose=False,
-        enable_position_completion=True,
     )
-    engine.current_capital = 60000.0
-    engine.positions = {
-        "600001.SH": {
-            "shares": 1000,
-            "buy_date": signal_date,
-            "signal_date": signal_date,
-            "buy_trade_price": 20.0,
-            "buy_pnl_price": 20.0,
-            "buy_cost_cash": 20000.0,
-        }
-    }
 
-    trading_dates = [signal_date, buy_date]
-    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
-
-    price_data = pd.DataFrame(
+    summary = engine._format_profit_extension_summary(
         [
-            {
-                "ts_code": "000001.SZ",
-                "trade_date": "20230103",
-                "close": 10.0,
-                "close_adj": 10.0,
-                "open": 10.0,
-                "open_adj": 10.0,
-                "vol": 1000000,
-                "pct_chg": 0.0,
-                "filter_is_suspended": 0,
-                "is_suspended": 0,
-                "is_limit_up": 0,
-                "is_limit_down": 0,
-                "filter_is_st": 0,
-                "is_st": 0,
-                "filter_list_days": 100,
-                "list_days": 100,
-                "tradable": 1,
-            },
-            {
-                "ts_code": "000002.SZ",
-                "trade_date": "20230103",
-                "close": 10.0,
-                "close_adj": 10.0,
-                "open": 10.0,
-                "open_adj": 10.0,
-                "vol": 1000000,
-                "pct_chg": 9.99,
-                "filter_is_suspended": 0,
-                "is_suspended": 0,
-                "is_limit_up": 1,
-                "is_limit_down": 0,
-                "filter_is_st": 0,
-                "is_st": 0,
-                "filter_list_days": 100,
-                "list_days": 100,
-                "tradable": 1,
-            },
-            {
-                "ts_code": "000003.SZ",
-                "trade_date": "20230103",
-                "close": 10.0,
-                "close_adj": 10.0,
-                "open": 10.0,
-                "open_adj": 10.0,
-                "vol": 1000000,
-                "pct_chg": 9.99,
-                "filter_is_suspended": 0,
-                "is_suspended": 0,
-                "is_limit_up": 1,
-                "is_limit_down": 0,
-                "filter_is_st": 0,
-                "is_st": 0,
-                "filter_list_days": 100,
-                "list_days": 100,
-                "tradable": 1,
-            },
-            {
-                "ts_code": "600001.SH",
-                "trade_date": "20230103",
-                "close": 20.0,
-                "close_adj": 20.0,
-                "open": 20.0,
-                "open_adj": 20.0,
-                "vol": 1000000,
-                "pct_chg": 0.0,
-                "filter_is_suspended": 0,
-                "is_suspended": 0,
-                "is_limit_up": 0,
-                "is_limit_down": 0,
-                "filter_is_st": 0,
-                "is_st": 0,
-                "filter_list_days": 100,
-                "list_days": 100,
-                "tradable": 1,
-            },
+            {"stock": f"00000{i}.SZ", "holding_days": 6 + i, "profit_rate": 0.01 * i, "score": 0.6 + 0.01 * i}
+            for i in range(8)
         ]
     )
-    engine._prepare_price_index(price_data)
-    engine.price_data_cache = price_data
 
-    engine.pending_signals[signal_date] = {
-        "signals": {
-            "000001.SZ": 0.25,
-            "000002.SZ": 0.25,
-        },
-        "ranked_candidates": [
-            ("000001.SZ", 1.0),
-            ("000002.SZ", 1.0),
-        ],
-        "target_n": 3,
-        "tranche_idx": 0,
-        "decision_trace": {
-            "signal_date": signal_date,
-            "candidate_count": 3,
-            "target_n": 3,
-            "holding_bonus": {
-                "enabled": True,
-                "kept_count": 1,
-                "kept_stocks": ["600001.SH"],
-            },
-        },
-    }
-
-    warning_messages = []
-    monkeypatch.setattr(
-        engine_module.logger,
-        "warning",
-        lambda message: warning_messages.append(str(message)),
-    )
-    monkeypatch.setattr(engine_module.logger, "info", lambda message: None)
-
-    engine._execute_pending_buys(
-        date=buy_date,
-        trading_dates=trading_dates,
-        date_to_idx=date_to_idx,
-    )
-
-    summary = next(message for message in warning_messages if "调仓买入汇总:" in message)
-    lines = summary.splitlines()
-
-    assert summary.endswith("\n")
-    assert len(lines) == 3
-    assert (
-        "调仓买入汇总: 执行日 2023-01-03 | 信号日 2023-01-02 | 计划=2 | 计划资金占比=50.00% | "
-        "继承上轮=1 | 继承资金占比=25.00% | 成功=1 | 失败=1"
-    ) == lines[0]
-    assert "成功仓位: 数量=1 | 股票=[000001.SZ] | 资金占比=25.00%" == lines[1]
-    assert "失败仓位: 数量=1 | 股票=[000002.SZ(涨停)] | 资金占比=25.00%" == lines[2]
+    assert "000000.SZ(6d,+0.0%,0.60)" in summary
+    assert "000005.SZ(11d,+5.0%,0.65)" in summary
+    assert "...+2" in summary

@@ -2,6 +2,94 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.71] - 2026-05-17
+
+### 修复
+
+- **walk-forward 训练验证集加入自动尾部隔离**：在 [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 中，`prepare_training_data()` 在原有按日期切分后，会基于标签自动推导的 `label_delta`（如 `y_ret_5 -> 6`）再对验证集尾部做隔离；隔离后的 `val_es` 才参与 `eval_set` / early stopping / best_iteration，避免测试期价格窗口通过 val 影响模型选择。
+- **验证集隔离统计打通到训练日志链路**：在 [scripts/walk_forward.py](scripts/walk_forward.py)、[scripts/train_ml_model.py](scripts/train_ml_model.py) 与 [src/lazybull/ml/run_logger.py](src/lazybull/ml/run_logger.py) 中，新增 `val_raw_* / val_es_* / val_embargo_*` 统计透传与落盘，便于批次审计每个 split 的验证集可用区间与隔离规模。
+
+### 测试
+
+- 新增 [tests/test_train_core_val_embargo.py](tests/test_train_core_val_embargo.py)，覆盖验证集尾部隔离 helper、全量隔离边界、以及 `prepare_training_data()` 的自动隔离口径。
+- 运行 [tests/test_train_core_date_split.py](tests/test_train_core_date_split.py)、[tests/test_ml_run_logger.py](tests/test_ml_run_logger.py)、[tests/test_training_feature_flag_forwarding.py](tests/test_training_feature_flag_forwarding.py) 回归，确认切分基线、日志写入与入口透传均未回归。
+
+## [0.71.70] - 2026-05-17
+
+### 修复
+
+- **延迟订单放弃日志并入日级白字摘要**：在 [src/lazybull/execution/pending_order.py](src/lazybull/execution/pending_order.py) 与 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，`延迟买入订单超过最大重试次数/最大延迟天数，放弃` 不再逐条输出，而是通过事件回调汇总为 `延迟订单放弃: 超次买... | 超期买...` 白字单行摘要。
+- **补齐跳过日志统一压缩到日级汇总**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，`补齐跳过` 的当日无行情、前日无行情、无数据、无候选、候选已持仓、候选不可交易等零散日志改为按交易日聚合为单行白字摘要，减少补齐窗口内的重复 warning。
+
+### 测试
+
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py)，覆盖 `补齐跳过` 与 `延迟订单放弃` 的新白字摘要格式。
+- 更新 [tests/test_pending_order.py](tests/test_pending_order.py)，覆盖延迟订单新增、成交、超次放弃、超期放弃的事件回调。
+
+## [0.71.69] - 2026-05-17
+
+### 修复
+
+- **延迟订单新增/成功日志改为日级白字摘要**：在 [src/lazybull/execution/pending_order.py](src/lazybull/execution/pending_order.py) 与 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，`添加延迟订单` 与 `延迟订单执行成功` 不再逐条输出，而是通过事件回调交给回测引擎按交易日压缩为白字单行摘要，例如 `延迟订单: 新增卖N[...]` 与 `延迟订单成交: 成功卖N[...]`。
+
+### 测试
+
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py)，覆盖延迟订单新增/成功的白字压缩展示。
+- 运行 [tests/test_pending_order.py](tests/test_pending_order.py)、[tests/test_integration_trade_status.py](tests/test_integration_trade_status.py) 与 [tests/test_suspended_stock_handling.py](tests/test_suspended_stock_handling.py) 回归，确认延迟卖出链路行为不变。
+
+## [0.71.68] - 2026-05-17
+
+### 修复
+
+- **每日交易摘要拆为买卖两行**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，当日成交摘要现在按 `交易: 买...` 与 `交易: 卖...` 分成两行展示，避免同一行同时挤入买卖明细。
+- **多类逐条日志压缩为白字日级摘要**：同文件中，`重复买入跳过`、`亏损提前换出`、`仓位未满`、`补齐放弃` 不再逐条输出，而是按交易日统一压缩为白色单行摘要，减少大段重复日志。
+- **调仓决策摘要前移到交易之前**：同文件中，日终输出顺序调整为“每日总结 -> 调仓决策摘要 -> 交易买/卖两行 -> 日级压缩摘要 -> 其他细节”，使调仓意图先于成交结果显示。
+- **盈利延续摘要显示更多股票**：同文件中，`盈利延续[strength]` 单行摘要现在会显示更多标的后再折叠，降低 `...+N` 过早出现的情况。
+
+### 测试
+
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py)，覆盖“调仓决策摘要在交易前”、“买卖两行拆分”、“多类白字压缩摘要”以及“盈利延续展示量增加”的回归。
+- 运行 [tests/test_position_completion.py](tests/test_position_completion.py)、[tests/test_ml_backtest_engine.py](tests/test_ml_backtest_engine.py) 与 [tests/test_buy_replacement.py](tests/test_buy_replacement.py) 扩展回归，确认买入、补齐与 ML 摘要路径未受影响。
+
+## [0.71.67] - 2026-05-17
+
+### 修复
+
+- **调仓决策摘要改为信号日单行白色输出**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 与 [src/lazybull/backtest/engine_ml.py](src/lazybull/backtest/engine_ml.py) 中，统一调仓决策摘要现在压缩为单行，并在信号日输出，不再等到执行买入日；ML 回测的市场层/最终仓位也会在信号日摘要中提前对齐。
+- **删除 ranked 选股/预测入口日志**：在 [src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py) 中，不再输出 `选股/预测(ranked)` 这条入口日志，避免与后续调仓摘要和日终汇总重复。
+- **空仓提前调仓/时间止损/整体止盈改为日级汇总**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，上述三类原 warning 事件现在会先按交易日累积，日终以白色单行摘要输出，减少逐条 warning 噪音。
+
+### 测试
+
+- 更新 [tests/test_ml_backtest_engine.py](tests/test_ml_backtest_engine.py)，覆盖“调仓决策摘要在信号日输出且只输出一次”的回归。
+- 更新 [tests/test_ml_signal.py](tests/test_ml_signal.py)，覆盖 `generate_ranked()` 不再输出 `选股/预测(ranked)` 的回归。
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py)，覆盖日级 warning 汇总的白色单行输出。
+
+## [0.71.66] - 2026-05-17
+
+### 修复
+
+- **回测每日日志重排并压缩**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，单个交易日的明细日志现在会先缓冲，待当日结束后按“彩色每日总结 -> 当日买卖摘要 -> 两空格缩进的其他细节”顺序统一输出；每日总结新增买/卖股票数量，去掉 ATR 展示，并删除原有单独的买入/卖出执行日志。
+- **盈利延续与仓位补齐日志改为单行汇总**：同文件中，`盈利延续持有[strength]` 与 `补齐成功/补齐延迟` 不再逐条展开，而是按交易日压缩为单行摘要，减少长串重复日志。
+- **选股过滤与预测入口合并为单行日志**：在 [src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py) 中，`选股过滤合计` 与 `开始模型预测(ranked)` 合并为 `选股/预测` 单行摘要，`TOP预测概率抽样` 降为 debug。
+- **日志延迟输出支持**：在 [src/lazybull/common/logger.py](src/lazybull/common/logger.py) 中，为 loguru handler 增加 `_defer_emit` 过滤开关，供回测按交易日统一回放日志。
+
+### 测试
+
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py)，覆盖新每日总结格式、去 ATR、以及“总结 -> 交易摘要 -> 缓冲细节”的输出顺序。
+- 更新 [tests/test_position_completion.py](tests/test_position_completion.py)，覆盖补齐日志新的单行摘要格式。
+- 更新 [tests/test_ml_signal.py](tests/test_ml_signal.py)，新增选股/预测单行汇总日志回归测试。
+
+## [0.71.65] - 2026-05-17
+
+### 修复
+
+- **回测补齐成功日志补充实际成交口径**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，仓位补齐成功日志现在会同时输出目标市值、实际成交市值、成交股数与交易成本，避免现金不足时被误读为按目标市值满额买入。
+
+### 测试
+
+- 更新 [tests/test_position_completion.py](tests/test_position_completion.py)，新增“现金受限时补齐日志展示实际成交”的回归测试。
+
 ## [0.71.64] - 2026-05-14
 
 ### 修复

@@ -193,7 +193,7 @@ def write_training_run_to_csv(
             logger.warning("将扩展表头以兼容新字段")
 
             # 读取完整的现有数据
-            existing_df = pd.read_csv(csv_path, encoding="utf-8-sig")
+            existing_df = pd.read_csv(csv_path, encoding="utf-8-sig", low_memory=False)
 
             # 为新增列填充空值
             for col in added_columns:
@@ -343,6 +343,26 @@ def create_training_run_record_from_training_session(
     for key, value in val_daily_metrics.items():
         if key.startswith("top") or key.startswith("diagnostic_"):
             additional_metrics[key] = value
+    
+        # 验证集隔离统计（若存在）
+        for key in [
+            "val_raw_start_date",
+            "val_raw_end_date",
+            "val_raw_n_dates",
+            "val_raw_samples",
+            "val_es_start_date",
+            "val_es_end_date",
+            "val_es_n_dates",
+            "val_es_samples",
+            "val_embargo_days",
+            "val_embargo_days_applied",
+            "val_embargo_n_dates",
+            "val_embargo_samples",
+            "val_embargo_start_date",
+            "val_embargo_end_date",
+        ]:
+            if key in data_stats:
+                additional_metrics[key] = data_stats.get(key)
 
     record.additional_metrics = additional_metrics
 

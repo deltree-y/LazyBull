@@ -343,6 +343,100 @@ def split_train_val_by_date(
     return df_train, df_val, stats
 
 
+def split_val_for_early_stopping_by_date(
+    df_val: pd.DataFrame,
+    embargo_days: int,
+    date_col: str = "trade_date",
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
+    """将验证集尾部按交易日隔离，避免用于 early stopping 的标签与测试期重叠
+
+    Args:
+        df_val: 原始验证集 DataFrame（通常由 split_train_val_by_date 产生）
+        embargo_days: 需要从验证集尾部隔离的交易日数
+        date_col: 日期列名，默认 trade_date
+
+    Returns:
+        (df_val_es, df_val_embargo, stats):
+            - df_val_es: 用于 early stopping / best_iteration 的验证子集
+            - df_val_embargo: 从验证集尾部隔离出的样本
+            - stats: 切分统计信息
+    """
+
+    def _date_range(dates: List) -> Tuple[str, str]:
+        if not dates:
+            return "N/A", "N/A"
+        return str(dates[0]), str(dates[-1])
+
+    if len(df_val) == 0:
+        empty_stats = {
+            "val_raw_n_dates": 0,
+            "val_raw_start_date": "N/A",
+            "val_raw_end_date": "N/A",
+            "val_raw_samples": 0,
+            "val_es_n_dates": 0,
+            "val_es_start_date": "N/A",
+            "val_es_end_date": "N/A",
+            "val_es_samples": 0,
+            "val_embargo_n_dates": 0,
+            "val_embargo_start_date": "N/A",
+            "val_embargo_end_date": "N/A",
+            "val_embargo_samples": 0,
+            "val_embargo_days_requested": max(int(embargo_days), 0),
+            "val_embargo_days_applied": 0,
+        }
+        return df_val.iloc[:0].copy(), df_val.iloc[:0].copy(), empty_stats
+
+    raw_dates = sorted(df_val[date_col].unique())
+    raw_start, raw_end = _date_range(raw_dates)
+    embargo_days_requested = max(int(embargo_days), 0)
+
+    if embargo_days_requested <= 0:
+        df_val_es = df_val.copy()
+        df_val_embargo = df_val.iloc[:0].copy()
+        es_dates = raw_dates
+        embargo_dates = []
+    else:
+        embargo_n_dates = min(embargo_days_requested, len(raw_dates))
+        if embargo_n_dates >= len(raw_dates):
+            es_dates = []
+            embargo_dates = raw_dates
+        else:
+            es_dates = raw_dates[:-embargo_n_dates]
+            embargo_dates = raw_dates[-embargo_n_dates:]
+
+        es_dates_set = set(es_dates)
+        embargo_dates_set = set(embargo_dates)
+        df_val_es = df_val[df_val[date_col].isin(es_dates_set)].copy()
+        df_val_embargo = df_val[df_val[date_col].isin(embargo_dates_set)].copy()
+
+    es_start, es_end = _date_range(es_dates)
+    embargo_start, embargo_end = _date_range(embargo_dates)
+    stats = {
+        "val_raw_n_dates": len(raw_dates),
+        "val_raw_start_date": raw_start,
+        "val_raw_end_date": raw_end,
+        "val_raw_samples": len(df_val),
+        "val_es_n_dates": len(es_dates),
+        "val_es_start_date": es_start,
+        "val_es_end_date": es_end,
+        "val_es_samples": len(df_val_es),
+        "val_embargo_n_dates": len(embargo_dates),
+        "val_embargo_start_date": embargo_start,
+        "val_embargo_end_date": embargo_end,
+        "val_embargo_samples": len(df_val_embargo),
+        "val_embargo_days_requested": embargo_days_requested,
+        "val_embargo_days_applied": len(embargo_dates),
+    }
+
+    if len(df_val_es) == 0 and len(df_val) > 0 and embargo_days_requested > 0:
+        logger.warning(
+            f"验证集尾部隔离后用于 early stopping 的样本为空 "
+            f"(raw_n_dates={len(raw_dates)}, embargo_days={embargo_days_requested})"
+        )
+
+    return df_val_es, df_val_embargo, stats
+
+
 def filter_stable_features(
     df_train: pd.DataFrame,
     feature_columns: List[str],
@@ -479,9 +573,9 @@ def prepare_training_data(
     Returns:
         (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats,
          df_val_split_original) 元组
-        - df_val_split: 标签已变换（供模型训练/early stopping 使用）
-        - df_val_split_original: 标签变换前的原始快照（供逐日收益评估使用，保持真实收益单位）
-        data_stats 包含：samples_after_filter, val_start_date, val_end_date
+        - df_val_split: 已做尾部隔离后的验证子集（供模型训练/early stopping 使用）
+        - df_val_split_original: 上述验证子集在标签变换前的原始快照（供逐日收益评估使用）
+        data_stats 包含：samples_after_filter, val_start_date, val_end_date 及 val_embargo_* 统计
     """
     logger.info("准备训练数据...")
 
@@ -735,8 +829,25 @@ def prepare_training_data(
     label_delta = max(inferred_horizon + 1, 5)  # 最少 5 个交易日间隔
 
     # 按 trade_date 粒度切分训练集和验证集（确保同日样本不被拆分到两侧）
-    df_train_split, df_val_split, split_stats = split_train_val_by_date(
+    df_train_split, df_val_split_raw, split_stats = split_train_val_by_date(
         df_train, val_ratio=val_ratio, delta=label_delta
+    )
+
+    # 从验证集尾部自动隔离与测试期可能重叠的标签窗口样本，
+    # 仅隔离后的子集参与 early stopping / best_iteration 选择。
+    df_val_split, df_val_split_embargo, val_es_stats = split_val_for_early_stopping_by_date(
+        df_val_split_raw,
+        embargo_days=label_delta,
+    )
+    logger.info(
+        "验证集尾部隔离（按标签自动推导）: "
+        f"raw={val_es_stats['val_raw_start_date']}~{val_es_stats['val_raw_end_date']} "
+        f"({val_es_stats['val_raw_n_dates']}日/{val_es_stats['val_raw_samples']}样本), "
+        f"es={val_es_stats['val_es_start_date']}~{val_es_stats['val_es_end_date']} "
+        f"({val_es_stats['val_es_n_dates']}日/{val_es_stats['val_es_samples']}样本), "
+        f"embargo={val_es_stats['val_embargo_start_date']}~{val_es_stats['val_embargo_end_date']} "
+        f"({val_es_stats['val_embargo_n_dates']}日/{val_es_stats['val_embargo_samples']}样本), "
+        f"embargo_days={val_es_stats['val_embargo_days_requested']}"
     )
 
     # 在标签变换前保存 val 原始 df 快照，用于逐日评估（保持真实收益单位）
@@ -758,9 +869,10 @@ def prepare_training_data(
             label_column=label_column,
         )
 
-    # 获取验证集的时间范围
-    val_start_date = split_stats["val_start_date"]
-    val_end_date = split_stats["val_end_date"]
+    # 获取用于 early stopping 的验证集时间范围（标签变换后可能进一步收缩）
+    val_es_dates = sorted(df_val_split["trade_date"].unique()) if len(df_val_split) > 0 else []
+    val_start_date = str(val_es_dates[0]) if val_es_dates else "N/A"
+    val_end_date = str(val_es_dates[-1]) if val_es_dates else "N/A"
 
     # 准备训练集 X 和 y
     X_train = df_train_split[feature_columns].copy()
@@ -780,6 +892,20 @@ def prepare_training_data(
         "samples_after_filter": samples_after_filter,
         "val_start_date": str(val_start_date),
         "val_end_date": str(val_end_date),
+        "val_raw_start_date": split_stats["val_start_date"],
+        "val_raw_end_date": split_stats["val_end_date"],
+        "val_raw_n_dates": split_stats["val_n_dates"],
+        "val_raw_samples": len(df_val_split_raw),
+        "val_es_start_date": str(val_start_date),
+        "val_es_end_date": str(val_end_date),
+        "val_es_n_dates": len(val_es_dates),
+        "val_es_samples": len(df_val_split),
+        "val_embargo_days": label_delta,
+        "val_embargo_days_applied": val_es_stats["val_embargo_days_applied"],
+        "val_embargo_n_dates": val_es_stats["val_embargo_n_dates"],
+        "val_embargo_samples": len(df_val_split_embargo),
+        "val_embargo_start_date": val_es_stats["val_embargo_start_date"],
+        "val_embargo_end_date": val_es_stats["val_embargo_end_date"],
         "feature_filter_info": feature_filter_info,
     }
 

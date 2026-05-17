@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import src.lazybull.ml.run_logger as run_logger_module
 
 from src.lazybull.ml.run_logger import (
     TrainingRunRecord,
@@ -267,6 +268,44 @@ def test_write_training_run_to_csv_column_expansion(temp_csv_dir):
     df = pd.read_csv(csv_path)
     assert len(df) == 3
     assert pd.isna(df.iloc[2]["new_field_1"])
+
+
+def test_write_training_run_to_csv_column_expansion_reads_full_csv_with_low_memory_false(
+    temp_csv_dir, monkeypatch
+):
+    """列扩展时整表回读应关闭 low_memory，避免混合类型列触发 DtypeWarning。"""
+    csv_path = Path(temp_csv_dir) / "test_runs.csv"
+
+    record1 = TrainingRunRecord(
+        timestamp="2024-01-01 10:00:00",
+        model_version=1,
+        task="regression",
+        n_estimators=200,
+    )
+    write_training_run_to_csv(record1, str(csv_path))
+
+    captured_kwargs = []
+    original_read_csv = run_logger_module.pd.read_csv
+
+    def _wrapped_read_csv(*args, **kwargs):
+        captured_kwargs.append(kwargs.copy())
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(run_logger_module.pd, "read_csv", _wrapped_read_csv)
+
+    record2 = TrainingRunRecord(
+        timestamp="2024-01-02 10:00:00",
+        model_version=2,
+        task="regression",
+        n_estimators=300,
+    )
+    record2.additional_metrics = {"mixed_column": "text-value"}
+    write_training_run_to_csv(record2, str(csv_path))
+
+    full_read_kwargs = [kwargs for kwargs in captured_kwargs if kwargs.get("nrows") is None]
+
+    assert full_read_kwargs, "列扩展路径应触发一次整表回读"
+    assert any(kwargs.get("low_memory") is False for kwargs in full_read_kwargs)
 
 
 def test_create_training_run_record_from_training_session(

@@ -7,6 +7,11 @@ from typing import Optional
 from loguru import logger
 
 
+def _should_emit_log(record: dict) -> bool:
+    """延迟输出模式下，先拦截日志，等待调用方统一回放。"""
+    return not bool(record.get("extra", {}).get("_defer_emit", False))
+
+
 def setup_logger(
     log_level: str = "INFO",
     log_file: Optional[str] = None,
@@ -41,7 +46,8 @@ def setup_logger(
         sys.stderr,
         format=format_string,
         level=log_level,
-        colorize=True
+        colorize=True,
+        filter=_should_emit_log,
     )
     
     # 添加文件输出
@@ -55,7 +61,8 @@ def setup_logger(
             level=log_level,
             rotation=rotation,
             retention=retention,
-            encoding="utf-8"
+            encoding="utf-8",
+            filter=_should_emit_log,
         )
     
     logger.info(f"日志系统初始化完成，级别: {log_level}")

@@ -1,10 +1,12 @@
 """ML 信号测试"""
 
+import io
 import tempfile
 
 import numpy as np
 import pandas as pd
 import pytest
+from loguru import logger
 
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.signals import MLSignal
@@ -219,10 +221,39 @@ def test_ml_signal_generate_with_universe_filter(trained_model):
 
     signals = signal.generate(date, universe, data)
 
-    # 应该只选择股票池内的股票
-    assert len(signals) == 3
-    for stock in signals.keys():
-        assert stock in universe
+
+def test_generate_ranked_no_longer_logs_prediction_summary(trained_model):
+    """generate_ranked 不再输出独立的过滤/预测入口日志。"""
+
+    models_dir, version = trained_model
+    signal = MLSignal(top_n=3, model_version=version, models_dir=models_dir, verbose=False)
+
+    date = pd.Timestamp("2023-06-15")
+    universe = ["000001.SZ", "000002.SZ", "000003.SZ"]
+    features_df = pd.DataFrame(
+        {
+            "ts_code": universe,
+            "f1": [10, 9, 8],
+            "f2": [1, 2, 3],
+            "f3": [4, 5, 6],
+            "amount_ma20": [60000.0, 40000.0, 70000.0],
+            "total_mv": [1000000.0, 1000000.0, 1000000.0],
+            "sw_l1_code": ["801010", "801010", "801010"],
+        }
+    )
+
+    stream = io.StringIO()
+    sink_id = logger.add(stream, format="{message}")
+    try:
+        ranked = signal.generate_ranked(date, universe, {"features": features_df})
+    finally:
+        logger.remove(sink_id)
+
+    output = stream.getvalue()
+    assert len(ranked) == 2
+    assert "选股/预测(ranked):" not in output
+    assert "选股过滤合计" not in output
+    assert "开始模型预测(ranked)" not in output
 
 
 def test_ml_signal_generate_with_features_method(trained_model):

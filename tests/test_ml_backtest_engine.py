@@ -443,6 +443,7 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
             price_data=mock_price_data,
             date_to_idx=date_to_idx,
         )
+        signal_day_output = stream.getvalue()
         engine._prepare_price_index(mock_price_data)
         engine.price_data_cache = mock_price_data
         engine._execute_pending_buys(
@@ -454,6 +455,7 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
         logger.remove(sink_id)
 
     output = stream.getvalue()
+    assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2" in signal_day_output
     assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2" in output
     assert "门控=40.0%[score=0.000, top_mean=1.0200, baseline=1.0200, std=0.3124, 档=0.000, 目标=40%]" in output
     assert "ECT=100.0%[未启用]" in output
@@ -463,6 +465,7 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
         "最终=20.0%[信号门控=40.0% x 质量=100.0% x ECT=100.0% x 市场层=50.0%, 进入待买队列]"
         in output
     )
+    assert output.count("调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2") == 1
 
 
 def test_ml_backtest_logs_blocked_rebalance_summary(

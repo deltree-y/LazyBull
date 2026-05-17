@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -36,21 +36,21 @@ $wf_period_configs = @(
         SplitCount = 13
         FinalDate = "20251231"
         ContinueDays = 1
-        StartModelVersion = 15071
+        StartModelVersion = 16365
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
         FinalDate = "20260209"
         ContinueDays = 1
-        StartModelVersion = 15097
+        StartModelVersion = 16378
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
         FinalDate = "20260324"
         ContinueDays = 1
-        StartModelVersion = 15125
+        StartModelVersion = 16392
     }
 )
 
@@ -158,7 +158,7 @@ $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 $bt_top_n_list           = @(20)            # 回测持仓 Top N
-$bt_rebalance_freq       = $null            # 调仓频率（$null 表示从标签自动推断）
+$bt_rebalance_freq       = 5#$null            # 调仓频率（$null 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除

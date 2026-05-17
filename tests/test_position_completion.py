@@ -1,7 +1,10 @@
 """测试仓位补齐机制"""
 
+import io
+
 import pandas as pd
 import pytest
+from loguru import logger
 
 from src.lazybull.backtest import BacktestEngine
 from src.lazybull.common.cost import CostModel
@@ -457,3 +460,134 @@ def test_completion_uses_prev_day_data():
     # 关键是验证有2只股票，且通过 D-1 日数据生成候选
     assert ('000002.SZ' in engine.positions) or ('000003.SZ' in engine.positions) or ('000004.SZ' in engine.positions), \
         "应该用候选股票补齐（基于 D-1 日数据生成的候选）"
+
+
+def test_completion_log_summarizes_success_when_cash_limited():
+    """补齐日志应压缩为单行摘要，实际成交由交易记录校验。"""
+
+    trading_dates = [pd.Timestamp('2023-01-02'), pd.Timestamp('2023-01-03')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+
+    price_data = pd.DataFrame(
+        [
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': '20230102',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '600569.SH',
+                'trade_date': '20230102',
+                'close': 2.17,
+                'close_adj': 2.17,
+                'open': 2.17,
+                'open_adj': 2.17,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': '20230103',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '600569.SH',
+                'trade_date': '20230103',
+                'close': 2.17,
+                'close_adj': 2.17,
+                'open': 2.17,
+                'open_adj': 2.17,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+        ]
+    )
+
+    stock_basic = pd.DataFrame(
+        {
+            'ts_code': ['000001.SZ', '600569.SH'],
+            'name': ['股票1', '股票2'],
+            'market': ['主板', '主板'],
+            'list_date': ['20200101', '20200101'],
+        }
+    )
+
+    universe = BasicUniverse(stock_basic=stock_basic, exclude_st=False, filter_suspended=False)
+    signal = MockRankedSignal(top_n=2)
+    engine = BacktestEngine(
+        universe=universe,
+        signal=signal,
+        initial_capital=100000.0,
+        cost_model=CostModel(commission_rate=0, min_commission=0, stamp_tax=0, slippage=0),
+        rebalance_freq=5,
+        holding_period=5,
+        enable_pending_order=False,
+        enable_position_completion=True,
+        completion_window_days=3,
+        verbose=True,
+    )
+    engine._prepare_price_index(price_data)
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 9970,
+            'buy_date': trading_dates[0],
+            'signal_date': trading_dates[0],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 99700.0,
+        }
+    }
+    engine.current_capital = 300.0
+    engine.unfilled_slots = {
+        trading_dates[0]: {
+            'unfilled_count': 1,
+            'unfilled_slot_weights': [{'stock': '002119.SZ', 'weight': 0.5}],
+            'target_n': 2,
+            'ranked_candidates': [('000001.SZ', 1.0), ('600569.SH', 0.9)],
+            'signal_date': trading_dates[0],
+            'first_attempt_date': trading_dates[0],
+            'attempts': 0,
+            'tranche_idx': 0,
+        }
+    }
+
+    stream = io.StringIO()
+    sink_id = logger.add(stream, format='{message}')
+    try:
+        engine._process_position_completion(
+            date=trading_dates[1],
+            trading_dates=trading_dates,
+            price_data=price_data,
+            date_to_idx=date_to_idx,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    output = stream.getvalue()
+    assert '补齐: 成功1[002119.SZ→600569.SH]' in output
+    assert '目标市值' not in output
+    assert '600569.SH' in engine.positions
+    assert engine.positions['600569.SH']['shares'] == 100
+

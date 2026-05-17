@@ -3,7 +3,7 @@
 import bisect
 import re
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -153,32 +153,26 @@ def _format_rebalance_decision_summary(
             quality_text = (
                 f"质量=hit_rate={quality_score:.2f}, 系数={_fmt_exposure(gate_quality_exposure)}"
             )
-        gate_line = (
-            f" | 门控={_fmt_exposure(gate_final_exposure)}"
+        gate_text = (
+            f"门控={_fmt_exposure(gate_final_exposure)}"
             f"[{gate_summary_text}"
             f" | {quality_text}]"
         )
     else:
-        gate_line = (
-            f" | 门控={_fmt_exposure(gate_final_exposure)}"
+        gate_text = (
+            f"门控={_fmt_exposure(gate_final_exposure)}"
             f"[{gate_summary_text}]"
         )
 
     return (
-        f"\n"
-        f"  {header} | 执行={execution_text} | 候选={candidate_text} | {topn_text}"
-        f"\n"
-        f"{gate_line}"
-        f"\n"
+        f"{header} | 执行={execution_text} | 候选={candidate_text} | {topn_text}"
+        f" | {gate_text}"
         f" | ECT={_fmt_exposure(ect_exposure)}"
         f"[{_compact_summary(ect.get('summary', '未启用'))}]"
-        f"\n"
         f" | MA250/ATR={_fmt_exposure(ma250_exposure)}"
         f"[{_compact_summary(ma250.get('summary', '未启用'))}]"
-        f"\n"
         f" | 市场={_fmt_exposure(market_regime_exposure)}"
         f"[{_compact_summary(market_regime.get('summary', '未启用'))}]"
-        f"\n"
         f" | 最终={_fmt_exposure(final_target_exposure)}[{final_detail}]"
     )
 
@@ -493,7 +487,9 @@ class BacktestEngine:
         self.pending_order_manager = None
         if enable_pending_order:
             self.pending_order_manager = PendingOrderManager(
-                max_retry_count=max_retry_count, max_retry_days=max_retry_days
+                max_retry_count=max_retry_count,
+                max_retry_days=max_retry_days,
+                event_sink=self._record_pending_order_event,
             )
 
         # 仓位补齐参数
@@ -545,6 +541,8 @@ class BacktestEngine:
             "total_abandoned": 0,  # 累计放弃补齐次数
             "completion_attempts": 0,  # 累计补齐尝试次数
         }
+        self._deferred_day_logs: List[Dict[str, str]] = []
+        self._daily_warning_items: Dict[str, List[Dict]] = {}
         self.confidence_gate_history: List[Dict] = []  # 信号置信度门控历史
 
         # ── 滚动模型质量监控 ──
@@ -672,196 +670,224 @@ class BacktestEngine:
 
         # 记录开始时间
         start_time = time.time()
-
-        # 按日推进
-        # _cycle_anchor_idx 是当前调仓周期的"第1天"在 trading_dates 中的 idx
-        # 初始为 0（第一天即第1轮的第1天）；每次信号成功入队列时重置为信号日 idx
-        # 这样门控连续阻断的空仓期不会推进 cycle_day
-        self._cycle_anchor_idx = 0
-        cycle_separator = (
-            "\n================================================ 新一轮回测 ================================================="
+        deferred_sink_id = logger.add(
+            self._collect_deferred_log,
+            format="{message}",
+            level="DEBUG",
+            colorize=False,
+            filter=lambda record: record["extra"].get("_defer_emit", False),
         )
-        for idx, date in enumerate(trading_dates):
-            # 新一轮首日：输出分隔线（在所有业务日志之前）
-            if idx == self._cycle_anchor_idx:
-                logger.info(cycle_separator)
-            cycle_day = idx - self._cycle_anchor_idx + 1
 
-            # 处理延迟订单（先处理延迟订单，再处理新信号）
-            if self.enable_pending_order:
-                self._process_pending_orders(date)
-
-            # 检查止损（T 日检查，T+1 日执行卖出）
-            if self.stop_loss_monitor:
-                self._check_stop_loss(date, trading_dates, date_to_idx)
-
-            # 判断是否为信号生成日
-            if date in signal_dates:
-                tranche_idx = signal_dates[date]
-                self._generate_signal(
-                    date,
-                    trading_dates,
-                    price_data,
-                    date_to_idx,
-                    tranche_idx=tranche_idx,
-                )
-                # 信号成功入队列 → 本日即为新周期第1天，更新 anchor 并输出分隔线
-                if date in self.pending_signals and idx != self._cycle_anchor_idx:
-                    self._cycle_anchor_idx = idx
-                    cycle_day = 1
-                    logger.info(cycle_separator)
-
-            # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
-            # 执行止损卖出（Tn+1 执行）
-            if self.stop_loss_monitor:
-                self._execute_pending_stop_loss_sells(date, trading_dates, date_to_idx)
-
-            # 执行条件卖出（Tn+1 执行：亏损提前换出、整体止盈）
-            self._execute_pending_condition_sells(date, trading_dates, date_to_idx)
-
-            # 检查卖出条件 + 执行持有期到期卖出
-            # - 持有期到期 / 盈利延续到期：预定事件，Tn 直接卖出
-            # - 亏损提前换出 / 整体止盈：写入 pending_condition_sells，Tn+1 执行
-            self._check_and_sell(date, trading_dates, date_to_idx)
-
-            # 执行待执行的买入操作（Tn+1）
-            self._execute_pending_buys(date, trading_dates, date_to_idx)
-
-            # 空仓提前调仓 / 盈利延续拖尾提前调仓：
-            # 场景 A（空仓）：持仓全部卖出，资金闲置 → 立即触发新一轮信号
-            # 场景 B（盈利延续拖尾）：cycle_day >= holding_period 但仍有残留持仓（通常为盈利延续）
-            #   → 若"残留持仓占比 + 新信号目标仓位 ≤ 100%"，则提前启动新一轮；否则继续等待
-            early_rebalance_guards_ok = (
-                self.enable_early_rebalance_on_empty
-                and not self.pending_signals
-                and not any(
-                    slot_info.get("unfilled_count", 0) > 0
-                    for slot_info in self.unfilled_slots.values()
-                )
-                and date not in signal_dates
+        try:
+            # 按日推进
+            # _cycle_anchor_idx 是当前调仓周期的"第1天"在 trading_dates 中的 idx
+            # 初始为 0（第一天即第1轮的第1天）；每次信号成功入队列时重置为信号日 idx
+            # 这样门控连续阻断的空仓期不会推进 cycle_day
+            self._cycle_anchor_idx = 0
+            cycle_separator = (
+                "\n================================================ 新一轮回测 ================================================="
             )
+            for idx, date in enumerate(trading_dates):
+                # 新一轮首日：输出分隔线（在所有业务日志之前）
+                if idx == self._cycle_anchor_idx:
+                    self._emit_immediate_log("INFO", cycle_separator)
+                cycle_day = idx - self._cycle_anchor_idx + 1
+                trade_start_idx = len(self.trades)
+                self._deferred_day_logs = []
+                self._reset_daily_warning_items()
 
-            is_empty_position = not self.positions
-            is_holding_period_exceeded = (
-                bool(self.positions) and cycle_day >= self.holding_period
-            )
+                with logger.contextualize(_defer_emit=True):
+                    # 处理延迟订单（先处理延迟订单，再处理新信号）
+                    if self.enable_pending_order:
+                        self._process_pending_orders(date)
 
-            if early_rebalance_guards_ok and (is_empty_position or is_holding_period_exceeded):
-                if is_empty_position:
-                    logger.warning(
-                        f"  空仓提前调仓触发: {date.date()}, "
-                        f"仓位为空且无待执行信号，提前生成新一轮信号（T+1执行买入）"
-                    )
-                else:
-                    # 盈利延续拖尾场景：打印当前残留持仓占比
-                    current_nav = self._calculate_portfolio_value(date)
-                    residual_market_value = current_nav - self.current_capital
-                    residual_ratio = (
-                        residual_market_value / current_nav if current_nav > 0 else 0.0
-                    )
-                    logger.warning(
-                        f"  持有期拖尾提前调仓评估: {date.date()}, "
-                        f"cycle_day={cycle_day}>={self.holding_period}, "
-                        f"残留持仓 {len(self.positions)} 只, "
-                        f"占比={residual_ratio:.2%}，尝试生成新一轮信号"
-                    )
+                    # 检查止损（T 日检查，T+1 日执行卖出）
+                    if self.stop_loss_monitor:
+                        self._check_stop_loss(date, trading_dates, date_to_idx)
 
-                # 快照历史状态：提前调仓若未真正入队列则回滚，避免污染门控/质量计算基准
-                # 仅快照评估过程会追加的字段，保证启用/禁用该开关对正常调仓日的门控计算完全一致
-                gate_history_snapshot = self._snapshot_early_rebalance_state(date)
-
-                self._generate_signal(
-                    date,
-                    trading_dates,
-                    price_data,
-                    date_to_idx,
-                    tranche_idx=0,
-                )
-
-                # 盈利延续拖尾场景：需额外校验 "残留仓位 + 新信号仓位 ≤ 100%"
-                # 若不满足，撤回本次信号，继续等待残留持仓到期
-                signal_accepted = date in self.pending_signals
-                if signal_accepted and is_holding_period_exceeded:
-                    current_nav = self._calculate_portfolio_value(date)
-                    residual_market_value = current_nav - self.current_capital
-                    residual_ratio = (
-                        residual_market_value / current_nav if current_nav > 0 else 0.0
-                    )
-                    new_signal_weight_sum = sum(
-                        self.pending_signals[date].get("signals", {}).values()
-                    )
-                    combined_ratio = residual_ratio + new_signal_weight_sum
-                    if combined_ratio > 1.0 + 1e-9:
-                        # 超过上限，撤回信号
-                        del self.pending_signals[date]
-                        signal_accepted = False
-                        logger.warning(
-                            f"  持有期拖尾提前调仓拒绝: {date.date()}, "
-                            f"残留仓位 {residual_ratio:.2%} + 新信号仓位 "
-                            f"{new_signal_weight_sum:.2%} = {combined_ratio:.2%} > 100%，"
-                            f"本次不入队列，继续等待残留持仓到期"
+                    # 判断是否为信号生成日
+                    if date in signal_dates:
+                        tranche_idx = signal_dates[date]
+                        self._generate_signal(
+                            date,
+                            trading_dates,
+                            price_data,
+                            date_to_idx,
+                            tranche_idx=tranche_idx,
                         )
-                    else:
-                        logger.info(
-                            f"  持有期拖尾提前调仓通过: {date.date()}, "
-                            f"残留仓位 {residual_ratio:.2%} + 新信号仓位 "
-                            f"{new_signal_weight_sum:.2%} = {combined_ratio:.2%} ≤ 100%，"
-                            f"信号进入待买队列（T+1执行买入）"
+                        # 信号成功入队列 → 本日即为新周期第1天，更新 anchor 并输出分隔线
+                        if date in self.pending_signals and idx != self._cycle_anchor_idx:
+                            self._cycle_anchor_idx = idx
+                            cycle_day = 1
+                            self._emit_immediate_log("INFO", cycle_separator)
+
+                    # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
+                    # 执行止损卖出（Tn+1 执行）
+                    if self.stop_loss_monitor:
+                        self._execute_pending_stop_loss_sells(date, trading_dates, date_to_idx)
+
+                    # 执行条件卖出（Tn+1 执行：亏损提前换出、整体止盈）
+                    self._execute_pending_condition_sells(date, trading_dates, date_to_idx)
+
+                    # 检查卖出条件 + 执行持有期到期卖出
+                    # - 持有期到期 / 盈利延续到期：预定事件，Tn 直接卖出
+                    # - 亏损提前换出 / 整体止盈：写入 pending_condition_sells，Tn+1 执行
+                    self._check_and_sell(date, trading_dates, date_to_idx)
+
+                    # 执行待执行的买入操作（Tn+1）
+                    self._execute_pending_buys(date, trading_dates, date_to_idx)
+
+                    # 空仓提前调仓 / 盈利延续拖尾提前调仓：
+                    # 场景 A（空仓）：持仓全部卖出，资金闲置 → 立即触发新一轮信号
+                    # 场景 B（盈利延续拖尾）：cycle_day >= holding_period 但仍有残留持仓（通常为盈利延续）
+                    #   → 若"残留持仓占比 + 新信号目标仓位 ≤ 100%"，则提前启动新一轮；否则继续等待
+                    early_rebalance_guards_ok = (
+                        self.enable_early_rebalance_on_empty
+                        and not self.pending_signals
+                        and not any(
+                            slot_info.get("unfilled_count", 0) > 0
+                            for slot_info in self.unfilled_slots.values()
+                        )
+                        and date not in signal_dates
+                    )
+
+                    is_empty_position = not self.positions
+                    is_holding_period_exceeded = (
+                        bool(self.positions) and cycle_day >= self.holding_period
+                    )
+
+                    if early_rebalance_guards_ok and (is_empty_position or is_holding_period_exceeded):
+                        if not is_empty_position:
+                            # 盈利延续拖尾场景：打印当前残留持仓占比
+                            current_nav = self._calculate_portfolio_value(date)
+                            residual_market_value = current_nav - self.current_capital
+                            residual_ratio = (
+                                residual_market_value / current_nav if current_nav > 0 else 0.0
+                            )
+                        else:
+                            residual_ratio = 0.0
+
+                        # 快照历史状态：提前调仓若未真正入队列则回滚，避免污染门控/质量计算基准
+                        # 仅快照评估过程会追加的字段，保证启用/禁用该开关对正常调仓日的门控计算完全一致
+                        gate_history_snapshot = self._snapshot_early_rebalance_state(date)
+
+                        self._generate_signal(
+                            date,
+                            trading_dates,
+                            price_data,
+                            date_to_idx,
+                            tranche_idx=0,
                         )
 
-                # 信号未真正入队列（门控阻断或拖尾拒绝）→ 回滚历史快照，避免污染基准
-                if not signal_accepted:
-                    self._restore_early_rebalance_state(date, gate_history_snapshot)
+                        # 盈利延续拖尾场景：需额外校验 "残留仓位 + 新信号仓位 ≤ 100%"
+                        # 若不满足，撤回本次信号，继续等待残留持仓到期
+                        signal_accepted = date in self.pending_signals
+                        if signal_accepted and is_holding_period_exceeded:
+                            current_nav = self._calculate_portfolio_value(date)
+                            residual_market_value = current_nav - self.current_capital
+                            residual_ratio = (
+                                residual_market_value / current_nav if current_nav > 0 else 0.0
+                            )
+                            new_signal_weight_sum = sum(
+                                self.pending_signals[date].get("signals", {}).values()
+                            )
+                            combined_ratio = residual_ratio + new_signal_weight_sum
+                            if combined_ratio > 1.0 + 1e-9:
+                                # 超过上限，撤回信号
+                                del self.pending_signals[date]
+                                signal_accepted = False
+                                self._record_early_rebalance_summary(
+                                    "拖尾拒绝",
+                                    f"残留{residual_ratio:.1%}+新信号{new_signal_weight_sum:.1%}"
+                                    f"={combined_ratio:.1%}>100%",
+                                )
+                            else:
+                                self._record_early_rebalance_summary(
+                                    "拖尾通过",
+                                    f"残留{residual_ratio:.1%}+新信号{new_signal_weight_sum:.1%}"
+                                    f"={combined_ratio:.1%}",
+                                )
 
-                # 信号真正入队列后，才更新节奏并清理预定调仓日
-                if signal_accepted:
-                    # 清除接下来一个持有期内的原预定调仓日，避免"刚买完又调仓"
-                    next_rebalance_cutoff_idx = idx + self.holding_period
-                    stale_dates = [
-                        d
-                        for d in list(signal_dates.keys())
-                        if idx < date_to_idx.get(d, -1) <= next_rebalance_cutoff_idx
-                    ]
-                    for d in stale_dates:
-                        del signal_dates[d]
-                    if stale_dates:
-                        logger.info(
-                            f"  已清除未来 {len(stale_dates)} 个预定调仓日（至 {stale_dates[-1].date()}），"
-                            f"避免重复调仓"
-                        )
-                    # 信号成功入队列 → 本日即为新周期第1天，更新 anchor 并输出分隔线
-                    if idx != self._cycle_anchor_idx:
-                        self._cycle_anchor_idx = idx
-                        cycle_day = 1
-                        logger.info(cycle_separator)
+                        # 信号未真正入队列（门控阻断或拖尾拒绝）→ 回滚历史快照，避免污染基准
+                        if not signal_accepted:
+                            self._restore_early_rebalance_state(date, gate_history_snapshot)
+                            if is_empty_position:
+                                self._record_early_rebalance_summary(
+                                    "空仓未入队",
+                                    "无持仓, 新信号未入队",
+                                )
 
-            # 处理仓位补齐（在补齐窗口期内尝试补齐未满仓位）
-            if self.enable_position_completion:
-                self._process_position_completion(date, trading_dates, price_data, date_to_idx)
+                        # 信号真正入队列后，才更新节奏并清理预定调仓日
+                        if signal_accepted:
+                            if is_empty_position:
+                                self._record_early_rebalance_summary(
+                                    "空仓触发",
+                                    "无持仓, 新信号入队",
+                                )
+                            # 清除接下来一个持有期内的原预定调仓日，避免"刚买完又调仓"
+                            next_rebalance_cutoff_idx = idx + self.holding_period
+                            stale_dates = [
+                                d
+                                for d in list(signal_dates.keys())
+                                if idx < date_to_idx.get(d, -1) <= next_rebalance_cutoff_idx
+                            ]
+                            for d in stale_dates:
+                                del signal_dates[d]
+                            if stale_dates:
+                                logger.info(
+                                    f"  已清除未来 {len(stale_dates)} 个预定调仓日（至 {stale_dates[-1].date()}），"
+                                    f"避免重复调仓"
+                                )
+                            # 信号成功入队列 → 本日即为新周期第1天，更新 anchor 并输出分隔线
+                            if idx != self._cycle_anchor_idx:
+                                self._cycle_anchor_idx = idx
+                                cycle_day = 1
+                                self._emit_immediate_log("INFO", cycle_separator)
 
-            # 计算当日组合价值
-            portfolio_value = self._calculate_portfolio_value(date)
+                    # 处理仓位补齐（在补齐窗口期内尝试补齐未满仓位）
+                    if self.enable_position_completion:
+                        self._process_position_completion(date, trading_dates, price_data, date_to_idx)
 
-            # 输出回测进度（含持仓和收益信息）
-            trading_days = idx + 1
-            logger.info(
-                self._format_daily_progress_log(
+                    # 计算当日组合价值
+                    portfolio_value = self._calculate_portfolio_value(date)
+
+                trading_days = idx + 1
+                buy_count, sell_count, trade_detail_logs = self._build_daily_trade_log(
                     date=date,
-                    trading_days=trading_days,
-                    total_days=total_days,
-                    cycle_day=cycle_day,
-                    portfolio_value=portfolio_value,
+                    trade_start_idx=trade_start_idx,
+                    date_to_idx=date_to_idx,
                 )
-            )
+                self._emit_daily_summary_log(
+                    self._format_daily_progress_log(
+                        date=date,
+                        trading_days=trading_days,
+                        total_days=total_days,
+                        cycle_day=cycle_day,
+                        portfolio_value=portfolio_value,
+                        buy_count=buy_count,
+                        sell_count=sell_count,
+                    )
+                )
+                self._flush_deferred_day_logs(
+                    predicate=lambda record: "调仓决策摘要:" in str(record.get("message", ""))
+                )
+                for trade_detail_log in trade_detail_logs:
+                    self._emit_immediate_log("INFO", f"  {trade_detail_log}")
+                for warning_log in self._build_daily_warning_logs():
+                    self._emit_immediate_log("INFO", f"  {warning_log}")
+                self._flush_deferred_day_logs()
 
-            self.portfolio_values.append(
-                {
-                    "date": date,
-                    "portfolio_value": portfolio_value,
-                    "capital": self.current_capital,
-                    "market_value": portfolio_value - self.current_capital,
-                }
-            )
+                self.portfolio_values.append(
+                    {
+                        "date": date,
+                        "portfolio_value": portfolio_value,
+                        "capital": self.current_capital,
+                        "market_value": portfolio_value - self.current_capital,
+                    }
+                )
+        finally:
+            logger.remove(deferred_sink_id)
+            self._deferred_day_logs = []
 
         # 生成净值曲线
         nav_df = self._generate_nav_curve()
@@ -899,6 +925,508 @@ class BacktestEngine:
             return target_n * self.stagger_tranches
         return len(self.positions)
 
+    def _collect_deferred_log(self, message) -> None:
+        """收集单个交易日内暂缓输出的日志。"""
+        record = message.record
+        self._deferred_day_logs.append(
+            {
+                "level": record["level"].name,
+                "message": record["message"],
+            }
+        )
+
+    def _emit_immediate_log(self, level: str, message: str, colors: bool = False) -> None:
+        """绕过单日缓冲，立即输出日志。"""
+        bound_logger = logger.bind(_defer_emit=False)
+        if colors:
+            bound_logger.opt(colors=True).log(level.upper(), message)
+            return
+        bound_logger.log(level.upper(), message)
+
+    def _emit_daily_summary_log(self, message: str) -> None:
+        """输出每日顶格彩色总结行。"""
+        self._emit_immediate_log(
+            "INFO",
+            f"<bold><cyan>{message}</cyan></bold>",
+            colors=True,
+        )
+
+    def _normalize_deferred_log_message(self, message: str) -> Optional[str]:
+        """将缓冲日志统一整理为两空格缩进格式。"""
+        lines = [line.rstrip() for line in str(message).splitlines() if line.strip()]
+        if not lines:
+            return None
+        return "\n".join(f"  {line.lstrip()}" for line in lines)
+
+    def _flush_deferred_day_logs(
+        self,
+        predicate: Optional[Callable[[Dict[str, str]], bool]] = None,
+    ) -> None:
+        """在每日总结之后统一回放明细日志。"""
+        remaining_logs: List[Dict[str, str]] = []
+        for record in self._deferred_day_logs:
+            if predicate is not None and not predicate(record):
+                remaining_logs.append(record)
+                continue
+            normalized = self._normalize_deferred_log_message(record["message"])
+            if normalized:
+                self._emit_immediate_log(record["level"], normalized)
+        self._deferred_day_logs = remaining_logs if predicate is not None else []
+
+    @staticmethod
+    def _format_compact_items(items: List[str], limit: int = 4) -> str:
+        """压缩同类股票列表，避免单行过长。"""
+        if not items:
+            return "-"
+        visible = items[:limit]
+        suffix = f", ...+{len(items) - limit}" if len(items) > limit else ""
+        return ", ".join(visible) + suffix
+
+    def _build_daily_trade_log(
+        self,
+        date: pd.Timestamp,
+        trade_start_idx: int,
+        date_to_idx: Dict,
+    ) -> Tuple[int, int, List[str]]:
+        """构建当日实际成交摘要。"""
+        day_trades = [
+            trade for trade in self.trades[trade_start_idx:] if trade.get("date") == date
+        ]
+        if not day_trades:
+            return 0, 0, []
+
+        buy_items: List[str] = []
+        sell_items: List[str] = []
+        current_idx = date_to_idx.get(date)
+
+        for trade in day_trades:
+            stock = str(trade.get("stock", "-"))
+            action = trade.get("action")
+            if action == "buy":
+                buy_items.append(f"{stock}(0d,+0.0%)")
+                continue
+
+            if action != "sell":
+                continue
+
+            buy_date = trade.get("buy_date")
+            holding_days = 0
+            if isinstance(buy_date, pd.Timestamp) and current_idx is not None:
+                buy_idx = date_to_idx.get(buy_date)
+                if buy_idx is not None:
+                    holding_days = max(current_idx - buy_idx, 0)
+
+            profit_pct = float(trade.get("pnl_profit_pct", 0.0) or 0.0)
+            sell_items.append(f"{stock}({holding_days}d,{profit_pct:+.1%})")
+
+        if not buy_items and not sell_items:
+            return 0, 0, []
+
+        lines = []
+        if buy_items:
+            lines.append(f"交易: 买{len(buy_items)}[{self._format_compact_items(buy_items)}]")
+        if sell_items:
+            lines.append(f"交易: 卖{len(sell_items)}[{self._format_compact_items(sell_items)}]")
+
+        return len(buy_items), len(sell_items), lines
+
+    def _format_profit_extension_summary(self, items: List[Dict]) -> str:
+        """压缩盈利延续持有日志。"""
+        details = []
+        for item in items:
+            score = item.get("score")
+            score_suffix = f",{score:.2f}" if score is not None else ""
+            details.append(
+                f"{item['stock']}({item['holding_days']}d,{item['profit_rate']:+.1%}{score_suffix})"
+            )
+        return (
+            f"盈利延续[{self.profit_extension_mode}] {len(items)}只: "
+            f"{self._format_compact_items(details, limit=6)}"
+        )
+
+    def _format_completion_summary(
+        self,
+        success_items: List[Dict],
+        delayed_slots: List[str],
+        remaining_count: int,
+    ) -> str:
+        """压缩仓位补齐日志。"""
+        parts = []
+        if success_items:
+            success_labels = []
+            for item in success_items:
+                slot = item["slot"]
+                buy = item["buy"]
+                success_labels.append(buy if slot == buy else f"{slot}→{buy}")
+            parts.append(
+                f"成功{len(success_items)}[{self._format_compact_items(success_labels)}]"
+            )
+        if delayed_slots:
+            parts.append(f"延迟{len(delayed_slots)}[{self._format_compact_items(delayed_slots)}]")
+        if remaining_count > 0:
+            parts.append(f"待补{remaining_count}")
+        return f"补齐: {' | '.join(parts)}"
+
+    def _reset_daily_warning_items(self) -> None:
+        """重置当日需汇总展示的压缩事件。"""
+        self._daily_warning_items = {
+            "early_rebalance": [],
+            "duplicate_buy": [],
+            "position_unfilled": [],
+            "completion_skipped": [],
+            "completion_abandoned": [],
+            "early_exit_trigger": [],
+            "pending_order_added": [],
+            "pending_order_success": [],
+            "pending_order_expired": [],
+            "take_profit": [],
+            "time_stop_loss_trigger": [],
+            "time_stop_loss_veto": [],
+        }
+
+    def _record_pending_order_event(self, event: Dict) -> None:
+        """记录延迟订单事件，日终统一压缩显示。"""
+        event_type = str(event.get("type", "")).lower()
+        if event_type == "added":
+            self._daily_warning_items.setdefault("pending_order_added", []).append(
+                {
+                    "stock": str(event.get("stock", "-")),
+                    "action": str(event.get("action", "-")),
+                    "reason": str(event.get("reason") or "-"),
+                }
+            )
+            return
+
+        if event_type == "success":
+            self._daily_warning_items.setdefault("pending_order_success", []).append(
+                {
+                    "stock": str(event.get("stock", "-")),
+                    "action": str(event.get("action", "-")),
+                    "retry_count": int(event.get("retry_count", 0) or 0),
+                    "delay_days": int(event.get("delay_days", 0) or 0),
+                }
+            )
+            return
+
+        if event_type in {"expired_retry", "expired_days"}:
+            self._daily_warning_items.setdefault("pending_order_expired", []).append(
+                {
+                    "stock": str(event.get("stock", "-")),
+                    "action": str(event.get("action", "-")),
+                    "expire_type": event_type,
+                    "retry_count": int(event.get("retry_count", 0) or 0),
+                    "max_retry_count": int(event.get("max_retry_count", 0) or 0),
+                    "delay_days": int(event.get("delay_days", 0) or 0),
+                    "max_retry_days": int(event.get("max_retry_days", 0) or 0),
+                }
+            )
+
+    def _record_completion_skip(self, label: str, detail: str) -> None:
+        """记录补齐跳过原因，日终统一压缩显示。"""
+        self._daily_warning_items.setdefault("completion_skipped", []).append(
+            {"label": label, "detail": detail}
+        )
+
+    @staticmethod
+    def _format_pending_order_group(
+        items: List[Dict],
+        action_label: str,
+        item_formatter,
+        count_prefix: str = "",
+    ) -> str:
+        """格式化延迟订单分组摘要。"""
+        labels = [item_formatter(item) for item in items]
+        prefix = f"{count_prefix}{action_label}{len(items)}"
+        return f"{prefix}[{BacktestEngine._format_compact_items(labels, limit=6)}]"
+
+    def _record_duplicate_buy_skip(self, stock: str, buy_date: pd.Timestamp) -> None:
+        """记录重复买入跳过，日终统一压缩显示。"""
+        self._daily_warning_items.setdefault("duplicate_buy", []).append(
+            {"stock": stock, "buy_date": buy_date}
+        )
+
+    def _record_position_unfilled_summary(
+        self,
+        tranche_tag: str,
+        target_n: int,
+        actually_bought: int,
+        unfilled_count: int,
+        unfilled_stocks: List[str],
+    ) -> None:
+        """记录仓位未满摘要。"""
+        self._daily_warning_items.setdefault("position_unfilled", []).append(
+            {
+                "tranche_tag": tranche_tag.strip(),
+                "target_n": int(target_n),
+                "actually_bought": int(actually_bought),
+                "unfilled_count": int(unfilled_count),
+                "unfilled_stocks": list(unfilled_stocks),
+            }
+        )
+
+    def _record_completion_abandoned_summary(
+        self,
+        tranche_tag: str,
+        original_signal_date: pd.Timestamp,
+        attempts: int,
+        unfilled_stocks: List[str],
+    ) -> None:
+        """记录补齐放弃摘要。"""
+        self._daily_warning_items.setdefault("completion_abandoned", []).append(
+            {
+                "tranche_tag": tranche_tag.strip(),
+                "original_signal_date": original_signal_date,
+                "attempts": int(attempts),
+                "unfilled_stocks": list(unfilled_stocks),
+            }
+        )
+
+    def _record_early_exit_trigger(
+        self, stock: str, holding_days: int, profit_rate: float
+    ) -> None:
+        """记录亏损提前换出触发。"""
+        self._daily_warning_items.setdefault("early_exit_trigger", []).append(
+            {
+                "stock": stock,
+                "holding_days": int(holding_days),
+                "profit_rate": float(profit_rate),
+            }
+        )
+
+    def _record_early_rebalance_summary(self, label: str, detail: str) -> None:
+        """记录提前调仓相关事件，日终统一汇总。"""
+        self._daily_warning_items.setdefault("early_rebalance", []).append(
+            {"label": label, "detail": detail}
+        )
+
+    def _record_take_profit_summary(
+        self, profit_rate: float, threshold: float, n_positions: int
+    ) -> None:
+        """记录整体止盈触发，日终统一汇总。"""
+        self._daily_warning_items.setdefault("take_profit", []).append(
+            {
+                "profit_rate": float(profit_rate),
+                "threshold": float(threshold),
+                "n_positions": int(n_positions),
+            }
+        )
+
+    def _record_time_stop_loss_trigger(
+        self, stock: str, holding_days: int, profit_rate: float
+    ) -> None:
+        """记录时间止损触发。"""
+        self._daily_warning_items.setdefault("time_stop_loss_trigger", []).append(
+            {
+                "stock": stock,
+                "holding_days": int(holding_days),
+                "profit_rate": float(profit_rate),
+            }
+        )
+
+    def _record_time_stop_loss_veto(
+        self, stock: str, holding_days: int, profit_rate: float, score: float
+    ) -> None:
+        """记录时间止损被强势度否决。"""
+        self._daily_warning_items.setdefault("time_stop_loss_veto", []).append(
+            {
+                "stock": stock,
+                "holding_days": int(holding_days),
+                "profit_rate": float(profit_rate),
+                "score": float(score),
+            }
+        )
+
+    def _build_daily_warning_logs(self) -> List[str]:
+        """构建需在每日总结下展示的日级压缩摘要。"""
+        lines: List[str] = []
+
+        early_items = self._daily_warning_items.get("early_rebalance", [])
+        if early_items:
+            labels = [f"{item['label']}[{item['detail']}]" for item in early_items]
+            lines.append(f"提前调仓: {self._format_compact_items(labels)}")
+
+        duplicate_buy_items = self._daily_warning_items.get("duplicate_buy", [])
+        if duplicate_buy_items:
+            labels = [
+                f"{item['stock']}({item['buy_date'].date()})"
+                for item in duplicate_buy_items
+            ]
+            lines.append(
+                f"重复买入跳过: {len(duplicate_buy_items)}只"
+                f"[{self._format_compact_items(labels, limit=6)}]"
+            )
+
+        position_unfilled_items = self._daily_warning_items.get("position_unfilled", [])
+        if position_unfilled_items:
+            labels = []
+            for item in position_unfilled_items:
+                prefix = f"{item['tranche_tag']} " if item["tranche_tag"] else ""
+                labels.append(
+                    f"{prefix}目标{item['target_n']}/实买{item['actually_bought']}/待补"
+                    f"{item['unfilled_count']}[{self._format_compact_items(item['unfilled_stocks'], limit=6)}]"
+                    f"/{self.completion_window_days}天"
+                )
+            lines.append(f"仓位未满: {self._format_compact_items(labels, limit=3)}")
+
+        completion_skipped_items = self._daily_warning_items.get("completion_skipped", [])
+        if completion_skipped_items:
+            groups = []
+            ordered_labels = [
+                "当日无行情",
+                "前日无行情",
+                "无数据",
+                "无候选",
+                "候选已持仓",
+                "候选不可交易",
+            ]
+            for label in ordered_labels:
+                matched = [
+                    item for item in completion_skipped_items if item.get("label") == label
+                ]
+                if not matched:
+                    continue
+                details = [item["detail"] for item in matched]
+                if label == "当日无行情":
+                    groups.append(f"{label}{len(matched)}")
+                else:
+                    groups.append(
+                        f"{label}{len(matched)}[{self._format_compact_items(details, limit=6)}]"
+                    )
+            if groups:
+                lines.append(f"补齐跳过: {' | '.join(groups)}")
+
+        completion_abandoned_items = self._daily_warning_items.get("completion_abandoned", [])
+        if completion_abandoned_items:
+            labels = []
+            for item in completion_abandoned_items:
+                prefix = f"{item['tranche_tag']} " if item["tranche_tag"] else ""
+                labels.append(
+                    f"{prefix}信号日{item['original_signal_date'].date()}/尝试{item['attempts']}次/"
+                    f"剩{len(item['unfilled_stocks'])}[{self._format_compact_items(item['unfilled_stocks'], limit=6)}]"
+                )
+            lines.append(f"补齐放弃: {self._format_compact_items(labels, limit=3)}")
+
+        early_exit_items = self._daily_warning_items.get("early_exit_trigger", [])
+        if early_exit_items:
+            labels = [
+                f"{item['stock']}({item['holding_days']}d,{item['profit_rate']:+.1%})"
+                for item in early_exit_items
+            ]
+            lines.append(
+                f"亏损换出: 触发{len(early_exit_items)}"
+                f"[{self._format_compact_items(labels, limit=6)}]"
+            )
+
+        pending_order_added_items = self._daily_warning_items.get("pending_order_added", [])
+        if pending_order_added_items:
+            groups = []
+            for action in ("buy", "sell"):
+                action_items = [
+                    item for item in pending_order_added_items if item.get("action") == action
+                ]
+                if not action_items:
+                    continue
+                groups.append(
+                    self._format_pending_order_group(
+                        action_items,
+                        action_label="买" if action == "buy" else "卖",
+                        count_prefix="新增",
+                        item_formatter=lambda item: f"{item['stock']}({item['reason']})",
+                    )
+                )
+            if groups:
+                lines.append(f"延迟订单: {' | '.join(groups)}")
+
+        pending_order_success_items = self._daily_warning_items.get("pending_order_success", [])
+        if pending_order_success_items:
+            groups = []
+            for action in ("buy", "sell"):
+                action_items = [
+                    item for item in pending_order_success_items if item.get("action") == action
+                ]
+                if not action_items:
+                    continue
+                groups.append(
+                    self._format_pending_order_group(
+                        action_items,
+                        action_label="买" if action == "buy" else "卖",
+                        count_prefix="成功",
+                        item_formatter=lambda item: (
+                            f"{item['stock']}(重{item['retry_count']},延{item['delay_days']}d)"
+                        ),
+                    )
+                )
+            if groups:
+                lines.append(f"延迟订单成交: {' | '.join(groups)}")
+
+        pending_order_expired_items = self._daily_warning_items.get("pending_order_expired", [])
+        if pending_order_expired_items:
+            groups = []
+            for expire_type, label in (
+                ("expired_retry", "超次"),
+                ("expired_days", "超期"),
+            ):
+                for action in ("buy", "sell"):
+                    action_items = [
+                        item
+                        for item in pending_order_expired_items
+                        if item.get("expire_type") == expire_type and item.get("action") == action
+                    ]
+                    if not action_items:
+                        continue
+                    groups.append(
+                        self._format_pending_order_group(
+                            action_items,
+                            action_label=("买" if action == "buy" else "卖"),
+                            count_prefix=label,
+                            item_formatter=lambda item: (
+                                f"{item['stock']}(重{item['retry_count']}>{item['max_retry_count']})"
+                                if item.get("expire_type") == "expired_retry"
+                                else f"{item['stock']}(延{item['delay_days']}d>{item['max_retry_days']}d)"
+                            ),
+                        )
+                    )
+            if groups:
+                lines.append(f"延迟订单放弃: {' | '.join(groups)}")
+
+        take_profit_items = self._daily_warning_items.get("take_profit", [])
+        if take_profit_items:
+            details = [
+                (
+                    f"触发[{item['profit_rate']:+.1%}>={item['threshold']:+.1%}, "
+                    f"{item['n_positions']}只次日卖出]"
+                )
+                for item in take_profit_items
+            ]
+            lines.append(f"整体止盈: {self._format_compact_items(details)}")
+
+        time_trigger_items = self._daily_warning_items.get("time_stop_loss_trigger", [])
+        time_veto_items = self._daily_warning_items.get("time_stop_loss_veto", [])
+        if time_trigger_items or time_veto_items:
+            parts = []
+            if time_trigger_items:
+                trigger_labels = [
+                    f"{item['stock']}({item['holding_days']}d,{item['profit_rate']:+.1%})"
+                    for item in time_trigger_items
+                ]
+                parts.append(
+                    f"触发{len(time_trigger_items)}[{self._format_compact_items(trigger_labels)}]"
+                )
+            if time_veto_items:
+                veto_labels = [
+                    (
+                        f"{item['stock']}({item['holding_days']}d,"
+                        f"{item['profit_rate']:+.1%},{item['score']:.2f})"
+                    )
+                    for item in time_veto_items
+                ]
+                parts.append(
+                    f"否决{len(time_veto_items)}[{self._format_compact_items(veto_labels)}]"
+                )
+            lines.append(f"时间止损: {' | '.join(parts)}")
+
+        return lines
+
     def _calculate_current_exposure_pct(self, portfolio_value: float) -> float:
         """按当日组合市值计算股票仓位比例。"""
         if portfolio_value <= 0:
@@ -910,6 +1438,12 @@ class BacktestEngine:
 
     def _initialize_decision_trace_for_signal(self, decision_trace: Dict) -> Dict:
         """扩展点：子类可补充市场层占位信息。"""
+        return decision_trace
+
+    def _finalize_decision_trace_for_signal_day(
+        self, decision_trace: Dict, signal_date: pd.Timestamp
+    ) -> Dict:
+        """扩展点：子类可在信号日补齐摘要所需状态。"""
         return decision_trace
 
     def _build_signal_decision_trace(
@@ -986,7 +1520,7 @@ class BacktestEngine:
         tranche_tag: str = "",
     ) -> None:
         """统一输出调仓决策摘要。"""
-        logger.warning(
+        logger.info(
             _format_rebalance_decision_summary(
                 decision_trace=decision_trace,
                 execution_date=execution_date,
@@ -1016,6 +1550,8 @@ class BacktestEngine:
         total_days: int,
         cycle_day: int,
         portfolio_value: float,
+        buy_count: int = 0,
+        sell_count: int = 0,
     ) -> str:
         """格式化每日回测进度日志。"""
         total_return = (portfolio_value / self.initial_capital - 1) * 100
@@ -1029,16 +1565,14 @@ class BacktestEngine:
         )
         target_position_count = self._get_target_position_count()
         current_exposure_pct = self._calculate_current_exposure_pct(portfolio_value)
-        current_position_atr_stats = self._format_current_position_atr_stats(date)
 
         return (
-            f"回测[{date.date()}]: {trading_days:0{len(str(total_days))}}/{total_days} 天 - "
-            f"本轮第[{cycle_day:0{len(str(self.rebalance_freq))}}/{self.rebalance_freq}]天, "
-            f"持仓/仓位[{len(self.positions):0{len(str(target_position_count))}}/{target_position_count}]/"
-            f"[{current_exposure_pct:.2f}%], "
-            f"收益:本调仓/本轮/年化:[{rebalance_return_str}/"
-            f"{total_return:+.2f}%/{ann_return:+.2f}%], "
-            f"{current_position_atr_stats}"
+            f"回测[{date.date()}]: {trading_days:0{len(str(total_days))}}/{total_days} 天"
+            f" | 本轮[{cycle_day:0{len(str(self.rebalance_freq))}}/{self.rebalance_freq}]"
+            f" | 持仓/仓位[{len(self.positions):0{len(str(target_position_count))}}/{target_position_count}]"
+            f"/[{current_exposure_pct:.2f}%]"
+            f" | 买/卖[{buy_count}/{sell_count}]"
+            f" | 收益[本调仓/本轮/年化]=[{rebalance_return_str}/{total_return:+.2f}%/{ann_return:+.2f}%]"
         )
 
     def _build_nav_series(self, current_date: pd.Timestamp) -> Optional[pd.Series]:
@@ -1500,14 +2034,27 @@ class BacktestEngine:
         # 保存最近一次调仓候选列表，供整体止盈补位使用
         self._last_ranked_candidates = list(ranked_candidates)
         self._last_signal_date = date
+        decision_trace["queued"] = True
+        decision_trace["final_target_exposure"] = float(sum(signals.values()))
+        decision_trace = self._finalize_decision_trace_for_signal_day(
+            decision_trace=decision_trace,
+            signal_date=date,
+        )
+        self.pending_signals[date]["decision_trace"] = decision_trace
+
+        tranche_tag = (
+            f"[批次 {tranche_idx + 1}/{self.stagger_tranches}] "
+            if self.stagger_tranches > 1
+            else ""
+        )
+        self._log_rebalance_decision_summary(
+            decision_trace=decision_trace,
+            execution_date=buy_date,
+            tranche_tag=tranche_tag,
+        )
 
         # 分批调仓时始终打印信号生成汇总，便于确认各批次调度情况
         if self.verbose or self.stagger_tranches > 1:
-            tranche_tag = (
-                f"[批次 {tranche_idx + 1}/{self.stagger_tranches}] "
-                if self.stagger_tranches > 1
-                else ""
-            )
             if self.enable_position_completion:
                 logger.info(
                     f"  {tranche_tag}信号生成: {date.date()}, 选择 top {len(signals)}/{target_n} 股票（未检查 T+1 可交易性，将在买入时处理）, "
@@ -1616,12 +2163,6 @@ class BacktestEngine:
         decision_trace["queued"] = True
         decision_trace["final_target_exposure"] = float(sum(signals.values()))
 
-        self._log_rebalance_decision_summary(
-            decision_trace=decision_trace,
-            execution_date=date,
-            tranche_tag=tranche_tag,
-        )
-
         # 计算当前组合市值
         portfolio_value = self._calculate_portfolio_value(date)
         current_value = portfolio_value
@@ -1710,10 +2251,6 @@ class BacktestEngine:
 
                     if not tradeable:
                         failed_buys.append({**buy_detail, "reason": reason})
-                        logger.info(
-                            f"  {tranche_tag}买入失败: {date.date()} {stock}, 原因: {reason}, "
-                            f"权重 {weight:.4f}, 将在后续交易日补齐"
-                        )
                         continue  # 跳过该股票，不买入
 
                 # 可交易，执行买入
@@ -1768,29 +2305,15 @@ class BacktestEngine:
 
                 self.completion_stats["total_unfilled"] += 1
 
-                logger.warning(
-                    f"  {tranche_tag}仓位未满: {date.date()}, 目标 {target_n} 只, 实际买入 {actually_bought} 只, "
-                    f"缺口槽位 {unfilled_count} 个, 未成交股票: {unfilled_stocks}, "
-                    f"将在接下来 {self.completion_window_days} 天内尝试补齐"
+                self._record_position_unfilled_summary(
+                    tranche_tag=tranche_tag,
+                    target_n=target_n,
+                    actually_bought=actually_bought,
+                    unfilled_count=unfilled_count,
+                    unfilled_stocks=unfilled_stocks,
                 )
 
-        logger.warning(
-            _format_buy_execution_summary(
-                signal_date=signal_date,
-                execution_date=date,
-                planned_buys=planned_buys,
-                successful_buys=successful_buys,
-                failed_buys=failed_buys,
-                inherited_position_count=inherited_position_count,
-                inherited_position_weight=inherited_position_weight,
-                tranche_tag=tranche_tag,
-            )
-        )
-
-        # 始终打印买入汇总，与卖出日志保持一致
-        logger.info(
-            f"  {tranche_tag}买入执行: {date.date()}, 买入 {actually_bought} 只股票（信号日: {signal_date.date()}）"
-        )
+        # 当日买入/卖出明细统一在每日总结下一行展示，这里不再单独输出买入执行日志。
 
     def _process_position_completion(
         self,
@@ -1831,11 +2354,13 @@ class BacktestEngine:
 
         if date_quote.empty:
             if self.verbose:
-                logger.warning(f"补齐跳过: {date.date()}, 当日无行情数据")
+                self._record_completion_skip("当日无行情", "当日无行情")
             return
 
         # 遍历所有未补齐的槽位
         completed_signal_dates = []
+        completion_success_items: List[Dict[str, str]] = []
+        completion_delayed_slots: List[str] = []
 
         for signal_date, slot_info in list(self.unfilled_slots.items()):
             first_attempt_date = slot_info["first_attempt_date"]
@@ -1866,23 +2391,25 @@ class BacktestEngine:
             if days_elapsed >= self.completion_window_days:
                 # 超过补齐窗口，放弃补齐
                 unfilled_count = len(unfilled_slot_weights)
-                unfilled_stocks_str = ", ".join([slot["stock"] for slot in unfilled_slot_weights])
+                unfilled_stocks = [slot["stock"] for slot in unfilled_slot_weights]
                 self.completion_stats["total_abandoned"] += 1
                 completed_signal_dates.append(signal_date)
 
-                logger.warning(
-                    f"{tranche_tag}补齐放弃: {date.date()}, 信号日 {original_signal_date.date()}, "
-                    f"已尝试 {attempts} 次补齐, 仍有 {unfilled_count} 个槽位未成交: {unfilled_stocks_str}, "
-                    f"超过补齐窗口 {self.completion_window_days} 天，放弃补齐，对应权重持币"
+                self._record_completion_abandoned_summary(
+                    tranche_tag=tranche_tag,
+                    original_signal_date=original_signal_date,
+                    attempts=attempts,
+                    unfilled_stocks=unfilled_stocks,
                 )
                 continue
 
             # 在补齐窗口内，尝试补齐
             # 使用 D-1 日的数据重新生成候选股票列表
             if prev_date_quote.empty:
-                logger.warning(
-                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
-                    f"上一交易日 {prev_date.date()} 无行情数据，无法生成候选"
+                prefix = f"{tranche_tag.strip()} " if tranche_tag.strip() else ""
+                self._record_completion_skip(
+                    "前日无行情",
+                    f"{prefix}信号日{original_signal_date.date()}",
                 )
                 continue
 
@@ -1892,9 +2419,10 @@ class BacktestEngine:
             # 调用扩展点获取 D-1 日的额外数据
             extra_data = self._build_signal_data(prev_date)
             if extra_data is None:
-                logger.warning(
-                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
-                    f"上一交易日 {prev_date.date()} 无可用数据（_build_signal_data 返回 None）"
+                prefix = f"{tranche_tag.strip()} " if tranche_tag.strip() else ""
+                self._record_completion_skip(
+                    "无数据",
+                    f"{prefix}信号日{original_signal_date.date()}",
                 )
                 continue
 
@@ -1908,9 +2436,10 @@ class BacktestEngine:
             )
 
             if not new_ranked_candidates:
-                logger.warning(
-                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
-                    f"基于 {prev_date.date()} 数据无候选股票"
+                prefix = f"{tranche_tag.strip()} " if tranche_tag.strip() else ""
+                self._record_completion_skip(
+                    "无候选",
+                    f"{prefix}信号日{original_signal_date.date()}",
                 )
                 continue
 
@@ -1926,9 +2455,10 @@ class BacktestEngine:
                         break
 
             if not stocks_to_try:
-                logger.warning(
-                    f"{tranche_tag}补齐跳过: {date.date()}, 信号日 {original_signal_date.date()}, "
-                    f"基于 {prev_date.date()} 数据生成的候选均已持仓"
+                prefix = f"{tranche_tag.strip()} " if tranche_tag.strip() else ""
+                self._record_completion_skip(
+                    "候选已持仓",
+                    f"{prefix}信号日{original_signal_date.date()}",
                 )
                 continue
 
@@ -1963,9 +2493,9 @@ class BacktestEngine:
                     if not tradeable:
                         untradeable_stocks.add(stock)
                         if self.verbose:
-                            logger.info(
-                                f"  {tranche_tag}补齐跳过: {date.date()} 候选 {stock} "
-                                f"不可交易({reason})，后续槽位也将跳过"
+                            self._record_completion_skip(
+                                "候选不可交易",
+                                f"{stock}({reason})",
                             )
                         continue
 
@@ -1978,25 +2508,16 @@ class BacktestEngine:
                         bought_stocks.append(stock)
                         bought_stock_set.add(stock)  # 记录已买入
                         bought_for_this_slot = True
+                        completion_success_items.append({"slot": original_stock, "buy": stock})
 
                         self.completion_stats["total_completed"] += 1
-
-                        logger.info(
-                            f"  {tranche_tag}补齐成功: {date.date()} (基于 {prev_date.date()} 数据), "
-                            f"槽位 {original_stock} (权重 {weight:.4f}) 买入股票 {stock} 成功. "
-                            f"信号日 {original_signal_date.date()}, 目标市值 {target_value:.2f}, "
-                            f"已补齐 {len(bought_stocks)}/{unfilled_count}"
-                        )
 
                         break
 
                 # 如果该槽位未能补齐，保留到下次（会在下次重新生成有限候选继续尝试）
                 if not bought_for_this_slot:
                     remaining_unfilled_slots.append(slot_weight_info)
-                    logger.info(
-                        f"  {tranche_tag}补齐延迟: {date.date()}, 槽位 {original_stock} (权重 {weight:.4f}) "
-                        f"在有限候选池 {len(stocks_to_try)} 只中未找到可买入股票，保留到下次"
-                    )
+                    completion_delayed_slots.append(original_stock)
 
             # 更新槽位信息
             slot_info["attempts"] += 1
@@ -2006,14 +2527,23 @@ class BacktestEngine:
             # 如果已经全部补齐，从待补齐列表中移除
             if not remaining_unfilled_slots:
                 completed_signal_dates.append(signal_date)
-                logger.info(
-                    f"  {tranche_tag}补齐完成: {date.date()}, 信号日 {original_signal_date.date()}, "
-                    f"本次补齐 {len(bought_stocks)} 只，仓位已满"
-                )
 
         # 清理已完成或放弃的槽位
         for signal_date in completed_signal_dates:
             del self.unfilled_slots[signal_date]
+
+        if completion_success_items or completion_delayed_slots:
+            remaining_count = sum(
+                len(slot_info.get("unfilled_slot_weights", []))
+                for slot_info in self.unfilled_slots.values()
+            )
+            logger.info(
+                self._format_completion_summary(
+                    success_items=completion_success_items,
+                    delayed_slots=completion_delayed_slots,
+                    remaining_count=remaining_count,
+                )
+            )
 
     def _check_and_sell(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
@@ -2029,6 +2559,7 @@ class BacktestEngine:
             date_to_idx: 日期到索引的映射
         """
         stocks_to_sell = []
+        profit_extension_items: List[Dict[str, Optional[float]]] = []
 
         current_idx = date_to_idx.get(date)
         if current_idx is None:
@@ -2056,10 +2587,10 @@ class BacktestEngine:
             ) / self._last_rebalance_nav
             if portfolio_profit_rate >= self.take_profit_threshold:
                 n_positions = len(positions_to_check)
-                logger.warning(
-                    f"  整体止盈触发: {date.date()}, 整体浮盈率={portfolio_profit_rate:.2%} "
-                    f">= 阈值={self.take_profit_threshold:.2%}, "
-                    f"{n_positions} 只持仓将在下一交易日卖出"
+                self._record_take_profit_summary(
+                    profit_rate=portfolio_profit_rate,
+                    threshold=self.take_profit_threshold,
+                    n_positions=n_positions,
                 )
                 for stock in positions_to_check:
                     self.pending_condition_sells[stock] = {
@@ -2163,18 +2694,14 @@ class BacktestEngine:
                             )
 
                     if should_extend:
-                        max_holding_days = self.holding_period + self.profit_extension_days
-                        expected_sell_idx = anchor_idx + max_holding_days
-                        expected_sell_date = (
-                            trading_dates[expected_sell_idx].date()
-                            if expected_sell_idx < len(trading_dates)
-                            else "超出回测区间"
-                        )
-                        logger.warning(
-                            f"  盈利延续持有[{self.profit_extension_mode}]: "
-                            f"{stock} 持有{holding_days}天, {extend_log_detail}, "
-                            f"延续至最多 {max_holding_days} 天, "
-                            f"预计卖出日期={expected_sell_date}"
+                        score = breakdown.total if self.profit_extension_mode == "strength" else None
+                        profit_extension_items.append(
+                            {
+                                "stock": stock,
+                                "holding_days": holding_days,
+                                "profit_rate": profit_rate,
+                                "score": score,
+                            }
                         )
                         continue  # 延续持有，跳过卖出
 
@@ -2239,10 +2766,10 @@ class BacktestEngine:
                                     continue  # 否决卖出，跳过
 
                         # 亏损提前换出 → 盘后发现，写入队列 Tn+1 执行
-                        logger.warning(
-                            f"  亏损提前换出: {stock} 持有{holding_days}天, "
-                            f"盈亏={profit_rate:.2%} <= 阈值={threshold_desc}, "
-                            f"将在下一交易日卖出（正常持有期={self.holding_period}天）"
+                        self._record_early_exit_trigger(
+                            stock=stock,
+                            holding_days=holding_days,
+                            profit_rate=profit_rate,
                         )
                         self.pending_condition_sells[stock] = {
                             "trigger_date": date,
@@ -2279,25 +2806,18 @@ class BacktestEngine:
                                         self._early_exit_reprieve_counts[stock] = (
                                             reprieve_count + 1
                                         )
-                                        logger.warning(
-                                            f"  时间止损否决[strength_veto]: {stock} "
-                                            f"持有{holding_days}天, "
-                                            f"盈亏={profit_rate:.2%} < "
-                                            f"时间止损阈值={self.time_stop_loss_profit_ratio:.2%}, "
-                                            f"但强势度={breakdown.total:.3f} >= "
-                                            f"{self.early_exit_strength_protect_threshold:.2f}"
-                                            f", 缓刑({reprieve_count + 1}/"
-                                            f"{self.early_exit_max_reprieves}), "
-                                            f"{breakdown.to_log_str()}"
+                                        self._record_time_stop_loss_veto(
+                                            stock=stock,
+                                            holding_days=holding_days,
+                                            profit_rate=profit_rate,
+                                            score=breakdown.total,
                                         )
                                         continue  # 否决卖出
 
-                            logger.warning(
-                                f"  时间止损触发: {stock} 持有{holding_days}天 >= "
-                                f"{self.time_stop_loss_days}天, "
-                                f"盈亏={profit_rate:.2%} < "
-                                f"时间止损阈值={self.time_stop_loss_profit_ratio:.2%}, "
-                                f"将在下一交易日卖出（正常持有期={self.holding_period}天）"
+                            self._record_time_stop_loss_trigger(
+                                stock=stock,
+                                holding_days=holding_days,
+                                profit_rate=profit_rate,
                             )
                             self.pending_condition_sells[stock] = {
                                 "trigger_date": date,
@@ -2308,10 +2828,8 @@ class BacktestEngine:
                 if holding_days >= self.holding_period:
                     stocks_to_sell.append(stock)
 
-        if stocks_to_sell:
-            logger.info(
-                f"  卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票（达到持有期）"
-            )
+        if profit_extension_items:
+            logger.info(self._format_profit_extension_summary(profit_extension_items))
 
         # 执行持有期到期卖出（预定事件，Tn 直接执行）
         for stock in stocks_to_sell:
@@ -2390,10 +2908,7 @@ class BacktestEngine:
                     f"（候选池 {len(tp['ranked_candidates'])} 只）"
                 )
 
-        logger.info(
-            f"  条件卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只"
-            f"（触发日: {trigger_date.date()}）"
-        )
+        # 实际卖出明细统一在每日总结下一行展示，这里不再单独输出卖出执行日志。
 
     def _check_stop_loss(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
@@ -2512,11 +3027,7 @@ class BacktestEngine:
             # 从待卖出队列中移除
             self.pending_stop_loss_sells.pop(stock, None)
 
-        if stocks_to_sell:
-            logger.info(
-                f"  止损卖出执行: {date.date()}, 卖出 {len(stocks_to_sell)} 只股票 "
-                f"（触发日: {trigger_date.date()}）"
-            )
+        # 实际卖出明细统一在每日总结下一行展示，这里不再单独输出止损卖出执行日志。
 
     def _prepare_price_index(self, price_data: pd.DataFrame) -> None:
         """准备价格索引（使用 MultiIndex，替代嵌套字典）
@@ -3138,9 +3649,9 @@ class BacktestEngine:
         """
         # 若已有持仓，跳过重复买入，避免覆盖持有期与成本基础导致计算错误
         if stock in self.positions:
-            logger.info(
-                f"  股票 {stock} 已在持仓中（买入日期: {self.positions[stock]['buy_date'].date()}），"
-                f"跳过重复买入，旧持仓将按原持有期正常到期"
+            self._record_duplicate_buy_skip(
+                stock=stock,
+                buy_date=self.positions[stock]["buy_date"],
             )
             return
 
@@ -3407,6 +3918,7 @@ class BacktestEngine:
 
         # 获取持仓信息
         shares = self.positions[stock]["shares"]
+        buy_date = self.positions[stock]["buy_date"]
         buy_trade_price = self.positions[stock]["buy_trade_price"]
         buy_pnl_price = self.positions[stock]["buy_pnl_price"]
         buy_cost_cash = self.positions[stock]["buy_cost_cash"]
@@ -3456,6 +3968,7 @@ class BacktestEngine:
             "shares": shares,
             "amount": sell_amount,
             "cost": sell_cost,
+            "buy_date": buy_date,
             "buy_price": buy_trade_price,  # 买入成交价格
             "buy_pnl_price": buy_pnl_price,  # 买入绩效价格
             "sell_pnl_price": sell_pnl_price,  # 卖出绩效价格

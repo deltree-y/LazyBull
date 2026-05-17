@@ -28,7 +28,40 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.64)
+### 当前版本 (v0.71.71)
+
+**walk-forward 验证集自动尾部隔离** (v0.71.71):
+- [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 在 `prepare_training_data()` 中新增验证集尾部自动隔离：按标签自动推导 `label_delta` 后，仅让隔离后的 `val_es` 参与 `eval_set`、early stopping 与 `best_iteration` 选择，避免测试期价格窗口通过 val 影响模型选择。
+- 同文件新增 `split_val_for_early_stopping_by_date()`，输出 `val_raw / val_es / val_embargo` 三段统计，并在样本过短时允许 `val_es` 为空，训练流程自动退化为“无验证集早停”。
+- [scripts/walk_forward.py](scripts/walk_forward.py)、[scripts/train_ml_model.py](scripts/train_ml_model.py) 与 [src/lazybull/ml/run_logger.py](src/lazybull/ml/run_logger.py) 已透传并落盘 `val_raw_* / val_es_* / val_embargo_*` 字段，便于回看每次训练的隔离规模与生效区间。
+
+**补齐跳过与延迟订单放弃继续压缩** (v0.71.70):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会把 `补齐跳过` 的当日无行情、前日无行情、无数据、无候选、候选已持仓、候选不可交易等情况统一压成每日白字单行摘要，不再在补齐流程中散落多条 warning
+- [src/lazybull/execution/pending_order.py](src/lazybull/execution/pending_order.py) 的买入延迟订单超次/超期放弃也改为交给 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 汇总，日终以 `延迟订单放弃: 超次买... | 超期买...` 的形式输出
+
+**延迟订单日志继续压缩** (v0.71.69):
+- [src/lazybull/execution/pending_order.py](src/lazybull/execution/pending_order.py) 不再逐条输出 `添加延迟订单` 和 `延迟订单执行成功`，而是将事件交给 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 按交易日统一汇总
+- 每日日终现在会以白字单行展示 `延迟订单: 新增买/卖...` 与 `延迟订单成交: 成功买/卖...`，避免跌停批量延迟卖出时刷出多行重复日志
+
+**回测交易与补齐日志进一步压缩** (v0.71.68):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会把当日 `交易` 摘要拆成 `买`、`卖` 两行，便于快速扫读；`调仓决策摘要` 也提前到了交易结果之前展示
+- 同文件中，`重复买入跳过`、`亏损提前换出`、`仓位未满`、`补齐放弃` 改为按交易日统一汇总成白色单行，不再逐条刷屏
+- `盈利延续[strength]` 单行摘要会显示更多股票后再折叠，减少过早出现 `...+N`
+
+**调仓摘要与 warning 日志继续压缩** (v0.71.67):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会把 `调仓决策摘要` 压成单行白色日志，并提前到信号日输出，不再等到 T+1 执行日；在 ML 回测中，[src/lazybull/backtest/engine_ml.py](src/lazybull/backtest/engine_ml.py) 会同步把市场层与最终仓位提前写入该摘要
+- [src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py) 不再输出 `选股/预测(ranked)` 入口日志，减少与当日汇总重复的信息
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 将 `空仓提前调仓`、`时间止损`、`整体止盈` 三类事件改为按交易日统一汇总，以白色单行显示在每日总结之下
+
+**回测日志按交易日重排并压缩** (v0.71.66):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会把单个交易日的明细日志先缓冲，待日终按“彩色每日总结 -> 当日买卖摘要 -> 两空格缩进细节”顺序统一输出，避免同一天的杂项日志出现在总结之前
+- 每日总结新增买/卖股票数量，移除 ATR 展示；若当日有成交，则下一行紧凑显示买入/卖出股票代码、持有天数与收益率
+- `盈利延续持有[strength]` 与 `补齐成功/补齐延迟` 改为按日单行汇总，原有买入/卖出执行日志不再单独输出
+- [src/lazybull/signals/ml_signal.py](src/lazybull/signals/ml_signal.py) 将 `选股过滤合计` 与 `开始模型预测(ranked)` 合并为 `选股/预测` 单行日志，减少重复噪音
+
+**回测补齐成功日志补充实际成交口径** (v0.71.65):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 的“补齐成功”日志现在会同时展示目标市值、实际成交市值、成交股数与交易成本，现金受限缩量时不会再被误读为按目标金额满额成交
+- 更新 [tests/test_position_completion.py](tests/test_position_completion.py) 回归测试，覆盖“目标市值 5 万但实际只够买一手低价股”的场景
 
 **树莓派 3.5LCD 盘内指数刷新时机修复** (v0.71.64):
 - [scripts/respi/lcd35/core.py](scripts/respi/lcd35/core.py) 与 [scripts/respi/lcd35/data_pipeline.py](scripts/respi/lcd35/data_pipeline.py) 现在会把“指数缓存是否过期”作为独立条件判断，完整缓存也会按盘中刷新节奏续刷

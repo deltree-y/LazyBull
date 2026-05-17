@@ -154,6 +154,101 @@ def test_mark_success(manager, base_date):
     assert stats['total_succeeded'] == 1
 
 
+def test_event_sink_receives_add_and_success_events(base_date):
+    """启用事件回调时，应发出新增和成交事件。"""
+    events = []
+    manager = PendingOrderManager(max_retry_count=3, max_retry_days=5, event_sink=events.append)
+
+    manager.add_order(
+        stock='000001.SZ',
+        action='buy',
+        current_date=base_date,
+        signal_date=base_date,
+        target_value=100000.0,
+        reason='涨停'
+    )
+    manager.mark_success(base_date + pd.Timedelta(days=1), '000001.SZ', 'buy')
+
+    assert events == [
+        {
+            'type': 'added',
+            'stock': '000001.SZ',
+            'action': 'buy',
+            'signal_date': base_date,
+            'reason': '涨停',
+        },
+        {
+            'type': 'success',
+            'stock': '000001.SZ',
+            'action': 'buy',
+            'retry_count': 1,
+            'delay_days': 1,
+        },
+    ]
+
+
+def test_event_sink_receives_expired_retry_event(base_date):
+    """超过最大重试次数时，应发出放弃事件。"""
+    events = []
+    manager = PendingOrderManager(max_retry_count=1, max_retry_days=5, event_sink=events.append)
+
+    manager.add_order(
+        stock='000001.SZ',
+        action='buy',
+        current_date=base_date,
+        signal_date=base_date,
+        target_value=100000.0,
+        reason='涨停'
+    )
+    manager.add_order(
+        stock='000001.SZ',
+        action='buy',
+        current_date=base_date + pd.Timedelta(days=1),
+        signal_date=base_date,
+        target_value=100000.0,
+        reason='涨停'
+    )
+
+    retry_orders, expired_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=1))
+
+    assert retry_orders == []
+    assert len(expired_orders) == 1
+    assert events[-1] == {
+        'type': 'expired_retry',
+        'stock': '000001.SZ',
+        'action': 'buy',
+        'retry_count': 2,
+        'max_retry_count': 1,
+    }
+
+
+def test_event_sink_receives_expired_days_event(base_date):
+    """超过最大延迟天数时，应发出放弃事件。"""
+    events = []
+    manager = PendingOrderManager(max_retry_count=3, max_retry_days=1, event_sink=events.append)
+
+    manager.add_order(
+        stock='000001.SZ',
+        action='buy',
+        current_date=base_date,
+        signal_date=base_date,
+        target_value=100000.0,
+        reason='停牌'
+    )
+
+    retry_orders, expired_orders = manager.get_orders_to_retry(base_date + pd.Timedelta(days=2))
+
+    assert retry_orders == []
+    assert len(expired_orders) == 1
+    assert events[-1] == {
+        'type': 'expired_days',
+        'stock': '000001.SZ',
+        'action': 'buy',
+        'delay_days': 2,
+        'max_retry_days': 1,
+    }
+
+
 def test_remove_order(manager, base_date):
     """测试手动移除订单"""
     manager.add_order(

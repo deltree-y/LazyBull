@@ -1005,6 +1005,20 @@ def execute_split_training(
         "val_start_date": data_stats["val_start_date"],
         "val_end_date": data_stats["val_end_date"],
         "val_ratio": args.val_ratio,
+        "val_raw_start_date": data_stats.get("val_raw_start_date", data_stats["val_start_date"]),
+        "val_raw_end_date": data_stats.get("val_raw_end_date", data_stats["val_end_date"]),
+        "val_raw_n_dates": data_stats.get("val_raw_n_dates", 0),
+        "val_raw_samples": data_stats.get("val_raw_samples", 0),
+        "val_es_start_date": data_stats.get("val_es_start_date", data_stats["val_start_date"]),
+        "val_es_end_date": data_stats.get("val_es_end_date", data_stats["val_end_date"]),
+        "val_es_n_dates": data_stats.get("val_es_n_dates", 0),
+        "val_es_samples": data_stats.get("val_es_samples", X_val_len),
+        "val_embargo_days": data_stats.get("val_embargo_days", 0),
+        "val_embargo_days_applied": data_stats.get("val_embargo_days_applied", 0),
+        "val_embargo_n_dates": data_stats.get("val_embargo_n_dates", 0),
+        "val_embargo_samples": data_stats.get("val_embargo_samples", 0),
+        "val_embargo_start_date": data_stats.get("val_embargo_start_date", "N/A"),
+        "val_embargo_end_date": data_stats.get("val_embargo_end_date", "N/A"),
         **feature_filter_summary,
     }
 
@@ -1046,6 +1060,9 @@ def execute_split_training(
         "model_version": version,
         "train_samples": X_train_len,
         "val_samples": X_val_len,
+        "val_es_samples": data_stats.get("val_es_samples", X_val_len),
+        "val_embargo_samples": data_stats.get("val_embargo_samples", 0),
+        "val_embargo_days": data_stats.get("val_embargo_days", 0),
         "test_samples": len(df_test_eval),
         "best_iteration": train_params.get("best_iteration"),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
@@ -1245,6 +1262,20 @@ def execute_deploy_training(
         "val_start_date": data_stats["val_start_date"],
         "val_end_date": data_stats["val_end_date"],
         "val_ratio": args.val_ratio,
+        "val_raw_start_date": data_stats.get("val_raw_start_date", data_stats["val_start_date"]),
+        "val_raw_end_date": data_stats.get("val_raw_end_date", data_stats["val_end_date"]),
+        "val_raw_n_dates": data_stats.get("val_raw_n_dates", 0),
+        "val_raw_samples": data_stats.get("val_raw_samples", 0),
+        "val_es_start_date": data_stats.get("val_es_start_date", data_stats["val_start_date"]),
+        "val_es_end_date": data_stats.get("val_es_end_date", data_stats["val_end_date"]),
+        "val_es_n_dates": data_stats.get("val_es_n_dates", 0),
+        "val_es_samples": data_stats.get("val_es_samples", X_val_len),
+        "val_embargo_days": data_stats.get("val_embargo_days", 0),
+        "val_embargo_days_applied": data_stats.get("val_embargo_days_applied", 0),
+        "val_embargo_n_dates": data_stats.get("val_embargo_n_dates", 0),
+        "val_embargo_samples": data_stats.get("val_embargo_samples", 0),
+        "val_embargo_start_date": data_stats.get("val_embargo_start_date", "N/A"),
+        "val_embargo_end_date": data_stats.get("val_embargo_end_date", "N/A"),
         **ff_summary_deploy,
     }
 
@@ -1283,6 +1314,9 @@ def execute_deploy_training(
         "model_version": version,
         "train_samples": X_train_len,
         "val_samples": X_val_len,
+        "val_es_samples": data_stats.get("val_es_samples", X_val_len),
+        "val_embargo_samples": data_stats.get("val_embargo_samples", 0),
+        "val_embargo_days": data_stats.get("val_embargo_days", 0),
         "test_samples": 0,
         "best_iteration": train_params.get("best_iteration"),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
@@ -1398,6 +1432,26 @@ def create_training_run_record_from_training_session(
     
     # 额外指标（包含测试集指标）
     additional_metrics = {}
+
+    # 验证集隔离统计（若存在）
+    for key in [
+        "val_raw_start_date",
+        "val_raw_end_date",
+        "val_raw_n_dates",
+        "val_raw_samples",
+        "val_es_start_date",
+        "val_es_end_date",
+        "val_es_n_dates",
+        "val_es_samples",
+        "val_embargo_days",
+        "val_embargo_days_applied",
+        "val_embargo_n_dates",
+        "val_embargo_samples",
+        "val_embargo_start_date",
+        "val_embargo_end_date",
+    ]:
+        if key in data_stats:
+            additional_metrics[key] = data_stats.get(key)
     
     # 验证集TopK收益和诊断统计
     for key, value in val_daily_metrics.items():

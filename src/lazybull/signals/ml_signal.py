@@ -5,7 +5,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -589,7 +589,9 @@ class MLSignal(Signal):
                 f"特征数={self.metadata['feature_count']}"
             )
 
-    def _apply_selection_filters(self, features_df: pd.DataFrame) -> pd.DataFrame:
+    def _apply_selection_filters(
+        self, features_df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, int, int]:
         """选股阶段过滤（实盘/回测共用）
 
         规则（均使用特征文件中的原始列，z-score 归一化不影响这些列）：
@@ -601,10 +603,10 @@ class MLSignal(Signal):
             features_df: 特征DataFrame
 
         Returns:
-            过滤后的DataFrame
+            过滤后的DataFrame、过滤前数量、过滤后数量
         """
         if len(features_df) == 0:
-            return features_df
+            return features_df, 0, 0
 
         before = len(features_df)
         mask = pd.Series(True, index=features_df.index)
@@ -650,11 +652,17 @@ class MLSignal(Signal):
                 mask &= ~fin_mask
 
         result = features_df[mask].copy()
-        if (before - len(result)) > 0:
-            logger.info(
-                f"  选股过滤合计: {before} → {len(result)}（剔除 {before - len(result)} 只）"
-            )
-        return result
+        return result, before, len(result)
+
+    def _log_prediction_pipeline_summary(
+        self, before_count: int, after_count: int, ranked: bool = False
+    ) -> None:
+        """将选股过滤与模型预测入口压缩为单行日志。"""
+        if ranked:
+            return
+        stage = "选股/预测(ranked)" if ranked else "选股/预测"
+        universe_text = f"{before_count}→{after_count}" if before_count != after_count else str(after_count)
+        logger.info(f"{stage}: {universe_text}, 特征{len(self.feature_columns)}")
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 ML 信号
@@ -692,7 +700,9 @@ class MLSignal(Signal):
             return {}
 
         # 应用选股过滤（成交额/市值/金融股）
-        features_df = self._apply_selection_filters(features_df)
+        features_df, filter_before_count, filter_after_count = self._apply_selection_filters(
+            features_df
+        )
 
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 选股过滤后无可选股票")
@@ -727,9 +737,12 @@ class MLSignal(Signal):
         # XGB/LGB 原生支持 NaN，不做 fillna，保留缺失值信息
 
         # 预测（classification 模型使用 predict_proba 获取正类概率）
-        model_type = self.metadata.get("model_type", "unknown")
         task = self.metadata.get("train_params", {}).get("task", "regression")
-        logger.info(f"开始模型预测: {len(X)} 只股票, {len(self.feature_columns)} 个特征")
+        self._log_prediction_pipeline_summary(
+            before_count=filter_before_count,
+            after_count=filter_after_count,
+            ranked=False,
+        )
 
         if task == "classification" and hasattr(self.model, "predict_proba"):
             # 分类模型：使用正类概率作为分数
@@ -753,14 +766,15 @@ class MLSignal(Signal):
         )
         confidence_state = self.evaluate_confidence_gate(ranked_candidates, date=date)
         top_stocks = features_df.head(self.top_n)
-        logger.info(
-            "  TOP预测概率抽样: {}".format(
-                features_df[["ts_code", "ml_score"]]
-                .head(3)
-                .to_string(index=False)
-                .replace("\n", " | ")
+        if self.verbose:
+            logger.debug(
+                "TOP预测概率抽样: {}".format(
+                    features_df[["ts_code", "ml_score"]]
+                    .head(3)
+                    .to_string(index=False)
+                    .replace("\n", " | ")
+                )
             )
-        )
 
         if len(top_stocks) == 0:
             logger.warning(f"{date.date()} 没有有效的预测结果")
@@ -824,7 +838,9 @@ class MLSignal(Signal):
             return []
 
         # 应用选股过滤（成交额/市值/金融股）
-        features_df = self._apply_selection_filters(features_df)
+        features_df, filter_before_count, filter_after_count = self._apply_selection_filters(
+            features_df
+        )
 
         if len(features_df) == 0:
             logger.warning(f"{date.date()} 选股过滤后无可选股票")
@@ -860,7 +876,11 @@ class MLSignal(Signal):
 
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         task = self.metadata.get("train_params", {}).get("task", "regression")
-        logger.info(f"  开始模型预测(ranked): {len(X)} 只股票, {len(self.feature_columns)} 个特征")
+        self._log_prediction_pipeline_summary(
+            before_count=filter_before_count,
+            after_count=filter_after_count,
+            ranked=True,
+        )
 
         if task == "classification" and hasattr(self.model, "predict_proba"):
             # 分类模型：使用正类概率作为分数
@@ -879,9 +899,9 @@ class MLSignal(Signal):
 
         # 按预测分数排序，返回所有候选
         features_df = features_df.sort_values("ml_score", ascending=False)
-        if False:
-            logger.info(
-                "  TOP预测概率抽样: {}".format(
+        if self.verbose:
+            logger.debug(
+                "TOP预测概率抽样: {}".format(
                     features_df[["ts_code", "ml_score"]]
                     .head(3)
                     .to_string(index=False)
