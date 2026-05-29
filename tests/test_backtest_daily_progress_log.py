@@ -50,7 +50,7 @@ def test_daily_progress_log_includes_position_count_and_exposure():
         sell_count=1,
     )
 
-    assert log_line.startswith("回测[2025-12-29]: 122/124 天 | 本轮[02/20]")
+    assert log_line.startswith("T1[2025-12-29]: 122/124 天 | 本轮[02/20]")
     assert "持仓/仓位[17/20]/[87.05%]" in log_line
     assert "买/卖[3/1]" in log_line
     # 年化收益改为简单年化公式: 15.84% / (122/252) = 32.72%
@@ -88,6 +88,59 @@ def test_ml_daily_progress_log_no_longer_shows_atr_summary():
 
     assert "买/卖[0/0]" in log_line
     assert "ATR:" not in log_line
+
+
+def test_daily_trade_log_buy_and_sell_items_are_not_compacted():
+    """交易买卖明细应完整输出，不应折叠为 ...+N。"""
+    trade_date = pd.Timestamp("2025-01-02")
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(top_n=20),
+        initial_capital=100000.0,
+        rebalance_freq=20,
+        verbose=False,
+    )
+
+    engine.trades = [
+        {
+            "date": trade_date,
+            "stock": f"00000{i}.SZ",
+            "action": "buy",
+            "amount": 10000.0 + i,
+            "cost": 0.0,
+        }
+        for i in range(6)
+    ]
+    engine.trades.extend(
+        [
+            {
+                "date": trade_date,
+                "stock": f"00010{i}.SZ",
+                "action": "sell",
+                "buy_date": pd.Timestamp("2025-01-01"),
+                "pnl_profit_pct": 0.01 * i,
+            }
+            for i in range(6)
+        ]
+    )
+
+    buy_count, sell_count, lines = engine._build_daily_trade_log(
+        date=trade_date,
+        trade_start_idx=0,
+        date_to_idx={pd.Timestamp("2025-01-01"): 0, trade_date: 1},
+    )
+
+    assert buy_count == 6
+    assert sell_count == 6
+    assert len(lines) == 2
+    assert lines[0] == (
+        "交易: 买6[000000.SZ(1.0w), 000001.SZ(1.0w), 000002.SZ(1.0w), "
+        "000003.SZ(1.0w), 000004.SZ(1.0w), 000005.SZ(1.0w)]"
+    )
+    assert lines[1] == (
+        "交易: 卖6[000100.SZ(1d,+0.0%), 000101.SZ(1d,+1.0%), 000102.SZ(1d,+2.0%), "
+        "000103.SZ(1d,+3.0%), 000104.SZ(1d,+4.0%), 000105.SZ(1d,+5.0%)]"
+    )
 
 
 def test_target_position_count_scales_with_stagger_tranches():
@@ -257,7 +310,15 @@ def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
         engine_module.logger.info("调试细节日志")
 
     def fake_execute_pending_buys(date, trading_dates, date_to_idx):
-        engine.trades.append({"date": date, "stock": "000001.SZ", "action": "buy"})
+        engine.trades.append(
+            {
+                "date": date,
+                "stock": "000001.SZ",
+                "action": "buy",
+                "amount": 103000.0,
+                "cost": 0.0,
+            }
+        )
 
     monkeypatch.setattr(engine, "_check_and_sell", fake_check_and_sell)
     monkeypatch.setattr(engine, "_execute_pending_buys", fake_execute_pending_buys)
@@ -270,7 +331,7 @@ def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
     )
 
     summary_index = next(
-        i for i, (_, message, _) in enumerate(emitted_messages) if "回测[2025-01-02]" in message
+        i for i, (_, message, _) in enumerate(emitted_messages) if "T0[2025-01-02]" in message
     )
     decision_index = next(
         i
@@ -278,7 +339,7 @@ def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
         if "调仓决策摘要: 信号日 2025-01-02 | 执行=2025-01-03 | 候选=5 | 目标=2" in message
     )
     buy_index = next(
-        i for i, (_, message, _) in enumerate(emitted_messages) if "交易: 买1[000001.SZ(0d,+0.0%)]" in message
+        i for i, (_, message, _) in enumerate(emitted_messages) if "交易: 买1[000001.SZ(10.3w)]" in message
     )
     sell_index = next(
         i for i, (_, message, _) in enumerate(emitted_messages) if "交易: 卖1[000002.SZ(0d,-2.1%)]" in message

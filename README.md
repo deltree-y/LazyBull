@@ -28,7 +28,26 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.71)
+### 当前版本 (v0.71.75)
+
+**回测最小买入后市值阈值对齐纸面交易** (v0.71.75):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 新增 `min_buy_value_ratio`，并在回测买入执行路径中按与纸面交易一致的口径拦截过小买单：`阈值=总资产/目标持仓数*ratio`。
+- 该拦截逻辑对正常买入、补齐买入、延迟买入重试统一生效，避免出现 `0.1w` 这类高成本低效率小单。
+- [src/lazybull/common/backtest_runtime.py](src/lazybull/common/backtest_runtime.py) 已透传 `trading_config.min_buy_value_ratio` 到回测引擎，保证两端配置一致。
+- 新增 [tests/test_backtest_min_buy_value_threshold.py](tests/test_backtest_min_buy_value_threshold.py) 回归测试，覆盖阈值开启/关闭两种行为。
+
+**交易买卖明细不再省略** (v0.71.74):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 的 `交易: 买...` 与 `交易: 卖...` 日志由压缩展示改为完整展示，当日有多少成交就打印多少条股票明细，不再出现 `...+N` 折叠。
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py) 回归测试，覆盖“买卖明细不折叠”的口径。
+
+**回测 T 标签按调仓周期重置** (v0.71.73):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 的每日进度摘要 `T` 序号由全局累计改为按调仓周期内计数：每个调仓日为 `T0`，随后 `T1/T2/...`，到下一调仓周期再次从 `T0` 开始。
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py) 回归测试，覆盖 `T` 标签按周期重置的口径。
+
+**回测每日日志标签与买入摘要可读性优化** (v0.71.72):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 的每日进度摘要前缀由 `回测[日期]` 改为 `T序号[日期]`（见 v0.71.73：已进一步修正为按调仓周期重置）。
+- 同文件中，当日交易摘要里的买入项不再展示 `0d,+0.0%`，改为展示单票买入现金支出（万元），格式如 `买3[002383.SZ(10.3w), ...]`。
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py) 回归测试，覆盖新的日汇总前缀与买入摘要格式。
 
 **walk-forward 验证集自动尾部隔离** (v0.71.71):
 - [src/lazybull/ml/train_core.py](src/lazybull/ml/train_core.py) 在 `prepare_training_data()` 中新增验证集尾部自动隔离：按标签自动推导 `label_delta` 后，仅让隔离后的 `val_es` 参与 `eval_set`、early stopping 与 `best_iteration` 选择，避免测试期价格窗口通过 val 影响模型选择。

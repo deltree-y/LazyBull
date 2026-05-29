@@ -307,6 +307,7 @@ class BacktestEngine:
         kelly_vol_window: int = 60,  # Kelly 波动率估计窗口（交易日）
         kelly_max_leverage: float = 0.25,  # 单只股票 Kelly 仓位上限（占总资产）
         enable_early_rebalance_on_empty: bool = True,  # 空仓时是否提前触发新一轮调仓
+        min_buy_value_ratio: float = 0.0,  # 买入后最小持仓市值占平均仓位市值比例（0=关闭）
     ):
         """初始化回测引擎
 
@@ -356,6 +357,8 @@ class BacktestEngine:
                 防止无限拖延，默认 2
             profit_extension_threshold: 盈利延续持有的盈亏率阈值，默认 0.05（盈利5%）
             profit_extension_days: 盈利延续持有的额外天数（交易日），默认 5
+            min_buy_value_ratio: 买入后最小持仓市值占“平均仓位市值”比例（0=关闭）。
+                与纸面交易口径一致：阈值=总资产/目标持仓数*比例。
         """
         self.universe = universe
         self.signal = signal
@@ -566,6 +569,11 @@ class BacktestEngine:
         self.position_sizing = position_sizing
         self.kelly_vol_window = kelly_vol_window
         self.kelly_max_leverage = kelly_max_leverage
+        if min_buy_value_ratio < 0:
+            raise ValueError(
+                f"min_buy_value_ratio 必须 >= 0，当前值: {min_buy_value_ratio}"
+            )
+        self.min_buy_value_ratio = float(min_buy_value_ratio)
         self._normalize_log_count = 0  # 权重诊断日志计数，只打印前5次
         if position_sizing in ("kelly", "half_kelly"):
             logger.info(
@@ -595,6 +603,7 @@ class BacktestEngine:
             f"风险预算={'启用' if enable_risk_budget else '禁用'}, "
             f"延迟订单={'启用' if enable_pending_order else '禁用'}, "
             f"仓位补齐={'启用' if enable_position_completion else '禁用'}, "
+            f"最小买入阈值={'关闭' if self.min_buy_value_ratio <= 0 else f'{self.min_buy_value_ratio:.2f}'}, "
             f"补齐窗口={completion_window_days}天, "
             f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
             f"时间止损={'启用' if time_stop_loss_enabled else '禁用'}"
@@ -982,6 +991,14 @@ class BacktestEngine:
         suffix = f", ...+{len(items) - limit}" if len(items) > limit else ""
         return ", ".join(visible) + suffix
 
+    @staticmethod
+    def _format_trade_cash_wan(trade: Dict) -> str:
+        """格式化买入现金支出（万元）。"""
+        amount = float(trade.get("amount", 0.0) or 0.0)
+        cost = float(trade.get("cost", 0.0) or 0.0)
+        total_cash = max(amount + cost, 0.0)
+        return f"{total_cash / 10000:.1f}w"
+
     def _build_daily_trade_log(
         self,
         date: pd.Timestamp,
@@ -1003,7 +1020,7 @@ class BacktestEngine:
             stock = str(trade.get("stock", "-"))
             action = trade.get("action")
             if action == "buy":
-                buy_items.append(f"{stock}(0d,+0.0%)")
+                buy_items.append(f"{stock}({self._format_trade_cash_wan(trade)})")
                 continue
 
             if action != "sell":
@@ -1024,9 +1041,9 @@ class BacktestEngine:
 
         lines = []
         if buy_items:
-            lines.append(f"交易: 买{len(buy_items)}[{self._format_compact_items(buy_items)}]")
+            lines.append(f"交易: 买{len(buy_items)}[{', '.join(buy_items)}]")
         if sell_items:
-            lines.append(f"交易: 卖{len(sell_items)}[{self._format_compact_items(sell_items)}]")
+            lines.append(f"交易: 卖{len(sell_items)}[{', '.join(sell_items)}]")
 
         return len(buy_items), len(sell_items), lines
 
@@ -1436,6 +1453,23 @@ class BacktestEngine:
         exposure_pct = market_value / portfolio_value * 100
         return min(exposure_pct, 100.0)
 
+    def _get_min_buy_value_threshold(self, date: pd.Timestamp) -> float:
+        """计算最小买入后市值阈值（与纸面交易口径一致）。"""
+        ratio = float(self.min_buy_value_ratio or 0.0)
+        if ratio <= 0:
+            return 0.0
+
+        target_count = int(self._get_target_position_count() or 0)
+        if target_count <= 0:
+            return 0.0
+
+        total_assets = float(self._calculate_portfolio_value(date))
+        if total_assets <= 0:
+            return 0.0
+
+        avg_position_value = total_assets / float(target_count)
+        return avg_position_value * ratio
+
     def _initialize_decision_trace_for_signal(self, decision_trace: Dict) -> Dict:
         """扩展点：子类可补充市场层占位信息。"""
         return decision_trace
@@ -1565,9 +1599,10 @@ class BacktestEngine:
         )
         target_position_count = self._get_target_position_count()
         current_exposure_pct = self._calculate_current_exposure_pct(portfolio_value)
+        t_index = max(cycle_day - 1, 0)
 
         return (
-            f"回测[{date.date()}]: {trading_days:0{len(str(total_days))}}/{total_days} 天"
+            f"T{t_index}[{date.date()}]: {trading_days:0{len(str(total_days))}}/{total_days} 天"
             f" | 本轮[{cycle_day:0{len(str(self.rebalance_freq))}}/{self.rebalance_freq}]"
             f" | 持仓/仓位[{len(self.positions):0{len(str(target_position_count))}}/{target_position_count}]"
             f"/[{current_exposure_pct:.2f}%]"
@@ -3691,6 +3726,16 @@ class BacktestEngine:
             amount = shares * trade_price
             cost = self.cost_model.calculate_buy_cost(amount)
             total_cost_cash = amount + cost
+
+        # 与纸面交易一致：过小仓位买入拦截（按买入后市值阈值）
+        min_buy_value_threshold = self._get_min_buy_value_threshold(date)
+        if min_buy_value_threshold > 0 and amount < min_buy_value_threshold:
+            if self.verbose:
+                logger.warning(
+                    f"股票 {stock} 买入后市值 {amount:.2f} 低于阈值 "
+                    f"{min_buy_value_threshold:.2f}（ratio={self.min_buy_value_ratio:.2f}），跳过买入"
+                )
+            return
 
         # 建立新持仓（记录买入的成交价格和绩效价格）
         self.positions[stock] = {

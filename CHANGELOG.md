@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.75] - 2026-05-29
+
+### 修复
+
+- **回测接入最小买入后市值阈值（与纸面交易同口径）**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中新增 `min_buy_value_ratio`，并在 `_buy_stock_direct()` 中按 `阈值=总资产/目标持仓数*ratio` 拦截过小买单（默认关闭，`ratio=0`）。同口径逻辑覆盖正常买入、补齐买入和延迟买入重试路径。
+- **回测运行时统一透传最小买入阈值参数**：在 [src/lazybull/common/backtest_runtime.py](src/lazybull/common/backtest_runtime.py) 中将 `trading_config.min_buy_value_ratio` 透传到回测引擎，确保与纸面交易使用同一配置项。
+
+### 测试
+
+- 新增 [tests/test_backtest_min_buy_value_threshold.py](tests/test_backtest_min_buy_value_threshold.py)，覆盖“低于阈值跳过买入”和“阈值关闭时允许小单成交”两条回归用例。
+
+## [0.71.74] - 2026-05-29
+
+### 修复
+
+- **交易买卖明细改为完整输出**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，`交易: 买...` 与 `交易: 卖...` 摘要不再使用折叠压缩，改为输出当日全部成交明细（不再出现 `...+N` 省略）。
+
+### 测试
+
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py)，新增“买卖明细不折叠”的回归测试。
+
+## [0.71.73] - 2026-05-29
+
+### 修复
+
+- **回测 T 标签改为按调仓周期重置**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，`T` 序号由全局交易日累计改为按调仓周期内计数（`T = cycle_day - 1`），实现“每个调仓日为 `T0`，随后 `T1/T2/...`，到下一调仓周期再次从 `T0` 开始”。
+
+### 测试
+
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py) 断言，覆盖 `T` 标签按周期重置的口径。
+
+## [0.71.72] - 2026-05-29
+
+### 修复
+
+- **回测每日进度前缀改为 T 序号**：在 [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 中，每日总结首段由 `回测[YYYY-MM-DD]` 调整为 `T{day_index}[YYYY-MM-DD]`，例如 `T0[2019-01-23]`，便于按交易日序号快速定位日志。
+- **买入交易摘要改为展示买入资金（万元）**：同文件中，`交易: 买...` 项移除无意义的 `0d,+0.0%`，改为单票买入现金支出（成交金额+手续费）并按万元显示，如 `000001.SZ(10.3w)`。
+
+### 测试
+
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py)，覆盖新的 `T` 前缀和买入摘要金额格式。
+
 ## [0.71.71] - 2026-05-17
 
 ### 修复

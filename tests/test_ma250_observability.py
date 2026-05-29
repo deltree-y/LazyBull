@@ -316,6 +316,53 @@ class TestCompareWalkForwardSummarySanitize:
             assert pd.isna(row_a["market_regime_drawdown_threshold"])
             assert row_b["market_regime_drawdown_threshold"] == -0.12
 
+    def test_load_all_summaries_from_raw_dirs_infers_bt_rebalance_freq_from_split_boundaries(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_dir = Path(tmpdir) / "raw"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+
+            pd.DataFrame(
+                [
+                    {
+                        "wf_run_id": "wf_hist_001",
+                        "split_index": 0,
+                        "split_count": 14,
+                        "final_date": "20260324",
+                        "step": "semiannual",
+                        "train_window_years": 6,
+                        "test_window_months": 6,
+                        "label_column": "neu_y_ret_20",
+                        "oos_backtest": True,
+                        "train_start": "20130219",
+                        "train_end": "20190219",
+                        "test_start": "20190220",
+                        "test_end": "20190821",
+                    },
+                    {
+                        "wf_run_id": "wf_hist_001",
+                        "split_index": 13,
+                        "split_count": 14,
+                        "final_date": "20260324",
+                        "step": "semiannual",
+                        "train_window_years": 6,
+                        "test_window_months": 6,
+                        "label_column": "neu_y_ret_20",
+                        "oos_backtest": True,
+                        "train_start": "20190923",
+                        "train_end": "20250922",
+                        "test_start": "20250923",
+                        "test_end": "20260324",
+                    },
+                ]
+            ).to_csv(raw_dir / "walk_forward_summary_hist.csv", index=False, encoding="utf-8-sig")
+
+            loaded = load_all_summaries_from_raw_dirs([raw_dir], data_root=Path("./data"))
+
+            assert "bt_rebalance_freq" in loaded.columns
+            assert (loaded["bt_rebalance_freq"] == 3).all()
+
 
 class TestCompareWalkForwardPeriodStability:
     """测试 compare 脚本的跨时间段稳定性汇总。"""
@@ -752,6 +799,105 @@ class TestCompareWalkForwardPeriodStability:
         assert result.loc[0, "运行ID列表"] == (
             "0101:wf_20260508_120000_run001 | 0209:wf_20260508_121500_run002"
         )
+
+    def test_build_period_stability_table_separates_bt_rebalance_freq(self):
+        all_df = pd.DataFrame(
+            [
+                {
+                    "wf_run_id": "wf_test_101",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "bt_rebalance_freq": 3,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.12,
+                    "daily_rankic_ir": 0.60,
+                },
+                {
+                    "wf_run_id": "wf_test_102",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "bt_rebalance_freq": 3,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.08,
+                    "daily_rankic_ir": 0.45,
+                },
+                {
+                    "wf_run_id": "wf_test_103",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0101",
+                    "wf_start_date": "20130101",
+                    "wf_end_date": "20201231",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "bt_rebalance_freq": 5,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.10,
+                    "daily_rankic_ir": 0.58,
+                },
+                {
+                    "wf_run_id": "wf_test_104",
+                    "batch_run_id": "wf_batch_001",
+                    "batch_period_label": "0209",
+                    "wf_start_date": "20130224",
+                    "wf_end_date": "20210224",
+                    "split_index": 0,
+                    "algorithm": "xgboost",
+                    "max_depth": 3,
+                    "learning_rate": 0.01,
+                    "train_window_years": 6,
+                    "test_window_months": 6,
+                    "label_column": "neu_y_ret_20",
+                    "task": "regression",
+                    "label_transform": "cs_zscore",
+                    "bt_top_n": 20,
+                    "bt_rebalance_freq": 5,
+                    "position_sizing": "equal",
+                    "bt_total_return": 0.07,
+                    "daily_rankic_ir": 0.40,
+                },
+            ]
+        )
+
+        comp_df = build_comparison_table(all_df)
+        comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+
+        result = build_period_stability_table(comp_df)
+
+        assert len(result) == 2
+        assert sorted(result["回测调仓频率"].tolist()) == [3, 5]
+        assert (result["时间段数"] == 2).all()
 
 
 class TestCompareWalkForwardAutoDiscovery:
