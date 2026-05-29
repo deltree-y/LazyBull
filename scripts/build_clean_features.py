@@ -143,19 +143,25 @@ def build_clean_data(
             # 添加可交易标记
             suspend_raw = storage.load_raw_by_date("suspend", trade_date)
             limit_raw = storage.load_raw_by_date("stk_limit", trade_date)
+            stock_st_raw = storage.load_raw_by_date("stock_st", trade_date)
             
             suspend_clean = None
             limit_clean = None
+            stock_st_clean = None
             
             if suspend_raw is not None and len(suspend_raw) > 0:
                 suspend_clean = cleaner.clean_suspend_info(suspend_raw)
             
             if limit_raw is not None and len(limit_raw) > 0:
                 limit_clean = cleaner.clean_limit_info(limit_raw)
+
+            if stock_st_raw is not None and len(stock_st_raw) > 0:
+                stock_st_clean = cleaner.clean_stock_st(stock_st_raw)
             
             daily_clean = cleaner.add_tradable_universe_flag(
                 daily_clean,
                 stock_basic_clean,
+                stock_st_df=stock_st_clean,
                 suspend_info_df=suspend_clean,
                 limit_info_df=limit_clean,
                 min_list_days=min_list_days

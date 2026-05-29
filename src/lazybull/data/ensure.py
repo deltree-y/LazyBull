@@ -87,6 +87,16 @@ def ensure_raw_data_for_date(
                 storage.save_raw_by_date(daily_basic, "daily_basic", trade_date)
                 logger.info(f"  每日指标: 已保存 {len(daily_basic)} 条记录")
 
+        # 下载 ST 状态（按日口径用于写入 is_st）
+        if force or not storage.is_data_exists("raw", "stock_st", trade_date):
+            try:
+                stock_st = client.get_stock_st(trade_date=trade_date)
+                if stock_st is not None and not stock_st.empty:
+                    storage.save_raw_by_date(stock_st, "stock_st", trade_date)
+                    logger.info(f"  ST状态: 已保存 {len(stock_st)} 条记录")
+            except Exception as e:
+                logger.warning(f"ST状态数据获取失败: {trade_date}（{e}）")
+
         # 下载融资融券明细（按日分区，特征构建需要）
         if force or not storage.is_data_exists("raw", "margin_detail", trade_date):
             try:
@@ -229,9 +239,11 @@ def ensure_clean_data_for_date(
             if stock_basic is not None:
                 suspend_raw = storage.load_raw_by_date("suspend", trade_date)
                 limit_raw = storage.load_raw_by_date("stk_limit", trade_date)
+                stock_st_raw = storage.load_raw_by_date("stock_st", trade_date)
 
                 suspend_clean = None
                 limit_clean = None
+                stock_st_clean = None
 
                 if suspend_raw is not None and len(suspend_raw) > 0:
                     suspend_clean = cleaner.clean_suspend_info(suspend_raw)
@@ -239,9 +251,13 @@ def ensure_clean_data_for_date(
                 if limit_raw is not None and len(limit_raw) > 0:
                     limit_clean = cleaner.clean_limit_info(limit_raw)
 
+                if stock_st_raw is not None and len(stock_st_raw) > 0:
+                    stock_st_clean = cleaner.clean_stock_st(stock_st_raw)
+
                 daily_clean = cleaner.add_tradable_universe_flag(
                     daily_clean,
                     stock_basic,
+                    stock_st_df=stock_st_clean,
                     suspend_info_df=suspend_clean,
                     limit_info_df=limit_clean,
                     min_list_days=MIN_LIST_DAYS

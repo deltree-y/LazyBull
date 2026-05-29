@@ -363,6 +363,32 @@ class TushareClient:
             start_date=start_date,
             end_date=end_date
         )
+
+    def get_stock_st(
+        self,
+        ts_code: Optional[str] = None,
+        trade_date: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取 ST 状态数据（stock_st）。
+
+        Args:
+            ts_code: 股票代码
+            trade_date: 交易日期
+            start_date: 开始日期
+            end_date: 结束日期
+
+        Returns:
+            ST 状态 DataFrame，通常包含 ts_code、trade_date、is_st 等字段
+        """
+        return self.query(
+            "stock_st",
+            ts_code=ts_code,
+            trade_date=trade_date,
+            start_date=start_date,
+            end_date=end_date,
+        )
     
     def get_namechange(
         self,

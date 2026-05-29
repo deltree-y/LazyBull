@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.71.77] - 2026-05-29
+
+### 修复
+
+- **download_raw 支持仅下载 ST 状态数据**：在 [scripts/download_raw.py](scripts/download_raw.py) 新增 `--only-is-st` 参数，可在保留基础数据检查流程的前提下，仅按交易日下载 `stock_st` 分区，不再触发其它日线/另类数据下载。
+- **参数冲突防护**：同文件新增 `--only-is-st` 与 `--only-basic`、`--all`、`--download` 的冲突校验，避免混用导致行为歧义。
+- **确认 --all 已包含 stock_st**：`--all` 仍通过日线组下载路径执行，且 `DAILY_SUBSETS` 已包含 `stock_st`，因此 `--all` 会覆盖 ST 状态数据下载。
+
+## [0.71.76] - 2026-05-29
+
+### 修复
+
+- **is_st 改为按 stock_st 日级口径写入**：在 [src/lazybull/data/cleaner.py](src/lazybull/data/cleaner.py) 中新增 `clean_stock_st()`，并将 `add_tradable_universe_flag()` 的 ST 判定改为“`stock_st` 优先、名称正则兜底”，修复历史回测使用名称快照导致的 ST 漏判问题。
+- **raw 下载链路补齐 stock_st 分区**：在 [src/lazybull/data/tushare_client.py](src/lazybull/data/tushare_client.py) 新增 `get_stock_st()`，并在 [scripts/download_raw.py](scripts/download_raw.py) 将 `stock_st` 纳入默认日线组按日下载。
+- **离线构建与自动补齐统一接入 stock_st**：在 [scripts/build_clean_features.py](scripts/build_clean_features.py) 与 [src/lazybull/data/ensure.py](src/lazybull/data/ensure.py) 中加载并清洗 `stock_st` 后再写入 `is_st`，保证离线构建、paper ensure 链路口径一致。
+
+### 测试
+
+- 更新 [tests/test_cleaner.py](tests/test_cleaner.py)，新增 `stock_st` 覆盖名称判定的回归用例。
+- 更新 [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py) 的 `_load_factor_data` 测试桩返回签名，避免与当前特征 ensure 解包数量不一致。
+
 ## [0.71.75] - 2026-05-29
 
 ### 修复

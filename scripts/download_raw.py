@@ -8,17 +8,19 @@
 - 不触发clean或feature的构建
 - 支持force参数强制重新下载已存在的数据
 - 支持--download参数选择下载特定数据集
+- 支持--only-is-st仅下载ST状态数据(stock_st)
 - 全程错误汇总：单条失败不中断，跑完在总结页统一打印所有错误
 - 进度打印：基于已下载速率估算 ETA，方便无人值守
 
 数据集：
   基础数据（默认）：trade_cal, stock_basic
-  日线数据（默认）：daily, daily_basic, adj_factor, suspend, stk_limit, moneyflow
+    日线数据（默认）：daily, daily_basic, adj_factor, suspend, stk_limit, moneyflow, stock_st
   另类数据（需指定）：见 ALT_DATASETS
 
 使用示例：
     python scripts/download_raw.py                            # 基础 + 日线
     python scripts/download_raw.py --all                      # 日线 + 全部另类
+        python scripts/download_raw.py --only-is-st               # 仅下载 stock_st
     python scripts/download_raw.py --download fina_indicator  # 只下指定另类
     python scripts/download_raw.py --download all_alt         # 全部另类(不含日线)
 """
@@ -55,7 +57,9 @@ ALT_DATASETS = [
 ]
 
 # 日线组需要保持原子性的子数据集（任一失败即视为当日失败，不写盘任一）
-DAILY_SUBSETS = ["daily", "daily_basic", "adj_factor", "suspend", "stk_limit", "moneyflow"]
+DAILY_SUBSETS = [
+    "daily", "daily_basic", "adj_factor", "suspend", "stk_limit", "moneyflow", "stock_st"
+]
 
 # 全局并发数, 在 main() 里从 base.yaml 读取后设置; 1=串行(退化行为)
 # 说明: 并发仅使"网络等待"并行化, 真实 QPS 仍被 TushareClient 全局锁 + rate_limit 严格限制
@@ -277,7 +281,7 @@ def _run_concurrent(work_items, worker: Callable, label: str) -> None:
 
 
 # ────────────────────────────────────────────────────────────────────
-# 日线组: 6 个子接口按日聚合, 任一失败视为当日失败(原子性, 修复 #5)
+# 日线组: 7 个子接口按日聚合, 任一失败视为当日失败(原子性, 修复 #5)
 # ────────────────────────────────────────────────────────────────────
 
 # 各子接口对应的 client 方法 (修复 #4: moneyflow 确实缺失必须报错)
@@ -288,10 +292,11 @@ _DAILY_FETCHERS: Dict[str, Callable] = {
     "suspend": lambda c, d: c.get_suspend_d(trade_date=d),
     "stk_limit": lambda c, d: c.get_stk_limit(trade_date=d),
     "moneyflow": lambda c, d: c.get_moneyflow(trade_date=d),
+    "stock_st": lambda c, d: c.get_stock_st(trade_date=d),
 }
 
 # 允许当日无数据的接口 (停牌/涨跌停/资金流在极早期无数据是正常的)
-_DAILY_ALLOW_EMPTY = {"suspend", "stk_limit", "moneyflow", "adj_factor"}
+_DAILY_ALLOW_EMPTY = {"suspend", "stk_limit", "moneyflow", "adj_factor", "stock_st"}
 
 
 def _pending_daily_subsets(storage: Storage, trade_date: str, force: bool) -> List[str]:
@@ -311,7 +316,7 @@ def download_daily_data(
 ) -> None:
     """下载日线数据 (按日期分区, 原子性 + ETA 进度)。
 
-    修复 #5: 单日 6 个接口原子性 —— 只要任一接口抛异常, 整天标记失败;
+    修复 #5: 单日 7 个接口原子性 —— 只要任一接口抛异常, 整天标记失败;
     已成功拉取的 DataFrame 不落盘, 下次重跑可重新尝试, 避免"半个日子"永久缺失。
     修复 #4: moneyflow 返回空时不再是 error 日志, 而是 raise 被记录到错误汇总。
     修复 #13: len(trading_dates)==0 时直接返回, 防止除零。
@@ -469,6 +474,14 @@ def download_cyq_perf(client, storage, trade_cal, start_date, end_date, force=Fa
     _download_by_trade_date(
         "cyq_perf",
         lambda c, d: c.get_cyq_perf(trade_date=d),
+        client, storage, trade_cal, start_date, end_date, force,
+    )
+
+
+def download_stock_st(client, storage, trade_cal, start_date, end_date, force=False):
+    _download_by_trade_date(
+        "stock_st",
+        lambda c, d: c.get_stock_st(trade_date=d),
         client, storage, trade_cal, start_date, end_date, force,
     )
 
@@ -1002,6 +1015,10 @@ def main():
     parser.add_argument("--force", action="store_true",
                         help="强制重新下载, 即使文件已存在")
     parser.add_argument(
+        "--only-is-st", action="store_true",
+        help="仅下载 ST 状态数据(stock_st)，不下载其它日线/另类数据"
+    )
+    parser.add_argument(
         "--download", nargs="*", default=None,
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
              "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
@@ -1030,6 +1047,12 @@ def main():
     if _to_int_date(args.start_date) > _to_int_date(args.end_date):
         logger.error(f"start_date({args.start_date}) > end_date({args.end_date})")
         sys.exit(2)
+    if args.only_basic and args.only_is_st:
+        logger.error("参数冲突: --only-basic 与 --only-is-st 不能同时使用")
+        sys.exit(2)
+    if args.only_is_st and (args.all or (args.download is not None and len(args.download) > 0)):
+        logger.error("参数冲突: --only-is-st 不能与 --all 或 --download 同时使用")
+        sys.exit(2)
 
     # 初始化日志
     setup_logger(log_level="INFO")
@@ -1048,6 +1071,7 @@ def main():
     logger.info("=" * 70)
     logger.info(f"日期范围    : {args.start_date} ~ {args.end_date}")
     logger.info(f"仅基础数据  : {'是' if args.only_basic else '否'}")
+    logger.info(f"仅ST数据    : {'是' if args.only_is_st else '否'}")
     logger.info(f"强制重下    : {'是' if args.force else '否'}")
     logger.info(f"另类数据集  : {args.download or '无'}")
     logger.info(f"全量下载    : {'是' if args.all else '否'}")
@@ -1072,6 +1096,11 @@ def main():
 
         if args.only_basic:
             logger.info("仅下载基础数据, 完成")
+        elif args.only_is_st:
+            download_stock_st(
+                client, storage, trade_cal,
+                args.start_date, args.end_date, force=args.force,
+            )
         else:
             download_set: Set[str] = set(args.download) if args.download else set()
 

@@ -330,10 +330,54 @@ class DataCleaner:
 
         return df
 
+    def clean_stock_st(self, raw_df: pd.DataFrame) -> pd.DataFrame:
+        """清洗 stock_st 数据。
+
+        Args:
+            raw_df: 原始 stock_st DataFrame
+
+        Returns:
+            清洗后的 stock_st DataFrame（ts_code, trade_date, is_st）
+        """
+        logger.info(f"开始清洗 stock_st 数据，原始记录数: {len(raw_df)}")
+
+        df = raw_df.copy()
+
+        if "ts_code" not in df.columns:
+            logger.warning("stock_st 缺少 ts_code 列，返回空结果")
+            return pd.DataFrame(columns=["ts_code", "trade_date", "is_st"])
+
+        if "trade_date" not in df.columns and "date" in df.columns:
+            df = df.rename(columns={"date": "trade_date"})
+
+        if "trade_date" not in df.columns:
+            logger.warning("stock_st 缺少 trade_date 列，返回空结果")
+            return pd.DataFrame(columns=["ts_code", "trade_date", "is_st"])
+
+        # 统一键列格式，确保能和 daily 逐日匹配
+        df["ts_code"] = df["ts_code"].astype(str)
+        df["trade_date"] = df["trade_date"].astype(str)
+        df = self._standardize_date_columns(df, ["trade_date"])
+
+        if "is_st" in df.columns:
+            df["is_st"] = pd.to_numeric(df["is_st"], errors="coerce").fillna(1)
+            df["is_st"] = (df["is_st"] > 0).astype(int)
+        else:
+            # 兼容仅返回 ST 样本的场景：出现即视为 ST
+            df["is_st"] = 1
+
+        df = df[["ts_code", "trade_date", "is_st"]]
+        df = self._deduplicate(df, ["ts_code", "trade_date"])
+        df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+
+        logger.info(f"stock_st 清洗完成，清洗后记录数: {len(df)}")
+        return df
+
     def add_tradable_universe_flag(
         self,
         daily_df: pd.DataFrame,
         stock_basic_df: pd.DataFrame,
+        stock_st_df: Optional[pd.DataFrame] = None,
         suspend_info_df: Optional[pd.DataFrame] = None,
         limit_info_df: Optional[pd.DataFrame] = None,
         min_list_days: int = 365,
@@ -352,6 +396,7 @@ class DataCleaner:
         Args:
             daily_df: 清洗后的日线行情DataFrame
             stock_basic_df: 清洗后的股票基本信息DataFrame
+            stock_st_df: 清洗后的 stock_st 信息（可选，优先用于 is_st）
             suspend_info_df: 清洗后的停复牌信息（可选）
             limit_info_df: 清洗后的涨跌停信息（可选）
             min_list_days: 最小上市自然日天数，默认365天（约12个月）
@@ -367,13 +412,44 @@ class DataCleaner:
         stock_info = stock_basic_df[["ts_code", "name", "list_date"]].copy()
         df = df.merge(stock_info, on="ts_code", how="left")
 
-        # 2. ST 标记
+        # 2. ST 标记：优先 stock_st，缺失时回退名称规则
         df["is_st"] = (
             df["name"]
             .fillna("")
             .str.contains(r"(?:^\*?S?\*?ST|退市)", case=False, regex=True)
             .astype(int)
         )
+
+        stock_st_covered = 0
+        if stock_st_df is not None and len(stock_st_df) > 0:
+            st_df = stock_st_df.copy()
+
+            if "trade_date" not in st_df.columns and "date" in st_df.columns:
+                st_df = st_df.rename(columns={"date": "trade_date"})
+
+            if {"ts_code", "trade_date"}.issubset(st_df.columns):
+                st_df["ts_code"] = st_df["ts_code"].astype(str)
+                st_df["trade_date"] = st_df["trade_date"].astype(str)
+                st_df = self._standardize_date_columns(st_df, ["trade_date"])
+
+                if "is_st" in st_df.columns:
+                    st_df["is_st"] = pd.to_numeric(st_df["is_st"], errors="coerce").fillna(1)
+                    st_df["is_st"] = (st_df["is_st"] > 0).astype(int)
+                else:
+                    st_df["is_st"] = 1
+
+                st_df = st_df[["ts_code", "trade_date", "is_st"]]
+                st_df = self._deduplicate(st_df, ["ts_code", "trade_date"])
+                st_df = st_df.rename(columns={"is_st": "_is_st_stock_st"})
+
+                df = df.merge(st_df, on=["ts_code", "trade_date"], how="left")
+                mask = df["_is_st_stock_st"].notna()
+                stock_st_covered = int(mask.sum())
+                if stock_st_covered > 0:
+                    df.loc[mask, "is_st"] = df.loc[mask, "_is_st_stock_st"].astype(int)
+                df.drop(columns=["_is_st_stock_st"], inplace=True, errors="ignore")
+            else:
+                logger.warning("stock_st 数据缺少 ts_code/trade_date 列，回退名称规则")
 
         # 3. 上市天数（使用自然日近似）
         df["list_days"] = -1  # 默认值：未知上市日期的股票不应通过 min_list_days 过滤
@@ -452,7 +528,8 @@ class DataCleaner:
         logger.info(
             f"可交易标记添加完成: 可交易 {tradable_count} ({tradable_pct:.1f}%), "
             f"ST {df['is_st'].sum()}, 停牌 {df['is_suspended'].sum()}, "
-            f"上市不足{min_list_days}天 {(df['list_days'] < min_list_days).sum()}"
+            f"上市不足{min_list_days}天 {(df['list_days'] < min_list_days).sum()}, "
+            f"stock_st 覆盖 {stock_st_covered}"
         )
 
         return df

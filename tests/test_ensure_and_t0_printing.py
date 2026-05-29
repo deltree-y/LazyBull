@@ -67,6 +67,7 @@ def mock_client():
     # 模拟停复牌和涨跌停（空数据）
     client.get_suspend_d.return_value = pd.DataFrame()
     client.get_stk_limit.return_value = pd.DataFrame()
+    client.get_stock_st.return_value = pd.DataFrame()
     
     return client
 
@@ -546,6 +547,8 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
         ensure_module,
         "_load_factor_data",
         lambda *args, **kwargs: (
+            None,
+            None,
             None,
             None,
             None,

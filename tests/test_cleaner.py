@@ -179,6 +179,42 @@ class TestDataCleaner:
         assert result[result['ts_code'] == '000002.SZ']['is_st'].iloc[0] == 0
         assert result[result['ts_code'] == '600000.SH']['is_st'].iloc[0] == 1
         assert result[result['ts_code'] == '600001.SH']['is_st'].iloc[0] == 1
+
+    def test_add_tradable_universe_flag_stock_st_override(self, cleaner):
+        """测试 stock_st 优先覆盖名称判定"""
+        daily_df = pd.DataFrame({
+            'ts_code': ['000001.SZ', '000002.SZ'],
+            'trade_date': ['20230110', '20230110'],
+            'close': [10.0, 11.0],
+            'vol': [1000000, 1000000],
+            'pct_chg': [1.0, 2.0]
+        })
+
+        stock_basic_df = pd.DataFrame({
+            'ts_code': ['000001.SZ', '000002.SZ'],
+            'name': ['平安银行', '万科A'],
+            'list_date': ['20100101', '20100101']
+        })
+
+        stock_st_df = pd.DataFrame({
+            'ts_code': ['000001.SZ'],
+            'trade_date': ['20230110'],
+            'is_st': [1]
+        })
+
+        result = cleaner.add_tradable_universe_flag(
+            daily_df,
+            stock_basic_df,
+            stock_st_df=stock_st_df,
+            min_list_days=1,
+        )
+
+        # 000001.SZ 名称不是 ST，但被 stock_st 标记为 ST
+        assert result[result['ts_code'] == '000001.SZ']['is_st'].iloc[0] == 1
+        assert result[result['ts_code'] == '000001.SZ']['tradable'].iloc[0] == 0
+
+        # 000002.SZ 无 stock_st 覆盖，沿用名称规则（非 ST）
+        assert result[result['ts_code'] == '000002.SZ']['is_st'].iloc[0] == 0
     
     def test_add_tradable_universe_flag_suspension_detection(self, cleaner):
         """测试停牌检测"""

@@ -28,7 +28,18 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.75)
+### 当前版本 (v0.71.77)
+
+**download_raw 支持仅下载 ST 状态数据** (v0.71.77):
+- [scripts/download_raw.py](scripts/download_raw.py) 新增 `--only-is-st` 参数，可只下载 `stock_st`（is_st 来源数据），不触发其它日线/另类数据下载。
+- 同文件新增参数冲突校验：`--only-is-st` 不能与 `--only-basic`、`--all`、`--download` 同时使用，避免执行语义不明确。
+- `--all` 仍会覆盖 `stock_st`：其走日线组下载路径，而日线集合 `DAILY_SUBSETS` 已包含 `stock_st`。
+
+**ST 判定改为 stock_st 按日口径写入** (v0.71.76):
+- [src/lazybull/data/cleaner.py](src/lazybull/data/cleaner.py) 新增 `clean_stock_st()`，并将 `add_tradable_universe_flag()` 的 `is_st` 判定改为“`stock_st` 优先、名称规则兜底”，修复历史回测中因名称快照引起的 ST 漏判。
+- [scripts/download_raw.py](scripts/download_raw.py) 的默认日线下载已纳入 `stock_st`，并在 [src/lazybull/data/tushare_client.py](src/lazybull/data/tushare_client.py) 新增 `get_stock_st()` 封装，保证 raw 层可按交易日落盘 ST 状态。
+- [scripts/build_clean_features.py](scripts/build_clean_features.py) 与 [src/lazybull/data/ensure.py](src/lazybull/data/ensure.py) 均已接入 `stock_st`，离线构建与自动补齐链路现在使用同一 ST 数据口径。
+- 更新 [tests/test_cleaner.py](tests/test_cleaner.py) 与 [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py) 回归测试。
 
 **回测最小买入后市值阈值对齐纸面交易** (v0.71.75):
 - [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 新增 `min_buy_value_ratio`，并在回测买入执行路径中按与纸面交易一致的口径拦截过小买单：`阈值=总资产/目标持仓数*ratio`。

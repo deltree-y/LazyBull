@@ -157,9 +157,9 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(10,15,20)            # 回测持仓 Top N
+$bt_top_n_list           = @(15)            # 回测持仓 Top N
 $bt_rebalance_freq       = 3#$null            # 调仓频率（$null 表示从标签自动推断）
-$bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
+$bt_initial_capital      = 500000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
 $bt_min_list_days_list   = @(365)           # 最少上市天数
