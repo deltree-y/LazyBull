@@ -134,13 +134,69 @@ def test_daily_trade_log_buy_and_sell_items_are_not_compacted():
     assert sell_count == 6
     assert len(lines) == 2
     assert lines[0] == (
-        "交易: 买6[000000.SZ(1.0w), 000001.SZ(1.0w), 000002.SZ(1.0w), "
-        "000003.SZ(1.0w), 000004.SZ(1.0w), 000005.SZ(1.0w)]"
-    )
-    assert lines[1] == (
         "交易: 卖6[000100.SZ(1d,+0.0%), 000101.SZ(1d,+1.0%), 000102.SZ(1d,+2.0%), "
         "000103.SZ(1d,+3.0%), 000104.SZ(1d,+4.0%), 000105.SZ(1d,+5.0%)]"
     )
+    assert lines[1] == (
+        "交易: 买6[000000.SZ(1.0w), 000001.SZ(1.0w), 000002.SZ(1.0w), "
+        "000003.SZ(1.0w), 000004.SZ(1.0w), 000005.SZ(1.0w)]"
+    )
+
+
+def test_daily_signal_log_summarizes_new_buy_and_sell_signals():
+    """当日新生成的买卖信号应压缩为一条简洁计数日志。"""
+    trade_date = pd.Timestamp("2025-01-02")
+    next_date = pd.Timestamp("2025-01-03")
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(top_n=20),
+        initial_capital=100000.0,
+        rebalance_freq=20,
+        verbose=False,
+    )
+
+    engine.pending_signals[trade_date] = {
+        "signals": {"000001.SZ": 0.1, "000002.SZ": 0.1},
+        "decision_trace": {"queued": True},
+    }
+    engine.pending_condition_sells["000003.SZ"] = {
+        "trigger_date": trade_date,
+        "sell_type": "holding_period",
+    }
+    engine.pending_condition_sells["000004.SZ"] = {
+        "trigger_date": trade_date,
+        "sell_type": "early_exit",
+    }
+    engine.pending_stop_loss_sells["000005.SZ"] = {
+        "trigger_date": trade_date,
+        "trigger_type": "drawdown",
+    }
+    engine.pending_stop_loss_sells["000006.SZ"] = {
+        "trigger_date": next_date,
+        "trigger_type": "trailing_stop",
+    }
+    engine._record_profit_extension_count(3)
+
+    assert (
+        engine._build_daily_signal_log(trade_date)
+        == "信号: 卖[持有期1, 亏损换出1, 回撤止损1] | 买[调仓2] | 延续[3]"
+    )
+
+
+def test_daily_signal_log_can_show_extension_only():
+    """当日只有盈利延续时，也应输出信号摘要。"""
+    trade_date = pd.Timestamp("2025-01-02")
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(top_n=20),
+        initial_capital=100000.0,
+        rebalance_freq=20,
+        verbose=False,
+    )
+
+    engine._record_profit_extension_count(20)
+
+    assert engine._build_daily_signal_log(trade_date) == "信号: 延续[20]"
 
 
 def test_target_position_count_scales_with_stagger_tranches():
@@ -269,8 +325,8 @@ def test_cycle_separator_is_logged_before_new_cycle_signal(monkeypatch):
     assert separator_indices[1] > signal_index
 
 
-def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
-    """单日回测应先输出总结，再输出调仓决策摘要、交易两行，最后回放缓冲细节。"""
+def test_run_emits_daily_summary_before_trade_signal_and_detail_logs(monkeypatch):
+    """单日回测应先输出总结，再输出调仓摘要、交易两行、信号统计，最后回放缓冲细节。"""
 
     trade_date = pd.Timestamp("2025-01-02")
     engine = BacktestEngine(
@@ -298,6 +354,19 @@ def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
 
     def fake_check_and_sell(date, trading_dates, date_to_idx):
         engine_module.logger.info("调仓决策摘要: 信号日 2025-01-02 | 执行=2025-01-03 | 候选=5 | 目标=2")
+        engine.pending_signals[date] = {
+            "signals": {"000007.SZ": 0.1, "000008.SZ": 0.1},
+            "decision_trace": {"queued": True},
+        }
+        engine.pending_condition_sells["000009.SZ"] = {
+            "trigger_date": date,
+            "sell_type": "holding_period",
+        }
+        engine.pending_stop_loss_sells["000010.SZ"] = {
+            "trigger_date": date,
+            "trigger_type": "drawdown",
+        }
+        engine._record_profit_extension_count(4)
         engine.trades.append(
             {
                 "date": date,
@@ -338,6 +407,11 @@ def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
         for i, (_, message, _) in enumerate(emitted_messages)
         if "调仓决策摘要: 信号日 2025-01-02 | 执行=2025-01-03 | 候选=5 | 目标=2" in message
     )
+    signal_index = next(
+        i
+        for i, (_, message, _) in enumerate(emitted_messages)
+        if "信号: 卖[持有期1, 回撤止损1] | 买[调仓2] | 延续[4]" in message
+    )
     buy_index = next(
         i for i, (_, message, _) in enumerate(emitted_messages) if "交易: 买1[000001.SZ(10.3w)]" in message
     )
@@ -348,7 +422,7 @@ def test_run_emits_daily_summary_before_trade_and_detail_logs(monkeypatch):
         i for i, (_, message, _) in enumerate(emitted_messages) if "调试细节日志" in message
     )
 
-    assert summary_index < decision_index < buy_index < sell_index < detail_index
+    assert summary_index < decision_index < sell_index < buy_index < signal_index < detail_index
     assert emitted_messages[detail_index][1].startswith("  调试细节日志")
 
 

@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -36,21 +36,21 @@ $wf_period_configs = @(
         SplitCount = 13
         FinalDate = "20251231"
         ContinueDays = 1
-        StartModelVersion = 16365
+        StartModelVersion = 16542#16501(5)#16447(4)#16365
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
         FinalDate = "20260209"
         ContinueDays = 1
-        StartModelVersion = 16378
+        StartModelVersion = 16555#16514(5)#16460(4)#16378
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
         FinalDate = "20260324"
         ContinueDays = 1
-        StartModelVersion = 16392
+        StartModelVersion = 16569#16528(5)#16474(4)#16392
     }
 )
 
@@ -68,9 +68,9 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
+$max_depth_list          = @(6)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.015)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.01)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -157,9 +157,9 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(15)            # 回测持仓 Top N
-$bt_rebalance_freq       = 3#$null            # 调仓频率（$null 表示从标签自动推断）
-$bt_initial_capital      = 500000          # 回测初始资金（默认：100万）
+$bt_top_n_list           = @(20)            # 回测持仓 Top N
+$bt_rebalance_freq_list  = @(8)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
+$bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
 $bt_min_list_days_list   = @(365)           # 最少上市天数
@@ -178,24 +178,27 @@ $kelly_max_leverage_list          = @(0.1)    # Kelly 单股仓位上限（可�
 # 0426这里应为composite
 $signal_gate_mode = "disabled"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
 # 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
-$signal_gate_cost_multiplier_list = @(1.0)      #0.3 composite: 门控严格度扫描
+# 0601 回撤降低4%, 收益降低4%
+$signal_gate_cost_multiplier_list = @(0.8)      #0.3 composite: 门控严格度扫描
 $signal_gate_round_trip_cost = 0.003            # composite: 往返交易成本估算（佣金+印花税+滑点，仅原始收益模式使用）
-$signal_gate_percentile_warmup = 5              # composite: 百分位归一化预热期（调仓次数）
+$signal_gate_percentile_warmup = 3              # composite: 百分位归一化预热期（调仓次数）
 
 # 滚动模型质量监控子开关：仅在开启时才使用以下质量参数
+# 0601:没用
 $signal_gate_quality_enabled = $false            # $true 启用 | $false 禁用
-$signal_gate_quality_window_list = @(3)         #2 滚动质量回看调仓周期数
-$signal_gate_quality_threshold_list = @(0.6)    #0.5 滚动质量最低 hit rate
-$signal_gate_quality_halflife = 4               #4 滚动质量 EWM 半衰期
+$signal_gate_quality_window_list = @(2)         #2 滚动质量回看调仓周期数
+$signal_gate_quality_threshold_list = @(0.2)    #0.5 滚动质量最低 hit rate
+$signal_gate_quality_halflife = 3               #4 滚动质量 EWM 半衰期
 
 # 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
+# 0601: 降低回撤2%, 降低收益3%
 $signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用
-$signal_gate_topn_high_multiplier = 0.6         # 高置信度缩减系数（<1，集中持股，如 top_n=17 → 10只）
-$signal_gate_topn_low_multiplier  = 1.5         # 中低置信度扩大系数（>1，分散持股，如 top_n=17 → 25只）
+$signal_gate_topn_high_multiplier = 0.8         # 高置信度缩减系数（<1，集中持股，如 top_n=17 → 10只）
+$signal_gate_topn_low_multiplier  = 1.2         # 中低置信度扩大系数（>1，分散持股，如 top_n=17 → 25只）
 
 # 持仓保留奖励子开关：仅在开启时对已持仓股票给予分数加成，降低换手
 $holding_bonus_enabled = $false                 # $true 启用 | $false 禁用
-$holding_bonus_sigma   = 0.5                    # 奖励幅度（截面分数标准差的倍数，0.3~1.0）
+$holding_bonus_sigma   = 0.25                    # 奖励幅度（截面分数标准差的倍数，0.3~1.0）
 
 # 旧版置信度门控子开关：仅在 $signal_gate_mode = "legacy" 且开关为 $true 时生效
 $signal_confidence_gate_enabled = $false
@@ -204,8 +207,8 @@ $signal_confidence_gate_threshold_sets = @( "0.01 0.02 0.10" )
 $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
 # ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
-# 0426这里应为true
-$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
+# 0601这里应为true
+$enable_profit_based_holding      = $false       # $true 启用 | $false 禁用
 # 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
 # 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，
@@ -526,6 +529,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $market_regime_ma250_threshold_list.Length *
               $market_regime_ma250_exposure_list.Length *
               $bt_top_n_list.Length *
+              $bt_rebalance_freq_list.Length *
               $signal_gate_cost_multiplier_list.Length *
               $signal_gate_quality_window_list.Length *
               $signal_gate_quality_threshold_list.Length *
@@ -602,6 +606,7 @@ foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($market_regime_ma250_threshold in $market_regime_ma250_threshold_list) {
 foreach ($market_regime_ma250_exposure in $market_regime_ma250_exposure_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
+foreach ($bt_rebalance_freq in $bt_rebalance_freq_list) {
 foreach ($signal_gate_cost_multiplier in $signal_gate_cost_multiplier_list) {
 foreach ($signal_gate_quality_window in $signal_gate_quality_window_list) {
 foreach ($signal_gate_quality_threshold in $signal_gate_quality_threshold_list) {
@@ -938,7 +943,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

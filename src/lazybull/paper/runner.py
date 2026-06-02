@@ -27,7 +27,7 @@ from ..universe.base import BasicUniverse
 from ..portfolio.industry_constraint import load_industry_mapping, apply_industry_constraint
 from .account import PaperAccount
 from .broker import PaperBroker
-from .models import NAVRecord, TargetWeight, TradeInstruction
+from .models import NAVRecord, PendingBuy, TargetWeight, TradeInstruction
 from .storage import PaperStorage
 
 # 常量定义
@@ -581,6 +581,7 @@ class PaperTradingRunner:
         total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
 
         # 仅处理目标股票买入/加仓（按目标顺序）
+        desired_position_count = len(ordered_target_codes)
         for ts_code in ordered_target_codes:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
             pos = current_positions.get(ts_code)
@@ -608,7 +609,9 @@ class PaperTradingRunner:
                         price_type=buy_price_type,
                         reason=reason,
                         source_date=source_date,
-                        target_weight=target_weight
+                        target_weight=target_weight,
+                        original_signal_date=source_date,
+                        desired_position_count=desired_position_count,
                     ))
             # target_shares <= current_shares 时不生成卖出指令：
             # 卖出统一由持有期到期/条件触发路径处理。
@@ -768,6 +771,9 @@ class PaperTradingRunner:
         
         # 保存交易指令（指令驱动模式）
         self.paper_storage.save_instructions(t1_date, instructions)
+        if hasattr(self.signal, "_last_ranked_candidates") and self.signal._last_ranked_candidates:
+            logger.info("保存本轮 ranked_candidates 供 T1 买入顺延使用")
+            self.paper_storage.save_ranked_candidates(self.signal._last_ranked_candidates, corrected_date)
         
         # 8. 更新调仓状态
         rebalance_state = {
@@ -867,6 +873,21 @@ class PaperTradingRunner:
             fills_count += len(fills) if fills else 0
             orders_count += len(instructions)
         
+        same_day_pending_buys: List[PendingBuy] = []
+        failed_buy_targets = self.broker.get_failed_buy_targets()
+        if failed_buy_targets:
+            logger.info("步骤3a: 处理当日买入失败的同日顺延补位")
+            same_day_pending_buys = self._build_pending_buys_from_failed_targets(
+                failed_buy_targets,
+                corrected_date,
+                attempts=0,
+            )
+            self.broker.clear_failed_buy_targets()
+            logger.info(f"当日新增 {len(same_day_pending_buys)} 个失败买入槽位，立即按 T0 候选顺延")
+
+        if same_day_pending_buys:
+            pending_buys = same_day_pending_buys + list(pending_buys or [])
+
         # 8. 执行补位买入（如果有pending_buys）
         if pending_buys:
             logger.info("步骤3b: 处理补位买入计划")
@@ -906,6 +927,37 @@ class PaperTradingRunner:
         logger.info("=" * 80)
         logger.info(f"T1工作流完成 - {corrected_date}")
         logger.info("=" * 80)
+
+    def _build_pending_buys_from_failed_targets(
+        self,
+        failed_buy_targets: List[TargetWeight],
+        trade_date: str,
+        attempts: int = 0,
+    ) -> List[PendingBuy]:
+        """将失败买入目标转换为补位槽位。"""
+        pending_buys: List[PendingBuy] = []
+        fallback_weight = 1.0 / max(len(failed_buy_targets), 1)
+
+        for target in failed_buy_targets:
+            slot_weight = float(getattr(target, "target_weight", 0.0) or 0.0)
+            if slot_weight <= 0:
+                slot_weight = fallback_weight
+
+            pending_buys.append(
+                PendingBuy(
+                    ts_code=str(getattr(target, "ts_code", "")),
+                    target_weight=slot_weight,
+                    reason=f"补位槽位-{getattr(target, 'reason', '买入失败')}",
+                    create_date=trade_date,
+                    attempts=attempts,
+                    last_attempt_date="",
+                    original_signal_date=str(
+                        getattr(target, "original_signal_date", trade_date) or trade_date
+                    ),
+                )
+            )
+
+        return pending_buys
     
     def _estimate_pending_buy_shares(
         self,
@@ -1063,13 +1115,45 @@ class PaperTradingRunner:
         if date_quote is None:
             date_quote = pd.DataFrame()
 
-        # 对齐回测：基于上一交易日重算候选池，并限制为「槽位数*2」
+        # 对齐回测：优先读取 T0 持久化候选池，再基于上一交易日重算候选池，
+        # 并限制为「槽位数*2」。
         slot_count = len(pending_buys)
         candidate_buffer = slot_count * 2
         prev_trade_date = self._get_prev_trade_date(trade_date)
 
         candidate_codes: List[str] = []
-        if prev_trade_date and self.signal is not None and hasattr(self.signal, "generate_ranked"):
+        existing_positions = set(self.account.get_positions().keys())
+        expected_signal_dates = {
+            str(getattr(pb, 'original_signal_date', '') or '')
+            for pb in pending_buys
+            if str(getattr(pb, 'original_signal_date', '') or '')
+        }
+        if prev_trade_date:
+            expected_signal_dates.add(prev_trade_date)
+
+        rc_loaded = self.paper_storage.load_ranked_candidates()
+        if isinstance(rc_loaded, tuple) and len(rc_loaded) == 2:
+            ranked_candidates, signal_date = rc_loaded
+            signal_date = str(signal_date)
+            if signal_date in expected_signal_dates:
+                for ts_code, _ in ranked_candidates:
+                    if ts_code in existing_positions:
+                        continue
+                    candidate_codes.append(ts_code)
+                    if len(candidate_codes) >= candidate_buffer:
+                        break
+                if candidate_codes:
+                    logger.info(
+                        f"补位候选池读取 T0 持久化排序: signal_date={signal_date}, "
+                        f"有限候选 {len(candidate_codes)} 只（槽位 {slot_count}）"
+                    )
+
+        if (
+            not candidate_codes
+            and prev_trade_date
+            and self.signal is not None
+            and hasattr(self.signal, "generate_ranked")
+        ):
             signal_data = self.storage.load_cs_train_day(prev_trade_date, subdir="cs_infer")
             if signal_data is None or signal_data.empty:
                 ok, missing = ensure_features_for_date(
@@ -1087,8 +1171,6 @@ class PaperTradingRunner:
 
             if signal_data is not None and not signal_data.empty:
                 try:
-                    existing_positions = set(self.account.get_positions().keys())
-
                     stocks: List[str] = []
                     stock_basic = self.loader.load_clean_stock_basic()
                     prev_daily_data = self.loader.load_clean_daily_by_date(prev_trade_date)

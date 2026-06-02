@@ -28,7 +28,52 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.71.77)
+### 当前版本 (v0.72.6)
+
+**回测非动态持仓分支补齐 T0->T1 卖后买链路** (v0.72.6):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 在 `enable_profit_based_holding=False` 的 `holding_period` 卖出路径中，现会同步写入次日补位买入计划。
+- 执行语义恢复为 T+1 当日“先卖后买”，减少了“T+1 只卖不买”导致的空仓提前调仓与短轮次日志。
+- 更新 [tests/test_backtest_t1.py](tests/test_backtest_t1.py) 回归测试，新增未启用盈亏动态持仓场景下的 T1 卖后买断言。
+
+**调仓决策摘要“最终”段精简为短标签** (v0.72.5):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 的 `调仓决策摘要` 里，`最终` 字段不再重复展开 `信号门控 x 质量 x ECT x 市场层` 的完整乘法细节。
+- 正常路径改为 `最终=xx.x%[入队/不入队]`；门控阻断路径改为 `最终=0.0%[门控阻断, 不入队]`，在保留关键结论的同时显著缩短单行日志长度。
+- 更新 [tests/test_ml_backtest_engine.py](tests/test_ml_backtest_engine.py) 回归测试，覆盖新的 `最终` 段文案。
+
+**回测信号与交易摘要统一改为卖在前、买在后** (v0.72.4):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 的日终 `交易:` 摘要现在会先输出卖出、再输出买入；`信号:` 单行也同步调整为先展示卖出信号，再展示买入信号。
+- 这样日志顺序会更贴合当前回测语义：先看释放了哪些仓位，再看补入了哪些仓位或计划补哪些仓位。
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py) 回归测试，覆盖 `交易:` 与 `信号:` 的新顺序。
+
+**回测信号摘要新增延续数量并调整输出顺序** (v0.72.3):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 的 `信号:` 单行现在会额外展示当日 `盈利延续` 数量；如果当天没有新的买/卖信号，但存在延续持有，也会打印类似 `信号: 延续[20]` 的摘要。
+- 同一行的输出位置已从交易摘要之前调整到 `交易: 买... / 卖...` 之后，便于先看 T+1 实际成交，再看当日新生成的 T 日信号。
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py) 回归测试，覆盖“延续数量统计”和“信号摘要顺序后移”的行为。
+
+**回测新增 T 日信号数量摘要日志** (v0.72.2):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会在每个产生新买入/卖出信号的 T 日，额外输出一条简洁的 `信号:` 统计，按类别汇总当日新生成的买卖信号数量。
+- 统计口径覆盖调仓买入、补槽买入，以及持有期卖出、亏损换出、时间止损、回撤止损、移动止损、连续跌停等卖出信号，且输出位置固定在调仓决策摘要之后、实际成交摘要之前，便于区分“T 日决策”和“T+1 成交”。
+- 更新 [tests/test_backtest_daily_progress_log.py](tests/test_backtest_daily_progress_log.py) 回归测试，覆盖文本格式与日志顺序。
+
+**回测盈利延续/持有期卖出后次日补买修复** (v0.72.1):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会在 `holding_period` 卖出信号生成日同步写入对应的待买计划；到下一交易日先按实际卖出结果释放空槽，再按 T0 的 ML 候选顺位补回，不再出现盈利延续失败后仓位一路下滑但没有对应补买的问题。
+- 同文件的待买计划新增显式 `desired_position_count`，部分补买场景会按实际卖出成功数量收缩开仓槽位，而不是把“待补槽位数”误当成组合总目标持仓数。
+- 更新 [tests/test_backtest_t1.py](tests/test_backtest_t1.py) 回归测试，覆盖“盈利延续未通过后，下一交易日先卖再买”的行为。
+
+**纸面交易买入改为 T0 计划、T+1 执行并支持同日顺延** (v0.72.0):
+- [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 与 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 现在会在 T0 保存 ranked_candidates；T+1 执行原计划买单失败后，会先在同一个交易日按 T0 的 ML 候选顺序继续顺延，而不是立即把失败槽位全部推迟到下一交易日。
+- [src/lazybull/paper/broker.py](src/lazybull/paper/broker.py) 现按 T0 目标持仓数限制新开仓；如果当日卖出失败导致空槽未真正释放，当日不会继续超配买入。
+- 更新 [tests/test_buy_replacement.py](tests/test_buy_replacement.py) 与 [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py) 回归测试，覆盖“同日顺延优先，跨日补位兜底”的纸面交易新口径。
+
+**回测买入改为 T0 计划、T+1 按优先级顺位执行** (v0.71.79):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会在 T0 保存 ML 候选优先级和原始槽位权重，T+1 执行买入时若原计划股票涨停、停牌或未成交，会在同日按候选顺序继续顺延，而不是提前在 T0 用 T+1 状态做前视过滤。
+- 同文件中，若 T+1 卖出失败并进入延迟卖出队列，当日买入会按实际空槽数收缩，不再因为账户里仍有现金而继续超配加仓。
+- 更新 [tests/test_backtest_t1.py](tests/test_backtest_t1.py) 与 [tests/test_position_completion.py](tests/test_position_completion.py) 回归测试，覆盖“同日顺延优先，跨日补齐兜底”的新口径。
+
+**回测持有期/盈利延续卖出改为 T0 信号、T+1 执行** (v0.71.78):
+- [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 将“持有期到期、盈利延续未通过、盈利延续到期”三条预定卖出路径从当日直卖改为先写入 `pending_condition_sells`，由下一交易日统一执行，和现有条件卖出时序对齐。
+- 同文件初始化日志中的交易规则说明已同步更新，明确卖出变为“满持有期后 T0 生成卖出信号，下一交易日成交”。
+- 更新 [tests/test_backtest_t1.py](tests/test_backtest_t1.py) 回归测试，覆盖持有期到期、盈利延续未通过、盈利延续到期三条 T0->T1 卖出路径。
 
 **download_raw 支持仅下载 ST 状态数据** (v0.71.77):
 - [scripts/download_raw.py](scripts/download_raw.py) 新增 `--only-is-st` 参数，可只下载 `stock_st`（is_st 来源数据），不触发其它日线/另类数据下载。

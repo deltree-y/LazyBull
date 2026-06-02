@@ -116,7 +116,7 @@ def _format_rebalance_decision_summary(
     else:
         topn_text = f"目标={target_n}"
 
-    final_action = "进入待买队列" if queued else "本次不进入待买队列"
+    final_action = "入队" if queued else "不入队"
 
     # 构建门控行：综合显示 composite exposure + quality exposure + 最终门控系数
     gate_composite_exposure = signal_gate_exposure if signal_gate_exposure is not None else 1.0
@@ -131,16 +131,9 @@ def _format_rebalance_decision_summary(
         and signal_gate_exposure is not None
         and signal_gate_exposure <= 0
     ):
-        final_detail = f"门控阻断, {final_action}"
+        final_detail = "门控阻断, 不入队"
     else:
-        # 最终 = 信号门控(composite) x 质量系数 x ECT x 市场层
-        # 完整展开所有参与相乘的分项，避免出现与分项乘积不符的"神秘"结果
-        final_detail = (
-            f"信号门控={_fmt_exposure(gate_composite_exposure)} x "
-            f"质量={_fmt_exposure(gate_quality_exposure)} x "
-            f"ECT={_fmt_exposure(ect_exposure)} x "
-            f"市场层={_fmt_exposure(market_layer_exposure)}, {final_action}"
-        )
+        final_detail = final_action
     gate_summary_text = _compact_summary(signal_gate.get("summary", "未启用"))
     # 质量监控相关字段（始终显示）
     quality_score = signal_gate.get("quality_score")
@@ -528,7 +521,7 @@ class BacktestEngine:
         )  # {股票代码: {trigger_date, reason, trigger_type}} 待止损卖出队列
         self.pending_condition_sells: Dict[str, Dict] = (
             {}
-        )  # {股票代码: {trigger_date, sell_type}} 待条件卖出队列（亏损提前换出/整体止盈）
+        )  # {股票代码: {trigger_date, sell_type}} 待条件卖出队列（T0 触发、T1 执行）
         self._pending_take_profit_info: Optional[Dict] = None  # 止盈元数据（延迟到执行日处理）
         self._cycle_anchor_idx: int = 0  # 当前调仓周期起点 idx（用于 cycle_day 日志显示）
         self.portfolio_values: List[Dict] = []  # 组合价值历史
@@ -613,7 +606,7 @@ class BacktestEngine:
         )
         sell_price_type = "开盘价" if self.sell_timing == "open" else "收盘价"
         logger.info(
-            f"交易规则: T日生成信号 -> T+1日收盘价买入 -> T+{self.holding_period}日{sell_price_type}卖出"
+            f"交易规则: T日生成信号 -> T+1日收盘价买入 -> 满{self.holding_period}天后T0生成卖出信号 -> 下一交易日{sell_price_type}卖出"
         )
         logger.info(f"价格口径: 成交使用不复权 close/open, 绩效使用后复权 close_adj/open_adj")
 
@@ -735,11 +728,11 @@ class BacktestEngine:
                     if self.stop_loss_monitor:
                         self._execute_pending_stop_loss_sells(date, trading_dates, date_to_idx)
 
-                    # 执行条件卖出（Tn+1 执行：亏损提前换出、整体止盈）
+                    # 执行条件卖出（Tn+1 执行：亏损提前换出、整体止盈、持有期到期）
                     self._execute_pending_condition_sells(date, trading_dates, date_to_idx)
 
-                    # 检查卖出条件 + 执行持有期到期卖出
-                    # - 持有期到期 / 盈利延续到期：预定事件，Tn 直接卖出
+                    # 检查卖出条件并生成 T0 卖出信号
+                    # - 持有期到期 / 盈利延续到期：写入 pending_condition_sells，Tn+1 执行
                     # - 亏损提前换出 / 整体止盈：写入 pending_condition_sells，Tn+1 执行
                     self._check_and_sell(date, trading_dates, date_to_idx)
 
@@ -882,6 +875,9 @@ class BacktestEngine:
                 )
                 for trade_detail_log in trade_detail_logs:
                     self._emit_immediate_log("INFO", f"  {trade_detail_log}")
+                signal_count_log = self._build_daily_signal_log(date)
+                if signal_count_log:
+                    self._emit_immediate_log("INFO", f"  {signal_count_log}")
                 for warning_log in self._build_daily_warning_logs():
                     self._emit_immediate_log("INFO", f"  {warning_log}")
                 self._flush_deferred_day_logs()
@@ -1040,10 +1036,10 @@ class BacktestEngine:
             return 0, 0, []
 
         lines = []
-        if buy_items:
-            lines.append(f"交易: 买{len(buy_items)}[{', '.join(buy_items)}]")
         if sell_items:
             lines.append(f"交易: 卖{len(sell_items)}[{', '.join(sell_items)}]")
+        if buy_items:
+            lines.append(f"交易: 买{len(buy_items)}[{', '.join(buy_items)}]")
 
         return len(buy_items), len(sell_items), lines
 
@@ -1088,6 +1084,7 @@ class BacktestEngine:
         """重置当日需汇总展示的压缩事件。"""
         self._daily_warning_items = {
             "early_rebalance": [],
+            "profit_extension": [],
             "duplicate_buy": [],
             "position_unfilled": [],
             "completion_skipped": [],
@@ -1216,6 +1213,14 @@ class BacktestEngine:
             {"label": label, "detail": detail}
         )
 
+    def _record_profit_extension_count(self, count: int) -> None:
+        """记录当日盈利延续数量，供日终信号摘要使用。"""
+        if count <= 0:
+            return
+        self._daily_warning_items.setdefault("profit_extension", []).append(
+            {"count": int(count)}
+        )
+
     def _record_take_profit_summary(
         self, profit_rate: float, threshold: float, n_positions: int
     ) -> None:
@@ -1252,6 +1257,83 @@ class BacktestEngine:
                 "score": float(score),
             }
         )
+
+    def _build_daily_signal_log(self, date: pd.Timestamp) -> Optional[str]:
+        """构建当日新生成买卖信号的数量摘要。"""
+
+        def _format_groups(groups: List[Tuple[str, int]]) -> str:
+            return ", ".join(f"{label}{count}" for label, count in groups if count > 0)
+
+        buy_groups: List[Tuple[str, int]] = []
+        signal_data = self.pending_signals.get(date)
+        if isinstance(signal_data, dict):
+            if "signals" in signal_data:
+                buy_count = len(signal_data.get("signals", {}))
+                if buy_count > 0:
+                    buy_label = "调仓" if signal_data.get("decision_trace") else "补槽"
+                    buy_groups.append((buy_label, buy_count))
+            elif signal_data:
+                buy_groups.append(("调仓", len(signal_data)))
+
+        sell_label_map = {
+            "holding_period": "持有期",
+            "early_exit": "亏损换出",
+            "time_stop_loss": "时间止损",
+            "take_profit": "止盈",
+        }
+        stop_loss_label_map = {
+            "drawdown": "回撤止损",
+            "trailing_stop": "移动止损",
+            "consecutive_limit_down": "连续跌停",
+            "unknown": "止损",
+        }
+
+        sell_counts: Dict[str, int] = {}
+        for info in self.pending_condition_sells.values():
+            if info.get("trigger_date") != date:
+                continue
+            label = sell_label_map.get(str(info.get("sell_type") or ""), "条件卖出")
+            sell_counts[label] = sell_counts.get(label, 0) + 1
+
+        for info in self.pending_stop_loss_sells.values():
+            if info.get("trigger_date") != date:
+                continue
+            label = stop_loss_label_map.get(str(info.get("trigger_type") or "unknown"), "止损")
+            sell_counts[label] = sell_counts.get(label, 0) + 1
+
+        sell_groups: List[Tuple[str, int]] = []
+        for label in (
+            "持有期",
+            "亏损换出",
+            "时间止损",
+            "止盈",
+            "回撤止损",
+            "移动止损",
+            "连续跌停",
+            "止损",
+            "条件卖出",
+        ):
+            count = sell_counts.get(label, 0)
+            if count > 0:
+                sell_groups.append((label, count))
+
+        extension_count = sum(
+            int(item.get("count", 0) or 0)
+            for item in self._daily_warning_items.get("profit_extension", [])
+        )
+
+        if not buy_groups and not sell_groups and extension_count <= 0:
+            return None
+
+        parts = []
+        if sell_groups:
+            parts.append(f"卖[{_format_groups(sell_groups)}]")
+        if buy_groups:
+            parts.append(f"买[{_format_groups(buy_groups)}]")
+        if extension_count > 0:
+            parts.append(f"延续[{extension_count}]")
+
+        return f"信号: {' | '.join(parts)}"
 
     def _build_daily_warning_logs(self) -> List[str]:
         """构建需在每日总结下展示的日级压缩摘要。"""
@@ -1650,17 +1732,146 @@ class BacktestEngine:
     def _post_filter_candidates(self, ranked_candidates: list, date: pd.Timestamp) -> list:
         """对排序候选列表做额外过滤（扩展点）
 
-        子类可重写此方法，例如按行业动量过滤弱势行业的股票。
-        默认不做任何过滤。
-
         Args:
             ranked_candidates: [(stock_code, score), ...] 已按分数降序排列
-            date: 信号生成日期
+            date: 当前日期
 
         Returns:
             过滤后的候选列表
         """
         return ranked_candidates
+
+    def _get_position_weight_for_planning(
+        self,
+        date: pd.Timestamp,
+        stock: str,
+        portfolio_value: Optional[float] = None,
+    ) -> float:
+        """获取指定持仓在规划日的组合权重。"""
+        if stock not in self.positions:
+            return 0.0
+
+        total_value = float(portfolio_value or 0.0)
+        if total_value <= 0:
+            total_value = float(self._calculate_portfolio_value(date))
+        if total_value <= 0:
+            return 0.0
+
+        info = self.positions[stock]
+        shares = float(info.get("shares", 0) or 0)
+        if shares <= 0:
+            return 0.0
+
+        trade_price = self._get_trade_price(date, stock)
+        if trade_price is None:
+            trade_price = info.get("last_known_price")
+            if trade_price is None:
+                trade_price = info.get("buy_trade_price", 0.0)
+        else:
+            info["last_known_price"] = trade_price
+
+        if not trade_price:
+            return 0.0
+
+        return float(shares * trade_price / total_value)
+
+    def _queue_condition_sell_refill_signal(
+        self,
+        date: pd.Timestamp,
+        slot_weights: List[Dict[str, float]],
+        price_data: pd.DataFrame,
+        date_to_idx: Dict,
+    ) -> None:
+        """为持有期/盈利延续卖出生成 T0 买入计划，供下一交易日执行。"""
+        if (
+            not self.enable_position_completion
+            or not slot_weights
+            or date in self.pending_signals
+            or price_data is None
+            or price_data.empty
+            or not hasattr(self.signal, "generate_ranked")
+        ):
+            return
+
+        current_idx = date_to_idx.get(date)
+        if current_idx is None or current_idx + 1 >= len(date_to_idx):
+            return
+
+        trade_date_str = to_trade_date_str(date)
+        date_quote = price_data[price_data["trade_date"] == trade_date_str]
+        stock_universe = self.universe.get_stocks(date, quote_data=date_quote)
+
+        extra_data = self._build_signal_data(date)
+        if extra_data is None:
+            return
+
+        signal_data = {}
+        signal_data.update(extra_data)
+        ranked_candidates = self.signal.generate_ranked(date, stock_universe, signal_data)
+        if not ranked_candidates:
+            return
+
+        if self.max_per_industry is not None:
+            from ..portfolio import apply_industry_constraint
+
+            ranked_candidates = apply_industry_constraint(
+                ranked_candidates,
+                self.industry_mapping,
+                max_per_industry=self.max_per_industry,
+                target_n=len(ranked_candidates),
+                verbose=self.verbose,
+            )
+
+        ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
+        existing_positions = set(self.positions.keys()) if self.positions else set()
+        priority_candidates = [
+            (stock, score)
+            for stock, score in ranked_candidates
+            if stock not in existing_positions
+        ]
+        if not priority_candidates:
+            return
+
+        normalized_slot_weights = []
+        fallback_weight = 1.0 / max(len(slot_weights), 1)
+        for slot in slot_weights:
+            weight = float(slot.get("weight", 0.0) or 0.0)
+            normalized_slot_weights.append(
+                {
+                    "stock": str(slot.get("stock", "")),
+                    "weight": weight if weight > 0 else fallback_weight,
+                }
+            )
+
+        planned_candidates = priority_candidates[: len(normalized_slot_weights)]
+        if not planned_candidates:
+            return
+
+        signals = {}
+        planned_slot_weights = []
+        for slot_weight_info, (candidate_stock, _score) in zip(
+            normalized_slot_weights, planned_candidates
+        ):
+            weight = float(slot_weight_info["weight"])
+            signals[candidate_stock] = weight
+            planned_slot_weights.append({"stock": candidate_stock, "weight": weight})
+
+        desired_position_count = int(self._get_target_position_count() or len(self.positions))
+        self.pending_signals[date] = {
+            "signals": signals,
+            "ranked_candidates": ranked_candidates,
+            "priority_candidates": list(priority_candidates),
+            "slot_weights": planned_slot_weights,
+            "target_n": len(planned_slot_weights),
+            "desired_position_count": desired_position_count,
+            "tranche_idx": 0,
+        }
+
+        if self.verbose:
+            logger.info(
+                f"  持有期卖出补位计划: {date.date()} 生成 {len(planned_slot_weights)} 个待买槽位，"
+                f"下一交易日按候选顺序执行"
+            )
 
     def _extend_holding_period(
         self,
@@ -1862,8 +2073,8 @@ class BacktestEngine:
                 )
 
         # 从排序候选中选择 top N 股票
-        # 当启用仓位补齐功能时，不在信号生成阶段过滤 T+1 的涨停/停牌，
-        # 而是在 T+1 执行买入时处理失败，并在 T+2 等日期补齐
+        # 始终仅基于 T0 排名生成次日买入计划；
+        # T+1 的可交易性统一在执行阶段处理，避免在计划阶段引入前视过滤。
         signals = {}
         candidates_checked = 0
         filtered_reasons = {"停牌": 0, "涨停": 0, "跌停": 0}
@@ -1929,10 +2140,12 @@ class BacktestEngine:
             "enabled": self.holding_bonus_enabled,
         }
 
+        priority_candidates = list(ranked_candidates_for_selection)
+
         if self.holding_bonus_enabled and existing_positions:
             # 换手率约束模式：区分保留持仓和新买入
             held_kept = []
-            for stock, score in ranked_candidates_for_selection[:target_n]:
+            for stock, score in priority_candidates[:target_n]:
                 if stock in existing_positions:
                     held_kept.append(stock)
                 else:
@@ -1950,44 +2163,10 @@ class BacktestEngine:
             decision_trace["holding_bonus"]["kept_count"] = len(held_kept)
             decision_trace["holding_bonus"]["kept_stocks"] = list(held_kept)
             decision_trace["holding_bonus"]["new_buy_count"] = len(signals)
-        elif self.enable_position_completion:
-            # 启用补齐功能：直接选择 top N 股票，不检查 T+1 可交易性
-            # 这样可以在 T+1 买入失败时触发补齐流程
-            for stock, score in ranked_candidates_for_selection[:target_n]:
+        else:
+            for stock, score in priority_candidates[:target_n]:
                 signals[stock] = score
                 candidates_checked += 1
-        else:
-            for stock, score in ranked_candidates_for_selection:
-                candidates_checked += 1
-
-                # 检查 T+1 日该股票是否可买入
-                if buy_date_quote.empty:
-                    # T+1 日行情数据为空，无法判断交易状态，跳过
-                    filtered_reasons["停牌"] += 1
-                    if self.verbose:
-                        logger.warning(
-                            f"信号日 {date.date()} 的候选股票 {stock} 在 T+1 日 {buy_date.date()} 无行情数据，"
-                            f"假定不可买入，从候选中回填"
-                        )
-                    continue
-
-                tradeable, reason = is_tradeable(stock, buy_date_str, buy_date_quote, action="buy")
-
-                if tradeable:
-                    # 可交易，加入信号
-                    signals[stock] = score
-
-                    # 达到目标数量，停止
-                    if len(signals) >= target_n:
-                        break
-                else:
-                    # 不可交易，记录原因并继续检查下一个候选
-                    filtered_reasons[reason] = filtered_reasons.get(reason, 0) + 1
-                    if self.verbose:
-                        logger.warning(
-                            f"候选股票 {stock} 在 {buy_date.date()} 不可买入(原因: {reason})，"
-                            f"从候选中顺延选择"
-                        )
 
         if not signals:
             if self.verbose:
@@ -2057,11 +2236,15 @@ class BacktestEngine:
                 confidence_gate_state.rolling_quality = self._rolling_quality_score
 
         # 保存信号，待 T+1 执行
-        # 同时保存完整的排序候选列表用于补齐（如果启用补齐功能）
+        # 同时保存 T0 候选优先级与槽位计划，供 T+1 顺位执行和后续补齐复用。
+        slot_weights = [{"stock": stock, "weight": float(weight)} for stock, weight in signals.items()]
         self.pending_signals[date] = {
             "signals": signals,
             "ranked_candidates": ranked_candidates if self.enable_position_completion else [],
+            "priority_candidates": list(priority_candidates),
+            "slot_weights": slot_weights,
             "target_n": target_n,
+            "desired_position_count": target_n,
             "tranche_idx": tranche_idx,
             "decision_trace": decision_trace,
         }
@@ -2090,19 +2273,10 @@ class BacktestEngine:
 
         # 分批调仓时始终打印信号生成汇总，便于确认各批次调度情况
         if self.verbose or self.stagger_tranches > 1:
-            if self.enable_position_completion:
-                logger.info(
-                    f"  {tranche_tag}信号生成: {date.date()}, 选择 top {len(signals)}/{target_n} 股票（未检查 T+1 可交易性，将在买入时处理）, "
-                    f"候选总数 {len(ranked_candidates)} 个"
-                )
-            else:
-                logger.info(
-                    f"  {tranche_tag}信号生成: {date.date()}, 信号数 {len(signals)}/{target_n}, "
-                    f"检查候选 {candidates_checked} 个, "
-                    f"过滤: 停牌 {filtered_reasons.get('停牌', 0)}, "
-                    f"涨停 {filtered_reasons.get('涨停', 0)}, "
-                    f"跌停 {filtered_reasons.get('跌停', 0)}"
-                )
+            logger.info(
+                f"  {tranche_tag}信号生成: {date.date()}, 选择 top {len(signals)}/{target_n} 股票（未检查 T+1 可交易性，将在买入时处理）, "
+                f"候选总数 {len(priority_candidates)} 个"
+            )
 
     def _execute_pending_buys(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
@@ -2129,20 +2303,27 @@ class BacktestEngine:
         signal_data = self.pending_signals.pop(signal_date)
 
         # 兼容性处理：支持旧格式和新格式
-        # 旧格式（补齐功能禁用时）：signal_data = {stock: weight}
-        # 新格式（补齐功能启用时）：signal_data = {'signals': {stock: weight}, 'ranked_candidates': [...], 'target_n': N}
+        # 旧格式：signal_data = {stock: weight}
+        # 新格式：signal_data = {
+        #   'signals': {stock: weight}, 'priority_candidates': [...],
+        #   'slot_weights': [...], 'ranked_candidates': [...], 'target_n': N
+        # }
         if isinstance(signal_data, dict) and "signals" in signal_data:
-            # 新格式
             signals = signal_data["signals"]
             ranked_candidates = signal_data.get("ranked_candidates", [])
+            priority_candidates = signal_data.get("priority_candidates", ranked_candidates)
+            slot_weights = signal_data.get("slot_weights", [])
             target_n = signal_data.get("target_n", len(signals))
+            desired_position_count = signal_data.get("desired_position_count")
             tranche_idx = signal_data.get("tranche_idx", 0)
             decision_trace = signal_data.get("decision_trace")
         else:
-            # 旧格式兼容（当 enable_position_completion=False 或旧代码生成的信号）
             signals = signal_data
             ranked_candidates = []
+            priority_candidates = list(signals.items())
+            slot_weights = [{"stock": stock, "weight": float(weight)} for stock, weight in signals.items()]
             target_n = len(signals)
+            desired_position_count = None
             tranche_idx = 0
             decision_trace = None
 
@@ -2180,6 +2361,28 @@ class BacktestEngine:
 
                     if self.verbose:
                         logger.info(f"ECT 调整: 所有目标权重乘以系数 {ect_exposure:.2f}")
+
+        # 执行日权重可能被风险预算/ECT 调整，按原槽位顺序同步更新。
+        if slot_weights:
+            ordered_slot_weights = []
+            seen_slot_stocks = set()
+            for slot in slot_weights:
+                slot_stock = slot.get("stock")
+                if slot_stock in signals and slot_stock not in seen_slot_stocks:
+                    ordered_slot_weights.append(
+                        {"stock": slot_stock, "weight": float(signals[slot_stock])}
+                    )
+                    seen_slot_stocks.add(slot_stock)
+            for stock, weight in signals.items():
+                if stock not in seen_slot_stocks:
+                    ordered_slot_weights.append({"stock": stock, "weight": float(weight)})
+        else:
+            ordered_slot_weights = [
+                {"stock": stock, "weight": float(weight)} for stock, weight in signals.items()
+            ]
+        slot_weights = ordered_slot_weights
+        if not priority_candidates:
+            priority_candidates = list(signals.items())
 
         if decision_trace is None:
             decision_trace = self._build_signal_decision_trace(
@@ -2237,9 +2440,8 @@ class BacktestEngine:
 
         inherited_position_weight = float(sum(_get_position_weight(stock) for stock in inherited_stocks))
 
-        def _record_buy_execution(buy_detail: Dict, stock: str, target_value: float) -> None:
+        def _record_buy_execution(buy_detail: Dict, stock: str, target_value: float) -> bool:
             trades_before = len(self.trades)
-            already_holding = stock in self.positions
 
             self._buy_stock(date, stock, target_value, signal_date=signal_date)
 
@@ -2252,101 +2454,116 @@ class BacktestEngine:
 
             if trade_executed:
                 successful_buys.append(buy_detail.copy())
-                return
+                return True
 
-            failed_buys.append(
-                {
-                    **buy_detail,
-                    "reason": "已持仓" if already_holding else "未成交",
-                }
+            return False
+
+        trade_date_str = to_trade_date_str(date)
+        date_quote = (
+            self.price_data_cache[self.price_data_cache["trade_date"] == trade_date_str]
+            if self.price_data_cache is not None
+            else pd.DataFrame()
+        )
+        blocked_tradeability_reasons: Dict[str, str] = {}
+        bought_stock_set = set()
+        remaining_unfilled_slots = []
+
+        def _check_candidate_tradeable(candidate_stock: str) -> tuple:
+            if candidate_stock in blocked_tradeability_reasons:
+                return False, blocked_tradeability_reasons[candidate_stock]
+            if date_quote.empty:
+                blocked_tradeability_reasons[candidate_stock] = "无行情"
+                return False, "无行情"
+
+            tradeable, reason = is_tradeable(
+                candidate_stock, trade_date_str, date_quote, action="buy"
             )
+            if not tradeable:
+                blocked_tradeability_reasons[candidate_stock] = reason
+            return tradeable, reason
 
-        # 当启用补齐功能时，需要检查可交易性，因为信号生成时未检查 T+1 可交易性
-        # 当未启用补齐功能时，信号生成时已经过滤，可以直接买入
-        if self.enable_position_completion:
-            # 获取当日行情数据用于交易性检查
-            trade_date_str = to_trade_date_str(date)
-            date_quote = (
-                self.price_data_cache[self.price_data_cache["trade_date"] == trade_date_str]
-                if self.price_data_cache is not None
-                else pd.DataFrame()
-            )
+        if desired_position_count is None:
+            desired_position_count = inherited_position_count + len(slot_weights)
+        desired_position_count = int(desired_position_count or 0)
+        available_slot_count = max(desired_position_count - len(self.positions), 0)
+        planned_slot_weights = slot_weights[:available_slot_count]
 
-            # 买入信号中的股票，检查可交易性
-            for stock, weight in signals.items():
-                target_value = current_value * weight
-                buy_detail = _build_buy_detail(stock, target_value)
-                planned_buys.append(buy_detail.copy())
+        for slot_weight_info in planned_slot_weights:
+            original_stock = slot_weight_info["stock"]
+            weight = float(slot_weight_info["weight"])
+            target_value = current_value * weight
+            planned_buys.append(_build_buy_detail(original_stock, target_value))
 
-                # 检查可交易性
-                if not date_quote.empty:
-                    tradeable, reason = is_tradeable(
-                        stock, trade_date_str, date_quote, action="buy"
+            bought_for_slot = False
+            last_reason = "候选耗尽"
+            slot_failure_recorded = False
+
+            for candidate_stock, _ in priority_candidates:
+                if candidate_stock in self.positions or candidate_stock in bought_stock_set:
+                    continue
+
+                tradeable, reason = _check_candidate_tradeable(candidate_stock)
+                if not tradeable:
+                    last_reason = reason
+                    if candidate_stock == original_stock:
+                        failed_buys.append(
+                            {
+                                **_build_buy_detail(candidate_stock, target_value),
+                                "reason": reason,
+                            }
+                        )
+                        slot_failure_recorded = True
+                    continue
+
+                buy_detail = _build_buy_detail(candidate_stock, target_value)
+                if _record_buy_execution(buy_detail, candidate_stock, target_value):
+                    bought_stock_set.add(candidate_stock)
+                    bought_for_slot = True
+                    break
+
+                last_reason = "未成交"
+                if candidate_stock == original_stock:
+                    failed_buys.append({**buy_detail, "reason": last_reason})
+                    slot_failure_recorded = True
+
+            if not bought_for_slot:
+                remaining_unfilled_slots.append({"stock": original_stock, "weight": weight})
+                if not slot_failure_recorded:
+                    failed_buys.append(
+                        {
+                            **_build_buy_detail(original_stock, target_value),
+                            "reason": last_reason,
+                        }
                     )
-
-                    if not tradeable:
-                        failed_buys.append({**buy_detail, "reason": reason})
-                        continue  # 跳过该股票，不买入
-
-                # 可交易，执行买入
-                _record_buy_execution(buy_detail, stock, target_value)
-        else:
-            # 未启用补齐功能，直接买入（信号生成时已过滤）
-            for stock, weight in signals.items():
-                target_value = current_value * weight
-                buy_detail = _build_buy_detail(stock, target_value)
-                planned_buys.append(buy_detail.copy())
-                _record_buy_execution(buy_detail, stock, target_value)
 
         # 记录买入后的持仓数量
         actually_bought = len(successful_buys)
 
-        # 如果启用补齐功能，检查是否有未成交的槽位
-        # 修复：应该对比 target_n 而非 len(signals)，因为 signals 可能已经过滤或调整
-        if self.enable_position_completion and actually_bought < target_n:
-            # 找出未成交的股票
-            unfilled_stocks = [stock for stock in signals.keys() if stock not in self.positions]
+        # 同日顺延后仍未补满的空槽，才进入后续跨日补齐。
+        if self.enable_position_completion and remaining_unfilled_slots and ranked_candidates:
+            unfilled_count = len(remaining_unfilled_slots)
+            unfilled_stocks = [slot["stock"] for slot in remaining_unfilled_slots]
 
-            if ranked_candidates:
-                # 计算缺口槽位数量
-                unfilled_count = target_n - actually_bought
+            self.unfilled_slots[signal_date] = {
+                "unfilled_count": unfilled_count,
+                "unfilled_slot_weights": remaining_unfilled_slots,
+                "target_n": len(planned_slot_weights),
+                "ranked_candidates": ranked_candidates,
+                "signal_date": signal_date,
+                "first_attempt_date": date,
+                "attempts": 0,
+                "tranche_idx": tranche_idx,
+            }
 
-                # 将 signals 的权重转换为槽位权重列表（按信号中的顺序）
-                # 这样可以在补齐时为每个缺口槽位分配固定权重
-                slot_weights = []
-                for stock, weight in signals.items():
-                    slot_weights.append(
-                        {
-                            "stock": stock,
-                            "weight": weight,
-                            "filled": stock in self.positions,  # 标记是否已成交
-                        }
-                    )
+            self.completion_stats["total_unfilled"] += 1
 
-                # 提取未成交槽位的权重
-                unfilled_slot_weights = [slot for slot in slot_weights if not slot["filled"]]
-
-                # 记录未成交槽位信息，准备补齐
-                self.unfilled_slots[signal_date] = {
-                    "unfilled_count": unfilled_count,
-                    "unfilled_slot_weights": unfilled_slot_weights,  # 保留原始权重序列
-                    "target_n": target_n,
-                    "ranked_candidates": ranked_candidates,
-                    "signal_date": signal_date,  # 信号生成日（T日）
-                    "first_attempt_date": date,  # T+1 日，第一次尝试买入的日期
-                    "attempts": 0,  # 补齐尝试次数
-                    "tranche_idx": tranche_idx,  # 分批调仓批次索引
-                }
-
-                self.completion_stats["total_unfilled"] += 1
-
-                self._record_position_unfilled_summary(
-                    tranche_tag=tranche_tag,
-                    target_n=target_n,
-                    actually_bought=actually_bought,
-                    unfilled_count=unfilled_count,
-                    unfilled_stocks=unfilled_stocks,
-                )
+            self._record_position_unfilled_summary(
+                tranche_tag=tranche_tag,
+                target_n=len(planned_slot_weights),
+                actually_bought=actually_bought,
+                unfilled_count=unfilled_count,
+                unfilled_stocks=unfilled_stocks,
+            )
 
         # 当日买入/卖出明细统一在每日总结下一行展示，这里不再单独输出买入执行日志。
 
@@ -2583,22 +2800,24 @@ class BacktestEngine:
     def _check_and_sell(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
     ) -> None:
-        """检查卖出条件并执行预定卖出
+        """检查卖出条件并生成 T0 卖出信号
 
         - 整体止盈、亏损提前换出：写入 pending_condition_sells 队列（Tn+1 执行）
-        - 持有期到期、盈利延续到期：直接执行卖出（预定事件）
+        - 持有期到期、盈利延续到期：写入 pending_condition_sells 队列（Tn+1 执行）
 
         Args:
             date: 当前日期
             trading_dates: 交易日列表
             date_to_idx: 日期到索引的映射
         """
-        stocks_to_sell = []
         profit_extension_items: List[Dict[str, Optional[float]]] = []
+        holding_period_sell_slot_weights: List[Dict[str, float]] = []
 
         current_idx = date_to_idx.get(date)
         if current_idx is None:
             return
+
+        portfolio_value_for_planning = self._calculate_portfolio_value(date)
 
         # 过滤已在待卖队列中的持仓（避免重复）
         positions_to_check = {
@@ -2751,8 +2970,21 @@ class BacktestEngine:
                             f"{extend_log_detail}"
                         )
 
-                    # 持有期到期（含延续到期）→ 预定事件，直接执行
-                    stocks_to_sell.append(stock)
+                    # 持有期到期（含延续到期）→ T0 生成卖出信号，T+1 执行
+                    self.pending_condition_sells[stock] = {
+                        "trigger_date": date,
+                        "sell_type": "holding_period",
+                    }
+                    holding_period_sell_slot_weights.append(
+                        {
+                            "stock": stock,
+                            "weight": self._get_position_weight_for_planning(
+                                date,
+                                stock,
+                                portfolio_value=portfolio_value_for_planning,
+                            ),
+                        }
+                    )
                 else:
                     # 计算实际止损阈值（ATR 动态 or 固定）
                     threshold = self.early_exit_loss_threshold
@@ -2859,21 +3091,41 @@ class BacktestEngine:
                                 "sell_type": "time_stop_loss",
                             }
             else:
-                # 原始逻辑：达到持有期才卖出
+                # 原始逻辑：达到持有期后在 T0 生成卖出信号，T+1 执行
                 if holding_days >= self.holding_period:
-                    stocks_to_sell.append(stock)
+                    self.pending_condition_sells[stock] = {
+                        "trigger_date": date,
+                        "sell_type": "holding_period",
+                    }
+                    # 与动态持仓分支保持一致：持有期卖出时同步生成次日补位计划，
+                    # 避免出现 T+1 只卖不买导致空仓/短周期抖动。
+                    holding_period_sell_slot_weights.append(
+                        {
+                            "stock": stock,
+                            "weight": self._get_position_weight_for_planning(
+                                date,
+                                stock,
+                                portfolio_value=portfolio_value_for_planning,
+                            ),
+                        }
+                    )
 
         if profit_extension_items:
+            self._record_profit_extension_count(len(profit_extension_items))
             logger.info(self._format_profit_extension_summary(profit_extension_items))
 
-        # 执行持有期到期卖出（预定事件，Tn 直接执行）
-        for stock in stocks_to_sell:
-            self._sell_stock(date, stock, sell_type="holding_period")
+        if holding_period_sell_slot_weights:
+            self._queue_condition_sell_refill_signal(
+                date=date,
+                slot_weights=holding_period_sell_slot_weights,
+                price_data=self.price_data_cache,
+                date_to_idx=date_to_idx,
+            )
 
     def _execute_pending_condition_sells(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
     ) -> None:
-        """执行待条件卖出操作（Tn+1 日执行，包括亏损提前换出和整体止盈）
+        """执行待条件卖出操作（Tn+1 日执行）
 
         Args:
             date: 当前日期（执行日，Tn+1）
@@ -3775,15 +4027,15 @@ class BacktestEngine:
     ) -> None:
         """买入股票（在 T+1 日以收盘价买入）
 
-        直接买入，不再进行交易状态检查，因为在信号生成阶段已经过滤了不可交易的股票。
+        交易状态检查由调用方在执行阶段处理，这里只负责实际成交。
 
         Args:
             date: 买入日期（T+1）
             stock: 股票代码
             target_value: 目标市值
-            signal_date: 信号生成日期（保留参数以兼容，但不使用）
+            signal_date: 触发本次买入计划的信号日期
         """
-        # 直接买入，不检查交易状态（已在信号生成时过滤）
+        # 直接买入，执行阶段的交易状态检查由上层调度负责。
         self._buy_stock_direct(date, stock, target_value, signal_date=signal_date)
 
     def _sell_stock(

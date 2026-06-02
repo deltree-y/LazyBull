@@ -11,6 +11,7 @@ class TargetWeight:
     ts_code: str  # 股票代码
     target_weight: float  # 目标权重
     reason: str = "信号生成"  # 买卖原因
+    original_signal_date: str = ""  # 原始信号日期（T0）
 
 
 @dataclass
@@ -178,3 +179,4 @@ class TradeInstruction:
     source_date: str  # 源日期（T0日期）YYYYMMDD
     target_weight: float = 0.0  # 目标权重（可选，用于追踪）
     original_signal_date: str = ""  # 原始信号日期（可选，用于补位场景）
+    desired_position_count: int = 0  # T0 计划的目标持仓数（用于 T1 限制新开仓槽位）

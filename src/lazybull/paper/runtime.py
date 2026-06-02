@@ -660,8 +660,20 @@ def _execute_t1_if_pending(
         logger.info(f"指令执行完成：{len(instructions)} 条指令，{len(fills)} 笔成交")
 
     failed_buy_targets = runner.broker.get_failed_buy_targets()
+    same_day_pending_buys: List[PendingBuy] = []
     if failed_buy_targets:
-        _handle_failed_buys(runner, trade_date, config, failed_buy_targets, attempt_count=0)
+        same_day_pending_buys = runner._build_pending_buys_from_failed_targets(
+            failed_buy_targets,
+            trade_date,
+            attempts=0,
+        )
+        runner.broker.clear_failed_buy_targets()
+        logger.info(
+            f"检测到 {len(same_day_pending_buys)} 个当日买入失败槽位，立即按 T0 候选顺延执行"
+        )
+
+    if same_day_pending_buys:
+        pending_buys = same_day_pending_buys + list(pending_buys or [])
 
     if pending_buys:
         logger.info("执行补位买入计划")
@@ -686,17 +698,6 @@ def _execute_t1_if_pending(
                         "reason": fill.reason,
                     }
                 )
-
-        new_failed_buy_targets = runner.broker.get_failed_buy_targets()
-        if new_failed_buy_targets:
-            max_attempt = max([pending_buy.attempts for pending_buy in pending_buys], default=0)
-            _handle_failed_buys(
-                runner,
-                trade_date,
-                config,
-                new_failed_buy_targets,
-                attempt_count=max_attempt,
-            )
 
     if fills_count > 0:
         runner.account.update_last_date(trade_date)
@@ -759,26 +760,11 @@ def _handle_failed_buys(
 
     next_trade_date = runner._get_next_trade_date(trade_date)
     if next_trade_date:
-        pending_buys: List[PendingBuy] = []
-        fallback_weight = 1.0 / max(len(failed_buy_targets), 1)
-        for target in failed_buy_targets:
-            slot_weight = float(getattr(target, "target_weight", 0.0) or 0.0)
-            if slot_weight <= 0:
-                slot_weight = fallback_weight
-
-            pending_buys.append(
-                PendingBuy(
-                    ts_code=str(getattr(target, "ts_code", "")),
-                    target_weight=slot_weight,
-                    reason=f"补位槽位-{getattr(target, 'reason', '买入失败')}",
-                    create_date=trade_date,
-                    attempts=next_attempt,
-                    last_attempt_date="",
-                    original_signal_date=str(
-                        getattr(target, "original_signal_date", trade_date) or trade_date
-                    ),
-                )
-            )
+        pending_buys = runner._build_pending_buys_from_failed_targets(
+            failed_buy_targets,
+            trade_date,
+            attempts=next_attempt,
+        )
 
         runner.paper_storage.save_pending_buys(pending_buys)
         logger.info(f"已保存 {len(pending_buys)} 个未成交槽位到补位队列（保留原始槽位权重）")

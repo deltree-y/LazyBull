@@ -43,10 +43,9 @@ def completion_price_data():
     
     场景：
     - T日(第1天): 生成信号选出3只股票：000001, 000002, 000003
-    - T+1日(第2天): 买入日，000002涨停，000003涨停 -> 只买入000001
-    - T+2日(第3天): 补齐尝试1，000002仍涨停，000003开板 -> 补齐000003
-    - T+3日(第4天): 补齐尝试2，000002开板 -> 补齐000002
-    - 结果：3只股票全部补齐完成
+        - T+1日(第2天): 买入日，000002涨停，000003涨停
+            -> 同日按优先级顺延买入000004、000005
+        - 结果：3个槽位在T+1日全部补满，不进入跨日补齐
     """
     dates = pd.date_range('2023-01-01', periods=10, freq='B')
     stocks = ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ', '000005.SZ']
@@ -102,7 +101,7 @@ def completion_stock_basic():
 
 
 def test_position_completion_enabled(completion_price_data, completion_stock_basic):
-    """测试仓位补齐功能启用时的行为"""
+    """启用补齐时，T1 备用候选足够应优先同日补满。"""
     
     # 创建股票池
     universe = BasicUniverse(
@@ -137,25 +136,21 @@ def test_position_completion_enabled(completion_price_data, completion_stock_bas
         price_data=completion_price_data
     )
     
-    # 验证补齐统计
-    assert engine.completion_stats['total_unfilled'] == 1, "应该有1次未满仓"
-    assert engine.completion_stats['total_completed'] >= 2, "应该至少补齐2次（填补2个槽位）"
-    assert engine.completion_stats['completion_attempts'] >= 1, "应该至少尝试1次补齐（可能一次填补多个槽位）"
+    # 验证：同日顺延已补满，不应进入跨日补齐
+    assert engine.completion_stats['total_unfilled'] == 0, "同日补满后，不应该记录未满仓"
+    assert engine.completion_stats['total_completed'] == 0, "同日补满后，不应该走跨日补齐"
+    assert engine.completion_stats['completion_attempts'] == 0, "同日补满后，不应该发起补齐尝试"
     
     # 验证最终持仓：应该成功买入3只股票
     # 注意：由于持有期=10天，在回测结束时还没有卖出
     assert len(engine.positions) == 3, "最终应该持有3只股票"
     
-    # 验证买入的股票
-    bought_stocks = set(engine.positions.keys())
-    assert '000001.SZ' in bought_stocks, "应该成功买入000001（T+1日正常买入）"
-    # 000002和000003至少有一只应该被补齐
-    assert ('000002.SZ' in bought_stocks) or ('000003.SZ' in bought_stocks), \
-        "至少应该补齐000002或000003中的一只"
+    # 验证买入的股票：000002/000003 涨停后，应同日顺延到 000004/000005
+    assert set(engine.positions.keys()) == {'000001.SZ', '000004.SZ', '000005.SZ'}
 
 
 def test_position_completion_disabled(completion_price_data, completion_stock_basic):
-    """测试仓位补齐功能禁用时的行为"""
+    """禁用跨日补齐时，T1 同日顺延仍应生效。"""
     
     # 创建股票池
     universe = BasicUniverse(
@@ -193,13 +188,8 @@ def test_position_completion_disabled(completion_price_data, completion_stock_ba
     assert engine.completion_stats['total_unfilled'] == 0, "禁用补齐时，不应该记录未满仓"
     assert engine.completion_stats['total_completed'] == 0, "禁用补齐时，不应该有补齐操作"
     
-    # 验证最终持仓：禁用补齐时，信号生成阶段会在 T+1 过滤不可交易股票并回填
-    # 由于000002和000003在T+1日涨停，会从候选中选择000001, 000004, 000005
-    assert len(engine.positions) == 3, "禁用补齐时，应该通过信号生成阶段的回填机制持有3只股票"
-    assert '000001.SZ' in engine.positions, "应该持有000001"
-    # 000004 或 000005 至少有一只被选中（回填逻辑）
-    assert ('000004.SZ' in engine.positions) or ('000005.SZ' in engine.positions), \
-        "应该通过回填选择000004或000005"
+    # 验证最终持仓：禁用跨日补齐时，也应在 T+1 基于候选优先级顺延补满
+    assert set(engine.positions.keys()) == {'000001.SZ', '000004.SZ', '000005.SZ'}
 
 
 def test_completion_window_exceeded():
@@ -291,7 +281,7 @@ def test_completion_window_exceeded():
 
 
 def test_completion_with_alternative_candidates():
-    """测试原未成交股票不可用时，使用其他候选股票补齐"""
+    """原计划股票不可买时，应在同日顺延到后备候选。"""
     
     # 创建价格数据：000002持续涨停，但000004可用
     dates = pd.date_range('2023-01-01', periods=10, freq='B')
@@ -365,17 +355,17 @@ def test_completion_with_alternative_candidates():
         price_data=price_data
     )
     
-    # 验证：引擎从扩大的候选池（unfilled_count * 2）中选择替代股票
-    # 由于候选池有buffer，可以跳过不可交易的股票找到替代
-    assert engine.completion_stats['total_unfilled'] == 1, "应该有1次未满仓"
+    # 验证：同日顺延成功后，不应进入跨日补齐
+    assert engine.completion_stats['total_unfilled'] == 0, "同日已顺延成功，不应该记录未满仓"
 
-    # 验证最终持仓：000002涨停但候选池buffer足够找到替代，应持有2只股票
+    # 验证最终持仓：000002涨停时，应同日顺延到 000003
     assert '000001.SZ' in engine.positions, "应该持有000001"
-    assert len(engine.positions) == 2, "候选buffer应允许找到替代股票完成补齐"
+    assert '000003.SZ' in engine.positions, "应该同日顺延买入000003"
+    assert len(engine.positions) == 2, "同日顺延后应持有2只股票"
 
 
 def test_completion_uses_prev_day_data():
-    """测试补齐时使用 D-1 日数据生成候选（验证避免未来函数）"""
+    """同日候选耗尽后，补齐应在后续日期使用 D-1 数据生成候选。"""
     
     # 创建价格数据：测试补齐时是否使用正确的日期数据
     dates = pd.date_range('2023-01-01', periods=10, freq='B')
@@ -386,8 +376,11 @@ def test_completion_uses_prev_day_data():
         for stock in stocks:
             is_limit_up = 0
             
-            # 000002 在 T+1 涨停
-            if stock == '000002.SZ' and i == 1:
+            # T+1 同日顺延时，000002/000003/000004 都不可买，迫使进入跨日补齐
+            if stock == '000002.SZ' and i in [1, 2]:
+                is_limit_up = 1
+
+            if stock in ['000003.SZ', '000004.SZ'] and i == 1:
                 is_limit_up = 1
             
             data.append({
@@ -449,17 +442,15 @@ def test_completion_uses_prev_day_data():
         price_data=price_data
     )
     
-    # 验证补齐发生且成功
+    # 验证：T+1 同日候选耗尽后，T+2 发生跨日补齐
     assert engine.completion_stats['total_unfilled'] == 1, "应该有1次未满仓"
     assert engine.completion_stats['total_completed'] == 1, "应该补齐1次"
     assert len(engine.positions) == 2, "最终应该持有2只股票"
     
     # 验证持仓的股票
     assert '000001.SZ' in engine.positions, "应该持有000001"
-    # 000002 在 T+2 已经开板，所以可能被选中；或者选择 000003/000004
-    # 关键是验证有2只股票，且通过 D-1 日数据生成候选
-    assert ('000002.SZ' in engine.positions) or ('000003.SZ' in engine.positions) or ('000004.SZ' in engine.positions), \
-        "应该用候选股票补齐（基于 D-1 日数据生成的候选）"
+    assert '000003.SZ' in engine.positions, "T+2 应补齐到 000003"
+    assert engine.positions['000003.SZ']['buy_date'] == trading_dates[2], "补齐应发生在 T+2"
 
 
 def test_completion_log_summarizes_success_when_cash_limited():

@@ -21,7 +21,7 @@ from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.paper import PaperStorage
 from src.lazybull.paper.broker import PaperBroker
 from src.lazybull.paper.account import PaperAccount
-from src.lazybull.paper.models import Fill, Order, PendingBuy, PendingSell, TargetWeight
+from src.lazybull.paper.models import Fill, Order, PendingBuy, PendingSell, TargetWeight, TradeInstruction
 from src.lazybull.paper.runner import PaperTradingRunner
 from src.lazybull.signals.ml_signal import MLSignal, SignalConfidenceGateState
 
@@ -165,6 +165,77 @@ def test_broker_tracks_limit_up_as_failed(broker):
         assert len(failed_targets) == 1
         assert failed_targets[0].ts_code == '000001.SZ'
         assert '涨停' in failed_targets[0].reason
+
+
+def test_execute_instructions_does_not_open_new_slot_when_sell_fails(broker):
+    """T1 卖出失败时，不应继续新开仓占用超额槽位。"""
+
+    broker.account.add_position(
+        ts_code='000001.SZ',
+        shares=1000,
+        buy_price=10.0,
+        buy_cost=0.0,
+        buy_date='20260120',
+        buy_pnl_price=10.0,
+    )
+
+    instructions = [
+        TradeInstruction(
+            ts_code='000001.SZ',
+            action='sell',
+            shares=1000,
+            price_type='close',
+            reason='持有期到期',
+            source_date='20260120',
+            target_weight=0.0,
+        ),
+        TradeInstruction(
+            ts_code='000002.SZ',
+            action='buy',
+            shares=1000,
+            price_type='close',
+            reason='信号生成',
+            source_date='20260120',
+            target_weight=0.2,
+            original_signal_date='20260120',
+            desired_position_count=1,
+        ),
+    ]
+
+    buy_prices = {'000002.SZ': 10.0}
+    sell_prices = {'000001.SZ': 10.0}
+
+    with patch.object(broker, '_load_tradability_info') as mock_tradability:
+        mock_tradability.return_value = {
+            '000001.SZ': {
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 1,
+                'tradable': 1,
+            },
+            '000002.SZ': {
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'tradable': 1,
+            },
+        }
+
+        fills = broker.execute_instructions(
+            instructions=instructions,
+            buy_prices=buy_prices,
+            sell_prices=sell_prices,
+            trade_date='20260121',
+        )
+
+    assert fills == []
+    assert broker.account.get_position('000001.SZ') is not None
+    assert broker.account.get_position('000002.SZ') is None
+    failed_targets = broker.get_failed_buy_targets()
+    assert len(failed_targets) == 1
+    assert failed_targets[0].ts_code == '000002.SZ'
+    assert '无可用空槽' in failed_targets[0].reason
+    assert failed_targets[0].original_signal_date == '20260120'
 
 
 def test_retry_pending_buys_success(broker):
@@ -670,6 +741,55 @@ def test_execute_pending_buys_uses_limited_candidate_pool_by_previous_day(monkey
         # 成功后补位队列应清空
         remaining = runner.paper_storage.load_pending_buys()
         assert len(remaining) == 0
+
+
+def test_execute_pending_buys_prefers_persisted_t0_ranked_candidates(monkeypatch):
+    """补位应优先复用 T0 持久化的 ranked_candidates 顺序。"""
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=500000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        class DummySignal:
+            def generate_ranked(self, *args, **kwargs):
+                raise AssertionError('不应在已有 T0 候选时重算 ranked_candidates')
+
+        runner.signal = DummySignal()
+        runner.paper_storage.save_ranked_candidates(
+            [('000003.SZ', 0.99), ('000002.SZ', 0.95), ('000004.SZ', 0.90)],
+            '20260122',
+        )
+
+        pending_buys = [
+            PendingBuy(
+                ts_code='SLOT_A',
+                target_weight=0.05,
+                reason='补位-槽位A',
+                create_date='20260122',
+                attempts=0,
+                last_attempt_date='',
+                original_signal_date='20260122',
+            )
+        ]
+
+        monkeypatch.setattr(runner, '_get_prev_trade_date', lambda _: '20260122')
+        runner.loader.load_clean_daily_by_date = Mock(return_value=pd.DataFrame())
+
+        with patch('src.lazybull.paper.runner.is_tradeable', return_value=(True, '可交易')):
+            fills = runner._execute_pending_buys(
+                pending_buys=pending_buys,
+                buy_prices={'000002.SZ': 10.0, '000003.SZ': 10.0, '000004.SZ': 10.0},
+                trade_date='20260123',
+                buy_price_type='close',
+            )
+
+        assert len(fills) == 1
+        assert fills[0].ts_code == '000003.SZ'
 
 
 def test_execute_pending_buys_skip_tiny_buy_value_by_ratio():

@@ -29,6 +29,12 @@ class MockSignal(Signal):
             return {}
         return {stock: 1.0 / len(universe) for stock in universe}
 
+    def generate_ranked(self, date, universe, data):
+        """生成排序候选列表。"""
+        if not universe:
+            return []
+        return [(stock, float(len(universe) - idx)) for idx, stock in enumerate(universe)]
+
 
 @pytest.fixture
 def mock_price_data():
@@ -101,7 +107,7 @@ def test_t1_trading_logic(mock_price_data, mock_trading_dates):
         assert first_buy_date > mock_trading_dates[0]
     
     # 验证持有期逻辑：
-    # 买入后应该在 T+2 天卖出
+    # 买入后至少要满持有期，并在后续交易日卖出
     sell_trades = trades_df[trades_df['action'] == 'sell']
     if len(sell_trades) > 0 and len(buy_trades) > 0:
         # 每笔卖出应该在对应买入之后至少2天
@@ -196,7 +202,7 @@ def test_position_tracking_with_buy_date(mock_price_data, mock_trading_dates):
 
 
 def test_profit_extension_log_includes_expected_sell_date():
-    """盈利延续持有日志应打印延期后的预计卖出日期。"""
+    """盈利延续命中时应输出压缩摘要且不触发卖出。"""
 
     trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=6, freq='B')]
     date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
@@ -222,6 +228,7 @@ def test_profit_extension_log_includes_expected_sell_date():
         enable_position_completion=False,
         verbose=False,
     )
+    engine.price_data_cache = price_data.copy()
     engine._prepare_price_index(price_data)
     engine.positions = {
         '000001.SZ': {
@@ -245,5 +252,595 @@ def test_profit_extension_log_includes_expected_sell_date():
         logger.remove(sink_id)
 
     output = stream.getvalue()
-    assert '盈利延续持有[pnl]: 000001.SZ 持有2天' in output
-    assert '延续至最多 4 天, 预计卖出日期=2023-01-09' in output
+    assert '盈利延续[pnl] 1只: 000001.SZ(2d,+20.0%)' in output
+    assert engine.pending_condition_sells == {}
+    assert engine.get_trades().empty
+
+
+def test_holding_period_sell_uses_t0_signal_and_t1_execution():
+    """持有期到期应在 T0 生成卖出信号，并于下一交易日执行。"""
+
+    trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=6, freq='B')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        {
+            'ts_code': ['000001.SZ'] * len(trading_dates),
+            'trade_date': [date.strftime('%Y%m%d') for date in trading_dates],
+            'close': [10.0, 10.0, 10.5, 11.0, 11.5, 12.0],
+        }
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(),
+        rebalance_freq=1,
+        holding_period=2,
+        enable_profit_based_holding=False,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        verbose=False,
+    )
+    engine.price_data_cache = price_data.copy()
+    engine._prepare_price_index(price_data)
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 100,
+            'buy_date': trading_dates[1],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 0.0,
+        }
+    }
+
+    engine._check_and_sell(
+        date=trading_dates[3],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    assert '000001.SZ' in engine.pending_condition_sells
+    assert engine.pending_condition_sells['000001.SZ']['trigger_date'] == trading_dates[3]
+    assert engine.pending_condition_sells['000001.SZ']['sell_type'] == 'holding_period'
+    assert engine.get_trades().empty
+
+    engine._execute_pending_condition_sells(
+        date=trading_dates[4],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    trades = engine.get_trades()
+    assert len(trades) == 1
+    assert trades.iloc[0]['action'] == 'sell'
+    assert trades.iloc[0]['date'] == trading_dates[4]
+    assert trades.iloc[0]['sell_type'] == 'holding_period'
+
+
+def test_holding_period_sell_generates_refill_buy_on_t1_without_profit_mode():
+    """未启用盈亏动态持仓时，持有期卖出也应在下一交易日先卖后补位买入。"""
+
+    trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=6, freq='B')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        [
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': date.strftime('%Y%m%d'),
+                'close': close_1,
+                'open': close_1,
+                'close_adj': close_1,
+                'open_adj': close_1,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            }
+            for date, close_1 in zip(trading_dates, [10.0, 10.0, 10.5, 11.0, 11.5, 12.0])
+        ]
+        + [
+            {
+                'ts_code': '000002.SZ',
+                'trade_date': date.strftime('%Y%m%d'),
+                'close': 20.0,
+                'open': 20.0,
+                'close_adj': 20.0,
+                'open_adj': 20.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            }
+            for date in trading_dates
+        ]
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(commission_rate=0, min_commission=0, stamp_tax=0, slippage=0),
+        rebalance_freq=20,
+        holding_period=2,
+        enable_profit_based_holding=False,
+        enable_pending_order=False,
+        enable_position_completion=True,
+        verbose=False,
+    )
+    engine.price_data_cache = price_data.copy()
+    engine._prepare_price_index(price_data)
+    engine.current_capital = 0.0
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 1000,
+            'buy_date': trading_dates[1],
+            'signal_date': trading_dates[1],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 0.0,
+        }
+    }
+
+    engine._check_and_sell(
+        date=trading_dates[3],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    assert '000001.SZ' in engine.pending_condition_sells
+    assert trading_dates[3] in engine.pending_signals
+    assert engine.pending_signals[trading_dates[3]]['desired_position_count'] == 1
+
+    engine._execute_pending_condition_sells(
+        date=trading_dates[4],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+    engine._execute_pending_buys(
+        date=trading_dates[4],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    trades = engine.get_trades()
+    assert len(trades) == 2
+    assert list(trades['action']) == ['sell', 'buy']
+    assert trades.iloc[0]['stock'] == '000001.SZ'
+    assert trades.iloc[1]['stock'] == '000002.SZ'
+    assert '000001.SZ' not in engine.positions
+    assert '000002.SZ' in engine.positions
+
+
+def test_profit_extension_rejection_uses_t0_signal_and_t1_execution():
+    """盈利延续未通过时，应在 T0 生成卖出信号，并于下一交易日执行。"""
+
+    trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=6, freq='B')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        {
+            'ts_code': ['000001.SZ'] * len(trading_dates),
+            'trade_date': [date.strftime('%Y%m%d') for date in trading_dates],
+            'close': [10.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        }
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(),
+        rebalance_freq=1,
+        holding_period=2,
+        enable_profit_based_holding=True,
+        profit_extension_threshold=0.3,
+        profit_extension_days=2,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        verbose=False,
+    )
+    engine.price_data_cache = price_data.copy()
+    engine._prepare_price_index(price_data)
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 100,
+            'buy_date': trading_dates[1],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 0.0,
+        }
+    }
+
+    engine._check_and_sell(
+        date=trading_dates[3],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    assert '000001.SZ' in engine.pending_condition_sells
+    assert engine.pending_condition_sells['000001.SZ']['trigger_date'] == trading_dates[3]
+    assert engine.get_trades().empty
+
+    engine._execute_pending_condition_sells(
+        date=trading_dates[4],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    trades = engine.get_trades()
+    assert len(trades) == 1
+    assert trades.iloc[0]['action'] == 'sell'
+    assert trades.iloc[0]['date'] == trading_dates[4]
+
+
+def test_profit_extension_rejection_generates_refill_buy_on_t1():
+    """盈利延续未通过时，应在下一交易日先卖再按 T0 候选补回空槽。"""
+
+    trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=6, freq='B')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        [
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': date.strftime('%Y%m%d'),
+                'close': close_1,
+                'open': close_1,
+                'close_adj': close_1,
+                'open_adj': close_1,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            }
+            for date, close_1 in zip(trading_dates, [10.0, 10.0, 11.0, 12.0, 13.0, 14.0])
+        ]
+        + [
+            {
+                'ts_code': '000002.SZ',
+                'trade_date': date.strftime('%Y%m%d'),
+                'close': 20.0,
+                'open': 20.0,
+                'close_adj': 20.0,
+                'open_adj': 20.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            }
+            for date in trading_dates
+        ]
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(commission_rate=0, min_commission=0, stamp_tax=0, slippage=0),
+        rebalance_freq=20,
+        holding_period=2,
+        enable_profit_based_holding=True,
+        profit_extension_threshold=0.3,
+        profit_extension_days=2,
+        enable_pending_order=False,
+        enable_position_completion=True,
+        verbose=False,
+    )
+    engine.price_data_cache = price_data.copy()
+    engine._prepare_price_index(price_data)
+    engine.current_capital = 0.0
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 1000,
+            'buy_date': trading_dates[1],
+            'signal_date': trading_dates[1],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 0.0,
+        }
+    }
+
+    engine._check_and_sell(
+        date=trading_dates[3],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    assert '000001.SZ' in engine.pending_condition_sells
+    assert trading_dates[3] in engine.pending_signals
+    assert engine.pending_signals[trading_dates[3]]['desired_position_count'] == 1
+
+    engine._execute_pending_condition_sells(
+        date=trading_dates[4],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+    engine._execute_pending_buys(
+        date=trading_dates[4],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    trades = engine.get_trades()
+    assert len(trades) == 2
+    assert list(trades['action']) == ['sell', 'buy']
+    assert trades.iloc[0]['stock'] == '000001.SZ'
+    assert trades.iloc[1]['stock'] == '000002.SZ'
+    assert '000001.SZ' not in engine.positions
+    assert '000002.SZ' in engine.positions
+
+
+def test_profit_extension_expiry_uses_t0_signal_and_t1_execution():
+    """盈利延续到期后，应在到期日生成卖出信号，并于下一交易日执行。"""
+
+    trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=7, freq='B')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        {
+            'ts_code': ['000001.SZ'] * len(trading_dates),
+            'trade_date': [date.strftime('%Y%m%d') for date in trading_dates],
+            'close': [10.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+        }
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(),
+        rebalance_freq=1,
+        holding_period=2,
+        enable_profit_based_holding=True,
+        profit_extension_threshold=0.1,
+        profit_extension_days=1,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        verbose=False,
+    )
+    engine._prepare_price_index(price_data)
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 100,
+            'buy_date': trading_dates[1],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 0.0,
+        }
+    }
+
+    engine._check_and_sell(
+        date=trading_dates[4],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    assert '000001.SZ' in engine.pending_condition_sells
+    assert engine.pending_condition_sells['000001.SZ']['trigger_date'] == trading_dates[4]
+    assert engine.get_trades().empty
+
+    engine._execute_pending_condition_sells(
+        date=trading_dates[5],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    trades = engine.get_trades()
+    assert len(trades) == 1
+    assert trades.iloc[0]['action'] == 'sell'
+    assert trades.iloc[0]['date'] == trading_dates[5]
+
+
+def test_pending_buys_use_t0_priority_candidates_same_day():
+    """T0 买入计划应在 T1 按优先级同日顺延。"""
+
+    trading_dates = [pd.Timestamp('2023-01-02'), pd.Timestamp('2023-01-03')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        [
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': '20230102',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '000002.SZ',
+                'trade_date': '20230102',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': '20230103',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 1,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '000002.SZ',
+                'trade_date': '20230103',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+        ]
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(commission_rate=0, min_commission=0, stamp_tax=0, slippage=0),
+        rebalance_freq=1,
+        holding_period=2,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        verbose=False,
+    )
+    engine.price_data_cache = price_data.copy()
+    engine._prepare_price_index(price_data)
+    engine.pending_signals[trading_dates[0]] = {
+        'signals': {'000001.SZ': 1.0},
+        'priority_candidates': [('000001.SZ', 1.0), ('000002.SZ', 0.9)],
+        'slot_weights': [{'stock': '000001.SZ', 'weight': 1.0}],
+        'target_n': 1,
+        'tranche_idx': 0,
+    }
+
+    engine._execute_pending_buys(
+        date=trading_dates[1],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    trades = engine.get_trades()
+    assert len(trades) == 1
+    assert trades.iloc[0]['action'] == 'buy'
+    assert trades.iloc[0]['stock'] == '000002.SZ'
+    assert '000002.SZ' in engine.positions
+    assert '000001.SZ' not in engine.positions
+
+
+def test_buy_plan_does_not_overbuy_when_sell_execution_fails():
+    """T1 卖出失败时，不应继续按原买入计划超配加仓。"""
+
+    trading_dates = [pd.Timestamp('2023-01-02'), pd.Timestamp('2023-01-03')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        [
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': '20230102',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '000002.SZ',
+                'trade_date': '20230102',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '000001.SZ',
+                'trade_date': '20230103',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 1,
+                'is_st': 0,
+                'list_days': 200,
+            },
+            {
+                'ts_code': '000002.SZ',
+                'trade_date': '20230103',
+                'close': 10.0,
+                'close_adj': 10.0,
+                'open': 10.0,
+                'open_adj': 10.0,
+                'is_suspended': 0,
+                'is_limit_up': 0,
+                'is_limit_down': 0,
+                'is_st': 0,
+                'list_days': 200,
+            },
+        ]
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(commission_rate=0, min_commission=0, stamp_tax=0, slippage=0),
+        rebalance_freq=1,
+        holding_period=2,
+        enable_pending_order=True,
+        enable_position_completion=False,
+        verbose=False,
+    )
+    engine.price_data_cache = price_data.copy()
+    engine._prepare_price_index(price_data)
+    engine.current_capital = 50000.0
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 100,
+            'buy_date': trading_dates[0],
+            'signal_date': trading_dates[0],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 1000.0,
+        }
+    }
+    engine.pending_condition_sells = {
+        '000001.SZ': {
+            'trigger_date': trading_dates[0],
+            'sell_type': 'holding_period',
+        }
+    }
+    engine.pending_signals[trading_dates[0]] = {
+        'signals': {'000002.SZ': 1.0},
+        'priority_candidates': [('000002.SZ', 1.0)],
+        'slot_weights': [{'stock': '000002.SZ', 'weight': 1.0}],
+        'target_n': 1,
+        'tranche_idx': 0,
+    }
+
+    engine._execute_pending_condition_sells(
+        date=trading_dates[1],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+    engine._execute_pending_buys(
+        date=trading_dates[1],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+
+    assert '000001.SZ' in engine.positions
+    assert '000002.SZ' not in engine.positions
+    assert engine.get_trades().empty

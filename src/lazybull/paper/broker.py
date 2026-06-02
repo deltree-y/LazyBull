@@ -595,6 +595,7 @@ class PaperBroker:
         from .models import PendingSell, PendingBuy, Order, TargetWeight
         
         fills = []
+        self._failed_buy_targets = []
         
         # 加载可交易性信息（如果加载失败，假设所有股票可交易）
         try:
@@ -721,6 +722,10 @@ class PaperBroker:
         # 2. 再执行买入指令
         buy_instructions = [i for i in instructions if i.action == 'buy']
         failed_buy_targets = []  # 记录买入失败的目标
+        desired_position_count = max(
+            [int(getattr(inst, 'desired_position_count', 0) or 0) for inst in buy_instructions],
+            default=0,
+        )
         price_map_for_threshold = {**sell_prices, **buy_prices}
         min_buy_value_threshold = self._get_min_buy_value_threshold(price_map_for_threshold)
 
@@ -741,6 +746,27 @@ class PaperBroker:
             target_shares = inst.shares
             price_type = inst.price_type
             reason = inst.reason
+            original_signal_date = getattr(inst, 'original_signal_date', '') or inst.source_date
+
+            current_position = self.account.get_position(ts_code)
+            if (
+                desired_position_count > 0
+                and current_position is None
+                and len(self.account.get_positions()) >= desired_position_count
+            ):
+                logger.warning(
+                    f"股票 {ts_code} 无可用空槽（目标持仓 {desired_position_count}，"
+                    f"当前持仓 {len(self.account.get_positions())}），加入补位计划"
+                )
+                failed_buy_targets.append(
+                    TargetWeight(
+                        ts_code=ts_code,
+                        target_weight=inst.target_weight,
+                        reason=f"{reason}（无可用空槽）",
+                        original_signal_date=original_signal_date,
+                    )
+                )
+                continue
             
             # 检查价格数据
             if ts_code not in buy_prices:
@@ -748,7 +774,8 @@ class PaperBroker:
                 failed_buy_targets.append(TargetWeight(
                     ts_code=ts_code,
                     target_weight=inst.target_weight,
-                    reason=f"{reason}（无价格数据）"
+                    reason=f"{reason}（无价格数据）",
+                    original_signal_date=original_signal_date,
                 ))
                 continue
             
@@ -759,7 +786,8 @@ class PaperBroker:
                 failed_buy_targets.append(TargetWeight(
                     ts_code=ts_code,
                     target_weight=inst.target_weight,
-                    reason=f"{reason}（{check_reason}）"
+                    reason=f"{reason}（{check_reason}）",
+                    original_signal_date=original_signal_date,
                 ))
                 continue
             
@@ -785,7 +813,8 @@ class PaperBroker:
                     failed_buy_targets.append(TargetWeight(
                         ts_code=ts_code,
                         target_weight=inst.target_weight,
-                        reason=f"{reason}（现金不足）"
+                        reason=f"{reason}（现金不足）",
+                        original_signal_date=original_signal_date,
                     ))
                     continue
                 else:
@@ -805,6 +834,7 @@ class PaperBroker:
                         ts_code=ts_code,
                         target_weight=inst.target_weight,
                         reason=f"{reason}（买入后市值过小）",
+                        original_signal_date=original_signal_date,
                     )
                 )
                 continue
@@ -847,8 +877,7 @@ class PaperBroker:
             self.storage.save_pending_sells(self.pending_sells)
         
         # 记录买入失败目标（用于后续补位）
-        if failed_buy_targets:
-            self._failed_buy_targets = failed_buy_targets
+        self._failed_buy_targets = failed_buy_targets
         
         # 统计交易类型
         stats = self._calculate_execution_stats(fills, positions_before)

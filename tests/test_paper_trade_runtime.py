@@ -4,14 +4,16 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
+from src.lazybull.paper.runner import PaperTradingRunner
 from src.lazybull.paper.reporting import format_trade_result
 from src.lazybull.paper.runtime import (
     PaperTradeExecutionResult,
     PaperTradeRuntimeContext,
+    _execute_t1_if_pending,
     _handle_failed_buys,
     execute_trade_workflow,
 )
-from src.lazybull.paper.models import TargetWeight
+from src.lazybull.paper.models import Fill, PendingBuy, TargetWeight, TradeInstruction
 
 
 def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
@@ -329,6 +331,9 @@ def test_handle_failed_buys_preserves_original_slot_weight():
     """买入失败转补位时应保留原始槽位权重，供下一交易日按槽位补齐。"""
     runner = MagicMock()
     runner._get_next_trade_date.return_value = "20260122"
+    runner._build_pending_buys_from_failed_targets = (
+        PaperTradingRunner._build_pending_buys_from_failed_targets.__get__(runner, PaperTradingRunner)
+    )
 
     failed = [
         TargetWeight(ts_code="000001.SZ", target_weight=0.07, reason="涨停"),
@@ -354,3 +359,101 @@ def test_handle_failed_buys_preserves_original_slot_weight():
     assert pending_buys[0].target_weight == 0.07
     assert pending_buys[1].target_weight == 0.03
     runner.broker.clear_failed_buy_targets.assert_called_once()
+
+
+def test_execute_t1_if_pending_runs_same_day_fallback_for_new_failed_buys(monkeypatch):
+    """T1 主路径的失败买单应在同一交易日立即转入补位执行。"""
+
+    runner = MagicMock()
+    runner.paper_storage.check_run_exists.return_value = False
+    runner.paper_storage.find_pending_instructions.return_value = (
+        '20260121',
+        [
+            TradeInstruction(
+                ts_code='000001.SZ',
+                action='buy',
+                shares=1000,
+                price_type='close',
+                reason='信号生成',
+                source_date='20260120',
+                target_weight=0.1,
+                original_signal_date='20260120',
+                desired_position_count=1,
+            )
+        ],
+    )
+    runner.paper_storage.load_pending_buys.return_value = []
+    runner._load_prices.return_value = ({'000002.SZ': 10.0}, {'000001.SZ': 10.0})
+    runner.broker.execute_instructions.return_value = []
+
+    failed_targets = [
+        TargetWeight(
+            ts_code='000001.SZ',
+            target_weight=0.1,
+            reason='信号生成（涨停）',
+            original_signal_date='20260120',
+        )
+    ]
+    runner.broker.get_failed_buy_targets.return_value = failed_targets
+
+    same_day_pending = [
+        PendingBuy(
+            ts_code='000001.SZ',
+            target_weight=0.1,
+            reason='补位槽位-信号生成（涨停）',
+            create_date='20260121',
+            attempts=0,
+            last_attempt_date='',
+            original_signal_date='20260120',
+        )
+    ]
+    runner._build_pending_buys_from_failed_targets.return_value = same_day_pending
+    runner._execute_pending_buys.return_value = [
+        Fill(
+            trade_date='20260121',
+            ts_code='000002.SZ',
+            action='buy',
+            shares=1000,
+            price=10.0,
+            amount=10000.0,
+            commission=0.0,
+            stamp_tax=0.0,
+            slippage=0.0,
+            total_cost=10000.0,
+            reason='补位槽位-信号生成（涨停）',
+        )
+    ]
+
+    monkeypatch.setattr(
+        'src.lazybull.paper.runtime._handle_failed_buys',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('不应先落到下一日补位队列')),
+    )
+
+    actions = _execute_t1_if_pending(
+        runner=runner,
+        trade_date='20260121',
+        config={
+            'buy_price': 'close',
+            'sell_price': 'close',
+            'enable_profit_based_holding': False,
+            'universe': 'mainboard',
+            'exclude_st': True,
+            'min_list_days': 365,
+        },
+    )
+
+    runner._build_pending_buys_from_failed_targets.assert_called_once_with(
+        failed_targets,
+        '20260121',
+        attempts=0,
+    )
+    runner.broker.clear_failed_buy_targets.assert_called_once()
+    runner._execute_pending_buys.assert_called_once()
+    assert actions == [
+        {
+            'ts_code': '000002.SZ',
+            'action': 'buy',
+            'shares': 1000,
+            'reason': '补位槽位-信号生成（涨停）',
+        }
+    ]
