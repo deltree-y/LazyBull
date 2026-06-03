@@ -12,7 +12,7 @@ from ..data import DataLoader
 from ..risk.equity_curve import EquityCurveMonitor, create_equity_curve_config_from_dict
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
-from .models import PendingBuy, PendingSell, TargetWeight, TradeInstruction
+from .models import PendingBuy, PendingSell, TargetWeight, TradeInstruction, normalize_trade_reason
 from .runner import PaperTradingRunner
 from .storage import PaperStorage
 
@@ -122,6 +122,21 @@ def execute_trade_workflow(
             "consecutive_limit_down_days", {}
         )
 
+    # T1 必须只执行上一交易日 T0 已落盘的指令，不能在执行日临时增删单。
+    _report("执行 T1 指令")
+    t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
+
+    # 恢复上一个 T0 生成的 ranked_candidates（如有），供后续 T0 规划使用
+    _report("恢复排序候选")
+    rc_loaded = storage.load_ranked_candidates()
+    if isinstance(rc_loaded, tuple) and len(rc_loaded) == 2:
+        ranked_candidates, signal_date = rc_loaded
+        runner.signal._last_ranked_candidates = ranked_candidates
+        runner.signal._last_signal_date = pd.Timestamp(signal_date)
+        logger.info(f"已恢复 ranked_candidates: signal_date={signal_date}, count={len(ranked_candidates)}")
+    elif rc_loaded:
+        logger.warning(f"ranked_candidates 格式异常，跳过恢复: {type(rc_loaded)}")
+
     _report("止损检查")
     stop_loss_actions: List[Dict[str, object]] = []
     if bool(config["stop_loss_enabled"]):
@@ -145,27 +160,35 @@ def execute_trade_workflow(
     _report("整体止盈检查")
     take_profit_actions = _check_take_profit(runner, corrected_date, config)
 
-    _report("处理延迟卖出")
-    pending_sell_actions = _process_pending_sells(runner, corrected_date, config)
-
-    # 恢复上一个 T0 生成的 ranked_candidates（如有），供 T1 持仓评分使用
-    _report("恢复排序候选")
-    rc_loaded = storage.load_ranked_candidates()
-    if isinstance(rc_loaded, tuple) and len(rc_loaded) == 2:
-        ranked_candidates, signal_date = rc_loaded
-        runner.signal._last_ranked_candidates = ranked_candidates
-        runner.signal._last_signal_date = pd.Timestamp(signal_date)
-        logger.info(f"已恢复 ranked_candidates: signal_date={signal_date}, count={len(ranked_candidates)}")
-    elif rc_loaded:
-        logger.warning(f"ranked_candidates 格式异常，跳过恢复: {type(rc_loaded)}")
-
-    _report("执行 T1 指令")
-    t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
+    _report("规划次日卖出/补位指令")
+    pending_sell_actions = _plan_next_day_retry_and_sell_instructions(
+        runner=runner,
+        trade_date=corrected_date,
+        config=config,
+        stop_loss_actions=stop_loss_actions,
+        early_exit_actions=early_exit_actions,
+        take_profit_actions=take_profit_actions,
+    )
 
     _report("执行 T0")
     t0_targets, ect_exposure, ect_reason, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
+
+    # 已将待重试队列转写为次日明确指令，避免 T1 再直接读取 pending_* 队列。
+    if pending_sell_actions:
+        runner.broker.pending_sells = []
+        runner.broker.storage.save_pending_sells([])
+    pending_buys = runner.paper_storage.load_pending_buys()
+    if pending_buys:
+        # 仅在当日已成功转写为明确指令后清空队列。
+        t1_date = runner._get_next_trade_date(corrected_date)
+        planned_next_day = runner.paper_storage.load_instructions(t1_date) if t1_date else []
+        planned_buy_retries = [
+            inst for inst in (planned_next_day or []) if inst.action == "buy" and inst.retry_attempt > 0
+        ]
+        if planned_buy_retries:
+            runner.paper_storage.save_pending_buys([])
 
     # 仅在本日真实执行 T0 时保存 ranked_candidates，
     # 避免非调仓日因补位流程临时调用 generate_ranked 覆盖持久化候选池。
@@ -267,18 +290,6 @@ def _check_stop_loss(
             }
         )
 
-        if sl_action.is_limit_down:
-            pending_sell = PendingSell(
-                ts_code=sl_action.ts_code,
-                shares=sell_shares,
-                target_weight=0.0,
-                reason=f"止损-{sl_action.reason}",
-                create_date=trade_date,
-                attempts=0,
-            )
-            runner.broker.pending_sells.append(pending_sell)
-            runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
-
     return actions
 
 
@@ -294,19 +305,6 @@ def _check_early_exit(
         logger.info("无持仓触发亏损提前换出")
         return actions
 
-    for action in actions:
-        pending_sell = PendingSell(
-            ts_code=str(action["ts_code"]),
-            shares=int(action["shares"]),
-            target_weight=0.0,
-            reason=str(action["reason"]),
-            create_date=trade_date,
-            attempts=0,
-        )
-        runner.broker.pending_sells.append(pending_sell)
-        logger.info(f"亏损提前换出 → 加入延迟卖出队列: {action['ts_code']} {action['shares']}股")
-
-    runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
     logger.info(f"亏损提前换出检查完成：{len(actions)} 只股票触发")
     return actions
 
@@ -349,7 +347,7 @@ def _check_take_profit(
         logger.info(f"整体止盈未触发: 本轮收益率={profit_rate:.2%}, 阈值={float(threshold):.2%}")
         return []
 
-    existing_pending = {sell.ts_code for sell in runner.broker.pending_sells}
+    existing_pending = set()
     actions = []
     for ts_code, pos in positions.items():
         if ts_code in existing_pending:
@@ -360,16 +358,6 @@ def _check_take_profit(
             continue
 
         reason = f"整体止盈: 本轮收益率={profit_rate:.2%} >= {float(threshold):.2%}"
-        runner.broker.pending_sells.append(
-            PendingSell(
-                ts_code=ts_code,
-                shares=sell_shares,
-                target_weight=0.0,
-                reason=reason,
-                create_date=trade_date,
-                attempts=0,
-            )
-        )
         actions.append(
             {
                 "ts_code": ts_code,
@@ -387,11 +375,201 @@ def _check_take_profit(
     if not bool(config.get("take_profit_refill", True)):
         strategy_state["take_profit_block_t0_date"] = runner._get_next_trade_date(trade_date)
     runner.paper_storage.save_strategy_state(strategy_state)
-    runner.broker.storage.save_pending_sells(runner.broker.pending_sells)
     logger.warning(
-        f"整体止盈触发: 本轮收益率={profit_rate:.2%}, 已加入 {len(actions)} 条延迟卖出指令"
+        f"整体止盈触发: 本轮收益率={profit_rate:.2%}, 已规划 {len(actions)} 条次日卖出指令"
     )
     return actions
+
+
+def _merge_trade_instructions(
+    existing: List[TradeInstruction],
+    new_items: List[TradeInstruction],
+) -> List[TradeInstruction]:
+    """合并同一执行日的交易指令，按(action, ts_code)去重。"""
+    merged: List[TradeInstruction] = []
+    seen = set()
+    for instruction in [*existing, *new_items]:
+        key = (instruction.action, instruction.ts_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(instruction)
+    return merged
+
+
+def _save_next_day_instructions(
+    runner: PaperTradingRunner,
+    trade_date: str,
+    instructions: List[TradeInstruction],
+) -> None:
+    """将 T0 规划结果写入下一交易日指令文件。"""
+    if not instructions:
+        return
+
+    t1_date = runner._get_next_trade_date(trade_date)
+    if not t1_date:
+        logger.warning(f"{trade_date} 无下一交易日，跳过写入次日指令")
+        return
+
+    existing = runner.paper_storage.load_instructions(t1_date) or []
+    merged = _merge_trade_instructions(existing, instructions)
+    runner.paper_storage.save_instructions(t1_date, merged)
+
+
+def _build_sell_instructions(
+    actions: List[Dict[str, object]],
+    trade_date: str,
+    config: Dict[str, object],
+    retry_attempt: int = 0,
+) -> List[TradeInstruction]:
+    """将卖出动作转为次日明确卖出指令。"""
+    instructions: List[TradeInstruction] = []
+    for action in actions:
+        shares = int(action.get("shares", 0) or 0)
+        if shares <= 0:
+            continue
+        instructions.append(
+            TradeInstruction(
+                ts_code=str(action["ts_code"]),
+                action="sell",
+                shares=shares,
+                price_type=str(config["sell_price"]),
+                reason=str(action["reason"]),
+                source_date=trade_date,
+                target_weight=0.0,
+                retry_attempt=retry_attempt,
+            )
+        )
+    return instructions
+
+
+def _plan_pending_buy_retry_instructions(
+    runner: PaperTradingRunner,
+    trade_date: str,
+    config: Dict[str, object],
+) -> List[TradeInstruction]:
+    """将失败买入槽位在 T0 具体化为下一交易日买入指令。"""
+    pending_buys = runner.paper_storage.load_pending_buys()
+    if not pending_buys:
+        return []
+
+    failed_count = len(pending_buys)
+    replacement_targets = runner.generate_replacement_targets(
+        trade_date=trade_date,
+        failed_count=failed_count,
+        universe_type=str(config.get("universe", "mainboard")),
+        model_version=config.get("model_version"),
+        buy_price_type=str(config["buy_price"]),
+        original_signal_date=str(getattr(pending_buys[0], "original_signal_date", trade_date) or trade_date),
+        max_per_industry=config.get("max_per_industry"),
+        exclude_st=bool(config.get("exclude_st", True)),
+        min_list_days=int(config.get("min_list_days", 365)),
+        trading_config=TradingConfig.from_dict(config),
+    )
+    if not replacement_targets:
+        logger.info("无可用补位目标，保留 pending_buys 供后续 T0 继续规划")
+        return []
+
+    daily_data = runner.loader.load_clean_daily_by_date(trade_date)
+    if daily_data is None or daily_data.empty:
+        logger.warning(f"无法加载 {trade_date} 的价格数据，跳过补位指令规划")
+        return []
+
+    current_prices = {
+        str(row["ts_code"]): float(row.get("close", 0.0) or 0.0)
+        for _, row in daily_data.iterrows()
+    }
+
+    retry_attempt_by_code: Dict[str, int] = {}
+    enriched_targets = []
+    for target, pending_buy in zip(replacement_targets, pending_buys):
+        target.target_weight = pending_buy.target_weight
+        target.reason = normalize_trade_reason(
+            pending_buy.reason,
+            ensure_replenishment_prefix=True,
+        )
+        target.original_signal_date = pending_buy.original_signal_date or trade_date
+        enriched_targets.append(target)
+        retry_attempt_by_code[target.ts_code] = int(pending_buy.attempts)
+
+    instructions = runner._generate_instructions(
+        targets=enriched_targets,
+        buy_price_type=str(config["buy_price"]),
+        sell_price_type=str(config["sell_price"]),
+        current_prices=current_prices,
+        source_date=trade_date,
+        desired_position_count=int(config.get("top_n", len(enriched_targets)) or len(enriched_targets)),
+    )
+    for instruction in instructions:
+        instruction.retry_attempt = retry_attempt_by_code.get(instruction.ts_code, 0)
+
+    if instructions:
+        logger.info(f"已将 {len(instructions)} 个补位槽位具体化为次日买入指令")
+
+    return instructions
+
+
+def _plan_next_day_retry_and_sell_instructions(
+    runner: PaperTradingRunner,
+    trade_date: str,
+    config: Dict[str, object],
+    stop_loss_actions: List[Dict[str, object]],
+    early_exit_actions: List[Dict[str, object]],
+    take_profit_actions: List[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    """在 T0 统一规划下一交易日全部卖出/补位指令。"""
+    planned_actions: List[Dict[str, object]] = []
+    existing_sell_codes = set()
+    instructions: List[TradeInstruction] = []
+
+    retry_sell_actions: List[Dict[str, object]] = []
+    for pending_sell in list(runner.broker.pending_sells):
+        pos = runner.account.get_position(pending_sell.ts_code)
+        if not pos or pos.shares <= 0:
+            continue
+        retry_sell_actions.append(
+            {
+                "ts_code": pending_sell.ts_code,
+                "shares": min(int(pending_sell.shares), int(pos.shares)),
+                "reason": str(pending_sell.reason),
+                "status": "已转写为次日卖出指令",
+            }
+        )
+        existing_sell_codes.add(pending_sell.ts_code)
+        instructions.extend(
+            _build_sell_instructions(
+                [retry_sell_actions[-1]],
+                trade_date=trade_date,
+                config=config,
+                retry_attempt=int(getattr(pending_sell, "attempts", 0) or 0),
+            )
+        )
+
+    daily_sell_actions = [*stop_loss_actions, *early_exit_actions, *take_profit_actions]
+    filtered_daily_actions = [
+        action for action in daily_sell_actions if str(action.get("ts_code")) not in existing_sell_codes
+    ]
+    instructions.extend(_build_sell_instructions(filtered_daily_actions, trade_date, config))
+    existing_sell_codes.update(str(action["ts_code"]) for action in filtered_daily_actions)
+
+    holding_sell_actions: List[Dict[str, object]] = []
+    if bool(config.get("enable_profit_based_holding", False)):
+        _, holding_sell_actions = runner.evaluate_holding_period_actions(
+            trade_date,
+            config,
+            exclude_stocks=existing_sell_codes,
+        )
+        instructions.extend(_build_sell_instructions(holding_sell_actions, trade_date, config))
+
+    pending_buy_instructions = _plan_pending_buy_retry_instructions(runner, trade_date, config)
+    instructions = _merge_trade_instructions(instructions, pending_buy_instructions)
+
+    _save_next_day_instructions(runner, trade_date, instructions)
+
+    planned_actions.extend(retry_sell_actions)
+    planned_actions.extend(filtered_daily_actions)
+    planned_actions.extend(holding_sell_actions)
+    return planned_actions
 
 
 def _process_pending_sells(
@@ -498,53 +676,11 @@ def _execute_t1_if_pending(
     trade_date: str,
     config: Dict[str, object],
 ) -> List[Dict[str, object]]:
-    """执行 T1（如果有交易指令或补位计划）。"""
+    """执行 T1（仅执行 T0 已明确生成的交易指令）。"""
     actions: List[Dict[str, object]] = []
 
     if runner.paper_storage.check_run_exists("t1", trade_date):
-        pending_buys = runner.paper_storage.load_pending_buys()
-        if not pending_buys:
-            logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
-            return actions
-
-        logger.info(f"T1 指令已执行，但有 {len(pending_buys)} 个补位计划待处理")
-        buy_prices, sell_prices = runner._load_prices(
-            trade_date,
-            str(config["buy_price"]),
-            str(config["sell_price"]),
-        )
-        if not buy_prices:
-            logger.error("无法加载价格数据，跳过补位处理")
-            return actions
-
-        replenishment_fills = runner._execute_pending_buys(
-            pending_buys,
-            buy_prices,
-            trade_date,
-            str(config["buy_price"]),
-            universe_type=str(config.get("universe", "mainboard")),
-            exclude_st=bool(config.get("exclude_st", True)),
-            min_list_days=int(config.get("min_list_days", 365)),
-        )
-        if replenishment_fills:
-            for fill in replenishment_fills:
-                actions.append(
-                    {
-                        "ts_code": fill.ts_code,
-                        "action": fill.action,
-                        "shares": fill.shares,
-                        "reason": fill.reason,
-                    }
-                )
-            runner.account.update_last_date(trade_date)
-            runner.account.save_state()
-            all_prices = {**sell_prices, **buy_prices}
-            runner._record_nav(trade_date, all_prices)
-
-        new_failed = runner.broker.get_failed_buy_targets()
-        if new_failed:
-            max_attempt = max([pending_buy.attempts for pending_buy in pending_buys], default=0)
-            _handle_failed_buys(runner, trade_date, config, new_failed, attempt_count=max_attempt)
+        logger.info(f"T1 工作流已在 {trade_date} 执行过，跳过")
         return actions
 
     instructions = None
@@ -586,48 +722,14 @@ def _execute_t1_if_pending(
             except (ValueError, Exception) as exc:
                 logger.warning(f"检查指令过期失败: {exc}，按原日期执行")
 
-    pending_buys = runner.paper_storage.load_pending_buys()
-
-    # 对齐回测：持有期到期/盈利延续按日评估，不依赖是否调仓日
-    instruction_list: List[TradeInstruction] = list(instructions) if instructions else []
-    existing_sell_stocks = {
-        inst.ts_code for inst in instruction_list if getattr(inst, "action", "") == "sell"
-    }
-    if bool(config.get("enable_profit_based_holding", False)):
-        _, holding_sell_actions = runner.evaluate_holding_period_actions(
-            trade_date,
-            config,
-            exclude_stocks=existing_sell_stocks,
-        )
-        if holding_sell_actions:
-            for action in holding_sell_actions:
-                instruction_list.append(
-                    TradeInstruction(
-                        ts_code=str(action["ts_code"]),
-                        action="sell",
-                        shares=int(action["shares"]),
-                        price_type=str(config["sell_price"]),
-                        reason=str(action["reason"]),
-                        source_date=trade_date,
-                        target_weight=0.0,
-                    )
-                )
-            logger.info(
-                f"持有期到期卖出评估: 新增 {len(holding_sell_actions)} 条当日卖出指令"
-            )
-
-    instructions = instruction_list if instruction_list else None
-    if not instructions and not pending_buys:
-        logger.info(f"未找到 {trade_date} 的交易指令、持有期到期卖出或补位买入计划，跳过 T1")
+    if not instructions:
+        logger.info(f"未找到 {trade_date} 的交易指令，跳过 T1")
         return actions
 
     if instructions:
         logger.info("=" * 80)
         logger.info(f"【T1 指令驱动】读取到 {len(instructions)} 条交易指令")
         logger.info("=" * 80)
-
-    if pending_buys:
-        logger.info(f"找到 {len(pending_buys)} 个补位买入计划（将在指令执行后处理）")
 
     buy_prices, sell_prices = runner._load_prices(
         trade_date,
@@ -640,64 +742,40 @@ def _execute_t1_if_pending(
 
     fills_count = 0
     orders_count = 0
-
-    if instructions:
-        logger.info("执行交易指令")
-        fills = runner.broker.execute_instructions(
-            instructions, buy_prices, sell_prices, trade_date
+    logger.info("执行交易指令")
+    fills = runner.broker.execute_instructions(
+        instructions, buy_prices, sell_prices, trade_date
+    )
+    fills_count += len(fills) if fills else 0
+    orders_count += len(instructions)
+    for fill in fills:
+        actions.append(
+            {
+                "ts_code": fill.ts_code,
+                "action": fill.action,
+                "shares": fill.shares,
+                "reason": fill.reason,
+            }
         )
-        fills_count += len(fills) if fills else 0
-        orders_count += len(instructions)
-        for fill in fills:
-            actions.append(
-                {
-                    "ts_code": fill.ts_code,
-                    "action": fill.action,
-                    "shares": fill.shares,
-                    "reason": fill.reason,
-                }
-            )
-        logger.info(f"指令执行完成：{len(instructions)} 条指令，{len(fills)} 笔成交")
+    logger.info(f"指令执行完成：{len(instructions)} 条指令，{len(fills)} 笔成交")
 
     failed_buy_targets = runner.broker.get_failed_buy_targets()
-    same_day_pending_buys: List[PendingBuy] = []
     if failed_buy_targets:
-        same_day_pending_buys = runner._build_pending_buys_from_failed_targets(
+        max_retry_attempt = max(
+            [
+                int(getattr(inst, "retry_attempt", 0) or 0)
+                for inst in instructions
+                if getattr(inst, "action", "") == "buy"
+            ],
+            default=0,
+        )
+        _handle_failed_buys(
+            runner,
+            trade_date,
+            config,
             failed_buy_targets,
-            trade_date,
-            attempts=0,
+            attempt_count=max_retry_attempt,
         )
-        runner.broker.clear_failed_buy_targets()
-        logger.info(
-            f"检测到 {len(same_day_pending_buys)} 个当日买入失败槽位，立即按 T0 候选顺延执行"
-        )
-
-    if same_day_pending_buys:
-        pending_buys = same_day_pending_buys + list(pending_buys or [])
-
-    if pending_buys:
-        logger.info("执行补位买入计划")
-        replenishment_fills = runner._execute_pending_buys(
-            pending_buys,
-            buy_prices,
-            trade_date,
-            str(config["buy_price"]),
-            universe_type=str(config.get("universe", "mainboard")),
-            exclude_st=bool(config.get("exclude_st", True)),
-            min_list_days=int(config.get("min_list_days", 365)),
-        )
-        if replenishment_fills:
-            fills_count += len(replenishment_fills)
-            orders_count += len(replenishment_fills)
-            for fill in replenishment_fills:
-                actions.append(
-                    {
-                        "ts_code": fill.ts_code,
-                        "action": fill.action,
-                        "shares": fill.shares,
-                        "reason": fill.reason,
-                    }
-                )
 
     if fills_count > 0:
         runner.account.update_last_date(trade_date)
@@ -705,24 +783,30 @@ def _execute_t1_if_pending(
         all_prices = {**sell_prices, **buy_prices}
         runner._record_nav(trade_date, all_prices)
 
-    if instructions or pending_buys:
-        run_record = {
-            "trade_date": trade_date,
-            "buy_price_type": config["buy_price"],
-            "sell_price_type": config["sell_price"],
-            "instructions_count": len(instructions) if instructions else 0,
-            "pending_buys_count": len(pending_buys) if pending_buys else 0,
-            "orders_count": orders_count,
-            "fills_count": fills_count,
-            "timestamp": pd.Timestamp.now().isoformat(),
-        }
-        runner.paper_storage.save_run_record("t1", trade_date, run_record)
-        if inst_date != trade_date and instructions:
-            runner.paper_storage.save_run_record(
-                "t1",
-                inst_date,
-                {**run_record, "note": f"指令延迟执行，实际执行日期 {trade_date}"},
-            )
+        if any("整体止盈" in str(fill.reason or "") for fill in fills):
+            strategy_state = runner.paper_storage.load_strategy_state()
+            strategy_state["last_rebalance_nav"] = runner.account.get_total_value(all_prices)
+            strategy_state["last_take_profit_date"] = trade_date
+            strategy_state.pop("pending_take_profit_trigger_date", None)
+            runner.paper_storage.save_strategy_state(strategy_state)
+
+    run_record = {
+        "trade_date": trade_date,
+        "buy_price_type": config["buy_price"],
+        "sell_price_type": config["sell_price"],
+        "instructions_count": len(instructions) if instructions else 0,
+        "pending_buys_count": len(failed_buy_targets) if failed_buy_targets else 0,
+        "orders_count": orders_count,
+        "fills_count": fills_count,
+        "timestamp": pd.Timestamp.now().isoformat(),
+    }
+    runner.paper_storage.save_run_record("t1", trade_date, run_record)
+    if inst_date != trade_date and instructions:
+        runner.paper_storage.save_run_record(
+            "t1",
+            inst_date,
+            {**run_record, "note": f"指令延迟执行，实际执行日期 {trade_date}"},
+        )
 
     logger.info(f"T1 执行完成：{len(actions)} 个订单")
     return actions

@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -36,21 +36,21 @@ $wf_period_configs = @(
         SplitCount = 13
         FinalDate = "20251231"
         ContinueDays = 1
-        StartModelVersion = 16542#16501(5)#16447(4)#16365
+        StartModelVersion = 16832#16447(6_20)#16542(6_10)#16501(5)#16706(4)#16665(3_20)
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
         FinalDate = "20260209"
         ContinueDays = 1
-        StartModelVersion = 16555#16514(5)#16460(4)#16378
+        StartModelVersion = 16846#16460(6_20)#16555(6_10)#16514(5)#16719(4)#16678(3_20)
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
         FinalDate = "20260324"
         ContinueDays = 1
-        StartModelVersion = 16569#16528(5)#16474(4)#16392
+        StartModelVersion = 16861#16474(6_20)#16569(6_10)#16528(5)#16733(4)#16692(3_20)
     }
 )
 
@@ -67,10 +67,10 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(6)         #. XGB推荐9, LGB推荐5
+$n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.01)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.02)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -129,7 +129,7 @@ $enable_consensus        = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约2%, 回撤无明显变化
 
 # ── 一致预期修正因子（0512基于已有 report_rc 构建时序修正信号，无需额外下载）─
-$enable_consensus_revision = $true  # $true 启用 | $false 禁用（实验性因子）
+$enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
 $enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
@@ -147,7 +147,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $false   # $true 启用 | $false 禁用
+$deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -157,8 +157,8 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(20)            # 回测持仓 Top N
-$bt_rebalance_freq_list  = @(8)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
+$bt_top_n_list           = @(10)            # 回测持仓 Top N
+$bt_rebalance_freq_list  = @(5)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
@@ -208,7 +208,7 @@ $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
 # ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
 # 0601这里应为true
-$enable_profit_based_holding      = $false       # $true 启用 | $false 禁用
+$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
 # 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
 # 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，

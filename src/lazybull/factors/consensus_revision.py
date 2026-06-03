@@ -33,6 +33,21 @@ CONSENSUS_REVISION_COLS = [
 CONSENSUS_REVISION_FRESHNESS_COL = "cons_revision_freshness_days"
 
 
+def _safe_nanstd(values: np.ndarray, ddof: int = 1) -> float:
+    """安全计算忽略 NaN 的标准差。
+
+    当有效样本数不足以支撑给定 ddof 时返回 NaN，避免 numpy 发出
+    "Degrees of freedom <= 0 for slice" 的 RuntimeWarning。
+    """
+    if values is None:
+        return np.nan
+
+    valid_values = values[~np.isnan(values)]
+    if valid_values.size <= ddof:
+        return np.nan
+    return float(np.nanstd(valid_values, ddof=ddof))
+
+
 def build_consensus_revision_lookup_by_date(
     report_rc_raw: pd.DataFrame,
     trading_dates: List[str],
@@ -201,7 +216,7 @@ def build_consensus_revision_lookup_by_date(
                 eps_mean = _safe_nanmean(recent_eps)
                 row["cons_eps_mean_90d"] = eps_mean
 
-                recent_std = float(np.nanstd(recent_eps, ddof=1)) if recent_eps.size >= 2 else np.nan
+                recent_std = _safe_nanstd(recent_eps, ddof=1)
                 if recent_count >= 5 and not np.isnan(recent_std) and recent_std > 0 and abs(eps_mean) > 1e-6:
                     row["cons_eps_dispersion"] = float(recent_std / abs(eps_mean))
                 else:
@@ -221,7 +236,7 @@ def build_consensus_revision_lookup_by_date(
 
                 if earlier_count >= 5:
                     earlier_eps = eps_vals[earlier_l:earlier_r]
-                    earlier_std = float(np.nanstd(earlier_eps, ddof=1)) if earlier_eps.size >= 2 else np.nan
+                    earlier_std = _safe_nanstd(earlier_eps, ddof=1)
                     earlier_mean = _safe_nanmean(earlier_eps)
                     if not np.isnan(earlier_std) and earlier_std > 0 and not np.isnan(earlier_mean) and abs(earlier_mean) > 1e-6:
                         earlier_disp = earlier_std / abs(earlier_mean)

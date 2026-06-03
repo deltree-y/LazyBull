@@ -21,7 +21,15 @@ from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.paper import PaperStorage
 from src.lazybull.paper.broker import PaperBroker
 from src.lazybull.paper.account import PaperAccount
-from src.lazybull.paper.models import Fill, Order, PendingBuy, PendingSell, TargetWeight, TradeInstruction
+from src.lazybull.paper.models import (
+    Fill,
+    Order,
+    PendingBuy,
+    PendingSell,
+    TargetWeight,
+    TradeInstruction,
+    normalize_trade_reason,
+)
 from src.lazybull.paper.runner import PaperTradingRunner
 from src.lazybull.signals.ml_signal import MLSignal, SignalConfidenceGateState
 
@@ -792,6 +800,22 @@ def test_execute_pending_buys_prefers_persisted_t0_ranked_candidates(monkeypatch
         assert fills[0].ts_code == '000003.SZ'
 
 
+
+
+def test_normalize_trade_reason_collapses_repeated_replenishment_tags():
+    """测试补位原因归一化会折叠重复前后缀。"""
+    reason = (
+        '补位槽位-补位槽位-信号生成 (权重=0.0500)'
+        '（无可用空槽）（无可用空槽）'
+    )
+
+    normalized = normalize_trade_reason(
+        reason,
+        ensure_replenishment_prefix=True,
+        append_suffix='（无可用空槽）',
+    )
+
+    assert normalized == '补位槽位-信号生成 (权重=0.0500)（无可用空槽）'
 def test_execute_pending_buys_skip_tiny_buy_value_by_ratio():
     """补位路径在现金缩量后仍应拦截过小市值买入。"""
     with tempfile.TemporaryDirectory() as tmpdir:

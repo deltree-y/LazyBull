@@ -27,7 +27,7 @@ from ..universe.base import BasicUniverse
 from ..portfolio.industry_constraint import load_industry_mapping, apply_industry_constraint
 from .account import PaperAccount
 from .broker import PaperBroker
-from .models import NAVRecord, PendingBuy, TargetWeight, TradeInstruction
+from .models import NAVRecord, PendingBuy, TargetWeight, TradeInstruction, normalize_trade_reason
 from .storage import PaperStorage
 
 # 常量定义
@@ -129,13 +129,52 @@ class PaperTradingRunner:
     def _get_open_trade_dates(self) -> List[str]:
         """返回开市交易日列表（带简单缓存）。"""
         if self._trade_dates_cache is None:
-            trade_cal = self.loader.load_clean_trade_cal()
-            if trade_cal is None or trade_cal.empty:
-                return []
-            self._trade_dates_cache = (
-                trade_cal.loc[trade_cal["is_open"] == 1, "cal_date"].astype(str).tolist()
-            )
+            self._trade_dates_cache = self._load_open_trade_dates_from_storage()
         return self._trade_dates_cache
+
+    def _load_open_trade_dates_from_storage(self) -> List[str]:
+        """从 clean/raw 交易日历中提取覆盖范围更完整的开市日列表。"""
+        clean_dates = self._extract_open_trade_dates(self.loader.load_clean_trade_cal())
+        raw_dates = self._extract_open_trade_dates(self.loader.load_trade_cal())
+
+        if raw_dates and (not clean_dates or raw_dates[-1] > clean_dates[-1]):
+            return raw_dates
+        return clean_dates or raw_dates
+
+    @staticmethod
+    def _extract_open_trade_dates(trade_cal: Optional[pd.DataFrame]) -> List[str]:
+        """从交易日历 DataFrame 中提取开市日列表。"""
+        if trade_cal is None or trade_cal.empty:
+            return []
+        if "cal_date" not in trade_cal.columns or "is_open" not in trade_cal.columns:
+            return []
+
+        cal_dates = trade_cal["cal_date"]
+        if pd.api.types.is_datetime64_any_dtype(cal_dates):
+            cal_dates = cal_dates.dt.strftime("%Y%m%d")
+        else:
+            cal_dates = cal_dates.astype(str).str.replace("-", "", regex=False).str.slice(0, 8)
+
+        is_open = trade_cal["is_open"].astype(str)
+        return cal_dates[is_open == "1"].dropna().tolist()
+
+    def _ensure_trade_calendar_coverage(self, target_date: Optional[str]) -> List[str]:
+        """确保交易日历至少覆盖到目标日期。"""
+        normalized_target = str(target_date).strip() if target_date is not None else ""
+        if normalized_target and len(normalized_target) == 10 and normalized_target[4] == "-":
+            normalized_target = normalized_target.replace("-", "")
+        if normalized_target and not normalized_target.isdigit():
+            normalized_target = ""
+
+        trade_dates = self._get_open_trade_dates()
+        if trade_dates and (not normalized_target or trade_dates[-1] >= normalized_target):
+            return trade_dates
+
+        if normalized_target and ensure_basic_data(self.client, self.storage, normalized_target, force=False):
+            self._trade_dates_cache = self._load_open_trade_dates_from_storage()
+            return self._trade_dates_cache
+
+        return trade_dates
 
     def _load_kelly_window_data(self, trade_date: str) -> Optional[pd.DataFrame]:
         """加载 Kelly 波动率估计所需的近窗价格数据。"""
@@ -404,13 +443,10 @@ class PaperTradingRunner:
             if len(normalized_input) == 10 and normalized_input[4] == "-" and normalized_input[7] == "-":
                 normalized_input = normalized_input.replace("-", "")
 
-            trade_cal = self.loader.load_clean_trade_cal()
-            if trade_cal is None:
+            trade_dates = self._ensure_trade_calendar_coverage(normalized_input)
+            if not trade_dates:
                 logger.error("无法加载交易日历")
                 return normalized_input
-            
-            # 筛选开市日
-            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].astype(str).tolist()
             
             # 检查输入日期是否为交易日
             if normalized_input in trade_dates:
@@ -435,12 +471,8 @@ class PaperTradingRunner:
 
     def _resolve_next_requested_trade_date(self) -> str:
         """将 next 解析为最近执行日之后的下一个交易日。"""
-        trade_cal = self.loader.load_clean_trade_cal()
-        if trade_cal is None:
-            logger.error("无法加载交易日历，next 回退为原始输入")
-            return "next"
-
-        trade_dates = trade_cal[trade_cal["is_open"] == 1]["cal_date"].astype(str).tolist()
+        today = datetime.now().strftime("%Y%m%d")
+        trade_dates = self._ensure_trade_calendar_coverage(today)
         if not trade_dates:
             logger.warning("交易日历为空，next 回退为原始输入")
             return "next"
@@ -545,6 +577,7 @@ class PaperTradingRunner:
         current_prices: Dict[str, float],
         source_date: str,
         protected_stocks: Optional[set] = None,
+        desired_position_count: Optional[int] = None,
     ) -> List[TradeInstruction]:
         """从目标权重生成明确的交易指令
 
@@ -581,7 +614,7 @@ class PaperTradingRunner:
         total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
 
         # 仅处理目标股票买入/加仓（按目标顺序）
-        desired_position_count = len(ordered_target_codes)
+        desired_position_count = int(desired_position_count or len(ordered_target_codes))
         for ts_code in ordered_target_codes:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
             pos = current_positions.get(ts_code)
@@ -769,8 +802,18 @@ class PaperTradingRunner:
             logger.error(f"无法获取 {corrected_date} 的下一个交易日")
             return
         
-        # 保存交易指令（指令驱动模式）
-        self.paper_storage.save_instructions(t1_date, instructions)
+        # 保存交易指令（指令驱动模式）。
+        # 同一交易日内，日度卖出规划可能已先写入次日指令，这里需要做合并而非覆盖。
+        existing_instructions = self.paper_storage.load_instructions(t1_date) or []
+        merged_instructions: List[TradeInstruction] = []
+        seen_keys = set()
+        for inst in [*existing_instructions, *instructions]:
+            key = (inst.action, inst.ts_code)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged_instructions.append(inst)
+        self.paper_storage.save_instructions(t1_date, merged_instructions)
         if hasattr(self.signal, "_last_ranked_candidates") and self.signal._last_ranked_candidates:
             logger.info("保存本轮 ranked_candidates 供 T1 买入顺延使用")
             self.paper_storage.save_ranked_candidates(self.signal._last_ranked_candidates, corrected_date)
@@ -796,7 +839,7 @@ class PaperTradingRunner:
             'model_version': model_version,
             'rebalance_freq': effective_config.rebalance_freq,
             'targets_count': len(targets),
-            'instructions_count': len(instructions),
+            'instructions_count': len(merged_instructions),
             'timestamp': pd.Timestamp.now().isoformat()
         }
         self.paper_storage.save_run_record("t0", corrected_date, run_record)
@@ -947,7 +990,10 @@ class PaperTradingRunner:
                 PendingBuy(
                     ts_code=str(getattr(target, "ts_code", "")),
                     target_weight=slot_weight,
-                    reason=f"补位槽位-{getattr(target, 'reason', '买入失败')}",
+                    reason=normalize_trade_reason(
+                        str(getattr(target, 'reason', '买入失败')),
+                        ensure_replenishment_prefix=True,
+                    ),
                     create_date=trade_date,
                     attempts=attempts,
                     last_attempt_date="",
@@ -2794,20 +2840,19 @@ class PaperTradingRunner:
             下一个交易日 YYYYMMDD，不存在返回None
         """
         try:
-            trade_cal = self.loader.load_clean_trade_cal()
-            if trade_cal is None:
+            trade_dates = self._ensure_trade_calendar_coverage(trade_date)
+            if not trade_dates:
                 logger.error("无法加载交易日历")
                 return None
-            
-            # 筛选开市日
-            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
-            
-            # 找到当前日期的下一个交易日
+
+            # 找到当前日期之后的第一个交易日；若当天本身是交易日，则返回其后一个交易日
             for i, date in enumerate(trade_dates):
+                if date > trade_date:
+                    return date
                 if date == trade_date and i + 1 < len(trade_dates):
                     return trade_dates[i + 1]
             
-            logger.warning(f"未找到 {trade_date} 的下一个交易日")
+            logger.debug(f"未找到 {trade_date} 的下一个交易日")
             return None
         except Exception as e:
             logger.error(f"获取下一个交易日失败: {e}")
@@ -2823,15 +2868,19 @@ class PaperTradingRunner:
             上一个交易日 YYYYMMDD，不存在返回None
         """
         try:
-            trade_cal = self.loader.load_clean_trade_cal()
-            if trade_cal is None:
+            trade_dates = self._ensure_trade_calendar_coverage(trade_date)
+            if not trade_dates:
                 logger.error("无法加载交易日历")
                 return None
 
-            trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
-            for i, date in enumerate(trade_dates):
-                if date == trade_date and i - 1 >= 0:
-                    return trade_dates[i - 1]
+            previous_date = None
+            for date in trade_dates:
+                if date >= trade_date:
+                    break
+                previous_date = date
+
+            if previous_date is not None:
+                return previous_date
 
             logger.warning(f"未找到 {trade_date} 的上一个交易日")
             return None

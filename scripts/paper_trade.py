@@ -40,6 +40,7 @@ from src.lazybull.paper import (
     PaperTradingRunner,
     create_paper_trade_runtime,
     execute_trade_workflow,
+    format_next_day_instructions,
 )
 from src.lazybull.paper import format_model_info as shared_format_model_info
 from src.lazybull.paper import (
@@ -184,9 +185,10 @@ def run_main(args):
 
     print_positions(result.corrected_date, runner=result.runner)
 
+    next_trade_date = result.runner._get_next_trade_date(result.corrected_date)
     logger.info("=" * 120)
     logger.info(
-        f"运行完成 - {result.corrected_date}, 下个交易日: [{result.runner._get_next_trade_date(result.corrected_date)}]"
+        f"运行完成 - {result.corrected_date}, 下个交易日: [{next_trade_date or '无'}]"
     )
     logger.info("=" * 120)
 
@@ -278,6 +280,14 @@ def print_positions(trade_date: str, runner: Optional[PaperTradingRunner] = None
     try:
         snapshot = load_position_snapshot(trade_date, runner=runner)
         logger.info("=" * 80)
+        next_day_text = format_next_day_instructions(
+            snapshot.trade_date,
+            runner=snapshot.runner,
+            stock_names=snapshot.stock_names,
+        )
+        for line in next_day_text.splitlines():
+            logger.info(line)
+        logger.info("-" * 80)
         logger.info(f"[{snapshot.trade_date}]持仓情况")
         logger.info("=" * 80)
         snapshot.runner.broker.print_positions_summary(

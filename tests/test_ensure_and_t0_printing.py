@@ -293,6 +293,99 @@ def test_correct_trade_date_supports_next_with_last_trade_date(monkeypatch):
         assert runner._correct_trade_date('next') == '20260326'
 
 
+def test_correct_trade_date_refreshes_trade_calendar_when_clean_is_stale(monkeypatch):
+    """测试非交易日输入会先刷新交易日历，再顺延到下一交易日。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=100000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        stale_clean = pd.DataFrame(
+            {
+                'cal_date': ['20260501', '20260502'],
+                'is_open': [1, 1],
+            }
+        )
+        stale_raw = pd.DataFrame(
+            {
+                'cal_date': ['20260501', '20260502'],
+                'is_open': [1, 1],
+            }
+        )
+        refreshed_raw = pd.DataFrame(
+            {
+                'cal_date': ['20260501', '20260502', '20260506'],
+                'is_open': [1, 1, 1],
+            }
+        )
+
+        clean_calls = {'count': 0}
+        refresh_state = {'done': False}
+
+        def fake_load_clean_trade_cal():
+            clean_calls['count'] += 1
+            return stale_clean
+
+        monkeypatch.setattr(runner.loader, 'load_clean_trade_cal', fake_load_clean_trade_cal)
+
+        def fake_load_trade_cal():
+            if refresh_state['done']:
+                return refreshed_raw
+            return stale_raw
+
+        monkeypatch.setattr(runner.loader, 'load_trade_cal', fake_load_trade_cal)
+
+        refresh_calls = []
+
+        def fake_ensure_basic_data(client, storage, end_date, force=False):
+            refresh_calls.append((end_date, force))
+            refresh_state['done'] = True
+            return True
+
+        monkeypatch.setattr('src.lazybull.paper.runner.ensure_basic_data', fake_ensure_basic_data)
+
+        assert runner._correct_trade_date('20260505') == '20260506'
+        assert refresh_calls == [('20260505', False)]
+        assert clean_calls['count'] >= 1
+
+
+def test_get_next_trade_date_no_next_only_logs_debug(monkeypatch):
+    """测试末尾交易日无下一交易日时不再打印 warning。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch('src.lazybull.paper.runner.TushareClient'):
+            runner = PaperTradingRunner(
+                initial_capital=100000.0,
+                data_root=tmpdir,
+                paper_root=tmpdir,
+                verbose=False,
+            )
+
+        monkeypatch.setattr(
+            runner.loader,
+            'load_clean_trade_cal',
+            lambda: pd.DataFrame(
+                {
+                    'cal_date': ['20260506'],
+                    'is_open': [1],
+                }
+            ),
+        )
+        monkeypatch.setattr(runner.loader, 'load_trade_cal', lambda: None)
+
+        warning_calls = []
+        debug_calls = []
+        monkeypatch.setattr('src.lazybull.paper.runner.logger.warning', lambda message: warning_calls.append(message))
+        monkeypatch.setattr('src.lazybull.paper.runner.logger.debug', lambda message: debug_calls.append(message))
+
+        assert runner._get_next_trade_date('20260506') is None
+        assert warning_calls == []
+        assert debug_calls == ['未找到 20260506 的下一个交易日']
+
+
 def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
     """测试 _load_factor_data 只为目标交易日构建因子查询表输出。"""
     trade_date = '20260422'

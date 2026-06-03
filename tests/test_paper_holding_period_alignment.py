@@ -11,7 +11,7 @@ from src.lazybull.signals.base import Signal
 from src.lazybull.universe.base import Universe
 from src.lazybull.paper.models import Position
 from src.lazybull.paper.runner import PaperTradingRunner
-from src.lazybull.paper.runtime import _execute_t1_if_pending
+from src.lazybull.paper.runtime import _build_sell_instructions, _plan_next_day_retry_and_sell_instructions
 
 
 def _build_runner(tmpdir: str) -> PaperTradingRunner:
@@ -88,8 +88,8 @@ def test_daily_holding_extension_strength_can_trigger_on_non_rebalance_day():
         assert sell_actions == []
 
 
-def test_t1_should_execute_holding_period_sell_even_without_rebalance_instructions():
-    """当日无调仓指令时，T1 也应执行持有期到期卖出。"""
+def test_t0_should_plan_holding_period_sell_for_next_trade_day():
+    """持有期到期卖出应在 T0 预生成到下一交易日指令。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         runner = _build_runner(tmpdir)
 
@@ -107,23 +107,10 @@ def test_t1_should_execute_holding_period_sell_even_without_rebalance_instructio
             )
         )
 
-        runner.paper_storage.find_pending_instructions = MagicMock(return_value=None)
         runner.paper_storage.load_pending_buys = MagicMock(return_value=[])
-        runner._load_prices = MagicMock(
-            return_value=(
-                {"000001.SZ": 10.0},
-                {"000001.SZ": 10.0},
-            )
-        )
-
-        captured = {"instructions": []}
-
-        def _fake_execute(instructions, buy_prices, sell_prices, trade_date):
-            captured["instructions"] = instructions
-            return []
-
-        runner.broker.execute_instructions = _fake_execute
-        runner.broker.get_failed_buy_targets = MagicMock(return_value=[])
+        runner.paper_storage.load_instructions = MagicMock(return_value=[])
+        runner.paper_storage.save_instructions = MagicMock()
+        runner._get_next_trade_date = MagicMock(return_value="20240105")
 
         config = {
             "buy_price": "close",
@@ -132,11 +119,32 @@ def test_t1_should_execute_holding_period_sell_even_without_rebalance_instructio
             "enable_profit_based_holding": True,
         }
 
-        _execute_t1_if_pending(runner, "20240104", config)
+        actions = _plan_next_day_retry_and_sell_instructions(
+            runner,
+            "20240104",
+            config,
+            stop_loss_actions=[],
+            early_exit_actions=[],
+            take_profit_actions=[],
+        )
 
-        assert len(captured["instructions"]) == 1
-        assert captured["instructions"][0].action == "sell"
-        assert captured["instructions"][0].ts_code == "000001.SZ"
+        assert len(actions) == 1
+        saved_instructions = runner.paper_storage.save_instructions.call_args[0][1]
+        assert len(saved_instructions) == 1
+        assert saved_instructions[0].action == "sell"
+        assert saved_instructions[0].ts_code == "000001.SZ"
+
+
+def test_build_sell_instructions_should_preserve_retry_attempt():
+    instructions = _build_sell_instructions(
+        actions=[{"ts_code": "000001.SZ", "shares": 100, "reason": "重试卖出"}],
+        trade_date="20240104",
+        config={"sell_price": "close"},
+        retry_attempt=2,
+    )
+
+    assert len(instructions) == 1
+    assert instructions[0].retry_attempt == 2
 
 
 def test_t0_generate_instructions_should_not_create_sell_from_target_reduction():

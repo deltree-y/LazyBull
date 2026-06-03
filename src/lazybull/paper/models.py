@@ -2,7 +2,51 @@
 
 from dataclasses import dataclass, field
 from typing import Optional
+
 import pandas as pd
+
+
+REPLENISHMENT_REASON_PREFIX = "补位槽位-"
+_KNOWN_REASON_SUFFIXES = ("（无可用空槽）", "（无价格数据）", "(补位)")
+
+
+def normalize_trade_reason(
+    reason: str,
+    ensure_replenishment_prefix: bool = False,
+    append_suffix: str = "",
+) -> str:
+    """归一化补位原因，避免跨日重试重复叠加相同标签。"""
+    normalized = str(reason or "").strip()
+    has_replenishment_prefix = ensure_replenishment_prefix
+    while normalized.startswith(REPLENISHMENT_REASON_PREFIX):
+        has_replenishment_prefix = True
+        normalized = normalized[len(REPLENISHMENT_REASON_PREFIX) :].lstrip()
+
+    suffixes = []
+    while normalized:
+        matched_suffix = next(
+            (suffix for suffix in _KNOWN_REASON_SUFFIXES if normalized.endswith(suffix)),
+            None,
+        )
+        if matched_suffix is None:
+            break
+        normalized = normalized[: -len(matched_suffix)].rstrip()
+        suffixes.insert(0, matched_suffix)
+
+    if append_suffix:
+        suffixes.append(append_suffix)
+
+    deduped_suffixes = []
+    for suffix in suffixes:
+        if suffix and suffix not in deduped_suffixes:
+            deduped_suffixes.append(suffix)
+
+    if not normalized:
+        normalized = "买入失败"
+    if has_replenishment_prefix:
+        normalized = f"{REPLENISHMENT_REASON_PREFIX}{normalized}"
+
+    return f"{normalized}{''.join(deduped_suffixes)}"
 
 
 @dataclass
@@ -180,3 +224,4 @@ class TradeInstruction:
     target_weight: float = 0.0  # 目标权重（可选，用于追踪）
     original_signal_date: str = ""  # 原始信号日期（可选，用于补位场景）
     desired_position_count: int = 0  # T0 计划的目标持仓数（用于 T1 限制新开仓槽位）
+    retry_attempt: int = 0  # 该指令对应的重试次数（用于补位/重试卖出链路）

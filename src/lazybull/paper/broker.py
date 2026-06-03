@@ -9,7 +9,7 @@ from ..common.print_table import format_row
 
 from ..common.cost import CostModel
 from .account import PaperAccount
-from .models import Fill, Order, PendingBuy, TargetWeight
+from .models import Fill, Order, PendingBuy, TargetWeight, normalize_trade_reason
 from .storage import PaperStorage
 
 
@@ -762,7 +762,7 @@ class PaperBroker:
                     TargetWeight(
                         ts_code=ts_code,
                         target_weight=inst.target_weight,
-                        reason=f"{reason}（无可用空槽）",
+                        reason=normalize_trade_reason(reason, append_suffix="（无可用空槽）"),
                         original_signal_date=original_signal_date,
                     )
                 )
@@ -774,7 +774,7 @@ class PaperBroker:
                 failed_buy_targets.append(TargetWeight(
                     ts_code=ts_code,
                     target_weight=inst.target_weight,
-                    reason=f"{reason}（无价格数据）",
+                    reason=normalize_trade_reason(reason, append_suffix="（无价格数据）"),
                     original_signal_date=original_signal_date,
                 ))
                 continue

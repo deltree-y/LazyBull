@@ -2,6 +2,80 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.72.13] - 2026-06-03
+
+### 修复
+
+- **纸面交易补位重试次日买单不再误用“补位批次数”作为目标持仓数**：在 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 中，`_plan_pending_buy_retry_instructions()` 生成次日补位买单时，`desired_position_count` 现改为沿用组合 `top_n`；[src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 的 `_generate_instructions()` 同步支持显式传入该值。这样当组合目标是 20、当前持仓 16、补位候选 5 只时，T1 将允许开出 4 个新槽位，而不是错误地拿“本轮 5/6 个补位候选”去拦截全部买单。
+
+### 测试
+
+- 更新 [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py)，新增“补位重试生成次日买单时应沿用组合 `top_n` 作为槽位上限”的回归用例。
+
+## [0.72.12] - 2026-06-03
+
+### 修复
+
+- **纸面交易补位原因不再跨日重复叠加**：在 [src/lazybull/paper/models.py](src/lazybull/paper/models.py) 中新增 `normalize_trade_reason()`，统一折叠重复的 `补位槽位-`、`（无可用空槽）`、`（无价格数据）` 等补位标签；[src/lazybull/paper/broker.py](src/lazybull/paper/broker.py)、[src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 与 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 现统一使用该函数，避免失败买单跨日重试时 reason 每天再包一层。
+- **纸面交易次日指令展示兼容清洗历史脏 reason**：在 [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py) 中，`format_next_day_instructions()` 展示买入原因前会先做一次归一化，因此即使旧的 instruction/pending_buys 已写入重复 reason，仓位预览也只显示一层。
+
+### 测试
+
+- 更新 [tests/test_buy_replacement.py](tests/test_buy_replacement.py) 与 [tests/test_paper_trading_cli.py](tests/test_paper_trading_cli.py)，新增补位原因归一化与次日指令展示去重的回归用例。
+
+## [0.72.11] - 2026-06-03
+
+### 优化
+
+- **纸面交易仓位展示前新增下一交易日买卖明细预览**：在 [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py) 中新增 `format_next_day_instructions()`，统一读取下一交易日 instruction 并格式化卖出/买入明细；[scripts/paper_trade.py](scripts/paper_trade.py) 的 `print_positions()` 现会在持仓表前先打印该预览；[src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py) 的 `format_positions_mobile()` 也同步在持仓列表前展示下一交易日待执行指令。
+
+### 测试
+
+- 更新 [tests/test_paper_trading_cli.py](tests/test_paper_trading_cli.py)，新增“下一交易日指令格式化展示”和“仓位打印前先输出次日指令”的回归用例。
+
+## [0.72.10] - 2026-06-03
+
+### 修复
+
+- **一致预期修正因子消除有效样本不足时的 numpy RuntimeWarning**：在 [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 中，EPS 分歧度及其变化的标准差计算改为先按非 NaN 有效样本数校验，再决定是否计算 `nanstd(ddof=1)`；当有效样本不足 2 个时直接返回 NaN，不再触发 `Degrees of freedom <= 0 for slice` 告警。
+
+### 测试
+
+- 更新 [tests/test_factor_consensus_revision.py](tests/test_factor_consensus_revision.py)，新增“窗口长度够但仅 1 个有效 EPS 样本时不应触发 RuntimeWarning”的回归用例。
+
+## [0.72.9] - 2026-06-03
+
+### 优化
+
+- **纸面交易“下一个交易日不存在”降为静默调试信息**：在 [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 中，`_get_next_trade_date()` 末尾找不到下一交易日时不再输出 warning，而是降为 debug。真正依赖下一交易日的调用方仍会在需要时自行报错，避免 CLI 结束态或信息性查询反复出现无害告警。
+- **纸面交易 CLI 收尾摘要不再显示 `[None]`**：在 [scripts/paper_trade.py](scripts/paper_trade.py) 中，运行完成摘要现将缺失的下一交易日显示为 `无`，减少噪音。
+
+### 测试
+
+- 更新 [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)，新增“末尾交易日无下一交易日时仅记录 debug、不再发出 warning”的回归用例。
+
+## [0.72.8] - 2026-06-03
+
+### 修复
+
+- **纸面交易交易日校正会在必要时先刷新交易日历覆盖范围**：在 [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 中，`_correct_trade_date()`、`_get_next_trade_date()` 与 `_get_prev_trade_date()` 现在会在发现本地交易日历未覆盖目标日期时，先触发 `ensure_basic_data()` 刷新基础日历，再从 clean/raw 两层选取覆盖更完整的开市日列表继续解析。这样像 `20260505` 这类非交易日输入，不会再因为旧交易日历缺少 `20260506` 而提前跳过自动补数。
+
+### 测试
+
+- 更新 [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py)，新增“clean 交易日历过期时仍会刷新后顺延到下一交易日”的回归用例。
+
+## [0.72.7] - 2026-06-02
+
+### 修复
+
+- **纸面交易 T1 全面改为只执行前一日 T0 指令**：在 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 中，共享运行时顺序调整为“先执行当日 T1 既有指令，再进行当日 T0 规划”；止损、亏损提前换出、整体止盈、持有期到期卖出，以及失败卖单/失败买单的下一日重试，现统一在 T0 写入下一交易日 instruction 文件，T1 不再临时现算新卖单，也不再做同日补位顺延。
+- **纸面交易 instruction 持久化补充 retry_attempt 元数据**：在 [src/lazybull/paper/models.py](src/lazybull/paper/models.py) 与 [src/lazybull/paper/storage.py](src/lazybull/paper/storage.py) 中，`TradeInstruction` 新增 `retry_attempt` 字段，用于跨日保留补位重试次数，避免从 instruction 恢复失败买单时丢失重试轮次。
+- **纸面交易 T0 买入指令改为与已有次日卖出指令合并保存**：在 [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 中，`run_t0()` 保存次日买入指令时会先读取同日已规划的卖出 instruction，并按 `(action, ts_code)` 去重合并，避免覆盖掉日度卖出规划。
+
+### 测试
+
+- 更新 [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py) 与 [tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py)，回归覆盖“共享运行时先 T1 后 T0 规划”“持有期卖出在 T0 落盘到次日”“T1 无预生成 instruction 时不再临时补卖”和“失败买单转入下一日 T0 规划”的新语义。
+
 ## [0.72.6] - 2026-06-01
 
 ### 修复

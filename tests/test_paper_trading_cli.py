@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -554,4 +555,88 @@ def test_instructions_not_exist(temp_paper_storage):
     """测试加载不存在的指令文件"""
     instructions = temp_paper_storage.load_instructions('20260203')
     assert instructions is None or len(instructions) == 0
+
+
+def test_format_next_day_instructions_lists_sell_and_buy(temp_paper_storage):
+    """测试下一交易日指令展示会输出买卖明细。"""
+    from src.lazybull.paper.models import TradeInstruction
+    from src.lazybull.paper.reporting import format_next_day_instructions
+
+    instructions = [
+        TradeInstruction(
+            ts_code='603115.SH',
+            action='sell',
+            shares=100,
+            price_type='close',
+            reason='减仓调整',
+            source_date='20260202',
+            target_weight=0.15,
+        ),
+        TradeInstruction(
+            ts_code='600519.SH',
+            action='buy',
+            shares=200,
+            price_type='close',
+            reason='补位槽位-补位槽位-加仓买入（无可用空槽）（无可用空槽）',
+            source_date='20260202',
+            target_weight=0.20,
+        ),
+    ]
+    temp_paper_storage.save_instructions('20260203', instructions)
+
+    runner = SimpleNamespace(
+        paper_storage=temp_paper_storage,
+        _correct_trade_date=lambda trade_date: trade_date,
+        _get_next_trade_date=lambda trade_date: '20260203',
+    )
+
+    text = format_next_day_instructions(
+        '20260202',
+        runner=runner,
+        stock_names={'603115.SH': '三维通信', '600519.SH': '贵州茅台'},
+    )
+
+    assert '下一交易日指令 (20260203)' in text
+    assert '卖1笔 买1笔' in text
+    assert text.index('卖出-') < text.index('买入-')
+    assert '1. 三维通信(603115.SH)' in text
+    assert '量100, 因减仓调整' in text
+    assert '1. 贵州茅台(600519.SH)' in text
+    assert '量200, 权20.00%, 因补位槽位-加仓买入（无可用空槽）' in text
+
+
+def test_print_positions_outputs_next_day_instructions_before_summary(monkeypatch):
+    """测试打印持仓时会先输出下一交易日指令。"""
+    import scripts.paper_trade as paper_trade_script
+
+    events = []
+
+    class DummyBroker:
+        def print_positions_summary(self, prices, trade_date, stock_names=None):
+            events.append(("summary", trade_date, stock_names))
+
+    snapshot = SimpleNamespace(
+        trade_date='20260202',
+        runner=SimpleNamespace(broker=DummyBroker()),
+        prices={'600519.SH': 123.45},
+        stock_names={'600519.SH': '贵州茅台'},
+    )
+
+    monkeypatch.setattr(paper_trade_script, 'load_position_snapshot', lambda trade_date, runner=None: snapshot)
+    monkeypatch.setattr(
+        paper_trade_script,
+        'format_next_day_instructions',
+        lambda trade_date, runner=None, stock_names=None: '下一交易日指令 (20260203)\n买入-\n1. 贵州茅台(600519.SH)',
+    )
+    monkeypatch.setattr(paper_trade_script.logger, 'info', lambda message: events.append(("log", message)))
+
+    paper_trade_script.print_positions('20260202')
+
+    summary_index = next(index for index, event in enumerate(events) if event[0] == 'summary')
+    instruction_index = next(
+        index
+        for index, event in enumerate(events)
+        if event[0] == 'log' and event[1] == '下一交易日指令 (20260203)'
+    )
+    assert instruction_index < summary_index
 

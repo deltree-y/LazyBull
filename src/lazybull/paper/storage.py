@@ -1000,6 +1000,7 @@ class PaperStorage:
                 'target_weight': inst.target_weight,
                 'original_signal_date': inst.original_signal_date,
                 'desired_position_count': inst.desired_position_count,
+                'retry_attempt': inst.retry_attempt,
             })
         
         df = pd.DataFrame(data)
@@ -1034,6 +1035,7 @@ class PaperStorage:
                 target_weight=row.get('target_weight', 0.0),
                 original_signal_date=row.get('original_signal_date', ''),
                 desired_position_count=int(row.get('desired_position_count', 0) or 0),
+                retry_attempt=int(row.get('retry_attempt', 0) or 0),
             ))
         
         logger.info(f"读取交易指令: {file_path} ({len(instructions)} 条)")

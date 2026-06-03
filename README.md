@@ -28,7 +28,42 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.72.6)
+### 当前版本 (v0.72.13)
+
+**纸面交易补位重试槽位上限修复** (v0.72.13):
+- [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 的 `_plan_pending_buy_retry_instructions()` 生成次日补位买单时，不再把“本轮补位候选数”误写成 `desired_position_count`，而是改为沿用组合目标 `top_n`。
+- [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 的 `_generate_instructions()` 现支持显式传入目标持仓数，因此像“目标仓位 20、当前持仓 16、补位候选 5 只”这样的场景，会允许开出 4 个新槽位，只拦下超出的第 5 只，而不会错误提示全部“无可用空槽”。
+
+**纸面交易补位原因跨日重复叠加修复** (v0.72.12):
+- [src/lazybull/paper/models.py](src/lazybull/paper/models.py) 新增 `normalize_trade_reason()`，统一折叠重复的 `补位槽位-`、`（无可用空槽）`、`（无价格数据）` 等补位标签。
+- [src/lazybull/paper/broker.py](src/lazybull/paper/broker.py)、[src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 和 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 在失败买单转补位、跨日重试再规划次日 instruction 时都改为复用该归一化逻辑，不再出现 reason 每过一天就再包一层的问题。
+- [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py) 的次日指令预览展示也会对历史脏 reason 做兜底清洗，因此旧数据展示会立即变干净。
+
+**纸面交易仓位展示前追加下一交易日买卖明细** (v0.72.11):
+- [scripts/paper_trade.py](scripts/paper_trade.py) 的 `positions`/`run` 持仓展示现在会先输出“下一交易日指令”区块，再打印当前持仓表。
+- [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py) 新增 `format_next_day_instructions()`，统一展示下一交易日待执行的卖出、买入明细，包含股数、目标权重和触发原因。
+- [src/lazybull/paper/reporting.py](src/lazybull/paper/reporting.py) 的 `format_positions_mobile()` 也同步加入该区块，因此钉钉 `positions` 命令会先展示次日计划、再展示持仓明细。
+
+**一致预期修正有效样本不足告警修复** (v0.72.10):
+- [src/lazybull/factors/consensus_revision.py](src/lazybull/factors/consensus_revision.py) 的 EPS 分歧度计算现在会先统计非 NaN 有效样本数，再决定是否计算标准差。
+- 当窗口里虽然有多条研报、但真正有值的 EPS 预测不足 2 条时，直接输出 `NaN`，不再触发 numpy 的 `Degrees of freedom <= 0 for slice` RuntimeWarning。
+- 更新 [tests/test_factor_consensus_revision.py](tests/test_factor_consensus_revision.py) 回归测试，用 `warnings.simplefilter("error", RuntimeWarning)` 确认不会再冒出这类告警。
+
+**纸面交易下一个交易日缺失告警降噪** (v0.72.9):
+- [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 的 `_get_next_trade_date()` 在确实没有下一交易日可返回时，内部日志已从 warning 降为 debug。
+- 真正依赖下一交易日的业务分支仍会在调用方按原逻辑报错；仅用于摘要展示、尾部状态或可选流程的查询不再反复打印无害告警。
+- [scripts/paper_trade.py](scripts/paper_trade.py) 的运行完成摘要也不再显示 `[None]`，改为 `无`。
+
+**纸面交易非交易日输入先刷新交易日历再自动补数** (v0.72.8):
+- [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 的交易日校正与前后交易日解析现在会在本地日历覆盖不足时先刷新基础交易日历，再从 clean/raw 两层挑选覆盖更完整的开市日列表。
+- 纸面交易输入非交易日时，会先顺延到下一交易日再触发 features/raw/clean 自动补齐，不再出现“旧交易日历下先报当日无数据、随后才下载下一交易日数据”的错序日志。
+- 更新 [tests/test_ensure_and_t0_printing.py](tests/test_ensure_and_t0_printing.py) 回归测试，覆盖 stale trade_cal 刷新后的顺延行为。
+
+**纸面交易 T1 全面改为只执行前一日 T0 指令** (v0.72.7):
+- [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 的共享执行顺序已调整为“先执行当日 T1 既有 instruction，再在当日 T0 统一规划下一交易日 instruction”。
+- 止损、亏损提前换出、整体止盈、持有期到期卖出，以及卖出失败/买入失败后的下一日重试，现全部在 T0 写入次日 instruction 文件；T1 不再临时计算新卖单，也不再在同一交易日立即顺延补位。
+- [src/lazybull/paper/models.py](src/lazybull/paper/models.py) 的 `TradeInstruction` 新增 `retry_attempt` 元数据，补位失败重试可在 instruction 文件里保留轮次。
+- 更新 [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py) 与 [tests/test_paper_holding_period_alignment.py](tests/test_paper_holding_period_alignment.py) 回归测试，覆盖“T1 只执行预生成指令”的纸面交易新口径。
 
 **回测非动态持仓分支补齐 T0->T1 卖后买链路** (v0.72.6):
 - [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 在 `enable_profit_based_holding=False` 的 `holding_period` 卖出路径中，现会同步写入次日补位买入计划。
@@ -60,10 +95,10 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - 同文件的待买计划新增显式 `desired_position_count`，部分补买场景会按实际卖出成功数量收缩开仓槽位，而不是把“待补槽位数”误当成组合总目标持仓数。
 - 更新 [tests/test_backtest_t1.py](tests/test_backtest_t1.py) 回归测试，覆盖“盈利延续未通过后，下一交易日先卖再买”的行为。
 
-**纸面交易买入改为 T0 计划、T+1 执行并支持同日顺延** (v0.72.0):
-- [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 与 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 现在会在 T0 保存 ranked_candidates；T+1 执行原计划买单失败后，会先在同一个交易日按 T0 的 ML 候选顺序继续顺延，而不是立即把失败槽位全部推迟到下一交易日。
+**纸面交易买入改为 T0 计划、T+1 执行** (v0.72.0):
+- [src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 与 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 现在会在 T0 保存 ranked_candidates，并把计划买单写入下一交易日 instruction。
 - [src/lazybull/paper/broker.py](src/lazybull/paper/broker.py) 现按 T0 目标持仓数限制新开仓；如果当日卖出失败导致空槽未真正释放，当日不会继续超配买入。
-- 更新 [tests/test_buy_replacement.py](tests/test_buy_replacement.py) 与 [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py) 回归测试，覆盖“同日顺延优先，跨日补位兜底”的纸面交易新口径。
+- 当前版本的进一步对齐见 v0.72.7：T1 已不再同日顺延补位，所有 T1 动作均来自前一日 T0 instruction。
 
 **回测买入改为 T0 计划、T+1 按优先级顺位执行** (v0.71.79):
 - [src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 现在会在 T0 保存 ML 候选优先级和原始槽位权重，T+1 执行买入时若原计划股票涨停、停牌或未成交，会在同日按候选顺序继续顺延，而不是提前在 T0 用 T+1 状态做前视过滤。

@@ -9,6 +9,7 @@ import pandas as pd
 from ..common.config import get_models_root
 from ..data import DataLoader, Storage
 from ..ml import ModelRegistry
+from .models import normalize_trade_reason
 from .runner import PaperTradingRunner
 from .runtime import PaperTradeExecutionResult
 from .storage import PaperStorage
@@ -205,9 +206,6 @@ def format_positions_mobile(
     except Exception:
         return f"无法加载 {trade_date} 的价格数据"
 
-    if snapshot.positions_df.empty:
-        return "当前无持仓"
-
     total_sign = "+" if snapshot.total_pnl_pct >= 0 else ""
     round_sign = "+" if snapshot.round_pnl_pct >= 0 else ""
 
@@ -219,7 +217,19 @@ def format_positions_mobile(
     ]
     if snapshot.rebalance_info:
         lines.append(snapshot.rebalance_info)
+    lines.append("")
+    lines.extend(
+        format_next_day_instructions(
+            snapshot.trade_date,
+            runner=snapshot.runner,
+            stock_names=snapshot.stock_names,
+        ).splitlines()
+    )
     lines.append("---")
+
+    if snapshot.positions_df.empty:
+        lines.append("当前无持仓")
+        return _md_join(lines)
 
     df_sorted = snapshot.positions_df.sort_values(by="收益率(%)", ascending=False)
     for index, (_, row) in enumerate(df_sorted.iterrows(), 1):
@@ -236,6 +246,63 @@ def format_positions_mobile(
         lines.append(f"   {pnl_sign}{pnl_pct:.2f}% ({pnl_sign}{row['浮动盈亏']:,.0f})")
 
     return _md_join(lines)
+
+
+def format_next_day_instructions(
+    trade_date: str,
+    runner: Optional[PaperTradingRunner] = None,
+    stock_names: Optional[Dict[str, str]] = None,
+) -> str:
+    """格式化下一交易日待执行买卖指令。"""
+    active_runner = runner or PaperTradingRunner(verbose=False)
+    corrected_trade_date = active_runner._correct_trade_date(trade_date)
+    next_trade_date = active_runner._get_next_trade_date(corrected_trade_date)
+
+    if not next_trade_date:
+        return "下一交易日指令: 无后续交易日"
+
+    instructions = active_runner.paper_storage.load_instructions(next_trade_date) or []
+    resolved_stock_names = stock_names
+    if resolved_stock_names is None:
+        loader = DataLoader(active_runner.storage, verbose=False)
+        resolved_stock_names = _build_stock_names(loader)
+
+    buy_instructions = [instruction for instruction in instructions if instruction.action == "buy"]
+    sell_instructions = [instruction for instruction in instructions if instruction.action == "sell"]
+
+    lines = [f"下一交易日指令 ({next_trade_date})"]
+    if not instructions:
+        lines.append("无待执行买卖指令")
+        return "\n".join(lines)
+
+    lines.append(f"卖{len(sell_instructions)}笔 买{len(buy_instructions)}笔")
+
+    if sell_instructions:
+        lines.append("卖出-")
+        for index, instruction in enumerate(sell_instructions, 1):
+            name = resolved_stock_names.get(instruction.ts_code, "")
+            label = f"{name}({instruction.ts_code})" if name else instruction.ts_code
+            lines.append(f"{index}. {label}")
+            lines.append(f"   量{instruction.shares}, 因{instruction.reason}")
+
+    if buy_instructions:
+        if sell_instructions:
+            lines.append("")
+        lines.append("买入-")
+        for index, instruction in enumerate(buy_instructions, 1):
+            name = resolved_stock_names.get(instruction.ts_code, "")
+            label = f"{name}({instruction.ts_code})" if name else instruction.ts_code
+            normalized_reason = normalize_trade_reason(instruction.reason)
+            weight_str = _extract_weight(normalized_reason, instruction.target_weight)
+            parts = [f"量{instruction.shares}"]
+            if weight_str:
+                parts.append(weight_str)
+            if normalized_reason:
+                parts.append(f"因{normalized_reason}")
+            lines.append(f"{index}. {label}")
+            lines.append(f"   {', '.join(parts)}")
+
+    return "\n".join(lines)
 
 
 def format_trade_result(result: PaperTradeExecutionResult) -> str:
