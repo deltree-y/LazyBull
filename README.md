@@ -28,7 +28,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.72.13)
+### 当前版本 (v0.73.0)
+
+**WF 对比报表新增选股指标组合与选股综合得分** (v0.73.0):
+- [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py) 的 `实验对比` sheet 现新增 `RankIC均值`、`ICIR`、`分层单调性(近似)` 三列，并新增独立的 `选股综合得分` 列（与原 `综合得分` 并存）。
+- `选股综合得分` 采用稳健权重：`RankIC均值 30% + ICIR 30% + Top30超额均值 25% + 分层单调性(近似) 15%`，并对旧批次缺失字段按有效项自动重归一，避免历史数据报表失真或生成失败。
+- `指标说明` sheet 与控制台对比输出同步补充上述选股指标口径，便于仅从选股维度做参数筛选。
+
+**纸面交易支持拖尾残留持仓提前调仓** (v0.72.14):
+- [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 新增 `_resolve_early_rebalance_context()`，非调仓日除“完全空仓”外，只要当前仍有满足盈利延续保护的拖尾持仓，且不存在 `pending_sells`、`pending_buys`、待执行 instruction，也允许提前执行 T0。
+- 同一批拖尾保护仓位会直接复用到后续 T0 规划，不再在提前调仓阶段和正式 T0 阶段各自重复判定一次，纸面行为与回测侧“空仓/持有期拖尾提前调仓”入口保持一致。
 
 **纸面交易补位重试槽位上限修复** (v0.72.13):
 - [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 的 `_plan_pending_buy_retry_instructions()` 生成次日补位买单时，不再把“本轮补位候选数”误写成 `desired_position_count`，而是改为沿用组合目标 `top_n`。

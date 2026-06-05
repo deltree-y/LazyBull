@@ -862,6 +862,43 @@ def _handle_failed_buys(
     runner.broker.clear_failed_buy_targets()
 
 
+def _resolve_early_rebalance_context(
+    runner: PaperTradingRunner,
+    trade_date: str,
+    config: Dict[str, object],
+    *,
+    take_profit_block_t0_date: Optional[str],
+) -> Tuple[bool, str, set]:
+    """判断是否允许提前调仓，并返回触发模式与已确认的保护持仓。"""
+    pending_instruction = runner.paper_storage.find_pending_instructions(trade_date)
+    pending_buys = runner.paper_storage.load_pending_buys()
+    current_positions = runner.account.get_positions()
+
+    guards_ok = (
+        bool(config.get("enable_early_rebalance_on_empty", True))
+        and take_profit_block_t0_date != trade_date
+        and not runner.broker.pending_sells
+        and not pending_buys
+        and pending_instruction is None
+    )
+    if not guards_ok:
+        return False, "", set()
+
+    if not current_positions:
+        return True, "empty", set()
+
+    if not bool(config.get("enable_profit_based_holding", False)):
+        return False, "", set()
+    if str(config.get("profit_extension_mode", "pnl")) == "disabled":
+        return False, "", set()
+
+    protected_stocks = set(runner.evaluate_profit_extension(trade_date, config))
+    if protected_stocks:
+        return True, "holding_tail", protected_stocks
+
+    return False, "", set()
+
+
 def _execute_t0_if_rebalance_day(
     runner: PaperTradingRunner,
     trade_date: str,
@@ -885,22 +922,25 @@ def _execute_t0_if_rebalance_day(
         strategy_state.pop("take_profit_block_t0_date", None)
         runner.paper_storage.save_strategy_state(strategy_state)
 
-    pending_instruction = runner.paper_storage.find_pending_instructions(trade_date)
-    pending_buys = runner.paper_storage.load_pending_buys()
-    allow_early_rebalance = (
-        bool(config.get("enable_early_rebalance_on_empty", True))
-        and take_profit_block_t0_date != trade_date
-        and not runner.account.get_positions()
-        and not runner.broker.pending_sells
-        and not pending_buys
-        and pending_instruction is None
+    allow_early_rebalance, early_rebalance_mode, precomputed_protected_stocks = (
+        _resolve_early_rebalance_context(
+            runner,
+            trade_date,
+            config,
+            take_profit_block_t0_date=take_profit_block_t0_date,
+        )
     )
 
     try:
         is_rebalance_day = runner._check_rebalance_day(trade_date, int(config["rebalance_freq"]))
     except RuntimeError as exc:
         if allow_early_rebalance:
-            logger.warning(f"当前不是调仓日，但满足空仓提前调仓条件：{exc}")
+            trigger_label = (
+                "空仓提前调仓"
+                if early_rebalance_mode == "empty"
+                else "持有期拖尾提前调仓"
+            )
+            logger.warning(f"当前不是调仓日，但满足{trigger_label}条件：{exc}")
             is_rebalance_day = True
         else:
             logger.info(f"当前不是调仓日：{exc}")
@@ -908,14 +948,22 @@ def _execute_t0_if_rebalance_day(
 
     if not is_rebalance_day:
         if allow_early_rebalance:
-            logger.warning("非调仓日，但当前空仓，提前执行 T0")
+            if early_rebalance_mode == "empty":
+                logger.warning("非调仓日，但当前空仓，提前执行 T0")
+            else:
+                logger.warning("非调仓日，但当前仍有拖尾持仓，提前执行 T0")
             is_rebalance_day = True
         else:
             logger.info("非调仓日，跳过 T0")
             return targets_info, ect_exposure, ect_reason, "not_rebalance_day", protected_stock_list
 
     if allow_early_rebalance:
-        logger.warning("空仓提前调仓触发，执行 T0")
+        if early_rebalance_mode == "empty":
+            logger.warning("空仓提前调仓触发，执行 T0")
+        else:
+            logger.warning(
+                f"持有期拖尾提前调仓触发，执行 T0（盈利延续保护 {len(precomputed_protected_stocks)} 只）"
+            )
 
     logger.info("当前是调仓日，执行 T0")
 
@@ -963,14 +1011,17 @@ def _execute_t0_if_rebalance_day(
             f" (ECT={ect_exposure:.2f} × 市场择时={market_regime_exposure:.2f})"
         )
 
-    protected_stocks = set()
+    protected_stocks = set(precomputed_protected_stocks)
     if bool(config.get("enable_profit_based_holding", False)):
         logger.info("-" * 80)
         if str(config.get("profit_extension_mode", "pnl")) == "disabled":
             logger.info("盈利延续模式未启用，跳过")
         else:
             logger.info("计算盈利延续保护")
-            protected_stocks = runner.evaluate_profit_extension(trade_date, config)
+            if early_rebalance_mode == "holding_tail" and protected_stocks:
+                logger.info("复用拖尾提前调仓阶段已确认的盈利延续保护")
+            else:
+                protected_stocks = set(runner.evaluate_profit_extension(trade_date, config))
             protected_stock_list = sorted(protected_stocks)
             if protected_stocks:
                 logger.info(f"盈利延续保护: {len(protected_stocks)} 只股票 → {protected_stocks}")

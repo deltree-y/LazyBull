@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.0] - 2026-06-04
+
+### 新增
+
+- **WF 对比报表新增“选股指标组合”与“选股综合得分”**：在 [scripts/compare_walk_forward.py](scripts/compare_walk_forward.py) 中，`实验对比` sheet 现新增 `RankIC均值`、`ICIR`、`分层单调性(近似)` 三个选股指标列，并新增独立的 `选股综合得分` 列（与原 `综合得分` 并存）。
+- **选股综合得分采用稳健权重并支持缺失项重归一**：`选股综合得分` 基于 `RankIC均值(30%) + ICIR(30%) + Top30超额均值(25%) + 分层单调性(近似)(15%)` 做百分位加权；对旧批次缺字段场景自动按有效项重归一，保证 `wf_comparison_batches.xlsx` 在历史数据上也能稳定生成。
+- **指标说明与控制台对比输出同步扩展**：`指标说明` sheet 新增上述选股指标与评分口径说明；控制台实验对比打印同步展示 `选股综合得分` 与关键选股指标，便于快速筛选参数组。
+
+## [0.72.14] - 2026-06-04
+
+### 修复
+
+- **纸面交易支持“持有期拖尾残留持仓”提前调仓**：在 [src/lazybull/paper/runtime.py](src/lazybull/paper/runtime.py) 中新增 `_resolve_early_rebalance_context()`，非调仓日除了“完全空仓”外，也会在“存在盈利延续保护的拖尾持仓、且无 pending_sells / pending_buys / 待执行 instruction”时允许提前执行 T0，并复用同一批 `protected_stocks` 进入后续 T0 规划，行为与回测侧的“拖尾提前调仓入口”保持一致。
+
+### 测试
+
+- 更新 [tests/test_paper_trade_runtime.py](tests/test_paper_trade_runtime.py)，新增“拖尾持仓满足盈利延续保护时允许提前调仓”和“残留持仓不满足保护时仍跳过非调仓日 T0”两条回归用例。
+
 ## [0.72.13] - 2026-06-03
 
 ### 修复

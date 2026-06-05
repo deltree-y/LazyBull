@@ -70,6 +70,9 @@ COL_NAMES = {
     "oos_rankic_ir_mean":         "OOS_RankIC_IR均值",
     "oos_rankic_ir_std":          "OOS_RankIC_IR标准差",
     "oos_cross_split_ir":         "跨切分IR",
+    "daily_rankic_mean":          "RankIC均值",
+    "icir":                       "ICIR",
+    "selection_monotonicity":     "分层单调性(近似)",
     "oos_rankic_ir_trend":        "RankIC_IR趋势(近-早)",
     "oos_top30_median_mean":      "Top30中位收益均值",
     "oos_top30_win_rate":         "Top30胜率",
@@ -1034,6 +1037,26 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     row["oos_rankic_ir_std"]  = round(oos_ir_std,  4) if oos_ir_std  is not None else None
     row["oos_cross_split_ir"] = round(oos_ir_mean / oos_ir_std, 3) if (oos_ir_mean and oos_ir_std and oos_ir_std != 0) else None
 
+    # RankIC 均值与 ICIR（纯选股能力核心指标）
+    rankic_mean_series = (
+        group["daily_rankic_mean"].dropna()
+        if "daily_rankic_mean" in group.columns
+        else pd.Series(dtype=float)
+    )
+    rankic_std_series = (
+        group["daily_rankic_std"].dropna()
+        if "daily_rankic_std" in group.columns
+        else pd.Series(dtype=float)
+    )
+    rankic_mean = rankic_mean_series.mean() if len(rankic_mean_series) else None
+    rankic_std = rankic_std_series.mean() if len(rankic_std_series) else None
+    row["daily_rankic_mean"] = round(rankic_mean, 6) if rankic_mean is not None else None
+    row["icir"] = (
+        round(rankic_mean / rankic_std, 4)
+        if (rankic_mean is not None and rankic_std is not None and rankic_std != 0)
+        else None
+    )
+
     # OOS RankIC 衰减检测（最近3个split均值 - 最早3个split均值）
     if len(oos_ir_series) >= 6:
         sorted_ir = group.sort_values("split_index")["daily_rankic_ir"] if "daily_rankic_ir" in group.columns else oos_ir_series
@@ -1085,6 +1108,27 @@ def aggregate_run(group: pd.DataFrame) -> dict:
         row["oos_top300_win_rate"]    = round((med300_series > 0).mean(), 3) if len(med300_series) else None
     else:
         row["oos_top300_median_mean"] = row["oos_top300_win_rate"] = None
+
+    # 分层单调性近似评分（Top30/100/300 中位收益应随覆盖范围扩大而递减）
+    monotonic_inputs = [
+        (30, row.get("oos_top30_median_mean")),
+        (100, row.get("oos_top100_median_mean")),
+        (300, row.get("oos_top300_median_mean")),
+    ]
+    monotonic_inputs = [(k, v) for k, v in monotonic_inputs if v is not None and pd.notna(v)]
+    if len(monotonic_inputs) >= 2:
+        bucket_sizes = np.array([k for k, _ in monotonic_inputs], dtype=float)
+        bucket_returns = np.array([v for _, v in monotonic_inputs], dtype=float)
+        if np.allclose(bucket_returns, bucket_returns[0]):
+            row["selection_monotonicity"] = 0.5
+        else:
+            corr = np.corrcoef(bucket_sizes, bucket_returns)[0, 1]
+            if pd.notna(corr):
+                row["selection_monotonicity"] = round(float(np.clip((1 - corr) / 2, 0.0, 1.0)), 4)
+            else:
+                row["selection_monotonicity"] = None
+    else:
+        row["selection_monotonicity"] = None
 
     # -----------------------------------------------------------------------
     # OOS 回测指标（来自 run_oos_backtest 写入的 bt_* 列）
@@ -1198,6 +1242,8 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
 
     non_scored_metric_cols = [
         "n_splits", "model_version_range",
+        # 选股指标组合补充
+        "daily_rankic_mean", "icir", "selection_monotonicity",
         # 全周期串联补充
         "chain_total_return", "chain_sharpe", "chain_trading_days",
         # 回测补充
@@ -1468,6 +1514,53 @@ def compute_composite_score(df: pd.DataFrame) -> pd.Series:
     return score.round(1)
 
 
+def compute_selection_score(df: pd.DataFrame) -> pd.Series:
+    """计算选股综合得分（0~100，越高越好）。
+
+    指标与权重（稳健版）：
+    - RankIC均值: 30%
+    - ICIR: 30%
+    - Top30超额均值: 25%
+    - 分层单调性(近似): 15%
+
+    说明：
+    - 每项先做百分位排名（0~1）后加权
+    - 对缺失项按“有效项重归一”处理，避免旧数据无新列时得分失真
+    - 单个实验或缺失值按中性值 0.5 处理
+    """
+    scoring_items = [
+        (COL_NAMES["daily_rankic_mean"], 0.30),
+        (COL_NAMES["icir"], 0.30),
+        (COL_NAMES["oos_top30_lift_mean"], 0.25),
+        (COL_NAMES["selection_monotonicity"], 0.15),
+    ]
+
+    n = len(df)
+    if n == 0:
+        return pd.Series(dtype=float)
+
+    weighted_pct = pd.Series(0.0, index=df.index)
+    effective_weight = pd.Series(0.0, index=df.index)
+
+    for col, weight in scoring_items:
+        if col not in df.columns:
+            continue
+
+        s = pd.to_numeric(df[col], errors="coerce")
+        pct = s.rank(ascending=True, method="average", na_option="keep") / n
+        pct = pct.fillna(0.5)
+
+        valid_mask = s.notna().astype(float)
+        weighted_pct += weight * pct
+        effective_weight += weight * valid_mask
+
+    # 对有效指标不足的行按中性分处理；其余按有效项权重重归一
+    score = pd.Series(50.0, index=df.index)
+    valid_rows = effective_weight > 0
+    score.loc[valid_rows] = (weighted_pct.loc[valid_rows] / effective_weight.loc[valid_rows]) * 100
+    return score.round(1)
+
+
 def build_metric_descriptions() -> pd.DataFrame:
     """构建指标说明表（第二个 sheet）"""
     rows = [
@@ -1481,6 +1574,12 @@ def build_metric_descriptions() -> pd.DataFrame:
          "（训练质量8%）：验证_OOS_IR差距 8%（低好）。"
          "NaN指标以中性分（0.5百分位）计入；仅1组实验时固定得50分。",
          "越高越好"),
+        ("综合评分", "选股综合得分",
+         "纯选股能力评分（0~100，越高越好）。"
+         "基于4项指标做百分位加权：RankIC均值30%、ICIR30%、Top30超额均值25%、"
+         "分层单调性(近似)15%。"
+         "对缺失指标按有效项重归一；若该行全部缺失则记为50分。",
+         "越高越好"),
         # ── OOS 性能指标 ──────────────────────────────────────────────────────
         ("OOS性能", "运行ID",               "walk-forward运行的唯一标识符，格式为wf_YYYYMMDD_HHMMSS_xxxxxxxx",                                                                              "标识符，无优劣"),
         ("OOS性能", "切分数",               "本次实验成功完成的OOS切分数量，越多统计结论越可靠",                                                                                               "越多越好"),
@@ -1488,6 +1587,9 @@ def build_metric_descriptions() -> pd.DataFrame:
         ("OOS性能", "OOS_RankIC_IR均值",    "各切分OOS期逐日RankIC信息比率（均值/标准差）的跨切分均值，衡量预测对股票排序的整体有效性",                                                            "越高越好"),
         ("OOS性能", "OOS_RankIC_IR标准差",  "各切分OOS RankIC IR的标准差，衡量策略在不同时间段的稳定性",                                                                                      "越低越稳定"),
         ("OOS性能", "跨切分IR",             "OOS_RankIC_IR均值 / 标准差，类似夏普比率，同时衡量收益水平与跨时间段稳定性，是排序各实验的首要指标",                                                   "越高越好（首要排序指标）"),
+        ("OOS性能", "RankIC均值",            "各切分 OOS 逐日RankIC均值的跨切分均值；直接衡量排序相关性的绝对水平",                                                                           "越高越好"),
+        ("OOS性能", "ICIR",                 "RankIC均值 / RankIC标准差，衡量单位波动下的排序信息效率",                                                                                    "越高越好"),
+        ("OOS性能", "分层单调性(近似)",      "基于 Top30/Top100/Top300 中位收益构造的单调性评分（0~1）；若收益随覆盖范围扩大递减，则得分更高",                                                      "越高越好"),
         ("OOS性能", "RankIC_IR趋势(近-早)", "最近3个切分的IR均值 - 最早3个切分的IR均值；正值说明模型随时间改善，负值说明alpha在衰减",                                                              "接近0或正值为好，持续负值需警惕"),
         ("OOS性能", "Top30中位收益均值",     "各切分中每日Top30持仓20日收益中位数的跨切分均值；用中位数代替均值，减少极端行情日（如大涨停日）的干扰",                                                  "越高越好"),
         ("OOS性能", "Top30胜率",            "各切分中Top30中位收益>0的占比；衡量策略在不同历史时段的正收益稳健性，>70%可认为优秀",                                                               "越高越好（>0.7为优秀）"),
@@ -1758,8 +1860,12 @@ def print_comparison_table(df: pd.DataFrame) -> None:
     display_cols = [
         COL_NAMES["wf_run_id"],
         "综合得分",
+        "选股综合得分",
         COL_NAMES["n_splits"],
         COL_NAMES["model_version_range"],
+        COL_NAMES["daily_rankic_mean"],
+        COL_NAMES["icir"],
+        COL_NAMES["selection_monotonicity"],
         COL_NAMES["chain_cagr"],
         COL_NAMES["chain_max_drawdown"],
         COL_NAMES["chain_total_return"],
@@ -1834,9 +1940,11 @@ def generate_comparison_report(
         return False
 
     comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+    comp_df.insert(2, "选股综合得分", compute_selection_score(comp_df))
     logger.info(
         f"综合得分计算完成（参与评分指标数: {sum(1 for k, _, _ in SCORE_CONFIG if COL_NAMES.get(k) in comp_df.columns)}）"
     )
+    logger.info("选股综合得分计算完成（指标: RankIC均值/ICIR/Top30超额/分层单调性）")
 
     desc_df = build_metric_descriptions()
     split_df = build_split_detail_table(all_df)
