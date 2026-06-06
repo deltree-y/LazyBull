@@ -210,6 +210,7 @@ def build_features_data(
     force: bool = False,
     shenwan_industry: pd.DataFrame = None,
     apply_industry_neutralization: bool = False,
+    apply_size_neutralization: bool = False,
     enable_fundamental: bool = False,
     enable_alt: bool = False,
     enable_margin: bool = False,
@@ -583,6 +584,7 @@ def build_features_data(
                 limit_info=None,
                 shenwan_industry=shenwan_industry if apply_industry_neutralization else None,
                 apply_industry_neutralization=apply_industry_neutralization,
+                apply_size_neutralization=apply_size_neutralization,
                 fundamental_data=funda_today,
                 margin_data=margin_today,
                 holder_data=holder_today,
@@ -652,7 +654,12 @@ def main():
     parser.add_argument(
         "--enable-industry-neutralization",
         action="store_true",
-        help="启用中性特征构建"
+        help="启用行业中性特征构建"
+    )
+    parser.add_argument(
+        "--enable-size-neutralization",
+        action="store_true",
+        help="启用市值中性化（在行业中性化基础上按市值分位再做Z-Score，生成zscore_*_sz列）"
     )
     parser.add_argument(
         "--min-list-days",
@@ -809,6 +816,7 @@ def main():
                 force=args.force,
                 shenwan_industry=shenwan_industry if args.enable_industry_neutralization else None,
                 apply_industry_neutralization=args.enable_industry_neutralization,
+                apply_size_neutralization=args.enable_size_neutralization,
                 enable_fundamental=args.enable_fundamental_features,
                 enable_alt=args.enable_alt_features,
                 enable_margin=args.enable_margin_features,

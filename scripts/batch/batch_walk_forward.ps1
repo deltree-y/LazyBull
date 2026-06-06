@@ -68,9 +68,9 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
+$max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.018)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.02,0.03)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -137,6 +137,9 @@ $enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性�
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
 $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
+
+# ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
+$factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
@@ -731,6 +734,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($feature_stability_filter) {
         $pythonCmd += " --feature-stability-filter"
+    }
+
+    if ($factor_prune) {
+        $pythonCmd += " --factor-prune"
     }
 
     if ($ensemble_offsets -gt 0) {

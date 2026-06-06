@@ -696,6 +696,7 @@ def _train_model_on_window(
             args, "enable_consensus_revision_features", False
         ),
         feature_stability_filter=args.feature_stability_filter,
+        factor_prune=args.factor_prune,
     )
 
     # 4. 构造样本权重（rank-weight + 时间衰减，可叠加）
@@ -1798,6 +1799,7 @@ def write_walk_forward_summary(
         "enable_fund": args.enable_fund_features,
         "enable_express": args.enable_express_features,
         "feature_stability_filter": args.feature_stability_filter,
+        "factor_prune": getattr(args, 'factor_prune', False),
         "ensemble_offsets": getattr(args, 'ensemble_offsets', 0),
         "enable_enhanced_features": getattr(args, 'enable_enhanced_features', False),
         "enable_north_features": getattr(args, 'enable_north_features', False),
@@ -2306,6 +2308,12 @@ def main():
         "--feature-stability-filter",
         action="store_true",
         help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）"
+    )
+
+    parser.add_argument(
+        "--factor-prune",
+        action="store_true",
+        help="启用因子精简（从 data/models/factor_exclude_list.json 加载排除列表）"
     )
 
     # 多偏移集成

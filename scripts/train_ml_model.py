@@ -337,6 +337,12 @@ def main():
         help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）"
     )
 
+    parser.add_argument(
+        "--factor-prune",
+        action="store_true",
+        help="启用因子精简（从 data/models/factor_exclude_list.json 加载排除列表）"
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",
@@ -430,6 +436,7 @@ def main():
                 args, "enable_consensus_revision_features", False
             ),
             feature_stability_filter=args.feature_stability_filter,
+            factor_prune=args.factor_prune,
         )
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
         if False:  # 默认不启用，后续可以改为参数控制

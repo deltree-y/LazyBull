@@ -211,6 +211,7 @@ def ensure_features_for_date(
             limit_info=None,
             shenwan_industry=shenwan_industry,
             apply_industry_neutralization=apply_neutralization,
+            apply_size_neutralization=True,
             fundamental_data=funda_today,
             margin_data=margin_today,
             holder_data=holder_today,

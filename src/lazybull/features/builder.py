@@ -172,6 +172,7 @@ class FeatureBuilder:
         limit_info: Optional[pd.DataFrame] = None,
         shenwan_industry: Optional[pd.DataFrame] = None,
         apply_industry_neutralization: bool = False,
+        apply_size_neutralization: bool = False,
         fundamental_data: Optional[pd.DataFrame] = None,
         margin_data: Optional[pd.DataFrame] = None,
         holder_data: Optional[pd.DataFrame] = None,
@@ -322,6 +323,11 @@ class FeatureBuilder:
         if apply_industry_neutralization and shenwan_industry is not None:
             result = self._apply_industry_neutralization(result)
             logger.debug(f"{trade_date} 行业中性化完成: {len(result.columns.tolist())} 列")
+
+        # 10.5 应用市值中性化（如果启用，在行业中性化之后）
+        if apply_size_neutralization:
+            result = self._apply_size_neutralization(result)
+            logger.debug(f"{trade_date} 市值中性化完成: {len(result.columns.tolist())} 列")
         
         # 11. 添加新增个股特征
         result = self._add_new_individual_features(result)
@@ -2083,6 +2089,78 @@ class FeatureBuilder:
         return result
 
 
+    def _apply_size_neutralization(
+        self,
+        result: pd.DataFrame,
+        n_size_groups: int = 10,
+    ) -> pd.DataFrame:
+        """应用市值中性化：对行业中性化后的 zscore_* 列再按市值分位做 Z-Score
+
+        在行业中性化基础上进一步剥离市值影响，生成 zscore_*_sz 列。
+        这对基本面因子尤其重要——ROE、利润率等天然与市值相关。
+
+        Args:
+            result: 当日截面 DataFrame（已含 zscore_* 列和 log_total_mv 列）
+            n_size_groups: 市值分组数，默认 10（十分位）
+
+        Returns:
+            添加了 zscore_*_sz 列的 DataFrame
+        """
+        if "log_total_mv" not in result.columns:
+            logger.warning("缺少 log_total_mv 列，跳过市值中性化")
+            return result
+
+        # 选择需要市值中性化的列：已行业中性化的 zscore_* 列
+        zscore_cols = [c for c in result.columns if c.startswith("zscore_")]
+        if not zscore_cols:
+            logger.info("未找到 zscore_* 列，跳过市值中性化")
+            return result
+
+        # 创建市值分位标记列（仅用可交易样本确定分位边界）
+        tradable_mask = result.get("tradable", pd.Series(1, index=result.index)) == 1
+        tradable_size = result.loc[tradable_mask, "log_total_mv"].dropna()
+
+        if len(tradable_size) < n_size_groups * 2:
+            logger.warning(f"可交易样本过少 ({len(tradable_size)})，跳过市值中性化")
+            return result
+
+        try:
+            bins = np.unique(np.quantile(tradable_size, np.linspace(0, 1, n_size_groups + 1)))
+            if len(bins) <= 1:
+                logger.warning("市值分位边界过少，跳过市值中性化")
+                return result
+            result["_size_group"] = pd.cut(
+                result["log_total_mv"], bins=bins, labels=False, include_lowest=True
+            )
+        except Exception as e:
+            logger.warning(f"市值分位计算失败: {e}，跳过市值中性化")
+            return result
+
+        # 对每个 zscore_* 列，按市值分位做 Z-Score（批量构建避免碎片化）
+        sz_columns = {}
+        for col in zscore_cols:
+            sz_col = f"{col}_sz"
+            try:
+                sz_vals = _cross_sectional_zscore_by_group(
+                    result[col], result["_size_group"], min_group_size=5
+                )
+                if sz_vals.notna().any():
+                    sz_columns[sz_col] = sz_vals
+            except Exception:
+                pass
+
+        if sz_columns:
+            sz_df = pd.DataFrame(sz_columns, index=result.index)
+            result = pd.concat([result, sz_df], axis=1)
+            logger.info(f"市值中性化完成: 新增 {len(sz_columns)} 个 zscore_*_sz 列")
+        else:
+            logger.info("市值中性化: 无新增列")
+
+        # 清理临时列
+        result.drop(columns=["_size_group"], inplace=True)
+        return result
+
+
     def _add_new_individual_features(
         self,
         result: pd.DataFrame,
@@ -2207,3 +2285,35 @@ class FeatureBuilder:
             result[feat_name] = feat_val
 
         return result
+
+
+# ── 模块级工具函数 ──────────────────────────────────────────────────
+
+def _cross_sectional_zscore_by_group(
+    values: "pd.Series",
+    groups: "pd.Series",
+    min_group_size: int = 5,
+) -> "pd.Series":
+    """按分组计算截面 Z-Score（模块级函数，不依赖类状态）
+
+    Args:
+        values: 待标准化值
+        groups: 分组标记
+        min_group_size: 最小组内样本数
+
+    Returns:
+        Z-Score 后的 Series
+    """
+    import numpy as np
+    import pandas as pd
+    result = pd.Series(np.nan, index=values.index, dtype=np.float64)
+    for g in groups.dropna().unique():
+        mask = (groups == g) & values.notna()
+        if mask.sum() < min_group_size:
+            continue
+        g_vals = values[mask]
+        g_mean = g_vals.mean()
+        g_std = g_vals.std()
+        if g_std > 0:
+            result[mask] = (g_vals - g_mean) / g_std
+    return result

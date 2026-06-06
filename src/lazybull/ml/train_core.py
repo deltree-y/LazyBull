@@ -13,9 +13,10 @@
 - 验证集逐日评估
 """
 
+import json
 import math
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -181,6 +182,59 @@ def neg_rank_ic(y_true, y_pred):
     返回负值以适配 XGBoost minimize 约定；函数名自动作为 metric name。"""
     corr, _ = spearmanr(y_true, y_pred)
     return float(-corr if not np.isnan(corr) else 0)
+
+
+# ── 因子精简工具 ──────────────────────────────────────────────────
+
+FACTOR_EXCLUDE_LIST_FILE = "factor_exclude_list.json"
+
+# 缓存已加载的排除列表（避免重复读盘）
+_factor_exclude_cache: Optional[Set[str]] = None
+
+
+def _load_factor_exclude_list(models_dir: Optional[Path] = None) -> Set[str]:
+    """加载因子排除列表（带缓存）
+
+    从 data/models/factor_exclude_list.json 读取排除的因子名称。
+    该文件由 scripts/ana/generate_factor_exclude_list.py 生成。
+
+    Args:
+        models_dir: 模型目录，为 None 时自动从 config 推断
+
+    Returns:
+        排除的因子名称集合（空集合表示未找到排除列表或列表为空）
+    """
+    global _factor_exclude_cache
+    if _factor_exclude_cache is not None:
+        return _factor_exclude_cache
+
+    if models_dir is None:
+        from src.lazybull.common.config import get_data_root
+        data_root = Path(get_data_root())
+        models_dir = data_root / "models"
+
+    exclude_file = models_dir / FACTOR_EXCLUDE_LIST_FILE
+
+    if not exclude_file.exists():
+        logger.warning(f"因子排除列表不存在: {exclude_file}，跳过因子精简")
+        _factor_exclude_cache = set()
+        return _factor_exclude_cache
+
+    try:
+        with open(exclude_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        exclude_list = data.get("exclude_factors", [])
+        _factor_exclude_cache = set(exclude_list)
+        logger.info(
+            f"已加载因子排除列表: {len(_factor_exclude_cache)} 个因子 "
+            f"(min_icir={data.get('min_icir')}, "
+            f"min_coverage={data.get('min_coverage')})"
+        )
+        return _factor_exclude_cache
+    except (json.JSONDecodeError, KeyError, OSError) as e:
+        logger.warning(f"加载因子排除列表失败: {e}，跳过因子精简")
+        _factor_exclude_cache = set()
+        return _factor_exclude_cache
 
 
 def _rank_ic_eval_lgb(y_true, y_pred):
@@ -559,6 +613,7 @@ def prepare_training_data(
     enable_cashflow_quality_features: bool = False,
     enable_consensus_revision_features: bool = False,
     feature_stability_filter: bool = False,
+    factor_prune: bool = False,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
 
@@ -569,6 +624,8 @@ def prepare_training_data(
         label_transform_fn: 可选的标签变换函数，接受 DataFrame 并返回变换后的 DataFrame。
             若提供，将在按日切分后分别对训练集与验证集独立调用，避免跨集合统计量污染。
             典型用法：cs_zscore 变换（见 transform_labels_cs_zscore）。
+        factor_prune: 是否启用因子精简（从 data/models/factor_exclude_list.json
+            加载排除列表并过滤特征列）。默认 False。
 
     Returns:
         (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats,
@@ -799,8 +856,36 @@ def prepare_training_data(
                 "enable_consensus_revision_features=True，但数据中未找到一致预期修正列，跳过"
             )
 
+    # ── 市值中性化特征：仅纳入核心特征列表中稳定因子对应的 zscore_*_sz 列 ──
+    # 避免稀疏因子（如一致预期）的 _sz 列在不同日期间存在/缺失导致 schema 不一致
+    sz_cols = [
+        c for c in df.columns
+        if c.startswith("zscore_") and c.endswith("_sz")
+        and c[:-3] in feature_columns  # 仅当基础 zscore_* 列已在核心特征列表中
+    ]
+    if sz_cols:
+        feature_columns.extend(sz_cols)
+        logger.info(f"自动发现市值中性化特征: {len(sz_cols)} 个 (zscore_*_sz)")
+
+    # ── 因子精简（可选）──
+    if factor_prune:
+        exclude_list = _load_factor_exclude_list()
+        if exclude_list:
+            before = len(feature_columns)
+            feature_columns = [c for c in feature_columns if c not in exclude_list]
+            removed = before - len(feature_columns)
+            logger.info(f"因子精简: 排除 {removed} 个因子, 剩余 {len(feature_columns)} 个")
+
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
+
+    # ── 内存优化：只保留训练必需的列，避免 copy 时 OOM ──
+    needed_cols = set(feature_columns + [label_column, "trade_date", "ts_code"] + filter_columns)
+    needed_cols &= set(df.columns)  # 仅保留实际存在的列
+    kept = list(needed_cols)
+    n_before = len(df.columns)
+    df = df[kept]
+    logger.debug(f"内存优化: {n_before} → {len(df.columns)} 列（仅保留训练必需列）")
 
     # 过滤可训练样本（移除含有过滤标记的样本）
     mask = pd.Series([True] * len(df), index=df.index)

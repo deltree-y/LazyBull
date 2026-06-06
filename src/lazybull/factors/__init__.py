@@ -44,6 +44,19 @@ from .returns import compute_ret_1
 from .fundamental import build_fundamental_lookup_by_date, FUNDA_COLS
 from .cashflow_quality import build_cashflow_quality_lookup_by_date, CASHFLOW_COLS
 from .consensus_revision import build_consensus_revision_lookup_by_date, CONSENSUS_REVISION_COLS
+from .factor_evaluation import (
+    auto_detect_factor_columns,
+    auto_detect_label_columns,
+    compare_neutralization_modes,
+    compute_daily_factor_ic,
+    compute_daily_pearson_ic,
+    compute_daily_rankic,
+    compute_factor_ic_series,
+    compute_factor_ic_summary,
+    compute_ic_decay,
+    evaluate_all_factors,
+    neutralize_factor,
+)
 
 __all__ = [
     # 技术指标
@@ -83,4 +96,16 @@ __all__ = [
     # 一致预期修正因子
     'build_consensus_revision_lookup_by_date',
     'CONSENSUS_REVISION_COLS',
+    # 因子IC评估
+    'compute_daily_rankic',
+    'compute_daily_pearson_ic',
+    'compute_daily_factor_ic',
+    'compute_factor_ic_series',
+    'compute_factor_ic_summary',
+    'compute_ic_decay',
+    'evaluate_all_factors',
+    'compare_neutralization_modes',
+    'neutralize_factor',
+    'auto_detect_factor_columns',
+    'auto_detect_label_columns',
 ]
