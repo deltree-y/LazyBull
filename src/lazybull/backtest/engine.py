@@ -723,6 +723,11 @@ class BacktestEngine:
                             cycle_day = 1
                             self._emit_immediate_log("INFO", cycle_separator)
 
+                        # 调仓日同步生成卖出信号：将当前非保护持仓排队到 T+1 卖出，
+                        # 使卖出与买入在同一交易日执行，避免卖出滞后一天。
+                        if date in self.pending_signals:
+                            self._queue_rebalance_sells(date, trading_dates, date_to_idx)
+
                     # @2026/01/18: 改为先卖出再买入, 避免当天买入的股票被误判为达到持有期而卖出
                     # 执行止损卖出（Tn+1 执行）
                     if self.stop_loss_monitor:
@@ -1280,6 +1285,7 @@ class BacktestEngine:
             "early_exit": "亏损换出",
             "time_stop_loss": "时间止损",
             "take_profit": "止盈",
+            "rebalance": "调仓",
         }
         stop_loss_label_map = {
             "drawdown": "回撤止损",
@@ -1303,6 +1309,7 @@ class BacktestEngine:
 
         sell_groups: List[Tuple[str, int]] = []
         for label in (
+            "调仓",
             "持有期",
             "亏损换出",
             "时间止损",
@@ -2796,6 +2803,168 @@ class BacktestEngine:
                     remaining_count=remaining_count,
                 )
             )
+
+    def _evaluate_profit_extension_for_stock(
+        self,
+        stock: str,
+        date: pd.Timestamp,
+        info: Dict,
+        holding_days: int,
+        profit_rate: float,
+    ):
+        """评估单只持仓是否应盈利延续保护（不卖出）。
+
+        Args:
+            stock: 股票代码
+            date: 评估日期
+            info: 持仓信息字典
+            holding_days: 已持有交易日数
+            profit_rate: 当前盈亏率（后复权口径）
+
+        Returns:
+            (should_extend: bool, log_detail: str)
+        """
+        if not self.enable_profit_based_holding:
+            return False, ""
+
+        if self.profit_extension_mode == "disabled":
+            return False, "模式=disabled"
+
+        within_extension_window = (
+            holding_days < self.holding_period + self.profit_extension_days
+        )
+
+        if not within_extension_window:
+            return False, (
+                f"超过延续窗口(持有{holding_days}天, "
+                f"上限{self.holding_period + self.profit_extension_days}天)"
+            )
+
+        if self.profit_extension_mode == "strength":
+            if self.holding_strength_scorer is not None:
+                breakdown = self.holding_strength_scorer.score(
+                    stock=stock,
+                    date=date,
+                    position_info=info,
+                    profit_rate=profit_rate,
+                )
+                if breakdown.total >= self.profit_extension_strength_threshold:
+                    return True, (
+                        f"强势度={breakdown.total:.3f} "
+                        f">= 阈值={self.profit_extension_strength_threshold:.2f}"
+                    )
+                else:
+                    return False, (
+                        f"强势度={breakdown.total:.3f} "
+                        f"< 阈值={self.profit_extension_strength_threshold:.2f}"
+                    )
+            return False, "强势度评分器缺失"
+
+        # pnl 模式（默认）
+        if profit_rate >= self.profit_extension_threshold:
+            return True, (
+                f"盈亏={profit_rate:.2%} "
+                f">= 阈值={self.profit_extension_threshold:.2%}"
+            )
+        return False, (
+            f"盈亏={profit_rate:.2%} "
+            f"< 阈值={self.profit_extension_threshold:.2%}"
+        )
+
+    def _queue_rebalance_sells(
+        self,
+        date: pd.Timestamp,
+        trading_dates: List[pd.Timestamp],
+        date_to_idx: Dict,
+    ) -> None:
+        """调仓日同步生成卖出信号：将当前非保护持仓排队到 T+1 卖出。
+
+        使卖出与买入在同一交易日执行，消除调仓日卖出滞后一天的偏差。
+        与 _check_and_sell 的职责互补：后者处理日常持有期到期/条件卖出，
+        本方法仅在信号成功入队列的调仓日触发，针对即将到期的持仓提前排队。
+
+        Args:
+            date: 当前调仓日（信号生成日）
+            trading_dates: 交易日列表
+            date_to_idx: 日期到索引的映射
+        """
+        if not self.positions:
+            return
+
+        current_idx = date_to_idx.get(date)
+        if current_idx is None:
+            return
+
+        # 获取新信号中的股票（这些股票应保留，不卖出）
+        signal_data = self.pending_signals.get(date, {})
+        if isinstance(signal_data, dict) and "signals" in signal_data:
+            new_signal_stocks = set(signal_data["signals"].keys())
+        else:
+            new_signal_stocks = set()
+
+        sell_count = 0
+        protected_count = 0
+
+        for stock, info in list(self.positions.items()):
+            # 跳过已在其他卖出队列中的持仓
+            if stock in self.pending_condition_sells or stock in self.pending_stop_loss_sells:
+                continue
+
+            # 保留新信号中的股票（加仓/维持，不卖出）
+            if stock in new_signal_stocks:
+                continue
+
+            buy_date = info.get("buy_date")
+            buy_idx = date_to_idx.get(buy_date) if buy_date else None
+            if buy_idx is None:
+                continue
+
+            holding_days = current_idx - buy_idx
+
+            # 仅在持仓即将到期时提前触发（holding_period-1 天）
+            # 若 holding_period=1，则 holding_days >= 0 全部触发
+            if holding_days < max(0, self.holding_period - 1):
+                continue
+
+            # 评估盈利延续保护
+            if self.enable_profit_based_holding:
+                current_pnl_price = self._get_pnl_price(date, stock)
+                if current_pnl_price is None:
+                    continue
+                buy_pnl_price = info.get("buy_pnl_price")
+                if (
+                    current_pnl_price
+                    and buy_pnl_price
+                    and not pd.isna(buy_pnl_price)
+                    and buy_pnl_price > 0
+                ):
+                    profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
+                else:
+                    profit_rate = 0.0
+
+                should_extend, _detail = self._evaluate_profit_extension_for_stock(
+                    stock=stock,
+                    date=date,
+                    info=info,
+                    holding_days=holding_days,
+                    profit_rate=profit_rate,
+                )
+                if should_extend:
+                    protected_count += 1
+                    continue
+
+            # 排队到 T+1 卖出
+            self.pending_condition_sells[stock] = {
+                "trigger_date": date,
+                "sell_type": "rebalance",
+            }
+            sell_count += 1
+
+        if sell_count > 0 or protected_count > 0:
+            parts = [f"调仓日同步卖出: {sell_count} 只排队到 T+1 卖出"]
+            if protected_count > 0:
+                parts.append(f"{protected_count} 只盈利延续保护")
+            logger.info("，".join(parts))
 
     def _check_and_sell(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict

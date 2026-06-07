@@ -36,21 +36,21 @@ $wf_period_configs = @(
         SplitCount = 13
         FinalDate = "20251231"
         ContinueDays = 1
-        StartModelVersion = 16832#16447(6_20)#16542(6_10)#16501(5)#16706(4)#16665(3_20)
+        StartModelVersion = 17783#16447(6_20)#16542(6_10)#16501(5)#16706(4)#16665(3_20)
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
         FinalDate = "20260209"
         ContinueDays = 1
-        StartModelVersion = 16846#16460(6_20)#16555(6_10)#16514(5)#16719(4)#16678(3_20)
+        StartModelVersion = 17797#16460(6_20)#16555(6_10)#16514(5)#16719(4)#16678(3_20)
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
         FinalDate = "20260324"
         ContinueDays = 1
-        StartModelVersion = 16861#16474(6_20)#16569(6_10)#16528(5)#16733(4)#16692(3_20)
+        StartModelVersion = 17812#16474(6_20)#16569(6_10)#16528(5)#16733(4)#16692(3_20)
     }
 )
 
@@ -58,7 +58,7 @@ $wf_period_configs = @(
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
 $train_window_years_list = @(6)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
-$val_ratio_list          = @(0.1)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
+$val_ratio_list          = @(0.175)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
@@ -70,7 +70,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.02,0.03)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.025)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -102,7 +102,7 @@ $enable_fundamental      = $true  # $true 启用 | $false 禁用
 $enable_alt              = $true  # $true 启用 | $false 禁用
 
 # ── 融资融券因子（通过 margin_detail 接口下载）────────────────────
-$enable_margin           = $true  # $true 启用 | $false 禁用
+$enable_margin           = $false  # $true 启用 | $false 禁用
 # 0428:关闭后CAGR下降约3%, 回撤基本不变
 
 # ── 筹码胜率因子（需5000+积分，需先下载 cyq_perf）─────────────────
@@ -160,8 +160,8 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(15)            # 回测持仓 Top N
-$bt_rebalance_freq_list  = @(5)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
+$bt_top_n_list           = @(20)            # 回测持仓 Top N
+$bt_rebalance_freq_list  = @(20)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
@@ -211,7 +211,7 @@ $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
 # ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
 # 0601这里应为true
-$enable_profit_based_holding      = $true       # $true 启用 | $false 禁用
+$enable_profit_based_holding      = $false       # $true 启用 | $false 禁用
 # 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
 # 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，

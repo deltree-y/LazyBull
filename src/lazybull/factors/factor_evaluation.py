@@ -899,3 +899,301 @@ def compare_neutralization_modes(
 
     combined = pd.concat(all_results, ignore_index=True)
     return combined.sort_values("ICIR", ascending=False).reset_index(drop=True)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 因子相关性矩阵
+# ══════════════════════════════════════════════════════════════════
+
+def compute_factor_correlation_matrix(
+    data: "pd.DataFrame",
+    factor_cols: "List[str]",
+    date_col: str = "trade_date",
+    tradable_col: str = "tradable",
+    method: str = "spearman",
+    min_samples: int = 30,
+    verbose: bool = True,
+) -> "pd.DataFrame":
+    """计算因子间截面相关性矩阵（逐日平均）
+
+    对每个交易日计算因子间的 Spearman/Pearson 相关矩阵，
+    然后取时间序列均值，得到稳定的因子相关性估计。
+
+    Args:
+        data: 多日截面DataFrame
+        factor_cols: 因子列名列表
+        date_col: 日期列名
+        tradable_col: 可交易标记列名
+        method: 相关方法 "spearman" 或 "pearson"
+        min_samples: 每日最少有效样本数
+        verbose: 是否输出进度
+
+    Returns:
+        (n_factors × n_factors) 相关性矩阵 DataFrame
+    """
+    import numpy as np
+    import pandas as pd
+    from scipy.stats import rankdata
+
+    n_factors = len(factor_cols)
+    dates = sorted(data[date_col].unique())
+    n_dates = len(dates)
+
+    logger.info(
+        f"计算因子相关性矩阵: {n_factors} 个因子, {n_dates} 个交易日, method={method}"
+    )
+
+    corr_sum = np.zeros((n_factors, n_factors))
+    corr_count = 0
+
+    for day_idx, date in enumerate(dates):
+        day_df = data[data[date_col] == date]
+
+        tradable_mask = day_df.get(tradable_col, pd.Series(1, index=day_df.index)) == 1
+        day_valid = day_df[tradable_mask]
+
+        if len(day_valid) < min_samples:
+            continue
+
+        # 提取因子矩阵，NaN 用列中位数填充（快速近似）
+        factor_arr = day_valid[factor_cols].values.astype(np.float64)
+        with np.errstate(all="ignore"):
+            col_medians = np.nanmedian(factor_arr, axis=0)
+        # 全 NaN 的列填充 0
+        col_medians = np.nan_to_num(col_medians, nan=0.0)
+        nan_mask = np.isnan(factor_arr)
+        factor_arr[nan_mask] = np.take(col_medians, np.where(nan_mask)[1])
+
+        if method == "spearman":
+            factor_arr = np.apply_along_axis(rankdata, 0, factor_arr)
+
+        # 向量化 Pearson 相关
+        f_centered = factor_arr - factor_arr.mean(axis=0, keepdims=True)
+        cov = f_centered.T @ f_centered  # (f, f)
+        std_col = np.sqrt((f_centered ** 2).sum(axis=0))
+        denom = np.outer(std_col, std_col)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            day_corr = cov / denom
+        day_corr[denom == 0] = np.nan
+
+        corr_sum[~np.isnan(day_corr)] += day_corr[~np.isnan(day_corr)]
+        corr_count += 1
+
+        if verbose and (day_idx + 1) % 500 == 0:
+            logger.info(f"  已处理 {day_idx + 1}/{n_dates} 日")
+
+    if corr_count == 0:
+        logger.error("无有效交易日可用于计算相关性")
+        return pd.DataFrame(index=factor_cols, columns=factor_cols)
+
+    corr_avg = corr_sum / corr_count
+    logger.info(f"相关性矩阵计算完成: {corr_count} 个有效交易日")
+
+    return pd.DataFrame(corr_avg, index=factor_cols, columns=factor_cols)
+
+
+def find_redundant_factors(
+    corr_matrix: "pd.DataFrame",
+    icir_series: "Optional[pd.Series]" = None,
+    threshold: float = 0.75,
+) -> "pd.DataFrame":
+    """识别冗余因子组，每组推荐保留 ICIR 最高的代表因子
+
+    Args:
+        corr_matrix: 因子相关性矩阵
+        icir_series: 因子 ICIR Series，用于选最优代表。为 None 则随机保留。
+        threshold: 相关性阈值，|corr| > threshold 视为冗余
+
+    Returns:
+        DataFrame，列: cluster_id, factor, keep, max_corr, ICIR
+    """
+    import numpy as np
+    import pandas as pd
+
+    factors = list(corr_matrix.index)
+    remaining = set(factors)
+    clusters = []
+    cluster_id = 0
+
+    while remaining:
+        seed = remaining.pop()
+        cluster = {seed}
+
+        for f in list(remaining):
+            if abs(corr_matrix.loc[seed, f]) > threshold:
+                cluster.add(f)
+                remaining.discard(f)
+
+        if icir_series is not None and all(f in icir_series.index for f in cluster):
+            best = max(cluster, key=lambda f: abs(icir_series.get(f, 0)))
+            best_icir = icir_series.get(best, np.nan)
+        else:
+            best = seed
+            best_icir = np.nan
+
+        for f in sorted(cluster):
+            clusters.append({
+                "cluster_id": cluster_id,
+                "factor": f,
+                "keep": (f == best),
+                "max_corr": abs(corr_matrix.loc[f, seed]) if f != seed else 1.0,
+                "ICIR": icir_series.get(f, np.nan) if icir_series is not None else np.nan,
+            })
+        cluster_id += 1
+
+    result = pd.DataFrame(clusters)
+    n_clusters = result["cluster_id"].nunique()
+    n_redundant = len(result) - result["keep"].sum()
+    logger.info(
+        f"冗余分析: {len(factors)} 因子 → {n_clusters} 个独立组, "
+        f"可精简 {n_redundant} 个冗余因子 (阈值={threshold})"
+    )
+    return result.sort_values(["cluster_id", "keep"], ascending=[True, False])
+
+
+# ══════════════════════════════════════════════════════════════════
+# 滚动 IC 稳定性
+# ══════════════════════════════════════════════════════════════════
+
+def compute_rolling_factor_ic(
+    data: "pd.DataFrame",
+    factor_cols: "List[str]",
+    label_col: str,
+    date_col: str = "trade_date",
+    window: int = 252,
+    min_periods: int = 126,
+    neutralize_industry: bool = False,
+    neutralize_size: bool = False,
+    industry_col: str = "sw_l1_code",
+    size_col: str = "log_total_mv",
+    tradable_col: str = "tradable",
+    verbose: bool = True,
+) -> "pd.DataFrame":
+    """计算因子的滚动窗口 IC（评价稳定性）
+
+    Args:
+        data: 多日截面DataFrame
+        factor_cols: 因子列名列表
+        label_col: 标签列名
+        date_col: 日期列名
+        window: 滚动窗口大小（交易日），默认 252（约1年）
+        min_periods: 最小有效窗口大小
+        neutralize_industry: 是否行业中性化
+        neutralize_size: 是否市值中性化
+        industry_col: 行业列名
+        size_col: 市值列名
+        tradable_col: 可交易标记列名
+        verbose: 是否输出进度
+
+    Returns:
+        DataFrame，列: trade_date, factor, rolling_icir, rolling_ic_mean, rolling_ic_std
+    """
+    import numpy as np
+    import pandas as pd
+
+    dates = sorted(data[date_col].unique())
+    n_dates = len(dates)
+    n_factors = len(factor_cols)
+
+    logger.info(
+        f"计算滚动 IC: {n_factors} 因子, {n_dates} 日, "
+        f"window={window}, label={label_col}"
+    )
+
+    daily_rank_ic = np.full((n_factors, n_dates), np.nan)
+
+    for day_idx, date in enumerate(dates):
+        day_df = data[data[date_col] == date]
+
+        if neutralize_industry or neutralize_size:
+            day_factors = _neutralize_factor_matrix(
+                day_df, factor_cols,
+                industry_col=industry_col if neutralize_industry else None,
+                size_col=size_col if neutralize_size else None,
+                n_size_groups=10, tradable_col=tradable_col,
+            )
+            day_df = day_df.copy()
+            day_df[factor_cols] = day_factors
+
+        rank_ics, _, _ = _compute_daily_batch_ic(
+            day_df, factor_cols, label_col, tradable_col
+        )
+        daily_rank_ic[:, day_idx] = rank_ics
+
+        if verbose and (day_idx + 1) % 200 == 0:
+            logger.info(f"  已处理 {day_idx + 1}/{n_dates} 日")
+
+    records = []
+    for j, factor_col in enumerate(factor_cols):
+        ic_series = pd.Series(daily_rank_ic[j], index=dates)
+        rolling_mean = ic_series.rolling(window=window, min_periods=min_periods).mean()
+        rolling_std = ic_series.rolling(window=window, min_periods=min_periods).std()
+        rolling_icir = rolling_mean / rolling_std.replace(0, np.nan)
+
+        for i, date in enumerate(dates):
+            if pd.notna(rolling_icir.iloc[i]):
+                records.append({
+                    "trade_date": date,
+                    "factor": factor_col,
+                    "rolling_icir": rolling_icir.iloc[i],
+                    "rolling_ic_mean": rolling_mean.iloc[i],
+                    "rolling_ic_std": rolling_std.iloc[i],
+                })
+
+    result = pd.DataFrame(records)
+    logger.info(f"滚动 IC 计算完成: {len(result)} 条记录")
+    return result
+
+
+def evaluate_ic_stability(
+    rolling_ic_df: "pd.DataFrame",
+    ic_col: str = "rolling_icir",
+) -> "pd.DataFrame":
+    """从滚动 IC 数据评估每个因子的稳定性
+
+    Args:
+        rolling_ic_df: compute_rolling_factor_ic 的输出
+        ic_col: IC 列名
+
+    Returns:
+        DataFrame，每行一个因子，列:
+        - icir_mean: 滚动 ICIR 均值
+        - icir_std: 滚动 ICIR 标准差
+        - icir_trend: 近半 vs 前半 ICIR 差值（正值=改善, 负值=衰减）
+        - icir_min: 最差滚动 ICIR
+        - icir_max: 最佳滚动 ICIR
+        - stability_score: 综合稳定性评分（越高越稳定）
+    """
+    import numpy as np
+    import pandas as pd
+
+    records = []
+    for factor in rolling_ic_df["factor"].unique():
+        sub = rolling_ic_df[rolling_ic_df["factor"] == factor][ic_col].dropna()
+        if len(sub) < 20:
+            continue
+
+        vals = sub.values
+        n = len(vals)
+        mid = n // 2
+
+        icir_mean = float(np.mean(vals))
+        icir_std = float(np.std(vals))
+        icir_trend = float(np.mean(vals[mid:])) - float(np.mean(vals[:mid]))
+        icir_min = float(np.min(vals))
+        icir_max = float(np.max(vals))
+
+        stability_score = icir_mean - 0.5 * icir_std + 0.3 * icir_trend
+
+        records.append({
+            "factor": factor,
+            "icir_mean": icir_mean,
+            "icir_std": icir_std,
+            "icir_trend": icir_trend,
+            "icir_min": icir_min,
+            "icir_max": icir_max,
+            "stability_score": stability_score,
+            "n_windows": n,
+        })
+
+    return pd.DataFrame(records).sort_values("stability_score", ascending=False)

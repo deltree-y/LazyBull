@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.2] - 2026-06-07
+
+### 修复
+
+- **滚动训练切分缺口修复**：`generate_walk_forward_splits_by_count()` 在 `test_window_months > step_months` 时，
+  旧的"不重叠约束"搜索会导致相邻 split 测试区间之间存在缺口（多达 1 个月以上）。现改为**严格连续构造**：
+  每个更早 split 的 `test_end` 直接设为下一 split `test_start` 的前一交易日，从后往前逐段拼接，
+  保证测试区间全覆盖、无重叠、无缺口。`step_frequency` 仅保留参数校验，不再驱动中间切分的 train_end 步退。
+
+## [0.73.1] - 2026-06-07
+
+### 修复
+
+- **调仓日卖出与买入同步到同一交易日**：此前回测与纸面交易中，调仓日生成的买入信号在 T+1 执行，但卖出（持有期到期）滞后到 T+2 才执行，导致新旧仓位存在 1 天重叠。现改为调仓日同步生成卖出指令：
+  - **回测**：[src/lazybull/backtest/engine.py](src/lazybull/backtest/engine.py) 新增 `_queue_rebalance_sells()`，在信号成功入队列的调仓日，将非保护持仓排队到 `pending_condition_sells`（`sell_type="rebalance"`），使卖出与买入在同一 T+1 日执行。
+  - **纸面交易**：[src/lazybull/paper/runner.py](src/lazybull/paper/runner.py) 新增 `_build_rebalance_sell_instructions()`，在 `run_t0()` 中生成调仓卖出指令，与买入指令合并保存到次日指令文件。
+  - 提取 `_evaluate_profit_extension_for_stock()` 辅助方法，供回测的调仓卖出与持有期检查复用盈利延续判定逻辑。
+  - 调仓卖出自动排除：已在 `pending_condition_sells`/`pending_stop_loss_sells` 中的持仓、新信号目标中的保留股票、盈利延续保护的持仓。
+- 卖出标签映射新增 `"rebalance": "调仓"`，回测日志可正确显示调仓卖出来源。
+
 ## [0.73.0] - 2026-06-04
 
 ### 新增

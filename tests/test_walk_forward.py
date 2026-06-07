@@ -285,12 +285,48 @@ class TestWalkForwardSplits:
             assert split.test_start > split.train_end
             assert split.test_start <= split.test_end
 
-        # 相邻 split 的测试区间应严格不重叠
+        # 验证测试区间严格连续：split[i].test_end 与 split[i+1].test_start 为连续交易日
+        all_trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
         for i in range(len(splits) - 1):
-            assert splits[i].test_end < splits[i + 1].test_start, (
-                f"split {i} 与 split {i+1} 测试区间重叠: "
-                f"{splits[i].test_start}-{splits[i].test_end} vs "
-                f"{splits[i+1].test_start}-{splits[i+1].test_end}"
+            end_idx = all_trade_dates.index(splits[i].test_end)
+            assert end_idx + 1 < len(all_trade_dates), (
+                f"split {i} test_end={splits[i].test_end} 已是最后一个交易日"
+            )
+            assert all_trade_dates[end_idx + 1] == splits[i + 1].test_start, (
+                f"split {i} 与 split {i+1} 测试区间不连续: "
+                f"test_end={splits[i].test_end}, "
+                f"下一个交易日={all_trade_dates[end_idx + 1]}, "
+                f"next.test_start={splits[i + 1].test_start}"
+            )
+
+    def test_generate_splits_by_count_contiguous_when_window_gt_step(self, trade_cal):
+        """测试 test_window_months > step_months 时测试区间仍严格连续（无缺口）"""
+        splits = generate_walk_forward_splits_by_count(
+            trade_cal=trade_cal,
+            split_count=5,
+            final_date="20221231",
+            step_frequency="quarterly",   # 3 个月
+            train_window_years=3,
+            test_window_months=6,          # 6 个月 > 3 个月步长
+        )
+
+        assert len(splits) == 5
+
+        for split in splits:
+            assert split.train_start < split.train_end
+            assert split.test_start > split.train_end
+            assert split.test_start <= split.test_end
+
+        # 验证测试区间严格连续
+        all_trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+        for i in range(len(splits) - 1):
+            end_idx = all_trade_dates.index(splits[i].test_end)
+            assert end_idx + 1 < len(all_trade_dates)
+            assert all_trade_dates[end_idx + 1] == splits[i + 1].test_start, (
+                f"split {i} 与 split {i+1} 测试区间不连续（存在缺口）: "
+                f"test_end={splits[i].test_end}, "
+                f"下一个交易日={all_trade_dates[end_idx + 1]}, "
+                f"next.test_start={splits[i + 1].test_start}"
             )
 
     def test_generate_splits_by_count_invalid_split_count(self, trade_cal):

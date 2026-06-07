@@ -264,21 +264,27 @@ def generate_walk_forward_splits_by_count(
 ) -> List[WalkForwardSplit]:
     """按切分数量和最终日期反推 walk-forward 切分。
 
+    从 final_date 向前逐段构造，**保证测试区间严格连续**（无缺口、无重叠）。
+    每个 split 的测试窗口长约 ``test_window_months``，训练窗口长约 ``train_window_years``。
+
     Args:
         trade_cal: 交易日历 DataFrame（包含 cal_date, is_open 列）
         split_count: 切分数量（必须 > 0）
-        final_date: 最终日期（YYYYMMDD）
-        step_frequency: 滚动频率（"monthly"|"quarterly"|"semiannual"）
+        final_date: 最终日期（YYYYMMDD）。最后一个 split 的 test_end 不超过该日期
+        step_frequency: 滚动频率（仅用于参数校验，本函数切分由连续约束驱动）
         train_window_years: 训练窗口年数
-        test_window_months: 测试窗口月数
-        rebalance_freq: 调仓频率（交易日）。若提供则将 test_end 向后对齐到调仓边界
+        test_window_months: 测试窗口月数（各 split 大致长度）
+        rebalance_freq: 调仓频率（交易日）。若提供则将 test_end 向后对齐到调仓边界，
+            但不破坏连续约束
 
     Returns:
-        WalkForwardSplit 列表（按 split_index 升序）
+        WalkForwardSplit 列表（按 split_index 升序），相邻 split 满足
+        ``splits[i].test_end`` 与 ``splits[i+1].test_start`` 为连续交易日
 
     Note:
-        - 不做“末尾强制截断”补丁，避免出现 test_start > test_end 的无效切分
+        - 不做"末尾强制截断"补丁，避免出现 test_start > test_end 的无效切分
         - 最后一段 split 的 test_end 会尽量贴近 final_date 且不超过 final_date
+        - 测试区间严格连续，不会因 step_frequency < test_window_months 产生缺口
     """
     if split_count <= 0:
         raise ValueError(f"split_count 必须为正整数，当前值: {split_count}")
@@ -299,7 +305,7 @@ def generate_walk_forward_splits_by_count(
     if len(all_trade_dates) == 0:
         raise ValueError("交易日历为空，无法生成切分")
 
-    step_months = step_months_map[step_frequency]
+    # step_frequency 仅用于参数校验；切分由连续约束驱动，不依赖步长回推
 
     def to_datetime(date_str: str) -> datetime:
         return datetime.strptime(date_str, "%Y%m%d")
@@ -430,32 +436,75 @@ def generate_walk_forward_splits_by_count(
             if newer_split_test_start is None:
                 raise ValueError("内部状态错误：缺少下一段 test_start 上界")
 
-            no_overlap_upper_bound = previous_trade_date(newer_split_test_start)
-            if no_overlap_upper_bound is None:
+            # ── 确保测试区间严格连续 ──────────────────────────────────
+            # 当前 split 的 test_end = 下一 split test_start 的前一交易日
+            test_end = previous_trade_date(newer_split_test_start)
+            if test_end is None:
                 raise ValueError(
-                    "切分数量过大：无法为更早 split 提供不重叠测试区间"
+                    "切分数量过大：无法为更早 split 提供连续测试区间"
                 )
 
-            prev_train_end_target = to_datetime(current_train_end) - relativedelta(months=step_months)
-            prev_train_end_target_str = to_date_str(prev_train_end_target)
-            search_start = find_nearest_trade_date(prev_train_end_target_str, direction="backward")
-
-            if search_start is None:
-                raise ValueError(
-                    f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
-                )
-
-            if search_start >= current_train_end:
-                search_start = previous_trade_date(current_train_end)
-                if search_start is None:
-                    raise ValueError(
-                        f"切分数量过大，无法继续回推（当前 split_count={split_count}）"
-                    )
-
-            current_train_end, current_built = find_latest_valid_train_end(
-                search_start=search_start,
-                test_end_upper_bound=no_overlap_upper_bound,
+            # 从 test_end 反向推算 test_start（约 test_window_months 个月之前）
+            test_start_dt = to_datetime(test_end) - relativedelta(months=test_window_months)
+            test_start = find_nearest_trade_date(
+                to_date_str(test_start_dt), direction="forward"
             )
+
+            if test_start is None or test_start >= test_end:
+                raise ValueError(
+                    f"测试窗口过短，无法为 split {split_count - 1 - rev_idx} "
+                    f"生成有效切分 (test_end={test_end})"
+                )
+
+            # 若提供调仓频率，将 test_end 向后对齐到调仓日边界（不超出连续边界）
+            if rebalance_freq is not None and rebalance_freq > 0:
+                try:
+                    ts_idx = all_trade_dates.index(test_start)
+                except ValueError:
+                    raise ValueError(f"test_start={test_start} 不在交易日列表中")
+                k = 1
+                while True:
+                    rebal_idx = ts_idx + k * rebalance_freq - 1
+                    if rebal_idx >= len(all_trade_dates):
+                        break
+                    candidate = all_trade_dates[rebal_idx]
+                    if candidate >= test_end:
+                        test_end = candidate
+                        break
+                    k += 1
+                # 调仓对齐后不得超出连续边界
+                if test_end >= newer_split_test_start:
+                    test_end = previous_trade_date(newer_split_test_start)
+                    if test_end is None or test_end < test_start:
+                        raise ValueError(
+                            f"调仓对齐导致 split {split_count - 1 - rev_idx} 测试区间无效"
+                        )
+
+            # train_end = test_start 的前一个交易日
+            try:
+                ts_idx = all_trade_dates.index(test_start)
+            except ValueError:
+                raise ValueError(f"test_start={test_start} 不在交易日列表中")
+            if ts_idx <= 0:
+                raise ValueError(
+                    f"test_start={test_start} 之前无可用交易日，无法确定 train_end"
+                )
+            current_train_end = all_trade_dates[ts_idx - 1]
+
+            # 计算 train_start
+            train_start_dt = to_datetime(current_train_end) - relativedelta(
+                years=train_window_years
+            )
+            train_start = find_nearest_trade_date(
+                to_date_str(train_start_dt), direction="forward"
+            )
+
+            if train_start is None or train_start >= current_train_end:
+                raise ValueError(
+                    f"训练窗口过长，无法为 train_end={current_train_end} 生成有效训练区间"
+                )
+
+            current_built = (train_start, test_start, test_end)
 
         train_start, test_start, test_end = current_built
         newer_split_test_start = test_start

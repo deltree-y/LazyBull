@@ -51,10 +51,14 @@ from .factor_evaluation import (
     compute_daily_factor_ic,
     compute_daily_pearson_ic,
     compute_daily_rankic,
+    compute_factor_correlation_matrix,
     compute_factor_ic_series,
     compute_factor_ic_summary,
     compute_ic_decay,
+    compute_rolling_factor_ic,
     evaluate_all_factors,
+    evaluate_ic_stability,
+    find_redundant_factors,
     neutralize_factor,
 )
 
@@ -108,4 +112,10 @@ __all__ = [
     'neutralize_factor',
     'auto_detect_factor_columns',
     'auto_detect_label_columns',
+    # 因子相关性
+    'compute_factor_correlation_matrix',
+    'find_redundant_factors',
+    # 滚动IC稳定性
+    'compute_rolling_factor_ic',
+    'evaluate_ic_stability',
 ]

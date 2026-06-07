@@ -651,7 +651,74 @@ class PaperTradingRunner:
 
         logger.info(f"生成 {len(instructions)} 条交易指令")
         return instructions
-    
+
+    def _build_rebalance_sell_instructions(
+        self,
+        trade_date: str,
+        sell_price_type: str,
+        protected_stocks: set,
+        target_codes: set,
+    ) -> List[TradeInstruction]:
+        """在调仓日生成当前持仓的清仓卖出指令。
+
+        仅针对不在新目标列表且不受盈利延续保护的持仓生成卖出指令，
+        使卖出与买入对齐到同一 T+1 执行日。
+
+        Args:
+            trade_date: 调仓日（T0 日期）
+            sell_price_type: 卖出价格类型 open/close
+            protected_stocks: 盈利延续保护的股票集合
+            target_codes: 新信号目标股票集合（保留，不卖出）
+
+        Returns:
+            卖出指令列表
+        """
+        instructions: List[TradeInstruction] = []
+        positions = self.account.get_positions()
+        if not positions:
+            return instructions
+
+        protected = protected_stocks or set()
+        sell_count = 0
+        protected_skip = 0
+        target_skip = 0
+
+        for ts_code, pos in positions.items():
+            if ts_code in protected:
+                protected_skip += 1
+                continue
+            if ts_code in target_codes:
+                target_skip += 1
+                continue
+
+            sell_shares = (pos.shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            if sell_shares <= 0:
+                continue
+
+            instructions.append(
+                TradeInstruction(
+                    ts_code=ts_code,
+                    action="sell",
+                    shares=sell_shares,
+                    price_type=sell_price_type,
+                    reason="调仓卖出",
+                    source_date=trade_date,
+                    target_weight=0.0,
+                )
+            )
+            sell_count += 1
+
+        if sell_count > 0:
+            skip_parts = []
+            if protected_skip > 0:
+                skip_parts.append(f"{protected_skip} 只盈利延续保护")
+            if target_skip > 0:
+                skip_parts.append(f"{target_skip} 只在新目标中")
+            skip_info = f"（{', '.join(skip_parts)}）" if skip_parts else ""
+            logger.info(f"调仓日生成卖出指令: {sell_count} 只股票{skip_info}")
+
+        return instructions
+
     def run_t0(
         self,
         trade_date: str,
@@ -781,7 +848,7 @@ class PaperTradingRunner:
             current_prices[row['ts_code']] = row.get('close', 0.0)
         
         # 生成指令（使用传入的 sell_price_type 参数）
-        instructions = self._generate_instructions(
+        buy_instructions = self._generate_instructions(
             targets=targets,
             buy_price_type=buy_price_type,
             sell_price_type=sell_price_type,
@@ -789,7 +856,20 @@ class PaperTradingRunner:
             source_date=corrected_date,
             protected_stocks=protected_stocks,
         )
-        
+
+        # 调仓日同步生成卖出指令：将不在新目标且非保护持仓排队到 T+1 卖出，
+        # 使卖出与买入对齐到同一执行日，消除卖出滞后一天的偏差。
+        target_codes = {t.ts_code for t in targets}
+        sell_instructions = self._build_rebalance_sell_instructions(
+            trade_date=corrected_date,
+            sell_price_type=sell_price_type,
+            protected_stocks=protected_stocks or set(),
+            target_codes=target_codes,
+        )
+
+        # 合并指令：卖出在前，买入在后（先卖后买）
+        instructions = sell_instructions + buy_instructions
+
         if not instructions:
             logger.warning("未生成任何交易指令")
             return
@@ -804,6 +884,7 @@ class PaperTradingRunner:
         
         # 保存交易指令（指令驱动模式）。
         # 同一交易日内，日度卖出规划可能已先写入次日指令，这里需要做合并而非覆盖。
+        # 合并优先级：已存在的条件卖出/止损指令 > 调仓卖出 > 调仓买入。
         existing_instructions = self.paper_storage.load_instructions(t1_date) or []
         merged_instructions: List[TradeInstruction] = []
         seen_keys = set()
@@ -830,6 +911,8 @@ class PaperTradingRunner:
         self._save_strategy_state()
         
         # 9. 保存执行记录
+        buy_count = len(buy_instructions)
+        sell_count = len(sell_instructions)
         run_record = {
             'trade_date': corrected_date,
             't1_date': t1_date,
@@ -840,12 +923,17 @@ class PaperTradingRunner:
             'rebalance_freq': effective_config.rebalance_freq,
             'targets_count': len(targets),
             'instructions_count': len(merged_instructions),
+            'buy_count': buy_count,
+            'sell_count': sell_count,
             'timestamp': pd.Timestamp.now().isoformat()
         }
         self.paper_storage.save_run_record("t0", corrected_date, run_record)
         
         logger.info("=" * 80)
-        logger.info(f"T0工作流完成 - 已生成 {len(targets)} 个目标权重和 {len(instructions)} 条交易指令")
+        logger.info(
+            f"T0工作流完成 - 已生成 {len(targets)} 个目标权重和 "
+            f"{len(merged_instructions)} 条交易指令（买入 {buy_count}，卖出 {sell_count}）"
+        )
         logger.info(f"下一交易日: {t1_date}")
         logger.info("=" * 80)
     
@@ -2297,7 +2385,9 @@ class PaperTradingRunner:
             )
 
             # 尚未到持有期，不需要延续保护（本来就不会卖）
-            if holding_days < rebalance_freq:
+            # 调仓日 holding_days == rebalance_freq-1，需提前 1 天评估以对齐买入/卖出
+            min_holding_for_protection = max(1, rebalance_freq - 1)
+            if holding_days < min_holding_for_protection:
                 continue
 
             # 已超过最大延续天数
