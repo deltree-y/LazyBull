@@ -15,6 +15,8 @@ tushare>=1.2.89
 akshare>=1.17.78
 efinance>=0.5.5.2
 tqdm>=4.64.0
+python-dateutil>=2.8.2
+openpyxl>=3.0.0
 
 # Machine Learning dependencies
 xgboost>=1.7.0
@@ -28,3 +30,10 @@ pytest-cov>=4.0.0
 black>=22.10.0
 flake8>=5.0.0
 isort>=5.10.0
+
+# Optional: 钉钉机器人服务
+dingtalk-stream>=1.0.0
+
+# Optional: 树莓派硬件驱动
+gpiod>=1.5.0
+psutil>=5.9.0

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.4] - 2026-06-08
+
+### 修复
+
+- **data.root 相对路径解析为绝对路径**：`get_data_root()` 现在会将 `configs/base.yaml` 中的相对路径
+  （如 `"./data"`）基于项目根目录（`PROJECT_ROOT`）解析为绝对路径，避免因 CWD 不同导致
+  `data/paper/config.yaml` 等文件找不到（典型场景：Docker 容器中 WORKDIR 不为项目根目录）。
+
+## [0.73.3] - 2026-06-08
+
+### 修复
+
+- **补齐缺失依赖**：`requirements.txt` 与 `pyproject.toml` 中新增 5 个代码已使用但未声明的依赖：
+  `python-dateutil`、`openpyxl`、`dingtalk-stream`、`gpiod`、`psutil`。
+
 ## [0.73.2] - 2026-06-07
 
 ### 修复

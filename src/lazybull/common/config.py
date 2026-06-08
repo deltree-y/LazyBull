@@ -179,9 +179,15 @@ def get_shenwan_level(default: str = "l2") -> str:
 
 
 def get_data_root(default: str = "./data") -> str:
-    """从项目级配置获取数据根目录。"""
+    """从项目级配置获取数据根目录。相对路径基于项目根目录解析为绝对路径。"""
     config = get_config()
-    return str(config.get("data.root", default))
+    raw = str(config.get("data.root", default))
+    path = Path(raw)
+    if not path.is_absolute():
+        # 相对路径基于项目根目录解析，避免 CWD 不同导致找不到文件
+        from .. import PROJECT_ROOT
+        path = PROJECT_ROOT / path
+    return str(path)
 
 
 def get_data_path(name: str, default: Optional[str] = None) -> str:
