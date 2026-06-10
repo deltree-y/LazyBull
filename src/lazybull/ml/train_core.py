@@ -13,6 +13,7 @@
 - 验证集逐日评估
 """
 
+import gc
 import json
 import math
 from pathlib import Path
@@ -935,8 +936,15 @@ def prepare_training_data(
         f"embargo_days={val_es_stats['val_embargo_days_requested']}"
     )
 
-    # 在标签变换前保存 val 原始 df 快照，用于逐日评估（保持真实收益单位）
-    df_val_split_original = df_val_split.copy()
+    # 在标签变换前保存 val 原始 df 引用（label_transform_fn 内部会创建新 df，
+    # 原 df_val_split 不会被修改，无需深拷贝即可保留原始收益单位数据）
+    df_val_split_original = df_val_split
+
+    # 释放已不再需要的原始/中间 DataFrame，回收 ~4-5 GiB 内存
+    # 提前保存后续 data_stats 需要的值
+    _val_raw_samples = len(df_val_split_raw)
+    del df, df_train, df_val_split_raw
+    gc.collect()
 
     # 如果提供了标签变换函数，切分后各自独立变换（避免跨集合统计量污染）
     if label_transform_fn is not None:
@@ -959,13 +967,16 @@ def prepare_training_data(
     val_start_date = str(val_es_dates[0]) if val_es_dates else "N/A"
     val_end_date = str(val_es_dates[-1]) if val_es_dates else "N/A"
 
-    # 准备训练集 X 和 y
-    X_train = df_train_split[feature_columns].copy()
-    y_train = df_train_split[label_column].copy()
+    # 准备训练集 X 和 y（float32 内存减半，XGBoost/LightGBM 原生支持）
+    X_train = df_train_split[feature_columns].astype(np.float32)
+    y_train = df_train_split[label_column].astype(np.float32)
 
     # 准备验证集 X 和 y
-    X_val = df_val_split[feature_columns].copy()
-    y_val = df_val_split[label_column].copy()
+    X_val = df_val_split[feature_columns].astype(np.float32)
+    y_val = df_val_split[label_column].astype(np.float32)
+
+    # 显式释放中间 DataFrame 引用，帮助 GC 回收内存
+    gc.collect()
 
     # NaN 处理：XGBoost / LightGBM 原生支持 NaN（自动学习缺失值的最优分裂方向），
     # 不再 fillna(0)，保留 NaN 让模型区分"无数据"与"值为0"。
@@ -980,7 +991,7 @@ def prepare_training_data(
         "val_raw_start_date": split_stats["val_start_date"],
         "val_raw_end_date": split_stats["val_end_date"],
         "val_raw_n_dates": split_stats["val_n_dates"],
-        "val_raw_samples": len(df_val_split_raw),
+        "val_raw_samples": _val_raw_samples,
         "val_es_start_date": str(val_start_date),
         "val_es_end_date": str(val_end_date),
         "val_es_n_dates": len(val_es_dates),
@@ -1032,13 +1043,12 @@ def transform_labels_cs_zscore(
     logger.info(f"对标签 {label_column} 进行截面 z-score 标准化...")
     logger.info(f"  winsorize 参数: {winsorize_p}")
 
-    df_transformed = df.copy()
-    nan_count_ori = df_transformed[label_column].isna().sum()
+    nan_count_ori = df[label_column].isna().sum()
     logger.info(f"原始标签 NaN 数量: {nan_count_ori}")
 
-    # 按 trade_date 分组进行截面标准化
-    df_transformed[label_column] = cross_sectional_zscore(
-        df_transformed,
+    # 按 trade_date 分组进行截面标准化（仅对标签列计算，不深拷贝整个 DataFrame）
+    transformed_label = cross_sectional_zscore(
+        df,
         value_col=label_column,
         group_col="trade_date",
         winsorize_limits=(winsorize_p, winsorize_p),
@@ -1046,19 +1056,23 @@ def transform_labels_cs_zscore(
     )
 
     # 统计标准化后的效果
-    mean = df_transformed[label_column].mean()
-    std = df_transformed[label_column].std()
+    mean = transformed_label.mean()
+    std = transformed_label.std()
     logger.info(f"标准化后: 均值={mean:.6f}, 标准差={std:.6f}")
 
     # 检查是否有 NaN（可能由于某天标准差为0）
-    nan_count = df_transformed[label_column].isna().sum()
+    nan_mask = transformed_label.isna()
+    nan_count = nan_mask.sum()
     if nan_count > 0:
         logger.warning(f"标准化后产生 {nan_count} 个 NaN（可能某天标准差为0），将被移除")
-        df_transformed = df_transformed.dropna(subset=[label_column])
-
-    # --- 新增：硬截断，防止标准化后依然存在离群值干扰 MSE ---
-    # 哪怕 winsorize 过了，如果有极端分布，z-score 后依然可能出现 > 5 的值
-    df_transformed[label_column] = df_transformed[label_column].clip(-5.0, 5.0)
+        df_transformed = df.loc[~nan_mask].assign(
+            **{label_column: transformed_label[~nan_mask].clip(-5.0, 5.0)}
+        )
+    else:
+        # 硬截断，防止标准化后依然存在离群值干扰 MSE
+        transformed_label = transformed_label.clip(-5.0, 5.0)
+        # 使用 assign 创建新 DataFrame，共享未修改列的内存（避免 ~2 GiB 深拷贝）
+        df_transformed = df.assign(**{label_column: transformed_label})
 
     return df_transformed
 

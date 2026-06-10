@@ -27,6 +27,7 @@ Walk-forward 滚动训练脚本
 """
 
 import argparse
+import gc
 import re
 import sys
 import traceback
@@ -698,6 +699,10 @@ def _train_model_on_window(
         feature_stability_filter=args.feature_stability_filter,
         factor_prune=args.factor_prune,
     )
+
+    # 原始 df_train 已不再需要，释放 ~3 GiB 内存
+    del df_train
+    gc.collect()
 
     # 4. 构造样本权重（rank-weight + 时间衰减，可叠加）
     rank_sample_weight = None
@@ -1792,6 +1797,7 @@ def write_walk_forward_summary(
         "rank_weight_topk": args.rank_weight_topk,
         "rank_weight": args.rank_weight,
         "time_decay_half_life": args.time_decay_half_life,
+        "objective": getattr(args, 'objective', 'mse'),
         "enable_fundamental": args.enable_fundamental_features,
         "enable_alt": args.enable_alt_features,
         "enable_margin": args.enable_margin_features,
@@ -1814,6 +1820,8 @@ def write_walk_forward_summary(
         "oos_backtest": getattr(args, 'oos_backtest', False),
         "oos_backtest_months": getattr(args, 'oos_backtest_months', None),
         "bt_top_n": getattr(args, 'bt_top_n', None),
+        "bt_rebalance_freq": getattr(args, 'bt_rebalance_freq', None),
+        "bt_initial_capital": getattr(args, 'bt_initial_capital', None),
         "signal_confidence_gate_enabled": getattr(args, 'signal_confidence_gate_enabled', False),
         "signal_confidence_gate_top_k": getattr(args, 'signal_confidence_gate_top_k', 10),
         "signal_confidence_gate_thresholds": getattr(
@@ -1904,6 +1912,9 @@ def write_walk_forward_summary(
         "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
         "take_profit_refill": getattr(args, 'take_profit_refill', True),
         "enable_early_rebalance_on_empty": getattr(args, 'enable_early_rebalance_on_empty', True),
+        "no_deploy_train": getattr(args, 'no_deploy_train', False),
+        "skip_training": getattr(args, 'skip_training', False),
+        "start_model_version": getattr(args, 'start_model_version', None),
     }
     train_params_cols = _sanitize_train_params(train_params_cols)
 

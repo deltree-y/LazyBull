@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.6] - 2026-06-10
+
+### 优化
+
+- **训练内存大幅优化（解决 32GB 内存 OOM）**：
+  - `transform_labels_cs_zscore`：用 `df.assign()` 替代 `df.copy()`，避免标签变换时深拷贝整个
+    DataFrame（~2 GiB），仅对标签列创建新 Series
+  - `prepare_training_data`：移除 `df_val_split_original = df_val_split.copy()` 的无意义深拷贝，
+    改为引用传递（label_transform_fn 内部已创建新 df，原 df 不会被修改）
+  - `prepare_training_data`：X/y 提取从 `float64` 改为 `float32`（`astype(np.float32)`），
+    内存减半（81×2.37M×8→4 字节），XGBoost/LightGBM 原生支持 float32
+  - `prepare_training_data`：在训练/验证集切分后显式 `del df, df_train, df_val_split_raw`
+    并 `gc.collect()`，及时回收 ~4-5 GiB 中间 DataFrame 内存
+  - `walk_forward.py` / `train_ml_model.py`：在 `prepare_training_data` 返回后显式释放
+    原始加载的 df_train/df，回收 ~3 GiB 内存
+
+## [0.73.5] - 2026-06-09
+
+### 修复
+
+- **batch_walk_forward 跨时间段稳定性分组缺失参数（全面补齐）**：
+  - `walk_forward.py` 的 `train_params_cols` 新增 6 项：`bt_rebalance_freq`、`bt_initial_capital`、
+    `objective`、`skip_training`、`start_model_version`、`no_deploy_train`
+  - `compare_walk_forward.py` 的 `PARAM_COLS` 新增 12 项分组键：
+    `time_decay_half_life`、`objective`、`factor_prune`、`enable_cashflow_quality_features`、
+    `enable_consensus_revision_features`、`bt_initial_capital`、`time_stop_loss_enabled`、
+    `time_stop_loss_days`、`time_stop_loss_profit_ratio`、`skip_training`、
+    `start_model_version`、`no_deploy_train`
+  - `COL_NAMES` 同步补齐对应中文显示名称
+  - 修复后 `start_model_version` 被错误地作为分组键，导致跨时间段稳定性表全空：
+    该参数随时间段变化（每个时间段不同模型版本），会使得每组只有 1 个时间段，
+    被 `len(group)<=1` 过滤掉。现将其加入 `varying_cols` 排除分组。
+
 ## [0.73.4] - 2026-06-08
 
 ### 修复

@@ -553,13 +553,14 @@ def _plan_next_day_retry_and_sell_instructions(
     existing_sell_codes.update(str(action["ts_code"]) for action in filtered_daily_actions)
 
     holding_sell_actions: List[Dict[str, object]] = []
-    if bool(config.get("enable_profit_based_holding", False)):
-        _, holding_sell_actions = runner.evaluate_holding_period_actions(
-            trade_date,
-            config,
-            exclude_stocks=existing_sell_codes,
-        )
-        instructions.extend(_build_sell_instructions(holding_sell_actions, trade_date, config))
+    # 持有期到期检查始终执行：enable_profit_based_holding=False 时仅做到期卖出，
+    # enable_profit_based_holding=True 时才会评估盈利延续。
+    _, holding_sell_actions = runner.evaluate_holding_period_actions(
+        trade_date,
+        config,
+        exclude_stocks=existing_sell_codes,
+    )
+    instructions.extend(_build_sell_instructions(holding_sell_actions, trade_date, config))
 
     pending_buy_instructions = _plan_pending_buy_retry_instructions(runner, trade_date, config)
     instructions = _merge_trade_instructions(instructions, pending_buy_instructions)

@@ -36,21 +36,21 @@ $wf_period_configs = @(
         SplitCount = 13
         FinalDate = "20251231"
         ContinueDays = 1
-        StartModelVersion = 17783#16447(6_20)#16542(6_10)#16501(5)#16706(4)#16665(3_20)
+        StartModelVersion = 18338#16447(6_20)#16542(6_10)#16501(5)#16706(4)#16665(3_20)
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
         FinalDate = "20260209"
         ContinueDays = 1
-        StartModelVersion = 17797#16460(6_20)#16555(6_10)#16514(5)#16719(4)#16678(3_20)
+        StartModelVersion = 18367#16460(6_20)#16555(6_10)#16514(5)#16719(4)#16678(3_20)
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
         FinalDate = "20260324"
         ContinueDays = 1
-        StartModelVersion = 17812#16474(6_20)#16569(6_10)#16528(5)#16733(4)#16692(3_20)
+        StartModelVersion = 18397#16474(6_20)#16569(6_10)#16528(5)#16733(4)#16692(3_20)
     }
 )
 
@@ -58,7 +58,7 @@ $wf_period_configs = @(
 $step_list               = @("semiannual")   # monthly | quarterly | semiannual
 $train_window_years_list = @(6)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
-$val_ratio_list          = @(0.175)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
+$val_ratio_list          = @(0.2)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
@@ -68,9 +68,9 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(4,5)         #. XGB推荐9, LGB推荐5
+$max_depth_list          = @(3,4,6)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.030)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.015,0.025,0.035)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -103,7 +103,8 @@ $enable_alt              = $true  # $true 启用 | $false 禁用
 
 # ── 融资融券因子（通过 margin_detail 接口下载）────────────────────
 $enable_margin           = $false  # $true 启用 | $false 禁用
-# 0428:关闭后CAGR下降约3%, 回撤基本不变
+# 0428:关闭后CAGR下降约3%, 回撤基本不变 
+# 0610:打开后CAGR大幅下降
 
 # ── 筹码胜率因子（需5000+积分，需先下载 cyq_perf）─────────────────
 $enable_cyq              = $true  # $true 启用 | $false 禁用
@@ -179,7 +180,7 @@ $kelly_max_leverage_list          = @(0.1)    # Kelly 单股仓位上限（可�
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
 # 0426这里应为composite
-$signal_gate_mode = "disabled"                 # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭
+$signal_gate_mode_list = @("disabled")         # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭（可多值扫描）
 # 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
 # 0601 回撤降低4%, 收益降低4%
 $signal_gate_cost_multiplier_list = @(0.8)      #0.3 composite: 门控严格度扫描
@@ -211,7 +212,7 @@ $signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
 
 # ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
 # 0601这里应为true
-$enable_profit_based_holding      = $false       # $true 启用 | $false 禁用
+$enable_profit_based_holding_list = @($false)    # $true 启用 | $false 禁用（可多值扫描，如 @($false, $true)）
 # 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
 
 # 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，
@@ -533,6 +534,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $market_regime_ma250_exposure_list.Length *
               $bt_top_n_list.Length *
               $bt_rebalance_freq_list.Length *
+              $signal_gate_mode_list.Length *
               $signal_gate_cost_multiplier_list.Length *
               $signal_gate_quality_window_list.Length *
               $signal_gate_quality_threshold_list.Length *
@@ -550,6 +552,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $bt_equity_curve_recovery_step_list.Length *
               $bt_equity_curve_recovery_delay_periods_list.Length *
               $stagger_tranches_list.Length *
+              $enable_profit_based_holding_list.Length *
               $early_exit_loss_threshold_list.Length *
               $early_exit_holding_ratio_list.Length *
               $profit_extension_threshold_list.Length *
@@ -610,6 +613,7 @@ foreach ($market_regime_ma250_threshold in $market_regime_ma250_threshold_list) 
 foreach ($market_regime_ma250_exposure in $market_regime_ma250_exposure_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
 foreach ($bt_rebalance_freq in $bt_rebalance_freq_list) {
+foreach ($signal_gate_mode in $signal_gate_mode_list) {
 foreach ($signal_gate_cost_multiplier in $signal_gate_cost_multiplier_list) {
 foreach ($signal_gate_quality_window in $signal_gate_quality_window_list) {
 foreach ($signal_gate_quality_threshold in $signal_gate_quality_threshold_list) {
@@ -627,6 +631,7 @@ foreach ($bt_equity_curve_recovery_mode in $bt_equity_curve_recovery_mode_list) 
 foreach ($bt_equity_curve_recovery_step in $bt_equity_curve_recovery_step_list) {
 foreach ($bt_equity_curve_recovery_delay_periods in $bt_equity_curve_recovery_delay_periods_list) {
 foreach ($stagger_tranches in $stagger_tranches_list) {
+foreach ($enable_profit_based_holding in $enable_profit_based_holding_list) {
 foreach ($early_exit_loss_threshold in $early_exit_loss_threshold_list) {
 foreach ($early_exit_holding_ratio in $early_exit_holding_ratio_list) {
 foreach ($profit_extension_threshold in $profit_extension_threshold_list) {
@@ -950,7 +955,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

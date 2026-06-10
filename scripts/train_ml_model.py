@@ -20,6 +20,7 @@ XGBoost 模型训练脚本
 """
 
 import argparse
+import gc
 import sys
 import traceback
 from pathlib import Path
@@ -438,6 +439,11 @@ def main():
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
         )
+
+        # 原始 df 已不再需要，释放 ~3 GiB 内存
+        del df
+        gc.collect()
+
         # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
         if False:  # 默认不启用，后续可以改为参数控制
             df_new = df.copy()

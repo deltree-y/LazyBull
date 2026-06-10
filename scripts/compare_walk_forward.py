@@ -100,6 +100,7 @@ COL_NAMES = {
     "bt_signal_confidence_avg_exposure_mean": "门控平均仓位",
     "bt_signal_confidence_avg_score_mean": "门控平均置信度",
     "bt_rebalance_freq":         "回测调仓频率",
+    "bt_initial_capital":         "回测初始资金",
     "bt_sell_timing":             "回测卖出时机",
     "signal_confidence_gate_enabled": "信号置信度门控",
     "signal_confidence_gate_top_k": "门控TopK",
@@ -176,6 +177,8 @@ COL_NAMES = {
     "rank_weight_enabled":        "rank权重启用",
     "rank_weight_topk":           "rank权重TopK",
     "rank_weight":                "rank权重值",
+    "time_decay_half_life":       "时间衰减半衰期",
+    "objective":                  "目标函数",
     "algorithm":                  "算法",
     "enable_fundamental":         "基本面因子",
     "enable_alt":                 "另类因子",
@@ -184,11 +187,14 @@ COL_NAMES = {
     "enable_fund":                "基金持仓因子",
     "enable_express":             "业绩快报因子",
     "feature_stability_filter":   "特征稳定性筛选",
+    "factor_prune":               "因子精简",
     "ensemble_offsets":           "多偏移集成",
     "enable_enhanced_features":   "增强因子",
     "enable_north_features":      "北向资金因子",
     "enable_lhb_features":        "龙虎榜因子",
     "enable_consensus_features":  "一致预期因子",
+    "enable_cashflow_quality_features": "现金流质量因子",
+    "enable_consensus_revision_features": "一致预期修正因子",
     "oos_backtest":               "OOS回测",
     "oos_backtest_months":        "OOS回测月数",
     "bt_top_n":                   "回测TopN",
@@ -220,6 +226,9 @@ COL_NAMES = {
     "early_exit_mode":                        "早退模式",
     "early_exit_strength_protect_threshold":   "早退保护阈值",
     "early_exit_max_reprieves":               "早退最大缓刑",
+    "time_stop_loss_enabled":        "时间止损",
+    "time_stop_loss_days":           "时间止损天数",
+    "time_stop_loss_profit_ratio":   "时间止损利润阈值",
     # 行业轮动加权
     "industry_rotation_enhanced":    "行业轮动加权",
     "industry_rotation_alpha":       "轮动Alpha",
@@ -249,6 +258,9 @@ COL_NAMES = {
     "take_profit_threshold":        "整体止盈阈值",
     "take_profit_refill":           "止盈后补仓",
     "enable_early_rebalance_on_empty": "空仓提前调仓",
+    "skip_training":               "跳过训练",
+    "start_model_version":         "起始模型版本",
+    "no_deploy_train":             "禁用部署训练",
 }
 
 # ---------------------------------------------------------------------------
@@ -268,11 +280,14 @@ PARAM_COLS = [
     "gamma", "reg_alpha", "reg_lambda",
     "early_stopping_rounds", "early_stopping_metric",
     "rank_weight_enabled", "rank_weight_topk", "rank_weight",
+    "time_decay_half_life", "objective",
     "enable_fundamental", "enable_alt", "enable_margin", "enable_cyq",
-    "enable_fund", "enable_express", "feature_stability_filter",
+    "enable_fund", "enable_express", "feature_stability_filter", "factor_prune",
     "ensemble_offsets", "enable_enhanced_features", "enable_north_features",
     "enable_lhb_features", "enable_consensus_features",
+    "enable_cashflow_quality_features", "enable_consensus_revision_features",
     "oos_backtest", "oos_backtest_months", "bt_top_n", "bt_rebalance_freq",
+    "bt_initial_capital",
     "signal_confidence_gate_enabled",
     "signal_confidence_gate_top_k",
     "signal_confidence_gate_thresholds",
@@ -301,6 +316,7 @@ PARAM_COLS = [
     "use_atr_for_early_exit", "atr_multiplier",
     # 亏损提前换出二次确认
     "early_exit_mode", "early_exit_strength_protect_threshold", "early_exit_max_reprieves",
+    "time_stop_loss_enabled", "time_stop_loss_days", "time_stop_loss_profit_ratio",
     # 行业轮动加权
     "industry_momentum_filter", "industry_momentum_bottom_pct",
     "industry_rotation_enhanced", "industry_rotation_alpha",
@@ -317,6 +333,7 @@ PARAM_COLS = [
     # 整体持仓止盈
     "take_profit_threshold", "take_profit_refill",
     "enable_early_rebalance_on_empty",
+    "skip_training", "start_model_version", "no_deploy_train",
 ]
 
 
@@ -1312,6 +1329,7 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         COL_NAMES["batch_period_label"],
         COL_NAMES["split_count"],
         COL_NAMES["final_date"],
+        COL_NAMES["start_model_version"],
     }
     metric_cols = {
         "综合得分",

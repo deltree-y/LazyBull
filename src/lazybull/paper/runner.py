@@ -658,17 +658,24 @@ class PaperTradingRunner:
         sell_price_type: str,
         protected_stocks: set,
         target_codes: set,
+        rebalance_freq: int = 20,
+        trade_dates_list: Optional[list] = None,
     ) -> List[TradeInstruction]:
         """在调仓日生成当前持仓的清仓卖出指令。
 
         仅针对不在新目标列表且不受盈利延续保护的持仓生成卖出指令，
         使卖出与买入对齐到同一 T+1 执行日。
 
+        提前调仓（holding tail）场景下，仅卖出已达到持有期阈值的持仓，
+        避免误卖尚未到期的年轻持仓。
+
         Args:
             trade_date: 调仓日（T0 日期）
             sell_price_type: 卖出价格类型 open/close
             protected_stocks: 盈利延续保护的股票集合
             target_codes: 新信号目标股票集合（保留，不卖出）
+            rebalance_freq: 调仓频率（交易日数），用于持有天数阈值判定
+            trade_dates_list: 交易日列表，用于计算持有天数
 
         Returns:
             卖出指令列表
@@ -682,6 +689,10 @@ class PaperTradingRunner:
         sell_count = 0
         protected_skip = 0
         target_skip = 0
+        too_young_skip = 0
+
+        # 持有天数阈值：仅卖出已接近或超过持有期的持仓
+        min_holding_for_sell = max(1, rebalance_freq - 1)
 
         for ts_code, pos in positions.items():
             if ts_code in protected:
@@ -690,6 +701,15 @@ class PaperTradingRunner:
             if ts_code in target_codes:
                 target_skip += 1
                 continue
+
+            # 检查持有天数：提前调仓时跳过尚未到期的年轻持仓
+            if trade_dates_list:
+                holding_days = self._calc_holding_days(
+                    pos.buy_date, trade_date, trade_dates_list
+                )
+                if holding_days < min_holding_for_sell:
+                    too_young_skip += 1
+                    continue
 
             sell_shares = (pos.shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
             if sell_shares <= 0:
@@ -708,12 +728,14 @@ class PaperTradingRunner:
             )
             sell_count += 1
 
-        if sell_count > 0:
+        if sell_count > 0 or too_young_skip > 0:
             skip_parts = []
             if protected_skip > 0:
                 skip_parts.append(f"{protected_skip} 只盈利延续保护")
             if target_skip > 0:
                 skip_parts.append(f"{target_skip} 只在新目标中")
+            if too_young_skip > 0:
+                skip_parts.append(f"{too_young_skip} 只未满持有期")
             skip_info = f"（{', '.join(skip_parts)}）" if skip_parts else ""
             logger.info(f"调仓日生成卖出指令: {sell_count} 只股票{skip_info}")
 
@@ -859,12 +881,21 @@ class PaperTradingRunner:
 
         # 调仓日同步生成卖出指令：将不在新目标且非保护持仓排队到 T+1 卖出，
         # 使卖出与买入对齐到同一执行日，消除卖出滞后一天的偏差。
+        # 提前调仓（holding tail）场景下仅卖出已到期的持仓，跳过未满期的年轻持仓。
         target_codes = {t.ts_code for t in targets}
+        trade_cal = self.loader.load_clean_trade_cal()
+        trade_dates_list = (
+            trade_cal[trade_cal["is_open"] == 1]["cal_date"].tolist()
+            if trade_cal is not None
+            else None
+        )
         sell_instructions = self._build_rebalance_sell_instructions(
             trade_date=corrected_date,
             sell_price_type=sell_price_type,
             protected_stocks=protected_stocks or set(),
             target_codes=target_codes,
+            rebalance_freq=effective_config.rebalance_freq,
+            trade_dates_list=trade_dates_list,
         )
 
         # 合并指令：卖出在前，买入在后（先卖后买）
@@ -2438,13 +2469,47 @@ class PaperTradingRunner:
         Returns:
             (protected_stocks, sell_actions)
         """
-        if not config.get("enable_profit_based_holding", False):
-            return set(), []
-
-        mode = str(config.get("profit_extension_mode", "pnl"))
         positions = self.account.get_positions()
         if not positions:
             return set(), []
+
+        trade_cal = self.loader.load_clean_trade_cal()
+        trade_dates_list = []
+        if trade_cal is not None:
+            trade_dates_list = trade_cal[trade_cal["is_open"] == 1]["cal_date"].tolist()
+
+        rebalance_freq = int(config.get("rebalance_freq", 20))
+        exclude_stocks = exclude_stocks or set()
+
+        # 盈亏动态持仓未启用：仅按持有期到期卖出，不做延续判定
+        # 阈值 = rebalance_freq - 1，确保 T+1 执行日恰好在持有期满当天卖出
+        if not config.get("enable_profit_based_holding", False):
+            sell_actions = []
+            min_holding_for_sell = max(1, rebalance_freq - 1)
+            for ts_code, pos in positions.items():
+                if ts_code in exclude_stocks:
+                    continue
+                holding_days = self._calc_holding_days(
+                    pos.buy_date, trade_date, trade_dates_list
+                )
+                if holding_days < min_holding_for_sell:
+                    continue
+                sell_shares = (pos.shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+                if sell_shares <= 0:
+                    continue
+                sell_actions.append(
+                    {
+                        "ts_code": ts_code,
+                        "shares": sell_shares,
+                        "reason": f"持有期到期: 持有{holding_days}天",
+                        "can_execute": True,
+                    }
+                )
+                if self.verbose:
+                    logger.info(f"  持有期到期卖出: {ts_code} 持有{holding_days}天 -> {sell_shares}股")
+            return set(), sell_actions
+
+        mode = str(config.get("profit_extension_mode", "pnl"))
 
         # 与回测对齐：strength 模式按日评估时需确保当日 cs_infer 可用，
         # 否则 momentum/technical/fund_flow 会因缺特征退化为 0.5。
