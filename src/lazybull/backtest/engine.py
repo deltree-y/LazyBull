@@ -17,6 +17,7 @@ from ..data.loader import DataLoader
 from ..execution.pending_order import PendingOrderManager
 from ..risk.equity_curve import EquityCurveConfig, EquityCurveMonitor
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
+from ..risk.weakness_exit import WeaknessExitConfig, WeaknessExitMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..signals.base import Signal
 from ..universe.base import Universe
@@ -287,6 +288,13 @@ class BacktestEngine:
         time_stop_loss_enabled: bool = True,  # 是否启用时间止损（持仓超限未达盈利要求提前换出）
         time_stop_loss_days: int = 15,  # 时间止损触发最低持有天数（交易日）
         time_stop_loss_profit_ratio: float = -0.02,  # 时间止损利润阈值（当前盈亏低于此值触发）
+        weakness_exit_enabled: bool = False,  # 是否启用表现弱势退出
+        weakness_exit_threshold: float = 0.6,  # 弱势评分触发阈值
+        weakness_exit_consecutive_days: int = 3,  # 需连续弱势天数
+        weakness_exit_min_holding_days: int = 5,  # 最低持有天数
+        weakness_exit_weights: str = "30,25,25,20",  # 4维度权重
+        weakness_exit_industry_filter: bool = False,  # 弱势行业过滤
+        weakness_exit_industry_bottom_pct: float = 0.3,  # 行业底部阈值
         signal_gate_quality_enabled: bool = False,  # 是否启用滚动模型质量监控
         signal_gate_quality_window: int = 5,  # 回看调仓周期数
         signal_gate_quality_threshold: float = 0.4,  # 最低滚动hit rate
@@ -466,6 +474,23 @@ class BacktestEngine:
         self.time_stop_loss_enabled = time_stop_loss_enabled
         self.time_stop_loss_days = time_stop_loss_days
         self.time_stop_loss_profit_ratio = time_stop_loss_profit_ratio
+        # 表现弱势退出
+        self.weakness_exit_enabled = weakness_exit_enabled
+        self.weakness_exit_monitor: Optional[WeaknessExitMonitor] = None
+        if weakness_exit_enabled:
+            w_parts = [float(x.strip()) / 100.0 for x in weakness_exit_weights.split(",")]
+            if len(w_parts) != 4:
+                w_parts = [0.30, 0.25, 0.25, 0.20]
+            wc = WeaknessExitConfig(
+                enabled=True,
+                threshold=weakness_exit_threshold,
+                consecutive_days=weakness_exit_consecutive_days,
+                min_holding_days=weakness_exit_min_holding_days,
+                weights=tuple(w_parts),
+                industry_filter=weakness_exit_industry_filter,
+                industry_bottom_pct=weakness_exit_industry_bottom_pct,
+            )
+            self.weakness_exit_monitor = WeaknessExitMonitor(wc)
         self.enable_early_rebalance_on_empty = enable_early_rebalance_on_empty
         self._last_ranked_candidates: list = []  # 最近一次调仓的候选排序列表（止盈补位用）
         self._last_signal_date: Optional[pd.Timestamp] = None  # 最近一次调仓日期
@@ -601,6 +626,8 @@ class BacktestEngine:
             f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
             f"时间止损={'启用' if time_stop_loss_enabled else '禁用'}"
             f"({time_stop_loss_days}天, {time_stop_loss_profit_ratio:.0%})" if time_stop_loss_enabled else "", ", "
+            f"弱势退出={'启用' if weakness_exit_enabled else '禁用'}"
+            f"(阈值{weakness_exit_threshold:.0%})" if weakness_exit_enabled else "", ", "
             f"空仓提前调仓={'启用' if enable_early_rebalance_on_empty else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
@@ -1284,6 +1311,7 @@ class BacktestEngine:
             "holding_period": "持有期",
             "early_exit": "亏损换出",
             "time_stop_loss": "时间止损",
+            "weakness_exit": "表现弱势",
             "take_profit": "止盈",
             "rebalance": "调仓",
         }
@@ -1313,6 +1341,7 @@ class BacktestEngine:
             "持有期",
             "亏损换出",
             "时间止损",
+            "表现弱势",
             "止盈",
             "回撤止损",
             "移动止损",
@@ -3047,6 +3076,28 @@ class BacktestEngine:
             # 计算持有天数（交易日）
             holding_days = current_idx - anchor_idx
 
+            # ── 表现弱势退出：纯价格表现评估，独立于 enable_profit_based_holding ──
+            if (
+                self.weakness_exit_monitor is not None
+                and stock not in self.pending_condition_sells
+            ):
+                should_exit, weakness_detail = self._evaluate_weakness_exit(
+                    stock=stock,
+                    date=date,
+                    position_info=info,
+                    holding_days=holding_days,
+                    profit_rate=0.0,
+                    trading_dates=trading_dates,
+                    date_to_idx=date_to_idx,
+                )
+                if should_exit:
+                    self.pending_condition_sells[stock] = {
+                        "trigger_date": date,
+                        "sell_type": "weakness_exit",
+                        "weakness_detail": weakness_detail,
+                    }
+                    continue
+
             if self.enable_profit_based_holding:
                 # 计算当前盈亏率（使用后复权价格口径）
                 current_pnl_price = self._get_pnl_price(date, stock)
@@ -3259,6 +3310,7 @@ class BacktestEngine:
                                 "trigger_date": date,
                                 "sell_type": "time_stop_loss",
                             }
+
             else:
                 # 原始逻辑：达到持有期后在 T0 生成卖出信号，T+1 执行
                 if holding_days >= self.holding_period:
@@ -3290,6 +3342,108 @@ class BacktestEngine:
                 price_data=self.price_data_cache,
                 date_to_idx=date_to_idx,
             )
+
+    def _evaluate_weakness_exit(
+        self,
+        stock: str,
+        date: pd.Timestamp,
+        position_info: dict,
+        holding_days: int,
+        profit_rate: float,
+        trading_dates: list,
+        date_to_idx: dict,
+    ):
+        """评估是否应因表现弱势而提前退出。
+
+        使用 WeaknessExitMonitor 的 4 维纯价格表现评分。
+        """
+        if self.weakness_exit_monitor is None:
+            return False, {}
+
+        # 获取买入以来的后复权价格序列
+        buy_date = position_info.get("buy_date")
+        if buy_date is None:
+            return False, {}
+
+        buy_idx = date_to_idx.get(buy_date)
+        current_idx = date_to_idx.get(date)
+        if buy_idx is None or current_idx is None:
+            return False, {}
+
+        # 从 price_data_cache 提取价格序列
+        pnl_prices = {}
+        if self.price_data_cache is not None:
+            stock_data = self.price_data_cache[
+                self.price_data_cache["ts_code"] == stock
+            ]
+            for _, row in stock_data.iterrows():
+                trade_date_str = to_trade_date_str(row["trade_date"])
+                close_val = row.get("close_adj", row.get("close"))
+                if pd.notna(close_val) and close_val > 0:
+                    pnl_prices[trade_date_str] = float(close_val)
+
+        if len(pnl_prices) < 2:
+            return False, {}
+
+        # 构建日期排序的价格 Series
+        sorted_dates = sorted(pnl_prices.keys())
+        price_values = [pnl_prices[d] for d in sorted_dates]
+        price_series = pd.Series(price_values, index=sorted_dates)
+
+        # 构建所有持仓的 profit_rate 字典
+        all_profits = {}
+        for s, info in self.positions.items():
+            current_pnl = self._get_pnl_price(date, s)
+            buy_pnl = info.get("buy_pnl_price")
+            if current_pnl and buy_pnl and buy_pnl > 0:
+                all_profits[s] = (current_pnl - buy_pnl) / buy_pnl
+            else:
+                all_profits[s] = 0.0
+
+        # 可选行业动量排名
+        industry_rank = None
+        if (
+            self.weakness_exit_monitor.config.industry_filter
+            and hasattr(self, "_get_holding_features_row")
+        ):
+            try:
+                features_row = self._get_holding_features_row(date, stock)
+                if features_row is not None and "ind_momentum_rank" in features_row.index:
+                    rank_val = features_row["ind_momentum_rank"]
+                    if not pd.isna(rank_val):
+                        industry_rank = float(rank_val)
+            except Exception:
+                pass
+
+        weakness_score, breakdown = self.weakness_exit_monitor.evaluate(
+            stock=stock,
+            price_series=price_series,
+            all_positions_profit=all_profits,
+            holding_days=holding_days,
+            industry_rank=industry_rank,
+        )
+
+        date_str = to_trade_date_str(date)
+        consec = self.weakness_exit_monitor.update(stock, date_str, weakness_score)
+
+        # 未达最低持有天数：仅跟踪不触发
+        min_hold = self.weakness_exit_monitor.config.min_holding_days
+        if holding_days < min_hold:
+            return False, breakdown
+
+        if weakness_score >= self.weakness_exit_monitor.config.threshold:
+            if consec >= self.weakness_exit_monitor.config.consecutive_days:
+                logger.warning(
+                    f"  表现弱势退出: {stock} 持有{holding_days}天, "
+                    f"评分={weakness_score:.3f}, 连弱{consec}天, "
+                    f"排名={breakdown.get('pnl_rank', 0):.2f}, "
+                    f"连跌={breakdown.get('down_streak', 0):.2f}, "
+                    f"回撤={breakdown.get('drawdown', 0):.2f}, "
+                    f"回升={breakdown.get('recovery', 0):.2f}"
+                )
+                return True, breakdown
+
+        return False, breakdown
 
     def _execute_pending_condition_sells(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
@@ -4424,6 +4578,10 @@ class BacktestEngine:
         # 如果是止损卖出，清理止损监控器中的持仓状态
         if sell_type == "stop_loss" and self.stop_loss_monitor:
             self.stop_loss_monitor.remove_position(stock)
+
+        # 清理弱势退出监控器中的持仓状态
+        if self.weakness_exit_monitor is not None:
+            self.weakness_exit_monitor.reset(stock)
 
         # 记录交易（包含绩效收益信息和卖出类型）
         trade_record = {

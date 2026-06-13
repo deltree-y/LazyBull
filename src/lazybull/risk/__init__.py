@@ -14,6 +14,12 @@ from .equity_curve import (
     create_equity_curve_config_from_dict
 )
 
+from .weakness_exit import (
+    WeaknessExitConfig,
+    WeaknessExitMonitor,
+    create_weakness_exit_config_from_dict,
+)
+
 __all__ = [
     'StopLossConfig',
     'StopLossMonitor',
@@ -22,5 +28,8 @@ __all__ = [
     'EquityCurveConfig',
     'EquityCurveMonitor',
     'ECTSignalType',
-    'create_equity_curve_config_from_dict'
+    'create_equity_curve_config_from_dict',
+    'WeaknessExitConfig',
+    'WeaknessExitMonitor',
+    'create_weakness_exit_config_from_dict',
 ]

@@ -237,6 +237,13 @@ def run_oos_backtest(
     time_stop_loss_enabled: bool = True,
     time_stop_loss_days: int = 15,
     time_stop_loss_profit_ratio: float = -0.02,
+    weakness_exit_enabled: bool = False,
+    weakness_exit_threshold: float = 0.6,
+    weakness_exit_consecutive_days: int = 3,
+    weakness_exit_min_holding_days: int = 5,
+    weakness_exit_weights: str = "30,25,25,20",
+    weakness_exit_industry_filter: bool = False,
+    weakness_exit_industry_bottom_pct: float = 0.3,
     take_profit_threshold: Optional[float] = None,
     take_profit_refill: bool = True,
     enable_early_rebalance_on_empty: bool = True,
@@ -398,6 +405,13 @@ def run_oos_backtest(
         time_stop_loss_enabled=time_stop_loss_enabled,
         time_stop_loss_days=time_stop_loss_days,
         time_stop_loss_profit_ratio=time_stop_loss_profit_ratio,
+        weakness_exit_enabled=weakness_exit_enabled,
+        weakness_exit_threshold=weakness_exit_threshold,
+        weakness_exit_consecutive_days=weakness_exit_consecutive_days,
+        weakness_exit_min_holding_days=weakness_exit_min_holding_days,
+        weakness_exit_weights=weakness_exit_weights,
+        weakness_exit_industry_filter=weakness_exit_industry_filter,
+        weakness_exit_industry_bottom_pct=weakness_exit_industry_bottom_pct,
         initial_capital=initial_capital,
         sell_price=bt_sell_timing,
     )
@@ -2607,6 +2621,50 @@ def main():
         help="OOS 回测连续跌停止损天数，默认 2"
     )
 
+    # OOS 回测 表现弱势退出 参数
+    parser.add_argument(
+        "--bt-weakness-exit-enabled",
+        action="store_true",
+        default=False,
+        help="启用 OOS 回测表现弱势退出",
+    )
+    parser.add_argument(
+        "--bt-weakness-exit-threshold",
+        type=float,
+        default=0.6,
+        help="OOS 弱势评分触发阈值（默认：0.6）",
+    )
+    parser.add_argument(
+        "--bt-weakness-exit-consecutive-days",
+        type=int,
+        default=3,
+        help="OOS 需连续弱势天数（默认：3）",
+    )
+    parser.add_argument(
+        "--bt-weakness-exit-min-holding-days",
+        type=int,
+        default=5,
+        help="OOS 最低持有天数（默认：5）",
+    )
+    parser.add_argument(
+        "--bt-weakness-exit-weights",
+        type=str,
+        default="30,25,25,20",
+        help="OOS 4 维度权重（默认：30,25,25,20）",
+    )
+    parser.add_argument(
+        "--bt-weakness-exit-industry-filter",
+        action="store_true",
+        default=False,
+        help="OOS 叠加弱势行业过滤",
+    )
+    parser.add_argument(
+        "--bt-weakness-exit-industry-bottom-pct",
+        type=float,
+        default=0.3,
+        help="OOS 行业底部阈值（默认：0.3）",
+    )
+
     # OOS 回测 ECT 参数
     parser.add_argument(
         "--bt-equity-curve-enabled",
@@ -3314,6 +3372,13 @@ def main():
                             time_stop_loss_enabled=args.time_stop_loss_enabled,
                             time_stop_loss_days=args.time_stop_loss_days,
                             time_stop_loss_profit_ratio=args.time_stop_loss_profit_ratio,
+                            weakness_exit_enabled=args.bt_weakness_exit_enabled,
+                            weakness_exit_threshold=args.bt_weakness_exit_threshold,
+                            weakness_exit_consecutive_days=args.bt_weakness_exit_consecutive_days,
+                            weakness_exit_min_holding_days=args.bt_weakness_exit_min_holding_days,
+                            weakness_exit_weights=args.bt_weakness_exit_weights,
+                            weakness_exit_industry_filter=args.bt_weakness_exit_industry_filter,
+                            weakness_exit_industry_bottom_pct=args.bt_weakness_exit_industry_bottom_pct,
                             enable_early_rebalance_on_empty=args.enable_early_rebalance_on_empty,
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,

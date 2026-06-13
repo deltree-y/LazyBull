@@ -110,6 +110,22 @@ CONFIG_SECTION_LAYOUT = [
         ],
     ),
     (
+        "weakness_exit",
+        "表现弱势退出",
+        [
+            "纯价格表现评估，零模型依赖。每日用累计收益排名、连续下跌天数、回撤深度、回升乏力 4 个维度识别弱势股并提前换出。",
+        ],
+        [
+            "weakness_exit_enabled",
+            "weakness_exit_threshold",
+            "weakness_exit_consecutive_days",
+            "weakness_exit_min_holding_days",
+            "weakness_exit_weights",
+            "weakness_exit_industry_filter",
+            "weakness_exit_industry_bottom_pct",
+        ],
+    ),
+    (
         "equity_curve",
         "权益曲线交易（ECT）",
         [
@@ -302,6 +318,22 @@ CONFIG_SECTION_RENDER_GROUPS = {
         (
             "移动止损子开关（trailing_pct 仅在 enabled=true 时生效）",
             ["stop_loss_trailing_enabled", "stop_loss_trailing_pct"],
+        ),
+    ],
+    "weakness_exit": [
+        (
+            "表现弱势退出总开关（关闭后以下参数整体不生效）",
+            [
+                "weakness_exit_enabled",
+                "weakness_exit_threshold",
+                "weakness_exit_consecutive_days",
+                "weakness_exit_min_holding_days",
+                "weakness_exit_weights",
+            ],
+        ),
+        (
+            "弱势行业过滤子开关（仅在 enabled=true 且 industry_filter=true 时生效）",
+            ["weakness_exit_industry_filter", "weakness_exit_industry_bottom_pct"],
         ),
     ],
     "equity_curve": [

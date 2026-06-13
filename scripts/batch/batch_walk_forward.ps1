@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -36,21 +36,21 @@ $wf_period_configs = @(
         SplitCount = 13
         FinalDate = "20251231"
         ContinueDays = 1
-        StartModelVersion = 18338#16447(6_20)#16542(6_10)#16501(5)#16706(4)#16665(3_20)
+        StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
         FinalDate = "20260209"
         ContinueDays = 1
-        StartModelVersion = 18367#16460(6_20)#16555(6_10)#16514(5)#16719(4)#16678(3_20)
+        StartModelVersion = 19234#19057#(0.035)#19234#(0.03)#19249#(0.04)
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
         FinalDate = "20260324"
         ContinueDays = 1
-        StartModelVersion = 18397#16474(6_20)#16569(6_10)#16528(5)#16733(4)#16692(3_20)
+        StartModelVersion = 19264#19147#(0.035)#19264#(0.03)#19279#(0.04)
     }
 )
 
@@ -67,10 +67,10 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(3,4,6)         #. XGB推荐9, LGB推荐5
+$n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.015,0.025,0.035)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.03)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -161,7 +161,7 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(20)            # 回测持仓 Top N
+$bt_top_n_list           = @(10)            # 回测持仓 Top N
 $bt_rebalance_freq_list  = @(20)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
@@ -174,9 +174,9 @@ $bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null =
 # ── OOS 仓位管理模式（仅在 $oos_backtest = $true 时参与回测）──────
 # equal：等权 | score：按分数比例 | kelly：凯利公式 | half_kelly：半凯利（更稳健）
 # 仅当 mode 为 kelly / half_kelly 时，Kelly 参数才会真正生效
-$position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
-$kelly_vol_window                 = 60         # Kelly 波动率窗口（交易日）
-$kelly_max_leverage_list          = @(0.1)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
+$position_sizing_list             = @('half_kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
+$kelly_vol_window_list           = @(60)      # Kelly 波动率窗口（交易日，可多值如 @(40, 60, 120)）
+$kelly_max_leverage_list          = @(0.2)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
 # 0426这里应为composite
@@ -241,7 +241,7 @@ $atr_multiplier_list              = @(2.5)   # ATR 倍数（仅启用 ATR 止损
 #    需同时满足 $enable_profit_based_holding = $true 且 $time_stop_loss_enabled = $true
 $time_stop_loss_enabled        = $false   # $true 启用 | $false 禁用
 # 以下参数仅在 $time_stop_loss_enabled = $true 时生效
-$time_stop_loss_days_list      = @(15)    # 触发时间止损的最低持有天数（交易日）
+$time_stop_loss_days_list      = @(5)    # 触发时间止损的最低持有天数（交易日）
 $time_stop_loss_profit_ratio_list = @(-0.02) # 时间止损利润阈值（当前盈亏低于此值触发，如-0.02=-2%）
 
 # 5) 盈利延续持有：仅在持有期满后进入该分支
@@ -284,11 +284,21 @@ $ma250_atr_scaling             = $true       # $true 启用 ATR 动态仓位缩�
 # 0426这里应为true
 $bt_stop_loss_enabled                 = $false   # $true 启用 | $false 禁用
 # 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
-$bt_stop_loss_drawdown_pct_list       = @(50) # 回撤止损阈值（%）
-$bt_stop_loss_consecutive_limit_down_list = @(4) # 连续跌停止损天数
+$bt_stop_loss_drawdown_pct_list       = @(20) # 回撤止损阈值（%）
+$bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
 $bt_stop_loss_trailing_enabled        = $false  # 移动止损子开关：$true 启用 | $false 禁用
 # 仅在 $bt_stop_loss_enabled = $true 且 $bt_stop_loss_trailing_enabled = $true 时生效
 $bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
+
+# ── OOS 表现弱势退出（总开关）───────────────────────────────
+$bt_weakness_exit_enabled                = $true  # $true 启用 | $false 禁用
+# 以下参数仅在 $bt_weakness_exit_enabled = $true 时生效
+$bt_weakness_exit_threshold_list         = @(0.4,0.6,0.8)     # 弱势评分触发阈值 [0,1]
+$bt_weakness_exit_consecutive_days_list  = @(3,5,7)       # 需连续弱势天数
+$bt_weakness_exit_min_holding_days_list  = @(3,5,7)       # 最低持有天数
+$bt_weakness_exit_weights                = "30,25,25,20"  # 4 维度权重
+$bt_weakness_exit_industry_filter        = $false     # 弱势行业过滤
+$bt_weakness_exit_industry_bottom_pct_list = @(0.3)   # 行业底部阈值
 
 # ── OOS ECT 权益曲线交易（总开关）────────────────────────────
 $bt_equity_curve_enabled                  = $false  # $true 启用 | $false 禁用
@@ -546,6 +556,10 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $bt_stop_loss_drawdown_pct_list.Length *
               $bt_stop_loss_trailing_pct_list.Length *
               $bt_stop_loss_consecutive_limit_down_list.Length *
+              $bt_weakness_exit_threshold_list.Length *
+              $bt_weakness_exit_consecutive_days_list.Length *
+              $bt_weakness_exit_min_holding_days_list.Length *
+              $bt_weakness_exit_industry_bottom_pct_list.Length *
               $bt_equity_curve_ma_short_list.Length *
               $bt_equity_curve_ma_long_list.Length *
               $bt_equity_curve_recovery_mode_list.Length *
@@ -569,6 +583,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $enable_early_rebalance_on_empty_list.Length *
               $industry_rotation_alpha_list.Length *
               $position_sizing_list.Length *
+              $kelly_vol_window_list.Length *
               $kelly_max_leverage_list.Length
 
 Write-Host ""
@@ -625,6 +640,10 @@ foreach ($bt_max_per_industry in $bt_max_per_industry_list) {
 foreach ($bt_stop_loss_drawdown_pct in $bt_stop_loss_drawdown_pct_list) {
 foreach ($bt_stop_loss_trailing_pct in $bt_stop_loss_trailing_pct_list) {
 foreach ($bt_stop_loss_consecutive_limit_down in $bt_stop_loss_consecutive_limit_down_list) {
+foreach ($bt_weakness_exit_threshold in $bt_weakness_exit_threshold_list) {
+foreach ($bt_weakness_exit_consecutive_days in $bt_weakness_exit_consecutive_days_list) {
+foreach ($bt_weakness_exit_min_holding_days in $bt_weakness_exit_min_holding_days_list) {
+foreach ($bt_weakness_exit_industry_bottom_pct in $bt_weakness_exit_industry_bottom_pct_list) {
 foreach ($bt_equity_curve_ma_short in $bt_equity_curve_ma_short_list) {
 foreach ($bt_equity_curve_ma_long in $bt_equity_curve_ma_long_list) {
 foreach ($bt_equity_curve_recovery_mode in $bt_equity_curve_recovery_mode_list) {
@@ -648,6 +667,7 @@ foreach ($take_profit_threshold in $take_profit_threshold_list) {
 foreach ($enable_early_rebalance_on_empty in $enable_early_rebalance_on_empty_list) {
 foreach ($industry_rotation_alpha in $industry_rotation_alpha_list) {
 foreach ($position_sizing in $position_sizing_list) {
+foreach ($kelly_vol_window in $kelly_vol_window_list) {
 foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     $count++
@@ -882,6 +902,17 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                 $pythonCmd += " --bt-stop-loss-trailing-enabled --bt-stop-loss-trailing-pct $bt_stop_loss_trailing_pct"
             }
         }
+        if ($bt_weakness_exit_enabled) {
+            $pythonCmd += " --bt-weakness-exit-enabled" +
+                          " --bt-weakness-exit-threshold $bt_weakness_exit_threshold" +
+                          " --bt-weakness-exit-consecutive-days $bt_weakness_exit_consecutive_days" +
+                          " --bt-weakness-exit-min-holding-days $bt_weakness_exit_min_holding_days" +
+                          " --bt-weakness-exit-weights $bt_weakness_exit_weights"
+            if ($bt_weakness_exit_industry_filter) {
+                $pythonCmd += " --bt-weakness-exit-industry-filter" +
+                              " --bt-weakness-exit-industry-bottom-pct $bt_weakness_exit_industry_bottom_pct"
+            }
+        }
         if ($bt_equity_curve_enabled) {
             $btEquityCurveDrawdownArgs = $bt_equity_curve_drawdown_thresholds -join " "
             $btEquityCurveExposureArgs = $bt_equity_curve_exposure_levels -join " "
@@ -955,7 +986,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

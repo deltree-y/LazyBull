@@ -141,6 +141,17 @@ class TradingConfig:
     time_stop_loss_days: int = 15  # 触发时间止损的最低持有天数（交易日）
     time_stop_loss_profit_ratio: float = -0.02  # 时间止损利润阈值（当前盈亏低于此值触发）
 
+    # ── 表现弱势退出 ──
+    # 纯价格表现评估，零模型依赖。每日用累计收益排名、连续下跌天数、
+    # 回撤深度、回升乏力 4 个维度识别弱势股并提前换出
+    weakness_exit_enabled: bool = False  # 是否启用表现弱势退出
+    weakness_exit_threshold: float = 0.6  # 弱势评分触发阈值 [0, 1]
+    weakness_exit_consecutive_days: int = 3  # 需连续弱势天数
+    weakness_exit_min_holding_days: int = 5  # 最低持有天数（交易日）
+    weakness_exit_weights: str = "30,25,25,20"  # 4 维度权重（逗号分隔，百分比）
+    weakness_exit_industry_filter: bool = False  # 是否叠加弱势行业过滤
+    weakness_exit_industry_bottom_pct: float = 0.3  # 行业底部百分位阈值
+
     # ── 整体止盈 ──
     take_profit_threshold: Optional[float] = None  # 整体浮盈阈值（None=禁用）
     take_profit_refill: bool = True  # 整体止盈后是否自动补位
@@ -495,6 +506,50 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=int,
         default=2,
         help="连续跌停触发天数（默认：2）",
+    )
+
+    # ── 表现弱势退出 ──
+    parser.add_argument(
+        "--weakness-exit-enabled",
+        action="store_true",
+        default=False,
+        help="启用表现弱势退出（纯价格表现评估，零模型依赖）",
+    )
+    parser.add_argument(
+        "--weakness-exit-threshold",
+        type=float,
+        default=0.6,
+        help="弱势评分触发阈值 [0,1]（默认：0.6）",
+    )
+    parser.add_argument(
+        "--weakness-exit-consecutive-days",
+        type=int,
+        default=3,
+        help="需连续弱势天数（默认：3）",
+    )
+    parser.add_argument(
+        "--weakness-exit-min-holding-days",
+        type=int,
+        default=5,
+        help="最低持有天数（默认：5）",
+    )
+    parser.add_argument(
+        "--weakness-exit-weights",
+        type=str,
+        default="30,25,25,20",
+        help="4 维度权重，逗号分隔百分比（默认：30,25,25,20）",
+    )
+    parser.add_argument(
+        "--weakness-exit-industry-filter",
+        action="store_true",
+        default=False,
+        help="叠加弱势行业过滤（默认：关闭）",
+    )
+    parser.add_argument(
+        "--weakness-exit-industry-bottom-pct",
+        type=float,
+        default=0.3,
+        help="行业底部百分位阈值（默认：0.3）",
     )
 
     # ── ECT ──
