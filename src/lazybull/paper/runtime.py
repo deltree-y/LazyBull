@@ -170,6 +170,11 @@ def execute_trade_workflow(
         take_profit_actions=take_profit_actions,
     )
 
+    # 持久化弱势退出监控状态（跨日连续计数）
+    weakness_monitor = getattr(runner, "weakness_exit_monitor", None)
+    if weakness_monitor is not None:
+        storage.save_weakness_exit_state(weakness_monitor.get_state())
+
     _report("执行 T0")
     t0_targets, ect_exposure, ect_reason, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
         runner, corrected_date, config

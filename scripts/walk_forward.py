@@ -1548,6 +1548,13 @@ def write_walk_forward_summary(
                 "bt_stop_loss_trailing_enabled",
                 "bt_stop_loss_trailing_pct",
                 "bt_stop_loss_consecutive_limit_down",
+                "bt_weakness_exit_enabled",
+                "bt_weakness_exit_threshold",
+                "bt_weakness_exit_consecutive_days",
+                "bt_weakness_exit_min_holding_days",
+                "bt_weakness_exit_weights",
+                "bt_weakness_exit_industry_filter",
+                "bt_weakness_exit_industry_bottom_pct",
                 "bt_equity_curve_enabled",
                 "bt_equity_curve_drawdown_thresholds",
                 "bt_equity_curve_exposure_levels",
@@ -1656,6 +1663,18 @@ def write_walk_forward_summary(
             )
         elif not params.get("bt_stop_loss_trailing_enabled"):
             clear("bt_stop_loss_trailing_pct")
+
+        if not params.get("bt_weakness_exit_enabled"):
+            clear(
+                "bt_weakness_exit_threshold",
+                "bt_weakness_exit_consecutive_days",
+                "bt_weakness_exit_min_holding_days",
+                "bt_weakness_exit_weights",
+                "bt_weakness_exit_industry_filter",
+                "bt_weakness_exit_industry_bottom_pct",
+            )
+        elif not params.get("bt_weakness_exit_industry_filter"):
+            clear("bt_weakness_exit_industry_bottom_pct")
 
         if not params.get("bt_equity_curve_enabled"):
             clear(
@@ -1868,6 +1887,21 @@ def write_walk_forward_summary(
         "bt_stop_loss_trailing_pct": getattr(args, 'bt_stop_loss_trailing_pct', 15.0),
         "bt_stop_loss_consecutive_limit_down": getattr(
             args, 'bt_stop_loss_consecutive_limit_down', 2
+        ),
+        "bt_weakness_exit_enabled": getattr(args, 'bt_weakness_exit_enabled', False),
+        "bt_weakness_exit_threshold": getattr(args, 'bt_weakness_exit_threshold', 0.6),
+        "bt_weakness_exit_consecutive_days": getattr(
+            args, 'bt_weakness_exit_consecutive_days', 3
+        ),
+        "bt_weakness_exit_min_holding_days": getattr(
+            args, 'bt_weakness_exit_min_holding_days', 5
+        ),
+        "bt_weakness_exit_weights": getattr(args, 'bt_weakness_exit_weights', "30,25,25,20"),
+        "bt_weakness_exit_industry_filter": getattr(
+            args, 'bt_weakness_exit_industry_filter', False
+        ),
+        "bt_weakness_exit_industry_bottom_pct": getattr(
+            args, 'bt_weakness_exit_industry_bottom_pct', 0.3
         ),
         "bt_equity_curve_enabled": getattr(args, 'bt_equity_curve_enabled', False),
         "bt_equity_curve_drawdown_thresholds": getattr(

@@ -238,7 +238,7 @@ class Storage:
                 message=".*DataFrame concatenation with empty or all-NA entries.*",
             )
             result = pd.concat(dfs, ignore_index=True)
-        logger.info(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
+        logger.debug(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
         return result
 
     def save_clean_by_date(
@@ -334,7 +334,7 @@ class Storage:
                 message=".*DataFrame concatenation with empty or all-NA entries.*",
             )
             result = pd.concat(dfs, ignore_index=True)
-        logger.info(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
+        logger.debug(f"加载了 {len(dfs)} 个分区文件，共 {len(result)} 条记录")
         return result
 
     def list_partitions(self, layer: str, name: str) -> List[str]:

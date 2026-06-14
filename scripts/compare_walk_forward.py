@@ -115,6 +115,13 @@ COL_NAMES = {
     "bt_stop_loss_trailing_enabled": "回测移动止损",
     "bt_stop_loss_trailing_pct":  "回测移动止损%",
     "bt_stop_loss_consecutive_limit_down": "回测连续跌停止损",
+    "bt_weakness_exit_enabled":    "回测弱势退出",
+    "bt_weakness_exit_threshold":  "回测弱势退出阈值",
+    "bt_weakness_exit_consecutive_days": "回测弱势退出连续天数",
+    "bt_weakness_exit_min_holding_days": "回测弱势退出最低持有",
+    "bt_weakness_exit_weights":    "回测弱势退出权重",
+    "bt_weakness_exit_industry_filter": "回测弱势退出行业过滤",
+    "bt_weakness_exit_industry_bottom_pct": "回测弱势退出行业阈值",
     "bt_equity_curve_enabled":    "回测ECT",
     "bt_equity_curve_drawdown_thresholds": "回测ECT回撤阈值",
     "bt_equity_curve_exposure_levels": "回测ECT仓位系数",
@@ -303,6 +310,10 @@ PARAM_COLS = [
     "bt_stop_loss_enabled", "bt_stop_loss_drawdown_pct",
     "bt_stop_loss_trailing_enabled", "bt_stop_loss_trailing_pct",
     "bt_stop_loss_consecutive_limit_down",
+    "bt_weakness_exit_enabled", "bt_weakness_exit_threshold",
+    "bt_weakness_exit_consecutive_days", "bt_weakness_exit_min_holding_days",
+    "bt_weakness_exit_weights",
+    "bt_weakness_exit_industry_filter", "bt_weakness_exit_industry_bottom_pct",
     "bt_equity_curve_enabled", "bt_equity_curve_drawdown_thresholds",
     "bt_equity_curve_exposure_levels", "bt_equity_curve_ma_short",
     "bt_equity_curve_ma_long", "bt_equity_curve_recovery_mode",
@@ -612,6 +623,13 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
             "bt_stop_loss_trailing_enabled",
             "bt_stop_loss_trailing_pct",
             "bt_stop_loss_consecutive_limit_down",
+            "bt_weakness_exit_enabled",
+            "bt_weakness_exit_threshold",
+            "bt_weakness_exit_consecutive_days",
+            "bt_weakness_exit_min_holding_days",
+            "bt_weakness_exit_weights",
+            "bt_weakness_exit_industry_filter",
+            "bt_weakness_exit_industry_bottom_pct",
             "bt_equity_curve_enabled",
             "bt_equity_curve_drawdown_thresholds",
             "bt_equity_curve_exposure_levels",
@@ -724,6 +742,18 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
     elif not _is_true_param_value(params.get("bt_stop_loss_trailing_enabled")):
         clear("bt_stop_loss_trailing_pct")
 
+    if not _is_true_param_value(params.get("bt_weakness_exit_enabled")):
+        clear(
+            "bt_weakness_exit_threshold",
+            "bt_weakness_exit_consecutive_days",
+            "bt_weakness_exit_min_holding_days",
+            "bt_weakness_exit_weights",
+            "bt_weakness_exit_industry_filter",
+            "bt_weakness_exit_industry_bottom_pct",
+        )
+    elif not _is_true_param_value(params.get("bt_weakness_exit_industry_filter")):
+        clear("bt_weakness_exit_industry_bottom_pct")
+
     if not _is_true_param_value(params.get("bt_equity_curve_enabled")):
         clear(
             "bt_equity_curve_drawdown_thresholds",
@@ -812,6 +842,9 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
             "early_exit_mode",
             "early_exit_strength_protect_threshold",
             "early_exit_max_reprieves",
+            "time_stop_loss_enabled",
+            "time_stop_loss_days",
+            "time_stop_loss_profit_ratio",
         )
     else:
         profit_extension_mode = _normalize_param_text(params.get("profit_extension_mode"))
@@ -830,6 +863,9 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
                 "early_exit_strength_protect_threshold",
                 "early_exit_max_reprieves",
             )
+
+        if not _is_true_param_value(params.get("time_stop_loss_enabled")):
+            clear("time_stop_loss_days", "time_stop_loss_profit_ratio")
 
     if _is_missing_param_value(params.get("take_profit_threshold")):
         clear("take_profit_refill")

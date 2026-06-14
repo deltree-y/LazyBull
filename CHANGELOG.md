@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.73.8] - 2026-06-13
+
+### Bugfix
+
+- **纸面交易 weakness_exit 在 enable_profit_based_holding=False 时永不触发**：
+  - `evaluate_holding_period_actions()` 中，弱势退出评估代码仅存在于
+    `enable_profit_based_holding=True` 分支内；当该开关为 False 时方法提前
+    `return set(), sell_actions`，导致弱势退出逻辑被完全跳过
+  - 修复：在 `enable_profit_based_holding=False` 的提前返回路径中补齐
+    `pnl_price_map` 构建与 `_eval_weakness_exit_paper()` 调用，使弱势退出
+    真正独立于盈亏动态持仓开关（与回测行为对齐）
+
+- **纸面交易 weakness_exit 连续弱势计数（consec）始终为 1，永不累加**：
+  - 根因：`WeaknessExitMonitor._state` 为纯内存状态，每次 `paper_trade.py run`
+    都创建新的 `PaperTradingRunner` → 新的 `WeaknessExitMonitor`，`_state` 每次从零开始
+  - 修复：新增 `WeaknessExitMonitor.get_state()` / `restore_state()` 序列化接口；
+    `PaperStorage` 新增 `save_weakness_exit_state()` / `load_weakness_exit_state()`；
+    `execute_trade_workflow` 每日评估后自动持久化，`_ensure_weakness_exit_monitor`
+    初始化时自动从磁盘恢复跨日状态
+  - `_eval_weakness_exit_paper` 新增 INFO 级跟踪日志（holding<min_hold 时输出 score/consec/各维子分）
+
+- **`storage.py` 分区加载日志过于频繁**：`logger.info` → `logger.debug`
+
+## [0.73.7] - 2026-06-13
+
+### Bugfix
+
+- **批量回测汇总遗漏弱势退出参数**：
+  - `walk_forward.py` `write_walk_forward_summary()` 的 `train_params_cols` 中补上
+    `bt_weakness_exit_enabled/threshold/consecutive_days/min_holding_days/weights/industry_filter/industry_bottom_pct`
+    共 7 个参数列，之前这些列未被写入 summary CSV，导致 `compare_walk_forward.py` 分组去重时
+    无法区分不同弱势退出参数的实验，多轮参数扫描被错误合并为一组结果
+  - `_sanitize_train_params()`（walk_forward.py 内）同步补上 `oos_backtest` 关闭时的
+    `bt_weakness_exit_*` 清除逻辑，以及 `bt_weakness_exit_enabled` 关闭时的子参数清除逻辑
+  - `compare_walk_forward.py` `_sanitize_summary_train_params()` 补上 `enable_profit_based_holding`
+    关闭时的 `time_stop_loss_*` 清除逻辑，以及 `time_stop_loss_enabled` 关闭时的子参数清除逻辑
+
 ## [0.73.6] - 2026-06-10
 
 ### 优化

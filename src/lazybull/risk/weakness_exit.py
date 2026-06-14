@@ -196,6 +196,21 @@ class WeaknessExitMonitor:
         """获取某只持仓的当前连续弱势天数"""
         return self._state.get(stock, {}).get("consecutive_weak_days", 0)
 
+    def get_state(self) -> dict:
+        """导出监控器状态（用于持久化）。"""
+        return {"_state": dict(self._state)}
+
+    def restore_state(self, saved: dict) -> None:
+        """从持久化数据恢复监控器状态。"""
+        if not isinstance(saved, dict):
+            return
+        state_data = saved.get("_state")
+        if isinstance(state_data, dict):
+            self._state = dict(state_data)
+            logger.info(
+                f"弱势退出监控器状态已恢复: {len(self._state)} 只股票"
+            )
+
     # ── 维度计算（内部方法）───────────────────────────────────────
 
     def _calc_pnl_rank(

@@ -293,9 +293,9 @@ $bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
 # ── OOS 表现弱势退出（总开关）───────────────────────────────
 $bt_weakness_exit_enabled                = $true  # $true 启用 | $false 禁用
 # 以下参数仅在 $bt_weakness_exit_enabled = $true 时生效
-$bt_weakness_exit_threshold_list         = @(0.4,0.6,0.8)     # 弱势评分触发阈值 [0,1]
-$bt_weakness_exit_consecutive_days_list  = @(3,5,7)       # 需连续弱势天数
-$bt_weakness_exit_min_holding_days_list  = @(3,5,7)       # 最低持有天数
+$bt_weakness_exit_threshold_list         = @(0.47,0.49,0.51,0.53)     # 弱势评分触发阈值 [0,1]
+$bt_weakness_exit_consecutive_days_list  = @(5,6,7)       # 需连续弱势天数
+$bt_weakness_exit_min_holding_days_list  = @(2,4,5)       # 最低持有天数
 $bt_weakness_exit_weights                = "30,25,25,20"  # 4 维度权重
 $bt_weakness_exit_industry_filter        = $false     # 弱势行业过滤
 $bt_weakness_exit_industry_bottom_pct_list = @(0.3)   # 行业底部阈值

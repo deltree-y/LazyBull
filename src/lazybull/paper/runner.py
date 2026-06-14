@@ -2472,6 +2472,15 @@ class PaperTradingRunner:
             industry_bottom_pct=float(config.get("weakness_exit_industry_bottom_pct", 0.3)),
         )
         self.weakness_exit_monitor = WeaknessExitMonitor(wc)
+
+        # 从磁盘恢复跨日连续弱势计数状态
+        try:
+            saved = self.paper_storage.load_weakness_exit_state()
+            if saved:
+                self.weakness_exit_monitor.restore_state(saved)
+        except Exception:
+            pass
+
         logger.info(f"纸面交易弱势退出监控器已初始化: threshold={wc.threshold}")
 
     def _eval_weakness_exit_paper(
@@ -2493,14 +2502,17 @@ class PaperTradingRunner:
             daily_df = self.loader.load_clean_daily(
                 start_date=pos.buy_date, end_date=trade_date
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"弱势退出: {ts_code} 加载日线数据失败 buy={pos.buy_date} trade={trade_date}: {exc}")
             return False, {}
 
         if daily_df is None or daily_df.empty:
+            logger.debug(f"弱势退出: {ts_code} 日线数据为空 buy={pos.buy_date} trade={trade_date}")
             return False, {}
 
         stock_daily = daily_df[daily_df["ts_code"] == ts_code]
         if stock_daily.empty:
+            logger.debug(f"弱势退出: {ts_code} 在日线数据中未找到 buy={pos.buy_date} trade={trade_date}")
             return False, {}
 
         # 构建后复权价格序列
@@ -2513,6 +2525,7 @@ class PaperTradingRunner:
         }
 
         if len(pnl_prices) < 2:
+            logger.debug(f"弱势退出: {ts_code} 有效价格数据不足({len(pnl_prices)}条) holding={holding_days}")
             return False, {}
 
         sorted_dates = sorted(pnl_prices.keys())
@@ -2538,14 +2551,33 @@ class PaperTradingRunner:
 
         consec = monitor.update(ts_code, trade_date, weakness_score)
 
-        # 未达最低持有天数：仅跟踪不触发
+        # 未达最低持有天数：仅跟踪不触发（连续弱势计数已从首日开始累计）
         min_hold = monitor.config.min_holding_days
         if holding_days < min_hold:
+            logger.info(
+                f"弱势退出[跟踪]: {ts_code} holding={holding_days}(<{min_hold}) "
+                f"score={weakness_score:.3f} consec={consec} "
+                f"rank={breakdown.get('pnl_rank', 0):.2f} "
+                f"streak={breakdown.get('down_streak', 0):.2f} "
+                f"dd={breakdown.get('drawdown', 0):.2f} "
+                f"recov={breakdown.get('recovery', 0):.2f}"
+            )
             return False, breakdown
 
         if weakness_score >= monitor.config.threshold:
             if consec >= monitor.config.consecutive_days:
                 return True, breakdown
+            else:
+                logger.info(
+                    f"弱势退出[未达连续天数]: {ts_code} holding={holding_days} "
+                    f"score={weakness_score:.3f}(>={monitor.config.threshold}) "
+                    f"consec={consec}(<{monitor.config.consecutive_days})"
+                )
+        else:
+            logger.debug(
+                f"弱势退出[未达阈值]: {ts_code} holding={holding_days} "
+                f"score={weakness_score:.3f}(<{monitor.config.threshold}) consec={consec}"
+            )
 
         return False, breakdown
 
@@ -2589,12 +2621,45 @@ class PaperTradingRunner:
         if not config.get("enable_profit_based_holding", False):
             sell_actions = []
             min_holding_for_sell = max(1, rebalance_freq - 1)
+            # 构建 pnl_price_map 供弱势退出评估使用（独立于 enable_profit_based_holding）
+            pnl_price_map = self._build_pnl_price_map_for_date(trade_date, price_type="close")
             for ts_code, pos in positions.items():
                 if ts_code in exclude_stocks:
                     continue
                 holding_days = self._calc_holding_days(
                     pos.buy_date, trade_date, trade_dates_list
                 )
+                # ── 表现弱势退出：纯价格表现评估，独立于持有期逻辑 ──
+                weakness_monitor = getattr(self, "weakness_exit_monitor", None)
+                if weakness_monitor is not None:
+                    weak_exit, weak_detail = self._eval_weakness_exit_paper(
+                        ts_code=ts_code,
+                        trade_date=trade_date,
+                        pos=pos,
+                        holding_days=holding_days,
+                        all_positions=positions,
+                        pnl_price_map=pnl_price_map,
+                    )
+                    if weak_exit:
+                        sell_shares = (pos.shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+                        if sell_shares > 0:
+                            detail_str = (
+                                f"评分={weak_detail.get('total', 0):.3f}, "
+                                f"排名={weak_detail.get('pnl_rank', 0):.2f}, "
+                                f"连跌={weak_detail.get('down_streak', 0):.2f}, "
+                                f"回撤={weak_detail.get('drawdown', 0):.2f}, "
+                                f"回升={1 - weak_detail.get('recovery', 0):.2f}"
+                            )
+                            sell_actions.append({
+                                "ts_code": ts_code,
+                                "shares": sell_shares,
+                                "reason": f"表现弱势退出: {detail_str}",
+                                "can_execute": True,
+                            })
+                            logger.warning(
+                                f"  表现弱势退出: {ts_code} 持有{holding_days}天, {detail_str}"
+                            )
+                        continue
                 if holding_days < min_holding_for_sell:
                     continue
                 sell_shares = (pos.shares // SHARE_LOT_SIZE) * SHARE_LOT_SIZE

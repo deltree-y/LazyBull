@@ -947,6 +947,35 @@ class PaperStorage:
         
         return state
     
+    def save_weakness_exit_state(self, state: dict) -> None:
+        """保存弱势退出监控状态
+
+        Args:
+            state: 弱势退出状态字典
+        """
+        file_path = self.state_path / "weakness_exit_state.json"
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+
+        logger.debug(f"保存弱势退出状态: {file_path}")
+
+    def load_weakness_exit_state(self) -> Optional[dict]:
+        """读取弱势退出监控状态
+
+        Returns:
+            弱势退出状态字典，不存在返回None
+        """
+        file_path = self.state_path / "weakness_exit_state.json"
+
+        if not file_path.exists():
+            return None
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+
+        return state
+    
     def save_last_trade_date(self, trade_date: str) -> None:
         """保存最近执行交易的日期（供 trade next 等命令推算下一交易日）"""
         file_path = self.state_path / "last_trade_date.json"
