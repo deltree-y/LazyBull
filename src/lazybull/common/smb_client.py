@@ -63,10 +63,19 @@ class SMBFileReader:
         from smbprotocol.session import Session
         from smbprotocol.tree import TreeConnect
 
+        # 确定实际使用的凭证：匿名访问用空字符串，避免 STATUS_PASSWORD_EXPIRED
+        username = self.username if self.username != "guest" else ""
+        password = self.password if self.username != "guest" else ""
+
         try:
             connection = Connection(uuid.uuid4(), self.host, self.port)
             connection.connect(timeout=self.timeout)
-            session = Session(connection, username=self.username, password=self.password)
+            session = Session(
+                connection,
+                username=username,
+                password=password,
+                require_encryption=False,
+            )
             session.connect()
             tree = TreeConnect(session, self.share)
             tree.connect()
