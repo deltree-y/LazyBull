@@ -42,15 +42,21 @@ _paper_remote_url = get_paper_remote()
 if _paper_remote_url:
     try:
         _smb_params = parse_smb_url(_paper_remote_url)
+        # 优先从环境变量读取 SMB 凭证，否则使用 guest（可能被 NAS 禁用）
+        _smb_user = os.getenv("LAZYBULL_SMB_USER", "")
+        _smb_pass = os.getenv("LAZYBULL_SMB_PASS", "")
         _smb_reader = SMBFileReader(
             host=_smb_params["host"],
             share=_smb_params["share"],
             path_prefix=_smb_params["path"],
+            username=_smb_user,
+            password=_smb_pass,
         )
+        _user_display = _smb_user if _smb_user else "guest"
         print(
             f"[LCD35] SMB 远端读取器已初始化: "
             f"host={_smb_params['host']}, share={_smb_params['share']}, "
-            f"path={_smb_params['path']}"
+            f"user={_user_display}, path={_smb_params['path']}"
         )
     except Exception as _smb_init_exc:
         print(f"[LCD35] SMB 远端读取器初始化失败: {_smb_init_exc}")

@@ -1,9 +1,11 @@
 # 树莓派 LCD35 远端数据配置
 # LCD35 启动时需加载本文件以启用 SMB 远端数据读取
+#
+# SMB 认证: 通过环境变量 LAZYBULL_SMB_USER / LAZYBULL_SMB_PASS 提供凭证
+#   未设置时默认使用 guest 匿名访问（群晖需启用 Guest 账户）
 
 data:
-  # 远端 paper 数据 SMB 路径
-  # 格式: //host/share/path
+  # 远端 paper 数据 SMB 路径，格式: //host/share/path
   paper_remote: "//192.168.1.21/docker/lazybull/data/paper"
 
   # LCD35 本地工作目录（日志、日内图缓存等）
