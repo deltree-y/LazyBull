@@ -224,7 +224,11 @@ def _render(state: DisplayState) -> None:
             for s in items:
                 pct_str = _fmt_pct(s['pnl_pct'])
                 color = _pct_color(s['pnl_pct'])
-                line = f"{s['name']} {s['code']} {pct_str}"
+                # name==code 时只显示代码+涨跌幅，避免 "002414 002414" 重复
+                if s.get('name') and s['name'] != s['code']:
+                    line = f"{s['name']} {s['code']} {pct_str}"
+                else:
+                    line = f"{s['code']} {pct_str}"
                 bbox_l = draw.textbbox((0, 0), line, font=font_rank)
                 lw = bbox_l[2] - bbox_l[0]
                 draw.text((rp_right - pad - lw, y), line,

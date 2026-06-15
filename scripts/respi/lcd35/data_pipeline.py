@@ -383,6 +383,20 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
     pct_col = next((c for c in ('涨跌幅', 'pct_chg', 'PCT_CHG', '涨跌幅%') if c in df.columns), None)
     time_col = next((c for c in ('更新时间', '时间', 'time', 'TIME') if c in df.columns), None)
 
+    # 诊断日志：输出 eFinance 实际列名和首个匹配行样本，便于排查 NAME 字段问题
+    _emit_diag_once(
+        "efinance_columns_diag",
+        f"E快照列名: {list(df.columns)}, name_col={name_col}, code_col={code_col}",
+        stderr=False,
+    )
+    if not df.empty:
+        _sample_row = df.iloc[0].to_dict()
+        _emit_diag_once(
+            "efinance_sample_row_diag",
+            f"E快照首行样本: { {k: v for k, v in _sample_row.items() if v is not None} }",
+            stderr=False,
+        )
+
     if code_col is None or price_col is None:
         _emit_diag_once(
             "efinance_holdings_columns_missing",
@@ -401,10 +415,12 @@ def _fetch_realtime_quotes_efinance(ts_codes: list[str]) -> Optional[pd.DataFram
         time_text = str(row.get(time_col, now_time)) if time_col else now_time
         if " " in time_text:
             time_text = time_text.split(" ")[-1]
+        # 名称获取：name_col 可能返回代码而非名称，统一取原始值由展示层清洗
+        raw_name = str(row.get(name_col, '')).strip() if name_col else ''
         rows.append(
             {
                 'TS_CODE': ts_code,
-                'NAME': str(row.get(name_col, '')) if name_col else '',
+                'NAME': raw_name,
                 'PRICE': row.get(price_col),
                 'PRE_CLOSE': row.get(pre_close_col) if pre_close_col else None,
                 'PCT_CHG': row.get(pct_col) if pct_col else None,
@@ -1003,12 +1019,13 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
             continue
         pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
         code = ts_code.split('.')[0]
-        # 名称清理：如果 NAME 为空、纯数字（像是代码），或短于2字符，用代码作为显示名
-        display_name = str(name or '').strip()
-        if not display_name or display_name.isdigit() or len(display_name) < 2:
-            display_name = code
+        # 名称清洗：仅当 NAME 含中文且长度合理时才用；否则直接用代码兜底
+        raw_name = str(name or '').strip()
+        has_cjk = any('\u4e00' <= ch <= '\u9fff' for ch in raw_name)
+        if has_cjk and len(raw_name) <= 6:
+            display_name = raw_name
         else:
-            display_name = display_name[:4]
+            display_name = code
         stocks.append({'name': display_name, 'code': code, 'pnl_pct': pnl_pct})
 
     _trace_diag(
