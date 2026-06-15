@@ -108,16 +108,15 @@ class TestSMBFileReader:
         assert result is None
 
     def test_file_exists_true(self):
+        """_open_and_read 返回非空字节 -> True。"""
         reader = SMBFileReader("1.2.3.4", "share", "prefix")
-        mock_conn = MagicMock()
-        reader._connect = MagicMock(return_value=mock_conn)
+        reader._open_and_read = MagicMock(return_value=b"data")
         assert reader.file_exists("state/account.json") is True
 
     def test_file_exists_false(self):
+        """_open_and_read 抛出 FileNotFoundError -> False。"""
         reader = SMBFileReader("1.2.3.4", "share")
-        mock_conn = MagicMock()
-        mock_conn.getAttributes.side_effect = Exception("not found")
-        reader._connect = MagicMock(return_value=mock_conn)
+        reader._open_and_read = MagicMock(side_effect=FileNotFoundError("not found"))
         assert reader.file_exists("nonexistent.json") is False
 
     def test_cache_set_and_get(self):

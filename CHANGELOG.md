@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
   - `config.py` 新增 `get_paper_remote()` / `get_respi_local_dir()` 配置函数
   - 新增 `configs/runtime_respi.yaml` — 树莓派 LCD35 专用运行时配置
   - 新增 `tests/test_smb_client.py` — SMB 客户端单元测试
-- **pysmb 依赖**：新增 `pysmb ^1.2` 依赖
+- **smbprotocol 依赖**：新增 `smbprotocol ^1.9` 依赖（SMB2/3 协议支持）
 
 ### Changed
 
