@@ -2449,6 +2449,37 @@ class PaperTradingRunner:
                     )
         return protected
 
+    def _add_weakness_exit_refill(
+        self,
+        ts_code: str,
+        trade_date: str,
+        pos,
+    ) -> None:
+        """弱勢退出后生成补位买入计划，在后续 T1 中自动补仓。"""
+        from .models import PendingBuy
+
+        pending_buys = self.paper_storage.load_pending_buys() or []
+        fallback_weight = 1.0 / max(
+            len([pb for pb in pending_buys if getattr(pb, "reason", "").startswith("补位")]) + 1,
+            1,
+        )
+        next_date = self._get_next_trade_date(trade_date) or trade_date
+        pending_buys.append(
+            PendingBuy(
+                ts_code=ts_code,
+                target_weight=fallback_weight,
+                reason="补位-弱勢退出",
+                create_date=next_date,
+                attempts=0,
+                last_attempt_date="",
+                original_signal_date=trade_date,
+            )
+        )
+        self.paper_storage.save_pending_buys(pending_buys)
+        logger.info(
+            f"  弱勢退出补位: 新增买入槽位 {ts_code} (权重 {fallback_weight:.4f})"
+        )
+
     def _ensure_weakness_exit_monitor(self, config: dict):
         """延迟初始化弱势退出监控器（从配置字典创建）。"""
         if getattr(self, "weakness_exit_monitor", None) is not None:
@@ -2659,6 +2690,12 @@ class PaperTradingRunner:
                             logger.warning(
                                 f"  表现弱势退出: {ts_code} 持有{holding_days}天, {detail_str}"
                             )
+                            # 生成补位买入计划，在后续 T1 中自动补仓
+                            #self._add_weakness_exit_refill(
+                            #    ts_code=ts_code,
+                            #    trade_date=trade_date,
+                            #    pos=pos,    # 弱势股卖出后,传入 pos 以便补位逻辑参考持仓信息
+                            #)
                         continue
                 if holding_days < min_holding_for_sell:
                     continue

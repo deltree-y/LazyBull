@@ -3096,6 +3096,13 @@ class BacktestEngine:
                         "sell_type": "weakness_exit",
                         "weakness_detail": weakness_detail,
                     }
+                    # 记录卖出槽位权重，用于后续自动补位
+                    slot_weight = self._get_position_weight_for_planning(
+                        date, stock, portfolio_value=portfolio_value_for_planning
+                    )*0.01  # 弱势退出的补位权重较小，避免过度补位导致频繁换入换出（可调整系数以适应不同策略）
+                    holding_period_sell_slot_weights.append(
+                        {"stock": stock, "weight": slot_weight}
+                    )
                     continue
 
             if self.enable_profit_based_holding:
