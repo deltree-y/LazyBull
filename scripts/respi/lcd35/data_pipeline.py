@@ -1003,7 +1003,13 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
             continue
         pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
         code = ts_code.split('.')[0]
-        stocks.append({'name': name[:4], 'code': code, 'pnl_pct': pnl_pct})
+        # 名称清理：如果 NAME 为空、纯数字（像是代码），或短于2字符，用代码作为显示名
+        display_name = str(name or '').strip()
+        if not display_name or display_name.isdigit() or len(display_name) < 2:
+            display_name = code
+        else:
+            display_name = display_name[:4]
+        stocks.append({'name': display_name, 'code': code, 'pnl_pct': pnl_pct})
 
     _trace_diag(
         "排行匹配统计: "
