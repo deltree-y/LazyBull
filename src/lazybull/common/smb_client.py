@@ -98,8 +98,15 @@ class SMBFileReader:
         """
         from smbprotocol.open import (
             Open, CreateDisposition, FileAttributes,
-            ImpersonationLevel, ShareAccess, AccessMask,
+            ImpersonationLevel, ShareAccess,
         )
+
+        # AccessMask 在不同版本 smbprotocol 中路径可能不同，用常量兜底
+        try:
+            from smbprotocol.open import AccessMask
+            _GENERIC_READ = AccessMask.GENERIC_READ
+        except ImportError:
+            _GENERIC_READ = 0x80000000  # Windows GENERIC_READ
 
         remote_path = self._build_remote_path(relative_path)
         connection, tree = self._connect_all()
@@ -107,7 +114,7 @@ class SMBFileReader:
             open_file = Open(tree, remote_path)
             open_file.create(
                 ImpersonationLevel.Impersonation,
-                AccessMask.GENERIC_READ,
+                _GENERIC_READ,
                 ShareAccess.FILE_SHARE_READ,
                 CreateDisposition.FILE_OPEN,
                 FileAttributes.FILE_ATTRIBUTE_NORMAL,
