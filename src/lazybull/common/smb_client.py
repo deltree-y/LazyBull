@@ -2,14 +2,17 @@
 # -*- coding: utf-8 -*-
 """SMB 远端文件读取客户端。
 
-为 LCD35 从群晖 NAS 读取 paper 数据提供轻量 SMB2/3 协议访问，
-基于 smbprotocol 库（纯 Python SMB2/3 实现）。
-设计原则：每交易日仅读取一次，每次独立建立连接。
+通过系统 smbclient 命令（SMB2/3 协议）从群晖 NAS 读取 paper 数据。
+可靠性优于纯 Python SMB 库（自动处理 SPNEGO/Kerberos/NTLM 认证协商）。
+
+依赖：树莓派需安装 smbclient（sudo apt install smbclient）。
 """
 
 import io
 import json
-import uuid
+import os
+import subprocess
+import tempfile
 from typing import Optional
 
 import pandas as pd
@@ -17,10 +20,9 @@ from loguru import logger
 
 
 class SMBFileReader:
-    """SMB 远端文件只读客户端（SMB2/3 协议）。
+    """SMB 远端文件只读客户端（基于 smbclient 命令行）。
 
-    每次调用独立建立连接→读取→断开。
-    适用于低频读取场景（每交易日一次）。
+    每次调用独立执行 smbclient 命令。
 
     Usage:
         reader = SMBFileReader("192.168.1.21", "docker", "lazybull/data/paper")
@@ -32,7 +34,7 @@ class SMBFileReader:
         host: str,
         share: str,
         path_prefix: str = "",
-        username: str = "guest",
+        username: str = "",
         password: str = "",
         port: int = 445,
         timeout: int = 15,
@@ -46,125 +48,130 @@ class SMBFileReader:
         self.timeout = timeout
         self._cache: dict[str, tuple[float, object]] = {}
 
+    @property
+    def _smb_url(self) -> str:
+        """构造 SMB URL。"""
+        return f"//{self.host}/{self.share}"
+
+    @property
+    def _auth_arg(self) -> str:
+        """构造 smbclient 认证参数。"""
+        if self.username:
+            return f"{self.username}%{self.password}"
+        return "guest%"
+
     def _build_remote_path(self, relative_path: str) -> str:
-        """构建共享内的相对路径（使用正斜杠）。"""
+        """构建共享内的相对路径。"""
         clean = str(relative_path).replace("\\", "/").strip("/")
         if self.path_prefix:
             return f"{self.path_prefix}/{clean}"
         return clean
 
-    def _connect_all(self):
-        """建立完整 SMB2/3 连接链: Connection -> Session -> TreeConnect。
-
-        Returns:
-            (connection, tree_connect) 元组
-        """
-        from smbprotocol.connection import Connection
-        from smbprotocol.session import Session
-        from smbprotocol.tree import TreeConnect
-
-        # 确定实际使用的凭证：匿名访问用空字符串，避免 STATUS_PASSWORD_EXPIRED
-        username = self.username if self.username != "guest" else ""
-        password = self.password if self.username != "guest" else ""
-
-        try:
-            connection = Connection(uuid.uuid4(), self.host, self.port)
-            connection.connect(timeout=self.timeout)
-            session = Session(
-                connection,
-                username=username,
-                password=password,
-                require_encryption=False,
-            )
-            session.connect()
-            tree = TreeConnect(session, self.share)
-            tree.connect()
-            return connection, tree
-        except Exception as exc:
-            raise ConnectionError(
-                f"SMB 连接失败: host={self.host}, port={self.port}, "
-                f"share={self.share}, err={type(exc).__name__}: {exc}"
-            ) from exc
-
-    def _disconnect(self, connection, tree) -> None:
-        """安全断开 SMB 连接链。"""
-        for obj in (tree, connection):
-            if obj is not None:
-                try:
-                    obj.disconnect()
-                except Exception:
-                    pass
-
-    def _open_and_read(self, relative_path: str) -> bytes:
-        """建立连接并读取文件全部内容。
-
-        Returns:
-            文件字节内容
+    def _read_file_raw(self, relative_path: str) -> bytes:
+        """通过 smbclient 读取远端文件，写入临时文件后读回。
 
         Raises:
             FileNotFoundError: 文件不存在
-            ConnectionError: SMB 连接失败
+            ConnectionError: SMB 连接或认证失败
         """
-        from smbprotocol.open import (
-            Open, CreateDisposition, FileAttributes,
-            ImpersonationLevel, ShareAccess,
-        )
-
-        # AccessMask 在不同版本 smbprotocol 中路径可能不同，用常量兜底
-        try:
-            from smbprotocol.open import AccessMask
-            _GENERIC_READ = AccessMask.GENERIC_READ
-        except ImportError:
-            _GENERIC_READ = 0x80000000  # Windows GENERIC_READ
-
         remote_path = self._build_remote_path(relative_path)
-        connection, tree = self._connect_all()
+        tmp_path = None
+
         try:
-            open_file = Open(tree, remote_path)
-            open_file.create(
-                ImpersonationLevel.Impersonation,
-                _GENERIC_READ,
-                ShareAccess.FILE_SHARE_READ,
-                CreateDisposition.FILE_OPEN,
-                FileAttributes.FILE_ATTRIBUTE_NORMAL,
+            # 创建临时文件
+            tmp_fd, tmp_path = tempfile.mkstemp(prefix="lazybull_smb_")
+            os.close(tmp_fd)
+
+            # 构造 smbclient 命令
+            # smbclient -U 'user%pass' //host/share -c 'get "remote/path" "local/path"'
+            cmd = [
+                "smbclient",
+                self._smb_url,
+                "-U", self._auth_arg,
+                "-p", str(self.port),
+                "-c", f'get "{remote_path}" "{tmp_path}"',
+            ]
+
+            # 执行
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                env={**os.environ, "LANG": "C"},  # 英文输出便于解析
             )
-            try:
-                file_size = open_file.end_of_file
-                data = open_file.read(0, file_size) if file_size > 0 else b""
-                return data
-            finally:
-                open_file.close()
+
+            stderr_lower = result.stderr.lower() if result.stderr else ""
+
+            if result.returncode != 0:
+                # 区分错误类型
+                if any(kw in stderr_lower for kw in (
+                    "nt_status_object_name_not_found",
+                    "does not exist",
+                    "no such file",
+                    "errno 2",
+                )):
+                    raise FileNotFoundError(
+                        f"SMB 文件不存在: share={self.share}, path={remote_path}"
+                    )
+                elif any(kw in stderr_lower for kw in (
+                    "nt_status_access_denied",
+                    "nt_status_logon_failure",
+                    "nt_status_account",
+                    "session setup failed",
+                    "nt_status_password_expired",
+                )):
+                    raise ConnectionError(
+                        f"SMB 认证失败: host={self.host}, share={self.share}, "
+                        f"user={self.username or 'guest'}, "
+                        f"stderr={result.stderr.strip()[:200]}"
+                    )
+                else:
+                    raise ConnectionError(
+                        f"SMB 读取失败: share={self.share}, path={remote_path}, "
+                        f"rc={result.returncode}, "
+                        f"stderr={result.stderr.strip()[:300]}"
+                    )
+
+            # 读取临时文件
+            with open(tmp_path, "rb") as f:
+                return f.read()
+
+        except subprocess.TimeoutExpired:
+            raise ConnectionError(
+                f"SMB 连接超时: host={self.host}, path={remote_path}, "
+                f"timeout={self.timeout}s"
+            )
+        except (FileNotFoundError, ConnectionError):
+            raise
         except Exception as exc:
-            msg = str(exc).lower()
-            if any(kw in msg for kw in (
-                "not found", "no such file", "status_object_name_not_found",
-                "status_no_such_file",
-            )):
-                raise FileNotFoundError(
-                    f"SMB 文件不存在: share={self.share}, path={remote_path}"
-                ) from exc
-            raise FileNotFoundError(
-                f"SMB 文件读取失败: share={self.share}, path={remote_path}, "
+            raise ConnectionError(
+                f"SMB 读取异常: share={self.share}, path={remote_path}, "
                 f"err={type(exc).__name__}: {exc}"
             ) from exc
         finally:
-            self._disconnect(connection, tree)
+            # 清理临时文件
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    # ---- 公共读取方法 ----
 
     def _read_file(self, relative_path: str) -> bytes:
-        """读取文件原始字节（便于测试时 mock）。"""
-        return self._open_and_read(relative_path)
+        """读取原始字节（便于测试 mock）。"""
+        return self._read_file_raw(relative_path)
 
     def file_exists(self, relative_path: str) -> bool:
         """检查远端文件是否存在。"""
         try:
-            self._open_and_read(relative_path)
+            self._read_file_raw(relative_path)
             return True
         except FileNotFoundError:
             return False
         except Exception:
             return False
-
-    # ---- 公共读取方法 ----
 
     def read_text(self, relative_path: str, encoding: str = "utf-8") -> str:
         return self._read_file(relative_path).decode(encoding)
@@ -172,7 +179,9 @@ class SMBFileReader:
     def read_json(self, relative_path: str) -> dict:
         raw = self.read_text(relative_path)
         if not raw.strip():
-            raise ValueError(f"SMB 远端文件为空: {self._build_remote_path(relative_path)}")
+            raise ValueError(
+                f"SMB 远端文件为空: {self._build_remote_path(relative_path)}"
+            )
         return json.loads(raw)
 
     def read_yaml(self, relative_path: str) -> dict:
@@ -180,7 +189,9 @@ class SMBFileReader:
         raw = self.read_text(relative_path)
         result = yaml.safe_load(raw)
         if result is None:
-            raise ValueError(f"SMB 远端 YAML 文件为空: {self._build_remote_path(relative_path)}")
+            raise ValueError(
+                f"SMB 远端 YAML 文件为空: {self._build_remote_path(relative_path)}"
+            )
         return result
 
     def read_parquet(self, relative_path: str) -> Optional[pd.DataFrame]:
@@ -231,7 +242,4 @@ def parse_smb_url(url: str) -> dict:
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) < 2:
         raise ValueError(f"SMB URL 格式无效，需要至少 host/share: {url}")
-    host = parts[0]
-    share = parts[1]
-    path = "/".join(parts[2:]) if len(parts) > 2 else ""
-    return {"host": host, "share": share, "path": path}
+    return {"host": parts[0], "share": parts[1], "path": "/".join(parts[2:]) if len(parts) > 2 else ""}
