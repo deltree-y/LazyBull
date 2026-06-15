@@ -83,12 +83,12 @@ class SMBFileReader:
             os.close(tmp_fd)
 
             # 构造 smbclient 命令
-            # smbclient -U 'user%pass' //host/share -c 'get "remote/path" "local/path"'
+            # -m SMB2 强制最低 SMB2 协议；不指定 -p 用默认端口（445自动协商）
             cmd = [
                 "smbclient",
                 self._smb_url,
                 "-U", self._auth_arg,
-                "-p", str(self.port),
+                "-m", "SMB2",
                 "-c", f'get "{remote_path}" "{tmp_path}"',
             ]
 
@@ -104,8 +104,12 @@ class SMBFileReader:
             stderr_lower = result.stderr.lower() if result.stderr else ""
 
             if result.returncode != 0:
+                # 合并 stdout+stderr 便于诊断
+                output = (result.stderr + result.stdout).strip()[:500]
+                output_lower = output.lower()
+
                 # 区分错误类型
-                if any(kw in stderr_lower for kw in (
+                if any(kw in output_lower for kw in (
                     "nt_status_object_name_not_found",
                     "does not exist",
                     "no such file",
@@ -114,7 +118,7 @@ class SMBFileReader:
                     raise FileNotFoundError(
                         f"SMB 文件不存在: share={self.share}, path={remote_path}"
                     )
-                elif any(kw in stderr_lower for kw in (
+                elif any(kw in output_lower for kw in (
                     "nt_status_access_denied",
                     "nt_status_logon_failure",
                     "nt_status_account",
@@ -123,14 +127,16 @@ class SMBFileReader:
                 )):
                     raise ConnectionError(
                         f"SMB 认证失败: host={self.host}, share={self.share}, "
-                        f"user={self.username or 'guest'}, "
-                        f"stderr={result.stderr.strip()[:200]}"
+                        f"user={self.username or 'guest'}, output={output[:200]}"
+                    )
+                elif "command not found" in output_lower or "not found" in output_lower:
+                    raise ConnectionError(
+                        f"smbclient 命令不可用，请安装: sudo apt install smbclient"
                     )
                 else:
                     raise ConnectionError(
                         f"SMB 读取失败: share={self.share}, path={remote_path}, "
-                        f"rc={result.returncode}, "
-                        f"stderr={result.stderr.strip()[:300]}"
+                        f"rc={result.returncode}, output={output[:300]}"
                     )
 
             # 读取临时文件

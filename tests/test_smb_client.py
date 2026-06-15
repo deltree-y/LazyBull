@@ -123,11 +123,12 @@ class TestSMBFileReader:
 # _read_file_raw — mock subprocess.run
 # ============================================================
 
-def _mk_result(returncode, stderr):
+def _mk_result(returncode, stderr, stdout=""):
     """构造模拟 subprocess.CompletedProcess。"""
     r = MagicMock()
     r.returncode = returncode
     r.stderr = stderr
+    r.stdout = stdout
     return r
 
 
