@@ -541,8 +541,17 @@ class PaperStorage:
             if not state_dict:
                 logger.warning("SMB 远端账户状态文件为空")
                 return None
+        except FileNotFoundError as exc:
+            logger.warning(f"SMB 远端账户状态文件不存在: {exc}")
+            return None
+        except ConnectionError as exc:
+            logger.warning(f"SMB 连接远端失败，无法读取账户状态: {exc}")
+            return None
+        except ValueError as exc:
+            logger.warning(f"SMB 远端账户状态文件格式错误: {exc}")
+            return None
         except Exception as exc:
-            logger.warning(f"SMB 读取远端账户状态失败: {exc}")
+            logger.warning(f"SMB 读取远端账户状态未知错误: {type(exc).__name__}: {exc}")
             return None
 
         positions = {}

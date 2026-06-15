@@ -75,17 +75,19 @@ class TestSMBFileReader:
         result = reader.read_json("test.json")
         assert result == {"key": "value"}
 
-    def test_read_json_empty(self):
+    def test_read_json_empty_raises(self):
+        """空文件应抛出 ValueError。"""
         reader = SMBFileReader("1.2.3.4", "share")
         reader._read_file = MagicMock(return_value=b"")
-        result = reader.read_json("test.json")
-        assert result == {}
+        with pytest.raises(ValueError, match="文件为空"):
+            reader.read_json("test.json")
 
-    def test_read_json_exception(self):
+    def test_read_json_exception_propagates(self):
+        """SMB 读取异常应向上传播（不再静默吞掉）。"""
         reader = SMBFileReader("1.2.3.4", "share")
-        reader._read_file = MagicMock(side_effect=Exception("SMB error"))
-        result = reader.read_json("test.json")
-        assert result == {}
+        reader._read_file = MagicMock(side_effect=ConnectionError("SMB error"))
+        with pytest.raises(ConnectionError, match="SMB error"):
+            reader.read_json("test.json")
 
     def test_read_parquet_success(self):
         df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})

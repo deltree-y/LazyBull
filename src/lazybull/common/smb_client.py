@@ -101,13 +101,25 @@ class SMBFileReader:
 
         Raises:
             FileNotFoundError: 文件不存在
+            ConnectionError: SMB 连接或读取失败
         """
         remote_path = self._build_remote_path(relative_path)
-        conn = self._connect()
+        try:
+            conn = self._connect()
+        except Exception as exc:
+            raise ConnectionError(
+                f"SMB 连接失败: host={self.host}, share={self.share}, "
+                f"err={type(exc).__name__}: {exc}"
+            ) from exc
         try:
             buf = io.BytesIO()
             conn.retrieveFile(self.share, remote_path, buf)
             return buf.getvalue()
+        except Exception as exc:
+            raise FileNotFoundError(
+                f"SMB 文件不存在或读取失败: share={self.share}, "
+                f"path={remote_path}, err={type(exc).__name__}: {exc}"
+            ) from exc
         finally:
             conn.close()
 
@@ -130,34 +142,47 @@ class SMBFileReader:
                     pass
 
     def read_text(self, relative_path: str, encoding: str = "utf-8") -> str:
-        """读取文本文件内容。"""
+        """读取文本文件内容。
+
+        Raises:
+            FileNotFoundError: 文件不存在
+            ConnectionError: SMB 连接失败
+        """
         return self._read_file(relative_path).decode(encoding)
 
     def read_json(self, relative_path: str) -> dict:
         """读取 JSON 文件并解析为字典。
 
         Returns:
-            解析后的字典，文件不存在时返回空字典
+            解析后的字典
+
+        Raises:
+            FileNotFoundError: 文件不存在
+            ConnectionError: SMB 连接失败
+            ValueError: JSON 解析失败
         """
-        try:
-            raw = self.read_text(relative_path)
-            return json.loads(raw) if raw.strip() else {}
-        except Exception:
-            return {}
+        raw = self.read_text(relative_path)
+        if not raw.strip():
+            raise ValueError(f"SMB 远端文件为空: {self._build_remote_path(relative_path)}")
+        return json.loads(raw)
 
     def read_yaml(self, relative_path: str) -> dict:
         """读取 YAML 文件并解析为字典。
 
         Returns:
-            解析后的字典，文件不存在时返回空字典
+            解析后的字典
+
+        Raises:
+            FileNotFoundError: 文件不存在
+            ConnectionError: SMB 连接失败
         """
         import yaml
 
-        try:
-            raw = self.read_text(relative_path)
-            return yaml.safe_load(raw) or {}
-        except Exception:
-            return {}
+        raw = self.read_text(relative_path)
+        result = yaml.safe_load(raw)
+        if result is None:
+            raise ValueError(f"SMB 远端 YAML 文件为空: {self._build_remote_path(relative_path)}")
+        return result
 
     def read_parquet(self, relative_path: str) -> Optional[pd.DataFrame]:
         """读取 Parquet 文件为 DataFrame。
@@ -170,7 +195,14 @@ class SMBFileReader:
         try:
             raw_bytes = self._read_file(relative_path)
             return pd.read_parquet(io.BytesIO(raw_bytes))
-        except Exception:
+        except FileNotFoundError:
+            logger.warning(f"SMB 远端 Parquet 文件不存在: {relative_path}")
+            return None
+        except Exception as exc:
+            logger.warning(
+                f"SMB 读取远端 Parquet 失败: path={relative_path}, "
+                f"err={type(exc).__name__}: {exc}"
+            )
             return None
 
     def get_cached(self, relative_path: str, max_age_seconds: float) -> Optional[object]:

@@ -297,7 +297,7 @@ $bt_weakness_exit_threshold_list         = @(0.52)     # 弱势评分触发阈�
 $bt_weakness_exit_consecutive_days_list  = @(5)       #5 需连续弱势天数
 $bt_weakness_exit_min_holding_days_list  = @(4)       #4 最低持有天数
 #$bt_weakness_exit_weights                = "30,25,25,20"  # 4维度权重: 排名,连跌,回撤,回升
-$bt_weakness_exit_weights                = "20,50,17,13"  # 4维度权重: 排名,连跌,回撤,回升
+$bt_weakness_exit_weights                = "30,25,25,20"  # 4维度权重: 排名,连跌,回撤,回升
 $bt_weakness_exit_industry_filter        = $false     # 弱势行业过滤
 $bt_weakness_exit_industry_bottom_pct_list = @(0.3)   # 行业底部阈值
 
