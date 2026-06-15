@@ -937,6 +937,38 @@ def _build_realtime_portfolio_summary(snapshot: Optional[dict]) -> Optional[dict
     )
 
 
+# ---------- 股票名称缓存 ----------
+
+_stock_name_cache: Optional[dict[str, str]] = None
+
+
+def _get_stock_name_map() -> dict[str, str]:
+    """从 stock_basic 构建 {6位代码: 股票名} 映射，仅加载一次。"""
+    global _stock_name_cache
+    if _stock_name_cache is not None:
+        return _stock_name_cache
+
+    try:
+        from src.lazybull.data import DataLoader, Storage
+
+        loader = DataLoader(storage=Storage(root_path=get_data_root()))
+        df = loader.load_clean_stock_basic()
+        if df is not None and not df.empty and 'ts_code' in df.columns and 'name' in df.columns:
+            name_map: dict[str, str] = {}
+            for _, row in df.iterrows():
+                ts_code = str(row['ts_code']).strip()
+                code = ts_code.split('.')[0] if '.' in ts_code else ts_code
+                if code.isdigit() and len(code) == 6:
+                    name_map[code] = str(row['name']).strip()
+            _stock_name_cache = name_map
+            return name_map
+    except Exception:
+        pass
+
+    _stock_name_cache = {}
+    return _stock_name_cache
+
+
 def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
     """基于实时快照构建个股总盈亏排名（按持仓成本）。"""
     if snapshot is None:
@@ -1019,13 +1051,9 @@ def _build_stock_rankings(snapshot: Optional[dict]) -> Optional[list]:
             continue
         pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
         code = ts_code.split('.')[0]
-        # 名称清洗：仅当 NAME 含中文且长度合理时才用；否则直接用代码兜底
-        raw_name = str(name or '').strip()
-        has_cjk = any('\u4e00' <= ch <= '\u9fff' for ch in raw_name)
-        if has_cjk and len(raw_name) <= 6:
-            display_name = raw_name
-        else:
-            display_name = code
+        # 从 stock_basic 查真实名称，查不到用代码兜底
+        stock_names = _get_stock_name_map()
+        display_name = stock_names.get(code, code)
         stocks.append({'name': display_name, 'code': code, 'pnl_pct': pnl_pct})
 
     _trace_diag(
