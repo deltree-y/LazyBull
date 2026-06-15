@@ -9,9 +9,14 @@ import pandas as pd
 import yaml
 from loguru import logger
 
+from typing import TYPE_CHECKING
+
 from ..common.config import get_paper_root
 from ..common.trading_config import TradingConfig
 from .models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight, TradeInstruction
+
+if TYPE_CHECKING:
+    from ..common.smb_client import SMBFileReader
 
 
 CONFIG_SECTION_LAYOUT = [
@@ -417,13 +422,21 @@ class PaperStorage:
     负责持久化和读取纸面交易的各类数据
     """
     
-    def __init__(self, root_path: Optional[str] = None, verbose: bool = False):
+    def __init__(
+        self,
+        root_path: Optional[str] = None,
+        verbose: bool = False,
+        smb_reader: Optional["SMBFileReader"] = None,
+    ):
         """初始化纸面交易存储
         
         Args:
             root_path: 数据根目录；未传时默认使用 data.root/paper
             verbose: 是否输出详细日志
+            smb_reader: 远端 SMB 读取器；传入后读取走 SMB，写入自动跳过（只读模式）
         """
+        self._smb_reader = smb_reader
+        self._is_remote = smb_reader is not None
         self.root_path = Path(root_path or get_paper_root())
         self.state_path = self.root_path / "state"
         self.trades_path = self.root_path / "trades"
@@ -434,13 +447,15 @@ class PaperStorage:
         self.instructions_path = self.root_path / "instructions"
         self.verbose = verbose
         
-        # 确保目录存在
-        for path in [self.state_path, self.trades_path, 
-                     self.nav_path, self.runs_path, self.pending_sells_path, self.pending_buys_path,
-                     self.instructions_path]:
-            path.mkdir(parents=True, exist_ok=True)
+        # 远端只读模式不创建本地目录
+        if not self._is_remote:
+            for path in [self.state_path, self.trades_path,
+                         self.nav_path, self.runs_path, self.pending_sells_path,
+                         self.pending_buys_path, self.instructions_path]:
+                path.mkdir(parents=True, exist_ok=True)
         if verbose:
-            logger.info(f"纸面交易存储初始化完成，根目录: {self.root_path}")
+            mode = "远端只读" if self._is_remote else "本地"
+            logger.info(f"纸面交易存储初始化完成（{mode}），根目录: {self.root_path}")
     
     def save_account_state(self, state: AccountState) -> None:
         """保存账户状态
@@ -448,6 +463,10 @@ class PaperStorage:
         Args:
             state: 账户状态
         """
+        if self._is_remote:
+            logger.warning("远端只读模式，跳过 save_account_state")
+            return
+
         file_path = self.state_path / "account.json"
         
         # 转换为字典
@@ -479,6 +498,9 @@ class PaperStorage:
         Returns:
             账户状态，不存在返回None
         """
+        if self._is_remote:
+            return self._load_account_state_remote()
+
         file_path = self.state_path / "account.json"
         
         if not file_path.exists():
@@ -508,6 +530,41 @@ class PaperStorage:
         )
         if self.verbose:
             logger.info(f"读取账户状态: {file_path}")
+        return state
+
+    def _load_account_state_remote(self) -> Optional[AccountState]:
+        """通过 SMB 远端读取账户状态。"""
+        if self._smb_reader is None:
+            return None
+        try:
+            state_dict = self._smb_reader.read_json("state/account.json")
+            if not state_dict:
+                logger.warning("SMB 远端账户状态文件为空")
+                return None
+        except Exception as exc:
+            logger.warning(f"SMB 读取远端账户状态失败: {exc}")
+            return None
+
+        positions = {}
+        for ts_code, pos_dict in state_dict.get('positions', {}).items():
+            positions[ts_code] = Position(
+                ts_code=pos_dict['ts_code'],
+                shares=pos_dict['shares'],
+                buy_price=pos_dict['buy_price'],
+                buy_cost=pos_dict['buy_cost'],
+                buy_date=pos_dict['buy_date'],
+                buy_pnl_price=pos_dict.get('buy_pnl_price', 0.0),
+                buy_atr_pct=pos_dict.get('buy_atr_pct', 0.0),
+            )
+
+        state = AccountState(
+            cash=state_dict['cash'],
+            positions=positions,
+            last_update=state_dict.get('last_update', '')
+        )
+        if self.verbose:
+            logger.info("SMB 远端读取账户状态成功")
+        return state
         return state
     
     def append_trade(self, fill: Fill) -> None:
@@ -592,6 +649,9 @@ class PaperStorage:
         Returns:
             净值记录DataFrame，不存在返回None
         """
+        if self._is_remote:
+            return self._smb_reader.read_parquet("nav/nav.parquet") if self._smb_reader else None
+
         file_path = self.nav_path / "nav.parquet"
         
         if not file_path.exists():
@@ -649,6 +709,16 @@ class PaperStorage:
         Returns:
             调仓状态字典，不存在返回None
         """
+        if self._is_remote:
+            if self._smb_reader is None:
+                return None
+            try:
+                state = self._smb_reader.read_json("runs/rebalance_state.json")
+                return state if state else None
+            except Exception as exc:
+                logger.warning(f"SMB 读取远端调仓状态失败: {exc}")
+                return None
+
         file_path = self.runs_path / "rebalance_state.json"
         
         if not file_path.exists():
@@ -909,6 +979,9 @@ class PaperStorage:
         Returns:
             配置字典，不存在返回None
         """
+        if self._is_remote:
+            return self._load_config_remote()
+
         yaml_path = self.root_path / "config.yaml"
         if not yaml_path.exists():
             return None
@@ -917,6 +990,19 @@ class PaperStorage:
             config = yaml.safe_load(f) or {}
 
         return self._normalize_config(config)
+
+    def _load_config_remote(self) -> Optional[dict]:
+        """通过 SMB 远端读取配置。"""
+        if self._smb_reader is None:
+            return None
+        try:
+            config = self._smb_reader.read_yaml("config.yaml")
+            if not config:
+                return None
+            return self._normalize_config(config)
+        except Exception as exc:
+            logger.warning(f"SMB 读取远端配置失败: {exc}")
+            return None
     
     def save_stop_loss_state(self, state: dict) -> None:
         """保存止损监控状态

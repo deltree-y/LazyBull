@@ -1,0 +1,10 @@
+# 树莓派 LCD35 远端数据配置
+# LCD35 启动时需加载本文件以启用 SMB 远端数据读取
+
+data:
+  # 远端 paper 数据 SMB 路径
+  # 格式: //host/share/path
+  paper_remote: "//192.168.1.21/docker/lazybull/data/paper"
+
+  # LCD35 本地工作目录（日志、日内图缓存等）
+  respi_local: "/tmp/lazybull_lcd35"

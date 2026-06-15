@@ -212,6 +212,44 @@ def get_paper_root(default: Optional[str] = None) -> str:
     return str(get_config().get("data.paper", fallback))
 
 
+def get_paper_remote() -> Optional[str]:
+    """获取远端 paper 数据 SMB 路径。
+
+    优先读取环境变量 LAZYBULL_PAPER_REMOTE，其次读取配置 data.paper_remote。
+    返回 None 表示不启用远端模式。
+
+    Returns:
+        SMB URL 字符串（如 //192.168.1.21/docker/lazybull/data/paper），或 None
+    """
+    env_val = os.getenv("LAZYBULL_PAPER_REMOTE")
+    if env_val and str(env_val).strip():
+        return str(env_val).strip()
+    return get_config().get("data.paper_remote")
+
+
+def get_respi_local_dir() -> str:
+    """获取 LCD35 本地工作目录（日志、日内图缓存等）。
+
+    优先环境变量 LAZYBULL_RESPI_LOCAL_DIR，否则读取配置 data.respi_local，
+    默认 /tmp/lazybull_lcd35。
+
+    Returns:
+        本地目录绝对路径
+    """
+    env_val = os.getenv("LAZYBULL_RESPI_LOCAL_DIR")
+    if env_val and str(env_val).strip():
+        local_dir = str(env_val).strip()
+    else:
+        local_dir = str(get_config().get("data.respi_local", "/tmp/lazybull_lcd35"))
+
+    path = Path(local_dir)
+    if not path.is_absolute():
+        from .. import PROJECT_ROOT
+        path = PROJECT_ROOT / path
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 def get_models_root(default: Optional[str] = None) -> str:
     """获取模型目录，默认派生自 data.root/models。"""
     return default or str(Path(get_data_root()) / "models")

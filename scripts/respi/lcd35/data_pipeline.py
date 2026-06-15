@@ -79,7 +79,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
     from src.lazybull.data.tushare_client import TushareClient
 
     paper_storage = PaperStorage(
-        root_path=get_paper_root(), verbose=False
+        root_path=get_paper_root(), verbose=False, smb_reader=_smb_reader
     )
 
     # 获取上次调仓日期作为周期起点
@@ -735,7 +735,7 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
 
     paper_root = get_paper_root()
     paper_storage = PaperStorage(
-        root_path=paper_root, verbose=False
+        root_path=paper_root, verbose=False, smb_reader=_smb_reader
     )
     config = paper_storage.load_config() or {}
 

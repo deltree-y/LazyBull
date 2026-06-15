@@ -159,7 +159,7 @@ def _calc_rebalance_status() -> tuple[Optional[str], Optional[int]]:
     from src.lazybull.data import DataLoader, Storage
 
     rebalance_state = PaperStorage(
-        root_path=get_paper_root()
+        root_path=get_paper_root(), smb_reader=_smb_reader
     ).load_rebalance_state()
     if rebalance_state is None:
         return None, None

@@ -161,8 +161,8 @@ def _resolve_intraday_slot_index(
 
 
 def _get_diag_log_paths() -> list[Path]:
-    """返回诊断日志落盘路径，优先项目目录，失败时兜底系统临时目录。"""
-    primary = Path(get_paper_root()) / "state" / DIAG_LOG_FILENAME
+    """返回诊断日志落盘路径，优先本地工作目录，失败时兜底系统临时目录。"""
+    primary = Path(get_respi_local_dir()) / DIAG_LOG_FILENAME
     fallback = Path(tempfile.gettempdir()) / DIAG_LOG_FILENAME
     if primary == fallback:
         return [primary]
@@ -729,8 +729,8 @@ def _upsert_intraday_chart(
 
 
 def _get_intraday_chart_state_dir() -> Path:
-    """返回 3.5 寸 LCD 日内图持久化目录。"""
-    return Path(get_paper_root()) / "state" / INTRADAY_CHART_STATE_DIRNAME
+    """返回 3.5 寸 LCD 日内图持久化目录（本地路径，非远端 paper）。"""
+    return Path(get_respi_local_dir()) / INTRADAY_CHART_STATE_DIRNAME
 
 
 def _get_intraday_chart_state_path(trade_date: str) -> Path:

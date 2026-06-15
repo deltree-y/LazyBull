@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "lazybull"
-version = "0.73.8"
+version = "0.75.0"
 description = "A股量化研究与回测框架 - 专注价值红利策略"
 authors = ["deltree-y"]
 packages = [{include = "lazybull", from = "src"}]
@@ -27,6 +27,7 @@ openpyxl = "^3.0.0"
 dingtalk-stream = "^1.0.0"
 gpiod = "^1.5.0"
 psutil = "^5.9.0"
+pysmb = "^1.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.2.0"

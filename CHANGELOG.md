@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.75.0] - 2026-06-15
+
+### Added
+
+- **LCD35 SMB 远端数据架构改造**：
+  - 新增 `src/lazybull/common/smb_client.py` — SMB 远端文件读取客户端（`SMBFileReader` + `parse_smb_url`）
+  - `PaperStorage` 新增 `smb_reader` 参数，支持 SMB 远端只读模式
+  - `config.py` 新增 `get_paper_remote()` / `get_respi_local_dir()` 配置函数
+  - 新增 `configs/runtime_respi.yaml` — 树莓派 LCD35 专用运行时配置
+  - 新增 `tests/test_smb_client.py` — SMB 客户端单元测试
+- **pysmb 依赖**：新增 `pysmb ^1.2` 依赖
+
+### Changed
+
+- **LCD35 日志/缓存路径迁移**：诊断日志和日内图缓存从 paper 目录迁移到本地 `/tmp/lazybull_lcd35/`
+- **LCD35 数据读取优化**：远端 paper 数据（account/rebalance/nav/config）改为每交易日仅读取一次（盘中不再轮询SMB）
+- **版本号跳号**：0.73.8 -> 0.75.0（跳过 0.74）
+
 ## [0.73.8] - 2026-06-13
 
 ### Bugfix

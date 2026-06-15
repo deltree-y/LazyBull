@@ -24,6 +24,14 @@ _SCRIPTS_DIR = _PROJECT_ROOT / "scripts"
 _prepend_sys_path(_PROJECT_ROOT)
 _prepend_sys_path(_SCRIPTS_DIR)
 
+# 合并树莓派 LCD35 运行时配置（SMB 远端路径等）
+# 必须在加载组件前执行，确保 _context.py 能读取到 paper_remote 配置
+from src.lazybull.common.config import get_config  # noqa: E402
+
+_respi_config_path = _PROJECT_ROOT / "configs" / "runtime_respi.yaml"
+if _respi_config_path.exists():
+    get_config().merge_config(str(_respi_config_path))
+
 
 _COMPONENT_DIR = Path(__file__).with_name("lcd35")
 _COMPONENT_MODULES = [
