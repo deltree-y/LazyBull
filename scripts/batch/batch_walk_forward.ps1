@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -34,21 +34,21 @@ $wf_period_configs = @(
     [PSCustomObject]@{
         Label = "0101"
         SplitCount = 13
-        FinalDate = "20251231"
+        FinalDate = "20251231"# 20251231
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
     }
     [PSCustomObject]@{
         Label = "0209"
         SplitCount = 14
-        FinalDate = "20260209"
+        FinalDate = "20260209" # 20260209
         ContinueDays = 1
         StartModelVersion = 19234#19057#(0.035)#19234#(0.03)#19249#(0.04)
     }
     [PSCustomObject]@{
         Label = "0324"
         SplitCount = 14
-        FinalDate = "20260324"
+        FinalDate = "20260324" # 20260324
         ContinueDays = 1
         StartModelVersion = 19264#19147#(0.035)#19264#(0.03)#19279#(0.04)
     }
@@ -291,7 +291,7 @@ $bt_stop_loss_trailing_enabled        = $false  # 移动止损子开关：$true 
 $bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
 
 # ── OOS 表现弱势退出（总开关）───────────────────────────────
-$bt_weakness_exit_enabled                = $true  # $true 启用 | $false 禁用
+$bt_weakness_exit_enabled                = $false  # $true 启用 | $false 禁用
 # 以下参数仅在 $bt_weakness_exit_enabled = $true 时生效
 $bt_weakness_exit_threshold_list         = @(0.52)     # 弱势评分触发阈值 [0,1]
 $bt_weakness_exit_consecutive_days_list  = @(5)       #5 需连续弱势天数

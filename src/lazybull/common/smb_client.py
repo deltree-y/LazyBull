@@ -47,6 +47,7 @@ class SMBFileReader:
         self.port = port
         self.timeout = timeout
         self._cache: dict[str, tuple[float, object]] = {}
+        self._cache_date: str = ""  # 缓存所属日期（YYYYMMDD），换日自动清空
 
     @property
     def _smb_url(self) -> str:
@@ -182,37 +183,63 @@ class SMBFileReader:
     def read_text(self, relative_path: str, encoding: str = "utf-8") -> str:
         return self._read_file(relative_path).decode(encoding)
 
+    def _check_daily_cache(self) -> None:
+        """跨日自动清空缓存。"""
+        from datetime import datetime
+        today = datetime.now().strftime("%Y%m%d")
+        if self._cache_date != today:
+            self._cache.clear()
+            self._cache_date = today
+
+    def _cached_read(self, relative_path: str, reader_func):
+        """带每日缓存的读取：同一天同一文件只走一次 SMB。"""
+        self._check_daily_cache()
+        cache_key = f"smb://{relative_path}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached[1]
+        data = reader_func()
+        import time
+        self._cache[cache_key] = (time.monotonic(), data)
+        return data
+
     def read_json(self, relative_path: str) -> dict:
-        raw = self.read_text(relative_path)
-        if not raw.strip():
-            raise ValueError(
-                f"SMB 远端文件为空: {self._build_remote_path(relative_path)}"
-            )
-        return json.loads(raw)
+        def _read():
+            raw = self.read_text(relative_path)
+            if not raw.strip():
+                raise ValueError(
+                    f"SMB 远端文件为空: {self._build_remote_path(relative_path)}"
+                )
+            return json.loads(raw)
+        return self._cached_read(relative_path, _read)
 
     def read_yaml(self, relative_path: str) -> dict:
         import yaml
-        raw = self.read_text(relative_path)
-        result = yaml.safe_load(raw)
-        if result is None:
-            raise ValueError(
-                f"SMB 远端 YAML 文件为空: {self._build_remote_path(relative_path)}"
-            )
-        return result
+        def _read():
+            raw = self.read_text(relative_path)
+            result = yaml.safe_load(raw)
+            if result is None:
+                raise ValueError(
+                    f"SMB 远端 YAML 文件为空: {self._build_remote_path(relative_path)}"
+                )
+            return result
+        return self._cached_read(relative_path, _read)
 
     def read_parquet(self, relative_path: str) -> Optional[pd.DataFrame]:
-        try:
-            raw_bytes = self._read_file(relative_path)
-            return pd.read_parquet(io.BytesIO(raw_bytes))
-        except FileNotFoundError:
-            logger.warning(f"SMB 远端 Parquet 文件不存在: {relative_path}")
-            return None
-        except Exception as exc:
-            logger.warning(
-                f"SMB 读取远端 Parquet 失败: path={relative_path}, "
-                f"err={type(exc).__name__}: {exc}"
-            )
-            return None
+        def _read():
+            try:
+                raw_bytes = self._read_file(relative_path)
+                return pd.read_parquet(io.BytesIO(raw_bytes))
+            except FileNotFoundError:
+                logger.warning(f"SMB 远端 Parquet 文件不存在: {relative_path}")
+                return None
+            except Exception as exc:
+                logger.warning(
+                    f"SMB 读取远端 Parquet 失败: path={relative_path}, "
+                    f"err={type(exc).__name__}: {exc}"
+                )
+                return None
+        return self._cached_read(relative_path, _read)
 
     # ---- 内存缓存 ----
 

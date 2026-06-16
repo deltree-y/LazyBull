@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.75.0)
+### 当前版本 (v0.75.1)
+
+**训练稳定性诊断脚本** (v0.75.1):
+- 新增 `scripts/ana/diagnose_training_stability.py`，在与 batch 训练完全一致的配置下，对指定 walk-forward split（默认最近期 `splits[-1]`）用多种子 × 多早停指标（auto / rank_ic）重复训练同一份数据，量化训练随机不稳定性
+- 量化三项：`best_iteration`（树数量）种子间方差与变异系数；全池 RankIC 与按日截面 RankIC 的口径差距；多种子预测平均（bagging）对按日截面 RankIC 种子间方差的收敛效果
+- 评估按日截面 RankIC 时直接用「保留 NaN」的验证集自行 predict，绕开 `fillna(0)` 口径污染；纯只读分析工具，不改训练主链路，结果输出到 `data/reports/`
 
 **LCD35 SMB 远端数据架构** (v0.75.0):
 - 树莓派 LCD35 显示现在支持从远端群晖 NAS 通过 SMB 协议读取纸面交易数据（持仓、调仓状态、净值等）

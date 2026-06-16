@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.75.1] - 2026-06-16
+
+### Added
+
+- **训练稳定性诊断脚本** `scripts/ana/diagnose_training_stability.py`：
+  - 在与 `batch_walk_forward.ps1` 完全一致的训练配置（6 年窗 / semiannual / rebalance_freq=20 /
+    rank-weight(50,3) / neu_y_ret_20 + cs_zscore / 同一组因子开关）下，对指定 walk-forward split
+    （默认最近期 `splits[-1]`）用多个随机种子 × 两种早停指标（auto / rank_ic）重复训练同一份数据，
+    量化训练的随机不稳定性
+  - 量化三项指标：A1 不同种子间 `best_iteration`（树数量）方差与变异系数；A2 全池 RankIC 与
+    按日截面 RankIC 的口径差距；#1 多种子预测平均（bagging）对按日截面 RankIC 种子间方差的收敛效果
+  - 评估按日截面 RankIC 时直接用「保留 NaN」的验证集自行 predict，绕开 `evaluate_validation_daily`
+    的 `fillna(0)`，避免口径污染
+  - 数据只准备一次、所有种子复用，确保唯一变量为 `random_state`（与 `early_stopping_metric`）
+  - 纯只读分析工具，不修改任何训练主链路；结果 CSV 输出到 `data/reports/`
+
 ## [0.75.0] - 2026-06-15
 
 ### Added
