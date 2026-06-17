@@ -642,6 +642,7 @@ def _train_model_on_window(
     storage: Storage,
     loader: DataLoader,
     args,
+    random_state_override: Optional[int] = None,
 ) -> Dict:
     """在指定训练窗口上训练单个模型
 
@@ -769,7 +770,9 @@ def _train_model_on_window(
         learning_rate=args.learning_rate,
         subsample=args.subsample,
         colsample_bytree=args.colsample_bytree,
-        random_state=args.random_state,
+        random_state=(
+            args.random_state if random_state_override is None else random_state_override
+        ),
         min_child_weight=args.min_child_weight,
         reg_alpha=args.reg_alpha,
         reg_lambda=args.reg_lambda,
@@ -794,6 +797,71 @@ def _train_model_on_window(
         "X_train_len": len(X_train),
         "X_val_len": len(X_val),
     }
+
+
+def _resolve_ensemble_seeds(args) -> List[int]:
+    """解析 --ensemble-seeds，返回去重保序的种子列表。
+
+    为空或未提供时回退到 [args.random_state]，保证向后兼容（单种子=原行为）。
+    """
+    raw = getattr(args, "ensemble_seeds", None)
+    if not raw:
+        return [args.random_state]
+    seeds: List[int] = []
+    for token in str(raw).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        seed = int(token)
+        if seed not in seeds:
+            seeds.append(seed)
+    return seeds if seeds else [args.random_state]
+
+
+def _build_ensemble_sub_models(
+    windows: List[tuple],
+    storage: Storage,
+    loader: DataLoader,
+    args,
+    seeds: List[int],
+    is_deploy: bool = False,
+) -> tuple:
+    """对（窗口 × 种子）笛卡尔训练子模型。
+
+    Args:
+        windows: [(win_start, win_end), ...] 训练窗口列表
+        seeds: 随机种子列表（多种子 bagging）
+        is_deploy: 是否为部署模型训练（仅影响日志文案）
+
+    Returns:
+        (sub_models, base_result) — base_result 为首个子模型的完整训练结果
+    """
+    sub_models: List = []
+    base_result: Optional[Dict] = None
+    total = len(windows) * len(seeds)
+    idx = 0
+    prefix = "部署" if is_deploy else ""
+    for win_idx, (win_start, win_end) in enumerate(windows):
+        win_label = ["基础", "前移", "后移"][win_idx] if win_idx < 3 else f"偏移{win_idx}"
+        for seed in seeds:
+            idx += 1
+            seed_note = f" seed={seed}" if len(seeds) > 1 else ""
+            logger.info(
+                f"  {prefix}子模型 {idx}/{total}（{win_label}{seed_note}）: "
+                f"{win_start} ~ {win_end}"
+            )
+            tr = _train_model_on_window(
+                win_start, win_end, storage, loader, args, random_state_override=seed
+            )
+            sub_models.append(tr["model"])
+            if base_result is None:
+                base_result = tr
+            elif set(tr["feature_columns"]) != set(base_result["feature_columns"]):
+                logger.warning(
+                    f"  子模型 {idx} 特征列数量({len(tr['feature_columns'])})"
+                    f"与基础模型({len(base_result['feature_columns'])})不一致"
+                )
+    return sub_models, base_result
 
 
 def execute_split_training(
@@ -832,37 +900,28 @@ def execute_split_training(
 
     # ── Phase 1: 训练模型 ──────────────────────────────────────────────
     ensemble_offsets = getattr(args, "ensemble_offsets", 0)
+    ensemble_seeds = _resolve_ensemble_seeds(args)
+    use_ensemble = (
+        ensemble_offsets > 0 and trade_cal is not None
+    ) or len(ensemble_seeds) > 1
 
-    if ensemble_offsets > 0 and trade_cal is not None:
-        # 多偏移集成训练
-        windows = compute_offset_windows(
-            split.train_start, split.train_end, ensemble_offsets, trade_cal
-        )
-        logger.info(
-            f"多偏移集成训练: {len(windows)}个窗口, 偏移±{ensemble_offsets}个月"
-        )
-
-        sub_models = []
-        base_result = None
-
-        for win_idx, (win_start, win_end) in enumerate(windows):
-            label = ["基础", "前移", "后移"][win_idx] if win_idx < 3 else f"偏移{win_idx}"
-            logger.info(
-                f"  子模型 {win_idx + 1}/{len(windows)}（{label}）: "
-                f"{win_start} ~ {win_end}"
+    if use_ensemble:
+        # 集成训练（多偏移窗口 × 多种子 bagging，二者正交可叠加）
+        if ensemble_offsets > 0 and trade_cal is not None:
+            windows = compute_offset_windows(
+                split.train_start, split.train_end, ensemble_offsets, trade_cal
             )
-            tr = _train_model_on_window(win_start, win_end, storage, loader, args)
-            sub_models.append(tr["model"])
+        else:
+            windows = [(split.train_start, split.train_end)]
+        logger.info(
+            f"集成训练: {len(windows)}个窗口 × {len(ensemble_seeds)}个种子 "
+            f"= {len(windows) * len(ensemble_seeds)}个子模型"
+            f"（偏移±{ensemble_offsets}个月, seeds={ensemble_seeds}）"
+        )
 
-            if win_idx == 0:
-                base_result = tr
-            else:
-                if set(tr["feature_columns"]) != set(base_result["feature_columns"]):
-                    logger.warning(
-                        f"  子模型 {win_idx + 1} 特征列数量"
-                        f"({len(tr['feature_columns'])}) "
-                        f"与基础模型({len(base_result['feature_columns'])})不一致"
-                    )
+        sub_models, base_result = _build_ensemble_sub_models(
+            windows, storage, loader, args, ensemble_seeds
+        )
 
         model = EnsembleModel(sub_models)
         feature_columns = base_result["feature_columns"]
@@ -984,8 +1043,9 @@ def execute_split_training(
             args, "enable_consensus_revision_features", False
         ),
     })
-    if ensemble_offsets > 0:
+    if isinstance(model, EnsembleModel):
         full_train_params["ensemble_offsets"] = ensemble_offsets
+        full_train_params["ensemble_seeds"] = ensemble_seeds
         full_train_params["ensemble_n_models"] = model.n_models
 
     # 注册模型（EnsembleModel 通过 joblib 序列化，包含所有子模型）
@@ -1152,28 +1212,25 @@ def execute_deploy_training(
 
     # ── 训练模型（支持多偏移集成）──────────────────────────────────────
     ensemble_offsets = getattr(args, "ensemble_offsets", 0)
+    ensemble_seeds = _resolve_ensemble_seeds(args)
+    use_ensemble = ensemble_offsets > 0 or len(ensemble_seeds) > 1
 
-    if ensemble_offsets > 0:
-        windows = compute_offset_windows(
-            train_start, train_end, ensemble_offsets, trade_cal
-        )
-        logger.info(
-            f"部署模型多偏移集成训练: {len(windows)}个窗口, 偏移±{ensemble_offsets}个月"
-        )
-
-        sub_models = []
-        base_result = None
-
-        for win_idx, (win_start, win_end) in enumerate(windows):
-            label = ["基础", "前移", "后移"][win_idx] if win_idx < 3 else f"偏移{win_idx}"
-            logger.info(
-                f"  部署子模型 {win_idx + 1}/{len(windows)}（{label}）: "
-                f"{win_start} ~ {win_end}"
+    if use_ensemble:
+        if ensemble_offsets > 0:
+            windows = compute_offset_windows(
+                train_start, train_end, ensemble_offsets, trade_cal
             )
-            tr = _train_model_on_window(win_start, win_end, storage, loader, args)
-            sub_models.append(tr["model"])
-            if win_idx == 0:
-                base_result = tr
+        else:
+            windows = [(train_start, train_end)]
+        logger.info(
+            f"部署模型集成训练: {len(windows)}个窗口 × {len(ensemble_seeds)}个种子 "
+            f"= {len(windows) * len(ensemble_seeds)}个子模型"
+            f"（偏移±{ensemble_offsets}个月, seeds={ensemble_seeds}）"
+        )
+
+        sub_models, base_result = _build_ensemble_sub_models(
+            windows, storage, loader, args, ensemble_seeds, is_deploy=True
+        )
 
         model = EnsembleModel(sub_models)
         feature_columns = base_result["feature_columns"]
@@ -1242,8 +1299,9 @@ def execute_deploy_training(
             args, "enable_consensus_revision_features", False
         ),
     })
-    if ensemble_offsets > 0:
+    if isinstance(model, EnsembleModel):
         full_train_params["ensemble_offsets"] = ensemble_offsets
+        full_train_params["ensemble_seeds"] = ensemble_seeds
         full_train_params["ensemble_n_models"] = model.n_models
 
     version = registry.register_model(
@@ -1840,6 +1898,7 @@ def write_walk_forward_summary(
         "feature_stability_filter": args.feature_stability_filter,
         "factor_prune": getattr(args, 'factor_prune', False),
         "ensemble_offsets": getattr(args, 'ensemble_offsets', 0),
+        "ensemble_seeds": getattr(args, 'ensemble_seeds', None),
         "enable_enhanced_features": getattr(args, 'enable_enhanced_features', False),
         "enable_north_features": getattr(args, 'enable_north_features', False),
         "enable_lhb_features": getattr(args, 'enable_lhb_features', False),
@@ -2381,6 +2440,13 @@ def main():
         type=int,
         default=0,
         help="多偏移集成：偏移月数（0=禁用, 1=±1个月→3模型, 2=±2个月→3模型）"
+    )
+    parser.add_argument(
+        "--ensemble-seeds",
+        type=str,
+        default=None,
+        help="多种子 bagging：逗号分隔的随机种子列表（如 42,1,2,3,4）。"
+             "默认 None=单种子（用 --random-state），与多偏移正交可叠加"
     )
 
     # 因子增强（2.2）

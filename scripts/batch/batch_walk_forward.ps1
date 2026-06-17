@@ -24,33 +24,40 @@ $skip_training           = $false   # $true 启用 | $false 禁用
 # ContinueDays         : 连续执行天数；>1 时会从 FinalDate 起按自然日逐日向后推进展开，并自动顺延到最近后一交易日
 # StartModelVersion    : skip-training 模式下该时间段首个 split 对应模型版本号
 $wf_period_configs = @(
-    #[PSCustomObject]@{
-    #    Label = "0430"
-    #    SplitCount = 14
-    #    FinalDate = "20260331"
-    #    ContinueDays = 1
-    #    StartModelVersion = 15034
-    #}
     [PSCustomObject]@{
-        Label = "0101"
-        SplitCount = 13
-        FinalDate = "20251231"# 20251231
+        Label = "0105"
+        SplitCount = 14
+        FinalDate = "20260105"# 20251231
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
     }
     [PSCustomObject]@{
-        Label = "0209"
+        Label = "0109"
         SplitCount = 14
-        FinalDate = "20260209" # 20260209
+        FinalDate = "20260109" # 20260209
         ContinueDays = 1
         StartModelVersion = 19234#19057#(0.035)#19234#(0.03)#19249#(0.04)
     }
     [PSCustomObject]@{
-        Label = "0324"
+        Label = "0116"
         SplitCount = 14
-        FinalDate = "20260324" # 20260324
+        FinalDate = "20260116" # 20260324
         ContinueDays = 1
         StartModelVersion = 19264#19147#(0.035)#19264#(0.03)#19279#(0.04)
+    }
+    [PSCustomObject]@{
+        Label = "0123"
+        SplitCount = 14
+        FinalDate = "20260123"
+        ContinueDays = 1
+        StartModelVersion = 15034
+    }
+    [PSCustomObject]@{
+        Label = "0130"
+        SplitCount = 14
+        FinalDate = "20260130"
+        ContinueDays = 1
+        StartModelVersion = 15034
     }
 )
 
@@ -67,8 +74,8 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
+$n_estimators_list       = @(2000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
 $learning_rate_list      = @(0.03)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
@@ -79,8 +86,8 @@ $reg_lambda_list         = @(5)         #. XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
-$early_stopping_metric   = "auto"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
+$early_stopping_rounds_list = @(300)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
@@ -145,13 +152,16 @@ $factor_prune             = $false  # $true 启用 | $false 禁用（需先运�
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
+# ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
+$ensemble_seeds            = ""#"42,1,2,3,4"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
 $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $true   # $true 启用 | $false 禁用
+$deploy_train            = $false   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -161,7 +171,7 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
-$bt_top_n_list           = @(10)            # 回测持仓 Top N
+$bt_top_n_list           = @(20)            # 回测持仓 Top N
 $bt_rebalance_freq_list  = @(20)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
@@ -174,7 +184,7 @@ $bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null =
 # ── OOS 仓位管理模式（仅在 $oos_backtest = $true 时参与回测）──────
 # equal：等权 | score：按分数比例 | kelly：凯利公式 | half_kelly：半凯利（更稳健）
 # 仅当 mode 为 kelly / half_kelly 时，Kelly 参数才会真正生效
-$position_sizing_list             = @('half_kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
+$position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
 $kelly_vol_window_list           = @(60)      # Kelly 波动率窗口（交易日，可多值如 @(40, 60, 120)）
 $kelly_max_leverage_list          = @(0.2)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
@@ -278,7 +288,7 @@ $market_regime_ma250_hard_stop = $false      # $true 启用 | $false 禁用
 # 以下参数仅在 $market_regime_ma250_hard_stop = $true 时生效
 $market_regime_ma250_threshold_list = @(1)   # 触发阈值（大盘收益曲线 / MA250 < 此值触发）
 $market_regime_ma250_exposure_list  = @(0.9) # 触发后的仓位系数（0.0 = 完全空仓）
-$ma250_atr_scaling             = $true       # $true 启用 ATR 动态仓位缩放（仓位 = base × MA(ATR,250) / CurrentATR）
+$ma250_atr_scaling             = $false       # $true 启用 ATR 动态仓位缩放（仓位 = base × MA(ATR,250) / CurrentATR）
 
 # ── OOS 止损（总开关）────────────────────────────────────────
 # 0426这里应为true
@@ -768,6 +778,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($ensemble_offsets -gt 0) {
         $pythonCmd += " --ensemble-offsets $ensemble_offsets"
+    }
+
+    if ($ensemble_seeds -ne "") {
+        $pythonCmd += " --ensemble-seeds $ensemble_seeds"
     }
 
     if ($enable_enhanced) {

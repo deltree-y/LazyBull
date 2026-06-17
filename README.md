@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.75.1)
+### 当前版本 (v0.76.0)
+
+**多种子 bagging（walk-forward 训练）** (v0.76.0):
+- `scripts/walk_forward.py` 新增 `--ensemble-seeds`（逗号分隔随机种子，如 `42,1,2,3,4`）：启用后每个 split 在多个种子上各训一个子模型，预测取平均，降低单一 holdout 早停带来的训练随机方差
+- 复用现有 `EnsembleModel`，推理端 / 模型注册 / 信号生成零改动；与 `--ensemble-offsets`（多偏移窗口）正交可叠加
+- 默认为空，严格向后兼容（单种子 = 原行为）；`batch_walk_forward.ps1` 新增 `$ensemble_seeds` 透传
 
 **训练稳定性诊断脚本** (v0.75.1):
 - 新增 `scripts/ana/diagnose_training_stability.py`，在与 batch 训练完全一致的配置下，对指定 walk-forward split（默认最近期 `splits[-1]`）用多种子 × 多早停指标（auto / rank_ic）重复训练同一份数据，量化训练随机不稳定性

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.0] - 2026-06-16
+
+### Added
+
+- **多种子 bagging（walk-forward 训练）**：
+  - `scripts/walk_forward.py` 新增 `--ensemble-seeds` 参数（逗号分隔随机种子，如
+    `42,1,2,3,4`）。启用后每个 split 在多个种子上各训练一个子模型，预测取平均，
+    降低单一 holdout 早停带来的训练随机方差（`best_iteration` 种子间波动）
+  - 复用现有 `EnsembleModel` 包装器：推理端 / `ModelRegistry` / `MLSignal` 零改动
+  - 与现有 `--ensemble-offsets`（多偏移窗口集成）正交，可笛卡尔叠加（M 窗 × N 种子）
+  - 默认 `--ensemble-seeds` 为空，严格向后兼容（单种子 = 原训练行为不变）
+  - 每个子模型保留各自独立早停（与 `diagnose_training_stability.py` 已验证的口径一致）
+  - `scripts/batch/batch_walk_forward.ps1` 新增 `$ensemble_seeds` 变量与透传
+  - `ensemble_seeds` / `ensemble_n_models` 写入 `model_registry.json` 训练元数据
+  - 新增 `tests/test_ensemble_seeds.py`（EnsembleModel 平均 + 种子解析）
+  - 依据：三组最近期 split（split12/13）×10 种子诊断显示 bagging 后按日截面 RankIC
+    均 ≥ 单种子均值，且种子间方差收敛为 0（结果可复现）
+
 ## [0.75.1] - 2026-06-16
 
 ### Added
