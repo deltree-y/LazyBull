@@ -23,6 +23,7 @@ $skip_training           = $false   # $true 启用 | $false 禁用
 # FinalDate            : 最终日期（启用部署训练时=部署训练数据最后一天；禁用部署训练时=最后split测试结束日）
 # ContinueDays         : 连续执行天数；>1 时会从 FinalDate 起按自然日逐日向后推进展开，并自动顺延到最近后一交易日
 # StartModelVersion    : skip-training 模式下该时间段首个 split 对应模型版本号
+# SelectedSplits       : 可选 split 下标列表（如 @(0,4,5,7,9)）；@() 或不填表示训练该时间段全部 split
 $wf_period_configs = @(
     [PSCustomObject]@{
         Label = "0105"
@@ -30,35 +31,37 @@ $wf_period_configs = @(
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
+        #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
+        SelectedSplits = @(7,8,9,10,12,13)
     }
-    [PSCustomObject]@{
-        Label = "0109"
-        SplitCount = 14
-        FinalDate = "20260109" # 20260209
-        ContinueDays = 1
-        StartModelVersion = 19234#19057#(0.035)#19234#(0.03)#19249#(0.04)
-    }
-    [PSCustomObject]@{
-        Label = "0116"
-        SplitCount = 14
-        FinalDate = "20260116" # 20260324
-        ContinueDays = 1
-        StartModelVersion = 19264#19147#(0.035)#19264#(0.03)#19279#(0.04)
-    }
-    [PSCustomObject]@{
-        Label = "0123"
-        SplitCount = 14
-        FinalDate = "20260123"
-        ContinueDays = 1
-        StartModelVersion = 15034
-    }
-    [PSCustomObject]@{
-        Label = "0130"
-        SplitCount = 14
-        FinalDate = "20260130"
-        ContinueDays = 1
-        StartModelVersion = 15034
-    }
+    #[PSCustomObject]@{
+    #    Label = "0109"
+    #    SplitCount = 14
+    #    FinalDate = "20260109" # 20260209
+    #    ContinueDays = 1
+    #    StartModelVersion = 19234#19057#(0.035)#19234#(0.03)#19249#(0.04)
+    #}
+    #[PSCustomObject]@{
+    #    Label = "0116"
+    #    SplitCount = 14
+    #    FinalDate = "20260116" # 20260324
+    #    ContinueDays = 1
+    #    StartModelVersion = 19264#19147#(0.035)#19264#(0.03)#19279#(0.04)
+    #}
+    #[PSCustomObject]@{
+    #    Label = "0123"
+    #    SplitCount = 14
+    #    FinalDate = "20260123"
+    #   ContinueDays = 1
+    #    StartModelVersion = 15034
+    #}
+    #[PSCustomObject]@{
+    #    Label = "0130"
+    #    SplitCount = 14
+    #    FinalDate = "20260130"
+    #    ContinueDays = 1
+    #    StartModelVersion = 15034
+    #}
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
@@ -74,10 +77,10 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(2000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.03)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.02)     #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 $min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
@@ -86,7 +89,7 @@ $reg_lambda_list         = @(5)         #. XGB推荐1.0, LGB推荐5.0
 $gamma_list              = @(0.5)       #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(300)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(600)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
@@ -95,7 +98,10 @@ $rank_weight_topk_list   = @(50)         #50
 $rank_weight_list        = @(3)          #3
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
-$time_decay_half_life    = 0         # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
+$time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
+
+# ── best_iteration 自适应候选重训 ─────────────────────────────
+$adaptive_best_iter_retrain = $true  # $true 启用：低迭代/撞上限 split 自动重训候选并按验证 RankIC/IR 择优
 
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
@@ -153,7 +159,7 @@ $factor_prune             = $false  # $true 启用 | $false 禁用（需先运�
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = ""#"42,1,2,3,4"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "729,121,229"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
@@ -471,6 +477,37 @@ foreach ($wfPeriod in $wf_period_configs) {
         1
     }
     $periodStartModelVersion = $wfPeriod.StartModelVersion
+    $periodSelectedSplits = @()
+    if ($wfPeriod.PSObject.Properties.Name -contains 'SelectedSplits' -and $null -ne $wfPeriod.SelectedSplits) {
+        if ($wfPeriod.SelectedSplits -is [string]) {
+            $splitTokens = $wfPeriod.SelectedSplits -split "[ ,;]+"
+            foreach ($token in $splitTokens) {
+                if ([string]::IsNullOrWhiteSpace($token)) {
+                    continue
+                }
+                $splitIndex = [int]$token
+                if ($splitIndex -lt 0) {
+                    throw "wf_period_configs[$($wfPeriodIndex - 1)] 的 SelectedSplits 仅支持非负整数，收到: $splitIndex"
+                }
+                if ($periodSelectedSplits -notcontains $splitIndex) {
+                    $periodSelectedSplits += $splitIndex
+                }
+            }
+        } else {
+            foreach ($splitIndexValue in $wfPeriod.SelectedSplits) {
+                if ($null -eq $splitIndexValue -or [string]::IsNullOrWhiteSpace([string]$splitIndexValue)) {
+                    continue
+                }
+                $splitIndex = [int]$splitIndexValue
+                if ($splitIndex -lt 0) {
+                    throw "wf_period_configs[$($wfPeriodIndex - 1)] 的 SelectedSplits 仅支持非负整数，收到: $splitIndex"
+                }
+                if ($periodSelectedSplits -notcontains $splitIndex) {
+                    $periodSelectedSplits += $splitIndex
+                }
+            }
+        }
+    }
 
     if ($periodSplitCount -le 0 -or [string]::IsNullOrWhiteSpace($periodFinalDate)) {
         throw "wf_period_configs[$($wfPeriodIndex - 1)] 缺少有效的 SplitCount 或 FinalDate"
@@ -498,6 +535,7 @@ foreach ($wfPeriod in $wf_period_configs) {
             ContinueDays = $periodContinueDays
             ContinueOffset = $continueOffset
             StartModelVersion = $periodStartModelVersion
+            SelectedSplits = $periodSelectedSplits
         }
     }
 }
@@ -513,10 +551,15 @@ $batch_compare_output = Join-Path $data_root "walk_forward\wf_comparison.xlsx"
 New-Item -ItemType Directory -Path $batch_raw_dir -Force | Out-Null
 
 $periodSummary = ($normalized_wf_period_configs | ForEach-Object {
-    if ($_.ContinueDays -gt 1) {
-        "{0}:split={1}, final={2}, day={3}/{4}" -f $_.Label, $_.SplitCount, $_.FinalDate, ($_.ContinueOffset + 1), $_.ContinueDays
+    $selectedSplitsLabel = if ($_.SelectedSplits -and $_.SelectedSplits.Count -gt 0) {
+        " | selected_splits=$($_.SelectedSplits -join ',')"
     } else {
-        "{0}:split={1}, final={2}" -f $_.Label, $_.SplitCount, $_.FinalDate
+        ""
+    }
+    if ($_.ContinueDays -gt 1) {
+        "{0}:split={1}, final={2}, day={3}/{4}{5}" -f $_.Label, $_.SplitCount, $_.FinalDate, ($_.ContinueOffset + 1), $_.ContinueDays, $selectedSplitsLabel
+    } else {
+        "{0}:split={1}, final={2}{3}" -f $_.Label, $_.SplitCount, $_.FinalDate, $selectedSplitsLabel
     }
 }) -join "; "
 
@@ -546,6 +589,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $reg_alpha_list.Length *
               $reg_lambda_list.Length *
               $gamma_list.Length *
+              $time_decay_half_life_list.Length *
               $rank_weight_topk_list.Length *
               $rank_weight_list.Length *
               $market_regime_bear_threshold_list.Length *
@@ -630,6 +674,7 @@ foreach ($min_child_weight in $min_child_weight_list) {
 foreach ($reg_alpha in $reg_alpha_list) {
 foreach ($reg_lambda in $reg_lambda_list) {
 foreach ($gamma in $gamma_list) {
+foreach ($time_decay_half_life in $time_decay_half_life_list) {
 foreach ($rank_weight_topk in $rank_weight_topk_list) {
 foreach ($rank_weight in $rank_weight_list) {
 foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
@@ -693,6 +738,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $period_label
     }
     $start_model_version = $wfPeriod.StartModelVersion
+    $selected_splits = $wfPeriod.SelectedSplits
     $summary_csv_path = Join-Path $batch_raw_dir ("walk_forward_summary_{0}_{1:D4}.csv" -f $period_label, $count)
 
     # 构建命令字符串
@@ -727,6 +773,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --batch-run-id $batch_run_id" +
                  " --batch-period-label $batch_period_label" +
                  " --wf-summary-csv `"$summary_csv_path`""
+
+    if ($selected_splits -and $selected_splits.Count -gt 0) {
+        $pythonCmd += " --selected-split-indices $($selected_splits -join ' ')"
+    }
 
     if (-not $rank_weight_enabled) {
         $pythonCmd += " --no-rank-weight"
@@ -782,6 +832,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($ensemble_seeds -ne "") {
         $pythonCmd += " --ensemble-seeds $ensemble_seeds"
+    }
+
+    if ($adaptive_best_iter_retrain) {
+        $pythonCmd += " --adaptive-best-iter-retrain"
     }
 
     if ($enable_enhanced) {
@@ -1001,7 +1055,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

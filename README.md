@@ -28,7 +28,24 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.76.0)
+### 当前版本 (v0.76.4)
+
+**特征稳定性筛选低自由度告警修复** (v0.76.4):
+- `src/lazybull/ml/train_core.py` 的 `filter_stable_features()` 移除无效的 `np.errstate` 告警抑制，改为在相关系数计算前做有效配对样本数和零方差校验
+- 仅当有效样本不少于 2 且截面 rank 方差大于 0 时才计算相关系数，避免 `Degrees of freedom <= 0 for slice` 告警刷屏
+- 新增 `tests/test_feature_stability_filter_warning.py` 回归测试，强制将 RuntimeWarning 升级为异常，确认该路径已被彻底规避
+
+**walk-forward 按 split 下标定向训练** (v0.76.3):
+- `scripts/walk_forward.py` 新增 `--selected-split-indices`（例如 `--selected-split-indices 0 4 5 7 9`），可只训练指定 split；不传该参数时默认训练全部 split
+- `scripts/batch/batch_walk_forward.ps1` 的 `wf_period_configs` 新增 `SelectedSplits`，可直接在每个 `PSCustomObject` 内配置（如 `SelectedSplits = @(0,4,5,7,9)`）；`SelectedSplits = @()` 或不填表示全部 split
+- 对非法下标会在启动阶段直接报错，避免批量任务长时间运行后才发现配置问题
+
+**walk-forward best_iteration 自适应候选重训** (v0.76.2):
+- `scripts/walk_forward.py` 新增 `--adaptive-best-iter-retrain`：当某子模型 `best_iteration <= 100` 时自动用 `learning_rate / 2` 且 `n_estimators * 2` 训练候选模型；当某子模型 `best_iteration >= 95% * n_estimators` 时自动用 `learning_rate * 1.5` 且保持 `n_estimators` 不变训练候选模型
+- 触发时机为子模型级实时触发：命中阈值后立即对该子模型候选重训并择优；候选参数会滚动到当前 split 尚未启动的后续子模型，不影响其他 split
+- 候选模型不会直接替换基础模型；只有验证集逐日 `RankIC IR` 至少提升 `0.05` 且 `RankIC` 均值不下降时才采用
+- summary 与模型 metadata 记录触发原因、是否评估候选、是否采用候选及基础/候选 `best_iteration`，并新增 `adaptive_live_*` 字段用于回看实时触发与最终滚动参数
+- `batch_walk_forward.ps1` 新增 `$adaptive_best_iter_retrain`，默认透传启用
 
 **多种子 bagging（walk-forward 训练）** (v0.76.0):
 - `scripts/walk_forward.py` 新增 `--ensemble-seeds`（逗号分隔随机种子，如 `42,1,2,3,4`）：启用后每个 split 在多个种子上各训一个子模型，预测取平均，降低单一 holdout 早停带来的训练随机方差

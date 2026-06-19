@@ -59,6 +59,7 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
         enable_cashflow_quality_features=True,
         enable_consensus_revision_features=True,
         feature_stability_filter=False,
+        factor_prune=False,
     )
 
     with pytest.raises(RuntimeError, match="stop after capture"):
@@ -68,6 +69,100 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
 
     assert captured["enable_cashflow_quality_features"] is True
     assert captured["enable_consensus_revision_features"] is True
+
+
+def test_walk_forward_adaptive_best_iter_action_thresholds():
+    assert walk_forward_module._resolve_adaptive_best_iter_action(100, 5000) == "low_iter"
+    assert walk_forward_module._resolve_adaptive_best_iter_action(101, 5000) is None
+    assert walk_forward_module._resolve_adaptive_best_iter_action(4749, 5000) is None
+    assert walk_forward_module._resolve_adaptive_best_iter_action(4750, 5000) == "hit_cap"
+    assert walk_forward_module._resolve_adaptive_best_iter_action(None, 5000) is None
+
+
+def test_walk_forward_adaptive_candidate_replacement_requires_ir_gain_and_rankic_hold():
+    base = {"daily_rankic_ir": 1.20, "daily_rankic_mean": 0.08}
+
+    better = {"daily_rankic_ir": 1.25, "daily_rankic_mean": 0.08}
+    assert walk_forward_module._candidate_passes_adaptive_replacement(base, better) is True
+
+    weak_ir = {"daily_rankic_ir": 1.249, "daily_rankic_mean": 0.09}
+    assert walk_forward_module._candidate_passes_adaptive_replacement(base, weak_ir) is False
+
+    lower_rankic = {"daily_rankic_ir": 1.30, "daily_rankic_mean": 0.079}
+    assert walk_forward_module._candidate_passes_adaptive_replacement(base, lower_rankic) is False
+
+
+def test_walk_forward_adaptive_candidate_args_follow_requested_rules():
+    args = types.SimpleNamespace(learning_rate=0.02, n_estimators=5000)
+
+    low_iter_args = walk_forward_module._build_adaptive_candidate_args(args, "low_iter")
+    assert low_iter_args.learning_rate == pytest.approx(0.01, rel=1e-2)
+    assert low_iter_args.n_estimators == 10000
+
+    hit_cap_args = walk_forward_module._build_adaptive_candidate_args(args, "hit_cap")
+    assert hit_cap_args.learning_rate == pytest.approx(0.03, rel=1e-2)
+    assert hit_cap_args.n_estimators == 5000
+
+
+def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch):
+    calls = []
+
+    def _fake_train_model_on_window(
+        train_start, train_end, storage, loader, args, random_state_override=None
+    ):
+        calls.append((round(args.learning_rate, 6), random_state_override))
+        best_iter = 4900 if args.learning_rate < 0.03 else 1200
+        return {
+            "model": object(),
+            "feature_columns": ["f1"],
+            "train_params": {
+                "best_iteration": best_iter,
+                "learning_rate": args.learning_rate,
+                "n_estimators": args.n_estimators,
+            },
+            "train_metrics": {},
+            "val_metrics": {},
+            "df_val_split_original": pd.DataFrame([{"trade_date": "20240101", "x": 1}]),
+            "data_stats": {},
+            "train_days_count": 1,
+            "total_train_samples": 1,
+            "X_train_len": 1,
+            "X_val_len": 1,
+        }
+
+    monkeypatch.setattr(walk_forward_module, "_train_model_on_window", _fake_train_model_on_window)
+    monkeypatch.setattr(
+        walk_forward_module,
+        "_evaluate_train_result_val_daily",
+        lambda tr, *_args, **_kwargs: {
+            "daily_rankic_ir": 1.30 if tr["train_params"]["learning_rate"] >= 0.03 else 1.00,
+            "daily_rankic_mean": 0.10,
+        },
+    )
+
+    args = types.SimpleNamespace(
+        learning_rate=0.02,
+        n_estimators=5000,
+        label_column="neu_y_ret_20",
+        task="regression",
+        random_state=42,
+    )
+
+    _sub_models, _base_result, meta = walk_forward_module._build_ensemble_sub_models(
+        windows=[("20120101", "20181231")],
+        storage=None,
+        loader=None,
+        args=args,
+        seeds=[729, 121],
+        topk_values=[30],
+        enable_live_adaptive=True,
+    )
+
+    assert calls == [(0.02, 729), (0.03, 729), (0.03, 121)]
+    assert meta["live_adaptive_triggered"] is True
+    assert meta["live_adaptive_trigger_count"] == 1
+    assert meta["live_adaptive_used_count"] == 1
+    assert meta["live_adaptive_final_learning_rate"] == pytest.approx(0.03, rel=1e-6)
 
 
 def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):

@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.76.4] - 2026-06-19
+
+### Bugfix
+
+- **特征稳定性筛选移除无效告警抑制并改为前置有效性校验**：
+  - `src/lazybull/ml/train_core.py` 的 `filter_stable_features()` 移除 `np.errstate` 包裹（该方式无法抑制 `warnings.warn` 型 RuntimeWarning）。
+  - 在逐日截面相关计算前增加有效配对样本数与零方差校验：仅当有效样本 `>=2` 且特征/标签 rank 方差都大于 0 时才计算相关系数。
+  - 修复后不再出现 `Degrees of freedom <= 0 for slice` 刷屏告警，且保持原有“无效样本跳过”的筛选语义。
+
+### Tests
+
+- 新增 `tests/test_feature_stability_filter_warning.py`，使用 `warnings.simplefilter("error", RuntimeWarning)` 回归验证低自由度样本不会触发 RuntimeWarning。
+
+## [0.76.3] - 2026-06-19
+
+### Added
+
+- **walk-forward 支持按 split 下标定向训练**：
+  - `scripts/walk_forward.py` 新增 `--selected-split-indices` 参数（示例：`--selected-split-indices 0 4 5 7 9`）。
+  - 参数留空时保持原行为，训练全部 split；非空时仅训练指定下标的 split。
+  - 新增下标校验：若传入不存在或负数下标会直接报错，避免误跑。
+  - summary 训练参数列新增 `selected_split_indices`，便于 compare 回溯。
+  - `scripts/batch/batch_walk_forward.ps1` 的 `wf_period_configs` 新增 `SelectedSplits` 字段，支持按时间段配置定向 split 训练并自动透传。
+
+### Tests
+
+- `tests/test_walk_forward.py` 新增 split 下标过滤回归：覆盖“空列表=全部、非空=指定子集、非法下标报错”。
+
+## [0.76.2] - 2026-06-18
+
+### Changed
+
+- **walk-forward best_iteration 自适应改为子模型实时触发（split 内生效）**：
+  - `scripts/walk_forward.py` 在多子模型集成训练循环中改为“每个子模型训练后立即判定”。
+  - 若子模型命中阈值（低迭代或撞上限），立刻对该子模型发起候选重训并按既有标准择优替换。
+  - 候选参数会即时滚动到“当前 split 尚未启动的后续子模型”，不会影响其他 split。
+  - 避免与 split 末尾后置 challenger 重复触发，保证训练日志与触发语义一致。
+  - summary / metadata 新增 `adaptive_live_*` 审计字段，用于回看实时触发次数、最终滚动参数与最后一次触发动作。
+
+### Tests
+
+- `tests/test_training_feature_flag_forwarding.py` 新增实时触发作用域回归：覆盖“触发后同 split 后续子模型参数滚动生效”的行为。
+
+## [0.76.1] - 2026-06-18
+
+### Added
+
+- **walk-forward best_iteration 自适应候选重训**：
+  - `scripts/walk_forward.py` 新增 `--adaptive-best-iter-retrain` 开关。
+  - 当基础模型 `best_iteration <= 100` 时，自动训练候选模型：`learning_rate / 2` 且
+    `n_estimators * 2`。
+  - 当基础模型 `best_iteration >= 95% * n_estimators` 时，自动训练候选模型：
+    `learning_rate * 1.5` 且 `n_estimators` 不变。
+  - 候选模型仅在验证集逐日 `RankIC IR` 至少提升 `0.05` 且 `RankIC` 均值不下降时替换基础模型。
+  - summary 与模型 metadata 写入 `adaptive_best_iter_action`、`adaptive_candidate_used` 等诊断字段。
+  - `scripts/batch/batch_walk_forward.ps1` 新增 `$adaptive_best_iter_retrain` 并默认透传启用。
+
+### Tests
+
+- 扩展 `tests/test_training_feature_flag_forwarding.py`，覆盖低迭代/撞上限判定、候选参数派生与替换条件。
+
 ## [0.76.0] - 2026-06-16
 
 ### Added

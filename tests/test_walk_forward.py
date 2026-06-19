@@ -341,6 +341,45 @@ class TestWalkForwardSplits:
                 test_window_months=3,
             )
 
+    def test_filter_splits_by_selected_indices(self):
+        """测试按 split 下标筛选：空列表=全部，非空=指定子集。"""
+        from scripts.walk_forward import _filter_splits_by_selected_indices
+
+        splits = [
+            WalkForwardSplit(
+                split_index=i,
+                train_start="20200101",
+                train_end="20201231",
+                test_start="20210101",
+                test_end="20210331",
+            )
+            for i in range(6)
+        ]
+
+        selected = _filter_splits_by_selected_indices(splits, [0, 4, 5])
+        assert [s.split_index for s in selected] == [0, 4, 5]
+
+        selected_all = _filter_splits_by_selected_indices(splits, [])
+        assert [s.split_index for s in selected_all] == [0, 1, 2, 3, 4, 5]
+
+    def test_filter_splits_by_selected_indices_invalid(self):
+        """测试按 split 下标筛选时，不存在的下标会报错。"""
+        from scripts.walk_forward import _filter_splits_by_selected_indices
+
+        splits = [
+            WalkForwardSplit(
+                split_index=i,
+                train_start="20200101",
+                train_end="20201231",
+                test_start="20210101",
+                test_end="20210331",
+            )
+            for i in range(3)
+        ]
+
+        with pytest.raises(ValueError, match="selected_split_indices"):
+            _filter_splits_by_selected_indices(splits, [0, 4])
+
 
 class TestWalkForwardCSV:
     """测试 walk-forward 汇总CSV生成"""

@@ -538,19 +538,22 @@ def filter_stable_features(
         split_df = df_train[df_train[date_col].isin(split_dates)]
 
         # 向量化计算：逐日 rank 后用 corr 算出各特征的截面IC
-        # 某些交易日某些特征值全相同（std=0），corr 返回 NaN 并触发 numpy 告警，
-        # 这是预期行为，NaN 已被跳过，抑制告警避免刷屏
+        # 先做最小样本与零方差校验，避免触发 numpy 的无效自由度告警
         daily_ics: Dict[str, List[float]] = {col: [] for col in feature_columns}
-        with np.errstate(divide="ignore", invalid="ignore"):
-            for _, group in split_df.groupby(date_col):
-                if len(group) < 30:
+        for _, group in split_df.groupby(date_col):
+            if len(group) < 30:
+                continue
+            ranked = group[feature_columns + [label_column]].rank()
+            label_rank = ranked[label_column]
+            for col in feature_columns:
+                pair = pd.concat([ranked[col], label_rank], axis=1).dropna()
+                if len(pair) < 2:
                     continue
-                ranked = group[feature_columns + [label_column]].rank()
-                label_rank = ranked[label_column]
-                for col in feature_columns:
-                    corr = ranked[col].corr(label_rank)
-                    if not np.isnan(corr):
-                        daily_ics[col].append(corr)
+                if pair.iloc[:, 0].std(ddof=1) == 0 or pair.iloc[:, 1].std(ddof=1) == 0:
+                    continue
+                corr = pair.iloc[:, 0].corr(pair.iloc[:, 1])
+                if not np.isnan(corr):
+                    daily_ics[col].append(corr)
 
         for col in feature_columns:
             ics = daily_ics[col]

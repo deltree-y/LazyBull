@@ -189,8 +189,8 @@ def write_training_run_to_csv(
         # 检测是否有新增列
         added_columns = new_columns - existing_columns
         if added_columns:
-            logger.warning(f"检测到新增字段: {sorted(added_columns)}")
-            logger.warning("将扩展表头以兼容新字段")
+            logger.info(f"检测到新增字段: {sorted(added_columns)}")
+            logger.info("将扩展表头以兼容新字段")
 
             # 读取完整的现有数据
             existing_df = pd.read_csv(csv_path, encoding="utf-8-sig", low_memory=False)
