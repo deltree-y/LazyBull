@@ -102,10 +102,10 @@ $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1�
 
 # ── best_iteration 自适应候选重训 ─────────────────────────────
 $adaptive_best_iter_retrain = $true  # $true 启用：低迭代/撞上限 split 自动重训候选并按验证 RankIC/IR 择优
-$adaptive_low_iter_max_retries = 5  # low_iter（best_iter<=100）随机种子重试上限
+$adaptive_low_iter_max_retries = 3  # low_iter（best_iter<=100）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "1000,2000,3000,4000,5000"#,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "1100,2200,3300,4400,5500,6600,7700,8800"#,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数
 

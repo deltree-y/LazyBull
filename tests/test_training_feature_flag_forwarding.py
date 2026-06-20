@@ -79,17 +79,17 @@ def test_walk_forward_adaptive_best_iter_action_thresholds():
     assert walk_forward_module._resolve_adaptive_best_iter_action(None, 5000) is None
 
 
-def test_walk_forward_adaptive_candidate_replacement_requires_ir_gain_and_rankic_hold():
-    base = {"daily_rankic_ir": 1.20, "daily_rankic_mean": 0.08}
+def test_walk_forward_adaptive_candidate_replacement_requires_ir_gain_and_top30_median_hold():
+    base = {"daily_rankic_ir": 1.20, "diagnostic_Top30_逐日均值_50分位": 0.0030}
 
-    better = {"daily_rankic_ir": 1.25, "daily_rankic_mean": 0.081}
+    better = {"daily_rankic_ir": 1.25, "diagnostic_Top30_逐日均值_50分位": 0.0035}
     assert walk_forward_module._candidate_passes_adaptive_replacement(base, better) is True
 
-    weak_ir = {"daily_rankic_ir": 1.199, "daily_rankic_mean": 0.09}
+    weak_ir = {"daily_rankic_ir": 1.199, "diagnostic_Top30_逐日均值_50分位": 0.0050}
     assert walk_forward_module._candidate_passes_adaptive_replacement(base, weak_ir) is False
 
-    lower_rankic = {"daily_rankic_ir": 1.30, "daily_rankic_mean": 0.079}
-    assert walk_forward_module._candidate_passes_adaptive_replacement(base, lower_rankic) is False
+    lower_top30 = {"daily_rankic_ir": 1.30, "diagnostic_Top30_逐日均值_50分位": 0.0025}
+    assert walk_forward_module._candidate_passes_adaptive_replacement(base, lower_top30) is False
 
 
 def test_walk_forward_adaptive_candidate_args_follow_requested_rules():
@@ -142,6 +142,7 @@ def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch
         lambda tr, *_args, **_kwargs: {
             "daily_rankic_ir": 1.30 if tr["train_params"]["learning_rate"] >= 0.03 else 1.00,
             "daily_rankic_mean": 0.11 if tr["train_params"]["learning_rate"] >= 0.03 else 0.10,
+            "diagnostic_Top30_逐日均值_50分位": 0.0040 if tr["train_params"]["learning_rate"] >= 0.03 else 0.0030,
         },
     )
 
@@ -220,6 +221,11 @@ def test_live_adaptive_low_iter_retries_with_incremental_seed(monkeypatch):
                 202: 0.13,
                 203: 0.12,
             }.get(tr["train_params"].get("random_state"), 0.10),
+            "diagnostic_Top30_逐日均值_50分位": {
+                201: 0.0035,
+                202: 0.0045,
+                203: 0.0040,
+            }.get(tr["train_params"].get("random_state"), 0.0030),
         },
     )
 
@@ -295,6 +301,13 @@ def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
                 104: 0.08,
                 105: 0.09,
             }[tr["train_params"]["random_state"]],
+            "diagnostic_Top30_逐日均值_50分位": {
+                101: 0.0010,
+                102: 0.0012,
+                103: 0.0015,
+                104: 0.0018,
+                105: 0.0020,
+            }[tr["train_params"]["random_state"]],
         },
     )
 
@@ -363,6 +376,13 @@ def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypa
                 203: 0.07,
                 204: 0.08,
                 205: 0.09,
+            }[tr["train_params"]["random_state"]],
+            "diagnostic_Top30_逐日均值_50分位": {
+                201: 0.0010,
+                202: 0.0012,
+                203: 0.0015,
+                204: 0.0018,
+                205: 0.0020,
             }[tr["train_params"]["random_state"]],
         },
     )

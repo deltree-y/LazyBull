@@ -926,8 +926,10 @@ def _build_ensemble_sub_models(
             idx += 1
             seed_note = f" seed={seed}" if len(seeds) > 1 else ""
             logger.info(
+                f"{'='*60}\n"
                 f"  {prefix}子模型 {idx}/{total}（{win_label}{seed_note}）: "
-                f"{win_start} ~ {win_end}"
+                f"{win_start} ~ {win_end}\n"
+                f"{'='*60}"
             )
             selected_tr = _train_model_on_window(
                 win_start, win_end, storage, loader, rolling_args, random_state_override=seed
@@ -944,7 +946,8 @@ def _build_ensemble_sub_models(
                     adaptive_meta["live_adaptive_last_action"] = action
                     adaptive_meta["live_adaptive_last_best_iteration"] = best_iter
                     base_val_daily = _evaluate_train_result_val_daily(
-                        selected_tr, rolling_args.label_column, rolling_args.task, topk_values
+                        selected_tr, rolling_args.label_column, rolling_args.task, topk_values,
+                        emit_logs=False,
                     )
 
                     if action == "low_iter":
@@ -988,6 +991,7 @@ def _build_ensemble_sub_models(
                                 candidate_args.label_column,
                                 candidate_args.task,
                                 topk_values,
+                                emit_logs=False,
                             )
 
                             logger.warning(
@@ -1002,14 +1006,18 @@ def _build_ensemble_sub_models(
                                 best_retry_seed = retry_seed
                                 best_retry_best_iteration = challenger_best_iteration
 
+                            base_top30m = _safe_float(base_val_daily.get('diagnostic_Top30_逐日均值_50分位'))
+                            cand_top30m = _safe_float(challenger_val_daily.get('diagnostic_Top30_逐日均值_50分位'))
+                            base_ir = _safe_float(base_val_daily.get('daily_rankic_ir'))
+                            cand_ir = _safe_float(challenger_val_daily.get('daily_rankic_ir'))
                             logger.warning(
                                 f"  子模型 {idx}/{total} 继续低迭代重试: "
                                 f"attempt={retry_index}, retry_seed={retry_seed}, "
                                 f"candidate_best_iter={challenger_best_iteration}, "
-                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
-                                f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
-                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
-                                f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
+                                f"base/candidate_top30_med={'nan' if base_top30m is None else f'{base_top30m:.6f}'}/"
+                                f"{'nan' if cand_top30m is None else f'{cand_top30m:.6f}'}, "
+                                f"base/candidate_val_ir={'nan' if base_ir is None else f'{base_ir:.4f}'}/"
+                                f"{'nan' if cand_ir is None else f'{cand_ir:.4f}'}"
                             )
 
                         adaptive_meta["live_adaptive_final_random_state"] = best_retry_seed
@@ -1020,11 +1028,13 @@ def _build_ensemble_sub_models(
                         ] = best_retry_best_iteration
 
                         if best_retry_metrics is not None:
+                            best_top30m = _safe_float(best_retry_metrics.get('diagnostic_Top30_逐日均值_50分位'))
+                            best_ir = _safe_float(best_retry_metrics.get('daily_rankic_ir'))
                             logger.warning(
                                 f"  子模型 {idx}/{total} 低迭代重试最优候选: "
                                 f"best_retry_seed={best_retry_seed}, best_retry_best_iter={best_retry_best_iteration}, "
-                                f"best_retry_val_ir={_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
-                                f"best_retry_val_rankic={_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                                f"best_retry_top30_median={'nan' if best_top30m is None else f'{best_top30m:.6f}'}, "
+                                f"best_retry_val_ir={'nan' if best_ir is None else f'{best_ir:.4f}'}"
                             )
 
                         if best_retry_tr is not None and _candidate_passes_adaptive_replacement(
@@ -1032,13 +1042,17 @@ def _build_ensemble_sub_models(
                         ):
                             selected_tr = best_retry_tr
                             adaptive_meta["live_adaptive_used_count"] += 1
+                            base_top30m = _safe_float(base_val_daily.get('diagnostic_Top30_逐日均值_50分位'))
+                            cand_top30m = _safe_float(best_retry_metrics.get('diagnostic_Top30_逐日均值_50分位'))
+                            base_ir = _safe_float(base_val_daily.get('daily_rankic_ir'))
+                            cand_ir = _safe_float(best_retry_metrics.get('daily_rankic_ir'))
                             logger.warning(
                                 f"  子模型 {idx}/{total} 采用低迭代重试最优候选模型: "
                                 f"retry_seed={best_retry_seed}, "
-                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
-                                f"{_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
-                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
-                                f"{_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                                f"base/candidate_top30_med={'nan' if base_top30m is None else f'{base_top30m:.6f}'}/"
+                                f"{'nan' if cand_top30m is None else f'{cand_top30m:.6f}'}, "
+                                f"base/candidate_val_ir={'nan' if base_ir is None else f'{base_ir:.4f}'}/"
+                                f"{'nan' if cand_ir is None else f'{cand_ir:.4f}'}"
                             )
                         else:
                             logger.warning(
@@ -1071,25 +1085,34 @@ def _build_ensemble_sub_models(
                             candidate_args.label_column,
                             candidate_args.task,
                             topk_values,
+                            emit_logs=False,
                         )
 
                         if _candidate_passes_adaptive_replacement(base_val_daily, challenger_val_daily):
                             selected_tr = challenger_tr
                             adaptive_meta["live_adaptive_used_count"] += 1
+                            base_top30m = _safe_float(base_val_daily.get('diagnostic_Top30_逐日均值_50分位'))
+                            cand_top30m = _safe_float(challenger_val_daily.get('diagnostic_Top30_逐日均值_50分位'))
+                            base_ir = _safe_float(base_val_daily.get('daily_rankic_ir'))
+                            cand_ir = _safe_float(challenger_val_daily.get('daily_rankic_ir'))
                             logger.warning(
                                 f"  子模型 {idx}/{total} 采用自适应候选模型: action={action}, "
-                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
-                                f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
-                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
-                                f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
+                                f"base/candidate_top30_med={'nan' if base_top30m is None else f'{base_top30m:.6f}'}/"
+                                f"{'nan' if cand_top30m is None else f'{cand_top30m:.6f}'}, "
+                                f"base/candidate_val_ir={'nan' if base_ir is None else f'{base_ir:.4f}'}/"
+                                f"{'nan' if cand_ir is None else f'{cand_ir:.4f}'}"
                             )
                         else:
+                            base_top30m = _safe_float(base_val_daily.get('diagnostic_Top30_逐日均值_50分位'))
+                            cand_top30m = _safe_float(challenger_val_daily.get('diagnostic_Top30_逐日均值_50分位'))
+                            base_ir = _safe_float(base_val_daily.get('daily_rankic_ir'))
+                            cand_ir = _safe_float(challenger_val_daily.get('daily_rankic_ir'))
                             logger.warning(
                                 f"  子模型 {idx}/{total} 保留原模型: action={action}, "
-                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
-                                f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
-                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
-                                f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
+                                f"base/candidate_top30_med={'nan' if base_top30m is None else f'{base_top30m:.6f}'}/"
+                                f"{'nan' if cand_top30m is None else f'{cand_top30m:.6f}'}, "
+                                f"base/candidate_val_ir={'nan' if base_ir is None else f'{base_ir:.4f}'}/"
+                                f"{'nan' if cand_ir is None else f'{cand_ir:.4f}'}"
                             )
 
                         # 仅影响当前 split 尚未启动的后续子模型，不影响其他 split
@@ -1129,6 +1152,7 @@ def _build_ensemble_sub_models(
                 args.label_column,
                 args.task,
                 eval_topk_values,
+                emit_logs=False,
             )
             score = _adaptive_sort_score(seed_metrics)
             scored_records.append(
@@ -1157,12 +1181,12 @@ def _build_ensemble_sub_models(
             train_result = item["train_result"]
             metrics = item["seed_metrics"]
             seed_used = train_result["train_params"].get("random_state")
+            top30_med = _safe_float(metrics.get("diagnostic_Top30_逐日均值_50分位"))
             val_ir = _safe_float(metrics.get("daily_rankic_ir"))
-            val_rankic = _safe_float(metrics.get("daily_rankic_mean"))
             logger.warning(
                 f"  保留子模型#{rank_idx}: seed={seed_used}, "
-                f"val_ir={'nan' if val_ir is None else f'{val_ir:.4f}'}, "
-                f"val_rankic={'nan' if val_rankic is None else f'{val_rankic:.4f}'}"
+                f"top30_median={'nan' if top30_med is None else f'{top30_med:.6f}'}, "
+                f"val_ir={'nan' if val_ir is None else f'{val_ir:.4f}'}"
             )
     return sub_models, base_result, adaptive_meta
 
@@ -1172,6 +1196,7 @@ def _evaluate_train_result_val_daily(
     original_return_col: str,
     task: str,
     topk_values: List[int],
+    emit_logs: bool = True,
 ) -> Dict:
     df_val = train_result.get("df_val_split_original")
     if df_val is None or len(df_val) == 0:
@@ -1183,6 +1208,7 @@ def _evaluate_train_result_val_daily(
         original_return_col=original_return_col,
         task=task,
         topk_values=topk_values,
+        emit_logs=emit_logs,
     )
 
 
@@ -1309,6 +1335,7 @@ def _select_posterior_tree_model(
         "posterior_tree_model_max_trees": None,
         "posterior_tree_candidate_limits": [],
         "posterior_tree_selected_limit": base_best_iteration,
+        "posterior_tree_selected_top30_median": None,
         "posterior_tree_selected_rankic_ir": None,
         "posterior_tree_selected_rankic_mean": None,
         "posterior_tree_selected_topk_mean": None,
@@ -1348,6 +1375,7 @@ def _select_posterior_tree_model(
     scored_candidates: List[Tuple[float, float, float, int, Dict, object]] = []
     primary_topk = topk_values[0] if topk_values else 30
     primary_topk_key = f"top{primary_topk}_return_mean"
+    primary_diag_key = f"diagnostic_Top{primary_topk}_逐日均值_50分位"
 
     for tree_limit in candidate_limits:
         limited_model = _wrap_model_with_tree_limit(model, tree_limit)
@@ -1360,12 +1388,13 @@ def _select_posterior_tree_model(
             topk_values=topk_values,
             emit_logs=False,
         )
+        top30_median = _safe_float(metrics.get(primary_diag_key))
         rankic_ir = _safe_float(metrics.get("daily_rankic_ir"))
         rankic_mean = _safe_float(metrics.get("daily_rankic_mean"))
         topk_mean = _safe_float(metrics.get(primary_topk_key))
         scored_candidates.append((
+            -np.inf if top30_median is None else top30_median,
             -np.inf if rankic_ir is None else rankic_ir,
-            -np.inf if rankic_mean is None else rankic_mean,
             -np.inf if topk_mean is None else topk_mean,
             tree_limit,
             metrics,
@@ -1378,12 +1407,14 @@ def _select_posterior_tree_model(
     selected_model = best_score[5]
 
     meta["posterior_tree_selected_limit"] = selected_limit
+    meta["posterior_tree_selected_top30_median"] = _safe_float(selected_metrics.get(primary_diag_key))
     meta["posterior_tree_selected_rankic_ir"] = _safe_float(selected_metrics.get("daily_rankic_ir"))
     meta["posterior_tree_selected_rankic_mean"] = _safe_float(selected_metrics.get("daily_rankic_mean"))
     meta["posterior_tree_selected_topk_mean"] = _safe_float(selected_metrics.get(primary_topk_key))
 
     logger.info(
         f"{model_label} 候选树数后验选优完成: selected_limit={selected_limit}, "
+        f"Top30_Median={meta['posterior_tree_selected_top30_median']}, "
         f"RankIC_IR={meta['posterior_tree_selected_rankic_ir']}, "
         f"RankIC={meta['posterior_tree_selected_rankic_mean']}"
     )
@@ -1404,12 +1435,12 @@ def _resolve_adaptive_best_iter_action(best_iteration, n_estimators) -> Optional
 
 
 def _adaptive_sort_score(metrics: Dict) -> Tuple[float, float]:
-    """自适应候选排序评分：逐日 RankIC IR 优先，其次逐日 RankIC 均值。"""
+    """自适应候选排序评分：Top30 逐日收益中位数优先，其次逐日 RankIC IR。"""
+    top30_median = _safe_float(metrics.get("diagnostic_Top30_逐日均值_50分位"))
     rankic_ir = _safe_float(metrics.get("daily_rankic_ir"))
-    rankic_mean = _safe_float(metrics.get("daily_rankic_mean"))
     return (
+        -np.inf if top30_median is None else top30_median,
         -np.inf if rankic_ir is None else rankic_ir,
-        -np.inf if rankic_mean is None else rankic_mean,
     )
 
 
@@ -1423,22 +1454,22 @@ def _format_adaptive_metric_compare(candidate_metrics: Dict, reference_metrics: 
     def _fmt(value: Optional[float]) -> str:
         return "nan" if value is None else f"{value:.4f}"
 
+    candidate_top30_med = _safe_float(candidate_metrics.get("diagnostic_Top30_逐日均值_50分位"))
     candidate_ir = _safe_float(candidate_metrics.get("daily_rankic_ir"))
-    candidate_mean = _safe_float(candidate_metrics.get("daily_rankic_mean"))
     if reference_metrics is None:
         return (
+            f"candidate_top30_median={_fmt(candidate_top30_med)}, "
             f"candidate_ir={_fmt(candidate_ir)}, "
-            f"candidate_rankic={_fmt(candidate_mean)}, "
             "reference=NONE, decision=SET_AS_BEST"
         )
 
+    ref_top30_med = _safe_float(reference_metrics.get("diagnostic_Top30_逐日均值_50分位"))
     ref_ir = _safe_float(reference_metrics.get("daily_rankic_ir"))
-    ref_mean = _safe_float(reference_metrics.get("daily_rankic_mean"))
     better = _is_better_adaptive_candidate(candidate_metrics, reference_metrics)
     decision = "UPDATE_BEST" if better else "KEEP_BEST"
     return (
-        f"candidate_ir={_fmt(candidate_ir)}, best_ir={_fmt(ref_ir)}, "
-        f"candidate_rankic={_fmt(candidate_mean)}, best_rankic={_fmt(ref_mean)}, "
+        f"candidate/best_top30_median={_fmt(candidate_top30_med)}/{_fmt(ref_top30_med)}, "
+        f"candidate/best_ir={_fmt(candidate_ir)}/{_fmt(ref_ir)}, "
         f"decision={decision}"
     )
 
@@ -1446,14 +1477,16 @@ def _format_adaptive_metric_compare(candidate_metrics: Dict, reference_metrics: 
 def _candidate_passes_adaptive_replacement(base_metrics: Dict, candidate_metrics: Dict) -> bool:
     base_ir = _safe_float(base_metrics.get("daily_rankic_ir"))
     candidate_ir = _safe_float(candidate_metrics.get("daily_rankic_ir"))
-    base_mean = _safe_float(base_metrics.get("daily_rankic_mean"))
-    candidate_mean = _safe_float(candidate_metrics.get("daily_rankic_mean"))
+    base_top30_med = _safe_float(base_metrics.get("diagnostic_Top30_逐日均值_50分位"))
+    candidate_top30_med = _safe_float(candidate_metrics.get("diagnostic_Top30_逐日均值_50分位"))
 
-    if base_ir is None or candidate_ir is None or base_mean is None or candidate_mean is None:
+    if base_ir is None or candidate_ir is None:
+        return False
+    if base_top30_med is None or candidate_top30_med is None:
         return False
     return (
         candidate_ir > base_ir + ADAPTIVE_MIN_VAL_RANKIC_IR_GAIN
-        and candidate_mean > base_mean
+        and candidate_top30_med > base_top30_med
     )
 
 
@@ -1678,9 +1711,9 @@ def execute_split_training(
                 adaptive_candidate_best_iteration = challenger["train_params"].get("best_iteration")
                 challenger_val_daily = challenger["val_daily_metrics"]
                 challenger_val_ir = _safe_float(challenger_val_daily.get("daily_rankic_ir"))
-                challenger_val_rankic = _safe_float(challenger_val_daily.get("daily_rankic_mean"))
+                challenger_top30_med = _safe_float(challenger_val_daily.get("diagnostic_Top30_逐日均值_50分位"))
                 base_val_ir = _safe_float(base_val_daily.get("daily_rankic_ir"))
-                base_val_rankic = _safe_float(base_val_daily.get("daily_rankic_mean"))
+                base_top30_med = _safe_float(base_val_daily.get("diagnostic_Top30_逐日均值_50分位"))
 
                 logger.warning(
                     f"Split {split.split_index} 低迭代重试指标对比: "
@@ -1697,17 +1730,18 @@ def execute_split_training(
                 logger.warning(
                     f"Split {split.split_index} 继续低迭代重试: attempt={retry_index}, retry_seed={retry_seed}, "
                     f"candidate_best_iter={adaptive_candidate_best_iteration}, "
-                    f"base_val_ir={base_val_ir:.4f}, "
-                    f"candidate_val_ir={challenger_val_ir:.4f}, base_val_rankic={base_val_rankic:.4f}, "
-                    f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                    f"base/cadidate_top30_med={'nan' if base_top30_med is None else f'{base_top30_med:.6f}'}/"
+                    f"{'nan' if challenger_top30_med is None else f'{challenger_top30_med:.6f}'}, "
+                    f"base/candidate_val_ir={'nan' if base_val_ir is None else f'{base_val_ir:.4f}'}/"
+                    f"{'nan' if challenger_val_ir is None else f'{challenger_val_ir:.4f}'}"
                 )
 
             if best_retry_metrics is not None:
                 logger.warning(
                     f"Split {split.split_index} 低迭代重试最优候选: "
                     f"best_retry_seed={best_retry_seed}, best_retry_best_iter={best_retry_best_iteration}, "
-                    f"best_retry_val_ir={_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
-                    f"best_retry_val_rankic={_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                    f"best_retry_top30_median={_safe_float(best_retry_metrics.get('diagnostic_Top30_逐日均值_50分位')):.6f}, "
+                    f"best_retry_val_ir={_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}"
                 )
 
             if best_retry_candidate is not None:
@@ -1719,11 +1753,15 @@ def execute_split_training(
             ):
                 selected_candidate = best_retry_candidate
                 adaptive_candidate_used = True
+                cand_best_top30m = _safe_float(best_retry_metrics.get('diagnostic_Top30_逐日均值_50分位'))
+                cand_best_ir = _safe_float(best_retry_metrics.get('daily_rankic_ir'))
                 logger.warning(
                     f"Split {split.split_index} 采用低迭代重试最优候选模型: "
                     f"retry_seed={best_retry_seed}, "
-                    f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
-                    f"base_val_rankic={base_val_rankic:.4f}, candidate_val_rankic={_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                    f"base/candidate_top30_med={'nan' if base_top30_med is None else f'{base_top30_med:.6f}'}/"
+                    f"{'nan' if cand_best_top30m is None else f'{cand_best_top30m:.6f}'}, "
+                    f"base/candidate_val_ir={'nan' if base_val_ir is None else f'{base_val_ir:.4f}'}/"
+                    f"{'nan' if cand_best_ir is None else f'{cand_best_ir:.4f}'}"
                 )
 
             if not adaptive_candidate_used:
@@ -1755,11 +1793,11 @@ def execute_split_training(
             adaptive_candidate_best_iteration = challenger["train_params"].get("best_iteration")
             base_val_ir = _safe_float(selected_candidate["val_daily_metrics"].get("daily_rankic_ir"))
             challenger_val_ir = _safe_float(challenger["val_daily_metrics"].get("daily_rankic_ir"))
-            base_val_rankic = _safe_float(
-                selected_candidate["val_daily_metrics"].get("daily_rankic_mean")
+            base_top30_med = _safe_float(
+                selected_candidate["val_daily_metrics"].get("diagnostic_Top30_逐日均值_50分位")
             )
-            challenger_val_rankic = _safe_float(
-                challenger["val_daily_metrics"].get("daily_rankic_mean")
+            challenger_top30_med = _safe_float(
+                challenger["val_daily_metrics"].get("diagnostic_Top30_逐日均值_50分位")
             )
             if _candidate_passes_adaptive_replacement(
                 selected_candidate["val_daily_metrics"], challenger["val_daily_metrics"]
@@ -1768,16 +1806,18 @@ def execute_split_training(
                 adaptive_candidate_used = True
                 logger.warning(
                     f"Split {split.split_index} 采用自适应候选模型: action={adaptive_action}, "
-                    f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={challenger_val_ir:.4f}, "
-                    f"base_val_rankic={base_val_rankic:.4f}, "
-                    f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                    f"base/candidate_top30_med={'nan' if base_top30_med is None else f'{base_top30_med:.6f}'}/"
+                    f"{'nan' if challenger_top30_med is None else f'{challenger_top30_med:.6f}'}, "
+                    f"base/candidate_val_ir={'nan' if base_val_ir is None else f'{base_val_ir:.4f}'}/"
+                    f"{'nan' if challenger_val_ir is None else f'{challenger_val_ir:.4f}'}"
                 )
             else:
                 logger.warning(
                     f"Split {split.split_index} 保留基础模型: action={adaptive_action}, "
-                    f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={challenger_val_ir:.4f}, "
-                    f"base_val_rankic={base_val_rankic:.4f}, "
-                    f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                    f"base/candidate_top30_med={'nan' if base_top30_med is None else f'{base_top30_med:.6f}'}/"
+                    f"{'nan' if challenger_top30_med is None else f'{challenger_top30_med:.6f}'}, "
+                    f"base/candidate_val_ir={'nan' if base_val_ir is None else f'{base_val_ir:.4f}'}/"
+                    f"{'nan' if challenger_val_ir is None else f'{challenger_val_ir:.4f}'}"
                 )
 
     posterior_model, posterior_val_daily_metrics, posterior_meta = _select_posterior_tree_model(
@@ -1950,6 +1990,9 @@ def execute_split_training(
     full_train_params["posterior_tree_candidate_count"] = len(
         train_params.get("posterior_tree_candidate_limits") or []
     )
+    full_train_params["posterior_tree_selected_top30_median"] = train_params.get(
+        "posterior_tree_selected_top30_median"
+    )
     full_train_params["posterior_tree_selected_rankic_ir"] = train_params.get(
         "posterior_tree_selected_rankic_ir"
     )
@@ -2081,6 +2124,7 @@ def execute_split_training(
             train_params.get("posterior_tree_candidate_limits") or []
         ),
         "posterior_tree_selected_limit": train_params.get("posterior_tree_selected_limit"),
+        "posterior_tree_selected_top30_median": train_params.get("posterior_tree_selected_top30_median"),
         "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
         "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
         "test_daily_metrics": test_daily_metrics,
@@ -2291,6 +2335,9 @@ def execute_deploy_training(
     full_train_params["posterior_tree_candidate_count"] = len(
         train_params.get("posterior_tree_candidate_limits") or []
     )
+    full_train_params["posterior_tree_selected_top30_median"] = train_params.get(
+        "posterior_tree_selected_top30_median"
+    )
     full_train_params["posterior_tree_selected_rankic_ir"] = train_params.get(
         "posterior_tree_selected_rankic_ir"
     )
@@ -2404,6 +2451,7 @@ def execute_deploy_training(
             train_params.get("posterior_tree_candidate_limits") or []
         ),
         "posterior_tree_selected_limit": train_params.get("posterior_tree_selected_limit"),
+        "posterior_tree_selected_top30_median": train_params.get("posterior_tree_selected_top30_median"),
         "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
         "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
         "test_daily_metrics": {},
