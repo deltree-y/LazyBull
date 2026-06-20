@@ -28,7 +28,42 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.76.4)
+### 当前版本 (v0.77.6)
+
+**LambdaRank + rank_ic 并发参数兼容修复** (v0.77.6):
+- 修复 `objective=lambdarank` 且 `early_stopping_metric=rank_ic` 时，XGBoost sklearn 包装器可调用评估指标路径触发 `max_workers must be greater than 0` 的问题
+- `src/lazybull/ml/train_core.py` 新增 `n_jobs` 规范化，确保传入线程池参数始终为正整数
+- 保持你要求的“早停指标继续 rank_ic，目标函数继续 rank:pairwise”不变
+
+**LambdaRank 支持 rank_ic 早停** (v0.77.5):
+- `src/lazybull/ml/train_core.py` 中 `train_xgboost_model()` 调整为统一 eval_metric 选择逻辑
+- 当 `objective=lambdarank` 且 `early_stopping_metric=rank_ic` 时，训练保持 `rank:pairwise` 目标函数，同时早停监控使用 `neg_rank_ic`
+- 满足“目标函数切换为排序目标、但不改 rank_ic 早停指标”的实盘调参诉求
+
+**TreeLimitedModel 序列化兼容一次性加固** (v0.77.4):
+- 通过模型文件探针确认并修复旧版扁平序列化状态：缺失 `base_model` 时反序列化自动重建基础模型
+- 新增稳定 `__getstate__` 最小状态输出，避免再次出现 wrapper 状态被底层模型字段覆盖
+- 预测路径改为显式安全读取基础模型，修复 `AttributeError: base_model` 导致的 OOS 中断
+
+**TreeLimitedModel 历史模型兼容性一次收口** (v0.77.3):
+- 修复旧模型缺失 `tree_limit` 导致 OOS 回测阶段 `AttributeError: tree_limit` 中断
+- 对 `tree_limit/max_trees` 缺失或非法值做统一恢复：优先回退到模型实际可用树数
+- 若历史状态无法解析有效树数上限，预测自动回退基础模型默认路径（不带限树参数），确保批任务不断裂
+
+**TreeLimitedModel 旧模型 max_trees 兼容修复** (v0.77.2):
+- 修复旧版本模型文件加载时缺少 `max_trees` 导致的 `AttributeError: max_trees`，避免 walk-forward OOS 阶段中断
+- `src/lazybull/ml/ensemble.py` 新增 `__setstate__`：历史模型反序列化后自动补齐 `max_trees`
+- 兼容逻辑保持与前一版防递归修复一致，确保反序列化早期和预测阶段都稳定
+
+**TreeLimitedModel 反序列化递归修复** (v0.77.1):
+- 修复 `src/lazybull/ml/ensemble.py` 中 `TreeLimitedModel.__getattr__` 在 joblib 反序列化阶段的递归访问问题，避免 `maximum recursion depth exceeded`
+- 当 `base_model` 尚未恢复时，属性代理会安全返回 `AttributeError`，不再进入无限递归
+- 该修复直接覆盖 walk-forward OOS 回测加载已注册模型路径，避免 split 训练后在回测加载阶段中断
+
+**候选树数后验选优（walk-forward / deploy）** (v0.77.0):
+- `scripts/walk_forward.py` 新增 `--posterior-tree-selection-mode`（`disabled|grid`）与 `--posterior-tree-candidates`：训练完成后可直接对候选树数网格做逐日验证评估，用后验口径决定最终模型复杂度，而不再完全依赖 early stopping 的单点 `best_iteration`
+- 默认使用验证集逐日 `RankIC IR` 为主排序、逐日 `RankIC` 均值为次排序；最终选中的树数上限会直接作用于 walk-forward OOS、模型注册与 deploy 模型落盘
+- `scripts/batch/batch_walk_forward.ps1` 新增 `$posterior_tree_selection_mode` 与 `$posterior_tree_candidates`，可在批量实验中直接开启；summary / 模型 metadata / `ml_train_runs.csv` 也会同步记录 `posterior_tree_*` 字段，便于回看基础 `best_iteration` 与后验选中的最终树数
 
 **特征稳定性筛选低自由度告警修复** (v0.76.4):
 - `src/lazybull/ml/train_core.py` 的 `filter_stable_features()` 移除无效的 `np.errstate` 告警抑制，改为在相关系数计算前做有效配对样本数和零方差校验

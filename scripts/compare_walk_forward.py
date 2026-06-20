@@ -137,6 +137,10 @@ COL_NAMES = {
     "best_iter_min":              "最佳迭代最小值",
     "best_iter_max":              "最佳迭代最大值",
     "best_iter_std":              "最佳迭代标准差",
+    "posterior_tree_candidate_count_mean": "后验候选数均值",
+    "posterior_tree_small_space_splits": "后验小搜索空间split数",
+    "posterior_tree_selected_limit_mean": "后验选中树数均值",
+    "posterior_tree_model_max_trees_mean": "后验最大可用树数均值",
     # 跨时间段稳定性
     "period_count":               "时间段数",
     "period_labels":              "时间段列表",
@@ -181,6 +185,16 @@ COL_NAMES = {
     "reg_lambda":                 "L2正则",
     "early_stopping_rounds":      "早停轮数",
     "early_stopping_metric":      "早停指标",
+    "posterior_tree_selection_mode": "后验树数选优模式",
+    "posterior_tree_candidates":  "后验树数候选配置",
+    "posterior_tree_selection_enabled": "后验树数选优启用",
+    "posterior_tree_candidate_limits": "后验树数候选列表",
+    "posterior_tree_candidate_count": "后验树数候选数",
+    "posterior_tree_base_best_iteration": "后验基础最佳迭代",
+    "posterior_tree_model_max_trees": "后验最大可用树数",
+    "posterior_tree_selected_limit": "后验选中树数",
+    "posterior_tree_selected_rankic_ir": "后验选中RankIC_IR",
+    "posterior_tree_selected_rankic_mean": "后验选中RankIC均值",
     "rank_weight_enabled":        "rank权重启用",
     "rank_weight_topk":           "rank权重TopK",
     "rank_weight":                "rank权重值",
@@ -286,6 +300,11 @@ PARAM_COLS = [
     "subsample", "colsample_bytree", "min_child_weight",
     "gamma", "reg_alpha", "reg_lambda",
     "early_stopping_rounds", "early_stopping_metric",
+    "posterior_tree_selection_mode", "posterior_tree_candidates",
+    "posterior_tree_selection_enabled", "posterior_tree_candidate_limits",
+    "posterior_tree_candidate_count", "posterior_tree_base_best_iteration",
+    "posterior_tree_model_max_trees", "posterior_tree_selected_limit",
+    "posterior_tree_selected_rankic_ir", "posterior_tree_selected_rankic_mean",
     "rank_weight_enabled", "rank_weight_topk", "rank_weight",
     "time_decay_half_life", "objective",
     "enable_fundamental", "enable_alt", "enable_margin", "enable_cyq",
@@ -1255,6 +1274,41 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     else:
         row["best_iter_mean"] = row["best_iter_min"] = row["best_iter_max"] = row["best_iter_std"] = None
 
+    # 后验树数选优统计
+    if "posterior_tree_candidate_count" in group.columns:
+        posterior_candidate_count = pd.to_numeric(
+            group["posterior_tree_candidate_count"], errors="coerce"
+        ).dropna()
+        row["posterior_tree_candidate_count_mean"] = (
+            round(posterior_candidate_count.mean(), 1) if len(posterior_candidate_count) else None
+        )
+        row["posterior_tree_small_space_splits"] = (
+            int((posterior_candidate_count <= 2).sum()) if len(posterior_candidate_count) else None
+        )
+    else:
+        row["posterior_tree_candidate_count_mean"] = None
+        row["posterior_tree_small_space_splits"] = None
+
+    if "posterior_tree_selected_limit" in group.columns:
+        posterior_selected = pd.to_numeric(
+            group["posterior_tree_selected_limit"], errors="coerce"
+        ).dropna()
+        row["posterior_tree_selected_limit_mean"] = (
+            round(posterior_selected.mean(), 1) if len(posterior_selected) else None
+        )
+    else:
+        row["posterior_tree_selected_limit_mean"] = None
+
+    if "posterior_tree_model_max_trees" in group.columns:
+        posterior_max_trees = pd.to_numeric(
+            group["posterior_tree_model_max_trees"], errors="coerce"
+        ).dropna()
+        row["posterior_tree_model_max_trees_mean"] = (
+            round(posterior_max_trees.mean(), 1) if len(posterior_max_trees) else None
+        )
+    else:
+        row["posterior_tree_model_max_trees_mean"] = None
+
     return row
 
 
@@ -1312,6 +1366,10 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         # 训练质量补充
         "val_rankic_ir_mean",
         "best_iter_mean", "best_iter_min", "best_iter_max", "best_iter_std",
+        "posterior_tree_candidate_count_mean",
+        "posterior_tree_small_space_splits",
+        "posterior_tree_selected_limit_mean",
+        "posterior_tree_model_max_trees_mean",
     ]
     param_cols_ordered = [c for c in PARAM_COLS if c != "wf_run_id"]
 
@@ -1936,6 +1994,9 @@ def print_comparison_table(df: pd.DataFrame) -> None:
         COL_NAMES["val_rankic_ir_mean"],
         COL_NAMES["train_val_ir_gap"],
         COL_NAMES["best_iter_mean"],
+        COL_NAMES["posterior_tree_candidate_count_mean"],
+        COL_NAMES["posterior_tree_small_space_splits"],
+        COL_NAMES["posterior_tree_selected_limit_mean"],
         COL_NAMES["label_column"],
         COL_NAMES["task"],
         COL_NAMES["n_estimators"],

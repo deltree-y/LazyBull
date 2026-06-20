@@ -2,6 +2,111 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.6] - 2026-06-19
+
+### Bugfix
+
+- **修复 lambdarank + rank_ic 训练时 `max_workers must be greater than 0`**：
+  - `src/lazybull/ml/train_core.py` 在构造 XGBoost 参数前新增 `n_jobs` 规范化逻辑，确保传给 sklearn 包装器与 `ThreadPoolExecutor` 的值始终为正整数。
+  - 保持 `objective=rank:pairwise` 与 `early_stopping_metric=rank_ic` 组合不变，仅修复并发线程数参数兼容问题。
+
+### Tests
+
+- `tests/test_train_core_lambdarank_metric.py` 新增断言：lambdarank + rank_ic 训练参数中的 `n_jobs` 必须 `>=1`。
+
+## [0.77.5] - 2026-06-19
+
+### Changed
+
+- **LambdaRank 分支支持 rank_ic 作为早停指标（不再强制 ndcg）**：
+  - `src/lazybull/ml/train_core.py` 中 `train_xgboost_model()` 调整为统一 eval_metric 选择逻辑。
+  - 当 `task=regression` 且 `early_stopping_metric=rank_ic` 时，`objective=lambdarank` 分支也使用 `neg_rank_ic` 作为 eval_metric。
+  - 保持目标函数为 `rank:pairwise`，满足“早停指标继续使用 rank_ic、目标函数切换为最匹配 rank_ic 的排序目标”这一组合。
+
+### Tests
+
+- 新增 `tests/test_train_core_lambdarank_metric.py`：回归验证 lambdarank + rank_ic 组合下，
+  - 训练参数 objective 为 `rank:pairwise`；
+  - eval_metric 为 `neg_rank_ic`；
+  - qid/eval_qid 仍正确透传。
+
+## [0.77.4] - 2026-06-19
+
+### Bugfix
+
+- **TreeLimitedModel 序列化/反序列化兼容性一次性加固（探针驱动）**：
+  - 新增稳定 `__getstate__`，序列化仅保留 `base_model/tree_limit/max_trees`，避免 wrapper 状态再次被底层模型字段扁平污染。
+  - `__setstate__` 增强历史兼容：当检测到旧版扁平 state（缺失 `base_model`）时，自动重建基础模型并恢复预测链路。
+  - 预测路径改为显式安全读取基础模型，避免 `AttributeError: base_model` 导致 OOS 中断。
+  - 继续保留对 `tree_limit/max_trees` 缺失与非法值的统一容错回退。
+
+### Tests
+
+- `tests/test_walk_forward.py` 新增回归测试：
+  - 验证旧版扁平 state 会触发 `base_model` 重建并可正常预测。
+  - 验证 `__getstate__` 只输出最小必要字段，锁定后续序列化稳定性。
+
+## [0.77.3] - 2026-06-19
+
+### Bugfix
+
+- **全面增强 TreeLimitedModel 历史模型兼容性（一次收口）**：
+  - 修复旧模型在 OOS 回测加载时因缺失 `tree_limit` 抛 `AttributeError: tree_limit` 的问题。
+  - `src/lazybull/ml/ensemble.py` 中新增统一容错：`tree_limit/max_trees` 缺失或非法时自动恢复，优先回退到模型实际可用树数。
+  - 新增无上限兜底路径：若历史状态无法解析有效树数限制，预测自动回退为基础模型默认 `predict/predict_proba`，保证不中断。
+  - 与前序修复协同：同时兼容“反序列化早期防递归”和“缺 `max_trees` 自动补齐”。
+
+### Tests
+
+- `tests/test_walk_forward.py` 新增两组回归测试：
+  - 旧状态缺失 `tree_limit` 时可兼容加载并预测。
+  - 旧状态同时缺失 `tree_limit/max_trees` 时回退基础预测且不传限树参数。
+
+## [0.77.2] - 2026-06-19
+
+### Bugfix
+
+- **修复 TreeLimitedModel 旧模型反序列化缺字段崩溃**：
+  - 修复 `src/lazybull/ml/ensemble.py` 中旧版本持久化对象缺失 `max_trees` 字段时在 OOS 预测路径抛 `AttributeError: max_trees` 的问题。
+  - 新增 `TreeLimitedModel.__setstate__`，对历史模型加载时自动补齐 `max_trees`（优先按实际已训练轮数解析）。
+  - 调整属性代理兼容逻辑：缺失 `max_trees` 时安全回退为 `None`，保持反序列化早期防递归保护。
+
+### Tests
+
+- `tests/test_walk_forward.py` 新增回归测试：验证旧状态（缺 `max_trees`）可兼容加载并正常预测。
+
+## [0.77.1] - 2026-06-19
+
+### Bugfix
+
+- **修复 TreeLimitedModel 反序列化递归崩溃**：
+  - 修复 `src/lazybull/ml/ensemble.py` 中 `TreeLimitedModel.__getattr__` 在 joblib 反序列化早期阶段触发的递归访问问题。
+  - 当 `base_model` 尚未恢复时，属性代理改为安全返回 `AttributeError`，避免 `maximum recursion depth exceeded`。
+  - 该修复覆盖 walk-forward OOS 回测加载已注册模型场景，解决 `Split 7 OOS回测失败` 的递归崩溃。
+
+### Tests
+
+- `tests/test_walk_forward.py` 新增回归测试：验证 `TreeLimitedModel` 在 `base_model` 未就绪时访问 `__setstate__` 不会递归。
+
+## [0.77.0] - 2026-06-19
+
+### Added
+
+- **候选树数后验选优（walk-forward / deploy）**：
+  - `scripts/walk_forward.py` 新增 `--posterior-tree-selection-mode`（`disabled|grid`）与 `--posterior-tree-candidates`，支持训练完成后不重训、直接对候选树数网格做逐日验证评估。
+  - 后验模式使用验证集逐日 `RankIC IR` 为主排序、`RankIC` 均值为次排序，从候选树数中选出最终用于模型注册、OOS 评估与部署模型落盘的树数上限。
+  - 新增 `src/lazybull/ml/ensemble.py` 的 `TreeLimitedModel`，以统一包装单模型与 `EnsembleModel`，支持对 XGBoost / LightGBM / 多种子集成施加一致的树数上限。
+  - `scripts/batch/batch_walk_forward.ps1` 新增 `$posterior_tree_selection_mode` 与 `$posterior_tree_candidates` 透传，便于批量实验直接开启该模式。
+  - summary、`ml_train_runs.csv` 与模型 metadata 新增 `posterior_tree_*` 审计字段，用于回看基础 `best_iteration`、候选网格与最终选中的树数上限。
+
+### Changed
+
+- `src/lazybull/ml/train_core.py` 的 `evaluate_validation_daily()` 新增 `emit_logs` 参数，供候选树数网格静默评估使用，避免同一 split 内大量重复日志刷屏。
+
+### Tests
+
+- `tests/test_walk_forward.py` 新增候选树数自动网格解析与后验择优回归测试。
+
 ## [0.76.4] - 2026-06-19
 
 ### Bugfix

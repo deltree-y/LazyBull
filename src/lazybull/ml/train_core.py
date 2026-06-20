@@ -16,6 +16,7 @@
 import gc
 import json
 import math
+import os
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
@@ -1381,11 +1382,40 @@ def train_xgboost_model(
             )
         logger.info("使用 LambdaRank 排序学习目标（直接优化股票排序，与 RankIC 评估对齐）")
 
+    # 统一确定 eval_metric：
+    # - regression + rank_ic: 使用自定义 Spearman 指标（可用于早停）
+    # - 其余 regression: mae
+    # - classification: auc
+    if early_stopping_metric == "rank_ic" and task == "regression":
+        xgb_eval_metric = neg_rank_ic
+    else:
+        xgb_eval_metric = "mae" if task == "regression" else "auc"
+
+    # xgboost 在 sklearn 包装器 + callable eval_metric 路径下，
+    # 会将 n_jobs 直接传给 ThreadPoolExecutor。这里确保 max_workers>0。
+    def _resolve_xgb_n_jobs(n_jobs: int) -> int:
+        cpu_count = os.cpu_count() or 1
+        if n_jobs is None:
+            return cpu_count
+        try:
+            n_jobs_int = int(n_jobs)
+        except (TypeError, ValueError):
+            return cpu_count
+        if n_jobs_int == 0:
+            return cpu_count
+        if n_jobs_int < 0:
+            # sklearn 语义：-1 表示使用全部 CPU，-2 表示保留 1 个核心，依此类推。
+            return max(cpu_count + 1 + n_jobs_int, 1)
+        return max(n_jobs_int, 1)
+
+    resolved_n_jobs = _resolve_xgb_n_jobs(-1)
+
     # 准备训练参数
     if use_lambdarank:
         train_params = {
             "objective": "rank:pairwise",
-            "eval_metric": "ndcg",
+            # 保持与早停配置一致：当用户指定 rank_ic 时，不强制改用 ndcg。
+            "eval_metric": xgb_eval_metric,
             "n_estimators": n_estimators,
             "max_depth": max_depth,
             "learning_rate": learning_rate,
@@ -1394,19 +1424,13 @@ def train_xgboost_model(
             "random_state": random_state,
             "tree_method": "hist",
             "device": "cuda",
-            "n_jobs": -1,
+            "n_jobs": resolved_n_jobs,
             "gamma": gamma,
             "reg_alpha": reg_alpha,
             "reg_lambda": reg_lambda,
             "min_child_weight": min_child_weight,
         }
     else:
-        # 确定 eval_metric：rank_ic 用自定义函数（尺度无关，跨 split 更稳定）
-        if early_stopping_metric == "rank_ic" and task == "regression":
-            xgb_eval_metric = neg_rank_ic
-        else:
-            xgb_eval_metric = "mae" if task == "regression" else "auc"
-
         train_params = {
             "objective": "reg:squarederror" if task == "regression" else "binary:logistic",
             "eval_metric": xgb_eval_metric,
@@ -1418,7 +1442,7 @@ def train_xgboost_model(
             "random_state": random_state,
             "tree_method": "hist",
             "device": "cuda",
-            "n_jobs": -1,
+            "n_jobs": resolved_n_jobs,
             "gamma": gamma,
             "reg_alpha": reg_alpha,
             "reg_lambda": reg_lambda,
@@ -1671,6 +1695,7 @@ def evaluate_validation_daily(
     original_return_col: str,
     task: str,
     topk_values: Optional[List[int]] = None,
+    emit_logs: bool = True,
 ) -> Dict:
     """对验证集进行逐日评估（贴近交易场景）
 
@@ -1696,9 +1721,10 @@ def evaluate_validation_daily(
     if topk_values is None:
         topk_values = [30, 100, 300]
 
-    logger.info("=" * 60)
-    logger.info("验证集逐日评估（贴近交易场景）")
-    logger.info("=" * 60)
+    if emit_logs:
+        logger.info("=" * 60)
+        logger.info("验证集逐日评估（贴近交易场景）")
+        logger.info("=" * 60)
 
     # 准备预测数据
     df_eval = df_val.copy()
@@ -1725,20 +1751,22 @@ def evaluate_validation_daily(
     summary = summarize_daily_metrics(daily_results)
 
     # 输出结果
-    logger.info(f"评估天数: {len(daily_results)}")
-    logger.info(f"逐日 RankIC 均值: {summary.get('RankIC_均值', np.nan):.4f}")
-    logger.info(f"逐日 RankIC 标准差: {summary.get('RankIC_标准差', np.nan):.4f}")
-    logger.info(f"逐日 RankIC IR: {summary.get('RankIC_IR', np.nan):.4f}")
+    if emit_logs:
+        logger.info(f"评估天数: {len(daily_results)}")
+        logger.info(f"逐日 RankIC 均值: {summary.get('RankIC_均值', np.nan):.4f}")
+        logger.info(f"逐日 RankIC 标准差: {summary.get('RankIC_标准差', np.nan):.4f}")
+        logger.info(f"逐日 RankIC IR: {summary.get('RankIC_IR', np.nan):.4f}")
 
     for k in topk_values:
         mean_key = f"Top{k}平均收益_均值"
         std_key = f"Top{k}平均收益_标准差"
-        if mean_key in summary:
+        if emit_logs and mean_key in summary:
             logger.info(
                 f"Top{k} 平均收益（跨日）: 均值={summary[mean_key]:.4f}, 标准差={summary[std_key]:.4f}"
             )
 
-    logger.info("=" * 60)
+    if emit_logs:
+        logger.info("=" * 60)
 
     # 计算并打印诊断统计
     diagnostics = compute_diagnostic_statistics(
@@ -1749,7 +1777,8 @@ def evaluate_validation_daily(
         topk_values=topk_values,
     )
 
-    print_diagnostic_report(diagnostics)
+    if emit_logs:
+        print_diagnostic_report(diagnostics)
 
     # 返回汇总结果（包含诊断统计）
     result = {

@@ -75,7 +75,7 @@ from src.lazybull.ml.walk_forward_utils import (
     resolve_deploy_train_window,
     WalkForwardSplit
 )
-from src.lazybull.ml.ensemble import EnsembleModel
+from src.lazybull.ml.ensemble import EnsembleModel, TreeLimitedModel
 from src.lazybull.ml.run_logger import (
     TrainingRunRecord,
     write_training_run_to_csv
@@ -89,6 +89,10 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*DataFrame c
 ADAPTIVE_LOW_BEST_ITER_THRESHOLD = 100
 ADAPTIVE_HIT_CAP_RATIO = 0.95
 ADAPTIVE_MIN_VAL_RANKIC_IR_GAIN = 0.00
+POSTERIOR_TREE_AUTO_GRID = [
+    8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768,
+    1024, 1536, 2048, 3072, 4096,
+]
 
 
 def _normalize_selected_split_indices(raw_indices: Optional[List[int]]) -> List[int]:
@@ -1027,6 +1031,192 @@ def _safe_float(value) -> Optional[float]:
     return result
 
 
+def _resolve_model_max_trees(model) -> Optional[int]:
+    if isinstance(model, TreeLimitedModel):
+        return model.max_trees
+    if isinstance(model, EnsembleModel):
+        child_limits = [_resolve_model_max_trees(child) for child in model.models]
+        child_limits = [limit for limit in child_limits if limit is not None]
+        return min(child_limits) if child_limits else None
+
+    # XGBoost: 以 booster 的实际训练轮数为准，防止 n_estimators 虚高导致越界
+    if hasattr(model, "get_booster"):
+        try:
+            booster = model.get_booster()
+            if hasattr(booster, "num_boosted_rounds"):
+                rounds = int(booster.num_boosted_rounds())
+                if rounds > 0:
+                    return rounds
+        except Exception:
+            pass
+
+    # LightGBM: 优先读取 booster 当前可用迭代轮数
+    if hasattr(model, "booster_"):
+        try:
+            rounds = int(model.booster_.current_iteration())
+            if rounds > 0:
+                return rounds
+        except Exception:
+            pass
+
+    for attr in ("n_estimators", "n_estimators_"):
+        value = getattr(model, attr, None)
+        if value is None:
+            continue
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            continue
+        if resolved > 0:
+            return resolved
+    return None
+
+
+def _wrap_model_with_tree_limit(model, tree_limit: int):
+    if isinstance(model, EnsembleModel):
+        return EnsembleModel([
+            TreeLimitedModel(child, tree_limit, max_trees=_resolve_model_max_trees(child))
+            for child in model.models
+        ])
+    return TreeLimitedModel(model, tree_limit, max_trees=_resolve_model_max_trees(model))
+
+
+def _resolve_posterior_tree_candidate_limits(
+    args,
+    max_trees: Optional[int],
+    base_best_iteration: Optional[int] = None,
+) -> List[int]:
+    if max_trees is None or max_trees <= 0:
+        return []
+
+    raw_candidates = getattr(args, "posterior_tree_candidates", "") or ""
+    candidates: List[int] = []
+
+    if str(raw_candidates).strip():
+        for token in str(raw_candidates).split(","):
+            token = token.strip()
+            if not token:
+                continue
+            candidate = int(token)
+            if candidate <= 0:
+                continue
+            if candidate not in candidates:
+                candidates.append(candidate)
+    else:
+        for candidate in POSTERIOR_TREE_AUTO_GRID:
+            if candidate <= max_trees and candidate not in candidates:
+                candidates.append(candidate)
+
+    if base_best_iteration is not None and base_best_iteration > 0:
+        candidates.append(int(base_best_iteration))
+    candidates.append(int(max_trees))
+
+    normalized = sorted({candidate for candidate in candidates if 0 < candidate <= max_trees})
+    return normalized
+
+
+def _select_posterior_tree_model(
+    model,
+    feature_columns: List[str],
+    df_val: pd.DataFrame,
+    args,
+    topk_values: List[int],
+    train_params: Dict,
+    model_label: str,
+) -> Tuple[object, Dict, Dict]:
+    posterior_mode = getattr(args, "posterior_tree_selection_mode", "disabled")
+    base_best_iteration = train_params.get("best_iteration")
+    base_best_iteration = int(base_best_iteration) if base_best_iteration is not None else None
+
+    meta = {
+        "posterior_tree_selection_mode": posterior_mode,
+        "posterior_tree_selection_enabled": posterior_mode != "disabled",
+        "posterior_tree_base_best_iteration": base_best_iteration,
+        "posterior_tree_model_max_trees": None,
+        "posterior_tree_candidate_limits": [],
+        "posterior_tree_selected_limit": base_best_iteration,
+        "posterior_tree_selected_rankic_ir": None,
+        "posterior_tree_selected_rankic_mean": None,
+        "posterior_tree_selected_topk_mean": None,
+    }
+
+    if posterior_mode == "disabled" or len(df_val) == 0:
+        return model, {}, meta
+
+    max_trees = _resolve_model_max_trees(model)
+    meta["posterior_tree_model_max_trees"] = max_trees
+    candidate_limits = _resolve_posterior_tree_candidate_limits(args, max_trees, base_best_iteration)
+    meta["posterior_tree_candidate_limits"] = candidate_limits
+    if len(candidate_limits) == 0:
+        logger.warning(
+            f"!!! [{model_label}] 候选树数后验选优未生效："
+            f"base_best_iter={base_best_iteration}, model_max_trees={max_trees}, candidates=[]"
+        )
+        return model, {}, meta
+
+    candidate_count = len(candidate_limits)
+    search_space_note = "有效搜索空间很小" if candidate_count <= 2 else "存在有效搜索空间"
+    logger.warning(
+        "!" * 92
+    )
+    logger.warning(
+        f"!!! [{model_label}] 候选树数后验选优启动 | mode={posterior_mode} | "
+        f"base_best_iter={base_best_iteration} | model_max_trees={max_trees} | "
+        f"candidate_count={candidate_count} | {search_space_note}"
+    )
+    logger.warning(
+        f"!!! [{model_label}] 候选树数列表: {candidate_limits}"
+    )
+    logger.warning(
+        "!" * 92
+    )
+
+    scored_candidates: List[Tuple[float, float, float, int, Dict, object]] = []
+    primary_topk = topk_values[0] if topk_values else 30
+    primary_topk_key = f"top{primary_topk}_return_mean"
+
+    for tree_limit in candidate_limits:
+        limited_model = _wrap_model_with_tree_limit(model, tree_limit)
+        metrics = evaluate_validation_daily(
+            model=limited_model,
+            df_val=df_val,
+            feature_columns=feature_columns,
+            original_return_col=args.label_column,
+            task=args.task,
+            topk_values=topk_values,
+            emit_logs=False,
+        )
+        rankic_ir = _safe_float(metrics.get("daily_rankic_ir"))
+        rankic_mean = _safe_float(metrics.get("daily_rankic_mean"))
+        topk_mean = _safe_float(metrics.get(primary_topk_key))
+        scored_candidates.append((
+            -np.inf if rankic_ir is None else rankic_ir,
+            -np.inf if rankic_mean is None else rankic_mean,
+            -np.inf if topk_mean is None else topk_mean,
+            tree_limit,
+            metrics,
+            limited_model,
+        ))
+
+    best_score = max(scored_candidates, key=lambda item: (item[0], item[1], item[2], item[3]))
+    selected_limit = best_score[3]
+    selected_metrics = best_score[4]
+    selected_model = best_score[5]
+
+    meta["posterior_tree_selected_limit"] = selected_limit
+    meta["posterior_tree_selected_rankic_ir"] = _safe_float(selected_metrics.get("daily_rankic_ir"))
+    meta["posterior_tree_selected_rankic_mean"] = _safe_float(selected_metrics.get("daily_rankic_mean"))
+    meta["posterior_tree_selected_topk_mean"] = _safe_float(selected_metrics.get(primary_topk_key))
+
+    logger.info(
+        f"{model_label} 候选树数后验选优完成: selected_limit={selected_limit}, "
+        f"RankIC_IR={meta['posterior_tree_selected_rankic_ir']}, "
+        f"RankIC={meta['posterior_tree_selected_rankic_mean']}"
+    )
+
+    return selected_model, selected_metrics, meta
+
+
 def _resolve_adaptive_best_iter_action(best_iteration, n_estimators) -> Optional[str]:
     best_iter = _safe_float(best_iteration)
     tree_limit = _safe_float(n_estimators)
@@ -1270,6 +1460,27 @@ def execute_split_training(
                 f"candidate_val_rankic={challenger_val_rankic:.4f}"
             )
 
+    posterior_model, posterior_val_daily_metrics, posterior_meta = _select_posterior_tree_model(
+        model=selected_candidate["model"],
+        feature_columns=selected_candidate["feature_columns"],
+        df_val=selected_candidate["df_val_split_original"],
+        args=args,
+        topk_values=topk_values,
+        train_params=selected_candidate["train_params"],
+        model_label=f"Split {split.split_index}",
+    )
+    if posterior_meta.get("posterior_tree_selection_enabled"):
+        selected_candidate["model"] = posterior_model
+        if posterior_val_daily_metrics:
+            selected_candidate["val_daily_metrics"] = posterior_val_daily_metrics
+        selected_candidate["train_params"]["posterior_tree_base_best_iteration"] = (
+            posterior_meta.get("posterior_tree_base_best_iteration")
+        )
+        selected_candidate["train_params"].update(posterior_meta)
+        selected_candidate["train_params"]["best_iteration"] = posterior_meta.get(
+            "posterior_tree_selected_limit"
+        )
+
     model = selected_candidate["model"]
     feature_columns = selected_candidate["feature_columns"]
     train_params = selected_candidate["train_params"]
@@ -1380,6 +1591,36 @@ def execute_split_training(
     )
     full_train_params["adaptive_live_final_n_estimators"] = adaptive_meta.get(
         "live_adaptive_final_n_estimators"
+    )
+    full_train_params["posterior_tree_selection_mode"] = train_params.get(
+        "posterior_tree_selection_mode", "disabled"
+    )
+    full_train_params["posterior_tree_selection_enabled"] = train_params.get(
+        "posterior_tree_selection_enabled", False
+    )
+    full_train_params["posterior_tree_base_best_iteration"] = train_params.get(
+        "posterior_tree_base_best_iteration"
+    )
+    full_train_params["posterior_tree_model_max_trees"] = train_params.get(
+        "posterior_tree_model_max_trees"
+    )
+    full_train_params["posterior_tree_candidate_limits"] = train_params.get(
+        "posterior_tree_candidate_limits"
+    )
+    full_train_params["posterior_tree_selected_limit"] = train_params.get(
+        "posterior_tree_selected_limit"
+    )
+    full_train_params["posterior_tree_candidate_count"] = len(
+        train_params.get("posterior_tree_candidate_limits") or []
+    )
+    full_train_params["posterior_tree_selected_rankic_ir"] = train_params.get(
+        "posterior_tree_selected_rankic_ir"
+    )
+    full_train_params["posterior_tree_selected_rankic_mean"] = train_params.get(
+        "posterior_tree_selected_rankic_mean"
+    )
+    full_train_params["posterior_tree_selected_topk_mean"] = train_params.get(
+        "posterior_tree_selected_topk_mean"
     )
 
     # 注册模型（EnsembleModel 通过 joblib 序列化，包含所有子模型）
@@ -1494,6 +1735,17 @@ def execute_split_training(
         "adaptive_live_last_best_iteration": adaptive_meta.get("live_adaptive_last_best_iteration"),
         "adaptive_live_final_learning_rate": adaptive_meta.get("live_adaptive_final_learning_rate"),
         "adaptive_live_final_n_estimators": adaptive_meta.get("live_adaptive_final_n_estimators"),
+        "posterior_tree_selection_mode": train_params.get("posterior_tree_selection_mode"),
+        "posterior_tree_selection_enabled": train_params.get("posterior_tree_selection_enabled"),
+        "posterior_tree_base_best_iteration": train_params.get("posterior_tree_base_best_iteration"),
+        "posterior_tree_model_max_trees": train_params.get("posterior_tree_model_max_trees"),
+        "posterior_tree_candidate_limits": train_params.get("posterior_tree_candidate_limits"),
+        "posterior_tree_candidate_count": len(
+            train_params.get("posterior_tree_candidate_limits") or []
+        ),
+        "posterior_tree_selected_limit": train_params.get("posterior_tree_selected_limit"),
+        "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
+        "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
         "test_daily_metrics": test_daily_metrics,
     }
 
@@ -1625,6 +1877,25 @@ def execute_deploy_training(
             topk_values=topk_values,
         )
 
+    posterior_model, posterior_val_daily_metrics, posterior_meta = _select_posterior_tree_model(
+        model=model,
+        feature_columns=feature_columns,
+        df_val=df_val_split_original,
+        args=args,
+        topk_values=topk_values,
+        train_params=train_params,
+        model_label="部署模型",
+    )
+    if posterior_meta.get("posterior_tree_selection_enabled"):
+        model = posterior_model
+        if posterior_val_daily_metrics:
+            val_daily_metrics = posterior_val_daily_metrics
+        train_params["posterior_tree_base_best_iteration"] = posterior_meta.get(
+            "posterior_tree_base_best_iteration"
+        )
+        train_params.update(posterior_meta)
+        train_params["best_iteration"] = posterior_meta.get("posterior_tree_selected_limit")
+
     # 6. 注册模型（与 wf 模型同一版本序列）
     performance_metrics = {
         "train": train_metrics,
@@ -1656,6 +1927,36 @@ def execute_deploy_training(
         full_train_params["ensemble_offsets"] = ensemble_offsets
         full_train_params["ensemble_seeds"] = ensemble_seeds
         full_train_params["ensemble_n_models"] = model.n_models
+    full_train_params["posterior_tree_selection_mode"] = train_params.get(
+        "posterior_tree_selection_mode", "disabled"
+    )
+    full_train_params["posterior_tree_selection_enabled"] = train_params.get(
+        "posterior_tree_selection_enabled", False
+    )
+    full_train_params["posterior_tree_base_best_iteration"] = train_params.get(
+        "posterior_tree_base_best_iteration"
+    )
+    full_train_params["posterior_tree_model_max_trees"] = train_params.get(
+        "posterior_tree_model_max_trees"
+    )
+    full_train_params["posterior_tree_candidate_limits"] = train_params.get(
+        "posterior_tree_candidate_limits"
+    )
+    full_train_params["posterior_tree_selected_limit"] = train_params.get(
+        "posterior_tree_selected_limit"
+    )
+    full_train_params["posterior_tree_candidate_count"] = len(
+        train_params.get("posterior_tree_candidate_limits") or []
+    )
+    full_train_params["posterior_tree_selected_rankic_ir"] = train_params.get(
+        "posterior_tree_selected_rankic_ir"
+    )
+    full_train_params["posterior_tree_selected_rankic_mean"] = train_params.get(
+        "posterior_tree_selected_rankic_mean"
+    )
+    full_train_params["posterior_tree_selected_topk_mean"] = train_params.get(
+        "posterior_tree_selected_topk_mean"
+    )
 
     version = registry.register_model(
         model=model,
@@ -1751,6 +2052,17 @@ def execute_deploy_training(
         "test_samples": 0,
         "best_iteration": train_params.get("best_iteration"),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
+        "posterior_tree_selection_mode": train_params.get("posterior_tree_selection_mode"),
+        "posterior_tree_selection_enabled": train_params.get("posterior_tree_selection_enabled"),
+        "posterior_tree_base_best_iteration": train_params.get("posterior_tree_base_best_iteration"),
+        "posterior_tree_model_max_trees": train_params.get("posterior_tree_model_max_trees"),
+        "posterior_tree_candidate_limits": train_params.get("posterior_tree_candidate_limits"),
+        "posterior_tree_candidate_count": len(
+            train_params.get("posterior_tree_candidate_limits") or []
+        ),
+        "posterior_tree_selected_limit": train_params.get("posterior_tree_selected_limit"),
+        "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
+        "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
         "test_daily_metrics": {},
     }
 
@@ -2238,6 +2550,10 @@ def write_walk_forward_summary(
         "early_stopping_rounds": args.early_stopping_rounds,
         "early_stopping_metric": args.early_stopping_metric,
         "adaptive_best_iter_retrain": getattr(args, "adaptive_best_iter_retrain", False),
+        "posterior_tree_selection_mode": getattr(
+            args, "posterior_tree_selection_mode", "disabled"
+        ),
+        "posterior_tree_candidates": getattr(args, "posterior_tree_candidates", ""),
         "rank_weight_enabled": args.rank_weight_enabled,
         "rank_weight_topk": args.rank_weight_topk,
         "rank_weight": args.rank_weight,
@@ -2410,6 +2726,12 @@ def write_walk_forward_summary(
             "adaptive_live_last_best_iteration": result.get("adaptive_live_last_best_iteration"),
             "adaptive_live_final_learning_rate": result.get("adaptive_live_final_learning_rate"),
             "adaptive_live_final_n_estimators": result.get("adaptive_live_final_n_estimators"),
+            "posterior_tree_selection_mode": result.get("posterior_tree_selection_mode"),
+            "posterior_tree_selection_enabled": result.get("posterior_tree_selection_enabled"),
+            "posterior_tree_base_best_iteration": result.get("posterior_tree_base_best_iteration"),
+            "posterior_tree_selected_limit": result.get("posterior_tree_selected_limit"),
+            "posterior_tree_selected_rankic_ir": result.get("posterior_tree_selected_rankic_ir"),
+            "posterior_tree_selected_rankic_mean": result.get("posterior_tree_selected_rankic_mean"),
         }
 
         # 添加测试集逐日评估指标
@@ -2722,6 +3044,25 @@ def main():
             "best_iter<=100 时 lr/2 且 n_estimators*2；"
             "best_iter>=95%%*n_estimators 时 lr*1.5 且 n_estimators 不变；"
             "候选仅在验证集 RankIC IR 至少提升 0.05 且 RankIC 均值不下降时替换基础模型"
+        )
+    )
+    parser.add_argument(
+        "--posterior-tree-selection-mode",
+        type=str,
+        default="disabled",
+        choices=["disabled", "grid"],
+        help=(
+            "候选树数后验选优模式：disabled=关闭；grid=训练完成后对候选树数网格做逐日验证，"
+            "按 RankIC IR / RankIC 均值择优并替换最终模型复杂度"
+        )
+    )
+    parser.add_argument(
+        "--posterior-tree-candidates",
+        type=str,
+        default="",
+        help=(
+            "候选树数列表，逗号分隔，如 16,32,64,128。留空时使用内置自适应网格，"
+            "并自动补入 early-stopping best_iteration 与 n_estimators"
         )
     )
 

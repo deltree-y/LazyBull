@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(7,8,9,10,12,13)
+        SelectedSplits = @()
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -103,8 +103,12 @@ $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1�
 # ── best_iteration 自适应候选重训 ─────────────────────────────
 $adaptive_best_iter_retrain = $true  # $true 启用：低迭代/撞上限 split 自动重训候选并按验证 RankIC/IR 择优
 
+# ── 候选树数后验选优（训练完成后按逐日验证指标重选最终树数）─────────
+$posterior_tree_selection_mode = "disabled"   # disabled | grid
+$posterior_tree_candidates     = ""           # 逗号分隔，如 "16,32,64,128"；空=使用内置网格
+
 # ── 目标函数 ─────────────────────────────────────────────────
-$objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
+$objective_list          = @("lambdarank")  # mse | lambdarank（排序学习，直接优化股票排序）
 
 ###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
@@ -159,7 +163,7 @@ $factor_prune             = $false  # $true 启用 | $false 禁用（需先运�
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "729,121,229"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "1,2,3"#,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
@@ -769,10 +773,15 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --data-root $data_root" +
                  " --early-stopping-rounds $early_stopping_rounds" +
                  " --early-stopping-metric $early_stopping_metric" +
+                 " --posterior-tree-selection-mode $posterior_tree_selection_mode" +
                  " --time-decay-half-life $time_decay_half_life" +
                  " --batch-run-id $batch_run_id" +
                  " --batch-period-label $batch_period_label" +
                  " --wf-summary-csv `"$summary_csv_path`""
+
+    if ($posterior_tree_candidates -ne "") {
+        $pythonCmd += " --posterior-tree-candidates $posterior_tree_candidates"
+    }
 
     if ($selected_splits -and $selected_splits.Count -gt 0) {
         $pythonCmd += " --selected-split-indices $($selected_splits -join ' ')"
