@@ -2,6 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.12] - 2026-06-20
+
+### Changed
+
+- **多种子筛选规则支持配置化**：
+  - `scripts/walk_forward.py` 新增 `--ensemble-seed-keep-top-ratio` 与 `--ensemble-seed-keep-min-models`。
+  - `scripts/batch/batch_walk_forward.ps1` 新增 `$ensemble_seed_keep_top_ratio` 与 `$ensemble_seed_keep_min_models` 并自动透传。
+  - 多种子筛选仍采用“按逐日 RankIC IR / RankIC 排序后保留 top 比例并保证最小数量”，但比例和最小数量不再写死。
+
+### Tests
+
+- `tests/test_training_feature_flag_forwarding.py` 新增 `test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable`，验证自定义比例与最小保留数生效。
+
+## [0.77.11] - 2026-06-20
+
+### Changed
+
+- **多种子 ensemble 子模型改为只保留前30%（且至少3个）**：
+  - `scripts/walk_forward.py` 在多种子场景下对候选子模型按逐日排序指标打分，仅保留 `top 30%`，若不足 3 个则保留 3 个。
+  - 排序依据与 adaptive 保持一致：先按 `daily_rankic_ir`，再按 `daily_rankic_mean`。
+  - 部署训练与 walk-forward 训练共用该筛选逻辑。
+
+### Tests
+
+- `tests/test_training_feature_flag_forwarding.py` 新增 `test_multi_seed_ensemble_keeps_top_30pct_with_min_three`，验证保留数量与排序结果。
+
+## [0.77.10] - 2026-06-20
+
+### Changed
+
+- **low_iter 重试过程新增逐轮排序指标对比日志**：
+  - `scripts/walk_forward.py` 在 split 后置 adaptive 与 ensemble live adaptive 两条 low_iter 重试路径中，新增每轮 `daily_rankic_ir` 与 `daily_rankic_mean` 对比打印。
+  - 每轮日志会输出“当前候选 vs 当前最优候选”的两指标数值，并给出 `UPDATE_BEST` / `KEEP_BEST` 判定，便于定位“一个高一个低”时的选择结果。
+
+## [0.77.9] - 2026-06-20
+
+### Changed
+
+- **low_iter 自适应重试支持批处理配置并改为重试集合内排序择优**：
+  - `scripts/batch/batch_walk_forward.ps1` 新增 `$adaptive_low_iter_max_retries`，并透传到 `scripts/walk_forward.py --adaptive-low-iter-max-retries`。
+  - `scripts/walk_forward.py` 的 low_iter（`best_iter<=100`）路径改为执行完整重试（上限可配）后，再从重试候选中按逐日 `RankIC IR`（主）+逐日 `RankIC`（次）选择最优候选。
+  - split 后置 adaptive 与 ensemble live adaptive 两条 low_iter 路径均已对齐为同一择优逻辑。
+
+### Tests
+
+- `tests/test_training_feature_flag_forwarding.py` 更新并新增断言：
+  - low_iter 路径会按配置次数执行递增 seed 重试；
+  - 在重试候选集合中按排序指标选择最优 seed，而不是按 best_iteration 选择。
+
+## [0.77.8] - 2026-06-20
+
+### Bugfix
+
+- **修复 ensemble live adaptive 低迭代重试未切换随机种子**：
+  - `scripts/walk_forward.py` 的 `_build_ensemble_sub_models()` 中，`action=low_iter` 分支此前候选重训仍使用原 seed。
+  - 修复后低迭代重试会按 `retry_seed = base_seed + retry_index`（最多 10 次）执行，并将重试次数、最后重试 seed、候选 best_iteration 写入 `adaptive_meta`。
+
+### Tests
+
+- `tests/test_training_feature_flag_forwarding.py` 新增 `test_live_adaptive_low_iter_retries_with_incremental_seed`，锁定 low_iter 路径必须使用递增 seed 重试。
+
+## [0.77.7] - 2026-06-20
+
+### Changed
+
+- **walk-forward 低迭代自适应重训改为随机种子重试**：
+  - `scripts/walk_forward.py` 中 `--adaptive-best-iter-retrain` 的 `best_iter<=100` 路径，不再通过降低学习率尝试修正，而是保持当前训练超参并通过修改 `random_state` 反复重训。
+  - 低迭代路径新增重试上限，默认最多尝试 10 次；每次重试都会重新评估验证集逐日 `RankIC IR` 与 `RankIC`，只有满足替换条件才接受候选模型。
+  - `best_iter>=95%*n_estimators` 的撞上限路径保持原有“扩树”处理方式不变。
+
+### Tests
+
+- `tests/test_training_feature_flag_forwarding.py` 更新回归测试：
+  - 低迭代候选参数不再改变学习率与树数；
+  - 新增随机种子重试序号的断言。
+
 ## [0.77.6] - 2026-06-19
 
 ### Bugfix

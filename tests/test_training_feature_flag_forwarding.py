@@ -82,10 +82,10 @@ def test_walk_forward_adaptive_best_iter_action_thresholds():
 def test_walk_forward_adaptive_candidate_replacement_requires_ir_gain_and_rankic_hold():
     base = {"daily_rankic_ir": 1.20, "daily_rankic_mean": 0.08}
 
-    better = {"daily_rankic_ir": 1.25, "daily_rankic_mean": 0.08}
+    better = {"daily_rankic_ir": 1.25, "daily_rankic_mean": 0.081}
     assert walk_forward_module._candidate_passes_adaptive_replacement(base, better) is True
 
-    weak_ir = {"daily_rankic_ir": 1.249, "daily_rankic_mean": 0.09}
+    weak_ir = {"daily_rankic_ir": 1.199, "daily_rankic_mean": 0.09}
     assert walk_forward_module._candidate_passes_adaptive_replacement(base, weak_ir) is False
 
     lower_rankic = {"daily_rankic_ir": 1.30, "daily_rankic_mean": 0.079}
@@ -96,12 +96,17 @@ def test_walk_forward_adaptive_candidate_args_follow_requested_rules():
     args = types.SimpleNamespace(learning_rate=0.02, n_estimators=5000)
 
     low_iter_args = walk_forward_module._build_adaptive_candidate_args(args, "low_iter")
-    assert low_iter_args.learning_rate == pytest.approx(0.01, rel=1e-2)
-    assert low_iter_args.n_estimators == 10000
+    assert low_iter_args.learning_rate == pytest.approx(0.02, rel=1e-2)
+    assert low_iter_args.n_estimators == 5000
 
     hit_cap_args = walk_forward_module._build_adaptive_candidate_args(args, "hit_cap")
     assert hit_cap_args.learning_rate == pytest.approx(0.03, rel=1e-2)
-    assert hit_cap_args.n_estimators == 5000
+    assert hit_cap_args.n_estimators == 25000
+
+
+def test_walk_forward_adaptive_retry_seed_is_incremental():
+    assert walk_forward_module._resolve_adaptive_retry_seed(42, 1) == 43
+    assert walk_forward_module._resolve_adaptive_retry_seed(42, 10) == 52
 
 
 def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch):
@@ -136,7 +141,7 @@ def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch
         "_evaluate_train_result_val_daily",
         lambda tr, *_args, **_kwargs: {
             "daily_rankic_ir": 1.30 if tr["train_params"]["learning_rate"] >= 0.03 else 1.00,
-            "daily_rankic_mean": 0.10,
+            "daily_rankic_mean": 0.11 if tr["train_params"]["learning_rate"] >= 0.03 else 0.10,
         },
     )
 
@@ -146,6 +151,7 @@ def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch
         label_column="neu_y_ret_20",
         task="regression",
         random_state=42,
+        adaptive_low_iter_max_retries=10,
     )
 
     _sub_models, _base_result, meta = walk_forward_module._build_ensemble_sub_models(
@@ -163,6 +169,227 @@ def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch
     assert meta["live_adaptive_trigger_count"] == 1
     assert meta["live_adaptive_used_count"] == 1
     assert meta["live_adaptive_final_learning_rate"] == pytest.approx(0.03, rel=1e-6)
+
+
+def test_live_adaptive_low_iter_retries_with_incremental_seed(monkeypatch):
+    calls = []
+
+    def _fake_train_model_on_window(
+        train_start, train_end, storage, loader, args, random_state_override=None
+    ):
+        calls.append((round(args.learning_rate, 6), random_state_override))
+        if random_state_override == 200:
+            best_iter = 17
+        elif random_state_override == 201:
+            best_iter = 500
+        elif random_state_override == 202:
+            best_iter = 120
+        else:
+            best_iter = 450
+        return {
+            "model": object(),
+            "feature_columns": ["f1"],
+            "train_params": {
+                "best_iteration": best_iter,
+                "learning_rate": args.learning_rate,
+                "n_estimators": args.n_estimators,
+                "random_state": random_state_override,
+            },
+            "train_metrics": {},
+            "val_metrics": {},
+            "df_val_split_original": pd.DataFrame([{"trade_date": "20240101", "x": 1}]),
+            "data_stats": {},
+            "train_days_count": 1,
+            "total_train_samples": 1,
+            "X_train_len": 1,
+            "X_val_len": 1,
+        }
+
+    monkeypatch.setattr(walk_forward_module, "_train_model_on_window", _fake_train_model_on_window)
+    monkeypatch.setattr(
+        walk_forward_module,
+        "_evaluate_train_result_val_daily",
+        lambda tr, *_args, **_kwargs: {
+            "daily_rankic_ir": {
+                201: 1.10,
+                202: 1.25,
+                203: 1.18,
+            }.get(tr["train_params"].get("random_state"), 1.00),
+            "daily_rankic_mean": {
+                201: 0.11,
+                202: 0.13,
+                203: 0.12,
+            }.get(tr["train_params"].get("random_state"), 0.10),
+        },
+    )
+
+    args = types.SimpleNamespace(
+        learning_rate=0.02,
+        n_estimators=5000,
+        label_column="neu_y_ret_20",
+        task="regression",
+        random_state=42,
+        adaptive_low_iter_max_retries=3,
+    )
+
+    _sub_models, _base_result, meta = walk_forward_module._build_ensemble_sub_models(
+        windows=[("20120101", "20181231")],
+        storage=None,
+        loader=None,
+        args=args,
+        seeds=[200],
+        topk_values=[30],
+        enable_live_adaptive=True,
+    )
+
+    assert calls == [(0.02, 200), (0.02, 201), (0.02, 202), (0.02, 203)]
+    assert meta["live_adaptive_triggered"] is True
+    assert meta["live_adaptive_last_action"] == "low_iter"
+    assert meta["live_adaptive_retry_count"] == 3
+    assert meta["live_adaptive_last_retry_seed"] == 203
+    assert meta["live_adaptive_last_candidate_best_iteration"] == 120
+    assert meta["live_adaptive_used_count"] == 1
+    assert meta["live_adaptive_final_random_state"] == 202
+
+
+def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
+    def _fake_train_model_on_window(
+        train_start, train_end, storage, loader, args, random_state_override=None
+    ):
+        seed = int(random_state_override)
+        return {
+            "model": f"m{seed}",
+            "feature_columns": ["f1"],
+            "train_params": {
+                "best_iteration": 500,
+                "learning_rate": args.learning_rate,
+                "n_estimators": args.n_estimators,
+                "random_state": seed,
+            },
+            "train_metrics": {},
+            "val_metrics": {},
+            "df_val_split_original": pd.DataFrame([{"trade_date": "20240101", "x": 1}]),
+            "data_stats": {},
+            "train_days_count": 1,
+            "total_train_samples": 1,
+            "X_train_len": 1,
+            "X_val_len": 1,
+        }
+
+    monkeypatch.setattr(walk_forward_module, "_train_model_on_window", _fake_train_model_on_window)
+    monkeypatch.setattr(
+        walk_forward_module,
+        "_evaluate_train_result_val_daily",
+        lambda tr, *_args, **_kwargs: {
+            "daily_rankic_ir": {
+                101: 0.10,
+                102: 0.12,
+                103: 0.15,
+                104: 0.18,
+                105: 0.20,
+            }[tr["train_params"]["random_state"]],
+            "daily_rankic_mean": {
+                101: 0.05,
+                102: 0.06,
+                103: 0.07,
+                104: 0.08,
+                105: 0.09,
+            }[tr["train_params"]["random_state"]],
+        },
+    )
+
+    args = types.SimpleNamespace(
+        learning_rate=0.02,
+        n_estimators=5000,
+        label_column="neu_y_ret_20",
+        task="regression",
+        random_state=42,
+        adaptive_low_iter_max_retries=3,
+    )
+
+    sub_models, base_result, _meta = walk_forward_module._build_ensemble_sub_models(
+        windows=[("20120101", "20181231")],
+        storage=None,
+        loader=None,
+        args=args,
+        seeds=[101, 102, 103, 104, 105],
+        topk_values=[30],
+        enable_live_adaptive=False,
+    )
+
+    assert sub_models == ["m105", "m104", "m103"]
+    assert base_result["train_params"]["random_state"] == 105
+
+
+def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypatch):
+    def _fake_train_model_on_window(
+        train_start, train_end, storage, loader, args, random_state_override=None
+    ):
+        seed = int(random_state_override)
+        return {
+            "model": f"m{seed}",
+            "feature_columns": ["f1"],
+            "train_params": {
+                "best_iteration": 500,
+                "learning_rate": args.learning_rate,
+                "n_estimators": args.n_estimators,
+                "random_state": seed,
+            },
+            "train_metrics": {},
+            "val_metrics": {},
+            "df_val_split_original": pd.DataFrame([{"trade_date": "20240101", "x": 1}]),
+            "data_stats": {},
+            "train_days_count": 1,
+            "total_train_samples": 1,
+            "X_train_len": 1,
+            "X_val_len": 1,
+        }
+
+    monkeypatch.setattr(walk_forward_module, "_train_model_on_window", _fake_train_model_on_window)
+    monkeypatch.setattr(
+        walk_forward_module,
+        "_evaluate_train_result_val_daily",
+        lambda tr, *_args, **_kwargs: {
+            "daily_rankic_ir": {
+                201: 0.10,
+                202: 0.12,
+                203: 0.15,
+                204: 0.18,
+                205: 0.20,
+            }[tr["train_params"]["random_state"]],
+            "daily_rankic_mean": {
+                201: 0.05,
+                202: 0.06,
+                203: 0.07,
+                204: 0.08,
+                205: 0.09,
+            }[tr["train_params"]["random_state"]],
+        },
+    )
+
+    args = types.SimpleNamespace(
+        learning_rate=0.02,
+        n_estimators=5000,
+        label_column="neu_y_ret_20",
+        task="regression",
+        random_state=42,
+        adaptive_low_iter_max_retries=3,
+        ensemble_seed_keep_top_ratio=0.4,
+        ensemble_seed_keep_min_models=2,
+    )
+
+    sub_models, base_result, _meta = walk_forward_module._build_ensemble_sub_models(
+        windows=[("20120101", "20181231")],
+        storage=None,
+        loader=None,
+        args=args,
+        seeds=[201, 202, 203, 204, 205],
+        topk_values=[30],
+        enable_live_adaptive=False,
+    )
+
+    assert sub_models == ["m205", "m204"]
+    assert base_result["train_params"]["random_state"] == 205
 
 
 def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):

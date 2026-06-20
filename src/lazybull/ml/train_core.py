@@ -1429,6 +1429,7 @@ def train_xgboost_model(
             "reg_alpha": reg_alpha,
             "reg_lambda": reg_lambda,
             "min_child_weight": min_child_weight,
+            "ndcg_exp_gain": False,          # ← 加这一行
         }
     else:
         train_params = {
@@ -1502,7 +1503,7 @@ def train_xgboost_model(
         # 将连续收益率转换为按日截面排名等级 (0~31)
         # XGBoost rank:pairwise + NDCG 指数增益要求标签 <= 31
         # ~3000 只股票 / 32 级 ≈ 每级 ~94 只，粒度足够保留排序信息
-        max_grade = 31
+        max_grade = 255 #31
 
         def _returns_to_grades(y: pd.Series, dates: np.ndarray) -> pd.Series:
             """按每日截面将连续收益率转为 0~max_grade 的整数等级"""

@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @()
+        SelectedSplits = @(7)
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -102,13 +102,19 @@ $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1�
 
 # ── best_iteration 自适应候选重训 ─────────────────────────────
 $adaptive_best_iter_retrain = $true  # $true 启用：低迭代/撞上限 split 自动重训候选并按验证 RankIC/IR 择优
+$adaptive_low_iter_max_retries = 5  # low_iter（best_iter<=100）随机种子重试上限
+
+# ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
+$ensemble_seeds            = "1000,2000,3000,4000,5000"#,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
+$ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数
 
 # ── 候选树数后验选优（训练完成后按逐日验证指标重选最终树数）─────────
 $posterior_tree_selection_mode = "disabled"   # disabled | grid
 $posterior_tree_candidates     = ""           # 逗号分隔，如 "16,32,64,128"；空=使用内置网格
 
 # ── 目标函数 ─────────────────────────────────────────────────
-$objective_list          = @("lambdarank")  # mse | lambdarank（排序学习，直接优化股票排序）
+$objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 
 ###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
@@ -161,9 +167,6 @@ $factor_prune             = $false  # $true 启用 | $false 禁用（需先运�
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
-
-# ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "1,2,3"#,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────
@@ -840,11 +843,14 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     }
 
     if ($ensemble_seeds -ne "") {
-        $pythonCmd += " --ensemble-seeds $ensemble_seeds"
+        $pythonCmd += " --ensemble-seeds $ensemble_seeds" +
+                      " --ensemble-seed-keep-top-ratio $ensemble_seed_keep_top_ratio" +
+                      " --ensemble-seed-keep-min-models $ensemble_seed_keep_min_models"
     }
 
     if ($adaptive_best_iter_retrain) {
-        $pythonCmd += " --adaptive-best-iter-retrain"
+        $pythonCmd += " --adaptive-best-iter-retrain" +
+                      " --adaptive-low-iter-max-retries $adaptive_low_iter_max_retries"
     }
 
     if ($enable_enhanced) {

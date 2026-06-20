@@ -87,8 +87,11 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*DataFrame c
 
 
 ADAPTIVE_LOW_BEST_ITER_THRESHOLD = 100
+ADAPTIVE_LOW_BEST_ITER_MAX_RETRIES = 10
 ADAPTIVE_HIT_CAP_RATIO = 0.95
 ADAPTIVE_MIN_VAL_RANKIC_IR_GAIN = 0.00
+SEED_ENSEMBLE_KEEP_TOP_RATIO = 0.30
+SEED_ENSEMBLE_KEEP_MIN_MODELS = 3
 POSTERIOR_TREE_AUTO_GRID = [
     8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768,
     1024, 1536, 2048, 3072, 4096,
@@ -886,6 +889,7 @@ def _build_ensemble_sub_models(
         (sub_models, base_result, adaptive_meta)
     """
     sub_models: List = []
+    sub_model_records: List[Dict] = []
     base_result: Optional[Dict] = None
     adaptive_meta = {
         "live_adaptive_triggered": False,
@@ -893,10 +897,26 @@ def _build_ensemble_sub_models(
         "live_adaptive_used_count": 0,
         "live_adaptive_last_action": None,
         "live_adaptive_last_best_iteration": None,
+        "live_adaptive_retry_count": 0,
+        "live_adaptive_last_retry_seed": None,
+        "live_adaptive_last_candidate_best_iteration": None,
+        "live_adaptive_final_random_state": getattr(args, "random_state", None),
         "live_adaptive_final_learning_rate": getattr(args, "learning_rate", None),
         "live_adaptive_final_n_estimators": getattr(args, "n_estimators", None),
     }
     rolling_args = args
+    keep_top_ratio = float(
+        getattr(args, "ensemble_seed_keep_top_ratio", SEED_ENSEMBLE_KEEP_TOP_RATIO)
+    )
+    keep_top_ratio = min(1.0, max(0.01, keep_top_ratio))
+    keep_min_models = int(
+        getattr(args, "ensemble_seed_keep_min_models", SEED_ENSEMBLE_KEEP_MIN_MODELS)
+    )
+    keep_min_models = max(1, keep_min_models)
+    max_low_iter_retries = max(
+        1,
+        int(getattr(args, "adaptive_low_iter_max_retries", ADAPTIVE_LOW_BEST_ITER_MAX_RETRIES)),
+    )
     total = len(windows) * len(seeds)
     idx = 0
     prefix = "部署" if is_deploy else ""
@@ -923,66 +943,173 @@ def _build_ensemble_sub_models(
                     adaptive_meta["live_adaptive_trigger_count"] += 1
                     adaptive_meta["live_adaptive_last_action"] = action
                     adaptive_meta["live_adaptive_last_best_iteration"] = best_iter
-
-                    candidate_args = _build_adaptive_candidate_args(rolling_args, action)
-                    logger.warning(
-                        f"  子模型 {idx}/{total} 触发 split 内实时自适应: action={action}, "
-                        f"best_iter={best_iter}, base_lr={rolling_args.learning_rate:.6f}, "
-                        f"base_n_estimators={rolling_args.n_estimators}, "
-                        f"candidate_lr={candidate_args.learning_rate:.6f}, "
-                        f"candidate_n_estimators={candidate_args.n_estimators}"
-                    )
-
-                    challenger_tr = _train_model_on_window(
-                        win_start,
-                        win_end,
-                        storage,
-                        loader,
-                        candidate_args,
-                        random_state_override=seed,
-                    )
-
                     base_val_daily = _evaluate_train_result_val_daily(
                         selected_tr, rolling_args.label_column, rolling_args.task, topk_values
                     )
-                    challenger_val_daily = _evaluate_train_result_val_daily(
-                        challenger_tr,
-                        candidate_args.label_column,
-                        candidate_args.task,
-                        topk_values,
-                    )
 
-                    if _candidate_passes_adaptive_replacement(base_val_daily, challenger_val_daily):
-                        selected_tr = challenger_tr
-                        adaptive_meta["live_adaptive_used_count"] += 1
-                        logger.warning(
-                            f"  子模型 {idx}/{total} 采用自适应候选模型: action={action}, "
-                            f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
-                            f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
-                            f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
-                            f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
-                        )
+                    if action == "low_iter":
+                        base_seed = int(seed)
+                        best_retry_tr = None
+                        best_retry_metrics = None
+                        best_retry_seed = None
+                        best_retry_best_iteration = None
+                        last_candidate_best_iteration = best_iter
+                        last_retry_seed = None
+                        for retry_index in range(1, max_low_iter_retries + 1):
+                            retry_seed = _resolve_adaptive_retry_seed(base_seed, retry_index)
+                            last_retry_seed = retry_seed
+                            adaptive_meta["live_adaptive_retry_count"] = retry_index
+                            adaptive_meta["live_adaptive_last_retry_seed"] = retry_seed
+                            candidate_args = _build_adaptive_candidate_args(rolling_args, action)
+                            candidate_args.random_state = retry_seed
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 触发 split 内低迭代重试: "
+                                f"attempt={retry_index}/{max_low_iter_retries}, "
+                                f"best_iter={best_iter}, base_seed={base_seed}, retry_seed={retry_seed}, "
+                                f"base_lr={rolling_args.learning_rate:.6f}, "
+                                f"base_n_estimators={rolling_args.n_estimators}"
+                            )
+
+                            challenger_tr = _train_model_on_window(
+                                win_start,
+                                win_end,
+                                storage,
+                                loader,
+                                candidate_args,
+                                random_state_override=retry_seed,
+                            )
+                            challenger_best_iteration = challenger_tr["train_params"].get("best_iteration")
+                            last_candidate_best_iteration = challenger_best_iteration
+                            adaptive_meta[
+                                "live_adaptive_last_candidate_best_iteration"
+                            ] = challenger_best_iteration
+                            challenger_val_daily = _evaluate_train_result_val_daily(
+                                challenger_tr,
+                                candidate_args.label_column,
+                                candidate_args.task,
+                                topk_values,
+                            )
+
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 低迭代重试指标对比: "
+                                f"attempt={retry_index}, retry_seed={retry_seed}, "
+                                f"{_format_adaptive_metric_compare(challenger_val_daily, best_retry_metrics)}"
+                            )
+
+                            if _is_better_adaptive_candidate(challenger_val_daily, best_retry_metrics):
+                                best_retry_tr = challenger_tr
+                                best_retry_metrics = challenger_val_daily
+                                best_retry_seed = retry_seed
+                                best_retry_best_iteration = challenger_best_iteration
+
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 继续低迭代重试: "
+                                f"attempt={retry_index}, retry_seed={retry_seed}, "
+                                f"candidate_best_iter={challenger_best_iteration}, "
+                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
+                                f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
+                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
+                                f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
+                            )
+
+                        adaptive_meta["live_adaptive_final_random_state"] = best_retry_seed
+                        adaptive_meta["live_adaptive_final_learning_rate"] = rolling_args.learning_rate
+                        adaptive_meta["live_adaptive_final_n_estimators"] = rolling_args.n_estimators
+                        adaptive_meta[
+                            "live_adaptive_last_candidate_best_iteration"
+                        ] = best_retry_best_iteration
+
+                        if best_retry_metrics is not None:
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 低迭代重试最优候选: "
+                                f"best_retry_seed={best_retry_seed}, best_retry_best_iter={best_retry_best_iteration}, "
+                                f"best_retry_val_ir={_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
+                                f"best_retry_val_rankic={_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                            )
+
+                        if best_retry_tr is not None and _candidate_passes_adaptive_replacement(
+                            base_val_daily, best_retry_metrics
+                        ):
+                            selected_tr = best_retry_tr
+                            adaptive_meta["live_adaptive_used_count"] += 1
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 采用低迭代重试最优候选模型: "
+                                f"retry_seed={best_retry_seed}, "
+                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
+                                f"{_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
+                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
+                                f"{_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                            )
+                        else:
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 低迭代重试完成但未满足替换条件: "
+                                f"max_retries={max_low_iter_retries}, "
+                                f"last_retry_seed={last_retry_seed}, "
+                                f"last_best_iter={last_candidate_best_iteration}"
+                            )
                     else:
+                        candidate_args = _build_adaptive_candidate_args(rolling_args, action)
                         logger.warning(
-                            f"  子模型 {idx}/{total} 保留原模型: action={action}, "
-                            f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
-                            f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
-                            f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
-                            f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
+                            f"  子模型 {idx}/{total} 触发 split 内实时自适应: action={action}, "
+                            f"best_iter={best_iter}, base_lr={rolling_args.learning_rate:.6f}, "
+                            f"base_n_estimators={rolling_args.n_estimators}, "
+                            f"candidate_lr={candidate_args.learning_rate:.6f}, "
+                            f"candidate_n_estimators={candidate_args.n_estimators}"
                         )
 
-                    # 仅影响当前 split 尚未启动的后续子模型，不影响其他 split
-                    rolling_args = candidate_args
-                    adaptive_meta["live_adaptive_final_learning_rate"] = rolling_args.learning_rate
-                    adaptive_meta["live_adaptive_final_n_estimators"] = rolling_args.n_estimators
-                    remaining_models = total - idx
-                    logger.warning(
-                        f"!!! [LIVE-ADAPTIVE] 滚动参数已更新并将用于当前 split 后续 {remaining_models} 个子模型: "
-                        f"action={action}, lr={rolling_args.learning_rate:.5f}, "
-                        f"n_estimators={rolling_args.n_estimators}"
-                    )
+                        challenger_tr = _train_model_on_window(
+                            win_start,
+                            win_end,
+                            storage,
+                            loader,
+                            candidate_args,
+                            random_state_override=seed,
+                        )
+
+                        challenger_val_daily = _evaluate_train_result_val_daily(
+                            challenger_tr,
+                            candidate_args.label_column,
+                            candidate_args.task,
+                            topk_values,
+                        )
+
+                        if _candidate_passes_adaptive_replacement(base_val_daily, challenger_val_daily):
+                            selected_tr = challenger_tr
+                            adaptive_meta["live_adaptive_used_count"] += 1
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 采用自适应候选模型: action={action}, "
+                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
+                                f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
+                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
+                                f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
+                            )
+                        else:
+                            logger.warning(
+                                f"  子模型 {idx}/{total} 保留原模型: action={action}, "
+                                f"base_val_ir/candidate_val_ir:{_safe_float(base_val_daily.get('daily_rankic_ir')):.4f}/"
+                                f"{_safe_float(challenger_val_daily.get('daily_rankic_ir')):.4f}, "
+                                f"base_val_rankic/candidate_val_rankic:{_safe_float(base_val_daily.get('daily_rankic_mean')):.4f}/"
+                                f"{_safe_float(challenger_val_daily.get('daily_rankic_mean')):.4f}"
+                            )
+
+                        # 仅影响当前 split 尚未启动的后续子模型，不影响其他 split
+                        rolling_args = candidate_args
+                        adaptive_meta["live_adaptive_final_random_state"] = getattr(
+                            rolling_args, "random_state", None
+                        )
+                        adaptive_meta["live_adaptive_final_learning_rate"] = rolling_args.learning_rate
+                        adaptive_meta["live_adaptive_final_n_estimators"] = rolling_args.n_estimators
+                        remaining_models = total - idx
+                        logger.warning(
+                            f"!!! [LIVE-ADAPTIVE] 滚动参数已更新并将用于当前 split 后续 {remaining_models} 个子模型: "
+                            f"action={action}, lr={rolling_args.learning_rate:.5f}, "
+                            f"n_estimators={rolling_args.n_estimators}"
+                        )
 
             sub_models.append(selected_tr["model"])
+            sub_model_records.append({
+                "train_result": selected_tr,
+            })
             if base_result is None:
                 base_result = selected_tr
             elif set(selected_tr["feature_columns"]) != set(base_result["feature_columns"]):
@@ -990,6 +1117,53 @@ def _build_ensemble_sub_models(
                     f"  子模型 {idx} 特征列数量({len(selected_tr['feature_columns'])})"
                     f"与基础模型({len(base_result['feature_columns'])})不一致"
                 )
+
+    # 多种子场景下，仅保留排序指标最好的前30%子模型，且至少保留3个
+    if len(seeds) > 1 and len(sub_model_records) > 0:
+        eval_topk_values = topk_values if topk_values else [30]
+        scored_records: List[Dict] = []
+        for record in sub_model_records:
+            train_result = record["train_result"]
+            seed_metrics = _evaluate_train_result_val_daily(
+                train_result,
+                args.label_column,
+                args.task,
+                eval_topk_values,
+            )
+            score = _adaptive_sort_score(seed_metrics)
+            scored_records.append(
+                {
+                    "train_result": train_result,
+                    "seed_metrics": seed_metrics,
+                    "score": score,
+                }
+            )
+
+        scored_records.sort(key=lambda item: item["score"], reverse=True)
+        raw_keep_count = int(np.ceil(len(scored_records) * keep_top_ratio))
+        keep_count = min(
+            len(scored_records),
+            max(keep_min_models, raw_keep_count),
+        )
+        kept_records = scored_records[:keep_count]
+        sub_models = [item["train_result"]["model"] for item in kept_records]
+        base_result = kept_records[0]["train_result"]
+
+        logger.warning(
+            f"{prefix}多种子筛选: total={len(scored_records)}, keep={keep_count}, "
+            f"ratio={keep_top_ratio:.0%}, min_keep={keep_min_models}"
+        )
+        for rank_idx, item in enumerate(kept_records, start=1):
+            train_result = item["train_result"]
+            metrics = item["seed_metrics"]
+            seed_used = train_result["train_params"].get("random_state")
+            val_ir = _safe_float(metrics.get("daily_rankic_ir"))
+            val_rankic = _safe_float(metrics.get("daily_rankic_mean"))
+            logger.warning(
+                f"  保留子模型#{rank_idx}: seed={seed_used}, "
+                f"val_ir={'nan' if val_ir is None else f'{val_ir:.4f}'}, "
+                f"val_rankic={'nan' if val_rankic is None else f'{val_rankic:.4f}'}"
+            )
     return sub_models, base_result, adaptive_meta
 
 
@@ -1229,6 +1403,46 @@ def _resolve_adaptive_best_iter_action(best_iteration, n_estimators) -> Optional
     return None
 
 
+def _adaptive_sort_score(metrics: Dict) -> Tuple[float, float]:
+    """自适应候选排序评分：逐日 RankIC IR 优先，其次逐日 RankIC 均值。"""
+    rankic_ir = _safe_float(metrics.get("daily_rankic_ir"))
+    rankic_mean = _safe_float(metrics.get("daily_rankic_mean"))
+    return (
+        -np.inf if rankic_ir is None else rankic_ir,
+        -np.inf if rankic_mean is None else rankic_mean,
+    )
+
+
+def _is_better_adaptive_candidate(candidate_metrics: Dict, best_metrics: Optional[Dict]) -> bool:
+    if best_metrics is None:
+        return True
+    return _adaptive_sort_score(candidate_metrics) > _adaptive_sort_score(best_metrics)
+
+
+def _format_adaptive_metric_compare(candidate_metrics: Dict, reference_metrics: Optional[Dict]) -> str:
+    def _fmt(value: Optional[float]) -> str:
+        return "nan" if value is None else f"{value:.4f}"
+
+    candidate_ir = _safe_float(candidate_metrics.get("daily_rankic_ir"))
+    candidate_mean = _safe_float(candidate_metrics.get("daily_rankic_mean"))
+    if reference_metrics is None:
+        return (
+            f"candidate_ir={_fmt(candidate_ir)}, "
+            f"candidate_rankic={_fmt(candidate_mean)}, "
+            "reference=NONE, decision=SET_AS_BEST"
+        )
+
+    ref_ir = _safe_float(reference_metrics.get("daily_rankic_ir"))
+    ref_mean = _safe_float(reference_metrics.get("daily_rankic_mean"))
+    better = _is_better_adaptive_candidate(candidate_metrics, reference_metrics)
+    decision = "UPDATE_BEST" if better else "KEEP_BEST"
+    return (
+        f"candidate_ir={_fmt(candidate_ir)}, best_ir={_fmt(ref_ir)}, "
+        f"candidate_rankic={_fmt(candidate_mean)}, best_rankic={_fmt(ref_mean)}, "
+        f"decision={decision}"
+    )
+
+
 def _candidate_passes_adaptive_replacement(base_metrics: Dict, candidate_metrics: Dict) -> bool:
     base_ir = _safe_float(base_metrics.get("daily_rankic_ir"))
     candidate_ir = _safe_float(candidate_metrics.get("daily_rankic_ir"))
@@ -1352,16 +1566,20 @@ def _build_adaptive_candidate_args(args, action: Optional[str]):
     if action == "low_iter":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate * 0.5,
-            n_estimators=args.n_estimators,# * 2,
+            learning_rate=args.learning_rate,
+            n_estimators=args.n_estimators,
         )
     if action == "hit_cap":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate,# * 1.5,
+            learning_rate=args.learning_rate * 1.5,
             n_estimators=args.n_estimators * 5,
         )
     return None
+
+
+def _resolve_adaptive_retry_seed(base_random_state: int, retry_index: int) -> int:
+    return int(base_random_state) + int(retry_index)
 
 
 def execute_split_training(
@@ -1407,58 +1625,160 @@ def execute_split_training(
     )
     adaptive_meta = selected_candidate.get("adaptive_meta", {})
     adaptive_retrain_enabled = getattr(args, "adaptive_best_iter_retrain", False)
+    max_low_iter_retries = max(
+        1,
+        int(getattr(args, "adaptive_low_iter_max_retries", ADAPTIVE_LOW_BEST_ITER_MAX_RETRIES)),
+    )
     adaptive_candidate_used = False
     adaptive_candidate_evaluated = False
+    adaptive_candidate_retry_count = 0
     adaptive_base_best_iteration = selected_candidate["train_params"].get("best_iteration")
     adaptive_candidate_best_iteration = None
+    adaptive_candidate_last_retry_seed = None
 
     live_adaptive_already_handled = bool(adaptive_meta.get("live_adaptive_triggered", False))
     if adaptive_retrain_enabled and adaptive_action is not None and not live_adaptive_already_handled:
-        candidate_args = _build_adaptive_candidate_args(args, adaptive_action)
-        logger.warning(
-            f"Split {split.split_index} 触发 best_iteration 自适应重训: "
-            f"action={adaptive_action}, base_best_iter={adaptive_base_best_iteration}, "
-            f"base_lr={args.learning_rate:.6f}, base_n_estimators={args.n_estimators}, "
-            f"candidate_lr={candidate_args.learning_rate:.6f}, "
-            f"candidate_n_estimators={candidate_args.n_estimators}"
-        )
-        adaptive_candidate_evaluated = True
-        challenger = _build_split_training_candidate(
-            split,
-            storage,
-            loader,
-            candidate_args,
-            topk_values,
-            trade_cal,
-            candidate_name=f"adaptive_{adaptive_action}",
-        )
-        adaptive_candidate_best_iteration = challenger["train_params"].get("best_iteration")
-        base_val_ir = _safe_float(selected_candidate["val_daily_metrics"].get("daily_rankic_ir"))
-        challenger_val_ir = _safe_float(challenger["val_daily_metrics"].get("daily_rankic_ir"))
-        base_val_rankic = _safe_float(
-            selected_candidate["val_daily_metrics"].get("daily_rankic_mean")
-        )
-        challenger_val_rankic = _safe_float(
-            challenger["val_daily_metrics"].get("daily_rankic_mean")
-        )
-        if _candidate_passes_adaptive_replacement(
-            selected_candidate["val_daily_metrics"], challenger["val_daily_metrics"]
-        ):
-            selected_candidate = challenger
-            adaptive_candidate_used = True
+        base_val_daily = selected_candidate["val_daily_metrics"]
+        base_seed = int(getattr(args, "random_state", 42))
+        if adaptive_action == "low_iter":
             logger.warning(
-                f"Split {split.split_index} 采用自适应候选模型: action={adaptive_action}, "
-                f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={challenger_val_ir:.4f}, "
-                f"base_val_rankic={base_val_rankic:.4f}, "
-                f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                f"Split {split.split_index} 触发 best_iteration 低迭代重试: "
+                f"base_best_iter={adaptive_base_best_iteration}, base_seed={base_seed}, "
+                f"max_retries={max_low_iter_retries}, "
+                f"base_lr={args.learning_rate:.6f}, base_n_estimators={args.n_estimators}"
             )
+            best_retry_candidate = None
+            best_retry_metrics = None
+            best_retry_seed = None
+            best_retry_best_iteration = None
+            for retry_index in range(1, max_low_iter_retries + 1):
+                adaptive_candidate_retry_count = retry_index
+                retry_seed = _resolve_adaptive_retry_seed(base_seed, retry_index)
+                adaptive_candidate_last_retry_seed = retry_seed
+                candidate_args = _build_adaptive_candidate_args(
+                    args,
+                    adaptive_action,
+                )
+                candidate_args.random_state = retry_seed
+                adaptive_candidate_evaluated = True
+                logger.warning(
+                    f"Split {split.split_index} 低迭代重试第 {retry_index}/{max_low_iter_retries} 次: "
+                    f"retry_seed={retry_seed}, candidate_lr={candidate_args.learning_rate:.6f}, "
+                    f"candidate_n_estimators={candidate_args.n_estimators}"
+                )
+                challenger = _build_split_training_candidate(
+                    split,
+                    storage,
+                    loader,
+                    candidate_args,
+                    topk_values,
+                    trade_cal,
+                    candidate_name=f"adaptive_{adaptive_action}_retry{retry_index}",
+                )
+                adaptive_candidate_best_iteration = challenger["train_params"].get("best_iteration")
+                challenger_val_daily = challenger["val_daily_metrics"]
+                challenger_val_ir = _safe_float(challenger_val_daily.get("daily_rankic_ir"))
+                challenger_val_rankic = _safe_float(challenger_val_daily.get("daily_rankic_mean"))
+                base_val_ir = _safe_float(base_val_daily.get("daily_rankic_ir"))
+                base_val_rankic = _safe_float(base_val_daily.get("daily_rankic_mean"))
+
+                logger.warning(
+                    f"Split {split.split_index} 低迭代重试指标对比: "
+                    f"attempt={retry_index}, retry_seed={retry_seed}, "
+                    f"{_format_adaptive_metric_compare(challenger_val_daily, best_retry_metrics)}"
+                )
+
+                if _is_better_adaptive_candidate(challenger_val_daily, best_retry_metrics):
+                    best_retry_candidate = challenger
+                    best_retry_metrics = challenger_val_daily
+                    best_retry_seed = retry_seed
+                    best_retry_best_iteration = adaptive_candidate_best_iteration
+
+                logger.warning(
+                    f"Split {split.split_index} 继续低迭代重试: attempt={retry_index}, retry_seed={retry_seed}, "
+                    f"candidate_best_iter={adaptive_candidate_best_iteration}, "
+                    f"base_val_ir={base_val_ir:.4f}, "
+                    f"candidate_val_ir={challenger_val_ir:.4f}, base_val_rankic={base_val_rankic:.4f}, "
+                    f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                )
+
+            if best_retry_metrics is not None:
+                logger.warning(
+                    f"Split {split.split_index} 低迭代重试最优候选: "
+                    f"best_retry_seed={best_retry_seed}, best_retry_best_iter={best_retry_best_iteration}, "
+                    f"best_retry_val_ir={_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
+                    f"best_retry_val_rankic={_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                )
+
+            if best_retry_candidate is not None:
+                adaptive_candidate_best_iteration = best_retry_best_iteration
+                adaptive_candidate_last_retry_seed = best_retry_seed
+
+            if best_retry_candidate is not None and _candidate_passes_adaptive_replacement(
+                base_val_daily, best_retry_metrics
+            ):
+                selected_candidate = best_retry_candidate
+                adaptive_candidate_used = True
+                logger.warning(
+                    f"Split {split.split_index} 采用低迭代重试最优候选模型: "
+                    f"retry_seed={best_retry_seed}, "
+                    f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={_safe_float(best_retry_metrics.get('daily_rankic_ir')):.4f}, "
+                    f"base_val_rankic={base_val_rankic:.4f}, candidate_val_rankic={_safe_float(best_retry_metrics.get('daily_rankic_mean')):.4f}"
+                )
+
+            if not adaptive_candidate_used:
+                logger.warning(
+                    f"Split {split.split_index} 低迭代重试完成但未满足替换条件: "
+                    f"max_retries={max_low_iter_retries}, "
+                    f"last_retry_seed={adaptive_candidate_last_retry_seed}, "
+                    f"last_best_iter={adaptive_candidate_best_iteration}"
+                )
         else:
+            candidate_args = _build_adaptive_candidate_args(args, adaptive_action)
             logger.warning(
-                f"Split {split.split_index} 保留基础模型: action={adaptive_action}, "
-                f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={challenger_val_ir:.4f}, "
-                f"base_val_rankic={base_val_rankic:.4f}, "
-                f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                f"Split {split.split_index} 触发 best_iteration 自适应重训: "
+                f"action={adaptive_action}, base_best_iter={adaptive_base_best_iteration}, "
+                f"base_lr={args.learning_rate:.6f}, base_n_estimators={args.n_estimators}, "
+                f"candidate_lr={candidate_args.learning_rate:.6f}, "
+                f"candidate_n_estimators={candidate_args.n_estimators}"
             )
+            adaptive_candidate_evaluated = True
+            challenger = _build_split_training_candidate(
+                split,
+                storage,
+                loader,
+                candidate_args,
+                topk_values,
+                trade_cal,
+                candidate_name=f"adaptive_{adaptive_action}",
+            )
+            adaptive_candidate_best_iteration = challenger["train_params"].get("best_iteration")
+            base_val_ir = _safe_float(selected_candidate["val_daily_metrics"].get("daily_rankic_ir"))
+            challenger_val_ir = _safe_float(challenger["val_daily_metrics"].get("daily_rankic_ir"))
+            base_val_rankic = _safe_float(
+                selected_candidate["val_daily_metrics"].get("daily_rankic_mean")
+            )
+            challenger_val_rankic = _safe_float(
+                challenger["val_daily_metrics"].get("daily_rankic_mean")
+            )
+            if _candidate_passes_adaptive_replacement(
+                selected_candidate["val_daily_metrics"], challenger["val_daily_metrics"]
+            ):
+                selected_candidate = challenger
+                adaptive_candidate_used = True
+                logger.warning(
+                    f"Split {split.split_index} 采用自适应候选模型: action={adaptive_action}, "
+                    f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={challenger_val_ir:.4f}, "
+                    f"base_val_rankic={base_val_rankic:.4f}, "
+                    f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                )
+            else:
+                logger.warning(
+                    f"Split {split.split_index} 保留基础模型: action={adaptive_action}, "
+                    f"base_val_ir={base_val_ir:.4f}, candidate_val_ir={challenger_val_ir:.4f}, "
+                    f"base_val_rankic={base_val_rankic:.4f}, "
+                    f"candidate_val_rankic={challenger_val_rankic:.4f}"
+                )
 
     posterior_model, posterior_val_daily_metrics, posterior_meta = _select_posterior_tree_model(
         model=selected_candidate["model"],
@@ -1572,19 +1892,36 @@ def execute_split_training(
     if isinstance(model, EnsembleModel):
         full_train_params["ensemble_offsets"] = getattr(args, "ensemble_offsets", 0)
         full_train_params["ensemble_seeds"] = _resolve_ensemble_seeds(args)
+        full_train_params["ensemble_seed_keep_top_ratio"] = getattr(
+            args, "ensemble_seed_keep_top_ratio", SEED_ENSEMBLE_KEEP_TOP_RATIO
+        )
+        full_train_params["ensemble_seed_keep_min_models"] = getattr(
+            args, "ensemble_seed_keep_min_models", SEED_ENSEMBLE_KEEP_MIN_MODELS
+        )
         full_train_params["ensemble_n_models"] = model.n_models
     full_train_params["adaptive_best_iter_retrain"] = adaptive_retrain_enabled
+    full_train_params["adaptive_low_iter_max_retries"] = max_low_iter_retries
     full_train_params["adaptive_best_iter_action"] = adaptive_action
     full_train_params["adaptive_candidate_evaluated"] = adaptive_candidate_evaluated
     full_train_params["adaptive_candidate_used"] = adaptive_candidate_used
+    full_train_params["adaptive_candidate_retry_count"] = adaptive_candidate_retry_count
     full_train_params["adaptive_base_best_iteration"] = adaptive_base_best_iteration
     full_train_params["adaptive_candidate_best_iteration"] = adaptive_candidate_best_iteration
+    full_train_params["adaptive_candidate_last_retry_seed"] = adaptive_candidate_last_retry_seed
     full_train_params["adaptive_live_triggered"] = adaptive_meta.get("live_adaptive_triggered", False)
     full_train_params["adaptive_live_trigger_count"] = adaptive_meta.get("live_adaptive_trigger_count", 0)
     full_train_params["adaptive_live_used_count"] = adaptive_meta.get("live_adaptive_used_count", 0)
     full_train_params["adaptive_live_last_action"] = adaptive_meta.get("live_adaptive_last_action")
     full_train_params["adaptive_live_last_best_iteration"] = adaptive_meta.get(
         "live_adaptive_last_best_iteration"
+    )
+    full_train_params["adaptive_live_retry_count"] = adaptive_meta.get("live_adaptive_retry_count", 0)
+    full_train_params["adaptive_live_last_retry_seed"] = adaptive_meta.get("live_adaptive_last_retry_seed")
+    full_train_params["adaptive_live_last_candidate_best_iteration"] = adaptive_meta.get(
+        "live_adaptive_last_candidate_best_iteration"
+    )
+    full_train_params["adaptive_live_final_random_state"] = adaptive_meta.get(
+        "live_adaptive_final_random_state"
     )
     full_train_params["adaptive_live_final_learning_rate"] = adaptive_meta.get(
         "live_adaptive_final_learning_rate"
@@ -1926,6 +2263,12 @@ def execute_deploy_training(
     if isinstance(model, EnsembleModel):
         full_train_params["ensemble_offsets"] = ensemble_offsets
         full_train_params["ensemble_seeds"] = ensemble_seeds
+        full_train_params["ensemble_seed_keep_top_ratio"] = getattr(
+            args, "ensemble_seed_keep_top_ratio", SEED_ENSEMBLE_KEEP_TOP_RATIO
+        )
+        full_train_params["ensemble_seed_keep_min_models"] = getattr(
+            args, "ensemble_seed_keep_min_models", SEED_ENSEMBLE_KEEP_MIN_MODELS
+        )
         full_train_params["ensemble_n_models"] = model.n_models
     full_train_params["posterior_tree_selection_mode"] = train_params.get(
         "posterior_tree_selection_mode", "disabled"
@@ -3041,10 +3384,16 @@ def main():
         default=False,
         help=(
             "启用 walk-forward best_iteration 自适应候选重训："
-            "best_iter<=100 时 lr/2 且 n_estimators*2；"
+            "best_iter<=100 时按随机种子重试并按排序指标择优；"
             "best_iter>=95%%*n_estimators 时 lr*1.5 且 n_estimators 不变；"
             "候选仅在验证集 RankIC IR 至少提升 0.05 且 RankIC 均值不下降时替换基础模型"
         )
+    )
+    parser.add_argument(
+        "--adaptive-low-iter-max-retries",
+        type=int,
+        default=ADAPTIVE_LOW_BEST_ITER_MAX_RETRIES,
+        help="low_iter（best_iter<=100）随机种子重试上限，默认 10"
     )
     parser.add_argument(
         "--posterior-tree-selection-mode",
@@ -3175,6 +3524,18 @@ def main():
         default=None,
         help="多种子 bagging：逗号分隔的随机种子列表（如 42,1,2,3,4）。"
              "默认 None=单种子（用 --random-state），与多偏移正交可叠加"
+    )
+    parser.add_argument(
+        "--ensemble-seed-keep-top-ratio",
+        type=float,
+        default=SEED_ENSEMBLE_KEEP_TOP_RATIO,
+        help="多种子筛选保留比例（0~1），默认 0.30"
+    )
+    parser.add_argument(
+        "--ensemble-seed-keep-min-models",
+        type=int,
+        default=SEED_ENSEMBLE_KEEP_MIN_MODELS,
+        help="多种子筛选最少保留模型数，默认 3"
     )
 
     # 因子增强（2.2）
@@ -3854,6 +4215,21 @@ def main():
     args.selected_split_indices = _normalize_selected_split_indices(
         getattr(args, "selected_split_indices", [])
     )
+    if args.adaptive_low_iter_max_retries <= 0:
+        logger.warning(
+            f"adaptive_low_iter_max_retries={args.adaptive_low_iter_max_retries} 非法，自动修正为 1"
+        )
+        args.adaptive_low_iter_max_retries = 1
+    if args.ensemble_seed_keep_top_ratio <= 0 or args.ensemble_seed_keep_top_ratio > 1:
+        logger.warning(
+            f"ensemble_seed_keep_top_ratio={args.ensemble_seed_keep_top_ratio} 非法，自动修正为 {SEED_ENSEMBLE_KEEP_TOP_RATIO}"
+        )
+        args.ensemble_seed_keep_top_ratio = SEED_ENSEMBLE_KEEP_TOP_RATIO
+    if args.ensemble_seed_keep_min_models <= 0:
+        logger.warning(
+            f"ensemble_seed_keep_min_models={args.ensemble_seed_keep_min_models} 非法，自动修正为 {SEED_ENSEMBLE_KEEP_MIN_MODELS}"
+        )
+        args.ensemble_seed_keep_min_models = SEED_ENSEMBLE_KEEP_MIN_MODELS
 
     # 如果指定了 --label，则覆盖 --label-column
     if args.label is not None:
@@ -3879,6 +4255,12 @@ def main():
     logger.info(f"早停: rounds={args.early_stopping_rounds if args.early_stopping_rounds else '禁用'}, metric={args.early_stopping_metric}")
     logger.info(
         f"best_iteration 自适应重训: {'启用' if args.adaptive_best_iter_retrain else '关闭'}"
+    )
+    if args.adaptive_best_iter_retrain:
+        logger.info(f"  low_iter 最大重试次数: {args.adaptive_low_iter_max_retries}")
+    logger.info(
+        f"多种子筛选: top_ratio={args.ensemble_seed_keep_top_ratio:.0%}, "
+        f"min_models={args.ensemble_seed_keep_min_models}"
     )
     if args.enable_enhanced_features:
         logger.info("因子增强: 启用（开盘强度、日内波动结构、委托不平衡）")

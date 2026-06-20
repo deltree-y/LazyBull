@@ -28,7 +28,35 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.6)
+### 当前版本 (v0.77.12)
+
+**多种子筛选参数可配置** (v0.77.12):
+- `scripts/walk_forward.py` 新增 `--ensemble-seed-keep-top-ratio` 与 `--ensemble-seed-keep-min-models`
+- `scripts/batch/batch_walk_forward.ps1` 新增 `$ensemble_seed_keep_top_ratio` 和 `$ensemble_seed_keep_min_models`，可在批处理配置区直接调整
+- 默认仍保持“前30%且至少3个”，仅从固定规则改为可调规则
+
+**多种子 ensemble 子模型筛选规则升级** (v0.77.11):
+- 在多种子构建模型时，最终仅保留排序指标最好的前 `30%` 子模型参与集成
+- 当 `30%` 对应数量小于 3 时，自动保底保留 3 个子模型
+- 排序依据为逐日 `RankIC IR` 优先、逐日 `RankIC` 均值次之，部署训练与 walk-forward 训练保持一致
+
+**low_iter 重试新增逐轮排序指标对比日志** (v0.77.10):
+- 在 `scripts/walk_forward.py` 的 low_iter 重试阶段，每轮都会打印 `daily_rankic_ir` 与 `daily_rankic_mean` 的对比信息
+- 日志展示“当前候选 vs 当前最优候选”以及 `UPDATE_BEST`/`KEEP_BEST` 判定，便于排查重试过程中的优选路径
+
+**low_iter 自适应重试支持可配次数与排序择优** (v0.77.9):
+- `scripts/batch/batch_walk_forward.ps1` 新增 `$adaptive_low_iter_max_retries`，可直接在批处理脚本中配置 low_iter 随机种子重试上限
+- `scripts/walk_forward.py` 新增 `--adaptive-low-iter-max-retries`，并将 low_iter 策略改为“先按上限完成重试，再按逐日 RankIC IR（主）+逐日 RankIC（次）从重试集合中选最优候选”
+- 不再以“迭代次数是否更高”作为 low_iter 的候选优先依据
+
+**修复 live adaptive 低迭代重试 seed 未切换** (v0.77.8):
+- 修复 `scripts/walk_forward.py` 中 ensemble 子模型 live adaptive 的 `low_iter` 路径：候选重训现在会按 `base_seed + retry_index` 递增 seed 执行（最多 10 次）
+- 新增重试审计字段（重试次数、最后重试 seed、候选 best_iteration），便于从日志和 metadata 复盘是否正确换种子
+
+**walk-forward 低迭代自适应重训改为随机种子重试** (v0.77.7):
+- `scripts/walk_forward.py` 中 `--adaptive-best-iter-retrain` 的 `best_iter<=100` 路径，不再调整学习率，而是保持当前学习率和树数，通过修改 `random_state` 重训候选模型
+- 低迭代重试默认最多 10 次，只有当候选模型的验证集逐日 `RankIC IR` 与 `RankIC` 满足替换条件时才会接管基础模型
+- `best_iter>=95%*n_estimators` 的撞上限路径继续沿用原有扩树处理方式，不改动既有行为
 
 **LambdaRank + rank_ic 并发参数兼容修复** (v0.77.6):
 - 修复 `objective=lambdarank` 且 `early_stopping_metric=rank_ic` 时，XGBoost sklearn 包装器可调用评估指标路径触发 `max_workers must be greater than 0` 的问题
