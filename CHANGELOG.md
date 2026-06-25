@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.14] - 2026-06-22
+
+### Changed
+
+- **训练特征重要性打印改为三列紧凑格式**：`_format_feature_importance_compact()` 将单列长列表排版为多列对齐输出，行数缩减至约 1/3，内容不减、可读性更好。
+
+## [0.77.13] - 2026-06-20
+
+### Changed
+
+- **factor_prune 排除列表重构（150→109个，安全裁剪）**：
+  - `data/models/factor_exclude_list.json` 从纯统计 ICIR 阈值替换为手工裁剪列表。
+  - **删除**（109个）：全部 `_sz` 市值中性化冗余列、原始版基本面/价值红利因子（保留 zscore 版）、原始收益率 `ret_1/5/10/20`（保留 `neu_ret_*`）、原始均线偏离 `ma_deviation_5/10/20`（保留 `zscore_ma_deviation_20`）、KDJ/MACD 高冗余线、`hot_rank` 系列零重要性因子、行业动量/均值冗余因子。
+  - **恢复保留**（41个）：`zscore_turnover_rate` 等模型核心因子、全部一致预期 `cons_*`、全部龙虎榜 `lhb_*`、全部北向 `north_*`、K线形态 `amplitude/body_length/shadows`、`kdj_j`、技术指标 `atr_pct_14/rsi_14/bb_pct` 等。
+  - 旧列表因 `ind_size` 双重中性化 ICIR 阈值过严，误删了模型重要性 #1 的 `zscore_turnover_rate` 及全部另类/事件因子。新列表仅排除真正冗余（r>0.9）或零信息量因子。
+
 ## [0.77.12] - 2026-06-20
 
 ### Changed

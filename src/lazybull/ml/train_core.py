@@ -40,6 +40,32 @@ from src.lazybull.ml.eval_utils import (
     summarize_daily_metrics,
 )
 
+
+def _format_feature_importance_compact(
+    feat_imp: pd.Series,
+    n_cols: int = 4,
+    float_format: str = "%.3f",
+) -> str:
+    """将特征重要性 Series 格式化为紧凑的多列字符串，减少显示行数。"""
+    n = len(feat_imp)
+    if n == 0:
+        return "(空)"
+    per_col = math.ceil(n / n_cols)
+    max_name_len = max(len(str(name)) for name in feat_imp.index)
+    lines: List[str] = []
+    for row_idx in range(per_col):
+        parts: List[str] = []
+        for col_idx in range(n_cols):
+            item_idx = col_idx * per_col + row_idx
+            if item_idx < n:
+                name = str(feat_imp.index[item_idx])
+                score = float_format % feat_imp.iloc[item_idx]
+                parts.append(f"{name:<{max_name_len}}  {score}")
+        if parts:
+            lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
 # 基本面因子特征列（行业 z-score 后的列名）
 FUNDAMENTAL_FEATURE_COLUMNS = [
     # 盈利能力（原始5个 + 新增5个）
@@ -1553,7 +1579,7 @@ def train_xgboost_model(
 
         model.fit(X_train, y_train_processed, **fit_kwargs)
         if early_stopping_rounds:
-            logger.info(f"模型训练完成（最佳迭代: {model.best_iteration}）")
+            logger.warning(f"模型训练完成（最佳迭代: {model.best_iteration}）")
         else:
             logger.info(f"模型训练完成（固定 {n_estimators} 棵树）")
     else:
@@ -1569,8 +1595,7 @@ def train_xgboost_model(
     importance = model.feature_importances_
     feature_names = X_train.columns
     feat_imp = pd.Series(importance, index=feature_names).sort_values(ascending=False)
-    logger.info(f"Model Features sorted:")
-    logger.warning(f"\n{feat_imp.head(len(feat_imp)).to_string(float_format='%.3f')}")
+    logger.info(f"模型特征重要性（共 {len(feat_imp)} 个）:\n{_format_feature_importance_compact(feat_imp)}")
 
     # 计算训练集性能指标
     # 使用 y_train_processed（winsorize 后）与预测值比较，保持与训练目标一致
@@ -1937,7 +1962,7 @@ def train_lightgbm_model(
             fit_kwargs["eval_metric"] = _rank_ic_eval_lgb
 
         model.fit(X_train, y_train_processed, **fit_kwargs)
-        logger.info(f"模型训练完成（最佳迭代: {model.best_iteration_}）")
+        logger.warning(f"模型训练完成（最佳迭代: {model.best_iteration_}）")
     elif len(X_val) > 0:
         callbacks = [lgb.log_evaluation(period=0)]
         logger.info(f"未使用早停机制，固定训练 {n_estimators} 棵树")
@@ -1961,8 +1986,7 @@ def train_lightgbm_model(
     importance = model.feature_importances_
     feature_names = X_train.columns
     feat_imp = pd.Series(importance, index=feature_names).sort_values(ascending=False)
-    logger.info(f"Model Top 20 Features:")
-    logger.warning(f"\n{feat_imp.head(20)}")
+    logger.info(f"模型 Top-20 特征重要性:\n{_format_feature_importance_compact(feat_imp.head(20))}")
 
     # 计算训练集性能指标
     if task == "regression":

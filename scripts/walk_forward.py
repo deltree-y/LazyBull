@@ -86,9 +86,9 @@ warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched de
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*DataFrame concatenation with empty or all-NA entries.*")
 
 
-ADAPTIVE_LOW_BEST_ITER_THRESHOLD = 100
+ADAPTIVE_LOW_BEST_ITER_THRESHOLD = 50
 ADAPTIVE_LOW_BEST_ITER_MAX_RETRIES = 10
-ADAPTIVE_HIT_CAP_RATIO = 0.95
+ADAPTIVE_HIT_CAP_RATIO = 0.90
 ADAPTIVE_MIN_VAL_RANKIC_IR_GAIN = 0.00
 SEED_ENSEMBLE_KEEP_TOP_RATIO = 0.30
 SEED_ENSEMBLE_KEEP_MIN_MODELS = 3
@@ -963,14 +963,14 @@ def _build_ensemble_sub_models(
                             last_retry_seed = retry_seed
                             adaptive_meta["live_adaptive_retry_count"] = retry_index
                             adaptive_meta["live_adaptive_last_retry_seed"] = retry_seed
-                            candidate_args = _build_adaptive_candidate_args(rolling_args, action)
+                            candidate_args = _build_adaptive_candidate_args(args, action)
                             candidate_args.random_state = retry_seed
                             logger.warning(
                                 f"  子模型 {idx}/{total} 触发 split 内低迭代重试: "
                                 f"attempt={retry_index}/{max_low_iter_retries}, "
                                 f"best_iter={best_iter}, base_seed={base_seed}, retry_seed={retry_seed}, "
-                                f"base_lr={rolling_args.learning_rate:.6f}, "
-                                f"base_n_estimators={rolling_args.n_estimators}"
+                                f"orig_lr={args.learning_rate:.6f}, "
+                                f"orig_n_estimators={args.n_estimators}"
                             )
 
                             challenger_tr = _train_model_on_window(
@@ -1062,11 +1062,11 @@ def _build_ensemble_sub_models(
                                 f"last_best_iter={last_candidate_best_iteration}"
                             )
                     else:
-                        candidate_args = _build_adaptive_candidate_args(rolling_args, action)
+                        candidate_args = _build_adaptive_candidate_args(args, action)
                         logger.warning(
                             f"  子模型 {idx}/{total} 触发 split 内实时自适应: action={action}, "
-                            f"best_iter={best_iter}, base_lr={rolling_args.learning_rate:.6f}, "
-                            f"base_n_estimators={rolling_args.n_estimators}, "
+                            f"best_iter={best_iter}, orig_lr={args.learning_rate:.6f}, "
+                            f"orig_n_estimators={args.n_estimators}, "
                             f"candidate_lr={candidate_args.learning_rate:.6f}, "
                             f"candidate_n_estimators={candidate_args.n_estimators}"
                         )
@@ -1188,6 +1188,24 @@ def _build_ensemble_sub_models(
                 f"top30_median={'nan' if top30_med is None else f'{top30_med:.6f}'}, "
                 f"val_ir={'nan' if val_ir is None else f'{val_ir:.4f}'}"
             )
+
+        # 收集保留子模型的 best_iteration（供回测前打印）
+        sub_model_best_iters: List[Tuple] = []
+        for item in kept_records:
+            tr = item["train_result"]
+            seed_val = tr["train_params"].get("random_state")
+            best_iter_val = tr["train_params"].get("best_iteration")
+            sub_model_best_iters.append((seed_val, best_iter_val))
+        adaptive_meta["sub_model_best_iterations"] = sub_model_best_iters
+    else:
+        # 单种子场景也收集 best_iteration
+        sub_model_best_iters: List[Tuple] = []
+        for record in sub_model_records:
+            tr = record["train_result"]
+            seed_val = tr["train_params"].get("random_state")
+            best_iter_val = tr["train_params"].get("best_iteration")
+            sub_model_best_iters.append((seed_val, best_iter_val))
+        adaptive_meta["sub_model_best_iterations"] = sub_model_best_iters
     return sub_models, base_result, adaptive_meta
 
 
@@ -1422,6 +1440,64 @@ def _select_posterior_tree_model(
     return selected_model, selected_metrics, meta
 
 
+def _print_pre_backtest_model_summary(
+    split_index: int,
+    adaptive_meta: Dict,
+    val_daily_metrics: Dict,
+    test_daily_metrics: Dict,
+) -> None:
+    """在回测前打印模型摘要：各子模型迭代轮数 + 验证集/测试集关键指标。"""
+    # ── 1. 各子模型迭代轮数 ──
+    sub_iters = adaptive_meta.get("sub_model_best_iterations", [])
+    if sub_iters:
+        seed_parts = []
+        for seed_val, best_iter_val in sub_iters:
+            seed_str = str(seed_val) if seed_val is not None else "?"
+            iter_str = str(best_iter_val) if best_iter_val is not None else "?"
+            seed_parts.append(f"seed={seed_str}:best_iter={iter_str}")
+        logger.opt(colors=True).warning(
+            f"<yellow><bold>Split {split_index} 子模型迭代轮数:</bold></yellow> "
+            f"{', '.join(seed_parts)}"
+        )
+
+    # ── 2. 指标提取 ──
+    def _extract(m: Dict) -> Dict[str, str]:
+        def _f(key: str, fmt: str = ".6f") -> str:
+            v = _safe_float(m.get(key))
+            return "nan" if v is None else f"{v:{fmt}}"
+
+        top30_med = _safe_float(m.get("diagnostic_Top30_逐日均值_50分位"))
+        univ_mean = _safe_float(m.get("diagnostic_全市场收益_逐日均值的均值"))
+        lift_med = (
+            top30_med - univ_mean
+            if top30_med is not None and univ_mean is not None
+            else None
+        )
+        return {
+            "RankIC均值": _f("daily_rankic_mean", ".4f"),
+            "Top30中位数": _f("diagnostic_Top30_逐日均值_50分位"),
+            "Top30均值": _f("top30_return_mean"),
+            "Top30提升中位数": "nan" if lift_med is None else f"{lift_med:.6f}",
+            "Top30提升均值": _f("diagnostic_Top30_相对全市场提升_均值"),
+        }
+
+    val_info = _extract(val_daily_metrics) if val_daily_metrics else {}
+    test_info = _extract(test_daily_metrics) if test_daily_metrics else {}
+
+    # ── 3. 打印 ──
+    metric_labels = ["RankIC均值", "Top30中位数", "Top30均值", "Top30提升中位数", "Top30提升均值"]
+    logger.opt(colors=True).warning(
+        f"<yellow><bold>Split {split_index} 模型指标对比（验证集 vs 测试集）:</bold></yellow>"
+    )
+    for label in metric_labels:
+        v_val = val_info.get(label, "-")
+        v_test = test_info.get(label, "-")
+        logger.opt(colors=True).warning(
+            f"  <yellow>{label:16s}</yellow>  "
+            f"验证={v_val:>12s}  |  测试={v_test:>12s}"
+        )
+
+
 def _resolve_adaptive_best_iter_action(best_iteration, n_estimators) -> Optional[str]:
     best_iter = _safe_float(best_iteration)
     tree_limit = _safe_float(n_estimators)
@@ -1599,14 +1675,14 @@ def _build_adaptive_candidate_args(args, action: Optional[str]):
     if action == "low_iter":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate,
+            learning_rate=args.learning_rate * 0.1,
             n_estimators=args.n_estimators,
         )
     if action == "hit_cap":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate * 1.5,
-            n_estimators=args.n_estimators * 5,
+            learning_rate=args.learning_rate * 1.25,# * 1.5,
+            n_estimators=args.n_estimators * 1.5,
         )
     return None
 
@@ -1899,6 +1975,14 @@ def execute_split_training(
         original_return_col=args.label_column,
         task=args.task,
         topk_values=topk_values,
+    )
+
+    # ── 回测前打印模型摘要（子模型迭代轮数 + 验证集/测试集关键指标）──
+    _print_pre_backtest_model_summary(
+        split_index=split.split_index,
+        adaptive_meta=selected_candidate.get("adaptive_meta", {}),
+        val_daily_metrics=val_daily_metrics,
+        test_daily_metrics=test_daily_metrics,
     )
 
     # ── Phase 5: 注册模型 ─────────────────────────────────────────────

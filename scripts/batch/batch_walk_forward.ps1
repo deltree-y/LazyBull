@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(7)
+        SelectedSplits = @()
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -77,19 +77,19 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
-$learning_rate_list      = @(0.02)     #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
-$min_child_weight_list   = @(175)       #. XGB推荐150, LGB推荐200
+$min_child_weight_list   = @(300)       #. XGB推荐150, LGB推荐200
 $reg_alpha_list          = @(0.05)      #. XGB推荐0.05, LGB推荐0.1
-$reg_lambda_list         = @(5)         #. XGB推荐1.0, LGB推荐5.0
+$reg_lambda_list         = @(7)         #. XGB推荐5.0, LGB推荐5.0
 $gamma_list              = @(0.5)       #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(600)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
@@ -102,12 +102,12 @@ $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1�
 
 # ── best_iteration 自适应候选重训 ─────────────────────────────
 $adaptive_best_iter_retrain = $true  # $true 启用：低迭代/撞上限 split 自动重训候选并按验证 RankIC/IR 择优
-$adaptive_low_iter_max_retries = 3  # low_iter（best_iter<=100）随机种子重试上限
+$adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=100）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "1100,2200,3300,4400,5500,6600,7700,8800"#,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "1100,2200,3300"#,4400,5500,6600,7700,8800,9900,10000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
-$ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数
+$ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数 
 
 # ── 候选树数后验选优（训练完成后按逐日验证指标重选最终树数）─────────
 $posterior_tree_selection_mode = "disabled"   # disabled | grid
@@ -125,7 +125,7 @@ $enable_fundamental      = $true  # $true 启用 | $false 禁用
 $enable_alt              = $true  # $true 启用 | $false 禁用
 
 # ── 融资融券因子（通过 margin_detail 接口下载）────────────────────
-$enable_margin           = $false  # $true 启用 | $false 禁用
+$enable_margin           = $true  # $true 启用 | $false 禁用
 # 0428:关闭后CAGR下降约3%, 回撤基本不变 
 # 0610:打开后CAGR大幅下降
 
@@ -745,7 +745,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $period_label
     }
     $start_model_version = $wfPeriod.StartModelVersion
-    $selected_splits = $wfPeriod.SelectedSplits
+    $selected_splits = @($wfPeriod.SelectedSplits)
     $summary_csv_path = Join-Path $batch_raw_dir ("walk_forward_summary_{0}_{1:D4}.csv" -f $period_label, $count)
 
     # 构建命令字符串
@@ -786,7 +786,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $pythonCmd += " --posterior-tree-candidates $posterior_tree_candidates"
     }
 
-    if ($selected_splits -and $selected_splits.Count -gt 0) {
+    if ($null -ne $selected_splits -and $selected_splits.Count -gt 0) {
         $pythonCmd += " --selected-split-indices $($selected_splits -join ' ')"
     }
 
