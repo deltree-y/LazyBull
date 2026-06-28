@@ -101,7 +101,7 @@ def calculate_industry_alpha_windows(
     Returns:
         DataFrame，包含 ts_code, trade_date, alpha_industry_{window}
     """
-    logger.info("计算多个窗口的行业 alpha...")
+    logger.debug("计算多个窗口的行业 alpha...")
     result = df[['ts_code', 'trade_date']].copy()
 
     for window in ret_windows:

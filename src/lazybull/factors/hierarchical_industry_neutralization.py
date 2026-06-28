@@ -165,7 +165,7 @@ def hierarchical_zscore(
         # 全市场统计（最终兜底）
         global_tradable = result.loc[tradable_mask, col].dropna()
         if len(global_tradable) < 2:
-            logger.warning(f"hierarchical_zscore: {col} 全市场可交易样本不足，跳过")
+            logger.debug(f"hierarchical_zscore: {col} 全市场可交易样本不足，跳过")
             result[output_col] = np.nan
             continue
 

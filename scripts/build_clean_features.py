@@ -603,7 +603,6 @@ def build_features_data(
             if len(features_df) > 0:
                 storage.save_cs_train_day(features_df, trade_date)
                 success_count += 1
-                logger.info(f"  已保存 {len(features_df)} 条特征记录")
             else:
                 logger.warning(f"  没有有效样本，跳过保存")
                 skip_count += 1

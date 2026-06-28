@@ -339,7 +339,23 @@ class FeatureBuilder:
         )
         logger.debug(f"{trade_date} 市场状态特征完成: {len(result.columns.tolist())} 列")
 
-        logger.info(f"{trade_date} 特征构建完成: {len(result)} 个样本")
+        # 每日精简摘要：一行展示核心指标
+        _n_samples = len(result)
+        _n_neu = len([c for c in result.columns if c.startswith('neu_')])
+        _n_zscore = len([c for c in result.columns if c.startswith('zscore_') and not c.endswith('_sz')])
+        _n_sz = len([c for c in result.columns if c.endswith('_sz')])
+        _fs = getattr(self, '_filter_stats', {}) or {}
+        _removed = _fs.get('original', 0) - _fs.get('result', 0) if _fs else 0
+        _parts = [f"{trade_date} ✓ {_n_samples}样本"]
+        if _removed > 0:
+            _parts.append(f"剔除{_removed}")
+        _feat_parts = []
+        if _n_neu: _feat_parts.append(f"demean+{_n_neu}")
+        if _n_zscore: _feat_parts.append(f"zscore+{_n_zscore}")
+        if _n_sz: _feat_parts.append(f"size+{_n_sz}")
+        if _feat_parts:
+            _parts.append(" | ".join(_feat_parts))
+        logger.info("  ".join(_parts))
         
         return result
     
@@ -607,7 +623,7 @@ class FeatureBuilder:
                 missing_summary.append(f"{label_col}={missing_labels}")
 
         if missing_summary:
-            logger.warning(
+            logger.debug(
                 f"{trade_date} 标签缺失统计（T+1 收盘价或 T+1+N 开盘价缺失）: "
                 + ", ".join(missing_summary)
             )
@@ -1481,7 +1497,7 @@ class FeatureBuilder:
         has_clean_flags = all(col in result.columns for col in ['is_st', 'is_suspended', 'tradable', 'list_days'])
         
         if has_clean_flags:
-            logger.info("数据已包含 clean 层过滤标记，直接复用")
+            logger.debug("数据已包含 clean 层过滤标记，直接复用")
             return result
         
         # 如果没有clean标记，则需要自己计算
@@ -1595,7 +1611,7 @@ class FeatureBuilder:
         has_clean_limit_flags = all(col in result.columns for col in ['is_limit_up', 'is_limit_down'])
         
         if has_clean_limit_flags:
-            logger.info("数据已包含 clean 层涨跌停标记，直接复用")
+            logger.debug("数据已包含 clean 层涨跌停标记，直接复用")
             return result
         
         # 如果没有clean标记，则需要自己计算
@@ -1701,11 +1717,20 @@ class FeatureBuilder:
             if label_col in df.columns:
                 label_missing_info[label_col] = df[label_col].isna().sum()
 
-        logger.info(
+        logger.debug(
             f"过滤前样本数: {original_count}, "
             f"ST: {st_count}, 上市<{self.min_list_days}天: {list_days_count}, "
             f"停牌: {suspend_count}, 标签缺失: {label_missing_info}"
         )
+
+        # 记录过滤统计，供每日摘要使用
+        self._filter_stats = {
+            "original": original_count,
+            "st": int(st_count),
+            "list_days": int(list_days_count),
+            "suspend": int(suspend_count),
+            "label_missing": label_missing_info,
+        }
 
         filter_mask = (
             (df['is_st'] == 0) &
@@ -1718,7 +1743,7 @@ class FeatureBuilder:
                 primary_col = f'y_ret_{self.horizon}'
                 if primary_col in df.columns:
                     label_mask = df[primary_col].notna()
-                    logger.info(
+                    logger.debug(
                         f"require_label=True [single], 按主 horizon={self.horizon} "
                         f"过滤 {primary_col} 缺失的样本"
                     )
@@ -1734,17 +1759,18 @@ class FeatureBuilder:
                     label_col = f'y_ret_{horizon}'
                     if label_col in df.columns:
                         label_mask = label_mask & df[label_col].notna()
-                logger.info(
+                logger.debug(
                     f"require_label=True [all], 要求 horizons={self.horizons} "
                     f"对应标签同时非空（AND）"
                 )
             filter_mask = filter_mask & label_mask
         else:
-            logger.info("require_label=False, 保留标签缺失样本（实盘/推理模式）")
+            logger.debug("require_label=False, 保留标签缺失样本（实盘/推理模式）")
 
         result = df[filter_mask].copy()
 
-        logger.info(f"过滤后样本数: {len(result)} （剔除 {original_count - len(result)} 只）")
+        self._filter_stats["result"] = len(result)
+        logger.debug(f"过滤后样本数: {len(result)} （剔除 {original_count - len(result)} 只）")
         
         return result
     
@@ -1974,7 +2000,7 @@ class FeatureBuilder:
 
         if len(demean_columns) > 0:
             if has_hierarchy:
-                logger.info(
+                logger.debug(
                     f"开始分层回退行业去均值（{hierarchy_label}）：{len(demean_columns)} 个列"
                 )
                 try:
@@ -1989,11 +2015,11 @@ class FeatureBuilder:
                         prefix='neu_',
                     )
                     actual_new = [f'neu_{c}' for c in demean_columns if f'neu_{c}' in result.columns]
-                    logger.info(f"分层去均值完成，新增 {len(actual_new)} 列")
+                    logger.debug(f"分层去均值完成，新增 {len(actual_new)} 列")
                 except Exception as e:
                     logger.error(f"分层行业去均值失败：{e}")
             else:
-                logger.info(
+                logger.debug(
                     f"开始行业去均值（按 sw_industry 分组）：{len(demean_columns)} 个列"
                 )
                 try:
@@ -2007,11 +2033,11 @@ class FeatureBuilder:
                         inplace=False
                     )
                     actual_new = [f'neu_{c}' for c in demean_columns if f'neu_{c}' in result.columns]
-                    logger.info(f"去均值完成，新增 {len(actual_new)} 列")
+                    logger.debug(f"去均值完成，新增 {len(actual_new)} 列")
                 except Exception as e:
                     logger.error(f"行业去均值失败：{e}")
         else:
-            logger.info("没有找到需要去均值的收益率/标签列")
+            logger.debug("没有找到需要去均值的收益率/标签列")
 
         # ========================================
         # 2. Z-Score 中性化：指标/特征列
@@ -2047,7 +2073,7 @@ class FeatureBuilder:
 
         if len(existing_zscore_columns) > 0:
             if has_hierarchy:
-                logger.info(
+                logger.debug(
                     f"开始分层回退行业内 Z-Score（{hierarchy_label}）：{len(existing_zscore_columns)} 个特征"
                 )
                 try:
@@ -2062,11 +2088,11 @@ class FeatureBuilder:
                         prefix='zscore_',
                     )
                     actual_new = [f'zscore_{c}' for c in existing_zscore_columns if f'zscore_{c}' in result.columns]
-                    logger.info(f"分层 Z-Score 完成，新增 {len(actual_new)} 列")
+                    logger.debug(f"分层 Z-Score 完成，新增 {len(actual_new)} 列")
                 except Exception as e:
                     logger.error(f"分层行业内 Z-Score 失败：{e}")
             else:
-                logger.info(
+                logger.debug(
                     f"开始行业内 Z-Score（按 sw_industry 分组）：{len(existing_zscore_columns)} 个特征"
                 )
                 try:
@@ -2080,11 +2106,11 @@ class FeatureBuilder:
                         inplace=False
                     )
                     actual_new = [f'zscore_{c}' for c in existing_zscore_columns if f'zscore_{c}' in result.columns]
-                    logger.info(f"Z-Score 完成，新增 {len(actual_new)} 列")
+                    logger.debug(f"Z-Score 完成，新增 {len(actual_new)} 列")
                 except Exception as e:
                     logger.error(f"行业内 Z-Score 失败：{e}")
         else:
-            logger.info("没有找到需要 Z-Score 的特征列")
+            logger.debug("没有找到需要 Z-Score 的特征列")
 
         return result
 
@@ -2113,7 +2139,7 @@ class FeatureBuilder:
         # 选择需要市值中性化的列：已行业中性化的 zscore_* 列
         zscore_cols = [c for c in result.columns if c.startswith("zscore_")]
         if not zscore_cols:
-            logger.info("未找到 zscore_* 列，跳过市值中性化")
+            logger.debug("未找到 zscore_* 列，跳过市值中性化")
             return result
 
         # 创建市值分位标记列（仅用可交易样本确定分位边界）
@@ -2152,9 +2178,9 @@ class FeatureBuilder:
         if sz_columns:
             sz_df = pd.DataFrame(sz_columns, index=result.index)
             result = pd.concat([result, sz_df], axis=1)
-            logger.info(f"市值中性化完成: 新增 {len(sz_columns)} 个 zscore_*_sz 列")
+            logger.debug(f"市值中性化完成: 新增 {len(sz_columns)} 个 zscore_*_sz 列")
         else:
-            logger.info("市值中性化: 无新增列")
+            logger.debug("市值中性化: 无新增列")
 
         # 清理临时列
         result.drop(columns=["_size_group"], inplace=True)

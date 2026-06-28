@@ -565,7 +565,7 @@ class Storage:
         else:
             raise ValueError(f"不支持的格式: {format}")
 
-        logger.info(f"数据已保存: {file_path} ({len(df)} 条记录)")
+        logger.debug(f"数据已保存: {file_path} ({len(df)} 条记录)")
 
     def _load_data(
         self,

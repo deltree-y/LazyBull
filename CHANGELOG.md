@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.15] - 2026-06-28
+
+### Changed
+
+- **精简 build features 日志输出**：每日特征构建日志大幅瘦身，中间步骤（标签缺失统计、过滤标记复用、行业 alpha、过滤前后样本数、分层去均值/Z-Score、市值中性化等）统一降级为 DEBUG 级别；保留每日进度头行与一行精简摘要（样本数 + 剔除数 + 特征列数），便于快速扫读。
+
 ## [0.77.14] - 2026-06-22
 
 ### Changed
