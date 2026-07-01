@@ -503,24 +503,22 @@ def build_features_data(
     loop_start_ts = time.time()
 
     for i, trade_date in enumerate(trading_dates_str, 1):
-        # 预估完成时间：基于已处理的日期平均耗时线性外推
-        elapsed = time.time() - loop_start_ts
-        if i > 1 and elapsed > 0:
-            avg_per_date = elapsed / (i - 1)
-            remaining = avg_per_date * (total_dates - i + 1)
-            eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            eta_str = "计算中"
-        logger.info(
-            f"\n===== [{i}/{total_dates}] ({i/total_dates:.1%}) 构建 {trade_date} 特征 "
-            f"| 预计完成: {eta_str} ====="
-        )
-        
         try:
             # 检查特征是否已存在
             if not force and storage.is_feature_exists(trade_date):
                 if _check_features_schema(storage, trade_date):
-                    logger.info(f"  特征已存在，跳过")
+                    # 预估完成时间
+                    elapsed = time.time() - loop_start_ts
+                    if i > 1 and elapsed > 0:
+                        avg_per_date = elapsed / (i - 1)
+                        remaining = avg_per_date * (total_dates - i + 1)
+                        eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        eta_str = "计算中"
+                    logger.info(
+                        f"[{i}/{total_dates}] ({i/total_dates:.1%}) {trade_date} ⏭ 已存在 "
+                        f"| 预计完成: {eta_str}"
+                    )
                     skip_count += 1
                     continue
                 logger.warning("  特征缓存缺少必要列，将重新构建")
@@ -603,6 +601,19 @@ def build_features_data(
             if len(features_df) > 0:
                 storage.save_cs_train_day(features_df, trade_date)
                 success_count += 1
+                # 每日一行精简输出：进度 + 结果摘要
+                elapsed = time.time() - loop_start_ts
+                if i > 1 and elapsed > 0:
+                    avg_per_date = elapsed / i
+                    remaining = avg_per_date * (total_dates - i)
+                    eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    eta_str = "计算中"
+                _summary = getattr(builder, '_last_summary', f'{trade_date} ✓ {len(features_df)}样本')
+                logger.info(
+                    f"[{i}/{total_dates}] ({i/total_dates:.1%}) {_summary} "
+                    f"| 预计完成: {eta_str}"
+                )
             else:
                 logger.warning(f"  没有有效样本，跳过保存")
                 skip_count += 1

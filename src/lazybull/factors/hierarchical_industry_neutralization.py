@@ -152,12 +152,12 @@ def hierarchical_zscore(
     if tradable_col in result.columns:
         tradable_mask = (result[tradable_col] == 1)
     else:
-        logger.warning(f"hierarchical_zscore: 未找到 {tradable_col} 列，使用全部样本")
+        logger.debug(f"hierarchical_zscore: 未找到 {tradable_col} 列，使用全部样本")
         tradable_mask = pd.Series(True, index=result.index)
 
     for col in columns:
         if col not in result.columns:
-            logger.warning(f"hierarchical_zscore: 列 {col} 不存在，跳过")
+            logger.debug(f"hierarchical_zscore: 列 {col} 不存在，跳过")
             continue
 
         output_col = f"{prefix}{col}"
@@ -172,7 +172,7 @@ def hierarchical_zscore(
         global_mean = float(global_tradable.mean())
         global_std = float(global_tradable.std())
         if np.isnan(global_std) or global_std == 0:
-            logger.warning(f"hierarchical_zscore: {col} 全市场标准差为 0 或 NaN，跳过")
+            logger.debug(f"hierarchical_zscore: {col} 全市场标准差为 0 或 NaN，跳过")
             result[output_col] = np.nan
             continue
 

@@ -1675,7 +1675,7 @@ def _build_adaptive_candidate_args(args, action: Optional[str]):
     if action == "low_iter":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate * 0.1,
+            learning_rate=args.learning_rate,# * 0.1,
             n_estimators=args.n_estimators,
         )
     if action == "hit_cap":

@@ -339,7 +339,7 @@ class FeatureBuilder:
         )
         logger.debug(f"{trade_date} 市场状态特征完成: {len(result.columns.tolist())} 列")
 
-        # 每日精简摘要：一行展示核心指标
+        # 每日精简摘要：存储供外部合并输出，自身仅 debug 级别打印
         _n_samples = len(result)
         _n_neu = len([c for c in result.columns if c.startswith('neu_')])
         _n_zscore = len([c for c in result.columns if c.startswith('zscore_') and not c.endswith('_sz')])
@@ -355,7 +355,8 @@ class FeatureBuilder:
         if _n_sz: _feat_parts.append(f"size+{_n_sz}")
         if _feat_parts:
             _parts.append(" | ".join(_feat_parts))
-        logger.info("  ".join(_parts))
+        self._last_summary = "  ".join(_parts)
+        logger.debug(self._last_summary)
         
         return result
     

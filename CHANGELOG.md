@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.16] - 2026-06-28
+
+### Changed
+
+- **build features 日志进一步精简为每日1行**：将进度头行与结果摘要合并为一行输出，格式 `[i/N] (pct%) date ✓ samples 剔除n feat... | 预计完成: ETA`，消除之前 3 行/天的冗余。
+
 ## [0.77.15] - 2026-06-28
 
 ### Changed

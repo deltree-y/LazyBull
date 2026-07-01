@@ -72,25 +72,29 @@ $val_ratio_list          = @(0.2)           # 训练数据内部验证集比例�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
+$label_list              = @("neu_y_ret_10")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(3)         #. XGB推荐9, LGB推荐5
-$num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
+$max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
 $learning_rate_list      = @(0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
-$subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
+$min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
-$min_child_weight_list   = @(300)       #. XGB推荐150, LGB推荐200
+
+$num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
+$subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
 $reg_alpha_list          = @(0.05)      #. XGB推荐0.05, LGB推荐0.1
 $reg_lambda_list         = @(7)         #. XGB推荐5.0, LGB推荐5.0
 $gamma_list              = @(0.5)       #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 
+# ── 目标函数 ─────────────────────────────────────────────────
+$objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 # ── 早停配置 ───────────────────────────────────────────────────
 $early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
+
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
@@ -101,20 +105,17 @@ $rank_weight_list        = @(3)          #3
 $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
 
 # ── best_iteration 自适应候选重训 ─────────────────────────────
-$adaptive_best_iter_retrain = $true  # $true 启用：低迭代/撞上限 split 自动重训候选并按验证 RankIC/IR 择优
+$adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split 自动重训候选并按验证 RankIC/IR 择优
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=100）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "1100,2200,3300"#,4400,5500,6600,7700,8800,9900,10000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "1100"#,2200,3300"#,4400,5500,6600,7700,8800,9900,10000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
-$ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数 
+$ensemble_seed_keep_min_models = 1    # 多种子筛选最少保留模型数 
 
 # ── 候选树数后验选优（训练完成后按逐日验证指标重选最终树数）─────────
 $posterior_tree_selection_mode = "disabled"   # disabled | grid
 $posterior_tree_candidates     = ""           # 逗号分隔，如 "16,32,64,128"；空=使用内置网格
-
-# ── 目标函数 ─────────────────────────────────────────────────
-$objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 
 ###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
@@ -185,7 +186,7 @@ $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 $bt_top_n_list           = @(20)            # 回测持仓 Top N
-$bt_rebalance_freq_list  = @(20)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
+$bt_rebalance_freq_list  = @($null)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
