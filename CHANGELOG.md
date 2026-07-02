@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.19] - 2026-07-02
+
+### Changed
+
+- **bot_service 调仓日诊断信息增强**：
+  - `ensure_features_for_date()` 返回值新增 `error_detail` 字段，在各失败节点返回具体原因描述（基础数据缺失/clean 数据缺失/特征构建为空/异常）。
+  - `PaperTradeExecutionResult` 新增 `feature_error_detail` 字段，透传特征构建失败原因。
+  - `format_trade_result()` 在 `t0_status="no_targets"` 时输出具体失败原因和缺失因子列表，替换原模糊提示"数据可能不足"。
+- **bot_service trade 结果附加下一交易日买卖计划**：
+  - `format_trade_result()` 末尾追加 `format_next_day_instructions()` 输出，与纸面交易 `positions` 命令看齐，每日 trade 后即可查看次日买卖计划。
+
 ## [0.77.18] - 2026-07-02
 
 ### Changed

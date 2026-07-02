@@ -44,7 +44,7 @@ def ensure_features_for_date(
     client: TushareClient,
     trade_date: str,
     force: bool = False
-) -> Tuple[bool, List[str]]:
+) -> Tuple[bool, List[str], str]:
     """确保指定日期的 features 数据存在，不存在则构建
 
     若发现 clean 数据缺失，会自动调用 clean 模块的 ensure 函数
@@ -60,9 +60,10 @@ def ensure_features_for_date(
         force: 是否强制重新构建
 
     Returns:
-        (success, missing_factors) 元组：
+        (success, missing_factors, error_detail) 元组：
         - success: 是否成功构建 features
         - missing_factors: 缺失的因子数据名称列表（空列表表示全部加载）
+        - error_detail: 失败原因描述（成功时为空字符串）
     """
     # 纸面交易/推理场景使用独立的 cs_infer 子目录，避免与训练数据交叉污染
     _INFER_SUBDIR = "cs_infer"
@@ -71,7 +72,7 @@ def ensure_features_for_date(
     if not force and storage.is_feature_exists(trade_date, subdir=_INFER_SUBDIR):
         if _check_features_schema(storage, trade_date, subdir=_INFER_SUBDIR):
             logger.debug(f"features 数据已存在: {trade_date}")
-            return True, []
+            return True, [], ""
         else:
             logger.warning(
                 f"features 缓存缺少必要因子列，将重新构建: {trade_date}"
@@ -83,14 +84,14 @@ def ensure_features_for_date(
         # 1. 确保基础数据存在
         if not ensure_basic_data(client, storage, trade_date, force=False):
             logger.error("无法获取基础数据（trade_cal/stock_basic）")
-            return False, []
+            return False, [], "基础数据缺失：trade_cal/stock_basic 下载失败，请检查 TuShare 连接与积分"
         
         # 2. 确保当日 clean 数据存在
         if not ensure_clean_data_for_date(
             storage, loader, cleaner, client, trade_date, force
         ):
             logger.error(f"无法获取 clean 数据: {trade_date}")
-            return False, []
+            return False, [], f"clean 数据缺失：{trade_date} 日的日线/每日指标/资金流向数据下载或清洗失败"
         
         # 3. 确保历史 clean 数据存在（features 需要历史数据计算特征）
         if not _ensure_historical_clean_data(
@@ -105,7 +106,7 @@ def ensure_features_for_date(
         
         if trade_cal is None or stock_basic is None:
             logger.error("缺少 clean 基础数据")
-            return False, []
+            return False, [], "clean 基础数据缺失：trade_cal 或 stock_basic 加载失败"
         
         # 转换日期格式
         if 'cal_date' in trade_cal.columns:
@@ -139,7 +140,7 @@ def ensure_features_for_date(
         
         if daily_clean is None or daily_clean.empty:
             logger.error(f"缺少 clean 日线数据: {trade_date}")
-            return False, []
+            return False, [], f"clean 日线数据缺失：{trade_date} 无日线行情数据"
         
         # 与 build_clean_features 对齐：moneyflow 缺失只告警，不在 ensure 阶段中断
         if moneyflow_clean is None or moneyflow_clean.empty:
@@ -161,7 +162,7 @@ def ensure_features_for_date(
                 "模型依赖 zscore_*/neu_*/alpha_industry_*/ind_* 特征，缺失会导致推理失败。\n"
                 "请运行: python scripts/update_basic_data.py --only-shenwan --force"
             )
-            return False, []
+            return False, [], "申万行业分类数据缺失，无法构建行业中性化特征"
         else:
             apply_neutralization = True
             logger.info(f"已加载申万行业分类数据: {len(shenwan_industry)} 条映射")
@@ -240,14 +241,14 @@ def ensure_features_for_date(
         if len(features_df) > 0:
             storage.save_cs_train_day(features_df, trade_date, subdir=_INFER_SUBDIR)
             logger.info(f"已保存 features 数据: {len(features_df)} 条")
-            return True, missing_factors
+            return True, missing_factors, ""
         else:
             logger.warning(f"没有有效样本: {trade_date}")
-            return False, missing_factors
+            return False, missing_factors, f"特征构建结果为空：{trade_date} 无有效样本（可能因停牌/涨跌停导致全部股票被过滤）"
 
     except Exception as e:
         logger.error(f"构建 features 数据失败 {trade_date}: {e}")
-        return False, []
+        return False, [], f"特征构建异常：{e}"
 
 
 def _ensure_historical_clean_data(

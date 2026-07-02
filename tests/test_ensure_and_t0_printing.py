@@ -656,7 +656,7 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
         ),
     )
 
-    success, missing = ensure_features_for_date(
+    success, missing, error_detail = ensure_features_for_date(
         storage=storage,
         loader=loader,
         builder=builder,

@@ -489,7 +489,7 @@ def test_generate_replacement_targets_respects_failed_count_with_trading_config(
 
         monkeypatch.setattr(
             'src.lazybull.paper.runner.ensure_features_for_date',
-            lambda *args, **kwargs: (True, []),
+            lambda *args, **kwargs: (True, [], ""),
         )
         runner.loader.load_clean_stock_basic = Mock(return_value=stock_basic)
         runner.loader.load_clean_daily_by_date = Mock(return_value=daily_data)
@@ -586,7 +586,7 @@ def test_generate_signals_preserves_gate_exposure_with_weight_cap(monkeypatch):
 
         monkeypatch.setattr(
             'src.lazybull.paper.runner.ensure_features_for_date',
-            lambda *args, **kwargs: (True, []),
+            lambda *args, **kwargs: (True, [], ""),
         )
         runner.loader.load_clean_stock_basic = Mock(return_value=stock_basic)
         runner.loader.load_clean_daily_by_date = Mock(return_value=daily_data)

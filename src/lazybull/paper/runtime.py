@@ -50,6 +50,7 @@ class PaperTradeExecutionResult:
     protected_stocks: List[str] = field(default_factory=list)
     stock_names: Dict[str, str] = field(default_factory=dict)
     missing_factors: List[str] = field(default_factory=list)
+    feature_error_detail: str = ""
 
 
 def create_paper_trade_runtime(
@@ -240,6 +241,7 @@ def execute_trade_workflow(
         protected_stocks=protected_stocks,
         stock_names=stock_names,
         missing_factors=list(runner.missing_factors),
+        feature_error_detail=getattr(runner, "_last_feature_error", ""),
     )
 
 

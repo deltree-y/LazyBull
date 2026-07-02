@@ -335,6 +335,10 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
         lines.append(f"T0信号: 执行失败 - {result.t0_status[6:]}")
     elif result.t0_status == "no_targets":
         lines.append("T0信号: 调仓日但未生成目标(数据可能不足)")
+        if result.feature_error_detail:
+            lines.append(f"原因: {result.feature_error_detail}")
+        if result.missing_factors:
+            lines.append(f"缺失因子: {', '.join(result.missing_factors)}")
     else:
         lines.append("T0信号: 非调仓日或无新目标")
 
@@ -441,6 +445,18 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
         lines.append(
             f"持仓: {len(result.runner.account.get_positions())}只 | 现金: {result.runner.account.get_cash():,.0f}"
         )
+
+    # 附加下一交易日买卖计划（与纸面交易 positions 看齐）
+    try:
+        lines.append("")
+        next_day_text = format_next_day_instructions(
+            result.corrected_date,
+            runner=result.runner,
+            stock_names=result.stock_names,
+        )
+        lines.extend(next_day_text.splitlines())
+    except Exception:
+        pass
 
     return _md_join(lines)
 

@@ -1321,7 +1321,7 @@ class PaperTradingRunner:
         ):
             signal_data = self.storage.load_cs_train_day(prev_trade_date, subdir="cs_infer")
             if signal_data is None or signal_data.empty:
-                ok, missing = ensure_features_for_date(
+                ok, missing, _ = ensure_features_for_date(
                     self.storage,
                     self.loader,
                     self.feature_builder,
@@ -1568,7 +1568,7 @@ class PaperTradingRunner:
 
         # 确保 features 数据存在
         logger.info(f"检查并确保 features 数据存在: {trade_date}")
-        success, missing = ensure_features_for_date(
+        success, missing, feature_error = ensure_features_for_date(
             self.storage,
             self.loader,
             self.feature_builder,
@@ -1582,7 +1582,9 @@ class PaperTradingRunner:
         self.feature_builder.clear_caches()
         if not success:
             logger.error(f"无法获取 features 数据: {trade_date}")
+            self._last_feature_error = feature_error
             return []
+        self._last_feature_error = ""
 
         # 加载股票池
         stock_basic = self.loader.load_clean_stock_basic()
@@ -2720,7 +2722,7 @@ class PaperTradingRunner:
         # 否则 momentum/technical/fund_flow 会因缺特征退化为 0.5。
         if mode == "strength":
             try:
-                success, missing = ensure_features_for_date(
+                success, missing, _ = ensure_features_for_date(
                     self.storage,
                     self.loader,
                     self.feature_builder,
@@ -3569,7 +3571,7 @@ class PaperTradingRunner:
         
         # 1. 确保features数据存在
         logger.info(f"检查并确保 features 数据存在: {trade_date}")
-        success, missing = ensure_features_for_date(
+        success, missing, _ = ensure_features_for_date(
             self.storage,
             self.loader,
             self.feature_builder,

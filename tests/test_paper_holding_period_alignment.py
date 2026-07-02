@@ -424,7 +424,7 @@ def test_holding_strength_should_ensure_features_before_daily_evaluation(monkeyp
 
         def _fake_ensure(*_args, **_kwargs):
             ensure_called["count"] += 1
-            return True, []
+            return True, [], ""
 
         monkeypatch.setattr("src.lazybull.paper.runner.ensure_features_for_date", _fake_ensure)
 
