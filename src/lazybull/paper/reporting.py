@@ -370,8 +370,12 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
         for index, action in enumerate(result.pending_sell_actions, 1):
             name = result.stock_names.get(str(action["ts_code"]), "")
             lines.append(f"{index}. {name}({action['ts_code']})")
-            lines.append(f"   量{action['shares']}, {action['status']}")
-            lines.append(f"   因{action['reason']}")
+            status = action.get("status", "")
+            if status:
+                lines.append(f"   量{action.get('shares', '?')}, {status}")
+            else:
+                lines.append(f"   量{action.get('shares', '?')}")
+            lines.append(f"   因{action.get('reason', '未知')}")
 
     if result.t1_actions:
         t1_buys = [action for action in result.t1_actions if action["action"] == "buy"]
