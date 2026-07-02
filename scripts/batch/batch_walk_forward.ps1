@@ -78,8 +78,8 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
-$max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
-$learning_rate_list      = @(0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
+$max_depth_list          = @(4)         #. XGB推荐9, LGB推荐5
+$learning_rate_list      = @(0.025)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
@@ -98,8 +98,9 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(20,150)         #50
+$rank_weight_topk_list   = @(50)         #50
 $rank_weight_list        = @(10)          #3
+$rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
 $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
@@ -776,6 +777,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --gamma $gamma" +
                  " --rank-weight-topk $rank_weight_topk" +
                  " --rank-weight $rank_weight" +
+                 " --rank-weight-topk-weight-mode $rank_weight_topk_weight_mode" +
                  " --data-root $data_root" +
                  " --early-stopping-rounds $early_stopping_rounds" +
                  " --early-stopping-metric $early_stopping_metric" +

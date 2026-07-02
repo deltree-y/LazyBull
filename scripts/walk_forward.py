@@ -809,6 +809,7 @@ def _train_model_on_window(
             label_column=actual_label_column,
             topk=args.rank_weight_topk,
             top_weight=args.rank_weight,
+            topk_weight_mode=getattr(args, "rank_weight_topk_weight_mode", "linear_decay"),
         )
     if args.time_decay_half_life > 0:
         td_weights = build_time_decay_weights(
@@ -3262,6 +3263,7 @@ def write_walk_forward_summary(
         "rank_weight_enabled": args.rank_weight_enabled,
         "rank_weight_topk": args.rank_weight_topk,
         "rank_weight": args.rank_weight,
+        "rank_weight_topk_weight_mode": getattr(args, "rank_weight_topk_weight_mode", "linear_decay"),
         "time_decay_half_life": args.time_decay_half_life,
         "objective": getattr(args, 'objective', 'mse'),
         "enable_fundamental": args.enable_fundamental_features,
@@ -3832,6 +3834,13 @@ def main():
         type=float,
         default=5.0,
         help="Top/Bottom K 样本权重，默认 5.0"
+    )
+    parser.add_argument(
+        "--rank-weight-topk-weight-mode",
+        type=str,
+        default="linear_decay",
+        choices=["linear_decay", "flat"],
+        help="TopK 权重分配模式：linear_decay（默认）| flat（TopK 同权）"
     )
 
     # 时间衰减权重

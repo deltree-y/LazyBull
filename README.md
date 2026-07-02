@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.19)
+### 当前版本 (v0.77.20)
+
+**rank-weight TopK 线性衰减 + BottomK 降权到1** (v0.77.20):
+- `src/lazybull/ml/train_core.py` 的 rank-weight 默认从 TopK 同权改为 `linear_decay`：Top1 权重=`rank_weight`，线性递减到 TopK 末位=1。
+- BottomK 不再加权，统一为 1（与 TopK 之外样本一致），减少尾部样本过度放大。
+- `scripts/walk_forward.py` 与 `scripts/train_ml_model.py` 新增 `--rank-weight-topk-weight-mode`（`linear_decay|flat`）开关。
+- `scripts/batch/batch_walk_forward.ps1` 新增 `$rank_weight_topk_weight_mode` 并自动透传，便于批量实验切换。
 
 **bot_service 调仓诊断 + 次日计划打印** (v0.77.19):
 - `ensure_features_for_date()` 返回详细失败原因，bot 调仓日不再仅提示"数据可能不足"，而是输出具体缺失原因和缺失因子列表。

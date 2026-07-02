@@ -1235,22 +1235,26 @@ def build_rank_sample_weights(
     label_column: str,
     topk: int = 30,
     top_weight: float = 5.0,
+    topk_weight_mode: str = "linear_decay",
     date_col: str = "trade_date",
 ) -> np.ndarray:
     """按日截面排名构造训练样本权重
 
-    对训练集按每个交易日截面排序，将每日 Top K 和 Bottom K 样本的权重设为
-    top_weight，其余样本权重为 1.0。用于强化模型对极端头部/尾部样本的预测精度。
+    对训练集按每个交易日截面排序：
+    - Top K 使用可配置模式赋权（默认 linear_decay）：第1名=top_weight，递减到第K名=1.0。
+    - Bottom K 不再加权，统一保持 1.0（与 TopK 之外样本一致）。
 
     处理规则：
-    - 若某日样本数 <= 2*topk，则该日全部样本均设为 top_weight（防止权重分配异常）。
-    - 排名依据：标签列在当日截面内的值（升序排名最小/最大分别对应 Bottom/Top）。
+    - 若某日样本数 <= topk，则该日样本全部设为 top_weight（避免退化时完全无区分）。
+    - 若某日样本数 > topk，按标签列升序排序后取 Top K（最大值）赋权。
+    - 排名依据：标签列在当日截面内的值（升序，尾部为 Top）。
 
     Args:
         df_train: 训练集 DataFrame，需包含 trade_date 列和标签列
         label_column: 排名所用标签列名（如 neu_y_ret_20）
-        topk: 每日 Top/Bottom 取前 K 个样本，默认 30
-        top_weight: Top/Bottom K 样本的权重，默认 5.0
+        topk: 每日 Top 取前 K 个样本，默认 30
+        top_weight: Top K 第1名样本权重上限，默认 5.0
+        topk_weight_mode: TopK 赋权模式，支持 linear_decay|flat，默认 linear_decay
         date_col: 日期列名，默认 trade_date
 
     Returns:
@@ -1266,6 +1270,13 @@ def build_rank_sample_weights(
         logger.warning(f"日期列 {date_col} 不存在，返回全为1的权重")
         return weights
 
+    effective_mode = (topk_weight_mode or "linear_decay").strip().lower()
+    if effective_mode not in {"linear_decay", "flat"}:
+        logger.warning(
+            f"未知 topk_weight_mode={topk_weight_mode}，回退到 linear_decay"
+        )
+        effective_mode = "linear_decay"
+
     # 按日截面处理
     for date, grp_idx in df_train.groupby(date_col).groups.items():
         grp = df_train.loc[grp_idx, label_column].dropna()
@@ -1273,29 +1284,41 @@ def build_rank_sample_weights(
         if n == 0:
             continue
 
-        if n <= 2 * topk:
+        if n <= topk:
             # 样本数不足时，整组都赋予 top_weight（退化处理）
             positions = df_train.index.get_indexer_for(grp_idx)
             valid_positions = positions[positions >= 0]
             weights[valid_positions] = top_weight
             continue
 
-        # 排序取 Top K（最大值）和 Bottom K（最小值）
+        # 排序取 Top K（最大值）
         sorted_vals = grp.sort_values()
-        bottom_k_idx = sorted_vals.iloc[:topk].index
         top_k_idx = sorted_vals.iloc[-topk:].index
 
-        # 将 Top/Bottom K 的位置映射到 weights 数组位置（使用 get_indexer_for 确保正确映射）
-        top_positions = df_train.index.get_indexer_for(top_k_idx)
-        bottom_positions = df_train.index.get_indexer_for(bottom_k_idx)
-        weights[top_positions[top_positions >= 0]] = top_weight
-        weights[bottom_positions[bottom_positions >= 0]] = top_weight
+        if effective_mode == "flat":
+            top_positions = df_train.index.get_indexer_for(top_k_idx)
+            weights[top_positions[top_positions >= 0]] = top_weight
+        else:
+            # linear_decay：TopK 中第1名=top_weight，逐步衰减到第K名=1
+            top_k_ranked_desc = sorted_vals.iloc[-topk:].sort_values(ascending=False)
+            denom = max(topk - 1, 1)
+            for rank_idx, sample_idx in enumerate(top_k_ranked_desc.index):
+                position = df_train.index.get_indexer_for([sample_idx])
+                valid = position[position >= 0]
+                if len(valid) == 0:
+                    continue
+                if topk == 1:
+                    decay_weight = top_weight
+                else:
+                    decay_weight = 1.0 + (top_weight - 1.0) * ((topk - 1 - rank_idx) / denom)
+                weights[valid] = decay_weight
 
-    top_bottom_count = int((weights > 1.0).sum())
+    top_weighted_count = int((weights > 1.0).sum())
     logger.info(
-        f"样本权重构造完成: Top/Bottom {topk} 增强，"
-        f"加权样本数={top_bottom_count}，权重={top_weight}，"
-        f"普通样本数={len(weights) - top_bottom_count}"
+        f"样本权重构造完成: Top {topk} 增强，"
+        f"模式={effective_mode}，"
+        f"加权样本数={top_weighted_count}，权重上限={top_weight}，"
+        f"普通样本数={len(weights) - top_weighted_count}"
     )
     return weights
 

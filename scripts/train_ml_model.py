@@ -233,6 +233,13 @@ def main():
         default=5.0,
         help="Top/Bottom K 样本权重，默认 5.0"
     )
+    parser.add_argument(
+        "--rank-weight-topk-weight-mode",
+        type=str,
+        default="linear_decay",
+        choices=["linear_decay", "flat"],
+        help="TopK 权重分配模式：linear_decay（默认）| flat（TopK 同权）"
+    )
     
     # 算法选择
     parser.add_argument(
@@ -377,7 +384,8 @@ def main():
     logger.info(f"数据目录: {effective_data_root}")
     logger.info(
         f"rank-weight: {'已启用' if args.rank_weight_enabled else '已禁用'} "
-        f"（topk={args.rank_weight_topk}, weight={args.rank_weight}）"
+        f"（topk={args.rank_weight_topk}, weight={args.rank_weight}, "
+        f"topk_mode={getattr(args, 'rank_weight_topk_weight_mode', 'linear_decay')}）"
     )
     
     try:
@@ -475,6 +483,7 @@ def main():
                 label_column=actual_label_column,
                 topk=args.rank_weight_topk,
                 top_weight=args.rank_weight,
+                topk_weight_mode=getattr(args, "rank_weight_topk_weight_mode", "linear_decay"),
             )
         
         # 根据算法选择训练函数
@@ -548,6 +557,10 @@ def main():
             "rank_weight_enabled": args.rank_weight_enabled,
             "rank_weight_topk": args.rank_weight_topk if args.rank_weight_enabled else None,
             "rank_weight": args.rank_weight if args.rank_weight_enabled else None,
+            "rank_weight_topk_weight_mode": (
+                getattr(args, "rank_weight_topk_weight_mode", "linear_decay")
+                if args.rank_weight_enabled else None
+            ),
             "enable_cashflow_quality_features": getattr(
                 args, "enable_cashflow_quality_features", False
             ),

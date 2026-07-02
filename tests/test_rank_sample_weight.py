@@ -1,7 +1,8 @@
 """测试 rank-weight sample_weight 构造逻辑
 
 验证：
-- 单日截面 Top K / Bottom K 样本权重正确
+- 单日截面 Top K 样本按 linear_decay 权重正确（默认）
+- Bottom K 与中间样本权重均为 1.0
 - 多日分组不串（各日独立排名）
 - K 大于样本数时全部样本加权（退化处理）
 - 返回数组长度与输入一致
@@ -40,14 +41,14 @@ def _make_multi_day(n_per_day: int = 20, n_days: int = 3,
 
 
 # ---------------------------------------------------------------------------
-# 1. 单日 Top K / Bottom K 权重测试
+# 1. 单日 Top K 权重测试
 # ---------------------------------------------------------------------------
 
 class TestBuildRankSampleWeightsSingleDay:
     """单日截面 rank-weight 测试"""
 
-    def test_topk_bottomk_weights_correct(self):
-        """Top K 和 Bottom K 样本权重应为 top_weight，其余为 1.0"""
+    def test_topk_linear_decay_weights_correct(self):
+        """Top K 样本应按 linear_decay 递减赋权，Bottom 与中间样本为 1.0"""
         n = 20
         topk = 5
         top_weight = 5.0
@@ -57,36 +58,50 @@ class TestBuildRankSampleWeightsSingleDay:
 
         assert len(weights) == n, "权重数组长度应与输入行数相同"
 
-        # Top 5：标签值最大的 5 个（索引 15-19）
-        top_indices = list(range(n - topk, n))
-        # Bottom 5：标签值最小的 5 个（索引 0-4）
-        bottom_indices = list(range(topk))
-        # 其余
-        middle_indices = list(range(topk, n - topk))
+        expected = np.ones(n, dtype=float)
+        # 标签 19,18,17,16,15 对应 rank 1..5
+        expected[19] = 5.0
+        expected[18] = 4.0
+        expected[17] = 3.0
+        expected[16] = 2.0
+        expected[15] = 1.0
+        np.testing.assert_allclose(weights, expected)
 
-        for i in top_indices:
-            assert weights[i] == top_weight, f"Top K 样本 {i} 权重应为 {top_weight}，实际={weights[i]}"
-        for i in bottom_indices:
-            assert weights[i] == top_weight, f"Bottom K 样本 {i} 权重应为 {top_weight}，实际={weights[i]}"
-        for i in middle_indices:
-            assert weights[i] == 1.0, f"中间样本 {i} 权重应为 1.0，实际={weights[i]}"
+    def test_topk_flat_mode_weights_correct(self):
+        """flat 模式下 Top K 样本同权 top_weight"""
+        n = 20
+        topk = 5
+        top_weight = 5.0
+        df = _make_single_day(n=n)
+
+        weights = build_rank_sample_weights(
+            df,
+            'neu_y_ret_20',
+            topk=topk,
+            top_weight=top_weight,
+            topk_weight_mode='flat',
+        )
+
+        expected = np.ones(n, dtype=float)
+        expected[15:20] = top_weight
+        np.testing.assert_allclose(weights, expected)
 
     def test_weight_count_correct(self):
-        """加权样本数应恰好为 2 * topk（当 n > 2*topk 时）"""
+        """默认 linear_decay 下，加权样本数应为 topk-1（第K名权重=1）"""
         n = 30
         topk = 5
         df = _make_single_day(n=n)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20', topk=topk)
         heavy_count = int((weights > 1.0).sum())
-        assert heavy_count == 2 * topk, f"加权样本数应为 {2*topk}，实际={heavy_count}"
+        assert heavy_count == (topk - 1), f"加权样本数应为 {topk - 1}，实际={heavy_count}"
 
     def test_default_topk_30(self):
-        """默认 topk=30 时加权样本数应为 2*30=60（n>60）"""
+        """默认 topk=30 且 linear_decay 时加权样本数应为 29（第30名权重=1）"""
         n = 100
         df = _make_single_day(n=n)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20')
         heavy_count = int((weights > 1.0).sum())
-        assert heavy_count == 60, f"默认 topk=30 时加权样本数应为 60，实际={heavy_count}"
+        assert heavy_count == 29, f"默认 topk=30 时加权样本数应为 29，实际={heavy_count}"
 
     def test_returns_numpy_array(self):
         """返回值应为 numpy 数组"""
@@ -103,20 +118,20 @@ class TestBuildRankSampleWeightsDegenerateCase:
     """K 大于等于样本数时的边界处理"""
 
     def test_k_greater_than_n_all_weighted(self):
-        """当 n <= 2*topk 时，整组样本均赋 top_weight（退化处理）"""
+        """当 n <= topk 时，整组样本均赋 top_weight（退化处理）"""
         n = 8
-        topk = 5  # 2*5=10 > 8
+        topk = 8
         top_weight = 4.0
         df = _make_single_day(n=n)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20', topk=topk, top_weight=top_weight)
 
         # 全部应为 top_weight
-        assert (weights == top_weight).all(), "样本数 <= 2*topk 时全部应赋 top_weight"
+        assert (weights == top_weight).all(), "样本数 <= topk 时全部应赋 top_weight"
 
-    def test_k_equal_half_n(self):
-        """n == 2*topk 时全部赋 top_weight（边界情况）"""
+    def test_k_equal_n(self):
+        """n == topk 时全部赋 top_weight（边界情况）"""
         n = 10
-        topk = 5
+        topk = 10
         df = _make_single_day(n=n)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20', topk=topk, top_weight=3.0)
         assert (weights == 3.0).all()
@@ -145,25 +160,25 @@ class TestBuildRankSampleWeightsMultiDay:
 
         assert len(weights) == n_per_day * n_days
 
-        # 每日应有 2*topk 个加权样本
+        # linear_decay 下每日应有 topk-1 个加权样本（第K名为1）
         for d in range(n_days):
             start = d * n_per_day
             end = start + n_per_day
             day_weights = weights[start:end]
             heavy_count = int((day_weights > 1.0).sum())
-            assert heavy_count == 2 * topk, (
-                f"第 {d+1} 日加权样本数应为 {2*topk}，实际={heavy_count}"
+            assert heavy_count == (topk - 1), (
+                f"第 {d+1} 日加权样本数应为 {topk - 1}，实际={heavy_count}"
             )
 
     def test_total_weighted_count(self):
-        """多日场景：总加权样本数 = n_days * 2 * topk"""
+        """多日场景：总加权样本数 = n_days * (topk-1)"""
         n_per_day = 20
         n_days = 3
         topk = 4
         df = _make_multi_day(n_per_day=n_per_day, n_days=n_days)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20', topk=topk, top_weight=5.0)
 
-        expected_heavy = n_days * 2 * topk
+        expected_heavy = n_days * (topk - 1)
         actual_heavy = int((weights > 1.0).sum())
         assert actual_heavy == expected_heavy, (
             f"总加权样本数应为 {expected_heavy}，实际={actual_heavy}"
@@ -203,7 +218,7 @@ class TestBuildRankSampleWeightsRobust:
             'trade_date': ['20230102'] * 10,
             'neu_y_ret_20': [float(i) if i < 8 else float('nan') for i in range(10)],
         })
-        # topk=2 时应正常处理（8 有效样本 > 2*2=4）
+        # topk=2 时应正常处理（8 有效样本 > 2）
         weights = build_rank_sample_weights(df, 'neu_y_ret_20', topk=2, top_weight=3.0)
         assert len(weights) == 10
         # NaN 样本（索引 8,9）不应被设为 top_weight

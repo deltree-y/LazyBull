@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.20] - 2026-07-02
+
+### Changed
+
+- **rank-weight 训练样本加权策略升级**：
+  - `src/lazybull/ml/train_core.py` 的 `build_rank_sample_weights()` 默认改为 TopK `linear_decay`：Top1 权重=`rank_weight`，线性递减到 TopK 末位权重=1。
+  - BottomK 不再加权，统一恢复为 1（与 TopK 外样本一致），避免尾部样本被同等放大。
+  - 保留可回退模式 `flat`（TopK 同权），通过新参数控制。
+- **训练脚本新增 TopK 赋权模式参数**：
+  - `scripts/walk_forward.py` 与 `scripts/train_ml_model.py` 新增 `--rank-weight-topk-weight-mode`（`linear_decay|flat`，默认 `linear_decay`）。
+  - 训练参数与对比汇总字段新增 `rank_weight_topk_weight_mode`，便于回看实验配置。
+- **批处理脚本新增对应开关**：
+  - `scripts/batch/batch_walk_forward.ps1` 新增 `$rank_weight_topk_weight_mode` 并透传到 `walk_forward.py`。
+
+### Tests
+
+- `tests/test_rank_sample_weight.py` 已同步更新为新规则：验证 TopK `linear_decay`、`flat` 回退模式、BottomK=1 与多日分组一致性。
+
 ## [0.77.19] - 2026-07-02
 
 ### Changed

@@ -210,6 +210,7 @@ COL_NAMES = {
     "rank_weight_enabled":        "rank权重启用",
     "rank_weight_topk":           "rank权重TopK",
     "rank_weight":                "rank权重值",
+    "rank_weight_topk_weight_mode": "rank权重TopK模式",
     "time_decay_half_life":       "时间衰减半衰期",
     "objective":                  "目标函数",
     "algorithm":                  "算法",
