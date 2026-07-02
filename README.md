@@ -28,7 +28,17 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.14)
+### 当前版本 (v0.77.18)
+
+**训练/评估统一主板过滤（与交易口径一致）** (v0.77.18):
+- `scripts/walk_forward.py` 在训练窗口、验证评估、测试评估与部署训练链路统一加入主板过滤（`market=主板`），训练数据不再混入 `.BJ` 样本。
+- OOS 重点面板中的 Top20/Top30 最新名单与 hit rate 口径与交易链路保持一致，不再出现“评估含.BJ、交易不含.BJ”的偏差。
+
+**OOS重点指标面板 + posterior可配置扩展 + 对比表重点前置** (v0.77.17):
+- `scripts/walk_forward.py` 新增 OOS 重点面板（Top20/Top30 最新名单、命中率、收益中位数、超额）并默认启用简洁输出；新增 `--oos-detail-metrics` 可按需切回每个 split 的详细对比日志。
+- 候选树数后验选优新增 `--posterior-tree-selection-metric` 与 `--posterior-tree-selection-topk`，支持按 TopK 口径（默认 Top20）或 RankIC 指标选树，并完整写入 summary / metadata。
+- `scripts/compare_walk_forward.py` 将 KEY 重点字段前置到“实验对比/逐Split明细”，并在 Excel 中用浅黄色高亮重点列，便于快速定位 Top20/Top30 核心信号。
+- `scripts/batch/batch_walk_forward.ps1` 新增 `$posterior_tree_selection_metric` 与 `$posterior_tree_selection_topk` 并自动透传，支持批量实验中快速开关与回退。
 
 **训练特征重要性三列紧凑打印** (v0.77.14):
 - 特征重要性输出从单列长列表改为 3 列对齐格式，行数缩减约 2/3，内容完整保留。

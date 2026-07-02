@@ -244,6 +244,8 @@ def compute_diagnostic_statistics(
     # 2. 计算 TopK 收益及其相对提升
     for k in topk_values:
         topk_daily_returns = []
+        last_topk_codes = []
+        last_topk_date = None
 
         for trade_date in df[date_col].unique():
             day_df = df[df[date_col] == trade_date]
@@ -259,6 +261,8 @@ def compute_diagnostic_statistics(
             sorted_df = valid_df.sort_values(prediction_col, ascending=False)
             actual_k = min(k, len(sorted_df))
             topk_df = sorted_df.head(actual_k)
+            last_topk_date = trade_date
+            last_topk_codes = topk_df["ts_code"].astype(str).tolist() if "ts_code" in topk_df.columns else []
 
             # 计算 TopK 平均收益
             topk_mean = topk_df[return_col].mean()
@@ -285,6 +289,10 @@ def compute_diagnostic_statistics(
             # 提升统计
             diagnostics[f"Top{k}_相对全市场提升_均值"] = topk_returns_df["lift"].mean()
             diagnostics[f"Top{k}_相对全市场提升_标准差"] = topk_returns_df["lift"].std()
+            diagnostics[f"Top{k}_命中率_日均收益为正"] = (topk_returns_df["topk_mean"] > 0).mean()
+            diagnostics[f"Top{k}_超额命中率_跑赢全市场"] = (topk_returns_df["lift"] > 0).mean()
+            diagnostics[f"Top{k}_最新日期"] = str(last_topk_date) if last_topk_date is not None else ""
+            diagnostics[f"Top{k}_最新股票列表"] = ",".join(last_topk_codes)
 
             # 分位数统计（用于判断是否被极端日驱动）
             diagnostics[f"Top{k}_逐日均值_25分位"] = topk_returns_df["topk_mean"].quantile(0.25)

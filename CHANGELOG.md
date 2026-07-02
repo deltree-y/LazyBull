@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.18] - 2026-07-02
+
+### Changed
+
+- **训练/评估统一主板过滤（与交易口径一致）**：
+  - `scripts/walk_forward.py` 新增主板样本过滤逻辑：训练窗口（含多偏移、多种子、adaptive 候选重训）、验证评估、测试评估统一只保留 `market=主板` 的 `ts_code`。
+  - OOS 重点面板中的 Top20/Top30 名单与 hit rate 现在与交易链路口径一致，不再混入 `.BJ` 样本。
+  - 部署训练链路同步接入主板过滤，避免线上模型与 walk-forward 训练口径漂移。
+
+## [0.77.17] - 2026-07-01
+
+### Changed
+
+- **OOS 重点输出与日志瘦身**：
+  - `scripts/walk_forward.py` 新增 OOS 重点面板，集中输出 Top20/Top30 最新名单、命中率、收益中位数与超额指标；默认保留“重点面板 + 一行简报”。
+  - 新增 `--oos-detail-metrics` 开关，按需输出每个 split 的“验证集 vs 测试集”详细指标对比，默认关闭以减少日志噪音。
+- **后验选树扩展为可配置 TopK/指标**：
+  - `scripts/walk_forward.py` 新增 `--posterior-tree-selection-metric` 与 `--posterior-tree-selection-topk`，支持按 TopK 口径（默认 Top20）或 RankIC 指标做候选树数后验择优。
+  - summary / 训练参数与 metadata 增补 `posterior_tree_selection_metric`、`posterior_tree_selection_topk` 及选中 TopK 统计字段，便于回看与回退。
+- **对比报表 KEY 重点字段前置与高亮**：
+  - `scripts/compare_walk_forward.py` 将 KEY 重点信息（Top20/Top30 名单、命中率均值、收益中位数均值）前置到“实验对比”与“逐Split明细”。
+  - Excel 输出对上述重点列做浅黄色高亮，并保留重点说明列，便于快速抓取核心信号。
+- **批处理透传 posterior 新参数**：
+  - `scripts/batch/batch_walk_forward.ps1` 新增 `$posterior_tree_selection_metric` 与 `$posterior_tree_selection_topk` 并透传到 `walk_forward.py`。
+
 ## [0.77.16] - 2026-06-28
 
 ### Changed

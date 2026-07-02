@@ -98,6 +98,36 @@ POSTERIOR_TREE_AUTO_GRID = [
 ]
 
 
+def _build_main_board_codes(stock_basic: pd.DataFrame) -> set:
+    """从 stock_basic 构建主板股票代码集合。"""
+    if stock_basic is None or len(stock_basic) == 0:
+        raise ValueError("stock_basic 为空，无法构建主板股票池")
+    if "ts_code" not in stock_basic.columns or "market" not in stock_basic.columns:
+        raise ValueError("stock_basic 缺少 ts_code/market 列，无法做主板过滤")
+
+    board_df = stock_basic[stock_basic["market"] == "主板"]
+    board_codes = set(board_df["ts_code"].astype(str).tolist())
+    if not board_codes:
+        raise ValueError("stock_basic 中 market=主板 的股票为空，无法做主板过滤")
+    return board_codes
+
+
+def _filter_to_main_board(df: pd.DataFrame, main_board_codes: set, stage: str) -> pd.DataFrame:
+    """按主板股票池过滤样本，确保训练/评估与交易口径一致。"""
+    if df is None or len(df) == 0:
+        return df
+    if "ts_code" not in df.columns:
+        raise ValueError(f"{stage} 数据缺少 ts_code 列，无法做主板过滤")
+
+    before = len(df)
+    filtered = df[df["ts_code"].astype(str).isin(main_board_codes)].copy()
+    after = len(filtered)
+    logger.info(f"{stage} 主板过滤: {before} -> {after}（移除 {before - after}）")
+    if after == 0:
+        raise ValueError(f"{stage} 主板过滤后样本为空，请检查数据与股票池配置")
+    return filtered
+
+
 def _normalize_selected_split_indices(raw_indices: Optional[List[int]]) -> List[int]:
     """规范化 split 下标列表：去重保序，且要求非负整数。"""
     if not raw_indices:
@@ -692,6 +722,7 @@ def _train_model_on_window(
     storage: Storage,
     loader: DataLoader,
     args,
+    main_board_codes: set,
     random_state_override: Optional[int] = None,
 ) -> Dict:
     """在指定训练窗口上训练单个模型
@@ -713,6 +744,7 @@ def _train_model_on_window(
     df_train, train_days_count = load_features_data(
         storage, loader, train_start, train_end
     )
+    df_train = _filter_to_main_board(df_train, main_board_codes, "训练窗口")
     total_train_samples = len(df_train)
 
     # 2. 应用标签变换
@@ -873,6 +905,7 @@ def _build_ensemble_sub_models(
     storage: Storage,
     loader: DataLoader,
     args,
+    main_board_codes: set,
     seeds: List[int],
     is_deploy: bool = False,
     topk_values: Optional[List[int]] = None,
@@ -932,7 +965,8 @@ def _build_ensemble_sub_models(
                 f"{'='*60}"
             )
             selected_tr = _train_model_on_window(
-                win_start, win_end, storage, loader, rolling_args, random_state_override=seed
+                win_start, win_end, storage, loader, rolling_args, main_board_codes,
+                random_state_override=seed
             )
 
             if enable_live_adaptive and topk_values is not None:
@@ -979,6 +1013,7 @@ def _build_ensemble_sub_models(
                                 storage,
                                 loader,
                                 candidate_args,
+                                main_board_codes,
                                 random_state_override=retry_seed,
                             )
                             challenger_best_iteration = challenger_tr["train_params"].get("best_iteration")
@@ -1077,6 +1112,7 @@ def _build_ensemble_sub_models(
                             storage,
                             loader,
                             candidate_args,
+                            main_board_codes,
                             random_state_override=seed,
                         )
 
@@ -1249,6 +1285,101 @@ def _safe_float(value) -> Optional[float]:
     return result
 
 
+def _fmt_metric(value: Optional[float], fmt: str = ".4f") -> str:
+    return "nan" if value is None else f"{value:{fmt}}"
+
+
+def _fmt_pct(value: Optional[float]) -> str:
+    return "nan" if value is None else f"{value * 100:.1f}%"
+
+
+def _metric_value(metrics: Dict, key: str) -> Optional[float]:
+    return _safe_float(metrics.get(key))
+
+
+def _topk_key_metrics(metrics: Dict, topk: int) -> Dict[str, Optional[float]]:
+    return {
+        "median": _metric_value(metrics, f"diagnostic_Top{topk}_逐日均值_50分位"),
+        "mean": _metric_value(metrics, f"top{topk}_return_mean"),
+        "lift": _metric_value(metrics, f"diagnostic_Top{topk}_相对全市场提升_均值"),
+        "hit_rate": _metric_value(metrics, f"diagnostic_Top{topk}_命中率_日均收益为正"),
+        "excess_hit_rate": _metric_value(metrics, f"diagnostic_Top{topk}_超额命中率_跑赢全市场"),
+    }
+
+
+def _print_oos_focus_panel(split_index: int, test_daily_metrics: Dict) -> None:
+    """打印 OOS 重点指标面板，避免关键 TopK 信息被普通日志淹没。"""
+    top20 = _topk_key_metrics(test_daily_metrics, 20)
+    top30 = _topk_key_metrics(test_daily_metrics, 30)
+    top20_list = str(test_daily_metrics.get("diagnostic_Top20_最新股票列表") or "")
+    top30_list = str(test_daily_metrics.get("diagnostic_Top30_最新股票列表") or "")
+    latest_date = str(
+        test_daily_metrics.get("diagnostic_Top20_最新日期")
+        or test_daily_metrics.get("diagnostic_Top30_最新日期")
+        or ""
+    )
+
+    logger.opt(colors=True).warning("<cyan><bold>" + "=" * 92 + "</bold></cyan>")
+    logger.opt(colors=True).warning(
+        f"<cyan><bold>Split {split_index} OOS 重点 TopK 指标</bold></cyan> "
+        f"<cyan>(hit rate=TopK逐日平均收益>0占比, list=最新OOS日期 {latest_date})</cyan>"
+    )
+    logger.opt(colors=True).warning(
+        "<yellow><bold>Top20</bold></yellow> | "
+        f"hit={_fmt_pct(top20['hit_rate'])} | "
+        f"均值中位数={_fmt_metric(top20['median'], '.6f')} | "
+        f"超额均值={_fmt_metric(top20['lift'], '.6f')} | "
+        f"跑赢全市场={_fmt_pct(top20['excess_hit_rate'])}"
+    )
+    logger.opt(colors=True).warning(
+        "<yellow><bold>Top30</bold></yellow> | "
+        f"hit={_fmt_pct(top30['hit_rate'])} | "
+        f"均值中位数={_fmt_metric(top30['median'], '.6f')} | "
+        f"超额均值={_fmt_metric(top30['lift'], '.6f')} | "
+        f"跑赢全市场={_fmt_pct(top30['excess_hit_rate'])}"
+    )
+    logger.opt(colors=True).warning(f"<yellow>Top20 list:</yellow> {top20_list}")
+    logger.opt(colors=True).warning(f"<yellow>Top30 list:</yellow> {top30_list}")
+    logger.opt(colors=True).warning("<cyan><bold>" + "=" * 92 + "</bold></cyan>")
+
+
+def _posterior_metric_score(metrics: Dict, metric_name: str, topk: int) -> Tuple[float, float, float]:
+    topk_metrics = _topk_key_metrics(metrics, topk)
+    rankic_ir = _metric_value(metrics, "daily_rankic_ir")
+    rankic_mean = _metric_value(metrics, "daily_rankic_mean")
+    metric_map = {
+        "topk_median": topk_metrics["median"],
+        "topk_mean": topk_metrics["mean"],
+        "topk_lift": topk_metrics["lift"],
+        "topk_hit_rate": topk_metrics["hit_rate"],
+        "topk_excess_hit_rate": topk_metrics["excess_hit_rate"],
+        "rankic_ir": rankic_ir,
+        "rankic_mean": rankic_mean,
+    }
+    primary = metric_map.get(metric_name, topk_metrics["median"])
+    return (
+        -np.inf if primary is None else primary,
+        -np.inf if rankic_ir is None else rankic_ir,
+        -np.inf if rankic_mean is None else rankic_mean,
+    )
+
+
+def _build_summary_key_fields(test_daily_metrics: Dict) -> Dict[str, object]:
+    top20 = _topk_key_metrics(test_daily_metrics, 20)
+    top30 = _topk_key_metrics(test_daily_metrics, 30)
+    return {
+        "KEY_说明": "重点: hit rate=TopK逐日平均收益>0占比; list=最新OOS日期预测名单",
+        "KEY_Top20_list": test_daily_metrics.get("diagnostic_Top20_最新股票列表"),
+        "KEY_Top30_list": test_daily_metrics.get("diagnostic_Top30_最新股票列表"),
+        "KEY_Top20_hit_rate": top20["hit_rate"],
+        "KEY_Top20_avg_return_median": top20["median"],
+        "KEY_Top20_lift_mean": top20["lift"],
+        "KEY_Top30_hit_rate": top30["hit_rate"],
+        "KEY_Top30_avg_return_median": top30["median"],
+        "KEY_Top30_lift_mean": top30["lift"],
+    }
+
+
 def _resolve_model_max_trees(model) -> Optional[int]:
     if isinstance(model, TreeLimitedModel):
         return model.max_trees
@@ -1343,17 +1474,24 @@ def _select_posterior_tree_model(
     model_label: str,
 ) -> Tuple[object, Dict, Dict]:
     posterior_mode = getattr(args, "posterior_tree_selection_mode", "disabled")
+    posterior_metric = getattr(args, "posterior_tree_selection_metric", "topk_median")
+    posterior_topk = int(getattr(args, "posterior_tree_selection_topk", 20) or 20)
     base_best_iteration = train_params.get("best_iteration")
     base_best_iteration = int(base_best_iteration) if base_best_iteration is not None else None
 
     meta = {
         "posterior_tree_selection_mode": posterior_mode,
+        "posterior_tree_selection_metric": posterior_metric,
+        "posterior_tree_selection_topk": posterior_topk,
         "posterior_tree_selection_enabled": posterior_mode != "disabled",
         "posterior_tree_base_best_iteration": base_best_iteration,
         "posterior_tree_model_max_trees": None,
         "posterior_tree_candidate_limits": [],
         "posterior_tree_selected_limit": base_best_iteration,
         "posterior_tree_selected_top30_median": None,
+        "posterior_tree_selected_topk_median": None,
+        "posterior_tree_selected_topk_lift": None,
+        "posterior_tree_selected_topk_hit_rate": None,
         "posterior_tree_selected_rankic_ir": None,
         "posterior_tree_selected_rankic_mean": None,
         "posterior_tree_selected_topk_mean": None,
@@ -1380,6 +1518,7 @@ def _select_posterior_tree_model(
     )
     logger.warning(
         f"!!! [{model_label}] 候选树数后验选优启动 | mode={posterior_mode} | "
+        f"metric={posterior_metric} | topk={posterior_topk} | "
         f"base_best_iter={base_best_iteration} | model_max_trees={max_trees} | "
         f"candidate_count={candidate_count} | {search_space_note}"
     )
@@ -1391,9 +1530,11 @@ def _select_posterior_tree_model(
     )
 
     scored_candidates: List[Tuple[float, float, float, int, Dict, object]] = []
-    primary_topk = topk_values[0] if topk_values else 30
-    primary_topk_key = f"top{primary_topk}_return_mean"
-    primary_diag_key = f"diagnostic_Top{primary_topk}_逐日均值_50分位"
+    eval_topk_values = sorted({*topk_values, posterior_topk}) if topk_values else [posterior_topk]
+    primary_topk_key = f"top{posterior_topk}_return_mean"
+    primary_diag_key = f"diagnostic_Top{posterior_topk}_逐日均值_50分位"
+    primary_lift_key = f"diagnostic_Top{posterior_topk}_相对全市场提升_均值"
+    primary_hit_key = f"diagnostic_Top{posterior_topk}_命中率_日均收益为正"
 
     for tree_limit in candidate_limits:
         limited_model = _wrap_model_with_tree_limit(model, tree_limit)
@@ -1403,17 +1544,16 @@ def _select_posterior_tree_model(
             feature_columns=feature_columns,
             original_return_col=args.label_column,
             task=args.task,
-            topk_values=topk_values,
+            topk_values=eval_topk_values,
             emit_logs=False,
         )
-        top30_median = _safe_float(metrics.get(primary_diag_key))
-        rankic_ir = _safe_float(metrics.get("daily_rankic_ir"))
-        rankic_mean = _safe_float(metrics.get("daily_rankic_mean"))
-        topk_mean = _safe_float(metrics.get(primary_topk_key))
+        primary_score, rankic_ir_score, rankic_mean_score = _posterior_metric_score(
+            metrics, posterior_metric, posterior_topk
+        )
         scored_candidates.append((
-            -np.inf if top30_median is None else top30_median,
-            -np.inf if rankic_ir is None else rankic_ir,
-            -np.inf if topk_mean is None else topk_mean,
+            primary_score,
+            rankic_ir_score,
+            rankic_mean_score,
             tree_limit,
             metrics,
             limited_model,
@@ -1426,13 +1566,18 @@ def _select_posterior_tree_model(
 
     meta["posterior_tree_selected_limit"] = selected_limit
     meta["posterior_tree_selected_top30_median"] = _safe_float(selected_metrics.get(primary_diag_key))
+    meta["posterior_tree_selected_topk_median"] = _safe_float(selected_metrics.get(primary_diag_key))
+    meta["posterior_tree_selected_topk_lift"] = _safe_float(selected_metrics.get(primary_lift_key))
+    meta["posterior_tree_selected_topk_hit_rate"] = _safe_float(selected_metrics.get(primary_hit_key))
     meta["posterior_tree_selected_rankic_ir"] = _safe_float(selected_metrics.get("daily_rankic_ir"))
     meta["posterior_tree_selected_rankic_mean"] = _safe_float(selected_metrics.get("daily_rankic_mean"))
     meta["posterior_tree_selected_topk_mean"] = _safe_float(selected_metrics.get(primary_topk_key))
 
     logger.info(
         f"{model_label} 候选树数后验选优完成: selected_limit={selected_limit}, "
-        f"Top30_Median={meta['posterior_tree_selected_top30_median']}, "
+        f"metric={posterior_metric}, topk={posterior_topk}, "
+        f"TopK_Median={meta['posterior_tree_selected_topk_median']}, "
+        f"TopK_Hit={meta['posterior_tree_selected_topk_hit_rate']}, "
         f"RankIC_IR={meta['posterior_tree_selected_rankic_ir']}, "
         f"RankIC={meta['posterior_tree_selected_rankic_mean']}"
     )
@@ -1466,18 +1611,27 @@ def _print_pre_backtest_model_summary(
             v = _safe_float(m.get(key))
             return "nan" if v is None else f"{v:{fmt}}"
 
+        top20_med = _safe_float(m.get("diagnostic_Top20_逐日均值_50分位"))
         top30_med = _safe_float(m.get("diagnostic_Top30_逐日均值_50分位"))
         univ_mean = _safe_float(m.get("diagnostic_全市场收益_逐日均值的均值"))
-        lift_med = (
+        lift20_med = (
+            top20_med - univ_mean
+            if top20_med is not None and univ_mean is not None
+            else None
+        )
+        lift30_med = (
             top30_med - univ_mean
             if top30_med is not None and univ_mean is not None
             else None
         )
         return {
             "RankIC均值": _f("daily_rankic_mean", ".4f"),
+            "Top20中位数": _f("diagnostic_Top20_逐日均值_50分位"),
+            "Top20命中率": _fmt_pct(_safe_float(m.get("diagnostic_Top20_命中率_日均收益为正"))),
+            "Top20提升中位数": "nan" if lift20_med is None else f"{lift20_med:.6f}",
             "Top30中位数": _f("diagnostic_Top30_逐日均值_50分位"),
-            "Top30均值": _f("top30_return_mean"),
-            "Top30提升中位数": "nan" if lift_med is None else f"{lift_med:.6f}",
+            "Top30命中率": _fmt_pct(_safe_float(m.get("diagnostic_Top30_命中率_日均收益为正"))),
+            "Top30提升中位数": "nan" if lift30_med is None else f"{lift30_med:.6f}",
             "Top30提升均值": _f("diagnostic_Top30_相对全市场提升_均值"),
         }
 
@@ -1485,7 +1639,10 @@ def _print_pre_backtest_model_summary(
     test_info = _extract(test_daily_metrics) if test_daily_metrics else {}
 
     # ── 3. 打印 ──
-    metric_labels = ["RankIC均值", "Top30中位数", "Top30均值", "Top30提升中位数", "Top30提升均值"]
+    metric_labels = [
+        "RankIC均值", "Top20中位数", "Top20命中率", "Top20提升中位数",
+        "Top30中位数", "Top30命中率", "Top30提升中位数", "Top30提升均值",
+    ]
     logger.opt(colors=True).warning(
         f"<yellow><bold>Split {split_index} 模型指标对比（验证集 vs 测试集）:</bold></yellow>"
     )
@@ -1571,6 +1728,7 @@ def _build_split_training_candidate(
     storage: Storage,
     loader: DataLoader,
     args,
+    main_board_codes: set,
     topk_values: List[int],
     trade_cal: Optional[pd.DataFrame] = None,
     candidate_name: str = "base",
@@ -1599,6 +1757,7 @@ def _build_split_training_candidate(
             storage,
             loader,
             args,
+            main_board_codes,
             ensemble_seeds,
             topk_values=topk_values,
             enable_live_adaptive=getattr(args, "adaptive_best_iter_retrain", False),
@@ -1618,8 +1777,11 @@ def _build_split_training_candidate(
 
         logger.info(f"{candidate_name} 集成模型创建完成: {model}")
     else:
+        # 单模型路径：当只有一个 seed 时（ensemble_seeds=[seed] 或回退到 [args.random_state]），
+        # 也需要应用该 seed，而不是默认使用 args.random_state
         tr = _train_model_on_window(
-            split.train_start, split.train_end, storage, loader, args
+            split.train_start, split.train_end, storage, loader, args, main_board_codes,
+            random_state_override=ensemble_seeds[0]
         )
         model = tr["model"]
         feature_columns = tr["feature_columns"]
@@ -1698,6 +1860,7 @@ def execute_split_training(
     loader: DataLoader,
     registry: ModelRegistry,
     args,
+    main_board_codes: set,
     topk_values: List[int],
     trade_cal: Optional[pd.DataFrame] = None,
 ) -> Dict:
@@ -1727,7 +1890,8 @@ def execute_split_training(
 
     # ── Phase 1: 训练模型，必要时基于 best_iteration 生成候选模型 ─────────────
     selected_candidate = _build_split_training_candidate(
-        split, storage, loader, args, topk_values, trade_cal, candidate_name="base"
+        split, storage, loader, args, main_board_codes, topk_values, trade_cal,
+        candidate_name="base"
     )
     adaptive_action = _resolve_adaptive_best_iter_action(
         selected_candidate["train_params"].get("best_iteration"), args.n_estimators
@@ -1780,6 +1944,7 @@ def execute_split_training(
                     storage,
                     loader,
                     candidate_args,
+                    main_board_codes,
                     topk_values,
                     trade_cal,
                     candidate_name=f"adaptive_{adaptive_action}_retry{retry_index}",
@@ -1862,6 +2027,7 @@ def execute_split_training(
                 storage,
                 loader,
                 candidate_args,
+                main_board_codes,
                 topk_values,
                 trade_cal,
                 candidate_name=f"adaptive_{adaptive_action}",
@@ -1933,6 +2099,7 @@ def execute_split_training(
     df_test, test_days_count = load_features_data(
         storage, loader, split.test_start, split.test_end
     )
+    df_test = _filter_to_main_board(df_test, main_board_codes, "测试窗口")
     total_test_samples = len(df_test)
 
     # ── Phase 3: 样本外测试集评估（walk-forward 的核心）──────────────
@@ -1975,15 +2142,28 @@ def execute_split_training(
         original_return_col=args.label_column,
         task=args.task,
         topk_values=topk_values,
+        emit_logs=False,
     )
 
+    _print_oos_focus_panel(split.split_index, test_daily_metrics)
+
     # ── 回测前打印模型摘要（子模型迭代轮数 + 验证集/测试集关键指标）──
-    _print_pre_backtest_model_summary(
-        split_index=split.split_index,
-        adaptive_meta=selected_candidate.get("adaptive_meta", {}),
-        val_daily_metrics=val_daily_metrics,
-        test_daily_metrics=test_daily_metrics,
-    )
+    if getattr(args, "oos_detail_metrics", False):
+        _print_pre_backtest_model_summary(
+            split_index=split.split_index,
+            adaptive_meta=selected_candidate.get("adaptive_meta", {}),
+            val_daily_metrics=val_daily_metrics,
+            test_daily_metrics=test_daily_metrics,
+        )
+    else:
+        logger.info(
+            f"Split {split.split_index} OOS简报: "
+            f"RankIC={_fmt_metric(_safe_float(test_daily_metrics.get('daily_rankic_mean')), '.4f')} | "
+            f"Top20_hit={_fmt_pct(_safe_float(test_daily_metrics.get('diagnostic_Top20_命中率_日均收益为正')))} | "
+            f"Top20_median={_fmt_metric(_safe_float(test_daily_metrics.get('diagnostic_Top20_逐日均值_50分位')), '.6f')} | "
+            f"Top30_hit={_fmt_pct(_safe_float(test_daily_metrics.get('diagnostic_Top30_命中率_日均收益为正')))} | "
+            f"Top30_median={_fmt_metric(_safe_float(test_daily_metrics.get('diagnostic_Top30_逐日均值_50分位')), '.6f')}"
+        )
 
     # ── Phase 5: 注册模型 ─────────────────────────────────────────────
     # 准备性能指标（包含训练集、验证集、测试集）
@@ -2056,6 +2236,12 @@ def execute_split_training(
     full_train_params["posterior_tree_selection_mode"] = train_params.get(
         "posterior_tree_selection_mode", "disabled"
     )
+    full_train_params["posterior_tree_selection_metric"] = train_params.get(
+        "posterior_tree_selection_metric", getattr(args, "posterior_tree_selection_metric", "topk_median")
+    )
+    full_train_params["posterior_tree_selection_topk"] = train_params.get(
+        "posterior_tree_selection_topk", getattr(args, "posterior_tree_selection_topk", 20)
+    )
     full_train_params["posterior_tree_selection_enabled"] = train_params.get(
         "posterior_tree_selection_enabled", False
     )
@@ -2076,6 +2262,15 @@ def execute_split_training(
     )
     full_train_params["posterior_tree_selected_top30_median"] = train_params.get(
         "posterior_tree_selected_top30_median"
+    )
+    full_train_params["posterior_tree_selected_topk_median"] = train_params.get(
+        "posterior_tree_selected_topk_median"
+    )
+    full_train_params["posterior_tree_selected_topk_lift"] = train_params.get(
+        "posterior_tree_selected_topk_lift"
+    )
+    full_train_params["posterior_tree_selected_topk_hit_rate"] = train_params.get(
+        "posterior_tree_selected_topk_hit_rate"
     )
     full_train_params["posterior_tree_selected_rankic_ir"] = train_params.get(
         "posterior_tree_selected_rankic_ir"
@@ -2200,6 +2395,8 @@ def execute_split_training(
         "adaptive_live_final_learning_rate": adaptive_meta.get("live_adaptive_final_learning_rate"),
         "adaptive_live_final_n_estimators": adaptive_meta.get("live_adaptive_final_n_estimators"),
         "posterior_tree_selection_mode": train_params.get("posterior_tree_selection_mode"),
+        "posterior_tree_selection_metric": train_params.get("posterior_tree_selection_metric"),
+        "posterior_tree_selection_topk": train_params.get("posterior_tree_selection_topk"),
         "posterior_tree_selection_enabled": train_params.get("posterior_tree_selection_enabled"),
         "posterior_tree_base_best_iteration": train_params.get("posterior_tree_base_best_iteration"),
         "posterior_tree_model_max_trees": train_params.get("posterior_tree_model_max_trees"),
@@ -2209,6 +2406,9 @@ def execute_split_training(
         ),
         "posterior_tree_selected_limit": train_params.get("posterior_tree_selected_limit"),
         "posterior_tree_selected_top30_median": train_params.get("posterior_tree_selected_top30_median"),
+        "posterior_tree_selected_topk_median": train_params.get("posterior_tree_selected_topk_median"),
+        "posterior_tree_selected_topk_lift": train_params.get("posterior_tree_selected_topk_lift"),
+        "posterior_tree_selected_topk_hit_rate": train_params.get("posterior_tree_selected_topk_hit_rate"),
         "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
         "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
         "test_daily_metrics": test_daily_metrics,
@@ -2224,6 +2424,7 @@ def execute_deploy_training(
     loader: DataLoader,
     registry: ModelRegistry,
     args,
+    main_board_codes: set,
     topk_values: List[int],
     trade_cal: pd.DataFrame,
 ) -> Optional[Dict]:
@@ -2298,6 +2499,7 @@ def execute_deploy_training(
             storage,
             loader,
             args,
+            main_board_codes,
             ensemble_seeds,
             is_deploy=True,
         )
@@ -2316,7 +2518,11 @@ def execute_deploy_training(
 
         logger.info(f"部署集成模型创建完成: {model}")
     else:
-        tr = _train_model_on_window(train_start, train_end, storage, loader, args)
+        # 单模型路径：当只有一个 seed 时，也需要应用该 seed
+        tr = _train_model_on_window(
+            train_start, train_end, storage, loader, args, main_board_codes,
+            random_state_override=ensemble_seeds[0]
+        )
         model = tr["model"]
         feature_columns = tr["feature_columns"]
         train_params = tr["train_params"]
@@ -2401,6 +2607,12 @@ def execute_deploy_training(
     full_train_params["posterior_tree_selection_mode"] = train_params.get(
         "posterior_tree_selection_mode", "disabled"
     )
+    full_train_params["posterior_tree_selection_metric"] = train_params.get(
+        "posterior_tree_selection_metric", getattr(args, "posterior_tree_selection_metric", "topk_median")
+    )
+    full_train_params["posterior_tree_selection_topk"] = train_params.get(
+        "posterior_tree_selection_topk", getattr(args, "posterior_tree_selection_topk", 20)
+    )
     full_train_params["posterior_tree_selection_enabled"] = train_params.get(
         "posterior_tree_selection_enabled", False
     )
@@ -2421,6 +2633,15 @@ def execute_deploy_training(
     )
     full_train_params["posterior_tree_selected_top30_median"] = train_params.get(
         "posterior_tree_selected_top30_median"
+    )
+    full_train_params["posterior_tree_selected_topk_median"] = train_params.get(
+        "posterior_tree_selected_topk_median"
+    )
+    full_train_params["posterior_tree_selected_topk_lift"] = train_params.get(
+        "posterior_tree_selected_topk_lift"
+    )
+    full_train_params["posterior_tree_selected_topk_hit_rate"] = train_params.get(
+        "posterior_tree_selected_topk_hit_rate"
     )
     full_train_params["posterior_tree_selected_rankic_ir"] = train_params.get(
         "posterior_tree_selected_rankic_ir"
@@ -2527,6 +2748,8 @@ def execute_deploy_training(
         "best_iteration": train_params.get("best_iteration"),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
         "posterior_tree_selection_mode": train_params.get("posterior_tree_selection_mode"),
+        "posterior_tree_selection_metric": train_params.get("posterior_tree_selection_metric"),
+        "posterior_tree_selection_topk": train_params.get("posterior_tree_selection_topk"),
         "posterior_tree_selection_enabled": train_params.get("posterior_tree_selection_enabled"),
         "posterior_tree_base_best_iteration": train_params.get("posterior_tree_base_best_iteration"),
         "posterior_tree_model_max_trees": train_params.get("posterior_tree_model_max_trees"),
@@ -2536,6 +2759,9 @@ def execute_deploy_training(
         ),
         "posterior_tree_selected_limit": train_params.get("posterior_tree_selected_limit"),
         "posterior_tree_selected_top30_median": train_params.get("posterior_tree_selected_top30_median"),
+        "posterior_tree_selected_topk_median": train_params.get("posterior_tree_selected_topk_median"),
+        "posterior_tree_selected_topk_lift": train_params.get("posterior_tree_selected_topk_lift"),
+        "posterior_tree_selected_topk_hit_rate": train_params.get("posterior_tree_selected_topk_hit_rate"),
         "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
         "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
         "test_daily_metrics": {},
@@ -3028,6 +3254,10 @@ def write_walk_forward_summary(
         "posterior_tree_selection_mode": getattr(
             args, "posterior_tree_selection_mode", "disabled"
         ),
+        "posterior_tree_selection_metric": getattr(
+            args, "posterior_tree_selection_metric", "topk_median"
+        ),
+        "posterior_tree_selection_topk": getattr(args, "posterior_tree_selection_topk", 20),
         "posterior_tree_candidates": getattr(args, "posterior_tree_candidates", ""),
         "rank_weight_enabled": args.rank_weight_enabled,
         "rank_weight_topk": args.rank_weight_topk,
@@ -3176,6 +3406,7 @@ def write_walk_forward_summary(
 
     for result in results:
         row = {
+            **_build_summary_key_fields(result.get("test_daily_metrics", {})),
             "split_index": result["split_index"],
             "train_start": result["train_start"],
             "train_end": result["train_end"],
@@ -3202,9 +3433,14 @@ def write_walk_forward_summary(
             "adaptive_live_final_learning_rate": result.get("adaptive_live_final_learning_rate"),
             "adaptive_live_final_n_estimators": result.get("adaptive_live_final_n_estimators"),
             "posterior_tree_selection_mode": result.get("posterior_tree_selection_mode"),
+            "posterior_tree_selection_metric": result.get("posterior_tree_selection_metric"),
+            "posterior_tree_selection_topk": result.get("posterior_tree_selection_topk"),
             "posterior_tree_selection_enabled": result.get("posterior_tree_selection_enabled"),
             "posterior_tree_base_best_iteration": result.get("posterior_tree_base_best_iteration"),
             "posterior_tree_selected_limit": result.get("posterior_tree_selected_limit"),
+            "posterior_tree_selected_topk_median": result.get("posterior_tree_selected_topk_median"),
+            "posterior_tree_selected_topk_lift": result.get("posterior_tree_selected_topk_lift"),
+            "posterior_tree_selected_topk_hit_rate": result.get("posterior_tree_selected_topk_hit_rate"),
             "posterior_tree_selected_rankic_ir": result.get("posterior_tree_selected_rankic_ir"),
             "posterior_tree_selected_rankic_mean": result.get("posterior_tree_selected_rankic_mean"),
         }
@@ -3545,6 +3781,31 @@ def main():
             "候选树数列表，逗号分隔，如 16,32,64,128。留空时使用内置自适应网格，"
             "并自动补入 early-stopping best_iteration 与 n_estimators"
         )
+    )
+    parser.add_argument(
+        "--posterior-tree-selection-metric",
+        type=str,
+        default="topk_median",
+        choices=[
+            "topk_median", "topk_mean", "topk_lift", "topk_hit_rate",
+            "topk_excess_hit_rate", "rankic_ir", "rankic_mean",
+        ],
+        help="候选树数后验选优主指标，默认 topk_median；disabled 模式下不生效"
+    )
+    parser.add_argument(
+        "--posterior-tree-selection-topk",
+        type=int,
+        default=20,
+        help="候选树数后验选优使用的 TopK，默认 20；可改为 30 快速切回旧 Top30 口径"
+    )
+    parser.add_argument(
+        "--oos-detail-metrics",
+        action="store_true",
+        default=False,
+        help=(
+            "启用每个 split 的 OOS 详细指标对比表（验证集 vs 测试集）。"
+            "默认关闭，仅输出重点 TopK 面板与一行简报，减少日志噪音"
+        ),
     )
 
     # rank-weight 参数：Top/Bottom K 样本增强权重
@@ -4483,6 +4744,16 @@ def main():
                 logger.warning("无法加载股票基本信息，OOS 回测将被禁用")
                 args.oos_backtest = False
 
+        # 训练/评估统一使用主板股票池，保证与交易口径一致
+        if stock_basic is None:
+            stock_basic = loader.load_clean_stock_basic()
+        if stock_basic is None:
+            stock_basic = loader.load_stock_basic()
+        if stock_basic is None:
+            raise ValueError("无法加载股票基本信息，无法执行主板过滤训练")
+        main_board_codes = _build_main_board_codes(stock_basic)
+        logger.info(f"主板股票池加载完成: {len(main_board_codes)} 只")
+
         # 生成 walk-forward ID
         wf_run_id = f"wf_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         logger.info(f"Walk-forward 运行ID: {wf_run_id}")
@@ -4585,7 +4856,9 @@ def main():
         
         # 2. 执行每个 split 的训练
         results = []
-        topk_values = [30, 100, 300]
+        topk_values = sorted({
+            20, 30, 100, 300, int(getattr(args, "posterior_tree_selection_topk", 20) or 20)
+        })
 
         # 创建跨 split 持久化 signal（仅 OOS 回测时使用）
         # 作用：门控历史缓冲区在 split 间累积，百分位归一化/自校准阈值能够完成预热
@@ -4640,6 +4913,7 @@ def main():
                         loader=loader,
                         registry=registry,
                         args=args,
+                        main_board_codes=main_board_codes,
                         topk_values=topk_values,
                         trade_cal=trade_cal,
                     )
@@ -4787,6 +5061,7 @@ def main():
                         loader=loader,
                         registry=registry,
                         args=args,
+                        main_board_codes=main_board_codes,
                         topk_values=topk_values,
                         trade_cal=trade_cal,
                     )

@@ -72,7 +72,7 @@ $val_ratio_list          = @(0.2)           # 训练数据内部验证集比例�
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
-$label_list              = @("neu_y_ret_10")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
+$label_list              = @("neu_y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
@@ -98,8 +98,8 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(50)         #50
-$rank_weight_list        = @(3)          #3
+$rank_weight_topk_list   = @(20,150)         #50
+$rank_weight_list        = @(10)          #3
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
 $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
@@ -116,6 +116,8 @@ $ensemble_seed_keep_min_models = 1    # 多种子筛选最少保留模型数
 # ── 候选树数后验选优（训练完成后按逐日验证指标重选最终树数）─────────
 $posterior_tree_selection_mode = "disabled"   # disabled | grid
 $posterior_tree_candidates     = ""           # 逗号分隔，如 "16,32,64,128"；空=使用内置网格
+$posterior_tree_selection_metric = "topk_median"  # topk_median | topk_mean | topk_lift | topk_hit_rate | topk_excess_hit_rate | rankic_ir | rankic_mean
+$posterior_tree_selection_topk   = 20             # 后验选优使用的 TopK，默认20（可改30切回旧口径）
 
 ###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
@@ -778,6 +780,8 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --early-stopping-rounds $early_stopping_rounds" +
                  " --early-stopping-metric $early_stopping_metric" +
                  " --posterior-tree-selection-mode $posterior_tree_selection_mode" +
+                 " --posterior-tree-selection-metric $posterior_tree_selection_metric" +
+                 " --posterior-tree-selection-topk $posterior_tree_selection_topk" +
                  " --time-decay-half-life $time_decay_half_life" +
                  " --batch-run-id $batch_run_id" +
                  " --batch-period-label $batch_period_label" +

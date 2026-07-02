@@ -60,6 +60,13 @@ _BT_REBALANCE_FREQ_MAX = 60
 COL_NAMES = {
     # 标识
     "wf_run_id":                  "运行ID",
+    "KEY_说明":                   "重点说明",
+    "KEY_Top20_list":             "重点Top20最新名单",
+    "KEY_Top30_list":             "重点Top30最新名单",
+    "key_top20_hit_rate_mean":    "重点Top20命中率均值",
+    "key_top20_avg_return_median_mean": "重点Top20收益中位数均值",
+    "key_top30_hit_rate_mean":    "重点Top30命中率均值",
+    "key_top30_avg_return_median_mean": "重点Top30收益中位数均值",
     "batch_run_id":               "批次ID",
     "batch_period_label":         "批次时间段",
     "split_count":                "切分数量",
@@ -186,6 +193,8 @@ COL_NAMES = {
     "early_stopping_rounds":      "早停轮数",
     "early_stopping_metric":      "早停指标",
     "posterior_tree_selection_mode": "后验树数选优模式",
+    "posterior_tree_selection_metric": "后验树数选优主指标",
+    "posterior_tree_selection_topk": "后验树数选优TopK",
     "posterior_tree_candidates":  "后验树数候选配置",
     "posterior_tree_selection_enabled": "后验树数选优启用",
     "posterior_tree_candidate_limits": "后验树数候选列表",
@@ -193,6 +202,9 @@ COL_NAMES = {
     "posterior_tree_base_best_iteration": "后验基础最佳迭代",
     "posterior_tree_model_max_trees": "后验最大可用树数",
     "posterior_tree_selected_limit": "后验选中树数",
+    "posterior_tree_selected_topk_median": "后验选中TopK收益中位数",
+    "posterior_tree_selected_topk_lift": "后验选中TopK超额均值",
+    "posterior_tree_selected_topk_hit_rate": "后验选中TopK命中率",
     "posterior_tree_selected_rankic_ir": "后验选中RankIC_IR",
     "posterior_tree_selected_rankic_mean": "后验选中RankIC均值",
     "rank_weight_enabled":        "rank权重启用",
@@ -300,10 +312,13 @@ PARAM_COLS = [
     "subsample", "colsample_bytree", "min_child_weight",
     "gamma", "reg_alpha", "reg_lambda",
     "early_stopping_rounds", "early_stopping_metric",
-    "posterior_tree_selection_mode", "posterior_tree_candidates",
+    "posterior_tree_selection_mode", "posterior_tree_selection_metric",
+    "posterior_tree_selection_topk", "posterior_tree_candidates",
     "posterior_tree_selection_enabled", "posterior_tree_candidate_limits",
     "posterior_tree_candidate_count", "posterior_tree_base_best_iteration",
     "posterior_tree_model_max_trees", "posterior_tree_selected_limit",
+    "posterior_tree_selected_topk_median", "posterior_tree_selected_topk_lift",
+    "posterior_tree_selected_topk_hit_rate",
     "posterior_tree_selected_rankic_ir", "posterior_tree_selected_rankic_mean",
     "rank_weight_enabled", "rank_weight_topk", "rank_weight",
     "time_decay_half_life", "objective",
@@ -1101,6 +1116,32 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     def safe_min(col):  return group[col].min()  if col in group.columns else None
     def safe_max(col):  return group[col].max()  if col in group.columns else None
 
+    # KEY 重点字段（前置展示）
+    row["KEY_说明"] = "重点: hit rate=TopK逐日平均收益>0占比; list=最新OOS日期预测名单"
+    row["KEY_Top20_list"] = None
+    row["KEY_Top30_list"] = None
+    if "split_index" in group.columns:
+        sorted_group = group.copy()
+        sorted_group["__split_index_int"] = pd.to_numeric(sorted_group["split_index"], errors="coerce")
+        sorted_group = sorted_group.sort_values("__split_index_int")
+    else:
+        sorted_group = group.copy()
+    if "KEY_Top20_list" in sorted_group.columns:
+        top20_list = sorted_group["KEY_Top20_list"].dropna()
+        row["KEY_Top20_list"] = str(top20_list.iloc[-1]) if len(top20_list) else None
+    if "KEY_Top30_list" in sorted_group.columns:
+        top30_list = sorted_group["KEY_Top30_list"].dropna()
+        row["KEY_Top30_list"] = str(top30_list.iloc[-1]) if len(top30_list) else None
+
+    key20_hit = safe_mean("KEY_Top20_hit_rate")
+    key20_med = safe_mean("KEY_Top20_avg_return_median")
+    key30_hit = safe_mean("KEY_Top30_hit_rate")
+    key30_med = safe_mean("KEY_Top30_avg_return_median")
+    row["key_top20_hit_rate_mean"] = round(key20_hit, 4) if key20_hit is not None else None
+    row["key_top20_avg_return_median_mean"] = round(key20_med, 6) if key20_med is not None else None
+    row["key_top30_hit_rate_mean"] = round(key30_hit, 4) if key30_hit is not None else None
+    row["key_top30_avg_return_median_mean"] = round(key30_med, 6) if key30_med is not None else None
+
     # OOS RankIC IR
     oos_ir_series = group["daily_rankic_ir"] if "daily_rankic_ir" in group.columns else pd.Series(dtype=float)
     oos_ir_mean = oos_ir_series.mean() if len(oos_ir_series) else None
@@ -1373,7 +1414,12 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
     ]
     param_cols_ordered = [c for c in PARAM_COLS if c != "wf_run_id"]
 
-    all_cols = ["wf_run_id"] + scored_cols + non_scored_metric_cols + param_cols_ordered
+    key_cols = [
+        "KEY_说明", "KEY_Top20_list", "KEY_Top30_list",
+        "key_top20_hit_rate_mean", "key_top20_avg_return_median_mean",
+        "key_top30_hit_rate_mean", "key_top30_avg_return_median_mean",
+    ]
+    all_cols = ["wf_run_id"] + key_cols + scored_cols + non_scored_metric_cols + param_cols_ordered
     df = pd.DataFrame(rows)
     # 只保留存在的列，避免 KeyError
     final_cols = [c for c in all_cols if c in df.columns]
@@ -1769,6 +1815,8 @@ def build_split_detail_table(all_df: pd.DataFrame) -> pd.DataFrame:
     # 选取需要的列
     detail_cols = [
         "wf_run_id", "split_index",
+        "KEY_Top20_list", "KEY_Top30_list", "KEY_Top20_hit_rate", "KEY_Top20_avg_return_median",
+        "KEY_Top30_hit_rate", "KEY_Top30_avg_return_median",
         "train_start", "train_end", "test_start", "test_end",
         # 逐 split 回测指标
         "bt_total_return", "bt_annual_return", "bt_max_drawdown",
@@ -1798,6 +1846,12 @@ def build_split_detail_table(all_df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {
         "wf_run_id": "运行ID",
         "split_index": "切分序号",
+        "KEY_Top20_list": "重点Top20名单",
+        "KEY_Top30_list": "重点Top30名单",
+        "KEY_Top20_hit_rate": "重点Top20命中率",
+        "KEY_Top20_avg_return_median": "重点Top20收益中位数",
+        "KEY_Top30_hit_rate": "重点Top30命中率",
+        "KEY_Top30_avg_return_median": "重点Top30收益中位数",
         "train_start": "训练开始",
         "train_end": "训练结束",
         "test_start": "测试开始",
@@ -1835,6 +1889,8 @@ def build_split_detail_table(all_df: pd.DataFrame) -> pd.DataFrame:
     # 调整列序：运行ID → 切分序号 → 时间 → 回测指标 → 累计净值 → 模型质量 → 训练参数
     ordered = [
         "运行ID", "切分序号",
+        "重点Top20命中率", "重点Top20收益中位数", "重点Top30命中率", "重点Top30收益中位数",
+        "重点Top20名单", "重点Top30名单",
         "训练开始", "训练结束", "测试开始", "测试结束",
         "总收益", "年化收益", "最大回撤", "夏普", "Calmar", "波动率", "交易天数", "TopN",
         "累计净值",
@@ -1925,9 +1981,21 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
     # 扫描"实验对比"标题行，建立 列字母 → 填充色 的映射
     ws_comp_ref = wb["实验对比"]
     col_letter_fill: dict[str, PatternFill] = {}
+    key_fill = PatternFill(fill_type="solid", fgColor="FFF2CC")
+    key_cols_cn = {
+        "重点说明",
+        "重点Top20最新名单",
+        "重点Top30最新名单",
+        "重点Top20命中率均值",
+        "重点Top20收益中位数均值",
+        "重点Top30命中率均值",
+        "重点Top30收益中位数均值",
+    }
     for cell in next(ws_comp_ref.iter_rows(min_row=1, max_row=1)):
         if cell.value and str(cell.value) in score_cn_fills:
             col_letter_fill[cell.column_letter] = score_cn_fills[str(cell.value)]
+        elif cell.value and str(cell.value) in key_cols_cn:
+            col_letter_fill[cell.column_letter] = key_fill
 
     # ── 全局字体、冻结、列宽、绿色背景 ──────────────────────────────────
     all_sheets = [s for s in ["实验对比", "跨时间段稳定性", "指标说明", "逐Split明细"] if s in wb.sheetnames]
@@ -1971,6 +2039,10 @@ def print_comparison_table(df: pd.DataFrame) -> None:
 
     display_cols = [
         COL_NAMES["wf_run_id"],
+        "重点Top20命中率均值",
+        "重点Top20收益中位数均值",
+        "重点Top30命中率均值",
+        "重点Top30收益中位数均值",
         "综合得分",
         "选股综合得分",
         COL_NAMES["n_splits"],
