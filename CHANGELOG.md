@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.24] - 2026-07-03
+
+### Changed
+
+- **walk-forward 自适应候选替换改为加权打分**：
+  - `scripts/walk_forward.py` 的 `_candidate_passes_adaptive_replacement()` 从“IR 提升且 Top30 中位数提升”的硬性 AND 规则，改为“Top30 逐日均值中位数提升（70%）+ RankIC IR 提升（30%）”的加权得分判定（得分 > 0 才替换）。
+  - `best_iteration` 触发阈值保持当前真实实现：`low_iter <= 50`、`hit_cap >= 90% * n_estimators`。
+- **自适应策略 help 文案与实现对齐**：
+  - `scripts/walk_forward.py` 的 `--adaptive-best-iter-retrain` 帮助文本更新为当前真实行为（阈值、`hit_cap` 候选参数、加权替换规则）。
+  - `scripts/batch/batch_walk_forward.ps1` 的自适应重训注释同步更新，避免配置区描述与代码行为不一致。
+
+### Tests
+
+- `tests/test_training_feature_flag_forwarding.py` 已同步更新：
+  - `best_iteration` 阈值断言改为 `<=50` / `>=90%`；
+  - 候选替换断言改为验证“加权打分”可接受 Top30 主导提升、拒绝 IR 主导但 Top30 走弱的候选。
+
+## [0.77.23] - 2026-07-03
+
+### Changed
+
+- **移除验证集逐日评估明细日志（保留精简诊断）**：
+  - `src/lazybull/ml/train_core.py` 的 `evaluate_validation_daily()` 删除“验证集逐日评估”标题、评估天数、逐日 RankIC 明细、TopK 跨日均值/标准差逐行打印。
+  - 保留 `compute_diagnostic_statistics()` 与 `print_diagnostic_report()`，继续输出更精简的 2-3 行诊断摘要。
+
+## [0.77.22] - 2026-07-03
+
+### Changed
+
+- **逐日评估诊断报告瘦身为 2-3 行摘要**：
+  - `src/lazybull/ml/eval_utils.py` 的 `print_diagnostic_report()` 改为输出全市场基线、样本数区间、TopK 概览和最强 TopK 结论，减少详细分段刷屏。
+
+## [0.77.21] - 2026-07-03
+
+### Bugfix
+
+- **修复 walk-forward 测试集过滤的布尔掩码重建索引告警**：
+  - `scripts/walk_forward.py` 中测试集过滤掩码改为使用 `df_test_eval.index` 显式构建布尔 Series。
+  - 消除 `UserWarning: Boolean Series key will be reindexed to match DataFrame index`，避免在 OOS 评估日志中出现告警噪音。
+
 ## [0.77.20] - 2026-07-02
 
 ### Changed

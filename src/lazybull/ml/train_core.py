@@ -1770,11 +1770,6 @@ def evaluate_validation_daily(
     if topk_values is None:
         topk_values = [30, 100, 300]
 
-    if emit_logs:
-        logger.info("=" * 60)
-        logger.info("验证集逐日评估（贴近交易场景）")
-        logger.info("=" * 60)
-
     # 准备预测数据
     df_eval = df_val.copy()
     X_val_features = df_val[feature_columns].fillna(0)
@@ -1798,24 +1793,6 @@ def evaluate_validation_daily(
 
     # 汇总统计
     summary = summarize_daily_metrics(daily_results)
-
-    # 输出结果
-    if emit_logs:
-        logger.info(f"评估天数: {len(daily_results)}")
-        logger.info(f"逐日 RankIC 均值: {summary.get('RankIC_均值', np.nan):.4f}")
-        logger.info(f"逐日 RankIC 标准差: {summary.get('RankIC_标准差', np.nan):.4f}")
-        logger.info(f"逐日 RankIC IR: {summary.get('RankIC_IR', np.nan):.4f}")
-
-    for k in topk_values:
-        mean_key = f"Top{k}平均收益_均值"
-        std_key = f"Top{k}平均收益_标准差"
-        if emit_logs and mean_key in summary:
-            logger.info(
-                f"Top{k} 平均收益（跨日）: 均值={summary[mean_key]:.4f}, 标准差={summary[std_key]:.4f}"
-            )
-
-    if emit_logs:
-        logger.info("=" * 60)
 
     # 计算并打印诊断统计
     diagnostics = compute_diagnostic_statistics(

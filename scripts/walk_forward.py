@@ -89,7 +89,9 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*DataFrame c
 ADAPTIVE_LOW_BEST_ITER_THRESHOLD = 50
 ADAPTIVE_LOW_BEST_ITER_MAX_RETRIES = 10
 ADAPTIVE_HIT_CAP_RATIO = 0.90
-ADAPTIVE_MIN_VAL_RANKIC_IR_GAIN = 0.00
+ADAPTIVE_REPLACEMENT_TOP30_WEIGHT = 0.70
+ADAPTIVE_REPLACEMENT_RANKIC_IR_WEIGHT = 0.30
+ADAPTIVE_REPLACEMENT_MIN_SCORE = 0.00
 SEED_ENSEMBLE_KEEP_TOP_RATIO = 0.30
 SEED_ENSEMBLE_KEEP_MIN_MODELS = 3
 POSTERIOR_TREE_AUTO_GRID = [
@@ -1709,18 +1711,29 @@ def _format_adaptive_metric_compare(candidate_metrics: Dict, reference_metrics: 
 
 
 def _candidate_passes_adaptive_replacement(base_metrics: Dict, candidate_metrics: Dict) -> bool:
+    score = _adaptive_replacement_score(base_metrics, candidate_metrics)
+    return score is not None and score > ADAPTIVE_REPLACEMENT_MIN_SCORE
+
+
+def _adaptive_replacement_score(base_metrics: Dict, candidate_metrics: Dict) -> Optional[float]:
     base_ir = _safe_float(base_metrics.get("daily_rankic_ir"))
     candidate_ir = _safe_float(candidate_metrics.get("daily_rankic_ir"))
     base_top30_med = _safe_float(base_metrics.get("diagnostic_Top30_逐日均值_50分位"))
     candidate_top30_med = _safe_float(candidate_metrics.get("diagnostic_Top30_逐日均值_50分位"))
 
     if base_ir is None or candidate_ir is None:
-        return False
+        return None
     if base_top30_med is None or candidate_top30_med is None:
-        return False
+        return None
+
+    ir_denominator = max(abs(base_ir), 1e-6)
+    top30_denominator = max(abs(base_top30_med), 1e-6)
+    ir_gain_ratio = (candidate_ir - base_ir) / ir_denominator
+    top30_gain_ratio = (candidate_top30_med - base_top30_med) / top30_denominator
+
     return (
-        candidate_ir > base_ir + ADAPTIVE_MIN_VAL_RANKIC_IR_GAIN
-        and candidate_top30_med > base_top30_med
+        ADAPTIVE_REPLACEMENT_TOP30_WEIGHT * top30_gain_ratio
+        + ADAPTIVE_REPLACEMENT_RANKIC_IR_WEIGHT * ir_gain_ratio
     )
 
 
@@ -1844,8 +1857,8 @@ def _build_adaptive_candidate_args(args, action: Optional[str]):
     if action == "hit_cap":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate * 1.25,# * 1.5,
-            n_estimators=args.n_estimators * 1.5,
+            learning_rate=args.learning_rate * 2,# * 1.5,
+            n_estimators=int(args.n_estimators * 2),
         )
     return None
 
@@ -2113,7 +2126,7 @@ def execute_split_training(
 
     # 过滤测试集样本（与训练时一致：过滤 ST、停牌、涨停；跌停可买入，保留）
     filter_columns = ["is_st", "is_suspended", "is_limit_up"]
-    mask = pd.Series([True] * len(df_test_eval))
+    mask = pd.Series(True, index=df_test_eval.index)
     for col in filter_columns:
         if col in df_test_eval.columns:
             mask = mask & (~df_test_eval[col].astype(bool))
@@ -3754,9 +3767,9 @@ def main():
         default=False,
         help=(
             "启用 walk-forward best_iteration 自适应候选重训："
-            "best_iter<=100 时按随机种子重试并按排序指标择优；"
-            "best_iter>=95%%*n_estimators 时 lr*1.5 且 n_estimators 不变；"
-            "候选仅在验证集 RankIC IR 至少提升 0.05 且 RankIC 均值不下降时替换基础模型"
+            "best_iter<=50 时按随机种子重试并按 Top30中位数/RankIC IR 择优；"
+            "best_iter>=90%%*n_estimators 时 lr*2 且 n_estimators*2；"
+            "候选替换改为加权打分：Top30逐日均值中位数提升(70%%)+RankIC IR提升(30%%) > 0"
         )
     )
     parser.add_argument(

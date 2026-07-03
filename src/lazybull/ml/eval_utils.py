@@ -303,7 +303,7 @@ def compute_diagnostic_statistics(
 
 
 def print_diagnostic_report(diagnostics: Dict[str, Any]) -> None:
-    """打印诊断报告（格式化输出）
+    """打印精简诊断报告（2-3 行摘要）
 
     Args:
         diagnostics: 诊断统计字典（来自 compute_diagnostic_statistics）
@@ -311,46 +311,41 @@ def print_diagnostic_report(diagnostics: Dict[str, Any]) -> None:
     from loguru import logger
 
     logger.info("=" * 80)
-    logger.info("逐日评估诊断报告（排查 TopK/RankIC 不一致风险）")
-    logger.info("=" * 80)
-
-    # 1. 全市场收益统计
-    logger.info("\n【1. 全市场收益统计】")
-    if "全市场收益_逐日均值的均值" in diagnostics:
-        logger.info(f"  逐日均值的均值: {diagnostics['全市场收益_逐日均值的均值']:.6f}")
-        logger.info(f"  逐日均值的标准差: {diagnostics['全市场收益_逐日均值的标准差']:.6f}")
-        logger.info(f"  逐日标准差的均值: {diagnostics['全市场收益_逐日标准差的均值']:.6f}")
-
-    # 2. 样本数分布
-    logger.info("\n【2. 每日样本数分布】")
-    if "每日样本数_最小" in diagnostics:
-        min_date = diagnostics.get("每日样本数_最小日期", "?")
-        logger.info(f"  最小: {diagnostics['每日样本数_最小']}（日期: {min_date}）")
-        logger.info(f"  中位数: {diagnostics['每日样本数_中位数']}")
-        logger.info(f"  最大: {diagnostics['每日样本数_最大']}")
-
-    # 3. TopK 收益与提升
-    logger.info("\n【3. TopK 收益统计与相对提升】")
     topk_keys = [k for k in diagnostics.keys() if k.startswith("Top") and "_逐日均值的均值" in k]
     import re
 
     sorted_keys = sorted(topk_keys, key=lambda x: int(re.search(r"\d+", x).group()))
 
+    universe_mean = diagnostics.get("全市场收益_逐日均值的均值")
+    universe_std = diagnostics.get("全市场收益_逐日均值的标准差")
+    sample_min = diagnostics.get("每日样本数_最小")
+    sample_mid = diagnostics.get("每日样本数_中位数")
+    sample_max = diagnostics.get("每日样本数_最大")
+
+    if universe_mean is not None and sample_min is not None:
+        logger.info(
+            "逐日评估诊断: "
+            f"全市场均值={universe_mean:.6f}, 波动={universe_std:.6f}; "
+            f"样本数={sample_min}-{sample_max}（中位{sample_mid}）"
+        )
+
+    topk_summary = []
+
     for key in sorted_keys:
         k_str = key.split("_")[0]  # 提取 "Top30", "Top100" 等
-        logger.info(f"\n  {k_str}:")
-        logger.info(f"    逐日均值的均值: {diagnostics[key]:.6f}")
-        logger.info(
-            f"    逐日均值的标准差: {diagnostics[key.replace('逐日均值的均值', '逐日均值的标准差')]:.6f}"
-        )
-        logger.info(
-            f"    相对全市场提升（均值）: {diagnostics[key.replace('逐日均值的均值', '相对全市场提升_均值')]:.6f}"
-        )
-        logger.info(
-            f"    相对全市场提升（标准差）: {diagnostics[key.replace('逐日均值的均值', '相对全市场提升_标准差')]:.6f}"
-        )
-        logger.info(
-            f"    分位数 (25%/50%/75%): {diagnostics[key.replace('逐日均值的均值', '逐日均值_25分位')]:.6f} / {diagnostics[key.replace('逐日均值的均值', '逐日均值_50分位')]:.6f} / {diagnostics[key.replace('逐日均值的均值', '逐日均值_75分位')]:.6f}"
-        )
+        topk_mean = diagnostics[key]
+        topk_lift = diagnostics[key.replace('逐日均值的均值', '相对全市场提升_均值')]
+        topk_std = diagnostics[key.replace('逐日均值的均值', '逐日均值的标准差')]
+        topk_summary.append(f"{k_str}={topk_mean:.6f}(+{topk_lift:.6f},σ={topk_std:.6f})")
+
+    if topk_summary:
+        logger.info("TopK概览: " + " | ".join(topk_summary))
+
+    if sorted_keys:
+        best_key = max(sorted_keys, key=lambda key: diagnostics[key])
+        best_k = best_key.split("_")[0]
+        best_mean = diagnostics[best_key]
+        best_lift = diagnostics[best_key.replace('逐日均值的均值', '相对全市场提升_均值')]
+        logger.info(f"结论: {best_k} 最强，日均收益={best_mean:.6f}，相对全市场提升={best_lift:.6f}")
 
     logger.info("=" * 80)

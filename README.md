@@ -28,7 +28,23 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.20)
+### 当前版本 (v0.77.24)
+
+**walk-forward 自适应候选替换改为加权打分 + help 文案对齐** (v0.77.24):
+- `scripts/walk_forward.py` 的自适应候选替换规则从“IR 与 Top30 双提升”改为加权打分：Top30 逐日均值中位数提升占 70%，RankIC IR 提升占 30%，加权得分大于 0 时替换基础模型。
+- `--adaptive-best-iter-retrain` 的 help 文案已与真实实现对齐：`low_iter<=50`、`hit_cap>=90%*n_estimators`、`hit_cap` 候选参数为 `lr*2 + n_estimators*2`。
+- `scripts/batch/batch_walk_forward.ps1` 的配置注释同步修正，避免批量实验时出现“看注释和实际行为不一致”。
+
+**移除验证集逐日评估明细日志** (v0.77.23):
+- `src/lazybull/ml/train_core.py` 的 `evaluate_validation_daily()` 不再打印“验证集逐日评估”标题、评估天数、逐日 RankIC 明细及 TopK 跨日均值/标准差逐行日志。
+- 保留逐日诊断摘要输出，日志更短更聚焦。
+
+**逐日评估诊断报告瘦身** (v0.77.22):
+- `src/lazybull/ml/eval_utils.py` 的逐日评估诊断输出改为 2-3 行摘要，保留全市场基线、样本数区间、TopK 概览和最强 TopK 结论，避免长篇分段日志。
+
+**修复 walk-forward OOS 布尔掩码重建索引告警** (v0.77.21):
+- `scripts/walk_forward.py` 测试集过滤掩码改为使用 `df_test_eval.index` 构建，避免布尔索引与 DataFrame 索引不一致。
+- 消除 `UserWarning: Boolean Series key will be reindexed to match DataFrame index`，OOS 评估日志更干净。
 
 **rank-weight TopK 线性衰减 + BottomK 降权到1** (v0.77.20):
 - `src/lazybull/ml/train_core.py` 的 rank-weight 默认从 TopK 同权改为 `linear_decay`：Top1 权重=`rank_weight`，线性递减到 TopK 末位=1。

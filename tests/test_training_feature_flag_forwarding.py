@@ -64,7 +64,12 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
 
     with pytest.raises(RuntimeError, match="stop after capture"):
         walk_forward_module._train_model_on_window(
-            "20240101", "20240131", storage=None, loader=None, args=args
+            "20240101",
+            "20240131",
+            storage=None,
+            loader=None,
+            args=args,
+            main_board_codes={"000001.SZ"},
         )
 
     assert captured["enable_cashflow_quality_features"] is True
@@ -72,24 +77,24 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
 
 
 def test_walk_forward_adaptive_best_iter_action_thresholds():
-    assert walk_forward_module._resolve_adaptive_best_iter_action(100, 5000) == "low_iter"
-    assert walk_forward_module._resolve_adaptive_best_iter_action(101, 5000) is None
-    assert walk_forward_module._resolve_adaptive_best_iter_action(4749, 5000) is None
-    assert walk_forward_module._resolve_adaptive_best_iter_action(4750, 5000) == "hit_cap"
+    assert walk_forward_module._resolve_adaptive_best_iter_action(50, 5000) == "low_iter"
+    assert walk_forward_module._resolve_adaptive_best_iter_action(51, 5000) is None
+    assert walk_forward_module._resolve_adaptive_best_iter_action(4499, 5000) is None
+    assert walk_forward_module._resolve_adaptive_best_iter_action(4500, 5000) == "hit_cap"
     assert walk_forward_module._resolve_adaptive_best_iter_action(None, 5000) is None
 
 
-def test_walk_forward_adaptive_candidate_replacement_requires_ir_gain_and_top30_median_hold():
+def test_walk_forward_adaptive_candidate_replacement_uses_weighted_score():
     base = {"daily_rankic_ir": 1.20, "diagnostic_Top30_逐日均值_50分位": 0.0030}
 
     better = {"daily_rankic_ir": 1.25, "diagnostic_Top30_逐日均值_50分位": 0.0035}
     assert walk_forward_module._candidate_passes_adaptive_replacement(base, better) is True
 
-    weak_ir = {"daily_rankic_ir": 1.199, "diagnostic_Top30_逐日均值_50分位": 0.0050}
-    assert walk_forward_module._candidate_passes_adaptive_replacement(base, weak_ir) is False
+    top30_dominant = {"daily_rankic_ir": 1.14, "diagnostic_Top30_逐日均值_50分位": 0.0045}
+    assert walk_forward_module._candidate_passes_adaptive_replacement(base, top30_dominant) is True
 
-    lower_top30 = {"daily_rankic_ir": 1.30, "diagnostic_Top30_逐日均值_50分位": 0.0025}
-    assert walk_forward_module._candidate_passes_adaptive_replacement(base, lower_top30) is False
+    ir_dominant = {"daily_rankic_ir": 1.35, "diagnostic_Top30_逐日均值_50分位": 0.0027}
+    assert walk_forward_module._candidate_passes_adaptive_replacement(base, ir_dominant) is False
 
 
 def test_walk_forward_adaptive_candidate_args_follow_requested_rules():
@@ -100,8 +105,8 @@ def test_walk_forward_adaptive_candidate_args_follow_requested_rules():
     assert low_iter_args.n_estimators == 5000
 
     hit_cap_args = walk_forward_module._build_adaptive_candidate_args(args, "hit_cap")
-    assert hit_cap_args.learning_rate == pytest.approx(0.03, rel=1e-2)
-    assert hit_cap_args.n_estimators == 25000
+    assert hit_cap_args.learning_rate == pytest.approx(0.04, rel=1e-2)
+    assert hit_cap_args.n_estimators == 10000
 
 
 def test_walk_forward_adaptive_retry_seed_is_incremental():
@@ -113,7 +118,7 @@ def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch
     calls = []
 
     def _fake_train_model_on_window(
-        train_start, train_end, storage, loader, args, random_state_override=None
+        train_start, train_end, storage, loader, args, main_board_codes=None, random_state_override=None
     ):
         calls.append((round(args.learning_rate, 6), random_state_override))
         best_iter = 4900 if args.learning_rate < 0.03 else 1200
@@ -160,23 +165,24 @@ def test_live_adaptive_updates_remaining_submodels_within_same_split(monkeypatch
         storage=None,
         loader=None,
         args=args,
+        main_board_codes=set(),
         seeds=[729, 121],
         topk_values=[30],
         enable_live_adaptive=True,
     )
 
-    assert calls == [(0.02, 729), (0.03, 729), (0.03, 121)]
+    assert calls == [(0.02, 729), (0.04, 729), (0.04, 121)]
     assert meta["live_adaptive_triggered"] is True
     assert meta["live_adaptive_trigger_count"] == 1
     assert meta["live_adaptive_used_count"] == 1
-    assert meta["live_adaptive_final_learning_rate"] == pytest.approx(0.03, rel=1e-6)
+    assert meta["live_adaptive_final_learning_rate"] == pytest.approx(0.04, rel=1e-6)
 
 
 def test_live_adaptive_low_iter_retries_with_incremental_seed(monkeypatch):
     calls = []
 
     def _fake_train_model_on_window(
-        train_start, train_end, storage, loader, args, random_state_override=None
+        train_start, train_end, storage, loader, args, main_board_codes=None, random_state_override=None
     ):
         calls.append((round(args.learning_rate, 6), random_state_override))
         if random_state_override == 200:
@@ -243,6 +249,7 @@ def test_live_adaptive_low_iter_retries_with_incremental_seed(monkeypatch):
         storage=None,
         loader=None,
         args=args,
+        main_board_codes=set(),
         seeds=[200],
         topk_values=[30],
         enable_live_adaptive=True,
@@ -260,7 +267,7 @@ def test_live_adaptive_low_iter_retries_with_incremental_seed(monkeypatch):
 
 def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
     def _fake_train_model_on_window(
-        train_start, train_end, storage, loader, args, random_state_override=None
+        train_start, train_end, storage, loader, args, main_board_codes=None, random_state_override=None
     ):
         seed = int(random_state_override)
         return {
@@ -325,6 +332,7 @@ def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
         storage=None,
         loader=None,
         args=args,
+        main_board_codes=set(),
         seeds=[101, 102, 103, 104, 105],
         topk_values=[30],
         enable_live_adaptive=False,
@@ -336,7 +344,7 @@ def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
 
 def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypatch):
     def _fake_train_model_on_window(
-        train_start, train_end, storage, loader, args, random_state_override=None
+        train_start, train_end, storage, loader, args, main_board_codes=None, random_state_override=None
     ):
         seed = int(random_state_override)
         return {
@@ -403,6 +411,7 @@ def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypa
         storage=None,
         loader=None,
         args=args,
+        main_board_codes=set(),
         seeds=[201, 202, 203, 204, 205],
         topk_values=[30],
         enable_live_adaptive=False,
