@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.24)
+### 当前版本 (v0.77.26)
+
+**实验对比工作表移除 D/E/F 三列冗余信息** (v0.77.26):
+- `scripts/compare_walk_forward.py` 的“实验对比”导出列删除 `KEY_说明`、`KEY_Top20_list`、`KEY_Top30_list`，`wf_comparison_batches.xlsx` 更简洁。
+
+**rank-weight 双侧 linear_decay（Top/Bottom 末位权重=2）** (v0.77.25):
+- `src/lazybull/ml/train_core.py` 中 `build_rank_sample_weights()` 的 `linear_decay` 模式调整为：TopK 末位权重从 1 提升到 2。
+- BottomK 同步采用与 TopK 一致的线性衰减权重（最差样本= `rank_weight`，BottomK 末位=2）。
+- `flat` 模式保持 Top/Bottom K 同权，便于与线性模式做 A/B 对照。
 
 **walk-forward 自适应候选替换改为加权打分 + help 文案对齐** (v0.77.24):
 - `scripts/walk_forward.py` 的自适应候选替换规则从“IR 与 Top30 双提升”改为加权打分：Top30 逐日均值中位数提升占 70%，RankIC IR 提升占 30%，加权得分大于 0 时替换基础模型。

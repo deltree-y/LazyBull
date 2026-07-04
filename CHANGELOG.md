@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.26] - 2026-07-04
+
+### Changed
+
+- **实验对比工作表移除 D/E/F 三列冗余信息**：
+  - `scripts/compare_walk_forward.py` 的 `build_comparison_table()` 不再导出 `KEY_说明`、`KEY_Top20_list`、`KEY_Top30_list`。
+  - 生成 `wf_comparison_batches.xlsx` 时，“实验对比”sheet 对应三列将不再出现。
+
+## [0.77.25] - 2026-07-03
+
+### Changed
+
+- **rank-weight 线性衰减策略再调整（Top/Bottom 双侧生效）**：
+  - `src/lazybull/ml/train_core.py` 的 `build_rank_sample_weights()` 在 `linear_decay` 模式下，TopK 末位权重由 `1` 提升为 `2`，确保 TopK 全部样本均有明显权重差异。
+  - BottomK 同步启用与 TopK 相同的线性衰减加权：最差样本权重=`rank_weight`，递减到 BottomK 末位权重=`2`。
+  - `flat` 模式下 Top/Bottom K 继续同权赋值 `rank_weight`。
+
+### Tests
+
+- `tests/test_rank_sample_weight.py` 已同步更新：验证 Top/Bottom 双侧 `linear_decay`、末位权重为 `2`、`flat` 模式双侧同权，以及加权样本计数规则。
+
 ## [0.77.24] - 2026-07-03
 
 ### Changed

@@ -77,10 +77,10 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(1500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
-$learning_rate_list      = @(0.08)      #0.009. XGB推荐0.005, LGB推荐0.005
-$min_child_weight_list   = @(150)       #. XGB推荐150, LGB推荐200
+$learning_rate_list      = @(0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
+$min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
@@ -92,21 +92,21 @@ $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。L
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(200)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(50)         #50
-$rank_weight_list        = @(10)          #3
+$rank_weight_topk_list   = @(100)         #50
+$rank_weight_list        = @(100,150)          #3
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
 $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
 
 # ── best_iteration 自适应候选重训 ─────────────────────────────
-$adaptive_best_iter_retrain = $true  # $true 启用：低迭代/撞上限 split 自动重训候选，并按 Top30中位数(70%)+RankIC IR(30%) 加权打分择优
+$adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split 自动重训候选，并按 Top30中位数(70%)+RankIC IR(30%) 加权打分择优
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─

@@ -1,8 +1,8 @@
 """测试 rank-weight sample_weight 构造逻辑
 
 验证：
-- 单日截面 Top K 样本按 linear_decay 权重正确（默认）
-- Bottom K 与中间样本权重均为 1.0
+- 单日截面 Top/Bottom K 样本按 linear_decay 权重正确（默认）
+- Top/Bottom K 末位权重为 2.0，中间样本权重为 1.0
 - 多日分组不串（各日独立排名）
 - K 大于样本数时全部样本加权（退化处理）
 - 返回数组长度与输入一致
@@ -41,14 +41,14 @@ def _make_multi_day(n_per_day: int = 20, n_days: int = 3,
 
 
 # ---------------------------------------------------------------------------
-# 1. 单日 Top K 权重测试
+# 1. 单日 Top/Bottom K 权重测试
 # ---------------------------------------------------------------------------
 
 class TestBuildRankSampleWeightsSingleDay:
     """单日截面 rank-weight 测试"""
 
     def test_topk_linear_decay_weights_correct(self):
-        """Top K 样本应按 linear_decay 递减赋权，Bottom 与中间样本为 1.0"""
+        """Top/Bottom K 样本应按 linear_decay 递减赋权，末位为2，中间样本为1"""
         n = 20
         topk = 5
         top_weight = 5.0
@@ -59,16 +59,22 @@ class TestBuildRankSampleWeightsSingleDay:
         assert len(weights) == n, "权重数组长度应与输入行数相同"
 
         expected = np.ones(n, dtype=float)
-        # 标签 19,18,17,16,15 对应 rank 1..5
+        # Top: 标签 19,18,17,16,15 对应 rank 1..5
         expected[19] = 5.0
-        expected[18] = 4.0
-        expected[17] = 3.0
-        expected[16] = 2.0
-        expected[15] = 1.0
+        expected[18] = 4.25
+        expected[17] = 3.5
+        expected[16] = 2.75
+        expected[15] = 2.0
+        # Bottom: 标签 0,1,2,3,4 对应 rank 1..5
+        expected[0] = 5.0
+        expected[1] = 4.25
+        expected[2] = 3.5
+        expected[3] = 2.75
+        expected[4] = 2.0
         np.testing.assert_allclose(weights, expected)
 
     def test_topk_flat_mode_weights_correct(self):
-        """flat 模式下 Top K 样本同权 top_weight"""
+        """flat 模式下 Top/Bottom K 样本同权 top_weight"""
         n = 20
         topk = 5
         top_weight = 5.0
@@ -83,25 +89,26 @@ class TestBuildRankSampleWeightsSingleDay:
         )
 
         expected = np.ones(n, dtype=float)
+        expected[0:5] = top_weight
         expected[15:20] = top_weight
         np.testing.assert_allclose(weights, expected)
 
     def test_weight_count_correct(self):
-        """默认 linear_decay 下，加权样本数应为 topk-1（第K名权重=1）"""
+        """默认 linear_decay 下，加权样本数应为 2*topk（Top/Bottom 末位权重=2）"""
         n = 30
         topk = 5
         df = _make_single_day(n=n)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20', topk=topk)
         heavy_count = int((weights > 1.0).sum())
-        assert heavy_count == (topk - 1), f"加权样本数应为 {topk - 1}，实际={heavy_count}"
+        assert heavy_count == (2 * topk), f"加权样本数应为 {2 * topk}，实际={heavy_count}"
 
     def test_default_topk_30(self):
-        """默认 topk=30 且 linear_decay 时加权样本数应为 29（第30名权重=1）"""
+        """默认 topk=30 且 linear_decay 时加权样本数应为 60（Top/Bottom 各30）"""
         n = 100
         df = _make_single_day(n=n)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20')
         heavy_count = int((weights > 1.0).sum())
-        assert heavy_count == 29, f"默认 topk=30 时加权样本数应为 29，实际={heavy_count}"
+        assert heavy_count == 60, f"默认 topk=30 时加权样本数应为 60，实际={heavy_count}"
 
     def test_returns_numpy_array(self):
         """返回值应为 numpy 数组"""
@@ -160,25 +167,25 @@ class TestBuildRankSampleWeightsMultiDay:
 
         assert len(weights) == n_per_day * n_days
 
-        # linear_decay 下每日应有 topk-1 个加权样本（第K名为1）
+        # linear_decay 下每日应有 2*topk 个加权样本（Top/Bottom 末位均为2）
         for d in range(n_days):
             start = d * n_per_day
             end = start + n_per_day
             day_weights = weights[start:end]
             heavy_count = int((day_weights > 1.0).sum())
-            assert heavy_count == (topk - 1), (
-                f"第 {d+1} 日加权样本数应为 {topk - 1}，实际={heavy_count}"
+            assert heavy_count == (2 * topk), (
+                f"第 {d+1} 日加权样本数应为 {2 * topk}，实际={heavy_count}"
             )
 
     def test_total_weighted_count(self):
-        """多日场景：总加权样本数 = n_days * (topk-1)"""
+        """多日场景：总加权样本数 = n_days * 2 * topk"""
         n_per_day = 20
         n_days = 3
         topk = 4
         df = _make_multi_day(n_per_day=n_per_day, n_days=n_days)
         weights = build_rank_sample_weights(df, 'neu_y_ret_20', topk=topk, top_weight=5.0)
 
-        expected_heavy = n_days * (topk - 1)
+        expected_heavy = n_days * 2 * topk
         actual_heavy = int((weights > 1.0).sum())
         assert actual_heavy == expected_heavy, (
             f"总加权样本数应为 {expected_heavy}，实际={actual_heavy}"

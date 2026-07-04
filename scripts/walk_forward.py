@@ -1857,8 +1857,8 @@ def _build_adaptive_candidate_args(args, action: Optional[str]):
     if action == "hit_cap":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate * 2,# * 1.5,
-            n_estimators=int(args.n_estimators * 2),
+            learning_rate=args.learning_rate * 3,# * 1.5,
+            n_estimators=int(args.n_estimators * 5),
         )
     return None
 

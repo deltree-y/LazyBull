@@ -1416,7 +1416,6 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
     param_cols_ordered = [c for c in PARAM_COLS if c != "wf_run_id"]
 
     key_cols = [
-        "KEY_说明", "KEY_Top20_list", "KEY_Top30_list",
         "key_top20_hit_rate_mean", "key_top20_avg_return_median_mean",
         "key_top30_hit_rate_mean", "key_top30_avg_return_median_mean",
     ]
