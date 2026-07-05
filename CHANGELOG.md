@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.27] - 2026-07-05
+
+### Changed
+
+- **选股综合得分改为三指标口径**：
+  - `scripts/compare_walk_forward.py` 的 `选股综合得分` 改为 `RankIC均值 30% + ICIR 30% + Top30超额均值 40%`。
+  - 移除分层单调性对选股综合得分的参与权重，保留该列作为辅助观察指标。
+  - 控制台精简对比表与指标说明同步更新，便于 batch 跑完后优先评估排序方向、排序稳定性和头部超额。
+
 ## [0.77.26] - 2026-07-04
 
 ### Changed

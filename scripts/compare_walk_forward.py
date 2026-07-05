@@ -1675,11 +1675,10 @@ def compute_composite_score(df: pd.DataFrame) -> pd.Series:
 def compute_selection_score(df: pd.DataFrame) -> pd.Series:
     """计算选股综合得分（0~100，越高越好）。
 
-    指标与权重（稳健版）：
+    指标与权重（选股优先版）：
     - RankIC均值: 30%
     - ICIR: 30%
-    - Top30超额均值: 25%
-    - 分层单调性(近似): 15%
+    - Top30超额均值: 40%
 
     说明：
     - 每项先做百分位排名（0~1）后加权
@@ -1689,13 +1688,14 @@ def compute_selection_score(df: pd.DataFrame) -> pd.Series:
     scoring_items = [
         (COL_NAMES["daily_rankic_mean"], 0.30),
         (COL_NAMES["icir"], 0.30),
-        (COL_NAMES["oos_top30_lift_mean"], 0.25),
-        (COL_NAMES["selection_monotonicity"], 0.15),
+        (COL_NAMES["oos_top30_lift_mean"], 0.40),
     ]
 
     n = len(df)
     if n == 0:
         return pd.Series(dtype=float)
+    if n == 1:
+        return pd.Series(50.0, index=df.index)
 
     weighted_pct = pd.Series(0.0, index=df.index)
     effective_weight = pd.Series(0.0, index=df.index)
@@ -1734,8 +1734,8 @@ def build_metric_descriptions() -> pd.DataFrame:
          "越高越好"),
         ("综合评分", "选股综合得分",
          "纯选股能力评分（0~100，越高越好）。"
-         "基于4项指标做百分位加权：RankIC均值30%、ICIR30%、Top30超额均值25%、"
-         "分层单调性(近似)15%。"
+         "基于3项最核心选股指标做百分位加权：RankIC均值30%、ICIR30%、Top30超额均值40%。"
+         "RankIC均值衡量排序方向，ICIR衡量排序稳定性，Top30超额均值衡量买入头部能否跑赢全市场。"
          "对缺失指标按有效项重归一；若该行全部缺失则记为50分。",
          "越高越好"),
         # ── OOS 性能指标 ──────────────────────────────────────────────────────
@@ -2049,7 +2049,7 @@ def print_comparison_table(df: pd.DataFrame) -> None:
         COL_NAMES["model_version_range"],
         COL_NAMES["daily_rankic_mean"],
         COL_NAMES["icir"],
-        COL_NAMES["selection_monotonicity"],
+        COL_NAMES["oos_top30_lift_mean"],
         COL_NAMES["chain_cagr"],
         COL_NAMES["chain_max_drawdown"],
         COL_NAMES["chain_total_return"],
@@ -2058,7 +2058,6 @@ def print_comparison_table(df: pd.DataFrame) -> None:
         COL_NAMES["oos_top30_win_rate"],
         COL_NAMES["oos_top30_median_mean"],
         COL_NAMES["oos_top30_worst_median"],
-        COL_NAMES["oos_top30_lift_mean"],
         COL_NAMES["bt_annual_return_mean"],
         COL_NAMES["bt_sharpe_mean"],
         COL_NAMES["bt_max_drawdown_worst"],
@@ -2131,7 +2130,7 @@ def generate_comparison_report(
     logger.info(
         f"综合得分计算完成（参与评分指标数: {sum(1 for k, _, _ in SCORE_CONFIG if COL_NAMES.get(k) in comp_df.columns)}）"
     )
-    logger.info("选股综合得分计算完成（指标: RankIC均值/ICIR/Top30超额/分层单调性）")
+    logger.info("选股综合得分计算完成（指标: RankIC均值30%/ICIR30%/Top30超额40%）")
 
     desc_df = build_metric_descriptions()
     split_df = build_split_detail_table(all_df)
