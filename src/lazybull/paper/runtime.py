@@ -1020,6 +1020,42 @@ def _execute_t0_if_rebalance_day(
         )
 
     protected_stocks = set(precomputed_protected_stocks)
+    if early_rebalance_mode == "holding_tail" and protected_stocks:
+        # 回测侧在生成信号后做 "残留占比 + 新信号权重 <= 100%" 校验。
+        # 纸面交易在 signal_gate_mode=disabled 时，新信号权重约等于 100%，
+        # 只要保护持仓残留占比 > 0 就必然超限。这里做前置短路，
+        # 避免重复执行整段 T0 再撤回导致日志噪音。
+        signal_gate_mode = str(config.get("signal_gate_mode", "disabled")).lower()
+        if signal_gate_mode == "disabled":
+            daily_data = runner.loader.load_clean_daily_by_date(trade_date)
+            if daily_data is not None and not daily_data.empty:
+                price_map: Dict[str, float] = {}
+                for _, row in daily_data.iterrows():
+                    price_map[str(row["ts_code"])] = float(row.get("close", 0.0))
+
+                total_value = runner.account.get_total_value(price_map)
+                residual_value = 0.0
+                positions = runner.account.get_positions()
+                for ts_code in protected_stocks:
+                    pos = positions.get(ts_code)
+                    price = price_map.get(ts_code, 0.0)
+                    if pos is not None and price > 0:
+                        residual_value += pos.shares * price
+
+                residual_ratio = residual_value / total_value if total_value > 0 else 0.0
+                if residual_ratio > 1e-9:
+                    logger.info(
+                        f"持有期拖尾提前调仓前置拒绝：signal_gate_mode=disabled 时，"
+                        f"残留仓位 {residual_ratio:.1%} + 新信号仓位 100.0% 必然 > 100%，"
+                        "与回测侧权重校验结论一致"
+                    )
+                    return (
+                        targets_info,
+                        ect_exposure,
+                        ect_reason,
+                        "not_rebalance_day",
+                        [],
+                    )
     if bool(config.get("enable_profit_based_holding", False)):
         logger.info("-" * 80)
         if str(config.get("profit_extension_mode", "pnl")) == "disabled":

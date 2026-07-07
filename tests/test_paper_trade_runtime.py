@@ -508,6 +508,7 @@ def test_execute_t0_if_rebalance_day_allows_holding_tail_early_rebalance():
             "enable_early_rebalance_on_empty": True,
             "enable_profit_based_holding": True,
             "profit_extension_mode": "strength",
+            "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
             "market_regime_ma250_hard_stop": False,
@@ -551,6 +552,7 @@ def test_execute_t0_if_rebalance_day_skips_when_no_holding_tail_protection():
             "enable_early_rebalance_on_empty": True,
             "enable_profit_based_holding": True,
             "profit_extension_mode": "strength",
+            "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
             "market_regime_ma250_hard_stop": False,
@@ -609,6 +611,7 @@ def test_holding_tail_post_check_rejects_when_weight_exceeds():
             "enable_early_rebalance_on_empty": True,
             "enable_profit_based_holding": True,
             "profit_extension_mode": "strength",
+            "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
             "market_regime_ma250_hard_stop": False,
@@ -671,6 +674,7 @@ def test_holding_tail_post_check_allows_when_weight_ok():
             "enable_early_rebalance_on_empty": True,
             "enable_profit_based_holding": True,
             "profit_extension_mode": "strength",
+            "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
             "market_regime_ma250_hard_stop": False,
@@ -694,3 +698,53 @@ def test_holding_tail_post_check_allows_when_weight_ok():
     cleared = any(call[0][1] == [] for call in save_calls if len(call[0]) >= 2)
     assert not cleared, "权重未超限时不应清空指令"
     assert status == "success"
+
+
+def test_holding_tail_disabled_gate_short_circuit_before_t0():
+    """signal_gate_mode=disabled 且存在保护残留时，应前置拒绝，不进入 run_t0。"""
+    import pandas as pd
+
+    runner = MagicMock()
+    runner.paper_storage.check_run_exists.return_value = False
+    runner.paper_storage.load_strategy_state.return_value = {}
+    runner.paper_storage.find_pending_instructions.return_value = None
+    runner.paper_storage.load_pending_buys.return_value = []
+    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
+
+    # 触发 holding_tail
+    runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
+    runner.broker.pending_sells = []
+    runner.evaluate_profit_extension.return_value = {"600925.SH"}
+
+    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [10.0]})
+    runner.loader.load_clean_daily_by_date.return_value = price_df
+    runner.account.get_total_value.return_value = 100000.0
+
+    _, _, _, status, protected = _execute_t0_if_rebalance_day(
+        runner=runner,
+        trade_date="20260120",
+        config={
+            "enable_early_rebalance_on_empty": True,
+            "enable_profit_based_holding": True,
+            "profit_extension_mode": "strength",
+            "signal_gate_mode": "disabled",
+            "equity_curve_enabled": False,
+            "market_regime_enabled": False,
+            "market_regime_ma250_hard_stop": False,
+            "buy_price": "close",
+            "sell_price": "open",
+            "universe": "mainboard",
+            "top_n": 20,
+            "rebalance_freq": 5,
+            "exclude_st": True,
+            "min_list_days": 365,
+            "industry_momentum_filter": False,
+            "industry_momentum_bottom_pct": 0.5,
+            "holding_bonus_enabled": False,
+            "holding_bonus_sigma": 0.5,
+        },
+    )
+
+    runner.run_t0.assert_not_called()
+    assert status == "not_rebalance_day"
+    assert protected == []

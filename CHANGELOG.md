@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.30] - 2026-07-07
+
+### Fixed
+
+- **持有期拖尾提前调仓在门控关闭场景增加前置短路，避免重复执行整段 T0 再撤回**：
+  在 `src/lazybull/paper/runtime.py` 的 `_execute_t0_if_rebalance_day()` 中，
+  当 `early_rebalance_mode=holding_tail` 且 `signal_gate_mode=disabled` 时，先计算保护残留仓位占比；
+  若残留占比 `> 0`，直接返回 `not_rebalance_day`，并打印
+  `残留仓位 + 新信号仓位100% 必然 > 100%` 的前置拒绝日志。
+  语义与回测侧权重校验一致，但避免了纸面交易中“先跑完整 T0，再 post-check 撤回”的无效开销与日志噪音。
+
+### Test
+
+- 新增 `test_holding_tail_disabled_gate_short_circuit_before_t0`，覆盖
+  `signal_gate_mode=disabled` + `holding_tail` 前置拒绝分支。
+
 ## [0.77.29] - 2026-07-07
 
 ### Fixed
