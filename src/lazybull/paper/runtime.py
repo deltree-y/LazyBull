@@ -902,6 +902,36 @@ def _resolve_early_rebalance_context(
 
     protected_stocks = set(runner.evaluate_profit_extension(trade_date, config))
     if protected_stocks:
+        # 持有期拖尾场景：校验是否有空槽可供新买入。
+        # 与回测侧一致：若持仓已满且无非保护可卖出槽位，拒绝提前调仓，
+        # 避免生成大量无法成交的买入指令。
+        top_n = int(config.get("top_n", 20))
+        if len(current_positions) >= top_n:
+            rebalance_freq = int(config.get("rebalance_freq", 20))
+            trade_cal = runner.loader.load_clean_trade_cal()
+            trade_dates_list: list = []
+            if trade_cal is not None:
+                trade_dates_list = trade_cal[trade_cal["is_open"] == 1]["cal_date"].tolist()
+
+            sellable_count = 0
+            for ts_code, pos in current_positions.items():
+                if ts_code in protected_stocks:
+                    continue
+                holding_days = runner._calc_holding_days(
+                    pos.buy_date, trade_date, trade_dates_list
+                )
+                if holding_days >= max(1, rebalance_freq - 1):
+                    sellable_count += 1
+
+            if sellable_count == 0:
+                logger.info(
+                    f"持有期拖尾提前调仓拒绝：{len(current_positions)} 个持仓中 "
+                    f"{len(protected_stocks)} 只受盈利延续保护，"
+                    f"其余 {len(current_positions) - len(protected_stocks)} 只未满持有期，"
+                    f"且仓位已满（目标 {top_n}），无空槽可供新买入"
+                )
+                return False, "", set()
+
         return True, "holding_tail", protected_stocks
 
     return False, "", set()

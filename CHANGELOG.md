@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.29] - 2026-07-07
+
+### Fixed
+
+- **持有期拖尾提前调仓补全仓位校验，与回测侧行为一致**：
+  在 `src/lazybull/paper/runtime.py` 的 `_resolve_early_rebalance_context()` 中，
+  `holding_tail` 模式现新增槽位可用性校验：当持仓数已达 `top_n` 且所有非保护持仓均未满持有期
+  （即无即将释放的卖出槽位）时，拒绝提前调仓，避免生成大量无法成交的买入指令。
+  与回测侧 `engine.py` 的 `残留仓位占比 + 新信号仓位 ≤ 100%` 权重校验语义对齐。
+
+### Test
+
+- 新增 `test_execute_t0_if_rebalance_day_rejects_holding_tail_when_slots_full_no_sellable`
+  和 `test_execute_t0_if_rebalance_day_allows_holding_tail_when_slots_full_has_sellable`
+  两条回归用例，覆盖仓位已满时拒绝/允许两种路径。
+
 ## [0.77.28] - 2026-07-07
 
 ### Changed

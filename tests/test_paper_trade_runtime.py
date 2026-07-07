@@ -571,3 +571,95 @@ def test_execute_t0_if_rebalance_day_skips_when_no_holding_tail_protection():
     runner.run_t0.assert_not_called()
     assert protected == []
     assert status == "not_rebalance_day"
+
+
+def test_execute_t0_if_rebalance_day_rejects_holding_tail_when_slots_full_no_sellable():
+    """持仓已满且所有非保护持仓未满持有期时，应拒绝持有期拖尾提前调仓。
+
+    与回测侧一致：仓位已满且无即将释放的卖出槽位时，提前调仓无意义。
+    """
+    runner = MagicMock()
+    runner.paper_storage.check_run_exists.return_value = False
+    runner.paper_storage.load_strategy_state.return_value = {}
+    runner.paper_storage.find_pending_instructions.return_value = None
+    runner.paper_storage.load_pending_buys.return_value = []
+    runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
+    runner.broker.pending_sells = []
+    runner.evaluate_profit_extension.return_value = {"600925.SH"}
+    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
+    runner.loader.load_clean_trade_cal.return_value = None
+
+    _, _, _, status, protected = _execute_t0_if_rebalance_day(
+        runner=runner,
+        trade_date="20260120",
+        config={
+            "enable_early_rebalance_on_empty": True,
+            "enable_profit_based_holding": True,
+            "profit_extension_mode": "strength",
+            "equity_curve_enabled": False,
+            "market_regime_enabled": False,
+            "market_regime_ma250_hard_stop": False,
+            "buy_price": "close",
+            "sell_price": "open",
+            "universe": "mainboard",
+            "top_n": 1,
+            "rebalance_freq": 5,
+            "exclude_st": True,
+            "min_list_days": 365,
+            "industry_momentum_filter": False,
+            "industry_momentum_bottom_pct": 0.5,
+            "holding_bonus_enabled": False,
+            "holding_bonus_sigma": 0.5,
+        },
+    )
+
+    runner.run_t0.assert_not_called()
+    assert protected == []
+    assert status == "not_rebalance_day"
+
+
+def test_execute_t0_if_rebalance_day_allows_holding_tail_when_slots_full_has_sellable():
+    """持仓已满但有非保护可卖出槽位时，应允许持有期拖尾提前调仓。"""
+    runner = MagicMock()
+    runner.paper_storage.check_run_exists.return_value = False
+    runner.paper_storage.load_strategy_state.return_value = {}
+    runner.paper_storage.find_pending_instructions.return_value = None
+    runner.paper_storage.load_pending_buys.return_value = []
+    runner.paper_storage.load_instructions.return_value = []
+    runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
+    runner.broker.pending_sells = []
+    runner.evaluate_profit_extension.return_value = {"000001.SZ"}
+    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
+    runner._get_next_trade_date.return_value = "20260121"
+    runner.loader.load_clean_trade_cal.return_value = None
+    runner._calc_holding_days.return_value = 5
+
+    _, _, _, status, protected = _execute_t0_if_rebalance_day(
+        runner=runner,
+        trade_date="20260120",
+        config={
+            "enable_early_rebalance_on_empty": True,
+            "enable_profit_based_holding": True,
+            "profit_extension_mode": "strength",
+            "equity_curve_enabled": False,
+            "market_regime_enabled": False,
+            "market_regime_ma250_hard_stop": False,
+            "buy_price": "close",
+            "sell_price": "open",
+            "universe": "mainboard",
+            "top_n": 1,
+            "rebalance_freq": 5,
+            "exclude_st": True,
+            "min_list_days": 365,
+            "industry_momentum_filter": False,
+            "industry_momentum_bottom_pct": 0.5,
+            "holding_bonus_enabled": False,
+            "holding_bonus_sigma": 0.5,
+        },
+    )
+
+    runner.run_t0.assert_called_once()
+    assert runner.run_t0.call_args.kwargs["force_rebalance"] is True
+    assert runner.run_t0.call_args.kwargs["protected_stocks"] == {"000001.SZ"}
+    assert protected == ["000001.SZ"]
+    assert status == "no_targets"
