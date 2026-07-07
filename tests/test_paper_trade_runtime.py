@@ -573,21 +573,34 @@ def test_execute_t0_if_rebalance_day_skips_when_no_holding_tail_protection():
     assert status == "not_rebalance_day"
 
 
-def test_execute_t0_if_rebalance_day_rejects_holding_tail_when_slots_full_no_sellable():
-    """持仓已满且所有非保护持仓未满持有期时，应拒绝持有期拖尾提前调仓。
+def test_holding_tail_post_check_rejects_when_weight_exceeds():
+    """持有期拖尾：T0 生成指令后权重超限应撤回（与回测 engine.py 一致）。
 
-    与回测侧一致：仓位已满且无即将释放的卖出槽位时，提前调仓无意义。
+    残留仓位 100% + 新信号 100% = 200% > 100% → 清空指令，返回 not_rebalance_day。
     """
+    import pandas as pd
+
     runner = MagicMock()
     runner.paper_storage.check_run_exists.return_value = False
     runner.paper_storage.load_strategy_state.return_value = {}
     runner.paper_storage.find_pending_instructions.return_value = None
     runner.paper_storage.load_pending_buys.return_value = []
-    runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
+    runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
     runner.broker.pending_sells = []
     runner.evaluate_profit_extension.return_value = {"600925.SH"}
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
-    runner.loader.load_clean_trade_cal.return_value = None
+    runner._get_next_trade_date.return_value = "20260121"
+
+    # 价格数据：持仓市值 = 总资产 → 残留占比 100%
+    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [100.0]})
+    runner.loader.load_clean_daily_by_date.return_value = price_df
+    runner.account.get_total_value.return_value = 100000.0
+
+    # T0 生成的买入指令（权重 1.0），无卖出 → 残留 100% + 新信号 100% > 100%
+    buy_inst = MagicMock()
+    buy_inst.action = "buy"
+    buy_inst.target_weight = 1.0
+    runner.paper_storage.load_instructions.return_value = [buy_inst]
 
     _, _, _, status, protected = _execute_t0_if_rebalance_day(
         runner=runner,
@@ -602,7 +615,7 @@ def test_execute_t0_if_rebalance_day_rejects_holding_tail_when_slots_full_no_sel
             "buy_price": "close",
             "sell_price": "open",
             "universe": "mainboard",
-            "top_n": 1,
+            "top_n": 20,
             "rebalance_freq": 5,
             "exclude_st": True,
             "min_list_days": 365,
@@ -613,26 +626,43 @@ def test_execute_t0_if_rebalance_day_rejects_holding_tail_when_slots_full_no_sel
         },
     )
 
-    runner.run_t0.assert_not_called()
-    assert protected == []
+    # 必须清空已保存的指令
+    runner.paper_storage.save_instructions.assert_called_with("20260121", [])
     assert status == "not_rebalance_day"
+    assert protected == []
 
 
-def test_execute_t0_if_rebalance_day_allows_holding_tail_when_slots_full_has_sellable():
-    """持仓已满但有非保护可卖出槽位时，应允许持有期拖尾提前调仓。"""
+def test_holding_tail_post_check_allows_when_weight_ok():
+    """持有期拖尾：权重不超限时应允许（与回测一致）。
+
+    残留仓位 10% + 新信号 30% = 40% ≤ 100% → 允许。
+    """
+    import pandas as pd
+
     runner = MagicMock()
     runner.paper_storage.check_run_exists.return_value = False
     runner.paper_storage.load_strategy_state.return_value = {}
     runner.paper_storage.find_pending_instructions.return_value = None
     runner.paper_storage.load_pending_buys.return_value = []
-    runner.paper_storage.load_instructions.return_value = []
-    runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
+    runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=100)}
     runner.broker.pending_sells = []
-    runner.evaluate_profit_extension.return_value = {"000001.SZ"}
+    runner.evaluate_profit_extension.return_value = set()  # 无保护 → 不会进入 holding_tail
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
     runner._get_next_trade_date.return_value = "20260121"
-    runner.loader.load_clean_trade_cal.return_value = None
-    runner._calc_holding_days.return_value = 5
+
+    # 为了让 holding_tail 触发，需要 evaluate_profit_extension 返回非空
+    runner.evaluate_profit_extension.return_value = {"600925.SH"}
+
+    # 持仓市值 10,000，总资产 100,000 → 残留占比 10%
+    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [100.0]})
+    runner.loader.load_clean_daily_by_date.return_value = price_df
+    runner.account.get_total_value.return_value = 100000.0
+
+    # T0 生成低权重买入指令 → 10% + 30% ≤ 100%
+    buy_inst = MagicMock()
+    buy_inst.action = "buy"
+    buy_inst.target_weight = 0.3
+    runner.paper_storage.load_instructions.return_value = [buy_inst]
 
     _, _, _, status, protected = _execute_t0_if_rebalance_day(
         runner=runner,
@@ -647,7 +677,7 @@ def test_execute_t0_if_rebalance_day_allows_holding_tail_when_slots_full_has_sel
             "buy_price": "close",
             "sell_price": "open",
             "universe": "mainboard",
-            "top_n": 1,
+            "top_n": 20,
             "rebalance_freq": 5,
             "exclude_st": True,
             "min_list_days": 365,
@@ -658,8 +688,9 @@ def test_execute_t0_if_rebalance_day_allows_holding_tail_when_slots_full_has_sel
         },
     )
 
-    runner.run_t0.assert_called_once()
-    assert runner.run_t0.call_args.kwargs["force_rebalance"] is True
-    assert runner.run_t0.call_args.kwargs["protected_stocks"] == {"000001.SZ"}
-    assert protected == ["000001.SZ"]
-    assert status == "no_targets"
+    # 不应清空指令，应该正常继续
+    # save_instructions 可能被 exposure 代码调用，但不应该是 [](清空)
+    save_calls = runner.paper_storage.save_instructions.call_args_list
+    cleared = any(call[0][1] == [] for call in save_calls if len(call[0]) >= 2)
+    assert not cleared, "权重未超限时不应清空指令"
+    assert status == "success"

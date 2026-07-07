@@ -902,36 +902,6 @@ def _resolve_early_rebalance_context(
 
     protected_stocks = set(runner.evaluate_profit_extension(trade_date, config))
     if protected_stocks:
-        # 持有期拖尾场景：校验是否有空槽可供新买入。
-        # 与回测侧一致：若持仓已满且无非保护可卖出槽位，拒绝提前调仓，
-        # 避免生成大量无法成交的买入指令。
-        top_n = int(config.get("top_n", 20))
-        if len(current_positions) >= top_n:
-            rebalance_freq = int(config.get("rebalance_freq", 20))
-            trade_cal = runner.loader.load_clean_trade_cal()
-            trade_dates_list: list = []
-            if trade_cal is not None:
-                trade_dates_list = trade_cal[trade_cal["is_open"] == 1]["cal_date"].tolist()
-
-            sellable_count = 0
-            for ts_code, pos in current_positions.items():
-                if ts_code in protected_stocks:
-                    continue
-                holding_days = runner._calc_holding_days(
-                    pos.buy_date, trade_date, trade_dates_list
-                )
-                if holding_days >= max(1, rebalance_freq - 1):
-                    sellable_count += 1
-
-            if sellable_count == 0:
-                logger.info(
-                    f"持有期拖尾提前调仓拒绝：{len(current_positions)} 个持仓中 "
-                    f"{len(protected_stocks)} 只受盈利延续保护，"
-                    f"其余 {len(current_positions) - len(protected_stocks)} 只未满持有期，"
-                    f"且仓位已满（目标 {top_n}），无空槽可供新买入"
-                )
-                return False, "", set()
-
         return True, "holding_tail", protected_stocks
 
     return False, "", set()
@@ -1093,6 +1063,52 @@ def _execute_t0_if_rebalance_day(
         if t1_date:
             instructions = runner.paper_storage.load_instructions(t1_date)
             if instructions:
+                # 持有期拖尾提前调仓权重校验（与回测侧 engine.py 一致）：
+                # 生成信号后检查 "残留仓位占比 + 新信号仓位 ≤ 100%"，超限则撤回。
+                if early_rebalance_mode == "holding_tail":
+                    positions = runner.account.get_positions()
+                    daily_data = runner.loader.load_clean_daily_by_date(trade_date)
+                    if daily_data is not None and not daily_data.empty and positions:
+                        price_map: Dict[str, float] = {}
+                        for _, row in daily_data.iterrows():
+                            price_map[str(row["ts_code"])] = float(row.get("close", 0.0))
+
+                        total_value = runner.account.get_total_value(price_map)
+
+                        sell_codes = {
+                            inst.ts_code for inst in instructions if inst.action == "sell"
+                        }
+
+                        residual_value = 0.0
+                        for ts_code, pos in positions.items():
+                            price = price_map.get(ts_code, 0.0)
+                            if price > 0 and ts_code not in sell_codes:
+                                residual_value += pos.shares * price
+
+                        residual_ratio = residual_value / total_value if total_value > 0 else 0.0
+
+                        new_buy_weight = sum(
+                            inst.target_weight
+                            for inst in instructions
+                            if inst.action == "buy"
+                        )
+
+                        if residual_ratio + new_buy_weight > 1.0 + 1e-9:
+                            logger.info(
+                                f"持有期拖尾提前调仓撤回：残留仓位 {residual_ratio:.1%} + "
+                                f"新信号仓位 {new_buy_weight:.1%} = "
+                                f"{(residual_ratio + new_buy_weight):.1%} > 100%，"
+                                f"与回测侧权重校验一致"
+                            )
+                            runner.paper_storage.save_instructions(t1_date, [])
+                            return (
+                                targets_info,
+                                ect_exposure,
+                                ect_reason,
+                                "not_rebalance_day",
+                                [],
+                            )
+
                 if final_exposure < 1.0:
                     logger.info(
                         f"应用综合仓位系数 {final_exposure:.2f} 到买入指令"
