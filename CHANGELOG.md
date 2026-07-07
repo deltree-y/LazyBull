@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.31] - 2026-07-07
+
+### Fixed
+
+- **修复真实调仓日被 holding_tail 前置拒绝误拦截的问题**：
+  在 `src/lazybull/paper/runtime.py` 的 `_execute_t0_if_rebalance_day()` 中新增
+  `early_rebalance_triggered` 标记，严格区分"真实调仓日"与"非调仓日提前触发"。
+  现在前置拒绝与 holding_tail post-check 仅在 `early_rebalance_triggered=True`
+  时生效，真实调仓日不会再被 `signal_gate_mode=disabled` 的短路逻辑误拦截。
+  同时 `run_t0(force_rebalance=...)` 改为仅在提前触发时为 True。
+
+### Test
+
+- 新增 `test_rebalance_day_should_not_be_blocked_by_holding_tail_short_circuit`，
+  覆盖“真实调仓日 + holding_tail + disabled”场景，确保会正常执行 T0。
+
 ## [0.77.30] - 2026-07-07
 
 ### Fixed

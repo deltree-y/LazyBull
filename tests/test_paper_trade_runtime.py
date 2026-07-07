@@ -748,3 +748,54 @@ def test_holding_tail_disabled_gate_short_circuit_before_t0():
     runner.run_t0.assert_not_called()
     assert status == "not_rebalance_day"
     assert protected == []
+
+
+def test_rebalance_day_should_not_be_blocked_by_holding_tail_short_circuit():
+    """真实调仓日即使存在 holding_tail + disabled，也不能前置拒绝。"""
+    import pandas as pd
+
+    runner = MagicMock()
+    runner.paper_storage.check_run_exists.return_value = False
+    runner.paper_storage.load_strategy_state.return_value = {}
+    runner.paper_storage.find_pending_instructions.return_value = None
+    runner.paper_storage.load_pending_buys.return_value = []
+    runner.paper_storage.load_instructions.return_value = []
+    runner._check_rebalance_day.return_value = True  # 真实调仓日
+    runner._get_next_trade_date.return_value = "20260121"
+
+    runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
+    runner.broker.pending_sells = []
+    runner.evaluate_profit_extension.return_value = {"600925.SH"}
+
+    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [10.0]})
+    runner.loader.load_clean_daily_by_date.return_value = price_df
+    runner.account.get_total_value.return_value = 100000.0
+
+    _, _, _, status, _ = _execute_t0_if_rebalance_day(
+        runner=runner,
+        trade_date="20260120",
+        config={
+            "enable_early_rebalance_on_empty": True,
+            "enable_profit_based_holding": True,
+            "profit_extension_mode": "strength",
+            "signal_gate_mode": "disabled",
+            "equity_curve_enabled": False,
+            "market_regime_enabled": False,
+            "market_regime_ma250_hard_stop": False,
+            "buy_price": "close",
+            "sell_price": "open",
+            "universe": "mainboard",
+            "top_n": 20,
+            "rebalance_freq": 20,
+            "exclude_st": True,
+            "min_list_days": 365,
+            "industry_momentum_filter": False,
+            "industry_momentum_bottom_pct": 0.5,
+            "holding_bonus_enabled": False,
+            "holding_bonus_sigma": 0.5,
+        },
+    )
+
+    runner.run_t0.assert_called_once()
+    assert runner.run_t0.call_args.kwargs["force_rebalance"] is False
+    assert status == "no_targets"

@@ -939,6 +939,7 @@ def _execute_t0_if_rebalance_day(
         )
     )
 
+    early_rebalance_triggered = False
     try:
         is_rebalance_day = runner._check_rebalance_day(trade_date, int(config["rebalance_freq"]))
     except RuntimeError as exc:
@@ -950,6 +951,7 @@ def _execute_t0_if_rebalance_day(
             )
             logger.warning(f"当前不是调仓日，但满足{trigger_label}条件：{exc}")
             is_rebalance_day = True
+            early_rebalance_triggered = True
         else:
             logger.info(f"当前不是调仓日：{exc}")
             return targets_info, ect_exposure, ect_reason, "not_rebalance_day", protected_stock_list
@@ -961,11 +963,12 @@ def _execute_t0_if_rebalance_day(
             else:
                 logger.warning("非调仓日，但当前仍有拖尾持仓，提前执行 T0")
             is_rebalance_day = True
+            early_rebalance_triggered = True
         else:
             logger.info("非调仓日，跳过 T0")
             return targets_info, ect_exposure, ect_reason, "not_rebalance_day", protected_stock_list
 
-    if allow_early_rebalance:
+    if early_rebalance_triggered:
         if early_rebalance_mode == "empty":
             logger.warning("空仓提前调仓触发，执行 T0")
         else:
@@ -1020,7 +1023,7 @@ def _execute_t0_if_rebalance_day(
         )
 
     protected_stocks = set(precomputed_protected_stocks)
-    if early_rebalance_mode == "holding_tail" and protected_stocks:
+    if early_rebalance_triggered and early_rebalance_mode == "holding_tail" and protected_stocks:
         # 回测侧在生成信号后做 "残留占比 + 新信号权重 <= 100%" 校验。
         # 纸面交易在 signal_gate_mode=disabled 时，新信号权重约等于 100%，
         # 只要保护持仓残留占比 > 0 就必然超限。这里做前置短路，
@@ -1091,7 +1094,7 @@ def _execute_t0_if_rebalance_day(
             holding_bonus_enabled=bool(config.get("holding_bonus_enabled", False)),
             holding_bonus_sigma=float(config.get("holding_bonus_sigma", 0.5)),
             trading_config=trading_config,
-            force_rebalance=allow_early_rebalance,
+            force_rebalance=early_rebalance_triggered,
             protected_stocks=protected_stocks,
         )
 
@@ -1101,7 +1104,7 @@ def _execute_t0_if_rebalance_day(
             if instructions:
                 # 持有期拖尾提前调仓权重校验（与回测侧 engine.py 一致）：
                 # 生成信号后检查 "残留仓位占比 + 新信号仓位 ≤ 100%"，超限则撤回。
-                if early_rebalance_mode == "holding_tail":
+                if early_rebalance_triggered and early_rebalance_mode == "holding_tail":
                     positions = runner.account.get_positions()
                     daily_data = runner.loader.load_clean_daily_by_date(trade_date)
                     if daily_data is not None and not daily_data.empty and positions:
