@@ -789,7 +789,7 @@ class PaperStorage:
                 last_attempt_date=item.get('last_attempt_date', '')
             ))
         if self.verbose:
-            logger.info(f"读取延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
+            logger.debug(f"读取延迟卖出队列: {file_path} ({len(pending_sells)} 条)")
         return pending_sells
     
     def save_pending_buys(self, pending_buys: List[PendingBuy]) -> None:
@@ -844,7 +844,7 @@ class PaperStorage:
                 original_signal_date=item.get('original_signal_date', '')
             ))
         if self.verbose:
-            logger.info(f"读取延迟买入队列: {file_path} ({len(pending_buys)} 条)")
+            logger.debug(f"读取延迟买入队列: {file_path} ({len(pending_buys)} 条)")
         return pending_buys
     
     def save_config(self, config: dict) -> None:

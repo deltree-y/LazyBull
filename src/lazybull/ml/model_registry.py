@@ -9,6 +9,7 @@
 import json
 import re
 import warnings
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -18,7 +19,37 @@ from loguru import logger
 
 from ..common.config import get_models_root
 
-warnings.filterwarnings("ignore", category=UserWarning, module="xgboost")
+
+@contextmanager
+def _suppress_xgboost_pickle_warning():
+    """上下文管理器：抑制 XGBoost 跨版本 pickle 反序列化告警。
+
+    XGBoost 在 pickle 加载旧版模型时会从 pickle.py 模块发出 UserWarning，
+    无法通过 module="xgboost" 过滤。使用 message 匹配精确屏蔽。
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=UserWarning,
+            message=".*loading a serialized model.*",
+        )
+        yield
+
+
+def _load_xgboost_native(file_path: str, model_type: str):
+    """从 XGBoost 原生 JSON/UBJSON 文件加载模型。
+
+    根据 model_type 自动选择 XGBRegressor 或 XGBClassifier。
+    """
+    import xgboost as xgb
+
+    is_classification = "classification" in (model_type or "").lower()
+    if is_classification:
+        model = xgb.XGBClassifier()
+    else:
+        model = xgb.XGBRegressor()
+    model.load_model(file_path)
+    return model
 
 
 class ModelRegistry:
@@ -227,11 +258,22 @@ class ModelRegistry:
         """
         version = self.get_next_version()
         version_str = f"v{version}"
-        
-        # 保存模型文件
-        model_file = self.models_dir / f"{version_str}_model.joblib"
-        joblib.dump(model, model_file)
-        logger.info(f"模型已保存: {model_file}")
+
+        # 保存模型文件（优先 XGBoost 原生格式，避免跨版本 pickle 告警）
+        native_saved = False
+        if hasattr(model, "save_model"):
+            try:
+                model_file = self.models_dir / f"{version_str}_model.json"
+                model.save_model(str(model_file))
+                native_saved = True
+                logger.info(f"模型已保存（XGBoost 原生格式）: {model_file}")
+            except Exception as exc:
+                logger.warning(f"XGBoost 原生保存失败，回退到 joblib: {exc}")
+
+        if not native_saved:
+            model_file = self.models_dir / f"{version_str}_model.joblib"
+            joblib.dump(model, model_file)
+            logger.info(f"模型已保存（joblib）: {model_file}")
         
         # 保存特征列表
         features_file = self.models_dir / f"{version_str}_features.json"
@@ -326,11 +368,25 @@ class ModelRegistry:
                     f"请重新训练模型以生成包含完整元数据的新版本。"
                 )
         
-        # 加载模型文件
+        # 加载模型文件（优先 XGBoost 原生格式，避免跨版本 pickle 告警）
         model_file = self.models_dir / metadata["model_file"]
-        if not model_file.exists():
+        native_file = self.models_dir / f"v{version}_model.json"
+
+        if native_file.exists():
+            # XGBoost 原生格式加载
+            model = _load_xgboost_native(str(native_file), metadata.get("model_type", ""))
+        elif model_file.suffix == ".json":
+            # 元数据指向 .json 原生格式但文件缺失
             raise FileNotFoundError(f"模型文件不存在: {model_file}")
-        model = joblib.load(model_file)
+        elif model_file.exists():
+            # 回退到 joblib 加载（旧模型），抑制跨版本 pickle 告警
+            with _suppress_xgboost_pickle_warning():
+                model = joblib.load(model_file)
+        else:
+            raise FileNotFoundError(
+                f"模型文件不存在（已尝试原生格式与 joblib）: "
+                f"{native_file}, {model_file}"
+            )
         
         # 加载特征列表
         features_file = self.models_dir / metadata["features_file"]

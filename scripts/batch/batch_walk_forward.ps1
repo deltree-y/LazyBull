@@ -79,7 +79,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
-$learning_rate_list      = @(0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
@@ -98,8 +98,8 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(30,50,100)         #50
-$rank_weight_list        = @(3,5,10)          #3
+$rank_weight_topk_list   = @(150)         #50
+$rank_weight_list        = @(5,10,15,20,50)         #3
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
@@ -110,7 +110,7 @@ $adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "1100"#,2200,3300"#,4400,5500,6600,7700,8800,9900,10000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "1100"#,2200"#,3300"#,4400,5500,6600,7700,8800,9900,10000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 1    # 多种子筛选最少保留模型数 
 
@@ -178,7 +178,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $false   # $true 启用 | $false 禁用
+$deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────

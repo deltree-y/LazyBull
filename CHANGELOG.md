@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.28] - 2026-07-07
+
+### Changed
+
+- **模型持久化改用 XGBoost 原生格式，消除跨版本 pickle 告警**：
+  - `src/lazybull/ml/model_registry.py` 的 `register_model()` 优先使用 `model.save_model()` 保存为 `.json` 原生格式，避免 pickle 序列化在 XGBoost 版本升级后产生 `UserWarning`。
+  - `load_model()` 优先从 `.json` 原生格式加载（自动识别 XGBRegressor / XGBClassifier），旧 `.joblib` 文件通过 `_suppress_xgboost_pickle_warning()` 上下文管理器静默回退加载。
+  - 新增 `_load_xgboost_native()` 辅助函数，根据 `model_type` 自动选择正确的 sklearn wrapper 类。
+  - 无 `save_model` 方法的模型（如 EnsembleModel）继续走 joblib 路径，不受影响。
+
 ## [0.77.27] - 2026-07-05
 
 ### Changed

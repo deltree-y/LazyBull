@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.27)
+### 当前版本 (v0.77.28)
+
+**模型持久化改用 XGBoost 原生格式，消除跨版本 pickle 告警** (v0.77.28):
+- `register_model()` 优先使用 `model.save_model()` 保存为 `.json` 原生格式，避免 XGBoost 版本升级后 pickle 反序列化产生 `UserWarning`。
+- `load_model()` 优先从 `.json` 加载，旧 `.joblib` 文件自动静默回退。
 
 **WF 选股综合得分改为三指标口径** (v0.77.27):
 - `scripts/compare_walk_forward.py` 的 `选股综合得分` 改为 `RankIC均值 30% + ICIR 30% + Top30超额均值 40%`。

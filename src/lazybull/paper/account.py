@@ -62,7 +62,7 @@ class PaperAccount:
                     f"{old_cash:,.2f} -> {self.state.cash:,.2f}"
                 )
             if verbose:
-                logger.info(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")
+                logger.debug(f"加载已有账户状态，现金: {self.state.cash:,.2f}，持仓数: {len(self.state.positions)}")
     
     def get_cash(self) -> float:
         """获取现金"""
