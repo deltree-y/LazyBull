@@ -684,7 +684,7 @@ class PaperStorage:
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(record, f, indent=2, ensure_ascii=False)
         
-        logger.info(f"保存执行记录: {file_path}")
+        logger.debug(f"保存执行记录: {file_path}")
     
     def check_run_exists(self, run_type: str, trade_date: str) -> bool:
         """检查执行记录是否存在
@@ -1161,7 +1161,7 @@ class PaperStorage:
         
         df = pd.DataFrame(data)
         df.to_parquet(file_path, index=False)
-        logger.info(f"保存交易指令: {file_path} ({len(instructions)} 条)")
+        logger.debug(f"保存交易指令: {file_path} ({len(instructions)} 条)")
     
     def load_instructions(self, trade_date: str) -> Optional[List[TradeInstruction]]:
         """读取交易指令列表
@@ -1175,7 +1175,7 @@ class PaperStorage:
         file_path = self.instructions_path / f"{trade_date}.parquet"
         
         if not file_path.exists():
-            logger.info(f"交易指令文件不存在: {file_path}")
+            logger.debug(f"交易指令文件不存在: {file_path}")
             return None
         
         df = pd.read_parquet(file_path)
@@ -1194,7 +1194,7 @@ class PaperStorage:
                 retry_attempt=int(row.get('retry_attempt', 0) or 0),
             ))
         
-        logger.info(f"读取交易指令: {file_path} ({len(instructions)} 条)")
+        logger.debug(f"读取交易指令: {file_path} ({len(instructions)} 条)")
         return instructions
 
     def save_ranked_candidates(self, ranked_candidates: List[tuple], signal_date: str) -> None:
