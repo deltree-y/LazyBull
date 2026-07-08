@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.33] - 2026-07-08
+
+### Fixed
+
+- **修复 compare 报表重排时的 duplicate labels 异常**：
+  - `scripts/compare_walk_forward.py` 在 `build_comparison_table()` 里构建最终列序时，改为按首次出现去重。
+  - 修复 `reorder_comparison_columns()` 阶段触发的 `ValueError: cannot reindex on an axis with duplicate labels`。
+  - 已验证 `py .\scripts\compare_walk_forward.py` 可正常生成 `wf_comparison_raw.xlsx` 与 `wf_comparison_batches.xlsx`。
+
+## [0.77.32] - 2026-07-08
+
+### Changed
+
+- **wf_comparison_batches 列顺序优化，重点参数与选股指标前置**：
+  - `scripts/compare_walk_forward.py` 的“实验对比”sheet 将 `最大深度`、`学习率`、`rank权重TopK`、`rank权重值` 前置，便于批量扫参后快速横向查看。
+  - `选股综合得分` 后紧跟 3 个构成指标：`RankIC均值`、`ICIR`、`Top30超额均值`。
+  - `后验候选数均值` 及其后续 3 个后验统计列统一移动到表尾，降低主阅读路径噪音。
+
+- **对比表新增自适应候选重训与多种子 bagging 参数展示**：
+  - `scripts/compare_walk_forward.py` 新增列映射与导出：`自适应候选重训`、`自适应低迭代重试上限`、`多种子bagging种子`、`多种子保留比例`、`多种子最少保留模型数`。
+  - `scripts/walk_forward.py` 的 `write_walk_forward_summary()` 新增写出 `adaptive_low_iter_max_retries`、`ensemble_seed_keep_top_ratio`、`ensemble_seed_keep_min_models`，确保后续批次可在 compare 表中直接查看。
+
 ## [0.77.31] - 2026-07-07
 
 ### Fixed

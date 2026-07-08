@@ -3265,6 +3265,7 @@ def write_walk_forward_summary(
         "early_stopping_rounds": args.early_stopping_rounds,
         "early_stopping_metric": args.early_stopping_metric,
         "adaptive_best_iter_retrain": getattr(args, "adaptive_best_iter_retrain", False),
+        "adaptive_low_iter_max_retries": getattr(args, "adaptive_low_iter_max_retries", 10),
         "posterior_tree_selection_mode": getattr(
             args, "posterior_tree_selection_mode", "disabled"
         ),
@@ -3289,6 +3290,8 @@ def write_walk_forward_summary(
         "factor_prune": getattr(args, 'factor_prune', False),
         "ensemble_offsets": getattr(args, 'ensemble_offsets', 0),
         "ensemble_seeds": getattr(args, 'ensemble_seeds', None),
+        "ensemble_seed_keep_top_ratio": getattr(args, 'ensemble_seed_keep_top_ratio', None),
+        "ensemble_seed_keep_min_models": getattr(args, 'ensemble_seed_keep_min_models', None),
         "enable_enhanced_features": getattr(args, 'enable_enhanced_features', False),
         "enable_north_features": getattr(args, 'enable_north_features', False),
         "enable_lhb_features": getattr(args, 'enable_lhb_features', False),

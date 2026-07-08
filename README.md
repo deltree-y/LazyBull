@@ -28,7 +28,18 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.31)
+### 当前版本 (v0.77.33)
+
+**修复 compare 列重排 duplicate labels 报错** (v0.77.33):
+- 修复 `scripts/compare_walk_forward.py` 在“实验对比”列重排阶段可能出现的 `ValueError: cannot reindex on an axis with duplicate labels`。
+- 通过“最终导出列按首次出现去重”保证前置参数列与参数区同名列不再冲突。
+- `py .\scripts\compare_walk_forward.py` 已可正常完成 raw/batches 两份对比表导出。
+
+**wf_comparison_batches 列顺序与参数可读性优化** (v0.77.32):
+- `scripts/compare_walk_forward.py` 将 `最大深度`、`学习率`、`rank权重TopK`、`rank权重值` 前置到实验对比表前部，便于扫参时快速横向比较。
+- `选股综合得分` 后紧跟其 3 个构成指标：`RankIC均值`、`ICIR`、`Top30超额均值`。
+- 新增自适应候选重训与多种子 bagging 相关列展示（含低迭代重试上限、多种子保留比例/最少保留模型数）。
+- `后验候选数均值` 与其后续 3 个后验统计列移动到表尾，主指标阅读路径更清晰。
 
 **模型持久化改用 XGBoost 原生格式，消除跨版本 pickle 告警** (v0.77.28):
 - `register_model()` 优先使用 `model.save_model()` 保存为 `.json` 原生格式，避免 XGBoost 版本升级后 pickle 反序列化产生 `UserWarning`。

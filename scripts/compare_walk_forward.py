@@ -192,6 +192,11 @@ COL_NAMES = {
     "reg_lambda":                 "L2正则",
     "early_stopping_rounds":      "早停轮数",
     "early_stopping_metric":      "早停指标",
+    "adaptive_best_iter_retrain": "自适应候选重训",
+    "adaptive_low_iter_max_retries": "自适应低迭代重试上限",
+    "ensemble_seeds":             "多种子bagging种子",
+    "ensemble_seed_keep_top_ratio": "多种子保留比例",
+    "ensemble_seed_keep_min_models": "多种子最少保留模型数",
     "posterior_tree_selection_mode": "后验树数选优模式",
     "posterior_tree_selection_metric": "后验树数选优主指标",
     "posterior_tree_selection_topk": "后验树数选优TopK",
@@ -313,6 +318,8 @@ PARAM_COLS = [
     "subsample", "colsample_bytree", "min_child_weight",
     "gamma", "reg_alpha", "reg_lambda",
     "early_stopping_rounds", "early_stopping_metric",
+    "adaptive_best_iter_retrain", "adaptive_low_iter_max_retries",
+    "ensemble_seeds", "ensemble_seed_keep_top_ratio", "ensemble_seed_keep_min_models",
     "posterior_tree_selection_mode", "posterior_tree_selection_metric",
     "posterior_tree_selection_topk", "posterior_tree_candidates",
     "posterior_tree_selection_enabled", "posterior_tree_candidate_limits",
@@ -1408,6 +1415,9 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         # 训练质量补充
         "val_rankic_ir_mean",
         "best_iter_mean", "best_iter_min", "best_iter_max", "best_iter_std",
+    ]
+
+    posterior_tail_cols = [
         "posterior_tree_candidate_count_mean",
         "posterior_tree_small_space_splits",
         "posterior_tree_selected_limit_mean",
@@ -1419,10 +1429,19 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         "key_top20_hit_rate_mean", "key_top20_avg_return_median_mean",
         "key_top30_hit_rate_mean", "key_top30_avg_return_median_mean",
     ]
-    all_cols = ["wf_run_id"] + key_cols + scored_cols + non_scored_metric_cols + param_cols_ordered
+    all_cols = [
+        "wf_run_id",
+        "max_depth",
+        "learning_rate",
+        "rank_weight_topk",
+        "rank_weight",
+    ] + key_cols + scored_cols + non_scored_metric_cols + param_cols_ordered + posterior_tail_cols
     df = pd.DataFrame(rows)
-    # 只保留存在的列，避免 KeyError
-    final_cols = [c for c in all_cols if c in df.columns]
+    # 只保留存在的列，并按首次出现去重，避免重复列名触发后续 reindex 异常。
+    final_cols = []
+    for col in all_cols:
+        if col in df.columns and col not in final_cols:
+            final_cols.append(col)
     df = df[final_cols]
 
     df = df.reset_index(drop=True)
@@ -1927,6 +1946,39 @@ def sort_by_run_time(df: pd.DataFrame, run_id_col: str = "运行ID") -> pd.DataF
     return df
 
 
+def reorder_comparison_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """按汇总阅读习惯重排实验对比列顺序。"""
+    preferred_order = [
+        "运行ID",
+        "综合得分",
+        "选股综合得分",
+        "RankIC均值",
+        "ICIR",
+        "Top30超额均值",
+        "最大深度",
+        "学习率",
+        "rank权重TopK",
+        "rank权重值",
+    ]
+
+    tail_order = [
+        "后验候选数均值",
+        "后验小搜索空间split数",
+        "后验选中树数均值",
+        "后验最大可用树数均值",
+    ]
+
+    ordered_cols = [col for col in preferred_order if col in df.columns]
+
+    # 其余列保持原顺序，避免非目标列发生意外位移。
+    for col in df.columns:
+        if col not in ordered_cols and col not in tail_order:
+            ordered_cols.append(col)
+
+    ordered_cols.extend([col for col in tail_order if col in df.columns])
+    return df.reindex(columns=ordered_cols)
+
+
 def _str_display_width(s: str) -> int:
     """计算字符串的显示宽度（CJK 字符计为 2，ASCII 计为 1）"""
     width = 0
@@ -2127,6 +2179,7 @@ def generate_comparison_report(
 
     comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
     comp_df.insert(2, "选股综合得分", compute_selection_score(comp_df))
+    comp_df = reorder_comparison_columns(comp_df)
     logger.info(
         f"综合得分计算完成（参与评分指标数: {sum(1 for k, _, _ in SCORE_CONFIG if COL_NAMES.get(k) in comp_df.columns)}）"
     )

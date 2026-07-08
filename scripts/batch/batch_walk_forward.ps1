@@ -98,8 +98,8 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(150)         #50
-$rank_weight_list        = @(5,10,15,20,50)         #3
+$rank_weight_topk_list   = @(200,300,500)         #50
+$rank_weight_list        = @(10)         #3
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
