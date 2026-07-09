@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.36] - 2026-07-09
+
+### Fixed
+
+- **修复 Windows 下 `py -c` 参数转义导致 next 交易日解析脚本引号丢失**：
+  - `scripts/batch/batch_paper_trade.ps1` 的 `Resolve-NextOpenTradeDate()` 改为“写临时 Python 文件 + `py <tmp>.py <after_date>`”执行。
+  - 避免 `py -c` 在某些终端/执行路径中出现 `"./data/clean/trade_cal.parquet"` 被剥离成无引号字符串，触发 `SyntaxError: invalid syntax`。
+  - 执行后会自动清理临时脚本文件，避免残留。
+
 ## [0.77.35] - 2026-07-09
 
 ### Fixed

@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.35)
+### 当前版本 (v0.77.36)
+
+**批量纸面交易脚本修复 Windows 下 `py -c` 引号丢失问题** (v0.77.36):
+- `scripts/batch/batch_paper_trade.ps1` 的 next 交易日解析改为临时 Python 文件执行，不再依赖 `py -c` 参数拼接。
+- 修复部分 PowerShell/路径环境下 `read_parquet("./data/clean/trade_cal.parquet")` 引号丢失导致的 `SyntaxError: invalid syntax`。
 
 **批量纸面交易 next 日期解析失败告警修复** (v0.77.35):
 - `scripts/batch/batch_paper_trade.ps1` 在调用内嵌 Python 解析下一交易日时，现会严格检查子进程退出码。

@@ -83,10 +83,13 @@ print(future[0] if future else '')
 '@
 
     try {
-        $nextDate = (& py -c $pyCode $AfterDate | Out-String).Trim()
+        $tmpPyPath = Join-Path $env:TEMP ("lazybull_next_trade_date_{0}.py" -f ([System.Guid]::NewGuid().ToString("N")))
+        Set-Content -Path $tmpPyPath -Value $pyCode -Encoding UTF8
+
+        $nextDate = (& py $tmpPyPath $AfterDate | Out-String).Trim()
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
-            throw "py -c 解析失败，exit code=$exitCode"
+            throw "py 脚本解析失败，exit code=$exitCode"
         }
         if ([string]::IsNullOrWhiteSpace($nextDate)) {
             return $null
@@ -95,6 +98,11 @@ print(future[0] if future else '')
     }
     catch {
         throw "解析下一交易日失败: $($_.Exception.Message)"
+    }
+    finally {
+        if ($tmpPyPath -and (Test-Path $tmpPyPath)) {
+            Remove-Item -Path $tmpPyPath -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
