@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.37] - 2026-07-09
+
+### Changed
+
+- **批量纸面交易脚本支持脚本内默认日期与多模型批跑汇总**：
+  - `scripts/batch/batch_paper_trade.ps1` 新增“默认配置区”，可直接在脚本内填写 `DefaultStartDate`、`DefaultEndDate`、`DefaultModelVersions`，运行时也支持参数覆盖。
+  - 模型编号改为数组参数 `ModelVersions`，支持一次填写多个模型并按顺序依次执行。
+  - 每个模型跑完后基于 `data/paper/nav/nav.parquet` 自动汇总 `总资产`、`总收益率`、`年化收益率`、执行轮次、状态等信息。
+  - 脚本结束时会在控制台打印汇总表，并导出 CSV 到 `data/reports/paper_trade_batch_summary_*.csv`。
+
 ## [0.77.36] - 2026-07-09
 
 ### Fixed
