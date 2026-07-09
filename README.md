@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.34)
+### 当前版本 (v0.77.35)
+
+**批量纸面交易 next 日期解析失败告警修复** (v0.77.35):
+- `scripts/batch/batch_paper_trade.ps1` 在调用内嵌 Python 解析下一交易日时，现会严格检查子进程退出码。
+- 若 Python 语法或执行异常，不再误判为“后续无可用交易日”，而是直接抛出错误，便于定位根因。
 
 **批量纸面交易脚本支持日期范围+模型编号三参数执行** (v0.77.34):
 - `scripts/batch/batch_paper_trade.ps1` 改为必填参数：`-StartDate`、`-EndDate`、`-ModelVersion`。

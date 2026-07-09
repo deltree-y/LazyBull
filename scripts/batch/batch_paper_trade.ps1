@@ -79,11 +79,15 @@ open_dates = (
     .tolist()
 )
 future = [d for d in open_dates if d > after_date]
-print(future[0] if future else "")
+print(future[0] if future else '')
 '@
 
     try {
         $nextDate = (& py -c $pyCode $AfterDate | Out-String).Trim()
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            throw "py -c 解析失败，exit code=$exitCode"
+        }
         if ([string]::IsNullOrWhiteSpace($nextDate)) {
             return $null
         }

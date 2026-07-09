@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.35] - 2026-07-09
+
+### Fixed
+
+- **修复批量纸面交易脚本在解析 next 交易日失败时被误判为“无后续交易日”**：
+  - `scripts/batch/batch_paper_trade.ps1` 的 `Resolve-NextOpenTradeDate()` 现在会在 `py -c` 返回非零退出码时直接抛错，不再静默回退为“后续无可用交易日，停止执行”。
+  - 内嵌 Python 输出改为 `print(future[0] if future else '')`，避免字符串引号异常导致的语法错误风险。
+
 ## [0.77.34] - 2026-07-09
 
 ### Changed
