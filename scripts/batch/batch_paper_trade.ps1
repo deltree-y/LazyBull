@@ -1,40 +1,32 @@
 ﻿# batch_paper_trade.ps1
 #
 # 用法：
-# 1) 直接使用脚本内默认值（推荐先在“默认配置区”填写）
+# 1) 直接使用脚本内默认值（直接修改下方 param 默认值）
 #    powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_paper_trade.ps1
 # 2) 运行时覆盖默认值
 #    powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_paper_trade.ps1 -StartDate 20260325 -EndDate 20260430 -ModelVersions 19321,19322
 
-# =========================
-# 默认配置区（可直接编辑）
-# =========================
-$DefaultStartDate = "20251231"
-$DefaultEndDate = "20260708"
-$DefaultModelVersions = @(21142,21157)
-$DefaultResetT0BeforeRun = $true
-
 param(
     [Parameter(Mandatory = $false)]
-    [string]$StartDate,
+    [string]$StartDate = "20251231",
 
     [Parameter(Mandatory = $false)]
-    [string]$EndDate,
+    [string]$EndDate = "20260708",
 
     [Parameter(Mandatory = $false)]
-    [int[]]$ModelVersions,
+    [int[]]$ModelVersions = @(21142, 21157),
 
     [Parameter(Mandatory = $false)]
-    [bool]$ResetT0BeforeRun
+    [bool]$ResetT0BeforeRun = $true
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$resolvedStartDate = if ([string]::IsNullOrWhiteSpace($StartDate)) { $DefaultStartDate } else { $StartDate }
-$resolvedEndDate = if ([string]::IsNullOrWhiteSpace($EndDate)) { $DefaultEndDate } else { $EndDate }
-$resolvedModelVersions = if ($ModelVersions -and $ModelVersions.Count -gt 0) { $ModelVersions } else { $DefaultModelVersions }
-$resolvedResetT0BeforeRun = if ($PSBoundParameters.ContainsKey('ResetT0BeforeRun')) { $ResetT0BeforeRun } else { $DefaultResetT0BeforeRun }
+$resolvedStartDate = $StartDate
+$resolvedEndDate = $EndDate
+$resolvedModelVersions = $ModelVersions
+$resolvedResetT0BeforeRun = $ResetT0BeforeRun
 
 function Get-DateFromText {
     param(

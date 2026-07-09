@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.38] - 2026-07-09
+
+### Fixed
+
+- **修复批量纸面交易脚本在直接执行时 `param` 被识别为命令的问题**：
+  - `scripts/batch/batch_paper_trade.ps1` 将默认配置从 `param` 之前的变量区迁移为 `param` 参数默认值，确保 `param(...)` 作为脚本第一条可执行语句。
+  - 消除 `param : 无法将“param”项识别为 cmdlet` 与后续 `$StartDate` 未定义连锁错误。
+  - 仍支持“脚本内直接填写默认值 + 命令行参数覆盖”两种用法。
+
 ## [0.77.37] - 2026-07-09
 
 ### Changed
