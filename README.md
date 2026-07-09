@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.33)
+### 当前版本 (v0.77.34)
+
+**批量纸面交易脚本支持日期范围+模型编号三参数执行** (v0.77.34):
+- `scripts/batch/batch_paper_trade.ps1` 改为必填参数：`-StartDate`、`-EndDate`、`-ModelVersion`。
+- 执行前自动写入模型配置：`paper_trade.py config --model-version <ModelVersion>`，并默认执行 `adjust reset-t0` 清空旧状态。
+- 执行顺序为：首日 `run --trade-date <StartDate>`，后续每天 `run --trade-date next`，直到达到结束日期停止。
 
 **修复 compare 列重排 duplicate labels 报错** (v0.77.33):
 - 修复 `scripts/compare_walk_forward.py` 在“实验对比”列重排阶段可能出现的 `ValueError: cannot reindex on an axis with duplicate labels`。

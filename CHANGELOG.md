@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.34] - 2026-07-09
+
+### Changed
+
+- **批量纸面交易脚本改为三参数驱动并支持模型编号写入配置**：
+  - `scripts/batch/batch_paper_trade.ps1` 新增必填参数 `StartDate`、`EndDate`、`ModelVersion`，支持按日期区间批量执行纸面交易。
+  - 执行前先调用 `paper_trade.py config --model-version <ModelVersion>`，统一写入 `data/paper/config.yaml` 的模型版本配置。
+  - 保持“首日指定日期、后续 `trade-date=next`”模式：先执行 `run --trade-date <StartDate>`，随后循环执行 `run --trade-date next`，直到到达或超过结束日期停止。
+  - 默认执行 `adjust reset-t0` 清理旧状态（可通过参数关闭）。
+
 ## [0.77.33] - 2026-07-08
 
 ### Fixed

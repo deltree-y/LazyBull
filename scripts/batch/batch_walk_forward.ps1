@@ -79,7 +79,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
-$learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.03, 0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
@@ -98,8 +98,8 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(200,300,500)         #50
-$rank_weight_list        = @(10)         #3
+$rank_weight_topk_list   = @(200)         #50
+$rank_weight_list        = @(15)         #3
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
