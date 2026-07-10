@@ -28,7 +28,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.41)
+### 当前版本 (v0.77.43)
+
+**批量纸面交易汇总新增 `append-summary-only` 开关** (v0.77.43):
+- `scripts/batch/batch_paper_trade.ps1` 支持 `-AppendSummaryOnly`，开启后仅对已有汇总 CSV 重新整合排序，不会重跑交易。
+- 适合在批跑结束后，只想把 `data/reports/paper_trade_batch_summary.csv` 重新按最新记录置顶时使用。
+
+**批量纸面交易汇总 CSV 改为单文件增量更新** (v0.77.42):
+- `scripts/batch/batch_paper_trade.ps1` 现在固定使用 `data/reports/paper_trade_batch_summary.csv`。
+- 每次运行会先读取旧记录，再把本次结果按最新置顶后写回同一个 CSV，不再生成新的时间戳文件。
+- 文件内按 `模型编号 + 计划开始 + 计划结束` 去重，确保同一批次重复执行时会更新旧记录而不是无限累积。
 
 **纸面交易停牌持仓估值修复** (v0.77.41):
 - 持仓估值优先使用 `close`，无效时自动回退 `pre_close`，避免停牌日现价为 0 导致市值错误归零。

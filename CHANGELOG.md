@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.43] - 2026-07-10
+
+### Changed
+
+- **批量纸面交易汇总新增 `append-summary-only` 开关**：
+  - `scripts/batch/batch_paper_trade.ps1` 新增 `-AppendSummaryOnly`，开启后只读取并重排已有 `data/reports/paper_trade_batch_summary.csv`，不再重跑交易。
+  - 保持单文件增量写入逻辑不变，最新记录仍会排在文件最前面。
+  - 适用于已经完成批跑、只想重新整合/排序汇总文件的场景。
+
+## [0.77.42] - 2026-07-10
+
+### Changed
+
+- **批量纸面交易汇总 CSV 改为单文件增量更新**：
+  - `scripts/batch/batch_paper_trade.ps1` 现在固定写入 `data/reports/paper_trade_batch_summary.csv`。
+  - 运行前会先读取已有 CSV，按 `模型编号 + 计划开始 + 计划结束` 去重，再将本次最新结果插入到最前面并覆盖写回。
+  - 新增 `完成时间` 与内部排序序号，确保最新记录始终排在文件最前面。
+
 ## [0.77.41] - 2026-07-10
 
 ### Fixed
