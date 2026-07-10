@@ -141,7 +141,16 @@ def load_position_snapshot(
     if daily_data is None or daily_data.empty:
         raise ValueError(f"无法加载 {corrected_trade_date} 的价格数据")
 
-    prices = {row["ts_code"]: row["close"] for _, row in daily_data.iterrows()}
+    prices = {}
+    for _, row in daily_data.iterrows():
+        price = row.get("close")
+        if pd.isna(price) or float(price) <= 0:
+            price = row.get("pre_close")
+        if pd.isna(price):
+            continue
+        price_val = float(price)
+        if price_val > 0:
+            prices[row["ts_code"]] = price_val
     stock_names = loader.build_stock_names_dict()
     positions_df = active_runner.broker.get_positions_detail(
         prices, corrected_trade_date, stock_names

@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.41] - 2026-07-10
+
+### Fixed
+
+- **修复纸面交易中停牌股票被按0价估值导致持仓收益率与市值异常**：
+  - `src/lazybull/paper/reporting.py` 持仓快照价格构建改为：优先 `close`，缺失或非正时回退 `pre_close`。
+  - `src/lazybull/paper/broker.py` 的 `get_positions_detail()` 在现价无效时回退买入价估值，避免展示 `-100%` 假亏损。
+  - `src/lazybull/paper/models.py` 的账户估值与权重计算统一增加无效价格回退买入价兜底，避免总资产被错误压低。
+  - `src/lazybull/paper/runner.py` 的 T0 指令估值价格映射同步加入 `pre_close` 回退与非正值过滤。
+  - 新增测试覆盖 0 价回退场景，防止回归。
+
 ## [0.77.40] - 2026-07-10
 
 ### Fixed

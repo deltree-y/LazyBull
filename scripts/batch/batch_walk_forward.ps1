@@ -27,7 +27,7 @@ $skip_training           = $false   # $true 启用 | $false 禁用
 $wf_period_configs = @(
     [PSCustomObject]@{
         Label = "0105"
-        SplitCount = 21
+        SplitCount = 10
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)

@@ -1148,7 +1148,14 @@ class PaperBroker:
         if extension_enabled and extension_mode != 'disabled':
             max_holding_days += max(0, extension_days)
         for ts_code, pos in positions.items():
-            current_price = current_prices.get(ts_code, 0.0)
+            raw_price = current_prices.get(ts_code)
+            try:
+                current_price = float(raw_price)
+            except (TypeError, ValueError):
+                current_price = 0.0
+            if pd.isna(current_price) or current_price <= 0:
+                # 停牌或行情缺失时，估值回退到买入价，避免将持仓错误计为0。
+                current_price = float(pos.buy_price)
             current_value = pos.shares * current_price
             cost_value = pos.shares * pos.buy_price + pos.buy_cost
             profit = current_value - cost_value

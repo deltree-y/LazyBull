@@ -155,6 +155,28 @@ def test_account_state_model(sample_prices):
     assert abs(weight - 10000.0/60000.0) < 1e-6
 
 
+def test_account_state_model_fallback_buy_price_when_price_is_zero():
+    """价格为0（如停牌）时，账户估值应回退买入价。"""
+    state = AccountState(
+        cash=50000.0,
+        positions={
+            '000001.SZ': Position(
+                ts_code='000001.SZ',
+                shares=1000,
+                buy_price=10.0,
+                buy_cost=15.0,
+                buy_date='20260121'
+            )
+        },
+        last_update='20260121'
+    )
+
+    prices = {'000001.SZ': 0.0}
+    assert state.get_position_value(prices) == 10000.0
+    assert state.get_total_value(prices) == 60000.0
+    assert abs(state.get_position_weight('000001.SZ', prices) - 10000.0 / 60000.0) < 1e-6
+
+
 def test_storage_save_and_load_account_state(temp_storage):
     """测试存储和读取账户状态"""
     state = AccountState(
@@ -718,6 +740,30 @@ def test_broker_get_positions_detail(sample_account, sample_prices):
         assert df.iloc[0]['持有天数'] == 5
         assert df.iloc[0]['持有剩余'] == 15
         assert df.iloc[0]['状态'] == '持有'
+
+
+def test_broker_get_positions_detail_fallback_buy_price_when_price_is_zero(sample_account):
+    """持仓明细在当前价为0时应回退买入价，避免错误显示-100%。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = PaperStorage(tmpdir)
+        broker = PaperBroker(sample_account, storage=storage)
+
+        sample_account.add_position(
+            ts_code='000001.SZ',
+            shares=1000,
+            buy_price=10.0,
+            buy_cost=15.0,
+            buy_date='20260115',
+            status='持有'
+        )
+        sample_account.update_cash(-10015.0)
+
+        df = broker.get_positions_detail({'000001.SZ': 0.0}, current_date='20260122')
+
+        assert len(df) == 1
+        assert df.iloc[0]['当前价格'] == 10.0
+        assert df.iloc[0]['当前市值'] == 10000.0
+        assert df.iloc[0]['收益率(%)'] > -1.0
 
 
 def test_broker_generate_orders_with_separate_prices():

@@ -123,6 +123,18 @@ class AccountState:
     cash: float  # 现金
     positions: dict = field(default_factory=dict)  # {ts_code: Position}
     last_update: str = ""  # 最后更新日期 YYYYMMDD
+
+    @staticmethod
+    def _resolve_valuation_price(pos: "Position", prices: dict, ts_code: str) -> float:
+        """解析估值价格，遇到停牌/缺失/非法价格时回退买入价。"""
+        price: Optional[float] = prices.get(ts_code)
+        try:
+            price_val = float(price)
+        except (TypeError, ValueError):
+            price_val = 0.0
+        if price_val > 0:
+            return price_val
+        return float(pos.buy_price)
     
     def get_position_value(self, prices: dict) -> float:
         """计算持仓市值
@@ -135,8 +147,7 @@ class AccountState:
         """
         total_value = 0.0
         for ts_code, pos in self.positions.items():
-            if ts_code in prices:
-                total_value += pos.shares * prices[ts_code]
+            total_value += pos.shares * self._resolve_valuation_price(pos, prices, ts_code)
         return total_value
     
     def get_total_value(self, prices: dict) -> float:
@@ -168,10 +179,7 @@ class AccountState:
             return 0.0
         
         pos = self.positions[ts_code]
-        if ts_code not in prices:
-            return 0.0
-        
-        pos_value = pos.shares * prices[ts_code]
+        pos_value = pos.shares * self._resolve_valuation_price(pos, prices, ts_code)
         return pos_value / total_value
 
 

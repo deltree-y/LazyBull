@@ -867,7 +867,14 @@ class PaperTradingRunner:
         
         current_prices = {}
         for _, row in daily_data.iterrows():
-            current_prices[row['ts_code']] = row.get('close', 0.0)
+            price = row.get('close')
+            if pd.isna(price) or float(price) <= 0:
+                price = row.get('pre_close')
+            if pd.isna(price):
+                continue
+            price_val = float(price)
+            if price_val > 0:
+                current_prices[row['ts_code']] = price_val
         
         # 生成指令（使用传入的 sell_price_type 参数）
         buy_instructions = self._generate_instructions(
