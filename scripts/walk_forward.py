@@ -3591,8 +3591,8 @@ def main():
         "--step",
         type=str,
         default="quarterly",
-        choices=["monthly", "quarterly", "semiannual"],
-        help="滚动频率（monthly|quarterly|semiannual），默认 quarterly"
+        choices=["monthly", "quarterly", "semiannual", "yearly"],
+        help="滚动频率（monthly|quarterly|semiannual|yearly），默认 quarterly"
     )
     parser.add_argument(
         "--train-window-years",

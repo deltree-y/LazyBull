@@ -92,11 +92,12 @@ def generate_walk_forward_splits(
     step_months_map = {
         "monthly": 1,
         "quarterly": 3,
-        "semiannual": 6
+        "semiannual": 6,
+        "yearly": 12,
     }
     
     if step_frequency not in step_months_map:
-        raise ValueError(f"不支持的 step_frequency: {step_frequency}，请使用 monthly, quarterly 或 semiannual")
+        raise ValueError(f"不支持的 step_frequency: {step_frequency}，请使用 monthly, quarterly, semiannual 或 yearly")
     
     step_months = step_months_map[step_frequency]
     
@@ -293,10 +294,11 @@ def generate_walk_forward_splits_by_count(
         "monthly": 1,
         "quarterly": 3,
         "semiannual": 6,
+        "yearly": 12,
     }
     if step_frequency not in step_months_map:
         raise ValueError(
-            f"不支持的 step_frequency: {step_frequency}，请使用 monthly, quarterly 或 semiannual"
+            f"不支持的 step_frequency: {step_frequency}，请使用 monthly, quarterly, semiannual 或 yearly"
         )
 
     all_trade_dates = trade_cal[

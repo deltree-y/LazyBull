@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.77.40] - 2026-07-10
+
+### Fixed
+
+- **修复 walk_forward 不支持 yearly 步进导致参数报错**：
+  - `scripts/walk_forward.py` 的 `--step` 参数选项新增 `yearly`。
+  - `src/lazybull/ml/walk_forward_utils.py` 的步长映射新增 `yearly=12`，并同步更新校验报错文案。
+
+## [0.77.39] - 2026-07-10
+
+### Changed
+
+- **batch walk-forward 步进选项补充 yearly**：
+  - `scripts/batch/batch_walk_forward.ps1` 的 `$step_list` 注释说明新增 `yearly`，与脚本可用步进选项保持一致。
+
 ## [0.77.38] - 2026-07-09
 
 ### Fixed

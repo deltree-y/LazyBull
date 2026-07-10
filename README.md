@@ -28,7 +28,14 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.77.38)
+### 当前版本 (v0.77.40)
+
+**walk_forward 支持 yearly 步进窗口** (v0.77.40):
+- `scripts/walk_forward.py` 的 `--step` 选项新增 `yearly`。
+- `src/lazybull/ml/walk_forward_utils.py` 同步支持 `yearly=12` 月步长，避免 `invalid choice: 'yearly'` 报错。
+
+**batch_walk_forward 的 `step_list` 增加 yearly 选项** (v0.77.39):
+- `scripts/batch/batch_walk_forward.ps1` 的 `step_list` 配置注释已补充 `yearly`，可直接在批量实验中使用年度步进窗口。
 
 **批量纸面交易脚本修复 `param` 位置错误导致无法启动** (v0.77.38):
 - `scripts/batch/batch_paper_trade.ps1` 现将默认值直接写在 `param` 参数默认值中，确保脚本可被 PowerShell 正常解析。

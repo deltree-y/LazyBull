@@ -27,7 +27,7 @@ $skip_training           = $false   # $true 启用 | $false 禁用
 $wf_period_configs = @(
     [PSCustomObject]@{
         Label = "0105"
-        SplitCount = 14
+        SplitCount = 21
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
@@ -65,9 +65,9 @@ $wf_period_configs = @(
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
-$step_list               = @("semiannual")   # monthly | quarterly | semiannual
-$train_window_years_list = @(6)             # 训练窗口年数
-$test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
+$step_list               = @("yearly")   # monthly | quarterly | semiannual | yearly
+$train_window_years_list = @(3)             # 训练窗口年数
+$test_window_months_list = @(12)             # 测试窗口月数（建议与标签持仓周期接近）
 $val_ratio_list          = @(0.2)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
 
 # ── 标签与任务 ────────────────────────────────────────────────
@@ -79,7 +79,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
-$learning_rate_list      = @(0.03, 0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
@@ -99,7 +99,7 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
 $rank_weight_topk_list   = @(200)         #50
-$rank_weight_list        = @(15)         #3
+$rank_weight_list        = @(20,50,100)         #3
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
@@ -110,7 +110,7 @@ $adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "1100"#,2200"#,3300"#,4400,5500,6600,7700,8800,9900,10000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "42"#,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 1    # 多种子筛选最少保留模型数 
 

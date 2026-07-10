@@ -126,7 +126,7 @@ class TrainingRunRecord:
     # Walk-forward 相关字段
     wf_run_id: Optional[str] = None  # walk-forward 运行ID（UUID或可读字符串）
     split_index: Optional[int] = None  # 切分索引（在一次 walk-forward 运行中的序号）
-    step_frequency: Optional[str] = None  # 滚动频率（monthly/quarterly/semiannual）
+    step_frequency: Optional[str] = None  # 滚动频率（monthly/quarterly/semiannual/yearly）
     test_start_date: Optional[str] = None  # 样本外测试开始日期
     test_end_date: Optional[str] = None  # 样本外测试结束日期
 
