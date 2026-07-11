@@ -153,15 +153,16 @@ $enable_lhb              = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约4%, 回撤提升约5%
 
 # ── 一致预期因子（report_rc 研报滚动聚合, 8000积分）──────────────
-$enable_consensus        = $true  # $true 启用 | $false 禁用
+$enable_consensus        = $false  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约2%, 回撤无明显变化
 
 # ── 一致预期修正因子（0512基于已有 report_rc 构建时序修正信号，无需额外下载）─
-#该因子有问题
+# 0711该因子有问题
 $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
-$enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
+$enable_cashflow_quality   = $true  # $true 启用 | $false 禁用（实验性因子）
+# 0711关闭后得分下降
 
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────

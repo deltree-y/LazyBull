@@ -153,10 +153,14 @@ def run_main(args):
     )
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
-    if config.get("market_regime_enabled") or config.get("market_regime_ma250_hard_stop"):
+    if config.get("market_regime_enabled"):
         logger.info(
-            f"  市场择时: 启用 (模式={config.get('market_regime_mode', 'binary')}"
-            f", MA250={'启用' if config.get('market_regime_ma250_hard_stop') else '关闭'})"
+            f"  市场择时: 启用 (模式={config.get('market_regime_mode', 'binary')})"
+        )
+    if config.get("market_regime_ma250_hard_stop"):
+        logger.info(
+            f"  MA250硬条件: 启用 (阈值={config.get('market_regime_ma250_threshold', 1.0)}"
+            f", 仓位={config.get('market_regime_ma250_exposure', 0.0):.0%})"
         )
     if config.get("industry_momentum_filter"):
         logger.info(
