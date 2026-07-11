@@ -138,14 +138,14 @@ $enable_cyq              = $true  # $true 启用 | $false 禁用
 # 0428:关闭后CAGR下降约3%, 回撤基本不变
 
 # ── 基金持仓因子（需5000+积分，需先下载 fund_portfolio）──────────
-$enable_fund             = $false  # $true 启用 | $false 禁用
+$enable_fund             = $true  # $true 启用 | $false 禁用
 #改为false似乎可以提升少量收益并减少少量回撤, 并提升稳定效果
 
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
 $enable_express          = $true  # $true 启用 | $false 禁用
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
-$enable_north            = $false  # $true 启用 | $false 禁用
+$enable_north            = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR下降约6%, 回撤上升8%
 
 # ── 龙虎榜因子（top_list 个股级, 2000+积分）──────────────────────
@@ -157,6 +157,7 @@ $enable_consensus        = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约2%, 回撤无明显变化
 
 # ── 一致预期修正因子（0512基于已有 report_rc 构建时序修正信号，无需额外下载）─
+#该因子有问题
 $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
@@ -165,9 +166,10 @@ $enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性�
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
 $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
+# 0711关闭后得分上升
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
-$factor_prune             = $false  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+$factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）

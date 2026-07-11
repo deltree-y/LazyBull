@@ -2981,7 +2981,7 @@ class PaperTradingRunner:
                 buy_atr = getattr(pos, "buy_atr_pct", 0.0)
                 if buy_atr > 0:
                     # ATR 动态阈值 = -multiplier × buy_atr_pct
-                    atr_multiplier = config.get("early_exit_atr_multiplier", 2.0)
+                    atr_multiplier = config.get("atr_multiplier", 2.0)
                     effective_threshold = -atr_multiplier * buy_atr
                     effective_threshold = max(effective_threshold, loss_threshold)
 

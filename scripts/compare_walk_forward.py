@@ -17,6 +17,7 @@ Walk-forward 实验对比脚本
 
 import argparse
 from bisect import bisect_right
+import re
 import sys
 import unicodedata
 from datetime import datetime
@@ -1857,6 +1858,54 @@ def _extract_run_timestamp(run_id: str) -> str:
     return ""
 
 
+def _latest_run_timestamp_from_text(value) -> str:
+    """从运行ID或运行ID列表中提取最新时间戳。"""
+    text = str(value) if value is not None and pd.notna(value) else ""
+    max_ts = ""
+    for match in re.finditer(r"wf_(\d{8})_(\d{6})", text):
+        ts = match.group(1) + match.group(2)
+        if ts > max_ts:
+            max_ts = ts
+    if not max_ts:
+        max_ts = _extract_run_timestamp(text)
+    return max_ts
+
+
+def _format_run_timestamp(ts: str) -> str:
+    if not ts or len(ts) != 14:
+        return ""
+    return f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} {ts[8:10]}:{ts[10:12]}:{ts[12:14]}"
+
+
+def sort_by_latest_run_time(
+    df: pd.DataFrame,
+    source_col: str,
+    secondary_sort_cols: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    """按来源列中的最新 wf_run_id 时间倒序排序，并添加可读的最新运行时间列。"""
+    if df.empty or source_col not in df.columns:
+        return df
+
+    result = df.copy()
+    result["__latest_run_ts"] = result[source_col].map(_latest_run_timestamp_from_text)
+    result["最新运行时间"] = result["__latest_run_ts"].map(_format_run_timestamp)
+    cols = list(result.columns)
+    if "最新运行时间" in cols and source_col in cols:
+        cols.remove("最新运行时间")
+        cols.insert(cols.index(source_col) + 1, "最新运行时间")
+        result = result[cols]
+    sort_cols = ["__latest_run_ts"]
+    ascending = [False]
+    if secondary_sort_cols:
+        for col in secondary_sort_cols:
+            if col in result.columns:
+                sort_cols.append(col)
+                ascending.append(False)
+    result = result.sort_values(sort_cols, ascending=ascending, na_position="last")
+    result = result.drop(columns=["__latest_run_ts"])
+    return result.reset_index(drop=True)
+
+
 def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     """按参数组合跨时间段聚合，输出稳定性汇总。"""
     if comp_df.empty:
@@ -2019,32 +2068,9 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     ordered_cols += [col for col in group_cols if col not in ordered_cols]
     result = pd.DataFrame(rows)
     result = result[[col for col in ordered_cols if col in result.columns]]
-
-    # 从 run_id_list 中提取最大时间戳（格式: 时间段:wf_YYYYMMDD_HHMMSS_xxx），
-    # 最近执行的批次排在最前面
-    run_id_list_col = COL_NAMES["run_id_list"]
-
-    def _max_run_ts(run_id_list_str: str) -> str:
-        """提取一行 run_id_list 中最大的时间戳（YYYYMMDDHHMMSS）。"""
-        max_ts = ""
-        for token in str(run_id_list_str).split("|"):
-            # token 格式: '时间段:wf_YYYYMMDD_HHMMSS_hash'
-            colon_idx = token.find(":")
-            if colon_idx == -1:
-                continue
-            run_id = token[colon_idx + 1 :].strip()
-            parts = run_id.split("_")
-            if len(parts) >= 3:
-                ts = parts[1] + parts[2]  # YYYYMMDDHHMMSS
-                if ts > max_ts:
-                    max_ts = ts
-        return max_ts
-
-    if run_id_list_col in result.columns:
-        result["_sort_ts"] = result[run_id_list_col].map(_max_run_ts)
-        result = result.sort_values("_sort_ts", ascending=False, na_position="last")
-        result = result.drop(columns=["_sort_ts"])
-    result = result.reset_index(drop=True)
+    result = sort_by_latest_run_time(
+        result, COL_NAMES["run_id_list"], [COL_NAMES["stability_score"]]
+    )
     return result
 
 
@@ -2292,6 +2318,7 @@ def build_model_alpha_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     front_cols = [
         "模型Alpha分",
         "模型Alpha排名",
+        "最新运行时间",
         "模型参数组ID",
         "样本数",
         "时间段数",
@@ -2311,7 +2338,10 @@ def build_model_alpha_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     ]
     ordered = [col for col in front_cols if col in result.columns]
     ordered += [col for col in model_cols if col not in ordered]
-    return result[ordered].sort_values("模型Alpha分", ascending=False).reset_index(drop=True)
+    result = sort_by_latest_run_time(result, "运行ID列表", ["模型Alpha分"])
+    ordered = [col for col in front_cols if col in result.columns]
+    ordered += [col for col in model_cols if col not in ordered]
+    return result[ordered].reset_index(drop=True)
 
 
 def build_trade_param_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
@@ -2413,6 +2443,11 @@ def build_trade_param_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
                 "最大回撤原始最差": round(
                     _numeric_series(group, COL_NAMES["chain_max_drawdown"]).min(), 6
                 ),
+                "运行ID列表": (
+                    " | ".join(group[COL_NAMES["wf_run_id"]].astype(str).tolist())
+                    if COL_NAMES["wf_run_id"] in group.columns
+                    else None
+                ),
                 "交易参数签名": group["交易参数签名"].iloc[0],
             }
         )
@@ -2428,6 +2463,7 @@ def build_trade_param_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     front_cols = [
         "交易收益分",
         "交易收益排名",
+        "最新运行时间",
         "交易参数组ID",
         "交易稳健分",
         "有效配对环境数",
@@ -2447,11 +2483,15 @@ def build_trade_param_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         "CAGR原始最差",
         "最大回撤原始均值",
         "最大回撤原始最差",
+        "运行ID列表",
         "交易参数签名",
     ]
     ordered = [col for col in front_cols if col in result.columns]
     ordered += [col for col in trade_cols if col not in ordered]
-    return result[ordered].sort_values("交易收益分", ascending=False).reset_index(drop=True)
+    result = sort_by_latest_run_time(result, "运行ID列表", ["交易收益分"])
+    ordered = [col for col in front_cols if col in result.columns]
+    ordered += [col for col in trade_cols if col not in ordered]
+    return result[ordered].reset_index(drop=True)
 
 
 def build_live_candidate_score_table(
@@ -2584,6 +2624,7 @@ def build_live_candidate_score_table(
     front_cols = [
         "实盘候选分",
         "候选排名",
+        "最新运行时间",
         "实盘候选原始分",
         "候选门槛通过",
         "候选门槛失败原因",
@@ -2609,7 +2650,10 @@ def build_live_candidate_score_table(
     ]
     ordered = [col for col in front_cols if col in result.columns]
     ordered += [col for col in candidate_cols if col not in ordered]
-    return result[ordered].sort_values("实盘候选分", ascending=False).reset_index(drop=True)
+    result = sort_by_latest_run_time(result, "运行ID列表", ["实盘候选分"])
+    ordered = [col for col in front_cols if col in result.columns]
+    ordered += [col for col in candidate_cols if col not in ordered]
+    return result[ordered].reset_index(drop=True)
 
 
 def build_metric_descriptions() -> pd.DataFrame:
@@ -3115,27 +3159,14 @@ def sort_by_run_time(df: pd.DataFrame, run_id_col: str = "运行ID") -> pd.DataF
     wf_run_id 格式: wf_YYYYMMDD_HHMMSS_xxxxxxxx
     提取 YYYYMMDD_HHMMSS 作为排序键。
     """
-    if run_id_col not in df.columns:
-        return df
-
-    def _extract_dt(run_id: str) -> str:
-        parts = str(run_id).split("_")
-        # parts: ['wf', 'YYYYMMDD', 'HHMMSS', 'xxxxxxxx']
-        if len(parts) >= 3:
-            return parts[1] + parts[2]  # YYYYMMDDHHMMSS
-        return run_id
-
-    df = df.copy()
-    df["_sort_key"] = df[run_id_col].map(_extract_dt)
-    df = df.sort_values("_sort_key", ascending=False, na_position="last")
-    df = df.drop(columns=["_sort_key"]).reset_index(drop=True)
-    return df
+    return sort_by_latest_run_time(df, run_id_col, ["综合得分"])
 
 
 def reorder_comparison_columns(df: pd.DataFrame) -> pd.DataFrame:
     """按汇总阅读习惯重排实验对比列顺序。"""
     preferred_order = [
         "运行ID",
+        "最新运行时间",
         "综合得分",
         "选股综合得分",
         "RankIC均值",

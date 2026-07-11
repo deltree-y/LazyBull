@@ -8,6 +8,7 @@ from scripts.compare_walk_forward import (
     build_model_alpha_score_table,
     build_trade_param_score_table,
     compute_selection_score,
+    sort_by_run_time,
 )
 
 
@@ -55,7 +56,7 @@ def _base_comp_df() -> pd.DataFrame:
             ]:
                 rows.append(
                     {
-                        "运行ID": f"{period}_{model_name}_{top_n}",
+                        "运行ID": (f"wf_{final_date}_090000_{model_name}_{top_n}"),
                         "批次时间段": period,
                         "最终日期": final_date,
                         "切分数量": 3,
@@ -123,3 +124,26 @@ def test_live_candidate_score_zero_when_hard_gate_fails() -> None:
 
     assert failed["实盘候选分"] == 0
     assert "模型Alpha分<60" in failed["候选门槛失败原因"]
+
+
+def test_score_tables_put_latest_run_first() -> None:
+    """评分表应把最新生成记录排在最前，并展示可读运行时间。"""
+    df = _base_comp_df()
+    model_df = build_model_alpha_score_table(df)
+
+    assert model_df.iloc[0]["最新运行时间"] == "2024-12-31 09:00:00"
+
+
+def test_comparison_table_sort_adds_latest_run_time() -> None:
+    """实验对比表也应按运行ID时间倒序，并补充最新运行时间列。"""
+    df = pd.DataFrame(
+        {
+            "运行ID": ["wf_20240101_090000_old", "wf_20250101_090000_new"],
+            "综合得分": [90.0, 10.0],
+        }
+    )
+
+    result = sort_by_run_time(df)
+
+    assert result.iloc[0]["运行ID"] == "wf_20250101_090000_new"
+    assert result.iloc[0]["最新运行时间"] == "2025-01-01 09:00:00"

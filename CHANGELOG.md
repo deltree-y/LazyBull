@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.80.1] - 2026-07-11
+
+### Changed
+
+- **walk-forward 对比报表默认按最新运行记录置顶**：
+  - `实验对比`、`模型Alpha评分`、`交易参数收益评分`、`实盘候选评分`、`跨时间段稳定性` 统一按最新 `wf_run_id` 时间倒序输出。
+  - 新增可读列 `最新运行时间`，避免只能从运行ID中手工辨认刚生成的训练结果。
+
 ## [0.80.0] - 2026-07-11
 
 ### Added
