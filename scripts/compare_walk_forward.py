@@ -59,148 +59,148 @@ _BT_REBALANCE_FREQ_MAX = 60
 # ---------------------------------------------------------------------------
 COL_NAMES = {
     # 标识
-    "wf_run_id":                  "运行ID",
-    "KEY_说明":                   "重点说明",
-    "KEY_Top20_list":             "重点Top20最新名单",
-    "KEY_Top30_list":             "重点Top30最新名单",
-    "key_top20_hit_rate_mean":    "重点Top20命中率均值",
+    "wf_run_id": "运行ID",
+    "KEY_说明": "重点说明",
+    "KEY_Top20_list": "重点Top20最新名单",
+    "KEY_Top30_list": "重点Top30最新名单",
+    "key_top20_hit_rate_mean": "重点Top20命中率均值",
     "key_top20_avg_return_median_mean": "重点Top20收益中位数均值",
-    "key_top30_hit_rate_mean":    "重点Top30命中率均值",
+    "key_top30_hit_rate_mean": "重点Top30命中率均值",
     "key_top30_avg_return_median_mean": "重点Top30收益中位数均值",
-    "batch_run_id":               "批次ID",
-    "batch_period_label":         "批次时间段",
-    "split_count":                "切分数量",
-    "final_date":                 "最终日期",
+    "batch_run_id": "批次ID",
+    "batch_period_label": "批次时间段",
+    "split_count": "切分数量",
+    "final_date": "最终日期",
     # OOS 性能
-    "n_splits":                   "切分数",
-    "model_version_range":        "模型版本范围",
-    "oos_rankic_ir_mean":         "OOS_RankIC_IR均值",
-    "oos_rankic_ir_std":          "OOS_RankIC_IR标准差",
-    "oos_cross_split_ir":         "跨切分IR",
-    "daily_rankic_mean":          "RankIC均值",
-    "icir":                       "ICIR",
-    "selection_monotonicity":     "分层单调性(近似)",
-    "oos_rankic_ir_trend":        "RankIC_IR趋势(近-早)",
-    "oos_top30_median_mean":      "Top30中位收益均值",
-    "oos_top30_win_rate":         "Top30胜率",
-    "oos_top30_worst_median":     "Top30最差中位收益",
-    "oos_top30_skew_score_mean":  "Top30偏斜度均值",
-    "oos_top30_lift_mean":        "Top30超额均值",
-    "oos_top100_median_mean":     "Top100中位收益均值",
-    "oos_top100_win_rate":        "Top100胜率",
-    "oos_top300_median_mean":     "Top300中位收益均值",
-    "oos_top300_win_rate":        "Top300胜率",
+    "n_splits": "切分数",
+    "model_version_range": "模型版本范围",
+    "oos_rankic_ir_mean": "OOS_RankIC_IR均值",
+    "oos_rankic_ir_std": "OOS_RankIC_IR标准差",
+    "oos_cross_split_ir": "跨切分IR",
+    "daily_rankic_mean": "RankIC均值",
+    "icir": "ICIR",
+    "selection_monotonicity": "分层单调性(近似)",
+    "oos_rankic_ir_trend": "RankIC_IR趋势(近-早)",
+    "oos_top30_median_mean": "Top30中位收益均值",
+    "oos_top30_win_rate": "Top30胜率",
+    "oos_top30_worst_median": "Top30最差中位收益",
+    "oos_top30_skew_score_mean": "Top30偏斜度均值",
+    "oos_top30_lift_mean": "Top30超额均值",
+    "oos_top100_median_mean": "Top100中位收益均值",
+    "oos_top100_win_rate": "Top100胜率",
+    "oos_top300_median_mean": "Top300中位收益均值",
+    "oos_top300_win_rate": "Top300胜率",
     # OOS 回测
-    "chain_cagr":                 "全周期CAGR",
-    "chain_total_return":         "全周期总收益",
-    "chain_max_drawdown":         "全周期链式最大回撤",
-    "chain_sharpe":               "全周期链式夏普",
-    "chain_trading_days":         "全周期链式交易日数",
-    "bt_annual_return_mean":      "回测年化收益均值",
-    "bt_sharpe_mean":             "回测夏普均值",
-    "bt_max_drawdown_worst":      "回测最大回撤(最差)",
-    "bt_calmar_mean":             "回测Calmar均值",
-    "bt_win_rate":                "回测胜率",
-    "bt_total_return_mean":       "回测总收益均值",
-    "bt_volatility_mean":         "回测波动率均值",
+    "chain_cagr": "全周期CAGR",
+    "chain_total_return": "全周期总收益",
+    "chain_max_drawdown": "全周期链式最大回撤",
+    "chain_sharpe": "全周期链式夏普",
+    "chain_trading_days": "全周期链式交易日数",
+    "bt_annual_return_mean": "回测年化收益均值",
+    "bt_sharpe_mean": "回测夏普均值",
+    "bt_max_drawdown_worst": "回测最大回撤(最差)",
+    "bt_calmar_mean": "回测Calmar均值",
+    "bt_win_rate": "回测胜率",
+    "bt_total_return_mean": "回测总收益均值",
+    "bt_volatility_mean": "回测波动率均值",
     "bt_signal_confidence_block_rate_mean": "门控持币率均值",
     "bt_signal_confidence_avg_exposure_mean": "门控平均仓位",
     "bt_signal_confidence_avg_score_mean": "门控平均置信度",
-    "bt_rebalance_freq":         "回测调仓频率",
-    "bt_initial_capital":         "回测初始资金",
-    "bt_sell_timing":             "回测卖出时机",
+    "bt_rebalance_freq": "回测调仓频率",
+    "bt_initial_capital": "回测初始资金",
+    "bt_sell_timing": "回测卖出时机",
     "signal_confidence_gate_enabled": "信号置信度门控",
     "signal_confidence_gate_top_k": "门控TopK",
     "signal_confidence_gate_thresholds": "门控阈值",
     "signal_confidence_gate_exposure_levels": "门控仓位系数",
-    "bt_exclude_st":              "回测排除ST",
-    "bt_min_list_days":           "回测最少上市天数",
-    "bt_max_weight_per_stock":    "回测单股最大权重",
-    "bt_max_per_industry":        "回测单行业最大持仓数",
-    "bt_stop_loss_enabled":       "回测止损",
-    "bt_stop_loss_drawdown_pct":  "回测回撤止损%",
+    "bt_exclude_st": "回测排除ST",
+    "bt_min_list_days": "回测最少上市天数",
+    "bt_max_weight_per_stock": "回测单股最大权重",
+    "bt_max_per_industry": "回测单行业最大持仓数",
+    "bt_stop_loss_enabled": "回测止损",
+    "bt_stop_loss_drawdown_pct": "回测回撤止损%",
     "bt_stop_loss_trailing_enabled": "回测移动止损",
-    "bt_stop_loss_trailing_pct":  "回测移动止损%",
+    "bt_stop_loss_trailing_pct": "回测移动止损%",
     "bt_stop_loss_consecutive_limit_down": "回测连续跌停止损",
-    "bt_weakness_exit_enabled":    "回测弱势退出",
-    "bt_weakness_exit_threshold":  "回测弱势退出阈值",
+    "bt_weakness_exit_enabled": "回测弱势退出",
+    "bt_weakness_exit_threshold": "回测弱势退出阈值",
     "bt_weakness_exit_consecutive_days": "回测弱势退出连续天数",
     "bt_weakness_exit_min_holding_days": "回测弱势退出最低持有",
-    "bt_weakness_exit_weights":    "回测弱势退出权重",
+    "bt_weakness_exit_weights": "回测弱势退出权重",
     "bt_weakness_exit_industry_filter": "回测弱势退出行业过滤",
     "bt_weakness_exit_industry_bottom_pct": "回测弱势退出行业阈值",
-    "bt_equity_curve_enabled":    "回测ECT",
+    "bt_equity_curve_enabled": "回测ECT",
     "bt_equity_curve_drawdown_thresholds": "回测ECT回撤阈值",
     "bt_equity_curve_exposure_levels": "回测ECT仓位系数",
-    "bt_equity_curve_ma_short":   "回测ECT短均线",
-    "bt_equity_curve_ma_long":    "回测ECT长均线",
+    "bt_equity_curve_ma_short": "回测ECT短均线",
+    "bt_equity_curve_ma_long": "回测ECT长均线",
     "bt_equity_curve_recovery_mode": "回测ECT恢复模式",
     "bt_equity_curve_recovery_step": "回测ECT恢复步长",
     "bt_equity_curve_recovery_delay_periods": "回测ECT恢复等待",
     # 训练质量
-    "val_rankic_ir_mean":         "验证集RankIC_IR均值",
-    "train_val_ir_gap":           "验证_OOS_IR差距",
-    "best_iter_mean":             "最佳迭代均值",
-    "best_iter_min":              "最佳迭代最小值",
-    "best_iter_max":              "最佳迭代最大值",
-    "best_iter_std":              "最佳迭代标准差",
+    "val_rankic_ir_mean": "验证集RankIC_IR均值",
+    "train_val_ir_gap": "验证_OOS_IR差距",
+    "best_iter_mean": "最佳迭代均值",
+    "best_iter_min": "最佳迭代最小值",
+    "best_iter_max": "最佳迭代最大值",
+    "best_iter_std": "最佳迭代标准差",
     "posterior_tree_candidate_count_mean": "后验候选数均值",
     "posterior_tree_small_space_splits": "后验小搜索空间split数",
     "posterior_tree_selected_limit_mean": "后验选中树数均值",
     "posterior_tree_model_max_trees_mean": "后验最大可用树数均值",
     # 跨时间段稳定性
-    "period_count":               "时间段数",
-    "period_labels":              "时间段列表",
-    "run_id_list":                "运行ID列表",
-    "score_mean":                 "综合得分均值",
-    "score_std":                  "综合得分标准差",
-    "score_min":                  "综合得分最差",
-    "score_max":                  "综合得分最佳",
-    "chain_cagr_mean":            "跨时间段CAGR均值",
-    "chain_cagr_std":             "跨时间段CAGR标准差",
-    "chain_cagr_min":             "跨时间段CAGR最差",
-    "chain_max_drawdown_mean":    "跨时间段回撤均值",
-    "chain_max_drawdown_worst":   "跨时间段回撤最差",
-    "oos_cross_split_ir_mean":    "跨时间段跨切分IR均值",
-    "oos_cross_split_ir_std":     "跨时间段跨切分IR标准差",
-    "bt_win_rate_mean":           "跨时间段回测胜率均值",
-    "bt_win_rate_min":            "跨时间段回测胜率最差",
-    "chain_sharpe_mean":          "跨时间段夏普均值",
-    "chain_sharpe_std":           "跨时间段夏普标准差",
-    "stability_score":            "时间段稳定性分",
+    "period_count": "时间段数",
+    "period_labels": "时间段列表",
+    "run_id_list": "运行ID列表",
+    "score_mean": "综合得分均值",
+    "score_std": "综合得分标准差",
+    "score_min": "综合得分最差",
+    "score_max": "综合得分最佳",
+    "chain_cagr_mean": "跨时间段CAGR均值",
+    "chain_cagr_std": "跨时间段CAGR标准差",
+    "chain_cagr_min": "跨时间段CAGR最差",
+    "chain_max_drawdown_mean": "跨时间段回撤均值",
+    "chain_max_drawdown_worst": "跨时间段回撤最差",
+    "oos_cross_split_ir_mean": "跨时间段跨切分IR均值",
+    "oos_cross_split_ir_std": "跨时间段跨切分IR标准差",
+    "bt_win_rate_mean": "跨时间段回测胜率均值",
+    "bt_win_rate_min": "跨时间段回测胜率最差",
+    "chain_sharpe_mean": "跨时间段夏普均值",
+    "chain_sharpe_std": "跨时间段夏普标准差",
+    "stability_score": "时间段稳定性分",
     # 训练参数
-    "split_count":                "切分数量",
-    "final_date":                 "最终日期",
-    "wf_start_date":              "WF起始日期",
-    "wf_end_date":                "WF结束日期",
-    "step":                       "滚动频率",
-    "train_window_years":         "训练窗口年数",
-    "test_window_months":         "测试窗口月数",
-    "val_ratio":                  "验证集比例",
-    "label_column":               "标签列",
-    "task":                       "任务类型",
-    "label_transform":            "标签变换",
-    "n_estimators":               "树数量",
-    "max_depth":                  "最大深度",
-    "num_leaves":                 "LGB叶子数",
-    "learning_rate":              "学习率",
-    "subsample":                  "样本采样比",
-    "colsample_bytree":           "特征采样比",
-    "min_child_weight":           "最小叶节点权重",
-    "gamma":                      "gamma",
-    "reg_alpha":                  "L1正则",
-    "reg_lambda":                 "L2正则",
-    "early_stopping_rounds":      "早停轮数",
-    "early_stopping_metric":      "早停指标",
+    "split_count": "切分数量",
+    "final_date": "最终日期",
+    "wf_start_date": "WF起始日期",
+    "wf_end_date": "WF结束日期",
+    "step": "滚动频率",
+    "train_window_years": "训练窗口年数",
+    "test_window_months": "测试窗口月数",
+    "val_ratio": "验证集比例",
+    "label_column": "标签列",
+    "task": "任务类型",
+    "label_transform": "标签变换",
+    "n_estimators": "树数量",
+    "max_depth": "最大深度",
+    "num_leaves": "LGB叶子数",
+    "learning_rate": "学习率",
+    "subsample": "样本采样比",
+    "colsample_bytree": "特征采样比",
+    "min_child_weight": "最小叶节点权重",
+    "gamma": "gamma",
+    "reg_alpha": "L1正则",
+    "reg_lambda": "L2正则",
+    "early_stopping_rounds": "早停轮数",
+    "early_stopping_metric": "早停指标",
     "adaptive_best_iter_retrain": "自适应候选重训",
     "adaptive_low_iter_max_retries": "自适应低迭代重试上限",
-    "ensemble_seeds":             "多种子bagging种子",
+    "ensemble_seeds": "多种子bagging种子",
     "ensemble_seed_keep_top_ratio": "多种子保留比例",
     "ensemble_seed_keep_min_models": "多种子最少保留模型数",
     "posterior_tree_selection_mode": "后验树数选优模式",
     "posterior_tree_selection_metric": "后验树数选优主指标",
     "posterior_tree_selection_topk": "后验树数选优TopK",
-    "posterior_tree_candidates":  "后验树数候选配置",
+    "posterior_tree_candidates": "后验树数候选配置",
     "posterior_tree_selection_enabled": "后验树数选优启用",
     "posterior_tree_candidate_limits": "后验树数候选列表",
     "posterior_tree_candidate_count": "后验树数候选数",
@@ -212,32 +212,32 @@ COL_NAMES = {
     "posterior_tree_selected_topk_hit_rate": "后验选中TopK命中率",
     "posterior_tree_selected_rankic_ir": "后验选中RankIC_IR",
     "posterior_tree_selected_rankic_mean": "后验选中RankIC均值",
-    "rank_weight_enabled":        "rank权重启用",
-    "rank_weight_topk":           "rank权重TopK",
-    "rank_weight":                "rank权重值",
+    "rank_weight_enabled": "rank权重启用",
+    "rank_weight_topk": "rank权重TopK",
+    "rank_weight": "rank权重值",
     "rank_weight_topk_weight_mode": "rank权重TopK模式",
-    "time_decay_half_life":       "时间衰减半衰期",
-    "objective":                  "目标函数",
-    "algorithm":                  "算法",
-    "enable_fundamental":         "基本面因子",
-    "enable_alt":                 "另类因子",
-    "enable_margin":              "融资融券因子",
-    "enable_cyq":                 "筹码胜率因子",
-    "enable_fund":                "基金持仓因子",
-    "enable_express":             "业绩快报因子",
-    "feature_stability_filter":   "特征稳定性筛选",
-    "factor_prune":               "因子精简",
-    "ensemble_offsets":           "多偏移集成",
-    "enable_enhanced_features":   "增强因子",
-    "enable_north_features":      "北向资金因子",
-    "enable_lhb_features":        "龙虎榜因子",
-    "enable_consensus_features":  "一致预期因子",
+    "time_decay_half_life": "时间衰减半衰期",
+    "objective": "目标函数",
+    "algorithm": "算法",
+    "enable_fundamental": "基本面因子",
+    "enable_alt": "另类因子",
+    "enable_margin": "融资融券因子",
+    "enable_cyq": "筹码胜率因子",
+    "enable_fund": "基金持仓因子",
+    "enable_express": "业绩快报因子",
+    "feature_stability_filter": "特征稳定性筛选",
+    "factor_prune": "因子精简",
+    "ensemble_offsets": "多偏移集成",
+    "enable_enhanced_features": "增强因子",
+    "enable_north_features": "北向资金因子",
+    "enable_lhb_features": "龙虎榜因子",
+    "enable_consensus_features": "一致预期因子",
     "enable_cashflow_quality_features": "现金流质量因子",
     "enable_consensus_revision_features": "一致预期修正因子",
-    "oos_backtest":               "OOS回测",
-    "oos_backtest_months":        "OOS回测月数",
-    "bt_top_n":                   "回测TopN",
-    "signal_gate_mode":           "信号门控模式",
+    "oos_backtest": "OOS回测",
+    "oos_backtest_months": "OOS回测月数",
+    "bt_top_n": "回测TopN",
+    "signal_gate_mode": "信号门控模式",
     "signal_gate_cost_multiplier": "门控成本倍数",
     "signal_gate_round_trip_cost": "门控往返成本",
     "signal_gate_quality_enabled": "门控质量监控",
@@ -245,61 +245,61 @@ COL_NAMES = {
     "signal_gate_quality_threshold": "门控质量阈值",
     "signal_gate_quality_halflife": "门控质量半衰期",
     "signal_gate_percentile_warmup": "门控百分位预热",
-    "signal_gate_dynamic_topn":   "动态TopN",
+    "signal_gate_dynamic_topn": "动态TopN",
     "signal_gate_topn_high_multiplier": "高置信TopN系数",
     "signal_gate_topn_low_multiplier": "低置信TopN系数",
-    "holding_bonus_enabled":      "持仓奖励",
-    "holding_bonus_sigma":        "持仓奖励Sigma",
+    "holding_bonus_enabled": "持仓奖励",
+    "holding_bonus_sigma": "持仓奖励Sigma",
     # 盈亏动态持仓
-    "enable_profit_based_holding":  "盈亏动态持仓",
-    "early_exit_loss_threshold":    "早退亏损阈值",
-    "early_exit_holding_ratio":     "早退持仓比例",
-    "profit_extension_threshold":   "盈利延持阈值",
-    "profit_extension_days":        "盈利延持天数",
-    "profit_extension_mode":        "盈利延持模式",
+    "enable_profit_based_holding": "盈亏动态持仓",
+    "early_exit_loss_threshold": "早退亏损阈值",
+    "early_exit_holding_ratio": "早退持仓比例",
+    "profit_extension_threshold": "盈利延持阈值",
+    "profit_extension_days": "盈利延持天数",
+    "profit_extension_mode": "盈利延持模式",
     "profit_extension_strength_threshold": "强势度阈值",
     # ATR 动态阈值与仓位缩放
-    "use_atr_for_early_exit":       "ATR动态阈值",
-    "atr_multiplier":               "ATR倍数",
+    "use_atr_for_early_exit": "ATR动态阈值",
+    "atr_multiplier": "ATR倍数",
     # 亏损提前换出二次确认
-    "early_exit_mode":                        "早退模式",
-    "early_exit_strength_protect_threshold":   "早退保护阈值",
-    "early_exit_max_reprieves":               "早退最大缓刑",
-    "time_stop_loss_enabled":        "时间止损",
-    "time_stop_loss_days":           "时间止损天数",
-    "time_stop_loss_profit_ratio":   "时间止损利润阈值",
+    "early_exit_mode": "早退模式",
+    "early_exit_strength_protect_threshold": "早退保护阈值",
+    "early_exit_max_reprieves": "早退最大缓刑",
+    "time_stop_loss_enabled": "时间止损",
+    "time_stop_loss_days": "时间止损天数",
+    "time_stop_loss_profit_ratio": "时间止损利润阈值",
     # 行业轮动加权
-    "industry_rotation_enhanced":    "行业轮动加权",
-    "industry_rotation_alpha":       "轮动Alpha",
-    "industry_momentum_filter":      "行业动量过滤",
-    "industry_momentum_bottom_pct":  "行业动量过滤比例",
+    "industry_rotation_enhanced": "行业轮动加权",
+    "industry_rotation_alpha": "轮动Alpha",
+    "industry_momentum_filter": "行业动量过滤",
+    "industry_momentum_bottom_pct": "行业动量过滤比例",
     # 仓位管理
-    "position_sizing":               "仓位模式",
-    "kelly_vol_window":              "Kelly波动窗口",
-    "kelly_max_leverage":            "Kelly仓位上限",
-    "market_regime":                 "市场择时",
-    "market_regime_bear_threshold":  "熊市阈值",
-    "market_regime_bear_exposure":   "熊市仓位",
-    "market_regime_mode":            "市场择时模式",
-    "market_regime_vol_target":      "波动率目标",
+    "position_sizing": "仓位模式",
+    "kelly_vol_window": "Kelly波动窗口",
+    "kelly_max_leverage": "Kelly仓位上限",
+    "market_regime": "市场择时",
+    "market_regime_bear_threshold": "熊市阈值",
+    "market_regime_bear_exposure": "熊市仓位",
+    "market_regime_mode": "市场择时模式",
+    "market_regime_vol_target": "波动率目标",
     "market_regime_trend_threshold": "趋势阈值",
-    "market_regime_min_exposure":    "最低仓位",
-    "market_regime_combine_method":  "择时组合方式",
-    "market_regime_trend_guard":     "趋势保护",
-    "market_regime_drawdown_guard":  "回撤保护",
+    "market_regime_min_exposure": "最低仓位",
+    "market_regime_combine_method": "择时组合方式",
+    "market_regime_trend_guard": "趋势保护",
+    "market_regime_drawdown_guard": "回撤保护",
     "market_regime_drawdown_threshold": "回撤保护阈值",
     "market_regime_ma250_hard_stop": "MA250硬条件",
     "market_regime_ma250_threshold": "MA250阈值",
-    "market_regime_ma250_exposure":  "MA250仓位",
+    "market_regime_ma250_exposure": "MA250仓位",
     "market_regime_ma250_atr_scaling": "MA250 ATR缩放",
-    "stagger_tranches":             "分批调仓批数",
+    "stagger_tranches": "分批调仓批数",
     # 整体持仓止盈
-    "take_profit_threshold":        "整体止盈阈值",
-    "take_profit_refill":           "止盈后补仓",
+    "take_profit_threshold": "整体止盈阈值",
+    "take_profit_refill": "止盈后补仓",
     "enable_early_rebalance_on_empty": "空仓提前调仓",
-    "skip_training":               "跳过训练",
-    "start_model_version":         "起始模型版本",
-    "no_deploy_train":             "禁用部署训练",
+    "skip_training": "跳过训练",
+    "start_model_version": "起始模型版本",
+    "no_deploy_train": "禁用部署训练",
 }
 
 # ---------------------------------------------------------------------------
@@ -310,84 +310,365 @@ PARAM_COLS = [
     "batch_run_id",
     "batch_period_label",
     "algorithm",
-    "split_count", "final_date",
-    "wf_start_date", "wf_end_date", "step",
-    "train_window_years", "test_window_months", "val_ratio",
-    "label_column", "task", "label_transform",
-    "n_estimators", "max_depth", "num_leaves", "learning_rate",
-    "subsample", "colsample_bytree", "min_child_weight",
-    "gamma", "reg_alpha", "reg_lambda",
-    "early_stopping_rounds", "early_stopping_metric",
-    "adaptive_best_iter_retrain", "adaptive_low_iter_max_retries",
-    "ensemble_seeds", "ensemble_seed_keep_top_ratio", "ensemble_seed_keep_min_models",
-    "posterior_tree_selection_mode", "posterior_tree_selection_metric",
-    "posterior_tree_selection_topk", "posterior_tree_candidates",
-    "posterior_tree_selection_enabled", "posterior_tree_candidate_limits",
-    "posterior_tree_candidate_count", "posterior_tree_base_best_iteration",
-    "posterior_tree_model_max_trees", "posterior_tree_selected_limit",
-    "posterior_tree_selected_topk_median", "posterior_tree_selected_topk_lift",
+    "split_count",
+    "final_date",
+    "wf_start_date",
+    "wf_end_date",
+    "step",
+    "train_window_years",
+    "test_window_months",
+    "val_ratio",
+    "label_column",
+    "task",
+    "label_transform",
+    "n_estimators",
+    "max_depth",
+    "num_leaves",
+    "learning_rate",
+    "subsample",
+    "colsample_bytree",
+    "min_child_weight",
+    "gamma",
+    "reg_alpha",
+    "reg_lambda",
+    "early_stopping_rounds",
+    "early_stopping_metric",
+    "adaptive_best_iter_retrain",
+    "adaptive_low_iter_max_retries",
+    "ensemble_seeds",
+    "ensemble_seed_keep_top_ratio",
+    "ensemble_seed_keep_min_models",
+    "posterior_tree_selection_mode",
+    "posterior_tree_selection_metric",
+    "posterior_tree_selection_topk",
+    "posterior_tree_candidates",
+    "posterior_tree_selection_enabled",
+    "posterior_tree_candidate_limits",
+    "posterior_tree_candidate_count",
+    "posterior_tree_base_best_iteration",
+    "posterior_tree_model_max_trees",
+    "posterior_tree_selected_limit",
+    "posterior_tree_selected_topk_median",
+    "posterior_tree_selected_topk_lift",
     "posterior_tree_selected_topk_hit_rate",
-    "posterior_tree_selected_rankic_ir", "posterior_tree_selected_rankic_mean",
-    "rank_weight_enabled", "rank_weight_topk", "rank_weight",
-    "time_decay_half_life", "objective",
-    "enable_fundamental", "enable_alt", "enable_margin", "enable_cyq",
-    "enable_fund", "enable_express", "feature_stability_filter", "factor_prune",
-    "ensemble_offsets", "enable_enhanced_features", "enable_north_features",
-    "enable_lhb_features", "enable_consensus_features",
-    "enable_cashflow_quality_features", "enable_consensus_revision_features",
-    "oos_backtest", "oos_backtest_months", "bt_top_n", "bt_rebalance_freq",
+    "posterior_tree_selected_rankic_ir",
+    "posterior_tree_selected_rankic_mean",
+    "rank_weight_enabled",
+    "rank_weight_topk",
+    "rank_weight",
+    "time_decay_half_life",
+    "objective",
+    "enable_fundamental",
+    "enable_alt",
+    "enable_margin",
+    "enable_cyq",
+    "enable_fund",
+    "enable_express",
+    "feature_stability_filter",
+    "factor_prune",
+    "ensemble_offsets",
+    "enable_enhanced_features",
+    "enable_north_features",
+    "enable_lhb_features",
+    "enable_consensus_features",
+    "enable_cashflow_quality_features",
+    "enable_consensus_revision_features",
+    "oos_backtest",
+    "oos_backtest_months",
+    "bt_top_n",
+    "bt_rebalance_freq",
     "bt_initial_capital",
     "signal_confidence_gate_enabled",
     "signal_confidence_gate_top_k",
     "signal_confidence_gate_thresholds",
     "signal_confidence_gate_exposure_levels",
-    "signal_gate_mode", "signal_gate_cost_multiplier", "signal_gate_round_trip_cost",
-    "signal_gate_quality_enabled", "signal_gate_quality_window",
-    "signal_gate_quality_threshold", "signal_gate_quality_halflife",
-    "signal_gate_percentile_warmup", "signal_gate_dynamic_topn",
-    "signal_gate_topn_high_multiplier", "signal_gate_topn_low_multiplier",
-    "holding_bonus_enabled", "holding_bonus_sigma",
-    "bt_sell_timing", "bt_exclude_st", "bt_min_list_days",
-    "bt_max_weight_per_stock", "bt_max_per_industry",
-    "bt_stop_loss_enabled", "bt_stop_loss_drawdown_pct",
-    "bt_stop_loss_trailing_enabled", "bt_stop_loss_trailing_pct",
+    "signal_gate_mode",
+    "signal_gate_cost_multiplier",
+    "signal_gate_round_trip_cost",
+    "signal_gate_quality_enabled",
+    "signal_gate_quality_window",
+    "signal_gate_quality_threshold",
+    "signal_gate_quality_halflife",
+    "signal_gate_percentile_warmup",
+    "signal_gate_dynamic_topn",
+    "signal_gate_topn_high_multiplier",
+    "signal_gate_topn_low_multiplier",
+    "holding_bonus_enabled",
+    "holding_bonus_sigma",
+    "bt_sell_timing",
+    "bt_exclude_st",
+    "bt_min_list_days",
+    "bt_max_weight_per_stock",
+    "bt_max_per_industry",
+    "bt_stop_loss_enabled",
+    "bt_stop_loss_drawdown_pct",
+    "bt_stop_loss_trailing_enabled",
+    "bt_stop_loss_trailing_pct",
     "bt_stop_loss_consecutive_limit_down",
-    "bt_weakness_exit_enabled", "bt_weakness_exit_threshold",
-    "bt_weakness_exit_consecutive_days", "bt_weakness_exit_min_holding_days",
+    "bt_weakness_exit_enabled",
+    "bt_weakness_exit_threshold",
+    "bt_weakness_exit_consecutive_days",
+    "bt_weakness_exit_min_holding_days",
     "bt_weakness_exit_weights",
-    "bt_weakness_exit_industry_filter", "bt_weakness_exit_industry_bottom_pct",
-    "bt_equity_curve_enabled", "bt_equity_curve_drawdown_thresholds",
-    "bt_equity_curve_exposure_levels", "bt_equity_curve_ma_short",
-    "bt_equity_curve_ma_long", "bt_equity_curve_recovery_mode",
-    "bt_equity_curve_recovery_step", "bt_equity_curve_recovery_delay_periods",
+    "bt_weakness_exit_industry_filter",
+    "bt_weakness_exit_industry_bottom_pct",
+    "bt_equity_curve_enabled",
+    "bt_equity_curve_drawdown_thresholds",
+    "bt_equity_curve_exposure_levels",
+    "bt_equity_curve_ma_short",
+    "bt_equity_curve_ma_long",
+    "bt_equity_curve_recovery_mode",
+    "bt_equity_curve_recovery_step",
+    "bt_equity_curve_recovery_delay_periods",
     # 盈亏动态持仓
     "enable_profit_based_holding",
-    "early_exit_loss_threshold", "early_exit_holding_ratio",
-    "profit_extension_threshold", "profit_extension_days",
-    "profit_extension_mode", "profit_extension_strength_threshold",
+    "early_exit_loss_threshold",
+    "early_exit_holding_ratio",
+    "profit_extension_threshold",
+    "profit_extension_days",
+    "profit_extension_mode",
+    "profit_extension_strength_threshold",
     # ATR 动态阈值与仓位缩放
-    "use_atr_for_early_exit", "atr_multiplier",
+    "use_atr_for_early_exit",
+    "atr_multiplier",
     # 亏损提前换出二次确认
-    "early_exit_mode", "early_exit_strength_protect_threshold", "early_exit_max_reprieves",
-    "time_stop_loss_enabled", "time_stop_loss_days", "time_stop_loss_profit_ratio",
+    "early_exit_mode",
+    "early_exit_strength_protect_threshold",
+    "early_exit_max_reprieves",
+    "time_stop_loss_enabled",
+    "time_stop_loss_days",
+    "time_stop_loss_profit_ratio",
     # 行业轮动加权
-    "industry_momentum_filter", "industry_momentum_bottom_pct",
-    "industry_rotation_enhanced", "industry_rotation_alpha",
+    "industry_momentum_filter",
+    "industry_momentum_bottom_pct",
+    "industry_rotation_enhanced",
+    "industry_rotation_alpha",
     # 仓位管理
-    "position_sizing", "kelly_vol_window", "kelly_max_leverage",
-    "market_regime", "market_regime_bear_threshold", "market_regime_bear_exposure",
-    "market_regime_mode", "market_regime_vol_target",
-    "market_regime_trend_threshold", "market_regime_min_exposure",
-    "market_regime_combine_method", "market_regime_trend_guard",
-    "market_regime_drawdown_guard", "market_regime_drawdown_threshold",
-    "market_regime_ma250_hard_stop", "market_regime_ma250_threshold",
-    "market_regime_ma250_exposure", "market_regime_ma250_atr_scaling",
+    "position_sizing",
+    "kelly_vol_window",
+    "kelly_max_leverage",
+    "market_regime",
+    "market_regime_bear_threshold",
+    "market_regime_bear_exposure",
+    "market_regime_mode",
+    "market_regime_vol_target",
+    "market_regime_trend_threshold",
+    "market_regime_min_exposure",
+    "market_regime_combine_method",
+    "market_regime_trend_guard",
+    "market_regime_drawdown_guard",
+    "market_regime_drawdown_threshold",
+    "market_regime_ma250_hard_stop",
+    "market_regime_ma250_threshold",
+    "market_regime_ma250_exposure",
+    "market_regime_ma250_atr_scaling",
     "stagger_tranches",
     # 整体持仓止盈
-    "take_profit_threshold", "take_profit_refill",
+    "take_profit_threshold",
+    "take_profit_refill",
     "enable_early_rebalance_on_empty",
-    "skip_training", "start_model_version", "no_deploy_train",
+    "skip_training",
+    "start_model_version",
+    "no_deploy_train",
 ]
+
+
+MODEL_PARAM_KEYS = [
+    "algorithm",
+    "split_count",
+    "final_date",
+    "wf_start_date",
+    "wf_end_date",
+    "step",
+    "train_window_years",
+    "test_window_months",
+    "val_ratio",
+    "label_column",
+    "task",
+    "label_transform",
+    "n_estimators",
+    "max_depth",
+    "num_leaves",
+    "learning_rate",
+    "subsample",
+    "colsample_bytree",
+    "min_child_weight",
+    "gamma",
+    "reg_alpha",
+    "reg_lambda",
+    "early_stopping_rounds",
+    "early_stopping_metric",
+    "adaptive_best_iter_retrain",
+    "adaptive_low_iter_max_retries",
+    "ensemble_seeds",
+    "ensemble_seed_keep_top_ratio",
+    "ensemble_seed_keep_min_models",
+    "posterior_tree_selection_mode",
+    "posterior_tree_selection_metric",
+    "posterior_tree_selection_topk",
+    "posterior_tree_candidates",
+    "rank_weight_enabled",
+    "rank_weight_topk",
+    "rank_weight",
+    "rank_weight_topk_weight_mode",
+    "time_decay_half_life",
+    "objective",
+    "enable_fundamental",
+    "enable_alt",
+    "enable_margin",
+    "enable_cyq",
+    "enable_fund",
+    "enable_express",
+    "feature_stability_filter",
+    "factor_prune",
+    "ensemble_offsets",
+    "enable_enhanced_features",
+    "enable_north_features",
+    "enable_lhb_features",
+    "enable_consensus_features",
+    "enable_cashflow_quality_features",
+    "enable_consensus_revision_features",
+    "skip_training",
+    "start_model_version",
+    "no_deploy_train",
+]
+
+
+TRADE_PARAM_KEYS = [
+    "oos_backtest",
+    "oos_backtest_months",
+    "bt_top_n",
+    "bt_rebalance_freq",
+    "bt_initial_capital",
+    "bt_sell_timing",
+    "bt_exclude_st",
+    "bt_min_list_days",
+    "bt_max_weight_per_stock",
+    "bt_max_per_industry",
+    "signal_confidence_gate_enabled",
+    "signal_confidence_gate_top_k",
+    "signal_confidence_gate_thresholds",
+    "signal_confidence_gate_exposure_levels",
+    "signal_gate_mode",
+    "signal_gate_cost_multiplier",
+    "signal_gate_round_trip_cost",
+    "signal_gate_quality_enabled",
+    "signal_gate_quality_window",
+    "signal_gate_quality_threshold",
+    "signal_gate_quality_halflife",
+    "signal_gate_percentile_warmup",
+    "signal_gate_dynamic_topn",
+    "signal_gate_topn_high_multiplier",
+    "signal_gate_topn_low_multiplier",
+    "holding_bonus_enabled",
+    "holding_bonus_sigma",
+    "bt_stop_loss_enabled",
+    "bt_stop_loss_drawdown_pct",
+    "bt_stop_loss_trailing_enabled",
+    "bt_stop_loss_trailing_pct",
+    "bt_stop_loss_consecutive_limit_down",
+    "bt_weakness_exit_enabled",
+    "bt_weakness_exit_threshold",
+    "bt_weakness_exit_consecutive_days",
+    "bt_weakness_exit_min_holding_days",
+    "bt_weakness_exit_weights",
+    "bt_weakness_exit_industry_filter",
+    "bt_weakness_exit_industry_bottom_pct",
+    "bt_equity_curve_enabled",
+    "bt_equity_curve_drawdown_thresholds",
+    "bt_equity_curve_exposure_levels",
+    "bt_equity_curve_ma_short",
+    "bt_equity_curve_ma_long",
+    "bt_equity_curve_recovery_mode",
+    "bt_equity_curve_recovery_step",
+    "bt_equity_curve_recovery_delay_periods",
+    "enable_profit_based_holding",
+    "early_exit_loss_threshold",
+    "early_exit_holding_ratio",
+    "profit_extension_threshold",
+    "profit_extension_days",
+    "profit_extension_mode",
+    "profit_extension_strength_threshold",
+    "use_atr_for_early_exit",
+    "atr_multiplier",
+    "early_exit_mode",
+    "early_exit_strength_protect_threshold",
+    "early_exit_max_reprieves",
+    "time_stop_loss_enabled",
+    "time_stop_loss_days",
+    "time_stop_loss_profit_ratio",
+    "industry_momentum_filter",
+    "industry_momentum_bottom_pct",
+    "industry_rotation_enhanced",
+    "industry_rotation_alpha",
+    "position_sizing",
+    "kelly_vol_window",
+    "kelly_max_leverage",
+    "market_regime",
+    "market_regime_bear_threshold",
+    "market_regime_bear_exposure",
+    "market_regime_mode",
+    "market_regime_vol_target",
+    "market_regime_trend_threshold",
+    "market_regime_min_exposure",
+    "market_regime_combine_method",
+    "market_regime_trend_guard",
+    "market_regime_drawdown_guard",
+    "market_regime_drawdown_threshold",
+    "market_regime_ma250_hard_stop",
+    "market_regime_ma250_threshold",
+    "market_regime_ma250_exposure",
+    "market_regime_ma250_atr_scaling",
+    "stagger_tranches",
+    "take_profit_threshold",
+    "take_profit_refill",
+    "enable_early_rebalance_on_empty",
+]
+
+
+PAIR_CONTEXT_KEYS = ["batch_period_label", "final_date", "split_count"]
+
+
+MODEL_ALPHA_SCORE_CONFIG = [
+    ("选股综合得分均值", 0.30, "high"),
+    ("ICIR均值", 0.20, "high"),
+    ("Top30超额均值", 0.15, "high"),
+    ("Top30最差中位收益", 0.15, "high"),
+    ("分层单调性均值", 0.10, "high"),
+    ("验证_OOS_IR差距", 0.10, "low"),
+]
+
+
+TRADE_YIELD_SCORE_CONFIG = [
+    ("CAGR配对百分位均值", 0.40, "high"),
+    ("总收益配对百分位均值", 0.25, "high"),
+    ("Calmar配对百分位均值", 0.15, "high"),
+    ("夏普配对百分位均值", 0.10, "high"),
+    ("胜率配对百分位均值", 0.10, "high"),
+]
+
+
+TRADE_ROBUST_SCORE_CONFIG = [
+    ("最大回撤配对百分位均值", 0.35, "high"),
+    ("Calmar配对百分位均值", 0.25, "high"),
+    ("夏普配对百分位均值", 0.20, "high"),
+    ("胜率配对百分位均值", 0.10, "high"),
+    ("CAGR最差配对百分位", 0.10, "high"),
+]
+
+
+CANDIDATE_SCORE_CONFIG = [
+    ("模型Alpha分", 0.45, "high"),
+    ("交易收益分", 0.30, "high"),
+    ("交易稳健分", 0.15, "high"),
+    ("最差场景防守分", 0.10, "high"),
+]
+
+
+CANDIDATE_MIN_MODEL_ALPHA = 60.0
+CANDIDATE_MIN_EFFECTIVE_PAIR_CONTEXTS = 2
+CANDIDATE_MIN_CHAIN_MAX_DRAWDOWN = -0.35
+CANDIDATE_MIN_CHAIN_CAGR_WORST = -0.05
 
 
 def _is_missing_param_value(value) -> bool:
@@ -441,10 +722,7 @@ def _get_open_trade_dates_and_index(
         return cached
 
     open_dates = (
-        trade_cal.loc[trade_cal["is_open"] == 1, "cal_date"]
-        .astype(str)
-        .sort_values()
-        .tolist()
+        trade_cal.loc[trade_cal["is_open"] == 1, "cal_date"].astype(str).sort_values().tolist()
     )
     index_map = {trade_date: idx for idx, trade_date in enumerate(open_dates)}
     cached = (open_dates, index_map)
@@ -452,7 +730,9 @@ def _get_open_trade_dates_and_index(
     return cached
 
 
-def _find_nearest_trade_date_backward(all_trade_dates: list[str], target_date: str) -> Optional[str]:
+def _find_nearest_trade_date_backward(
+    all_trade_dates: list[str], target_date: str
+) -> Optional[str]:
     if not all_trade_dates:
         return None
     pos = bisect_right(all_trade_dates, target_date)
@@ -946,6 +1226,7 @@ def _concat_summary_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
     all_df = pd.concat(prepared_frames, ignore_index=True)
     return all_df.reindex(columns=ordered_columns)
 
+
 # ---------------------------------------------------------------------------
 # 综合得分配置：(英文列键, 权重, 方向)
 #   "high"    → 值越大越好
@@ -955,24 +1236,26 @@ def _concat_summary_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 SCORE_CONFIG = [
     # ── 回测指标（60%）：真实组合模拟，最直接反映参数优劣 ──────────
-    ("chain_cagr",               0.20, "high"),     # 全周期串联 CAGR：最终最该看的盈利能力
-    ("bt_win_rate",               0.15, "high"),     # 回测胜率：各切分正收益占比
-    ("bt_sharpe_mean",            0.15, "high"),     # 回测夏普均值：风险收益比
-    ("chain_max_drawdown",        0.10, "high"),     # 全周期链式最大回撤：真实风险下限
+    ("chain_cagr", 0.20, "high"),  # 全周期串联 CAGR：最终最该看的盈利能力
+    ("bt_win_rate", 0.15, "high"),  # 回测胜率：各切分正收益占比
+    ("bt_sharpe_mean", 0.15, "high"),  # 回测夏普均值：风险收益比
+    ("chain_max_drawdown", 0.10, "high"),  # 全周期链式最大回撤：真实风险下限
     # ── 统计指标（32%）：辅助验证，防止回测过拟合 ─────────────────
-    ("oos_cross_split_ir",        0.10, "high"),     # 跨切分IR：核心稳健性
-    ("oos_top30_win_rate",        0.05, "high"),     # Top30胜率：策略持续性
-    ("oos_top30_worst_median",    0.05, "high"),     # Top30最差切分：抗压能力
-    ("oos_rankic_ir_trend",       0.05, "high"),     # IC趋势：alpha是否在衰减
-    ("oos_top30_median_mean",     0.03, "high"),     # Top30中位收益：核心盈利能力
-    ("oos_top30_lift_mean",       0.02, "high"),     # Top30超额：纯选股能力
+    ("oos_cross_split_ir", 0.10, "high"),  # 跨切分IR：核心稳健性
+    ("oos_top30_win_rate", 0.05, "high"),  # Top30胜率：策略持续性
+    ("oos_top30_worst_median", 0.05, "high"),  # Top30最差切分：抗压能力
+    ("oos_rankic_ir_trend", 0.05, "high"),  # IC趋势：alpha是否在衰减
+    ("oos_top30_median_mean", 0.03, "high"),  # Top30中位收益：核心盈利能力
+    ("oos_top30_lift_mean", 0.02, "high"),  # Top30超额：纯选股能力
     ("oos_top30_skew_score_mean", 0.02, "abs_low"),  # 偏斜度：极端日干扰风险（绝对值越小越好）
     # ── 训练质量（8%）：过拟合检测 ────────────────────────────────
-    ("train_val_ir_gap",          0.08, "low"),      # 验证_OOS差距：过拟合风险（越小越好）
+    ("train_val_ir_gap", 0.08, "low"),  # 验证_OOS差距：过拟合风险（越小越好）
 ]
 
 
-def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str, source_dir: Optional[Path] = None) -> dict:
+def load_chain_metrics(
+    raw_dir: Optional[Path], wf_run_id: str, source_dir: Optional[Path] = None
+) -> dict:
     """读取 chain_nav 并计算全周期指标。"""
     empty = {
         "chain_total_return": None,
@@ -1011,7 +1294,7 @@ def load_chain_metrics(raw_dir: Optional[Path], wf_run_id: str, source_dir: Opti
     drawdown = (nav - cummax) / cummax
     max_drawdown = drawdown.min() if not drawdown.empty else None
     daily_ret = nav.pct_change().dropna()
-    volatility = daily_ret.std() * (252 ** 0.5) if len(daily_ret) > 1 else None
+    volatility = daily_ret.std() * (252**0.5) if len(daily_ret) > 1 else None
     sharpe = None
     if cagr is not None and volatility is not None and volatility > 0:
         sharpe = (cagr - 0.03) / volatility
@@ -1037,7 +1320,9 @@ def load_all_summaries_from_raw_dirs(
 
     csv_files: list[tuple[Path, Path]] = []
     for raw_dir in existing_raw_dirs:
-        csv_files.extend((raw_dir, csv_file) for csv_file in sorted(raw_dir.glob("walk_forward_summary_*.csv")))
+        csv_files.extend(
+            (raw_dir, csv_file) for csv_file in sorted(raw_dir.glob("walk_forward_summary_*.csv"))
+        )
 
     if len(csv_files) == 0:
         joined_dirs = ", ".join(str(raw_dir) for raw_dir in existing_raw_dirs)
@@ -1066,7 +1351,9 @@ def load_all_summaries_from_raw_dirs(
 
     all_df = _concat_summary_frames(frames)
     all_df = _fill_missing_bt_rebalance_freq(all_df, data_root)
-    logger.info(f"合并后总行数: {len(all_df)}，unique wf_run_id: {all_df['wf_run_id'].nunique() if 'wf_run_id' in all_df.columns else '?'}")
+    logger.info(
+        f"合并后总行数: {len(all_df)}，unique wf_run_id: {all_df['wf_run_id'].nunique() if 'wf_run_id' in all_df.columns else '?'}"
+    )
     return all_df
 
 
@@ -1080,7 +1367,11 @@ def build_auto_compare_jobs(data_root: Path) -> list[dict]:
     walk_forward_root = data_root / "walk_forward"
     raw_dir = walk_forward_root / "raw"
     batches_root = walk_forward_root / "batches"
-    batch_raw_dirs = sorted(path for path in batches_root.glob("*/raw") if path.is_dir()) if batches_root.exists() else []
+    batch_raw_dirs = (
+        sorted(path for path in batches_root.glob("*/raw") if path.is_dir())
+        if batches_root.exists()
+        else []
+    )
 
     jobs = [
         {
@@ -1119,10 +1410,17 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     # -----------------------------------------------------------------------
     # OOS 性能指标（来自 test_daily_metrics 展开列）
     # -----------------------------------------------------------------------
-    def safe_mean(col): return group[col].mean() if col in group.columns else None
-    def safe_std(col):  return group[col].std()  if col in group.columns else None
-    def safe_min(col):  return group[col].min()  if col in group.columns else None
-    def safe_max(col):  return group[col].max()  if col in group.columns else None
+    def safe_mean(col):
+        return group[col].mean() if col in group.columns else None
+
+    def safe_std(col):
+        return group[col].std() if col in group.columns else None
+
+    def safe_min(col):
+        return group[col].min() if col in group.columns else None
+
+    def safe_max(col):
+        return group[col].max() if col in group.columns else None
 
     # KEY 重点字段（前置展示）
     row["KEY_说明"] = "重点: hit rate=TopK逐日平均收益>0占比; list=最新OOS日期预测名单"
@@ -1130,7 +1428,9 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     row["KEY_Top30_list"] = None
     if "split_index" in group.columns:
         sorted_group = group.copy()
-        sorted_group["__split_index_int"] = pd.to_numeric(sorted_group["split_index"], errors="coerce")
+        sorted_group["__split_index_int"] = pd.to_numeric(
+            sorted_group["split_index"], errors="coerce"
+        )
         sorted_group = sorted_group.sort_values("__split_index_int")
     else:
         sorted_group = group.copy()
@@ -1151,12 +1451,18 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     row["key_top30_avg_return_median_mean"] = round(key30_med, 6) if key30_med is not None else None
 
     # OOS RankIC IR
-    oos_ir_series = group["daily_rankic_ir"] if "daily_rankic_ir" in group.columns else pd.Series(dtype=float)
+    oos_ir_series = (
+        group["daily_rankic_ir"] if "daily_rankic_ir" in group.columns else pd.Series(dtype=float)
+    )
     oos_ir_mean = oos_ir_series.mean() if len(oos_ir_series) else None
-    oos_ir_std  = oos_ir_series.std()  if len(oos_ir_series) > 1 else None
+    oos_ir_std = oos_ir_series.std() if len(oos_ir_series) > 1 else None
     row["oos_rankic_ir_mean"] = round(oos_ir_mean, 4) if oos_ir_mean is not None else None
-    row["oos_rankic_ir_std"]  = round(oos_ir_std,  4) if oos_ir_std  is not None else None
-    row["oos_cross_split_ir"] = round(oos_ir_mean / oos_ir_std, 3) if (oos_ir_mean and oos_ir_std and oos_ir_std != 0) else None
+    row["oos_rankic_ir_std"] = round(oos_ir_std, 4) if oos_ir_std is not None else None
+    row["oos_cross_split_ir"] = (
+        round(oos_ir_mean / oos_ir_std, 3)
+        if (oos_ir_mean and oos_ir_std and oos_ir_std != 0)
+        else None
+    )
 
     # RankIC 均值与 ICIR（纯选股能力核心指标）
     rankic_mean_series = (
@@ -1180,44 +1486,62 @@ def aggregate_run(group: pd.DataFrame) -> dict:
 
     # OOS RankIC 衰减检测（最近3个split均值 - 最早3个split均值）
     if len(oos_ir_series) >= 6:
-        sorted_ir = group.sort_values("split_index")["daily_rankic_ir"] if "daily_rankic_ir" in group.columns else oos_ir_series
-        row["oos_rankic_ir_trend"] = round(sorted_ir.iloc[-3:].mean() - sorted_ir.iloc[:3].mean(), 4)
+        sorted_ir = (
+            group.sort_values("split_index")["daily_rankic_ir"]
+            if "daily_rankic_ir" in group.columns
+            else oos_ir_series
+        )
+        row["oos_rankic_ir_trend"] = round(
+            sorted_ir.iloc[-3:].mean() - sorted_ir.iloc[:3].mean(), 4
+        )
     else:
         row["oos_rankic_ir_trend"] = None
 
     # Top30 指标（以中位数为核心，不受极端日干扰）
-    med30_col  = "diagnostic_Top30_逐日均值_50分位"
+    med30_col = "diagnostic_Top30_逐日均值_50分位"
     mean30_col = "diagnostic_Top30_逐日均值的均值"
-    std30_col  = "diagnostic_Top30_逐日均值的标准差"
+    std30_col = "diagnostic_Top30_逐日均值的标准差"
     lift30_col = "diagnostic_Top30_相对全市场提升_均值"
 
     if med30_col in group.columns:
         med30_series = group[med30_col].dropna()
-        row["oos_top30_median_mean"]   = round(med30_series.mean(), 6) if len(med30_series) else None
-        row["oos_top30_win_rate"]      = round((med30_series > 0).mean(), 3) if len(med30_series) else None
-        row["oos_top30_worst_median"]  = round(med30_series.min(), 6) if len(med30_series) else None
+        row["oos_top30_median_mean"] = round(med30_series.mean(), 6) if len(med30_series) else None
+        row["oos_top30_win_rate"] = (
+            round((med30_series > 0).mean(), 3) if len(med30_series) else None
+        )
+        row["oos_top30_worst_median"] = round(med30_series.min(), 6) if len(med30_series) else None
     else:
-        row["oos_top30_median_mean"] = row["oos_top30_win_rate"] = row["oos_top30_worst_median"] = None
+        row["oos_top30_median_mean"] = row["oos_top30_win_rate"] = row["oos_top30_worst_median"] = (
+            None
+        )
 
     # Top30 偏斜度（均值/中位数 gap，衡量是否被极端日驱动）
     if all(c in group.columns for c in [mean30_col, med30_col, std30_col]):
         valid = group[[mean30_col, med30_col, std30_col]].dropna()
         if len(valid):
-            skew_scores = (valid[mean30_col] - valid[med30_col]) / valid[std30_col].replace(0, np.nan)
+            skew_scores = (valid[mean30_col] - valid[med30_col]) / valid[std30_col].replace(
+                0, np.nan
+            )
             row["oos_top30_skew_score_mean"] = round(skew_scores.mean(), 3)
         else:
             row["oos_top30_skew_score_mean"] = None
     else:
         row["oos_top30_skew_score_mean"] = None
 
-    row["oos_top30_lift_mean"] = round(safe_mean(lift30_col), 6) if safe_mean(lift30_col) is not None else None
+    row["oos_top30_lift_mean"] = (
+        round(safe_mean(lift30_col), 6) if safe_mean(lift30_col) is not None else None
+    )
 
     # Top100 指标
     med100_col = "diagnostic_Top100_逐日均值_50分位"
     if med100_col in group.columns:
         med100_series = group[med100_col].dropna()
-        row["oos_top100_median_mean"] = round(med100_series.mean(), 6) if len(med100_series) else None
-        row["oos_top100_win_rate"]    = round((med100_series > 0).mean(), 3) if len(med100_series) else None
+        row["oos_top100_median_mean"] = (
+            round(med100_series.mean(), 6) if len(med100_series) else None
+        )
+        row["oos_top100_win_rate"] = (
+            round((med100_series > 0).mean(), 3) if len(med100_series) else None
+        )
     else:
         row["oos_top100_median_mean"] = row["oos_top100_win_rate"] = None
 
@@ -1225,8 +1549,12 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     med300_col = "diagnostic_Top300_逐日均值_50分位"
     if med300_col in group.columns:
         med300_series = group[med300_col].dropna()
-        row["oos_top300_median_mean"] = round(med300_series.mean(), 6) if len(med300_series) else None
-        row["oos_top300_win_rate"]    = round((med300_series > 0).mean(), 3) if len(med300_series) else None
+        row["oos_top300_median_mean"] = (
+            round(med300_series.mean(), 6) if len(med300_series) else None
+        )
+        row["oos_top300_win_rate"] = (
+            round((med300_series > 0).mean(), 3) if len(med300_series) else None
+        )
     else:
         row["oos_top300_median_mean"] = row["oos_top300_win_rate"] = None
 
@@ -1256,30 +1584,49 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     # -----------------------------------------------------------------------
     if "bt_total_return" in group.columns:
         bt_ret = group["bt_total_return"].dropna()
-        bt_ar  = group["bt_annual_return"].dropna() if "bt_annual_return" in group.columns else pd.Series(dtype=float)
-        bt_sh  = group["bt_sharpe"].dropna()        if "bt_sharpe"        in group.columns else pd.Series(dtype=float)
-        bt_md  = group["bt_max_drawdown"].dropna()  if "bt_max_drawdown"  in group.columns else pd.Series(dtype=float)
-        bt_cal = group["bt_calmar"].dropna()         if "bt_calmar"        in group.columns else pd.Series(dtype=float)
-        bt_vol = group["bt_volatility"].dropna()     if "bt_volatility"    in group.columns else pd.Series(dtype=float)
+        bt_ar = (
+            group["bt_annual_return"].dropna()
+            if "bt_annual_return" in group.columns
+            else pd.Series(dtype=float)
+        )
+        bt_sh = (
+            group["bt_sharpe"].dropna() if "bt_sharpe" in group.columns else pd.Series(dtype=float)
+        )
+        bt_md = (
+            group["bt_max_drawdown"].dropna()
+            if "bt_max_drawdown" in group.columns
+            else pd.Series(dtype=float)
+        )
+        bt_cal = (
+            group["bt_calmar"].dropna() if "bt_calmar" in group.columns else pd.Series(dtype=float)
+        )
+        bt_vol = (
+            group["bt_volatility"].dropna()
+            if "bt_volatility" in group.columns
+            else pd.Series(dtype=float)
+        )
 
-        row["bt_total_return_mean"]  = round(bt_ret.mean(), 6) if len(bt_ret) else None
-        row["bt_annual_return_mean"] = round(bt_ar.mean(),  6) if len(bt_ar)  else None
-        row["bt_sharpe_mean"]        = round(bt_sh.mean(),  4) if len(bt_sh)  else None
-        row["bt_max_drawdown_worst"] = round(bt_md.min(),   6) if len(bt_md)  else None
-        row["bt_calmar_mean"]        = round(bt_cal.mean(), 4) if len(bt_cal) else None
-        row["bt_volatility_mean"]    = round(bt_vol.mean(), 6) if len(bt_vol) else None
-        row["bt_win_rate"]           = round((bt_ret > 0).mean(), 3) if len(bt_ret) else None
+        row["bt_total_return_mean"] = round(bt_ret.mean(), 6) if len(bt_ret) else None
+        row["bt_annual_return_mean"] = round(bt_ar.mean(), 6) if len(bt_ar) else None
+        row["bt_sharpe_mean"] = round(bt_sh.mean(), 4) if len(bt_sh) else None
+        row["bt_max_drawdown_worst"] = round(bt_md.min(), 6) if len(bt_md) else None
+        row["bt_calmar_mean"] = round(bt_cal.mean(), 4) if len(bt_cal) else None
+        row["bt_volatility_mean"] = round(bt_vol.mean(), 6) if len(bt_vol) else None
+        row["bt_win_rate"] = round((bt_ret > 0).mean(), 3) if len(bt_ret) else None
         bt_gate_block = (
             group["bt_signal_confidence_block_rate"].dropna()
-            if "bt_signal_confidence_block_rate" in group.columns else pd.Series(dtype=float)
+            if "bt_signal_confidence_block_rate" in group.columns
+            else pd.Series(dtype=float)
         )
         bt_gate_exposure = (
             group["bt_signal_confidence_avg_exposure"].dropna()
-            if "bt_signal_confidence_avg_exposure" in group.columns else pd.Series(dtype=float)
+            if "bt_signal_confidence_avg_exposure" in group.columns
+            else pd.Series(dtype=float)
         )
         bt_gate_score = (
             group["bt_signal_confidence_avg_score"].dropna()
-            if "bt_signal_confidence_avg_score" in group.columns else pd.Series(dtype=float)
+            if "bt_signal_confidence_avg_score" in group.columns
+            else pd.Series(dtype=float)
         )
         row["bt_signal_confidence_block_rate_mean"] = (
             round(bt_gate_block.mean(), 6) if len(bt_gate_block) else None
@@ -1291,11 +1638,18 @@ def aggregate_run(group: pd.DataFrame) -> dict:
             round(bt_gate_score.mean(), 6) if len(bt_gate_score) else None
         )
     else:
-        for k in ["bt_total_return_mean", "bt_annual_return_mean", "bt_sharpe_mean",
-                   "bt_max_drawdown_worst", "bt_calmar_mean", "bt_volatility_mean", "bt_win_rate",
-                   "bt_signal_confidence_block_rate_mean",
-                   "bt_signal_confidence_avg_exposure_mean",
-                   "bt_signal_confidence_avg_score_mean"]:
+        for k in [
+            "bt_total_return_mean",
+            "bt_annual_return_mean",
+            "bt_sharpe_mean",
+            "bt_max_drawdown_worst",
+            "bt_calmar_mean",
+            "bt_volatility_mean",
+            "bt_win_rate",
+            "bt_signal_confidence_block_rate_mean",
+            "bt_signal_confidence_avg_exposure_mean",
+            "bt_signal_confidence_avg_score_mean",
+        ]:
             row[k] = None
 
     # -----------------------------------------------------------------------
@@ -1307,7 +1661,9 @@ def aggregate_run(group: pd.DataFrame) -> dict:
         row["val_rankic_ir_mean"] = round(val_ir_series.mean(), 4) if len(val_ir_series) else None
         # 泛化差距（val IR 越接近 oos IR 越好；负值说明 oos 反而更好，通常是正常的）
         if row["val_rankic_ir_mean"] is not None and row["oos_rankic_ir_mean"] is not None:
-            row["train_val_ir_gap"] = round(row["val_rankic_ir_mean"] - row["oos_rankic_ir_mean"], 4)
+            row["train_val_ir_gap"] = round(
+                row["val_rankic_ir_mean"] - row["oos_rankic_ir_mean"], 4
+            )
         else:
             row["train_val_ir_gap"] = None
     else:
@@ -1317,11 +1673,13 @@ def aggregate_run(group: pd.DataFrame) -> dict:
     if "best_iteration" in group.columns:
         bi = group["best_iteration"].dropna()
         row["best_iter_mean"] = round(bi.mean(), 1) if len(bi) else None
-        row["best_iter_min"]  = int(bi.min())       if len(bi) else None
-        row["best_iter_max"]  = int(bi.max())       if len(bi) else None
-        row["best_iter_std"]  = round(bi.std(), 1)  if len(bi) > 1 else None
+        row["best_iter_min"] = int(bi.min()) if len(bi) else None
+        row["best_iter_max"] = int(bi.max()) if len(bi) else None
+        row["best_iter_std"] = round(bi.std(), 1) if len(bi) > 1 else None
     else:
-        row["best_iter_mean"] = row["best_iter_min"] = row["best_iter_max"] = row["best_iter_std"] = None
+        row["best_iter_mean"] = row["best_iter_min"] = row["best_iter_max"] = row[
+            "best_iter_std"
+        ] = None
 
     # 后验树数选优统计
     if "posterior_tree_candidate_count" in group.columns:
@@ -1397,24 +1755,38 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
     scored_cols = [col for col, _w, _d in sorted(SCORE_CONFIG, key=lambda x: -x[1])]
 
     non_scored_metric_cols = [
-        "n_splits", "model_version_range",
+        "n_splits",
+        "model_version_range",
         # 选股指标组合补充
-        "daily_rankic_mean", "icir", "selection_monotonicity",
+        "daily_rankic_mean",
+        "icir",
+        "selection_monotonicity",
         # 全周期串联补充
-        "chain_total_return", "chain_sharpe", "chain_trading_days",
+        "chain_total_return",
+        "chain_sharpe",
+        "chain_trading_days",
         # 回测补充
-        "bt_annual_return_mean", "bt_calmar_mean", "bt_total_return_mean",
-        "bt_max_drawdown_worst", "bt_volatility_mean",
+        "bt_annual_return_mean",
+        "bt_calmar_mean",
+        "bt_total_return_mean",
+        "bt_max_drawdown_worst",
+        "bt_volatility_mean",
         "bt_signal_confidence_block_rate_mean",
         "bt_signal_confidence_avg_exposure_mean",
         "bt_signal_confidence_avg_score_mean",
         # 统计补充
-        "oos_rankic_ir_mean", "oos_rankic_ir_std",
-        "oos_top100_median_mean", "oos_top100_win_rate",
-        "oos_top300_median_mean", "oos_top300_win_rate",
+        "oos_rankic_ir_mean",
+        "oos_rankic_ir_std",
+        "oos_top100_median_mean",
+        "oos_top100_win_rate",
+        "oos_top300_median_mean",
+        "oos_top300_win_rate",
         # 训练质量补充
         "val_rankic_ir_mean",
-        "best_iter_mean", "best_iter_min", "best_iter_max", "best_iter_std",
+        "best_iter_mean",
+        "best_iter_min",
+        "best_iter_max",
+        "best_iter_std",
     ]
 
     posterior_tail_cols = [
@@ -1426,16 +1798,25 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
     param_cols_ordered = [c for c in PARAM_COLS if c != "wf_run_id"]
 
     key_cols = [
-        "key_top20_hit_rate_mean", "key_top20_avg_return_median_mean",
-        "key_top30_hit_rate_mean", "key_top30_avg_return_median_mean",
+        "key_top20_hit_rate_mean",
+        "key_top20_avg_return_median_mean",
+        "key_top30_hit_rate_mean",
+        "key_top30_avg_return_median_mean",
     ]
-    all_cols = [
-        "wf_run_id",
-        "max_depth",
-        "learning_rate",
-        "rank_weight_topk",
-        "rank_weight",
-    ] + key_cols + scored_cols + non_scored_metric_cols + param_cols_ordered + posterior_tail_cols
+    all_cols = (
+        [
+            "wf_run_id",
+            "max_depth",
+            "learning_rate",
+            "rank_weight_topk",
+            "rank_weight",
+        ]
+        + key_cols
+        + scored_cols
+        + non_scored_metric_cols
+        + param_cols_ordered
+        + posterior_tail_cols
+    )
     df = pd.DataFrame(rows)
     # 只保留存在的列，并按首次出现去重，避免重复列名触发后续 reindex 异常。
     final_cols = []
@@ -1557,7 +1938,9 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
         row.update(
             {
                 COL_NAMES["period_count"]: len(group),
-                COL_NAMES["period_labels"]: " | ".join(ordered_group["__时间段标签"].astype(str).tolist()),
+                COL_NAMES["period_labels"]: " | ".join(
+                    ordered_group["__时间段标签"].astype(str).tolist()
+                ),
                 COL_NAMES["run_id_list"]: " | ".join(
                     f"{period}:{run_id}"
                     for period, run_id in zip(
@@ -1565,21 +1948,45 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
                         ordered_group[COL_NAMES["wf_run_id"]].astype(str),
                     )
                 ),
-                COL_NAMES["score_mean"]: round(score_series.mean(), 2) if score_series.notna().any() else None,
+                COL_NAMES["score_mean"]: (
+                    round(score_series.mean(), 2) if score_series.notna().any() else None
+                ),
                 COL_NAMES["score_std"]: round(score_std, 2) if pd.notna(score_std) else None,
-                COL_NAMES["score_min"]: round(score_series.min(), 2) if score_series.notna().any() else None,
-                COL_NAMES["score_max"]: round(score_series.max(), 2) if score_series.notna().any() else None,
-                COL_NAMES["chain_cagr_mean"]: round(cagr_series.mean(), 6) if cagr_series.notna().any() else None,
+                COL_NAMES["score_min"]: (
+                    round(score_series.min(), 2) if score_series.notna().any() else None
+                ),
+                COL_NAMES["score_max"]: (
+                    round(score_series.max(), 2) if score_series.notna().any() else None
+                ),
+                COL_NAMES["chain_cagr_mean"]: (
+                    round(cagr_series.mean(), 6) if cagr_series.notna().any() else None
+                ),
                 COL_NAMES["chain_cagr_std"]: round(cagr_std, 6) if pd.notna(cagr_std) else None,
-                COL_NAMES["chain_cagr_min"]: round(cagr_series.min(), 6) if cagr_series.notna().any() else None,
-                COL_NAMES["chain_max_drawdown_mean"]: round(drawdown_series.mean(), 6) if drawdown_series.notna().any() else None,
-                COL_NAMES["chain_max_drawdown_worst"]: round(drawdown_series.min(), 6) if drawdown_series.notna().any() else None,
-                COL_NAMES["oos_cross_split_ir_mean"]: round(ir_series.mean(), 4) if ir_series.notna().any() else None,
+                COL_NAMES["chain_cagr_min"]: (
+                    round(cagr_series.min(), 6) if cagr_series.notna().any() else None
+                ),
+                COL_NAMES["chain_max_drawdown_mean"]: (
+                    round(drawdown_series.mean(), 6) if drawdown_series.notna().any() else None
+                ),
+                COL_NAMES["chain_max_drawdown_worst"]: (
+                    round(drawdown_series.min(), 6) if drawdown_series.notna().any() else None
+                ),
+                COL_NAMES["oos_cross_split_ir_mean"]: (
+                    round(ir_series.mean(), 4) if ir_series.notna().any() else None
+                ),
                 COL_NAMES["oos_cross_split_ir_std"]: round(ir_std, 4) if pd.notna(ir_std) else None,
-                COL_NAMES["bt_win_rate_mean"]: round(win_rate_series.mean(), 4) if win_rate_series.notna().any() else None,
-                COL_NAMES["bt_win_rate_min"]: round(win_rate_series.min(), 4) if win_rate_series.notna().any() else None,
-                COL_NAMES["chain_sharpe_mean"]: round(sharpe_series.mean(), 4) if sharpe_series.notna().any() else None,
-                COL_NAMES["chain_sharpe_std"]: round(sharpe_series.std(), 4) if sharpe_series.notna().sum() > 1 else None,
+                COL_NAMES["bt_win_rate_mean"]: (
+                    round(win_rate_series.mean(), 4) if win_rate_series.notna().any() else None
+                ),
+                COL_NAMES["bt_win_rate_min"]: (
+                    round(win_rate_series.min(), 4) if win_rate_series.notna().any() else None
+                ),
+                COL_NAMES["chain_sharpe_mean"]: (
+                    round(sharpe_series.mean(), 4) if sharpe_series.notna().any() else None
+                ),
+                COL_NAMES["chain_sharpe_std"]: (
+                    round(sharpe_series.std(), 4) if sharpe_series.notna().sum() > 1 else None
+                ),
                 COL_NAMES["stability_score"]: max(stability_score, 0.0),
             }
         )
@@ -1667,11 +2074,11 @@ def compute_composite_score(df: pd.DataFrame) -> pd.Series:
 
         if direction == "abs_low":
             s = s.abs()
-            ascending = False   # 最大绝对值 → rank 1 → 百分位低 → 得分低 ✓
+            ascending = False  # 最大绝对值 → rank 1 → 百分位低 → 得分低 ✓
         elif direction == "low":
-            ascending = False   # 最大值 → rank 1 → 百分位低 → 得分低 ✓
+            ascending = False  # 最大值 → rank 1 → 百分位低 → 得分低 ✓
         else:  # "high"
-            ascending = True    # 最小值 → rank 1 → 百分位低 → 大值得高分 ✓
+            ascending = True  # 最小值 → rank 1 → 百分位低 → 大值得高分 ✓
 
         if n > 0:
             # rank(ascending=True): 最小→1, 最大→n → pct=rank/n
@@ -1738,87 +2145,813 @@ def compute_selection_score(df: pd.DataFrame) -> pd.Series:
     return score.round(1)
 
 
+def _cn_param_cols(keys: list[str], df: pd.DataFrame) -> list[str]:
+    """将内部参数键转换为当前表中存在的中文列名。"""
+    cols = []
+    for key in keys:
+        col = COL_NAMES.get(key, key)
+        if col in df.columns and col not in cols:
+            cols.append(col)
+    return cols
+
+
+def _numeric_series(df: pd.DataFrame, col: str) -> pd.Series:
+    if col not in df.columns:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    return pd.to_numeric(df[col], errors="coerce")
+
+
+def _weighted_percentile_score(
+    df: pd.DataFrame,
+    scoring_items: list[tuple[str, float, str]],
+) -> pd.Series:
+    """对指定列做百分位加权评分，缺失指标按有效权重重归一。"""
+    if df.empty:
+        return pd.Series(dtype=float)
+    if len(df) == 1:
+        return pd.Series(50.0, index=df.index)
+
+    weighted_pct = pd.Series(0.0, index=df.index)
+    effective_weight = pd.Series(0.0, index=df.index)
+    for col, weight, direction in scoring_items:
+        if col not in df.columns:
+            continue
+        s = pd.to_numeric(df[col], errors="coerce")
+        if direction == "abs_low":
+            rank_input = s.abs()
+            ascending = False
+        elif direction == "low":
+            rank_input = s
+            ascending = False
+        else:
+            rank_input = s
+            ascending = True
+        pct = rank_input.rank(ascending=ascending, method="average", na_option="keep") / len(df)
+        pct = pct.fillna(0.5)
+        valid_mask = s.notna().astype(float)
+        weighted_pct += weight * pct
+        effective_weight += weight * valid_mask
+
+    score = pd.Series(50.0, index=df.index)
+    valid_rows = effective_weight > 0
+    score.loc[valid_rows] = (weighted_pct.loc[valid_rows] / effective_weight.loc[valid_rows]) * 100
+    return score.round(1)
+
+
+def _signature_for_frame(df: pd.DataFrame, cols: list[str]) -> pd.Series:
+    """为一组参数列生成可合并的稳定签名。"""
+    if not cols:
+        return pd.Series("", index=df.index)
+
+    def normalize(value) -> str:
+        if _is_missing_param_value(value):
+            return "<NA>"
+        return str(value).strip()
+
+    return df[cols].apply(lambda row: "||".join(normalize(v) for v in row), axis=1)
+
+
+def _unique_count(group: pd.DataFrame, cols: list[str]) -> int:
+    if not cols:
+        return len(group)
+    return len(group[cols].drop_duplicates())
+
+
+def _dedupe_columns(cols: list[str]) -> list[str]:
+    result = []
+    for col in cols:
+        if col not in result:
+            result.append(col)
+    return result
+
+
+def build_model_alpha_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
+    """按模型参数聚合，构建只评价选股 alpha 的评分表。"""
+    if comp_df.empty:
+        return pd.DataFrame()
+
+    model_cols = _cn_param_cols(MODEL_PARAM_KEYS, comp_df)
+    if not model_cols:
+        return pd.DataFrame()
+
+    rows = []
+    for _, group in comp_df.groupby(model_cols, dropna=False, sort=False):
+        row = {col: group.iloc[0][col] for col in model_cols}
+        period_col = COL_NAMES["batch_period_label"]
+        row.update(
+            {
+                "样本数": len(group),
+                "时间段数": (
+                    int(group[period_col].dropna().nunique())
+                    if period_col in group.columns
+                    else None
+                ),
+                "运行ID列表": (
+                    " | ".join(group[COL_NAMES["wf_run_id"]].astype(str).tolist())
+                    if COL_NAMES["wf_run_id"] in group.columns
+                    else None
+                ),
+                "选股综合得分均值": round(_numeric_series(group, "选股综合得分").mean(), 4),
+                "选股综合得分最差": round(_numeric_series(group, "选股综合得分").min(), 4),
+                "RankIC均值": round(
+                    _numeric_series(group, COL_NAMES["daily_rankic_mean"]).mean(), 6
+                ),
+                "ICIR均值": round(_numeric_series(group, COL_NAMES["icir"]).mean(), 4),
+                "Top30超额均值": round(
+                    _numeric_series(group, COL_NAMES["oos_top30_lift_mean"]).mean(), 6
+                ),
+                "Top30胜率": round(
+                    _numeric_series(group, COL_NAMES["oos_top30_win_rate"]).mean(), 4
+                ),
+                "Top30最差中位收益": round(
+                    _numeric_series(group, COL_NAMES["oos_top30_worst_median"]).min(), 6
+                ),
+                "分层单调性均值": round(
+                    _numeric_series(group, COL_NAMES["selection_monotonicity"]).mean(), 4
+                ),
+                "验证_OOS_IR差距": round(
+                    _numeric_series(group, COL_NAMES["train_val_ir_gap"]).mean(), 4
+                ),
+                "全周期CAGR均值": round(_numeric_series(group, COL_NAMES["chain_cagr"]).mean(), 6),
+                "全周期最大回撤最差": round(
+                    _numeric_series(group, COL_NAMES["chain_max_drawdown"]).min(), 6
+                ),
+            }
+        )
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+    result["模型参数签名"] = _signature_for_frame(result, model_cols)
+    result.insert(0, "模型Alpha分", _weighted_percentile_score(result, MODEL_ALPHA_SCORE_CONFIG))
+    result.insert(
+        1, "模型Alpha排名", result["模型Alpha分"].rank(ascending=False, method="min").astype(int)
+    )
+    result.insert(2, "模型参数组ID", [f"M{i:04d}" for i in range(1, len(result) + 1)])
+    front_cols = [
+        "模型Alpha分",
+        "模型Alpha排名",
+        "模型参数组ID",
+        "样本数",
+        "时间段数",
+        "选股综合得分均值",
+        "选股综合得分最差",
+        "RankIC均值",
+        "ICIR均值",
+        "Top30超额均值",
+        "Top30胜率",
+        "Top30最差中位收益",
+        "分层单调性均值",
+        "验证_OOS_IR差距",
+        "全周期CAGR均值",
+        "全周期最大回撤最差",
+        "运行ID列表",
+        "模型参数签名",
+    ]
+    ordered = [col for col in front_cols if col in result.columns]
+    ordered += [col for col in model_cols if col not in ordered]
+    return result[ordered].sort_values("模型Alpha分", ascending=False).reset_index(drop=True)
+
+
+def build_trade_param_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
+    """在相同模型参数+相同时间段内做配对百分位，聚合交易参数评分。"""
+    if comp_df.empty:
+        return pd.DataFrame()
+
+    model_cols = _cn_param_cols(MODEL_PARAM_KEYS, comp_df)
+    context_cols = _cn_param_cols(PAIR_CONTEXT_KEYS, comp_df)
+    trade_cols = _cn_param_cols(TRADE_PARAM_KEYS, comp_df)
+    pair_cols = _dedupe_columns(
+        [col for col in model_cols + context_cols if col in comp_df.columns]
+    )
+    if not pair_cols or not trade_cols:
+        return pd.DataFrame()
+
+    metric_map = [
+        (COL_NAMES["chain_cagr"], "CAGR配对百分位", "high"),
+        (COL_NAMES["chain_total_return"], "总收益配对百分位", "high"),
+        (COL_NAMES["chain_sharpe"], "夏普配对百分位", "high"),
+        (COL_NAMES["bt_calmar_mean"], "Calmar配对百分位", "high"),
+        (COL_NAMES["bt_win_rate"], "胜率配对百分位", "high"),
+        (COL_NAMES["chain_max_drawdown"], "最大回撤配对百分位", "high"),
+    ]
+
+    paired_frames = []
+    for pair_index, (_, group) in enumerate(
+        comp_df.groupby(pair_cols, dropna=False, sort=False), 1
+    ):
+        trade_candidate_count = _unique_count(group, trade_cols)
+        if trade_candidate_count < 2:
+            continue
+        pair_df = group.copy()
+        pair_df["__pair_context_id"] = f"P{pair_index:06d}"
+        pair_df["__pair_candidate_count"] = trade_candidate_count
+        for metric_col, pct_col, direction in metric_map:
+            s = _numeric_series(pair_df, metric_col)
+            ascending = direction == "high"
+            pct = s.rank(ascending=ascending, method="average", na_option="keep") / len(pair_df)
+            pair_df[pct_col] = pct.fillna(0.5) * 100
+        pair_df["单次配对交易收益分"] = _weighted_percentile_score(
+            pair_df,
+            [
+                ("CAGR配对百分位", 0.40, "high"),
+                ("总收益配对百分位", 0.25, "high"),
+                ("Calmar配对百分位", 0.15, "high"),
+                ("夏普配对百分位", 0.10, "high"),
+                ("胜率配对百分位", 0.10, "high"),
+            ],
+        )
+        pair_df["单次配对交易稳健分"] = _weighted_percentile_score(
+            pair_df,
+            [
+                ("最大回撤配对百分位", 0.35, "high"),
+                ("Calmar配对百分位", 0.25, "high"),
+                ("夏普配对百分位", 0.20, "high"),
+                ("胜率配对百分位", 0.10, "high"),
+            ],
+        )
+        paired_frames.append(pair_df)
+
+    if not paired_frames:
+        return pd.DataFrame(
+            columns=["交易收益分", "交易稳健分", "有效配对环境数", "配对样本数"] + trade_cols
+        )
+
+    paired_df = pd.concat(paired_frames, ignore_index=False)
+    paired_df["交易参数签名"] = _signature_for_frame(paired_df, trade_cols)
+    rows = []
+    for _, group in paired_df.groupby(trade_cols, dropna=False, sort=False):
+        cagr_pair_min = group.groupby("__pair_context_id")["CAGR配对百分位"].min()
+        row = {col: group.iloc[0][col] for col in trade_cols}
+        row.update(
+            {
+                "有效配对环境数": int(group["__pair_context_id"].nunique()),
+                "配对样本数": len(group),
+                "平均每组候选数": round(group["__pair_candidate_count"].mean(), 2),
+                "胜出率": round((group["单次配对交易收益分"] >= 50).mean(), 4),
+                "交易收益分": round(group["单次配对交易收益分"].mean(), 1),
+                "交易收益分标准差": (
+                    round(group["单次配对交易收益分"].std(), 4) if len(group) > 1 else None
+                ),
+                "交易收益分最差": round(group["单次配对交易收益分"].min(), 1),
+                "交易稳健分": round(group["单次配对交易稳健分"].mean(), 1),
+                "CAGR配对百分位均值": round(group["CAGR配对百分位"].mean(), 2),
+                "总收益配对百分位均值": round(group["总收益配对百分位"].mean(), 2),
+                "夏普配对百分位均值": round(group["夏普配对百分位"].mean(), 2),
+                "Calmar配对百分位均值": round(group["Calmar配对百分位"].mean(), 2),
+                "胜率配对百分位均值": round(group["胜率配对百分位"].mean(), 2),
+                "最大回撤配对百分位均值": round(group["最大回撤配对百分位"].mean(), 2),
+                "CAGR最差配对百分位": (
+                    round(cagr_pair_min.mean(), 2) if len(cagr_pair_min) else None
+                ),
+                "CAGR原始均值": round(_numeric_series(group, COL_NAMES["chain_cagr"]).mean(), 6),
+                "CAGR原始最差": round(_numeric_series(group, COL_NAMES["chain_cagr"]).min(), 6),
+                "最大回撤原始均值": round(
+                    _numeric_series(group, COL_NAMES["chain_max_drawdown"]).mean(), 6
+                ),
+                "最大回撤原始最差": round(
+                    _numeric_series(group, COL_NAMES["chain_max_drawdown"]).min(), 6
+                ),
+                "交易参数签名": group["交易参数签名"].iloc[0],
+            }
+        )
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+    result.insert(
+        1, "交易收益排名", result["交易收益分"].rank(ascending=False, method="min").astype(int)
+    )
+    result.insert(2, "交易参数组ID", [f"T{i:04d}" for i in range(1, len(result) + 1)])
+    front_cols = [
+        "交易收益分",
+        "交易收益排名",
+        "交易参数组ID",
+        "交易稳健分",
+        "有效配对环境数",
+        "配对样本数",
+        "平均每组候选数",
+        "胜出率",
+        "交易收益分标准差",
+        "交易收益分最差",
+        "CAGR配对百分位均值",
+        "总收益配对百分位均值",
+        "夏普配对百分位均值",
+        "Calmar配对百分位均值",
+        "胜率配对百分位均值",
+        "最大回撤配对百分位均值",
+        "CAGR最差配对百分位",
+        "CAGR原始均值",
+        "CAGR原始最差",
+        "最大回撤原始均值",
+        "最大回撤原始最差",
+        "交易参数签名",
+    ]
+    ordered = [col for col in front_cols if col in result.columns]
+    ordered += [col for col in trade_cols if col not in ordered]
+    return result[ordered].sort_values("交易收益分", ascending=False).reset_index(drop=True)
+
+
+def build_live_candidate_score_table(
+    comp_df: pd.DataFrame,
+    model_score_df: pd.DataFrame,
+    trade_score_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """构建最终候选评分表，硬门槛未通过时实盘候选分直接置 0。"""
+    if comp_df.empty or model_score_df.empty or trade_score_df.empty:
+        return pd.DataFrame()
+
+    model_cols = _cn_param_cols(MODEL_PARAM_KEYS, comp_df)
+    trade_cols = _cn_param_cols(TRADE_PARAM_KEYS, comp_df)
+    candidate_cols = _dedupe_columns(
+        [col for col in model_cols + trade_cols if col in comp_df.columns]
+    )
+    if not candidate_cols:
+        return pd.DataFrame()
+
+    working = comp_df.copy()
+    working["模型参数签名"] = _signature_for_frame(working, model_cols)
+    working["交易参数签名"] = _signature_for_frame(working, trade_cols)
+
+    model_lookup = model_score_df[["模型参数签名", "模型参数组ID", "模型Alpha分"]].drop_duplicates(
+        "模型参数签名"
+    )
+    trade_lookup_cols = [
+        "交易参数签名",
+        "交易参数组ID",
+        "交易收益分",
+        "交易稳健分",
+        "有效配对环境数",
+    ]
+    trade_lookup = trade_score_df[
+        [c for c in trade_lookup_cols if c in trade_score_df.columns]
+    ].drop_duplicates("交易参数签名")
+    working = working.merge(model_lookup, on="模型参数签名", how="left")
+    working = working.merge(trade_lookup, on="交易参数签名", how="left")
+
+    rows = []
+    group_cols = ["模型参数签名", "交易参数签名"]
+    for _, group in working.groupby(group_cols, dropna=False, sort=False):
+        row = {col: group.iloc[0][col] for col in candidate_cols}
+        period_col = COL_NAMES["batch_period_label"]
+        cagr_series = _numeric_series(group, COL_NAMES["chain_cagr"])
+        drawdown_series = _numeric_series(group, COL_NAMES["chain_max_drawdown"])
+        row.update(
+            {
+                "模型参数组ID": (
+                    group["模型参数组ID"].iloc[0] if "模型参数组ID" in group.columns else None
+                ),
+                "交易参数组ID": (
+                    group["交易参数组ID"].iloc[0] if "交易参数组ID" in group.columns else None
+                ),
+                "模型参数签名": group["模型参数签名"].iloc[0],
+                "交易参数签名": group["交易参数签名"].iloc[0],
+                "模型Alpha分": round(_numeric_series(group, "模型Alpha分").mean(), 1),
+                "交易收益分": round(_numeric_series(group, "交易收益分").mean(), 1),
+                "交易稳健分": round(_numeric_series(group, "交易稳健分").mean(), 1),
+                "有效配对环境数": (
+                    int(_numeric_series(group, "有效配对环境数").max())
+                    if "有效配对环境数" in group.columns
+                    and _numeric_series(group, "有效配对环境数").notna().any()
+                    else 0
+                ),
+                "时间段数": (
+                    int(group[period_col].dropna().nunique())
+                    if period_col in group.columns
+                    else None
+                ),
+                "样本数": len(group),
+                "全周期CAGR均值": round(cagr_series.mean(), 6),
+                "跨时间段CAGR最差": round(cagr_series.min(), 6),
+                "全周期最大回撤最差": round(drawdown_series.min(), 6),
+                "运行ID列表": (
+                    " | ".join(group[COL_NAMES["wf_run_id"]].astype(str).tolist())
+                    if COL_NAMES["wf_run_id"] in group.columns
+                    else None
+                ),
+            }
+        )
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+
+    defense_input = result[["跨时间段CAGR最差", "全周期最大回撤最差"]].copy()
+    result["最差场景防守分"] = _weighted_percentile_score(
+        defense_input,
+        [("跨时间段CAGR最差", 0.50, "high"), ("全周期最大回撤最差", 0.50, "high")],
+    )
+    result["实盘候选原始分"] = (
+        _numeric_series(result, "模型Alpha分") * 0.45
+        + _numeric_series(result, "交易收益分") * 0.30
+        + _numeric_series(result, "交易稳健分") * 0.15
+        + _numeric_series(result, "最差场景防守分") * 0.10
+    ).round(1)
+
+    model_pass = _numeric_series(result, "模型Alpha分") >= CANDIDATE_MIN_MODEL_ALPHA
+    pair_pass = _numeric_series(result, "有效配对环境数") >= CANDIDATE_MIN_EFFECTIVE_PAIR_CONTEXTS
+    drawdown_pass = (
+        _numeric_series(result, "全周期最大回撤最差") >= CANDIDATE_MIN_CHAIN_MAX_DRAWDOWN
+    )
+    cagr_pass = _numeric_series(result, "跨时间段CAGR最差") >= CANDIDATE_MIN_CHAIN_CAGR_WORST
+    result["模型Alpha门槛通过"] = model_pass
+    result["有效配对门槛通过"] = pair_pass
+    result["最大回撤门槛通过"] = drawdown_pass
+    result["最差CAGR门槛通过"] = cagr_pass
+    result["候选门槛通过"] = model_pass & pair_pass & drawdown_pass & cagr_pass
+
+    failure_reasons = []
+    for _, row in result.iterrows():
+        reasons = []
+        if not bool(row["模型Alpha门槛通过"]):
+            reasons.append(f"模型Alpha分<{CANDIDATE_MIN_MODEL_ALPHA:g}")
+        if not bool(row["有效配对门槛通过"]):
+            reasons.append(f"有效配对环境数<{CANDIDATE_MIN_EFFECTIVE_PAIR_CONTEXTS}")
+        if not bool(row["最大回撤门槛通过"]):
+            reasons.append(f"全周期最大回撤<{CANDIDATE_MIN_CHAIN_MAX_DRAWDOWN:.0%}")
+        if not bool(row["最差CAGR门槛通过"]):
+            reasons.append(f"跨时间段CAGR最差<{CANDIDATE_MIN_CHAIN_CAGR_WORST:.0%}")
+        failure_reasons.append("；".join(reasons) if reasons else "")
+    result["候选门槛失败原因"] = failure_reasons
+    result["实盘候选分"] = result["实盘候选原始分"].where(result["候选门槛通过"], 0.0)
+    result.insert(
+        1, "候选排名", result["实盘候选分"].rank(ascending=False, method="min").astype(int)
+    )
+
+    front_cols = [
+        "实盘候选分",
+        "候选排名",
+        "实盘候选原始分",
+        "候选门槛通过",
+        "候选门槛失败原因",
+        "模型Alpha分",
+        "交易收益分",
+        "交易稳健分",
+        "最差场景防守分",
+        "有效配对环境数",
+        "模型Alpha门槛通过",
+        "有效配对门槛通过",
+        "最大回撤门槛通过",
+        "最差CAGR门槛通过",
+        "模型参数组ID",
+        "交易参数组ID",
+        "时间段数",
+        "样本数",
+        "全周期CAGR均值",
+        "跨时间段CAGR最差",
+        "全周期最大回撤最差",
+        "运行ID列表",
+        "模型参数签名",
+        "交易参数签名",
+    ]
+    ordered = [col for col in front_cols if col in result.columns]
+    ordered += [col for col in candidate_cols if col not in ordered]
+    return result[ordered].sort_values("实盘候选分", ascending=False).reset_index(drop=True)
+
+
 def build_metric_descriptions() -> pd.DataFrame:
     """构建指标说明表（第二个 sheet）"""
     rows = [
         # ── 综合评分 ──────────────────────────────────────────────────────────
-        ("综合评分", "综合得分",
-         "跨实验百分位排名加权综合得分（0~100，越高越好）。"
-         "对12个关键指标分别计算当前实验集内的百分位排名（0~1），再按权重求和×100。"
-         "权重配置（回测60%）：全周期CAGR 20%、回测胜率 15%、回测夏普 15%、全周期链式最大回撤 10%；"
-         "（统计32%）：跨切分IR 10%、Top30胜率 5%、Top30最差中位收益 5%、"
-         "RankIC_IR趋势 5%、Top30中位收益 3%、Top30超额 2%、偏斜度 2%（绝对值低好）；"
-         "（训练质量8%）：验证_OOS_IR差距 8%（低好）。"
-         "NaN指标以中性分（0.5百分位）计入；仅1组实验时固定得50分。",
-         "越高越好"),
-        ("综合评分", "选股综合得分",
-         "纯选股能力评分（0~100，越高越好）。"
-         "基于3项最核心选股指标做百分位加权：RankIC均值30%、ICIR30%、Top30超额均值40%。"
-         "RankIC均值衡量排序方向，ICIR衡量排序稳定性，Top30超额均值衡量买入头部能否跑赢全市场。"
-         "对缺失指标按有效项重归一；若该行全部缺失则记为50分。",
-         "越高越好"),
+        (
+            "综合评分",
+            "综合得分",
+            "跨实验百分位排名加权综合得分（0~100，越高越好）。"
+            "对12个关键指标分别计算当前实验集内的百分位排名（0~1），再按权重求和×100。"
+            "权重配置（回测60%）：全周期CAGR 20%、回测胜率 15%、回测夏普 15%、全周期链式最大回撤 10%；"
+            "（统计32%）：跨切分IR 10%、Top30胜率 5%、Top30最差中位收益 5%、"
+            "RankIC_IR趋势 5%、Top30中位收益 3%、Top30超额 2%、偏斜度 2%（绝对值低好）；"
+            "（训练质量8%）：验证_OOS_IR差距 8%（低好）。"
+            "NaN指标以中性分（0.5百分位）计入；仅1组实验时固定得50分。",
+            "越高越好",
+        ),
+        (
+            "综合评分",
+            "选股综合得分",
+            "纯选股能力评分（0~100，越高越好）。"
+            "基于3项最核心选股指标做百分位加权：RankIC均值30%、ICIR30%、Top30超额均值40%。"
+            "RankIC均值衡量排序方向，ICIR衡量排序稳定性，Top30超额均值衡量买入头部能否跑赢全市场。"
+            "对缺失指标按有效项重归一；若该行全部缺失则记为50分。",
+            "越高越好",
+        ),
+        (
+            "三视角评分",
+            "模型Alpha分",
+            "按模型参数聚合后的纯选股 Alpha 评分（0~100，越高越好）。"
+            "权重：选股综合得分均值30%、ICIR均值20%、Top30超额均值15%、Top30最差中位收益15%、"
+            "分层单调性10%、验证_OOS_IR差距10%（低好）。用于回答“哪个模型/超参更好”。",
+            "越高越好",
+        ),
+        (
+            "三视角评分",
+            "交易收益分",
+            "按交易参数聚合后的收益评分（0~100，越高越好）。"
+            "先在相同模型参数+相同时间段的配对环境内比较不同交易参数，计算收益类百分位，"
+            "再跨模型、跨时间段取平均。单候选配对环境不参与评分。",
+            "越高越好",
+        ),
+        (
+            "三视角评分",
+            "交易稳健分",
+            "按交易参数聚合后的风控稳健评分（0~100，越高越好）。"
+            "更重视最大回撤、Calmar、夏普、胜率和最差 CAGR 配对表现，用于辅助交易参数筛选。",
+            "越高越好",
+        ),
+        (
+            "三视角评分",
+            "实盘候选分",
+            "模型 Alpha、交易收益、交易稳健和最差场景防守的组合候选分。"
+            "硬门槛未通过时直接置 0：模型Alpha分>=60、有效配对环境数>=2、"
+            "全周期最大回撤最差>=-35%、跨时间段CAGR最差>=-5%。",
+            "越高越好；0分优先看失败原因",
+        ),
+        (
+            "三视角评分",
+            "候选门槛失败原因",
+            "实盘候选分被置 0 的具体原因，可能包含模型Alpha不足、有效配对环境不足、"
+            "最大回撤过深或最差时间段 CAGR 过低。",
+            "为空表示通过",
+        ),
         # ── OOS 性能指标 ──────────────────────────────────────────────────────
-        ("OOS性能", "运行ID",               "walk-forward运行的唯一标识符，格式为wf_YYYYMMDD_HHMMSS_xxxxxxxx",                                                                              "标识符，无优劣"),
-        ("OOS性能", "切分数",               "本次实验成功完成的OOS切分数量，越多统计结论越可靠",                                                                                               "越多越好"),
-        ("OOS性能", "模型版本范围",         "本次walk-forward生成的模型编号范围（格式：最小编号~最大编号），可在ModelRegistry中定位具体模型文件",                                                      "参考"),
-        ("OOS性能", "OOS_RankIC_IR均值",    "各切分OOS期逐日RankIC信息比率（均值/标准差）的跨切分均值，衡量预测对股票排序的整体有效性",                                                            "越高越好"),
-        ("OOS性能", "OOS_RankIC_IR标准差",  "各切分OOS RankIC IR的标准差，衡量策略在不同时间段的稳定性",                                                                                      "越低越稳定"),
-        ("OOS性能", "跨切分IR",             "OOS_RankIC_IR均值 / 标准差，类似夏普比率，同时衡量收益水平与跨时间段稳定性，是排序各实验的首要指标",                                                   "越高越好（首要排序指标）"),
-        ("OOS性能", "RankIC均值",            "各切分 OOS 逐日RankIC均值的跨切分均值；直接衡量排序相关性的绝对水平",                                                                           "越高越好"),
-        ("OOS性能", "ICIR",                 "RankIC均值 / RankIC标准差，衡量单位波动下的排序信息效率",                                                                                    "越高越好"),
-        ("OOS性能", "分层单调性(近似)",      "基于 Top30/Top100/Top300 中位收益构造的单调性评分（0~1）；若收益随覆盖范围扩大递减，则得分更高",                                                      "越高越好"),
-        ("OOS性能", "RankIC_IR趋势(近-早)", "最近3个切分的IR均值 - 最早3个切分的IR均值；正值说明模型随时间改善，负值说明alpha在衰减",                                                              "接近0或正值为好，持续负值需警惕"),
-        ("OOS性能", "Top30中位收益均值",     "各切分中每日Top30持仓20日收益中位数的跨切分均值；用中位数代替均值，减少极端行情日（如大涨停日）的干扰",                                                  "越高越好"),
-        ("OOS性能", "Top30胜率",            "各切分中Top30中位收益>0的占比；衡量策略在不同历史时段的正收益稳健性，>70%可认为优秀",                                                               "越高越好（>0.7为优秀）"),
-        ("OOS性能", "Top30最差中位收益",     "所有切分中Top30中位收益的最小值，代表策略的最差历史表现，用于压力测试",                                                                               "越高越好（大幅负值需警惕）"),
-        ("OOS性能", "Top30偏斜度均值",       "各切分中(Top30均值-中位数)/标准差的均值；偏斜度高说明均值被少数极端行情日拉偏，均值的代表性下降",                                                      "越接近0越好（>0.6需警惕）"),
-        ("OOS性能", "Top30超额均值",         "各切分中Top30相对全市场平均收益的超额均值，衡量纯选股能力（剔除市场整体涨跌的影响）",                                                                  "越高越好"),
-        ("OOS性能", "Top100中位收益均值",    "各切分每日Top100持仓20日收益中位数的跨切分均值",                                                                                                 "越高越好"),
-        ("OOS性能", "Top100胜率",           "各切分中Top100中位收益>0的占比",                                                                                                              "越高越好"),
-        ("OOS性能", "Top300中位收益均值",    "各切分每日Top300持仓20日收益中位数的跨切分均值；样本量大，统计更稳定但个股alpha被稀释",                                                               "越高越好"),
-        ("OOS性能", "Top300胜率",           "各切分中Top300中位收益>0的占比",                                                                                                              "越高越好"),
+        (
+            "OOS性能",
+            "运行ID",
+            "walk-forward运行的唯一标识符，格式为wf_YYYYMMDD_HHMMSS_xxxxxxxx",
+            "标识符，无优劣",
+        ),
+        ("OOS性能", "切分数", "本次实验成功完成的OOS切分数量，越多统计结论越可靠", "越多越好"),
+        (
+            "OOS性能",
+            "模型版本范围",
+            "本次walk-forward生成的模型编号范围（格式：最小编号~最大编号），可在ModelRegistry中定位具体模型文件",
+            "参考",
+        ),
+        (
+            "OOS性能",
+            "OOS_RankIC_IR均值",
+            "各切分OOS期逐日RankIC信息比率（均值/标准差）的跨切分均值，衡量预测对股票排序的整体有效性",
+            "越高越好",
+        ),
+        (
+            "OOS性能",
+            "OOS_RankIC_IR标准差",
+            "各切分OOS RankIC IR的标准差，衡量策略在不同时间段的稳定性",
+            "越低越稳定",
+        ),
+        (
+            "OOS性能",
+            "跨切分IR",
+            "OOS_RankIC_IR均值 / 标准差，类似夏普比率，同时衡量收益水平与跨时间段稳定性，是排序各实验的首要指标",
+            "越高越好（首要排序指标）",
+        ),
+        (
+            "OOS性能",
+            "RankIC均值",
+            "各切分 OOS 逐日RankIC均值的跨切分均值；直接衡量排序相关性的绝对水平",
+            "越高越好",
+        ),
+        ("OOS性能", "ICIR", "RankIC均值 / RankIC标准差，衡量单位波动下的排序信息效率", "越高越好"),
+        (
+            "OOS性能",
+            "分层单调性(近似)",
+            "基于 Top30/Top100/Top300 中位收益构造的单调性评分（0~1）；若收益随覆盖范围扩大递减，则得分更高",
+            "越高越好",
+        ),
+        (
+            "OOS性能",
+            "RankIC_IR趋势(近-早)",
+            "最近3个切分的IR均值 - 最早3个切分的IR均值；正值说明模型随时间改善，负值说明alpha在衰减",
+            "接近0或正值为好，持续负值需警惕",
+        ),
+        (
+            "OOS性能",
+            "Top30中位收益均值",
+            "各切分中每日Top30持仓20日收益中位数的跨切分均值；用中位数代替均值，减少极端行情日（如大涨停日）的干扰",
+            "越高越好",
+        ),
+        (
+            "OOS性能",
+            "Top30胜率",
+            "各切分中Top30中位收益>0的占比；衡量策略在不同历史时段的正收益稳健性，>70%可认为优秀",
+            "越高越好（>0.7为优秀）",
+        ),
+        (
+            "OOS性能",
+            "Top30最差中位收益",
+            "所有切分中Top30中位收益的最小值，代表策略的最差历史表现，用于压力测试",
+            "越高越好（大幅负值需警惕）",
+        ),
+        (
+            "OOS性能",
+            "Top30偏斜度均值",
+            "各切分中(Top30均值-中位数)/标准差的均值；偏斜度高说明均值被少数极端行情日拉偏，均值的代表性下降",
+            "越接近0越好（>0.6需警惕）",
+        ),
+        (
+            "OOS性能",
+            "Top30超额均值",
+            "各切分中Top30相对全市场平均收益的超额均值，衡量纯选股能力（剔除市场整体涨跌的影响）",
+            "越高越好",
+        ),
+        (
+            "OOS性能",
+            "Top100中位收益均值",
+            "各切分每日Top100持仓20日收益中位数的跨切分均值",
+            "越高越好",
+        ),
+        ("OOS性能", "Top100胜率", "各切分中Top100中位收益>0的占比", "越高越好"),
+        (
+            "OOS性能",
+            "Top300中位收益均值",
+            "各切分每日Top300持仓20日收益中位数的跨切分均值；样本量大，统计更稳定但个股alpha被稀释",
+            "越高越好",
+        ),
+        ("OOS性能", "Top300胜率", "各切分中Top300中位收益>0的占比", "越高越好"),
         # ── OOS 回测指标 ──────────────────────────────────────────────────────
-        ("OOS回测", "全周期CAGR",            "基于 chain_nav 将所有 split 的 OOS 净值顺次串联后得到的全周期复利年化收益，更适合做最终策略筛选",                                                       "越高越好（优先看）"),
-        ("OOS回测", "全周期总收益",          "基于 chain_nav 串联后的起止总收益率，反映整轮 walk-forward 结束时的真实累计收益",                                                                      "越高越好"),
-        ("OOS回测", "全周期链式最大回撤",    "基于 chain_nav 串联后的全周期最大回撤，避免只看单个 split 的最差值而忽略跨 split 累计损失",                                                              "越接近0越好（优先看）"),
-        ("OOS回测", "全周期链式夏普",        "基于 chain_nav 串联后的全周期夏普比率，使用 3% 无风险利率与全周期日收益波动计算",                                                                      "越高越好"),
-        ("OOS回测", "全周期链式交易日数",    "chain_nav 串联后的交易日总数，用于判断 CAGR 计算口径和样本长度是否一致",                                                                            "参考"),
-        ("OOS回测", "回测年化收益均值",       "各切分 OOS 回测年化收益率的跨切分均值，适合做横向粗筛，但不等同于全周期 CAGR",                                                                      "越高越好（粗筛用）"),
-        ("OOS回测", "回测夏普均值",          "各切分OOS回测夏普比率（年化收益-3%无风险利率/年化波动率）的跨切分均值",                                                                                "越高越好（>1.0为优秀）"),
-        ("OOS回测", "回测最大回撤(最差)",     "所有切分 OOS 回测中最大回撤的最差值（绝对值最大的单段回撤），用于观察最脆弱 split，但不等同于全周期链式回撤",                                        "越接近0越好（-30%以下需警惕）"),
-        ("OOS回测", "回测Calmar均值",        "各切分年化收益/最大回撤的均值，衡量单位风险回报",                                                                                                   "越高越好（>1.0为良好）"),
-        ("OOS回测", "回测胜率",              "各切分 OOS 回测总收益>0 的占比，衡量策略在不同历史时段的盈利稳健性",                                                                                 "越高越好（>0.7为优秀）"),
-        ("OOS回测", "回测总收益均值",         "各切分 OOS 回测期间总收益率的跨切分均值，适合观察 split 层面的平均水平，不等同于全周期累计收益",                                                      "越高越好"),
-        ("OOS回测", "回测波动率均值",         "各切分OOS回测年化波动率的跨切分均值",                                                                                                             "越低越稳定"),
+        (
+            "OOS回测",
+            "全周期CAGR",
+            "基于 chain_nav 将所有 split 的 OOS 净值顺次串联后得到的全周期复利年化收益，更适合做最终策略筛选",
+            "越高越好（优先看）",
+        ),
+        (
+            "OOS回测",
+            "全周期总收益",
+            "基于 chain_nav 串联后的起止总收益率，反映整轮 walk-forward 结束时的真实累计收益",
+            "越高越好",
+        ),
+        (
+            "OOS回测",
+            "全周期链式最大回撤",
+            "基于 chain_nav 串联后的全周期最大回撤，避免只看单个 split 的最差值而忽略跨 split 累计损失",
+            "越接近0越好（优先看）",
+        ),
+        (
+            "OOS回测",
+            "全周期链式夏普",
+            "基于 chain_nav 串联后的全周期夏普比率，使用 3% 无风险利率与全周期日收益波动计算",
+            "越高越好",
+        ),
+        (
+            "OOS回测",
+            "全周期链式交易日数",
+            "chain_nav 串联后的交易日总数，用于判断 CAGR 计算口径和样本长度是否一致",
+            "参考",
+        ),
+        (
+            "OOS回测",
+            "回测年化收益均值",
+            "各切分 OOS 回测年化收益率的跨切分均值，适合做横向粗筛，但不等同于全周期 CAGR",
+            "越高越好（粗筛用）",
+        ),
+        (
+            "OOS回测",
+            "回测夏普均值",
+            "各切分OOS回测夏普比率（年化收益-3%无风险利率/年化波动率）的跨切分均值",
+            "越高越好（>1.0为优秀）",
+        ),
+        (
+            "OOS回测",
+            "回测最大回撤(最差)",
+            "所有切分 OOS 回测中最大回撤的最差值（绝对值最大的单段回撤），用于观察最脆弱 split，但不等同于全周期链式回撤",
+            "越接近0越好（-30%以下需警惕）",
+        ),
+        (
+            "OOS回测",
+            "回测Calmar均值",
+            "各切分年化收益/最大回撤的均值，衡量单位风险回报",
+            "越高越好（>1.0为良好）",
+        ),
+        (
+            "OOS回测",
+            "回测胜率",
+            "各切分 OOS 回测总收益>0 的占比，衡量策略在不同历史时段的盈利稳健性",
+            "越高越好（>0.7为优秀）",
+        ),
+        (
+            "OOS回测",
+            "回测总收益均值",
+            "各切分 OOS 回测期间总收益率的跨切分均值，适合观察 split 层面的平均水平，不等同于全周期累计收益",
+            "越高越好",
+        ),
+        ("OOS回测", "回测波动率均值", "各切分OOS回测年化波动率的跨切分均值", "越低越稳定"),
         # ── 训练质量指标 ──────────────────────────────────────────────────────
-        ("训练质量", "验证集RankIC_IR均值",  "各切分内部验证集逐日RankIC IR的跨切分均值；验证集来自训练窗口末尾，反映模型在样本内末期的泛化能力",                                                      "越高越好"),
-        ("训练质量", "验证_OOS_IR差距",      "验证集IR均值 - OOS IR均值；正值表示验证集优于OOS（轻度过拟合信号），负值表示OOS优于验证集（通常正常）",                                               "接近0为好，负值可接受，大正值（>0.5）需警惕过拟合"),
-        ("训练质量", "最佳迭代均值",         "各切分早停触发时的迭代次数均值；反映模型实际使用的树数量，可指导n_estimators上限的设置",                                                               "参考指标（<100可能欠拟合，接近n_estimators上限则建议增大）"),
-        ("训练质量", "最佳迭代最小值",       "所有切分中最少的早停迭代次数；如果某个切分迭代极少，说明该时段数据可能有异常",                                                                          "不宜过低（<100需关注）"),
-        ("训练质量", "最佳迭代最大值",       "所有切分中最多的早停迭代次数",                                                                                                                   "不宜接近n_estimators（说明需增大树数量上限）"),
-        ("训练质量", "最佳迭代标准差",       "各切分迭代次数的标准差；衡量模型在不同时间段需要的学习量是否一致，差异过大说明数据分布在各时段差异明显",                                                    "越低越稳定"),
+        (
+            "训练质量",
+            "验证集RankIC_IR均值",
+            "各切分内部验证集逐日RankIC IR的跨切分均值；验证集来自训练窗口末尾，反映模型在样本内末期的泛化能力",
+            "越高越好",
+        ),
+        (
+            "训练质量",
+            "验证_OOS_IR差距",
+            "验证集IR均值 - OOS IR均值；正值表示验证集优于OOS（轻度过拟合信号），负值表示OOS优于验证集（通常正常）",
+            "接近0为好，负值可接受，大正值（>0.5）需警惕过拟合",
+        ),
+        (
+            "训练质量",
+            "最佳迭代均值",
+            "各切分早停触发时的迭代次数均值；反映模型实际使用的树数量，可指导n_estimators上限的设置",
+            "参考指标（<100可能欠拟合，接近n_estimators上限则建议增大）",
+        ),
+        (
+            "训练质量",
+            "最佳迭代最小值",
+            "所有切分中最少的早停迭代次数；如果某个切分迭代极少，说明该时段数据可能有异常",
+            "不宜过低（<100需关注）",
+        ),
+        (
+            "训练质量",
+            "最佳迭代最大值",
+            "所有切分中最多的早停迭代次数",
+            "不宜接近n_estimators（说明需增大树数量上限）",
+        ),
+        (
+            "训练质量",
+            "最佳迭代标准差",
+            "各切分迭代次数的标准差；衡量模型在不同时间段需要的学习量是否一致，差异过大说明数据分布在各时段差异明显",
+            "越低越稳定",
+        ),
         # ── 训练参数（仅供参考） ───────────────────────────────────────────────
-        ("训练参数", "WF起始日期",           "walk-forward整体时间范围起始日期，训练集不早于此日期",                                                                                             "参考"),
-        ("训练参数", "WF结束日期",           "walk-forward整体时间范围结束日期，训练集截止于此，测试集可超出此范围",                                                                               "参考"),
-        ("训练参数", "滚动频率",             "每次train_end向前推进的步长（monthly=月度 / quarterly=季度 / semiannual=半年度）",                                                               "参考"),
-        ("训练参数", "训练窗口年数",         "每次训练使用的历史数据年数；过短欠拟合，过长可能纳入失效的历史规律",                                                                                   "参考（通常3~7年）"),
-        ("训练参数", "测试窗口月数",         "每次OOS评估的时间窗口（月数），建议与标签持仓周期相近",                                                                                             "参考"),
-        ("训练参数", "验证集比例",           "训练数据中用于内部早停评估的比例",                                                                                                               "参考"),
-        ("训练参数", "标签列",               "预测目标列名，如neu_y_ret_20（中性化20日收益）；neu_前缀表示已剔除市值/行业因子",                                                                    "参考"),
-        ("训练参数", "任务类型",             "regression=回归（预测收益率大小）/ classification=分类（预测涨跌方向）",                                                                           "参考"),
-        ("训练参数", "标签变换",             "raw=使用原始收益率标签 / cs_zscore=截面z-score标准化（消除截面异方差，让模型聚焦排序）",                                                             "参考"),
-        ("训练参数", "树数量",               "XGBoost决策树总数上限；配合早停使用，实际用量为最佳迭代次数",                                                                                       "参考"),
-        ("训练参数", "最大深度",             "每棵树的最大层数；越大模型越复杂越容易过拟合",                                                                                                     "参考（建议6~10）"),
-        ("训练参数", "学习率",               "梯度下降步长；越小越精细但需要更多树才能收敛",                                                                                                     "参考"),
-        ("训练参数", "样本采样比",           "每棵树随机抽取的样本比例（行采样），降低过拟合风险",                                                                                                 "参考"),
-        ("训练参数", "特征采样比",           "每棵树随机抽取的特征比例（列采样），降低过拟合风险",                                                                                                 "参考"),
-        ("训练参数", "最小叶节点权重",       "叶节点所需的最少样本权重之和；越大越保守，防止模型学习噪声",                                                                                          "参考"),
-        ("训练参数", "gamma",               "节点分裂所需的最小损失下降量；越大越保守，减少无效分裂",                                                                                             "参考"),
-        ("训练参数", "L1正则",               "L1正则化系数，使特征权重趋向稀疏（部分特征权重归零）",                                                                                              "参考"),
-        ("训练参数", "L2正则",               "L2正则化系数，使特征权重趋向平滑（防止某个特征权重过大）",                                                                                          "参考"),
-        ("训练参数", "rank权重启用",         "是否对每日Top/Bottom K样本赋予更高训练权重，使模型更关注极端收益样本",                                                                               "参考"),
-        ("训练参数", "rank权重TopK",         "每日增强权重覆盖的头部/尾部股票数量",                                                                                                             "参考"),
-        ("训练参数", "rank权重值",           "增强样本相对普通样本的权重倍数",                                                                                                                 "参考"),
+        ("训练参数", "WF起始日期", "walk-forward整体时间范围起始日期，训练集不早于此日期", "参考"),
+        (
+            "训练参数",
+            "WF结束日期",
+            "walk-forward整体时间范围结束日期，训练集截止于此，测试集可超出此范围",
+            "参考",
+        ),
+        (
+            "训练参数",
+            "滚动频率",
+            "每次train_end向前推进的步长（monthly=月度 / quarterly=季度 / semiannual=半年度）",
+            "参考",
+        ),
+        (
+            "训练参数",
+            "训练窗口年数",
+            "每次训练使用的历史数据年数；过短欠拟合，过长可能纳入失效的历史规律",
+            "参考（通常3~7年）",
+        ),
+        (
+            "训练参数",
+            "测试窗口月数",
+            "每次OOS评估的时间窗口（月数），建议与标签持仓周期相近",
+            "参考",
+        ),
+        ("训练参数", "验证集比例", "训练数据中用于内部早停评估的比例", "参考"),
+        (
+            "训练参数",
+            "标签列",
+            "预测目标列名，如neu_y_ret_20（中性化20日收益）；neu_前缀表示已剔除市值/行业因子",
+            "参考",
+        ),
+        (
+            "训练参数",
+            "任务类型",
+            "regression=回归（预测收益率大小）/ classification=分类（预测涨跌方向）",
+            "参考",
+        ),
+        (
+            "训练参数",
+            "标签变换",
+            "raw=使用原始收益率标签 / cs_zscore=截面z-score标准化（消除截面异方差，让模型聚焦排序）",
+            "参考",
+        ),
+        (
+            "训练参数",
+            "树数量",
+            "XGBoost决策树总数上限；配合早停使用，实际用量为最佳迭代次数",
+            "参考",
+        ),
+        (
+            "训练参数",
+            "最大深度",
+            "每棵树的最大层数；越大模型越复杂越容易过拟合",
+            "参考（建议6~10）",
+        ),
+        ("训练参数", "学习率", "梯度下降步长；越小越精细但需要更多树才能收敛", "参考"),
+        ("训练参数", "样本采样比", "每棵树随机抽取的样本比例（行采样），降低过拟合风险", "参考"),
+        ("训练参数", "特征采样比", "每棵树随机抽取的特征比例（列采样），降低过拟合风险", "参考"),
+        (
+            "训练参数",
+            "最小叶节点权重",
+            "叶节点所需的最少样本权重之和；越大越保守，防止模型学习噪声",
+            "参考",
+        ),
+        ("训练参数", "gamma", "节点分裂所需的最小损失下降量；越大越保守，减少无效分裂", "参考"),
+        ("训练参数", "L1正则", "L1正则化系数，使特征权重趋向稀疏（部分特征权重归零）", "参考"),
+        ("训练参数", "L2正则", "L2正则化系数，使特征权重趋向平滑（防止某个特征权重过大）", "参考"),
+        (
+            "训练参数",
+            "rank权重启用",
+            "是否对每日Top/Bottom K样本赋予更高训练权重，使模型更关注极端收益样本",
+            "参考",
+        ),
+        ("训练参数", "rank权重TopK", "每日增强权重覆盖的头部/尾部股票数量", "参考"),
+        ("训练参数", "rank权重值", "增强样本相对普通样本的权重倍数", "参考"),
     ]
     return pd.DataFrame(rows, columns=["分类", "指标名", "说明", "优劣方向"])
 
@@ -1833,21 +2966,47 @@ def build_split_detail_table(all_df: pd.DataFrame) -> pd.DataFrame:
 
     # 选取需要的列
     detail_cols = [
-        "wf_run_id", "split_index",
-        "KEY_Top20_list", "KEY_Top30_list", "KEY_Top20_hit_rate", "KEY_Top20_avg_return_median",
-        "KEY_Top30_hit_rate", "KEY_Top30_avg_return_median",
-        "train_start", "train_end", "test_start", "test_end",
+        "wf_run_id",
+        "split_index",
+        "KEY_Top20_list",
+        "KEY_Top30_list",
+        "KEY_Top20_hit_rate",
+        "KEY_Top20_avg_return_median",
+        "KEY_Top30_hit_rate",
+        "KEY_Top30_avg_return_median",
+        "train_start",
+        "train_end",
+        "test_start",
+        "test_end",
         # 逐 split 回测指标
-        "bt_total_return", "bt_annual_return", "bt_max_drawdown",
-        "bt_sharpe", "bt_calmar", "bt_volatility",
-        "bt_trading_days", "bt_top_n", "bt_rebalance_freq",
+        "bt_total_return",
+        "bt_annual_return",
+        "bt_max_drawdown",
+        "bt_sharpe",
+        "bt_calmar",
+        "bt_volatility",
+        "bt_trading_days",
+        "bt_top_n",
+        "bt_rebalance_freq",
         # 逐 split 模型质量
-        "daily_rankic_mean", "daily_rankic_ir", "val_rankic_ir",
-        "best_iteration", "train_samples", "test_samples",
+        "daily_rankic_mean",
+        "daily_rankic_ir",
+        "val_rankic_ir",
+        "best_iteration",
+        "train_samples",
+        "test_samples",
         # 关键训练参数（用于区分实验）
-        "algorithm", "label_column", "task", "label_transform",
-        "max_depth", "learning_rate", "train_window_years", "test_window_months",
-        "time_decay_half_life", "market_regime", "enable_fundamental",
+        "algorithm",
+        "label_column",
+        "task",
+        "label_transform",
+        "max_depth",
+        "learning_rate",
+        "train_window_years",
+        "test_window_months",
+        "time_decay_half_life",
+        "market_regime",
+        "enable_fundamental",
     ]
     available_cols = [c for c in detail_cols if c in all_df.columns]
     result = all_df[available_cols].copy()
@@ -1907,17 +3066,44 @@ def build_split_detail_table(all_df: pd.DataFrame) -> pd.DataFrame:
 
     # 调整列序：运行ID → 切分序号 → 时间 → 回测指标 → 累计净值 → 模型质量 → 训练参数
     ordered = [
-        "运行ID", "切分序号",
-        "重点Top20命中率", "重点Top20收益中位数", "重点Top30命中率", "重点Top30收益中位数",
-        "重点Top20名单", "重点Top30名单",
-        "训练开始", "训练结束", "测试开始", "测试结束",
-        "总收益", "年化收益", "最大回撤", "夏普", "Calmar", "波动率", "交易天数", "TopN",
+        "运行ID",
+        "切分序号",
+        "重点Top20命中率",
+        "重点Top20收益中位数",
+        "重点Top30命中率",
+        "重点Top30收益中位数",
+        "重点Top20名单",
+        "重点Top30名单",
+        "训练开始",
+        "训练结束",
+        "测试开始",
+        "测试结束",
+        "总收益",
+        "年化收益",
+        "最大回撤",
+        "夏普",
+        "Calmar",
+        "波动率",
+        "交易天数",
+        "TopN",
         "累计净值",
-        "OOS_RankIC均值", "OOS_RankIC_IR", "验证集RankIC_IR", "最佳迭代",
-        "训练样本数", "测试样本数",
-        "算法", "标签列", "任务类型", "标签变换",
-        "最大深度", "学习率", "训练窗口年数", "测试窗口月数",
-        "时间衰减半衰期", "市场择时", "基本面因子",
+        "OOS_RankIC均值",
+        "OOS_RankIC_IR",
+        "验证集RankIC_IR",
+        "最佳迭代",
+        "训练样本数",
+        "测试样本数",
+        "算法",
+        "标签列",
+        "任务类型",
+        "标签变换",
+        "最大深度",
+        "学习率",
+        "训练窗口年数",
+        "测试窗口月数",
+        "时间衰减半衰期",
+        "市场择时",
+        "基本面因子",
     ]
     final_cols = [c for c in ordered if c in result.columns]
     return result[final_cols].reset_index(drop=True)
@@ -1996,10 +3182,59 @@ def _weight_to_green_fill(weight: float, max_weight: float) -> PatternFill:
       最大权重 → RGB(130, 215, 130)  中等绿（与黑字对比度 ≈ 8:1，远超 WCAG AA 4.5:1）
     """
     t = min(weight / max_weight, 1.0) if max_weight > 0 else 0.0
-    r = int(round(220 - t * 90))   # 220 → 130
-    g = int(round(245 - t * 30))   # 245 → 215
-    b = int(round(220 - t * 90))   # 220 → 130
+    r = int(round(220 - t * 90))  # 220 → 130
+    g = int(round(245 - t * 30))  # 245 → 215
+    b = int(round(220 - t * 90))  # 220 → 130
     return PatternFill(fill_type="solid", fgColor=f"{r:02X}{g:02X}{b:02X}")
+
+
+def _weight_to_palette_fill(weight: float, max_weight: float, palette: str) -> PatternFill:
+    """将权重映射为指定色系的浅色填充，权重越高颜色越深。"""
+    if palette == "blue":
+        start, end = (225, 239, 255), (132, 181, 232)
+    elif palette == "orange":
+        start, end = (255, 235, 205), (242, 174, 88)
+    elif palette == "red":
+        start, end = (255, 224, 224), (242, 150, 150)
+    else:
+        start, end = (220, 245, 220), (130, 215, 130)
+    t = min(weight / max_weight, 1.0) if max_weight > 0 else 0.0
+    r = int(round(start[0] + (end[0] - start[0]) * t))
+    g = int(round(start[1] + (end[1] - start[1]) * t))
+    b = int(round(start[2] + (end[2] - start[2]) * t))
+    return PatternFill(fill_type="solid", fgColor=f"{r:02X}{g:02X}{b:02X}")
+
+
+def _score_column_fills() -> dict[str, dict[str, PatternFill]]:
+    """构建各评分 sheet 的列填充配置。"""
+    max_model = max(w for _, w, _ in MODEL_ALPHA_SCORE_CONFIG)
+    max_trade = max(w for _, w, _ in TRADE_YIELD_SCORE_CONFIG)
+    max_candidate = max(w for _, w, _ in CANDIDATE_SCORE_CONFIG)
+    return {
+        "模型Alpha评分": {
+            "模型Alpha分": _weight_to_palette_fill(max_model, max_model, "blue"),
+            **{
+                col: _weight_to_palette_fill(weight, max_model, "blue")
+                for col, weight, _ in MODEL_ALPHA_SCORE_CONFIG
+            },
+        },
+        "交易参数收益评分": {
+            "交易收益分": _weight_to_palette_fill(max_trade, max_trade, "orange"),
+            "交易稳健分": _weight_to_palette_fill(max_trade, max_trade, "orange"),
+            **{
+                col: _weight_to_palette_fill(weight, max_trade, "orange")
+                for col, weight, _ in TRADE_YIELD_SCORE_CONFIG
+            },
+        },
+        "实盘候选评分": {
+            "实盘候选分": _weight_to_palette_fill(max_candidate, max_candidate, "green"),
+            "实盘候选原始分": _weight_to_palette_fill(max_candidate, max_candidate, "green"),
+            **{
+                col: _weight_to_palette_fill(weight, max_candidate, "green")
+                for col, weight, _ in CANDIDATE_SCORE_CONFIG
+            },
+        },
+    }
 
 
 def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
@@ -2017,9 +3252,9 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
         desc_row_map[str(row["指标名"])] = int(i) + 2  # +2: header占第1行，数据从第2行
 
     font_normal = Font(name="微软雅黑", size=9)
-    font_link   = Font(name="微软雅黑", size=9, color="0563C1", underline="single")
+    font_link = Font(name="微软雅黑", size=9, color="0563C1", underline="single")
 
-    # ── 构建 中文列名 → 绿色填充 的映射（用于"实验对比"sheet）────────────
+    # ── 构建 中文列名 → 填充 的映射（用于各评分 sheet）─────────────────
     _max_w = max(w for _, w, _ in SCORE_CONFIG) if SCORE_CONFIG else 1.0
     # 综合得分列本身也着色，用最深绿（权重等同最大权重）
     score_cn_fills: dict[str, PatternFill] = {
@@ -2030,10 +3265,11 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
         if col_cn:
             score_cn_fills[col_cn] = _weight_to_green_fill(weight, _max_w)
 
-    # 扫描"实验对比"标题行，建立 列字母 → 填充色 的映射
-    ws_comp_ref = wb["实验对比"]
-    col_letter_fill: dict[str, PatternFill] = {}
+    sheet_score_fills = _score_column_fills()
     key_fill = PatternFill(fill_type="solid", fgColor="FFF2CC")
+    zero_fill = PatternFill(fill_type="solid", fgColor="F4CCCC")
+    score_header_fill = PatternFill(fill_type="solid", fgColor="274E13")
+    score_header_font = Font(name="微软雅黑", size=9, color="FFFFFF", bold=True)
     key_cols_cn = {
         "重点说明",
         "重点Top20最新名单",
@@ -2043,25 +3279,77 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
         "重点Top30命中率均值",
         "重点Top30收益中位数均值",
     }
-    for cell in next(ws_comp_ref.iter_rows(min_row=1, max_row=1)):
-        if cell.value and str(cell.value) in score_cn_fills:
-            col_letter_fill[cell.column_letter] = score_cn_fills[str(cell.value)]
-        elif cell.value and str(cell.value) in key_cols_cn:
-            col_letter_fill[cell.column_letter] = key_fill
+
+    sheet_col_letter_fill: dict[str, dict[str, PatternFill]] = {}
+    for sheet_name in wb.sheetnames:
+        ws_ref = wb[sheet_name]
+        col_letter_fill: dict[str, PatternFill] = {}
+        local_fills = (
+            score_cn_fills if sheet_name == "实验对比" else sheet_score_fills.get(sheet_name, {})
+        )
+        for cell in next(ws_ref.iter_rows(min_row=1, max_row=1)):
+            if cell.value and str(cell.value) in local_fills:
+                col_letter_fill[cell.column_letter] = local_fills[str(cell.value)]
+            elif sheet_name == "实验对比" and cell.value and str(cell.value) in key_cols_cn:
+                col_letter_fill[cell.column_letter] = key_fill
+        sheet_col_letter_fill[sheet_name] = col_letter_fill
 
     # ── 全局字体、冻结、列宽、绿色背景 ──────────────────────────────────
-    all_sheets = [s for s in ["实验对比", "跨时间段稳定性", "指标说明", "逐Split明细"] if s in wb.sheetnames]
+    all_sheets = [
+        s
+        for s in [
+            "实盘候选评分",
+            "模型Alpha评分",
+            "交易参数收益评分",
+            "实验对比",
+            "跨时间段稳定性",
+            "指标说明",
+            "逐Split明细",
+        ]
+        if s in wb.sheetnames
+    ]
     for sheet_name in all_sheets:
         ws = wb[sheet_name]
         ws.freeze_panes = "A2"
+        header_values = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        zero_score_col = None
+        failure_cols = set()
+        if sheet_name == "实盘候选评分":
+            for idx, value in enumerate(header_values, 1):
+                if value == "实盘候选分":
+                    zero_score_col = idx
+                if value in {
+                    "候选门槛失败原因",
+                    "候选门槛通过",
+                    "模型Alpha门槛通过",
+                    "有效配对门槛通过",
+                    "最大回撤门槛通过",
+                    "最差CAGR门槛通过",
+                }:
+                    failure_cols.add(idx)
 
         col_widths: dict[str, int] = {}
         for row in ws.iter_rows():
+            is_zero_candidate = False
+            if sheet_name == "实盘候选评分" and row[0].row > 1 and zero_score_col is not None:
+                score_value = row[zero_score_col - 1].value
+                try:
+                    is_zero_candidate = float(score_value) == 0.0
+                except (TypeError, ValueError):
+                    is_zero_candidate = False
             for cell in row:
                 cell.font = font_normal
-                # 仅对"实验对比"sheet 的参与评分列着绿色背景
-                if sheet_name == "实验对比" and cell.column_letter in col_letter_fill:
-                    cell.fill = col_letter_fill[cell.column_letter]
+                if cell.row == 1 and cell.column_letter in sheet_col_letter_fill.get(
+                    sheet_name, {}
+                ):
+                    cell.fill = score_header_fill
+                    cell.font = score_header_font
+                elif cell.column_letter in sheet_col_letter_fill.get(sheet_name, {}):
+                    cell.fill = sheet_col_letter_fill[sheet_name][cell.column_letter]
+                if is_zero_candidate and (
+                    cell.column == zero_score_col or cell.column in failure_cols
+                ):
+                    cell.fill = zero_fill
                 if cell.value is not None:
                     w = _str_display_width(str(cell.value))
                     col_letter = cell.column_letter
@@ -2070,17 +3358,20 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
         for col_letter, w in col_widths.items():
             ws.column_dimensions[col_letter].width = min(w + 2, 60)  # 最多60宽，留2字符边距
 
-    # ── 实验对比标题行超链接（内部链接须用 Hyperlink(location=...)）───────
-    ws_comp = wb["实验对比"]
-    for cell in next(ws_comp.iter_rows(min_row=1, max_row=1)):
-        metric_name = str(cell.value) if cell.value else ""
-        if metric_name in desc_row_map:
-            target_row = desc_row_map[metric_name]
-            cell.hyperlink = Hyperlink(
-                ref=cell.coordinate,
-                location=f"'指标说明'!A{target_row}",
-            )
-            cell.font = font_link
+    # ── 标题行超链接（内部链接须用 Hyperlink(location=...)）─────────────
+    for sheet_name in ["实盘候选评分", "模型Alpha评分", "交易参数收益评分", "实验对比"]:
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        for cell in next(ws.iter_rows(min_row=1, max_row=1)):
+            metric_name = str(cell.value) if cell.value else ""
+            if metric_name in desc_row_map:
+                target_row = desc_row_map[metric_name]
+                cell.hyperlink = Hyperlink(
+                    ref=cell.coordinate,
+                    location=f"'指标说明'!A{target_row}",
+                )
+                cell.font = font_link
 
 
 def print_comparison_table(df: pd.DataFrame) -> None:
@@ -2147,6 +3438,19 @@ def write_empty_report(output_path: Path, source_label: str) -> None:
         placeholder_df.to_excel(writer, sheet_name="实验对比", index=False)
 
 
+def _score_sheet_or_placeholder(df: pd.DataFrame, sheet_name: str, reason: str) -> pd.DataFrame:
+    """评分表为空时仍输出占位说明，保持 Excel 工作表结构稳定。"""
+    if not df.empty:
+        return df
+    return pd.DataFrame(
+        {
+            "状态": ["无可用评分"],
+            "评分视角": [sheet_name],
+            "说明": [reason],
+        }
+    )
+
+
 def generate_comparison_report(
     raw_dirs: list[Path],
     output_path: Path,
@@ -2190,10 +3494,31 @@ def generate_comparison_report(
     logger.info(f"逐Split明细表: {len(split_df)} 行")
     period_stability_df = build_period_stability_table(comp_df)
     logger.info(f"跨时间段稳定性表: {len(period_stability_df)} 行")
+    model_alpha_df = build_model_alpha_score_table(comp_df)
+    logger.info(f"模型Alpha评分表: {len(model_alpha_df)} 行")
+    trade_score_df = build_trade_param_score_table(comp_df)
+    logger.info(f"交易参数收益评分表: {len(trade_score_df)} 行")
+    candidate_df = build_live_candidate_score_table(comp_df, model_alpha_df, trade_score_df)
+    logger.info(f"实盘候选评分表: {len(candidate_df)} 行")
     comp_df = sort_by_run_time(comp_df)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        _score_sheet_or_placeholder(
+            candidate_df,
+            "实盘候选评分",
+            "缺少模型Alpha评分或有效交易参数配对评分，无法计算实盘候选分。",
+        ).to_excel(writer, sheet_name="实盘候选评分", index=False)
+        _score_sheet_or_placeholder(
+            model_alpha_df,
+            "模型Alpha评分",
+            "缺少可聚合的模型参数或选股指标，无法计算模型Alpha分。",
+        ).to_excel(writer, sheet_name="模型Alpha评分", index=False)
+        _score_sheet_or_placeholder(
+            trade_score_df,
+            "交易参数收益评分",
+            "没有相同模型参数 + 相同时间段下的多交易参数候选，无法计算配对交易参数评分。",
+        ).to_excel(writer, sheet_name="交易参数收益评分", index=False)
         comp_df.to_excel(writer, sheet_name="实验对比", index=False)
         if not period_stability_df.empty:
             period_stability_df.to_excel(writer, sheet_name="跨时间段稳定性", index=False)
@@ -2230,8 +3555,18 @@ def main():
         default=None,
         help="数据根目录；未指定时使用 configs/base.yaml 中的 data.root",
     )
-    parser.add_argument("--raw-dir",   type=str, default=None,     help="walk_forward 汇总CSV目录，默认 {data_root}/walk_forward/raw")
-    parser.add_argument("--output",    type=str, default=None,     help="对比Excel输出路径，默认 {data_root}/walk_forward/wf_comparison.xlsx")
+    parser.add_argument(
+        "--raw-dir",
+        type=str,
+        default=None,
+        help="walk_forward 汇总CSV目录，默认 {data_root}/walk_forward/raw",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="对比Excel输出路径，默认 {data_root}/walk_forward/wf_comparison.xlsx",
+    )
     args = parser.parse_args()
 
     setup_logger()
@@ -2249,9 +3584,17 @@ def main():
             return
         logger.info(f"自动扫描完成，共生成 {len(output_paths)} 个对比文件")
     else:
-        raw_dir = Path(args.raw_dir) if args.raw_dir else effective_data_root / "walk_forward" / "raw"
-        output_path = Path(args.output) if args.output else effective_data_root / "walk_forward" / "wf_comparison.xlsx"
-        if not generate_comparison_report([raw_dir], output_path, "single", data_root=effective_data_root):
+        raw_dir = (
+            Path(args.raw_dir) if args.raw_dir else effective_data_root / "walk_forward" / "raw"
+        )
+        output_path = (
+            Path(args.output)
+            if args.output
+            else effective_data_root / "walk_forward" / "wf_comparison.xlsx"
+        )
+        if not generate_comparison_report(
+            [raw_dir], output_path, "single", data_root=effective_data_root
+        ):
             logger.error("没有可用数据，退出")
             return
 

@@ -27,7 +27,7 @@ $skip_training           = $false   # $true 启用 | $false 禁用
 $wf_period_configs = @(
     [PSCustomObject]@{
         Label = "0105"
-        SplitCount = 10
+        SplitCount = 14
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
@@ -65,9 +65,9 @@ $wf_period_configs = @(
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
-$step_list               = @("yearly")   # monthly | quarterly | semiannual | yearly
-$train_window_years_list = @(3)             # 训练窗口年数
-$test_window_months_list = @(12)             # 测试窗口月数（建议与标签持仓周期接近）
+$step_list               = @("semiannual")    #此参数并不会改变切分,无用处 monthly | quarterly | semiannual | yearly
+$train_window_years_list = @(6)             # 训练窗口年数
+$test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
 $val_ratio_list          = @(0.2)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
 
 # ── 标签与任务 ────────────────────────────────────────────────
@@ -98,8 +98,8 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(200)         #50
-$rank_weight_list        = @(20,50,100)         #3
+$rank_weight_topk_list   = @(120)         #50
+$rank_weight_list        = @(100)         #3
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
