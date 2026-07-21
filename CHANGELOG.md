@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.81.0] - 2026-07-12
+
+### Added
+
+- **walk-forward 对比报表新增 `模型Seed稳定性` 工作表**：
+  - 按“排除多种子字段后的同一套模型超参”聚合不同 seed 结果。
+  - 新增 `Seed稳健分`、`模型Alpha分均值`、`模型Alpha分标准差`、`模型Alpha分最差`、`模型Alpha分最好`、`Seed列表` 等列。
+  - 用于判断一套超参是否只是某个 seed 碰巧跑好，还是跨 seed 仍然稳定。
+
 ## [0.80.1] - 2026-07-11
 
 ### Changed

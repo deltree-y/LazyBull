@@ -535,6 +535,13 @@ MODEL_PARAM_KEYS = [
 ]
 
 
+SEED_STABILITY_EXCLUDED_MODEL_KEYS = [
+    "ensemble_seeds",
+    "ensemble_seed_keep_top_ratio",
+    "ensemble_seed_keep_min_models",
+]
+
+
 TRADE_PARAM_KEYS = [
     "oos_backtest",
     "oos_backtest_months",
@@ -2344,6 +2351,115 @@ def build_model_alpha_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     return result[ordered].reset_index(drop=True)
 
 
+def build_model_seed_stability_table(
+    comp_df: pd.DataFrame,
+    model_alpha_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """按排除 seed 后的模型参数聚合，观察同一超参跨 seed 的稳定性。"""
+    if comp_df.empty or model_alpha_df.empty:
+        return pd.DataFrame()
+
+    model_cols = _cn_param_cols(MODEL_PARAM_KEYS, comp_df)
+    seed_cols = _cn_param_cols(SEED_STABILITY_EXCLUDED_MODEL_KEYS, comp_df)
+    stable_model_cols = [col for col in model_cols if col not in seed_cols]
+    if not stable_model_cols or not seed_cols:
+        return pd.DataFrame()
+
+    working = comp_df.copy()
+    working["模型参数签名"] = _signature_for_frame(working, model_cols)
+    working["Seed稳定性签名"] = _signature_for_frame(working, stable_model_cols)
+    lookup_cols = [
+        "模型参数签名",
+        "模型参数组ID",
+        "模型Alpha分",
+        "运行ID列表",
+    ]
+    lookup = model_alpha_df[
+        [col for col in lookup_cols if col in model_alpha_df.columns]
+    ].drop_duplicates("模型参数签名")
+    working = working.merge(lookup, on="模型参数签名", how="left", suffixes=("", "_模型Alpha"))
+
+    rows = []
+    for _, group in working.groupby(stable_model_cols, dropna=False, sort=False):
+        alpha_by_model = group.drop_duplicates("模型参数签名")
+        alpha_series = _numeric_series(alpha_by_model, "模型Alpha分")
+        row = {col: group.iloc[0][col] for col in stable_model_cols}
+        seed_values = []
+        for col in seed_cols:
+            values = group[col].dropna().astype(str).drop_duplicates().tolist()
+            if values:
+                seed_values.append(f"{col}=" + ",".join(values))
+        run_lists = []
+        run_list_col = (
+            "运行ID列表_模型Alpha" if "运行ID列表_模型Alpha" in group.columns else "运行ID列表"
+        )
+        if run_list_col in group.columns:
+            run_lists = group[run_list_col].dropna().astype(str).drop_duplicates().tolist()
+        row.update(
+            {
+                "Seed稳定性样本数": int(alpha_by_model["模型参数签名"].nunique()),
+                "Seed列表": " | ".join(seed_values),
+                "模型Alpha分均值": (
+                    round(alpha_series.mean(), 1) if alpha_series.notna().any() else None
+                ),
+                "模型Alpha分标准差": (
+                    round(alpha_series.std(), 2) if alpha_series.notna().sum() > 1 else None
+                ),
+                "模型Alpha分最差": (
+                    round(alpha_series.min(), 1) if alpha_series.notna().any() else None
+                ),
+                "模型Alpha分最好": (
+                    round(alpha_series.max(), 1) if alpha_series.notna().any() else None
+                ),
+                "模型参数组ID列表": (
+                    " | ".join(
+                        alpha_by_model["模型参数组ID"]
+                        .dropna()
+                        .astype(str)
+                        .drop_duplicates()
+                        .tolist()
+                    )
+                    if "模型参数组ID" in alpha_by_model.columns
+                    else None
+                ),
+                "运行ID列表": " | ".join(run_lists),
+                "Seed稳定性签名": group["Seed稳定性签名"].iloc[0],
+            }
+        )
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+    result["Seed稳健分"] = (
+        _numeric_series(result, "模型Alpha分均值") * 0.50
+        + _numeric_series(result, "模型Alpha分最差") * 0.35
+        + (100 - _numeric_series(result, "模型Alpha分标准差").fillna(0).clip(lower=0, upper=100))
+        * 0.15
+    ).round(1)
+    result.insert(
+        0, "Seed稳健排名", result["Seed稳健分"].rank(ascending=False, method="min").astype(int)
+    )
+    front_cols = [
+        "Seed稳健分",
+        "Seed稳健排名",
+        "最新运行时间",
+        "Seed稳定性样本数",
+        "Seed列表",
+        "模型Alpha分均值",
+        "模型Alpha分标准差",
+        "模型Alpha分最差",
+        "模型Alpha分最好",
+        "模型参数组ID列表",
+        "运行ID列表",
+        "Seed稳定性签名",
+    ]
+    result = sort_by_latest_run_time(result, "运行ID列表", ["Seed稳健分"])
+    ordered = [col for col in front_cols if col in result.columns]
+    ordered += [col for col in stable_model_cols if col not in ordered]
+    return result[ordered].reset_index(drop=True)
+
+
 def build_trade_param_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     """在相同模型参数+相同时间段内做配对百分位，聚合交易参数评分。"""
     if comp_df.empty:
@@ -2718,6 +2834,37 @@ def build_metric_descriptions() -> pd.DataFrame:
             "实盘候选分被置 0 的具体原因，可能包含模型Alpha不足、有效配对环境不足、"
             "最大回撤过深或最差时间段 CAGR 过低。",
             "为空表示通过",
+        ),
+        (
+            "Seed稳定性",
+            "Seed稳健分",
+            "忽略多种子字段后，对同一套模型超参跨 seed 的稳健评分。"
+            "权重：模型Alpha分均值50%、模型Alpha分最差35%、模型Alpha分标准差惩罚15%。",
+            "越高越好",
+        ),
+        (
+            "Seed稳定性",
+            "模型Alpha分均值",
+            "同一套非 seed 模型超参下，不同 seed 对应模型Alpha分的平均值。",
+            "越高越好",
+        ),
+        (
+            "Seed稳定性",
+            "模型Alpha分标准差",
+            "同一套非 seed 模型超参下，不同 seed 对应模型Alpha分的标准差；越大说明 seed 敏感性越强。",
+            "越低越稳",
+        ),
+        (
+            "Seed稳定性",
+            "模型Alpha分最差",
+            "同一套非 seed 模型超参下，不同 seed 对应模型Alpha分的最差值，用于识别是否只靠某个 seed 碰巧跑好。",
+            "越高越好",
+        ),
+        (
+            "Seed稳定性",
+            "Seed稳定性样本数",
+            "同一套非 seed 模型超参下参与聚合的完整模型参数组数量，通常等于不同 seed 配置数量。",
+            "越多越可靠",
         ),
         # ── OOS 性能指标 ──────────────────────────────────────────────────────
         (
@@ -3249,6 +3396,13 @@ def _score_column_fills() -> dict[str, dict[str, PatternFill]]:
                 for col, weight, _ in MODEL_ALPHA_SCORE_CONFIG
             },
         },
+        "模型Seed稳定性": {
+            "Seed稳健分": _weight_to_palette_fill(max_model, max_model, "blue"),
+            "模型Alpha分均值": _weight_to_palette_fill(0.30, max_model, "blue"),
+            "模型Alpha分标准差": _weight_to_palette_fill(0.15, max_model, "blue"),
+            "模型Alpha分最差": _weight_to_palette_fill(0.25, max_model, "blue"),
+            "模型Alpha分最好": _weight_to_palette_fill(0.10, max_model, "blue"),
+        },
         "交易参数收益评分": {
             "交易收益分": _weight_to_palette_fill(max_trade, max_trade, "orange"),
             "交易稳健分": _weight_to_palette_fill(max_trade, max_trade, "orange"),
@@ -3331,6 +3485,7 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
         for s in [
             "实盘候选评分",
             "模型Alpha评分",
+            "模型Seed稳定性",
             "交易参数收益评分",
             "实验对比",
             "跨时间段稳定性",
@@ -3390,7 +3545,13 @@ def format_excel_output(wb, desc_df: pd.DataFrame) -> None:
             ws.column_dimensions[col_letter].width = min(w + 2, 60)  # 最多60宽，留2字符边距
 
     # ── 标题行超链接（内部链接须用 Hyperlink(location=...)）─────────────
-    for sheet_name in ["实盘候选评分", "模型Alpha评分", "交易参数收益评分", "实验对比"]:
+    for sheet_name in [
+        "实盘候选评分",
+        "模型Alpha评分",
+        "模型Seed稳定性",
+        "交易参数收益评分",
+        "实验对比",
+    ]:
         if sheet_name not in wb.sheetnames:
             continue
         ws = wb[sheet_name]
@@ -3527,6 +3688,8 @@ def generate_comparison_report(
     logger.info(f"跨时间段稳定性表: {len(period_stability_df)} 行")
     model_alpha_df = build_model_alpha_score_table(comp_df)
     logger.info(f"模型Alpha评分表: {len(model_alpha_df)} 行")
+    model_seed_stability_df = build_model_seed_stability_table(comp_df, model_alpha_df)
+    logger.info(f"模型Seed稳定性表: {len(model_seed_stability_df)} 行")
     trade_score_df = build_trade_param_score_table(comp_df)
     logger.info(f"交易参数收益评分表: {len(trade_score_df)} 行")
     candidate_df = build_live_candidate_score_table(comp_df, model_alpha_df, trade_score_df)
@@ -3545,6 +3708,11 @@ def generate_comparison_report(
             "模型Alpha评分",
             "缺少可聚合的模型参数或选股指标，无法计算模型Alpha分。",
         ).to_excel(writer, sheet_name="模型Alpha评分", index=False)
+        _score_sheet_or_placeholder(
+            model_seed_stability_df,
+            "模型Seed稳定性",
+            "缺少 seed 字段或模型Alpha评分，无法按忽略 seed 的超参分组统计稳定性。",
+        ).to_excel(writer, sheet_name="模型Seed稳定性", index=False)
         _score_sheet_or_placeholder(
             trade_score_df,
             "交易参数收益评分",

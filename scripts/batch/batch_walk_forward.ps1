@@ -40,6 +40,7 @@ $wf_period_configs = @(
     #    FinalDate = "20260109" # 20260209
     #    ContinueDays = 1
     #    StartModelVersion = 19234#19057#(0.035)#19234#(0.03)#19249#(0.04)
+    #    SelectedSplits = @()
     #}
     #[PSCustomObject]@{
     #    Label = "0116"
@@ -79,7 +80,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
-$learning_rate_list      = @(0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
@@ -127,37 +128,45 @@ $enable_fundamental      = $true  # $true 启用 | $false 禁用
 
 # ── 另类数据因子（股东人数、业绩预告等）(0310添加)──────────────────
 $enable_alt              = $true  # $true 启用 | $false 禁用
+# 0711关闭后得分大幅下降, 属于关键因子, 必须打开
 
 # ── 融资融券因子（通过 margin_detail 接口下载）────────────────────
 $enable_margin           = $true  # $true 启用 | $false 禁用
 # 0428:关闭后CAGR下降约3%, 回撤基本不变 
 # 0610:打开后CAGR大幅下降
+# 0711关闭后得分小降,但rank_ic最高,暂时保持打开
 
 # ── 筹码胜率因子（需5000+积分，需先下载 cyq_perf）─────────────────
-$enable_cyq              = $true  # $true 启用 | $false 禁用
+$enable_cyq              = $true # $true 启用 | $false 禁用
 # 0428:关闭后CAGR下降约3%, 回撤基本不变
+# 0711 关掉后分数大幅下降, 属于关键因子, 必须打开
 
 # ── 基金持仓因子（需5000+积分，需先下载 fund_portfolio）──────────
 $enable_fund             = $true  # $true 启用 | $false 禁用
 #改为false似乎可以提升少量收益并减少少量回撤, 并提升稳定效果
+# 0711关闭后会有下降, 需要保持打开
 
 # ── 业绩快报因子（需5000+积分，需先下载 express）─────────────────
 $enable_express          = $true  # $true 启用 | $false 禁用
+# 0711关闭后分数大幅下降, 需要保持打开
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
-$enable_north            = $true  # $true 启用 | $false 禁用
+$enable_north            = $false  # $true 启用 | $false 禁用
 #实测:打开后CAGR下降约6%, 回撤上升8%
+# 0711 似乎无影响, 那就保持关闭
 
 # ── 龙虎榜因子（top_list 个股级, 2000+积分）──────────────────────
 $enable_lhb              = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约4%, 回撤提升约5%
+# 0711关闭后微降,先保持打开
 
 # ── 一致预期因子（report_rc 研报滚动聚合, 8000积分）──────────────
 $enable_consensus        = $false  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约2%, 回撤无明显变化
+# 0711关闭后大幅提升分数
 
 # ── 一致预期修正因子（0512基于已有 report_rc 构建时序修正信号，无需额外下载）─
-# 0711该因子有问题
+# 0711该因子有问题, 打开的话会导致训练异常bug
 $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─

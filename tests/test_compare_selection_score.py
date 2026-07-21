@@ -6,6 +6,7 @@ from scripts.compare_walk_forward import (
     COL_NAMES,
     build_live_candidate_score_table,
     build_model_alpha_score_table,
+    build_model_seed_stability_table,
     build_trade_param_score_table,
     compute_selection_score,
     sort_by_run_time,
@@ -63,6 +64,7 @@ def _base_comp_df() -> pd.DataFrame:
                         "标签列": model_name,
                         "最大深度": 6 if model_name == "model_good" else 3,
                         "学习率": 0.03 if model_name == "model_good" else 0.10,
+                        "多种子bagging种子": "42",
                         "回测TopN": top_n,
                         "回测调仓频率": 5,
                         "选股综合得分": 90.0 if model_name == "model_good" else 20.0,
@@ -147,3 +149,40 @@ def test_comparison_table_sort_adds_latest_run_time() -> None:
 
     assert result.iloc[0]["运行ID"] == "wf_20250101_090000_new"
     assert result.iloc[0]["最新运行时间"] == "2025-01-01 09:00:00"
+
+
+def test_model_seed_stability_groups_same_params_except_seed() -> None:
+    """模型Seed稳定性应忽略 seed 字段，聚合同一套超参的多 seed 结果。"""
+    df = pd.DataFrame(
+        {
+            "运行ID": ["wf_20250101_090000_seed42", "wf_20250101_100000_seed99"],
+            "批次时间段": ["seed_test", "seed_test"],
+            "最终日期": ["20250101", "20250101"],
+            "切分数量": [3, 3],
+            "标签列": ["model_same", "model_same"],
+            "最大深度": [6, 6],
+            "学习率": [0.03, 0.03],
+            "多种子bagging种子": ["42", "99"],
+            "选股综合得分": [90.0, 70.0],
+            COL_NAMES["daily_rankic_mean"]: [0.08, 0.06],
+            COL_NAMES["icir"]: [2.0, 1.4],
+            COL_NAMES["oos_top30_lift_mean"]: [0.04, 0.02],
+            COL_NAMES["oos_top30_win_rate"]: [0.8, 0.7],
+            COL_NAMES["oos_top30_worst_median"]: [0.01, 0.00],
+            COL_NAMES["selection_monotonicity"]: [1.0, 0.8],
+            COL_NAMES["train_val_ir_gap"]: [0.05, 0.10],
+            COL_NAMES["chain_cagr"]: [0.3, 0.2],
+            COL_NAMES["chain_max_drawdown"]: [-0.12, -0.15],
+        }
+    )
+
+    model_df = build_model_alpha_score_table(df)
+    seed_df = build_model_seed_stability_table(df, model_df)
+
+    assert len(seed_df) == 1
+    assert seed_df.iloc[0]["Seed稳定性样本数"] == 2
+    assert "42" in seed_df.iloc[0]["Seed列表"]
+    assert "99" in seed_df.iloc[0]["Seed列表"]
+    assert "模型Alpha分均值" in seed_df.columns
+    assert "模型Alpha分标准差" in seed_df.columns
+    assert "模型Alpha分最差" in seed_df.columns
