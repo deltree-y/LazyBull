@@ -79,9 +79,8 @@ def compute_daily_topk_returns(
     # 计算每个 K 的 TopK 平均收益
     topk_returns = {}
     for k in k_values:
-        actual_k = min(k, len(sorted_idx))
-        if actual_k > 0:
-            topk_idx = sorted_idx[:actual_k]
+        if len(sorted_idx) >= k and k > 0:
+            topk_idx = sorted_idx[:k]
             topk_mean_return = ret_valid.loc[topk_idx].mean()
             topk_returns[f"Top{k}平均收益"] = topk_mean_return
         else:
@@ -246,21 +245,24 @@ def compute_diagnostic_statistics(
         topk_daily_returns = []
         last_topk_codes = []
         last_topk_date = None
+        eligible_trade_dates = 0
+        total_trade_dates = 0
 
         for trade_date in df[date_col].unique():
             day_df = df[df[date_col] == trade_date]
+            total_trade_dates += 1
 
             # 过滤有效样本
             valid_mask = day_df[prediction_col].notna() & day_df[return_col].notna()
             valid_df = day_df[valid_mask]
 
-            if len(valid_df) == 0:
+            if len(valid_df) < k or k <= 0:
                 continue
+            eligible_trade_dates += 1
 
             # 按预测分数降序排序，选择 TopK
             sorted_df = valid_df.sort_values(prediction_col, ascending=False)
-            actual_k = min(k, len(sorted_df))
-            topk_df = sorted_df.head(actual_k)
+            topk_df = sorted_df.head(k)
             last_topk_date = trade_date
             last_topk_codes = topk_df["ts_code"].astype(str).tolist() if "ts_code" in topk_df.columns else []
 
@@ -293,11 +295,20 @@ def compute_diagnostic_statistics(
             diagnostics[f"Top{k}_超额命中率_跑赢全市场"] = (topk_returns_df["lift"] > 0).mean()
             diagnostics[f"Top{k}_最新日期"] = str(last_topk_date) if last_topk_date is not None else ""
             diagnostics[f"Top{k}_最新股票列表"] = ",".join(last_topk_codes)
+            diagnostics[f"Top{k}_有效交易日数"] = int(eligible_trade_dates)
+            diagnostics[f"Top{k}_样本覆盖率"] = (
+                eligible_trade_dates / total_trade_dates if total_trade_dates > 0 else np.nan
+            )
 
             # 分位数统计（用于判断是否被极端日驱动）
             diagnostics[f"Top{k}_逐日均值_25分位"] = topk_returns_df["topk_mean"].quantile(0.25)
             diagnostics[f"Top{k}_逐日均值_50分位"] = topk_returns_df["topk_mean"].quantile(0.50)
             diagnostics[f"Top{k}_逐日均值_75分位"] = topk_returns_df["topk_mean"].quantile(0.75)
+        else:
+            diagnostics[f"Top{k}_有效交易日数"] = int(eligible_trade_dates)
+            diagnostics[f"Top{k}_样本覆盖率"] = (
+                eligible_trade_dates / total_trade_dates if total_trade_dates > 0 else np.nan
+            )
 
     return diagnostics
 

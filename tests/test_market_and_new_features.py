@@ -663,3 +663,72 @@ class TestWarmupStartDateIndependence:
         assert abs(v1 - v3) > 1e-9, (
             f"截断后 mkt_adv_dec_ratio 预期不同，实际相同: v1={v1}, v3={v3}"
         )
+
+    def test_precompute_daily_adj_invalidates_derived_caches_between_windows(self):
+        """同一 builder 切换输入窗口时，派生缓存应重建而不是复用旧窗口结果。"""
+        daily_data, dates = self._make_daily_data(n_days=200, n_stocks=5)
+        daily_basic = self._make_daily_basic(dates, n_stocks=5)
+        trade_cal = pd.DataFrame({'cal_date': dates, 'is_open': 1})
+        target_date = dates[160]
+        result_df = pd.DataFrame({'ts_code': ['000000.SZ']})
+        empty_adj = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+
+        builder = FeatureBuilder()
+
+        builder.precompute_daily_adj(daily_data, empty_adj)
+        trading_dates = builder._get_trading_dates(trade_cal)
+        builder._get_tech_factor_today(builder._daily_adj_precomputed, target_date, trading_dates)
+        builder._add_market_state_features(
+            result_df.copy(),
+            builder._daily_adj_precomputed,
+            target_date,
+            trading_dates,
+            trading_dates.index(target_date),
+            daily_basic_data=daily_basic,
+        )
+
+        trunc_dates = set(dates[20:])
+        trunc_data = daily_data[daily_data['trade_date'].isin(trunc_dates)].copy()
+        trunc_basic = daily_basic[daily_basic['trade_date'].isin(trunc_dates)].copy()
+
+        builder.precompute_daily_adj(trunc_data, empty_adj)
+        trading_dates = builder._get_trading_dates(trade_cal)
+        tech_reuse = builder._get_tech_factor_today(
+            builder._daily_adj_precomputed, target_date, trading_dates
+        )
+        builder._add_market_state_features(
+            result_df.copy(),
+            builder._daily_adj_precomputed,
+            target_date,
+            trading_dates,
+            trading_dates.index(target_date),
+            daily_basic_data=trunc_basic,
+        )
+        market_reuse = float(builder._market_state_cache.loc[target_date, 'mkt_vol_20'])
+
+        fresh_builder = FeatureBuilder()
+        fresh_builder.precompute_daily_adj(trunc_data, empty_adj)
+        fresh_trading_dates = fresh_builder._get_trading_dates(trade_cal)
+        tech_fresh = fresh_builder._get_tech_factor_today(
+            fresh_builder._daily_adj_precomputed,
+            target_date,
+            fresh_trading_dates,
+        )
+        fresh_builder._add_market_state_features(
+            result_df.copy(),
+            fresh_builder._daily_adj_precomputed,
+            target_date,
+            fresh_trading_dates,
+            fresh_trading_dates.index(target_date),
+            daily_basic_data=trunc_basic,
+        )
+        market_fresh = float(fresh_builder._market_state_cache.loc[target_date, 'mkt_vol_20'])
+
+        assert abs(market_reuse - market_fresh) < 1e-9
+
+        merged = tech_reuse.merge(tech_fresh, on='ts_code', suffixes=('_reuse', '_fresh'))
+        for col in ['macd_hist', 'rsi_14', 'bb_pct']:
+            if f'{col}_reuse' not in merged.columns or f'{col}_fresh' not in merged.columns:
+                continue
+            diff = (merged[f'{col}_reuse'] - merged[f'{col}_fresh']).abs().fillna(0)
+            assert diff.max() < 1e-9, f'{col} 在复用 builder 与新 builder 间不一致'

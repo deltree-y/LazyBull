@@ -1857,8 +1857,8 @@ def _build_adaptive_candidate_args(args, action: Optional[str]):
     if action == "hit_cap":
         return _copy_args_with_training_overrides(
             args,
-            learning_rate=args.learning_rate * 3,# * 1.5,
-            n_estimators=int(args.n_estimators * 5),
+            learning_rate=args.learning_rate * 2,
+            n_estimators=int(args.n_estimators * 2),
         )
     return None
 
@@ -2341,6 +2341,10 @@ def execute_split_training(
         "val_es_end_date": data_stats.get("val_es_end_date", data_stats["val_end_date"]),
         "val_es_n_dates": data_stats.get("val_es_n_dates", 0),
         "val_es_samples": data_stats.get("val_es_samples", X_val_len),
+        "val_calib_start_date": data_stats.get("val_calib_start_date", "N/A"),
+        "val_calib_end_date": data_stats.get("val_calib_end_date", "N/A"),
+        "val_calib_n_dates": data_stats.get("val_calib_n_dates", 0),
+        "val_calib_samples": data_stats.get("val_calib_samples", 0),
         "val_embargo_days": data_stats.get("val_embargo_days", 0),
         "val_embargo_days_applied": data_stats.get("val_embargo_days_applied", 0),
         "val_embargo_n_dates": data_stats.get("val_embargo_n_dates", 0),
@@ -2711,6 +2715,10 @@ def execute_deploy_training(
         "val_es_end_date": data_stats.get("val_es_end_date", data_stats["val_end_date"]),
         "val_es_n_dates": data_stats.get("val_es_n_dates", 0),
         "val_es_samples": data_stats.get("val_es_samples", X_val_len),
+        "val_calib_start_date": data_stats.get("val_calib_start_date", "N/A"),
+        "val_calib_end_date": data_stats.get("val_calib_end_date", "N/A"),
+        "val_calib_n_dates": data_stats.get("val_calib_n_dates", 0),
+        "val_calib_samples": data_stats.get("val_calib_samples", 0),
         "val_embargo_days": data_stats.get("val_embargo_days", 0),
         "val_embargo_days_applied": data_stats.get("val_embargo_days_applied", 0),
         "val_embargo_n_dates": data_stats.get("val_embargo_n_dates", 0),

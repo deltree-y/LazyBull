@@ -519,6 +519,120 @@ def split_val_for_early_stopping_by_date(
     return df_val_es, df_val_embargo, stats
 
 
+def split_val_for_selection_protocol_by_date(
+    df_val: pd.DataFrame,
+    embargo_days: int,
+    date_col: str = "trade_date",
+    calibration_ratio: float = 0.25,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict]:
+    """将验证集拆成 early stopping / calibration / embargo 三段。
+
+    目的：
+    - `df_val_es` 仅用于训练期间 early stopping / best_iteration；
+    - `df_val_calib` 仅用于候选比较、后验树数选择与稳定性诊断；
+    - `df_val_embargo` 继续隔离尾部，避免与测试期价格窗口重叠。
+
+    默认在扣除 embargo 后，将剩余验证日期的后 25% 划为 calibration，
+    至少保留 1 个 calibration 交易日，并确保 early stopping 至少保留 1 个交易日。
+    当样本过短时，自动退化为“只有 early stopping，没有 calibration”。
+    """
+
+    def _date_range(dates: List) -> Tuple[str, str]:
+        if not dates:
+            return "N/A", "N/A"
+        return str(dates[0]), str(dates[-1])
+
+    if len(df_val) == 0:
+        empty_stats = {
+            "val_raw_n_dates": 0,
+            "val_raw_start_date": "N/A",
+            "val_raw_end_date": "N/A",
+            "val_raw_samples": 0,
+            "val_es_n_dates": 0,
+            "val_es_start_date": "N/A",
+            "val_es_end_date": "N/A",
+            "val_es_samples": 0,
+            "val_calib_n_dates": 0,
+            "val_calib_start_date": "N/A",
+            "val_calib_end_date": "N/A",
+            "val_calib_samples": 0,
+            "val_embargo_n_dates": 0,
+            "val_embargo_start_date": "N/A",
+            "val_embargo_end_date": "N/A",
+            "val_embargo_samples": 0,
+            "val_embargo_days_requested": max(int(embargo_days), 0),
+            "val_embargo_days_applied": 0,
+            "val_calibration_ratio": float(calibration_ratio),
+        }
+        empty = df_val.iloc[:0].copy()
+        return empty, empty, empty, empty_stats
+
+    raw_dates = sorted(df_val[date_col].unique())
+    raw_start, raw_end = _date_range(raw_dates)
+    embargo_days_requested = max(int(embargo_days), 0)
+    calibration_ratio = min(max(float(calibration_ratio), 0.0), 0.5)
+
+    if embargo_days_requested <= 0:
+        candidate_dates = raw_dates
+        embargo_dates = []
+    else:
+        embargo_n_dates = min(embargo_days_requested, len(raw_dates))
+        if embargo_n_dates >= len(raw_dates):
+            candidate_dates = []
+            embargo_dates = raw_dates
+        else:
+            candidate_dates = raw_dates[:-embargo_n_dates]
+            embargo_dates = raw_dates[-embargo_n_dates:]
+
+    if len(candidate_dates) <= 1:
+        es_dates = candidate_dates
+        calib_dates = []
+    else:
+        requested_calib_dates = max(1, math.ceil(len(candidate_dates) * calibration_ratio))
+        calib_n_dates = min(requested_calib_dates, len(candidate_dates) - 1)
+        es_dates = candidate_dates[:-calib_n_dates]
+        calib_dates = candidate_dates[-calib_n_dates:]
+
+    es_dates_set = set(es_dates)
+    calib_dates_set = set(calib_dates)
+    embargo_dates_set = set(embargo_dates)
+    df_val_es = df_val[df_val[date_col].isin(es_dates_set)].copy()
+    df_val_calib = df_val[df_val[date_col].isin(calib_dates_set)].copy()
+    df_val_embargo = df_val[df_val[date_col].isin(embargo_dates_set)].copy()
+
+    es_start, es_end = _date_range(es_dates)
+    calib_start, calib_end = _date_range(calib_dates)
+    embargo_start, embargo_end = _date_range(embargo_dates)
+    stats = {
+        "val_raw_n_dates": len(raw_dates),
+        "val_raw_start_date": raw_start,
+        "val_raw_end_date": raw_end,
+        "val_raw_samples": len(df_val),
+        "val_es_n_dates": len(es_dates),
+        "val_es_start_date": es_start,
+        "val_es_end_date": es_end,
+        "val_es_samples": len(df_val_es),
+        "val_calib_n_dates": len(calib_dates),
+        "val_calib_start_date": calib_start,
+        "val_calib_end_date": calib_end,
+        "val_calib_samples": len(df_val_calib),
+        "val_embargo_n_dates": len(embargo_dates),
+        "val_embargo_start_date": embargo_start,
+        "val_embargo_end_date": embargo_end,
+        "val_embargo_samples": len(df_val_embargo),
+        "val_embargo_days_requested": embargo_days_requested,
+        "val_embargo_days_applied": len(embargo_dates),
+        "val_calibration_ratio": calibration_ratio,
+    }
+
+    if len(df_val_es) == 0 and len(candidate_dates) > 0:
+        logger.warning(
+            "验证集协议拆分后 early stopping 子集为空，训练将退化为无验证集早停"
+        )
+
+    return df_val_es, df_val_calib, df_val_embargo, stats
+
+
 def filter_stable_features(
     df_train: pd.DataFrame,
     feature_columns: List[str],
@@ -659,11 +773,13 @@ def prepare_training_data(
             加载排除列表并过滤特征列）。默认 False。
 
     Returns:
-        (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats,
-         df_val_split_original) 元组
-        - df_val_split: 已做尾部隔离后的验证子集（供模型训练/early stopping 使用）
-        - df_val_split_original: 上述验证子集在标签变换前的原始快照（供逐日收益评估使用）
-        data_stats 包含：samples_after_filter, val_start_date, val_end_date 及 val_embargo_* 统计
+                (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats,
+                 df_val_split_original) 元组
+                - df_val_split: early stopping 子集（仅供模型训练/early stopping 使用）
+                - df_val_split_original: calibration 子集的原始快照；若 calibration 为空则回退到
+                    early stopping 子集。供逐日收益评估、候选比较与后验树数选择使用。
+                data_stats 包含：samples_after_filter, val_start_date, val_end_date 及
+                    val_es_* / val_calib_* / val_embargo_* 统计
     """
     logger.info("准备训练数据...")
 
@@ -951,24 +1067,33 @@ def prepare_training_data(
 
     # 从验证集尾部自动隔离与测试期可能重叠的标签窗口样本，
     # 仅隔离后的子集参与 early stopping / best_iteration 选择。
-    df_val_split, df_val_split_embargo, val_es_stats = split_val_for_early_stopping_by_date(
+    (
+        df_val_split,
+        df_val_split_calib,
+        df_val_split_embargo,
+        val_protocol_stats,
+    ) = split_val_for_selection_protocol_by_date(
         df_val_split_raw,
         embargo_days=label_delta,
     )
     logger.info(
-        "验证集尾部隔离（按标签自动推导）: "
-        f"raw={val_es_stats['val_raw_start_date']}~{val_es_stats['val_raw_end_date']} "
-        f"({val_es_stats['val_raw_n_dates']}日/{val_es_stats['val_raw_samples']}样本), "
-        f"es={val_es_stats['val_es_start_date']}~{val_es_stats['val_es_end_date']} "
-        f"({val_es_stats['val_es_n_dates']}日/{val_es_stats['val_es_samples']}样本), "
-        f"embargo={val_es_stats['val_embargo_start_date']}~{val_es_stats['val_embargo_end_date']} "
-        f"({val_es_stats['val_embargo_n_dates']}日/{val_es_stats['val_embargo_samples']}样本), "
-        f"embargo_days={val_es_stats['val_embargo_days_requested']}"
+        "验证集协议拆分（按标签自动推导）: "
+        f"raw={val_protocol_stats['val_raw_start_date']}~{val_protocol_stats['val_raw_end_date']} "
+        f"({val_protocol_stats['val_raw_n_dates']}日/{val_protocol_stats['val_raw_samples']}样本), "
+        f"es={val_protocol_stats['val_es_start_date']}~{val_protocol_stats['val_es_end_date']} "
+        f"({val_protocol_stats['val_es_n_dates']}日/{val_protocol_stats['val_es_samples']}样本), "
+        f"calib={val_protocol_stats['val_calib_start_date']}~{val_protocol_stats['val_calib_end_date']} "
+        f"({val_protocol_stats['val_calib_n_dates']}日/{val_protocol_stats['val_calib_samples']}样本), "
+        f"embargo={val_protocol_stats['val_embargo_start_date']}~{val_protocol_stats['val_embargo_end_date']} "
+        f"({val_protocol_stats['val_embargo_n_dates']}日/{val_protocol_stats['val_embargo_samples']}样本), "
+        f"embargo_days={val_protocol_stats['val_embargo_days_requested']}"
     )
 
-    # 在标签变换前保存 val 原始 df 引用（label_transform_fn 内部会创建新 df，
-    # 原 df_val_split 不会被修改，无需深拷贝即可保留原始收益单位数据）
-    df_val_split_original = df_val_split
+    # 在标签变换前保存 calibration 原始 df 引用；若 calibration 为空则回退到 es 子集。
+    # label_transform_fn 内部会创建新 df，原始 df 不会被修改，无需深拷贝。
+    df_val_split_original = (
+        df_val_split_calib if len(df_val_split_calib) > 0 else df_val_split
+    )
 
     # 释放已不再需要的原始/中间 DataFrame，回收 ~4-5 GiB 内存
     # 提前保存后续 data_stats 需要的值
@@ -1026,12 +1151,17 @@ def prepare_training_data(
         "val_es_end_date": str(val_end_date),
         "val_es_n_dates": len(val_es_dates),
         "val_es_samples": len(df_val_split),
+        "val_calib_start_date": val_protocol_stats["val_calib_start_date"],
+        "val_calib_end_date": val_protocol_stats["val_calib_end_date"],
+        "val_calib_n_dates": val_protocol_stats["val_calib_n_dates"],
+        "val_calib_samples": len(df_val_split_original),
         "val_embargo_days": label_delta,
-        "val_embargo_days_applied": val_es_stats["val_embargo_days_applied"],
-        "val_embargo_n_dates": val_es_stats["val_embargo_n_dates"],
+        "val_embargo_days_applied": val_protocol_stats["val_embargo_days_applied"],
+        "val_embargo_n_dates": val_protocol_stats["val_embargo_n_dates"],
         "val_embargo_samples": len(df_val_split_embargo),
-        "val_embargo_start_date": val_es_stats["val_embargo_start_date"],
-        "val_embargo_end_date": val_es_stats["val_embargo_end_date"],
+        "val_embargo_start_date": val_protocol_stats["val_embargo_start_date"],
+        "val_embargo_end_date": val_protocol_stats["val_embargo_end_date"],
+        "val_calibration_ratio": val_protocol_stats["val_calibration_ratio"],
         "feature_filter_info": feature_filter_info,
     }
 

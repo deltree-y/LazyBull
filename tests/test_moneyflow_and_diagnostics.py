@@ -182,6 +182,27 @@ class TestDiagnosticStatistics:
         # 验证样本数统计
         assert diagnostics['每日样本数_最小'] == 100
         assert diagnostics['每日样本数_最大'] == 100
+
+    def test_topk_diagnostics_skip_days_with_insufficient_samples(self):
+        df = pd.DataFrame(
+            {
+                'trade_date': ['20240102'] * 5 + ['20240103'] * 12,
+                'ts_code': [f'{i:06d}.SZ' for i in range(5)] + [f'{i:06d}.SZ' for i in range(12)],
+                'pred_score': list(range(5, 0, -1)) + list(range(12, 0, -1)),
+                'y_ret_20': np.linspace(0.01, 0.05, 17),
+            }
+        )
+
+        diagnostics = compute_diagnostic_statistics(
+            df=df,
+            date_col='trade_date',
+            prediction_col='pred_score',
+            return_col='y_ret_20',
+            topk_values=[10],
+        )
+
+        assert diagnostics['Top10_有效交易日数'] == 1
+        assert diagnostics['Top10_样本覆盖率'] == 0.5
     
     def test_print_diagnostic_report(self, sample_features_data):
         """测试诊断报告打印（不报错即可）"""

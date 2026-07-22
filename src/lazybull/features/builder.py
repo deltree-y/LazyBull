@@ -134,6 +134,32 @@ class FeatureBuilder:
         if cleared:
             logger.debug(f"FeatureBuilder 缓存已释放: {', '.join(cleared)}")
 
+    def _invalidate_precomputed_state(self) -> None:
+        """失效依赖当前输入窗口的派生缓存。
+
+        `precompute_daily_adj()` / 新窗口重算前必须调用，避免同一 builder 在不同
+        历史窗口之间复用旧的技术因子、市场状态和交易日索引缓存。
+        """
+        cache_names = [
+            '_market_state_cache',
+            '_tech_factor_cache',
+            '_tech_factor_cache_dict',
+            '_trading_dates_cache',
+            '_trading_date_index',
+            '_daily_adj_precomputed',
+            '_daily_adj_dict',
+        ]
+        invalidated = []
+        for name in cache_names:
+            if getattr(self, name, None) is not None:
+                setattr(self, name, None)
+                invalidated.append(name)
+        if invalidated:
+            logger.debug(
+                "FeatureBuilder 检测到输入窗口切换，已失效缓存: "
+                + ", ".join(invalidated)
+            )
+
     def precompute_daily_adj(self, daily_data: pd.DataFrame, adj_factor: pd.DataFrame) -> None:
         """预计算全量 daily_adj 并建立按交易日索引的字典（循环外调用一次）
 
@@ -144,6 +170,7 @@ class FeatureBuilder:
             daily_data: 全量日线数据（clean 层，已含 close_adj 等复权价）
             adj_factor: 复权因子（clean 层场景下传入空 DataFrame 即可）
         """
+        self._invalidate_precomputed_state()
         logger.info("预计算 daily_adj（含 pre_close_adj）并建立日期索引字典...")
         daily_adj = self._calculate_adj_close(daily_data, adj_factor)
         daily_adj = daily_adj.sort_values(['ts_code', 'trade_date'])

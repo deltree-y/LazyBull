@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.81.1] - 2026-07-22
+
+### Changed
+
+- **训练验证协议改为 `ES / Calibration / Embargo` 三段**：
+  - `src/lazybull/ml/train_core.py` 新增验证协议拆分逻辑：`val_es` 只用于 early stopping / best_iteration，`val_calib` 只用于候选比较、后验树数选择与稳定性诊断，`val_embargo` 继续隔离测试期前沿标签窗口。
+  - `scripts/walk_forward.py`、`scripts/train_ml_model.py` 与 `src/lazybull/ml/run_logger.py` 同步落盘 `val_calib_*` 字段，便于回看每次训练实际使用了哪些验证子集。
+  - 目的：停止把同一块验证数据同时用于 early stopping 和候选比较，降低 seed / 起始日期波动被验证集重复利用放大的问题。
+
+- **TopK 评估新增最小样本保护与覆盖率统计**：
+  - `src/lazybull/ml/eval_utils.py` 在逐日 TopK 评估中，当日有效样本数小于 K 时不再把 `TopK` 退化成更小样本的伪 `TopK`，而是记为缺失并跳过该日。
+  - 新增 `Top{k}_有效交易日数` 与 `Top{k}_样本覆盖率` 诊断字段，帮助识别某组参数是否只是靠少数“可评估日期”抬高了 TopK 表现。
+
+- **FeatureBuilder 跨窗口复用时强制失效派生缓存**：
+  - `src/lazybull/features/builder.py` 的 `precompute_daily_adj()` 现在会先失效旧窗口对应的技术因子缓存、市场状态缓存、交易日索引缓存与预计算 `daily_adj` 缓存，再重建当前窗口状态。
+  - 目的：避免 `ensure_features_for_date()` / 纸面交易复用同一个 `FeatureBuilder` 时，把上一轮历史窗口的技术指标或市场状态缓存错误带入下一轮窗口。
+
 ## [0.81.0] - 2026-07-12
 
 ### Added

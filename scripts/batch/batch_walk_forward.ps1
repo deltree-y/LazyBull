@@ -81,7 +81,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
 $learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
-$min_child_weight_list   = @(250)       #. XGB推荐150, LGB推荐200
+$min_child_weight_list   = @(200)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
@@ -111,7 +111,7 @@ $adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "42"#,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "61"#,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 1    # 多种子筛选最少保留模型数 
 

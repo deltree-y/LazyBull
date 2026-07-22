@@ -9,6 +9,7 @@ from src.lazybull.ml.train_core import (
     prepare_training_data,
     split_train_val_by_date,
     split_val_for_early_stopping_by_date,
+    split_val_for_selection_protocol_by_date,
 )
 
 
@@ -106,6 +107,42 @@ def test_split_val_for_early_stopping_by_date_all_embargo_when_short():
     assert len(df_embargo) == len(df_val)
 
 
+def test_split_val_for_selection_protocol_by_date_splits_three_segments():
+    df = _make_training_df(n_dates=20, stocks_per_date=2)
+    df_val = df[["trade_date", "ts_code", "y_ret_5"]].copy()
+
+    df_es, df_calib, df_embargo, stats = split_val_for_selection_protocol_by_date(
+        df_val, embargo_days=4
+    )
+
+    assert stats["val_raw_n_dates"] == 20
+    assert stats["val_embargo_n_dates"] == 4
+    assert stats["val_calib_n_dates"] == 4
+    assert stats["val_es_n_dates"] == 12
+    assert len(df_es) == 12 * 2
+    assert len(df_calib) == 4 * 2
+    assert len(df_embargo) == 4 * 2
+    assert set(df_es["trade_date"].unique()).isdisjoint(set(df_calib["trade_date"].unique()))
+    assert set(df_calib["trade_date"].unique()).isdisjoint(set(df_embargo["trade_date"].unique()))
+    assert df_es["trade_date"].max() < df_calib["trade_date"].min()
+    assert df_calib["trade_date"].max() < df_embargo["trade_date"].min()
+
+
+def test_split_val_for_selection_protocol_short_data_falls_back_to_es_only():
+    df = _make_training_df(n_dates=7, stocks_per_date=2)
+    df_val = df[["trade_date", "ts_code", "y_ret_5"]].copy()
+
+    df_es, df_calib, df_embargo, stats = split_val_for_selection_protocol_by_date(
+        df_val, embargo_days=6
+    )
+
+    assert stats["val_embargo_n_dates"] == 6
+    assert stats["val_calib_n_dates"] == 0
+    assert stats["val_es_n_dates"] == 1
+    assert len(df_calib) == 0
+    assert len(df_es) == 2
+
+
 def test_prepare_training_data_auto_embargo_from_label_horizon():
     df = _make_training_df(n_dates=40, stocks_per_date=2)
 
@@ -129,23 +166,40 @@ def test_prepare_training_data_auto_embargo_from_label_horizon():
     assert data_stats["val_embargo_days"] == expected_delta
     assert data_stats["val_raw_n_dates"] > 0
     assert data_stats["val_embargo_n_dates"] == expected_delta
-    assert data_stats["val_es_n_dates"] == data_stats["val_raw_n_dates"] - expected_delta
+    assert data_stats["val_es_n_dates"] + data_stats["val_calib_n_dates"] == (
+        data_stats["val_raw_n_dates"] - expected_delta
+    )
 
     # 返回给训练器的验证集应与 early stopping 子集一致
-    assert len(X_val) == len(y_val) == len(df_val_split) == len(df_val_split_original)
+    assert len(X_val) == len(y_val) == len(df_val_split)
     assert len(X_val) == data_stats["val_es_samples"]
     assert len(X_train) == len(y_train) == len(df_train_split)
     assert list(X_val.columns) == feature_columns
+
+    if data_stats["val_calib_n_dates"] > 0:
+        assert len(df_val_split_original) == data_stats["val_calib_samples"]
+        assert set(df_val_split["trade_date"].unique()).isdisjoint(
+            set(df_val_split_original["trade_date"].unique())
+        )
+    else:
+        assert len(df_val_split_original) == len(df_val_split)
 
     # 验证集日期不应与训练集日期重叠
     train_dates = set(df_train_split["trade_date"].unique())
     val_dates = set(df_val_split["trade_date"].unique())
     assert train_dates.isdisjoint(val_dates)
 
-    if data_stats["val_es_n_dates"] > 0 and data_stats["val_embargo_n_dates"] > 0:
-        assert data_stats["val_end_date"] < data_stats["val_embargo_start_date"]
+    if data_stats["val_es_n_dates"] > 0 and data_stats["val_calib_n_dates"] > 0:
+        assert data_stats["val_end_date"] < data_stats["val_calib_start_date"]
+    if data_stats["val_calib_n_dates"] > 0 and data_stats["val_embargo_n_dates"] > 0:
+        assert data_stats["val_calib_end_date"] < data_stats["val_embargo_start_date"]
 
     # 与独立计算的期望子集对齐
     _, raw_val, _ = split_train_val_by_date(df, val_ratio=0.4, delta=expected_delta)
-    expected_es, _, _ = split_val_for_early_stopping_by_date(raw_val, embargo_days=expected_delta)
+    expected_es, expected_calib, _, _ = split_val_for_selection_protocol_by_date(
+        raw_val, embargo_days=expected_delta
+    )
     assert set(df_val_split["trade_date"].unique()) == set(expected_es["trade_date"].unique())
+    assert set(df_val_split_original["trade_date"].unique()) == set(
+        (expected_calib if len(expected_calib) > 0 else expected_es)["trade_date"].unique()
+    )
