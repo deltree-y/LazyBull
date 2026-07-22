@@ -4,10 +4,14 @@ import pandas as pd
 
 from scripts.compare_walk_forward import (
     COL_NAMES,
+    build_comparison_table,
     build_live_candidate_score_table,
     build_model_alpha_score_table,
     build_model_seed_stability_table,
+    build_period_stability_table,
     build_trade_param_score_table,
+    compact_experiment_sheet_for_display,
+    compute_composite_score,
     compute_selection_score,
     sort_by_run_time,
 )
@@ -183,6 +187,184 @@ def test_model_seed_stability_groups_same_params_except_seed() -> None:
     assert seed_df.iloc[0]["Seed稳定性样本数"] == 2
     assert "42" in seed_df.iloc[0]["Seed列表"]
     assert "99" in seed_df.iloc[0]["Seed列表"]
+    assert "模型Alpha分中位数" in seed_df.columns
     assert "模型Alpha分均值" in seed_df.columns
     assert "模型Alpha分标准差" in seed_df.columns
     assert "模型Alpha分最差" in seed_df.columns
+    assert seed_df.iloc[0]["模型Alpha分中位数"] is not None
+
+
+def test_model_alpha_score_groups_same_params_except_seed() -> None:
+    """模型Alpha评分应将仅 seed 不同的运行聚合为同一套模型参数。"""
+    df = pd.DataFrame(
+        {
+            "运行ID": ["wf_20250101_090000_seed42", "wf_20250101_100000_seed99"],
+            "批次时间段": ["seed_test", "seed_test"],
+            "最终日期": ["20250101", "20250101"],
+            "切分数量": [3, 3],
+            "标签列": ["model_same", "model_same"],
+            "最大深度": [6, 6],
+            "学习率": [0.03, 0.03],
+            "多种子bagging种子": ["42", "99"],
+            "多种子保留比例": [0.5, 0.7],
+            "多种子最少保留模型数": [3, 5],
+            "选股综合得分": [90.0, 70.0],
+            COL_NAMES["daily_rankic_mean"]: [0.08, 0.06],
+            COL_NAMES["icir"]: [2.0, 1.4],
+            COL_NAMES["oos_top30_lift_mean"]: [0.04, 0.02],
+            COL_NAMES["oos_top30_win_rate"]: [0.8, 0.7],
+            COL_NAMES["oos_top30_worst_median"]: [0.01, 0.00],
+            COL_NAMES["selection_monotonicity"]: [1.0, 0.8],
+            COL_NAMES["train_val_ir_gap"]: [0.05, 0.10],
+            COL_NAMES["chain_cagr"]: [0.3, 0.2],
+            COL_NAMES["chain_max_drawdown"]: [-0.12, -0.15],
+        }
+    )
+
+    model_df = build_model_alpha_score_table(df)
+
+    assert len(model_df) == 1
+    assert model_df.iloc[0]["样本数"] == 2
+    assert "多种子bagging种子" not in model_df.columns
+    assert "多种子保留比例" not in model_df.columns
+    assert "多种子最少保留模型数" not in model_df.columns
+
+
+def test_period_stability_groups_same_params_except_seed() -> None:
+    """跨时间段稳定性不应把 seed 差异当作不同参数组。"""
+    all_df = pd.DataFrame(
+        [
+            {
+                "wf_run_id": "wf_20250101_090000_seed42",
+                "batch_run_id": "wf_batch_001",
+                "batch_period_label": "0101",
+                "split_count": 3,
+                "final_date": "20250101",
+                "algorithm": "xgboost",
+                "max_depth": 6,
+                "learning_rate": 0.03,
+                "label_column": "neu_y_ret_20",
+                "task": "regression",
+                "label_transform": "cs_zscore",
+                "ensemble_seeds": "42",
+                "ensemble_seed_keep_top_ratio": 0.5,
+                "ensemble_seed_keep_min_models": 3,
+                "bt_total_return": 0.12,
+                "bt_annual_return": 0.15,
+                "bt_max_drawdown": -0.10,
+                "bt_sharpe": 1.2,
+                "daily_rankic_ir": 0.50,
+            },
+            {
+                "wf_run_id": "wf_20250209_090000_seed99",
+                "batch_run_id": "wf_batch_001",
+                "batch_period_label": "0209",
+                "split_count": 3,
+                "final_date": "20250209",
+                "algorithm": "xgboost",
+                "max_depth": 6,
+                "learning_rate": 0.03,
+                "label_column": "neu_y_ret_20",
+                "task": "regression",
+                "label_transform": "cs_zscore",
+                "ensemble_seeds": "99",
+                "ensemble_seed_keep_top_ratio": 0.7,
+                "ensemble_seed_keep_min_models": 5,
+                "bt_total_return": 0.08,
+                "bt_annual_return": 0.10,
+                "bt_max_drawdown": -0.12,
+                "bt_sharpe": 1.0,
+                "daily_rankic_ir": 0.35,
+            },
+        ]
+    )
+
+    comp_df = build_comparison_table(all_df)
+    comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
+
+    result = build_period_stability_table(comp_df)
+
+    assert len(result) == 1
+    assert result.loc[0, "时间段数"] == 2
+    assert result.loc[0, "时间段列表"] == "0101 | 0209"
+
+
+def test_compact_experiment_sheet_for_batches_hides_seed_variations() -> None:
+    df = pd.DataFrame(
+        {
+            "运行ID": ["wf_20250101_090000_a", "wf_20250101_100000_b"],
+            "最新运行时间": ["2025-01-01 09:00:00", "2025-01-01 10:00:00"],
+            "批次ID": ["batch1", "batch1"],
+            "批次时间段": ["0101", "0209"],
+            "最终日期": ["20250101", "20250209"],
+            "综合得分": [80.0, 70.0],
+            "选股综合得分": [85.0, 65.0],
+            "全周期CAGR": [0.20, 0.10],
+            "全周期链式最大回撤": [-0.10, -0.20],
+            "全周期链式夏普": [1.2, 0.9],
+            "跨切分IR": [1.1, 0.7],
+            "回测胜率": [0.7, 0.6],
+            "RankIC均值": [0.08, 0.05],
+            "ICIR": [1.8, 1.1],
+            "Top30超额均值": [0.03, 0.01],
+            "Top30最差中位收益": [0.00, -0.01],
+            "分层单调性(近似)": [0.9, 0.6],
+            "验证_OOS_IR差距": [0.1, 0.2],
+            "重点Top20命中率均值": [0.70, 0.60],
+            "重点Top20收益中位数均值": [0.01, 0.02],
+            "重点Top30命中率均值": [0.72, 0.62],
+            "重点Top30收益中位数均值": [0.011, 0.021],
+            "最大深度": [6, 8],
+            "多种子bagging种子": ["42", "99"],
+            "多种子保留比例": [0.5, 0.7],
+            "多种子最少保留模型数": [3, 5],
+        }
+    )
+
+    result = compact_experiment_sheet_for_display(df, "batches")
+
+    assert "最大深度" in result.columns
+    assert "多种子bagging种子" not in result.columns
+    assert "多种子保留比例" not in result.columns
+    assert "多种子最少保留模型数" not in result.columns
+
+
+def test_compact_experiment_sheet_for_batches_keeps_core_and_varying_params() -> None:
+    df = pd.DataFrame(
+        {
+            "运行ID": ["wf_20250101_090000_a", "wf_20250101_100000_b"],
+            "最新运行时间": ["2025-01-01 09:00:00", "2025-01-01 10:00:00"],
+            "批次ID": ["batch1", "batch1"],
+            "批次时间段": ["0101", "0101"],
+            "最终日期": ["20250101", "20250101"],
+            "综合得分": [80.0, 70.0],
+            "选股综合得分": [85.0, 65.0],
+            "全周期CAGR": [0.20, 0.10],
+            "全周期链式最大回撤": [-0.10, -0.20],
+            "全周期链式夏普": [1.2, 0.9],
+            "跨切分IR": [1.1, 0.7],
+            "回测胜率": [0.7, 0.6],
+            "RankIC均值": [0.08, 0.05],
+            "ICIR": [1.8, 1.1],
+            "Top30超额均值": [0.03, 0.01],
+            "Top30最差中位收益": [0.00, -0.01],
+            "分层单调性(近似)": [0.9, 0.6],
+            "验证_OOS_IR差距": [0.1, 0.2],
+            "重点Top20命中率均值": [0.70, 0.60],
+            "重点Top20收益中位数均值": [0.01, 0.02],
+            "重点Top30命中率均值": [0.72, 0.62],
+            "重点Top30收益中位数均值": [0.011, 0.021],
+            "最大深度": [6, 8],
+            "学习率": [0.03, 0.03],
+            "回测TopN": [20, 20],
+            "多种子bagging种子": ["42,142,242", "42,142,242"],
+        }
+    )
+
+    result = compact_experiment_sheet_for_display(df, "batches")
+
+    assert "运行ID" in result.columns
+    assert "最大深度" in result.columns
+    assert "学习率" not in result.columns
+    assert "回测TopN" not in result.columns
+    assert "多种子bagging种子" not in result.columns

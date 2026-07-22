@@ -169,6 +169,7 @@ COL_NAMES = {
     "chain_sharpe_mean": "跨时间段夏普均值",
     "chain_sharpe_std": "跨时间段夏普标准差",
     "stability_score": "时间段稳定性分",
+    "seed_alpha_median": "模型Alpha分中位数",
     # 训练参数
     "split_count": "切分数量",
     "final_date": "最终日期",
@@ -302,6 +303,60 @@ COL_NAMES = {
     "start_model_version": "起始模型版本",
     "no_deploy_train": "禁用部署训练",
 }
+
+
+BATCH_EXPERIMENT_CORE_COLS = [
+    "运行ID",
+    "最新运行时间",
+    "批次ID",
+    "批次时间段",
+    "最终日期",
+    "综合得分",
+    "选股综合得分",
+    "全周期CAGR",
+    "全周期链式最大回撤",
+    "全周期链式夏普",
+    "跨切分IR",
+    "回测胜率",
+    "RankIC均值",
+    "ICIR",
+    "Top30超额均值",
+    "Top30最差中位收益",
+    "分层单调性(近似)",
+    "验证_OOS_IR差距",
+    "重点Top20命中率均值",
+    "重点Top20收益中位数均值",
+    "重点Top30命中率均值",
+    "重点Top30收益中位数均值",
+]
+
+
+BATCH_EXPERIMENT_PARAM_CANDIDATES = [
+    "标签列",
+    "任务类型",
+    "滚动频率",
+    "训练窗口年数",
+    "测试窗口月数",
+    "树数量",
+    "最大深度",
+    "学习率",
+    "rank权重TopK",
+    "rank权重值",
+    "多种子bagging种子",
+    "多种子保留比例",
+    "多种子最少保留模型数",
+    "后验树数选优模式",
+    "后验树数选优主指标",
+    "后验树数选优TopK",
+    "后验选中树数均值",
+    "最佳迭代均值",
+    "回测TopN",
+    "回测调仓频率",
+    "回测卖出时机",
+    "信号门控模式",
+    "市场择时",
+    "盈亏动态持仓",
+]
 
 # ---------------------------------------------------------------------------
 # 训练参数列（来自 write_walk_forward_summary 写入的列名，取每组第一行即可）
@@ -540,6 +595,13 @@ SEED_STABILITY_EXCLUDED_MODEL_KEYS = [
     "ensemble_seed_keep_top_ratio",
     "ensemble_seed_keep_min_models",
 ]
+
+
+BATCH_EXPERIMENT_EXCLUDED_PARAM_COLS = {
+    COL_NAMES["ensemble_seeds"],
+    COL_NAMES["ensemble_seed_keep_top_ratio"],
+    COL_NAMES["ensemble_seed_keep_min_models"],
+}
 
 
 TRADE_PARAM_KEYS = [
@@ -1937,7 +1999,7 @@ def build_period_stability_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     }
     group_cols = []
     for key in PARAM_COLS:
-        if key == "wf_run_id":
+        if key == "wf_run_id" or key in SEED_STABILITY_EXCLUDED_MODEL_KEYS:
             continue
         col = COL_NAMES.get(key, key)
         if col and col in comp_df.columns and col not in varying_cols and col not in metric_cols:
@@ -2188,6 +2250,12 @@ def _cn_param_cols(keys: list[str], df: pd.DataFrame) -> list[str]:
     return cols
 
 
+def _comparison_model_param_cols(df: pd.DataFrame) -> list[str]:
+    """对比报表中的模型参数默认忽略 seed 维度，避免重复试验被误判为不同超参。"""
+    keys = [key for key in MODEL_PARAM_KEYS if key not in SEED_STABILITY_EXCLUDED_MODEL_KEYS]
+    return _cn_param_cols(keys, df)
+
+
 def _numeric_series(df: pd.DataFrame, col: str) -> pd.Series:
     if col not in df.columns:
         return pd.Series(np.nan, index=df.index, dtype=float)
@@ -2258,12 +2326,14 @@ def _dedupe_columns(cols: list[str]) -> list[str]:
     return result
 
 
-def build_model_alpha_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
-    """按模型参数聚合，构建只评价选股 alpha 的评分表。"""
+def _build_model_alpha_score_table_for_cols(
+    comp_df: pd.DataFrame,
+    model_cols: list[str],
+) -> pd.DataFrame:
+    """按指定模型参数列聚合，构建只评价选股 alpha 的评分表。"""
     if comp_df.empty:
         return pd.DataFrame()
 
-    model_cols = _cn_param_cols(MODEL_PARAM_KEYS, comp_df)
     if not model_cols:
         return pd.DataFrame()
 
@@ -2351,6 +2421,12 @@ def build_model_alpha_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     return result[ordered].reset_index(drop=True)
 
 
+def build_model_alpha_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
+    """按非 seed 模型参数聚合，构建只评价选股 alpha 的评分表。"""
+    model_cols = _comparison_model_param_cols(comp_df)
+    return _build_model_alpha_score_table_for_cols(comp_df, model_cols)
+
+
 def build_model_seed_stability_table(
     comp_df: pd.DataFrame,
     model_alpha_df: pd.DataFrame,
@@ -2365,6 +2441,10 @@ def build_model_seed_stability_table(
     if not stable_model_cols or not seed_cols:
         return pd.DataFrame()
 
+    seed_level_alpha_df = _build_model_alpha_score_table_for_cols(comp_df, model_cols)
+    if seed_level_alpha_df.empty:
+        return pd.DataFrame()
+
     working = comp_df.copy()
     working["模型参数签名"] = _signature_for_frame(working, model_cols)
     working["Seed稳定性签名"] = _signature_for_frame(working, stable_model_cols)
@@ -2374,8 +2454,8 @@ def build_model_seed_stability_table(
         "模型Alpha分",
         "运行ID列表",
     ]
-    lookup = model_alpha_df[
-        [col for col in lookup_cols if col in model_alpha_df.columns]
+    lookup = seed_level_alpha_df[
+        [col for col in lookup_cols if col in seed_level_alpha_df.columns]
     ].drop_duplicates("模型参数签名")
     working = working.merge(lookup, on="模型参数签名", how="left", suffixes=("", "_模型Alpha"))
 
@@ -2401,6 +2481,9 @@ def build_model_seed_stability_table(
                 "Seed列表": " | ".join(seed_values),
                 "模型Alpha分均值": (
                     round(alpha_series.mean(), 1) if alpha_series.notna().any() else None
+                ),
+                "模型Alpha分中位数": (
+                    round(alpha_series.median(), 1) if alpha_series.notna().any() else None
                 ),
                 "模型Alpha分标准差": (
                     round(alpha_series.std(), 2) if alpha_series.notna().sum() > 1 else None
@@ -2432,7 +2515,7 @@ def build_model_seed_stability_table(
     if result.empty:
         return result
     result["Seed稳健分"] = (
-        _numeric_series(result, "模型Alpha分均值") * 0.50
+        _numeric_series(result, "模型Alpha分中位数") * 0.50
         + _numeric_series(result, "模型Alpha分最差") * 0.35
         + (100 - _numeric_series(result, "模型Alpha分标准差").fillna(0).clip(lower=0, upper=100))
         * 0.15
@@ -2446,6 +2529,7 @@ def build_model_seed_stability_table(
         "最新运行时间",
         "Seed稳定性样本数",
         "Seed列表",
+        "模型Alpha分中位数",
         "模型Alpha分均值",
         "模型Alpha分标准差",
         "模型Alpha分最差",
@@ -2465,7 +2549,7 @@ def build_trade_param_score_table(comp_df: pd.DataFrame) -> pd.DataFrame:
     if comp_df.empty:
         return pd.DataFrame()
 
-    model_cols = _cn_param_cols(MODEL_PARAM_KEYS, comp_df)
+    model_cols = _comparison_model_param_cols(comp_df)
     context_cols = _cn_param_cols(PAIR_CONTEXT_KEYS, comp_df)
     trade_cols = _cn_param_cols(TRADE_PARAM_KEYS, comp_df)
     pair_cols = _dedupe_columns(
@@ -2619,7 +2703,7 @@ def build_live_candidate_score_table(
     if comp_df.empty or model_score_df.empty or trade_score_df.empty:
         return pd.DataFrame()
 
-    model_cols = _cn_param_cols(MODEL_PARAM_KEYS, comp_df)
+    model_cols = _comparison_model_param_cols(comp_df)
     trade_cols = _cn_param_cols(TRADE_PARAM_KEYS, comp_df)
     candidate_cols = _dedupe_columns(
         [col for col in model_cols + trade_cols if col in comp_df.columns]
@@ -3343,6 +3427,38 @@ def reorder_comparison_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.reindex(columns=ordered_cols)
 
 
+def _series_has_meaningful_variation(series: pd.Series) -> bool:
+    """判断列是否存在实际区分度，纯常量或仅空值视为无区分度。"""
+    if series is None:
+        return False
+    non_na = series.dropna()
+    if non_na.empty:
+        return False
+    return non_na.astype(str).nunique() > 1
+
+
+def compact_experiment_sheet_for_display(df: pd.DataFrame, source_label: str) -> pd.DataFrame:
+    """压缩 batches 实验对比页，只保留核心指标和有区分度的关键参数。"""
+    if df.empty or source_label != "batches":
+        return df
+
+    ordered: list[str] = []
+    for col in BATCH_EXPERIMENT_CORE_COLS:
+        if col in df.columns and col not in ordered:
+            ordered.append(col)
+
+    for col in BATCH_EXPERIMENT_PARAM_CANDIDATES:
+        if (
+            col in df.columns
+            and col not in ordered
+            and col not in BATCH_EXPERIMENT_EXCLUDED_PARAM_COLS
+            and _series_has_meaningful_variation(df[col])
+        ):
+            ordered.append(col)
+
+    return df[[col for col in ordered if col in df.columns]].copy()
+
+
 def _str_display_width(s: str) -> int:
     """计算字符串的显示宽度（CJK 字符计为 2，ASCII 计为 1）"""
     width = 0
@@ -3695,6 +3811,7 @@ def generate_comparison_report(
     candidate_df = build_live_candidate_score_table(comp_df, model_alpha_df, trade_score_df)
     logger.info(f"实盘候选评分表: {len(candidate_df)} 行")
     comp_df = sort_by_run_time(comp_df)
+    display_comp_df = compact_experiment_sheet_for_display(comp_df, source_label)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
@@ -3718,7 +3835,7 @@ def generate_comparison_report(
             "交易参数收益评分",
             "没有相同模型参数 + 相同时间段下的多交易参数候选，无法计算配对交易参数评分。",
         ).to_excel(writer, sheet_name="交易参数收益评分", index=False)
-        comp_df.to_excel(writer, sheet_name="实验对比", index=False)
+        display_comp_df.to_excel(writer, sheet_name="实验对比", index=False)
         if not period_stability_df.empty:
             period_stability_df.to_excel(writer, sheet_name="跨时间段稳定性", index=False)
         desc_df.to_excel(writer, sheet_name="指标说明", index=False)

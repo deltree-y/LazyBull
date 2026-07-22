@@ -571,6 +571,60 @@ class TestWalkForwardSplits:
 
 class TestWalkForwardCSV:
     """测试 walk-forward 汇总CSV生成"""
+
+    def test_write_walk_forward_topk_details(self):
+        """测试导出每个 split 的逐日 Top20/Top30 名单与预测分数。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from scripts.walk_forward import build_daily_topk_detail_df, write_walk_forward_topk_details
+
+            base_rows = []
+            for trade_date, offset in [("20240102", 0.0), ("20240103", 0.1)]:
+                for idx in range(35):
+                    base_rows.append(
+                        {
+                            "trade_date": trade_date,
+                            "ts_code": f"000{idx:03d}.SZ",
+                            "pred_score": 100 - idx + offset,
+                            "y_ret_20": idx / 1000.0,
+                        }
+                    )
+            df_eval = pd.DataFrame(base_rows)
+            detail_df = build_daily_topk_detail_df(df_eval, original_return_col="y_ret_20")
+
+            results = [
+                {
+                    "split_index": 3,
+                    "test_start": "20240102",
+                    "test_end": "20240103",
+                    "model_version": 99,
+                    "_topk_detail_df": detail_df,
+                }
+            ]
+            summary_path = os.path.join(tmpdir, "walk_forward_summary_test.csv")
+
+            write_walk_forward_topk_details(results, summary_path, "wf_test_777")
+
+            export_path = os.path.join(
+                tmpdir, "walk_forward_topk_details_wf_test_777_split03.csv"
+            )
+            assert os.path.exists(export_path)
+
+            exported = pd.read_csv(export_path)
+            assert set([
+                "wf_run_id", "split_index", "trade_date", "topk", "rank", "ts_code", "pred_score", "true_return"
+            ]).issubset(exported.columns)
+            assert len(exported) == (20 + 30) * 2
+            assert exported.loc[0, "wf_run_id"] == "wf_test_777"
+            assert exported.loc[0, "split_index"] == 3
+
+            day_top20 = exported[(exported["trade_date"] == 20240102) & (exported["topk"] == 20)]
+            day_top30 = exported[(exported["trade_date"] == 20240102) & (exported["topk"] == 30)]
+            assert len(day_top20) == 20
+            assert len(day_top30) == 30
+            assert day_top20.iloc[0]["rank"] == 1
+            assert day_top20.iloc[0]["ts_code"] == "000000.SZ"
+            assert day_top20.iloc[0]["pred_score"] == 100.0
+            assert day_top30.iloc[-1]["rank"] == 30
     
     def test_write_walk_forward_summary(self):
         """测试写入汇总文件"""

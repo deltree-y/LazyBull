@@ -28,7 +28,26 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.81.1)
+### 当前版本 (v0.83.1)
+
+**wf_comparison_batches 忽略 seed 作为参数分组维度** (v0.83.1):
+- `wf_comparison_batches.xlsx` 在 `跨时间段稳定性`、`模型Alpha评分`、`交易参数收益评分`、`实盘候选评分` 中，不再把仅 seed 不同的运行拆成不同参数组。
+- 多种子相关列也不会再出现在 `实验对比` 页的“有区分度参数”里，避免主表把重复试验误读成新参数扫描。
+- seed 差异仍保留在 `模型Seed稳定性` 工作表里，继续用于观察同一套非 seed 超参的波动。
+
+**模型 Seed 稳定性改为突出中位数口径** (v0.83.0):
+- `模型Seed稳定性` 工作表新增 `模型Alpha分中位数`，用于表示同一套非 seed 超参在多 seed 下的典型表现。
+- `Seed稳健分` 改为优先使用中位数，而不是均值，避免单个 seed 异常好时抬高整套参数的代表值。
+
+**wf_comparison_batches 主表默认精简** (v0.83.0):
+- `wf_comparison_batches.xlsx` 的 `实验对比` 页现在只保留核心指标和真正有区分度的关键参数。
+- 训练/交易常量列与低价值尾部列不再全部平铺，批量扫参时更容易直接看结论。
+- 完整指标仍保留在 `逐Split明细`、`模型Alpha评分`、`模型Seed稳定性`、`交易参数收益评分` 等工作表中。
+
+**walk-forward 新增每个 split 的逐日 Top20/Top30 明细导出** (v0.82.0):
+- OOS 评估阶段会默认额外导出 `walk_forward_topk_details_{wf_run_id}_splitXX.csv`。
+- 每条记录包含 `trade_date`、`topk`、`rank`、`ts_code`、`pred_score` 与 `true_return`，便于直接比较不同 seed 在同一天的前排名单与分数分叉。
+- 可用 `--no-export-topk-details` 关闭，适合只做大批量扫参、不保留逐日明细的场景。
 
 **训练验证协议拆分为 `ES / Calibration / Embargo` 三段** (v0.81.1):
 - `val_es` 只参与 early stopping 与 `best_iteration` 选择。

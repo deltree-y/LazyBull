@@ -1383,6 +1383,94 @@ def _build_summary_key_fields(test_daily_metrics: Dict) -> Dict[str, object]:
     }
 
 
+def build_daily_topk_detail_df(
+    df_eval: pd.DataFrame,
+    original_return_col: str,
+    topk_values: Tuple[int, ...] = (20, 30),
+) -> pd.DataFrame:
+    """构建逐日 TopK 明细，便于排查不同 seed 的名单分叉。"""
+    output_columns = [
+        "trade_date",
+        "topk",
+        "rank",
+        "ts_code",
+        "pred_score",
+        "true_return",
+    ]
+    if df_eval is None or len(df_eval) == 0:
+        return pd.DataFrame(columns=output_columns)
+
+    valid_topk_values = []
+    for value in topk_values:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            continue
+        if resolved > 0 and resolved not in valid_topk_values:
+            valid_topk_values.append(resolved)
+    if not valid_topk_values:
+        return pd.DataFrame(columns=output_columns)
+
+    detail_parts: List[pd.DataFrame] = []
+    trade_dates = df_eval["trade_date"].drop_duplicates().tolist()
+    for trade_date in trade_dates:
+        day_df = df_eval[df_eval["trade_date"] == trade_date].copy()
+        if day_df.empty or "pred_score" not in day_df.columns or "ts_code" not in day_df.columns:
+            continue
+
+        day_df = day_df[day_df["pred_score"].notna()].copy()
+        if day_df.empty:
+            continue
+
+        day_df = day_df.sort_values(["pred_score", "ts_code"], ascending=[False, True])
+        for topk in valid_topk_values:
+            topk_df = day_df.head(topk).copy()
+            if topk_df.empty:
+                continue
+            topk_df["topk"] = int(topk)
+            topk_df["rank"] = np.arange(1, len(topk_df) + 1)
+            topk_df["true_return"] = topk_df.get(original_return_col, np.nan)
+            detail_parts.append(topk_df[output_columns])
+
+    if not detail_parts:
+        return pd.DataFrame(columns=output_columns)
+    return pd.concat(detail_parts, ignore_index=True)
+
+
+def write_walk_forward_topk_details(
+    results: List[Dict],
+    summary_csv_path: str,
+    wf_run_id: str,
+) -> None:
+    """将每个 split 的逐日 Top20/Top30 名单与预测分数落盘。"""
+    output_dir = Path(summary_csv_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    exported_count = 0
+    for result in results:
+        detail_df = result.get("_topk_detail_df")
+        if detail_df is None or len(detail_df) == 0:
+            continue
+
+        export_df = detail_df.copy()
+        export_df.insert(0, "wf_run_id", wf_run_id)
+        export_df.insert(1, "split_index", result.get("split_index"))
+        export_df.insert(2, "test_start", result.get("test_start"))
+        export_df.insert(3, "test_end", result.get("test_end"))
+        export_df.insert(4, "model_version", result.get("model_version"))
+
+        split_index = result.get("split_index")
+        filename = f"walk_forward_topk_details_{wf_run_id}_split{int(split_index):02d}.csv"
+        output_path = output_dir / filename
+        export_df.to_csv(output_path, index=False, encoding="utf-8-sig")
+        exported_count += 1
+
+    if exported_count > 0:
+        logger.info(
+            f"已导出 walk-forward TopK 明细: {exported_count} 个 split -> {output_dir}"
+        )
+
+
 def _resolve_model_max_trees(model) -> Optional[int]:
     if isinstance(model, TreeLimitedModel):
         return model.max_trees
@@ -2148,6 +2236,12 @@ def execute_split_training(
         y_test_pred = model.predict(X_test_features)
         df_test_eval["pred_score"] = y_test_pred
 
+    topk_detail_df = build_daily_topk_detail_df(
+        df_eval=df_test_eval,
+        original_return_col=args.label_column,
+        topk_values=(20, 30),
+    )
+
     # 测试集逐日评估
     test_daily_metrics = evaluate_validation_daily(
         model=model,
@@ -2430,6 +2524,7 @@ def execute_split_training(
         "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
         "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
         "test_daily_metrics": test_daily_metrics,
+        "_topk_detail_df": topk_detail_df,
     }
 
     return result
@@ -4032,6 +4127,18 @@ def main():
         help="walk-forward 汇总CSV路径，默认为 {data_root}/walk_forward/walk_forward_summary.csv"
     )
     parser.add_argument(
+        "--export-topk-details",
+        action="store_true",
+        default=True,
+        help="导出每个 split 的逐日 Top20/Top30 名单与预测分数（默认开启）"
+    )
+    parser.add_argument(
+        "--no-export-topk-details",
+        action="store_false",
+        dest="export_topk_details",
+        help="禁用逐日 Top20/Top30 名单与预测分数导出"
+    )
+    parser.add_argument(
         "--batch-run-id",
         type=str,
         default=None,
@@ -5117,6 +5224,9 @@ def main():
                 )
 
             write_walk_forward_summary(results, summary_csv_path, args, wf_run_id)
+
+            if getattr(args, "export_topk_details", True):
+                write_walk_forward_topk_details(results, summary_csv_path, wf_run_id)
 
             # ── 串联各 split 的 OOS 回测净值曲线 ──────────────────
             chain_nav_splits(results, summary_csv_path, wf_run_id)

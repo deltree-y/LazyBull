@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.83.1] - 2026-07-22
+
+### Fixed
+
+- **wf_comparison_batches 不再把 seed 差异当成不同参数组**：
+  - `scripts/compare_walk_forward.py` 的 `跨时间段稳定性`、`模型Alpha评分`、`交易参数收益评分`、`实盘候选评分` 现在统一忽略 `ensemble_seeds` 及其保留配置列，避免同一套超参仅因 seed 不同被拆成多组。
+  - `模型Seed稳定性` 工作表继续保留 seed 维度，用于单独观察同一套非 seed 超参在多 seed 下的波动。
+  - `wf_comparison_batches.xlsx` 的 `实验对比` 页也不再把多种子相关列当作“有区分度参数”展示。
+
+## [0.83.0] - 2026-07-22
+
+### Changed
+
+- **模型Seed稳定性表改为突出中位数口径**：
+  - `scripts/compare_walk_forward.py` 的 `模型Seed稳定性` 工作表新增 `模型Alpha分中位数`。
+  - `Seed稳健分` 由“均值 + 最差 + 波动惩罚”改为“中位数 + 最差 + 波动惩罚”，降低单个幸运 seed 对代表值的污染。
+
+- **wf_comparison_batches 的实验对比页改为精简展示**：
+  - `scripts/compare_walk_forward.py` 现在仅对 `batches` 来源的 `实验对比` 工作表做展示层压缩。
+  - 默认保留核心决策指标，以及真正有区分度的关键参数；常量列和低价值尾部列不再铺满主表。
+  - `raw` 来源和其它评分表仍保留完整口径，避免影响分析链路与派生评分。
+
+## [0.82.0] - 2026-07-22
+
+### Added
+
+- **walk-forward 新增每个 split 的逐日 Top20/Top30 明细导出**：
+  - `scripts/walk_forward.py` 现在会在 OOS 评估阶段保留每个交易日的 `Top20/Top30` 名单、排名、`pred_score` 与真实收益，并默认导出到 summary 同目录。
+  - 新增文件命名格式：`walk_forward_topk_details_{wf_run_id}_splitXX.csv`，用于定位不同 seed 在哪些交易日、哪些股票上发生名单分叉。
+  - 新增 `--no-export-topk-details` 开关，供批量大规模扫描时关闭明细导出。
+
 ## [0.81.1] - 2026-07-22
 
 ### Changed
