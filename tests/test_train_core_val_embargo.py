@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from src.lazybull.ml.train_core import (
+    learn_risk_penalty_config,
     prepare_training_data,
     split_train_val_by_date,
     split_val_for_early_stopping_by_date,
@@ -203,3 +204,66 @@ def test_prepare_training_data_auto_embargo_from_label_horizon():
     assert set(df_val_split_original["trade_date"].unique()) == set(
         (expected_calib if len(expected_calib) > 0 else expected_es)["trade_date"].unique()
     )
+
+
+class _RiskMockModel:
+    def predict(self, X):
+        return X["pred_feature"].values
+
+
+def test_learn_risk_penalty_config_from_bad_pick_pattern():
+    rows = []
+    for offset in range(6):
+        trade_date = f"2024010{offset + 1}"
+        rows.extend(
+            [
+                {
+                    "trade_date": trade_date,
+                    "ts_code": f"A{offset}",
+                    "pred_feature": 1.00,
+                    "spec_score": 100.0,
+                    "y_ret_5": -0.06,
+                },
+                {
+                    "trade_date": trade_date,
+                    "ts_code": f"B{offset}",
+                    "pred_feature": 0.95,
+                    "spec_score": 1.0,
+                    "y_ret_5": 0.05,
+                },
+                {
+                    "trade_date": trade_date,
+                    "ts_code": f"C{offset}",
+                    "pred_feature": 0.90,
+                    "spec_score": 10.0,
+                    "y_ret_5": 0.03,
+                },
+                {
+                    "trade_date": trade_date,
+                    "ts_code": f"D{offset}",
+                    "pred_feature": 0.85,
+                    "spec_score": 5.0,
+                    "y_ret_5": -0.01,
+                },
+            ]
+        )
+
+    df_val = pd.DataFrame(rows)
+    config = learn_risk_penalty_config(
+        model=_RiskMockModel(),
+        df_val=df_val,
+        feature_columns=["pred_feature"],
+        original_return_col="y_ret_5",
+        task="regression",
+        candidate_topk=3,
+        eval_topk=2,
+        lambda_grid=[0.0, 0.4],
+        min_bad_samples=3,
+        min_total_samples=12,
+    )
+
+    assert config is not None
+    assert config["enabled"] is True
+    assert config["penalty_lambda"] == 0.4
+    assert config["feature_weights"][0]["name"] == "spec_score"
+    assert config["selected_topk_median"] > config["baseline_topk_median"]

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.84.0] - 2026-07-22
+
+### Added
+
+- **新增基于 calibration 段的高分错票风险惩罚**：
+  - `src/lazybull/ml/train_core.py` 新增 `learn_risk_penalty_config()`，会先在 calibration 段按主模型 `pred_score` 选出每日高分候选，再将“未来收益落入候选底部且为负”的样本标记为 `bad_pick`。
+  - 风险画像仅从现有风险类特征中学习单调分位权重，并在同一 calibration 段上用小网格自动选择 `penalty_lambda`，避免再引入一个高方差的第二模型。
+  - `src/lazybull/ml/model_registry.py` 现会把 `risk_penalty_config` 与模型 metadata 一起持久化，供回测、walk-forward 和部署推理复用。
+  - `src/lazybull/signals/ml_signal.py` 推理时新增 `risk_score` 与 `final_score`，默认按 `final_score = ml_score - lambda * risk_score` 排序；旧模型若无该配置则行为保持不变。
+
 ## [0.83.1] - 2026-07-22
 
 ### Fixed

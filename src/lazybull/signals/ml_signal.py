@@ -584,6 +584,20 @@ class MLSignal(Signal):
                 version=self.model_version, strict_version_check=True
             )
             self.feature_columns = self.metadata["feature_columns"]
+            risk_config = self.metadata.get("risk_penalty_config") or {}
+            risk_enabled = bool(risk_config.get("enabled", False))
+            if risk_enabled:
+                top_features = ", ".join(
+                    f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
+                    for item in (risk_config.get("feature_weights") or [])[:3]
+                )
+                logger.warning(
+                    f"模型风险惩罚已启用: lambda={float(risk_config.get('penalty_lambda', 0.0) or 0.0):.3f}, "
+                    f"bad_rate={float(risk_config.get('calibration_bad_rate', 0.0)):.2%}, "
+                    f"top_features={top_features or '无'}"
+                )
+            else:
+                logger.info("模型风险惩罚未启用")
             logger.info(
                 f"模型已加载: {self.metadata['version_str']}, "
                 f"特征数={self.metadata['feature_count']}"
@@ -663,6 +677,54 @@ class MLSignal(Signal):
         stage = "选股/预测(ranked)" if ranked else "选股/预测"
         universe_text = f"{before_count}→{after_count}" if before_count != after_count else str(after_count)
         logger.info(f"{stage}: {universe_text}, 特征{len(self.feature_columns)}")
+
+    @staticmethod
+    def _rank_risk_feature(series: pd.Series) -> pd.Series:
+        """将单日截面风险特征映射到 0~1 分位。"""
+        valid = series.dropna()
+        if len(valid) == 0:
+            return pd.Series(0.5, index=series.index, dtype=float)
+        ranked = series.rank(method="average", pct=True, na_option="keep")
+        return ranked.fillna(0.5).clip(0.0, 1.0)
+
+    def _apply_risk_penalty(self, features_df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
+        """按模型 metadata 中的风险配置生成 final_score。"""
+        features_df["risk_score"] = 0.0
+        features_df["final_score"] = features_df["ml_score"]
+
+        risk_config = (self.metadata or {}).get("risk_penalty_config") or {}
+        if not risk_config.get("enabled"):
+            return features_df, "ml_score"
+
+        penalty_lambda = float(risk_config.get("penalty_lambda", 0.0) or 0.0)
+        feature_weights = risk_config.get("feature_weights") or []
+        if penalty_lambda <= 0 or len(feature_weights) == 0:
+            return features_df, "ml_score"
+
+        risk_score = pd.Series(0.0, index=features_df.index, dtype=float)
+        total_weight = 0.0
+        for item in feature_weights:
+            feature_name = item.get("name")
+            weight = float(item.get("weight", 0.0) or 0.0)
+            if not feature_name or weight <= 0:
+                continue
+            feature_series = (
+                self._rank_risk_feature(features_df[feature_name])
+                if feature_name in features_df.columns
+                else pd.Series(0.5, index=features_df.index, dtype=float)
+            )
+            risk_score += feature_series * weight
+            total_weight += weight
+
+        if total_weight <= 0:
+            return features_df, "ml_score"
+
+        if total_weight != 1.0:
+            risk_score = risk_score / total_weight
+
+        features_df["risk_score"] = risk_score
+        features_df["final_score"] = features_df["ml_score"] - penalty_lambda * features_df["risk_score"]
+        return features_df, "final_score"
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 ML 信号
@@ -758,18 +820,19 @@ class MLSignal(Signal):
                 )
 
         features_df["ml_score"] = predictions
+        features_df, score_column = self._apply_risk_penalty(features_df)
 
         # 按预测分数排序，选择 Top N
-        features_df = features_df.sort_values("ml_score", ascending=False)
+        features_df = features_df.sort_values(score_column, ascending=False)
         ranked_candidates = list(
-            zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist())
+            zip(features_df["ts_code"].tolist(), features_df[score_column].tolist())
         )
         confidence_state = self.evaluate_confidence_gate(ranked_candidates, date=date)
         top_stocks = features_df.head(self.top_n)
         if self.verbose:
             logger.debug(
                 "TOP预测概率抽样: {}".format(
-                    features_df[["ts_code", "ml_score"]]
+                    features_df[["ts_code", "ml_score", "risk_score", "final_score"]]
                     .head(3)
                     .to_string(index=False)
                     .replace("\n", " | ")
@@ -782,12 +845,12 @@ class MLSignal(Signal):
 
         # 输出原始 ml_score（供引擎层 _normalize_signals 统一做权重分配）
         # 正分数原样输出；全为负/零时回退到等权（避免引擎层收到无意义负值）
-        positive_stocks = top_stocks[top_stocks["ml_score"] > 0]
+        positive_stocks = top_stocks[top_stocks[score_column] > 0]
         if len(positive_stocks) == 0:
             weight = 1.0 / len(top_stocks)
             signals = {stock: weight for stock in top_stocks["ts_code"].tolist()}
         else:
-            scores = positive_stocks["ml_score"].values
+            scores = positive_stocks[score_column].values
             stocks = positive_stocks["ts_code"].values
             signals = dict(zip(stocks, scores.tolist()))
 
@@ -797,7 +860,7 @@ class MLSignal(Signal):
 
         logger.debug(
             f"ML 信号生成完成: {date.date()}, 选择 {len(signals)} 只股票, "
-            f"平均预测分数={top_stocks['ml_score'].mean():.6f}"
+            f"平均预测分数={top_stocks[score_column].mean():.6f}"
         )
 
         return signals
@@ -896,13 +959,14 @@ class MLSignal(Signal):
                 )
 
         features_df["ml_score"] = predictions
+        features_df, score_column = self._apply_risk_penalty(features_df)
 
         # 按预测分数排序，返回所有候选
-        features_df = features_df.sort_values("ml_score", ascending=False)
+        features_df = features_df.sort_values(score_column, ascending=False)
         if self.verbose:
             logger.debug(
                 "TOP预测概率抽样: {}".format(
-                    features_df[["ts_code", "ml_score"]]
+                    features_df[["ts_code", "ml_score", "risk_score", "final_score"]]
                     .head(3)
                     .to_string(index=False)
                     .replace("\n", " | ")
@@ -910,7 +974,7 @@ class MLSignal(Signal):
             )
 
         # 返回 (股票代码, 分数) 元组列表
-        ranked = list(zip(features_df["ts_code"].tolist(), features_df["ml_score"].tolist()))
+        ranked = list(zip(features_df["ts_code"].tolist(), features_df[score_column].tolist()))
         self.evaluate_confidence_gate(ranked, date=date)
         if False:
             logger.info(

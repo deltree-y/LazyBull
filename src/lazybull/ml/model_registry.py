@@ -238,7 +238,8 @@ class ModelRegistry:
         label_column: str,
         n_samples: int,
         train_params: Dict,
-        performance_metrics: Optional[Dict] = None
+        performance_metrics: Optional[Dict] = None,
+        risk_penalty_config: Optional[Dict] = None,
     ) -> int:
         """注册新模型
         
@@ -296,6 +297,8 @@ class ModelRegistry:
             "performance_metrics": performance_metrics or {},
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        if risk_penalty_config is not None:
+            metadata["risk_penalty_config"] = risk_penalty_config
 
         self._save_metadata_sidecar(metadata)
         self._save_latest_version_file(version)

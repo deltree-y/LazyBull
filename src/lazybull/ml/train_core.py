@@ -18,7 +18,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,27 @@ from src.lazybull.ml.eval_utils import (
     print_diagnostic_report,
     summarize_daily_metrics,
 )
+
+
+RISK_PENALTY_FEATURE_CANDIDATES = [
+    "zscore_volatility_20",
+    "zscore_volatility_5",
+    "zscore_turnover_rate",
+    "vol_ratio_20",
+    "vol_burst_20",
+    "zscore_amount_ma20",
+    "amplitude",
+    "zscore_bb_width",
+    "upper_shadow",
+    "spec_score",
+    "bb_pct",
+    "zscore_ma_deviation_20",
+    "ind_momentum_rank",
+    "rsi_14",
+    "kdj_j",
+]
+
+RISK_PENALTY_DEFAULT_LAMBDA_GRID = [0.0, 0.05, 0.1, 0.15, 0.2]
 
 
 def _format_feature_importance_compact(
@@ -1467,6 +1488,235 @@ def build_rank_sample_weights(
         f"普通样本数={len(weights) - top_weighted_count}"
     )
     return weights
+
+
+def _predict_scores(
+    model,
+    df_eval: pd.DataFrame,
+    feature_columns: List[str],
+    task: str,
+) -> np.ndarray:
+    """统一模型预测接口，兼容回归、分类与集成包装器。"""
+    X_eval = df_eval[feature_columns].fillna(0)
+    if task == "classification" and hasattr(model, "predict_proba"):
+        return model.predict_proba(X_eval)[:, 1]
+    return model.predict(X_eval)
+
+
+def _rank_to_quantile(series: pd.Series) -> pd.Series:
+    """将单日截面特征转成 0~1 风险分位，缺失值按中性 0.5 处理。"""
+    valid = series.dropna()
+    if len(valid) == 0:
+        return pd.Series(0.5, index=series.index, dtype=float)
+    ranked = series.rank(method="average", pct=True, na_option="keep")
+    return ranked.fillna(0.5).clip(0.0, 1.0)
+
+
+def _summarize_lambda_objective(
+    df_eval: pd.DataFrame,
+    score_col: str,
+    return_col: str,
+    eval_topk: int,
+) -> Dict[str, float]:
+    """按既有逐日评估口径汇总单个评分列的 TopK 中位数与 RankIC IR。"""
+    daily_results = evaluate_predictions_by_date(
+        df=df_eval,
+        date_col="trade_date",
+        prediction_col=score_col,
+        return_col=return_col,
+        topk_values=[eval_topk],
+    )
+    topk_col = f"Top{eval_topk}平均收益"
+    topk_series = (
+        daily_results[topk_col].dropna()
+        if topk_col in daily_results.columns
+        else pd.Series(dtype=float)
+    )
+    rankic_series = (
+        daily_results["RankIC"].dropna()
+        if "RankIC" in daily_results.columns
+        else pd.Series(dtype=float)
+    )
+    rankic_std = rankic_series.std()
+    rankic_ir = (
+        float(rankic_series.mean() / rankic_std)
+        if len(rankic_series) > 0 and pd.notna(rankic_std) and rankic_std > 0
+        else float("nan")
+    )
+    return {
+        "topk_mean": float(topk_series.mean()) if len(topk_series) > 0 else float("nan"),
+        "topk_median": float(topk_series.median()) if len(topk_series) > 0 else float("nan"),
+        "rankic_ir": rankic_ir,
+        "n_days": int(daily_results["trade_date"].nunique()) if len(daily_results) > 0 else 0,
+    }
+
+
+def learn_risk_penalty_config(
+    model,
+    df_val: pd.DataFrame,
+    feature_columns: List[str],
+    original_return_col: str,
+    task: str,
+    candidate_topk: int = 30,
+    bad_bottom_pct: float = 0.3,
+    eval_topk: int = 30,
+    lambda_grid: Optional[List[float]] = None,
+    min_bad_samples: int = 5,
+    min_total_samples: int = 15,
+) -> Optional[Dict[str, Any]]:
+    """从 calibration 段学习高分错票风险惩罚配置。"""
+    if df_val is None or len(df_val) == 0:
+        return None
+    if original_return_col not in df_val.columns or "trade_date" not in df_val.columns:
+        return None
+
+    eval_df = df_val.copy()
+    eval_df = eval_df[eval_df[original_return_col].notna()].copy()
+    if len(eval_df) == 0:
+        return None
+
+    candidate_topk = max(int(candidate_topk or 0), 1)
+    eval_topk = max(int(eval_topk or 0), 1)
+    bad_bottom_pct = float(bad_bottom_pct)
+    if not 0 < bad_bottom_pct < 1:
+        raise ValueError(f"bad_bottom_pct 必须在 (0, 1) 内，当前值: {bad_bottom_pct}")
+
+    eval_df["pred_score"] = _predict_scores(model, eval_df, feature_columns, task)
+
+    candidate_parts: List[pd.DataFrame] = []
+    for trade_date in eval_df["trade_date"].drop_duplicates().tolist():
+        day_df = eval_df[eval_df["trade_date"] == trade_date].copy()
+        day_df = day_df[day_df["pred_score"].notna() & day_df[original_return_col].notna()].copy()
+        if len(day_df) < max(3, min(candidate_topk, eval_topk)):
+            continue
+        day_df = day_df.sort_values(["pred_score", "ts_code"], ascending=[False, True]).head(candidate_topk)
+        bottom_threshold = day_df[original_return_col].quantile(bad_bottom_pct)
+        day_df["bad_pick"] = (
+            (day_df[original_return_col] < 0) & (day_df[original_return_col] <= bottom_threshold)
+        ).astype(int)
+        candidate_parts.append(day_df)
+
+    if not candidate_parts:
+        return None
+
+    candidate_df = pd.concat(candidate_parts, ignore_index=True)
+    bad_count = int(candidate_df["bad_pick"].sum())
+    total_count = int(len(candidate_df))
+    if bad_count < min_bad_samples or total_count < min_total_samples:
+        logger.info(
+            "风险惩罚学习跳过: calibration 样本不足, "
+            f"total={total_count}, bad={bad_count}, min_total={min_total_samples}, min_bad={min_bad_samples}"
+        )
+        return None
+
+    available_features = [
+        feature for feature in RISK_PENALTY_FEATURE_CANDIDATES if feature in candidate_df.columns
+    ]
+    if not available_features:
+        logger.info("风险惩罚学习跳过: calibration 段缺少候选风险特征")
+        return None
+
+    feature_items: List[Dict[str, Any]] = []
+    risk_score = pd.Series(0.0, index=candidate_df.index, dtype=float)
+    for feature_name in available_features:
+        feature_quantile = candidate_df.groupby("trade_date")[feature_name].transform(_rank_to_quantile)
+        mean_all_quantile = float(feature_quantile.mean())
+        mean_bad_quantile = float(feature_quantile[candidate_df["bad_pick"] == 1].mean())
+        uplift = mean_bad_quantile - mean_all_quantile
+        if not pd.notna(uplift) or uplift <= 0:
+            continue
+        feature_items.append(
+            {
+                "name": feature_name,
+                "weight_raw": float(uplift),
+                "mean_all_quantile": mean_all_quantile,
+                "mean_bad_quantile": mean_bad_quantile,
+                "coverage": float(candidate_df[feature_name].notna().mean()),
+            }
+        )
+        risk_score += feature_quantile * float(uplift)
+
+    if not feature_items:
+        logger.info("风险惩罚学习跳过: calibration 段未学到正向风险画像")
+        return None
+
+    total_weight_raw = float(sum(item["weight_raw"] for item in feature_items))
+    if total_weight_raw <= 0:
+        return None
+
+    for item in feature_items:
+        item["weight"] = float(item["weight_raw"] / total_weight_raw)
+        item.pop("weight_raw")
+
+    candidate_df["risk_score"] = risk_score / total_weight_raw
+
+    lambda_grid = lambda_grid or RISK_PENALTY_DEFAULT_LAMBDA_GRID
+    normalized_grid: List[float] = []
+    for value in lambda_grid:
+        resolved = float(value)
+        if resolved < 0:
+            continue
+        if resolved not in normalized_grid:
+            normalized_grid.append(resolved)
+    if 0.0 not in normalized_grid:
+        normalized_grid.insert(0, 0.0)
+    normalized_grid.sort()
+
+    lambda_results: List[Dict[str, Any]] = []
+    for penalty_lambda in normalized_grid:
+        scored_df = candidate_df[
+            ["trade_date", "ts_code", "pred_score", "risk_score", original_return_col]
+        ].copy()
+        scored_df["final_score"] = scored_df["pred_score"] - penalty_lambda * scored_df["risk_score"]
+        summary = _summarize_lambda_objective(
+            scored_df,
+            score_col="final_score",
+            return_col=original_return_col,
+            eval_topk=eval_topk,
+        )
+        lambda_results.append({"lambda": penalty_lambda, **summary})
+
+    def _score_tuple(item: Dict[str, Any]) -> Tuple[float, float, float, float]:
+        topk_median = item.get("topk_median")
+        rankic_ir = item.get("rankic_ir")
+        topk_mean = item.get("topk_mean")
+        return (
+            -np.inf if not pd.notna(topk_median) else float(topk_median),
+            -np.inf if not pd.notna(rankic_ir) else float(rankic_ir),
+            -np.inf if not pd.notna(topk_mean) else float(topk_mean),
+            -float(item.get("lambda", 0.0)),
+        )
+
+    baseline_result = next(item for item in lambda_results if float(item["lambda"]) == 0.0)
+    best_result = max(lambda_results, key=_score_tuple)
+    enabled = float(best_result["lambda"]) > 0 and _score_tuple(best_result) > _score_tuple(baseline_result)
+
+    logger.info(
+        "风险惩罚学习完成: "
+        f"enabled={enabled}, lambda={best_result['lambda']:.3f}, "
+        f"features={len(feature_items)}, bad_rate={bad_count / total_count:.2%}, "
+        f"top{eval_topk}_median={baseline_result['topk_median']:.6f}->{best_result['topk_median']:.6f}"
+    )
+
+    return {
+        "enabled": enabled,
+        "version": 1,
+        "candidate_topk": candidate_topk,
+        "bad_bottom_pct": bad_bottom_pct,
+        "eval_topk": eval_topk,
+        "penalty_lambda": float(best_result["lambda"]),
+        "feature_weights": feature_items,
+        "calibration_samples": total_count,
+        "calibration_bad_samples": bad_count,
+        "calibration_bad_rate": float(bad_count / total_count),
+        "baseline_topk_median": baseline_result["topk_median"],
+        "baseline_topk_mean": baseline_result["topk_mean"],
+        "baseline_rankic_ir": baseline_result["rankic_ir"],
+        "selected_topk_median": best_result["topk_median"],
+        "selected_topk_mean": best_result["topk_mean"],
+        "selected_rankic_ir": best_result["rankic_ir"],
+        "selected_score_column": "final_score",
+    }
 
 
 def train_xgboost_model(

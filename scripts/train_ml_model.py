@@ -57,6 +57,7 @@ from src.lazybull.ml.train_core import (
     train_lightgbm_model,
     evaluate_validation_daily,
     build_rank_sample_weights,
+    learn_risk_penalty_config,
 )
 
 try:
@@ -67,6 +68,31 @@ except ImportError:
 import warnings
 # 匹配告警信息中的关键字符串，设置为 ignore
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
+
+
+def _log_risk_penalty_summary(risk_penalty_config: Optional[Dict]) -> None:
+    """打印训练脚本的风险惩罚学习摘要。"""
+    if not risk_penalty_config:
+        logger.warning("风险惩罚: 未生成配置（通常是 calibration 样本或 bad_pick 不足）")
+        return
+
+    enabled = bool(risk_penalty_config.get("enabled", False))
+    penalty_lambda = float(risk_penalty_config.get("penalty_lambda", 0.0) or 0.0)
+    features = risk_penalty_config.get("feature_weights") or []
+    top_features = ", ".join(
+        f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
+        for item in features[:3]
+    )
+    if not top_features:
+        top_features = "无"
+    logger.warning(
+        f"风险惩罚: enabled={enabled}, lambda={penalty_lambda:.3f}, "
+        f"bad_rate={float(risk_penalty_config.get('calibration_bad_rate', 0.0)):.2%}, "
+        f"samples={int(risk_penalty_config.get('calibration_samples', 0) or 0)}, "
+        f"top30_median={float(risk_penalty_config.get('baseline_topk_median', float('nan'))):.6f}"
+        f"->{float(risk_penalty_config.get('selected_topk_median', float('nan'))):.6f}, "
+        f"top_features={top_features}"
+    )
 
 
 def main():
@@ -541,6 +567,16 @@ def main():
             "validation": val_metrics,
             "validation_daily": daily_val_metrics  # 逐日评估结果
         }
+
+        risk_penalty_config = learn_risk_penalty_config(
+            model=model,
+            df_val=df_val_split_original,
+            feature_columns=feature_columns,
+            original_return_col=args.label_column,
+            task=args.task,
+            eval_topk=30,
+        )
+        _log_risk_penalty_summary(risk_penalty_config)
         
         # 准备完整的训练参数（包含任务配置）
         full_train_params = train_params.copy()
@@ -579,7 +615,8 @@ def main():
             label_column=args.label_column,
             n_samples=len(X_train) + len(X_val),
             train_params=full_train_params,
-            performance_metrics=performance_metrics
+            performance_metrics=performance_metrics,
+            risk_penalty_config=risk_penalty_config,
         )
         
         logger.info("=" * 60)
