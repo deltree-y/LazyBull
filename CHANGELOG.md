@@ -12,6 +12,18 @@ All notable changes to this project will be documented in this file.
   - `src/lazybull/ml/model_registry.py` 现会把 `risk_penalty_config` 与模型 metadata 一起持久化，供回测、walk-forward 和部署推理复用。
   - `src/lazybull/signals/ml_signal.py` 推理时新增 `risk_score` 与 `final_score`，默认按 `final_score = ml_score - lambda * risk_score` 排序；旧模型若无该配置则行为保持不变。
 
+## [0.84.1] - 2026-07-22
+
+### Fixed
+
+- **风险惩罚学习不再在 calibration 不支持时强行启用**：
+  - `src/lazybull/ml/train_core.py` 现在把 `lambda=0` 作为正式候选最优解参与选择；若 calibration 段未证明正惩罚更优，则会保留 `penalty_lambda=0`，而不是仅因学出了风险画像就默认启用惩罚。
+  - 这修复了类似 split 9 这类 `calibration_prefers_penalty=false` 但 metadata 仍保存正 `lambda` 的问题。
+
+- **风险惩罚学习目标对齐真实执行 TopN**：
+  - `scripts/walk_forward.py` 不再把风险惩罚评估口径固定写死为 `Top30`，而是改为跟随 `bt_top_n`。
+  - `scripts/train_ml_model.py` 的单次训练路径也同步回到默认 `Top20` 执行口径，避免学的是 Top30，实际跑的是 Top20。
+
 ## [0.83.1] - 2026-07-22
 
 ### Fixed

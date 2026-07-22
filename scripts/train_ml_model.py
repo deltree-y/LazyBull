@@ -568,13 +568,15 @@ def main():
             "validation_daily": daily_val_metrics  # 逐日评估结果
         }
 
+        risk_penalty_eval_topk = 20
         risk_penalty_config = learn_risk_penalty_config(
             model=model,
             df_val=df_val_split_original,
             feature_columns=feature_columns,
             original_return_col=args.label_column,
             task=args.task,
-            eval_topk=30,
+            candidate_topk=max(30, risk_penalty_eval_topk),
+            eval_topk=risk_penalty_eval_topk,
         )
         _log_risk_penalty_summary(risk_penalty_config)
         

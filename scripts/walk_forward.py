@@ -185,12 +185,67 @@ def _log_risk_penalty_summary(tag: str, risk_penalty_config: Optional[Dict]) -> 
         top_features = "无"
     logger.warning(
         f"{tag} 风险惩罚: enabled={enabled}, lambda={penalty_lambda:.3f}, "
+        f"calib_prefers_penalty={bool(risk_penalty_config.get('calibration_prefers_penalty', False))}, "
         f"bad_rate={float(risk_penalty_config.get('calibration_bad_rate', 0.0)):.2%}, "
         f"samples={int(risk_penalty_config.get('calibration_samples', 0) or 0)}, "
         f"top30_median={float(risk_penalty_config.get('baseline_topk_median', float('nan'))):.6f}"
         f"->{float(risk_penalty_config.get('selected_topk_median', float('nan'))):.6f}, "
         f"top_features={top_features}"
     )
+
+
+def _rank_risk_feature(series: pd.Series) -> pd.Series:
+    """将单日截面风险特征映射到 0~1 分位。"""
+    valid = series.dropna()
+    if len(valid) == 0:
+        return pd.Series(0.5, index=series.index, dtype=float)
+    ranked = series.rank(method="average", pct=True, na_option="keep")
+    return ranked.fillna(0.5).clip(0.0, 1.0)
+
+
+def _apply_risk_penalty_scores(
+    df_eval: pd.DataFrame,
+    risk_penalty_config: Optional[Dict],
+    base_score_col: str = "pred_score",
+) -> Tuple[pd.DataFrame, str]:
+    """在 walk-forward 评估阶段复用执行侧的风险惩罚排序口径。"""
+    scored_df = df_eval.copy()
+    scored_df["ml_score"] = scored_df[base_score_col]
+    scored_df["risk_score"] = 0.0
+    scored_df["final_score"] = scored_df[base_score_col]
+
+    risk_config = risk_penalty_config or {}
+    if not risk_config.get("enabled"):
+        return scored_df, base_score_col
+
+    penalty_lambda = float(risk_config.get("penalty_lambda", 0.0) or 0.0)
+    feature_weights = risk_config.get("feature_weights") or []
+    if penalty_lambda <= 0 or len(feature_weights) == 0:
+        return scored_df, base_score_col
+
+    risk_score = pd.Series(0.0, index=scored_df.index, dtype=float)
+    total_weight = 0.0
+    for item in feature_weights:
+        feature_name = item.get("name")
+        weight = float(item.get("weight", 0.0) or 0.0)
+        if not feature_name or weight <= 0:
+            continue
+        if feature_name in scored_df.columns:
+            feature_series = _rank_risk_feature(scored_df[feature_name])
+        else:
+            feature_series = pd.Series(0.5, index=scored_df.index, dtype=float)
+        risk_score += feature_series * weight
+        total_weight += weight
+
+    if total_weight <= 0:
+        return scored_df, base_score_col
+
+    if total_weight != 1.0:
+        risk_score = risk_score / total_weight
+
+    scored_df["risk_score"] = risk_score
+    scored_df["final_score"] = scored_df[base_score_col] - penalty_lambda * scored_df["risk_score"]
+    return scored_df, "final_score"
 
 
 def summarize_ma250_signal_coverage(
@@ -1413,6 +1468,7 @@ def build_daily_topk_detail_df(
     df_eval: pd.DataFrame,
     original_return_col: str,
     topk_values: Tuple[int, ...] = (20, 30),
+    score_column: str = "pred_score",
 ) -> pd.DataFrame:
     """构建逐日 TopK 明细，便于排查不同 seed 的名单分叉。"""
     output_columns = [
@@ -1422,6 +1478,10 @@ def build_daily_topk_detail_df(
         "ts_code",
         "pred_score",
         "true_return",
+        "score_column",
+        "ml_score",
+        "risk_score",
+        "final_score",
     ]
     if df_eval is None or len(df_eval) == 0:
         return pd.DataFrame(columns=output_columns)
@@ -1441,21 +1501,29 @@ def build_daily_topk_detail_df(
     trade_dates = df_eval["trade_date"].drop_duplicates().tolist()
     for trade_date in trade_dates:
         day_df = df_eval[df_eval["trade_date"] == trade_date].copy()
-        if day_df.empty or "pred_score" not in day_df.columns or "ts_code" not in day_df.columns:
+        if day_df.empty or score_column not in day_df.columns or "ts_code" not in day_df.columns:
             continue
 
-        day_df = day_df[day_df["pred_score"].notna()].copy()
+        day_df = day_df[day_df[score_column].notna()].copy()
         if day_df.empty:
             continue
 
-        day_df = day_df.sort_values(["pred_score", "ts_code"], ascending=[False, True])
+        day_df = day_df.sort_values([score_column, "ts_code"], ascending=[False, True])
         for topk in valid_topk_values:
             topk_df = day_df.head(topk).copy()
             if topk_df.empty:
                 continue
             topk_df["topk"] = int(topk)
             topk_df["rank"] = np.arange(1, len(topk_df) + 1)
+            topk_df["pred_score"] = topk_df[score_column]
             topk_df["true_return"] = topk_df.get(original_return_col, np.nan)
+            topk_df["score_column"] = score_column
+            if "ml_score" not in topk_df.columns:
+                topk_df["ml_score"] = np.nan
+            if "risk_score" not in topk_df.columns:
+                topk_df["risk_score"] = np.nan
+            if "final_score" not in topk_df.columns:
+                topk_df["final_score"] = np.nan
             detail_parts.append(topk_df[output_columns])
 
     if not detail_parts:
@@ -2223,6 +2291,18 @@ def execute_split_training(
     X_train_len = selected_candidate["X_train_len"]
     X_val_len = selected_candidate["X_val_len"]
 
+    risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
+    risk_penalty_config = learn_risk_penalty_config(
+        model=model,
+        df_val=selected_candidate["df_val_split_original"],
+        feature_columns=feature_columns,
+        original_return_col=args.label_column,
+        task=args.task,
+        candidate_topk=max(30, risk_penalty_eval_topk),
+        eval_topk=risk_penalty_eval_topk,
+    )
+    _log_risk_penalty_summary(f"Split {split.split_index}", risk_penalty_config)
+
     # ── Phase 2: 加载测试数据 ──────────────────────────────────────────
     df_test, test_days_count = load_features_data(
         storage, loader, split.test_start, split.test_end
@@ -2262,10 +2342,17 @@ def execute_split_training(
         y_test_pred = model.predict(X_test_features)
         df_test_eval["pred_score"] = y_test_pred
 
+    df_test_eval, test_score_column = _apply_risk_penalty_scores(
+        df_eval=df_test_eval,
+        risk_penalty_config=risk_penalty_config,
+        base_score_col="pred_score",
+    )
+
     topk_detail_df = build_daily_topk_detail_df(
         df_eval=df_test_eval,
         original_return_col=args.label_column,
         topk_values=(20, 30),
+        score_column=test_score_column,
     )
 
     # 测试集逐日评估
@@ -2277,6 +2364,7 @@ def execute_split_training(
         task=args.task,
         topk_values=topk_values,
         emit_logs=False,
+        prediction_col=test_score_column,
     )
 
     _print_oos_focus_panel(split.split_index, test_daily_metrics)
@@ -2415,16 +2503,6 @@ def execute_split_training(
     full_train_params["posterior_tree_selected_topk_mean"] = train_params.get(
         "posterior_tree_selected_topk_mean"
     )
-
-    risk_penalty_config = learn_risk_penalty_config(
-        model=model,
-        df_val=selected_candidate["df_val_split_original"],
-        feature_columns=feature_columns,
-        original_return_col=args.label_column,
-        task=args.task,
-        eval_topk=30,
-    )
-    _log_risk_penalty_summary(f"Split {split.split_index}", risk_penalty_config)
 
     # 注册模型（EnsembleModel 通过 joblib 序列化，包含所有子模型）
     version = registry.register_model(
@@ -2803,13 +2881,15 @@ def execute_deploy_training(
         "posterior_tree_selected_topk_mean"
     )
 
+    risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
     risk_penalty_config = learn_risk_penalty_config(
         model=model,
         df_val=df_val_split_original,
         feature_columns=feature_columns,
         original_return_col=args.label_column,
         task=args.task,
-        eval_topk=30,
+        candidate_topk=max(30, risk_penalty_eval_topk),
+        eval_topk=risk_penalty_eval_topk,
     )
     _log_risk_penalty_summary("部署模型", risk_penalty_config)
 

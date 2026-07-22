@@ -625,6 +625,47 @@ class TestWalkForwardCSV:
             assert day_top20.iloc[0]["ts_code"] == "000000.SZ"
             assert day_top20.iloc[0]["pred_score"] == 100.0
             assert day_top30.iloc[-1]["rank"] == 30
+
+    def test_build_daily_topk_detail_df_uses_final_score_when_requested(self):
+        """测试 TopK 明细可以按风险惩罚后的 final_score 排序导出。"""
+        from scripts.walk_forward import build_daily_topk_detail_df
+
+        df_eval = pd.DataFrame(
+            [
+                {
+                    "trade_date": "20240102",
+                    "ts_code": "000001.SZ",
+                    "pred_score": 0.95,
+                    "ml_score": 0.95,
+                    "risk_score": 1.00,
+                    "final_score": 0.75,
+                    "y_ret_20": -0.02,
+                },
+                {
+                    "trade_date": "20240102",
+                    "ts_code": "000002.SZ",
+                    "pred_score": 0.90,
+                    "ml_score": 0.90,
+                    "risk_score": 0.10,
+                    "final_score": 0.88,
+                    "y_ret_20": 0.03,
+                },
+            ]
+        )
+
+        detail_df = build_daily_topk_detail_df(
+            df_eval,
+            original_return_col="y_ret_20",
+            topk_values=(2,),
+            score_column="final_score",
+        )
+
+        assert len(detail_df) == 2
+        assert detail_df.iloc[0]["ts_code"] == "000002.SZ"
+        assert detail_df.iloc[0]["pred_score"] == 0.88
+        assert detail_df.iloc[0]["score_column"] == "final_score"
+        assert detail_df.iloc[0]["ml_score"] == 0.90
+        assert detail_df.iloc[0]["final_score"] == 0.88
     
     def test_write_walk_forward_summary(self):
         """测试写入汇总文件"""

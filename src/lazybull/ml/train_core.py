@@ -1689,12 +1689,14 @@ def learn_risk_penalty_config(
 
     baseline_result = next(item for item in lambda_results if float(item["lambda"]) == 0.0)
     best_result = max(lambda_results, key=_score_tuple)
-    enabled = float(best_result["lambda"]) > 0 and _score_tuple(best_result) > _score_tuple(baseline_result)
+    calibration_prefers_penalty = float(best_result["lambda"]) > 0.0
+    enabled = calibration_prefers_penalty
 
     logger.info(
         "风险惩罚学习完成: "
         f"enabled={enabled}, lambda={best_result['lambda']:.3f}, "
         f"features={len(feature_items)}, bad_rate={bad_count / total_count:.2%}, "
+        f"calib_prefers_penalty={calibration_prefers_penalty}, "
         f"top{eval_topk}_median={baseline_result['topk_median']:.6f}->{best_result['topk_median']:.6f}"
     )
 
@@ -1715,7 +1717,8 @@ def learn_risk_penalty_config(
         "selected_topk_median": best_result["topk_median"],
         "selected_topk_mean": best_result["topk_mean"],
         "selected_rankic_ir": best_result["rankic_ir"],
-        "selected_score_column": "final_score",
+        "calibration_prefers_penalty": calibration_prefers_penalty,
+        "selected_score_column": "final_score" if enabled else "pred_score",
     }
 
 
@@ -2141,6 +2144,7 @@ def evaluate_validation_daily(
     task: str,
     topk_values: Optional[List[int]] = None,
     emit_logs: bool = True,
+    prediction_col: str = "pred_score",
 ) -> Dict:
     """对验证集进行逐日评估（贴近交易场景）
 
@@ -2166,23 +2170,24 @@ def evaluate_validation_daily(
     if topk_values is None:
         topk_values = [30, 100, 300]
 
-    # 准备预测数据
+    # 准备预测数据；当调用方已提供评分列时，直接复用，避免与实际排序口径脱节。
     df_eval = df_val.copy()
-    X_val_features = df_val[feature_columns].fillna(0)
+    score_col = str(prediction_col or "pred_score")
+    if score_col not in df_eval.columns:
+        X_val_features = df_val[feature_columns].fillna(0)
 
-    # 预测
-    if task == "classification":
-        y_pred_proba = model.predict_proba(X_val_features)[:, 1]
-        df_eval["pred_score"] = y_pred_proba
-    else:
-        y_pred = model.predict(X_val_features)
-        df_eval["pred_score"] = y_pred
+        if task == "classification":
+            y_pred_proba = model.predict_proba(X_val_features)[:, 1]
+            df_eval[score_col] = y_pred_proba
+        else:
+            y_pred = model.predict(X_val_features)
+            df_eval[score_col] = y_pred
 
     # 逐日评估
     daily_results = evaluate_predictions_by_date(
         df=df_eval,
         date_col="trade_date",
-        prediction_col="pred_score",
+        prediction_col=score_col,
         return_col=original_return_col,
         topk_values=topk_values,
     )
@@ -2194,7 +2199,7 @@ def evaluate_validation_daily(
     diagnostics = compute_diagnostic_statistics(
         df=df_eval,
         date_col="trade_date",
-        prediction_col="pred_score",
+        prediction_col=score_col,
         return_col=original_return_col,
         topk_values=topk_values,
     )
@@ -2204,6 +2209,7 @@ def evaluate_validation_daily(
 
     # 返回汇总结果（包含诊断统计）
     result = {
+        "prediction_col": score_col,
         "daily_rankic_mean": summary.get("RankIC_均值", np.nan),
         "daily_rankic_std": summary.get("RankIC_标准差", np.nan),
         "daily_rankic_ir": summary.get("RankIC_IR", np.nan),

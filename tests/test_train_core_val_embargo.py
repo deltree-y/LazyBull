@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from src.lazybull.ml.train_core import (
+    evaluate_validation_daily,
     learn_risk_penalty_config,
     prepare_training_data,
     split_train_val_by_date,
@@ -267,3 +268,104 @@ def test_learn_risk_penalty_config_from_bad_pick_pattern():
     assert config["penalty_lambda"] == 0.4
     assert config["feature_weights"][0]["name"] == "spec_score"
     assert config["selected_topk_median"] > config["baseline_topk_median"]
+
+
+def test_learn_risk_penalty_config_selects_zero_lambda_when_calibration_not_improved():
+    rows = []
+    for offset in range(6):
+        trade_date = f"2024020{offset + 1}"
+        rows.extend(
+            [
+                {
+                    "trade_date": trade_date,
+                    "ts_code": f"A{offset}",
+                    "pred_feature": 1.00,
+                    "spec_score": 100.0,
+                    "y_ret_5": -0.06,
+                },
+                {
+                    "trade_date": trade_date,
+                    "ts_code": f"B{offset}",
+                    "pred_feature": 0.70,
+                    "spec_score": 1.0,
+                    "y_ret_5": 0.05,
+                },
+                {
+                    "trade_date": trade_date,
+                    "ts_code": f"C{offset}",
+                    "pred_feature": 0.69,
+                    "spec_score": 10.0,
+                    "y_ret_5": 0.03,
+                },
+            ]
+        )
+
+    df_val = pd.DataFrame(rows)
+    config = learn_risk_penalty_config(
+        model=_RiskMockModel(),
+        df_val=df_val,
+        feature_columns=["pred_feature"],
+        original_return_col="y_ret_5",
+        task="regression",
+        candidate_topk=3,
+        eval_topk=2,
+        lambda_grid=[0.0, 0.05, 0.1],
+        min_bad_samples=3,
+        min_total_samples=12,
+    )
+
+    assert config is not None
+    assert config["enabled"] is False
+    assert config["penalty_lambda"] == 0.0
+    assert config["calibration_prefers_penalty"] is False
+    assert config["selected_topk_median"] == config["baseline_topk_median"]
+    assert config["selected_score_column"] == "pred_score"
+
+
+def test_evaluate_validation_daily_uses_existing_prediction_col():
+    df_val = pd.DataFrame(
+        [
+            {
+                "trade_date": "20240102",
+                "ts_code": "000001.SZ",
+                "pred_feature": 0.1,
+                "y_ret_5": -0.05,
+                "final_score": 0.9,
+            },
+            {
+                "trade_date": "20240102",
+                "ts_code": "000002.SZ",
+                "pred_feature": 0.9,
+                "y_ret_5": 0.08,
+                "final_score": 0.1,
+            },
+            {
+                "trade_date": "20240103",
+                "ts_code": "000003.SZ",
+                "pred_feature": 0.2,
+                "y_ret_5": -0.02,
+                "final_score": 0.8,
+            },
+            {
+                "trade_date": "20240103",
+                "ts_code": "000004.SZ",
+                "pred_feature": 0.8,
+                "y_ret_5": 0.06,
+                "final_score": 0.2,
+            },
+        ]
+    )
+
+    metrics = evaluate_validation_daily(
+        model=_RiskMockModel(),
+        df_val=df_val,
+        feature_columns=["pred_feature"],
+        original_return_col="y_ret_5",
+        task="regression",
+        topk_values=[1],
+        emit_logs=False,
+        prediction_col="final_score",
+    )
+
+    assert metrics["prediction_col"] == "final_score"
+    assert metrics["top1_return_mean"] == (-0.05 - 0.02) / 2

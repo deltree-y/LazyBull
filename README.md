@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.84.0)
+### 当前版本 (v0.84.1)
+
+**风险惩罚学习口径修正并对齐真实 TopN 执行** (v0.84.1):
+- `src/lazybull/ml/train_core.py` 现在把 `lambda=0` 作为正式候选解参与 calibration 比较；如果 calibration 段没有证明正惩罚更优，就会保留零惩罚，而不是因为“学出了风险画像”就默认启用惩罚。
+- `scripts/walk_forward.py` 的风险惩罚学习目标不再固定为 `Top30`，而是跟随真实回测使用的 `bt_top_n`；当前批量脚本默认 `bt_top_n=20`，因此学习与执行口径保持一致。
+- `scripts/train_ml_model.py` 的单次训练路径也同步对齐默认 `Top20`，减少训练期诊断和实际持仓目标不一致的问题。
 
 **MLSignal 新增基于 calibration 的高分错票风险惩罚** (v0.84.0):
 - `src/lazybull/ml/train_core.py` 现在会在 calibration 段先用主模型打分，再从每日高分候选中自动识别“高分但未来收益落入底部且为负”的 `bad_pick`。
