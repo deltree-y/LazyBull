@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @()
+        SelectedSplits = @(9,13)
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -190,7 +190,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $true   # $true 启用 | $false 禁用
+$deploy_train            = $false   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -200,6 +200,11 @@ $stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
+
+# ── 风险惩罚 Lambda 配置（坏票惩罚校准，同时影响训练与 OOS 回测）──
+$risk_penalty_lambda_scale_list = @(0.75)   # lambda 缩放系数（>0）；默认 1.0，<1 更温和，>1 更严格
+$risk_penalty_lambda_grid_list  = @("0.05")    # 自定义 lambda 候选（逗号分隔，如 "0.02,0.04,0.06"）；空=使用默认网格
+
 $bt_top_n_list           = @(20)            # 回测持仓 Top N
 $bt_rebalance_freq_list  = @($null)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
@@ -613,6 +618,8 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $reg_lambda_list.Length *
               $gamma_list.Length *
               $time_decay_half_life_list.Length *
+              $risk_penalty_lambda_scale_list.Length *
+              $risk_penalty_lambda_grid_list.Length *
               $rank_weight_topk_list.Length *
               $rank_weight_list.Length *
               $market_regime_bear_threshold_list.Length *
@@ -698,6 +705,8 @@ foreach ($reg_alpha in $reg_alpha_list) {
 foreach ($reg_lambda in $reg_lambda_list) {
 foreach ($gamma in $gamma_list) {
 foreach ($time_decay_half_life in $time_decay_half_life_list) {
+foreach ($risk_penalty_lambda_scale in $risk_penalty_lambda_scale_list) {
+foreach ($risk_penalty_lambda_grid in $risk_penalty_lambda_grid_list) {
 foreach ($rank_weight_topk in $rank_weight_topk_list) {
 foreach ($rank_weight in $rank_weight_list) {
 foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
@@ -787,6 +796,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --reg-alpha $reg_alpha" +
                  " --reg-lambda $reg_lambda" +
                  " --gamma $gamma" +
+                 " --risk-penalty-lambda-scale $risk_penalty_lambda_scale" +
                  " --rank-weight-topk $rank_weight_topk" +
                  " --rank-weight $rank_weight" +
                  " --rank-weight-topk-weight-mode $rank_weight_topk_weight_mode" +
@@ -803,6 +813,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($posterior_tree_candidates -ne "") {
         $pythonCmd += " --posterior-tree-candidates $posterior_tree_candidates"
+    }
+
+    if ($risk_penalty_lambda_grid -ne "") {
+        $pythonCmd += " --risk-penalty-lambda-grid $risk_penalty_lambda_grid"
     }
 
     if ($null -ne $selected_splits -and $selected_splits.Count -gt 0) {
@@ -1089,7 +1103,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

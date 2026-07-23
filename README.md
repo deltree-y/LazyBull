@@ -28,7 +28,22 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.85.1)
+### 当前版本 (v0.85.4)
+
+**风险惩罚强度可调 + 批量对比新增惩罚效果指标** (v0.85.4):
+- `scripts/walk_forward.py` 新增 `--risk-penalty-lambda-scale` 与 `--risk-penalty-lambda-grid`，可直接控制 conditional bad-pick 的惩罚强度搜索网格。
+- walk-forward 汇总新增四个诊断列：`risk_penalty_penalized_ratio`、`risk_penalty_penalty_mean`、`risk_penalty_topk_changed_days_ratio`、`risk_penalty_swap_alpha`。
+- `scripts/compare_walk_forward.py` 已接入这些列的聚合与展示，便于在 `wf_comparison_batches.xlsx` 直接观察“覆盖率/替换收益贡献”。
+
+**修复 conditional bad-pick 在 walk-forward 评估侧的特征名对齐问题** (v0.85.3):
+- `scripts/walk_forward.py` 的 `_apply_risk_penalty_scores()` 在 v2 路径中，现会按分类器 `feature_names_in_` 对输入特征自动对齐（补缺失、剔多余、重排）。
+- 修复了评估输入多出 `mkt_drawdown_20` 时 `predict_proba` 失败并静默回退 `pred_score` 的问题，避免“惩罚已启用但实际未生效”。
+- 新增回归测试覆盖该场景，并在失败回退日志中输出模型版本与异常上下文。
+
+**修复 conditional bad-pick 分类器兜底加载不可达分支** (v0.85.2):
+- `scripts/walk_forward.py` 的 `_apply_risk_penalty_scores()` 在 `_clf_model` 缺失时，现会先尝试按 `bad_pick_model_version` 从模型恢复分类器，再决定是否跳过惩罚。
+- 修复了此前“兜底加载逻辑写在提前返回之后，永远不会执行”的控制流问题。
+- 新增回归测试覆盖该路径，确保 OOS 评估能正确生成 `final_score`。
 
 **年化收益率统一为 CAGR 公式 + 批量汇总结束日期修复** (v0.85.1):
 - `src/lazybull/paper/broker.py` 年化收益率从简单线性改为复合年化（CAGR）。

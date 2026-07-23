@@ -59,6 +59,7 @@ from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.train_core import (
+    RISK_PENALTY_DEFAULT_LAMBDA_GRID,
     load_features_data,
     prepare_training_data,
     transform_labels_cs_zscore,
@@ -214,6 +215,140 @@ def _log_risk_penalty_summary(tag: str, risk_penalty_config: Optional[Dict]) -> 
         )
 
 
+def _resolve_risk_penalty_lambda_grid(args) -> Optional[List[float]]:
+    """解析 risk penalty 的 lambda 网格配置。"""
+    custom_grid_text = str(getattr(args, "risk_penalty_lambda_grid", "") or "").strip()
+    lambda_scale = float(getattr(args, "risk_penalty_lambda_scale", 1.0) or 1.0)
+
+    if lambda_scale <= 0:
+        raise ValueError(f"risk_penalty_lambda_scale 必须 > 0，当前值: {lambda_scale}")
+
+    if custom_grid_text:
+        values: List[float] = []
+        for token in custom_grid_text.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            value = float(token)
+            if value < 0:
+                raise ValueError(
+                    "risk_penalty_lambda_grid 中不允许负值，"
+                    f"收到: {value}"
+                )
+            if value > 0:
+                values.append(value)
+        if not values:
+            return None
+        return sorted(set(values))
+
+    if abs(lambda_scale - 1.0) < 1e-12:
+        return None
+
+    scaled = [
+        round(float(value) * lambda_scale, 6)
+        for value in RISK_PENALTY_DEFAULT_LAMBDA_GRID
+        if float(value) > 0
+    ]
+    return sorted(set(v for v in scaled if v > 0)) or None
+
+
+def _compute_risk_penalty_effect_metrics(
+    df_eval: pd.DataFrame,
+    return_col: str,
+    topk: int,
+    score_column: str,
+    base_score_col: str = "pred_score",
+) -> Dict[str, Optional[float]]:
+    """评估风险惩罚在单个 split 上的覆盖率与替换收益贡献。"""
+    metrics = {
+        "risk_penalty_penalized_ratio": 0.0,
+        "risk_penalty_penalty_mean": 0.0,
+        "risk_penalty_topk_changed_days_ratio": 0.0,
+        "risk_penalty_swap_alpha": 0.0,
+    }
+
+    if df_eval is None or len(df_eval) == 0 or return_col not in df_eval.columns:
+        return metrics
+
+    score_col = score_column if score_column in df_eval.columns else base_score_col
+    if score_col not in df_eval.columns or base_score_col not in df_eval.columns:
+        return metrics
+
+    penalty = None
+    if "ml_score" in df_eval.columns and "final_score" in df_eval.columns:
+        penalty = pd.to_numeric(df_eval["ml_score"], errors="coerce") - pd.to_numeric(
+            df_eval["final_score"], errors="coerce"
+        )
+    elif "final_score" in df_eval.columns:
+        penalty = pd.to_numeric(df_eval[base_score_col], errors="coerce") - pd.to_numeric(
+            df_eval["final_score"], errors="coerce"
+        )
+
+    if penalty is not None:
+        valid_penalty = penalty.dropna()
+        if len(valid_penalty) > 0:
+            metrics["risk_penalty_penalized_ratio"] = float((valid_penalty > 1e-6).mean())
+            positive_penalty = valid_penalty[valid_penalty > 1e-6]
+            metrics["risk_penalty_penalty_mean"] = (
+                float(positive_penalty.mean()) if len(positive_penalty) > 0 else 0.0
+            )
+
+    if score_col == base_score_col or topk <= 0:
+        return metrics
+
+    changed_days = 0
+    total_days = 0
+    swap_alpha_list: List[float] = []
+
+    trade_dates = df_eval["trade_date"].dropna().drop_duplicates().tolist()
+    for trade_date in trade_dates:
+        day_df = df_eval[df_eval["trade_date"] == trade_date].copy()
+        if day_df.empty or "ts_code" not in day_df.columns:
+            continue
+
+        day_df = day_df[
+            day_df[base_score_col].notna()
+            & day_df[score_col].notna()
+            & day_df[return_col].notna()
+        ].copy()
+        if len(day_df) == 0:
+            continue
+
+        total_days += 1
+
+        base_top_df = day_df.sort_values([base_score_col, "ts_code"], ascending=[False, True]).head(topk)
+        final_top_df = day_df.sort_values([score_col, "ts_code"], ascending=[False, True]).head(topk)
+
+        base_set = set(base_top_df["ts_code"].astype(str).tolist())
+        final_set = set(final_top_df["ts_code"].astype(str).tolist())
+
+        if base_set != final_set:
+            changed_days += 1
+
+        add_codes = list(final_set - base_set)
+        rem_codes = list(base_set - final_set)
+        if len(add_codes) == 0 or len(rem_codes) == 0:
+            swap_alpha_list.append(0.0)
+            continue
+
+        final_top_ret = final_top_df.set_index("ts_code")[return_col]
+        base_top_ret = base_top_df.set_index("ts_code")[return_col]
+
+        try:
+            add_ret = float(final_top_ret.loc[add_codes].mean())
+            rem_ret = float(base_top_ret.loc[rem_codes].mean())
+            swap_alpha_list.append(add_ret - rem_ret)
+        except Exception:
+            swap_alpha_list.append(0.0)
+
+    if total_days > 0:
+        metrics["risk_penalty_topk_changed_days_ratio"] = changed_days / total_days
+    if len(swap_alpha_list) > 0:
+        metrics["risk_penalty_swap_alpha"] = float(np.mean(swap_alpha_list))
+
+    return metrics
+
+
 def _rank_risk_feature(series: pd.Series) -> pd.Series:
     """将单日截面风险特征映射到 0~1 分位。"""
     valid = series.dropna()
@@ -254,32 +389,38 @@ def _apply_risk_penalty_scores(
         if not bp_config.enabled:
             return scored_df, base_score_col
 
+        bp_model_ver = int(bp_config.bad_pick_model_version or 0)
+
         # 获取分类器：learn_risk_penalty_config 直接返回的 _clf_model
         clf = risk_config.get("_clf_model")
         if clf is None:
-            logger.warning(
-                "_apply_risk_penalty_scores: _clf_model 缺失，跳过惩罚 "
+            if bp_model_ver > 0:
+                try:
+                    from src.lazybull.ml.model_registry import ModelRegistry
+                    from src.lazybull.common.config import get_data_root
 
-                f"(bad_pick_model_version={bp_config.bad_pick_model_version})"
-            )
-            return scored_df, base_score_col
-            try:
-                from src.lazybull.ml.model_registry import ModelRegistry
-                from src.lazybull.common.config import get_data_root
-
-                data_root = get_data_root()
-                models_dir = Path(data_root) / "models"
-                reg = ModelRegistry(models_dir=str(models_dir))
-                main_model, _ = reg.load_model(
-                    version=bp_model_ver, strict_version_check=False
+                    data_root = get_data_root()
+                    models_dir = Path(data_root) / "models"
+                    reg = ModelRegistry(models_dir=str(models_dir))
+                    main_model, _ = reg.load_model(
+                        version=bp_model_ver, strict_version_check=False
+                    )
+                    if hasattr(main_model, "_bad_pick_classifier_"):
+                        clf = main_model._bad_pick_classifier_
+                    elif hasattr(main_model, "predict_proba"):
+                        # 旧版兼容：直接将主模型作为分类器使用
+                        clf = main_model
+                except Exception as exc:
+                    logger.warning(
+                        "_apply_risk_penalty_scores: 兜底加载坏票分类器失败 "
+                        f"(bad_pick_model_version={bp_model_ver}, err={exc})"
+                    )
+            if clf is None:
+                logger.warning(
+                    "_apply_risk_penalty_scores: _clf_model 缺失且兜底分类器不可用，跳过惩罚 "
+                    f"(bad_pick_model_version={bp_model_ver})"
                 )
-                if hasattr(main_model, '_bad_pick_classifier_'):
-                    clf = main_model._bad_pick_classifier_
-                elif hasattr(main_model, 'predict_proba'):
-                    # 旧版兼容：直接当分类器用
-                    clf = main_model
-            except Exception:
-                pass
+                return scored_df, base_score_col
         if clf is None:
             return scored_df, base_score_col
 
@@ -306,10 +447,28 @@ def _apply_risk_penalty_scores(
         if X_clf.empty:
             return scored_df, base_score_col
 
+        expected_features = getattr(clf, "feature_names_in_", None)
+        if expected_features is not None:
+            expected_features = list(expected_features)
+            missing_features = [f for f in expected_features if f not in X_clf.columns]
+            extra_features = [f for f in X_clf.columns if f not in expected_features]
+            for feature_name in missing_features:
+                X_clf[feature_name] = 0.0
+            X_clf = X_clf[expected_features]
+            if missing_features or extra_features:
+                logger.debug(
+                    "_apply_risk_penalty_scores: v2 分类器特征已对齐 "
+                    f"(missing={len(missing_features)}, extra={len(extra_features)})"
+                )
+
         try:
             proba = clf.predict_proba(X_clf)
             p_bad = proba[:, 1] if proba.shape[1] > 1 else proba[:, 0]
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "_apply_risk_penalty_scores: v2 分类器预测失败，跳过惩罚 "
+                f"(bad_pick_model_version={bp_model_ver}, err={exc})"
+            )
             return scored_df, base_score_col
 
         p_bad_series = pd.Series(p_bad, index=X_clf.index, dtype=float)
@@ -2399,6 +2558,7 @@ def execute_split_training(
     X_val_len = selected_candidate["X_val_len"]
 
     risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
+    risk_penalty_lambda_grid = _resolve_risk_penalty_lambda_grid(args)
     risk_penalty_config = learn_risk_penalty_config(
         model=model,
         df_val=selected_candidate["df_val_split_original"],
@@ -2407,6 +2567,7 @@ def execute_split_training(
         task=args.task,
         candidate_topk=max(30, risk_penalty_eval_topk),
         eval_topk=risk_penalty_eval_topk,
+        lambda_grid=risk_penalty_lambda_grid,
     )
     _log_risk_penalty_summary(f"Split {split.split_index}", risk_penalty_config)
     if risk_penalty_config is None:
@@ -2462,6 +2623,21 @@ def execute_split_training(
         df_eval=df_test_eval,
         risk_penalty_config=risk_penalty_config,
         base_score_col="pred_score",
+    )
+
+    risk_penalty_effect_metrics = _compute_risk_penalty_effect_metrics(
+        df_eval=df_test_eval,
+        return_col=args.label_column,
+        topk=risk_penalty_eval_topk,
+        score_column=test_score_column,
+        base_score_col="pred_score",
+    )
+    logger.info(
+        f"Split {split.split_index} 惩罚效果: "
+        f"覆盖率={risk_penalty_effect_metrics['risk_penalty_penalized_ratio']:.2%}, "
+        f"Top{risk_penalty_eval_topk}换仓日占比="
+        f"{risk_penalty_effect_metrics['risk_penalty_topk_changed_days_ratio']:.2%}, "
+        f"swap_alpha={risk_penalty_effect_metrics['risk_penalty_swap_alpha']:.6f}"
     )
 
     topk_detail_df = build_daily_topk_detail_df(
@@ -2754,6 +2930,12 @@ def execute_split_training(
         "posterior_tree_selected_topk_hit_rate": train_params.get("posterior_tree_selected_topk_hit_rate"),
         "posterior_tree_selected_rankic_ir": train_params.get("posterior_tree_selected_rankic_ir"),
         "posterior_tree_selected_rankic_mean": train_params.get("posterior_tree_selected_rankic_mean"),
+        "risk_penalty_penalized_ratio": risk_penalty_effect_metrics["risk_penalty_penalized_ratio"],
+        "risk_penalty_penalty_mean": risk_penalty_effect_metrics["risk_penalty_penalty_mean"],
+        "risk_penalty_topk_changed_days_ratio": risk_penalty_effect_metrics[
+            "risk_penalty_topk_changed_days_ratio"
+        ],
+        "risk_penalty_swap_alpha": risk_penalty_effect_metrics["risk_penalty_swap_alpha"],
         "test_daily_metrics": test_daily_metrics,
         "_topk_detail_df": topk_detail_df,
     }
@@ -2998,6 +3180,7 @@ def execute_deploy_training(
     )
 
     risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
+    risk_penalty_lambda_grid = _resolve_risk_penalty_lambda_grid(args)
     risk_penalty_config = learn_risk_penalty_config(
         model=model,
         df_val=df_val_split_original,
@@ -3006,6 +3189,7 @@ def execute_deploy_training(
         task=args.task,
         candidate_topk=max(30, risk_penalty_eval_topk),
         eval_topk=risk_penalty_eval_topk,
+        lambda_grid=risk_penalty_lambda_grid,
     )
     _log_risk_penalty_summary("部署模型", risk_penalty_config)
 
@@ -3627,6 +3811,8 @@ def write_walk_forward_summary(
         "rank_weight_topk_weight_mode": getattr(args, "rank_weight_topk_weight_mode", "linear_decay"),
         "time_decay_half_life": args.time_decay_half_life,
         "objective": getattr(args, 'objective', 'mse'),
+        "risk_penalty_lambda_scale": getattr(args, 'risk_penalty_lambda_scale', 1.0),
+        "risk_penalty_lambda_grid": getattr(args, 'risk_penalty_lambda_grid', ''),
         "enable_fundamental": args.enable_fundamental_features,
         "enable_alt": args.enable_alt_features,
         "enable_margin": args.enable_margin_features,
@@ -3808,6 +3994,12 @@ def write_walk_forward_summary(
             "posterior_tree_selected_topk_hit_rate": result.get("posterior_tree_selected_topk_hit_rate"),
             "posterior_tree_selected_rankic_ir": result.get("posterior_tree_selected_rankic_ir"),
             "posterior_tree_selected_rankic_mean": result.get("posterior_tree_selected_rankic_mean"),
+            "risk_penalty_penalized_ratio": result.get("risk_penalty_penalized_ratio"),
+            "risk_penalty_penalty_mean": result.get("risk_penalty_penalty_mean"),
+            "risk_penalty_topk_changed_days_ratio": result.get(
+                "risk_penalty_topk_changed_days_ratio"
+            ),
+            "risk_penalty_swap_alpha": result.get("risk_penalty_swap_alpha"),
         }
 
         # 添加测试集逐日评估指标
@@ -4413,6 +4605,18 @@ def main():
         type=int,
         default=0,
         help="OOS 回测时长（月），默认 0 表示自动对齐 test_window_months"
+    )
+    parser.add_argument(
+        "--risk-penalty-lambda-scale",
+        type=float,
+        default=1.0,
+        help="风险惩罚lambda缩放系数（>0）；默认1.0，<1更温和，>1更严格"
+    )
+    parser.add_argument(
+        "--risk-penalty-lambda-grid",
+        type=str,
+        default="",
+        help="自定义风险惩罚lambda候选（逗号分隔，如0.02,0.04,0.06）；留空则基于默认网格与scale"
     )
     parser.add_argument(
         "--bt-top-n",
