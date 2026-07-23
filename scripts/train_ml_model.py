@@ -76,23 +76,43 @@ def _log_risk_penalty_summary(risk_penalty_config: Optional[Dict]) -> None:
         logger.warning("风险惩罚: 未生成配置（通常是 calibration 样本或 bad_pick 不足）")
         return
 
+    risk_version = int(risk_penalty_config.get("version", 1))
     enabled = bool(risk_penalty_config.get("enabled", False))
-    penalty_lambda = float(risk_penalty_config.get("penalty_lambda", 0.0) or 0.0)
-    features = risk_penalty_config.get("feature_weights") or []
-    top_features = ", ".join(
-        f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
-        for item in features[:3]
-    )
-    if not top_features:
-        top_features = "无"
-    logger.warning(
-        f"风险惩罚: enabled={enabled}, lambda={penalty_lambda:.3f}, "
-        f"bad_rate={float(risk_penalty_config.get('calibration_bad_rate', 0.0)):.2%}, "
-        f"samples={int(risk_penalty_config.get('calibration_samples', 0) or 0)}, "
-        f"top30_median={float(risk_penalty_config.get('baseline_topk_median', float('nan'))):.6f}"
-        f"->{float(risk_penalty_config.get('selected_topk_median', float('nan'))):.6f}, "
-        f"top_features={top_features}"
-    )
+    bad_rate = float(risk_penalty_config.get("calibration_bad_rate", 0.0) or 0)
+    samples = int(risk_penalty_config.get("calibration_samples", 0) or 0)
+    baseline = float(risk_penalty_config.get("baseline_topk_median", float("nan")))
+    selected = float(risk_penalty_config.get("selected_topk_median", float("nan")))
+
+    if risk_version >= 2:
+        auc = float(risk_penalty_config.get("calibration_auc", 0.0) or 0)
+        regimes = risk_penalty_config.get("regime_configs") or {}
+        regime_info = ", ".join(
+            f"{n}:thr={c.get('threshold',0):.2f},lam={c.get('penalty_lambda',0):.3f}"
+            for n, c in regimes.items()
+        )
+        regime_counts = risk_penalty_config.get("regime_sample_counts") or {}
+        logger.warning(
+            f"条件式坏票惩罚: enabled={enabled}, AUC={auc:.3f}, "
+            f"bad_rate={bad_rate:.2%}, samples={samples}, "
+            f"regimes={regime_counts}, "
+            f"config=({regime_info}), "
+            f"top30_median={baseline:.6f}->{selected:.6f}"
+        )
+    else:
+        penalty_lambda = float(risk_penalty_config.get("penalty_lambda", 0.0) or 0.0)
+        features = risk_penalty_config.get("feature_weights") or []
+        top_features = ", ".join(
+            f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
+            for item in features[:3]
+        )
+        if not top_features:
+            top_features = "无"
+        logger.warning(
+            f"风险惩罚(v1): enabled={enabled}, lambda={penalty_lambda:.3f}, "
+            f"bad_rate={bad_rate:.2%}, samples={samples}, "
+            f"top30_median={baseline:.6f}->{selected:.6f}, "
+            f"top_features={top_features}"
+        )
 
 
 def main():

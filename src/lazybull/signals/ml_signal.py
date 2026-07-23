@@ -114,6 +114,8 @@ class MLSignal(Signal):
         self._GATE_HISTORY_MAX_LEN = 60  # 最多保留60个调仓日的历史
         # 跨 split 持久化质量监控状态（walk-forward 复用 signal 实例时保留）
         self._persisted_quality_state: Optional[dict] = None
+        # 条件式坏票分类器（v2，延迟加载）
+        self._bad_pick_classifier = None
 
         self.min_amount_ma20 = min_amount_ma20
         self.min_total_mv = min_total_mv
@@ -587,15 +589,47 @@ class MLSignal(Signal):
             risk_config = self.metadata.get("risk_penalty_config") or {}
             risk_enabled = bool(risk_config.get("enabled", False))
             if risk_enabled:
-                top_features = ", ".join(
-                    f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
-                    for item in (risk_config.get("feature_weights") or [])[:3]
-                )
-                logger.warning(
-                    f"模型风险惩罚已启用: lambda={float(risk_config.get('penalty_lambda', 0.0) or 0.0):.3f}, "
-                    f"bad_rate={float(risk_config.get('calibration_bad_rate', 0.0)):.2%}, "
-                    f"top_features={top_features or '无'}"
-                )
+                risk_version = int(risk_config.get("version", 1))
+                if risk_version >= 2:
+                    # 条件式坏票模型（v2+）
+                    bp_model_ver = int(risk_config.get("bad_pick_model_version", 0) or 0)
+                    auc = float(risk_config.get("calibration_auc", 0.0) or 0)
+                    regimes = risk_config.get("regime_configs") or {}
+                    regime_info = ", ".join(
+                        f"{n}:thr={c.get('threshold',0):.2f},lam={c.get('penalty_lambda',0):.3f}"
+                        for n, c in regimes.items()
+                    )
+                    logger.warning(
+                        f"模型条件式坏票惩罚已启用: AUC={auc:.3f}, "
+                        f"bad_rate={float(risk_config.get('calibration_bad_rate', 0.0)):.2%}, "
+                        f"classifier=v{bp_model_ver}, "
+                        f"regimes={{{regime_info}}}"
+                    )
+                    # 延迟加载坏票分类器（直接用 XGBoost 原生加载，绕过注册表类型检测）
+                    if bp_model_ver > 0:
+                        try:
+                            import xgboost as xgb
+                            clf_file = self.models_dir / f"v{bp_model_ver}_model.json"
+                            if not clf_file.exists():
+                                raise FileNotFoundError(f"分类器模型文件不存在: {clf_file}")
+                            clf = xgb.XGBClassifier()
+                            clf.load_model(str(clf_file))
+                            self._bad_pick_classifier = clf
+                            logger.info(f"坏票分类器已加载: v{bp_model_ver}")
+                        except Exception as exc:
+                            logger.warning(f"坏票分类器加载失败: {exc}，惩罚将跳过")
+                            self._bad_pick_classifier = None
+                else:
+                    # 旧版线性惩罚（v1）
+                    top_features = ", ".join(
+                        f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
+                        for item in (risk_config.get("feature_weights") or [])[:3]
+                    )
+                    logger.warning(
+                        f"模型风险惩罚已启用(v1): lambda={float(risk_config.get('penalty_lambda', 0.0) or 0.0):.3f}, "
+                        f"bad_rate={float(risk_config.get('calibration_bad_rate', 0.0)):.2%}, "
+                        f"top_features={top_features or '无'}"
+                    )
             else:
                 logger.info("模型风险惩罚未启用")
             logger.info(
@@ -688,7 +722,12 @@ class MLSignal(Signal):
         return ranked.fillna(0.5).clip(0.0, 1.0)
 
     def _apply_risk_penalty(self, features_df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
-        """按模型 metadata 中的风险配置生成 final_score。"""
+        """按模型 metadata 中的风险配置生成 final_score。
+
+        支持两种模式：
+        - v1（旧版线性加权）: final_score = ml_score - λ × Σ(w_i × quantile_i)
+        - v2（条件式坏票）: 市场状态检测 + 二分类器 + 阈值门控
+        """
         features_df["risk_score"] = 0.0
         features_df["final_score"] = features_df["ml_score"]
 
@@ -696,6 +735,21 @@ class MLSignal(Signal):
         if not risk_config.get("enabled"):
             return features_df, "ml_score"
 
+        risk_version = int(risk_config.get("version", 1))
+
+        if risk_version >= 2:
+            # ── v2: 条件式坏票模型 ──
+            from src.lazybull.risk.bad_pick import BadPickConfig, apply_conditional_penalty
+
+            bp_config = BadPickConfig.from_dict(risk_config)
+            if not bp_config.enabled or bp_config.bad_pick_model_version <= 0:
+                return features_df, "ml_score"
+            if self._bad_pick_classifier is None:
+                return features_df, "ml_score"
+
+            return apply_conditional_penalty(features_df, bp_config, self._bad_pick_classifier)
+
+        # ── v1: 旧版线性加权惩罚（保留兼容）──
         penalty_lambda = float(risk_config.get("penalty_lambda", 0.0) or 0.0)
         feature_weights = risk_config.get("feature_weights") or []
         if penalty_lambda <= 0 or len(feature_weights) == 0:
@@ -723,7 +777,9 @@ class MLSignal(Signal):
             risk_score = risk_score / total_weight
 
         features_df["risk_score"] = risk_score
-        features_df["final_score"] = features_df["ml_score"] - penalty_lambda * features_df["risk_score"]
+        features_df["final_score"] = (
+            features_df["ml_score"] - penalty_lambda * features_df["risk_score"]
+        )
         return features_df, "final_score"
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:

@@ -275,6 +275,17 @@ class ModelRegistry:
             model_file = self.models_dir / f"{version_str}_model.joblib"
             joblib.dump(model, model_file)
             logger.info(f"模型已保存（joblib）: {model_file}")
+            # 清理可能存在的残留 .json 僵尸文件（避免加载时误读旧分类器）
+            stale_json = self.models_dir / f"{version_str}_model.json"
+            if stale_json.exists():
+                stale_json.unlink()
+                logger.debug(f"已清理残留文件: {stale_json.name}")
+        else:
+            # 清理可能存在的残留 .joblib 文件
+            stale_joblib = self.models_dir / f"{version_str}_model.joblib"
+            if stale_joblib.exists():
+                stale_joblib.unlink()
+                logger.debug(f"已清理残留文件: {stale_joblib.name}")
         
         # 保存特征列表
         features_file = self.models_dir / f"{version_str}_features.json"
@@ -298,15 +309,59 @@ class ModelRegistry:
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         if risk_penalty_config is not None:
+            # 若为条件式坏票模型（v2），先注册分类器
+            clf_model = risk_penalty_config.pop("_clf_model", None)
+            clf_features = risk_penalty_config.pop("_clf_features", None)
+            if clf_model is not None:
+                clf_version = version + 1  # 分类器版本 = 主模型+1
+                clf_version_str = f"v{clf_version}"
+                try:
+                    clf_model_file = self.models_dir / f"{clf_version_str}_model.json"
+                    clf_model.save_model(str(clf_model_file))
+                    clf_metadata = {
+                        "version": clf_version,
+                        "version_str": clf_version_str,
+                        "model_type": "xgboost_classifier",
+                        "model_file": str(clf_model_file.name),
+                        "features_file": "",
+                        "train_start_date": train_start_date,
+                        "train_end_date": train_end_date,
+                        "feature_count": len(clf_features) if clf_features else 0,
+                        "label_column": "bad_pick",
+                        "n_samples": 0,
+                        "train_params": {"purpose": "bad_pick_classifier"},
+                        "performance_metrics": {},
+                        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "risk_penalty_config": risk_penalty_config,
+                    }
+                    # 保存分类器特征
+                    if clf_features:
+                        clf_feat_file = self.models_dir / f"{clf_version_str}_features.json"
+                        with open(clf_feat_file, 'w', encoding='utf-8') as ff:
+                            json.dump(list(clf_features), ff, ensure_ascii=False, indent=2)
+                        clf_metadata["features_file"] = str(clf_feat_file.name)
+                    self._save_metadata_sidecar(clf_metadata)
+                    # 暂存到内存注册表（最终由外层统一落盘，避免两次 _save_registry 导致 next_version 回滚）
+                    registry = self._ensure_registry_loaded()
+                    registry["models"].append(clf_metadata)
+                    if clf_version >= registry.get("next_version", 1):
+                        registry["next_version"] = clf_version + 1
+                    # 回填 bad_pick_model_version
+                    risk_penalty_config["bad_pick_model_version"] = clf_version
+                    logger.info(f"坏票分类器已注册: v{clf_version}")
+                except Exception as exc:
+                    logger.warning(f"坏票分类器注册失败: {exc}")
+                    risk_penalty_config["bad_pick_model_version"] = 0
             metadata["risk_penalty_config"] = risk_penalty_config
 
         self._save_metadata_sidecar(metadata)
         self._save_latest_version_file(version)
         
-        # 更新注册表
+        # 更新注册表（next_version 取主模型和分类器的最大值，避免版本回滚）
         registry = self._ensure_registry_loaded()
         registry["models"].append(metadata)
-        registry["next_version"] = version + 1
+        next_ver = max(version + 1, registry.get("next_version", version + 1))
+        registry["next_version"] = next_ver
         self._save_registry()
         
         logger.info(
@@ -371,24 +426,23 @@ class ModelRegistry:
                     f"请重新训练模型以生成包含完整元数据的新版本。"
                 )
         
-        # 加载模型文件（优先 XGBoost 原生格式，避免跨版本 pickle 告警）
+        # 加载模型文件
+        # 优先按 metadata 中记录的实际文件名加载，避免被残留的 .json 僵尸文件误导
         model_file = self.models_dir / metadata["model_file"]
         native_file = self.models_dir / f"v{version}_model.json"
 
-        if native_file.exists():
-            # XGBoost 原生格式加载
+        if model_file.exists():
+            if model_file.suffix == ".json":
+                model = _load_xgboost_native(str(model_file), metadata.get("model_type", ""))
+            else:
+                with _suppress_xgboost_pickle_warning():
+                    model = joblib.load(model_file)
+        elif native_file.exists():
+            # metadata 中记录的文件缺失，回退到同名 .json（可能是旧格式迁移场景）
             model = _load_xgboost_native(str(native_file), metadata.get("model_type", ""))
-        elif model_file.suffix == ".json":
-            # 元数据指向 .json 原生格式但文件缺失
-            raise FileNotFoundError(f"模型文件不存在: {model_file}")
-        elif model_file.exists():
-            # 回退到 joblib 加载（旧模型），抑制跨版本 pickle 告警
-            with _suppress_xgboost_pickle_warning():
-                model = joblib.load(model_file)
         else:
             raise FileNotFoundError(
-                f"模型文件不存在（已尝试原生格式与 joblib）: "
-                f"{native_file}, {model_file}"
+                f"模型文件不存在: {model_file} (native: {native_file})"
             )
         
         # 加载特征列表

@@ -1564,7 +1564,23 @@ def learn_risk_penalty_config(
     min_bad_samples: int = 5,
     min_total_samples: int = 15,
 ) -> Optional[Dict[str, Any]]:
-    """从 calibration 段学习高分错票风险惩罚配置。"""
+    """从 calibration 段学习条件式坏票惩罚配置（v2）。
+
+    流程：
+      1. 构造候选池 + 标记 bad_pick（与 v1 相同）
+      2. 训练 XGBoost 二分类器预测 bad_pick
+      3. 用分位数网格搜索校准 market regime 阈值
+      4. 用 (threshold, lambda) 二维网格搜索校准 per-regime 门控参数
+      5. 返回 BadPickConfig 兼容字典
+    """
+    from src.lazybull.risk.bad_pick import (
+        BAD_PICK_CLASSIFIER_FEATURES,
+        MARKET_STATE_FEATURES,
+        BadPickConfig,
+        RegimeBadPickConfig,
+        detect_market_regime,
+    )
+
     if df_val is None or len(df_val) == 0:
         return None
     if original_return_col not in df_val.columns or "trade_date" not in df_val.columns:
@@ -1583,6 +1599,7 @@ def learn_risk_penalty_config(
 
     eval_df["pred_score"] = _predict_scores(model, eval_df, feature_columns, task)
 
+    # ── 1. 构造候选池 + 标记 bad_pick（与 v1 相同）────────────────────
     candidate_parts: List[pd.DataFrame] = []
     for trade_date in eval_df["trade_date"].drop_duplicates().tolist():
         day_df = eval_df[eval_df["trade_date"] == trade_date].copy()
@@ -1604,123 +1621,303 @@ def learn_risk_penalty_config(
     total_count = int(len(candidate_df))
     if bad_count < min_bad_samples or total_count < min_total_samples:
         logger.info(
-            "风险惩罚学习跳过: calibration 样本不足, "
+            "条件式坏票惩罚学习跳过: calibration 样本不足, "
             f"total={total_count}, bad={bad_count}, min_total={min_total_samples}, min_bad={min_bad_samples}"
         )
         return None
 
-    available_features = [
-        feature for feature in RISK_PENALTY_FEATURE_CANDIDATES if feature in candidate_df.columns
+    # ── 2. 准备分类器特征 ──────────────────────────────────────────────
+    available_clf_features = [
+        f for f in BAD_PICK_CLASSIFIER_FEATURES if f in candidate_df.columns
     ]
-    if not available_features:
-        logger.info("风险惩罚学习跳过: calibration 段缺少候选风险特征")
+    available_mkt_features = [
+        f for f in MARKET_STATE_FEATURES if f in candidate_df.columns
+    ]
+    all_clf_features = available_clf_features + available_mkt_features
+
+    if len(available_clf_features) == 0:
+        logger.info("条件式坏票惩罚学习跳过: calibration 段缺少分类器特征")
         return None
 
-    feature_items: List[Dict[str, Any]] = []
-    risk_score = pd.Series(0.0, index=candidate_df.index, dtype=float)
-    for feature_name in available_features:
-        feature_quantile = candidate_df.groupby("trade_date")[feature_name].transform(_rank_to_quantile)
-        mean_all_quantile = float(feature_quantile.mean())
-        mean_bad_quantile = float(feature_quantile[candidate_df["bad_pick"] == 1].mean())
-        uplift = mean_bad_quantile - mean_all_quantile
-        if not pd.notna(uplift) or uplift <= 0:
-            continue
-        feature_items.append(
-            {
-                "name": feature_name,
-                "weight_raw": float(uplift),
-                "mean_all_quantile": mean_all_quantile,
-                "mean_bad_quantile": mean_bad_quantile,
-                "coverage": float(candidate_df[feature_name].notna().mean()),
-            }
-        )
-        risk_score += feature_quantile * float(uplift)
+    # 缺失值填中位数
+    X_clf = candidate_df[all_clf_features].copy()
+    for col in X_clf.columns:
+        if X_clf[col].isna().any():
+            X_clf[col] = X_clf[col].fillna(X_clf[col].median() if X_clf[col].notna().any() else 0.0)
 
-    if not feature_items:
-        logger.info("风险惩罚学习跳过: calibration 段未学到正向风险画像")
-        return None
+    y_clf = candidate_df["bad_pick"].astype(int)
 
-    total_weight_raw = float(sum(item["weight_raw"] for item in feature_items))
-    if total_weight_raw <= 0:
-        return None
+    # ── 3. 训练二分类器 ────────────────────────────────────────────────
+    scale_pos_weight_val = float((len(y_clf) - y_clf.sum()) / max(y_clf.sum(), 1))
+    scale_pos_weight_val = min(max(scale_pos_weight_val, 1.0), 20.0)
 
-    for item in feature_items:
-        item["weight"] = float(item["weight_raw"] / total_weight_raw)
-        item.pop("weight_raw")
-
-    candidate_df["risk_score"] = risk_score / total_weight_raw
-
-    lambda_grid = lambda_grid or RISK_PENALTY_DEFAULT_LAMBDA_GRID
-    normalized_grid: List[float] = []
-    for value in lambda_grid:
-        resolved = float(value)
-        if resolved < 0:
-            continue
-        if resolved not in normalized_grid:
-            normalized_grid.append(resolved)
-    if 0.0 not in normalized_grid:
-        normalized_grid.insert(0, 0.0)
-    normalized_grid.sort()
-
-    lambda_results: List[Dict[str, Any]] = []
-    for penalty_lambda in normalized_grid:
-        scored_df = candidate_df[
-            ["trade_date", "ts_code", "pred_score", "risk_score", original_return_col]
-        ].copy()
-        scored_df["final_score"] = scored_df["pred_score"] - penalty_lambda * scored_df["risk_score"]
-        summary = _summarize_lambda_objective(
-            scored_df,
-            score_col="final_score",
-            return_col=original_return_col,
-            eval_topk=eval_topk,
-        )
-        lambda_results.append({"lambda": penalty_lambda, **summary})
-
-    def _score_tuple(item: Dict[str, Any]) -> Tuple[float, float, float, float]:
-        topk_median = item.get("topk_median")
-        rankic_ir = item.get("rankic_ir")
-        topk_mean = item.get("topk_mean")
-        return (
-            -np.inf if not pd.notna(topk_median) else float(topk_median),
-            -np.inf if not pd.notna(rankic_ir) else float(rankic_ir),
-            -np.inf if not pd.notna(topk_mean) else float(topk_mean),
-            -float(item.get("lambda", 0.0)),
-        )
-
-    baseline_result = next(item for item in lambda_results if float(item["lambda"]) == 0.0)
-    best_result = max(lambda_results, key=_score_tuple)
-    calibration_prefers_penalty = float(best_result["lambda"]) > 0.0
-    enabled = calibration_prefers_penalty
-
-    logger.info(
-        "风险惩罚学习完成: "
-        f"enabled={enabled}, lambda={best_result['lambda']:.3f}, "
-        f"features={len(feature_items)}, bad_rate={bad_count / total_count:.2%}, "
-        f"calib_prefers_penalty={calibration_prefers_penalty}, "
-        f"top{eval_topk}_median={baseline_result['topk_median']:.6f}->{best_result['topk_median']:.6f}"
+    clf_model = xgb.XGBClassifier(
+        n_estimators=50,
+        max_depth=3,
+        learning_rate=0.1,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        scale_pos_weight=scale_pos_weight_val,
+        random_state=42,
+        eval_metric="auc",
+        use_label_encoder=False,
+        verbosity=0,
     )
 
-    return {
-        "enabled": enabled,
-        "version": 1,
-        "candidate_topk": candidate_topk,
-        "bad_bottom_pct": bad_bottom_pct,
-        "eval_topk": eval_topk,
-        "penalty_lambda": float(best_result["lambda"]),
-        "feature_weights": feature_items,
-        "calibration_samples": total_count,
-        "calibration_bad_samples": bad_count,
-        "calibration_bad_rate": float(bad_count / total_count),
-        "baseline_topk_median": baseline_result["topk_median"],
-        "baseline_topk_mean": baseline_result["topk_mean"],
-        "baseline_rankic_ir": baseline_result["rankic_ir"],
-        "selected_topk_median": best_result["topk_median"],
-        "selected_topk_mean": best_result["topk_mean"],
-        "selected_rankic_ir": best_result["rankic_ir"],
-        "calibration_prefers_penalty": calibration_prefers_penalty,
-        "selected_score_column": "final_score" if enabled else "pred_score",
+    try:
+        clf_model.fit(X_clf, y_clf)
+    except Exception as exc:
+        logger.warning(f"坏票分类器训练失败: {exc}")
+        return None
+
+    # 计算 AUC
+    try:
+        from sklearn.metrics import roc_auc_score
+        y_proba = clf_model.predict_proba(X_clf)
+        p_bad_all = y_proba[:, 1] if y_proba.shape[1] > 1 else y_proba[:, 0]
+        calib_auc = float(roc_auc_score(y_clf, p_bad_all))
+    except Exception:
+        calib_auc = float("nan")
+
+    candidate_df["p_bad"] = p_bad_all
+
+    # ── 4. 校准 market regime 阈值（分位数网格搜索）─────────────────────
+    bear_pcts = [0.10, 0.20, 0.30, 0.40]
+    vol_pcts = [0.60, 0.70, 0.80, 0.90]
+    dd_pcts = [0.10, 0.20, 0.30]
+
+    # 从候选池提取市场特征标量（每个交易日一个值）
+    mkt_daily: Dict[str, Dict[str, float]] = {}
+    for date_str, grp in candidate_df.groupby("trade_date"):
+        row: Dict[str, float] = {}
+        for col in MARKET_STATE_FEATURES:
+            if col in grp.columns:
+                vals = grp[col].dropna()
+                row[col] = float(vals.iloc[0]) if len(vals) > 0 else 0.0
+            else:
+                row[col] = 0.0
+        mkt_daily[str(date_str)] = row
+
+    # 计算市场特征的实际分位数值（用于配置存储）
+    if len(mkt_daily) > 1:
+        bear_vals = [mkt_daily[d].get("mkt_ret_avg_20", 0.0) for d in mkt_daily]
+        vol_vals = [mkt_daily[d].get("mkt_vol_20", 0.0) for d in mkt_daily]
+        dd_vals = [mkt_daily[d].get("mkt_drawdown_20", 0.0) for d in mkt_daily]
+
+        best_regime_score = -np.inf
+        best_bear_pct = bear_pcts[1]
+        best_vol_pct = vol_pcts[1]
+        best_dd_pct = dd_pcts[1]
+
+        for bear_pct in bear_pcts:
+            bear_thr = float(np.percentile(bear_vals, bear_pct * 100)) if bear_vals else 0.0
+            for vol_pct in vol_pcts:
+                vol_thr = float(np.percentile(vol_vals, vol_pct * 100)) if vol_vals else 0.0
+                for dd_pct in dd_pcts:
+                    dd_thr = float(np.percentile(dd_vals, dd_pct * 100)) if dd_vals else 0.0
+
+                    tmp_config = BadPickConfig(
+                        regime_bear_pct=bear_thr,
+                        regime_vol_pct=vol_thr,
+                        regime_dd_pct=dd_thr,
+                    )
+
+                    stressed_bad = 0
+                    stressed_total = 0
+                    normal_bad = 0
+                    normal_total = 0
+                    for date_str, mf in mkt_daily.items():
+                        regime = detect_market_regime(mf, tmp_config)
+                        day_bad = candidate_df[candidate_df["trade_date"] == date_str]["bad_pick"].sum()
+                        day_total = int((candidate_df["trade_date"] == date_str).sum())
+                        if regime == "stressed":
+                            stressed_bad += int(day_bad)
+                            stressed_total += day_total
+                        else:
+                            normal_bad += int(day_bad)
+                            normal_total += day_total
+
+                    stressed_recall = stressed_bad / max(bad_count, 1)
+                    normal_safe = 1.0 - (normal_bad / max(normal_total, 1))
+
+                    stressed_ratio = stressed_total / max(total_count, 1)
+                    if stressed_ratio < 0.10 or stressed_ratio > 0.70:
+                        score = -np.inf
+                    else:
+                        score = stressed_recall * 0.5 + normal_safe * 0.5
+
+                    if score > best_regime_score:
+                        best_regime_score = score
+                        best_bear_pct = bear_pct
+                        best_vol_pct = vol_pct
+                        best_dd_pct = dd_pct
+
+        logger.info(
+            f"Regime 阈值校准: bear_pct={best_bear_pct:.0%}, vol_pct={best_vol_pct:.0%}, "
+            f"dd_pct={best_dd_pct:.0%}, score={best_regime_score:.3f}"
+        )
+    else:
+        best_bear_pct = bear_pcts[1]
+        best_vol_pct = vol_pcts[1]
+        best_dd_pct = dd_pcts[1]
+
+    # 用校准后的分位数计算实际阈值
+    if len(mkt_daily) > 1:
+        bear_vals = [mkt_daily[d].get("mkt_ret_avg_20", 0.0) for d in mkt_daily]
+        vol_vals = [mkt_daily[d].get("mkt_vol_20", 0.0) for d in mkt_daily]
+        dd_vals = [mkt_daily[d].get("mkt_drawdown_20", 0.0) for d in mkt_daily]
+        actual_bear_thr = float(np.percentile(bear_vals, best_bear_pct * 100))
+        actual_vol_thr = float(np.percentile(vol_vals, best_vol_pct * 100))
+        actual_dd_thr = float(np.percentile(dd_vals, best_dd_pct * 100))
+    else:
+        actual_bear_thr = 0.0
+        actual_vol_thr = 0.0
+        actual_dd_thr = 0.0
+
+    # ── 5. 为每个样本添加 regime 标签 ───────────────────────────────────
+    tmp_config = BadPickConfig(
+        regime_bear_pct=actual_bear_thr,
+        regime_vol_pct=actual_vol_thr,
+        regime_dd_pct=actual_dd_thr,
+    )
+    regime_labels: Dict[str, str] = {}
+    for date_str, mf in mkt_daily.items():
+        regime_labels[date_str] = detect_market_regime(mf, tmp_config)
+    candidate_df["regime"] = candidate_df["trade_date"].astype(str).map(regime_labels).fillna("normal")
+
+    regime_sample_counts = {
+        name: int(cnt) for name, cnt in candidate_df["regime"].value_counts().items()
     }
 
+    # ── 6. per-regime (threshold, lambda) 二维网格搜索 ──────────────────
+    threshold_candidates = [0.3, 0.4, 0.5, 0.6, 0.7]
+    lambda_candidates = lambda_grid or RISK_PENALTY_DEFAULT_LAMBDA_GRID
+
+    regimes = candidate_df["regime"].unique().tolist()
+    if "normal" not in regimes:
+        regimes.insert(0, "normal")
+
+    best_per_regime: Dict[str, Tuple[float, float, float]] = {}
+
+    for regime_name in regimes:
+        regime_df = candidate_df[candidate_df["regime"] == regime_name]
+        if len(regime_df) < min_total_samples:
+            best_per_regime[regime_name] = (1.0, 0.0, 0.0)
+            continue
+
+        best_score = -np.inf
+        best_threshold = 0.5
+        best_lambda = 0.0
+
+        for threshold in threshold_candidates:
+            effective_lambdas = [0.0] + lambda_candidates if threshold < 1.0 else [0.0]
+            for penalty_lambda in effective_lambdas:
+                scored_df = regime_df.copy()
+                mask = scored_df["p_bad"] > threshold
+                excess = (scored_df["p_bad"] - threshold).clip(lower=0.0)
+                penalty = (penalty_lambda * excess * mask.astype(float)).astype(
+                    scored_df["pred_score"].dtype
+                )
+                scored_df["final_score"] = scored_df["pred_score"] - penalty
+
+                summary = _summarize_lambda_objective(
+                    scored_df,
+                    score_col="final_score",
+                    return_col=original_return_col,
+                    eval_topk=eval_topk,
+                )
+                topk_median = summary.get("topk_median", float("nan"))
+                rankic_ir = summary.get("rankic_ir", float("nan"))
+
+                if not pd.notna(topk_median):
+                    continue
+
+                score = (
+                    topk_median * 0.5
+                    + (rankic_ir if pd.notna(rankic_ir) else 0) * 0.3
+                    - penalty_lambda * 0.2
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_threshold = threshold
+                    best_lambda = penalty_lambda
+
+        best_per_regime[regime_name] = (best_threshold, best_lambda, best_score)
+
+    # ── 7. 全局 baseline（无惩罚）vs 条件式惩罚对比 ─────────────────────
+    baseline_df = candidate_df.copy()
+    baseline_df["final_score"] = baseline_df["pred_score"]
+    baseline_summary = _summarize_lambda_objective(
+        baseline_df, score_col="final_score", return_col=original_return_col, eval_topk=eval_topk
+    )
+
+    conditional_df = candidate_df.copy()
+    conditional_df["final_score"] = conditional_df["pred_score"]
+    for regime_name, (thr, lam, _) in best_per_regime.items():
+        if lam <= 0:
+            continue
+        reg_mask = conditional_df["regime"] == regime_name
+        if not reg_mask.any():
+            continue
+        p_bad_reg = conditional_df.loc[reg_mask, "p_bad"]
+        excess = (p_bad_reg - thr).clip(lower=0.0)
+        penalty_mask = p_bad_reg > thr
+        penalty = (lam * excess * penalty_mask.astype(float)).astype(
+            conditional_df["pred_score"].dtype
+        )
+        conditional_df.loc[reg_mask, "final_score"] = (
+            conditional_df.loc[reg_mask, "pred_score"] - penalty
+        )
+
+    conditional_summary = _summarize_lambda_objective(
+        conditional_df, score_col="final_score", return_col=original_return_col, eval_topk=eval_topk
+    )
+
+    any_penalty = any(lam > 0 for _, lam, _ in best_per_regime.values())
+    enabled = any_penalty
+
+    logger.info(
+        "条件式坏票惩罚学习完成: "
+        f"enabled={enabled}, AUC={calib_auc:.3f}, "
+        f"bad_rate={bad_count/total_count:.2%}, "
+        f"regimes={regime_sample_counts}, "
+        f"top{eval_topk}_median={baseline_summary.get('topk_median', float('nan')):.6f}"
+        f"->{conditional_summary.get('topk_median', float('nan')):.6f}"
+    )
+
+    for regime_name, (thr, lam, _) in best_per_regime.items():
+        logger.info(f"  regime={regime_name}: threshold={thr:.2f}, lambda={lam:.3f}")
+
+    # ── 8. 构建 BadPickConfig ──────────────────────────────────────────
+    regime_configs = {
+        name: RegimeBadPickConfig(threshold=thr, penalty_lambda=lam)
+        for name, (thr, lam, _) in best_per_regime.items()
+    }
+
+    bp_config = BadPickConfig(
+        enabled=enabled,
+        bad_pick_model_version=0,
+        classifier_features=available_clf_features,
+        regime_bear_pct=actual_bear_thr,
+        regime_vol_pct=actual_vol_thr,
+        regime_dd_pct=actual_dd_thr,
+        regime_configs=regime_configs,
+        calibration_samples=total_count,
+        calibration_bad_samples=bad_count,
+        calibration_bad_rate=float(bad_count / total_count),
+        calibration_auc=calib_auc,
+        regime_sample_counts=regime_sample_counts,
+        baseline_topk_median=baseline_summary.get("topk_median", float("nan")),
+        selected_topk_median=conditional_summary.get("topk_median", float("nan")),
+        baseline_rankic_ir=baseline_summary.get("rankic_ir", float("nan")),
+        selected_rankic_ir=conditional_summary.get("rankic_ir", float("nan")),
+    )
+
+    result = bp_config.to_dict()
+    result["_clf_model"] = clf_model
+    result["_clf_features"] = all_clf_features
+    return result
 
 def train_xgboost_model(
     X_train: pd.DataFrame,

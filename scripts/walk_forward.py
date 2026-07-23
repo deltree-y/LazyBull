@@ -174,24 +174,44 @@ def _log_risk_penalty_summary(tag: str, risk_penalty_config: Optional[Dict]) -> 
         logger.warning(f"{tag} 风险惩罚: 未生成配置（通常是 calibration 样本或 bad_pick 不足）")
         return
 
+    risk_version = int(risk_penalty_config.get("version", 1))
     enabled = bool(risk_penalty_config.get("enabled", False))
-    penalty_lambda = float(risk_penalty_config.get("penalty_lambda", 0.0) or 0.0)
-    features = risk_penalty_config.get("feature_weights") or []
-    top_features = ", ".join(
-        f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
-        for item in features[:3]
-    )
-    if not top_features:
-        top_features = "无"
-    logger.warning(
-        f"{tag} 风险惩罚: enabled={enabled}, lambda={penalty_lambda:.3f}, "
-        f"calib_prefers_penalty={bool(risk_penalty_config.get('calibration_prefers_penalty', False))}, "
-        f"bad_rate={float(risk_penalty_config.get('calibration_bad_rate', 0.0)):.2%}, "
-        f"samples={int(risk_penalty_config.get('calibration_samples', 0) or 0)}, "
-        f"top30_median={float(risk_penalty_config.get('baseline_topk_median', float('nan'))):.6f}"
-        f"->{float(risk_penalty_config.get('selected_topk_median', float('nan'))):.6f}, "
-        f"top_features={top_features}"
-    )
+    bad_rate = float(risk_penalty_config.get("calibration_bad_rate", 0.0) or 0)
+    samples = int(risk_penalty_config.get("calibration_samples", 0) or 0)
+    baseline = float(risk_penalty_config.get("baseline_topk_median", float("nan")))
+    selected = float(risk_penalty_config.get("selected_topk_median", float("nan")))
+
+    if risk_version >= 2:
+        auc = float(risk_penalty_config.get("calibration_auc", 0.0) or 0)
+        regimes = risk_penalty_config.get("regime_configs") or {}
+        regime_info = ", ".join(
+            f"{n}:thr={c.get('threshold',0):.2f},lam={c.get('penalty_lambda',0):.3f}"
+            for n, c in regimes.items()
+        )
+        regime_counts = risk_penalty_config.get("regime_sample_counts") or {}
+        logger.warning(
+            f"{tag} 条件式坏票惩罚: enabled={enabled}, AUC={auc:.3f}, "
+            f"bad_rate={bad_rate:.2%}, samples={samples}, "
+            f"regimes={regime_counts}, "
+            f"config=({regime_info}), "
+            f"top30_median={baseline:.6f}->{selected:.6f}"
+        )
+    else:
+        penalty_lambda = float(risk_penalty_config.get("penalty_lambda", 0.0) or 0.0)
+        features = risk_penalty_config.get("feature_weights") or []
+        top_features = ", ".join(
+            f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
+            for item in features[:3]
+        )
+        if not top_features:
+            top_features = "无"
+        logger.warning(
+            f"{tag} 风险惩罚(v1): enabled={enabled}, lambda={penalty_lambda:.3f}, "
+            f"calib_prefers_penalty={bool(risk_penalty_config.get('calibration_prefers_penalty', False))}, "
+            f"bad_rate={bad_rate:.2%}, samples={samples}, "
+            f"top30_median={baseline:.6f}->{selected:.6f}, "
+            f"top_features={top_features}"
+        )
 
 
 def _rank_risk_feature(series: pd.Series) -> pd.Series:
@@ -208,7 +228,10 @@ def _apply_risk_penalty_scores(
     risk_penalty_config: Optional[Dict],
     base_score_col: str = "pred_score",
 ) -> Tuple[pd.DataFrame, str]:
-    """在 walk-forward 评估阶段复用执行侧的风险惩罚排序口径。"""
+    """在 walk-forward 评估阶段复用执行侧的风险惩罚排序口径。
+
+    支持 v1（线性加权）和 v2（条件式坏票模型）两种模式。
+    """
     scored_df = df_eval.copy()
     scored_df["ml_score"] = scored_df[base_score_col]
     scored_df["risk_score"] = 0.0
@@ -218,6 +241,75 @@ def _apply_risk_penalty_scores(
     if not risk_config.get("enabled"):
         return scored_df, base_score_col
 
+    risk_version = int(risk_config.get("version", 1))
+
+    if risk_version >= 2:
+        # ── v2: 条件式坏票模型 ──
+        from src.lazybull.risk.bad_pick import (
+            BadPickConfig, MARKET_STATE_FEATURES,
+            detect_market_regime, prepare_classifier_features,
+        )
+
+        bp_config = BadPickConfig.from_dict(risk_config)
+        if not bp_config.enabled or bp_config.bad_pick_model_version <= 0:
+            return scored_df, base_score_col
+
+        # 尝试加载分类器（评估时使用 ModelRegistry）
+        try:
+            from src.lazybull.ml.model_registry import ModelRegistry
+            from src.lazybull.common.config import get_data_root
+
+            data_root = get_data_root()
+            models_dir = Path(data_root) / "models"
+            reg = ModelRegistry(models_dir=str(models_dir))
+            clf, _ = reg.load_model(
+                version=bp_config.bad_pick_model_version, strict_version_check=False
+            )
+        except Exception:
+            return scored_df, base_score_col
+
+        # 检测市场状态
+        mkt_state = {}
+        for col in MARKET_STATE_FEATURES:
+            if col in scored_df.columns:
+                vals = scored_df[col].dropna()
+                mkt_state[col] = float(vals.iloc[0]) if len(vals) > 0 else 0.0
+            else:
+                mkt_state[col] = 0.0
+        regime = detect_market_regime(mkt_state, bp_config)
+
+        regime_cfg = bp_config.regime_configs.get(regime)
+        if regime_cfg is None:
+            regime_cfg = bp_config.regime_configs.get("normal")
+        if regime_cfg is None or regime_cfg.penalty_lambda <= 0:
+            return scored_df, base_score_col
+
+        # 预测 P(bad_pick)
+        X_clf = prepare_classifier_features(
+            scored_df, bp_config.classifier_features, MARKET_STATE_FEATURES
+        )
+        if X_clf.empty:
+            return scored_df, base_score_col
+
+        try:
+            proba = clf.predict_proba(X_clf)
+            p_bad = proba[:, 1] if proba.shape[1] > 1 else proba[:, 0]
+        except Exception:
+            return scored_df, base_score_col
+
+        p_bad_series = pd.Series(p_bad, index=X_clf.index, dtype=float)
+        threshold = regime_cfg.threshold
+        penalty_lambda = regime_cfg.penalty_lambda
+
+        mask = p_bad_series > threshold
+        excess = (p_bad_series - threshold).clip(lower=0.0)
+        scored_df["risk_score"] = p_bad_series
+        scored_df["final_score"] = (
+            scored_df[base_score_col] - penalty_lambda * excess * mask.astype(float)
+        )
+        return scored_df, "final_score"
+
+    # ── v1: 旧版线性加权惩罚 ──
     penalty_lambda = float(risk_config.get("penalty_lambda", 0.0) or 0.0)
     feature_weights = risk_config.get("feature_weights") or []
     if penalty_lambda <= 0 or len(feature_weights) == 0:
