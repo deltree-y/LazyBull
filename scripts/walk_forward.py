@@ -254,18 +254,28 @@ def _apply_risk_penalty_scores(
         if not bp_config.enabled or bp_config.bad_pick_model_version <= 0:
             return scored_df, base_score_col
 
-        # 尝试加载分类器（评估时使用 ModelRegistry）
-        try:
-            from src.lazybull.ml.model_registry import ModelRegistry
-            from src.lazybull.common.config import get_data_root
+        # 尝试获取分类器：优先从主模型内嵌属性，其次按版本号加载
+        clf = None
+        bp_model_ver = bp_config.bad_pick_model_version
+        if bp_model_ver > 0:
+            try:
+                from src.lazybull.ml.model_registry import ModelRegistry
+                from src.lazybull.common.config import get_data_root
 
-            data_root = get_data_root()
-            models_dir = Path(data_root) / "models"
-            reg = ModelRegistry(models_dir=str(models_dir))
-            clf, _ = reg.load_model(
-                version=bp_config.bad_pick_model_version, strict_version_check=False
-            )
-        except Exception:
+                data_root = get_data_root()
+                models_dir = Path(data_root) / "models"
+                reg = ModelRegistry(models_dir=str(models_dir))
+                main_model, _ = reg.load_model(
+                    version=bp_model_ver, strict_version_check=False
+                )
+                if hasattr(main_model, '_bad_pick_classifier_'):
+                    clf = main_model._bad_pick_classifier_
+                elif hasattr(main_model, 'predict_proba'):
+                    # 旧版兼容：直接当分类器用
+                    clf = main_model
+            except Exception:
+                pass
+        if clf is None:
             return scored_df, base_score_col
 
         # 检测市场状态

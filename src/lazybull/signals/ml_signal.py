@@ -599,14 +599,20 @@ class MLSignal(Signal):
                         f"{n}:thr={c.get('threshold',0):.2f},lam={c.get('penalty_lambda',0):.3f}"
                         for n, c in regimes.items()
                     )
+                    inline = risk_config.get('classifier_inline', False) or bp_model_ver > 0
+                    clf_src = "内嵌" if risk_config.get('classifier_inline') else f"v{bp_model_ver}"
                     logger.warning(
                         f"模型条件式坏票惩罚已启用: AUC={auc:.3f}, "
                         f"bad_rate={float(risk_config.get('calibration_bad_rate', 0.0)):.2%}, "
-                        f"classifier=v{bp_model_ver}, "
+                        f"classifier={clf_src}, "
                         f"regimes={{{regime_info}}}"
                     )
-                    # 延迟加载坏票分类器（直接用 XGBoost 原生加载，绕过注册表类型检测）
-                    if bp_model_ver > 0:
+                    # 从主模型属性中提取内嵌的坏票分类器
+                    if hasattr(self.model, '_bad_pick_classifier_'):
+                        self._bad_pick_classifier = self.model._bad_pick_classifier_
+                        logger.info("坏票分类器已从模型内嵌属性加载")
+                    elif bp_model_ver > 0:
+                        # 兼容旧版：仍尝试通过版本号单独加载
                         try:
                             import xgboost as xgb
                             clf_file = self.models_dir / f"v{bp_model_ver}_model.json"
@@ -615,10 +621,12 @@ class MLSignal(Signal):
                             clf = xgb.XGBClassifier()
                             clf.load_model(str(clf_file))
                             self._bad_pick_classifier = clf
-                            logger.info(f"坏票分类器已加载: v{bp_model_ver}")
+                            logger.info(f"坏票分类器已加载(旧版兼容): v{bp_model_ver}")
                         except Exception as exc:
                             logger.warning(f"坏票分类器加载失败: {exc}，惩罚将跳过")
                             self._bad_pick_classifier = None
+                    else:
+                        self._bad_pick_classifier = None
                 else:
                     # 旧版线性惩罚（v1）
                     top_features = ", ".join(

@@ -208,14 +208,10 @@ class ModelRegistry:
             return {"models": [], "next_version": 1}
     
     def _save_registry(self) -> None:
-        """保存注册表到文件"""
+        """保存注册表到文件（不自动更新 latest_version_file，由调用方显式控制）"""
         registry = self._ensure_registry_loaded()
         with open(self.registry_file, 'w', encoding='utf-8') as f:
             json.dump(registry, f, ensure_ascii=False, indent=2)
-
-        latest_version = self.get_latest_version()
-        if latest_version is not None:
-            self._save_latest_version_file(latest_version)
 
         logger.debug(f"注册表已保存: {self.registry_file}")
     
@@ -243,6 +239,8 @@ class ModelRegistry:
     ) -> int:
         """注册新模型
         
+        若 risk_penalty_config 含 _clf_model，将分类器内嵌到主模型文件中（单一版本号）。
+        
         Args:
             model: 训练好的模型对象
             model_type: 模型类型（如 "xgboost"）
@@ -260,9 +258,18 @@ class ModelRegistry:
         version = self.get_next_version()
         version_str = f"v{version}"
 
-        # 保存模型文件（优先 XGBoost 原生格式，避免跨版本 pickle 告警）
+        # ── 提取分类器（若有则内嵌到主模型）─────────────────────────────
+        clf_model = None
+        if risk_penalty_config is not None:
+            clf_model = risk_penalty_config.pop("_clf_model", None)
+            risk_penalty_config.pop("_clf_features", None)  # 特征名已在 config 中
+
+        # ── 保存模型文件 ────────────────────────────────────────────────
+        # 若有分类器需内嵌，强制使用 joblib（原生 JSON 不支持自定义属性）
+        force_joblib = clf_model is not None
         native_saved = False
-        if hasattr(model, "save_model"):
+
+        if not force_joblib and hasattr(model, "save_model"):
             try:
                 model_file = self.models_dir / f"{version_str}_model.json"
                 model.save_model(str(model_file))
@@ -272,27 +279,32 @@ class ModelRegistry:
                 logger.warning(f"XGBoost 原生保存失败，回退到 joblib: {exc}")
 
         if not native_saved:
+            # 内嵌分类器到主模型属性
+            if clf_model is not None:
+                model._bad_pick_classifier_ = clf_model
+                logger.info(f"坏票分类器已内嵌到模型 v{version}")
+
             model_file = self.models_dir / f"{version_str}_model.joblib"
             joblib.dump(model, model_file)
             logger.info(f"模型已保存（joblib）: {model_file}")
-            # 清理可能存在的残留 .json 僵尸文件（避免加载时误读旧分类器）
+
+            # 清理可能存在的残留 .json 僵尸文件
             stale_json = self.models_dir / f"{version_str}_model.json"
             if stale_json.exists():
                 stale_json.unlink()
                 logger.debug(f"已清理残留文件: {stale_json.name}")
         else:
-            # 清理可能存在的残留 .joblib 文件
+            # JSON 格式无分类器内嵌（force_joblib=False 保证 clf_model=None）
             stale_joblib = self.models_dir / f"{version_str}_model.joblib"
             if stale_joblib.exists():
                 stale_joblib.unlink()
-                logger.debug(f"已清理残留文件: {stale_joblib.name}")
-        
-        # 保存特征列表
+
+        # ── 保存特征列表 ────────────────────────────────────────────────
         features_file = self.models_dir / f"{version_str}_features.json"
         with open(features_file, 'w', encoding='utf-8') as f:
             json.dump(feature_columns, f, ensure_ascii=False, indent=2)
-        
-        # 记录元数据
+
+        # ── 记录元数据 ──────────────────────────────────────────────────
         metadata = {
             "version": version,
             "version_str": version_str,
@@ -306,70 +318,29 @@ class ModelRegistry:
             "n_samples": n_samples,
             "train_params": train_params,
             "performance_metrics": performance_metrics or {},
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         if risk_penalty_config is not None:
-            # 若为条件式坏票模型（v2），先注册分类器
-            clf_model = risk_penalty_config.pop("_clf_model", None)
-            clf_features = risk_penalty_config.pop("_clf_features", None)
             if clf_model is not None:
-                clf_version = version + 1  # 分类器版本 = 主模型+1
-                clf_version_str = f"v{clf_version}"
-                try:
-                    clf_model_file = self.models_dir / f"{clf_version_str}_model.json"
-                    clf_model.save_model(str(clf_model_file))
-                    clf_metadata = {
-                        "version": clf_version,
-                        "version_str": clf_version_str,
-                        "model_type": "xgboost_classifier",
-                        "model_file": str(clf_model_file.name),
-                        "features_file": "",
-                        "train_start_date": train_start_date,
-                        "train_end_date": train_end_date,
-                        "feature_count": len(clf_features) if clf_features else 0,
-                        "label_column": "bad_pick",
-                        "n_samples": 0,
-                        "train_params": {"purpose": "bad_pick_classifier"},
-                        "performance_metrics": {},
-                        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "risk_penalty_config": risk_penalty_config,
-                    }
-                    # 保存分类器特征
-                    if clf_features:
-                        clf_feat_file = self.models_dir / f"{clf_version_str}_features.json"
-                        with open(clf_feat_file, 'w', encoding='utf-8') as ff:
-                            json.dump(list(clf_features), ff, ensure_ascii=False, indent=2)
-                        clf_metadata["features_file"] = str(clf_feat_file.name)
-                    self._save_metadata_sidecar(clf_metadata)
-                    # 暂存到内存注册表（最终由外层统一落盘，避免两次 _save_registry 导致 next_version 回滚）
-                    registry = self._ensure_registry_loaded()
-                    registry["models"].append(clf_metadata)
-                    if clf_version >= registry.get("next_version", 1):
-                        registry["next_version"] = clf_version + 1
-                    # 回填 bad_pick_model_version
-                    risk_penalty_config["bad_pick_model_version"] = clf_version
-                    logger.info(f"坏票分类器已注册: v{clf_version}")
-                except Exception as exc:
-                    logger.warning(f"坏票分类器注册失败: {exc}")
-                    risk_penalty_config["bad_pick_model_version"] = 0
+                risk_penalty_config["classifier_inline"] = True
+                risk_penalty_config["bad_pick_model_version"] = version  # 指向主模型自身
             metadata["risk_penalty_config"] = risk_penalty_config
 
         self._save_metadata_sidecar(metadata)
         self._save_latest_version_file(version)
-        
-        # 更新注册表（next_version 取主模型和分类器的最大值，避免版本回滚）
+
+        # ── 更新注册表 ──────────────────────────────────────────────────
         registry = self._ensure_registry_loaded()
         registry["models"].append(metadata)
-        next_ver = max(version + 1, registry.get("next_version", version + 1))
-        registry["next_version"] = next_ver
+        registry["next_version"] = version + 1
         self._save_registry()
-        
+
         logger.info(
             f"模型已注册: {version_str}, 类型={model_type}, "
             f"训练区间={train_start_date}至{train_end_date}, "
             f"特征数={len(feature_columns)}, 样本数={n_samples}"
         )
-        
+
         return version
     
     def load_model(self, version: Optional[int] = None, strict_version_check: bool = True) -> tuple:
@@ -509,25 +480,35 @@ class ModelRegistry:
         return registry["models"]
     
     def get_latest_version(self) -> Optional[int]:
-        """获取最新模型版本号
-        
+        """获取最新模型版本号（跳过分类器等辅助模型，仅返回主预测模型）
+
         Returns:
-            最新版本号，如果没有模型则返回 None
+            最新主模型版本号，如果没有模型则返回 None
         """
         latest_version = self._read_latest_version_file()
         if latest_version is not None:
-            return latest_version
-
-        next_version = self._load_next_version_from_registry_tail()
-        if next_version is not None and next_version > 1:
-            latest_version = next_version - 1
-            self._save_latest_version_file(latest_version)
-            return latest_version
+            # 验证该版本是主模型而非分类器
+            metadata = self._load_metadata(latest_version)
+            if metadata is not None:
+                mt = (metadata.get("model_type") or "").lower()
+                if "classifier" not in mt:
+                    return latest_version
+                # 是指向分类器，回退到注册表扫描
+                logger.debug(
+                    f"latest_version_file 指向分类器 v{latest_version}，回退到注册表扫描"
+                )
 
         registry = self._ensure_registry_loaded()
         if not registry["models"]:
             return None
 
-        latest_version = registry["models"][-1]["version"]
-        self._save_latest_version_file(latest_version)
-        return latest_version
+        # 从最新到最旧扫描，返回第一个非分类器模型
+        for model_entry in reversed(registry["models"]):
+            mt = (model_entry.get("model_type") or "").lower()
+            if "classifier" not in mt:
+                ver = model_entry.get("version")
+                if ver is not None:
+                    self._save_latest_version_file(ver)
+                    return ver
+
+        return None
