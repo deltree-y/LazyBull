@@ -251,13 +251,18 @@ def _apply_risk_penalty_scores(
         )
 
         bp_config = BadPickConfig.from_dict(risk_config)
-        if not bp_config.enabled or bp_config.bad_pick_model_version <= 0:
+        if not bp_config.enabled:
             return scored_df, base_score_col
 
-        # 尝试获取分类器：优先从主模型内嵌属性，其次按版本号加载
-        clf = None
-        bp_model_ver = bp_config.bad_pick_model_version
-        if bp_model_ver > 0:
+        # 获取分类器：learn_risk_penalty_config 直接返回的 _clf_model
+        clf = risk_config.get("_clf_model")
+        if clf is None:
+            logger.warning(
+                "_apply_risk_penalty_scores: _clf_model 缺失，跳过惩罚 "
+
+                f"(bad_pick_model_version={bp_config.bad_pick_model_version})"
+            )
+            return scored_df, base_score_col
             try:
                 from src.lazybull.ml.model_registry import ModelRegistry
                 from src.lazybull.common.config import get_data_root
@@ -2404,6 +2409,15 @@ def execute_split_training(
         eval_topk=risk_penalty_eval_topk,
     )
     _log_risk_penalty_summary(f"Split {split.split_index}", risk_penalty_config)
+    if risk_penalty_config is None:
+        logger.warning(
+            f"Split {split.split_index}: learn_risk_penalty_config 返回 None，"
+            f"OOS 评估将跳过坏票惩罚"
+        )
+    elif not risk_penalty_config.get("enabled"):
+        logger.info(
+            f"Split {split.split_index}: 坏票惩罚未启用（enabled=False）"
+        )
 
     # ── Phase 2: 加载测试数据 ──────────────────────────────────────────
     df_test, test_days_count = load_features_data(

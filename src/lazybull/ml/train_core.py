@@ -59,7 +59,7 @@ RISK_PENALTY_FEATURE_CANDIDATES = [
     "kdj_j",
 ]
 
-RISK_PENALTY_DEFAULT_LAMBDA_GRID = [0.0, 0.05, 0.1, 0.15, 0.2]
+RISK_PENALTY_DEFAULT_LAMBDA_GRID = [0.0, 0.05, 0.1]
 
 
 def _format_feature_importance_compact(
@@ -1651,24 +1651,55 @@ def learn_risk_penalty_config(
     scale_pos_weight_val = float((len(y_clf) - y_clf.sum()) / max(y_clf.sum(), 1))
     scale_pos_weight_val = min(max(scale_pos_weight_val, 1.0), 20.0)
 
+    # ── 按日期切分分类器训练/验证集（chronological，最后20%作早停验证）──
+    clf_dates = candidate_df["trade_date"].unique()
+    clf_dates_sorted = sorted(clf_dates)
+    n_clf_val = max(1, int(len(clf_dates_sorted) * 0.1))  # 10% 验证，保持更多训练数据
+    clf_val_dates = set(clf_dates_sorted[-n_clf_val:])
+    clf_train_mask = ~candidate_df["trade_date"].isin(clf_val_dates)
+    X_clf_train = X_clf[clf_train_mask]
+    y_clf_train = y_clf[clf_train_mask]
+    X_clf_val = X_clf[~clf_train_mask]
+    y_clf_val = y_clf[~clf_train_mask]
+
     clf_model = xgb.XGBClassifier(
         n_estimators=50,
         max_depth=3,
-        learning_rate=0.1,
+        learning_rate=0.05,
         subsample=0.8,
-        colsample_bytree=0.8,
+        colsample_bytree=0.6,
         scale_pos_weight=scale_pos_weight_val,
         random_state=42,
         eval_metric="auc",
+        early_stopping_rounds=20,
         use_label_encoder=False,
         verbosity=0,
     )
 
     try:
-        clf_model.fit(X_clf, y_clf)
+        if len(X_clf_val) > 0:
+            clf_model.fit(
+                X_clf_train, y_clf_train,
+                eval_set=[(X_clf_val, y_clf_val)],
+                verbose=False,
+            )
+            best_iter = getattr(clf_model, "best_iteration", None)
+        else:
+            clf_model.fit(X_clf, y_clf)
+            best_iter = clf_model.n_estimators if hasattr(clf_model, "n_estimators") else None
     except Exception as exc:
         logger.warning(f"坏票分类器训练失败: {exc}")
         return None
+
+    # ── 分类器训练摘要 ────────────────────────────────────────────────
+    actual_trees = best_iter if best_iter else (
+        clf_model.n_estimators if hasattr(clf_model, "n_estimators") else 0
+    )
+    if hasattr(clf_model, "get_booster"):
+        try:
+            actual_trees = clf_model.get_booster().num_boosted_rounds()
+        except Exception:
+            pass
 
     # 计算 AUC
     try:
@@ -1678,6 +1709,30 @@ def learn_risk_penalty_config(
         calib_auc = float(roc_auc_score(y_clf, p_bad_all))
     except Exception:
         calib_auc = float("nan")
+
+    # 提取特征重要性 Top5
+    top5_features = ""
+    if hasattr(clf_model, "feature_importances_"):
+        feat_names = getattr(clf_model, "feature_names_in_",
+                             [f"f{i}" for i in range(len(clf_model.feature_importances_))])
+        ranked = sorted(
+            zip(feat_names, clf_model.feature_importances_),
+            key=lambda x: x[1], reverse=True
+        )
+        top5 = [f"{n}:{v:.3f}" for n, v in ranked[:5] if v > 0]
+        if top5:
+            top5_features = ", ".join(top5)
+        n_used = sum(1 for _, v in ranked if v > 1e-6)
+    else:
+        n_used = 0
+
+    logger.info(
+        f"坏票分类器训练: trees={actual_trees}, AUC={calib_auc:.3f}, "
+        f"train={len(y_clf_train) if 'y_clf_train' in dir() else len(y_clf)}, "
+        f"val={len(y_clf_val) if 'y_clf_val' in dir() else 0}, "
+        f"used_features={n_used}/{len(all_clf_features)}"
+        + (f", top5=[{top5_features}]" if top5_features else "")
+    )
 
     candidate_df["p_bad"] = p_bad_all
 
@@ -1790,7 +1845,7 @@ def learn_risk_penalty_config(
     }
 
     # ── 6. per-regime (threshold, lambda) 二维网格搜索 ──────────────────
-    threshold_candidates = [0.3, 0.4, 0.5, 0.6, 0.7]
+    threshold_candidates = [0.5, 0.6, 0.7]
     lambda_candidates = lambda_grid or RISK_PENALTY_DEFAULT_LAMBDA_GRID
 
     regimes = candidate_df["regime"].unique().tolist()
@@ -1835,7 +1890,6 @@ def learn_risk_penalty_config(
                 score = (
                     topk_median * 0.5
                     + (rankic_ir if pd.notna(rankic_ir) else 0) * 0.3
-                    - penalty_lambda * 0.2
                 )
 
                 if score > best_score:
@@ -1875,15 +1929,36 @@ def learn_risk_penalty_config(
     )
 
     any_penalty = any(lam > 0 for _, lam, _ in best_per_regime.values())
-    enabled = any_penalty
+
+    # 守卫1: AUC 必须 > 0.70（分类器有实际区分力，不是随机噪声）
+    auc_ok = pd.notna(calib_auc) and calib_auc > 0.70
+
+    # 守卫2: 校准集 TopK 中位数必须有改善（惩罚没有退化）
+    bl_median = baseline_summary.get("topk_median", float("nan"))
+    cond_median = conditional_summary.get("topk_median", float("nan"))
+    improvement = (
+        (cond_median - bl_median) / max(abs(bl_median), 1e-8)
+        if pd.notna(bl_median) and pd.notna(cond_median)
+        else 0.0
+    )
+    calib_ok = improvement > 0.0
+
+    enabled = any_penalty and auc_ok and calib_ok
+    skip_reason = []
+    if not any_penalty:
+        skip_reason.append("lambda 全为 0")
+    if not auc_ok:
+        skip_reason.append(f"AUC={calib_auc:.3f} <= 0.70")
+    if not calib_ok:
+        skip_reason.append(f"TopK 无改善 ({bl_median:.6f} -> {cond_median:.6f})")
 
     logger.info(
         "条件式坏票惩罚学习完成: "
         f"enabled={enabled}, AUC={calib_auc:.3f}, "
         f"bad_rate={bad_count/total_count:.2%}, "
         f"regimes={regime_sample_counts}, "
-        f"top{eval_topk}_median={baseline_summary.get('topk_median', float('nan')):.6f}"
-        f"->{conditional_summary.get('topk_median', float('nan')):.6f}"
+        f"top{eval_topk}_median={bl_median:.6f}->{cond_median:.6f}"
+        + (f", skip={{{'; '.join(skip_reason)}}}" if skip_reason else "")
     )
 
     for regime_name, (thr, lam, _) in best_per_regime.items():
