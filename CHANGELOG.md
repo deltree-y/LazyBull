@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.1] - 2026-07-23
+
+### Fixed
+
+- **年化收益率统一为 CAGR 公式**：`src/lazybull/paper/broker.py` 的 `_calculate_annualized_return()` 从简单线性年化改为复合年化（CAGR），与批量汇总脚本一致。
+- **批量纸面交易汇总结束日期修复**：`scripts/batch/batch_paper_trade.ps1` 的 `Get-NavSummary` 现在使用实际最终交易日（`$finalTradeDate`）而非 `nav.parquet` 末行日期，确保年化收益率计算覆盖完整的实际交易区间。
+
 ## [0.85.0] - 2026-07-23
 
 ### Changed

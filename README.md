@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.85.0)
+### 当前版本 (v0.85.1)
+
+**年化收益率统一为 CAGR 公式 + 批量汇总结束日期修复** (v0.85.1):
+- `src/lazybull/paper/broker.py` 年化收益率从简单线性改为复合年化（CAGR）。
+- `scripts/batch/batch_paper_trade.ps1` 汇总使用实际最终交易日，确保区间计算准确。
 
 **风险惩罚学习口径修正并对齐真实 TopN 执行** (v0.85.0):
 - `src/lazybull/ml/train_core.py` 现在把 `lambda=0` 作为正式候选解参与 calibration 比较；如果 calibration 段没有证明正惩罚更优，就会保留零惩罚，而不是因为“学出了风险画像”就默认启用惩罚。

@@ -1374,10 +1374,9 @@ class PaperBroker:
             if days < 1:
                 return 0.0
 
-            # 简单年化收益率（不假设收益再投入）
-            # 年化收益率 = (当前总资产 - 初始资金) / 初始资金 * 365 / 持有天数 * 100
-            total_profit = current_value - initial_capital
-            annualized = (total_profit / initial_capital) * (365.0 / days) * 100
+            # 复合年化收益率 (CAGR)
+            # 年化收益率 = ((当前总资产 / 初始资金) ^ (365 / 持有天数) - 1) * 100
+            annualized = ((current_value / initial_capital) ** (365.0 / days) - 1.0) * 100
             return annualized
             
         except Exception as e:

@@ -121,13 +121,20 @@ print(future[0] if future else '')
 }
 
 function Get-NavSummary {
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$EndTradeDate = ""
+    )
+
     $pyCode = @'
 import json
+import sys
 from datetime import datetime
 
 import pandas as pd
 
 file_path = "./data/paper/nav/nav.parquet"
+end_trade_date_arg = sys.argv[1] if len(sys.argv) > 1 else ""
 
 try:
     df = pd.read_parquet(file_path)
@@ -146,9 +153,21 @@ if "trade_date" not in df.columns or "total_value" not in df.columns:
 df = df.sort_values("trade_date").reset_index(drop=True)
 
 start_trade_date = str(df.iloc[0]["trade_date"])
-end_trade_date = str(df.iloc[-1]["trade_date"])
 start_total_value = float(df.iloc[0]["total_value"])
-end_total_value = float(df.iloc[-1]["total_value"])
+
+# 如果指定了最终交易日，使用该日期对应的 NAV 行；否则使用最后一行
+if end_trade_date_arg:
+    # 查找匹配或最接近（<= end_trade_date_arg）的行
+    df_date = df[df["trade_date"].astype(str) <= end_trade_date_arg]
+    if len(df_date) > 0:
+        end_row = df_date.iloc[-1]
+    else:
+        end_row = df.iloc[-1]
+else:
+    end_row = df.iloc[-1]
+
+end_trade_date = str(end_row["trade_date"])
+end_total_value = float(end_row["total_value"])
 
 total_return_pct = 0.0
 if start_total_value > 0:
@@ -160,6 +179,7 @@ try:
     d1 = datetime.strptime(end_trade_date, "%Y%m%d")
     days = (d1 - d0).days
     if days > 0 and start_total_value > 0 and end_total_value > 0:
+        # 复合年化收益率 (CAGR)
         annualized_return_pct = ((end_total_value / start_total_value) ** (365.0 / days) - 1.0) * 100.0
 except Exception:
     annualized_return_pct = None
@@ -184,7 +204,11 @@ print(
         $tmpPyPath = Join-Path $env:TEMP ("lazybull_nav_summary_{0}.py" -f ([System.Guid]::NewGuid().ToString("N")))
         Set-Content -Path $tmpPyPath -Value $pyCode -Encoding UTF8
 
-        $raw = (& py $tmpPyPath | Out-String).Trim()
+        $pyArgs = @($tmpPyPath)
+        if ($EndTradeDate) {
+            $pyArgs += $EndTradeDate
+        }
+        $raw = (& py $pyArgs | Out-String).Trim()
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
             throw "py 汇总脚本执行失败，exit code=$exitCode"
@@ -361,7 +385,7 @@ if ($resolvedAppendSummaryOnly) {
     Write-Host "========================================================" -ForegroundColor Magenta
     Write-Host "  汇总整合完成（未执行交易）" -ForegroundColor Magenta
     Write-Host "========================================================" -ForegroundColor Magenta
-    $summaryRows | Format-Table 模型编号, 计划开始, 计划结束, NAV结束, 总资产, 年化收益率, 状态 -AutoSize
+    $summaryRows | Format-Table 模型编号, 计划开始, 最终交易日, 总资产, 年化收益率, 状态 -AutoSize
     Write-Host "汇总文件: $summaryCsvPath" -ForegroundColor Magenta
 
     exit 0
@@ -438,7 +462,7 @@ foreach ($modelVersion in $normalizedModels) {
     $navEndDate = ""
 
     try {
-        $navSummary = Get-NavSummary
+        $navSummary = Get-NavSummary -EndTradeDate $finalTradeDate
         if ($navSummary.ok -eq $true) {
             $totalAssets = [double]$navSummary.end_total_value
             $totalReturnPct = [double]$navSummary.total_return_pct
@@ -493,7 +517,7 @@ Write-Host ""
 Write-Host "========================================================" -ForegroundColor Magenta
 Write-Host "  多模型执行汇总" -ForegroundColor Magenta
 Write-Host "========================================================" -ForegroundColor Magenta
-$summaryRows | Format-Table 模型编号, 计划开始, 计划结束, NAV结束, 总资产, 年化收益率, 状态 -AutoSize
+$summaryRows | Format-Table 模型编号, 计划开始, 最终交易日, 总资产, 年化收益率, 状态 -AutoSize
 Write-Host "汇总文件: $summaryCsvPath" -ForegroundColor Magenta
 
 exit 0
