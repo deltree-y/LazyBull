@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(9,13)
+        SelectedSplits = @()
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -190,7 +190,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $false   # $true 启用 | $false 禁用
+$deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -201,9 +201,23 @@ $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 
+# ── 风险惩罚分类器超参（控制坏票二分类器训练行为）─────────────
+$risk_penalty_clf_max_depth_list = @(3)            # 分类器 max_depth，默认 3
+$risk_penalty_clf_n_estimators_list = @(100)        # 分类器树数量上限，默认 50
+$risk_penalty_clf_learning_rate_list = @(0.02)    # 分类器学习率，默认 0.05
+$risk_penalty_clf_subsample_list = @(0.8)          # 分类器 subsample，默认 0.8
+$risk_penalty_clf_colsample_bytree_list = @(0.4)   # 分类器 colsample_bytree，默认 0.6
+$risk_penalty_clf_early_stopping_rounds_list = @(20)  # 分类器早停轮数，默认 20
+# ── 风险惩罚训练参数（控制坏票校准学习行为）─────────────────
+$risk_penalty_candidate_topk_list = @(100)      # 候选池 TopK，默认 30；值越大候选越宽
+$risk_penalty_bad_bottom_pct_list = @(0.3)     # 候选池底部标记坏票比例（0~1），默认 0.3
+$risk_penalty_min_bad_samples_list = @(5)      # 最少坏样本数，低于此跳过惩罚学习，默认 5
+$risk_penalty_min_total_samples_list = @(15)   # 最少总样本数，低于此跳过惩罚学习，默认 15
 # ── 风险惩罚 Lambda 配置（坏票惩罚校准，同时影响训练与 OOS 回测）──
-$risk_penalty_lambda_scale_list = @(0.75)   # lambda 缩放系数（>0）；默认 1.0，<1 更温和，>1 更严格
-$risk_penalty_lambda_grid_list  = @("0.05")    # 自定义 lambda 候选（逗号分隔，如 "0.02,0.04,0.06"）；空=使用默认网格
+$risk_penalty_lambda_scale_list = @(1)   # lambda 缩放系数（>0）；默认 1.0，<1 更温和，>1 更严格
+$risk_penalty_lambda_grid_list  = @("1")    # 自定义 lambda 候选（逗号分隔，如 "0.02,0.04,0.06"）；空=使用默认网格
+$risk_penalty_clf_threshold_candidates_list = @("0.5")   # 惩罚 threshold 候选（逗号分隔如"0.3,0.4,0.5"）；空=使用默认[0.5,0.6,0.7]
+
 
 $bt_top_n_list           = @(20)            # 回测持仓 Top N
 $bt_rebalance_freq_list  = @($null)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
@@ -620,6 +634,17 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $time_decay_half_life_list.Length *
               $risk_penalty_lambda_scale_list.Length *
               $risk_penalty_lambda_grid_list.Length *
+              $risk_penalty_candidate_topk_list.Length *
+              $risk_penalty_bad_bottom_pct_list.Length *
+              $risk_penalty_min_bad_samples_list.Length *
+              $risk_penalty_min_total_samples_list.Length *
+              $risk_penalty_clf_max_depth_list.Length *
+              $risk_penalty_clf_n_estimators_list.Length *
+              $risk_penalty_clf_learning_rate_list.Length *
+              $risk_penalty_clf_subsample_list.Length *
+              $risk_penalty_clf_colsample_bytree_list.Length *
+              $risk_penalty_clf_early_stopping_rounds_list.Length *
+              $risk_penalty_clf_threshold_candidates_list.Length *
               $rank_weight_topk_list.Length *
               $rank_weight_list.Length *
               $market_regime_bear_threshold_list.Length *
@@ -707,6 +732,17 @@ foreach ($gamma in $gamma_list) {
 foreach ($time_decay_half_life in $time_decay_half_life_list) {
 foreach ($risk_penalty_lambda_scale in $risk_penalty_lambda_scale_list) {
 foreach ($risk_penalty_lambda_grid in $risk_penalty_lambda_grid_list) {
+foreach ($risk_penalty_candidate_topk in $risk_penalty_candidate_topk_list) {
+foreach ($risk_penalty_bad_bottom_pct in $risk_penalty_bad_bottom_pct_list) {
+foreach ($risk_penalty_min_bad_samples in $risk_penalty_min_bad_samples_list) {
+foreach ($risk_penalty_min_total_samples in $risk_penalty_min_total_samples_list) {
+foreach ($risk_penalty_clf_max_depth in $risk_penalty_clf_max_depth_list) {
+foreach ($risk_penalty_clf_n_estimators in $risk_penalty_clf_n_estimators_list) {
+foreach ($risk_penalty_clf_learning_rate in $risk_penalty_clf_learning_rate_list) {
+foreach ($risk_penalty_clf_subsample in $risk_penalty_clf_subsample_list) {
+foreach ($risk_penalty_clf_colsample_bytree in $risk_penalty_clf_colsample_bytree_list) {
+foreach ($risk_penalty_clf_early_stopping_rounds in $risk_penalty_clf_early_stopping_rounds_list) {
+foreach ($risk_penalty_clf_threshold_candidates in $risk_penalty_clf_threshold_candidates_list) {
 foreach ($rank_weight_topk in $rank_weight_topk_list) {
 foreach ($rank_weight in $rank_weight_list) {
 foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
@@ -817,6 +853,21 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($risk_penalty_lambda_grid -ne "") {
         $pythonCmd += " --risk-penalty-lambda-grid $risk_penalty_lambda_grid"
+    }
+
+    $pythonCmd += " --risk-penalty-candidate-topk $risk_penalty_candidate_topk" +
+                  " --risk-penalty-bad-bottom-pct $risk_penalty_bad_bottom_pct" +
+                  " --risk-penalty-min-bad-samples $risk_penalty_min_bad_samples" +
+                  " --risk-penalty-min-total-samples $risk_penalty_min_total_samples" +
+                  " --risk-penalty-clf-max-depth $risk_penalty_clf_max_depth" +
+                  " --risk-penalty-clf-n-estimators $risk_penalty_clf_n_estimators" +
+                  " --risk-penalty-clf-learning-rate $risk_penalty_clf_learning_rate" +
+                  " --risk-penalty-clf-subsample $risk_penalty_clf_subsample" +
+                  " --risk-penalty-clf-colsample-bytree $risk_penalty_clf_colsample_bytree" +
+                  " --risk-penalty-clf-early-stopping-rounds $risk_penalty_clf_early_stopping_rounds"
+
+    if ($risk_penalty_clf_threshold_candidates -ne "") {
+        $pythonCmd += " --risk-penalty-clf-threshold-candidates $risk_penalty_clf_threshold_candidates"
     }
 
     if ($null -ne $selected_splits -and $selected_splits.Count -gt 0) {
@@ -1103,7 +1154,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

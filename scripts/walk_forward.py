@@ -215,6 +215,52 @@ def _log_risk_penalty_summary(tag: str, risk_penalty_config: Optional[Dict]) -> 
         )
 
 
+def _parse_threshold_candidates(text: str) -> Optional[List[float]]:
+    """解析 threshold 候选字符串，返回排序去重列表；空串返回 None（用默认）。"""
+    if not text or not text.strip():
+        return None
+    values: List[float] = []
+    for token in text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        value = float(token)
+        if not 0 < value < 1:
+            raise ValueError(
+                f"risk_penalty_clf_threshold_candidates 中阈值必须在 (0,1) 内，收到: {value}"
+            )
+        values.append(value)
+    return sorted(set(values)) if values else None
+
+
+def _log_risk_penalty_params(args) -> None:
+    """训练开始前打印风险惩罚关键参数，便于日志追溯。"""
+    lambda_scale = float(getattr(args, "risk_penalty_lambda_scale", 1.0) or 1.0)
+    lambda_grid = str(getattr(args, "risk_penalty_lambda_grid", "") or "").strip()
+    candidate_topk = int(getattr(args, "risk_penalty_candidate_topk", 30) or 30)
+    bad_bottom_pct = float(getattr(args, "risk_penalty_bad_bottom_pct", 0.3) or 0.3)
+    min_bad_samples = int(getattr(args, "risk_penalty_min_bad_samples", 5) or 5)
+    min_total_samples = int(getattr(args, "risk_penalty_min_total_samples", 15) or 15)
+    clf_md = int(getattr(args, "risk_penalty_clf_max_depth", 3) or 3)
+    clf_n = int(getattr(args, "risk_penalty_clf_n_estimators", 50) or 50)
+    clf_lr = float(getattr(args, "risk_penalty_clf_learning_rate", 0.05) or 0.05)
+    clf_ss = float(getattr(args, "risk_penalty_clf_subsample", 0.8) or 0.8)
+    clf_cb = float(getattr(args, "risk_penalty_clf_colsample_bytree", 0.6) or 0.6)
+    clf_esr = int(getattr(args, "risk_penalty_clf_early_stopping_rounds", 20) or 20)
+    clf_thr_text = str(getattr(args, "risk_penalty_clf_threshold_candidates", "") or "").strip()
+    clf_thr = clf_thr_text if clf_thr_text else "[0.5,0.6,0.7]"
+
+    grid_label = lambda_grid if lambda_grid else f"默认网格×{lambda_scale}"
+    logger.info(
+        f"  风险惩罚参数: lambda_scale={lambda_scale}, lambda_grid={grid_label}, "
+        f"candidate_topk={candidate_topk}, bad_bottom_pct={bad_bottom_pct}, "
+        f"min_bad_samples={min_bad_samples}, min_total_samples={min_total_samples}, "
+        f"clf(max_depth={clf_md}, n_est={clf_n}, lr={clf_lr}, "
+        f"subsample={clf_ss}, colsample_bytree={clf_cb}, esr={clf_esr}), "
+        f"thresholds={clf_thr}"
+    )
+
+
 def _resolve_risk_penalty_lambda_grid(args) -> Optional[List[float]]:
     """解析 risk penalty 的 lambda 网格配置。"""
     custom_grid_text = str(getattr(args, "risk_penalty_lambda_grid", "") or "").strip()
@@ -2348,6 +2394,8 @@ def execute_split_training(
     logger.info(f"开始训练 Split {split.split_index}")
     logger.info(f"  训练区间: {split.train_start} 至 {split.train_end}")
     logger.info(f"  测试区间: {split.test_start} 至 {split.test_end}")
+    # ── 打印风险惩罚参数 ──
+    _log_risk_penalty_params(args)
     logger.info("=" * 80)
 
     # ── Phase 1: 训练模型，必要时基于 best_iteration 生成候选模型 ─────────────
@@ -2559,15 +2607,58 @@ def execute_split_training(
 
     risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
     risk_penalty_lambda_grid = _resolve_risk_penalty_lambda_grid(args)
+    risk_penalty_candidate_topk = max(
+        1, int(getattr(args, "risk_penalty_candidate_topk", 30) or 30)
+    )
+    risk_penalty_bad_bottom_pct = float(
+        getattr(args, "risk_penalty_bad_bottom_pct", 0.3) or 0.3
+    )
+    risk_penalty_min_bad_samples = int(
+        getattr(args, "risk_penalty_min_bad_samples", 5) or 5
+    )
+    risk_penalty_min_total_samples = int(
+        getattr(args, "risk_penalty_min_total_samples", 15) or 15
+    )
+    risk_penalty_clf_max_depth = int(
+        getattr(args, "risk_penalty_clf_max_depth", 3) or 3
+    )
+    risk_penalty_clf_n_estimators = int(
+        getattr(args, "risk_penalty_clf_n_estimators", 50) or 50
+    )
+    risk_penalty_clf_learning_rate = float(
+        getattr(args, "risk_penalty_clf_learning_rate", 0.05) or 0.05
+    )
+    risk_penalty_clf_subsample = float(
+        getattr(args, "risk_penalty_clf_subsample", 0.8) or 0.8
+    )
+    risk_penalty_clf_colsample_bytree = float(
+        getattr(args, "risk_penalty_clf_colsample_bytree", 0.6) or 0.6
+    )
+    risk_penalty_clf_early_stopping_rounds = int(
+        getattr(args, "risk_penalty_clf_early_stopping_rounds", 20) or 20
+    )
+    risk_penalty_clf_threshold_candidates = _parse_threshold_candidates(
+        getattr(args, "risk_penalty_clf_threshold_candidates", "") or ""
+    )
     risk_penalty_config = learn_risk_penalty_config(
         model=model,
         df_val=selected_candidate["df_val_split_original"],
         feature_columns=feature_columns,
         original_return_col=args.label_column,
         task=args.task,
-        candidate_topk=max(30, risk_penalty_eval_topk),
+        candidate_topk=risk_penalty_candidate_topk,
         eval_topk=risk_penalty_eval_topk,
         lambda_grid=risk_penalty_lambda_grid,
+        bad_bottom_pct=risk_penalty_bad_bottom_pct,
+        min_bad_samples=risk_penalty_min_bad_samples,
+        min_total_samples=risk_penalty_min_total_samples,
+        clf_max_depth=risk_penalty_clf_max_depth,
+        clf_n_estimators=risk_penalty_clf_n_estimators,
+        clf_learning_rate=risk_penalty_clf_learning_rate,
+        clf_subsample=risk_penalty_clf_subsample,
+        clf_colsample_bytree=risk_penalty_clf_colsample_bytree,
+        clf_early_stopping_rounds=risk_penalty_clf_early_stopping_rounds,
+        threshold_candidates=risk_penalty_clf_threshold_candidates,
     )
     _log_risk_penalty_summary(f"Split {split.split_index}", risk_penalty_config)
     if risk_penalty_config is None:
@@ -3181,15 +3272,58 @@ def execute_deploy_training(
 
     risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
     risk_penalty_lambda_grid = _resolve_risk_penalty_lambda_grid(args)
+    risk_penalty_candidate_topk = max(
+        1, int(getattr(args, "risk_penalty_candidate_topk", 30) or 30)
+    )
+    risk_penalty_bad_bottom_pct = float(
+        getattr(args, "risk_penalty_bad_bottom_pct", 0.3) or 0.3
+    )
+    risk_penalty_min_bad_samples = int(
+        getattr(args, "risk_penalty_min_bad_samples", 5) or 5
+    )
+    risk_penalty_min_total_samples = int(
+        getattr(args, "risk_penalty_min_total_samples", 15) or 15
+    )
+    risk_penalty_clf_max_depth = int(
+        getattr(args, "risk_penalty_clf_max_depth", 3) or 3
+    )
+    risk_penalty_clf_n_estimators = int(
+        getattr(args, "risk_penalty_clf_n_estimators", 50) or 50
+    )
+    risk_penalty_clf_learning_rate = float(
+        getattr(args, "risk_penalty_clf_learning_rate", 0.05) or 0.05
+    )
+    risk_penalty_clf_subsample = float(
+        getattr(args, "risk_penalty_clf_subsample", 0.8) or 0.8
+    )
+    risk_penalty_clf_colsample_bytree = float(
+        getattr(args, "risk_penalty_clf_colsample_bytree", 0.6) or 0.6
+    )
+    risk_penalty_clf_early_stopping_rounds = int(
+        getattr(args, "risk_penalty_clf_early_stopping_rounds", 20) or 20
+    )
+    risk_penalty_clf_threshold_candidates = _parse_threshold_candidates(
+        getattr(args, "risk_penalty_clf_threshold_candidates", "") or ""
+    )
     risk_penalty_config = learn_risk_penalty_config(
         model=model,
         df_val=df_val_split_original,
         feature_columns=feature_columns,
         original_return_col=args.label_column,
         task=args.task,
-        candidate_topk=max(30, risk_penalty_eval_topk),
+        candidate_topk=risk_penalty_candidate_topk,
         eval_topk=risk_penalty_eval_topk,
         lambda_grid=risk_penalty_lambda_grid,
+        bad_bottom_pct=risk_penalty_bad_bottom_pct,
+        min_bad_samples=risk_penalty_min_bad_samples,
+        min_total_samples=risk_penalty_min_total_samples,
+        clf_max_depth=risk_penalty_clf_max_depth,
+        clf_n_estimators=risk_penalty_clf_n_estimators,
+        clf_learning_rate=risk_penalty_clf_learning_rate,
+        clf_subsample=risk_penalty_clf_subsample,
+        clf_colsample_bytree=risk_penalty_clf_colsample_bytree,
+        clf_early_stopping_rounds=risk_penalty_clf_early_stopping_rounds,
+        threshold_candidates=risk_penalty_clf_threshold_candidates,
     )
     _log_risk_penalty_summary("部署模型", risk_penalty_config)
 
@@ -3813,6 +3947,17 @@ def write_walk_forward_summary(
         "objective": getattr(args, 'objective', 'mse'),
         "risk_penalty_lambda_scale": getattr(args, 'risk_penalty_lambda_scale', 1.0),
         "risk_penalty_lambda_grid": getattr(args, 'risk_penalty_lambda_grid', ''),
+        "risk_penalty_candidate_topk": getattr(args, 'risk_penalty_candidate_topk', 30),
+        "risk_penalty_bad_bottom_pct": getattr(args, 'risk_penalty_bad_bottom_pct', 0.3),
+        "risk_penalty_min_bad_samples": getattr(args, 'risk_penalty_min_bad_samples', 5),
+        "risk_penalty_min_total_samples": getattr(args, 'risk_penalty_min_total_samples', 15),
+        "risk_penalty_clf_max_depth": getattr(args, 'risk_penalty_clf_max_depth', 3),
+        "risk_penalty_clf_n_estimators": getattr(args, 'risk_penalty_clf_n_estimators', 50),
+        "risk_penalty_clf_learning_rate": getattr(args, 'risk_penalty_clf_learning_rate', 0.05),
+        "risk_penalty_clf_subsample": getattr(args, 'risk_penalty_clf_subsample', 0.8),
+        "risk_penalty_clf_colsample_bytree": getattr(args, 'risk_penalty_clf_colsample_bytree', 0.6),
+        "risk_penalty_clf_early_stopping_rounds": getattr(args, 'risk_penalty_clf_early_stopping_rounds', 20),
+        "risk_penalty_clf_threshold_candidates": getattr(args, 'risk_penalty_clf_threshold_candidates', ''),
         "enable_fundamental": args.enable_fundamental_features,
         "enable_alt": args.enable_alt_features,
         "enable_margin": args.enable_margin_features,
@@ -4617,6 +4762,72 @@ def main():
         type=str,
         default="",
         help="自定义风险惩罚lambda候选（逗号分隔，如0.02,0.04,0.06）；留空则基于默认网格与scale"
+    )
+    parser.add_argument(
+        "--risk-penalty-candidate-topk",
+        type=int,
+        default=30,
+        help="坏票校准候选池 TopK，默认 30；值越大候选越宽，惩罚覆盖更保守"
+    )
+    parser.add_argument(
+        "--risk-penalty-bad-bottom-pct",
+        type=float,
+        default=0.3,
+        help="候选池底部标记坏票的比例（0~1），默认 0.3"
+    )
+    parser.add_argument(
+        "--risk-penalty-min-bad-samples",
+        type=int,
+        default=5,
+        help="坏票校准最少坏样本数，低于此值跳过惩罚学习，默认 5"
+    )
+    parser.add_argument(
+        "--risk-penalty-min-total-samples",
+        type=int,
+        default=15,
+        help="坏票校准最少总样本数，低于此值跳过惩罚学习，默认 15"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-max-depth",
+        type=int,
+        default=3,
+        help="坏票分类器 max_depth，默认 3"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-n-estimators",
+        type=int,
+        default=50,
+        help="坏票分类器树数量上限，默认 50"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-learning-rate",
+        type=float,
+        default=0.05,
+        help="坏票分类器学习率，默认 0.05"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-subsample",
+        type=float,
+        default=0.8,
+        help="坏票分类器 subsample，默认 0.8"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-colsample-bytree",
+        type=float,
+        default=0.6,
+        help="坏票分类器 colsample_bytree，默认 0.6"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-early-stopping-rounds",
+        type=int,
+        default=20,
+        help="坏票分类器早停轮数，默认 20"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-threshold-candidates",
+        type=str,
+        default="",
+        help="坏票惩罚 threshold 候选（逗号分隔，如0.3,0.4,0.5,0.6）；空=使用默认[0.5,0.6,0.7]"
     )
     parser.add_argument(
         "--bt-top-n",

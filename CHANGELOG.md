@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.5] - 2026-07-23
+
+### Added
+
+- **风险惩罚训练参数接入 batch_walk_forward.ps1 并打印**：
+  - `scripts/walk_forward.py` 新增 10 个 CLI 参数：
+    - 校准行为：`--risk-penalty-candidate-topk`、`--risk-penalty-bad-bottom-pct`、`--risk-penalty-min-bad-samples`、`--risk-penalty-min-total-samples`
+    - 分类器超参：`--risk-penalty-clf-max-depth`、`--risk-penalty-clf-n-estimators`、`--risk-penalty-clf-learning-rate`、`--risk-penalty-clf-subsample`、`--risk-penalty-clf-colsample-bytree`、`--risk-penalty-clf-early-stopping-rounds`
+  - 在 split 训练与部署训练两处 `learn_risk_penalty_config()` 调用中透传上述 10 个参数。
+  - `learn_risk_penalty_config()` 签名新增 6 个分类器超参（`clf_max_depth`/`clf_n_estimators`/`clf_learning_rate`/`clf_subsample`/`clf_colsample_bytree`/`clf_early_stopping_rounds`），替代原硬编码常量。
+  - `_log_risk_penalty_params()` 扩展打印，含分类器超参。
+  - walk-forward 汇总 CSV 新增对应 10 列。
+- **batch_walk_forward.ps1 接入**：
+  - 配置区新增 6 个分类器超参列表变量。
+  - 自动加入笛卡尔积遍历（+6 层 foreach）与命令行构建，参与总任务数统计。
+
 ## [0.85.4] - 2026-07-23
 
 ### Changed

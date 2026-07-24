@@ -1551,6 +1551,45 @@ def _summarize_lambda_objective(
     }
 
 
+def _log_p_bad_in_topk(
+    candidate_df: pd.DataFrame, eval_topk: int, score_col: str = "pred_score"
+) -> None:
+    """诊断：打印 TopK 内 p_bad 的分布，帮助判断 threshold 是否过高。"""
+    if candidate_df is None or len(candidate_df) == 0 or "p_bad" not in candidate_df.columns:
+        return
+    if score_col not in candidate_df.columns or "trade_date" not in candidate_df.columns:
+        return
+
+    topk_parts = []
+    for trade_date in candidate_df["trade_date"].drop_duplicates().tolist():
+        day_df = candidate_df[candidate_df["trade_date"] == trade_date]
+        day_df = day_df.sort_values(score_col, ascending=False).head(eval_topk)
+        topk_parts.append(day_df[["p_bad"]])
+
+    if not topk_parts:
+        return
+
+    topk_pbad = pd.concat(topk_parts, ignore_index=True)["p_bad"].dropna()
+    if len(topk_pbad) == 0:
+        return
+
+    # 统计各阈值下被惩罚的股票占比（threshold 必须 > p_bad）
+    thresholds = [0.3, 0.4, 0.5, 0.6, 0.7]
+    hit_ratios = []
+    for thr in thresholds:
+        hit = (topk_pbad > thr).mean()
+        hit_ratios.append(f"p>{thr}={hit:.1%}")
+
+    logger.info(
+        f"  Top{eval_topk}内p_bad诊断: "
+        f"mean={topk_pbad.mean():.3f}, "
+        f"p50={topk_pbad.median():.3f}, "
+        f"p75={topk_pbad.quantile(0.75):.3f}, "
+        f"p90={topk_pbad.quantile(0.90):.3f}, "
+        f"命中率: [{', '.join(hit_ratios)}]"
+    )
+
+
 def learn_risk_penalty_config(
     model,
     df_val: pd.DataFrame,
@@ -1563,6 +1602,13 @@ def learn_risk_penalty_config(
     lambda_grid: Optional[List[float]] = None,
     min_bad_samples: int = 5,
     min_total_samples: int = 15,
+    clf_max_depth: int = 3,
+    clf_n_estimators: int = 50,
+    clf_learning_rate: float = 0.05,
+    clf_subsample: float = 0.8,
+    clf_colsample_bytree: float = 0.6,
+    clf_early_stopping_rounds: int = 20,
+    threshold_candidates: Optional[List[float]] = None,
 ) -> Optional[Dict[str, Any]]:
     """从 calibration 段学习条件式坏票惩罚配置（v2）。
 
@@ -1663,15 +1709,15 @@ def learn_risk_penalty_config(
     y_clf_val = y_clf[~clf_train_mask]
 
     clf_model = xgb.XGBClassifier(
-        n_estimators=50,
-        max_depth=3,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.6,
+        n_estimators=clf_n_estimators,
+        max_depth=clf_max_depth,
+        learning_rate=clf_learning_rate,
+        subsample=clf_subsample,
+        colsample_bytree=clf_colsample_bytree,
         scale_pos_weight=scale_pos_weight_val,
         random_state=42,
         eval_metric="auc",
-        early_stopping_rounds=20,
+        early_stopping_rounds=clf_early_stopping_rounds,
         use_label_encoder=False,
         verbosity=0,
     )
@@ -1845,7 +1891,7 @@ def learn_risk_penalty_config(
     }
 
     # ── 6. per-regime (threshold, lambda) 二维网格搜索 ──────────────────
-    threshold_candidates = [0.5, 0.6, 0.7]
+    threshold_candidates = threshold_candidates or [0.5, 0.6, 0.7]
     lambda_candidates = lambda_grid or RISK_PENALTY_DEFAULT_LAMBDA_GRID
 
     regimes = candidate_df["regime"].unique().tolist()
@@ -1933,7 +1979,7 @@ def learn_risk_penalty_config(
     # 守卫1: AUC 必须 > 0.70（分类器有实际区分力，不是随机噪声）
     auc_ok = pd.notna(calib_auc) and calib_auc > 0.70
 
-    # 守卫2: 校准集 TopK 中位数必须有改善（惩罚没有退化）
+    # 守卫2: 校准集 TopK 中位数或 RankIC IR 必须有改善（惩罚没有退化）
     bl_median = baseline_summary.get("topk_median", float("nan"))
     cond_median = conditional_summary.get("topk_median", float("nan"))
     improvement = (
@@ -1941,7 +1987,15 @@ def learn_risk_penalty_config(
         if pd.notna(bl_median) and pd.notna(cond_median)
         else 0.0
     )
-    calib_ok = improvement > 0.0
+    # 若 TopK 中位数无改善，回退检查 RankIC IR
+    bl_rankic_ir = baseline_summary.get("rankic_ir", float("nan"))
+    cond_rankic_ir = conditional_summary.get("rankic_ir", float("nan"))
+    rankic_ir_improvement = (
+        cond_rankic_ir - bl_rankic_ir
+        if pd.notna(bl_rankic_ir) and pd.notna(cond_rankic_ir)
+        else 0.0
+    )
+    calib_ok = improvement > 0.0 or rankic_ir_improvement > 0.0
 
     enabled = any_penalty and auc_ok and calib_ok
     skip_reason = []
@@ -1950,7 +2004,16 @@ def learn_risk_penalty_config(
     if not auc_ok:
         skip_reason.append(f"AUC={calib_auc:.3f} <= 0.70")
     if not calib_ok:
-        skip_reason.append(f"TopK 无改善 ({bl_median:.6f} -> {cond_median:.6f})")
+        reason_parts = [f"TopK 无改善 ({bl_median:.6f} -> {cond_median:.6f})"]
+        if improvement <= 0.0 and rankic_ir_improvement <= 0.0:
+            reason_parts.append(
+                f"RankIC IR 无改善 ({bl_rankic_ir:.3f} -> {cond_rankic_ir:.3f})"
+            )
+        skip_reason.append("; ".join(reason_parts))
+
+    # ── 诊断：TopK 内 p_bad 分布（展示惩罚前/后各一份）───────────────
+    _log_p_bad_in_topk(candidate_df, eval_topk, score_col="pred_score")
+    _log_p_bad_in_topk(conditional_df, eval_topk, score_col="final_score")
 
     logger.info(
         "条件式坏票惩罚学习完成: "
