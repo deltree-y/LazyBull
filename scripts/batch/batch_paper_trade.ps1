@@ -209,10 +209,12 @@ function Invoke-PaperTradeCommand {
     )
 
     Write-Host "[$Description] py $($Arguments -join ' ')" -ForegroundColor Gray
-    $output = & py @Arguments 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
+    $raw = & py @Arguments 2>&1
+    $pyExitCode = $LASTEXITCODE
+    $output = ($raw | Out-String)
+    if ($pyExitCode -ne 0) {
         Write-Host $output
-        throw "$Description 执行失败，exit code=$LASTEXITCODE"
+        throw "$Description 执行失败，exit code=$pyExitCode"
     }
     if ($CapturedOutput) {
         $CapturedOutput.Value = $output
