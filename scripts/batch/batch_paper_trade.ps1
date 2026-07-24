@@ -209,15 +209,24 @@ function Invoke-PaperTradeCommand {
     )
 
     Write-Host "[$Description] py $($Arguments -join ' ')" -ForegroundColor Gray
-    $raw = & py @Arguments 2>&1
-    $pyExitCode = $LASTEXITCODE
-    $output = ($raw | Out-String)
-    if ($pyExitCode -ne 0) {
-        Write-Host $output
-        throw "$Description 执行失败，exit code=$pyExitCode"
-    }
+
     if ($CapturedOutput) {
+        # 捕获模式：仅 paper_trade run 使用，解析输出提取指标
+        $raw = & py @Arguments 2>&1
+        $pyExitCode = $LASTEXITCODE
+        $output = ($raw | Out-String)
+        if ($pyExitCode -ne 0) {
+            Write-Host $output
+            throw "$Description 执行失败，exit code=$pyExitCode"
+        }
         $CapturedOutput.Value = $output
+    }
+    else {
+        # 普通模式：config / reset-t0 等，输出直接到控制台
+        & py @Arguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "$Description 执行失败，exit code=$LASTEXITCODE"
+        }
     }
 }
 
