@@ -212,8 +212,12 @@ function Invoke-PaperTradeCommand {
 
     if ($CapturedOutput) {
         # 捕获模式：仅 paper_trade run 使用，解析输出提取指标
+        # 注意：必须临时关闭 Stop 模式，否则 2>&1 会因 stderr 触发终止错误
+        $savedEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         $raw = & py @Arguments 2>&1
         $pyExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $savedEAP
         $output = ($raw | Out-String)
         if ($pyExitCode -ne 0) {
             Write-Host $output
