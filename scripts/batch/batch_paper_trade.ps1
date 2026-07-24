@@ -297,6 +297,7 @@ foreach ($modelVersion in $normalizedModels) {
     $modelStatus = "成功"
     $modelError = ""
     $finalTradeDate = ""
+    $lastRunOutput = ""
 
     try {
         # 先写入模型编号到 data/paper/config.yaml（由 paper_trade.py config 统一渲染）
@@ -307,7 +308,6 @@ foreach ($modelVersion in $normalizedModels) {
         }
 
         $currentRequest = $startStr
-        $lastRunOutput = ""
         while ($true) {
             $modelRunCount++
 
