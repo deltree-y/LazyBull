@@ -28,7 +28,10 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.85.4)
+### 当前版本 (v0.85.6)
+
+**批量汇总年化收益率与 broker 日志完全对齐** (v0.85.6):
+- `scripts/batch/batch_paper_trade.ps1` 汇总不再从 `nav.parquet` 重新计算，改为读取 `config.yaml` + `account.json` + clean daily 收盘价，与 broker 使用完全一致的数据源和 CAGR 公式。
 
 **风险惩罚强度可调 + 批量对比新增惩罚效果指标** (v0.85.4):
 - `scripts/walk_forward.py` 新增 `--risk-penalty-lambda-scale` 与 `--risk-penalty-lambda-grid`，可直接控制 conditional bad-pick 的惩罚强度搜索网格。

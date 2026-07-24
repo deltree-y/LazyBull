@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.6] - 2026-07-24
+
+### Fixed
+
+- **批量汇总年化收益率与 broker 日志完全对齐**：`scripts/batch/batch_paper_trade.ps1` 的 `Get-NavSummary` 不再从 `nav.parquet` 重新计算（其价格来源与 broker 不同），改为直接读取 `config.yaml`（`initial_capital`/`account_start_date`）+ `account.json`（`cash`/`positions`）+ clean daily 收盘价，与 broker 的 `print_positions_summary` → `_calculate_annualized_return` 使用完全相同的数据源和 CAGR 公式。
+
 ## [0.85.5] - 2026-07-23
 
 ### Added

@@ -129,58 +129,97 @@ function Get-NavSummary {
     $pyCode = @'
 import json
 import sys
+import yaml
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
-file_path = "./data/paper/nav/nav.parquet"
 end_trade_date_arg = sys.argv[1] if len(sys.argv) > 1 else ""
 
-try:
-    df = pd.read_parquet(file_path)
-except Exception as exc:
-    print(json.dumps({"ok": False, "error": f"读取 nav.parquet 失败: {exc}"}, ensure_ascii=False))
+# 1. 读取 config.yaml 获取 initial_capital 和 account_start_date
+config_path = Path("./data/paper/config.yaml")
+config = {}
+if config_path.exists():
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+
+initial_capital = float(config.get("initial_capital", 0))
+account_start_date = config.get("account_start_date", "")
+
+if initial_capital <= 0:
+    print(json.dumps({"ok": False, "error": "config.yaml 缺少 initial_capital"}, ensure_ascii=False))
     raise SystemExit(0)
 
-if df is None or df.empty:
-    print(json.dumps({"ok": False, "error": "nav.parquet 为空，无法汇总"}, ensure_ascii=False))
+# 2. 读取 account.json 获取现金和持仓
+account_path = Path("./data/paper/state/account.json")
+if not account_path.exists():
+    print(json.dumps({"ok": False, "error": "account.json 不存在"}, ensure_ascii=False))
     raise SystemExit(0)
 
-if "trade_date" not in df.columns or "total_value" not in df.columns:
-    print(json.dumps({"ok": False, "error": "nav.parquet 缺少 trade_date 或 total_value 字段"}, ensure_ascii=False))
-    raise SystemExit(0)
+with open(account_path, "r", encoding="utf-8") as f:
+    account = json.load(f)
 
-df = df.sort_values("trade_date").reset_index(drop=True)
+cash = float(account.get("cash", 0))
+positions = account.get("positions", {})
 
-start_trade_date = str(df.iloc[0]["trade_date"])
-start_total_value = float(df.iloc[0]["total_value"])
-
-# 如果指定了最终交易日，使用该日期对应的 NAV 行；否则使用最后一行
+# 3. 确定最终交易日：优先使用传入的 end_trade_date，否则取 account.last_update
 if end_trade_date_arg:
-    # 查找匹配或最接近（<= end_trade_date_arg）的行
-    df_date = df[df["trade_date"].astype(str) <= end_trade_date_arg]
-    if len(df_date) > 0:
-        end_row = df_date.iloc[-1]
-    else:
-        end_row = df.iloc[-1]
+    final_trade_date = end_trade_date_arg
 else:
-    end_row = df.iloc[-1]
+    final_trade_date = account.get("last_update", "")
 
-end_trade_date = str(end_row["trade_date"])
-end_total_value = float(end_row["total_value"])
+if len(final_trade_date) != 8:
+    print(json.dumps({"ok": False, "error": f"无法确定最终交易日: {final_trade_date}"}, ensure_ascii=False))
+    raise SystemExit(0)
 
+# 4. 读取当日收盘价
+date_str = f"{final_trade_date[:4]}-{final_trade_date[4:6]}-{final_trade_date[6:8]}"
+daily_path = Path(f"./data/clean/daily/{date_str}.parquet")
+prices = {}
+if daily_path.exists():
+    df = pd.read_parquet(daily_path)
+    if "ts_code" in df.columns and "close" in df.columns:
+        for _, row in df.iterrows():
+            price = row.get("close")
+            if pd.isna(price):
+                continue
+            price_val = float(price)
+            if price_val > 0:
+                prices[row["ts_code"]] = price_val
+
+# 5. 计算持仓市值（与 broker / load_position_snapshot 一致：停牌回退买入价）
+position_value = 0.0
+for ts_code, pos in positions.items():
+    shares = int(pos.get("shares", 0))
+    buy_price = float(pos.get("buy_price", 0))
+    price = prices.get(ts_code)
+    try:
+        price_val = float(price)
+    except (TypeError, ValueError):
+        price_val = 0.0
+    if price_val <= 0:
+        price_val = buy_price
+    position_value += shares * price_val
+
+total_assets = cash + position_value
+
+# 6. 计算总收益率和年化收益率（CAGR，与 broker 一致）
 total_return_pct = 0.0
-if start_total_value > 0:
-    total_return_pct = (end_total_value / start_total_value - 1.0) * 100.0
+if initial_capital > 0:
+    total_return_pct = (total_assets / initial_capital - 1.0) * 100.0
+
+# 起始日期：优先 account_start_date，否则 account.last_update（最早有记录日）
+start_date = account_start_date if account_start_date else final_trade_date
 
 annualized_return_pct = None
 try:
-    d0 = datetime.strptime(start_trade_date, "%Y%m%d")
-    d1 = datetime.strptime(end_trade_date, "%Y%m%d")
+    d0 = datetime.strptime(start_date, "%Y%m%d")
+    d1 = datetime.strptime(final_trade_date, "%Y%m%d")
     days = (d1 - d0).days
-    if days > 0 and start_total_value > 0 and end_total_value > 0:
+    if days > 0 and initial_capital > 0 and total_assets > 0:
         # 复合年化收益率 (CAGR)
-        annualized_return_pct = ((end_total_value / start_total_value) ** (365.0 / days) - 1.0) * 100.0
+        annualized_return_pct = ((total_assets / initial_capital) ** (365.0 / days) - 1.0) * 100.0
 except Exception:
     annualized_return_pct = None
 
@@ -188,10 +227,10 @@ print(
     json.dumps(
         {
             "ok": True,
-            "start_trade_date": start_trade_date,
-            "end_trade_date": end_trade_date,
-            "start_total_value": start_total_value,
-            "end_total_value": end_total_value,
+            "start_trade_date": start_date,
+            "end_trade_date": final_trade_date,
+            "start_total_value": initial_capital,
+            "end_total_value": total_assets,
             "total_return_pct": total_return_pct,
             "annualized_return_pct": annualized_return_pct,
         },
@@ -253,8 +292,6 @@ function Update-BatchSummaryCsv {
         '模型编号',
         '计划开始',
         '计划结束',
-        'NAV开始',
-        'NAV结束',
         '最终交易日',
         '总资产',
         '总收益率',
@@ -458,8 +495,6 @@ foreach ($modelVersion in $normalizedModels) {
     $totalAssets = $null
     $totalReturnPct = $null
     $annualizedReturnPct = $null
-    $navStartDate = ""
-    $navEndDate = ""
 
     try {
         $navSummary = Get-NavSummary -EndTradeDate $finalTradeDate
@@ -469,8 +504,6 @@ foreach ($modelVersion in $normalizedModels) {
             if ($null -ne $navSummary.annualized_return_pct) {
                 $annualizedReturnPct = [double]$navSummary.annualized_return_pct
             }
-            $navStartDate = [string]$navSummary.start_trade_date
-            $navEndDate = [string]$navSummary.end_trade_date
         }
         else {
             if ([string]::IsNullOrWhiteSpace($modelError)) {
@@ -494,8 +527,6 @@ foreach ($modelVersion in $normalizedModels) {
         模型编号 = $modelVersion
         计划开始 = $startStr
         计划结束 = $endStr
-        NAV开始 = $navStartDate
-        NAV结束 = $navEndDate
         最终交易日 = $finalTradeDate
         总资产 = if ($null -ne $totalAssets) { "{0:N2}" -f $totalAssets } else { "N/A" }
         总收益率 = if ($null -ne $totalReturnPct) { "{0:F2}%" -f $totalReturnPct } else { "N/A" }
