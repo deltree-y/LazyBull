@@ -196,41 +196,111 @@ function Read-BatchSummaryCsv {
     }
 }
 
+function Get-PaperMetrics {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TradeDate
+    )
+
+    $pyCode = @'
+import json, sys, yaml
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+
+trade_date = sys.argv[1]
+
+# 1. 读取 config.yaml（嵌套结构，需解析 paper_trade 子段）
+with open("./data/paper/config.yaml", "r", encoding="utf-8") as f:
+    config = yaml.safe_load(f) or {}
+pt = config.get("paper_trade", {})
+initial_capital = float(pt.get("initial_capital", 0))
+account_start_date = str(config.get("account_start_date", "") or "")
+
+# 2. 若无 account_start_date，回退到 nav.parquet 最早日期（与 broker 一致）
+if not account_start_date:
+    nav_path = Path("./data/paper/nav/nav.parquet")
+    if nav_path.exists():
+        nav_df = pd.read_parquet(nav_path)
+        if len(nav_df) > 0:
+            account_start_date = str(nav_df["trade_date"].iloc[0])
+
+# 3. 读取 account.json
+with open("./data/paper/state/account.json", "r", encoding="utf-8") as f:
+    account = json.load(f)
+cash = float(account.get("cash", 0))
+positions = account.get("positions", {})
+
+# 4. 读取当日收盘价
+date_str = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
+daily_path = Path(f"./data/clean/daily/{date_str}.parquet")
+prices = {}
+if daily_path.exists():
+    df = pd.read_parquet(daily_path)
+    for _, row in df.iterrows():
+        price = row.get("close")
+        if pd.notna(price) and float(price) > 0:
+            prices[row["ts_code"]] = float(price)
+
+# 5. 持仓市值（停牌回退买入价，与 broker 一致）
+position_value = 0.0
+for ts_code, pos in positions.items():
+    shares = int(pos.get("shares", 0))
+    buy_price = float(pos.get("buy_price", 0))
+    price = prices.get(ts_code, 0.0)
+    if price <= 0:
+        price = buy_price
+    position_value += shares * price
+
+total_assets = cash + position_value
+
+# 6. CAGR（与 broker._calculate_annualized_return 一致）
+total_return_pct = (total_assets / initial_capital - 1.0) * 100.0 if initial_capital > 0 else 0.0
+
+start_date = account_start_date if account_start_date else trade_date
+d0 = datetime.strptime(start_date, "%Y%m%d")
+d1 = datetime.strptime(trade_date, "%Y%m%d")
+days = (d1 - d0).days
+if days > 0 and initial_capital > 0 and total_assets > 0:
+    annualized = ((total_assets / initial_capital) ** (365.0 / days) - 1.0) * 100.0
+else:
+    annualized = None
+
+print(json.dumps({
+    "total_assets": round(total_assets, 2),
+    "total_return_pct": round(total_return_pct, 2),
+    "annualized_return_pct": round(annualized, 2) if annualized is not None else None,
+}))
+'@
+
+    $tmpPy = Join-Path $env:TEMP "lazybull_metrics_$([Guid]::NewGuid().ToString('N')).py"
+    try {
+        Set-Content -Path $tmpPy -Value $pyCode -Encoding UTF8
+        $raw = & py $tmpPy $TradeDate | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "Python 指标脚本退出码=$LASTEXITCODE, 输出=$raw"
+        }
+        return ($raw.Trim() | ConvertFrom-Json)
+    }
+    finally {
+        Remove-Item $tmpPy -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-PaperTradeCommand {
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$Arguments,
 
         [Parameter(Mandatory = $true)]
-        [string]$Description,
-
-        [Parameter(Mandatory = $false)]
-        [ref]$CapturedOutput
+        [string]$Description
     )
 
     Write-Host "[$Description] py $($Arguments -join ' ')" -ForegroundColor Gray
-
-    if ($CapturedOutput) {
-        # 捕获模式：仅 paper_trade run 使用，解析输出提取指标
-        # 注意：必须临时关闭 Stop 模式，否则 2>&1 会因 stderr 触发终止错误
-        $savedEAP = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        $raw = & py @Arguments 2>&1
-        $pyExitCode = $LASTEXITCODE
-        $ErrorActionPreference = $savedEAP
-        $output = ($raw | Out-String)
-        if ($pyExitCode -ne 0) {
-            Write-Host $output
-            throw "$Description 执行失败，exit code=$pyExitCode"
-        }
-        $CapturedOutput.Value = $output
-    }
-    else {
-        # 普通模式：config / reset-t0 等，输出直接到控制台
-        & py @Arguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "$Description 执行失败，exit code=$LASTEXITCODE"
-        }
+    & py @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description 执行失败，exit code=$LASTEXITCODE"
     }
 }
 
@@ -312,7 +382,6 @@ foreach ($modelVersion in $normalizedModels) {
     $modelStatus = "成功"
     $modelError = ""
     $finalTradeDate = ""
-    $lastRunOutput = ""
 
     try {
         # 先写入模型编号到 data/paper/config.yaml（由 paper_trade.py config 统一渲染）
@@ -329,9 +398,7 @@ foreach ($modelVersion in $normalizedModels) {
             Write-Host ""
             Write-Host "[模型 $modelVersion | 任务 $modelRunCount] 请求 trade-date: $currentRequest" -ForegroundColor Green
 
-            $captured = ""
-            Invoke-PaperTradeCommand -Arguments @("scripts\paper_trade.py", "run", "--trade-date", $currentRequest) -Description "执行 paper_trade run" -CapturedOutput ([ref]$captured)
-            $lastRunOutput = $captured
+            Invoke-PaperTradeCommand -Arguments @("scripts\paper_trade.py", "run", "--trade-date", $currentRequest) -Description "执行 paper_trade run"
 
             $lastTradeDate = Get-LastTradeDate
             if ([string]::IsNullOrWhiteSpace($lastTradeDate)) {
@@ -368,19 +435,22 @@ foreach ($modelVersion in $normalizedModels) {
 
     $modelTimer.Stop()
 
-    # 从最后一次 paper_trade run 输出中直接提取年化收益率和总资产
+    # 通过独立 Python 脚本读取 config + account + clean daily，与 broker 口径完全一致
     $totalAssets = $null
     $totalReturnPct = $null
     $annualizedReturnPct = $null
 
-    if ($lastRunOutput -match '年化收益率:\s*([\-\d.]+)%') {
-        $annualizedReturnPct = [double]$Matches[1]
-    }
-    if ($lastRunOutput -match '总资产:\s*([\d,]+(?:\.\d+)?)') {
-        $totalAssets = [double]($Matches[1] -replace ',', '')
-    }
-    if ($lastRunOutput -match '总盈亏:\s*([\-\d.]+)%') {
-        $totalReturnPct = [double]$Matches[1]
+    if ($modelStatus -eq "成功" -and $finalTradeDate) {
+        try {
+            $metrics = Get-PaperMetrics -TradeDate $finalTradeDate
+            $totalAssets = $metrics.total_assets
+            $totalReturnPct = $metrics.total_return_pct
+            $annualizedReturnPct = $metrics.annualized_return_pct
+        }
+        catch {
+            $modelError = "读取指标失败: $($_.Exception.Message)"
+            $modelStatus = "失败"
+        }
     }
 
     $summaryRows += [PSCustomObject]@{
