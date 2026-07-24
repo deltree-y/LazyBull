@@ -111,8 +111,8 @@ $adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "42,61,82"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
-$ensemble_seed_keep_top_ratio = 0.50  # 多种子筛选保留比例（0~1）
+$ensemble_seeds            = "42,61,82,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seed_keep_top_ratio = 1  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数 
 
 # ── 候选树数后验选优（训练完成后按逐日验证指标重选最终树数）─────────
@@ -209,9 +209,9 @@ $risk_penalty_clf_subsample_list = @(0.8)          # 分类器 subsample，默�
 $risk_penalty_clf_colsample_bytree_list = @(0.4)   # 分类器 colsample_bytree，默认 0.6
 $risk_penalty_clf_early_stopping_rounds_list = @(20)  # 分类器早停轮数，默认 20
 # ── 风险惩罚训练参数（控制坏票校准学习行为）─────────────────
-$risk_penalty_candidate_topk_list = @(100)      # 候选池 TopK，默认 30；值越大候选越宽
+$risk_penalty_candidate_topk_list = @(150)      # 候选池 TopK，默认 30；值越大候选越宽
 $risk_penalty_bad_bottom_pct_list = @(0.3)     # 候选池底部标记坏票比例（0~1），默认 0.3
-$risk_penalty_min_bad_samples_list = @(5)      # 最少坏样本数，低于此跳过惩罚学习，默认 5
+$risk_penalty_min_bad_samples_list = @(4)      # 最少坏样本数，低于此跳过惩罚学习，默认 5
 $risk_penalty_min_total_samples_list = @(15)   # 最少总样本数，低于此跳过惩罚学习，默认 15
 # ── 风险惩罚 Lambda 配置（坏票惩罚校准，同时影响训练与 OOS 回测）──
 $risk_penalty_lambda_scale_list = @(1)   # lambda 缩放系数（>0）；默认 1.0，<1 更温和，>1 更严格
