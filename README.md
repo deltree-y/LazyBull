@@ -28,7 +28,19 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.85.6)
+### 当前版本 (v0.85.14)
+
+**Bad-Pick AUC 阈值可配置** (v0.85.17):
+- `--risk-penalty-clf-auc-threshold`（walk_forward）和 `$risk_penalty_clf_auc_threshold_list`（batch）可用于调节样本外 AUC 启用门槛，默认 0.55。
+
+**Bad-Pick 因子调优：排除低质量因子，新增融资/筹码/换手** (v0.85.15):
+- 移除 `fund_hold_ratio`、`fund_hold_ratio_chg`（factor_exclude_list 中，ICIR 或覆盖率不达标），可能为导致部分 split 校准 AUC=0.500 的原因之一。
+- 新增 `margin_net_buy_ratio`、`weight_avg_bias`、`turnover_rate`、`vol_burst_10`，覆盖杠杆资金、筹码成本、原始活跃度和中间窗口量能四个新维度。
+
+**Bad-Pick 因子实证筛选与严格样本外校准** (v0.85.14):
+- 坏票分类器改用 16 个在主模型 Top 候选池中具有稳定分离度的特征，其中 10 个不在最新主模型中，减少与主排序信号的重复学习。
+- 分类器按日期使用 70% 训练、10% early-stop、20% 独立 calibration；AUC、市场状态和惩罚参数不再使用分类器训练样本评估。
+- 最终部署分类器按 early-stop 选定树数在全部候选样本上重训。
 
 **批量汇总年化收益率与 broker 日志完全对齐** (v0.85.6):
 - `scripts/batch/batch_paper_trade.ps1` 汇总不再从 `nav.parquet` 重新计算，改为读取 `config.yaml` + `account.json` + clean daily 收盘价，与 broker 使用完全一致的数据源和 CAGR 公式。

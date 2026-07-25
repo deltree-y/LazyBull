@@ -22,6 +22,7 @@ from src.lazybull.risk.bad_pick import (
     detect_market_regime,
     prepare_classifier_features,
 )
+from src.lazybull.ml.train_core import learn_risk_penalty_config
 
 
 class TestBadPickConfig:
@@ -328,3 +329,51 @@ class TestBadPickClassifierFeatures:
         required = ["mkt_ret_avg_20", "mkt_vol_20", "mkt_drawdown_20"]
         for feat in required:
             assert feat in MARKET_STATE_FEATURES, f"{feat} missing from MARKET_STATE_FEATURES"
+
+
+class TestBadPickCalibrationProtocol:
+    """分类器训练与惩罚校准必须按日期隔离。"""
+
+    def test_calibration_statistics_only_use_last_twenty_percent_dates(self):
+        """配置统计不得混入分类器训练段和 early-stop 段。"""
+
+        class ScoreModel:
+            def predict(self, features):
+                return features["main_signal"].to_numpy()
+
+        rows = []
+        for day_index in range(30):
+            trade_date = f"202301{day_index + 1:02d}"
+            for stock_index in range(30):
+                risk_signal = stock_index / 29.0
+                rows.append(
+                    {
+                        "trade_date": trade_date,
+                        "ts_code": f"{stock_index:06d}.SZ",
+                        "main_signal": float(stock_index),
+                        "kdj_d": risk_signal,
+                        "y_ret_20": -risk_signal,
+                    }
+                )
+
+        config = learn_risk_penalty_config(
+            model=ScoreModel(),
+            df_val=pd.DataFrame(rows),
+            feature_columns=["main_signal"],
+            original_return_col="y_ret_20",
+            task="regression",
+            candidate_topk=30,
+            bad_bottom_pct=0.3,
+            min_bad_samples=20,
+            min_total_samples=100,
+            eval_topk=5,
+            lambda_grid=[0.1],
+            clf_n_estimators=20,
+            clf_early_stopping_rounds=5,
+            threshold_candidates=[0.5],
+        )
+
+        assert config is not None
+        assert config["calibration_samples"] == 30 * 6
+        assert config["calibration_bad_samples"] == 9 * 6
+        assert config["calibration_auc"] > 0.55

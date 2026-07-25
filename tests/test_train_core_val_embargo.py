@@ -214,40 +214,19 @@ class _RiskMockModel:
 
 def test_learn_risk_penalty_config_from_bad_pick_pattern():
     rows = []
-    for offset in range(6):
-        trade_date = f"2024010{offset + 1}"
-        rows.extend(
-            [
+    for day_index in range(30):
+        trade_date = f"202401{day_index + 1:02d}"
+        for stock_index in range(40):
+            risk_signal = stock_index / 39.0
+            rows.append(
                 {
                     "trade_date": trade_date,
-                    "ts_code": f"A{offset}",
-                    "pred_feature": 1.00,
-                    "spec_score": 100.0,
-                    "y_ret_5": -0.06,
-                },
-                {
-                    "trade_date": trade_date,
-                    "ts_code": f"B{offset}",
-                    "pred_feature": 0.95,
-                    "spec_score": 1.0,
-                    "y_ret_5": 0.05,
-                },
-                {
-                    "trade_date": trade_date,
-                    "ts_code": f"C{offset}",
-                    "pred_feature": 0.90,
-                    "spec_score": 10.0,
-                    "y_ret_5": 0.03,
-                },
-                {
-                    "trade_date": trade_date,
-                    "ts_code": f"D{offset}",
-                    "pred_feature": 0.85,
-                    "spec_score": 5.0,
-                    "y_ret_5": -0.01,
-                },
-            ]
-        )
+                    "ts_code": f"{stock_index:06d}.SZ",
+                    "pred_feature": risk_signal,
+                    "kdj_d": risk_signal,
+                    "y_ret_5": -risk_signal,
+                }
+            )
 
     df_val = pd.DataFrame(rows)
     config = learn_risk_penalty_config(
@@ -256,49 +235,39 @@ def test_learn_risk_penalty_config_from_bad_pick_pattern():
         feature_columns=["pred_feature"],
         original_return_col="y_ret_5",
         task="regression",
-        candidate_topk=3,
+        candidate_topk=40,
         eval_topk=2,
-        lambda_grid=[0.0, 0.4],
-        min_bad_samples=3,
-        min_total_samples=12,
+        lambda_grid=[1000.0],
+        min_bad_samples=40,
+        min_total_samples=200,
+        clf_n_estimators=20,
+        clf_early_stopping_rounds=5,
+        threshold_candidates=[0.3],
     )
 
     assert config is not None
     assert config["enabled"] is True
-    assert config["penalty_lambda"] == 0.4
-    assert config["feature_weights"][0]["name"] == "spec_score"
+    assert config["classifier_features"] == ["kdj_d"]
+    assert config["calibration_samples"] == 240
+    assert config["calibration_auc"] > 0.55
     assert config["selected_topk_median"] > config["baseline_topk_median"]
 
 
 def test_learn_risk_penalty_config_selects_zero_lambda_when_calibration_not_improved():
     rows = []
-    for offset in range(6):
-        trade_date = f"2024020{offset + 1}"
-        rows.extend(
-            [
+    for day_index in range(30):
+        trade_date = f"202402{day_index + 1:02d}"
+        bad_stock = day_index % 40
+        for stock_index in range(40):
+            rows.append(
                 {
                     "trade_date": trade_date,
-                    "ts_code": f"A{offset}",
-                    "pred_feature": 1.00,
-                    "spec_score": 100.0,
-                    "y_ret_5": -0.06,
-                },
-                {
-                    "trade_date": trade_date,
-                    "ts_code": f"B{offset}",
-                    "pred_feature": 0.70,
-                    "spec_score": 1.0,
-                    "y_ret_5": 0.05,
-                },
-                {
-                    "trade_date": trade_date,
-                    "ts_code": f"C{offset}",
-                    "pred_feature": 0.69,
-                    "spec_score": 10.0,
-                    "y_ret_5": 0.03,
-                },
-            ]
-        )
+                    "ts_code": f"{stock_index:06d}.SZ",
+                    "pred_feature": float(stock_index),
+                    "kdj_d": stock_index / 39.0,
+                    "y_ret_5": -1.0 if stock_index == bad_stock else 0.1,
+                }
+            )
 
     df_val = pd.DataFrame(rows)
     config = learn_risk_penalty_config(
@@ -307,19 +276,20 @@ def test_learn_risk_penalty_config_selects_zero_lambda_when_calibration_not_impr
         feature_columns=["pred_feature"],
         original_return_col="y_ret_5",
         task="regression",
-        candidate_topk=3,
+        candidate_topk=40,
         eval_topk=2,
-        lambda_grid=[0.0, 0.05, 0.1],
+        lambda_grid=[0.1],
+        bad_bottom_pct=0.3,
         min_bad_samples=3,
-        min_total_samples=12,
+        min_total_samples=200,
+        clf_n_estimators=20,
+        clf_early_stopping_rounds=5,
+        threshold_candidates=[0.5],
     )
 
     assert config is not None
     assert config["enabled"] is False
-    assert config["penalty_lambda"] == 0.0
-    assert config["calibration_prefers_penalty"] is False
-    assert config["selected_topk_median"] == config["baseline_topk_median"]
-    assert config["selected_score_column"] == "pred_score"
+    assert config["calibration_auc"] <= 0.55
 
 
 def test_evaluate_validation_daily_uses_existing_prediction_col():

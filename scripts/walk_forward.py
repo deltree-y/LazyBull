@@ -2640,6 +2640,9 @@ def execute_split_training(
     risk_penalty_clf_threshold_candidates = _parse_threshold_candidates(
         getattr(args, "risk_penalty_clf_threshold_candidates", "") or ""
     )
+    risk_penalty_clf_auc_threshold = float(
+        getattr(args, "risk_penalty_clf_auc_threshold", 0.55) or 0.55
+    )
     risk_penalty_config = learn_risk_penalty_config(
         model=model,
         df_val=selected_candidate["df_val_split_original"],
@@ -2659,6 +2662,7 @@ def execute_split_training(
         clf_colsample_bytree=risk_penalty_clf_colsample_bytree,
         clf_early_stopping_rounds=risk_penalty_clf_early_stopping_rounds,
         threshold_candidates=risk_penalty_clf_threshold_candidates,
+        clf_auc_threshold=risk_penalty_clf_auc_threshold,
     )
     _log_risk_penalty_summary(f"Split {split.split_index}", risk_penalty_config)
     if risk_penalty_config is None:
@@ -3305,6 +3309,9 @@ def execute_deploy_training(
     risk_penalty_clf_threshold_candidates = _parse_threshold_candidates(
         getattr(args, "risk_penalty_clf_threshold_candidates", "") or ""
     )
+    risk_penalty_clf_auc_threshold = float(
+        getattr(args, "risk_penalty_clf_auc_threshold", 0.55) or 0.55
+    )
     risk_penalty_config = learn_risk_penalty_config(
         model=model,
         df_val=df_val_split_original,
@@ -3324,6 +3331,7 @@ def execute_deploy_training(
         clf_colsample_bytree=risk_penalty_clf_colsample_bytree,
         clf_early_stopping_rounds=risk_penalty_clf_early_stopping_rounds,
         threshold_candidates=risk_penalty_clf_threshold_candidates,
+        clf_auc_threshold=risk_penalty_clf_auc_threshold,
     )
     _log_risk_penalty_summary("部署模型", risk_penalty_config)
 
@@ -4828,6 +4836,12 @@ def main():
         type=str,
         default="",
         help="坏票惩罚 threshold 候选（逗号分隔，如0.3,0.4,0.5,0.6）；空=使用默认[0.5,0.6,0.7]"
+    )
+    parser.add_argument(
+        "--risk-penalty-clf-auc-threshold",
+        type=float,
+        default=0.55,
+        help="坏票分类器样本外 AUC 启用门槛，默认 0.55；低于此值跳过惩罚学习"
     )
     parser.add_argument(
         "--bt-top-n",

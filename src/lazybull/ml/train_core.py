@@ -39,6 +39,10 @@ from src.lazybull.ml.eval_utils import (
     print_diagnostic_report,
     summarize_daily_metrics,
 )
+from src.lazybull.risk.bad_pick import (
+    BAD_PICK_CLASSIFIER_FEATURES,
+    MARKET_STATE_FEATURES,
+)
 
 
 RISK_PENALTY_FEATURE_CANDIDATES = [
@@ -1048,7 +1052,9 @@ def prepare_training_data(
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
 
     # ── 内存优化：只保留训练必需的列，避免 copy 时 OOM ──
+    # 同时保留 Bad-Pick 分类器特征列，确保后续校准有足够特征可用
     needed_cols = set(feature_columns + [label_column, "trade_date", "ts_code"] + filter_columns)
+    needed_cols |= set(BAD_PICK_CLASSIFIER_FEATURES) | set(MARKET_STATE_FEATURES)
     needed_cols &= set(df.columns)  # 仅保留实际存在的列
     kept = list(needed_cols)
     n_before = len(df.columns)
@@ -1609,6 +1615,7 @@ def learn_risk_penalty_config(
     clf_colsample_bytree: float = 0.6,
     clf_early_stopping_rounds: int = 20,
     threshold_candidates: Optional[List[float]] = None,
+    clf_auc_threshold: float = 0.55,
 ) -> Optional[Dict[str, Any]]:
     """从 calibration 段学习条件式坏票惩罚配置（v2）。
 
@@ -1679,34 +1686,56 @@ def learn_risk_penalty_config(
     available_mkt_features = [
         f for f in MARKET_STATE_FEATURES if f in candidate_df.columns
     ]
-    all_clf_features = available_clf_features + available_mkt_features
+    # 去重：mkt_drawdown_20 等可能同时出现在 classifier_features 和 market_state 中
+    all_clf_features = list(dict.fromkeys(available_clf_features + available_mkt_features))
 
     if len(available_clf_features) == 0:
         logger.info("条件式坏票惩罚学习跳过: calibration 段缺少分类器特征")
         return None
 
-    # 缺失值填中位数
+    # ── 按日期拆分 train / early-stop / calibration ────────────────────
+    # calibration 严格留出，只用于 AUC、regime 和惩罚参数搜索，避免训练内评估虚高。
+    clf_dates_sorted = sorted(candidate_df["trade_date"].unique())
+    if len(clf_dates_sorted) < 10:
+        logger.info(
+            f"条件式坏票惩罚学习跳过: 仅 {len(clf_dates_sorted)} 个候选交易日，"
+            "不足以拆分 train/early-stop/calibration"
+        )
+        return None
+
+    n_clf_calib = max(1, math.ceil(len(clf_dates_sorted) * 0.20))
+    n_clf_es = max(1, math.ceil(len(clf_dates_sorted) * 0.10))
+    n_clf_train = len(clf_dates_sorted) - n_clf_es - n_clf_calib
+    if n_clf_train < 1:
+        return None
+
+    clf_train_dates = set(clf_dates_sorted[:n_clf_train])
+    clf_es_dates = set(clf_dates_sorted[n_clf_train : n_clf_train + n_clf_es])
+    clf_calib_dates = set(clf_dates_sorted[n_clf_train + n_clf_es :])
+    clf_train_mask = candidate_df["trade_date"].isin(clf_train_dates)
+    clf_es_mask = candidate_df["trade_date"].isin(clf_es_dates)
+    clf_calib_mask = candidate_df["trade_date"].isin(clf_calib_dates)
+
+    # 中位数只从训练段估计，避免 calibration 分布泄漏到分类器输入。
     X_clf = candidate_df[all_clf_features].copy()
     for col in X_clf.columns:
-        if X_clf[col].isna().any():
-            X_clf[col] = X_clf[col].fillna(X_clf[col].median() if X_clf[col].notna().any() else 0.0)
+        train_values = X_clf.loc[clf_train_mask, col].dropna()
+        fill_value = train_values.median() if len(train_values) > 0 else 0.0
+        X_clf[col] = X_clf[col].fillna(fill_value)
 
     y_clf = candidate_df["bad_pick"].astype(int)
+    X_clf_train = X_clf.loc[clf_train_mask]
+    y_clf_train = y_clf.loc[clf_train_mask]
+    X_clf_es = X_clf.loc[clf_es_mask]
+    y_clf_es = y_clf.loc[clf_es_mask]
+    X_clf_calib = X_clf.loc[clf_calib_mask]
+    y_clf_calib = y_clf.loc[clf_calib_mask]
 
     # ── 3. 训练二分类器 ────────────────────────────────────────────────
-    scale_pos_weight_val = float((len(y_clf) - y_clf.sum()) / max(y_clf.sum(), 1))
+    scale_pos_weight_val = float(
+        (len(y_clf_train) - y_clf_train.sum()) / max(y_clf_train.sum(), 1)
+    )
     scale_pos_weight_val = min(max(scale_pos_weight_val, 1.0), 20.0)
-
-    # ── 按日期切分分类器训练/验证集（chronological，最后20%作早停验证）──
-    clf_dates = candidate_df["trade_date"].unique()
-    clf_dates_sorted = sorted(clf_dates)
-    n_clf_val = max(1, int(len(clf_dates_sorted) * 0.1))  # 10% 验证，保持更多训练数据
-    clf_val_dates = set(clf_dates_sorted[-n_clf_val:])
-    clf_train_mask = ~candidate_df["trade_date"].isin(clf_val_dates)
-    X_clf_train = X_clf[clf_train_mask]
-    y_clf_train = y_clf[clf_train_mask]
-    X_clf_val = X_clf[~clf_train_mask]
-    y_clf_val = y_clf[~clf_train_mask]
 
     clf_model = xgb.XGBClassifier(
         n_estimators=clf_n_estimators,
@@ -1723,16 +1752,13 @@ def learn_risk_penalty_config(
     )
 
     try:
-        if len(X_clf_val) > 0:
-            clf_model.fit(
-                X_clf_train, y_clf_train,
-                eval_set=[(X_clf_val, y_clf_val)],
-                verbose=False,
-            )
-            best_iter = getattr(clf_model, "best_iteration", None)
-        else:
-            clf_model.fit(X_clf, y_clf)
-            best_iter = clf_model.n_estimators if hasattr(clf_model, "n_estimators") else None
+        clf_model.fit(
+            X_clf_train,
+            y_clf_train,
+            eval_set=[(X_clf_es, y_clf_es)],
+            verbose=False,
+        )
+        best_iter = getattr(clf_model, "best_iteration", None)
     except Exception as exc:
         logger.warning(f"坏票分类器训练失败: {exc}")
         return None
@@ -1747,22 +1773,43 @@ def learn_risk_penalty_config(
         except Exception:
             pass
 
-    # 计算 AUC
+    # 只在严格留出的 calibration 段计算 AUC 和 p_bad。
     try:
         from sklearn.metrics import roc_auc_score
-        y_proba = clf_model.predict_proba(X_clf)
-        p_bad_all = y_proba[:, 1] if y_proba.shape[1] > 1 else y_proba[:, 0]
-        calib_auc = float(roc_auc_score(y_clf, p_bad_all))
+
+        y_proba = clf_model.predict_proba(X_clf_calib)
+        p_bad_calib = y_proba[:, 1] if y_proba.shape[1] > 1 else y_proba[:, 0]
+        calib_auc = float(roc_auc_score(y_clf_calib, p_bad_calib))
     except Exception:
         calib_auc = float("nan")
 
+    # 最终部署分类器按早停选出的树数在全部候选样本上重训。
+    final_n_estimators = max(int(actual_trees), 1)
+    final_clf_model = xgb.XGBClassifier(
+        n_estimators=final_n_estimators,
+        max_depth=clf_max_depth,
+        learning_rate=clf_learning_rate,
+        subsample=clf_subsample,
+        colsample_bytree=clf_colsample_bytree,
+        scale_pos_weight=scale_pos_weight_val,
+        random_state=42,
+        eval_metric="auc",
+        use_label_encoder=False,
+        verbosity=0,
+    )
+    try:
+        final_clf_model.fit(X_clf, y_clf, verbose=False)
+    except Exception as exc:
+        logger.warning(f"坏票分类器全量重训失败: {exc}")
+        return None
+
     # 提取特征重要性 Top5
     top5_features = ""
-    if hasattr(clf_model, "feature_importances_"):
-        feat_names = getattr(clf_model, "feature_names_in_",
-                             [f"f{i}" for i in range(len(clf_model.feature_importances_))])
+    if hasattr(final_clf_model, "feature_importances_"):
+        feat_names = getattr(final_clf_model, "feature_names_in_",
+                             [f"f{i}" for i in range(len(final_clf_model.feature_importances_))])
         ranked = sorted(
-            zip(feat_names, clf_model.feature_importances_),
+            zip(feat_names, final_clf_model.feature_importances_),
             key=lambda x: x[1], reverse=True
         )
         top5 = [f"{n}:{v:.3f}" for n, v in ranked[:5] if v > 0]
@@ -1774,13 +1821,22 @@ def learn_risk_penalty_config(
 
     logger.info(
         f"坏票分类器训练: trees={actual_trees}, AUC={calib_auc:.3f}, "
-        f"train={len(y_clf_train) if 'y_clf_train' in dir() else len(y_clf)}, "
-        f"val={len(y_clf_val) if 'y_clf_val' in dir() else 0}, "
+        f"train={len(y_clf_train)}, es={len(y_clf_es)}, calib={len(y_clf_calib)}, "
         f"used_features={n_used}/{len(all_clf_features)}"
         + (f", top5=[{top5_features}]" if top5_features else "")
     )
 
-    candidate_df["p_bad"] = p_bad_all
+    candidate_df = candidate_df.loc[clf_calib_mask].copy()
+    candidate_df["p_bad"] = p_bad_calib
+    bad_count = int(candidate_df["bad_pick"].sum())
+    total_count = int(len(candidate_df))
+    if bad_count < min_bad_samples or total_count < min_total_samples:
+        logger.info(
+            "条件式坏票惩罚学习跳过: 独立 calibration 样本不足, "
+            f"total={total_count}, bad={bad_count}, "
+            f"min_total={min_total_samples}, min_bad={min_bad_samples}"
+        )
+        return None
 
     # ── 4. 校准 market regime 阈值（分位数网格搜索）─────────────────────
     bear_pcts = [0.10, 0.20, 0.30, 0.40]
@@ -1899,10 +1955,13 @@ def learn_risk_penalty_config(
         regimes.insert(0, "normal")
 
     best_per_regime: Dict[str, Tuple[float, float, float]] = {}
+    # 每个 regime 至少需要这么多样本才能做独立的 (threshold, lambda) 网格搜索。
+    # 对于小校准集（如 260 样本），200 过于严格，改为与 min_total_samples 联动。
+    min_regime_samples = max(50, min_total_samples // 8)
 
     for regime_name in regimes:
         regime_df = candidate_df[candidate_df["regime"] == regime_name]
-        if len(regime_df) < min_total_samples:
+        if len(regime_df) < min_regime_samples:
             best_per_regime[regime_name] = (1.0, 0.0, 0.0)
             continue
 
@@ -1945,6 +2004,54 @@ def learn_risk_penalty_config(
 
         best_per_regime[regime_name] = (best_threshold, best_lambda, best_score)
 
+    # ── 6b. 兜底：所有 regime 都不满足样本门槛时，回退到全量单网格搜索 ──
+    if not any(lam > 0 for _, lam, _ in best_per_regime.values()) and len(candidate_df) >= 30:
+        logger.info(
+            f"所有 regime 样本不足（最小需要 {min_regime_samples}），"
+            f"回退到全量 {len(candidate_df)} 样本单网格搜索"
+        )
+        global_best_score = -np.inf
+        global_best_threshold = 0.5
+        global_best_lambda = 0.0
+
+        for threshold in threshold_candidates:
+            effective_lambdas = [0.0] + lambda_candidates if threshold < 1.0 else [0.0]
+            for penalty_lambda in effective_lambdas:
+                scored_df = candidate_df.copy()
+                mask = scored_df["p_bad"] > threshold
+                excess = (scored_df["p_bad"] - threshold).clip(lower=0.0)
+                penalty = (penalty_lambda * excess * mask.astype(float)).astype(
+                    scored_df["pred_score"].dtype
+                )
+                scored_df["final_score"] = scored_df["pred_score"] - penalty
+
+                summary = _summarize_lambda_objective(
+                    scored_df,
+                    score_col="final_score",
+                    return_col=original_return_col,
+                    eval_topk=eval_topk,
+                )
+                topk_median = summary.get("topk_median", float("nan"))
+                rankic_ir = summary.get("rankic_ir", float("nan"))
+
+                if not pd.notna(topk_median):
+                    continue
+
+                score = (
+                    topk_median * 0.5
+                    + (rankic_ir if pd.notna(rankic_ir) else 0) * 0.3
+                )
+
+                if score > global_best_score:
+                    global_best_score = score
+                    global_best_threshold = threshold
+                    global_best_lambda = penalty_lambda
+
+        for regime_name in list(best_per_regime.keys()):
+            best_per_regime[regime_name] = (
+                global_best_threshold, global_best_lambda, global_best_score
+            )
+
     # ── 7. 全局 baseline（无惩罚）vs 条件式惩罚对比 ─────────────────────
     baseline_df = candidate_df.copy()
     baseline_df["final_score"] = baseline_df["pred_score"]
@@ -1976,8 +2083,8 @@ def learn_risk_penalty_config(
 
     any_penalty = any(lam > 0 for _, lam, _ in best_per_regime.values())
 
-    # 守卫1: AUC 必须 > 0.70（分类器有实际区分力，不是随机噪声）
-    auc_ok = pd.notna(calib_auc) and calib_auc > 0.70
+    # 守卫1: 严格样本外 AUC 必须 > clf_auc_threshold；旧版 0.70 是训练内 AUC 口径，不再适用。
+    auc_ok = pd.notna(calib_auc) and calib_auc > clf_auc_threshold
 
     # 守卫2: 校准集 TopK 中位数或 RankIC IR 必须有改善（惩罚没有退化）
     bl_median = baseline_summary.get("topk_median", float("nan"))
@@ -2002,7 +2109,7 @@ def learn_risk_penalty_config(
     if not any_penalty:
         skip_reason.append("lambda 全为 0")
     if not auc_ok:
-        skip_reason.append(f"AUC={calib_auc:.3f} <= 0.70")
+        skip_reason.append(f"样本外 AUC={calib_auc:.3f} <= {clf_auc_threshold}")
     if not calib_ok:
         reason_parts = [f"TopK 无改善 ({bl_median:.6f} -> {cond_median:.6f})"]
         if improvement <= 0.0 and rankic_ir_improvement <= 0.0:
@@ -2053,7 +2160,7 @@ def learn_risk_penalty_config(
     )
 
     result = bp_config.to_dict()
-    result["_clf_model"] = clf_model
+    result["_clf_model"] = final_clf_model
     result["_clf_features"] = all_clf_features
     return result
 

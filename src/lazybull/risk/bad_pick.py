@@ -28,33 +28,48 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-# ── 扩展后的坏票分类器候选特征 ────────────────────────────────────────
-# 原 15 个 + 新增 7 个 = 22 个候选特征
+# ── 坏票分类器候选特征 ──────────────────────────────────────────────
+# 设计原则：
+#   1. 只保留在主模型 Top 候选池中对 bad_pick 有稳定分离度的因子
+#   2. 优先使用主模型未采用的时间尺度和风险维度，减少重复学习
+#   3. 公告型稀疏因子只有在校准窗口有稳定覆盖时才纳入
+#   4. 因子不得在 factor_exclude_list.json 中（ICIR < 0.1 或覆盖率 < 0.3）
+#   5. 避免与主模型使用同一信息的"不同包装"（如原始值 vs zscore 版）
+# 共 20 个特征，覆盖 7 个独立信号维度。
 BAD_PICK_CLASSIFIER_FEATURES = [
-    # 原有 15 个（波动率/量比/K线/超买）
-    "zscore_volatility_20",
-    "zscore_volatility_5",
-    "zscore_turnover_rate",
-    "vol_ratio_20",
-    "vol_burst_20",
-    "zscore_amount_ma20",
-    "amplitude",
-    "zscore_bb_width",
-    "upper_shadow",
-    "spec_score",
-    "bb_pct",
-    "zscore_ma_deviation_20",
-    "ind_momentum_rank",
-    "rsi_14",
-    "kdj_j",
-    # 新增 7 个（主力资金/动量衰竭/日内形态/估值/分歧/筹码）
-    "zscore_elg_net_amount_sum_20",
-    "zscore_acceleration",
-    "zscore_opening_strength",
-    "zscore_pe_ttm",
-    "zscore_cons_eps_dispersion",
-    "lg_net_amount_sum_5",
-    "winner_rate",
+    # ── 短期反转/均值回归（4个）──
+    "ret_5",                         # 5日收益，超短期反转
+    "ret_10",                        # 10日收益，短期动量衰竭（主模型无此窗口）
+    "ma_deviation_5",                # 偏离5日均线幅度，短期过热
+    "ma_deviation_10",               # 偏离10日均线幅度，中期过热
+
+    # ── 技术形态/超买超卖（5个）──
+    "kdj_d",                         # KDJ 慢线，超买区域（主模型用 kdj_j 快线）
+    "macd_dif",                      # MACD 快慢线差值（主模型用 macd_hist 柱）
+    "macd_dea",                      # MACD 信号线，与 dif 配合形成完整金叉/死叉判断
+    "bb_pct",                        # 布林带位置（主模型低权重）
+    "upper_shadow",                  # 上影线，日内抛压（主模型低权重）
+
+    # ── 波动与量能异常（4个）──
+    "volatility_10",                 # 10日波动率，补主模型 5/20 日窗口
+    "atr_pct_14",                    # ATR/收盘价，跨股票可比的真实波幅
+    "vol_burst_5",                   # 5日爆量 zscore，超短期资金异动
+    "vol_ratio_5",                   # 5日量比原始值，超短期量能突变
+
+    # ── 资金流向（2个）──
+    "lg_net_amount_sum_20",          # 20日大单累计（主模型用 5日窗口）
+    "zscore_elg_net_amount_sum_20",  # 特大单20日累计（主模型低权重）
+
+    # ── 估值极端（2个）──
+    "zscore_pe_ttm",                 # 行业内 PE 极端值（主模型低权重）
+    "ep_ttm",                        # 盈利收益率=1/PE，价值陷阱反向指标
+
+    # ── 流动性（1个）──
+    "amount_ma5",                    # 5日日均成交额，流动性枯竭预警（主模型用 20日 zscore）
+
+    # ── 行为/结构风险（2个）──
+    "weight_avg_bias",               # 筹码加权均价偏离，套牢盘压力
+    "vol_burst_20",                  # 20日爆量系数（主模型低权重）
 ]
 
 # ── 市场状态相关特征（用于 regime 检测 + 作为分类器输入）─────────────
@@ -254,13 +269,13 @@ def prepare_classifier_features(
 
     result = features_df[available].copy()
 
-    # 缺失值填截面中位数（比填 0 更鲁棒）
+    # 缺失值填截面中位数（比填 0 更鲁棒）；全 NaN 列填 0 并抑制空切片警告
     for col in result.columns:
-        if result[col].isna().any():
-            median_val = result[col].median()
-            if pd.isna(median_val):
-                median_val = 0.0
-            result[col] = result[col].fillna(median_val)
+        valid_vals = result[col].dropna()
+        if len(valid_vals) == 0:
+            result[col] = 0.0
+        elif len(valid_vals) < len(result[col]):
+            result[col] = result[col].fillna(valid_vals.median())
 
     return result
 
