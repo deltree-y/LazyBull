@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @()
+        SelectedSplits = @(9)
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -93,7 +93,7 @@ $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。L
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(100)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(2000)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 
@@ -111,7 +111,7 @@ $adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "42,61,82,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "42,61,82"#,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 1  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数 
 
@@ -204,7 +204,7 @@ $oos_backtest_months     = 0                # 回测时长（月），0 = 自动
 # ── 风险惩罚分类器超参（控制坏票二分类器训练行为）─────────────
 $risk_penalty_clf_max_depth_list = @(3)            # 分类器 max_depth，默认 3
 $risk_penalty_clf_n_estimators_list = @(300)        # 分类器树数量上限，默认 50
-$risk_penalty_clf_learning_rate_list = @(0.2)    # 分类器学习率，默认 0.05
+$risk_penalty_clf_learning_rate_list = @(0.03)    # 分类器学习率，默认 0.05
 $risk_penalty_clf_subsample_list = @(0.8)          # 分类器 subsample，默认 0.8
 $risk_penalty_clf_colsample_bytree_list = @(0.4)   # 分类器 colsample_bytree，默认 0.6
 $risk_penalty_clf_early_stopping_rounds_list = @(30)  # 分类器早停轮数，默认 20
@@ -216,7 +216,7 @@ $risk_penalty_min_total_samples_list = @(15)   # 最少总样本数，低于此�
 # ── 风险惩罚 Lambda 配置（坏票惩罚校准，同时影响训练与 OOS 回测）──
 $risk_penalty_lambda_scale_list = @(1)   # lambda 缩放系数（>0）；默认 1.0，<1 更温和，>1 更严格
 $risk_penalty_lambda_grid_list  = @("1")    # 自定义 lambda 候选（逗号分隔，如 "0.02,0.04,0.06"）；空=使用默认网格
-$risk_penalty_clf_threshold_candidates_list = @("0.4")   # 惩罚 threshold 候选（逗号分隔如"0.3,0.4,0.5"）；空=使用默认[0.5,0.6,0.7]
+$risk_penalty_clf_threshold_candidates_list = @("0.5")   # 惩罚 threshold 候选（逗号分隔如"0.3,0.4,0.5"）；空=使用默认[0.5,0.6,0.7]
 $risk_penalty_clf_auc_threshold_list = @(0.55)        # 样本外 AUC 启用门槛，默认 0.55
 
 

@@ -223,7 +223,7 @@ def test_learn_risk_penalty_config_from_bad_pick_pattern():
                     "trade_date": trade_date,
                     "ts_code": f"{stock_index:06d}.SZ",
                     "pred_feature": risk_signal,
-                    "kdj_d": risk_signal,
+                    "kdj_j": risk_signal,
                     "y_ret_5": -risk_signal,
                 }
             )
@@ -247,7 +247,7 @@ def test_learn_risk_penalty_config_from_bad_pick_pattern():
 
     assert config is not None
     assert config["enabled"] is True
-    assert config["classifier_features"] == ["kdj_d"]
+    assert config["classifier_features"] == ["kdj_j"]
     assert config["calibration_samples"] == 240
     assert config["calibration_auc"] > 0.55
     assert config["selected_topk_median"] > config["baseline_topk_median"]

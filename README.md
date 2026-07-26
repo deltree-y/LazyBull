@@ -28,7 +28,10 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.85.14)
+### 当前版本 (v0.85.20)
+
+**Bad-Pick 分类器特征恢复** (v0.85.20):
+- `BAD_PICK_CLASSIFIER_FEATURES` 恢复为此前 21 因子版本，替换 v0.85.18–v0.85.19 的 20 因子重构版本。
 
 **Bad-Pick AUC 阈值可配置** (v0.85.17):
 - `--risk-penalty-clf-auc-threshold`（walk_forward）和 `$risk_penalty_clf_auc_threshold_list`（batch）可用于调节样本外 AUC 启用门槛，默认 0.55。

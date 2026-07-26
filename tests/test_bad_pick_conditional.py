@@ -351,7 +351,7 @@ class TestBadPickCalibrationProtocol:
                         "trade_date": trade_date,
                         "ts_code": f"{stock_index:06d}.SZ",
                         "main_signal": float(stock_index),
-                        "kdj_d": risk_signal,
+                        "kdj_j": risk_signal,
                         "y_ret_20": -risk_signal,
                     }
                 )

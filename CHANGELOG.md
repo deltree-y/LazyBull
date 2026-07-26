@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.20] - 2026-07-26
+
+### Changed
+
+- **Bad-Pick 分类器特征恢复**：将 `BAD_PICK_CLASSIFIER_FEATURES` 恢复为此前 21 因子版本（波动/量价、成交额/振幅/布林、技术形态、动量/反转、开盘/资金、估值/行为），替换 v0.85.18–v0.85.19 引入的 20 因子重构版本。同步更新测试中 `kdj_d` → `kdj_j`。
+
 ## [0.85.19] - 2026-07-25
 
 ### Changed
