@@ -201,6 +201,165 @@ def build_clean_data(
     logger.info(f"失败: {error_count} 个交易日")
 
 
+def _build_features_parallel(
+    pending_dates,
+    builder,
+    storage,
+    trade_cal,
+    daily_clean,
+    adj_factor,
+    stock_basic,
+    daily_basic_clean,
+    moneyflow_clean,
+    shenwan_industry,
+    apply_industry_neutralization,
+    apply_size_neutralization,
+    fundamental_lookup,
+    margin_lookup,
+    holder_lookup,
+    earnings_lookup,
+    cyq_perf_lookup,
+    fund_portfolio_lookup,
+    express_lookup,
+    north_flow_lookup,
+    lhb_lookup,
+    consensus_lookup,
+    cashflow_lookup,
+    consensus_revision_lookup,
+    n_jobs,
+):
+    """并行构建特征：预构建 FeatureContext 列表后调用 parallel 模块。"""
+    from src.lazybull.features.context import FeatureContext
+    from src.lazybull.features.parallel import build_features_for_day_static
+    from src.lazybull.features.factor_handlers import create_factor_registry
+    from joblib import Parallel, delayed
+
+    # 共享只读缓存（通过 loky copy-on-write 共享，不深拷贝）
+    daily_adj_dict = builder._daily_adj_dict
+    tech_cache_dict = builder._tech_factor_cache_dict
+    market_state_cache = builder._market_state_cache
+    trading_dates_list = builder._trading_dates_cache or []
+    trading_date_index = builder._trading_date_index or {}
+    daily_adj_precomputed = builder._daily_adj_precomputed
+    factor_registry = create_factor_registry()
+
+    # 预构建所有 FeatureContext（在主进程中完成，避免 pickle 复杂对象）
+    ctx_list = []
+    for trade_date in pending_dates:
+        funda_today = fundamental_lookup.get(trade_date) if fundamental_lookup else None
+        margin_today = margin_lookup.get(trade_date) if margin_lookup else None
+        holder_today = holder_lookup.get(trade_date) if holder_lookup else None
+        earnings_today = earnings_lookup.get(trade_date) if earnings_lookup else None
+        cyq_perf_today = cyq_perf_lookup.get(trade_date) if cyq_perf_lookup else None
+        fund_portfolio_today = (
+            fund_portfolio_lookup.get(trade_date) if fund_portfolio_lookup else None
+        )
+        express_today = express_lookup.get(trade_date) if express_lookup else None
+        if north_flow_lookup is not None:
+            north_flow_today = north_flow_lookup.get(trade_date) or {}
+        else:
+            north_flow_today = None
+        if lhb_lookup is not None:
+            lhb_today = lhb_lookup.get(trade_date)
+            if lhb_today is None:
+                lhb_today = pd.DataFrame()
+        else:
+            lhb_today = None
+        if consensus_lookup is not None:
+            consensus_today = consensus_lookup.get(trade_date)
+            if consensus_today is None:
+                consensus_today = pd.DataFrame()
+        else:
+            consensus_today = None
+        if cashflow_lookup is not None:
+            cashflow_today = cashflow_lookup.get(trade_date)
+            if cashflow_today is None:
+                cashflow_today = pd.DataFrame()
+        else:
+            cashflow_today = None
+        if consensus_revision_lookup is not None:
+            consensus_revision_today = consensus_revision_lookup.get(trade_date)
+            if consensus_revision_today is None:
+                consensus_revision_today = pd.DataFrame()
+        else:
+            consensus_revision_today = None
+
+        ctx = FeatureContext(
+            trade_date=trade_date,
+            trade_cal=trade_cal,
+            daily_data=daily_clean,
+            adj_factor=adj_factor,
+            stock_basic=stock_basic,
+            daily_basic_data=daily_basic_clean,
+            moneyflow_data=moneyflow_clean,
+            shenwan_industry=shenwan_industry,
+            apply_industry_neutralization=apply_industry_neutralization,
+            apply_size_neutralization=apply_size_neutralization,
+            fundamental_data=funda_today,
+            margin_data=margin_today,
+            holder_data=holder_today,
+            earnings_data=earnings_today,
+            cyq_perf_data=cyq_perf_today,
+            express_data=express_today,
+            fund_portfolio_data=fund_portfolio_today,
+            north_flow_data=north_flow_today,
+            lhb_data=lhb_today,
+            consensus_data=consensus_today,
+            cashflow_data=cashflow_today,
+            consensus_revision_data=consensus_revision_today,
+            horizons=builder.horizons,
+            horizon=builder.horizon,
+            lookback_windows=builder.lookback_windows,
+            require_label=builder.require_label,
+            label_filter_mode=builder.label_filter_mode,
+            min_list_days=builder.min_list_days,
+            shenwan_level=builder.shenwan_level,
+            verbose=False,
+        )
+        ctx_list.append(ctx)
+
+    total = len(ctx_list)
+    logger.info(f"启动并行特征构建: {total} 天, workers={n_jobs}")
+
+    def _process_one(ctx):
+        try:
+            df = build_features_for_day_static(
+                trade_date=ctx.trade_date,
+                ctx=ctx,
+                daily_adj_dict=daily_adj_dict,
+                tech_factor_cache_dict=tech_cache_dict,
+                market_state_cache=market_state_cache,
+                trading_dates_list=trading_dates_list,
+                trading_date_index=trading_date_index,
+                daily_adj_precomputed=daily_adj_precomputed,
+                factor_registry=factor_registry,
+            )
+            return ctx.trade_date, df, None
+        except Exception as e:
+            return ctx.trade_date, None, str(e)
+
+    results = Parallel(n_jobs=n_jobs, backend="loky", verbose=5)(
+        delayed(_process_one)(ctx) for ctx in ctx_list
+    )
+
+    success = 0
+    errors = 0
+    for trade_date, df, err in results:
+        if err is not None:
+            logger.error(f"  {trade_date} 并行构建失败: {err}")
+            errors += 1
+            continue
+        if df is not None and len(df) > 0:
+            storage.save_cs_train_day(df, trade_date)
+            success += 1
+
+    logger.info("=" * 60)
+    logger.info("features层数据构建完成（并行）")
+    logger.info("=" * 60)
+    logger.info(f"成功: {success} 个交易日")
+    logger.info(f"失败: {errors} 个交易日")
+
+
 def build_features_data(
     storage: Storage,
     loader: DataLoader,
@@ -222,6 +381,8 @@ def build_features_data(
     enable_consensus: bool = False,
     enable_cashflow_quality: bool = False,
     enable_consensus_revision: bool = False,
+    use_parallel: bool = False,
+    parallel_jobs: int = -1,
 ) -> None:
     """构建features层数据
 
@@ -491,55 +652,77 @@ def build_features_data(
     adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
 
     # 优化1/4：循环外一次性预计算 daily_adj（含 pre_close_adj）及日期索引字典
-    # 避免在 2000 次循环内重复执行全量 copy / sort_values / groupby.shift
     builder.precompute_daily_adj(daily_clean, adj_factor)
 
-    # 构建特征
-    success_count = 0
-    skip_count = 0
-    error_count = 0
-
+    # 预筛：收集待处理日期（跳过已存在且schema完整的）
     total_dates = len(trading_dates_str)
+    pending_dates = []
+    skip_count = 0
+    for trade_date in trading_dates_str:
+        if not force and storage.is_feature_exists(trade_date):
+            if _check_features_schema(storage, trade_date):
+                skip_count += 1
+                continue
+            logger.warning(f"  {trade_date} 特征缓存缺少必要列，将重新构建")
+        pending_dates.append(trade_date)
+
+    logger.info(
+        f"共 {total_dates} 个交易日: 跳过 {skip_count} (已存在), "
+        f"待构建 {len(pending_dates)}"
+    )
+
+    if not pending_dates:
+        logger.info("所有日期特征已存在，无需构建")
+        return
+
+    # ── 判断是否使用并行 ──
+    if use_parallel and len(pending_dates) > 4:
+        _build_features_parallel(
+            pending_dates=pending_dates,
+            builder=builder,
+            storage=storage,
+            trade_cal=trade_cal,
+            daily_clean=daily_clean,
+            adj_factor=adj_factor,
+            stock_basic=stock_basic,
+            daily_basic_clean=daily_basic_clean,
+            moneyflow_clean=moneyflow_clean,
+            shenwan_industry=shenwan_industry if apply_industry_neutralization else None,
+            apply_industry_neutralization=apply_industry_neutralization,
+            apply_size_neutralization=apply_size_neutralization,
+            fundamental_lookup=fundamental_lookup,
+            margin_lookup=margin_lookup,
+            holder_lookup=holder_lookup,
+            earnings_lookup=earnings_lookup,
+            cyq_perf_lookup=cyq_perf_lookup,
+            fund_portfolio_lookup=fund_portfolio_lookup,
+            express_lookup=express_lookup,
+            north_flow_lookup=north_flow_lookup,
+            lhb_lookup=lhb_lookup,
+            consensus_lookup=consensus_lookup,
+            cashflow_lookup=cashflow_lookup,
+            consensus_revision_lookup=consensus_revision_lookup,
+            n_jobs=parallel_jobs,
+        )
+        return
+
+    # ── 串行路径（保留作为回退）──
+    success_count = 0
+    error_count = 0
     loop_start_ts = time.time()
 
-    for i, trade_date in enumerate(trading_dates_str, 1):
+    for i, trade_date in enumerate(pending_dates, 1):
         try:
-            # 检查特征是否已存在
-            if not force and storage.is_feature_exists(trade_date):
-                if _check_features_schema(storage, trade_date):
-                    # 预估完成时间
-                    elapsed = time.time() - loop_start_ts
-                    if i > 1 and elapsed > 0:
-                        avg_per_date = elapsed / (i - 1)
-                        remaining = avg_per_date * (total_dates - i + 1)
-                        eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime("%Y-%m-%d %H:%M:%S")
-                    else:
-                        eta_str = "计算中"
-                    logger.info(
-                        f"[{i}/{total_dates}] ({i/total_dates:.1%}) {trade_date} ⏭ 已存在 "
-                        f"| 预计完成: {eta_str}"
-                    )
-                    skip_count += 1
-                    continue
-                logger.warning("  特征缓存缺少必要列，将重新构建")
-            
-            # 获取当日基本面数据
-            funda_today = None
-            if fundamental_lookup is not None:
-                funda_today = fundamental_lookup.get(trade_date)
-
-            # 获取当日另类数据
+            # 获取当日因子数据
+            funda_today = fundamental_lookup.get(trade_date) if fundamental_lookup else None
             margin_today = margin_lookup.get(trade_date) if margin_lookup else None
             holder_today = holder_lookup.get(trade_date) if holder_lookup else None
             earnings_today = earnings_lookup.get(trade_date) if earnings_lookup else None
-            # 获取当日高积分因子数据
             cyq_perf_today = cyq_perf_lookup.get(trade_date) if cyq_perf_lookup else None
             fund_portfolio_today = (
                 fund_portfolio_lookup.get(trade_date) if fund_portfolio_lookup else None
             )
             express_today = express_lookup.get(trade_date) if express_lookup else None
-            # 获取当日 C1/C2/C3 数据
-            # 语义: 启用 (lookup 非 None) 时, 即使当日缺数据也传空容器, 保证特征 schema 一致
             if north_flow_lookup is not None:
                 north_flow_today = north_flow_lookup.get(trade_date) or {}
             else:
@@ -601,25 +784,24 @@ def build_features_data(
             if len(features_df) > 0:
                 storage.save_cs_train_day(features_df, trade_date)
                 success_count += 1
-                # 每日一行精简输出：进度 + 结果摘要
                 elapsed = time.time() - loop_start_ts
                 if i > 1 and elapsed > 0:
                     avg_per_date = elapsed / i
-                    remaining = avg_per_date * (total_dates - i)
+                    remaining = avg_per_date * (len(pending_dates) - i)
                     eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime("%Y-%m-%d %H:%M:%S")
                 else:
                     eta_str = "计算中"
                 _summary = getattr(builder, '_last_summary', f'{trade_date} ✓ {len(features_df)}样本')
                 logger.info(
-                    f"[{i}/{total_dates}] ({i/total_dates:.1%}) {_summary} "
+                    f"[{i}/{len(pending_dates)}] ({i/len(pending_dates):.1%}) {_summary} "
                     f"| 预计完成: {eta_str}"
                 )
             else:
-                logger.warning(f"  没有有效样本，跳过保存")
+                logger.warning(f"  {trade_date} 没有有效样本，跳过保存")
                 skip_count += 1
                 
         except Exception as e:
-            logger.error(f"  构建失败: {str(e)}")
+            logger.error(f"  {trade_date} 构建失败: {str(e)}")
             error_count += 1
             continue
     
@@ -628,7 +810,7 @@ def build_features_data(
     logger.info("=" * 60)
     logger.info(f"成功: {success_count} 个交易日")
     logger.info(f"跳过: {skip_count} 个交易日（已存在或无效样本）")
-    logger.info(f"失败: {error_count} 个交易日")
+    logger.info(f"失败: {error_count} 个交易日（共处理 {len(pending_dates)} 天）")
 
 
 def main():
@@ -660,6 +842,17 @@ def main():
         "--force",
         action="store_true",
         help="强制重新构建，即使文件已存在"
+    )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="启用多进程并行构建（默认串行），利用所有CPU核心加速"
+    )
+    parser.add_argument(
+        "--parallel-jobs",
+        type=int,
+        default=-1,
+        help="并行 worker 数（默认 -1=全部核心）"
     )
     parser.add_argument(
         "--enable-industry-neutralization",
@@ -838,6 +1031,8 @@ def main():
                 enable_consensus=args.enable_consensus_features,
                 enable_cashflow_quality=args.enable_cashflow_quality_features,
                 enable_consensus_revision=args.enable_consensus_revision_features,
+                use_parallel=args.parallel,
+                parallel_jobs=args.parallel_jobs,
             )
         
         logger.info("=" * 60)
