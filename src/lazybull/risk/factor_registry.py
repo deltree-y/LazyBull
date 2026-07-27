@@ -61,23 +61,25 @@ def _ensure_all_modules_imported():
     """确保所有因子模块已被导入（触发注册）。
 
     首次调用 compute_all_risk_factors() 时自动执行。
-    每个模块只需导入一次。
+    使用包相对导入，兼容 `src.lazybull` 与 `lazybull` 两种导入路径。
     """
+    import importlib
+
     modules_to_import = [
-        ("downside_factors", "src.lazybull.risk.downside_factors"),
-        ("volatility_factors", "src.lazybull.risk.volatility_factors"),
-        ("liquidity_factors", "src.lazybull.risk.liquidity_factors"),
-        ("announcement_factors", "src.lazybull.risk.announcement_factors"),
+        "downside_factors",
+        "volatility_factors",
+        "liquidity_factors",
+        "announcement_factors",
     ]
 
-    for mod_key, mod_path in modules_to_import:
-        if mod_key not in _IMPORTED_MODULES:
+    for mod_name in modules_to_import:
+        if mod_name not in _IMPORTED_MODULES:
             try:
-                __import__(mod_path, fromlist=["*"])
-                _IMPORTED_MODULES[mod_key] = True
-                logger.debug(f"已加载风控因子模块: {mod_path}")
+                importlib.import_module(f".{mod_name}", package=__package__)
+                _IMPORTED_MODULES[mod_name] = True
+                logger.debug(f"已加载风控因子模块: {__package__}.{mod_name}")
             except ImportError as e:
-                logger.warning(f"无法加载风控因子模块 {mod_path}: {e}")
+                logger.warning(f"无法加载风控因子模块 {mod_name}: {e}")
 
 
 def _prefilter_daily_adj(

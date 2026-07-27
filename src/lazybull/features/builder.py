@@ -290,6 +290,11 @@ class FeatureBuilder:
             features, current_data, daily_adj, ctx.trade_date, trading_dates, current_idx
         )
 
+        # 9.5 风控因子（独立模块，逻辑在 src/lazybull/risk/ 中维护）
+        features = self._add_risk_factors(
+            features, daily_adj, ctx.trade_date, trading_dates
+        )
+
         # 10. 合并特征和标签
         result = features.merge(labels, on=["trade_date", "ts_code"], how="inner")
 
@@ -527,6 +532,56 @@ class FeatureBuilder:
                 daily_adj, td, trading_dates
             ),
         )
+
+    # ── 风控因子 ──────────────────────────────────────────────
+
+    def _add_risk_factors(
+        self,
+        features: pd.DataFrame,
+        daily_adj: pd.DataFrame,
+        trade_date: str,
+        trading_dates: List[str],
+    ) -> pd.DataFrame:
+        """计算风控模型专属因子（下行风险/波动结构/流动性/公告类）。
+
+        所有因子计算逻辑在 src/lazybull/risk/ 独立模块中维护，
+        此处仅做窗口切片与结果合并，保持编排器轻量。
+        """
+        try:
+            from ..risk.factor_registry import compute_all_risk_factors
+        except ImportError:
+            logger.debug("风控因子模块不可用，跳过")
+            return features
+
+        # 切片到最长风控窗口（252 交易日 + 余量），避免全量历史参与逐日计算
+        sliced = self._slice_by_trading_days(
+            daily_adj, trading_dates, trade_date, warmup_days=260
+        )
+        if sliced is None or len(sliced) == 0:
+            return features
+
+        # 风控因子需要日收益列 ret_1（从后复权价格衍生）
+        if "ret_1" not in sliced.columns and "pre_close_adj" in sliced.columns:
+            sliced = sliced.copy()
+            sliced["ret_1"] = sliced["close_adj"] / sliced["pre_close_adj"] - 1
+
+        risk_cols = compute_all_risk_factors(
+            df=features,
+            daily_adj=sliced,
+            market_state=None,
+            trade_date=trade_date,
+        )
+        if risk_cols:
+            new_df = pd.DataFrame(
+                {
+                    name: (s.values if isinstance(s, pd.Series) else s)
+                    for name, s in risk_cols.items()
+                },
+                index=features.index,
+            )
+            features = pd.concat([features, new_df], axis=1)
+            logger.debug(f"已添加 {len(risk_cols)} 个风控因子")
+        return features
 
     # ── 窗口特征 ──────────────────────────────────────────────
 
