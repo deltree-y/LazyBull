@@ -26,7 +26,6 @@ class EnsembleSignal(Signal):
         self._top_n = signal_a.top_n
         self.model_version = signal_a.model_version
         self.model_version_b = signal_b.model_version
-        self._persisted_quality_state: Optional[dict] = None
 
     @property
     def top_n(self) -> int:
@@ -76,26 +75,6 @@ class EnsembleSignal(Signal):
             ts_code: positive_scores[ts_code] / total_score
             for ts_code in positive_scores
         }
-
-    def evaluate_confidence_gate(self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None):
-        return self.signal_a.evaluate_confidence_gate(ranked_candidates, date=date)
-
-    def apply_confidence_gate_to_weights(
-        self,
-        signals: Dict[str, float],
-        confidence_state=None,
-        date: Optional[pd.Timestamp] = None,
-        emit_log: bool = True,
-    ) -> Dict[str, float]:
-        return self.signal_a.apply_confidence_gate_to_weights(
-            signals,
-            confidence_state=confidence_state,
-            date=date,
-            emit_log=emit_log,
-        )
-
-    def get_last_confidence_gate_state(self):
-        return self.signal_a.get_last_confidence_gate_state()
 
     def update_versions(self, model_version_a: int, model_version_b: int) -> None:
         self.signal_a.update_model_version(model_version_a)

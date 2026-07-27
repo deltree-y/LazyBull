@@ -108,15 +108,6 @@ class PaperTradingRunner:
     ) -> dict:
         """初始化并返回策略运行状态。"""
         state = self._strategy_state or {}
-        state.setdefault("prediction_quality_history", [])
-        state.setdefault("signal_tracking", {})
-        state.setdefault("rolling_quality_score", 1.0)
-        warmup_default = (
-            trading_config.signal_gate_quality_window
-            if trading_config is not None
-            else 0
-        )
-        state.setdefault("quality_warmup_remaining", warmup_default)
         state.setdefault("last_rebalance_nav", None)
         state.setdefault("last_take_profit_date", None)
         self._strategy_state = state
@@ -293,140 +284,6 @@ class PaperTradingRunner:
 
         return result
 
-    def _record_signal_for_quality_tracking(
-        self,
-        trade_date: str,
-        selected_stocks: List[str],
-        predicted_mean: float,
-    ) -> None:
-        """记录当前调仓选股，供后续滚动质量评估。"""
-        state = self._ensure_strategy_state()
-        state["signal_tracking"][trade_date] = {
-            "stocks": list(selected_stocks),
-            "predicted_mean": float(predicted_mean),
-            "date": trade_date,
-        }
-
-    def _update_prediction_quality(
-        self,
-        signal_date: str,
-        selected_stocks: List[str],
-        sell_date: str,
-        trading_config: TradingConfig,
-    ) -> None:
-        """评估一轮信号的实际表现并更新滚动质量分数。"""
-        state = self._ensure_strategy_state(trading_config)
-        start_date = signal_date
-        price_data = self.loader.load_clean_daily(start_date=start_date, end_date=sell_date)
-        if price_data is None or price_data.empty or "trade_date" not in price_data.columns:
-            return
-
-        trade_dates = sorted(price_data["trade_date"].astype(str).unique())
-        if signal_date not in trade_dates:
-            return
-        signal_pos = trade_dates.index(signal_date)
-        buy_pos = signal_pos + 1
-        if buy_pos >= len(trade_dates):
-            return
-        buy_date = trade_dates[buy_pos]
-
-        price_col = "close_adj" if "close_adj" in price_data.columns else "close"
-        buy_prices = price_data.loc[
-            price_data["trade_date"].astype(str) == buy_date, ["ts_code", price_col]
-        ].set_index("ts_code")[price_col]
-        sell_prices = price_data.loc[
-            price_data["trade_date"].astype(str) == sell_date, ["ts_code", price_col]
-        ].set_index("ts_code")[price_col]
-        if buy_prices.empty or sell_prices.empty:
-            return
-
-        selected_returns = []
-        for stock in selected_stocks:
-            if stock in buy_prices.index and stock in sell_prices.index:
-                buy_price = float(buy_prices[stock])
-                sell_price = float(sell_prices[stock])
-                if buy_price > 0:
-                    selected_returns.append(sell_price / buy_price - 1.0)
-
-        common_stocks = buy_prices.index.intersection(sell_prices.index)
-        all_returns = (
-            sell_prices[common_stocks] / buy_prices[common_stocks] - 1.0
-        ).dropna()
-        if not selected_returns or all_returns.empty:
-            return
-
-        universe_median = float(all_returns.median())
-        beat_count = sum(1 for ret in selected_returns if ret > universe_median)
-        hit_rate = beat_count / len(selected_returns)
-        history = state["prediction_quality_history"]
-        history.append(
-            {
-                "signal_date": signal_date,
-                "sell_date": sell_date,
-                "hit_rate": hit_rate,
-                "selected_count": len(selected_returns),
-                "selected_mean_return": float(np.mean(selected_returns)),
-                "universe_median_return": universe_median,
-                "beat_count": beat_count,
-            }
-        )
-
-        if state["quality_warmup_remaining"] > 0:
-            state["quality_warmup_remaining"] -= 1
-
-        recent = history[-trading_config.signal_gate_quality_window :]
-        if recent:
-            hit_series = pd.Series([entry["hit_rate"] for entry in recent])
-            state["rolling_quality_score"] = float(
-                hit_series.ewm(
-                    halflife=trading_config.signal_gate_quality_halflife,
-                    min_periods=1,
-                ).mean().iloc[-1]
-            )
-
-    def _evaluate_expired_signal_quality(
-        self,
-        current_date: str,
-        trading_config: TradingConfig,
-    ) -> None:
-        """在新一轮调仓前，评估已到期信号的实际表现。"""
-        state = self._ensure_strategy_state(trading_config)
-        signal_tracking = state.get("signal_tracking", {})
-        if not signal_tracking:
-            return
-
-        trade_dates = self._get_open_trade_dates()
-        expired_dates = []
-        for signal_date, tracking_info in list(signal_tracking.items()):
-            holding_days = self._calc_holding_days(signal_date, current_date, trade_dates)
-            if holding_days < trading_config.rebalance_freq:
-                continue
-            self._update_prediction_quality(
-                signal_date=signal_date,
-                selected_stocks=list(tracking_info.get("stocks", [])),
-                sell_date=current_date,
-                trading_config=trading_config,
-            )
-            expired_dates.append(signal_date)
-
-        for signal_date in expired_dates:
-            signal_tracking.pop(signal_date, None)
-
-    def _get_rolling_quality_exposure(self, trading_config: TradingConfig) -> float:
-        """根据滚动质量分数返回当前仓位系数。"""
-        if not trading_config.signal_gate_quality_enabled:
-            return 1.0
-
-        state = self._ensure_strategy_state(trading_config)
-        if state["quality_warmup_remaining"] > 0:
-            return 1.0
-
-        rolling_score = float(state.get("rolling_quality_score", 1.0))
-        if rolling_score >= trading_config.signal_gate_quality_threshold:
-            return 1.0
-
-        return max(0.2, rolling_score / trading_config.signal_gate_quality_threshold)
-    
     def _correct_trade_date(self, input_date: str) -> str:
         """校正交易日期：非交易日自动滚动到下一交易日
         
@@ -756,8 +613,6 @@ class PaperTradingRunner:
         min_list_days: int = 365,
         industry_momentum_filter: bool = False,
         industry_momentum_bottom_pct: float = 0.5,
-        holding_bonus_enabled: bool = False,
-        holding_bonus_sigma: float = 0.5,
         trading_config: Optional[TradingConfig] = None,
         force_rebalance: bool = False,
         protected_stocks: Optional[set] = None,
@@ -791,8 +646,7 @@ class PaperTradingRunner:
             min_list_days=min_list_days,
             industry_momentum_filter=industry_momentum_filter,
             industry_momentum_bottom_pct=industry_momentum_bottom_pct,
-            holding_bonus_enabled=holding_bonus_enabled,
-            holding_bonus_sigma=holding_bonus_sigma,
+
         )
         self.position_sizing = effective_config.position_sizing
         self.kelly_vol_window = effective_config.kelly_vol_window
@@ -847,8 +701,6 @@ class PaperTradingRunner:
             min_list_days=effective_config.min_list_days,
             industry_momentum_filter=effective_config.industry_momentum_filter,
             industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
-            holding_bonus_enabled=effective_config.holding_bonus_enabled,
-            holding_bonus_sigma=effective_config.holding_bonus_sigma,
             protected_stocks=protected_stocks,
             trading_config=effective_config,
         )
@@ -1535,8 +1387,6 @@ class PaperTradingRunner:
         min_list_days: int = 365,
         industry_momentum_filter: bool = False,
         industry_momentum_bottom_pct: float = 0.5,
-        holding_bonus_enabled: bool = False,
-        holding_bonus_sigma: float = 0.5,
         protected_stocks: Optional[set] = None,
         trading_config: Optional[TradingConfig] = None,
     ) -> List[TargetWeight]:
@@ -1568,8 +1418,7 @@ class PaperTradingRunner:
             min_list_days=min_list_days,
             industry_momentum_filter=industry_momentum_filter,
             industry_momentum_bottom_pct=industry_momentum_bottom_pct,
-            holding_bonus_enabled=holding_bonus_enabled,
-            holding_bonus_sigma=holding_bonus_sigma,
+
             position_sizing=self.position_sizing,
         )
 
@@ -1659,9 +1508,6 @@ class PaperTradingRunner:
         # 回收内存后再进入模型加载/预测（对内存受限设备如树莓派尤为重要）
         gc.collect()
 
-        if effective_config.signal_gate_quality_enabled:
-            self._evaluate_expired_signal_quality(trade_date, effective_config)
-
         # 生成信号（原始分数字典，权重归一化由 _normalize_signals 统一处理）
         try:
             if hasattr(self.signal, "generate_ranked"):
@@ -1677,8 +1523,6 @@ class PaperTradingRunner:
                     industry_mapping=industry_mapping,
                     industry_momentum_filter=effective_config.industry_momentum_filter,
                     industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
-                    holding_bonus_enabled=effective_config.holding_bonus_enabled,
-                    holding_bonus_sigma=effective_config.holding_bonus_sigma,
                     industry_rotation_enhanced=effective_config.industry_rotation_enhanced,
                     industry_rotation_alpha=effective_config.industry_rotation_alpha,
                     trading_config=effective_config,
@@ -1705,16 +1549,6 @@ class PaperTradingRunner:
                     verbose=True,
                 )
 
-            confidence_state = signal_meta.get('confidence_gate_state')
-            if hasattr(self.signal, "apply_confidence_gate_to_weights") and confidence_state is not None:
-                signal_dict = self.signal.apply_confidence_gate_to_weights(
-                    signal_dict,
-                    confidence_state=confidence_state,
-                    date=date_ts,
-                    emit_log=True,
-                )
-
-            if effective_config.signal_gate_quality_enabled and signal_dict:
                 predicted_mean = (
                     confidence_state.top_mean
                     if confidence_state is not None
@@ -1722,21 +1556,6 @@ class PaperTradingRunner:
                     and np.isfinite(confidence_state.top_mean)
                     else float(np.mean(list(raw_scores.values())))
                 )
-                self._record_signal_for_quality_tracking(
-                    trade_date,
-                    list(raw_scores.keys()),
-                    predicted_mean,
-                )
-                quality_exposure = self._get_rolling_quality_exposure(effective_config)
-                if quality_exposure < 1.0:
-                    signal_dict = {
-                        stock: weight * quality_exposure
-                        for stock, weight in signal_dict.items()
-                    }
-                    logger.warning(
-                        f"滚动质量监控降仓: score={self._strategy_state.get('rolling_quality_score', 1.0):.3f}, "
-                        f"quality_exposure={quality_exposure:.2f}"
-                    )
         except Exception as e:
             logger.error(f"信号生成失败: {e}")
             return []
@@ -1747,7 +1566,6 @@ class PaperTradingRunner:
             return []
 
         # 与回测对齐：持仓保留奖励命中的留仓，在 T0 将持有期锚点重置到 T+1
-        if effective_config.holding_bonus_enabled:
             kept_stocks = set(self.account.get_positions().keys()) & set(signal_dict.keys())
             if kept_stocks:
                 self._reset_holding_anchor_for_kept_positions(
@@ -1789,8 +1607,6 @@ class PaperTradingRunner:
         industry_mapping: Optional[Dict[str, str]] = None,
         industry_momentum_filter: bool = False,
         industry_momentum_bottom_pct: float = 0.5,
-        holding_bonus_enabled: bool = False,
-        holding_bonus_sigma: float = 0.5,
         industry_rotation_enhanced: bool = False,
         industry_rotation_alpha: float = 0.3,
         trading_config: Optional[TradingConfig] = None,
@@ -1875,12 +1691,10 @@ class PaperTradingRunner:
                 )
 
         # 持仓保留奖励（降低换手率）
-        if holding_bonus_enabled and ranked_candidates:
             if existing_positions:
                 scores = [s for _, s in ranked_candidates]
                 score_std = float(np.std(scores)) if len(scores) > 1 else 0.0
                 if score_std > 0:
-                    bonus = holding_bonus_sigma * score_std
                     adjusted = []
                     bonus_count = 0
                     for stock, score in ranked_candidates:
@@ -1896,12 +1710,10 @@ class PaperTradingRunner:
                     if bonus_count > 0:
                         logger.info(
                             f"持仓保留奖励: 为 {bonus_count} 只已持仓股票"
-                            f" 加分 {bonus:.4f} (sigma={holding_bonus_sigma})"
                         )
 
-        # 对齐目标行为：holding_bonus=false 时，T0 选股应完全排除已持仓，
+        # T0 选股应完全排除已持仓，
         # 避免为已持仓股票生成“补差买单”。
-        if (not holding_bonus_enabled) and existing_positions and ranked_candidates:
             before = len(ranked_candidates)
             ranked_candidates = [
                 (ts_code, score)
@@ -1911,42 +1723,14 @@ class PaperTradingRunner:
             excluded = before - len(ranked_candidates)
             if excluded > 0:
                 logger.info(
-                    f"holding_bonus关闭：排除已持仓候选 {excluded} 只，"
+                    f"排除已持仓候选 {excluded} 只，"
                     f"候选数 {before} -> {len(ranked_candidates)}"
                 )
 
         logger.info(f"等权+一手约束: 排序候选数 {len(ranked_candidates)}")
 
-        confidence_gate_state = None
         target_n = top_n
-        if hasattr(self.signal, 'evaluate_confidence_gate'):
-            confidence_gate_state = self.signal.evaluate_confidence_gate(
-                ranked_candidates,
-                date=date,
-            )
-            if (
-                trading_config is not None
-                and trading_config.signal_gate_dynamic_topn
-                and getattr(confidence_gate_state, 'enabled', False)
-            ):
-                gate_exposure = getattr(confidence_gate_state, 'exposure', 1.0)
-                if gate_exposure >= 1.0:
-                    target_n = max(
-                        3,
-                        int(round(top_n * trading_config.signal_gate_topn_high_multiplier)),
-                    )
-                elif gate_exposure > 0:
-                    multiplier = 1.0 + (1.0 - gate_exposure) * (
-                        trading_config.signal_gate_topn_low_multiplier - 1.0
-                    )
-                    target_n = min(
-                        len(ranked_candidates),
-                        max(top_n, int(round(top_n * multiplier))),
-                    )
-                logger.info(
-                    f"动态Top-N: base={top_n}, effective={target_n}, exposure={gate_exposure:.2f}"
-                )
-        
+
         # 构建价格映射（使用 buy_price_type 指定的价格列）
         price_col = buy_price_type  # 'open' 或 'close'
         if price_col not in daily_data.columns:
@@ -1974,7 +1758,6 @@ class PaperTradingRunner:
             if len(selected) >= target_n:
                 break
 
-            if holding_bonus_enabled and ts_code in existing_positions:
                 selected.append((ts_code, score))
                 continue
 
@@ -2013,7 +1796,6 @@ class PaperTradingRunner:
         if final_count == 0:
             result = {}
             meta = {
-                'confidence_gate_state': confidence_gate_state,
                 'target_n': target_n,
                 'ranked_candidates': ranked_candidates,
             }
@@ -2021,7 +1803,6 @@ class PaperTradingRunner:
 
         result = {ts_code: score for ts_code, score in selected}
         meta = {
-            'confidence_gate_state': confidence_gate_state,
             'target_n': target_n,
             'ranked_candidates': ranked_candidates,
         }
@@ -3704,8 +3485,6 @@ class PaperTradingRunner:
                     industry_mapping=industry_mapping,
                     industry_momentum_filter=effective_config.industry_momentum_filter,
                     industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
-                    holding_bonus_enabled=False,
-                    holding_bonus_sigma=effective_config.holding_bonus_sigma,
                     industry_rotation_enhanced=effective_config.industry_rotation_enhanced,
                     industry_rotation_alpha=effective_config.industry_rotation_alpha,
                     trading_config=effective_config,
@@ -3721,14 +3500,6 @@ class PaperTradingRunner:
                 signal_meta = {}
 
             signal_dict = self._normalize_signals(raw_scores, trade_date)
-            confidence_state = signal_meta.get('confidence_gate_state')
-            if hasattr(self.signal, "apply_confidence_gate_to_weights") and confidence_state is not None:
-                signal_dict = self.signal.apply_confidence_gate_to_weights(
-                    signal_dict,
-                    confidence_state=confidence_state,
-                    date=date_ts,
-                    emit_log=True,
-                )
         except Exception as e:
             logger.error(f"补位信号生成失败: {e}")
             return []

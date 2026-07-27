@@ -51,8 +51,6 @@ from src.lazybull.common.backtest_runtime import (
     create_backtest_engine_from_config,
     create_or_reuse_signal,
     infer_rebalance_freq_from_label,
-    persist_signal_quality_state,
-    restore_signal_quality_state,
 )
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.common.trading_config import TradingConfig
@@ -394,27 +392,6 @@ def run_oos_backtest(
     effective_config = TradingConfig(
         model_version=model_version,
         top_n=bt_top_n,
-        signal_confidence_gate_enabled=signal_confidence_gate_enabled,
-        signal_confidence_gate_top_k=signal_confidence_gate_top_k,
-        signal_confidence_gate_thresholds=(
-            signal_confidence_gate_thresholds or [0.8, 1.2, 1.6]
-        ),
-        signal_confidence_gate_exposure_levels=(
-            signal_confidence_gate_exposure_levels or [0.3, 0.6, 1.0]
-        ),
-        signal_gate_mode=signal_gate_mode,
-        signal_gate_cost_multiplier=signal_gate_cost_multiplier,
-        signal_gate_round_trip_cost=signal_gate_round_trip_cost,
-        signal_gate_quality_enabled=signal_gate_quality_enabled,
-        signal_gate_quality_window=signal_gate_quality_window,
-        signal_gate_quality_threshold=signal_gate_quality_threshold,
-        signal_gate_quality_halflife=signal_gate_quality_halflife,
-        signal_gate_percentile_warmup=signal_gate_percentile_warmup,
-        signal_gate_dynamic_topn=signal_gate_dynamic_topn,
-        signal_gate_topn_high_multiplier=signal_gate_topn_high_multiplier,
-        signal_gate_topn_low_multiplier=signal_gate_topn_low_multiplier,
-        holding_bonus_enabled=holding_bonus_enabled,
-        holding_bonus_sigma=holding_bonus_sigma,
         rebalance_freq=(
             bt_rebalance_freq
             if bt_rebalance_freq is not None
@@ -560,10 +537,6 @@ def run_oos_backtest(
         enable_pending_order=True,
     )
 
-    # 从持久化 signal 恢复质量监控状态（跨 split 积累，避免每次重置预热期）
-    if persistent_signal is not None:
-        restore_signal_quality_state(engine, persistent_signal)
-
     trading_dates_ts = [pd.Timestamp(d) for d in trade_dates]
 
     nav_curve = engine.run(
@@ -572,12 +545,6 @@ def run_oos_backtest(
         trading_dates=trading_dates_ts,
         price_data=price_data
     )
-
-    # 回测结束后将质量监控状态保存到持久化 signal，供下一个 split 继续
-    if persistent_signal is not None:
-        persist_signal_quality_state(engine, persistent_signal)
-
-    confidence_gate_stats = engine.get_confidence_gate_stats()
 
     # 6. 提取绩效指标
     if nav_curve is None or nav_curve.empty or 'nav' not in nav_curve.columns:
@@ -614,13 +581,6 @@ def run_oos_backtest(
         "bt_start": bt_start,
         "bt_end": bt_end,
         "bt_top_n": bt_top_n,
-        "bt_signal_confidence_signal_days": confidence_gate_stats["signal_days"],
-        "bt_signal_confidence_blocked_days": confidence_gate_stats["blocked_days"],
-        "bt_signal_confidence_block_rate": round(confidence_gate_stats["block_rate"], 6),
-        "bt_signal_confidence_avg_exposure": round(
-            confidence_gate_stats["avg_exposure"], 6
-        ),
-        "bt_signal_confidence_avg_score": round(confidence_gate_stats["avg_score"], 6),
     }
 
     if market_regime_enabled:
@@ -4371,25 +4331,6 @@ def main():
         logger.info(f"  持仓 Top N: {args.bt_top_n}")
         logger.info(f"  卖出时机: {args.bt_sell_timing}")
         logger.info(f"  调仓频率: {args.bt_rebalance_freq or '自动推断'}")
-        logger.info(f"  信号入口门控: mode={args.signal_gate_mode}")
-        if args.signal_gate_mode == "composite":
-            logger.info(
-                f"    cost_multiplier={args.signal_gate_cost_multiplier}, "
-                f"cost={args.signal_gate_round_trip_cost}, "
-                f"warmup={args.signal_gate_percentile_warmup}"
-            )
-        elif args.signal_gate_mode == "legacy" and args.signal_confidence_gate_enabled:
-            logger.info(
-                f"    legacy门控: top_k={args.signal_confidence_gate_top_k}, "
-                f"thresholds={args.signal_confidence_gate_thresholds}, "
-                f"exposures={args.signal_confidence_gate_exposure_levels}"
-            )
-        if args.signal_gate_quality_enabled:
-            logger.info(
-                f"  滚动质量监控: window={args.signal_gate_quality_window}, "
-                f"threshold={args.signal_gate_quality_threshold}, "
-                f"halflife={args.signal_gate_quality_halflife}"
-            )
         logger.info(f"  排除 ST: {'是' if args.bt_exclude_st else '否'}")
         logger.info(f"  最少上市天数: {args.bt_min_list_days}")
         if args.bt_max_weight_per_stock is not None:
@@ -4575,19 +4516,10 @@ def main():
                 models_dir=get_models_root(
                     str(Path(args.data_root) / "models") if args.data_root else None
                 ),
-                signal_confidence_gate_enabled=args.signal_confidence_gate_enabled,
-                signal_confidence_gate_top_k=args.signal_confidence_gate_top_k,
-                signal_confidence_gate_thresholds=args.signal_confidence_gate_thresholds,
-                signal_confidence_gate_exposure_levels=args.signal_confidence_gate_exposure_levels,
-                signal_gate_mode=args.signal_gate_mode,
-                signal_gate_cost_multiplier=args.signal_gate_cost_multiplier,
-                signal_gate_round_trip_cost=args.signal_gate_round_trip_cost,
-                signal_gate_percentile_warmup=args.signal_gate_percentile_warmup,
                 verbose=False,
             )
             logger.info(
-                f"持久化 MLSignal 已创建: mode={args.signal_gate_mode}, "
-                f"将跨 {len(splits)} 个 split 积累门控历史"
+                f"持久化 MLSignal 已创建，将跨 {len(splits)} 个 split 复用"
             )
 
         for split in splits:

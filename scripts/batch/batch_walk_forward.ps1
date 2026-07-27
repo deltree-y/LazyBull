@@ -213,38 +213,6 @@ $position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly')
 $kelly_vol_window_list           = @(60)      # Kelly 波动率窗口（交易日，可多值如 @(40, 60, 120)）
 $kelly_max_leverage_list          = @(0.2)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
-# ── OOS 信号入口门控 v2（替代旧置信度门控，0406引入）────────────
-# 0426这里应为composite
-$signal_gate_mode_list = @("disabled")         # "legacy" 旧公式 | "composite" 新公式(成本+百分位) | "disabled" 关闭（可多值扫描）
-# 以下 3 个参数仅在 $signal_gate_mode = "composite" 时生效
-# 0601 回撤降低4%, 收益降低4%
-$signal_gate_cost_multiplier_list = @(0.8)      #0.3 composite: 门控严格度扫描
-$signal_gate_round_trip_cost = 0.003            # composite: 往返交易成本估算（佣金+印花税+滑点，仅原始收益模式使用）
-$signal_gate_percentile_warmup = 3              # composite: 百分位归一化预热期（调仓次数）
-
-# 滚动模型质量监控子开关：仅在开启时才使用以下质量参数
-# 0601:没用
-$signal_gate_quality_enabled = $false            # $true 启用 | $false 禁用
-$signal_gate_quality_window_list = @(2)         #2 滚动质量回看调仓周期数
-$signal_gate_quality_threshold_list = @(0.2)    #0.5 滚动质量最低 hit rate
-$signal_gate_quality_halflife = 3               #4 滚动质量 EWM 半衰期
-
-# 动态 Top-N 子开关：仅在开启时按置信度缩放持仓数量
-# 0601: 降低回撤2%, 降低收益3%
-$signal_gate_dynamic_topn = $false              # $true 启用 | $false 禁用
-$signal_gate_topn_high_multiplier = 0.8         # 高置信度缩减系数（<1，集中持股，如 top_n=17 → 10只）
-$signal_gate_topn_low_multiplier  = 1.2         # 中低置信度扩大系数（>1，分散持股，如 top_n=17 → 25只）
-
-# 持仓保留奖励子开关：仅在开启时对已持仓股票给予分数加成，降低换手
-$holding_bonus_enabled = $false                 # $true 启用 | $false 禁用
-$holding_bonus_sigma   = 0.25                    # 奖励幅度（截面分数标准差的倍数，0.3~1.0）
-
-# 旧版置信度门控子开关：仅在 $signal_gate_mode = "legacy" 且开关为 $true 时生效
-$signal_confidence_gate_enabled = $false
-$signal_confidence_gate_top_k_list = @(20)
-$signal_confidence_gate_threshold_sets = @( "0.01 0.02 0.10" )
-$signal_confidence_gate_exposure_sets =  @( "0.10 0.99 1.00" )
-
 # ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
 # 0601这里应为true
 $enable_profit_based_holding_list = @($false)    # $true 启用 | $false 禁用（可多值扫描，如 @($false, $true)）
@@ -402,20 +370,6 @@ $signal_confidence_gate_scan_configs = @(
         Exposures = $null
     }
 )
-if ($signal_confidence_gate_enabled) {
-    $signal_confidence_gate_scan_configs = @()
-    foreach ($gateTopK in $signal_confidence_gate_top_k_list) {
-        foreach ($gateThresholds in $signal_confidence_gate_threshold_sets) {
-            foreach ($gateExposures in $signal_confidence_gate_exposure_sets) {
-                $signal_confidence_gate_scan_configs += [PSCustomObject]@{
-                    TopK = $gateTopK
-                    Thresholds = $gateThresholds
-                    Exposures = $gateExposures
-                }
-            }
-        }
-    }
-}
 
 function Get-NextOrSameTradeDate {
     param(
@@ -618,11 +572,6 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $market_regime_ma250_exposure_list.Length *
               $bt_top_n_list.Length *
               $bt_rebalance_freq_list.Length *
-              $signal_gate_mode_list.Length *
-              $signal_gate_cost_multiplier_list.Length *
-              $signal_gate_quality_window_list.Length *
-              $signal_gate_quality_threshold_list.Length *
-              $signal_confidence_gate_scan_configs.Length *
               $bt_sell_timing_list.Length *
               $bt_min_list_days_list.Length *
               $bt_max_weight_per_stock_list.Length *
@@ -703,11 +652,6 @@ foreach ($market_regime_ma250_threshold in $market_regime_ma250_threshold_list) 
 foreach ($market_regime_ma250_exposure in $market_regime_ma250_exposure_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
 foreach ($bt_rebalance_freq in $bt_rebalance_freq_list) {
-foreach ($signal_gate_mode in $signal_gate_mode_list) {
-foreach ($signal_gate_cost_multiplier in $signal_gate_cost_multiplier_list) {
-foreach ($signal_gate_quality_window in $signal_gate_quality_window_list) {
-foreach ($signal_gate_quality_threshold in $signal_gate_quality_threshold_list) {
-foreach ($signal_confidence_gate_config in $signal_confidence_gate_scan_configs) {
 foreach ($bt_sell_timing in $bt_sell_timing_list) {
 foreach ($bt_min_list_days in $bt_min_list_days_list) {
 foreach ($bt_max_weight_per_stock in $bt_max_weight_per_stock_list) {
@@ -946,34 +890,6 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($oos_backtest) {
         $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-initial-capital $bt_initial_capital --bt-sell-timing $bt_sell_timing --bt-min-list-days $bt_min_list_days"
-        # 信号入口门控 v2
-        $pythonCmd += " --signal-gate-mode $signal_gate_mode"
-        if ($signal_gate_mode -eq "composite") {
-            $pythonCmd += " --signal-gate-cost-multiplier $signal_gate_cost_multiplier" +
-                          " --signal-gate-round-trip-cost $signal_gate_round_trip_cost" +
-                          " --signal-gate-percentile-warmup $signal_gate_percentile_warmup"
-        }
-        if ($signal_gate_mode -eq "legacy" -and $signal_confidence_gate_enabled) {
-            $pythonCmd += " --signal-confidence-gate-enabled" +
-                          " --signal-confidence-gate-top-k $($signal_confidence_gate_config.TopK)" +
-                          " --signal-confidence-gate-thresholds $($signal_confidence_gate_config.Thresholds)" +
-                          " --signal-confidence-gate-exposure-levels $($signal_confidence_gate_config.Exposures)"
-        }
-        if ($signal_gate_quality_enabled) {
-            $pythonCmd += " --signal-gate-quality-enabled" +
-                          " --signal-gate-quality-window $signal_gate_quality_window" +
-                          " --signal-gate-quality-threshold $signal_gate_quality_threshold" +
-                          " --signal-gate-quality-halflife $signal_gate_quality_halflife"
-        }
-        if ($signal_gate_dynamic_topn) {
-            $pythonCmd += " --signal-gate-dynamic-topn" +
-                          " --signal-gate-topn-high-multiplier $signal_gate_topn_high_multiplier" +
-                          " --signal-gate-topn-low-multiplier $signal_gate_topn_low_multiplier"
-        }
-        if ($holding_bonus_enabled) {
-            $pythonCmd += " --holding-bonus-enabled" +
-                          " --holding-bonus-sigma $holding_bonus_sigma"
-        }
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
         }
@@ -1078,7 +994,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  # end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

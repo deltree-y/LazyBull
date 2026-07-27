@@ -4,7 +4,6 @@
 使用排序选股 Top N 方式
 """
 
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -14,29 +13,6 @@ from loguru import logger
 from ..common.config import get_models_root
 from ..ml import ModelRegistry
 from .base import Signal
-
-
-@dataclass
-class SignalConfidenceGateState:
-    """信号置信度门控状态。"""
-
-    enabled: bool = False
-    score: float = float("nan")
-    exposure: float = 1.0
-    candidate_count: int = 0
-    top_k: int = 0
-    top_mean: float = float("nan")
-    baseline_mean: float = float("nan")
-    score_std: float = float("nan")
-    hit_threshold: Optional[float] = None
-    reason: str = "未启用"
-
-    # ── composite 模式新增字段 ──
-    abs_quality_score: float = float("nan")  # 绝对收益质量分
-    separation_percentile: float = float("nan")  # 分离度历史百分位
-    composite_score: float = float("nan")  # 综合得分
-    cost_gate_passed: bool = True  # 成本门控是否通过
-    rolling_quality: float = float("nan")  # 滚动模型质量（由engine注入）
 
 
 class MLSignal(Signal):
@@ -53,14 +29,6 @@ class MLSignal(Signal):
         top_n: int = 20,
         model_version: Optional[int] = None,
         models_dir: Optional[str] = None,
-        signal_confidence_gate_enabled: bool = False,
-        signal_confidence_gate_top_k: int = 10,
-        signal_confidence_gate_thresholds: Optional[List[float]] = None,
-        signal_confidence_gate_exposure_levels: Optional[List[float]] = None,
-        signal_gate_mode: str = "legacy",
-        signal_gate_cost_multiplier: float = 2.0,
-        signal_gate_round_trip_cost: float = 0.003,
-        signal_gate_percentile_warmup: int = 20,
         min_amount_ma20: float = 50000.0,
         min_total_mv: float = 500000.0,
         max_total_mv: float = 15000000.0,
@@ -73,14 +41,6 @@ class MLSignal(Signal):
             top_n: 选择 Top N 只股票
             model_version: 模型版本号，None 表示使用最新版本
             models_dir: 模型目录
-            signal_confidence_gate_enabled: 是否启用信号置信度门控，默认False
-            signal_confidence_gate_top_k: 置信度评估使用的头部股票数量，默认10
-            signal_confidence_gate_thresholds: 置信度阈值列表，低于首档时持币
-            signal_confidence_gate_exposure_levels: 各阈值对应的仓位系数列表
-            signal_gate_mode: 门控模式 "legacy"|"composite"|"disabled"
-            signal_gate_cost_multiplier: composite模式下预测收益至少覆盖成本的倍数
-            signal_gate_round_trip_cost: 往返交易成本估算
-            signal_gate_percentile_warmup: 百分位归一化预热期（调仓次数）
             min_amount_ma20: 20日均成交额下限（千元），默认50000（=5000万元）
             min_total_mv: 总市值下限（万元），默认500000（=50亿元）
             max_total_mv: 总市值上限（万元），默认15000000（=1500亿元）
@@ -91,29 +51,6 @@ class MLSignal(Signal):
         self.top_n = top_n
         self.model_version = model_version
         self.models_dir = models_dir or get_models_root()
-        self.signal_confidence_gate_enabled = signal_confidence_gate_enabled
-        self.signal_confidence_gate_top_k = signal_confidence_gate_top_k
-        self.signal_confidence_gate_thresholds = signal_confidence_gate_thresholds or [
-            0.8,
-            1.2,
-            1.6,
-        ]
-        self.signal_confidence_gate_exposure_levels = signal_confidence_gate_exposure_levels or [
-            0.3,
-            0.6,
-            1.0,
-        ]
-        # composite 门控参数
-        self.signal_gate_mode = signal_gate_mode
-        self.signal_gate_cost_multiplier = signal_gate_cost_multiplier
-        self.signal_gate_round_trip_cost = signal_gate_round_trip_cost
-        self.signal_gate_percentile_warmup = signal_gate_percentile_warmup
-        # composite 门控历史缓冲区（用于百分位归一化和自校准阈值）
-        self._separation_history: List[float] = []
-        self._composite_score_history: List[float] = []
-        self._GATE_HISTORY_MAX_LEN = 60  # 最多保留60个调仓日的历史
-        # 跨 split 持久化质量监控状态（walk-forward 复用 signal 实例时保留）
-        self._persisted_quality_state: Optional[dict] = None
 
         self.min_amount_ma20 = min_amount_ma20
         self.min_total_mv = min_total_mv
@@ -125,433 +62,18 @@ class MLSignal(Signal):
         self.metadata = None
         self.feature_columns = None
         self.registry = None  # 复用 registry 实例
-        self._last_confidence_gate_state = SignalConfidenceGateState()
-
-        self._validate_confidence_gate_params()
-
-        confidence_gate_info = ""
-        if self.signal_gate_mode == "composite":
-            confidence_gate_info = (
-                f", gate=composite(cost_mult={self.signal_gate_cost_multiplier}, "
-                f"cost={self.signal_gate_round_trip_cost}, "
-                f"top_k={self.signal_confidence_gate_top_k}, "
-                f"warmup={self.signal_gate_percentile_warmup})"
-            )
-        elif self.signal_confidence_gate_enabled:
-            confidence_gate_info = (
-                ", confidence_gate="
-                f"enabled(top_k={self.signal_confidence_gate_top_k}, "
-                f"thresholds={self.signal_confidence_gate_thresholds}, "
-                f"exposures={self.signal_confidence_gate_exposure_levels})"
-            )
+        # 缓存最近一次排序候选列表（供持仓强势度评分查询）
+        self._last_ranked_candidates: List[tuple] = []
 
         logger.info(
             f"ML 信号初始化: top_n={top_n}, model_version={model_version}, "
             f"min_amount_ma20={min_amount_ma20:.0f}千元, "
             f"total_mv=[{min_total_mv/10000:.0f}亿,{max_total_mv/10000:.0f}亿], "
-            f"exclude_financial={exclude_financial}{confidence_gate_info}"
+            f"exclude_financial={exclude_financial}"
         )
-
-    def _validate_confidence_gate_params(self) -> None:
-        """校验信号置信度门控参数。"""
-        if self.signal_gate_mode not in ("legacy", "composite", "disabled"):
-            raise ValueError(
-                f"signal_gate_mode 必须为 'legacy'/'composite'/'disabled'，"
-                f"当前值: {self.signal_gate_mode}"
-            )
-
-        if self.signal_gate_mode == "composite":
-            if self.signal_gate_cost_multiplier <= 0:
-                raise ValueError(
-                    f"signal_gate_cost_multiplier 必须为正数，"
-                    f"当前值: {self.signal_gate_cost_multiplier}"
-                )
-            if self.signal_gate_round_trip_cost <= 0:
-                raise ValueError(
-                    f"signal_gate_round_trip_cost 必须为正数，"
-                    f"当前值: {self.signal_gate_round_trip_cost}"
-                )
-
-        if self.signal_confidence_gate_top_k <= 0:
-            raise ValueError(
-                "signal_confidence_gate_top_k 必须为正整数，"
-                f"当前值: {self.signal_confidence_gate_top_k}"
-            )
-
-        # legacy 模式需要校验阈值和仓位列表
-        if self.signal_gate_mode == "legacy":
-            if len(self.signal_confidence_gate_thresholds) == 0:
-                raise ValueError(
-                    "legacy 模式下 signal_confidence_gate_thresholds 不能为空列表"
-                )
-            if len(self.signal_confidence_gate_exposure_levels) == 0:
-                raise ValueError(
-                    "legacy 模式下 signal_confidence_gate_exposure_levels 不能为空列表"
-                )
-            if len(self.signal_confidence_gate_thresholds) != len(
-                self.signal_confidence_gate_exposure_levels
-            ):
-                raise ValueError(
-                    "signal_confidence_gate_thresholds 与 "
-                    "signal_confidence_gate_exposure_levels 长度必须一致"
-                )
-
-            for i in range(1, len(self.signal_confidence_gate_thresholds)):
-                if (
-                    self.signal_confidence_gate_thresholds[i]
-                    <= self.signal_confidence_gate_thresholds[i - 1]
-                ):
-                    raise ValueError(
-                        "signal_confidence_gate_thresholds 必须严格递增: "
-                        f"{self.signal_confidence_gate_thresholds}"
-                    )
-
-            last_exposure = -1.0
-            for exposure in self.signal_confidence_gate_exposure_levels:
-                if exposure < 0 or exposure > 1:
-                    raise ValueError(
-                        "signal_confidence_gate_exposure_levels 必须在 [0, 1] 范围内: "
-                        f"{self.signal_confidence_gate_exposure_levels}"
-                    )
-                if exposure < last_exposure:
-                    raise ValueError(
-                        "signal_confidence_gate_exposure_levels 必须非递减: "
-                        f"{self.signal_confidence_gate_exposure_levels}"
-                    )
-                last_exposure = exposure
-
-    def _get_primary_task(self) -> str:
-        """获取主模型任务类型。"""
-        if self.metadata is None:
-            return "regression"
-        return self.metadata.get("train_params", {}).get("task", "regression")
-
-    def _get_label_transform(self) -> str:
-        """获取标签变换类型（影响预测分数的尺度）。"""
-        if self.metadata is None:
-            return "raw"
-        return self.metadata.get("train_params", {}).get("label_transform", "raw")
-
-    def _calculate_confidence_gate_state(
-        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
-    ) -> SignalConfidenceGateState:
-        """根据排序候选计算置信度门控状态，按 signal_gate_mode 路由。"""
-        # disabled 模式：完全跳过门控
-        if self.signal_gate_mode == "disabled":
-            state = SignalConfidenceGateState(
-                enabled=False, exposure=1.0, reason="门控已禁用(disabled)"
-            )
-            self._last_confidence_gate_state = state
-            return state
-
-        # composite 模式：使用新公式
-        if self.signal_gate_mode == "composite":
-            return self._compute_composite_gate_state(ranked_candidates, date=date)
-
-        # legacy 模式：保持原有逻辑
-        if not self.signal_confidence_gate_enabled:
-            state = SignalConfidenceGateState(enabled=False, exposure=1.0, reason="未启用")
-            self._last_confidence_gate_state = state
-            return state
-
-        return self._compute_legacy_gate_state(ranked_candidates, date=date)
-
-    def _compute_legacy_gate_state(
-        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
-    ) -> SignalConfidenceGateState:
-        """legacy 模式：原有的置信度门控逻辑。"""
-        score_values = np.asarray([score for _, score in ranked_candidates], dtype=float)
-        score_values = score_values[np.isfinite(score_values)]
-
-        if len(score_values) == 0:
-            state = SignalConfidenceGateState(
-                enabled=True,
-                score=0.0,
-                exposure=0.0,
-                candidate_count=0,
-                top_k=0,
-                reason="无有效候选分数，持币",
-            )
-            self._last_confidence_gate_state = state
-            return state
-
-        top_k = min(self.signal_confidence_gate_top_k, len(score_values))
-        top_scores = score_values[:top_k]
-
-        if len(score_values) > top_k:
-            baseline_scores = score_values[top_k : min(len(score_values), top_k * 2)]
-            if len(baseline_scores) == 0:
-                baseline_scores = score_values[top_k:]
-        else:
-            baseline_scores = score_values
-
-        top_mean = float(np.mean(top_scores))
-        baseline_mean = float(np.mean(baseline_scores))
-        score_std = float(np.std(score_values))
-
-        confidence_score = 0.0
-        reason = "分数离散度过低，持币"
-        if score_std > 1e-12:
-            confidence_score = max(0.0, (top_mean - baseline_mean) / score_std)
-            reason = (
-                f"score={confidence_score:.3f}, top_mean={top_mean:.4f}, "
-                f"baseline={baseline_mean:.4f}, std={score_std:.4f}"
-            )
-
-        if self._get_primary_task() == "regression" and top_mean <= 0:
-            confidence_score = 0.0
-            reason = f"Top{top_k} 平均分={top_mean:.4f} <= 0，视为无正向alpha，持币"
-
-        exposure = 0.0
-        hit_threshold = None
-        for threshold, level in zip(
-            self.signal_confidence_gate_thresholds,
-            self.signal_confidence_gate_exposure_levels,
-        ):
-            if confidence_score >= threshold:
-                exposure = level
-                hit_threshold = threshold
-            else:
-                break
-
-        if hit_threshold is None:
-            reason = f"{reason}，未达到首档阈值 " f"{self.signal_confidence_gate_thresholds[0]:.3f}"
-        else:
-            reason = f"{reason}，达到阈值 {hit_threshold:.3f}，" f"目标仓位 {exposure:.0%}"
-
-        state = SignalConfidenceGateState(
-            enabled=True,
-            score=confidence_score,
-            exposure=exposure,
-            candidate_count=len(score_values),
-            top_k=top_k,
-            top_mean=top_mean,
-            baseline_mean=baseline_mean,
-            score_std=score_std,
-            hit_threshold=hit_threshold,
-            reason=reason,
-        )
-        self._last_confidence_gate_state = state
-        return state
-
-    def _compute_composite_gate_state(
-        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
-    ) -> SignalConfidenceGateState:
-        """composite 模式：成本门控 + 绝对质量分 + 百分位归一化 + 自校准阈值。"""
-        score_values = np.asarray([score for _, score in ranked_candidates], dtype=float)
-        score_values = score_values[np.isfinite(score_values)]
-
-        if len(score_values) == 0:
-            state = SignalConfidenceGateState(
-                enabled=True,
-                score=0.0,
-                exposure=0.0,
-                candidate_count=0,
-                top_k=0,
-                cost_gate_passed=False,
-                reason="无有效候选分数，持币",
-            )
-            self._last_confidence_gate_state = state
-            return state
-
-        top_k = min(self.signal_confidence_gate_top_k, len(score_values))
-        top_scores = score_values[:top_k]
-
-        if len(score_values) > top_k:
-            baseline_end = min(len(score_values), top_k * 2)
-            baseline_scores = score_values[top_k:baseline_end]
-            if len(baseline_scores) == 0:
-                baseline_scores = score_values[top_k:]
-        else:
-            baseline_scores = score_values
-
-        top_mean = float(np.mean(top_scores))
-        baseline_mean = float(np.mean(baseline_scores))
-        score_std = float(np.std(score_values))
-
-        # 判断标签尺度：cs_zscore 标签的预测值是无量纲 z 分数，不能直接与交易成本比较
-        is_zscore_label = self._get_label_transform() == "cs_zscore"
-        is_regression = self._get_primary_task() == "regression"
-
-        # ── 方案1: 成本门控（硬门槛）──
-        cost_gate_passed = True
-        if is_regression:
-            if is_zscore_label:
-                # z 分数尺度：cost_multiplier 直接表示 top_mean 必须超过 score_std 的倍数
-                # 例如 cost_multiplier=0.3 表示 top_mean > 0.3 × score_std
-                # 典型范围：0.1（宽松）~ 1.0（严格）
-                cost_threshold = self.signal_gate_cost_multiplier * (score_std + 1e-8)
-                if top_mean < cost_threshold:
-                    cost_gate_passed = False
-                    reason = (
-                        f"成本门控未通过(z分数模式): top_mean={top_mean:.4f} < "
-                        f"{self.signal_gate_cost_multiplier}×std={cost_threshold:.4f}，"
-                        f"信号强度不足(std={score_std:.4f})，持币"
-                    )
-            else:
-                # 原始收益尺度：直接与交易成本比较
-                cost_threshold = self.signal_gate_cost_multiplier * self.signal_gate_round_trip_cost
-                if top_mean < cost_threshold:
-                    cost_gate_passed = False
-                    reason = (
-                        f"成本门控未通过: top_mean={top_mean:.4f} < "
-                        f"{self.signal_gate_cost_multiplier}×{self.signal_gate_round_trip_cost}"
-                        f"={cost_threshold:.4f}，预期收益不足以覆盖交易成本，持币"
-                    )
-
-        if not cost_gate_passed:
-            state = SignalConfidenceGateState(
-                enabled=True,
-                score=0.0,
-                exposure=0.0,
-                candidate_count=len(score_values),
-                top_k=top_k,
-                top_mean=top_mean,
-                baseline_mean=baseline_mean,
-                score_std=score_std,
-                abs_quality_score=0.0,
-                cost_gate_passed=False,
-                composite_score=0.0,
-                reason=reason,
-            )
-            self._last_confidence_gate_state = state
-            return state
-
-        # ── 方案3A: 绝对收益质量分 ──
-        # 用 sigmoid 风格映射，让 cost_multiplier 控制"半满分"位置：
-        # - 当 top_mean == cost_multiplier × 基准尺度 时，abs_quality_score ≈ 1.0（半满分）
-        # - top_mean 越高于该门槛，越趋近 2.0；越低于该门槛，越趋近 0
-        # - 不同 cost_multiplier 值移动这条 S 曲线，始终产生有区分度的连续值
-        if is_zscore_label:
-            midpoint = self.signal_gate_cost_multiplier * (score_std + 1e-8)
-        elif self.signal_gate_round_trip_cost > 0:
-            midpoint = self.signal_gate_cost_multiplier * self.signal_gate_round_trip_cost
-        else:
-            midpoint = 1e-8
-        # sigmoid 映射: 2 / (1 + exp(-k*(x/midpoint - 1)))
-        # k 控制曲线陡峭度，k=3 时在 midpoint 附近有良好区分度
-        ratio = top_mean / (midpoint + 1e-8)
-        abs_quality_score = float(2.0 / (1.0 + np.exp(-3.0 * (ratio - 1.0))))
-
-        # ── 方案3B: 分离度百分位归一化 ──
-        separation = top_mean - baseline_mean
-        self._separation_history.append(separation)
-        if len(self._separation_history) > self._GATE_HISTORY_MAX_LEN:
-            self._separation_history = self._separation_history[-self._GATE_HISTORY_MAX_LEN :]
-
-        # 预热期不足时使用保守默认
-        if len(self._separation_history) >= self.signal_gate_percentile_warmup:
-            hist_arr = np.asarray(self._separation_history)
-            # 当前separation在历史中的百分位（0~1）
-            sep_percentile = float(np.mean(hist_arr <= separation))
-        else:
-            # 预热期: 基于分离度正负做简单判断
-            sep_percentile = 0.5 if separation >= 0 else 0.3
-
-        # ── 综合得分 ──
-        composite_score = 0.5 * abs_quality_score + 0.5 * sep_percentile
-        self._composite_score_history.append(composite_score)
-        if len(self._composite_score_history) > self._GATE_HISTORY_MAX_LEN:
-            self._composite_score_history = self._composite_score_history[
-                -self._GATE_HISTORY_MAX_LEN :
-            ]
-
-        # ── 方案3C: 自校准阈值（基于历史分位决定仓位）──
-        if len(self._composite_score_history) >= self.signal_gate_percentile_warmup:
-            hist_scores = np.asarray(self._composite_score_history)
-            score_pct = float(np.mean(hist_scores <= composite_score))
-            if score_pct < 0.20:
-                exposure = 0.0  # 低于20%分位 → 持币
-            elif score_pct < 0.50:
-                exposure = 0.5  # 20%-50%分位 → 半仓
-            else:
-                exposure = 1.0  # 50%以上 → 满仓
-        else:
-            # 预热期: 只做成本门控（已在上方通过），其余放行
-            exposure = 1.0
-
-        reason_parts = [
-            f"composite={composite_score:.3f}",
-            f"abs_quality={abs_quality_score:.3f}",
-            f"sep_pct={sep_percentile:.2f}",
-            f"top_mean={top_mean:.4f}",
-            f"baseline={baseline_mean:.4f}",
-        ]
-        if exposure <= 0:
-            reason_parts.append("低于20%分位，持币")
-        elif exposure < 1.0:
-            reason_parts.append(f"中等分位，仓位{exposure:.0%}")
-        else:
-            reason_parts.append("满仓通过")
-        reason = "，".join(reason_parts)
-
-        state = SignalConfidenceGateState(
-            enabled=True,
-            score=composite_score,
-            exposure=exposure,
-            candidate_count=len(score_values),
-            top_k=top_k,
-            top_mean=top_mean,
-            baseline_mean=baseline_mean,
-            score_std=score_std,
-            abs_quality_score=abs_quality_score,
-            separation_percentile=sep_percentile,
-            composite_score=composite_score,
-            cost_gate_passed=cost_gate_passed,
-            reason=reason,
-        )
-        self._last_confidence_gate_state = state
-        return state
-
-    def evaluate_confidence_gate(
-        self, ranked_candidates: List[tuple], date: Optional[pd.Timestamp] = None
-    ) -> SignalConfidenceGateState:
-        """对排序候选重新评估一次置信度门控。"""
-        return self._calculate_confidence_gate_state(ranked_candidates, date=date)
-
-    def apply_confidence_gate_to_weights(
-        self,
-        signals: Dict[str, float],
-        confidence_state: Optional[SignalConfidenceGateState] = None,
-        date: Optional[pd.Timestamp] = None,
-        emit_log: bool = True,
-    ) -> Dict[str, float]:
-        """将置信度门控结果应用到最终权重，允许留出现金。"""
-        if not signals:
-            return signals
-
-        state = confidence_state or self._last_confidence_gate_state
-        if not state.enabled:
-            return signals
-
-        date_label = date.date() if isinstance(date, pd.Timestamp) else date
-
-        if state.exposure <= 0:
-            if emit_log:
-                logger.warning(f"信号置信度门控: {date_label}, {state.reason}，本次持币")
-            return {}
-
-        if state.exposure < 1.0:
-            if emit_log:
-                logger.warning(
-                    f"信号置信度门控: {date_label}, {state.reason}，"
-                    f"仓位缩放到 {state.exposure:.0%}，剩余资金持币"
-                )
-            return {stock: weight * state.exposure for stock, weight in signals.items()}
-
-        if emit_log:
-            logger.info(f"信号置信度门控: {date_label}, {state.reason}，满仓通过")
-        return signals
-
-    def get_last_confidence_gate_state(self) -> SignalConfidenceGateState:
-        """返回最近一次评估的置信度门控状态。"""
-        return self._last_confidence_gate_state
 
     def update_model_version(self, new_version: int) -> None:
         """切换到新模型版本（walk-forward 跨 split 复用时调用）。
-
-        仅重置模型相关缓存，保留门控历史缓冲区（_separation_history、
-        _composite_score_history），以便百分位归一化和自校准阈值跨 split 积累。
 
         Args:
             new_version: 新模型版本号
@@ -564,11 +86,7 @@ class MLSignal(Signal):
         self.model = None
         self.metadata = None
         self.feature_columns = None
-        logger.info(
-            f"MLSignal 切换模型: v{old_version} → v{new_version}，"
-            f"门控历史保留（separation={len(self._separation_history)}条，"
-            f"composite={len(self._composite_score_history)}条）"
-        )
+        logger.info(f"MLSignal 切换模型: v{old_version} → v{new_version}")
 
     def _load_model(self) -> None:
         """加载模型（延迟加载）"""
@@ -613,27 +131,12 @@ class MLSignal(Signal):
 
         # ── 成交额：amount_ma20 原始列（千元）────────────────────────────
         if "amount_ma20" in features_df.columns:
-            amount_low = (features_df["amount_ma20"].fillna(0) < self.min_amount_ma20).sum()
-            if amount_low > 0:
-                # logger.info(
-                #    f"  选股过滤-成交额: 剔除 amount_ma20 < {self.min_amount_ma20:.0f}千元"
-                #    f"（={self.min_amount_ma20 / 10:.0f}万元）的 {amount_low} 只"
-                # )
-                pass
             mask &= features_df["amount_ma20"].fillna(0) >= self.min_amount_ma20
         else:
             logger.warning("选股过滤-成交额: amount_ma20 列不存在，跳过")
 
         # ── 市值：total_mv 原始列（万元）────────────────────────────────
         if "total_mv" in features_df.columns:
-            mv_low = (features_df["total_mv"] < self.min_total_mv).sum()
-            mv_high = (features_df["total_mv"] > self.max_total_mv).sum()
-            if mv_low + mv_high > 0:
-                # logger.info(
-                #   f"  选股过滤-市值: 剔除 <{self.min_total_mv / 10000:.0f}亿 {mv_low}只, "
-                #   f">{self.max_total_mv / 10000:.0f}亿 {mv_high}只"
-                # )
-                pass
             mask &= features_df["total_mv"].between(self.min_total_mv, self.max_total_mv)
         else:
             logger.warning("选股过滤-市值: total_mv 列不存在，跳过")
@@ -646,9 +149,6 @@ class MLSignal(Signal):
                 )
             else:
                 fin_mask = features_df["sw_l1_code"].isin(self._FINANCIAL_SW_L1_CODES)
-                fin_count = fin_mask.sum()
-                # if fin_count > 0:
-                #    logger.info(f"  选股过滤-金融股: 剔除银行/非银金融 {fin_count} 只")
                 mask &= ~fin_mask
 
         result = features_df[mask].copy()
@@ -660,9 +160,8 @@ class MLSignal(Signal):
         """将选股过滤与模型预测入口压缩为单行日志。"""
         if ranked:
             return
-        stage = "选股/预测(ranked)" if ranked else "选股/预测"
         universe_text = f"{before_count}→{after_count}" if before_count != after_count else str(after_count)
-        logger.info(f"{stage}: {universe_text}, 特征{len(self.feature_columns)}")
+        logger.info(f"选股/预测: {universe_text}, 特征{len(self.feature_columns)}")
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 ML 信号
@@ -681,9 +180,6 @@ class MLSignal(Signal):
         # 获取当日特征数据
         if "features" not in data:
             logger.warning(f"{date.date()} 没有特征数据")
-            logger.info(
-                f"data columns: {data['daily'].columns.tolist() if 'daily' in data else 'N/A'}"
-            )
             return {}
 
         features_df = data["features"]
@@ -709,15 +205,9 @@ class MLSignal(Signal):
             return {}
 
         # 特征列一致性检查 (缺失列以 NaN 自动补齐, 由 XGBoost/LightGBM 原生 NaN 处理)
-        # 适用于另类因子 (如 north_flow / consensus) 在历史早期无数据导致的列缺失
         required_features = set(self.metadata.get("feature_columns", []))
         missing = required_features - set(features_df.columns)
         if missing:
-            import numpy as np
-            logger.debug(
-                f"推理特征缺失 {len(missing)} 列, 自动补 NaN: "
-                f"{sorted(list(missing))[:5]}{'...' if len(missing) > 5 else ''}"
-            )
             for col in missing:
                 features_df[col] = np.nan
         available_features = features_df.columns.tolist()
@@ -734,8 +224,6 @@ class MLSignal(Signal):
             logger.error(f"特征列缺失: {e}")
             return {}
 
-        # XGB/LGB 原生支持 NaN，不做 fillna，保留缺失值信息
-
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         task = self.metadata.get("train_params", {}).get("task", "regression")
         self._log_prediction_pipeline_summary(
@@ -745,37 +233,16 @@ class MLSignal(Signal):
         )
 
         if task == "classification" and hasattr(self.model, "predict_proba"):
-            # 分类模型：使用正类概率作为分数
-            predictions = self.model.predict_proba(X)[:, 1]  # 取正类（标签=1）的概率
-            if self.verbose:
-                logger.debug(f"使用 classification 模型预测概率（正类）作为分数")
+            predictions = self.model.predict_proba(X)[:, 1]
         else:
-            # 回归模型：使用预测值作为分数
             predictions = self.model.predict(X)
-            if self.verbose and task == "classification":
-                logger.warning(
-                    f"模型声明为 classification，但无 predict_proba 方法，回退到 predict"
-                )
 
         features_df["ml_score"] = predictions
         score_column = "ml_score"
 
         # 按预测分数排序，选择 Top N
         features_df = features_df.sort_values(score_column, ascending=False)
-        ranked_candidates = list(
-            zip(features_df["ts_code"].tolist(), features_df[score_column].tolist())
-        )
-        confidence_state = self.evaluate_confidence_gate(ranked_candidates, date=date)
         top_stocks = features_df.head(self.top_n)
-        if self.verbose:
-            logger.debug(
-                "TOP预测概率抽样: {}".format(
-                    features_df[["ts_code", "ml_score"]]
-                    .head(3)
-                    .to_string(index=False)
-                    .replace("\n", " | ")
-                )
-            )
 
         if len(top_stocks) == 0:
             logger.warning(f"{date.date()} 没有有效的预测结果")
@@ -791,10 +258,6 @@ class MLSignal(Signal):
             scores = positive_stocks[score_column].values
             stocks = positive_stocks["ts_code"].values
             signals = dict(zip(stocks, scores.tolist()))
-
-        signals = self.apply_confidence_gate_to_weights(
-            signals, confidence_state=confidence_state, date=date
-        )
 
         logger.debug(
             f"ML 信号生成完成: {date.date()}, 选择 {len(signals)} 只股票, "
@@ -848,15 +311,9 @@ class MLSignal(Signal):
             return []
 
         # 特征列一致性检查 (缺失列以 NaN 自动补齐, 由 XGBoost/LightGBM 原生 NaN 处理)
-        # 适用于另类因子 (如 north_flow / consensus) 在历史早期无数据导致的列缺失
         required_features = set(self.metadata.get("feature_columns", []))
         missing = required_features - set(features_df.columns)
         if missing:
-            import numpy as np
-            logger.debug(
-                f"推理特征缺失 {len(missing)} 列, 自动补 NaN: "
-                f"{sorted(list(missing))[:5]}{'...' if len(missing) > 5 else ''}"
-            )
             for col in missing:
                 features_df[col] = np.nan
         available_features = features_df.columns.tolist()
@@ -873,8 +330,6 @@ class MLSignal(Signal):
             logger.error(f"特征列缺失: {e}")
             return []
 
-        # XGB/LGB 原生支持 NaN，不做 fillna
-
         # 预测（classification 模型使用 predict_proba 获取正类概率）
         task = self.metadata.get("train_params", {}).get("task", "regression")
         self._log_prediction_pipeline_summary(
@@ -884,45 +339,20 @@ class MLSignal(Signal):
         )
 
         if task == "classification" and hasattr(self.model, "predict_proba"):
-            # 分类模型：使用正类概率作为分数
-            predictions = self.model.predict_proba(X)[:, 1]  # 取正类（标签=1）的概率
-            if self.verbose:
-                logger.debug(f"使用 classification 模型预测概率（正类）作为分数")
+            predictions = self.model.predict_proba(X)[:, 1]
         else:
-            # 回归模型：使用预测值作为分数
             predictions = self.model.predict(X)
-            if self.verbose and task == "classification":
-                logger.warning(
-                    f"模型声明为 classification，但无 predict_proba 方法，回退到 predict"
-                )
 
         features_df["ml_score"] = predictions
         score_column = "ml_score"
 
         # 按预测分数排序，返回所有候选
         features_df = features_df.sort_values(score_column, ascending=False)
-        if self.verbose:
-            logger.debug(
-                "TOP预测概率抽样: {}".format(
-                    features_df[["ts_code", "ml_score"]]
-                    .head(3)
-                    .to_string(index=False)
-                    .replace("\n", " | ")
-                )
-            )
 
         # 返回 (股票代码, 分数) 元组列表
         ranked = list(zip(features_df["ts_code"].tolist(), features_df[score_column].tolist()))
-        self.evaluate_confidence_gate(ranked, date=date)
-        if False:
-            logger.info(
-                f"  ML排序候选生成: {date.date()}, "  # 候选数 {len(ranked)}, "
-                f"平均预测分数[{features_df['ml_score'].mean():.3f}], "
-                f"最高/最低[{features_df['ml_score'].max():.3f}/{features_df['ml_score'].min():.3f}]"
-            )
 
         # 缓存本次完整排序候选列表，供持仓强势度评分（_score_holding_strength）查询 ml_raw_score
-        # 与回测行为对齐：回测 engine 在 _generate_signal 末尾缓存 _last_ranked_candidates
         self._last_ranked_candidates = ranked
 
         return ranked

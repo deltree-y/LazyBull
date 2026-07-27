@@ -110,10 +110,6 @@ COL_NAMES = {
     "bt_rebalance_freq": "回测调仓频率",
     "bt_initial_capital": "回测初始资金",
     "bt_sell_timing": "回测卖出时机",
-    "signal_confidence_gate_enabled": "信号置信度门控",
-    "signal_confidence_gate_top_k": "门控TopK",
-    "signal_confidence_gate_thresholds": "门控阈值",
-    "signal_confidence_gate_exposure_levels": "门控仓位系数",
     "bt_exclude_st": "回测排除ST",
     "bt_min_list_days": "回测最少上市天数",
     "bt_max_weight_per_stock": "回测单股最大权重",
@@ -220,19 +216,6 @@ COL_NAMES = {
     "oos_backtest": "OOS回测",
     "oos_backtest_months": "OOS回测月数",
     "bt_top_n": "回测TopN",
-    "signal_gate_mode": "信号门控模式",
-    "signal_gate_cost_multiplier": "门控成本倍数",
-    "signal_gate_round_trip_cost": "门控往返成本",
-    "signal_gate_quality_enabled": "门控质量监控",
-    "signal_gate_quality_window": "门控质量窗口",
-    "signal_gate_quality_threshold": "门控质量阈值",
-    "signal_gate_quality_halflife": "门控质量半衰期",
-    "signal_gate_percentile_warmup": "门控百分位预热",
-    "signal_gate_dynamic_topn": "动态TopN",
-    "signal_gate_topn_high_multiplier": "高置信TopN系数",
-    "signal_gate_topn_low_multiplier": "低置信TopN系数",
-    "holding_bonus_enabled": "持仓奖励",
-    "holding_bonus_sigma": "持仓奖励Sigma",
     # 盈亏动态持仓
     "enable_profit_based_holding": "盈亏动态持仓",
     "early_exit_loss_threshold": "早退亏损阈值",
@@ -332,7 +315,6 @@ BATCH_EXPERIMENT_PARAM_CANDIDATES = [
     "回测TopN",
     "回测调仓频率",
     "回测卖出时机",
-    "信号门控模式",
     "市场择时",
     "盈亏动态持仓",
 ]
@@ -398,23 +380,6 @@ PARAM_COLS = [
     "bt_top_n",
     "bt_rebalance_freq",
     "bt_initial_capital",
-    "signal_confidence_gate_enabled",
-    "signal_confidence_gate_top_k",
-    "signal_confidence_gate_thresholds",
-    "signal_confidence_gate_exposure_levels",
-    "signal_gate_mode",
-    "signal_gate_cost_multiplier",
-    "signal_gate_round_trip_cost",
-    "signal_gate_quality_enabled",
-    "signal_gate_quality_window",
-    "signal_gate_quality_threshold",
-    "signal_gate_quality_halflife",
-    "signal_gate_percentile_warmup",
-    "signal_gate_dynamic_topn",
-    "signal_gate_topn_high_multiplier",
-    "signal_gate_topn_low_multiplier",
-    "holding_bonus_enabled",
-    "holding_bonus_sigma",
     "bt_sell_timing",
     "bt_exclude_st",
     "bt_min_list_days",
@@ -575,23 +540,6 @@ TRADE_PARAM_KEYS = [
     "bt_min_list_days",
     "bt_max_weight_per_stock",
     "bt_max_per_industry",
-    "signal_confidence_gate_enabled",
-    "signal_confidence_gate_top_k",
-    "signal_confidence_gate_thresholds",
-    "signal_confidence_gate_exposure_levels",
-    "signal_gate_mode",
-    "signal_gate_cost_multiplier",
-    "signal_gate_round_trip_cost",
-    "signal_gate_quality_enabled",
-    "signal_gate_quality_window",
-    "signal_gate_quality_threshold",
-    "signal_gate_quality_halflife",
-    "signal_gate_percentile_warmup",
-    "signal_gate_dynamic_topn",
-    "signal_gate_topn_high_multiplier",
-    "signal_gate_topn_low_multiplier",
-    "holding_bonus_enabled",
-    "holding_bonus_sigma",
     "bt_stop_loss_enabled",
     "bt_stop_loss_drawdown_pct",
     "bt_stop_loss_trailing_enabled",
@@ -948,23 +896,6 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
             "oos_backtest_months",
             "bt_top_n",
             "bt_rebalance_freq",
-            "signal_confidence_gate_enabled",
-            "signal_confidence_gate_top_k",
-            "signal_confidence_gate_thresholds",
-            "signal_confidence_gate_exposure_levels",
-            "signal_gate_mode",
-            "signal_gate_cost_multiplier",
-            "signal_gate_round_trip_cost",
-            "signal_gate_quality_enabled",
-            "signal_gate_quality_window",
-            "signal_gate_quality_threshold",
-            "signal_gate_quality_halflife",
-            "signal_gate_percentile_warmup",
-            "signal_gate_dynamic_topn",
-            "signal_gate_topn_high_multiplier",
-            "signal_gate_topn_low_multiplier",
-            "holding_bonus_enabled",
-            "holding_bonus_sigma",
             "bt_sell_timing",
             "bt_exclude_st",
             "bt_min_list_days",
@@ -1031,58 +962,17 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
         )
         return params
 
-    signal_gate_mode = _normalize_param_text(params.get("signal_gate_mode"))
-    signal_confidence_gate_enabled = _is_true_param_value(
-        params.get("signal_confidence_gate_enabled")
-    )
-    signal_gate_active = signal_gate_mode == "composite" or (
-        signal_gate_mode == "legacy" and signal_confidence_gate_enabled
-    )
 
-    if signal_gate_mode not in ("legacy", "composite"):
-        clear("signal_confidence_gate_top_k")
 
-    if signal_gate_mode != "legacy":
+
         clear(
-            "signal_confidence_gate_enabled",
-            "signal_confidence_gate_thresholds",
-            "signal_confidence_gate_exposure_levels",
-        )
-    elif not signal_confidence_gate_enabled:
-        clear(
-            "signal_confidence_gate_top_k",
-            "signal_confidence_gate_thresholds",
-            "signal_confidence_gate_exposure_levels",
         )
 
-    if signal_gate_mode != "composite":
         clear(
-            "signal_gate_cost_multiplier",
-            "signal_gate_round_trip_cost",
-            "signal_gate_percentile_warmup",
+        )
+        clear(
         )
 
-    if not _is_true_param_value(params.get("signal_gate_quality_enabled")):
-        clear(
-            "signal_gate_quality_window",
-            "signal_gate_quality_threshold",
-            "signal_gate_quality_halflife",
-        )
-
-    if not signal_gate_active:
-        clear(
-            "signal_gate_dynamic_topn",
-            "signal_gate_topn_high_multiplier",
-            "signal_gate_topn_low_multiplier",
-        )
-    elif not _is_true_param_value(params.get("signal_gate_dynamic_topn")):
-        clear(
-            "signal_gate_topn_high_multiplier",
-            "signal_gate_topn_low_multiplier",
-        )
-
-    if not _is_true_param_value(params.get("holding_bonus_enabled")):
-        clear("holding_bonus_sigma")
 
     if not _is_true_param_value(params.get("bt_stop_loss_enabled")):
         clear(

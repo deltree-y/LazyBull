@@ -31,18 +31,6 @@ def create_signal(
     Returns:
         Signal 实例
     """
-    # 公共门控参数
-    gate_kwargs = dict(
-        signal_confidence_gate_enabled=config.signal_confidence_gate_enabled,
-        signal_confidence_gate_top_k=config.signal_confidence_gate_top_k,
-        signal_confidence_gate_thresholds=config.signal_confidence_gate_thresholds,
-        signal_confidence_gate_exposure_levels=config.signal_confidence_gate_exposure_levels,
-        signal_gate_mode=config.signal_gate_mode,
-        signal_gate_cost_multiplier=config.signal_gate_cost_multiplier,
-        signal_gate_round_trip_cost=config.signal_gate_round_trip_cost,
-        signal_gate_percentile_warmup=config.signal_gate_percentile_warmup,
-    )
-
     resolved_models_dir = models_dir or get_models_root()
 
     signal_a = MLSignal(
@@ -50,7 +38,6 @@ def create_signal(
         model_version=config.model_version,
         models_dir=resolved_models_dir,
         verbose=verbose,
-        **gate_kwargs,
     )
 
     if config.model_version_b is None:
@@ -61,7 +48,6 @@ def create_signal(
         model_version=config.model_version_b,
         models_dir=resolved_models_dir,
         verbose=verbose,
-        **gate_kwargs,
     )
     logger.info(
         f"创建双模型集成信号: A=v{config.model_version}, "

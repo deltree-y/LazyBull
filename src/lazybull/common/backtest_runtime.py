@@ -40,27 +40,6 @@ def build_walk_forward_trading_config(args, *, model_version: int) -> TradingCon
     return TradingConfig(
         model_version=model_version,
         top_n=getattr(args, "bt_top_n", 30),
-        signal_confidence_gate_enabled=getattr(args, "signal_confidence_gate_enabled", False),
-        signal_confidence_gate_top_k=getattr(args, "signal_confidence_gate_top_k", 10),
-        signal_confidence_gate_thresholds=getattr(
-            args, "signal_confidence_gate_thresholds", [0.8, 1.2, 1.6]
-        ),
-        signal_confidence_gate_exposure_levels=getattr(
-            args, "signal_confidence_gate_exposure_levels", [0.3, 0.6, 1.0]
-        ),
-        signal_gate_mode=getattr(args, "signal_gate_mode", "legacy"),
-        signal_gate_cost_multiplier=getattr(args, "signal_gate_cost_multiplier", 2.0),
-        signal_gate_round_trip_cost=getattr(args, "signal_gate_round_trip_cost", 0.003),
-        signal_gate_quality_enabled=getattr(args, "signal_gate_quality_enabled", False),
-        signal_gate_quality_window=getattr(args, "signal_gate_quality_window", 5),
-        signal_gate_quality_threshold=getattr(args, "signal_gate_quality_threshold", 0.4),
-        signal_gate_quality_halflife=getattr(args, "signal_gate_quality_halflife", 3),
-        signal_gate_percentile_warmup=getattr(args, "signal_gate_percentile_warmup", 20),
-        signal_gate_dynamic_topn=getattr(args, "signal_gate_dynamic_topn", False),
-        signal_gate_topn_high_multiplier=getattr(args, "signal_gate_topn_high_multiplier", 0.6),
-        signal_gate_topn_low_multiplier=getattr(args, "signal_gate_topn_low_multiplier", 1.5),
-        holding_bonus_enabled=getattr(args, "holding_bonus_enabled", False),
-        holding_bonus_sigma=getattr(args, "holding_bonus_sigma", 0.5),
         rebalance_freq=rebalance_freq,
         stagger_tranches=getattr(args, "stagger_tranches", 1),
         max_per_industry=getattr(args, "bt_max_per_industry", None),
@@ -254,47 +233,7 @@ def create_backtest_engine_from_config(
         weakness_exit_industry_filter=trading_config.weakness_exit_industry_filter,
         weakness_exit_industry_bottom_pct=trading_config.weakness_exit_industry_bottom_pct,
         enable_early_rebalance_on_empty=trading_config.enable_early_rebalance_on_empty,
-        signal_gate_quality_enabled=trading_config.signal_gate_quality_enabled,
-        signal_gate_quality_window=trading_config.signal_gate_quality_window,
-        signal_gate_quality_threshold=trading_config.signal_gate_quality_threshold,
-        signal_gate_quality_halflife=trading_config.signal_gate_quality_halflife,
-        signal_gate_dynamic_topn=trading_config.signal_gate_dynamic_topn,
-        signal_gate_topn_high_multiplier=trading_config.signal_gate_topn_high_multiplier,
-        signal_gate_topn_low_multiplier=trading_config.signal_gate_topn_low_multiplier,
-        holding_bonus_enabled=trading_config.holding_bonus_enabled,
-        holding_bonus_sigma=trading_config.holding_bonus_sigma,
     )
 
 
-def restore_signal_quality_state(engine: BacktestEngineML, signal: Optional[MLSignal]) -> None:
-    """从持久化 signal 恢复滚动质量状态。"""
-    if signal is None or not getattr(engine, "signal_gate_quality_enabled", False):
-        return
 
-    state = getattr(signal, "_persisted_quality_state", None)
-    if state is None:
-        return
-
-    engine._prediction_quality_history = list(state["history"])
-    engine._rolling_quality_score = state["score"]
-    engine._quality_warmup_remaining = state["warmup_remaining"]
-    logger.info(
-        f"质量监控状态已恢复: {len(state['history'])}条历史, "
-        f"score={state['score']:.3f}, warmup_remaining={state['warmup_remaining']}"
-    )
-
-
-def persist_signal_quality_state(engine: BacktestEngineML, signal: Optional[MLSignal]) -> None:
-    """将滚动质量状态写回持久化 signal。"""
-    if signal is None or not getattr(engine, "signal_gate_quality_enabled", False):
-        return
-
-    signal._persisted_quality_state = {
-        "history": list(engine._prediction_quality_history),
-        "score": engine._rolling_quality_score,
-        "warmup_remaining": engine._quality_warmup_remaining,
-    }
-    logger.info(
-        f"质量监控状态已保存: {len(engine._prediction_quality_history)}条历史, "
-        f"score={engine._rolling_quality_score:.3f}"
-    )

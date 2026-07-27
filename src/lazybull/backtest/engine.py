@@ -75,25 +75,20 @@ def _format_rebalance_decision_summary(
     target_n = decision_trace.get("target_n", 0)
     queued = bool(decision_trace.get("queued", execution_date is not None))
 
-    signal_gate = decision_trace.get("signal_gate", {})
     ect = decision_trace.get("ect", {})
     ma250 = decision_trace.get("ma250", {})
     market_regime = decision_trace.get("market_regime", {})
-    dynamic_topn = decision_trace.get("dynamic_topn", {})
 
-    signal_gate_exposure = _to_optional_float(signal_gate.get("exposure", 1.0))
-    signal_gate_quality_exposure = _to_optional_float(signal_gate.get("quality_exposure", 1.0))
     ect_exposure = _to_optional_float(ect.get("exposure", 1.0))
     ma250_exposure = _to_optional_float(ma250.get("exposure", 1.0))
     market_regime_exposure = _to_optional_float(market_regime.get("exposure", 1.0))
     market_layer_exposure = _to_optional_float(decision_trace.get("market_layer_exposure", 1.0))
     computed_exposure = None
     if (
-        signal_gate_exposure is not None
-        and ect_exposure is not None
+        ect_exposure is not None
         and market_layer_exposure is not None
     ):
-        computed_exposure = signal_gate_exposure * ect_exposure * market_layer_exposure
+        computed_exposure = ect_exposure * market_layer_exposure
     final_target_exposure = _to_optional_float(
         decision_trace.get(
             "final_target_exposure",
@@ -109,58 +104,20 @@ def _format_rebalance_decision_summary(
 
     candidate_text = candidate_count if candidate_count is not None else "N/A"
 
-    # 动态 Top-N 显示
-    if dynamic_topn.get("enabled") and dynamic_topn.get("reason"):
-        base_n = dynamic_topn.get("base_n", target_n)
-        effective_n = dynamic_topn.get("effective_n", target_n)
-        topn_text = f"目标={effective_n}(基准={base_n}, {dynamic_topn['reason']})"
-    else:
-        topn_text = f"目标={target_n}"
+    topn_text = f"目标={target_n}"
 
     final_action = "入队" if queued else "不入队"
-
-    # 构建门控行：综合显示 composite exposure + quality exposure + 最终门控系数
-    gate_composite_exposure = signal_gate_exposure if signal_gate_exposure is not None else 1.0
-    gate_quality_exposure = (
-        signal_gate_quality_exposure if signal_gate_quality_exposure is not None else 1.0
-    )
-    gate_final_exposure = gate_composite_exposure * gate_quality_exposure
 
     if (
         final_target_exposure is not None
         and final_target_exposure <= 0
-        and signal_gate_exposure is not None
-        and signal_gate_exposure <= 0
     ):
-        final_detail = "门控阻断, 不入队"
+        final_detail = "阻断, 不入队"
     else:
         final_detail = final_action
-    gate_summary_text = _compact_summary(signal_gate.get("summary", "未启用"))
-    # 质量监控相关字段（始终显示）
-    quality_score = signal_gate.get("quality_score")
-    quality_warmup = signal_gate.get("quality_warmup_remaining")
-    if quality_score is not None:
-        # 预热期中用特殊标记，正常期显示 hit_rate 和仓位系数
-        if quality_warmup is not None and quality_warmup > 0:
-            quality_text = f"质量=预热中(剩{quality_warmup}期)"
-        else:
-            quality_text = (
-                f"质量=hit_rate={quality_score:.2f}, 系数={_fmt_exposure(gate_quality_exposure)}"
-            )
-        gate_text = (
-            f"门控={_fmt_exposure(gate_final_exposure)}"
-            f"[{gate_summary_text}"
-            f" | {quality_text}]"
-        )
-    else:
-        gate_text = (
-            f"门控={_fmt_exposure(gate_final_exposure)}"
-            f"[{gate_summary_text}]"
-        )
 
     return (
         f"{header} | 执行={execution_text} | 候选={candidate_text} | {topn_text}"
-        f" | {gate_text}"
         f" | ECT={_fmt_exposure(ect_exposure)}"
         f"[{_compact_summary(ect.get('summary', '未启用'))}]"
         f" | MA250/ATR={_fmt_exposure(ma250_exposure)}"
@@ -295,15 +252,6 @@ class BacktestEngine:
         weakness_exit_weights: str = "30,25,25,20",  # 4维度权重
         weakness_exit_industry_filter: bool = False,  # 弱势行业过滤
         weakness_exit_industry_bottom_pct: float = 0.3,  # 行业底部阈值
-        signal_gate_quality_enabled: bool = False,  # 是否启用滚动模型质量监控
-        signal_gate_quality_window: int = 5,  # 回看调仓周期数
-        signal_gate_quality_threshold: float = 0.4,  # 最低滚动hit rate
-        signal_gate_quality_halflife: int = 3,  # EWM半衰期
-        signal_gate_dynamic_topn: bool = False,  # 是否启用动态Top-N
-        signal_gate_topn_high_multiplier: float = 0.6,  # 高置信度缩减系数（<1）
-        signal_gate_topn_low_multiplier: float = 1.5,  # 低置信度扩大系数（>1）
-        holding_bonus_enabled: bool = False,  # 是否启用持仓保留奖励（降低换手率）
-        holding_bonus_sigma: float = 0.5,  # 保留奖励幅度（截面分数标准差的倍数）
         position_sizing: str = "equal",  # 仓位管理: equal|score|kelly|half_kelly
         kelly_vol_window: int = 60,  # Kelly 波动率估计窗口（交易日）
         kelly_max_leverage: float = 0.25,  # 单只股票 Kelly 仓位上限（占总资产）
@@ -564,20 +512,7 @@ class BacktestEngine:
         }
         self._deferred_day_logs: List[Dict[str, str]] = []
         self._daily_warning_items: Dict[str, List[Dict]] = {}
-        self.confidence_gate_history: List[Dict] = []  # 信号置信度门控历史
 
-        # ── 滚动模型质量监控 ──
-        self.signal_gate_quality_enabled = signal_gate_quality_enabled
-        self.signal_gate_quality_window = signal_gate_quality_window
-        self.signal_gate_quality_threshold = signal_gate_quality_threshold
-        self.signal_gate_quality_halflife = signal_gate_quality_halflife
-        # ── 动态 Top-N ──
-        self.signal_gate_dynamic_topn = signal_gate_dynamic_topn
-        self.signal_gate_topn_high_multiplier = signal_gate_topn_high_multiplier
-        self.signal_gate_topn_low_multiplier = signal_gate_topn_low_multiplier
-        # ── 换手率约束（持仓保留奖励）──
-        self.holding_bonus_enabled = holding_bonus_enabled
-        self.holding_bonus_sigma = holding_bonus_sigma
         # Kelly 仓位管理参数
         if position_sizing not in ("equal", "score", "kelly", "half_kelly"):
             raise ValueError(
@@ -598,11 +533,6 @@ class BacktestEngine:
                 f"仓位管理模式={position_sizing}, 波动率窗口={kelly_vol_window}, "
                 f"单股上限={kelly_max_leverage:.2f}"
             )
-        self._prediction_quality_history: List[Dict] = []
-        self._rolling_quality_score: float = 1.0  # 默认满分（预热期不干预）
-        self._quality_warmup_remaining: int = signal_gate_quality_window  # 预热计数
-        # 记录每次信号日的选股和预测均值，用于持仓结束后评估
-        self._signal_tracking: Dict[str, Dict] = {}  # {信号日期str: {stocks, predicted_mean}}
 
         # 价格索引（在 run 时初始化）
         self.trade_price_index: Optional[pd.Series] = None  # 成交价格（不复权 close）
@@ -1604,31 +1534,14 @@ class BacktestEngine:
         target_n: int,
         candidate_count: int,
         tranche_idx: int,
-        confidence_gate_state=None,
     ) -> Dict:
         """构建调仓决策摘要所需的状态。"""
-        gate_enabled = bool(
-            confidence_gate_state is not None and getattr(confidence_gate_state, "enabled", False)
-        )
-        gate_exposure = (
-            float(getattr(confidence_gate_state, "exposure", 1.0)) if gate_enabled else 1.0
-        )
-        gate_summary = (
-            getattr(confidence_gate_state, "reason", "未启用") if gate_enabled else "未启用"
-        )
-
         trace = {
             "signal_date": date,
             "target_n": target_n,
             "candidate_count": candidate_count,
             "tranche_idx": tranche_idx,
             "queued": False,
-            "signal_gate": {
-                "enabled": gate_enabled,
-                "exposure": gate_exposure,
-                "quality_exposure": 1.0,  # 由质量监控模块事后填入
-                "summary": gate_summary,
-            },
             "ect": {
                 "enabled": self.equity_curve_monitor is not None,
                 "exposure": 1.0,
@@ -1645,7 +1558,7 @@ class BacktestEngine:
                 "summary": "未启用",
             },
             "market_layer_exposure": 1.0,
-            "final_target_exposure": gate_exposure,
+            "final_target_exposure": 1.0,
         }
         return self._initialize_decision_trace_for_signal(trace)
 
@@ -1655,13 +1568,13 @@ class BacktestEngine:
         decision_trace["final_target_exposure"] = 0.0
         if decision_trace.get("ect", {}).get("enabled"):
             decision_trace["ect"]["exposure"] = None
-            decision_trace["ect"]["summary"] = "未评估（信号门控已阻断）"
+            decision_trace["ect"]["summary"] = "未评估（信号已阻断）"
         if decision_trace.get("ma250", {}).get("enabled"):
             decision_trace["ma250"]["exposure"] = None
-            decision_trace["ma250"]["summary"] = "未评估（信号门控已阻断）"
+            decision_trace["ma250"]["summary"] = "未评估（信号已阻断）"
         if decision_trace.get("market_regime", {}).get("enabled"):
             decision_trace["market_regime"]["exposure"] = None
-            decision_trace["market_regime"]["summary"] = "未评估（信号门控已阻断）"
+            decision_trace["market_regime"]["summary"] = "未评估（信号已阻断）"
         decision_trace["market_layer_exposure"] = None
         return decision_trace
 
@@ -1974,10 +1887,6 @@ class BacktestEngine:
         # 记录调仓日组合净值，用于止盈基准和"本调仓收益"计算
         self._last_rebalance_nav = self._calculate_portfolio_value(date)
 
-        # ── 滚��质量监控：评估上一次信号的实际表现 ──
-        if self.signal_gate_quality_enabled and self._signal_tracking:
-            self._evaluate_expired_signal_quality(date, price_data)
-
         # 获取当日行情数据用于基础过滤（ST、停牌等基础过滤）
         trade_date_str = to_trade_date_str(date)
         date_quote = price_data[price_data["trade_date"] == trade_date_str]
@@ -2035,44 +1944,17 @@ class BacktestEngine:
         # 扩展点：子类可覆盖此方法对候选列表做额外过滤
         ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
 
-        # ── 持仓处理：排除或奖励 ──
+        # ── 持仓处理：排除已持仓股票 ──
         existing_positions = set(self.positions.keys()) if self.positions else set()
-        ranked_candidates_for_gate = ranked_candidates  # 用于置信度门控（不含奖励）
+        ranked_candidates_for_selection = ranked_candidates
 
-        if self.holding_bonus_enabled and existing_positions:
-            # 换手率约束模式：对已持仓股票加分，不排除
-            scores_array = np.array([s for _, s in ranked_candidates])
-            score_std = float(np.std(scores_array)) if len(scores_array) > 1 else 0.0
-            bonus = self.holding_bonus_sigma * score_std
-            bonus_count = sum(1 for stock, _ in ranked_candidates if stock in existing_positions)
-
-            # 含奖励的候选列表用于选股
-            ranked_candidates_for_selection = sorted(
-                [
-                    (stock, score + bonus) if stock in existing_positions else (stock, score)
-                    for stock, score in ranked_candidates
-                ],
-                key=lambda x: x[1],
-                reverse=True,
-            )
-            # 门控评估排除已持仓（不受 bonus 影响，保持原有评估逻辑）
-            ranked_candidates_for_gate = [
-                (stock, score) for stock, score in ranked_candidates
-                if stock not in existing_positions
-            ]
-            if self.verbose and bonus_count > 0:
-                logger.info(
-                    f"  换手率约束: {bonus_count} 只持仓获得加分 "
-                    f"(bonus={bonus:.4f}, sigma={self.holding_bonus_sigma}×std={score_std:.4f})"
-                )
-        elif existing_positions:
-            # 原有逻辑：排除已持仓的股票
+        if existing_positions:
+            # 排除已持仓的股票
             ranked_candidates_for_selection = [
                 (stock, score)
                 for stock, score in ranked_candidates
                 if stock not in existing_positions
             ]
-            ranked_candidates_for_gate = ranked_candidates_for_selection
             if self.verbose:
                 excluded = len(ranked_candidates) - len(ranked_candidates_for_selection)
                 if excluded > 0:
@@ -2085,29 +1967,6 @@ class BacktestEngine:
         else:
             ranked_candidates_for_selection = ranked_candidates
 
-        confidence_gate_state = None
-        if hasattr(self.signal, "evaluate_confidence_gate"):
-            confidence_gate_state = self.signal.evaluate_confidence_gate(
-                ranked_candidates_for_gate,
-                date=date,
-            )
-            if getattr(confidence_gate_state, "enabled", False):
-                self.confidence_gate_history.append(
-                    {
-                        "date": trade_date_str,
-                        "tranche_idx": tranche_idx,
-                        "score": confidence_gate_state.score,
-                        "exposure": confidence_gate_state.exposure,
-                        "candidate_count": confidence_gate_state.candidate_count,
-                        "top_k": confidence_gate_state.top_k,
-                        "top_mean": confidence_gate_state.top_mean,
-                        "baseline_mean": confidence_gate_state.baseline_mean,
-                        "score_std": confidence_gate_state.score_std,
-                        "hit_threshold": confidence_gate_state.hit_threshold,
-                        "reason": confidence_gate_state.reason,
-                    }
-                )
-
         # 从排序候选中选择 top N 股票
         # 始终仅基于 T0 排名生成次日买入计划；
         # T+1 的可交易性统一在执行阶段处理，避免在计划阶段引入前视过滤。
@@ -2117,92 +1976,22 @@ class BacktestEngine:
 
         # 获取目标数量（从信号生成器获取）
         if hasattr(self.signal, "top_n"):
-            base_n = self.signal.top_n
+            target_n = self.signal.top_n
         else:
-            base_n = len(ranked_candidates)
-
-        # 动态 Top-N：根据门控置信度调整选股数量
-        # 高置信度 → 集中（缩减），低置信度 → 分散（扩大）
-        dynamic_topn_reason = None
-        if (
-            self.signal_gate_dynamic_topn
-            and confidence_gate_state is not None
-            and getattr(confidence_gate_state, "enabled", False)
-        ):
-            gate_exposure = getattr(confidence_gate_state, "exposure", 1.0)
-            if gate_exposure >= 1.0:
-                # 高置信度：集中持股
-                target_n = max(3, int(round(base_n * self.signal_gate_topn_high_multiplier)))
-                dynamic_topn_reason = (
-                    f"高置信度(exposure={gate_exposure:.0%})→集中"
-                    f"({base_n}×{self.signal_gate_topn_high_multiplier}={target_n}只)"
-                )
-            elif gate_exposure <= 0:
-                # 门控阻断，target_n 保持 base_n（后续门控会清零信号）
-                target_n = base_n
-                dynamic_topn_reason = "门控阻断，top-N不生效"
-            else:
-                # 中低置信度：分散持股，按 exposure 线性插值
-                # exposure 越低 → multiplier 越大（趋向 low_multiplier）
-                multiplier = 1.0 + (1.0 - gate_exposure) * (
-                    self.signal_gate_topn_low_multiplier - 1.0
-                )
-                target_n = min(
-                    len(ranked_candidates_for_selection),
-                    max(base_n, int(round(base_n * multiplier))),
-                )
-                dynamic_topn_reason = (
-                    f"中低置信度(exposure={gate_exposure:.0%})→分散"
-                    f"({base_n}×{multiplier:.2f}={target_n}只)"
-                )
-        else:
-            target_n = base_n
+            target_n = len(ranked_candidates)
 
         decision_trace = self._build_signal_decision_trace(
             date=date,
             target_n=target_n,
             candidate_count=len(ranked_candidates_for_selection),
             tranche_idx=tranche_idx,
-            confidence_gate_state=confidence_gate_state,
         )
-        # 将动态 Top-N 信息写入 decision_trace
-        decision_trace["dynamic_topn"] = {
-            "enabled": self.signal_gate_dynamic_topn,
-            "base_n": base_n,
-            "effective_n": target_n,
-            "reason": dynamic_topn_reason,
-        }
-        decision_trace["holding_bonus"] = {
-            "enabled": self.holding_bonus_enabled,
-        }
 
         priority_candidates = list(ranked_candidates_for_selection)
 
-        if self.holding_bonus_enabled and existing_positions:
-            # 换手率约束模式：区分保留持仓和新买入
-            held_kept = []
-            for stock, score in priority_candidates[:target_n]:
-                if stock in existing_positions:
-                    held_kept.append(stock)
-                else:
-                    signals[stock] = score
-                    candidates_checked += 1
-            # 延续保留的持仓（重置持有期起点为 T+1）
-            for stock in held_kept:
-                self._extend_holding_period(stock, date, trading_dates, date_to_idx)
-            if held_kept and self.verbose:
-                logger.info(
-                    f"  持仓保留: {len(held_kept)} 只仍在Top-{target_n}中，"
-                    f"延续持有 ({', '.join(held_kept[:5])}"
-                    f"{'...' if len(held_kept) > 5 else ''})"
-                )
-            decision_trace["holding_bonus"]["kept_count"] = len(held_kept)
-            decision_trace["holding_bonus"]["kept_stocks"] = list(held_kept)
-            decision_trace["holding_bonus"]["new_buy_count"] = len(signals)
-        else:
-            for stock, score in priority_candidates[:target_n]:
-                signals[stock] = score
-                candidates_checked += 1
+        for stock, score in priority_candidates[:target_n]:
+            signals[stock] = score
+            candidates_checked += 1
 
         if not signals:
             if self.verbose:
@@ -2216,62 +2005,6 @@ class BacktestEngine:
         signals = self._normalize_signals(signals, date)
 
         # 应用权重限制（如果启用）
-        if self.max_weight_per_stock is not None:
-            from ..portfolio import cap_and_normalize_weights
-
-            signals = cap_and_normalize_weights(
-                signals, max_weight_per_stock=self.max_weight_per_stock, verbose=self.verbose
-            )
-
-            if not signals:
-                if self.verbose:
-                    logger.warning(f"信号日 {date.date()} 权重限制后无有效权重，跳过")
-                return
-
-        if confidence_gate_state is not None and hasattr(
-            self.signal, "apply_confidence_gate_to_weights"
-        ):
-            signals = self.signal.apply_confidence_gate_to_weights(
-                signals,
-                confidence_state=confidence_gate_state,
-                date=date,
-                emit_log=False,
-            )
-
-            if not signals:
-                decision_trace = self._mark_decision_trace_blocked(decision_trace)
-                self._log_rebalance_decision_summary(decision_trace=decision_trace)
-                return
-
-        # ── 滚动模型质量监控：记录选股信息 + 应用质量仓位系数 ──
-        if self.signal_gate_quality_enabled and signals:
-            # 记录本次选股，用于后续持仓结束后评估
-            predicted_mean = (
-                confidence_gate_state.top_mean
-                if confidence_gate_state is not None
-                and not np.isnan(confidence_gate_state.top_mean)
-                else 0.0
-            )
-            self._record_signal_for_quality_tracking(date, list(signals.keys()), predicted_mean)
-            # 应用滚动质量仓位系数
-            quality_exposure = self._get_rolling_quality_exposure()
-            if quality_exposure < 1.0:
-                signals = {stock: weight * quality_exposure for stock, weight in signals.items()}
-            # 将质量系数写入 decision_trace，供摘要日志统一显示
-            if "signal_gate" in decision_trace:
-                decision_trace["signal_gate"]["quality_exposure"] = quality_exposure
-                decision_trace["signal_gate"]["quality_score"] = self._rolling_quality_score
-                decision_trace["signal_gate"]["quality_warmup_remaining"] = (
-                    self._quality_warmup_remaining
-                )
-                # 同步更新 final_target_exposure（门控 × 质量）
-                orig_gate = decision_trace["signal_gate"].get("exposure", 1.0)
-                decision_trace["final_target_exposure"] = float(orig_gate) * float(quality_exposure)
-            # 注入质量分数到门控状态
-            if confidence_gate_state is not None:
-                confidence_gate_state.rolling_quality = self._rolling_quality_score
-
-        # 保存信号，待 T+1 执行
         # 同时保存 T0 候选优先级与槽位计划，供 T+1 顺位执行和后续补齐复用。
         slot_weights = [{"stock": stock, "weight": float(weight)} for stock, weight in signals.items()]
         self.pending_signals[date] = {
@@ -2426,7 +2159,6 @@ class BacktestEngine:
                 target_n=target_n,
                 candidate_count=len(ranked_candidates) if ranked_candidates else len(signals),
                 tranche_idx=tranche_idx,
-                confidence_gate_state=None,
             )
 
         decision_trace["ect"] = {
@@ -2448,11 +2180,8 @@ class BacktestEngine:
         planned_buys: List[Dict] = []
         successful_buys: List[Dict] = []
         failed_buys: List[Dict] = []
-        holding_bonus_state = decision_trace.get("holding_bonus", {}) if decision_trace else {}
-        inherited_stocks = list(holding_bonus_state.get("kept_stocks", []))
-        inherited_position_count = int(
-            holding_bonus_state.get("kept_count", len(inherited_stocks))
-        )
+        inherited_stocks: List[str] = []
+        inherited_position_count = 0
 
         def _build_buy_detail(stock: str, target_value: float) -> Dict:
             actual_weight = float(target_value / portfolio_value) if portfolio_value > 0 else 0.0
@@ -4669,282 +4398,23 @@ class BacktestEngine:
         """
         return pd.DataFrame(self.trades)
 
-    def get_confidence_gate_stats(self) -> Dict[str, float]:
-        """获取信号置信度门控统计。"""
-        if not self.confidence_gate_history:
-            return {
-                "signal_days": 0,
-                "blocked_days": 0,
-                "block_rate": 0.0,
-                "avg_exposure": 1.0,
-                "avg_score": 0.0,
-            }
-
-        history_df = pd.DataFrame(self.confidence_gate_history)
-        signal_days = int(len(history_df))
-        blocked_days = int((history_df["exposure"] <= 0).sum())
-        block_rate = blocked_days / signal_days if signal_days > 0 else 0.0
-        avg_exposure = float(history_df["exposure"].mean()) if signal_days > 0 else 1.0
-        avg_score = float(history_df["score"].mean()) if signal_days > 0 else 0.0
-
-        return {
-            "signal_days": signal_days,
-            "blocked_days": blocked_days,
-            "block_rate": block_rate,
-            "avg_exposure": avg_exposure,
-            "avg_score": avg_score,
-        }
-
-    # ── 提前调仓历史快照/回滚（避免污染门控和质量监控基准）──
+    # ── 提前调仓历史快照/回滚 ──
 
     def _snapshot_early_rebalance_state(self, date: pd.Timestamp) -> Dict:
-        """快照提前调仓可能污染的历史缓冲区状态（仅记录长度/标记），用于失败时回滚。
-
-        返回的快照用于：提前调仓信号若未入 pending_signals（门控阻断或拖尾拒绝），
-        需回滚 evaluate_confidence_gate 和 _record_signal_for_quality_tracking 追加的历史条目，
-        确保"是否启用该开关"不会影响正常调仓日的门控/质量计算基准。
-        """
+        """快照提前调仓可能污染的状态，用于失败时回滚。"""
         snapshot = {
-            "confidence_gate_history_len": len(self.confidence_gate_history),
             "last_ranked_candidates": list(self._last_ranked_candidates),
             "last_signal_date": self._last_signal_date,
-            # 完整深拷贝 _signal_tracking（_evaluate_expired_signal_quality 会删除过期键）
-            "signal_tracking": {k: dict(v) for k, v in self._signal_tracking.items()},
-            # _generate_signal 第 966 行会重置基准 NAV
             "last_rebalance_nav": getattr(self, "_last_rebalance_nav", None),
-            # _evaluate_expired_signal_quality → _update_prediction_quality 会追加质量历史
-            "prediction_quality_history": list(
-                getattr(self, "_prediction_quality_history", [])
-            ),
-            "rolling_quality_score": getattr(self, "_rolling_quality_score", None),
-            "quality_warmup_remaining": getattr(self, "_quality_warmup_remaining", None),
         }
-        # 快照信号生成器侧的门控历史缓冲
-        if hasattr(self.signal, "_separation_history"):
-            snapshot["separation_history_len"] = len(self.signal._separation_history)
-        if hasattr(self.signal, "_composite_score_history"):
-            snapshot["composite_score_history_len"] = len(self.signal._composite_score_history)
         return snapshot
 
     def _restore_early_rebalance_state(self, date: pd.Timestamp, snapshot: Dict) -> None:
-        """回滚提前调仓过程中追加的历史条目，使状态恢复到 _generate_signal 调用之前。"""
-        # 回滚 confidence_gate_history
-        target_len = snapshot["confidence_gate_history_len"]
-        if len(self.confidence_gate_history) > target_len:
-            del self.confidence_gate_history[target_len:]
-
-        # 回滚信号生成器侧的门控历史缓冲
-        if "separation_history_len" in snapshot and hasattr(
-            self.signal, "_separation_history"
-        ):
-            target = snapshot["separation_history_len"]
-            if len(self.signal._separation_history) > target:
-                del self.signal._separation_history[target:]
-        if "composite_score_history_len" in snapshot and hasattr(
-            self.signal, "_composite_score_history"
-        ):
-            target = snapshot["composite_score_history_len"]
-            if len(self.signal._composite_score_history) > target:
-                del self.signal._composite_score_history[target:]
-
-        # 完整还原 _signal_tracking（覆盖 _evaluate_expired_signal_quality 的删除和新增）
-        self._signal_tracking = {k: dict(v) for k, v in snapshot["signal_tracking"].items()}
-
-        # 还原 _last_rebalance_nav（_generate_signal 会无条件重置）
+        """回滚提前调仓过程中修改的状态。"""
         if snapshot["last_rebalance_nav"] is not None:
             self._last_rebalance_nav = snapshot["last_rebalance_nav"]
 
-        # 还原滚动质量监控状态（_update_prediction_quality 会修改）
-        if snapshot["prediction_quality_history"] is not None and hasattr(
-            self, "_prediction_quality_history"
-        ):
-            self._prediction_quality_history = list(snapshot["prediction_quality_history"])
-        if snapshot["rolling_quality_score"] is not None and hasattr(
-            self, "_rolling_quality_score"
-        ):
-            self._rolling_quality_score = snapshot["rolling_quality_score"]
-        if snapshot["quality_warmup_remaining"] is not None and hasattr(
-            self, "_quality_warmup_remaining"
-        ):
-            self._quality_warmup_remaining = snapshot["quality_warmup_remaining"]
-
-        # 回滚止盈补位用的候选快照
         self._last_ranked_candidates = snapshot["last_ranked_candidates"]
         self._last_signal_date = snapshot["last_signal_date"]
 
-    # ── 滚动模型质量监控 ──
 
-    def _record_signal_for_quality_tracking(
-        self, date: pd.Timestamp, selected_stocks: List[str], predicted_mean: float
-    ) -> None:
-        """记录本次调仓选中的股票，用于后续评估实际表现。"""
-        if not self.signal_gate_quality_enabled:
-            return
-        date_str = date.strftime("%Y%m%d")
-        self._signal_tracking[date_str] = {
-            "stocks": list(selected_stocks),
-            "predicted_mean": predicted_mean,
-            "date": date,
-        }
-
-    def _update_prediction_quality(
-        self,
-        signal_date: pd.Timestamp,
-        selected_stocks: List[str],
-        price_data: pd.DataFrame,
-        sell_date: pd.Timestamp,
-    ) -> None:
-        """一个调仓周期结束后，评估选股实际表现并更新滚动质量分数。
-
-        Args:
-            signal_date: 信号生成日期
-            selected_stocks: 选中的股票列表
-            price_data: 价格数据（需要包含 ts_code, close_adj 或 close）
-            sell_date: 卖出日期
-        """
-        if not self.signal_gate_quality_enabled:
-            return
-
-        signal_date_str = signal_date.strftime("%Y%m%d")
-        sell_date_str = sell_date.strftime("%Y%m%d")
-
-        if price_data is None or price_data.empty or "trade_date" not in price_data.columns:
-            return
-
-        # 获取信号日后一个交易日（买入日）
-        # price_data 的 index 是整数行号，通过 trade_date 列来查找日期位置
-        unique_dates = sorted(price_data["trade_date"].unique())
-        if not unique_dates:
-            return
-        signal_pos = bisect.bisect_left(unique_dates, signal_date_str)
-        # 信号日T+1为买入日
-        buy_pos = signal_pos + 1
-        if buy_pos >= len(unique_dates):
-            return
-        buy_date_str = unique_dates[buy_pos]
-
-        # 计算选中股票的收益率
-        price_col = "close_adj" if "close_adj" in price_data.columns else "close"
-        if "ts_code" not in price_data.columns:
-            return
-
-        buy_prices = price_data.loc[
-            price_data["trade_date"] == buy_date_str, ["ts_code", price_col]
-        ].set_index("ts_code")[price_col]
-        sell_prices = price_data.loc[
-            price_data["trade_date"] == sell_date_str, ["ts_code", price_col]
-        ].set_index("ts_code")[price_col]
-
-        if buy_prices.empty or sell_prices.empty:
-            return
-
-        # 选中股票收益率
-        selected_returns = []
-        for stock in selected_stocks:
-            if stock in buy_prices.index and stock in sell_prices.index:
-                bp = buy_prices[stock]
-                sp = sell_prices[stock]
-                if bp > 0:
-                    selected_returns.append(sp / bp - 1.0)
-
-        # 全市场收益率（计算中位数）
-        common_stocks = buy_prices.index.intersection(sell_prices.index)
-        all_returns = (sell_prices[common_stocks] / buy_prices[common_stocks] - 1.0).dropna()
-
-        if len(selected_returns) == 0 or len(all_returns) == 0:
-            return
-
-        universe_median = float(all_returns.median())
-        beat_count = sum(1 for r in selected_returns if r > universe_median)
-        hit_rate = beat_count / len(selected_returns)
-
-        self._prediction_quality_history.append(
-            {
-                "signal_date": signal_date_str,
-                "sell_date": sell_date_str,
-                "hit_rate": hit_rate,
-                "selected_count": len(selected_returns),
-                "selected_mean_return": float(np.mean(selected_returns)),
-                "universe_median_return": universe_median,
-                "beat_count": beat_count,
-            }
-        )
-
-        # 更新滚动质量分数（EWM）
-        if self._quality_warmup_remaining > 0:
-            self._quality_warmup_remaining -= 1
-
-        recent = self._prediction_quality_history[-self.signal_gate_quality_window :]
-        if len(recent) > 0:
-            hit_rates = [entry["hit_rate"] for entry in recent]
-            hit_series = pd.Series(hit_rates)
-            self._rolling_quality_score = float(
-                hit_series.ewm(halflife=self.signal_gate_quality_halflife, min_periods=1)
-                .mean()
-                .iloc[-1]
-            )
-
-    def _evaluate_expired_signal_quality(
-        self, current_date: pd.Timestamp, price_data: pd.DataFrame
-    ) -> None:
-        """在新调��时，评估已过期信号的实际选股表现。"""
-        if not self._signal_tracking:
-            return
-
-        current_date_str = current_date.strftime("%Y%m%d")
-        expired_keys = []
-
-        for signal_date_str, tracking_info in self._signal_tracking.items():
-            signal_date = tracking_info["date"]
-            # 判断此信号是否已超过持有期
-            # 保守处理：当前日期距离信���日已超过 holding_period，则认为已到期
-            days_since = (current_date - signal_date).days
-            if days_since < self.holding_period:
-                continue
-
-            # 评估此信号的实际表现
-            self._update_prediction_quality(
-                signal_date=signal_date,
-                selected_stocks=tracking_info["stocks"],
-                price_data=price_data,
-                sell_date=current_date,
-            )
-            expired_keys.append(signal_date_str)
-
-        # 清理已评估的信号
-        for key in expired_keys:
-            del self._signal_tracking[key]
-
-    def _get_rolling_quality_exposure(self) -> float:
-        """根据滚动模型质量计算仓位系数。
-
-        Returns:
-            仓位系数 (0.2~1.0)，预热期返回1.0
-        """
-        if not self.signal_gate_quality_enabled:
-            return 1.0
-        if self._quality_warmup_remaining > 0:
-            return 1.0  # 预热期不干预
-        if self._rolling_quality_score >= self.signal_gate_quality_threshold:
-            return 1.0  # 模型表现正常
-        # 模型表现低于阈值，按比例线性降仓
-        return max(0.2, self._rolling_quality_score / self.signal_gate_quality_threshold)
-
-    def get_prediction_quality_stats(self) -> Dict[str, float]:
-        """获取滚动模型质量统计。"""
-        if not self._prediction_quality_history:
-            return {
-                "quality_periods": 0,
-                "avg_hit_rate": 0.0,
-                "rolling_quality_score": self._rolling_quality_score,
-                "quality_exposure": self._get_rolling_quality_exposure(),
-                "warmup_remaining": self._quality_warmup_remaining,
-            }
-        hit_rates = [e["hit_rate"] for e in self._prediction_quality_history]
-        return {
-            "quality_periods": len(self._prediction_quality_history),
-            "avg_hit_rate": float(np.mean(hit_rates)),
-            "rolling_quality_score": self._rolling_quality_score,
-            "quality_exposure": self._get_rolling_quality_exposure(),
-            "warmup_remaining": self._quality_warmup_remaining,
-        }

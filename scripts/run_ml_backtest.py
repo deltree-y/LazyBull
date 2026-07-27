@@ -183,8 +183,6 @@ def run_ml_backtest(
     max_weight_per_stock: float = None,
     max_per_industry: int = None,
     stock_basic: pd.DataFrame = None,
-    holding_bonus_enabled: bool = False,
-    holding_bonus_sigma: float = 0.5,
     profit_extension_mode: str = "pnl",
     profit_extension_strength_threshold: float = 0.6,
     profit_extension_strength_weights: dict = None,
@@ -206,13 +204,6 @@ def run_ml_backtest(
     take_profit_threshold: float = None,
     take_profit_refill: bool = True,
     enable_early_rebalance_on_empty: bool = True,
-    signal_gate_quality_enabled: bool = False,
-    signal_gate_quality_window: int = 5,
-    signal_gate_quality_threshold: float = 0.4,
-    signal_gate_quality_halflife: int = 3,
-    signal_gate_dynamic_topn: bool = False,
-    signal_gate_topn_high_multiplier: float = 0.6,
-    signal_gate_topn_low_multiplier: float = 1.5,
     trading_config: TradingConfig = None,
     data_storage: Storage = None,
 ) -> tuple:
@@ -235,8 +226,6 @@ def run_ml_backtest(
         max_weight_per_stock: 单股最大权重（可选）
         max_per_industry: 单行业最大持仓数量（可选）
         stock_basic: 股票基本信息 DataFrame（用于行业约束，可选）
-        holding_bonus_enabled: 是否启用持仓奖励（降低换手）
-        holding_bonus_sigma: 持仓奖励强度（标准差倍数）
         
     Returns:
         (nav_curve, trades) 元组
@@ -295,8 +284,6 @@ def run_ml_backtest(
             if equity_curve_config and equity_curve_config.enabled
             else 0
         ),
-        holding_bonus_enabled=holding_bonus_enabled,
-        holding_bonus_sigma=holding_bonus_sigma,
         profit_extension_mode=profit_extension_mode,
         profit_extension_strength_threshold=profit_extension_strength_threshold,
         profit_extension_strength_weights=profit_extension_strength_weights,
@@ -318,13 +305,6 @@ def run_ml_backtest(
         take_profit_threshold=take_profit_threshold,
         take_profit_refill=take_profit_refill,
         enable_early_rebalance_on_empty=enable_early_rebalance_on_empty,
-        signal_gate_quality_enabled=signal_gate_quality_enabled,
-        signal_gate_quality_window=signal_gate_quality_window,
-        signal_gate_quality_threshold=signal_gate_quality_threshold,
-        signal_gate_quality_halflife=signal_gate_quality_halflife,
-        signal_gate_dynamic_topn=signal_gate_dynamic_topn,
-        signal_gate_topn_high_multiplier=signal_gate_topn_high_multiplier,
-        signal_gate_topn_low_multiplier=signal_gate_topn_low_multiplier,
         sell_price=sell_timing,
     )
 
@@ -973,15 +953,9 @@ def main():
         logger.info(f"  - 恢复等待周期: {args.equity_curve_recovery_delay_periods} 个调仓周期")
     if args.take_profit_threshold is not None:
         logger.info(f"整体止盈: 启用 (threshold={args.take_profit_threshold:.2%}, refill={'启用' if args.take_profit_refill else '关闭'})")
-    if args.signal_gate_quality_enabled:
         logger.info(
-            f"滚动质量监控: 启用 (window={args.signal_gate_quality_window}, "
-            f"threshold={args.signal_gate_quality_threshold}, halflife={args.signal_gate_quality_halflife})"
         )
-    if args.signal_gate_dynamic_topn:
         logger.info(
-            f"动态Top-N: 启用 (high={args.signal_gate_topn_high_multiplier}, "
-            f"low={args.signal_gate_topn_low_multiplier})"
         )
 
     # 构建统一策略配置
@@ -1060,8 +1034,6 @@ def main():
             max_weight_per_stock=trading_config.max_weight_per_stock,
             max_per_industry=trading_config.max_per_industry,
             stock_basic=stock_basic,
-            holding_bonus_enabled=trading_config.holding_bonus_enabled,
-            holding_bonus_sigma=trading_config.holding_bonus_sigma,
             profit_extension_mode=trading_config.profit_extension_mode,
             profit_extension_strength_threshold=trading_config.profit_extension_strength_threshold,
             profit_extension_strength_weights=trading_config.profit_extension_strength_weights,
@@ -1083,13 +1055,6 @@ def main():
             take_profit_threshold=trading_config.take_profit_threshold,
             take_profit_refill=trading_config.take_profit_refill,
             enable_early_rebalance_on_empty=trading_config.enable_early_rebalance_on_empty,
-            signal_gate_quality_enabled=trading_config.signal_gate_quality_enabled,
-            signal_gate_quality_window=trading_config.signal_gate_quality_window,
-            signal_gate_quality_threshold=trading_config.signal_gate_quality_threshold,
-            signal_gate_quality_halflife=trading_config.signal_gate_quality_halflife,
-            signal_gate_dynamic_topn=trading_config.signal_gate_dynamic_topn,
-            signal_gate_topn_high_multiplier=trading_config.signal_gate_topn_high_multiplier,
-            signal_gate_topn_low_multiplier=trading_config.signal_gate_topn_low_multiplier,
             trading_config=trading_config,
             data_storage=storage,
         )

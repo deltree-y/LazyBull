@@ -23,29 +23,6 @@ class TradingConfig:
 
     # ── 组合 ──
     top_n: int = 30
-    signal_confidence_gate_enabled: bool = False
-    signal_confidence_gate_top_k: int = 10
-    signal_confidence_gate_thresholds: List[float] = field(default_factory=lambda: [0.8, 1.2, 1.6])
-    signal_confidence_gate_exposure_levels: List[float] = field(
-        default_factory=lambda: [0.3, 0.6, 1.0]
-    )
-
-    # ── 信号入口门控 v2（composite 模式替代旧置信度门控）──
-    signal_gate_mode: str = "legacy"  # "legacy" 旧逻辑 | "composite" 新公式 | "disabled" 关闭
-    signal_gate_cost_multiplier: float = 2.0  # 预测收益至少覆盖成本的倍数
-    signal_gate_round_trip_cost: float = 0.003  # 往返交易成本估算（佣金+印花税+滑点）
-    signal_gate_quality_enabled: bool = False  # 是否启用滚动模型质量监控
-    signal_gate_quality_window: int = 5  # 回看调仓周期数
-    signal_gate_quality_threshold: float = 0.4  # 最低滚动hit rate
-    signal_gate_quality_halflife: int = 3  # EWM半衰期（调仓周期数）
-    signal_gate_percentile_warmup: int = 20  # 百分位归一化预热期（调仓次数）
-    signal_gate_dynamic_topn: bool = False  # 是否启用动态 Top-N（按置信度调整选股数量）
-    signal_gate_topn_high_multiplier: float = 0.6  # 高置信度时缩减选股数量的系数（<1，集中持股）
-    signal_gate_topn_low_multiplier: float = 1.5  # 低置信度时扩大选股数量的系数（>1，分散持股）
-
-    # ── 换手率约束（持仓保留奖励）──
-    holding_bonus_enabled: bool = False  # 是否启用持仓保留奖励（降低换手率）
-    holding_bonus_sigma: float = 0.5  # 保留奖励幅度（截面分数标准差的倍数）
 
     # ── 盈利延续持有模式（强势度评分）──
     # pnl=原单一浮盈判据(向后兼容,默认) | strength=多维度强势度评分 | disabled=关闭延续机制
