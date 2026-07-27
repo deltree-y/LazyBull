@@ -195,18 +195,12 @@ COL_NAMES = {
     "ensemble_seeds": "多种子bagging种子",
     "ensemble_seed_keep_top_ratio": "多种子保留比例",
     "ensemble_seed_keep_min_models": "多种子最少保留模型数",
-    "risk_penalty_penalized_ratio": "惩罚覆盖率",
-    "risk_penalty_penalty_mean": "惩罚均值",
-    "risk_penalty_topk_changed_days_ratio": "TopN变更日占比",
-    "risk_penalty_swap_alpha": "替换收益贡献",
     "rank_weight_enabled": "rank权重启用",
     "rank_weight_topk": "rank权重TopK",
     "rank_weight": "rank权重值",
     "rank_weight_topk_weight_mode": "rank权重TopK模式",
     "time_decay_half_life": "时间衰减半衰期",
     "objective": "目标函数",
-    "risk_penalty_lambda_scale": "风险惩罚lambda缩放",
-    "risk_penalty_lambda_grid": "风险惩罚lambda网格",
     "algorithm": "算法",
     "enable_fundamental": "基本面因子",
     "enable_alt": "另类因子",
@@ -335,7 +329,6 @@ BATCH_EXPERIMENT_PARAM_CANDIDATES = [
     "多种子保留比例",
     "多种子最少保留模型数",
     "最佳迭代均值",
-    "风险惩罚lambda缩放",
     "回测TopN",
     "回测调仓频率",
     "回测卖出时机",
@@ -385,8 +378,6 @@ PARAM_COLS = [
     "rank_weight",
     "time_decay_half_life",
     "objective",
-    "risk_penalty_lambda_scale",
-    "risk_penalty_lambda_grid",
     "enable_fundamental",
     "enable_alt",
     "enable_margin",
@@ -538,8 +529,6 @@ MODEL_PARAM_KEYS = [
     "rank_weight_topk_weight_mode",
     "time_decay_half_life",
     "objective",
-    "risk_penalty_lambda_scale",
-    "risk_penalty_lambda_grid",
     "enable_fundamental",
     "enable_alt",
     "enable_margin",
@@ -1573,27 +1562,6 @@ def aggregate_run(group: pd.DataFrame) -> dict:
         round(safe_mean(lift30_col), 6) if safe_mean(lift30_col) is not None else None
     )
 
-    row["risk_penalty_penalized_ratio"] = (
-        round(safe_mean("risk_penalty_penalized_ratio"), 6)
-        if safe_mean("risk_penalty_penalized_ratio") is not None
-        else None
-    )
-    row["risk_penalty_penalty_mean"] = (
-        round(safe_mean("risk_penalty_penalty_mean"), 6)
-        if safe_mean("risk_penalty_penalty_mean") is not None
-        else None
-    )
-    row["risk_penalty_topk_changed_days_ratio"] = (
-        round(safe_mean("risk_penalty_topk_changed_days_ratio"), 6)
-        if safe_mean("risk_penalty_topk_changed_days_ratio") is not None
-        else None
-    )
-    row["risk_penalty_swap_alpha"] = (
-        round(safe_mean("risk_penalty_swap_alpha"), 6)
-        if safe_mean("risk_penalty_swap_alpha") is not None
-        else None
-    )
-
     # Top100 指标
     med100_col = "diagnostic_Top100_逐日均值_50分位"
     if med100_col in group.columns:
@@ -1788,10 +1756,6 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         "daily_rankic_mean",
         "icir",
         "selection_monotonicity",
-        "risk_penalty_penalized_ratio",
-        "risk_penalty_penalty_mean",
-        "risk_penalty_topk_changed_days_ratio",
-        "risk_penalty_swap_alpha",
         # 全周期串联补充
         "chain_total_return",
         "chain_sharpe",

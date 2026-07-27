@@ -114,8 +114,6 @@ class MLSignal(Signal):
         self._GATE_HISTORY_MAX_LEN = 60  # 最多保留60个调仓日的历史
         # 跨 split 持久化质量监控状态（walk-forward 复用 signal 实例时保留）
         self._persisted_quality_state: Optional[dict] = None
-        # 条件式坏票分类器（v2，延迟加载）
-        self._bad_pick_classifier = None
 
         self.min_amount_ma20 = min_amount_ma20
         self.min_total_mv = min_total_mv
@@ -586,60 +584,6 @@ class MLSignal(Signal):
                 version=self.model_version, strict_version_check=True
             )
             self.feature_columns = self.metadata["feature_columns"]
-            risk_config = self.metadata.get("risk_penalty_config") or {}
-            risk_enabled = bool(risk_config.get("enabled", False))
-            if risk_enabled:
-                risk_version = int(risk_config.get("version", 1))
-                if risk_version >= 2:
-                    # 条件式坏票模型（v2+）
-                    bp_model_ver = int(risk_config.get("bad_pick_model_version", 0) or 0)
-                    auc = float(risk_config.get("calibration_auc", 0.0) or 0)
-                    regimes = risk_config.get("regime_configs") or {}
-                    regime_info = ", ".join(
-                        f"{n}:thr={c.get('threshold',0):.2f},lam={c.get('penalty_lambda',0):.3f}"
-                        for n, c in regimes.items()
-                    )
-                    inline = risk_config.get('classifier_inline', False) or bp_model_ver > 0
-                    clf_src = "内嵌" if risk_config.get('classifier_inline') else f"v{bp_model_ver}"
-                    logger.warning(
-                        f"模型条件式坏票惩罚已启用: AUC={auc:.3f}, "
-                        f"bad_rate={float(risk_config.get('calibration_bad_rate', 0.0)):.2%}, "
-                        f"classifier={clf_src}, "
-                        f"regimes={{{regime_info}}}"
-                    )
-                    # 从主模型属性中提取内嵌的坏票分类器
-                    if hasattr(self.model, '_bad_pick_classifier_'):
-                        self._bad_pick_classifier = self.model._bad_pick_classifier_
-                        logger.info("坏票分类器已从模型内嵌属性加载")
-                    elif bp_model_ver > 0:
-                        # 兼容旧版：仍尝试通过版本号单独加载
-                        try:
-                            import xgboost as xgb
-                            clf_file = self.models_dir / f"v{bp_model_ver}_model.json"
-                            if not clf_file.exists():
-                                raise FileNotFoundError(f"分类器模型文件不存在: {clf_file}")
-                            clf = xgb.XGBClassifier()
-                            clf.load_model(str(clf_file))
-                            self._bad_pick_classifier = clf
-                            logger.info(f"坏票分类器已加载(旧版兼容): v{bp_model_ver}")
-                        except Exception as exc:
-                            logger.warning(f"坏票分类器加载失败: {exc}，惩罚将跳过")
-                            self._bad_pick_classifier = None
-                    else:
-                        self._bad_pick_classifier = None
-                else:
-                    # 旧版线性惩罚（v1）
-                    top_features = ", ".join(
-                        f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
-                        for item in (risk_config.get("feature_weights") or [])[:3]
-                    )
-                    logger.warning(
-                        f"模型风险惩罚已启用(v1): lambda={float(risk_config.get('penalty_lambda', 0.0) or 0.0):.3f}, "
-                        f"bad_rate={float(risk_config.get('calibration_bad_rate', 0.0)):.2%}, "
-                        f"top_features={top_features or '无'}"
-                    )
-            else:
-                logger.info("模型风险惩罚未启用")
             logger.info(
                 f"模型已加载: {self.metadata['version_str']}, "
                 f"特征数={self.metadata['feature_count']}"
@@ -719,76 +663,6 @@ class MLSignal(Signal):
         stage = "选股/预测(ranked)" if ranked else "选股/预测"
         universe_text = f"{before_count}→{after_count}" if before_count != after_count else str(after_count)
         logger.info(f"{stage}: {universe_text}, 特征{len(self.feature_columns)}")
-
-    @staticmethod
-    def _rank_risk_feature(series: pd.Series) -> pd.Series:
-        """将单日截面风险特征映射到 0~1 分位。"""
-        valid = series.dropna()
-        if len(valid) == 0:
-            return pd.Series(0.5, index=series.index, dtype=float)
-        ranked = series.rank(method="average", pct=True, na_option="keep")
-        return ranked.fillna(0.5).clip(0.0, 1.0)
-
-    def _apply_risk_penalty(self, features_df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
-        """按模型 metadata 中的风险配置生成 final_score。
-
-        支持两种模式：
-        - v1（旧版线性加权）: final_score = ml_score - λ × Σ(w_i × quantile_i)
-        - v2（条件式坏票）: 市场状态检测 + 二分类器 + 阈值门控
-        """
-        features_df["risk_score"] = 0.0
-        features_df["final_score"] = features_df["ml_score"]
-
-        risk_config = (self.metadata or {}).get("risk_penalty_config") or {}
-        if not risk_config.get("enabled"):
-            return features_df, "ml_score"
-
-        risk_version = int(risk_config.get("version", 1))
-
-        if risk_version >= 2:
-            # ── v2: 条件式坏票模型 ──
-            from src.lazybull.risk.bad_pick import BadPickConfig, apply_conditional_penalty
-
-            bp_config = BadPickConfig.from_dict(risk_config)
-            if not bp_config.enabled or bp_config.bad_pick_model_version <= 0:
-                return features_df, "ml_score"
-            if self._bad_pick_classifier is None:
-                return features_df, "ml_score"
-
-            return apply_conditional_penalty(features_df, bp_config, self._bad_pick_classifier)
-
-        # ── v1: 旧版线性加权惩罚（保留兼容）──
-        penalty_lambda = float(risk_config.get("penalty_lambda", 0.0) or 0.0)
-        feature_weights = risk_config.get("feature_weights") or []
-        if penalty_lambda <= 0 or len(feature_weights) == 0:
-            return features_df, "ml_score"
-
-        risk_score = pd.Series(0.0, index=features_df.index, dtype=float)
-        total_weight = 0.0
-        for item in feature_weights:
-            feature_name = item.get("name")
-            weight = float(item.get("weight", 0.0) or 0.0)
-            if not feature_name or weight <= 0:
-                continue
-            feature_series = (
-                self._rank_risk_feature(features_df[feature_name])
-                if feature_name in features_df.columns
-                else pd.Series(0.5, index=features_df.index, dtype=float)
-            )
-            risk_score += feature_series * weight
-            total_weight += weight
-
-        if total_weight <= 0:
-            return features_df, "ml_score"
-
-        if total_weight != 1.0:
-            risk_score = risk_score / total_weight
-
-        features_df["risk_score"] = risk_score
-        features_df["final_score"] = (
-            features_df["ml_score"] - penalty_lambda * features_df["risk_score"]
-        )
-        return features_df, "final_score"
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 ML 信号
@@ -884,7 +758,7 @@ class MLSignal(Signal):
                 )
 
         features_df["ml_score"] = predictions
-        features_df, score_column = self._apply_risk_penalty(features_df)
+        score_column = "ml_score"
 
         # 按预测分数排序，选择 Top N
         features_df = features_df.sort_values(score_column, ascending=False)
@@ -896,7 +770,7 @@ class MLSignal(Signal):
         if self.verbose:
             logger.debug(
                 "TOP预测概率抽样: {}".format(
-                    features_df[["ts_code", "ml_score", "risk_score", "final_score"]]
+                    features_df[["ts_code", "ml_score"]]
                     .head(3)
                     .to_string(index=False)
                     .replace("\n", " | ")
@@ -1023,14 +897,14 @@ class MLSignal(Signal):
                 )
 
         features_df["ml_score"] = predictions
-        features_df, score_column = self._apply_risk_penalty(features_df)
+        score_column = "ml_score"
 
         # 按预测分数排序，返回所有候选
         features_df = features_df.sort_values(score_column, ascending=False)
         if self.verbose:
             logger.debug(
                 "TOP预测概率抽样: {}".format(
-                    features_df[["ts_code", "ml_score", "risk_score", "final_score"]]
+                    features_df[["ts_code", "ml_score"]]
                     .head(3)
                     .to_string(index=False)
                     .replace("\n", " | ")

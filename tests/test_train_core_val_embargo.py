@@ -7,7 +7,6 @@ import pandas as pd
 
 from src.lazybull.ml.train_core import (
     evaluate_validation_daily,
-    learn_risk_penalty_config,
     prepare_training_data,
     split_train_val_by_date,
     split_val_for_early_stopping_by_date,
@@ -210,86 +209,6 @@ def test_prepare_training_data_auto_embargo_from_label_horizon():
 class _RiskMockModel:
     def predict(self, X):
         return X["pred_feature"].values
-
-
-def test_learn_risk_penalty_config_from_bad_pick_pattern():
-    rows = []
-    for day_index in range(30):
-        trade_date = f"202401{day_index + 1:02d}"
-        for stock_index in range(40):
-            risk_signal = stock_index / 39.0
-            rows.append(
-                {
-                    "trade_date": trade_date,
-                    "ts_code": f"{stock_index:06d}.SZ",
-                    "pred_feature": risk_signal,
-                    "kdj_j": risk_signal,
-                    "y_ret_5": -risk_signal,
-                }
-            )
-
-    df_val = pd.DataFrame(rows)
-    config = learn_risk_penalty_config(
-        model=_RiskMockModel(),
-        df_val=df_val,
-        feature_columns=["pred_feature"],
-        original_return_col="y_ret_5",
-        task="regression",
-        candidate_topk=40,
-        eval_topk=2,
-        lambda_grid=[1000.0],
-        min_bad_samples=40,
-        min_total_samples=200,
-        clf_n_estimators=20,
-        clf_early_stopping_rounds=5,
-        threshold_candidates=[0.3],
-    )
-
-    assert config is not None
-    assert config["enabled"] is True
-    assert config["classifier_features"] == ["kdj_j"]
-    assert config["calibration_samples"] == 240
-    assert config["calibration_auc"] > 0.55
-    assert config["selected_topk_median"] > config["baseline_topk_median"]
-
-
-def test_learn_risk_penalty_config_selects_zero_lambda_when_calibration_not_improved():
-    rows = []
-    for day_index in range(30):
-        trade_date = f"202402{day_index + 1:02d}"
-        bad_stock = day_index % 40
-        for stock_index in range(40):
-            rows.append(
-                {
-                    "trade_date": trade_date,
-                    "ts_code": f"{stock_index:06d}.SZ",
-                    "pred_feature": float(stock_index),
-                    "kdj_d": stock_index / 39.0,
-                    "y_ret_5": -1.0 if stock_index == bad_stock else 0.1,
-                }
-            )
-
-    df_val = pd.DataFrame(rows)
-    config = learn_risk_penalty_config(
-        model=_RiskMockModel(),
-        df_val=df_val,
-        feature_columns=["pred_feature"],
-        original_return_col="y_ret_5",
-        task="regression",
-        candidate_topk=40,
-        eval_topk=2,
-        lambda_grid=[0.1],
-        bad_bottom_pct=0.3,
-        min_bad_samples=3,
-        min_total_samples=200,
-        clf_n_estimators=20,
-        clf_early_stopping_rounds=5,
-        threshold_candidates=[0.5],
-    )
-
-    assert config is not None
-    assert config["enabled"] is False
-    assert config["calibration_auc"] <= 0.55
 
 
 def test_evaluate_validation_daily_uses_existing_prediction_col():

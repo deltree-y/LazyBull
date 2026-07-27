@@ -28,38 +28,18 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.85.20)
+### 当前版本 (v0.85.21)
 
-**Bad-Pick 分类器特征恢复** (v0.85.20):
-- `BAD_PICK_CLASSIFIER_FEATURES` 恢复为此前 21 因子版本，替换 v0.85.18–v0.85.19 的 20 因子重构版本。
-
-**Bad-Pick AUC 阈值可配置** (v0.85.17):
-- `--risk-penalty-clf-auc-threshold`（walk_forward）和 `$risk_penalty_clf_auc_threshold_list`（batch）可用于调节样本外 AUC 启用门槛，默认 0.55。
-
-**Bad-Pick 因子调优：排除低质量因子，新增融资/筹码/换手** (v0.85.15):
-- 移除 `fund_hold_ratio`、`fund_hold_ratio_chg`（factor_exclude_list 中，ICIR 或覆盖率不达标），可能为导致部分 split 校准 AUC=0.500 的原因之一。
-- 新增 `margin_net_buy_ratio`、`weight_avg_bias`、`turnover_rate`、`vol_burst_10`，覆盖杠杆资金、筹码成本、原始活跃度和中间窗口量能四个新维度。
-
-**Bad-Pick 因子实证筛选与严格样本外校准** (v0.85.14):
-- 坏票分类器改用 16 个在主模型 Top 候选池中具有稳定分离度的特征，其中 10 个不在最新主模型中，减少与主排序信号的重复学习。
-- 分类器按日期使用 70% 训练、10% early-stop、20% 独立 calibration；AUC、市场状态和惩罚参数不再使用分类器训练样本评估。
-- 最终部署分类器按 early-stop 选定树数在全部候选样本上重训。
+- 完全移除风险惩罚功能及其所有相关代码、配置、测试。该功能在实际使用中效果不佳，移除后简化核心架构。
 
 **批量汇总年化收益率与 broker 日志完全对齐** (v0.85.6):
 - `scripts/batch/batch_paper_trade.ps1` 汇总不再从 `nav.parquet` 重新计算，改为读取 `config.yaml` + `account.json` + clean daily 收盘价，与 broker 使用完全一致的数据源和 CAGR 公式。
 
-**风险惩罚强度可调 + 批量对比新增惩罚效果指标** (v0.85.4):
-- `scripts/walk_forward.py` 新增 `--risk-penalty-lambda-scale` 与 `--risk-penalty-lambda-grid`，可直接控制 conditional bad-pick 的惩罚强度搜索网格。
-- walk-forward 汇总新增四个诊断列：`risk_penalty_penalized_ratio`、`risk_penalty_penalty_mean`、`risk_penalty_topk_changed_days_ratio`、`risk_penalty_swap_alpha`。
 - `scripts/compare_walk_forward.py` 已接入这些列的聚合与展示，便于在 `wf_comparison_batches.xlsx` 直接观察“覆盖率/替换收益贡献”。
 
-**修复 conditional bad-pick 在 walk-forward 评估侧的特征名对齐问题** (v0.85.3):
-- `scripts/walk_forward.py` 的 `_apply_risk_penalty_scores()` 在 v2 路径中，现会按分类器 `feature_names_in_` 对输入特征自动对齐（补缺失、剔多余、重排）。
 - 修复了评估输入多出 `mkt_drawdown_20` 时 `predict_proba` 失败并静默回退 `pred_score` 的问题，避免“惩罚已启用但实际未生效”。
 - 新增回归测试覆盖该场景，并在失败回退日志中输出模型版本与异常上下文。
 
-**修复 conditional bad-pick 分类器兜底加载不可达分支** (v0.85.2):
-- `scripts/walk_forward.py` 的 `_apply_risk_penalty_scores()` 在 `_clf_model` 缺失时，现会先尝试按 `bad_pick_model_version` 从模型恢复分类器，再决定是否跳过惩罚。
 - 修复了此前“兜底加载逻辑写在提前返回之后，永远不会执行”的控制流问题。
 - 新增回归测试覆盖该路径，确保 OOS 评估能正确生成 `final_score`。
 
@@ -72,10 +52,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - `scripts/walk_forward.py` 的风险惩罚学习目标不再固定为 `Top30`，而是跟随真实回测使用的 `bt_top_n`；当前批量脚本默认 `bt_top_n=20`，因此学习与执行口径保持一致。
 - `scripts/train_ml_model.py` 的单次训练路径也同步对齐默认 `Top20`，减少训练期诊断和实际持仓目标不一致的问题。
 
-**MLSignal 新增基于 calibration 的高分错票风险惩罚** (v0.84.0):
-- `src/lazybull/ml/train_core.py` 现在会在 calibration 段先用主模型打分，再从每日高分候选中自动识别“高分但未来收益落入底部且为负”的 `bad_pick`。
 - 风险惩罚不再依赖手工拍脑袋扣分，而是从现有风险类特征中学习出单调分位权重，并在同一 calibration 段上用小网格自动选择 `penalty_lambda`。
-- 学到的 `risk_penalty_config` 会随模型 metadata 一起保存；`src/lazybull/signals/ml_signal.py` 推理时会自动生成 `final_score = ml_score - lambda * risk_score` 后再排序，旧模型因无该配置而保持原行为不变。
 
 **wf_comparison_batches 忽略 seed 作为参数分组维度** (v0.83.1):
 - `wf_comparison_batches.xlsx` 在 `跨时间段稳定性`、`模型Alpha评分`、`交易参数收益评分`、`实盘候选评分` 中，不再把仅 seed 不同的运行拆成不同参数组。

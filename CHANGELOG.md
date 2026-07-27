@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.21] - 2026-07-27
+
+### Removed
+
+- **移除风险惩罚(Bad-Pick)功能**：删除 `src/lazybull/risk/bad_pick.py` 及所有相关代码、配置开关、测试。该功能在实际使用中效果不佳，简化核心架构。移除内容包括：
+  - `BadPickConfig`、`RegimeBadPickConfig`、`apply_conditional_penalty`、`detect_market_regime` 等核心类/函数
+  - `learn_risk_penalty_config` 训练函数及 `_apply_risk_penalty` / `_apply_risk_penalty_scores` 推理函数
+  - `BAD_PICK_CLASSIFIER_FEATURES`、`MARKET_STATE_FEATURES`、`RISK_PENALTY_DEFAULT_LAMBDA_GRID` 等常量
+  - `model_registry.py` 中的分类器内嵌逻辑
+  - `walk_forward.py` 和 `train_ml_model.py` 中的风险惩罚学习/评估/参数定义
+  - `batch_walk_forward.ps1` 中的风险惩罚配置/参数拼接/扫描循环
+  - `compare_walk_forward.py` 中的风险惩罚指标列
+  - `test_bad_pick_conditional.py` 及 `test_ml_signal.py`/`test_train_core_val_embargo.py`/`test_walk_forward.py` 中的相关测试
+
 ## [0.85.20] - 2026-07-26
 
 ### Changed

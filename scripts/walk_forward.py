@@ -59,7 +59,6 @@ from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.train_core import (
-    RISK_PENALTY_DEFAULT_LAMBDA_GRID,
     load_features_data,
     prepare_training_data,
     transform_labels_cs_zscore,
@@ -69,7 +68,6 @@ from src.lazybull.ml.train_core import (
     evaluate_validation_daily,
     build_rank_sample_weights,
     build_time_decay_weights,
-    learn_risk_penalty_config,
 )
 from src.lazybull.ml.walk_forward_utils import (
     generate_walk_forward_splits_by_count,
@@ -163,397 +161,6 @@ def _filter_splits_by_selected_indices(
 
     selected_index_set = set(selected_split_indices)
     return [split for split in splits if split.split_index in selected_index_set]
-
-
-def _log_risk_penalty_summary(tag: str, risk_penalty_config: Optional[Dict]) -> None:
-    """打印风险惩罚学习摘要，避免被训练日志淹没。"""
-    if not risk_penalty_config:
-        logger.warning(f"{tag} 风险惩罚: 未生成配置（通常是 calibration 样本或 bad_pick 不足）")
-        return
-
-    risk_version = int(risk_penalty_config.get("version", 1))
-    enabled = bool(risk_penalty_config.get("enabled", False))
-    bad_rate = float(risk_penalty_config.get("calibration_bad_rate", 0.0) or 0)
-    samples = int(risk_penalty_config.get("calibration_samples", 0) or 0)
-    baseline = float(risk_penalty_config.get("baseline_topk_median", float("nan")))
-    selected = float(risk_penalty_config.get("selected_topk_median", float("nan")))
-
-    if risk_version >= 2:
-        auc = float(risk_penalty_config.get("calibration_auc", 0.0) or 0)
-        regimes = risk_penalty_config.get("regime_configs") or {}
-        regime_info = ", ".join(
-            f"{n}:thr={c.get('threshold',0):.2f},lam={c.get('penalty_lambda',0):.3f}"
-            for n, c in regimes.items()
-        )
-        regime_counts = risk_penalty_config.get("regime_sample_counts") or {}
-        logger.warning(
-            f"{tag} 条件式坏票惩罚: enabled={enabled}, AUC={auc:.3f}, "
-            f"bad_rate={bad_rate:.2%}, samples={samples}, "
-            f"regimes={regime_counts}, "
-            f"config=({regime_info}), "
-            f"top30_median={baseline:.6f}->{selected:.6f}"
-        )
-    else:
-        penalty_lambda = float(risk_penalty_config.get("penalty_lambda", 0.0) or 0.0)
-        features = risk_penalty_config.get("feature_weights") or []
-        top_features = ", ".join(
-            f"{item.get('name')}:{float(item.get('weight', 0.0)):.2f}"
-            for item in features[:3]
-        )
-        if not top_features:
-            top_features = "无"
-        logger.warning(
-            f"{tag} 风险惩罚(v1): enabled={enabled}, lambda={penalty_lambda:.3f}, "
-            f"calib_prefers_penalty={bool(risk_penalty_config.get('calibration_prefers_penalty', False))}, "
-            f"bad_rate={bad_rate:.2%}, samples={samples}, "
-            f"top30_median={baseline:.6f}->{selected:.6f}, "
-            f"top_features={top_features}"
-        )
-
-
-def _parse_threshold_candidates(text: str) -> Optional[List[float]]:
-    """解析 threshold 候选字符串，返回排序去重列表；空串返回 None（用默认）。"""
-    if not text or not text.strip():
-        return None
-    values: List[float] = []
-    for token in text.split(","):
-        token = token.strip()
-        if not token:
-            continue
-        value = float(token)
-        if not 0 < value < 1:
-            raise ValueError(
-                f"risk_penalty_clf_threshold_candidates 中阈值必须在 (0,1) 内，收到: {value}"
-            )
-        values.append(value)
-    return sorted(set(values)) if values else None
-
-
-def _log_risk_penalty_params(args) -> None:
-    """训练开始前打印风险惩罚关键参数，便于日志追溯。"""
-    lambda_scale = float(getattr(args, "risk_penalty_lambda_scale", 1.0) or 1.0)
-    lambda_grid = str(getattr(args, "risk_penalty_lambda_grid", "") or "").strip()
-    candidate_topk = int(getattr(args, "risk_penalty_candidate_topk", 30) or 30)
-    bad_bottom_pct = float(getattr(args, "risk_penalty_bad_bottom_pct", 0.3) or 0.3)
-    min_bad_samples = int(getattr(args, "risk_penalty_min_bad_samples", 5) or 5)
-    min_total_samples = int(getattr(args, "risk_penalty_min_total_samples", 15) or 15)
-    clf_md = int(getattr(args, "risk_penalty_clf_max_depth", 3) or 3)
-    clf_n = int(getattr(args, "risk_penalty_clf_n_estimators", 50) or 50)
-    clf_lr = float(getattr(args, "risk_penalty_clf_learning_rate", 0.05) or 0.05)
-    clf_ss = float(getattr(args, "risk_penalty_clf_subsample", 0.8) or 0.8)
-    clf_cb = float(getattr(args, "risk_penalty_clf_colsample_bytree", 0.6) or 0.6)
-    clf_esr = int(getattr(args, "risk_penalty_clf_early_stopping_rounds", 20) or 20)
-    clf_thr_text = str(getattr(args, "risk_penalty_clf_threshold_candidates", "") or "").strip()
-    clf_thr = clf_thr_text if clf_thr_text else "[0.5,0.6,0.7]"
-
-    grid_label = lambda_grid if lambda_grid else f"默认网格×{lambda_scale}"
-    logger.info(
-        f"  风险惩罚参数: lambda_scale={lambda_scale}, lambda_grid={grid_label}, "
-        f"candidate_topk={candidate_topk}, bad_bottom_pct={bad_bottom_pct}, "
-        f"min_bad_samples={min_bad_samples}, min_total_samples={min_total_samples}, "
-        f"clf(max_depth={clf_md}, n_est={clf_n}, lr={clf_lr}, "
-        f"subsample={clf_ss}, colsample_bytree={clf_cb}, esr={clf_esr}), "
-        f"thresholds={clf_thr}"
-    )
-
-
-def _resolve_risk_penalty_lambda_grid(args) -> Optional[List[float]]:
-    """解析 risk penalty 的 lambda 网格配置。"""
-    custom_grid_text = str(getattr(args, "risk_penalty_lambda_grid", "") or "").strip()
-    lambda_scale = float(getattr(args, "risk_penalty_lambda_scale", 1.0) or 1.0)
-
-    if lambda_scale <= 0:
-        raise ValueError(f"risk_penalty_lambda_scale 必须 > 0，当前值: {lambda_scale}")
-
-    if custom_grid_text:
-        values: List[float] = []
-        for token in custom_grid_text.split(","):
-            token = token.strip()
-            if not token:
-                continue
-            value = float(token)
-            if value < 0:
-                raise ValueError(
-                    "risk_penalty_lambda_grid 中不允许负值，"
-                    f"收到: {value}"
-                )
-            if value > 0:
-                values.append(value)
-        if not values:
-            return None
-        return sorted(set(values))
-
-    if abs(lambda_scale - 1.0) < 1e-12:
-        return None
-
-    scaled = [
-        round(float(value) * lambda_scale, 6)
-        for value in RISK_PENALTY_DEFAULT_LAMBDA_GRID
-        if float(value) > 0
-    ]
-    return sorted(set(v for v in scaled if v > 0)) or None
-
-
-def _compute_risk_penalty_effect_metrics(
-    df_eval: pd.DataFrame,
-    return_col: str,
-    topk: int,
-    score_column: str,
-    base_score_col: str = "pred_score",
-) -> Dict[str, Optional[float]]:
-    """评估风险惩罚在单个 split 上的覆盖率与替换收益贡献。"""
-    metrics = {
-        "risk_penalty_penalized_ratio": 0.0,
-        "risk_penalty_penalty_mean": 0.0,
-        "risk_penalty_topk_changed_days_ratio": 0.0,
-        "risk_penalty_swap_alpha": 0.0,
-    }
-
-    if df_eval is None or len(df_eval) == 0 or return_col not in df_eval.columns:
-        return metrics
-
-    score_col = score_column if score_column in df_eval.columns else base_score_col
-    if score_col not in df_eval.columns or base_score_col not in df_eval.columns:
-        return metrics
-
-    penalty = None
-    if "ml_score" in df_eval.columns and "final_score" in df_eval.columns:
-        penalty = pd.to_numeric(df_eval["ml_score"], errors="coerce") - pd.to_numeric(
-            df_eval["final_score"], errors="coerce"
-        )
-    elif "final_score" in df_eval.columns:
-        penalty = pd.to_numeric(df_eval[base_score_col], errors="coerce") - pd.to_numeric(
-            df_eval["final_score"], errors="coerce"
-        )
-
-    if penalty is not None:
-        valid_penalty = penalty.dropna()
-        if len(valid_penalty) > 0:
-            metrics["risk_penalty_penalized_ratio"] = float((valid_penalty > 1e-6).mean())
-            positive_penalty = valid_penalty[valid_penalty > 1e-6]
-            metrics["risk_penalty_penalty_mean"] = (
-                float(positive_penalty.mean()) if len(positive_penalty) > 0 else 0.0
-            )
-
-    if score_col == base_score_col or topk <= 0:
-        return metrics
-
-    changed_days = 0
-    total_days = 0
-    swap_alpha_list: List[float] = []
-
-    trade_dates = df_eval["trade_date"].dropna().drop_duplicates().tolist()
-    for trade_date in trade_dates:
-        day_df = df_eval[df_eval["trade_date"] == trade_date].copy()
-        if day_df.empty or "ts_code" not in day_df.columns:
-            continue
-
-        day_df = day_df[
-            day_df[base_score_col].notna()
-            & day_df[score_col].notna()
-            & day_df[return_col].notna()
-        ].copy()
-        if len(day_df) == 0:
-            continue
-
-        total_days += 1
-
-        base_top_df = day_df.sort_values([base_score_col, "ts_code"], ascending=[False, True]).head(topk)
-        final_top_df = day_df.sort_values([score_col, "ts_code"], ascending=[False, True]).head(topk)
-
-        base_set = set(base_top_df["ts_code"].astype(str).tolist())
-        final_set = set(final_top_df["ts_code"].astype(str).tolist())
-
-        if base_set != final_set:
-            changed_days += 1
-
-        add_codes = list(final_set - base_set)
-        rem_codes = list(base_set - final_set)
-        if len(add_codes) == 0 or len(rem_codes) == 0:
-            swap_alpha_list.append(0.0)
-            continue
-
-        final_top_ret = final_top_df.set_index("ts_code")[return_col]
-        base_top_ret = base_top_df.set_index("ts_code")[return_col]
-
-        try:
-            add_ret = float(final_top_ret.loc[add_codes].mean())
-            rem_ret = float(base_top_ret.loc[rem_codes].mean())
-            swap_alpha_list.append(add_ret - rem_ret)
-        except Exception:
-            swap_alpha_list.append(0.0)
-
-    if total_days > 0:
-        metrics["risk_penalty_topk_changed_days_ratio"] = changed_days / total_days
-    if len(swap_alpha_list) > 0:
-        metrics["risk_penalty_swap_alpha"] = float(np.mean(swap_alpha_list))
-
-    return metrics
-
-
-def _rank_risk_feature(series: pd.Series) -> pd.Series:
-    """将单日截面风险特征映射到 0~1 分位。"""
-    valid = series.dropna()
-    if len(valid) == 0:
-        return pd.Series(0.5, index=series.index, dtype=float)
-    ranked = series.rank(method="average", pct=True, na_option="keep")
-    return ranked.fillna(0.5).clip(0.0, 1.0)
-
-
-def _apply_risk_penalty_scores(
-    df_eval: pd.DataFrame,
-    risk_penalty_config: Optional[Dict],
-    base_score_col: str = "pred_score",
-) -> Tuple[pd.DataFrame, str]:
-    """在 walk-forward 评估阶段复用执行侧的风险惩罚排序口径。
-
-    支持 v1（线性加权）和 v2（条件式坏票模型）两种模式。
-    """
-    scored_df = df_eval.copy()
-    scored_df["ml_score"] = scored_df[base_score_col]
-    scored_df["risk_score"] = 0.0
-    scored_df["final_score"] = scored_df[base_score_col]
-
-    risk_config = risk_penalty_config or {}
-    if not risk_config.get("enabled"):
-        return scored_df, base_score_col
-
-    risk_version = int(risk_config.get("version", 1))
-
-    if risk_version >= 2:
-        # ── v2: 条件式坏票模型 ──
-        from src.lazybull.risk.bad_pick import (
-            BadPickConfig, MARKET_STATE_FEATURES,
-            detect_market_regime, prepare_classifier_features,
-        )
-
-        bp_config = BadPickConfig.from_dict(risk_config)
-        if not bp_config.enabled:
-            return scored_df, base_score_col
-
-        bp_model_ver = int(bp_config.bad_pick_model_version or 0)
-
-        # 获取分类器：learn_risk_penalty_config 直接返回的 _clf_model
-        clf = risk_config.get("_clf_model")
-        if clf is None:
-            if bp_model_ver > 0:
-                try:
-                    from src.lazybull.ml.model_registry import ModelRegistry
-                    from src.lazybull.common.config import get_data_root
-
-                    data_root = get_data_root()
-                    models_dir = Path(data_root) / "models"
-                    reg = ModelRegistry(models_dir=str(models_dir))
-                    main_model, _ = reg.load_model(
-                        version=bp_model_ver, strict_version_check=False
-                    )
-                    if hasattr(main_model, "_bad_pick_classifier_"):
-                        clf = main_model._bad_pick_classifier_
-                    elif hasattr(main_model, "predict_proba"):
-                        # 旧版兼容：直接将主模型作为分类器使用
-                        clf = main_model
-                except Exception as exc:
-                    logger.warning(
-                        "_apply_risk_penalty_scores: 兜底加载坏票分类器失败 "
-                        f"(bad_pick_model_version={bp_model_ver}, err={exc})"
-                    )
-            if clf is None:
-                logger.warning(
-                    "_apply_risk_penalty_scores: _clf_model 缺失且兜底分类器不可用，跳过惩罚 "
-                    f"(bad_pick_model_version={bp_model_ver})"
-                )
-                return scored_df, base_score_col
-        if clf is None:
-            return scored_df, base_score_col
-
-        # 检测市场状态
-        mkt_state = {}
-        for col in MARKET_STATE_FEATURES:
-            if col in scored_df.columns:
-                vals = scored_df[col].dropna()
-                mkt_state[col] = float(vals.iloc[0]) if len(vals) > 0 else 0.0
-            else:
-                mkt_state[col] = 0.0
-        regime = detect_market_regime(mkt_state, bp_config)
-
-        regime_cfg = bp_config.regime_configs.get(regime)
-        if regime_cfg is None:
-            regime_cfg = bp_config.regime_configs.get("normal")
-        if regime_cfg is None or regime_cfg.penalty_lambda <= 0:
-            return scored_df, base_score_col
-
-        # 预测 P(bad_pick)
-        X_clf = prepare_classifier_features(
-            scored_df, bp_config.classifier_features, MARKET_STATE_FEATURES
-        )
-        if X_clf.empty:
-            return scored_df, base_score_col
-
-        expected_features = getattr(clf, "feature_names_in_", None)
-        if expected_features is not None:
-            expected_features = list(expected_features)
-            missing_features = [f for f in expected_features if f not in X_clf.columns]
-            extra_features = [f for f in X_clf.columns if f not in expected_features]
-            for feature_name in missing_features:
-                X_clf[feature_name] = 0.0
-            X_clf = X_clf[expected_features]
-            if missing_features or extra_features:
-                logger.debug(
-                    "_apply_risk_penalty_scores: v2 分类器特征已对齐 "
-                    f"(missing={len(missing_features)}, extra={len(extra_features)})"
-                )
-
-        try:
-            proba = clf.predict_proba(X_clf)
-            p_bad = proba[:, 1] if proba.shape[1] > 1 else proba[:, 0]
-        except Exception as exc:
-            logger.warning(
-                "_apply_risk_penalty_scores: v2 分类器预测失败，跳过惩罚 "
-                f"(bad_pick_model_version={bp_model_ver}, err={exc})"
-            )
-            return scored_df, base_score_col
-
-        p_bad_series = pd.Series(p_bad, index=X_clf.index, dtype=float)
-        threshold = regime_cfg.threshold
-        penalty_lambda = regime_cfg.penalty_lambda
-
-        mask = p_bad_series > threshold
-        excess = (p_bad_series - threshold).clip(lower=0.0)
-        scored_df["risk_score"] = p_bad_series
-        scored_df["final_score"] = (
-            scored_df[base_score_col] - penalty_lambda * excess * mask.astype(float)
-        )
-        return scored_df, "final_score"
-
-    # ── v1: 旧版线性加权惩罚 ──
-    penalty_lambda = float(risk_config.get("penalty_lambda", 0.0) or 0.0)
-    feature_weights = risk_config.get("feature_weights") or []
-    if penalty_lambda <= 0 or len(feature_weights) == 0:
-        return scored_df, base_score_col
-
-    risk_score = pd.Series(0.0, index=scored_df.index, dtype=float)
-    total_weight = 0.0
-    for item in feature_weights:
-        feature_name = item.get("name")
-        weight = float(item.get("weight", 0.0) or 0.0)
-        if not feature_name or weight <= 0:
-            continue
-        if feature_name in scored_df.columns:
-            feature_series = _rank_risk_feature(scored_df[feature_name])
-        else:
-            feature_series = pd.Series(0.5, index=scored_df.index, dtype=float)
-        risk_score += feature_series * weight
-        total_weight += weight
-
-    if total_weight <= 0:
-        return scored_df, base_score_col
-
-    if total_weight != 1.0:
-        risk_score = risk_score / total_weight
-
-    scored_df["risk_score"] = risk_score
-    scored_df["final_score"] = scored_df[base_score_col] - penalty_lambda * scored_df["risk_score"]
-    return scored_df, "final_score"
 
 
 def summarize_ma250_signal_coverage(
@@ -2165,7 +1772,6 @@ def execute_split_training(
     logger.info(f"  训练区间: {split.train_start} 至 {split.train_end}")
     logger.info(f"  测试区间: {split.test_start} 至 {split.test_end}")
     # ── 打印风险惩罚参数 ──
-    _log_risk_penalty_params(args)
     logger.info("=" * 80)
 
     # ── Phase 1: 训练模型，必要时基于 best_iteration 生成候选模型 ─────────────
@@ -2354,76 +1960,6 @@ def execute_split_training(
     X_train_len = selected_candidate["X_train_len"]
     X_val_len = selected_candidate["X_val_len"]
 
-    risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
-    risk_penalty_lambda_grid = _resolve_risk_penalty_lambda_grid(args)
-    risk_penalty_candidate_topk = max(
-        1, int(getattr(args, "risk_penalty_candidate_topk", 30) or 30)
-    )
-    risk_penalty_bad_bottom_pct = float(
-        getattr(args, "risk_penalty_bad_bottom_pct", 0.3) or 0.3
-    )
-    risk_penalty_min_bad_samples = int(
-        getattr(args, "risk_penalty_min_bad_samples", 5) or 5
-    )
-    risk_penalty_min_total_samples = int(
-        getattr(args, "risk_penalty_min_total_samples", 15) or 15
-    )
-    risk_penalty_clf_max_depth = int(
-        getattr(args, "risk_penalty_clf_max_depth", 3) or 3
-    )
-    risk_penalty_clf_n_estimators = int(
-        getattr(args, "risk_penalty_clf_n_estimators", 50) or 50
-    )
-    risk_penalty_clf_learning_rate = float(
-        getattr(args, "risk_penalty_clf_learning_rate", 0.05) or 0.05
-    )
-    risk_penalty_clf_subsample = float(
-        getattr(args, "risk_penalty_clf_subsample", 0.8) or 0.8
-    )
-    risk_penalty_clf_colsample_bytree = float(
-        getattr(args, "risk_penalty_clf_colsample_bytree", 0.6) or 0.6
-    )
-    risk_penalty_clf_early_stopping_rounds = int(
-        getattr(args, "risk_penalty_clf_early_stopping_rounds", 20) or 20
-    )
-    risk_penalty_clf_threshold_candidates = _parse_threshold_candidates(
-        getattr(args, "risk_penalty_clf_threshold_candidates", "") or ""
-    )
-    risk_penalty_clf_auc_threshold = float(
-        getattr(args, "risk_penalty_clf_auc_threshold", 0.55) or 0.55
-    )
-    risk_penalty_config = learn_risk_penalty_config(
-        model=model,
-        df_val=selected_candidate["df_val_split_original"],
-        feature_columns=feature_columns,
-        original_return_col=args.label_column,
-        task=args.task,
-        candidate_topk=risk_penalty_candidate_topk,
-        eval_topk=risk_penalty_eval_topk,
-        lambda_grid=risk_penalty_lambda_grid,
-        bad_bottom_pct=risk_penalty_bad_bottom_pct,
-        min_bad_samples=risk_penalty_min_bad_samples,
-        min_total_samples=risk_penalty_min_total_samples,
-        clf_max_depth=risk_penalty_clf_max_depth,
-        clf_n_estimators=risk_penalty_clf_n_estimators,
-        clf_learning_rate=risk_penalty_clf_learning_rate,
-        clf_subsample=risk_penalty_clf_subsample,
-        clf_colsample_bytree=risk_penalty_clf_colsample_bytree,
-        clf_early_stopping_rounds=risk_penalty_clf_early_stopping_rounds,
-        threshold_candidates=risk_penalty_clf_threshold_candidates,
-        clf_auc_threshold=risk_penalty_clf_auc_threshold,
-    )
-    _log_risk_penalty_summary(f"Split {split.split_index}", risk_penalty_config)
-    if risk_penalty_config is None:
-        logger.warning(
-            f"Split {split.split_index}: learn_risk_penalty_config 返回 None，"
-            f"OOS 评估将跳过坏票惩罚"
-        )
-    elif not risk_penalty_config.get("enabled"):
-        logger.info(
-            f"Split {split.split_index}: 坏票惩罚未启用（enabled=False）"
-        )
-
     # ── Phase 2: 加载测试数据 ──────────────────────────────────────────
     df_test, test_days_count = load_features_data(
         storage, loader, split.test_start, split.test_end
@@ -2463,26 +1999,7 @@ def execute_split_training(
         y_test_pred = model.predict(X_test_features)
         df_test_eval["pred_score"] = y_test_pred
 
-    df_test_eval, test_score_column = _apply_risk_penalty_scores(
-        df_eval=df_test_eval,
-        risk_penalty_config=risk_penalty_config,
-        base_score_col="pred_score",
-    )
-
-    risk_penalty_effect_metrics = _compute_risk_penalty_effect_metrics(
-        df_eval=df_test_eval,
-        return_col=args.label_column,
-        topk=risk_penalty_eval_topk,
-        score_column=test_score_column,
-        base_score_col="pred_score",
-    )
-    logger.info(
-        f"Split {split.split_index} 惩罚效果: "
-        f"覆盖率={risk_penalty_effect_metrics['risk_penalty_penalized_ratio']:.2%}, "
-        f"Top{risk_penalty_eval_topk}换仓日占比="
-        f"{risk_penalty_effect_metrics['risk_penalty_topk_changed_days_ratio']:.2%}, "
-        f"swap_alpha={risk_penalty_effect_metrics['risk_penalty_swap_alpha']:.6f}"
-    )
+    test_score_column = "pred_score"
 
     topk_detail_df = build_daily_topk_detail_df(
         df_eval=df_test_eval,
@@ -2603,7 +2120,6 @@ def execute_split_training(
         n_samples=X_train_len + X_val_len,
         train_params=full_train_params,
         performance_metrics=performance_metrics,
-        risk_penalty_config=risk_penalty_config,
     )
 
     logger.info(f"模型已注册: v{version}")
@@ -2709,12 +2225,6 @@ def execute_split_training(
         "adaptive_live_last_best_iteration": adaptive_meta.get("live_adaptive_last_best_iteration"),
         "adaptive_live_final_learning_rate": adaptive_meta.get("live_adaptive_final_learning_rate"),
         "adaptive_live_final_n_estimators": adaptive_meta.get("live_adaptive_final_n_estimators"),
-        "risk_penalty_penalized_ratio": risk_penalty_effect_metrics["risk_penalty_penalized_ratio"],
-        "risk_penalty_penalty_mean": risk_penalty_effect_metrics["risk_penalty_penalty_mean"],
-        "risk_penalty_topk_changed_days_ratio": risk_penalty_effect_metrics[
-            "risk_penalty_topk_changed_days_ratio"
-        ],
-        "risk_penalty_swap_alpha": risk_penalty_effect_metrics["risk_penalty_swap_alpha"],
         "test_daily_metrics": test_daily_metrics,
         "_topk_detail_df": topk_detail_df,
     }
@@ -2891,67 +2401,6 @@ def execute_deploy_training(
         )
         full_train_params["ensemble_n_models"] = model.n_models
 
-    risk_penalty_eval_topk = max(1, int(getattr(args, "bt_top_n", 20) or 20))
-    risk_penalty_lambda_grid = _resolve_risk_penalty_lambda_grid(args)
-    risk_penalty_candidate_topk = max(
-        1, int(getattr(args, "risk_penalty_candidate_topk", 30) or 30)
-    )
-    risk_penalty_bad_bottom_pct = float(
-        getattr(args, "risk_penalty_bad_bottom_pct", 0.3) or 0.3
-    )
-    risk_penalty_min_bad_samples = int(
-        getattr(args, "risk_penalty_min_bad_samples", 5) or 5
-    )
-    risk_penalty_min_total_samples = int(
-        getattr(args, "risk_penalty_min_total_samples", 15) or 15
-    )
-    risk_penalty_clf_max_depth = int(
-        getattr(args, "risk_penalty_clf_max_depth", 3) or 3
-    )
-    risk_penalty_clf_n_estimators = int(
-        getattr(args, "risk_penalty_clf_n_estimators", 50) or 50
-    )
-    risk_penalty_clf_learning_rate = float(
-        getattr(args, "risk_penalty_clf_learning_rate", 0.05) or 0.05
-    )
-    risk_penalty_clf_subsample = float(
-        getattr(args, "risk_penalty_clf_subsample", 0.8) or 0.8
-    )
-    risk_penalty_clf_colsample_bytree = float(
-        getattr(args, "risk_penalty_clf_colsample_bytree", 0.6) or 0.6
-    )
-    risk_penalty_clf_early_stopping_rounds = int(
-        getattr(args, "risk_penalty_clf_early_stopping_rounds", 20) or 20
-    )
-    risk_penalty_clf_threshold_candidates = _parse_threshold_candidates(
-        getattr(args, "risk_penalty_clf_threshold_candidates", "") or ""
-    )
-    risk_penalty_clf_auc_threshold = float(
-        getattr(args, "risk_penalty_clf_auc_threshold", 0.55) or 0.55
-    )
-    risk_penalty_config = learn_risk_penalty_config(
-        model=model,
-        df_val=df_val_split_original,
-        feature_columns=feature_columns,
-        original_return_col=args.label_column,
-        task=args.task,
-        candidate_topk=risk_penalty_candidate_topk,
-        eval_topk=risk_penalty_eval_topk,
-        lambda_grid=risk_penalty_lambda_grid,
-        bad_bottom_pct=risk_penalty_bad_bottom_pct,
-        min_bad_samples=risk_penalty_min_bad_samples,
-        min_total_samples=risk_penalty_min_total_samples,
-        clf_max_depth=risk_penalty_clf_max_depth,
-        clf_n_estimators=risk_penalty_clf_n_estimators,
-        clf_learning_rate=risk_penalty_clf_learning_rate,
-        clf_subsample=risk_penalty_clf_subsample,
-        clf_colsample_bytree=risk_penalty_clf_colsample_bytree,
-        clf_early_stopping_rounds=risk_penalty_clf_early_stopping_rounds,
-        threshold_candidates=risk_penalty_clf_threshold_candidates,
-        clf_auc_threshold=risk_penalty_clf_auc_threshold,
-    )
-    _log_risk_penalty_summary("部署模型", risk_penalty_config)
-
     version = registry.register_model(
         model=model,
         model_type=f"{algorithm}_{args.task}_wf",
@@ -2962,7 +2411,6 @@ def execute_deploy_training(
         n_samples=X_train_len + X_val_len,
         train_params=full_train_params,
         performance_metrics=performance_metrics,
-        risk_penalty_config=risk_penalty_config,
     )
 
     logger.info(f"部署模型已注册: v{version}")
@@ -3545,19 +2993,6 @@ def write_walk_forward_summary(
         "rank_weight_topk_weight_mode": getattr(args, "rank_weight_topk_weight_mode", "linear_decay"),
         "time_decay_half_life": args.time_decay_half_life,
         "objective": getattr(args, 'objective', 'mse'),
-        "risk_penalty_lambda_scale": getattr(args, 'risk_penalty_lambda_scale', 1.0),
-        "risk_penalty_lambda_grid": getattr(args, 'risk_penalty_lambda_grid', ''),
-        "risk_penalty_candidate_topk": getattr(args, 'risk_penalty_candidate_topk', 30),
-        "risk_penalty_bad_bottom_pct": getattr(args, 'risk_penalty_bad_bottom_pct', 0.3),
-        "risk_penalty_min_bad_samples": getattr(args, 'risk_penalty_min_bad_samples', 5),
-        "risk_penalty_min_total_samples": getattr(args, 'risk_penalty_min_total_samples', 15),
-        "risk_penalty_clf_max_depth": getattr(args, 'risk_penalty_clf_max_depth', 3),
-        "risk_penalty_clf_n_estimators": getattr(args, 'risk_penalty_clf_n_estimators', 50),
-        "risk_penalty_clf_learning_rate": getattr(args, 'risk_penalty_clf_learning_rate', 0.05),
-        "risk_penalty_clf_subsample": getattr(args, 'risk_penalty_clf_subsample', 0.8),
-        "risk_penalty_clf_colsample_bytree": getattr(args, 'risk_penalty_clf_colsample_bytree', 0.6),
-        "risk_penalty_clf_early_stopping_rounds": getattr(args, 'risk_penalty_clf_early_stopping_rounds', 20),
-        "risk_penalty_clf_threshold_candidates": getattr(args, 'risk_penalty_clf_threshold_candidates', ''),
         "enable_fundamental": args.enable_fundamental_features,
         "enable_alt": args.enable_alt_features,
         "enable_margin": args.enable_margin_features,
@@ -3728,12 +3163,6 @@ def write_walk_forward_summary(
             "adaptive_live_last_best_iteration": result.get("adaptive_live_last_best_iteration"),
             "adaptive_live_final_learning_rate": result.get("adaptive_live_final_learning_rate"),
             "adaptive_live_final_n_estimators": result.get("adaptive_live_final_n_estimators"),
-            "risk_penalty_penalized_ratio": result.get("risk_penalty_penalized_ratio"),
-            "risk_penalty_penalty_mean": result.get("risk_penalty_penalty_mean"),
-            "risk_penalty_topk_changed_days_ratio": result.get(
-                "risk_penalty_topk_changed_days_ratio"
-            ),
-            "risk_penalty_swap_alpha": result.get("risk_penalty_swap_alpha"),
         }
 
         # 添加测试集逐日评估指标
@@ -4304,90 +3733,6 @@ def main():
         type=int,
         default=0,
         help="OOS 回测时长（月），默认 0 表示自动对齐 test_window_months"
-    )
-    parser.add_argument(
-        "--risk-penalty-lambda-scale",
-        type=float,
-        default=1.0,
-        help="风险惩罚lambda缩放系数（>0）；默认1.0，<1更温和，>1更严格"
-    )
-    parser.add_argument(
-        "--risk-penalty-lambda-grid",
-        type=str,
-        default="",
-        help="自定义风险惩罚lambda候选（逗号分隔，如0.02,0.04,0.06）；留空则基于默认网格与scale"
-    )
-    parser.add_argument(
-        "--risk-penalty-candidate-topk",
-        type=int,
-        default=30,
-        help="坏票校准候选池 TopK，默认 30；值越大候选越宽，惩罚覆盖更保守"
-    )
-    parser.add_argument(
-        "--risk-penalty-bad-bottom-pct",
-        type=float,
-        default=0.3,
-        help="候选池底部标记坏票的比例（0~1），默认 0.3"
-    )
-    parser.add_argument(
-        "--risk-penalty-min-bad-samples",
-        type=int,
-        default=5,
-        help="坏票校准最少坏样本数，低于此值跳过惩罚学习，默认 5"
-    )
-    parser.add_argument(
-        "--risk-penalty-min-total-samples",
-        type=int,
-        default=15,
-        help="坏票校准最少总样本数，低于此值跳过惩罚学习，默认 15"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-max-depth",
-        type=int,
-        default=3,
-        help="坏票分类器 max_depth，默认 3"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-n-estimators",
-        type=int,
-        default=50,
-        help="坏票分类器树数量上限，默认 50"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-learning-rate",
-        type=float,
-        default=0.05,
-        help="坏票分类器学习率，默认 0.05"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-subsample",
-        type=float,
-        default=0.8,
-        help="坏票分类器 subsample，默认 0.8"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-colsample-bytree",
-        type=float,
-        default=0.6,
-        help="坏票分类器 colsample_bytree，默认 0.6"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-early-stopping-rounds",
-        type=int,
-        default=20,
-        help="坏票分类器早停轮数，默认 20"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-threshold-candidates",
-        type=str,
-        default="",
-        help="坏票惩罚 threshold 候选（逗号分隔，如0.3,0.4,0.5,0.6）；空=使用默认[0.5,0.6,0.7]"
-    )
-    parser.add_argument(
-        "--risk-penalty-clf-auc-threshold",
-        type=float,
-        default=0.55,
-        help="坏票分类器样本外 AUC 启用门槛，默认 0.55；低于此值跳过惩罚学习"
     )
     parser.add_argument(
         "--bt-top-n",

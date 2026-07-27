@@ -235,11 +235,8 @@ class ModelRegistry:
         n_samples: int,
         train_params: Dict,
         performance_metrics: Optional[Dict] = None,
-        risk_penalty_config: Optional[Dict] = None,
     ) -> int:
         """注册新模型
-        
-        若 risk_penalty_config 含 _clf_model，将分类器内嵌到主模型文件中（单一版本号）。
         
         Args:
             model: 训练好的模型对象
@@ -258,18 +255,10 @@ class ModelRegistry:
         version = self.get_next_version()
         version_str = f"v{version}"
 
-        # ── 提取分类器（若有则内嵌到主模型）─────────────────────────────
-        clf_model = None
-        if risk_penalty_config is not None:
-            clf_model = risk_penalty_config.pop("_clf_model", None)
-            risk_penalty_config.pop("_clf_features", None)  # 特征名已在 config 中
-
         # ── 保存模型文件 ────────────────────────────────────────────────
-        # 若有分类器需内嵌，强制使用 joblib（原生 JSON 不支持自定义属性）
-        force_joblib = clf_model is not None
         native_saved = False
 
-        if not force_joblib and hasattr(model, "save_model"):
+        if hasattr(model, "save_model"):
             try:
                 model_file = self.models_dir / f"{version_str}_model.json"
                 model.save_model(str(model_file))
@@ -279,11 +268,6 @@ class ModelRegistry:
                 logger.warning(f"XGBoost 原生保存失败，回退到 joblib: {exc}")
 
         if not native_saved:
-            # 内嵌分类器到主模型属性
-            if clf_model is not None:
-                model._bad_pick_classifier_ = clf_model
-                logger.info(f"坏票分类器已内嵌到模型 v{version}")
-
             model_file = self.models_dir / f"{version_str}_model.joblib"
             joblib.dump(model, model_file)
             logger.info(f"模型已保存（joblib）: {model_file}")
@@ -294,7 +278,6 @@ class ModelRegistry:
                 stale_json.unlink()
                 logger.debug(f"已清理残留文件: {stale_json.name}")
         else:
-            # JSON 格式无分类器内嵌（force_joblib=False 保证 clf_model=None）
             stale_joblib = self.models_dir / f"{version_str}_model.joblib"
             if stale_joblib.exists():
                 stale_joblib.unlink()
@@ -320,12 +303,6 @@ class ModelRegistry:
             "performance_metrics": performance_metrics or {},
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        if risk_penalty_config is not None:
-            if clf_model is not None:
-                risk_penalty_config["classifier_inline"] = True
-                risk_penalty_config["bad_pick_model_version"] = version  # 指向主模型自身
-            metadata["risk_penalty_config"] = risk_penalty_config
-
         self._save_metadata_sidecar(metadata)
         self._save_latest_version_file(version)
 
