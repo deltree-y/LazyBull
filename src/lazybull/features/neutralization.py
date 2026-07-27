@@ -71,6 +71,9 @@ def apply_size_neutralization(
 
     使用 groupby().transform() 向量化处理，消除原双层 for 循环。
     """
+    # 去碎片化：上游大量逐列 merge/assign 导致 DataFrame 内部碎片，copy() 消除 PerformanceWarning
+    result = result.copy()
+
     if "log_total_mv" not in result.columns:
         logger.warning("缺少 log_total_mv 列，跳过市值中性化")
         return result

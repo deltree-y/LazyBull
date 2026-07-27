@@ -274,6 +274,9 @@ class FeatureBuilder:
         # 7. 因子处理器（替代原 11 个内联 if-else 块）
         features = self._get_factor_registry().apply_all(features, ctx, current_data)
 
+        # 7.5 基本面代理回填（cf_sales、cf_nm 等列）
+        features = self._backfill_fundamental_proxy_features(features)
+
         # 8. 行业合并
         if ctx.shenwan_industry is not None:
             from .industry_merge import merge_shenwan_industry
@@ -349,6 +352,31 @@ class FeatureBuilder:
 
             self._factor_registry = create_factor_registry()
         return self._factor_registry
+
+    # ── 基本面代理回填 ──────────────────────────────────────
+
+    @staticmethod
+    def _backfill_fundamental_proxy_features(features: pd.DataFrame) -> pd.DataFrame:
+        """用可稳定获取的字段回填基本面代理列（cf_sales、cf_nm）。"""
+        if "cf_sales" not in features.columns:
+            features["cf_sales"] = np.nan
+        if "q_ocf_to_sales" in features.columns:
+            features["cf_sales"] = features["cf_sales"].combine_first(
+                features["q_ocf_to_sales"]
+            )
+        if "ocf_to_revenue" in features.columns:
+            features["cf_sales"] = features["cf_sales"].combine_first(
+                features["ocf_to_revenue"]
+            )
+
+        if "cf_nm" not in features.columns:
+            features["cf_nm"] = np.nan
+        if "ocf_to_profit" in features.columns:
+            features["cf_nm"] = features["cf_nm"].combine_first(
+                features["ocf_to_profit"]
+            )
+
+        return features
 
     # ── 交易日历工具 ──────────────────────────────────────────
 
@@ -638,6 +666,20 @@ class FeatureBuilder:
             ):
                 hist_moneyflow["elg_net_amount"] = (
                     hist_moneyflow["buy_elg_amount"] - hist_moneyflow["sell_elg_amount"]
+                )
+                # 历史订单失衡（用于滚动均值）
+                _total = (
+                    hist_moneyflow["buy_elg_amount"]
+                    + hist_moneyflow["sell_elg_amount"]
+                )
+                hist_moneyflow["order_imbalance"] = np.where(
+                    _total > 1e-6,
+                    (
+                        hist_moneyflow["buy_elg_amount"]
+                        - hist_moneyflow["sell_elg_amount"]
+                    )
+                    / _total,
+                    np.nan,
                 )
             agg_dict = {}
             if "net_mf_amount" in hist_moneyflow.columns:
@@ -1208,6 +1250,8 @@ def _apply_filters_static(
 
 
 def _add_new_individual_features_static(result: pd.DataFrame) -> pd.DataFrame:
+    # 去碎片化：上游多次逐列 merge/assign 导致 DataFrame 内部碎片，copy() 消除 PerformanceWarning
+    result = result.copy()
     if "list_days" in result.columns:
         result["is_new_stock"] = (result["list_days"] < 365).astype(int)
     else:
