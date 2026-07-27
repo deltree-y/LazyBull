@@ -1,14 +1,13 @@
 """统一策略参数配置模块
 
 将 paper_trade.py / run_ml_backtest.py / bot_service.py 中重复定义的
-策略参数（止损、ECT、组合约束、模型选择等）抽取为公共 dataclass + argparse 注册函数，
+策略参数（止损、组合约束、模型选择等）抽取为公共 dataclass + argparse 注册函数，
 消除三套脚本之间的参数定义不一致。
 """
 
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
-from ..risk.equity_curve import EquityCurveConfig
 from ..risk.stop_loss import StopLossConfig
 
 
@@ -41,18 +40,6 @@ class TradingConfig:
     stop_loss_trailing_pct: float = 15.0
     stop_loss_consecutive_limit_down: int = 2
 
-    # ── ECT ──
-    equity_curve_enabled: bool = False
-    equity_curve_drawdown_thresholds: List[float] = field(
-        default_factory=lambda: [5.0, 10.0, 15.0, 20.0]
-    )
-    equity_curve_exposure_levels: List[float] = field(default_factory=lambda: [0.8, 0.6, 0.4, 0.2])
-    equity_curve_ma_short: int = 5
-    equity_curve_ma_long: int = 20
-    equity_curve_recovery_mode: str = "gradual"
-    equity_curve_recovery_step: float = 0.25
-    equity_curve_recovery_delay_periods: int = 0
-
     # ── 市场择时仓位管理 ──
     market_regime_enabled: bool = False  # 是否启用市场择时
     market_regime_mode: str = "vol_target"  # binary|vol_target|trend|combined
@@ -65,10 +52,6 @@ class TradingConfig:
     market_regime_trend_guard: bool = True  # combined: 上行趋势跳过vol降仓
     market_regime_drawdown_guard: bool = False  # 回撤保护：已大幅下跌时停止降仓
     market_regime_drawdown_threshold: float = -0.08  # 回撤保护阈值
-    market_regime_ma250_hard_stop: bool = True  # MA250长周期硬条件
-    market_regime_ma250_threshold: float = 1.0  # MA250触发阈值
-    market_regime_ma250_exposure: float = 0.9  # MA250触发后仓位系数
-    market_regime_ma250_atr_scaling: bool = True  # ATR动态仓位缩放
 
     # ── 行业动量过滤 & 行业轮动加权 ──
     industry_momentum_filter: bool = False  # 是否启用行业动量过滤（硬过滤弱势行业）
@@ -80,17 +63,6 @@ class TradingConfig:
     position_sizing: str = "equal"  # equal|score|kelly|half_kelly
     kelly_vol_window: int = 60  # Kelly 波动率估计窗口（交易日）
     kelly_max_leverage: float = 0.25  # 单只股票 Kelly 仓位上限（占总资产）
-
-    # ── 表现弱势退出 ──
-    # 纯价格表现评估，零模型依赖。每日用累计收益排名、连续下跌天数、
-    # 回撤深度、回升乏力 4 个维度识别弱势股并提前换出
-    weakness_exit_enabled: bool = False  # 是否启用表现弱势退出
-    weakness_exit_threshold: float = 0.6  # 弱势评分触发阈值 [0, 1]
-    weakness_exit_consecutive_days: int = 3  # 需连续弱势天数
-    weakness_exit_min_holding_days: int = 5  # 最低持有天数（交易日）
-    weakness_exit_weights: str = "30,25,25,20"  # 4 维度权重（逗号分隔，百分比）
-    weakness_exit_industry_filter: bool = False  # 是否叠加弱势行业过滤
-    weakness_exit_industry_bottom_pct: float = 0.3  # 行业底部百分位阈值
 
     # ── 其他（仅 paper_trade 使用，backtest 不需要） ──
     buy_price: str = "close"
@@ -145,21 +117,6 @@ class TradingConfig:
             trailing_stop_enabled=self.stop_loss_trailing_enabled,
             trailing_stop_pct=self.stop_loss_trailing_pct,
             consecutive_limit_down_days=self.stop_loss_consecutive_limit_down,
-        )
-
-    def create_equity_curve_config(self) -> Optional[EquityCurveConfig]:
-        """构建 EquityCurveConfig（不启用时返回 None）"""
-        if not self.equity_curve_enabled:
-            return None
-        return EquityCurveConfig(
-            enabled=True,
-            drawdown_thresholds=self.equity_curve_drawdown_thresholds,
-            exposure_levels=self.equity_curve_exposure_levels,
-            ma_short_window=self.equity_curve_ma_short,
-            ma_long_window=self.equity_curve_ma_long,
-            recovery_mode=self.equity_curve_recovery_mode,
-            recovery_step=self.equity_curve_recovery_step,
-            recovery_delay_periods=self.equity_curve_recovery_delay_periods,
         )
 
 
@@ -371,97 +328,6 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         help="连续跌停触发天数（默认：2）",
     )
 
-    # ── 表现弱势退出 ──
-    parser.add_argument(
-        "--weakness-exit-enabled",
-        action="store_true",
-        default=False,
-        help="启用表现弱势退出（纯价格表现评估，零模型依赖）",
-    )
-    parser.add_argument(
-        "--weakness-exit-threshold",
-        type=float,
-        default=0.6,
-        help="弱势评分触发阈值 [0,1]（默认：0.6）",
-    )
-    parser.add_argument(
-        "--weakness-exit-consecutive-days",
-        type=int,
-        default=3,
-        help="需连续弱势天数（默认：3）",
-    )
-    parser.add_argument(
-        "--weakness-exit-min-holding-days",
-        type=int,
-        default=5,
-        help="最低持有天数（默认：5）",
-    )
-    parser.add_argument(
-        "--weakness-exit-weights",
-        type=str,
-        default="30,25,25,20",
-        help="4 维度权重，逗号分隔百分比（默认：30,25,25,20）",
-    )
-    parser.add_argument(
-        "--weakness-exit-industry-filter",
-        action="store_true",
-        default=False,
-        help="叠加弱势行业过滤（默认：关闭）",
-    )
-    parser.add_argument(
-        "--weakness-exit-industry-bottom-pct",
-        type=float,
-        default=0.3,
-        help="行业底部百分位阈值（默认：0.3）",
-    )
-
-    # ── ECT ──
-    parser.add_argument(
-        "--equity-curve-enabled",
-        action="store_true",
-        default=False,
-        help="启用权益曲线交易（ECT）功能",
-    )
-    parser.add_argument(
-        "--equity-curve-drawdown-thresholds",
-        type=float,
-        nargs="+",
-        default=[5.0, 10.0, 15.0, 20.0],
-        help="ECT 回撤阈值列表（百分比），默认：5.0 10.0 15.0 20.0",
-    )
-    parser.add_argument(
-        "--equity-curve-exposure-levels",
-        type=float,
-        nargs="+",
-        default=[0.8, 0.6, 0.4, 0.2],
-        help="ECT 对应仓位系数列表，默认：0.8 0.6 0.4 0.2",
-    )
-    parser.add_argument(
-        "--equity-curve-ma-short", type=int, default=5, help="ECT 短期均线窗口（默认：5）"
-    )
-    parser.add_argument(
-        "--equity-curve-ma-long", type=int, default=20, help="ECT 长期均线窗口（默认：20）"
-    )
-    parser.add_argument(
-        "--equity-curve-recovery-mode",
-        type=str,
-        default="gradual",
-        choices=["gradual", "immediate"],
-        help="ECT 恢复模式（默认：gradual）",
-    )
-    parser.add_argument(
-        "--equity-curve-recovery-step",
-        type=float,
-        default=0.25,
-        help="ECT 逐步恢复步长（默认：0.25）",
-    )
-    parser.add_argument(
-        "--equity-curve-recovery-delay-periods",
-        type=int,
-        default=0,
-        help="ECT 恢复等待周期数（默认：0）",
-    )
-
     # ── 市场择时仓位管理 ──
     parser.add_argument(
         "--market-regime-enabled",
@@ -544,44 +410,6 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=float,
         default=-0.08,
         help="回撤保护阈值（默认：-0.08）",
-    )
-    parser.add_argument(
-        "--market-regime-ma250-hard-stop",
-        action="store_true",
-        default=True,
-        dest="market_regime_ma250_hard_stop",
-        help="启用MA250长周期硬条件（默认：启用）",
-    )
-    parser.add_argument(
-        "--no-market-regime-ma250-hard-stop",
-        action="store_false",
-        dest="market_regime_ma250_hard_stop",
-        help="关闭MA250硬条件",
-    )
-    parser.add_argument(
-        "--market-regime-ma250-threshold",
-        type=float,
-        default=1.0,
-        help="MA250触发阈值（默认：1.0）",
-    )
-    parser.add_argument(
-        "--market-regime-ma250-exposure",
-        type=float,
-        default=0.9,
-        help="MA250触发后仓位系数（默认：0.9）",
-    )
-    parser.add_argument(
-        "--market-regime-ma250-atr-scaling",
-        action="store_true",
-        default=True,
-        dest="market_regime_ma250_atr_scaling",
-        help="MA250启用ATR动态仓位缩放（默认：启用）",
-    )
-    parser.add_argument(
-        "--no-market-regime-ma250-atr-scaling",
-        action="store_false",
-        dest="market_regime_ma250_atr_scaling",
-        help="关闭MA250 ATR缩放",
     )
 
     # ── 行业动量过滤 & 行业轮动加权 ──

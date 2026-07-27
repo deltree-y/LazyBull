@@ -15,9 +15,7 @@ from ..common.date_utils import to_trade_date_str
 from ..common.trade_status import is_tradeable
 from ..data.loader import DataLoader
 from ..execution.pending_order import PendingOrderManager
-from ..risk.equity_curve import EquityCurveConfig, EquityCurveMonitor
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
-from ..risk.weakness_exit import WeaknessExitConfig, WeaknessExitMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..signals.base import Signal
 from ..universe.base import Universe
@@ -49,8 +47,6 @@ def _format_rebalance_decision_summary(
         compact = compact.replace("达到阈值 ", "档=")
         compact = compact.replace("未达到首档阈值 ", "未达首档=")
         compact = compact.replace("目标仓位 ", "目标=")
-        compact = compact.replace("base_after_ma250=", "base=")
-        compact = compact.replace("final_after_atr=", "after_atr=")
         compact = re.sub(r",?\s*市场层=[0-9.]+%", "", compact)
         compact = re.sub(r"\s+", " ", compact)
         return compact
@@ -74,24 +70,14 @@ def _format_rebalance_decision_summary(
     target_n = decision_trace.get("target_n", 0)
     queued = bool(decision_trace.get("queued", execution_date is not None))
 
-    ect = decision_trace.get("ect", {})
-    ma250 = decision_trace.get("ma250", {})
     market_regime = decision_trace.get("market_regime", {})
 
-    ect_exposure = _to_optional_float(ect.get("exposure", 1.0))
-    ma250_exposure = _to_optional_float(ma250.get("exposure", 1.0))
     market_regime_exposure = _to_optional_float(market_regime.get("exposure", 1.0))
     market_layer_exposure = _to_optional_float(decision_trace.get("market_layer_exposure", 1.0))
-    computed_exposure = None
-    if (
-        ect_exposure is not None
-        and market_layer_exposure is not None
-    ):
-        computed_exposure = ect_exposure * market_layer_exposure
     final_target_exposure = _to_optional_float(
         decision_trace.get(
             "final_target_exposure",
-            computed_exposure,
+            market_layer_exposure,
         )
     )
 
@@ -117,10 +103,6 @@ def _format_rebalance_decision_summary(
 
     return (
         f"{header} | 执行={execution_text} | 候选={candidate_text} | {topn_text}"
-        f" | ECT={_fmt_exposure(ect_exposure)}"
-        f"[{_compact_summary(ect.get('summary', '未启用'))}]"
-        f" | MA250/ATR={_fmt_exposure(ma250_exposure)}"
-        f"[{_compact_summary(ma250.get('summary', '未启用'))}]"
         f" | 市场={_fmt_exposure(market_regime_exposure)}"
         f"[{_compact_summary(market_regime.get('summary', '未启用'))}]"
         f" | 最终={_fmt_exposure(final_target_exposure)}[{final_detail}]"
@@ -218,19 +200,11 @@ class BacktestEngine:
         sell_timing: str = "open",
         enable_position_completion: bool = True,
         completion_window_days: int = 3,
-        equity_curve_config: Optional[EquityCurveConfig] = None,
         data_storage=None,  # 新增：数据存储实例（用于读取 raw/suspend 数据）
         max_weight_per_stock: Optional[float] = None,  # 新增：单股最大权重
         max_per_industry: Optional[int] = None,  # 新增：单行业最大持仓数量
         stock_basic: Optional[pd.DataFrame] = None,  # 新增：股票基本信息（用于行业约束）
         stagger_tranches: int = 1,  # 分批调仓批次数（1=不分批）
-        weakness_exit_enabled: bool = False,  # 是否启用表现弱势退出
-        weakness_exit_threshold: float = 0.6,  # 弱势评分触发阈值
-        weakness_exit_consecutive_days: int = 3,  # 需连续弱势天数
-        weakness_exit_min_holding_days: int = 5,  # 最低持有天数
-        weakness_exit_weights: str = "30,25,25,20",  # 4维度权重
-        weakness_exit_industry_filter: bool = False,  # 弱势行业过滤
-        weakness_exit_industry_bottom_pct: float = 0.3,  # 行业底部阈值
         position_sizing: str = "equal",  # 仓位管理: equal|score|kelly|half_kelly
         kelly_vol_window: int = 60,  # Kelly 波动率估计窗口（交易日）
         kelly_max_leverage: float = 0.25,  # 单只股票 Kelly 仓位上限（占总资产）
@@ -261,7 +235,6 @@ class BacktestEngine:
             sell_timing: 卖出时机，'open' 表示开盘价卖出（默认），'close' 表示收盘价卖出
             enable_position_completion: 是否启用仓位补齐功能，默认True
             completion_window_days: 补齐窗口期（交易日），默认3天
-            equity_curve_config: ECT（权益曲线交易）配置，None 表示不启用（默认）
             data_storage: 数据存储实例（用于读取 raw/suspend 数据），如不提供则在需要时创建
             max_weight_per_stock: 单个股票最大权重（0-1），None 表示不启用限权，启用后会在信号生成时对权重进行限制并归一化
             max_per_industry: 单个行业最大持仓数量，None 或 0 表示不启用行业约束
@@ -335,23 +308,6 @@ class BacktestEngine:
             raise ValueError(f"分批调仓批次数必须 >= 1，当前值: {stagger_tranches}")
         self.stagger_tranches = stagger_tranches
 
-        # 表现弱势退出
-        self.weakness_exit_enabled = weakness_exit_enabled
-        self.weakness_exit_monitor: Optional[WeaknessExitMonitor] = None
-        if weakness_exit_enabled:
-            w_parts = [float(x.strip()) / 100.0 for x in weakness_exit_weights.split(",")]
-            if len(w_parts) != 4:
-                w_parts = [0.30, 0.25, 0.25, 0.20]
-            wc = WeaknessExitConfig(
-                enabled=True,
-                threshold=weakness_exit_threshold,
-                consecutive_days=weakness_exit_consecutive_days,
-                min_holding_days=weakness_exit_min_holding_days,
-                weights=tuple(w_parts),
-                industry_filter=weakness_exit_industry_filter,
-                industry_bottom_pct=weakness_exit_industry_bottom_pct,
-            )
-            self.weakness_exit_monitor = WeaknessExitMonitor(wc)
         self.enable_early_rebalance_on_empty = enable_early_rebalance_on_empty
         self._last_ranked_candidates: list = []  # 最近一次调仓的候选排序列表（止盈补位用）
         self._last_signal_date: Optional[pd.Timestamp] = None  # 最近一次调仓日期
@@ -383,12 +339,6 @@ class BacktestEngine:
         self.stop_loss_monitor = None
         if stop_loss_config and stop_loss_config.enabled:
             self.stop_loss_monitor = StopLossMonitor(stop_loss_config)
-
-        # ECT 配置
-        self.equity_curve_config = equity_curve_config
-        self.equity_curve_monitor = None
-        if equity_curve_config and equity_curve_config.enabled:
-            self.equity_curve_monitor = EquityCurveMonitor(equity_curve_config)
 
         # 持有期逻辑：如果未指定，与调仓频率保持一致
         if holding_period is None:
@@ -466,7 +416,6 @@ class BacktestEngine:
             f"最小买入阈值={'关闭' if self.min_buy_value_ratio <= 0 else f'{self.min_buy_value_ratio:.2f}'}, "
             f"补齐窗口={completion_window_days}天, "
             f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
-            f"弱势退出={'启用' if weakness_exit_enabled else '禁用'}, "
             f"空仓提前调仓={'启用' if enable_early_rebalance_on_empty else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
@@ -1072,7 +1021,6 @@ class BacktestEngine:
 
         sell_label_map = {
             "holding_period": "持有期",
-            "weakness_exit": "表现弱势",
             "rebalance": "调仓",
         }
         stop_loss_label_map = {
@@ -1315,16 +1263,6 @@ class BacktestEngine:
             "candidate_count": candidate_count,
             "tranche_idx": tranche_idx,
             "queued": False,
-            "ect": {
-                "enabled": self.equity_curve_monitor is not None,
-                "exposure": 1.0,
-                "summary": "待执行日评估" if self.equity_curve_monitor else "未启用",
-            },
-            "ma250": {
-                "enabled": False,
-                "exposure": 1.0,
-                "summary": "未启用",
-            },
             "market_regime": {
                 "enabled": False,
                 "exposure": 1.0,
@@ -1339,12 +1277,6 @@ class BacktestEngine:
         """标记该信号未进入待买队列。"""
         decision_trace["queued"] = False
         decision_trace["final_target_exposure"] = 0.0
-        if decision_trace.get("ect", {}).get("enabled"):
-            decision_trace["ect"]["exposure"] = None
-            decision_trace["ect"]["summary"] = "未评估（信号已阻断）"
-        if decision_trace.get("ma250", {}).get("enabled"):
-            decision_trace["ma250"]["exposure"] = None
-            decision_trace["ma250"]["summary"] = "未评估（信号已阻断）"
         if decision_trace.get("market_regime", {}).get("enabled"):
             decision_trace["market_regime"]["exposure"] = None
             decision_trace["market_regime"]["summary"] = "未评估（信号已阻断）"
@@ -1413,29 +1345,6 @@ class BacktestEngine:
             f" | 买/卖[{buy_count}/{sell_count}]"
             f" | 收益[本调仓/本轮/年化]=[{rebalance_return_str}/{total_return:+.2f}%/{ann_return:+.2f}%]"
         )
-
-    def _build_nav_series(self, current_date: pd.Timestamp) -> Optional[pd.Series]:
-        """构建用于 ECT 的历史 NAV 序列
-
-        Args:
-            current_date: 当前日期
-
-        Returns:
-            NAV Series (index=date, values=nav) 或 None
-        """
-        if not self.portfolio_values:
-            return None
-
-        # 从 portfolio_values 构建 DataFrame
-        df = pd.DataFrame(self.portfolio_values)
-
-        # 计算 NAV（相对于初始资金的净值）
-        df["nav"] = df["portfolio_value"] / self.initial_capital
-
-        # 转换为 Series
-        nav_series = pd.Series(df["nav"].values, index=df["date"])
-
-        return nav_series
 
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建传递给信号生成器的额外数据（扩展点）
@@ -1879,32 +1788,7 @@ class BacktestEngine:
         if self.enable_risk_budget:
             signals = self._apply_risk_budget(signals, date)
 
-        # 应用 ECT 仓位系数
-        ect_exposure = 1.0
-        ect_reason = "未启用"
-        if self.equity_curve_monitor:
-            # 构建历史 NAV 序列
-            nav_series = self._build_nav_series(date)
-
-            if nav_series is not None and len(nav_series) > 0:
-                # 计算 ECT 系数
-                ect_exposure, ect_reason = self.equity_curve_monitor.calculate_exposure(
-                    nav_series, current_date=to_trade_date_str(date)
-                )
-
-                if self.verbose and ect_exposure < 1.0:
-                    logger.info(f"ECT 生效: {date.date()}, {ect_reason}")
-                elif self.verbose:
-                    logger.info(f"ECT 不生效: {date.date()}, {ect_reason}")
-
-                # 将系数应用到所有目标权重
-                if ect_exposure < 1.0:
-                    signals = {stock: weight * ect_exposure for stock, weight in signals.items()}
-
-                    if self.verbose:
-                        logger.info(f"ECT 调整: 所有目标权重乘以系数 {ect_exposure:.2f}")
-
-        # 执行日权重可能被风险预算/ECT 调整，按原槽位顺序同步更新。
+        # 执行日权重可能被风险预算调整，按原槽位顺序同步更新。
         if slot_weights:
             ordered_slot_weights = []
             seen_slot_stocks = set()
@@ -1934,11 +1818,6 @@ class BacktestEngine:
                 tranche_idx=tranche_idx,
             )
 
-        decision_trace["ect"] = {
-            "enabled": self.equity_curve_monitor is not None,
-            "exposure": ect_exposure,
-            "summary": ect_reason if self.equity_curve_monitor else "未启用",
-        }
         decision_trace["queued"] = True
         decision_trace["final_target_exposure"] = float(sum(signals.values()))
 
@@ -2443,28 +2322,6 @@ class BacktestEngine:
             # 计算持有天数（交易日）
             holding_days = current_idx - anchor_idx
 
-            # ── 表现弱势退出：纯价格表现评估 ──
-            if (
-                self.weakness_exit_monitor is not None
-                and stock not in self.pending_condition_sells
-            ):
-                should_exit, weakness_detail = self._evaluate_weakness_exit(
-                    stock=stock,
-                    date=date,
-                    position_info=info,
-                    holding_days=holding_days,
-                    profit_rate=0.0,
-                    trading_dates=trading_dates,
-                    date_to_idx=date_to_idx,
-                )
-                if should_exit:
-                    self.pending_condition_sells[stock] = {
-                        "trigger_date": date,
-                        "sell_type": "weakness_exit",
-                        "weakness_detail": weakness_detail,
-                    }
-                    continue
-
             # 持有期到期 → T0 生成卖出信号，T+1 执行
             if holding_days >= self.holding_period:
                 self.pending_condition_sells[stock] = {
@@ -2489,108 +2346,6 @@ class BacktestEngine:
                 price_data=self.price_data_cache,
                 date_to_idx=date_to_idx,
             )
-
-    def _evaluate_weakness_exit(
-        self,
-        stock: str,
-        date: pd.Timestamp,
-        position_info: dict,
-        holding_days: int,
-        profit_rate: float,
-        trading_dates: list,
-        date_to_idx: dict,
-    ):
-        """评估是否应因表现弱势而提前退出。
-
-        使用 WeaknessExitMonitor 的 4 维纯价格表现评分。
-        """
-        if self.weakness_exit_monitor is None:
-            return False, {}
-
-        # 获取买入以来的后复权价格序列
-        buy_date = position_info.get("buy_date")
-        if buy_date is None:
-            return False, {}
-
-        buy_idx = date_to_idx.get(buy_date)
-        current_idx = date_to_idx.get(date)
-        if buy_idx is None or current_idx is None:
-            return False, {}
-
-        # 从 price_data_cache 提取价格序列
-        pnl_prices = {}
-        if self.price_data_cache is not None:
-            stock_data = self.price_data_cache[
-                self.price_data_cache["ts_code"] == stock
-            ]
-            for _, row in stock_data.iterrows():
-                trade_date_str = to_trade_date_str(row["trade_date"])
-                close_val = row.get("close_adj", row.get("close"))
-                if pd.notna(close_val) and close_val > 0:
-                    pnl_prices[trade_date_str] = float(close_val)
-
-        if len(pnl_prices) < 2:
-            return False, {}
-
-        # 构建日期排序的价格 Series
-        sorted_dates = sorted(pnl_prices.keys())
-        price_values = [pnl_prices[d] for d in sorted_dates]
-        price_series = pd.Series(price_values, index=sorted_dates)
-
-        # 构建所有持仓的 profit_rate 字典
-        all_profits = {}
-        for s, info in self.positions.items():
-            current_pnl = self._get_pnl_price(date, s)
-            buy_pnl = info.get("buy_pnl_price")
-            if current_pnl and buy_pnl and buy_pnl > 0:
-                all_profits[s] = (current_pnl - buy_pnl) / buy_pnl
-            else:
-                all_profits[s] = 0.0
-
-        # 可选行业动量排名
-        industry_rank = None
-        if (
-            self.weakness_exit_monitor.config.industry_filter
-            and hasattr(self, "_get_holding_features_row")
-        ):
-            try:
-                features_row = self._get_holding_features_row(date, stock)
-                if features_row is not None and "ind_momentum_rank" in features_row.index:
-                    rank_val = features_row["ind_momentum_rank"]
-                    if not pd.isna(rank_val):
-                        industry_rank = float(rank_val)
-            except Exception:
-                pass
-
-        weakness_score, breakdown = self.weakness_exit_monitor.evaluate(
-            stock=stock,
-            price_series=price_series,
-            all_positions_profit=all_profits,
-            holding_days=holding_days,
-            industry_rank=industry_rank,
-        )
-
-        date_str = to_trade_date_str(date)
-        consec = self.weakness_exit_monitor.update(stock, date_str, weakness_score)
-
-        # 未达最低持有天数：仅跟踪不触发
-        min_hold = self.weakness_exit_monitor.config.min_holding_days
-        if holding_days < min_hold:
-            return False, breakdown
-
-        if weakness_score >= self.weakness_exit_monitor.config.threshold:
-            if consec >= self.weakness_exit_monitor.config.consecutive_days:
-                logger.warning(
-                    f"  表现弱势退出: {stock} 持有{holding_days}天, "
-                    f"评分={weakness_score:.3f}, 连弱{consec}天, "
-                    f"排名={breakdown.get('pnl_rank', 0):.2f}, "
-                    f"连跌={breakdown.get('down_streak', 0):.2f}, "
-                    f"回撤={breakdown.get('drawdown', 0):.2f}, "
-                    f"回升={breakdown.get('recovery', 0):.2f}"
-                )
-                return True, breakdown
-
-        return False, breakdown
 
     def _execute_pending_condition_sells(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
@@ -3685,10 +3440,6 @@ class BacktestEngine:
         # 如果是止损卖出，清理止损监控器中的持仓状态
         if sell_type == "stop_loss" and self.stop_loss_monitor:
             self.stop_loss_monitor.remove_position(stock)
-
-        # 清理弱势退出监控器中的持仓状态
-        if self.weakness_exit_monitor is not None:
-            self.weakness_exit_monitor.reset(stock)
 
         # 记录交易（包含绩效收益信息和卖出类型）
         trade_record = {

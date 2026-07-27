@@ -70,44 +70,10 @@ CONFIG_SECTION_LAYOUT = [
         ],
     ),
     (
-        "weakness_exit",
-        "表现弱势退出",
-        [
-            "纯价格表现评估，零模型依赖。每日用累计收益排名、连续下跌天数、回撤深度、回升乏力 4 个维度识别弱势股并提前换出。",
-        ],
-        [
-            "weakness_exit_enabled",
-            "weakness_exit_threshold",
-            "weakness_exit_consecutive_days",
-            "weakness_exit_min_holding_days",
-            "weakness_exit_weights",
-            "weakness_exit_industry_filter",
-            "weakness_exit_industry_bottom_pct",
-        ],
-    ),
-    (
-        "equity_curve",
-        "权益曲线交易（ECT）",
-        [
-            "drawdown_thresholds 和 exposure_levels 需要一一对应。",
-        ],
-        [
-            "equity_curve_enabled",
-            "equity_curve_drawdown_thresholds",
-            "equity_curve_exposure_levels",
-            "equity_curve_ma_short",
-            "equity_curve_ma_long",
-            "equity_curve_recovery_mode",
-            "equity_curve_recovery_step",
-            "equity_curve_recovery_delay_periods",
-        ],
-    ),
-    (
         "market_regime",
         "市场择时仓位管理",
         [
             "market_regime_mode 可选 binary / vol_target / trend / combined。",
-            "MA250 硬条件和 ATR 缩放也在本段统一配置。",
         ],
         [
             "market_regime_enabled",

@@ -51,7 +51,6 @@ from src.lazybull.data import DataLoader, Storage
 from src.lazybull.signals import MLSignal
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.risk.stop_loss import StopLossConfig, create_stop_loss_config_from_dict
-from src.lazybull.risk.equity_curve import EquityCurveConfig, create_equity_curve_config_from_dict
 import warnings
 # 匹配告警信息中的关键字符串，设置为 ignore
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
@@ -178,7 +177,6 @@ def run_ml_backtest(
     stagger_tranches: int = 1,
     cost_model: CostModel = None,
     stop_loss_config: StopLossConfig = None,
-    equity_curve_config: EquityCurveConfig = None,
     sell_timing: str = 'open',
     max_weight_per_stock: float = None,
     max_per_industry: int = None,
@@ -206,7 +204,6 @@ def run_ml_backtest(
         rebalance_freq: 调仓频率（交易日数），必须为正整数
         cost_model: 成本模型
         stop_loss_config: 止损配置（可选）
-        equity_curve_config: ECT 配置（可选）
         sell_timing: 卖出时机
         max_weight_per_stock: 单股最大权重（可选）
         max_per_industry: 单行业最大持仓数量（可选）
@@ -240,34 +237,6 @@ def run_ml_backtest(
             stop_loss_config.consecutive_limit_down_days
             if stop_loss_config and stop_loss_config.enabled
             else 2
-        ),
-        equity_curve_enabled=bool(equity_curve_config and equity_curve_config.enabled),
-        equity_curve_drawdown_thresholds=(
-            equity_curve_config.drawdown_thresholds
-            if equity_curve_config and equity_curve_config.enabled
-            else [5.0, 10.0, 15.0, 20.0]
-        ),
-        equity_curve_exposure_levels=(
-            equity_curve_config.exposure_levels
-            if equity_curve_config and equity_curve_config.enabled
-            else [0.8, 0.6, 0.4, 0.2]
-        ),
-        equity_curve_ma_short=(
-            equity_curve_config.ma_short_window if equity_curve_config and equity_curve_config.enabled else 5
-        ),
-        equity_curve_ma_long=(
-            equity_curve_config.ma_long_window if equity_curve_config and equity_curve_config.enabled else 20
-        ),
-        equity_curve_recovery_mode=(
-            equity_curve_config.recovery_mode if equity_curve_config and equity_curve_config.enabled else "gradual"
-        ),
-        equity_curve_recovery_step=(
-            equity_curve_config.recovery_step if equity_curve_config and equity_curve_config.enabled else 0.25
-        ),
-        equity_curve_recovery_delay_periods=(
-            equity_curve_config.recovery_delay_periods
-            if equity_curve_config and equity_curve_config.enabled
-            else 0
         ),
         industry_rotation_enhanced=industry_rotation_enhanced,
         industry_rotation_alpha=industry_rotation_alpha,
@@ -913,19 +882,6 @@ def main():
             logger.info(f"  - 移动止损阈值: {args.stop_loss_trailing_pct}%")
         logger.info(f"  - 连续跌停止损: {args.stop_loss_consecutive_limit_down} 天")
     
-    logger.info(f"ECT功能: {'启用' if args.equity_curve_enabled else '禁用'}")
-    if args.equity_curve_enabled:
-        logger.info(f"  - 回撤阈值: {args.equity_curve_drawdown_thresholds}")
-        logger.info(f"  - 仓位系数: {args.equity_curve_exposure_levels}")
-        logger.info(f"  - 均线窗口: 短期={args.equity_curve_ma_short}, 长期={args.equity_curve_ma_long}")
-        logger.info(f"  - 恢复模式: {args.equity_curve_recovery_mode}")
-        logger.info(f"  - 恢复步长: {args.equity_curve_recovery_step}")
-        logger.info(f"  - 恢复等待周期: {args.equity_curve_recovery_delay_periods} 个调仓周期")
-        logger.info(
-        )
-        logger.info(
-        )
-
     # 构建统一策略配置
     trading_config = TradingConfig.from_args(args)
 
@@ -933,9 +889,8 @@ def main():
         # 初始化组件（registry 已在前面初始化）
         loader = DataLoader(storage)
 
-        # 通过 TradingConfig 创建止损 / ECT 配置
+        # 通过 TradingConfig 创建止损配置
         stop_loss_config = trading_config.create_stop_loss_config()
-        equity_curve_config = trading_config.create_equity_curve_config()
 
         # 1. 加载数据
         trade_cal, stock_basic, daily_data, features_by_date = load_backtest_data(
@@ -997,7 +952,6 @@ def main():
             rebalance_freq=trading_config.rebalance_freq,
             stagger_tranches=trading_config.stagger_tranches,
             stop_loss_config=stop_loss_config,
-            equity_curve_config=equity_curve_config,
             sell_timing=args.sell_timing,
             max_weight_per_stock=trading_config.max_weight_per_stock,
             max_per_industry=trading_config.max_per_industry,

@@ -54,20 +54,6 @@ def build_walk_forward_trading_config(args, *, model_version: int) -> TradingCon
         stop_loss_consecutive_limit_down=getattr(
             args, "bt_stop_loss_consecutive_limit_down", 2
         ),
-        equity_curve_enabled=getattr(args, "bt_equity_curve_enabled", False),
-        equity_curve_drawdown_thresholds=getattr(
-            args, "bt_equity_curve_drawdown_thresholds", [5.0, 10.0, 15.0, 20.0]
-        ),
-        equity_curve_exposure_levels=getattr(
-            args, "bt_equity_curve_exposure_levels", [0.8, 0.6, 0.4, 0.2]
-        ),
-        equity_curve_ma_short=getattr(args, "bt_equity_curve_ma_short", 5),
-        equity_curve_ma_long=getattr(args, "bt_equity_curve_ma_long", 20),
-        equity_curve_recovery_mode=getattr(args, "bt_equity_curve_recovery_mode", "gradual"),
-        equity_curve_recovery_step=getattr(args, "bt_equity_curve_recovery_step", 0.25),
-        equity_curve_recovery_delay_periods=getattr(
-            args, "bt_equity_curve_recovery_delay_periods", 0
-        ),
         market_regime_enabled=getattr(args, "market_regime", False),
         market_regime_mode=getattr(args, "market_regime_mode", "binary"),
         market_regime_bear_threshold=getattr(args, "market_regime_bear_threshold", -0.02),
@@ -79,12 +65,6 @@ def build_walk_forward_trading_config(args, *, model_version: int) -> TradingCon
         market_regime_trend_guard=getattr(args, "market_regime_trend_guard", True),
         market_regime_drawdown_guard=getattr(args, "market_regime_drawdown_guard", True),
         market_regime_drawdown_threshold=getattr(args, "market_regime_drawdown_threshold", -0.08),
-        market_regime_ma250_hard_stop=getattr(args, "market_regime_ma250_hard_stop", False),
-        market_regime_ma250_threshold=getattr(args, "market_regime_ma250_threshold", 1.0),
-        market_regime_ma250_exposure=getattr(args, "market_regime_ma250_exposure", 0.0),
-        market_regime_ma250_atr_scaling=getattr(
-            args, "market_regime_ma250_atr_scaling", False
-        ),
         industry_momentum_filter=getattr(args, "industry_momentum_filter", False),
         industry_momentum_bottom_pct=getattr(args, "industry_momentum_bottom_pct", 0.2),
         industry_rotation_enhanced=getattr(args, "industry_rotation_enhanced", False),
@@ -152,7 +132,6 @@ def create_backtest_engine_from_config(
         rebalance_freq=trading_config.rebalance_freq,
         stagger_tranches=trading_config.stagger_tranches,
         stop_loss_config=trading_config.create_stop_loss_config(),
-        equity_curve_config=trading_config.create_equity_curve_config(),
         sell_timing=sell_timing or trading_config.sell_price,
         enable_pending_order=enable_pending_order,
         completion_window_days=completion_window_days,
@@ -172,10 +151,6 @@ def create_backtest_engine_from_config(
         market_regime_trend_guard=trading_config.market_regime_trend_guard,
         market_regime_drawdown_guard=trading_config.market_regime_drawdown_guard,
         market_regime_drawdown_threshold=trading_config.market_regime_drawdown_threshold,
-        market_regime_ma250_hard_stop=trading_config.market_regime_ma250_hard_stop,
-        market_regime_ma250_threshold=trading_config.market_regime_ma250_threshold,
-        market_regime_ma250_exposure=trading_config.market_regime_ma250_exposure,
-        market_regime_ma250_atr_scaling=trading_config.market_regime_ma250_atr_scaling,
         industry_momentum_filter=trading_config.industry_momentum_filter,
         industry_momentum_bottom_pct=trading_config.industry_momentum_bottom_pct,
         industry_rotation_enhanced=trading_config.industry_rotation_enhanced,
@@ -184,13 +159,6 @@ def create_backtest_engine_from_config(
         kelly_vol_window=trading_config.kelly_vol_window,
         kelly_max_leverage=trading_config.kelly_max_leverage,
         min_buy_value_ratio=trading_config.min_buy_value_ratio,
-        weakness_exit_enabled=trading_config.weakness_exit_enabled,
-        weakness_exit_threshold=trading_config.weakness_exit_threshold,
-        weakness_exit_consecutive_days=trading_config.weakness_exit_consecutive_days,
-        weakness_exit_min_holding_days=trading_config.weakness_exit_min_holding_days,
-        weakness_exit_weights=trading_config.weakness_exit_weights,
-        weakness_exit_industry_filter=trading_config.weakness_exit_industry_filter,
-        weakness_exit_industry_bottom_pct=trading_config.weakness_exit_industry_bottom_pct,
         enable_early_rebalance_on_empty=trading_config.enable_early_rebalance_on_empty,
     )
 

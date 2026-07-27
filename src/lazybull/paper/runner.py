@@ -1975,35 +1975,6 @@ class PaperTradingRunner:
 
         min_exposure = config.get("market_regime_min_exposure", 0.2)
 
-        # ── MA250 硬条件（优先级最高）──
-        if config.get("market_regime_ma250_hard_stop", False):
-            ma250_ratio = self._get_feature_scalar(features_df, "mkt_ma250_ratio")
-            ma250_threshold = config.get("market_regime_ma250_threshold", 1.0)
-            ma250_exposure_cfg = config.get("market_regime_ma250_exposure", 0.0)
-
-            if not np.isnan(ma250_ratio) and ma250_ratio < ma250_threshold:
-                base_exposure = ma250_exposure_cfg
-                triggered = True
-            else:
-                base_exposure = 1.0
-                triggered = False
-
-            # ATR 动态缩放
-            if config.get("market_regime_ma250_atr_scaling", False):
-                exposure = self._apply_ma250_atr_scaling(
-                    base_exposure, features_df, min_exposure
-                )
-            else:
-                exposure = base_exposure
-
-            if triggered or exposure < 1.0:
-                reason = (
-                    f"MA250硬条件: ratio={ma250_ratio:.3f}"
-                    f" {'<' if triggered else '>='} {ma250_threshold}，"
-                    f"仓位={exposure:.1%}"
-                )
-                return exposure, reason
-
         # ── 常规市场择时 ──
         if not config.get("market_regime_enabled", False):
             return 1.0, "市场择时未启用"
@@ -2035,24 +2006,6 @@ class PaperTradingRunner:
 
         reason = f"市场择时({mode}): 仓位={exposure:.1%}"
         return exposure, reason
-
-    @staticmethod
-    def _apply_ma250_atr_scaling(
-        base_exposure: float,
-        features_df: pd.DataFrame,
-        min_exposure: float,
-    ) -> float:
-        """ATR 动态仓位缩放: clip(base * MA(ATR,250) / CurrentATR, min, 1.0)"""
-        mkt_atr = PaperTradingRunner._get_feature_scalar(
-            features_df, "mkt_atr_pct"
-        )
-        mkt_atr_ma250 = PaperTradingRunner._get_feature_scalar(
-            features_df, "mkt_atr_pct_ma250"
-        )
-        if np.isnan(mkt_atr) or np.isnan(mkt_atr_ma250) or mkt_atr <= 0:
-            return base_exposure
-        atr_ratio = mkt_atr_ma250 / mkt_atr
-        return float(np.clip(base_exposure * atr_ratio, min_exposure, 1.0))
 
     @staticmethod
     def _regime_binary(features_df: pd.DataFrame, config: dict) -> float:

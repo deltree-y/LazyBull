@@ -358,8 +358,6 @@ def test_format_rebalance_decision_summary_is_explicit():
             "exposure": 0.6,
             "summary": "score=0.124，达到阈值 0.080，目标仓位 60%",
         },
-        "ect": {"exposure": 1.0, "summary": "未启用"},
-        "ma250": {"exposure": 1.0, "summary": "未启用"},
         "market_regime": {
             "exposure": 0.5,
             "summary": "mode=vol_target, target_vol=20.0%, realized_vol=40.0%, 市场层=50.0%",
@@ -455,8 +453,6 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
     assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2" in signal_day_output
     assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2" in output
     assert "门控=40.0%[score=0.000, top_mean=1.0200, baseline=1.0200, std=0.3124, 档=0.000, 目标=40%]" in output
-    assert "ECT=100.0%[未启用]" in output
-    assert "MA250/ATR=100.0%[未启用]" in output
     assert "市场=50.0%[mode=vol_target, target_vol=10.0%, realized_vol=20.0%]" in output
     assert "最终=20.0%[入队]" in output
     assert output.count("调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2") == 1

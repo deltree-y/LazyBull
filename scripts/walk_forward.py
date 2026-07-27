@@ -161,71 +161,6 @@ def _filter_splits_by_selected_indices(
     return [split for split in splits if split.split_index in selected_index_set]
 
 
-def summarize_ma250_signal_coverage(
-    trade_dates: List[str],
-    features_by_date: Dict[str, pd.DataFrame],
-    threshold: float,
-    rebalance_freq: int,
-    stagger_tranches: int = 1,
-) -> Dict[str, object]:
-    """统计 MA250 阈值在交易日与调仓信号日上的命中情况。"""
-    if rebalance_freq <= 0:
-        raise ValueError(f"rebalance_freq 必须为正整数，当前值: {rebalance_freq}")
-
-    sorted_trade_dates = sorted(trade_dates)
-
-    def get_ratio(trade_date: str) -> Optional[float]:
-        features_df = features_by_date.get(trade_date)
-        if features_df is None or len(features_df) == 0:
-            return None
-        if "mkt_ma250_ratio" not in features_df.columns:
-            return None
-        ratio = features_df["mkt_ma250_ratio"].iloc[0]
-        if pd.isna(ratio):
-            return None
-        return float(ratio)
-
-    hit_trade_dates = []
-    for trade_date in sorted_trade_dates:
-        ratio = get_ratio(trade_date)
-        if ratio is not None and ratio < threshold:
-            hit_trade_dates.append((trade_date, ratio))
-
-    if stagger_tranches <= 1:
-        signal_dates = sorted_trade_dates[::rebalance_freq]
-    else:
-        offset = max(1, rebalance_freq // stagger_tranches)
-        signal_date_set = set()
-        for tranche_idx in range(stagger_tranches):
-            start_idx = tranche_idx * offset
-            signal_date_set.update(sorted_trade_dates[start_idx::rebalance_freq])
-        signal_dates = sorted(signal_date_set)
-
-    hit_signal_dates = []
-    for trade_date in signal_dates:
-        ratio = get_ratio(trade_date)
-        if ratio is not None and ratio < threshold:
-            hit_signal_dates.append((trade_date, ratio))
-
-    first_hit_trade_date, first_hit_trade_ratio = (
-        hit_trade_dates[0] if hit_trade_dates else (None, None)
-    )
-    first_hit_signal_date, first_hit_signal_ratio = (
-        hit_signal_dates[0] if hit_signal_dates else (None, None)
-    )
-
-    return {
-        "trade_days": len(sorted_trade_dates),
-        "signal_days": len(signal_dates),
-        "hit_trade_days": len(hit_trade_dates),
-        "hit_signal_days": len(hit_signal_dates),
-        "first_hit_trade_date": first_hit_trade_date,
-        "first_hit_trade_ratio": first_hit_trade_ratio,
-        "first_hit_signal_date": first_hit_signal_date,
-        "first_hit_signal_ratio": first_hit_signal_ratio,
-    }
-
-
 def run_oos_backtest(
     model_version: int,
     bt_start: str,
@@ -390,18 +325,6 @@ def run_oos_backtest(
         stop_loss_trailing_enabled=bt_stop_loss_trailing_enabled,
         stop_loss_trailing_pct=bt_stop_loss_trailing_pct,
         stop_loss_consecutive_limit_down=bt_stop_loss_consecutive_limit_down,
-        equity_curve_enabled=bt_equity_curve_enabled,
-        equity_curve_drawdown_thresholds=(
-            bt_equity_curve_drawdown_thresholds or [5.0, 10.0, 15.0, 20.0]
-        ),
-        equity_curve_exposure_levels=(
-            bt_equity_curve_exposure_levels or [0.8, 0.6, 0.4, 0.2]
-        ),
-        equity_curve_ma_short=bt_equity_curve_ma_short,
-        equity_curve_ma_long=bt_equity_curve_ma_long,
-        equity_curve_recovery_mode=bt_equity_curve_recovery_mode,
-        equity_curve_recovery_step=bt_equity_curve_recovery_step,
-        equity_curve_recovery_delay_periods=bt_equity_curve_recovery_delay_periods,
         market_regime_enabled=market_regime_enabled,
         market_regime_mode=market_regime_mode,
         market_regime_bear_threshold=market_regime_bear_threshold,
@@ -413,10 +336,6 @@ def run_oos_backtest(
         market_regime_trend_guard=market_regime_trend_guard,
         market_regime_drawdown_guard=market_regime_drawdown_guard,
         market_regime_drawdown_threshold=market_regime_drawdown_threshold,
-        market_regime_ma250_hard_stop=market_regime_ma250_hard_stop,
-        market_regime_ma250_threshold=market_regime_ma250_threshold,
-        market_regime_ma250_exposure=market_regime_ma250_exposure,
-        market_regime_ma250_atr_scaling=market_regime_ma250_atr_scaling,
         industry_momentum_filter=industry_momentum_filter,
         industry_momentum_bottom_pct=industry_momentum_bottom_pct,
         industry_rotation_enhanced=industry_rotation_enhanced,
@@ -424,13 +343,6 @@ def run_oos_backtest(
         position_sizing=position_sizing,
         kelly_vol_window=kelly_vol_window,
         kelly_max_leverage=kelly_max_leverage,
-        weakness_exit_enabled=weakness_exit_enabled,
-        weakness_exit_threshold=weakness_exit_threshold,
-        weakness_exit_consecutive_days=weakness_exit_consecutive_days,
-        weakness_exit_min_holding_days=weakness_exit_min_holding_days,
-        weakness_exit_weights=weakness_exit_weights,
-        weakness_exit_industry_filter=weakness_exit_industry_filter,
-        weakness_exit_industry_bottom_pct=weakness_exit_industry_bottom_pct,
         initial_capital=initial_capital,
         sell_price=bt_sell_timing,
     )
@@ -453,38 +365,6 @@ def run_oos_backtest(
 
     # 自动推断调仓频率
     bt_rebalance_freq = effective_config.rebalance_freq
-
-    if market_regime_ma250_hard_stop:
-        ma250_stats = summarize_ma250_signal_coverage(
-            trade_dates=trade_dates,
-            features_by_date=features_by_date,
-            threshold=market_regime_ma250_threshold,
-            rebalance_freq=bt_rebalance_freq,
-            stagger_tranches=stagger_tranches,
-        )
-        logger.info(
-            "MA250硬条件统计: "
-            f"threshold={market_regime_ma250_threshold}, "
-            f"交易日命中 {ma250_stats['hit_trade_days']}/{ma250_stats['trade_days']}, "
-            f"调仓信号日命中 {ma250_stats['hit_signal_days']}/{ma250_stats['signal_days']}"
-        )
-        if ma250_stats["first_hit_signal_date"] is not None:
-            logger.info(
-                "MA250硬条件首次命中调仓信号日: "
-                f"{ma250_stats['first_hit_signal_date']} "
-                f"(mkt_ma250_ratio={ma250_stats['first_hit_signal_ratio']:.3f})"
-            )
-        elif ma250_stats["first_hit_trade_date"] is not None:
-            logger.warning(
-                "MA250硬条件在当前 OOS 窗口仅命中过普通交易日，"
-                f"未命中调仓信号日；首次交易日命中为 {ma250_stats['first_hit_trade_date']} "
-                f"(mkt_ma250_ratio={ma250_stats['first_hit_trade_ratio']:.3f})"
-            )
-        elif ma250_stats["signal_days"] > 0:
-            logger.warning(
-                "MA250硬条件已开启，但当前 OOS 窗口没有任何调仓信号日命中；"
-                "回测结果可能与关闭时接近"
-            )
 
     # 5. 运行回测
     engine = create_backtest_engine_from_config(
@@ -4001,31 +3881,6 @@ def main():
         type=float,
         default=-0.08,
         help="回撤保护阈值：mkt_drawdown_20 低于此值时停止降仓，默认 -0.08（-8%%）"
-    )
-    parser.add_argument(
-        "--market-regime-ma250-hard-stop",
-        action="store_true",
-        default=False,
-        help="启用 MA250 长周期硬条件：大盘跌破 250 日均线时强制降至 ma250_exposure 仓位"
-    )
-    parser.add_argument(
-        "--market-regime-ma250-threshold",
-        type=float,
-        default=1.0,
-        help="MA250 硬条件触发阈值（mkt_ma250_ratio < 此值触发），默认 1.0"
-    )
-    parser.add_argument(
-        "--market-regime-ma250-exposure",
-        type=float,
-        default=0.0,
-        help="MA250 硬条件触发后的仓位系数，默认 0.0（完全空仓）"
-    )
-    parser.add_argument(
-        "--ma250-atr-scaling",
-        action="store_true",
-        default=False,
-        dest="market_regime_ma250_atr_scaling",
-        help="MA250 模块启用 ATR 动态仓位缩放：仓位 = base × MA(ATR,250)/CurrentATR"
     )
     # 盈亏动态持仓参数
     parser.add_argument(

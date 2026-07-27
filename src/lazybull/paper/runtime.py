@@ -9,7 +9,6 @@ from loguru import logger
 from ..common.signal_factory import create_signal
 from ..common.trading_config import TradingConfig
 from ..data import DataLoader
-from ..risk.equity_curve import EquityCurveMonitor, create_equity_curve_config_from_dict
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from .models import PendingBuy, PendingSell, TargetWeight, TradeInstruction, normalize_trade_reason
@@ -42,8 +41,6 @@ class PaperTradeExecutionResult:
     t1_actions: List[Dict[str, object]] = field(default_factory=list)
     t0_targets: List[Dict[str, object]] = field(default_factory=list)
     t0_instructions: List[TradeInstruction] = field(default_factory=list)
-    ect_exposure: float = 1.0
-    ect_reason: str = "ECT 未启用"
     t0_status: str = "not_rebalance_day"
     protected_stocks: List[str] = field(default_factory=list)
     stock_names: Dict[str, str] = field(default_factory=dict)
@@ -158,13 +155,8 @@ def execute_trade_workflow(
         stop_loss_actions=stop_loss_actions,
     )
 
-    # 持久化弱势退出监控状态（跨日连续计数）
-    weakness_monitor = getattr(runner, "weakness_exit_monitor", None)
-    if weakness_monitor is not None:
-        storage.save_weakness_exit_state(weakness_monitor.get_state())
-
     _report("执行 T0")
-    t0_targets, ect_exposure, ect_reason, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
+    t0_targets, _, _, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
 
@@ -220,8 +212,6 @@ def execute_trade_workflow(
         t1_actions=t1_actions,
         t0_targets=t0_targets,
         t0_instructions=t0_instructions,
-        ect_exposure=ect_exposure,
-        ect_reason=ect_reason,
         t0_status=t0_status,
         protected_stocks=protected_stocks,
         stock_names=stock_names,
@@ -783,15 +773,19 @@ def _execute_t0_if_rebalance_day(
     trade_date: str,
     config: Dict[str, object],
 ) -> Tuple[List[Dict[str, object]], float, str, str, List[str]]:
-    """执行 T0（如果是调仓日）。"""
+    """执行 T0（如果是调仓日）。
+    
+    返回值: (targets_info, _dummy1, _dummy2, t0_status, protected_stock_list)
+    注：_dummy1/_dummy2 为兼容旧调用方保留，始终为 1.0 / "已移除"。
+    """
     targets_info: List[Dict[str, object]] = []
-    ect_exposure = 1.0
-    ect_reason = "ECT 未启用"
+    _dummy_exposure = 1.0
+    _dummy_reason = "已移除"
     protected_stock_list: List[str] = []
 
     if runner.paper_storage.check_run_exists("t0", trade_date):
         logger.info(f"T0 工作流已在 {trade_date} 执行过，跳过")
-        return targets_info, ect_exposure, ect_reason, "already_run", protected_stock_list
+        return targets_info, _dummy_exposure, _dummy_reason, "already_run", protected_stock_list
 
     trading_config = TradingConfig.from_dict(config)
 
@@ -818,7 +812,7 @@ def _execute_t0_if_rebalance_day(
             early_rebalance_triggered = True
         else:
             logger.info(f"当前不是调仓日：{exc}")
-            return targets_info, ect_exposure, ect_reason, "not_rebalance_day", protected_stock_list
+            return targets_info, _dummy_exposure, _dummy_reason, "not_rebalance_day", protected_stock_list
 
     if not is_rebalance_day:
         if allow_early_rebalance:
@@ -830,7 +824,7 @@ def _execute_t0_if_rebalance_day(
             early_rebalance_triggered = True
         else:
             logger.info("非调仓日，跳过 T0")
-            return targets_info, ect_exposure, ect_reason, "not_rebalance_day", protected_stock_list
+            return targets_info, _dummy_exposure, _dummy_reason, "not_rebalance_day", protected_stock_list
 
     if early_rebalance_triggered:
         if early_rebalance_mode == "empty":
@@ -842,33 +836,9 @@ def _execute_t0_if_rebalance_day(
 
     logger.info("当前是调仓日，执行 T0")
 
-    if bool(config.get("equity_curve_enabled", False)):
-        logger.info("-" * 80)
-        logger.info("计算 ECT 仓位系数")
-        logger.info("-" * 80)
-
-        ect_config = create_equity_curve_config_from_dict(config)
-        ect_monitor = EquityCurveMonitor(ect_config)
-        nav_df = runner.paper_storage.load_all_nav()
-        if nav_df is not None and len(nav_df) > 0:
-            nav_series = nav_df.set_index("trade_date")["nav"]
-            ect_exposure, ect_reason = ect_monitor.calculate_exposure(
-                nav_series, current_date=trade_date
-            )
-            logger.info(f"ECT 计算结果: {ect_reason}")
-            logger.info(f"ECT 仓位系数: {ect_exposure:.2f}")
-        else:
-            logger.warning("NAV 历史为空，使用默认系数 1.0")
-            ect_exposure = 1.0
-            ect_reason = "NAV 历史为空"
-
-        logger.info("-" * 80)
-
     market_regime_exposure = 1.0
     market_regime_reason = "市场择时未启用"
-    if bool(config.get("market_regime_enabled", False)) or bool(
-        config.get("market_regime_ma250_hard_stop", False)
-    ):
+    if bool(config.get("market_regime_enabled", False)):
         logger.info("-" * 80)
         logger.info("计算市场择时仓位系数")
         logger.info("-" * 80)
@@ -879,12 +849,7 @@ def _execute_t0_if_rebalance_day(
         logger.info(f"市场择时仓位系数: {market_regime_exposure:.2f}")
         logger.info("-" * 80)
 
-    final_exposure = ect_exposure * market_regime_exposure
-    if final_exposure < 1.0:
-        logger.info(
-            f"综合仓位系数: {final_exposure:.2f}"
-            f" (ECT={ect_exposure:.2f} × 市场择时={market_regime_exposure:.2f})"
-        )
+    final_exposure = market_regime_exposure
 
     protected_stocks = set(precomputed_protected_stocks)
     # 盈亏动态持仓已移除，跳过盈利延续保护逻辑
@@ -952,8 +917,8 @@ def _execute_t0_if_rebalance_day(
                             runner.paper_storage.save_instructions(t1_date, [])
                             return (
                                 targets_info,
-                                ect_exposure,
-                                ect_reason,
+                                _dummy_exposure,
+                                _dummy_reason,
                                 "not_rebalance_day",
                                 [],
                             )
@@ -961,7 +926,7 @@ def _execute_t0_if_rebalance_day(
                 if final_exposure < 1.0:
                     logger.info(
                         f"应用综合仓位系数 {final_exposure:.2f} 到买入指令"
-                        f" (ECT={ect_exposure:.2f}, 市场择时={market_regime_exposure:.2f})"
+                        f" (市场择时={market_regime_exposure:.2f})"
                     )
                     valid_instructions = []
                     for instruction in instructions:
@@ -1005,4 +970,4 @@ def _execute_t0_if_rebalance_day(
         logger.error(f"T0 执行失败: {exc}")
         t0_status = f"error:{exc}"
 
-    return targets_info, ect_exposure, ect_reason, t0_status, protected_stock_list
+    return targets_info, _dummy_exposure, _dummy_reason, t0_status, protected_stock_list
