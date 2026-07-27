@@ -181,8 +181,6 @@ def run_ml_backtest(
     max_weight_per_stock: float = None,
     max_per_industry: int = None,
     stock_basic: pd.DataFrame = None,
-    industry_rotation_enhanced: bool = False,
-    industry_rotation_alpha: float = 0.3,
     position_sizing: str = "equal",
     kelly_vol_window: int = 60,
     kelly_max_leverage: float = 0.25,
@@ -225,21 +223,11 @@ def run_ml_backtest(
         stop_loss_drawdown_pct=(
             stop_loss_config.drawdown_pct if stop_loss_config and stop_loss_config.enabled else 30.0
         ),
-        stop_loss_trailing_enabled=(
-            stop_loss_config.trailing_stop_enabled
-            if stop_loss_config and stop_loss_config.enabled
-            else False
-        ),
-        stop_loss_trailing_pct=(
-            stop_loss_config.trailing_stop_pct if stop_loss_config and stop_loss_config.enabled else 15.0
-        ),
         stop_loss_consecutive_limit_down=(
             stop_loss_config.consecutive_limit_down_days
             if stop_loss_config and stop_loss_config.enabled
             else 2
         ),
-        industry_rotation_enhanced=industry_rotation_enhanced,
-        industry_rotation_alpha=industry_rotation_alpha,
         position_sizing=position_sizing,
         kelly_vol_window=kelly_vol_window,
         kelly_max_leverage=kelly_max_leverage,
@@ -956,8 +944,6 @@ def main():
             max_weight_per_stock=trading_config.max_weight_per_stock,
             max_per_industry=trading_config.max_per_industry,
             stock_basic=stock_basic,
-            industry_rotation_enhanced=trading_config.industry_rotation_enhanced,
-            industry_rotation_alpha=trading_config.industry_rotation_alpha,
             position_sizing=trading_config.position_sizing,
             kelly_vol_window=trading_config.kelly_vol_window,
             kelly_max_leverage=trading_config.kelly_max_leverage,

@@ -610,8 +610,6 @@ class TestWalkForwardCSV:
                 bt_min_list_days=365,
                 bt_stop_loss_enabled=False,
                 bt_stop_loss_drawdown_pct=18.0,
-                bt_stop_loss_trailing_enabled=True,
-                bt_stop_loss_trailing_pct=10.0,
                 bt_stop_loss_consecutive_limit_down=3,
                 bt_equity_curve_enabled=False,
                 bt_equity_curve_drawdown_thresholds=[6.0, 12.0],
@@ -621,28 +619,9 @@ class TestWalkForwardCSV:
                 bt_equity_curve_recovery_mode="immediate",
                 bt_equity_curve_recovery_step=0.5,
                 bt_equity_curve_recovery_delay_periods=2,
-                industry_momentum_filter=False,
-                industry_momentum_bottom_pct=0.4,
-                industry_rotation_enhanced=False,
-                industry_rotation_alpha=0.6,
                 position_sizing="equal",
                 kelly_vol_window=90,
                 kelly_max_leverage=0.4,
-                market_regime=False,
-                market_regime_mode="combined",
-                market_regime_bear_threshold=-0.03,
-                market_regime_bear_exposure=0.2,
-                market_regime_vol_target=0.18,
-                market_regime_trend_threshold=1.1,
-                market_regime_min_exposure=0.3,
-                market_regime_combine_method="multiply",
-                market_regime_trend_guard=False,
-                market_regime_drawdown_guard=True,
-                market_regime_drawdown_threshold=-0.09,
-                market_regime_ma250_hard_stop=False,
-                market_regime_ma250_threshold=1.02,
-                market_regime_ma250_exposure=0.5,
-                market_regime_ma250_atr_scaling=True,
                 enable_early_rebalance_on_empty=True,
             )
 
@@ -666,25 +645,13 @@ class TestWalkForwardCSV:
             assert pd.isna(row["signal_gate_topn_low_multiplier"])
             assert pd.isna(row["holding_bonus_sigma"])
             assert pd.isna(row["bt_stop_loss_drawdown_pct"])
-            assert pd.isna(row["bt_stop_loss_trailing_enabled"])
-            assert pd.isna(row["bt_stop_loss_trailing_pct"])
             assert pd.isna(row["bt_stop_loss_consecutive_limit_down"])
             assert pd.isna(row["bt_equity_curve_drawdown_thresholds"])
             assert pd.isna(row["bt_equity_curve_exposure_levels"])
             assert pd.isna(row["bt_equity_curve_ma_short"])
             assert pd.isna(row["bt_equity_curve_ma_long"])
-            assert pd.isna(row["industry_momentum_bottom_pct"])
-            assert pd.isna(row["industry_rotation_alpha"])
             assert pd.isna(row["kelly_vol_window"])
             assert pd.isna(row["kelly_max_leverage"])
-            assert pd.isna(row["market_regime_mode"])
-            assert pd.isna(row["market_regime_bear_threshold"])
-            assert pd.isna(row["market_regime_vol_target"])
-            assert pd.isna(row["market_regime_trend_guard"])
-            assert pd.isna(row["market_regime_drawdown_threshold"])
-            assert pd.isna(row["market_regime_ma250_threshold"])
-            assert pd.isna(row["market_regime_ma250_exposure"])
-            assert pd.isna(row["market_regime_ma250_atr_scaling"])
 
     def test_write_walk_forward_summary_keeps_composite_top_k_and_clears_drawdown_threshold(self):
         """composite 模式保留 top_k，关闭回撤保护时清空其阈值。"""
@@ -752,8 +719,6 @@ class TestWalkForwardCSV:
                 bt_max_per_industry=2,
                 bt_stop_loss_enabled=False,
                 bt_stop_loss_drawdown_pct=18.0,
-                bt_stop_loss_trailing_enabled=False,
-                bt_stop_loss_trailing_pct=10.0,
                 bt_stop_loss_consecutive_limit_down=3,
                 bt_equity_curve_enabled=False,
                 bt_equity_curve_drawdown_thresholds=[6.0, 12.0],
@@ -763,28 +728,9 @@ class TestWalkForwardCSV:
                 bt_equity_curve_recovery_mode="immediate",
                 bt_equity_curve_recovery_step=0.5,
                 bt_equity_curve_recovery_delay_periods=2,
-                industry_momentum_filter=False,
-                industry_momentum_bottom_pct=0.4,
-                industry_rotation_enhanced=False,
-                industry_rotation_alpha=0.6,
                 position_sizing="equal",
                 kelly_vol_window=90,
                 kelly_max_leverage=0.4,
-                market_regime=True,
-                market_regime_mode="combined",
-                market_regime_bear_threshold=-0.03,
-                market_regime_bear_exposure=0.2,
-                market_regime_vol_target=0.18,
-                market_regime_trend_threshold=1.1,
-                market_regime_min_exposure=0.3,
-                market_regime_combine_method="multiply",
-                market_regime_trend_guard=True,
-                market_regime_drawdown_guard=False,
-                market_regime_drawdown_threshold=-0.09,
-                market_regime_ma250_hard_stop=False,
-                market_regime_ma250_threshold=1.02,
-                market_regime_ma250_exposure=0.5,
-                market_regime_ma250_atr_scaling=True,
                 enable_early_rebalance_on_empty=True,
             )
 
@@ -803,117 +749,6 @@ class TestWalkForwardCSV:
             assert row["signal_gate_topn_low_multiplier"] == 1.6
             assert str(row["market_regime_drawdown_guard"]).lower() == "false"
             assert pd.isna(row["market_regime_drawdown_threshold"])
-
-    def test_write_walk_forward_summary_keeps_binary_drawdown_guard(self):
-        """binary 模式下回撤保护仍然生效，不应被误清空。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = os.path.join(tmpdir, "test_summary_binary_guard.csv")
-
-            results = [
-                {
-                    "split_index": 0,
-                    "train_start": "20200101",
-                    "train_end": "20221231",
-                    "test_start": "20230101",
-                    "test_end": "20230331",
-                    "model_version": 1,
-                    "test_daily_metrics": {},
-                }
-            ]
-
-            from scripts.walk_forward import write_walk_forward_summary
-            import types
-
-            mock_args = types.SimpleNamespace(
-                wf_start_date="20200101", wf_end_date="20230630",
-                batch_run_id="wf_batch_test_004",
-                batch_period_label="0412",
-                algorithm="xgboost", step=3, train_window_years=3,
-                test_window_months=3, val_ratio=0.2,
-                label_column="y_ret_5", task="regression",
-                label_transform="cs_zscore",
-                n_estimators=500, max_depth=6, learning_rate=0.05,
-                subsample=0.8, colsample_bytree=0.8,
-                min_child_weight=1, gamma=0, reg_alpha=0, reg_lambda=1,
-                early_stopping_rounds=50, early_stopping_metric="rmse",
-                rank_weight_enabled=False, rank_weight_topk=100, rank_weight=2.0,
-                time_decay_half_life=0,
-                enable_fundamental_features=False, enable_alt_features=False,
-                enable_margin_features=False,
-                enable_cyq_features=False, enable_fund_features=False,
-                enable_express_features=False,
-                feature_stability_filter=False,
-                oos_backtest=True,
-                oos_backtest_months=3,
-                bt_top_n=20,
-                signal_gate_mode="disabled",
-                signal_gate_cost_multiplier=1.8,
-                signal_gate_round_trip_cost=0.004,
-                signal_gate_percentile_warmup=9,
-                signal_confidence_gate_enabled=False,
-                signal_confidence_gate_top_k=8,
-                signal_confidence_gate_thresholds=[0.1, 0.3],
-                signal_confidence_gate_exposure_levels=[0.4, 1.0],
-                signal_gate_quality_enabled=False,
-                signal_gate_quality_window=7,
-                signal_gate_quality_threshold=0.55,
-                signal_gate_quality_halflife=5,
-                signal_gate_dynamic_topn=False,
-                signal_gate_topn_high_multiplier=0.5,
-                signal_gate_topn_low_multiplier=1.6,
-                holding_bonus_enabled=False,
-                holding_bonus_sigma=0.8,
-                bt_sell_timing="open",
-                bt_exclude_st=True,
-                bt_min_list_days=365,
-                bt_max_weight_per_stock=0.1,
-                bt_max_per_industry=2,
-                bt_stop_loss_enabled=False,
-                bt_stop_loss_drawdown_pct=18.0,
-                bt_stop_loss_trailing_enabled=False,
-                bt_stop_loss_trailing_pct=10.0,
-                bt_stop_loss_consecutive_limit_down=3,
-                bt_equity_curve_enabled=False,
-                bt_equity_curve_drawdown_thresholds=[6.0, 12.0],
-                bt_equity_curve_exposure_levels=[0.8, 0.5],
-                bt_equity_curve_ma_short=7,
-                bt_equity_curve_ma_long=21,
-                bt_equity_curve_recovery_mode="immediate",
-                bt_equity_curve_recovery_step=0.5,
-                bt_equity_curve_recovery_delay_periods=2,
-                industry_momentum_filter=False,
-                industry_momentum_bottom_pct=0.4,
-                industry_rotation_enhanced=False,
-                industry_rotation_alpha=0.6,
-                position_sizing="equal",
-                kelly_vol_window=90,
-                kelly_max_leverage=0.4,
-                market_regime=True,
-                market_regime_mode="binary",
-                market_regime_bear_threshold=-0.03,
-                market_regime_bear_exposure=0.2,
-                market_regime_vol_target=0.18,
-                market_regime_trend_threshold=1.1,
-                market_regime_min_exposure=0.3,
-                market_regime_combine_method="multiply",
-                market_regime_trend_guard=True,
-                market_regime_drawdown_guard=True,
-                market_regime_drawdown_threshold=-0.09,
-                market_regime_ma250_hard_stop=False,
-                market_regime_ma250_threshold=1.02,
-                market_regime_ma250_exposure=0.5,
-                market_regime_ma250_atr_scaling=True,
-                enable_early_rebalance_on_empty=True,
-            )
-
-            write_walk_forward_summary(results, output_path, mock_args, "wf_test_004")
-
-            df = pd.read_csv(output_path)
-            row = df.loc[0]
-
-            assert row["market_regime_mode"] == "binary"
-            assert str(row["market_regime_drawdown_guard"]).lower() == "true"
-            assert row["market_regime_drawdown_threshold"] == -0.09
 
 
 class TestRunLoggerIntegration:

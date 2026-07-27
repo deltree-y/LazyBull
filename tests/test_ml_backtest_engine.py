@@ -358,11 +358,6 @@ def test_format_rebalance_decision_summary_is_explicit():
             "exposure": 0.6,
             "summary": "score=0.124，达到阈值 0.080，目标仓位 60%",
         },
-        "market_regime": {
-            "exposure": 0.5,
-            "summary": "mode=vol_target, target_vol=20.0%, realized_vol=40.0%, 市场层=50.0%",
-        },
-        "market_layer_exposure": 0.5,
         "final_target_exposure": 0.3,
     }
 
@@ -374,7 +369,6 @@ def test_format_rebalance_decision_summary_is_explicit():
     assert "调仓决策摘要: 信号日 2024-08-12 | 执行=2024-08-13 | 候选=1158 | 目标=17" in message
     assert "门控=60.0%[score=0.124, 档=0.080, 目标=60%]" in message
     assert "ECT=100.0%[未启用]" in message
-    assert "市场=50.0%[mode=vol_target, target_vol=20.0%, realized_vol=40.0%]" in message
     assert "最终=30.0%[入队]" in message
 
 
@@ -415,10 +409,6 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
         initial_capital=100000.0,
         cost_model=CostModel(),
         rebalance_freq=1,
-        market_regime_enabled=True,
-        market_regime_mode="vol_target",
-        market_regime_vol_target=0.1,
-        market_regime_min_exposure=0.2,
         verbose=False,
     )
 
@@ -453,8 +443,7 @@ def test_ml_backtest_logs_unified_rebalance_summary_when_verbose_false(
     assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2" in signal_day_output
     assert "调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2" in output
     assert "门控=40.0%[score=0.000, top_mean=1.0200, baseline=1.0200, std=0.3124, 档=0.000, 目标=40%]" in output
-    assert "市场=50.0%[mode=vol_target, target_vol=10.0%, realized_vol=20.0%]" in output
-    assert "最终=20.0%[入队]" in output
+    assert "最终=40.0%[入队]" in output
     assert output.count("调仓决策摘要: 信号日 2023-06-01 | 执行=2023-06-02 | 候选=5 | 目标=2") == 1
 
 

@@ -69,17 +69,7 @@ def _format_rebalance_decision_summary(
     candidate_count = decision_trace.get("candidate_count")
     target_n = decision_trace.get("target_n", 0)
     queued = bool(decision_trace.get("queued", execution_date is not None))
-
-    market_regime = decision_trace.get("market_regime", {})
-
-    market_regime_exposure = _to_optional_float(market_regime.get("exposure", 1.0))
-    market_layer_exposure = _to_optional_float(decision_trace.get("market_layer_exposure", 1.0))
-    final_target_exposure = _to_optional_float(
-        decision_trace.get(
-            "final_target_exposure",
-            market_layer_exposure,
-        )
-    )
+    final_target_exposure = _to_optional_float(decision_trace.get("final_target_exposure", 1.0))
 
     header = f"{tranche_tag}调仓决策摘要: 信号日 {signal_label}"
     if execution_label is not None:
@@ -103,8 +93,6 @@ def _format_rebalance_decision_summary(
 
     return (
         f"{header} | 执行={execution_text} | 候选={candidate_text} | {topn_text}"
-        f" | 市场={_fmt_exposure(market_regime_exposure)}"
-        f"[{_compact_summary(market_regime.get('summary', '未启用'))}]"
         f" | 最终={_fmt_exposure(final_target_exposure)}[{final_detail}]"
     )
 

@@ -151,22 +151,6 @@ def run_main(args):
     )
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
     logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
-    if config.get("market_regime_enabled"):
-        logger.info(
-            f"  市场择时: 启用 (模式={config.get('market_regime_mode', 'binary')})"
-        )
-    if config.get("market_regime_ma250_hard_stop"):
-        logger.info(
-            f"  MA250硬条件: 启用 (阈值={config.get('market_regime_ma250_threshold', 1.0)}"
-            f", 仓位={config.get('market_regime_ma250_exposure', 0.0):.0%})"
-        )
-    if config.get("industry_momentum_filter"):
-        logger.info(
-            f"  行业动量过滤: 启用 (剔除后{config.get('industry_momentum_bottom_pct', 0.2):.0%})"
-        )
-        logger.info(
-            f", 亏损换出={early_exit_text})"
-        )
     if config.get("max_per_industry"):
         logger.info(f"  单行业最大持仓: {config['max_per_industry']}")
     if config.get("max_weight_per_stock"):

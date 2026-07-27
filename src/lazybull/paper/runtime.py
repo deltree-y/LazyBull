@@ -836,21 +836,6 @@ def _execute_t0_if_rebalance_day(
 
     logger.info("当前是调仓日，执行 T0")
 
-    market_regime_exposure = 1.0
-    market_regime_reason = "市场择时未启用"
-    if bool(config.get("market_regime_enabled", False)):
-        logger.info("-" * 80)
-        logger.info("计算市场择时仓位系数")
-        logger.info("-" * 80)
-        market_regime_exposure, market_regime_reason = runner.compute_market_regime_exposure(
-            trade_date, config
-        )
-        logger.info(f"市场择时: {market_regime_reason}")
-        logger.info(f"市场择时仓位系数: {market_regime_exposure:.2f}")
-        logger.info("-" * 80)
-
-    final_exposure = market_regime_exposure
-
     protected_stocks = set(precomputed_protected_stocks)
     # 盈亏动态持仓已移除，跳过盈利延续保护逻辑
     if protected_stocks:
@@ -869,90 +854,12 @@ def _execute_t0_if_rebalance_day(
             max_weight_per_stock=config.get("max_weight_per_stock"),
             exclude_st=bool(config.get("exclude_st", True)),
             min_list_days=int(config.get("min_list_days", 365)),
-            industry_momentum_filter=bool(config.get("industry_momentum_filter", False)),
-            industry_momentum_bottom_pct=float(config.get("industry_momentum_bottom_pct", 0.5)),
         )
 
         t1_date = runner._get_next_trade_date(trade_date)
         if t1_date:
             instructions = runner.paper_storage.load_instructions(t1_date)
             if instructions:
-                # 持有期拖尾提前调仓权重校验（与回测侧 engine.py 一致）：
-                # 生成信号后检查 "残留仓位占比 + 新信号仓位 ≤ 100%"，超限则撤回。
-                if early_rebalance_triggered and early_rebalance_mode == "holding_tail":
-                    positions = runner.account.get_positions()
-                    daily_data = runner.loader.load_clean_daily_by_date(trade_date)
-                    if daily_data is not None and not daily_data.empty and positions:
-                        price_map: Dict[str, float] = {}
-                        for _, row in daily_data.iterrows():
-                            price_map[str(row["ts_code"])] = float(row.get("close", 0.0))
-
-                        total_value = runner.account.get_total_value(price_map)
-
-                        sell_codes = {
-                            inst.ts_code for inst in instructions if inst.action == "sell"
-                        }
-
-                        residual_value = 0.0
-                        for ts_code, pos in positions.items():
-                            price = price_map.get(ts_code, 0.0)
-                            if price > 0 and ts_code not in sell_codes:
-                                residual_value += pos.shares * price
-
-                        residual_ratio = residual_value / total_value if total_value > 0 else 0.0
-
-                        new_buy_weight = sum(
-                            inst.target_weight
-                            for inst in instructions
-                            if inst.action == "buy"
-                        )
-
-                        if residual_ratio + new_buy_weight > 1.0 + 1e-9:
-                            logger.info(
-                                f"持有期拖尾提前调仓撤回：残留仓位 {residual_ratio:.1%} + "
-                                f"新信号仓位 {new_buy_weight:.1%} = "
-                                f"{(residual_ratio + new_buy_weight):.1%} > 100%，"
-                                f"与回测侧权重校验一致"
-                            )
-                            runner.paper_storage.save_instructions(t1_date, [])
-                            return (
-                                targets_info,
-                                _dummy_exposure,
-                                _dummy_reason,
-                                "not_rebalance_day",
-                                [],
-                            )
-
-                if final_exposure < 1.0:
-                    logger.info(
-                        f"应用综合仓位系数 {final_exposure:.2f} 到买入指令"
-                        f" (市场择时={market_regime_exposure:.2f})"
-                    )
-                    valid_instructions = []
-                    for instruction in instructions:
-                        if instruction.action == "buy":
-                            original_shares = instruction.shares
-                            instruction.shares = int(instruction.shares * final_exposure)
-                            instruction.shares = (instruction.shares // 100) * 100
-                            if instruction.shares == 0:
-                                logger.warning(
-                                    f"仓位调整后 {instruction.ts_code} 股数为0，"
-                                    f"跳过该买入指令（原 {original_shares} 股）"
-                                )
-                                continue
-
-                            if instruction.shares != original_shares:
-                                instruction.reason = (
-                                    f"{instruction.reason} (仓位调整:"
-                                    f" {original_shares} -> {instruction.shares}股)"
-                                )
-                        valid_instructions.append(instruction)
-
-                    runner.paper_storage.save_instructions(t1_date, valid_instructions)
-                    logger.info(
-                        f"已将仓位系数应用到买入指令：{len(valid_instructions)}/{len(instructions)} 条有效"
-                    )
-
                 for instruction in instructions:
                     if instruction.action == "buy":
                         targets_info.append(

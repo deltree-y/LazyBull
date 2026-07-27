@@ -221,36 +221,6 @@ $bt_stop_loss_enabled                 = $false   # $true 启用 | $false 禁用
 # 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
 $bt_stop_loss_drawdown_pct_list       = @(20) # 回撤止损阈值（%）
 $bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
-$bt_stop_loss_trailing_enabled        = $false  # 移动止损子开关：$true 启用 | $false 禁用
-# 仅在 $bt_stop_loss_enabled = $true 且 $bt_stop_loss_trailing_enabled = $true 时生效
-$bt_stop_loss_trailing_pct_list       = @(15.0) # 移动止损阈值（%）
-
-# ── 行业动量过滤（总开关）────────────────────────────────────
-$industry_momentum_filter     = $false  # $true 启用 | $false 禁用
-# 仅在 $industry_momentum_filter = $true 时生效
-$industry_momentum_bottom_pct = 0.5     # 剔除排名后 X% 的行业（0~1），默认 0.2
-
-# ── 行业轮动加权（总开关）────────────────────────────────────
-$industry_rotation_enhanced       = $false     # $true 启用 | $false 禁用（独立于上方硬过滤）
-# 仅在 $industry_rotation_enhanced = $true 时生效
-$industry_rotation_alpha_list     = @(0.3)#1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0)     # 加权强度（可多值，如 @(0.1, 0.3, 0.5)）
-
-# ── 市场择时仓位管理（总开关）────────────────────────────────
-$market_regime                = $false            # $true 启用 | $false 禁用
-# 以下参数仅在 $market_regime = $true 时生效
-$market_regime_mode_list      = @("vol_target")  # binary | vol_target | trend | combined
-# 仅在 mode = binary 时，bear_threshold / bear_exposure 真正决定熊市降仓
-$market_regime_bear_threshold_list = @(-0.03)    # mkt_ret_avg_20 低于此值判定为熊市
-$market_regime_bear_exposure  = 0.3              # binary 模式熊市仓位系数（0~1）
-# vol_target / combined 模式会使用 vol_target；trend / combined 模式会使用 trend_threshold
-$market_regime_vol_target_list = @(0.20)         # 默认只围绕均衡区间做更窄扫描
-$market_regime_trend_threshold = 1.0             # trend / combined 模式：mkt_ma_trend 低于此值降仓
-$market_regime_min_exposure    = 0.2             # 非 binary 模式：最低仓位下限
-$market_regime_combine_method  = "min"          # combined 模式组合方式：min | multiply
-$market_regime_trend_guard     = $true           # combined 模式趋势保护：上行趋势跳过 vol 降仓
-$market_regime_drawdown_guard  = $false          # 回撤保护子开关：已大幅下跌时停止降仓，避免底部踏空
-# 仅在 $market_regime_drawdown_guard = $true 时生效
-$market_regime_drawdown_threshold = -0.08        # mkt_drawdown_20 低于此值停止降仓
 
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
@@ -271,15 +241,6 @@ if ($skip_training -and $label_list.Length -gt 1) {
     Write-Host "[提示] skip-training 模式下标签不会切换模型，仅保留首个标签避免重复任务。" -ForegroundColor Yellow
     $effective_label_list = @($label_list[0])
 }
-
-# 预生成门控扫描配置，避免关闭门控时无意义地展开笛卡尔积
-$signal_confidence_gate_scan_configs = @(
-    [PSCustomObject]@{
-        TopK = $null
-        Thresholds = $null
-        Exposures = $null
-    }
-)
 
 function Get-NextOrSameTradeDate {
     param(
@@ -475,9 +436,6 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $time_decay_half_life_list.Length *
               $rank_weight_topk_list.Length *
               $rank_weight_list.Length *
-              $market_regime_bear_threshold_list.Length *
-              $market_regime_mode_list.Length *
-              $market_regime_vol_target_list.Length *
               $bt_top_n_list.Length *
               $bt_rebalance_freq_list.Length *
               $bt_sell_timing_list.Length *
@@ -485,11 +443,9 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $bt_max_weight_per_stock_list.Length *
               $bt_max_per_industry_list.Length *
               $bt_stop_loss_drawdown_pct_list.Length *
-              $bt_stop_loss_trailing_pct_list.Length *
               $bt_stop_loss_consecutive_limit_down_list.Length *
               $stagger_tranches_list.Length *
               $enable_early_rebalance_on_empty_list.Length *
-              $industry_rotation_alpha_list.Length *
               $position_sizing_list.Length *
               $kelly_vol_window_list.Length *
               $kelly_max_leverage_list.Length
@@ -530,9 +486,6 @@ foreach ($gamma in $gamma_list) {
 foreach ($time_decay_half_life in $time_decay_half_life_list) {
 foreach ($rank_weight_topk in $rank_weight_topk_list) {
 foreach ($rank_weight in $rank_weight_list) {
-foreach ($market_regime_bear_threshold in $market_regime_bear_threshold_list) {
-foreach ($market_regime_mode in $market_regime_mode_list) {
-foreach ($market_regime_vol_target in $market_regime_vol_target_list) {
 foreach ($bt_top_n in $bt_top_n_list) {
 foreach ($bt_rebalance_freq in $bt_rebalance_freq_list) {
 foreach ($bt_sell_timing in $bt_sell_timing_list) {
@@ -540,11 +493,9 @@ foreach ($bt_min_list_days in $bt_min_list_days_list) {
 foreach ($bt_max_weight_per_stock in $bt_max_weight_per_stock_list) {
 foreach ($bt_max_per_industry in $bt_max_per_industry_list) {
 foreach ($bt_stop_loss_drawdown_pct in $bt_stop_loss_drawdown_pct_list) {
-foreach ($bt_stop_loss_trailing_pct in $bt_stop_loss_trailing_pct_list) {
 foreach ($bt_stop_loss_consecutive_limit_down in $bt_stop_loss_consecutive_limit_down_list) {
 foreach ($stagger_tranches in $stagger_tranches_list) {
 foreach ($enable_early_rebalance_on_empty in $enable_early_rebalance_on_empty_list) {
-foreach ($industry_rotation_alpha in $industry_rotation_alpha_list) {
 foreach ($position_sizing in $position_sizing_list) {
 foreach ($kelly_vol_window in $kelly_vol_window_list) {
 foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
@@ -677,25 +628,6 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $pythonCmd += " --enable-consensus-revision-features"
     }
 
-    if ($market_regime) {
-        $pythonCmd += " --market-regime" +
-                      " --market-regime-mode $market_regime_mode" +
-                      " --market-regime-bear-threshold $market_regime_bear_threshold" +
-                      " --market-regime-bear-exposure $market_regime_bear_exposure" +
-                      " --market-regime-vol-target $market_regime_vol_target" +
-                      " --market-regime-trend-threshold $market_regime_trend_threshold" +
-                      " --market-regime-min-exposure $market_regime_min_exposure" +
-                      " --market-regime-combine-method $market_regime_combine_method"
-        if (-not $market_regime_trend_guard) {
-            $pythonCmd += " --no-market-regime-trend-guard"
-        }
-        if ($market_regime_drawdown_guard) {
-            $pythonCmd += " --market-regime-drawdown-guard --market-regime-drawdown-threshold $market_regime_drawdown_threshold"
-        } else {
-            $pythonCmd += " --no-market-regime-drawdown-guard"
-        }
-    }
-
     if (-not $enable_early_rebalance_on_empty) {
         $pythonCmd += " --no-early-rebalance-on-empty"
     }
@@ -722,20 +654,9 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
             $pythonCmd += " --bt-stop-loss-enabled" +
                           " --bt-stop-loss-drawdown-pct $bt_stop_loss_drawdown_pct" +
                           " --bt-stop-loss-consecutive-limit-down $bt_stop_loss_consecutive_limit_down"
-            if ($bt_stop_loss_trailing_enabled) {
-                $pythonCmd += " --bt-stop-loss-trailing-enabled --bt-stop-loss-trailing-pct $bt_stop_loss_trailing_pct"
-            }
         }
     } else {
         $pythonCmd += " --no-oos-backtest"
-    }
-
-    if ($industry_momentum_filter) {
-        $pythonCmd += " --industry-momentum-filter --industry-momentum-bottom-pct $industry_momentum_bottom_pct"
-    }
-
-    if ($industry_rotation_enhanced) {
-        $pythonCmd += " --industry-rotation-enhanced --industry-rotation-alpha $industry_rotation_alpha"
     }
 
     if ($position_sizing -ne 'equal') {
@@ -787,7 +708,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

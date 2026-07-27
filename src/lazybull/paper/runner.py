@@ -610,8 +610,6 @@ class PaperTradingRunner:
         max_weight_per_stock: Optional[float] = None,
         exclude_st: bool = True,
         min_list_days: int = 365,
-        industry_momentum_filter: bool = False,
-        industry_momentum_bottom_pct: float = 0.5,
         trading_config: Optional[TradingConfig] = None,
         force_rebalance: bool = False,
         protected_stocks: Optional[set] = None,
@@ -643,8 +641,6 @@ class PaperTradingRunner:
             max_weight_per_stock=max_weight_per_stock,
             exclude_st=exclude_st,
             min_list_days=min_list_days,
-            industry_momentum_filter=industry_momentum_filter,
-            industry_momentum_bottom_pct=industry_momentum_bottom_pct,
 
         )
         self.position_sizing = effective_config.position_sizing
@@ -698,8 +694,6 @@ class PaperTradingRunner:
             max_weight_per_stock=effective_config.max_weight_per_stock,
             exclude_st=effective_config.exclude_st,
             min_list_days=effective_config.min_list_days,
-            industry_momentum_filter=effective_config.industry_momentum_filter,
-            industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
             protected_stocks=protected_stocks,
             trading_config=effective_config,
         )
@@ -1384,8 +1378,6 @@ class PaperTradingRunner:
         max_weight_per_stock: Optional[float] = None,
         exclude_st: bool = True,
         min_list_days: int = 365,
-        industry_momentum_filter: bool = False,
-        industry_momentum_bottom_pct: float = 0.5,
         protected_stocks: Optional[set] = None,
         trading_config: Optional[TradingConfig] = None,
     ) -> List[TargetWeight]:
@@ -1415,8 +1407,6 @@ class PaperTradingRunner:
             max_weight_per_stock=max_weight_per_stock,
             exclude_st=exclude_st,
             min_list_days=min_list_days,
-            industry_momentum_filter=industry_momentum_filter,
-            industry_momentum_bottom_pct=industry_momentum_bottom_pct,
 
             position_sizing=self.position_sizing,
         )
@@ -1520,10 +1510,6 @@ class PaperTradingRunner:
                     buy_price_type,
                     max_per_industry=effective_config.max_per_industry,
                     industry_mapping=industry_mapping,
-                    industry_momentum_filter=effective_config.industry_momentum_filter,
-                    industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
-                    industry_rotation_enhanced=effective_config.industry_rotation_enhanced,
-                    industry_rotation_alpha=effective_config.industry_rotation_alpha,
                     trading_config=effective_config,
                     existing_positions=set(self.account.get_positions().keys()),
                     return_meta=True,
@@ -1604,15 +1590,11 @@ class PaperTradingRunner:
         buy_price_type: str,
         max_per_industry: Optional[int] = None,
         industry_mapping: Optional[Dict[str, str]] = None,
-        industry_momentum_filter: bool = False,
-        industry_momentum_bottom_pct: float = 0.5,
-        industry_rotation_enhanced: bool = False,
-        industry_rotation_alpha: float = 0.3,
         trading_config: Optional[TradingConfig] = None,
         existing_positions: Optional[set] = None,
         return_meta: bool = False,
     ) -> Union[Dict[str, float], Tuple[Dict[str, float], Dict[str, object]]]:
-        """生成原始分数字典（含行业约束 + 行业动量过滤 + 持仓保留奖励 + 一手可买约束顺延补足）
+        """生成原始分数字典（含行业约束 + 持仓保留奖励 + 一手可买约束顺延补足）
 
         返回原始 ml_score（非归一化权重），权重归一化由 _normalize_signals 统一处理。
         一手约束：按等权分配金额估算，不足1手的候选被跳过并顺延。
@@ -1655,39 +1637,6 @@ class PaperTradingRunner:
                 verbose=True,
             )
             logger.info(f"行业约束后候选数: {len(ranked_candidates)} (原始 {original_count})")
-
-        # 行业动量过滤
-        if industry_momentum_filter and industry_momentum_bottom_pct > 0:
-            before = len(ranked_candidates)
-            ranked_candidates = self._filter_industry_momentum(
-                ranked_candidates,
-                signal_data,
-                industry_momentum_bottom_pct,
-                verbose=self.verbose,
-            )
-            if len(ranked_candidates) < before:
-                logger.info(
-                    f"行业动量过滤后候选数: {len(ranked_candidates)}"
-                    f" (过滤前 {before})"
-                )
-
-        if industry_rotation_enhanced and ranked_candidates:
-            if signal_data is not None and 'ind_momentum_rank' in signal_data.columns:
-                rank_map = dict(zip(signal_data['ts_code'], signal_data['ind_momentum_rank']))
-                adjusted = []
-                for ts_code, score in ranked_candidates:
-                    rank = rank_map.get(ts_code)
-                    if rank is not None and not pd.isna(rank):
-                        multiplier = 1.0 + industry_rotation_alpha * (float(rank) - 0.5)
-                        adjusted.append((ts_code, score * multiplier))
-                    else:
-                        adjusted.append((ts_code, score))
-                adjusted.sort(key=lambda item: item[1], reverse=True)
-                ranked_candidates = adjusted
-                logger.info(
-                    f"行业轮动加权后候选数: {len(ranked_candidates)} "
-                    f"(alpha={industry_rotation_alpha})"
-                )
 
         # 持仓保留奖励（降低换手率）
             if existing_positions:
@@ -1941,159 +1890,6 @@ class PaperTradingRunner:
         
         return buy_prices, sell_prices
     
-    # ─────────────── 市场择时仓位管理 ───────────────
-
-    @staticmethod
-    def _get_feature_scalar(features_df: pd.DataFrame, col: str) -> float:
-        """从特征 DataFrame 取广播到所有行的标量值（首行），缺失返回 NaN"""
-        if col not in features_df.columns:
-            return np.nan
-        val = features_df[col].iloc[0]
-        return float(val) if not pd.isna(val) else np.nan
-
-    def compute_market_regime_exposure(
-        self, trade_date: str, config: dict
-    ) -> Tuple[float, str]:
-        """根据市场状态计算仓位系数
-
-        复用回测引擎 BacktestEngineML 的 4 种择时模式逻辑，
-        从 cs_infer 特征中提取市场级标量计算仓位。
-
-        Args:
-            trade_date: 交易日期 YYYYMMDD
-            config: 配置字典（含 market_regime_* 字段）
-
-        Returns:
-            (exposure, reason) — 仓位系数 [0, 1] 和原因描述
-        """
-        # 加载 cs_infer 特征
-        features_df = self.storage.load_cs_train_day(
-            trade_date, subdir="cs_infer"
-        )
-        if features_df is None or len(features_df) == 0:
-            return 1.0, "缺少特征数据，按满仓处理"
-
-        min_exposure = config.get("market_regime_min_exposure", 0.2)
-
-        # ── 常规市场择时 ──
-        if not config.get("market_regime_enabled", False):
-            return 1.0, "市场择时未启用"
-
-        mode = config.get("market_regime_mode", "binary")
-
-        if mode == "binary":
-            exposure = self._regime_binary(features_df, config)
-        elif mode == "vol_target":
-            exposure = self._regime_vol_target(features_df, config)
-        elif mode == "trend":
-            exposure = self._regime_trend(features_df, config)
-        elif mode == "combined":
-            exposure = self._regime_combined(features_df, config)
-        else:
-            logger.warning(f"未知 market_regime_mode={mode}，回退到 binary")
-            exposure = self._regime_binary(features_df, config)
-
-        # 回撤保护
-        if config.get("market_regime_drawdown_guard", False) and exposure < 1.0:
-            drawdown = self._get_feature_scalar(features_df, "mkt_drawdown_20")
-            dd_threshold = config.get("market_regime_drawdown_threshold", -0.08)
-            if not np.isnan(drawdown) and drawdown < dd_threshold:
-                exposure = 1.0
-                return exposure, (
-                    f"回撤保护触发: mkt_drawdown_20={drawdown:.2%}"
-                    f" < {dd_threshold:.2%}，恢复满仓"
-                )
-
-        reason = f"市场择时({mode}): 仓位={exposure:.1%}"
-        return exposure, reason
-
-    @staticmethod
-    def _regime_binary(features_df: pd.DataFrame, config: dict) -> float:
-        """二值模式：mkt_ret_avg_20 < threshold → bear_exposure，否则满仓"""
-        mkt_ret = PaperTradingRunner._get_feature_scalar(
-            features_df, "mkt_ret_avg_20"
-        )
-        if np.isnan(mkt_ret):
-            return 1.0
-        threshold = config.get("market_regime_bear_threshold", -0.02)
-        if mkt_ret < threshold:
-            return config.get("market_regime_bear_exposure", 0.3)
-        return 1.0
-
-    @staticmethod
-    def _regime_vol_target(features_df: pd.DataFrame, config: dict) -> float:
-        """波动率目标模式：target_vol / realized_vol"""
-        mkt_ret_vol = PaperTradingRunner._get_feature_scalar(
-            features_df, "mkt_ret_vol_20"
-        )
-        if np.isnan(mkt_ret_vol) or mkt_ret_vol <= 0:
-            return 1.0
-        annualized_vol = mkt_ret_vol * np.sqrt(252)
-        vol_target = config.get("market_regime_vol_target", 0.15)
-        min_exp = config.get("market_regime_min_exposure", 0.2)
-        return float(np.clip(vol_target / annualized_vol, min_exp, 1.0))
-
-    @staticmethod
-    def _regime_trend(features_df: pd.DataFrame, config: dict) -> float:
-        """趋势模式：基于 mkt_ma_trend 线性降仓"""
-        ma_trend = PaperTradingRunner._get_feature_scalar(
-            features_df, "mkt_ma_trend"
-        )
-        if np.isnan(ma_trend):
-            return 1.0
-        threshold = config.get("market_regime_trend_threshold", 1.0)
-        if ma_trend >= threshold:
-            return 1.0
-        min_exp = config.get("market_regime_min_exposure", 0.2)
-        return float(np.clip(ma_trend / threshold, min_exp, 1.0))
-
-    # ─────────────── 行业动量过滤 ───────────────
-
-    @staticmethod
-    def _filter_industry_momentum(
-        ranked_candidates: list,
-        signal_data: pd.DataFrame,
-        bottom_pct: float,
-        verbose: bool = True,
-    ) -> list:
-        """剔除弱势行业的股票
-
-        利用 cs_infer 中的 ind_momentum_rank（行业动量百分位排名，0~1）
-        过滤掉排名 < bottom_pct 的行业的所有股票。
-
-        Args:
-            ranked_candidates: [(ts_code, score), ...] 排序候选列表
-            signal_data: cs_infer 特征 DataFrame
-            bottom_pct: 剔除排名后 X% 的行业（0~1）
-            verbose: 是否输出日志
-
-        Returns:
-            过滤后的排序候选列表
-        """
-        if signal_data is None or "ind_momentum_rank" not in signal_data.columns:
-            return ranked_candidates
-
-        rank_map = dict(
-            zip(signal_data["ts_code"], signal_data["ind_momentum_rank"])
-        )
-
-        filtered = []
-        removed = 0
-        for stock, score in ranked_candidates:
-            rank = rank_map.get(stock)
-            if rank is not None and rank < bottom_pct:
-                removed += 1
-                continue
-            filtered.append((stock, score))
-
-        if removed > 0 and verbose:
-            logger.info(
-                f"  行业动量过滤: 剔除 {removed} 只弱势行业股票"
-                f" (bottom {bottom_pct * 100:.0f}%)"
-            )
-
-        return filtered
-
     # ─────────────── 盈利延续持有 / 亏损提前换出 ───────────────
 
     def _calc_holding_days(
@@ -2667,10 +2463,6 @@ class PaperTradingRunner:
                     buy_price_type,
                     max_per_industry=effective_config.max_per_industry,
                     industry_mapping=industry_mapping,
-                    industry_momentum_filter=effective_config.industry_momentum_filter,
-                    industry_momentum_bottom_pct=effective_config.industry_momentum_bottom_pct,
-                    industry_rotation_enhanced=effective_config.industry_rotation_enhanced,
-                    industry_rotation_alpha=effective_config.industry_rotation_alpha,
                     trading_config=effective_config,
                     existing_positions=current_positions,
                     return_meta=True,

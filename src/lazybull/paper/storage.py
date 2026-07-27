@@ -59,51 +59,12 @@ CONFIG_SECTION_LAYOUT = [
         "stop_loss",
         "止损参数",
         [
-            "stop_loss_enabled 为总开关，支持回撤止损、移动止损和连续跌停止损。",
+            "stop_loss_enabled 为总开关，支持回撤止损和连续跌停止损。",
         ],
         [
             "stop_loss_enabled",
             "stop_loss_drawdown_pct",
-            "stop_loss_trailing_enabled",
-            "stop_loss_trailing_pct",
             "stop_loss_consecutive_limit_down",
-        ],
-    ),
-    (
-        "market_regime",
-        "市场择时仓位管理",
-        [
-            "market_regime_mode 可选 binary / vol_target / trend / combined。",
-        ],
-        [
-            "market_regime_enabled",
-            "market_regime_mode",
-            "market_regime_bear_threshold",
-            "market_regime_bear_exposure",
-            "market_regime_vol_target",
-            "market_regime_trend_threshold",
-            "market_regime_min_exposure",
-            "market_regime_combine_method",
-            "market_regime_trend_guard",
-            "market_regime_drawdown_guard",
-            "market_regime_drawdown_threshold",
-            "market_regime_ma250_hard_stop",
-            "market_regime_ma250_threshold",
-            "market_regime_ma250_exposure",
-            "market_regime_ma250_atr_scaling",
-        ],
-    ),
-    (
-        "industry",
-        "行业过滤与行业轮动加权",
-        [
-            "industry_momentum_filter 为硬过滤；industry_rotation_enhanced 为软加权。",
-        ],
-        [
-            "industry_momentum_filter",
-            "industry_momentum_bottom_pct",
-            "industry_rotation_enhanced",
-            "industry_rotation_alpha",
         ],
     ),
     (
@@ -154,8 +115,6 @@ CONFIG_SECTION_RENDER_GROUPS = {
     "stop_loss": [],
     "weakness_exit": [],
     "equity_curve": [],
-    "market_regime": [],
-    "industry": [],
     "position_management": [],
     "paper_trade": [],
 }

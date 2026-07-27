@@ -15,7 +15,6 @@ class StopLossTriggerType(Enum):
     """止损触发类型"""
     DRAWDOWN = "drawdown"  # 回撤止损
     CONSECUTIVE_LIMIT_DOWN = "consecutive_limit_down"  # 连续跌停
-    TRAILING_STOP = "trailing_stop"  # 移动止损（基于最高点）
 
 
 @dataclass
@@ -24,9 +23,6 @@ class StopLossConfig:
     enabled: bool = False
     # 回撤止损配置
     drawdown_pct: float = 20.0  # 从买入成本回撤超过N%触发止损，默认20%
-    # 移动止损配置
-    trailing_stop_enabled: bool = False  # 是否启用移动止损
-    trailing_stop_pct: float = 15.0  # 从最高点回撤超过N%触发止损，默认15%
     # 连续跌停配置
     consecutive_limit_down_days: int = 2  # 连续N天跌停触发止损，默认2天
     # 触发后处理策略
@@ -46,28 +42,13 @@ class StopLossMonitor:
             config: 止损配置
         """
         self.config = config
-        self.position_high_prices: Dict[str, float] = {}  # 记录每只股票的最高价（用于移动止损）
         self.consecutive_limit_down_days: Dict[str, int] = {}  # 记录连续跌停天数
         
         logger.info(
             f"止损监控器初始化: enabled={config.enabled}, "
             f"drawdown_pct={config.drawdown_pct}%, "
-            f"trailing_stop_enabled={config.trailing_stop_enabled}, "
-            f"trailing_stop_pct={config.trailing_stop_pct}%, "
             f"consecutive_limit_down_days={config.consecutive_limit_down_days}"
         )
-    
-    def update_position_price(self, stock: str, current_price: float):
-        """更新持仓的最高价（用于移动止损）
-        
-        Args:
-            stock: 股票代码
-            current_price: 当前价格
-        """
-        if stock not in self.position_high_prices:
-            self.position_high_prices[stock] = current_price
-        else:
-            self.position_high_prices[stock] = max(self.position_high_prices[stock], current_price)
     
     def check_stop_loss(
         self,
@@ -102,18 +83,7 @@ class StopLossMonitor:
             logger.warning(f"  {stock} 触发止损: {reason}")
             return True, StopLossTriggerType.DRAWDOWN, reason
         
-        # 2. 检查移动止损（从最高点）
-        if self.config.trailing_stop_enabled:
-            self.update_position_price(stock, current_price)
-            high_price = self.position_high_prices.get(stock, buy_price)
-            drawdown_from_high = (current_price - high_price) / high_price * 100
-            
-            if drawdown_from_high <= -self.config.trailing_stop_pct:
-                reason = f"移动止损: 从最高价{high_price:.2f}下跌至{current_price:.2f}，跌幅{-drawdown_from_high:.2f}%"
-                logger.warning(f"  {stock} 触发止损: {reason}")
-                return True, StopLossTriggerType.TRAILING_STOP, reason
-        
-        # 3. 检查连续跌停
+        # 2. 检查连续跌停
         if is_limit_down:
             # 增加连续跌停计数
             self.consecutive_limit_down_days[stock] = self.consecutive_limit_down_days.get(stock, 0) + 1
@@ -135,12 +105,10 @@ class StopLossMonitor:
         Args:
             stock: 股票代码
         """
-        self.position_high_prices.pop(stock, None)
         self.consecutive_limit_down_days.pop(stock, None)
     
     def reset(self):
         """重置所有监控记录"""
-        self.position_high_prices.clear()
         self.consecutive_limit_down_days.clear()
 
 
@@ -156,8 +124,6 @@ def create_stop_loss_config_from_dict(config_dict: Dict) -> StopLossConfig:
     return StopLossConfig(
         enabled=config_dict.get('stop_loss_enabled', False),
         drawdown_pct=config_dict.get('stop_loss_drawdown_pct', 20.0),
-        trailing_stop_enabled=config_dict.get('stop_loss_trailing_enabled', False),
-        trailing_stop_pct=config_dict.get('stop_loss_trailing_pct', 15.0),
         consecutive_limit_down_days=config_dict.get('stop_loss_consecutive_limit_down', 2),
         post_trigger_action=config_dict.get('stop_loss_post_action', 'hold_cash')
     )

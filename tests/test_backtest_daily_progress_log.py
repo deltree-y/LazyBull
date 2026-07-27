@@ -173,7 +173,7 @@ def test_daily_signal_log_summarizes_new_buy_and_sell_signals():
     }
     engine.pending_stop_loss_sells["000006.SZ"] = {
         "trigger_date": next_date,
-        "trigger_type": "trailing_stop",
+        "trigger_type": "drawdown",
     }
 
     assert (

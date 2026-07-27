@@ -36,28 +36,7 @@ class TradingConfig:
     # ── 止损 ──
     stop_loss_enabled: bool = False
     stop_loss_drawdown_pct: float = 30.0
-    stop_loss_trailing_enabled: bool = False
-    stop_loss_trailing_pct: float = 15.0
     stop_loss_consecutive_limit_down: int = 2
-
-    # ── 市场择时仓位管理 ──
-    market_regime_enabled: bool = False  # 是否启用市场择时
-    market_regime_mode: str = "vol_target"  # binary|vol_target|trend|combined
-    market_regime_bear_threshold: float = -0.03  # binary: mkt_ret_avg_20 低于此值判定熊市
-    market_regime_bear_exposure: float = 0.3  # binary: 熊市仓位系数（0~1）
-    market_regime_vol_target: float = 0.20  # vol_target/combined: 年化波动率目标
-    market_regime_trend_threshold: float = 1.0  # trend/combined: mkt_ma_trend 降仓阈值
-    market_regime_min_exposure: float = 0.2  # 非binary模式最低仓位下限
-    market_regime_combine_method: str = "min"  # combined: min|multiply
-    market_regime_trend_guard: bool = True  # combined: 上行趋势跳过vol降仓
-    market_regime_drawdown_guard: bool = False  # 回撤保护：已大幅下跌时停止降仓
-    market_regime_drawdown_threshold: float = -0.08  # 回撤保护阈值
-
-    # ── 行业动量过滤 & 行业轮动加权 ──
-    industry_momentum_filter: bool = False  # 是否启用行业动量过滤（硬过滤弱势行业）
-    industry_momentum_bottom_pct: float = 0.5  # 剔除排名后X%的行业
-    industry_rotation_enhanced: bool = False  # 是否启用行业轮动加权（按行业动量排名调整分数）
-    industry_rotation_alpha: float = 0.3  # 行业轮动加权强度(0=不调整,1=强调整)
 
     # ── 仓位管理模式 ──
     position_sizing: str = "equal"  # equal|score|kelly|half_kelly
@@ -114,8 +93,6 @@ class TradingConfig:
         return StopLossConfig(
             enabled=True,
             drawdown_pct=self.stop_loss_drawdown_pct,
-            trailing_stop_enabled=self.stop_loss_trailing_enabled,
-            trailing_stop_pct=self.stop_loss_trailing_pct,
             consecutive_limit_down_days=self.stop_loss_consecutive_limit_down,
         )
 

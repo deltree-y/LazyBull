@@ -116,8 +116,6 @@ COL_NAMES = {
     "bt_max_per_industry": "回测单行业最大持仓数",
     "bt_stop_loss_enabled": "回测止损",
     "bt_stop_loss_drawdown_pct": "回测回撤止损%",
-    "bt_stop_loss_trailing_enabled": "回测移动止损",
-    "bt_stop_loss_trailing_pct": "回测移动止损%",
     "bt_stop_loss_consecutive_limit_down": "回测连续跌停止损",
     "bt_weakness_exit_enabled": "回测弱势退出",
     "bt_weakness_exit_threshold": "回测弱势退出阈值",
@@ -219,30 +217,10 @@ COL_NAMES = {
     # 盈亏动态持仓
     # ATR 动态阈值与仓位缩放
     # 亏损提前换出二次确认
-    # 行业轮动加权
-    "industry_rotation_enhanced": "行业轮动加权",
-    "industry_rotation_alpha": "轮动Alpha",
-    "industry_momentum_filter": "行业动量过滤",
-    "industry_momentum_bottom_pct": "行业动量过滤比例",
     # 仓位管理
     "position_sizing": "仓位模式",
     "kelly_vol_window": "Kelly波动窗口",
     "kelly_max_leverage": "Kelly仓位上限",
-    "market_regime": "市场择时",
-    "market_regime_bear_threshold": "熊市阈值",
-    "market_regime_bear_exposure": "熊市仓位",
-    "market_regime_mode": "市场择时模式",
-    "market_regime_vol_target": "波动率目标",
-    "market_regime_trend_threshold": "趋势阈值",
-    "market_regime_min_exposure": "最低仓位",
-    "market_regime_combine_method": "择时组合方式",
-    "market_regime_trend_guard": "趋势保护",
-    "market_regime_drawdown_guard": "回撤保护",
-    "market_regime_drawdown_threshold": "回撤保护阈值",
-    "market_regime_ma250_hard_stop": "MA250硬条件",
-    "market_regime_ma250_threshold": "MA250阈值",
-    "market_regime_ma250_exposure": "MA250仓位",
-    "market_regime_ma250_atr_scaling": "MA250 ATR缩放",
     "stagger_tranches": "分批调仓批数",
     # 整体持仓止盈
     "enable_early_rebalance_on_empty": "空仓提前调仓",

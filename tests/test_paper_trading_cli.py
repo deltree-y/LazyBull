@@ -31,8 +31,6 @@ def test_save_and_load_config(temp_paper_storage):
         'model_version': None,
         'stop_loss_enabled': True,
         'stop_loss_drawdown_pct': 20.0,
-        'stop_loss_trailing_enabled': False,
-        'stop_loss_trailing_pct': 15.0,
         'stop_loss_consecutive_limit_down': 2,
         'universe': 'mainboard'
     }
@@ -145,40 +143,6 @@ def test_stop_loss_monitor_drawdown():
     assert '回撤止损' in reason
 
 
-def test_stop_loss_monitor_trailing():
-    """测试移动止损触发"""
-    config = StopLossConfig(
-        enabled=True,
-        drawdown_pct=20.0,
-        trailing_stop_enabled=True,
-        trailing_stop_pct=15.0
-    )
-    monitor = StopLossMonitor(config)
-    
-    # 更新最高价
-    monitor.update_position_price('000001.SZ', 12.0)
-    monitor.update_position_price('000001.SZ', 15.0)  # 最高价15.0
-    
-    # 情况1：未触发移动止损（从最高点跌14%）
-    triggered, trigger_type, reason = monitor.check_stop_loss(
-        stock='000001.SZ',
-        buy_price=10.0,
-        current_price=12.9,  # 从15.0跌到12.9，跌14%
-        is_limit_down=False
-    )
-    assert triggered is False
-    
-    # 情况2：触发移动止损（从最高点跌15%）
-    triggered, trigger_type, reason = monitor.check_stop_loss(
-        stock='000001.SZ',
-        buy_price=10.0,
-        current_price=12.75,  # 从15.0跌到12.75，跌15%
-        is_limit_down=False
-    )
-    assert triggered is True
-    assert '移动止损' in reason
-
-
 def test_stop_loss_monitor_consecutive_limit_down():
     """测试连续跌停止损触发"""
     config = StopLossConfig(
@@ -247,8 +211,6 @@ def test_config_command_integration(temp_paper_storage):
         'model_version': 1,
         'stop_loss_enabled': True,
         'stop_loss_drawdown_pct': 15.0,
-        'stop_loss_trailing_enabled': True,
-        'stop_loss_trailing_pct': 10.0,
         'stop_loss_consecutive_limit_down': 3,
         'universe': 'all'
     }
@@ -362,13 +324,11 @@ def test_stop_loss_state_persistence():
         config = StopLossConfig(
             enabled=True,
             drawdown_pct=20.0,
-            trailing_stop_enabled=True,
-            trailing_stop_pct=15.0
         )
         monitor = StopLossMonitor(config)
         
         # 更新一些状态
-        monitor.update_position_price('000001.SZ', 12.5)
+        monitor.consecutive_limit_down_days['000001.SZ'] = 1
         monitor.update_position_price('000002.SZ', 15.8)
         monitor.consecutive_limit_down_days['000003.SZ'] = 1
         
@@ -479,8 +439,6 @@ def test_config_with_all_parameters():
         'model_version',
         'stop_loss_enabled',
         'stop_loss_drawdown_pct',
-        'stop_loss_trailing_enabled',
-        'stop_loss_trailing_pct',
         'stop_loss_consecutive_limit_down',
         'universe'
     ]
@@ -495,8 +453,6 @@ def test_config_with_all_parameters():
         'model_version': None,
         'stop_loss_enabled': False,
         'stop_loss_drawdown_pct': 20.0,
-        'stop_loss_trailing_enabled': False,
-        'stop_loss_trailing_pct': 15.0,
         'stop_loss_consecutive_limit_down': 2,
         'universe': 'mainboard'
     }

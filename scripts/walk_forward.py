@@ -198,8 +198,6 @@ def run_oos_backtest(
     bt_max_per_industry: Optional[int] = None,
     bt_stop_loss_enabled: bool = False,
     bt_stop_loss_drawdown_pct: float = 30.0,
-    bt_stop_loss_trailing_enabled: bool = False,
-    bt_stop_loss_trailing_pct: float = 15.0,
     bt_stop_loss_consecutive_limit_down: int = 2,
     bt_equity_curve_enabled: bool = False,
     bt_equity_curve_drawdown_thresholds: Optional[List[float]] = None,
@@ -209,25 +207,6 @@ def run_oos_backtest(
     bt_equity_curve_recovery_mode: str = "gradual",
     bt_equity_curve_recovery_step: float = 0.25,
     bt_equity_curve_recovery_delay_periods: int = 0,
-    market_regime_enabled: bool = False,
-    market_regime_mode: str = "binary",
-    market_regime_bear_threshold: float = -0.02,
-    market_regime_bear_exposure: float = 0.3,
-    market_regime_vol_target: float = 0.15,
-    market_regime_trend_threshold: float = 1.0,
-    market_regime_min_exposure: float = 0.2,
-    market_regime_combine_method: str = "min",
-    market_regime_trend_guard: bool = True,
-    market_regime_drawdown_guard: bool = True,
-    market_regime_drawdown_threshold: float = -0.08,
-    market_regime_ma250_hard_stop: bool = False,
-    market_regime_ma250_threshold: float = 1.0,
-    market_regime_ma250_exposure: float = 0.0,
-    market_regime_ma250_atr_scaling: bool = False,
-    industry_momentum_filter: bool = False,
-    industry_momentum_bottom_pct: float = 0.2,
-    industry_rotation_enhanced: bool = False,
-    industry_rotation_alpha: float = 0.3,
     position_sizing: str = "equal",
     kelly_vol_window: int = 60,
     kelly_max_leverage: float = 0.25,
@@ -322,24 +301,7 @@ def run_oos_backtest(
         min_list_days=bt_min_list_days,
         stop_loss_enabled=bt_stop_loss_enabled,
         stop_loss_drawdown_pct=bt_stop_loss_drawdown_pct,
-        stop_loss_trailing_enabled=bt_stop_loss_trailing_enabled,
-        stop_loss_trailing_pct=bt_stop_loss_trailing_pct,
         stop_loss_consecutive_limit_down=bt_stop_loss_consecutive_limit_down,
-        market_regime_enabled=market_regime_enabled,
-        market_regime_mode=market_regime_mode,
-        market_regime_bear_threshold=market_regime_bear_threshold,
-        market_regime_bear_exposure=market_regime_bear_exposure,
-        market_regime_vol_target=market_regime_vol_target,
-        market_regime_trend_threshold=market_regime_trend_threshold,
-        market_regime_min_exposure=market_regime_min_exposure,
-        market_regime_combine_method=market_regime_combine_method,
-        market_regime_trend_guard=market_regime_trend_guard,
-        market_regime_drawdown_guard=market_regime_drawdown_guard,
-        market_regime_drawdown_threshold=market_regime_drawdown_threshold,
-        industry_momentum_filter=industry_momentum_filter,
-        industry_momentum_bottom_pct=industry_momentum_bottom_pct,
-        industry_rotation_enhanced=industry_rotation_enhanced,
-        industry_rotation_alpha=industry_rotation_alpha,
         position_sizing=position_sizing,
         kelly_vol_window=kelly_vol_window,
         kelly_max_leverage=kelly_max_leverage,
@@ -426,10 +388,6 @@ def run_oos_backtest(
         "bt_end": bt_end,
         "bt_top_n": bt_top_n,
     }
-
-    if market_regime_enabled:
-        metrics["bt_market_regime"] = True
-        metrics["bt_market_regime_mode"] = market_regime_mode
 
     split_tag = f"Split {split_num} | " if split_num is not None else ""
     logger.info(
@@ -2508,8 +2466,6 @@ def write_walk_forward_summary(
                 "bt_max_per_industry",
                 "bt_stop_loss_enabled",
                 "bt_stop_loss_drawdown_pct",
-                "bt_stop_loss_trailing_enabled",
-                "bt_stop_loss_trailing_pct",
                 "bt_stop_loss_consecutive_limit_down",
                 "bt_weakness_exit_enabled",
                 "bt_weakness_exit_threshold",
@@ -2526,28 +2482,9 @@ def write_walk_forward_summary(
                 "bt_equity_curve_recovery_mode",
                 "bt_equity_curve_recovery_step",
                 "bt_equity_curve_recovery_delay_periods",
-                "industry_momentum_filter",
-                "industry_momentum_bottom_pct",
-                "industry_rotation_enhanced",
-                "industry_rotation_alpha",
                 "position_sizing",
                 "kelly_vol_window",
                 "kelly_max_leverage",
-                "market_regime",
-                "market_regime_bear_threshold",
-                "market_regime_bear_exposure",
-                "market_regime_mode",
-                "market_regime_vol_target",
-                "market_regime_trend_threshold",
-                "market_regime_min_exposure",
-                "market_regime_combine_method",
-                "market_regime_trend_guard",
-                "market_regime_drawdown_guard",
-                "market_regime_drawdown_threshold",
-                "market_regime_ma250_hard_stop",
-                "market_regime_ma250_threshold",
-                "market_regime_ma250_exposure",
-                "market_regime_ma250_atr_scaling",
                 "stagger_tranches",
                 "enable_early_rebalance_on_empty",
             )
@@ -2606,12 +2543,8 @@ def write_walk_forward_summary(
         if not params.get("bt_stop_loss_enabled"):
             clear(
                 "bt_stop_loss_drawdown_pct",
-                "bt_stop_loss_trailing_enabled",
-                "bt_stop_loss_trailing_pct",
                 "bt_stop_loss_consecutive_limit_down",
             )
-        elif not params.get("bt_stop_loss_trailing_enabled"):
-            clear("bt_stop_loss_trailing_pct")
 
         if not params.get("bt_weakness_exit_enabled"):
             clear(
@@ -2636,79 +2569,8 @@ def write_walk_forward_summary(
                 "bt_equity_curve_recovery_delay_periods",
             )
 
-        if not params.get("industry_momentum_filter"):
-            clear("industry_momentum_bottom_pct")
-
-        if not params.get("industry_rotation_enhanced"):
-            clear("industry_rotation_alpha")
-
         if params.get("position_sizing") not in ("kelly", "half_kelly"):
             clear("kelly_vol_window", "kelly_max_leverage")
-
-        if not params.get("market_regime"):
-            clear(
-                "market_regime_bear_threshold",
-                "market_regime_bear_exposure",
-                "market_regime_mode",
-                "market_regime_vol_target",
-                "market_regime_trend_threshold",
-                "market_regime_min_exposure",
-                "market_regime_combine_method",
-                "market_regime_trend_guard",
-                "market_regime_drawdown_guard",
-                "market_regime_drawdown_threshold",
-            )
-        else:
-            market_regime_mode = params.get("market_regime_mode")
-            if market_regime_mode == "binary":
-                clear(
-                    "market_regime_vol_target",
-                    "market_regime_trend_threshold",
-                    "market_regime_min_exposure",
-                    "market_regime_combine_method",
-                    "market_regime_trend_guard",
-                )
-            elif market_regime_mode == "vol_target":
-                clear(
-                    "market_regime_bear_threshold",
-                    "market_regime_bear_exposure",
-                    "market_regime_trend_threshold",
-                    "market_regime_combine_method",
-                    "market_regime_trend_guard",
-                )
-            elif market_regime_mode == "trend":
-                clear(
-                    "market_regime_bear_threshold",
-                    "market_regime_bear_exposure",
-                    "market_regime_vol_target",
-                    "market_regime_combine_method",
-                    "market_regime_trend_guard",
-                )
-            elif market_regime_mode == "combined":
-                clear(
-                    "market_regime_bear_threshold",
-                    "market_regime_bear_exposure",
-                )
-
-        if not params.get("market_regime_ma250_hard_stop"):
-            clear(
-                "market_regime_ma250_threshold",
-                "market_regime_ma250_exposure",
-                "market_regime_ma250_atr_scaling",
-            )
-
-        if not params.get("market_regime_drawdown_guard"):
-            clear("market_regime_drawdown_threshold")
-
-            clear(
-            )
-        else:
-
-
-                clear(
-                )
-
-
 
         return params
 
@@ -2807,8 +2669,6 @@ def write_walk_forward_summary(
         "bt_max_per_industry": getattr(args, 'bt_max_per_industry', None),
         "bt_stop_loss_enabled": getattr(args, 'bt_stop_loss_enabled', False),
         "bt_stop_loss_drawdown_pct": getattr(args, 'bt_stop_loss_drawdown_pct', 30.0),
-        "bt_stop_loss_trailing_enabled": getattr(args, 'bt_stop_loss_trailing_enabled', False),
-        "bt_stop_loss_trailing_pct": getattr(args, 'bt_stop_loss_trailing_pct', 15.0),
         "bt_stop_loss_consecutive_limit_down": getattr(
             args, 'bt_stop_loss_consecutive_limit_down', 2
         ),
@@ -2843,28 +2703,9 @@ def write_walk_forward_summary(
         "bt_equity_curve_recovery_delay_periods": getattr(
             args, 'bt_equity_curve_recovery_delay_periods', 0
         ),
-        "industry_momentum_filter": getattr(args, 'industry_momentum_filter', False),
-        "industry_momentum_bottom_pct": getattr(args, 'industry_momentum_bottom_pct', 0.2),
-        "industry_rotation_enhanced": getattr(args, 'industry_rotation_enhanced', False),
-        "industry_rotation_alpha": getattr(args, 'industry_rotation_alpha', 0.3),
         "position_sizing": getattr(args, 'position_sizing', 'equal'),
         "kelly_vol_window": getattr(args, 'kelly_vol_window', 60),
         "kelly_max_leverage": getattr(args, 'kelly_max_leverage', 0.25),
-        "market_regime": getattr(args, 'market_regime', False),
-        "market_regime_bear_threshold": getattr(args, 'market_regime_bear_threshold', None),
-        "market_regime_bear_exposure": getattr(args, 'market_regime_bear_exposure', None),
-        "market_regime_mode": getattr(args, 'market_regime_mode', 'binary'),
-        "market_regime_vol_target": getattr(args, 'market_regime_vol_target', None),
-        "market_regime_trend_threshold": getattr(args, 'market_regime_trend_threshold', None),
-        "market_regime_min_exposure": getattr(args, 'market_regime_min_exposure', None),
-        "market_regime_combine_method": getattr(args, 'market_regime_combine_method', None),
-        "market_regime_trend_guard": getattr(args, 'market_regime_trend_guard', True),
-        "market_regime_drawdown_guard": getattr(args, 'market_regime_drawdown_guard', True),
-        "market_regime_drawdown_threshold": getattr(args, 'market_regime_drawdown_threshold', None),
-        "market_regime_ma250_hard_stop": getattr(args, 'market_regime_ma250_hard_stop', False),
-        "market_regime_ma250_threshold": getattr(args, 'market_regime_ma250_threshold', 1.0),
-        "market_regime_ma250_exposure": getattr(args, 'market_regime_ma250_exposure', 0.0),
-        "market_regime_ma250_atr_scaling": getattr(args, 'market_regime_ma250_atr_scaling', False),
         "stagger_tranches": getattr(args, 'stagger_tranches', 1),
         "enable_early_rebalance_on_empty": getattr(args, 'enable_early_rebalance_on_empty', True),
         "no_deploy_train": getattr(args, 'no_deploy_train', False),
@@ -3631,18 +3472,6 @@ def main():
         help="OOS 回测回撤止损阈值（%%），默认 30.0"
     )
     parser.add_argument(
-        "--bt-stop-loss-trailing-enabled",
-        action="store_true",
-        default=False,
-        help="启用 OOS 回测移动止损"
-    )
-    parser.add_argument(
-        "--bt-stop-loss-trailing-pct",
-        type=float,
-        default=15.0,
-        help="OOS 回测移动止损阈值（%%），默认 15.0"
-    )
-    parser.add_argument(
         "--bt-stop-loss-consecutive-limit-down",
         type=int,
         default=2,
@@ -3754,32 +3583,6 @@ def main():
         help="分批调仓批次数（默认1=不分批）。设为K时将资金分成K份错开调仓，降低时点风险"
     )
 
-    # 行业动量过滤
-    parser.add_argument(
-        "--industry-momentum-filter",
-        action="store_true",
-        default=False,
-        help="启用行业动量过滤（剔除弱势行业股票，自动补位），默认关闭"
-    )
-    parser.add_argument(
-        "--industry-momentum-bottom-pct",
-        type=float,
-        default=0.2,
-        help="行业动量过滤阈值：剔除排名后 X%% 的行业（0~1），默认 0.2（后20%%）"
-    )
-    parser.add_argument(
-        "--industry-rotation-enhanced",
-        action="store_true",
-        default=False,
-        help="启用行业轮动加权：按行业动量排名对候选分数做乘性调整（强势加分、弱势扣分）"
-    )
-    parser.add_argument(
-        "--industry-rotation-alpha",
-        type=float,
-        default=0.3,
-        help="行业轮动加权强度（0=不调整, 1=强调整），默认 0.3"
-    )
-
     # 仓位管理模式
     parser.add_argument(
         "--position-sizing",
@@ -3801,87 +3604,6 @@ def main():
         help="Kelly 单只股票仓位上限（占总资产），默认 0.25"
     )
 
-    # 市场择时仓位管理参数
-    parser.add_argument(
-        "--market-regime",
-        action="store_true",
-        default=False,
-        help="启用市场择时仓位管理（熊市自动降仓），默认关闭"
-    )
-    parser.add_argument(
-        "--market-regime-bear-threshold",
-        type=float,
-        default=-0.02,
-        help="mkt_ret_avg_20 低于此值判定为熊市，默认 -0.02"
-    )
-    parser.add_argument(
-        "--market-regime-bear-exposure",
-        type=float,
-        default=0.3,
-        help="熊市仓位系数（0~1），默认 0.3（仅 binary 模式）"
-    )
-    parser.add_argument(
-        "--market-regime-mode",
-        type=str,
-        default="binary",
-        choices=["binary", "vol_target", "trend", "combined"],
-        help="市场择时模式: binary(二值) | vol_target(波动率目标) | trend(趋势叠加) | combined(组合)，默认 binary"
-    )
-    parser.add_argument(
-        "--market-regime-vol-target",
-        type=float,
-        default=0.15,
-        help="波动率目标（年化），默认 0.15（15%%）。仅 vol_target/combined 模式有效"
-    )
-    parser.add_argument(
-        "--market-regime-trend-threshold",
-        type=float,
-        default=1.0,
-        help="趋势阈值（mkt_ma_trend 低于此值开始降仓），默认 1.0。仅 trend/combined 模式有效"
-    )
-    parser.add_argument(
-        "--market-regime-min-exposure",
-        type=float,
-        default=0.2,
-        help="最低仓位系数（非 binary 模式的下限），默认 0.2"
-    )
-    parser.add_argument(
-        "--market-regime-combine-method",
-        type=str,
-        default="min",
-        choices=["min", "multiply"],
-        help="combined 模式组合方式: min(取最小) | multiply(相乘)，默认 min"
-    )
-    parser.add_argument(
-        "--market-regime-trend-guard",
-        action="store_true",
-        default=True,
-        help="combined 模式下趋势保护：上行趋势时跳过 vol_target 强制满仓，避免高波动上涨误杀，默认开启"
-    )
-    parser.add_argument(
-        "--no-market-regime-trend-guard",
-        action="store_false",
-        dest="market_regime_trend_guard",
-        help="关闭趋势保护"
-    )
-    parser.add_argument(
-        "--market-regime-drawdown-guard",
-        action="store_true",
-        default=True,
-        help="回撤保护：市场已大幅下跌时停止降仓，避免底部减仓踏空反弹，默认开启"
-    )
-    parser.add_argument(
-        "--no-market-regime-drawdown-guard",
-        action="store_false",
-        dest="market_regime_drawdown_guard",
-        help="关闭回撤保护"
-    )
-    parser.add_argument(
-        "--market-regime-drawdown-threshold",
-        type=float,
-        default=-0.08,
-        help="回撤保护阈值：mkt_drawdown_20 低于此值时停止降仓，默认 -0.08（-8%%）"
-    )
     # 盈亏动态持仓参数
     parser.add_argument(
         "--enable-profit-based-holding",
@@ -4095,8 +3817,6 @@ def main():
         if args.bt_stop_loss_enabled:
             logger.info(
                 f"    drawdown={args.bt_stop_loss_drawdown_pct}%, "
-                f"trailing={'开' if args.bt_stop_loss_trailing_enabled else '关'}, "
-                f"trailing_pct={args.bt_stop_loss_trailing_pct}%, "
                 f"consecutive_limit_down={args.bt_stop_loss_consecutive_limit_down}"
             )
         logger.info(f"  ECT: {'启用' if args.bt_equity_curve_enabled else '关闭'}")
@@ -4110,18 +3830,6 @@ def main():
             )
         if args.stagger_tranches > 1:
             logger.info(f"  分批调仓: {args.stagger_tranches} 批")
-        if args.market_regime:
-            regime_detail = f"mode={args.market_regime_mode}"
-            if args.market_regime_mode == "binary":
-                regime_detail += f", bear_threshold={args.market_regime_bear_threshold}, bear_exposure={args.market_regime_bear_exposure}"
-            else:
-                regime_detail += f", vol_target={args.market_regime_vol_target}, trend_threshold={args.market_regime_trend_threshold}, min_exposure={args.market_regime_min_exposure}"
-                if args.market_regime_mode == "combined":
-                    regime_detail += f", combine={args.market_regime_combine_method}, trend_guard={args.market_regime_trend_guard}"
-                regime_detail += f", dd_guard={args.market_regime_drawdown_guard}, dd_threshold={args.market_regime_drawdown_threshold}"
-            logger.info(f"  市场择时: 开启 ({regime_detail})")
-        else:
-            logger.info(f"  市场择时: 关闭")
     effective_data_root = args.data_root or get_data_root()
     logger.info(f"数据目录: {effective_data_root}")
     
@@ -4351,8 +4059,6 @@ def main():
                             bt_max_per_industry=args.bt_max_per_industry,
                             bt_stop_loss_enabled=args.bt_stop_loss_enabled,
                             bt_stop_loss_drawdown_pct=args.bt_stop_loss_drawdown_pct,
-                            bt_stop_loss_trailing_enabled=args.bt_stop_loss_trailing_enabled,
-                            bt_stop_loss_trailing_pct=args.bt_stop_loss_trailing_pct,
                             bt_stop_loss_consecutive_limit_down=args.bt_stop_loss_consecutive_limit_down,
                             bt_equity_curve_enabled=args.bt_equity_curve_enabled,
                             bt_equity_curve_drawdown_thresholds=args.bt_equity_curve_drawdown_thresholds,
@@ -4362,25 +4068,6 @@ def main():
                             bt_equity_curve_recovery_mode=args.bt_equity_curve_recovery_mode,
                             bt_equity_curve_recovery_step=args.bt_equity_curve_recovery_step,
                             bt_equity_curve_recovery_delay_periods=args.bt_equity_curve_recovery_delay_periods,
-                            market_regime_enabled=args.market_regime,
-                            market_regime_mode=args.market_regime_mode,
-                            market_regime_bear_threshold=args.market_regime_bear_threshold,
-                            market_regime_bear_exposure=args.market_regime_bear_exposure,
-                            market_regime_vol_target=args.market_regime_vol_target,
-                            market_regime_trend_threshold=args.market_regime_trend_threshold,
-                            market_regime_min_exposure=args.market_regime_min_exposure,
-                            market_regime_combine_method=args.market_regime_combine_method,
-                            market_regime_trend_guard=args.market_regime_trend_guard,
-                            market_regime_drawdown_guard=args.market_regime_drawdown_guard,
-                            market_regime_drawdown_threshold=args.market_regime_drawdown_threshold,
-                            market_regime_ma250_hard_stop=args.market_regime_ma250_hard_stop,
-                            market_regime_ma250_threshold=args.market_regime_ma250_threshold,
-                            market_regime_ma250_exposure=args.market_regime_ma250_exposure,
-                            market_regime_ma250_atr_scaling=args.market_regime_ma250_atr_scaling,
-                            industry_momentum_filter=args.industry_momentum_filter,
-                            industry_momentum_bottom_pct=args.industry_momentum_bottom_pct,
-                            industry_rotation_enhanced=getattr(args, 'industry_rotation_enhanced', False),
-                            industry_rotation_alpha=getattr(args, 'industry_rotation_alpha', 0.3),
                             position_sizing=getattr(args, 'position_sizing', 'equal'),
                             kelly_vol_window=getattr(args, 'kelly_vol_window', 60),
                             kelly_max_leverage=getattr(args, 'kelly_max_leverage', 0.25),

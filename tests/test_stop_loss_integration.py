@@ -97,7 +97,6 @@ def test_stop_loss_t1_execution(trained_model, mock_stock_basic):
     stop_loss_config = StopLossConfig(
         enabled=True,
         drawdown_pct=20.0,
-        trailing_stop_enabled=False,
         consecutive_limit_down_days=2,
         post_trigger_action='hold_cash'
     )
@@ -250,7 +249,6 @@ def test_stop_loss_no_duplicate_trigger(trained_model, mock_stock_basic):
     stop_loss_config = StopLossConfig(
         enabled=True,
         drawdown_pct=20.0,
-        trailing_stop_enabled=False,
         consecutive_limit_down_days=2,
         post_trigger_action='hold_cash'
     )
