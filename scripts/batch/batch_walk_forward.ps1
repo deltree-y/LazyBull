@@ -93,7 +93,7 @@ $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。L
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(2000)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(50)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 
@@ -111,15 +111,9 @@ $adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "42,61,82"#,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "42"#,61,82"#,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 1  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数 
-
-# ── 候选树数后验选优（训练完成后按逐日验证指标重选最终树数）─────────
-$posterior_tree_selection_mode = "disabled"   # disabled | grid
-$posterior_tree_candidates     = ""           # 逗号分隔，如 "16,32,64,128"；空=使用内置网格
-$posterior_tree_selection_metric = "topk_median"  # topk_median | topk_mean | topk_lift | topk_hit_rate | topk_excess_hit_rate | rankic_ir | rankic_mean
-$posterior_tree_selection_topk   = 20             # 后验选优使用的 TopK，默认20（可改30切回旧口径）
 
 ###  以下为因子选择
 # ── 基本面因子（需先运行 download_raw.py --download fina_indicator）───
@@ -842,17 +836,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --data-root $data_root" +
                  " --early-stopping-rounds $early_stopping_rounds" +
                  " --early-stopping-metric $early_stopping_metric" +
-                 " --posterior-tree-selection-mode $posterior_tree_selection_mode" +
-                 " --posterior-tree-selection-metric $posterior_tree_selection_metric" +
-                 " --posterior-tree-selection-topk $posterior_tree_selection_topk" +
                  " --time-decay-half-life $time_decay_half_life" +
                  " --batch-run-id $batch_run_id" +
                  " --batch-period-label $batch_period_label" +
                  " --wf-summary-csv `"$summary_csv_path`""
-
-    if ($posterior_tree_candidates -ne "") {
-        $pythonCmd += " --posterior-tree-candidates $posterior_tree_candidates"
-    }
 
     if ($risk_penalty_lambda_grid -ne "") {
         $pythonCmd += " --risk-penalty-lambda-grid $risk_penalty_lambda_grid"

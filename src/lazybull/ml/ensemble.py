@@ -52,8 +52,8 @@ class EnsembleModel:
 class TreeLimitedModel:
     """对基础模型施加树数上限的轻量包装器。
 
-    用于 walk-forward 在训练完成后对一组候选树数做后验验证评估，
-    最终以统一接口继续参与验证、回测与模型注册。
+    用于对模型施加树数上限以控制复杂度，
+    以统一接口继续参与验证、回测与模型注册。
     """
 
     def __init__(self, base_model, tree_limit: int, max_trees: Optional[int] = None):

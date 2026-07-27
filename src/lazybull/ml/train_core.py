@@ -554,7 +554,7 @@ def split_val_for_selection_protocol_by_date(
 
     目的：
     - `df_val_es` 仅用于训练期间 early stopping / best_iteration；
-    - `df_val_calib` 仅用于候选比较、后验树数选择与稳定性诊断；
+    - `df_val_calib` 仅用于候选比较、验证评估与稳定性诊断；
     - `df_val_embargo` 继续隔离尾部，避免与测试期价格窗口重叠。
 
     默认在扣除 embargo 后，将剩余验证日期的后 25% 划为 calibration，
@@ -802,7 +802,7 @@ def prepare_training_data(
                  df_val_split_original) 元组
                 - df_val_split: early stopping 子集（仅供模型训练/early stopping 使用）
                 - df_val_split_original: calibration 子集的原始快照；若 calibration 为空则回退到
-                    early stopping 子集。供逐日收益评估、候选比较与后验树数选择使用。
+                    early stopping 子集。供逐日收益评估、候选比较与验证评估使用。
                 data_stats 包含：samples_after_filter, val_start_date, val_end_date 及
                     val_es_* / val_calib_* / val_embargo_* 统计
     """

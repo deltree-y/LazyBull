@@ -145,10 +145,6 @@ COL_NAMES = {
     "best_iter_min": "最佳迭代最小值",
     "best_iter_max": "最佳迭代最大值",
     "best_iter_std": "最佳迭代标准差",
-    "posterior_tree_candidate_count_mean": "后验候选数均值",
-    "posterior_tree_small_space_splits": "后验小搜索空间split数",
-    "posterior_tree_selected_limit_mean": "后验选中树数均值",
-    "posterior_tree_model_max_trees_mean": "后验最大可用树数均值",
     # 跨时间段稳定性
     "period_count": "时间段数",
     "period_labels": "时间段列表",
@@ -199,21 +195,6 @@ COL_NAMES = {
     "ensemble_seeds": "多种子bagging种子",
     "ensemble_seed_keep_top_ratio": "多种子保留比例",
     "ensemble_seed_keep_min_models": "多种子最少保留模型数",
-    "posterior_tree_selection_mode": "后验树数选优模式",
-    "posterior_tree_selection_metric": "后验树数选优主指标",
-    "posterior_tree_selection_topk": "后验树数选优TopK",
-    "posterior_tree_candidates": "后验树数候选配置",
-    "posterior_tree_selection_enabled": "后验树数选优启用",
-    "posterior_tree_candidate_limits": "后验树数候选列表",
-    "posterior_tree_candidate_count": "后验树数候选数",
-    "posterior_tree_base_best_iteration": "后验基础最佳迭代",
-    "posterior_tree_model_max_trees": "后验最大可用树数",
-    "posterior_tree_selected_limit": "后验选中树数",
-    "posterior_tree_selected_topk_median": "后验选中TopK收益中位数",
-    "posterior_tree_selected_topk_lift": "后验选中TopK超额均值",
-    "posterior_tree_selected_topk_hit_rate": "后验选中TopK命中率",
-    "posterior_tree_selected_rankic_ir": "后验选中RankIC_IR",
-    "posterior_tree_selected_rankic_mean": "后验选中RankIC均值",
     "risk_penalty_penalized_ratio": "惩罚覆盖率",
     "risk_penalty_penalty_mean": "惩罚均值",
     "risk_penalty_topk_changed_days_ratio": "TopN变更日占比",
@@ -353,10 +334,6 @@ BATCH_EXPERIMENT_PARAM_CANDIDATES = [
     "多种子bagging种子",
     "多种子保留比例",
     "多种子最少保留模型数",
-    "后验树数选优模式",
-    "后验树数选优主指标",
-    "后验树数选优TopK",
-    "后验选中树数均值",
     "最佳迭代均值",
     "风险惩罚lambda缩放",
     "回测TopN",
@@ -403,21 +380,6 @@ PARAM_COLS = [
     "ensemble_seeds",
     "ensemble_seed_keep_top_ratio",
     "ensemble_seed_keep_min_models",
-    "posterior_tree_selection_mode",
-    "posterior_tree_selection_metric",
-    "posterior_tree_selection_topk",
-    "posterior_tree_candidates",
-    "posterior_tree_selection_enabled",
-    "posterior_tree_candidate_limits",
-    "posterior_tree_candidate_count",
-    "posterior_tree_base_best_iteration",
-    "posterior_tree_model_max_trees",
-    "posterior_tree_selected_limit",
-    "posterior_tree_selected_topk_median",
-    "posterior_tree_selected_topk_lift",
-    "posterior_tree_selected_topk_hit_rate",
-    "posterior_tree_selected_rankic_ir",
-    "posterior_tree_selected_rankic_mean",
     "rank_weight_enabled",
     "rank_weight_topk",
     "rank_weight",
@@ -570,10 +532,6 @@ MODEL_PARAM_KEYS = [
     "ensemble_seeds",
     "ensemble_seed_keep_top_ratio",
     "ensemble_seed_keep_min_models",
-    "posterior_tree_selection_mode",
-    "posterior_tree_selection_metric",
-    "posterior_tree_selection_topk",
-    "posterior_tree_candidates",
     "rank_weight_enabled",
     "rank_weight_topk",
     "rank_weight",
@@ -1785,41 +1743,6 @@ def aggregate_run(group: pd.DataFrame) -> dict:
             "best_iter_std"
         ] = None
 
-    # 后验树数选优统计
-    if "posterior_tree_candidate_count" in group.columns:
-        posterior_candidate_count = pd.to_numeric(
-            group["posterior_tree_candidate_count"], errors="coerce"
-        ).dropna()
-        row["posterior_tree_candidate_count_mean"] = (
-            round(posterior_candidate_count.mean(), 1) if len(posterior_candidate_count) else None
-        )
-        row["posterior_tree_small_space_splits"] = (
-            int((posterior_candidate_count <= 2).sum()) if len(posterior_candidate_count) else None
-        )
-    else:
-        row["posterior_tree_candidate_count_mean"] = None
-        row["posterior_tree_small_space_splits"] = None
-
-    if "posterior_tree_selected_limit" in group.columns:
-        posterior_selected = pd.to_numeric(
-            group["posterior_tree_selected_limit"], errors="coerce"
-        ).dropna()
-        row["posterior_tree_selected_limit_mean"] = (
-            round(posterior_selected.mean(), 1) if len(posterior_selected) else None
-        )
-    else:
-        row["posterior_tree_selected_limit_mean"] = None
-
-    if "posterior_tree_model_max_trees" in group.columns:
-        posterior_max_trees = pd.to_numeric(
-            group["posterior_tree_model_max_trees"], errors="coerce"
-        ).dropna()
-        row["posterior_tree_model_max_trees_mean"] = (
-            round(posterior_max_trees.mean(), 1) if len(posterior_max_trees) else None
-        )
-    else:
-        row["posterior_tree_model_max_trees_mean"] = None
-
     return row
 
 
@@ -1897,12 +1820,6 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         "best_iter_std",
     ]
 
-    posterior_tail_cols = [
-        "posterior_tree_candidate_count_mean",
-        "posterior_tree_small_space_splits",
-        "posterior_tree_selected_limit_mean",
-        "posterior_tree_model_max_trees_mean",
-    ]
     param_cols_ordered = [c for c in PARAM_COLS if c != "wf_run_id"]
 
     key_cols = [
@@ -1923,7 +1840,6 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         + scored_cols
         + non_scored_metric_cols
         + param_cols_ordered
-        + posterior_tail_cols
     )
     df = pd.DataFrame(rows)
     # 只保留存在的列，并按首次出现去重，避免重复列名触发后续 reindex 异常。
@@ -3448,10 +3364,6 @@ def reorder_comparison_columns(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
     tail_order = [
-        "后验候选数均值",
-        "后验小搜索空间split数",
-        "后验选中树数均值",
-        "后验最大可用树数均值",
     ]
 
     ordered_cols = [col for col in preferred_order if col in df.columns]
@@ -3754,9 +3666,6 @@ def print_comparison_table(df: pd.DataFrame) -> None:
         COL_NAMES["val_rankic_ir_mean"],
         COL_NAMES["train_val_ir_gap"],
         COL_NAMES["best_iter_mean"],
-        COL_NAMES["posterior_tree_candidate_count_mean"],
-        COL_NAMES["posterior_tree_small_space_splits"],
-        COL_NAMES["posterior_tree_selected_limit_mean"],
         COL_NAMES["label_column"],
         COL_NAMES["task"],
         COL_NAMES["n_estimators"],

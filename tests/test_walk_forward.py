@@ -382,86 +382,6 @@ class TestWalkForwardSplits:
         with pytest.raises(ValueError, match="selected_split_indices"):
             _filter_splits_by_selected_indices(splits, [0, 4])
 
-    def test_resolve_posterior_tree_candidate_limits_auto_grid(self):
-        """测试候选树数后验选优的自动网格解析。"""
-        from scripts.walk_forward import _resolve_posterior_tree_candidate_limits
-
-        args = types.SimpleNamespace(posterior_tree_candidates="")
-        candidates = _resolve_posterior_tree_candidate_limits(
-            args,
-            max_trees=300,
-            base_best_iteration=27,
-        )
-
-        assert candidates == [8, 12, 16, 24, 27, 32, 48, 64, 96, 128, 192, 256, 300]
-
-    def test_select_posterior_tree_model_prefers_best_candidate(self, monkeypatch):
-        """测试后验选优会按验证指标选择最佳候选树数。"""
-        from scripts import walk_forward as wf
-
-        class DummyModel:
-            def __init__(self):
-                self.n_estimators = 128
-
-            def predict(self, X, iteration_range=None):
-                return np.zeros(len(X))
-
-        def fake_eval(model, df_val, feature_columns, original_return_col, task, topk_values, emit_logs):
-            limit = getattr(model, "tree_limit", None)
-            if limit == 32:
-                return {"daily_rankic_ir": 0.8, "daily_rankic_mean": 0.05, "top30_return_mean": 0.01}
-            if limit == 64:
-                return {"daily_rankic_ir": 0.8, "daily_rankic_mean": 0.09, "top30_return_mean": 0.03}
-            return {"daily_rankic_ir": 0.5, "daily_rankic_mean": 0.03, "top30_return_mean": 0.00}
-
-        monkeypatch.setattr(wf, "evaluate_validation_daily", fake_eval)
-
-        args = types.SimpleNamespace(
-            posterior_tree_selection_mode="grid",
-            posterior_tree_candidates="32,64,96",
-            label_column="y_ret_20",
-            task="regression",
-        )
-        df_val = pd.DataFrame(
-            {
-                "trade_date": ["20240102"],
-                "ts_code": ["000001.SZ"],
-                "y_ret_20": [0.1],
-            }
-        )
-
-        model, metrics, meta = wf._select_posterior_tree_model(
-            model=DummyModel(),
-            feature_columns=[],
-            df_val=df_val,
-            args=args,
-            topk_values=[30],
-            train_params={"best_iteration": 10},
-            model_label="test",
-        )
-
-        assert isinstance(model, TreeLimitedModel)
-        assert model.tree_limit == 64
-        assert metrics["daily_rankic_mean"] == 0.09
-        assert meta["posterior_tree_selected_limit"] == 64
-        assert meta["posterior_tree_base_best_iteration"] == 10
-
-    def test_resolve_model_max_trees_prefers_booster_rounds(self):
-        """测试树数上限优先使用 booster 实际轮数，避免 n_estimators 虚高。"""
-        from scripts.walk_forward import _resolve_model_max_trees
-
-        class DummyBooster:
-            def num_boosted_rounds(self):
-                return 614
-
-        class DummyXGBModel:
-            n_estimators = 5000
-
-            def get_booster(self):
-                return DummyBooster()
-
-        assert _resolve_model_max_trees(DummyXGBModel()) == 614
-
     def test_tree_limited_model_getattr_safe_before_base_model_ready(self):
         """测试反序列化早期未恢复 base_model 时 __getattr__ 不会递归。"""
         model = TreeLimitedModel.__new__(TreeLimitedModel)
@@ -982,8 +902,6 @@ class TestWalkForwardCSV:
                 signal_confidence_gate_top_k=8,
                 signal_confidence_gate_thresholds=[0.1, 0.3],
                 signal_confidence_gate_exposure_levels=[0.4, 1.0],
-                posterior_tree_selection_mode="grid",
-                posterior_tree_candidates="32,64,96",
             )
 
             # 写入文件

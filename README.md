@@ -98,7 +98,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 **训练验证协议拆分为 `ES / Calibration / Embargo` 三段** (v0.81.1):
 - `val_es` 只参与 early stopping 与 `best_iteration` 选择。
-- `val_calib` 只参与候选比较、后验树数选择与稳定性诊断，避免同一块验证集被反复用于“训练内选优”。
+- `val_calib` 只参与候选比较、验证评估与稳定性诊断，避免同一块验证集被反复用于“训练内选优”。
 - `val_embargo` 继续隔离测试期前沿标签窗口，并新增 `val_calib_*` 统计字段落盘，方便回看每次训练真实使用的验证区间。
 
 **TopK 逐日评估新增样本覆盖保护** (v0.81.1):
@@ -175,7 +175,6 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - `scripts/compare_walk_forward.py` 将 `最大深度`、`学习率`、`rank权重TopK`、`rank权重值` 前置到实验对比表前部，便于扫参时快速横向比较。
 - `选股综合得分` 后紧跟其 3 个构成指标：`RankIC均值`、`ICIR`、`Top30超额均值`。
 - 新增自适应候选重训与多种子 bagging 相关列展示（含低迭代重试上限、多种子保留比例/最少保留模型数）。
-- `后验候选数均值` 与其后续 3 个后验统计列移动到表尾，主指标阅读路径更清晰。
 
 **模型持久化改用 XGBoost 原生格式，消除跨版本 pickle 告警** (v0.77.28):
 - `register_model()` 优先使用 `model.save_model()` 保存为 `.json` 原生格式，避免 XGBoost 版本升级后 pickle 反序列化产生 `UserWarning`。
@@ -224,11 +223,9 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - `scripts/walk_forward.py` 在训练窗口、验证评估、测试评估与部署训练链路统一加入主板过滤（`market=主板`），训练数据不再混入 `.BJ` 样本。
 - OOS 重点面板中的 Top20/Top30 最新名单与 hit rate 口径与交易链路保持一致，不再出现“评估含.BJ、交易不含.BJ”的偏差。
 
-**OOS重点指标面板 + posterior可配置扩展 + 对比表重点前置** (v0.77.17):
+**OOS重点指标面板 + 对比表重点前置** (v0.77.17):
 - `scripts/walk_forward.py` 新增 OOS 重点面板（Top20/Top30 最新名单、命中率、收益中位数、超额）并默认启用简洁输出；新增 `--oos-detail-metrics` 可按需切回每个 split 的详细对比日志。
-- 候选树数后验选优新增 `--posterior-tree-selection-metric` 与 `--posterior-tree-selection-topk`，支持按 TopK 口径（默认 Top20）或 RankIC 指标选树，并完整写入 summary / metadata。
 - `scripts/compare_walk_forward.py` 将 KEY 重点字段前置到“实验对比/逐Split明细”，并在 Excel 中用浅黄色高亮重点列，便于快速定位 Top20/Top30 核心信号。
-- `scripts/batch/batch_walk_forward.ps1` 新增 `$posterior_tree_selection_metric` 与 `$posterior_tree_selection_topk` 并自动透传，支持批量实验中快速开关与回退。
 
 **训练特征重要性三列紧凑打印** (v0.77.14):
 - 特征重要性输出从单列长列表改为 3 列对齐格式，行数缩减约 2/3，内容完整保留。
@@ -290,11 +287,6 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - 修复 `src/lazybull/ml/ensemble.py` 中 `TreeLimitedModel.__getattr__` 在 joblib 反序列化阶段的递归访问问题，避免 `maximum recursion depth exceeded`
 - 当 `base_model` 尚未恢复时，属性代理会安全返回 `AttributeError`，不再进入无限递归
 - 该修复直接覆盖 walk-forward OOS 回测加载已注册模型路径，避免 split 训练后在回测加载阶段中断
-
-**候选树数后验选优（walk-forward / deploy）** (v0.77.0):
-- `scripts/walk_forward.py` 新增 `--posterior-tree-selection-mode`（`disabled|grid`）与 `--posterior-tree-candidates`：训练完成后可直接对候选树数网格做逐日验证评估，用后验口径决定最终模型复杂度，而不再完全依赖 early stopping 的单点 `best_iteration`
-- 默认使用验证集逐日 `RankIC IR` 为主排序、逐日 `RankIC` 均值为次排序；最终选中的树数上限会直接作用于 walk-forward OOS、模型注册与 deploy 模型落盘
-- `scripts/batch/batch_walk_forward.ps1` 新增 `$posterior_tree_selection_mode` 与 `$posterior_tree_candidates`，可在批量实验中直接开启；summary / 模型 metadata / `ml_train_runs.csv` 也会同步记录 `posterior_tree_*` 字段，便于回看基础 `best_iteration` 与后验选中的最终树数
 
 **特征稳定性筛选低自由度告警修复** (v0.76.4):
 - `src/lazybull/ml/train_core.py` 的 `filter_stable_features()` 移除无效的 `np.errstate` 告警抑制，改为在相关系数计算前做有效配对样本数和零方差校验
