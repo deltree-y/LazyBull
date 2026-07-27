@@ -217,23 +217,8 @@ COL_NAMES = {
     "oos_backtest_months": "OOS回测月数",
     "bt_top_n": "回测TopN",
     # 盈亏动态持仓
-    "enable_profit_based_holding": "盈亏动态持仓",
-    "early_exit_loss_threshold": "早退亏损阈值",
-    "early_exit_holding_ratio": "早退持仓比例",
-    "profit_extension_threshold": "盈利延持阈值",
-    "profit_extension_days": "盈利延持天数",
-    "profit_extension_mode": "盈利延持模式",
-    "profit_extension_strength_threshold": "强势度阈值",
     # ATR 动态阈值与仓位缩放
-    "use_atr_for_early_exit": "ATR动态阈值",
-    "atr_multiplier": "ATR倍数",
     # 亏损提前换出二次确认
-    "early_exit_mode": "早退模式",
-    "early_exit_strength_protect_threshold": "早退保护阈值",
-    "early_exit_max_reprieves": "早退最大缓刑",
-    "time_stop_loss_enabled": "时间止损",
-    "time_stop_loss_days": "时间止损天数",
-    "time_stop_loss_profit_ratio": "时间止损利润阈值",
     # 行业轮动加权
     "industry_rotation_enhanced": "行业轮动加权",
     "industry_rotation_alpha": "轮动Alpha",
@@ -260,8 +245,6 @@ COL_NAMES = {
     "market_regime_ma250_atr_scaling": "MA250 ATR缩放",
     "stagger_tranches": "分批调仓批数",
     # 整体持仓止盈
-    "take_profit_threshold": "整体止盈阈值",
-    "take_profit_refill": "止盈后补仓",
     "enable_early_rebalance_on_empty": "空仓提前调仓",
     "skip_training": "跳过训练",
     "start_model_version": "起始模型版本",
@@ -406,23 +389,8 @@ PARAM_COLS = [
     "bt_equity_curve_recovery_step",
     "bt_equity_curve_recovery_delay_periods",
     # 盈亏动态持仓
-    "enable_profit_based_holding",
-    "early_exit_loss_threshold",
-    "early_exit_holding_ratio",
-    "profit_extension_threshold",
-    "profit_extension_days",
-    "profit_extension_mode",
-    "profit_extension_strength_threshold",
     # ATR 动态阈值与仓位缩放
-    "use_atr_for_early_exit",
-    "atr_multiplier",
     # 亏损提前换出二次确认
-    "early_exit_mode",
-    "early_exit_strength_protect_threshold",
-    "early_exit_max_reprieves",
-    "time_stop_loss_enabled",
-    "time_stop_loss_days",
-    "time_stop_loss_profit_ratio",
     # 行业轮动加权
     "industry_momentum_filter",
     "industry_momentum_bottom_pct",
@@ -449,8 +417,6 @@ PARAM_COLS = [
     "market_regime_ma250_atr_scaling",
     "stagger_tranches",
     # 整体持仓止盈
-    "take_profit_threshold",
-    "take_profit_refill",
     "enable_early_rebalance_on_empty",
     "skip_training",
     "start_model_version",
@@ -560,21 +526,6 @@ TRADE_PARAM_KEYS = [
     "bt_equity_curve_recovery_mode",
     "bt_equity_curve_recovery_step",
     "bt_equity_curve_recovery_delay_periods",
-    "enable_profit_based_holding",
-    "early_exit_loss_threshold",
-    "early_exit_holding_ratio",
-    "profit_extension_threshold",
-    "profit_extension_days",
-    "profit_extension_mode",
-    "profit_extension_strength_threshold",
-    "use_atr_for_early_exit",
-    "atr_multiplier",
-    "early_exit_mode",
-    "early_exit_strength_protect_threshold",
-    "early_exit_max_reprieves",
-    "time_stop_loss_enabled",
-    "time_stop_loss_days",
-    "time_stop_loss_profit_ratio",
     "industry_momentum_filter",
     "industry_momentum_bottom_pct",
     "industry_rotation_enhanced",
@@ -598,8 +549,6 @@ TRADE_PARAM_KEYS = [
     "market_regime_ma250_exposure",
     "market_regime_ma250_atr_scaling",
     "stagger_tranches",
-    "take_profit_threshold",
-    "take_profit_refill",
     "enable_early_rebalance_on_empty",
 ]
 
@@ -944,20 +893,6 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
             "market_regime_ma250_exposure",
             "market_regime_ma250_atr_scaling",
             "stagger_tranches",
-            "enable_profit_based_holding",
-            "early_exit_loss_threshold",
-            "early_exit_holding_ratio",
-            "profit_extension_threshold",
-            "profit_extension_days",
-            "profit_extension_mode",
-            "profit_extension_strength_threshold",
-            "use_atr_for_early_exit",
-            "atr_multiplier",
-            "early_exit_mode",
-            "early_exit_strength_protect_threshold",
-            "early_exit_max_reprieves",
-            "take_profit_threshold",
-            "take_profit_refill",
             "enable_early_rebalance_on_empty",
         )
         return params
@@ -1071,46 +1006,15 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
     if not _is_true_param_value(params.get("market_regime_drawdown_guard")):
         clear("market_regime_drawdown_threshold")
 
-    if not _is_true_param_value(params.get("enable_profit_based_holding")):
         clear(
-            "early_exit_loss_threshold",
-            "early_exit_holding_ratio",
-            "profit_extension_threshold",
-            "profit_extension_days",
-            "profit_extension_mode",
-            "profit_extension_strength_threshold",
-            "use_atr_for_early_exit",
-            "atr_multiplier",
-            "early_exit_mode",
-            "early_exit_strength_protect_threshold",
-            "early_exit_max_reprieves",
-            "time_stop_loss_enabled",
-            "time_stop_loss_days",
-            "time_stop_loss_profit_ratio",
         )
     else:
-        profit_extension_mode = _normalize_param_text(params.get("profit_extension_mode"))
-        if profit_extension_mode != "pnl":
-            clear("profit_extension_threshold")
-        if profit_extension_mode != "strength":
-            clear("profit_extension_strength_threshold")
-        if profit_extension_mode == "disabled":
-            clear("profit_extension_days")
 
-        if not _is_true_param_value(params.get("use_atr_for_early_exit")):
-            clear("atr_multiplier")
 
-        if _normalize_param_text(params.get("early_exit_mode")) != "strength_veto":
             clear(
-                "early_exit_strength_protect_threshold",
-                "early_exit_max_reprieves",
             )
 
-        if not _is_true_param_value(params.get("time_stop_loss_enabled")):
-            clear("time_stop_loss_days", "time_stop_loss_profit_ratio")
 
-    if _is_missing_param_value(params.get("take_profit_threshold")):
-        clear("take_profit_refill")
 
     return params
 

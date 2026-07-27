@@ -390,34 +390,12 @@ class BacktestEngineML(BacktestEngine):
 
         return ranked_candidates
 
-    # ── ATR 功能 hook 覆写 ────────────────────────────────────────────
-
-    def _build_position_extra_info(self, date: pd.Timestamp, stock: str) -> Dict:
-        """买入时从 features_by_date 读取买入日 ATR%，用于 ATR 动态止损
-
-        仅当 enable_profit_based_holding 且 use_atr_for_early_exit 同时开启时生效。
-        直接使用预计算的 atr_pct_14（=atr_14/close_adj），无需在运行时查询价格。
-        """
-        if not (self.enable_profit_based_holding and self.use_atr_for_early_exit):
-            return {}
-        date_str = date.strftime('%Y%m%d')
-        features_df = self.features_by_date.get(date_str)
-        if features_df is None or 'atr_pct_14' not in features_df.columns:
-            return {}
-        row = features_df[features_df['ts_code'] == stock]
-        if row.empty:
-            return {}
-        atr_pct = row['atr_pct_14'].iloc[0]
-        if pd.isna(atr_pct) or atr_pct <= 0:
-            return {}
-        return {'buy_atr_pct': float(atr_pct)}
 
     def _get_holding_features_row(
         self, date: pd.Timestamp, stock: str
     ) -> Optional[pd.Series]:
         """覆写基类 hook:从 features_by_date 读取持仓股票的截面特征行
 
-        供 HoldingStrengthScorer 在 profit_extension_mode='strength' 时使用。
         缺失时返回 None,scorer 会降级到中位分。
         """
         date_str = date.strftime('%Y%m%d')

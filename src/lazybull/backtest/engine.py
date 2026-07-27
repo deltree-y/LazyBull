@@ -21,7 +21,6 @@ from ..risk.weakness_exit import WeaknessExitConfig, WeaknessExitMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..signals.base import Signal
 from ..universe.base import Universe
-from .holding_strength import HoldingStrengthScorer, HoldingStrengthWeights
 
 
 def _format_rebalance_decision_summary(
@@ -225,26 +224,6 @@ class BacktestEngine:
         max_per_industry: Optional[int] = None,  # 新增：单行业最大持仓数量
         stock_basic: Optional[pd.DataFrame] = None,  # 新增：股票基本信息（用于行业约束）
         stagger_tranches: int = 1,  # 分批调仓批次数（1=不分批）
-        enable_profit_based_holding: bool = False,  # 是否启用盈亏动态持仓时长
-        early_exit_loss_threshold: float = -0.05,  # 亏损提前换出阈值（达到持有期比例后生效）
-        early_exit_holding_ratio: float = 0.6,  # 亏损提前换出最早触发时点（持有期比例）
-        profit_extension_threshold: float = 0.05,  # 盈利延续持有阈值
-        profit_extension_days: int = 5,  # 盈利延续持有额外天数（交易日）
-        profit_extension_mode: str = "pnl",  # "pnl"=原浮盈单维判据 | "strength"=多维度强势度 | "disabled"=关闭
-        profit_extension_strength_threshold: float = 0.6,  # strength 模式下的延续阈值 [0,1]
-        profit_extension_strength_weights: Optional[Dict[str, float]] = None,  # 强势度 5 维度权重
-        use_atr_for_early_exit: bool = False,  # 是否用个股 ATR 动态替代固定止损阈值
-        atr_multiplier: float = 2.0,  # ATR 倍数（亏损超过 N×ATR% 时触发提前换出）
-        early_exit_mode: str = "disabled",  # "disabled"=原硬卖 | "strength_veto"=二次确认门控
-        early_exit_strength_protect_threshold: float = 0.55,  # strength >= 此值时否决卖出
-        early_exit_max_reprieves: int = 2,  # 单只股票最多缓刑次数
-        take_profit_threshold: Optional[
-            float
-        ] = None,  # 整体持仓止盈阈值（None=禁用，如0.15=整体浮盈15%止盈）
-        take_profit_refill: bool = True,  # 整体止盈后是否触发自动补位买入
-        time_stop_loss_enabled: bool = True,  # 是否启用时间止损（持仓超限未达盈利要求提前换出）
-        time_stop_loss_days: int = 15,  # 时间止损触发最低持有天数（交易日）
-        time_stop_loss_profit_ratio: float = -0.02,  # 时间止损利润阈值（当前盈亏低于此值触发）
         weakness_exit_enabled: bool = False,  # 是否启用表现弱势退出
         weakness_exit_threshold: float = 0.6,  # 弱势评分触发阈值
         weakness_exit_consecutive_days: int = 3,  # 需连续弱势天数
@@ -293,8 +272,6 @@ class BacktestEngine:
                 开启后在固定持有期基础上叠加两个规则：
                 1. 亏损提前换出：持有达到持有期的 early_exit_holding_ratio 且亏损超过
                    early_exit_loss_threshold 时，提前换出（不等满持有期）
-                2. 盈利延续持有：持有期满时若盈利超过 profit_extension_threshold，
-                   允许延续持有 profit_extension_days 天（趋势跟踪）
             early_exit_loss_threshold: 亏损提前换出的盈亏率阈值，默认 -0.05（亏损5%）
             early_exit_holding_ratio: 亏损提前换出最早触发时点（占持有期比例），默认 0.6
             early_exit_mode: 亏损提前换出模式。"disabled"=原硬卖（默认），
@@ -304,8 +281,6 @@ class BacktestEngine:
                 评分 >= 此值时否决卖出，默认 0.55
             early_exit_max_reprieves: strength_veto 模式下单只股票最多缓刑次数，
                 防止无限拖延，默认 2
-            profit_extension_threshold: 盈利延续持有的盈亏率阈值，默认 0.05（盈利5%）
-            profit_extension_days: 盈利延续持有的额外天数（交易日），默认 5
             min_buy_value_ratio: 买入后最小持仓市值占“平均仓位市值”比例（0=关闭）。
                 与纸面交易口径一致：阈值=总资产/目标持仓数*比例。
         """
@@ -360,68 +335,6 @@ class BacktestEngine:
             raise ValueError(f"分批调仓批次数必须 >= 1，当前值: {stagger_tranches}")
         self.stagger_tranches = stagger_tranches
 
-        # 盈亏动态持仓参数
-        self.enable_profit_based_holding = enable_profit_based_holding
-        self.early_exit_loss_threshold = early_exit_loss_threshold
-        self.early_exit_holding_ratio = early_exit_holding_ratio
-        self.profit_extension_threshold = profit_extension_threshold
-        self.profit_extension_days = profit_extension_days
-        self.use_atr_for_early_exit = use_atr_for_early_exit
-        self.atr_multiplier = atr_multiplier
-        # ── 亏损提前换出二次确认（strength_veto）──
-        if early_exit_mode not in ("disabled", "strength_veto"):
-            raise ValueError(
-                f"early_exit_mode 必须为 disabled|strength_veto，当前值: {early_exit_mode}"
-            )
-        self.early_exit_mode = early_exit_mode
-        self.early_exit_strength_protect_threshold = early_exit_strength_protect_threshold
-        self.early_exit_max_reprieves = early_exit_max_reprieves
-        self.early_exit_strength_scorer: Optional[HoldingStrengthScorer] = None
-        self._early_exit_reprieve_counts: Dict[str, int] = {}
-        if early_exit_mode == "strength_veto":
-            # early_exit 专用权重：drawdown 归零（已知亏损，信息量低），
-            # 侧重 ML 分数和动量（模型是否看好、趋势是否恢复）
-            ee_weights = HoldingStrengthWeights(
-                ml_score=0.35, momentum=0.30, technical=0.20,
-                fund_flow=0.15, drawdown=0.00,
-            )
-            self.early_exit_strength_scorer = HoldingStrengthScorer(self, ee_weights)
-            logger.info(
-                f"亏损提前换出模式=strength_veto, "
-                f"保护阈值={early_exit_strength_protect_threshold:.2f}, "
-                f"最大缓刑次数={early_exit_max_reprieves}, "
-                f"权重={ee_weights.normalize().as_dict()}"
-            )
-        # ── 盈利延续持有模式（多维度强势度评分）──
-        if profit_extension_mode not in ("pnl", "strength", "disabled"):
-            raise ValueError(
-                f"profit_extension_mode 必须为 pnl|strength|disabled，当前值: {profit_extension_mode}"
-            )
-        self.profit_extension_mode = profit_extension_mode
-        self.profit_extension_strength_threshold = profit_extension_strength_threshold
-        self.profit_extension_strength_weights = profit_extension_strength_weights
-        self.holding_strength_scorer: Optional[HoldingStrengthScorer] = None
-        if profit_extension_mode == "strength":
-            weights_obj = HoldingStrengthWeights.from_dict(profit_extension_strength_weights)
-            self.holding_strength_scorer = HoldingStrengthScorer(self, weights_obj)
-            logger.info(
-                f"盈利延续持有模式=strength, 阈值={profit_extension_strength_threshold:.2f}, "
-                f"权重={weights_obj.normalize().as_dict()}"
-            )
-        elif profit_extension_mode == "disabled":
-            logger.info("盈利延续持有模式=disabled, 持有期满直接卖出")
-        else:
-            logger.info(
-                f"盈利延续持有模式=pnl(原浮盈单维), 阈值={profit_extension_threshold:.2%}, "
-                f"延续天数={profit_extension_days}"
-            )
-        # 整体持仓止盈参数
-        self.take_profit_threshold = take_profit_threshold
-        self.take_profit_refill = take_profit_refill
-        # 时间止损参数
-        self.time_stop_loss_enabled = time_stop_loss_enabled
-        self.time_stop_loss_days = time_stop_loss_days
-        self.time_stop_loss_profit_ratio = time_stop_loss_profit_ratio
         # 表现弱势退出
         self.weakness_exit_enabled = weakness_exit_enabled
         self.weakness_exit_monitor: Optional[WeaknessExitMonitor] = None
@@ -495,7 +408,6 @@ class BacktestEngine:
         self.pending_condition_sells: Dict[str, Dict] = (
             {}
         )  # {股票代码: {trigger_date, sell_type}} 待条件卖出队列（T0 触发、T1 执行）
-        self._pending_take_profit_info: Optional[Dict] = None  # 止盈元数据（延迟到执行日处理）
         self._cycle_anchor_idx: int = 0  # 当前调仓周期起点 idx（用于 cycle_day 日志显示）
         self.portfolio_values: List[Dict] = []  # 组合价值历史
         self.trades: List[Dict] = []  # 交易记录
@@ -554,10 +466,7 @@ class BacktestEngine:
             f"最小买入阈值={'关闭' if self.min_buy_value_ratio <= 0 else f'{self.min_buy_value_ratio:.2f}'}, "
             f"补齐窗口={completion_window_days}天, "
             f"止损功能={'启用' if (stop_loss_config and stop_loss_config.enabled) else '禁用'}, "
-            f"时间止损={'启用' if time_stop_loss_enabled else '禁用'}"
-            f"({time_stop_loss_days}天, {time_stop_loss_profit_ratio:.0%})" if time_stop_loss_enabled else "", ", "
-            f"弱势退出={'启用' if weakness_exit_enabled else '禁用'}"
-            f"(阈值{weakness_exit_threshold:.0%})" if weakness_exit_enabled else "", ", "
+            f"弱势退出={'启用' if weakness_exit_enabled else '禁用'}, "
             f"空仓提前调仓={'启用' if enable_early_rebalance_on_empty else '禁用'}, "
             f"详细日志={'开启' if verbose else '关闭'}"
         )
@@ -1005,20 +914,6 @@ class BacktestEngine:
 
         return len(buy_items), len(sell_items), lines
 
-    def _format_profit_extension_summary(self, items: List[Dict]) -> str:
-        """压缩盈利延续持有日志。"""
-        details = []
-        for item in items:
-            score = item.get("score")
-            score_suffix = f",{score:.2f}" if score is not None else ""
-            details.append(
-                f"{item['stock']}({item['holding_days']}d,{item['profit_rate']:+.1%}{score_suffix})"
-            )
-        return (
-            f"盈利延续[{self.profit_extension_mode}] {len(items)}只: "
-            f"{self._format_compact_items(details, limit=6)}"
-        )
-
     def _format_completion_summary(
         self,
         success_items: List[Dict],
@@ -1046,18 +941,13 @@ class BacktestEngine:
         """重置当日需汇总展示的压缩事件。"""
         self._daily_warning_items = {
             "early_rebalance": [],
-            "profit_extension": [],
             "duplicate_buy": [],
             "position_unfilled": [],
             "completion_skipped": [],
             "completion_abandoned": [],
-            "early_exit_trigger": [],
             "pending_order_added": [],
             "pending_order_success": [],
             "pending_order_expired": [],
-            "take_profit": [],
-            "time_stop_loss_trigger": [],
-            "time_stop_loss_veto": [],
         }
 
     def _record_pending_order_event(self, event: Dict) -> None:
@@ -1157,67 +1047,10 @@ class BacktestEngine:
             }
         )
 
-    def _record_early_exit_trigger(
-        self, stock: str, holding_days: int, profit_rate: float
-    ) -> None:
-        """记录亏损提前换出触发。"""
-        self._daily_warning_items.setdefault("early_exit_trigger", []).append(
-            {
-                "stock": stock,
-                "holding_days": int(holding_days),
-                "profit_rate": float(profit_rate),
-            }
-        )
-
     def _record_early_rebalance_summary(self, label: str, detail: str) -> None:
         """记录提前调仓相关事件，日终统一汇总。"""
         self._daily_warning_items.setdefault("early_rebalance", []).append(
             {"label": label, "detail": detail}
-        )
-
-    def _record_profit_extension_count(self, count: int) -> None:
-        """记录当日盈利延续数量，供日终信号摘要使用。"""
-        if count <= 0:
-            return
-        self._daily_warning_items.setdefault("profit_extension", []).append(
-            {"count": int(count)}
-        )
-
-    def _record_take_profit_summary(
-        self, profit_rate: float, threshold: float, n_positions: int
-    ) -> None:
-        """记录整体止盈触发，日终统一汇总。"""
-        self._daily_warning_items.setdefault("take_profit", []).append(
-            {
-                "profit_rate": float(profit_rate),
-                "threshold": float(threshold),
-                "n_positions": int(n_positions),
-            }
-        )
-
-    def _record_time_stop_loss_trigger(
-        self, stock: str, holding_days: int, profit_rate: float
-    ) -> None:
-        """记录时间止损触发。"""
-        self._daily_warning_items.setdefault("time_stop_loss_trigger", []).append(
-            {
-                "stock": stock,
-                "holding_days": int(holding_days),
-                "profit_rate": float(profit_rate),
-            }
-        )
-
-    def _record_time_stop_loss_veto(
-        self, stock: str, holding_days: int, profit_rate: float, score: float
-    ) -> None:
-        """记录时间止损被强势度否决。"""
-        self._daily_warning_items.setdefault("time_stop_loss_veto", []).append(
-            {
-                "stock": stock,
-                "holding_days": int(holding_days),
-                "profit_rate": float(profit_rate),
-                "score": float(score),
-            }
         )
 
     def _build_daily_signal_log(self, date: pd.Timestamp) -> Optional[str]:
@@ -1239,10 +1072,7 @@ class BacktestEngine:
 
         sell_label_map = {
             "holding_period": "持有期",
-            "early_exit": "亏损换出",
-            "time_stop_loss": "时间止损",
             "weakness_exit": "表现弱势",
-            "take_profit": "止盈",
             "rebalance": "调仓",
         }
         stop_loss_label_map = {
@@ -1269,10 +1099,7 @@ class BacktestEngine:
         for label in (
             "调仓",
             "持有期",
-            "亏损换出",
-            "时间止损",
             "表现弱势",
-            "止盈",
             "回撤止损",
             "移动止损",
             "连续跌停",
@@ -1283,12 +1110,7 @@ class BacktestEngine:
             if count > 0:
                 sell_groups.append((label, count))
 
-        extension_count = sum(
-            int(item.get("count", 0) or 0)
-            for item in self._daily_warning_items.get("profit_extension", [])
-        )
-
-        if not buy_groups and not sell_groups and extension_count <= 0:
+        if not buy_groups and not sell_groups:
             return None
 
         parts = []
@@ -1296,8 +1118,6 @@ class BacktestEngine:
             parts.append(f"卖[{_format_groups(sell_groups)}]")
         if buy_groups:
             parts.append(f"买[{_format_groups(buy_groups)}]")
-        if extension_count > 0:
-            parts.append(f"延续[{extension_count}]")
 
         return f"信号: {' | '.join(parts)}"
 
@@ -1371,17 +1191,6 @@ class BacktestEngine:
                 )
             lines.append(f"补齐放弃: {self._format_compact_items(labels, limit=3)}")
 
-        early_exit_items = self._daily_warning_items.get("early_exit_trigger", [])
-        if early_exit_items:
-            labels = [
-                f"{item['stock']}({item['holding_days']}d,{item['profit_rate']:+.1%})"
-                for item in early_exit_items
-            ]
-            lines.append(
-                f"亏损换出: 触发{len(early_exit_items)}"
-                f"[{self._format_compact_items(labels, limit=6)}]"
-            )
-
         pending_order_added_items = self._daily_warning_items.get("pending_order_added", [])
         if pending_order_added_items:
             groups = []
@@ -1453,42 +1262,6 @@ class BacktestEngine:
                     )
             if groups:
                 lines.append(f"延迟订单放弃: {' | '.join(groups)}")
-
-        take_profit_items = self._daily_warning_items.get("take_profit", [])
-        if take_profit_items:
-            details = [
-                (
-                    f"触发[{item['profit_rate']:+.1%}>={item['threshold']:+.1%}, "
-                    f"{item['n_positions']}只次日卖出]"
-                )
-                for item in take_profit_items
-            ]
-            lines.append(f"整体止盈: {self._format_compact_items(details)}")
-
-        time_trigger_items = self._daily_warning_items.get("time_stop_loss_trigger", [])
-        time_veto_items = self._daily_warning_items.get("time_stop_loss_veto", [])
-        if time_trigger_items or time_veto_items:
-            parts = []
-            if time_trigger_items:
-                trigger_labels = [
-                    f"{item['stock']}({item['holding_days']}d,{item['profit_rate']:+.1%})"
-                    for item in time_trigger_items
-                ]
-                parts.append(
-                    f"触发{len(time_trigger_items)}[{self._format_compact_items(trigger_labels)}]"
-                )
-            if time_veto_items:
-                veto_labels = [
-                    (
-                        f"{item['stock']}({item['holding_days']}d,"
-                        f"{item['profit_rate']:+.1%},{item['score']:.2f})"
-                    )
-                    for item in time_veto_items
-                ]
-                parts.append(
-                    f"否决{len(time_veto_items)}[{self._format_compact_items(veto_labels)}]"
-                )
-            lines.append(f"时间止损: {' | '.join(parts)}")
 
         return lines
 
@@ -2562,73 +2335,6 @@ class BacktestEngine:
                 )
             )
 
-    def _evaluate_profit_extension_for_stock(
-        self,
-        stock: str,
-        date: pd.Timestamp,
-        info: Dict,
-        holding_days: int,
-        profit_rate: float,
-    ):
-        """评估单只持仓是否应盈利延续保护（不卖出）。
-
-        Args:
-            stock: 股票代码
-            date: 评估日期
-            info: 持仓信息字典
-            holding_days: 已持有交易日数
-            profit_rate: 当前盈亏率（后复权口径）
-
-        Returns:
-            (should_extend: bool, log_detail: str)
-        """
-        if not self.enable_profit_based_holding:
-            return False, ""
-
-        if self.profit_extension_mode == "disabled":
-            return False, "模式=disabled"
-
-        within_extension_window = (
-            holding_days < self.holding_period + self.profit_extension_days
-        )
-
-        if not within_extension_window:
-            return False, (
-                f"超过延续窗口(持有{holding_days}天, "
-                f"上限{self.holding_period + self.profit_extension_days}天)"
-            )
-
-        if self.profit_extension_mode == "strength":
-            if self.holding_strength_scorer is not None:
-                breakdown = self.holding_strength_scorer.score(
-                    stock=stock,
-                    date=date,
-                    position_info=info,
-                    profit_rate=profit_rate,
-                )
-                if breakdown.total >= self.profit_extension_strength_threshold:
-                    return True, (
-                        f"强势度={breakdown.total:.3f} "
-                        f">= 阈值={self.profit_extension_strength_threshold:.2f}"
-                    )
-                else:
-                    return False, (
-                        f"强势度={breakdown.total:.3f} "
-                        f"< 阈值={self.profit_extension_strength_threshold:.2f}"
-                    )
-            return False, "强势度评分器缺失"
-
-        # pnl 模式（默认）
-        if profit_rate >= self.profit_extension_threshold:
-            return True, (
-                f"盈亏={profit_rate:.2%} "
-                f">= 阈值={self.profit_extension_threshold:.2%}"
-            )
-        return False, (
-            f"盈亏={profit_rate:.2%} "
-            f"< 阈值={self.profit_extension_threshold:.2%}"
-        )
-
     def _queue_rebalance_sells(
         self,
         date: pd.Timestamp,
@@ -2661,7 +2367,6 @@ class BacktestEngine:
             new_signal_stocks = set()
 
         sell_count = 0
-        protected_count = 0
 
         for stock, info in list(self.positions.items()):
             # 跳过已在其他卖出队列中的持仓
@@ -2684,33 +2389,6 @@ class BacktestEngine:
             if holding_days < max(0, self.holding_period - 1):
                 continue
 
-            # 评估盈利延续保护
-            if self.enable_profit_based_holding:
-                current_pnl_price = self._get_pnl_price(date, stock)
-                if current_pnl_price is None:
-                    continue
-                buy_pnl_price = info.get("buy_pnl_price")
-                if (
-                    current_pnl_price
-                    and buy_pnl_price
-                    and not pd.isna(buy_pnl_price)
-                    and buy_pnl_price > 0
-                ):
-                    profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
-                else:
-                    profit_rate = 0.0
-
-                should_extend, _detail = self._evaluate_profit_extension_for_stock(
-                    stock=stock,
-                    date=date,
-                    info=info,
-                    holding_days=holding_days,
-                    profit_rate=profit_rate,
-                )
-                if should_extend:
-                    protected_count += 1
-                    continue
-
             # 排队到 T+1 卖出
             self.pending_condition_sells[stock] = {
                 "trigger_date": date,
@@ -2718,26 +2396,21 @@ class BacktestEngine:
             }
             sell_count += 1
 
-        if sell_count > 0 or protected_count > 0:
-            parts = [f"调仓日同步卖出: {sell_count} 只排队到 T+1 卖出"]
-            if protected_count > 0:
-                parts.append(f"{protected_count} 只盈利延续保护")
-            logger.info("，".join(parts))
+        if sell_count > 0:
+            logger.info(f"调仓日同步卖出: {sell_count} 只排队到 T+1 卖出")
 
     def _check_and_sell(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
     ) -> None:
         """检查卖出条件并生成 T0 卖出信号
 
-        - 整体止盈、亏损提前换出：写入 pending_condition_sells 队列（Tn+1 执行）
-        - 持有期到期、盈利延续到期：写入 pending_condition_sells 队列（Tn+1 执行）
+        - 持有期到期：写入 pending_condition_sells 队列（Tn+1 执行）
 
         Args:
             date: 当前日期
             trading_dates: 交易日列表
             date_to_idx: 日期到索引的映射
         """
-        profit_extension_items: List[Dict[str, Optional[float]]] = []
         holding_period_sell_slot_weights: List[Dict[str, float]] = []
 
         current_idx = date_to_idx.get(date)
@@ -2754,46 +2427,11 @@ class BacktestEngine:
             and stock not in self.pending_stop_loss_sells
         }
 
-        # ── 整体持仓止盈检查（Tn 检查，写入队列，Tn+1 执行）──────────
-        # 盈亏基准：上次调仓日的组合净值（衡量"本轮调仓以来的盈利"）
-        if (
-            self.take_profit_threshold is not None
-            and positions_to_check
-            and self._last_rebalance_nav is not None
-            and self._last_rebalance_nav > 0
-        ):
-            current_nav = self._calculate_portfolio_value(date)
-            portfolio_profit_rate = (
-                current_nav - self._last_rebalance_nav
-            ) / self._last_rebalance_nav
-            if portfolio_profit_rate >= self.take_profit_threshold:
-                n_positions = len(positions_to_check)
-                self._record_take_profit_summary(
-                    profit_rate=portfolio_profit_rate,
-                    threshold=self.take_profit_threshold,
-                    n_positions=n_positions,
-                )
-                for stock in positions_to_check:
-                    self.pending_condition_sells[stock] = {
-                        "trigger_date": date,
-                        "sell_type": "take_profit",
-                    }
-                # 暂存止盈元数据，延迟到执行日处理补位和NAV重置
-                self._pending_take_profit_info = {
-                    "trigger_date": date,
-                    "n_positions": n_positions,
-                    "ranked_candidates": list(self._last_ranked_candidates),
-                    "signal_date": self._last_signal_date or date,
-                }
-                return  # 跳过后续逐只判断
-        # ── 整体止盈检查结束 ──────────────────────────────────────────
-
         for stock, info in positions_to_check.items():
             buy_date = info["buy_date"]
             buy_idx = date_to_idx.get(buy_date)
 
-            # 以实际买入日作为持有期起点，确保每只股票都持满 holding_period 个交易日
-            # （原以 signal_date 为起点会导致补齐仓位实际持有天数不足，低估收益、高估换手率）
+            # 以实际买入日作为持有期起点
             anchor_idx = buy_idx
             if anchor_idx is None:
                 signal_date = info.get("signal_date", buy_date)
@@ -2805,7 +2443,7 @@ class BacktestEngine:
             # 计算持有天数（交易日）
             holding_days = current_idx - anchor_idx
 
-            # ── 表现弱势退出：纯价格表现评估，独立于 enable_profit_based_holding ──
+            # ── 表现弱势退出：纯价格表现评估 ──
             if (
                 self.weakness_exit_monitor is not None
                 and stock not in self.pending_condition_sells
@@ -2825,251 +2463,24 @@ class BacktestEngine:
                         "sell_type": "weakness_exit",
                         "weakness_detail": weakness_detail,
                     }
-                    # 表现弱势卖出后, 记录卖出槽位权重，用于后续自动补位
-                    #slot_weight = self._get_position_weight_for_planning(
-                    #    date, stock, portfolio_value=portfolio_value_for_planning
-                    #)*0.01  # 弱势退出的补位权重较小，避免过度补位导致频繁换入换出（可调整系数以适应不同策略）
-                    #holding_period_sell_slot_weights.append(
-                    #    {"stock": stock, "weight": slot_weight}
-                    #)
                     continue
 
-            if self.enable_profit_based_holding:
-                # 计算当前盈亏率（使用后复权价格口径）
-                current_pnl_price = self._get_pnl_price(date, stock)
-                if current_pnl_price is None:
-                    # 停牌或无价格数据时，无法评估当前盈亏，跳过亏损提前换出检查
-                    # 注意：不能用 buy_trade_price 作为 fallback，因为它是不复权价格，
-                    # 与后复权的 buy_pnl_price 混用会导致盈亏率严重失真
-                    continue
-                buy_pnl_price = info.get("buy_pnl_price")
-                if (
-                    current_pnl_price
-                    and buy_pnl_price
-                    and not pd.isna(buy_pnl_price)
-                    and buy_pnl_price > 0
-                ):
-                    profit_rate = (current_pnl_price - buy_pnl_price) / buy_pnl_price
-                else:
-                    profit_rate = 0.0
-
-                early_exit_holding = max(
-                    1, int(self.holding_period * self.early_exit_holding_ratio)
+            # 持有期到期 → T0 生成卖出信号，T+1 执行
+            if holding_days >= self.holding_period:
+                self.pending_condition_sells[stock] = {
+                    "trigger_date": date,
+                    "sell_type": "holding_period",
+                }
+                holding_period_sell_slot_weights.append(
+                    {
+                        "stock": stock,
+                        "weight": self._get_position_weight_for_planning(
+                            date,
+                            stock,
+                            portfolio_value=portfolio_value_for_planning,
+                        ),
+                    }
                 )
-
-                if holding_days >= self.holding_period:
-                    # ── 盈利延续持有决策 ─────────────────────────────
-                    # 根据 profit_extension_mode 分派到不同判据:
-                    #  - pnl:      原浮盈率 >= profit_extension_threshold(向后兼容)
-                    #  - strength: 多维度强势度评分 >= profit_extension_strength_threshold
-                    #  - disabled: 不延续,直接卖出
-                    should_extend = False
-                    extend_log_detail = ""
-                    within_extension_window = (
-                        holding_days < self.holding_period + self.profit_extension_days
-                    )
-
-                    if self.profit_extension_mode == "disabled":
-                        should_extend = False
-                    elif self.profit_extension_mode == "strength":
-                        if within_extension_window and self.holding_strength_scorer is not None:
-                            breakdown = self.holding_strength_scorer.score(
-                                stock=stock,
-                                date=date,
-                                position_info=info,
-                                profit_rate=profit_rate,
-                            )
-                            if breakdown.total >= self.profit_extension_strength_threshold:
-                                should_extend = True
-                                extend_log_detail = (
-                                    f"强势度={breakdown.total:.3f} "
-                                    f">= 阈值={self.profit_extension_strength_threshold:.2f}, "
-                                    f"{breakdown.to_log_str()}"
-                                )
-                            else:
-                                extend_log_detail = (
-                                    f"强势度={breakdown.total:.3f} "
-                                    f"< 阈值={self.profit_extension_strength_threshold:.2f}, "
-                                    f"{breakdown.to_log_str()}"
-                                )
-                    else:  # pnl 模式(默认,向后兼容)
-                        if (
-                            profit_rate >= self.profit_extension_threshold
-                            and within_extension_window
-                        ):
-                            should_extend = True
-                            extend_log_detail = (
-                                f"盈亏={profit_rate:.2%} "
-                                f">= 阈值={self.profit_extension_threshold:.2%}"
-                            )
-
-                    if should_extend:
-                        score = breakdown.total if self.profit_extension_mode == "strength" else None
-                        profit_extension_items.append(
-                            {
-                                "stock": stock,
-                                "holding_days": holding_days,
-                                "profit_rate": profit_rate,
-                                "score": score,
-                            }
-                        )
-                        continue  # 延续持有，跳过卖出
-
-                    # strength 模式下打印未延续的分项评分(便于归因)
-                    if (
-                        self.profit_extension_mode == "strength"
-                        and extend_log_detail
-                        and self.verbose
-                    ):
-                        logger.info(
-                            f"  持有期满不延续[strength]: {stock} 持有{holding_days}天, "
-                            f"{extend_log_detail}"
-                        )
-
-                    # 持有期到期（含延续到期）→ T0 生成卖出信号，T+1 执行
-                    self.pending_condition_sells[stock] = {
-                        "trigger_date": date,
-                        "sell_type": "holding_period",
-                    }
-                    holding_period_sell_slot_weights.append(
-                        {
-                            "stock": stock,
-                            "weight": self._get_position_weight_for_planning(
-                                date,
-                                stock,
-                                portfolio_value=portfolio_value_for_planning,
-                            ),
-                        }
-                    )
-                else:
-                    # 计算实际止损阈值（ATR 动态 or 固定）
-                    threshold = self.early_exit_loss_threshold
-                    threshold_desc = f"固定({threshold:.2%})"
-                    if self.use_atr_for_early_exit:
-                        buy_atr_pct = info.get("buy_atr_pct")
-                        if buy_atr_pct is not None and not np.isnan(buy_atr_pct):
-                            threshold = -self.atr_multiplier * buy_atr_pct
-                            threshold_desc = f"ATR动态({threshold:.2%})"
-                        else:
-                            threshold_desc += "(ATR缺失,用固定)"
-
-                    if holding_days >= early_exit_holding and profit_rate <= threshold:
-                        # strength_veto 二次确认：评分高于保护阈值时否决卖出（缓刑）
-                        if (
-                            self.early_exit_mode == "strength_veto"
-                            and self.early_exit_strength_scorer is not None
-                        ):
-                            reprieve_count = self._early_exit_reprieve_counts.get(
-                                stock, 0
-                            )
-                            if reprieve_count < self.early_exit_max_reprieves:
-                                breakdown = self.early_exit_strength_scorer.score(
-                                    stock=stock,
-                                    date=date,
-                                    position_info=info,
-                                    profit_rate=profit_rate,
-                                )
-                                if (
-                                    breakdown.total
-                                    >= self.early_exit_strength_protect_threshold
-                                ):
-                                    self._early_exit_reprieve_counts[stock] = (
-                                        reprieve_count + 1
-                                    )
-                                    logger.warning(
-                                        f"  亏损换出否决[strength_veto]: {stock} "
-                                        f"持有{holding_days}天, "
-                                        f"盈亏={profit_rate:.2%} <= {threshold_desc}, "
-                                        f"但强势度={breakdown.total:.3f} >= "
-                                        f"{self.early_exit_strength_protect_threshold:.2f}"
-                                        f", 缓刑({reprieve_count + 1}/"
-                                        f"{self.early_exit_max_reprieves}), "
-                                        f"{breakdown.to_log_str()}"
-                                    )
-                                    continue  # 否决卖出，跳过
-
-                        # 亏损提前换出 → 盘后发现，写入队列 Tn+1 执行
-                        self._record_early_exit_trigger(
-                            stock=stock,
-                            holding_days=holding_days,
-                            profit_rate=profit_rate,
-                        )
-                        self.pending_condition_sells[stock] = {
-                            "trigger_date": date,
-                            "sell_type": "early_exit",
-                        }
-
-                    # ── 时间止损：持仓超过指定天数后仍未达到最低盈利要求 → 提前换出 ──
-                    if (
-                        self.time_stop_loss_enabled
-                        and stock not in self.pending_condition_sells
-                        and holding_days >= self.time_stop_loss_days
-                        and holding_days >= early_exit_holding
-                    ):
-                        if profit_rate < self.time_stop_loss_profit_ratio:
-                            # strength_veto 二次确认（共用 early_exit_strength_scorer）
-                            if (
-                                self.early_exit_mode == "strength_veto"
-                                and self.early_exit_strength_scorer is not None
-                            ):
-                                reprieve_count = self._early_exit_reprieve_counts.get(
-                                    stock, 0
-                                )
-                                if reprieve_count < self.early_exit_max_reprieves:
-                                    breakdown = self.early_exit_strength_scorer.score(
-                                        stock=stock,
-                                        date=date,
-                                        position_info=info,
-                                        profit_rate=profit_rate,
-                                    )
-                                    if (
-                                        breakdown.total
-                                        >= self.early_exit_strength_protect_threshold
-                                    ):
-                                        self._early_exit_reprieve_counts[stock] = (
-                                            reprieve_count + 1
-                                        )
-                                        self._record_time_stop_loss_veto(
-                                            stock=stock,
-                                            holding_days=holding_days,
-                                            profit_rate=profit_rate,
-                                            score=breakdown.total,
-                                        )
-                                        continue  # 否决卖出
-
-                            self._record_time_stop_loss_trigger(
-                                stock=stock,
-                                holding_days=holding_days,
-                                profit_rate=profit_rate,
-                            )
-                            self.pending_condition_sells[stock] = {
-                                "trigger_date": date,
-                                "sell_type": "time_stop_loss",
-                            }
-
-            else:
-                # 原始逻辑：达到持有期后在 T0 生成卖出信号，T+1 执行
-                if holding_days >= self.holding_period:
-                    self.pending_condition_sells[stock] = {
-                        "trigger_date": date,
-                        "sell_type": "holding_period",
-                    }
-                    # 与动态持仓分支保持一致：持有期卖出时同步生成次日补位计划，
-                    # 避免出现 T+1 只卖不买导致空仓/短周期抖动。
-                    holding_period_sell_slot_weights.append(
-                        {
-                            "stock": stock,
-                            "weight": self._get_position_weight_for_planning(
-                                date,
-                                stock,
-                                portfolio_value=portfolio_value_for_planning,
-                            ),
-                        }
-                    )
-
-        if profit_extension_items:
-            self._record_profit_extension_count(len(profit_extension_items))
-            logger.info(self._format_profit_extension_summary(profit_extension_items))
 
         if holding_period_sell_slot_weights:
             self._queue_condition_sell_refill_signal(
@@ -3216,43 +2627,6 @@ class BacktestEngine:
                 continue
             self._sell_stock(date, stock, sell_type=info["sell_type"])
             self.pending_condition_sells.pop(stock, None)
-
-        # 处理延迟的止盈元数据（补位 + NAV 重置）
-        if (
-            self._pending_take_profit_info
-            and self._pending_take_profit_info["trigger_date"] == trigger_date
-        ):
-            tp = self._pending_take_profit_info
-            self._pending_take_profit_info = None
-            # 重置调仓基准 NAV（卖出后的现金净值），使"本调仓"从 0 重新计量
-            self._last_rebalance_nav = self._calculate_portfolio_value(date)
-            # 写入补位 unfilled_slots
-            n_positions = tp["n_positions"]
-            if (
-                self.take_profit_refill
-                and self.enable_position_completion
-                and tp["ranked_candidates"]
-                and tp["trigger_date"] not in self.unfilled_slots
-            ):
-                weight = 1.0 / n_positions if n_positions > 0 else 0.0
-                unfilled_slot_weights = [
-                    {"stock": f"__tp_{i}__", "weight": weight, "filled": False}
-                    for i in range(n_positions)
-                ]
-                self.unfilled_slots[tp["trigger_date"]] = {
-                    "unfilled_count": n_positions,
-                    "unfilled_slot_weights": unfilled_slot_weights,
-                    "target_n": n_positions,
-                    "ranked_candidates": list(tp["ranked_candidates"]),
-                    "signal_date": tp["signal_date"],
-                    "first_attempt_date": date,  # 执行日（Tn+1），补位从此日起算
-                    "attempts": 0,
-                    "tranche_idx": 0,
-                }
-                logger.info(
-                    f"  整体止盈补位: 已写入 {n_positions} 个补位槽，自动补仓"
-                    f"（候选池 {len(tp['ranked_candidates'])} 只）"
-                )
 
         # 实际卖出明细统一在每日总结下一行展示，这里不再单独输出卖出执行日志。
 
@@ -4307,9 +3681,6 @@ class BacktestEngine:
         # 更新持仓和资金
         del self.positions[stock]
         self.current_capital += sell_proceeds
-
-        # 清理亏损提前换出的缓刑计数
-        self._early_exit_reprieve_counts.pop(stock, None)
 
         # 如果是止损卖出，清理止损监控器中的持仓状态
         if sell_type == "stop_loss" and self.stop_loss_monitor:

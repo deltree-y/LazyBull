@@ -1141,11 +1141,8 @@ class PaperBroker:
         trade_dates_list = self._get_open_trade_dates() if current_date else []
         config = self.storage.load_config() or {}
         rebalance_freq = int(config.get('rebalance_freq', 20))
-        extension_days = int(config.get('profit_extension_days', 5))
-        extension_enabled = bool(config.get('enable_profit_based_holding', False))
-        extension_mode = str(config.get('profit_extension_mode', 'pnl'))
         max_holding_days = rebalance_freq
-        if extension_enabled and extension_mode != 'disabled':
+        if extension_mode != 'disabled':
             max_holding_days += max(0, extension_days)
         for ts_code, pos in positions.items():
             raw_price = current_prices.get(ts_code)

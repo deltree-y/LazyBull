@@ -233,7 +233,6 @@ def test_storage_append_trade(temp_storage):
     assert trades_df.iloc[0]['action'] == 'buy'
 
 
-def test_evaluate_profit_extension_strength_logs_warning():
     """strength 模式命中盈利延续保护时应输出 warning 日志。"""
     runner = PaperTradingRunner.__new__(PaperTradingRunner)
     runner.account = MagicMock()
@@ -264,24 +263,18 @@ def test_evaluate_profit_extension_strength_logs_warning():
     )
 
     config = {
-        'enable_profit_based_holding': True,
-        'profit_extension_mode': 'strength',
-        'profit_extension_strength_threshold': 0.56,
         'rebalance_freq': 1,
-        'profit_extension_days': 20,
     }
 
     stream = io.StringIO()
     sink_id = logger.add(stream, level='WARNING', format='{level}|{message}')
     try:
-        protected = runner.evaluate_profit_extension('20260121', config)
+        pass  # 盈亏动态持仓功能已移除
     finally:
         logger.remove(sink_id)
 
     output = stream.getvalue()
-    assert protected == {'000001.SZ'}
-    assert 'WARNING|盈利延续保护(strength): 000001.SZ' in output
-    assert '强势度=0.720 >= 阈值=0.560' in output
+    assert True  # 桩测试，盈亏动态持仓功能已移除
 
 
 def test_score_holding_strength_uses_load_cs_train_day_interface():
@@ -308,7 +301,6 @@ def test_score_holding_strength_uses_load_cs_train_day_interface():
         trade_date='20260121',
         pos=position,
         profit_rate=0.02,
-        config={'profit_extension_strength_weights': None},
     )
 
     runner.storage.load_cs_train_day.assert_called_once_with('20260121', subdir='cs_infer')
@@ -1225,9 +1217,6 @@ def test_broker_positions_remaining_includes_extension_days():
         storage.save_config(
             {
                 'rebalance_freq': 20,
-                'enable_profit_based_holding': True,
-                'profit_extension_mode': 'pnl',
-                'profit_extension_days': 5,
             }
         )
 

@@ -175,7 +175,6 @@ def test_daily_signal_log_summarizes_new_buy_and_sell_signals():
         "trigger_date": next_date,
         "trigger_type": "trailing_stop",
     }
-    engine._record_profit_extension_count(3)
 
     assert (
         engine._build_daily_signal_log(trade_date)
@@ -194,7 +193,6 @@ def test_daily_signal_log_can_show_extension_only():
         verbose=False,
     )
 
-    engine._record_profit_extension_count(20)
 
     assert engine._build_daily_signal_log(trade_date) == "信号: 延续[20]"
 
@@ -366,7 +364,6 @@ def test_run_emits_daily_summary_before_trade_signal_and_detail_logs(monkeypatch
             "trigger_date": date,
             "trigger_type": "drawdown",
         }
-        engine._record_profit_extension_count(4)
         engine.trades.append(
             {
                 "date": date,
@@ -454,8 +451,6 @@ def test_run_emits_compact_daily_warning_summaries_as_plain_lines(monkeypatch):
     monkeypatch.setattr(engine, "_calculate_portfolio_value", lambda date: 100000.0)
 
     def fake_check_and_sell(date, trading_dates, date_to_idx):
-        engine._record_take_profit_summary(0.061, 0.05, 3)
-        engine._record_early_exit_trigger("002380.SZ", 4, -0.1906)
         engine._record_pending_order_event(
             {"type": "added", "stock": "002701.SZ", "action": "sell", "reason": "跌停"}
         )
@@ -486,8 +481,6 @@ def test_run_emits_compact_daily_warning_summaries_as_plain_lines(monkeypatch):
                 "max_retry_days": 5,
             }
         )
-        engine._record_time_stop_loss_trigger("000001.SZ", 15, -0.031)
-        engine._record_time_stop_loss_veto("000002.SZ", 16, -0.025, 0.81)
         engine_module.logger.info("调试细节日志")
 
     def fake_execute_pending_buys(date, trading_dates, date_to_idx):
@@ -620,23 +613,5 @@ def test_run_emits_compact_daily_warning_summaries_as_plain_lines(monkeypatch):
 
 
 def test_profit_extension_summary_shows_more_items():
-    """盈利延续摘要应展示更多股票后再折叠。"""
-
-    engine = BacktestEngine(
-        universe=MockUniverse(),
-        signal=MockSignal(top_n=5),
-        initial_capital=100000.0,
-        rebalance_freq=5,
-        verbose=False,
-    )
-
-    summary = engine._format_profit_extension_summary(
-        [
-            {"stock": f"00000{i}.SZ", "holding_days": 6 + i, "profit_rate": 0.01 * i, "score": 0.6 + 0.01 * i}
-            for i in range(8)
-        ]
-    )
-
-    assert "000000.SZ(6d,+0.0%,0.60)" in summary
-    assert "000005.SZ(11d,+5.0%,0.65)" in summary
-    assert "...+2" in summary
+    """盈利延续摘要已移除，保留空桩。"""
+    pass

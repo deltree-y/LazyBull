@@ -93,27 +93,6 @@ def build_walk_forward_trading_config(args, *, model_version: int) -> TradingCon
         kelly_vol_window=getattr(args, "kelly_vol_window", 60),
         kelly_max_leverage=getattr(args, "kelly_max_leverage", 0.25),
         min_buy_value_ratio=getattr(args, "min_buy_value_ratio", 0.2),
-        enable_profit_based_holding=getattr(args, "enable_profit_based_holding", False),
-        early_exit_loss_threshold=getattr(args, "early_exit_loss_threshold", -0.05),
-        early_exit_holding_ratio=getattr(args, "early_exit_holding_ratio", 0.6),
-        profit_extension_threshold=getattr(args, "profit_extension_threshold", 0.05),
-        profit_extension_days=getattr(args, "profit_extension_days", 5),
-        profit_extension_mode=getattr(args, "profit_extension_mode", "pnl"),
-        profit_extension_strength_threshold=getattr(
-            args, "profit_extension_strength_threshold", 0.6
-        ),
-        profit_extension_strength_weights=getattr(
-            args, "profit_extension_strength_weights", None
-        ),
-        use_atr_for_early_exit=getattr(args, "use_atr_for_early_exit", False),
-        atr_multiplier=getattr(args, "atr_multiplier", 2.0),
-        early_exit_mode=getattr(args, "early_exit_mode", "disabled"),
-        early_exit_strength_protect_threshold=getattr(
-            args, "early_exit_strength_protect_threshold", 0.55
-        ),
-        early_exit_max_reprieves=getattr(args, "early_exit_max_reprieves", 2),
-        take_profit_threshold=getattr(args, "take_profit_threshold", None),
-        take_profit_refill=getattr(args, "take_profit_refill", True),
         initial_capital=getattr(args, "bt_initial_capital", 1000000.0),
         sell_price=getattr(args, "bt_sell_timing", "open"),
     )
@@ -205,26 +184,6 @@ def create_backtest_engine_from_config(
         kelly_vol_window=trading_config.kelly_vol_window,
         kelly_max_leverage=trading_config.kelly_max_leverage,
         min_buy_value_ratio=trading_config.min_buy_value_ratio,
-        enable_profit_based_holding=trading_config.enable_profit_based_holding,
-        early_exit_loss_threshold=trading_config.early_exit_loss_threshold,
-        early_exit_holding_ratio=trading_config.early_exit_holding_ratio,
-        profit_extension_threshold=trading_config.profit_extension_threshold,
-        profit_extension_days=trading_config.profit_extension_days,
-        profit_extension_mode=trading_config.profit_extension_mode,
-        profit_extension_strength_threshold=trading_config.profit_extension_strength_threshold,
-        profit_extension_strength_weights=trading_config.profit_extension_strength_weights,
-        use_atr_for_early_exit=trading_config.use_atr_for_early_exit,
-        atr_multiplier=trading_config.atr_multiplier,
-        early_exit_mode=trading_config.early_exit_mode,
-        early_exit_strength_protect_threshold=(
-            trading_config.early_exit_strength_protect_threshold
-        ),
-        early_exit_max_reprieves=trading_config.early_exit_max_reprieves,
-        take_profit_threshold=trading_config.take_profit_threshold,
-        take_profit_refill=trading_config.take_profit_refill,
-        time_stop_loss_enabled=trading_config.time_stop_loss_enabled,
-        time_stop_loss_days=trading_config.time_stop_loss_days,
-        time_stop_loss_profit_ratio=trading_config.time_stop_loss_profit_ratio,
         weakness_exit_enabled=trading_config.weakness_exit_enabled,
         weakness_exit_threshold=trading_config.weakness_exit_threshold,
         weakness_exit_consecutive_days=trading_config.weakness_exit_consecutive_days,

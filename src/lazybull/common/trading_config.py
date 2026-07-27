@@ -24,20 +24,6 @@ class TradingConfig:
     # ── 组合 ──
     top_n: int = 30
 
-    # ── 盈利延续持有模式（强势度评分）──
-    # pnl=原单一浮盈判据(向后兼容,默认) | strength=多维度强势度评分 | disabled=关闭延续机制
-    profit_extension_mode: str = "pnl"
-    profit_extension_strength_threshold: float = 0.6  # strength 模式延续阈值 [0, 1]
-    profit_extension_strength_weights: Dict[str, float] = field(
-        default_factory=lambda: {
-            "ml_score": 0.30,
-            "momentum": 0.25,
-            "technical": 0.15,
-            "fund_flow": 0.15,
-            "drawdown": 0.15,
-        }
-    )
-
     rebalance_freq: Optional[int] = 20
     stagger_tranches: int = 1
     max_per_industry: Optional[int] = None
@@ -95,29 +81,6 @@ class TradingConfig:
     kelly_vol_window: int = 60  # Kelly 波动率估计窗口（交易日）
     kelly_max_leverage: float = 0.25  # 单只股票 Kelly 仓位上限（占总资产）
 
-    # ── 盈亏动态持仓 ──
-    enable_profit_based_holding: bool = True  # 是否启用盈亏动态持仓
-    early_exit_loss_threshold: float = -0.07  # 亏损提前换出阈值
-    early_exit_holding_ratio: float = 0.5  # 最早触发时点（占持有期比例）
-    profit_extension_threshold: float = 0.1  # 盈利延续持有阈值（pnl模式）
-    profit_extension_days: int = 2  # 盈利延续额外天数
-
-    # ── 亏损提前换出二次确认（strength_veto 门控）──
-    early_exit_mode: str = "disabled"  # disabled|strength_veto
-    early_exit_strength_protect_threshold: float = 0.1  # strength_veto保护阈值
-    early_exit_max_reprieves: int = 1  # 单只股票最多缓刑次数
-
-    # ── ATR 动态止损 ──
-    use_atr_for_early_exit: bool = False  # 用ATR替代固定阈值
-    atr_multiplier: float = 2.0  # ATR 动态止损乘数
-
-    # ── 时间止损 ──
-    # 持仓超过指定天数后仍未达到最低盈利要求，视为"死钱"触发提前换出
-    # 本功能独立于 enable_profit_based_holding，但需在 enable_profit_based_holding=True 时生效
-    time_stop_loss_enabled: bool = True  # 是否启用时间止损
-    time_stop_loss_days: int = 15  # 触发时间止损的最低持有天数（交易日）
-    time_stop_loss_profit_ratio: float = -0.02  # 时间止损利润阈值（当前盈亏低于此值触发）
-
     # ── 表现弱势退出 ──
     # 纯价格表现评估，零模型依赖。每日用累计收益排名、连续下跌天数、
     # 回撤深度、回升乏力 4 个维度识别弱势股并提前换出
@@ -128,10 +91,6 @@ class TradingConfig:
     weakness_exit_weights: str = "30,25,25,20"  # 4 维度权重（逗号分隔，百分比）
     weakness_exit_industry_filter: bool = False  # 是否叠加弱势行业过滤
     weakness_exit_industry_bottom_pct: float = 0.3  # 行业底部百分位阈值
-
-    # ── 整体止盈 ──
-    take_profit_threshold: Optional[float] = None  # 整体浮盈阈值（None=禁用）
-    take_profit_refill: bool = True  # 整体止盈后是否自动补位
 
     # ── 其他（仅 paper_trade 使用，backtest 不需要） ──
     buy_price: str = "close"
@@ -154,9 +113,6 @@ class TradingConfig:
         normalized = dict(d)
         if "position_sizing" not in normalized and "weight_method" in normalized:
             normalized["position_sizing"] = normalized["weight_method"]
-        # 向后兼容旧字段名
-        if "atr_multiplier" not in normalized and "early_exit_atr_multiplier" in normalized:
-            normalized["atr_multiplier"] = normalized["early_exit_atr_multiplier"]
         filtered = {k: v for k, v in normalized.items() if k in valid_keys}
         return cls(**filtered)
 
@@ -165,32 +121,12 @@ class TradingConfig:
         """从 argparse Namespace 构建 TradingConfig。
 
         只取 TradingConfig 中定义的字段，忽略其余 CLI 参数。
-        额外处理：将 profit_extension_strength_w_* 5 个独立 CLI 权重参数
-        合并为 profit_extension_strength_weights 字典字段。
         """
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         args_dict = vars(args)
-        if "atr_multiplier" not in args_dict and "early_exit_atr_multiplier" in args_dict:
-            args_dict["atr_multiplier"] = args_dict["early_exit_atr_multiplier"]
 
         d = {k: v for k, v in args_dict.items() if k in valid_keys}
 
-        # 合并盈利延续持有强势度权重（5 个 CLI 参数 → dict 字段）
-        weight_keys = (
-            "profit_extension_strength_w_ml",
-            "profit_extension_strength_w_momentum",
-            "profit_extension_strength_w_technical",
-            "profit_extension_strength_w_fund",
-            "profit_extension_strength_w_drawdown",
-        )
-        if any(k in args_dict for k in weight_keys):
-            d["profit_extension_strength_weights"] = {
-                "ml_score": float(args_dict.get("profit_extension_strength_w_ml", 0.30)),
-                "momentum": float(args_dict.get("profit_extension_strength_w_momentum", 0.25)),
-                "technical": float(args_dict.get("profit_extension_strength_w_technical", 0.15)),
-                "fund_flow": float(args_dict.get("profit_extension_strength_w_fund", 0.15)),
-                "drawdown": float(args_dict.get("profit_extension_strength_w_drawdown", 0.15)),
-            }
         return cls(**d)
 
     def to_dict(self) -> dict:
@@ -365,56 +301,6 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=float,
         default=0.5,
         help="持仓保留奖励幅度，截面分数标准差的倍数（默认：0.5）",
-    )
-
-    # ── 盈利延续持有模式（强势度评分）──
-    parser.add_argument(
-        "--profit-extension-mode",
-        type=str,
-        default="pnl",
-        choices=["pnl", "strength", "disabled"],
-        help=(
-            "盈利延续持有判据模式："
-            "pnl=原单一浮盈判据(默认,兼容)；"
-            "strength=多维度强势度评分(ML+动量+技术+资金+回撤)；"
-            "disabled=关闭延续机制"
-        ),
-    )
-    parser.add_argument(
-        "--profit-extension-strength-threshold",
-        type=float,
-        default=0.6,
-        help="strength 模式的延续阈值 [0,1]，高于此值才延续持有（默认：0.6）",
-    )
-    parser.add_argument(
-        "--profit-extension-strength-w-ml",
-        type=float,
-        default=0.30,
-        help="strength 模式 ML 分数维度权重（默认：0.30）",
-    )
-    parser.add_argument(
-        "--profit-extension-strength-w-momentum",
-        type=float,
-        default=0.25,
-        help="strength 模式 动量维度权重（默认：0.25）",
-    )
-    parser.add_argument(
-        "--profit-extension-strength-w-technical",
-        type=float,
-        default=0.15,
-        help="strength 模式 技术维度权重（默认：0.15）",
-    )
-    parser.add_argument(
-        "--profit-extension-strength-w-fund",
-        type=float,
-        default=0.15,
-        help="strength 模式 资金筹码维度权重（默认：0.15）",
-    )
-    parser.add_argument(
-        "--profit-extension-strength-w-drawdown",
-        type=float,
-        default=0.15,
-        help="strength 模式 回撤距离维度权重（默认：0.15）",
     )
 
     # ── 市场自适应 Top-N ──
@@ -745,122 +631,7 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         help="Kelly 单只股票仓位上限（占总资产），默认 0.25",
     )
 
-    # ── 盈亏动态持仓 ──
-    parser.add_argument(
-        "--enable-profit-based-holding",
-        action="store_true",
-        default=True,
-        dest="enable_profit_based_holding",
-        help="启用盈亏动态持仓（默认：启用）",
-    )
-    parser.add_argument(
-        "--no-profit-based-holding",
-        action="store_false",
-        dest="enable_profit_based_holding",
-        help="关闭盈亏动态持仓",
-    )
-    parser.add_argument(
-        "--early-exit-loss-threshold",
-        type=float,
-        default=-0.07,
-        help="亏损提前换出阈值（默认：-0.07）",
-    )
-    parser.add_argument(
-        "--early-exit-holding-ratio",
-        type=float,
-        default=0.5,
-        help="亏损提前换出最早触发时点，占持有期比例（默认：0.5）",
-    )
-    parser.add_argument(
-        "--profit-extension-threshold",
-        type=float,
-        default=0.1,
-        help="盈利延续持有阈值，pnl模式（默认：0.1）",
-    )
-    parser.add_argument(
-        "--profit-extension-days",
-        type=int,
-        default=2,
-        help="盈利延续额外交易日数（默认：2）",
-    )
-
-    # ── 亏损提前换出二次确认（strength_veto）──
-    parser.add_argument(
-        "--early-exit-mode",
-        type=str,
-        default="disabled",
-        choices=["disabled", "strength_veto"],
-        help="亏损提前换出模式：disabled=直接卖出, strength_veto=二次确认（默认：disabled）",
-    )
-    parser.add_argument(
-        "--early-exit-strength-protect-threshold",
-        type=float,
-        default=0.1,
-        help="strength_veto保护阈值 [0,1]（默认：0.1）",
-    )
-    parser.add_argument(
-        "--early-exit-max-reprieves",
-        type=int,
-        default=1,
-        help="单只股票最多缓刑次数（默认：1）",
-    )
-
-    # ── ATR 动态止损 ──
-    parser.add_argument(
-        "--use-atr-for-early-exit",
-        action="store_true",
-        default=False,
-        help="用ATR动态阈值替代固定early_exit_loss_threshold",
-    )
-    parser.add_argument(
-        "--atr-multiplier",
-        "--early-exit-atr-multiplier",
-        dest="atr_multiplier",
-        type=float,
-        default=2.0,
-        help="ATR动态止损乘数（默认2.0）",
-    )
-
-    # ── 时间止损 ──
-    parser.add_argument(
-        "--time-stop-loss-enabled",
-        action="store_true",
-        default=True,
-        help="启用时间止损：持仓超限未达盈利要求时提前换出",
-    )
-    parser.add_argument(
-        "--no-time-stop-loss",
-        dest="time_stop_loss_enabled",
-        action="store_false",
-        help="关闭时间止损",
-    )
-    parser.add_argument(
-        "--time-stop-loss-days",
-        type=int,
-        default=15,
-        help="时间止损最低持有天数（交易日），默认15",
-    )
-    parser.add_argument(
-        "--time-stop-loss-profit-ratio",
-        type=float,
-        default=-0.02,
-        help="时间止损利润阈值，当前盈亏低于此值时触发，默认-0.02（-2%%）",
-    )
-
-    # ── 整体止盈 ──
-    parser.add_argument(
-        "--take-profit-threshold",
-        type=float,
-        default=None,
-        help="整体持仓止盈阈值（如 0.15 表示整体浮盈15%%时清仓，默认禁用）",
-    )
-    parser.add_argument(
-        "--no-take-profit-refill",
-        dest="take_profit_refill",
-        action="store_false",
-        default=True,
-        help="整体止盈后不触发补位买入（默认开启补位）",
-    )
+    # ── 空仓提前调仓 ──
     parser.add_argument(
         "--no-early-rebalance-on-empty",
         dest="enable_early_rebalance_on_empty",

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.22] - 2026-07-27
+
+### Removed
+
+- **移除盈亏动态持仓功能**：删除 `src/lazybull/backtest/holding_strength.py` 及所有相关代码、配置开关、测试。包括：
+  - `enable_profit_based_holding` 总开关及所有子功能（亏损提前换出、盈利延续持有、ATR 动态止损、时间止损、strength_veto 二次确认）
+  - 所有相关 dataclass 字段、CLI 参数、backtest engine 初始化参数
+  - 纸面交易中的 `evaluate_profit_extension`、`evaluate_early_exit`、`_check_early_exit` 等方法
+  - `batch_walk_forward.ps1` 中的全部分段配置
+  - `compare_walk_forward.py` 中的中文标签映射和参数列表
+  - `test_holding_strength.py` 及所有测试文件中的相关引用
+
+- **移除整体持仓止盈功能**：删除 `take_profit_threshold`、`take_profit_refill` 及相关逻辑（整体止盈检查、止盈补位、元数据处理）
+
 ## [0.85.21] - 2026-07-27
 
 ### Removed

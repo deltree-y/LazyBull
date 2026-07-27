@@ -643,20 +643,6 @@ class TestWalkForwardCSV:
                 market_regime_ma250_threshold=1.02,
                 market_regime_ma250_exposure=0.5,
                 market_regime_ma250_atr_scaling=True,
-                enable_profit_based_holding=False,
-                early_exit_loss_threshold=-0.09,
-                early_exit_holding_ratio=1.0,
-                profit_extension_threshold=0.1,
-                profit_extension_days=5,
-                profit_extension_mode="pnl",
-                profit_extension_strength_threshold=0.75,
-                use_atr_for_early_exit=True,
-                atr_multiplier=2.8,
-                early_exit_mode="strength_veto",
-                early_exit_strength_protect_threshold=0.55,
-                early_exit_max_reprieves=2,
-                take_profit_threshold=None,
-                take_profit_refill=True,
                 enable_early_rebalance_on_empty=True,
             )
 
@@ -699,18 +685,6 @@ class TestWalkForwardCSV:
             assert pd.isna(row["market_regime_ma250_threshold"])
             assert pd.isna(row["market_regime_ma250_exposure"])
             assert pd.isna(row["market_regime_ma250_atr_scaling"])
-            assert pd.isna(row["early_exit_loss_threshold"])
-            assert pd.isna(row["early_exit_holding_ratio"])
-            assert pd.isna(row["profit_extension_threshold"])
-            assert pd.isna(row["profit_extension_days"])
-            assert pd.isna(row["profit_extension_mode"])
-            assert pd.isna(row["profit_extension_strength_threshold"])
-            assert pd.isna(row["use_atr_for_early_exit"])
-            assert pd.isna(row["atr_multiplier"])
-            assert pd.isna(row["early_exit_mode"])
-            assert pd.isna(row["early_exit_strength_protect_threshold"])
-            assert pd.isna(row["early_exit_max_reprieves"])
-            assert pd.isna(row["take_profit_refill"])
 
     def test_write_walk_forward_summary_keeps_composite_top_k_and_clears_drawdown_threshold(self):
         """composite 模式保留 top_k，关闭回撤保护时清空其阈值。"""
@@ -811,20 +785,6 @@ class TestWalkForwardCSV:
                 market_regime_ma250_threshold=1.02,
                 market_regime_ma250_exposure=0.5,
                 market_regime_ma250_atr_scaling=True,
-                enable_profit_based_holding=False,
-                early_exit_loss_threshold=-0.09,
-                early_exit_holding_ratio=1.0,
-                profit_extension_threshold=0.1,
-                profit_extension_days=5,
-                profit_extension_mode="pnl",
-                profit_extension_strength_threshold=0.75,
-                use_atr_for_early_exit=True,
-                atr_multiplier=2.8,
-                early_exit_mode="strength_veto",
-                early_exit_strength_protect_threshold=0.55,
-                early_exit_max_reprieves=2,
-                take_profit_threshold=0.15,
-                take_profit_refill=True,
                 enable_early_rebalance_on_empty=True,
             )
 
@@ -943,20 +903,6 @@ class TestWalkForwardCSV:
                 market_regime_ma250_threshold=1.02,
                 market_regime_ma250_exposure=0.5,
                 market_regime_ma250_atr_scaling=True,
-                enable_profit_based_holding=False,
-                early_exit_loss_threshold=-0.09,
-                early_exit_holding_ratio=1.0,
-                profit_extension_threshold=0.1,
-                profit_extension_days=5,
-                profit_extension_mode="pnl",
-                profit_extension_strength_threshold=0.75,
-                use_atr_for_early_exit=True,
-                atr_multiplier=2.8,
-                early_exit_mode="strength_veto",
-                early_exit_strength_protect_threshold=0.55,
-                early_exit_max_reprieves=2,
-                take_profit_threshold=0.15,
-                take_profit_refill=True,
                 enable_early_rebalance_on_empty=True,
             )
 

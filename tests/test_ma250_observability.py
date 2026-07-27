@@ -214,9 +214,6 @@ class TestCompareWalkForwardSummarySanitize:
                         "signal_gate_dynamic_topn": True,
                         "signal_gate_topn_high_multiplier": 0.5,
                         "signal_gate_topn_low_multiplier": 1.6,
-                        "enable_profit_based_holding": False,
-                        "profit_extension_mode": "pnl",
-                        "profit_extension_days": 5,
                         "market_regime": True,
                         "market_regime_mode": "binary",
                         "market_regime_drawdown_guard": True,
@@ -251,8 +248,6 @@ class TestCompareWalkForwardSummarySanitize:
             assert pd.isna(row1["signal_gate_dynamic_topn"])
             assert pd.isna(row1["signal_gate_topn_high_multiplier"])
             assert pd.isna(row1["signal_gate_topn_low_multiplier"])
-            assert pd.isna(row1["profit_extension_mode"])
-            assert pd.isna(row1["profit_extension_days"])
             assert str(row1["market_regime_drawdown_guard"]).lower() == "true"
             assert row1["market_regime_drawdown_threshold"] == -0.09
 
@@ -274,9 +269,6 @@ class TestCompareWalkForwardSummarySanitize:
                         "wf_run_id": "wf_a",
                         "split_index": 0,
                         "oos_backtest": True,
-                        "enable_profit_based_holding": False,
-                        "profit_extension_mode": "pnl",
-                        "profit_extension_days": 5,
                         "market_regime": True,
                         "market_regime_mode": "combined",
                         "market_regime_drawdown_guard": False,
@@ -291,9 +283,6 @@ class TestCompareWalkForwardSummarySanitize:
                         "wf_run_id": "wf_b",
                         "split_index": 0,
                         "oos_backtest": True,
-                        "enable_profit_based_holding": True,
-                        "profit_extension_mode": "strength",
-                        "profit_extension_strength_threshold": 0.75,
                         "market_regime": True,
                         "market_regime_mode": "combined",
                         "market_regime_drawdown_guard": True,
@@ -311,8 +300,6 @@ class TestCompareWalkForwardSummarySanitize:
             assert len(loaded) == 2
             row_a = loaded.loc[loaded["wf_run_id"] == "wf_a"].iloc[0]
             row_b = loaded.loc[loaded["wf_run_id"] == "wf_b"].iloc[0]
-            assert pd.isna(row_a["profit_extension_mode"])
-            assert row_b["profit_extension_mode"] == "strength"
             assert pd.isna(row_a["market_regime_drawdown_threshold"])
             assert row_b["market_regime_drawdown_threshold"] == -0.12
 

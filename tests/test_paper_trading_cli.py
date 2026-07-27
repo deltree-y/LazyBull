@@ -57,7 +57,6 @@ def test_save_and_load_config(temp_paper_storage):
     assert 'paper_trade:' in yaml_text
     assert '以下参数仅在 model_version_b 非 null 时生效' in yaml_text
     assert '止损总开关（关闭后以下止损参数整体不生效）' in yaml_text
-    assert '亏损提前换出基础阈值（enable_profit_based_holding=true 时始终生效）' in yaml_text
     assert '亏损提前换出二次确认子开关（disabled=原硬卖，strength_veto=启用二次确认）' in yaml_text
 
     json_path = Path(temp_paper_storage.root_path) / 'config.json'
@@ -72,7 +71,6 @@ def test_load_config_not_exist(temp_paper_storage):
 
 def test_load_grouped_yaml_config(temp_paper_storage):
     """测试分段 YAML 配置可直接加载为扁平配置视图"""
-    yaml_text = """# 纸面交易模板\nmodel:\n  model_version: 99\n  model_version_b: null\n  ensemble_weight_a: 0.5\nsignal_gate:\n  signal_gate_mode: composite\n  signal_gate_quality_enabled: true\nportfolio:\n  top_n: 12\n  rebalance_freq: 10\n  max_per_industry: 2\nholding_management:\n  take_profit_threshold: 0.18\n  take_profit_refill: false\nposition_management:\n  position_sizing: half_kelly\n  kelly_vol_window: 80\n  kelly_max_leverage: 0.2\npaper_trade:\n  buy_price: open\n  sell_price: close\n  initial_capital: 888888.0\n  horizon: 20\n  universe: mainboard\n"""
 
     yaml_path = Path(temp_paper_storage.root_path) / 'config.yaml'
     yaml_path.write_text(yaml_text, encoding='utf-8')
@@ -85,8 +83,6 @@ def test_load_grouped_yaml_config(temp_paper_storage):
     assert loaded_config['signal_gate_quality_enabled'] is True
     assert loaded_config['top_n'] == 12
     assert loaded_config['position_sizing'] == 'half_kelly'
-    assert loaded_config['take_profit_threshold'] == 0.18
-    assert loaded_config['take_profit_refill'] is False
     assert loaded_config['initial_capital'] == 888888.0
 
 

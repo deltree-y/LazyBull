@@ -75,11 +75,7 @@ def test_daily_holding_extension_strength_can_trigger_on_non_rebalance_day():
         )
 
         config = {
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
-            "profit_extension_strength_threshold": 0.56,
             "rebalance_freq": 2,
-            "profit_extension_days": 3,
         }
 
         protected, sell_actions = runner.evaluate_holding_period_actions("20240104", config)
@@ -116,7 +112,6 @@ def test_t0_should_plan_holding_period_sell_for_next_trade_day():
             "buy_price": "close",
             "sell_price": "open",
             "rebalance_freq": 20,
-            "enable_profit_based_holding": True,
         }
 
         actions = _plan_next_day_retry_and_sell_instructions(
@@ -124,8 +119,6 @@ def test_t0_should_plan_holding_period_sell_for_next_trade_day():
             "20240104",
             config,
             stop_loss_actions=[],
-            early_exit_actions=[],
-            take_profit_actions=[],
         )
 
         assert len(actions) == 1
@@ -208,11 +201,7 @@ def test_profit_rate_should_use_adjusted_price_for_extension_decision():
         )
 
         config = {
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "pnl",
-            "profit_extension_threshold": 0.1,
             "rebalance_freq": 2,
-            "profit_extension_days": 3,
             "buy_price": "close",
         }
 
@@ -277,10 +266,6 @@ def test_end_to_end_decision_alignment_with_backtest_on_same_window():
         cost_model=CostModel(),
         rebalance_freq=2,
         holding_period=2,
-        enable_profit_based_holding=True,
-        profit_extension_mode="pnl",
-        profit_extension_threshold=0.1,
-        profit_extension_days=2,
         verbose=False,
     )
     bt_engine._prepare_price_index(price_data)
@@ -327,11 +312,7 @@ def test_end_to_end_decision_alignment_with_backtest_on_same_window():
             )
         )
         cfg = {
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "pnl",
-            "profit_extension_threshold": 0.1,
             "rebalance_freq": 2,
-            "profit_extension_days": 2,
             "buy_price": "close",
         }
         protected, sell_actions = runner.evaluate_holding_period_actions("20240104", cfg)
@@ -372,15 +353,10 @@ def test_early_exit_should_not_trigger_after_holding_period_reached():
         )
 
         cfg = {
-            "enable_profit_based_holding": True,
             "rebalance_freq": 2,
-            "early_exit_holding_ratio": 0.5,
-            "early_exit_loss_threshold": -0.03,
             "buy_price": "close",
-            "early_exit_mode": "disabled",
         }
 
-        actions = runner.evaluate_early_exit("20240104", cfg)
         assert actions == []
 
 
@@ -429,11 +405,7 @@ def test_holding_strength_should_ensure_features_before_daily_evaluation(monkeyp
         monkeypatch.setattr("src.lazybull.paper.runner.ensure_features_for_date", _fake_ensure)
 
         cfg = {
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
-            "profit_extension_strength_threshold": 0.56,
             "rebalance_freq": 2,
-            "profit_extension_days": 3,
             "buy_price": "close",
         }
 

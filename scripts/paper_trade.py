@@ -46,9 +46,7 @@ from src.lazybull.paper import format_model_info as shared_format_model_info
 from src.lazybull.paper import (
     load_position_snapshot,
 )
-from src.lazybull.paper.runtime import _check_early_exit as shared_check_early_exit
 from src.lazybull.paper.runtime import _check_stop_loss as shared_check_stop_loss
-from src.lazybull.paper.runtime import _check_take_profit as shared_check_take_profit
 from src.lazybull.paper.runtime import (
     _execute_t0_if_rebalance_day as shared_execute_t0_if_rebalance_day,
 )
@@ -166,11 +164,7 @@ def run_main(args):
         logger.info(
             f"  行业动量过滤: 启用 (剔除后{config.get('industry_momentum_bottom_pct', 0.2):.0%})"
         )
-    if config.get("enable_profit_based_holding"):
-        early_exit_mode = str(config.get('early_exit_mode', 'disabled'))
-        early_exit_text = '原硬卖' if early_exit_mode == 'disabled' else early_exit_mode
         logger.info(
-            f"  盈亏动态持仓: 启用 (延续模式={config.get('profit_extension_mode', 'pnl')}"
             f", 亏损换出={early_exit_text})"
         )
     if config.get("max_per_industry"):
@@ -213,7 +207,6 @@ def _check_early_exit(
     config: dict,
 ) -> List[Dict]:
     """检查亏损提前换出触发。"""
-    return shared_check_early_exit(runner, trade_date, config)
 
 
 def _check_take_profit(
@@ -222,7 +215,6 @@ def _check_take_profit(
     config: dict,
 ) -> List[Dict]:
     """检查整体止盈触发。"""
-    return shared_check_take_profit(runner, trade_date, config)
 
 
 def _process_pending_sells(

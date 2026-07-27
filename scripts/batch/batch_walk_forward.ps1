@@ -184,7 +184,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $true   # $true 启用 | $false 禁用
+$deploy_train            = $false   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -213,67 +213,7 @@ $position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly')
 $kelly_vol_window_list           = @(60)      # Kelly 波动率窗口（交易日，可多值如 @(40, 60, 120)）
 $kelly_max_leverage_list          = @(0.2)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
-# ── 盈亏动态持仓（总开关，控制提前换出与到期延续）────────────────
-# 0601这里应为true
-$enable_profit_based_holding_list = @($false)    # $true 启用 | $false 禁用（可多值扫描，如 @($false, $true)）
-# 以下所有参数仅在 $enable_profit_based_holding = $true 时生效
-
-# 1) 亏损提前换出基础阈值：持有达到 early_exit_holding_ratio × 持有期后，
-#    若收益率 <= early_exit_loss_threshold，则提前换出
-#    注意：这两个阈值在 $enable_profit_based_holding = $true 时始终生效，
-#    不受 $early_exit_mode_list = @('disabled') 影响；disabled 表示原硬卖。
-$early_exit_holding_ratio_list    = @(0.8)        # 最早触发时点（占持有期比例，可多值，如 @(0.3, 0.5, 0.7)）
-$early_exit_loss_threshold_list   = @(-0.15)    # 亏损提前换出阈值（可多值，如 @(-0.03, -0.05, -0.08)）
-# 0429这个似乎不开比较好, early_exit_holding_ratio设置为1就是关闭
-
-# 2) 亏损提前换出二次确认：仅在 early_exit 条件已触发后再做一次强势度否决
-#    disabled      = 原硬卖
-#    strength_veto = 评分高于保护阈值时否决卖出（缓刑）
-$early_exit_mode_list                        = @('disabled')   # 可多值如 @('disabled', 'strength_veto')
-# 仅在 $early_exit_mode_list 扫到 'strength_veto' 时生效
-$early_exit_strength_protect_threshold_list   = @(0.1)         # strength_veto 保护阈值 [0,1]
-$early_exit_max_reprieves_list               = @(3)            # 单只股票最多缓刑次数
-
-# 3) ATR 动态亏损阈值：在亏损提前换出分支中，用 ATR 替代固定亏损阈值
-#    需同时满足 $enable_profit_based_holding = $true 且 $use_atr_for_early_exit = $true
-$use_atr_for_early_exit           = $false   # $true 启用 | $false 禁用
-$atr_multiplier_list              = @(2.5)   # ATR 倍数（仅启用 ATR 止损时生效）
-# 0430效果都不好, 收益和回测都变差
-
-# 4) 时间止损：持仓超过指定天数后仍未达到最低盈利要求，视为"死钱"触发提前换出0512
-#    需同时满足 $enable_profit_based_holding = $true 且 $time_stop_loss_enabled = $true
-$time_stop_loss_enabled        = $false   # $true 启用 | $false 禁用
-# 以下参数仅在 $time_stop_loss_enabled = $true 时生效
-$time_stop_loss_days_list      = @(5)    # 触发时间止损的最低持有天数（交易日）
-$time_stop_loss_profit_ratio_list = @(-0.02) # 时间止损利润阈值（当前盈亏低于此值触发，如-0.02=-2%）
-
-# 5) 盈利延续持有：仅在持有期满后进入该分支
-#    pnl      = 浮盈率判据（兼容原行为）
-#    strength = 5 维强势度评分判据
-#    disabled = 持有期满直接卖出，不做延续
-$profit_extension_mode_list = @('strength')     # 可多值如 @('pnl', 'strength', 'disabled')
-# 在 $profit_extension_mode_list 扫到 "pnl" 或 "strength" 时生效
-$profit_extension_days_list       = @(20)        # 额外延续天数（交易日）
-
-# 仅在 $profit_extension_mode_list 扫到 "pnl" 时生效
-$profit_extension_threshold_list  = @(0.04)      # 盈利延续阈值（浮盈率，可多值，如 @(0.03, 0.05, 0.10)）
-# 0430 0.04/20:43%(33%)年化,-31%(-31)回撤
-
-# 仅在 $profit_extension_mode_list 扫到 "strength" 时生效
-$profit_extension_strength_threshold_list = @(0.56) # strength 模式延续阈值 [0,1]
-# 0503 0.56/20:49%(38%),-25%(-28%); 0.6/20:45%(29%)年化,-28%(-32%)回撤
-
-# ── 整体持仓止盈（独立于 $enable_profit_based_holding）──────────────
-# 0426这里应为0.15
-$take_profit_threshold_list   = @($null)      # 可多值；$null = 禁用，如 @($null, 0.15, 0.20)
-# 仅在 $take_profit_threshold_list 不为 $null 时，$take_profit_refill 才有意义
-$take_profit_refill           = $false       # $true = 整体止盈后自动补位买入
-
-# ── 空仓/持有期拖尾提前调仓（独立开关，常与盈利延续/整体止盈联动）────
-# $true  = 启用：当持仓全部清零或 cycle_day >= holding_period 且仍有残留盈利延续持仓时，
-#          尝试提前触发新一轮 T0 流程（拖尾场景下需"残留仓位+新目标仓位<=100%"方可入队）
-# $false = 禁用：严格等待下一个预定调仓日
-# 0426这里应为true
+# ── 空仓/持有期拖尾提前调仓（独立开关）────
 $enable_early_rebalance_on_empty_list = @($true)  # 可多值如 @($false, $true)
 
 # ── MA250 长周期硬条件（系统性熊市保护）─────────────────────────
@@ -589,20 +529,6 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $bt_equity_curve_recovery_step_list.Length *
               $bt_equity_curve_recovery_delay_periods_list.Length *
               $stagger_tranches_list.Length *
-              $enable_profit_based_holding_list.Length *
-              $early_exit_loss_threshold_list.Length *
-              $early_exit_holding_ratio_list.Length *
-              $profit_extension_threshold_list.Length *
-              $profit_extension_days_list.Length *
-              $profit_extension_mode_list.Length *
-              $profit_extension_strength_threshold_list.Length *
-              $atr_multiplier_list.Length *
-              $time_stop_loss_days_list.Length *
-              $time_stop_loss_profit_ratio_list.Length *
-              $early_exit_mode_list.Length *
-              $early_exit_strength_protect_threshold_list.Length *
-              $early_exit_max_reprieves_list.Length *
-              $take_profit_threshold_list.Length *
               $enable_early_rebalance_on_empty_list.Length *
               $industry_rotation_alpha_list.Length *
               $position_sizing_list.Length *
@@ -669,20 +595,6 @@ foreach ($bt_equity_curve_recovery_mode in $bt_equity_curve_recovery_mode_list) 
 foreach ($bt_equity_curve_recovery_step in $bt_equity_curve_recovery_step_list) {
 foreach ($bt_equity_curve_recovery_delay_periods in $bt_equity_curve_recovery_delay_periods_list) {
 foreach ($stagger_tranches in $stagger_tranches_list) {
-foreach ($enable_profit_based_holding in $enable_profit_based_holding_list) {
-foreach ($early_exit_loss_threshold in $early_exit_loss_threshold_list) {
-foreach ($early_exit_holding_ratio in $early_exit_holding_ratio_list) {
-foreach ($profit_extension_threshold in $profit_extension_threshold_list) {
-foreach ($profit_extension_days in $profit_extension_days_list) {
-foreach ($profit_extension_mode in $profit_extension_mode_list) {
-foreach ($profit_extension_strength_threshold in $profit_extension_strength_threshold_list) {
-foreach ($atr_multiplier in $atr_multiplier_list) {
-foreach ($time_stop_loss_days in $time_stop_loss_days_list) {
-foreach ($time_stop_loss_profit_ratio in $time_stop_loss_profit_ratio_list) {
-foreach ($early_exit_mode in $early_exit_mode_list) {
-foreach ($early_exit_strength_protect_threshold in $early_exit_strength_protect_threshold_list) {
-foreach ($early_exit_max_reprieves in $early_exit_max_reprieves_list) {
-foreach ($take_profit_threshold in $take_profit_threshold_list) {
 foreach ($enable_early_rebalance_on_empty in $enable_early_rebalance_on_empty_list) {
 foreach ($industry_rotation_alpha in $industry_rotation_alpha_list) {
 foreach ($position_sizing in $position_sizing_list) {
@@ -845,40 +757,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         }
     }
 
-    if ($enable_profit_based_holding) {
-        $pythonCmd += " --enable-profit-based-holding" +
-                      " --early-exit-loss-threshold $early_exit_loss_threshold" +
-                      " --early-exit-holding-ratio $early_exit_holding_ratio" +
-                      " --early-exit-mode $early_exit_mode" +
-                      " --profit-extension-threshold $profit_extension_threshold" +
-                      " --profit-extension-days $profit_extension_days" +
-                      " --profit-extension-mode $profit_extension_mode" +
-                      " --profit-extension-strength-threshold $profit_extension_strength_threshold"
-    }
 
-    if ($use_atr_for_early_exit) {
-        $pythonCmd += " --use-atr-for-early-exit --atr-multiplier $atr_multiplier"
-    }
 
-    if ($time_stop_loss_enabled) {
-        $pythonCmd += " --time-stop-loss-enabled" +
-                      " --time-stop-loss-days $time_stop_loss_days" +
-                      " --time-stop-loss-profit-ratio $time_stop_loss_profit_ratio"
-    } else {
-        $pythonCmd += " --no-time-stop-loss"
-    }
 
-    if ($enable_profit_based_holding -and $early_exit_mode -ne 'disabled') {
-        $pythonCmd += " --early-exit-strength-protect-threshold $early_exit_strength_protect_threshold" +
-                      " --early-exit-max-reprieves $early_exit_max_reprieves"
-    }
 
-    if ($null -ne $take_profit_threshold) {
-        $pythonCmd += " --take-profit-threshold $take_profit_threshold"
-        if (-not $take_profit_refill) {
-            $pythonCmd += " --no-take-profit-refill"
-        }
-    }
 
     if (-not $enable_early_rebalance_on_empty) {
         $pythonCmd += " --no-early-rebalance-on-empty"
@@ -994,7 +876,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

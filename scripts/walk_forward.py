@@ -297,22 +297,6 @@ def run_oos_backtest(
     kelly_vol_window: int = 60,
     kelly_max_leverage: float = 0.25,
     stagger_tranches: int = 1,
-    enable_profit_based_holding: bool = False,
-    early_exit_loss_threshold: float = -0.05,
-    early_exit_holding_ratio: float = 0.6,
-    profit_extension_threshold: float = 0.05,
-    profit_extension_days: int = 5,
-    profit_extension_mode: str = "pnl",
-    profit_extension_strength_threshold: float = 0.6,
-    profit_extension_strength_weights: Optional[Dict[str, float]] = None,
-    use_atr_for_early_exit: bool = False,
-    atr_multiplier: float = 2.0,
-    early_exit_mode: str = "disabled",
-    early_exit_strength_protect_threshold: float = 0.55,
-    early_exit_max_reprieves: int = 2,
-    time_stop_loss_enabled: bool = True,
-    time_stop_loss_days: int = 15,
-    time_stop_loss_profit_ratio: float = -0.02,
     weakness_exit_enabled: bool = False,
     weakness_exit_threshold: float = 0.6,
     weakness_exit_consecutive_days: int = 3,
@@ -320,8 +304,6 @@ def run_oos_backtest(
     weakness_exit_weights: str = "30,25,25,20",
     weakness_exit_industry_filter: bool = False,
     weakness_exit_industry_bottom_pct: float = 0.3,
-    take_profit_threshold: Optional[float] = None,
-    take_profit_refill: bool = True,
     enable_early_rebalance_on_empty: bool = True,
     initial_capital: float = 1000000.0,
     split_num: Optional[int] = None,
@@ -442,24 +424,6 @@ def run_oos_backtest(
         position_sizing=position_sizing,
         kelly_vol_window=kelly_vol_window,
         kelly_max_leverage=kelly_max_leverage,
-        enable_profit_based_holding=enable_profit_based_holding,
-        early_exit_loss_threshold=early_exit_loss_threshold,
-        early_exit_holding_ratio=early_exit_holding_ratio,
-        profit_extension_threshold=profit_extension_threshold,
-        profit_extension_days=profit_extension_days,
-        profit_extension_mode=profit_extension_mode,
-        profit_extension_strength_threshold=profit_extension_strength_threshold,
-        profit_extension_strength_weights=profit_extension_strength_weights,
-        use_atr_for_early_exit=use_atr_for_early_exit,
-        atr_multiplier=atr_multiplier,
-        early_exit_mode=early_exit_mode,
-        early_exit_strength_protect_threshold=early_exit_strength_protect_threshold,
-        early_exit_max_reprieves=early_exit_max_reprieves,
-        take_profit_threshold=take_profit_threshold,
-        take_profit_refill=take_profit_refill,
-        time_stop_loss_enabled=time_stop_loss_enabled,
-        time_stop_loss_days=time_stop_loss_days,
-        time_stop_loss_profit_ratio=time_stop_loss_profit_ratio,
         weakness_exit_enabled=weakness_exit_enabled,
         weakness_exit_threshold=weakness_exit_threshold,
         weakness_exit_consecutive_days=weakness_exit_consecutive_days,
@@ -2705,20 +2669,6 @@ def write_walk_forward_summary(
                 "market_regime_ma250_exposure",
                 "market_regime_ma250_atr_scaling",
                 "stagger_tranches",
-                "enable_profit_based_holding",
-                "early_exit_loss_threshold",
-                "early_exit_holding_ratio",
-                "profit_extension_threshold",
-                "profit_extension_days",
-                "profit_extension_mode",
-                "profit_extension_strength_threshold",
-                "use_atr_for_early_exit",
-                "atr_multiplier",
-                "early_exit_mode",
-                "early_exit_strength_protect_threshold",
-                "early_exit_max_reprieves",
-                "take_profit_threshold",
-                "take_profit_refill",
                 "enable_early_rebalance_on_empty",
             )
             return params
@@ -2870,46 +2820,15 @@ def write_walk_forward_summary(
         if not params.get("market_regime_drawdown_guard"):
             clear("market_regime_drawdown_threshold")
 
-        if not params.get("enable_profit_based_holding"):
             clear(
-                "early_exit_loss_threshold",
-                "early_exit_holding_ratio",
-                "profit_extension_threshold",
-                "profit_extension_days",
-                "profit_extension_mode",
-                "profit_extension_strength_threshold",
-                "use_atr_for_early_exit",
-                "atr_multiplier",
-                "early_exit_mode",
-                "early_exit_strength_protect_threshold",
-                "early_exit_max_reprieves",
-                "time_stop_loss_enabled",
-                "time_stop_loss_days",
-                "time_stop_loss_profit_ratio",
             )
         else:
-            profit_extension_mode = params.get("profit_extension_mode")
-            if profit_extension_mode != "pnl":
-                clear("profit_extension_threshold")
-            if profit_extension_mode != "strength":
-                clear("profit_extension_strength_threshold")
-            if profit_extension_mode == "disabled":
-                clear("profit_extension_days")
 
-            if not params.get("use_atr_for_early_exit"):
-                clear("atr_multiplier")
 
-            if params.get("early_exit_mode") != "strength_veto":
                 clear(
-                    "early_exit_strength_protect_threshold",
-                    "early_exit_max_reprieves",
                 )
 
-            if not params.get("time_stop_loss_enabled"):
-                clear("time_stop_loss_days", "time_stop_loss_profit_ratio")
 
-        if params.get("take_profit_threshold") is None:
-            clear("take_profit_refill")
 
         return params
 
@@ -3067,23 +2986,6 @@ def write_walk_forward_summary(
         "market_regime_ma250_exposure": getattr(args, 'market_regime_ma250_exposure', 0.0),
         "market_regime_ma250_atr_scaling": getattr(args, 'market_regime_ma250_atr_scaling', False),
         "stagger_tranches": getattr(args, 'stagger_tranches', 1),
-        "enable_profit_based_holding": getattr(args, 'enable_profit_based_holding', False),
-        "early_exit_loss_threshold": getattr(args, 'early_exit_loss_threshold', -0.05),
-        "early_exit_holding_ratio": getattr(args, 'early_exit_holding_ratio', 0.6),
-        "profit_extension_threshold": getattr(args, 'profit_extension_threshold', 0.05),
-        "profit_extension_days": getattr(args, 'profit_extension_days', 5),
-        "profit_extension_mode": getattr(args, 'profit_extension_mode', 'pnl'),
-        "profit_extension_strength_threshold": getattr(args, 'profit_extension_strength_threshold', 0.6),
-        "use_atr_for_early_exit": getattr(args, 'use_atr_for_early_exit', False),
-        "atr_multiplier": getattr(args, 'atr_multiplier', 2.0),
-        "time_stop_loss_enabled": getattr(args, 'time_stop_loss_enabled', True),
-        "time_stop_loss_days": getattr(args, 'time_stop_loss_days', 15),
-        "time_stop_loss_profit_ratio": getattr(args, 'time_stop_loss_profit_ratio', -0.02),
-        "early_exit_mode": getattr(args, 'early_exit_mode', 'disabled'),
-        "early_exit_strength_protect_threshold": getattr(args, 'early_exit_strength_protect_threshold', 0.55),
-        "early_exit_max_reprieves": getattr(args, 'early_exit_max_reprieves', 2),
-        "take_profit_threshold": getattr(args, 'take_profit_threshold', None),
-        "take_profit_refill": getattr(args, 'take_profit_refill', True),
         "enable_early_rebalance_on_empty": getattr(args, 'enable_early_rebalance_on_empty', True),
         "no_deploy_train": getattr(args, 'no_deploy_train', False),
         "skip_training": getattr(args, 'skip_training', False),
@@ -4173,7 +4075,6 @@ def main():
         "--use-atr-for-early-exit",
         action="store_true",
         default=False,
-        help="用个股 ATR 动态阈值替代固定 early_exit_loss_threshold（需同时开启 --enable-profit-based-holding）"
     )
     parser.add_argument(
         "--atr-multiplier",
@@ -4189,7 +4090,6 @@ def main():
     )
     parser.add_argument(
         "--no-time-stop-loss",
-        dest="time_stop_loss_enabled",
         action="store_false",
         help="关闭时间止损"
     )
@@ -4232,7 +4132,6 @@ def main():
     )
     parser.add_argument(
         "--no-take-profit-refill",
-        dest="take_profit_refill",
         action="store_false",
         default=True,
         help="整体止盈后不触发补位买入（默认开启补位）"
@@ -4631,24 +4530,6 @@ def main():
                             kelly_vol_window=getattr(args, 'kelly_vol_window', 60),
                             kelly_max_leverage=getattr(args, 'kelly_max_leverage', 0.25),
                             stagger_tranches=args.stagger_tranches,
-                            enable_profit_based_holding=args.enable_profit_based_holding,
-                            early_exit_loss_threshold=args.early_exit_loss_threshold,
-                            early_exit_holding_ratio=args.early_exit_holding_ratio,
-                            profit_extension_threshold=args.profit_extension_threshold,
-                            profit_extension_days=args.profit_extension_days,
-                            profit_extension_mode=getattr(args, 'profit_extension_mode', 'pnl'),
-                            profit_extension_strength_threshold=getattr(args, 'profit_extension_strength_threshold', 0.6),
-                            profit_extension_strength_weights=getattr(args, 'profit_extension_strength_weights', None),
-                            use_atr_for_early_exit=args.use_atr_for_early_exit,
-                            atr_multiplier=args.atr_multiplier,
-                            early_exit_mode=getattr(args, 'early_exit_mode', 'disabled'),
-                            early_exit_strength_protect_threshold=getattr(args, 'early_exit_strength_protect_threshold', 0.55),
-                            early_exit_max_reprieves=getattr(args, 'early_exit_max_reprieves', 2),
-                            take_profit_threshold=args.take_profit_threshold,
-                            take_profit_refill=args.take_profit_refill,
-                            time_stop_loss_enabled=args.time_stop_loss_enabled,
-                            time_stop_loss_days=args.time_stop_loss_days,
-                            time_stop_loss_profit_ratio=args.time_stop_loss_profit_ratio,
                             weakness_exit_enabled=args.bt_weakness_exit_enabled,
                             weakness_exit_threshold=args.bt_weakness_exit_threshold,
                             weakness_exit_consecutive_days=args.bt_weakness_exit_consecutive_days,

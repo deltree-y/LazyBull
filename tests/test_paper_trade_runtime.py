@@ -37,8 +37,6 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
         storage=storage,
         config={
             "stop_loss_enabled": True,
-            "enable_profit_based_holding": True,
-            "early_exit_mode": "strength_veto",
             "buy_price": "close",
             "sell_price": "close",
         },
@@ -58,11 +56,9 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
         lambda *_args, **_kwargs: call_order.append("stop_loss") or [{"ts_code": "000001.SZ"}],
     )
     monkeypatch.setattr(
-        "src.lazybull.paper.runtime._check_early_exit",
         lambda *_args, **_kwargs: call_order.append("early_exit") or [{"ts_code": "000002.SZ"}],
     )
     monkeypatch.setattr(
-        "src.lazybull.paper.runtime._check_take_profit",
         lambda *_args, **_kwargs: call_order.append("take_profit") or [{"ts_code": "000003.SZ"}],
     )
     monkeypatch.setattr(
@@ -98,8 +94,6 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
     assert call_order == ["t1", "stop_loss", "early_exit", "take_profit", "plan", "t0"]
     assert result.corrected_date == "20260120"
     assert result.stop_loss_actions == [{"ts_code": "000001.SZ"}]
-    assert result.early_exit_actions == [{"ts_code": "000002.SZ"}]
-    assert result.take_profit_actions == [{"ts_code": "000003.SZ"}]
     assert result.pending_sell_actions == [{"ts_code": "000004.SZ"}]
     assert result.t1_actions == [{"ts_code": "000005.SZ", "action": "buy"}]
     assert result.t0_status == "success"
@@ -111,7 +105,6 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
 
 
 def test_execute_trade_workflow_still_checks_early_exit_in_disabled_mode(monkeypatch):
-    """early_exit_mode=disabled 仍应执行基础亏损提前换出（原硬卖）。"""
     runner = MagicMock()
     runner._correct_trade_date.return_value = "20260120"
     runner._get_next_trade_date.return_value = None
@@ -129,9 +122,6 @@ def test_execute_trade_workflow_still_checks_early_exit_in_disabled_mode(monkeyp
         storage=storage,
         config={
             "stop_loss_enabled": False,
-            "enable_profit_based_holding": True,
-            "early_exit_mode": "disabled",
-            "take_profit_threshold": None,
             "buy_price": "close",
             "sell_price": "close",
         },
@@ -146,12 +136,10 @@ def test_execute_trade_workflow_still_checks_early_exit_in_disabled_mode(monkeyp
         lambda *_args, **_kwargs: MagicMock(),
     )
     monkeypatch.setattr(
-        "src.lazybull.paper.runtime._check_early_exit",
         lambda *_args, **_kwargs: call_order.append("early_exit")
         or [{"ts_code": "000002.SZ"}],
     )
     monkeypatch.setattr(
-        "src.lazybull.paper.runtime._check_take_profit",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
@@ -174,7 +162,6 @@ def test_execute_trade_workflow_still_checks_early_exit_in_disabled_mode(monkeyp
     result = execute_trade_workflow("20260120", runtime=context)
 
     assert call_order == ["early_exit"]
-    assert result.early_exit_actions == [{"ts_code": "000002.SZ"}]
 
 
 def test_format_trade_result_includes_profit_management_sections():
@@ -192,12 +179,6 @@ def test_format_trade_result_includes_profit_management_sections():
         runner=runner,
         stop_loss_actions=[
             {"ts_code": "000001.SZ", "shares": 100, "reason": "回撤止损", "can_execute": True}
-        ],
-        early_exit_actions=[
-            {"ts_code": "000002.SZ", "shares": 100, "reason": "亏损提前换出", "can_execute": True}
-        ],
-        take_profit_actions=[
-            {"ts_code": "000003.SZ", "shares": 100, "reason": "整体止盈", "can_execute": True}
         ],
         pending_sell_actions=[],
         t1_actions=[],
@@ -251,7 +232,6 @@ def test_execute_trade_workflow_skip_save_ranked_candidates_when_no_t0(monkeypat
         storage=storage,
         config={
             "stop_loss_enabled": False,
-            "enable_profit_based_holding": True,
             "buy_price": "close",
             "sell_price": "close",
         },
@@ -260,8 +240,6 @@ def test_execute_trade_workflow_skip_save_ranked_candidates_when_no_t0(monkeypat
     )
 
     monkeypatch.setattr("src.lazybull.paper.runtime.StopLossMonitor", lambda *_a, **_k: MagicMock())
-    monkeypatch.setattr("src.lazybull.paper.runtime._check_early_exit", lambda *_a, **_k: [])
-    monkeypatch.setattr("src.lazybull.paper.runtime._check_take_profit", lambda *_a, **_k: [])
     monkeypatch.setattr("src.lazybull.paper.runtime._execute_t1_if_pending", lambda *_a, **_k: [])
     monkeypatch.setattr(
         "src.lazybull.paper.runtime._plan_next_day_retry_and_sell_instructions",
@@ -303,7 +281,6 @@ def test_execute_trade_workflow_save_ranked_candidates_on_t0_success(monkeypatch
         storage=storage,
         config={
             "stop_loss_enabled": False,
-            "enable_profit_based_holding": True,
             "buy_price": "close",
             "sell_price": "close",
         },
@@ -312,8 +289,6 @@ def test_execute_trade_workflow_save_ranked_candidates_on_t0_success(monkeypatch
     )
 
     monkeypatch.setattr("src.lazybull.paper.runtime.StopLossMonitor", lambda *_a, **_k: MagicMock())
-    monkeypatch.setattr("src.lazybull.paper.runtime._check_early_exit", lambda *_a, **_k: [])
-    monkeypatch.setattr("src.lazybull.paper.runtime._check_take_profit", lambda *_a, **_k: [])
     monkeypatch.setattr("src.lazybull.paper.runtime._execute_t1_if_pending", lambda *_a, **_k: [])
     monkeypatch.setattr(
         "src.lazybull.paper.runtime._plan_next_day_retry_and_sell_instructions",
@@ -416,7 +391,6 @@ def test_execute_t1_if_pending_should_defer_failed_buys_to_next_t0(monkeypatch):
         config={
             'buy_price': 'close',
             'sell_price': 'close',
-            'enable_profit_based_holding': False,
             'universe': 'mainboard',
             'exclude_st': True,
             'min_list_days': 365,
@@ -497,7 +471,6 @@ def test_execute_t0_if_rebalance_day_allows_holding_tail_early_rebalance():
     runner.paper_storage.load_instructions.return_value = []
     runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
     runner.broker.pending_sells = []
-    runner.evaluate_profit_extension.return_value = {"600925.SH"}
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
     runner._get_next_trade_date.return_value = "20260121"
 
@@ -506,8 +479,6 @@ def test_execute_t0_if_rebalance_day_allows_holding_tail_early_rebalance():
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
             "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
@@ -542,7 +513,6 @@ def test_execute_t0_if_rebalance_day_skips_when_no_holding_tail_protection():
     runner.paper_storage.load_pending_buys.return_value = []
     runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
     runner.broker.pending_sells = []
-    runner.evaluate_profit_extension.return_value = set()
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
 
     _, _, _, status, protected = _execute_t0_if_rebalance_day(
@@ -550,8 +520,6 @@ def test_execute_t0_if_rebalance_day_skips_when_no_holding_tail_protection():
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
             "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
@@ -589,7 +557,6 @@ def test_holding_tail_post_check_rejects_when_weight_exceeds():
     runner.paper_storage.load_pending_buys.return_value = []
     runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
     runner.broker.pending_sells = []
-    runner.evaluate_profit_extension.return_value = {"600925.SH"}
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
     runner._get_next_trade_date.return_value = "20260121"
 
@@ -609,8 +576,6 @@ def test_holding_tail_post_check_rejects_when_weight_exceeds():
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
             "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
@@ -649,12 +614,9 @@ def test_holding_tail_post_check_allows_when_weight_ok():
     runner.paper_storage.load_pending_buys.return_value = []
     runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=100)}
     runner.broker.pending_sells = []
-    runner.evaluate_profit_extension.return_value = set()  # 无保护 → 不会进入 holding_tail
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
     runner._get_next_trade_date.return_value = "20260121"
 
-    # 为了让 holding_tail 触发，需要 evaluate_profit_extension 返回非空
-    runner.evaluate_profit_extension.return_value = {"600925.SH"}
 
     # 持仓市值 10,000，总资产 100,000 → 残留占比 10%
     price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [100.0]})
@@ -672,8 +634,6 @@ def test_holding_tail_post_check_allows_when_weight_ok():
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
             "signal_gate_mode": "composite",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
@@ -714,7 +674,6 @@ def test_holding_tail_disabled_gate_short_circuit_before_t0():
     # 触发 holding_tail
     runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
     runner.broker.pending_sells = []
-    runner.evaluate_profit_extension.return_value = {"600925.SH"}
 
     price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [10.0]})
     runner.loader.load_clean_daily_by_date.return_value = price_df
@@ -725,8 +684,6 @@ def test_holding_tail_disabled_gate_short_circuit_before_t0():
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
             "signal_gate_mode": "disabled",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,
@@ -765,7 +722,6 @@ def test_rebalance_day_should_not_be_blocked_by_holding_tail_short_circuit():
 
     runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
     runner.broker.pending_sells = []
-    runner.evaluate_profit_extension.return_value = {"600925.SH"}
 
     price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [10.0]})
     runner.loader.load_clean_daily_by_date.return_value = price_df
@@ -776,8 +732,6 @@ def test_rebalance_day_should_not_be_blocked_by_holding_tail_short_circuit():
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "enable_profit_based_holding": True,
-            "profit_extension_mode": "strength",
             "signal_gate_mode": "disabled",
             "equity_curve_enabled": False,
             "market_regime_enabled": False,

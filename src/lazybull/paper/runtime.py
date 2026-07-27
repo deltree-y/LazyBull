@@ -38,8 +38,6 @@ class PaperTradeExecutionResult:
     trading_config: TradingConfig
     runner: PaperTradingRunner
     stop_loss_actions: List[Dict[str, object]] = field(default_factory=list)
-    early_exit_actions: List[Dict[str, object]] = field(default_factory=list)
-    take_profit_actions: List[Dict[str, object]] = field(default_factory=list)
     pending_sell_actions: List[Dict[str, object]] = field(default_factory=list)
     t1_actions: List[Dict[str, object]] = field(default_factory=list)
     t0_targets: List[Dict[str, object]] = field(default_factory=list)
@@ -151,15 +149,6 @@ def execute_trade_workflow(
     else:
         logger.info("止损功能未启用，跳过")
 
-    _report("亏损提前换出检查")
-    early_exit_actions: List[Dict[str, object]] = []
-    if bool(config.get("enable_profit_based_holding", False)):
-        early_exit_actions = _check_early_exit(runner, corrected_date, config)
-    else:
-        logger.info("盈亏动态持仓未启用，跳过亏损提前换出")
-
-    _report("整体止盈检查")
-    take_profit_actions = _check_take_profit(runner, corrected_date, config)
 
     _report("规划次日卖出/补位指令")
     pending_sell_actions = _plan_next_day_retry_and_sell_instructions(
@@ -167,8 +156,6 @@ def execute_trade_workflow(
         trade_date=corrected_date,
         config=config,
         stop_loss_actions=stop_loss_actions,
-        early_exit_actions=early_exit_actions,
-        take_profit_actions=take_profit_actions,
     )
 
     # 持久化弱势退出监控状态（跨日连续计数）
@@ -229,8 +216,6 @@ def execute_trade_workflow(
         trading_config=trading_config,
         runner=runner,
         stop_loss_actions=stop_loss_actions,
-        early_exit_actions=early_exit_actions,
-        take_profit_actions=take_profit_actions,
         pending_sell_actions=pending_sell_actions,
         t1_actions=t1_actions,
         t0_targets=t0_targets,
@@ -297,94 +282,6 @@ def _check_stop_loss(
             }
         )
 
-    return actions
-
-
-def _check_early_exit(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: Dict[str, object],
-) -> List[Dict[str, object]]:
-    """检查亏损提前换出触发。"""
-    actions = runner.evaluate_early_exit(trade_date, config)
-
-    if not actions:
-        logger.info("无持仓触发亏损提前换出")
-        return actions
-
-    logger.info(f"亏损提前换出检查完成：{len(actions)} 只股票触发")
-    return actions
-
-
-def _check_take_profit(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: Dict[str, object],
-) -> List[Dict[str, object]]:
-    """检查整体止盈触发。"""
-    threshold = config.get("take_profit_threshold")
-    if threshold is None:
-        logger.info("整体止盈未启用，跳过")
-        return []
-
-    positions = runner.account.get_positions()
-    if not positions:
-        logger.info("当前无持仓，跳过整体止盈检查")
-        return []
-
-    strategy_state = runner.paper_storage.load_strategy_state()
-    last_rebalance_nav = strategy_state.get("last_rebalance_nav")
-    if not last_rebalance_nav or last_rebalance_nav <= 0:
-        logger.info("整体止盈基准净值缺失，跳过")
-        return []
-
-    buy_prices, sell_prices = runner._load_prices(
-        trade_date,
-        str(config["buy_price"]),
-        str(config["sell_price"]),
-    )
-    all_prices = {**sell_prices, **buy_prices}
-    if not all_prices:
-        logger.warning("无法加载整体止盈所需价格数据，跳过")
-        return []
-
-    current_nav = runner.account.get_total_value(all_prices)
-    profit_rate = (current_nav - last_rebalance_nav) / last_rebalance_nav
-    if profit_rate < float(threshold):
-        logger.info(f"整体止盈未触发: 本轮收益率={profit_rate:.2%}, 阈值={float(threshold):.2%}")
-        return []
-
-    existing_pending = set()
-    actions = []
-    for ts_code, pos in positions.items():
-        if ts_code in existing_pending:
-            continue
-
-        sell_shares = (pos.shares // 100) * 100
-        if sell_shares <= 0:
-            continue
-
-        reason = f"整体止盈: 本轮收益率={profit_rate:.2%} >= {float(threshold):.2%}"
-        actions.append(
-            {
-                "ts_code": ts_code,
-                "shares": sell_shares,
-                "reason": reason,
-                "can_execute": True,
-            }
-        )
-
-    if not actions:
-        logger.info("整体止盈无新增延迟卖出指令")
-        return []
-
-    strategy_state["pending_take_profit_trigger_date"] = trade_date
-    if not bool(config.get("take_profit_refill", True)):
-        strategy_state["take_profit_block_t0_date"] = runner._get_next_trade_date(trade_date)
-    runner.paper_storage.save_strategy_state(strategy_state)
-    logger.warning(
-        f"整体止盈触发: 本轮收益率={profit_rate:.2%}, 已规划 {len(actions)} 条次日卖出指令"
-    )
     return actions
 
 
@@ -521,8 +418,6 @@ def _plan_next_day_retry_and_sell_instructions(
     trade_date: str,
     config: Dict[str, object],
     stop_loss_actions: List[Dict[str, object]],
-    early_exit_actions: List[Dict[str, object]],
-    take_profit_actions: List[Dict[str, object]],
 ) -> List[Dict[str, object]]:
     """在 T0 统一规划下一交易日全部卖出/补位指令。"""
     planned_actions: List[Dict[str, object]] = []
@@ -552,7 +447,7 @@ def _plan_next_day_retry_and_sell_instructions(
             )
         )
 
-    daily_sell_actions = [*stop_loss_actions, *early_exit_actions, *take_profit_actions]
+    daily_sell_actions = [*stop_loss_actions]
     filtered_daily_actions = [
         action for action in daily_sell_actions if str(action.get("ts_code")) not in existing_sell_codes
     ]
@@ -560,8 +455,7 @@ def _plan_next_day_retry_and_sell_instructions(
     existing_sell_codes.update(str(action["ts_code"]) for action in filtered_daily_actions)
 
     holding_sell_actions: List[Dict[str, object]] = []
-    # 持有期到期检查始终执行：enable_profit_based_holding=False 时仅做到期卖出，
-    # enable_profit_based_holding=True 时才会评估盈利延续。
+    # 持有期到期检查
     _, holding_sell_actions = runner.evaluate_holding_period_actions(
         trade_date,
         config,
@@ -621,12 +515,6 @@ def _process_pending_sells(
         all_prices = {**sell_prices, **buy_prices}
         runner._record_nav(trade_date, all_prices)
 
-        if any("整体止盈" in str(fill.reason or "") for fill in fills):
-            strategy_state = runner.paper_storage.load_strategy_state()
-            strategy_state["last_rebalance_nav"] = runner.account.get_total_value(all_prices)
-            strategy_state["last_take_profit_date"] = trade_date
-            strategy_state.pop("pending_take_profit_trigger_date", None)
-            runner.paper_storage.save_strategy_state(strategy_state)
 
     logger.info(
         f"延迟卖出处理完成：成交 {len(fills)} 笔，剩余 {len(runner.broker.pending_sells)} 笔"
@@ -791,12 +679,6 @@ def _execute_t1_if_pending(
         all_prices = {**sell_prices, **buy_prices}
         runner._record_nav(trade_date, all_prices)
 
-        if any("整体止盈" in str(fill.reason or "") for fill in fills):
-            strategy_state = runner.paper_storage.load_strategy_state()
-            strategy_state["last_rebalance_nav"] = runner.account.get_total_value(all_prices)
-            strategy_state["last_take_profit_date"] = trade_date
-            strategy_state.pop("pending_take_profit_trigger_date", None)
-            runner.paper_storage.save_strategy_state(strategy_state)
 
     run_record = {
         "trade_date": trade_date,
@@ -874,8 +756,6 @@ def _resolve_early_rebalance_context(
     runner: PaperTradingRunner,
     trade_date: str,
     config: Dict[str, object],
-    *,
-    take_profit_block_t0_date: Optional[str],
 ) -> Tuple[bool, str, set]:
     """判断是否允许提前调仓，并返回触发模式与已确认的保护持仓。"""
     pending_instruction = runner.paper_storage.find_pending_instructions(trade_date)
@@ -884,7 +764,6 @@ def _resolve_early_rebalance_context(
 
     guards_ok = (
         bool(config.get("enable_early_rebalance_on_empty", True))
-        and take_profit_block_t0_date != trade_date
         and not runner.broker.pending_sells
         and not pending_buys
         and pending_instruction is None
@@ -895,15 +774,7 @@ def _resolve_early_rebalance_context(
     if not current_positions:
         return True, "empty", set()
 
-    if not bool(config.get("enable_profit_based_holding", False)):
-        return False, "", set()
-    if str(config.get("profit_extension_mode", "pnl")) == "disabled":
-        return False, "", set()
-
-    protected_stocks = set(runner.evaluate_profit_extension(trade_date, config))
-    if protected_stocks:
-        return True, "holding_tail", protected_stocks
-
+    # 盈亏动态持仓已移除，仅支持空仓场景的提前调仓
     return False, "", set()
 
 
@@ -923,19 +794,12 @@ def _execute_t0_if_rebalance_day(
         return targets_info, ect_exposure, ect_reason, "already_run", protected_stock_list
 
     trading_config = TradingConfig.from_dict(config)
-    strategy_state = runner.paper_storage.load_strategy_state()
-    take_profit_block_t0_date = strategy_state.get("take_profit_block_t0_date")
-    if take_profit_block_t0_date == trade_date:
-        logger.info("整体止盈且关闭自动补仓，本日不触发空仓提前调仓")
-        strategy_state.pop("take_profit_block_t0_date", None)
-        runner.paper_storage.save_strategy_state(strategy_state)
 
     allow_early_rebalance, early_rebalance_mode, precomputed_protected_stocks = (
         _resolve_early_rebalance_context(
             runner,
             trade_date,
             config,
-            take_profit_block_t0_date=take_profit_block_t0_date,
         )
     )
 
@@ -1023,22 +887,9 @@ def _execute_t0_if_rebalance_day(
         )
 
     protected_stocks = set(precomputed_protected_stocks)
-    if early_rebalance_triggered and early_rebalance_mode == "holding_tail" and protected_stocks:
-        # 回测侧在生成信号后做 "残留占比 + 新信号权重 <= 100%" 校验。
-        if str(config.get("profit_extension_mode", "pnl")) == "disabled":
-            logger.info("盈利延续模式未启用，跳过")
-        else:
-            logger.info("计算盈利延续保护")
-            if early_rebalance_mode == "holding_tail" and protected_stocks:
-                logger.info("复用拖尾提前调仓阶段已确认的盈利延续保护")
-            else:
-                protected_stocks = set(runner.evaluate_profit_extension(trade_date, config))
-            protected_stock_list = sorted(protected_stocks)
-            if protected_stocks:
-                logger.info(f"盈利延续保护: {len(protected_stocks)} 只股票 → {protected_stocks}")
-            else:
-                logger.info("无持仓满足盈利延续条件")
-        logger.info("-" * 80)
+    # 盈亏动态持仓已移除，跳过盈利延续保护逻辑
+    if protected_stocks:
+        protected_stock_list = sorted(protected_stocks)
 
     try:
         runner.run_t0(

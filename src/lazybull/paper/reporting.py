@@ -319,15 +319,11 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
     lines: List[str] = [f"交易执行完成 ({result.corrected_date})", ""]
 
     stop_loss_count = len(result.stop_loss_actions)
-    early_exit_count = len(result.early_exit_actions)
-    take_profit_count = len(result.take_profit_actions)
     pending_sell_count = len(result.pending_sell_actions)
     t1_buy_count = sum(1 for action in result.t1_actions if action["action"] == "buy")
     t1_sell_count = sum(1 for action in result.t1_actions if action["action"] == "sell")
 
     lines.append(f"止损: {'无触发' if stop_loss_count == 0 else f'{stop_loss_count}笔'}")
-    lines.append(f"提前换出: {'无触发' if early_exit_count == 0 else f'{early_exit_count}笔'}")
-    lines.append(f"整体止盈: {'无触发' if take_profit_count == 0 else f'{take_profit_count}笔'}")
     lines.append(f"延迟卖出: {pending_sell_count}笔")
     if result.t1_actions:
         lines.append(f"T1执行: 买{t1_buy_count}笔 卖{t1_sell_count}笔")
@@ -369,8 +365,6 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
         lines.append(f"缺失: {', '.join(result.missing_factors)}")
 
     _append_trigger_section(lines, "止损卖出", result.stop_loss_actions, result.stock_names)
-    _append_trigger_section(lines, "亏损提前换出", result.early_exit_actions, result.stock_names)
-    _append_trigger_section(lines, "整体止盈", result.take_profit_actions, result.stock_names)
     _append_protected_section(lines, result.protected_stocks, result.stock_names)
 
     if result.pending_sell_actions:
