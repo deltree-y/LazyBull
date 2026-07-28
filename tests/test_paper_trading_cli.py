@@ -55,7 +55,6 @@ def test_save_and_load_config(temp_paper_storage):
     assert 'paper_trade:' in yaml_text
     assert '以下参数仅在 model_version_b 非 null 时生效' in yaml_text
     assert '止损总开关（关闭后以下止损参数整体不生效）' in yaml_text
-    assert '亏损提前换出二次确认子开关（disabled=原硬卖，strength_veto=启用二次确认）' in yaml_text
 
     json_path = Path(temp_paper_storage.root_path) / 'config.json'
     assert not json_path.exists()
@@ -70,15 +69,21 @@ def test_load_config_not_exist(temp_paper_storage):
 def test_load_grouped_yaml_config(temp_paper_storage):
     """测试分段 YAML 配置可直接加载为扁平配置视图"""
 
+    grouped_yaml_text = (
+        "model:\n"
+        "  model_version: 99\n"
+        "paper_trade:\n"
+        "  top_n: 12\n"
+        "  position_sizing: half_kelly\n"
+        "  initial_capital: 888888.0\n"
+    )
     yaml_path = Path(temp_paper_storage.root_path) / 'config.yaml'
-    yaml_path.write_text(yaml_text, encoding='utf-8')
+    yaml_path.write_text(grouped_yaml_text, encoding='utf-8')
 
     loaded_config = temp_paper_storage.load_config()
 
     assert loaded_config is not None
     assert loaded_config['model_version'] == 99
-    assert loaded_config['signal_gate_mode'] == 'composite'
-    assert loaded_config['signal_gate_quality_enabled'] is True
     assert loaded_config['top_n'] == 12
     assert loaded_config['position_sizing'] == 'half_kelly'
     assert loaded_config['initial_capital'] == 888888.0
@@ -87,10 +92,6 @@ def test_load_grouped_yaml_config(temp_paper_storage):
 def test_save_and_load_stop_loss_state(temp_paper_storage):
     """测试止损状态保存和读取"""
     state = {
-        'position_high_prices': {
-            '000001.SZ': 12.5,
-            '000002.SZ': 15.8
-        },
         'consecutive_limit_down_days': {
             '000001.SZ': 0,
             '000002.SZ': 1
@@ -104,8 +105,7 @@ def test_save_and_load_stop_loss_state(temp_paper_storage):
     loaded_state = temp_paper_storage.load_stop_loss_state()
     
     assert loaded_state is not None
-    assert '000001.SZ' in loaded_state['position_high_prices']
-    assert loaded_state['position_high_prices']['000001.SZ'] == 12.5
+    assert loaded_state['consecutive_limit_down_days']['000001.SZ'] == 0
     assert loaded_state['consecutive_limit_down_days']['000002.SZ'] == 1
 
 
@@ -329,12 +329,10 @@ def test_stop_loss_state_persistence():
         
         # 更新一些状态
         monitor.consecutive_limit_down_days['000001.SZ'] = 1
-        monitor.update_position_price('000002.SZ', 15.8)
-        monitor.consecutive_limit_down_days['000003.SZ'] = 1
+        monitor.consecutive_limit_down_days['000003.SZ'] = 2
         
         # 保存状态
         state = {
-            'position_high_prices': monitor.position_high_prices,
             'consecutive_limit_down_days': monitor.consecutive_limit_down_days
         }
         storage.save_stop_loss_state(state)
@@ -342,13 +340,11 @@ def test_stop_loss_state_persistence():
         # 创建新的监控器并加载状态
         monitor2 = StopLossMonitor(config)
         loaded_state = storage.load_stop_loss_state()
-        monitor2.position_high_prices = loaded_state['position_high_prices']
         monitor2.consecutive_limit_down_days = loaded_state['consecutive_limit_down_days']
         
         # 验证状态恢复
-        assert monitor2.position_high_prices['000001.SZ'] == 12.5
-        assert monitor2.position_high_prices['000002.SZ'] == 15.8
-        assert monitor2.consecutive_limit_down_days['000003.SZ'] == 1
+        assert monitor2.consecutive_limit_down_days['000001.SZ'] == 1
+        assert monitor2.consecutive_limit_down_days['000003.SZ'] == 2
 
 
 def test_t0_targets_output_format():

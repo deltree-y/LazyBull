@@ -8,6 +8,7 @@ from loguru import logger
 from ..common.print_table import format_row
 
 from ..common.cost import CostModel
+from ..trading.sizing import compute_min_buy_value_threshold
 from .account import PaperAccount
 from .models import Fill, Order, PendingBuy, TargetWeight, normalize_trade_reason
 from .storage import PaperStorage
@@ -116,18 +117,13 @@ class PaperBroker:
         return total_assets
 
     def _get_min_buy_value_threshold(self, price_map: Dict[str, float]) -> float:
-        """计算最小买入后持仓市值阈值。"""
+        """计算最小买入后持仓市值阈值（与回测共用 trading.sizing 口径）。"""
         config = self.storage.load_config() or {}
-        ratio = float(config.get("min_buy_value_ratio", 0.2) or 0.0)
-        top_n = int(config.get("top_n", 30) or 0)
-        if ratio <= 0 or top_n <= 0:
-            return 0.0
-
-        total_assets = self._estimate_total_assets_with_price_map(price_map)
-        if total_assets <= 0:
-            return 0.0
-        avg_position_value = total_assets / float(top_n)
-        return avg_position_value * ratio
+        return compute_min_buy_value_threshold(
+            total_assets=self._estimate_total_assets_with_price_map(price_map),
+            target_count=int(config.get("top_n", 30) or 0),
+            ratio=float(config.get("min_buy_value_ratio", 0.2) or 0.0),
+        )
     
 
     
@@ -1142,8 +1138,6 @@ class PaperBroker:
         config = self.storage.load_config() or {}
         rebalance_freq = int(config.get('rebalance_freq', 20))
         max_holding_days = rebalance_freq
-        if extension_mode != 'disabled':
-            max_holding_days += max(0, extension_days)
         for ts_code, pos in positions.items():
             raw_price = current_prices.get(ts_code)
             try:

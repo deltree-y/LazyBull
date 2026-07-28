@@ -18,6 +18,21 @@ from ..execution.pending_order import PendingOrderManager
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..signals.base import Signal
+from ..trading.buy_plan import (
+    REASON_ALREADY_BOUGHT,
+    REASON_EXECUTION_FAILED,
+    fill_slots_from_candidates,
+)
+from ..trading.sell_rules import (
+    is_holding_period_expired,
+    min_holding_days_for_rebalance_sell,
+    select_rebalance_sell_candidates,
+)
+from ..trading.sizing import (
+    compute_kelly_weights,
+    compute_min_buy_value_threshold,
+    estimate_variance_from_prices,
+)
 from ..universe.base import Universe
 
 
@@ -229,19 +244,6 @@ class BacktestEngine:
             stock_basic: 股票基本信息 DataFrame（用于行业约束），必须包含 ts_code 和 industry 列
             stagger_tranches: 分批调仓批次数，默认1（不分批）。设为K时将资金分成K份，
                 每份错开 rebalance_freq/K 天调仓，降低单次调仓时点风险
-            enable_profit_based_holding: 是否启用盈亏动态持仓时长，默认False。
-                开启后在固定持有期基础上叠加两个规则：
-                1. 亏损提前换出：持有达到持有期的 early_exit_holding_ratio 且亏损超过
-                   early_exit_loss_threshold 时，提前换出（不等满持有期）
-            early_exit_loss_threshold: 亏损提前换出的盈亏率阈值，默认 -0.05（亏损5%）
-            early_exit_holding_ratio: 亏损提前换出最早触发时点（占持有期比例），默认 0.6
-            early_exit_mode: 亏损提前换出模式。"disabled"=原硬卖（默认），
-                "strength_veto"=触发后用 HoldingStrengthScorer 二次确认，
-                评分高于保护阈值时否决卖出（缓刑）
-            early_exit_strength_protect_threshold: strength_veto 模式下的保护阈值，
-                评分 >= 此值时否决卖出，默认 0.55
-            early_exit_max_reprieves: strength_veto 模式下单只股票最多缓刑次数，
-                防止无限拖延，默认 2
             min_buy_value_ratio: 买入后最小持仓市值占“平均仓位市值”比例（0=关闭）。
                 与纸面交易口径一致：阈值=总资产/目标持仓数*比例。
         """
@@ -1035,7 +1037,6 @@ class BacktestEngine:
         for label in (
             "调仓",
             "持有期",
-            "表现弱势",
             "回撤止损",
             "移动止损",
             "连续跌停",
@@ -1211,21 +1212,15 @@ class BacktestEngine:
         return min(exposure_pct, 100.0)
 
     def _get_min_buy_value_threshold(self, date: pd.Timestamp) -> float:
-        """计算最小买入后市值阈值（与纸面交易口径一致）。"""
+        """计算最小买入后市值阈值（与纸面交易共用 trading.sizing 口径）。"""
         ratio = float(self.min_buy_value_ratio or 0.0)
         if ratio <= 0:
             return 0.0
-
-        target_count = int(self._get_target_position_count() or 0)
-        if target_count <= 0:
-            return 0.0
-
-        total_assets = float(self._calculate_portfolio_value(date))
-        if total_assets <= 0:
-            return 0.0
-
-        avg_position_value = total_assets / float(target_count)
-        return avg_position_value * ratio
+        return compute_min_buy_value_threshold(
+            total_assets=float(self._calculate_portfolio_value(date)),
+            target_count=int(self._get_target_position_count() or 0),
+            ratio=ratio,
+        )
 
     def _initialize_decision_trace_for_signal(self, decision_trace: Dict) -> Dict:
         """扩展点：子类可补充市场层占位信息。"""
@@ -1490,39 +1485,6 @@ class BacktestEngine:
             logger.info(
                 f"  持有期卖出补位计划: {date.date()} 生成 {len(planned_slot_weights)} 个待买槽位，"
                 f"下一交易日按候选顺序执行"
-            )
-
-    def _extend_holding_period(
-        self,
-        stock: str,
-        signal_date: pd.Timestamp,
-        trading_dates: List[pd.Timestamp],
-        date_to_idx: Dict,
-    ) -> None:
-        """延续持有：重置持有期起点为 T+1（下一交易日），不产生交易成本。
-
-        当持仓保留奖励启用时，仍在 Top-N 中的已持仓股票不会被卖出再买入，
-        而是直接延续持有并重置持有期计时器。
-
-        Args:
-            stock: 股票代码
-            signal_date: 信号生成日期（T 日）
-            trading_dates: 交易日列表
-            date_to_idx: 日期到索引的映射
-        """
-        if stock not in self.positions:
-            return
-        current_idx = date_to_idx.get(signal_date)
-        if current_idx is None or current_idx + 1 >= len(trading_dates):
-            return
-        new_buy_date = trading_dates[current_idx + 1]  # T+1 作为新的持有期起点
-        old_buy_date = self.positions[stock]["buy_date"]
-        self.positions[stock]["buy_date"] = new_buy_date
-        self.positions[stock]["signal_date"] = signal_date
-        if self.verbose:
-            logger.debug(
-                f"  持仓延续: {stock} 持有期重置 "
-                f"({old_buy_date.date()} → {new_buy_date.date()})"
             )
 
     def _get_holding_features_row(
@@ -1870,8 +1832,6 @@ class BacktestEngine:
             else pd.DataFrame()
         )
         blocked_tradeability_reasons: Dict[str, str] = {}
-        bought_stock_set = set()
-        remaining_unfilled_slots = []
 
         def _check_candidate_tradeable(candidate_stock: str) -> tuple:
             if candidate_stock in blocked_tradeability_reasons:
@@ -1893,53 +1853,67 @@ class BacktestEngine:
         available_slot_count = max(desired_position_count - len(self.positions), 0)
         planned_slot_weights = slot_weights[:available_slot_count]
 
+        # 槽位匹配委托 trading.buy_plan 共享骨架，买入评估/执行/失败记录通过回调注入
+        slot_states: Dict[int, Dict] = {}
+
+        def _slot_state(slot: Dict) -> Dict:
+            return slot_states.setdefault(
+                id(slot), {"last_reason": "候选耗尽", "failure_recorded": False}
+            )
+
+        def _evaluate_candidate(candidate_stock: str, slot: Dict) -> tuple:
+            if candidate_stock in self.positions:
+                return False, "__held__"
+            return _check_candidate_tradeable(candidate_stock)
+
+        def _execute_buy(candidate_stock: str, slot: Dict) -> bool:
+            target_value = current_value * float(slot["weight"])
+            buy_detail = _build_buy_detail(candidate_stock, target_value)
+            return _record_buy_execution(buy_detail, candidate_stock, target_value)
+
+        def _on_reject(slot: Dict, candidate_stock: str, reason: str) -> None:
+            # 已持仓/当日已被其他槽位买入：与既有行为一致，静默跳过不计入失败原因
+            if reason in ("__held__", REASON_ALREADY_BOUGHT):
+                return
+            if reason == REASON_EXECUTION_FAILED:
+                reason = "未成交"
+            state = _slot_state(slot)
+            state["last_reason"] = reason
+            if candidate_stock == slot["stock"]:
+                target_value = current_value * float(slot["weight"])
+                failed_buys.append(
+                    {**_build_buy_detail(candidate_stock, target_value), "reason": reason}
+                )
+                state["failure_recorded"] = True
+
         for slot_weight_info in planned_slot_weights:
-            original_stock = slot_weight_info["stock"]
-            weight = float(slot_weight_info["weight"])
-            target_value = current_value * weight
-            planned_buys.append(_build_buy_detail(original_stock, target_value))
+            planned_buys.append(
+                _build_buy_detail(
+                    slot_weight_info["stock"],
+                    current_value * float(slot_weight_info["weight"]),
+                )
+            )
 
-            bought_for_slot = False
-            last_reason = "候选耗尽"
-            slot_failure_recorded = False
+        match_result = fill_slots_from_candidates(
+            slots=planned_slot_weights,
+            candidates=[candidate for candidate, _ in priority_candidates],
+            evaluate_candidate=_evaluate_candidate,
+            execute_buy=_execute_buy,
+            on_reject=_on_reject,
+        )
 
-            for candidate_stock, _ in priority_candidates:
-                if candidate_stock in self.positions or candidate_stock in bought_stock_set:
-                    continue
-
-                tradeable, reason = _check_candidate_tradeable(candidate_stock)
-                if not tradeable:
-                    last_reason = reason
-                    if candidate_stock == original_stock:
-                        failed_buys.append(
-                            {
-                                **_build_buy_detail(candidate_stock, target_value),
-                                "reason": reason,
-                            }
-                        )
-                        slot_failure_recorded = True
-                    continue
-
-                buy_detail = _build_buy_detail(candidate_stock, target_value)
-                if _record_buy_execution(buy_detail, candidate_stock, target_value):
-                    bought_stock_set.add(candidate_stock)
-                    bought_for_slot = True
-                    break
-
-                last_reason = "未成交"
-                if candidate_stock == original_stock:
-                    failed_buys.append({**buy_detail, "reason": last_reason})
-                    slot_failure_recorded = True
-
-            if not bought_for_slot:
-                remaining_unfilled_slots.append({"stock": original_stock, "weight": weight})
-                if not slot_failure_recorded:
-                    failed_buys.append(
-                        {
-                            **_build_buy_detail(original_stock, target_value),
-                            "reason": last_reason,
-                        }
-                    )
+        remaining_unfilled_slots = []
+        for slot in match_result.unfilled:
+            weight = float(slot["weight"])
+            remaining_unfilled_slots.append({"stock": slot["stock"], "weight": weight})
+            state = _slot_state(slot)
+            if not state["failure_recorded"]:
+                failed_buys.append(
+                    {
+                        **_build_buy_detail(slot["stock"], current_value * weight),
+                        "reason": state["last_reason"],
+                    }
+                )
 
         # 记录买入后的持仓数量
         actually_bought = len(successful_buys)
@@ -2233,38 +2207,32 @@ class BacktestEngine:
         else:
             new_signal_stocks = set()
 
-        sell_count = 0
-
+        # 构建持有天数映射（无法计算持有天数的持仓保持既有行为：不排队卖出）
+        holding_days_map: Dict[str, Optional[int]] = {}
         for stock, info in list(self.positions.items()):
-            # 跳过已在其他卖出队列中的持仓
-            if stock in self.pending_condition_sells or stock in self.pending_stop_loss_sells:
-                continue
-
-            # 保留新信号中的股票（加仓/维持，不卖出）
-            if stock in new_signal_stocks:
-                continue
-
             buy_date = info.get("buy_date")
             buy_idx = date_to_idx.get(buy_date) if buy_date else None
             if buy_idx is None:
                 continue
+            holding_days_map[stock] = current_idx - buy_idx
 
-            holding_days = current_idx - buy_idx
+        # 共享调仓卖出筛选（回测阈值下限 floor=0：仅在持仓即将到期时提前触发）
+        decision = select_rebalance_sell_candidates(
+            holding_days_map,
+            min_holding_days=min_holding_days_for_rebalance_sell(self.holding_period, floor=0),
+            target_codes=new_signal_stocks,
+            queued_codes=set(self.pending_condition_sells) | set(self.pending_stop_loss_sells),
+        )
 
-            # 仅在持仓即将到期时提前触发（holding_period-1 天）
-            # 若 holding_period=1，则 holding_days >= 0 全部触发
-            if holding_days < max(0, self.holding_period - 1):
-                continue
-
+        for stock in decision.sells:
             # 排队到 T+1 卖出
             self.pending_condition_sells[stock] = {
                 "trigger_date": date,
                 "sell_type": "rebalance",
             }
-            sell_count += 1
 
-        if sell_count > 0:
-            logger.info(f"调仓日同步卖出: {sell_count} 只排队到 T+1 卖出")
+        if decision.sells:
+            logger.info(f"调仓日同步卖出: {len(decision.sells)} 只排队到 T+1 卖出")
 
     def _check_and_sell(
         self, date: pd.Timestamp, trading_dates: List[pd.Timestamp], date_to_idx: Dict
@@ -2310,8 +2278,8 @@ class BacktestEngine:
             # 计算持有天数（交易日）
             holding_days = current_idx - anchor_idx
 
-            # 持有期到期 → T0 生成卖出信号，T+1 执行
-            if holding_days >= self.holding_period:
+            # 持有期到期 → T0 生成卖出信号，T+1 执行（共享判定口径）
+            if is_holding_period_expired(holding_days, self.holding_period):
                 self.pending_condition_sells[stock] = {
                     "trigger_date": date,
                     "sell_type": "holding_period",
@@ -2958,103 +2926,21 @@ class BacktestEngine:
         date: pd.Timestamp,
         half: bool = False,
     ) -> Dict[str, float]:
-        """计算 Kelly / 半 Kelly 仓位权重
+        """计算 Kelly / 半 Kelly 仓位权重（委托 trading.sizing 共享实现）。"""
+        result, fallback_count = compute_kelly_weights(
+            signals,
+            variance_fn=lambda stock: self._estimate_stock_variance(stock, date),
+            half=half,
+            max_leverage=self.kelly_max_leverage,
+        )
 
-        f* = score_rank / σ²，分数排名为主项，波动率负相关（低波动 → 更高权重）。
-
-        对每只股票:
-        1. score_rank = 分数百分位排名（0~1），量级稳定，避免原始分数与 σ² 量级不匹配
-        2. f* = score_rank / σ²（分数高 + 波动低 → 权重高）
-        3. 半 Kelly: 归一化后与等权混合（50% kelly + 50% 等权），比 kelly 更保守
-        4. 归一化总和为 1.0，再按 kelly_max_leverage 做单股上限限制
-
-        如果无法估计波动率，该股票仅用分数排名权重（等同 score 模式）。
-        """
-        n = len(signals)
-        if n == 0:
-            return {}
-
-        # 计算分数百分位排名（0~1），分数最高的股票 rank=1，最低的 rank=1/n
-        positive_stocks = {s: v for s, v in signals.items() if v > 0}
-        if not positive_stocks:
-            weight = 1.0 / n
-            return {stock: weight for stock in signals}
-
-        sorted_stocks = sorted(positive_stocks.items(), key=lambda x: x[1])
-        m = len(sorted_stocks)
-        score_ranks = {stock: (i + 1) / m for i, (stock, _) in enumerate(sorted_stocks)}
-
-        # 计算每只股票的 1/σ²（无数据时用截面中位数）
-        vol_adjusts = {}
-        fallback_stocks = []
-        for stock in positive_stocks:
-            vol_sq = self._estimate_stock_variance(stock, date)
-            if vol_sq is not None and vol_sq > 0:
-                vol_adjusts[stock] = 1.0 / float(vol_sq)
-            else:
-                fallback_stocks.append(stock)
-
-        if vol_adjusts:
-            median_vol_adj = float(np.median(list(vol_adjusts.values())))
-        else:
-            median_vol_adj = 1.0
-        for stock in fallback_stocks:
-            vol_adjusts[stock] = median_vol_adj
-
-        # f* = score_rank / σ²（标准 Kelly，低波动股获更高权重）
-        raw_kelly = {
-            stock: score_ranks[stock] * vol_adjusts[stock]
-            for stock in positive_stocks
-        }
-
-        # fallback 股票（score <= 0）分配中位 kelly 值
-        if raw_kelly:
-            median_kelly = float(np.median(list(raw_kelly.values())))
-        else:
-            median_kelly = 1.0 / n
-        for stock in signals:
-            if stock not in raw_kelly:
-                raw_kelly[stock] = median_kelly
-
-        # 归一化总和为 1.0
-        total = sum(raw_kelly.values())
-        if total <= 0:
-            weight = 1.0 / n
-            return {stock: weight for stock in signals}
-        kelly_weights = {stock: w / total for stock, w in raw_kelly.items()}
-
-        # half_kelly: 50% kelly 权重 + 50% 等权，更保守，同时确保两种模式结果不同
-        if half:
-            eq_weight = 1.0 / n
-            kelly_weights = {
-                stock: 0.5 * w + 0.5 * eq_weight
-                for stock, w in kelly_weights.items()
-            }
-            # 重新归一化（理论上和已为1，防浮点误差）
-            total2 = sum(kelly_weights.values())
-            if total2 > 0:
-                kelly_weights = {s: w / total2 for s, w in kelly_weights.items()}
-
-        result = kelly_weights
-
-        # 按 kelly_max_leverage 做单股权重上限（迭代重归一化）
-        if self.kelly_max_leverage < 1.0:
-            for _ in range(10):
-                capped = {s: min(w, self.kelly_max_leverage) for s, w in result.items()}
-                cap_total = sum(capped.values())
-                if cap_total <= 0:
-                    break
-                result = {s: w / cap_total for s, w in capped.items()}
-                if all(w <= self.kelly_max_leverage + 1e-9 for w in result.values()):
-                    break
-
-        if self.verbose:
+        if self.verbose and result:
             mode_name = "half_kelly" if half else "kelly"
             sample = list(result.items())[:3]
             weights_str = ", ".join([f"{s}: {w:.4f}" for s, w in sample])
             logger.info(
                 f"  权重方法: {mode_name}, 示例权重（前3只）: {weights_str}, "
-                f"fallback={len(fallback_stocks)}只"
+                f"fallback={fallback_count}只"
             )
         return result
 
@@ -3081,18 +2967,9 @@ class BacktestEngine:
         # 取最近 kelly_vol_window 条
         stock_data = stock_data.sort_values("trade_date").tail(self.kelly_vol_window)
 
-        # 优先使用后复权价格
+        # 优先使用后复权价格，方差口径统一由 trading.sizing 计算
         price_col = "close_adj" if "close_adj" in stock_data.columns else "close"
-        prices = stock_data[price_col].values.astype(float)
-        prices = prices[~np.isnan(prices)]
-        if len(prices) < 10:
-            return None
-
-        log_returns = np.diff(np.log(prices))
-        if len(log_returns) < 5:
-            return None
-
-        return float(np.var(log_returns))
+        return estimate_variance_from_prices(stock_data[price_col].values.astype(float))
 
     def _buy_stock_direct(
         self,

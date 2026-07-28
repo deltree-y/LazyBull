@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.86.0] - 2026-07-29
+
+### Added
+
+- **回测/纸面交易共享决策核心**：新增 `src/lazybull/trading/` 包（`buy_plan.py`、`sell_rules.py`、`sizing.py`），将买入计划生成、卖出规则与仓位计算抽取为单一实现，回测 `engine.py` 与纸面 `runner.py`/`broker.py` 统一接入，消除两侧逻辑漂移；新增 30+ 共享核心单元测试
+
+### Fixed
+
+- **修复此前功能删除提交遗留的多处“截肢”损伤**：
+  - `paper/storage.py`：从完整版本恢复并裁剪，修复配置模板/分段加载等能力缺失
+  - `paper/runner.py`：恢复 `evaluate_holding_period_actions`/`_calc_holding_days`；“排除已持仓”逻辑修复为无条件生效
+  - `paper/broker.py`：修复 `extension_mode` 引用残留
+  - `ml/model_registry.py`：恢复 `get_latest_version()` 的 registry 尾部回退路径（避免全量加载）
+  - `paper/reporting.py`：移除已删除字段 `ect_exposure`/`ect_reason` 的生产残留引用
+- **树莓派 LCD35 无效价回退昨收逻辑恢复**：`_normalize_cycle_price` 实时价无效时回退昨收（昨收缺失时仍允许现价）；`_compute_holdings_intraday_pct` 移除无效价提前跳过，统一由 `_normalize_intraday_price` 回退处理
+
+### Removed
+
+- 删除重构后判明无用的废弃代码：runner 持仓奖励/置信度门控残留、`_reset_holding_anchor_for_kept_positions`、engine `_extend_holding_period`、runtime 止损状态中的死字段 `position_high_prices`、`train_ml_model.py` 的 `if False` 死块及未用 import
+- 删除废弃测试项（约 20 个，涉及 signal gate、holding_bonus、ECT、holding_tail、已删除的 `3.5LCD_disp.py` 兼容入口等），重写多个过期断言测试（刷新文案、刷新间隔、配置模板）
+
+### Tests
+
+- 全量测试套件 949 个用例全部通过；新增 trading 共享核心、runtime 工作流、持有期对齐等回归测试；测试 stub 补齐 `PaperStorage` 的 `smb_reader` 参数
+
 ## [0.85.24] - 2026-07-28
 
 ### Fixed

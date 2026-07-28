@@ -37,10 +37,6 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 from src.lazybull.common.config import get_data_root, get_models_root
 from src.lazybull.common.logger import setup_logger
-from src.lazybull.common.feature_utils import (
-    drop_high_correlation_features,
-    analyze_feature_importance
-)
 
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
@@ -451,25 +447,6 @@ def main():
         # 原始 df 已不再需要，释放 ~3 GiB 内存
         del df
         gc.collect()
-
-        # 2.6. 测试阶段：临时过滤掉一些高相关性特征，减少过拟合风险（后续可以改为参数控制）
-        if False:  # 默认不启用，后续可以改为参数控制
-            df_new = df.copy()
-            df_new = df_new.drop('trade_date', axis=1)
-            df_new = df_new.drop('ts_code', axis=1)
-            df_new = df_new.drop('industry', axis=1)
-            print(f"原始特征: {df_new.columns.tolist()}")
-            redundant_features = drop_high_correlation_features(df_new, threshold=0.9)
-            logger.warning(f"以下特征与其他特征高度相关，建议后续版本中删除: {redundant_features}")
-            import seaborn as sns
-            import matplotlib.pyplot as plt
-            #plt.figure(figsize=(20, 15))
-            #sns.heatmap(df_new.corr(), cmap='coolwarm', center=0)
-            #plt.show()
-
-            #shap_v = analyze_feature_importance(X_train, y_train)
-            #logger.warning(f"SHAP 特征重要性分析结果: {shap_v}")
-            exit()
 
         # 3. 训练模型
         # 当 label_transform=cs_zscore 时，标签已在 cs_zscore 步骤中 winsorize，训练时不再 winsorize

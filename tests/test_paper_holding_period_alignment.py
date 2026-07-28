@@ -1,14 +1,8 @@
-"""纸面交易持有期到期/盈利延续与回测口径对齐测试"""
+"""纸面交易持有期到期与回测口径对齐测试"""
 
 import tempfile
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
-
-from src.lazybull.backtest import BacktestEngine
-from src.lazybull.common.cost import CostModel
-from src.lazybull.signals.base import Signal
-from src.lazybull.universe.base import Universe
 from src.lazybull.paper.models import Position
 from src.lazybull.paper.runner import PaperTradingRunner
 from src.lazybull.paper.runtime import _build_sell_instructions, _plan_next_day_retry_and_sell_instructions
@@ -24,64 +18,6 @@ def _build_runner(tmpdir: str) -> PaperTradingRunner:
             verbose=False,
         )
     return runner
-
-
-class _MockUniverse(Universe):
-    def get_stocks(self, date, quote_data=None):
-        return ["000001.SZ"]
-
-
-class _MockSignal(Signal):
-    def generate(self, date, universe, data):
-        return {"000001.SZ": 1.0}
-
-
-def test_daily_holding_extension_strength_can_trigger_on_non_rebalance_day():
-    """非调仓日也应可触发强势度盈利延续。"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        runner = _build_runner(tmpdir)
-
-        runner.account.state.positions = {
-            "000001.SZ": Position(
-                ts_code="000001.SZ",
-                shares=100,
-                buy_price=10.0,
-                buy_cost=1.0,
-                buy_date="20240102",
-            )
-        }
-
-        runner.loader.load_clean_daily_by_date = MagicMock(
-            return_value=pd.DataFrame(
-                [{"ts_code": "000001.SZ", "close": 11.2}]
-            )
-        )
-        runner.loader.load_clean_trade_cal = MagicMock(
-            return_value=pd.DataFrame(
-                [
-                    {"cal_date": "20240102", "is_open": 1},
-                    {"cal_date": "20240103", "is_open": 1},
-                    {"cal_date": "20240104", "is_open": 1},
-                    {"cal_date": "20240105", "is_open": 1},
-                ]
-            )
-        )
-        runner._score_holding_strength = MagicMock(
-            return_value=type(
-                "Breakdown",
-                (),
-                {"total": 0.80, "to_log_str": lambda self: "mock-breakdown"},
-            )()
-        )
-
-        config = {
-            "rebalance_freq": 2,
-        }
-
-        protected, sell_actions = runner.evaluate_holding_period_actions("20240104", config)
-
-        assert protected == {"000001.SZ"}
-        assert sell_actions == []
 
 
 def test_t0_should_plan_holding_period_sell_for_next_trade_day():
@@ -169,159 +105,50 @@ def test_t0_generate_instructions_should_not_create_sell_from_target_reduction()
         assert instructions == []
 
 
-def test_profit_rate_should_use_adjusted_price_for_extension_decision():
-    """盈利延续判定应使用后复权绩效价而非成交价。"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        runner = _build_runner(tmpdir)
+def _mock_trade_cal():
+    """构建 4 个连续交易日的 mock 交易日历。"""
+    import pandas as pd
 
-        runner.account.state.positions = {
-            "000001.SZ": Position(
-                ts_code="000001.SZ",
-                shares=100,
-                buy_price=10.0,
-                buy_cost=1.0,
-                buy_date="20240102",
-                buy_pnl_price=100.0,
-            )
-        }
-
-        runner.loader.load_clean_daily_by_date = MagicMock(
-            side_effect=[
-                pd.DataFrame([{"ts_code": "000001.SZ", "close": 10.0, "close_adj": 120.0}]),
-            ]
-        )
-        runner.loader.load_clean_trade_cal = MagicMock(
-            return_value=pd.DataFrame(
-                [
-                    {"cal_date": "20240102", "is_open": 1},
-                    {"cal_date": "20240103", "is_open": 1},
-                    {"cal_date": "20240104", "is_open": 1},
-                ]
-            )
-        )
-
-        config = {
-            "rebalance_freq": 2,
-            "buy_price": "close",
-        }
-
-        protected, sell_actions = runner.evaluate_holding_period_actions("20240104", config)
-        assert protected == {"000001.SZ"}
-        assert sell_actions == []
-
-
-def test_holding_bonus_kept_position_should_reset_holding_anchor_to_t1():
-    """持仓保留奖励命中时，应将持有期锚点重置到 T+1。"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        runner = _build_runner(tmpdir)
-
-        runner.account.state.positions = {
-            "000001.SZ": Position(
-                ts_code="000001.SZ",
-                shares=100,
-                buy_price=10.0,
-                buy_cost=1.0,
-                buy_date="20240102",
-            )
-        }
-        runner.account.save_state = MagicMock()
-        runner._get_next_trade_date = MagicMock(return_value="20240105")
-
-        runner._reset_holding_anchor_for_kept_positions(
-            trade_date="20240104",
-            kept_stocks=["000001.SZ"],
-        )
-
-        assert runner.account.state.positions["000001.SZ"].buy_date == "20240105"
-        runner.account.save_state.assert_called_once()
-
-
-def test_end_to_end_decision_alignment_with_backtest_on_same_window():
-    """同区间下，回测与纸面在盈利延续决策上应保持一致（后复权口径）。"""
-    # 回测侧
-    trading_dates = [
-        pd.Timestamp("2024-01-02"),
-        pd.Timestamp("2024-01-03"),
-        pd.Timestamp("2024-01-04"),
-        pd.Timestamp("2024-01-05"),
-    ]
-    date_to_idx = {d: i for i, d in enumerate(trading_dates)}
-    price_data = pd.DataFrame(
+    return pd.DataFrame(
         [
-            {
-                "ts_code": "000001.SZ",
-                "trade_date": d.strftime("%Y%m%d"),
-                "close": 10.0,
-                "open": 10.0,
-                "close_adj": 120.0 if d >= pd.Timestamp("2024-01-04") else 100.0,
-                "open_adj": 120.0 if d >= pd.Timestamp("2024-01-04") else 100.0,
-            }
-            for d in trading_dates
+            {"cal_date": "20240102", "is_open": 1},
+            {"cal_date": "20240103", "is_open": 1},
+            {"cal_date": "20240104", "is_open": 1},
+            {"cal_date": "20240105", "is_open": 1},
         ]
     )
-    bt_engine = BacktestEngine(
-        universe=_MockUniverse(),
-        signal=_MockSignal(),
-        initial_capital=100000.0,
-        cost_model=CostModel(),
-        rebalance_freq=2,
-        holding_period=2,
-        verbose=False,
-    )
-    bt_engine._prepare_price_index(price_data)
-    bt_engine.price_data_cache = price_data
-    bt_engine.positions = {
-        "000001.SZ": {
-            "shares": 100,
-            "buy_date": pd.Timestamp("2024-01-02"),
-            "signal_date": pd.Timestamp("2024-01-02"),
-            "buy_trade_price": 10.0,
-            "buy_pnl_price": 100.0,
-            "buy_cost_cash": 1.0,
-        }
-    }
-    bt_engine._check_and_sell(pd.Timestamp("2024-01-04"), trading_dates, date_to_idx)
-    assert "000001.SZ" in bt_engine.positions
 
-    # 纸面侧
+
+def test_evaluate_holding_period_actions_sells_expired_position():
+    """持有期到期的持仓应生成整手卖出动作。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         runner = _build_runner(tmpdir)
+
         runner.account.state.positions = {
             "000001.SZ": Position(
                 ts_code="000001.SZ",
-                shares=100,
+                shares=150,
                 buy_price=10.0,
                 buy_cost=1.0,
                 buy_date="20240102",
-                buy_pnl_price=100.0,
             )
         }
-        runner.loader.load_clean_daily_by_date = MagicMock(
-            return_value=pd.DataFrame(
-                [{"ts_code": "000001.SZ", "close": 10.0, "close_adj": 120.0}]
-            )
+        runner.loader.load_clean_trade_cal = MagicMock(return_value=_mock_trade_cal())
+
+        # rebalance_freq=2 -> 阈值 max(1, 2-1)=1，20240102 -> 20240104 持有 2 天已到期
+        protected, sell_actions = runner.evaluate_holding_period_actions(
+            "20240104", {"rebalance_freq": 2}
         )
-        runner.loader.load_clean_trade_cal = MagicMock(
-            return_value=pd.DataFrame(
-                [
-                    {"cal_date": "20240102", "is_open": 1},
-                    {"cal_date": "20240103", "is_open": 1},
-                    {"cal_date": "20240104", "is_open": 1},
-                    {"cal_date": "20240105", "is_open": 1},
-                ]
-            )
-        )
-        cfg = {
-            "rebalance_freq": 2,
-            "buy_price": "close",
-        }
-        protected, sell_actions = runner.evaluate_holding_period_actions("20240104", cfg)
-        assert protected == {"000001.SZ"}
-        assert sell_actions == []
+
+        assert protected == set()
+        assert len(sell_actions) == 1
+        assert sell_actions[0]["ts_code"] == "000001.SZ"
+        assert sell_actions[0]["shares"] == 100  # 整手取整
+        assert "持有期到期" in sell_actions[0]["reason"]
 
 
-def test_early_exit_should_not_trigger_after_holding_period_reached():
-    """到达持有期后，亏损提前换出应让位于到期/延续路径（对齐回测）。"""
+def test_evaluate_holding_period_actions_keeps_young_and_excluded_positions():
+    """未满持有期或在排除集内的持仓不应生成卖出动作。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         runner = _build_runner(tmpdir)
 
@@ -331,86 +158,23 @@ def test_early_exit_should_not_trigger_after_holding_period_reached():
                 shares=100,
                 buy_price=10.0,
                 buy_cost=1.0,
-                buy_date="20240102",
-                buy_pnl_price=100.0,
-            )
-        }
-
-        # 当日亏损（95/100=-5%），若未加边界会触发 early_exit
-        runner.loader.load_clean_daily_by_date = MagicMock(
-            return_value=pd.DataFrame(
-                [{"ts_code": "000001.SZ", "close": 9.5, "close_adj": 95.0}]
-            )
-        )
-        runner.loader.load_clean_trade_cal = MagicMock(
-            return_value=pd.DataFrame(
-                [
-                    {"cal_date": "20240102", "is_open": 1},
-                    {"cal_date": "20240103", "is_open": 1},
-                    {"cal_date": "20240104", "is_open": 1},
-                ]
-            )
-        )
-
-        cfg = {
-            "rebalance_freq": 2,
-            "buy_price": "close",
-        }
-
-        assert actions == []
-
-
-def test_holding_strength_should_ensure_features_before_daily_evaluation(monkeypatch):
-    """strength 模式按日评估前应先 ensure 当日 features。"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        runner = _build_runner(tmpdir)
-
-        runner.account.state.positions = {
-            "000001.SZ": Position(
-                ts_code="000001.SZ",
+                buy_date="20240104",  # 当日买入，未满持有期
+            ),
+            "000002.SZ": Position(
+                ts_code="000002.SZ",
                 shares=100,
                 buy_price=10.0,
                 buy_cost=1.0,
-                buy_date="20240102",
-                buy_pnl_price=100.0,
-            )
+                buy_date="20240102",  # 已到期但在排除集内
+            ),
         }
+        runner.loader.load_clean_trade_cal = MagicMock(return_value=_mock_trade_cal())
 
-        runner.loader.load_clean_daily_by_date = MagicMock(
-            return_value=pd.DataFrame([{"ts_code": "000001.SZ", "close": 112.0, "close_adj": 112.0}])
-        )
-        runner.loader.load_clean_trade_cal = MagicMock(
-            return_value=pd.DataFrame(
-                [
-                    {"cal_date": "20240102", "is_open": 1},
-                    {"cal_date": "20240103", "is_open": 1},
-                    {"cal_date": "20240104", "is_open": 1},
-                ]
-            )
-        )
-        runner._score_holding_strength = MagicMock(
-            return_value=type(
-                "Breakdown",
-                (object,),
-                {"total": 0.8, "to_log_str": lambda self: "ok"},
-            )()
+        protected, sell_actions = runner.evaluate_holding_period_actions(
+            "20240104",
+            {"rebalance_freq": 2},
+            exclude_stocks={"000002.SZ"},
         )
 
-        ensure_called = {"count": 0}
-
-        def _fake_ensure(*_args, **_kwargs):
-            ensure_called["count"] += 1
-            return True, [], ""
-
-        monkeypatch.setattr("src.lazybull.paper.runner.ensure_features_for_date", _fake_ensure)
-
-        cfg = {
-            "rebalance_freq": 2,
-            "buy_price": "close",
-        }
-
-        protected, sell_actions = runner.evaluate_holding_period_actions("20240104", cfg)
-
-        assert ensure_called["count"] == 1
-        assert protected == {"000001.SZ"}
+        assert protected == set()
         assert sell_actions == []

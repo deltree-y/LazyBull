@@ -475,6 +475,18 @@ class ModelRegistry:
                     f"latest_version_file 指向分类器 v{latest_version}，回退到注册表扫描"
                 )
 
+        # 旁路文件缺失时，先尝试从注册表尾部读取 next_version 推断最新版本，
+        # 避免整包加载大体积 model_registry.json
+        next_version = self._load_next_version_from_registry_tail()
+        if next_version is not None and next_version > 1:
+            candidate = next_version - 1
+            metadata = self._load_metadata(candidate)
+            if metadata is not None:
+                mt = (metadata.get("model_type") or "").lower()
+                if "classifier" not in mt:
+                    self._save_latest_version_file(candidate)
+                    return candidate
+
         registry = self._ensure_registry_loaded()
         if not registry["models"]:
             return None

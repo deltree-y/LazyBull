@@ -1424,27 +1424,33 @@ def _compute_holdings_intraday_pct(snapshot: Optional[dict]) -> Optional[float]:
         row = quote_map.get(ts_code)
         if row is None:
             continue
-        current_price = _coerce_float(row.get('PRICE', row.get('price')))
-        if current_price is None or not np.isfinite(current_price) or current_price <= 0:
-            continue
+        raw_price = _coerce_float(row.get('PRICE', row.get('price')))
+        raw_price_valid = (
+            raw_price is not None and np.isfinite(raw_price) and raw_price > 0
+        )
 
         pre_close = _coerce_float(row.get('PRE_CLOSE', row.get('pre_close')))
         if pre_close is None or pre_close <= 0:
-            pre_close = _derive_pre_close_from_price_and_pct(
-                current_price,
-                row.get('PCT_CHG', row.get('pct_chg')),
+            pre_close = (
+                _derive_pre_close_from_price_and_pct(
+                    raw_price,
+                    row.get('PCT_CHG', row.get('pct_chg')),
+                )
+                if raw_price_valid
+                else None
             )
             if pre_close is None:
                 pre_close_missing_count += 1
                 continue
             pre_close_derived_count += 1
 
+        # 实时价无效时由 _normalize_intraday_price 回退昨收（当日涨幅按 0 计）
         current_price = _normalize_intraday_price(
-            current_price,
+            raw_price,
             pre_close,
             INTRADAY_STOCK_PCT_ABS_LIMIT,
         )
-        if pre_close in (None, 0) or current_price is None:
+        if current_price is None:
             continue
         current_value += current_price * pos.shares
         prev_close_value += pre_close * pos.shares

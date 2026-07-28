@@ -59,13 +59,16 @@ def _normalize_intraday_price(price: object, pre_close: object, abs_limit: float
 
 
 def _normalize_cycle_price(price: object, pre_close: object, abs_limit: float) -> Optional[float]:
-    """规范化成本口径实时价；昨收缺失时仍允许使用现价。"""
+    """规范化成本口径实时价；实时价无效时回退昨收，昨收缺失时仍允许使用现价。"""
     price_float = _coerce_float(price)
-    if price_float is None or not np.isfinite(price_float) or price_float <= 0:
-        return None
-
     pre_close_float = _coerce_float(pre_close)
-    if pre_close_float is None or not np.isfinite(pre_close_float) or pre_close_float <= 0:
+    pre_close_valid = (
+        pre_close_float is not None and np.isfinite(pre_close_float) and pre_close_float > 0
+    )
+    if price_float is None or not np.isfinite(price_float) or price_float <= 0:
+        return pre_close_float if pre_close_valid else None
+
+    if not pre_close_valid:
         return price_float
 
     pct = (price_float / pre_close_float - 1) * 100

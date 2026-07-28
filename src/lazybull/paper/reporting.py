@@ -350,9 +350,6 @@ def format_trade_result(result: PaperTradeExecutionResult) -> str:
     if result.protected_stocks:
         lines.append(f"盈利延续保护: {len(result.protected_stocks)}只")
 
-    if result.ect_reason and "未启用" not in result.ect_reason and "为空" not in result.ect_reason:
-        lines.append(f"ECT系数: {result.ect_exposure:.2f} ({result.ect_reason})")
-
     rebalance_info = _get_rebalance_status(result.corrected_date)
     if rebalance_info:
         lines.append(rebalance_info)

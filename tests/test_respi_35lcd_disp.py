@@ -23,18 +23,6 @@ def _load_module():
     return module
 
 
-def test_legacy_entrypoint_remains_loadable():
-    spec = importlib.util.spec_from_file_location(
-        "lcd35_display_legacy",
-        PROJECT_ROOT / "scripts" / "respi" / "3.5LCD_disp.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-
-    assert hasattr(module, "main")
-
-
 def test_main_entrypoint_bootstraps_project_root_for_src_import(monkeypatch):
     pruned_path = []
     project_root_resolved = PROJECT_ROOT.resolve()
@@ -1232,7 +1220,7 @@ def test_fetch_realtime_holdings_snapshot_prefers_efinance_over_akshare(monkeypa
     module = _load_module()
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_config(self):
@@ -1279,7 +1267,7 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_efinance_em
     module = _load_module()
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_config(self):
@@ -1322,7 +1310,7 @@ def test_fetch_realtime_holdings_snapshot_returns_empty_when_efinance_and_akshar
     module = _load_module()
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_config(self):
@@ -1353,7 +1341,7 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_daily_close_post_close(m
     query_calls = []
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_config(self):
@@ -1435,7 +1423,7 @@ def test_fetch_realtime_holdings_snapshot_prefers_daily_snapshot_before_open(mon
     module = _load_module()
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_config(self):
@@ -1647,7 +1635,7 @@ def test_fetch_realtime_holdings_snapshot_builds_annualized_func_from_config(mon
     module = _load_module()
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_config(self):
@@ -1742,7 +1730,7 @@ def test_fetch_realtime_holdings_snapshot_prewarms_index_refresh_before_quote_fe
     refresh_state = {"started": False}
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_config(self):
@@ -2069,7 +2057,7 @@ def test_render_shows_updating_text_and_new_rebalance_status(monkeypatch):
 
     module._render(state)
 
-    assert "更新中..." in captured_texts
+    assert "更:刷新中" in captured_texts
     assert "下次调仓:04/10/剩2天" in captured_texts
 
 
@@ -2689,11 +2677,13 @@ def test_is_realtime_refresh_due_respects_new_session_and_refresh_interval(monke
 def test_is_realtime_refresh_due_continues_interval_after_close_when_allowed():
     module = _load_module()
 
+    last_refresh_at = datetime(2026, 4, 7, 15, 0, 0)
+    now = last_refresh_at + timedelta(seconds=module.REALTIME_REFRESH_INTERVAL + 30)
     due_now, session_key = module._is_realtime_refresh_due(
         True,
-        datetime(2026, 4, 7, 15, 0, 0),
+        last_refresh_at,
         "20260407-pm",
-        datetime(2026, 4, 7, 15, 2, 0),
+        now,
     )
 
     assert due_now is True
@@ -2739,7 +2729,7 @@ def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkey
     query_calls = []
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_rebalance_state(self):
@@ -2799,7 +2789,7 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
     query_call_count = {"value": 0}
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_rebalance_state(self):
@@ -2866,7 +2856,7 @@ def test_fetch_cycle_chart_data_tolerates_string_account_numbers(monkeypatch):
     module = _load_module()
 
     class DummyStorage:
-        def __init__(self, root_path=None, verbose=False):
+        def __init__(self, root_path=None, verbose=False, smb_reader=None):
             pass
 
         def load_rebalance_state(self):

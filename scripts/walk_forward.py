@@ -211,13 +211,6 @@ def run_oos_backtest(
     kelly_vol_window: int = 60,
     kelly_max_leverage: float = 0.25,
     stagger_tranches: int = 1,
-    weakness_exit_enabled: bool = False,
-    weakness_exit_threshold: float = 0.6,
-    weakness_exit_consecutive_days: int = 3,
-    weakness_exit_min_holding_days: int = 5,
-    weakness_exit_weights: str = "30,25,25,20",
-    weakness_exit_industry_filter: bool = False,
-    weakness_exit_industry_bottom_pct: float = 0.3,
     enable_early_rebalance_on_empty: bool = True,
     initial_capital: float = 1000000.0,
     split_num: Optional[int] = None,
@@ -2467,13 +2460,6 @@ def write_walk_forward_summary(
                 "bt_stop_loss_enabled",
                 "bt_stop_loss_drawdown_pct",
                 "bt_stop_loss_consecutive_limit_down",
-                "bt_weakness_exit_enabled",
-                "bt_weakness_exit_threshold",
-                "bt_weakness_exit_consecutive_days",
-                "bt_weakness_exit_min_holding_days",
-                "bt_weakness_exit_weights",
-                "bt_weakness_exit_industry_filter",
-                "bt_weakness_exit_industry_bottom_pct",
                 "bt_equity_curve_enabled",
                 "bt_equity_curve_drawdown_thresholds",
                 "bt_equity_curve_exposure_levels",
@@ -2545,18 +2531,6 @@ def write_walk_forward_summary(
                 "bt_stop_loss_drawdown_pct",
                 "bt_stop_loss_consecutive_limit_down",
             )
-
-        if not params.get("bt_weakness_exit_enabled"):
-            clear(
-                "bt_weakness_exit_threshold",
-                "bt_weakness_exit_consecutive_days",
-                "bt_weakness_exit_min_holding_days",
-                "bt_weakness_exit_weights",
-                "bt_weakness_exit_industry_filter",
-                "bt_weakness_exit_industry_bottom_pct",
-            )
-        elif not params.get("bt_weakness_exit_industry_filter"):
-            clear("bt_weakness_exit_industry_bottom_pct")
 
         if not params.get("bt_equity_curve_enabled"):
             clear(
@@ -2671,21 +2645,6 @@ def write_walk_forward_summary(
         "bt_stop_loss_drawdown_pct": getattr(args, 'bt_stop_loss_drawdown_pct', 30.0),
         "bt_stop_loss_consecutive_limit_down": getattr(
             args, 'bt_stop_loss_consecutive_limit_down', 2
-        ),
-        "bt_weakness_exit_enabled": getattr(args, 'bt_weakness_exit_enabled', False),
-        "bt_weakness_exit_threshold": getattr(args, 'bt_weakness_exit_threshold', 0.6),
-        "bt_weakness_exit_consecutive_days": getattr(
-            args, 'bt_weakness_exit_consecutive_days', 3
-        ),
-        "bt_weakness_exit_min_holding_days": getattr(
-            args, 'bt_weakness_exit_min_holding_days', 5
-        ),
-        "bt_weakness_exit_weights": getattr(args, 'bt_weakness_exit_weights', "30,25,25,20"),
-        "bt_weakness_exit_industry_filter": getattr(
-            args, 'bt_weakness_exit_industry_filter', False
-        ),
-        "bt_weakness_exit_industry_bottom_pct": getattr(
-            args, 'bt_weakness_exit_industry_bottom_pct', 0.3
         ),
         "bt_equity_curve_enabled": getattr(args, 'bt_equity_curve_enabled', False),
         "bt_equity_curve_drawdown_thresholds": getattr(
@@ -3478,50 +3437,6 @@ def main():
         help="OOS 回测连续跌停止损天数，默认 2"
     )
 
-    # OOS 回测 表现弱势退出 参数
-    parser.add_argument(
-        "--bt-weakness-exit-enabled",
-        action="store_true",
-        default=False,
-        help="启用 OOS 回测表现弱势退出",
-    )
-    parser.add_argument(
-        "--bt-weakness-exit-threshold",
-        type=float,
-        default=0.6,
-        help="OOS 弱势评分触发阈值（默认：0.6）",
-    )
-    parser.add_argument(
-        "--bt-weakness-exit-consecutive-days",
-        type=int,
-        default=3,
-        help="OOS 需连续弱势天数（默认：3）",
-    )
-    parser.add_argument(
-        "--bt-weakness-exit-min-holding-days",
-        type=int,
-        default=5,
-        help="OOS 最低持有天数（默认：5）",
-    )
-    parser.add_argument(
-        "--bt-weakness-exit-weights",
-        type=str,
-        default="30,25,25,20",
-        help="OOS 4 维度权重（默认：30,25,25,20）",
-    )
-    parser.add_argument(
-        "--bt-weakness-exit-industry-filter",
-        action="store_true",
-        default=False,
-        help="OOS 叠加弱势行业过滤",
-    )
-    parser.add_argument(
-        "--bt-weakness-exit-industry-bottom-pct",
-        type=float,
-        default=0.3,
-        help="OOS 行业底部阈值（默认：0.3）",
-    )
-
     # OOS 回测 ECT 参数
     parser.add_argument(
         "--bt-equity-curve-enabled",
@@ -3604,115 +3519,6 @@ def main():
         help="Kelly 单只股票仓位上限（占总资产），默认 0.25"
     )
 
-    # 盈亏动态持仓参数
-    parser.add_argument(
-        "--enable-profit-based-holding",
-        action="store_true",
-        default=False,
-        help="启用盈亏动态持仓：亏损提前换出 + 盈利延续持有"
-    )
-    parser.add_argument(
-        "--early-exit-loss-threshold",
-        type=float,
-        default=-0.05,
-        help="亏损提前换出阈值（盈亏率），默认 -0.05（亏损5%%）"
-    )
-    parser.add_argument(
-        "--early-exit-holding-ratio",
-        type=float,
-        default=0.6,
-        help="亏损提前换出最早触发时点（占持有期比例），默认 0.6"
-    )
-    parser.add_argument(
-        "--profit-extension-threshold",
-        type=float,
-        default=0.05,
-        help="盈利延续持有阈值（盈亏率），默认 0.05（盈利5%%）"
-    )
-    parser.add_argument(
-        "--profit-extension-days",
-        type=int,
-        default=5,
-        help="盈利延续持有的额外天数（交易日），默认 5"
-    )
-    parser.add_argument(
-        "--profit-extension-mode",
-        type=str,
-        default="pnl",
-        choices=["pnl", "strength", "disabled"],
-        help="盈利延续持有判据模式: pnl=单一浮盈率(默认,兼容原行为) | strength=5维度强势度评分 | disabled=关闭延续"
-    )
-    parser.add_argument(
-        "--profit-extension-strength-threshold",
-        type=float,
-        default=0.6,
-        help="strength 模式下的延续阈值 [0,1]，默认 0.6"
-    )
-    parser.add_argument(
-        "--use-atr-for-early-exit",
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
-        "--atr-multiplier",
-        type=float,
-        default=2.0,
-        help="ATR 倍数，亏损超过 N×ATR%% 时提前换出，默认 2.0"
-    )
-    parser.add_argument(
-        "--time-stop-loss-enabled",
-        action="store_true",
-        default=True,
-        help="启用时间止损：持仓超限未达盈利要求时提前换出（需同时开启 --enable-profit-based-holding）"
-    )
-    parser.add_argument(
-        "--no-time-stop-loss",
-        action="store_false",
-        help="关闭时间止损"
-    )
-    parser.add_argument(
-        "--time-stop-loss-days",
-        type=int,
-        default=15,
-        help="时间止损最低持有天数（交易日），默认 15"
-    )
-    parser.add_argument(
-        "--time-stop-loss-profit-ratio",
-        type=float,
-        default=-0.02,
-        help="时间止损利润阈值，当前盈亏低于此值时触发，默认 -0.02（-2%%）"
-    )
-    parser.add_argument(
-        "--early-exit-mode",
-        type=str,
-        default="disabled",
-        choices=["disabled", "strength_veto"],
-        help="亏损提前换出模式: disabled=原硬卖(默认), strength_veto=二次确认门控"
-    )
-    parser.add_argument(
-        "--early-exit-strength-protect-threshold",
-        type=float,
-        default=0.55,
-        help="strength_veto 模式下的保护阈值，评分>=此值时否决卖出，默认 0.55"
-    )
-    parser.add_argument(
-        "--early-exit-max-reprieves",
-        type=int,
-        default=2,
-        help="strength_veto 模式下单只股票最多缓刑次数，默认 2"
-    )
-    parser.add_argument(
-        "--take-profit-threshold",
-        type=float,
-        default=None,
-        help="整体持仓止盈阈值（如 0.15 表示整体浮盈15%%时清仓，默认禁用）"
-    )
-    parser.add_argument(
-        "--no-take-profit-refill",
-        action="store_false",
-        default=True,
-        help="整体止盈后不触发补位买入（默认开启补位）"
-    )
     parser.add_argument(
         "--no-early-rebalance-on-empty",
         dest="enable_early_rebalance_on_empty",
@@ -4072,13 +3878,6 @@ def main():
                             kelly_vol_window=getattr(args, 'kelly_vol_window', 60),
                             kelly_max_leverage=getattr(args, 'kelly_max_leverage', 0.25),
                             stagger_tranches=args.stagger_tranches,
-                            weakness_exit_enabled=args.bt_weakness_exit_enabled,
-                            weakness_exit_threshold=args.bt_weakness_exit_threshold,
-                            weakness_exit_consecutive_days=args.bt_weakness_exit_consecutive_days,
-                            weakness_exit_min_holding_days=args.bt_weakness_exit_min_holding_days,
-                            weakness_exit_weights=args.bt_weakness_exit_weights,
-                            weakness_exit_industry_filter=args.bt_weakness_exit_industry_filter,
-                            weakness_exit_industry_bottom_pct=args.bt_weakness_exit_industry_bottom_pct,
                             enable_early_rebalance_on_empty=args.enable_early_rebalance_on_empty,
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,

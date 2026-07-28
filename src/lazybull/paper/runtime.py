@@ -113,7 +113,6 @@ def execute_trade_workflow(
     stop_loss_monitor = StopLossMonitor(stop_loss_config)
     sl_state = storage.load_stop_loss_state()
     if sl_state:
-        stop_loss_monitor.position_high_prices = sl_state.get("position_high_prices", {})
         stop_loss_monitor.consecutive_limit_down_days = sl_state.get(
             "consecutive_limit_down_days", {}
         )
@@ -139,7 +138,6 @@ def execute_trade_workflow(
         stop_loss_actions = _check_stop_loss(runner, stop_loss_monitor, corrected_date, config)
         storage.save_stop_loss_state(
             {
-                "position_high_prices": stop_loss_monitor.position_high_prices,
                 "consecutive_limit_down_days": stop_loss_monitor.consecutive_limit_down_days,
             }
         )

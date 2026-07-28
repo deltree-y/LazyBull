@@ -275,10 +275,10 @@ def test_equal_weight_lot_constraint_boundary_case(mock_runner):
     assert len(result) == 1
 
 
-def test_equal_weight_lot_constraint_excludes_existing_positions_when_holding_bonus_disabled(
+def test_equal_weight_lot_constraint_excludes_existing_positions(
     mock_runner,
 ):
-    """holding_bonus 关闭时，已持仓股票应被完全排除，不生成补差买单目标。"""
+    """已持仓股票应被完全排除，不生成补差买单目标。"""
     date = pd.Timestamp('20260201')
     stocks = ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ']
     top_n = 3
@@ -317,7 +317,6 @@ def test_equal_weight_lot_constraint_excludes_existing_positions_when_holding_bo
         daily_data,
         top_n,
         buy_price_type,
-        holding_bonus_enabled=False,
         existing_positions={'000001.SZ', '000002.SZ'},
     )
 

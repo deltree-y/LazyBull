@@ -95,14 +95,12 @@ def test_project_default_helpers(monkeypatch, tmp_path):
     assert get_models_root() == str(data_root / "models")
     assert get_reports_root() == str(data_root / "reports")
     assert get_paper_root() == str(data_root / "paper")
-    assert get_tushare_settings() == {
-        "max_retries": 7,
-        "retry_delay": 2.5,
-        "rate_limit": 123,
-    }
-    assert get_cost_settings() == {
-        "commission_rate": 0.0004,
-        "min_commission": 6.0,
-        "stamp_tax": 0.0006,
-        "slippage": 0.0007,
-    }
+    tushare_settings = get_tushare_settings()
+    assert tushare_settings["max_retries"] == 7
+    assert tushare_settings["retry_delay"] == 2.5
+    assert tushare_settings["rate_limit"] == 123
+    cost_settings = get_cost_settings()
+    assert cost_settings["commission_rate"] == 0.0004
+    assert cost_settings["min_commission"] == 6.0
+    assert cost_settings["stamp_tax"] == 0.0006
+    assert cost_settings["slippage"] == 0.0007

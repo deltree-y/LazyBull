@@ -56,12 +56,6 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
         lambda *_args, **_kwargs: call_order.append("stop_loss") or [{"ts_code": "000001.SZ"}],
     )
     monkeypatch.setattr(
-        lambda *_args, **_kwargs: call_order.append("early_exit") or [{"ts_code": "000002.SZ"}],
-    )
-    monkeypatch.setattr(
-        lambda *_args, **_kwargs: call_order.append("take_profit") or [{"ts_code": "000003.SZ"}],
-    )
-    monkeypatch.setattr(
         "src.lazybull.paper.runtime._execute_t1_if_pending",
         lambda *_args, **_kwargs: call_order.append("t1")
         or [{"ts_code": "000005.SZ", "action": "buy"}],
@@ -75,8 +69,8 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
         lambda *_args, **_kwargs: call_order.append("t0")
         or (
             [{"ts_code": "000006.SZ", "target_weight": 0.1, "reason": "补位", "score": None}],
-            0.8,
-            "ECT测试",
+            1.0,
+            "已移除",
             "success",
             ["000007.SZ"],
         ),
@@ -91,7 +85,7 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
 
     result = execute_trade_workflow("20260120", runtime=context)
 
-    assert call_order == ["t1", "stop_loss", "early_exit", "take_profit", "plan", "t0"]
+    assert call_order == ["t1", "stop_loss", "plan", "t0"]
     assert result.corrected_date == "20260120"
     assert result.stop_loss_actions == [{"ts_code": "000001.SZ"}]
     assert result.pending_sell_actions == [{"ts_code": "000004.SZ"}]
@@ -104,68 +98,8 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
     storage.save_last_trade_date.assert_called_once_with("20260120")
 
 
-def test_execute_trade_workflow_still_checks_early_exit_in_disabled_mode(monkeypatch):
-    runner = MagicMock()
-    runner._correct_trade_date.return_value = "20260120"
-    runner._get_next_trade_date.return_value = None
-    runner.missing_factors = []
-    runner.paper_storage.load_instructions.return_value = []
-
-    storage = MagicMock()
-    storage.load_account_state.return_value = None
-    storage.load_stop_loss_state.return_value = None
-
-    trading_config = MagicMock()
-    trading_config.create_stop_loss_config.return_value = None
-
-    context = PaperTradeRuntimeContext(
-        storage=storage,
-        config={
-            "stop_loss_enabled": False,
-            "buy_price": "close",
-            "sell_price": "close",
-        },
-        trading_config=trading_config,
-        runner=runner,
-    )
-
-    call_order = []
-
-    monkeypatch.setattr(
-        "src.lazybull.paper.runtime.StopLossMonitor",
-        lambda *_args, **_kwargs: MagicMock(),
-    )
-    monkeypatch.setattr(
-        lambda *_args, **_kwargs: call_order.append("early_exit")
-        or [{"ts_code": "000002.SZ"}],
-    )
-    monkeypatch.setattr(
-        lambda *_args, **_kwargs: [],
-    )
-    monkeypatch.setattr(
-        "src.lazybull.paper.runtime._execute_t1_if_pending",
-        lambda *_args, **_kwargs: [],
-    )
-    monkeypatch.setattr(
-        "src.lazybull.paper.runtime._plan_next_day_retry_and_sell_instructions",
-        lambda *_args, **_kwargs: [],
-    )
-    monkeypatch.setattr(
-        "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
-        lambda *_args, **_kwargs: ([], 1.0, "ECT 未启用", "not_rebalance_day", []),
-    )
-    monkeypatch.setattr(
-        "src.lazybull.paper.runtime.DataLoader",
-        lambda *_args, **_kwargs: MagicMock(build_stock_names_dict=lambda: {}),
-    )
-
-    result = execute_trade_workflow("20260120", runtime=context)
-
-    assert call_order == ["early_exit"]
-
-
-def test_format_trade_result_includes_profit_management_sections():
-    """交易结果 Markdown 应包含新增的提前换出与整体止盈摘要。"""
+def test_format_trade_result_includes_stop_loss_and_protected_sections():
+    """交易结果 Markdown 应包含止损与盈利延续保护摘要。"""
     runner = MagicMock()
     runner.account.get_positions.return_value = {}
     runner.account.get_cash.return_value = 12345.0
@@ -184,8 +118,6 @@ def test_format_trade_result_includes_profit_management_sections():
         t1_actions=[],
         t0_targets=[],
         t0_instructions=[],
-        ect_exposure=0.7,
-        ect_reason="ECT 回撤保护",
         t0_status="not_rebalance_day",
         protected_stocks=["000004.SZ", "000005.SZ"],
         stock_names={
@@ -199,14 +131,10 @@ def test_format_trade_result_includes_profit_management_sections():
 
     text = format_trade_result(result)
 
-    assert "提前换出: 1笔" in text
-    assert "整体止盈: 1笔" in text
+    assert "止损: 1笔" in text
     assert "盈利延续保护: 2只" in text
-    assert "--- 亏损提前换出 ---" in text
-    assert "--- 整体止盈 ---" in text
     assert "--- 盈利延续保护 ---" in text
     assert "1. 豫园股份(000004.SZ)" in text
-    assert "ECT系数: 0.70 (ECT 回撤保护)" in text
 
 
 def test_execute_trade_workflow_skip_save_ranked_candidates_when_no_t0(monkeypatch):
@@ -461,15 +389,46 @@ def test_plan_pending_buy_retry_instructions_uses_portfolio_topn_as_slot_limit()
     assert instructions[0].retry_attempt == 1
 
 
-def test_execute_t0_if_rebalance_day_allows_holding_tail_early_rebalance():
-    """非调仓日但存在盈利延续拖尾持仓时，应允许提前执行 T0。"""
+def test_execute_t0_skips_early_rebalance_when_positions_exist():
+    """非调仓日且仍有持仓时，不应提前执行 T0（仅空仓可提前调仓）。"""
+    runner = MagicMock()
+    runner.paper_storage.check_run_exists.return_value = False
+    runner.paper_storage.load_strategy_state.return_value = {}
+    runner.paper_storage.find_pending_instructions.return_value = None
+    runner.paper_storage.load_pending_buys.return_value = []
+    runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
+    runner.broker.pending_sells = []
+    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
+
+    _, _, _, status, protected = _execute_t0_if_rebalance_day(
+        runner=runner,
+        trade_date="20260120",
+        config={
+            "enable_early_rebalance_on_empty": True,
+            "buy_price": "close",
+            "sell_price": "open",
+            "universe": "mainboard",
+            "top_n": 15,
+            "rebalance_freq": 5,
+            "exclude_st": True,
+            "min_list_days": 365,
+        },
+    )
+
+    runner.run_t0.assert_not_called()
+    assert protected == []
+    assert status == "not_rebalance_day"
+
+
+def test_execute_t0_allows_early_rebalance_when_empty():
+    """非调仓日但空仓时，应允许提前执行 T0。"""
     runner = MagicMock()
     runner.paper_storage.check_run_exists.return_value = False
     runner.paper_storage.load_strategy_state.return_value = {}
     runner.paper_storage.find_pending_instructions.return_value = None
     runner.paper_storage.load_pending_buys.return_value = []
     runner.paper_storage.load_instructions.return_value = []
-    runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
+    runner.account.get_positions.return_value = {}
     runner.broker.pending_sells = []
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
     runner._get_next_trade_date.return_value = "20260121"
@@ -479,10 +438,6 @@ def test_execute_t0_if_rebalance_day_allows_holding_tail_early_rebalance():
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "signal_gate_mode": "composite",
-            "equity_curve_enabled": False,
-            "market_regime_enabled": False,
-            "market_regime_ma250_hard_stop": False,
             "buy_price": "close",
             "sell_price": "open",
             "universe": "mainboard",
@@ -490,227 +445,16 @@ def test_execute_t0_if_rebalance_day_allows_holding_tail_early_rebalance():
             "rebalance_freq": 5,
             "exclude_st": True,
             "min_list_days": 365,
-            "industry_momentum_filter": False,
-            "industry_momentum_bottom_pct": 0.5,
-            "holding_bonus_enabled": False,
-            "holding_bonus_sigma": 0.5,
         },
     )
 
     runner.run_t0.assert_called_once()
-    assert runner.run_t0.call_args.kwargs["force_rebalance"] is True
-    assert runner.run_t0.call_args.kwargs["protected_stocks"] == {"600925.SH"}
-    assert protected == ["600925.SH"]
+    assert protected == []
     assert status == "no_targets"
 
 
-def test_execute_t0_if_rebalance_day_skips_when_no_holding_tail_protection():
-    """非调仓日且残留持仓不满足盈利延续保护时，不应提前执行 T0。"""
-    runner = MagicMock()
-    runner.paper_storage.check_run_exists.return_value = False
-    runner.paper_storage.load_strategy_state.return_value = {}
-    runner.paper_storage.find_pending_instructions.return_value = None
-    runner.paper_storage.load_pending_buys.return_value = []
-    runner.account.get_positions.return_value = {"600925.SH": MagicMock()}
-    runner.broker.pending_sells = []
-    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
-
-    _, _, _, status, protected = _execute_t0_if_rebalance_day(
-        runner=runner,
-        trade_date="20260120",
-        config={
-            "enable_early_rebalance_on_empty": True,
-            "signal_gate_mode": "composite",
-            "equity_curve_enabled": False,
-            "market_regime_enabled": False,
-            "market_regime_ma250_hard_stop": False,
-            "buy_price": "close",
-            "sell_price": "open",
-            "universe": "mainboard",
-            "top_n": 15,
-            "rebalance_freq": 5,
-            "exclude_st": True,
-            "min_list_days": 365,
-            "industry_momentum_filter": False,
-            "industry_momentum_bottom_pct": 0.5,
-            "holding_bonus_enabled": False,
-            "holding_bonus_sigma": 0.5,
-        },
-    )
-
-    runner.run_t0.assert_not_called()
-    assert protected == []
-    assert status == "not_rebalance_day"
-
-
-def test_holding_tail_post_check_rejects_when_weight_exceeds():
-    """持有期拖尾：T0 生成指令后权重超限应撤回（与回测 engine.py 一致）。
-
-    残留仓位 100% + 新信号 100% = 200% > 100% → 清空指令，返回 not_rebalance_day。
-    """
-    import pandas as pd
-
-    runner = MagicMock()
-    runner.paper_storage.check_run_exists.return_value = False
-    runner.paper_storage.load_strategy_state.return_value = {}
-    runner.paper_storage.find_pending_instructions.return_value = None
-    runner.paper_storage.load_pending_buys.return_value = []
-    runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
-    runner.broker.pending_sells = []
-    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
-    runner._get_next_trade_date.return_value = "20260121"
-
-    # 价格数据：持仓市值 = 总资产 → 残留占比 100%
-    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [100.0]})
-    runner.loader.load_clean_daily_by_date.return_value = price_df
-    runner.account.get_total_value.return_value = 100000.0
-
-    # T0 生成的买入指令（权重 1.0），无卖出 → 残留 100% + 新信号 100% > 100%
-    buy_inst = MagicMock()
-    buy_inst.action = "buy"
-    buy_inst.target_weight = 1.0
-    runner.paper_storage.load_instructions.return_value = [buy_inst]
-
-    _, _, _, status, protected = _execute_t0_if_rebalance_day(
-        runner=runner,
-        trade_date="20260120",
-        config={
-            "enable_early_rebalance_on_empty": True,
-            "signal_gate_mode": "composite",
-            "equity_curve_enabled": False,
-            "market_regime_enabled": False,
-            "market_regime_ma250_hard_stop": False,
-            "buy_price": "close",
-            "sell_price": "open",
-            "universe": "mainboard",
-            "top_n": 20,
-            "rebalance_freq": 5,
-            "exclude_st": True,
-            "min_list_days": 365,
-            "industry_momentum_filter": False,
-            "industry_momentum_bottom_pct": 0.5,
-            "holding_bonus_enabled": False,
-            "holding_bonus_sigma": 0.5,
-        },
-    )
-
-    # 必须清空已保存的指令
-    runner.paper_storage.save_instructions.assert_called_with("20260121", [])
-    assert status == "not_rebalance_day"
-    assert protected == []
-
-
-def test_holding_tail_post_check_allows_when_weight_ok():
-    """持有期拖尾：权重不超限时应允许（与回测一致）。
-
-    残留仓位 10% + 新信号 30% = 40% ≤ 100% → 允许。
-    """
-    import pandas as pd
-
-    runner = MagicMock()
-    runner.paper_storage.check_run_exists.return_value = False
-    runner.paper_storage.load_strategy_state.return_value = {}
-    runner.paper_storage.find_pending_instructions.return_value = None
-    runner.paper_storage.load_pending_buys.return_value = []
-    runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=100)}
-    runner.broker.pending_sells = []
-    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
-    runner._get_next_trade_date.return_value = "20260121"
-
-
-    # 持仓市值 10,000，总资产 100,000 → 残留占比 10%
-    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [100.0]})
-    runner.loader.load_clean_daily_by_date.return_value = price_df
-    runner.account.get_total_value.return_value = 100000.0
-
-    # T0 生成低权重买入指令 → 10% + 30% ≤ 100%
-    buy_inst = MagicMock()
-    buy_inst.action = "buy"
-    buy_inst.target_weight = 0.3
-    runner.paper_storage.load_instructions.return_value = [buy_inst]
-
-    _, _, _, status, protected = _execute_t0_if_rebalance_day(
-        runner=runner,
-        trade_date="20260120",
-        config={
-            "enable_early_rebalance_on_empty": True,
-            "signal_gate_mode": "composite",
-            "equity_curve_enabled": False,
-            "market_regime_enabled": False,
-            "market_regime_ma250_hard_stop": False,
-            "buy_price": "close",
-            "sell_price": "open",
-            "universe": "mainboard",
-            "top_n": 20,
-            "rebalance_freq": 5,
-            "exclude_st": True,
-            "min_list_days": 365,
-            "industry_momentum_filter": False,
-            "industry_momentum_bottom_pct": 0.5,
-            "holding_bonus_enabled": False,
-            "holding_bonus_sigma": 0.5,
-        },
-    )
-
-    # 不应清空指令，应该正常继续
-    # save_instructions 可能被 exposure 代码调用，但不应该是 [](清空)
-    save_calls = runner.paper_storage.save_instructions.call_args_list
-    cleared = any(call[0][1] == [] for call in save_calls if len(call[0]) >= 2)
-    assert not cleared, "权重未超限时不应清空指令"
-    assert status == "success"
-
-
-def test_holding_tail_disabled_gate_short_circuit_before_t0():
-    """signal_gate_mode=disabled 且存在保护残留时，应前置拒绝，不进入 run_t0。"""
-    import pandas as pd
-
-    runner = MagicMock()
-    runner.paper_storage.check_run_exists.return_value = False
-    runner.paper_storage.load_strategy_state.return_value = {}
-    runner.paper_storage.find_pending_instructions.return_value = None
-    runner.paper_storage.load_pending_buys.return_value = []
-    runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
-
-    # 触发 holding_tail
-    runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
-    runner.broker.pending_sells = []
-
-    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [10.0]})
-    runner.loader.load_clean_daily_by_date.return_value = price_df
-    runner.account.get_total_value.return_value = 100000.0
-
-    _, _, _, status, protected = _execute_t0_if_rebalance_day(
-        runner=runner,
-        trade_date="20260120",
-        config={
-            "enable_early_rebalance_on_empty": True,
-            "signal_gate_mode": "disabled",
-            "equity_curve_enabled": False,
-            "market_regime_enabled": False,
-            "market_regime_ma250_hard_stop": False,
-            "buy_price": "close",
-            "sell_price": "open",
-            "universe": "mainboard",
-            "top_n": 20,
-            "rebalance_freq": 5,
-            "exclude_st": True,
-            "min_list_days": 365,
-            "industry_momentum_filter": False,
-            "industry_momentum_bottom_pct": 0.5,
-            "holding_bonus_enabled": False,
-            "holding_bonus_sigma": 0.5,
-        },
-    )
-
-    runner.run_t0.assert_not_called()
-    assert status == "not_rebalance_day"
-    assert protected == []
-
-
-def test_rebalance_day_should_not_be_blocked_by_holding_tail_short_circuit():
-    """真实调仓日即使存在 holding_tail + disabled，也不能前置拒绝。"""
-    import pandas as pd
-
+def test_rebalance_day_executes_run_t0():
+    """真实调仓日应正常执行 run_t0。"""
     runner = MagicMock()
     runner.paper_storage.check_run_exists.return_value = False
     runner.paper_storage.load_strategy_state.return_value = {}
@@ -723,19 +467,11 @@ def test_rebalance_day_should_not_be_blocked_by_holding_tail_short_circuit():
     runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
     runner.broker.pending_sells = []
 
-    price_df = pd.DataFrame({"ts_code": ["600925.SH"], "close": [10.0]})
-    runner.loader.load_clean_daily_by_date.return_value = price_df
-    runner.account.get_total_value.return_value = 100000.0
-
     _, _, _, status, _ = _execute_t0_if_rebalance_day(
         runner=runner,
         trade_date="20260120",
         config={
             "enable_early_rebalance_on_empty": True,
-            "signal_gate_mode": "disabled",
-            "equity_curve_enabled": False,
-            "market_regime_enabled": False,
-            "market_regime_ma250_hard_stop": False,
             "buy_price": "close",
             "sell_price": "open",
             "universe": "mainboard",
@@ -743,13 +479,8 @@ def test_rebalance_day_should_not_be_blocked_by_holding_tail_short_circuit():
             "rebalance_freq": 20,
             "exclude_st": True,
             "min_list_days": 365,
-            "industry_momentum_filter": False,
-            "industry_momentum_bottom_pct": 0.5,
-            "holding_bonus_enabled": False,
-            "holding_bonus_sigma": 0.5,
         },
     )
 
     runner.run_t0.assert_called_once()
-    assert runner.run_t0.call_args.kwargs["force_rebalance"] is False
     assert status == "no_targets"

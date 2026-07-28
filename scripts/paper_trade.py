@@ -185,22 +185,6 @@ def _check_stop_loss(
     return shared_check_stop_loss(runner, stop_loss_monitor, trade_date, config)
 
 
-def _check_early_exit(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: dict,
-) -> List[Dict]:
-    """检查亏损提前换出触发。"""
-
-
-def _check_take_profit(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: dict,
-) -> List[Dict]:
-    """检查整体止盈触发。"""
-
-
 def _process_pending_sells(
     runner: PaperTradingRunner,
     trade_date: str,

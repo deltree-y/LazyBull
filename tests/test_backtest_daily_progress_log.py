@@ -163,10 +163,6 @@ def test_daily_signal_log_summarizes_new_buy_and_sell_signals():
         "trigger_date": trade_date,
         "sell_type": "holding_period",
     }
-    engine.pending_condition_sells["000004.SZ"] = {
-        "trigger_date": trade_date,
-        "sell_type": "early_exit",
-    }
     engine.pending_stop_loss_sells["000005.SZ"] = {
         "trigger_date": trade_date,
         "trigger_type": "drawdown",
@@ -178,23 +174,8 @@ def test_daily_signal_log_summarizes_new_buy_and_sell_signals():
 
     assert (
         engine._build_daily_signal_log(trade_date)
-        == "信号: 卖[持有期1, 亏损换出1, 回撤止损1] | 买[调仓2] | 延续[3]"
+        == "信号: 卖[持有期1, 回撤止损1] | 买[调仓2]"
     )
-
-
-def test_daily_signal_log_can_show_extension_only():
-    """当日只有盈利延续时，也应输出信号摘要。"""
-    trade_date = pd.Timestamp("2025-01-02")
-    engine = BacktestEngine(
-        universe=MockUniverse(),
-        signal=MockSignal(top_n=20),
-        initial_capital=100000.0,
-        rebalance_freq=20,
-        verbose=False,
-    )
-
-
-    assert engine._build_daily_signal_log(trade_date) == "信号: 延续[20]"
 
 
 def test_target_position_count_scales_with_stagger_tranches():
@@ -407,7 +388,7 @@ def test_run_emits_daily_summary_before_trade_signal_and_detail_logs(monkeypatch
     signal_index = next(
         i
         for i, (_, message, _) in enumerate(emitted_messages)
-        if "信号: 卖[持有期1, 回撤止损1] | 买[调仓2] | 延续[4]" in message
+        if "信号: 卖[持有期1, 回撤止损1] | 买[调仓2]" in message
     )
     buy_index = next(
         i for i, (_, message, _) in enumerate(emitted_messages) if "交易: 买1[000001.SZ(10.3w)]" in message
@@ -530,24 +511,18 @@ def test_run_emits_compact_daily_warning_summaries_as_plain_lines(monkeypatch):
     position_unfilled = next(item for item in emitted_messages if "仓位未满:" in item[1])
     completion_skipped = next(item for item in emitted_messages if "补齐跳过:" in item[1])
     completion_abandoned = next(item for item in emitted_messages if "补齐放弃:" in item[1])
-    early_exit = next(item for item in emitted_messages if "亏损换出:" in item[1])
     pending_order_added = next(item for item in emitted_messages if "延迟订单: " in item[1])
     pending_order_success = next(item for item in emitted_messages if "延迟订单成交: " in item[1])
     pending_order_expired = next(item for item in emitted_messages if "延迟订单放弃: " in item[1])
-    take_profit = next(item for item in emitted_messages if "整体止盈:" in item[1])
-    time_stop_loss = next(item for item in emitted_messages if "时间止损:" in item[1])
     detail_index = next(i for i, item in enumerate(emitted_messages) if "调试细节日志" in item[1])
     early_index = emitted_messages.index(early_rebalance)
     duplicate_buy_index = emitted_messages.index(duplicate_buy)
     position_unfilled_index = emitted_messages.index(position_unfilled)
     completion_skipped_index = emitted_messages.index(completion_skipped)
     completion_abandoned_index = emitted_messages.index(completion_abandoned)
-    early_exit_index = emitted_messages.index(early_exit)
     pending_order_added_index = emitted_messages.index(pending_order_added)
     pending_order_success_index = emitted_messages.index(pending_order_success)
     pending_order_expired_index = emitted_messages.index(pending_order_expired)
-    take_profit_index = emitted_messages.index(take_profit)
-    time_stop_loss_index = emitted_messages.index(time_stop_loss)
 
     assert early_rebalance == ("INFO", "  提前调仓: 空仓触发[无持仓, 新信号入队]", False)
     assert duplicate_buy == (
@@ -570,11 +545,6 @@ def test_run_emits_compact_daily_warning_summaries_as_plain_lines(monkeypatch):
         "  补齐放弃: 信号日2021-01-18/尝试4次/剩2[603444.SH, 601186.SH]",
         False,
     )
-    assert early_exit == (
-        "INFO",
-        "  亏损换出: 触发1[002380.SZ(4d,-19.1%)]",
-        False,
-    )
     assert pending_order_added == (
         "INFO",
         "  延迟订单: 新增卖2[002701.SZ(跌停), 000938.SZ(跌停)]",
@@ -590,28 +560,11 @@ def test_run_emits_compact_daily_warning_summaries_as_plain_lines(monkeypatch):
         "  延迟订单放弃: 超次买1[300001.SZ(重4>3)] | 超期买1[300002.SZ(延6d>5d)]",
         False,
     )
-    assert take_profit == ("INFO", "  整体止盈: 触发[+6.1%>=+5.0%, 3只次日卖出]", False)
-    assert (
-        time_stop_loss
-        == (
-            "INFO",
-            "  时间止损: 触发1[000001.SZ(15d,-3.1%)] | 否决1[000002.SZ(16d,-2.5%,0.81)]",
-            False,
-        )
-    )
     assert early_index < detail_index
     assert duplicate_buy_index < detail_index
     assert position_unfilled_index < detail_index
     assert completion_skipped_index < detail_index
     assert completion_abandoned_index < detail_index
-    assert early_exit_index < detail_index
     assert pending_order_added_index < detail_index
     assert pending_order_success_index < detail_index
     assert pending_order_expired_index < detail_index
-    assert take_profit_index < detail_index
-    assert time_stop_loss_index < detail_index
-
-
-def test_profit_extension_summary_shows_more_items():
-    """盈利延续摘要已移除，保留空桩。"""
-    pass

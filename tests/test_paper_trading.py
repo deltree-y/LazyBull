@@ -277,36 +277,6 @@ def test_storage_append_trade(temp_storage):
     assert True  # 桩测试，盈亏动态持仓功能已移除
 
 
-def test_score_holding_strength_uses_load_cs_train_day_interface():
-    """Storage 仅提供 load_cs_train_day 时，strength 评分不应抛 AttributeError。"""
-    runner = PaperTradingRunner.__new__(PaperTradingRunner)
-    runner.storage = MagicMock()
-    runner.signal = MagicMock()
-    runner.signal.generate_ranked = MagicMock()
-    runner.signal._last_ranked_candidates = []
-    runner.storage.load_cs_train_day.return_value = pd.DataFrame(
-        [{'ts_code': '000001.SZ'}]
-    )
-
-    position = Position(
-        ts_code='000001.SZ',
-        shares=100,
-        buy_price=10.0,
-        buy_cost=5.0,
-        buy_date='20260120',
-    )
-
-    result = runner._score_holding_strength(
-        ts_code='000001.SZ',
-        trade_date='20260121',
-        pos=position,
-        profit_rate=0.02,
-    )
-
-    runner.storage.load_cs_train_day.assert_called_once_with('20260121', subdir='cs_infer')
-    assert result is not None
-
-
 def test_print_t0_targets_marks_protected_stocks_as_retained():
     """T0 目标详情中，盈利延续保护股票应显示为保留而非清仓。"""
     runner = PaperTradingRunner.__new__(PaperTradingRunner)
@@ -1205,38 +1175,6 @@ def test_broker_positions_with_stock_names():
         assert df.iloc[0]['持仓股数'] == 1000
         assert df.iloc[0]['持有天数'] == 5
         assert df.iloc[0]['持有剩余'] == 15
-
-
-def test_broker_positions_remaining_includes_extension_days():
-    """测试开启盈利延续时，持有剩余计入延期持有天数。"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        storage = PaperStorage(tmpdir)
-        account = PaperAccount(initial_capital=100000.0, storage=storage)
-        broker = PaperBroker(account, storage=storage)
-
-        storage.save_config(
-            {
-                'rebalance_freq': 20,
-            }
-        )
-
-        account.add_position(
-            ts_code='000001.SZ',
-            shares=1000,
-            buy_price=10.0,
-            buy_cost=15.0,
-            buy_date='20260115',
-            status='持有'
-        )
-
-        prices = {'000001.SZ': 12.0}
-        df = broker.get_positions_detail(prices, current_date='20260122')
-
-        # 交易日口径下 20260115 -> 20260122 为 5 天（不含买入当日）
-        # 持有上限 = 20 + 5 = 25，剩余 = 25 - 5 = 20
-        assert len(df) == 1
-        assert df.iloc[0]['持有天数'] == 5
-        assert df.iloc[0]['持有剩余'] == 20
 
 
 def test_broker_positions_without_stock_names():
