@@ -278,19 +278,26 @@ class FeatureBuilder:
 
         # 6. 价值红利 + 资金流（FeatureBuilder 实例方法）
         if ctx.daily_basic_data is not None and len(ctx.daily_basic_data) > 0:
-            features = self._add_value_dividend_features(
-                features, ctx.daily_basic_data, ctx.trade_date
+            features = _add_value_dividend_features_static(
+                features=features,
+                daily_basic_data=ctx.daily_basic_data,
+                trade_date=ctx.trade_date,
             )
         if ctx.moneyflow_data is not None and len(ctx.moneyflow_data) > 0:
-            features = self._add_moneyflow_features(
-                features, ctx.moneyflow_data, ctx.trade_date, trading_dates, current_idx
+            features = _add_moneyflow_features_static(
+                features=features,
+                moneyflow_data=ctx.moneyflow_data,
+                trade_date=ctx.trade_date,
+                trading_dates=trading_dates,
+                current_idx=current_idx,
+                trading_date_index=self._trading_date_index,
             )
 
         # 7. 因子处理器（替代原 11 个内联 if-else 块）
         features = self._get_factor_registry().apply_all(features, ctx, current_data)
 
         # 7.5 基本面代理回填（cf_sales、cf_nm 等列）
-        features = self._backfill_fundamental_proxy_features(features)
+        features = _backfill_fundamental_proxy_features_static(features)
 
         # 8. 行业合并
         if ctx.shenwan_industry is not None:
@@ -376,19 +383,7 @@ class FeatureBuilder:
     @staticmethod
     def _backfill_fundamental_proxy_features(features: pd.DataFrame) -> pd.DataFrame:
         """用可稳定获取的字段回填基本面代理列（cf_sales、cf_nm）。"""
-        if "cf_sales" not in features.columns:
-            features["cf_sales"] = np.nan
-        if "q_ocf_to_sales" in features.columns:
-            features["cf_sales"] = features["cf_sales"].combine_first(features["q_ocf_to_sales"])
-        if "ocf_to_revenue" in features.columns:
-            features["cf_sales"] = features["cf_sales"].combine_first(features["ocf_to_revenue"])
-
-        if "cf_nm" not in features.columns:
-            features["cf_nm"] = np.nan
-        if "ocf_to_profit" in features.columns:
-            features["cf_nm"] = features["cf_nm"].combine_first(features["ocf_to_profit"])
-
-        return features
+        return _backfill_fundamental_proxy_features_static(features)
 
     # ── 交易日历工具 ──────────────────────────────────────────
 
@@ -453,6 +448,9 @@ class FeatureBuilder:
             on=["ts_code", "trade_date"],
             how="left",
         )
+        daily_adj["adj_factor"] = pd.to_numeric(daily_adj["adj_factor"], errors="coerce")
+        daily_adj = daily_adj.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+        daily_adj["adj_factor"] = daily_adj.groupby("ts_code")["adj_factor"].ffill().bfill()
         daily_adj["close_adj"] = daily_adj["close"] * daily_adj["adj_factor"]
         if "open" in daily_adj.columns:
             daily_adj["open_adj"] = daily_adj["open"] * daily_adj["adj_factor"]
@@ -465,15 +463,8 @@ class FeatureBuilder:
             missing_codes = daily_adj.loc[daily_adj["adj_factor"].isna(), "ts_code"].unique()
             logger.warning(
                 f"有 {missing_adj} 条记录缺少复权因子（涉及 {len(missing_codes)} 只股票），"
-                f"将使用原始价格"
+                "对应复权价保持为空，避免收益污染"
             )
-            daily_adj["close_adj"].fillna(daily_adj["close"], inplace=True)
-            if "open_adj" in daily_adj.columns:
-                daily_adj["open_adj"].fillna(daily_adj["open"], inplace=True)
-            if "high_adj" in daily_adj.columns:
-                daily_adj["high_adj"].fillna(daily_adj["high"], inplace=True)
-            if "low_adj" in daily_adj.columns:
-                daily_adj["low_adj"].fillna(daily_adj["low"], inplace=True)
         return daily_adj
 
     # ── 技术因子缓存 ──────────────────────────────────────────
@@ -645,48 +636,7 @@ class FeatureBuilder:
         daily_basic_data: pd.DataFrame,
         trade_date: str,
     ) -> pd.DataFrame:
-        from ..common.feature_utils import log1p_transform
-
-        daily_basic_today = daily_basic_data[daily_basic_data["trade_date"] == trade_date].copy()
-        if len(daily_basic_today) == 0:
-            logger.warning(f"{trade_date} 没有 daily_basic 数据，价值红利特征将为空")
-            return features
-        value_cols = [
-            "ts_code",
-            "pb",
-            "pe_ttm",
-            "ps_ttm",
-            "dv_ttm",
-            "total_mv",
-            "circ_mv",
-            "turnover_rate",
-            "volume_ratio",
-        ]
-        existing_cols = ["ts_code"] + [c for c in value_cols[1:] if c in daily_basic_today.columns]
-        daily_basic_today = daily_basic_today[existing_cols].copy()
-        features = features.merge(daily_basic_today, on="ts_code", how="left")
-        if "dv_ttm" in features.columns:
-            features["dv_ttm"] = features["dv_ttm"].fillna(0)
-        if "pe_ttm" in features.columns:
-            features["ep_ttm"] = np.where(
-                (features["pe_ttm"].notna()) & (features["pe_ttm"] > 0),
-                1.0 / features["pe_ttm"],
-                np.nan,
-            )
-            features["is_loss"] = ((features["pe_ttm"].isna()) | (features["pe_ttm"] <= 0)).astype(
-                int
-            )
-        if "pb" in features.columns:
-            features["bp"] = np.where(
-                (features["pb"].notna()) & (features["pb"] > 0),
-                1.0 / features["pb"],
-                np.nan,
-            )
-        if "total_mv" in features.columns:
-            features["log_total_mv"] = log1p_transform(features["total_mv"])
-        if "circ_mv" in features.columns:
-            features["log_circ_mv"] = log1p_transform(features["circ_mv"])
-        return features
+        return _add_value_dividend_features_static(features, daily_basic_data, trade_date)
 
     # ── 资金流 ────────────────────────────────────────────────
 
@@ -698,104 +648,14 @@ class FeatureBuilder:
         trading_dates: List[str],
         current_idx: int,
     ) -> pd.DataFrame:
-        from ..common.feature_utils import winsorize_series
-
-        moneyflow_today = moneyflow_data[moneyflow_data["trade_date"] == trade_date].copy()
-        if len(moneyflow_today) == 0:
-            logger.warning(f"{trade_date} 没有 moneyflow 数据，资金流特征将为空")
-            return features
-        merge_cols = ["ts_code", "net_mf_amount"]
-        merge_cols = [c for c in merge_cols if c in moneyflow_today.columns]
-        if len(merge_cols) > 1:
-            features = features.merge(moneyflow_today[merge_cols], on="ts_code", how="left")
-        if (
-            "buy_lg_amount" in moneyflow_today.columns
-            and "sell_lg_amount" in moneyflow_today.columns
-        ):
-            moneyflow_today["lg_net_amount"] = (
-                moneyflow_today["buy_lg_amount"] - moneyflow_today["sell_lg_amount"]
-            )
-            features = features.merge(
-                moneyflow_today[["ts_code", "lg_net_amount"]], on="ts_code", how="left"
-            )
-        if (
-            "buy_elg_amount" in moneyflow_today.columns
-            and "sell_elg_amount" in moneyflow_today.columns
-        ):
-            moneyflow_today["elg_net_amount"] = (
-                moneyflow_today["buy_elg_amount"] - moneyflow_today["sell_elg_amount"]
-            )
-            features = features.merge(
-                moneyflow_today[["ts_code", "elg_net_amount"]], on="ts_code", how="left"
-            )
-            _total = moneyflow_today["buy_elg_amount"] + moneyflow_today["sell_elg_amount"]
-            moneyflow_today["order_imbalance"] = np.where(
-                _total > 1e-6,
-                (moneyflow_today["buy_elg_amount"] - moneyflow_today["sell_elg_amount"]) / _total,
-                np.nan,
-            )
-            features = features.merge(
-                moneyflow_today[["ts_code", "order_imbalance"]], on="ts_code", how="left"
-            )
-        for window in [5, 20]:
-            hist_dates = self._get_lookback_dates(trade_date, window, trading_dates)
-            if not hist_dates:
-                features[f"net_mf_amount_sum_{window}"] = np.nan
-                features[f"net_mf_amount_mean_{window}"] = np.nan
-                if "lg_net_amount" in features.columns:
-                    features[f"lg_net_amount_sum_{window}"] = np.nan
-                if "elg_net_amount" in features.columns:
-                    features[f"elg_net_amount_sum_{window}"] = np.nan
-                continue
-            hist_moneyflow = moneyflow_data[moneyflow_data["trade_date"].isin(hist_dates)].copy()
-            if len(hist_moneyflow) == 0:
-                continue
-            if (
-                "buy_lg_amount" in hist_moneyflow.columns
-                and "sell_lg_amount" in hist_moneyflow.columns
-            ):
-                hist_moneyflow["lg_net_amount"] = (
-                    hist_moneyflow["buy_lg_amount"] - hist_moneyflow["sell_lg_amount"]
-                )
-            if (
-                "buy_elg_amount" in hist_moneyflow.columns
-                and "sell_elg_amount" in hist_moneyflow.columns
-            ):
-                hist_moneyflow["elg_net_amount"] = (
-                    hist_moneyflow["buy_elg_amount"] - hist_moneyflow["sell_elg_amount"]
-                )
-                # 历史订单失衡（用于滚动均值）
-                _total = hist_moneyflow["buy_elg_amount"] + hist_moneyflow["sell_elg_amount"]
-                hist_moneyflow["order_imbalance"] = np.where(
-                    _total > 1e-6,
-                    (hist_moneyflow["buy_elg_amount"] - hist_moneyflow["sell_elg_amount"]) / _total,
-                    np.nan,
-                )
-            agg_dict = {}
-            if "net_mf_amount" in hist_moneyflow.columns:
-                agg_dict["net_mf_amount"] = ["sum", "mean"]
-            if "lg_net_amount" in hist_moneyflow.columns:
-                agg_dict["lg_net_amount"] = ["sum"]
-            if "elg_net_amount" in hist_moneyflow.columns:
-                agg_dict["elg_net_amount"] = ["sum"]
-            if "order_imbalance" in hist_moneyflow.columns:
-                agg_dict["order_imbalance"] = ["mean"]
-            if not agg_dict:
-                continue
-            rolling_features = hist_moneyflow.groupby("ts_code").agg(agg_dict).reset_index()
-            new_columns = ["ts_code"]
-            for col in rolling_features.columns[1:]:
-                if isinstance(col, tuple):
-                    new_columns.append(f"{col[0]}_{col[1]}_{window}")
-                else:
-                    new_columns.append(col)
-            rolling_features.columns = new_columns
-            features = features.merge(rolling_features, on="ts_code", how="left")
-        winsorize_cols = [c for c in features.columns if "net_amount" in c or "mf_amount" in c]
-        for col in winsorize_cols:
-            if col in features.columns:
-                features[col] = winsorize_series(features[col], limits=(0.01, 0.01))
-        return features
+        return _add_moneyflow_features_static(
+            features=features,
+            moneyflow_data=moneyflow_data,
+            trade_date=trade_date,
+            trading_dates=trading_dates,
+            current_idx=current_idx,
+            trading_date_index=self._trading_date_index,
+        )
 
     # ── 过滤 ──────────────────────────────────────────────────
 
@@ -1005,6 +865,179 @@ def _calculate_base_features(
 
         hist_features = _calculate_window_features_static(hist_data, current_data, window)
         features = features.merge(hist_features, on="ts_code", how="left")
+
+    return features
+
+
+def _backfill_fundamental_proxy_features_static(features: pd.DataFrame) -> pd.DataFrame:
+    """用可稳定获取的字段回填基本面代理列（cf_sales、cf_nm）。"""
+    features = features.copy()
+
+    if "cf_sales" not in features.columns:
+        features["cf_sales"] = np.nan
+    if "q_ocf_to_sales" in features.columns:
+        features["cf_sales"] = features["cf_sales"].combine_first(features["q_ocf_to_sales"])
+    if "ocf_to_revenue" in features.columns:
+        features["cf_sales"] = features["cf_sales"].combine_first(features["ocf_to_revenue"])
+
+    if "cf_nm" not in features.columns:
+        features["cf_nm"] = np.nan
+    if "ocf_to_profit" in features.columns:
+        features["cf_nm"] = features["cf_nm"].combine_first(features["ocf_to_profit"])
+
+    return features
+
+
+def _add_value_dividend_features_static(
+    features: pd.DataFrame,
+    daily_basic_data: pd.DataFrame,
+    trade_date: str,
+) -> pd.DataFrame:
+    """静态版价值红利特征构建，供串行与并行路径共用。"""
+    from ..common.feature_utils import log1p_transform
+
+    daily_basic_today = daily_basic_data[daily_basic_data["trade_date"] == trade_date].copy()
+    if len(daily_basic_today) == 0:
+        logger.warning(f"{trade_date} 没有 daily_basic 数据，价值红利特征将为空")
+        return features
+
+    value_cols = [
+        "ts_code",
+        "pb",
+        "pe_ttm",
+        "ps_ttm",
+        "dv_ttm",
+        "total_mv",
+        "circ_mv",
+        "turnover_rate",
+        "volume_ratio",
+    ]
+    existing_cols = ["ts_code"] + [c for c in value_cols[1:] if c in daily_basic_today.columns]
+    daily_basic_today = daily_basic_today[existing_cols].copy()
+    features = features.merge(daily_basic_today, on="ts_code", how="left")
+
+    if "dv_ttm" in features.columns:
+        features["dv_ttm"] = features["dv_ttm"].fillna(0)
+    if "pe_ttm" in features.columns:
+        features["ep_ttm"] = np.where(
+            (features["pe_ttm"].notna()) & (features["pe_ttm"] > 0),
+            1.0 / features["pe_ttm"],
+            np.nan,
+        )
+        features["is_loss"] = ((features["pe_ttm"].isna()) | (features["pe_ttm"] <= 0)).astype(int)
+    if "pb" in features.columns:
+        features["bp"] = np.where(
+            (features["pb"].notna()) & (features["pb"] > 0),
+            1.0 / features["pb"],
+            np.nan,
+        )
+    if "total_mv" in features.columns:
+        features["log_total_mv"] = log1p_transform(features["total_mv"])
+    if "circ_mv" in features.columns:
+        features["log_circ_mv"] = log1p_transform(features["circ_mv"])
+
+    return features
+
+
+def _add_moneyflow_features_static(
+    features: pd.DataFrame,
+    moneyflow_data: pd.DataFrame,
+    trade_date: str,
+    trading_dates: List[str],
+    current_idx: int,
+    trading_date_index: Optional[Dict[str, int]],
+) -> pd.DataFrame:
+    """静态版资金流特征构建，供串行与并行路径共用。"""
+    from ..common.feature_utils import winsorize_series
+
+    moneyflow_today = moneyflow_data[moneyflow_data["trade_date"] == trade_date].copy()
+    if len(moneyflow_today) == 0:
+        logger.warning(f"{trade_date} 没有 moneyflow 数据，资金流特征将为空")
+        return features
+
+    merge_cols = ["ts_code", "net_mf_amount"]
+    merge_cols = [c for c in merge_cols if c in moneyflow_today.columns]
+    if len(merge_cols) > 1:
+        features = features.merge(moneyflow_today[merge_cols], on="ts_code", how="left")
+
+    if "buy_lg_amount" in moneyflow_today.columns and "sell_lg_amount" in moneyflow_today.columns:
+        moneyflow_today["lg_net_amount"] = moneyflow_today["buy_lg_amount"] - moneyflow_today["sell_lg_amount"]
+        features = features.merge(moneyflow_today[["ts_code", "lg_net_amount"]], on="ts_code", how="left")
+
+    if "buy_elg_amount" in moneyflow_today.columns and "sell_elg_amount" in moneyflow_today.columns:
+        moneyflow_today["elg_net_amount"] = (
+            moneyflow_today["buy_elg_amount"] - moneyflow_today["sell_elg_amount"]
+        )
+        features = features.merge(moneyflow_today[["ts_code", "elg_net_amount"]], on="ts_code", how="left")
+        _total = moneyflow_today["buy_elg_amount"] + moneyflow_today["sell_elg_amount"]
+        moneyflow_today["order_imbalance"] = np.where(
+            _total > 1e-6,
+            (moneyflow_today["buy_elg_amount"] - moneyflow_today["sell_elg_amount"]) / _total,
+            np.nan,
+        )
+        features = features.merge(moneyflow_today[["ts_code", "order_imbalance"]], on="ts_code", how="left")
+
+    for window in [5, 20]:
+        hist_dates = _get_lookback_dates_static(
+            trade_date,
+            window,
+            trading_dates,
+            trading_date_index,
+        )
+        if not hist_dates:
+            features[f"net_mf_amount_sum_{window}"] = np.nan
+            features[f"net_mf_amount_mean_{window}"] = np.nan
+            if "lg_net_amount" in features.columns:
+                features[f"lg_net_amount_sum_{window}"] = np.nan
+            if "elg_net_amount" in features.columns:
+                features[f"elg_net_amount_sum_{window}"] = np.nan
+            continue
+
+        hist_moneyflow = moneyflow_data[moneyflow_data["trade_date"].isin(hist_dates)].copy()
+        if len(hist_moneyflow) == 0:
+            continue
+
+        if "buy_lg_amount" in hist_moneyflow.columns and "sell_lg_amount" in hist_moneyflow.columns:
+            hist_moneyflow["lg_net_amount"] = (
+                hist_moneyflow["buy_lg_amount"] - hist_moneyflow["sell_lg_amount"]
+            )
+        if "buy_elg_amount" in hist_moneyflow.columns and "sell_elg_amount" in hist_moneyflow.columns:
+            hist_moneyflow["elg_net_amount"] = (
+                hist_moneyflow["buy_elg_amount"] - hist_moneyflow["sell_elg_amount"]
+            )
+            _total = hist_moneyflow["buy_elg_amount"] + hist_moneyflow["sell_elg_amount"]
+            hist_moneyflow["order_imbalance"] = np.where(
+                _total > 1e-6,
+                (hist_moneyflow["buy_elg_amount"] - hist_moneyflow["sell_elg_amount"]) / _total,
+                np.nan,
+            )
+
+        agg_dict = {}
+        if "net_mf_amount" in hist_moneyflow.columns:
+            agg_dict["net_mf_amount"] = ["sum", "mean"]
+        if "lg_net_amount" in hist_moneyflow.columns:
+            agg_dict["lg_net_amount"] = ["sum"]
+        if "elg_net_amount" in hist_moneyflow.columns:
+            agg_dict["elg_net_amount"] = ["sum"]
+        if "order_imbalance" in hist_moneyflow.columns:
+            agg_dict["order_imbalance"] = ["mean"]
+        if not agg_dict:
+            continue
+
+        rolling_features = hist_moneyflow.groupby("ts_code").agg(agg_dict).reset_index()
+        new_columns = ["ts_code"]
+        for col in rolling_features.columns[1:]:
+            if isinstance(col, tuple):
+                new_columns.append(f"{col[0]}_{col[1]}_{window}")
+            else:
+                new_columns.append(col)
+        rolling_features.columns = new_columns
+        features = features.merge(rolling_features, on="ts_code", how="left")
+
+    winsorize_cols = [c for c in features.columns if "net_amount" in c or "mf_amount" in c]
+    for col in winsorize_cols:
+        if col in features.columns:
+            features[col] = winsorize_series(features[col], limits=(0.01, 0.01))
 
     return features
 
@@ -1334,49 +1367,12 @@ def _add_limit_flags_static(
         logger.debug("数据已包含 clean 层涨跌停标记，直接复用")
         return result
 
-    logger.info("clean 层涨跌停标记不存在，开始计算")
-    current_daily = daily_data[daily_data["trade_date"] == trade_date][
-        ["ts_code", "close", "pct_chg"]
-    ].copy()
-    result = result.merge(
-        current_daily,
-        on="ts_code",
-        how="left",
-        suffixes=("", "_daily"),
+    logger.warning(
+        "检测到缺失 clean 层涨跌停标记，按设计约束不在 features 层重算，"
+        "将回退填充为 0。"
     )
     result["is_limit_up"] = 0
     result["is_limit_down"] = 0
-
-    non_st_mask = result["is_st"] == 0
-    st_mask = result["is_st"] == 1
-    kcb_mask = result["ts_code"].str.startswith("688")
-    gem_mask = result["ts_code"].str.startswith("300") | result["ts_code"].str.startswith("301")
-    reg_board_mask = (kcb_mask | gem_mask) & non_st_mask
-    main_board_mask = ~(kcb_mask | gem_mask) & non_st_mask
-
-    result.loc[reg_board_mask & (result["pct_chg"] >= 19.9), "is_limit_up"] = 1
-    result.loc[reg_board_mask & (result["pct_chg"] <= -19.9), "is_limit_down"] = 1
-    result.loc[main_board_mask & (result["pct_chg"] >= 9.9), "is_limit_up"] = 1
-    result.loc[main_board_mask & (result["pct_chg"] <= -9.9), "is_limit_down"] = 1
-    result.loc[st_mask & (result["pct_chg"] >= 4.9), "is_limit_up"] = 1
-    result.loc[st_mask & (result["pct_chg"] <= -4.9), "is_limit_down"] = 1
-
-    if limit_info is not None and len(limit_info) > 0:
-        limit_today = limit_info[limit_info["trade_date"] == trade_date][
-            ["ts_code", "up_limit", "down_limit"]
-        ].copy()
-        if len(limit_today) > 0:
-            result = result.merge(
-                limit_today,
-                on="ts_code",
-                how="left",
-                suffixes=("", "_limit"),
-            )
-            result.loc[(result["close"] >= result["up_limit"] * 0.999), "is_limit_up"] = 1
-            result.loc[(result["close"] <= result["down_limit"] * 1.001), "is_limit_down"] = 1
-            result.drop(columns=["up_limit", "down_limit"], inplace=True, errors="ignore")
-
-    result.drop(columns=["close", "pct_chg"], inplace=True, errors="ignore")
     return result
 
 

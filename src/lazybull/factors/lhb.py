@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
+
 
 LHB_COLS = [
     "lhb_on_list",
@@ -62,7 +64,7 @@ def build_lhb_lookup_by_date(
         return {}
 
     df = top_list_df.copy()
-    df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+    df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
 
     for col in ["net_amount", "net_rate", "amount_rate", "l_amount", "float_values"]:
         if col in df.columns:

@@ -607,4 +607,4 @@ class Storage:
             return df
         except Exception as e:
             logger.error(f"加载数据失败: {file_path}, 错误: {str(e)}")
-            return None
+            raise RuntimeError(f"读取数据文件失败: {file_path}") from e

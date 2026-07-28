@@ -22,6 +22,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
+
 
 MARGIN_COLS = [
     "rzye_chg_5",
@@ -48,7 +50,7 @@ def build_margin_lookup_by_date(
     df = margin_detail.copy()
 
     # 确保日期格式
-    df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+    df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
 
     # 确保数值列
     for col in ["rzye", "rqye", "rzmre", "rzche"]:

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.86.1] - 2026-07-28
+
+### Fixed
+
+- **并行/串行特征构建对齐**：`features/parallel.py` 补齐价值红利、资金流、基本面代理回填步骤，修复并行路径列缺失导致的 schema 漂移问题。
+- **复权因子缺失污染修复**：移除 `adj_factor=1.0` 伪默认值回退，改为按股票前后向填充；仍缺失时保留 NaN，避免伪造复权价污染标签与收益类因子。
+- **涨跌停判定修复**：`cleaner` 层按主板/创业板/科创板/北交所及 ST 规则统一计算，并在有 `stk_limit` 时用涨跌停价覆盖阈值判定。
+- **因子处理器安全性增强**：新增 `ts_code` 去重与 merge 行数校验，修复重复键静默错配；处理器异常时改为记录错误并填充 NaN 占位，保证 schema 稳定。
+- **Storage 读取失败不再静默**：文件损坏等读取异常改为抛出错误，不再与“文件不存在”同构返回 None。
+
+### Changed
+
+- **日期契约统一**：`DataLoader` 与多个因子模块统一输出 YYYYMMDD 字符串日期；新增公共日期规范化函数，避免 `astype(str)` 产生字符串 `nan`。
+- **load_clean_daily_by_date 去隐式副作用**：默认不再在“读取”方法里自动触发下载/清洗；如需自动补齐需显式传入 `auto_ensure=True`。
+
+### Docs
+
+- `docs/data_contract.md` 新增设计约束：
+  - 涨跌停标记仅在 cleaner 层处理，features 层只复用。
+  - 各层日期字段统一为 YYYYMMDD 字符串。
+
 ## [0.86.0] - 2026-07-29
 
 ### Added

@@ -5,6 +5,7 @@
 
 from typing import List, Optional
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -228,9 +229,9 @@ def ensure_clean_data_for_date(
 
             adj_factor_raw = storage.load_raw_by_date("adj_factor", trade_date)
             if adj_factor_raw is None or adj_factor_raw.empty:
-                logger.warning(f"未找到复权因子，使用默认值 1.0: {trade_date}")
+                logger.warning(f"未找到复权因子，保留缺失值并交由清洗层处理: {trade_date}")
                 adj_factor_raw = daily_raw[['ts_code', 'trade_date']].copy()
-                adj_factor_raw['adj_factor'] = 1.0
+                adj_factor_raw['adj_factor'] = np.nan
 
             daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
 

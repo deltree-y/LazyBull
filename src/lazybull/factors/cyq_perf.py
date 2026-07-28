@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
+
 
 CYQ_PERF_COLS = [
     "winner_rate",          # 胜率
@@ -46,7 +48,7 @@ def build_cyq_perf_lookup_by_date(
 
     # 日期标准化
     if "trade_date" in df.columns:
-        df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+        df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
 
     # 数值列转换
     numeric_cols = ["winner_rate", "weight_avg", "cost_5pct", "cost_15pct",

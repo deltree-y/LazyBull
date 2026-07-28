@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
+
 
 class DataCleaner:
     """数据清洗器
@@ -488,29 +490,46 @@ class DataCleaner:
                 df["is_suspended"] = df["_suspended"].fillna(df["is_suspended"]).astype(int)
                 df.drop(columns=["_suspended"], inplace=True, errors="ignore")
 
-        # 5. 涨跌停标记：使用涨跌幅判断
+        # 5. 涨跌停标记：仅在 cleaner 层统一处理
         df["is_limit_up"] = 0
         df["is_limit_down"] = 0
 
         if "pct_chg" in df.columns:
-            # 非 ST：±10%
             non_st = df["is_st"] == 0
-            df.loc[non_st & (df["pct_chg"] >= 9.9), "is_limit_up"] = 1
-            df.loc[non_st & (df["pct_chg"] <= -9.9), "is_limit_down"] = 1
+            kcb_mask = df["ts_code"].str.startswith("688")
+            gem_mask = df["ts_code"].str.startswith("300") | df["ts_code"].str.startswith("301")
+            bj_mask = df["ts_code"].str.startswith("8") | df["ts_code"].str.startswith("4")
+            reg20_mask = (kcb_mask | gem_mask) & non_st
+            bj30_mask = bj_mask & non_st
+            main_board_mask = ~(kcb_mask | gem_mask | bj_mask) & non_st
+
+            # 非 ST：主板 10%，创业/科创 20%，北交所 30%
+            df.loc[main_board_mask & (df["pct_chg"] >= 9.9), "is_limit_up"] = 1
+            df.loc[main_board_mask & (df["pct_chg"] <= -9.9), "is_limit_down"] = 1
+            df.loc[reg20_mask & (df["pct_chg"] >= 19.9), "is_limit_up"] = 1
+            df.loc[reg20_mask & (df["pct_chg"] <= -19.9), "is_limit_down"] = 1
+            df.loc[bj30_mask & (df["pct_chg"] >= 29.9), "is_limit_up"] = 1
+            df.loc[bj30_mask & (df["pct_chg"] <= -29.9), "is_limit_down"] = 1
 
             # ST：±5%
             st = df["is_st"] == 1
             df.loc[st & (df["pct_chg"] >= 4.9), "is_limit_up"] = 1
             df.loc[st & (df["pct_chg"] <= -4.9), "is_limit_down"] = 1
 
-        # 如果有涨跌停信息，使用价格对比（更精确）
+        # 如果有涨跌停信息，使用价格对比覆盖阈值判定（更精确）
         if limit_info_df is not None and len(limit_info_df) > 0:
             limit_prices = limit_info_df[["ts_code", "trade_date", "up_limit", "down_limit"]].copy()
             df = df.merge(limit_prices, on=["ts_code", "trade_date"], how="left")
 
-            # 价格比对（使用绝对误差 0.01 元，避免高价股容差过大）
-            df.loc[df["close"] >= df["up_limit"] - 0.01, "is_limit_up"] = 1
-            df.loc[df["close"] <= df["down_limit"] + 0.01, "is_limit_down"] = 1
+            # 仅在有涨跌停价的记录上覆盖，避免误判残留
+            has_up_limit = df["up_limit"].notna()
+            has_down_limit = df["down_limit"].notna()
+            df.loc[has_up_limit, "is_limit_up"] = (
+                df.loc[has_up_limit, "close"] >= df.loc[has_up_limit, "up_limit"] - 0.01
+            ).astype(int)
+            df.loc[has_down_limit, "is_limit_down"] = (
+                df.loc[has_down_limit, "close"] <= df.loc[has_down_limit, "down_limit"] + 0.01
+            ).astype(int)
 
             df.drop(columns=["up_limit", "down_limit"], inplace=True, errors="ignore")
 
@@ -562,6 +581,12 @@ class DataCleaner:
                 if invalid.sum() > 0:
                     logger.warning(f"列 {col} 中有 {invalid.sum()} 个无效日期格式")
                     df.loc[invalid, col] = None
+            elif pd.api.types.is_numeric_dtype(df[col]):
+                normalized = normalize_series_to_yyyymmdd(df[col])
+                invalid = normalized.isna() & df[col].notna()
+                if invalid.sum() > 0:
+                    logger.warning(f"列 {col} 中有 {invalid.sum()} 个数值日期格式无效")
+                df[col] = normalized
 
         return df
 
@@ -649,11 +674,18 @@ class DataCleaner:
             how="left",
         )
 
-        # 处理缺失的复权因子
-        missing_adj = df["adj_factor"].isna().sum()
+        if "adj_factor" in df.columns:
+            df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
+            df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+            df["adj_factor"] = df.groupby("ts_code")["adj_factor"].ffill().bfill()
+
+        missing_adj = int(df["adj_factor"].isna().sum())
         if missing_adj > 0:
-            logger.warning(f"有 {missing_adj} 条记录缺少复权因子，将使用 1.0 作为默认值")
-            df["adj_factor"] = df["adj_factor"].fillna(1.0)
+            missing_codes = df.loc[df["adj_factor"].isna(), "ts_code"].nunique()
+            logger.warning(
+                f"有 {missing_adj} 条记录缺少复权因子（涉及 {missing_codes} 只股票），"
+                "对应复权价将保留为空，避免使用伪造默认值污染收益"
+            )
 
         # 计算复权价格: price_adj = price * adj_factor
         if "close" in df.columns:

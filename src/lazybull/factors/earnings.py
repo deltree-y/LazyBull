@@ -15,6 +15,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
 from .announcement_utils import build_latest_announcement_lookup_by_date
 
 
@@ -56,7 +57,7 @@ def build_earnings_lookup_by_date(
     # ── 处理业绩预告 ────────────────────────────────────────────
     if forecast_df is not None and len(forecast_df) > 0:
         fc = forecast_df.copy()
-        fc["ann_date"] = fc["ann_date"].astype(str).str.replace("-", "").str[:8]
+        fc["ann_date"] = normalize_series_to_yyyymmdd(fc["ann_date"])
         fc = fc.dropna(subset=["ann_date"])
 
         # 类型评分

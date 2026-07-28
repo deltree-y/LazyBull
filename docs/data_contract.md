@@ -5,6 +5,12 @@
 ## 数据分层
 
 ```
+
+## 全局设计约束
+
+1. 日期格式统一：raw/clean/features 各层涉及交易日、公告日、报告日的字段，统一为 YYYYMMDD 字符串。
+2. 涨跌停标记唯一入口：is_limit_up/is_limit_down 只允许在 cleaner 层生成；features 层仅复用，不得重算。
+3. schema 稳定优先：构建失败时应以显式报错或 NaN 占位保障列契约，不允许静默丢列。
 data/
 ├── raw/        # 原始数据层（从数据源直接获取）
 │   ├── {name}.parquet              # 非分区数据（旧格式，向后兼容）
@@ -198,7 +204,7 @@ suspend_df = client.get_suspend_d(
 ## Clean 层数据契约
 
 Clean层数据基于Raw层处理：
-- 日期统一转换为datetime类型
+- 日期统一为 YYYYMMDD 字符串
 - 缺失值按规则填充或删除
 - 异常值处理（涨跌停、停牌标记）
 - 数据类型标准化
@@ -215,7 +221,7 @@ Clean层数据基于Raw层处理：
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | ts_code | str | 股票代码 |
-| trade_date | datetime | 交易日期 |
+| trade_date | str | 交易日期（YYYYMMDD） |
 | factor_name | float | 因子值 |
 
 **因子命名规范**:

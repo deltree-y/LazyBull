@@ -27,6 +27,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
+
 
 CONS_COLS = [
     "cons_analyst_count_30d",
@@ -78,7 +80,7 @@ def build_consensus_lookup_by_date(
         return {}
 
     df = report_rc_df.copy()
-    df["report_date"] = df["report_date"].astype(str).str.replace("-", "").str[:8]
+    df["report_date"] = normalize_series_to_yyyymmdd(df["report_date"])
     for col in ["eps", "max_price", "min_price"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -100,7 +102,7 @@ def build_consensus_lookup_by_date(
     # 按 report_date 排序后便于截断到 <= trade_date 的视图
     df = df.sort_values(["ts_code", "report_date"]).reset_index(drop=True)
 
-    sorted_trading_dates = sorted({str(d) for d in trading_dates})
+    sorted_trading_dates = sorted({d for d in trading_dates if d is not None})
     result: Dict[str, pd.DataFrame] = {}
 
     # 预计算日期 dt 便于窗口比较

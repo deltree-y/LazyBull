@@ -22,6 +22,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
+
 
 NORTH_COLS = [
     "north_flow",
@@ -71,7 +73,7 @@ def build_north_flow_lookup_by_date(
         return {}
 
     df = hsgt_df.copy()
-    df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+    df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
 
     # 统一北向净流入列名
     if "north_money" in df.columns:

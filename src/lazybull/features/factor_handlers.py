@@ -13,6 +13,61 @@ import pandas as pd
 from loguru import logger
 
 
+def _safe_merge_by_ts_code(
+    features: pd.DataFrame,
+    data: pd.DataFrame,
+    merge_cols: List[str],
+    handler_name: str,
+) -> pd.DataFrame:
+    """按 ts_code 做安全 merge，避免重复键导致错位。"""
+    subset_cols = ["ts_code"] + [c for c in merge_cols if c in data.columns and c != "ts_code"]
+    subset = data[subset_cols].copy()
+
+    if subset.duplicated(subset=["ts_code"], keep=False).any():
+        dup_count = int(subset.duplicated(subset=["ts_code"], keep=False).sum())
+        logger.warning(
+            f"因子处理器 [{handler_name}] 检测到 {dup_count} 条重复 ts_code，"
+            "按 ts_code 保留最后一条"
+        )
+        subset = subset.drop_duplicates(subset=["ts_code"], keep="last")
+
+    merged = features[["ts_code"]].merge(subset, on="ts_code", how="left")
+    if len(merged) != len(features):
+        raise ValueError(
+            f"处理器 [{handler_name}] merge 后行数异常: {len(merged)} != {len(features)}"
+        )
+    merged.index = features.index
+    return merged
+
+
+def _get_handler_default_columns(name: str) -> List[str]:
+    """处理器失败时用于补齐 schema 的默认列名。"""
+    if name == "north_flow":
+        from ..factors.north_flow import NORTH_COLS
+
+        return list(NORTH_COLS)
+    if name == "lhb":
+        from ..factors.lhb import LHB_COLS
+
+        return list(LHB_COLS)
+    if name == "consensus":
+        from ..factors.consensus import CONS_COLS, CONSENSUS_FRESHNESS_COL
+
+        return list(CONS_COLS) + [CONSENSUS_FRESHNESS_COL]
+    if name == "cashflow_quality":
+        from ..factors.cashflow_quality import CASHFLOW_COLS, CASHFLOW_FRESHNESS_COL
+
+        return list(CASHFLOW_COLS) + [CASHFLOW_FRESHNESS_COL]
+    if name == "consensus_revision":
+        from ..factors.consensus_revision import (
+            CONSENSUS_REVISION_COLS,
+            CONSENSUS_REVISION_FRESHNESS_COL,
+        )
+
+        return list(CONSENSUS_REVISION_COLS) + [CONSENSUS_REVISION_FRESHNESS_COL]
+    return []
+
+
 # ── Handler 协议 ───────────────────────────────────────────────
 
 class FactorHandler(Protocol):
@@ -44,9 +99,7 @@ class FundamentalFactorHandler:
         if data is None or len(data) == 0:
             return {}
         merge_cols = [c for c in data.columns if c != "ts_code"]
-        merged = features[["ts_code"]].merge(
-            data[["ts_code"] + merge_cols], on="ts_code", how="left"
-        )
+        merged = _safe_merge_by_ts_code(features, data, merge_cols, "fundamental")
         return {col: merged[col] for col in merge_cols if col in merged.columns}
 
 
@@ -57,9 +110,7 @@ class MarginFactorHandler:
         if data is None or len(data) == 0:
             return {}
         merge_cols = [c for c in data.columns if c != "ts_code"]
-        merged = features[["ts_code"]].merge(
-            data[["ts_code"] + merge_cols], on="ts_code", how="left"
-        )
+        merged = _safe_merge_by_ts_code(features, data, merge_cols, "margin")
         return {col: merged[col] for col in merge_cols if col in merged.columns}
 
 
@@ -70,9 +121,7 @@ class HolderFactorHandler:
         if data is None or len(data) == 0:
             return {}
         merge_cols = [c for c in data.columns if c != "ts_code"]
-        merged = features[["ts_code"]].merge(
-            data[["ts_code"] + merge_cols], on="ts_code", how="left"
-        )
+        merged = _safe_merge_by_ts_code(features, data, merge_cols, "holder")
         return {col: merged[col] for col in merge_cols if col in merged.columns}
 
 
@@ -83,9 +132,7 @@ class EarningsFactorHandler:
         if data is None or len(data) == 0:
             return {}
         merge_cols = [c for c in data.columns if c != "ts_code"]
-        merged = features[["ts_code"]].merge(
-            data[["ts_code"] + merge_cols], on="ts_code", how="left"
-        )
+        merged = _safe_merge_by_ts_code(features, data, merge_cols, "earnings")
         return {col: merged[col] for col in merge_cols if col in merged.columns}
 
 
@@ -111,9 +158,7 @@ class CyqPerfFactorHandler:
             from ..factors.cyq_perf import CYQ_PERF_COLS
 
             merge_cols = [c for c in CYQ_PERF_COLS if c in cyq_with_close.columns]
-            merged = features[["ts_code"]].merge(
-                cyq_with_close[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
+            merged = _safe_merge_by_ts_code(features, cyq_with_close, merge_cols, "cyq_perf")
             for col in merge_cols:
                 if col in merged.columns:
                     result[col] = merged[col]
@@ -123,9 +168,7 @@ class CyqPerfFactorHandler:
                 for c in data.columns
                 if c != "ts_code" and c != "weight_avg"
             ]
-            merged = features[["ts_code"]].merge(
-                data[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "cyq_perf")
             for col in merge_cols:
                 if col in merged.columns:
                     result[col] = merged[col]
@@ -139,9 +182,7 @@ class ExpressFactorHandler:
         if data is None or len(data) == 0:
             return {}
         merge_cols = [c for c in data.columns if c != "ts_code"]
-        merged = features[["ts_code"]].merge(
-            data[["ts_code"] + merge_cols], on="ts_code", how="left"
-        )
+        merged = _safe_merge_by_ts_code(features, data, merge_cols, "express")
         return {col: merged[col] for col in merge_cols if col in merged.columns}
 
 
@@ -152,9 +193,7 @@ class FundPortfolioFactorHandler:
         if data is None or len(data) == 0:
             return {}
         merge_cols = [c for c in data.columns if c != "ts_code"]
-        merged = features[["ts_code"]].merge(
-            data[["ts_code"] + merge_cols], on="ts_code", how="left"
-        )
+        merged = _safe_merge_by_ts_code(features, data, merge_cols, "fund_portfolio")
         return {col: merged[col] for col in merge_cols if col in merged.columns}
 
 
@@ -185,9 +224,7 @@ class LhbFactorHandler:
         if data is not None:
             if len(data) > 0:
                 merge_cols = [c for c in data.columns if c != "ts_code"]
-                merged = features[["ts_code"]].merge(
-                    data[["ts_code"] + merge_cols], on="ts_code", how="left"
-                )
+                merged = _safe_merge_by_ts_code(features, data, merge_cols, "lhb")
                 for col in merge_cols:
                     if col in merged.columns:
                         result[col] = merged[col].fillna(0.0)
@@ -209,9 +246,7 @@ class ConsensusFactorHandler:
         result = {}
         if data is not None and len(data) > 0:
             merge_cols = [c for c in data.columns if c != "ts_code"]
-            merged = features[["ts_code"]].merge(
-                data[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "consensus")
             for col in merge_cols:
                 if col in merged.columns:
                     result[col] = merged[col]
@@ -231,9 +266,7 @@ class CashflowQualityFactorHandler:
         result = {}
         if data is not None and len(data) > 0:
             merge_cols = [c for c in data.columns if c != "ts_code"]
-            merged = features[["ts_code"]].merge(
-                data[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "cashflow_quality")
             for col in merge_cols:
                 if col in merged.columns:
                     result[col] = merged[col]
@@ -265,9 +298,7 @@ class ConsensusRevisionFactorHandler:
         result = {}
         if data is not None and len(data) > 0:
             merge_cols = [c for c in data.columns if c != "ts_code"]
-            merged = features[["ts_code"]].merge(
-                data[["ts_code"] + merge_cols], on="ts_code", how="left"
-            )
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "consensus_revision")
             for col in merge_cols:
                 if col in merged.columns:
                     result[col] = merged[col]
@@ -287,14 +318,14 @@ class FactorRegistry:
     def __init__(self) -> None:
         self._handlers: List[tuple] = []
 
-    def register(self, name: str, handler: FactorHandler, data_getter, enabled: bool = True) -> None:
+    def register(self, name: str, handler: FactorHandler, data_getter, enabled=True) -> None:
         """注册一个因子处理器。
 
         Args:
             name: 因子名称（用于日志）
             handler: FactorHandler 实例
             data_getter: callable(ctx) -> Optional[data]，从上下文获取当日数据
-            enabled: 是否启用
+            enabled: 是否启用。支持 bool 或 callable(ctx)->bool
         """
         self._handlers.append((name, handler, data_getter, enabled))
 
@@ -310,7 +341,8 @@ class FactorRegistry:
         """
         all_columns: Dict[str, pd.Series] = {}
         for name, handler, data_getter, enabled in self._handlers:
-            if not enabled:
+            enabled_flag = enabled(ctx) if callable(enabled) else bool(enabled)
+            if not enabled_flag:
                 continue
             data = data_getter(ctx)
             if data is None:
@@ -320,7 +352,10 @@ class FactorRegistry:
                 for col_name, series in cols.items():
                     all_columns[col_name] = series
             except Exception as e:
-                logger.warning(f"因子处理器 [{name}] 失败: {e}")
+                logger.error(f"因子处理器 [{name}] 失败，回退 NaN 占位: {e}")
+                for col in _get_handler_default_columns(name):
+                    if col not in all_columns:
+                        all_columns[col] = pd.Series(np.nan, index=features.index)
 
         if all_columns:
             new_df = pd.DataFrame(all_columns, index=features.index)

@@ -19,6 +19,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
 from .announcement_utils import build_latest_announcement_lookup_by_date
 
 
@@ -93,10 +94,7 @@ def build_express_lookup_by_date(
     # 日期标准化（兼容 datetime 和字符串类型）
     for col in ["ann_date", "end_date"]:
         if col in ex.columns:
-            if pd.api.types.is_datetime64_any_dtype(ex[col]):
-                ex[col] = ex[col].dt.strftime("%Y%m%d")
-            else:
-                ex[col] = ex[col].astype(str).str.replace("-", "").str[:8]
+            ex[col] = normalize_series_to_yyyymmdd(ex[col])
 
     ex = ex.dropna(subset=["ann_date"])
 
@@ -120,7 +118,7 @@ def build_express_lookup_by_date(
         fc = forecast_df.copy()
         for col in ["ann_date", "end_date"]:
             if col in fc.columns:
-                fc[col] = fc[col].astype(str).str.replace("-", "").str[:8]
+                fc[col] = normalize_series_to_yyyymmdd(fc[col])
         for col in ["p_change_min", "p_change_max"]:
             if col in fc.columns:
                 fc[col] = pd.to_numeric(fc[col], errors="coerce")

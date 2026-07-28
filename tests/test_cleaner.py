@@ -262,6 +262,29 @@ class TestDataCleaner:
         assert result[result['ts_code'] == '000002.SZ']['is_limit_down'].iloc[0] == 1
         assert result[result['ts_code'] == '600000.SH']['is_limit_up'].iloc[0] == 1  # ST 5%
         assert result[result['ts_code'] == '600001.SH']['is_limit_up'].iloc[0] == 0
+
+    def test_add_tradable_universe_flag_limit_detection_growth_board(self, cleaner):
+        """测试创业板/科创板 20% 涨跌停阈值"""
+        daily_df = pd.DataFrame({
+            'ts_code': ['300001.SZ', '688001.SH', '300002.SZ', '688002.SH'],
+            'trade_date': ['20230110'] * 4,
+            'close': [12.0, 12.0, 8.0, 8.0],
+            'vol': [1000000] * 4,
+            'pct_chg': [12.0, 20.0, -8.0, -20.0],
+        })
+
+        stock_basic_df = pd.DataFrame({
+            'ts_code': ['300001.SZ', '688001.SH', '300002.SZ', '688002.SH'],
+            'name': ['创业板A', '科创板B', '创业板C', '科创板D'],
+            'list_date': ['20100101'] * 4,
+        })
+
+        result = cleaner.add_tradable_universe_flag(daily_df, stock_basic_df)
+
+        assert result[result['ts_code'] == '300001.SZ']['is_limit_up'].iloc[0] == 0
+        assert result[result['ts_code'] == '688001.SH']['is_limit_up'].iloc[0] == 1
+        assert result[result['ts_code'] == '300002.SZ']['is_limit_down'].iloc[0] == 0
+        assert result[result['ts_code'] == '688002.SH']['is_limit_down'].iloc[0] == 1
     
     def test_add_tradable_universe_flag_tradable_flag(self, cleaner):
         """测试 tradable 标记"""
@@ -345,7 +368,7 @@ class TestDataCleaner:
             cleaner._validate_uniqueness(df, ['key1', 'key2'])
     
     def test_clean_daily_with_missing_adj_factor(self, cleaner):
-        """测试缺少复权因子的情况"""
+        """测试缺少复权因子时保留缺失，避免伪造复权价"""
         daily_raw = pd.DataFrame({
             'ts_code': ['000001.SZ', '000002.SZ'],
             'trade_date': ['20230102', '20230102'],
@@ -367,14 +390,14 @@ class TestDataCleaner:
         
         result = cleaner.clean_daily(daily_raw, adj_factor_raw)
         
-        # 检查所有股票都有复权价格（缺失的用1.0填充）
+        # 缺失复权因子的股票应保留 NaN
         assert 'close_adj' in result.columns
         assert len(result) == 2
-        assert not result['close_adj'].isna().any()
+        assert result[result['ts_code'] == '000001.SZ']['close_adj'].notna().all()
+        assert result[result['ts_code'] == '000002.SZ']['close_adj'].isna().all()
         
         # 验证计算
         assert abs(result[result['ts_code'] == '000001.SZ']['close_adj'].iloc[0] - 10.0 * 1.1) < 0.01
-        assert abs(result[result['ts_code'] == '000002.SZ']['close_adj'].iloc[0] - 11.0 * 1.0) < 0.01
     
     def test_clean_daily_with_negative_volume(self, cleaner):
         """测试过滤负成交量"""

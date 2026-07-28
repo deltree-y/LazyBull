@@ -1,9 +1,10 @@
 """日期处理工具函数
 
-统一日期格式转换，避免类型不匹配导致的比较错误
+统一日期格式转换，避免类型不匹配导致的比较错误。
+对跨层数据契约，统一使用 YYYYMMDD 字符串。
 """
 
-from typing import Union
+from typing import Optional, Union
 
 import pandas as pd
 import numpy as np
@@ -128,3 +129,34 @@ def normalize_date_columns(df: pd.DataFrame, columns: list, to_str: bool = True)
         if column in df.columns:
             df = normalize_date_column(df, column, to_str=to_str)
     return df
+
+
+def normalize_to_yyyymmdd(value) -> Optional[str]:
+    """将单个日期值规范化为 YYYYMMDD 字符串。
+
+    约定：
+    - 无法解析/空值返回 None，不返回字符串 "nan"
+    - 仅允许 8 位数字日期
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        return value.strftime("%Y%m%d")
+
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return None
+
+    text = text.replace("-", "").replace("/", "")
+    if len(text) != 8 or not text.isdigit():
+        return None
+    return text
+
+
+def normalize_series_to_yyyymmdd(series: pd.Series) -> pd.Series:
+    """将 Series 统一规范化为 YYYYMMDD 字符串（无效值为 None）。"""
+    return series.map(normalize_to_yyyymmdd)

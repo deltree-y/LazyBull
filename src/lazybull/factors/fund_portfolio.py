@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
 from .announcement_utils import build_latest_announcement_lookup_by_date
 
 FUND_PORTFOLIO_COLS = [
@@ -63,10 +64,7 @@ def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
     # 日期标准化（兼容 datetime 和字符串类型）
     for col in ["ann_date", "end_date"]:
         if col in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
-                df[col] = df[col].dt.strftime("%Y%m%d")
-            else:
-                df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+            df[col] = normalize_series_to_yyyymmdd(df[col])
 
     # 数值列转换
     df["stk_float_ratio"] = pd.to_numeric(df["stk_float_ratio"], errors="coerce")

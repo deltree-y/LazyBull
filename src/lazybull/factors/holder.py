@@ -15,6 +15,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
 from .announcement_utils import build_latest_announcement_lookup_by_date
 
 
@@ -45,7 +46,7 @@ def build_holder_lookup_by_date(
     # 日期标准化
     for col in ["ann_date", "end_date"]:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+            df[col] = normalize_series_to_yyyymmdd(df[col])
 
     df["holder_num"] = pd.to_numeric(df["holder_num"], errors="coerce")
     df = df.dropna(subset=["ann_date", "holder_num"])

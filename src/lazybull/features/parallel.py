@@ -81,6 +81,30 @@ def build_features_for_day_static(
         moneyflow_data=ctx.moneyflow_data,
     )
 
+    # ── 价值红利 + 资金流 + 基本面代理回填 ──
+    from .builder import (
+        _add_moneyflow_features_static,
+        _add_value_dividend_features_static,
+        _backfill_fundamental_proxy_features_static,
+    )
+
+    if ctx.daily_basic_data is not None and len(ctx.daily_basic_data) > 0:
+        features = _add_value_dividend_features_static(
+            features=features,
+            daily_basic_data=ctx.daily_basic_data,
+            trade_date=trade_date,
+        )
+    if ctx.moneyflow_data is not None and len(ctx.moneyflow_data) > 0:
+        features = _add_moneyflow_features_static(
+            features=features,
+            moneyflow_data=ctx.moneyflow_data,
+            trade_date=trade_date,
+            trading_dates=trading_dates_list,
+            current_idx=current_idx,
+            trading_date_index=trading_date_index,
+        )
+    features = _backfill_fundamental_proxy_features_static(features)
+
     # ── 因子处理器 ──
     features = factor_registry.apply_all(features, ctx, current_data)
 

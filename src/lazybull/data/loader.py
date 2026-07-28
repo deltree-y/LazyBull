@@ -6,7 +6,7 @@ import pandas as pd
 from loguru import logger
 
 from .storage import Storage
-from ..common.date_utils import to_trade_date_str, normalize_date_column
+from ..common.date_utils import normalize_series_to_yyyymmdd, normalize_to_yyyymmdd
 
 
 class DataLoader:
@@ -33,11 +33,11 @@ class DataLoader:
         """
         df = self.storage.load_raw("trade_cal")
         if df is not None:
-            # 转换日期格式
+            # 统一返回 YYYYMMDD 字符串
             if 'cal_date' in df.columns:
-                df['cal_date'] = pd.to_datetime(df['cal_date'], format='%Y%m%d')
+                df['cal_date'] = normalize_series_to_yyyymmdd(df['cal_date'])
             if 'pretrade_date' in df.columns:
-                df['pretrade_date'] = pd.to_datetime(df['pretrade_date'], format='%Y%m%d', errors='coerce')
+                df['pretrade_date'] = normalize_series_to_yyyymmdd(df['pretrade_date'])
         return df
     
     def load_stock_basic(self) -> Optional[pd.DataFrame]:
@@ -48,9 +48,9 @@ class DataLoader:
         """
         df = self.storage.load_raw("stock_basic")
         if df is not None:
-            # 转换日期格式
+            # 统一返回 YYYYMMDD 字符串
             if 'list_date' in df.columns:
-                df['list_date'] = pd.to_datetime(df['list_date'], format='%Y%m%d', errors='coerce')
+                df['list_date'] = normalize_series_to_yyyymmdd(df['list_date'])
         return df
     
     def load_daily(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
@@ -75,14 +75,8 @@ class DataLoader:
             df = self.storage.load_raw_by_date_range("daily", start_str, end_str)
             
             if df is not None:
-                # 转换日期格式
                 if 'trade_date' in df.columns:
-                    # 尝试从YYYYMMDD格式转换
-                    try:
-                        df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-                    except (ValueError, TypeError):
-                        # 如果失败，可能已经是datetime格式
-                        df['trade_date'] = pd.to_datetime(df['trade_date'])
+                    df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
                 return df
         
         # 回退到加载完整数据
@@ -90,16 +84,16 @@ class DataLoader:
         if df is None:
             return None
         
-        # 确保日期类型一致（转换为 datetime 以便比较）
+        # 统一日期类型为 YYYYMMDD 字符串
         if 'trade_date' in df.columns:
-            df = normalize_date_column(df, 'trade_date', to_str=False)
+            df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
         
-        # 日期过滤（统一为 datetime 类型比较）
+        # 日期过滤（字符串比较）
         if start_date:
-            start_dt = pd.to_datetime(self._normalize_date(start_date))
+            start_dt = self._normalize_date(start_date)
             df = df[df['trade_date'] >= start_dt]
         if end_date:
-            end_dt = pd.to_datetime(self._normalize_date(end_date))
+            end_dt = self._normalize_date(end_date)
             df = df[df['trade_date'] <= end_dt]
         
         return df
@@ -126,12 +120,8 @@ class DataLoader:
             df = self.storage.load_raw_by_date_range("daily_basic", start_str, end_str)
             
             if df is not None:
-                # 转换日期格式
                 if 'trade_date' in df.columns:
-                    try:
-                        df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
-                    except (ValueError, TypeError):
-                        df['trade_date'] = pd.to_datetime(df['trade_date'])
+                    df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
                 return df
         
         # 回退到加载完整数据
@@ -139,32 +129,33 @@ class DataLoader:
         if df is None:
             return None
         
-        # 确保日期类型一致（转换为 datetime 以便比较）
+        # 统一日期类型为 YYYYMMDD 字符串
         if 'trade_date' in df.columns:
-            df = normalize_date_column(df, 'trade_date', to_str=False)
+            df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
         
-        # 日期过滤（统一为 datetime 类型比较）
+        # 日期过滤（字符串比较）
         if start_date:
-            start_dt = pd.to_datetime(self._normalize_date(start_date))
+            start_dt = self._normalize_date(start_date)
             df = df[df['trade_date'] >= start_dt]
         if end_date:
-            end_dt = pd.to_datetime(self._normalize_date(end_date))
+            end_dt = self._normalize_date(end_date)
             df = df[df['trade_date'] <= end_dt]
         
         return df
     
     def _normalize_date(self, date_str: str) -> str:
-        """标准化日期格式为YYYY-MM-DD
+        """标准化日期格式为 YYYYMMDD
         
         Args:
             date_str: 日期字符串，支持YYYYMMDD或YYYY-MM-DD
             
         Returns:
-            标准化后的日期字符串
+            标准化后的日期字符串（YYYYMMDD）
         """
-        if len(date_str) == 8:  # YYYYMMDD
-            return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-        return date_str
+        normalized = normalize_to_yyyymmdd(date_str)
+        if normalized is None:
+            raise ValueError(f"不支持的日期格式: {date_str}")
+        return normalized
 
     def _load_quarter_partitioned_raw(
         self,
@@ -184,9 +175,9 @@ class DataLoader:
         if start_date and end_date:
             start_norm = self._normalize_date(start_date)
             end_norm = self._normalize_date(end_date)
-            start_year = pd.to_datetime(start_norm).year - lookback_years
+            start_year = pd.to_datetime(start_norm, format="%Y%m%d").year - lookback_years
             range_start = f"{start_year}-01-01"
-            range_end = end_norm
+            range_end = f"{end_norm[:4]}-{end_norm[4:6]}-{end_norm[6:8]}"
         else:
             range_start = partitions[0]
             range_end = partitions[-1]
@@ -214,13 +205,15 @@ class DataLoader:
             return []
         
         # 筛选交易日
+        start_str = self._normalize_date(start_date)
+        end_str = self._normalize_date(end_date)
         mask = (
-            (df['cal_date'] >= pd.to_datetime(start_date)) &
-            (df['cal_date'] <= pd.to_datetime(end_date)) &
+            (df['cal_date'] >= start_str) &
+            (df['cal_date'] <= end_str) &
             (df['is_open'] == 1)
         )
         
-        trading_dates = df[mask]['cal_date'].tolist()
+        trading_dates = [d for d in df[mask]['cal_date'].tolist() if d is not None]
         return sorted(trading_dates)
     
     def load_clean_daily(
@@ -249,11 +242,8 @@ class DataLoader:
             df = self.storage.load_clean_by_date_range("daily", start_str, end_str)
             
             if df is not None:
-                # 确保日期格式一致（YYYYMMDD字符串）
                 if 'trade_date' in df.columns:
-                    # 如果是 datetime，转换为 YYYYMMDD
-                    if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
-                        df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+                    df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
                 return df
         
         # 回退到加载完整数据
@@ -263,15 +253,14 @@ class DataLoader:
         
         # 确保日期格式一致
         if 'trade_date' in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
-                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+            df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
         
         # 日期过滤
         if start_date:
-            start_dt = self._normalize_date(start_date).replace('-', '')
+            start_dt = self._normalize_date(start_date)
             df = df[df['trade_date'] >= start_dt]
         if end_date:
-            end_dt = self._normalize_date(end_date).replace('-', '')
+            end_dt = self._normalize_date(end_date)
             df = df[df['trade_date'] <= end_dt]
         
         return df
@@ -299,8 +288,7 @@ class DataLoader:
             
             if df is not None:
                 if 'trade_date' in df.columns:
-                    if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
-                        df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+                    df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
                 return df
         
         # 回退到加载完整数据
@@ -310,15 +298,14 @@ class DataLoader:
         
         # 确保日期格式一致
         if 'trade_date' in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
-                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+            df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
         
         # 日期过滤
         if start_date:
-            start_dt = self._normalize_date(start_date).replace('-', '')
+            start_dt = self._normalize_date(start_date)
             df = df[df['trade_date'] >= start_dt]
         if end_date:
-            end_dt = self._normalize_date(end_date).replace('-', '')
+            end_dt = self._normalize_date(end_date)
             df = df[df['trade_date'] <= end_dt]
         
         return df
@@ -368,8 +355,7 @@ class DataLoader:
             
             if df is not None:
                 if 'trade_date' in df.columns:
-                    if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
-                        df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+                    df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
                 return df
         
         # 回退到加载完整数据
@@ -379,20 +365,26 @@ class DataLoader:
         
         # 确保日期格式一致
         if 'trade_date' in df.columns:
-            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
-                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+            df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
         
         # 日期过滤
         if start_date:
-            start_dt = self._normalize_date(start_date).replace('-', '')
+            start_dt = self._normalize_date(start_date)
             df = df[df['trade_date'] >= start_dt]
         if end_date:
-            end_dt = self._normalize_date(end_date).replace('-', '')
+            end_dt = self._normalize_date(end_date)
             df = df[df['trade_date'] <= end_dt]
         
         return df
     
-    def load_clean_daily_by_date(self, trade_date: str) -> Optional[pd.DataFrame]:
+    def load_clean_daily_by_date(
+        self,
+        trade_date: str,
+        auto_ensure: bool = False,
+        ensure_loader: Optional["DataLoader"] = None,
+        ensure_cleaner: Optional["DataCleaner"] = None,
+        ensure_client: Optional["TushareClient"] = None,
+    ) -> Optional[pd.DataFrame]:
         """加载指定日期的清洗后日线数据
         
         Args:
@@ -401,27 +393,29 @@ class DataLoader:
         Returns:
             日线数据DataFrame
         """
-        # 转换日期格式 YYYYMMDD -> YYYY-MM-DD
-        if len(trade_date) == 8:
-            date_str = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
-        else:
-            date_str = trade_date
-        
-        # 确保已存在清洗过的数据, 若不存在则下载创建
-        from .ensure import ensure_clean_data_for_date
-        from ..data.tushare_client import TushareClient
-        from ..data.cleaner import DataCleaner
-        loader = DataLoader(verbose=False)
-        ts = TushareClient(verbose=False)
-        cleaner = DataCleaner(verbose=False)
-        ensure_clean_data_for_date(self.storage, loader, cleaner, ts, trade_date)
-        
+        normalized_trade_date = self._normalize_date(trade_date)
+
+        if auto_ensure:
+            from .ensure import ensure_clean_data_for_date
+            from ..data.tushare_client import TushareClient
+            from ..data.cleaner import DataCleaner
+
+            _loader = ensure_loader or self
+            _cleaner = ensure_cleaner or DataCleaner(verbose=False)
+            _client = ensure_client or TushareClient(verbose=False)
+            ensure_clean_data_for_date(
+                self.storage,
+                _loader,
+                _cleaner,
+                _client,
+                normalized_trade_date,
+            )
+
+        date_str = f"{normalized_trade_date[:4]}-{normalized_trade_date[4:6]}-{normalized_trade_date[6:8]}"
         df = self.storage.load_clean_by_date("daily", date_str)
         
         if df is not None and 'trade_date' in df.columns:
-            # 确保日期格式一致（YYYYMMDD字符串）
-            if pd.api.types.is_datetime64_any_dtype(df['trade_date']):
-                df['trade_date'] = df['trade_date'].dt.strftime('%Y%m%d')
+            df['trade_date'] = normalize_series_to_yyyymmdd(df['trade_date'])
         
         return df
     
@@ -468,7 +462,7 @@ class DataLoader:
         # 日期列标准化为 YYYYMMDD 字符串
         for col in ['ann_date', 'end_date']:
             if col in df.columns:
-                df[col] = df[col].astype(str).str.replace('-', '').str[:8]
+                df[col] = normalize_series_to_yyyymmdd(df[col])
 
         return df
 
@@ -483,7 +477,7 @@ class DataLoader:
             end_str = self._normalize_date(end_date)
             df = self.storage.load_raw_by_date_range("margin_detail", start_str, end_str)
             if df is not None and "trade_date" in df.columns:
-                df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+                df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
             return df
         df = self.storage.load_raw("margin_detail")
         return df
@@ -496,7 +490,7 @@ class DataLoader:
         else:
             for col in ["ann_date", "end_date"]:
                 if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+                    df[col] = normalize_series_to_yyyymmdd(df[col])
         return df
 
     def load_forecast(self) -> Optional[pd.DataFrame]:
@@ -507,7 +501,7 @@ class DataLoader:
         else:
             for col in ["ann_date", "end_date"]:
                 if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+                    df[col] = normalize_series_to_yyyymmdd(df[col])
         return df
 
     def load_cyq_perf(
@@ -521,7 +515,7 @@ class DataLoader:
             end_str = self._normalize_date(end_date)
             df = self.storage.load_raw_by_date_range("cyq_perf", start_str, end_str)
             if df is not None and "trade_date" in df.columns:
-                df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+                df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
             return df
         # 兼容：无日期参数时尝试加载单文件（旧格式）
         df = self.storage.load_raw("cyq_perf")
@@ -529,7 +523,7 @@ class DataLoader:
             logger.warning("未找到筹码胜率数据")
         else:
             if "trade_date" in df.columns:
-                df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+                df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
         return df
 
     def load_express(self) -> Optional[pd.DataFrame]:
@@ -540,7 +534,7 @@ class DataLoader:
         else:
             for col in ["ann_date", "end_date"]:
                 if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+                    df[col] = normalize_series_to_yyyymmdd(df[col])
         return df
 
     def load_cashflow(
@@ -563,7 +557,7 @@ class DataLoader:
         else:
             for col in ["ann_date", "end_date", "f_ann_date"]:
                 if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+                    df[col] = normalize_series_to_yyyymmdd(df[col])
         return df
 
     def load_moneyflow_hsgt(
@@ -583,7 +577,7 @@ class DataLoader:
         if df is None:
             logger.warning("未找到北向资金数据")
         elif "trade_date" in df.columns:
-            df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+            df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
         return df
 
     def load_top_list(
@@ -601,7 +595,7 @@ class DataLoader:
         if df is None:
             logger.warning("未找到龙虎榜数据")
         elif "trade_date" in df.columns:
-            df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
+            df["trade_date"] = normalize_series_to_yyyymmdd(df["trade_date"])
         return df
 
     def load_report_rc(self) -> Optional[pd.DataFrame]:
@@ -610,9 +604,7 @@ class DataLoader:
         if df is None:
             logger.warning("未找到一致预期研报数据")
         elif "report_date" in df.columns:
-            df["report_date"] = (
-                df["report_date"].astype(str).str.replace("-", "").str[:8]
-            )
+            df["report_date"] = normalize_series_to_yyyymmdd(df["report_date"])
         return df
 
     def load_fund_portfolio(
@@ -633,7 +625,7 @@ class DataLoader:
         else:
             for col in ["ann_date", "end_date"]:
                 if col in df.columns:
-                    df[col] = df[col].astype(str).str.replace("-", "").str[:8]
+                    df[col] = normalize_series_to_yyyymmdd(df[col])
         return df
 
     def build_stock_names_dict(self) -> Dict[str, str]:
