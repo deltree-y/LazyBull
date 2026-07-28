@@ -73,6 +73,9 @@ class FeatureBuilder:
         self._trading_date_index: Optional[Dict[str, int]] = None
         self._daily_adj_precomputed: Optional[pd.DataFrame] = None
         self._daily_adj_dict: Optional[Dict[str, pd.DataFrame]] = None
+        self._risk_factor_cache_dict: Optional[Dict[str, pd.DataFrame]] = None
+        self._risk_factor_names: Optional[List[str]] = None
+        self._risk_cache_failed: bool = False
         self._factor_registry = None  # 延迟初始化
 
         # 每日摘要用
@@ -90,29 +93,41 @@ class FeatureBuilder:
 
     def clear_caches(self) -> None:
         cache_names = [
-            "_market_state_cache", "_tech_factor_cache",
-            "_tech_factor_cache_dict", "_trading_dates_cache",
-            "_trading_date_index", "_daily_adj_precomputed",
+            "_market_state_cache",
+            "_tech_factor_cache",
+            "_tech_factor_cache_dict",
+            "_trading_dates_cache",
+            "_trading_date_index",
+            "_daily_adj_precomputed",
             "_daily_adj_dict",
+            "_risk_factor_cache_dict",
+            "_risk_factor_names",
         ]
         cleared = []
         for name in cache_names:
             if getattr(self, name, None) is not None:
                 setattr(self, name, None)
                 cleared.append(name)
+        self._risk_cache_failed = False
         if cleared:
             logger.debug(f"FeatureBuilder 缓存已释放: {', '.join(cleared)}")
 
     def _invalidate_precomputed_state(self) -> None:
         cache_names = [
-            "_market_state_cache", "_tech_factor_cache",
-            "_tech_factor_cache_dict", "_trading_dates_cache",
-            "_trading_date_index", "_daily_adj_precomputed",
+            "_market_state_cache",
+            "_tech_factor_cache",
+            "_tech_factor_cache_dict",
+            "_trading_dates_cache",
+            "_trading_date_index",
+            "_daily_adj_precomputed",
             "_daily_adj_dict",
+            "_risk_factor_cache_dict",
+            "_risk_factor_names",
         ]
         for name in cache_names:
             if getattr(self, name, None) is not None:
                 setattr(self, name, None)
+        self._risk_cache_failed = False
 
     # ── 预计算 ────────────────────────────────────────────────
 
@@ -291,9 +306,7 @@ class FeatureBuilder:
         )
 
         # 9.5 风控因子（独立模块，逻辑在 src/lazybull/risk/ 中维护）
-        features = self._add_risk_factors(
-            features, daily_adj, ctx.trade_date, trading_dates
-        )
+        features = self._add_risk_factors(features, daily_adj, ctx.trade_date, trading_dates)
 
         # 10. 合并特征和标签
         result = features.merge(labels, on=["trade_date", "ts_code"], how="inner")
@@ -366,20 +379,14 @@ class FeatureBuilder:
         if "cf_sales" not in features.columns:
             features["cf_sales"] = np.nan
         if "q_ocf_to_sales" in features.columns:
-            features["cf_sales"] = features["cf_sales"].combine_first(
-                features["q_ocf_to_sales"]
-            )
+            features["cf_sales"] = features["cf_sales"].combine_first(features["q_ocf_to_sales"])
         if "ocf_to_revenue" in features.columns:
-            features["cf_sales"] = features["cf_sales"].combine_first(
-                features["ocf_to_revenue"]
-            )
+            features["cf_sales"] = features["cf_sales"].combine_first(features["ocf_to_revenue"])
 
         if "cf_nm" not in features.columns:
             features["cf_nm"] = np.nan
         if "ocf_to_profit" in features.columns:
-            features["cf_nm"] = features["cf_nm"].combine_first(
-                features["ocf_to_profit"]
-            )
+            features["cf_nm"] = features["cf_nm"].combine_first(features["ocf_to_profit"])
 
         return features
 
@@ -400,9 +407,7 @@ class FeatureBuilder:
         self._trading_date_index = {d: i for i, d in enumerate(self._trading_dates_cache)}
         return self._trading_dates_cache
 
-    def _get_lookback_dates(
-        self, trade_date: str, n: int, trading_dates: List[str]
-    ) -> List[str]:
+    def _get_lookback_dates(self, trade_date: str, n: int, trading_dates: List[str]) -> List[str]:
         if self._trading_date_index is not None:
             idx = self._trading_date_index.get(trade_date, -1)
             if idx == -1:
@@ -535,6 +540,42 @@ class FeatureBuilder:
 
     # ── 风控因子 ──────────────────────────────────────────────
 
+    def _get_risk_factor_cache(self, daily_adj: pd.DataFrame) -> Optional[Dict[str, pd.DataFrame]]:
+        """获取（首次调用时构建）风控因子批量预计算缓存。
+
+        22 个基于 daily_adj 历史窗口的风控因子在首次调用时对整个周期
+        一次性向量化计算并缓存（与技术因子缓存模式一致），之后每日 O(1) 查表。
+        构建失败时返回 None，调用方回退到逐日滑窗路径。
+        """
+        if self._risk_factor_cache_dict is not None:
+            return self._risk_factor_cache_dict
+        if self._risk_cache_failed:
+            return None
+        try:
+            from ..risk.precompute import (
+                PRECOMPUTED_RISK_FACTOR_NAMES,
+                build_risk_factor_cache_dict,
+                precompute_risk_factors,
+            )
+        except ImportError:
+            logger.debug("风控因子预计算模块不可用，回退逐日计算路径")
+            self._risk_cache_failed = True
+            return None
+        try:
+            logger.info("首次构建：批量预计算风控因子（缓存中）...")
+            long_df = precompute_risk_factors(daily_adj)
+            if long_df is None or len(long_df) == 0:
+                logger.warning("风控因子批量预计算返回空，回退逐日计算路径")
+                self._risk_cache_failed = True
+                return None
+            self._risk_factor_cache_dict = build_risk_factor_cache_dict(long_df)
+            self._risk_factor_names = list(PRECOMPUTED_RISK_FACTOR_NAMES)
+            return self._risk_factor_cache_dict
+        except (ValueError, KeyError, TypeError, MemoryError) as e:
+            logger.warning(f"风控因子批量预计算失败（{type(e).__name__}: {e}），回退逐日计算路径")
+            self._risk_cache_failed = True
+            return None
+
     def _add_risk_factors(
         self,
         features: pd.DataFrame,
@@ -544,8 +585,9 @@ class FeatureBuilder:
     ) -> pd.DataFrame:
         """计算风控模型专属因子（下行风险/波动结构/流动性/公告类）。
 
-        所有因子计算逻辑在 src/lazybull/risk/ 独立模块中维护，
-        此处仅做窗口切片与结果合并，保持编排器轻量。
+        优先路径：22 个历史窗口因子读取批量预计算缓存（O(1) 查表合并），
+        9 个公告类截面因子仍逐日计算（无历史窗口，开销极小）。
+        预计算不可用时回退到旧的逐日滑窗计算路径。
         """
         try:
             from ..risk.factor_registry import compute_all_risk_factors
@@ -553,10 +595,15 @@ class FeatureBuilder:
             logger.debug("风控因子模块不可用，跳过")
             return features
 
-        # 切片到最长风控窗口（252 交易日 + 余量），避免全量历史参与逐日计算
-        sliced = self._slice_by_trading_days(
-            daily_adj, trading_dates, trade_date, warmup_days=260
-        )
+        # 优先路径：批量预计算缓存查表
+        cache_dict = self._get_risk_factor_cache(daily_adj)
+        if cache_dict is not None and self._risk_factor_names:
+            return _attach_risk_factors_static(
+                features, trade_date, cache_dict, self._risk_factor_names
+            )
+
+        # 回退路径：切片到最长风控窗口（252 交易日 + 余量）逐日计算
+        sliced = self._slice_by_trading_days(daily_adj, trading_dates, trade_date, warmup_days=260)
         if sliced is None or len(sliced) == 0:
             return features
 
@@ -600,19 +647,22 @@ class FeatureBuilder:
     ) -> pd.DataFrame:
         from ..common.feature_utils import log1p_transform
 
-        daily_basic_today = daily_basic_data[
-            daily_basic_data["trade_date"] == trade_date
-        ].copy()
+        daily_basic_today = daily_basic_data[daily_basic_data["trade_date"] == trade_date].copy()
         if len(daily_basic_today) == 0:
             logger.warning(f"{trade_date} 没有 daily_basic 数据，价值红利特征将为空")
             return features
         value_cols = [
-            "ts_code", "pb", "pe_ttm", "ps_ttm", "dv_ttm",
-            "total_mv", "circ_mv", "turnover_rate", "volume_ratio",
+            "ts_code",
+            "pb",
+            "pe_ttm",
+            "ps_ttm",
+            "dv_ttm",
+            "total_mv",
+            "circ_mv",
+            "turnover_rate",
+            "volume_ratio",
         ]
-        existing_cols = ["ts_code"] + [
-            c for c in value_cols[1:] if c in daily_basic_today.columns
-        ]
+        existing_cols = ["ts_code"] + [c for c in value_cols[1:] if c in daily_basic_today.columns]
         daily_basic_today = daily_basic_today[existing_cols].copy()
         features = features.merge(daily_basic_today, on="ts_code", how="left")
         if "dv_ttm" in features.columns:
@@ -623,9 +673,9 @@ class FeatureBuilder:
                 1.0 / features["pe_ttm"],
                 np.nan,
             )
-            features["is_loss"] = (
-                (features["pe_ttm"].isna()) | (features["pe_ttm"] <= 0)
-            ).astype(int)
+            features["is_loss"] = ((features["pe_ttm"].isna()) | (features["pe_ttm"] <= 0)).astype(
+                int
+            )
         if "pb" in features.columns:
             features["bp"] = np.where(
                 (features["pb"].notna()) & (features["pb"] > 0),
@@ -678,16 +728,10 @@ class FeatureBuilder:
             features = features.merge(
                 moneyflow_today[["ts_code", "elg_net_amount"]], on="ts_code", how="left"
             )
-            _total = (
-                moneyflow_today["buy_elg_amount"] + moneyflow_today["sell_elg_amount"]
-            )
+            _total = moneyflow_today["buy_elg_amount"] + moneyflow_today["sell_elg_amount"]
             moneyflow_today["order_imbalance"] = np.where(
                 _total > 1e-6,
-                (
-                    moneyflow_today["buy_elg_amount"]
-                    - moneyflow_today["sell_elg_amount"]
-                )
-                / _total,
+                (moneyflow_today["buy_elg_amount"] - moneyflow_today["sell_elg_amount"]) / _total,
                 np.nan,
             )
             features = features.merge(
@@ -703,9 +747,7 @@ class FeatureBuilder:
                 if "elg_net_amount" in features.columns:
                     features[f"elg_net_amount_sum_{window}"] = np.nan
                 continue
-            hist_moneyflow = moneyflow_data[
-                moneyflow_data["trade_date"].isin(hist_dates)
-            ].copy()
+            hist_moneyflow = moneyflow_data[moneyflow_data["trade_date"].isin(hist_dates)].copy()
             if len(hist_moneyflow) == 0:
                 continue
             if (
@@ -723,17 +765,10 @@ class FeatureBuilder:
                     hist_moneyflow["buy_elg_amount"] - hist_moneyflow["sell_elg_amount"]
                 )
                 # 历史订单失衡（用于滚动均值）
-                _total = (
-                    hist_moneyflow["buy_elg_amount"]
-                    + hist_moneyflow["sell_elg_amount"]
-                )
+                _total = hist_moneyflow["buy_elg_amount"] + hist_moneyflow["sell_elg_amount"]
                 hist_moneyflow["order_imbalance"] = np.where(
                     _total > 1e-6,
-                    (
-                        hist_moneyflow["buy_elg_amount"]
-                        - hist_moneyflow["sell_elg_amount"]
-                    )
-                    / _total,
+                    (hist_moneyflow["buy_elg_amount"] - hist_moneyflow["sell_elg_amount"]) / _total,
                     np.nan,
                 )
             agg_dict = {}
@@ -747,9 +782,7 @@ class FeatureBuilder:
                 agg_dict["order_imbalance"] = ["mean"]
             if not agg_dict:
                 continue
-            rolling_features = (
-                hist_moneyflow.groupby("ts_code").agg(agg_dict).reset_index()
-            )
+            rolling_features = hist_moneyflow.groupby("ts_code").agg(agg_dict).reset_index()
             new_columns = ["ts_code"]
             for col in rolling_features.columns[1:]:
                 if isinstance(col, tuple):
@@ -758,9 +791,7 @@ class FeatureBuilder:
                     new_columns.append(col)
             rolling_features.columns = new_columns
             features = features.merge(rolling_features, on="ts_code", how="left")
-        winsorize_cols = [
-            c for c in features.columns if "net_amount" in c or "mf_amount" in c
-        ]
+        winsorize_cols = [c for c in features.columns if "net_amount" in c or "mf_amount" in c]
         for col in winsorize_cols:
             if col in features.columns:
                 features[col] = winsorize_series(features[col], limits=(0.01, 0.01))
@@ -826,9 +857,7 @@ class FeatureBuilder:
         """已移出至 industry_merge.py，保留委托。"""
         from .industry_merge import merge_shenwan_industry
 
-        return merge_shenwan_industry(
-            features, shenwan_industry, self.shenwan_level, self.verbose
-        )
+        return merge_shenwan_industry(features, shenwan_industry, self.shenwan_level, self.verbose)
 
     def _apply_industry_neutralization(self, features: pd.DataFrame) -> pd.DataFrame:
         """已移出至 neutralization.py，保留委托。"""
@@ -903,8 +932,12 @@ def _calculate_base_features(
     """模块级基础特征计算（无状态版本）。"""
     base_columns = ["trade_date", "ts_code", "vol", "amount"]
     clean_marker_columns = [
-        "is_st", "is_suspended", "is_limit_up", "is_limit_down",
-        "list_days", "tradable",
+        "is_st",
+        "is_suspended",
+        "is_limit_up",
+        "is_limit_down",
+        "list_days",
+        "tradable",
     ]
     columns_to_keep = base_columns.copy()
     for col in clean_marker_columns:
@@ -916,7 +949,9 @@ def _calculate_base_features(
     # ret_1
     features = features.merge(
         current_data[["ts_code", "pct_chg"]],
-        on="ts_code", how="left", suffixes=("", "_dup"),
+        on="ts_code",
+        how="left",
+        suffixes=("", "_dup"),
     )
     features.rename(columns={"pct_chg": "ret_1"}, inplace=True)
     features["ret_1"] = features["ret_1"] / 100.0
@@ -925,10 +960,14 @@ def _calculate_base_features(
     if "open" in current_data.columns and "pre_close" in current_data.columns:
         _open = current_data[["ts_code", "open", "pre_close"]].copy()
         _open["opening_strength"] = np.where(
-            _open["pre_close"] > 1e-6, _open["open"] / _open["pre_close"] - 1, np.nan,
+            _open["pre_close"] > 1e-6,
+            _open["open"] / _open["pre_close"] - 1,
+            np.nan,
         )
         features = features.merge(
-            _open[["ts_code", "opening_strength"]], on="ts_code", how="left",
+            _open[["ts_code", "opening_strength"]],
+            on="ts_code",
+            how="left",
         )
 
     # intraday_vol_structure
@@ -938,13 +977,18 @@ def _calculate_base_features(
         _down = _hloc["open"] - _hloc["low"]
         _hloc["intraday_vol_structure"] = np.where(_down > 1e-6, _up / _down, np.nan)
         features = features.merge(
-            _hloc[["ts_code", "intraday_vol_structure"]], on="ts_code", how="left",
+            _hloc[["ts_code", "intraday_vol_structure"]],
+            on="ts_code",
+            how="left",
         )
 
     # 回看特征
     for window in lookback_windows:
         hist_dates = _get_lookback_dates_static(
-            trade_date, window, trading_dates, trading_date_index,
+            trade_date,
+            window,
+            trading_dates,
+            trading_date_index,
         )
         if not hist_dates:
             features[f"ret_{window}"] = np.nan
@@ -962,6 +1006,51 @@ def _calculate_base_features(
         hist_features = _calculate_window_features_static(hist_data, current_data, window)
         features = features.merge(hist_features, on="ts_code", how="left")
 
+    return features
+
+
+def _attach_risk_factors_static(
+    features: pd.DataFrame,
+    trade_date: str,
+    risk_factor_cache_dict: Optional[Dict[str, pd.DataFrame]],
+    risk_factor_names: Optional[List[str]],
+) -> pd.DataFrame:
+    """静态版风控因子合并：预计算缓存查表 + 公告类截面因子逐日计算。
+
+    供串行（FeatureBuilder）与并行（parallel.py）两条路径共用。
+    """
+    if risk_factor_cache_dict is None or not risk_factor_names:
+        return features
+    try:
+        from ..risk.factor_registry import compute_all_risk_factors
+    except ImportError:
+        return features
+
+    # 1. 历史窗口因子：O(1) 查表合并
+    day_df = risk_factor_cache_dict.get(trade_date)
+    if day_df is not None and len(day_df) > 0:
+        merged = features[["ts_code"]].merge(day_df, on="ts_code", how="left")
+        block = merged[list(risk_factor_names)]
+        block.index = features.index
+        features = pd.concat([features, block], axis=1)
+    else:
+        nan_block = pd.DataFrame(np.nan, index=features.index, columns=list(risk_factor_names))
+        features = pd.concat([features, nan_block], axis=1)
+
+    # 2. 公告类截面因子：逐日计算（不依赖 daily_adj 历史窗口，开销极小）
+    risk_cols = compute_all_risk_factors(
+        df=features,
+        daily_adj=None,
+        market_state=None,
+        trade_date=trade_date,
+        exclude=set(risk_factor_names),
+    )
+    if risk_cols:
+        new_df = pd.DataFrame(
+            {name: (s.values if isinstance(s, pd.Series) else s) for name, s in risk_cols.items()},
+            index=features.index,
+        )
+        features = pd.concat([features, new_df], axis=1)
     return features
 
 
@@ -1022,13 +1111,15 @@ def _calculate_window_features_static(
     )
     window_features[f"ma_deviation_{window}"] = np.where(
         window_features["ma_close"] > 1e-6,
-        (window_features["close_adj"] - window_features["ma_close"])
-        / window_features["ma_close"],
+        (window_features["close_adj"] - window_features["ma_close"]) / window_features["ma_close"],
         np.nan,
     )
     keep_cols = [
-        "ts_code", f"ret_{window}", f"vol_ratio_{window}",
-        f"ma_deviation_{window}", "mean_amount",
+        "ts_code",
+        f"ret_{window}",
+        f"vol_ratio_{window}",
+        f"ma_deviation_{window}",
+        "mean_amount",
     ]
     window_features = window_features[keep_cols]
     window_features = window_features.rename(columns={"mean_amount": f"amount_ma{window}"})
@@ -1049,16 +1140,12 @@ def _add_advanced_factors_static(
     result = features.copy()
 
     if all(
-        col in current_data.columns
-        for col in ["high_adj", "low_adj", "pre_close", "adj_factor"]
+        col in current_data.columns for col in ["high_adj", "low_adj", "pre_close", "adj_factor"]
     ):
         amplitude_df = calculate_amplitude(current_data)
         result = result.merge(amplitude_df, on=["ts_code", "trade_date"], how="left")
 
-    if all(
-        col in current_data.columns
-        for col in ["open_adj", "high_adj", "low_adj", "close_adj"]
-    ):
+    if all(col in current_data.columns for col in ["open_adj", "high_adj", "low_adj", "close_adj"]):
         shadows_df = calculate_shadows(current_data)
         result = result.merge(shadows_df, on=["ts_code", "trade_date"], how="left")
 
@@ -1087,15 +1174,21 @@ def _add_advanced_factors_static(
         industry_col = "sw_industry" if "sw_industry" in result.columns else None
         if industry_col is not None:
             industry_alpha_df = calculate_industry_alpha_windows(
-                result, ret_windows=lookback_windows, industry_col=industry_col,
+                result,
+                ret_windows=lookback_windows,
+                industry_col=industry_col,
             )
             result = result.merge(
-                industry_alpha_df, on=["ts_code", "trade_date"], how="left",
+                industry_alpha_df,
+                on=["ts_code", "trade_date"],
+                how="left",
             )
             from ..factors.industry import calculate_industry_momentum_features
 
             ind_mom_df = calculate_industry_momentum_features(
-                result, industry_col=industry_col, ret_col="ret_20",
+                result,
+                industry_col=industry_col,
+                ret_col="ret_20",
             )
             result = result.merge(ind_mom_df, on=["ts_code", "trade_date"], how="left")
 
@@ -1120,10 +1213,20 @@ def _add_advanced_factors_static(
             tech_indicator_cols = [
                 c
                 for c in [
-                    "rsi_14", "kdj_k", "kdj_d", "kdj_j",
-                    "macd_dif", "macd_dea", "macd_hist",
-                    "bb_middle", "bb_upper", "bb_lower", "bb_width", "bb_pct",
-                    "atr_14", "atr_pct_14",
+                    "rsi_14",
+                    "kdj_k",
+                    "kdj_d",
+                    "kdj_j",
+                    "macd_dif",
+                    "macd_dea",
+                    "macd_hist",
+                    "bb_middle",
+                    "bb_upper",
+                    "bb_lower",
+                    "bb_width",
+                    "bb_pct",
+                    "atr_14",
+                    "atr_pct_14",
                 ]
                 if c in tech_today.columns
             ]
@@ -1145,8 +1248,7 @@ def _add_filter_flags_static(
 ) -> pd.DataFrame:
     result = df.copy()
     has_clean_flags = all(
-        col in result.columns
-        for col in ["is_st", "is_suspended", "tradable", "list_days"]
+        col in result.columns for col in ["is_st", "is_suspended", "tradable", "list_days"]
     )
     if has_clean_flags:
         logger.debug("数据已包含 clean 层过滤标记，直接复用")
@@ -1165,12 +1267,17 @@ def _add_filter_flags_static(
     if pd.api.types.is_datetime64_any_dtype(stock_list_date["list_date"]):
         stock_list_date["list_date"] = stock_list_date["list_date"].dt.strftime("%Y%m%d")
     result = result.merge(
-        stock_list_date, on="ts_code", how="left", suffixes=("", "_basic"),
+        stock_list_date,
+        on="ts_code",
+        how="left",
+        suffixes=("", "_basic"),
     )
     try:
         trade_date_dt = pd.to_datetime(trade_date, format="%Y%m%d")
         result["list_date_dt"] = pd.to_datetime(
-            result["list_date"], format="%Y%m%d", errors="coerce",
+            result["list_date"],
+            format="%Y%m%d",
+            errors="coerce",
         )
         result["list_days"] = (trade_date_dt - result["list_date_dt"]).dt.days
         result.drop(columns=["list_date_dt"], inplace=True)
@@ -1186,7 +1293,9 @@ def _add_filter_flags_static(
     if suspend_info is not None and len(suspend_info) > 0:
         if "suspend_date" in suspend_info.columns and "resume_date" in suspend_info.columns:
             suspend_info_normalized = normalize_date_columns(
-                suspend_info, ["suspend_date", "resume_date"], to_str=True,
+                suspend_info,
+                ["suspend_date", "resume_date"],
+                to_str=True,
             )
             trade_date_str = to_trade_date_str(trade_date)
             suspend_today = suspend_info_normalized[
@@ -1197,12 +1306,11 @@ def _add_filter_flags_static(
                 )
             ]["ts_code"].unique()
             result.loc[result["ts_code"].isin(suspend_today), "is_suspended"] = 1
-        elif (
-            "trade_date" in suspend_info.columns
-            and "suspend_type" in suspend_info.columns
-        ):
+        elif "trade_date" in suspend_info.columns and "suspend_type" in suspend_info.columns:
             suspend_info_normalized = normalize_date_columns(
-                suspend_info, ["trade_date"], to_str=True,
+                suspend_info,
+                ["trade_date"],
+                to_str=True,
             )
             trade_date_str = to_trade_date_str(trade_date)
             suspend_today = suspend_info_normalized[
@@ -1221,9 +1329,7 @@ def _add_limit_flags_static(
     trade_date: str,
 ) -> pd.DataFrame:
     result = df.copy()
-    has_clean_limit_flags = all(
-        col in result.columns for col in ["is_limit_up", "is_limit_down"]
-    )
+    has_clean_limit_flags = all(col in result.columns for col in ["is_limit_up", "is_limit_down"])
     if has_clean_limit_flags:
         logger.debug("数据已包含 clean 层涨跌停标记，直接复用")
         return result
@@ -1233,7 +1339,10 @@ def _add_limit_flags_static(
         ["ts_code", "close", "pct_chg"]
     ].copy()
     result = result.merge(
-        current_daily, on="ts_code", how="left", suffixes=("", "_daily"),
+        current_daily,
+        on="ts_code",
+        how="left",
+        suffixes=("", "_daily"),
     )
     result["is_limit_up"] = 0
     result["is_limit_down"] = 0
@@ -1241,9 +1350,7 @@ def _add_limit_flags_static(
     non_st_mask = result["is_st"] == 0
     st_mask = result["is_st"] == 1
     kcb_mask = result["ts_code"].str.startswith("688")
-    gem_mask = result["ts_code"].str.startswith("300") | result["ts_code"].str.startswith(
-        "301"
-    )
+    gem_mask = result["ts_code"].str.startswith("300") | result["ts_code"].str.startswith("301")
     reg_board_mask = (kcb_mask | gem_mask) & non_st_mask
     main_board_mask = ~(kcb_mask | gem_mask) & non_st_mask
 
@@ -1260,14 +1367,13 @@ def _add_limit_flags_static(
         ].copy()
         if len(limit_today) > 0:
             result = result.merge(
-                limit_today, on="ts_code", how="left", suffixes=("", "_limit"),
+                limit_today,
+                on="ts_code",
+                how="left",
+                suffixes=("", "_limit"),
             )
-            result.loc[
-                (result["close"] >= result["up_limit"] * 0.999), "is_limit_up"
-            ] = 1
-            result.loc[
-                (result["close"] <= result["down_limit"] * 1.001), "is_limit_down"
-            ] = 1
+            result.loc[(result["close"] >= result["up_limit"] * 0.999), "is_limit_up"] = 1
+            result.loc[(result["close"] <= result["down_limit"] * 1.001), "is_limit_down"] = 1
             result.drop(columns=["up_limit", "down_limit"], inplace=True, errors="ignore")
 
     result.drop(columns=["close", "pct_chg"], inplace=True, errors="ignore")
@@ -1285,9 +1391,7 @@ def _apply_filters_static(
     horizons = horizons or [5, 10, 20]
 
     filter_mask = (
-        (df["is_st"] == 0)
-        & (df["list_days"] >= min_list_days)
-        & (df["is_suspended"] == 0)
+        (df["is_st"] == 0) & (df["list_days"] >= min_list_days) & (df["is_suspended"] == 0)
     )
 
     if require_label:

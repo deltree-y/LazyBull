@@ -45,17 +45,20 @@ def register_risk_factor(name: str):
         def compute_downside_vol_20(df, daily_adj, market_state, **kwargs):
             ...
     """
+
     def decorator(fn: Callable[..., pd.Series]) -> Callable[..., pd.Series]:
         if name in _RISK_FACTOR_REGISTRY:
             logger.warning(f"风控因子 '{name}' 被重复注册，将覆盖前一个")
         _RISK_FACTOR_REGISTRY[name] = fn
         return fn
+
     return decorator
 
 
 # ---------------------------------------------------------------------------
 # 统一入口（builder.py 唯一调用点）
 # ---------------------------------------------------------------------------
+
 
 def _ensure_all_modules_imported():
     """确保所有因子模块已被导入（触发注册）。
@@ -103,13 +106,13 @@ def _prefilter_daily_adj(
     if trading_dates is not None and trade_date_idx is not None:
         # 快速路径：用双边界比较定位最近 max_window 个交易日（纯向量化，无哈希开销）
         start_date = trading_dates[max(0, trade_date_idx - max_window + 1)]
-        mask = (daily_adj['trade_date'] >= start_date) & (daily_adj['trade_date'] <= trade_date)
+        mask = (daily_adj["trade_date"] >= start_date) & (daily_adj["trade_date"] <= trade_date)
         return daily_adj.loc[mask]
 
     # 回退路径：mask + groupby.tail（无 trading_dates 信息时使用）
-    mask = daily_adj['trade_date'] <= trade_date
+    mask = daily_adj["trade_date"] <= trade_date
     filtered = daily_adj.loc[mask]
-    filtered = filtered.groupby('ts_code', sort=False).tail(max_window)
+    filtered = filtered.groupby("ts_code", sort=False).tail(max_window)
     return filtered
 
 
@@ -117,7 +120,8 @@ def compute_all_risk_factors(
     df: pd.DataFrame,
     daily_adj: Optional[pd.DataFrame] = None,
     market_state: Optional[Dict[str, Any]] = None,
-    **kwargs
+    exclude: Optional[set] = None,
+    **kwargs,
 ) -> Dict[str, pd.Series]:
     """计算全部已注册的风控因子（builder.py 唯一调用入口）。
 
@@ -125,6 +129,7 @@ def compute_all_risk_factors(
         df: 当日截面 DataFrame，必须包含 ts_code 列
         daily_adj: 全量后复权日线数据（部分因子需要历史窗口计算）
         market_state: 市场状态字典（mkt_ret / mkt_vol / mkt_drawdown 等）
+        exclude: 需跳过的因子名集合（已由批量预计算提供的因子）
         **kwargs: 传递给各因子计算函数的额外参数
 
     Returns:
@@ -138,19 +143,24 @@ def compute_all_risk_factors(
 
     # ---- 性能优化：预过滤 daily_adj 到最大窗口 ----
     # 使用 trading_dates 做双边界比较过滤，替代昂贵的 groupby.tail 扫描
-    trade_date = kwargs.get('trade_date', '')
-    _td_list = kwargs.get('trading_dates', None)
-    _td_idx = kwargs.get('trade_date_idx', None)
-    if daily_adj is not None and trade_date and 'ts_code' in daily_adj.columns:
+    trade_date = kwargs.get("trade_date", "")
+    _td_list = kwargs.get("trading_dates", None)
+    _td_idx = kwargs.get("trade_date_idx", None)
+    if daily_adj is not None and trade_date and "ts_code" in daily_adj.columns:
         daily_adj = _prefilter_daily_adj(
-            daily_adj, trade_date, _MAX_RISK_WINDOW,
-            trading_dates=_td_list, trade_date_idx=_td_idx,
+            daily_adj,
+            trade_date,
+            _MAX_RISK_WINDOW,
+            trading_dates=_td_list,
+            trade_date_idx=_td_idx,
         )
 
     logger.debug(f"开始计算 {len(_RISK_FACTOR_REGISTRY)} 个风控因子...")
     results: Dict[str, pd.Series] = {}
 
     for name, fn in _RISK_FACTOR_REGISTRY.items():
+        if exclude and name in exclude:
+            continue
         try:
             series = fn(df, daily_adj=daily_adj, market_state=market_state, **kwargs)
             if isinstance(series, pd.Series):

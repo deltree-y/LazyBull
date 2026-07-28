@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.85.24] - 2026-07-28
+
+### Fixed
+
+- **风控因子预计算告警抑制**：新股上市前的日期在宽矩阵中全为 NaN，rolling 运算会触发 numpy 的 `All-NaN slice encountered` RuntimeWarning（结果本身是正确的 NaN，属预期行为），现已在 `precompute_risk_factors` 内定向抑制；新增后期上市股票场景的无告警回归测试
+
+## [0.85.23] - 2026-07-28
+
+### Performance
+
+- **风控因子批量预计算**：新增 `src/lazybull/risk/precompute.py`，将 22 个基于 daily_adj 历史窗口的风控因子（A 类下行风险 8 个、B 类波动结构 6 个、D 类流动性 8 个）改为全周期一次性宽矩阵 rolling 向量化计算，替代原先每交易日的「全量切片 + groupby.tail + pivot + 逐股 Python 循环」模式。实测 2012-2026 全量数据预计算仅需约 80 秒（一次性），`build_clean_features` 整体耗时从 6+ 小时回落至约 2 小时。
+  - `FeatureBuilder` 新增 `_risk_factor_cache_dict` 缓存槽位（与技术因子缓存模式一致），首次构建时预计算，之后每日 O(1) 查表合并；预计算失败时自动回退旧的逐日滑窗路径
+  - 9 个公告类截面因子（pledge/unlock/block/short）不依赖历史窗口，仍逐日计算
+  - `compute_all_risk_factors` 新增 `exclude` 参数，跳过已由预计算提供的因子
+  - 语义说明：预计算窗口按「最近 N 个交易日」对齐（停牌日按 min_periods 跳过），而非原逐日路径的「该股最近 N 条观测」；对无停牌股票两者完全一致（17 个因子数值精确对齐，已有测试覆盖）
+
+### Fixed
+
+- **并行构建路径补齐风控因子**：`build_features_for_day_static`（`--parallel` 路径）此前完全缺失风控因子步骤，导致串行/并行产出的 cs_train schema 不一致；现已接入预计算缓存查表 + 公告类因子逐日计算，与串行路径保持一致
+
+### Tests
+
+- 新增 `tests/test_risk_precompute.py`（12 个用例）：预计算与逐日路径数值一致性、缺列降级、缓存复用、分位因子取值范围、exclude 参数、builder 集成等
+
 ## [0.85.22] - 2026-07-27
 
 ### Removed

@@ -26,6 +26,8 @@ def build_features_for_day_static(
     trading_date_index: Dict[str, int],
     daily_adj_precomputed: Optional[pd.DataFrame],
     factor_registry,
+    risk_factor_cache_dict: Optional[Dict[str, pd.DataFrame]] = None,
+    risk_factor_names: Optional[List[str]] = None,
 ) -> Optional[pd.DataFrame]:
     """纯函数版单日特征构建：所有状态外部传入，可 pickle 用于多进程。
 
@@ -103,15 +105,20 @@ def build_features_for_day_static(
         tech_factor_cache_dict=tech_factor_cache_dict,
     )
 
+    # ── 风控因子（批量预计算缓存查表 + 公告类逐日计算）──
+    from .builder import _attach_risk_factors_static
+
+    features = _attach_risk_factors_static(
+        features, trade_date, risk_factor_cache_dict, risk_factor_names
+    )
+
     # ── 合并特征和标签 ──
     result = features.merge(labels, on=["trade_date", "ts_code"], how="inner")
 
     # ── 过滤标记 ──
     from .builder import _add_filter_flags_static, _add_limit_flags_static, _apply_filters_static
 
-    result = _add_filter_flags_static(
-        result, ctx.stock_basic, ctx.suspend_info, trade_date
-    )
+    result = _add_filter_flags_static(result, ctx.stock_basic, ctx.suspend_info, trade_date)
     result = _add_limit_flags_static(result, ctx.daily_data, ctx.limit_info, trade_date)
     result = _apply_filters_static(
         result,
@@ -166,6 +173,8 @@ def build_features_parallel(
     factor_registry,
     save_fn: Callable[[str, pd.DataFrame], None],
     n_jobs: int = -1,
+    risk_factor_cache_dict: Optional[Dict[str, pd.DataFrame]] = None,
+    risk_factor_names: Optional[List[str]] = None,
 ) -> Tuple[int, int]:
     """并行构建多日特征并写入存储。
 
@@ -181,6 +190,8 @@ def build_features_parallel(
         factor_registry: FactorRegistry 实例
         save_fn: (trade_date, features_df) -> None 写入回调
         n_jobs: 并行 worker 数，-1 表示全部核心
+        risk_factor_cache_dict: 预计算的风控因子字典（trade_date -> 截面）
+        risk_factor_names: 预计算风控因子名列表
 
     Returns:
         (success_count, error_count)
@@ -211,6 +222,8 @@ def build_features_parallel(
                 trading_date_index=trading_date_index,
                 daily_adj_precomputed=daily_adj_precomputed,
                 factor_registry=factor_registry,
+                risk_factor_cache_dict=risk_factor_cache_dict,
+                risk_factor_names=risk_factor_names,
             )
             return td, df, None
         except Exception as e:

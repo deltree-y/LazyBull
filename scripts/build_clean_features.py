@@ -77,108 +77,112 @@ def build_clean_data(
     logger.info("=" * 60)
     logger.info("开始构建clean层数据")
     logger.info("=" * 60)
-    
+
     # 1. 检查并处理trade_cal
     logger.info("处理交易日历...")
     trade_cal_raw = storage.load_raw("trade_cal")
     if trade_cal_raw is None:
-        raise ValueError("缺少raw层trade_cal数据，请先运行: python scripts/download_raw.py --only-basic")
-    
+        raise ValueError(
+            "缺少raw层trade_cal数据，请先运行: python scripts/download_raw.py --only-basic"
+        )
+
     trade_cal_clean = cleaner.clean_trade_cal(trade_cal_raw)
     storage.save_clean(trade_cal_clean, "trade_cal", is_force=True)
     logger.info(f"交易日历清洗完成: {len(trade_cal_clean)} 条记录")
-    
+
     # 2. 检查并处理stock_basic
     logger.info("处理股票基本信息...")
     stock_basic_raw = storage.load_raw("stock_basic")
     if stock_basic_raw is None:
-        raise ValueError("缺少raw层stock_basic数据，请先运行: python scripts/download_raw.py --only-basic")
-    
+        raise ValueError(
+            "缺少raw层stock_basic数据，请先运行: python scripts/download_raw.py --only-basic"
+        )
+
     stock_basic_clean = cleaner.clean_stock_basic(stock_basic_raw)
     storage.save_clean(stock_basic_clean, "stock_basic", is_force=True)
     logger.info(f"股票基本信息清洗完成: {len(stock_basic_clean)} 条记录")
-    
+
     # 3. 按日期分区处理日线数据
     logger.info("使用分区模式处理日线数据...")
-    
+
     # 获取交易日列表
     trading_dates = trade_cal_clean[
-        (trade_cal_clean['cal_date'] >= start_date) &
-        (trade_cal_clean['cal_date'] <= end_date) &
-        (trade_cal_clean['is_open'] == 1)
-    ]['cal_date'].tolist()
-    
+        (trade_cal_clean["cal_date"] >= start_date)
+        & (trade_cal_clean["cal_date"] <= end_date)
+        & (trade_cal_clean["is_open"] == 1)
+    ]["cal_date"].tolist()
+
     logger.info(f"共 {len(trading_dates)} 个交易日需要处理")
-    
+
     success_count = 0
     skip_count = 0
     error_count = 0
-    
+
     for i, trade_date in enumerate(trading_dates, 1):
         logger.info(f"[{i}/{len(trading_dates)}] ({i/len(trading_dates):.1%}) 处理 {trade_date}...")
-        
+
         try:
             # 检查clean数据是否已存在
             if not force and storage.is_data_exists("clean", "daily", trade_date):
                 logger.info(f"  clean daily已存在，跳过")
                 skip_count += 1
                 continue
-            
+
             # 加载raw数据
             daily_raw = storage.load_raw_by_date("daily", trade_date)
             if daily_raw is None or len(daily_raw) == 0:
                 logger.warning(f"  未找到raw层daily数据，跳过")
                 error_count += 1
                 continue
-            
+
             adj_factor_raw = storage.load_raw_by_date("adj_factor", trade_date)
             if adj_factor_raw is None or len(adj_factor_raw) == 0:
                 logger.warning(f"  未找到复权因子，使用默认值1.0")
-                adj_factor_raw = daily_raw[['ts_code', 'trade_date']].copy()
-                adj_factor_raw['adj_factor'] = 1.0
-            
+                adj_factor_raw = daily_raw[["ts_code", "trade_date"]].copy()
+                adj_factor_raw["adj_factor"] = 1.0
+
             # 清洗日线数据
             daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
-            
+
             # 添加可交易标记
             suspend_raw = storage.load_raw_by_date("suspend", trade_date)
             limit_raw = storage.load_raw_by_date("stk_limit", trade_date)
             stock_st_raw = storage.load_raw_by_date("stock_st", trade_date)
-            
+
             suspend_clean = None
             limit_clean = None
             stock_st_clean = None
-            
+
             if suspend_raw is not None and len(suspend_raw) > 0:
                 suspend_clean = cleaner.clean_suspend_info(suspend_raw)
-            
+
             if limit_raw is not None and len(limit_raw) > 0:
                 limit_clean = cleaner.clean_limit_info(limit_raw)
 
             if stock_st_raw is not None and len(stock_st_raw) > 0:
                 stock_st_clean = cleaner.clean_stock_st(stock_st_raw)
-            
+
             daily_clean = cleaner.add_tradable_universe_flag(
                 daily_clean,
                 stock_basic_clean,
                 stock_st_df=stock_st_clean,
                 suspend_info_df=suspend_clean,
                 limit_info_df=limit_clean,
-                min_list_days=min_list_days
+                min_list_days=min_list_days,
             )
 
             # 保存clean数据
             storage.save_clean_by_date(daily_clean, "daily", trade_date)
             success_count += 1
             logger.info(f"  已保存 {len(daily_clean)} 条clean记录")
-            
+
             # 处理daily_basic
             daily_basic_raw = storage.load_raw_by_date("daily_basic", trade_date)
             if daily_basic_raw is not None and len(daily_basic_raw) > 0:
                 if force or not storage.is_data_exists("clean", "daily_basic", trade_date):
                     daily_basic_clean = cleaner.clean_daily_basic(daily_basic_raw)
                     storage.save_clean_by_date(daily_basic_clean, "daily_basic", trade_date)
-            
+
             # 处理moneyflow
             moneyflow_raw = storage.load_raw_by_date("moneyflow", trade_date)
             if moneyflow_raw is not None and len(moneyflow_raw) > 0:
@@ -187,12 +191,12 @@ def build_clean_data(
                     storage.save_clean_by_date(moneyflow_clean, "moneyflow", trade_date)
             else:
                 logger.warning(f"  未找到资金流向数据（moneyflow 为强制依赖项）")
-            
+
         except Exception as e:
             logger.error(f"处理 {trade_date} 失败: {str(e)}")
             error_count += 1
             continue
-    
+
     logger.info("=" * 60)
     logger.info("clean层数据构建完成")
     logger.info("=" * 60)
@@ -242,6 +246,13 @@ def _build_features_parallel(
     trading_date_index = builder._trading_date_index or {}
     daily_adj_precomputed = builder._daily_adj_precomputed
     factor_registry = create_factor_registry()
+
+    # 风控因子批量预计算（主进程一次性完成，worker 仅查表）
+    risk_cache_dict = None
+    risk_names = None
+    if daily_adj_precomputed is not None:
+        risk_cache_dict = builder._get_risk_factor_cache(daily_adj_precomputed)
+        risk_names = builder._risk_factor_names if risk_cache_dict is not None else None
 
     # 预构建所有 FeatureContext（在主进程中完成，避免 pickle 复杂对象）
     ctx_list = []
@@ -333,6 +344,8 @@ def _build_features_parallel(
                 trading_date_index=trading_date_index,
                 daily_adj_precomputed=daily_adj_precomputed,
                 factor_registry=factor_registry,
+                risk_factor_cache_dict=risk_cache_dict,
+                risk_factor_names=risk_names,
             )
             return ctx.trade_date, df, None
         except Exception as e:
@@ -410,51 +423,47 @@ def build_features_data(
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
     logger.info("=" * 60)
-    
+
     # 加载基础数据（从clean层）
     logger.info("加载基础数据...")
     trade_cal = loader.load_clean_trade_cal()
     stock_basic = loader.load_clean_stock_basic()
-    
+
     if trade_cal is None:
         raise ValueError("缺少clean层trade_cal数据")
     if stock_basic is None:
         raise ValueError("缺少clean层stock_basic数据")
-    
+
     # 转换日期格式
-    if 'cal_date' in trade_cal.columns:
-        if not pd.api.types.is_datetime64_any_dtype(trade_cal['cal_date']):
-            trade_cal['cal_date'] = pd.to_datetime(trade_cal['cal_date'], format='%Y%m%d')
-    
+    if "cal_date" in trade_cal.columns:
+        if not pd.api.types.is_datetime64_any_dtype(trade_cal["cal_date"]):
+            trade_cal["cal_date"] = pd.to_datetime(trade_cal["cal_date"], format="%Y%m%d")
+
     # 获取交易日列表
     trading_dates = loader.get_trading_dates(
-        start_date[:4] + '-' + start_date[4:6] + '-' + start_date[6:8],
-        end_date[:4] + '-' + end_date[4:6] + '-' + end_date[6:8]
+        start_date[:4] + "-" + start_date[4:6] + "-" + start_date[6:8],
+        end_date[:4] + "-" + end_date[4:6] + "-" + end_date[6:8],
     )
-    
+
     if len(trading_dates) == 0:
         raise ValueError(f"指定日期范围内没有交易日: {start_date} - {end_date}")
-    
+
     # 转换为YYYYMMDD格式
     trading_dates_str = [
-        d.strftime('%Y%m%d') if isinstance(d, pd.Timestamp) else d
-        for d in trading_dates
+        d.strftime("%Y%m%d") if isinstance(d, pd.Timestamp) else d for d in trading_dates
     ]
-    
+
     logger.info(f"共 {len(trading_dates_str)} 个交易日需要构建特征")
-    
+
     # 加载clean层日线数据（扩展范围以包含足够的 warmup 历史，覆盖 120 个交易日 ≈ 7 个月）
-    start_dt = pd.to_datetime(start_date, format='%Y%m%d') - pd.DateOffset(months=7)
-    end_dt = pd.to_datetime(end_date, format='%Y%m%d') + pd.DateOffset(months=1)
-    
-    daily_clean = loader.load_clean_daily(
-        start_dt.strftime('%Y%m%d'),
-        end_dt.strftime('%Y%m%d')
-    )
-    
+    start_dt = pd.to_datetime(start_date, format="%Y%m%d") - pd.DateOffset(months=7)
+    end_dt = pd.to_datetime(end_date, format="%Y%m%d") + pd.DateOffset(months=1)
+
+    daily_clean = loader.load_clean_daily(start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d"))
+
     if daily_clean is None:
         raise ValueError("缺少clean层daily数据")
-    
+
     logger.info(f"clean日线数据: {len(daily_clean)} 条记录")
 
     daily_close_lookup = {
@@ -462,40 +471,39 @@ def build_features_data(
         for trade_date, grp in daily_clean.groupby("trade_date", sort=False)
         if "close_adj" in grp.columns
     }
-    
+
     # 加载 daily_basic 数据
     daily_basic_clean = loader.load_clean_daily_basic(
-        start_dt.strftime('%Y%m%d'),
-        end_dt.strftime('%Y%m%d')
+        start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
     )
     if daily_basic_clean is not None:
         logger.info(f"clean daily_basic 数据: {len(daily_basic_clean)} 条记录")
     else:
         logger.warning("未找到 daily_basic 数据，价值红利特征将为空")
-    
+
     # 加载 moneyflow 数据
     moneyflow_clean = loader.load_clean_moneyflow(
-        start_dt.strftime('%Y%m%d'),
-        end_dt.strftime('%Y%m%d')
+        start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
     )
     if moneyflow_clean is not None:
         logger.info(f"clean moneyflow 数据: {len(moneyflow_clean)} 条记录")
     else:
         logger.warning("未找到 moneyflow 数据（强制依赖项），资金流特征将为空")
-    
+
     # 加载基本面数据（可选）
     fundamental_lookup = None
     if enable_fundamental:
         from src.lazybull.factors.fundamental import build_fundamental_lookup_by_date
+
         fina_indicator = loader.load_fina_indicator(start_date, end_date)
         if fina_indicator is not None:
             logger.info("构建基本面日频查询表...")
-            fundamental_lookup = build_fundamental_lookup_by_date(
-                fina_indicator, trading_dates_str
-            )
+            fundamental_lookup = build_fundamental_lookup_by_date(fina_indicator, trading_dates_str)
         else:
-            logger.warning("未找到财务指标数据，基本面特征将被跳过。"
-                         "请先运行: python scripts/download_raw.py --download fina_indicator")
+            logger.warning(
+                "未找到财务指标数据，基本面特征将被跳过。"
+                "请先运行: python scripts/download_raw.py --download fina_indicator"
+            )
 
     # 加载融资融券数据（可选，独立开关）
     margin_lookup = None
@@ -503,7 +511,7 @@ def build_features_data(
         from src.lazybull.factors.margin import build_margin_lookup_by_date
 
         margin_detail = loader.load_margin_detail(
-            start_dt.strftime('%Y%m%d'), end_dt.strftime('%Y%m%d')
+            start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
         )
         if margin_detail is not None:
             logger.info(f"融资融券数据: {len(margin_detail)} 条")
@@ -530,9 +538,7 @@ def build_features_data(
         forecast_df = loader.load_forecast()
         if forecast_df is not None:
             logger.info(f"业绩预告: {len(forecast_df)} 条")
-            earnings_lookup = build_earnings_lookup_by_date(
-                forecast_df, trading_dates_str
-            )
+            earnings_lookup = build_earnings_lookup_by_date(forecast_df, trading_dates_str)
         else:
             logger.warning("未找到业绩预告数据，相关特征将为空")
 
@@ -540,32 +546,39 @@ def build_features_data(
     cyq_perf_lookup = None
     if enable_cyq:
         from src.lazybull.factors.cyq_perf import build_cyq_perf_lookup_by_date
-        cyq_perf_df = loader.load_cyq_perf(start_dt.strftime('%Y%m%d'), end_date)
+
+        cyq_perf_df = loader.load_cyq_perf(start_dt.strftime("%Y%m%d"), end_date)
         if cyq_perf_df is not None:
             logger.info(f"筹码胜率数据: {len(cyq_perf_df)} 条")
             cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, trading_dates_str)
         else:
-            logger.warning("未找到筹码胜率数据，相关特征将为空。"
-                         "请先运行: python scripts/download_raw.py --download cyq_perf")
+            logger.warning(
+                "未找到筹码胜率数据，相关特征将为空。"
+                "请先运行: python scripts/download_raw.py --download cyq_perf"
+            )
 
     # 加载基金持仓数据（可选，按季度分区存储，回溯加载以确保 point-in-time 查询覆盖前序季度）
     fund_portfolio_lookup = None
     if enable_fund:
         from src.lazybull.factors.fund_portfolio import build_fund_portfolio_lookup_by_date
-        fund_portfolio_df = loader.load_fund_portfolio(start_dt.strftime('%Y%m%d'), end_date)
+
+        fund_portfolio_df = loader.load_fund_portfolio(start_dt.strftime("%Y%m%d"), end_date)
         if fund_portfolio_df is not None:
             logger.info(f"基金持仓数据: {len(fund_portfolio_df)} 条")
             fund_portfolio_lookup = build_fund_portfolio_lookup_by_date(
                 fund_portfolio_df, trading_dates_str
             )
         else:
-            logger.warning("未找到基金持仓数据，相关特征将为空。"
-                         "请先运行: python scripts/download_raw.py --download fund_portfolio")
+            logger.warning(
+                "未找到基金持仓数据，相关特征将为空。"
+                "请先运行: python scripts/download_raw.py --download fund_portfolio"
+            )
 
     # 加载业绩快报数据（可选）
     express_lookup = None
     if enable_express:
         from src.lazybull.factors.express import build_express_lookup_by_date
+
         express_df = loader.load_express()
         if express_df is not None:
             logger.info(f"业绩快报数据: {len(express_df)} 条")
@@ -575,14 +588,17 @@ def build_features_data(
                 express_df, trading_dates_str, forecast_df=forecast_df
             )
         else:
-            logger.warning("未找到业绩快报数据，相关特征将为空。"
-                         "请先运行: python scripts/download_raw.py --download express")
+            logger.warning(
+                "未找到业绩快报数据，相关特征将为空。"
+                "请先运行: python scripts/download_raw.py --download express"
+            )
 
     # 加载北向资金数据（可选，市场级广播）
     north_flow_lookup = None
     if enable_north:
         from src.lazybull.factors.north_flow import build_north_flow_lookup_by_date
-        hsgt_df = loader.load_moneyflow_hsgt(start_dt.strftime('%Y%m%d'), end_date)
+
+        hsgt_df = loader.load_moneyflow_hsgt(start_dt.strftime("%Y%m%d"), end_date)
         if hsgt_df is not None:
             logger.info(f"北向资金数据: {len(hsgt_df)} 条")
             north_flow_lookup = build_north_flow_lookup_by_date(hsgt_df, trading_dates_str)
@@ -593,7 +609,8 @@ def build_features_data(
     lhb_lookup = None
     if enable_lhb:
         from src.lazybull.factors.lhb import build_lhb_lookup_by_date
-        top_list_df = loader.load_top_list(start_dt.strftime('%Y%m%d'), end_date)
+
+        top_list_df = loader.load_top_list(start_dt.strftime("%Y%m%d"), end_date)
         if top_list_df is not None:
             logger.info(f"龙虎榜数据: {len(top_list_df)} 条")
             lhb_lookup = build_lhb_lookup_by_date(top_list_df, trading_dates_str)
@@ -605,6 +622,7 @@ def build_features_data(
     report_rc_df = None
     if enable_consensus:
         from src.lazybull.factors.consensus import build_consensus_lookup_by_date
+
         report_rc_df = loader.load_report_rc()
         if report_rc_df is not None:
             logger.info(f"一致预期研报数据: {len(report_rc_df)} 条")
@@ -625,8 +643,10 @@ def build_features_data(
                 trading_dates_str,
             )
         else:
-            logger.warning("未找到现金流量表数据，相关特征将为空。"
-                         "请先运行: python scripts/download_raw.py --download cashflow")
+            logger.warning(
+                "未找到现金流量表数据，相关特征将为空。"
+                "请先运行: python scripts/download_raw.py --download cashflow"
+            )
 
     # 加载一致预期修正因子（可选）
     consensus_revision_lookup = None
@@ -645,11 +665,13 @@ def build_features_data(
                 daily_data_lookup=daily_close_lookup,
             )
         else:
-            logger.warning("未找到一致预期研报数据，修正因子将为空。"
-                         "请先运行: python scripts/download_raw.py --download report_rc")
+            logger.warning(
+                "未找到一致预期研报数据，修正因子将为空。"
+                "请先运行: python scripts/download_raw.py --download report_rc"
+            )
 
     # clean数据已包含复权价格，使用空DataFrame
-    adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+    adj_factor = pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"])
 
     # 优化1/4：循环外一次性预计算 daily_adj（含 pre_close_adj）及日期索引字典
     builder.precompute_daily_adj(daily_clean, adj_factor)
@@ -667,8 +689,7 @@ def build_features_data(
         pending_dates.append(trade_date)
 
     logger.info(
-        f"共 {total_dates} 个交易日: 跳过 {skip_count} (已存在), "
-        f"待构建 {len(pending_dates)}"
+        f"共 {total_dates} 个交易日: 跳过 {skip_count} (已存在), " f"待构建 {len(pending_dates)}"
     )
 
     if not pending_dates:
@@ -779,7 +800,7 @@ def build_features_data(
                 cashflow_data=cashflow_today,
                 consensus_revision_data=consensus_revision_today,
             )
-            
+
             # 保存结果
             if len(features_df) > 0:
                 storage.save_cs_train_day(features_df, trade_date)
@@ -788,10 +809,14 @@ def build_features_data(
                 if i > 1 and elapsed > 0:
                     avg_per_date = elapsed / i
                     remaining = avg_per_date * (len(pending_dates) - i)
-                    eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime("%Y-%m-%d %H:%M:%S")
+                    eta_str = (datetime.now() + timedelta(seconds=remaining)).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
                 else:
                     eta_str = "计算中"
-                _summary = getattr(builder, '_last_summary', f'{trade_date} ✓ {len(features_df)}样本')
+                _summary = getattr(
+                    builder, "_last_summary", f"{trade_date} ✓ {len(features_df)}样本"
+                )
                 logger.info(
                     f"[{i}/{len(pending_dates)}] ({i/len(pending_dates):.1%}) {_summary} "
                     f"| 预计完成: {eta_str}"
@@ -799,12 +824,12 @@ def build_features_data(
             else:
                 logger.warning(f"  {trade_date} 没有有效样本，跳过保存")
                 skip_count += 1
-                
+
         except Exception as e:
             logger.error(f"  {trade_date} 构建失败: {str(e)}")
             error_count += 1
             continue
-    
+
     logger.info("=" * 60)
     logger.info("features层数据构建完成")
     logger.info("=" * 60)
@@ -815,60 +840,36 @@ def build_features_data(
 
 def main():
     """主函数"""
-    parser = argparse.ArgumentParser(
-        description="构建clean和features数据（假设raw已存在）"
+    parser = argparse.ArgumentParser(description="构建clean和features数据（假设raw已存在）")
+    parser.add_argument(
+        "--start-date", default="20200101", help="开始日期，格式YYYYMMDD（默认：20200101）"
     )
     parser.add_argument(
-        "--start-date",
-        default="20200101",
-        help="开始日期，格式YYYYMMDD（默认：20200101）"
+        "--end-date", default="20251231", help="结束日期，格式YYYYMMDD（默认：20251231）"
     )
+    parser.add_argument("--only-clean", action="store_true", help="仅构建clean层，不构建features")
     parser.add_argument(
-        "--end-date",
-        default="20251231",
-        help="结束日期，格式YYYYMMDD（默认：20251231）"
+        "--only-features", action="store_true", help="仅构建features层，不构建clean"
     )
-    parser.add_argument(
-        "--only-clean",
-        action="store_true",
-        help="仅构建clean层，不构建features"
-    )
-    parser.add_argument(
-        "--only-features",
-        action="store_true",
-        help="仅构建features层，不构建clean"
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="强制重新构建，即使文件已存在"
-    )
+    parser.add_argument("--force", action="store_true", help="强制重新构建，即使文件已存在")
     parser.add_argument(
         "--parallel",
         action="store_true",
-        help="启用多进程并行构建（默认串行），利用所有CPU核心加速"
+        help="启用多进程并行构建（默认串行），利用所有CPU核心加速",
     )
     parser.add_argument(
-        "--parallel-jobs",
-        type=int,
-        default=-1,
-        help="并行 worker 数（默认 -1=全部核心）"
+        "--parallel-jobs", type=int, default=-1, help="并行 worker 数（默认 -1=全部核心）"
     )
     parser.add_argument(
-        "--enable-industry-neutralization",
-        action="store_true",
-        help="启用行业中性特征构建"
+        "--enable-industry-neutralization", action="store_true", help="启用行业中性特征构建"
     )
     parser.add_argument(
         "--enable-size-neutralization",
         action="store_true",
-        help="启用市值中性化（在行业中性化基础上按市值分位再做Z-Score，生成zscore_*_sz列）"
+        help="启用市值中性化（在行业中性化基础上按市值分位再做Z-Score，生成zscore_*_sz列）",
     )
     parser.add_argument(
-        "--min-list-days",
-        type=int,
-        default=365,
-        help="最小上市自然日天数（默认：365，约12个月）"
+        "--min-list-days", type=int, default=365, help="最小上市自然日天数（默认：365，约12个月）"
     )
     horizon_group = parser.add_mutually_exclusive_group(required=True)
     horizon_group.add_argument(
@@ -876,7 +877,7 @@ def main():
         type=int,
         default=None,
         help="单 horizon 模式：按此主标签 y_ret_N 非空过滤样本（如 --horizon 20）。"
-             "仍生成 y_ret_5/10/20 三列标签，仅过滤时只看主 horizon"
+        "仍生成 y_ret_5/10/20 三列标签，仅过滤时只看主 horizon",
     )
     horizon_group.add_argument(
         "--horizons",
@@ -884,75 +885,73 @@ def main():
         nargs="+",
         default=None,
         help="多 horizon 模式：按 AND 过滤，要求给定 horizons 对应的所有标签同时非空"
-             "（如 --horizons 5 10 20）"
+        "（如 --horizons 5 10 20）",
     )
     parser.add_argument(
         "--build-all",
         action="store_true",
-        help="启用全部可选因子（基本面、另类数据、融资融券、筹码胜率、基金持仓、业绩快报、北向资金、龙虎榜、一致预期；不含行业中性化）"
+        help="启用全部可选因子（基本面、另类数据、融资融券、筹码胜率、基金持仓、业绩快报、北向资金、龙虎榜、一致预期；不含行业中性化）",
     )
     parser.add_argument(
         "--enable-fundamental-features",
         action="store_true",
-        help="启用基本面因子（ROE、营收增速等），需先下载 fina_indicator 数据"
+        help="启用基本面因子（ROE、营收增速等），需先下载 fina_indicator 数据",
     )
     parser.add_argument(
         "--enable-alt-features",
         action="store_true",
-        help="启用另类数据因子（股东人数、业绩预告等）"
+        help="启用另类数据因子（股东人数、业绩预告等）",
     )
     parser.add_argument(
         "--enable-margin-features",
         action="store_true",
-        help="启用融资融券因子（融资余额变动、融券/融资比、净买入比等）"
+        help="启用融资融券因子（融资余额变动、融券/融资比、净买入比等）",
     )
     parser.add_argument(
         "--enable-cyq-features",
         action="store_true",
-        help="启用筹码胜率因子（winner_rate、成本偏离等）"
+        help="启用筹码胜率因子（winner_rate、成本偏离等）",
     )
     parser.add_argument(
         "--enable-fund-features",
         action="store_true",
-        help="启用基金持仓因子（持股比例、基金数量等）"
+        help="启用基金持仓因子（持股比例、基金数量等）",
     )
     parser.add_argument(
         "--enable-express-features",
         action="store_true",
-        help="启用业绩快报因子（实际营收/净利润增速等）"
+        help="启用业绩快报因子（实际营收/净利润增速等）",
     )
     parser.add_argument(
         "--enable-north-features",
         action="store_true",
-        help="启用北向资金因子（moneyflow_hsgt 市场级广播）"
+        help="启用北向资金因子（moneyflow_hsgt 市场级广播）",
     )
     parser.add_argument(
-        "--enable-lhb-features",
-        action="store_true",
-        help="启用龙虎榜因子（top_list 个股级）"
+        "--enable-lhb-features", action="store_true", help="启用龙虎榜因子（top_list 个股级）"
     )
     parser.add_argument(
         "--enable-consensus-features",
         action="store_true",
-        help="启用一致预期因子（report_rc 研报滚动聚合）"
+        help="启用一致预期因子（report_rc 研报滚动聚合）",
     )
     parser.add_argument(
         "--enable-cashflow-quality-features",
         action="store_true",
-        help="启用现金流质量因子（需 cashflow 接口，2000 积分，需先下载 cashflow 数据）"
+        help="启用现金流质量因子（需 cashflow 接口，2000 积分，需先下载 cashflow 数据）",
     )
     parser.add_argument(
         "--enable-consensus-revision-features",
         action="store_true",
-        help="启用一致预期修正因子（基于已有 report_rc 构建时序修正信号，无需额外下载）"
+        help="启用一致预期修正因子（基于已有 report_rc 构建时序修正信号，无需额外下载）",
     )
 
     args = parser.parse_args()
     args = apply_build_all_feature_flags(args)
-    
+
     # 初始化日志
     setup_logger(log_level="INFO")
-    
+
     logger.info("=" * 60)
     logger.info("开始构建clean和features数据")
     logger.info("=" * 60)
@@ -971,7 +970,9 @@ def main():
     logger.info(f"龙虎榜因子: {'启用' if args.enable_lhb_features else '禁用'}")
     logger.info(f"一致预期因子: {'启用' if args.enable_consensus_features else '禁用'}")
     logger.info(f"现金流质量因子: {'启用' if args.enable_cashflow_quality_features else '禁用'}")
-    logger.info(f"一致预期修正因子: {'启用' if args.enable_consensus_revision_features else '禁用'}")
+    logger.info(
+        f"一致预期修正因子: {'启用' if args.enable_consensus_revision_features else '禁用'}"
+    )
     if args.horizon is not None:
         logger.info(f"标签过滤模式: single (主 horizon={args.horizon})")
     else:
@@ -1001,21 +1002,27 @@ def main():
                 require_label=True,
                 label_filter_mode="all",
             )
-        
+
         # 构建clean数据
         if not args.only_features:
             build_clean_data(
-                storage, loader, cleaner,
-                args.start_date, args.end_date,
+                storage,
+                loader,
+                cleaner,
+                args.start_date,
+                args.end_date,
                 force=args.force,
                 min_list_days=args.min_list_days,
             )
-        
+
         # 构建features数据
         if not args.only_clean:
             build_features_data(
-                storage, loader, builder,
-                args.start_date, args.end_date,
+                storage,
+                loader,
+                builder,
+                args.start_date,
+                args.end_date,
                 force=args.force,
                 shenwan_industry=shenwan_industry if args.enable_industry_neutralization else None,
                 apply_industry_neutralization=args.enable_industry_neutralization,
@@ -1034,13 +1041,13 @@ def main():
                 use_parallel=args.parallel,
                 parallel_jobs=args.parallel_jobs,
             )
-        
+
         logger.info("=" * 60)
         logger.info("数据构建完成！")
         logger.info(f"clean数据位置: {storage.clean_path}")
         logger.info(f"features数据位置: {storage.features_path}")
         logger.info("=" * 60)
-        
+
     except ValueError as e:
         logger.error("=" * 60)
         logger.error("数据构建失败")
@@ -1051,7 +1058,7 @@ def main():
         logger.error("  python scripts/download_raw.py")
         logger.error("=" * 60)
         sys.exit(1)
-        
+
     except Exception as e:
         logger.exception(f"构建过程中出错: {str(e)}")
         sys.exit(1)
