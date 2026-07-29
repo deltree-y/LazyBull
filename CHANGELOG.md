@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.86.3] - 2026-07-28
+
+### Changed
+
+- **P2-C freshness 策略正式落地（状态型保持、事件型衰减）**：
+  - `prepare_training_data()` 新增 `freshness_strategy`（默认 `state_keep_event_decay`）与 `event_freshness_half_life_days` 参数；
+  - `state_keep_event_decay` 策略下：
+    - 状态型 freshness（如 `fundamental_freshness_days`、`holder_freshness_days`）保留；
+    - 事件型 freshness（如 `forecast_freshness_days`、`express_freshness_days`、`consensus_freshness_days`、`cons_revision_freshness_days`）不直接入模，改为用于对应事件因子的指数衰减；
+  - 保留 `drop_all` 兼容策略用于纯硬删除模式。
+
+### Fixed
+
+- **训练入口 freshness 处理去噪优化**：事件型 freshness 不再作为独立特征直接输入模型，避免模型过拟合披露节律；同时仍保留其时效信息并注入到事件值本身。
+
+### CLI
+
+- `scripts/train_ml_model.py` 与 `scripts/walk_forward.py` 新增参数：
+  - `--freshness-strategy`（`state_keep_event_decay|drop_all`）
+  - `--event-freshness-half-life-days`
+- `scripts/batch/batch_walk_forward.ps1` 新增批量配置透传：
+  - `$freshness_strategy`
+  - `$event_freshness_half_life_days`
+
+## [0.86.2] - 2026-07-28
+
+### Fixed
+
+- **训练入口特征质量门禁**：`prepare_training_data()` 新增硬过滤：
+  - 统一删除全部 `*freshness*` 特征，避免模型学习披露节律噪声；
+  - 删除高缺失特征（默认缺失率阈值 `0.4`）；
+  - 删除全空/常数特征；
+  - 对 `zscore_*` 与 `zscore_*_sz` 增加联动剔除，避免派生列绕过过滤名单。
+- **公告类多版本 PIT 对齐修复**：`fundamental`/`cashflow_quality`/`earnings`/`holder`/`express` 不再按 `ts_code+end_date` 仅保留最终版本，改为保留同报告期多公告版本并由交易日 PIT 查询选择当日可见版本。
+- **快报惊喜值前视修复**：`express_surprise` 改为仅使用 `forecast_ann_date <= express_ann_date` 的历史预告版本计算，避免引用未来修订值。
+
+### Changed
+
+- **全历史截尾停用**：`fundamental` 与 `cashflow_quality` 中基于全样本分位数的 winsorize 截尾逻辑已移除，降低未来信息泄露风险。
+
 ## [0.86.1] - 2026-07-28
 
 ### Fixed

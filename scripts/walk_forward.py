@@ -548,6 +548,10 @@ def _train_model_on_window(
         ),
         feature_stability_filter=args.feature_stability_filter,
         factor_prune=args.factor_prune,
+        freshness_strategy=getattr(args, "freshness_strategy", "state_keep_event_decay"),
+        event_freshness_half_life_days=getattr(
+            args, "event_freshness_half_life_days", 45.0
+        ),
     )
 
     # 原始 df_train 已不再需要，释放 ~3 GiB 内存
@@ -3136,6 +3140,22 @@ def main():
         "--factor-prune",
         action="store_true",
         help="启用因子精简（从 data/models/factor_exclude_list.json 加载排除列表）"
+    )
+    parser.add_argument(
+        "--freshness-strategy",
+        type=str,
+        default="state_keep_event_decay",
+        choices=["state_keep_event_decay", "drop_all"],
+        help=(
+            "freshness 处理策略：state_keep_event_decay=状态型保留+事件型衰减（默认），"
+            "drop_all=删除全部 freshness 特征"
+        ),
+    )
+    parser.add_argument(
+        "--event-freshness-half-life-days",
+        type=float,
+        default=45.0,
+        help="事件型因子 freshness 衰减半衰期（天），默认 45",
     )
 
     # 多偏移集成

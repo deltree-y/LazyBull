@@ -14,7 +14,8 @@
 关键防前视：只用 ann_date（公告日），不用 end_date（报告期末）。
 """
 
-from typing import Dict, List
+import bisect
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -103,9 +104,9 @@ def build_express_lookup_by_date(
         if col in ex.columns:
             ex[col] = pd.to_numeric(ex[col], errors="coerce")
 
-    # 去重：同股同报告期保留最新公告
+    # 仅去除完全重复记录，保留同一报告期多次公告版本，交由 PIT 查询按交易日选择
     ex = ex.sort_values(["ts_code", "end_date", "ann_date"])
-    ex = ex.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
+    ex = ex.drop_duplicates(subset=["ts_code", "end_date", "ann_date"], keep="last")
     ex = ex.sort_values(["ts_code", "ann_date"])
 
     # 计算营收同比增速（TuShare express_vip 不提供此字段，需自行计算）
@@ -113,7 +114,7 @@ def build_express_lookup_by_date(
     _compute_revenue_yoy(ex)
 
     # 构建预告 lookup（用于计算 express_surprise）
-    fc_lookup: Dict[str, Dict[str, float]] = {}  # ts_code -> {end_date -> forecast_chg_mid}
+    fc_lookup: Dict[Tuple[str, str], Tuple[List[str], List[float]]] = {}
     if forecast_df is not None and len(forecast_df) > 0:
         fc = forecast_df.copy()
         for col in ["ann_date", "end_date"]:
@@ -126,24 +127,28 @@ def build_express_lookup_by_date(
             fc["forecast_chg_mid"] = (fc["p_change_min"] + fc["p_change_max"]) / 2
             fc = fc.dropna(subset=["forecast_chg_mid"])
             fc = fc.sort_values(["ts_code", "end_date", "ann_date"])
-            fc = fc.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
-            for _, row in fc.iterrows():
-                fc_lookup.setdefault(row["ts_code"], {})[row["end_date"]] = row["forecast_chg_mid"]
+            fc = fc.drop_duplicates(subset=["ts_code", "end_date", "ann_date"], keep="last")
+            for (ts_code, end_date), grp in fc.groupby(["ts_code", "end_date"], sort=False):
+                grp = grp.sort_values("ann_date")
+                fc_lookup[(ts_code, end_date)] = (
+                    grp["ann_date"].tolist(),
+                    grp["forecast_chg_mid"].astype(float).tolist(),
+                )
 
     ex["express_surprise"] = np.nan
-    for ts_code, end_lookup in fc_lookup.items():
-        stock_mask = ex["ts_code"] == ts_code
-        if not stock_mask.any():
+    for idx, row in ex.iterrows():
+        key = (row["ts_code"], row["end_date"])
+        hist = fc_lookup.get(key)
+        if hist is None:
             continue
-        mapped = ex.loc[stock_mask, "end_date"].map(end_lookup)
-        profit_yoy = ex.loc[stock_mask, "yoy_net_profit"]
-        valid_mask = mapped.notna() & profit_yoy.notna()
-        if valid_mask.any():
-            ex.loc[stock_mask, "express_surprise"] = np.where(
-                valid_mask,
-                profit_yoy - mapped,
-                np.nan,
-            )
+        ann_dates, values = hist
+        pos = bisect.bisect_right(ann_dates, row["ann_date"]) - 1
+        if pos < 0:
+            continue
+        base_forecast = values[pos]
+        profit_yoy = row.get("yoy_net_profit")
+        if pd.notna(base_forecast) and pd.notna(profit_yoy):
+            ex.at[idx, "express_surprise"] = float(profit_yoy) - float(base_forecast)
 
     factor_df = ex.assign(
         express_revenue_yoy=ex["revenue_yoy"],

@@ -59,9 +59,9 @@ def build_cashflow_quality_lookup_by_date(
     df["ann_date"] = df["ann_date"].astype(str).str[:8]
     df["end_date"] = df["end_date"].astype(str).str[:8]
 
-    # 去重：同一股票同一报告期，保留最新公告
+    # 仅去除完全重复记录，保留同一报告期的多次公告版本，交由 PIT 查询按交易日选择
     df = df.sort_values(["ts_code", "end_date", "ann_date"])
-    df = df.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
+    df = df.drop_duplicates(subset=["ts_code", "end_date", "ann_date"], keep="last")
 
     # 数值化
     numeric_cols = [
@@ -110,16 +110,6 @@ def build_cashflow_quality_lookup_by_date(
         )
     else:
         df["capex_to_ocf"] = np.nan
-
-    # winsorize 派生比率
-    ratio_cols = ["ocf_to_revenue", "ocf_to_profit", "capex_to_ocf"]
-    for col in ratio_cols:
-        if col in df.columns:
-            s = df[col].dropna()
-            if len(s) > 10:
-                lower = s.quantile(0.01)
-                upper = s.quantile(0.99)
-                df[col] = df[col].clip(lower=lower, upper=upper)
 
     available_cols = [c for c in CASHFLOW_COLS if c in df.columns]
 

@@ -51,9 +51,9 @@ def build_holder_lookup_by_date(
     df["holder_num"] = pd.to_numeric(df["holder_num"], errors="coerce")
     df = df.dropna(subset=["ann_date", "holder_num"])
 
-    # 按股票+报告期去重，保留最新公告
+    # 仅去除完全重复记录，保留同一报告期多次公告版本，交由 PIT 查询按交易日选择
     df = df.sort_values(["ts_code", "end_date", "ann_date"])
-    df = df.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
+    df = df.drop_duplicates(subset=["ts_code", "end_date", "ann_date"], keep="last")
 
     # 按股票+公告日排序，计算环比变动
     df = df.sort_values(["ts_code", "ann_date"])

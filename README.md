@@ -28,7 +28,28 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.86.1)
+### 当前版本 (v0.86.3)
+
+- **P2-C freshness 完整方案上线**：
+  - 训练入口支持 `state_keep_event_decay`（默认）与 `drop_all` 两种策略；
+  - 状态型 freshness 保留，事件型 freshness 改为驱动对应事件因子做指数衰减（半衰期可配）；
+  - 事件型 freshness 不再直接作为独立特征入模，降低“披露节律噪声”学习风险。
+
+- **训练/滚动训练参数可控化**：
+  - `train_ml_model.py` 与 `walk_forward.py` 新增 `--freshness-strategy`、`--event-freshness-half-life-days`；
+  - `batch_walk_forward.ps1` 同步新增批量参数透传。
+
+- **因子训练防污染第一阶段落地**：
+  - 训练入口统一移除 `*freshness*` 特征；
+  - 新增高缺失（默认 >40%）、全空、常数特征硬门禁；
+  - `factor_prune` 增加 `zscore_*` 与 `zscore_*_sz` 联动剔除，防止派生列绕过过滤。
+
+- **公告因子 PIT 可见性修复**：
+  - `fundamental` / `cashflow_quality` / `earnings` / `holder` / `express` 改为保留同报告期多公告版本，由交易日 PIT 回放选择当日可见值；
+  - `express_surprise` 仅使用 `forecast_ann_date <= express_ann_date` 的历史预告，修复前视污染。
+
+- **未来统计泄露风险收敛**：
+  - 停用 `fundamental` / `cashflow_quality` 中基于全历史样本分位数的 winsorize 截尾。
 
 - **因子链路稳定性修复与约束落地**：
   - 并行/串行特征构建步骤完全对齐，修复并行路径缺失价值红利、资金流与基本面代理回填导致的 schema 漂移。

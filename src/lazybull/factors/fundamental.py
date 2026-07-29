@@ -63,9 +63,9 @@ def build_fundamental_lookup_by_date(
     df['ann_date'] = df['ann_date'].astype(str).str[:8]
     df['end_date'] = df['end_date'].astype(str).str[:8]
 
-    # 去重：同一股票同一报告期，保留最新公告的修正版
+    # 仅去除完全重复记录，保留同一报告期的多次公告版本，交由 PIT 查询按交易日选择
     df = df.sort_values(['ts_code', 'end_date', 'ann_date'])
-    df = df.drop_duplicates(subset=['ts_code', 'end_date'], keep='last')
+    df = df.drop_duplicates(subset=['ts_code', 'end_date', 'ann_date'], keep='last')
 
     # 确保数值列为 float
     for col in FUNDA_COLS + FUNDA_AUX_COLS:
@@ -77,9 +77,6 @@ def build_fundamental_lookup_by_date(
             df['cf_sales'] = df['cf_sales'].combine_first(df['q_ocf_to_sales'])
         else:
             df['cf_sales'] = df['q_ocf_to_sales']
-
-    # 对增长率类指标做 winsorize 截断极端值
-    _winsorize_growth_cols(df)
 
     available_cols = [c for c in FUNDA_COLS if c in df.columns]
     available_aux_cols = [c for c in FUNDA_AUX_COLS if c in df.columns]
@@ -96,22 +93,3 @@ def build_fundamental_lookup_by_date(
     )
     logger.info(f"基本面日频查询表构建完成: {len(result_dict)} 个交易日")
     return result_dict
-
-
-def _winsorize_growth_cols(df: pd.DataFrame) -> None:
-    """对增长率列做 winsorize（原地修改）
-
-    增长率类指标（or_yoy, netprofit_yoy, q_gr_yoy）可能出现极端值
-    （如扭亏为盈导致 >10000%），截断到 1%~99% 分位。
-    """
-    growth_cols = ['or_yoy', 'netprofit_yoy', 'q_gr_yoy', 'profit_dedt', 'equity_yoy']
-    for col in growth_cols:
-        if col not in df.columns:
-            continue
-        s = df[col]
-        valid = s.dropna()
-        if len(valid) == 0:
-            continue
-        lower = valid.quantile(0.01)
-        upper = valid.quantile(0.99)
-        df[col] = s.clip(lower=lower, upper=upper)

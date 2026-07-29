@@ -204,6 +204,93 @@ CONSENSUS_REVISION_FEATURE_COLUMNS = [
     "cons_revision_freshness_days",       # 最近一次研报距当日天数
 ]
 
+FRESHNESS_STRATEGY_DROP_ALL = "drop_all"
+FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY = "state_keep_event_decay"
+
+# 状态型 freshness：保留为模型特征（低频状态信息）
+STATE_FRESHNESS_COLUMNS = {
+    "fundamental_freshness_days",
+    "holder_freshness_days",
+    "fund_portfolio_freshness_days",
+    "cashflow_freshness_days",
+}
+
+# 事件型 freshness：用于对对应事件值做时效衰减，不直接作为训练特征
+EVENT_FRESHNESS_TO_VALUE_COLUMNS = {
+    "forecast_freshness_days": [
+        "forecast_type_score",
+        "forecast_chg_mid",
+    ],
+    "express_freshness_days": [
+        "express_revenue_yoy",
+        "express_profit_yoy",
+        "express_roe",
+        "express_surprise",
+    ],
+    "consensus_freshness_days": [
+        "cons_analyst_count_30d",
+        "cons_eps_mean_fy1",
+        "cons_eps_revision_30d",
+        "cons_target_price_mid",
+        "cons_rating_score",
+    ],
+    "cons_revision_freshness_days": [
+        "zscore_cons_eps_revision_accel",
+        "zscore_cons_eps_dispersion",
+        "zscore_cons_eps_dispersion_chg",
+        "zscore_cons_target_upside",
+        "zscore_cons_target_upside_chg",
+        "zscore_cons_analyst_count_chg",
+        "zscore_cons_rating_upgrade_ratio",
+    ],
+}
+
+
+def _apply_event_freshness_decay(
+    df: pd.DataFrame,
+    event_freshness_cols: List[str],
+    half_life_days: float,
+) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """按 freshness 对事件型因子做指数衰减（半衰期）。
+
+    权重: w = exp(-ln(2) * days / half_life)
+    - freshness 缺失时权重按 1.0 处理（避免无谓引入缺失）
+    - freshness < 0 按 0 处理
+    """
+    if half_life_days <= 0:
+        raise ValueError("event_freshness_half_life_days 必须 > 0")
+
+    decay_stats: Dict[str, int] = {}
+    if len(df) == 0 or not event_freshness_cols:
+        return df, decay_stats
+
+    ln2 = math.log(2.0)
+    for freshness_col in event_freshness_cols:
+        if freshness_col not in df.columns:
+            continue
+        value_cols = [
+            col
+            for col in EVENT_FRESHNESS_TO_VALUE_COLUMNS.get(freshness_col, [])
+            if col in df.columns
+        ]
+        if not value_cols:
+            continue
+
+        freshness = pd.to_numeric(df[freshness_col], errors="coerce")
+        decay_weight = np.exp(-ln2 * freshness.clip(lower=0) / float(half_life_days))
+        decay_weight = pd.Series(decay_weight, index=df.index).fillna(1.0)
+
+        touched = 0
+        for value_col in value_cols:
+            raw = pd.to_numeric(df[value_col], errors="coerce")
+            before_non_na = int(raw.notna().sum())
+            df[value_col] = raw * decay_weight
+            touched += before_non_na
+
+        decay_stats[freshness_col] = touched
+
+    return df, decay_stats
+
 
 # ── 自定义早停 eval metric ──────────────────────────────────────
 def neg_rank_ic(y_true, y_pred):
@@ -760,6 +847,9 @@ def prepare_training_data(
     enable_consensus_revision_features: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
+    max_feature_missing_ratio: float = 0.4,
+    freshness_strategy: str = FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
+    event_freshness_half_life_days: float = 45.0,
 ) -> tuple:
     """准备训练数据，并按 trade_date 粒度切分训练集和验证集
 
@@ -772,6 +862,12 @@ def prepare_training_data(
             典型用法：cs_zscore 变换（见 transform_labels_cs_zscore）。
         factor_prune: 是否启用因子精简（从 data/models/factor_exclude_list.json
             加载排除列表并过滤特征列）。默认 False。
+        max_feature_missing_ratio: 训练入口特征缺失率上限，超过该阈值的特征将被移除。
+            默认 0.4。
+        freshness_strategy: freshness 处理策略。
+            - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
+            - drop_all：删除全部 freshness 特征，不做衰减
+        event_freshness_half_life_days: 事件型特征衰减半衰期（天），默认 45。
 
     Returns:
                 (X_train, y_train, X_val, y_val, feature_columns, df_train_split, df_val_split, data_stats,
@@ -1019,16 +1115,71 @@ def prepare_training_data(
     if factor_prune:
         exclude_list = _load_factor_exclude_list()
         if exclude_list:
+            # 联动剔除：
+            # 1) 排除 zscore_x 时同步排除 zscore_x_sz
+            # 2) 排除 zscore_x_sz 时同步排除 zscore_x
+            expanded_excludes = set(exclude_list)
+            for col in list(exclude_list):
+                if col.startswith("zscore_") and not col.endswith("_sz"):
+                    expanded_excludes.add(f"{col}_sz")
+                if col.startswith("zscore_") and col.endswith("_sz"):
+                    expanded_excludes.add(col[:-3])
+
             before = len(feature_columns)
-            feature_columns = [c for c in feature_columns if c not in exclude_list]
+            feature_columns = [c for c in feature_columns if c not in expanded_excludes]
             removed = before - len(feature_columns)
             logger.info(f"因子精简: 排除 {removed} 个因子, 剩余 {len(feature_columns)} 个")
+
+    freshness_cols = [c for c in feature_columns if "freshness" in c]
+    removed_freshness_features: List[str] = []
+    event_freshness_cols_used: List[str] = []
+    state_freshness_cols_kept: List[str] = []
+    decay_helper_cols: List[str] = []
+
+    if freshness_strategy not in {
+        FRESHNESS_STRATEGY_DROP_ALL,
+        FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
+    }:
+        raise ValueError(
+            "freshness_strategy 非法，"
+            f"可选: {FRESHNESS_STRATEGY_DROP_ALL} | {FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY}"
+        )
+
+    if freshness_strategy == FRESHNESS_STRATEGY_DROP_ALL:
+        removed_freshness_features = sorted(freshness_cols)
+        if removed_freshness_features:
+            feature_columns = [c for c in feature_columns if c not in removed_freshness_features]
+            logger.info(f"训练入口移除 freshness 特征: {len(removed_freshness_features)} 个")
+    else:
+        state_freshness_cols_kept = sorted(
+            [c for c in freshness_cols if c in STATE_FRESHNESS_COLUMNS]
+        )
+        event_freshness_cols_used = sorted(
+            [c for c in freshness_cols if c in EVENT_FRESHNESS_TO_VALUE_COLUMNS]
+        )
+        removed_freshness_features = sorted(event_freshness_cols_used)
+        if removed_freshness_features:
+            feature_columns = [c for c in feature_columns if c not in removed_freshness_features]
+            logger.info(
+                "freshness 策略(state_keep_event_decay): "
+                f"保留状态型 {len(state_freshness_cols_kept)} 列，"
+                f"移除事件型 freshness {len(removed_freshness_features)} 列"
+            )
+        decay_helper_cols = list(event_freshness_cols_used)
+
+    # 去重，保持顺序稳定
+    feature_columns = list(dict.fromkeys(feature_columns))
+
+    if not feature_columns:
+        raise ValueError("特征列为空（在因子精简/freshness 策略后）")
 
     logger.info(f"特征列数量: {len(feature_columns)}")
     logger.debug(f"特征列: {feature_columns[:10]}...")  # 只显示前10个
 
     # ── 内存优化：只保留训练必需的列，避免 copy 时 OOM ──
-    needed_cols = set(feature_columns + [label_column, "trade_date", "ts_code"] + filter_columns)
+    needed_cols = set(
+        feature_columns + [label_column, "trade_date", "ts_code"] + filter_columns + decay_helper_cols
+    )
     needed_cols &= set(df.columns)  # 仅保留实际存在的列
     kept = list(needed_cols)
     n_before = len(df.columns)
@@ -1051,6 +1202,62 @@ def prepare_training_data(
 
     if len(df_train) == 0:
         raise ValueError("没有可用的训练样本")
+
+    decay_applied_stats: Dict[str, int] = {}
+    if (
+        freshness_strategy == FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
+        and event_freshness_cols_used
+    ):
+        df_train, decay_applied_stats = _apply_event_freshness_decay(
+            df_train,
+            event_freshness_cols=event_freshness_cols_used,
+            half_life_days=float(event_freshness_half_life_days),
+        )
+        if decay_applied_stats:
+            logger.info(
+                "事件型 freshness 衰减已应用: "
+                + ", ".join(
+                    [f"{k}->{v}" for k, v in sorted(decay_applied_stats.items())]
+                )
+            )
+
+    # 训练入口特征质量门禁：删除高缺失、全空、常数列
+    available_feature_cols = [c for c in feature_columns if c in df_train.columns]
+    removed_high_missing: List[str] = []
+    removed_all_nan: List[str] = []
+    removed_constant: List[str] = []
+    if available_feature_cols:
+        missing_ratio = df_train[available_feature_cols].isna().mean()
+        removed_high_missing = sorted(
+            missing_ratio[missing_ratio > float(max_feature_missing_ratio)].index.tolist()
+        )
+        removed_all_nan = sorted(missing_ratio[missing_ratio >= 1.0].index.tolist())
+
+        candidate_cols = [c for c in available_feature_cols if c not in removed_high_missing]
+        if candidate_cols:
+            nunique = df_train[candidate_cols].nunique(dropna=True)
+            removed_constant = sorted(nunique[nunique <= 1].index.tolist())
+
+        base_removed = set(removed_high_missing) | set(removed_all_nan) | set(removed_constant)
+        linked_removed: Set[str] = set(base_removed)
+        for col in list(base_removed):
+            if col.startswith("zscore_") and col.endswith("_sz"):
+                linked_removed.add(col[:-3])
+            if col.startswith("zscore_") and not col.endswith("_sz"):
+                linked_removed.add(f"{col}_sz")
+
+        if linked_removed:
+            before = len(feature_columns)
+            feature_columns = [c for c in feature_columns if c not in linked_removed]
+            removed_count = before - len(feature_columns)
+            logger.info(
+                "训练入口特征清洗: "
+                f"移除 {removed_count} 列（高缺失>{max_feature_missing_ratio}: {len(removed_high_missing)}，"
+                f"全空: {len(removed_all_nan)}，常数: {len(removed_constant)}）"
+            )
+
+    if not feature_columns:
+        raise ValueError("特征列为空（在缺失率/常数列过滤后）")
 
     # 从标签列名自动推断 delta（例如 neu_y_ret_20 -> horizon=20，y_ret_5 -> horizon=5）
     # delta 是训练集末尾与验证集开头之间的交易日间隔，需 >= 标签实际跨越的交易日数以防止标签泄露
@@ -1164,6 +1371,16 @@ def prepare_training_data(
         "val_embargo_end_date": val_protocol_stats["val_embargo_end_date"],
         "val_calibration_ratio": val_protocol_stats["val_calibration_ratio"],
         "feature_filter_info": feature_filter_info,
+        "max_feature_missing_ratio": float(max_feature_missing_ratio),
+        "removed_high_missing_features": removed_high_missing,
+        "removed_all_nan_features": removed_all_nan,
+        "removed_constant_features": removed_constant,
+        "freshness_strategy": freshness_strategy,
+        "event_freshness_half_life_days": float(event_freshness_half_life_days),
+        "removed_freshness_features": removed_freshness_features,
+        "kept_state_freshness_features": state_freshness_cols_kept,
+        "event_freshness_columns_used": event_freshness_cols_used,
+        "event_decay_applied_stats": decay_applied_stats,
     }
 
     return (

@@ -4,7 +4,9 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
+import src.lazybull.ml.train_core as train_core_module
 from src.lazybull.ml.train_core import (
     evaluate_validation_daily,
     prepare_training_data,
@@ -258,3 +260,52 @@ def test_evaluate_validation_daily_uses_existing_prediction_col():
 
     assert metrics["prediction_col"] == "final_score"
     assert metrics["top1_return_mean"] == (-0.05 - 0.02) / 2
+
+
+def test_prepare_training_data_state_keep_event_decay_and_high_missing(monkeypatch):
+    df = _make_training_df(n_dates=40, stocks_per_date=2)
+    df["fundamental_freshness_days"] = 5.0
+    df["forecast_type_score"] = 1.0
+    df["forecast_chg_mid"] = 2.0
+    df["forecast_freshness_days"] = np.arange(len(df)) % 20
+    df["zscore_bp_sz"] = np.linspace(1.0, 2.0, len(df))
+    df["vol_ratio_20"] = np.nan
+    df.loc[df.index[::5], "vol_ratio_20"] = 1.0  # 缺失率 80%
+
+    monkeypatch.setattr(
+        train_core_module,
+        "_load_factor_exclude_list",
+        lambda models_dir=None: {"zscore_bp"},
+    )
+
+    result = prepare_training_data(
+        df,
+        label_column="y_ret_5",
+        val_ratio=0.3,
+        enable_fundamental_features=True,
+        enable_alt_features=True,
+        factor_prune=True,
+        max_feature_missing_ratio=0.4,
+        freshness_strategy="state_keep_event_decay",
+        event_freshness_half_life_days=10,
+    )
+
+    feature_columns = result[4]
+    df_train_split = result[5]
+    data_stats = result[7]
+
+    assert (
+        "fundamental_freshness_days" in feature_columns
+        or "fundamental_freshness_days" in data_stats["removed_constant_features"]
+    )
+    assert "forecast_freshness_days" not in feature_columns
+    assert "vol_ratio_20" not in feature_columns
+    assert "zscore_bp" not in feature_columns
+    assert "zscore_bp_sz" not in feature_columns
+    assert "forecast_freshness_days" in data_stats["removed_freshness_features"]
+    assert "fundamental_freshness_days" in data_stats["kept_state_freshness_features"]
+    assert "vol_ratio_20" in data_stats["removed_high_missing_features"]
+
+    # 事件型特征应被 freshness 衰减（至少有一部分样本 < 原始值）
+    assert df_train_split["forecast_type_score"].max() <= 1.0
+    assert df_train_split["forecast_type_score"].min() < 1.0

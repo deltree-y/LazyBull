@@ -75,9 +75,9 @@ def build_earnings_lookup_by_date(
         else:
             fc["forecast_chg_mid"] = np.nan
 
-        # 去重：同股同报告期保留最新公告
+        # 仅去除完全重复记录，保留同一报告期多次公告版本，交由 PIT 查询按交易日选择
         fc = fc.sort_values(["ts_code", "end_date", "ann_date"])
-        fc = fc.drop_duplicates(subset=["ts_code", "end_date"], keep="last")
+        fc = fc.drop_duplicates(subset=["ts_code", "end_date", "ann_date"], keep="last")
         fc = fc.sort_values(["ts_code", "ann_date"])
 
         factor_df = fc[["ts_code", "ann_date"] + EARNINGS_COLS].copy()

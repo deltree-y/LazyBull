@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(12)
+        SelectedSplits = @()
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -93,7 +93,7 @@ $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。L
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(50)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 
@@ -111,7 +111,7 @@ $adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split
 $adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
-$ensemble_seeds            = "42,61,82"#,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
+$ensemble_seeds            = "42"#,61,82"#,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
 $ensemble_seed_keep_top_ratio = 1  # 多种子筛选保留比例（0~1）
 $ensemble_seed_keep_min_models = 3    # 多种子筛选最少保留模型数 
 
@@ -174,6 +174,10 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
 $factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+
+# ── freshness 处理策略（P2-C）────────────────────────────────────────────
+$freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | drop_all
+$event_freshness_half_life_days = 150                         # 事件型因子衰减半衰期（天）,修改此值无需重新build features
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
 $ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
@@ -545,6 +549,8 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --early-stopping-rounds $early_stopping_rounds" +
                  " --early-stopping-metric $early_stopping_metric" +
                  " --time-decay-half-life $time_decay_half_life" +
+                 " --freshness-strategy $freshness_strategy" +
+                 " --event-freshness-half-life-days $event_freshness_half_life_days" +
                  " --batch-run-id $batch_run_id" +
                  " --batch-period-label $batch_period_label" +
                  " --wf-summary-csv `"$summary_csv_path`""
