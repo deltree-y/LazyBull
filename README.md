@@ -28,10 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.86.3)
+### 当前版本 (v0.86.4)
+
+- **freshness 归因实验支持**：
+  - 新增 `state_keep_event_no_decay` 可选策略，仅保留状态型 freshness，事件型 freshness 不入模且不衰减事件值；
+  - 默认生产策略仍为 `state_keep_event_decay`，实验结束后无需删除临时代码；
+  - walk-forward 汇总与对比表记录 freshness 策略及有效半衰期，避免依赖运行顺序人工追溯。
 
 - **P2-C freshness 完整方案上线**：
-  - 训练入口支持 `state_keep_event_decay`（默认）与 `drop_all` 两种策略；
+  - 训练入口支持 `state_keep_event_decay`（默认）、`state_keep_event_no_decay` 与 `drop_all` 三种策略；
   - 状态型 freshness 保留，事件型 freshness 改为驱动对应事件因子做指数衰减（半衰期可配）；
   - 事件型 freshness 不再直接作为独立特征入模，降低“披露节律噪声”学习风险。
 

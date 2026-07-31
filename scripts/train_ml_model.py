@@ -351,11 +351,12 @@ def main():
         "--freshness-strategy",
         type=str,
         default="state_keep_event_decay",
-        choices=["state_keep_event_decay", "drop_all"],
-        help=(
-            "freshness 处理策略：state_keep_event_decay=状态型保留+事件型衰减（默认），"
-            "drop_all=删除全部 freshness 特征"
-        )
+            choices=["state_keep_event_decay", "state_keep_event_no_decay", "drop_all"],
+            help=(
+                "freshness 处理策略：state_keep_event_decay=状态型保留+事件型衰减（默认），"
+                "state_keep_event_no_decay=状态型保留+事件型不衰减（实验归因），"
+                "drop_all=删除全部 freshness 特征"
+            )
     )
     parser.add_argument(
         "--event-freshness-half-life-days",

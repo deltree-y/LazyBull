@@ -2435,6 +2435,9 @@ def write_walk_forward_summary(
                 if key in params:
                     params[key] = None
 
+        if params.get("freshness_strategy") != "state_keep_event_decay":
+            clear("event_freshness_half_life_days")
+
         if not params.get("oos_backtest"):
             clear(
                 "oos_backtest_months",
@@ -2591,6 +2594,10 @@ def write_walk_forward_summary(
         "rank_weight": args.rank_weight,
         "rank_weight_topk_weight_mode": getattr(args, "rank_weight_topk_weight_mode", "linear_decay"),
         "time_decay_half_life": args.time_decay_half_life,
+        "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),
+        "event_freshness_half_life_days": getattr(
+            args, "event_freshness_half_life_days", 45.0
+        ),
         "objective": getattr(args, 'objective', 'mse'),
         "enable_fundamental": args.enable_fundamental_features,
         "enable_alt": args.enable_alt_features,
@@ -3145,9 +3152,10 @@ def main():
         "--freshness-strategy",
         type=str,
         default="state_keep_event_decay",
-        choices=["state_keep_event_decay", "drop_all"],
+        choices=["state_keep_event_decay", "state_keep_event_no_decay", "drop_all"],
         help=(
             "freshness 处理策略：state_keep_event_decay=状态型保留+事件型衰减（默认），"
+            "state_keep_event_no_decay=状态型保留+事件型不衰减（实验归因），"
             "drop_all=删除全部 freshness 特征"
         ),
     )

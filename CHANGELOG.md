@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.86.4] - 2026-07-29
+
+### Added
+
+- **freshness 归因实验策略**：新增 `state_keep_event_no_decay`，保留状态型 freshness、
+  删除事件型 freshness，但不衰减事件因子原始值；默认策略仍为 `state_keep_event_decay`。
+- **walk-forward 实验可追溯性**：汇总与对比结果新增 freshness 策略和事件衰减半衰期；
+  非衰减策略的半衰期统一记为空，避免无效参数参与实验签名。
+
 ## [0.86.3] - 2026-07-28
 
 ### Changed

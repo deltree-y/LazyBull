@@ -206,6 +206,7 @@ CONSENSUS_REVISION_FEATURE_COLUMNS = [
 
 FRESHNESS_STRATEGY_DROP_ALL = "drop_all"
 FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY = "state_keep_event_decay"
+FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY = "state_keep_event_no_decay"
 
 # 状态型 freshness：保留为模型特征（低频状态信息）
 STATE_FRESHNESS_COLUMNS = {
@@ -866,6 +867,7 @@ def prepare_training_data(
             默认 0.4。
         freshness_strategy: freshness 处理策略。
             - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
+            - state_keep_event_no_decay：状态型 freshness 保留，事件型 freshness 删除且不衰减对应特征值
             - drop_all：删除全部 freshness 特征，不做衰减
         event_freshness_half_life_days: 事件型特征衰减半衰期（天），默认 45。
 
@@ -1139,10 +1141,13 @@ def prepare_training_data(
     if freshness_strategy not in {
         FRESHNESS_STRATEGY_DROP_ALL,
         FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
+        FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY,
     }:
         raise ValueError(
             "freshness_strategy 非法，"
-            f"可选: {FRESHNESS_STRATEGY_DROP_ALL} | {FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY}"
+            f"可选: {FRESHNESS_STRATEGY_DROP_ALL} | "
+            f"{FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY} | "
+            f"{FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY}"
         )
 
     if freshness_strategy == FRESHNESS_STRATEGY_DROP_ALL:
@@ -1161,11 +1166,12 @@ def prepare_training_data(
         if removed_freshness_features:
             feature_columns = [c for c in feature_columns if c not in removed_freshness_features]
             logger.info(
-                "freshness 策略(state_keep_event_decay): "
+                f"freshness 策略({freshness_strategy}): "
                 f"保留状态型 {len(state_freshness_cols_kept)} 列，"
                 f"移除事件型 freshness {len(removed_freshness_features)} 列"
             )
-        decay_helper_cols = list(event_freshness_cols_used)
+        if freshness_strategy == FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY:
+            decay_helper_cols = list(event_freshness_cols_used)
 
     # 去重，保持顺序稳定
     feature_columns = list(dict.fromkeys(feature_columns))

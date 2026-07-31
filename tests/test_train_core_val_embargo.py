@@ -309,3 +309,31 @@ def test_prepare_training_data_state_keep_event_decay_and_high_missing(monkeypat
     # 事件型特征应被 freshness 衰减（至少有一部分样本 < 原始值）
     assert df_train_split["forecast_type_score"].max() <= 1.0
     assert df_train_split["forecast_type_score"].min() < 1.0
+
+
+def test_prepare_training_data_state_keep_event_no_decay():
+    df = _make_training_df(n_dates=40, stocks_per_date=2)
+    df["fundamental_freshness_days"] = np.arange(len(df)) % 10
+    df["forecast_type_score"] = 1.0
+    df["forecast_chg_mid"] = 2.0
+    df["forecast_freshness_days"] = np.arange(len(df)) % 20
+
+    result = prepare_training_data(
+        df,
+        label_column="y_ret_5",
+        val_ratio=0.3,
+        enable_fundamental_features=True,
+        enable_alt_features=True,
+        freshness_strategy="state_keep_event_no_decay",
+    )
+
+    feature_columns = result[4]
+    df_train_split = result[5]
+    data_stats = result[7]
+
+    assert "fundamental_freshness_days" in feature_columns
+    assert "forecast_freshness_days" not in feature_columns
+    assert "forecast_freshness_days" in data_stats["removed_freshness_features"]
+    assert "fundamental_freshness_days" in data_stats["kept_state_freshness_features"]
+    assert df_train_split["forecast_type_score"].eq(1.0).all()
+    assert df_train_split["forecast_chg_mid"].eq(2.0).all()

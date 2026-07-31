@@ -582,6 +582,8 @@ class TestWalkForwardCSV:
                 early_stopping_rounds=50, early_stopping_metric="rmse",
                 rank_weight_enabled=False, rank_weight_topk=100, rank_weight=2.0,
                 time_decay_half_life=0,
+                freshness_strategy="state_keep_event_no_decay",
+                event_freshness_half_life_days=120.0,
                 enable_fundamental_features=False, enable_alt_features=False,
                 enable_margin_features=False,
                 enable_cyq_features=False, enable_fund_features=False,
@@ -652,6 +654,8 @@ class TestWalkForwardCSV:
             assert pd.isna(row["bt_equity_curve_ma_long"])
             assert pd.isna(row["kelly_vol_window"])
             assert pd.isna(row["kelly_max_leverage"])
+            assert row["freshness_strategy"] == "state_keep_event_no_decay"
+            assert pd.isna(row["event_freshness_half_life_days"])
 
 
 class TestRunLoggerIntegration:
