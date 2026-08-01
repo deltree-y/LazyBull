@@ -346,6 +346,12 @@ def main():
         action="store_true",
         help="启用因子精简（从 data/models/factor_exclude_list.json 加载排除列表）"
     )
+    parser.add_argument(
+        "--factor-exclude-file",
+        type=str,
+        default=None,
+        help="因子精简清单路径；未指定时使用 data/models/factor_exclude_list.json",
+    )
 
     parser.add_argument(
         "--freshness-strategy",
@@ -460,6 +466,7 @@ def main():
             ),
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
+            factor_exclude_file=getattr(args, "factor_exclude_file", None),
             freshness_strategy=getattr(args, "freshness_strategy", "state_keep_event_decay"),
             event_freshness_half_life_days=getattr(
                 args, "event_freshness_half_life_days", 45.0

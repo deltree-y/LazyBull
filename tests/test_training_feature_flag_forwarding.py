@@ -60,6 +60,7 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
         enable_consensus_revision_features=True,
         feature_stability_filter=False,
         factor_prune=False,
+        factor_exclude_file="configs/factor_exclude_candidate_sparse_v1.json",
     )
 
     with pytest.raises(RuntimeError, match="stop after capture"):
@@ -74,6 +75,9 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
 
     assert captured["enable_cashflow_quality_features"] is True
     assert captured["enable_consensus_revision_features"] is True
+    assert captured["factor_exclude_file"] == (
+        "configs/factor_exclude_candidate_sparse_v1.json"
+    )
 
 
 def test_walk_forward_adaptive_best_iter_action_thresholds():
@@ -482,6 +486,9 @@ def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):
             "./data",
             "--enable-cashflow-quality-features",
             "--enable-consensus-revision-features",
+            "--factor-prune",
+            "--factor-exclude-file",
+            "configs/factor_exclude_candidate_sparse_v1.json",
         ],
     )
     monkeypatch.setattr(train_ml_model_module.sys, "exit", _fake_exit)
@@ -492,3 +499,6 @@ def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):
     assert exc_info.value.code == 1
     assert captured["enable_cashflow_quality_features"] is True
     assert captured["enable_consensus_revision_features"] is True
+    assert captured["factor_exclude_file"] == (
+        "configs/factor_exclude_candidate_sparse_v1.json"
+    )

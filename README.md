@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.87.0)
+### 当前版本 (v0.88.0)
+
+- **独立因子裁剪实验清单**：
+  - 单次训练和 walk-forward 支持 `--factor-exclude-file <JSON路径>`；
+  - 未指定路径时仍使用生产 `data/models/factor_exclude_list.json`；
+  - batch 默认使用 `configs/factor_exclude_candidate_sparse_v1.json`，不会覆盖生产清单。
 
 - **因子使用稳定性分析**：
   - 支持按模型版本区间展开 `EnsembleModel` 的全部子模型并聚合归一化 importance；

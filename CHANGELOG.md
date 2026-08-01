@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.88.0] - 2026-08-01
+
+### Added
+
+- **显式因子排除清单**：`train_ml_model.py` 与 `walk_forward.py` 新增
+  `--factor-exclude-file`，启用 `--factor-prune` 时可为实验指定独立 JSON；未指定仍读取
+  `data/models/factor_exclude_list.json`，保持生产默认行为。
+- **稀疏因子首轮候选**：新增 `configs/factor_exclude_candidate_sparse_v1.json`，严格合并生产
+  53 项与 `order_imbalance_mean_5`、`zscore_intraday_vol_structure`、`zscore_inv_turn`
+  三个低使用、低覆盖根因子；batch walk-forward 默认指向该实验清单。
+
+### Fixed
+
+- **排除清单缓存隔离**：因子排除缓存改为按清单绝对路径保存，避免同一进程运行多个候选
+  时错误复用首个清单。
+
 ## [0.87.0] - 2026-08-01
 
 ### Added

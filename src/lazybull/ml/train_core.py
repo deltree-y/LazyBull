@@ -305,11 +305,14 @@ def neg_rank_ic(y_true, y_pred):
 
 FACTOR_EXCLUDE_LIST_FILE = "factor_exclude_list.json"
 
-# 缓存已加载的排除列表（避免重复读盘）
-_factor_exclude_cache: Optional[Set[str]] = None
+# 按文件路径缓存已加载的排除列表（避免同一进程内不同实验清单相互污染）
+_factor_exclude_cache: Dict[Path, Set[str]] = {}
 
 
-def _load_factor_exclude_list(models_dir: Optional[Path] = None) -> Set[str]:
+def _load_factor_exclude_list(
+    models_dir: Optional[Path] = None,
+    exclude_file: Optional[Path] = None,
+) -> Set[str]:
     """加载因子排除列表（带缓存）
 
     从 data/models/factor_exclude_list.json 读取排除的因子名称。
@@ -317,41 +320,44 @@ def _load_factor_exclude_list(models_dir: Optional[Path] = None) -> Set[str]:
 
     Args:
         models_dir: 模型目录，为 None 时自动从 config 推断
+        exclude_file: 显式排除清单路径；未提供时读取模型目录下的默认清单
 
     Returns:
         排除的因子名称集合（空集合表示未找到排除列表或列表为空）
     """
-    global _factor_exclude_cache
-    if _factor_exclude_cache is not None:
-        return _factor_exclude_cache
+    if exclude_file is None:
+        if models_dir is None:
+            from src.lazybull.common.config import get_data_root
 
-    if models_dir is None:
-        from src.lazybull.common.config import get_data_root
-        data_root = Path(get_data_root())
-        models_dir = data_root / "models"
+            data_root = Path(get_data_root())
+            models_dir = data_root / "models"
+        exclude_file = models_dir / FACTOR_EXCLUDE_LIST_FILE
+    exclude_file = Path(exclude_file).resolve()
 
-    exclude_file = models_dir / FACTOR_EXCLUDE_LIST_FILE
+    if exclude_file in _factor_exclude_cache:
+        return _factor_exclude_cache[exclude_file]
 
     if not exclude_file.exists():
         logger.warning(f"因子排除列表不存在: {exclude_file}，跳过因子精简")
-        _factor_exclude_cache = set()
-        return _factor_exclude_cache
+        _factor_exclude_cache[exclude_file] = set()
+        return _factor_exclude_cache[exclude_file]
 
     try:
         with open(exclude_file, "r", encoding="utf-8") as f:
             data = json.load(f)
         exclude_list = data.get("exclude_factors", [])
-        _factor_exclude_cache = set(exclude_list)
+        _factor_exclude_cache[exclude_file] = set(exclude_list)
         logger.info(
-            f"已加载因子排除列表: {len(_factor_exclude_cache)} 个因子 "
+            f"已加载因子排除列表: {exclude_file}，"
+            f"{len(_factor_exclude_cache[exclude_file])} 个因子 "
             f"(min_icir={data.get('min_icir')}, "
             f"min_coverage={data.get('min_coverage')})"
         )
-        return _factor_exclude_cache
+        return _factor_exclude_cache[exclude_file]
     except (json.JSONDecodeError, KeyError, OSError) as e:
-        logger.warning(f"加载因子排除列表失败: {e}，跳过因子精简")
-        _factor_exclude_cache = set()
-        return _factor_exclude_cache
+        logger.warning(f"加载因子排除列表失败: {exclude_file}，{e}，跳过因子精简")
+        _factor_exclude_cache[exclude_file] = set()
+        return _factor_exclude_cache[exclude_file]
 
 
 def _rank_ic_eval_lgb(y_true, y_pred):
@@ -848,6 +854,7 @@ def prepare_training_data(
     enable_consensus_revision_features: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
+    factor_exclude_file: Optional[str] = None,
     max_feature_missing_ratio: float = 0.4,
     freshness_strategy: str = FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     event_freshness_half_life_days: float = 45.0,
@@ -863,6 +870,7 @@ def prepare_training_data(
             典型用法：cs_zscore 变换（见 transform_labels_cs_zscore）。
         factor_prune: 是否启用因子精简（从 data/models/factor_exclude_list.json
             加载排除列表并过滤特征列）。默认 False。
+        factor_exclude_file: 因子精简使用的显式清单路径；未提供时使用默认生产清单。
         max_feature_missing_ratio: 训练入口特征缺失率上限，超过该阈值的特征将被移除。
             默认 0.4。
         freshness_strategy: freshness 处理策略。
@@ -1115,7 +1123,9 @@ def prepare_training_data(
 
     # ── 因子精简（可选）──
     if factor_prune:
-        exclude_list = _load_factor_exclude_list()
+        exclude_list = _load_factor_exclude_list(
+            exclude_file=Path(factor_exclude_file) if factor_exclude_file else None
+        )
         if exclude_list:
             # 联动剔除：
             # 1) 排除 zscore_x 时同步排除 zscore_x_sz

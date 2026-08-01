@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 """train_core 验证集尾部隔离专项测试。"""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -55,6 +57,24 @@ BASE_FEATURE_COLUMNS = [
     "mkt_turnover_std",
     "mkt_vol_20",
 ]
+
+
+def test_load_factor_exclude_list_caches_by_explicit_file(tmp_path):
+    first_file = tmp_path / "first.json"
+    second_file = tmp_path / "second.json"
+    first_file.write_text(json.dumps({"exclude_factors": ["factor_a"]}), encoding="utf-8")
+    second_file.write_text(json.dumps({"exclude_factors": ["factor_b"]}), encoding="utf-8")
+
+    train_core_module._factor_exclude_cache.clear()
+    try:
+        assert train_core_module._load_factor_exclude_list(exclude_file=first_file) == {
+            "factor_a"
+        }
+        assert train_core_module._load_factor_exclude_list(exclude_file=second_file) == {
+            "factor_b"
+        }
+    finally:
+        train_core_module._factor_exclude_cache.clear()
 
 
 def _make_training_df(n_dates: int, stocks_per_date: int, seed: int = 7) -> pd.DataFrame:
@@ -275,7 +295,7 @@ def test_prepare_training_data_state_keep_event_decay_and_high_missing(monkeypat
     monkeypatch.setattr(
         train_core_module,
         "_load_factor_exclude_list",
-        lambda models_dir=None: {"zscore_bp"},
+        lambda models_dir=None, exclude_file=None: {"zscore_bp"},
     )
 
     result = prepare_training_data(

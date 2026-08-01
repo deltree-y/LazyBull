@@ -174,6 +174,7 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
 $factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+$factor_exclude_file      = "configs/factor_exclude_candidate_sparse_v1.json"  # 空字符串使用生产默认清单
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all
@@ -605,6 +606,9 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($factor_prune) {
         $pythonCmd += " --factor-prune"
+        if ($factor_exclude_file -ne "") {
+            $pythonCmd += " --factor-exclude-file `"$factor_exclude_file`""
+        }
     }
 
     if ($ensemble_offsets -gt 0) {
