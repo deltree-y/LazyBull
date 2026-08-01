@@ -321,6 +321,82 @@ def test_run_t0_stagger_uses_overall_top_n_as_desired_position_count():
     assert runner._generate_instructions.call_args.kwargs["desired_position_count"] == 20
 
 
+def test_generate_signals_respects_top_n_even_with_trading_config(monkeypatch):
+    """_generate_signals 传入 trading_config 时也应遵循函数参数 top_n。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+
+    runner.position_sizing = "equal"
+    runner.signal = MagicMock()
+    runner.signal.generate_ranked = MagicMock()
+    runner.storage = MagicMock()
+    runner.loader = MagicMock()
+    runner.feature_builder = MagicMock()
+    runner.cleaner = MagicMock()
+    runner.client = MagicMock()
+    runner.account = MagicMock()
+    runner._save_strategy_state = MagicMock()
+
+    monkeypatch.setattr(
+        "src.lazybull.paper.runner.ensure_features_for_date",
+        lambda *args, **kwargs: (True, [], ""),
+    )
+
+    runner.loader.load_clean_stock_basic.return_value = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "000003.SZ"],
+            "name": ["A", "B", "C"],
+        }
+    )
+    runner.loader.load_clean_daily_by_date.return_value = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "000003.SZ"],
+            "close": [10.0, 11.0, 12.0],
+        }
+    )
+    runner.storage.load_cs_train_day.return_value = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "000003.SZ"],
+            "f1": [1.0, 2.0, 3.0],
+        }
+    )
+    runner.account.get_positions.return_value = {}
+
+    universe = MagicMock()
+    universe.get_stocks.return_value = ["000001.SZ", "000002.SZ", "000003.SZ"]
+    runner._create_universe = MagicMock(return_value=universe)
+
+    runner._generate_ranked_with_lot_constraint = MagicMock(
+        return_value=({"000001.SZ": 0.9, "000002.SZ": 0.8}, {"target_n": 5})
+    )
+    runner._normalize_signals = MagicMock(return_value={"000001.SZ": 0.5, "000002.SZ": 0.5})
+    runner._enhance_target_info = MagicMock(
+        return_value=[
+            TargetWeight(ts_code="000001.SZ", target_weight=0.5, reason="信号生成"),
+            TargetWeight(ts_code="000002.SZ", target_weight=0.5, reason="信号生成"),
+        ]
+    )
+    runner._print_t0_targets = MagicMock()
+
+    config = TradingConfig(
+        buy_price="close",
+        sell_price="close",
+        universe="mainboard",
+        top_n=20,
+        rebalance_freq=20,
+        stagger_tranches=4,
+    )
+
+    targets = runner._generate_signals(
+        trade_date="20260120",
+        top_n=5,
+        trading_config=config,
+    )
+
+    assert len(targets) == 2
+    assert runner._generate_ranked_with_lot_constraint.called
+    assert runner._generate_ranked_with_lot_constraint.call_args.args[4] == 5
+
+
 def test_retry_pending_buys_success(broker):
     """测试成功重试 PendingBuy"""
     # 添加一个 pending buy

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.89.2] - 2026-08-01
+
+### Fixed
+
+- **纸面交易分批选股数量对齐回测**：`_generate_signals()` 在传入 `trading_config`
+  时不再固定使用配置中的总 `top_n`，改为优先使用调用参数 `top_n`（即本批槽位数）。
+  修复 `stagger_tranches > 1` 时首批仍按总 `top_n` 选股、导致首批即买满的问题。
+
 ## [0.89.1] - 2026-08-01
 
 ### Fixed

@@ -1540,18 +1540,45 @@ class PaperTradingRunner:
         Returns:
             目标权重列表
         """
-        effective_config = trading_config or TradingConfig(
-            buy_price=buy_price_type,
-            universe=universe_type,
-            top_n=top_n,
-            model_version=model_version,
-            max_per_industry=max_per_industry,
-            max_weight_per_stock=max_weight_per_stock,
-            exclude_st=exclude_st,
-            min_list_days=min_list_days,
-
-            position_sizing=self.position_sizing,
-        )
+        if trading_config is not None:
+            # 纸面交易分批模式下，top_n 必须以调用方传入值为准（本批槽位数），
+            # 不能被总配置中的 top_n 覆盖，否则会退化为首批一次买满总仓位。
+            effective_config = replace(
+                trading_config,
+                buy_price=buy_price_type,
+                universe=universe_type,
+                top_n=top_n,
+                model_version=(
+                    model_version
+                    if model_version is not None
+                    else trading_config.model_version
+                ),
+                max_per_industry=(
+                    max_per_industry
+                    if max_per_industry is not None
+                    else trading_config.max_per_industry
+                ),
+                max_weight_per_stock=(
+                    max_weight_per_stock
+                    if max_weight_per_stock is not None
+                    else trading_config.max_weight_per_stock
+                ),
+                exclude_st=exclude_st,
+                min_list_days=min_list_days,
+                position_sizing=self.position_sizing,
+            )
+        else:
+            effective_config = TradingConfig(
+                buy_price=buy_price_type,
+                universe=universe_type,
+                top_n=top_n,
+                model_version=model_version,
+                max_per_industry=max_per_industry,
+                max_weight_per_stock=max_weight_per_stock,
+                exclude_st=exclude_st,
+                min_list_days=min_list_days,
+                position_sizing=self.position_sizing,
+            )
 
         # 确保 features 数据存在
         logger.info(f"检查并确保 features 数据存在: {trade_date}")
