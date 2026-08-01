@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.89.1] - 2026-08-01
+
+### Fixed
+
+- **纸面交易分批槽位上限对齐回测**：`run_t0` 生成买入指令时，`desired_position_count`
+  改为传递总 `top_n`（而非本批槽位数）。修复 `stagger_tranches > 1` 时首批建仓后，
+  后续批次被误判为“无可用空槽”而无法继续买入的问题。
+
 ## [0.89.0] - 2026-08-01
 
 ### Added

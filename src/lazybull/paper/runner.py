@@ -837,6 +837,7 @@ class PaperTradingRunner:
             current_prices=current_prices,
             source_date=corrected_date,
             protected_stocks=protected_stocks,
+            desired_position_count=overall_top_n,
             tranche_idx=tranche_idx,
             overall_top_n=overall_top_n,
             stagger_tranches=stagger_tranches,

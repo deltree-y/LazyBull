@@ -246,6 +246,81 @@ def test_execute_instructions_does_not_open_new_slot_when_sell_fails(broker):
     assert failed_targets[0].original_signal_date == '20260120'
 
 
+def test_run_t0_stagger_uses_overall_top_n_as_desired_position_count():
+    """分批调仓下，T0 生成买入指令应传递总 top_n 作为槽位上限。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+
+    runner.position_sizing = "equal"
+    runner.kelly_vol_window = 60
+    runner.kelly_max_leverage = 1.0
+    runner.verbose = False
+    runner.signal = MagicMock()
+    runner.client = MagicMock()
+    runner.storage = MagicMock()
+    runner.loader = MagicMock()
+    runner.paper_storage = MagicMock()
+    runner.account = MagicMock()
+    runner.feature_builder = MagicMock()
+    runner.cleaner = MagicMock()
+    runner.missing_factors = []
+
+    runner._correct_trade_date = MagicMock(return_value="20260120")
+    runner._check_rebalance_day = MagicMock(return_value=(True, 1))
+    runner._get_next_trade_date = MagicMock(return_value="20260121")
+    runner._build_rebalance_sell_instructions = MagicMock(return_value=[])
+    runner._ensure_strategy_state = MagicMock(return_value={})
+    runner._save_strategy_state = MagicMock()
+
+    runner.paper_storage.check_run_exists.return_value = False
+    runner.paper_storage.load_instructions.return_value = []
+    runner.paper_storage.load_rebalance_state.return_value = {}
+
+    runner.loader.load_clean_daily.return_value = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ", "000005.SZ"],
+            "close": [10.0, 10.0, 10.0, 10.0, 10.0],
+        }
+    )
+    runner.loader.load_clean_trade_cal.return_value = pd.DataFrame(
+        {"cal_date": ["20260120"], "is_open": [1]}
+    )
+    runner.account.get_total_value.return_value = 500000.0
+
+    targets = [
+        TargetWeight(ts_code=f"00000{i}.SZ", target_weight=0.2, reason="信号生成")
+        for i in range(1, 6)
+    ]
+    runner._generate_signals = MagicMock(return_value=targets)
+
+    runner._generate_instructions = MagicMock(
+        return_value=[
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="buy",
+                shares=100,
+                price_type="close",
+                reason="信号生成",
+                source_date="20260120",
+                target_weight=0.2,
+            )
+        ]
+    )
+
+    config = TradingConfig(
+        buy_price="close",
+        sell_price="close",
+        universe="mainboard",
+        top_n=20,
+        rebalance_freq=20,
+        stagger_tranches=4,
+    )
+
+    runner.run_t0(trade_date="20260120", trading_config=config)
+
+    assert runner._generate_instructions.called
+    assert runner._generate_instructions.call_args.kwargs["desired_position_count"] == 20
+
+
 def test_retry_pending_buys_success(broker):
     """测试成功重试 PendingBuy"""
     # 添加一个 pending buy
