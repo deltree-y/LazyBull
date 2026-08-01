@@ -356,6 +356,7 @@ class BacktestEngine:
         self._cycle_anchor_idx: int = 0  # 当前调仓周期起点 idx（用于 cycle_day 日志显示）
         self.portfolio_values: List[Dict] = []  # 组合价值历史
         self.trades: List[Dict] = []  # 交易记录
+        self.execution_attribution_records: List[Dict] = []  # 信号槽位到实际成交的旁路记录
 
         # 仓位补齐状态跟踪
         # {调仓日期: {未成交股票列表, 目标数量, 候选列表, 剩余权重字典}}
@@ -1925,6 +1926,62 @@ class BacktestEngine:
             on_reject=_on_reject,
         )
 
+        candidate_rank = {
+            stock: rank
+            for rank, (stock, _score) in enumerate(priority_candidates, start=1)
+        }
+        candidate_score = {stock: float(score) for stock, score in priority_candidates}
+        filled_by_slot = {
+            id(item["slot"]): item["stock"] for item in match_result.filled
+        }
+        for slot in planned_slot_weights:
+            planned_stock = str(slot["stock"])
+            actual_stock = filled_by_slot.get(id(slot))
+            state = _slot_state(slot)
+            trade = next(
+                (
+                    item
+                    for item in reversed(self.trades)
+                    if item.get("action") == "buy"
+                    and item.get("date") == date
+                    and item.get("stock") == actual_stock
+                ),
+                {},
+            )
+            signal_price = (
+                self._get_trade_price(signal_date, actual_stock) if actual_stock else None
+            )
+            buy_price = trade.get("price")
+            signal_to_buy_return = (
+                float(buy_price / signal_price - 1.0)
+                if buy_price is not None and signal_price not in (None, 0)
+                else None
+            )
+            self.execution_attribution_records.append(
+                {
+                    "signal_date": signal_date,
+                    "ranking_date": signal_date,
+                    "execution_date": date,
+                    "execution_stage": "t1",
+                    "tranche_idx": tranche_idx,
+                    "planned_stock": planned_stock,
+                    "actual_stock": actual_stock,
+                    "planned_rank": candidate_rank.get(planned_stock),
+                    "actual_rank": candidate_rank.get(actual_stock),
+                    "pred_score": candidate_score.get(actual_stock),
+                    "target_weight": float(slot["weight"]),
+                    "status": "filled" if actual_stock else "unfilled",
+                    "reason": (
+                        state["last_reason"]
+                        if not actual_stock or actual_stock != planned_stock
+                        else None
+                    ),
+                    "buy_price": buy_price,
+                    "signal_price": signal_price,
+                    "signal_to_buy_return": signal_to_buy_return,
+                }
+            )
+
         remaining_unfilled_slots = []
         for slot in match_result.unfilled:
             weight = float(slot["weight"])
@@ -2163,6 +2220,14 @@ class BacktestEngine:
                         bought_stock_set.add(stock)  # 记录已买入
                         bought_for_this_slot = True
                         completion_success_items.append({"slot": original_stock, "buy": stock})
+                        self._update_completion_attribution(
+                            original_signal_date=original_signal_date,
+                            ranking_date=prev_date,
+                            execution_date=date,
+                            planned_stock=original_stock,
+                            actual_stock=stock,
+                            ranked_candidates=new_ranked_candidates,
+                        )
 
                         self.completion_stats["total_completed"] += 1
 
@@ -3069,6 +3134,7 @@ class BacktestEngine:
         self.trades.append(
             {
                 "date": date,
+                "signal_date": signal_date or date,
                 "stock": stock,
                 "action": "buy",
                 "price": trade_price,  # 成交价格
@@ -3276,6 +3342,7 @@ class BacktestEngine:
         # 获取持仓信息
         shares = self.positions[stock]["shares"]
         buy_date = self.positions[stock]["buy_date"]
+        signal_date = self.positions[stock].get("signal_date", buy_date)
         buy_trade_price = self.positions[stock]["buy_trade_price"]
         buy_pnl_price = self.positions[stock]["buy_pnl_price"]
         buy_cost_cash = self.positions[stock]["buy_cost_cash"]
@@ -3316,6 +3383,7 @@ class BacktestEngine:
         # 记录交易（包含绩效收益信息和卖出类型）
         trade_record = {
             "date": date,
+            "signal_date": signal_date,
             "stock": stock,
             "action": "sell",
             "price": sell_trade_price,  # 卖出成交价格
@@ -3391,6 +3459,63 @@ class BacktestEngine:
             交易记录DataFrame
         """
         return pd.DataFrame(self.trades)
+
+    def get_execution_attribution(self) -> pd.DataFrame:
+        """获取信号槽位到实际买入的归因记录。"""
+        return pd.DataFrame(self.execution_attribution_records)
+
+    def _update_completion_attribution(
+        self,
+        original_signal_date: pd.Timestamp,
+        ranking_date: pd.Timestamp,
+        execution_date: pd.Timestamp,
+        planned_stock: str,
+        actual_stock: str,
+        ranked_candidates: List[Tuple[str, float]],
+    ) -> None:
+        """用补位成交结果更新原始未成交槽位。"""
+        candidate_rank = {
+            stock: rank for rank, (stock, _score) in enumerate(ranked_candidates, start=1)
+        }
+        candidate_score = {stock: float(score) for stock, score in ranked_candidates}
+        trade = next(
+            (
+                item
+                for item in reversed(self.trades)
+                if item.get("action") == "buy"
+                and item.get("date") == execution_date
+                and item.get("stock") == actual_stock
+            ),
+            {},
+        )
+        signal_price = self._get_trade_price(ranking_date, actual_stock)
+        buy_price = trade.get("price")
+        signal_to_buy_return = (
+            float(buy_price / signal_price - 1.0)
+            if buy_price is not None and signal_price not in (None, 0)
+            else None
+        )
+        for record in reversed(self.execution_attribution_records):
+            if (
+                record.get("signal_date") == original_signal_date
+                and record.get("planned_stock") == planned_stock
+                and record.get("status") == "unfilled"
+            ):
+                record.update(
+                    {
+                        "ranking_date": ranking_date,
+                        "execution_date": execution_date,
+                        "execution_stage": "completion",
+                        "actual_stock": actual_stock,
+                        "actual_rank": candidate_rank.get(actual_stock),
+                        "pred_score": candidate_score.get(actual_stock),
+                        "status": "filled",
+                        "buy_price": buy_price,
+                        "signal_price": signal_price,
+                        "signal_to_buy_return": signal_to_buy_return,
+                    }
+                )
+                return
 
     # ── 提前调仓历史快照/回滚 ──
 

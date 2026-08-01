@@ -452,6 +452,14 @@ def test_completion_uses_prev_day_data():
     assert '000003.SZ' in engine.positions, "T+2 应补齐到 000003"
     assert engine.positions['000003.SZ']['buy_date'] == trading_dates[2], "补齐应发生在 T+2"
 
+    attribution = engine.get_execution_attribution()
+    completed = attribution[attribution['planned_stock'] == '000002.SZ'].iloc[0]
+    assert completed['status'] == 'filled'
+    assert completed['execution_stage'] == 'completion'
+    assert completed['ranking_date'] == trading_dates[1]
+    assert completed['execution_date'] == trading_dates[2]
+    assert completed['actual_stock'] == '000003.SZ'
+
 
 def test_completion_log_summarizes_success_when_cash_limited():
     """补齐日志应压缩为单行摘要，实际成交由交易记录校验。"""

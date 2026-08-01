@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(0,3,6,9,13)
+        SelectedSplits = @(6,9)
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -174,7 +174,7 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
 $factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
-$factor_exclude_file      = "configs/factor_exclude_candidate_sparse_v1.json"  # 空字符串使用生产默认清单
+$factor_exclude_file      = ""#configs/factor_exclude_candidate_sparse_v1.json"  # 空字符串使用生产默认清单
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all

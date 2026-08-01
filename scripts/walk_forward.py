@@ -395,6 +395,8 @@ def run_oos_backtest(
 
     # 附带 nav_curve 用于串联全周期净值
     metrics["_nav_curve"] = nav_curve
+    metrics["_trades"] = engine.get_trades()
+    metrics["_execution_attribution"] = engine.get_execution_attribution()
 
     return metrics
 
@@ -1268,6 +1270,41 @@ def write_walk_forward_topk_details(
         logger.info(
             f"已导出 walk-forward TopK 明细: {exported_count} 个 split -> {output_dir}"
         )
+
+
+def write_walk_forward_trade_details(
+    results: List[Dict],
+    summary_csv_path: str,
+    wf_run_id: str,
+) -> None:
+    """将每个 split 的成交记录与买入执行归因落盘。"""
+    output_dir = Path(summary_csv_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    export_specs = (
+        ("_trades", "trades"),
+        ("_execution_attribution", "execution_attribution"),
+    )
+    exported_count = 0
+    for result in results:
+        split_index = result.get("split_index")
+        for result_key, filename_tag in export_specs:
+            detail_df = result.get(result_key)
+            if detail_df is None or detail_df.empty:
+                continue
+
+            export_df = detail_df.copy()
+            export_df.insert(0, "wf_run_id", wf_run_id)
+            export_df.insert(1, "split_index", split_index)
+            export_df.insert(2, "model_version", result.get("model_version"))
+            filename = (
+                f"walk_forward_{filename_tag}_{wf_run_id}_split{int(split_index):02d}.csv"
+            )
+            export_df.to_csv(output_dir / filename, index=False, encoding="utf-8-sig")
+            exported_count += 1
+
+    if exported_count > 0:
+        logger.info(f"已导出 walk-forward 交易归因明细: {exported_count} 个文件 -> {output_dir}")
 
 
 def _print_pre_backtest_model_summary(
@@ -3979,6 +4016,12 @@ def main():
                         nav_curve = bt_metrics.pop("_nav_curve", None)
                         if nav_curve is not None:
                             result["_nav_curve"] = nav_curve
+                        trades = bt_metrics.pop("_trades", None)
+                        if trades is not None:
+                            result["_trades"] = trades
+                        execution_attribution = bt_metrics.pop("_execution_attribution", None)
+                        if execution_attribution is not None:
+                            result["_execution_attribution"] = execution_attribution
                         result["bt_metrics"] = bt_metrics
                     except Exception as e:
                         logger.error(f"Split {split.split_index} OOS回测失败: {e}")
@@ -4038,6 +4081,8 @@ def main():
 
             if getattr(args, "export_topk_details", True):
                 write_walk_forward_topk_details(results, summary_csv_path, wf_run_id)
+
+            write_walk_forward_trade_details(results, summary_csv_path, wf_run_id)
 
             # ── 串联各 split 的 OOS 回测净值曲线 ──────────────────
             chain_nav_splits(results, summary_csv_path, wf_run_id)

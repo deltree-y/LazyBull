@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.89.0] - 2026-08-01
+
+### Added
+
+- **Walk-forward 交易归因明细**：OOS 回测按 split 自动导出成交记录与买入执行归因，
+  包含信号日、计划股、实际买入股、候选排名、目标权重、未成交/替换原因及 T0 到 T1
+  价格变化；数据仅旁路记录，不参与交易决策。
+- **信号到持仓收益分析**：新增 `scripts/ana/analyze_signal_execution_gap.py`，严格区分
+  信号日 Top30 标签收益、实际买入股票标签收益与已平仓真实持仓收益，并汇总成交率、
+  替换率、Top30 覆盖率、实际排名和失败原因。
+
 ## [0.88.0] - 2026-08-01
 
 ### Added

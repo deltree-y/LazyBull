@@ -659,8 +659,17 @@ def test_pending_buys_use_t0_priority_candidates_same_day():
     assert len(trades) == 1
     assert trades.iloc[0]['action'] == 'buy'
     assert trades.iloc[0]['stock'] == '000002.SZ'
+    assert trades.iloc[0]['signal_date'] == trading_dates[0]
     assert '000002.SZ' in engine.positions
     assert '000001.SZ' not in engine.positions
+
+    attribution = engine.get_execution_attribution()
+    assert len(attribution) == 1
+    assert attribution.iloc[0]['planned_stock'] == '000001.SZ'
+    assert attribution.iloc[0]['actual_stock'] == '000002.SZ'
+    assert attribution.iloc[0]['actual_rank'] == 2
+    assert attribution.iloc[0]['status'] == 'filled'
+    assert attribution.iloc[0]['reason'] == '涨停'
 
 
 def test_buy_plan_does_not_overbuy_when_sell_execution_fails():

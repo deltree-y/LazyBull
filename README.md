@@ -28,12 +28,19 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.88.0)
+### 当前版本 (v0.89.0)
+
+- **Walk-forward 信号到成交收益归因**：
+  - OOS 回测按 split 自动导出 `walk_forward_trades_*` 与
+    `walk_forward_execution_attribution_*` 两类明细；
+  - 记录计划股、实际买入股、候选排名、替换/未成交原因及 T0 到 T1 价格变化；
+  - 使用 `python scripts/ana/analyze_signal_execution_gap.py --raw-dir <raw目录> --wf-run-id <运行ID> --focus-splits 6,9`
+    分析信号日 Top30、实际买入标签收益和真实持仓收益的转化差异。
 
 - **独立因子裁剪实验清单**：
   - 单次训练和 walk-forward 支持 `--factor-exclude-file <JSON路径>`；
   - 未指定路径时仍使用生产 `data/models/factor_exclude_list.json`；
-  - batch 默认使用 `configs/factor_exclude_candidate_sparse_v1.json`，不会覆盖生产清单。
+  - 候选实验可显式使用 `configs/factor_exclude_candidate_sparse_v1.json`，不会覆盖生产清单。
 
 - **因子使用稳定性分析**：
   - 支持按模型版本区间展开 `EnsembleModel` 的全部子模型并聚合归一化 importance；

@@ -492,6 +492,49 @@ class TestWalkForwardSplits:
 class TestWalkForwardCSV:
     """测试 walk-forward 汇总CSV生成"""
 
+    def test_write_walk_forward_trade_details(self):
+        """成交与执行归因应按 split 输出独立文件。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from scripts.walk_forward import write_walk_forward_trade_details
+
+            results = [
+                {
+                    "split_index": 6,
+                    "model_version": 123,
+                    "_trades": pd.DataFrame(
+                        [{"date": "20220104", "stock": "000001.SZ", "action": "buy"}]
+                    ),
+                    "_execution_attribution": pd.DataFrame(
+                        [
+                            {
+                                "signal_date": "20220103",
+                                "execution_date": "20220104",
+                                "planned_stock": "000001.SZ",
+                                "actual_stock": "000001.SZ",
+                                "status": "filled",
+                            }
+                        ]
+                    ),
+                }
+            ]
+            summary_path = os.path.join(tmpdir, "walk_forward_summary_test.csv")
+
+            write_walk_forward_trade_details(results, summary_path, "wf_test_trade")
+
+            trades_path = os.path.join(
+                tmpdir, "walk_forward_trades_wf_test_trade_split06.csv"
+            )
+            attribution_path = os.path.join(
+                tmpdir,
+                "walk_forward_execution_attribution_wf_test_trade_split06.csv",
+            )
+            assert os.path.exists(trades_path)
+            assert os.path.exists(attribution_path)
+            exported = pd.read_csv(attribution_path)
+            assert exported.loc[0, "wf_run_id"] == "wf_test_trade"
+            assert exported.loc[0, "split_index"] == 6
+            assert exported.loc[0, "model_version"] == 123
+
     def test_write_walk_forward_topk_details(self):
         """测试导出每个 split 的逐日 Top20/Top30 名单与预测分数。"""
         with tempfile.TemporaryDirectory() as tmpdir:
