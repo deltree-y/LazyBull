@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.86.7)
+### 当前版本 (v0.87.0)
+
+- **因子使用稳定性分析**：
+  - 支持按模型版本区间展开 `EnsembleModel` 的全部子模型并聚合归一化 importance；
+  - 输出严格低使用候选与待 IC 复核观察名单，不会自动修改生产因子排除清单；
+  - 示例：`python scripts/ana/analyze_factor_stability.py --versions 22626-22639`。
 
 - **分批调仓均匀排期**：
   - 批次数不能整除调仓周期时，按周期比例均匀分布各 tranche；
@@ -2538,7 +2543,9 @@ LazyBull/
 │   ├── train_ml_model.py      # 训练 ML 模型
 │   ├── run_backtest.py        # 运行回测
 │   ├── run_ml_backtest.py     # 运行 ML 信号回测
-│   └── analyze_factor_importance.py # 因子重要性分析
+│   └── ana/
+│       ├── analyze_factor_importance.py # 因子重要性分析
+│       └── analyze_factor_stability.py  # 集成模型因子使用稳定性分析
 ├── src/lazybull/              # 源代码
 │   ├── common/                # 通用模块
 │   │   ├── config.py          # 配置管理

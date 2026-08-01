@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -32,23 +32,23 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @()
+        SelectedSplits = @(0,3,6,9,13)
     }
-    [PSCustomObject]@{
-        Label = "0109"
-        SplitCount = 14
-        FinalDate = "20260109" # 20260209
-        ContinueDays = 1
-        StartModelVersion = 22641
-        SelectedSplits = @()
-    }
-    [PSCustomObject]@{
-        Label = "0116"
-        SplitCount = 14
-        FinalDate = "20260116" # 20260324
-        ContinueDays = 1
-        StartModelVersion = 22656
-    }
+    #[PSCustomObject]@{
+    #    Label = "0109"
+    #    SplitCount = 14
+    #    FinalDate = "20260109" # 20260209
+    #    ContinueDays = 1
+    #    StartModelVersion = 22641
+    #    SelectedSplits = @()
+    #}
+    #[PSCustomObject]@{
+    #    Label = "0116"
+    #    SplitCount = 14
+    #    FinalDate = "20260116" # 20260324
+    #    ContinueDays = 1
+    #    StartModelVersion = 22656
+    #}
     #[PSCustomObject]@{
     #    Label = "0123"
     #    SplitCount = 14
@@ -100,7 +100,7 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
 $rank_weight_topk_list   = @(120)         #50
-$rank_weight_list        = @(100)         #3
+$rank_weight_list        = @(30)         #3
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
@@ -188,11 +188,11 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $true   # $true 启用 | $false 禁用
+$deploy_train            = $false   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(2,3)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(2)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -217,7 +217,7 @@ $kelly_vol_window_list           = @(60)      # Kelly 波动率窗口（交易�
 $kelly_max_leverage_list          = @(0.2)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── 空仓/持有期拖尾提前调仓（独立开关）────
-$enable_early_rebalance_on_empty_list = @($false, $true)  # 可多值如 @($false, $true)
+$enable_early_rebalance_on_empty_list = @($true)  # 可多值如 @($false, $true)
 
 # ── OOS 止损（总开关）────────────────────────────────────────
 # 0426这里应为true

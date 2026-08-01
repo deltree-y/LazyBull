@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.87.0] - 2026-08-01
+
+### Added
+
+- **因子使用稳定性分析**：新增 `scripts/ana/analyze_factor_stability.py`，支持精确指定
+  模型版本或版本区间，并递归展开 `EnsembleModel` 子模型，按归一化 importance、模型内
+  排名、零值率和 Top50% 出现率聚合因子跨模型稳定性。
+- **分层候选输出**：报告区分严格低使用候选和待 IC 复核观察名单；分析过程只读，不会
+  修改模型注册表或 `factor_exclude_list.json`，避免候选未经消融验证直接进入生产裁剪。
+
 ## [0.86.7] - 2026-08-01
 
 ### Fixed
