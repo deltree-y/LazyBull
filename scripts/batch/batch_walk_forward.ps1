@@ -192,14 +192,14 @@ $deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(1, 4)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(2,3)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 
-$bt_top_n_list           = @(20, 30)            # 回测持仓 Top N
+$bt_top_n_list           = @(30)            # 回测持仓 Top N
 $bt_rebalance_freq_list  = @($null)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
@@ -217,7 +217,7 @@ $kelly_vol_window_list           = @(60)      # Kelly 波动率窗口（交易�
 $kelly_max_leverage_list          = @(0.2)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── 空仓/持有期拖尾提前调仓（独立开关）────
-$enable_early_rebalance_on_empty_list = @($true)  # 可多值如 @($false, $true)
+$enable_early_rebalance_on_empty_list = @($false, $true)  # 可多值如 @($false, $true)
 
 # ── OOS 止损（总开关）────────────────────────────────────────
 # 0426这里应为true

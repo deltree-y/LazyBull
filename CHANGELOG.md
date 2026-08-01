@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.86.7] - 2026-08-01
+
+### Fixed
+
+- **非整除分批调度均匀化**：分批信号日期不再使用 `floor(rebalance_freq / K)`
+  固定偏移，改为按完整调仓周期比例均匀取整。例如 20 日分 3 批时，偏移由
+  `0/6/12` 修正为 `0/7/13`，循环间隔由 `6/6/8` 改为 `7/6/7`；K1、K2、K4
+  等可整除配置保持不变。
+
 ## [0.86.6] - 2026-08-01
 
 ### Fixed

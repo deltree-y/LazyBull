@@ -142,6 +142,32 @@ def test_rebalance_freq_20days(mock_trading_dates):
     assert len(rebalance_dates) == 3
 
 
+def test_stagger_tranches_are_evenly_distributed_for_non_divisible_period(
+    mock_trading_dates,
+):
+    """20日分3批时应使用0/7/13偏移，避免尾部形成8日空档。"""
+    engine = BacktestEngine(
+        universe=MockUniverse(['000001.SZ']),
+        signal=MockSignal(),
+        rebalance_freq=20,
+        stagger_tranches=3,
+        verbose=False,
+    )
+
+    schedule = engine._get_rebalance_dates(mock_trading_dates)
+    scheduled_indices = [
+        mock_trading_dates.index(date) for date in sorted(schedule.keys())
+    ]
+    tranche_indices = [schedule[date] for date in sorted(schedule.keys())]
+
+    assert scheduled_indices[:6] == [0, 7, 13, 20, 27, 33]
+    assert tranche_indices[:6] == [0, 1, 2, 0, 1, 2]
+    assert [
+        current - previous
+        for previous, current in zip(scheduled_indices[:5], scheduled_indices[1:6])
+    ] == [7, 6, 7, 7, 6]
+
+
 def test_rebalance_freq_invalid_integer():
     """测试无效的整数调仓频率（负数或零）"""
     universe = MockUniverse(['000001.SZ'])

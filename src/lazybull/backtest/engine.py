@@ -2744,12 +2744,12 @@ class BacktestEngine:
             # 不分批：保持原有逻辑，所有调仓日 tranche=0
             return {trading_dates[i]: 0 for i in range(0, len(trading_dates), n)}
 
-        # 分批调仓：K 个 tranche 各自错开 offset 天
+        # 分批调仓：按周期比例均匀分布 K 个 tranche。
+        # 例如 20 日分 3 批时偏移为 0/7/13，循环间隔为 7/6/7。
         k = self.stagger_tranches
-        offset = max(1, n // k)
         schedule = {}
         for t in range(k):
-            start = t * offset
+            start = (2 * t * n + k) // (2 * k)
             for i in range(start, len(trading_dates), n):
                 schedule[trading_dates[i]] = t
         return schedule
