@@ -45,6 +45,7 @@ from src.lazybull.ml.run_logger import (
     write_training_run_to_csv
 )
 from src.lazybull.ml.train_core import (
+    add_blended_return_label,
     load_features_data,
     prepare_training_data,
     transform_labels_cs_zscore,
@@ -94,6 +95,12 @@ def main():
         default=None,
         choices=["y_ret_5", "y_ret_10", "y_ret_20", "neu_y_ret_5", "neu_y_ret_10", "neu_y_ret_20"],
         help="标签选择，默认 neu_y_ret_20。优先级高于 --label-column"
+    )
+    parser.add_argument(
+        "--neutral-label-blend-weight",
+        type=float,
+        default=0.0,
+        help="原始收益在行业中性混合标签中的权重，范围 0~1，默认 0（保持原标签）",
     )
     
     # 任务类型和标签变换参数
@@ -390,6 +397,12 @@ def main():
     # 如果指定了 --label，则覆盖 --label-column
     if args.label is not None:
         args.label_column = args.label
+    if not 0.0 <= args.neutral_label_blend_weight <= 1.0:
+        parser.error("--neutral-label-blend-weight 必须在 0~1 之间")
+    if args.neutral_label_blend_weight > 0 and args.task != "regression":
+        parser.error("--neutral-label-blend-weight 仅支持 regression 任务")
+    if args.neutral_label_blend_weight > 0 and not args.label_column.startswith("neu_y_ret_"):
+        parser.error("混合标签要求 --label 使用 neu_y_ret_N")
     
     # 设置日志
     setup_logger()
@@ -400,6 +413,7 @@ def main():
     logger.info(f"训练算法: {args.algorithm}")
     logger.info(f"训练日期区间: {args.start_date} 至 {args.end_date}")
     logger.info(f"标签列: {args.label_column}")
+    logger.info(f"行业中性标签混合权重: {args.neutral_label_blend_weight:.2f}")
     effective_data_root = args.data_root or get_data_root()
     logger.info(f"数据目录: {effective_data_root}")
     logger.info(
@@ -419,6 +433,11 @@ def main():
         # 1. 加载特征数据
         df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)
         total_samples = len(df)
+        actual_label_column = add_blended_return_label(
+            df,
+            args.label_column,
+            args.neutral_label_blend_weight,
+        )
         
         # 1.5. 应用标签变换（如果需要）
         if args.task == "classification":
@@ -434,11 +453,8 @@ def main():
             )
             
             # 使用二分类标签作为训练标签
-            binary_label_col = f"{args.label_column}_binary"
+            binary_label_col = f"{actual_label_column}_binary"
             actual_label_column = binary_label_col
-        else:
-            # 回归任务：标签变换（cs_zscore 在切分后各自独立变换，避免数据泄露）
-            actual_label_column = args.label_column
         
         # 2. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
         # cs_zscore 回归任务：切分后对 train/val 各自独立变换，不共享截面统计量
@@ -554,6 +570,7 @@ def main():
             "algorithm": args.algorithm,
             "task": args.task,
             "label_transform": args.label_transform if args.task == "regression" else None,
+            "neutral_label_blend_weight": args.neutral_label_blend_weight,
             "winsorize_p": args.winsorize_p if args.label_transform == "cs_zscore" else None,
             "pos_quantile": args.pos_quantile if args.task == "classification" else None,
             "pos_topk": args.pos_topk if args.task == "classification" else None,

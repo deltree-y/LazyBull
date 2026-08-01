@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.89.2)
+### 当前版本 (v0.90.0)
+
+- **行业中性与绝对收益混合标签**：
+  - 通过 `--neutral-label-blend-weight` 在训练期动态混合 `neu_y_ret_N` 与 `y_ret_N`，无需重建特征；
+  - `0` 保持纯行业中性标签，`0.25` 表示引入 25% 原始收益目标，`1` 等价于纯原始收益；
+  - 混合发生在 `cs_zscore` 之前，walk-forward 的早停、rank-weight、验证和 OOS 标签指标统一使用混合目标；
+  - `batch_walk_forward.ps1` 可用 `@(0.0, 0.25, 0.5)` 做真实重训快筛，不能在 skip-training 模式复用旧模型。
 
 - **Walk-forward 信号到成交收益归因**：
   - OOS 回测按 split 自动导出 `walk_forward_trades_*` 与

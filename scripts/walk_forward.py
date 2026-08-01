@@ -57,6 +57,7 @@ from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.train_core import (
+    add_blended_return_label,
     load_features_data,
     prepare_training_data,
     transform_labels_cs_zscore,
@@ -503,6 +504,11 @@ def _train_model_on_window(
     total_train_samples = len(df_train)
 
     # 2. 应用标签变换
+    actual_label_column = add_blended_return_label(
+        df_train,
+        args.label_column,
+        getattr(args, "neutral_label_blend_weight", 0.0),
+    )
     if args.task == "classification":
         if args.pos_quantile is None and args.pos_topk is None:
             raise ValueError("分类任务必须指定 --pos-quantile 或 --pos-topk")
@@ -512,10 +518,8 @@ def _train_model_on_window(
             pos_quantile=args.pos_quantile,
             pos_topk=args.pos_topk,
         )
-        binary_label_col = f"{args.label_column}_binary"
+        binary_label_col = f"{actual_label_column}_binary"
         actual_label_column = binary_label_col
-    else:
-        actual_label_column = args.label_column
 
     # 3. 准备训练数据（按 trade_date 粒度切分训练集/验证集）
     label_transform_fn = None
@@ -639,6 +643,7 @@ def _train_model_on_window(
         "total_train_samples": total_train_samples,
         "X_train_len": len(X_train),
         "X_val_len": len(X_val),
+        "label_column": actual_label_column,
     }
 
 
@@ -782,7 +787,7 @@ def _build_ensemble_sub_models(
                     adaptive_meta["live_adaptive_last_action"] = action
                     adaptive_meta["live_adaptive_last_best_iteration"] = best_iter
                     base_val_daily = _evaluate_train_result_val_daily(
-                        selected_tr, rolling_args.label_column, rolling_args.task, topk_values,
+                        selected_tr, selected_tr["label_column"], rolling_args.task, topk_values,
                         emit_logs=False,
                     )
 
@@ -825,7 +830,7 @@ def _build_ensemble_sub_models(
                             ] = challenger_best_iteration
                             challenger_val_daily = _evaluate_train_result_val_daily(
                                 challenger_tr,
-                                candidate_args.label_column,
+                                challenger_tr["label_column"],
                                 candidate_args.task,
                                 topk_values,
                                 emit_logs=False,
@@ -920,7 +925,7 @@ def _build_ensemble_sub_models(
 
                         challenger_val_daily = _evaluate_train_result_val_daily(
                             challenger_tr,
-                            candidate_args.label_column,
+                            challenger_tr["label_column"],
                             candidate_args.task,
                             topk_values,
                             emit_logs=False,
@@ -987,7 +992,7 @@ def _build_ensemble_sub_models(
             train_result = record["train_result"]
             seed_metrics = _evaluate_train_result_val_daily(
                 train_result,
-                args.label_column,
+                train_result["label_column"],
                 args.task,
                 eval_topk_values,
                 emit_logs=False,
@@ -1504,6 +1509,7 @@ def _build_split_training_candidate(
         val_metrics = base_result["val_metrics"]
         df_val_split_original = validation_result["df_val_split_original"]
         validation_feature_columns = validation_result["feature_columns"]
+        validation_label_column = validation_result["label_column"]
         data_stats = base_result["data_stats"]
         train_days_count = base_result["train_days_count"]
         total_train_samples = base_result["total_train_samples"]
@@ -1525,6 +1531,7 @@ def _build_split_training_candidate(
         val_metrics = tr["val_metrics"]
         df_val_split_original = tr["df_val_split_original"]
         validation_feature_columns = feature_columns
+        validation_label_column = tr["label_column"]
         data_stats = tr["data_stats"]
         train_days_count = tr["train_days_count"]
         total_train_samples = tr["total_train_samples"]
@@ -1546,7 +1553,7 @@ def _build_split_training_candidate(
             model=model,
             df_val=df_val_split_original,
             feature_columns=validation_feature_columns,
-            original_return_col=args.label_column,
+            original_return_col=validation_label_column,
             task=args.task,
             topk_values=topk_values,
         )
@@ -1565,6 +1572,7 @@ def _build_split_training_candidate(
         "total_train_samples": total_train_samples,
         "X_train_len": X_train_len,
         "X_val_len": X_val_len,
+        "label_column": validation_label_column,
         "adaptive_meta": adaptive_meta,
     }
 
@@ -1825,6 +1833,11 @@ def execute_split_training(
 
     # 准备测试数据
     df_test_eval = df_test.copy()
+    evaluation_label_column = add_blended_return_label(
+        df_test_eval,
+        args.label_column,
+        getattr(args, "neutral_label_blend_weight", 0.0),
+    )
 
     # 过滤测试集样本（与训练时一致：过滤 ST、停牌、涨停；跌停可买入，保留）
     filter_columns = ["is_st", "is_suspended", "is_limit_up"]
@@ -1835,8 +1848,8 @@ def execute_split_training(
     df_test_eval = df_test_eval[mask].copy()
 
     # 移除标签为 NaN 的样本
-    if args.label_column in df_test_eval.columns:
-        df_test_eval = df_test_eval.dropna(subset=[args.label_column])
+    if evaluation_label_column in df_test_eval.columns:
+        df_test_eval = df_test_eval.dropna(subset=[evaluation_label_column])
 
     logger.info(f"测试集样本数（过滤后）: {len(df_test_eval)}")
 
@@ -1854,7 +1867,7 @@ def execute_split_training(
 
     topk_detail_df = build_daily_topk_detail_df(
         df_eval=df_test_eval,
-        original_return_col=args.label_column,
+        original_return_col=evaluation_label_column,
         topk_values=(20, 30),
         score_column=test_score_column,
     )
@@ -1864,7 +1877,7 @@ def execute_split_training(
         model=model,
         df_val=df_test_eval,
         feature_columns=feature_columns,
-        original_return_col=args.label_column,
+        original_return_col=evaluation_label_column,
         task=args.task,
         topk_values=topk_values,
         emit_logs=False,
@@ -2178,6 +2191,7 @@ def execute_deploy_training(
         val_metrics = base_result["val_metrics"]
         df_val_split_original = validation_result["df_val_split_original"]
         validation_feature_columns = validation_result["feature_columns"]
+        validation_label_column = validation_result["label_column"]
         data_stats = base_result["data_stats"]
         train_days_count = base_result["train_days_count"]
         total_train_samples = base_result["total_train_samples"]
@@ -2198,6 +2212,7 @@ def execute_deploy_training(
         val_metrics = tr["val_metrics"]
         df_val_split_original = tr["df_val_split_original"]
         validation_feature_columns = feature_columns
+        validation_label_column = tr["label_column"]
         data_stats = tr["data_stats"]
         train_days_count = tr["train_days_count"]
         total_train_samples = tr["total_train_samples"]
@@ -2207,12 +2222,11 @@ def execute_deploy_training(
     # 验证集逐日评估
     val_daily_metrics = {}
     if len(df_val_split_original) > 0:
-        original_return_col = args.label_column
         val_daily_metrics = evaluate_validation_daily(
             model=model,
             df_val=df_val_split_original,
             feature_columns=validation_feature_columns,
-            original_return_col=original_return_col,
+            original_return_col=validation_label_column,
             task=args.task,
             topk_values=topk_values,
         )
@@ -2668,6 +2682,7 @@ def write_walk_forward_summary(
         "test_window_months": args.test_window_months,
         "val_ratio": args.val_ratio,
         "label_column": args.label_column,
+        "neutral_label_blend_weight": getattr(args, "neutral_label_blend_weight", 0.0),
         "task": args.task,
         "label_transform": args.label_transform if args.task == "regression" else None,
         "n_estimators": args.n_estimators,
@@ -2984,6 +2999,12 @@ def main():
         default=None,
         choices=["y_ret_5", "y_ret_10", "y_ret_20", "neu_y_ret_5", "neu_y_ret_10", "neu_y_ret_20"],
         help="标签选择（y_ret_5|y_ret_10|y_ret_20|neu_y_ret_5|neu_y_ret_10|neu_y_ret_20），默认 y_ret_5。优先级高于 --label-column"
+    )
+    parser.add_argument(
+        "--neutral-label-blend-weight",
+        type=float,
+        default=0.0,
+        help="原始收益在行业中性混合标签中的权重，范围 0~1，默认 0（保持原标签）",
     )
     
     # 任务类型和标签变换参数
@@ -3703,6 +3724,14 @@ def main():
     # 如果指定了 --label，则覆盖 --label-column
     if args.label is not None:
         args.label_column = args.label
+    if not 0.0 <= args.neutral_label_blend_weight <= 1.0:
+        parser.error("--neutral-label-blend-weight 必须在 0~1 之间")
+    if args.neutral_label_blend_weight > 0 and args.task != "regression":
+        parser.error("--neutral-label-blend-weight 仅支持 regression 任务")
+    if args.neutral_label_blend_weight > 0 and args.skip_training:
+        parser.error("混合标签必须重新训练，不能与 --skip-training 同时使用")
+    if args.neutral_label_blend_weight > 0 and not args.label_column.startswith("neu_y_ret_"):
+        parser.error("混合标签要求 --label 使用 neu_y_ret_N")
     
     # 设置日志
     setup_logger()
@@ -3720,6 +3749,7 @@ def main():
         % (args.selected_split_indices if args.selected_split_indices else "全部")
     )
     logger.info(f"标签列: {args.label_column}")
+    logger.info(f"行业中性标签混合权重: {args.neutral_label_blend_weight:.2f}")
     logger.info(f"任务类型: {args.task}")
     logger.info(f"早停: rounds={args.early_stopping_rounds if args.early_stopping_rounds else '禁用'}, metric={args.early_stopping_metric}")
     logger.info(

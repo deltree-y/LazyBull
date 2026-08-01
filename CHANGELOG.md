@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.0] - 2026-08-01
+
+### Added
+
+- **行业中性与绝对收益混合标签**：`train_ml_model.py` 与 `walk_forward.py` 新增
+  `--neutral-label-blend-weight`，训练期动态生成混合目标，不修改特征分区 schema；权重为 0
+  时完全沿用原行业中性标签，权重为 1 时等价于原始收益标签。
+- **混合标签批量实验**：`batch_walk_forward.ps1` 支持扫描混合权重，汇总与对比表同步记录
+  `neutral_label_blend_weight`，便于独立比较行业内 Alpha 与绝对收益目标的平衡。
+
 ## [0.89.2] - 2026-08-01
 
 ### Fixed

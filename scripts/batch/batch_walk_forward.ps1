@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -74,6 +74,7 @@ $val_ratio_list          = @(0.2)           # 训练数据内部验证集比例�
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
 $label_list              = @("neu_y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
+$neutral_label_blend_weight_list = @(0.25, 0.5, 0.75, 1)  # 0=纯行业中性标签，1=纯原始收益标签
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
@@ -426,6 +427,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $test_window_months_list.Length *
               $val_ratio_list.Length *
               $effective_label_list.Length *
+              $neutral_label_blend_weight_list.Length *
               $task_list.Length *
               $label_transform_list.Length *
               $objective_list.Length *
@@ -474,6 +476,7 @@ foreach ($train_window_years in $train_window_years_list) {
 foreach ($test_window_months in $test_window_months_list) {
 foreach ($val_ratio in $val_ratio_list) {
 foreach ($label in $effective_label_list) {
+foreach ($neutral_label_blend_weight in $neutral_label_blend_weight_list) {
 foreach ($task in $task_list) {
 foreach ($label_transform in $label_transform_list) {
 foreach ($objective in $objective_list) {
@@ -530,6 +533,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --test-window-months $test_window_months" +
                  " --val-ratio $val_ratio" +
                  " --label $label" +
+                 " --neutral-label-blend-weight $neutral_label_blend_weight" +
                  " --task $task" +
                  " --label-transform $label_transform" +
                  " --objective $objective" +
@@ -718,7 +722,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

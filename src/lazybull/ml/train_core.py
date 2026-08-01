@@ -41,6 +41,37 @@ from src.lazybull.ml.eval_utils import (
 )
 
 
+def add_blended_return_label(
+    df: pd.DataFrame,
+    neutral_label: str,
+    blend_weight: float,
+) -> str:
+    """按权重混合行业中性标签与原始收益标签，并返回实际训练列名。"""
+    if not 0.0 <= blend_weight <= 1.0:
+        raise ValueError(f"neutral_label_blend_weight 必须在 [0, 1]，实际为 {blend_weight}")
+    if blend_weight == 0.0:
+        return neutral_label
+    if not neutral_label.startswith("neu_y_ret_"):
+        raise ValueError(
+            "neutral_label_blend_weight > 0 时标签必须为 neu_y_ret_N，"
+            f"实际为 {neutral_label}"
+        )
+
+    raw_label = neutral_label[len("neu_") :]
+    missing_columns = [
+        col for col in (neutral_label, raw_label) if col not in df.columns
+    ]
+    if missing_columns:
+        raise ValueError(f"混合标签缺少源列: {', '.join(missing_columns)}")
+
+    horizon = neutral_label.rsplit("_", 1)[-1]
+    blended_label = f"y_blend_ret_{horizon}"
+    df[blended_label] = (
+        (1.0 - blend_weight) * df[neutral_label] + blend_weight * df[raw_label]
+    )
+    return blended_label
+
+
 
 def _format_feature_importance_compact(
     feat_imp: pd.Series,
