@@ -797,7 +797,11 @@ def _execute_t0_if_rebalance_day(
 
     early_rebalance_triggered = False
     try:
-        is_rebalance_day = runner._check_rebalance_day(trade_date, int(config["rebalance_freq"]))
+        is_rebalance_day, _tranche_idx = runner._check_rebalance_day(
+            trade_date,
+            int(config["rebalance_freq"]),
+            stagger_tranches=int(config.get("stagger_tranches", 1)),
+        )
     except RuntimeError as exc:
         if allow_early_rebalance:
             trigger_label = (
@@ -852,6 +856,8 @@ def _execute_t0_if_rebalance_day(
             max_weight_per_stock=config.get("max_weight_per_stock"),
             exclude_st=bool(config.get("exclude_st", True)),
             min_list_days=int(config.get("min_list_days", 365)),
+            trading_config=trading_config,
+            force_rebalance=early_rebalance_triggered,
         )
 
         t1_date = runner._get_next_trade_date(trade_date)

@@ -461,7 +461,7 @@ def test_rebalance_day_executes_run_t0():
     runner.paper_storage.find_pending_instructions.return_value = None
     runner.paper_storage.load_pending_buys.return_value = []
     runner.paper_storage.load_instructions.return_value = []
-    runner._check_rebalance_day.return_value = True  # 真实调仓日
+    runner._check_rebalance_day.return_value = (True, 0)  # 真实调仓日
     runner._get_next_trade_date.return_value = "20260121"
 
     runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}

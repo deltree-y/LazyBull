@@ -9,6 +9,11 @@
 25%，四批完成后目标仍是 20 只股票。`top_n=30`、`stagger_tranches=4` 时，批次槽位为
 `8/8/7/7`，预算按槽位比例分配并合计为 100%。
 
+**回测引擎和纸面交易共用同一套分批调仓核心逻辑**（`trading/stagger.py`），包括：
+- 排期计算（`compute_tranche_schedule` / `build_tranche_schedule_from_anchor`）
+- 槽位拆分（`get_tranche_target_count`）
+- 预算比例（`get_tranche_capital_fraction`）
+
 ## 功能说明
 
 ### 使用场景
@@ -84,12 +89,45 @@ engine = BacktestEngine(
 3. **流动性好的股票**：分批效果不明显
 4. **流动性差的股票**：分批调仓更有价值
 
+## 纸面交易配置
+
+纸面交易通过 `config.yaml` 的 `stagger_tranches` 字段启用分批调仓：
+
+```yaml
+# data/paper/config.yaml
+top_n: 20
+rebalance_freq: 20
+stagger_tranches: 4  # 分4批调仓，1=不分批
+```
+
+或通过命令行设置：
+
+```powershell
+python scripts/paper_trade.py config --top-n 20 --rebalance-freq 20 --stagger-tranches 4
+```
+
+### 纸面交易与回测的差异
+
+| 维度 | 回测引擎 | 纸面交易 |
+|------|---------|---------|
+| 排期锚定 | 回测区间起点 | `tranche_anchor_date`（批次0调仓日） |
+| 空仓提前调仓 | tranche_idx=0 全量建仓 | tranche_idx=0 全量建仓（一致） |
+| 拖尾提前调仓 | tranche_idx=0 全量建仓 | tranche_idx=0 全量建仓（一致） |
+| 持有期计算 | 按各批实际买入日独立计算 | 按各批实际买入日独立计算（一致） |
+| 资金分配 | 组合总资产 × 槽位比例 | 组合总资产 × 槽位比例（一致） |
+
+### 状态持久化
+
+分批模式下，`rebalance_state.json` 额外维护：
+- `tranche_anchor_date`: 批次0锚定日，用于推算后续各批次排期
+- `stagger_tranches`: 批次数
+
 ## 注意事项
 
 - `rebalance_freq` 是每个批次自身的持有周期，不是相邻批次间隔。
 - 相邻批次间隔由引擎按 `rebalance_freq / stagger_tranches` 自动排期。
 - 免训练扫描必须同时保留 `stagger_tranches=1` 基线，并使用相同模型版本和 split 边界。
-- 2026-08-01 之前生成的分批结果受“仅首批实际买入”问题影响，不应用于策略判断。
+- 2026-08-01 之前生成的分批结果受"仅首批实际买入"问题影响，不应用于策略判断。
    - 避免立即补仓造成的冲击
 
 ## 相关文档

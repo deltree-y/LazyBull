@@ -33,6 +33,11 @@ from ..trading.sizing import (
     compute_min_buy_value_threshold,
     estimate_variance_from_prices,
 )
+from ..trading.stagger import (
+    compute_tranche_schedule,
+    get_tranche_capital_fraction as _shared_tranche_capital_fraction,
+    get_tranche_target_count as _shared_tranche_target_count,
+)
 from ..universe.base import Universe
 
 
@@ -743,21 +748,15 @@ class BacktestEngine:
     def _get_tranche_target_count(
         self, tranche_idx: int, target_count: Optional[int] = None
     ) -> int:
-        """获取当前批次应占用的目标持仓槽位数。"""
+        """获取当前批次应占用的目标持仓槽位数（委托 trading.stagger 共享实现）。"""
         if target_count is None:
             target_count = self._get_target_position_count()
-        if self.stagger_tranches <= 1:
-            return target_count
-
-        base_count, remainder = divmod(target_count, self.stagger_tranches)
-        return base_count + (1 if tranche_idx < remainder else 0)
+        return _shared_tranche_target_count(tranche_idx, target_count, self.stagger_tranches)
 
     def _get_tranche_capital_fraction(self, tranche_idx: int) -> float:
-        """获取当前批次占组合总资产的预算比例。"""
+        """获取当前批次占组合总资产的预算比例（委托 trading.stagger 共享实现）。"""
         target_count = self._get_target_position_count()
-        if target_count <= 0:
-            return 0.0
-        return self._get_tranche_target_count(tranche_idx) / target_count
+        return _shared_tranche_capital_fraction(tranche_idx, target_count, self.stagger_tranches)
 
     def _collect_deferred_log(self, message) -> None:
         """收集单个交易日内暂缓输出的日志。"""
@@ -2728,7 +2727,7 @@ class BacktestEngine:
         return adj_weights
 
     def _get_rebalance_dates(self, trading_dates: List[pd.Timestamp]) -> Dict[pd.Timestamp, int]:
-        """获取调仓日期及对应的 tranche 索引
+        """获取调仓日期及对应的 tranche 索引（委托 trading.stagger 共享实现）
 
         Args:
             trading_dates: 交易日列表
@@ -2736,23 +2735,7 @@ class BacktestEngine:
         Returns:
             字典 {日期: tranche_idx}。stagger_tranches=1 时所有日期的 tranche 均为 0。
         """
-        n = self.rebalance_freq
-        if n <= 0:
-            raise ValueError(f"调仓频率必须为正整数，当前值: {n}")
-
-        if self.stagger_tranches <= 1:
-            # 不分批：保持原有逻辑，所有调仓日 tranche=0
-            return {trading_dates[i]: 0 for i in range(0, len(trading_dates), n)}
-
-        # 分批调仓：按周期比例均匀分布 K 个 tranche。
-        # 例如 20 日分 3 批时偏移为 0/7/13，循环间隔为 7/6/7。
-        k = self.stagger_tranches
-        schedule = {}
-        for t in range(k):
-            start = (2 * t * n + k) // (2 * k)
-            for i in range(start, len(trading_dates), n):
-                schedule[trading_dates[i]] = t
-        return schedule
+        return compute_tranche_schedule(trading_dates, self.rebalance_freq, self.stagger_tranches)
 
     def _process_pending_orders(self, date: pd.Timestamp) -> None:
         """处理延迟订单队列

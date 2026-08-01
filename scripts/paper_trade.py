@@ -143,7 +143,9 @@ def run_main(args):
     logger.info(f"  买入价格类型: {config['buy_price']}")
     logger.info(f"  卖出价格类型: {config['sell_price']}")
     logger.info(f"  持仓数: {config['top_n']}")
-    logger.info(f"  调仓频率: {config['rebalance_freq']} 个交易日")
+    stagger = int(config.get('stagger_tranches', 1))
+    stagger_info = f", 分批{stagger}批" if stagger > 1 else ""
+    logger.info(f"  调仓频率: {config['rebalance_freq']} 个交易日{stagger_info}")
     logger.info(f"  仓位管理: {config.get('position_sizing', 'equal')}")
     logger.info(f"  特征预测周期（horizon）: {config['horizon']} 天")
     logger.info(

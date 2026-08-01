@@ -33,6 +33,11 @@ from ..trading.sell_rules import (
     select_rebalance_sell_candidates,
 )
 from ..trading.sizing import compute_kelly_weights, estimate_variance_from_prices
+from ..trading.stagger import (
+    build_tranche_schedule_from_anchor,
+    get_tranche_capital_fraction as _shared_tranche_capital_fraction,
+    get_tranche_target_count as _shared_tranche_target_count,
+)
 from ..universe.base import BasicUniverse
 from ..portfolio.industry_constraint import load_industry_mapping, apply_industry_constraint
 from .account import PaperAccount
@@ -297,62 +302,73 @@ class PaperTradingRunner:
         return "next"
     
     def _check_rebalance_day(
-        self, 
-        trade_date: str, 
-        rebalance_freq: int
-    ) -> bool:
-        """检查是否为调仓日
-        
+        self,
+        trade_date: str,
+        rebalance_freq: int,
+        stagger_tranches: int = 1,
+    ) -> Tuple[bool, int]:
+        """检查是否为调仓日，并返回批次索引
+
         Args:
             trade_date: 交易日期 YYYYMMDD
             rebalance_freq: 调仓频率（交易日数）
-            
+            stagger_tranches: 分批调仓批次数（1=不分批）
+
         Returns:
-            True 如果是调仓日
-            
+            (是否为调仓日, tranche_idx)。stagger_tranches=1 时 tranche_idx 恒为 0。
+
         Raises:
             RuntimeError: 如果不是调仓日
         """
         # 加载调仓状态
         rebalance_state = self.paper_storage.load_rebalance_state()
-        
-        # 首次运行，允许执行
+
+        # 首次运行，允许执行（tranche_idx=0 全量建仓）
         if rebalance_state is None:
             logger.info("首次运行T0，允许执行")
-            return True
-        
+            return True, 0
+
         last_rebalance_date = rebalance_state.get('last_rebalance_date')
         if not last_rebalance_date:
             logger.info("无上次调仓记录，允许执行")
-            return True
-        
-        # 计算距离上次调仓的交易日数
+            return True, 0
+
+        # 分批调仓模式：基于锚定日推算排期表
+        if stagger_tranches > 1:
+            return self._check_staggered_rebalance_day(
+                trade_date, rebalance_freq, stagger_tranches, rebalance_state
+            )
+
+        # 不分批模式：保持原有逻辑
+        return self._check_single_rebalance_day(trade_date, rebalance_freq, last_rebalance_date)
+
+    def _check_single_rebalance_day(
+        self, trade_date: str, rebalance_freq: int, last_rebalance_date: str
+    ) -> Tuple[bool, int]:
+        """不分批模式的调仓日检查（原有逻辑）。"""
         try:
             trade_cal = self.loader.load_clean_trade_cal()
             if trade_cal is None:
                 logger.error("无法加载交易日历，跳过调仓日检查")
-                return True
-            
-            # 筛选开市日
+                return True, 0
+
             trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
-            
-            # 找到两个日期的索引
+
             try:
                 last_idx = trade_dates.index(last_rebalance_date)
                 current_idx = trade_dates.index(trade_date)
             except ValueError as e:
                 logger.error(f"日期不在交易日历中: {e}")
-                return True
-            
-            # 计算间隔
+                return True, 0
+
             days_since_last = current_idx - last_idx
-            
+
             if days_since_last >= rebalance_freq:
                 logger.info(
                     f"距离上次调仓 {last_rebalance_date} 已过 [{days_since_last}] 个交易日，"
                     f"满足调仓频率 {rebalance_freq}，允许执行"
                 )
-                return True
+                return True, 0
             else:
                 raise RuntimeError(
                     f"当前不是调仓日！距离上次调仓 {last_rebalance_date} "
@@ -363,7 +379,59 @@ class PaperTradingRunner:
             raise
         except Exception as e:
             logger.error(f"检查调仓日失败: {e}，跳过检查")
-            return True
+            return True, 0
+
+    def _check_staggered_rebalance_day(
+        self,
+        trade_date: str,
+        rebalance_freq: int,
+        stagger_tranches: int,
+        rebalance_state: dict,
+    ) -> Tuple[bool, int]:
+        """分批调仓模式的调仓日检查。
+
+        基于 tranche_anchor_date（批次0锚定日）推算各批次排期，
+        当前日在排期表中则允许执行，并返回对应的 tranche_idx。
+        """
+        try:
+            trade_dates = self._get_open_trade_dates()
+            if not trade_dates:
+                logger.error("无法加载交易日历，跳过分批调仓日检查")
+                return True, 0
+
+            # 使用 tranche_anchor_date 作为锚定日，兼容旧版 last_rebalance_date
+            anchor_date = rebalance_state.get('tranche_anchor_date') or rebalance_state.get(
+                'last_rebalance_date'
+            )
+            if not anchor_date:
+                logger.info("无分批锚定日记录，允许执行（tranche_idx=0）")
+                return True, 0
+
+            # 基于锚定日推算排期表
+            schedule = build_tranche_schedule_from_anchor(
+                anchor_date, trade_dates, rebalance_freq, stagger_tranches
+            )
+
+            if trade_date in schedule:
+                tranche_idx = schedule[trade_date]
+                logger.info(
+                    f"分批调仓日命中: {trade_date} → 批次 {tranche_idx + 1}/{stagger_tranches}"
+                    f"（锚定日 {anchor_date}）"
+                )
+                return True, tranche_idx
+
+            # 不在排期表中，计算最近的调仓日
+            future_dates = sorted(d for d in schedule if d >= trade_date)
+            next_rebalance = future_dates[0] if future_dates else "无"
+            raise RuntimeError(
+                f"当前不是调仓日！分批模式（{stagger_tranches} 批，锚定日 {anchor_date}），"
+                f"下一调仓日: {next_rebalance}"
+            )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.error(f"分批调仓日检查失败: {e}，跳过检查")
+            return True, 0
     
     def _generate_instructions(
         self,
@@ -374,6 +442,9 @@ class PaperTradingRunner:
         source_date: str,
         protected_stocks: Optional[set] = None,
         desired_position_count: Optional[int] = None,
+        tranche_idx: int = 0,
+        overall_top_n: Optional[int] = None,
+        stagger_tranches: int = 1,
     ) -> List[TradeInstruction]:
         """从目标权重生成明确的交易指令
 
@@ -387,6 +458,9 @@ class PaperTradingRunner:
             current_prices: 当前价格字典
             source_date: 源日期（T0日期）
             protected_stocks: 盈利延续保护的股票集合，跳过卖出指令生成
+            tranche_idx: 分批调仓批次索引（0-based）
+            overall_top_n: 组合最终总持仓数（分批时使用）
+            stagger_tranches: 分批调仓批次数（1=不分批）
 
         Returns:
             交易指令列表
@@ -408,6 +482,17 @@ class PaperTradingRunner:
 
         #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
         total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
+
+        # 分批调仓：按本批槽位占总 top_n 的比例分配组合价值（与回测对齐）
+        if stagger_tranches > 1 and overall_top_n and overall_top_n > 0:
+            capital_fraction = _shared_tranche_capital_fraction(
+                tranche_idx, overall_top_n, stagger_tranches
+            )
+            total_capital *= capital_fraction
+            logger.info(
+                f"  分批资金分配: 批次 {tranche_idx + 1}/{stagger_tranches}, "
+                f"预算比例={capital_fraction:.2%}, 可用资金={total_capital:,.0f}"
+            )
 
         # 仅处理目标股票买入/加仓（按目标顺序）
         desired_position_count = int(desired_position_count or len(ordered_target_codes))
@@ -648,26 +733,58 @@ class PaperTradingRunner:
                 f"不允许重复执行（幂等性保障）"
             )
         
-        # 3. 检查调仓日
+        # 3. 检查调仓日（分批模式返回 tranche_idx）
+        tranche_idx = 0
         if force_rebalance:
             logger.warning(f"强制执行 T0，跳过调仓日校验: {corrected_date}")
         else:
-            self._check_rebalance_day(corrected_date, effective_config.rebalance_freq)
-        
+            _, tranche_idx = self._check_rebalance_day(
+                corrected_date,
+                effective_config.rebalance_freq,
+                stagger_tranches=effective_config.stagger_tranches,
+            )
+
+        # 分批调仓：空仓/拖尾提前调仓时触发 tranche 0 全量建仓（与回测对齐）
+        stagger_tranches = effective_config.stagger_tranches
+        if stagger_tranches > 1 and force_rebalance:
+            tranche_idx = 0
+
+        tranche_tag = (
+            f"[批次 {tranche_idx + 1}/{stagger_tranches}] "
+            if stagger_tranches > 1
+            else ""
+        )
+
         logger.info("=" * 80)
         logger.info(f"开始T0工作流 - {corrected_date}")
         logger.info("=" * 80)
-        logger.info(f"调仓频率: {effective_config.rebalance_freq} 个交易日")
+        stagger_info = f", 分批调仓={stagger_tranches}批" if stagger_tranches > 1 else ""
+        logger.info(f"调仓频率: {effective_config.rebalance_freq} 个交易日{stagger_info}")
+
+        # 分批调仓：拆分 top_n 为本批槽位数
+        overall_top_n = effective_config.top_n
+        tranche_target_n = _shared_tranche_target_count(
+            tranche_idx, overall_top_n, stagger_tranches
+        )
+        if stagger_tranches > 1:
+            logger.info(
+                f"{tranche_tag}本批槽位: {tranche_target_n}/{overall_top_n}"
+            )
+        if tranche_target_n <= 0:
+            logger.warning(f"{tranche_tag}本批槽位为 0，跳过信号生成")
+            return
         
         # 4. 生成信号（ensure_features_for_date 内部自动下载缺失的 raw/clean 数据）
+        # 分批调仓时 signal.top_n 保持为总 top_n（用于候选排序范围），
+        # 但实际目标生成数量由 tranche_target_n 控制。
         logger.info("步骤2: 生成信号")
         self.signal = self.signal or MLSignal(
-            top_n=effective_config.top_n,
+            top_n=overall_top_n,
             model_version=effective_config.model_version,
             verbose=False,
         )
         if hasattr(self.signal, "top_n"):
-            self.signal.top_n = effective_config.top_n
+            self.signal.top_n = overall_top_n
         if effective_config.model_version_b is not None and hasattr(self.signal, "update_versions"):
             self.signal.update_versions(
                 effective_config.model_version,
@@ -678,7 +795,7 @@ class PaperTradingRunner:
         targets = self._generate_signals(
             corrected_date,
             universe_type=effective_config.universe,
-            top_n=effective_config.top_n,
+            top_n=tranche_target_n,
             model_version=effective_config.model_version,
             buy_price_type=effective_config.buy_price,
             max_per_industry=effective_config.max_per_industry,
@@ -712,7 +829,7 @@ class PaperTradingRunner:
             if price_val > 0:
                 current_prices[row['ts_code']] = price_val
         
-        # 生成指令（使用传入的 sell_price_type 参数）
+        # 生成指令（使用传入的 sell_price_type 参数，分批模式传入 tranche 参数）
         buy_instructions = self._generate_instructions(
             targets=targets,
             buy_price_type=buy_price_type,
@@ -720,6 +837,9 @@ class PaperTradingRunner:
             current_prices=current_prices,
             source_date=corrected_date,
             protected_stocks=protected_stocks,
+            tranche_idx=tranche_idx,
+            overall_top_n=overall_top_n,
+            stagger_tranches=stagger_tranches,
         )
 
         # 调仓日同步生成卖出指令：将不在新目标且非保护持仓排队到 T+1 卖出，
@@ -773,11 +893,19 @@ class PaperTradingRunner:
             logger.info("保存本轮 ranked_candidates 供 T1 买入顺延使用")
             self.paper_storage.save_ranked_candidates(self.signal._last_ranked_candidates, corrected_date)
         
-        # 8. 更新调仓状态
+        # 8. 更新调仓状态（分批模式：批次0时更新锚定日）
         rebalance_state = {
             'last_rebalance_date': corrected_date,
-            'rebalance_freq': effective_config.rebalance_freq
+            'rebalance_freq': effective_config.rebalance_freq,
+            'stagger_tranches': stagger_tranches,
         }
+        if stagger_tranches > 1 and tranche_idx == 0:
+            rebalance_state['tranche_anchor_date'] = corrected_date
+        elif stagger_tranches > 1:
+            # 非批次0：保留已有锚定日
+            prev_state = self.paper_storage.load_rebalance_state() or {}
+            if prev_state.get('tranche_anchor_date'):
+                rebalance_state['tranche_anchor_date'] = prev_state['tranche_anchor_date']
         self.paper_storage.save_rebalance_state(rebalance_state)
 
         state = self._ensure_strategy_state(effective_config)
