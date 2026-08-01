@@ -30,25 +30,25 @@ $wf_period_configs = @(
         SplitCount = 14
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
-        StartModelVersion = 19206#18968#(0.035)#19206#(0.03)#19220#(0.04)
+        StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
         SelectedSplits = @()
     }
-    #[PSCustomObject]@{
-    #    Label = "0109"
-    #    SplitCount = 14
-    #    FinalDate = "20260109" # 20260209
-    #    ContinueDays = 1
-    #    StartModelVersion = 19234#19057#(0.035)#19234#(0.03)#19249#(0.04)
-    #    SelectedSplits = @()
-    #}
-    #[PSCustomObject]@{
-    #    Label = "0116"
-    #    SplitCount = 14
-    #    FinalDate = "20260116" # 20260324
-    #    ContinueDays = 1
-    #    StartModelVersion = 19264#19147#(0.035)#19264#(0.03)#19279#(0.04)
-    #}
+    [PSCustomObject]@{
+        Label = "0109"
+        SplitCount = 14
+        FinalDate = "20260109" # 20260209
+        ContinueDays = 1
+        StartModelVersion = 22641
+        SelectedSplits = @()
+    }
+    [PSCustomObject]@{
+        Label = "0116"
+        SplitCount = 14
+        FinalDate = "20260116" # 20260324
+        ContinueDays = 1
+        StartModelVersion = 22656
+    }
     #[PSCustomObject]@{
     #    Label = "0123"
     #    SplitCount = 14
@@ -93,7 +93,7 @@ $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。L
 # ── 目标函数 ─────────────────────────────────────────────────
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 # ── 早停配置 ───────────────────────────────────────────────────
-$early_stopping_rounds_list = @(500)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
+$early_stopping_rounds_list = @(50)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
 $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
 
 
@@ -180,7 +180,7 @@ $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_d
 $event_freshness_half_life_days = 120                           # 仅 decay 策略生效；no_decay/drop_all 的汇总中记为空
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
-$ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
+$ensemble_offsets          = 1      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────

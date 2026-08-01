@@ -1355,6 +1355,8 @@ def prepare_training_data(
     # 数据统计
     data_stats = {
         "samples_after_filter": samples_after_filter,
+        "train_start_date": split_stats["train_start_date"],
+        "train_end_date": split_stats["train_end_date"],
         "val_start_date": str(val_start_date),
         "val_end_date": str(val_end_date),
         "val_raw_start_date": split_stats["val_start_date"],

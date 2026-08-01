@@ -406,7 +406,7 @@ def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypa
         ensemble_seed_keep_min_models=2,
     )
 
-    sub_models, base_result, _meta = walk_forward_module._build_ensemble_sub_models(
+    sub_models, base_result, meta = walk_forward_module._build_ensemble_sub_models(
         windows=[("20120101", "20181231")],
         storage=None,
         loader=None,
@@ -419,6 +419,31 @@ def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypa
 
     assert sub_models == ["m205", "m204"]
     assert base_result["train_params"]["random_state"] == 205
+    assert meta["_ensemble_validation_result"]["df_val_split_original"].empty
+
+
+def test_ensemble_validation_uses_panel_unseen_by_all_retained_models():
+    def make_result(seed, train_end, val_es_end, val_start):
+        return {
+            "train_params": {"random_state": seed},
+            "data_stats": {
+                "train_end_date": train_end,
+                "val_es_end_date": val_es_end,
+            },
+            "df_val_split_original": pd.DataFrame(
+                [{"trade_date": val_start, "ts_code": "000001.SZ", "f1": 1.0}]
+            ),
+        }
+
+    early_result = make_result(42, "20230630", "20230714", "20230717")
+    latest_result = make_result(61, "20230731", "20230811", "20230814")
+
+    selected = walk_forward_module._select_ensemble_validation_result(
+        [early_result, latest_result]
+    )
+
+    assert selected["train_params"]["random_state"] == 61
+    assert selected["df_val_split_original"]["trade_date"].min() > "20230811"
 
 
 def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):

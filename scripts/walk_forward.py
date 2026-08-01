@@ -658,6 +658,47 @@ def _resolve_ensemble_seeds(args) -> List[int]:
     return seeds if seeds else [args.random_state]
 
 
+def _select_ensemble_validation_result(train_results: List[Dict]) -> Optional[Dict]:
+    """选择所有保留子模型共同未见的 calibration 面板。"""
+    dated_results = []
+    for train_result in train_results:
+        data_stats = train_result.get("data_stats", {})
+        train_end = str(data_stats.get("train_end_date", "")).replace("-", "")[:8]
+        val_es_end = str(data_stats.get("val_es_end_date", "")).replace("-", "")[:8]
+        validation_frame = train_result.get("df_val_split_original")
+        if not train_end.isdigit() or validation_frame is None or len(validation_frame) == 0:
+            continue
+        seen_end = max(train_end, val_es_end) if val_es_end.isdigit() else train_end
+        validation_dates = validation_frame["trade_date"].astype(str).str.replace(
+            "-", "", regex=False
+        )
+        val_start = validation_dates.min()[:8]
+        if val_start.isdigit():
+            dated_results.append((seen_end, val_start, train_result))
+
+    if not dated_results:
+        return train_results[0] if train_results else None
+
+    max_seen_end = max(item[0] for item in dated_results)
+    safe_results = [item for item in dated_results if item[1] > max_seen_end]
+    if safe_results:
+        _, val_start, selected_result = min(safe_results, key=lambda item: item[1])
+        logger.info(
+            f"集成验证统一口径: 所有子模型训练/早停截止<={max_seen_end}, "
+            f"共同未见 calibration 起始={val_start}"
+        )
+        return selected_result
+
+    fallback_result = copy.copy(max(dated_results, key=lambda item: item[0])[2])
+    fallback_frame = fallback_result["df_val_split_original"]
+    fallback_result["df_val_split_original"] = fallback_frame.iloc[:0].copy()
+    logger.warning(
+        f"集成验证已禁用: 无法找到晚于所有子模型训练/早停截止日 {max_seen_end} "
+        "的 calibration 面板"
+    )
+    return fallback_result
+
+
 def _build_ensemble_sub_models(
     windows: List[tuple],
     storage: Storage,
@@ -991,6 +1032,7 @@ def _build_ensemble_sub_models(
             best_iter_val = tr["train_params"].get("best_iteration")
             sub_model_best_iters.append((seed_val, best_iter_val))
         adaptive_meta["sub_model_best_iterations"] = sub_model_best_iters
+        retained_train_results = [item["train_result"] for item in kept_records]
     else:
         # 单种子场景也收集 best_iteration
         sub_model_best_iters: List[Tuple] = []
@@ -1000,6 +1042,15 @@ def _build_ensemble_sub_models(
             best_iter_val = tr["train_params"].get("best_iteration")
             sub_model_best_iters.append((seed_val, best_iter_val))
         adaptive_meta["sub_model_best_iterations"] = sub_model_best_iters
+        retained_train_results = [record["train_result"] for record in sub_model_records]
+    if len(retained_train_results) < len(sub_model_records):
+        validation_result = copy.copy(base_result)
+        validation_frame = validation_result["df_val_split_original"]
+        validation_result["df_val_split_original"] = validation_frame.iloc[:0].copy()
+        logger.warning("集成验证已禁用: calibration 已参与子模型筛选，不能复用为独立验证集")
+    else:
+        validation_result = _select_ensemble_validation_result(retained_train_results)
+    adaptive_meta["_ensemble_validation_result"] = validation_result
     return sub_models, base_result, adaptive_meta
 
 
@@ -1408,11 +1459,13 @@ def _build_split_training_candidate(
         )
 
         model = EnsembleModel(sub_models)
+        validation_result = adaptive_meta.pop("_ensemble_validation_result", None) or base_result
         feature_columns = base_result["feature_columns"]
         train_params = base_result["train_params"]
         train_metrics = base_result["train_metrics"]
         val_metrics = base_result["val_metrics"]
-        df_val_split_original = base_result["df_val_split_original"]
+        df_val_split_original = validation_result["df_val_split_original"]
+        validation_feature_columns = validation_result["feature_columns"]
         data_stats = base_result["data_stats"]
         train_days_count = base_result["train_days_count"]
         total_train_samples = base_result["total_train_samples"]
@@ -1433,6 +1486,7 @@ def _build_split_training_candidate(
         train_metrics = tr["train_metrics"]
         val_metrics = tr["val_metrics"]
         df_val_split_original = tr["df_val_split_original"]
+        validation_feature_columns = feature_columns
         data_stats = tr["data_stats"]
         train_days_count = tr["train_days_count"]
         total_train_samples = tr["total_train_samples"]
@@ -1453,7 +1507,7 @@ def _build_split_training_candidate(
         val_daily_metrics = evaluate_validation_daily(
             model=model,
             df_val=df_val_split_original,
-            feature_columns=feature_columns,
+            feature_columns=validation_feature_columns,
             original_return_col=args.label_column,
             task=args.task,
             topk_values=topk_values,
@@ -2068,7 +2122,7 @@ def execute_deploy_training(
             f"（偏移±{ensemble_offsets}个月, seeds={ensemble_seeds}）"
         )
 
-        sub_models, base_result, _ = _build_ensemble_sub_models(
+        sub_models, base_result, ensemble_meta = _build_ensemble_sub_models(
             windows,
             storage,
             loader,
@@ -2079,11 +2133,13 @@ def execute_deploy_training(
         )
 
         model = EnsembleModel(sub_models)
+        validation_result = ensemble_meta.pop("_ensemble_validation_result", None) or base_result
         feature_columns = base_result["feature_columns"]
         train_params = base_result["train_params"]
         train_metrics = base_result["train_metrics"]
         val_metrics = base_result["val_metrics"]
-        df_val_split_original = base_result["df_val_split_original"]
+        df_val_split_original = validation_result["df_val_split_original"]
+        validation_feature_columns = validation_result["feature_columns"]
         data_stats = base_result["data_stats"]
         train_days_count = base_result["train_days_count"]
         total_train_samples = base_result["total_train_samples"]
@@ -2103,6 +2159,7 @@ def execute_deploy_training(
         train_metrics = tr["train_metrics"]
         val_metrics = tr["val_metrics"]
         df_val_split_original = tr["df_val_split_original"]
+        validation_feature_columns = feature_columns
         data_stats = tr["data_stats"]
         train_days_count = tr["train_days_count"]
         total_train_samples = tr["total_train_samples"]
@@ -2116,7 +2173,7 @@ def execute_deploy_training(
         val_daily_metrics = evaluate_validation_daily(
             model=model,
             df_val=df_val_split_original,
-            feature_columns=feature_columns,
+            feature_columns=validation_feature_columns,
             original_return_col=original_return_col,
             task=args.task,
             topk_values=topk_values,
