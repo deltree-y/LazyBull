@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -192,14 +192,14 @@ $deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(1, 4)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 
-$bt_top_n_list           = @(20)            # 回测持仓 Top N
+$bt_top_n_list           = @(20, 30)            # 回测持仓 Top N
 $bt_rebalance_freq_list  = @($null)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close

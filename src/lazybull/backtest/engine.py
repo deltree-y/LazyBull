@@ -737,8 +737,27 @@ class BacktestEngine:
         """获取组合当前期望的目标持仓数。"""
         target_n = getattr(self.signal, "top_n", None)
         if isinstance(target_n, int) and target_n > 0:
-            return target_n * self.stagger_tranches
+            return target_n
         return len(self.positions)
+
+    def _get_tranche_target_count(
+        self, tranche_idx: int, target_count: Optional[int] = None
+    ) -> int:
+        """获取当前批次应占用的目标持仓槽位数。"""
+        if target_count is None:
+            target_count = self._get_target_position_count()
+        if self.stagger_tranches <= 1:
+            return target_count
+
+        base_count, remainder = divmod(target_count, self.stagger_tranches)
+        return base_count + (1 if tranche_idx < remainder else 0)
+
+    def _get_tranche_capital_fraction(self, tranche_idx: int) -> float:
+        """获取当前批次占组合总资产的预算比例。"""
+        target_count = self._get_target_position_count()
+        if target_count <= 0:
+            return 0.0
+        return self._get_tranche_target_count(tranche_idx) / target_count
 
     def _collect_deferred_log(self, message) -> None:
         """收集单个交易日内暂缓输出的日志。"""
@@ -1606,11 +1625,16 @@ class BacktestEngine:
         candidates_checked = 0
         filtered_reasons = {"停牌": 0, "涨停": 0, "跌停": 0}
 
-        # 获取目标数量（从信号生成器获取）
-        if hasattr(self.signal, "top_n"):
-            target_n = self.signal.top_n
-        else:
-            target_n = len(ranked_candidates)
+        # 分批调仓拆分的是总 TopN，而不是每批各选 TopN。
+        configured_target_n = getattr(self.signal, "top_n", None)
+        overall_target_n = (
+            configured_target_n
+            if isinstance(configured_target_n, int) and configured_target_n > 0
+            else len(ranked_candidates)
+        )
+        target_n = self._get_tranche_target_count(tranche_idx, overall_target_n)
+        if target_n <= 0:
+            return
 
         decision_trace = self._build_signal_decision_trace(
             date=date,
@@ -1645,7 +1669,7 @@ class BacktestEngine:
             "priority_candidates": list(priority_candidates),
             "slot_weights": slot_weights,
             "target_n": target_n,
-            "desired_position_count": target_n,
+            "desired_position_count": overall_target_n,
             "tranche_idx": tranche_idx,
             "decision_trace": decision_trace,
         }
@@ -1775,9 +1799,9 @@ class BacktestEngine:
         portfolio_value = self._calculate_portfolio_value(date)
         current_value = portfolio_value
 
-        # 分批调仓时，每个 tranche 只使用 1/K 的组合价值
+        # 分批调仓按本批槽位占总 TopN 的比例分配组合价值。
         if self.stagger_tranches > 1:
-            current_value = current_value / self.stagger_tranches
+            current_value *= self._get_tranche_capital_fraction(tranche_idx)
 
         planned_buys: List[Dict] = []
         successful_buys: List[Dict] = []
@@ -2096,9 +2120,9 @@ class BacktestEngine:
             # 尝试按槽位补齐
             bought_stocks = []
             current_value = self._calculate_portfolio_value(date)
-            # 分批调仓时，补齐预算也要按 tranche 比例分配，与正常买入路径一致
+            # 分批调仓时，补齐预算也按本批槽位比例分配，与正常买入路径一致。
             if self.stagger_tranches > 1:
-                current_value = current_value / self.stagger_tranches
+                current_value *= self._get_tranche_capital_fraction(completion_tranche_idx)
             remaining_unfilled_slots = []
             bought_stock_set = set()  # 跟踪已买入的股票，避免重复买入
             untradeable_stocks = set()  # 当天不可交易的股票，跳过后续槽位的重复尝试

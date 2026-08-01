@@ -5,6 +5,7 @@ import src.lazybull.backtest.engine as engine_module
 
 from src.lazybull.backtest import BacktestEngine
 from src.lazybull.backtest.engine_ml import BacktestEngineML
+from src.lazybull.common.cost import CostModel
 from src.lazybull.signals.base import Signal
 from src.lazybull.universe.base import Universe
 
@@ -178,8 +179,8 @@ def test_daily_signal_log_summarizes_new_buy_and_sell_signals():
     )
 
 
-def test_target_position_count_scales_with_stagger_tranches():
-    """分批调仓时目标持仓数应按批次数放大。"""
+def test_target_position_count_is_split_across_stagger_tranches():
+    """分批调仓应拆分总目标持仓数，而不是按批次数放大。"""
     engine = BacktestEngine(
         universe=MockUniverse(),
         signal=MockSignal(top_n=5),
@@ -189,7 +190,105 @@ def test_target_position_count_scales_with_stagger_tranches():
         verbose=False,
     )
 
-    assert engine._get_target_position_count() == 15
+    assert engine._get_target_position_count() == 5
+    assert [engine._get_tranche_target_count(index) for index in range(3)] == [2, 2, 1]
+    assert [engine._get_tranche_capital_fraction(index) for index in range(3)] == [
+        0.4,
+        0.4,
+        0.2,
+    ]
+
+
+def test_stagger_signal_plan_keeps_total_target_and_splits_slots(monkeypatch):
+    """各批信号只生成本批槽位，同时保留总 TopN 作为组合目标。"""
+    trading_dates = [pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03")]
+    price_data = pd.DataFrame(
+        {
+            "trade_date": ["20250102", "20250103"],
+            "ts_code": ["000001.SZ", "000001.SZ"],
+            "close": [10.0, 10.0],
+        }
+    )
+
+    for tranche_idx, expected_count in enumerate([2, 2, 1]):
+        engine = BacktestEngine(
+            universe=MockUniverse(),
+            signal=MockSignal(top_n=5),
+            initial_capital=100000.0,
+            rebalance_freq=20,
+            stagger_tranches=3,
+            verbose=False,
+        )
+        monkeypatch.setattr(
+            engine.signal,
+            "generate_ranked",
+            lambda *_args: [(f"00000{index}.SZ", 10.0 - index) for index in range(1, 10)],
+        )
+
+        engine._generate_signal(
+            date=trading_dates[0],
+            trading_dates=trading_dates,
+            price_data=price_data,
+            date_to_idx={date: index for index, date in enumerate(trading_dates)},
+            tranche_idx=tranche_idx,
+        )
+
+        signal_plan = engine.pending_signals[trading_dates[0]]
+        assert signal_plan["target_n"] == expected_count
+        assert signal_plan["desired_position_count"] == 5
+        assert len(signal_plan["slot_weights"]) == expected_count
+
+
+def test_stagger_tranches_build_full_position_across_batches(monkeypatch):
+    """后续批次应继续占用剩余槽位，完成后达到总 TopN 满仓。"""
+    trading_dates = list(pd.date_range("2025-01-02", periods=4, freq="B"))
+    stocks = [f"00000{index}.SZ" for index in range(1, 9)]
+    price_data = pd.DataFrame(
+        [
+            {
+                "trade_date": date.strftime("%Y%m%d"),
+                "ts_code": stock,
+                "close": 10.0,
+            }
+            for date in trading_dates
+            for stock in stocks
+        ]
+    )
+    signal = MockSignal(top_n=4)
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=signal,
+        initial_capital=100000.0,
+        cost_model=CostModel(
+            commission_rate=0.0,
+            min_commission=0.0,
+            stamp_tax=0.0,
+            slippage=0.0,
+        ),
+        rebalance_freq=4,
+        stagger_tranches=2,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        enable_early_rebalance_on_empty=False,
+        verbose=False,
+    )
+    monkeypatch.setattr(engine.universe, "get_stocks", lambda *_args, **_kwargs: stocks)
+    monkeypatch.setattr(
+        signal,
+        "generate_ranked",
+        lambda *_args: [(stock, 10.0 - index) for index, stock in enumerate(stocks)],
+    )
+
+    engine.run(
+        start_date=trading_dates[0],
+        end_date=trading_dates[-1],
+        trading_dates=trading_dates,
+        price_data=price_data,
+    )
+
+    assert len(engine.positions) == 4
+    assert len(engine.get_trades()) == 4
+    assert engine.current_capital == 0.0
 
 
 def test_cycle_separator_logs_only_on_first_day(monkeypatch):
