@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.1] - 2026-08-02
+
+### Removed
+
+- **移除 best_iteration 自适应候选重训能力**：`scripts/walk_forward.py` 删除
+  `--adaptive-best-iter-retrain` 与 `--adaptive-low-iter-max-retries` 参数，以及对应候选重训、
+  替换判定与元数据写入逻辑。
+- **移除批量脚本透传开关**：`scripts/batch/batch_walk_forward.ps1` 删除
+  `$adaptive_best_iter_retrain`、`$adaptive_low_iter_max_retries` 配置和命令行透传。
+- **移除对比汇总中的相关参数列**：`scripts/compare_walk_forward.py` 删除
+  `adaptive_best_iter_retrain` 与 `adaptive_low_iter_max_retries` 参数映射和候选列定义。
+- **移除对应测试覆盖**：`tests/test_training_feature_flag_forwarding.py` 删除
+  自适应重训相关单元测试，并同步更新多种子集成测试调用签名。
+
 ## [0.90.0] - 2026-08-01
 
 ### Added

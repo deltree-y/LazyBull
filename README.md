@@ -28,7 +28,12 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.90.0)
+### 当前版本 (v0.90.1)
+
+- **移除 best_iteration 自适应候选重训**：
+  - `walk_forward.py` 不再支持 `--adaptive-best-iter-retrain` 与 `--adaptive-low-iter-max-retries`；
+  - `batch_walk_forward.ps1` 已删除对应开关与参数透传；
+  - 对比汇总不再输出相关实验字段，训练与汇总口径更简洁稳定。
 
 - **行业中性与绝对收益混合标签**：
   - 通过 `--neutral-label-blend-weight` 在训练期动态混合 `neu_y_ret_N` 与 `y_ret_N`，无需重建特征；
@@ -229,7 +234,6 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 **wf_comparison_batches 列顺序与参数可读性优化** (v0.77.32):
 - `scripts/compare_walk_forward.py` 将 `最大深度`、`学习率`、`rank权重TopK`、`rank权重值` 前置到实验对比表前部，便于扫参时快速横向比较。
 - `选股综合得分` 后紧跟其 3 个构成指标：`RankIC均值`、`ICIR`、`Top30超额均值`。
-- 新增自适应候选重训与多种子 bagging 相关列展示（含低迭代重试上限、多种子保留比例/最少保留模型数）。
 
 **模型持久化改用 XGBoost 原生格式，消除跨版本 pickle 告警** (v0.77.28):
 - `register_model()` 优先使用 `model.save_model()` 保存为 `.json` 原生格式，避免 XGBoost 版本升级后 pickle 反序列化产生 `UserWarning`。
@@ -247,11 +251,6 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - `src/lazybull/ml/train_core.py` 中 `build_rank_sample_weights()` 的 `linear_decay` 模式调整为：TopK 末位权重从 1 提升到 2。
 - BottomK 同步采用与 TopK 一致的线性衰减权重（最差样本= `rank_weight`，BottomK 末位=2）。
 - `flat` 模式保持 Top/Bottom K 同权，便于与线性模式做 A/B 对照。
-
-**walk-forward 自适应候选替换改为加权打分 + help 文案对齐** (v0.77.24):
-- `scripts/walk_forward.py` 的自适应候选替换规则从“IR 与 Top30 双提升”改为加权打分：Top30 逐日均值中位数提升占 70%，RankIC IR 提升占 30%，加权得分大于 0 时替换基础模型。
-- `--adaptive-best-iter-retrain` 的 help 文案已与真实实现对齐：`low_iter<=50`、`hit_cap>=90%*n_estimators`、`hit_cap` 候选参数为 `lr*2 + n_estimators*2`。
-- `scripts/batch/batch_walk_forward.ps1` 的配置注释同步修正，避免批量实验时出现“看注释和实际行为不一致”。
 
 **移除验证集逐日评估明细日志** (v0.77.23):
 - `src/lazybull/ml/train_core.py` 的 `evaluate_validation_daily()` 不再打印“验证集逐日评估”标题、评估天数、逐日 RankIC 明细及 TopK 跨日均值/标准差逐行日志。
@@ -295,24 +294,6 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - 当 `30%` 对应数量小于 3 时，自动保底保留 3 个子模型
 - 排序依据为逐日 `RankIC IR` 优先、逐日 `RankIC` 均值次之，部署训练与 walk-forward 训练保持一致
 
-**low_iter 重试新增逐轮排序指标对比日志** (v0.77.10):
-- 在 `scripts/walk_forward.py` 的 low_iter 重试阶段，每轮都会打印 `daily_rankic_ir` 与 `daily_rankic_mean` 的对比信息
-- 日志展示“当前候选 vs 当前最优候选”以及 `UPDATE_BEST`/`KEEP_BEST` 判定，便于排查重试过程中的优选路径
-
-**low_iter 自适应重试支持可配次数与排序择优** (v0.77.9):
-- `scripts/batch/batch_walk_forward.ps1` 新增 `$adaptive_low_iter_max_retries`，可直接在批处理脚本中配置 low_iter 随机种子重试上限
-- `scripts/walk_forward.py` 新增 `--adaptive-low-iter-max-retries`，并将 low_iter 策略改为“先按上限完成重试，再按逐日 RankIC IR（主）+逐日 RankIC（次）从重试集合中选最优候选”
-- 不再以“迭代次数是否更高”作为 low_iter 的候选优先依据
-
-**修复 live adaptive 低迭代重试 seed 未切换** (v0.77.8):
-- 修复 `scripts/walk_forward.py` 中 ensemble 子模型 live adaptive 的 `low_iter` 路径：候选重训现在会按 `base_seed + retry_index` 递增 seed 执行（最多 10 次）
-- 新增重试审计字段（重试次数、最后重试 seed、候选 best_iteration），便于从日志和 metadata 复盘是否正确换种子
-
-**walk-forward 低迭代自适应重训改为随机种子重试** (v0.77.7):
-- `scripts/walk_forward.py` 中 `--adaptive-best-iter-retrain` 的 `best_iter<=100` 路径，不再调整学习率，而是保持当前学习率和树数，通过修改 `random_state` 重训候选模型
-- 低迭代重试默认最多 10 次，只有当候选模型的验证集逐日 `RankIC IR` 与 `RankIC` 满足替换条件时才会接管基础模型
-- `best_iter>=95%*n_estimators` 的撞上限路径继续沿用原有扩树处理方式，不改动既有行为
-
 **LambdaRank + rank_ic 并发参数兼容修复** (v0.77.6):
 - 修复 `objective=lambdarank` 且 `early_stopping_metric=rank_ic` 时，XGBoost sklearn 包装器可调用评估指标路径触发 `max_workers must be greater than 0` 的问题
 - `src/lazybull/ml/train_core.py` 新增 `n_jobs` 规范化，确保传入线程池参数始终为正整数
@@ -352,13 +333,6 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - `scripts/walk_forward.py` 新增 `--selected-split-indices`（例如 `--selected-split-indices 0 4 5 7 9`），可只训练指定 split；不传该参数时默认训练全部 split
 - `scripts/batch/batch_walk_forward.ps1` 的 `wf_period_configs` 新增 `SelectedSplits`，可直接在每个 `PSCustomObject` 内配置（如 `SelectedSplits = @(0,4,5,7,9)`）；`SelectedSplits = @()` 或不填表示全部 split
 - 对非法下标会在启动阶段直接报错，避免批量任务长时间运行后才发现配置问题
-
-**walk-forward best_iteration 自适应候选重训** (v0.76.2):
-- `scripts/walk_forward.py` 新增 `--adaptive-best-iter-retrain`：当某子模型 `best_iteration <= 100` 时自动用 `learning_rate / 2` 且 `n_estimators * 2` 训练候选模型；当某子模型 `best_iteration >= 95% * n_estimators` 时自动用 `learning_rate * 1.5` 且保持 `n_estimators` 不变训练候选模型
-- 触发时机为子模型级实时触发：命中阈值后立即对该子模型候选重训并择优；候选参数会滚动到当前 split 尚未启动的后续子模型，不影响其他 split
-- 候选模型不会直接替换基础模型；只有验证集逐日 `RankIC IR` 至少提升 `0.05` 且 `RankIC` 均值不下降时才采用
-- summary 与模型 metadata 记录触发原因、是否评估候选、是否采用候选及基础/候选 `best_iteration`，并新增 `adaptive_live_*` 字段用于回看实时触发与最终滚动参数
-- `batch_walk_forward.ps1` 新增 `$adaptive_best_iter_retrain`，默认透传启用
 
 **多种子 bagging（walk-forward 训练）** (v0.76.0):
 - `scripts/walk_forward.py` 新增 `--ensemble-seeds`（逗号分隔随机种子，如 `42,1,2,3,4`）：启用后每个 split 在多个种子上各训一个子模型，预测取平均，降低单一 holdout 早停带来的训练随机方差

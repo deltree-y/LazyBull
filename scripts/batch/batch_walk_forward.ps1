@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(6,9)
+        SelectedSplits = @(0,3,6,9,13)
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -74,7 +74,7 @@ $val_ratio_list          = @(0.2)           # 训练数据内部验证集比例�
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
 $label_list              = @("neu_y_ret_20")#,"neu_y_ret_20")      # skip-training 默认只保留单标签，避免对同一组旧模型重复回测
-$neutral_label_blend_weight_list = @(0.25, 0.5, 0.75, 1)  # 0=纯行业中性标签，1=纯原始收益标签
+$neutral_label_blend_weight_list = @(0)  # 0=纯行业中性标签，1=纯原始收益标签
 $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
@@ -106,10 +106,6 @@ $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
 $time_decay_half_life_list = @(0)      # 半衰期（年）。0=禁用，1.0=1年前权重0.5，2.0=2年前权重0.5
-
-# ── best_iteration 自适应候选重训 ─────────────────────────────
-$adaptive_best_iter_retrain = $false  # $true 启用：低迭代/撞上限 split 自动重训候选，并按 Top30中位数(70%)+RankIC IR(30%) 加权打分择优
-$adaptive_low_iter_max_retries = 1  # low_iter（best_iter<=50）随机种子重试上限
 
 # ── 多种子 bagging（每个split用多个随机种子各训一个子模型取平均，降训练随机方差）─
 $ensemble_seeds            = "42,61,82"#,42,61,82"#,29,23"#42,61,82,100,200"#,300"#,400,500,600,700,800,900,1000"#,220,719"     # 逗号分隔种子如 "42,1,2,3,4"；空=单种子（用 --random-state），与多偏移可叠加
@@ -623,11 +619,6 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         $pythonCmd += " --ensemble-seeds $ensemble_seeds" +
                       " --ensemble-seed-keep-top-ratio $ensemble_seed_keep_top_ratio" +
                       " --ensemble-seed-keep-min-models $ensemble_seed_keep_min_models"
-    }
-
-    if ($adaptive_best_iter_retrain) {
-        $pythonCmd += " --adaptive-best-iter-retrain" +
-                      " --adaptive-low-iter-max-retries $adaptive_low_iter_max_retries"
     }
 
     if ($enable_enhanced) {
