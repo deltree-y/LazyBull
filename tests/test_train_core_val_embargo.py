@@ -292,9 +292,9 @@ def test_prepare_training_data_state_keep_event_decay_and_high_missing(monkeypat
     df["vol_ratio_20"] = np.nan
     df.loc[df.index[::5], "vol_ratio_20"] = 1.0  # 缺失率 80%
 
+    # 拆分后 prepare_training_data 在 prepare 模块，_load_factor_exclude_list 由该模块绑定引用
     monkeypatch.setattr(
-        train_core_module,
-        "_load_factor_exclude_list",
+        "src.lazybull.ml.train_core.prepare._load_factor_exclude_list",
         lambda models_dir=None, exclude_file=None: {"zscore_bp"},
     )
 

@@ -23,7 +23,8 @@ class DummyRanker:
 
 
 def test_lambdarank_keeps_rank_ic_as_early_stopping_metric(monkeypatch):
-    monkeypatch.setattr(tc.xgb, "XGBRanker", DummyRanker)
+    # 拆分后 train_core 为子包，xgb.py 内 import xgboost as xgb，需 mock xgboost 库本身
+    monkeypatch.setattr("xgboost.XGBRanker", DummyRanker)
 
     X_train = pd.DataFrame({"f1": [1, 2, 3, 4, 5, 6], "f2": [6, 5, 4, 3, 2, 1]})
     y_train = pd.Series([0.01, 0.02, -0.01, 0.03, -0.02, 0.00])

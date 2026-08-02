@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.6] - 2026-08-02
+
+### Changed
+
+- **拆分训练核心为 `ml/train_core/` 子包**：2512 行的 `src/lazybull/ml/train_core.py` 拆分为
+  `constants.py`（特征列清单/freshness 常量）、`labels.py`（标签变换）、`split.py`（数据切分）、
+  `features.py`（特征清洗/因子排除，含 `_factor_exclude_cache` 缓存）、`prepare.py`
+  （`prepare_training_data`）、`weights.py`（时间衰减/rank 权重）、`eval.py`（逐日评估/IC 指标）、
+  `xgb.py` 与 `lgb.py`（按模型分拆，便于后续新增模型）。
+  `train_core/__init__.py` 为门面，re-export 全部公共符号、常量与 `_factor_exclude_cache`，
+  `from src.lazybull.ml.train_core import <X>` 与 `import ...train_core as tc` 既有用法保持不变。
+- **测试适配**：将因子包化而失效的 `monkeypatch` 目标更新到实际模块
+  （`xgboost.XGBRanker`、`train_core.prepare._load_factor_exclude_list`）。
+
 ## [0.90.5] - 2026-08-02
 
 ### Changed
