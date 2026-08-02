@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """PaperPositionsMixin：src/lazybull/paper/broker.py 拆分出的 _estimate_total_assets_with_price_map, _get_min_buy_value_threshold, get_positions_detail, print_positions_summary, calculate_round_pnl_metrics, _calculate_annualized_return。"""
 
-from ..common.print_table import format_row
-from ..trading.sizing import compute_min_buy_value_threshold
+from ...common.print_table import format_row
+from ...trading.sizing import compute_min_buy_value_threshold
 from loguru import logger
 from typing import Dict
 from typing import Optional

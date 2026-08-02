@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """PaperRebalanceMixin：src/lazybull/paper/runner.py 拆分出的 _check_rebalance_day, _check_single_rebalance_day, _check_staggered_rebalance_day。"""
 
-from ..trading.stagger import build_tranche_schedule_from_anchor
+from ...trading.stagger import build_tranche_schedule_from_anchor
 from loguru import logger
 from typing import Tuple
 

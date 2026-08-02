@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """PaperSignalMixin：src/lazybull/paper/runner.py 拆分出的 _generate_signals, _generate_ranked_with_lot_constraint, _normalize_signals, _create_universe。"""
 
-from ..common.constants import SHARE_LOT_SIZE
-from ..common.trading_config import TradingConfig
-from ..features import ensure_features_for_date
-from ..portfolio import cap_and_normalize_weights
-from ..portfolio.industry_constraint import apply_industry_constraint
-from ..portfolio.industry_constraint import load_industry_mapping
-from ..signals.base import EqualWeightSignal
-from ..signals.ml_signal import MLSignal
-from ..trading.sizing import compute_lot_shares
-from ..universe.base import BasicUniverse
-from .models import TargetWeight
+from ...common.constants import SHARE_LOT_SIZE
+from ...common.trading_config import TradingConfig
+from ...features import ensure_features_for_date
+from ...portfolio import cap_and_normalize_weights
+from ...portfolio.industry_constraint import apply_industry_constraint
+from ...portfolio.industry_constraint import load_industry_mapping
+from ...signals.base import EqualWeightSignal
+from ...signals.ml_signal import MLSignal
+from ...trading.sizing import compute_lot_shares
+from ...universe.base import BasicUniverse
+from ..models import TargetWeight
 from dataclasses import replace
 from loguru import logger
 from typing import Dict
@@ -154,7 +154,7 @@ class PaperSignalMixin:
                 )
             else:
                 logger.warning("未指定信号生成器，使用等权")
-                from ..signals.base import EqualWeightSignal
+                from ...signals.base import EqualWeightSignal
                 self.signal = EqualWeightSignal(top_n=effective_config.top_n)
         elif hasattr(self.signal, "top_n"):
             self.signal.top_n = effective_config.top_n
@@ -209,7 +209,7 @@ class PaperSignalMixin:
 
             # 与 backtest 保持一致：先做单股限权，避免后续归一化抹掉留仓位效果。
             if effective_config.max_weight_per_stock is not None and signal_dict:
-                from ..portfolio import cap_and_normalize_weights
+                from ...portfolio import cap_and_normalize_weights
 
                 signal_dict = cap_and_normalize_weights(
                     signal_dict,

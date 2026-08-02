@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """PaperInstructionMixin：src/lazybull/paper/runner.py 拆分出的 _generate_instructions, evaluate_holding_period_actions, _build_rebalance_sell_instructions。"""
 
-from ..common.constants import SHARE_LOT_SIZE
-from ..trading.sell_rules import min_holding_days_for_rebalance_sell
-from ..trading.sell_rules import select_rebalance_sell_candidates
-from ..trading.sizing import compute_lot_shares
-from ..trading.stagger import get_tranche_capital_fraction as _shared_tranche_capital_fraction
-from .models import TargetWeight
-from .models import TradeInstruction
+from ...common.constants import SHARE_LOT_SIZE
+from ...trading.sell_rules import min_holding_days_for_rebalance_sell
+from ...trading.sell_rules import select_rebalance_sell_candidates
+from ...trading.sizing import compute_lot_shares
+from ...trading.stagger import get_tranche_capital_fraction as _shared_tranche_capital_fraction
+from ..models import TargetWeight
+from ..models import TradeInstruction
 from loguru import logger
 from typing import Dict
 from typing import List

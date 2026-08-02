@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """PaperReplacementMixin：src/lazybull/paper/runner.py 拆分出的 _enhance_target_info, _print_t0_targets, generate_replacement_targets, _print_replacement_targets。"""
 
-from ..common.constants import SEPARATOR_LENGTH, SHARE_LOT_SIZE
-from ..common.print_table import format_row
-from ..common.trading_config import TradingConfig
-from ..features import ensure_features_for_date
-from ..portfolio.industry_constraint import load_industry_mapping
-from ..signals.base import EqualWeightSignal
-from ..signals.ml_signal import MLSignal
-from ..trading.sizing import compute_lot_shares
-from .models import TargetWeight
+from ...common.constants import SEPARATOR_LENGTH, SHARE_LOT_SIZE
+from ...common.print_table import format_row
+from ...common.trading_config import TradingConfig
+from ...features import ensure_features_for_date
+from ...portfolio.industry_constraint import load_industry_mapping
+from ...signals.base import EqualWeightSignal
+from ...signals.ml_signal import MLSignal
+from ...trading.sizing import compute_lot_shares
+from ..models import TargetWeight
 from dataclasses import replace
 from loguru import logger
 from typing import Dict
@@ -319,7 +319,7 @@ class PaperReplacementMixin:
                 )
             else:
                 logger.warning("未指定信号生成器，使用等权")
-                from ..signals.base import EqualWeightSignal
+                from ...signals.base import EqualWeightSignal
                 self.signal = EqualWeightSignal(top_n=effective_config.top_n)
         elif hasattr(self.signal, "top_n"):
             self.signal.top_n = effective_config.top_n

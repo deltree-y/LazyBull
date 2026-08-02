@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.7] - 2026-08-02
+
+### Changed
+
+- **纸面交易目录规整为子包**：将散落的 `runner_*.py` / `broker_*.py` / `storage_*.py` mixin 文件
+  收敛为三个子包：
+  - `paper/runner/`（`__init__.py` 门面 + `calendar/rebalance/instructions/execution/pricing/signals/replacement`）
+  - `paper/broker/`（`__init__.py` 门面 + `tradability/execution/retry/positions`）
+  - `paper/storage/`（`__init__.py` 门面 + `state/config/records/queue/maintenance`）
+  `from src.lazybull.paper.runner import PaperTradingRunner` 等既有导入路径保持不变。
+- **测试适配**：更新 4 处 `monkeypatch`/`patch` 目标为子包路径
+  （`paper.runner.signals` / `paper.runner.replacement` / `paper.runner.execution` / `paper.runner.calendar`）。
+
 ## [0.90.6] - 2026-08-02
 
 ### Changed

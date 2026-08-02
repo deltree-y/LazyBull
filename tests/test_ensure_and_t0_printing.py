@@ -347,7 +347,7 @@ def test_correct_trade_date_refreshes_trade_calendar_when_clean_is_stale(monkeyp
             return True
 
         # 拆分后 _correct_trade_date 位于 runner_calendar mixin，ensure_basic_data 由其模块级引用提供
-        monkeypatch.setattr('src.lazybull.paper.runner_calendar.ensure_basic_data', fake_ensure_basic_data)
+        monkeypatch.setattr('src.lazybull.paper.runner.calendar.ensure_basic_data', fake_ensure_basic_data)
 
         assert runner._correct_trade_date('20260505') == '20260506'
         assert refresh_calls == [('20260505', False)]

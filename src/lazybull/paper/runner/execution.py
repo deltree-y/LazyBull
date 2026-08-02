@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 """PaperExecutionMixin：src/lazybull/paper/runner.py 拆分出的 run_t0, _build_pending_buys_from_failed_targets, _analyze_pending_buy_shares_backtest_style, _execute_pending_buys。"""
 
-from ..common.constants import SHARE_LOT_SIZE
-from ..common.trade_status import is_tradeable
-from ..common.trading_config import TradingConfig
-from ..features import ensure_features_for_date
-from ..signals.ml_signal import MLSignal
-from ..trading.buy_plan import REASON_ALREADY_BOUGHT
-from ..trading.buy_plan import REASON_EXECUTION_FAILED
-from ..trading.buy_plan import fill_slots_from_candidates
-from ..trading.sizing import compute_lot_shares
-from ..trading.stagger import get_tranche_target_count as _shared_tranche_target_count
-from .models import Order
-from .models import PendingBuy
-from .models import TargetWeight
-from .models import TradeInstruction
-from .models import normalize_trade_reason
+from ...common.constants import SHARE_LOT_SIZE
+from ...common.trade_status import is_tradeable
+from ...common.trading_config import TradingConfig
+from ...features import ensure_features_for_date
+from ...signals.ml_signal import MLSignal
+from ...trading.buy_plan import REASON_ALREADY_BOUGHT
+from ...trading.buy_plan import REASON_EXECUTION_FAILED
+from ...trading.buy_plan import fill_slots_from_candidates
+from ...trading.sizing import compute_lot_shares
+from ...trading.stagger import get_tranche_target_count as _shared_tranche_target_count
+from ..models import Order
+from ..models import PendingBuy
+from ..models import TargetWeight
+from ..models import TradeInstruction
+from ..models import normalize_trade_reason
 from loguru import logger
 from typing import Dict
 from typing import List
@@ -392,7 +392,7 @@ class PaperExecutionMixin:
         Returns:
             成交记录列表
         """
-        from .models import Fill, Order
+        from ..models import Fill, Order
         
         MAX_REPLENISHMENT_ATTEMPTS = 5
         

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """PaperMaintenanceMixin：src/lazybull/paper/storage.py 拆分出的 reset_t0, truncate_since。"""
 
-from .models import AccountState
+from ..models import AccountState
 from loguru import logger
 from typing import Optional
 import json

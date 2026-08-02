@@ -9,59 +9,55 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..common.config import get_cost_settings
-from ..common.print_table import format_row
-from ..common.trade_status import is_tradeable
-from ..common.trading_config import TradingConfig
-from ..data import (
+from ...common.config import get_cost_settings
+from ...common.print_table import format_row
+from ...common.trade_status import is_tradeable
+from ...common.trading_config import TradingConfig
+from ...data import (
     DataCleaner,
     DataLoader,
     Storage,
     TushareClient,
     ensure_basic_data,
 )
-from ..features import FeatureBuilder, ensure_features_for_date
-from ..signals.base import Signal
-from ..signals.ml_signal import MLSignal
-from ..trading.buy_plan import (
+from ...features import FeatureBuilder, ensure_features_for_date
+from ...signals.base import Signal
+from ...signals.ml_signal import MLSignal
+from ...trading.buy_plan import (
     REASON_ALREADY_BOUGHT,
     REASON_EXECUTION_FAILED,
     fill_slots_from_candidates,
 )
-from ..trading.sell_rules import (
+from ...trading.sell_rules import (
     min_holding_days_for_rebalance_sell,
     select_rebalance_sell_candidates,
 )
-from ..trading.sizing import (
+from ...trading.sizing import (
     compute_kelly_weights,
     compute_lot_shares,
     estimate_variance_from_prices,
 )
-from ..trading.stagger import (
+from ...trading.stagger import (
     build_tranche_schedule_from_anchor,
     get_tranche_capital_fraction as _shared_tranche_capital_fraction,
     get_tranche_target_count as _shared_tranche_target_count,
 )
-from ..universe.base import BasicUniverse
-from ..portfolio.industry_constraint import load_industry_mapping, apply_industry_constraint
-from .account import PaperAccount
-from .broker import PaperBroker
-from .models import NAVRecord, PendingBuy, TargetWeight, TradeInstruction, normalize_trade_reason
-from .storage import PaperStorage
+from ...universe.base import BasicUniverse
+from ...portfolio.industry_constraint import load_industry_mapping, apply_industry_constraint
+from ..account import PaperAccount
+from ..broker import PaperBroker
+from ..models import NAVRecord, PendingBuy, TargetWeight, TradeInstruction, normalize_trade_reason
+from ..storage import PaperStorage
 
-# 常量定义
-SHARE_LOT_SIZE = 100         # A股买卖单位（手）
-SEPARATOR_LENGTH = 100       # 分隔线长度
+from ...common.constants import SEPARATOR_LENGTH, SHARE_LOT_SIZE
 
-from ..common.constants import SEPARATOR_LENGTH, SHARE_LOT_SIZE
-
-from .runner_calendar import PaperCalendarMixin
-from .runner_rebalance import PaperRebalanceMixin
-from .runner_instructions import PaperInstructionMixin
-from .runner_execution import PaperExecutionMixin
-from .runner_pricing import PaperPricingMixin
-from .runner_signals import PaperSignalMixin
-from .runner_replacement import PaperReplacementMixin
+from .calendar import PaperCalendarMixin
+from .rebalance import PaperRebalanceMixin
+from .instructions import PaperInstructionMixin
+from .execution import PaperExecutionMixin
+from .pricing import PaperPricingMixin
+from .signals import PaperSignalMixin
+from .replacement import PaperReplacementMixin
 
 class PaperTradingRunner(
     PaperCalendarMixin,
@@ -72,9 +68,10 @@ class PaperTradingRunner(
     PaperSignalMixin,
     PaperReplacementMixin,
 ):
-    """    纸面交易运行器
-    
-    负责T0和T1的完整工作流"""
+    """纸面交易运行器
+
+    负责T0和T1的完整工作流
+    """
 
     def __init__(
         self,

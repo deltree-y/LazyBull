@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """PaperPricingMixin：src/lazybull/paper/runner.py 拆分出的 _load_prices, _record_nav, _load_kelly_window_data, _estimate_stock_variance, _kelly_weights, _calc_holding_days。"""
 
-from ..common.date_utils import calc_holding_trade_days
-from ..trading.sizing import compute_kelly_weights
-from ..trading.sizing import estimate_variance_from_prices
-from .models import NAVRecord
+from ...common.date_utils import calc_holding_trade_days
+from ...trading.sizing import compute_kelly_weights
+from ...trading.sizing import estimate_variance_from_prices
+from ..models import NAVRecord
 from loguru import logger
 from typing import Dict
 from typing import Optional
@@ -160,6 +160,6 @@ class PaperPricingMixin:
         trade_dates_list: list,
     ) -> int:
         """计算两个日期之间的交易日数（共用 common.date_utils）。"""
-        from ..common.date_utils import calc_holding_trade_days
+        from ...common.date_utils import calc_holding_trade_days
 
         return calc_holding_trade_days(buy_date, current_date, trade_dates_list)

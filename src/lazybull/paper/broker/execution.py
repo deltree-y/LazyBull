@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """PaperExecutionMixin：src/lazybull/paper/broker.py 拆分出的 execute_instructions, _execute_single_order, _resolve_buy_pnl_price, _calculate_execution_stats。"""
 
-from ..common.print_table import format_row
-from .models import Fill, Order, PendingBuy, PendingSell, TargetWeight
-from .models import normalize_trade_reason
+from ...common.print_table import format_row
+from ..models import Fill, Order, PendingBuy, PendingSell, TargetWeight
+from ..models import normalize_trade_reason
 from loguru import logger
 from typing import Dict
 from typing import List
@@ -31,7 +31,7 @@ class PaperExecutionMixin:
         Returns:
             成交记录列表
         """
-        from .models import PendingSell, PendingBuy, Order, TargetWeight
+        from ..models import PendingSell, PendingBuy, Order, TargetWeight
         
         fills = []
         self._failed_buy_targets = []
@@ -171,7 +171,7 @@ class PaperExecutionMixin:
         # 预加载 ATR 数据（如果可用）
         atr_map = {}
         try:
-            from ..data import Storage as DataStorage
+            from ...data import Storage as DataStorage
             ds = self.data_storage or DataStorage()
             features_df = ds.load_features_by_date(trade_date, subdir="cs_infer")
             if features_df is not None and "atr_pct_14" in features_df.columns:
@@ -449,7 +449,7 @@ class PaperExecutionMixin:
             return 0.0
 
         try:
-            from ..data import DataLoader
+            from ...data import DataLoader
 
             if self.data_storage is None:
                 return float(fallback_price)

@@ -11,18 +11,18 @@ from loguru import logger
 
 from typing import TYPE_CHECKING
 
-from ..common.config import get_paper_root
-from ..common.trading_config import TradingConfig
-from .models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight, TradeInstruction
+from ...common.config import get_paper_root
+from ...common.trading_config import TradingConfig
+from ..models import AccountState, Fill, NAVRecord, PendingBuy, PendingSell, Position, TargetWeight, TradeInstruction
 
 if TYPE_CHECKING:
-    from ..common.smb_client import SMBFileReader
+    from ...common.smb_client import SMBFileReader
 
-from .storage_state import PaperStateMixin
-from .storage_config import PaperConfigMixin
-from .storage_records import PaperRecordMixin
-from .storage_queue import PaperQueueMixin
-from .storage_maintenance import PaperMaintenanceMixin
+from .state import PaperStateMixin
+from .config import PaperConfigMixin
+from .records import PaperRecordMixin
+from .queue import PaperQueueMixin
+from .maintenance import PaperMaintenanceMixin
 
 class PaperStorage(
     PaperStateMixin,
@@ -31,9 +31,10 @@ class PaperStorage(
     PaperQueueMixin,
     PaperMaintenanceMixin,
 ):
-    """    纸面交易存储
-    
-    负责持久化和读取纸面交易的各类数据"""
+    """纸面交易存储
+
+    负责持久化和读取纸面交易的各类数据
+    """
 
     def __init__(
         self,

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """PaperTradabilityMixin：src/lazybull/paper/broker.py 拆分出的 _get_suspend_calendar, _get_open_trade_dates, _calc_holding_trade_days, _load_tradability_info, _check_can_buy, _check_can_sell。"""
 
-from ..common.trade_status import evaluate_trade_status
+from ...common.trade_status import evaluate_trade_status
 from loguru import logger
 from typing import Dict
 from typing import List
@@ -10,7 +10,7 @@ class PaperTradabilityMixin:
     def _get_suspend_calendar(self):
         """获取停牌日历实例（延迟创建，共用 common 构建函数）"""
         if self._suspend_calendar is None:
-            from ..common.suspend_calendar import get_suspend_calendar
+            from ...common.suspend_calendar import get_suspend_calendar
 
             self._suspend_calendar, self.data_storage = get_suspend_calendar(self.data_storage)
 
@@ -22,7 +22,7 @@ class PaperTradabilityMixin:
             return self._open_trade_dates
 
         try:
-            from ..data import DataLoader, Storage
+            from ...data import DataLoader, Storage
 
             data_storage = self.data_storage if self.data_storage is not None else Storage()
             loader = DataLoader(data_storage, verbose=False)
@@ -41,7 +41,7 @@ class PaperTradabilityMixin:
     @staticmethod
     def _calc_holding_trade_days(buy_date: str, current_date: str, trade_dates_list: List[str]) -> int:
         """按交易日口径计算持有天数（共用 common.date_utils）。"""
-        from ..common.date_utils import calc_holding_trade_days
+        from ...common.date_utils import calc_holding_trade_days
 
         return calc_holding_trade_days(buy_date, current_date, trade_dates_list)
 
@@ -54,7 +54,7 @@ class PaperTradabilityMixin:
         Returns:
             {ts_code: {is_suspended, is_limit_up, is_limit_down, tradable}}
         """
-        from ..data import DataLoader, Storage
+        from ...data import DataLoader, Storage
         
         storage = Storage()
         loader = DataLoader(storage)

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """PaperCalendarMixin：src/lazybull/paper/runner.py 拆分出的 _get_open_trade_dates, _load_open_trade_dates_from_storage, _extract_open_trade_dates, _ensure_trade_calendar_coverage, _correct_trade_date, _resolve_next_requested_trade_date, _get_next_trade_date, _get_prev_trade_date。"""
 
-from ..data import ensure_basic_data
+from ...data import ensure_basic_data
 from datetime import datetime
 from loguru import logger
 from typing import List

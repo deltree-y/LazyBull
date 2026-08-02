@@ -346,7 +346,7 @@ def test_generate_signals_respects_top_n_even_with_trading_config(monkeypatch):
     runner._save_strategy_state = MagicMock()
 
     monkeypatch.setattr(
-        "src.lazybull.paper.runner_signals.ensure_features_for_date",
+        "src.lazybull.paper.runner.signals.ensure_features_for_date",
         lambda *args, **kwargs: (True, [], ""),
     )
 
@@ -648,7 +648,7 @@ def test_generate_replacement_targets_respects_failed_count_with_trading_config(
         )
 
         monkeypatch.setattr(
-            'src.lazybull.paper.runner_replacement.ensure_features_for_date',
+            'src.lazybull.paper.runner.replacement.ensure_features_for_date',
             lambda *args, **kwargs: (True, [], ""),
         )
         runner.loader.load_clean_stock_basic = Mock(return_value=stock_basic)
@@ -855,7 +855,7 @@ def test_execute_pending_buys_prefers_persisted_t0_ranked_candidates(monkeypatch
         monkeypatch.setattr(runner, '_get_prev_trade_date', lambda _: '20260122')
         runner.loader.load_clean_daily_by_date = Mock(return_value=pd.DataFrame())
 
-        with patch('src.lazybull.paper.runner_execution.is_tradeable', return_value=(True, '可交易')):
+        with patch('src.lazybull.paper.runner.execution.is_tradeable', return_value=(True, '可交易')):
             fills = runner._execute_pending_buys(
                 pending_buys=pending_buys,
                 buy_prices={'000002.SZ': 10.0, '000003.SZ': 10.0, '000004.SZ': 10.0},
@@ -927,7 +927,7 @@ def test_execute_pending_buys_skip_tiny_buy_value_by_ratio():
         }
         runner.loader.load_clean_daily_by_date = Mock(return_value=pd.DataFrame())
 
-        with patch('src.lazybull.paper.runner_execution.is_tradeable', return_value=(True, '可交易')):
+        with patch('src.lazybull.paper.runner.execution.is_tradeable', return_value=(True, '可交易')):
             fills = runner._execute_pending_buys(
                 pending_buys=pending_buys,
                 buy_prices=buy_prices,

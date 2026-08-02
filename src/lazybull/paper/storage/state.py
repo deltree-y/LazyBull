@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """PaperStateMixin：src/lazybull/paper/storage.py 拆分出的 save_account_state, load_account_state, _load_account_state_remote, save_stop_loss_state, load_stop_loss_state, save_last_trade_date, load_last_trade_date, save_strategy_state, load_strategy_state。"""
 
-from .models import AccountState
-from .models import Position
+from ..models import AccountState
+from ..models import Position
 from loguru import logger
 from typing import Optional
 import json

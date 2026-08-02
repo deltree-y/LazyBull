@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """PaperConfigMixin：src/lazybull/paper/storage.py 拆分出的 save_config, _render_config_yaml, _write_yaml_config, _flatten_grouped_config, _normalize_config, load_config, _load_config_remote。"""
 
-from ..common.trading_config import TradingConfig
+from ...common.trading_config import TradingConfig
 from loguru import logger
 from typing import Optional
 import yaml

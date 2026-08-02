@@ -5,19 +5,19 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from ..common.print_table import format_row
+from ...common.print_table import format_row
 
-from ..common.cost import CostModel
-from ..common.trade_status import evaluate_trade_status
-from ..trading.sizing import compute_lot_shares, compute_min_buy_value_threshold
-from .account import PaperAccount
-from .models import Fill, Order, PendingBuy, TargetWeight, normalize_trade_reason
-from .storage import PaperStorage
+from ...common.cost import CostModel
+from ...common.trade_status import evaluate_trade_status
+from ...trading.sizing import compute_lot_shares, compute_min_buy_value_threshold
+from ..account import PaperAccount
+from ..models import Fill, Order, PendingBuy, TargetWeight, normalize_trade_reason
+from ..storage import PaperStorage
 
-from .broker_tradability import PaperTradabilityMixin
-from .broker_execution import PaperExecutionMixin
-from .broker_retry import PaperRetryMixin
-from .broker_positions import PaperPositionsMixin
+from .tradability import PaperTradabilityMixin
+from .execution import PaperExecutionMixin
+from .retry import PaperRetryMixin
+from .positions import PaperPositionsMixin
 
 class PaperBroker(
     PaperTradabilityMixin,
@@ -25,9 +25,10 @@ class PaperBroker(
     PaperRetryMixin,
     PaperPositionsMixin,
 ):
-    """    纸面交易经纪
-    
-    负责生成订单、计算成本、打印明细、记录成交"""
+    """纸面交易经纪
+
+    负责生成订单、计算成本、打印明细、记录成交
+    """
 
     def __init__(
         self,

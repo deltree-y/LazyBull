@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """PaperRecordMixin：src/lazybull/paper/storage.py 拆分出的 append_trade, load_all_trades, append_nav, load_all_nav, save_run_record, check_run_exists, save_rebalance_state, load_rebalance_state。"""
 
-from .models import Fill
-from .models import NAVRecord
+from ..models import Fill
+from ..models import NAVRecord
 from loguru import logger
 from typing import Optional
 import json
