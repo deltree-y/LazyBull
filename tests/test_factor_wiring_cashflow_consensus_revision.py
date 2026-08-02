@@ -144,10 +144,10 @@ def test_try_download_fina_indicator_full_download_uses_explicit_fields():
         return None
 
     with patch(
-        "src.lazybull.features.ensure._bulk_download_by_period",
+        "src.lazybull.features.ensure.downloads._bulk_download_by_period",
         side_effect=_fake_bulk_download_by_period,
     ), patch(
-        "src.lazybull.features.ensure.DataLoader.load_fina_indicator",
+        "src.lazybull.features.ensure.downloads.DataLoader.load_fina_indicator",
         return_value="ok",
     ):
         result = _try_download_fina_indicator(
@@ -188,10 +188,10 @@ def test_try_download_cashflow_full_download_uses_quarter_partitions():
         return None
 
     with patch(
-        "src.lazybull.features.ensure._bulk_download_by_period",
+        "src.lazybull.features.ensure.downloads._bulk_download_by_period",
         side_effect=_fake_bulk_download_by_period,
     ), patch(
-        "src.lazybull.features.ensure.DataLoader.load_cashflow",
+        "src.lazybull.features.ensure.downloads.DataLoader.load_cashflow",
         return_value="ok",
     ):
         result = _try_download_cashflow(
@@ -242,10 +242,10 @@ def test_try_download_fina_indicator_existing_schema_triggers_period_refresh():
         return kwargs["existing_df"]
 
     with patch(
-        "src.lazybull.features.ensure._refresh_existing_period_rows",
+        "src.lazybull.features.ensure.downloads._refresh_existing_period_rows",
         side_effect=_fake_refresh_existing_period_rows,
     ), patch(
-        "src.lazybull.features.ensure._incremental_catchup_by_calendar_date",
+        "src.lazybull.features.ensure.downloads._incremental_catchup_by_calendar_date",
         side_effect=_fake_incremental_catchup_by_calendar_date,
     ):
         result = _try_download_fina_indicator(

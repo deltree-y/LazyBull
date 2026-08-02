@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.9] - 2026-08-02
+
+### Changed
+
+- **features 层大文件规整为子包**：
+  - `features/builder.py`（约 1440 行）→ `features/builder/` 子包：
+    `__init__.py` 门面（`FeatureBuilder` 由 `cache/orchestration/helpers/factors`
+    四个 mixin 组合）+ `static_core.py` / `static_extra.py`（12 个静态函数）。
+  - `features/ensure.py`（约 1780 行）→ `features/ensure/` 子包：
+    `__init__.py` 门面 + `entry/historical/factor_load/downloads/bulk/incremental/`
+    `historical_assets/industry/schema/constants` 10 个模块。
+  旧路径 `from src.lazybull.features.builder/ensure import X` 经门面 re-export 保持兼容。
+- **测试适配**：更新 `test_ensure_and_t0_printing.py` 与
+  `test_factor_wiring_cashflow_consensus_revision.py` 的 monkeypatch/patch 目标到
+  实际子模块（门面 setattr 不影响实际模块绑定），
+  `test_technical_indicators_precompute.py` 的 patch 目标到 `builder.helpers`。
+- **性能验证**：拆分前后性能基线对比（200 股 × 250 交易日）：
+  `precompute_daily_adj` 51.94→53.91ms、单日构建 686.40→655.26ms（均 ±5% 噪声范围），
+  构建输出逐值一致（`assert_frame_equal` 通过），内存释放节奏（gc.collect 时序）与
+  网络增量短路逻辑保持不变。
+
 ## [0.90.8] - 2026-08-02
 
 ### Changed

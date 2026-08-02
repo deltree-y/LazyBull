@@ -314,16 +314,18 @@ class TestTechFactorCache:
 
     def test_precompute_called_only_once(self, sample_daily_adj, monkeypatch):
         """多日构建时，precompute_technical_factors 应只调用一次"""
-        import src.lazybull.features.builder as builder_module
+        from src.lazybull.features.builder import helpers as builder_helpers_module
 
         call_count = {'n': 0}
-        original_func = builder_module.precompute_technical_factors
+        original_func = builder_helpers_module.precompute_technical_factors
 
         def counting_precompute(*args, **kwargs):
             call_count['n'] += 1
             return original_func(*args, **kwargs)
 
-        monkeypatch.setattr(builder_module, 'precompute_technical_factors', counting_precompute)
+        monkeypatch.setattr(
+            builder_helpers_module, 'precompute_technical_factors', counting_precompute
+        )
 
         builder = FeatureBuilder(min_list_days=10, require_label=False)
         trading_dates = sorted(sample_daily_adj['trade_date'].unique().tolist())

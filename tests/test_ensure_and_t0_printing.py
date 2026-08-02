@@ -14,6 +14,10 @@ from src.lazybull.data.ensure import (
     ensure_raw_data_for_date,
 )
 import src.lazybull.features.ensure as ensure_module
+import src.lazybull.features.ensure.downloads as ensure_downloads
+import src.lazybull.features.ensure.entry as ensure_entry
+import src.lazybull.features.ensure.factor_load as ensure_factor_load
+import src.lazybull.features.ensure.historical_assets as ensure_hist_assets
 from src.lazybull.features import FeatureBuilder, ensure_features_for_date
 from src.lazybull.paper import PaperAccount, PaperStorage, TargetWeight
 from src.lazybull.paper.runner import PaperTradingRunner
@@ -402,30 +406,30 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         '_MIN_EXPRESS_RECORDS',
         '_MIN_REPORT_RC_RECORDS',
     ]:
-        monkeypatch.setattr(ensure_module, attr, 1)
+        monkeypatch.setattr(ensure_factor_load, attr, 1)
 
     monkeypatch.setattr(
-        ensure_module,
+        ensure_factor_load,
         '_try_ensure_historical_margin',
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        ensure_module,
+        ensure_factor_load,
         '_try_ensure_historical_cyq_perf',
         lambda *args, **kwargs: stub_df,
     )
     monkeypatch.setattr(
-        ensure_module,
+        ensure_factor_load,
         '_try_ensure_historical_fund_portfolio',
         lambda *args, **kwargs: stub_df,
     )
     monkeypatch.setattr(
-        ensure_module,
+        ensure_factor_load,
         '_try_ensure_historical_moneyflow_hsgt',
         lambda *args, **kwargs: stub_df,
     )
     monkeypatch.setattr(
-        ensure_module,
+        ensure_factor_load,
         '_try_ensure_historical_top_list',
         lambda *args, **kwargs: stub_df,
     )
@@ -527,8 +531,8 @@ def test_try_ensure_historical_fund_portfolio_builds_and_reuses_agg_cache(
     )
     temp_storage.save_raw_by_date(raw_df, "fund_portfolio", period)
 
-    monkeypatch.setattr(ensure_module, "_generate_quarter_periods", lambda *_args: [period])
-    monkeypatch.setattr(ensure_module, "_query_with_pagination", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(ensure_hist_assets, "_generate_quarter_periods", lambda *_args: [period])
+    monkeypatch.setattr(ensure_hist_assets, "_query_with_pagination", lambda *args, **kwargs: pd.DataFrame())
 
     result = ensure_module._try_ensure_historical_fund_portfolio(
         client=Mock(),
@@ -626,19 +630,19 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
         }
     )
 
-    monkeypatch.setattr(ensure_module, "ensure_basic_data", lambda *args, **kwargs: True)
+    monkeypatch.setattr(ensure_entry, "ensure_basic_data", lambda *args, **kwargs: True)
     monkeypatch.setattr(
-        ensure_module,
+        ensure_entry,
         "ensure_clean_data_for_date",
         lambda *args, **kwargs: True,
     )
     monkeypatch.setattr(
-        ensure_module,
+        ensure_entry,
         "_ensure_historical_clean_data",
         lambda *args, **kwargs: True,
     )
     monkeypatch.setattr(
-        ensure_module,
+        ensure_entry,
         "_load_factor_data",
         lambda *args, **kwargs: (
             None,
@@ -782,7 +786,7 @@ def test_incremental_download_functions_delegate_to_range_catchup(
         )
 
     temp_storage.save_raw(existing, dataset_name, is_force=True)
-    monkeypatch.setattr(ensure_module, threshold_attr, 1)
+    monkeypatch.setattr(ensure_downloads, threshold_attr, 1)
 
     captured = {}
 
@@ -790,7 +794,7 @@ def test_incremental_download_functions_delegate_to_range_catchup(
         captured.update(kwargs)
         return kwargs["existing_df"]
 
-    monkeypatch.setattr(ensure_module, "_incremental_catchup_by_calendar_date", _fake_catchup)
+    monkeypatch.setattr(ensure_downloads, "_incremental_catchup_by_calendar_date", _fake_catchup)
 
     client = Mock(spec=TushareClient)
     func = getattr(ensure_module, func_name)
