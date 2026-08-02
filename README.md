@@ -2604,6 +2604,8 @@ LazyBull/
 │   ├── train_ml_model.py      # 训练 ML 模型
 │   ├── run_backtest.py        # 运行回测
 │   ├── run_ml_backtest.py     # 运行 ML 信号回测
+│   ├── compare_walk_forward.py # 实验对比与稳定性汇总（薄入口）
+│   ├── compare/               # 实验对比分析子包（constants/loading/aggregate/scoring/...）
 │   └── ana/
 │       ├── analyze_factor_importance.py # 因子重要性分析
 │       └── analyze_factor_stability.py  # 集成模型因子使用稳定性分析

@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.3] - 2026-08-02
+
+### Changed
+
+- **拆分实验对比脚本为子包**：将 3467 行的 `scripts/compare_walk_forward.py` 按职责拆分为
+  `scripts/compare/` 子包（`constants.py` / `loading.py` / `aggregate.py` / `scoring.py` /
+  `metrics_desc.py` / `detail_display.py` / `excel.py` / `report.py`），
+  原脚本保留为薄入口（CLI 参数解析 + 从子包 re-export 公共 API），
+  列名、评分权重、聚合/评分/展示逻辑与 Excel 输出行为完全不变，
+  `tests/test_compare_selection_score.py` 的既有导入路径保持不变。
+
 ## [0.90.2] - 2026-08-02
 
 ### Removed
