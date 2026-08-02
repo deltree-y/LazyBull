@@ -60,17 +60,12 @@ class PaperBroker:
         self._open_trade_dates: Optional[List[str]] = None
 
     def _get_suspend_calendar(self):
-        """获取停牌日历实例（延迟创建）"""
+        """获取停牌日历实例（延迟创建，共用 common 构建函数）"""
         if self._suspend_calendar is None:
-            from ..common.suspend_calendar import SuspendCalendar
-            from ..data import Storage
-            
-            # 如果没有提供 data_storage，创建一个默认实例
-            if self.data_storage is None:
-                self.data_storage = Storage()
-            
-            self._suspend_calendar = SuspendCalendar(self.data_storage)
-        
+            from ..common.suspend_calendar import get_suspend_calendar
+
+            self._suspend_calendar, self.data_storage = get_suspend_calendar(self.data_storage)
+
         return self._suspend_calendar
 
     def _get_open_trade_dates(self) -> List[str]:
@@ -97,15 +92,10 @@ class PaperBroker:
 
     @staticmethod
     def _calc_holding_trade_days(buy_date: str, current_date: str, trade_dates_list: List[str]) -> int:
-        """按交易日口径计算持有天数（不含买入当日）。"""
-        if not buy_date or not current_date:
-            return 0
-        try:
-            buy_idx = trade_dates_list.index(str(buy_date))
-            cur_idx = trade_dates_list.index(str(current_date))
-            return max(0, cur_idx - buy_idx)
-        except ValueError:
-            return 0
+        """按交易日口径计算持有天数（共用 common.date_utils）。"""
+        from ..common.date_utils import calc_holding_trade_days
+
+        return calc_holding_trade_days(buy_date, current_date, trade_dates_list)
 
     def _estimate_total_assets_with_price_map(self, price_map: Dict[str, float]) -> float:
         """估算当前总资产（价格缺失时回退买入价）。"""
@@ -128,283 +118,6 @@ class PaperBroker:
     
 
     
-    def generate_orders(
-        self,
-        targets: List[TargetWeight],
-        buy_prices: Dict[str, float],
-        sell_prices: Dict[str, float],
-        trade_date: str
-    ) -> List[Order]:
-        """生成订单（含可交易性检查）
-        
-        从当前持仓和目标权重生成买卖订单，并检查涨跌停、停牌等可交易性
-        
-        Args:
-            targets: 目标权重列表
-            buy_prices: {ts_code: price} 买入价格字典
-            sell_prices: {ts_code: price} 卖出价格字典
-            trade_date: 交易日期 YYYYMMDD
-            
-        Returns:
-            订单列表
-        """
-        orders = []
-        
-        # 加载当日可交易性信息
-        tradability = self._load_tradability_info(trade_date)
-        
-        # 使用卖出价格计算总资产（因为卖出在前）
-        all_prices = {**buy_prices, **sell_prices}  # 卖出价格优先（后者覆盖前者）
-        total_value = self.account.get_total_value(all_prices)
-        if total_value <= 0:
-            logger.warning("总资产为0，无法生成订单")
-            return orders
-        
-        # 目标权重字典
-        target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
-        
-        # 当前持仓股票
-        current_stocks = set(self.account.get_positions().keys())
-        
-        # 目标持仓股票
-        target_stocks = set(target_weights.keys())
-        
-        # 1. 卖出订单：当前持有但不在目标中，或目标权重降低
-        for ts_code in current_stocks:
-            current_weight = self.account.get_position_weight(ts_code, all_prices)
-            target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
-            
-            if target_weight < current_weight:
-                # 需要卖出
-                pos = self.account.get_position(ts_code)
-                
-                # 检查是否有卖出价格数据
-                if ts_code not in sell_prices:
-                    # 无卖出价格数据，使用 SuspendCalendar 判断原因（停牌优先，否则无价格数据）
-                    reason_suffix = ""
-                    try:
-                        suspend_calendar = self._get_suspend_calendar()
-                        is_suspended = suspend_calendar.is_suspended(ts_code, trade_date)
-                        if is_suspended:
-                            reason_suffix = "（停牌）"
-                            logger.warning(f"股票 {ts_code} 停牌，无法卖出，加入延迟卖出队列")
-                        else:
-                            reason_suffix = "（无价格数据）"
-                            logger.warning(f"股票 {ts_code} 无卖出价格数据，加入延迟卖出队列")
-                    except Exception as e:
-                        # 停牌数据加载失败，使用通用描述
-                        reason_suffix = "（无价格数据）"
-                        logger.warning(f"股票 {ts_code} 无卖出价格数据，且停牌数据加载失败（{e}），加入延迟卖出队列")
-                    
-                    # 加入延迟卖出队列
-                    # 注意：由于无价格数据，无法计算精确的卖出股数
-                    # 使用当前持仓全部股数记录，重试时会根据价格重新计算
-                    from .models import PendingSell
-                    sell_reason = "退出持仓" if target_weight == 0 else "减仓"
-                    pending_sell = PendingSell(
-                        ts_code=ts_code,
-                        shares=pos.shares,  # 记录当前持仓股数，重试时重新计算
-                        target_weight=target_weight,
-                        reason=f"{sell_reason}{reason_suffix}",
-                        create_date=trade_date,
-                        attempts=0
-                    )
-                    self.pending_sells.append(pending_sell)
-                    continue
-                
-                # 计算需要卖出的股数
-                target_value = total_value * target_weight
-                current_value = pos.shares * sell_prices[ts_code]
-                sell_value = current_value - target_value
-                sell_shares_raw = int(sell_value / sell_prices[ts_code])
-                
-                # 判断是否为清仓
-                is_full_liquidation = (target_weight == 0)
-                
-                if is_full_liquidation:
-                    # 清仓：必须卖出全部股数，不允许零股
-                    sell_shares = pos.shares
-                    
-                    # 检查是否有零股（不是100的倍数）
-                    if sell_shares % 100 != 0:
-                        # 零股出现：详细日志并 raise 异常
-                        current_price = sell_prices.get(ts_code, 0.0)
-                        current_market_value = pos.shares * current_price if current_price > 0 else 0.0
-                        
-                        error_msg = (
-                            f"清仓时检测到零股，必须中止执行！\n"
-                            f"  股票代码: {ts_code}\n"
-                            f"  持仓股数: {pos.shares} 股（非100倍数）\n"
-                            f"  交易日期: {trade_date}\n"
-                            f"  目标权重: {target_weight}\n"
-                            f"  原因: {reason}\n"
-                            f"  当前价格: {current_price:.2f}\n"
-                            f"  当前市值: {current_market_value:.2f}\n"
-                            f"  买入日期: {pos.buy_date}\n"
-                            f"  买入价格: {pos.buy_price:.2f}\n"
-                            f"  持仓备注: {pos.notes}"
-                        )
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
-                else:
-                    # 减仓：按100股向下取整
-                    sell_shares = (sell_shares_raw // 100) * 100
-                
-                # 确保不超过持仓且不卖超
-                sell_shares = min(sell_shares, pos.shares)
-                
-                # 根据实际卖出股数确定原因文案
-                if target_weight == 0:
-                    # 目标权重为0的情况
-                    if sell_shares == pos.shares:
-                        # 完全清仓
-                        sell_reason = "退出持仓"
-                    else:
-                        # 部分卖出（100股取整等原因导致无法完全清仓）
-                        sell_reason = "减仓(退出持仓未完全清仓)"
-                else:
-                    # 目标权重>0，仅减仓
-                    sell_reason = "减仓"
-                
-                # 检查可交易性
-                can_sell, check_reason = self._check_can_sell(ts_code, tradability, trade_date)
-                if not can_sell:
-                    logger.warning(f"股票 {ts_code} 不可卖出: {check_reason}，订单延迟")
-                    # 跌停或停牌，加入延迟卖出队列
-                    from .models import PendingSell
-                    pending_sell = PendingSell(
-                        ts_code=ts_code,
-                        shares=pos.shares,  # 记录待卖出股数
-                        target_weight=target_weight,
-                        reason=sell_reason,
-                        create_date=trade_date,
-                        attempts=0
-                    )
-                    self.pending_sells.append(pending_sell)
-                    continue
-                
-                if sell_shares > 0:
-                    orders.append(Order(
-                        ts_code=ts_code,
-                        action='sell',
-                        shares=sell_shares,
-                        price=sell_prices[ts_code],
-                        target_weight=target_weight,
-                        current_weight=current_weight,
-                        reason=sell_reason
-                    ))
-        
-        # 2. 买入订单：目标持有但当前没有，或目标权重增加
-        failed_buy_targets = []  # 记录买入失败的目标（用于补位）
-        min_buy_value_threshold = 0.0
-        config = self.storage.load_config() or {}
-        ratio = float(config.get("min_buy_value_ratio", 0.2) or 0.0)
-        if ratio > 0:
-            min_buy_value_threshold = (total_value / float(max(1, int(config.get("top_n", 30) or 30)))) * ratio
-        
-        for ts_code in target_stocks:
-            target_weight, reason = target_weights[ts_code]
-            current_weight = self.account.get_position_weight(ts_code, all_prices)
-            
-            if target_weight > current_weight:
-                # 需要买入
-                if ts_code not in buy_prices:
-                    logger.warning(f"股票 {ts_code} 无买入价格数据，跳过买入")
-                    # 记录失败目标（原因：无价格数据）
-                    failed_buy_targets.append(TargetWeight(
-                        ts_code=ts_code,
-                        target_weight=target_weight,
-                        reason=f"{reason}（无价格数据）"
-                    ))
-                    continue
-                
-                # 检查可交易性
-                can_buy, buy_reason = self._check_can_buy(ts_code, tradability)
-                if not can_buy:
-                    logger.warning(f"股票 {ts_code} 不可买入: {buy_reason}，记录为补位候选")
-                    # 记录失败目标（原因：涨停、停牌等）
-                    failed_buy_targets.append(TargetWeight(
-                        ts_code=ts_code,
-                        target_weight=target_weight,
-                        reason=f"{reason}（{buy_reason}）"
-                    ))
-                    continue
-                
-                # 计算需要买入的金额
-                target_value = total_value * target_weight
-                current_value = total_value * current_weight
-                buy_value = target_value - current_value
-                
-                # 预估成本
-                estimated_cost = self.cost_model.calculate_buy_cost(buy_value)
-                available_cash = self.account.get_cash()
-                
-                # 确保有足够现金（考虑成本）
-                if buy_value + estimated_cost > available_cash:
-                    buy_value = available_cash - estimated_cost
-                    if buy_value <= 0:
-                        logger.warning(f"现金不足，跳过买入 {ts_code}")
-                        # 记录失败目标（原因：现金不足）
-                        failed_buy_targets.append(TargetWeight(
-                            ts_code=ts_code,
-                            target_weight=target_weight,
-                            reason=f"{reason}（现金不足）"
-                        ))
-                        continue
-                
-                # 计算股数（向下取整到100的倍数）
-                buy_shares = compute_lot_shares(buy_value, buy_prices[ts_code])
-
-                # 防止生成过小仓位：买入后市值需达到“平均仓位市值×比例”
-                if buy_shares > 0 and min_buy_value_threshold > 0:
-                    actual_buy_value = buy_shares * buy_prices[ts_code]
-                    if actual_buy_value < min_buy_value_threshold:
-                        logger.warning(
-                            f"股票 {ts_code} 买入后市值 {actual_buy_value:.2f} 低于阈值 "
-                            f"{min_buy_value_threshold:.2f}（ratio={ratio:.2f}），跳过买入"
-                        )
-                        failed_buy_targets.append(
-                            TargetWeight(
-                                ts_code=ts_code,
-                                target_weight=target_weight,
-                                reason=f"{reason}（买入后市值过小）",
-                            )
-                        )
-                        continue
-                
-                if buy_shares > 0:
-                    orders.append(Order(
-                        ts_code=ts_code,
-                        action='buy',
-                        shares=buy_shares,
-                        price=buy_prices[ts_code],
-                        target_weight=target_weight,
-                        current_weight=current_weight,
-                        reason=reason if current_weight == 0 else "加仓"
-                    ))
-                else:
-                    # 记录失败目标（原因：不足一手）
-                    logger.warning(f"股票 {ts_code} 不足一手，无法买入")
-                    failed_buy_targets.append(TargetWeight(
-                        ts_code=ts_code,
-                        target_weight=target_weight,
-                        reason=f"{reason}（不足一手）"
-                    ))
-        
-        logger.info(f"生成订单: {len([o for o in orders if o.action == 'buy'])} 买，"
-                   f"{len([o for o in orders if o.action == 'sell'])} 卖")
-        
-        if failed_buy_targets:
-            logger.warning(f"买入失败目标数: {len(failed_buy_targets)}，将生成补位计划")
-            # 记录失败信息，供后续生成补位计划使用
-            self._failed_buy_targets = failed_buy_targets
-        else:
-            self._failed_buy_targets = []
-        
-        # 保存延迟卖出队列
-        self.storage.save_pending_sells(self.pending_sells)
-        
-        return orders
     
     def _load_tradability_info(self, trade_date: str) -> Dict[str, Dict]:
         """加载可交易性信息
@@ -485,72 +198,6 @@ class PaperBroker:
         can_sell, reason = evaluate_trade_status(info, "sell")
         return can_sell, reason or "可卖出"
     
-    def execute_orders(
-        self,
-        orders: List[Order],
-        trade_date: str,
-        buy_price_type: str = 'close',
-        sell_price_type: str = 'close'
-    ) -> List[Fill]:
-        """执行订单并打印明细
-        
-        Args:
-            orders: 订单列表
-            trade_date: 交易日期 YYYYMMDD
-            buy_price_type: 买入价格类型 open/close
-            sell_price_type: 卖出价格类型 open/close
-            
-        Returns:
-            成交记录列表
-        """
-        fills = []
-        
-        # 记录执行前的持仓快照（用于统计）
-        positions_before = {}
-        for ts_code, pos in self.account.get_positions().items():
-            positions_before[ts_code] = pos.shares
-        
-        # 打印标题
-        header = ["股票代码", "方向", "目标权重", "当前权重", "股数", "价格类型", "参考价格", "成交金额", "佣金", "印花税", "滑点", "总成本", "原因"]
-        logger.info("=" * 120)
-        logger.info(f"纸面交易执行明细 - {trade_date}")
-        logger.info("=" * 120)
-        #logger.info(f"{'股票代码':<12} {'方向':<6} {'目标权重':<10} {'当前权重':<10} "
-        #           f"{'股数':<8} {'价格类型':<8} {'参考价格':<10} {'成交金额':<12} "
-        #           f"{'佣金':<10} {'印花税':<10} {'滑点':<10} {'总成本':<10} {'原因':<15}")
-        logger.info(format_row(header, self.order_table_widths, ['left'] * len(self.order_table_widths)))
-
-        logger.info("-" * 120)
-        
-        # 先执行卖出订单
-        sell_orders = [o for o in orders if o.action == 'sell']
-        for order in sell_orders:
-            fill = self._execute_single_order(order, trade_date, sell_price_type)
-            if fill:
-                fills.append(fill)
-                self._print_order_detail(order, fill, sell_price_type)
-        
-        # 再执行买入订单
-        buy_orders = [o for o in orders if o.action == 'buy']
-        for order in buy_orders:
-            fill = self._execute_single_order(order, trade_date, buy_price_type)
-            if fill:
-                fills.append(fill)
-                self._print_order_detail(order, fill, buy_price_type)
-        
-        # 统计交易类型
-        stats = self._calculate_execution_stats(fills, positions_before)
-        
-        logger.info("=" * 120)
-        logger.info(f"执行完成: {len([f for f in fills if f.action == 'buy'])} 买，"
-                   f"{len([f for f in fills if f.action == 'sell'])} 卖")
-        logger.info(f"  - 买入: 新建持仓 {stats['new_position']} 笔，加仓 {stats['add_position']} 笔")
-        logger.info(f"  - 卖出: 清仓 {stats['liquidate']} 笔，减仓 {stats['reduce_position']} 笔")
-        logger.info(f"账户现金: {self.account.get_cash():,.2f}")
-        logger.info(f"持仓数量: {len(self.account.get_positions())}")
-        logger.info("=" * 120)
-        
-        return fills
     
     def execute_instructions(
         self,
@@ -1068,36 +715,6 @@ class PaperBroker:
         
         return stats
     
-    def _print_order_detail(self, order: Order, fill: Fill, price_type: str) -> None:
-        """打印订单明细
-        
-        Args:
-            order: 订单
-            fill: 成交记录
-            price_type: 价格类型
-        """
-        #logger.info(
-        #    f"{order.ts_code:<12} {order.action:<6} {order.target_weight:<10.4f} {order.current_weight:<10.4f} "
-        #    f"{order.shares:<8} {price_type:<8} {fill.price:<10.2f} {fill.amount:<12.2f} "
-        #    f"{fill.commission:<10.2f} {fill.stamp_tax:<10.2f} {fill.slippage:<10.2f} "
-        #    f"{fill.total_cost:<10.2f} {fill.reason:<15}"
-        #)
-        row = [
-            order.ts_code,
-            order.action,
-            f"{order.target_weight:.4f}",
-            f"{order.current_weight:.4f}",
-            str(order.shares),
-            price_type,
-            f"{fill.price:.2f}",
-            f"{fill.amount:.2f}",
-            f"{fill.commission:.2f}",
-            f"{fill.stamp_tax:.2f}",
-            f"{fill.slippage:.2f}",
-            f"{fill.total_cost:.2f}",
-            fill.reason
-        ]
-        logger.info(format_row(row, self.order_table_widths, self.order_table_aligns))
 
     
     def get_positions_detail(self, current_prices: Dict[str, float], current_date: Optional[str] = None, stock_names: Optional[Dict[str, str]] = None) -> pd.DataFrame:

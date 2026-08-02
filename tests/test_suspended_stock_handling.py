@@ -95,70 +95,32 @@ class TestPaperTradingSuspendedHandling:
             # 验证：停牌股票不会触发止损
             assert len(actions) == 0, "停牌股票不应触发止损"
 
-    def test_sell_suspended_stock_added_to_pending_sells(
-        self, sample_account_with_position, temp_storage
-    ):
-        """测试：卖出停牌股票时加入延迟卖出队列（停牌原因）"""
-        broker = PaperBroker(
-            account=sample_account_with_position, storage=temp_storage, verbose=False
-        )
-
-        # 创建目标权重（需要卖出）
-        targets = [TargetWeight(ts_code="000001.SZ", target_weight=0.0, reason="退出持仓")]
-
-        # 提供卖出价格（用于权重计算），但停牌时可交易性检查会阻止卖出
-        buy_prices = {}
-        sell_prices = {"000001.SZ": 10.0}
-
-        # Mock 可交易性信息（停牌）
-        tradability = {
-            "000001.SZ": {
-                "is_suspended": 1,
-                "is_limit_up": 0,
-                "is_limit_down": 0,
-                "tradable": 0,  # 停牌股票不可交易
-            }
-        }
-
-        with (
-            patch.object(broker, "_load_tradability_info", return_value=tradability),
-            patch.object(broker, "_get_suspend_calendar") as mock_sc,
-        ):
-            # Mock SuspendCalendar 返回停牌
-            mock_sc.return_value.is_suspended.return_value = True
-
-            # 生成订单
-            orders = broker.generate_orders(
-                targets=targets,
-                buy_prices=buy_prices,
-                sell_prices=sell_prices,
-                trade_date="20260120",
-            )
-
-            # 验证：没有生成订单（因为停牌不可卖出）
-            assert len(orders) == 0, "停牌股票不应生成卖出订单"
-
-            # 验证：加入了延迟卖出队列
-            assert len(broker.pending_sells) == 1, "应该加入延迟卖出队列"
-
-            pending_sell = broker.pending_sells[0]
-            assert pending_sell.ts_code == "000001.SZ"
-            assert pending_sell.shares == 1000
 
     def test_sell_no_price_data_added_to_pending_sells(
         self, sample_account_with_position, temp_storage
     ):
-        """测试：卖出无价格数据股票时加入延迟卖出队列（无价格数据原因）"""
+        """测试：执行指令时卖出无价格数据股票加入延迟卖出队列（无价格数据原因）"""
+        from src.lazybull.paper.models import TradeInstruction
+
         broker = PaperBroker(
             account=sample_account_with_position, storage=temp_storage, verbose=False
         )
 
-        # 创建目标权重（需要卖出）
-        targets = [TargetWeight(ts_code="000001.SZ", target_weight=0.0, reason="退出持仓")]
+        # 创建卖出指令
+        instructions = [
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="sell",
+                shares=1000,
+                price_type="close",
+                reason="退出持仓",
+                source_date="20260119",
+                target_weight=0.0,
+            )
+        ]
 
-        # 通过 buy_prices 提供参考价格（用于权重计算），但不提供 sell_prices
-        # 这样 ts_code not in sell_prices 触发 "无卖出价格" 分支
-        buy_prices = {"000001.SZ": 10.0}
+        # 无卖出价格：ts_code not in sell_prices 触发 "无卖出价格" 分支
+        buy_prices = {}
         sell_prices = {}  # 000001.SZ 无卖出价格
 
         # Mock 可交易性信息（非停牌，但无价格数据）
@@ -178,16 +140,16 @@ class TestPaperTradingSuspendedHandling:
             # Mock SuspendCalendar 返回非停牌
             mock_sc.return_value.is_suspended.return_value = False
 
-            # 生成订单
-            orders = broker.generate_orders(
-                targets=targets,
+            # 执行指令
+            fills = broker.execute_instructions(
+                instructions=instructions,
                 buy_prices=buy_prices,
                 sell_prices=sell_prices,
                 trade_date="20260120",
             )
 
-            # 验证：没有生成订单（无卖出价格）
-            assert len(orders) == 0, "无价格数据股票不应生成卖出订单"
+            # 验证：没有成交
+            assert len(fills) == 0, "无价格数据股票不应成交"
 
             # 验证：加入了延迟卖出队列
             assert len(broker.pending_sells) == 1, "应该加入延迟卖出队列"

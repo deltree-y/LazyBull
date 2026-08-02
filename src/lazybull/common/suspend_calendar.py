@@ -3,11 +3,28 @@
 提供统一的停牌判断接口，基于 raw/suspend 数据
 """
 
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Tuple
 import pandas as pd
 from loguru import logger
 
 from ..data.storage import Storage
+
+
+def get_suspend_calendar(
+    data_storage: Optional[Storage] = None,
+) -> Tuple["SuspendCalendar", Storage]:
+    """从存储实例构建停牌日历（回测引擎与纸面 broker 共用）.
+
+    Args:
+        data_storage: Storage 实例；为 None 时创建默认实例.
+
+    Returns:
+        (calendar, resolved_storage)：resolved_storage 为实际使用的 Storage,
+        供调用方回写自身缓存，保持两侧“缺失时默认创建”的行为一致。
+    """
+    if data_storage is None:
+        data_storage = Storage()
+    return SuspendCalendar(data_storage), data_storage
 
 
 class SuspendCalendar:

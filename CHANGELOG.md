@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.4] - 2026-08-02
+
+### Removed
+
+- **删除纸面交易历史遗留死代码**：
+  - `paper/runner.py`：删除 `_regime_combined`（零调用且引用不存在属性）、
+    `_estimate_pending_buy_shares_backtest_style`（零调用薄包装）、`run_t1`/`run_retry`
+    （生产已被 `runtime.py` 内联等价逻辑替代）、`_build_pnl_price_map_for_date`/
+    `_resolve_buy_pnl_price_for_position`（零调用，与 broker 版重复）、
+    `_generate_ranked_with_lot_constraint` 内 `break` 后不可达孤儿块。
+  - `paper/broker.py`：删除权重驱动旧路径 `generate_orders`/`execute_orders` 及仅被其
+    调用的 `_print_order_detail`，生产执行统一走指令驱动 `execute_instructions`。
+  - 修复删除 `@staticmethod` 方法后残留孤立装饰器误装饰 `_record_nav` 的问题。
+- **清理测试**：删除 13 个仅覆盖已删除旧路径的测试，改写 16 个测试为指令驱动
+  `execute_instructions` 与组合价值口径（`test_sell_order_reason` / `test_buy_replacement` /
+  `test_suspended_stock_handling` / `test_pending_buy_estimation`）。
+
+### Changed
+
+- **停牌日历构建共享**：`_get_suspend_calendar` 抽为 `common/suspend_calendar.py` 的
+  `get_suspend_calendar()`，回测引擎与纸面 broker 复用（保留各自延迟缓存与默认 Storage 赋值）。
+- **持有天数计算共享**：交易日口径持有天数收敛为 `common/date_utils.py` 的
+  `calc_holding_trade_days()`，`runner._calc_holding_days` 与 `broker._calc_holding_trade_days`
+  改为薄包装复用。
+- **统一补位股数估算口径**：`_print_replacement_targets` 展示由“现金均分”口径改为
+  与实际执行一致的“组合价值×槽位权重”口径（对齐回测），删除旧现金均分实现
+  `_estimate_pending_buy_shares`，展示建议股数与真实成交一致。
+- **清理**：移除 `_generate_instructions` 中无意义的 `del sell_price_type, protected_stocks`
+  消警残留（参数按兼容保留）。
+
 ## [0.90.3] - 2026-08-02
 
 ### Changed

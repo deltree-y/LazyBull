@@ -8,75 +8,8 @@ from src.lazybull.paper import (
     PaperAccount,
     PaperBroker,
     PaperStorage,
-    TargetWeight,
+    TradeInstruction,
 )
-
-
-def test_sell_order_reason_full_liquidation():
-    """测试完全清仓时的 reason 为"退出持仓" """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        storage = PaperStorage(tmpdir)
-        account = PaperAccount(initial_capital=100000.0, storage=storage)
-
-        # 建立持仓（100的倍数）
-        account.add_position(
-            ts_code="000001.SZ",
-            shares=1000,  # 100的倍数
-            buy_price=10.0,
-            buy_cost=15.0,
-            buy_date="20260120",
-        )
-        account.update_cash(-10015.0)
-
-        broker = PaperBroker(account, storage=storage)
-
-        # 清仓目标（target_weight=0，且应该卖出全部股数）
-        targets = []  # 空目标列表意味着清仓所有持仓
-
-        prices = {"000001.SZ": 10.0}
-
-        # Mock the tradability check to return empty dict (no restrictions)
-        with patch.object(broker, "_load_tradability_info", return_value={}):
-            orders = broker.generate_orders(targets, prices, prices, "20260121")
-
-        # 应该生成卖出订单
-        assert len(orders) == 1
-        assert orders[0].action == "sell"
-        assert orders[0].ts_code == "000001.SZ"
-        assert orders[0].shares == 1000  # 卖出全部
-        assert orders[0].reason == "退出持仓"  # 完全清仓
-
-
-def test_sell_order_reason_reduce_position():
-    """测试减仓时的 reason 为"减仓" """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        storage = PaperStorage(tmpdir)
-        account = PaperAccount(initial_capital=100000.0, storage=storage)
-
-        # 建立持仓
-        account.add_position(
-            ts_code="000001.SZ", shares=5000, buy_price=10.0, buy_cost=15.0, buy_date="20260120"
-        )
-        account.update_cash(-50015.0)
-
-        broker = PaperBroker(account, storage=storage)
-
-        # 减仓目标（target_weight>0但小于当前权重）
-        targets = [
-            TargetWeight(ts_code="000001.SZ", target_weight=0.2, reason="信号调整"),
-        ]
-
-        prices = {"000001.SZ": 10.0}
-
-        with patch.object(broker, "_load_tradability_info", return_value={}):
-            orders = broker.generate_orders(targets, prices, prices, "20260121")
-
-        # 应该生成卖出订单
-        assert len(orders) == 1
-        assert orders[0].action == "sell"
-        assert orders[0].ts_code == "000001.SZ"
-        assert orders[0].shares < 5000  # 部分卖出
-        assert orders[0].reason == "减仓"  # 减仓而非清仓
 
 
 def test_execution_stats_new_position():
@@ -87,17 +20,24 @@ def test_execution_stats_new_position():
         broker = PaperBroker(account, cost_model=CostModel(), storage=storage)
 
         # 买入新股票
-        targets = [
-            TargetWeight(ts_code="000001.SZ", target_weight=0.1, reason="新建仓位"),
+        instructions = [
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="buy",
+                shares=1000,
+                price_type="close",
+                reason="新建仓位",
+                source_date="20260120",
+                target_weight=0.1,
+            ),
         ]
 
         prices = {"000001.SZ": 10.0}
 
         with patch.object(broker, "_load_tradability_info", return_value={}):
-            orders = broker.generate_orders(targets, prices, prices, "20260121")
-        fills = broker.execute_orders(orders, "20260121", "close", "close")
+            fills = broker.execute_instructions(instructions, prices, prices, "20260121")
 
-        # 检查统计（通过查看日志输出，这里只能间接验证）
+        # 检查统计
         assert len(fills) == 1
         assert fills[0].action == "buy"
         assert account.get_position("000001.SZ") is not None
@@ -118,15 +58,22 @@ def test_execution_stats_add_position():
         broker = PaperBroker(account, cost_model=CostModel(), storage=storage)
 
         # 加仓
-        targets = [
-            TargetWeight(ts_code="000001.SZ", target_weight=0.5, reason="加仓"),
+        instructions = [
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="buy",
+                shares=1000,
+                price_type="close",
+                reason="加仓",
+                source_date="20260120",
+                target_weight=0.5,
+            ),
         ]
 
         prices = {"000001.SZ": 10.0}
 
         with patch.object(broker, "_load_tradability_info", return_value={}):
-            orders = broker.generate_orders(targets, prices, prices, "20260121")
-        fills = broker.execute_orders(orders, "20260121", "close", "close")
+            fills = broker.execute_instructions(instructions, prices, prices, "20260121")
 
         # 检查
         assert len(fills) == 1
@@ -150,13 +97,22 @@ def test_execution_stats_liquidate():
         broker = PaperBroker(account, cost_model=CostModel(), storage=storage)
 
         # 清仓
-        targets = []  # 空目标列表意味着清仓所有持仓
+        instructions = [
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="sell",
+                shares=1000,
+                price_type="close",
+                reason="退出持仓",
+                source_date="20260120",
+                target_weight=0.0,
+            ),
+        ]
 
         prices = {"000001.SZ": 10.0}
 
         with patch.object(broker, "_load_tradability_info", return_value={}):
-            orders = broker.generate_orders(targets, prices, prices, "20260121")
-        fills = broker.execute_orders(orders, "20260121", "close", "close")
+            fills = broker.execute_instructions(instructions, prices, prices, "20260121")
 
         # 检查
         assert len(fills) == 1
@@ -180,15 +136,22 @@ def test_execution_stats_reduce_position():
         broker = PaperBroker(account, cost_model=CostModel(), storage=storage)
 
         # 减仓
-        targets = [
-            TargetWeight(ts_code="000001.SZ", target_weight=0.2, reason="信号调整"),
+        instructions = [
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="sell",
+                shares=1000,
+                price_type="close",
+                reason="信号调整",
+                source_date="20260120",
+                target_weight=0.2,
+            ),
         ]
 
         prices = {"000001.SZ": 10.0}
 
         with patch.object(broker, "_load_tradability_info", return_value={}):
-            orders = broker.generate_orders(targets, prices, prices, "20260121")
-        fills = broker.execute_orders(orders, "20260121", "close", "close")
+            fills = broker.execute_instructions(instructions, prices, prices, "20260121")
 
         # 检查
         assert len(fills) == 1
@@ -218,9 +181,34 @@ def test_execution_stats_mixed_operations():
         broker = PaperBroker(account, cost_model=CostModel(), storage=storage)
 
         # 调仓：清仓000001.SZ，减仓000002.SZ，新建000003.SZ
-        targets = [
-            TargetWeight(ts_code="000002.SZ", target_weight=0.2, reason="减仓"),
-            TargetWeight(ts_code="000003.SZ", target_weight=0.3, reason="新建仓位"),
+        instructions = [
+            TradeInstruction(
+                ts_code="000001.SZ",
+                action="sell",
+                shares=1000,
+                price_type="close",
+                reason="退出持仓",
+                source_date="20260120",
+                target_weight=0.0,
+            ),
+            TradeInstruction(
+                ts_code="000002.SZ",
+                action="sell",
+                shares=500,
+                price_type="close",
+                reason="减仓",
+                source_date="20260120",
+                target_weight=0.2,
+            ),
+            TradeInstruction(
+                ts_code="000003.SZ",
+                action="buy",
+                shares=1000,
+                price_type="close",
+                reason="新建仓位",
+                source_date="20260120",
+                target_weight=0.3,
+            ),
         ]
 
         prices = {
@@ -230,8 +218,7 @@ def test_execution_stats_mixed_operations():
         }
 
         with patch.object(broker, "_load_tradability_info", return_value={}):
-            orders = broker.generate_orders(targets, prices, prices, "20260121")
-        fills = broker.execute_orders(orders, "20260121", "close", "close")
+            fills = broker.execute_instructions(instructions, prices, prices, "20260121")
 
         # 检查：应该有清仓、减仓、新建仓位各一笔
         sell_fills = [f for f in fills if f.action == "sell"]

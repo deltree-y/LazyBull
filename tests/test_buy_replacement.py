@@ -107,17 +107,23 @@ def test_pending_buy_empty_load(storage):
 
 
 def test_broker_tracks_failed_buy_targets(broker):
-    """测试 broker 跟踪买入失败的目标"""
-    # 创建目标
-    targets = [
-        TargetWeight(ts_code='000001.SZ', target_weight=0.2, reason='信号生成'),
-        TargetWeight(ts_code='000002.SZ', target_weight=0.2, reason='信号生成'),
+    """测试 broker 跟踪买入失败的目标（指令驱动路径）"""
+    # 创建买入指令（000002.SZ 无价格，应该失败）
+    instructions = [
+        TradeInstruction(
+            ts_code='000001.SZ', action='buy', shares=1000, price_type='close',
+            reason='信号生成', source_date='20260120', target_weight=0.2,
+        ),
+        TradeInstruction(
+            ts_code='000002.SZ', action='buy', shares=1000, price_type='close',
+            reason='信号生成', source_date='20260120', target_weight=0.2,
+        ),
     ]
-    
+
     # Mock 价格和可交易性数据
     buy_prices = {'000001.SZ': 10.0}  # 000002.SZ 无价格，应该失败
     sell_prices = {}
-    
+
     # Mock 可交易性信息
     with patch.object(broker, '_load_tradability_info') as mock_tradability:
         mock_tradability.return_value = {
@@ -128,13 +134,13 @@ def test_broker_tracks_failed_buy_targets(broker):
                 'tradable': 1
             },
         }
-        
-        # 生成订单
-        orders = broker.generate_orders(targets, buy_prices, sell_prices, '20260121')
-        
+
+        # 执行指令
+        broker.execute_instructions(instructions, buy_prices, sell_prices, '20260121')
+
         # 获取失败目标
         failed_targets = broker.get_failed_buy_targets()
-        
+
         # 验证：000002.SZ 应该因为无价格数据而失败
         assert len(failed_targets) == 1
         assert failed_targets[0].ts_code == '000002.SZ'
@@ -142,16 +148,19 @@ def test_broker_tracks_failed_buy_targets(broker):
 
 
 def test_broker_tracks_limit_up_as_failed(broker):
-    """测试 broker 将涨停标记为买入失败"""
-    # 创建目标
-    targets = [
-        TargetWeight(ts_code='000001.SZ', target_weight=0.2, reason='信号生成'),
+    """测试 broker 将涨停标记为买入失败（指令驱动路径）"""
+    # 创建买入指令
+    instructions = [
+        TradeInstruction(
+            ts_code='000001.SZ', action='buy', shares=1000, price_type='close',
+            reason='信号生成', source_date='20260120', target_weight=0.2,
+        ),
     ]
-    
+
     # Mock 价格
     buy_prices = {'000001.SZ': 10.0}
     sell_prices = {}
-    
+
     # Mock 可交易性信息（涨停）
     with patch.object(broker, '_load_tradability_info') as mock_tradability:
         mock_tradability.return_value = {
@@ -162,13 +171,13 @@ def test_broker_tracks_limit_up_as_failed(broker):
                 'tradable': 1
             },
         }
-        
-        # 生成订单
-        orders = broker.generate_orders(targets, buy_prices, sell_prices, '20260121')
-        
+
+        # 执行指令
+        broker.execute_instructions(instructions, buy_prices, sell_prices, '20260121')
+
         # 获取失败目标
         failed_targets = broker.get_failed_buy_targets()
-        
+
         # 验证
         assert len(failed_targets) == 1
         assert failed_targets[0].ts_code == '000001.SZ'

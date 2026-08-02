@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(0,3,6,9,13)
+        SelectedSplits = @(13)
     }
     #[PSCustomObject]@{
     #    Label = "0109"

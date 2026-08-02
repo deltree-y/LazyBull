@@ -288,16 +288,11 @@ class BacktestEngine(
         logger.info(f"价格口径: 成交使用不复权 close/open, 绩效使用后复权 close_adj/open_adj")
 
     def _get_suspend_calendar(self):
-        """获取停牌日历实例（延迟创建）"""
+        """获取停牌日历实例（延迟创建，共用 common 构建函数）"""
         if self._suspend_calendar is None:
-            from ..common.suspend_calendar import SuspendCalendar
-            from ..data import Storage
+            from ..common.suspend_calendar import get_suspend_calendar
 
-            # 如果没有提供 data_storage，创建一个默认实例
-            if self.data_storage is None:
-                self.data_storage = Storage()
-
-            self._suspend_calendar = SuspendCalendar(self.data_storage)
+            self._suspend_calendar, self.data_storage = get_suspend_calendar(self.data_storage)
 
         return self._suspend_calendar
 

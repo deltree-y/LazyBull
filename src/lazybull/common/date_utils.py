@@ -160,3 +160,28 @@ def normalize_to_yyyymmdd(value) -> Optional[str]:
 def normalize_series_to_yyyymmdd(series: pd.Series) -> pd.Series:
     """将 Series 统一规范化为 YYYYMMDD 字符串（无效值为 None）。"""
     return series.map(normalize_to_yyyymmdd)
+
+
+def calc_holding_trade_days(
+    buy_date: str,
+    current_date: str,
+    trade_dates_list: list,
+) -> int:
+    """按交易日口径计算持有天数（不含买入当日），回测/纸面共用。
+
+    Args:
+        buy_date: 买入日期 YYYYMMDD
+        current_date: 当前日期 YYYYMMDD
+        trade_dates_list: 开市交易日列表（升序）
+
+    Returns:
+        交易日口径持有天数；日期缺失或不在交易日列表中返回 0。
+    """
+    if not buy_date or not current_date:
+        return 0
+    try:
+        buy_idx = trade_dates_list.index(str(buy_date))
+        cur_idx = trade_dates_list.index(str(current_date))
+        return max(0, cur_idx - buy_idx)
+    except ValueError:
+        return 0

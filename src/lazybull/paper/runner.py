@@ -470,8 +470,7 @@ class PaperTradingRunner:
             交易指令列表
         """
         instructions = []
-        protected_stocks = protected_stocks or set()
-        del sell_price_type, protected_stocks
+        # 注：sell_price_type / protected_stocks 为兼容旧调用保留，本方法不再参与卖出逻辑
 
         # 目标权重字典（供快速查找）
         target_weights = {t.ts_code: (t.target_weight, t.reason) for t in targets}
@@ -944,127 +943,6 @@ class PaperTradingRunner:
         logger.info(f"下一交易日: {t1_date}")
         logger.info("=" * 80)
     
-    def run_t1(
-        self,
-        trade_date: str,
-        buy_price_type: str = 'close',
-        sell_price_type: str = 'close'
-    ) -> None:
-        """T1工作流：读取待执行目标 + 执行订单 + 更新状态
-        
-        Args:
-            trade_date: 交易日期 YYYYMMDD（T1日期）
-            buy_price_type: 买入价格类型 open/close
-            sell_price_type: 卖出价格类型 open/close（固定为close）
-        """
-        # 1. 校正交易日期
-        corrected_date = self._correct_trade_date(trade_date)
-        
-        # 2. 检查幂等性
-        if self.paper_storage.check_run_exists("t1", corrected_date):
-            raise RuntimeError(
-                f"T1 工作流已在 {corrected_date} 执行过，"
-                f"不允许重复执行（幂等性保障）"
-            )
-        
-        logger.info("=" * 80)
-        logger.info(f"开始T1工作流 - {corrected_date}")
-        logger.info("=" * 80)
-        
-        # 3. 读取交易指令
-        logger.info("步骤1: 读取交易指令")
-        instructions = self.paper_storage.load_instructions(corrected_date)
-        
-        # 4. 读取补位买入计划（增量买入）
-        pending_buys = self.paper_storage.load_pending_buys()
-        
-        # 检查是否有任何待执行任务
-        if not instructions and not pending_buys:
-            logger.warning(f"未找到 {corrected_date} 的交易指令或补位买入计划，跳过执行")
-            return
-        
-        if instructions:
-            logger.info(f"读取到 {len(instructions)} 条交易指令")
-        if pending_buys:
-            logger.info(f"读取到 {len(pending_buys)} 个补位买入计划")
-        
-        # 6. 加载价格数据
-        logger.info("步骤2: 加载价格数据")
-        buy_prices, sell_prices = self._load_prices(corrected_date, buy_price_type, sell_price_type)
-        
-        if not buy_prices and not sell_prices:
-            logger.error("无法加载价格数据")
-            return
-        
-        fills_count = 0
-        orders_count = 0
-        
-        # 7. 执行交易指令
-        if instructions:
-            logger.info("步骤3: 执行交易指令")
-            fills = self.broker.execute_instructions(
-                instructions,
-                buy_prices,
-                sell_prices,
-                corrected_date
-            )
-            fills_count += len(fills) if fills else 0
-            orders_count += len(instructions)
-        
-        same_day_pending_buys: List[PendingBuy] = []
-        failed_buy_targets = self.broker.get_failed_buy_targets()
-        if failed_buy_targets:
-            logger.info("步骤3a: 处理当日买入失败的同日顺延补位")
-            same_day_pending_buys = self._build_pending_buys_from_failed_targets(
-                failed_buy_targets,
-                corrected_date,
-                attempts=0,
-            )
-            self.broker.clear_failed_buy_targets()
-            logger.info(f"当日新增 {len(same_day_pending_buys)} 个失败买入槽位，立即按 T0 候选顺延")
-
-        if same_day_pending_buys:
-            pending_buys = same_day_pending_buys + list(pending_buys or [])
-
-        # 8. 执行补位买入（如果有pending_buys）
-        if pending_buys:
-            logger.info("步骤3b: 处理补位买入计划")
-            replenishment_fills = self._execute_pending_buys(
-                pending_buys,
-                buy_prices,
-                corrected_date,
-                buy_price_type
-            )
-            fills_count += len(replenishment_fills) if replenishment_fills else 0
-            orders_count += len(replenishment_fills) if replenishment_fills else 0
-        
-        # 8. 更新账户状态
-        logger.info("步骤5: 更新账户状态")
-        self.account.update_last_date(corrected_date)
-        self.account.save_state()
-        
-        # 9. 记录净值
-        logger.info("步骤6: 记录净值")
-        # 使用收盘价计算净值
-        all_prices = {**sell_prices, **buy_prices}  # 合并价格字典
-        self._record_nav(corrected_date, all_prices)
-        
-        # 11. 保存执行记录
-        run_record = {
-            'trade_date': corrected_date,
-            'buy_price_type': buy_price_type,
-            'sell_price_type': sell_price_type,
-            'instructions_count': len(instructions) if instructions else 0,
-            'pending_buys_count': len(pending_buys) if pending_buys else 0,
-            'orders_count': orders_count,
-            'fills_count': fills_count,
-            'timestamp': pd.Timestamp.now().isoformat()
-        }
-        self.paper_storage.save_run_record("t1", corrected_date, run_record)
-        
-        logger.info("=" * 80)
-        logger.info(f"T1工作流完成 - {corrected_date}")
-        logger.info("=" * 80)
 
     def _build_pending_buys_from_failed_targets(
         self,
@@ -1100,80 +978,7 @@ class PaperTradingRunner:
 
         return pending_buys
     
-    def _estimate_pending_buy_shares(
-        self,
-        ts_code: str,
-        price: float,
-        target_weight: float,
-        total_pending_count: int,
-        pendding_capital_retention_ratio: float
-    ) -> int:
-        """估算补位买入股数（与_execute_pending_buys的实际执行口径一致）
-        
-        本方法封装了补位买入股数的计算逻辑，确保提示信息与实际执行一致。
-        
-        计算逻辑：
-        1. total_cash = account.cash * (1 - pendding_capital_retention_ratio)
-        2. available_cash = total_cash / total_pending_count  # 每个补位目标平均分配
-        3. target_value = total_cash * target_weight
-        4. 若 target_value + estimated_cost > available_cash，则 target_value = available_cash - estimated_cost
-        5. buy_shares = floor(target_value / price / 100) * 100  # 按100股取整
-        
-        Args:
-            ts_code: 股票代码
-            price: 买入价格
-            target_weight: 目标权重
-            total_pending_count: 补位队列中的总数量
-            pendding_capital_retention_ratio: 补位资金保留比例
-            
-        Returns:
-            估算的买入股数（已按100股取整）。若不足一手，返回0
-        """
-        if price <= 0 or total_pending_count <= 0:
-            return 0
-        
-        # 1. 计算总可用现金（扣除保留比例）
-        total_cash = self.account.get_cash() * (1 - pendding_capital_retention_ratio)
-        
-        # 2. 平均分配到每个补位目标
-        available_cash = total_cash / total_pending_count
-        
-        # 3. 根据目标权重计算买入金额
-        target_value = total_cash * target_weight
-        
-        # 4. 预估成本
-        estimated_cost = self.broker.cost_model.calculate_buy_cost(target_value)
-        
-        # 5. 检查是否超出可用现金
-        if target_value + estimated_cost > available_cash:
-            target_value = available_cash - estimated_cost
-            if target_value <= 0:
-                return 0
-        
-        # 6. 计算股数（按100股取整）
-        buy_shares = compute_lot_shares(target_value, price)
-        
-        return buy_shares
 
-    def _estimate_pending_buy_shares_backtest_style(
-        self,
-        ts_code: str,
-        price: float,
-        target_weight: float,
-        current_total_value: float,
-    ) -> int:
-        """按回测口径估算补位买入股数。
-
-        回测补位的买入目标金额为 current_total_value * slot_weight，
-        再按 A 股一手约束取整，若现金不足则按剩余现金缩量。
-        """
-        buy_shares, _ = self._analyze_pending_buy_shares_backtest_style(
-            ts_code=ts_code,
-            price=price,
-            target_weight=target_weight,
-            current_total_value=current_total_value,
-        )
-        return buy_shares
 
     def _analyze_pending_buy_shares_backtest_style(
         self,
@@ -1842,9 +1647,6 @@ class PaperTradingRunner:
             if len(selected) >= target_n:
                 break
 
-                selected.append((ts_code, score))
-                continue
-
             price = price_map.get(ts_code)
             if price is None or price <= 0:
                 skipped_stocks.append((ts_code, "无价格数据"))
@@ -2036,79 +1838,10 @@ class PaperTradingRunner:
         current_date: str,
         trade_dates_list: list,
     ) -> int:
-        """计算两个日期之间的交易日数"""
-        try:
-            buy_idx = trade_dates_list.index(buy_date)
-            cur_idx = trade_dates_list.index(current_date)
-            return cur_idx - buy_idx
-        except ValueError:
-            return 0
+        """计算两个日期之间的交易日数（共用 common.date_utils）。"""
+        from ..common.date_utils import calc_holding_trade_days
 
-    def _build_pnl_price_map_for_date(
-        self,
-        trade_date: str,
-        price_type: str = "close",
-    ) -> Dict[str, float]:
-        """构建某交易日的绩效价格映射（优先后复权）。"""
-        daily_data = self.loader.load_clean_daily_by_date(trade_date)
-        if daily_data is None or daily_data.empty:
-            return {}
-
-        if str(price_type) == "open":
-            candidates = ["open_adj", "open", "close_adj", "close"]
-        else:
-            candidates = ["close_adj", "close", "open_adj", "open"]
-
-        result: Dict[str, float] = {}
-        for _, row in daily_data.iterrows():
-            ts_code = row["ts_code"]
-            value = 0.0
-            for col in candidates:
-                col_val = row.get(col)
-                if col_val is not None and not pd.isna(col_val) and float(col_val) > 0:
-                    value = float(col_val)
-                    break
-            if value > 0:
-                result[ts_code] = value
-        return result
-
-    def _resolve_buy_pnl_price_for_position(
-        self,
-        pos,
-        buy_price_type: str,
-        cache: Dict[str, Dict[str, float]],
-    ) -> float:
-        """解析持仓买入绩效价（优先持仓快照中的 buy_pnl_price）。"""
-        buy_pnl_price = float(getattr(pos, "buy_pnl_price", 0.0) or 0.0)
-        if buy_pnl_price > 0:
-            return buy_pnl_price
-
-        buy_date = getattr(pos, "buy_date", "")
-        if not buy_date:
-            return 0.0
-
-        if buy_date not in cache:
-            cache[buy_date] = self._build_pnl_price_map_for_date(buy_date, buy_price_type)
-
-        return float(cache[buy_date].get(pos.ts_code, 0.0) or 0.0)
-
-    @staticmethod
-    def _regime_combined(features_df: pd.DataFrame, config: dict) -> float:
-        """组合模式：vol_target + trend 双重保护"""
-        trend_exp = PaperTradingRunner._regime_trend(features_df, config)
-
-        # 趋势保护：上行趋势时跳过 vol_target
-        if config.get("market_regime_trend_guard", True) and trend_exp >= 1.0:
-            return 1.0
-
-        vol_exp = PaperTradingRunner._regime_vol_target(features_df, config)
-        combine = config.get("market_regime_combine_method", "min")
-        if combine == "multiply":
-            combined = vol_exp * trend_exp
-        else:
-            combined = min(vol_exp, trend_exp)
-        min_exp = config.get("market_regime_min_exposure", 0.2)
-        return float(np.clip(combined, min_exp, 1.0))
+        return calc_holding_trade_days(buy_date, current_date, trade_dates_list)
 
     def _record_nav(self, trade_date: str, prices: Dict[str, float]) -> None:
         """记录净值
@@ -2361,44 +2094,6 @@ class PaperTradingRunner:
         logger.info("=" * SEPARATOR_LENGTH)
         logger.info("")
     
-    def run_retry(
-        self,
-        trade_date: str,
-        sell_price_type: str = 'close'
-    ) -> None:
-        """重试延迟卖出订单
-        
-        Args:
-            trade_date: 交易日期 YYYYMMDD
-            sell_price_type: 卖出价格类型 open/close
-        """
-        # 1. 校正交易日期
-        corrected_date = self._correct_trade_date(trade_date)
-        
-        # 注意：retry 命令不加锁，允许同日多次执行
-        
-        logger.info("=" * 80)
-        logger.info(f"重试延迟卖出 - {corrected_date}")
-        logger.info("=" * 80)
-        
-        # 2. 重试延迟卖出
-        fills = self.broker.retry_pending_sells(corrected_date, sell_price_type)
-        
-        # 3. 如果有成交，更新账户状态和净值
-        if fills:
-            logger.info("步骤1: 更新账户状态")
-            self.account.update_last_date(corrected_date)
-            self.account.save_state()
-            
-            logger.info("步骤2: 记录净值")
-            # 加载价格
-            buy_prices, sell_prices = self._load_prices(corrected_date, 'close', sell_price_type)
-            all_prices = {**sell_prices, **buy_prices}
-            self._record_nav(corrected_date, all_prices)
-        
-        logger.info("=" * 80)
-        logger.info(f"重试完成 - {corrected_date}，成交 {len(fills)} 笔")
-        logger.info("=" * 80)
     
     def generate_replacement_targets(
         self,
@@ -2644,17 +2339,17 @@ class PaperTradingRunner:
             for _, row in daily_data.iterrows():
                 price_map[row['ts_code']] = row.get('close', 0.0)
         
-        # 加载配置以获取资金保留比例
-        pendding_capital_retention_ratio = self._get_cost_setting(
-            "pendding_capital_retention_ratio", 0.3
-        )
-        
+        # 组合总资产（与 _execute_pending_buys 实际执行口径一致）
+        current_total_value = self.account.get_total_value(price_map)
+        if current_total_value <= 0:
+            current_total_value = float(getattr(self.account, "initial_capital", 0.0) or 0.0)
+
         # 打印表头
         logger.info("=" * 120)
         logger.info("补位买入目标详情（需要在下一交易日继续买入）")
         logger.info("=" * 120)
-        logger.info(f"注意：以下股数为估算值，基于当前价格与现金（保留比例 {pendding_capital_retention_ratio:.1%}）")
-        logger.info(f"实际执行时会受到执行日价格变化、补位队列长度变化等因素影响，但计算规则一致")
+        logger.info("注意：以下股数为估算值，基于当前价格与组合总资产（与实际执行口径一致）")
+        logger.info("实际执行时会受到执行日价格变化、补位队列长度变化等因素影响，但计算规则一致")
         logger.info("=" * 120)
         
         header = ["股票代码", "股票名称", "方向", "参考价格", "估算股数", "原因"]
@@ -2668,14 +2363,13 @@ class PaperTradingRunner:
             name = name_map.get(target.ts_code, '-')
             price = price_map.get(target.ts_code, 0.0)
             
-            # 使用统一的估算方法计算建议股数
+            # 使用与实际执行一致的组合价值口径估算建议股数
             if price > 0:
-                suggested_shares = self._estimate_pending_buy_shares(
+                suggested_shares, _ = self._analyze_pending_buy_shares_backtest_style(
                     ts_code=target.ts_code,
                     price=price,
                     target_weight=target.target_weight,
-                    total_pending_count=len(targets),
-                    pendding_capital_retention_ratio=pendding_capital_retention_ratio
+                    current_total_value=current_total_value,
                 )
             else:
                 suggested_shares = 0
