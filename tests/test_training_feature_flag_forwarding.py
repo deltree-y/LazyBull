@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from scripts import train_ml_model as train_ml_model_module
-from src.lazybull.ml import walk_forward_training_core as core_module
+from src.lazybull.ml.walk_forward import training_core as core_module
 
 
 def _sample_train_df() -> pd.DataFrame:

@@ -25,7 +25,7 @@ from src.lazybull.ml.train_core import (
     train_xgboost_model,
     transform_labels_cs_zscore,
 )
-from src.lazybull.ml.walk_forward_training_reporting import _safe_float
+from .training_reporting import _safe_float
 
 SEED_ENSEMBLE_KEEP_TOP_RATIO = 0.30
 MIN_MODELS = 3

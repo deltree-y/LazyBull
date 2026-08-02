@@ -57,7 +57,7 @@ from src.lazybull.ml.train_core import (
     train_xgboost_model,
     transform_labels_cs_zscore,
 )
-from src.lazybull.ml.walk_forward_utils import (
+from src.lazybull.ml.walk_forward.utils import (
     WalkForwardSplit,
     generate_walk_forward_splits_by_count,
 )

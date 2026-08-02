@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from loguru import logger
 
-from src.lazybull.ml.walk_forward_training_core import (
+from .training_core import (
     SEED_ENSEMBLE_KEEP_MIN_MODELS,
     SEED_ENSEMBLE_KEEP_TOP_RATIO,
 )

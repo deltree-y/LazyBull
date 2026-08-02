@@ -17,7 +17,7 @@ from src.lazybull.ml.run_logger import (
     write_training_run_to_csv,
 )
 from src.lazybull.ml.train_core import evaluate_validation_daily
-from src.lazybull.ml.walk_forward_training_core import (
+from .training_core import (
     MIN_MODELS,
     SEED_ENSEMBLE_KEEP_TOP_RATIO,
     _build_ensemble_sub_models,
@@ -25,7 +25,7 @@ from src.lazybull.ml.walk_forward_training_core import (
     _train_model_on_window,
     compute_offset_windows,
 )
-from src.lazybull.ml.walk_forward_utils import resolve_deploy_train_window
+from .utils import resolve_deploy_train_window
 
 
 def execute_deploy_training(

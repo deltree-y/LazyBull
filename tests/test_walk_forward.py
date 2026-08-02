@@ -18,7 +18,7 @@ import tempfile
 import os
 import types
 
-from src.lazybull.ml.walk_forward_utils import (
+from src.lazybull.ml.walk_forward.utils import (
     generate_walk_forward_splits,
     generate_walk_forward_splits_by_count,
     print_splits_summary,
@@ -634,7 +634,7 @@ class TestWalkForwardCSV:
                 }
             ]
 
-            from src.lazybull.ml.walk_forward_summary import write_walk_forward_summary
+            from src.lazybull.ml.walk_forward.summary import write_walk_forward_summary
             import types
 
             mock_args = types.SimpleNamespace(

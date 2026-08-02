@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.8] - 2026-08-02
+
+### Changed
+
+- **walk_forward 模块规整为子包**：将 `src/lazybull/ml/` 顶层 11 个散落的
+  `walk_forward_*.py` 收敛为 `src/lazybull/ml/walk_forward/` 子包
+  （`__init__.py` 门面 + `backtest/cli/deploy_training/reporting/runner/split_training/`
+  `summary/training/training_core/training_reporting/utils`）。
+  包内交叉引用统一改相对导入；对 `common`/`data`/`universe` 的相对导入层级 +1。
+- **外部引用一次性迁移**：`scripts/walk_forward.py`、`scripts/ana/diagnose_training_stability.py`
+  及 3 个测试文件（`test_walk_forward.py`、`test_walk_forward_training_modules.py`、
+  `test_training_feature_flag_forwarding.py`）改用新路径；旧 `ml.walk_forward_*`
+  模块路径不再保留（一次性破坏性路径变更）。
+
 ## [0.90.7] - 2026-08-02
 
 ### Changed

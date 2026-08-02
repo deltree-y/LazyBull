@@ -5,11 +5,13 @@
 import ast
 from pathlib import Path
 
-from src.lazybull.ml import walk_forward_training as facade
-from src.lazybull.ml import walk_forward_training_core as core
-from src.lazybull.ml import walk_forward_training_reporting as reporting
-from src.lazybull.ml.walk_forward_deploy_training import execute_deploy_training
-from src.lazybull.ml.walk_forward_split_training import (
+from src.lazybull.ml.walk_forward import (
+    training as facade,
+    training_core as core,
+    training_reporting as reporting,
+)
+from src.lazybull.ml.walk_forward.deploy_training import execute_deploy_training
+from src.lazybull.ml.walk_forward.split_training import (
     _build_split_training_candidate,
     execute_split_training,
 )

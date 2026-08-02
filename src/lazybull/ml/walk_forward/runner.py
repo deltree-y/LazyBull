@@ -18,17 +18,17 @@ from src.lazybull.common.config import get_data_root, get_models_root
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
-from src.lazybull.ml.walk_forward_backtest import run_oos_backtest
-from src.lazybull.ml.walk_forward_deploy_training import execute_deploy_training
-from src.lazybull.ml.walk_forward_reporting import (
+from .backtest import run_oos_backtest
+from .deploy_training import execute_deploy_training
+from .reporting import (
     chain_nav_splits,
     write_walk_forward_topk_details,
     write_walk_forward_trade_details,
 )
-from src.lazybull.ml.walk_forward_split_training import execute_split_training
-from src.lazybull.ml.walk_forward_summary import write_walk_forward_summary
-from src.lazybull.ml.walk_forward_training_core import _build_main_board_codes
-from src.lazybull.ml.walk_forward_utils import (
+from .split_training import execute_split_training
+from .summary import write_walk_forward_summary
+from .training_core import _build_main_board_codes
+from .utils import (
     WalkForwardSplit,
     generate_walk_forward_splits_by_count,
     print_splits_summary,

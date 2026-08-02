@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """Walk-forward 训练兼容门面。"""
 
-from src.lazybull.ml.walk_forward_deploy_training import execute_deploy_training
-from src.lazybull.ml.walk_forward_split_training import (
+from .deploy_training import execute_deploy_training
+from .split_training import (
     _build_split_training_candidate,
     execute_split_training,
 )
-from src.lazybull.ml.walk_forward_training_core import (
+from .training_core import (
     MIN_MODELS,
     SEED_ENSEMBLE_KEEP_MIN_MODELS,
     SEED_ENSEMBLE_KEEP_TOP_RATIO,
@@ -22,7 +22,7 @@ from src.lazybull.ml.walk_forward_training_core import (
     _train_model_on_window,
     compute_offset_windows,
 )
-from src.lazybull.ml.walk_forward_training_reporting import (
+from .training_reporting import (
     _fmt_metric,
     _fmt_pct,
     _metric_value,
