@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.5] - 2026-08-02
+
+### Changed
+
+- **拆分纸面交易大文件为 mixin**（沿用回测 `BacktestXxxMixin` 先例，扁平文件 + 门面组合）：
+  - `paper/runner.py`：2390 行 → 150 行门面（`PaperTradingRunner` 组合 7 个 mixin）；
+    拆分出 `runner_calendar.py`（日历/日期）、`runner_rebalance.py`（调仓日判断）、
+    `runner_instructions.py`（指令生成）、`runner_execution.py`（T0/补位执行）、
+    `runner_pricing.py`（价格/Kelly/净值）、`runner_signals.py`（信号）、
+    `runner_replacement.py`（补位目标）。
+  - `paper/broker.py`：1295 行 → 门面（`PaperBroker` 组合 4 个 mixin）；
+    拆分出 `broker_tradability.py`、`broker_execution.py`、`broker_retry.py`、`broker_positions.py`。
+  - `paper/storage.py`：1121 行 → 门面（`PaperStorage` 组合 5 个 mixin）；
+    拆分出 `storage_state.py`、`storage_config.py`、`storage_records.py`、`storage_queue.py`、
+    `storage_maintenance.py`。
+  - 方法体原样搬运、行为不变，`from src.lazybull.paper.runner import PaperTradingRunner` 等
+    既有导入路径保持不变。
+- **新增 `common/constants.py`**：`SHARE_LOT_SIZE`/`SEPARATOR_LENGTH` 由 `runner.py` 迁移至此，
+  供门面与 mixin 共用，避免循环依赖。
+- **测试适配**：将因方法迁移而失效的 `monkeypatch` 目标更新到实际 mixin 模块
+  （`runner_calendar`/`runner_signals`/`runner_replacement`/`runner_execution`），
+  保证 mock 真正生效。
+
 ## [0.90.4] - 2026-08-02
 
 ### Removed
