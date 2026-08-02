@@ -3,10 +3,28 @@
 提供检查股票涨跌停、停牌状态的工具函数，用于选股和交易阶段的过滤。
 """
 
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Mapping, Optional
 
 import pandas as pd
 from loguru import logger
+
+
+def evaluate_trade_status(
+    status: Mapping[str, Any],
+    action: str,
+    *,
+    require_tradable: bool = False,
+) -> tuple[bool, Optional[str]]:
+    """根据单条状态记录判断买卖可执行性。"""
+    if status.get("is_suspended", 0) == 1:
+        return False, "停牌"
+    if action == "buy" and status.get("is_limit_up", 0) == 1:
+        return False, "涨停"
+    if action == "sell" and status.get("is_limit_down", 0) == 1:
+        return False, "跌停"
+    if require_tradable and status.get("tradable", 1) == 0:
+        return False, "不可交易（ST/上市不足等）"
+    return True, None
 
 
 def is_suspended(
@@ -138,21 +156,12 @@ def is_tradeable(
         logger.warning(f"行情数据为空，假定股票可交易 {ts_code} {trade_date}")
         return True, None
 
-    # 检查停牌
-    if is_suspended(ts_code, trade_date, quote_data):
-        return False, "停牌"
-    
-    # 检查涨跌停
-    if action == 'buy':
-        # 买入时涨停难以成交
-        if is_limit_up(ts_code, trade_date, quote_data):
-            return False, "涨停"
-    elif action == 'sell':
-        # 卖出时跌停难以成交
-        if is_limit_down(ts_code, trade_date, quote_data):
-            return False, "跌停"
-    
-    return True, None
+    status = {
+        "is_suspended": is_suspended(ts_code, trade_date, quote_data),
+        "is_limit_up": is_limit_up(ts_code, trade_date, quote_data),
+        "is_limit_down": is_limit_down(ts_code, trade_date, quote_data),
+    }
+    return evaluate_trade_status(status, action)
 
 
 def get_trade_status_info(

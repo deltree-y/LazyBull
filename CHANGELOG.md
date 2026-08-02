@@ -2,6 +2,80 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.2] - 2026-08-02
+
+### Removed
+
+- **移除无效信号门控历史接口**：删除统一交易参数和 walk-forward 中的信号置信度门控、
+  composite 门控、滚动质量门控、动态 Top-N 与持仓奖励参数。这些参数未进入
+  `TradingConfig`、信号或回测引擎，历史上接受参数但不会改变运行结果。
+- **清理无效汇总字段**：walk-forward summary 不再写入上述参数，实验对比不再聚合
+  从未由当前回测链路生成的门控持币率、平均仓位和平均置信度指标。
+- **移除未接通的 ECT 入口**：删除 walk-forward 的权益曲线交易参数、日志和汇总列；
+  风险模块中的独立实现保留，但不再暴露不会传入当前回测引擎的命令行接口。
+- **移除无效滚动步长接口**：按 `split_count + final_date` 反推的切分从未使用 `--step`；
+  现删除该 CLI、训练日志与汇总字段，并移除 batch 中无效的扫描维度和重复任务组合。
+
+### Changed
+
+- **统一可交易性状态判断**：新增单条状态记录的共享纯函数，回测/选股的 DataFrame 路径与
+  纸面交易 broker 复用同一停牌、涨停和跌停判断；纸面交易特有的 `tradable` 买入过滤和
+  `SuspendCalendar` 优先级保持不变。
+- **统一整手买入股数计算**：新增金额、价格到整手股数的共享纯函数，回测引擎、纸面
+  broker 与 runner 统一复用；各路径原有预算、手续费和现金缩量规则保持不变。
+- **拆分 walk-forward 汇总模块**：将 split 指标整理、条件参数清洗和 summary CSV 写入
+  从 `scripts/walk_forward.py` 迁移至 `src/lazybull/ml/walk_forward_summary.py`。
+- **拆分 walk-forward OOS 回测模块**：将单 split 数据准备、引擎执行与绩效提取迁移至
+  `src/lazybull/ml/walk_forward_backtest.py`，主脚本仅保留调用和结果编排。
+- **合并训练运行记录构造器**：普通训练与 walk-forward 共用 `ml/run_logger.py` 的记录构造
+  逻辑，统一验证隔离、TopK 与测试集指标落盘规则，并正式记录 `num_leaves`。
+- **拆分 walk-forward 报告模块**：TopK 明细、成交归因和全周期串联净值统一迁移至
+  `src/lazybull/ml/walk_forward_reporting.py`。
+- **拆分 walk-forward 训练域模块**：将训练窗口构建、多偏移/多种子集成、split/deploy
+  训练执行及训练评估辅助函数从 `scripts/walk_forward.py` 迁移至
+  `src/lazybull/ml/walk_forward_training.py`；主脚本保留 CLI 编排并通过导入重导出兼容旧引用。
+- **细分 walk-forward 训练子模块**：`src/lazybull/ml/walk_forward_training.py` 调整为兼容门面，
+  训练核心函数与常量迁移至 `walk_forward_training_core.py`，日志/指标打印迁移至
+  `walk_forward_training_reporting.py`，split 与 deploy 执行入口分别迁移至
+  `walk_forward_split_training.py` 与 `walk_forward_deploy_training.py`；
+  算法与训练行为保持不变。
+- **拆分 walk-forward CLI 与 runner**：参数构建、解析、规范化与校验迁移至
+  `src/lazybull/ml/walk_forward_cli.py`，运行编排与 split 过滤迁移至
+  `src/lazybull/ml/walk_forward_runner.py`；`scripts/walk_forward.py` 调整为薄入口并保持历史导出。
+- **拆分回测主循环状态机边界**：`BacktestEngine.run` 原样迁移至
+  `src/lazybull/backtest/run_loop.py` 的 `BacktestRunLoopMixin.run`，
+  每日 T0/T1 状态推进、早调仓回滚与统计输出顺序保持不变，`engine.py` 保留状态与执行组件实现。
+- **拆分回测信号执行边界**：将 `_build_signal_data`、`_post_filter_candidates`、
+  `_get_position_weight_for_planning`、`_queue_condition_sell_refill_signal`、
+  `_get_holding_features_row`、`_generate_signal` 原样迁移至
+  `src/lazybull/backtest/signal_execution.py` 的 `BacktestSignalExecutionMixin`，
+  保持行业约束延迟导入与 `BacktestEngineML` 三个 hook 覆写行为不变。
+- **拆分回测买入执行边界**：将 `_execute_pending_buys`、`_process_position_completion`、
+  `_buy_stock_with_status_check`、`_build_position_extra_info`、`_buy_stock_direct`、
+  `_buy_stock`、`_update_completion_attribution` 原样迁移至
+  `src/lazybull/backtest/buy_execution.py` 的 `BacktestBuyExecutionMixin`，
+  保持 T1 候选顺位、未成交槽位、补齐窗口、旁路归因、整手股数、手续费、
+  最小买入阈值与 pending order 行为不变。
+- **拆分回测卖出执行边界**：将 `_queue_rebalance_sells`、`_check_and_sell`、
+  `_execute_pending_condition_sells`、`_check_stop_loss`、`_execute_pending_stop_loss_sells`、
+  `_sell_stock`、`_sell_stock_with_status_check`、`_sell_stock_direct` 原样迁移至
+  `src/lazybull/backtest/sell_execution.py` 的 `BacktestSellExecutionMixin`，
+  保持调仓卖出候选、持有期/盈利延续、T0 触发 T1 执行、止损去重、
+  停牌/跌停延迟、开盘/收盘口径及 PnL 与交易记录字段不变。
+- **拆分回测延迟订单执行边界**：将 `_record_pending_order_event` 与
+  `_process_pending_orders` 原样迁移至
+  `src/lazybull/backtest/pending_execution.py` 的 `BacktestPendingExecutionMixin`，
+  保持 `PendingOrderManager` 在 `__init__` 的 `event_sink=self._record_pending_order_event`
+  绑定、每日重试流程、可交易性检查、买卖分发与成功/过期/继续延迟状态更新不变。
+- **拆分回测报告与日志边界**：将调仓摘要 formatter 与日级日志/告警/信号汇总、
+  决策 trace、进度日志等方法原样迁移至
+  `src/lazybull/backtest/reporting.py` 的 `BacktestReportingMixin`，
+  `engine.py` 保留 `_get_min_buy_value_threshold` 并通过导入重导出
+  `_format_rebalance_decision_summary` 兼容既有引用。
+- **清理回测引擎死代码**：删除 `engine.py` 顶层未调用的
+  `_format_buy_execution_stock_list`、`_sum_buy_execution_weights`、
+  `_format_buy_execution_summary`，不再保留重复实现。
+
 ## [0.90.1] - 2026-08-02
 
 ### Removed

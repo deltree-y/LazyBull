@@ -4,12 +4,30 @@ import pandas as pd
 import pytest
 
 from src.lazybull.common.trade_status import (
+    evaluate_trade_status,
     is_suspended,
     is_limit_up,
     is_limit_down,
     is_tradeable,
     get_trade_status_info
 )
+
+
+@pytest.mark.parametrize(
+    "status,action,require_tradable,expected",
+    [
+        ({"is_suspended": 1}, "buy", False, (False, "停牌")),
+        ({"is_limit_up": 1}, "buy", False, (False, "涨停")),
+        ({"is_limit_down": 1}, "sell", False, (False, "跌停")),
+        ({"tradable": 0}, "buy", True, (False, "不可交易（ST/上市不足等）")),
+        ({"tradable": 0}, "sell", False, (True, None)),
+    ],
+)
+def test_evaluate_trade_status(status, action, require_tradable, expected):
+    """测试共享的单条交易状态判断。"""
+    assert evaluate_trade_status(
+        status, action, require_tradable=require_tradable
+    ) == expected
 
 
 @pytest.fixture

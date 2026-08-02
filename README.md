@@ -28,7 +28,74 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.90.1)
+### 当前版本 (v0.90.2)
+
+- **移除无效信号门控历史接口**：
+  - 删除信号置信度门控、composite 门控、动态 Top-N 与持仓奖励 CLI 参数；
+  - 这些参数未进入 `TradingConfig`、信号或回测引擎，历史上接受参数但不会改变运行结果；
+  - 同步移除未接入回测引擎的 ECT 参数，风险模块中的独立实现不受影响；
+  - walk-forward 汇总与实验对比不再输出对应空字段和幽灵指标。
+  - 按切分数量反推的主链不再暴露无效 `--step`，batch 也不再生成仅步长不同的重复任务。
+
+- **统一交易状态判断**：
+  - 回测、选股与纸面交易 broker 共用停牌、涨停和跌停状态决策；
+  - 纸面交易仍保留 `tradable` 买入过滤和停牌日历优先级。
+  - 回测与纸面交易统一复用金额、价格到 A 股整手股数的计算函数。
+
+- **Walk-forward 汇总模块拆分**：
+  - split 指标整理、条件参数清洗与 summary CSV 写入已迁移到独立 ML 模块；
+  - 单 split 的 OOS 数据准备、回测执行和绩效提取已迁移到独立回测模块；
+  - 训练窗口构建、多偏移/多种子集成与种子筛选评分迁移到
+    `src/lazybull/ml/walk_forward_training_core.py`；
+  - OOS 重点面板与回测前模型摘要迁移到
+    `src/lazybull/ml/walk_forward_training_reporting.py`；
+  - split 与 deploy 训练执行入口分别迁移到
+    `src/lazybull/ml/walk_forward_split_training.py` 与
+    `src/lazybull/ml/walk_forward_deploy_training.py`；
+  - `src/lazybull/ml/walk_forward_training.py` 保留为兼容门面重导出；
+  - 普通训练和 walk-forward 共用训练运行记录构造器；
+  - TopK 明细、成交归因和串联净值由独立报告模块负责；
+  - 主脚本继续保留训练和部署编排职责。
+
+- **Walk-forward CLI/Runner 拆分**：
+  - 参数解析与校验迁移至 `src/lazybull/ml/walk_forward_cli.py`，提供 `build_walk_forward_parser()` 与 `parse_walk_forward_args(argv=None)`；
+  - split 过滤与运行编排迁移至 `src/lazybull/ml/walk_forward_runner.py`，提供 `_filter_splits_by_selected_indices()` 与 `run_walk_forward(args)`；
+  - `scripts/walk_forward.py` 调整为薄入口，保留历史导出符号兼容既有测试与外部调用。
+
+- **回测主循环状态机边界拆分**：
+  - `BacktestEngine.run` 原样迁移到 `src/lazybull/backtest/run_loop.py` 的 `BacktestRunLoopMixin.run`；
+  - 每日 T0/T1 状态推进、早调仓回滚、signal_dates 修剪、finally 清理和统计输出顺序保持一致；
+  - `src/lazybull/backtest/engine.py` 聚焦状态字段与执行组件，不改动既有交易算法。
+
+- **回测信号执行边界拆分**：
+  - `_build_signal_data`、`_post_filter_candidates`、`_get_position_weight_for_planning`、`_queue_condition_sell_refill_signal`、`_get_holding_features_row`、`_generate_signal`
+    已原样迁移到 `src/lazybull/backtest/signal_execution.py` 的 `BacktestSignalExecutionMixin`；
+  - `BacktestEngine` 与 `BacktestEngineML` 的既有覆写关系保持不变，行业约束继续采用延迟导入。
+
+- **回测买入执行边界拆分**：
+  - `_execute_pending_buys`、`_process_position_completion`、`_buy_stock_with_status_check`、`_build_position_extra_info`、`_buy_stock_direct`、`_buy_stock`、`_update_completion_attribution`
+    已原样迁移到 `src/lazybull/backtest/buy_execution.py` 的 `BacktestBuyExecutionMixin`；
+  - T1 候选顺位、未成交槽位、补齐窗口、旁路归因、整手股数、手续费、最小买入阈值与 pending order 行为保持不变。
+
+- **回测卖出执行边界拆分**：
+  - `_queue_rebalance_sells`、`_check_and_sell`、`_execute_pending_condition_sells`、`_check_stop_loss`、`_execute_pending_stop_loss_sells`、`_sell_stock`、`_sell_stock_with_status_check`、`_sell_stock_direct`
+    已原样迁移到 `src/lazybull/backtest/sell_execution.py` 的 `BacktestSellExecutionMixin`；
+  - 调仓卖出候选、持有期/盈利延续、T0 触发 T1 执行、止损去重、停牌/跌停延迟、开盘/收盘口径以及 PnL 与交易记录字段保持不变。
+
+- **回测延迟订单执行边界拆分**：
+  - `_record_pending_order_event`、`_process_pending_orders`
+    已原样迁移到 `src/lazybull/backtest/pending_execution.py` 的 `BacktestPendingExecutionMixin`；
+  - `PendingOrderManager` 在 `BacktestEngine.__init__` 中继续通过
+    `event_sink=self._record_pending_order_event` 绑定；
+  - 每日重试、可交易性检查、买卖分发与成功/过期/继续延迟状态保持不变。
+
+- **回测报告与日志边界拆分**：
+  - 调仓摘要 formatter 与日级日志/告警/信号汇总、决策 trace、进度日志等方法
+    已原样迁移到 `src/lazybull/backtest/reporting.py` 的 `BacktestReportingMixin`；
+  - `src/lazybull/backtest/engine.py` 通过导入重导出 `_format_rebalance_decision_summary`，
+    兼容现有测试与外部引用。
+  - 删除 `engine.py` 顶层未调用的 `_format_buy_execution_stock_list`、
+    `_sum_buy_execution_weights`、`_format_buy_execution_summary` 死代码。
 
 - **移除 best_iteration 自适应候选重训**：
   - `walk_forward.py` 不再支持 `--adaptive-best-iter-retrain` 与 `--adaptive-low-iter-max-retries`；

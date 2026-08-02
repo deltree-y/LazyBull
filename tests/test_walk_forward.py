@@ -272,7 +272,6 @@ class TestWalkForwardSplits:
             trade_cal=trade_cal,
             split_count=6,
             final_date="20221231",
-            step_frequency="quarterly",
             train_window_years=2,
             test_window_months=3,
             rebalance_freq=5,
@@ -307,7 +306,6 @@ class TestWalkForwardSplits:
             trade_cal=trade_cal,
             split_count=5,
             final_date="20221231",
-            step_frequency="quarterly",   # 3 个月
             train_window_years=3,
             test_window_months=6,          # 6 个月 > 3 个月步长
         )
@@ -338,7 +336,6 @@ class TestWalkForwardSplits:
                 trade_cal=trade_cal,
                 split_count=0,
                 final_date="20221231",
-                step_frequency="quarterly",
                 train_window_years=2,
                 test_window_months=3,
             )
@@ -381,6 +378,35 @@ class TestWalkForwardSplits:
 
         with pytest.raises(ValueError, match="selected_split_indices"):
             _filter_splits_by_selected_indices(splits, [0, 4])
+
+    def test_parse_walk_forward_args_selected_split_dedup_and_label_override(self):
+        """测试 CLI 解析支持传入 argv，且 split 去重和 label 覆盖生效。"""
+        from scripts.walk_forward import parse_walk_forward_args
+
+        args = parse_walk_forward_args(
+            [
+                "--split-count",
+                "3",
+                "--final-date",
+                "20221230",
+                "--selected-split-indices",
+                "2",
+                "2",
+                "0",
+                "--label",
+                "neu_y_ret_10",
+            ]
+        )
+
+        assert args.selected_split_indices == [2, 0]
+        assert args.label_column == "neu_y_ret_10"
+
+    def test_parse_walk_forward_args_requires_final_date(self):
+        """测试 required 参数校验不依赖 sys.argv。"""
+        from scripts.walk_forward import parse_walk_forward_args
+
+        with pytest.raises(SystemExit):
+            parse_walk_forward_args(["--split-count", "3"])
 
     def test_tree_limited_model_getattr_safe_before_base_model_ready(self):
         """测试反序列化早期未恢复 base_model 时 __getattr__ 不会递归。"""
@@ -608,7 +634,7 @@ class TestWalkForwardCSV:
                 }
             ]
 
-            from scripts.walk_forward import write_walk_forward_summary
+            from src.lazybull.ml.walk_forward_summary import write_walk_forward_summary
             import types
 
             mock_args = types.SimpleNamespace(
@@ -633,37 +659,12 @@ class TestWalkForwardCSV:
                 enable_express_features=False,
                 feature_stability_filter=False,
                 oos_backtest=True,
-                signal_gate_mode="disabled",
-                signal_gate_cost_multiplier=1.8,
-                signal_gate_round_trip_cost=0.004,
-                signal_gate_percentile_warmup=9,
-                signal_confidence_gate_enabled=True,
-                signal_confidence_gate_top_k=8,
-                signal_confidence_gate_thresholds=[0.1, 0.3],
-                signal_confidence_gate_exposure_levels=[0.4, 1.0],
-                signal_gate_quality_enabled=False,
-                signal_gate_quality_window=7,
-                signal_gate_quality_threshold=0.55,
-                signal_gate_quality_halflife=5,
-                signal_gate_dynamic_topn=True,
-                signal_gate_topn_high_multiplier=0.5,
-                signal_gate_topn_low_multiplier=1.6,
-                holding_bonus_enabled=False,
-                holding_bonus_sigma=0.8,
                 bt_sell_timing="open",
                 bt_exclude_st=True,
                 bt_min_list_days=365,
                 bt_stop_loss_enabled=False,
                 bt_stop_loss_drawdown_pct=18.0,
                 bt_stop_loss_consecutive_limit_down=3,
-                bt_equity_curve_enabled=False,
-                bt_equity_curve_drawdown_thresholds=[6.0, 12.0],
-                bt_equity_curve_exposure_levels=[0.8, 0.5],
-                bt_equity_curve_ma_short=7,
-                bt_equity_curve_ma_long=21,
-                bt_equity_curve_recovery_mode="immediate",
-                bt_equity_curve_recovery_step=0.5,
-                bt_equity_curve_recovery_delay_periods=2,
                 position_sizing="equal",
                 kelly_vol_window=90,
                 kelly_max_leverage=0.4,
@@ -675,26 +676,12 @@ class TestWalkForwardCSV:
             df = pd.read_csv(output_path)
             row = df.loc[0]
 
-            assert pd.isna(row["signal_gate_cost_multiplier"])
-            assert pd.isna(row["signal_gate_round_trip_cost"])
-            assert pd.isna(row["signal_gate_percentile_warmup"])
-            assert pd.isna(row["signal_confidence_gate_enabled"])
-            assert pd.isna(row["signal_confidence_gate_top_k"])
-            assert pd.isna(row["signal_confidence_gate_thresholds"])
-            assert pd.isna(row["signal_confidence_gate_exposure_levels"])
-            assert pd.isna(row["signal_gate_quality_window"])
-            assert pd.isna(row["signal_gate_quality_threshold"])
-            assert pd.isna(row["signal_gate_quality_halflife"])
-            assert pd.isna(row["signal_gate_dynamic_topn"])
-            assert pd.isna(row["signal_gate_topn_high_multiplier"])
-            assert pd.isna(row["signal_gate_topn_low_multiplier"])
-            assert pd.isna(row["holding_bonus_sigma"])
+            assert not any("signal_gate" in col for col in df.columns)
+            assert not any("signal_confidence" in col for col in df.columns)
+            assert not any("holding_bonus" in col for col in df.columns)
             assert pd.isna(row["bt_stop_loss_drawdown_pct"])
             assert pd.isna(row["bt_stop_loss_consecutive_limit_down"])
-            assert pd.isna(row["bt_equity_curve_drawdown_thresholds"])
-            assert pd.isna(row["bt_equity_curve_exposure_levels"])
-            assert pd.isna(row["bt_equity_curve_ma_short"])
-            assert pd.isna(row["bt_equity_curve_ma_long"])
+            assert not any("bt_equity_curve" in col for col in df.columns)
             assert pd.isna(row["kelly_vol_window"])
             assert pd.isna(row["kelly_max_leverage"])
             assert row["freshness_strategy"] == "state_keep_event_no_decay"
@@ -715,7 +702,6 @@ class TestRunLoggerIntegration:
             task="regression",
             wf_run_id="wf_test_123",
             split_index=0,
-            step_frequency="quarterly",
             test_start_date="20230101",
             test_end_date="20230331"
         )
@@ -723,7 +709,6 @@ class TestRunLoggerIntegration:
         # 验证字段存在
         assert record.wf_run_id == "wf_test_123"
         assert record.split_index == 0
-        assert record.step_frequency == "quarterly"
         assert record.test_start_date == "20230101"
         assert record.test_end_date == "20230331"
         
@@ -731,7 +716,7 @@ class TestRunLoggerIntegration:
         record_dict = record.to_dict()
         assert "wf_run_id" in record_dict
         assert "split_index" in record_dict
-        assert "step_frequency" in record_dict
+        assert "step_frequency" not in record_dict
         assert "test_start_date" in record_dict
         assert "test_end_date" in record_dict
     
@@ -750,7 +735,6 @@ class TestRunLoggerIntegration:
                 task="regression",
                 wf_run_id="wf_test_123",
                 split_index=0,
-                step_frequency="quarterly",
                 test_start_date="20230101",
                 test_end_date="20230331",
                 n_estimators=200,
@@ -767,7 +751,6 @@ class TestRunLoggerIntegration:
                 task="regression",
                 wf_run_id="wf_test_123",
                 split_index=1,
-                step_frequency="quarterly",
                 test_start_date="20230401",
                 test_end_date="20230630",
                 n_estimators=200,
@@ -785,7 +768,7 @@ class TestRunLoggerIntegration:
             assert len(df) == 2
             assert "wf_run_id" in df.columns
             assert "split_index" in df.columns
-            assert "step_frequency" in df.columns
+            assert "step_frequency" not in df.columns
             assert "test_start_date" in df.columns
             assert "test_end_date" in df.columns
             
@@ -793,7 +776,6 @@ class TestRunLoggerIntegration:
             assert df.loc[0, "wf_run_id"] == "wf_test_123"
             assert df.loc[0, "split_index"] == 0
             assert df.loc[1, "split_index"] == 1
-            assert df.loc[1, "step_frequency"] == "quarterly"
     
     def test_csv_dynamic_column_expansion(self):
         """测试 CSV 动态列扩展（新增 wf 字段时，旧记录自动留空）"""

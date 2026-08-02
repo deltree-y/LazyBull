@@ -104,9 +104,6 @@ COL_NAMES = {
     "bt_win_rate": "回测胜率",
     "bt_total_return_mean": "回测总收益均值",
     "bt_volatility_mean": "回测波动率均值",
-    "bt_signal_confidence_block_rate_mean": "门控持币率均值",
-    "bt_signal_confidence_avg_exposure_mean": "门控平均仓位",
-    "bt_signal_confidence_avg_score_mean": "门控平均置信度",
     "bt_rebalance_freq": "回测调仓频率",
     "bt_initial_capital": "回测初始资金",
     "bt_sell_timing": "回测卖出时机",
@@ -117,14 +114,6 @@ COL_NAMES = {
     "bt_stop_loss_enabled": "回测止损",
     "bt_stop_loss_drawdown_pct": "回测回撤止损%",
     "bt_stop_loss_consecutive_limit_down": "回测连续跌停止损",
-    "bt_equity_curve_enabled": "回测ECT",
-    "bt_equity_curve_drawdown_thresholds": "回测ECT回撤阈值",
-    "bt_equity_curve_exposure_levels": "回测ECT仓位系数",
-    "bt_equity_curve_ma_short": "回测ECT短均线",
-    "bt_equity_curve_ma_long": "回测ECT长均线",
-    "bt_equity_curve_recovery_mode": "回测ECT恢复模式",
-    "bt_equity_curve_recovery_step": "回测ECT恢复步长",
-    "bt_equity_curve_recovery_delay_periods": "回测ECT恢复等待",
     # 训练质量
     "val_rankic_ir_mean": "验证集RankIC_IR均值",
     "train_val_ir_gap": "验证_OOS_IR差距",
@@ -158,7 +147,6 @@ COL_NAMES = {
     "final_date": "最终日期",
     "wf_start_date": "WF起始日期",
     "wf_end_date": "WF结束日期",
-    "step": "滚动频率",
     "train_window_years": "训练窗口年数",
     "test_window_months": "测试窗口月数",
     "val_ratio": "验证集比例",
@@ -287,7 +275,6 @@ PARAM_COLS = [
     "final_date",
     "wf_start_date",
     "wf_end_date",
-    "step",
     "train_window_years",
     "test_window_months",
     "val_ratio",
@@ -348,14 +335,6 @@ PARAM_COLS = [
     "bt_stop_loss_trailing_enabled",
     "bt_stop_loss_trailing_pct",
     "bt_stop_loss_consecutive_limit_down",
-    "bt_equity_curve_enabled",
-    "bt_equity_curve_drawdown_thresholds",
-    "bt_equity_curve_exposure_levels",
-    "bt_equity_curve_ma_short",
-    "bt_equity_curve_ma_long",
-    "bt_equity_curve_recovery_mode",
-    "bt_equity_curve_recovery_step",
-    "bt_equity_curve_recovery_delay_periods",
     # 行业轮动加权
     "industry_momentum_filter",
     "industry_momentum_bottom_pct",
@@ -394,7 +373,6 @@ MODEL_PARAM_KEYS = [
     "final_date",
     "wf_start_date",
     "wf_end_date",
-    "step",
     "train_window_years",
     "test_window_months",
     "val_ratio",
@@ -476,14 +454,6 @@ TRADE_PARAM_KEYS = [
     "bt_stop_loss_trailing_enabled",
     "bt_stop_loss_trailing_pct",
     "bt_stop_loss_consecutive_limit_down",
-    "bt_equity_curve_enabled",
-    "bt_equity_curve_drawdown_thresholds",
-    "bt_equity_curve_exposure_levels",
-    "bt_equity_curve_ma_short",
-    "bt_equity_curve_ma_long",
-    "bt_equity_curve_recovery_mode",
-    "bt_equity_curve_recovery_step",
-    "bt_equity_curve_recovery_delay_periods",
     "industry_momentum_filter",
     "industry_momentum_bottom_pct",
     "industry_rotation_enhanced",
@@ -813,14 +783,6 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
             "bt_stop_loss_trailing_enabled",
             "bt_stop_loss_trailing_pct",
             "bt_stop_loss_consecutive_limit_down",
-            "bt_equity_curve_enabled",
-            "bt_equity_curve_drawdown_thresholds",
-            "bt_equity_curve_exposure_levels",
-            "bt_equity_curve_ma_short",
-            "bt_equity_curve_ma_long",
-            "bt_equity_curve_recovery_mode",
-            "bt_equity_curve_recovery_step",
-            "bt_equity_curve_recovery_delay_periods",
             "industry_momentum_filter",
             "industry_momentum_bottom_pct",
             "industry_rotation_enhanced",
@@ -857,17 +819,6 @@ def _sanitize_summary_train_params(raw_params: dict) -> dict:
         )
     elif not _is_true_param_value(params.get("bt_stop_loss_trailing_enabled")):
         clear("bt_stop_loss_trailing_pct")
-
-    if not _is_true_param_value(params.get("bt_equity_curve_enabled")):
-        clear(
-            "bt_equity_curve_drawdown_thresholds",
-            "bt_equity_curve_exposure_levels",
-            "bt_equity_curve_ma_short",
-            "bt_equity_curve_ma_long",
-            "bt_equity_curve_recovery_mode",
-            "bt_equity_curve_recovery_step",
-            "bt_equity_curve_recovery_delay_periods",
-        )
 
     if not _is_true_param_value(params.get("industry_momentum_filter")):
         clear("industry_momentum_bottom_pct")
@@ -1354,30 +1305,6 @@ def aggregate_run(group: pd.DataFrame) -> dict:
         row["bt_calmar_mean"] = round(bt_cal.mean(), 4) if len(bt_cal) else None
         row["bt_volatility_mean"] = round(bt_vol.mean(), 6) if len(bt_vol) else None
         row["bt_win_rate"] = round((bt_ret > 0).mean(), 3) if len(bt_ret) else None
-        bt_gate_block = (
-            group["bt_signal_confidence_block_rate"].dropna()
-            if "bt_signal_confidence_block_rate" in group.columns
-            else pd.Series(dtype=float)
-        )
-        bt_gate_exposure = (
-            group["bt_signal_confidence_avg_exposure"].dropna()
-            if "bt_signal_confidence_avg_exposure" in group.columns
-            else pd.Series(dtype=float)
-        )
-        bt_gate_score = (
-            group["bt_signal_confidence_avg_score"].dropna()
-            if "bt_signal_confidence_avg_score" in group.columns
-            else pd.Series(dtype=float)
-        )
-        row["bt_signal_confidence_block_rate_mean"] = (
-            round(bt_gate_block.mean(), 6) if len(bt_gate_block) else None
-        )
-        row["bt_signal_confidence_avg_exposure_mean"] = (
-            round(bt_gate_exposure.mean(), 6) if len(bt_gate_exposure) else None
-        )
-        row["bt_signal_confidence_avg_score_mean"] = (
-            round(bt_gate_score.mean(), 6) if len(bt_gate_score) else None
-        )
     else:
         for k in [
             "bt_total_return_mean",
@@ -1387,9 +1314,6 @@ def aggregate_run(group: pd.DataFrame) -> dict:
             "bt_calmar_mean",
             "bt_volatility_mean",
             "bt_win_rate",
-            "bt_signal_confidence_block_rate_mean",
-            "bt_signal_confidence_avg_exposure_mean",
-            "bt_signal_confidence_avg_score_mean",
         ]:
             row[k] = None
 
@@ -1477,9 +1401,6 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         "bt_total_return_mean",
         "bt_max_drawdown_worst",
         "bt_volatility_mean",
-        "bt_signal_confidence_block_rate_mean",
-        "bt_signal_confidence_avg_exposure_mean",
-        "bt_signal_confidence_avg_score_mean",
         # 统计补充
         "oos_rankic_ir_mean",
         "oos_rankic_ir_std",

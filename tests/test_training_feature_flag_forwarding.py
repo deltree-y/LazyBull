@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from scripts import train_ml_model as train_ml_model_module
-from scripts import walk_forward as walk_forward_module
+from src.lazybull.ml import walk_forward_training_core as core_module
 
 
 def _sample_train_df() -> pd.DataFrame:
@@ -27,7 +27,7 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(
-        walk_forward_module,
+        core_module,
         "load_features_data",
         lambda *args, **kwargs: (_sample_train_df(), 1),
     )
@@ -36,7 +36,11 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
         captured.update(kwargs)
         raise RuntimeError("stop after capture")
 
-    monkeypatch.setattr(walk_forward_module, "prepare_training_data", _fake_prepare_training_data)
+    monkeypatch.setattr(
+        core_module,
+        "prepare_training_data",
+        _fake_prepare_training_data,
+    )
 
     args = types.SimpleNamespace(
         task="regression",
@@ -64,7 +68,7 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="stop after capture"):
-        walk_forward_module._train_model_on_window(
+        core_module._train_model_on_window(
             "20240101",
             "20240131",
             storage=None,
@@ -75,14 +79,18 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
 
     assert captured["enable_cashflow_quality_features"] is True
     assert captured["enable_consensus_revision_features"] is True
-    assert captured["factor_exclude_file"] == (
-        "configs/factor_exclude_candidate_sparse_v1.json"
-    )
+    assert captured["factor_exclude_file"] == ("configs/factor_exclude_candidate_sparse_v1.json")
 
 
 def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
     def _fake_train_model_on_window(
-        train_start, train_end, storage, loader, args, main_board_codes=None, random_state_override=None
+        train_start,
+        train_end,
+        storage,
+        loader,
+        args,
+        main_board_codes=None,
+        random_state_override=None,
     ):
         seed = int(random_state_override)
         return {
@@ -105,9 +113,13 @@ def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
             "X_val_len": 1,
         }
 
-    monkeypatch.setattr(walk_forward_module, "_train_model_on_window", _fake_train_model_on_window)
     monkeypatch.setattr(
-        walk_forward_module,
+        core_module,
+        "_train_model_on_window",
+        _fake_train_model_on_window,
+    )
+    monkeypatch.setattr(
+        core_module,
         "_evaluate_train_result_val_daily",
         lambda tr, *_args, **_kwargs: {
             "daily_rankic_ir": {
@@ -142,7 +154,7 @@ def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
         random_state=42,
     )
 
-    sub_models, base_result, _meta = walk_forward_module._build_ensemble_sub_models(
+    sub_models, base_result, _meta = core_module._build_ensemble_sub_models(
         windows=[("20120101", "20181231")],
         storage=None,
         loader=None,
@@ -158,7 +170,13 @@ def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
 
 def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypatch):
     def _fake_train_model_on_window(
-        train_start, train_end, storage, loader, args, main_board_codes=None, random_state_override=None
+        train_start,
+        train_end,
+        storage,
+        loader,
+        args,
+        main_board_codes=None,
+        random_state_override=None,
     ):
         seed = int(random_state_override)
         return {
@@ -181,9 +199,13 @@ def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypa
             "X_val_len": 1,
         }
 
-    monkeypatch.setattr(walk_forward_module, "_train_model_on_window", _fake_train_model_on_window)
     monkeypatch.setattr(
-        walk_forward_module,
+        core_module,
+        "_train_model_on_window",
+        _fake_train_model_on_window,
+    )
+    monkeypatch.setattr(
+        core_module,
         "_evaluate_train_result_val_daily",
         lambda tr, *_args, **_kwargs: {
             "daily_rankic_ir": {
@@ -220,7 +242,7 @@ def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypa
         ensemble_seed_keep_min_models=2,
     )
 
-    sub_models, base_result, meta = walk_forward_module._build_ensemble_sub_models(
+    sub_models, base_result, meta = core_module._build_ensemble_sub_models(
         windows=[("20120101", "20181231")],
         storage=None,
         loader=None,
@@ -251,9 +273,7 @@ def test_ensemble_validation_uses_panel_unseen_by_all_retained_models():
     early_result = make_result(42, "20230630", "20230714", "20230717")
     latest_result = make_result(61, "20230731", "20230811", "20230814")
 
-    selected = walk_forward_module._select_ensemble_validation_result(
-        [early_result, latest_result]
-    )
+    selected = core_module._select_ensemble_validation_result([early_result, latest_result])
 
     assert selected["train_params"]["random_state"] == 61
     assert selected["df_val_split_original"]["trade_date"].min() > "20230811"
@@ -308,6 +328,4 @@ def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):
     assert exc_info.value.code == 1
     assert captured["enable_cashflow_quality_features"] is True
     assert captured["enable_consensus_revision_features"] is True
-    assert captured["factor_exclude_file"] == (
-        "configs/factor_exclude_candidate_sparse_v1.json"
-    )
+    assert captured["factor_exclude_file"] == ("configs/factor_exclude_candidate_sparse_v1.json")

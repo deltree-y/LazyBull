@@ -8,7 +8,8 @@ from loguru import logger
 from ..common.print_table import format_row
 
 from ..common.cost import CostModel
-from ..trading.sizing import compute_min_buy_value_threshold
+from ..common.trade_status import evaluate_trade_status
+from ..trading.sizing import compute_lot_shares, compute_min_buy_value_threshold
 from .account import PaperAccount
 from .models import Fill, Order, PendingBuy, TargetWeight, normalize_trade_reason
 from .storage import PaperStorage
@@ -352,7 +353,7 @@ class PaperBroker:
                         continue
                 
                 # 计算股数（向下取整到100的倍数）
-                buy_shares = int(buy_value / buy_prices[ts_code] / 100) * 100
+                buy_shares = compute_lot_shares(buy_value, buy_prices[ts_code])
 
                 # 防止生成过小仓位：买入后市值需达到“平均仓位市值×比例”
                 if buy_shares > 0 and min_buy_value_threshold > 0:
@@ -446,22 +447,11 @@ class PaperBroker:
         """
         if ts_code not in tradability:
             return True, "无可交易性数据"
-        
-        info = tradability[ts_code]
-        
-        # 停牌检查
-        if info.get('is_suspended', 0) == 1:
-            return False, "停牌"
-        
-        # 涨停检查（涨停不可买入）
-        if info.get('is_limit_up', 0) == 1:
-            return False, "涨停"
-        
-        # 基本可交易性检查
-        if info.get('tradable', 1) == 0:
-            return False, "不可交易（ST/上市不足等）"
-        
-        return True, "可买入"
+
+        can_buy, reason = evaluate_trade_status(
+            tradability[ts_code], "buy", require_tradable=True
+        )
+        return can_buy, reason or "可买入"
     
     def _check_can_sell(self, ts_code: str, tradability: Dict, trade_date: str = None) -> tuple[bool, str]:
         """检查是否可以卖出
@@ -474,6 +464,8 @@ class PaperBroker:
         Returns:
             (can_sell, reason) 是否可卖出及原因
         """
+        info = tradability.get(ts_code)
+
         # 如果提供了 trade_date，优先使用 SuspendCalendar 检查停牌
         if trade_date:
             try:
@@ -481,25 +473,17 @@ class PaperBroker:
                 is_suspended = suspend_calendar.is_suspended(ts_code, trade_date)
                 if is_suspended:
                     return False, "停牌"
+                if info is not None:
+                    info = {**info, "is_suspended": 0}
             except Exception as e:
                 # 停牌数据加载失败，回退到使用 tradability
                 logger.warning(f"停牌数据加载失败（{e}），使用 tradability 判断")
-        
-        # 使用 tradability 判断（兼容旧逻辑）
-        if ts_code not in tradability:
+
+        if info is None:
             return True, "无可交易性数据"
-        
-        info = tradability[ts_code]
-        
-        # 停牌检查（如果没有使用 SuspendCalendar）
-        if not trade_date and info.get('is_suspended', 0) == 1:
-            return False, "停牌"
-        
-        # 跌停检查（跌停不可卖出）
-        if info.get('is_limit_down', 0) == 1:
-            return False, "跌停"
-        
-        return True, "可卖出"
+
+        can_sell, reason = evaluate_trade_status(info, "sell")
+        return can_sell, reason or "可卖出"
     
     def execute_orders(
         self,
@@ -1634,7 +1618,7 @@ class PaperBroker:
                     continue
             
             # 计算股数（向下取整到100的倍数）
-            buy_shares = int(buy_value / price / 100) * 100
+            buy_shares = compute_lot_shares(buy_value, price)
             
             if buy_shares < 100:
                 logger.warning(f"股票 {pb.ts_code} 不足一手（可买{buy_shares}股），保留订单")

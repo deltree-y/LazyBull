@@ -5,9 +5,27 @@ import pytest
 
 from src.lazybull.trading.sizing import (
     compute_kelly_weights,
+    compute_lot_shares,
     compute_min_buy_value_threshold,
     estimate_variance_from_prices,
 )
+
+
+class TestComputeLotShares:
+    """整手买入股数计算测试。"""
+
+    def test_rounds_down_to_default_lot(self):
+        assert compute_lot_shares(7_000, 33.33) == 200
+
+    def test_supports_custom_lot_size(self):
+        assert compute_lot_shares(1_050, 10, lot_size=10) == 100
+
+    @pytest.mark.parametrize(
+        "budget,price,lot_size",
+        [(0, 10, 100), (1_000, 0, 100), (1_000, 10, 0), (None, None, None)],
+    )
+    def test_invalid_input_returns_zero(self, budget, price, lot_size):
+        assert compute_lot_shares(budget, price, lot_size) == 0
 
 
 class TestEstimateVarianceFromPrices:

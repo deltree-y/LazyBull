@@ -59,6 +59,7 @@ class TrainingRunRecord:
     # XGBoost超参数
     n_estimators: int = 0
     max_depth: int = 0
+    num_leaves: int = 0
     learning_rate: float = 0.0
     subsample: float = 0.0
     colsample_bytree: float = 0.0
@@ -126,7 +127,6 @@ class TrainingRunRecord:
     # Walk-forward 相关字段
     wf_run_id: Optional[str] = None  # walk-forward 运行ID（UUID或可读字符串）
     split_index: Optional[int] = None  # 切分索引（在一次 walk-forward 运行中的序号）
-    step_frequency: Optional[str] = None  # 滚动频率（monthly/quarterly/semiannual/yearly）
     test_start_date: Optional[str] = None  # 样本外测试开始日期
     test_end_date: Optional[str] = None  # 样本外测试结束日期
 
@@ -243,8 +243,13 @@ def create_training_run_record_from_training_session(
     train_params: Dict[str, Any],
     data_stats: Dict[str, Any],
     performance_metrics: Dict[str, Any],
+    timestamp: Optional[str] = None,
+    wf_run_id: Optional[str] = None,
+    split_index: Optional[int] = None,
+    test_start_date: Optional[str] = None,
+    test_end_date: Optional[str] = None,
 ) -> TrainingRunRecord:
-    """从训练会话信息创建训练运行记录
+    """从普通训练或 walk-forward 训练会话创建运行记录。
 
     Args:
         start_date: 训练开始日期
@@ -259,15 +264,11 @@ def create_training_run_record_from_training_session(
     Returns:
         TrainingRunRecord对象
     """
-    # 当前时间戳
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # 提取训练集和验证集指标
+    timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     train_metrics = performance_metrics.get("train", {})
     val_metrics = performance_metrics.get("validation", {})
     val_daily_metrics = performance_metrics.get("validation_daily", {})
 
-    # 创建记录对象
     record = TrainingRunRecord(
         timestamp=timestamp,
         model_version=model_version,
@@ -275,10 +276,12 @@ def create_training_run_record_from_training_session(
         end_date=end_date,
         label_column=label_column,
         task=task,
-        # 标签变换配置
+        wf_run_id=wf_run_id,
+        split_index=split_index,
+        test_start_date=test_start_date,
+        test_end_date=test_end_date,
         label_transform=train_params.get("label_transform"),
         winsorize_p=train_params.get("winsorize_p"),
-        # 分类任务配置
         pos_quantile=train_params.get("pos_quantile"),
         pos_topk=train_params.get("pos_topk"),
         scale_pos_weight=train_params.get("scale_pos_weight"),
@@ -287,9 +290,9 @@ def create_training_run_record_from_training_session(
             if train_params.get("scale_pos_weight_manual")
             else ("auto" if train_params.get("scale_pos_weight") is not None else None)
         ),
-        # XGBoost超参数
         n_estimators=train_params.get("n_estimators", 0),
         max_depth=train_params.get("max_depth", 0),
+        num_leaves=train_params.get("num_leaves", 0),
         learning_rate=train_params.get("learning_rate", 0.0),
         subsample=train_params.get("subsample", 0.0),
         colsample_bytree=train_params.get("colsample_bytree", 0.0),
@@ -300,7 +303,6 @@ def create_training_run_record_from_training_session(
         tree_method=train_params.get("tree_method", ""),
         random_state=train_params.get("random_state", 0),
         n_jobs=train_params.get("n_jobs", 0),
-        # 数据统计
         trade_days_count=data_stats.get("trade_days_count", 0),
         total_samples=data_stats.get("total_samples", 0),
         samples_after_filter=data_stats.get("samples_after_filter", 0),
@@ -309,9 +311,7 @@ def create_training_run_record_from_training_session(
         val_start_date=data_stats.get("val_start_date", ""),
         val_end_date=data_stats.get("val_end_date", ""),
         val_ratio=data_stats.get("val_ratio", 0.2),
-        # 训练结果
         best_iteration=train_params.get("best_iteration"),
-        # 训练集指标
         train_mse=train_metrics.get("mse"),
         train_rmse=train_metrics.get("rmse"),
         train_r2=train_metrics.get("r2"),
@@ -320,7 +320,6 @@ def create_training_run_record_from_training_session(
         train_auc=train_metrics.get("auc"),
         train_precision=train_metrics.get("precision"),
         train_recall=train_metrics.get("recall"),
-        # 验证集指标
         val_mse=val_metrics.get("mse"),
         val_rmse=val_metrics.get("rmse"),
         val_r2=val_metrics.get("r2"),
@@ -330,44 +329,47 @@ def create_training_run_record_from_training_session(
         val_auc=val_metrics.get("auc"),
         val_precision=val_metrics.get("precision"),
         val_recall=val_metrics.get("recall"),
-        # 验证集逐日评估
         val_daily_rankic_mean=val_daily_metrics.get("daily_rankic_mean"),
         val_daily_rankic_std=val_daily_metrics.get("daily_rankic_std"),
         val_daily_rankic_ir=val_daily_metrics.get("daily_rankic_ir"),
     )
 
-    # 添加额外指标（TopK收益、诊断统计等）
     additional_metrics = {}
-
-    # 提取所有TopK和诊断相关的指标
+    is_walk_forward = wf_run_id is not None or split_index is not None
     for key, value in val_daily_metrics.items():
-        if key.startswith("top") or key.startswith("diagnostic_"):
+        if key in ["daily_rankic_mean", "daily_rankic_std", "daily_rankic_ir"]:
+            continue
+        if is_walk_forward:
+            additional_metrics[f"val_{key}"] = value
+        elif key.startswith("top") or key.startswith("diagnostic_"):
             additional_metrics[key] = value
-    
-        # 验证集隔离统计（若存在）
-        for key in [
-            "val_raw_start_date",
-            "val_raw_end_date",
-            "val_raw_n_dates",
-            "val_raw_samples",
-            "val_es_start_date",
-            "val_es_end_date",
-            "val_es_n_dates",
-            "val_es_samples",
-            "val_calib_start_date",
-            "val_calib_end_date",
-            "val_calib_n_dates",
-            "val_calib_samples",
-            "val_embargo_days",
-            "val_embargo_days_applied",
-            "val_embargo_n_dates",
-            "val_embargo_samples",
-            "val_embargo_start_date",
-            "val_embargo_end_date",
-        ]:
-            if key in data_stats:
-                additional_metrics[key] = data_stats.get(key)
+
+    for key in [
+        "val_raw_start_date",
+        "val_raw_end_date",
+        "val_raw_n_dates",
+        "val_raw_samples",
+        "val_es_start_date",
+        "val_es_end_date",
+        "val_es_n_dates",
+        "val_es_samples",
+        "val_calib_start_date",
+        "val_calib_end_date",
+        "val_calib_n_dates",
+        "val_calib_samples",
+        "val_embargo_days",
+        "val_embargo_days_applied",
+        "val_embargo_n_dates",
+        "val_embargo_samples",
+        "val_embargo_start_date",
+        "val_embargo_end_date",
+    ]:
+        if key in data_stats:
+            additional_metrics[key] = data_stats.get(key)
+
+    if is_walk_forward:
+        for key, value in performance_metrics.get("test_daily", {}).items():
+            additional_metrics[f"test_{key}"] = value
 
     record.additional_metrics = additional_metrics
-
     return record

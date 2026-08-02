@@ -66,7 +66,6 @@ $wf_period_configs = @(
 )
 
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
-$step_list               = @("semiannual")    #此参数并不会改变切分,无用处 monthly | quarterly | semiannual | yearly
 $train_window_years_list = @(6)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
 $val_ratio_list          = @(0.2)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
@@ -418,7 +417,6 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $algorithm_list.Length *
               $n_estimators_list.Length *
               $early_stopping_rounds_list.Length *
-              $step_list.Length *
               $train_window_years_list.Length *
               $test_window_months_list.Length *
               $val_ratio_list.Length *
@@ -467,7 +465,6 @@ Write-Host ""
 
 foreach ($wfPeriod in $normalized_wf_period_configs) {
 foreach ($algorithm in $algorithm_list) {
-foreach ($step in $step_list) {
 foreach ($train_window_years in $train_window_years_list) {
 foreach ($test_window_months in $test_window_months_list) {
 foreach ($val_ratio in $val_ratio_list) {
@@ -524,7 +521,6 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --algorithm $algorithm" +
                  " --split-count $split_count" +
                  " --final-date $final_date" +
-                 " --step $step" +
                  " --train-window-years $train_window_years" +
                  " --test-window-months $test_window_months" +
                  " --val-ratio $val_ratio" +
@@ -713,7 +709,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

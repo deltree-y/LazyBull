@@ -111,7 +111,6 @@ def resolve_split(
     split_count: int,
     final_date: str,
     split_index: Optional[int],
-    step: str,
     train_window_years: int,
     test_window_months: int,
     rebalance_freq: int,
@@ -125,7 +124,6 @@ def resolve_split(
         trade_cal=trade_cal,
         split_count=split_count,
         final_date=final_date,
-        step_frequency=step,
         train_window_years=train_window_years,
         test_window_months=test_window_months,
         rebalance_freq=rebalance_freq,
@@ -428,13 +426,6 @@ def main() -> None:
         default="auto,rank_ic",
         help="逗号分隔的早停指标，默认 auto,rank_ic",
     )
-    parser.add_argument(
-        "--step",
-        type=str,
-        default="semiannual",
-        choices=["monthly", "quarterly", "semiannual"],
-        help="滚动频率，默认 semiannual（对齐 batch）",
-    )
     parser.add_argument("--train-window-years", type=int, default=6, help="训练窗口年数，默认 6")
     parser.add_argument("--test-window-months", type=int, default=6, help="测试窗口月数，默认 6")
     parser.add_argument("--rebalance-freq", type=int, default=20, help="调仓频率（影响 split 边界），默认 20")
@@ -467,7 +458,6 @@ def main() -> None:
         split_count=args.split_count,
         final_date=args.final_date,
         split_index=args.split_index,
-        step=args.step,
         train_window_years=args.train_window_years,
         test_window_months=args.test_window_months,
         rebalance_freq=args.rebalance_freq,

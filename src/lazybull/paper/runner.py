@@ -32,7 +32,11 @@ from ..trading.sell_rules import (
     min_holding_days_for_rebalance_sell,
     select_rebalance_sell_candidates,
 )
-from ..trading.sizing import compute_kelly_weights, estimate_variance_from_prices
+from ..trading.sizing import (
+    compute_kelly_weights,
+    compute_lot_shares,
+    estimate_variance_from_prices,
+)
 from ..trading.stagger import (
     build_tranche_schedule_from_anchor,
     get_tranche_capital_fraction as _shared_tranche_capital_fraction,
@@ -509,7 +513,7 @@ class PaperTradingRunner:
 
             # 计算目标股数
             target_value = total_capital * target_weight
-            target_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            target_shares = compute_lot_shares(target_value, price, SHARE_LOT_SIZE)
 
             # 判断操作类型
             if target_shares > current_shares:
@@ -1147,7 +1151,7 @@ class PaperTradingRunner:
                 return 0
         
         # 6. 计算股数（按100股取整）
-        buy_shares = int(target_value / price / 100) * 100
+        buy_shares = compute_lot_shares(target_value, price)
         
         return buy_shares
 
@@ -1187,7 +1191,7 @@ class PaperTradingRunner:
             return 0, "组合总资产<=0"
 
         target_value = current_total_value * target_weight
-        buy_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+        buy_shares = compute_lot_shares(target_value, price, SHARE_LOT_SIZE)
         if buy_shares < SHARE_LOT_SIZE:
             return 0, "目标金额不足一手"
 
@@ -1204,7 +1208,7 @@ class PaperTradingRunner:
         if cash <= buy_cost:
             return 0, "现金不足(连手续费都不够)"
 
-        buy_shares = int((cash - buy_cost) / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+        buy_shares = compute_lot_shares(cash - buy_cost, price, SHARE_LOT_SIZE)
         if buy_shares < SHARE_LOT_SIZE:
             return 0, "现金不足(缩量后不足一手)"
 
@@ -1846,7 +1850,9 @@ class PaperTradingRunner:
                 skipped_stocks.append((ts_code, "无价格数据"))
                 continue
 
-            affordable_shares = int(equal_weight_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            affordable_shares = compute_lot_shares(
+                equal_weight_value, price, SHARE_LOT_SIZE
+            )
             if affordable_shares < SHARE_LOT_SIZE:
                 skipped_stocks.append((ts_code, f"不足1手(价格={price:.2f}, 可买={affordable_shares}股)"))
                 continue
@@ -2305,7 +2311,7 @@ class PaperTradingRunner:
                 continue
             
             target_value = total_capital * target_weight
-            target_shares = int(target_value / price / SHARE_LOT_SIZE) * SHARE_LOT_SIZE
+            target_shares = compute_lot_shares(target_value, price, SHARE_LOT_SIZE)
             
             # 判断方向
             if target_shares > current_shares:

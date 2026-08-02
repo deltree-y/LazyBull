@@ -10,6 +10,20 @@ from typing import Callable, Dict, Optional, Tuple
 import numpy as np
 
 
+def compute_lot_shares(
+    budget: float,
+    price: float,
+    lot_size: int = 100,
+) -> int:
+    """将买入预算按价格向下取整为整手股数。"""
+    budget = float(budget or 0.0)
+    price = float(price or 0.0)
+    lot_size = int(lot_size or 0)
+    if budget <= 0 or price <= 0 or lot_size <= 0:
+        return 0
+    return int(budget / price / lot_size) * lot_size
+
+
 def estimate_variance_from_prices(prices: np.ndarray) -> Optional[float]:
     """由价格序列估计日对数收益率方差。
 
