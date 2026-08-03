@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.14] - 2026-08-03
+
+### Fixed
+
+- **`raw_download/cli.py` 运行时报错修复**：
+  - 补 `import time`（`main` 中 `time.time()` 使用，原报 `NameError: name 'time' is not defined`）。
+  - 补 `_fmt_duration` import（`finally` 中总耗时打印使用）。
+  - **并发数写入 core 模块**：拆分后 `cli.main` 原用 `global _DOWNLOAD_CONCURRENCY` 只改 `cli`
+    模块变量，不影响 `core._run_concurrent` 读取（始终为初始值 1=串行）；改为直接写
+    `raw_core._DOWNLOAD_CONCURRENCY`，使 `--concurrency`/`download_concurrency` 配置真正生效。
+- **测试**：`test_download_raw_fixes.py` 新增 `TestCliMainRuntime`（验证并发写入 core 模块）。
+
 ## [0.90.13] - 2026-08-03
 
 ### Changed

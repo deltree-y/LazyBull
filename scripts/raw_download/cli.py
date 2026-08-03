@@ -3,6 +3,7 @@
 
 import argparse
 import sys
+import time
 from datetime import datetime
 from typing import Set
 
@@ -20,8 +21,9 @@ from .alt import (
     download_stk_holdernumber,
     download_top_list,
 )
+from . import core as raw_core
 from .basic import download_basic_data
-from .core import ALT_DATASETS, ERROR_COLLECTOR
+from .core import ALT_DATASETS, ERROR_COLLECTOR, _fmt_duration
 from .daily import download_daily_data
 from .daily_partition import download_cyq_perf, download_margin_detail, download_stock_st
 from .periodic import _to_int_date, download_by_period
@@ -87,13 +89,13 @@ def main():
     setup_logger(log_level="INFO")
     get_config()
 
-    # 从配置 / 命令行读取并发数, 注入全局变量供 _run_concurrent 使用
-    global _DOWNLOAD_CONCURRENCY
+    # 从配置 / 命令行读取并发数, 直接写入 core 模块供 _run_concurrent 读取
+    # (拆分后不能再用 global, 否则只改 cli 模块变量, 不影响 core 的 _run_concurrent)
     ts_settings = get_tushare_settings()
     if args.concurrency is not None:
-        _DOWNLOAD_CONCURRENCY = max(1, args.concurrency)
+        raw_core._DOWNLOAD_CONCURRENCY = max(1, args.concurrency)
     else:
-        _DOWNLOAD_CONCURRENCY = max(1, ts_settings["download_concurrency"])
+        raw_core._DOWNLOAD_CONCURRENCY = max(1, ts_settings["download_concurrency"])
 
     logger.info("=" * 70)
     logger.info("开始下载原始数据 (raw 层)")
@@ -104,7 +106,7 @@ def main():
     logger.info(f"强制重下    : {'是' if args.force else '否'}")
     logger.info(f"另类数据集  : {args.download or '无'}")
     logger.info(f"全量下载    : {'是' if args.all else '否'}")
-    logger.info(f"并发线程数  : {_DOWNLOAD_CONCURRENCY} (1=串行降级)")
+    logger.info(f"并发线程数  : {raw_core._DOWNLOAD_CONCURRENCY} (1=串行降级)")
     logger.info(f"限频        : {ts_settings['rate_limit']}次/分钟, "
                 f"限流重试等待={ts_settings['retry_rate_limit_sleep']}s")
     logger.info("=" * 70)

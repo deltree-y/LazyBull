@@ -8,11 +8,15 @@
 - download_basic_data 每次全量下载 trade_cal（不按 start/end 裁剪）
 """
 
+import sys
+
 import pandas as pd
 import pytest
 
 from scripts import download_raw as download_raw_module
 from scripts.raw_download import alt as raw_download_alt
+import scripts.raw_download.core as raw_core
+from scripts.raw_download.cli import main
 from scripts.raw_download.basic import download_basic_data
 
 
@@ -255,6 +259,50 @@ class TestTradeCalFullDownload:
         # 拉取失败时保留已有数据，不抛异常
         assert storage.saved is None
         assert len(result) == 1
+
+
+class TestCliMainRuntime:
+    """cli.main 运行时：并发数应写入 core 模块（供 _run_concurrent 读取），且无 NameError。"""
+
+    def test_main_writes_concurrency_to_core(self, monkeypatch):
+        monkeypatch.setattr("scripts.raw_download.cli.setup_logger", lambda log_level="INFO": None)
+        monkeypatch.setattr("scripts.raw_download.cli.get_config", lambda: None)
+        monkeypatch.setattr(
+            "scripts.raw_download.cli.get_tushare_settings",
+            lambda: {
+                "rate_limit": 500,
+                "retry_rate_limit_sleep": 15.0,
+                "download_concurrency": 4,
+            },
+        )
+        monkeypatch.setattr("scripts.raw_download.cli.TushareClient", lambda verbose=True: object())
+        monkeypatch.setattr("scripts.raw_download.cli.Storage", lambda: object())
+        monkeypatch.setattr(
+            "scripts.raw_download.cli.download_basic_data",
+            lambda client, storage, start_date, end_date, force=False: pd.DataFrame(
+                {"cal_date": ["20240101"], "is_open": [1]}
+            ),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "download_raw.py",
+                "--only-basic",
+                "--concurrency",
+                "8",
+                "--start-date",
+                "20240101",
+                "--end-date",
+                "20240131",
+            ],
+        )
+
+        with pytest.raises(SystemExit):
+            main()
+
+        # 关键断言：并发数写入 core 模块，而非 cli 模块的孤立变量
+        assert raw_core._DOWNLOAD_CONCURRENCY == 8
 
 
 class TestReportRcPagination:
