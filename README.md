@@ -28,7 +28,11 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.90.22)
+### 当前版本 (v0.90.23)
+
+- **修复 `_query_with_pagination` concat FutureWarning**：
+  - 翻页中"有行但全 NaN"的片段在 concat 前剔除，并保留全部列集合，
+    消除 pandas FutureWarning 且 schema 不缺失（与 `_save_merged` 修复一致）。
 
 - **修复 `top_list` 限频绕过配置导致限流**：
   - `get_top_list` 不再硬编码 `rate_limit_override`（它绕过接口级/全局令牌桶），

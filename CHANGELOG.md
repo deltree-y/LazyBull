@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.23] - 2026-08-03
+
+### Fixed
+
+- **修复 `_query_with_pagination` 的 concat FutureWarning**：翻页过程中某些页
+  "有行但所有值均为 NaN"（全 NA 片段）时，`pd.concat` 触发 pandas
+  "empty/all-NA entries" 行为变更告警（与 0.90.17 修复的 `_save_merged` 同类）。
+  现于 concat 前剔除全 NA 片段并保留全部列集合，消除告警且 schema 不缺失。
+  修复位于 `scripts/raw_download/periodic.py`，影响所有走分页下载的数据集
+  （如 `report_rc`/`forecast`/`express` 等）。
+- **测试**：`test_download_raw_fixes.py` 新增 `TestQueryWithPaginationAllNA`
+  （全 NA 页剔除 + 列集合保留 + 全 NA 页仅存时结果为空）。
+- **测试适配**：`test_tushare_client_rate_limit.py` 中硬编码 `cyq_perf=100`
+  的断言改为动态读取 `_API_RATE_LIMITS_DEFAULT`，与用户对接口级限频的调整解耦。
+
 ## [0.90.22] - 2026-08-03
 
 ### Fixed

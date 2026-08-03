@@ -139,7 +139,17 @@ def _query_with_pagination(
 
     if not all_pages:
         return pd.DataFrame()
-    return pd.concat(all_pages, ignore_index=True)
+    # 剔除全 NA 片段（有行但所有值均 NaN），避免 concat 触发 pandas
+    # FutureWarning（未来版本不再排除 empty/all-NA 条目参与结果 dtype 推断）；
+    # 同时保留全部列集合，确保剔除后 schema 不缺失。
+    all_columns = list(dict.fromkeys(c for d in all_pages for c in d.columns))
+    pages = [d for d in all_pages if not d.dropna(how="all").empty]
+    if not pages:
+        return pd.DataFrame()
+    result = pd.concat(pages, ignore_index=True)
+    if all_columns:
+        result = result.reindex(columns=all_columns)
+    return result
 
 
 def download_by_period(

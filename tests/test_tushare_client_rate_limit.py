@@ -44,20 +44,22 @@ def _make_client(rate_limit: int = 500) -> TushareClient:
 class TestInterfaceRateLimit:
     def test_known_low_freq_interface_uses_smaller_interval(self):
         client = _make_client(rate_limit=500)
-        # cyq_perf 限频 100/分钟 → interval 0.6s；未知接口回退全局 500/分钟 → 0.12s
-        assert client._request_interval_for("cyq_perf") == pytest.approx(60.0 / 100)
+        # 已知低限频接口使用独立 interval；未知接口回退全局 500/分钟
+        cyq_limit = client._api_rate_limits["cyq_perf"]
+        assert client._request_interval_for("cyq_perf") == pytest.approx(60.0 / cyq_limit)
         assert client._request_interval_for("daily") == pytest.approx(60.0 / 500)
 
     def test_rate_limit_wait_uses_per_api_bucket(self):
         client = _make_client(rate_limit=500)
+        cyq_interval = client._request_interval_for("cyq_perf")
         # 每个接口首次调用各自分桶，不因其他接口已调用而 sleep
         t0 = time.perf_counter()
         client._rate_limit_wait("cyq_perf")
         client._rate_limit_wait("daily")
         client._rate_limit_wait("cyq_perf")
         elapsed = time.perf_counter() - t0
-        # 两次 cyq_perf 间隔应 >= 0.6s（60/100），daily 与 cyq_perf 独立不额外等待
-        assert elapsed >= 0.58
+        # 两次 cyq_perf 间隔应 >= 接口级 interval；daily 与 cyq_perf 独立不额外等待
+        assert elapsed >= cyq_interval - 0.02
 
     def test_rate_limit_error_updates_api_rate_limit(self):
         client = _make_client(rate_limit=500)

@@ -53,7 +53,7 @@ class TestQueryWithPagination:
         calls = []
         pages = [
             pd.DataFrame({"v": list(range(100))}),  # 恰好整页
-            pd.DataFrame({"v": [1, 2]}),            # 第二页不足 → 结束
+            pd.DataFrame({"v": [1, 2]}),  # 第二页不足 → 结束
         ]
 
         class _FakeClient:
@@ -81,6 +81,44 @@ class TestQueryWithPagination:
         )
 
         assert len(result) == 150  # 恰 3 页后停止，不再无限循环
+
+
+class TestQueryWithPaginationAllNA:
+    """修复: _query_with_pagination 应剔除全 NA 片段并保留列集合，避免 concat FutureWarning。"""
+
+    def test_all_na_page_skipped_and_columns_kept(self):
+        # page_limit=2: 页1 正常(2行) -> 页2 全 NA(2行, 含独有列 extra) -> 页3 正常(1行) 结束
+        pages = [
+            pd.DataFrame({"a": [1, 2], "b": [3, 4]}),
+            pd.DataFrame({"a": [None, None], "b": [None, None], "extra": [None, None]}),
+            pd.DataFrame({"a": [5], "b": [6]}),
+        ]
+
+        class _FakeClient:
+            def query(self, api_name, fields=None, **kwargs):
+                return pages.pop(0) if pages else pd.DataFrame()
+
+        result = download_raw_module._query_with_pagination(_FakeClient(), "test_api", page_limit=2)
+
+        # 全 NA 页被剔除, 正常数据完整
+        assert len(result) == 3
+        assert result["a"].tolist() == [1, 2, 5]
+        # 全 NA 页的独有列不丢失 (列集合保留)
+        assert "extra" in result.columns
+        # 被剔除的行不残留 NaN
+        assert result.dropna(how="all").empty is False
+
+    def test_all_na_only_pages_result_empty(self):
+        pages = [pd.DataFrame({"a": [None, None], "extra": [None, None]})]
+
+        class _FakeClient:
+            def query(self, api_name, fields=None, **kwargs):
+                return pages.pop(0) if pages else pd.DataFrame()
+
+        result = download_raw_module._query_with_pagination(_FakeClient(), "test_api", page_limit=2)
+
+        # 全部页面都是全 NA -> 返回空
+        assert len(result) == 0
 
 
 class TestStkHoldernumberResume:
@@ -169,9 +207,7 @@ class TestTradeCalFullDownload:
     """download_basic_data 每次全量下载 trade_cal（不按 start/end 裁剪）。"""
 
     def test_fetches_full_trade_cal_ignoring_date_range(self):
-        existing = pd.DataFrame(
-            {"cal_date": ["20240101"], "exchange": ["SSE"], "is_open": [1]}
-        )
+        existing = pd.DataFrame({"cal_date": ["20240101"], "exchange": ["SSE"], "is_open": [1]})
         full = pd.DataFrame(
             {
                 "exchange": ["SSE"] * 3,
@@ -199,9 +235,7 @@ class TestTradeCalFullDownload:
 
         class _FakeClient:
             def get_trade_cal(self, start_date=None, end_date=None, exchange="SSE"):
-                calls.append(
-                    {"start_date": start_date, "end_date": end_date, "exchange": exchange}
-                )
+                calls.append({"start_date": start_date, "end_date": end_date, "exchange": exchange})
                 return full
 
             def get_stock_basic(self, list_status="L", fields=None):
@@ -225,9 +259,7 @@ class TestTradeCalFullDownload:
         ]
 
     def test_keeps_existing_when_full_fetch_returns_empty(self):
-        existing = pd.DataFrame(
-            {"cal_date": ["20240101"], "exchange": ["SSE"], "is_open": [1]}
-        )
+        existing = pd.DataFrame({"cal_date": ["20240101"], "exchange": ["SSE"], "is_open": [1]})
 
         class _FakeStorage:
             def __init__(self):
@@ -252,9 +284,7 @@ class TestTradeCalFullDownload:
                 return pd.DataFrame()
 
         storage = _FakeStorage()
-        result = download_basic_data(
-            _FakeClient(), storage, "20240101", "20240131"
-        )
+        result = download_basic_data(_FakeClient(), storage, "20240101", "20240131")
 
         # 拉取失败时保留已有数据，不抛异常
         assert storage.saved is None
@@ -399,9 +429,7 @@ class TestSaveMergedAllNA:
         from scripts.raw_download.periodic import _save_merged
 
         storage, saved = self._fake_storage()
-        df_all_na = pd.DataFrame(
-            {"ts_code": [None], "end_date": [None], "value": [None]}
-        )
+        df_all_na = pd.DataFrame({"ts_code": [None], "end_date": [None], "value": [None]})
 
         _save_merged(
             storage,
