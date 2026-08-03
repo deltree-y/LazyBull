@@ -5,20 +5,34 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 
 ALT_DATASETS = [
-    "fina_indicator", "margin_detail", "stk_holdernumber",
-    "forecast", "cyq_perf", "express", "fund_portfolio",
-    "moneyflow_hsgt", "top_list", "report_rc", "cashflow",
+    "fina_indicator",
+    "margin_detail",
+    "stk_holdernumber",
+    "forecast",
+    "cyq_perf",
+    "express",
+    "fund_portfolio",
+    "moneyflow_hsgt",
+    "top_list",
+    "report_rc",
+    "cashflow",
 ]
 
 
 DAILY_SUBSETS = [
-    "daily", "daily_basic", "adj_factor", "suspend", "stk_limit", "moneyflow", "stock_st"
+    "daily",
+    "daily_basic",
+    "adj_factor",
+    "suspend",
+    "stk_limit",
+    "moneyflow",
+    "stock_st",
 ]
 
 
@@ -114,30 +128,48 @@ def _fmt_duration(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def _run_concurrent(work_items, worker: Callable, label: str) -> None:
+def _run_concurrent(
+    work_items,
+    worker: Callable,
+    label: str,
+    collect: bool = False,
+) -> Optional[List[Any]]:
     """并发执行 worker(item) 遍历 work_items。
 
     - _DOWNLOAD_CONCURRENCY == 1 时走同步路径, 与串行等价, 便于排障/降级
     - 真实并发度仍被 TushareClient 内置的令牌桶限频收紧, 不会触发 QPS 超标
     - worker 内的所有异常由 worker 自己捕获并记录到 ERROR_COLLECTOR,
       此处仅兜底一次避免单个线程崩溃吞掉其余任务
+    - collect=True 时按 work_items 顺序返回 worker 返回值列表; 否则返回 None
+      (既有调用方不传 collect, 行为完全不变)
+
+    Returns:
+        collect=True 时返回 List[Any] (长度与 work_items 一致), 否则 None
     """
+    results: List[Any] = [None] * len(work_items)
+
     if _DOWNLOAD_CONCURRENCY <= 1 or len(work_items) <= 1:
-        for item in work_items:
+        for i, item in enumerate(work_items):
             try:
-                worker(item)
+                r = worker(item)
+                if collect:
+                    results[i] = r
             except Exception as e:
                 ERROR_COLLECTOR.add(label, f"item={item!r}", f"worker 未捕获异常: {e}")
-        return
+        return results if collect else None
 
     with ThreadPoolExecutor(
         max_workers=_DOWNLOAD_CONCURRENCY,
         thread_name_prefix=f"dl-{label}",
     ) as pool:
-        futures = {pool.submit(worker, item): item for item in work_items}
+        futures = {pool.submit(worker, item): idx for idx, item in enumerate(work_items)}
         for fut in as_completed(futures):
-            item = futures[fut]
+            idx = futures[fut]
             try:
-                fut.result()
+                r = fut.result()
+                if collect:
+                    results[idx] = r
             except Exception as e:
+                item = work_items[idx]
                 ERROR_COLLECTOR.add(label, f"item={item!r}", f"worker 未捕获异常: {e}")
+    return results if collect else None

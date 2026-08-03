@@ -28,7 +28,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.90.2)
+### 当前版本 (v0.90.18)
+
+- **按季度下载并发化（fund_portfolio 等大幅提速）**：
+  - `download_by_period`（`scripts/raw_download/periodic.py`）从纯串行逐季度
+    下载改为复用 `_run_concurrent` 并行下载，受 `tushare.download_concurrency`
+    并发数与 TushareClient 令牌桶限频约束；
+  - 分区模式（`fund_portfolio`/`fina_indicator`）各季度独立落盘，天然线程安全；
+    非分区模式（`forecast`/`express`）各季度下载完成后统一合并去重落盘；
+  - 实测 `fund_portfolio` 全量 86 个季度从约 2 小时压缩到数分钟量级。
 
 - **移除无效信号门控历史接口**：
   - 删除信号置信度门控、composite 门控、动态 Top-N 与持仓奖励 CLI 参数；

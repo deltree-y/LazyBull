@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.18] - 2026-08-03
+
+### Changed
+
+- **按季度下载并发化（fund_portfolio 等大幅提速）**：
+  `scripts/raw_download/periodic.py` 的 `download_by_period` 原为纯串行逐季度
+  下载，每个季度内部还要按 `page_limit`（如 fund_portfolio=8000）逐页翻页，
+  每请求服务端响应约 5s，导致大季度（上百万条）单季度耗时十几分钟、全量
+  86 个季度约 2 小时。现改为复用 `_run_concurrent`（受
+  `tushare.download_concurrency` 并发数与 TushareClient 令牌桶限频约束）并行下载：
+  - 分区模式（`fund_portfolio`/`fina_indicator`）：各季度独立分区文件，worker
+    内直接落盘，天然线程安全；
+  - 非分区模式（`forecast`/`express`）：worker 返回各季度 df，全部完成后统一
+    `_save_merged` 合并去重落盘；
+  - `success`/`empty` 计数加锁保护，`ProgressTracker.tick` 保持线程安全。
+- **`_run_concurrent` 支持收集返回值**：`scripts/raw_download/core.py` 的
+  `_run_concurrent` 新增 `collect` 参数（默认 False，既有调用方行为不变），
+  按 `work_items` 顺序返回 worker 返回值列表。
+- **测试**：新增 `tests/test_download_periodic_concurrency.py`（`_run_concurrent`
+  collect 串行/并发路径、download_by_period 分区/非分区模式行为、合并去重）。
+
 ## [0.90.17] - 2026-08-03
 
 ### Fixed

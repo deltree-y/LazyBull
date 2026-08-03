@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """raw_download 子包：按季度/年月批量下载与分页查询。"""
 
-import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Tuple
+import threading
+from datetime import datetime
+from typing import List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
 from src.lazybull.data import Storage, TushareClient
 
-from .core import ERROR_COLLECTOR, ProgressTracker
+from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
 
 
 def _to_int_date(s: str) -> int:
@@ -40,6 +40,7 @@ def _generate_quarter_periods(start_date: str, end_date: str) -> List[str]:
 def _generate_month_periods(start_date: str, end_date: str) -> List[Tuple[str, str]]:
     """生成按月切分的 (start, end) 列表。"""
     import calendar
+
     start = datetime.strptime(start_date, "%Y%m%d")
     end = datetime.strptime(end_date, "%Y%m%d")
     periods: List[Tuple[str, str]] = []
@@ -175,8 +176,7 @@ def download_by_period(
             if existing_df is not None and len(existing_df) > 0:
                 if "end_date" in existing_df.columns:
                     existing_periods = set(
-                        existing_df["end_date"].astype(str)
-                        .str.replace("-", "").str[:8].unique()
+                        existing_df["end_date"].astype(str).str.replace("-", "").str[:8].unique()
                     )
                 logger.info(f"[{dataset_name}] 已有 {len(existing_periods)} 个季度数据")
 
@@ -191,32 +191,63 @@ def download_by_period(
     )
 
     tracker = ProgressTracker(len(periods_to_download), label=dataset_name, log_every=4)
-    all_dfs: List["pd.DataFrame"] = []
     success = empty = 0
+    # 并发下 success/empty 计数需要线程保护; tracker.tick 内部自带锁, 可安全并发
+    stats_lock = threading.Lock()
 
-    for period in periods_to_download:
+    def _worker(period: str) -> Optional["pd.DataFrame"]:
+        """下载单个季度。
+
+        - 分区模式 (partition_by_period): 每个季度写独立分区文件, 天然线程安全, worker 内直接落盘
+        - 非分区模式: 返回 df 供主线程统一合并去重落盘, 避免并发写同一文件
+        """
+        nonlocal success, empty
         try:
             df = _query_with_pagination(
-                client, api_name, page_limit=page_limit,
-                fields=fields, period=period,
+                client,
+                api_name,
+                page_limit=page_limit,
+                fields=fields,
+                period=period,
             )
             if df is not None and len(df) > 0:
                 if partition_by_period:
                     storage.save_raw_by_date(df, dataset_name, period)
-                else:
-                    all_dfs.append(df)
-                success += 1
+                with stats_lock:
+                    success += 1
                 logger.info(f"  [{dataset_name}] {period}: {len(df)} 条")
-            else:
+                return df if not partition_by_period else None
+            with stats_lock:
                 empty += 1
+            return None
         except Exception as e:
             ERROR_COLLECTOR.add(dataset_name, f"period={period}", str(e))
-        tracker.tick(extra_info=f"ok={success} empty={empty}")
+            return None
+        finally:
+            with stats_lock:
+                info = f"ok={success} empty={empty}"
+            tracker.tick(extra_info=info)
 
-    if not partition_by_period and all_dfs:
-        _save_merged(
-            storage, dataset_name, all_dfs, existing_df,
-            dedup_cols, sort_cols=sort_cols or ["ann_date", "end_date"],
+    if partition_by_period:
+        # 分区模式: 每季度独立落盘, 无需收集返回值
+        _run_concurrent(periods_to_download, _worker, label=dataset_name)
+    else:
+        # 非分区模式: 收集各季度 df, 全部完成后统一合并去重落盘
+        collected = _run_concurrent(
+            periods_to_download,
+            _worker,
+            label=dataset_name,
+            collect=True,
         )
+        all_dfs: List["pd.DataFrame"] = [d for d in collected if d is not None and len(d) > 0]
+        if all_dfs:
+            _save_merged(
+                storage,
+                dataset_name,
+                all_dfs,
+                existing_df,
+                dedup_cols,
+                sort_cols=sort_cols or ["ann_date", "end_date"],
+            )
 
     logger.info(f"[{dataset_name}] 完成: 成功={success} 空={empty}")
