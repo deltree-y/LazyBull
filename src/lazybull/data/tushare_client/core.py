@@ -23,10 +23,11 @@ FINA_INDICATOR_DEFAULT_FIELDS = (
 )
 
 # 接口级每分钟限频（Tushare 8000 积分）。
-# 部分接口有独立限频（低于全局 rate_limit），如 cyq_perf=200 次/分钟。
+# 部分接口有独立限频（低于全局 rate_limit），如 cyq_perf=100 次/分钟。
 # 未知接口回退全局 rate_limit；收到限流错误时会自动解析"频率超限(X次/分钟)"并动态更新。
 _API_RATE_LIMITS_DEFAULT: Dict[str, int] = {
-    "cyq_perf": 200,
+    "cyq_perf": 100,
+    "margin_detail": 200,
 }
 # 限流错误中提取接口频次，如 "抱歉，您访问接口(cyq_perf)频率超限(200次/分钟)..."
 _RATE_LIMIT_MSG_FREQ = re.compile(r"频率超限\s*\(\s*(\d+)\s*次/分钟")

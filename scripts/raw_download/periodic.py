@@ -71,10 +71,17 @@ def _save_merged(
     修复 #9: 合并前按 sort_cols 排序, dedup 的 keep="last" 才有明确语义。
     """
     new_dfs = [d for d in new_dfs if d is not None and len(d) > 0]
+    # 修复: 剔除全 NA 片段（有行但所有值均为 NaN），避免 concat 触发 pandas
+    # FutureWarning（未来版本不再排除 empty/all-NA 条目参与结果 dtype 推断）；
+    # 同时保留全部列集合，确保剔除后 schema 不缺失。
+    all_columns = list(dict.fromkeys(c for d in new_dfs for c in d.columns))
+    new_dfs = [d for d in new_dfs if not d.dropna(how="all").empty]
     if not new_dfs:
         result = existing_df if existing_df is not None else pd.DataFrame()
     else:
         result = pd.concat(new_dfs, ignore_index=True)
+        if all_columns:
+            result = result.reindex(columns=all_columns)
         if existing_df is not None and len(existing_df) > 0:
             result = pd.concat([existing_df, result], ignore_index=True)
 

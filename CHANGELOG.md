@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.17] - 2026-08-03
+
+### Fixed
+
+- **修复 `_save_merged` 的 concat FutureWarning**：`pd.concat` 遇到全 NA 片段（有行但所有
+  值均为 NaN）时触发 pandas "empty/all-NA entries" 行为变更告警；现于 concat 前剔除全
+  NA 片段并保留全部列集合，消除告警且 schema 不缺失。修复位于
+  `scripts/raw_download/periodic.py`，影响 `express`/`cyq_perf`/`stk_holdernumber`/
+  `report_rc` 等按季度批量下载路径。
+- **测试**：`test_download_raw_fixes.py` 新增 `TestSaveMergedAllNA`（全 NA 片段剔除 +
+  列集合保留 + 全 NA 仅存时结果为空）。
+
+### Changed
+
+- **cyq_perf 限频统一为 100 次/分钟**：`src/lazybull/data/tushare_client/core.py`
+  工作区默认值已从 200 调整为 100（并新增 `margin_detail=200`），同步更新
+  `test_tushare_client_rate_limit.py` 断言（interval 0.6s）与 `configs/base.yaml`、
+  `core.py` 注释口径。
+
 ## [0.90.16] - 2026-08-03
 
 ### Removed

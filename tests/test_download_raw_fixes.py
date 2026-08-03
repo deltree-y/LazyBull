@@ -345,3 +345,71 @@ class TestReportRcPagination:
         assert captured[0][1] == 2000
         assert captured[0][2]["start_date"] == "20240101"
         assert captured[0][2]["end_date"] == "20241231"
+
+
+class TestSaveMergedAllNA:
+    """修复: _save_merged 应剔除全 NA 片段并保留列集合，避免 concat FutureWarning。"""
+
+    def _fake_storage(self):
+        saved = {}
+
+        class _FakeStorage:
+            def save_raw(self, df, name, is_force=False):
+                saved[name] = df.copy()
+
+        return _FakeStorage(), saved
+
+    def test_all_na_fragment_skipped_and_columns_kept(self):
+        from scripts.raw_download.periodic import _save_merged
+
+        storage, saved = self._fake_storage()
+        df_ok = pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000002.SZ"],
+                "end_date": ["20240331", "20240331"],
+                "value": [1.0, 2.0],
+            }
+        )
+        # 全 NA 片段：有行但所有值均为 NaN，且携带独有列
+        df_all_na = pd.DataFrame(
+            {
+                "ts_code": [None, None],
+                "end_date": [None, None],
+                "value": [None, None],
+                "extra_col": [None, None],
+            }
+        )
+
+        _save_merged(
+            storage,
+            "test_ds",
+            [df_ok, df_all_na],
+            existing_df=None,
+            dedup_cols=["ts_code", "end_date"],
+        )
+
+        result = saved["test_ds"]
+        # 只保留正常片段的数据
+        assert len(result) == 2
+        assert result["value"].tolist() == [1.0, 2.0]
+        # 列集合保留（全 NA 片段的独有列不丢失）
+        assert "extra_col" in result.columns
+
+    def test_all_na_only_results_empty(self):
+        from scripts.raw_download.periodic import _save_merged
+
+        storage, saved = self._fake_storage()
+        df_all_na = pd.DataFrame(
+            {"ts_code": [None], "end_date": [None], "value": [None]}
+        )
+
+        _save_merged(
+            storage,
+            "test_ds",
+            [df_all_na],
+            existing_df=None,
+            dedup_cols=["ts_code", "end_date"],
+        )
+
+        result = saved["test_ds"]
+        assert len(result) == 0
