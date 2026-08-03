@@ -58,16 +58,8 @@ def test_equal_count_grouping():
     project_root = Path(__file__).parent.parent
     sys.path.insert(0, str(project_root))
     
-    # 导入 run_ml_backtest 中的函数
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "run_ml_backtest", 
-        project_root / "scripts" / "run_ml_backtest.py"
-    )
-    run_ml_backtest = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(run_ml_backtest)
-    
-    equal_count_grouping = run_ml_backtest.equal_count_grouping
+    # 导入评估面板函数（已下沉到 backtest.eval_panel）
+    from src.lazybull.backtest.eval_panel import equal_count_grouping
     
     # 测试1：10个样本分成3组
     scores = pd.Series([10, 9, 8, 7, 6, 5, 4, 3, 2, 1], index=[f"stock_{i}" for i in range(10)])
@@ -140,16 +132,8 @@ def test_evaluate_daily(trained_model, tmp_path):
     project_root = Path(__file__).parent.parent
     sys.path.insert(0, str(project_root))
     
-    # 导入 run_ml_backtest 中的函数
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "run_ml_backtest", 
-        project_root / "scripts" / "run_ml_backtest.py"
-    )
-    run_ml_backtest = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(run_ml_backtest)
-    
-    evaluate_daily = run_ml_backtest.evaluate_daily
+    # 导入评估面板函数（已下沉到 backtest.eval_panel）
+    from src.lazybull.backtest.eval_panel import evaluate_daily
     
     models_dir, version = trained_model
     
@@ -224,16 +208,8 @@ def test_csv_export(trained_model, tmp_path):
     project_root = Path(__file__).parent.parent
     sys.path.insert(0, str(project_root))
     
-    # 导入 run_ml_backtest 中的函数
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "run_ml_backtest", 
-        project_root / "scripts" / "run_ml_backtest.py"
-    )
-    run_ml_backtest = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(run_ml_backtest)
-    
-    _append_dict_to_csv = run_ml_backtest._append_dict_to_csv
+    # 导入评估面板函数（已下沉到 backtest.eval_panel）
+    from src.lazybull.backtest.eval_panel import _append_dict_to_csv
     
     # 测试 CSV 追加功能
     csv_file = tmp_path / "test.csv"

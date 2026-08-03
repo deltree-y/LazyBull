@@ -275,8 +275,8 @@ class TestMLBacktestTradesRuns:
         
         reporter = MockReporter(temp_dir)
         
-        # 调用被测试的函数
-        from scripts.run_ml_backtest import _append_trades_to_cumulative_file
+        # 调用被测试的函数（已下沉到 backtest.eval_panel）
+        from src.lazybull.backtest.eval_panel import _append_trades_to_cumulative_file
         _append_trades_to_cumulative_file(
             trades_df,
             args,
@@ -382,8 +382,8 @@ class TestMLBacktestTradesRuns:
         
         reporter = MockReporter(temp_dir)
         
-        # 调用被测试的函数
-        from scripts.run_ml_backtest import _append_trades_to_cumulative_file
+        # 调用被测试的函数（已下沉到 backtest.eval_panel）
+        from src.lazybull.backtest.eval_panel import _append_trades_to_cumulative_file
         _append_trades_to_cumulative_file(
             trades_df,
             args,

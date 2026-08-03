@@ -2053,17 +2053,7 @@ python scripts/paper_trade.py config \
 python scripts/paper_trade.py run --trade-date 20260205
 ```
 
-**回测**:
-```bash
-python scripts/run_ml_backtest.py \
-  --start-date 20230101 --end-date 20231231 \
-  --top-n 5 --rebalance-freq 5 \
-  --equity-curve-enabled \
-  --equity-curve-drawdown-thresholds 5.0 10.0 15.0 \
-  --equity-curve-exposure-levels 0.8 0.6 0.4 \
-  --equity-curve-ma-short 5 \
-  --equity-curve-ma-long 20
-```
+**回测**（`scripts/run_ml_backtest.py` 已删除；回测已并入 `walk_forward` 滚动回测，或经 `src.lazybull.common.backtest_runtime` 工厂驱动 `BacktestEngineML`）:
 
 **Python API**:
 ```python
@@ -2439,24 +2429,8 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
     --n-estimators 200 --max-depth 5 --learning-rate 0.05
 
 # 步骤2: 使用 ML 模型运行回测（使用新的默认值）
-# 默认：Top N=5, 初始资金=50万, 周频调仓, 排除ST
-python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231
-
-# 自定义参数示例
-python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --model-version 1 --top-n 10 --initial-capital 1000000
-
-# 指定调仓频率（每20个交易日调仓一次，约1个月）
-python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --rebalance-freq 20 --top-n 5
-
-# 使用自定义天数调仓（每10个交易日调仓一次）
-python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --rebalance-freq 10 --top-n 5
-
-# 包含ST股票（默认排除）
-python scripts/run_ml_backtest.py --start-date 20230101 --end-date 20231231 \
-    --include-st
+# 注意：scripts/run_ml_backtest.py 已删除，回测已并入 walk_forward 滚动回测，
+# 或经 src.lazybull.common.backtest_runtime 工厂驱动 BacktestEngineML
 ```
 
 **ML 模型特点：**

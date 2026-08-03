@@ -137,16 +137,8 @@ def main():
         
         universe = SimpleUniverse(stocks)
         
-        # 5. 导入评估面板函数
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "run_ml_backtest", 
-            project_root / "scripts" / "run_ml_backtest.py"
-        )
-        run_ml_backtest = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(run_ml_backtest)
-        
-        export_evaluation_panel = run_ml_backtest.export_evaluation_panel
+        # 5. 导入评估面板函数（已下沉到 backtest.eval_panel）
+        from src.lazybull.backtest.eval_panel import export_evaluation_panel
         
         # 6. 运行评估面板导出
         logger.info("运行评估面板导出...")

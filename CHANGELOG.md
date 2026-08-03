@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.16] - 2026-08-03
+
+### Removed
+
+- **删除 `scripts/run_ml_backtest.py`（1059 行）**：用户已不再独立运行该脚本。
+  - 评估面板能力（`evaluate_daily` / `export_evaluation_panel` / `equal_count_grouping` /
+    `_append_dict_to_csv` / `_append_trades_to_cumulative_file`）下沉到
+    `src/lazybull/backtest/eval_panel.py`。
+  - `load_backtest_data` / `prepare_price_data` / `run_ml_backtest` / `_generate_run_id`
+    无外部引用，随脚本删除。
+  - 引用方同步切换：`tests/test_eval_panel.py`、`tests/test_ml_backtest_trades_runs.py`、
+    `examples/demo_eval_panel.py` 改为直接 import `src.lazybull.backtest.eval_panel`。
+  - 删除已弃用的 `scripts/batch/batch_backtest.ps1`。
+
+### Changed
+
+- **`scripts/build_clean_features.py`（1068 行）核心逻辑下沉**：
+  - `build_clean_data` 下沉到 `src/lazybull/data/build_clean.py`。
+  - `build_features_data` 与 `_build_features_parallel` 下沉到
+    `src/lazybull/features/pipeline.py`。
+  - 脚本保留 `main` + `apply_build_all_feature_flags`（CLI 参数处理）作为薄入口。
+  - 下沉函数与原脚本逐字等价（AST 对比验证），全量回归通过。
+
 ## [0.90.15] - 2026-08-03
 
 ### Changed
