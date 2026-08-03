@@ -15,6 +15,7 @@ _query_report_rc_adaptive 在整段查询失败时自动二分日期范围重试
 - 日期辅助函数 _mid_date_str / _next_date_str
 """
 
+import warnings
 from datetime import datetime
 
 import pandas as pd
@@ -66,6 +67,28 @@ def _make_overlimit_pagination(limit_days=180):
     return _fake_pagination, calls
 
 
+def _make_overlimit_pagination_with_na_col(limit_days=180):
+    """同 _make_overlimit_pagination, 但返回页含全 NaN 列 (触发 concat FutureWarning)。"""
+    calls = []
+
+    def _fake_pagination(client, api_name, page_limit=50000, fields=None, **kwargs):
+        start = datetime.strptime(kwargs["start_date"], "%Y%m%d")
+        end = datetime.strptime(kwargs["end_date"], "%Y%m%d")
+        days = (end - start).days + 1
+        calls.append((kwargs["start_date"], kwargs["end_date"], days))
+        if days > limit_days:
+            raise RuntimeError("查询数据失败，请确认参数！")
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "report_date": [kwargs["end_date"]],
+                "max_price": [None],  # 全 NaN 列, 触发 concat FutureWarning
+            }
+        )
+
+    return _fake_pagination, calls
+
+
 class TestDateHelpers:
     def test_mid_date_str(self):
         # 2024 闰年: 365 天中点 = 182.5 天 -> 7 月 1 日 (取整)
@@ -111,6 +134,33 @@ class TestQueryReportRcAdaptive:
         df = _query_report_rc_adaptive(object(), "20241231", "20240101")
         assert len(df) == 0
         assert len(calls) == 0
+
+    def test_non_overlimit_error_not_bisected(self, monkeypatch):
+        """网络超时等非超限错误不应触发二分, 直接上抛 (避免对全局性问题无意义递归)。"""
+        calls = []
+
+        def _fake_pagination(client, api_name, page_limit=50000, fields=None, **kwargs):
+            calls.append(kwargs["start_date"])
+            raise TimeoutError("HTTPConnectionPool(...): Read timed out. (read timeout=30)")
+
+        monkeypatch.setattr(raw_download_alt, "_query_with_pagination", _fake_pagination)
+        with pytest.raises(TimeoutError):
+            _query_report_rc_adaptive(object(), "20240101", "20241231")
+        assert len(calls) == 1  # 只尝试整段一次, 未发生二分
+
+    def test_bisect_concat_suppresses_warning(self, monkeypatch):
+        """二分合并 (pd.concat parts) 也应屏蔽 empty/all-NA FutureWarning。"""
+        fake_pagination, _ = _make_overlimit_pagination_with_na_col(limit_days=180)
+        monkeypatch.setattr(raw_download_alt, "_query_with_pagination", fake_pagination)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            df = _query_report_rc_adaptive(object(), "20240101", "20241231")
+
+        assert len(df) == 4  # 二分成功取全
+        assert not any(
+            "FutureWarning" in str(x.category) and "empty or all-NA" in str(x.message) for x in w
+        )
 
 
 class TestDownloadReportRcAdaptive:
@@ -171,6 +221,49 @@ class TestDownloadReportRcAdaptive:
         assert storage.saved is not None
         assert len(storage.saved) == 8
         assert "report_rc" not in raw_core.ERROR_COLLECTOR._errors
+
+    def test_uses_conservative_concurrency(self, monkeypatch):
+        """download_report_rc 应使用保守并发 (_REPORT_RC_CONCURRENCY), 避免打爆本地代理。"""
+        from scripts.raw_download.alt import _REPORT_RC_CONCURRENCY
+
+        captured = {}
+
+        def _fake_pagination(client, api_name, page_limit=50000, fields=None, **kwargs):
+            return pd.DataFrame(
+                {
+                    "ts_code": ["000001.SZ"],
+                    "report_date": [kwargs["end_date"]],
+                    "org_name": ["x"],
+                    "author_name": ["y"],
+                }
+            )
+
+        def _fake_run_concurrent(work_items, worker, label, collect=False, max_workers=None):
+            captured["max_workers"] = max_workers
+            return [worker(y) for y in work_items]
+
+        monkeypatch.setattr(raw_download_alt, "_query_with_pagination", _fake_pagination)
+        monkeypatch.setattr(raw_download_alt, "_run_concurrent", _fake_run_concurrent)
+
+        class _FakeStorage:
+            def __init__(self):
+                self.saved = None
+
+            def load_raw(self, name):
+                return None
+
+            def save_raw(self, df, name, is_force=False):
+                self.saved = df.copy()
+
+        download_report_rc(
+            client=object(),
+            storage=_FakeStorage(),
+            start_date="20240101",
+            end_date="20241231",
+            force=True,
+        )
+
+        assert captured["max_workers"] == _REPORT_RC_CONCURRENCY
 
     def test_serial_degrade_consistent(self, monkeypatch):
         """串行降级 (_DOWNLOAD_CONCURRENCY=1) 与并发结果一致。"""

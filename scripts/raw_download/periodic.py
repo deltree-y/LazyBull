@@ -2,6 +2,7 @@
 """raw_download 子包：按季度/年月批量下载与分页查询。"""
 
 import threading
+import warnings
 from datetime import datetime
 from typing import List, Optional, Set, Tuple
 
@@ -11,6 +12,25 @@ from loguru import logger
 from src.lazybull.data import Storage, TushareClient
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
+
+# pandas 对 concat 中 empty/all-NA entries 的 FutureWarning: 这是未来 dtype 推断
+# 行为变更的提示, 不影响当前结果。不为此对数据做任何剔除/补列处理 (否则会破坏
+# raw 层 schema, 导致训练用到列、预测时列被删), 仅屏蔽该告警。
+# 注意: filterwarnings 的 message 用 re.match 从头匹配, 需带 "The behavior of " 前缀。
+_CONCAT_ALL_NA_WARNING = (
+    r"The behavior of DataFrame concatenation with empty or all-NA entries is deprecated"
+)
+
+
+def _concat_no_warning(frames: List["pd.DataFrame"]) -> "pd.DataFrame":
+    """原样 concat, 仅屏蔽 pandas 的 empty/all-NA entries FutureWarning。"""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=_CONCAT_ALL_NA_WARNING,
+            category=FutureWarning,
+        )
+        return pd.concat(frames, ignore_index=True)
 
 
 def _to_int_date(s: str) -> int:
@@ -72,19 +92,14 @@ def _save_merged(
     修复 #9: 合并前按 sort_cols 排序, dedup 的 keep="last" 才有明确语义。
     """
     new_dfs = [d for d in new_dfs if d is not None and len(d) > 0]
-    # 修复: 剔除全 NA 片段（有行但所有值均为 NaN），避免 concat 触发 pandas
-    # FutureWarning（未来版本不再排除 empty/all-NA 条目参与结果 dtype 推断）；
-    # 同时保留全部列集合，确保剔除后 schema 不缺失。
-    all_columns = list(dict.fromkeys(c for d in new_dfs for c in d.columns))
-    new_dfs = [d for d in new_dfs if not d.dropna(how="all").empty]
     if not new_dfs:
         result = existing_df if existing_df is not None else pd.DataFrame()
     else:
-        result = pd.concat(new_dfs, ignore_index=True)
-        if all_columns:
-            result = result.reindex(columns=all_columns)
+        # 数据原样合并, 不剔除任何行/列、不做补列处理, 保证 raw 层 schema 完整
+        # (训练/预测用到的列始终存在); 仅屏蔽 pandas 的 empty/all-NA concat 告警
+        result = _concat_no_warning(new_dfs)
         if existing_df is not None and len(existing_df) > 0:
-            result = pd.concat([existing_df, result], ignore_index=True)
+            result = _concat_no_warning([existing_df, result])
 
     if dedup_cols and len(result) > 0:
         # 先按 sort_cols (如 ann_date) 升序, 然后 keep="last" 保留最新
@@ -139,17 +154,9 @@ def _query_with_pagination(
 
     if not all_pages:
         return pd.DataFrame()
-    # 剔除全 NA 片段（有行但所有值均 NaN），避免 concat 触发 pandas
-    # FutureWarning（未来版本不再排除 empty/all-NA 条目参与结果 dtype 推断）；
-    # 同时保留全部列集合，确保剔除后 schema 不缺失。
-    all_columns = list(dict.fromkeys(c for d in all_pages for c in d.columns))
-    pages = [d for d in all_pages if not d.dropna(how="all").empty]
-    if not pages:
-        return pd.DataFrame()
-    result = pd.concat(pages, ignore_index=True)
-    if all_columns:
-        result = result.reindex(columns=all_columns)
-    return result
+    # 数据原样合并, 不剔除任何行/列 (避免破坏 raw 层 schema, 训练/预测列一致);
+    # 仅屏蔽 pandas 的 empty/all-NA entries concat FutureWarning
+    return _concat_no_warning(all_pages)
 
 
 def download_by_period(

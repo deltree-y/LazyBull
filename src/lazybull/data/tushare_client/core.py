@@ -29,7 +29,10 @@ _API_RATE_LIMITS_DEFAULT: Dict[str, int] = {
     "cyq_perf": 150,
     "margin_detail": 250,
     "top_list": 450,  # 官方限频 500 次/分钟, 客户端侧留 10% 余量避免被限流
+    "report_rc": 200,  # 官方限频约 200~300 次/分钟, 客户端侧保守取值避免长期高并发被拒
 }
+# 确定性业务错误 (参数错误/单次查询超限等): 重试必然再失败, 直接抛以节省请求量
+_ERR_NO_RETRY_KEYWORDS = ("查询数据失败", "请确认参数")
 # 限流错误中提取接口频次，如 "抱歉，您访问接口(cyq_perf)频率超限(200次/分钟)..."
 _RATE_LIMIT_MSG_FREQ = re.compile(r"频率超限\s*\(\s*(\d+)\s*次/分钟")
 
@@ -173,6 +176,12 @@ class ClientCoreMixin:
             except Exception as e:
                 last_err = e
                 err_msg = str(e)
+                # 确定性业务错误 (如参数错误/单次查询超限): 重试必失败, 直接抛
+                # 省去 2/3 的重复请求, 避免高并发下放大请求风暴;
+                # 属预期正常分流 (如大年份超限后走二分), 用 debug 避免黄色噪音
+                if any(k in err_msg for k in _ERR_NO_RETRY_KEYWORDS):
+                    logger.debug(f"API调用失败 (确定性错误, 不重试): {api_name}, {err_msg}")
+                    raise
                 is_rl = _is_rate_limit_error(err_msg, self._rate_limit_keywords)
                 if is_rl:
                     # 从错误信息解析接口频次, 自适应更新接口级限频 (如 cyq_perf=200/分钟)

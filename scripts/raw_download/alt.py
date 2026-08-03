@@ -12,12 +12,17 @@ from src.lazybull.data import Storage, TushareClient
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
 from .periodic import (
+    _concat_no_warning,
     _generate_month_periods,
     _query_with_pagination,
     _save_merged,
     _to_int_date,
     download_by_period,
 )
+
+# report_rc 单请求服务端响应慢 (~5s); 并发过高 (16) 在长期运行下会让 TuShare
+# 拒绝请求 (返回"查询数据失败"), 使用保守并发 + 接口级限频 (core.py) 保持稳定
+_REPORT_RC_CONCURRENCY = 8
 
 
 def download_stk_holdernumber(
@@ -169,7 +174,8 @@ def download_moneyflow_hsgt(
         logger.warning("[moneyflow_hsgt] 全部分段返回空")
         return
 
-    merged = pd.concat(all_dfs, ignore_index=True)
+    # 原样合并, 仅屏蔽 pandas 的 empty/all-NA concat 告警
+    merged = _concat_no_warning(all_dfs)
     merged["trade_date"] = merged["trade_date"].astype(str)
     merged = merged.drop_duplicates(subset=["trade_date"], keep="last")
 
@@ -262,6 +268,16 @@ def _next_date_str(date_str: str) -> str:
     return (datetime.strptime(date_str, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
 
 
+def _is_report_rc_overlimit_error(err_msg: str) -> bool:
+    """判断 report_rc 错误是否为"单次查询超限"。
+
+    超限 (offset > 100000) 时 TuShare 返回"查询数据失败，请确认参数！"；
+    网络超时/代理错误 (Read timed out) 等其它错误不是超限, 不应触发二分
+    (二分对全局性问题无意义, 反而浪费时间递归)。
+    """
+    return "查询数据失败" in err_msg or "请确认参数" in err_msg
+
+
 def _query_report_rc_adaptive(
     client: TushareClient,
     start_date: str,
@@ -300,11 +316,16 @@ def _query_report_rc_adaptive(
             end_date=end_date,
         )
     except Exception as e:
+        if not _is_report_rc_overlimit_error(str(e)):
+            # 非超限错误 (如代理/网络 Read timed out): 二分无意义, 直接上抛,
+            # 由 download_report_rc 记录该年份失败, 重跑时断点续传
+            raise
         if depth >= max_depth:
             raise RuntimeError(
                 f"report_rc {start_date}~{end_date} 二分 {max_depth} 层后仍失败: {e}"
             ) from e
-        logger.warning(
+        # 大年份单次查询超限 -> 自动二分是预期正常流程, 用 debug 而非 warning
+        logger.debug(
             f"[report_rc] {start_date}~{end_date} 整段查询失败, 自动二分重试 "
             f"(depth={depth + 1}): {e}"
         )
@@ -316,7 +337,8 @@ def _query_report_rc_adaptive(
         parts = [d for d in (left, right) if d is not None and len(d) > 0]
         if not parts:
             return pd.DataFrame()
-        return pd.concat(parts, ignore_index=True)
+        # 二分结果合并同样需屏蔽 pandas 的 empty/all-NA concat 告警
+        return _concat_no_warning(parts)
 
 
 def download_report_rc(
@@ -390,11 +412,16 @@ def download_report_rc(
 
     # 按年并发下载: 不同年份的网络等待并行化 (总 QPS 仍受令牌桶限频约束);
     # 各年份 df 收集后统一合并去重落盘, 避免并发写同一文件
+    #
+    # report_rc 单请求服务端响应 ~5s, 全局限频 48 并发会让本地代理
+    # (如 192.168.1.21:18081) 或 TuShare 服务端出现 Read timed out /
+    # "查询数据失败" 全局性失败。这里使用保守并发, 优先保证稳定不失败。
     collected = _run_concurrent(
         years_to_download,
         _worker,
         label="report_rc",
         collect=True,
+        max_workers=_REPORT_RC_CONCURRENCY,
     )
     all_dfs: List["pd.DataFrame"] = [d for d in collected if d is not None and len(d) > 0]
 

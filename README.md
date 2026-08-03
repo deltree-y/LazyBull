@@ -28,7 +28,33 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.90.23)
+### 当前版本 (v0.90.28)
+
+- **`report_rc` 下载告警清零 + 日志去噪**：
+  - 二分合并的 concat 也改用 `_concat_no_warning`，所有 pandas empty/all-NA
+    告警全部屏蔽（数据原样）；
+  - 预期流程（确定性错误不重试、自动二分重试）日志降为 debug，只有真错误
+    （如 `Read timed out`）保留 warning。
+
+- **修复 `report_rc` 长期高并发被 TuShare 拒绝**：
+  - 实测确认并发数量本身没问题（16 并发 320 请求全成功），根因是长期高请求
+    频率 + 超限错误重试 3 次放大请求量；
+  - 修复：确定性错误（"查询数据失败"）不重试、`report_rc` 接口级限频 200、
+    并发降到 8。
+
+- **下载 concat 只屏蔽告警、不再改动数据**：
+  - `_query_with_pagination` 与 `_save_merged` 恢复数据**原样 concat**，
+    不再剔除全 NA 行/全 NaN 列、不做 reindex 补列（避免破坏 raw 层 schema，
+    导致训练用到列、预测时列被删）；
+  - 仅通过 `_concat_no_warning` 按消息精确屏蔽 pandas 的 empty/all-NA
+    entries FutureWarning。
+
+- **彻底修复 `_query_with_pagination` concat FutureWarning（真正根源）**：
+  - `report_rc` 改用保守并发（`_REPORT_RC_CONCURRENCY=8`），避免 48 并发
+    打爆本地 HTTP 代理（`192.168.1.21:18081`）导致 `Read timed out`；
+  - `_query_report_rc_adaptive` 只对"查询数据失败"超限错误二分，网络超时等
+    其它错误直接抛出（不无意义递归），重跑断点续传；
+  - `_run_concurrent` 新增 `max_workers` 参数，可按接口单独设置并发。
 
 - **修复 `_query_with_pagination` concat FutureWarning**：
   - 翻页中"有行但全 NaN"的片段在 concat 前剔除，并保留全部列集合，

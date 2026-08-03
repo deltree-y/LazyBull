@@ -9,6 +9,7 @@
 """
 
 import sys
+import warnings
 
 import pandas as pd
 import pytest
@@ -84,41 +85,57 @@ class TestQueryWithPagination:
 
 
 class TestQueryWithPaginationAllNA:
-    """修复: _query_with_pagination 应剔除全 NA 片段并保留列集合，避免 concat FutureWarning。"""
+    """_query_with_pagination 应原样保留数据 (不剔除行/列), 仅屏蔽 concat FutureWarning。"""
 
-    def test_all_na_page_skipped_and_columns_kept(self):
-        # page_limit=2: 页1 正常(2行) -> 页2 全 NA(2行, 含独有列 extra) -> 页3 正常(1行) 结束
+    def test_concat_preserves_data_and_suppresses_warning(self):
+        """含全 NaN 列/全 NA 行的页应原样并入, 且不泄露 empty/all-NA FutureWarning。"""
+        # page_limit=2: 页1 正常(2行) -> 页2 含全NaN列 max_price(2行) -> 页3 全NA行(1行) 结束
         pages = [
             pd.DataFrame({"a": [1, 2], "b": [3, 4]}),
-            pd.DataFrame({"a": [None, None], "b": [None, None], "extra": [None, None]}),
-            pd.DataFrame({"a": [5], "b": [6]}),
+            pd.DataFrame({"a": [5, 6], "b": [7, 8], "max_price": [None, None]}),
+            pd.DataFrame({"a": [None], "b": [None]}),
         ]
 
         class _FakeClient:
             def query(self, api_name, fields=None, **kwargs):
                 return pages.pop(0) if pages else pd.DataFrame()
 
-        result = download_raw_module._query_with_pagination(_FakeClient(), "test_api", page_limit=2)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = download_raw_module._query_with_pagination(
+                _FakeClient(), "test_api", page_limit=2
+            )
 
-        # 全 NA 页被剔除, 正常数据完整
-        assert len(result) == 3
-        assert result["a"].tolist() == [1, 2, 5]
-        # 全 NA 页的独有列不丢失 (列集合保留)
-        assert "extra" in result.columns
-        # 被剔除的行不残留 NaN
-        assert result.dropna(how="all").empty is False
+        # 数据原样保留: 5 行, 全 NaN 列 max_price 与全 NA 行都在
+        assert len(result) == 5
+        assert "max_price" in result.columns
+        # 页1/页3 无 max_price 列 (concat 填 NaN), 页2 为 None -> 5 行全部 NaN
+        assert result["max_price"].isna().sum() == 5
+        assert result.isna().all(axis=1).sum() == 1  # 全 NA 行保留
+        # 不泄露该 FutureWarning
+        assert not any(
+            "FutureWarning" in str(x.category) and "empty or all-NA" in str(x.message) for x in w
+        )
 
-    def test_all_na_only_pages_result_empty(self):
+    def test_concat_all_na_pages_preserved(self):
+        """全 NA 页单独 concat 也原样保留 (不返回空), 且无告警。"""
         pages = [pd.DataFrame({"a": [None, None], "extra": [None, None]})]
 
         class _FakeClient:
             def query(self, api_name, fields=None, **kwargs):
                 return pages.pop(0) if pages else pd.DataFrame()
 
-        result = download_raw_module._query_with_pagination(_FakeClient(), "test_api", page_limit=2)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = download_raw_module._query_with_pagination(
+                _FakeClient(), "test_api", page_limit=2
+            )
 
-        # 全部页面都是全 NA -> 返回空
-        assert len(result) == 0
+        assert len(result) == 2  # 原样保留
+        assert "extra" in result.columns
+        assert not any(
+            "FutureWarning" in str(x.category) and "empty or all-NA" in str(x.message) for x in w
+        )
 
 
 class TestStkHoldernumberResume:
@@ -378,7 +395,7 @@ class TestReportRcPagination:
 
 
 class TestSaveMergedAllNA:
-    """修复: _save_merged 应剔除全 NA 片段并保留列集合，避免 concat FutureWarning。"""
+    """_save_merged 应原样保留数据 (不剔除行/列), 仅屏蔽 concat FutureWarning。"""
 
     def _fake_storage(self):
         saved = {}
@@ -389,7 +406,7 @@ class TestSaveMergedAllNA:
 
         return _FakeStorage(), saved
 
-    def test_all_na_fragment_skipped_and_columns_kept(self):
+    def test_all_na_fragment_preserved_and_warning_suppressed(self):
         from scripts.raw_download.periodic import _save_merged
 
         storage, saved = self._fake_storage()
@@ -410,34 +427,46 @@ class TestSaveMergedAllNA:
             }
         )
 
-        _save_merged(
-            storage,
-            "test_ds",
-            [df_ok, df_all_na],
-            existing_df=None,
-            dedup_cols=["ts_code", "end_date"],
-        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _save_merged(
+                storage,
+                "test_ds",
+                [df_ok, df_all_na],
+                existing_df=None,
+                dedup_cols=["ts_code", "end_date"],
+            )
 
         result = saved["test_ds"]
-        # 只保留正常片段的数据
-        assert len(result) == 2
-        assert result["value"].tolist() == [1.0, 2.0]
-        # 列集合保留（全 NA 片段的独有列不丢失）
+        # 数据原样保留: 全 NA 片段不剔除; 去重后 3 行 (df_ok 2 行 + 全 NA 片段的 (None,None) 1 行)
+        assert len(result) == 3
+        assert result["value"].iloc[:2].tolist() == [1.0, 2.0]
+        assert pd.isna(result["value"].iloc[2])  # 全 NA 片段行保留且值为 NaN
         assert "extra_col" in result.columns
+        # 不泄露该 FutureWarning
+        assert not any(
+            "FutureWarning" in str(x.category) and "empty or all-NA" in str(x.message) for x in w
+        )
 
-    def test_all_na_only_results_empty(self):
+    def test_all_na_only_preserved(self):
         from scripts.raw_download.periodic import _save_merged
 
         storage, saved = self._fake_storage()
         df_all_na = pd.DataFrame({"ts_code": [None], "end_date": [None], "value": [None]})
 
-        _save_merged(
-            storage,
-            "test_ds",
-            [df_all_na],
-            existing_df=None,
-            dedup_cols=["ts_code", "end_date"],
-        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _save_merged(
+                storage,
+                "test_ds",
+                [df_all_na],
+                existing_df=None,
+                dedup_cols=["ts_code", "end_date"],
+            )
 
         result = saved["test_ds"]
-        assert len(result) == 0
+        # 全 NA 片段原样保留, 不返回空
+        assert len(result) == 1
+        assert not any(
+            "FutureWarning" in str(x.category) and "empty or all-NA" in str(x.message) for x in w
+        )

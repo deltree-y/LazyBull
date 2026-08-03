@@ -47,6 +47,22 @@ class TestRunConcurrentCollect:
         results = raw_core._run_concurrent([1, 2, 3], lambda x: x * 10, label="t", collect=False)
         assert results is None
 
+    def test_max_workers_overrides_global(self, monkeypatch):
+        """max_workers 覆盖全局并发; 仍按序收集结果。"""
+        monkeypatch.setattr(raw_core, "_DOWNLOAD_CONCURRENCY", 16)
+        results = raw_core._run_concurrent(
+            list(range(6)), lambda x: x, label="t", collect=True, max_workers=2
+        )
+        assert results == list(range(6))
+
+    def test_max_workers_one_serial(self, monkeypatch):
+        """max_workers=1 走串行路径, 行为与 _DOWNLOAD_CONCURRENCY=1 一致。"""
+        monkeypatch.setattr(raw_core, "_DOWNLOAD_CONCURRENCY", 16)
+        results = raw_core._run_concurrent(
+            [1, 2, 3], lambda x: x * 10, label="t", collect=True, max_workers=1
+        )
+        assert results == [10, 20, 30]
+
 
 class TestDownloadByPeriodConcurrency:
     """download_by_period 并发化: 分区/非分区模式行为与串行一致。"""

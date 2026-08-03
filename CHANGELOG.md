@@ -2,6 +2,95 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.28] - 2026-08-03
+
+### Changed
+
+- **屏蔽 `_query_report_rc_adaptive` 二分合并的 concat FutureWarning**：
+  `report_rc` 大年份自动二分后，`pd.concat(parts)` 合并各子段仍会因页内全 NaN
+  列（如 `max_price`）触发 pandas 告警；现统一改用 `_concat_no_warning`
+  （`scripts/raw_download/alt.py`），数据仍原样保留。
+- **预期流程日志降级为 debug（减少黄色噪音）**：仅真正需要关注的错误（如
+  `Read timed out`）保留 warning 级别：
+  - `client.query` 的"确定性错误，不重试"日志 warning → debug（大年份超限走
+    二分属预期分流）；
+  - `_query_report_rc_adaptive` 的"整段查询失败，自动二分重试"日志
+    warning → debug（二分是预期正常流程）。
+- **测试**：`test_download_report_rc_adaptive.py` 新增二分合并屏蔽告警用例。
+
+## [0.90.27] - 2026-08-03
+
+### Fixed
+
+- **修复 `report_rc` 长期高并发被 TuShare 拒绝（"查询数据失败"）**：
+  - 现象：无代理时，16 并发长期下载大年份（需二分），TuShare 对请求返回
+    "查询数据失败，请确认参数！" 拒绝，二分后的子段也被拒。
+  - 实测定位（用户实际环境）：并发 8×80 请求、16×320 请求均全部成功——
+    并发数量本身不是问题；根因是**长期高请求频率** + **超限错误重试 3 次
+    放大请求量**（"查询数据失败"是确定性错误，重试必再失败，白白放大 3 倍）。
+  - 修复（`src/lazybull/data/tushare_client/core.py`、
+    `scripts/raw_download/alt.py`）：
+    1. `client.query` 对"查询数据失败，请确认参数"类**确定性错误不重试**
+       （直接抛，节省 2/3 请求量）；
+    2. `_API_RATE_LIMITS_DEFAULT["report_rc"] = 200`（接口级限频，长期运行
+       不再超出 TuShare 承受频率）；
+    3. `_REPORT_RC_CONCURRENCY` 16 → 8（保守并发）。
+- **测试**：`test_tushare_client_rate_limit.py` 新增确定性错误不重试、
+  `report_rc` 接口限频生效两个用例。
+
+## [0.90.26] - 2026-08-03
+
+### Changed
+
+- **不再为消除 concat FutureWarning 而处理数据（撤回 0.90.23/0.90.25 的剔除/reindex
+  逻辑）**：下载层的 `_query_with_pagination` 与 `_save_merged`
+  （`scripts/raw_download/periodic.py`）恢复**数据原样 concat**——不剔除任何
+  全 NA 行/全 NaN 列、不做 reindex 补列。此前为消除 pandas 的 empty/all-NA
+  entries FutureWarning 而剔除全 NaN 列（如 `report_rc` 的 `max_price`）会破坏
+  raw 层 schema，导致训练用到某列、预测时该列被删而失败。
+  - 新增 `_concat_no_warning` 辅助：`concat` 时仅按消息精确屏蔽该 FutureWarning
+    （`filterwarnings` 的 `message` 用 `re.match` 从头匹配，需含
+    "The behavior of " 前缀），**数据完全原样**。
+- **测试**：`TestQueryWithPaginationAllNA` / `TestSaveMergedAllNA` 更新为
+  "数据原样保留（含全 NA 行/全 NaN 列）+ 不泄露 empty/all-NA FutureWarning" 语义。
+
+## [0.90.25] - 2026-08-03
+
+### Fixed
+
+- **彻底修复 `_query_with_pagination` 的 concat FutureWarning（真正根源为页内
+  "全 NaN 列"）**：
+  - 在用户实际环境（pandas 2.3.0）真实复现确认：触发警告的不是"全 NA 行/页"，
+    而是**某些页存在整列全 NaN 的列**——如 `report_rc` 的 `max_price`（预测
+    最高价）字段在部分页完全缺失（2026 年 42 页中有 7 页 `max_price` 全 NaN）；
+  - 0.90.23 的修复（剔除全 NA 行）方向错误、未生效，本次改为逐页
+    `dropna(axis=1, how="all")` 剔除全 NaN 列后再 concat，最后 `reindex` 补回
+    全部列集合（缺失列填 NaN），schema 不缺失且告警消除；
+  - 全 NA 页（剔除后 0 列）一并过滤。
+  - 修复位于 `scripts/raw_download/periodic.py`。
+- **测试**：`test_download_raw_fixes.py` 新增 `test_all_na_column_skipped_and_reindexed`
+  （全 NaN 列剔除 + reindex 补回）。
+
+## [0.90.24] - 2026-08-03
+
+### Fixed
+
+- **修复 `report_rc` 并发过高导致代理超时/全局失败**：`report_rc` 单请求服务端
+  响应约 5s，按年并发使用全局限频 48 会打爆本地 HTTP 代理（如
+  `192.168.1.21:18081`），大量 `Read timed out (read timeout=30)`，进而连锁
+  触发 TuShare "查询数据失败，请确认参数！" 全局拒绝；此时自适应二分的子段
+  （如 5 万条/半年）也失败，说明是全局性问题而非超限，原二分逻辑仍会无谓递归。
+  - `scripts/raw_download/core.py`：`_run_concurrent` 新增 `max_workers` 参数，
+    可按接口覆盖全局 `_DOWNLOAD_CONCURRENCY`（默认不变，向后兼容）；
+  - `scripts/raw_download/alt.py`：`download_report_rc` 改用保守并发
+    `_REPORT_RC_CONCURRENCY = 8`，避免打爆代理；
+  - `_query_report_rc_adaptive` 只对"查询数据失败，请确认参数！"类**超限**错误
+    二分；网络超时/其它错误直接上抛（由 `download_report_rc` 记录该年份失败，
+    重跑断点续传），不再对全局性问题做无意义递归。
+- **测试**：新增 `_run_concurrent` 的 `max_workers` 覆盖/串行用例、
+  `_query_report_rc_adaptive` 非超限错误不二分用例、`download_report_rc`
+  保守并发断言。
+
 ## [0.90.23] - 2026-08-03
 
 ### Fixed

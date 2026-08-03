@@ -96,6 +96,29 @@ class TestInterfaceRateLimit:
 
         assert client._api_rate_limits.get("daily") is None  # 非限流错误不更新
 
+    def test_deterministic_error_not_retried(self):
+        """确定性业务错误 (查询数据失败/参数错误) 重试必失败, 应直接抛以节省请求量。"""
+        client = _make_client(rate_limit=500)
+        calls = {"n": 0}
+
+        class _Pro:
+            def query(self, api_name, fields=None, **kwargs):
+                calls["n"] += 1
+                raise Exception("查询数据失败，请确认参数！可以反馈管理员协助您排查问题")
+
+        client.pro = _Pro()
+        with pytest.raises(Exception, match="查询数据失败"):
+            client.query("report_rc", skip_rate_limit=True)
+
+        assert calls["n"] == 1  # 不重试
+
+    def test_report_rc_has_interface_limit(self):
+        """report_rc 应有接口级限频 (避免长期高并发被 TuShare 拒绝)。"""
+        client = _make_client(rate_limit=500)
+        limit = client._api_rate_limits["report_rc"]
+        assert limit > 0
+        assert client._request_interval_for("report_rc") == pytest.approx(60.0 / limit)
+
 
 class TestTopListRateLimitOverride:
     """get_top_list 应局部放宽限频到 1000 次/分钟 (注释意图), 加速历史批量下载。"""

@@ -133,6 +133,7 @@ def _run_concurrent(
     worker: Callable,
     label: str,
     collect: bool = False,
+    max_workers: Optional[int] = None,
 ) -> Optional[List[Any]]:
     """并发执行 worker(item) 遍历 work_items。
 
@@ -142,13 +143,17 @@ def _run_concurrent(
       此处仅兜底一次避免单个线程崩溃吞掉其余任务
     - collect=True 时按 work_items 顺序返回 worker 返回值列表; 否则返回 None
       (既有调用方不传 collect, 行为完全不变)
+    - max_workers 可覆盖全局 _DOWNLOAD_CONCURRENCY: 用于对"单请求响应慢/经过
+      本地代理"的接口 (如 report_rc) 使用更保守并发, 避免打爆代理或触发
+      服务端全局拒绝。
 
     Returns:
         collect=True 时返回 List[Any] (长度与 work_items 一致), 否则 None
     """
     results: List[Any] = [None] * len(work_items)
+    workers = max_workers if max_workers is not None else _DOWNLOAD_CONCURRENCY
 
-    if _DOWNLOAD_CONCURRENCY <= 1 or len(work_items) <= 1:
+    if workers <= 1 or len(work_items) <= 1:
         for i, item in enumerate(work_items):
             try:
                 r = worker(item)
@@ -159,7 +164,7 @@ def _run_concurrent(
         return results if collect else None
 
     with ThreadPoolExecutor(
-        max_workers=_DOWNLOAD_CONCURRENCY,
+        max_workers=workers,
         thread_name_prefix=f"dl-{label}",
     ) as pool:
         futures = {pool.submit(worker, item): idx for idx, item in enumerate(work_items)}
