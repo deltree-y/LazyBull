@@ -16,8 +16,10 @@ tushare:
   rate_limit: 500  # 每分钟请求数上限(全局限频令牌桶, 所有并发线程共享)
   # 下载并发数: 同一秒内允许的最大线程数
   # 注意: 并发仅加速"网络等待", 总 QPS 仍被 rate_limit 严格限制, 所以不会超过 TuShare 官方配额
-  # 若观察到限流频繁触发, 手动改回 1 即可退回串行下载
-  download_concurrency: 4
+  # 接口级限频: TushareClient 会按接口自动限频(如 cyq_perf=200次/分钟), 且限流错误
+  #   会自动解析"频率超限(X次/分钟)"并自适应, 因此高并发不会打爆低限频接口
+  # 实测 tushare 服务器 HTTP 响应 ~5s/请求(网络 ping 0ms), 并发 36 可接近 rate_limit 上限
+  download_concurrency: 36
   # 限流错误识别: 匹配以下子串(不区分大小写)的错误视为限流, 触发长等 retry_rate_limit_sleep
   # 其它错误(如 token 无效/网络不通)使用 retry_delay 的短等, 避免无谓等待
   rate_limit_error_keywords: ["每分钟", "访问", "频次", "rate", "limit", "频率", "429", "超过"]

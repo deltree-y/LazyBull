@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.12] - 2026-08-03
+
+### Changed
+
+- **`data/tushare_client.py`（约 940 行）→ `data/tushare_client/` 子包**：
+  `__init__.py` 门面（`TushareClient` 由 `ClientCoreMixin/ClientBasicMixin/`
+  `ClientDailyMixin/ClientFundamentalMixin/ClientAltMixin` 组合）+ `core/basic/`
+  `daily/fundamental/alt` 5 个模块。旧路径 `from src.lazybull.data.tushare_client import X`
+  经门面 re-export 保持兼容（含 `ts`、`FINA_INDICATOR_DEFAULT_FIELDS`）。
+- **`scripts/download_raw.py` → `scripts/raw_download/` 子包 + 薄入口**：
+  `raw_download/`（`core/basic/daily/periodic/daily_partition/alt/cli`）承载全部逻辑；
+  `scripts/download_raw.py` 保留为薄入口（`python scripts/download_raw.py` 命令不变），
+  `from scripts import download_raw` 经薄入口 re-export 兼容。
+- **测试适配**：`test_download_raw_fixes.py` 的 monkeypatch 目标更新到
+  `scripts.raw_download.alt`（门面 setattr 不影响实际模块绑定）。
+
+## [0.90.11] - 2026-08-03
+
+### Changed
+
+- **TushareClient 接口级限频自适应**：
+  - 限频改为**按接口分桶令牌桶**（每个接口独立 `interval`），不同限频的接口互不拖累
+    （如 `cyq_perf=200次/分钟` 不影响全局 `rate_limit=500`）。
+  - 新增接口限频表 `_API_RATE_LIMITS_DEFAULT`（默认收录 `cyq_perf=200`）；未知接口回退全局。
+  - 收到限流错误时**自动解析**"频率超限(X次/分钟)"并动态更新该接口限频（自适应学习）。
+  - 解决并发 36 下 `cyq_perf` 等低限频接口被限流 → 15s 长等 → 重试又限流的恶性循环。
+- **测试**：新增 `tests/test_tushare_client_rate_limit.py`（4 用例）覆盖接口 interval、
+  分桶独立性、限流错误自适应更新。
+
+## [0.90.10] - 2026-08-02
+
+### Fixed
+
+- **download_raw 下载性能回归（20 小时 → 恢复）**：
+  - `_query_with_pagination` 改用 `client.query`（走令牌桶限频 + 限流重试），
+    原先直接 `client.pro.query` 绕过限频，在并发下触发 TuShare 限流后整段
+    period 失败且不落盘，重跑反复重下导致耗时爆炸。
+  - 移除 probe 探测逻辑（每整页多一次额外请求，且对不支持 offset 的接口存在
+    死循环风险），恢复 `len(df) < page_limit` 终止条件，并新增 `max_pages` 兜底。
+  - `download_stk_holdernumber` 增加断点续传（读已有最大 `ann_date`，仅下载其后
+    月份段），修复每次全量重下 180 个月的问题；单月改为分页拉取，规避单次
+    3000 条上限截断。
+  - `download_report_rc` 按年改为分页拉取（`page_limit=2000`），规避单次 2000 条
+    上限导致研报数据截断。
+- **测试**：新增 `tests/test_download_raw_fixes.py`（6 用例）覆盖分页累积、
+  max_pages 兜底、stk_holdernumber 断点续传、report_rc 分页。
+
 ## [0.90.9] - 2026-08-02
 
 ### Changed
