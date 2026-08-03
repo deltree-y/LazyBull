@@ -8,8 +8,8 @@
 
 覆盖:
 - _run_concurrent 的 collect 模式: 串行/并发路径均按 work_items 顺序返回 worker 返回值
-- download_by_period 分区模式 (fund_portfolio/fina_indicator): 各季度独立落盘, 计数正确
-- download_by_period 非分区模式 (forecast/express): 全部下载后统一合并去重落盘
+- download_by_period 分区模式 (fund_portfolio/fina_indicator/forecast): 各季度独立落盘, 计数正确
+- download_by_period 非分区模式 (express 等): 全部下载后统一合并去重落盘
 """
 
 import pandas as pd
@@ -145,8 +145,8 @@ class TestDownloadByPeriodConcurrency:
         download_by_period(
             client,
             storage,
-            dataset_name="forecast",
-            api_name="forecast_vip",
+            dataset_name="express",
+            api_name="express_vip",
             start_date="20240101",
             end_date="20251231",
             dedup_cols=["ts_code"],
@@ -173,8 +173,8 @@ class TestDownloadByPeriodConcurrency:
         download_by_period(
             _ClientWithDup(),
             storage,
-            dataset_name="forecast",
-            api_name="forecast_vip",
+            dataset_name="express",
+            api_name="express_vip",
             start_date="20240101",
             end_date="20251231",
             dedup_cols=["ts_code"],

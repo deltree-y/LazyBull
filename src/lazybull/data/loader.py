@@ -493,9 +493,24 @@ class DataLoader:
                     df[col] = normalize_series_to_yyyymmdd(df[col])
         return df
 
-    def load_forecast(self) -> Optional[pd.DataFrame]:
-        """加载业绩预告数据（单文件）"""
-        df = self.storage.load_raw("forecast")
+    def load_forecast(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        lookback_years: int = 1,
+    ) -> Optional[pd.DataFrame]:
+        """加载业绩预告数据（按季度 end_date 分区存储）
+
+        Returns:
+            业绩预告DataFrame，包含 ts_code, ann_date, end_date 等字段。
+            不存在返回 None。
+        """
+        df = self._load_quarter_partitioned_raw(
+            "forecast",
+            start_date=start_date,
+            end_date=end_date,
+            lookback_years=lookback_years,
+        )
         if df is None:
             logger.warning("未找到业绩预告数据")
         else:
@@ -599,13 +614,23 @@ class DataLoader:
         return df
 
     def load_report_rc(self) -> Optional[pd.DataFrame]:
-        """加载卖方一致预期研报数据（单文件）"""
-        df = self.storage.load_raw("report_rc")
-        if df is None:
+        """加载卖方一致预期研报数据（按年 report_date 分区存储）"""
+        partitions = self.storage.list_partitions("raw", "report_rc")
+        if not partitions:
             logger.warning("未找到一致预期研报数据")
-        elif "report_date" in df.columns:
-            df["report_date"] = normalize_series_to_yyyymmdd(df["report_date"])
-        return df
+            return None
+        dfs: List[pd.DataFrame] = []
+        for p in partitions:
+            df = self.storage.load_raw_by_date("report_rc", p)
+            if df is not None and len(df) > 0:
+                dfs.append(df)
+        if not dfs:
+            logger.warning("未找到一致预期研报数据")
+            return None
+        result = pd.concat(dfs, ignore_index=True)
+        if "report_date" in result.columns:
+            result["report_date"] = normalize_series_to_yyyymmdd(result["report_date"])
+        return result
 
     def load_fund_portfolio(
         self,

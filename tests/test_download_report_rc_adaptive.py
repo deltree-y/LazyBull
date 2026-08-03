@@ -170,13 +170,13 @@ class TestDownloadReportRcAdaptive:
 
         class _FakeStorage:
             def __init__(self):
-                self.saved = None
+                self.saved_partitions = {}
 
-            def load_raw(self, name):
-                return None
+            def list_partitions(self, layer, name):
+                return []
 
-            def save_raw(self, df, name, is_force=False):
-                self.saved = df.copy()
+            def save_raw_by_date(self, df, name, period):
+                self.saved_partitions[period] = df.copy()
 
         storage = _FakeStorage()
         download_report_rc(
@@ -187,9 +187,9 @@ class TestDownloadReportRcAdaptive:
             force=True,
         )
 
-        # 超限年份通过二分成功下载并合并保存
-        assert storage.saved is not None
-        assert len(storage.saved) == 4
+        # 超限年份通过二分成功下载, 按年独立分区落盘
+        assert set(storage.saved_partitions.keys()) == {"2024-12-31"}
+        assert len(storage.saved_partitions["2024-12-31"]) == 4
         assert "report_rc" not in raw_core.ERROR_COLLECTOR._errors
 
     def test_multi_year_concurrent_merge(self, monkeypatch):
@@ -200,13 +200,13 @@ class TestDownloadReportRcAdaptive:
 
         class _FakeStorage:
             def __init__(self):
-                self.saved = None
+                self.saved_partitions = {}
 
-            def load_raw(self, name):
-                return None
+            def list_partitions(self, layer, name):
+                return []
 
-            def save_raw(self, df, name, is_force=False):
-                self.saved = df.copy()
+            def save_raw_by_date(self, df, name, period):
+                self.saved_partitions[period] = df.copy()
 
         storage = _FakeStorage()
         download_report_rc(
@@ -217,9 +217,9 @@ class TestDownloadReportRcAdaptive:
             force=True,
         )
 
-        # 2023 + 2024 两年, 每年超限二分后 4 段 -> 合并 8 行
-        assert storage.saved is not None
-        assert len(storage.saved) == 8
+        # 2023 + 2024 两年, 每年超限二分后 4 段 -> 两个年分区各 4 行
+        assert set(storage.saved_partitions.keys()) == {"2023-12-31", "2024-12-31"}
+        assert sum(len(v) for v in storage.saved_partitions.values()) == 8
         assert "report_rc" not in raw_core.ERROR_COLLECTOR._errors
 
     def test_uses_conservative_concurrency(self, monkeypatch):
@@ -247,13 +247,13 @@ class TestDownloadReportRcAdaptive:
 
         class _FakeStorage:
             def __init__(self):
-                self.saved = None
+                self.saved_partitions = {}
 
-            def load_raw(self, name):
-                return None
+            def list_partitions(self, layer, name):
+                return []
 
-            def save_raw(self, df, name, is_force=False):
-                self.saved = df.copy()
+            def save_raw_by_date(self, df, name, period):
+                self.saved_partitions[period] = df.copy()
 
         download_report_rc(
             client=object(),
@@ -273,13 +273,13 @@ class TestDownloadReportRcAdaptive:
 
         class _FakeStorage:
             def __init__(self):
-                self.saved = None
+                self.saved_partitions = {}
 
-            def load_raw(self, name):
-                return None
+            def list_partitions(self, layer, name):
+                return []
 
-            def save_raw(self, df, name, is_force=False):
-                self.saved = df.copy()
+            def save_raw_by_date(self, df, name, period):
+                self.saved_partitions[period] = df.copy()
 
         storage = _FakeStorage()
         download_report_rc(
@@ -290,6 +290,7 @@ class TestDownloadReportRcAdaptive:
             force=True,
         )
 
-        assert storage.saved is not None
-        assert len(storage.saved) == 8
+        # 串行降级: 两个年分区各 4 行, 与并发结果一致
+        assert set(storage.saved_partitions.keys()) == {"2023-12-31", "2024-12-31"}
+        assert sum(len(v) for v in storage.saved_partitions.values()) == 8
         assert "report_rc" not in raw_core.ERROR_COLLECTOR._errors

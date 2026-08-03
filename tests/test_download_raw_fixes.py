@@ -357,12 +357,13 @@ class TestReportRcPagination:
 
     def test_uses_pagination_with_2000_page_limit(self, monkeypatch):
         class _FakeStorage:
-            def load_raw(self, name):
+            def list_partitions(self, layer, name):
                 assert name == "report_rc"
-                return None
+                return []
 
-            def save_raw(self, df, name, is_force=False):
+            def save_raw_by_date(self, df, name, period):
                 assert name == "report_rc"
+                assert period == "2024-12-31"
 
         captured = []
 

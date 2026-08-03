@@ -785,7 +785,13 @@ def test_incremental_download_functions_delegate_to_range_catchup(
             ]
         )
 
-    temp_storage.save_raw(existing, dataset_name, is_force=True)
+    # forecast/report_rc 已改为按时间分区存储, 其余公告类数据集仍为单文件
+    if dataset_name == "forecast":
+        temp_storage.save_raw_by_date(existing, dataset_name, "20260331")
+    elif dataset_name == "report_rc":
+        temp_storage.save_raw_by_date(existing, dataset_name, "2026-12-31")
+    else:
+        temp_storage.save_raw(existing, dataset_name, is_force=True)
     monkeypatch.setattr(ensure_downloads, threshold_attr, 1)
 
     captured = {}

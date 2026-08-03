@@ -2,10 +2,11 @@
 """raw_download 子包：CLI 主入口。"""
 
 import argparse
+import os
 import sys
 import time
 from datetime import datetime
-from typing import Set
+from typing import Set, Tuple
 
 from loguru import logger
 
@@ -27,6 +28,40 @@ from .core import ALT_DATASETS, ERROR_COLLECTOR, _fmt_duration
 from .daily import download_daily_data
 from .daily_partition import download_cyq_perf, download_margin_detail, download_stock_st
 from .periodic import _to_int_date, download_by_period
+
+# 终端/系统常通过环境变量注入 HTTP(S) 代理 (如 PowerShell profile 加载的
+# http://192.168.1.21:18081), 导致 TuShare 请求走内网代理并出现 Read timed out。
+# 下载原始数据默认在进程内绕过代理直连, 仅影响当前进程, 不修改终端设置。
+# 开关: LAZYBULL_DOWNLOAD_BYPASS_PROXY=0 可关闭 (单开关、单默认值)。
+_DOWNLOAD_PROXY_ENV_KEYS: Tuple[str, ...] = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def _should_bypass_proxy_for_download() -> bool:
+    """判断下载原始数据时是否临时禁用代理 (默认启用)。"""
+    raw = str(os.getenv("LAZYBULL_DOWNLOAD_BYPASS_PROXY", "1")).strip().lower()
+    return raw not in {"0", "false", "off", "no"}
+
+
+def _bypass_proxy_for_download() -> None:
+    """清除当前进程内的代理环境变量, 使 TuShare/requests 直连。
+
+    仅影响当前 Python 进程, 不修改终端/系统设置; 未注入代理时为空操作。
+    """
+    if not _should_bypass_proxy_for_download():
+        return
+    removed = [k for k in _DOWNLOAD_PROXY_ENV_KEYS if os.environ.pop(k, None) is not None]
+    if removed:
+        logger.info(
+            f"已临时清除代理环境变量(直连): {', '.join(sorted(removed))} "
+            "(如需走代理可设置 LAZYBULL_DOWNLOAD_BYPASS_PROXY=0)"
+        )
 
 
 def main():
@@ -87,6 +122,8 @@ def main():
 
     # 初始化日志
     setup_logger(log_level="INFO")
+    # 默认绕过终端/系统注入的代理, 避免 TuShare 请求走代理 Read timed out
+    _bypass_proxy_for_download()
     get_config()
 
     # 从配置 / 命令行读取并发数, 直接写入 core 模块供 _run_concurrent 读取
@@ -192,6 +229,7 @@ def main():
                         start_date=args.start_date, end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date", "ann_date"],
                         force=args.force,
+                        partition_by_period=True,
                         sort_cols=["ann_date", "end_date"],
                     )
 

@@ -12,7 +12,7 @@ from .alt import (
     download_top_list,
 )
 from .basic import download_basic_data
-from .cli import main
+from .cli import _bypass_proxy_for_download, _should_bypass_proxy_for_download, main
 from .core import (
     ALT_DATASETS,
     DAILY_SUBSETS,
@@ -53,6 +53,7 @@ __all__ = [
     "_DAILY_ALLOW_EMPTY",
     "_DAILY_FETCHERS",
     "_DOWNLOAD_CONCURRENCY",
+    "_bypass_proxy_for_download",
     "_download_by_trade_date",
     "_fmt_duration",
     "_generate_month_periods",
@@ -61,6 +62,7 @@ __all__ = [
     "_query_with_pagination",
     "_run_concurrent",
     "_save_merged",
+    "_should_bypass_proxy_for_download",
     "_to_int_date",
     "download_basic_data",
     "download_by_period",

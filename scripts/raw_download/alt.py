@@ -341,6 +341,15 @@ def _query_report_rc_adaptive(
         return _concat_no_warning(parts)
 
 
+def _existing_report_rc_years(storage: Storage) -> Set[str]:
+    """从 raw/report_rc 年分区中提取已有年份集合 (分区文件名 YYYY-MM-DD, 取 YYYY)。"""
+    years: Set[str] = set()
+    for partition in storage.list_partitions("raw", "report_rc"):
+        if len(partition) == 10 and partition[4] == "-":
+            years.add(partition[:4])
+    return years
+
+
 def download_report_rc(
     client: TushareClient,
     storage: Storage,
@@ -348,21 +357,18 @@ def download_report_rc(
     end_date: str,
     force: bool = False,
 ) -> None:
-    """下载卖方研报一致预期 (按年分页增量)。
+    """下载卖方研报一致预期 (按年分页增量, 每年独立分区落盘)。
 
-    修复 #8: --force 模式下丢弃 existing_df, 语义与其它函数一致 (强制重下不保留旧数据)。
+    report_rc 按 report_date 年分区存储: 目录结构 data/raw/report_rc/{YYYY}-12-31.parquet,
+    每年一份, 与"按年下载/断点续传"的既有节奏一致; 并发下各年份写独立文件天然线程安全。
+
+    修复 #8: --force 模式下丢弃已有年份, 语义与其它函数一致 (强制重下不保留旧数据)。
     """
-    existing_df = None
     existing_years: Set[str] = set()
     if not force:
-        existing_df = storage.load_raw("report_rc")
-        if (
-            existing_df is not None
-            and len(existing_df) > 0
-            and "report_date" in existing_df.columns
-        ):
-            existing_years = set(existing_df["report_date"].astype(str).str[:4].unique())
-            logger.info(f"[report_rc] 已有 {len(existing_df)} 条, 覆盖 {len(existing_years)} 年")
+        existing_years = _existing_report_rc_years(storage)
+        if existing_years:
+            logger.info(f"[report_rc] 已有 {len(existing_years)} 个年份分区")
 
     start_year = _to_int_date(start_date) // 10000
     end_year = _to_int_date(end_date) // 10000
@@ -384,8 +390,8 @@ def download_report_rc(
     # 并发下 success/empty 计数需要线程保护; tracker.tick 内部自带锁, 可安全并发
     stats_lock = threading.Lock()
 
-    def _worker(year: str) -> Optional["pd.DataFrame"]:
-        """下载单个年份 report_rc (含超限自动二分); 返回 df 供主线程统一合并。"""
+    def _worker(year: str) -> None:
+        """下载单个年份 report_rc (含超限自动二分) 并独立落盘。"""
         nonlocal success, empty
         y_start = max(f"{year}0101", start_date)
         y_end = min(f"{year}1231", end_date)
@@ -398,43 +404,30 @@ def download_report_rc(
                 with stats_lock:
                     success += 1
                 logger.info(f"  [report_rc] {year}: {len(df)} 条")
-                return df
-            with stats_lock:
-                empty += 1
-            return None
+                # 每年独立分区落盘 (线程安全, 不同年份写不同文件)
+                storage.save_raw_by_date(df, "report_rc", f"{year}-12-31")
+            else:
+                with stats_lock:
+                    empty += 1
         except Exception as e:
             ERROR_COLLECTOR.add("report_rc", f"year={year}", str(e))
-            return None
         finally:
             with stats_lock:
                 info = f"ok={success} empty={empty}"
             tracker.tick(extra_info=info)
 
     # 按年并发下载: 不同年份的网络等待并行化 (总 QPS 仍受令牌桶限频约束);
-    # 各年份 df 收集后统一合并去重落盘, 避免并发写同一文件
+    # 各年份写独立分区文件, 无需收集合并。
     #
     # report_rc 单请求服务端响应 ~5s, 全局限频 48 并发会让本地代理
     # (如 192.168.1.21:18081) 或 TuShare 服务端出现 Read timed out /
     # "查询数据失败" 全局性失败。这里使用保守并发, 优先保证稳定不失败。
-    collected = _run_concurrent(
+    _run_concurrent(
         years_to_download,
         _worker,
         label="report_rc",
-        collect=True,
         max_workers=_REPORT_RC_CONCURRENCY,
     )
-    all_dfs: List["pd.DataFrame"] = [d for d in collected if d is not None and len(d) > 0]
-
-    if all_dfs:
-        _save_merged(
-            storage,
-            "report_rc",
-            all_dfs,
-            # 修复 #8: force 时 existing_df 传 None
-            existing_df if not force else None,
-            dedup_cols=["ts_code", "report_date", "org_name", "author_name"],
-            sort_cols=["report_date"],
-        )
 
     logger.info(f"[report_rc] 完成: 成功={success} 空={empty}")
 

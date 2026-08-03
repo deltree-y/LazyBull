@@ -28,7 +28,22 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.90.28)
+### 当前版本 (v0.91.0)
+
+- **`download_raw` 启动时自动绕过终端/系统代理**：
+  - PowerShell 等终端常通过环境变量注入 HTTP(S) 代理，导致 TuShare 请求走内网代理
+    出现 `Read timed out`；
+  - 脚本启动时在进程内清除 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`（含小写），
+    只影响当前进程、不改终端设置；可用 `LAZYBULL_DOWNLOAD_BYPASS_PROXY=0` 关闭。
+
+- **`forecast` / `report_rc` 改为按时间分区存储（告别超大独立文件）**：
+  - `forecast` 按季度 `end_date` 分区，与 `fina_indicator`/`cashflow` 对齐；
+    `report_rc` 按年 `report_date` 分区，与"按年下载/断点续传"节奏一致；
+  - 离线下载：`forecast` 复用 `download_by_period(partition_by_period=True)`；
+    `download_report_rc` 按年独立落盘（保留自适应二分 + 保守并发）；
+  - 增量补齐：新增 `_append_and_save_partitioned` 按分区键路由写入，分区内去重，
+    不再整文件读-合并-重写；
+  - 加载：`load_forecast` / `load_report_rc` 纯分区加载（无旧单文件兜底）。
 
 - **`report_rc` 下载告警清零 + 日志去噪**：
   - 二分合并的 concat 也改用 `_concat_no_warning`，所有 pandas empty/all-NA

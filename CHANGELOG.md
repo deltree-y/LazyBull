@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.91.0] - 2026-08-03
+
+### Added
+
+- **`download_raw` 启动时自动绕过终端/系统注入的代理**：
+  - PowerShell 等终端常通过环境变量注入 HTTP(S) 代理（如 `http://192.168.1.21:18081`），
+    导致 TuShare 请求走内网代理并出现 `Read timed out`；
+  - `scripts/raw_download/cli.py` 在 `main()` 启动时于进程内清除
+    `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`（含小写），使 TuShare/requests 直连，
+    仅影响当前进程、不修改终端/系统设置；
+  - 开关：`LAZYBULL_DOWNLOAD_BYPASS_PROXY=0` 可关闭（默认启用，单变量直读、单默认值）；
+  - 新增 `tests/test_download_raw_proxy_bypass.py` 覆盖默认清除、开关关闭、空操作
+    三种场景。
+
+## [0.90.29] - 2026-08-03
+
+### Changed
+
+- **`forecast` / `report_rc` 由超大独立单文件改为按时间分区存储**，与
+  `fina_indicator`/`cashflow`/`fund_portfolio` 对齐：
+  - `forecast` 按季度 `end_date` 分区（`data/raw/forecast/{YYYY-MM-DD}.parquet`），
+    离线下载复用 `download_by_period(partition_by_period=True)`，增量补齐按
+    `end_date` 路由写对应季度分区；
+  - `report_rc` 按年 `report_date` 分区（`data/raw/report_rc/{YYYY}-12-31.parquet`），
+    `download_report_rc` 按年独立落盘（保留自适应二分与保守并发），增量补齐按
+    年份路由写分区；
+  - 新增 `_append_and_save_partitioned` / `_partition_date_str` /
+    `_load_all_partitions`（`features/ensure/incremental.py`），分区内去重、
+    跨分区天然隔离，增量补齐从"整文件读-合并-重写 (O(全量))"降为"只写增量分区"；
+  - `DataLoader.load_forecast` / `load_report_rc` 改为纯分区加载（复用
+    `_load_quarter_partitioned_raw` / `list_partitions + concat`），不再保留
+    旧单文件路径；
+  - 修复潜在 bug：`ensure/downloads.py` 的 `_try_download_report_rc` 全量回溯
+    路径使用了未导入的 `_query_with_pagination`（NameError 被 except 吞掉，
+    全量回溯从未成功），现正确导入。
+- **测试**：新增 `test_forecast_report_rc_partition.py`（分区键映射、分区路由
+  去重、增量补齐写分区、loader 纯分区加载）；同步适配
+  `test_download_report_rc_adaptive.py` / `test_download_raw_fixes.py` /
+  `test_download_periodic_concurrency.py` / `test_ensure_and_t0_printing.py`。
+
 ## [0.90.28] - 2026-08-03
 
 ### Changed
