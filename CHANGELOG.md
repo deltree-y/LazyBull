@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.13] - 2026-08-03
+
+### Changed
+
+- **trade_cal 改为每次全量下载**：`download_basic_data` 不再按 `start/end` 裁剪区间，
+  每次涉及 trade_cal 的下载（默认日线 / `--all` / `--only-basic`）都以
+  `get_trade_cal(exchange="SSE")` 全量拉取（不传日期参数），合并旧数据去重排序后保存，
+  保证交易日历始终完整最新；全量拉取失败时保留已有数据。仅针对 trade_cal 如此操作，
+  其余数据仍按日期区间下载。
+- **测试**：`test_download_raw_fixes.py` 新增 2 用例（全量拉取不传日期、失败时保留已有数据）。
+
 ## [0.90.12] - 2026-08-03
 
 ### Changed

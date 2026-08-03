@@ -23,40 +23,17 @@ def download_basic_data(
     注意修复 #2: trade_cal 需要扩展日历窗口时, 必须合并旧数据后再保存，
     否则短窗口调用会截断历史。stock_basic 同时拉取 L/D/P 修复 #12 生存者偏差。
     """
-    # 1. 交易日历: 按需合并新旧数据
-    logger.info("检查交易日历...")
-    existing_cal: Optional[pd.DataFrame] = None
-    need_download = force
-    if not force:
-        existing_cal = storage.load_raw("trade_cal")
-        if existing_cal is None or "cal_date" not in existing_cal.columns:
-            need_download = True
+    # 1. 交易日历: 每次全量下载（不按 start/end 裁剪，保证日历完整），合并旧数据去重
+    logger.info("下载交易日历 (全量)...")
+    existing_cal = storage.load_raw("trade_cal")
+    new_cal = client.get_trade_cal(exchange="SSE")
+    if new_cal is None or len(new_cal) == 0:
+        if existing_cal is not None and len(existing_cal) > 0:
+            logger.warning("全量下载交易日历返回空，保留已有数据")
+            trade_cal = existing_cal
         else:
-            latest = str(existing_cal["cal_date"].astype(str).max()).replace("-", "")[:8]
-            earliest = str(existing_cal["cal_date"].astype(str).min()).replace("-", "")[:8]
-            # 任一端不覆盖则需要扩展
-            if latest < end_date or earliest > start_date:
-                need_download = True
-                logger.info(
-                    f"交易日历需要扩展: 现有 {earliest}~{latest}, "
-                    f"目标 {start_date}~{end_date}"
-                )
-            else:
-                logger.info(f"交易日历已覆盖 {earliest}~{latest}, 跳过")
-
-    if need_download:
-        # 为了安全, 拉取并集窗口 (min(现有起点, 目标起点) ~ max(现有终点, 目标终点))
-        query_start = start_date
-        query_end = end_date
-        if existing_cal is not None and "cal_date" in existing_cal.columns:
-            ex_min = str(existing_cal["cal_date"].astype(str).min()).replace("-", "")[:8]
-            ex_max = str(existing_cal["cal_date"].astype(str).max()).replace("-", "")[:8]
-            query_start = min(ex_min, start_date)
-            query_end = max(ex_max, end_date)
-        logger.info(f"下载交易日历 ({query_start}~{query_end})...")
-        new_cal = client.get_trade_cal(
-            start_date=query_start, end_date=query_end, exchange="SSE"
-        )
+            raise RuntimeError("交易日历下载失败且无历史数据可保留")
+    else:
         if existing_cal is not None and len(existing_cal) > 0:
             new_cal = pd.concat([existing_cal, new_cal], ignore_index=True)
             new_cal = new_cal.drop_duplicates(subset=["cal_date"], keep="last")
@@ -64,8 +41,6 @@ def download_basic_data(
         storage.save_raw(new_cal, "trade_cal", is_force=True)
         logger.info(f"交易日历已保存: {len(new_cal)} 条")
         trade_cal = new_cal
-    else:
-        trade_cal = existing_cal
 
     # 2. 股票基本信息: 同时拉 L/D/P 消除生存者偏差 (#12)
     logger.info("检查股票基本信息...")

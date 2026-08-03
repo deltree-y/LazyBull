@@ -5,6 +5,7 @@
 - _query_with_pagination 走 client.query 限频（不再绕过）+ 分页累积 + max_pages 兜底
 - download_stk_holdernumber 断点续传（已有 ann_date 后不再全量重下）
 - download_report_rc 按年分页（规避单次 2000 条上限截断）
+- download_basic_data 每次全量下载 trade_cal（不按 start/end 裁剪）
 """
 
 import pandas as pd
@@ -12,6 +13,7 @@ import pytest
 
 from scripts import download_raw as download_raw_module
 from scripts.raw_download import alt as raw_download_alt
+from scripts.raw_download.basic import download_basic_data
 
 
 @pytest.fixture(autouse=True)
@@ -157,6 +159,102 @@ class TestStkHoldernumberResume:
         )
 
         assert captured == []  # 已有数据覆盖整个区间，一次都不下载
+
+
+class TestTradeCalFullDownload:
+    """download_basic_data 每次全量下载 trade_cal（不按 start/end 裁剪）。"""
+
+    def test_fetches_full_trade_cal_ignoring_date_range(self):
+        existing = pd.DataFrame(
+            {"cal_date": ["20240101"], "exchange": ["SSE"], "is_open": [1]}
+        )
+        full = pd.DataFrame(
+            {
+                "exchange": ["SSE"] * 3,
+                "cal_date": ["20230101", "20240101", "20250101"],
+                "is_open": [1, 1, 1],
+            }
+        )
+
+        class _FakeStorage:
+            def __init__(self):
+                self.saved = None
+
+            def load_raw(self, name):
+                if name == "trade_cal":
+                    return existing
+                return None
+
+            def save_raw(self, df, name, is_force=False):
+                self.saved = (name, df.copy())
+
+            def check_basic_data_freshness(self, name, end_date):
+                return True  # 跳过 stock_basic，聚焦 trade_cal
+
+        calls = []
+
+        class _FakeClient:
+            def get_trade_cal(self, start_date=None, end_date=None, exchange="SSE"):
+                calls.append(
+                    {"start_date": start_date, "end_date": end_date, "exchange": exchange}
+                )
+                return full
+
+            def get_stock_basic(self, list_status="L", fields=None):
+                return pd.DataFrame()
+
+        storage = _FakeStorage()
+        client = _FakeClient()
+        download_basic_data(client, storage, "20240101", "20240131")
+
+        # 关键断言：无论请求区间如何，trade_cal 都以全量拉取（不传 start/end）
+        assert calls[0]["start_date"] is None
+        assert calls[0]["end_date"] is None
+        assert calls[0]["exchange"] == "SSE"
+        # 合并去重排序后保存
+        assert storage.saved is not None
+        assert storage.saved[0] == "trade_cal"
+        assert storage.saved[1]["cal_date"].tolist() == [
+            "20230101",
+            "20240101",
+            "20250101",
+        ]
+
+    def test_keeps_existing_when_full_fetch_returns_empty(self):
+        existing = pd.DataFrame(
+            {"cal_date": ["20240101"], "exchange": ["SSE"], "is_open": [1]}
+        )
+
+        class _FakeStorage:
+            def __init__(self):
+                self.saved = None
+
+            def load_raw(self, name):
+                if name == "trade_cal":
+                    return existing
+                return None
+
+            def save_raw(self, df, name, is_force=False):
+                self.saved = (name, df.copy())
+
+            def check_basic_data_freshness(self, name, end_date):
+                return True
+
+        class _FakeClient:
+            def get_trade_cal(self, start_date=None, end_date=None, exchange="SSE"):
+                return None  # 全量拉取失败
+
+            def get_stock_basic(self, list_status="L", fields=None):
+                return pd.DataFrame()
+
+        storage = _FakeStorage()
+        result = download_basic_data(
+            _FakeClient(), storage, "20240101", "20240131"
+        )
+
+        # 拉取失败时保留已有数据，不抛异常
+        assert storage.saved is None
+        assert len(result) == 1
 
 
 class TestReportRcPagination:
