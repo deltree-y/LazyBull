@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.20] - 2026-08-03
+
+### Changed
+
+- **report_rc 下载并发化**：`download_report_rc`（`scripts/raw_download/alt.py`）
+  原为按年串行下载（每年内部逐页翻页, 每请求响应约 5s, 22 年全量串行耗时很长）。
+  现改为按年并发（复用 `_run_concurrent` + `collect=True`）：
+  - 各年份 worker 独立下载（含超限年份自动二分分片），网络等待并行化，总 QPS
+    仍受 TushareClient 令牌桶限频约束；
+  - 全部完成后统一 `_save_merged` 合并去重落盘，避免并发写同一文件；
+  - `success`/`empty` 计数加锁保护，`tracker.tick` 线程安全。
+- **测试**：`test_download_report_rc_adaptive.py` 新增多年份并发合并、串行降级
+  一致性用例。
+
+## [0.90.19] - 2026-08-03
+
+### Fixed
+
+- **修复 `report_rc` 单次查询超限导致整年下载失败**：
+  TuShare `report_rc` 接口对"一次查询 (start_date/end_date + offset 翻页)"的总
+  行数上限为 100000 条 (offset 上限 100000)。`download_report_rc` 按年整段查询,
+  数据量超限的年份 (2009 年约 10.2 万条, 2020/2023/2025 等约 20~30 万条) 翻页到
+  offset > 100000 时服务端返回"查询数据失败, 请确认参数！", 整年数据全部丢失并
+  记为失败 (实测 2009 年在 offset=102000 失败)。
+  - `scripts/raw_download/alt.py` 新增 `_query_report_rc_adaptive`: 整段查询失败
+    时自动把日期范围二分递归重试 (最多 2^6=64 段), 任意规模数据都能取全; 未超限
+    年份仍按整年单次查询, 零额外开销。
+  - 新增日期辅助 `_mid_date_str` / `_next_date_str`。
+  - `download_report_rc` 改走 `_query_report_rc_adaptive`。
+- **测试**: 新增 `tests/test_download_report_rc_adaptive.py` (7 用例: 整段成功/
+  二分合并/深度耗尽抛错/空区间/超限年份下载/日期辅助)。既有
+  `TestReportRcPagination` 保持通过。
+
 ## [0.90.18] - 2026-08-03
 
 ### Changed

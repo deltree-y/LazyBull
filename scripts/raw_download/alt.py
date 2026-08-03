@@ -2,7 +2,8 @@
 """raw_download 子包：另类数据下载 (股东人数/北向/龙虎榜/一致预期/现金流)。"""
 
 import threading
-from typing import Dict, List, Optional, Set, Tuple
+from datetime import datetime, timedelta
+from typing import List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -43,12 +44,7 @@ def download_stk_holdernumber(
         if existing_df is not None and len(existing_df) > 0:
             logger.info(f"[stk_holdernumber] 已有 {len(existing_df)} 条数据")
             if "ann_date" in existing_df.columns:
-                ann_dates = (
-                    existing_df["ann_date"]
-                    .astype(str)
-                    .str.replace("-", "")
-                    .str[:8]
-                )
+                ann_dates = existing_df["ann_date"].astype(str).str.replace("-", "").str[:8]
                 ann_dates = ann_dates[ann_dates.str.match(r"^\d{8}$", na=False)]
                 if len(ann_dates) > 0:
                     latest_ann = ann_dates.max()
@@ -96,8 +92,12 @@ def download_stk_holdernumber(
 
     if all_dfs:
         _save_merged(
-            storage, "stk_holdernumber", all_dfs, existing_df,
-            dedup_cols, sort_cols=["ann_date", "end_date"],
+            storage,
+            "stk_holdernumber",
+            all_dfs,
+            existing_df,
+            dedup_cols,
+            sort_cols=["ann_date", "end_date"],
         )
 
     logger.info(f"[stk_holdernumber] 完成: 成功={success} 空={empty}")
@@ -130,7 +130,9 @@ def download_moneyflow_hsgt(
     if force:
         pending_dates = list(trading_dates)
     else:
-        pending_dates = [td for td in trading_dates if not storage.is_data_exists("raw", "moneyflow_hsgt", td)]
+        pending_dates = [
+            td for td in trading_dates if not storage.is_data_exists("raw", "moneyflow_hsgt", td)
+        ]
 
     skip = len(trading_dates) - len(pending_dates)
     logger.info(
@@ -202,7 +204,9 @@ def download_top_list(
         logger.warning("[top_list] 区间无交易日, 跳过")
         return
 
-    pending = [td for td in trading_dates if force or not storage.is_data_exists("raw", "top_list", td)]
+    pending = [
+        td for td in trading_dates if force or not storage.is_data_exists("raw", "top_list", td)
+    ]
     skip = len(trading_dates) - len(pending)
 
     logger.info(f"[top_list] 共 {len(trading_dates)} 天, 跳过 {skip}, 待下 {len(pending)}")
@@ -222,11 +226,18 @@ def download_top_list(
                     counters["success"] += 1
             else:
                 storage.save_raw_by_date(
-                    pd.DataFrame(columns=[
-                        "trade_date", "ts_code", "net_amount",
-                        "net_rate", "amount_rate", "reason",
-                    ]),
-                    "top_list", td,
+                    pd.DataFrame(
+                        columns=[
+                            "trade_date",
+                            "ts_code",
+                            "net_amount",
+                            "net_rate",
+                            "amount_rate",
+                            "reason",
+                        ]
+                    ),
+                    "top_list",
+                    td,
                 )
                 with counter_lock:
                     counters["empty"] += 1
@@ -237,6 +248,75 @@ def download_top_list(
     _run_concurrent(pending, _worker, label="top_list")
 
     logger.info(f"[top_list] 完成: 新下载={counters['success']} 空占位={counters['empty']}")
+
+
+def _mid_date_str(start_date: str, end_date: str) -> str:
+    """返回 [start_date, end_date] 的中点日期 (YYYYMMDD)。"""
+    s = datetime.strptime(start_date, "%Y%m%d")
+    e = datetime.strptime(end_date, "%Y%m%d")
+    return (s + (e - s) / 2).strftime("%Y%m%d")
+
+
+def _next_date_str(date_str: str) -> str:
+    """返回 date_str 的次日 (YYYYMMDD)。"""
+    return (datetime.strptime(date_str, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
+
+
+def _query_report_rc_adaptive(
+    client: TushareClient,
+    start_date: str,
+    end_date: str,
+    page_limit: int = 2000,
+    depth: int = 0,
+    max_depth: int = 6,
+) -> pd.DataFrame:
+    """查询 report_rc 日期范围；单次查询超限时自动二分重试。
+
+    report_rc 接口对"一次查询 (start_date/end_date + offset 翻页)"的总行数上限
+    为 100000 条 (offset 上限 100000)。整段查询超过该上限时, 继续翻页会返回
+    "查询数据失败, 请确认参数！" (实测 2009 年在 offset=102000 失败, 2020/2023
+    等年份约 20~30 万条同样会触发)。本函数在整段查询失败时把日期范围二分递归,
+    保证任意规模数据都能取全, 已下载小年份 (整年 < 100000 条) 零额外开销。
+
+    Args:
+        client: TuShare 客户端
+        start_date: 开始日期 YYYYMMDD
+        end_date: 结束日期 YYYYMMDD
+        page_limit: 单页行数 (report_rc 单次上限 2000)
+        depth: 当前递归深度 (内部使用)
+        max_depth: 最大递归深度, 超过后抛出 (防无限递归, 2^6=64 段足够覆盖任何规模)
+
+    Returns:
+        区间内的 report_rc DataFrame (可能为空)
+    """
+    if start_date > end_date:
+        return pd.DataFrame()
+    try:
+        return _query_with_pagination(
+            client,
+            "report_rc",
+            page_limit=page_limit,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except Exception as e:
+        if depth >= max_depth:
+            raise RuntimeError(
+                f"report_rc {start_date}~{end_date} 二分 {max_depth} 层后仍失败: {e}"
+            ) from e
+        logger.warning(
+            f"[report_rc] {start_date}~{end_date} 整段查询失败, 自动二分重试 "
+            f"(depth={depth + 1}): {e}"
+        )
+        mid = _mid_date_str(start_date, end_date)
+        left = _query_report_rc_adaptive(client, start_date, mid, page_limit, depth + 1, max_depth)
+        right = _query_report_rc_adaptive(
+            client, _next_date_str(mid), end_date, page_limit, depth + 1, max_depth
+        )
+        parts = [d for d in (left, right) if d is not None and len(d) > 0]
+        if not parts:
+            return pd.DataFrame()
+        return pd.concat(parts, ignore_index=True)
 
 
 def download_report_rc(
@@ -254,53 +334,75 @@ def download_report_rc(
     existing_years: Set[str] = set()
     if not force:
         existing_df = storage.load_raw("report_rc")
-        if existing_df is not None and len(existing_df) > 0 and "report_date" in existing_df.columns:
-            existing_years = set(
-                existing_df["report_date"].astype(str).str[:4].unique()
-            )
+        if (
+            existing_df is not None
+            and len(existing_df) > 0
+            and "report_date" in existing_df.columns
+        ):
+            existing_years = set(existing_df["report_date"].astype(str).str[:4].unique())
             logger.info(f"[report_rc] 已有 {len(existing_df)} 条, 覆盖 {len(existing_years)} 年")
 
     start_year = _to_int_date(start_date) // 10000
     end_year = _to_int_date(end_date) // 10000
     years_to_download = [
-        str(y) for y in range(start_year, end_year + 1)
-        if force or str(y) not in existing_years
+        str(y) for y in range(start_year, end_year + 1) if force or str(y) not in existing_years
     ]
 
     if not years_to_download:
         logger.info("[report_rc] 全部年份已存在, 跳过。如需重下加 --force")
         return
 
-    logger.info(f"[report_rc] 按年下载 {len(years_to_download)} 年 ({years_to_download[0]}~{years_to_download[-1]})")
+    logger.info(
+        f"[report_rc] 按年下载 {len(years_to_download)} 年 "
+        f"({years_to_download[0]}~{years_to_download[-1]})"
+    )
 
     tracker = ProgressTracker(len(years_to_download), label="report_rc", log_every=1)
-    all_dfs: List["pd.DataFrame"] = []
     success = empty = 0
-    for y in years_to_download:
-        y_start = max(f"{y}0101", start_date)
-        y_end = min(f"{y}1231", end_date)
+    # 并发下 success/empty 计数需要线程保护; tracker.tick 内部自带锁, 可安全并发
+    stats_lock = threading.Lock()
+
+    def _worker(year: str) -> Optional["pd.DataFrame"]:
+        """下载单个年份 report_rc (含超限自动二分); 返回 df 供主线程统一合并。"""
+        nonlocal success, empty
+        y_start = max(f"{year}0101", start_date)
+        y_end = min(f"{year}1231", end_date)
         try:
-            # 按年分页拉取，规避 report_rc 单次 2000 条上限截断
-            df = _query_with_pagination(
-                client,
-                "report_rc",
-                page_limit=2000,
-                start_date=y_start,
-                end_date=y_end,
-            )
+            # 按年分页拉取, 规避 report_rc 单次 2000 条上限截断;
+            # 单次查询总行数上限 100000 条, 超限年份 (如 2009 起多数年份)
+            # 由 _query_report_rc_adaptive 自动二分分片下载
+            df = _query_report_rc_adaptive(client, y_start, y_end)
             if df is not None and len(df) > 0:
-                all_dfs.append(df)
-                success += 1
-                logger.info(f"  [report_rc] {y}: {len(df)} 条")
-            else:
+                with stats_lock:
+                    success += 1
+                logger.info(f"  [report_rc] {year}: {len(df)} 条")
+                return df
+            with stats_lock:
                 empty += 1
+            return None
         except Exception as e:
-            ERROR_COLLECTOR.add("report_rc", f"year={y}", str(e))
-        tracker.tick(extra_info=f"ok={success} empty={empty}")
+            ERROR_COLLECTOR.add("report_rc", f"year={year}", str(e))
+            return None
+        finally:
+            with stats_lock:
+                info = f"ok={success} empty={empty}"
+            tracker.tick(extra_info=info)
+
+    # 按年并发下载: 不同年份的网络等待并行化 (总 QPS 仍受令牌桶限频约束);
+    # 各年份 df 收集后统一合并去重落盘, 避免并发写同一文件
+    collected = _run_concurrent(
+        years_to_download,
+        _worker,
+        label="report_rc",
+        collect=True,
+    )
+    all_dfs: List["pd.DataFrame"] = [d for d in collected if d is not None and len(d) > 0]
 
     if all_dfs:
         _save_merged(
-            storage, "report_rc", all_dfs,
+            storage,
+            "report_rc",
+            all_dfs,
             # 修复 #8: force 时 existing_df 传 None
             existing_df if not force else None,
             dedup_cols=["ts_code", "report_date", "org_name", "author_name"],
@@ -319,10 +421,12 @@ def download_cashflow(
 ) -> None:
     """下载现金流量表数据 (cashflow_vip, 5000积分)。按报告期批量下载全市场数据。"""
     download_by_period(
-        client, storage,
+        client,
+        storage,
         dataset_name="cashflow",
         api_name="cashflow_vip",
-        start_date=start_date, end_date=end_date,
+        start_date=start_date,
+        end_date=end_date,
         dedup_cols=["ts_code", "end_date", "ann_date"],
         fields=None,
         force=force,

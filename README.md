@@ -28,7 +28,20 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.90.18)
+### 当前版本 (v0.90.20)
+
+- **`report_rc` 下载并发化**：
+  - `download_report_rc` 从按年串行改为按年并发下载，网络等待并行化；
+  - 各年份独立下载（超限年份自动二分分片），全部完成后统一合并去重落盘；
+  - 配合 `--concurrency` / `tushare.download_concurrency` 生效，22 年全量
+    下载耗时显著下降。
+
+- **修复 `report_rc` 单次查询超限导致整年下载失败**：
+  - TuShare `report_rc` 接口单次查询（`start_date`/`end_date` + offset 翻页）
+    总行数上限 100000 条，超限年份（2009 起多数年份 10~30 万条）翻页到
+    offset > 100000 会返回"查询数据失败，请确认参数！"并整年失败；
+  - `download_report_rc` 现通过 `_query_report_rc_adaptive` 自动二分日期范围
+    重试，任意规模数据都能取全；未超限年份仍单次查询，零额外开销。
 
 - **按季度下载并发化（fund_portfolio 等大幅提速）**：
   - `download_by_period`（`scripts/raw_download/periodic.py`）从纯串行逐季度
