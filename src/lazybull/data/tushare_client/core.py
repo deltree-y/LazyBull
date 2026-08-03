@@ -26,10 +26,10 @@ FINA_INDICATOR_DEFAULT_FIELDS = (
 # 部分接口有独立限频（低于全局 rate_limit），如 cyq_perf=100 次/分钟。
 # 未知接口回退全局 rate_limit；收到限流错误时会自动解析"频率超限(X次/分钟)"并动态更新。
 _API_RATE_LIMITS_DEFAULT: Dict[str, int] = {
-    "cyq_perf": 150,
-    "margin_detail": 250,
-    "top_list": 450,  # 官方限频 500 次/分钟, 客户端侧留 10% 余量避免被限流
-    "report_rc": 200,  # 官方限频约 200~300 次/分钟, 客户端侧保守取值避免长期高并发被拒
+    "cyq_perf": 180,
+    "margin_detail": 280,
+    "top_list": 480,  # 官方限频 500 次/分钟, 客户端侧留 10% 余量避免被限流
+    "report_rc": 280,  # 官方限频约 200~300 次/分钟, 客户端侧保守取值避免长期高并发被拒
 }
 # 确定性业务错误 (参数错误/单次查询超限等): 重试必然再失败, 直接抛以节省请求量
 _ERR_NO_RETRY_KEYWORDS = ("查询数据失败", "请确认参数")

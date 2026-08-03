@@ -4,29 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [0.92.0] - 2026-08-03
 
-### Added / Changed
+### Added
 
-- **一致预期基础因子按 quarter 预测财年分组过滤**：
+- **一致预期基础因子新增按 quarter 预测财年分组的 EPS 均值因子**：
   - `report_rc` 同一 `report_date` 会同时含多个预测季度（如 2024Q4/2025Q4/2026Q4），
-    此前 `cons_eps_mean_fy1` / `cons_eps_revision_30d` 把所有预测期混入同一窗口
-    均值，名不符实；
+    研报内各季度预测相互独立；
   - `src/lazybull/factors/consensus.py` 新增 `_parse_quarter_year` 解析研报
     `quarter` 预测年份，相对 `report_date` 发布年份定位财年位置
     （FY0=当年, FY1=次年, FY2=后年）；
-  - `cons_eps_mean_fy1` 修正为仅聚合 FY1（未来第一财年）；新增
-    `cons_eps_mean_fy0`（当前财年）与 `cons_eps_mean_fy2`（未来第二财年）；
-  - `cons_eps_revision_30d` 修正为 FY1 同财年口径的 EPS 修正率（避免跨预测期比较）；
-  - `cons_target_price_mid` / `cons_rating_score` / `cons_analyst_count_30d`
-    与预测期无关，保持原聚合口径；`quarter` 缺失时 EPS 财年列优雅降级为 NaN；
+  - 新增 `cons_eps_mean_fy0`（当前财年）与 `cons_eps_mean_fy2`（未来第二财年），
+    `cons_eps_mean_fy1` 作为 FY1（未来第一财年）分组因子；
+  - `cons_eps_revision_30d` / `cons_target_price_mid` / `cons_rating_score` /
+    `cons_analyst_count_30d` 均保持原语义不变；`quarter` 缺失时 EPS 财年分组列
+    优雅降级为 NaN；
   - `src/lazybull/ml/train_core/constants.py` 同步更新
     `CONSENSUS_FEATURE_COLUMNS` 与
     `EVENT_FRESHNESS_TO_VALUE_COLUMNS["consensus_freshness_days"]`，纳入
     `cons_eps_mean_fy0` / `cons_eps_mean_fy2`；
   - **测试**：`tests/test_factor_consensus.py` 数据补齐 `quarter`，新增
-    `test_consensus_eps_mean_by_fy`（FY0/FY1/FY2 分组断言）与
+    `test_consensus_eps_mean_by_fy`（FY0/FY1/FY2 分组断言）、
+    `test_consensus_revision_all_periods_mix`（revision 全预测期口径回归）与
     `test_consensus_without_quarter_column_degrades`（缺失 quarter 优雅降级）；
-  - **注意**：因子值口径变化，需重新构建 features（build_clean_features）
-    并重训模型后方可用于新模型。
+  - **注意**：新增/变更列需重新构建 features（build_clean_features）并重训模型
+    后方可用于新模型。
 
 ## [0.91.0] - 2026-08-03
 

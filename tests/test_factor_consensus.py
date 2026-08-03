@@ -88,11 +88,34 @@ def test_consensus_eps_revision():
     result = build_consensus_lookup_by_date(df, ["20240315"])
     frame = result["20240315"]
     row = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
-    # 修正率基于 FY1 (2025Q4) 口径:
-    # 近 30 日 (2/14 - 3/15) FY1: 20240310 (eps=1.25)
-    # 前 30 日 (1/14 - 2/13) FY1: 20240210 (eps=1.10)
+    # 修正率为全预测期口径 (与 FY 分组无关):
+    # 近 30 日 (2/14 - 3/15): 20240310 (eps=1.25)
+    # 前 30 日 (1/14 - 2/13): 20240210 (eps=1.10)
     # revision = (1.25 - 1.10) / 1.10
     assert abs(row["cons_eps_revision_30d"] - (1.25 - 1.10) / 1.10) < 1e-6
+
+
+def test_consensus_revision_all_periods_mix():
+    # 近 30 日同时含 FY0 与 FY1 研报时, revision 使用全预测期 eps 中值 (非 FY1 专用)
+    df = pd.DataFrame(
+        [
+            {"ts_code": "000001.SZ", "report_date": "20240210",
+             "quarter": "2025Q4", "eps": 1.10, "max_price": 16.0, "min_price": 14.0, "rating": "增持"},
+            {"ts_code": "000001.SZ", "report_date": "20240305",
+             "quarter": "2024Q4", "eps": 1.15, "max_price": 17.0, "min_price": 15.0, "rating": "买入"},
+            {"ts_code": "000001.SZ", "report_date": "20240310",
+             "quarter": "2025Q4", "eps": 1.25, "max_price": 18.0, "min_price": 16.0, "rating": "买入"},
+        ]
+    )
+    result = build_consensus_lookup_by_date(df, ["20240315"])
+    frame = result["20240315"]
+    r1 = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
+    # 近 30 日全预测期 eps: [1.15(fy0), 1.25(fy1)] -> 中值 1.20
+    # 前 30 日全预测期 eps: [1.10(fy1)] -> 中值 1.10
+    # revision = (1.20 - 1.10) / 1.10
+    assert abs(r1["cons_eps_revision_30d"] - (1.20 - 1.10) / 1.10) < 1e-6
+    # 若误用 FY1 专用中值 (1.25-1.10)/1.10, 应不相等
+    assert abs(r1["cons_eps_revision_30d"] - (1.25 - 1.10) / 1.10) > 1e-6
 
 
 def test_consensus_eps_mean_by_fy():
@@ -113,11 +136,12 @@ def test_consensus_without_quarter_column_degrades():
     result = build_consensus_lookup_by_date(df, ["20240315"])
     frame = result["20240315"]
     r1 = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
-    # 无 quarter 时 EPS 财年列优雅降级为 NaN, 不报错
+    # 无 quarter 时 EPS 财年分组列优雅降级为 NaN, 不报错
     assert pd.isna(r1["cons_eps_mean_fy0"])
     assert pd.isna(r1["cons_eps_mean_fy1"])
     assert pd.isna(r1["cons_eps_mean_fy2"])
-    assert pd.isna(r1["cons_eps_revision_30d"])
+    # revision 为全预测期口径, 与 quarter 无关, 仍有值
+    assert abs(r1["cons_eps_revision_30d"] - (1.25 - 1.10) / 1.10) < 1e-6
     # 预测期无关因子仍正常
     assert r1["cons_analyst_count_30d"] == 1.0
 

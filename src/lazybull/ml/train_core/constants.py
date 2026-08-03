@@ -95,7 +95,7 @@ CONSENSUS_FEATURE_COLUMNS = [
     "cons_eps_mean_fy0",  # 近 90 日当前财年 (FY0) EPS 预测均值
     "cons_eps_mean_fy1",  # 近 90 日未来第一财年 (FY1) EPS 预测均值
     "cons_eps_mean_fy2",  # 近 90 日未来第二财年 (FY2) EPS 预测均值
-    "cons_eps_revision_30d",  # 近 30 日 FY1 EPS 预测修正率
+    "cons_eps_revision_30d",  # 近 30 日 EPS 预测修正率（全预测期）
     "cons_target_price_mid",  # 近 90 日目标价中值
     "cons_rating_score",  # 近 90 日平均评级得分
     "consensus_freshness_days",  # 最近一次研报距当日天数

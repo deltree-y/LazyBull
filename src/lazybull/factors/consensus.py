@@ -14,7 +14,7 @@
 - cons_eps_mean_fy0: 近 90 日当前财年 (FY0) 每股收益预测均值
 - cons_eps_mean_fy1: 近 90 日未来第一财年 (FY1) 每股收益预测均值
 - cons_eps_mean_fy2: 近 90 日未来第二财年 (FY2) 每股收益预测均值
-- cons_eps_revision_30d: 近 30 日 FY1 EPS 预测中值相对于前 30 日的变化率
+- cons_eps_revision_30d: 近 30 日 EPS 预测中值相对于前 30 日的变化率 (全预测期)
 - cons_target_price_mid: 近 90 日目标价中值 (max/min 均值)
 - cons_rating_score: 近 90 日评级得分 (买入=5, 增持=4, 中性=3, 减持=2, 卖出=1)
 
@@ -180,13 +180,12 @@ def build_consensus_lookup_by_date(
         agg = agg.join(count30, how="left")
         agg["cons_analyst_count_30d"] = agg["cons_analyst_count_30d"].fillna(0.0)
 
-        # EPS 修正率: 最近 30 日 FY1 eps 中值 vs 前 30 日 FY1 eps 中值
-        # (同一财年口径下比较修正才有意义, 避免跨预测期比较)
+        # EPS 修正率: 最近 30 日 eps 中值 vs 前 30 日 eps 中值 (全预测期口径)
         prev_win = visible[
             (visible["_rd_dt"] > window_60) & (visible["_rd_dt"] <= window_30)
         ]
-        recent_med = win30[win30["_rel_fy"] == 1].groupby("ts_code")["eps"].median()
-        prev_med = prev_win[prev_win["_rel_fy"] == 1].groupby("ts_code")["eps"].median()
+        recent_med = win30.groupby("ts_code")["eps"].median()
+        prev_med = prev_win.groupby("ts_code")["eps"].median()
         rev = (recent_med - prev_med) / prev_med.replace(0, np.nan).abs()
         rev.name = "cons_eps_revision_30d"
         agg = agg.join(rev, how="left")
