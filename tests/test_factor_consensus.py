@@ -11,19 +11,20 @@ from src.lazybull.factors.consensus import (
 
 
 def _make_report_rc_df() -> pd.DataFrame:
-    # 两只股票, 覆盖近 90 日内多条研报
+    # 两只股票, 覆盖近 90 日内多条研报; quarter 为预测季度 (Q4 表示年度预测),
+    # FY 相对 report_date 发布年份定位 (FY0=当年, FY1=次年, FY2=后年)
     return pd.DataFrame(
         [
             # 000001: 老研报 (60 天前) + 近 30 日研报
             {"ts_code": "000001.SZ", "report_date": "20240110",
-             "eps": 1.00, "max_price": 15.0, "min_price": 13.0, "rating": "买入"},
+             "quarter": "2024Q4", "eps": 1.00, "max_price": 15.0, "min_price": 13.0, "rating": "买入"},
             {"ts_code": "000001.SZ", "report_date": "20240210",
-             "eps": 1.10, "max_price": 16.0, "min_price": 14.0, "rating": "增持"},
+             "quarter": "2025Q4", "eps": 1.10, "max_price": 16.0, "min_price": 14.0, "rating": "增持"},
             {"ts_code": "000001.SZ", "report_date": "20240310",
-             "eps": 1.25, "max_price": 18.0, "min_price": 16.0, "rating": "买入"},
+             "quarter": "2025Q4", "eps": 1.25, "max_price": 18.0, "min_price": 16.0, "rating": "买入"},
             # 000002: 评级文本中性 + 仅一条
             {"ts_code": "000002.SZ", "report_date": "20240220",
-             "eps": 0.50, "max_price": 8.0, "min_price": 7.0, "rating": "中性"},
+             "quarter": "2025Q4", "eps": 0.50, "max_price": 8.0, "min_price": 7.0, "rating": "中性"},
         ]
     )
 
@@ -87,10 +88,38 @@ def test_consensus_eps_revision():
     result = build_consensus_lookup_by_date(df, ["20240315"])
     frame = result["20240315"]
     row = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
-    # 近 30 日 (2/13 - 3/15): 有 20240310 (eps=1.25)
-    # 前 30 日 (1/14 - 2/13): 有 20240210 (eps=1.10)
+    # 修正率基于 FY1 (2025Q4) 口径:
+    # 近 30 日 (2/14 - 3/15) FY1: 20240310 (eps=1.25)
+    # 前 30 日 (1/14 - 2/13) FY1: 20240210 (eps=1.10)
     # revision = (1.25 - 1.10) / 1.10
     assert abs(row["cons_eps_revision_30d"] - (1.25 - 1.10) / 1.10) < 1e-6
+
+
+def test_consensus_eps_mean_by_fy():
+    df = _make_report_rc_df()
+    result = build_consensus_lookup_by_date(df, ["20240315"])
+    frame = result["20240315"]
+    r1 = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
+    # FY0 (2024Q4, 当年): 仅 20240110 (eps=1.00)
+    assert abs(r1["cons_eps_mean_fy0"] - 1.00) < 1e-6
+    # FY1 (2025Q4, 次年): 20240210 (1.10) + 20240310 (1.25)
+    assert abs(r1["cons_eps_mean_fy1"] - 1.175) < 1e-6
+    # FY2 (2026Q4, 后年): 无数据
+    assert pd.isna(r1["cons_eps_mean_fy2"])
+
+
+def test_consensus_without_quarter_column_degrades():
+    df = _make_report_rc_df().drop(columns=["quarter"])
+    result = build_consensus_lookup_by_date(df, ["20240315"])
+    frame = result["20240315"]
+    r1 = frame[frame["ts_code"] == "000001.SZ"].iloc[0]
+    # 无 quarter 时 EPS 财年列优雅降级为 NaN, 不报错
+    assert pd.isna(r1["cons_eps_mean_fy0"])
+    assert pd.isna(r1["cons_eps_mean_fy1"])
+    assert pd.isna(r1["cons_eps_mean_fy2"])
+    assert pd.isna(r1["cons_eps_revision_30d"])
+    # 预测期无关因子仍正常
+    assert r1["cons_analyst_count_30d"] == 1.0
 
 
 def test_consensus_rating_score_mapping():

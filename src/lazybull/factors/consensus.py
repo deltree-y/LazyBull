@@ -11,17 +11,22 @@
 
 因子说明：
 - cons_analyst_count_30d: 近 30 日覆盖的研报数
-- cons_eps_mean_fy1: 近 90 日 FY1 每股收益预测均值
-- cons_eps_revision_30d: 近 30 日 EPS 预测中值相对于前 30 日的变化率
+- cons_eps_mean_fy0: 近 90 日当前财年 (FY0) 每股收益预测均值
+- cons_eps_mean_fy1: 近 90 日未来第一财年 (FY1) 每股收益预测均值
+- cons_eps_mean_fy2: 近 90 日未来第二财年 (FY2) 每股收益预测均值
+- cons_eps_revision_30d: 近 30 日 FY1 EPS 预测中值相对于前 30 日的变化率
 - cons_target_price_mid: 近 90 日目标价中值 (max/min 均值)
 - cons_rating_score: 近 90 日评级得分 (买入=5, 增持=4, 中性=3, 减持=2, 卖出=1)
 
 注: report_rc 的 ts_code/report_date 粒度 + 每股票每日多条研报, 需按
 ts_code 逐票处理, 滚动窗口基于研报发布日期 (report_date)。为避免前视,
 特征以"截至 trade_date 当天可见的所有研报"进行滚动聚合。
+财年按研报中 quarter 的预测年份相对 report_date 发布年份定位
+(FY0=当年, FY1=次年, FY2=后年), EPS 相关列按财年分组过滤,
+避免不同预测期混入同一均值。
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,7 +37,9 @@ from ..common.date_utils import normalize_series_to_yyyymmdd
 
 CONS_COLS = [
     "cons_analyst_count_30d",
+    "cons_eps_mean_fy0",
     "cons_eps_mean_fy1",
+    "cons_eps_mean_fy2",
     "cons_eps_revision_30d",
     "cons_target_price_mid",
     "cons_rating_score",
@@ -62,6 +69,21 @@ def _rating_to_score(rating) -> float:
     return 3.0
 
 
+def _parse_quarter_year(quarter) -> Optional[int]:
+    """从 quarter 字段解析预测财年，如 '2024Q4' -> 2024。
+
+    无法解析（缺失/非标准格式）返回 None。
+    """
+    if quarter is None:
+        return None
+    if isinstance(quarter, float) and pd.isna(quarter):
+        return None
+    s = str(quarter).strip()
+    if len(s) >= 4 and s[:4].isdigit():
+        return int(s[:4])
+    return None
+
+
 def build_consensus_lookup_by_date(
     report_rc_df: pd.DataFrame,
     trading_dates: List[str],
@@ -84,6 +106,17 @@ def build_consensus_lookup_by_date(
     for col in ["eps", "max_price", "min_price"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # 财年定位: 解析研报中 quarter 的预测年份, 相对 report_date 发布年份
+    # 计算 FY 位置 (FY0=当年, FY1=次年, FY2=后年), 供 EPS 按财年分组过滤。
+    df["_report_year"] = pd.to_numeric(
+        df["report_date"].astype(str).str[:4], errors="coerce"
+    )
+    if "quarter" in df.columns:
+        df["_q_year"] = df["quarter"].map(_parse_quarter_year)
+    else:
+        df["_q_year"] = np.nan
+    df["_rel_fy"] = df["_q_year"] - df["_report_year"]
 
     if "max_price" in df.columns and "min_price" in df.columns:
         df["_tp_mid"] = (df["max_price"] + df["min_price"]) / 2.0
@@ -126,10 +159,20 @@ def build_consensus_lookup_by_date(
             continue
 
         agg = win90.groupby("ts_code").agg(
-            cons_eps_mean_fy1=("eps", "mean"),
             cons_target_price_mid=("_tp_mid", "median"),
             cons_rating_score=("_rating_score", "mean"),
         )
+
+        # EPS 预测均值按财年分组过滤 (FY0=当年, FY1=次年, FY2=后年),
+        # 避免同一 report_date 下不同预测季度混入同一均值
+        for fy_rel, fy_label in ((0, "fy0"), (1, "fy1"), (2, "fy2")):
+            fy_sub = win90[win90["_rel_fy"] == fy_rel]
+            fy_mean = (
+                fy_sub.groupby("ts_code")["eps"].mean()
+                if not fy_sub.empty
+                else pd.Series(dtype="float64")
+            )
+            agg = agg.join(fy_mean.rename(f"cons_eps_mean_{fy_label}"), how="left")
 
         # 30 日分析师数
         win30 = visible[visible["_rd_dt"] > window_30]
@@ -137,12 +180,13 @@ def build_consensus_lookup_by_date(
         agg = agg.join(count30, how="left")
         agg["cons_analyst_count_30d"] = agg["cons_analyst_count_30d"].fillna(0.0)
 
-        # EPS 修正率: 最近 30 日 eps 中值 vs 前 30 日 eps 中值
+        # EPS 修正率: 最近 30 日 FY1 eps 中值 vs 前 30 日 FY1 eps 中值
+        # (同一财年口径下比较修正才有意义, 避免跨预测期比较)
         prev_win = visible[
             (visible["_rd_dt"] > window_60) & (visible["_rd_dt"] <= window_30)
         ]
-        recent_med = win30.groupby("ts_code")["eps"].median()
-        prev_med = prev_win.groupby("ts_code")["eps"].median()
+        recent_med = win30[win30["_rel_fy"] == 1].groupby("ts_code")["eps"].median()
+        prev_med = prev_win[prev_win["_rel_fy"] == 1].groupby("ts_code")["eps"].median()
         rev = (recent_med - prev_med) / prev_med.replace(0, np.nan).abs()
         rev.name = "cons_eps_revision_30d"
         agg = agg.join(rev, how="left")
