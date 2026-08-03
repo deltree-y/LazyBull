@@ -174,10 +174,12 @@ class ClientAltMixin:
             kwargs["start_date"] = start_date
         if end_date is not None:
             kwargs["end_date"] = end_date
-        # 官方未明示限频, 局部放宽到 1000 次/分钟 (60ms/次), 加速历史批量下载
-        # 实测 60ms 间隔连续请求 30 次无限流 (瓶颈是服务端 ~3.8s/请求),
-        # 若触发限流 client.query 会自动解析"频率超限(X次/分钟)"并降频
-        return self.query("top_list", rate_limit_override=1000, **kwargs)
+        # top_list 官方限频 500 次/分钟, 由 _API_RATE_LIMITS_DEFAULT["top_list"]
+        # 控制客户端侧限频 (当前 400, 低于官方限频避免被限流)。
+        # 不要传 rate_limit_override: 它会绕过接口级/全局令牌桶, 曾导致按 1000
+        # 次/分钟并发触发官方限流。若仍触发限流, client.query 会自动解析
+        # "频率超限(X次/分钟)"并自适应降频。
+        return self.query("top_list", **kwargs)
 
     def get_report_rc(
         self,

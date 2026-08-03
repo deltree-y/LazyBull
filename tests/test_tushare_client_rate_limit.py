@@ -98,7 +98,9 @@ class TestInterfaceRateLimit:
 class TestTopListRateLimitOverride:
     """get_top_list 应局部放宽限频到 1000 次/分钟 (注释意图), 加速历史批量下载。"""
 
-    def test_get_top_list_uses_1000_override(self, monkeypatch):
+    def test_get_top_list_uses_api_level_limit(self, monkeypatch):
+        """get_top_list 不应传 rate_limit_override (会绕过接口级限频);
+        限频由 _API_RATE_LIMITS_DEFAULT["top_list"] 控制 (低于官方 500 次/分钟)。"""
         client = _make_client(rate_limit=500)
         captured = {}
 
@@ -118,6 +120,16 @@ class TestTopListRateLimitOverride:
         df = client.get_top_list(trade_date="20240101")
 
         assert captured["api_name"] == "top_list"
-        assert captured["rate_limit_override"] == 1000  # 60 次/分钟是笔误
+        assert captured["rate_limit_override"] is None  # 不绕过接口级限频
         assert captured["kwargs"]["trade_date"] == "20240101"
         assert len(df) == 1
+
+    def test_top_list_interval_uses_configured_limit(self):
+        """top_list 令牌桶间隔应取 _API_RATE_LIMITS_DEFAULT["top_list"] (如 400)。"""
+        client = _make_client(rate_limit=500)
+        top_list_limit = client._api_rate_limits["top_list"]
+        assert top_list_limit > 0
+        # 接口级间隔 = 60 / 配置限频
+        assert client._request_interval_for("top_list") == pytest.approx(60.0 / top_list_limit)
+        # 配置限频应不高于官方 500 次/分钟 (间隔 >= 60/500 = 0.12s), 避免被限流
+        assert client._request_interval_for("top_list") >= 60.0 / 500

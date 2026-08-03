@@ -5,7 +5,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 import tushare as ts
@@ -28,11 +28,10 @@ FINA_INDICATOR_DEFAULT_FIELDS = (
 _API_RATE_LIMITS_DEFAULT: Dict[str, int] = {
     "cyq_perf": 100,
     "margin_detail": 200,
+    "top_list": 400,  # 官方限频 500 次/分钟, 客户端侧留 20% 余量避免被限流
 }
 # 限流错误中提取接口频次，如 "抱歉，您访问接口(cyq_perf)频率超限(200次/分钟)..."
 _RATE_LIMIT_MSG_FREQ = re.compile(r"频率超限\s*\(\s*(\d+)\s*次/分钟")
-
-
 
 
 def _is_rate_limit_error(err_msg: str, keywords: List[str]) -> bool:
@@ -121,10 +120,14 @@ class ClientCoreMixin:
 
         Args:
             api_name: 接口名 (限频分桶键)
-            override_interval: 若提供, 则本次等待使用此最小间隔 (秒), 用于官方
-                无明示限频的接口 (如 top_list) 局部提速。
+            override_interval: 若提供, 则本次等待使用此最小间隔 (秒), 用于临时
+                放宽/收紧某次调用的限频 (默认 None 走接口级/全局令牌桶)。
         """
-        interval = override_interval if override_interval is not None else self._request_interval_for(api_name)
+        interval = (
+            override_interval
+            if override_interval is not None
+            else self._request_interval_for(api_name)
+        )
         lock = self._rate_limit_locks.setdefault(api_name, threading.Lock())
         with lock:
             last = self._last_request_time_by_api.get(api_name, 0.0)
@@ -139,7 +142,7 @@ class ClientCoreMixin:
         fields: Optional[str] = None,
         skip_rate_limit: bool = False,
         rate_limit_override: Optional[int] = None,
-        **kwargs
+        **kwargs,
     ) -> pd.DataFrame:
         """调用 TuShare API
 

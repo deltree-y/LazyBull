@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.22] - 2026-08-03
+
+### Fixed
+
+- **修复 `top_list` 限频 override 绕过配置导致大量限流**（v0.90.21 引入的回归）：
+  - v0.90.21 将 `get_top_list` 的 `rate_limit_override` 从 60 改为 1000，但 TuShare
+    `top_list` 官方限频实测为 **500 次/分钟**；`rate_limit_override` 会绕过
+    `_API_RATE_LIMITS_DEFAULT` 与全局令牌桶，1000 在 48 并发下远超官方限频，
+    触发海量"频率超限(500次/分钟)"限流错误。
+  - 同时导致用户对 `_API_RATE_LIMITS_DEFAULT["top_list"]` 的配置（如 400）不生效。
+  - 修复：`get_top_list` **移除 `rate_limit_override` 硬编码**，改走接口级限频
+    `_API_RATE_LIMITS_DEFAULT["top_list"]`（默认 400，低于官方 500 留余量），
+    用户可直接在该表配置；仍触发限流时 `client.query` 会自动解析并自适应降频。
+- **测试**：`test_tushare_client_rate_limit.py` 更新为断言 `get_top_list` 不传
+  override、接口级间隔取配置限频且不高于官方 500。
+
 ## [0.90.21] - 2026-08-03
 
 ### Fixed
