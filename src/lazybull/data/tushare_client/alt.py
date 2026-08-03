@@ -175,7 +175,9 @@ class ClientAltMixin:
         if end_date is not None:
             kwargs["end_date"] = end_date
         # 官方未明示限频, 局部放宽到 1000 次/分钟 (60ms/次), 加速历史批量下载
-        return self.query("top_list", rate_limit_override=60, **kwargs)
+        # 实测 60ms 间隔连续请求 30 次无限流 (瓶颈是服务端 ~3.8s/请求),
+        # 若触发限流 client.query 会自动解析"频率超限(X次/分钟)"并降频
+        return self.query("top_list", rate_limit_override=1000, **kwargs)
 
     def get_report_rc(
         self,

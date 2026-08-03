@@ -28,7 +28,14 @@ def _make_client(rate_limit: int = 500) -> TushareClient:
     client.retry_delay = 0.0
     client._retry_rate_limit_sleep = 0.0
     client._rate_limit_keywords = [
-        "每分钟", "访问", "频次", "rate", "limit", "频率", "429", "超过",
+        "每分钟",
+        "访问",
+        "频次",
+        "rate",
+        "limit",
+        "频率",
+        "429",
+        "超过",
     ]
     client.verbose = False
     return client
@@ -60,9 +67,7 @@ class TestInterfaceRateLimit:
             def query(self, api_name, fields=None, **kwargs):
                 calls["n"] += 1
                 if calls["n"] == 1:
-                    raise Exception(
-                        "抱歉，您访问接口(cyq_perf)频率超限(200次/分钟)，具体频次详情"
-                    )
+                    raise Exception("抱歉，您访问接口(cyq_perf)频率超限(200次/分钟)，具体频次详情")
                 return pd.DataFrame({"x": [1]})
 
         client.pro = _Pro()
@@ -88,3 +93,31 @@ class TestInterfaceRateLimit:
         client.query("daily", skip_rate_limit=True)
 
         assert client._api_rate_limits.get("daily") is None  # 非限流错误不更新
+
+
+class TestTopListRateLimitOverride:
+    """get_top_list 应局部放宽限频到 1000 次/分钟 (注释意图), 加速历史批量下载。"""
+
+    def test_get_top_list_uses_1000_override(self, monkeypatch):
+        client = _make_client(rate_limit=500)
+        captured = {}
+
+        def _fake_query(
+            api_name,
+            fields=None,
+            skip_rate_limit=False,
+            rate_limit_override=None,
+            **kwargs,
+        ):
+            captured["api_name"] = api_name
+            captured["rate_limit_override"] = rate_limit_override
+            captured["kwargs"] = kwargs
+            return pd.DataFrame({"ts_code": ["000001.SZ"]})
+
+        monkeypatch.setattr(client, "query", _fake_query)
+        df = client.get_top_list(trade_date="20240101")
+
+        assert captured["api_name"] == "top_list"
+        assert captured["rate_limit_override"] == 1000  # 60 次/分钟是笔误
+        assert captured["kwargs"]["trade_date"] == "20240101"
+        assert len(df) == 1

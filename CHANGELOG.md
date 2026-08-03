@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.21] - 2026-08-03
+
+### Fixed
+
+- **修复 `top_list` 下载限频笔误导致极慢**：`get_top_list`
+  （`src/lazybull/data/tushare_client/alt.py`）的 `rate_limit_override` 误写为
+  60（60 次/分钟 = 1 秒 1 请求），与注释意图"1000 次/分钟"不符，导致龙虎榜
+  5240 个交易日全量下载耗时约 88 分钟（日志 rate=0.99/s）。
+  - 实测 TuShare `top_list` 60ms 间隔连续请求 30 次无限流，实际瓶颈是服务端
+    响应（~3.8s/请求），官方未对该接口设低频限制；
+  - 改为 `rate_limit_override=1000` 后配合按日并发（`download_top_list` 已用
+    `_run_concurrent`），吞吐从 60 次/分钟提升到数百次/分钟（受服务端响应与
+    令牌桶约束），全量预计从 ~88 分钟压缩到 ~10 分钟量级；
+  - 若触发限流，`client.query` 会自动解析"频率超限(X次/分钟)"并自适应降频兜底。
+- **测试**：`test_tushare_client_rate_limit.py` 新增 `get_top_list` 传
+  `rate_limit_override=1000` 的断言。
+
 ## [0.90.20] - 2026-08-03
 
 ### Changed
