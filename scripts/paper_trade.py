@@ -19,7 +19,7 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
@@ -46,14 +46,6 @@ from src.lazybull.paper import format_model_info as shared_format_model_info
 from src.lazybull.paper import (
     load_position_snapshot,
 )
-from src.lazybull.paper.runtime import _check_stop_loss as shared_check_stop_loss
-from src.lazybull.paper.runtime import (
-    _execute_t0_if_rebalance_day as shared_execute_t0_if_rebalance_day,
-)
-from src.lazybull.paper.runtime import _execute_t1_if_pending as shared_execute_t1_if_pending
-from src.lazybull.paper.runtime import _handle_failed_buys as shared_handle_failed_buys
-from src.lazybull.paper.runtime import _process_pending_buys as shared_process_pending_buys
-from src.lazybull.paper.runtime import _process_pending_sells as shared_process_pending_sells
 
 # 匹配告警信息中的关键字符串，设置为 ignore
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
@@ -175,63 +167,6 @@ def run_main(args):
         f"运行完成 - {result.corrected_date}, 下个交易日: [{next_trade_date or '无'}]"
     )
     logger.info("=" * 120)
-
-
-def _check_stop_loss(
-    runner: PaperTradingRunner,
-    stop_loss_monitor,
-    trade_date: str,
-    config: dict,
-) -> List[Dict]:
-    """检查止损触发。"""
-    return shared_check_stop_loss(runner, stop_loss_monitor, trade_date, config)
-
-
-def _process_pending_sells(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: dict,
-) -> List[Dict]:
-    """处理延迟卖出队列。"""
-    return shared_process_pending_sells(runner, trade_date, config)
-
-
-def _process_pending_buys(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: dict,
-) -> List[Dict]:
-    """处理延迟买入队列。"""
-    return shared_process_pending_buys(runner, trade_date, config)
-
-
-def _execute_t1_if_pending(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: dict,
-) -> List[Dict]:
-    """执行 T1（如果有交易指令或补位买入计划）。"""
-    return shared_execute_t1_if_pending(runner, trade_date, config)
-
-
-def _handle_failed_buys(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: dict,
-    failed_buy_targets: List,
-    attempt_count: int,
-) -> None:
-    """处理买入失败：生成补位计划。"""
-    shared_handle_failed_buys(runner, trade_date, config, failed_buy_targets, attempt_count)
-
-
-def _execute_t0_if_rebalance_day(
-    runner: PaperTradingRunner,
-    trade_date: str,
-    config: dict,
-) -> Tuple[List[Dict], float, str, str]:
-    """执行 T0（如果是调仓日）。"""
-    return shared_execute_t0_if_rebalance_day(runner, trade_date, config)
 
 
 def view_positions(args):

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.90.15] - 2026-08-03
+
+### Changed
+
+- **清理 `scripts/paper_trade.py` 遗留死薄壳**：删除 6 个仅转发到
+  `src.lazybull.paper.runtime` 且无人引用的本地薄壳
+  （`_check_stop_loss` / `_process_pending_sells` / `_process_pending_buys` /
+  `_execute_t1_if_pending` / `_handle_failed_buys` / `_execute_t0_if_rebalance_day`）
+  及其对应 `shared_*` import，消除"搬一半"的双胞胎结构；顺带清理 unused 的 `List` import。
+- **测试适配**：`test_suspended_stock_handling.py` 改直接引用
+  `src.lazybull.paper.runtime._check_stop_loss`（不再经 paper_trade 薄壳）。
+
 ## [0.90.14] - 2026-08-03
 
 ### Fixed

@@ -52,7 +52,8 @@ class TestPaperTradingSuspendedHandling:
 
     def test_suspended_stock_skipped_in_stop_loss_check(self, temp_storage):
         """测试：停牌股票在止损检查中被跳过"""
-        from scripts.paper_trade import PaperTradingRunner, _check_stop_loss
+        from scripts.paper_trade import PaperTradingRunner
+        from src.lazybull.paper.runtime import _check_stop_loss
 
         # 创建账户和持仓
         account = PaperAccount(initial_capital=100000.0, storage=temp_storage)
