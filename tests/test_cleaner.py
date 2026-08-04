@@ -424,3 +424,42 @@ class TestDataCleaner:
         # 负成交量的记录应该被过滤
         assert len(result) == 2
         assert '000002.SZ' not in result['ts_code'].values
+
+    def test_step_logs_gated_by_verbose(self, mock_daily_raw, mock_adj_factor_raw):
+        """步骤级 INFO 日志仅在 verbose=True 时输出（默认 verbose=False 保持安静）"""
+        from loguru import logger as _logger
+
+        records = []
+        handler_id = _logger.add(lambda m: records.append(str(m)), level="INFO")
+        try:
+            # 默认 verbose=False：清洗过程不输出步骤级日志
+            quiet = DataCleaner(verbose=False)
+            quiet.clean_daily(mock_daily_raw, mock_adj_factor_raw)
+            quiet.add_tradable_universe_flag(
+                pd.DataFrame({
+                    'ts_code': ['000001.SZ'],
+                    'trade_date': ['20230110'],
+                    'close': [10.0],
+                    'vol': [1000000],
+                    'pct_chg': [1.0],
+                }),
+                pd.DataFrame({
+                    'ts_code': ['000001.SZ'],
+                    'name': ['平安银行'],
+                    'list_date': ['20100101'],
+                }),
+            )
+            quiet_messages = list(records)
+            assert not any("开始清洗日线行情数据" in m for m in quiet_messages)
+            assert not any("复权价格计算完成" in m for m in quiet_messages)
+            assert not any("可交易标记添加完成" in m for m in quiet_messages)
+
+            # verbose=True：输出步骤级日志
+            records.clear()
+            loud = DataCleaner(verbose=True)
+            loud.clean_daily(mock_daily_raw, mock_adj_factor_raw)
+            loud_messages = list(records)
+            assert any("开始清洗日线行情数据" in m for m in loud_messages)
+            assert any("复权价格计算完成" in m for m in loud_messages)
+        finally:
+            _logger.remove(handler_id)

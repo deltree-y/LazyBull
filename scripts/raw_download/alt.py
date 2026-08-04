@@ -22,7 +22,7 @@ from .periodic import (
 
 # report_rc 单请求服务端响应慢 (~5s); 并发过高 (16) 在长期运行下会让 TuShare
 # 拒绝请求 (返回"查询数据失败"), 使用保守并发 + 接口级限频 (core.py) 保持稳定
-_REPORT_RC_CONCURRENCY = 24
+_REPORT_RC_CONCURRENCY = 16
 
 
 def download_stk_holdernumber(

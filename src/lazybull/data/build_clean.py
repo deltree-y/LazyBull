@@ -78,7 +78,7 @@ def build_clean_data(
         try:
             # 检查clean数据是否已存在
             if not force and storage.is_data_exists("clean", "daily", trade_date):
-                logger.info(f"  clean daily已存在，跳过")
+                logger.debug(f"  clean daily已存在，跳过")
                 skip_count += 1
                 continue
 
@@ -128,7 +128,7 @@ def build_clean_data(
             # 保存clean数据
             storage.save_clean_by_date(daily_clean, "daily", trade_date)
             success_count += 1
-            logger.info(f"  已保存 {len(daily_clean)} 条clean记录")
+            logger.debug(f"  已保存 {len(daily_clean)} 条clean记录")
 
             # 处理daily_basic
             daily_basic_raw = storage.load_raw_by_date("daily_basic", trade_date)

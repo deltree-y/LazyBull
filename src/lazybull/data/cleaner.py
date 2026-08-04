@@ -30,6 +30,11 @@ class DataCleaner:
         if self.verbose:
             logger.info("数据清洗器初始化完成")
 
+    def _log_step(self, message: str) -> None:
+        """步骤级日志：仅 verbose 模式输出，避免逐日清洗时日志过多。"""
+        if self.verbose:
+            logger.info(message)
+
     def clean_trade_cal(self, raw_df: pd.DataFrame) -> pd.DataFrame:
         """清洗交易日历数据
 
@@ -39,7 +44,7 @@ class DataCleaner:
         Returns:
             清洗后的交易日历DataFrame
         """
-        logger.info(f"开始清洗交易日历数据，原始记录数: {len(raw_df)}")
+        self._log_step(f"开始清洗交易日历数据，原始记录数: {len(raw_df)}")
 
         df = raw_df.copy()
 
@@ -56,7 +61,7 @@ class DataCleaner:
         # 4. 排序：按 cal_date 排序
         df = df.sort_values("cal_date").reset_index(drop=True)
 
-        logger.info(f"交易日历清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"交易日历清洗完成，清洗后记录数: {len(df)}")
 
         return df
 
@@ -69,7 +74,7 @@ class DataCleaner:
         Returns:
             清洗后的股票基本信息DataFrame
         """
-        logger.info(f"开始清洗股票基本信息，原始记录数: {len(raw_df)}")
+        self._log_step(f"开始清洗股票基本信息，原始记录数: {len(raw_df)}")
 
         df = raw_df.copy()
 
@@ -86,7 +91,7 @@ class DataCleaner:
         # 4. 排序：按 ts_code 排序
         df = df.sort_values("ts_code").reset_index(drop=True)
 
-        logger.info(f"股票基本信息清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"股票基本信息清洗完成，清洗后记录数: {len(df)}")
 
         return df
 
@@ -100,7 +105,7 @@ class DataCleaner:
         Returns:
             清洗后的日线行情DataFrame（包含复权价格列）
         """
-        logger.info(f"开始清洗日线行情数据，原始记录数: {len(raw_daily)}")
+        self._log_step(f"开始清洗日线行情数据，原始记录数: {len(raw_daily)}")
 
         df = raw_daily.copy()
 
@@ -150,7 +155,7 @@ class DataCleaner:
         # 8. 验证唯一性
         self._validate_uniqueness(df, ["ts_code", "trade_date"])
 
-        logger.info(f"日线行情清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"日线行情清洗完成，清洗后记录数: {len(df)}")
 
         return df
 
@@ -163,7 +168,7 @@ class DataCleaner:
         Returns:
             清洗后的每日指标DataFrame
         """
-        logger.info(f"开始清洗每日指标数据，原始记录数: {len(raw_df)}")
+        self._log_step(f"开始清洗每日指标数据，原始记录数: {len(raw_df)}")
 
         df = raw_df.copy()
 
@@ -203,7 +208,7 @@ class DataCleaner:
         # 5. 验证唯一性
         self._validate_uniqueness(df, ["ts_code", "trade_date"])
 
-        logger.info(f"每日指标清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"每日指标清洗完成，清洗后记录数: {len(df)}")
 
         return df
 
@@ -216,7 +221,7 @@ class DataCleaner:
         Returns:
             清洗后的停复牌DataFrame
         """
-        logger.info(f"开始清洗停复牌信息，原始记录数: {len(raw_df)}")
+        self._log_step(f"开始清洗停复牌信息，原始记录数: {len(raw_df)}")
 
         df = raw_df.copy()
 
@@ -243,7 +248,7 @@ class DataCleaner:
             df = self._deduplicate(df, ["ts_code", "suspend_date"])
             df = df.sort_values(["ts_code", "suspend_date"]).reset_index(drop=True)
 
-        logger.info(f"停复牌信息清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"停复牌信息清洗完成，清洗后记录数: {len(df)}")
 
         return df
 
@@ -256,7 +261,7 @@ class DataCleaner:
         Returns:
             清洗后的涨跌停DataFrame
         """
-        logger.info(f"开始清洗涨跌停信息，原始记录数: {len(raw_df)}")
+        self._log_step(f"开始清洗涨跌停信息，原始记录数: {len(raw_df)}")
 
         df = raw_df.copy()
 
@@ -276,7 +281,7 @@ class DataCleaner:
         # 4. 排序
         df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
-        logger.info(f"涨跌停信息清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"涨跌停信息清洗完成，清洗后记录数: {len(df)}")
 
         return df
 
@@ -289,7 +294,7 @@ class DataCleaner:
         Returns:
             清洗后的资金流向DataFrame
         """
-        logger.info(f"开始清洗资金流向数据，原始记录数: {len(raw_df)}")
+        self._log_step(f"开始清洗资金流向数据，原始记录数: {len(raw_df)}")
 
         df = raw_df.copy()
 
@@ -328,7 +333,7 @@ class DataCleaner:
         # 4. 排序
         df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
-        logger.info(f"资金流向数据清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"资金流向数据清洗完成，清洗后记录数: {len(df)}")
 
         return df
 
@@ -341,7 +346,7 @@ class DataCleaner:
         Returns:
             清洗后的 stock_st DataFrame（ts_code, trade_date, is_st）
         """
-        logger.info(f"开始清洗 stock_st 数据，原始记录数: {len(raw_df)}")
+        self._log_step(f"开始清洗 stock_st 数据，原始记录数: {len(raw_df)}")
 
         df = raw_df.copy()
 
@@ -372,7 +377,7 @@ class DataCleaner:
         df = self._deduplicate(df, ["ts_code", "trade_date"])
         df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
 
-        logger.info(f"stock_st 清洗完成，清洗后记录数: {len(df)}")
+        self._log_step(f"stock_st 清洗完成，清洗后记录数: {len(df)}")
         return df
 
     def add_tradable_universe_flag(
@@ -406,7 +411,7 @@ class DataCleaner:
         Returns:
             添加了标记列的DataFrame
         """
-        logger.info(f"为日线数据添加可交易标记，记录数: {len(daily_df)}")
+        self._log_step(f"为日线数据添加可交易标记，记录数: {len(daily_df)}")
 
         df = daily_df.copy()
 
@@ -544,7 +549,7 @@ class DataCleaner:
         tradable_count = df["tradable"].sum()
         tradable_pct = 100.0 * tradable_count / len(df) if len(df) > 0 else 0
 
-        logger.info(
+        self._log_step(
             f"可交易标记添加完成: 可交易 {tradable_count} ({tradable_pct:.1f}%), "
             f"ST {df['is_st'].sum()}, 停牌 {df['is_suspended'].sum()}, "
             f"上市不足{min_list_days}天 {(df['list_days'] < min_list_days).sum()}, "
@@ -635,7 +640,7 @@ class DataCleaner:
             # 按主键列排序后保留最后一条，确保去重结果不依赖输入顺序
             df = df.sort_values(list(key_cols)).drop_duplicates(subset=key_cols, keep="last")
 
-            logger.info(
+            self._log_step(
                 f"去重完成: {original_count} -> {len(df)} ({original_count - len(df)} 条被移除)"
             )
 
@@ -653,7 +658,7 @@ class DataCleaner:
         Returns:
             添加了复权价格列的DataFrame
         """
-        logger.info("开始计算复权价格")
+        self._log_step("开始计算复权价格")
 
         df = daily_df.copy()
 
@@ -702,7 +707,7 @@ class DataCleaner:
 
         # 检查复权价格是否生成
         adj_cols = [c for c in ["close_adj", "open_adj", "high_adj", "low_adj"] if c in df.columns]
-        logger.info(f"复权价格计算完成，生成列: {adj_cols}")
+        self._log_step(f"复权价格计算完成，生成列: {adj_cols}")
 
         return df
 
@@ -754,7 +759,7 @@ class DataCleaner:
               sw_l3_code、sw_l3、in_date（若可得）
             - level_str='l1'/'l2' 时（向后兼容）：ts_code、sw_code、sw_name、in_date
         """
-        logger.info(
+        self._log_step(
             f"开始清洗申万行业分类数据（level={level_str}），行业数: {len(raw_index_members)}"
         )
 
@@ -869,7 +874,7 @@ class DataCleaner:
         result = self._deduplicate(result, ["ts_code"])
         result = result.sort_values("ts_code").reset_index(drop=True)
 
-        logger.info(f"申万三级行业分类清洗完成，记录数: {len(result)}")
+        self._log_step(f"申万三级行业分类清洗完成，记录数: {len(result)}")
         return result
 
     def _clean_shenwan_industry_legacy(
@@ -911,7 +916,7 @@ class DataCleaner:
 
             df = df[keep_cols]
             all_members.append(df)
-            logger.info(
+            self._log_step(
                 f"行业 {index_code} ({index_code_to_name.get(index_code, '未知行业')}) 成分股数: {len(df)}"
             )
 
@@ -924,5 +929,5 @@ class DataCleaner:
         result = self._deduplicate(result, ["ts_code"])
         result = result.sort_values("ts_code").reset_index(drop=True)
 
-        logger.info(f"申万行业分类清洗完成，清洗后记录数: {len(result)}")
+        self._log_step(f"申万行业分类清洗完成，清洗后记录数: {len(result)}")
         return result

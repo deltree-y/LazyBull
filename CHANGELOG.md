@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.92.1] - 2026-08-04
+
+### Changed
+
+- **clean 层日志精简：build_clean_features 逐日仅保留一行进度**：
+  - `src/lazybull/data/cleaner.py` 所有步骤级 INFO 日志（开始清洗/清洗完成/
+    复权价格计算/可交易标记统计等）统一收敛到 `verbose` 门控下，仅在
+    `DataCleaner(verbose=True)` 时输出；
+  - `scripts/build_clean_features.py` 使用默认 `verbose=False` 的清洗器，逐日
+    仅保留 `[i/N] (x%) 处理 YYYYMMDD...` 一行进度，异常类 warning 保持不变；
+  - `src/lazybull/data/build_clean.py` 逐日的“已保存 clean 记录”与“clean daily
+    已存在，跳过”日志降级为 debug；
+  - 纸面交易链路（`PaperTradingRunner` 默认 `verbose=True`）行为不受影响；
+  - **测试**：`tests/test_cleaner.py` 新增
+    `test_step_logs_gated_by_verbose`（默认安静、verbose=True 输出步骤日志）。
+
 ## [0.92.0] - 2026-08-03
 
 ### Added
