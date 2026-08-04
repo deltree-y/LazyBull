@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(13)
+        SelectedSplits = @(6)
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -151,7 +151,7 @@ $enable_lhb              = $true  # $true 启用 | $false 禁用
 # 0711关闭后微降,先保持打开
 
 # ── 一致预期因子（report_rc 研报滚动聚合, 8000积分）──────────────
-$enable_consensus        = $false  # $true 启用 | $false 禁用
+$enable_consensus        = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR提升约2%, 回撤无明显变化
 # 0711关闭后大幅提升分数
 

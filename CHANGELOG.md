@@ -18,6 +18,21 @@ All notable changes to this project will be documented in this file.
   - **测试**：`tests/test_cleaner.py` 新增
     `test_step_logs_gated_by_verbose`（默认安静、verbose=True 输出步骤日志）。
 
+- **一致预期（report_rc）因子恢复进入训练链路**：
+  - `data/models/factor_exclude_list.json` 移除 20 个 report_rc 相关排除项
+    （`cons_*` / `zscore_cons_*`，53 → 33），因子精简不再拦截一致预期因子；
+  - `src/lazybull/ml/train_core/prepare.py` 的 `max_feature_missing_ratio`
+    默认值 0.4 → 0.6，使缺失率约 50~60% 的一致预期基础因子通过训练入口
+    缺失率门禁；
+  - 效果（模拟验证）：打开 `--enable-consensus-features` 后，
+    `cons_analyst_count_30d` / `cons_eps_mean_fy0` / `cons_eps_mean_fy1` /
+    `cons_eps_mean_fy2` / `cons_rating_score` 共 5 个因子实际进入训练；
+  - 仍被门禁剔除（数据源本身缺失过高，82%+）：`cons_eps_revision_30d` /
+    `cons_target_price_mid` / `zscore_cons_*` 一致预期修正因子；
+  - **注意**：`factor_exclude_list.json` 由 `generate_factor_exclude_list.py`
+    重新生成时会覆盖手工调整；`max_feature_missing_ratio=0.6` 为全局阈值，
+    会同时放宽其他因子组的缺失率门槛。
+
 ## [0.92.0] - 2026-08-03
 
 ### Added

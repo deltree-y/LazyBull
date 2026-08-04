@@ -61,7 +61,7 @@ def prepare_training_data(
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
     factor_exclude_file: Optional[str] = None,
-    max_feature_missing_ratio: float = 0.4,
+    max_feature_missing_ratio: float = 0.6,
     freshness_strategy: str = FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     event_freshness_half_life_days: float = 45.0,
 ) -> tuple:
@@ -78,7 +78,7 @@ def prepare_training_data(
             加载排除列表并过滤特征列）。默认 False。
         factor_exclude_file: 因子精简使用的显式清单路径；未提供时使用默认生产清单。
         max_feature_missing_ratio: 训练入口特征缺失率上限，超过该阈值的特征将被移除。
-            默认 0.4。
+            默认 0.6。
         freshness_strategy: freshness 处理策略。
             - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
             - state_keep_event_no_decay：状态型 freshness 保留，事件型 freshness 删除且不衰减对应特征值

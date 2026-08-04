@@ -30,6 +30,15 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ### 当前版本 (v0.92.1)
 
+- **一致预期（report_rc）因子恢复进入训练链路**：
+  - `factor_exclude_list.json` 移除 20 个 `cons_*` / `zscore_cons_*` 排除项
+    （53 → 33），因子精简不再拦截一致预期因子；
+  - `max_feature_missing_ratio` 默认 0.4 → 0.6，`cons_analyst_count_30d` /
+    `cons_eps_mean_fy0` / `cons_eps_mean_fy1` / `cons_eps_mean_fy2` /
+    `cons_rating_score` 共 5 个因子实际进入训练；
+  - `cons_eps_revision_30d` / `cons_target_price_mid` / `zscore_cons_*`
+    因数据源缺失过高（82%+）仍被门禁剔除。
+
 - **一致预期因子新增按 quarter 预测财年分组的 EPS 均值**：
   - `report_rc` 同一 `report_date` 含多个预测季度（如 2024Q4/2025Q4/2026Q4）；
   - 新增 `cons_eps_mean_fy0`（当前财年）/ `cons_eps_mean_fy2`（未来第二财年），
