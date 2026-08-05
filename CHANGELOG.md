@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.92.3] - 2026-08-05
+
+### Fixed
+
+- **修复纸面交易非调仓日缺数据不自动下载导致止损跳过与持仓打印崩溃**：
+  - 根因：`execute_trade_workflow` 仅在 T0 调仓日生成信号（`ensure_features_for_date`
+    自动下载）或 T1 有指令时才触发数据下载；非调仓日/无指令时只做只读操作
+    （止损检查、持仓打印），直接加载 clean 数据——缺失时止损检查仅 warning 跳过、
+    `load_position_snapshot` 直接抛 `ValueError` 退出（复现：`trade_date=next` 解析
+    为 20260723，距上次调仓 17 个交易日 < 20 非调仓日且无 T1 指令，当日 clean 数据
+    从未下载）；
+  - `src/lazybull/paper/runtime.py`：`execute_trade_workflow` 校正日期后、T1 前主动
+    调用 `ensure_clean_data_for_date` 补齐当日 clean 数据（缺失时内部触发
+    `ensure_raw_data_for_date` 自动下载），补齐失败仅 warning 不阻断主流程（保持
+    原降级语义）；修复同时惠及钉钉机器人链路（`bot_service.py` 复用同一 runtime）；
+  - `src/lazybull/paper/reporting.py`：`load_position_snapshot` 加载前同样补齐当日
+    clean 数据，避免 `positions` 命令/run 后打印因缺数据直接崩溃；
+  - **测试**：`tests/test_paper_trade_runtime.py` 新增
+    `test_execute_trade_workflow_ensures_trade_date_clean_data` 与
+    `test_execute_trade_workflow_continues_when_clean_data_ensure_fails`；
+    `tests/test_ensure_and_t0_printing.py` 新增
+    `test_load_position_snapshot_ensures_trade_date_clean_data`。
+
 ## [0.92.2] - 2026-08-05
 
 ### Fixed

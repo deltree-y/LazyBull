@@ -8,7 +8,7 @@ from loguru import logger
 
 from ..common.signal_factory import create_signal
 from ..common.trading_config import TradingConfig
-from ..data import DataLoader
+from ..data import DataLoader, ensure_clean_data_for_date
 from ..risk.stop_loss import StopLossConfig, StopLossMonitor
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from .models import PendingBuy, PendingSell, TargetWeight, TradeInstruction, normalize_trade_reason
@@ -116,6 +116,22 @@ def execute_trade_workflow(
         stop_loss_monitor.consecutive_limit_down_days = sl_state.get(
             "consecutive_limit_down_days", {}
         )
+
+    # 非调仓日/无 T1 指令时，run 链路不会生成信号，因而不会触发
+    # ensure_features_for_date 的自动下载；这里主动补齐当日 clean 数据
+    # （缺失时自动下载 raw），保证止损检查、持仓打印与 NAV 记录可正常加载。
+    # 补齐失败不阻断主流程，保持原有降级语义（跳过止损/跳过 T1）。
+    _report("确保当日数据")
+    try:
+        ensure_clean_data_for_date(
+            runner.storage,
+            runner.loader,
+            runner.cleaner,
+            runner.client,
+            corrected_date,
+        )
+    except Exception as exc:
+        logger.warning(f"补齐 {corrected_date} 的 clean 数据失败: {exc}")
 
     # T1 必须只执行上一交易日 T0 已落盘的指令，不能在执行日临时增删单。
     _report("执行 T1 指令")

@@ -28,7 +28,21 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.92.2)
+### 当前版本 (v0.92.3)
+
+- **修复纸面交易非调仓日缺数据不自动下载**：
+  - 根因：`execute_trade_workflow` 仅在 T0 调仓日生成信号（`ensure_features_for_date`
+    自动下载）或 T1 有指令时才触发数据下载；非调仓日/无指令时只做只读操作（止损
+    检查、持仓打印），直接加载 clean 数据，缺失时止损仅跳过、持仓打印直接报错退出；
+  - `src/lazybull/paper/runtime.py`：`execute_trade_workflow` 校正日期后主动调用
+    `ensure_clean_data_for_date` 补齐当日 clean 数据（内部自动下载 raw），失败仅
+    warning 不阻断主流程（保持降级语义）；
+  - `src/lazybull/paper/reporting.py`：`load_position_snapshot` 加载前同样补齐当日
+    clean 数据，避免 `positions` 查看/打印因缺数据崩溃；
+  - 修复同时惠及钉钉机器人链路（`bot_service.py` 复用同一 runtime）；
+  - **测试**：新增 `test_execute_trade_workflow_ensures_trade_date_clean_data`、
+    `test_execute_trade_workflow_continues_when_clean_data_ensure_fails`、
+    `test_load_position_snapshot_ensures_trade_date_clean_data`。
 
 - **修复 walk-forward 多窗口集成子模型特征列不一致导致的训练失败**：
   - 多窗口（基础/前移/后移）集成时，以首个（基础窗口）子模型特征列为准，

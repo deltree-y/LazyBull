@@ -484,3 +484,125 @@ def test_rebalance_day_executes_run_t0():
 
     runner.run_t0.assert_called_once()
     assert status == "no_targets"
+
+
+def test_execute_trade_workflow_ensures_trade_date_clean_data(monkeypatch):
+    """run 主链路非调仓日也应主动补齐当日 clean 数据（缺数据自动下载）。"""
+    runner = MagicMock()
+    runner._correct_trade_date.return_value = "20260120"
+    runner._get_next_trade_date.return_value = "20260121"
+    runner.missing_factors = []
+    runner.paper_storage.load_instructions.return_value = []
+
+    storage = MagicMock()
+    storage.load_account_state.return_value = None
+    storage.load_stop_loss_state.return_value = None
+
+    trading_config = MagicMock()
+    trading_config.create_stop_loss_config.return_value = None
+
+    context = PaperTradeRuntimeContext(
+        storage=storage,
+        config={
+            "stop_loss_enabled": False,
+            "buy_price": "close",
+            "sell_price": "close",
+        },
+        trading_config=trading_config,
+        runner=runner,
+    )
+
+    ensure_calls = []
+
+    def _fake_ensure(storage_, loader_, cleaner_, client_, trade_date_, force=False):
+        ensure_calls.append(
+            {
+                "storage": storage_,
+                "loader": loader_,
+                "cleaner": cleaner_,
+                "client": client_,
+                "trade_date": trade_date_,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime.ensure_clean_data_for_date",
+        _fake_ensure,
+    )
+    monkeypatch.setattr("src.lazybull.paper.runtime.StopLossMonitor", lambda *_a, **_k: MagicMock())
+    monkeypatch.setattr("src.lazybull.paper.runtime._execute_t1_if_pending", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._plan_next_day_retry_and_sell_instructions",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
+        lambda *_a, **_k: ([], 1.0, "已移除", "not_rebalance_day", []),
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime.DataLoader",
+        lambda *_a, **_k: MagicMock(build_stock_names_dict=lambda: {}),
+    )
+
+    execute_trade_workflow("20260120", runtime=context)
+
+    assert len(ensure_calls) == 1
+    assert ensure_calls[0]["storage"] is runner.storage
+    assert ensure_calls[0]["loader"] is runner.loader
+    assert ensure_calls[0]["cleaner"] is runner.cleaner
+    assert ensure_calls[0]["client"] is runner.client
+    assert ensure_calls[0]["trade_date"] == "20260120"
+
+
+def test_execute_trade_workflow_continues_when_clean_data_ensure_fails(monkeypatch):
+    """当日 clean 数据补齐失败不应阻断主流程（保持降级语义）。"""
+    runner = MagicMock()
+    runner._correct_trade_date.return_value = "20260120"
+    runner._get_next_trade_date.return_value = None
+    runner.missing_factors = []
+    runner.paper_storage.load_instructions.return_value = []
+    runner.signal = MagicMock()
+
+    storage = MagicMock()
+    storage.load_account_state.return_value = None
+    storage.load_stop_loss_state.return_value = None
+    storage.load_ranked_candidates.return_value = None
+
+    trading_config = MagicMock()
+    trading_config.create_stop_loss_config.return_value = None
+
+    context = PaperTradeRuntimeContext(
+        storage=storage,
+        config={
+            "stop_loss_enabled": False,
+            "buy_price": "close",
+            "sell_price": "close",
+        },
+        trading_config=trading_config,
+        runner=runner,
+    )
+
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime.ensure_clean_data_for_date",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("下载失败")),
+    )
+    monkeypatch.setattr("src.lazybull.paper.runtime.StopLossMonitor", lambda *_a, **_k: MagicMock())
+    monkeypatch.setattr("src.lazybull.paper.runtime._execute_t1_if_pending", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._plan_next_day_retry_and_sell_instructions",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
+        lambda *_a, **_k: ([], 1.0, "已移除", "not_rebalance_day", []),
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.runtime.DataLoader",
+        lambda *_a, **_k: MagicMock(build_stock_names_dict=lambda: {}),
+    )
+
+    result = execute_trade_workflow("20260120", runtime=context)
+
+    assert result.corrected_date == "20260120"
+    assert result.t0_status == "not_rebalance_day"

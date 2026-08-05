@@ -20,6 +20,7 @@ import src.lazybull.features.ensure.factor_load as ensure_factor_load
 import src.lazybull.features.ensure.historical_assets as ensure_hist_assets
 from src.lazybull.features import FeatureBuilder, ensure_features_for_date
 from src.lazybull.paper import PaperAccount, PaperStorage, TargetWeight
+from src.lazybull.paper.reporting import load_position_snapshot
 from src.lazybull.paper.runner import PaperTradingRunner
 
 
@@ -810,6 +811,73 @@ def test_incremental_download_functions_delegate_to_range_catchup(
     assert captured["dataset_name"] == dataset_name
     assert captured["date_col"] == date_col
     assert captured["trade_date"] == "20260430"
+
+
+def test_load_position_snapshot_ensures_trade_date_clean_data(monkeypatch):
+    """查看/打印持仓前应自动补齐当日 clean 数据（缺数据自动下载）。"""
+    runner = MagicMock()
+    runner._correct_trade_date.return_value = "20260120"
+    runner.storage = MagicMock()
+    runner.loader = MagicMock()
+    runner.cleaner = MagicMock()
+    runner.client = MagicMock()
+    runner.account.get_cash.return_value = 500000.0
+    runner.account.initial_capital = 500000.0
+    runner.broker.get_positions_detail.return_value = pd.DataFrame()
+    runner.broker.calculate_round_pnl_metrics.return_value = (0.0, 0.0, 0.0)
+
+    ensure_calls = []
+
+    def _fake_ensure(storage_, loader_, cleaner_, client_, trade_date_, force=False):
+        ensure_calls.append(
+            {
+                "storage": storage_,
+                "loader": loader_,
+                "cleaner": cleaner_,
+                "client": client_,
+                "trade_date": trade_date_,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(
+        "src.lazybull.paper.reporting.ensure_clean_data_for_date",
+        _fake_ensure,
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.reporting._get_rebalance_status",
+        lambda *_args, **_kwargs: "",
+    )
+
+    daily_data = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "close": [10.5],
+            "pre_close": [10.0],
+        }
+    )
+    loader = MagicMock()
+    loader.load_clean_daily_by_date.return_value = daily_data
+    loader.build_stock_names_dict.return_value = {"000001.SZ": "测试股票1"}
+    monkeypatch.setattr(
+        "src.lazybull.paper.reporting.DataLoader",
+        lambda *_args, **_kwargs: loader,
+    )
+    monkeypatch.setattr(
+        "src.lazybull.paper.reporting.PaperStorage",
+        lambda *_args, **_kwargs: MagicMock(load_config=lambda: None),
+    )
+
+    snapshot = load_position_snapshot("20260120", runner=runner)
+
+    assert len(ensure_calls) == 1
+    assert ensure_calls[0]["storage"] is runner.storage
+    assert ensure_calls[0]["loader"] is runner.loader
+    assert ensure_calls[0]["cleaner"] is runner.cleaner
+    assert ensure_calls[0]["client"] is runner.client
+    assert ensure_calls[0]["trade_date"] == "20260120"
+    assert snapshot.trade_date == "20260120"
+    assert snapshot.total_assets == 500000.0
 
 
 if __name__ == "__main__":

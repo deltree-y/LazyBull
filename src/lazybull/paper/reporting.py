@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import pandas as pd
+from loguru import logger
 
 from ..common.config import get_models_root
-from ..data import DataLoader, Storage
+from ..data import DataLoader, Storage, ensure_clean_data_for_date
 from ..ml import ModelRegistry
 from .models import normalize_trade_reason
 from .runner import PaperTradingRunner
@@ -136,6 +137,18 @@ def load_position_snapshot(
     """加载持仓快照。"""
     active_runner = runner or PaperTradingRunner(verbose=False)
     corrected_trade_date = active_runner._correct_trade_date(trade_date)
+    # 查看/打印持仓前确保当日 clean 数据存在（缺失时自动下载），
+    # 避免因缺数据直接抛异常退出。
+    try:
+        ensure_clean_data_for_date(
+            active_runner.storage,
+            active_runner.loader,
+            active_runner.cleaner,
+            active_runner.client,
+            corrected_trade_date,
+        )
+    except Exception as exc:
+        logger.warning(f"补齐 {corrected_trade_date} 的 clean 数据失败: {exc}")
     loader = DataLoader(active_runner.storage, verbose=False)
     daily_data = loader.load_clean_daily_by_date(corrected_trade_date)
     if daily_data is None or daily_data.empty:
