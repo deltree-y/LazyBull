@@ -91,6 +91,7 @@ def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):
         args,
         main_board_codes=None,
         random_state_override=None,
+        feature_columns_override=None,
     ):
         seed = int(random_state_override)
         return {
@@ -177,6 +178,7 @@ def test_multi_seed_ensemble_keep_ratio_and_min_models_are_configurable(monkeypa
         args,
         main_board_codes=None,
         random_state_override=None,
+        feature_columns_override=None,
     ):
         seed = int(random_state_override)
         return {
@@ -329,3 +331,73 @@ def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):
     assert captured["enable_cashflow_quality_features"] is True
     assert captured["enable_consensus_revision_features"] is True
     assert captured["factor_exclude_file"] == ("configs/factor_exclude_candidate_sparse_v1.json")
+
+
+def test_ensemble_sub_models_align_feature_columns_to_base_window(monkeypatch):
+    """多窗口集成时，后续子模型应以基础窗口特征列为准（feature_columns_override）。"""
+    calls = []
+
+    def _fake_train_model_on_window(
+        train_start,
+        train_end,
+        storage,
+        loader,
+        args,
+        main_board_codes=None,
+        random_state_override=None,
+        feature_columns_override=None,
+    ):
+        seed = int(random_state_override)
+        calls.append({"seed": seed, "feature_columns_override": feature_columns_override})
+        return {
+            "model": f"m{seed}",
+            "feature_columns": ["f1", "f2"],
+            "label_column": "neu_y_ret_20",
+            "train_params": {"best_iteration": 100, "random_state": seed},
+            "train_metrics": {},
+            "val_metrics": {},
+            "df_val_split_original": pd.DataFrame(
+                [{"trade_date": "20240101", "ts_code": "000001.SZ", "f1": 1.0}]
+            ),
+            "data_stats": {"train_end_date": "20231231", "val_es_end_date": "20231201"},
+            "train_days_count": 1,
+            "total_train_samples": 1,
+            "X_train_len": 1,
+            "X_val_len": 1,
+        }
+
+    monkeypatch.setattr(core_module, "_train_model_on_window", _fake_train_model_on_window)
+    monkeypatch.setattr(
+        core_module,
+        "_evaluate_train_result_val_daily",
+        lambda tr, *_args, **_kwargs: {
+            "daily_rankic_ir": 0.1,
+            "daily_rankic_mean": 0.05,
+            "diagnostic_Top30_逐日均值_50分位": 0.001,
+        },
+    )
+
+    args = types.SimpleNamespace(
+        learning_rate=0.02,
+        n_estimators=5000,
+        label_column="neu_y_ret_20",
+        task="regression",
+        random_state=42,
+        ensemble_seed_keep_top_ratio=1.0,
+        ensemble_seed_keep_min_models=1,
+    )
+
+    sub_models, base_result, _meta = core_module._build_ensemble_sub_models(
+        windows=[("20120101", "20181231"), ("20130101", "20191231")],
+        storage=None,
+        loader=None,
+        args=args,
+        main_board_codes=set(),
+        seeds=[101],
+        topk_values=[30],
+    )
+
+    # 首个子模型（基础窗口）不传 override；后续子模型以基础窗口特征列为准
+    assert calls[0]["feature_columns_override"] is None
+    assert calls[1]["feature_columns_override"] == ["f1", "f2"]
+    assert sub_models == ["m101", "m101"]

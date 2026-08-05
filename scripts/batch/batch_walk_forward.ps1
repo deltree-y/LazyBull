@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(6)
+        SelectedSplits = @()
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -170,7 +170,7 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
 $factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
-$factor_exclude_file      = ""#configs/factor_exclude_candidate_sparse_v1.json"  # 空字符串使用生产默认清单
+$factor_exclude_file      = ""#configs/factor_exclude_repro_v22712.json"  # 临时复现 v22712(CAGR>4%): 加回3个report_rc因子; 复现完改回 ""
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all
@@ -185,7 +185,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $false   # $true 启用 | $false 禁用
+$deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────

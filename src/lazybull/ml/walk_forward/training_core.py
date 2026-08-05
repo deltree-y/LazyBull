@@ -105,8 +105,14 @@ def _train_model_on_window(
     args,
     main_board_codes: set,
     random_state_override: Optional[int] = None,
+    feature_columns_override: Optional[List[str]] = None,
 ) -> Dict:
-    """在指定训练窗口上训练单个模型。"""
+    """在指定训练窗口上训练单个模型。
+
+    Args:
+        feature_columns_override: 若提供，训练入口特征质量门禁后强制将特征列
+            对齐到该列表（多窗口集成统一子模型特征 schema）。
+    """
     df_train, train_days_count = load_features_data(storage, loader, train_start, train_end)
     df_train = _filter_to_main_board(df_train, main_board_codes, "训练窗口")
     total_train_samples = len(df_train)
@@ -165,6 +171,8 @@ def _train_model_on_window(
         feature_stability_filter=args.feature_stability_filter,
         factor_prune=args.factor_prune,
         factor_exclude_file=getattr(args, "factor_exclude_file", None),
+        max_feature_missing_ratio=getattr(args, "max_feature_missing_ratio", 0.6),
+        feature_columns_override=feature_columns_override,
         freshness_strategy=getattr(args, "freshness_strategy", "state_keep_event_decay"),
         event_freshness_half_life_days=getattr(args, "event_freshness_half_life_days", 45.0),
     )
@@ -355,6 +363,11 @@ def _build_ensemble_sub_models(
                 args,
                 main_board_codes,
                 random_state_override=seed,
+                # 以首个（基础窗口）子模型的特征列为准，强制后续子模型对齐，
+                # 避免不同窗口高缺失门禁产生不一致的特征 schema 导致集成预测失败
+                feature_columns_override=(
+                    base_result["feature_columns"] if base_result is not None else None
+                ),
             )
 
             sub_models.append(selected_tr["model"])

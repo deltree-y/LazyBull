@@ -357,3 +357,53 @@ def test_prepare_training_data_state_keep_event_no_decay():
     assert "fundamental_freshness_days" in data_stats["kept_state_freshness_features"]
     assert df_train_split["forecast_type_score"].eq(1.0).all()
     assert df_train_split["forecast_chg_mid"].eq(2.0).all()
+
+
+def test_prepare_training_data_feature_columns_override():
+    """feature_columns_override 强制特征列对齐，数据缺失列补 NaN。"""
+    df = _make_training_df(n_dates=40, stocks_per_date=2)
+    df["vol_ratio_20"] = np.nan
+    df.loc[df.index[::5], "vol_ratio_20"] = 1.0  # 缺失率 80% > 0.6
+
+    override_cols = ["neu_ret_1", "vol_ratio_20", "express_revenue_yoy"]
+
+    result = prepare_training_data(
+        df,
+        label_column="y_ret_5",
+        val_ratio=0.3,
+        max_feature_missing_ratio=0.6,
+        feature_columns_override=override_cols,
+    )
+
+    feature_columns = result[4]
+    X_train = result[0]
+    df_train_split = result[5]
+
+    # 强制对齐到 override，且保持顺序一致
+    assert feature_columns == override_cols
+    # 高缺失列被强制保留
+    assert "vol_ratio_20" in feature_columns
+    # 数据中不存在的列已补全为全 NaN 列，且参与训练数据
+    assert "express_revenue_yoy" in X_train.columns
+    assert X_train["express_revenue_yoy"].isna().all()
+    assert df_train_split["express_revenue_yoy"].isna().all()
+
+
+def test_prepare_training_data_without_override_removes_high_missing():
+    """未提供 override 时，高缺失列仍按门禁移除（默认行为不变）。"""
+    df = _make_training_df(n_dates=40, stocks_per_date=2)
+    df["vol_ratio_20"] = np.nan
+    df.loc[df.index[::5], "vol_ratio_20"] = 1.0  # 缺失率 80% > 0.6
+
+    result = prepare_training_data(
+        df,
+        label_column="y_ret_5",
+        val_ratio=0.3,
+        max_feature_missing_ratio=0.6,
+    )
+
+    feature_columns = result[4]
+    data_stats = result[7]
+
+    assert "vol_ratio_20" not in feature_columns
+    assert "vol_ratio_20" in data_stats["removed_high_missing_features"]

@@ -62,6 +62,7 @@ def prepare_training_data(
     factor_prune: bool = False,
     factor_exclude_file: Optional[str] = None,
     max_feature_missing_ratio: float = 0.6,
+    feature_columns_override: Optional[List[str]] = None,
     freshness_strategy: str = FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     event_freshness_half_life_days: float = 45.0,
 ) -> tuple:
@@ -79,6 +80,9 @@ def prepare_training_data(
         factor_exclude_file: 因子精简使用的显式清单路径；未提供时使用默认生产清单。
         max_feature_missing_ratio: 训练入口特征缺失率上限，超过该阈值的特征将被移除。
             默认 0.6。
+        feature_columns_override: 若提供，则在训练入口特征质量门禁之后强制将特征列
+            对齐到该列表（用于多窗口集成统一子模型特征 schema），数据中缺失的列补 NaN。
+            默认 None（不启用）。
         freshness_strategy: freshness 处理策略。
             - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
             - state_keep_event_no_decay：状态型 freshness 保留，事件型 freshness 删除且不衰减对应特征值
@@ -480,6 +484,30 @@ def prepare_training_data(
 
     if not feature_columns:
         raise ValueError("特征列为空（在缺失率/常数列过滤后）")
+
+    # 多窗口集成特征列统一：以基础窗口特征列为准，保证集成子模型特征 schema 一致。
+    # 不同窗口稀疏因子缺失率不同，高缺失门禁可能产生不同特征列（如 express_revenue_yoy），
+    # 若不统一会导致集成预测时 XGBoost feature_names mismatch。
+    if feature_columns_override is not None:
+        override_missing_in_data = [
+            c for c in feature_columns_override if c not in df_train.columns
+        ]
+        for col in override_missing_in_data:
+            df_train[col] = np.nan
+        if len(feature_columns) != len(feature_columns_override):
+            logger.info(
+                "训练入口特征列统一(override): "
+                f"{len(feature_columns)} -> {len(feature_columns_override)} 列（以基础窗口为准）"
+            )
+        if override_missing_in_data:
+            logger.warning(
+                "训练入口特征列统一(override): "
+                f"当前窗口数据缺失列补 NaN {len(override_missing_in_data)} 个: "
+                f"{override_missing_in_data}"
+            )
+        feature_columns = list(feature_columns_override)
+        if not feature_columns:
+            raise ValueError("特征列为空（在 override 统一后）")
 
     # 从标签列名自动推断 delta（例如 neu_y_ret_20 -> horizon=20，y_ret_5 -> horizon=5）
     # delta 是训练集末尾与验证集开头之间的交易日间隔，需 >= 标签实际跨越的交易日数以防止标签泄露

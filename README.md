@@ -28,7 +28,13 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.92.1)
+### 当前版本 (v0.92.2)
+
+- **修复 walk-forward 多窗口集成子模型特征列不一致导致的训练失败**：
+  - 多窗口（基础/前移/后移）集成时，以首个（基础窗口）子模型特征列为准，
+    强制后续子模型通过 `feature_columns_override` 对齐，避免不同窗口高缺失
+    门禁产生不一致的特征 schema（如 `express_revenue_yoy`）导致集成预测
+    XGBoost `feature_names mismatch`；
 
 - **一致预期（report_rc）因子恢复进入训练链路**：
   - `factor_exclude_list.json` 移除 20 个 `cons_*` / `zscore_cons_*` 排除项

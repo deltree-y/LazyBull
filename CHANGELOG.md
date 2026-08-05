@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.92.2] - 2026-08-05
+
+### Fixed
+
+- **修复 walk-forward 多窗口集成子模型特征列不一致导致训练失败**：
+  - 根因：多窗口（基础/前移/后移）集成时，每个子模型独立在各自训练窗口上执行
+    “训练入口特征质量门禁”（缺失率 > 0.6 移除特征），不同窗口稀疏因子缺失率
+    不同，导致子模型间特征 schema 不一致（如 `express_revenue_yoy` 在基础/前移
+    窗口缺失率 > 0.6 被移除、在后移窗口保留），集成预测时按基础窗口特征列调用
+    全部子模型，XGBoost 报 `feature_names mismatch`；
+  - `src/lazybull/ml/train_core/prepare.py`：`prepare_training_data` 新增
+    `feature_columns_override` 可选参数，训练入口特征质量门禁之后强制将特征列
+    对齐到指定列表，数据中缺失的列补 NaN（默认 None，行为不变）；
+  - `src/lazybull/ml/walk_forward/training_core.py`：`_train_model_on_window`
+    透传 `feature_columns_override`；`_build_ensemble_sub_models` 以首个（基础
+    窗口）子模型特征列为准，强制后续子模型对齐，保证集成内子模型特征 schema
+    完全一致（部署链路 `deploy_training.py` 复用同一入口，同步受益）；
+  - **测试**：`tests/test_train_core_val_embargo.py` 新增
+    `test_prepare_training_data_feature_columns_override` 与
+    `test_prepare_training_data_without_override_removes_high_missing`；
+    `tests/test_training_feature_flag_forwarding.py` 新增
+    `test_ensemble_sub_models_align_feature_columns_to_base_window`，并同步
+    更新两个 fake `_train_model_on_window` 的签名。
+
 ## [0.92.1] - 2026-08-04
 
 ### Changed
