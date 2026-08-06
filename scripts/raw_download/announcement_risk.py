@@ -21,7 +21,11 @@ from src.lazybull.data import Storage, TushareClient
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
 from .daily_partition import _download_by_trade_date
-from .periodic import _concat_no_warning, _generate_quarter_periods, _query_with_pagination
+from .periodic import (
+    _concat_no_warning,
+    _generate_quarter_periods,
+    _query_with_pagination,
+)
 
 # 积分要求（用户 8000 积分均满足）：block_trade=2000, pledge_stat=5000, share_float=5000
 # 接口级限频（次/分钟），走 client.query 令牌桶；值低于 TuShare 官方限频留余量
@@ -90,8 +94,9 @@ def download_pledge_stat(
     """下载股权质押统计（按 end_date 季末查询 → 季分区）。
 
     TuShare `pledge_stat` 参数为 `end_date`（单值，季末），每期返回全市场质押统计
-    （约 5000 只 × 13 列）。复用 `_generate_quarter_periods` 生成季末序列，
-    每期查询后落盘 `raw/pledge_stat/{YYYY-MM-DD}.parquet`。
+    （约 5000 只 × 13 列），单次查询 limit 上限 3000，超限期需分页取全。
+    复用 `_generate_quarter_periods` 生成季末序列，每期查询后落盘
+    `raw/pledge_stat/{YYYY-MM-DD}.parquet`。
     """
     _ensure_rate_limit("pledge_stat")
     periods = _generate_quarter_periods(start_date, end_date)
@@ -111,7 +116,9 @@ def download_pledge_stat(
 
     def _worker(period: str) -> None:
         try:
-            df = client.query("pledge_stat", end_date=period)
+            # TuShare pledge_stat 单次 limit 上限 3000，必须按 3000 粒度分页取全
+            # （旧实现直接单次查询，2017Q1/Q2、2019Q3 等超限期被截断到 3000）
+            df = _query_with_pagination(client, "pledge_stat", page_limit=3000, end_date=period)
             if df is not None and len(df) > 0:
                 storage.save_raw_by_date(df, "pledge_stat", period)
                 with counter_lock:

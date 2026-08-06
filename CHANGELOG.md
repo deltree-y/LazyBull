@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.6] - 2026-08-06
+
+### Fixed
+
+- **全数据集下载完整性审计：修复 4 个数据集的单次查询截断**：
+  - 背景：对全部 19 个 raw 数据集做整体筛查（pyarrow 元数据扫描 + TuShare 单次
+    limit 上限实测），发现多个数据集存在与 share_float 同类的"单次查询被服务端
+    limit 截断、分页未生效"问题；
+  - 实测各接口单次 limit 上限：cashflow_vip=6400、fina_indicator_vip=12000、
+    pledge_stat=3000、stk_limit=6000、express_vip=5000、forecast_vip=6500、
+    fund_portfolio=8000；daily/daily_basic/moneyflow/margin_detail/cyq_perf/
+    adj_factor/suspend/stock_st/top_list 单日数据量均低于上限（无截断）；
+  - **cashflow**（23 个季度恰好 6400 行被截断）：`download_cashflow` 设
+    `page_limit=6400`（旧默认 50000 导致首屏 6400 被误判取完）；实测重下后
+    恰好 6400 季度 23→0、总行数 +18%；
+  - **fina_indicator**（2 个季度恰好 12000）：cli 调用设 `page_limit=12000`；
+  - **pledge_stat**（3 期恰好 3000）：`download_pledge_stat` 改用
+    `_query_with_pagination(page_limit=3000)` 分页；实测 2017Q1/Q2、2019Q3
+    从 3000 → 3123/3252/3171；
+  - **stk_limit**（单日约 7411 条 > 6000 上限被截断）：新增
+    `_fetch_stk_limit_paginated` 按日分页 fetcher，`download_daily_data` 支持
+    `subsets` 参数，CLI 支持 `--download stk_limit`（及 daily/daily_basic/
+    adj_factor/suspend/moneyflow/stock_st 日线子集单独下载）；实测单日
+    7397-7411 条取全；
+  - 确认无截断：forecast（未触及 6500）、express（每期 <5000）、stk_holdernumber
+    （page_limit=3000 已正确）、fund_portfolio（page_limit=8000 已正确）；
+    moneyflow/stk_limit 的分区空洞为数据源起始时间（2005-2006 无数据），非下载不全；
+  - **多记录处理审计**（问题 B）：逐一检查全部 lookup builder——top_list 已按
+    (trade_date,ts_code) 聚合（sum/mean/count）、fund_portfolio 已预聚合、
+    block_trade 已按日聚合、PIT 多版本（fina/cashflow/earnings/express/holder）
+    取最新版本、consensus 滚动聚合，均无"同事实多行只取一条"偏差
+    （share_float 多持有人问题已在 v0.94.4 修复）；
+  - **待重下**：`python scripts/download_raw.py --download fina_indicator --force`
+    （补齐 2 个截断季度）；cashflow/pledge_stat/stk_limit 已在本轮实测重下。
+
 ## [0.94.5] - 2026-08-06
 
 ### Fixed

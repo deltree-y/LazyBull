@@ -439,7 +439,11 @@ def download_cashflow(
     end_date: str,
     force: bool = False,
 ) -> None:
-    """下载现金流量表数据 (cashflow_vip, 5000积分)。按报告期批量下载全市场数据。"""
+    """下载现金流量表数据 (cashflow_vip, 5000积分)。按报告期批量下载全市场数据。
+
+    TuShare cashflow_vip 单次 limit 上限 6400，分页粒度必须取 6400，
+    否则首屏 6400 条被误判"取完"（实测 2018Q4-2020Q4 共 23 个季度被截断到 6400）。
+    """
     download_by_period(
         client,
         storage,
@@ -450,6 +454,7 @@ def download_cashflow(
         dedup_cols=["ts_code", "end_date", "ann_date"],
         fields=None,
         force=force,
+        page_limit=6400,
         partition_by_period=True,
         sort_cols=["end_date", "ann_date"],
     )

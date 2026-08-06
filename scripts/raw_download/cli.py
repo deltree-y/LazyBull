@@ -77,34 +77,43 @@ def main():
     parser = argparse.ArgumentParser(
         description="下载原始数据 (仅 raw 层, 不触发 clean/feature 构建)"
     )
-    parser.add_argument("--start-date", default="20120702",
-                        help="开始日期 YYYYMMDD (默认 20120702)")
-    parser.add_argument("--end-date", default=today_str,
-                        help=f"结束日期 YYYYMMDD (默认当日 {today_str})")
-    parser.add_argument("--only-basic", action="store_true",
-                        help="仅下载基础数据 (trade_cal, stock_basic)")
-    parser.add_argument("--force", action="store_true",
-                        help="强制重新下载, 即使文件已存在")
     parser.add_argument(
-        "--only-is-st", action="store_true",
-        help="仅下载 ST 状态数据(stock_st)，不下载其它日线/另类数据"
+        "--start-date", default="20120702", help="开始日期 YYYYMMDD (默认 20120702)"
     )
     parser.add_argument(
-        "--download", nargs="*", default=None,
+        "--end-date", default=today_str, help=f"结束日期 YYYYMMDD (默认当日 {today_str})"
+    )
+    parser.add_argument(
+        "--only-basic", action="store_true", help="仅下载基础数据 (trade_cal, stock_basic)"
+    )
+    parser.add_argument("--force", action="store_true", help="强制重新下载, 即使文件已存在")
+    parser.add_argument(
+        "--only-is-st",
+        action="store_true",
+        help="仅下载 ST 状态数据(stock_st)，不下载其它日线/另类数据",
+    )
+    parser.add_argument(
+        "--download",
+        nargs="*",
+        default=None,
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
-             "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
-             "moneyflow_hsgt, top_list, report_rc, cashflow, pledge_stat, "
-             "share_float, block_trade, all_alt。不指定时仅下基础+日线"
+        "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
+        "moneyflow_hsgt, top_list, report_rc, cashflow, pledge_stat, "
+        "share_float, block_trade, all_alt。不指定时仅下基础+日线",
     )
-    parser.add_argument("--all", action="store_true", default=False,
-                        help="下载日线 + 全部另类数据")
+    parser.add_argument("--all", action="store_true", default=False, help="下载日线 + 全部另类数据")
     # 修复 #10: --resume 此前未使用, 改为从 help 中说明它等价于默认行为
-    parser.add_argument("--resume", action="store_true",
-                        help="(保留兼容参数, 等价于默认的断点续传行为, 无需单独指定)")
     parser.add_argument(
-        "--concurrency", type=int, default=None,
+        "--resume",
+        action="store_true",
+        help="(保留兼容参数, 等价于默认的断点续传行为, 无需单独指定)",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
         help="并发线程数, 覆盖 base.yaml 中 tushare.download_concurrency。"
-             "1=串行(若触发限流可降级); 默认读取配置"
+        "1=串行(若触发限流可降级); 默认读取配置",
     )
 
     args = parser.parse_args()
@@ -150,8 +159,10 @@ def main():
     logger.info(f"另类数据集  : {args.download or '无'}")
     logger.info(f"全量下载    : {'是' if args.all else '否'}")
     logger.info(f"并发线程数  : {raw_core._DOWNLOAD_CONCURRENCY} (1=串行降级)")
-    logger.info(f"限频        : {ts_settings['rate_limit']}次/分钟, "
-                f"限流重试等待={ts_settings['retry_rate_limit_sleep']}s")
+    logger.info(
+        f"限频        : {ts_settings['rate_limit']}次/分钟, "
+        f"限流重试等待={ts_settings['retry_rate_limit_sleep']}s"
+    )
     logger.info("=" * 70)
 
     script_start_ts = time.time()
@@ -163,8 +174,10 @@ def main():
 
         # 1. 基础数据
         trade_cal = download_basic_data(
-            client, storage,
-            args.start_date, args.end_date,
+            client,
+            storage,
+            args.start_date,
+            args.end_date,
             force=args.force,
         )
 
@@ -172,8 +185,12 @@ def main():
             logger.info("仅下载基础数据, 完成")
         elif args.only_is_st:
             download_stock_st(
-                client, storage, trade_cal,
-                args.start_date, args.end_date, force=args.force,
+                client,
+                storage,
+                trade_cal,
+                args.start_date,
+                args.end_date,
+                force=args.force,
             )
         else:
             download_set: Set[str] = set(args.download) if args.download else set()
@@ -182,19 +199,52 @@ def main():
             if args.all:
                 download_set = set(ALT_DATASETS)
                 download_daily_data(
-                    client, storage, trade_cal,
-                    args.start_date, args.end_date, force=args.force,
+                    client,
+                    storage,
+                    trade_cal,
+                    args.start_date,
+                    args.end_date,
+                    force=args.force,
                 )
             elif not download_set:
                 # 未指定 --download -> 默认下载日线
                 download_daily_data(
-                    client, storage, trade_cal,
-                    args.start_date, args.end_date, force=args.force,
+                    client,
+                    storage,
+                    trade_cal,
+                    args.start_date,
+                    args.end_date,
+                    force=args.force,
                 )
             if "all_alt" in download_set:
                 download_set = set(ALT_DATASETS)
 
             if download_set:
+                # 日线子集名（daily/daily_basic/adj_factor/suspend/stk_limit/moneyflow/
+                # stock_st）单独下载：stk_limit 单日超 6000 条需分页，历史截断需重下
+                _DAILY_SUBSET_NAMES = {
+                    "daily",
+                    "daily_basic",
+                    "adj_factor",
+                    "suspend",
+                    "stk_limit",
+                    "moneyflow",
+                    "stock_st",
+                }
+                daily_subsets = [s for s in download_set if s in _DAILY_SUBSET_NAMES]
+                if daily_subsets:
+                    download_daily_data(
+                        client,
+                        storage,
+                        trade_cal,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
+                        subsets=daily_subsets,
+                    )
+                    download_set -= set(daily_subsets)
+                if not download_set:
+                    return
                 # 另类数据需要 stock_basic 存在
                 stock_basic = storage.load_raw("stock_basic")
                 if stock_basic is None:
@@ -202,37 +252,48 @@ def main():
 
                 if "fina_indicator" in download_set:
                     download_by_period(
-                        client, storage,
+                        client,
+                        storage,
                         dataset_name="fina_indicator",
                         api_name="fina_indicator_vip",
-                        start_date=args.start_date, end_date=args.end_date,
+                        start_date=args.start_date,
+                        end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date", "ann_date"],
                         fields=FINA_INDICATOR_DEFAULT_FIELDS,
                         force=args.force,
+                        page_limit=12000,  # fina_indicator_vip 单次 limit 上限
                         partition_by_period=True,
                         sort_cols=["ann_date", "end_date"],
                     )
 
                 if "margin_detail" in download_set:
                     download_margin_detail(
-                        client, storage, trade_cal,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        trade_cal,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 if "stk_holdernumber" in download_set:
                     download_stk_holdernumber(
-                        client, storage,
-                        start_date=args.start_date, end_date=args.end_date,
+                        client,
+                        storage,
+                        start_date=args.start_date,
+                        end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date"],
                         force=args.force,
                     )
 
                 if "forecast" in download_set:
                     download_by_period(
-                        client, storage,
+                        client,
+                        storage,
                         dataset_name="forecast",
                         api_name="forecast_vip",
-                        start_date=args.start_date, end_date=args.end_date,
+                        start_date=args.start_date,
+                        end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date", "ann_date"],
                         force=args.force,
                         partition_by_period=True,
@@ -241,16 +302,22 @@ def main():
 
                 if "cyq_perf" in download_set:
                     download_cyq_perf(
-                        client, storage, trade_cal,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        trade_cal,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 if "express" in download_set:
                     download_by_period(
-                        client, storage,
+                        client,
+                        storage,
                         dataset_name="express",
                         api_name="express_vip",
-                        start_date=args.start_date, end_date=args.end_date,
+                        start_date=args.start_date,
+                        end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date", "ann_date"],
                         force=args.force,
                         sort_cols=["ann_date", "end_date"],
@@ -258,10 +325,12 @@ def main():
 
                 if "fund_portfolio" in download_set:
                     download_by_period(
-                        client, storage,
+                        client,
+                        storage,
                         dataset_name="fund_portfolio",
                         api_name="fund_portfolio",
-                        start_date=args.start_date, end_date=args.end_date,
+                        start_date=args.start_date,
+                        end_date=args.end_date,
                         dedup_cols=["ts_code", "symbol", "end_date"],
                         force=args.force,
                         page_limit=8000,
@@ -270,45 +339,69 @@ def main():
 
                 if "moneyflow_hsgt" in download_set:
                     download_moneyflow_hsgt(
-                        client, storage, trade_cal,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        trade_cal,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 if "top_list" in download_set:
                     download_top_list(
-                        client, storage, trade_cal,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        trade_cal,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 if "report_rc" in download_set:
                     download_report_rc(
-                        client, storage,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 if "cashflow" in download_set:
                     download_cashflow(
-                        client, storage,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 # ── 风控公告类（质押/解禁/大宗）──
                 if "pledge_stat" in download_set:
                     download_pledge_stat(
-                        client, storage,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 if "share_float" in download_set:
                     download_share_float(
-                        client, storage,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 if "block_trade" in download_set:
                     download_block_trade(
-                        client, storage, trade_cal,
-                        args.start_date, args.end_date, force=args.force,
+                        client,
+                        storage,
+                        trade_cal,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
     except KeyboardInterrupt:
