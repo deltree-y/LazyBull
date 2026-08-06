@@ -21,7 +21,7 @@ from src.lazybull.data import Storage, TushareClient
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
 from .daily_partition import _download_by_trade_date
-from .periodic import _concat_no_warning, _generate_quarter_periods
+from .periodic import _concat_no_warning, _generate_quarter_periods, _query_with_pagination
 
 # 积分要求（用户 8000 积分均满足）：block_trade=2000, pledge_stat=5000, share_float=5000
 # 接口级限频（次/分钟），走 client.query 令牌桶；值低于 TuShare 官方限频留余量
@@ -140,20 +140,28 @@ def _generate_year_ranges(start_date: str, end_date: str) -> List[str]:
     return [str(y) for y in range(start_year, end_year + 1)]
 
 
-# share_float 下载保守并发：按 ann_date 逐交易日查询（单日单次请求，无分页），
+# share_float 下载保守并发：按 ann_date 逐交易日查询（单日 1-2 次请求），
 # 令牌桶限频（120/分钟）自动节流，并发 8 在限频下安全
 _SHARE_FLOAT_CONCURRENCY = 8
 
+# share_float 单次查询 limit 上限（TuShare 服务端截断，分页粒度必须取该值）
+_SHARE_FLOAT_PAGE_LIMIT = 6000
+
 
 def _query_share_float_by_ann_date(client: TushareClient, date: str) -> pd.DataFrame:
-    """查询 ann_date（公告日）为 [date] 的解禁记录。
+    """查询 ann_date（公告日）为 [date] 的全部解禁记录（分页取全）。
 
-    TuShare `share_float` 的 `ann_date` 为单值日期参数（YYYYMMDD），每天公告
-    仅约 10-20 条，单次查询即取全（无翻页）。按 ann_date 逐日查询直接命中
-    PIT 分区目标（分区=公告年），且数据量为公告级（每天 10 条），远小于按
-    float_date 查询的解禁明细（每月 4 万+ 条），无需 offset 深翻页。
+    TuShare `share_float` 的 `ann_date` 为单值日期参数（YYYYMMDD），单次查询
+    limit 上限 6000；解禁明细高峰日（如 2023 年多数交易日）单日公告超 6000 条，
+    必须按 6000 粒度 offset 翻页取全，否则被截断（实测 2023 年 132/242 个
+    交易日满额截断）。按 ann_date 逐日查询直接命中 PIT 分区目标（分区=公告年）。
     """
-    return client.query("share_float", ann_date=date)
+    return _query_with_pagination(
+        client,
+        "share_float",
+        page_limit=_SHARE_FLOAT_PAGE_LIMIT,
+        ann_date=date,
+    )
 
 
 def download_share_float(

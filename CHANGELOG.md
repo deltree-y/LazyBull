@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.5] - 2026-08-06
+
+### Fixed
+
+- **修复 `share_float` 单日公告超 6000 条被截断（下载缺约 45%）**：
+  - 现象：检查全量重下后的各年分区，发现 2017/2019/2021/2022/2023/2024 年大量
+    交易日"满额 6000 条"（2023 年 132/242 个交易日满额、单日中位数=6000），
+    疑似单日查询被 TuShare 单次 limit 上限 6000 截断；2020 年 0 天满额
+    （max 3604），确认 2020 年下载完整、数据源本就偏少（非下载失败）；
+  - 根因：`_query_share_float_by_ann_date` 用 `client.query(ann_date=date)`
+    直接单次查询、无 offset 翻页，解禁明细高峰日单日公告超 6000 条被截断；
+  - 修复（`scripts/raw_download/announcement_risk.py`）：改为 `_query_with_pagination`
+    按 6000 粒度 offset 翻页取全单日全部公告（复用既有翻页模板）；
+  - 效果（实测 2023 年重下）：93.6 万条 → **171.6 万条**（截断漏 45%），
+    242 个交易日全部成功、64 秒、零错误；
+  - **注意**：其他年份（2017/2018/2019/2021/2022/2024 等含满额天）分区仍为
+    截断数据，需重跑全量：`python scripts/download_raw.py --download share_float
+    --start-date 20120101 --end-date 20261231 --force`；
+  - **测试**：`tests/test_announcement_lookup.py` 新增
+    `test_query_share_float_by_ann_date_paginates_full_day`（mock 单日 6000+2000
+    条分页取全，断言 8000 条全部取回）。
+
 ## [0.94.4] - 2026-08-06
 
 ### Fixed

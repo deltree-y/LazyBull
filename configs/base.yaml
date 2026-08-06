@@ -13,7 +13,7 @@ data:
 tushare:
   max_retries: 3
   retry_delay: 1  # 基础重试延迟(秒), 仅对非限流错误使用固定短等
-  rate_limit: 800  # 每分钟请求数上限(全局限频令牌桶, 所有并发线程共享)
+  rate_limit: 500  # 每分钟请求数上限(全局限频令牌桶, 所有并发线程共享)
   # 下载并发数: 同一秒内允许的最大线程数
   # 注意: 并发仅加速"网络等待", 总 QPS 仍被 rate_limit 严格限制, 所以不会超过 TuShare 官方配额
   # 接口级限频: TushareClient 会按接口自动限频(如 cyq_perf=100次/分钟), 且限流错误

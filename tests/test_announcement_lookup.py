@@ -450,3 +450,39 @@ def test_download_share_float_query_semantics_and_ann_date_partition(
     assert "20191210" in queried
     # get_trade_cal 按目标区间获取交易日
     client.get_trade_cal.assert_called_once_with(start_date="20180101", end_date="20191231")
+
+
+def test_query_share_float_by_ann_date_paginates_full_day(monkeypatch):
+    """回归：单日公告超 6000 条时，ann_date 查询必须 offset 翻页取全。
+
+    旧 bug：直接 `client.query(ann_date=date)` 不翻页，单日 >6000 条被 TuShare
+    截断（实测 2023 年 132/242 个交易日满额 6000）。
+    """
+    from unittest.mock import Mock
+
+    from scripts.raw_download.announcement_risk import _query_share_float_by_ann_date
+
+    client = Mock()
+    columns = ["ts_code", "ann_date", "float_date", "float_ratio"]
+
+    def fake_query(api, **kwargs):
+        if api != "share_float":
+            return pd.DataFrame()
+        off = kwargs.get("offset", 0)
+        # 模拟服务端单次 limit 上限 6000：第一页 6000 条、第二页 2000 条、之后空
+        n = 6000 if off == 0 else (2000 if off == 6000 else 0)
+        if n == 0:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame(
+            {
+                "ts_code": [f"{i:06d}.SZ" for i in range(off, off + n)],
+                "ann_date": ["20230320"] * n,
+                "float_date": ["20230322"] * n,
+                "float_ratio": [0.1] * n,
+            }
+        )
+
+    client.query = Mock(side_effect=fake_query)
+    df = _query_share_float_by_ann_date(client, "20230320")
+    assert len(df) == 8000  # 6000 + 2000 全部取回，未被截断
+    assert client.query.call_count == 2  # 第一页 6000 + 第二页 2000（<6000 即终止）
