@@ -2714,7 +2714,15 @@ LazyBull/
 │   │   ├── volatility.py           # 波动率
 │   │   ├── industry.py             # 行业相关（alpha/偏离）
 │   │   ├── momentum.py             # 动量加速度
-│   │   └── volume.py               # 量能突变
+│   │   ├── volume.py               # 量能突变
+│   │   └── risk/                   # 风控模型专用因子子包 ✅ v0.92.4
+│   │       ├── factor_registry.py      # 因子注册表 + compute_all_risk_factors()
+│   │       ├── downside_factors.py     # 下行风险（VaR/CVaR/偏度/峰度）
+│   │       ├── volatility_factors.py   # 波动结构（Parkinson/GARCH 等）
+│   │       ├── liquidity_factors.py    # 流动性风险（Amihud/量价背离等）
+│   │       ├── announcement_factors.py # 公告类（质押/解禁/大宗/融券）
+│   │       ├── derived_factors.py      # 衍生（momentum_decay/earnings_yield）
+│   │       └── position_features.py    # 持仓上下文特征
 │   ├── features/              # 特征构建模块
 │   │   └── builder.py         # 特征构建器（调用 factors 模块）
 │   ├── signals/               # 信号模块
@@ -3077,6 +3085,13 @@ def calculate_your_indicator(df: pd.DataFrame, window: int = 14) -> pd.DataFrame
 ```
 
 然后在 `FeatureBuilder._add_advanced_factors()` 中调用该函数。
+
+**因子归属约定**（v0.92.4）：
+- 通用选股因子 → `src/lazybull/factors/` 根目录（如 `technical_indicators.py`）
+- **风控模型专用因子** → `src/lazybull/factors/risk/` 子包，通过 `@register_risk_factor`
+  装饰器注册到 `factor_registry.py`，由 builder 统一计算；`risk/` 仅保留风控逻辑
+  （PositionRiskModel/label_builder/precompute 调度），不放因子本体
+- 新增任何因子都必须遵循此归属，避免因子逻辑散落在脚本或 risk 模块中
 
 **详细指南**: 参见 [docs/guide/factor_extension.md](docs/guide/factor_extension.md)
 

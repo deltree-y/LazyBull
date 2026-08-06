@@ -89,37 +89,6 @@ _POSITION_RISK_FEATURE_CANDIDATES = [
 # 过滤标记（非特征，跳过）
 _NON_FEATURE_COLS = {'ts_code', 'trade_date', 'label', 'rar'}
 
-# 需在训练前由原始列构造的衍生特征
-_DERIVED_FEATURE_SPECS = {
-    # 动量衰减率：ret_5 / abs(ret_20)，接近 1=稳定，趋向 0=衰竭
-    'momentum_decay': ('ret_5', 'ret_20'),
-    # 盈利收益率：1 / pe_ttm（PE 为负或 0 时置 NaN）
-    'earnings_yield': ('pe_ttm',),
-    # 收益波动比：ret_20 / volatility_20
-    'ret_volatility_ratio': ('ret_20', 'volatility_20'),
-}
-
-
-def _add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
-    """构造衍生特征（momentum_decay / earnings_yield / ret_volatility_ratio）。"""
-    result = df.copy()
-
-    if 'momentum_decay' not in result.columns and 'ret_5' in result.columns and 'ret_20' in result.columns:
-        result['momentum_decay'] = result['ret_5'] / (result['ret_20'].abs() + 1e-8)
-
-    if 'earnings_yield' not in result.columns and 'pe_ttm' in result.columns:
-        pe = result['pe_ttm']
-        result['earnings_yield'] = np.where(
-            (pe > 0) & pe.notna(), 1.0 / pe, np.nan
-        )
-
-    if 'ret_volatility_ratio' not in result.columns and 'ret_20' in result.columns:
-        vol_col = 'volatility_20' if 'volatility_20' in result.columns else None
-        if vol_col is not None:
-            result['ret_volatility_ratio'] = result['ret_20'] / (result[vol_col] + 1e-8)
-
-    return result
-
 
 def _select_available_features(df: pd.DataFrame) -> List[str]:
     """从 DataFrame 中筛选实际可用的特征列，并剔除无效列。
@@ -373,10 +342,6 @@ def main():
     if features_df is None or len(features_df) == 0:
         logger.error("未找到特征数据，请先运行 build_clean_features.py")
         sys.exit(1)
-
-    # 构造衍生特征（momentum_decay / earnings_yield / ret_volatility_ratio）
-    logger.info("构造衍生特征...")
-    features_df = _add_derived_features(features_df)
 
     # 构造标签
     logger.info("构造风控标签...")

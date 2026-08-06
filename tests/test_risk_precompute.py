@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.lazybull.risk.factor_registry import compute_all_risk_factors
+from src.lazybull.factors.risk.factor_registry import compute_all_risk_factors
 from src.lazybull.risk.precompute import (
     PRECOMPUTED_RISK_FACTOR_NAMES,
     build_risk_factor_cache_dict,

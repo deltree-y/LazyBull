@@ -186,7 +186,7 @@ def _attach_risk_factors_static(
     if risk_factor_cache_dict is None or not risk_factor_names:
         return features
     try:
-        from ...risk.factor_registry import compute_all_risk_factors
+        from ...factors.risk.factor_registry import compute_all_risk_factors
     except ImportError:
         return features
 

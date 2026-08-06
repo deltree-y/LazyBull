@@ -73,6 +73,7 @@ def _ensure_all_modules_imported():
         "volatility_factors",
         "liquidity_factors",
         "announcement_factors",
+        "derived_factors",
     ]
 
     for mod_name in modules_to_import:

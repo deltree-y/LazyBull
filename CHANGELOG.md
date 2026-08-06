@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.92.4] - 2026-08-06
+
+### Changed
+
+- **重构：风控因子统一归入 `src/lazybull/factors/risk` 子包**：
+  - 将 `src/lazybull/risk/` 下的 7 个风控因子模块迁移到 `src/lazybull/factors/risk/`：
+    `factor_registry`、`downside_factors`、`volatility_factors`、`liquidity_factors`、
+    `announcement_factors`、`derived_factors`、`position_features`；
+  - 依据：因子构建统一归入 `factors/`（风险因子放 `factors/risk` 子目录），
+    `risk/` 仅保留风控逻辑（止损/止盈/PositionRiskModel/label_builder/precompute）；
+  - 更新引用：`features/builder/factors.py`、`features/builder/static_extra.py`、
+    `tests/test_risk_precompute.py` 的导入路径改为 `...factors.risk.factor_registry`；
+  - 新增 `src/lazybull/factors/risk/__init__.py`（导出 registry 三接口）；
+  - **测试**：`tests/test_risk_precompute.py`（13 passed）验证迁移后无回归。
+
 ## [0.92.3] - 2026-08-05
 
 ### Fixed

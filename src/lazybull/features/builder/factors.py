@@ -93,7 +93,7 @@ class FeatureFactorsMixin:
         预计算不可用时回退到旧的逐日滑窗计算路径。
         """
         try:
-            from ...risk.factor_registry import compute_all_risk_factors
+            from ...factors.risk.factor_registry import compute_all_risk_factors
         except ImportError:
             logger.debug("风控因子模块不可用，跳过")
             return features
