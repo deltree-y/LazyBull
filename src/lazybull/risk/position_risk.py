@@ -64,8 +64,24 @@ class PositionRiskConfig:
     calibration_monotonic: Optional[bool] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        """将 numpy 标量转换为 Python 原生类型，保证 JSON 可序列化。"""
+        import numpy as np
+        if isinstance(value, (np.bool_,)):
+            return bool(value)
+        if isinstance(value, (np.integer,)):
+            return int(value)
+        if isinstance(value, (np.floating,)):
+            return float(value)
+        if isinstance(value, dict):
+            return {k: PositionRiskConfig._json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [PositionRiskConfig._json_safe(v) for v in value]
+        return value
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        return self._json_safe({
             'model_version': self.model_version,
             'feature_names': self.feature_names,
             'class_labels': {str(k): v for k, v in self.class_labels.items()},
@@ -74,7 +90,7 @@ class PositionRiskConfig:
             'calibration_f1': self.calibration_f1,
             'calibration_monotonic': self.calibration_monotonic,
             'extra': self.extra,
-        }
+        })
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> 'PositionRiskConfig':

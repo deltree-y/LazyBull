@@ -30,8 +30,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.lazybull.data import DataLoader, Storage
+from src.lazybull.common.logger import setup_logger
 from src.lazybull.ml.model_registry import ModelRegistry
 from src.lazybull.ml.train_core import (
+    load_features_data,
     split_train_val_by_date,
     train_xgboost_model,
 )
@@ -48,7 +50,7 @@ from src.lazybull.risk.position_risk import (
 
 
 # ---------------------------------------------------------------------------
-# 默认特征列表（方案中的 ~45 个因子 + freshness 列）
+# 默认特征列表（已按 cs_train 实际列名映射）
 # ---------------------------------------------------------------------------
 
 _POSITION_RISK_FEATURE_CANDIDATES = [
@@ -58,20 +60,22 @@ _POSITION_RISK_FEATURE_CANDIDATES = [
     # B. 波动结构（6）
     'parkinson_vol_20', 'vol_of_vol_20', 'vol_regime_percentile',
     'garch_persistence', 'high_low_range_ratio', 'gap_risk',
-    # C. 动量趋势（7）
+    # C. 动量趋势（7，momentum_decay 为衍生列）
     'ret_5', 'ret_20', 'momentum_decay', 'rsi_14',
     'ma_deviation_20', 'acceleration', 'bb_pct',
     # D. 流动性风险（8）
     'turnover_cv_20', 'amount_cv_20', 'amihud_illiq_20',
     'vol_ratio_5_20', 'up_down_vol_ratio', 'volume_climax_days',
     'turnover_percentile', 'volume_price_divergence',
-    # E-G. 基本面/市场/情绪（~15）
-    'roe', 'pe_ttm', 'debt_ratio', 'earnings_yield', 'cashflow_quality',
-    'mkt_ret_5', 'mkt_ret_20', 'mkt_vol_20', 'mkt_drawdown_20',
-    'mkt_adv_decline_ratio',
-    'north_flow_trend', 'margin_balance_change', 'winner_rate',
-    'spec_score', 'ret_volatility_ratio',
-    # 公告类（7）
+    # E-G. 基本面/市场/情绪（列名已按 cs_train 实际列映射）
+    'roe_waa', 'pe_ttm', 'debt_to_assets', 'fcf_yield', 'ocf_to_profit',
+    'mkt_ret_avg_20', 'mkt_ret_avg_60', 'mkt_vol_20', 'mkt_drawdown_20',
+    'mkt_adv_dec_ratio',
+    'north_flow_sum5', 'margin_net_buy', 'winner_rate',
+    'spec_score',
+    # 衍生特征（由 _add_derived_features 生成）
+    'momentum_decay', 'earnings_yield', 'ret_volatility_ratio',
+    # 公告类（数据打通前会因全 NaN/全 0 被有效性过滤自动剔除）
     'pledge_ratio_decayed', 'pledge_high_flag', 'pledge_delta',
     'unlock_risk_flag', 'unlock_ratio',
     'block_discount_avg_10d', 'block_discount_days_10d',
@@ -85,15 +89,64 @@ _POSITION_RISK_FEATURE_CANDIDATES = [
 # 过滤标记（非特征，跳过）
 _NON_FEATURE_COLS = {'ts_code', 'trade_date', 'label', 'rar'}
 
+# 需在训练前由原始列构造的衍生特征
+_DERIVED_FEATURE_SPECS = {
+    # 动量衰减率：ret_5 / abs(ret_20)，接近 1=稳定，趋向 0=衰竭
+    'momentum_decay': ('ret_5', 'ret_20'),
+    # 盈利收益率：1 / pe_ttm（PE 为负或 0 时置 NaN）
+    'earnings_yield': ('pe_ttm',),
+    # 收益波动比：ret_20 / volatility_20
+    'ret_volatility_ratio': ('ret_20', 'volatility_20'),
+}
+
+
+def _add_derived_features(df: pd.DataFrame) -> pd.DataFrame:
+    """构造衍生特征（momentum_decay / earnings_yield / ret_volatility_ratio）。"""
+    result = df.copy()
+
+    if 'momentum_decay' not in result.columns and 'ret_5' in result.columns and 'ret_20' in result.columns:
+        result['momentum_decay'] = result['ret_5'] / (result['ret_20'].abs() + 1e-8)
+
+    if 'earnings_yield' not in result.columns and 'pe_ttm' in result.columns:
+        pe = result['pe_ttm']
+        result['earnings_yield'] = np.where(
+            (pe > 0) & pe.notna(), 1.0 / pe, np.nan
+        )
+
+    if 'ret_volatility_ratio' not in result.columns and 'ret_20' in result.columns:
+        vol_col = 'volatility_20' if 'volatility_20' in result.columns else None
+        if vol_col is not None:
+            result['ret_volatility_ratio'] = result['ret_20'] / (result[vol_col] + 1e-8)
+
+    return result
+
 
 def _select_available_features(df: pd.DataFrame) -> List[str]:
-    """从 DataFrame 中筛选实际可用的特征列。"""
+    """从 DataFrame 中筛选实际可用的特征列，并剔除无效列。
+
+    有效性规则：
+      - 必须存在于 df 中
+      - 剔除全 NaN 列（如未接入数据的公告类因子）
+      - 剔除方差为 0 的常数列（对模型无信息量）
+    """
     available = []
     for col in _POSITION_RISK_FEATURE_CANDIDATES:
-        if col in df.columns and col not in _NON_FEATURE_COLS:
-            available.append(col)
+        if col not in df.columns or col in _NON_FEATURE_COLS:
+            continue
+        series = df[col]
+        # 全 NaN 剔除
+        if series.notna().sum() == 0:
+            logger.debug(f"剔除全 NaN 特征: {col}")
+            continue
+        # 常数列剔除（去 NaN 后无变化）
+        valid = series.dropna()
+        if len(valid) > 1 and valid.nunique() <= 1:
+            logger.debug(f"剔除常数特征: {col}")
+            continue
+        available.append(col)
     logger.info(
-        f"特征筛选: {len(available)}/{len(_POSITION_RISK_FEATURE_CANDIDATES)} 个可用"
+        f"特征筛选: {len(available)}/{len(_POSITION_RISK_FEATURE_CANDIDATES)} 个可用 "
+        f"（剔除全NaN/常数列 {len(_POSITION_RISK_FEATURE_CANDIDATES) - len(available)} 个）"
     )
     return available
 
@@ -295,23 +348,35 @@ def main():
     # Monitor 参数
     parser.add_argument('--proba-threshold', type=float, default=0.6,
                         help='REDUCE 触发提前退出的最低概率')
+    # 日志级别
+    parser.add_argument('--log-level', default='INFO',
+                        help='日志级别: DEBUG | INFO | WARNING | ERROR')
 
     args = parser.parse_args()
 
-    # 加载数据
+    # 配置日志（默认 INFO，避免数据加载模块的 DEBUG 刷屏）
+    setup_logger(log_level=args.log_level.upper())
+
+    # 加载数据（cs_train 按交易日分区，逐日合并）
     storage = Storage(root_path=args.data_root)
     loader = DataLoader(storage)
 
     logger.info(f"加载特征数据: {args.start_date} ~ {args.end_date}")
-    features_df = loader.load_features(
-        start_date=args.start_date,
-        end_date=args.end_date,
-        dataset='cs_train',
-    )
+    try:
+        features_df, trade_days_count = load_features_data(
+            storage, loader, args.start_date, args.end_date
+        )
+    except ValueError as e:
+        logger.error(f"加载特征数据失败: {e}")
+        sys.exit(1)
 
     if features_df is None or len(features_df) == 0:
         logger.error("未找到特征数据，请先运行 build_clean_features.py")
         sys.exit(1)
+
+    # 构造衍生特征（momentum_decay / earnings_yield / ret_volatility_ratio）
+    logger.info("构造衍生特征...")
+    features_df = _add_derived_features(features_df)
 
     # 构造标签
     logger.info("构造风控标签...")
