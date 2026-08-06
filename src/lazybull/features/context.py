@@ -49,6 +49,11 @@ class FeatureContext:
     cashflow_data: Optional[pd.DataFrame] = None
     consensus_revision_data: Optional[pd.DataFrame] = None
 
+    # ── 风控公告类数据（质押/解禁/大宗，PIT 日频截面）──
+    pledge_data: Optional[pd.DataFrame] = None
+    share_float_data: Optional[pd.DataFrame] = None
+    block_trade_data: Optional[pd.DataFrame] = None
+
     # ── 预计算缓存引用（并行模式下从主进程传入，只读共享）──
     daily_adj_dict: Optional[Dict[str, pd.DataFrame]] = field(default=None, repr=False)
     tech_factor_cache_dict: Optional[Dict[str, pd.DataFrame]] = field(default=None, repr=False)

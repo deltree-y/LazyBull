@@ -15,6 +15,7 @@ from ..data import DataLoader, Storage
 from . import FeatureBuilder
 from .ensure import _check_features_schema
 
+
 def _build_features_parallel(
     pending_dates,
     builder,
@@ -40,13 +41,17 @@ def _build_features_parallel(
     consensus_lookup,
     cashflow_lookup,
     consensus_revision_lookup,
+    pledge_lookup,
+    share_float_lookup,
+    block_trade_lookup,
     n_jobs,
 ):
     """并行构建特征：预构建 FeatureContext 列表后调用 parallel 模块。"""
-    from src.lazybull.features.context import FeatureContext
-    from src.lazybull.features.parallel import build_features_for_day_static
-    from src.lazybull.features.factor_handlers import create_factor_registry
     from joblib import Parallel, delayed
+
+    from src.lazybull.features.context import FeatureContext
+    from src.lazybull.features.factor_handlers import create_factor_registry
+    from src.lazybull.features.parallel import build_features_for_day_static
 
     # 共享只读缓存（通过 loky copy-on-write 共享，不深拷贝）
     daily_adj_dict = builder._daily_adj_dict
@@ -104,6 +109,24 @@ def _build_features_parallel(
                 consensus_revision_today = pd.DataFrame()
         else:
             consensus_revision_today = None
+        if pledge_lookup is not None:
+            pledge_today = pledge_lookup.get(trade_date)
+            if pledge_today is None:
+                pledge_today = pd.DataFrame()
+        else:
+            pledge_today = None
+        if share_float_lookup is not None:
+            share_float_today = share_float_lookup.get(trade_date)
+            if share_float_today is None:
+                share_float_today = pd.DataFrame()
+        else:
+            share_float_today = None
+        if block_trade_lookup is not None:
+            block_trade_today = block_trade_lookup.get(trade_date)
+            if block_trade_today is None:
+                block_trade_today = pd.DataFrame()
+        else:
+            block_trade_today = None
 
         ctx = FeatureContext(
             trade_date=trade_date,
@@ -128,6 +151,9 @@ def _build_features_parallel(
             consensus_data=consensus_today,
             cashflow_data=cashflow_today,
             consensus_revision_data=consensus_revision_today,
+            pledge_data=pledge_today,
+            share_float_data=share_float_today,
+            block_trade_data=block_trade_today,
             horizons=builder.horizons,
             horizon=builder.horizon,
             lookback_windows=builder.lookback_windows,
@@ -204,6 +230,7 @@ def build_features_data(
     enable_consensus: bool = False,
     enable_cashflow_quality: bool = False,
     enable_consensus_revision: bool = False,
+    enable_announcement_risk: bool = False,
     use_parallel: bool = False,
     parallel_jobs: int = -1,
 ) -> None:
@@ -229,6 +256,7 @@ def build_features_data(
         enable_consensus: 是否启用一致预期因子
         enable_cashflow_quality: 是否启用现金流质量因子
         enable_consensus_revision: 是否启用一致预期修正因子
+        enable_announcement_risk: 是否启用风控公告类因子（质押/解禁/大宗）
     """
     logger.info("=" * 60)
     logger.info("开始构建features层数据")
@@ -333,8 +361,8 @@ def build_features_data(
     holder_lookup = None
     earnings_lookup = None
     if enable_alt:
-        from src.lazybull.factors.holder import build_holder_lookup_by_date
         from src.lazybull.factors.earnings import build_earnings_lookup_by_date
+        from src.lazybull.factors.holder import build_holder_lookup_by_date
 
         # 股东人数
         stk_holdernumber = loader.load_stk_holdernumber()
@@ -480,6 +508,66 @@ def build_features_data(
                 "请先运行: python scripts/download_raw.py --download report_rc"
             )
 
+    # 加载风控公告类数据（可选：质押/解禁/大宗，PIT 日频查询表）
+    pledge_lookup = None
+    share_float_lookup = None
+    block_trade_lookup = None
+    if enable_announcement_risk:
+        from src.lazybull.factors.risk.announcement_lookup import (
+            build_block_trade_lookup_by_date,
+            build_pledge_lookup_by_date,
+            build_share_float_lookup_by_date,
+        )
+
+        # 质押（季分区，回溯 start_dt 覆盖 PIT 前向填充所需历史期）
+        pledge_df = loader.load_pledge_stat(start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d"))
+        if pledge_df is not None and len(pledge_df) > 0:
+            logger.info(f"质押数据: {len(pledge_df)} 条")
+            pledge_lookup = build_pledge_lookup_by_date(pledge_df, trading_dates_str)
+        else:
+            logger.warning(
+                "未找到质押数据，相关特征将为空。"
+                "请先运行: python scripts/download_raw.py --download pledge_stat"
+            )
+        pledge_df = None
+
+        # 限售解禁（年分区，PIT 按公告日，回溯 start_dt）
+        share_float_df = loader.load_share_float(
+            start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
+        )
+        if share_float_df is not None and len(share_float_df) > 0:
+            logger.info(f"限售解禁数据: {len(share_float_df)} 条")
+            share_float_lookup = build_share_float_lookup_by_date(share_float_df, trading_dates_str)
+        else:
+            logger.warning(
+                "未找到限售解禁数据，相关特征将为空。"
+                "请先运行: python scripts/download_raw.py --download share_float"
+            )
+        share_float_df = None
+
+        # 大宗交易（日分区，近 10 交易日折价聚合，需未复权收盘价）
+        block_trade_df = loader.load_block_trade(
+            start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d")
+        )
+        if block_trade_df is not None and len(block_trade_df) > 0:
+            logger.info(f"大宗交易数据: {len(block_trade_df)} 条")
+            close_lookup = {
+                trade_date: (
+                    grp[["ts_code", "close"]].dropna().set_index("ts_code")["close"].to_dict()
+                )
+                for trade_date, grp in daily_clean.groupby("trade_date", sort=False)
+                if "close" in grp.columns
+            }
+            block_trade_lookup = build_block_trade_lookup_by_date(
+                block_trade_df, trading_dates_str, close_lookup=close_lookup
+            )
+        else:
+            logger.warning(
+                "未找到大宗交易数据，相关特征将为空。"
+                "请先运行: python scripts/download_raw.py --download block_trade"
+            )
+        block_trade_df = None
+
     # clean数据已包含复权价格，使用空DataFrame
     adj_factor = pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"])
 
@@ -533,6 +621,9 @@ def build_features_data(
             consensus_lookup=consensus_lookup,
             cashflow_lookup=cashflow_lookup,
             consensus_revision_lookup=consensus_revision_lookup,
+            pledge_lookup=pledge_lookup,
+            share_float_lookup=share_float_lookup,
+            block_trade_lookup=block_trade_lookup,
             n_jobs=parallel_jobs,
         )
         return
@@ -582,6 +673,24 @@ def build_features_data(
                     consensus_revision_today = pd.DataFrame()
             else:
                 consensus_revision_today = None
+            if pledge_lookup is not None:
+                pledge_today = pledge_lookup.get(trade_date)
+                if pledge_today is None:
+                    pledge_today = pd.DataFrame()
+            else:
+                pledge_today = None
+            if share_float_lookup is not None:
+                share_float_today = share_float_lookup.get(trade_date)
+                if share_float_today is None:
+                    share_float_today = pd.DataFrame()
+            else:
+                share_float_today = None
+            if block_trade_lookup is not None:
+                block_trade_today = block_trade_lookup.get(trade_date)
+                if block_trade_today is None:
+                    block_trade_today = pd.DataFrame()
+            else:
+                block_trade_today = None
 
             # 构建特征
             features_df = builder.build_features_for_day(
@@ -609,6 +718,9 @@ def build_features_data(
                 consensus_data=consensus_today,
                 cashflow_data=cashflow_today,
                 consensus_revision_data=consensus_revision_today,
+                pledge_data=pledge_today,
+                share_float_data=share_float_today,
+                block_trade_data=block_trade_today,
             )
 
             # 保存结果

@@ -65,10 +65,23 @@ def _get_handler_default_columns(name: str) -> List[str]:
         )
 
         return list(CONSENSUS_REVISION_COLS) + [CONSENSUS_REVISION_FRESHNESS_COL]
+    if name == "pledge":
+        from .handlers_announcement import PLEDGE_COLS
+
+        return list(PLEDGE_COLS)
+    if name == "share_float":
+        from .handlers_announcement import SHARE_FLOAT_COLS
+
+        return list(SHARE_FLOAT_COLS)
+    if name == "block_trade":
+        from .handlers_announcement import BLOCK_TRADE_COLS
+
+        return list(BLOCK_TRADE_COLS)
     return []
 
 
 # ── Handler 协议 ───────────────────────────────────────────────
+
 
 class FactorHandler(Protocol):
     """因子处理器协议：接收 features 和当日数据，返回 {列名: Series} 字典。"""
@@ -79,8 +92,7 @@ class FactorHandler(Protocol):
         data: Any,
         trade_date: str,
         current_data: pd.DataFrame,
-    ) -> Dict[str, pd.Series]:
-        ...
+    ) -> Dict[str, pd.Series]: ...
 
 
 # ── 各因子 Handler 实现 ────────────────────────────────────────
@@ -146,9 +158,7 @@ class CyqPerfFactorHandler:
 
         if "weight_avg" in data.columns and "close_adj" in features.columns:
             cyq = data.copy()
-            cyq_with_close = cyq.merge(
-                features[["ts_code", "close_adj"]], on="ts_code", how="left"
-            )
+            cyq_with_close = cyq.merge(features[["ts_code", "close_adj"]], on="ts_code", how="left")
             cyq_with_close["weight_avg_bias"] = np.where(
                 cyq_with_close["weight_avg"] > 1e-6,
                 (cyq_with_close["close_adj"] - cyq_with_close["weight_avg"])
@@ -163,11 +173,7 @@ class CyqPerfFactorHandler:
                 if col in merged.columns:
                     result[col] = merged[col]
         else:
-            merge_cols = [
-                c
-                for c in data.columns
-                if c != "ts_code" and c != "weight_avg"
-            ]
+            merge_cols = [c for c in data.columns if c != "ts_code" and c != "weight_avg"]
             merged = _safe_merge_by_ts_code(features, data, merge_cols, "cyq_perf")
             for col in merge_cols:
                 if col in merged.columns:
@@ -432,6 +438,29 @@ def create_factor_registry() -> FactorRegistry:
         "consensus_revision",
         ConsensusRevisionFactorHandler(),
         lambda ctx: ctx.consensus_revision_data,
+    )
+
+    # 风控公告类（质押/解禁/大宗，PIT 日频截面原始列）
+    from .handlers_announcement import (
+        BlockTradeFactorHandler,
+        PledgeFactorHandler,
+        ShareFloatFactorHandler,
+    )
+
+    registry.register(
+        "pledge",
+        PledgeFactorHandler(),
+        lambda ctx: ctx.pledge_data,
+    )
+    registry.register(
+        "share_float",
+        ShareFloatFactorHandler(),
+        lambda ctx: ctx.share_float_data,
+    )
+    registry.register(
+        "block_trade",
+        BlockTradeFactorHandler(),
+        lambda ctx: ctx.block_trade_data,
     )
 
     return registry

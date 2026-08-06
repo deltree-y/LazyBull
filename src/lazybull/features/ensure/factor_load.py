@@ -42,6 +42,7 @@ def _load_factor_data(
     start_date: str,
     end_date: str,
     daily_close_lookup: Optional[Dict[str, pd.DataFrame]] = None,
+    block_close_lookup: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> tuple:
     """加载因子数据（基本面 + 另类数据）
 
@@ -59,6 +60,7 @@ def _load_factor_data(
         trading_dates_str: 日期范围内的交易日列表
         start_date: 数据范围起始日期
         end_date: 数据范围结束日期
+        block_close_lookup: 未复权收盘价查询 {trade_date: {ts_code: close}}（大宗折价）
 
     Returns:
         因子当日截面与缺失列表元组。
@@ -77,6 +79,7 @@ def _load_factor_data(
         fina_indicator = _try_download_fina_indicator(client, storage, trade_date)
     if fina_indicator is not None and len(fina_indicator) > 0:
         from ...factors.fundamental import build_fundamental_lookup_by_date
+
         funda_lookup = build_fundamental_lookup_by_date(fina_indicator, factor_output_dates)
         funda_today = funda_lookup.get(trade_date)
         logger.info(f"基本面因子: 已加载 ({len(fina_indicator)} 条原始记录)")
@@ -96,13 +99,12 @@ def _load_factor_data(
     margin_detail = loader.load_margin_detail(start_date, end_date)
     if margin_detail is not None and len(margin_detail) > 0:
         from ...factors.margin import build_margin_lookup_by_date
+
         margin_lookup = build_margin_lookup_by_date(margin_detail, factor_output_dates)
         margin_today = margin_lookup.get(trade_date)
         # 当日 margin_detail 可能尚未发布，额外重试一次下载
         if margin_today is None:
-            logger.warning(
-                f"融资融券: 当日 {trade_date} 数据不在查询表中，尝试单独下载..."
-            )
+            logger.warning(f"融资融券: 当日 {trade_date} 数据不在查询表中，尝试单独下载...")
             try:
                 df = client.query("margin_detail", trade_date=trade_date)
                 if df is not None and not df.empty:
@@ -138,6 +140,7 @@ def _load_factor_data(
         stk_holdernumber = _try_download_stk_holdernumber(client, storage, trade_date)
     if stk_holdernumber is not None and len(stk_holdernumber) > 0:
         from ...factors.holder import build_holder_lookup_by_date
+
         holder_lookup = build_holder_lookup_by_date(stk_holdernumber, factor_output_dates)
         holder_today = holder_lookup.get(trade_date)
         logger.info(f"股东人数因子: 已加载 ({len(stk_holdernumber)} 条)")
@@ -155,9 +158,8 @@ def _load_factor_data(
         forecast_df = _try_download_forecast(client, storage, trade_date)
     if forecast_df is not None and len(forecast_df) > 0:
         from ...factors.earnings import build_earnings_lookup_by_date
-        earnings_lookup = build_earnings_lookup_by_date(
-            forecast_df, factor_output_dates
-        )
+
+        earnings_lookup = build_earnings_lookup_by_date(forecast_df, factor_output_dates)
         earnings_today = earnings_lookup.get(trade_date)
         logger.info(f"业绩预告因子: 已加载 ({len(forecast_df)} 条)")
     else:
@@ -173,6 +175,7 @@ def _load_factor_data(
     cyq_perf_df = _try_ensure_historical_cyq_perf(client, storage, cyq_perf_hist_dates)
     if cyq_perf_df is not None and len(cyq_perf_df) > 0:
         from ...factors.cyq_perf import build_cyq_perf_lookup_by_date
+
         cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, factor_output_dates)
         cyq_perf_today = cyq_perf_lookup.get(trade_date)
         logger.info(f"筹码胜率因子: 已加载 ({len(cyq_perf_df)} 条)")
@@ -190,6 +193,7 @@ def _load_factor_data(
         express_df = _try_download_express(client, storage, trade_date)
     if express_df is not None and len(express_df) > 0:
         from ...factors.express import build_express_lookup_by_date
+
         # 复用业绩预告段已加载的 forecast_df，避免重复磁盘读取
         express_lookup = build_express_lookup_by_date(
             express_df, factor_output_dates, forecast_df=forecast_df
@@ -209,10 +213,13 @@ def _load_factor_data(
     # 只补齐 <= trade_date 的历史季度（未来季度实盘不可获取）
     fund_hist_dates = [d for d in trading_dates_str if d <= trade_date]
     fund_portfolio_df = _try_ensure_historical_fund_portfolio(
-        client, storage, fund_hist_dates,
+        client,
+        storage,
+        fund_hist_dates,
     )
     if fund_portfolio_df is not None and len(fund_portfolio_df) > 0:
         from ...factors.fund_portfolio import build_fund_portfolio_lookup_by_date
+
         fund_lookup = build_fund_portfolio_lookup_by_date(
             fund_portfolio_df, factor_output_dates, pre_aggregated=True
         )
@@ -232,6 +239,7 @@ def _load_factor_data(
     hsgt_df = _try_ensure_historical_moneyflow_hsgt(client, storage, north_hist_dates)
     if hsgt_df is not None and len(hsgt_df) > 0:
         from ...factors.north_flow import build_north_flow_lookup_by_date
+
         north_lookup = build_north_flow_lookup_by_date(hsgt_df, factor_output_dates)
         cur = north_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
@@ -251,6 +259,7 @@ def _load_factor_data(
     top_list_df = _try_ensure_historical_top_list(client, storage, lhb_hist_dates)
     if top_list_df is not None and len(top_list_df) > 0:
         from ...factors.lhb import build_lhb_lookup_by_date
+
         lhb_lookup = build_lhb_lookup_by_date(top_list_df, factor_output_dates)
         cur = lhb_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
@@ -270,6 +279,7 @@ def _load_factor_data(
         report_rc_df = _try_download_report_rc(client, storage, trade_date)
     if report_rc_df is not None and len(report_rc_df) > 0:
         from ...factors.consensus import build_consensus_lookup_by_date
+
         cons_lookup = build_consensus_lookup_by_date(report_rc_df, factor_output_dates)
         cur = cons_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
@@ -321,8 +331,61 @@ def _load_factor_data(
     revision_lookup = None
     gc.collect()
 
+    # ── 风控公告类（质押，季分区 PIT 前向填充）─────────────────────
+    pledge_today = pd.DataFrame()
+    pledge_df = loader.load_pledge_stat(start_date, end_date)
+    if pledge_df is not None and len(pledge_df) > 0:
+        from ...factors.risk.announcement_lookup import build_pledge_lookup_by_date
+
+        pledge_lookup = build_pledge_lookup_by_date(pledge_df, factor_output_dates)
+        cur = pledge_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            pledge_today = cur
+        logger.info(f"质押公告因子: 已加载 ({len(pledge_df)} 条原始记录)")
+    else:
+        missing_factors.append("pledge_stat（质押）")
+    pledge_df = None
+    pledge_lookup = None
+    gc.collect()
+
+    # ── 风控公告类（限售解禁，年分区 PIT 按公告日）──────────────────
+    share_float_today = pd.DataFrame()
+    share_float_df = loader.load_share_float(start_date, end_date)
+    if share_float_df is not None and len(share_float_df) > 0:
+        from ...factors.risk.announcement_lookup import build_share_float_lookup_by_date
+
+        share_float_lookup = build_share_float_lookup_by_date(share_float_df, factor_output_dates)
+        cur = share_float_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            share_float_today = cur
+        logger.info(f"限售解禁因子: 已加载 ({len(share_float_df)} 条原始记录)")
+    else:
+        missing_factors.append("share_float（限售解禁）")
+    share_float_df = None
+    share_float_lookup = None
+    gc.collect()
+
+    # ── 风控公告类（大宗交易，日分区近 10 交易日折价聚合）────────────
+    block_trade_today = pd.DataFrame()
+    block_trade_df = loader.load_block_trade(start_date, end_date)
+    if block_trade_df is not None and len(block_trade_df) > 0:
+        from ...factors.risk.announcement_lookup import build_block_trade_lookup_by_date
+
+        block_trade_lookup = build_block_trade_lookup_by_date(
+            block_trade_df, factor_output_dates, close_lookup=block_close_lookup
+        )
+        cur = block_trade_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            block_trade_today = cur
+        logger.info(f"大宗交易因子: 已加载 ({len(block_trade_df)} 条原始记录)")
+    else:
+        missing_factors.append("block_trade（大宗交易）")
+    block_trade_df = None
+    block_trade_lookup = None
+    gc.collect()
+
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 12
+    total = 15
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -333,8 +396,21 @@ def _load_factor_data(
     else:
         logger.info(f"因子数据覆盖: {total}/{total} 组全部加载")
 
-    return (funda_today, margin_today, holder_today, earnings_today,
-            cyq_perf_today, express_today, fund_portfolio_today,
-            north_flow_today, lhb_today, consensus_today,
-            cashflow_today, consensus_revision_today,
-            missing_factors)
+    return (
+        funda_today,
+        margin_today,
+        holder_today,
+        earnings_today,
+        cyq_perf_today,
+        express_today,
+        fund_portfolio_today,
+        north_flow_today,
+        lhb_today,
+        consensus_today,
+        cashflow_today,
+        consensus_revision_today,
+        pledge_today,
+        share_float_today,
+        block_trade_today,
+        missing_factors,
+    )

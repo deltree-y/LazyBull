@@ -2,6 +2,73 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.0] - 2026-08-06
+
+### Added
+
+- **风控公告类因子侧接线（质押/解禁/大宗原始列接入 features）**：完成 0.93.0
+  下载链 → 因子生效的最后一环，使 `announcement_factors.py` 的 7 个公告因子
+  （质押 3 + 解禁 2 + 大宗 2）从「全 NaN 被有效性过滤剔除」变为真实计算：
+  - `src/lazybull/factors/risk/announcement_lookup.py`（新建）：3 个 PIT 日频
+    查询表 builder（与 fundamental/consensus_revision 同模式），把低频公告数据
+    转换为 `{trade_date: DataFrame}` 当日截面：
+    - `build_pledge_lookup_by_date`：按公告日 `ann_date`（缺失回退 `end_date`）
+      前向填充，输出 `pledge_ratio` / `pledge_freshness_days` / `pledge_ratio_prev`；
+    - `build_share_float_lookup_by_date`：仅 `ann_date <= T` 且 `float_date > T`
+      （未解禁）的公告可见，取最近解禁日一条，输出 `days_to_unlock` / `unlock_ratio`；
+    - `build_block_trade_lookup_by_date`：折价率 =（成交价 - 未复权收盘价）/ 收盘价，
+      按近 10 个交易日聚合，输出 `block_discount_avg_10d` / `block_discount_days_10d`；
+    - **修复**：YYYYMMDD 不能直接整数相减算自然日差（20240301-20240210=91 但
+      实际 20 天），统一经 datetime64 转自然日；大宗聚合窗口延伸到最后一笔交易后
+      9 个交易日（折价影响持续存在）；
+  - `src/lazybull/features/handlers_announcement.py`（新建）：3 个 FactorHandler
+    （`PledgeFactorHandler` / `ShareFloatFactorHandler` / `BlockTradeFactorHandler`），
+    将当日截面原始列合并进 features；空数据输出 NaN/0 占位（schema 稳定）；
+  - `FeatureContext` + `builder/orchestration.py` 新增 `pledge_data` /
+    `share_float_data` / `block_trade_data` 三个字段（向后兼容透传）；
+  - `features/factor_handlers.py`：注册 3 个新 handler 并补充失败占位默认列；
+  - `features/pipeline.py`：新增 `enable_announcement_risk` 开关，加载三类原始
+    数据并构建日频查询表（并行 + 串行双路径）；
+  - `features/ensure/factor_load.py` + `entry.py`：纸面交易链路自动加载三类数据
+    （有则加载、缺失记 missing；自动下载补齐为下一步工作）；
+  - `scripts/build_clean_features.py`：新增 `--enable-announcement-risk-features`
+    开关（纳入 `--build-all`）；
+  - **测试**：`tests/test_announcement_lookup.py`（新建，10 个测试）覆盖 PIT
+    前向填充、自然日差、解禁清零、大宗窗口聚合、handler 占位/合并、端到端因子
+    计算；`tests/test_ensure_and_t0_printing.py` 更新适配 16 元组返回；
+    既有 features/ensure/下载测试全部通过。
+
+## [0.93.0] - 2026-08-06
+
+### Added
+
+- **风控公告类数据下载链（质押/解禁/大宗）**：新增 3 个数据集的完整下载链路，
+  全部复用现有下载模板（`_download_by_trade_date` / `_query_with_pagination` /
+  `_generate_quarter_periods` / `_run_concurrent`），零新并发/限频/断点续传架构：
+  - `scripts/raw_download/announcement_risk.py`（新建）：
+    - `block_trade`（大宗交易）：按 `trade_date` 逐日查询 → 日分区
+      `raw/block_trade/{YYYY-MM-DD}.parquet`（对齐 margin_detail/top_list），
+      全量约 4400 交易日，预计 10-20 分钟；
+    - `pledge_stat`（股权质押统计）：按 `end_date`(季末) 查询 → 季分区
+      `raw/pledge_stat/{YYYY-MM-DD}.parquet`（对齐 fina_indicator），
+      全量约 52 期，预计 1-3 分钟；
+    - `share_float`（限售解禁）：按 `ann_date` 年区间查询 → 年分区
+      `raw/share_float/{YYYY}-12-31.parquet`（对齐 report_rc），
+      **PIT 契约**：按公告日分区/过滤（`ann_date <= T` 才可见，`float_date` 为未来解禁日），
+      全量约 22 年，预计 5-15 分钟；
+  - `scripts/raw_download/cli.py`：`--download pledge_stat/share_float/block_trade`
+    接入分发，`ALT_DATASETS`（`scripts/raw_download/core.py`）纳入 3 数据集
+    （`--all` 一并下载）；
+  - `src/lazybull/data/loader_announcement.py`（新建 Mixin）：`DataLoader` 组合
+    该 Mixin，新增 `load_pledge_stat` / `load_share_float` / `load_block_trade`
+    三个加载方法（日/季/年分区路由，日期统一 YYYYMMDD）；
+  - 接口级限频写入 `_API_RATE_LIMITS_DEFAULT`（block_trade=200 / pledge_stat=120 /
+    share_float=120，仅当无配置或更宽松时写入，不覆盖用户配置）；
+  - 因子侧接线（FeatureContext + factor_handlers 合并 pledge/unlock/block 原始列）
+    为下一步工作，本次仅落地下载与加载；
+  - **测试**：mock 验证三个下载器的查询参数与分区路由（含 share_float 跨年
+    `ann_date` 归位）；既有下载测试 42 个全部通过。
+
 ## [0.92.4] - 2026-08-06
 
 ### Changed

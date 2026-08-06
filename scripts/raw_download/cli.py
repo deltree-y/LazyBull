@@ -22,6 +22,11 @@ from .alt import (
     download_stk_holdernumber,
     download_top_list,
 )
+from .announcement_risk import (
+    download_block_trade,
+    download_pledge_stat,
+    download_share_float,
+)
 from . import core as raw_core
 from .basic import download_basic_data
 from .core import ALT_DATASETS, ERROR_COLLECTOR, _fmt_duration
@@ -88,7 +93,8 @@ def main():
         "--download", nargs="*", default=None,
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
              "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
-             "moneyflow_hsgt, top_list, report_rc, cashflow, all_alt。不指定时仅下基础+日线"
+             "moneyflow_hsgt, top_list, report_rc, cashflow, pledge_stat, "
+             "share_float, block_trade, all_alt。不指定时仅下基础+日线"
     )
     parser.add_argument("--all", action="store_true", default=False,
                         help="下载日线 + 全部另类数据")
@@ -283,6 +289,25 @@ def main():
                 if "cashflow" in download_set:
                     download_cashflow(
                         client, storage,
+                        args.start_date, args.end_date, force=args.force,
+                    )
+
+                # ── 风控公告类（质押/解禁/大宗）──
+                if "pledge_stat" in download_set:
+                    download_pledge_stat(
+                        client, storage,
+                        args.start_date, args.end_date, force=args.force,
+                    )
+
+                if "share_float" in download_set:
+                    download_share_float(
+                        client, storage,
+                        args.start_date, args.end_date, force=args.force,
+                    )
+
+                if "block_trade" in download_set:
+                    download_block_trade(
+                        client, storage, trade_cal,
                         args.start_date, args.end_date, force=args.force,
                     )
 

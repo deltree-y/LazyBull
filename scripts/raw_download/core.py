@@ -22,6 +22,9 @@ ALT_DATASETS = [
     "top_list",
     "report_rc",
     "cashflow",
+    "pledge_stat",
+    "share_float",
+    "block_trade",
 ]
 
 

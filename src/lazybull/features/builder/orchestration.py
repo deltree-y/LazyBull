@@ -46,6 +46,9 @@ class FeatureOrchestrationMixin:
         consensus_data: Optional[pd.DataFrame] = None,
         cashflow_data: Optional[pd.DataFrame] = None,
         consensus_revision_data: Optional[pd.DataFrame] = None,
+        pledge_data: Optional[pd.DataFrame] = None,
+        share_float_data: Optional[pd.DataFrame] = None,
+        block_trade_data: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """构建单个交易日的截面特征和标签（签名保持向后兼容）。"""
 
@@ -76,6 +79,9 @@ class FeatureOrchestrationMixin:
             consensus_data=consensus_data,
             cashflow_data=cashflow_data,
             consensus_revision_data=consensus_revision_data,
+            pledge_data=pledge_data,
+            share_float_data=share_float_data,
+            block_trade_data=block_trade_data,
             horizons=self.horizons,
             horizon=self.horizon,
             lookback_windows=self.lookback_windows,

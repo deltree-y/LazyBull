@@ -6,10 +6,11 @@ import pandas as pd
 from loguru import logger
 
 from .storage import Storage
+from .loader_announcement import AnnouncementRiskLoaderMixin
 from ..common.date_utils import normalize_series_to_yyyymmdd, normalize_to_yyyymmdd
 
 
-class DataLoader:
+class DataLoader(AnnouncementRiskLoaderMixin):
     """数据加载器
     
     提供标准化的数据加载接口

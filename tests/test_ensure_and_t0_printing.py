@@ -455,6 +455,9 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         ('src.lazybull.factors.consensus', 'build_consensus_lookup_by_date', 'consensus'),
         ('src.lazybull.factors.cashflow_quality', 'build_cashflow_quality_lookup_by_date', 'cashflow'),
         ('src.lazybull.factors.consensus_revision', 'build_consensus_revision_lookup_by_date', 'consensus_revision'),
+        ('src.lazybull.factors.risk.announcement_lookup', 'build_pledge_lookup_by_date', 'pledge'),
+        ('src.lazybull.factors.risk.announcement_lookup', 'build_share_float_lookup_by_date', 'share_float'),
+        ('src.lazybull.factors.risk.announcement_lookup', 'build_block_trade_lookup_by_date', 'block_trade'),
     ]
     expected_names = {item[2] for item in builder_targets}
 
@@ -485,6 +488,15 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
             return stub_df
 
         def load_cashflow(self, start_date=None, end_date=None):
+            return stub_df
+
+        def load_pledge_stat(self, start_date=None, end_date=None):
+            return stub_df
+
+        def load_share_float(self, start_date=None, end_date=None):
+            return stub_df
+
+        def load_block_trade(self, start_date=None, end_date=None):
             return stub_df
 
     result = ensure_module._load_factor_data(
@@ -646,6 +658,9 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
         ensure_entry,
         "_load_factor_data",
         lambda *args, **kwargs: (
+            None,
+            None,
+            None,
             None,
             None,
             None,

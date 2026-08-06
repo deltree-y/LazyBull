@@ -2459,12 +2459,18 @@ LazyBull 提供三种数据处理模式，适应不同使用场景：
 # 步骤1: 仅下载raw数据（不构建clean/features）
 python scripts/download_raw.py --start-date 20230101 --end-date 20231231
 
+# 风控公告类数据（质押/解禁/大宗，供风控模型专用因子使用）
+python scripts/download_raw.py --start-date 20230101 --end-date 20231231 --download pledge_stat share_float block_trade
+
 # 步骤2: 构建clean和features（假设raw已存在）
 # --horizon / --horizons 二选一必填：
 #   --horizon 20         : 单值模式，仅按主 horizon 对应的 y_ret_20 非空过滤（推荐，保留停牌导致的辅助标签缺失样本）
 #   --horizons 5 10 20   : 多值模式，AND 过滤，要求所有 horizons 对应 y_ret_N 同时非空
 # 两种模式下生成的特征文件都包含 y_ret_5/10/20 三列，schema 一致
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20
+
+# 启用风控公告类因子（质押/解禁/大宗，需先下载 pledge_stat/share_float/block_trade）
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-announcement-risk-features
 
 # 或者只构建clean
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-clean --horizon 20
@@ -2721,10 +2727,12 @@ LazyBull/
 │   │       ├── volatility_factors.py   # 波动结构（Parkinson/GARCH 等）
 │   │       ├── liquidity_factors.py    # 流动性风险（Amihud/量价背离等）
 │   │       ├── announcement_factors.py # 公告类（质押/解禁/大宗/融券）
+│   │       ├── announcement_lookup.py  # 公告类 PIT 日频查询表 ✅ v0.94.0
 │   │       ├── derived_factors.py      # 衍生（momentum_decay/earnings_yield）
 │   │       └── position_features.py    # 持仓上下文特征
 │   ├── features/              # 特征构建模块
-│   │   └── builder.py         # 特征构建器（调用 factors 模块）
+│   │   ├── builder.py         # 特征构建器（调用 factors 模块）
+│   │   └── handlers_announcement.py # 风控公告类因子处理器 ✅ v0.94.0
 │   ├── signals/               # 信号模块
 │   │   ├── base.py            # 信号基类
 │   │   └── ml_signal.py       # ML 信号生成器
@@ -3090,6 +3098,9 @@ def calculate_your_indicator(df: pd.DataFrame, window: int = 14) -> pd.DataFrame
 - 通用选股因子 → `src/lazybull/factors/` 根目录（如 `technical_indicators.py`）
 - **风控模型专用因子** → `src/lazybull/factors/risk/` 子包，通过 `@register_risk_factor`
   装饰器注册到 `factor_registry.py`，由 builder 统一计算；`risk/` 仅保留风控逻辑
+- 公告类原始数据（质押/解禁/大宗）→ `factors/risk/announcement_lookup.py` 构建
+  PIT 日频查询表，经 `features/handlers_announcement.py` 处理器合并进 features，
+  再交由 `announcement_factors.py` 三层加工（v0.94.0）
   （PositionRiskModel/label_builder/precompute 调度），不放因子本体
 - 新增任何因子都必须遵循此归属，避免因子逻辑散落在脚本或 risk 模块中
 
