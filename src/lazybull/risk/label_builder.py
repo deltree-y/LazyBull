@@ -51,6 +51,54 @@ def compute_rar(
     return forward_ret / (forward_vol + _EPS)
 
 
+def compute_forward_volatility(
+    df: pd.DataFrame,
+    horizon: int,
+    ret_col: str = 'ret_1',
+) -> pd.Series:
+    """自动计算每只股票每个交易日的前向 N 日年化已实现波动率。
+
+    算法（对齐 y_ret_N 的 T+1 买入约定）：
+      - 先计算每只股票的滚动 N 日 std（窗口 [t-N+1, t]）
+      - 再整体前移 N 位：T 日的前向波动率 = 窗口 [T+1, T+N] 的 std
+      - 年化：× sqrt(252)
+
+    与 forward_ret（close(T+1+N)/close(T+1)-1）使用同一窗口，保证对齐。
+
+    Args:
+        df: 含 ts_code, trade_date, ret_col 的 DataFrame（需按日期排序）
+        horizon: 持有期天数 N
+        ret_col: 日收益率列名
+
+    Returns:
+        Series（索引与 df 对齐），T 日前向 N 日年化波动率；窗口不足返回 NaN
+    """
+    if ret_col not in df.columns:
+        logger.warning(f"缺少 {ret_col} 列，无法计算前向波动率")
+        return pd.Series(np.nan, index=df.index)
+
+    if horizon <= 0:
+        logger.warning(f"持有期 horizon={horizon} 无效，返回 NaN")
+        return pd.Series(np.nan, index=df.index)
+
+    sorted_df = df.sort_values(['ts_code', 'trade_date'])
+    min_periods = max(int(horizon * 0.8), 3)
+
+    # 逐股滚动 N 日 std（向后窗口）
+    roll_std = (
+        sorted_df.groupby('ts_code')[ret_col]
+        .rolling(horizon, min_periods=min_periods)
+        .std()
+        .reset_index(level=0, drop=True)
+    )
+    # 前移 N 位 → T 日取到窗口 [T+1, T+N]
+    forward_std = roll_std.groupby(sorted_df['ts_code']).shift(-horizon)
+
+    # 对齐回原 df 的索引顺序
+    forward_vol = (forward_std * np.sqrt(252)).reindex(df.index)
+    return forward_vol
+
+
 def compute_labels_from_rar(
     rar: pd.Series,
 ) -> pd.Series:
@@ -82,17 +130,21 @@ def build_position_risk_labels(
     forward_ret_col: str = 'y_ret_10',
     forward_vol_col: Optional[str] = None,
     holding_period: int = 10,
+    ret_1_col: str = 'ret_1',
 ) -> pd.DataFrame:
     """为特征 DataFrame 构造风控标签。
 
-    如果 forward_vol_col 未指定，则尝试从 daily_adj 计算前向波动率。
-    如果不可用，则用 |forward_ret| 作为简化的波动率代理（不推荐，仅做 fallback）。
+    前向波动率的获取优先级：
+      1. forward_vol_col 指定的列（如果存在）
+      2. 从 ret_1 自动计算前向已实现波动率（推荐，无需额外数据）
+      3. 用 |forward_ret| 作为简化代理（仅当前两者都不可用）
 
     Args:
-        features_df: 含 ts_code, trade_date 和 forward_ret_col 的 DataFrame
+        features_df: 含 ts_code, trade_date, forward_ret_col 的 DataFrame
         forward_ret_col: 前向收益率列名（如 y_ret_10）
         forward_vol_col: 前向波动率列名（可选）
-        holding_period: 持有期天数（用于日志）
+        holding_period: 持有期天数（标签窗口）
+        ret_1_col: 日收益率列名（用于自动计算前向波动率）
 
     Returns:
         新增了 rar 和 label 两列的 DataFrame
@@ -105,14 +157,22 @@ def build_position_risk_labels(
 
     forward_ret = df[forward_ret_col].astype(float)
 
-    # 前向波动率
+    # 前向波动率：优先级 1 → 2 → 3
     if forward_vol_col and forward_vol_col in df.columns:
+        logger.info(f"使用前向波动率列: {forward_vol_col}")
         forward_vol = df[forward_vol_col].astype(float)
+    elif ret_1_col in df.columns:
+        logger.info(
+            f"未提供前向波动率列，从 {ret_1_col} 自动计算前向 {holding_period} 日"
+            f"已实现波动率..."
+        )
+        forward_vol = compute_forward_volatility(
+            df, horizon=holding_period, ret_col=ret_1_col
+        )
     else:
-        # Fallback：用 |ret| 作为简化代理
         logger.warning(
-            f"未找到前向波动率列 '{forward_vol_col}'，"
-            f"使用 |{forward_ret_col}| 作为简化代理（建议提供实际波动率）"
+            f"未找到前向波动率列 '{forward_vol_col}'，且缺少 {ret_1_col} 列，"
+            f"使用 |{forward_ret_col}| 作为简化代理"
         )
         forward_vol = forward_ret.abs()
 
@@ -135,8 +195,7 @@ def build_position_risk_labels(
     for trade_date, group in df[valid_mask].groupby('trade_date'):
         rar = compute_rar(
             group[forward_ret_col],
-            group[forward_vol_col] if forward_vol_col and forward_vol_col in df.columns
-            else group[forward_ret_col].abs(),
+            forward_vol.loc[group.index],
         )
         labels = compute_labels_from_rar(rar)
         df.loc[group.index, 'rar'] = rar.values
