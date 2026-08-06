@@ -224,9 +224,9 @@ def test_announcement_factors_from_wired_columns():
     features = pd.DataFrame(
         {
             "ts_code": ["000001.SZ", "600000.SH"],
-            "pledge_ratio": [0.6, 0.1],
+            "pledge_ratio": [60.0, 10.0],
             "pledge_freshness_days": [10, 100],
-            "pledge_ratio_prev": [0.4, 0.1],
+            "pledge_ratio_prev": [40.0, 10.0],
             "days_to_unlock": [15.0, 200.0],
             "unlock_ratio": [0.05, 0.02],
             "block_discount_avg_10d": [-0.03, 0.0],
@@ -235,18 +235,92 @@ def test_announcement_factors_from_wired_columns():
     )
     results = compute_all_risk_factors(df=features, daily_adj=None, market_state=None)
 
-    # 质押：0.6 × exp(-10/30)，且 >50% 触发高危
+    # 质押（百分比口径）：60 × exp(-10/30)，且 >50% 触发高危
     assert "pledge_ratio_decayed" in results
-    assert results["pledge_ratio_decayed"].iloc[0] == pytest.approx(0.6 * np.exp(-10 / 30))
-    assert results["pledge_high_flag"].iloc[0] == 1
-    assert results["pledge_high_flag"].iloc[1] == -1  # 0.1 < 0.30
-    # delta：0.6-0.4=0.2 保留；0.1-0.1=0 清零
-    assert results["pledge_delta"].iloc[0] == pytest.approx(0.2)
+    assert results["pledge_ratio_decayed"].iloc[0] == pytest.approx(60.0 * np.exp(-10 / 30))
+    assert results["pledge_high_flag"].iloc[0] == 1  # 60% > 50% 高危
+    assert results["pledge_high_flag"].iloc[1] == -1  # 10% < 30% 安全
+    # delta（百分点）：60-40=20 保留；10-10=0 清零
+    assert results["pledge_delta"].iloc[0] == pytest.approx(20.0)
     assert results["pledge_delta"].iloc[1] == 0.0
     # 解禁：15 天 → 危险档 2；200 天 → 安全 0
     assert results["unlock_risk_flag"].iloc[0] == 2
     assert results["unlock_risk_flag"].iloc[1] == 0
-    assert results["unlock_ratio"].iloc[0] == pytest.approx(0.05)
-    # 大宗：折价列直通
-    assert results["block_discount_avg_10d"].iloc[0] == pytest.approx(-0.03)
-    assert results["block_discount_days_10d"].iloc[0] == 2
+    # 透传列（unlock_ratio/block_discount_*）已由 handler 提供，因子层不再重复输出
+    assert "unlock_ratio" not in results
+    assert "block_discount_avg_10d" not in results
+    assert "block_discount_days_10d" not in results
+
+
+def test_pledge_high_flag_percentage_threshold():
+    """回归：pledge_ratio 为百分比口径（0-100），分档阈值必须是 50/30。
+
+    旧 bug：阈值按小数 0.50 写，导致 0.6%（0.6）的股票被判高危 1，
+    实测 90% 有质押股票全部误判高危（pledge_high_flag median=1.0）。
+    """
+    features = pd.DataFrame(
+        {
+            "ts_code": ["a", "b", "c", "d", "e", "f", "g"],
+            "pledge_ratio": [0.6, 29.0, 30.0, 50.0, 51.0, 75.09, np.nan],
+        }
+    )
+    results = compute_all_risk_factors(df=features, daily_adj=None, market_state=None)
+    flag = results["pledge_high_flag"]
+    assert flag.iloc[0] == -1  # 0.6% < 30% → 安全（旧代码误判为 1）
+    assert flag.iloc[1] == -1  # 29% < 30% → 安全
+    assert flag.iloc[2] == 0  # 30% 边界 → 中性
+    assert flag.iloc[3] == 0  # 50% 边界 → 中性（>50 才高危）
+    assert flag.iloc[4] == 1  # 51% > 50% → 高危
+    assert flag.iloc[5] == 1  # 75.09% → 高危
+    assert flag.iloc[6] == 0  # 缺数据 → 0
+
+
+def test_pledge_delta_threshold_percentage_points():
+    """回归：pledge_delta 的实质变化阈值应为 0.5 个百分点（百分比口径）。
+
+    旧 bug：0.005 阈值（0.005 个百分点）过严，几乎任何变化都保留为噪声。
+    """
+    features = pd.DataFrame(
+        {
+            "ts_code": ["a", "b"],
+            "pledge_ratio": [50.4, 51.0],
+            "pledge_freshness_days": [1, 1],
+            "pledge_ratio_prev": [50.0, 50.0],
+        }
+    )
+    results = compute_all_risk_factors(df=features, daily_adj=None, market_state=None)
+    delta = results["pledge_delta"]
+    assert delta.iloc[0] == 0.0  # +0.4 个百分点 < 0.5 → 清零
+    assert delta.iloc[1] == pytest.approx(1.0)  # +1.0 个百分点 → 保留
+
+
+def test_attach_risk_factors_no_duplicate_columns():
+    """回归：handler 合并原始列后，_attach_risk_factors_static 不得产生重复列。
+
+    真实场景暴露的 bug：features 已含 unlock_ratio/block_discount_*/short_balance_change_5
+    原始列，透传型因子重复输出同名列导致 pd.concat 报 Duplicate column names。
+    """
+    from src.lazybull.features.builder import _attach_risk_factors_static
+    from src.lazybull.risk.precompute import PRECOMPUTED_RISK_FACTOR_NAMES
+
+    features = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "600000.SH"],
+            "pledge_ratio": [60.0, 10.0],
+            "pledge_freshness_days": [10, 100],
+            "pledge_ratio_prev": [40.0, 10.0],
+            "days_to_unlock": [15.0, 200.0],
+            "unlock_ratio": [0.05, 0.02],
+            "block_discount_avg_10d": [-0.03, 0.0],
+            "block_discount_days_10d": [2, 0],
+            "short_balance_change_5": [0.1, -0.1],
+        }
+    )
+    result = _attach_risk_factors_static(features, "20240115", {}, PRECOMPUTED_RISK_FACTOR_NAMES)
+    # 无重复列：所有列名唯一
+    dupes = [c for c in result.columns if (result.columns == c).sum() > 1]
+    assert dupes == [], f"存在重复列: {dupes}"
+    # 原始列保留原值，加工因子（unlock_risk_flag）仍生成
+    assert (result["unlock_ratio"] == features["unlock_ratio"]).all()
+    assert "unlock_risk_flag" in result.columns
+    assert "pledge_high_flag" in result.columns

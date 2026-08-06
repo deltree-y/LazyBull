@@ -162,6 +162,11 @@ def compute_all_risk_factors(
     for name, fn in _RISK_FACTOR_REGISTRY.items():
         if exclude and name in exclude:
             continue
+        # 因子名已存在于 features（原始列已由 handler/其他因子组提供，如
+        # unlock_ratio / block_discount_avg_10d / short_balance_change_5）时跳过，
+        # 避免透传型因子重复输出同名列导致 pd.concat 报 Duplicate column names。
+        if name in df.columns:
+            continue
         try:
             series = fn(df, daily_adj=daily_adj, market_state=market_state, **kwargs)
             if isinstance(series, pd.Series):

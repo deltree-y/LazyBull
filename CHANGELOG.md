@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.2] - 2026-08-06
+
+### Fixed
+
+- **修复质押因子阈值单位 bug（`pledge_ratio` 为百分比口径 0-100）**：
+  - `pledge_high_flag` 分档阈值原按小数写（`> 0.50` / `< 0.30`），实际数据为百分比
+    （median≈3.6、max≈81），导致 0.5% 以上的质押率全部误判高危——真实构建的
+    `cs_train` 中 56.7% 股票被标记高危（median=1.0），而真实 >50% 的高危仅 0.44%；
+    修复为 `> 50` / `< 30`（百分比口径），实测高危从 2656 只降到 12 只；
+  - `pledge_delta` 的实质变化阈值原为 `abs() < 0.005`（0.005 个百分点，几乎不清零），
+    修复为 `< 0.5`（0.5 个百分点才算实质变化）；
+  - 删除 `announcement_factors.py` 中未被使用的 `_align_to_df` 死代码及未使用 import；
+  - **测试**：`tests/test_announcement_lookup.py` 新增
+    `test_pledge_high_flag_percentage_threshold`（含 0.6%/29/30/50/51/75.09 边界）与
+    `test_pledge_delta_threshold_percentage_points`（0.4 清零 / 1.0 保留）；
+    端到端测试数据统一为百分比口径；相关测试全部通过。
+  - **注意**：修复后需重新 build features（`pledge_high_flag`/`pledge_delta` 列才会
+    以正确口径进入 cs_train）。
+
+## [0.94.1] - 2026-08-06
+
+### Fixed
+
+- **修复风控公告类因子与 handler 原始列重名导致 build_clean_features 失败**：
+  - 现象：启用 `--enable-announcement-risk-features` 真实构建时，首个交易日即报
+    `Duplicate column names found`（重复列 `unlock_ratio` / `block_discount_avg_10d` /
+    `block_discount_days_10d` / `short_balance_change_5`），build 中断；
+  - 根因：`factor_handlers` 已把原始列（如 `unlock_ratio`）合并进 features，而
+    `announcement_factors.py` 中 4 个透传型因子（`compute_unlock_ratio` /
+    `compute_block_discount_avg_10d` / `compute_block_discount_days_10d` /
+    `compute_short_balance_change_5`）读取同名列并原样返回，`_attach_risk_factors_static`
+    再次 `pd.concat` 时列名重复。此前测试未暴露是因为无数据时 handler 走 NaN 占位、
+    features 中不存在这些原始列，透传型因子返回 NaN 占位不冲突；
+  - 修复：`factors/risk/factor_registry.py` 的 `compute_all_risk_factors` 统一跳过
+    `name in df.columns` 的因子（透传型因子不再重复输出同名列），覆盖串行
+    `_add_risk_factors` 回退路径与 `_attach_risk_factors_static` 主路径；
+    加工型因子（`pledge_high_flag` / `unlock_risk_flag` 等输出名 ≠ 输入列名）不受影响；
+  - **测试**：`tests/test_announcement_lookup.py` 新增
+    `test_attach_risk_factors_no_duplicate_columns`（handler 合并原始列后
+    `_attach_risk_factors_static` 无重复列、原始列保留、加工因子仍生成），
+    更新端到端断言（透传列不在因子层重复输出）；相关测试全部通过。
+
 ## [0.94.0] - 2026-08-06
 
 ### Added
