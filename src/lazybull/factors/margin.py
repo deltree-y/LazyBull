@@ -14,6 +14,8 @@
 - rzye_chg_5/20: 融资余额 N 日变动率，反映杠杆情绪变化
 - rqye_rzye_ratio: 融券余额 / 融资余额，做空情绪指标
 - margin_net_buy_ratio: 融资净买入 / 成交额，杠杆资金参与度
+- short_balance_change_5: 融券余额 5 日变化率（rqye），做空力量强弱
+- short_sell_vol_change_5: 融券卖出量 5 日变化率（rqmcl），做空活跃度
 """
 
 from typing import Dict, List, Optional
@@ -30,6 +32,8 @@ MARGIN_COLS = [
     "rzye_chg_20",
     "rqye_rzye_ratio",
     "margin_net_buy_ratio",
+    "short_balance_change_5",
+    "short_sell_vol_change_5",
 ]
 
 
@@ -76,6 +80,24 @@ def build_margin_lookup_by_date(
         df["margin_net_buy"] = df["rzmre"] - df["rzche"]
     else:
         df["margin_net_buy"] = np.nan
+
+    # 融券余额 5 日变化率（rqye）：做空力量增强 = 负面信号
+    if "rqye" in df.columns:
+        df["rqye_lag_5"] = grouped["rqye"].shift(5)
+        df["short_balance_change_5"] = (
+            (df["rqye"] - df["rqye_lag_5"]) / df["rqye_lag_5"].replace(0, np.nan)
+        )
+    else:
+        df["short_balance_change_5"] = np.nan
+
+    # 融券卖出量 5 日变化率（rqmcl）：做空活跃度
+    if "rqmcl" in df.columns:
+        df["rqmcl_lag_5"] = grouped["rqmcl"].shift(5)
+        df["short_sell_vol_change_5"] = (
+            (df["rqmcl"] - df["rqmcl_lag_5"]) / df["rqmcl_lag_5"].replace(0, np.nan)
+        )
+    else:
+        df["short_sell_vol_change_5"] = np.nan
 
     # 构建日频查询表
     date_set = set(trading_dates)

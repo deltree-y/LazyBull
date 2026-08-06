@@ -79,7 +79,8 @@ _POSITION_RISK_FEATURE_CANDIDATES = [
     'pledge_ratio_decayed', 'pledge_high_flag', 'pledge_delta',
     'unlock_risk_flag', 'unlock_ratio',
     'block_discount_avg_10d', 'block_discount_days_10d',
-    'short_balance_change_5', 'short_sell_ratio_5',
+    # 融券（由 margin_lookup 合并，零新下载）
+    'short_balance_change_5', 'short_sell_vol_change_5',
     # 行业/市值中性化后的版本
     'zscore_volatility_20', 'zscore_turnover_rate', 'zscore_pe_ttm',
     'zscore_amount_ma20', 'zscore_ma_deviation_20',
@@ -89,17 +90,56 @@ _POSITION_RISK_FEATURE_CANDIDATES = [
 # 过滤标记（非特征，跳过）
 _NON_FEATURE_COLS = {'ts_code', 'trade_date', 'label', 'rar'}
 
+# ── 截面归一化（百分位）特征：对绝对值跨市场环境漂移严重的因子，
+# 按交易日截面 rank(pct=True) 转成 0~1 相对分位，消除牛熊市阈值漂移。
+_PCT_NORMALIZED_FEATURES = [
+    # 动量/价格类（诊断证实截面漂移最严重：ret_20 月均值 -7% ~ +12%）
+    'ret_5', 'ret_20', 'momentum_decay', 'ret_volatility_ratio',
+    'acceleration', 'ma_deviation_20', 'rsi_14', 'bb_pct',
+    # 波动率类
+    'volatility_20', 'downside_vol_20', 'parkinson_vol_20',
+    'var_95_20', 'cvar_95_20', 'max_drawdown_20',
+    'vol_of_vol_20', 'high_low_range_ratio', 'gap_risk',
+    # 流动性类
+    'amihud_illiq_20', 'turnover_cv_20', 'amount_cv_20',
+    'vol_ratio_5_20', 'up_down_vol_ratio', 'volume_price_divergence',
+]
 
-def _select_available_features(df: pd.DataFrame) -> List[str]:
+
+def _add_pct_features(df: pd.DataFrame) -> pd.DataFrame:
+    """为 _PCT_NORMALIZED_FEATURES 中存在的列计算按交易日的截面百分位。
+
+    输出列为 pct_<原名>，取值 0~1（rank pct=True，按 trade_date 分组）。
+    """
+    existing = [c for c in _PCT_NORMALIZED_FEATURES if c in df.columns]
+    if not existing:
+        logger.warning("无可用特征做截面百分位归一化")
+        return df
+    result = df.copy()
+    for col in existing:
+        result[f'pct_{col}'] = result.groupby('trade_date')[col].rank(pct=True)
+    logger.info(f"已添加 {len(existing)} 个截面百分位特征 (pct_*)")
+    return result
+
+
+def _select_available_features(df: pd.DataFrame, add_pct: bool = True) -> List[str]:
     """从 DataFrame 中筛选实际可用的特征列，并剔除无效列。
 
     有效性规则：
       - 必须存在于 df 中
       - 剔除全 NaN 列（如未接入数据的公告类因子）
       - 剔除方差为 0 的常数列（对模型无信息量）
+
+    Args:
+        df: 特征 DataFrame（已含 pct_* 列）
+        add_pct: 是否把截面百分位特征（pct_*）追加到候选列表
     """
+    candidates = list(_POSITION_RISK_FEATURE_CANDIDATES)
+    if add_pct:
+        candidates += [f'pct_{c}' for c in _PCT_NORMALIZED_FEATURES]
+
     available = []
-    for col in _POSITION_RISK_FEATURE_CANDIDATES:
+    for col in candidates:
         if col not in df.columns or col in _NON_FEATURE_COLS:
             continue
         series = df[col]
@@ -114,8 +154,8 @@ def _select_available_features(df: pd.DataFrame) -> List[str]:
             continue
         available.append(col)
     logger.info(
-        f"特征筛选: {len(available)}/{len(_POSITION_RISK_FEATURE_CANDIDATES)} 个可用 "
-        f"（剔除全NaN/常数列 {len(_POSITION_RISK_FEATURE_CANDIDATES) - len(available)} 个）"
+        f"特征筛选: {len(available)}/{len(candidates)} 个可用 "
+        f"（剔除全NaN/常数列 {len(candidates) - len(available)} 个）"
     )
     return available
 
@@ -320,6 +360,11 @@ def main():
     # 日志级别
     parser.add_argument('--log-level', default='INFO',
                         help='日志级别: DEBUG | INFO | WARNING | ERROR')
+    # 截面百分位归一化特征开关
+    parser.add_argument('--add-pct-features', action='store_true', default=True,
+                        help='是否添加截面百分位特征（pct_*，消除牛熊市阈值漂移）')
+    parser.add_argument('--no-pct-features', action='store_false', dest='add_pct_features',
+                        help='关闭截面百分位特征')
 
     args = parser.parse_args()
 
@@ -343,6 +388,10 @@ def main():
         logger.error("未找到特征数据，请先运行 build_clean_features.py")
         sys.exit(1)
 
+    # 截面百分位归一化特征（消除绝对值的市场环境漂移）
+    if args.add_pct_features:
+        features_df = _add_pct_features(features_df)
+
     # 构造标签
     logger.info("构造风控标签...")
     features_df = build_position_risk_labels(
@@ -357,7 +406,7 @@ def main():
         sys.exit(1)
 
     # 确定可用特征
-    feature_names = _select_available_features(valid_df)
+    feature_names = _select_available_features(valid_df, add_pct=args.add_pct_features)
     if len(feature_names) < 10:
         logger.error(f"可用特征过少 ({len(feature_names)})")
         sys.exit(1)

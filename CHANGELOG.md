@@ -17,6 +17,20 @@ All notable changes to this project will be documented in this file.
   - 新增 `src/lazybull/factors/risk/__init__.py`（导出 registry 三接口）；
   - **测试**：`tests/test_risk_precompute.py`（13 passed）验证迁移后无回归。
 
+- **风控模型特征增强（融券因子 + 截面百分位归一化）**：
+  - `src/lazybull/factors/margin.py` 新增 2 个融券因子（零新下载，复用已有
+    margin_detail）：`short_balance_change_5`（融券余额 5 日变化率，rqye）、
+    `short_sell_vol_change_5`（融券卖出量 5 日变化率，rqmcl）；经
+    `build_margin_lookup_by_date` → FeatureContext → MarginFactorHandler
+    全链路自动并入 features（含 ensure 增量路径）；
+  - `scripts/train_position_risk_model.py` 新增截面百分位归一化特征
+    （`--add-pct-features`，默认开启）：对 24 个绝对值跨市场环境漂移严重的
+    因子（动量/波动率/流动性类，诊断证实 `ret_20` 月均值漂移 8.6 倍）按
+    交易日截面 `rank(pct=True)` 转 0~1 相对分位，消除牛熊市阈值漂移，
+    输出 `pct_<原名>` 列并自动加入候选列表；
+  - **注意**：融券列需重新 build features（build_clean_features）后进入
+    cs_train/cs_infer；截面百分位特征为训练期现算，无需新列。
+
 ## [0.92.3] - 2026-08-05
 
 ### Fixed
