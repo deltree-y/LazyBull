@@ -137,6 +137,36 @@ def test_share_float_lookup_empty_input():
     assert build_share_float_lookup_by_date(None, ["20240101"]) == {}
 
 
+def test_share_float_lookup_aggregates_multi_holder_same_float_date():
+    """回归：同一 (ts_code, float_date) 多持有人记录，unlock_ratio 应聚合求和。
+
+    旧 bug：float_ratio 为单持有人占总股本比例（百分比 0-100，通常 0.0002%），
+    取最近解禁日一条导致 unlock_ratio 是单持有人比例（低估约百倍）。
+    同批解禁总比例 = 各持有人 float_ratio 求和。
+    """
+    raw = pd.DataFrame(
+        [
+            {
+                "ts_code": "603080.SH",
+                "ann_date": "20180102",
+                "float_date": "20210104",
+                "float_ratio": 33.0919,
+            },
+            {
+                "ts_code": "603080.SH",
+                "ann_date": "20180102",
+                "float_date": "20210104",
+                "float_ratio": 5.2580,
+            },
+        ]
+    )
+    lookup = build_share_float_lookup_by_date(raw, ["20180115", "20210103"])
+    row = lookup["20210103"].iloc[0]  # 解禁前一日
+    # 聚合求和：33.0919 + 5.2580 = 38.3499（该批总解禁比例）
+    assert row["unlock_ratio"] == pytest.approx(38.3499)
+    assert row["days_to_unlock"] == 1  # 20210104 - 20210103
+
+
 # ═══════════════════════════════════════════════════════════════
 # 大宗交易 lookup
 # ═══════════════════════════════════════════════════════════════
@@ -324,3 +354,99 @@ def test_attach_risk_factors_no_duplicate_columns():
     assert (result["unlock_ratio"] == features["unlock_ratio"]).all()
     assert "unlock_risk_flag" in result.columns
     assert "pledge_high_flag" in result.columns
+
+
+# ═══════════════════════════════════════════════════════════════
+# share_float 下载器（按 float_date 查询 + 按 ann_date 分组落盘）
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def share_float_storage():
+    import tempfile
+
+    from src.lazybull.data import Storage
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield Storage(tmpdir)
+
+
+def _make_share_float_client(records, trade_dates):
+    """构造模拟 TuShare share_float 语义的 client：ann_date 单值查询 + get_trade_cal。"""
+    from unittest.mock import Mock
+
+    client = Mock()
+    columns = ["ts_code", "ann_date", "float_date", "float_ratio"]
+
+    def fake_query(api, **kwargs):
+        if api != "share_float":
+            return pd.DataFrame()
+        date = kwargs.get("ann_date")
+        rows = [r for r in records if r["ann_date"] == date]
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=columns)
+
+    client.query = Mock(side_effect=fake_query)
+    client.get_trade_cal.return_value = pd.DataFrame(
+        {"cal_date": trade_dates, "is_open": [1] * len(trade_dates)}
+    )
+    return client
+
+
+def test_download_share_float_query_semantics_and_ann_date_partition(
+    monkeypatch, share_float_storage
+):
+    """回归：share_float 按 ann_date 逐交易日查询、按公告年分区落盘。
+
+    旧 bug：按 float_date 查询后按 `ann_date[:4]==year` 过滤，导致"前几年公告、
+    当年解禁"的记录被误删（2018/2019/2021/2023 年分区只剩 12 月公告）；且
+    float_date 按月深翻页会触发 TuShare offset 上限（"查询数据失败"）。
+    新逻辑：按 ann_date 单值逐交易日查询（每天公告约 10 条，单次即取全），
+    直接按公告年分组落盘。
+    """
+    import scripts.raw_download.core as raw_core
+    from scripts.raw_download.announcement_risk import download_share_float
+
+    monkeypatch.setattr(raw_core, "_DOWNLOAD_CONCURRENCY", 1)  # 串行，确定性
+
+    records = [
+        # 2018 年两个公告日（同年公告）
+        {"ts_code": "A.SZ", "ann_date": "20180310", "float_date": "20181110", "float_ratio": 0.1},
+        {"ts_code": "B.SZ", "ann_date": "20180920", "float_date": "20200615", "float_ratio": 0.2},
+        # 2019 年公告
+        {"ts_code": "C.SZ", "ann_date": "20191210", "float_date": "20211225", "float_ratio": 0.3},
+        # 2016 年公告（非目标公告年，应跳过不落盘）
+        {"ts_code": "D.SZ", "ann_date": "20160105", "float_date": "20180401", "float_ratio": 0.4},
+    ]
+    trade_dates = [
+        "20160105",
+        "20180101",
+        "20180310",
+        "20180920",
+        "20180921",
+        "20191210",
+        "20191211",
+    ]
+    client = _make_share_float_client(records, trade_dates)
+
+    download_share_float(client, share_float_storage, "20180101", "20191231", force=True)
+
+    # 2018 分区：A + B（2018 年公告，B 解禁日 2020 也无妨）
+    p2018 = share_float_storage.load_raw_by_date("share_float", "2018-12-31")
+    assert p2018 is not None and len(p2018) == 2
+    assert set(p2018["ts_code"]) == {"A.SZ", "B.SZ"}
+    # 2019 分区：C
+    p2019 = share_float_storage.load_raw_by_date("share_float", "2019-12-31")
+    assert p2019 is not None and len(p2019) == 1
+    assert p2019["ts_code"].iloc[0] == "C.SZ"
+    # 非目标公告年（2016）不落盘
+    assert share_float_storage.load_raw_by_date("share_float", "2016-12-31") is None
+    # 查询按 ann_date 单值逐日调用（覆盖目标区间交易日）
+    queried = {
+        str(c.kwargs.get("ann_date"))
+        for c in client.query.call_args_list
+        if c.args and c.args[0] == "share_float"
+    }
+    assert "20180310" in queried
+    assert "20191210" in queried
+    # get_trade_cal 按目标区间获取交易日
+    client.get_trade_cal.assert_called_once_with(start_date="20180101", end_date="20191231")

@@ -29,6 +29,7 @@ _API_RATE_LIMITS_DEFAULT: Dict[str, int] = {
     "cyq_perf": 180,
     "margin_detail": 280,
     "block_trade": 480,
+    "share_float": 480,
     "top_list": 480,  # 官方限频 500 次/分钟, 客户端侧留 10% 余量避免被限流
     "daily": 480,  # 官方限频 500 次/分钟, 客户端侧留 10% 余量避免被限流
     "report_rc": 280,  # 官方限频约 200~300 次/分钟, 客户端侧保守取值避免长期高并发被拒

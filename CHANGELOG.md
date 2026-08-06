@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.4] - 2026-08-06
+
+### Fixed
+
+- **修复 `unlock_ratio` 因子对同批多持有人解禁只取单条记录导致严重低估**：
+  - 现象：`share_float` 原始数据中同一 (ts_code, float_date)（同一批解禁）有大量
+    持有人记录（80.6% 的批次多条，最多 6000 条），`float_ratio` 是**单持有人**
+    占总股本比例（百分比 0-100，多数 0.0002%）；
+  - 旧实现 `build_share_float_lookup_by_date` 取"已公告未解禁"中最近解禁日
+    **一条**记录，`unlock_ratio` 变成单持有人比例（0.0002% 级），而非该批
+    解禁总比例（实测聚合后中位数 10%），低估约百倍；
+  - 修复（`src/lazybull/factors/risk/announcement_lookup.py`）：先按
+    `(ts_code, float_date)` 分组，`float_ratio` 求和（同批解禁总比例，实测
+    中位数 10.1%、最大 99.5% <100% 合理）、`ann_date` 取该批最早公告日，
+    再走原 PIT 逻辑（取最近解禁日一条）；`days_to_unlock` 不受影响；
+  - 效果（真实数据）：20180115 截面 `unlock_ratio` median 从 0.0002% 级 →
+    4.76%（24 只有解禁，max 77.33%）；
+  - **测试**：`tests/test_announcement_lookup.py` 新增
+    `test_share_float_lookup_aggregates_multi_holder_same_float_date`
+    （603080.SH 两条 33.09+5.26 → 38.35）；
+  - **注意**：`unlock_ratio` 因子列需重新 build features 后进入 cs_train。
+
+## [0.94.3] - 2026-08-06
+
+### Fixed
+
+- **修复 `share_float` 下载器查询语义错误导致解禁数据严重缺失**：
+  - 现象：2018/2019/2021/2023 年分区只剩 12 月公告的残缺数据（2019 年仅 35 条），
+    解禁因子 `days_to_unlock`/`unlock_ratio` 在 features 里几乎全空（非空率 0%）；
+  - 根因 1（语义）：TuShare `share_float` 的 `start_date/end_date` 语义是
+    **float_date（解禁日）** 而非 ann_date（公告日），旧代码按 float_date 查询后
+    再按 `ann_date[:4]==year` 过滤，只保留"当年公告且当年解禁"的记录，而大部分
+    "前几年公告、当年解禁"的记录被误删；
+  - 根因 2（翻页）：按 float_date 查询返回解禁明细（每年 30-55 万条），且单次
+    `limit` 上限 6000、offset 深翻页有上限（约 100000，超限报"查询数据失败"），
+    旧实现 `page_limit=20000` 导致首屏 6000 条被误判"已取完"，每年只取到
+    float_date 最晚（12 月末）的一批；
+  - 修复（`scripts/raw_download/announcement_risk.py`）：改为按 **ann_date 单值
+    逐交易日查询**（`ann_date=YYYYMMDD`，每天公告约 10-2000 条，单次查询即取全、
+    无分页），用交易日历生成目标公告年内交易日，并发 8 逐日拉取，按公告年分组落盘；
+  - 效果（实测 2018-2019）：2018 分区从 5713 条（仅 12 月）→ 340049 条（1-12 月
+    全年覆盖），2019 从 35 条 → 551711 条；487 个交易日 40 秒完成、零错误；
+  - **注意**：其他年份（2012-2017/2020-2026）分区仍为旧逻辑残缺数据，需重跑
+    `python scripts/download_raw.py --download share_float --start-date 20120101
+    --end-date 20261231 --force` 全量覆盖；
+  - **测试**：更新 `tests/test_announcement_lookup.py` 下载器回归测试为
+    ann_date 逐日查询语义 + 公告年分区 + `get_trade_cal` 调用断言。
+
 ## [0.94.2] - 2026-08-06
 
 ### Fixed

@@ -8,8 +8,10 @@ factors/consensus_revision 等 lookup builder 同模式），供 features 层因
 PIT 契约（与 scripts/raw_download/announcement_risk.py 保持一致）：
   - pledge_stat : PIT 按公告日（ann_date，缺失时回退 end_date）前向填充，
                   输出 pledge_ratio / pledge_freshness_days / pledge_ratio_prev；
-  - share_float : 仅 ann_date <= T 且 float_date > T（未解禁）的公告可见，
-                  取最近解禁日一条，输出 days_to_unlock / unlock_ratio；
+  - share_float : float_ratio 为单持有人占总股本比例（百分比 0-100），先按
+                  (ts_code, float_date) 聚合求和（同批解禁总比例），再按
+                  ann_date <= T 且 float_date > T 取最近解禁日一条，
+                  输出 days_to_unlock / unlock_ratio；
   - block_trade : 大宗交易当日可见，按近 10 个交易日聚合折价（未复权收盘价），
                   输出 block_discount_avg_10d / block_discount_days_10d。
 
@@ -186,6 +188,13 @@ def build_share_float_lookup_by_date(
         logger.warning("share_float 缺少 float_ratio 列，无法构建解禁查询表")
         return {}
     df["float_ratio"] = pd.to_numeric(df["float_ratio"], errors="coerce")
+
+    # ── 同批解禁聚合：float_ratio 为"单个持有人"占总股本比例（百分比 0-100），
+    # 同一 (ts_code, float_date)（同一批解禁）有多条持有人记录，求和才是该批
+    # 解禁总比例（实测中位数约 10%、最大 <100%）；公告日取该批最早公告。
+    df = df.groupby(["ts_code", "float_date"], as_index=False).agg(
+        ann_date=("ann_date", "min"), float_ratio=("float_ratio", "sum")
+    )
     df = df.sort_values(["ts_code", "float_date"])
 
     trade_ord = _trade_ord(trading_dates)
