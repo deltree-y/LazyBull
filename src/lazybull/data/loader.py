@@ -1,5 +1,6 @@
 """数据加载模块"""
 
+import warnings
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -628,7 +629,16 @@ class DataLoader(AnnouncementRiskLoaderMixin):
         if not dfs:
             logger.warning("未找到一致预期研报数据")
             return None
-        result = pd.concat(dfs, ignore_index=True)
+        # 抑制 pandas 对 concat 含 all-NA 列时的 FutureWarning：
+        # report_rc 按年分区存储，部分分区存在整列全 NA 的情况，
+        # 该警告对结果无影响，仅屏蔽避免刷屏（与 storage.py 统一模式一致）。
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=FutureWarning,
+                message=".*DataFrame concatenation with empty or all-NA entries.*",
+            )
+            result = pd.concat(dfs, ignore_index=True)
         if "report_date" in result.columns:
             result["report_date"] = normalize_series_to_yyyymmdd(result["report_date"])
         return result

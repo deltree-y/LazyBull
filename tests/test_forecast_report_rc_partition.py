@@ -13,6 +13,7 @@
 """
 
 import tempfile
+import warnings
 
 import pandas as pd
 import pytest
@@ -256,3 +257,35 @@ class TestLoaderPartitionLoading:
         """无分区时返回 None (纯分区, 无单文件兜底)。"""
         loader = DataLoader(temp_storage)
         assert loader.load_report_rc() is None
+
+    def test_load_report_rc_all_na_column_no_future_warning(self, temp_storage):
+        """含全 NA 列的分区合并时不触发 concat FutureWarning（告警已屏蔽）。
+
+        背景: report_rc 按年分区存储, 部分分区存在整列全 NA (如 org_name 某年
+        全部缺失), 裸 pd.concat 会触发 pandas FutureWarning (DataFrame
+        concatenation with empty or all-NA entries is deprecated), 纸面交易
+        run 时被黄色告警刷屏; load_report_rc 现与 storage.py 统一模式屏蔽该告警。
+        """
+        df1 = pd.DataFrame(
+            [{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}]
+        )
+        # 模拟真实场景: 部分分区整列全 NA (org_name 字段某年全部缺失)
+        df2 = pd.DataFrame(
+            [{"ts_code": "000002.SZ", "report_date": "20260410", "org_name": None}]
+        )
+        temp_storage.save_raw_by_date(df1, "report_rc", "2025-12-31")
+        temp_storage.save_raw_by_date(df2, "report_rc", "2026-12-31")
+
+        loader = DataLoader(temp_storage)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = loader.load_report_rc()
+
+        assert result is not None and len(result) == 2
+        concat_warnings = [
+            w
+            for w in caught
+            if issubclass(w.category, FutureWarning)
+            and "DataFrame concatenation with empty or all-NA entries" in str(w.message)
+        ]
+        assert concat_warnings == []

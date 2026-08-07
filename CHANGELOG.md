@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.8] - 2026-08-07
+
+### Fixed
+
+- **修复纸面交易链路 report_rc 加载触发 pandas concat FutureWarning**：
+  - 背景：纸面交易 run 加载"一致预期研报（report_rc）"时，`load_report_rc` 合并按年
+    分区的 DataFrame，部分分区存在整列全 NA，触发 pandas FutureWarning
+    （DataFrame concatenation with empty or all-NA entries is deprecated），
+    日志被黄色告警刷屏（每次 run 出现两次）；
+  - 根因：`src/lazybull/data/loader.py` 的 `load_report_rc` 使用裸
+    `pd.concat(dfs, ignore_index=True)`，未像 `storage.py` 那样屏蔽该告警；
+  - `src/lazybull/data/loader.py`：新增 `import warnings`，`load_report_rc` 的
+    concat 使用 `warnings.catch_warnings()` + `filterwarnings` 精确屏蔽该
+    FutureWarning（与 storage.py 统一模式一致，不改动任何数据）；
+  - 影响：仅消除告警刷屏，concat 结果与 schema 完全不变。
+
 ## [0.94.7] - 2026-08-07
 
 ### Fixed
