@@ -9,6 +9,9 @@
 - 汇总所有公募基金对同一只股票的持仓，得到机构共识
 - 基金持股比例上升 + 持仓基金数量增加 → 机构看好
 - fund_count_chg 捕捉"拥挤度"变化（人多→可能过热，人少→可能冷门价值）
+
+披露口径：一季报/三季报仅披露前十大重仓，半年报/年报披露全量持仓。
+故变化量只在相隔两个季度的同口径报告期之间计算（0331↔0930、0630↔1231）。
 """
 
 from typing import Dict, List, Optional
@@ -22,9 +25,9 @@ from .announcement_utils import build_latest_announcement_lookup_by_date
 
 FUND_PORTFOLIO_COLS = [
     "fund_hold_ratio",  # 基金持股占流通股比例（全基金汇总）
-    "fund_hold_ratio_chg",  # 基金持股比例季度环比变化
+    "fund_hold_ratio_chg",  # 基金持股比例较同口径上一报告期的变化
     "fund_count",  # 持仓基金数量
-    "fund_count_chg",  # 持仓基金数量季度变化
+    "fund_count_chg",  # 持仓基金数量较同口径上一报告期的变化
 ]
 
 FUND_PORTFOLIO_FRESHNESS_COL = "fund_portfolio_freshness_days"
@@ -40,18 +43,22 @@ FUND_PORTFOLIO_RAW_COLS = [
 _QUARTER_ENDS = ["0331", "0630", "0930", "1231"]
 
 
-def _prev_quarter_end(end_date) -> Optional[str]:
-    """返回紧邻上一季度末（YYYYMMDD），非法或非季度末返回 None。"""
+def _prev_same_scope_end(end_date) -> Optional[str]:
+    """返回同披露口径的上一报告期（YYYYMMDD），非法或非季度末返回 None。
+
+    公募基金一季报/三季报仅披露前十大重仓，半年报/年报披露全量持仓，
+    故持股比例与持仓基金数只在相隔两个季度的同口径报告期之间可比。
+    """
     text = str(end_date)
     if len(text) != 8 or not text.isdigit():
         return None
     year, month_day = text[:4], text[4:]
     if month_day not in _QUARTER_ENDS:
         return None
-    idx = _QUARTER_ENDS.index(month_day)
-    if idx == 0:
-        return f"{int(year) - 1}1231"
-    return f"{year}{_QUARTER_ENDS[idx - 1]}"
+    idx = _QUARTER_ENDS.index(month_day) - 2
+    if idx < 0:
+        return f"{int(year) - 1}{_QUARTER_ENDS[idx + 4]}"
+    return f"{year}{_QUARTER_ENDS[idx]}"
 
 
 def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -124,23 +131,23 @@ def build_fund_portfolio_lookup_by_date(
     if len(agg) == 0:
         return {}
 
-    # 按股票+报告期排序，计算季度变化
-    agg = agg.sort_values(["symbol", "end_date"])
-    grouped = agg.groupby("symbol")
-    agg["fund_hold_ratio_prev"] = grouped["fund_hold_ratio"].shift(1)
-    agg["fund_count_prev"] = grouped["fund_count"].shift(1)
-    agg["prev_ann_date"] = grouped["ann_date"].shift(1)
-    agg["prev_end_date"] = grouped["end_date"].shift(1)
-    agg["fund_hold_ratio_chg"] = agg["fund_hold_ratio"] - agg["fund_hold_ratio_prev"]
-    agg["fund_count_chg"] = agg["fund_count"] - agg["fund_count_prev"]
+    # 变化量只对比同披露口径的上一报告期（相隔两个季度），避免前十大/全量口径断层
+    agg = agg.sort_values(["symbol", "end_date"]).reset_index(drop=True)
+    agg["prev_end_date"] = agg["end_date"].map(_prev_same_scope_end)
+    keyed = agg.drop_duplicates(subset=["symbol", "end_date"], keep="last").set_index(
+        ["symbol", "end_date"]
+    )
+    prev = keyed.reindex(pd.MultiIndex.from_arrays([agg["symbol"], agg["prev_end_date"]]))
 
-    # 上期延迟披露（公告日晚于本期）会造成前视；上期非紧邻季度则环比口径不可比。
-    prev_ann = agg["prev_ann_date"].fillna("")
-    cur_ann = agg["ann_date"].fillna("")
-    prev_end = agg["prev_end_date"].fillna("")
-    expected_prev_end = agg["end_date"].map(_prev_quarter_end).fillna("")
-    invalid_chg = (prev_ann > cur_ann) | (prev_end != expected_prev_end)
-    agg.loc[invalid_chg, ["fund_hold_ratio_chg", "fund_count_chg"]] = np.nan
+    agg["fund_hold_ratio_chg"] = agg["fund_hold_ratio"].to_numpy() - prev[
+        "fund_hold_ratio"
+    ].to_numpy(dtype=float)
+    agg["fund_count_chg"] = agg["fund_count"].to_numpy() - prev["fund_count"].to_numpy(dtype=float)
+
+    # 上期延迟披露（公告日晚于本期）会造成前视
+    prev_ann = pd.Series(prev["ann_date"].to_numpy(), index=agg.index).fillna("")
+    lookahead = prev_ann > agg["ann_date"].fillna("")
+    agg.loc[lookahead, ["fund_hold_ratio_chg", "fund_count_chg"]] = np.nan
 
     agg["ts_code"] = agg["symbol"].map(_symbol_to_ts_code)
     agg = agg.dropna(subset=["ts_code", "ann_date"])

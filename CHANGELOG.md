@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.10] - 2026-08-07
+
+### Fixed
+
+- **修复 fund_portfolio 变化量因子的披露口径断层**：
+  - 背景：公募基金一季报/三季报**仅披露前十大重仓股**，半年报/年报**披露全量持仓**。
+    `fund_hold_ratio` / `fund_count` 按季度相邻作差时，Q1↔H1、H1↔Q3、Q3↔年报
+    四对里有三对跨口径，`fund_hold_ratio_chg` / `fund_count_chg` 实际上大部分时候
+    在度量"披露口径切换"而非"机构增减持"，噪声量级大于 v0.94.9 修掉的前视；
+  - `src/lazybull/factors/fund_portfolio.py`：
+    - `_prev_quarter_end()` 改为 `_prev_same_scope_end()`，返回**同口径上一报告期**
+      （相隔两个季度：0331←上年 0930、0630←上年 1231、0930←0331、1231←0630）；
+    - 变化量不再用 `shift(1)` 取排序后的紧邻记录，改为按 `(symbol, 同口径上期 end_date)`
+      精确 `reindex` 查找；该报告期缺失（如某季度无基金持有）则为 NaN；
+    - 保留 v0.94.9 的延迟披露校验：同口径上期公告日晚于本期时置 NaN；
+  - `src/lazybull/ml/train_core/constants.py`：同步更新 `FUND_FEATURE_COLUMNS` 注释；
+  - 测试：`tests/test_fund_portfolio_factor.py` 改造环比用例为同口径语义，新增
+    "相邻季度跨口径不作差"与"年报对半年报"两个用例；
+  - 影响：列名与 schema 不变；跨口径的相邻季度作差由错误取值变为 NaN，同口径期间
+    的变化量口径统一为"半年度变化"。因子取值分布变化较大，建议重建特征后重新训练。
+
 ## [0.94.9] - 2026-08-07
 
 ### Fixed
@@ -28,11 +49,6 @@ All notable changes to this project will be documented in this file.
     `tests/test_fund_portfolio_factor.py` 新增上期延迟披露、上期非紧邻季度两个用例；
   - 影响：仅收紧上述两个因子的可用信息边界，正常披露路径下取值不变；异常路径下
     由错误取值变为 NaN，`freshness_days` 与 schema 均不受影响。
-
-### Known
-
-- `fund_hold_ratio` / `fund_count` 仍存在披露口径断层：一季报/三季报仅披露前十大
-  重仓，半年报/年报披露全量持仓，环比在跨口径季度间的可比性有限。此项待单独处理。
 
 ## [0.94.8] - 2026-08-07
 

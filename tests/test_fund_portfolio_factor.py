@@ -173,17 +173,36 @@ class TestBuildFundPortfolioLookup:
         assert row["fund_hold_ratio"] == pytest.approx(5.3)
         assert row["fund_count"] == 3
 
-    def test_hold_ratio_chg(self, mock_fund_portfolio_data, trading_dates_fund):
-        """验证季度环比变化"""
+    def test_hold_ratio_chg(self):
+        """验证同口径报告期（相隔两个季度）的变化量"""
+        df = pd.DataFrame([
+            {
+                "symbol": "000001", "ann_date": "20230420", "end_date": "20230331",
+                "fund_hold_ratio": 3.5, "fund_count": 2,
+            },
+            {
+                "symbol": "000001", "ann_date": "20231020", "end_date": "20230930",
+                "fund_hold_ratio": 5.3, "fund_count": 3,
+            },
+        ])
+        lookup = build_fund_portfolio_lookup_by_date(df, ["20231021"], pre_aggregated=True)
+        row = lookup["20231021"]
+        row = row[row["ts_code"] == "000001.SZ"].iloc[0]
+        assert row["fund_hold_ratio_chg"] == pytest.approx(1.8)
+        assert row["fund_count_chg"] == pytest.approx(1)
+
+    def test_chg_skips_adjacent_quarter_across_scope(
+        self, mock_fund_portfolio_data, trading_dates_fund
+    ):
+        """相邻季度跨披露口径（半年报全量 vs 三季报前十大），不得直接作差"""
         lookup = build_fund_portfolio_lookup_by_date(
             mock_fund_portfolio_data, trading_dates_fund
         )
         df = lookup["20231029"]
         row = df[df["ts_code"] == "000001.SZ"].iloc[0]
-        # Q3 ratio(5.3) - Q2 ratio(3.5) = 1.8
-        assert row["fund_hold_ratio_chg"] == pytest.approx(1.8)
-        # Q3 count(3) - Q2 count(2) = 1
-        assert row["fund_count_chg"] == pytest.approx(1)
+        # 20230930 的同口径上期是 20230331，数据中不存在
+        assert np.isnan(row["fund_hold_ratio_chg"])
+        assert np.isnan(row["fund_count_chg"])
 
     def test_first_quarter_chg_is_nan(self, mock_fund_portfolio_data, trading_dates_fund):
         """第一个季度没有前值，变化应为 NaN"""
@@ -195,11 +214,11 @@ class TestBuildFundPortfolioLookup:
         assert np.isnan(row["fund_hold_ratio_chg"])
         assert np.isnan(row["fund_count_chg"])
 
-    def test_chg_nan_when_prev_quarter_announced_later(self):
-        """上期公告日晚于本期时，环比应置 NaN（防前视）"""
+    def test_chg_nan_when_prev_period_announced_later(self):
+        """同口径上期公告日晚于本期时，变化量应置 NaN（防前视）"""
         df = pd.DataFrame([
             {
-                "symbol": "000001", "ann_date": "20231101", "end_date": "20230630",
+                "symbol": "000001", "ann_date": "20231101", "end_date": "20230331",
                 "fund_hold_ratio": 3.5, "fund_count": 2,
             },
             {
@@ -214,23 +233,23 @@ class TestBuildFundPortfolioLookup:
         assert np.isnan(row["fund_hold_ratio_chg"])
         assert np.isnan(row["fund_count_chg"])
 
-    def test_chg_nan_when_quarter_not_adjacent(self):
-        """上期不是紧邻季度时，环比口径不可比，应置 NaN"""
+    def test_chg_pairs_annual_with_half_year(self):
+        """年报（10月31日之后的 1231）应与同年半年报对比"""
         df = pd.DataFrame([
             {
-                "symbol": "000001", "ann_date": "20230420", "end_date": "20230331",
-                "fund_hold_ratio": 3.5, "fund_count": 2,
+                "symbol": "600000", "ann_date": "20230830", "end_date": "20230630",
+                "fund_hold_ratio": 2.0, "fund_count": 8,
             },
             {
-                "symbol": "000001", "ann_date": "20231020", "end_date": "20230930",
-                "fund_hold_ratio": 5.3, "fund_count": 3,
+                "symbol": "600000", "ann_date": "20240330", "end_date": "20231231",
+                "fund_hold_ratio": 2.6, "fund_count": 11,
             },
         ])
-        lookup = build_fund_portfolio_lookup_by_date(df, ["20231021"], pre_aggregated=True)
-        row = lookup["20231021"]
-        row = row[row["ts_code"] == "000001.SZ"].iloc[0]
-        assert np.isnan(row["fund_hold_ratio_chg"])
-        assert np.isnan(row["fund_count_chg"])
+        lookup = build_fund_portfolio_lookup_by_date(df, ["20240401"], pre_aggregated=True)
+        row = lookup["20240401"]
+        row = row[row["ts_code"] == "600000.SH"].iloc[0]
+        assert row["fund_hold_ratio_chg"] == pytest.approx(0.6)
+        assert row["fund_count_chg"] == pytest.approx(3)
 
     def test_empty_input(self, trading_dates_fund):
         """空数据返回空字典"""

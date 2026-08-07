@@ -56,9 +56,9 @@ CYQ_FEATURE_COLUMNS = [
 
 FUND_FEATURE_COLUMNS = [
     "fund_hold_ratio",  # 基金持股占流通股比例
-    "fund_hold_ratio_chg",  # 基金持股比例季度变化
+    "fund_hold_ratio_chg",  # 基金持股比例较同口径上一报告期的变化
     "fund_count",  # 持仓基金数量
-    "fund_count_chg",  # 持仓基金数量季度变化
+    "fund_count_chg",  # 持仓基金数量较同口径上一报告期的变化
     "fund_portfolio_freshness_days",  # 最近一次基金持仓公告距当日天数
 ]
 
