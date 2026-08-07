@@ -29,33 +29,51 @@ def _compute_revenue_yoy(ex: pd.DataFrame) -> None:
 
     逻辑：同一 ts_code，当前 end_date 对比去年同期（年份-1、月日相同）的 revenue。
     公式：(当期revenue - 去年同期revenue) / abs(去年同期revenue) * 100
+
+    去年同期只取本期公告日当天及之前已披露的版本，避免重述公告造成跨期前视。
     """
-    if "revenue" not in ex.columns or "end_date" not in ex.columns:
+    required = {"revenue", "end_date", "ann_date"}
+    if not required.issubset(ex.columns):
         ex["revenue_yoy"] = np.nan
         return
 
-    # 构建 (ts_code, end_date) -> revenue 的映射
-    rev_map: Dict[tuple, float] = {}
-    for _, row in ex.iterrows():
-        rev_map[(row["ts_code"], row["end_date"])] = row["revenue"]
+    # 构建 (ts_code, end_date) -> (ann_date 升序列表, revenue 列表)
+    rev_lookup: Dict[Tuple[str, str], Tuple[List[str], List[float]]] = {}
+    ordered = ex[["ts_code", "end_date", "ann_date", "revenue"]].sort_values(
+        ["ts_code", "end_date", "ann_date"]
+    )
+    for ts_code, end_date, ann_date, revenue in zip(
+        ordered["ts_code"], ordered["end_date"], ordered["ann_date"], ordered["revenue"]
+    ):
+        ann_dates, revenues = rev_lookup.setdefault((ts_code, str(end_date)), ([], []))
+        ann_dates.append(str(ann_date))
+        revenues.append(revenue)
 
     yoy_values = []
-    for _, row in ex.iterrows():
-        end_date = str(row["end_date"])
-        if len(end_date) == 8:
-            # 去年同期：年份 -1，月日不变
-            prev_end = str(int(end_date[:4]) - 1) + end_date[4:]
-            prev_rev = rev_map.get((row["ts_code"], prev_end))
-            cur_rev = row["revenue"]
-            if (
-                prev_rev is not None
-                and pd.notna(prev_rev)
-                and abs(prev_rev) > 1e-6
-                and pd.notna(cur_rev)
-            ):
-                yoy_values.append((cur_rev - prev_rev) / abs(prev_rev) * 100)
-            else:
-                yoy_values.append(np.nan)
+    for ts_code, end_date, ann_date, cur_rev in zip(
+        ex["ts_code"], ex["end_date"], ex["ann_date"], ex["revenue"]
+    ):
+        end_date = str(end_date)
+        if len(end_date) != 8 or not end_date.isdigit() or pd.isna(cur_rev):
+            yoy_values.append(np.nan)
+            continue
+
+        # 去年同期：年份 -1，月日不变
+        prev_end = str(int(end_date[:4]) - 1) + end_date[4:]
+        hist = rev_lookup.get((ts_code, prev_end))
+        if hist is None:
+            yoy_values.append(np.nan)
+            continue
+
+        prev_ann_dates, prev_revenues = hist
+        pos = bisect.bisect_right(prev_ann_dates, str(ann_date)) - 1
+        if pos < 0:
+            yoy_values.append(np.nan)
+            continue
+
+        prev_rev = prev_revenues[pos]
+        if pd.notna(prev_rev) and abs(prev_rev) > 1e-6:
+            yoy_values.append((cur_rev - prev_rev) / abs(prev_rev) * 100)
         else:
             yoy_values.append(np.nan)
     ex["revenue_yoy"] = yoy_values

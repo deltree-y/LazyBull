@@ -162,6 +162,51 @@ class TestBuildExpressLookup:
         row = df[df["ts_code"] == "600000.SH"].iloc[0]
         assert np.isnan(row["express_revenue_yoy"])
 
+    def test_revenue_yoy_ignores_future_restatement(self, trading_dates_express):
+        """去年同期的重述公告晚于本期公告日时，同比不得采用重述值"""
+        df = pd.DataFrame([
+            {
+                "ts_code": "000001.SZ", "ann_date": "20221028", "end_date": "20220930",
+                "revenue": 1_000_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
+            },
+            # 去年同期的更正公告，公告日晚于本期快报
+            {
+                "ts_code": "000001.SZ", "ann_date": "20231201", "end_date": "20220930",
+                "revenue": 1_100_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
+            },
+            {
+                "ts_code": "000001.SZ", "ann_date": "20231028", "end_date": "20230930",
+                "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
+            },
+        ])
+        lookup = build_express_lookup_by_date(df, trading_dates_express)
+        row = lookup["20231029"]
+        row = row[row["ts_code"] == "000001.SZ"].iloc[0]
+        # 应用 20221028 版本：(1_155_000 - 1_000_000) / 1_000_000 * 100 = 15.5
+        assert row["express_revenue_yoy"] == pytest.approx(15.5)
+
+    def test_revenue_yoy_uses_restatement_already_public(self):
+        """去年同期的重述已先于本期公告时，同比应采用重述后的值"""
+        df = pd.DataFrame([
+            {
+                "ts_code": "000001.SZ", "ann_date": "20221028", "end_date": "20220930",
+                "revenue": 1_000_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
+            },
+            {
+                "ts_code": "000001.SZ", "ann_date": "20230601", "end_date": "20220930",
+                "revenue": 1_100_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
+            },
+            {
+                "ts_code": "000001.SZ", "ann_date": "20231028", "end_date": "20230930",
+                "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
+            },
+        ])
+        lookup = build_express_lookup_by_date(df, ["20231029"])
+        row = lookup["20231029"]
+        row = row[row["ts_code"] == "000001.SZ"].iloc[0]
+        # (1_155_000 - 1_100_000) / 1_100_000 * 100 = 5.0
+        assert row["express_revenue_yoy"] == pytest.approx(5.0)
+
     def test_output_columns(self, mock_express_data, trading_dates_express):
         """验证输出包含所有必要列"""
         lookup = build_express_lookup_by_date(mock_express_data, trading_dates_express)

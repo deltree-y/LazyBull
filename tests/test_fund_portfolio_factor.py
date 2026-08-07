@@ -195,6 +195,43 @@ class TestBuildFundPortfolioLookup:
         assert np.isnan(row["fund_hold_ratio_chg"])
         assert np.isnan(row["fund_count_chg"])
 
+    def test_chg_nan_when_prev_quarter_announced_later(self):
+        """上期公告日晚于本期时，环比应置 NaN（防前视）"""
+        df = pd.DataFrame([
+            {
+                "symbol": "000001", "ann_date": "20231101", "end_date": "20230630",
+                "fund_hold_ratio": 3.5, "fund_count": 2,
+            },
+            {
+                "symbol": "000001", "ann_date": "20231020", "end_date": "20230930",
+                "fund_hold_ratio": 5.3, "fund_count": 3,
+            },
+        ])
+        lookup = build_fund_portfolio_lookup_by_date(df, ["20231021"], pre_aggregated=True)
+        row = lookup["20231021"]
+        row = row[row["ts_code"] == "000001.SZ"].iloc[0]
+        assert row["fund_hold_ratio"] == pytest.approx(5.3)
+        assert np.isnan(row["fund_hold_ratio_chg"])
+        assert np.isnan(row["fund_count_chg"])
+
+    def test_chg_nan_when_quarter_not_adjacent(self):
+        """上期不是紧邻季度时，环比口径不可比，应置 NaN"""
+        df = pd.DataFrame([
+            {
+                "symbol": "000001", "ann_date": "20230420", "end_date": "20230331",
+                "fund_hold_ratio": 3.5, "fund_count": 2,
+            },
+            {
+                "symbol": "000001", "ann_date": "20231020", "end_date": "20230930",
+                "fund_hold_ratio": 5.3, "fund_count": 3,
+            },
+        ])
+        lookup = build_fund_portfolio_lookup_by_date(df, ["20231021"], pre_aggregated=True)
+        row = lookup["20231021"]
+        row = row[row["ts_code"] == "000001.SZ"].iloc[0]
+        assert np.isnan(row["fund_hold_ratio_chg"])
+        assert np.isnan(row["fund_count_chg"])
+
     def test_empty_input(self, trading_dates_fund):
         """空数据返回空字典"""
         lookup = build_fund_portfolio_lookup_by_date(pd.DataFrame(), trading_dates_fund)

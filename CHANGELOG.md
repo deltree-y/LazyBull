@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.9] - 2026-08-07
+
+### Fixed
+
+- **修复公告型因子跨期计算的前视泄漏（express 同比 / fund_portfolio 环比）**：
+  - 背景：`build_latest_announcement_lookup_by_date` 的 PIT 门控只作用于
+    **当前记录的 ann_date**，但因子值内部引用了其它报告期的数据，这部分跨期引用
+    此前完全没有公告日约束；
+  - `src/lazybull/factors/express.py`：`_compute_revenue_yoy` 原先用全量数据构建
+    `(ts_code, end_date) -> revenue` 字典，因入参已按 ann_date 排序，同一报告期
+    保留的是公告日最晚的版本。若去年同期存在晚于本期快报的重述/更正公告，
+    `express_revenue_yoy` 会在本期公告日就用上未来信息。改为按
+    `(ts_code, end_date) -> (ann_date 升序列表, revenue 列表)` 存储，用
+    `bisect_right(本期 ann_date) - 1` 取本期公告日当天及之前已披露的最新版本
+    （与同文件 `express_surprise` 的 `fc_lookup` 口径统一）；取不到则为 NaN；
+  - `src/lazybull/factors/fund_portfolio.py`：季度环比原先仅按 `end_date` 排序后
+    `shift(1)`，未校验上期公告日。新增 `_prev_quarter_end()` 与两项校验，满足任一
+    条件即把 `fund_hold_ratio_chg` / `fund_count_chg` 置 NaN：
+    - 上期聚合公告日晚于本期（基金延迟披露/补充更正，构成前视）；
+    - 上期不是紧邻上一季度（该股某季度无基金持仓导致记录缺失，环比口径不可比）；
+  - 顺带把 `_compute_revenue_yoy` 的双重 `iterrows()` 改为列级 `zip` 遍历，并补充
+    `end_date` 数字校验，避免异常报告期触发 `int()` 抛错；
+  - 测试：`tests/test_express_factor.py` 新增未来重述不采用 / 已公开重述采用两个用例；
+    `tests/test_fund_portfolio_factor.py` 新增上期延迟披露、上期非紧邻季度两个用例；
+  - 影响：仅收紧上述两个因子的可用信息边界，正常披露路径下取值不变；异常路径下
+    由错误取值变为 NaN，`freshness_days` 与 schema 均不受影响。
+
+### Known
+
+- `fund_hold_ratio` / `fund_count` 仍存在披露口径断层：一季报/三季报仅披露前十大
+  重仓，半年报/年报披露全量持仓，环比在跨口径季度间的可比性有限。此项待单独处理。
+
 ## [0.94.8] - 2026-08-07
 
 ### Fixed

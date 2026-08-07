@@ -11,7 +11,7 @@
 - fund_count_chg 捕捉"拥挤度"变化（人多→可能过热，人少→可能冷门价值）
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -36,6 +36,22 @@ FUND_PORTFOLIO_RAW_COLS = [
     "end_date",
     "stk_float_ratio",
 ]
+
+_QUARTER_ENDS = ["0331", "0630", "0930", "1231"]
+
+
+def _prev_quarter_end(end_date) -> Optional[str]:
+    """返回紧邻上一季度末（YYYYMMDD），非法或非季度末返回 None。"""
+    text = str(end_date)
+    if len(text) != 8 or not text.isdigit():
+        return None
+    year, month_day = text[:4], text[4:]
+    if month_day not in _QUARTER_ENDS:
+        return None
+    idx = _QUARTER_ENDS.index(month_day)
+    if idx == 0:
+        return f"{int(year) - 1}1231"
+    return f"{year}{_QUARTER_ENDS[idx - 1]}"
 
 
 def _aggregate_fund_portfolio(raw_df: pd.DataFrame) -> pd.DataFrame:
@@ -113,8 +129,18 @@ def build_fund_portfolio_lookup_by_date(
     grouped = agg.groupby("symbol")
     agg["fund_hold_ratio_prev"] = grouped["fund_hold_ratio"].shift(1)
     agg["fund_count_prev"] = grouped["fund_count"].shift(1)
+    agg["prev_ann_date"] = grouped["ann_date"].shift(1)
+    agg["prev_end_date"] = grouped["end_date"].shift(1)
     agg["fund_hold_ratio_chg"] = agg["fund_hold_ratio"] - agg["fund_hold_ratio_prev"]
     agg["fund_count_chg"] = agg["fund_count"] - agg["fund_count_prev"]
+
+    # 上期延迟披露（公告日晚于本期）会造成前视；上期非紧邻季度则环比口径不可比。
+    prev_ann = agg["prev_ann_date"].fillna("")
+    cur_ann = agg["ann_date"].fillna("")
+    prev_end = agg["prev_end_date"].fillna("")
+    expected_prev_end = agg["end_date"].map(_prev_quarter_end).fillna("")
+    invalid_chg = (prev_ann > cur_ann) | (prev_end != expected_prev_end)
+    agg.loc[invalid_chg, ["fund_hold_ratio_chg", "fund_count_chg"]] = np.nan
 
     agg["ts_code"] = agg["symbol"].map(_symbol_to_ts_code)
     agg = agg.dropna(subset=["ts_code", "ann_date"])
