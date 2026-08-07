@@ -54,7 +54,11 @@ def _filter_to_main_board(df: pd.DataFrame, main_board_codes: set, stage: str) -
         raise ValueError(f"{stage} 数据缺少 ts_code 列，无法做主板过滤")
 
     before = len(df)
-    filtered = df[df["ts_code"].astype(str).isin(main_board_codes)].copy()
+    # 布尔掩码索引 df[mask] 本身已按行 take 复制出独立数据，无需再 deep copy。
+    # 大训练集（如 293 列 × 400 万行）上 .copy() 会触发 pandas BlockManager
+    # _consolidate_inplace 合并全部列块，额外申请一份全量连续内存（≈8.8 GiB），
+    # 极易导致 OOM。
+    filtered = df[df["ts_code"].astype(str).isin(main_board_codes)]
     after = len(filtered)
     logger.info(f"{stage} 主板过滤: {before} -> {after}（移除 {before - after}）")
     if after == 0:

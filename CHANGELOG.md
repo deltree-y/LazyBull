@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.7] - 2026-08-07
+
+### Fixed
+
+- **修复部署训练大窗口 OOM（MemoryError）**：
+  - 背景：部署训练使用长训练窗口（如 20200206 ~ 20260205，约 610 万样本 × 293 列）
+    时，`_filter_to_main_board` 中 `df[布尔掩码].copy()` 触发 `Unable to allocate
+    8.76 GiB` OOM；
+  - 根因：布尔掩码索引 `df[mask]` 本身已按行 take 复制出独立数据（约 8.76 GiB），
+    紧随的 `.copy()`（deep=True）再次触发 pandas `BlockManager._consolidate_inplace`
+    把 293 个列块合并为一块 293 × 4014232 的连续 float64 数组（又 8.76 GiB 连续内存），
+    峰值内存翻倍导致 OOM；
+  - `src/lazybull/ml/walk_forward/training_core.py`：`_filter_to_main_board` 去除
+    冗余 `.copy()`（布尔索引已生成独立副本），消除 consolidate 峰值分配；
+  - `src/lazybull/ml/train_core/prepare.py`：训练样本过滤 `df[mask].copy()` 去除
+    冗余 `.copy()`（后续 `df_train[col] = np.nan` 等写操作作用于独立副本，不写穿
+    原 df），消除同链路下一个同类 OOM 风险点；
+  - 影响：仅降低峰值内存，过滤语义与训练结果不变。
+
 ## [0.94.6] - 2026-08-06
 
 ### Fixed

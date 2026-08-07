@@ -418,7 +418,10 @@ def prepare_training_data(
         if col in df.columns:
             mask = mask & (~df[col].astype(bool))
 
-    df_train = df[mask].copy()
+    # df[mask]（布尔索引）已复制独立数据，无需再 deep copy；后续
+    # df_train[col] = np.nan 等写操作作用于独立副本，不会写穿 df。
+    # 大训练集上 .copy() 会触发 BlockManager 合并导致额外全量内存分配（OOM）。
+    df_train = df[mask]
     logger.info(f"过滤后样本数: {len(df_train)} / {len(df)}")
     samples_after_filter = len(df_train)
 

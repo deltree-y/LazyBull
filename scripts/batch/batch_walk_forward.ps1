@@ -141,7 +141,7 @@ $enable_express          = $true  # $true 启用 | $false 禁用
 # 0711关闭后分数大幅下降, 需要保持打开
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
-$enable_north            = $false  # $true 启用 | $false 禁用
+$enable_north            = $true  # $true 启用 | $false 禁用
 #实测:打开后CAGR下降约6%, 回撤上升8%
 # 0711 似乎无影响, 那就保持关闭
 
@@ -156,7 +156,6 @@ $enable_consensus        = $true  # $true 启用 | $false 禁用
 # 0711关闭后大幅提升分数
 
 # ── 一致预期修正因子（0512基于已有 report_rc 构建时序修正信号，无需额外下载）─
-# 0711该因子有问题, 打开的话会导致训练异常bug
 $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
@@ -170,7 +169,9 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
 $factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
-$factor_exclude_file      = ""#configs/factor_exclude_repro_v22712.json"  # 临时复现 v22712(CAGR>4%): 加回3个report_rc因子; 复现完改回 ""
+
+# ── 因子排除列表（可选，0801引入）────────────────────────────────────
+$factor_exclude_file      = "configs/factor_exclude_list_north_on.json"  # 临时复现 v22712(CAGR>4%): 加回3个report_rc因子; 复现完改回 ""
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all
