@@ -48,14 +48,20 @@ def _add_value_dividend_features_static(
     features = features.merge(daily_basic_today, on="ts_code", how="left")
 
     if "dv_ttm" in features.columns:
-        features["dv_ttm"] = features["dv_ttm"].fillna(0)
+        # 缺失 dv_ttm 保留 NaN（避免与"不分红=0"混淆，防止掩盖数据缺失），另增显式缺失标记
+        features["dv_ttm_missing"] = features["dv_ttm"].isna().astype(int)
     if "pe_ttm" in features.columns:
         features["ep_ttm"] = np.where(
             (features["pe_ttm"].notna()) & (features["pe_ttm"] > 0),
             1.0 / features["pe_ttm"],
             np.nan,
         )
-        features["is_loss"] = ((features["pe_ttm"].isna()) | (features["pe_ttm"] <= 0)).astype(int)
+        # is_loss 仅对已知亏损（pe_ttm 非缺失且 <=0）为 1；缺失单独标记，
+        # 避免将"无数据"误判为"亏损"并掩盖数据链路失败
+        features["pe_ttm_missing"] = features["pe_ttm"].isna().astype(int)
+        features["is_loss"] = (
+            (features["pe_ttm"].notna()) & (features["pe_ttm"] <= 0)
+        ).astype(int)
     if "pb" in features.columns:
         features["bp"] = np.where(
             (features["pb"].notna()) & (features["pb"] > 0),

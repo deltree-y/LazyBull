@@ -24,6 +24,9 @@ class MLSignal(Signal):
     # 申万一级行业：银行(801780)、非银金融(801790，含保险/券商)
     _FINANCIAL_SW_L1_CODES = {"801780", "801790"}
 
+    # 数值质量门禁：缺失率告警阈值（超过视为异常数据链路，记录 ERROR 级日志）
+    _MISSING_RATE_WARN_THRESHOLD = 0.5
+
     def __init__(
         self,
         top_n: int = 20,
@@ -154,6 +157,64 @@ class MLSignal(Signal):
         result = features_df[mask].copy()
         return result, before, len(result)
 
+    def _check_feature_quality(self, X: pd.DataFrame) -> bool:
+        """检查模型输入特征数值质量，返回是否可继续预测。
+
+        仅对明确的数据完整性失效做硬拒绝：
+        - 全空：缺失率 100%（该特征当日完全无数据，无法提供）
+
+        以下情况记录 WARNING 级聚合警告但不阻断（可能是合法状态，不能一票否决整日预测）：
+        - 全零：如当日全部股票 is_loss=0、均未上龙虎榜、均不分红等
+        - 截面常量：市场环境特征（mkt_*）本就是单日常量广播到全部股票，
+          训练期逐日变化，截面内唯一值=1 不代表数据失效
+        - 高缺失率（> _MISSING_RATE_WARN_THRESHOLD）：可能是局部数据链路问题
+
+        已知市场级广播列（mkt_*/north_*，单日常量广播到全部股票）的常量/全零
+        为设计状态，不产生警告，避免每天为多个广播列制造噪音日志。
+
+        训练侧（prepare.py）已按"整个训练期"判定高缺失/全空/常数并移除，
+        推理侧不应以截面分布一票否决；本门禁只拦截最明确的"全空"失效。
+        """
+        if X is None or len(X) == 0:
+            logger.error("特征质量检查：输入为空，拒绝预测")
+            return False
+
+        # 市场级广播列前缀：单日常量广播到全部股票，常量/全零为设计状态，不警告
+        broadcast_prefixes = ("mkt_", "north_")
+
+        reject_cols = []
+        warn_cols = []
+        for col in X.columns:
+            series = X[col]
+            missing_ratio = float(series.isna().mean())
+            non_null = series.dropna()
+            if missing_ratio >= 1.0 or len(non_null) == 0:
+                reject_cols.append((col, "全空"))
+            elif missing_ratio > self._MISSING_RATE_WARN_THRESHOLD:
+                warn_cols.append(
+                    (
+                        col,
+                        f"缺失率 {missing_ratio:.1%} 超过阈值 "
+                        f"{self._MISSING_RATE_WARN_THRESHOLD:.0%}",
+                    )
+                )
+            elif (non_null == 0).all():
+                if not col.startswith(broadcast_prefixes):
+                    warn_cols.append(
+                        (col, "全零（可能为合法状态，如全部不分红/未上榜/未亏损）")
+                    )
+            elif len(non_null) >= 2 and non_null.nunique() <= 1:
+                if not col.startswith(broadcast_prefixes):
+                    warn_cols.append((col, "截面常量（无区分度）"))
+
+        for col, reason in reject_cols:
+            logger.error(f"特征质量检查未通过: {col} 为{reason}，拒绝本次预测")
+        if warn_cols:
+            detail = "; ".join(f"{col} {reason}" for col, reason in warn_cols)
+            logger.warning(f"特征质量检查警告（不阻断预测）: {detail}")
+
+        return not reject_cols
+
     def _log_prediction_pipeline_summary(
         self, before_count: int, after_count: int, ranked: bool = False
     ) -> None:
@@ -222,6 +283,11 @@ class MLSignal(Signal):
             X = features_df[self.feature_columns]
         except KeyError as e:
             logger.error(f"特征列缺失: {e}")
+            return {}
+
+        # 数值质量门禁：仅拒绝全空列（数据完全缺失），全零/常量/高缺失仅警告不阻断
+        if not self._check_feature_quality(X):
+            logger.error(f"{date.date()} 特征数值质量异常，跳过预测")
             return {}
 
         # 预测（classification 模型使用 predict_proba 获取正类概率）
@@ -328,6 +394,11 @@ class MLSignal(Signal):
             X = features_df[self.feature_columns]
         except KeyError as e:
             logger.error(f"特征列缺失: {e}")
+            return []
+
+        # 数值质量门禁：仅拒绝全空列（数据完全缺失），全零/常量/高缺失仅警告不阻断
+        if not self._check_feature_quality(X):
+            logger.error(f"{date.date()} 特征数值质量异常，跳过预测")
             return []
 
         # 预测（classification 模型使用 predict_proba 获取正类概率）

@@ -28,6 +28,7 @@ from .constants import (
     FUND_FEATURE_COLUMNS,
     LHB_FEATURE_COLUMNS,
     MARGIN_FEATURE_COLUMNS,
+    MISSING_MARKER_FEATURE_COLUMNS,
     NORTH_FEATURE_COLUMNS,
     STATE_FRESHNESS_COLUMNS,
 )
@@ -205,6 +206,21 @@ def prepare_training_data(
         "mkt_turnover_std",  # 市场成交额波动
         "mkt_vol_20",  # 市场总体成交量
     ]
+
+    # 估值缺失标记因子（可选：旧 schema 特征分区无此列时自动跳过，兼容旧数据直接训练）
+    # 新构建的特征分区（含 dv_ttm_missing/pe_ttm_missing）加入训练，模型可显式利用缺失状态
+    available_missing_markers = [
+        col for col in MISSING_MARKER_FEATURE_COLUMNS if col in df.columns
+    ]
+    if available_missing_markers:
+        feature_columns.extend(available_missing_markers)
+        logger.info(f"启用估值缺失标记因子: {available_missing_markers}")
+    else:
+        logger.warning(
+            "数据中未找到估值缺失标记列 "
+            f"{MISSING_MARKER_FEATURE_COLUMNS}（旧 schema 特征分区），"
+            "缺失标记特征将被跳过；如需启用请重建特征"
+        )
 
     # 基本面因子（可选）
     if enable_fundamental_features:

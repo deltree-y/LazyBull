@@ -51,6 +51,8 @@ BASE_FEATURE_COLUMNS = [
     "zscore_dv_ttm",
     "zscore_pe_ttm",
     "is_loss",
+    "dv_ttm_missing",
+    "pe_ttm_missing",
     "list_days",
     "mkt_adv_dec_ratio",
     "mkt_ret_avg_20",
@@ -226,6 +228,58 @@ def test_prepare_training_data_auto_embargo_from_label_horizon():
     assert set(df_val_split_original["trade_date"].unique()) == set(
         (expected_calib if len(expected_calib) > 0 else expected_es)["trade_date"].unique()
     )
+
+
+def test_prepare_training_data_skips_missing_markers_when_absent():
+    """旧 schema 特征分区（无 dv_ttm_missing/pe_ttm_missing）训练不报错，缺失标记被跳过。"""
+    df = _make_training_df(n_dates=12, stocks_per_date=2)
+    # 模拟旧 schema：移除缺失标记列
+    df = df.drop(columns=["dv_ttm_missing", "pe_ttm_missing"], errors="ignore")
+
+    (
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        feature_columns,
+        df_train_split,
+        df_val_split,
+        data_stats,
+        df_val_split_original,
+    ) = prepare_training_data(
+        df,
+        label_column="y_ret_5",
+        val_ratio=0.4,
+    )
+
+    assert "dv_ttm_missing" not in feature_columns
+    assert "pe_ttm_missing" not in feature_columns
+    assert list(X_train.columns) == feature_columns
+    assert len(X_train) == len(y_train) == len(df_train_split)
+
+
+def test_prepare_training_data_includes_missing_markers_when_present():
+    """新 schema 特征分区含缺失标记列时，标记进入训练特征。"""
+    df = _make_training_df(n_dates=12, stocks_per_date=2)
+
+    (
+        _X_train,
+        _y_train,
+        _X_val,
+        _y_val,
+        feature_columns,
+        _df_train_split,
+        _df_val_split,
+        _data_stats,
+        _df_val_split_original,
+    ) = prepare_training_data(
+        df,
+        label_column="y_ret_5",
+        val_ratio=0.4,
+    )
+
+    assert "dv_ttm_missing" in feature_columns
+    assert "pe_ttm_missing" in feature_columns
 
 
 class _RiskMockModel:

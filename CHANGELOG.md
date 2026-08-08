@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.14] - 2026-08-08
+
+### Fixed
+
+- **统一串行/并行特征构建的基本面代理回填顺序（问题1）**：
+  - `src/lazybull/features/parallel.py` 原先在因子处理器 `apply_all` 之前执行
+    `_backfill_fundamental_proxy_features_static`，与串行路径（`orchestration.py`
+    先 `apply_all` 再回填）相反，导致 `ocf_to_revenue → cf_sales`、
+    `ocf_to_profit → cf_nm` 两条回填链在并行路径失效，串行/并行产出不同特征；
+  - 现统一为"先因子处理器、后回填"，与串行路径保持一致，消除训练/推理口径漂移；
+  - **测试**：新增 `tests/test_audit_fixes_quality_consistency.py` 端到端用例
+    （mock 因子处理器生成 `q_ocf_to_sales/ocf_to_revenue`，断言 `cf_sales` 被回填）。
+
+- **统一离线/在线缺失复权因子处理（问题2）**：
+  - `src/lazybull/data/build_clean.py` 原先在复权因子缺失时伪造默认值 `1.0`，
+    与在线 `ensure.py` 保留 `NaN` 相反，导致同一原始缺失状态产生不同复权价格
+    与收益；现统一保留 `NaN` 交由清洗层处理（cleaner 已有 ffill/bfill 兜底）；
+  - **测试**：新增 `test_build_clean_missing_adj_factor_keeps_nan`。
+
+- **缺失 dv_ttm/pe_ttm 不再编码成真实经济含义（问题3）**：
+  - `src/lazybull/features/builder/static_extra.py` 原先将缺失 `dv_ttm` 填 `0`
+    （与"不分红"混淆）、缺失 `pe_ttm` 标为 `is_loss=1`（与"亏损"混淆），且会
+    掩盖数据链路失败；现保留 `NaN` 并新增 `dv_ttm_missing`/`pe_ttm_missing`
+    显式缺失标记，`is_loss` 仅对已知亏损（非缺失且 <=0）为 1；
+  - 影响：新增 `dv_ttm_missing`/`pe_ttm_missing` 列，不影响既有 schema 列；
+    `is_loss` 语义修正为仅真实亏损，模型推理输入口径更准确；
+  - `dv_ttm_missing`/`pe_ttm_missing` 以可选方式加入训练候选特征
+    （`ml/train_core/constants.py` 定义 + `prepare.py` 按存在性加入），
+    新构建的特征分区自动启用、旧 schema 分区（无此列）自动跳过并 warning，
+    不破坏存量特征数据直接训练；重新训练后模型可显式利用缺失状态；
+  - **测试**：新增 `test_value_dividend_missing_semantics_preserved`；
+    训练侧新增 `test_prepare_training_data_skips_missing_markers_when_absent`
+    （旧 schema 无标记列不报错）与
+    `test_prepare_training_data_includes_missing_markers_when_present`。
+
+- **模型推理新增数值质量门禁（问题5）**：
+  - `src/lazybull/signals/ml_signal.py` 原先仅做列结构一致性检查，数据失效列仍会
+    静默预测（实际案例：`dv_ttm` 全零）；现新增 `_check_feature_quality`，在
+    `generate`/`generate_ranked` 预测前仅对"全空"列（缺失率 100%）硬拒绝本次预测
+    （返回空信号）；
+  - 全零/截面常量/高缺失（>50%）仅记录 WARNING 级聚合警告（不逐列刷 ERROR
+    日志）且不阻断——市场环境特征（`mkt_*`/`north_*`）本就是单日常量广播到
+    全部股票，常量/全零为设计状态直接忽略不警告；全零也可能是合法状态（如
+    全部不分红/未上榜/未亏损），不能以截面分布一票否决整日预测；训练侧已在
+    `prepare.py` 按整个训练期判定高缺失/全空/常数并移除；
+  - **测试**：新增 `test_check_feature_quality_rejects_only_all_nan`、
+    `test_check_feature_quality_accepts_market_state_broadcast`、
+    `test_generate_all_zero_column_warns_but_predicts`、
+    `test_generate_ranked_rejects_all_nan_column`、
+    `test_generate_passes_quality_gate_with_good_data`。
+
 ## [0.94.13] - 2026-08-08
 
 ### Fixed

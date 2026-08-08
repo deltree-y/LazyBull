@@ -81,7 +81,7 @@ def build_features_for_day_static(
         moneyflow_data=ctx.moneyflow_data,
     )
 
-    # ── 价值红利 + 资金流 + 基本面代理回填 ──
+    # ── 价值红利 + 资金流 ──
     from .builder import (
         _add_moneyflow_features_static,
         _add_value_dividend_features_static,
@@ -103,10 +103,12 @@ def build_features_for_day_static(
             current_idx=current_idx,
             trading_date_index=trading_date_index,
         )
-    features = _backfill_fundamental_proxy_features_static(features)
 
     # ── 因子处理器 ──
     features = factor_registry.apply_all(features, ctx, current_data)
+
+    # ── 基本面代理回填（须在因子处理器之后，与串行路径保持一致）──
+    features = _backfill_fundamental_proxy_features_static(features)
 
     # ── 行业合并 ──
     if ctx.shenwan_industry is not None:

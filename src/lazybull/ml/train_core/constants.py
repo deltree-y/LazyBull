@@ -28,6 +28,13 @@ FUNDAMENTAL_FEATURE_COLUMNS = [
     "fundamental_freshness_days",  # 最近一次基本面公告距当日天数
 ]
 
+# 估值缺失标记列（可选：由 features/builder/static_extra.py 生成，
+# 旧 schema 特征分区可能缺失，训练时按存在性自动加入/跳过）
+MISSING_MARKER_FEATURE_COLUMNS = [
+    "dv_ttm_missing",  # 股息率缺失标记
+    "pe_ttm_missing",  # PE 缺失标记
+]
+
 MARGIN_FEATURE_COLUMNS = [
     "rzye_chg_5",  # 融资余额5日变动率
     "rzye_chg_20",  # 融资余额20日变动率

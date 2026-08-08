@@ -4,9 +4,12 @@
 负责按交易日历逐日清洗 raw 层日线/复权/停牌/涨跌停/ST 数据并保存到 clean 分区。
 """
 
+import numpy as np
+
 from loguru import logger
 
 from . import DataCleaner, DataLoader, Storage
+
 
 def build_clean_data(
     storage: Storage,
@@ -91,9 +94,11 @@ def build_clean_data(
 
             adj_factor_raw = storage.load_raw_by_date("adj_factor", trade_date)
             if adj_factor_raw is None or len(adj_factor_raw) == 0:
-                logger.warning(f"  未找到复权因子，使用默认值1.0")
+                # 与在线 ensure 路径保持一致：保留缺失值并交由清洗层处理，
+                # 避免用伪造默认值 1.0 污染复权价格与收益（问题2）
+                logger.warning("  未找到复权因子，保留缺失值并交由清洗层处理")
                 adj_factor_raw = daily_raw[["ts_code", "trade_date"]].copy()
-                adj_factor_raw["adj_factor"] = 1.0
+                adj_factor_raw["adj_factor"] = np.nan
 
             # 清洗日线数据
             daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
