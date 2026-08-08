@@ -185,3 +185,27 @@ def calc_holding_trade_days(
         return max(0, cur_idx - buy_idx)
     except ValueError:
         return 0
+
+
+def is_recent_date_str(date_str: str, days: int = 3) -> bool:
+    """判断日期字符串是否处于"近期可能未发布"窗口内。
+
+    用于龙虎榜等逐日接口的空响应处理：接口数据通常在收盘后晚间才发布，
+    过早下载会得到空响应。若把空响应落盘为占位分区，之后 is_data_exists
+    检查通过就永远不会重试，造成"假空"永久缓存、真实数据丢失。
+    对窗口内的空响应不落盘、延迟重试即可避免。
+
+    Args:
+        date_str: 日期字符串 YYYYMMDD
+        days: 判定窗口天数（自然日）
+
+    Returns:
+        True 表示处于近期窗口内（数据可能未发布）
+    """
+    try:
+        d = to_timestamp(date_str)
+    except ValueError:
+        return False
+    if d is None:
+        return False
+    return d >= pd.Timestamp.now() - pd.Timedelta(days=days)

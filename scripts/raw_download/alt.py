@@ -8,6 +8,7 @@ from typing import List, Optional, Set, Tuple
 import pandas as pd
 from loguru import logger
 
+from src.lazybull.common.date_utils import is_recent_date_str
 from src.lazybull.data import Storage, TushareClient
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
@@ -191,6 +192,17 @@ def download_moneyflow_hsgt(
     logger.info(f"[moneyflow_hsgt] 完成: 新下载={success} 跳过={skip}")
 
 
+# 龙虎榜"近期空占位"重新查询窗口（自然日）: 数据通常在收盘后晚间发布,
+# 已被过早下载成 0 行占位的近期日期, 在窗口内每次运行都重新查询一次, 修复已落盘的假空分区
+_TOP_LIST_REDOWNLOAD_DAYS = 10
+
+
+def _is_top_list_empty_placeholder(storage: Storage, date_str: str) -> bool:
+    """判断某日 top_list 分区是否为 0 行空占位（假空候选, 需重新查询）。"""
+    df = storage.load_raw_by_date("top_list", date_str)
+    return df is not None and len(df) == 0
+
+
 def download_top_list(
     client: TushareClient,
     storage: Storage,
@@ -211,7 +223,14 @@ def download_top_list(
         return
 
     pending = [
-        td for td in trading_dates if force or not storage.is_data_exists("raw", "top_list", td)
+        td
+        for td in trading_dates
+        if force
+        or not storage.is_data_exists("raw", "top_list", td)
+        or (
+            is_recent_date_str(td, days=_TOP_LIST_REDOWNLOAD_DAYS)
+            and _is_top_list_empty_placeholder(storage, td)
+        )
     ]
     skip = len(trading_dates) - len(pending)
 
@@ -220,7 +239,7 @@ def download_top_list(
         return
 
     tracker = ProgressTracker(len(pending), label="top_list", log_every=100)
-    counters = {"success": 0, "empty": 0}
+    counters = {"success": 0, "empty": 0, "recent_empty": 0, "redownload": 0}
     counter_lock = threading.Lock()
 
     def _worker(td: str) -> None:
@@ -230,6 +249,11 @@ def download_top_list(
                 storage.save_raw_by_date(df, "top_list", td)
                 with counter_lock:
                     counters["success"] += 1
+            elif is_recent_date_str(td):
+                # 近期日期数据可能尚未发布（龙虎榜通常在收盘后晚间才发布）,
+                # 不写空占位, 下次运行重试, 避免"假空"永久缓存真实数据丢失
+                with counter_lock:
+                    counters["recent_empty"] += 1
             else:
                 storage.save_raw_by_date(
                     pd.DataFrame(
@@ -249,11 +273,17 @@ def download_top_list(
                     counters["empty"] += 1
         except Exception as e:
             ERROR_COLLECTOR.add("top_list", td, str(e))
-        tracker.tick(extra_info=f"ok={counters['success']} empty={counters['empty']}")
+        tracker.tick(
+            extra_info=f"ok={counters['success']} empty={counters['empty']} "
+            f"recent={counters['recent_empty']}"
+        )
 
     _run_concurrent(pending, _worker, label="top_list")
 
-    logger.info(f"[top_list] 完成: 新下载={counters['success']} 空占位={counters['empty']}")
+    logger.info(
+        f"[top_list] 完成: 新下载={counters['success']} 空占位={counters['empty']} "
+        f"近期空响应待重试={counters['recent_empty']}"
+    )
 
 
 def _mid_date_str(start_date: str, end_date: str) -> str:

@@ -2,6 +2,81 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.13] - 2026-08-08
+
+### Fixed
+
+- **修复龙虎榜（lhb）因子三审问题（0.94.12 的补充）**：
+  - **groupby.first() 拼接不同记录字段**：`src/lazybull/factors/lhb.py` 原先排序后
+    用 `groupby.first()` 选择同日代表记录，它会逐列取首个非空值，当净买入最大那条
+    的 `net_rate`/`amount_rate` 缺失时会把另一条记录的字段拼接进来，生成不存在的
+    行（真实历史影响 1 个股票日）。改为按 `(trade_date, ts_code, is_cont, abs)`
+    排序后 `drop_duplicates(subset=["trade_date", "ts_code"])` 保留第一整行；
+  - **补充关键接线测试**：
+    - `tests/test_pipeline_lhb_wiring.py`（新增）：断言 `features/pipeline.py`
+      批量构建龙虎榜时确实把含预热期的完整日历作为 `calendar_dates` 传入（防止
+      以后重构时预热接线复发）；并覆盖 `scripts/raw_download/alt.py download_top_list`
+      对近期空占位分区重新查询覆盖、非近期空占位跳过两个分支；
+    - `tests/test_factor_lhb.py`：新增"同日组内不同列 NaN 分布时保留第一整行
+      不拼接字段"回归用例；
+  - 影响：`lhb_*` 列名与 schema 不变；修复极小概率的字段错配。
+
+## [0.94.12] - 2026-08-08
+
+### Fixed
+
+- **修复龙虎榜（lhb）因子二轮审计问题（0.94.11 的补充）**：
+  - **批量构建缺少预热日历**：`features/pipeline.py` 批量构建时输出交易日从
+    `start_date` 开始，未传预热期交易日历，导致加载的前 7 个月 top_list 数据在
+    `reindex` 时被丢弃，区间前 19 个交易日的 `lhb_up_days_20` / `lhb_net_sum_*`
+    历史累计为空，造成批量构建与单日推理不一致。现通过
+    `loader.get_trading_dates(start_dt, end_date)` 获取含预热期的完整日历并作为
+    `calendar_dates` 传入；
+  - **仅连续类理由被误标为未上榜**：`lhb.py` 原先无条件删除所有含"连续"的
+    reason 记录，若股票当天只有连续异动理由（2024-2026 共 11816 个股票日）会被
+    误标为未上榜。现改为：同日同时存在单日榜与连续类时优先单日榜；仅连续类时
+    保留（`lhb_on_list=1`）；`lhb_reason_count` 与选中类别一致；
+  - **净额全 NaN 组 idxmax 崩溃**：`lhb.py` 原先对净买入全 NaN 的分组调用
+    `idxmax()` 返回 NaN 索引导致 `df.loc[idx]` 崩溃。现改为
+    `sort_values(na_position="last") + groupby.first()`，全 NaN 组取第一条，不崩溃；
+  - **已有假空分区不会被修复**：新逻辑只能阻止新的近期空响应落盘，已存在的
+    0 行空占位（如 2026-08-03）因 `is_data_exists` 检查通过仍被永久跳过。现在下载
+    与推理补齐对"10 个自然日内"已存在的空占位分区重新查询一次，查询到真实数据则
+    覆盖旧占位；
+  - 测试：`tests/test_factor_lhb.py` 新增"仅连续类理由保留""净额全 NaN 不崩溃"
+    "日历预热一致性"用例；`tests/test_lhb_false_empty_guard.py` 新增"近期空占位
+    重新下载覆盖""非近期空占位跳过"用例；
+  - 影响：`lhb_*` 列名与 schema 不变；仅连续类理由的股票日恢复真实上榜标记。
+
+## [0.94.11] - 2026-08-08
+
+### Fixed
+
+- **修复龙虎榜（lhb）因子三处实质性问题 + 空响应防假空**：
+  - **滚动窗口语义错误**：`lhb_up_days_20` / `lhb_net_sum_5` / `lhb_net_sum_20`
+    原先按"上榜事件条数"滚动（top_list 稀疏，20 条记录可能跨越数年），实际含义是
+    "历史上榜次数封顶 20 / 最近 N 次上榜的净买入累计"，而非"近 5/20 个交易日"。
+    `src/lazybull/factors/lhb.py` 改为按完整交易日历重采样（未上榜日补 0）后再滚动，
+    并新增 `calendar_dates` 参数供单日推断传入历史交易日历；
+  - **时序连续性缺失**：lookup 原先只输出当日上榜股票，一笔上榜事件次日即归零，
+    历史累计只在再次上榜当天出现。现每个交易日输出所有"近 20 个交易日内上过榜"
+    的股票（含当日未上榜者），`lhb_up_days_20` 等历史累计在非上榜日持续衰减保留；
+  - **同日多理由重复放大**：同一股票同日可能同时给出单日榜与"连续 N 个交易日"榜
+    （统计周期重叠，直接求和会翻倍甚至符号反转）。现排除"连续"类 reason，并对
+    同周期重复行取净买入绝对值最大的一条（禁止 sum）；`lhb_reason_count` 改为
+    当日去重后的理由数；
+  - **空响应防假空**：下载与推理补齐对"近期日期（3 个自然日内）"的空响应不再落盘
+    占位，延迟重试，避免接口数据未发布时被过早下载成"假空"永久缓存、真实数据丢失；
+    历史日期的空占位统一为 0 行 6 列（与下载脚本 schema 一致，加载时自动过滤）；
+    ensure 原先的 1 行 1 列空占位会触发 `build_lhb_lookup_by_date` 异常，已由
+    ts_code 缺失防御 + 占位 schema 统一双重修复；
+  - 单日推断（纸面交易）的滚动日历裁剪到近 40 个交易日，避免每次对全历史重算；
+  - 测试：`tests/test_factor_lhb.py` 重写为按交易日窗口 / 时序连续性 / 排除连续类 /
+    同日取绝对值最大语义；新增 `tests/test_lhb_false_empty_guard.py` 覆盖近期空响应
+    不落盘与历史空占位 schema；
+  - 影响：`lhb_*` 列名与 schema 不变，但取值语义变化较大（窗口口径、聚合口径、
+    时序连续性），建议重建特征后重新训练并对比 walk-forward 稳定性。
+
 ## [0.94.10] - 2026-08-07
 
 ### Fixed

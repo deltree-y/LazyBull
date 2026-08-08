@@ -7,6 +7,7 @@ from typing import List, Optional
 import pandas as pd
 from loguru import logger
 
+from ...common.date_utils import is_recent_date_str
 from ...data import Storage, TushareClient
 from .bulk import _generate_quarter_periods, _query_with_pagination
 
@@ -253,6 +254,17 @@ def _try_ensure_historical_moneyflow_hsgt(
     )
 
 
+# 龙虎榜"近期空占位"重新查询窗口（自然日）: 已被过早下载成 0 行占位的近期日期
+# 在窗口内每次运行都重新查询一次, 修复已落盘的假空分区
+_TOP_LIST_REDOWNLOAD_DAYS = 10
+
+
+def _is_top_list_empty_placeholder(storage, date_str: str) -> bool:
+    """判断某日 top_list 分区是否为 0 行空占位（假空候选, 需重新查询）。"""
+    df = storage.load_raw_by_date("top_list", date_str)
+    return df is not None and len(df) == 0
+
+
 def _try_ensure_historical_top_list(
     client: TushareClient,
     storage: Storage,
@@ -275,24 +287,52 @@ def _try_ensure_historical_top_list(
         return None
 
     downloaded = 0
+    skipped_recent = 0
+    redownloaded = 0
     for dt in trading_dates_str:
         if storage.is_data_exists("raw", "top_list", dt):
-            continue
+            if (
+                is_recent_date_str(dt, days=_TOP_LIST_REDOWNLOAD_DAYS)
+                and _is_top_list_empty_placeholder(storage, dt)
+            ):
+                # 近期空占位重新查询（修复已落盘的假空分区）
+                redownloaded += 1
+            else:
+                continue
         try:
             df = client.get_top_list(trade_date=dt)
             if df is not None and not df.empty:
                 storage.save_raw_by_date(df, "top_list", dt)
                 downloaded += 1
+            elif is_recent_date_str(dt):
+                # 近期日期数据可能尚未发布, 不落盘空占位, 下次运行重试（防假空）
+                skipped_recent += 1
             else:
-                # 当日无上榜股票, 保存空 DataFrame 占位避免重复下载
+                # 历史日期确认无上榜: 保存 0 行空占位（与下载脚本 schema 一致,
+                # 加载时会被过滤）, 避免重复下载
                 storage.save_raw_by_date(
-                    pd.DataFrame({"trade_date": [dt]}), "top_list", dt,
+                    pd.DataFrame(
+                        columns=[
+                            "trade_date",
+                            "ts_code",
+                            "net_amount",
+                            "net_rate",
+                            "amount_rate",
+                            "reason",
+                        ]
+                    ),
+                    "top_list",
+                    dt,
                 )
         except Exception as e:
             logger.debug(f"top_list {dt} 下载失败: {e}")
 
     if downloaded > 0:
         logger.info(f"龙虎榜历史补齐: 新增 {downloaded} 个交易日")
+    if skipped_recent > 0:
+        logger.info(f"龙虎榜历史补齐: 近期 {skipped_recent} 个交易日空响应, 暂不落盘待重试")
+    if redownloaded > 0:
+        logger.info(f"龙虎榜历史补齐: 近期空占位 {redownloaded} 个交易日重新查询")
 
     from ...data.loader import DataLoader
     loader = DataLoader(storage)

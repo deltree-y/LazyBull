@@ -451,7 +451,18 @@ def build_features_data(
         top_list_df = loader.load_top_list(start_dt.strftime("%Y%m%d"), end_date)
         if top_list_df is not None:
             logger.info(f"龙虎榜数据: {len(top_list_df)} 条")
-            lhb_lookup = build_lhb_lookup_by_date(top_list_df, trading_dates_str)
+            # 滚动窗口需要包含预热期的完整交易日历, 否则区间前 19 个交易日
+            # 的历史累计被 reindex 丢弃, 造成批量构建与单日推理不一致
+            warm_cal = loader.get_trading_dates(
+                start_dt.strftime("%Y-%m-%d"),
+                end_date[:4] + "-" + end_date[4:6] + "-" + end_date[6:8],
+            )
+            calendar_str = [
+                d.strftime("%Y%m%d") if isinstance(d, pd.Timestamp) else d for d in warm_cal
+            ]
+            lhb_lookup = build_lhb_lookup_by_date(
+                top_list_df, trading_dates_str, calendar_dates=calendar_str
+            )
         else:
             logger.warning("未找到龙虎榜数据，相关特征将为空")
 

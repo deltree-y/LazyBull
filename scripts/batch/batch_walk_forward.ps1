@@ -32,7 +32,7 @@ $wf_period_configs = @(
         ContinueDays = 1
         StartModelVersion = 22626
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @(13)
+        SelectedSplits = @()
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -142,7 +142,6 @@ $enable_express          = $true  # $true 启用 | $false 禁用
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
 $enable_north            = $true  # $true 启用 | $false 禁用
-#实测:打开后CAGR下降约6%, 回撤上升8%
 # 0711 似乎无影响, 那就保持关闭
 
 # ── 龙虎榜因子（top_list 个股级, 2000+积分）──────────────────────

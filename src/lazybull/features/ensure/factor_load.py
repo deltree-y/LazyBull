@@ -255,12 +255,16 @@ def _load_factor_data(
 
     # ── 龙虎榜（按日分区）──────────────────────────────────────
     lhb_today = pd.DataFrame()
-    lhb_hist_dates = [d for d in trading_dates_str if d <= trade_date]
+    # 滚动窗口只需近 20 个交易日; 裁剪日历避免单日推断每次对全历史重算
+    lhb_hist_dates = [d for d in trading_dates_str if d <= trade_date][-40:]
     top_list_df = _try_ensure_historical_top_list(client, storage, lhb_hist_dates)
     if top_list_df is not None and len(top_list_df) > 0:
         from ...factors.lhb import build_lhb_lookup_by_date
 
-        lhb_lookup = build_lhb_lookup_by_date(top_list_df, factor_output_dates)
+        # 单日推断仅输出当日, 但滚动窗口需要完整历史交易日历
+        lhb_lookup = build_lhb_lookup_by_date(
+            top_list_df, factor_output_dates, calendar_dates=lhb_hist_dates
+        )
         cur = lhb_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
             lhb_today = cur
