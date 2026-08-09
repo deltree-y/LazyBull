@@ -5,6 +5,9 @@ from typing import Optional
 
 import pandas as pd
 
+# TuShare 单次查询行数上限（全市场单日已逼近该值，超出会静默截断）
+_TUSHARE_PAGE_LIMIT = 6000
+
 
 class ClientDailyMixin:
     """TushareClient 日线行情 mixin。"""
@@ -27,6 +30,16 @@ class ClientDailyMixin:
         Returns:
             日线行情DataFrame
         """
+        if ts_code is None:
+            # 全市场查询（单日约 5400+ 条，逼近单次 6000 上限）自动分页，避免静默截断
+            return self._query_with_pagination(
+                "daily",
+                page_limit=_TUSHARE_PAGE_LIMIT,
+                ts_code=ts_code,
+                trade_date=trade_date,
+                start_date=start_date,
+                end_date=end_date,
+            )
         return self.query(
             "daily",
             ts_code=ts_code,
@@ -53,6 +66,16 @@ class ClientDailyMixin:
         Returns:
             每日指标DataFrame
         """
+        if ts_code is None:
+            # 全市场查询（单日约 5400+ 条，逼近单次 6000 上限）自动分页，避免静默截断
+            return self._query_with_pagination(
+                "daily_basic",
+                page_limit=_TUSHARE_PAGE_LIMIT,
+                ts_code=ts_code,
+                trade_date=trade_date,
+                start_date=start_date,
+                end_date=end_date,
+            )
         return self.query(
             "daily_basic",
             ts_code=ts_code,
@@ -146,6 +169,16 @@ class ClientDailyMixin:
         Returns:
             涨跌停价格DataFrame，包含 up_limit, down_limit 等字段
         """
+        if ts_code is None:
+            # 全市场查询（含指数约 7400 条，超单次 6000 上限）自动分页，避免静默截断
+            return self._query_with_pagination(
+                "stk_limit",
+                page_limit=_TUSHARE_PAGE_LIMIT,
+                ts_code=ts_code,
+                trade_date=trade_date,
+                start_date=start_date,
+                end_date=end_date,
+            )
         return self.query(
             "stk_limit",
             ts_code=ts_code,
@@ -218,6 +251,16 @@ class ClientDailyMixin:
             - net_mf_vol: 净流入量（手）
             - net_mf_amount: 净流入额（万元）
         """
+        if ts_code is None:
+            # 全市场查询（单日约 5400+ 条，逼近单次 6000 上限）自动分页，避免静默截断
+            return self._query_with_pagination(
+                "moneyflow",
+                page_limit=_TUSHARE_PAGE_LIMIT,
+                ts_code=ts_code,
+                trade_date=trade_date,
+                start_date=start_date,
+                end_date=end_date,
+            )
         return self.query(
             "moneyflow",
             ts_code=ts_code,

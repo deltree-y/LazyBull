@@ -4,11 +4,10 @@
 负责按交易日历逐日清洗 raw 层日线/复权/停牌/涨跌停/ST 数据并保存到 clean 分区。
 """
 
-import numpy as np
-
 from loguru import logger
 
 from . import DataCleaner, DataLoader, Storage
+from .cleaner import has_usable_adjusted_prices
 
 
 def build_clean_data(
@@ -81,24 +80,25 @@ def build_clean_data(
         try:
             # 检查clean数据是否已存在
             if not force and storage.is_data_exists("clean", "daily", trade_date):
-                logger.debug(f"  clean daily已存在，跳过")
-                skip_count += 1
-                continue
+                existing_clean = storage.load_clean_by_date("daily", trade_date)
+                if has_usable_adjusted_prices(existing_clean):
+                    logger.debug("  clean daily已存在，跳过")
+                    skip_count += 1
+                    continue
+                logger.warning("  clean daily 复权价不可用，将重新构建")
 
             # 加载raw数据
             daily_raw = storage.load_raw_by_date("daily", trade_date)
             if daily_raw is None or len(daily_raw) == 0:
-                logger.warning(f"  未找到raw层daily数据，跳过")
+                logger.warning("  未找到raw层daily数据，跳过")
                 error_count += 1
                 continue
 
             adj_factor_raw = storage.load_raw_by_date("adj_factor", trade_date)
             if adj_factor_raw is None or len(adj_factor_raw) == 0:
-                # 与在线 ensure 路径保持一致：保留缺失值并交由清洗层处理，
-                # 避免用伪造默认值 1.0 污染复权价格与收益（问题2）
-                logger.warning("  未找到复权因子，保留缺失值并交由清洗层处理")
-                adj_factor_raw = daily_raw[["ts_code", "trade_date"]].copy()
-                adj_factor_raw["adj_factor"] = np.nan
+                logger.error("  未找到复权因子，跳过 clean/daily 构建")
+                error_count += 1
+                continue
 
             # 清洗日线数据
             daily_clean = cleaner.clean_daily(daily_raw, adj_factor_raw)
@@ -149,7 +149,7 @@ def build_clean_data(
                     moneyflow_clean = cleaner.clean_moneyflow(moneyflow_raw)
                     storage.save_clean_by_date(moneyflow_clean, "moneyflow", trade_date)
             else:
-                logger.warning(f"  未找到资金流向数据（moneyflow 为强制依赖项）")
+                logger.warning("  未找到资金流向数据（moneyflow 为强制依赖项）")
 
         except Exception as e:
             logger.error(f"处理 {trade_date} 失败: {str(e)}")

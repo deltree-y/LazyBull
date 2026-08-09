@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """FeatureBuilder 工具 mixin：交易日/回看/复权/技术因子缓存/市场状态/中性化委托。"""
 
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -65,6 +65,22 @@ class FeatureHelpersMixin:
         window_dates = set(trading_dates[warmup_start_idx:])
         return daily_df[daily_df["trade_date"].isin(window_dates)]
 
+    def _get_window_trading_dates(
+        self,
+        trading_dates: List[str],
+        anchor_trade_date: str,
+        warmup_days: int = _WARMUP_TRADING_DAYS,
+    ) -> List[str]:
+        """返回与 _slice_by_trading_days 切片一致的有序交易日窗口列表。
+
+        供技术指标按交易日对齐滚动窗口使用（审计问题6 修复）。
+        """
+        if anchor_trade_date not in trading_dates:
+            return list(trading_dates)
+        anchor_idx = trading_dates.index(anchor_trade_date)
+        warmup_start_idx = max(0, anchor_idx - warmup_days)
+        return trading_dates[warmup_start_idx:]
+
     def _calculate_adj_close(
         self, daily_data: pd.DataFrame, adj_factor: pd.DataFrame
     ) -> pd.DataFrame:
@@ -84,7 +100,6 @@ class FeatureHelpersMixin:
         )
         daily_adj["adj_factor"] = pd.to_numeric(daily_adj["adj_factor"], errors="coerce")
         daily_adj = daily_adj.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
-        daily_adj["adj_factor"] = daily_adj.groupby("ts_code")["adj_factor"].ffill().bfill()
         daily_adj["close_adj"] = daily_adj["close"] * daily_adj["adj_factor"]
         if "open" in daily_adj.columns:
             daily_adj["open_adj"] = daily_adj["open"] * daily_adj["adj_factor"]
@@ -113,10 +128,15 @@ class FeatureHelpersMixin:
                 daily_adj_for_cache = self._slice_by_trading_days(
                     daily_adj, trading_dates, trade_date
                 )
+                # 与切片窗口一致的交易日列表：滚动窗口按交易日对齐（停牌日补 NaN）
+                window_trading_dates = self._get_window_trading_dates(trading_dates, trade_date)
             else:
                 daily_adj_for_cache = daily_adj
+                window_trading_dates = None
             self._tech_factor_cache = precompute_technical_factors(
-                daily_adj=daily_adj_for_cache, vol_windows=self.lookback_windows
+                daily_adj=daily_adj_for_cache,
+                vol_windows=self.lookback_windows,
+                trading_dates=window_trading_dates,
             )
             if (
                 self._daily_adj_dict is not None

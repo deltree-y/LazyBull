@@ -212,3 +212,37 @@ class ClientCoreMixin:
         if last_err is not None:
             raise last_err
         return pd.DataFrame()
+
+    def _query_with_pagination(
+        self,
+        api_name: str,
+        page_limit: int = 6000,
+        fields: Optional[str] = None,
+        max_pages: int = 100,
+        **kwargs,
+    ) -> pd.DataFrame:
+        """带分页的 API 调用（走 query 限频与限流重试），自动翻页获取全量数据。
+
+        适用于单日全市场等行数可能超过 TuShare 单次上限（6000）的查询，
+        如 daily_basic / moneyflow / stk_limit。终止条件为返回行数 < page_limit，
+        并以 max_pages 兜底防止不支持 offset 的接口死循环。
+        """
+        all_pages: List[pd.DataFrame] = []
+        offset = 0
+        for _ in range(max_pages):
+            df = self.query(
+                api_name, fields=fields or "", limit=page_limit, offset=offset, **kwargs,
+            )
+            if df is None or len(df) == 0:
+                break
+            all_pages.append(df)
+            if len(df) < page_limit:
+                break
+            offset += page_limit
+        else:
+            logger.warning(
+                f"[{api_name}] 达到最大分页数 {max_pages}，数据可能未取完，请检查是否支持 offset 分页"
+            )
+        if not all_pages:
+            return pd.DataFrame()
+        return pd.concat(all_pages, ignore_index=True)

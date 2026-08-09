@@ -199,6 +199,24 @@ class TestStoragePartitioning:
         partitions = temp_storage.list_partitions("raw", "nonexistent")
         assert partitions == []
 
+    def test_count_rows(self, temp_storage, sample_data):
+        """count_rows 快速统计分区行数（不加载全量）"""
+        temp_storage.save_raw_by_date(sample_data, "daily", "20230101")
+        assert temp_storage.count_rows("raw", "daily", "20230101") == 3
+        # 文件不存在返回 None
+        assert temp_storage.count_rows("raw", "daily", "20230102") is None
+
+    def test_is_data_exists_min_rows_coverage_gate(self, temp_storage, sample_data):
+        """min_rows 覆盖度门控：文件存在但行数不足视为未补齐（审计问题2）"""
+        temp_storage.save_raw_by_date(sample_data, "daily", "20230101")  # 3 行
+        # 行数充足 / 恰好等于阈值均视为已补齐
+        assert temp_storage.is_data_exists("raw", "daily", "20230101", min_rows=3)
+        assert temp_storage.is_data_exists("raw", "daily", "20230101", min_rows=2)
+        # 行数不足视为未补齐（模拟历史截断落盘）
+        assert not temp_storage.is_data_exists("raw", "daily", "20230101", min_rows=5)
+        # 不传 min_rows 时保持原行为（只查存在性）
+        assert temp_storage.is_data_exists("raw", "daily", "20230101")
+
 
 class TestTushareClient:
     """测试TushareClient的suspend_d方法"""

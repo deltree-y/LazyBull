@@ -32,11 +32,12 @@ def compute_ret_1(daily_adj: pd.DataFrame) -> pd.Series:
 
     if 'close_adj' in daily_adj.columns:
         # 按 ts_code 分组、trade_date 升序排序后计算 pct_change
-        # 先对整个 DataFrame 排序，保证 groupby 后顺序正确
+        # fill_method=None：不做 NaN 前向填充，停牌/缺行段保持 NaN，
+        # 避免跨停牌期计算收益（配合按交易日对齐的滚动窗口，审计问题6）
         sorted_df = daily_adj[['ts_code', 'trade_date', 'close_adj']].sort_values(
             ['ts_code', 'trade_date']
         )
-        ret = sorted_df.groupby('ts_code', sort=False)['close_adj'].pct_change()
+        ret = sorted_df.groupby('ts_code', sort=False)['close_adj'].pct_change(fill_method=None)
         # 恢复到原始行索引顺序
         return ret.reindex(daily_adj.index)
 

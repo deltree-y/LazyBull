@@ -160,7 +160,11 @@ def _calculate_window_features_static(
     hist_data = hist_data.sort_values(["ts_code", "trade_date"])
     grouped = hist_data.groupby("ts_code", as_index=False)
     window_features = grouped.agg(
-        {"close_adj": ["first", "last", "mean"], "vol": "mean", "amount": "mean"}
+        {
+            "close_adj": ["first", "last", "mean", "count"],
+            "vol": "mean",
+            "amount": "mean",
+        }
     )
     new_columns = []
     for col in window_features.columns:
@@ -174,6 +178,7 @@ def _calculate_window_features_static(
             "close_adj_first": "first_close",
             "close_adj_last": "last_close",
             "close_adj_mean": "ma_close",
+            "close_adj_count": "obs_count",
             "vol_mean": "mean_vol",
             "amount_mean": "mean_amount",
         }
@@ -193,6 +198,12 @@ def _calculate_window_features_static(
         (window_features["close_adj"] - window_features["ma_close"]) / window_features["ma_close"],
         np.nan,
     )
+    # 窗口内观测不足（长期停牌/上市不足导致行数 < window）时，窗口特征语义失效置 NaN：
+    # ret_N/vol_ratio_N/ma_deviation_N 要求覆盖 window 个交易日的完整观测，
+    # 缺行时 first/last 会跨停牌或跨度不足，按实际观测行聚合会给出失真值
+    insufficient = window_features["obs_count"] < window
+    for col in [f"ret_{window}", f"vol_ratio_{window}", f"ma_deviation_{window}", "mean_amount"]:
+        window_features.loc[insufficient, col] = np.nan
     keep_cols = [
         "ts_code",
         f"ret_{window}",

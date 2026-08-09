@@ -2,6 +2,182 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.27] - 2026-08-09
+
+### Fixed
+
+- **adj_factor 强制依赖闭环**：
+  - raw 批量下载不再允许 adj_factor 空响应静默通过，空响应按整日失败处理且不部分落盘；moneyflow 仍允许因发布时间较晚而暂时为空，并在后续运行重试；
+  - 在线 ensure 获取不到 adj_factor 时返回 False，离线 clean 批量构建则跳过该日期，不再构造全 NaN 占位并缓存无效 clean/daily。
+- **无效 clean/daily 缓存自愈**：
+  - 在线和离线构建在跳过已有分区前检查 close_adj 是否至少包含一个有效值；旧版本生成的全空复权价分区会自动失效并覆盖重建；
+  - DataCleaner 拒绝空、缺必要列或全无有效数值的 adj_factor，防止其他调用路径绕过入口保护。
+- **复权因子缺失不再跨日填充**：
+  - cleaner 与 FeatureBuilder helper 均取消 adj_factor 前向填充；局部缺失保留 NaN 并告警，避免除权除息事件日错误沿用昨日因子；
+  - 真实历史数据允许少量股票缺少因子，不要求 daily 与 adj_factor 代码集合完全一致。
+
+### Tests
+
+- 新增 adj_factor 空响应整日不落盘、在线补齐失败、离线跳过、全无效值拒绝和旧坏缓存自动重建测试；更新中间日期缺失因子测试为保持 NaN。
+
+## [0.94.26] - 2026-08-09
+
+### Fixed
+
+- **daily 唯一代码完整性校验**：
+  - 新下载和历史重下数据在落盘前校验 `(ts_code, trade_date)` 主键，重复记录、空代码或混入非目标日期时直接失败，避免分页重叠用重复行虚增覆盖率；
+  - 覆盖度统一使用唯一 `ts_code` 数量，不再使用 Parquet 物理行数判断。
+- **历史停牌日覆盖度交叉确认**：
+  - stock_basic 粗筛低于 85% 时，改由独立 daily_basic 代码域二次确认，避免 2006 年和 2015 年大面积停牌等合法历史日期被硬阈值误杀；
+  - 基于全部 241 个低覆盖历史分区校准 2% 跨源容差，实际最大差异为 1.96%，明显部分返回仍会失败；
+  - daily_basic 自身改用代码集合校验，替代严格行数相等门控；正常发布时间延迟仍保持告警降级。
+- **缺失基准安全降级**：stock_basic 缺少 list_date 时跳过历史覆盖率粗筛并告警，不再错误回退当前股票全集。
+
+### Tests
+
+- 新增重复 daily 不落盘、历史低覆盖由 daily_basic 确认、2% 历史容差与明显部分返回拒绝用例。
+
+## [0.94.25] - 2026-08-09
+
+### Fixed
+
+- **daily 完整性严格闭环（评审高危）**：
+  - 新下载 daily **先验证覆盖度再落盘**：覆盖率低于当日已上市股票域的 85% 时不落盘并返回 False，
+    避免缺陷分区（截断/部分返回）被保存；
+  - 历史低覆盖强制重下后，重下返回空（接口故障）或重下后仍低（数据不可靠）均返回 False，
+    不再"告警后继续放行"；旧分区在重下异常时保留但明确失败；
+  - 测试覆盖全部失败路径（首次低覆盖不落盘、重下空、重下仍低）。
+- **覆盖度基准按 list_date 过滤（评审中高）**：
+  - `_is_daily_coverage_low` 分母改为"截至 trade_date 已上市（list_date <= trade_date）"股票数，
+    不再用当前 stock_basic 全集（5878 只）做所有日期的分母，避免 2005 年等历史日期
+    被必然误判低覆盖而每次重复下载；缺 list_date 列时退化为全集并保留告警。
+
+### Tests
+
+- `test_ensure_and_t0_printing.py`：新增首次下载低覆盖不落盘、重下返回空、重下仍低三条失败路径用例；
+  新增 list_date 过滤（历史日期不误伤）断言。
+
+## [0.94.24] - 2026-08-09
+
+### Fixed
+
+- **daily 覆盖度闭环（评审高危）**：
+  - `_check_daily_coverage` 重构为 `_is_daily_coverage_low`，阈值 0.7 → 0.85
+    （实测丢失 1000/5500、覆盖率 81.8% 的场景可被检测）；
+  - 历史已有 daily 覆盖度偏低时触发一次**强制重下**（不再仅告警），重下后覆盖度恢复即成功；
+  - 重下后仍低（可能为真实停牌潮或服务端部分返回）时 error 告警待人工核实
+    （不返回失败，避免停牌潮日误报阻断流程）；
+  - 集合级错配（缺一只混入另一只且行数相近）仍属已知局限。
+- **daily_basic 覆盖度门控恢复（评审中危）**：
+  - 实测 daily_basic 与 daily 代码集合 30/30 天完全一致（不同于 moneyflow 缺北交所），
+    恢复 `min_rows=daily_rows` 门控；上一版（0.94.23）将其与 moneyflow 一并移除属误删，已纠正。
+
+### Tests
+
+- `test_ensure_and_t0_printing.py`：coverage_gate 恢复为 daily_basic；新增历史 daily 低覆盖
+  触发强制重下、`_is_daily_coverage_low` 判定用例。
+
+## [0.94.23] - 2026-08-09
+
+### Fixed
+
+- **moneyflow 覆盖度门控修正（评审高危）**：
+  - `moneyflow` 天然不覆盖全部 daily 股票（实测每日稳定少 319~331 只，主要为北交所 920xxx.BJ），
+    从 `ensure_raw_data_for_date` 的 `min_rows=daily_rows` 门控中移除，恢复存在性检查，
+    避免每次 ensure 重复下载；`adj_factor`/`stk_limit` 保留行数门控。
+    （注：`daily_basic` 实测与 daily 代码集合一致，其门控保留——见 0.94.24 修正说明。）
+- **KDJ 窗口不足掩码（评审中危）**：
+  - `technical_indicators.py::calculate_kdj` 在 RSV 窗口有效观测不足（low_n/high_n 为 NaN）时，
+    最终 kdj_k/kdj_d/kdj_j 输出掩码为 NaN：内部状态可重置（ffill/fillna 仅用于 EWM 演化），
+    但不再给"看似有效"的伪信号，与 volatility 等窗口因子保持一致的缺失语义。
+- **daily 自身覆盖度告警（评审中危）**：
+  - `ensure.py` 新增 `_check_daily_coverage`：以 stock_basic 全集为参照，daily 行数低于 70%
+    时记录 error 告警（覆盖历史截断分区/服务端部分返回），仅告警不自动重下；
+    集合级错配（缺一只混入另一只且行数相近）仍属已知局限。
+    （注：0.94.24 已升级为低覆盖度触发强制重下，见下。）
+
+### Tests
+
+- `test_ensure_and_t0_printing.py`：coverage_gate 改用 adj_factor；新增 moneyflow 不受 daily
+  行数门控、daily 覆盖度告警用例；
+- `test_technical_indicators_precompute.py`：补充停牌股复牌首日 KDJ 掩码为 NaN 断言。
+
+## [0.94.22] - 2026-08-09
+
+### Fixed
+
+- **停牌窗口修复补全（评审问题1）**：
+  - `static_core.py::_calculate_window_features_static` 统计窗口内观测数，`ret_N`/`vol_ratio_N`/
+    `ma_deviation_N`/`amount_maN` 在观测不足（停牌/上市不足导致行数 < window）时置 NaN，
+    不再用不足观测的 first/last 聚合出跨停牌失真值；
+  - `technical_indicators.py::calculate_kdj` 的 RSV 前向填充改为 `ffill(limit=3)`：短期停牌保持
+    停牌前 RSV，长期停牌回退 `fillna(50)` 重置，避免指标长期僵化后在复牌日跳变。
+- **daily 自身截断源头修复（评审问题2）**：
+  - `get_daily` 全市场查询（`ts_code is None`）改走 `_query_with_pagination` 分页，
+    消除 daily 单次 6000 上限静默截断；覆盖度门控的 daily 行数基准因此更可靠。
+- **ensure 区分非交易日与接口故障（评审问题3）**：
+  - `ensure_raw_data_for_date` 日线为空时依据缓存 trade_cal 判断：非交易日返回 True（正常跳过）；
+    交易日接口返回空或无法确认交易日历时返回 False（不再把接口故障误报为成功）。
+- **suspend 空值占位（评审问题4）**：
+  - 停复牌接口返回空（当日无停牌）时写占位空文件，避免下次 ensure 重复请求。
+
+### Tests
+
+- `test_ensure_and_t0_printing.py`：非交易日用例预置 trade_cal；新增交易日接口故障返回 False、
+  suspend 空占位不再重复请求用例；
+- `test_tushare_client_pagination.py`：新增 daily 全市场分页用例；
+- `test_technical_indicators_precompute.py`：新增 static_core 窗口观测不足置 NaN 用例；
+- `test_audit_fixes_quality_consistency.py`：新增 daily_basic 空值 `logger.error` 断言（评审问题5）。
+
+## [0.94.21] - 2026-08-09
+
+### Fixed
+
+- **raw ensure 覆盖度门控（审计高危）**：
+  - `storage.py::is_data_exists` 新增可选 `min_rows` 参数（配合 `count_rows` 用 pyarrow 元数据快速读行数），
+    文件存在但行数不足即视为未补齐，防止历史截断/中断落盘后缺口永久驻留；
+  - `ensure.py` 以当日 daily 行数为覆盖度参照，对 `adj_factor`/`stk_limit`/`moneyflow`/`daily_basic`
+    独立检查时启用 `min_rows` 门控（按日返回的应为同一批交易股票，行数不足触发重新补齐）。
+- **技术指标/波动率滚动窗口按交易日对齐（审计中危）**：
+  - `precompute_technical_factors` 新增可选 `trading_dates` 参数，经 `_align_to_trading_dates`
+    将日线序列与交易日对齐（停牌日补 NaN 行占位），滚动窗口按交易日跨度而非实际行数，
+    避免长期停牌股复牌后 RSI/KDJ/MACD/BOLL/波动率/ATR 窗口语义错位；输出仍以原始行为键；
+  - `compute_ret_1` 的 `pct_change` 改 `fill_method=None`，停牌缺口收益保持 NaN，
+    不再跨停牌期计算（对无缺口的正常股票行为不变）；
+  - `helpers.py` 技术因子缓存构建时传入窗口交易日列表（生产路径默认生效）。
+
+### Tests
+
+- `test_storage.py` 新增 `count_rows` 与 `is_data_exists(min_rows)` 覆盖度门控用例；
+- `test_ensure_and_t0_printing.py` 新增 daily_basic 行数不足触发重新补齐用例；
+- `test_technical_indicators_precompute.py` 新增 `_align_to_trading_dates` 补行与
+  停牌股复牌初期滚动窗口按交易日对齐（NaN）用例。
+
+## [0.94.20] - 2026-08-09
+
+### Fixed
+
+- **raw ensure 补齐解耦（审计高危）**：
+  - `adj_factor` / `suspend` / `stk_limit` 从"daily 缺失分支"中移出，改为与 moneyflow/daily_basic 一致的独立存在性检查，
+    防止 daily 已落盘但某类数据因接口抖动缺失时永久无法补齐；
+  - 日线为空（非交易日）时提前返回并告警，不再无意义调用其余接口；`daily_basic` 为空时新增告警。
+- **daily_basic / moneyflow / stk_limit 全市场查询自动分页（审计中危）**：
+  - `TushareClient` 新增 `_query_with_pagination`（走 query 限频与限流重试）；三个 getter 在未指定 `ts_code` 的
+    全市场查询下自动分页取全，避免单次 6000 上限静默截断。
+- **复权因子回填语义修正（审计中偏高）**：
+  - `cleaner.py` 与 `helpers.py` 的 `adj_factor` 处理去掉 `bfill` 仅保留 `ffill`（累积因子前向填充语义正确），
+    避免将除权除息事件后的因子回填到事件前造成复权价虚假跳变、污染动量/波动率因子与标签。
+- **daily_basic 单日整体缺失硬告警（审计中危）**：
+  - `_add_value_dividend_features_static` 由 warning 升级为 error 级告警，价值红利核心信号
+    （bp/ep_ttm/dv_ttm/市值/换手）全空时明确可见。
+
+### Tests
+
+- 新增 `tests/test_tushare_client_pagination.py`（分页拼接/单股不翻页/空降级）；
+- `test_ensure_and_t0_printing.py` 新增 adj_factor 独立补齐与非交易日短路用例；
+- `test_features.py` 新增复权因子头部缺失不回填、中间缺失前向填充用例；
+- `test_audit_fixes_quality_consistency.py` 新增 daily_basic 空值不熔断用例。
+
 ## [0.94.19] - 2026-08-09
 
 ### Fixed

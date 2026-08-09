@@ -10,6 +10,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# KDJ 对停牌/缺行 NaN 段的前向填充上限（交易日）：短期缺口保持停牌前 RSV，
+# 长期停牌不填充（回退 fillna(50) 重置），避免指标长期僵化后在复牌日跳变
+_KDJ_RSV_FFILL_LIMIT = 3
+
 
 def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.DataFrame:
     """计算RSI（相对强弱指标）
@@ -112,19 +116,23 @@ def calculate_kdj(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.
     
     low_n = gp['low_adj'].rolling(window=n, min_periods=n).min().reset_index(level=0, drop=True)
     high_n = gp['high_adj'].rolling(window=n, min_periods=n).max().reset_index(level=0, drop=True)
+
+    # RSV 窗口有效性：low_n/high_n 均非 NaN 才认为窗口内有效观测足够；
+    # 停牌/上市初期等窗口不足时，最终 KDJ 输出掩码为 NaN（避免伪信号）
+    window_valid = low_n.notna() & high_n.notna()
     
     # 3. 计算 RSV
     denom = (high_n - low_n).replace(0, np.nan)
     rsv = 100 * (df_calc['close_adj'] - low_n) / denom
     
     # 填充 RSV 的 NaN：
-    #   - 先在每只股票内部做前向填充（ffill），处理停牌等导致的中间 NaN 段，
-    #     避免用固定值 50 覆盖停牌前的最后有效 RSV
-    #   - 再用 50 填充股票历史起始阶段（窗口不足时）的初始 NaN，
+    #   - 先在每只股票内部做前向填充（ffill limit），短期停牌（<= _KDJ_RSV_FFILL_LIMIT 日）
+    #     保持停牌前 RSV，避免长期停牌指标僵化后在复牌日跳变
+    #   - 再用 50 填充剩余 NaN（长期停牌后重置、或股票历史起始阶段窗口不足），
     #     符合传统 KDJ 初始值为 50 的约定
     df_calc['rsv_tmp'] = (
         rsv.groupby(df_calc['ts_code'])
-           .transform(lambda x: x.ffill().fillna(50.0))
+           .transform(lambda x: x.ffill(limit=_KDJ_RSV_FFILL_LIMIT).fillna(50.0))
     )
     
     # 4. 计算 K, D, J (使用 transform 避免索引冲突)
@@ -138,6 +146,10 @@ def calculate_kdj(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.
     )
     
     df_calc['kdj_j'] = 3 * df_calc['kdj_k'] - 2 * df_calc['kdj_d']
+
+    # 窗口有效观测不足的行掩码为 NaN：内部状态可以重置（ffill/fillna 仅用于 EWM 演化），
+    # 但最终输出不给"看似有效"的数值，与 volatility 等因子保持一致的缺失语义（审计评审意见2）
+    df_calc.loc[~window_valid, ['kdj_k', 'kdj_d', 'kdj_j']] = np.nan
     
     # 5. 按照原要求构造返回结果
     result = df_calc[['ts_code', 'trade_date', 'kdj_k', 'kdj_d', 'kdj_j']].copy()

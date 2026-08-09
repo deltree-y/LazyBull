@@ -1,5 +1,6 @@
 """测试特征构建模块"""
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -10,332 +11,321 @@ from src.lazybull.features import FeatureBuilder
 def mock_trade_cal():
     """模拟交易日历"""
     # 创建50个连续交易日（确保中间日期有足够的前后窗口覆盖 max(horizons)=20）
-    dates = pd.date_range('2023-01-01', periods=50, freq='B')  # Business days
+    dates = pd.date_range("2023-01-01", periods=50, freq="B")  # Business days
 
-    return pd.DataFrame({
-        'exchange': ['SSE'] * len(dates),
-        'cal_date': dates.strftime('%Y%m%d').tolist(),
-        'is_open': [1] * len(dates)
-    })
+    return pd.DataFrame(
+        {
+            "exchange": ["SSE"] * len(dates),
+            "cal_date": dates.strftime("%Y%m%d").tolist(),
+            "is_open": [1] * len(dates),
+        }
+    )
 
 
 @pytest.fixture
 def mock_stock_basic():
     """模拟股票基本信息"""
-    return pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-        'name': ['平安银行', '万科A', '*ST浦发', '邯郸钢铁'],
-        'list_date': ['20100101', '20100101', '20100101', '20230101']  # 最后一个刚上市
-    })
+    return pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+            "name": ["平安银行", "万科A", "*ST浦发", "邯郸钢铁"],
+            "list_date": ["20100101", "20100101", "20100101", "20230101"],  # 最后一个刚上市
+        }
+    )
 
 
 @pytest.fixture
 def mock_daily_data():
     """模拟日线行情数据"""
-    dates = pd.date_range('2023-01-01', periods=50, freq='B')
-    stocks = ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH']
-    
+    dates = pd.date_range("2023-01-01", periods=50, freq="B")
+    stocks = ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"]
+
     data = []
     for date in dates:
-        date_str = date.strftime('%Y%m%d')
+        date_str = date.strftime("%Y%m%d")
         for i, stock in enumerate(stocks):
             # 模拟价格
             base_price = 10.0 + i
             close = base_price * (1 + 0.01 * i)
             pre_close = base_price
             pct_chg = ((close - pre_close) / pre_close) * 100
-            
+
             # 第三只股票在某些日期停牌（成交量为0）
-            vol = 0 if (stock == '600000.SH' and date.day % 5 == 0) else 1000000
-            
+            vol = 0 if (stock == "600000.SH" and date.day % 5 == 0) else 1000000
+
             # 模拟开盘价（与收盘价稍有差异，便于测试 open_adj 取值）
             open_price = base_price * (1 + 0.005 * i)
 
-            data.append({
-                'ts_code': stock,
-                'trade_date': date_str,
-                'open': open_price,
-                'close': close,
-                'pre_close': pre_close,
-                'pct_chg': pct_chg,
-                'vol': vol,
-                'amount': vol * close if vol > 0 else 0
-            })
-    
+            data.append(
+                {
+                    "ts_code": stock,
+                    "trade_date": date_str,
+                    "open": open_price,
+                    "close": close,
+                    "pre_close": pre_close,
+                    "pct_chg": pct_chg,
+                    "vol": vol,
+                    "amount": vol * close if vol > 0 else 0,
+                }
+            )
+
     return pd.DataFrame(data)
 
 
 @pytest.fixture
 def mock_adj_factor():
     """模拟复权因子"""
-    dates = pd.date_range('2023-01-01', periods=50, freq='B')
-    stocks = ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH']
-    
+    dates = pd.date_range("2023-01-01", periods=50, freq="B")
+    stocks = ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"]
+
     data = []
     for date in dates:
-        date_str = date.strftime('%Y%m%d')
+        date_str = date.strftime("%Y%m%d")
         for stock in stocks:
             # 所有股票使用相同的复权因子（简化）
-            data.append({
-                'ts_code': stock,
-                'trade_date': date_str,
-                'adj_factor': 1.0
-            })
-    
+            data.append({"ts_code": stock, "trade_date": date_str, "adj_factor": 1.0})
+
     return pd.DataFrame(data)
 
 
 class TestFeatureBuilder:
     """测试特征构建器"""
-    
+
     def test_init(self):
         """测试初始化"""
         builder = FeatureBuilder(min_list_days=60, horizon=5)
-        
+
         assert builder.min_list_days == 60
         assert builder.horizon == 5
         assert len(builder.lookback_windows) > 0
-    
+
     def test_get_trading_dates(self, mock_trade_cal):
         """测试提取交易日列表"""
         builder = FeatureBuilder()
-        
+
         trading_dates = builder._get_trading_dates(mock_trade_cal)
-        
+
         assert len(trading_dates) == 50
         assert trading_dates == sorted(trading_dates)
         assert trading_dates[0] < trading_dates[-1]
-    
+
     def test_calculate_adj_close(self, mock_daily_data, mock_adj_factor):
         """测试计算后复权收盘价"""
         builder = FeatureBuilder()
-        
+
         daily_adj = builder._calculate_adj_close(mock_daily_data, mock_adj_factor)
-        
+
         # 检查是否添加了 close_adj 列
-        assert 'close_adj' in daily_adj.columns
-        
+        assert "close_adj" in daily_adj.columns
+
         # 检查计算是否正确（复权因子为1时，close_adj应该等于close）
-        assert (daily_adj['close_adj'] == daily_adj['close']).all()
-    
-    def test_calculate_forward_returns(
-        self,
-        mock_daily_data,
-        mock_adj_factor,
-        mock_trade_cal
-    ):
+        assert (daily_adj["close_adj"] == daily_adj["close"]).all()
+
+    def test_calculate_adj_close_no_backfill_head_missing(self, mock_daily_data, mock_adj_factor):
+        """复权因子头部缺失时不后向回填，复权价保留为空（审计问题5）"""
+        builder = FeatureBuilder()
+        adj = mock_adj_factor.copy()
+        first_date = adj["trade_date"].min()
+        mask = (adj["ts_code"] == "000001.SZ") & (adj["trade_date"] == first_date)
+        adj.loc[mask, "adj_factor"] = np.nan
+
+        daily_adj = builder._calculate_adj_close(mock_daily_data, adj)
+
+        head = daily_adj[
+            (daily_adj["ts_code"] == "000001.SZ") & (daily_adj["trade_date"] == first_date)
+        ]
+        # 去掉 bfill 后：首日缺失保持 NaN，不再用次日因子回填
+        assert head["adj_factor"].isna().all()
+        assert head["close_adj"].isna().all()
+
+    def test_calculate_adj_close_middle_missing_stays_nan(self, mock_daily_data, mock_adj_factor):
+        """复权因子中间缺失时保留 NaN，避免除权日沿用旧因子"""
+        builder = FeatureBuilder()
+        adj = mock_adj_factor.copy()
+        dates = sorted(adj["trade_date"].unique())
+        mid_date = dates[5]
+        mask = (adj["ts_code"] == "000001.SZ") & (adj["trade_date"] == mid_date)
+        adj.loc[mask, "adj_factor"] = np.nan
+
+        daily_adj = builder._calculate_adj_close(mock_daily_data, adj)
+
+        mid = daily_adj[
+            (daily_adj["ts_code"] == "000001.SZ") & (daily_adj["trade_date"] == mid_date)
+        ]
+        assert mid["adj_factor"].isna().all()
+        assert mid["close_adj"].isna().all()
+
+    def test_calculate_forward_returns(self, mock_daily_data, mock_adj_factor, mock_trade_cal):
         """测试计算未来5日收益"""
         builder = FeatureBuilder(horizon=5)
-        
+
         # 准备数据
         trading_dates = builder._get_trading_dates(mock_trade_cal)
         daily_adj = builder._calculate_adj_close(mock_daily_data, mock_adj_factor)
-        
+
         # 选择第一个交易日
         trade_date = trading_dates[0]
         current_idx = 0
-        current_data = daily_adj[daily_adj['trade_date'] == trade_date].copy()
-        
+        current_data = daily_adj[daily_adj["trade_date"] == trade_date].copy()
+
         # 计算标签
         labels = builder._calculate_forward_returns(
-            current_data,
-            daily_adj,
-            trade_date,
-            trading_dates,
-            current_idx
+            current_data, daily_adj, trade_date, trading_dates, current_idx
         )
-        
+
         # 检查返回结果
-        assert 'y_ret_5' in labels.columns
+        assert "y_ret_5" in labels.columns
         assert len(labels) == len(current_data)
-        
+
         # 未来5日的数据应该存在，标签不应该全是NaN
-        assert not labels['y_ret_5'].isna().all()
-    
+        assert not labels["y_ret_5"].isna().all()
+
     def test_forward_returns_calculation_correctness(
-        self,
-        mock_daily_data,
-        mock_adj_factor,
-        mock_trade_cal
+        self, mock_daily_data, mock_adj_factor, mock_trade_cal
     ):
         """测试未来收益计算的正确性"""
         builder = FeatureBuilder(horizon=5)
-        
+
         trading_dates = builder._get_trading_dates(mock_trade_cal)
         daily_adj = builder._calculate_adj_close(mock_daily_data, mock_adj_factor)
-        
+
         trade_date = trading_dates[0]
         # 标签语义：T+1 收盘买入，T+1+N 开盘卖出
-        buy_date = trading_dates[1]   # T+1
+        buy_date = trading_dates[1]  # T+1
         sell_date = trading_dates[6]  # T+1+5
 
         current_idx = 0
-        current_data = daily_adj[daily_adj['trade_date'] == trade_date].copy()
+        current_data = daily_adj[daily_adj["trade_date"] == trade_date].copy()
 
         labels = builder._calculate_forward_returns(
-            current_data,
-            daily_adj,
-            trade_date,
-            trading_dates,
-            current_idx
+            current_data, daily_adj, trade_date, trading_dates, current_idx
         )
 
         # 手动验证第一只股票的收益计算
-        stock = '000001.SZ'
+        stock = "000001.SZ"
         buy_price = daily_adj[
-            (daily_adj['trade_date'] == buy_date) &
-            (daily_adj['ts_code'] == stock)
-        ]['close_adj'].iloc[0]
+            (daily_adj["trade_date"] == buy_date) & (daily_adj["ts_code"] == stock)
+        ]["close_adj"].iloc[0]
 
         sell_price = daily_adj[
-            (daily_adj['trade_date'] == sell_date) &
-            (daily_adj['ts_code'] == stock)
-        ]['open_adj'].iloc[0]
+            (daily_adj["trade_date"] == sell_date) & (daily_adj["ts_code"] == stock)
+        ]["open_adj"].iloc[0]
 
         expected_return = (sell_price / buy_price) - 1
-        actual_return = labels[labels['ts_code'] == stock]['y_ret_5'].iloc[0]
+        actual_return = labels[labels["ts_code"] == stock]["y_ret_5"].iloc[0]
 
         assert abs(actual_return - expected_return) < 1e-6
-    
+
     def test_forward_returns_insufficient_future_dates(
-        self,
-        mock_daily_data,
-        mock_adj_factor,
-        mock_trade_cal
+        self, mock_daily_data, mock_adj_factor, mock_trade_cal
     ):
         """测试未来交易日不足的情况"""
         builder = FeatureBuilder(horizon=5)
-        
+
         trading_dates = builder._get_trading_dates(mock_trade_cal)
         daily_adj = builder._calculate_adj_close(mock_daily_data, mock_adj_factor)
-        
+
         # 选择最后一个交易日（没有足够的未来数据）
         trade_date = trading_dates[-1]
         current_idx = len(trading_dates) - 1
-        current_data = daily_adj[daily_adj['trade_date'] == trade_date].copy()
-        
+        current_data = daily_adj[daily_adj["trade_date"] == trade_date].copy()
+
         labels = builder._calculate_forward_returns(
-            current_data,
-            daily_adj,
-            trade_date,
-            trading_dates,
-            current_idx
+            current_data, daily_adj, trade_date, trading_dates, current_idx
         )
-        
+
         # 标签应该全是NaN
-        assert labels['y_ret_5'].isna().all()
-    
-    def test_apply_filters_st_stocks(
-        self,
-        mock_stock_basic
-    ):
+        assert labels["y_ret_5"].isna().all()
+
+    def test_apply_filters_st_stocks(self, mock_stock_basic):
         """测试ST股票过滤"""
         builder = FeatureBuilder(min_list_days=60)
-        
+
         # 创建模拟特征数据
-        df = pd.DataFrame({
-            'trade_date': ['20230110'] * 4,
-            'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-            'ret_1': [0.01, 0.02, 0.03, 0.01],
-            'y_ret_5': [0.05, 0.06, 0.07, 0.08],
-            'vol': [1000000, 1000000, 1000000, 1000000]
-        })
-        
-        # 添加过滤标记
-        result = builder._add_filter_flags(
-            df,
-            mock_stock_basic,
-            None,
-            '20230110'
+        df = pd.DataFrame(
+            {
+                "trade_date": ["20230110"] * 4,
+                "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+                "ret_1": [0.01, 0.02, 0.03, 0.01],
+                "y_ret_5": [0.05, 0.06, 0.07, 0.08],
+                "vol": [1000000, 1000000, 1000000, 1000000],
+            }
         )
-        
+
+        # 添加过滤标记
+        result = builder._add_filter_flags(df, mock_stock_basic, None, "20230110")
+
         # 检查ST标记（统一列名：is_st）
-        assert result[result['ts_code'] == '600000.SH']['is_st'].iloc[0] == 1  # *ST浦发
-        assert result[result['ts_code'] == '000001.SZ']['is_st'].iloc[0] == 0  # 平安银行
-        
+        assert result[result["ts_code"] == "600000.SH"]["is_st"].iloc[0] == 1  # *ST浦发
+        assert result[result["ts_code"] == "000001.SZ"]["is_st"].iloc[0] == 0  # 平安银行
+
         # 应用过滤
         filtered = builder._apply_filters(result)
-        
+
         # ST股票应该被过滤掉
-        assert '600000.SH' not in filtered['ts_code'].values
-        assert '000001.SZ' in filtered['ts_code'].values
+        assert "600000.SH" not in filtered["ts_code"].values
+        assert "000001.SZ" in filtered["ts_code"].values
         # 确认统一列名存在
-        assert 'is_st' in filtered.columns
-    
-    def test_apply_filters_list_days(
-        self,
-        mock_stock_basic
-    ):
+        assert "is_st" in filtered.columns
+
+    def test_apply_filters_list_days(self, mock_stock_basic):
         """测试上市天数过滤"""
         builder = FeatureBuilder(min_list_days=60)
-        
-        df = pd.DataFrame({
-            'trade_date': ['20230110'] * 4,
-            'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-            'ret_1': [0.01, 0.02, 0.03, 0.01],
-            'y_ret_5': [0.05, 0.06, 0.07, 0.08],
-            'vol': [1000000, 1000000, 1000000, 1000000]
-        })
-        
-        result = builder._add_filter_flags(
-            df,
-            mock_stock_basic,
-            None,
-            '20230110'
+
+        df = pd.DataFrame(
+            {
+                "trade_date": ["20230110"] * 4,
+                "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+                "ret_1": [0.01, 0.02, 0.03, 0.01],
+                "y_ret_5": [0.05, 0.06, 0.07, 0.08],
+                "vol": [1000000, 1000000, 1000000, 1000000],
+            }
         )
-        
+
+        result = builder._add_filter_flags(df, mock_stock_basic, None, "20230110")
+
         filtered = builder._apply_filters(result)
-        
+
         # 刚上市的股票（600001.SH，上市日期20230101）应该被过滤掉
         # 注意：这里的判断依赖于上市天数计算
-        assert '600001.SH' not in filtered['ts_code'].values or len(filtered) == 0
-    
-    def test_apply_filters_suspend(
-        self,
-        mock_stock_basic
-    ):
+        assert "600001.SH" not in filtered["ts_code"].values or len(filtered) == 0
+
+    def test_apply_filters_suspend(self, mock_stock_basic):
         """测试停牌过滤"""
         builder = FeatureBuilder(min_list_days=10)  # 降低上市天数要求
-        
-        df = pd.DataFrame({
-            'trade_date': ['20230110'] * 4,
-            'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-            'ret_1': [0.01, 0.02, 0.03, 0.01],
-            'y_ret_5': [0.05, 0.06, 0.07, 0.08],
-            'vol': [1000000, 0, 1000000, 1000000]  # 000002.SZ停牌（成交量为0）
-        })
-        
-        result = builder._add_filter_flags(
-            df,
-            mock_stock_basic,
-            None,
-            '20230110'
+
+        df = pd.DataFrame(
+            {
+                "trade_date": ["20230110"] * 4,
+                "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+                "ret_1": [0.01, 0.02, 0.03, 0.01],
+                "y_ret_5": [0.05, 0.06, 0.07, 0.08],
+                "vol": [1000000, 0, 1000000, 1000000],  # 000002.SZ停牌（成交量为0）
+            }
         )
-        
+
+        result = builder._add_filter_flags(df, mock_stock_basic, None, "20230110")
+
         # 检查停牌标记（统一列名：is_suspended）
-        assert result[result['ts_code'] == '000002.SZ']['is_suspended'].iloc[0] == 1
-        
+        assert result[result["ts_code"] == "000002.SZ"]["is_suspended"].iloc[0] == 1
+
         # 应用过滤
         filtered = builder._apply_filters(result)
-        
+
         # 停牌股票应该被过滤掉
-        assert '000002.SZ' not in filtered['ts_code'].values
+        assert "000002.SZ" not in filtered["ts_code"].values
         # 确认统一列名存在
-        assert 'is_suspended' in filtered.columns
-    
+        assert "is_suspended" in filtered.columns
+
     def test_build_features_for_day_integration(
-        self,
-        mock_trade_cal,
-        mock_daily_data,
-        mock_adj_factor,
-        mock_stock_basic
+        self, mock_trade_cal, mock_daily_data, mock_adj_factor, mock_stock_basic
     ):
         """测试完整的单日特征构建流程"""
         builder = FeatureBuilder(min_list_days=10, horizon=5)
-        
+
         # 选择一个中间的交易日（确保有历史和未来数据）
-        trade_date = '20230109'  # 第5个交易日
-        
+        trade_date = "20230109"  # 第5个交易日
+
         features = builder.build_features_for_day(
             trade_date=trade_date,
             trade_cal=mock_trade_cal,
@@ -343,77 +333,78 @@ class TestFeatureBuilder:
             adj_factor=mock_adj_factor,
             stock_basic=mock_stock_basic,
             suspend_info=None,
-            limit_info=None
+            limit_info=None,
         )
-        
+
         # 检查返回结果
         assert len(features) > 0
-        assert 'trade_date' in features.columns
-        assert 'ts_code' in features.columns
-        assert 'y_ret_5' in features.columns
-        assert 'ret_1' in features.columns
+        assert "trade_date" in features.columns
+        assert "ts_code" in features.columns
+        assert "y_ret_5" in features.columns
+        assert "ret_1" in features.columns
         # 统一列名（与clean层一致）
-        assert 'is_st' in features.columns
-        assert 'is_suspended' in features.columns
-        assert 'list_days' in features.columns
-        assert 'is_limit_up' in features.columns
-        assert 'is_limit_down' in features.columns
-        
+        assert "is_st" in features.columns
+        assert "is_suspended" in features.columns
+        assert "list_days" in features.columns
+        assert "is_limit_up" in features.columns
+        assert "is_limit_down" in features.columns
+
         # 所有样本的trade_date应该一致
-        assert (features['trade_date'] == trade_date).all()
-        
+        assert (features["trade_date"] == trade_date).all()
+
         # 标签不应该有缺失值（因为已经过滤）
-        assert not features['y_ret_5'].isna().any()
-        
+        assert not features["y_ret_5"].isna().any()
+
         # ST股票应该被过滤掉
-        assert not features['is_st'].any()
-        
+        assert not features["is_st"].any()
+
         # 停牌股票应该被过滤掉
-        assert not features['is_suspended'].any()
-    
+        assert not features["is_suspended"].any()
+
     def test_limit_flags(self, mock_daily_data, mock_stock_basic):
-        """测试涨跌停标记"""
+        """测试直接复用 clean 层涨跌停标记"""
         builder = FeatureBuilder()
-        
+
         # 创建包含涨跌停的数据
-        df = pd.DataFrame({
-            'trade_date': ['20230110'] * 4,
-            'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-            'ret_1': [0.01, 0.02, 0.03, 0.01],
-            'y_ret_5': [0.05, 0.06, 0.07, 0.08],
-            'is_st': [0, 0, 1, 0],  # 第三只是ST
-            'vol': [1000000, 1000000, 1000000, 1000000]
-        })
-        
-        # 模拟涨停和跌停的日线数据
-        limit_daily = pd.DataFrame({
-            'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-            'trade_date': ['20230110'] * 4,
-            'close': [11.0, 12.0, 13.0, 14.0],
-            'pct_chg': [10.0, -10.0, 5.0, 0.0]  # 涨停、跌停、ST涨停、正常
-        })
-        
-        result = builder._add_limit_flags(
-            df,
-            limit_daily,
-            None,
-            '20230110'
+        df = pd.DataFrame(
+            {
+                "trade_date": ["20230110"] * 4,
+                "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+                "ret_1": [0.01, 0.02, 0.03, 0.01],
+                "y_ret_5": [0.05, 0.06, 0.07, 0.08],
+                "is_st": [0, 0, 1, 0],  # 第三只是ST
+                "vol": [1000000, 1000000, 1000000, 1000000],
+                "is_limit_up": [1, 0, 1, 0],
+                "is_limit_down": [0, 1, 0, 0],
+            }
         )
-        
-        # 检查涨跌停标记（统一列名：is_limit_up, is_limit_down）
-        assert result[result['ts_code'] == '000001.SZ']['is_limit_up'].iloc[0] == 1
-        assert result[result['ts_code'] == '000002.SZ']['is_limit_down'].iloc[0] == 1
-        assert result[result['ts_code'] == '600000.SH']['is_limit_up'].iloc[0] == 1  # ST股票5%涨停
-        assert result[result['ts_code'] == '600001.SH']['is_limit_up'].iloc[0] == 0
+
+        # 模拟涨停和跌停的日线数据
+        limit_daily = pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+                "trade_date": ["20230110"] * 4,
+                "close": [11.0, 12.0, 13.0, 14.0],
+                "pct_chg": [10.0, -10.0, 5.0, 0.0],  # 涨停、跌停、ST涨停、正常
+            }
+        )
+
+        result = builder._add_limit_flags(df, limit_daily, None, "20230110")
+
+        # features 层只复用 cleaner 生成的标记，不按 pct_chg 重算
+        assert result[result["ts_code"] == "000001.SZ"]["is_limit_up"].iloc[0] == 1
+        assert result[result["ts_code"] == "000002.SZ"]["is_limit_down"].iloc[0] == 1
+        assert result[result["ts_code"] == "600000.SH"]["is_limit_up"].iloc[0] == 1  # ST股票5%涨停
+        assert result[result["ts_code"] == "600001.SH"]["is_limit_up"].iloc[0] == 0
 
 
 def test_feature_builder_with_empty_data():
     """测试空数据的处理"""
     builder = FeatureBuilder()
-    
+
     # 空交易日历
-    empty_cal = pd.DataFrame(columns=['exchange', 'cal_date', 'is_open'])
-    
+    empty_cal = pd.DataFrame(columns=["exchange", "cal_date", "is_open"])
+
     trading_dates = builder._get_trading_dates(empty_cal)
     assert len(trading_dates) == 0
 
@@ -421,125 +412,126 @@ def test_feature_builder_with_empty_data():
 def test_feature_builder_reuses_clean_markers():
     """测试特征构建器复用clean层标记"""
     builder = FeatureBuilder(min_list_days=60)
-    
+
     # 创建包含clean层标记的数据
-    df = pd.DataFrame({
-        'trade_date': ['20230110'] * 4,
-        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-        'ret_1': [0.01, 0.02, 0.03, 0.01],
-        'y_ret_5': [0.05, 0.06, 0.07, 0.08],
-        'vol': [1000000, 1000000, 1000000, 1000000],
-        # clean层标记
-        'is_st': [0, 0, 1, 0],
-        'is_suspended': [0, 1, 0, 0],
-        'is_limit_up': [1, 0, 0, 0],
-        'is_limit_down': [0, 0, 0, 1],
-        'list_days': [1000, 1000, 1000, 50],
-        'tradable': [1, 0, 0, 0]
-    })
-    
+    df = pd.DataFrame(
+        {
+            "trade_date": ["20230110"] * 4,
+            "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+            "ret_1": [0.01, 0.02, 0.03, 0.01],
+            "y_ret_5": [0.05, 0.06, 0.07, 0.08],
+            "vol": [1000000, 1000000, 1000000, 1000000],
+            # clean层标记
+            "is_st": [0, 0, 1, 0],
+            "is_suspended": [0, 1, 0, 0],
+            "is_limit_up": [1, 0, 0, 0],
+            "is_limit_down": [0, 0, 0, 1],
+            "list_days": [1000, 1000, 1000, 50],
+            "tradable": [1, 0, 0, 0],
+        }
+    )
+
     # 模拟stock_basic（实际不会被使用，因为有clean标记）
-    stock_basic = pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-        'name': ['平安银行', '万科A', '*ST浦发', '邯郸钢铁'],
-        'list_date': ['20100101', '20100101', '20100101', '20230101']
-    })
-    
+    stock_basic = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+            "name": ["平安银行", "万科A", "*ST浦发", "邯郸钢铁"],
+            "list_date": ["20100101", "20100101", "20100101", "20230101"],
+        }
+    )
+
     # 添加过滤标记（应该直接复用clean层标记）
-    result = builder._add_filter_flags(
-        df,
-        stock_basic,
-        None,
-        '20230110'
-    )
-    
+    result = builder._add_filter_flags(df, stock_basic, None, "20230110")
+
     # 验证clean层标记被保留
-    assert result[result['ts_code'] == '600000.SH']['is_st'].iloc[0] == 1
-    assert result[result['ts_code'] == '000002.SZ']['is_suspended'].iloc[0] == 1
-    assert result[result['ts_code'] == '600001.SH']['list_days'].iloc[0] == 50
-    
+    assert result[result["ts_code"] == "600000.SH"]["is_st"].iloc[0] == 1
+    assert result[result["ts_code"] == "000002.SZ"]["is_suspended"].iloc[0] == 1
+    assert result[result["ts_code"] == "600001.SH"]["list_days"].iloc[0] == 50
+
     # 模拟daily_data用于涨跌停标记（实际不会被使用，因为有clean标记）
-    daily_data = pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH', '600001.SH'],
-        'trade_date': ['20230110'] * 4,
-        'close': [11.0, 12.0, 13.0, 14.0],
-        'pct_chg': [10.0, -10.0, 5.0, -10.0]
-    })
-    
-    # 添加涨跌停标记（应该直接复用clean层标记）
-    result = builder._add_limit_flags(
-        result,
-        daily_data,
-        None,
-        '20230110'
+    daily_data = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "600000.SH", "600001.SH"],
+            "trade_date": ["20230110"] * 4,
+            "close": [11.0, 12.0, 13.0, 14.0],
+            "pct_chg": [10.0, -10.0, 5.0, -10.0],
+        }
     )
-    
+
+    # 添加涨跌停标记（应该直接复用clean层标记）
+    result = builder._add_limit_flags(result, daily_data, None, "20230110")
+
     # 验证clean层涨跌停标记被保留
-    assert result[result['ts_code'] == '000001.SZ']['is_limit_up'].iloc[0] == 1
-    assert result[result['ts_code'] == '600001.SH']['is_limit_down'].iloc[0] == 1
-    
+    assert result[result["ts_code"] == "000001.SZ"]["is_limit_up"].iloc[0] == 1
+    assert result[result["ts_code"] == "600001.SH"]["is_limit_down"].iloc[0] == 1
+
     # 应用过滤
     filtered = builder._apply_filters(result)
-    
+
     # ST、停牌、上市不足60天的股票应该被过滤
-    assert '000001.SZ' in filtered['ts_code'].values  # 正常，仅涨停不过滤
-    assert '000002.SZ' not in filtered['ts_code'].values  # 停牌
-    assert '600000.SH' not in filtered['ts_code'].values  # ST
-    assert '600001.SH' not in filtered['ts_code'].values  # 上市不足60天
+    assert "000001.SZ" in filtered["ts_code"].values  # 正常，仅涨停不过滤
+    assert "000002.SZ" not in filtered["ts_code"].values  # 停牌
+    assert "600000.SH" not in filtered["ts_code"].values  # ST
+    assert "600001.SH" not in filtered["ts_code"].values  # 上市不足60天
 
 
 def test_feature_builder_require_label_false():
     """测试 require_label=False 时不过滤标签缺失样本"""
     # 创建特征构建器（不要求标签）
     builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=False)
-    
+
     # 创建带标签缺失的DataFrame
-    df = pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH'],
-        'trade_date': ['20230110'] * 3,
-        'is_st': [0, 0, 0],
-        'list_days': [100, 100, 100],
-        'is_suspended': [0, 0, 0],
-        'y_ret_5': [0.05, float('nan'), 0.03]  # 第二个样本标签缺失
-    })
-    
+    df = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "600000.SH"],
+            "trade_date": ["20230110"] * 3,
+            "is_st": [0, 0, 0],
+            "list_days": [100, 100, 100],
+            "is_suspended": [0, 0, 0],
+            "y_ret_5": [0.05, float("nan"), 0.03],  # 第二个样本标签缺失
+        }
+    )
+
     # 应用过滤
     result = builder._apply_filters(df)
-    
+
     # 验证标签缺失的样本未被过滤
     assert len(result) == 3
-    assert '000002.SZ' in result['ts_code'].values
-    assert pd.isna(result[result['ts_code'] == '000002.SZ']['y_ret_5'].iloc[0])
+    assert "000002.SZ" in result["ts_code"].values
+    assert pd.isna(result[result["ts_code"] == "000002.SZ"]["y_ret_5"].iloc[0])
 
 
 def test_feature_builder_require_label_true():
     """测试 require_label=True 时过滤标签缺失样本（默认行为）"""
     # 创建特征构建器（要求标签，默认行为）
     builder = FeatureBuilder(min_list_days=60, horizon=5, require_label=True)
-    
+
     # 创建带标签缺失的DataFrame
-    df = pd.DataFrame({
-        'ts_code': ['000001.SZ', '000002.SZ', '600000.SH'],
-        'trade_date': ['20230110'] * 3,
-        'is_st': [0, 0, 0],
-        'list_days': [100, 100, 100],
-        'is_suspended': [0, 0, 0],
-        'y_ret_5': [0.05, float('nan'), 0.03]  # 第二个样本标签缺失
-    })
-    
+    df = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ", "600000.SH"],
+            "trade_date": ["20230110"] * 3,
+            "is_st": [0, 0, 0],
+            "list_days": [100, 100, 100],
+            "is_suspended": [0, 0, 0],
+            "y_ret_5": [0.05, float("nan"), 0.03],  # 第二个样本标签缺失
+        }
+    )
+
     # 应用过滤
     result = builder._apply_filters(df)
-    
+
     # 验证标签缺失的样本被过滤
     assert len(result) == 2
-    assert '000002.SZ' not in result['ts_code'].values
-    assert '000001.SZ' in result['ts_code'].values
-    assert '600000.SH' in result['ts_code'].values
+    assert "000002.SZ" not in result["ts_code"].values
+    assert "000001.SZ" in result["ts_code"].values
+    assert "600000.SH" in result["ts_code"].values
 
 
 # ============================================================
 # 测试：不同 start_date 截断，同一 trade_date 的窗口特征应一致
 # ============================================================
+
 
 def _make_full_trade_cal(dates):
     """辅助函数：根据日期列表生成完整交易日历 DataFrame
@@ -547,11 +539,13 @@ def _make_full_trade_cal(dates):
     Returns:
         DataFrame，包含 exchange、cal_date（YYYYMMDD 字符串）、is_open（全为 1）列
     """
-    return pd.DataFrame({
-        'exchange': ['SSE'] * len(dates),
-        'cal_date': [d.strftime('%Y%m%d') for d in dates],
-        'is_open': [1] * len(dates),
-    })
+    return pd.DataFrame(
+        {
+            "exchange": ["SSE"] * len(dates),
+            "cal_date": [d.strftime("%Y%m%d") for d in dates],
+            "is_open": [1] * len(dates),
+        }
+    )
 
 
 def _make_daily_data(dates, stocks, seed=42):
@@ -562,6 +556,7 @@ def _make_daily_data(dates, stocks, seed=42):
         pct_chg、vol、amount、close_adj/open_adj/high_adj/low_adj、adj_factor 列
     """
     import numpy as np
+
     rng = np.random.default_rng(seed)
     records = []
     for stock in stocks:
@@ -570,23 +565,25 @@ def _make_daily_data(dates, stocks, seed=42):
             pct = rng.uniform(-0.03, 0.03)
             close = round(price * (1 + pct), 4)
             pre_close = price
-            records.append({
-                'ts_code': stock,
-                'trade_date': date.strftime('%Y%m%d'),
-                'open': close,
-                'high': close * 1.01,
-                'low': close * 0.99,
-                'close': close,
-                'pre_close': pre_close,
-                'pct_chg': pct * 100,
-                'vol': 1_000_000,
-                'amount': close * 1_000_000,
-                'close_adj': close,
-                'open_adj': close,
-                'high_adj': close * 1.01,
-                'low_adj': close * 0.99,
-                'adj_factor': 1.0,
-            })
+            records.append(
+                {
+                    "ts_code": stock,
+                    "trade_date": date.strftime("%Y%m%d"),
+                    "open": close,
+                    "high": close * 1.01,
+                    "low": close * 0.99,
+                    "close": close,
+                    "pre_close": pre_close,
+                    "pct_chg": pct * 100,
+                    "vol": 1_000_000,
+                    "amount": close * 1_000_000,
+                    "close_adj": close,
+                    "open_adj": close,
+                    "high_adj": close * 1.01,
+                    "low_adj": close * 0.99,
+                    "adj_factor": 1.0,
+                }
+            )
             price = close
     return pd.DataFrame(records)
 
@@ -597,18 +594,21 @@ def _make_stock_basic(stocks):
     Returns:
         DataFrame，包含 ts_code、name、list_date（均设为 20100101）列
     """
-    return pd.DataFrame({
-        'ts_code': stocks,
-        'name': [f'股票{i}' for i in range(len(stocks))],
-        'list_date': ['20100101'] * len(stocks),
-    })
+    return pd.DataFrame(
+        {
+            "ts_code": stocks,
+            "name": [f"股票{i}" for i in range(len(stocks))],
+            "list_date": ["20100101"] * len(stocks),
+        }
+    )
 
 
 def test_get_lookback_dates_basic():
     """测试 _get_lookback_dates 基础功能"""
     import pandas as pd
-    dates = pd.date_range('2023-01-01', periods=30, freq='B')
-    trading_dates = [d.strftime('%Y%m%d') for d in dates]
+
+    dates = pd.date_range("2023-01-01", periods=30, freq="B")
+    trading_dates = [d.strftime("%Y%m%d") for d in dates]
     builder = FeatureBuilder()
 
     # 正常回溯 5 个交易日
@@ -625,7 +625,7 @@ def test_get_lookback_dates_basic():
     assert result == []
 
     # trade_date 不在序列中
-    result = builder._get_lookback_dates('99991231', 5, trading_dates)
+    result = builder._get_lookback_dates("99991231", 5, trading_dates)
     assert result == []
 
 
@@ -641,15 +641,15 @@ def test_window_features_stable_across_start_dates():
     """
     import pandas as pd
 
-    all_dates = pd.date_range('2023-01-01', periods=60, freq='B')
-    stocks = ['000001.SZ', '000002.SZ']
+    all_dates = pd.date_range("2023-01-01", periods=60, freq="B")
+    stocks = ["000001.SZ", "000002.SZ"]
 
     full_trade_cal = _make_full_trade_cal(all_dates)
     all_daily = _make_daily_data(all_dates, stocks)
     stock_basic = _make_stock_basic(stocks)
-    adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+    adj_factor = pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"])
 
-    target_date = all_dates[49].strftime('%Y%m%d')  # 第 50 个交易日
+    target_date = all_dates[49].strftime("%Y%m%d")  # 第 50 个交易日
 
     builder = FeatureBuilder(
         min_list_days=10,
@@ -662,8 +662,8 @@ def test_window_features_stable_across_start_dates():
     daily_run1 = all_daily.copy()
 
     # run_2：从第 10 个交易日起截断（仍有 >=20 天历史）
-    cutoff_date = all_dates[9].strftime('%Y%m%d')
-    daily_run2 = all_daily[all_daily['trade_date'] >= cutoff_date].copy()
+    cutoff_date = all_dates[9].strftime("%Y%m%d")
+    daily_run2 = all_daily[all_daily["trade_date"] >= cutoff_date].copy()
 
     feat_run1 = builder.build_features_for_day(
         trade_date=target_date,
@@ -689,13 +689,21 @@ def test_window_features_stable_across_start_dates():
 
     # 对比每只股票的窗口特征
     for stock in stocks:
-        r1 = feat_run1[feat_run1['ts_code'] == stock]
-        r2 = feat_run2[feat_run2['ts_code'] == stock]
+        r1 = feat_run1[feat_run1["ts_code"] == stock]
+        r2 = feat_run2[feat_run2["ts_code"] == stock]
         if r1.empty or r2.empty:
             continue
-        for col in ['ret_5', 'ret_10', 'ret_20',
-                    'vol_ratio_5', 'vol_ratio_10', 'vol_ratio_20',
-                    'ma_deviation_5', 'ma_deviation_10', 'ma_deviation_20']:
+        for col in [
+            "ret_5",
+            "ret_10",
+            "ret_20",
+            "vol_ratio_5",
+            "vol_ratio_10",
+            "vol_ratio_20",
+            "ma_deviation_5",
+            "ma_deviation_10",
+            "ma_deviation_20",
+        ]:
             if col not in r1.columns or col not in r2.columns:
                 continue
             v1 = r1[col].iloc[0]
@@ -717,15 +725,15 @@ def test_window_features_nan_when_insufficient_history():
     import pandas as pd
     import numpy as np
 
-    all_dates = pd.date_range('2023-01-01', periods=5, freq='B')
-    stocks = ['000001.SZ']
+    all_dates = pd.date_range("2023-01-01", periods=5, freq="B")
+    stocks = ["000001.SZ"]
 
     full_trade_cal = _make_full_trade_cal(all_dates)
     all_daily = _make_daily_data(all_dates, stocks)
     stock_basic = _make_stock_basic(stocks)
-    adj_factor = pd.DataFrame(columns=['ts_code', 'trade_date', 'adj_factor'])
+    adj_factor = pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"])
 
-    target_date = all_dates[4].strftime('%Y%m%d')  # 第 5 个交易日
+    target_date = all_dates[4].strftime("%Y%m%d")  # 第 5 个交易日
 
     builder = FeatureBuilder(
         min_list_days=10,
@@ -744,6 +752,6 @@ def test_window_features_nan_when_insufficient_history():
 
     # 样本可能因 min_list_days 过滤而为空，此处仅验证窗口特征列存在且为 NaN
     if len(feat) > 0:
-        for col in ['ret_5', 'ret_10', 'ret_20']:
+        for col in ["ret_5", "ret_10", "ret_20"]:
             if col in feat.columns:
                 assert feat[col].isna().all(), f"{col} 历史不足时应全为 NaN"

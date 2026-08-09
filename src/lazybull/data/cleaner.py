@@ -3,19 +3,25 @@
 实现 raw -> clean 的数据转换，包括：
 - 去重（按主键 ts_code+trade_date）
 - 类型统一（trade_date 为 YYYYMMDD 字符串，数值列转 float/int）
-- 缺失值处理（adj_factor 回退，必要列报错或填充）
+- 缺失值处理（adj_factor 缺失保留，整日无有效值时拒绝构建）
 - 复权后行情计算（close_adj/open_adj/high_adj/low_adj）
 - ST/停牌过滤标记（tradable_universe 列）
 - 数据排序与校验
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
 from ..common.date_utils import normalize_series_to_yyyymmdd
+
+
+def has_usable_adjusted_prices(data: Optional[pd.DataFrame]) -> bool:
+    """判断 clean/daily 是否包含至少一个有效复权收盘价。"""
+    if data is None or data.empty or "close_adj" not in data.columns:
+        return False
+    return bool(pd.to_numeric(data["close_adj"], errors="coerce").notna().any())
 
 
 class DataCleaner:
@@ -660,6 +666,13 @@ class DataCleaner:
         """
         self._log_step("开始计算复权价格")
 
+        required_cols = {"ts_code", "trade_date", "adj_factor"}
+        if adj_factor_df is None or adj_factor_df.empty:
+            raise ValueError("复权因子数据为空，无法计算复权价格")
+        missing_cols = required_cols.difference(adj_factor_df.columns)
+        if missing_cols:
+            raise ValueError(f"复权因子缺少必要列: {sorted(missing_cols)}")
+
         df = daily_df.copy()
 
         # 标准化复权因子的日期格式
@@ -682,7 +695,8 @@ class DataCleaner:
         if "adj_factor" in df.columns:
             df["adj_factor"] = pd.to_numeric(df["adj_factor"], errors="coerce")
             df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
-            df["adj_factor"] = df.groupby("ts_code")["adj_factor"].ffill().bfill()
+            if not df["adj_factor"].notna().any():
+                raise ValueError("复权因子没有任何有效数值，无法计算复权价格")
 
         missing_adj = int(df["adj_factor"].isna().sum())
         if missing_adj > 0:

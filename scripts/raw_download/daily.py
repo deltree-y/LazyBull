@@ -31,7 +31,7 @@ _DAILY_FETCHERS: Dict[str, Callable] = {
 }
 
 
-_DAILY_ALLOW_EMPTY = {"suspend", "stk_limit", "moneyflow", "adj_factor", "stock_st"}
+_DAILY_ALLOW_EMPTY = {"suspend", "stk_limit", "moneyflow", "stock_st"}
 
 
 def _pending_daily_subsets(
@@ -60,7 +60,8 @@ def download_daily_data(
 
     修复 #5: 单日 7 个接口原子性 —— 只要任一接口抛异常, 整天标记失败;
     已成功拉取的 DataFrame 不落盘, 下次重跑可重新尝试, 避免"半个日子"永久缺失。
-    修复 #4: moneyflow 返回空时不再是 error 日志, 而是 raise 被记录到错误汇总。
+    moneyflow 因发布时间与代码域差异允许空返回，但不写占位，后续运行仍会重试；
+    adj_factor 是复权价格强制依赖，空返回按整日失败处理。
     修复 #13: len(trading_dates)==0 时直接返回, 防止除零。
     """
     logger.info(f"下载日线数据 ({start_date}~{end_date})...")

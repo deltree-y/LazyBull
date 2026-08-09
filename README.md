@@ -28,7 +28,52 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.94.19)
+### 当前版本 (v0.94.27)
+
+- **adj_factor 强制依赖**：批量下载和在线 ensure 遇到空响应时明确失败，clean 构建不再缓存全 NaN 复权价分区；
+- **坏缓存自动修复**：已有 clean/daily 的 close_adj 全空时自动失效并重建；局部因子缺失保持 NaN，不再跨日沿用昨日因子。
+
+### v0.94.26
+
+- **daily 唯一代码完整性校验**：落盘前严格校验 `(ts_code, trade_date)` 主键并按唯一代码计数，重复、空代码和非目标日期数据直接失败；
+- **历史停牌日交叉确认**：stock_basic 覆盖率粗筛偏低时，以 daily_basic 独立代码域二次确认并容忍经全量历史数据校准的 2% 接口差异，既拦截部分返回，也不误伤 2006 年和 2015 年大面积停牌日。
+
+### v0.94.25
+
+- **daily 完整性严格闭环**：新下载 daily 先验证覆盖度再落盘，覆盖率低于 85% 不落盘并返回 False；历史低覆盖重下后仍异常（重下空/仍低）也返回 False，不再告警放行；
+- **覆盖度基准按上市日期过滤**：分母取 list_date <= 当日 的股票数，不再用当前全集误伤历史日期。
+
+### v0.94.24
+
+- **daily 覆盖度闭环**：历史 daily 覆盖度低于 stock_basic 全集的 85% 时强制重下一次，重下后仍低则 error 告警待人工核实（不再仅告警），历史截断/服务端部分返回可被检测并修复；
+- **daily_basic 覆盖度门控恢复**：实测 daily_basic 与 daily 代码集合完全一致，恢复 `min_rows` 行数门控（仅 moneyflow 因缺北交所不设此门控）。
+
+### v0.94.23
+
+- **moneyflow 覆盖度门控修正**：moneyflow 天然不覆盖全部 daily 股票（如不含北交所 920xxx.BJ），不再以 daily 行数为下限（避免每次 ensure 重复下载）；`adj_factor`/`stk_limit` 保留行数门控；
+- **KDJ 窗口不足掩码 NaN**：RSV 窗口有效观测不足时 kdj 输出为 NaN（内部状态可重置，但不给伪信号），与 volatility 等因子缺失语义一致；
+- **daily 自身覆盖度告警**：以 stock_basic 全集为参照，daily 行数低于 70% 时 error 告警（仅告警不自动重下；0.94.24 已升级为强制重下）。
+
+### v0.94.22
+
+- **停牌窗口修复补全**：`ret_N`/`vol_ratio_N`/`ma_deviation_N`/`amount_maN` 在窗口内观测不足（停牌）时置 NaN；KDJ RSV 前向填充限长（`ffill(limit=3)`），长期停牌后重置而非僵化跳变；
+- **daily 自身分页**：`get_daily` 全市场查询自动分页，堵住 daily 单次 6000 上限截断源头；
+- **ensure 区分非交易日与接口故障**：依据缓存 trade_cal，非交易日正常跳过（True），交易日接口空或无法确认时返回 False，不再误报成功；
+- **suspend 空值占位**：当日无停牌时写占位空文件，避免重复请求。
+
+### v0.94.21
+
+- **raw ensure 覆盖度门控**：`is_data_exists` 新增 `min_rows` 参数（pyarrow 快速读行数），以当日 daily 行数为参照对 `adj_factor`/`stk_limit`/`moneyflow`/`daily_basic` 做覆盖度检查，文件存在但行数不足视为未补齐并重新下载；
+- **技术指标/波动率滚动窗口按交易日对齐**：`precompute_technical_factors` 支持 `trading_dates` 参数，停牌日补 NaN 行占位，长期停牌股复牌后 RSI/KDJ/MACD/BOLL/波动率/ATR 窗口不再按行数凑满；`compute_ret_1` 停牌缺口收益保持 NaN。
+
+### v0.94.20
+
+- **raw ensure 补齐解耦**：`adj_factor`/`suspend`/`stk_limit` 改为独立存在性检查，不再绑定 daily 缺失分支，防止单类数据缺失永久无法补齐；日线为空（非交易日）提前返回并告警，`daily_basic` 为空新增告警；
+- **全市场查询自动分页**：`daily_basic`/`moneyflow`/`stk_limit` 未指定 `ts_code` 时自动分页取全，避免单次 6000 上限静默截断；
+- **复权因子回填语义修正**：去掉 `bfill` 仅保留 `ffill`（累积因子前向填充），避免跨除权除息日回填污染复权价与标签；
+- **daily_basic 单日整体缺失升级为 error 硬告警**：价值红利核心信号（bp/ep_ttm/dv_ttm/市值/换手）全空时明确可见。
+
+### v0.94.19
 
 - **门控 docstring 语义与实现对齐**：覆盖水位描述更新为"有水位以水位为准，无水位用数据最新日期初始化"；
 - **同步水位写入使用唯一临时文件**：`tempfile.mkstemp` + `os.replace`，避免多进程并发同步同一数据集时互相覆盖。

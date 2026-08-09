@@ -29,9 +29,48 @@ from .volatility import calculate_atr, calculate_volatility
 _MIN_HIST_DAYS_FOR_TECH = 30
 
 
+def _align_to_trading_dates(
+    daily_adj: pd.DataFrame,
+    trading_dates: List[str],
+) -> pd.DataFrame:
+    """将日线序列与全市场交易日对齐，缺失交易日补 NaN 行占位。
+
+    目的：让技术指标/波动率的滚动窗口按交易日跨度而非实际行数计算，
+    避免长期停牌股复牌后窗口实际跨度远超自然交易日（动量/波动率语义错位）。
+
+    正常股票（每日都有记录）不受影响；停牌股在停牌日插入 NaN 行，
+    窗口内有效值不足时产出 NaN（而非用停牌前数据凑满窗口）。
+
+    Args:
+        daily_adj: 全量后复权日线数据
+        trading_dates: 有序交易日列表（YYYYMMDD 字符串），应与 daily_adj 覆盖区间一致
+
+    Returns:
+        与 daily_adj 同列、行数扩展（含停牌补全行）的对齐后 DataFrame
+    """
+    if daily_adj is None or len(daily_adj) == 0 or not trading_dates:
+        return daily_adj
+    df = daily_adj.copy()
+    if pd.api.types.is_datetime64_any_dtype(df["trade_date"]):
+        df["trade_date"] = df["trade_date"].dt.strftime("%Y%m%d")
+    trading_index = pd.Index([str(d) for d in trading_dates])
+    parts: List[pd.DataFrame] = []
+    for ts_code, sub in df.groupby("ts_code", sort=False):
+        sub = sub.drop_duplicates(subset=["trade_date"]).set_index("trade_date")
+        sub = sub.reindex(trading_index)
+        sub.index.name = "trade_date"
+        sub["ts_code"] = ts_code
+        parts.append(sub.reset_index())
+    if not parts:
+        return df
+    aligned = pd.concat(parts, ignore_index=True)
+    return aligned[df.columns]
+
+
 def precompute_technical_factors(
     daily_adj: pd.DataFrame,
     vol_windows: Optional[List[int]] = None,
+    trading_dates: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """批量预计算技术指标与波动率因子
 
@@ -59,6 +98,14 @@ def precompute_technical_factors(
         logger.warning("precompute_technical_factors: daily_adj 为空，返回空 DataFrame")
         return pd.DataFrame(columns=['ts_code', 'trade_date'])
 
+    # 若提供交易日列表，先将日线序列与交易日对齐（停牌日补 NaN 行占位），
+    # 使滚动窗口按交易日跨度计算；result 键仍以原始 daily_adj 为准（不输出补全行）
+    daily_adj_calc = (
+        _align_to_trading_dates(daily_adj, trading_dates)
+        if trading_dates is not None and len(trading_dates) > 0
+        else daily_adj
+    )
+
     t0 = time.time()
     logger.info("开始批量预计算技术指标与波动率因子...")
 
@@ -72,7 +119,7 @@ def precompute_technical_factors(
     if 'close_adj' in daily_adj.columns:
         logger.debug("批量计算 RSI(14)...")
         try:
-            rsi_df = calculate_rsi(daily_adj, window=14)
+            rsi_df = calculate_rsi(daily_adj_calc, window=14)
             result = result.merge(
                 rsi_df[['ts_code', 'trade_date', 'rsi_14']],
                 on=['ts_code', 'trade_date'],
@@ -87,7 +134,7 @@ def precompute_technical_factors(
     if all(col in daily_adj.columns for col in ['high_adj', 'low_adj', 'close_adj']):
         logger.debug("批量计算 KDJ(9,3,3)...")
         try:
-            kdj_df = calculate_kdj(daily_adj, n=9, m1=3, m2=3)
+            kdj_df = calculate_kdj(daily_adj_calc, n=9, m1=3, m2=3)
             result = result.merge(
                 kdj_df[['ts_code', 'trade_date', 'kdj_k', 'kdj_d', 'kdj_j']],
                 on=['ts_code', 'trade_date'],
@@ -102,7 +149,7 @@ def precompute_technical_factors(
     if all(col in daily_adj.columns for col in ['high_adj', 'low_adj', 'close_adj']):
         logger.debug("批量计算 ATR(14)...")
         try:
-            atr_df = calculate_atr(daily_adj, window=14)
+            atr_df = calculate_atr(daily_adj_calc, window=14)
             result = result.merge(
                 atr_df[['ts_code', 'trade_date', 'atr_14', 'atr_pct_14']],
                 on=['ts_code', 'trade_date'],
@@ -115,7 +162,7 @@ def precompute_technical_factors(
     if 'close_adj' in daily_adj.columns:
         logger.debug("批量计算 MACD(12,26,9)...")
         try:
-            macd_df = calculate_macd(daily_adj, fast=12, slow=26, signal=9)
+            macd_df = calculate_macd(daily_adj_calc, fast=12, slow=26, signal=9)
             result = result.merge(
                 macd_df[['ts_code', 'trade_date', 'macd_dif', 'macd_dea', 'macd_hist']],
                 on=['ts_code', 'trade_date'],
@@ -128,7 +175,7 @@ def precompute_technical_factors(
     if 'close_adj' in daily_adj.columns:
         logger.debug("批量计算布林带(20,2)...")
         try:
-            bb_df = calculate_bollinger_bands(daily_adj, window=20, num_std=2.0)
+            bb_df = calculate_bollinger_bands(daily_adj_calc, window=20, num_std=2.0)
             result = result.merge(
                 bb_df[['ts_code', 'trade_date', 'bb_middle', 'bb_upper',
                         'bb_lower', 'bb_width', 'bb_pct']],
@@ -140,13 +187,13 @@ def precompute_technical_factors(
 
     # ---- 步骤 6：波动率（多窗口滚动标准差） ----
     # 使用共用 compute_ret_1 构造收益率：优先 close_adj pct_change，其次 pct_chg/100
-    ret_1_series = compute_ret_1(daily_adj)
+    ret_1_series = compute_ret_1(daily_adj_calc)
     ret_col_available = not ret_1_series.isna().all()
 
     if ret_col_available:
         logger.debug(f"批量计算滚动波动率（窗口={vol_windows}）...")
         try:
-            vol_input = daily_adj[['ts_code', 'trade_date']].copy()
+            vol_input = daily_adj_calc[['ts_code', 'trade_date']].copy()
             vol_input['ret_1'] = ret_1_series.values
 
             vol_df = calculate_volatility(vol_input, ret_col='ret_1', windows=vol_windows)

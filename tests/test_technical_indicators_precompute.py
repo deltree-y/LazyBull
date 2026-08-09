@@ -11,7 +11,10 @@ import pandas as pd
 import pytest
 from unittest.mock import patch
 
-from src.lazybull.factors.precompute_technical_factors import precompute_technical_factors
+from src.lazybull.factors.precompute_technical_factors import (
+    _align_to_trading_dates,
+    precompute_technical_factors,
+)
 from src.lazybull.factors.returns import compute_ret_1
 from src.lazybull.factors.technical_indicators import (
     calculate_rsi,
@@ -605,3 +608,108 @@ class TestVolatilityRet1Consistency:
             assert abs(row['zscore_vol_20_new'] - row['zscore_vol_20_ref']) < 1e-10, (
                 f"{row['ts_code']} zscore_volatility_20 不一致"
             )
+
+
+class TestAlignToTradingDates:
+    """测试按交易日对齐（审计问题6）"""
+
+    def test_align_fills_missing_dates(self):
+        """缺行股票在停牌日被补 NaN 行，正常股票不受影响。"""
+        trading_dates = ["20230103", "20230104", "20230105", "20230106", "20230109"]
+        df = pd.DataFrame({
+            "ts_code": ["A", "A", "A", "B", "B", "B", "B", "B"],
+            "trade_date": [
+                "20230103", "20230104", "20230106",
+                "20230103", "20230104", "20230105", "20230106", "20230109",
+            ],
+            "close_adj": [1.0, 2.0, 4.0, 10.0, 11.0, 12.0, 13.0, 14.0],
+        })
+
+        aligned = _align_to_trading_dates(df, trading_dates)
+
+        # 每只股票都被对齐到 5 个交易日
+        assert len(aligned[aligned["ts_code"] == "A"]) == 5
+        assert len(aligned[aligned["ts_code"] == "B"]) == 5
+        # A 股停牌日（20230105 / 20230109）补 NaN 行
+        a_rows = aligned[aligned["ts_code"] == "A"]
+        assert a_rows[a_rows["trade_date"] == "20230105"]["close_adj"].isna().all()
+        assert a_rows[a_rows["trade_date"] == "20230109"]["close_adj"].isna().all()
+        # B 股每日都有数据，不受影响
+        assert aligned[aligned["ts_code"] == "B"]["close_adj"].notna().all()
+
+    def test_precompute_align_trading_dates_suspended_stock(self):
+        """传 trading_dates 后，长期停牌股复牌初期滚动窗口按交易日对齐（NaN），
+        而非按行凑满窗口（审计问题6）。"""
+        trading_dates = [f"202301{i:02d}" for i in range(3, 23)]  # 20 个交易日
+        suspended_days = set(trading_dates[10:15])  # 第 11-15 交易日停牌
+        records = []
+        for i, d in enumerate(trading_dates):
+            # 股票 A：全程有数据
+            records.append({
+                "ts_code": "A", "trade_date": d, "close_adj": 10.0 + i * 0.1,
+                "high_adj": 10.5 + i * 0.1, "low_adj": 9.5 + i * 0.1, "pct_chg": 1.0,
+            })
+            # 股票 B：中间停牌 5 天（无行），其余有数据
+            if d not in suspended_days:
+                records.append({
+                    "ts_code": "B", "trade_date": d, "close_adj": 20.0 + i * 0.1,
+                    "high_adj": 20.5 + i * 0.1, "low_adj": 19.5 + i * 0.1, "pct_chg": 1.0,
+                })
+        df = pd.DataFrame(records)
+
+        no_align = precompute_technical_factors(df, vol_windows=[5])
+        aligned = precompute_technical_factors(df, vol_windows=[5], trading_dates=trading_dates)
+
+        resume_day = trading_dates[15]  # 第 16 交易日（复牌首日）
+        no_align_b = no_align[(no_align["ts_code"] == "B") & (no_align["trade_date"] == resume_day)]
+        align_b = aligned[(aligned["ts_code"] == "B") & (aligned["trade_date"] == resume_day)]
+        # 不传对齐：按行窗口（含停牌前数据）→ 有值
+        assert not no_align_b["volatility_5"].isna().all()
+        # 传对齐：窗口内有效值不足 → NaN
+        assert align_b["volatility_5"].isna().all()
+        # 复牌首日 KDJ：不传对齐时按行窗口有值；传对齐后窗口有效观测不足掩码为 NaN（评审意见2）
+        assert not no_align[
+            (no_align["ts_code"] == "B") & (no_align["trade_date"] == resume_day)
+        ]["kdj_k"].isna().all()
+        assert aligned[
+            (aligned["ts_code"] == "B") & (aligned["trade_date"] == resume_day)
+        ]["kdj_k"].isna().all()
+        # 正常股票 A 两者一致（对齐不影响完整股票）
+        no_align_a = no_align[
+            (no_align["ts_code"] == "A") & (no_align["trade_date"] == resume_day)
+        ]["volatility_5"].iloc[0]
+        align_a = aligned[
+            (aligned["ts_code"] == "A") & (aligned["trade_date"] == resume_day)
+        ]["volatility_5"].iloc[0]
+        assert no_align_a == pytest.approx(align_a)
+
+    def test_window_features_insufficient_obs_nan(self):
+        """static_core 窗口因子在观测不足（停牌股）时置 NaN（审计问题1）"""
+        from src.lazybull.features.builder.static_core import _calculate_window_features_static
+
+        hist_data = pd.DataFrame({
+            "ts_code": ["A"] * 5 + ["B"] * 10,
+            "trade_date": [f"202301{i:02d}" for i in range(3, 8)]
+                         + [f"202301{i:02d}" for i in range(3, 13)],
+            "close_adj": [10.0 + i for i in range(5)] + [100.0 + i for i in range(10)],
+            "vol": [100.0] * 15,
+            "amount": [1000.0] * 15,
+        })
+        current_data = pd.DataFrame({
+            "ts_code": ["A", "B"],
+            "vol": [100.0, 100.0],
+            "amount": [1000.0, 1000.0],
+            "close_adj": [14.0, 109.0],
+        })
+
+        result = _calculate_window_features_static(hist_data, current_data, window=10)
+
+        a = result[result["ts_code"] == "A"]
+        b = result[result["ts_code"] == "B"]
+        # A 只观测 5 行 < 10 → 窗口特征全 NaN（跨停牌失真）
+        assert a["ret_10"].isna().all()
+        assert a["vol_ratio_10"].isna().all()
+        assert a["ma_deviation_10"].isna().all()
+        assert a["amount_ma10"].isna().all()
+        # B 观测 10 行 == 10 → 正常有值
+        assert not b["ret_10"].isna().all()

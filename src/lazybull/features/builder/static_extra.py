@@ -29,7 +29,11 @@ def _add_value_dividend_features_static(
 
     daily_basic_today = daily_basic_data[daily_basic_data["trade_date"] == trade_date].copy()
     if len(daily_basic_today) == 0:
-        logger.warning(f"{trade_date} 没有 daily_basic 数据，价值红利特征将为空")
+        # 价值红利策略核心信号缺失，升级为 error 级硬告警（不熔断，保留优雅降级）
+        logger.error(
+            f"{trade_date} 没有 daily_basic 数据，价值红利特征将全部为空"
+            "（bp/ep_ttm/dv_ttm/市值/换手等核心信号丢失，请检查 raw 层补齐）"
+        )
         return features
 
     value_cols = [

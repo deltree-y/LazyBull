@@ -564,14 +564,19 @@ class Storage:
 
         return file_path.exists()
 
-    def is_data_exists(self, layer: str, name: str, date: str, format: str = "parquet") -> bool:
-        """判断文件是否存在
+    def count_rows(self, layer: str, name: str, date: str, format: str = "parquet") -> Optional[int]:
+        """快速统计分区文件行数（不加载全量数据）。
+
+        用于覆盖度门控：文件存在但行数不足（如历史截断/中断落盘）时识别为未补齐。
 
         Args:
             layer: 数据层，'raw'或'clean'
             name: 数据类型名称
             date: 交易日期，格式YYYYMMDD
             format: 文件格式
+
+        Returns:
+            行数；文件不存在或读取失败返回 None
         """
         if layer == "raw":
             base_path = self.raw_path
@@ -588,7 +593,59 @@ class Storage:
         else:
             raise ValueError(f"不支持的格式: {format}")
 
-        return file_path.exists()
+        if not file_path.exists():
+            return None
+        try:
+            if format == "parquet":
+                # 优先读取 pyarrow 元数据行数，避免加载全量数据
+                import pyarrow.parquet as pq
+
+                return pq.ParquetFile(str(file_path)).metadata.num_rows
+            return len(pd.read_csv(file_path))
+        except Exception as e:
+            logger.warning(f"统计文件行数失败: {file_path}（{e}）")
+            return None
+
+    def is_data_exists(
+        self,
+        layer: str,
+        name: str,
+        date: str,
+        format: str = "parquet",
+        min_rows: Optional[int] = None,
+    ) -> bool:
+        """判断文件是否存在（可选覆盖度门控）
+
+        Args:
+            layer: 数据层，'raw'或'clean'
+            name: 数据类型名称
+            date: 交易日期，格式YYYYMMDD
+            format: 文件格式
+            min_rows: 若提供，则文件行数须 >= min_rows 才算已补齐
+                （防止截断/中断落盘后缺口永久驻留）
+        """
+        if layer == "raw":
+            base_path = self.raw_path
+        elif layer == "clean":
+            base_path = self.clean_path
+        else:
+            raise ValueError(f"不支持的数据层: {layer}")
+        path = base_path / name / self._format_date(date)
+
+        if format == "parquet":
+            file_path = path.with_suffix(".parquet")
+        elif format == "csv":
+            file_path = path.with_suffix(".csv")
+        else:
+            raise ValueError(f"不支持的格式: {format}")
+
+        if not file_path.exists():
+            return False
+        if min_rows is not None:
+            rows = self.count_rows(layer, name, date, format=format)
+            if rows is None or rows < min_rows:
+                return False
+        return True
 
     def _save_data(self, df: pd.DataFrame, path: Path, format: str, is_force: bool = False) -> None:
         """保存数据

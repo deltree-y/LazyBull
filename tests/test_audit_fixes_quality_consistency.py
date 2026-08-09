@@ -169,8 +169,8 @@ class _StubStorage:
         return False
 
 
-def test_build_clean_missing_adj_factor_keeps_nan():
-    """离线批量构建：复权因子缺失时保留 NaN（与在线 ensure 一致），交由清洗层处理。"""
+def test_build_clean_missing_adj_factor_skips_daily_partition():
+    """离线批量构建：复权因子整日缺失时不得生成 clean/daily。"""
     trade_cal_raw = pd.DataFrame(
         {"exchange": ["SSE", "SSE"], "cal_date": ["20230102", "20230103"], "is_open": [1, 1]}
     )
@@ -193,9 +193,7 @@ def test_build_clean_missing_adj_factor_keeps_nan():
     storage = _StubStorage(trade_cal_raw, stock_basic_raw, daily_raw)
 
     cleaner = Mock()
-    cleaner.clean_trade_cal.return_value = pd.DataFrame(
-        {"cal_date": ["20230102"], "is_open": [1]}
-    )
+    cleaner.clean_trade_cal.return_value = pd.DataFrame({"cal_date": ["20230102"], "is_open": [1]})
     cleaner.clean_stock_basic.return_value = pd.DataFrame(
         {"ts_code": ["000001.SZ"], "name": ["测试"]}
     )
@@ -212,14 +210,46 @@ def test_build_clean_missing_adj_factor_keeps_nan():
         min_list_days=0,
     )
 
-    # 捕获传给 clean_daily 的 adj_factor_raw，断言保留 NaN 而非伪造 1.0
-    assert cleaner.clean_daily.called
-    _, adj_passed = cleaner.clean_daily.call_args[0]
-    assert "adj_factor" in adj_passed.columns
-    assert adj_passed["adj_factor"].isna().all()
+    cleaner.clean_daily.assert_not_called()
+    assert not any(call[0] == "save_clean_by_date" for call in storage.saved)
 
 
 # ── 问题3：缺失 dv_ttm/pe_ttm 保留 NaN + 显式缺失标记 ────────
+
+
+def test_value_dividend_empty_daily_basic_returns_features():
+    """daily_basic 单日整体缺失时返回原特征、不生成价值列（审计问题7，硬告警不熔断）。"""
+    features = pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"]})
+    daily_basic = pd.DataFrame(
+        columns=["ts_code", "trade_date", "pb", "pe_ttm", "dv_ttm", "total_mv"]
+    )
+
+    result = _add_value_dividend_features_static(features, daily_basic, "20230102")
+
+    assert list(result.columns) == ["ts_code"]
+    assert len(result) == 2
+
+
+def test_value_dividend_empty_daily_basic_logs_error():
+    """daily_basic 单日整体缺失时记录 error 级硬告警（审计问题7，评审问题5）。"""
+    import io
+
+    from loguru import logger
+
+    sink = io.StringIO()
+    handler_id = logger.add(sink, level="ERROR", format="{level}|{message}")
+    try:
+        features = pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"]})
+        daily_basic = pd.DataFrame(
+            columns=["ts_code", "trade_date", "pb", "pe_ttm", "dv_ttm", "total_mv"]
+        )
+        _add_value_dividend_features_static(features, daily_basic, "20230102")
+        logs = sink.getvalue()
+    finally:
+        logger.remove(handler_id)
+    assert "ERROR" in logs
+    assert "daily_basic" in logs
+    assert "20230102" in logs
 
 
 def test_value_dividend_missing_semantics_preserved():
