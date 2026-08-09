@@ -184,12 +184,76 @@ class DataLoader(AnnouncementRiskLoaderMixin):
             range_start = partitions[0]
             range_end = partitions[-1]
 
-        return self.storage.load_raw_by_date_range(
+        df = self.storage.load_raw_by_date_range(
             name,
             range_start,
             range_end,
             columns=columns,
         )
+        # freshness 契约：窗口外仍有最新公告的股票保留"旧值 + 大 freshness"，
+        # 而非直接 NaN —— 从窗口起点之前最近的分区补充其最新一条公告。
+        # 窗口内无任何分区时同样执行（df 为 None），否则目标窗口外的股票会整体变 NaN。
+        if start_date and end_date:
+            extra = self._load_pre_window_latest_rows(
+                name, df, range_start, partitions, columns=columns
+            )
+            if extra is not None and len(extra) > 0:
+                if df is not None and len(df) > 0:
+                    df = pd.concat([df, extra], ignore_index=True)
+                else:
+                    df = extra
+        return df
+
+    def _load_pre_window_latest_rows(
+        self,
+        name: str,
+        window_df: Optional[pd.DataFrame],
+        range_start: str,
+        partitions: List[str],
+        columns: Optional[List[str]] = None,
+    ) -> Optional[pd.DataFrame]:
+        """从窗口起点之前的分区，补充窗口内缺失股票的最新一条公告。
+
+        保持 freshness 契约：对窗口外仍有历史公告的股票，保留其最近一条记录
+        （对应其最新报告期），由 PIT 查询按 ann_date 对齐并输出大 freshness，
+        而非在数据层直接硬缺失(NaN)。窗口内已覆盖的股票不重复加载。
+        完整遍历窗口前分区（不做启发式截断），确保能找到更早的有效股票。
+
+        Args:
+            name: 数据集名称
+            window_df: 窗口内已加载的数据（用于识别已覆盖股票）；可为 None/空
+                （此时窗口内无数据，窗口前所有股票均视为窗口外）
+            range_start: 窗口起点（YYYY-MM-DD）
+            partitions: 全部分区日期列表（升序）
+            columns: 仅读取指定列（与窗口加载一致）
+
+        Returns:
+            窗口外股票的最新公告数据；无则返回 None
+        """
+        if window_df is not None and len(window_df) > 0 and "ts_code" not in window_df.columns:
+            return None
+        window_codes = (
+            set(window_df["ts_code"].unique())
+            if window_df is not None and len(window_df) > 0
+            else set()
+        )
+        pre_partitions = [p for p in partitions if p < range_start]
+        if not pre_partitions:
+            return None
+
+        seen = set(window_codes)
+        extras: List[pd.DataFrame] = []
+        for part_date in reversed(pre_partitions):
+            df = self.storage.load_raw_by_date(name, part_date, columns=columns)
+            if df is None or len(df) == 0 or "ts_code" not in df.columns:
+                continue
+            new_rows = df[~df["ts_code"].isin(seen)]
+            if len(new_rows) > 0:
+                extras.append(new_rows)
+                seen |= set(new_rows["ts_code"].unique())
+        if not extras:
+            return None
+        return pd.concat(extras, ignore_index=True)
     
     def get_trading_dates(self, start_date: str, end_date: str) -> list:
         """获取指定范围内的交易日列表

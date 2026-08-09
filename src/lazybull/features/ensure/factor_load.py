@@ -8,14 +8,6 @@ import pandas as pd
 from loguru import logger
 
 from ...data import DataLoader, Storage, TushareClient
-from .constants import (
-    _MIN_CASHFLOW_RECORDS,
-    _MIN_EXPRESS_RECORDS,
-    _MIN_FINA_RECORDS,
-    _MIN_FORECAST_RECORDS,
-    _MIN_HOLDER_RECORDS,
-    _MIN_REPORT_RC_RECORDS,
-)
 from .downloads import (
     _try_download_cashflow,
     _try_download_express,
@@ -31,6 +23,48 @@ from .historical_assets import (
     _try_ensure_historical_moneyflow_hsgt,
     _try_ensure_historical_top_list,
 )
+from .incremental import _get_latest_date
+
+
+def _has_announcement_gap(
+    storage: Storage,
+    df: Optional[pd.DataFrame],
+    dataset_name: str,
+    date_col: str,
+    trade_date: str,
+) -> bool:
+    """判断公告/事件型因子是否存在数据缺口。
+
+    缺口定义：本地数据缺失，或覆盖水位 < 目标交易日。
+    覆盖水位语义（与 _incremental_catchup_by_calendar_date 保持一致）：
+    - 已有同步水位（连续成功前缀）时，以水位为准；数据最新公告日可能跨过失败日，
+      不可用来越过水位之后的未知区间；
+    - 无水位时，以数据最新公告日初始化前缀。
+    同步水位记录"成功查询至的日期"（无公告日也算已同步），避免空白日期被反复下载。
+    基于覆盖判断而非记录数量——分区/单文件数据一旦齐全（无论新旧），
+    记录数量永远充足，数量门控会让增量补齐永不触发。
+
+    Args:
+        storage: Storage 实例（读取同步水位）
+        df: 已加载的本地因子数据
+        dataset_name: 数据集名称
+        date_col: 公告/事件日期列（ann_date / report_date）
+        trade_date: 目标交易日 YYYYMMDD
+
+    Returns:
+        存在缺口返回 True（应触发下载/增量补齐）
+    """
+    latest = _get_latest_date(df, date_col)
+    if latest is None:
+        # 本地数据缺失/无有效日期列：即使水位存在也不能仅凭水位跳过——
+        # parquet 可能被删除或损坏，需重新初始化/恢复。
+        return True
+    watermark = storage.load_sync_watermark(dataset_name)
+    # 有水位（连续成功前缀）时，覆盖判断只认水位：数据最新公告日可能跨过
+    # 失败日（后续成功落盘），不能用来越过水位之后的未知区间，否则失败日会被永久漏掉。
+    # 与 _incremental_catchup_by_calendar_date 的起点语义保持一致。
+    covered_to = watermark if watermark is not None else latest
+    return covered_to < trade_date
 
 
 def _load_factor_data(
@@ -74,8 +108,8 @@ def _load_factor_data(
     # ── 基本面因子 ──────────────────────────────────────────
     funda_today = None
     fina_indicator = loader.load_fina_indicator(start_date=trade_date, end_date=trade_date)
-    # 数据不存在、或记录过少（之前单日增量下载的残留）均触发全量下载
-    if fina_indicator is None or len(fina_indicator) < _MIN_FINA_RECORDS:
+    # 无数据、或本地有效水位未覆盖目标交易日（存在缺口）→ 触发下载/增量补齐
+    if _has_announcement_gap(storage, fina_indicator, "fina_indicator", "ann_date", trade_date):
         fina_indicator = _try_download_fina_indicator(client, storage, trade_date)
     if fina_indicator is not None and len(fina_indicator) > 0:
         from ...factors.fundamental import build_fundamental_lookup_by_date
@@ -136,7 +170,7 @@ def _load_factor_data(
     # ── 股东人数 ────────────────────────────────────────────
     holder_today = None
     stk_holdernumber = loader.load_stk_holdernumber()
-    if stk_holdernumber is None or len(stk_holdernumber) < _MIN_HOLDER_RECORDS:
+    if _has_announcement_gap(storage, stk_holdernumber, "stk_holdernumber", "ann_date", trade_date):
         stk_holdernumber = _try_download_stk_holdernumber(client, storage, trade_date)
     if stk_holdernumber is not None and len(stk_holdernumber) > 0:
         from ...factors.holder import build_holder_lookup_by_date
@@ -154,7 +188,7 @@ def _load_factor_data(
     # ── 业绩预告 ────────────────────────────────────────────
     earnings_today = None
     forecast_df = loader.load_forecast()
-    if forecast_df is None or len(forecast_df) < _MIN_FORECAST_RECORDS:
+    if _has_announcement_gap(storage, forecast_df, "forecast", "ann_date", trade_date):
         forecast_df = _try_download_forecast(client, storage, trade_date)
     if forecast_df is not None and len(forecast_df) > 0:
         from ...factors.earnings import build_earnings_lookup_by_date
@@ -189,7 +223,7 @@ def _load_factor_data(
     # ── 业绩快报 ──────────────────────────────────────────────
     express_today = None
     express_df = loader.load_express()
-    if express_df is None or len(express_df) < _MIN_EXPRESS_RECORDS:
+    if _has_announcement_gap(storage, express_df, "express", "ann_date", trade_date):
         express_df = _try_download_express(client, storage, trade_date)
     if express_df is not None and len(express_df) > 0:
         from ...factors.express import build_express_lookup_by_date
@@ -276,10 +310,10 @@ def _load_factor_data(
     lhb_lookup = None
     gc.collect()
 
-    # ── 一致预期（单文件, 按 report_date 增量）───────────────────
+    # ── 一致预期（按 report_date 增量）─────────────────────────
     consensus_today = pd.DataFrame()
     report_rc_df = loader.load_report_rc()
-    if report_rc_df is None or len(report_rc_df) < _MIN_REPORT_RC_RECORDS:
+    if _has_announcement_gap(storage, report_rc_df, "report_rc", "report_date", trade_date):
         report_rc_df = _try_download_report_rc(client, storage, trade_date)
     if report_rc_df is not None and len(report_rc_df) > 0:
         from ...factors.consensus import build_consensus_lookup_by_date
@@ -295,10 +329,10 @@ def _load_factor_data(
     cons_lookup = None
     gc.collect()
 
-    # ── 现金流质量（单文件，按 ann_date 增量）──────────────────────
+    # ── 现金流质量（按 ann_date 增量）──────────────────────────
     cashflow_today = pd.DataFrame()
     cashflow_df = loader.load_cashflow(start_date=trade_date, end_date=trade_date)
-    if cashflow_df is None or len(cashflow_df) < _MIN_CASHFLOW_RECORDS:
+    if _has_announcement_gap(storage, cashflow_df, "cashflow", "ann_date", trade_date):
         cashflow_df = _try_download_cashflow(client, storage, trade_date)
     if cashflow_df is not None and len(cashflow_df) > 0:
         from ...factors.cashflow_quality import build_cashflow_quality_lookup_by_date

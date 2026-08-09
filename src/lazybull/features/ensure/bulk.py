@@ -2,12 +2,13 @@
 """ensure 子包：批量下载、分页查询与合并保存。"""
 
 import time
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 import pandas as pd
 from loguru import logger
 
 from ...data import Storage, TushareClient
+from .incremental import _drop_duplicates_keep_updated
 
 
 def _generate_quarter_periods(start_year: int, end_year: int) -> List[str]:
@@ -109,7 +110,11 @@ def _bulk_download_by_period(
             )
             if df is not None and len(df) > 0:
                 if partition_by_period:
-                    storage.save_raw_by_date(df, dataset_name, period)
+                    storage.save_raw_by_date(
+                        _drop_duplicates_keep_updated(df, dedup_cols),
+                        dataset_name,
+                        period,
+                    )
                 else:
                     all_dfs.append(df)
                 success += 1
@@ -222,7 +227,7 @@ def _save_merged_bulk(
     if existing_df is not None and len(existing_df) > 0:
         result = pd.concat([existing_df, result], ignore_index=True)
     if dedup_cols:
-        result = result.drop_duplicates(subset=dedup_cols, keep="last")
+        result = _drop_duplicates_keep_updated(result, dedup_cols)
     storage.save_raw(result, dataset_name, is_force=True)
     logger.info(f"[{dataset_name}] 已保存: {len(result)} 条记录")
     return result

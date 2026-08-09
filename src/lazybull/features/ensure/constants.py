@@ -18,4 +18,10 @@ _MIN_FORECAST_RECORDS = 500    # 业绩预告：全量应有数万条
 _MIN_EXPRESS_RECORDS = 500        # 业绩快报：全量应有数万条
 _MIN_REPORT_RC_RECORDS = 1000     # 一致预期研报：全量应有数万条
 _MIN_CASHFLOW_RECORDS = 1000      # 现金流量表：全量应有数万条
-_FINA_REQUIRED_RAW_COLS = ["q_gr_yoy", "q_ocf_to_sales", "int_to_talcap", "inv_turn"]
+_FINA_REQUIRED_RAW_COLS = [
+    "q_gr_yoy",
+    "q_ocf_to_sales",
+    "int_to_talcap",
+    "inv_turn",
+    "update_flag",
+]

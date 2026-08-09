@@ -1,5 +1,8 @@
 """数据存储模块"""
 
+import json
+import os
+import tempfile
 import warnings
 from pathlib import Path
 from typing import List, Optional
@@ -97,6 +100,49 @@ class Storage:
             format: 文件格式，csv/parquet
         """
         self._save_data(df, self.reports_path / name, format, is_force)
+
+    _WATERMARK_FILE = "_sync_watermark.json"
+
+    def load_sync_watermark(self, name: str) -> Optional[str]:
+        """读取数据集同步水位（已成功查询至的日期，YYYYMMDD）。
+
+        水位记录该数据集已成功查询到目标日期的公告/事件数据（无公告日也算已同步），
+        供增量补齐门控判断使用，避免空白日期被反复下载。
+        """
+        path = self.raw_path / name / self._WATERMARK_FILE
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("synced_to")
+        except (OSError, ValueError) as exc:
+            logger.warning(f"读取同步水位失败 {path}: {exc}")
+            return None
+
+    def save_sync_watermark(self, name: str, date_str: str) -> None:
+        """保存数据集同步水位（YYYYMMDD）。
+
+        通过同目录唯一临时文件 + os.replace 原子替换：崩溃时正式水位文件保持不变，
+        只会触发安全重查；唯一临时文件名避免多进程并发同步同一数据集时互相覆盖。
+        """
+        path = self.raw_path / name / self._WATERMARK_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix="_sync_watermark.", suffix=".tmp", dir=str(path.parent)
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"synced_to": date_str}, f, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        except Exception:
+            # 失败时清理残留临时文件，不掩盖原始异常（正常路径已由 os.replace 移动）
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def load_raw(self, name: str, format: str = "parquet") -> Optional[pd.DataFrame]:
         """加载原始数据

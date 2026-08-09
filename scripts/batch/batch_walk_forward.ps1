@@ -177,7 +177,7 @@ $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_d
 $event_freshness_half_life_days = 120                           # 仅 decay 策略生效；no_decay/drop_all 的汇总中记为空
 
 # ── 多偏移集成（每个split训练3个偏移模型取平均，消除边界敏感性, 0326引入）─
-$ensemble_offsets          = 1      # 偏移月数（0=禁用, 1=±1个月→3模型）
+$ensemble_offsets          = 0      # 偏移月数（0=禁用, 1=±1个月→3模型）
 
 # 0408引入
 # ── 因子增强（开盘强度/日内波动结构/委托不平衡）───────

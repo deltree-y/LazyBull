@@ -11,7 +11,6 @@
 
 from typing import Dict, List
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -63,8 +62,19 @@ def build_fundamental_lookup_by_date(
     df['ann_date'] = df['ann_date'].astype(str).str[:8]
     df['end_date'] = df['end_date'].astype(str).str[:8]
 
-    # 仅去除完全重复记录，保留同一报告期的多次公告版本，交由 PIT 查询按交易日选择
-    df = df.sort_values(['ts_code', 'end_date', 'ann_date'])
+    # 仅去除完全重复记录，保留同一报告期的多次公告版本，交由 PIT 查询按交易日选择。
+    # 同 (ts_code, end_date, ann_date) 多次修订时优先保留 update_flag 修正版，
+    # 保证同日多公告/多次修订的选取确定、可复现。
+    if 'update_flag' in df.columns:
+        # update_flag == "1" 表示该条为修正/更新记录（TuShare 文档）；
+        # 仅显式识别 1，不臆测任意非空值即为修正版
+        df['_updated'] = df['update_flag'].astype(str).str.strip().eq('1')
+        df = df.sort_values(
+            ['ts_code', 'end_date', 'ann_date', '_updated'], kind='mergesort'
+        )
+        df = df.drop(columns=['_updated'])
+    else:
+        df = df.sort_values(['ts_code', 'end_date', 'ann_date'])
     df = df.drop_duplicates(subset=['ts_code', 'end_date', 'ann_date'], keep='last')
 
     # 确保数值列为 float

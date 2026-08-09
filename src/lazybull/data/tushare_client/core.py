@@ -14,7 +14,7 @@ from loguru import logger
 from ...common.config import get_tushare_settings
 
 FINA_INDICATOR_DEFAULT_FIELDS = (
-    "ts_code,ann_date,end_date,"
+    "ts_code,ann_date,end_date,update_flag,"
     "roe_waa,roe_dt,roa,or_yoy,netprofit_yoy,"
     "profit_dedt,q_gr_yoy,equity_yoy,"
     "grossprofit_margin,netprofit_margin,"

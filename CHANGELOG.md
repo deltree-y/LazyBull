@@ -2,6 +2,139 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.19] - 2026-08-09
+
+### Fixed
+
+- **门控 docstring 语义与实现对齐（审计低危）**：
+  - `factor_load.py::_has_announcement_gap` docstring 原写"有效水位 = max(...)"，
+    与"有水位以水位为准、无水位用数据最新日期初始化"的实现不符，已更新描述。
+- **同步水位写入使用唯一临时文件（审计低危）**：
+  - `storage.py::save_sync_watermark` 改用同目录唯一临时文件
+    （`tempfile.mkstemp` + `os.replace`），避免多进程并发同步同一数据集时
+    固定临时文件名互相覆盖。
+
+## [0.94.18] - 2026-08-09
+
+### Fixed
+
+- **门控覆盖判断与增量函数语义对齐（审计高危）**：
+  - `factor_load.py::_has_announcement_gap` 原先在有水位时仍取
+    `max(watermark, latest_data)`，数据最新公告日可能跨过失败日（后续成功落盘），
+    导致门控误判已覆盖、阻止增量运行，失败日永久漏掉；
+  - 现改为"有水位（连续成功前缀）时覆盖判断只认水位"（`covered_to = watermark`），
+    数据不得越过水位后的未知区间，与 `_incremental_catchup_by_calendar_date` 起点语义一致；
+  - **测试**：新增反例用例（watermark=11、数据已有 13 公告、target=13 仍为缺口）。
+
+- **同步水位写入改为原子替换（审计低危）**：
+  - `storage.py::save_sync_watermark` 改为临时文件 + `os.replace` 原子替换，
+    崩溃时正式水位文件保持不变，只会触发安全重查。
+
+## [0.94.17] - 2026-08-09
+
+### Fixed
+
+- **同步水位语义修正：水位只代表"连续成功前缀"（审计高危×2 + 中危）**：
+  - 失败日不再被后续成功数据跨过：`_incremental_catchup_by_calendar_date` 起点
+    改为"有水位则从水位之后开始，不可用数据最新公告日越过水位"；区间内遇到首个
+    失败立即停止，水位只推进到最后一个成功日（含空日），下次从水位之后重试；
+  - 原子推进：先落盘新数据，成功后才推进水位；落盘失败则水位保持原值，
+    避免"水位已提交但数据缺失"导致永久缺数据；
+  - 数据缺失不能仅凭水位跳过：`_has_announcement_gap` 在本地数据无有效日期列
+    （parquet 被删/损坏）时即使水位高也判定缺口，触发初始化/恢复；
+  - **测试**：新增失败日不被后续成功跨过、落盘失败水位不推进用例，
+    更新首个失败即停/水位只推进到前缀用例。
+
+## [0.94.16] - 2026-08-09
+
+### Fixed
+
+- **增量补齐引入持久化同步水位，避免反复下载无公告日期（审计高危）**：
+  - `src/lazybull/data/storage.py` 新增 `load_sync_watermark`/`save_sync_watermark`
+    （存 `{raw}/{dataset}/_sync_watermark.json`），记录该数据集已成功查询至的日期；
+  - `_incremental_catchup_by_calendar_date` 仅在区间内无失败时把水位推进到目标日
+    （无公告空日也算已同步）；有失败则不推进，下次从原水位之后重试，不跳过失败日；
+  - 门控 `_has_announcement_gap` 用"有效水位 = max(数据最新公告日, 同步水位)"
+    判断覆盖，本地数据无公告日不再被反复下载；
+  - **测试**：新增同步水位覆盖/推进/失败不推进用例。
+
+- **窗口外补行契约补全（审计中危）**：
+  - `_load_quarter_partitioned_raw` 目标窗口内无任何分区时，同样从窗口前分区补充
+    股票最新公告（原实现直接返回 None，窗口外股票整体变 NaN）；
+  - `_load_pre_window_latest_rows` 移除"连续 4 分区无新股票提前终止"的启发式截断，
+    完整遍历窗口前分区，确保能找到更早的有效股票（实测补全 545 只窗口外股票，0.6s）；
+  - **测试**：新增窗口内无数据仍回填用例。
+
+- **update_flag 闭环补全（审计中危）**：
+  - `_FINA_REQUIRED_RAW_COLS` 补充 `update_flag`，现有旧季度分区缺该列时触发
+    schema 回补（`fields` 已含 update_flag）；
+  - `_bulk_download_by_period` 分区保存前调用 `_drop_duplicates_keep_updated` 去重；
+  - `_drop_duplicates_keep_updated`/`fundamental.py` 仅显式识别 `update_flag == "1"`
+    为修正版（TuShare 文档：1 表示更新记录），不臆测任意非空值；
+  - **测试**：新增非 "1" 非空值不视为修正的用例。
+
+- **cf_nm 依赖告警按构建会话只提示一次（审计低危）**：
+  - `static_core.py` 缺 `ocf_to_profit` 导致 `cf_nm` 全 NaN 时，仅首次提示并说明
+    可能是 cashflow 未启用或数据缺失，不再按交易日刷屏。
+
+- **清理未使用导入（代码质量）**：
+  - `factor_load.py` 移除门控改版后不再使用的 `_MIN_*` 常量导入（F401）；
+    顺带清理 `fundamental.py` 的 `numpy` 与 `bulk.py` 的 `Dict` 未使用导入。
+
+## [0.94.15] - 2026-08-09
+
+### Fixed
+
+- **修复公告型基本面因子增量补齐"死路"（审计高危1）**：
+  - `src/lazybull/features/ensure/factor_load.py` 门控原先基于"记录数量是否充足"
+    （`len < _MIN_XXX_RECORDS` 才触发下载），分区/单文件数据一旦齐全（无论新旧）
+    数量永远充足，导致 `_incremental_catchup_by_calendar_date` 增量补齐永不触发，
+    纸面交易基本面数据新鲜度完全依赖人工全量下载；
+  - 现改为基于"本地最新公告日是否覆盖目标交易日"判断缺口（新增
+    `_has_announcement_gap`），fina_indicator/cashflow/stk_holdernumber/forecast/
+    express/report_rc 六类统一生效；
+  - **测试**：新增 `tests/test_announcement_incremental_gate_fix.py`。
+
+- **修复 fina_indicator/cashflow 增量写入单文件被分区遮蔽（审计高危2）**：
+  - `src/lazybull/features/ensure/downloads.py` 的 `_try_download_fina_indicator` /
+    `_try_download_cashflow` 原先用 `storage.load_raw` 读旧单文件判断存量（实盘纯
+    季度分区时读不到 → 误判为全量重下），增量分支未传分区参数 → 追加写单文件被
+    loader 分区优先遮蔽；
+  - 现改为 `_load_all_partitions` 分区读取 + 增量按 `end_date` 季度分区路由写入
+    （对齐 forecast/report_rc 已有正确写法）；schema 回补结果同样写回分区
+    （`historical.py::_refresh_existing_period_rows` 支持分区保存）；
+  - **测试**：更新 `test_factor_wiring_cashflow_consensus_revision.py` 与
+    `test_ensure_and_t0_printing.py`。
+
+- **季度窗口外股票保留"旧值 + 大 freshness"而非硬缺失（审计中危）**：
+  - `src/lazybull/data/loader.py::_load_quarter_partitioned_raw` 原先按窗口
+    `[起点年-1, 目标日]` 截断加载，窗口外最新报告的股票（长期停牌/年报延迟）
+    直接 NaN，且 paper 单日窗口起点与离线构建不一致产生 cs_train/cs_infer 漂移；
+  - 现从窗口起点之前最近的分区补充窗口外股票的最新一条公告
+    （新增 `_load_pre_window_latest_rows`），保持 freshness 契约；
+  - **测试**：新增 `tests/test_announcement_incremental_gate_fix.py`。
+
+- **同日多公告稳定排序（审计低危1）**：
+  - `src/lazybull/factors/announcement_utils.py` 排序改为 `kind="mergesort"` 稳定
+    排序，配合 `fundamental.py` 上游按 `[ts_code, end_date, ann_date]` 排序，同日
+    披露"更正公告 + 新季报"时 PIT 确定选中最新报告期；
+  - **测试**：新增稳定排序用例。
+
+- **update_flag 修正版优先去重（审计低危2）**：
+  - `FINA_INDICATOR_DEFAULT_FIELDS` 补充 `update_flag` 字段；
+  - 新增 `_drop_duplicates_keep_updated`：同 `(ts_code, end_date, ann_date)` 多次
+    修订时优先保留 `update_flag` 非空的修正记录，保证跨次下载可复现；接入分区/单
+    文件/批量/回补各保存路径（incremental/bulk/historical）；
+  - **测试**：新增 `tests/test_announcement_incremental_gate_fix.py`。
+
+- **cf_nm 回填依赖显式提示（审计低危3）**：
+  - `src/lazybull/features/builder/static_core.py` 在未启用 cashflow 因子导致
+    `cf_nm` 全 NaN 时显式 warning，避免与启用 cashflow 的实验特征集悄然不一致。
+
+- **bot 盘中触发当日交易显式提示（审计低危4）**：
+  - `scripts/bot_service.py` 盘中（A股连续竞价时段）触发当日 `/trade` 时显式提示
+    "当日公告可能尚未全部发布"，降低盘后才披露公告被误用的风险。
+
 ## [0.94.14] - 2026-08-08
 
 ### Fixed

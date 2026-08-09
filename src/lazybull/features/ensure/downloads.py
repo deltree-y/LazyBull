@@ -36,7 +36,7 @@ def _try_download_fina_indicator(
     数据充足（>= 阈值）：按公告日区间补齐增量公告。
     数据不足或不存在：逐股全量下载全部历史财务指标。
     """
-    existing = storage.load_raw("fina_indicator")
+    existing = _load_all_partitions(storage, "fina_indicator")
 
     if existing is not None and len(existing) >= _MIN_FINA_RECORDS:
         missing_schema_cols = [c for c in _FINA_REQUIRED_RAW_COLS if c not in existing.columns]
@@ -53,13 +53,15 @@ def _try_download_fina_indicator(
                 existing_df=existing,
                 dedup_cols=["ts_code", "end_date", "ann_date"],
                 fields=FINA_INDICATOR_DEFAULT_FIELDS,
+                partition_date_col="end_date",
+                partition_mode="quarter",
             )
             if repaired is not None:
                 existing = repaired
 
-        # 增量模式：数据量充足，按公告日区间补齐
+        # 增量模式：数据量充足，按公告日区间补齐（路由写入对应季度分区）
         try:
-            return _incremental_catchup_by_calendar_date(
+            _incremental_catchup_by_calendar_date(
                 storage=storage,
                 dataset_name="fina_indicator",
                 existing_df=existing,
@@ -67,10 +69,13 @@ def _try_download_fina_indicator(
                 date_col="ann_date",
                 dedup_cols=["ts_code", "end_date", "ann_date"],
                 fetch_by_date=lambda d: client.get_fina_indicator_by_date(ann_date=d),
+                partition_date_col="end_date",
+                partition_mode="quarter",
             )
         except Exception as e:
             logger.warning(f"增量下载 fina_indicator 失败: {e}")
-            return existing
+        # 统一返回目标交易日窗口数据（与正常加载路径形态一致）
+        return DataLoader(storage).load_fina_indicator(start_date=trade_date, end_date=trade_date)
 
     # 全量下载（首次或数据不足）— 按季度批量
     cnt = len(existing) if existing is not None else 0
@@ -99,11 +104,11 @@ def _try_download_cashflow(
     数据充足（>= 阈值）：按公告日区间补齐增量。
     数据不足或不存在：按季度批量下载全量。
     """
-    existing = storage.load_raw("cashflow")
+    existing = _load_all_partitions(storage, "cashflow")
 
     if existing is not None and len(existing) >= _MIN_CASHFLOW_RECORDS:
         try:
-            return _incremental_catchup_by_calendar_date(
+            _incremental_catchup_by_calendar_date(
                 storage=storage,
                 dataset_name="cashflow",
                 existing_df=existing,
@@ -111,10 +116,13 @@ def _try_download_cashflow(
                 date_col="ann_date",
                 dedup_cols=["ts_code", "end_date", "ann_date"],
                 fetch_by_date=lambda d: client.query("cashflow_vip", ann_date=d),
+                partition_date_col="end_date",
+                partition_mode="quarter",
             )
         except Exception as e:
             logger.warning(f"增量下载 cashflow 失败: {e}")
-            return existing
+        # 统一返回目标交易日窗口数据（与正常加载路径形态一致）
+        return DataLoader(storage).load_cashflow(start_date=trade_date, end_date=trade_date)
 
     cnt = len(existing) if existing is not None else 0
     logger.info(

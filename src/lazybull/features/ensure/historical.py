@@ -10,7 +10,11 @@ from ...data import DataCleaner, DataLoader, Storage, TushareClient
 from ...data.ensure import ensure_clean_data_for_date
 from .bulk import _query_with_pagination, _save_merged_bulk
 from .constants import HISTORICAL_DATA_MONTHS, MAX_HISTORICAL_DAYS
-from .incremental import _normalize_date_str
+from .incremental import (
+    _append_and_save_partitioned,
+    _drop_duplicates_keep_updated,
+    _normalize_date_str,
+)
 
 
 def _ensure_historical_clean_data(
@@ -101,8 +105,8 @@ def _merge_refreshed_rows(
     dedup_cols: List[str],
 ) -> pd.DataFrame:
     """按主键将刷新结果补回旧表，保留旧表中的其他列。"""
-    existing = existing_df.drop_duplicates(subset=dedup_cols, keep="last").set_index(dedup_cols)
-    refreshed = refreshed_df.drop_duplicates(subset=dedup_cols, keep="last").set_index(dedup_cols)
+    existing = _drop_duplicates_keep_updated(existing_df, dedup_cols).set_index(dedup_cols)
+    refreshed = _drop_duplicates_keep_updated(refreshed_df, dedup_cols).set_index(dedup_cols)
 
     full_index = existing.index.union(refreshed.index)
     existing = existing.reindex(full_index)
@@ -126,8 +130,15 @@ def _refresh_existing_period_rows(
     dedup_cols: List[str],
     fields: str,
     period_col: str = "end_date",
+    partition_date_col: Optional[str] = None,
+    partition_mode: Optional[str] = None,
 ) -> Optional[pd.DataFrame]:
-    """对已有 period 数据按季度重拉，回补旧 schema 缺列。"""
+    """对已有 period 数据按季度重拉，回补旧 schema 缺列。
+
+    Args:
+        partition_date_col / partition_mode: 若提供，回补结果路由写入对应分区
+            （分区存储数据集，避免写入单文件后被分区遮蔽）；否则沿用单文件保存。
+    """
     if existing_df is None or len(existing_df) == 0 or period_col not in existing_df.columns:
         return existing_df
 
@@ -157,6 +168,16 @@ def _refresh_existing_period_rows(
 
     refreshed_df = pd.concat(refreshed_dfs, ignore_index=True)
     merged_df = _merge_refreshed_rows(existing_df, refreshed_df, dedup_cols)
-    storage.save_raw(merged_df, dataset_name, is_force=True)
+    if partition_date_col and partition_mode:
+        _append_and_save_partitioned(
+            storage,
+            dataset_name,
+            merged_df,
+            dedup_cols=dedup_cols,
+            partition_date_col=partition_date_col,
+            partition_mode=partition_mode,
+        )
+    else:
+        storage.save_raw(merged_df, dataset_name, is_force=True)
     logger.info(f"[{dataset_name}] schema 回补完成: {len(merged_df)} 条记录")
     return merged_df

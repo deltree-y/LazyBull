@@ -98,6 +98,15 @@ class ProgressReporter:
         self._schedule()
 
 
+def _is_ah_intraday_now() -> bool:
+    """判断当前是否处于 A 股连续竞价时段（周一至周五 09:30-11:30 / 13:00-15:00）。"""
+    now = pd.Timestamp.now()
+    if now.weekday() >= 5:
+        return False
+    hm = now.hour * 100 + now.minute
+    return (930 <= hm <= 1130) or (1300 <= hm <= 1500)
+
+
 def execute_trade(
     trade_date: str, progress_callback: Optional[Callable[[str], None]] = None
 ) -> tuple[str, str]:
@@ -350,7 +359,18 @@ class SimpleHandler(dts.AsyncChatbotHandler):
                 return
         else:
             trade_date = args[0]
-        self._safe_reply(f"开始执行交易 ({trade_date})，请稍候...", incoming)
+        # 盘中触发当日交易时，当日公告可能尚未全部发布（盘后才披露），
+        # PIT 因子会纳入盘中已发布的当日公告值（既有审计低危项），显式提示用户。
+        intraday_warn = ""
+        if (
+            _is_ah_intraday_now()
+            and trade_date == pd.Timestamp.now().strftime("%Y%m%d")
+        ):
+            intraday_warn = (
+                "\n⚠️ 盘中触发：当日公告可能尚未全部发布，本次将仅使用盘中已发布的"
+                "公告值；如需完整当日数据建议收盘后执行。"
+            )
+        self._safe_reply(f"开始执行交易 ({trade_date})，请稍候...{intraday_warn}", incoming)
 
         # 启动进度报告器，每60秒推送一次当前步骤
         reporter = ProgressReporter(self._safe_reply, incoming, interval=60)

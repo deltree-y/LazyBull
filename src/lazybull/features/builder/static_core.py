@@ -100,8 +100,14 @@ def _calculate_base_features(
     return features
 
 
+# cf_nm 无 fina_indicator 侧独立代理，依赖 cashflow 因子 ocf_to_profit 回填；
+# 缺失/未启用时按构建会话只提示一次，避免批量构建按交易日刷屏
+_CF_NM_DEP_WARNED = False
+
+
 def _backfill_fundamental_proxy_features_static(features: pd.DataFrame) -> pd.DataFrame:
     """用可稳定获取的字段回填基本面代理列（cf_sales、cf_nm）。"""
+    global _CF_NM_DEP_WARNED
     features = features.copy()
 
     if "cf_sales" not in features.columns:
@@ -115,6 +121,14 @@ def _backfill_fundamental_proxy_features_static(features: pd.DataFrame) -> pd.Da
         features["cf_nm"] = np.nan
     if "ocf_to_profit" in features.columns:
         features["cf_nm"] = features["cf_nm"].combine_first(features["ocf_to_profit"])
+    elif features["cf_nm"].isna().all() and not _CF_NM_DEP_WARNED:
+        # 缺列可能是 cashflow 未启用，也可能是数据缺失；
+        # 按构建会话只提示一次，避免批量构建按交易日刷屏
+        logger.warning(
+            "cf_nm 依赖 cashflow 因子 ocf_to_profit 回填，当前该列缺失/未启用，"
+            "cf_nm 保持全 NaN（训练侧将按常量列剔除）"
+        )
+        _CF_NM_DEP_WARNED = True
 
     return features
 

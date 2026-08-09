@@ -82,7 +82,7 @@ def build_latest_announcement_lookup_by_date(
     if df.empty:
         return {}
 
-    df = df.sort_values([code_col, ann_col])
+    df = df.sort_values([code_col, ann_col], kind="mergesort")
     trade_ts_map = {
         trade_date: pd.to_datetime(trade_date, format="%Y%m%d", errors="coerce")
         for trade_date in ordered_trade_dates
@@ -93,7 +93,9 @@ def build_latest_announcement_lookup_by_date(
     stock_ann_timestamps: Dict[str, List[pd.Timestamp]] = {}
 
     for ts_code, grp in df.groupby(code_col, sort=False):
-        grp = grp.sort_values(ann_col)
+        # mergesort 稳定排序：保持上游（如按 end_date 排序）的相对顺序，
+        # 同日多公告时 bisect 取最后一条 = 最新报告期，保证选取确定可复现。
+        grp = grp.sort_values(ann_col, kind="mergesort")
         ann_dates = grp[ann_col].tolist()
         stock_ann_dates[ts_code] = ann_dates
         stock_values[ts_code] = grp[value_cols].values.tolist()

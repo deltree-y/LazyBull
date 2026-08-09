@@ -32,6 +32,15 @@ def _get_latest_date(df: Optional[pd.DataFrame], date_col: str) -> Optional[str]
     return str(dates.max())
 
 
+def _max_date(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    """取两个 YYYYMMDD 日期字符串中较大者（任一为 None 返回另一个）。"""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if a >= b else b
+
+
 def _iter_calendar_dates(start_date: str, end_date: str) -> List[str]:
     """生成闭区间 [start_date, end_date] 的自然日列表（YYYYMMDD）。"""
     try:
@@ -79,12 +88,21 @@ def _incremental_catchup_by_calendar_date(
         logger.warning(f"[{dataset_name}] 无法解析 trade_date={trade_date}，跳过增量补齐")
         return existing_df
 
-    latest_date = _get_latest_date(existing_df, date_col)
-    if latest_date is None:
-        logger.warning(
-            f"[{dataset_name}] 本地数据缺少有效 {date_col}，无法执行区间补齐，保持现有数据"
-        )
-        return existing_df
+    watermark = storage.load_sync_watermark(dataset_name)
+    if watermark is not None:
+        # 水位 = 连续成功同步前缀。水位之后的区间可能存在失败日（数据未连续），
+        # 不可用数据最新公告日越过水位，必须从水位之后逐日重查。
+        latest_date = watermark
+    else:
+        # 无水位：以数据最新公告日为首个连续前缀
+        latest_data = _get_latest_date(existing_df, date_col)
+        if latest_data is None:
+            logger.warning(
+                f"[{dataset_name}] 本地数据缺少有效 {date_col} 且无同步水位，"
+                "无法执行区间补齐，保持现有数据"
+            )
+            return existing_df
+        latest_date = latest_data
 
     if latest_date >= target_date:
         logger.info(
@@ -108,6 +126,7 @@ def _incremental_catchup_by_calendar_date(
     success_days = 0
     empty_days = 0
     failed_days = 0
+    last_success: Optional[str] = None
 
     for idx, cur_date in enumerate(pending_dates, 1):
         try:
@@ -117,9 +136,13 @@ def _incremental_catchup_by_calendar_date(
                 success_days += 1
             else:
                 empty_days += 1
+            last_success = cur_date
         except Exception as e:
             failed_days += 1
             logger.warning(f"[{dataset_name}] {date_col}={cur_date} 增量下载失败: {e}")
+            # 水位只代表连续成功前缀：遇到首个失败立即停止，
+            # 失败日及之后留待下次从水位之后重试，保证失败日不被跳过。
+            break
 
         if idx % 30 == 0 or idx == len(pending_dates):
             logger.info(
@@ -127,33 +150,36 @@ def _incremental_catchup_by_calendar_date(
                 f"(有数据={success_days}, 空={empty_days}, 失败={failed_days})"
             )
 
-    if not new_dfs:
-        logger.info(
-            f"[{dataset_name}] 区间增量完成: 无新增记录 "
-            f"(空={empty_days}, 失败={failed_days})"
-        )
-        return existing_df
+    # 先落盘新数据，成功后再原子推进水位：
+    # 避免"水位已提交但数据落盘失败"导致下次跳过该区间造成永久缺失。
+    result = existing_df
+    if new_dfs:
+        new_merged = pd.concat(new_dfs, ignore_index=True)
+        if partition_date_col and partition_mode:
+            result = _append_and_save_partitioned(
+                storage,
+                dataset_name,
+                new_merged,
+                dedup_cols=dedup_cols,
+                partition_date_col=partition_date_col,
+                partition_mode=partition_mode,
+            )
+        else:
+            result = _append_and_save_raw(
+                storage,
+                dataset_name,
+                new_merged,
+                dedup_cols=dedup_cols,
+            )
+        # 若落盘抛异常，此处不会执行，水位保持原值，下次从原水位之后重查
 
-    new_merged = pd.concat(new_dfs, ignore_index=True)
-    if partition_date_col and partition_mode:
-        result = _append_and_save_partitioned(
-            storage,
-            dataset_name,
-            new_merged,
-            dedup_cols=dedup_cols,
-            partition_date_col=partition_date_col,
-            partition_mode=partition_mode,
-        )
-    else:
-        result = _append_and_save_raw(
-            storage,
-            dataset_name,
-            new_merged,
-            dedup_cols=dedup_cols,
-        )
+    # 数据（或空日查询）成功推进后，水位推进到最后一个成功日（含空日）
+    if last_success is not None:
+        storage.save_sync_watermark(dataset_name, _max_date(watermark, last_success))
+
     logger.info(
-        f"[{dataset_name}] 区间增量完成: 新增 {len(new_merged)} 条, "
-        f"总计 {len(result) if result is not None else 0} 条"
+        f"[{dataset_name}] 区间增量完成: 新增数据日={success_days}, 空={empty_days}, "
+        f"失败={failed_days}, 水位推进到 {last_success or '未推进'}"
     )
     return result
 
@@ -203,6 +229,26 @@ def _load_all_partitions(storage: Storage, dataset_name: str) -> Optional[pd.Dat
     return pd.concat(dfs, ignore_index=True)
 
 
+def _drop_duplicates_keep_updated(
+    df: pd.DataFrame,
+    dedup_cols: List[str],
+) -> pd.DataFrame:
+    """去重时优先保留 update_flag 标记的修正记录（确定性、可复现）。
+
+    TuShare 同 (ts_code, end_date, ann_date) 可能存在多次修订，
+    update_flag 非空表示修正记录。排序后 keep='last' 保证修正版被保留，
+    避免跨次下载因顺序不稳定而选中不同版本。
+    """
+    work = df.copy()
+    if "update_flag" in work.columns:
+        # 仅显式识别 update_flag == "1"（TuShare 文档：1 表示更新/修正记录），
+        # 不臆测任意非空值即为修正版
+        work["_updated"] = work["update_flag"].astype(str).str.strip().eq("1")
+        work = work.sort_values(list(dedup_cols) + ["_updated"], kind="mergesort")
+        work = work.drop(columns=["_updated"])
+    return work.drop_duplicates(subset=dedup_cols, keep="last")
+
+
 def _append_and_save_partitioned(
     storage: Storage,
     dataset_name: str,
@@ -247,7 +293,7 @@ def _append_and_save_partitioned(
             merged = pd.concat([existing, part], ignore_index=True)
         else:
             merged = part
-        merged = merged.drop_duplicates(subset=dedup_cols, keep="last")
+        merged = _drop_duplicates_keep_updated(merged, dedup_cols)
         storage.save_raw_by_date(merged, dataset_name, part_date)
 
     logger.info(f"[{dataset_name}] 增量写入 {partition_count} 个分区")
@@ -276,6 +322,6 @@ def _append_and_save_raw(
         result = pd.concat([existing_df, new_df], ignore_index=True)
     else:
         result = new_df.copy()
-    result = result.drop_duplicates(subset=dedup_cols, keep="last")
+    result = _drop_duplicates_keep_updated(result, dedup_cols)
     storage.save_raw(result, dataset_name, is_force=True)
     return result

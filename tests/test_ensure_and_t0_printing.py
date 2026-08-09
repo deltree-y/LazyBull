@@ -396,18 +396,15 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
     """测试 _load_factor_data 只为目标交易日构建因子查询表输出。"""
     trade_date = '20260422'
     trading_dates = ['20260418', '20260421', trade_date]
-    stub_df = pd.DataFrame({'ts_code': ['000001.SZ']})
+    # 门控基于“最新公告日是否覆盖目标交易日”，stub 数据需带日期列且已覆盖目标日
+    stub_df = pd.DataFrame(
+        {
+            'ts_code': ['000001.SZ'],
+            'ann_date': [trade_date],
+            'report_date': [trade_date],
+        }
+    )
     captured_dates = {}
-
-    for attr in [
-        '_MIN_FINA_RECORDS',
-        '_MIN_CASHFLOW_RECORDS',
-        '_MIN_HOLDER_RECORDS',
-        '_MIN_FORECAST_RECORDS',
-        '_MIN_EXPRESS_RECORDS',
-        '_MIN_REPORT_RC_RECORDS',
-    ]:
-        monkeypatch.setattr(ensure_factor_load, attr, 1)
 
     monkeypatch.setattr(
         ensure_factor_load,
@@ -499,10 +496,13 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         def load_block_trade(self, start_date=None, end_date=None):
             return stub_df
 
+    storage = Mock()
+    storage.load_sync_watermark.return_value = None
+
     result = ensure_module._load_factor_data(
         loader=StubLoader(),
         client=Mock(),
-        storage=Mock(),
+        storage=storage,
         trade_date=trade_date,
         trading_dates_str=trading_dates,
         start_date='20260401',
@@ -801,8 +801,8 @@ def test_incremental_download_functions_delegate_to_range_catchup(
             ]
         )
 
-    # forecast/report_rc 已改为按时间分区存储, 其余公告类数据集仍为单文件
-    if dataset_name == "forecast":
+    # 分区存储数据集按分区保存；其余公告类数据集仍为单文件
+    if dataset_name in ("forecast", "fina_indicator"):
         temp_storage.save_raw_by_date(existing, dataset_name, "20260331")
     elif dataset_name == "report_rc":
         temp_storage.save_raw_by_date(existing, dataset_name, "2026-12-31")

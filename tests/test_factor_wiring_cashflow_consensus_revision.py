@@ -121,9 +121,10 @@ def test_builder_backfills_fundamental_proxy_features_before_neutralization():
 
 def test_try_download_fina_indicator_full_download_uses_explicit_fields():
     class _DummyStorage:
-        def load_raw(self, name):
+        def list_partitions(self, layer, name):
+            assert layer == "raw"
             assert name == "fina_indicator"
-            return None
+            return []
 
     captured = {}
 
@@ -165,9 +166,10 @@ def test_try_download_fina_indicator_full_download_uses_explicit_fields():
 
 def test_try_download_cashflow_full_download_uses_quarter_partitions():
     class _DummyStorage:
-        def load_raw(self, name):
+        def list_partitions(self, layer, name):
+            assert layer == "raw"
             assert name == "cashflow"
-            return None
+            return []
 
     captured = {}
 
@@ -209,7 +211,12 @@ def test_try_download_cashflow_full_download_uses_quarter_partitions():
 
 def test_try_download_fina_indicator_existing_schema_triggers_period_refresh():
     class _DummyStorage:
-        def load_raw(self, name):
+        def list_partitions(self, layer, name):
+            assert layer == "raw"
+            assert name == "fina_indicator"
+            return ["2024-03-31"]
+
+        def load_raw_by_date(self, name, trade_date, format="parquet", columns=None):
             assert name == "fina_indicator"
             return pd.DataFrame(
                 {
@@ -224,6 +231,8 @@ def test_try_download_fina_indicator_existing_schema_triggers_period_refresh():
 
     def _fake_refresh_existing_period_rows(**kwargs):
         events.append(("refresh", kwargs["fields"]))
+        assert kwargs["partition_date_col"] == "end_date"
+        assert kwargs["partition_mode"] == "quarter"
         return pd.DataFrame(
             {
                 "ts_code": ["000001.SZ"],
@@ -239,7 +248,22 @@ def test_try_download_fina_indicator_existing_schema_triggers_period_refresh():
 
     def _fake_incremental_catchup_by_calendar_date(**kwargs):
         events.append(("incremental", kwargs["existing_df"].columns.tolist()))
+        assert kwargs["partition_date_col"] == "end_date"
+        assert kwargs["partition_mode"] == "quarter"
         return kwargs["existing_df"]
+
+    refreshed_df = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "ann_date": ["20240501"],
+            "end_date": ["20240331"],
+            "roe_waa": [12.0],
+            "q_gr_yoy": [5.0],
+            "q_ocf_to_sales": [0.2],
+            "int_to_talcap": [3.0],
+            "inv_turn": [1.1],
+        }
+    )
 
     with patch(
         "src.lazybull.features.ensure.downloads._refresh_existing_period_rows",
@@ -247,6 +271,9 @@ def test_try_download_fina_indicator_existing_schema_triggers_period_refresh():
     ), patch(
         "src.lazybull.features.ensure.downloads._incremental_catchup_by_calendar_date",
         side_effect=_fake_incremental_catchup_by_calendar_date,
+    ), patch(
+        "src.lazybull.features.ensure.downloads.DataLoader.load_fina_indicator",
+        return_value=refreshed_df,
     ):
         result = _try_download_fina_indicator(
             client=object(),
