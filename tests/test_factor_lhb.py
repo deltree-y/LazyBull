@@ -301,6 +301,43 @@ def test_lhb_cont_on_list_missing_reason_column():
     result = build_lhb_lookup_by_date(df, ["20240102"])
     row = result["20240102"][result["20240102"]["ts_code"] == "000001.SZ"].iloc[0]
     assert row["lhb_cont_on_list"] == 0.0
+    assert row["lhb_cont_up_days_5"] == 0.0
+    assert row["lhb_cont_up_days_20"] == 0.0
+
+
+def test_lhb_cont_up_days_rolling():
+    """近 5/20 交易日连续异动上榜次数滚动累计（含 5 日窗口衰减与 20 日保留）。"""
+    calendar = _cal("20240101", 60)
+    df = pd.DataFrame(
+        [
+            {
+                "trade_date": calendar[i], "ts_code": "600000.SH",
+                "net_amount": 1e8, "net_rate": 0.02, "amount_rate": 0.1,
+                "reason": "连续三个交易日内，涨幅偏离值累计达到20%的证券",
+            }
+            for i in range(6)
+        ]
+    )
+    output_dates = calendar[2:15]
+    result = build_lhb_lookup_by_date(df, output_dates, calendar_dates=calendar)
+
+    def _row_at(td):
+        return result[td][result[td]["ts_code"] == "600000.SH"].iloc[0]
+
+    # 第 2 日（第 3 个连续异动上榜日）: 近 5 日累计 3 次, 近 20 日累计 3 次
+    r = _row_at(calendar[2])
+    assert r["lhb_cont_up_days_5"] == 3.0
+    assert r["lhb_cont_up_days_20"] == 3.0
+    # 第 5 日（第 6 个连续异动上榜日）: 近 5 日累计封顶 5 次, 近 20 日累计 6 次
+    r = _row_at(calendar[5])
+    assert r["lhb_cont_up_days_5"] == 5.0
+    assert r["lhb_cont_up_days_20"] == 6.0
+    # 第 10 日（未上榜）: 最近上榜在第 5 日, 距 5 日窗口之外 → 5 日累计归 0;
+    # 但仍在 20 日窗口内 → 20 日累计保留 6（时序连续性）
+    r = _row_at(calendar[10])
+    assert r["lhb_on_list"] == 0.0
+    assert r["lhb_cont_up_days_5"] == 0.0
+    assert r["lhb_cont_up_days_20"] == 6.0
 
 
 def test_lhb_empty():

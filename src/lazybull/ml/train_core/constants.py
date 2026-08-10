@@ -96,6 +96,8 @@ LHB_FEATURE_COLUMNS = [
     "lhb_net_sum_20",  # 近 20 日净买入累计
     "lhb_reason_count",  # 当日上榜理由数
     "lhb_cont_on_list",  # 当日是否连续异动上榜（reason 含"连续"）
+    "lhb_cont_up_days_5",  # 近 5 交易日连续异动上榜次数累计
+    "lhb_cont_up_days_20",  # 近 20 交易日连续异动上榜次数累计
 ]
 
 CONSENSUS_FEATURE_COLUMNS = [

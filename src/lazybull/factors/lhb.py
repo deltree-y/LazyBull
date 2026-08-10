@@ -18,6 +18,8 @@
 - lhb_cont_on_list: 当日是否因"连续异动"类理由上榜 (0/1)
   （reason 含"连续", 如连续三个交易日涨幅偏离累计达 20%; 事件级信号,
     与选中主记录无关, 当日任一条 reason 含"连续"即记为 1）
+- lhb_cont_up_days_5 / lhb_cont_up_days_20: 近 5/20 交易日"连续异动"
+  上榜次数累计（按 lhb_cont_on_list 滚动求和, 未上榜日补 0）
 
 注: top_list 同一 (trade_date, ts_code) 可能出现多条记录
 (不同上榜理由), 需先做 groupby 聚合。
@@ -42,6 +44,8 @@ LHB_COLS = [
     "lhb_net_sum_20",
     "lhb_reason_count",
     "lhb_cont_on_list",
+    "lhb_cont_up_days_5",
+    "lhb_cont_up_days_20",
 ]
 
 
@@ -179,6 +183,14 @@ def build_lhb_lookup_by_date(
             if col in daily.columns:
                 daily[col] = daily[col].fillna(0.0)
         daily["lhb_up_days_20"] = daily["lhb_on_list"].rolling(20, min_periods=1).sum()
+        # 连续异动上榜次数累计（lhb_cont_on_list 已在上方 fillna(0.0)）
+        if "lhb_cont_on_list" in daily.columns:
+            daily["lhb_cont_up_days_5"] = (
+                daily["lhb_cont_on_list"].rolling(5, min_periods=1).sum()
+            )
+            daily["lhb_cont_up_days_20"] = (
+                daily["lhb_cont_on_list"].rolling(20, min_periods=1).sum()
+            )
         if has_net:
             daily["lhb_net_sum_5"] = daily["lhb_net_amount"].rolling(5, min_periods=1).sum()
             daily["lhb_net_sum_20"] = daily["lhb_net_amount"].rolling(20, min_periods=1).sum()

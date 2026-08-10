@@ -33,6 +33,8 @@ _REQUIRED_FACTOR_COLS = [
     "express_revenue_yoy",                                  # 业绩快报因子
     "express_freshness_days",                               # 业绩快报 freshness
     "lhb_cont_on_list",                                     # 龙虎榜因子（v0.95.0 新增列，旧缓存缺列需重建）
+    "lhb_cont_up_days_5",                                   # 龙虎榜连续异动近 5 日累计（v0.95.0 新增列）
+    "lhb_cont_up_days_20",                                  # 龙虎榜连续异动近 20 日累计（v0.95.0 新增列）
     "consensus_freshness_days",                             # 一致预期 freshness
     "cashflow_freshness_days",                              # 现金流质量 freshness
     "cons_revision_freshness_days",                         # 一致预期修正 freshness

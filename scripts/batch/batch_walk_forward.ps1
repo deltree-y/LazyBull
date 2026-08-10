@@ -25,23 +25,23 @@ $skip_training           = $false   # $true 启用 | $false 禁用
 # StartModelVersion    : skip-training 模式下该时间段首个 split 对应模型版本号
 # SelectedSplits       : 可选 split 下标列表（如 @(0,4,5,7,9)）；@() 或不填表示训练该时间段全部 split
 $wf_period_configs = @(
-    [PSCustomObject]@{
-        Label = "0105"
-        SplitCount = 14
-        FinalDate = "20260105"# 20251231
-        ContinueDays = 1
-        StartModelVersion = 22626
-        #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-        SelectedSplits = @()
-    }
     #[PSCustomObject]@{
-    #    Label = "0109"
+    #    Label = "0105"
     #    SplitCount = 14
-    #    FinalDate = "20260109" # 20260209
+    #    FinalDate = "20260105"# 20251231
     #    ContinueDays = 1
-    #    StartModelVersion = 22641
+    #    StartModelVersion = 22626
+    #    #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
     #    SelectedSplits = @()
     #}
+    [PSCustomObject]@{
+        Label = "0109"
+        SplitCount = 14
+        FinalDate = "20260109" # 20260209
+        ContinueDays = 1
+        StartModelVersion = 22641
+        SelectedSplits = @()
+    }
     #[PSCustomObject]@{
     #    Label = "0116"
     #    SplitCount = 14
@@ -170,7 +170,7 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 $factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 因子排除列表（可选，0801引入）────────────────────────────────────
-$factor_exclude_file      = "configs/factor_exclude_list_north_on.json"  # 临时复现 v22712(CAGR>4%): 加回3个report_rc因子; 复现完改回 ""
+$factor_exclude_file      = "#configs/factor_exclude_list_north_on.json"  # 临时复现 v22712(CAGR>4%): 加回3个report_rc因子; 复现完改回 ""
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all
