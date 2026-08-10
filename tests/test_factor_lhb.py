@@ -66,6 +66,8 @@ def test_lhb_same_day_multiple_reasons_take_abs_max():
     # 去重后的上榜理由数
     assert row["lhb_reason_count"] == 2
     assert row["lhb_on_list"] == 1.0
+    # 两条理由均不含"连续", 非连续异动上榜
+    assert row["lhb_cont_on_list"] == 0.0
 
 
 def test_lhb_rolling_up_days_keeps_timeline_continuity():
@@ -132,6 +134,8 @@ def test_lhb_excludes_continuous_reason():
     # 优先单日榜的 1e8, 而不是求和 6e8
     assert row["lhb_net_amount"] == 1e8
     assert row["lhb_reason_count"] == 1
+    # 当日同时存在连续类理由, 连续异动信号记为 1（事件级, 与选中主记录无关）
+    assert row["lhb_cont_on_list"] == 1.0
 
 
 def test_lhb_only_continuous_reason_kept():
@@ -150,6 +154,7 @@ def test_lhb_only_continuous_reason_kept():
     assert row["lhb_on_list"] == 1.0
     assert row["lhb_net_amount"] == 5e8
     assert row["lhb_reason_count"] == 1
+    assert row["lhb_cont_on_list"] == 1.0
 
 
 def test_lhb_all_na_net_amount_no_crash():
@@ -229,6 +234,73 @@ def test_lhb_no_field_cross_join():
     assert row["lhb_net_amount"] == 1e8
     assert row["lhb_net_rate"] == 0.0
     assert row["lhb_amount_rate"] == 0.1
+
+
+def test_lhb_cont_on_list_event_signal():
+    """lhb_cont_on_list 是事件级信号: 当日任一条 reason 含"连续"即记为 1,
+    即使主记录选中单日榜; 仅单日类理由时记为 0。"""
+    df = pd.DataFrame(
+        [
+            {
+                "trade_date": "20240102", "ts_code": "000001.SZ",
+                "net_amount": 1e8, "net_rate": 0.02, "amount_rate": 0.1,
+                "reason": "日涨幅偏离值达 7%",
+            },
+            {
+                "trade_date": "20240102", "ts_code": "000001.SZ",
+                "net_amount": 5e8, "net_rate": 0.1, "amount_rate": 0.2,
+                "reason": "连续三个交易日内，涨幅偏离值累计达到20%的证券",
+            },
+            {
+                "trade_date": "20240103", "ts_code": "000002.SZ",
+                "net_amount": 3e7, "net_rate": 0.01, "amount_rate": 0.05,
+                "reason": "日涨幅偏离值达 7%",
+            },
+        ]
+    )
+    result = build_lhb_lookup_by_date(df, ["20240102", "20240103"])
+    # 当日单日榜与连续类并存: 主记录选中单日榜(1e8), 但连续异动信号=1
+    row = result["20240102"][result["20240102"]["ts_code"] == "000001.SZ"].iloc[0]
+    assert row["lhb_net_amount"] == 1e8
+    assert row["lhb_cont_on_list"] == 1.0
+    # 仅单日类理由: cont=0
+    row2 = result["20240103"][result["20240103"]["ts_code"] == "000002.SZ"].iloc[0]
+    assert row2["lhb_cont_on_list"] == 0.0
+
+
+def test_lhb_cont_on_list_non_listed_day_zero():
+    """未上榜但近 20 日上过榜的股票, cont 标记为 0（仅上榜当日为 1）。"""
+    df = pd.DataFrame(
+        [
+            {
+                "trade_date": "20240102", "ts_code": "000001.SZ",
+                "net_amount": 5e8, "net_rate": 0.1, "amount_rate": 0.2,
+                "reason": "连续三个交易日内，涨幅偏离值累计达到20%的证券",
+            },
+        ]
+    )
+    result = build_lhb_lookup_by_date(df, ["20240102", "20240103"])
+    row = result["20240102"][result["20240102"]["ts_code"] == "000001.SZ"].iloc[0]
+    assert row["lhb_cont_on_list"] == 1.0
+    # 第 2 日未上榜: cont=0
+    row2 = result["20240103"][result["20240103"]["ts_code"] == "000001.SZ"].iloc[0]
+    assert row2["lhb_on_list"] == 0.0
+    assert row2["lhb_cont_on_list"] == 0.0
+
+
+def test_lhb_cont_on_list_missing_reason_column():
+    """reason 列缺失时 cont 标记恒为 0（不崩溃）。"""
+    df = pd.DataFrame(
+        [
+            {
+                "trade_date": "20240102", "ts_code": "000001.SZ",
+                "net_amount": 1e8, "net_rate": 0.02, "amount_rate": 0.1,
+            },
+        ]
+    )
+    result = build_lhb_lookup_by_date(df, ["20240102"])
+    row = result["20240102"][result["20240102"]["ts_code"] == "000001.SZ"].iloc[0]
+    assert row["lhb_cont_on_list"] == 0.0
 
 
 def test_lhb_empty():

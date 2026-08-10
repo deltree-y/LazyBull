@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.0] - 2026-08-09
+
+### Added
+
+- **龙虎榜新增连续异动信号 `lhb_cont_on_list`**：
+  - 语义：当日是否存在"连续异动"类上榜理由（`top_list.reason` 含"连续"，如连续三个交易日涨幅偏离累计达 20%），0/1 事件级信号；
+  - 与选中主记录无关：当日单日榜与连续类理由并存时，主记录仍取单日榜（净买入绝对值最大），但连续异动信号记为 1；
+  - 相比 `lhb_reason_count`（非零比例约 1.6%、值域几乎二元）区分度更高：真实数据上榜当日连续异动占比约 39%，覆盖度约 4.8%；
+  - 已登记入 `LHB_COLS` 与训练特征清单 `LHB_FEATURE_COLUMNS`，批量 build 特征后自动进入训练（`build_clean_features.py --build-all` 或增量区间重建）。
+- **`lhb_reason_count` 纳入生产因子排除清单**：该列仍保留在特征 schema（不破坏历史一致性），但已加入 `data/models/factor_exclude_list.json`，训练时由因子精简逻辑剔除（重要性恒为 0 且与 `lhb_on_list` 冗余）；如需复启用，从清单移除即可。
+- **ensure 缓存 schema 补检 `lhb_cont_on_list`**：`features/ensure/schema.py` 的 `_REQUIRED_FACTOR_COLS` 新增 `lhb_cont_on_list`。旧 `cs_infer`/`cs_train` 缓存（v0.95.0 之前构建、缺该列）会被 `_check_features_schema` 判定不完整并自动触发重建，避免推理时该列缺失被 `MLSignal` 补 NaN 后触发"全空拒绝预测"。
+
+### Tests
+
+- 新增 `lhb_cont_on_list` 事件级信号、非上榜日置 0、reason 列缺失降级测试；既有单日/连续类并存与仅连续类用例补充断言。
+
 ## [0.94.27] - 2026-08-09
 
 ### Fixed

@@ -32,6 +32,7 @@ _REQUIRED_FACTOR_COLS = [
     "fund_portfolio_freshness_days",                        # 基金持仓 freshness
     "express_revenue_yoy",                                  # 业绩快报因子
     "express_freshness_days",                               # 业绩快报 freshness
+    "lhb_cont_on_list",                                     # 龙虎榜因子（v0.95.0 新增列，旧缓存缺列需重建）
     "consensus_freshness_days",                             # 一致预期 freshness
     "cashflow_freshness_days",                              # 现金流质量 freshness
     "cons_revision_freshness_days",                         # 一致预期修正 freshness

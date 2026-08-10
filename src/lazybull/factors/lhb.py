@@ -15,6 +15,9 @@
 - lhb_up_days_20: 近 20 日累计上榜次数
 - lhb_net_sum_5 / lhb_net_sum_20: 近 5/20 日净买入累计
 - lhb_reason_count: 当日上榜理由数（同一股票同日可有多条）
+- lhb_cont_on_list: 当日是否因"连续异动"类理由上榜 (0/1)
+  （reason 含"连续", 如连续三个交易日涨幅偏离累计达 20%; 事件级信号,
+    与选中主记录无关, 当日任一条 reason 含"连续"即记为 1）
 
 注: top_list 同一 (trade_date, ts_code) 可能出现多条记录
 (不同上榜理由), 需先做 groupby 聚合。
@@ -38,6 +41,7 @@ LHB_COLS = [
     "lhb_net_sum_5",
     "lhb_net_sum_20",
     "lhb_reason_count",
+    "lhb_cont_on_list",
 ]
 
 
@@ -124,6 +128,21 @@ def build_lhb_lookup_by_date(
         grouped["lhb_reason_count"] = grouped["_rc"].fillna(1.0)
         grouped = grouped.drop(columns=["_rc"])
 
+    # lhb_cont_on_list: 当日是否存在"连续异动"类上榜理由（事件级信号, 与选中
+    # 主记录无关; 只要当日任一条 reason 含"连续"即记为 1）
+    if "reason" in df.columns:
+        cont_any = (
+            df.groupby(["trade_date", "ts_code"])["_lhb_is_cont"]
+            .max()
+            .rename("_lhb_cont_any")
+            .reset_index()
+        )
+        grouped = grouped.merge(cont_any, on=["trade_date", "ts_code"], how="left")
+        grouped["lhb_cont_on_list"] = grouped["_lhb_cont_any"].fillna(False).astype(float)
+        grouped = grouped.drop(columns=["_lhb_cont_any"])
+    else:
+        grouped["lhb_cont_on_list"] = 0.0
+
     grouped = grouped.drop(columns=["_lhb_is_cont", "_lhb_abs"], errors="ignore")
     grouped = grouped.rename(
         columns={
@@ -149,8 +168,14 @@ def build_lhb_lookup_by_date(
         if i0 >= end:
             continue
         daily = sub.set_index("trade_date").reindex(calendar[i0:end])
-        for col in ["lhb_on_list", "lhb_net_amount", "lhb_net_rate", "lhb_amount_rate",
-                    "lhb_reason_count"]:
+        for col in [
+            "lhb_on_list",
+            "lhb_net_amount",
+            "lhb_net_rate",
+            "lhb_amount_rate",
+            "lhb_reason_count",
+            "lhb_cont_on_list",
+        ]:
             if col in daily.columns:
                 daily[col] = daily[col].fillna(0.0)
         daily["lhb_up_days_20"] = daily["lhb_on_list"].rolling(20, min_periods=1).sum()

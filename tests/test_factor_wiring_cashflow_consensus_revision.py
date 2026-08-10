@@ -34,6 +34,8 @@ def test_required_factor_cols_include_new_cashflow_and_consensus_revision_fields
     assert "grossprofit_margin" in _REQUIRED_FACTOR_COLS
     assert "q_gr_yoy" in _REQUIRED_FACTOR_COLS
     assert "int_to_talcap" in _REQUIRED_FACTOR_COLS
+    # v0.95.0 新增 lhb_cont_on_list: 旧 cs_infer 缓存缺列时由 ensure 自动重建
+    assert "lhb_cont_on_list" in _REQUIRED_FACTOR_COLS
 
 
 def test_loader_cashflow_normalizes_date_columns():
