@@ -590,8 +590,13 @@ def main():
             "enable_consensus_revision_features": getattr(
                 args, "enable_consensus_revision_features", False
             ),
+            # 推理侧（MLSignal）按此复现事件型 freshness 衰减，必须与训练一致
+            "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),
+            "event_freshness_half_life_days": getattr(
+                args, "event_freshness_half_life_days", 45.0
+            ),
         })
-        
+
         # 4. 注册模型
         version = registry.register_model(
             model=model,

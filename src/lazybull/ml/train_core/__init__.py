@@ -7,6 +7,7 @@ from .constants import (
     CONSENSUS_FEATURE_COLUMNS,
     CONSENSUS_REVISION_FEATURE_COLUMNS,
     CYQ_FEATURE_COLUMNS,
+    DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
     ENHANCED_FEATURE_COLUMNS,
     EVENT_FRESHNESS_TO_VALUE_COLUMNS,
     EXPRESS_FEATURE_COLUMNS,
@@ -21,6 +22,10 @@ from .constants import (
     NORTH_FEATURE_COLUMNS,
     STATE_FRESHNESS_COLUMNS,
 )
+from .freshness import (
+    apply_event_freshness_decay,
+    apply_serving_event_decay,
+)
 from .labels import (
     add_blended_return_label,
     generate_classification_labels,
@@ -33,7 +38,6 @@ from .split import (
     split_val_for_selection_protocol_by_date,
 )
 from .features import (
-    _apply_event_freshness_decay,
     _format_feature_importance_compact,
     _load_factor_exclude_list,
     filter_stable_features,

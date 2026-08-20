@@ -60,11 +60,12 @@ def build_earnings_lookup_by_date(
         fc["ann_date"] = normalize_series_to_yyyymmdd(fc["ann_date"])
         fc = fc.dropna(subset=["ann_date"])
 
-        # 类型评分
+        # 类型评分：未知/缺失类型保留 NaN（与"不确定"评分 0.0 区分，
+        # 由 XGBoost/LightGBM 原生 NaN 处理学习"无预告类型"的缺失方向）
         if "type" in fc.columns:
-            fc["forecast_type_score"] = fc["type"].map(FORECAST_TYPE_SCORE).fillna(0.0)
+            fc["forecast_type_score"] = fc["type"].map(FORECAST_TYPE_SCORE)
         else:
-            fc["forecast_type_score"] = 0.0
+            fc["forecast_type_score"] = np.nan
 
         # 变动幅度中值
         for col in ["p_change_min", "p_change_max"]:
@@ -75,17 +76,19 @@ def build_earnings_lookup_by_date(
         else:
             fc["forecast_chg_mid"] = np.nan
 
-        # 仅去除完全重复记录，保留同一报告期多次公告版本，交由 PIT 查询按交易日选择
+        # 仅去除完全重复记录，保留同一报告期多次公告版本，
+        # 由 PIT 查询按交易日选择（end_col 模式下同报告期取最新修正版）
         fc = fc.sort_values(["ts_code", "end_date", "ann_date"])
         fc = fc.drop_duplicates(subset=["ts_code", "end_date", "ann_date"], keep="last")
         fc = fc.sort_values(["ts_code", "ann_date"])
 
-        factor_df = fc[["ts_code", "ann_date"] + EARNINGS_COLS].copy()
+        factor_df = fc[["ts_code", "ann_date", "end_date"] + EARNINGS_COLS].copy()
         return build_latest_announcement_lookup_by_date(
             factor_df,
             trading_dates,
             value_cols=EARNINGS_COLS,
             freshness_col=EARNINGS_FRESHNESS_COL,
+            end_col="end_date",
             log_name="业绩预告",
         )
 

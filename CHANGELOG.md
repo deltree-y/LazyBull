@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.1] - 2026-08-20
+
+### Fixed
+
+- **推理侧补齐事件型 freshness 衰减（消除 train/serve skew）**：
+  - 训练侧 `state_keep_event_decay` 策略对事件型因子按 freshness 指数衰减，但 OOS 评估与 `MLSignal`（回测/纸面）一直用未衰减原值，导致模型在压缩分布上学习、推理时旧公告以原值全额进入模型；
+  - 衰减逻辑抽取为公共模块 `ml/train_core/freshness.py`（`apply_event_freshness_decay` / `apply_serving_event_decay`），训练侧与推理侧共用同一实现；
+  - `MLSignal.generate` / `generate_ranked` 按模型 `train_params` 中记录的 `freshness_strategy` / `event_freshness_half_life_days` 复现衰减；旧模型缺参数时按默认 `state_keep_event_decay` + 45 天处理；
+  - walk-forward OOS 评估（`split_training.py`）同样按运行参数复现衰减；新注册模型（split、deploy 与 `train_ml_model.py` 单次训练）在 `train_params` 中记录 freshness 参数，供推理侧精确复现；
+  - 注意：历史 `decay` 组实验结论基于未衰减推理，修复后需重跑对比才有可比性。
+- **股东人数环比改为跨报告期精确对齐（holder_num_chg / holder_num_chg_2q）**：
+  - 原实现按 `ann_date` 朴素 shift，同一报告期的修正公告会稀释跨期信号；现改为每个公告版本的环比基准 = 公告日不晚于本版本、报告期早于本版本的最新已公告值（同报告期多版本取最新修正版）；
+  - PIT 查询启用报告期优先（`end_col`），晚发的旧报告期修正公告不再覆盖已公告的新报告期。
+- **业绩预告因子两处修正**：
+  - `forecast_type_score` 未知/缺失类型不再 `fillna(0.0)`（与"不确定"评分混淆），保留 NaN 交由模型原生处理；
+  - PIT 查询启用报告期优先（`end_col`），同报告期修正公告发布后自动替代首发版，晚发旧期修正不覆盖新期预告。
+- **公告 PIT 通用函数新增 `end_col` 参数**：提供时在当日可见公告中优先选择报告期最新的记录（同报告期取最新公告），未提供时保持原行为，现有调用不受影响。
+
+### Tests
+
+- 新增 `test_serving_freshness_decay.py`：衰减权重/半衰期、缺失与负 freshness、策略门控、`MLSignal` 推理侧复现（decay/no_decay/旧模型默认）等 8 个用例；
+- 新增 `test_holder_end_date_alignment.py`：同报告期修正版本跨期对齐、晚发旧期修正不覆盖新期、首期 NaN、跨股票隔离；
+- 新增 `test_earnings_pit_and_type_nan.py`：未知类型 NaN、修正版本切换、报告期优先查询、`end_col` 兼容行为等 7 个用例。
+
 ## [0.95.0] - 2026-08-09
 
 ### Added

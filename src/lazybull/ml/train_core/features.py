@@ -15,56 +15,11 @@ import numpy as np
 import pandas as pd
 
 from .constants import (
-    EVENT_FRESHNESS_TO_VALUE_COLUMNS,
     FACTOR_EXCLUDE_LIST_FILE,
 )
 
 _factor_exclude_cache: Dict[Path, Set[str]] = {}
 
-def _apply_event_freshness_decay(
-    df: pd.DataFrame,
-    event_freshness_cols: List[str],
-    half_life_days: float,
-) -> Tuple[pd.DataFrame, Dict[str, int]]:
-    """按 freshness 对事件型因子做指数衰减（半衰期）。
-
-    权重: w = exp(-ln(2) * days / half_life)
-    - freshness 缺失时权重按 1.0 处理（避免无谓引入缺失）
-    - freshness < 0 按 0 处理
-    """
-    if half_life_days <= 0:
-        raise ValueError("event_freshness_half_life_days 必须 > 0")
-
-    decay_stats: Dict[str, int] = {}
-    if len(df) == 0 or not event_freshness_cols:
-        return df, decay_stats
-
-    ln2 = math.log(2.0)
-    for freshness_col in event_freshness_cols:
-        if freshness_col not in df.columns:
-            continue
-        value_cols = [
-            col
-            for col in EVENT_FRESHNESS_TO_VALUE_COLUMNS.get(freshness_col, [])
-            if col in df.columns
-        ]
-        if not value_cols:
-            continue
-
-        freshness = pd.to_numeric(df[freshness_col], errors="coerce")
-        decay_weight = np.exp(-ln2 * freshness.clip(lower=0) / float(half_life_days))
-        decay_weight = pd.Series(decay_weight, index=df.index).fillna(1.0)
-
-        touched = 0
-        for value_col in value_cols:
-            raw = pd.to_numeric(df[value_col], errors="coerce")
-            before_non_na = int(raw.notna().sum())
-            df[value_col] = raw * decay_weight
-            touched += before_non_na
-
-        decay_stats[freshness_col] = touched
-
-    return df, decay_stats
 
 def _load_factor_exclude_list(
     models_dir: Optional[Path] = None,

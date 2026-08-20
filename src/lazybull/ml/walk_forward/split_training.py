@@ -16,7 +16,10 @@ from src.lazybull.ml.run_logger import (
     write_training_run_to_csv,
 )
 from src.lazybull.ml.train_core import (
+    DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
+    FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     add_blended_return_label,
+    apply_serving_event_decay,
     evaluate_validation_daily,
     load_features_data,
 )
@@ -222,6 +225,17 @@ def execute_split_training(
 
     logger.info(f"测试集样本数（过滤后）: {len(df_test_eval)}")
 
+    # OOS 评估侧复现训练时的事件型 freshness 衰减（train/serve 一致）
+    df_test_eval = apply_serving_event_decay(
+        df_test_eval,
+        freshness_strategy=getattr(
+            args, "freshness_strategy", FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
+        ),
+        event_freshness_half_life_days=getattr(
+            args, "event_freshness_half_life_days", DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS
+        ),
+    )
+
     X_test_features = df_test_eval[feature_columns]
 
     if args.task == "classification":
@@ -294,6 +308,12 @@ def execute_split_training(
             ),
             "enable_consensus_revision_features": getattr(
                 args, "enable_consensus_revision_features", False
+            ),
+            "freshness_strategy": getattr(
+                args, "freshness_strategy", FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
+            ),
+            "event_freshness_half_life_days": getattr(
+                args, "event_freshness_half_life_days", DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS
             ),
         }
     )

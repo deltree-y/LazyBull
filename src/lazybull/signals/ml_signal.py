@@ -12,6 +12,12 @@ from loguru import logger
 
 from ..common.config import get_models_root
 from ..ml import ModelRegistry
+from ..ml.train_core import (
+    DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
+    EVENT_FRESHNESS_TO_VALUE_COLUMNS,
+    FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
+    apply_event_freshness_decay,
+)
 from .base import Signal
 
 
@@ -221,8 +227,51 @@ class MLSignal(Signal):
         """将选股过滤与模型预测入口压缩为单行日志。"""
         if ranked:
             return
-        universe_text = f"{before_count}→{after_count}" if before_count != after_count else str(after_count)
+        universe_text = (
+            f"{before_count}→{after_count}" if before_count != after_count else str(after_count)
+        )
         logger.info(f"选股/预测: {universe_text}, 特征{len(self.feature_columns)}")
+
+    def _apply_serving_event_decay(self, features_df: pd.DataFrame) -> pd.DataFrame:
+        """推理侧按模型训练参数复现事件型 freshness 指数衰减（消除 train/serve skew）。
+
+        训练侧在 state_keep_event_decay 策略下对事件型因子按 freshness 衰减
+        并从特征列移除 freshness 列；推理侧必须复现同一衰减，否则模型会在
+        未衰减的分布上预测（旧公告以原值全额进入模型）。
+
+        Args:
+            features_df: 当日特征 DataFrame（原地修改值列并返回）。
+
+        Returns:
+            衰减后的 DataFrame。
+        """
+        train_params = self.metadata.get("train_params", {}) if self.metadata else {}
+        strategy = train_params.get(
+            "freshness_strategy", FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
+        )
+        if strategy != FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY:
+            return features_df
+        half_life_days = float(
+            train_params.get(
+                "event_freshness_half_life_days", DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS
+            )
+        )
+        event_freshness_cols = [
+            c for c in EVENT_FRESHNESS_TO_VALUE_COLUMNS if c in features_df.columns
+        ]
+        if not event_freshness_cols:
+            return features_df
+        features_df, decay_stats = apply_event_freshness_decay(
+            features_df,
+            event_freshness_cols=event_freshness_cols,
+            half_life_days=half_life_days,
+        )
+        if decay_stats:
+            logger.debug(
+                f"推理侧事件 freshness 衰减: half_life={half_life_days:.0f}天, "
+                + ", ".join(sorted(decay_stats.keys()))
+            )
+        return features_df
 
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 ML 信号
@@ -277,6 +326,9 @@ class MLSignal(Signal):
         except ValueError as e:
             logger.error(f"特征列一致性检查失败: {e}")
             raise
+
+        # 推理侧复现训练时的事件型 freshness 衰减（train/serve 一致）
+        features_df = self._apply_serving_event_decay(features_df)
 
         # 准备特征（XGBoost 不修改输入，无需 .copy()）
         try:
@@ -388,6 +440,9 @@ class MLSignal(Signal):
         except ValueError as e:
             logger.error(f"特征列一致性检查失败: {e}")
             raise
+
+        # 推理侧复现训练时的事件型 freshness 衰减（train/serve 一致）
+        features_df = self._apply_serving_event_decay(features_df)
 
         # 准备特征（XGBoost 不修改输入，无需 .copy()）
         try:

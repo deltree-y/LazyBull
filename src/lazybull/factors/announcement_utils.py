@@ -35,6 +35,7 @@ def build_latest_announcement_lookup_by_date(
     value_cols: List[str],
     code_col: str = "ts_code",
     ann_col: str = "ann_date",
+    end_col: Optional[str] = None,
     freshness_col: Optional[str] = None,
     log_name: str = "公告因子",
 ) -> Dict[str, pd.DataFrame]:
@@ -46,6 +47,10 @@ def build_latest_announcement_lookup_by_date(
         value_cols: 需要输出的因子列名。
         code_col: 证券代码列名。
         ann_col: 公告日期列名。
+        end_col: 可选报告期列名；提供时在当日可见公告中优先选择
+            报告期（end_col）最新的记录（同报告期取最新公告），避免
+            晚发的旧报告期修正公告覆盖已公告的新报告期。未提供时
+            保持原行为：直接取公告日最新的记录。
         freshness_col: 可选的新鲜度列名；若提供，则输出距公告日的天数。
         log_name: 日志展示名称。
 
@@ -82,6 +87,12 @@ def build_latest_announcement_lookup_by_date(
     if df.empty:
         return {}
 
+    # 报告期优先模式：标准化 end_col 并剔除报告期缺失的记录
+    use_end_pref = end_col is not None and end_col in df.columns
+    if use_end_pref:
+        df[end_col] = df[end_col].map(_normalize_date_str)
+        df = df.dropna(subset=[end_col])
+
     df = df.sort_values([code_col, ann_col], kind="mergesort")
     trade_ts_map = {
         trade_date: pd.to_datetime(trade_date, format="%Y%m%d", errors="coerce")
@@ -91,6 +102,7 @@ def build_latest_announcement_lookup_by_date(
     stock_ann_dates: Dict[str, List[str]] = {}
     stock_values: Dict[str, List[List[object]]] = {}
     stock_ann_timestamps: Dict[str, List[pd.Timestamp]] = {}
+    stock_end_dates: Optional[Dict[str, List[str]]] = {} if use_end_pref else None
 
     for ts_code, grp in df.groupby(code_col, sort=False):
         # mergesort 稳定排序：保持上游（如按 end_date 排序）的相对顺序，
@@ -99,6 +111,8 @@ def build_latest_announcement_lookup_by_date(
         ann_dates = grp[ann_col].tolist()
         stock_ann_dates[ts_code] = ann_dates
         stock_values[ts_code] = grp[value_cols].values.tolist()
+        if use_end_pref:
+            stock_end_dates[ts_code] = grp[end_col].tolist()
         if freshness_col is not None:
             stock_ann_timestamps[ts_code] = pd.to_datetime(
                 pd.Series(ann_dates), format="%Y%m%d", errors="coerce"
@@ -116,6 +130,12 @@ def build_latest_announcement_lookup_by_date(
             idx = bisect.bisect_right(ann_dates, trade_date) - 1
             if idx < 0:
                 continue
+
+            if stock_end_dates is not None:
+                # 报告期优先：在当日可见公告内选报告期最新的记录
+                visible_ends = stock_end_dates[ts_code][: idx + 1]
+                latest_end = max(visible_ends)
+                idx = max(i for i, e in enumerate(visible_ends) if e == latest_end)
 
             values = stock_values[ts_code][idx]
             row = {code_col: ts_code}

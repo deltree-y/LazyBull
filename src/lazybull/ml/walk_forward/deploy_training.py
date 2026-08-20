@@ -16,7 +16,11 @@ from src.lazybull.ml.run_logger import (
     create_training_run_record_from_training_session,
     write_training_run_to_csv,
 )
-from src.lazybull.ml.train_core import evaluate_validation_daily
+from src.lazybull.ml.train_core import (
+    DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
+    FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
+    evaluate_validation_daily,
+)
 from .training_core import (
     MIN_MODELS,
     SEED_ENSEMBLE_KEEP_TOP_RATIO,
@@ -166,6 +170,12 @@ def execute_deploy_training(
             ),
             "enable_consensus_revision_features": getattr(
                 args, "enable_consensus_revision_features", False
+            ),
+            "freshness_strategy": getattr(
+                args, "freshness_strategy", FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
+            ),
+            "event_freshness_half_life_days": getattr(
+                args, "event_freshness_half_life_days", DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS
             ),
         }
     )

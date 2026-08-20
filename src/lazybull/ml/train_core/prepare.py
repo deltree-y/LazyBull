@@ -37,10 +37,11 @@ from .split import (
     split_val_for_selection_protocol_by_date,
 )
 from .features import (
-    _apply_event_freshness_decay,
     _load_factor_exclude_list,
     filter_stable_features,
 )
+from .freshness import apply_event_freshness_decay
+
 
 def prepare_training_data(
     df: pd.DataFrame,
@@ -453,7 +454,7 @@ def prepare_training_data(
         freshness_strategy == FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
         and event_freshness_cols_used
     ):
-        df_train, decay_applied_stats = _apply_event_freshness_decay(
+        df_train, decay_applied_stats = apply_event_freshness_decay(
             df_train,
             event_freshness_cols=event_freshness_cols_used,
             half_life_days=float(event_freshness_half_life_days),

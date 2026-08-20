@@ -144,6 +144,8 @@ FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY = "state_keep_event_decay"
 
 FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY = "state_keep_event_no_decay"
 
+DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS = 45.0
+
 STATE_FRESHNESS_COLUMNS = {
     "fundamental_freshness_days",
     "holder_freshness_days",
