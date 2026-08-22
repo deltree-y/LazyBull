@@ -28,7 +28,16 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ## ✨ 功能特性
 
-### 当前版本 (v0.95.1)
+### 当前版本 (v0.95.3)
+
+- **训练入口特征清洗日志输出移除列明细**：训练启动时按类逐行打印被移除特征列（高缺失/全空/常数/zscore 联动）的详细名称，便于定位数据链路问题；仅日志增强，不改变特征移除逻辑与训练结果。
+
+### v0.95.2
+
+- **融资融券幽灵因子清理**：从未实现的 `margin_net_buy_ratio` 从主模型列清单移除，正式入模融资融券因子为 `rzye_chg_5` / `rzye_chg_20` / `rqye_rzye_ratio`；风控专用列（`margin_net_buy`、`short_balance_change_5`、`short_sell_vol_change_5`）独立为 `MARGIN_RISK_COLS` 继续供 PositionRiskModel 使用；
+- **cs_infer 缓存补检**：缓存完整性校验新增 `short_balance_change_5`，旧推理缓存缺列自动重建，消除风控模型 train/infer 列差异。
+
+### v0.95.1
 
 - **事件衰减推理侧补齐**：`MLSignal` 与 OOS 评估按模型训练参数复现事件型 freshness 指数衰减，消除 train/serve skew（旧公告不再以原值全额入模）；
 - **股东人数环比精确对齐**：`holder_num_chg` 基准改为公告日不晚于本版本、报告期早于本版本的最新已公告值，同报告期修正版本不再稀释跨期信号；

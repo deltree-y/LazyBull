@@ -39,7 +39,6 @@ MARGIN_FEATURE_COLUMNS = [
     "rzye_chg_5",  # 融资余额5日变动率
     "rzye_chg_20",  # 融资余额20日变动率
     "rqye_rzye_ratio",  # 融券/融资余额比
-    "margin_net_buy_ratio",  # 融资净买入/成交额
 ]
 
 ALT_FEATURE_COLUMNS = [

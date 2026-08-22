@@ -9,6 +9,7 @@ from ...data import Storage
 # 每个因子组至少一个代表性列，确保旧缓存或因子组缺失时自动淘汰
 _REQUIRED_FACTOR_COLS = [
     "rzye_chg_5", "rzye_chg_20", "rqye_rzye_ratio",       # 融资融券
+    "short_balance_change_5",                             # 融资融券（风控列，v0.95.2 补检旧缓存）
     "zscore_bp", "zscore_dv_ttm", "zscore_amount_ma20",    # 截面 z-score
     "neu_ret_5",                                            # 行业中性化收益
     "alpha_industry_5",                                     # 行业 alpha

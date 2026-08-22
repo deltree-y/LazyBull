@@ -25,23 +25,23 @@ $skip_training           = $false   # $true 启用 | $false 禁用
 # StartModelVersion    : skip-training 模式下该时间段首个 split 对应模型版本号
 # SelectedSplits       : 可选 split 下标列表（如 @(0,4,5,7,9)）；@() 或不填表示训练该时间段全部 split
 $wf_period_configs = @(
-    #[PSCustomObject]@{
-    #    Label = "0105"
-    #    SplitCount = 14
-    #    FinalDate = "20260105"# 20251231
-    #    ContinueDays = 1
-    #    StartModelVersion = 22626
-    #    #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
-    #    SelectedSplits = @()
-    #}
     [PSCustomObject]@{
-        Label = "0109"
+        Label = "0101"
         SplitCount = 14
-        FinalDate = "20260109" # 20260209
+        FinalDate = "20260105"# 20251231
         ContinueDays = 1
-        StartModelVersion = 22641
+        StartModelVersion = 22626
+        #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
         SelectedSplits = @()
     }
+    #[PSCustomObject]@{
+    #    Label = "0109"
+    #    SplitCount = 14
+    #    FinalDate = "20260109" # 20260209
+    #    ContinueDays = 1
+    #    StartModelVersion = 22641
+    #    SelectedSplits = @()
+    #}
     #[PSCustomObject]@{
     #    Label = "0116"
     #    SplitCount = 14
@@ -78,7 +78,7 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(5000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
 $learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(200)       #. XGB推荐150, LGB推荐200

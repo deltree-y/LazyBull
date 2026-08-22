@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.3] - 2026-08-22
+
+### Changed
+
+- **训练入口特征清洗日志输出移除列明细**：`ml/train_core/prepare.py` 在原有统计日志（高缺失/全空/常数计数）之后，按类逐行打印被移除特征列的详细名称（高缺失、全空、常数、zscore 联动移除），便于快速定位数据链路问题（如某类因子整体缺失）；仅日志变更，不影响特征移除逻辑与训练结果。
+
+## [0.95.2] - 2026-08-22
+
+### Fixed
+
+- **融资融券幽灵因子清理（margin_net_buy_ratio）**：
+  - `margin_net_buy_ratio` 自引入以来从未被计算，仅在 `MARGIN_COLS` 与 `MARGIN_FEATURE_COLUMNS` 中声明，被 lookup 存在性过滤与训练列过滤双重掩盖；现已从两份清单移除，主模型入模融资融券因子正式确定为 `rzye_chg_5` / `rzye_chg_20` / `rqye_rzye_ratio` 三个；
+  - `factors/margin.py` 将列清单拆分为 `MARGIN_COLS`（主模型）与 `MARGIN_RISK_COLS`（风控专用：`margin_net_buy` / `short_balance_change_5` / `short_sell_vol_change_5`），后者继续由 lookup 输出供 PositionRiskModel 使用，不改变既有特征分区 schema；
+  - `features/ensure/schema.py` 缓存补检新增 `short_balance_change_5`，2026-08-06 之前构建的旧 `cs_infer` 缓存（缺该列）会被判定不完整并自动重建，消除风控模型 train/infer 列差异；
+  - 顺带修复：`rqye_rzye_ratio` 补上源列存在性保护（同函数其他因子均具备），`rqye` 缺失时优雅降级为 NaN 而非 KeyError。
+
+### Tests
+
+- 新增 `test_margin_factor_cleanup.py`：lookup 输出列集合、主模型/风控列清单划分、变化率/多空比/净买入数值、融券源列缺失降级、缓存补检列断言。
+
 ## [0.95.1] - 2026-08-20
 
 ### Fixed

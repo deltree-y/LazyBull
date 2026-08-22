@@ -501,6 +501,28 @@ def prepare_training_data(
                 f"移除 {removed_count} 列（高缺失>{max_feature_missing_ratio}: {len(removed_high_missing)}，"
                 f"全空: {len(removed_all_nan)}，常数: {len(removed_constant)}）"
             )
+            # 打印各类移除列的详细名称，便于定位数据链路问题（全空是高缺失的子集，计数独立）
+            detail_lines: List[str] = []
+            if removed_high_missing:
+                detail_lines.append(
+                    f"高缺失>{max_feature_missing_ratio}（{len(removed_high_missing)}列）: "
+                    f"{', '.join(removed_high_missing)}"
+                )
+            if removed_all_nan:
+                detail_lines.append(
+                    f"全空（{len(removed_all_nan)}列）: {', '.join(removed_all_nan)}"
+                )
+            if removed_constant:
+                detail_lines.append(
+                    f"常数（{len(removed_constant)}列）: {', '.join(removed_constant)}"
+                )
+            linked_extra = sorted(linked_removed - base_removed)
+            if linked_extra:
+                detail_lines.append(
+                    f"联动移除（{len(linked_extra)}列）: {', '.join(linked_extra)}"
+                )
+            if detail_lines:
+                logger.info("训练入口特征清洗明细:\n" + "\n".join(detail_lines))
 
     if not feature_columns:
         raise ValueError("特征列为空（在缺失率/常数列过滤后）")

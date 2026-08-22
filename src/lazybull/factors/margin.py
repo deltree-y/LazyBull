@@ -13,9 +13,12 @@
 因子说明：
 - rzye_chg_5/20: 融资余额 N 日变动率，反映杠杆情绪变化
 - rqye_rzye_ratio: 融券余额 / 融资余额，做空情绪指标
-- margin_net_buy_ratio: 融资净买入 / 成交额，杠杆资金参与度
+- margin_net_buy: 融资净买入额（元），风控模型专用中间列
 - short_balance_change_5: 融券余额 5 日变化率（rqye），做空力量强弱
 - short_sell_vol_change_5: 融券卖出量 5 日变化率（rqmcl），做空活跃度
+
+历史说明：margin_net_buy_ratio（融资净买入 / 成交额）自引入以来从未实现，
+已于 v0.95.2 从主模型列清单移除（避免幽灵声明）。
 """
 
 from typing import Dict, List, Optional
@@ -27,11 +30,19 @@ from loguru import logger
 from ..common.date_utils import normalize_series_to_yyyymmdd
 
 
+# 主模型入模列（与 ml/train_core/constants.py::MARGIN_FEATURE_COLUMNS 保持一致）
 MARGIN_COLS = [
     "rzye_chg_5",
     "rzye_chg_20",
     "rqye_rzye_ratio",
-    "margin_net_buy_ratio",
+]
+
+# 风控模型专用列：仅作为 PositionRiskModel 特征输入，不进主模型
+# - margin_net_buy: 融资净买入绝对额（元），中间列
+# - short_balance_change_5: 融券余额 5 日变化率（风控因子优先复用列）
+# - short_sell_vol_change_5: 融券卖出量 5 日变化率
+MARGIN_RISK_COLS = [
+    "margin_net_buy",
     "short_balance_change_5",
     "short_sell_vol_change_5",
 ]
@@ -72,8 +83,11 @@ def build_margin_lookup_by_date(
     df["rzye_chg_5"] = (df["rzye"] - df["rzye_lag_5"]) / df["rzye_lag_5"].replace(0, np.nan)
     df["rzye_chg_20"] = (df["rzye"] - df["rzye_lag_20"]) / df["rzye_lag_20"].replace(0, np.nan)
 
-    # 融券/融资比
-    df["rqye_rzye_ratio"] = df["rqye"] / df["rzye"].replace(0, np.nan)
+    # 融券/融资比（源列缺失时优雅降级为 NaN）
+    if "rqye" in df.columns:
+        df["rqye_rzye_ratio"] = df["rqye"] / df["rzye"].replace(0, np.nan)
+    else:
+        df["rqye_rzye_ratio"] = np.nan
 
     # 融资净买入/成交额（rzmre - rzche 为融资净买入额）
     if "rzmre" in df.columns and "rzche" in df.columns:
@@ -99,10 +113,10 @@ def build_margin_lookup_by_date(
     else:
         df["short_sell_vol_change_5"] = np.nan
 
-    # 构建日频查询表
+    # 构建日频查询表（主模型列 + 风控专用列一并输出，保持既有分区 schema 不变）
     date_set = set(trading_dates)
     result: Dict[str, pd.DataFrame] = {}
-    keep_cols = ["ts_code"] + MARGIN_COLS + ["margin_net_buy"]
+    keep_cols = ["ts_code"] + MARGIN_COLS + MARGIN_RISK_COLS
 
     for trade_date, grp in df.groupby("trade_date"):
         if trade_date not in date_set:
