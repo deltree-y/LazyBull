@@ -324,6 +324,15 @@ def prepare_training_data(
                 "enable_cashflow_quality_features=True，但数据中未找到现金流质量列，跳过"
             )
 
+    removed_duplicate_features: List[str] = []
+    if "zscore_cf_nm" in feature_columns and "zscore_ocf_to_profit" in feature_columns:
+        feature_columns.remove("zscore_cf_nm")
+        removed_duplicate_features.append("zscore_cf_nm")
+        logger.info(
+            "训练入口因子去重: zscore_cf_nm 是 zscore_ocf_to_profit 的构建别名，"
+            "两者同时启用时保留后者"
+        )
+
     # 一致预期修正因子（可选，基于已有 report_rc 构建时序修正信号）
     if enable_consensus_revision_features:
         available_cr = [
@@ -669,6 +678,7 @@ def prepare_training_data(
         "removed_high_missing_features": removed_high_missing,
         "removed_all_nan_features": removed_all_nan,
         "removed_constant_features": removed_constant,
+        "removed_duplicate_features": removed_duplicate_features,
         "freshness_strategy": freshness_strategy,
         "event_freshness_half_life_days": float(event_freshness_half_life_days),
         "removed_freshness_features": removed_freshness_features,

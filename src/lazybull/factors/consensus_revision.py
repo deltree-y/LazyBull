@@ -87,7 +87,10 @@ def build_consensus_revision_lookup_by_date(
         min_price = pd.to_numeric(df.get("min_price"), errors="coerce")
         target_proxy_col = "target_price_proxy"
         if "max_price" in df.columns and "min_price" in df.columns:
-            df[target_proxy_col] = (max_price + min_price) / 2.0
+            df[target_proxy_col] = pd.concat([max_price, min_price], axis=1).mean(
+                axis=1,
+                skipna=True,
+            )
         elif "max_price" in df.columns:
             df[target_proxy_col] = max_price
         else:

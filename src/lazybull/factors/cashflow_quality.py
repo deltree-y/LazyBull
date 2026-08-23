@@ -118,11 +118,12 @@ def build_cashflow_quality_lookup_by_date(
         f"{len(trading_dates)} 个交易日"
     )
 
-    factor_df = df[["ts_code", "ann_date"] + available_cols].copy()
+    factor_df = df[["ts_code", "ann_date", "end_date"] + available_cols].copy()
     result_dict = build_latest_announcement_lookup_by_date(
         factor_df,
         trading_dates,
         value_cols=available_cols,
+        end_col="end_date",
         freshness_col=CASHFLOW_FRESHNESS_COL,
         log_name="现金流质量",
     )

@@ -69,6 +69,28 @@ def test_consensus_revision_supports_np_tp_and_target_price_proxy():
     assert pd.notna(row["cons_analyst_count_chg"])
 
 
+def test_consensus_revision_target_proxy_uses_available_single_bound():
+    trade_date = "20240401"
+    report_rc = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000001.SZ", "000001.SZ"],
+            "report_date": ["20240201", "20240301", "20240320"],
+            "np": [90.0, 110.0, 130.0],
+            "max_price": [float("nan"), float("nan"), float("nan")],
+            "min_price": [10.0, 11.0, 12.0],
+        }
+    )
+
+    result = build_consensus_revision_lookup_by_date(
+        report_rc,
+        [trade_date],
+        daily_data_lookup=_make_daily_lookup(trade_date),
+    )
+
+    row = result[trade_date].loc[result[trade_date]["ts_code"] == "000001.SZ"].iloc[0]
+    assert abs(row["cons_target_upside"] - 0.1) < 1e-12
+
+
 def test_consensus_revision_target_all_nan_does_not_warn_or_crash():
     trade_date = "20240401"
     report_rc = pd.DataFrame(

@@ -119,7 +119,7 @@ def build_consensus_lookup_by_date(
     df["_rel_fy"] = df["_q_year"] - df["_report_year"]
 
     if "max_price" in df.columns and "min_price" in df.columns:
-        df["_tp_mid"] = (df["max_price"] + df["min_price"]) / 2.0
+        df["_tp_mid"] = df[["max_price", "min_price"]].mean(axis=1, skipna=True)
     elif "max_price" in df.columns:
         df["_tp_mid"] = df["max_price"]
     elif "min_price" in df.columns:

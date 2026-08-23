@@ -85,6 +85,30 @@ def test_cashflow_quality_industry_neutralization_outputs_zscore_fcf_yield():
     assert result["zscore_fcf_yield"].notna().all()
 
 
+def test_cashflow_fcf_yield_converts_total_mv_from_ten_thousand_yuan():
+    features = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "total_mv": [10000.0],
+        }
+    )
+    cashflow = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "fcf": [10000000.0],
+        }
+    )
+
+    result = CashflowQualityFactorHandler().apply(
+        features,
+        cashflow,
+        "20240506",
+        features,
+    )
+
+    assert result["fcf_yield"].iloc[0] == 0.1
+
+
 def test_cashflow_quality_uses_tushare_capex_field():
     raw = pd.DataFrame(
         {
@@ -103,6 +127,24 @@ def test_cashflow_quality_uses_tushare_capex_field():
     assert result.loc["000002.SZ", "fcf"] == -80.0
     assert result.loc["000001.SZ", "capex_to_ocf"] == 0.2
     assert result.loc["000002.SZ", "capex_to_ocf"] == -0.6
+
+
+def test_cashflow_quality_late_old_period_correction_does_not_replace_latest_period():
+    raw = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"] * 4,
+            "ann_date": ["20240501", "20240801", "20240815", "20240901"],
+            "end_date": ["20240331", "20240630", "20240630", "20240331"],
+            "n_cashflow_act": [100.0, 200.0, 220.0, 999.0],
+            "c_pay_acq_const_fiolta": [20.0, 30.0, 35.0, 40.0],
+        }
+    )
+
+    result = build_cashflow_quality_lookup_by_date(raw, ["20240902"])["20240902"]
+
+    assert result.loc[0, "ocf"] == 220.0
+    assert result.loc[0, "fcf"] == 185.0
+    assert result.loc[0, "cashflow_freshness_days"] == 18
 
 
 def test_cashflow_capex_reaches_all_training_features():

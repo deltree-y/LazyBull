@@ -282,6 +282,31 @@ def test_prepare_training_data_includes_missing_markers_when_present():
     assert "pe_ttm_missing" in feature_columns
 
 
+def test_prepare_training_data_deduplicates_cashflow_profit_alias():
+    df = _make_training_df(n_dates=40, stocks_per_date=2)
+    values = np.linspace(0.1, 2.0, len(df))
+    df["zscore_cf_nm"] = values
+    df["zscore_ocf_to_profit"] = values
+    df["zscore_cf_nm_sz"] = values * 0.5
+    df["zscore_ocf_to_profit_sz"] = values * 0.5
+
+    result = prepare_training_data(
+        df,
+        label_column="y_ret_5",
+        val_ratio=0.4,
+        enable_fundamental_features=True,
+        enable_cashflow_quality_features=True,
+    )
+
+    feature_columns = result[4]
+    data_stats = result[7]
+    assert "zscore_ocf_to_profit" in feature_columns
+    assert "zscore_ocf_to_profit_sz" in feature_columns
+    assert "zscore_cf_nm" not in feature_columns
+    assert "zscore_cf_nm_sz" not in feature_columns
+    assert data_stats["removed_duplicate_features"] == ["zscore_cf_nm"]
+
+
 class _RiskMockModel:
     def predict(self, X):
         return X["pred_feature"].values

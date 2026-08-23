@@ -284,8 +284,13 @@ class CashflowQualityFactorHandler:
                 fcf = result.get("fcf")
                 total_mv = features["total_mv"]
                 if fcf is not None:
+                    total_mv_yuan = total_mv * 10000.0
                     result["fcf_yield"] = pd.Series(
-                        np.where(total_mv > 1e-6, fcf.values / total_mv.values, np.nan),
+                        np.where(
+                            total_mv_yuan > 1e-6,
+                            fcf.values / total_mv_yuan.values,
+                            np.nan,
+                        ),
                         index=features.index,
                     )
         else:

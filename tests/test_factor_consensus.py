@@ -83,6 +83,27 @@ def test_consensus_lookup_basic():
         assert col in frame.columns
 
 
+def test_consensus_target_price_uses_available_single_bound():
+    df = pd.DataFrame(
+        [
+            {"ts_code": "000001.SZ", "report_date": "20240310", "max_price": 18.0,
+             "min_price": 16.0, "eps": 1.0},
+            {"ts_code": "000002.SZ", "report_date": "20240310", "max_price": None,
+             "min_price": 12.0, "eps": 1.0},
+            {"ts_code": "000003.SZ", "report_date": "20240310", "max_price": 20.0,
+             "min_price": None, "eps": 1.0},
+        ]
+    )
+
+    frame = build_consensus_lookup_by_date(df, ["20240315"])["20240315"].set_index(
+        "ts_code"
+    )
+
+    assert frame.loc["000001.SZ", "cons_target_price_mid"] == 17.0
+    assert frame.loc["000002.SZ", "cons_target_price_mid"] == 12.0
+    assert frame.loc["000003.SZ", "cons_target_price_mid"] == 20.0
+
+
 def test_consensus_eps_revision():
     df = _make_report_rc_df()
     result = build_consensus_lookup_by_date(df, ["20240315"])

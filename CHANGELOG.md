@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.9] - 2026-08-23
+
+### Fixed
+
+- **一致预期单边目标价恢复**：`consensus.py` 与 `consensus_revision.py` 改为逐行计算目标价代理；上下界同时存在时取均值，仅一边存在时保留该值，避免 `report_rc` 同时含两列但 `max_price` 行级稀疏时将有效 `min_price` 一并丢弃。
+- **现金流报告期选择修复**：现金流公告 PIT 查询启用报告期优先，同报告期取最新公告，晚发的旧报告期更正不再覆盖最新报告期状态。
+- **自由现金流收益率单位修复**：计算 `fcf_yield` 前将 TuShare `total_mv` 从万元换算为元，与现金流量表金额单位对齐。
+- **现金流利润比重复入模修复**：基本面与现金流质量因子同时启用时，训练入口保留 `zscore_ocf_to_profit`，移除确定性别名 `zscore_cf_nm` 及其 `_sz` 派生列；特征分区仍保留原列，兼容既有模型推理与只启用基本面的实验。
+
+### Audit
+
+- `express_revenue_yoy` 的缺失来自去年同期快报不可用，`express_surprise` 的缺失来自同报告期先验业绩预告不可用，`cons_eps_revision_30d` 的缺失来自相邻两个 30 日窗口不同时满足；三者保留真实 NaN，不做填零或跨期回填。
+- 存量目标价与现金流特征需重建后采用新口径；训练候选去重需重新训练后生效。
+
+### Tests
+
+- 新增一致预期单边目标价、现金流报告期优先、`fcf_yield` 单位换算及训练候选别名去重测试。
+
 ## [0.95.8] - 2026-08-23
 
 ### Fixed
