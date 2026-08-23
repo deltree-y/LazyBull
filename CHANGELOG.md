@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.8] - 2026-08-23
+
+### Fixed
+
+- **现金流质量四列全空修复**：`cashflow_quality.py` 原先读取不存在的 `c_pay_for_assets`，现统一改用 TuShare 现金流量表官方字段 `c_pay_acq_const_fiolta`（购建固定资产、无形资产和其他长期资产支付的现金），恢复 `fcf` 与 `capex_to_ocf` 计算，进而恢复训练列 `zscore_capex_to_ocf`、`zscore_capex_to_ocf_sz`、`zscore_fcf_yield`、`zscore_fcf_yield_sz`；`TushareClient` 的默认 cashflow/cashflow_vip 请求字段同步修正。
+- **生效说明**：存量 `cs_train` / `cs_infer` 分区中的上述四列仍为全空，需重建特征并重新训练模型后生效；现有 raw/cashflow 分区已包含正确字段，无需重新下载。
+
+### Tests
+
+- `test_factor_wiring_cashflow_consensus_revision.py` 新增 TuShare 官方资本开支字段公式测试、四个训练列端到端非空测试及客户端默认字段契约测试。
+
+## [0.95.7] - 2026-08-23
+
+### Fixed
+
+- **亏损因子恢复真实区分度**：`is_loss` 对齐 TuShare `daily_basic` 契约，将“已匹配股票的 `pe_ttm` 为空”识别为亏损，同时保留 `pe_ttm <= 0` 以兼容其他数据源；通过当日 `daily_basic` 股票集合区分源记录存在性，左连接未命中的数据缺失不再误判为亏损。此前仅以 `pe_ttm <= 0` 判断，但 TuShare 对亏损公司返回空 PE，导致历史 `is_loss` 全为 0 并在每次训练时作为常数列删除。
+- **生效说明**：存量 `cs_train` / `cs_infer` 分区中的 `is_loss` 不会自动改写，需重建特征并重新训练模型后生效。
+
+### Tests
+
+- 更新 `test_value_dividend_missing_semantics_preserved`，覆盖正 PE、兼容性负 PE、TuShare 匹配空 PE及 `daily_basic` 未匹配四种场景。
+
 ## [0.95.6] - 2026-08-23
 
 ### Fixed

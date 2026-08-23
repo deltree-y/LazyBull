@@ -40,7 +40,7 @@ def build_cashflow_quality_lookup_by_date(
     Args:
         cashflow_raw: 现金流量表原始 DataFrame，需包含
                       ts_code, ann_date, end_date,
-                      n_cashflow_act, c_pay_for_assets, c_fr_sale_sg, net_profit
+                      n_cashflow_act, c_pay_acq_const_fiolta, c_fr_sale_sg, net_profit
         trading_dates: 交易日列表（YYYYMMDD 格式字符串，已排序）
         daily_basic_lookup: 每日指标查询表 {trade_date: DataFrame}，
                            用于获取 total_mv 计算 fcf_yield
@@ -65,7 +65,7 @@ def build_cashflow_quality_lookup_by_date(
 
     # 数值化
     numeric_cols = [
-        "n_cashflow_act", "c_pay_for_assets",
+        "n_cashflow_act", "c_pay_acq_const_fiolta",
         "c_fr_sale_sg", "net_profit",
     ]
     for col in numeric_cols:
@@ -97,15 +97,15 @@ def build_cashflow_quality_lookup_by_date(
         df["ocf_to_profit"] = np.nan
 
     # 自由现金流 = OCF - 资本支出
-    if "c_pay_for_assets" in df.columns:
-        df["fcf"] = df["ocf"] - df["c_pay_for_assets"].abs()
+    if "c_pay_acq_const_fiolta" in df.columns:
+        df["fcf"] = df["ocf"] - df["c_pay_acq_const_fiolta"].abs()
     else:
         df["fcf"] = np.nan
 
-    if "c_pay_for_assets" in df.columns and df["ocf"].notna().any():
+    if "c_pay_acq_const_fiolta" in df.columns and df["ocf"].notna().any():
         df["capex_to_ocf"] = np.where(
             df["ocf"].abs() > 1e-6,
-            df["c_pay_for_assets"].abs() / df["ocf"],
+            df["c_pay_acq_const_fiolta"].abs() / df["ocf"],
             np.nan,
         )
     else:

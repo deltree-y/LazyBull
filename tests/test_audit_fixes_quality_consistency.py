@@ -253,10 +253,16 @@ def test_value_dividend_empty_daily_basic_logs_error():
 
 
 def test_value_dividend_missing_semantics_preserved():
-    """缺失 dv_ttm/pe_ttm 不再被编码成"不分红/亏损"，另增显式缺失标记。"""
+    """TuShare 已匹配记录的空 PE 表示亏损，整行未匹配不误判为亏损。"""
     features = pd.DataFrame(
         {
-            "ts_code": ["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"],
+            "ts_code": [
+                "000001.SZ",
+                "000002.SZ",
+                "000003.SZ",
+                "000004.SZ",
+                "000005.SZ",
+            ],
         }
     )
     daily_basic = pd.DataFrame(
@@ -274,11 +280,11 @@ def test_value_dividend_missing_semantics_preserved():
     assert result.loc[0, "dv_ttm"] == pytest.approx(0.03)
     assert result.loc[1, "dv_ttm"] == pytest.approx(0.0)  # 真实不分红=0 保持 0
     assert np.isnan(result.loc[2, "dv_ttm"])
-    assert result["dv_ttm_missing"].tolist() == [0, 0, 1, 1]
+    assert result["dv_ttm_missing"].tolist() == [0, 0, 1, 1, 1]
 
-    # pe_ttm：缺失 is_loss=0（不再误判亏损），缺失单独标记
-    assert result["is_loss"].tolist() == [0, 1, 0, 0]
-    assert result["pe_ttm_missing"].tolist() == [0, 0, 1, 0]
+    # 已匹配记录的 pe_ttm 为空按 TuShare 契约表示亏损；整行未匹配仅标记缺失
+    assert result["is_loss"].tolist() == [0, 1, 1, 0, 0]
+    assert result["pe_ttm_missing"].tolist() == [0, 0, 1, 0, 1]
     assert result.loc[0, "ep_ttm"] == pytest.approx(0.1)
     assert np.isnan(result.loc[2, "ep_ttm"])
 

@@ -7,14 +7,20 @@ from unittest.mock import patch
 import pandas as pd
 
 from src.lazybull.data.loader import DataLoader
-from src.lazybull.data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS
+from src.lazybull.data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS, TushareClient
+from src.lazybull.factors.cashflow_quality import build_cashflow_quality_lookup_by_date
+from src.lazybull.factors.fundamental import build_fundamental_lookup_by_date
 from src.lazybull.features.builder import FeatureBuilder
 from src.lazybull.features.ensure import (
     _REQUIRED_FACTOR_COLS,
     _try_download_cashflow,
     _try_download_fina_indicator,
 )
-from src.lazybull.factors.fundamental import build_fundamental_lookup_by_date
+from src.lazybull.features.factor_handlers import CashflowQualityFactorHandler
+from src.lazybull.features.neutralization import (
+    apply_industry_neutralization,
+    apply_size_neutralization,
+)
 
 
 class _StubStorage:
@@ -77,6 +83,86 @@ def test_cashflow_quality_industry_neutralization_outputs_zscore_fcf_yield():
 
     assert "zscore_fcf_yield" in result.columns
     assert result["zscore_fcf_yield"].notna().all()
+
+
+def test_cashflow_quality_uses_tushare_capex_field():
+    raw = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "000002.SZ"],
+            "ann_date": ["20240501", "20240501"],
+            "end_date": ["20240331", "20240331"],
+            "n_cashflow_act": [100.0, -50.0],
+            "c_pay_acq_const_fiolta": [20.0, 30.0],
+        }
+    )
+
+    lookup = build_cashflow_quality_lookup_by_date(raw, ["20240506"])
+    result = lookup["20240506"].set_index("ts_code")
+
+    assert result.loc["000001.SZ", "fcf"] == 80.0
+    assert result.loc["000002.SZ", "fcf"] == -80.0
+    assert result.loc["000001.SZ", "capex_to_ocf"] == 0.2
+    assert result.loc["000002.SZ", "capex_to_ocf"] == -0.6
+
+
+def test_cashflow_capex_reaches_all_training_features():
+    codes = [f"{index:06d}.SZ" for index in range(40)]
+    raw = pd.DataFrame(
+        {
+            "ts_code": codes,
+            "ann_date": ["20240501"] * 40,
+            "end_date": ["20240331"] * 40,
+            "n_cashflow_act": [100.0 + index * 7 for index in range(40)],
+            "c_pay_acq_const_fiolta": [10.0 + (index % 7) * 3 for index in range(40)],
+        }
+    )
+    lookup = build_cashflow_quality_lookup_by_date(raw, ["20240506"])
+    features = pd.DataFrame(
+        {
+            "ts_code": codes,
+            "total_mv": [1000.0 + index * 100 for index in range(40)],
+            "log_total_mv": [float(index) for index in range(40)],
+            "sw_industry": ["银行" if index % 2 == 0 else "电子" for index in range(40)],
+            "tradable": [1] * 40,
+        }
+    )
+    factor_values = CashflowQualityFactorHandler().apply(
+        features,
+        lookup["20240506"],
+        "20240506",
+        features,
+    )
+    enriched = features.assign(**factor_values)
+    industry_neutralized = apply_industry_neutralization(
+        enriched,
+        horizons=[5, 10, 20],
+        lookback_windows=[5, 10, 20],
+    )
+    result = apply_size_neutralization(industry_neutralized)
+
+    expected_columns = [
+        "zscore_capex_to_ocf",
+        "zscore_capex_to_ocf_sz",
+        "zscore_fcf_yield",
+        "zscore_fcf_yield_sz",
+    ]
+    for column in expected_columns:
+        assert result[column].notna().all()
+        assert result[column].nunique() > 1
+
+
+def test_cashflow_client_default_fields_use_tushare_capex_name():
+    client = object.__new__(TushareClient)
+
+    with patch.object(client, "query", return_value=pd.DataFrame()) as query_mock:
+        client.get_cashflow(ts_code="000001.SZ")
+        client.get_cashflow_by_period("20240331")
+
+    assert len(query_mock.call_args_list) == 2
+    for call in query_mock.call_args_list:
+        fields = call.kwargs["fields"]
+        assert "c_pay_acq_const_fiolta" in fields.split(",")
+        assert "c_pay_for_assets" not in fields.split(",")
 
 
 def test_fina_indicator_lookup_maps_proxy_columns():

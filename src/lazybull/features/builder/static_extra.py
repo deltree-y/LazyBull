@@ -36,6 +36,7 @@ def _add_value_dividend_features_static(
         )
         return features
 
+    daily_basic_codes = set(daily_basic_today["ts_code"].dropna())
     value_cols = [
         "ts_code",
         "pb",
@@ -60,11 +61,12 @@ def _add_value_dividend_features_static(
             1.0 / features["pe_ttm"],
             np.nan,
         )
-        # is_loss 仅对已知亏损（pe_ttm 非缺失且 <=0）为 1；缺失单独标记，
-        # 避免将"无数据"误判为"亏损"并掩盖数据链路失败
         features["pe_ttm_missing"] = features["pe_ttm"].isna().astype(int)
+        # TuShare 对亏损公司将 pe_ttm 置空；先确认当天源记录存在，
+        # 避免把左连接未命中的数据缺失误判为亏损。<=0 兼容其他数据源。
+        has_daily_basic = features["ts_code"].isin(daily_basic_codes)
         features["is_loss"] = (
-            (features["pe_ttm"].notna()) & (features["pe_ttm"] <= 0)
+            has_daily_basic & (features["pe_ttm"].isna() | (features["pe_ttm"] <= 0))
         ).astype(int)
     if "pb" in features.columns:
         features["bp"] = np.where(
