@@ -13,6 +13,28 @@ from loguru import logger
 from ..common.config import get_data_path, get_data_root
 
 
+def _partition_key_to_date(value: object) -> Optional[str]:
+    """把分组键标准化为 YYYYMMDD 日期字符串（供单文件迁移分区用）。"""
+    if value is None:
+        return None
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y%m%d") if not pd.isna(value) else None
+    text = str(value).strip().replace("-", "")
+    if len(text) < 8 or not text[:8].isdigit():
+        return None
+    date_str = text[:8]
+    # 校验真实日历日期（如 20230230 视为无效），避免保存分区时抛 ValueError 中断迁移
+    from datetime import datetime as _dt
+
+    try:
+        _dt.strptime(date_str, "%Y%m%d")
+    except ValueError:
+        return None
+    return date_str
+
+
 class Storage:
     """数据存储类
 
@@ -420,6 +442,94 @@ class Storage:
 
         return sorted(dates)
 
+    def migrate_raw_single_file_to_partitions(
+        self,
+        name: str,
+        partition_date_col: str,
+        dedup_cols: Optional[List[str]] = None,
+    ) -> Optional[pd.DataFrame]:
+        """把旧单文件 raw/{name}.parquet 迁移为按日期分区存储 raw/{name}/{date}.parquet。
+
+        express 等公告型数据历史为单文件存储，迁移后各下载/加载路径统一走分区。
+        按 partition_date_col 分组写入分区，并与同日期已有分区合并去重
+        （支持"部分分区 + 旧单文件"混合态，避免漏读旧数据；同主键冲突时已有分区优先，
+        旧单文件不得覆盖新分区数据）；仅当全部记录成功迁移时才删除旧单文件，
+        存在无效分区键的记录时保留旧文件待人工处理，防止静默丢数。
+        空旧文件或缺少分区列的异常旧文件直接跳过并保留（空文件清理），
+        返回 None 由调用方保留已有分区数据，避免异常旧文件遮蔽有效分区。
+
+        Args:
+            name: 数据类型名称
+            partition_date_col: 分区依据列（如 end_date）
+            dedup_cols: 分区内去重列（同 key 保留最后一条）
+
+        Returns:
+            迁移合并后的全量分区 DataFrame；旧单文件不存在/为空/缺少分区列时返回 None
+        """
+        legacy_df = self.load_raw(name)
+        if legacy_df is None:
+            return None
+        if len(legacy_df) == 0:
+            # 空旧文件为历史垃圾：清理后返回 None，不影响已有分区数据
+            legacy = (self.raw_path / name).with_suffix(".parquet")
+            if legacy.exists():
+                try:
+                    legacy.unlink()
+                except OSError as exc:
+                    logger.warning(f"[{name}] 删除空旧单文件失败 {legacy}: {exc}")
+            return None
+        if partition_date_col not in legacy_df.columns:
+            logger.warning(f"[{name}] 旧单文件缺少分区列 {partition_date_col}，跳过自动迁移")
+            return None
+
+        skipped = 0
+        for part_key, part in legacy_df.groupby(partition_date_col, sort=True, dropna=False):
+            date_str = _partition_key_to_date(part_key)
+            if date_str is None:
+                skipped += len(part)
+                logger.warning(f"[{name}] {len(part)} 条记录分区键无效 ({part_key!r})，不迁移")
+                continue
+            existing = self.load_raw_by_date(name, date_str)
+            if existing is not None and len(existing) > 0:
+                # 混合态合并：已有分区数据放在后面，keep="last" 保证同键冲突时新分区优先
+                part = pd.concat([part, existing], ignore_index=True)
+            if dedup_cols:
+                part = part.drop_duplicates(subset=dedup_cols, keep="last")
+            self.save_raw_by_date(part, name, date_str)
+
+        if skipped > 0:
+            logger.warning(f"[{name}] {skipped} 条记录分区键无效未迁移，保留旧单文件待人工处理")
+        else:
+            # 分区全部写入成功后删除旧单文件，避免单文件与分区双份并存
+            legacy = (self.raw_path / name).with_suffix(".parquet")
+            if legacy.exists():
+                try:
+                    legacy.unlink()
+                except OSError as exc:
+                    logger.warning(f"[{name}] 删除旧单文件失败 {legacy}: {exc}")
+
+        result = self._load_raw_all_partitions(name)
+        migrated = len(result) if result is not None else 0
+        logger.info(f"[{name}] 旧单文件迁移完成: 当前分区全量 {migrated} 条记录")
+        return result
+
+    def _load_raw_all_partitions(self, name: str) -> Optional[pd.DataFrame]:
+        """读取 raw 层某数据集全部分区并合并（无分区返回 None）。"""
+        dfs = []
+        for partition in self.list_partitions("raw", name):
+            df = self.load_raw_by_date(name, partition)
+            if df is not None and len(df) > 0:
+                dfs.append(df)
+        if not dfs:
+            return None
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=FutureWarning,
+                message=".*DataFrame concatenation with empty or all-NA entries.*",
+            )
+            return pd.concat(dfs, ignore_index=True)
+
     def _format_date(self, date_str: str) -> str:
         """统一日期格式为YYYY-MM-DD
 
@@ -564,7 +674,9 @@ class Storage:
 
         return file_path.exists()
 
-    def count_rows(self, layer: str, name: str, date: str, format: str = "parquet") -> Optional[int]:
+    def count_rows(
+        self, layer: str, name: str, date: str, format: str = "parquet"
+    ) -> Optional[int]:
         """快速统计分区文件行数（不加载全量数据）。
 
         用于覆盖度门控：文件存在但行数不足（如历史截断/中断落盘）时识别为未补齐。

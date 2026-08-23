@@ -29,8 +29,11 @@ def _query_with_pagination(
     offset = 0
     while True:
         df = client.pro.query(
-            api_name, fields=fields or "",
-            limit=page_limit, offset=offset, **kwargs,
+            api_name,
+            fields=fields or "",
+            limit=page_limit,
+            offset=offset,
+            **kwargs,
         )
         if df is None or len(df) == 0:
             break
@@ -52,6 +55,7 @@ def _bulk_download_by_period(
     fields: Optional[str] = None,
     start_year: int = 2012,
     partition_by_period: bool = False,
+    force: bool = False,
 ) -> Optional[pd.DataFrame]:
     """按报告期(period)批量下载全量数据（自动分页）
 
@@ -67,46 +71,52 @@ def _bulk_download_by_period(
         dedup_cols: 去重列
         fields: 返回字段（部分 API 需要）
         start_year: 起始年份
+        partition_by_period: 按季度独立分区落盘
+        force: 忽略已有数据全量重下（数据不足残缺恢复用，默认 False 走断点续传）
 
     Returns:
         下载并保存后的完整 DataFrame，或 None
     """
     import datetime as _dt
+
     current_year = _dt.datetime.now().year
     periods = _generate_quarter_periods(start_year, current_year)
 
-    # 断点续传：跳过已有季度
+    # 断点续传：跳过已有季度；force=True 时忽略已有数据全量重下
     existing_df = None
     existing_periods: Set[str] = set()
-    if partition_by_period:
-        existing_periods = {
-            partition.replace("-", "")
-            for partition in storage.list_partitions("raw", dataset_name)
-        }
-    else:
-        existing_df = storage.load_raw(dataset_name)
-        if existing_df is not None and len(existing_df) > 0:
-            if "end_date" in existing_df.columns:
-                existing_periods = set(
-                    existing_df["end_date"].astype(str).str.replace("-", "").str[:8].unique()
-                )
+    if not force:
+        if partition_by_period:
+            existing_periods = {
+                partition.replace("-", "")
+                for partition in storage.list_partitions("raw", dataset_name)
+            }
+        else:
+            existing_df = storage.load_raw(dataset_name)
+            if existing_df is not None and len(existing_df) > 0:
+                if "end_date" in existing_df.columns:
+                    existing_periods = set(
+                        existing_df["end_date"].astype(str).str.replace("-", "").str[:8].unique()
+                    )
 
     periods_to_download = [p for p in periods if p not in existing_periods]
     if not periods_to_download:
         return existing_df
 
-    logger.info(
-        f"[{dataset_name}] 按季度批量下载: {len(periods_to_download)} 个季度"
-    )
+    logger.info(f"[{dataset_name}] 按季度批量下载: {len(periods_to_download)} 个季度")
 
     all_dfs: List[pd.DataFrame] = []
     success = empty = errors = 0
+    failed_periods: List[str] = []
     t0 = time.time()
 
     for period in periods_to_download:
         try:
             df = _query_with_pagination(
-                client, api_name, fields=fields, period=period,
+                client,
+                api_name,
+                fields=fields,
+                period=period,
             )
             if df is not None and len(df) > 0:
                 if partition_by_period:
@@ -120,20 +130,28 @@ def _bulk_download_by_period(
                 success += 1
             else:
                 empty += 1
-        except Exception as e:
+        except Exception as exc:
             errors += 1
-            logger.debug(f"[{dataset_name}] {period} 失败: {e}")
+            failed_periods.append(period)
+            log = logger.warning if force else logger.debug
+            log(f"[{dataset_name}] {period} 失败: {exc}")
 
     if not partition_by_period and all_dfs:
-        existing_df = _save_merged_bulk(
-            storage, dataset_name, all_dfs, existing_df, dedup_cols
-        )
+        existing_df = _save_merged_bulk(storage, dataset_name, all_dfs, existing_df, dedup_cols)
 
     elapsed_total = time.time() - t0
     logger.info(
         f"[{dataset_name}] 全量下载完成: 成功={success} 空={empty} 失败={errors} "
         f"耗时={elapsed_total:.0f}秒"
     )
+    if force and failed_periods:
+        failed_preview = ", ".join(failed_periods[:5])
+        if len(failed_periods) > 5:
+            failed_preview += f" 等 {len(failed_periods)} 个季度"
+        raise RuntimeError(
+            f"[{dataset_name}] 强制全量下载失败: {errors}/{len(periods_to_download)} "
+            f"个季度异常 ({failed_preview})"
+        )
     return existing_df
 
 

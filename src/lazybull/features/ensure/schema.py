@@ -39,6 +39,9 @@ _REQUIRED_FACTOR_COLS = [
     "fund_hold_ratio",  # 基金持仓因子
     "fund_portfolio_freshness_days",  # 基金持仓 freshness
     "express_revenue_yoy",  # 业绩快报因子
+    "express_profit_yoy",  # 业绩快报因子（v0.95.6 补检）
+    "express_roe",  # 业绩快报因子（v0.95.6 补检）
+    "express_surprise",  # 业绩快报因子（v0.95.6 补检）
     "express_freshness_days",  # 业绩快报 freshness
     "lhb_cont_on_list",  # 龙虎榜因子（v0.95.0 新增列，旧缓存缺列需重建）
     "lhb_cont_up_days_5",  # 龙虎榜连续异动近 5 日累计（v0.95.0 新增列）

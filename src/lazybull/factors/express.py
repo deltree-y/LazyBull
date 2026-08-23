@@ -123,9 +123,11 @@ def build_express_lookup_by_date(
             ex[col] = pd.to_numeric(ex[col], errors="coerce")
 
     # 仅去除完全重复记录，保留同一报告期多次公告版本，交由 PIT 查询按交易日选择
-    ex = ex.sort_values(["ts_code", "end_date", "ann_date"])
+    ex = ex.sort_values(["ts_code", "end_date", "ann_date"], kind="mergesort")
     ex = ex.drop_duplicates(subset=["ts_code", "end_date", "ann_date"], keep="last")
-    ex = ex.sort_values(["ts_code", "ann_date"])
+    # 稳定排序保持"同日多公告按 end_date 升序"的相对顺序：
+    # PIT 查询（mergesort）在同一公告日取最后一条时稳定选中报告期最新的快报
+    ex = ex.sort_values(["ts_code", "ann_date"], kind="mergesort")
 
     # 计算营收同比增速（TuShare express_vip 不提供此字段，需自行计算）
     # 同一公司，当前 end_date 对比去年同期 end_date 的 revenue
@@ -168,16 +170,19 @@ def build_express_lookup_by_date(
         if pd.notna(base_forecast) and pd.notna(profit_yoy):
             ex.at[idx, "express_surprise"] = float(profit_yoy) - float(base_forecast)
 
-    factor_df = ex.assign(
-        express_revenue_yoy=ex["revenue_yoy"],
-        express_profit_yoy=ex["yoy_net_profit"],
-        express_roe=ex["diluted_roe"],
-    )[["ts_code", "ann_date"] + EXPRESS_COLS]
+    # 接口字段缺失时输出全 NaN 列：保证 cs_train/cs_infer schema 稳定，不因缺列崩溃
+    ex["express_profit_yoy"] = ex["yoy_net_profit"] if "yoy_net_profit" in ex.columns else np.nan
+    ex["express_roe"] = ex["diluted_roe"] if "diluted_roe" in ex.columns else np.nan
+    factor_df = ex.assign(express_revenue_yoy=ex["revenue_yoy"])[
+        ["ts_code", "ann_date", "end_date"] + EXPRESS_COLS
+    ]
 
     return build_latest_announcement_lookup_by_date(
         factor_df,
         trading_dates,
         value_cols=EXPRESS_COLS,
         freshness_col=EXPRESS_FRESHNESS_COL,
+        # 报告期优先：晚发的旧报告期更正公告不会把因子值回退到旧报告期
+        end_col="end_date",
         log_name="业绩快报",
     )

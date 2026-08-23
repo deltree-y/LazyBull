@@ -691,6 +691,13 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         }
     )
     captured_dates = {}
+    express_ensure_calls = []
+
+    def _ensure_express(_client, _storage, target_date):
+        express_ensure_calls.append(target_date)
+        return stub_df
+
+    monkeypatch.setattr(ensure_factor_load, "_try_download_express", _ensure_express)
 
     monkeypatch.setattr(
         ensure_factor_load,
@@ -817,6 +824,8 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
 
     assert set(captured_dates.keys()) == expected_names
     assert result[-1] == []
+    # 即使公告水位已覆盖，也必须进入 express ensure 检查记录数量完整性。
+    assert express_ensure_calls == [trade_date]
     for output_dates in captured_dates.values():
         assert output_dates == [trade_date]
 
@@ -1021,7 +1030,7 @@ def test_incremental_catchup_by_calendar_date_covers_weekend_announcements(temp_
             }
         ]
     )
-    temp_storage.save_raw(existing, "express", is_force=True)
+    temp_storage.save_raw(existing, "stk_holdernumber", is_force=True)
 
     queried_dates = []
 
@@ -1053,8 +1062,8 @@ def test_incremental_catchup_by_calendar_date_covers_weekend_announcements(temp_
 
     result = ensure_module._incremental_catchup_by_calendar_date(
         storage=temp_storage,
-        dataset_name="express",
-        existing_df=temp_storage.load_raw("express"),
+        dataset_name="stk_holdernumber",
+        existing_df=temp_storage.load_raw("stk_holdernumber"),
         trade_date="20260413",
         date_col="ann_date",
         dedup_cols=["ts_code", "end_date", "ann_date"],
@@ -1115,7 +1124,7 @@ def test_incremental_download_functions_delegate_to_range_catchup(
         )
 
     # 分区存储数据集按分区保存；其余公告类数据集仍为单文件
-    if dataset_name in ("forecast", "fina_indicator"):
+    if dataset_name in ("forecast", "fina_indicator", "express"):
         temp_storage.save_raw_by_date(existing, dataset_name, "20260331")
     elif dataset_name == "report_rc":
         temp_storage.save_raw_by_date(existing, dataset_name, "2026-12-31")

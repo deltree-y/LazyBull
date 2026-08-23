@@ -226,9 +226,9 @@ def _load_factor_data(
 
     # ── 业绩快报 ──────────────────────────────────────────────
     express_today = None
-    express_df = loader.load_express()
-    if _has_announcement_gap(storage, express_df, "express", "ann_date", trade_date):
-        express_df = _try_download_express(client, storage, trade_date)
+    # 统一交给 express ensure 同时判断记录完整性与增量水位，避免水位已覆盖时
+    # 绕过 _MIN_EXPRESS_RECORDS 损坏门槛。
+    express_df = _try_download_express(client, storage, trade_date)
     if express_df is not None and len(express_df) > 0:
         from ...factors.express import build_express_lookup_by_date
 

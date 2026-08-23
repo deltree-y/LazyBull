@@ -42,8 +42,7 @@ def _try_download_fina_indicator(
         missing_schema_cols = [c for c in _FINA_REQUIRED_RAW_COLS if c not in existing.columns]
         if missing_schema_cols:
             logger.info(
-                "财务指标数据缺少关键列，先执行历史 schema 回补: "
-                + ", ".join(missing_schema_cols)
+                "财务指标数据缺少关键列，先执行历史 schema 回补: " + ", ".join(missing_schema_cols)
             )
             repaired = _refresh_existing_period_rows(
                 client=client,
@@ -80,11 +79,11 @@ def _try_download_fina_indicator(
     # 全量下载（首次或数据不足）— 按季度批量
     cnt = len(existing) if existing is not None else 0
     logger.info(
-        f"财务指标数据不足 (当前 {cnt} 条, 阈值 {_MIN_FINA_RECORDS})，"
-        f"启动按季度批量下载..."
+        f"财务指标数据不足 (当前 {cnt} 条, 阈值 {_MIN_FINA_RECORDS})，" f"启动按季度批量下载..."
     )
     _bulk_download_by_period(
-        client, storage,
+        client,
+        storage,
         dataset_name="fina_indicator",
         api_name="fina_indicator_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
@@ -171,11 +170,11 @@ def _try_download_stk_holdernumber(
     # 全量下载（首次或数据不足）— 按月批量
     cnt = len(existing) if existing is not None else 0
     logger.info(
-        f"股东人数数据不足 (当前 {cnt} 条, 阈值 {_MIN_HOLDER_RECORDS})，"
-        f"启动按月批量下载..."
+        f"股东人数数据不足 (当前 {cnt} 条, 阈值 {_MIN_HOLDER_RECORDS})，" f"启动按月批量下载..."
     )
     return _bulk_download_stk_holdernumber(
-        client, storage,
+        client,
+        storage,
         dedup_cols=["ts_code", "end_date"],
     )
 
@@ -212,11 +211,11 @@ def _try_download_forecast(
     # 全量下载（首次或数据不足）— 按季度批量, 每季度独立分区
     cnt = len(existing) if existing is not None else 0
     logger.info(
-        f"业绩预告数据不足 (当前 {cnt} 条, 阈值 {_MIN_FORECAST_RECORDS})，"
-        f"启动按季度批量下载..."
+        f"业绩预告数据不足 (当前 {cnt} 条, 阈值 {_MIN_FORECAST_RECORDS})，" f"启动按季度批量下载..."
     )
     _bulk_download_by_period(
-        client, storage,
+        client,
+        storage,
         dataset_name="forecast",
         api_name="forecast_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
@@ -230,12 +229,22 @@ def _try_download_express(
     storage: Storage,
     trade_date: str,
 ) -> Optional[pd.DataFrame]:
-    """下载业绩快报数据
+    """下载业绩快报数据（按季度 end_date 分区存储）
 
-    数据充足：按公告日区间补齐增量快报。
-    数据不足：逐股全量下载。
+    数据充足（>= 阈值）：按公告日区间补齐增量快报，路由写入对应季度分区。
+    数据不足或不存在：按季度批量全量下载。
     """
-    existing = storage.load_raw("express")
+    existing = _load_all_partitions(storage, "express")
+    # 旧单文件仍存在（含"部分分区 + 旧单文件"混合态）时先迁移合并，避免漏读旧数据；
+    # 迁移不可用（空文件/缺分区列等异常旧文件）时保留已有分区数据，不遮蔽
+    if storage.load_raw("express") is not None:
+        migrated = storage.migrate_raw_single_file_to_partitions(
+            "express",
+            partition_date_col="end_date",
+            dedup_cols=["ts_code", "end_date", "ann_date"],
+        )
+        if migrated is not None:
+            existing = migrated
 
     if existing is not None and len(existing) >= _MIN_EXPRESS_RECORDS:
         try:
@@ -247,23 +256,36 @@ def _try_download_express(
                 date_col="ann_date",
                 dedup_cols=["ts_code", "end_date", "ann_date"],
                 fetch_by_date=lambda d: client.get_express_vip(ann_date=d),
+                partition_date_col="end_date",
+                partition_mode="quarter",
             )
         except Exception as e:
             logger.warning(f"增量下载 express 失败: {e}")
             return existing
 
-    # 全量下载 — 按季度批量
+    # 全量下载（首次或数据不足）— 按季度批量，每季度独立分区
     cnt = len(existing) if existing is not None else 0
     logger.info(
-        f"业绩快报数据不足 (当前 {cnt} 条, 阈值 {_MIN_EXPRESS_RECORDS})，"
-        f"启动按季度批量下载..."
+        f"业绩快报数据不足 (当前 {cnt} 条, 阈值 {_MIN_EXPRESS_RECORDS})，启动按季度批量下载..."
     )
-    return _bulk_download_by_period(
-        client, storage,
+    _bulk_download_by_period(
+        client,
+        storage,
         dataset_name="express",
         api_name="express_vip",
         dedup_cols=["ts_code", "end_date", "ann_date"],
+        partition_by_period=True,
+        # 数据不足为异常态（正常全量应有数万条）：忽略已有残缺季度全量重下补齐
+        force=True,
     )
+    rebuilt = _load_all_partitions(storage, "express")
+    rebuilt_count = len(rebuilt) if rebuilt is not None else 0
+    if rebuilt_count < _MIN_EXPRESS_RECORDS:
+        raise RuntimeError(
+            "express 强制全量重建后数据仍不足: "
+            f"当前 {rebuilt_count} 条, 最低 {_MIN_EXPRESS_RECORDS} 条"
+        )
+    return rebuilt
 
 
 def _try_download_report_rc(
@@ -298,10 +320,10 @@ def _try_download_report_rc(
     # 全量下载 — 按年分页, 每年独立分区
     cnt = len(existing) if existing is not None else 0
     logger.info(
-        f"一致预期数据不足 (当前 {cnt} 条, 阈值 {_MIN_REPORT_RC_RECORDS})，"
-        f"启动按年批量下载..."
+        f"一致预期数据不足 (当前 {cnt} 条, 阈值 {_MIN_REPORT_RC_RECORDS})，" f"启动按年批量下载..."
     )
     import datetime as _dt
+
     current_year = _dt.datetime.now().year
     all_pages: List[pd.DataFrame] = []
     for year in range(current_year - 5, current_year + 1):

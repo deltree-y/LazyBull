@@ -14,53 +14,76 @@ def mock_express_data():
     包含 2 只股票，各有 2 个报告期（Q3/Q4），不同 ann_date 发布。
     revenue_yoy 由代码自动根据同比 revenue 计算。
     """
-    return pd.DataFrame([
-        # 000001.SZ：去年同期（用于计算同比）
-        {
-            "ts_code": "000001.SZ", "ann_date": "20221028",
-            "end_date": "20220930",
-            "revenue": 1_000_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
-        },
-        {
-            "ts_code": "000001.SZ", "ann_date": "20230120",
-            "end_date": "20221231",
-            "revenue": 2_000_000, "yoy_net_profit": 12.0, "diluted_roe": 11.5,
-        },
-        # 000001.SZ：Q3 公告日 2023-10-28，Q4 公告日 2024-01-20
-        {
-            "ts_code": "000001.SZ", "ann_date": "20231028",
-            "end_date": "20230930",
-            "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
-        },
-        {
-            "ts_code": "000001.SZ", "ann_date": "20240120",
-            "end_date": "20231231",
-            "revenue": 2_360_000, "yoy_net_profit": 22.5, "diluted_roe": 13.0,
-        },
-        # 600000.SH：仅 Q3（无去年同期，revenue_yoy 应为 NaN）
-        {
-            "ts_code": "600000.SH", "ann_date": "20231030",
-            "end_date": "20230930",
-            "revenue": 500_000, "yoy_net_profit": -8.0, "diluted_roe": 6.5,
-        },
-    ])
+    return pd.DataFrame(
+        [
+            # 000001.SZ：去年同期（用于计算同比）
+            {
+                "ts_code": "000001.SZ",
+                "ann_date": "20221028",
+                "end_date": "20220930",
+                "revenue": 1_000_000,
+                "yoy_net_profit": 10.0,
+                "diluted_roe": 11.0,
+            },
+            {
+                "ts_code": "000001.SZ",
+                "ann_date": "20230120",
+                "end_date": "20221231",
+                "revenue": 2_000_000,
+                "yoy_net_profit": 12.0,
+                "diluted_roe": 11.5,
+            },
+            # 000001.SZ：Q3 公告日 2023-10-28，Q4 公告日 2024-01-20
+            {
+                "ts_code": "000001.SZ",
+                "ann_date": "20231028",
+                "end_date": "20230930",
+                "revenue": 1_155_000,
+                "yoy_net_profit": 20.3,
+                "diluted_roe": 12.0,
+            },
+            {
+                "ts_code": "000001.SZ",
+                "ann_date": "20240120",
+                "end_date": "20231231",
+                "revenue": 2_360_000,
+                "yoy_net_profit": 22.5,
+                "diluted_roe": 13.0,
+            },
+            # 600000.SH：仅 Q3（无去年同期，revenue_yoy 应为 NaN）
+            {
+                "ts_code": "600000.SH",
+                "ann_date": "20231030",
+                "end_date": "20230930",
+                "revenue": 500_000,
+                "yoy_net_profit": -8.0,
+                "diluted_roe": 6.5,
+            },
+        ]
+    )
 
 
 @pytest.fixture
 def mock_forecast_data():
     """构造预告数据，用于计算 express_surprise"""
-    return pd.DataFrame([
-        {
-            "ts_code": "000001.SZ", "ann_date": "20231015",
-            "end_date": "20230930",
-            "p_change_min": 15.0, "p_change_max": 25.0,
-        },
-        {
-            "ts_code": "000001.SZ", "ann_date": "20240110",
-            "end_date": "20231231",
-            "p_change_min": 10.0, "p_change_max": 20.0,
-        },
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "ann_date": "20231015",
+                "end_date": "20230930",
+                "p_change_min": 15.0,
+                "p_change_max": 25.0,
+            },
+            {
+                "ts_code": "000001.SZ",
+                "ann_date": "20240110",
+                "end_date": "20231231",
+                "p_change_min": 10.0,
+                "p_change_max": 20.0,
+            },
+        ]
+    )
 
 
 @pytest.fixture
@@ -146,11 +169,18 @@ class TestBuildExpressLookup:
 
     def test_date_with_dashes(self, trading_dates_express):
         """日期带横线也能正确处理"""
-        df = pd.DataFrame([{
-            "ts_code": "000001.SZ", "ann_date": "2023-10-28",
-            "end_date": "2023-09-30",
-            "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "2023-10-28",
+                    "end_date": "2023-09-30",
+                    "revenue": 1_155_000,
+                    "yoy_net_profit": 20.3,
+                    "diluted_roe": 12.0,
+                }
+            ]
+        )
         lookup = build_express_lookup_by_date(df, trading_dates_express)
         assert "20231029" in lookup
 
@@ -164,21 +194,35 @@ class TestBuildExpressLookup:
 
     def test_revenue_yoy_ignores_future_restatement(self, trading_dates_express):
         """去年同期的重述公告晚于本期公告日时，同比不得采用重述值"""
-        df = pd.DataFrame([
-            {
-                "ts_code": "000001.SZ", "ann_date": "20221028", "end_date": "20220930",
-                "revenue": 1_000_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
-            },
-            # 去年同期的更正公告，公告日晚于本期快报
-            {
-                "ts_code": "000001.SZ", "ann_date": "20231201", "end_date": "20220930",
-                "revenue": 1_100_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
-            },
-            {
-                "ts_code": "000001.SZ", "ann_date": "20231028", "end_date": "20230930",
-                "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20221028",
+                    "end_date": "20220930",
+                    "revenue": 1_000_000,
+                    "yoy_net_profit": 10.0,
+                    "diluted_roe": 11.0,
+                },
+                # 去年同期的更正公告，公告日晚于本期快报
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20231201",
+                    "end_date": "20220930",
+                    "revenue": 1_100_000,
+                    "yoy_net_profit": 10.0,
+                    "diluted_roe": 11.0,
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20231028",
+                    "end_date": "20230930",
+                    "revenue": 1_155_000,
+                    "yoy_net_profit": 20.3,
+                    "diluted_roe": 12.0,
+                },
+            ]
+        )
         lookup = build_express_lookup_by_date(df, trading_dates_express)
         row = lookup["20231029"]
         row = row[row["ts_code"] == "000001.SZ"].iloc[0]
@@ -187,20 +231,34 @@ class TestBuildExpressLookup:
 
     def test_revenue_yoy_uses_restatement_already_public(self):
         """去年同期的重述已先于本期公告时，同比应采用重述后的值"""
-        df = pd.DataFrame([
-            {
-                "ts_code": "000001.SZ", "ann_date": "20221028", "end_date": "20220930",
-                "revenue": 1_000_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
-            },
-            {
-                "ts_code": "000001.SZ", "ann_date": "20230601", "end_date": "20220930",
-                "revenue": 1_100_000, "yoy_net_profit": 10.0, "diluted_roe": 11.0,
-            },
-            {
-                "ts_code": "000001.SZ", "ann_date": "20231028", "end_date": "20230930",
-                "revenue": 1_155_000, "yoy_net_profit": 20.3, "diluted_roe": 12.0,
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20221028",
+                    "end_date": "20220930",
+                    "revenue": 1_000_000,
+                    "yoy_net_profit": 10.0,
+                    "diluted_roe": 11.0,
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20230601",
+                    "end_date": "20220930",
+                    "revenue": 1_100_000,
+                    "yoy_net_profit": 10.0,
+                    "diluted_roe": 11.0,
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20231028",
+                    "end_date": "20230930",
+                    "revenue": 1_155_000,
+                    "yoy_net_profit": 20.3,
+                    "diluted_roe": 12.0,
+                },
+            ]
+        )
         lookup = build_express_lookup_by_date(df, ["20231029"])
         row = lookup["20231029"]
         row = row[row["ts_code"] == "000001.SZ"].iloc[0]
@@ -211,6 +269,99 @@ class TestBuildExpressLookup:
         """验证输出包含所有必要列"""
         lookup = build_express_lookup_by_date(mock_express_data, trading_dates_express)
         df = lookup["20231031"]
-        for col in ["ts_code", "express_revenue_yoy", "express_profit_yoy",
-                     "express_roe", "express_surprise", "express_freshness_days"]:
+        for col in [
+            "ts_code",
+            "express_revenue_yoy",
+            "express_profit_yoy",
+            "express_roe",
+            "express_surprise",
+            "express_freshness_days",
+        ]:
             assert col in df.columns
+
+    def test_same_day_multi_announcement_picks_latest_period(self):
+        """同日多公告时稳定选取报告期最新的一条（end_col + 稳定排序）。"""
+        df = pd.DataFrame(
+            [
+                # 同日两条公告：新报告期快报 + 旧报告期更正（输入顺序故意反着放）
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20240120",
+                    "end_date": "20231231",
+                    "revenue": 2_360_000,
+                    "yoy_net_profit": 22.5,
+                    "diluted_roe": 13.0,
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20240120",
+                    "end_date": "20230930",
+                    "revenue": 1_155_000,
+                    "yoy_net_profit": 20.3,
+                    "diluted_roe": 12.0,
+                },
+            ]
+        )
+        lookup = build_express_lookup_by_date(df, ["20240121"])
+        row = lookup["20240121"].iloc[0]
+        # 应选报告期最新（20231231）的记录，而非同日任意一条
+        assert row["express_profit_yoy"] == pytest.approx(22.5)
+        assert row["express_roe"] == pytest.approx(13.0)
+
+    def test_late_old_period_correction_does_not_rollback(self):
+        """晚发的旧报告期更正公告不得把因子值回退到旧报告期。"""
+        df = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20240120",
+                    "end_date": "20231231",
+                    "revenue": 2_360_000,
+                    "yoy_net_profit": 22.5,
+                    "diluted_roe": 13.0,
+                },
+                # Q3 更正公告：公告日更晚、报告期更早
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20240210",
+                    "end_date": "20230930",
+                    "revenue": 1_200_000,
+                    "yoy_net_profit": 21.0,
+                    "diluted_roe": 12.5,
+                },
+            ]
+        )
+        lookup = build_express_lookup_by_date(df, ["20240211"])
+        row = lookup["20240211"].iloc[0]
+        # 仍保持最新报告期（年报）口径，不被旧期更正覆盖
+        assert row["express_profit_yoy"] == pytest.approx(22.5)
+        # freshness 基于所选记录（年报）的公告日
+        expected_days = (pd.to_datetime("20240211") - pd.to_datetime("20240120")).days
+        assert row["express_freshness_days"] == expected_days
+
+    def test_missing_value_columns_output_nan_schema(self):
+        """接口字段缺失时输出全 NaN 列而非崩溃，schema 保持不变。"""
+        df = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20240120",
+                    "end_date": "20231231",
+                    "revenue": 2_360_000,
+                }
+            ]
+        )
+        lookup = build_express_lookup_by_date(df, ["20240121"])
+        row = lookup["20240121"].iloc[0]
+        assert np.isnan(row["express_profit_yoy"])
+        assert np.isnan(row["express_roe"])
+        assert np.isnan(row["express_surprise"])
+        for col in [
+            "ts_code",
+            "express_revenue_yoy",
+            "express_profit_yoy",
+            "express_roe",
+            "express_surprise",
+            "express_freshness_days",
+        ]:
+            assert col in lookup["20240121"].columns

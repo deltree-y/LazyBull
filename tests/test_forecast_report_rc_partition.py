@@ -111,8 +111,18 @@ class TestAppendAndSavePartitioned:
         """report_rc 增量按 report_date 路由到对应年份分区。"""
         new_df = pd.DataFrame(
             [
-                {"ts_code": "000001.SZ", "report_date": "20260410", "org_name": "a", "quarter": "2026Q1"},
-                {"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "b", "quarter": "2025Q4"},
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20260410",
+                    "org_name": "a",
+                    "quarter": "2026Q1",
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20251230",
+                    "org_name": "b",
+                    "quarter": "2025Q4",
+                },
             ]
         )
         _append_and_save_partitioned(
@@ -181,13 +191,12 @@ class TestIncrementalCatchupPartition:
         assert temp_storage.list_partitions("raw", "forecast") == ["2026-03-31", "2026-06-30"]
         assert result is not None and len(result) == 2
 
-
     def test_without_partition_params_keeps_single_file_append(self, temp_storage):
-        """未传分区参数时沿用整文件追加 (不影响 fina_indicator/express 等单文件数据集)。"""
+        """未传分区参数时沿用整文件追加 (不影响 stk_holdernumber 等单文件数据集)。"""
         existing = pd.DataFrame(
             [{"ts_code": "000001.SZ", "ann_date": "20260410", "end_date": "20260331"}]
         )
-        temp_storage.save_raw(existing, "express", is_force=True)
+        temp_storage.save_raw(existing, "stk_holdernumber", is_force=True)
 
         def _fetch(ann_date):
             if ann_date == "20260412":
@@ -198,8 +207,8 @@ class TestIncrementalCatchupPartition:
 
         result = _incremental_catchup_by_calendar_date(
             storage=temp_storage,
-            dataset_name="express",
-            existing_df=temp_storage.load_raw("express"),
+            dataset_name="stk_holdernumber",
+            existing_df=temp_storage.load_raw("stk_holdernumber"),
             trade_date="20260413",
             date_col="ann_date",
             dedup_cols=["ts_code", "end_date", "ann_date"],
@@ -207,8 +216,8 @@ class TestIncrementalCatchupPartition:
         )
 
         # 仍写单文件 (非分区), 返回合并全量
-        assert temp_storage.list_partitions("raw", "express") == []
-        single = temp_storage.load_raw("express")
+        assert temp_storage.list_partitions("raw", "stk_holdernumber") == []
+        single = temp_storage.load_raw("stk_holdernumber")
         assert single is not None and len(single) == 2
         assert result is not None and len(result) == 2
 
@@ -238,12 +247,8 @@ class TestLoaderPartitionLoading:
 
     def test_load_report_rc_all_year_partitions(self, temp_storage):
         """load_report_rc: 合并全部年分区, report_date 标准化为 YYYYMMDD。"""
-        df1 = pd.DataFrame(
-            [{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}]
-        )
-        df2 = pd.DataFrame(
-            [{"ts_code": "000001.SZ", "report_date": "20260410", "org_name": "b"}]
-        )
+        df1 = pd.DataFrame([{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}])
+        df2 = pd.DataFrame([{"ts_code": "000001.SZ", "report_date": "20260410", "org_name": "b"}])
         temp_storage.save_raw_by_date(df1, "report_rc", "2025-12-31")
         temp_storage.save_raw_by_date(df2, "report_rc", "2026-12-31")
 
@@ -266,13 +271,9 @@ class TestLoaderPartitionLoading:
         concatenation with empty or all-NA entries is deprecated), 纸面交易
         run 时被黄色告警刷屏; load_report_rc 现与 storage.py 统一模式屏蔽该告警。
         """
-        df1 = pd.DataFrame(
-            [{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}]
-        )
+        df1 = pd.DataFrame([{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}])
         # 模拟真实场景: 部分分区整列全 NA (org_name 字段某年全部缺失)
-        df2 = pd.DataFrame(
-            [{"ts_code": "000002.SZ", "report_date": "20260410", "org_name": None}]
-        )
+        df2 = pd.DataFrame([{"ts_code": "000002.SZ", "report_date": "20260410", "org_name": None}])
         temp_storage.save_raw_by_date(df1, "report_rc", "2025-12-31")
         temp_storage.save_raw_by_date(df2, "report_rc", "2026-12-31")
 

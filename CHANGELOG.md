@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.6] - 2026-08-23
+
+### Fixed
+
+- **业绩快报因子全链路修复（express 审计）**：
+  - 同日多公告稳定排序：`express.py` 最终排序改用 `mergesort`，保持“同日多公告按 end_date 升序”相对顺序，PIT 查询同日取最后一条时稳定选中报告期最新的快报（与 fundamental 同构修复对齐）；
+  - 报告期优先 PIT：`build_express_lookup_by_date` 启用 `end_col="end_date"`，晚发的旧报告期更正公告不再把因子值整体回退到旧报告期（此前 express 是公告型因子中少数未启用该模式的之一）；
+  - 接口缺列优雅降级：`yoy_net_profit` / `diluted_roe` 缺失时输出全 NaN 列而非 KeyError，保持 cs_train/cs_infer schema 稳定；
+  - 离线构建显式告警：`enable_express` 且 forecast 缺失时输出 warning（提示 `express_surprise` 将全 NaN），与纸面 ensure 强制补齐口径差异可见化；
+  - 迁移季度分区存储：express 由单文件改为按季度 `end_date` 分区存储（与 forecast/fina_indicator 对齐）；loader 与 ensure 首次访问自动迁移旧单文件（分组写分区 + 删除旧文件），增量补齐路由写入季度分区（消除整文件读-合并-重写）；`raw_download` CLI 的 express 下载同步分区化，关闭单文件写入入口；
+  - 门控强化：`_MIN_EXPRESS_RECORDS` 500→1000（防止损坏残留误判为充足）；cs_infer 缓存补检新增 `express_profit_yoy` / `express_roe` / `express_surprise`，旧缓存缺列自动重建。
+
+- **express 分区迁移三项数据完整性加固（审查反馈）**：
+  - 混合态不漏读：迁移条件从"无分区"改为"旧单文件仍存在"，迁移时与同季度已有分区合并去重（此前"部分分区 + 旧单文件"混合态会完全忽略旧数据）；
+  - 数据不足真正全量重建：`_bulk_download_by_period` 新增 `force` 参数（忽略断点续传全量重下），express 数据不足分支 `force=True` 补齐残缺季度（此前已迁移的残缺季度会被跳过）；
+  - 无效分区键不静默丢数：迁移按 `dropna=False` 统计无效分区键记录，存在跳过记录时不删除旧单文件（保留待人工处理），仅在全部记录成功迁移后删除旧文件。
+
+- **express 分区迁移三项一致性加固（复审反馈）**：
+  - 同键冲突新分区优先：迁移合并顺序调整为已有分区在后 + `keep="last"`，旧单文件不再覆盖新分区数据（此前 `concat([existing, part])` 导致旧值胜出）；
+  - 异常旧文件不遮蔽有效分区：空旧文件视为垃圾清理、缺分区列时返回 None，loader/ensure 仅在迁移结果非 None 时才覆盖已加载分区（此前空/破损旧文件会把有效分区覆盖为 None/破损数据）；
+  - 非法日历日期计入无效：`_partition_key_to_date` 新增真实日历校验（如 20230230），非法日期计入 skipped 而非在保存分区时抛 ValueError 中断迁移。
+
+- **express 完整性门控与失败契约加固**：
+  - 纸面因子链路统一通过 `_try_download_express` 检查记录数量与同步水位，水位已覆盖时也不会绕过 `_MIN_EXPRESS_RECORDS` 损坏门槛；
+  - `force=True` 强制全量下载出现季度异常时明确抛错，重建完成后再次校验最低记录数，禁止残缺分区被当作重建成功继续生成特征。
+
+### Tests
+
+- 新增 `test_express_partition_migration.py`：单文件迁移（写分区/删旧文件/缺分区列保持原状）、混合态合并（部分分区 + 旧单文件不漏读）、无效分区键保留旧文件、同键冲突已有分区优先、非法日历日期计入无效、空/破损旧文件不遮蔽有效分区（loader 与 ensure 两侧）、`load_express` 分区优先与迁移回退、`_try_download_express` 迁移后分区增量与数据不足 force 全量下载、强制下载异常及重建后仍不足的失败契约、`_bulk_download_by_period` force 断点续传跳过语义；
+- `test_ensure_and_t0_printing.py` 补充纸面 express 即使同步水位已覆盖也必须进入完整性检查入口的回归断言；
+- `test_express_factor.py` 新增同日多公告选最新报告期、晚发旧期更正不回退、缺列输出全 NaN 列；
+- 既有单文件示例用例（`test_forecast_report_rc_partition.py` / `test_ensure_and_t0_printing.py`）改挂 `stk_holdernumber`，express 纳入分区数据集用例。
+
 ## [0.95.5] - 2026-08-23
 
 ### Fixed

@@ -320,6 +320,7 @@ def main():
                         end_date=args.end_date,
                         dedup_cols=["ts_code", "end_date", "ann_date"],
                         force=args.force,
+                        partition_by_period=True,
                         sort_cols=["ann_date", "end_date"],
                     )
 

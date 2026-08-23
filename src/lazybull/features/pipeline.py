@@ -427,6 +427,11 @@ def build_features_data(
             logger.info(f"业绩快报数据: {len(express_df)} 条")
             # 加载业绩预告数据用于计算业绩惊喜
             forecast_df = loader.load_forecast()
+            if forecast_df is None:
+                logger.warning(
+                    "未找到业绩预告数据，express_surprise 将全部为 NaN。"
+                    "请先运行: python scripts/download_raw.py --download forecast"
+                )
             express_lookup = build_express_lookup_by_date(
                 express_df, trading_dates_str, forecast_df=forecast_df
             )
