@@ -210,7 +210,11 @@ def _load_factor_data(
     if cyq_perf_df is not None and len(cyq_perf_df) > 0:
         from ...factors.cyq_perf import build_cyq_perf_lookup_by_date
 
-        cyq_perf_lookup = build_cyq_perf_lookup_by_date(cyq_perf_df, factor_output_dates)
+        # calendar_dates 传完整历史交易日：ensure 只输出单日截面，但历史某日
+        # 全市场下载失败会从数据并集中消失，补入完整日历才能避免 diff 静默跨期。
+        cyq_perf_lookup = build_cyq_perf_lookup_by_date(
+            cyq_perf_df, factor_output_dates, calendar_dates=trading_dates_str
+        )
         cyq_perf_today = cyq_perf_lookup.get(trade_date)
         logger.info(f"筹码胜率因子: 已加载 ({len(cyq_perf_df)} 条)")
     else:

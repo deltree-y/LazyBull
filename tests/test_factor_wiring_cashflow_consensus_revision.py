@@ -38,6 +38,9 @@ def test_required_factor_cols_include_new_cashflow_and_consensus_revision_fields
     assert "lhb_cont_on_list" in _REQUIRED_FACTOR_COLS
     assert "lhb_cont_up_days_5" in _REQUIRED_FACTOR_COLS
     assert "lhb_cont_up_days_20" in _REQUIRED_FACTOR_COLS
+    # v0.95.4 筹码胜率 5 列齐备: 旧 4 列缓存缺 weight_avg_bias 时由 ensure 自动重建
+    assert "winner_rate" in _REQUIRED_FACTOR_COLS
+    assert "weight_avg_bias" in _REQUIRED_FACTOR_COLS
 
 
 def test_loader_cashflow_normalizes_date_columns():

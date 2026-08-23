@@ -156,12 +156,15 @@ class CyqPerfFactorHandler:
             return {}
         result = {}
 
-        if "weight_avg" in data.columns and "close_adj" in features.columns:
+        # weight_avg 为未复权成本价，偏离度必须与未复权收盘价（current_data.close）
+        # 同口径计算；误用后复权 close_adj 会混入历史分红送转，使因子退化为
+        # adj_factor 代理（≈上市年限×分红送转强度），与设计语义完全背离。
+        if "weight_avg" in data.columns and "close" in current_data.columns:
             cyq = data.copy()
-            cyq_with_close = cyq.merge(features[["ts_code", "close_adj"]], on="ts_code", how="left")
+            cyq_with_close = cyq.merge(current_data[["ts_code", "close"]], on="ts_code", how="left")
             cyq_with_close["weight_avg_bias"] = np.where(
                 cyq_with_close["weight_avg"] > 1e-6,
-                (cyq_with_close["close_adj"] - cyq_with_close["weight_avg"])
+                (cyq_with_close["close"] - cyq_with_close["weight_avg"])
                 / cyq_with_close["weight_avg"],
                 np.nan,
             )

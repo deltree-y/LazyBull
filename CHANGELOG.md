@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.4] - 2026-08-23
+
+### Fixed
+
+- **筹码胜率因子链路四项修复**：
+  - `weight_avg_bias` 复权口径修复：偏离度改用未复权收盘价（`current_data.close`）与未复权成本价 `weight_avg` 同口径计算；此前因特征截面从不含 `close_adj` 列，该因子从未被产出（幽灵因子），修复后 5 列齐备正式入模（需重建特征分区 + 重训练后生效，建议按因子裁剪实验契约先 A/B 对比）；
+  - `winner_rate_chg_5` / `winner_rate_chg_20` 改为按交易日历对齐：缺失数据日（含个股缺席与全市场缺某日）保留空位，严格取 5/20 个交易日前的值，对齐位置缺数据为 NaN，不再因 `dropna` 先行删除缺数据日而静默跨越更长日历区间；日历 = 数据内日期 ∪ `trading_dates`（裁剪到数据范围），并新增 `calendar_dates` 参数供 ensure 链路传入完整历史交易日（ensure 仅输出单日截面，不物化完整 lookup）；
+  - `build_cyq_perf_lookup_by_date` 向量化重写：筹码集中度列运算、变化率日历对齐、按日切分全部向量化，移除逐行 `iterrows`（6 年约 800 万次迭代）；
+  - 纸面链路下载失败静默降级修复：`cyq_perf` 当日分区下载失败日志从 `debug` 升级为 `warning`，避免当日因子静默缺列造成 train/serve 口径不一致。
+
+- **`_REQUIRED_FACTOR_COLS` 同步补检 `weight_avg_bias`**：随口径修复直接加入缓存校验清单（用户决策：不等切换），旧 4 列缓存分区（缺该列）会被 ensure 自动判定为不完整并重建为 5 列新口径；注意这意味着重建后的推理特征与现役 4 列旧口径模型不匹配，需同步推进重训练，勿在重建后用旧模型跑纸面。
+
+### Tests
+
+- 新增 `test_cyq_factor_handler.py`：未复权口径偏离度计算、后复权价不混入口径、缺 `close` 兑底不产出偏离度；
+- `test_cyq_perf_factor.py` 新增缺失数据日日历对齐测试（对齐日缺失 → NaN，后续日正确跨 5 个交易日）。
+
 ## [0.95.3] - 2026-08-22
 
 ### Changed

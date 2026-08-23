@@ -21,19 +21,21 @@ def mock_cyq_perf_data():
         for j, code in enumerate(stocks):
             base_wr = 50.0 + i * 0.5 + j * 5  # 胜率递增
             wa = 10.0 + j * 2  # 加权成本
-            rows.append({
-                "ts_code": code,
-                "trade_date": d,
-                "winner_rate": base_wr,
-                "weight_avg": wa,
-                "cost_5pct": wa * 0.90,
-                "cost_15pct": wa * 0.92,
-                "cost_50pct": wa * 1.00,
-                "cost_85pct": wa * 1.10,
-                "cost_95pct": wa * 1.15,
-                "his_low": wa * 0.80,
-                "his_high": wa * 1.30,
-            })
+            rows.append(
+                {
+                    "ts_code": code,
+                    "trade_date": d,
+                    "winner_rate": base_wr,
+                    "weight_avg": wa,
+                    "cost_5pct": wa * 0.90,
+                    "cost_15pct": wa * 0.92,
+                    "cost_50pct": wa * 1.00,
+                    "cost_85pct": wa * 1.10,
+                    "cost_95pct": wa * 1.15,
+                    "his_low": wa * 0.80,
+                    "his_high": wa * 1.30,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -100,16 +102,102 @@ class TestBuildCyqPerfLookup:
         # winner_rate 每天 +0.5，20 日变化 = 10.0
         assert row["winner_rate_chg_20"] == pytest.approx(10.0, abs=0.01)
 
+    def test_winner_rate_chg_5_missing_day_alignment(self, mock_cyq_perf_data, trading_dates_25):
+        """缺失数据日不静默跨期：对齐的 5 个交易日前缺数据时 chg_5 为 NaN。
+
+        删除 000001.SZ 第 11 天（index=10）数据后：
+        - index=15 的 chg_5 应对齐 index=10（缺失）→ NaN，
+          行级 diff 会错误地取 index=9（跨 6 个日历日）；
+        - index=16 的 chg_5 正确对齐 index=11。
+        """
+        dropped_date = trading_dates_25[10]
+        df = mock_cyq_perf_data[
+            ~(
+                (mock_cyq_perf_data["ts_code"] == "000001.SZ")
+                & (mock_cyq_perf_data["trade_date"] == dropped_date)
+            )
+        ].copy()
+        lookup = build_cyq_perf_lookup_by_date(df, trading_dates_25)
+
+        # 缺失日仅剩 600000.SH，000001.SZ 不应出现在该日截面中
+        day_dropped = lookup[dropped_date]
+        assert "000001.SZ" not in day_dropped["ts_code"].tolist()
+
+        # 5 个交易日前（index=10）缺失 → chg_5 为 NaN，而非跨到 index=9
+        day15 = lookup[trading_dates_25[15]]
+        row15 = day15[day15["ts_code"] == "000001.SZ"].iloc[0]
+        assert np.isnan(row15["winner_rate_chg_5"])
+
+        # index=16 的 chg_5 正确对齐 index=11：0.5 * 5 = 2.5
+        day16 = lookup[trading_dates_25[16]]
+        row16 = day16[day16["ts_code"] == "000001.SZ"].iloc[0]
+        assert row16["winner_rate_chg_5"] == pytest.approx(2.5, abs=0.01)
+
+        # 20 日对齐不受缺失日影响（index=20 对齐 index=0）
+        day20 = lookup[trading_dates_25[20]]
+        row20 = day20[day20["ts_code"] == "000001.SZ"].iloc[0]
+        assert row20["winner_rate_chg_20"] == pytest.approx(10.0, abs=0.01)
+
+        # 另一只股票不受影响
+        day15_other = lookup[trading_dates_25[15]]
+        row_other = day15_other[day15_other["ts_code"] == "600000.SH"].iloc[0]
+        assert row_other["winner_rate_chg_5"] == pytest.approx(2.5, abs=0.01)
+
+    def test_winner_rate_chg_5_missing_market_day_alignment(
+        self, mock_cyq_perf_data, trading_dates_25
+    ):
+        """全市场缺失某交易日时，日历应保留空位而非位置压缩。
+
+        删除两只股票在 index=10 的全部数据（模拟该日 cyq 分区缺失）：
+        - index=14 的 chg_5 仍应严格对齐 5 个交易日前的 index=9；
+        - index=15 的 chg_5 对齐 index=10（空位）→ NaN。
+        """
+        dropped_date = trading_dates_25[10]
+        df = mock_cyq_perf_data[mock_cyq_perf_data["trade_date"] != dropped_date].copy()
+        lookup = build_cyq_perf_lookup_by_date(df, trading_dates_25)
+
+        # 该日截面整体缺失
+        assert dropped_date not in lookup
+
+        # index=14 对齐 index=9：0.5 * 5 = 2.5（位置压缩会错误地取 index=8）
+        day14 = lookup[trading_dates_25[14]]
+        row14 = day14[day14["ts_code"] == "000001.SZ"].iloc[0]
+        assert row14["winner_rate_chg_5"] == pytest.approx(2.5, abs=0.01)
+
+        # index=15 对齐 index=10（全市场空位）→ NaN
+        day15 = lookup[trading_dates_25[15]]
+        row15 = day15[day15["ts_code"] == "000001.SZ"].iloc[0]
+        assert np.isnan(row15["winner_rate_chg_5"])
+
+    def test_winner_rate_chg_5_missing_market_day_with_calendar_dates(
+        self, mock_cyq_perf_data, trading_dates_25
+    ):
+        """ensure 链路：输出仅单日、日历补传完整交易日，全市场缺失日同样对齐。"""
+        dropped_date = trading_dates_25[10]
+        df = mock_cyq_perf_data[mock_cyq_perf_data["trade_date"] != dropped_date].copy()
+        # 仅输出单日（模拟 ensure 的 factor_output_dates=[trade_date]）
+        output_dates = [trading_dates_25[15]]
+        lookup = build_cyq_perf_lookup_by_date(df, output_dates, calendar_dates=trading_dates_25)
+        assert set(lookup.keys()) == set(output_dates)
+        day15 = lookup[trading_dates_25[15]]
+        row15 = day15[day15["ts_code"] == "000001.SZ"].iloc[0]
+        # 5 个交易日前（index=10）全市场缺失 → NaN
+        assert np.isnan(row15["winner_rate_chg_5"])
+        # 20 个交易日前在数据起点之外 → NaN（与完整数据路径行为一致）
+        assert np.isnan(row15["winner_rate_chg_20"])
+
     def test_date_normalization(self, trading_dates_25):
         """验证日期带横线也能正确匹配"""
-        df = pd.DataFrame({
-            "ts_code": ["000001.SZ"],
-            "trade_date": ["2023-01-02"],  # 带横线
-            "winner_rate": [55.0],
-            "weight_avg": [10.0],
-            "cost_15pct": [9.2],
-            "cost_85pct": [11.0],
-        })
+        df = pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "trade_date": ["2023-01-02"],  # 带横线
+                "winner_rate": [55.0],
+                "weight_avg": [10.0],
+                "cost_15pct": [9.2],
+                "cost_85pct": [11.0],
+            }
+        )
         lookup = build_cyq_perf_lookup_by_date(df, trading_dates_25)
         assert "20230102" in lookup
 

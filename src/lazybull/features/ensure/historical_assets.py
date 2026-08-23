@@ -43,7 +43,9 @@ def _try_ensure_historical_cyq_perf(
                 storage.save_raw_by_date(df, "cyq_perf", dt)
                 downloaded += 1
         except Exception as e:
-            logger.debug(f"cyq_perf {dt} 下载失败: {e}")
+            # 下载失败保持警告可见：否则当日分区缺失时 cyq 因子静默缺列，
+            # 造成推理侧与训练侧口径不一致（后续 schema 校验仅部分自愈）。
+            logger.warning(f"cyq_perf {dt} 下载失败: {e}")
 
     if downloaded > 0:
         logger.info(f"筹码胜率历史补齐: 新增 {downloaded} 个交易日")
@@ -98,7 +100,10 @@ def _try_ensure_historical_fund_portfolio(
             continue
         try:
             df = _query_with_pagination(
-                client, "fund_portfolio", page_limit=8000, period=period,
+                client,
+                "fund_portfolio",
+                page_limit=8000,
+                period=period,
             )
             if df is not None and len(df) > 0:
                 storage.save_raw_by_date(df, "fund_portfolio", period)
@@ -209,8 +214,7 @@ def _try_ensure_historical_moneyflow_hsgt(
         return None
 
     missing_dates = [
-        dt for dt in trading_dates_str
-        if not storage.is_data_exists("raw", "moneyflow_hsgt", dt)
+        dt for dt in trading_dates_str if not storage.is_data_exists("raw", "moneyflow_hsgt", dt)
     ]
     if missing_dates:
         # moneyflow_hsgt 单次返回上限 300 条 (约 14 个月), 需按半年分段拉取以覆盖长历史
@@ -219,6 +223,7 @@ def _try_ensure_historical_moneyflow_hsgt(
         seg_end = missing_dates[-1]
         # 生成半年段 (从 seg_start 往后, 每 6 个日历月一段)
         from datetime import datetime, timedelta
+
         segments: List[tuple] = []
         cursor = datetime.strptime(seg_start, "%Y%m%d")
         end_dt = datetime.strptime(seg_end, "%Y%m%d")
@@ -235,9 +240,7 @@ def _try_ensure_historical_moneyflow_hsgt(
                 df = client.get_moneyflow_hsgt(start_date=s, end_date=e)
                 if df is None or df.empty:
                     continue
-                df["trade_date"] = (
-                    df["trade_date"].astype(str).str.replace("-", "").str[:8]
-                )
+                df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
                 for dt, grp in df.groupby("trade_date"):
                     if dt in missing_set:
                         storage.save_raw_by_date(grp, "moneyflow_hsgt", dt)
@@ -248,10 +251,9 @@ def _try_ensure_historical_moneyflow_hsgt(
             logger.info(f"北向资金历史补齐: 新增 {saved} 个交易日")
 
     from ...data.loader import DataLoader
+
     loader = DataLoader(storage)
-    return loader.load_moneyflow_hsgt(
-        trading_dates_str[0], trading_dates_str[-1]
-    )
+    return loader.load_moneyflow_hsgt(trading_dates_str[0], trading_dates_str[-1])
 
 
 # 龙虎榜"近期空占位"重新查询窗口（自然日）: 已被过早下载成 0 行占位的近期日期
@@ -291,10 +293,9 @@ def _try_ensure_historical_top_list(
     redownloaded = 0
     for dt in trading_dates_str:
         if storage.is_data_exists("raw", "top_list", dt):
-            if (
-                is_recent_date_str(dt, days=_TOP_LIST_REDOWNLOAD_DAYS)
-                and _is_top_list_empty_placeholder(storage, dt)
-            ):
+            if is_recent_date_str(
+                dt, days=_TOP_LIST_REDOWNLOAD_DAYS
+            ) and _is_top_list_empty_placeholder(storage, dt):
                 # 近期空占位重新查询（修复已落盘的假空分区）
                 redownloaded += 1
             else:
@@ -335,5 +336,6 @@ def _try_ensure_historical_top_list(
         logger.info(f"龙虎榜历史补齐: 近期空占位 {redownloaded} 个交易日重新查询")
 
     from ...data.loader import DataLoader
+
     loader = DataLoader(storage)
     return loader.load_top_list(trading_dates_str[0], trading_dates_str[-1])
