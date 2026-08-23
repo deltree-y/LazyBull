@@ -182,3 +182,42 @@ class TestDownloadByPeriodConcurrency:
         )
         assert storage.saved_merged is not None
         assert set(storage.saved_merged["ts_code"]) == {"a", "b", "c"}
+
+    def test_partition_mode_dedups_before_save(self, monkeypatch):
+        """分区模式落盘前按 dedup_cols 去重（此前去重仅作用于非分区合并路径）。
+
+        同一报告期"季报前十大 + 半年报/年报全量"两批公告同 (ts_code, end_date)，
+        未去重会导致下游聚合 sum 双重计数。
+        """
+        monkeypatch.setattr(raw_core, "_DOWNLOAD_CONCURRENCY", 2)
+
+        class _ClientWithDup:
+            def query(self, api_name, fields=None, **kwargs):
+                period = kwargs.get("period")
+                if period == "20241231":
+                    # 同 ts_code 两条（不同 ann_date 两批公告）
+                    return pd.DataFrame(
+                        {
+                            "ts_code": ["a", "b", "a"],
+                            "ann_date": ["20241020", "20241020", "20241101"],
+                        }
+                    )
+                return pd.DataFrame()
+
+        storage = self._make_fake_storage()
+        download_by_period(
+            _ClientWithDup(),
+            storage,
+            dataset_name="fund_portfolio",
+            api_name="fund_portfolio",
+            start_date="20240101",
+            end_date="20241231",
+            dedup_cols=["ts_code"],
+            page_limit=10,
+            partition_by_period=True,
+            sort_cols=["ann_date"],
+        )
+        saved = storage.saved_partitions["20241231"]
+        assert set(saved["ts_code"]) == {"a", "b"}
+        # keep="last" 按 ann_date 升序后保留最晚公告记录
+        assert saved[saved["ts_code"] == "a"]["ann_date"].iloc[0] == "20241101"

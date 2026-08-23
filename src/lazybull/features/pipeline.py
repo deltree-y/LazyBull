@@ -400,7 +400,12 @@ def build_features_data(
     if enable_fund:
         from src.lazybull.factors.fund_portfolio import build_fund_portfolio_lookup_by_date
 
-        fund_portfolio_df = loader.load_fund_portfolio(start_dt.strftime("%Y%m%d"), end_date)
+        # fund 单独回溯 18 个月（不沿用统一 7 个月 warmup）：fund_hold_ratio_chg /
+        # fund_count_chg 需要同口径上一报告期（end_date 早 6 个月）且存在披露滞后
+        # （最长约 4 个月），7 个月窗口会把 prev 分区排除在加载范围外导致 chg 整批 NaN，
+        # 与纸面链路（回溯 start_year-1）口径分裂。
+        fund_start_dt = pd.to_datetime(start_date, format="%Y%m%d") - pd.DateOffset(months=18)
+        fund_portfolio_df = loader.load_fund_portfolio(fund_start_dt.strftime("%Y%m%d"), end_date)
         if fund_portfolio_df is not None:
             logger.info(f"基金持仓数据: {len(fund_portfolio_df)} 条")
             fund_portfolio_lookup = build_fund_portfolio_lookup_by_date(

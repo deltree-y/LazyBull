@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.5] - 2026-08-23
+
+### Fixed
+
+- **基金持仓因子全链路修复（fund_portfolio 审计）**：
+  - 离线分区模式去重生效：`download_by_period` 分区落盘前按 `dedup_cols` 去重（此前去重仅作用于非分区合并路径，分区数据集原样落盘），同一报告期"季报前十大 + 半年报/年报全量"两批公告不再让聚合 `sum(stk_float_ratio)` 双重计数（`fund_count` 用 `nunique` 原本幸免）；`cli.py` 的 `fund_portfolio` 下载补充 `sort_cols`，保证 keep="last" 保留 ann_date 最晚记录；
+  - paper 端落盘去重：`_try_ensure_historical_fund_portfolio` 下载后按 `(ts_code, symbol, end_date)` 去重，与离线口径一致；
+  - paper 端披露季刷新门控：距报告期末不足 4 个月的分区，若分区内最新公告日未覆盖到当前日则强制重下并覆盖重写，同时强制重算 `fund_portfolio_agg` 缓存，消除披露季中期首次下载的部分快照永久冻结（train/serve 口径分裂）；
+  - 离线 fund 回溯窗口独立扩至 18 个月（此前统一 7 个月 warmup 无法加载 chg 所需同口径上期分区，短窗口增量构建 chg 整批 NaN，与 paper 端回溯口径分裂）；
+  - paper 端 `fund_portfolio` 下载失败日志从 `debug` 升级为 `warning`（与 cyq_perf 同类口径风险），docstring 回溯年限描述修正。
+
+### Tests
+
+- 新增 `test_fund_portfolio_ensure_refresh.py`：披露窗口边界、落盘去重（保留最晚公告日）、窗口内水位刷新 + agg 缓存重算、下载失败警告与降级；
+- `test_download_periodic_concurrency.py` 新增分区模式落盘前去重用例；
+- `test_ensure_and_t0_printing.py` 聚合缓存复用用例改用披露窗口外日期（新语义下窗口内会回读明细检查覆盖水位）。
+
 ## [0.95.4] - 2026-08-23
 
 ### Fixed

@@ -335,6 +335,8 @@ def main():
                         force=args.force,
                         page_limit=8000,
                         partition_by_period=True,
+                        # 同 end_date 两批公告去重时 keep="last" 保留 ann_date 最晚记录
+                        sort_cols=["ann_date", "end_date"],
                     )
 
                 if "moneyflow_hsgt" in download_set:

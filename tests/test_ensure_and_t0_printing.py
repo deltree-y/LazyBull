@@ -21,7 +21,7 @@ import src.lazybull.features.ensure.entry as ensure_entry
 import src.lazybull.features.ensure.factor_load as ensure_factor_load
 import src.lazybull.features.ensure.historical_assets as ensure_hist_assets
 from src.lazybull.features import FeatureBuilder, ensure_features_for_date
-from src.lazybull.paper import PaperAccount, PaperStorage, TargetWeight
+from src.lazybull.paper import TargetWeight
 from src.lazybull.paper.reporting import load_position_snapshot
 from src.lazybull.paper.runner import PaperTradingRunner
 
@@ -824,8 +824,13 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
 def test_try_ensure_historical_fund_portfolio_builds_and_reuses_agg_cache(
     monkeypatch, temp_storage
 ):
-    """测试基金持仓历史补齐会写入并复用季度聚合缓存。"""
+    """测试基金持仓历史补齐会写入并复用季度聚合缓存。
+
+    使用披露窗口外日期（距报告期末 >= 4 个月）：窗口内分区会按覆盖水位回读
+    raw 明细判断是否需要刷新，窗口外则完全依赖 agg 缓存，不回读明细。
+    """
     period = "20260331"
+    trade_dates = ["20260801"]  # 20260331 + 4 个月 = 20260731，已出披露窗口
     raw_df = pd.DataFrame(
         [
             {
@@ -858,7 +863,7 @@ def test_try_ensure_historical_fund_portfolio_builds_and_reuses_agg_cache(
     result = ensure_module._try_ensure_historical_fund_portfolio(
         client=Mock(),
         storage=temp_storage,
-        trading_dates_str=["20260422"],
+        trading_dates_str=trade_dates,
     )
 
     assert result is not None
@@ -876,7 +881,7 @@ def test_try_ensure_historical_fund_portfolio_builds_and_reuses_agg_cache(
     cached = ensure_module._try_ensure_historical_fund_portfolio(
         client=Mock(),
         storage=temp_storage,
-        trading_dates_str=["20260422"],
+        trading_dates_str=trade_dates,
     )
 
     assert cached is not None

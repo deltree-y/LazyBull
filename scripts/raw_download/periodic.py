@@ -79,6 +79,29 @@ def _generate_month_periods(start_date: str, end_date: str) -> List[Tuple[str, s
     return periods
 
 
+def _dedup_rows(
+    df: "pd.DataFrame",
+    dedup_cols: List[str],
+    sort_cols: Optional[List[str]] = None,
+) -> "pd.DataFrame":
+    """按 dedup_cols 去重 (keep="last")，先按 sort_cols 升序保证保留最新记录。
+
+    分区模式与非分区合并路径共享同一去重语义，避免同一报告期两批公告
+    (如基金季报前十大 + 半年报/年报全量, 同 end_date 不同 ann_date) 重复落盘,
+    下游聚合 sum 时双重计数。
+    """
+    if not dedup_cols or len(df) == 0:
+        return df
+    cols_present = [c for c in dedup_cols if c in df.columns]
+    if not cols_present:
+        return df
+    if sort_cols:
+        sort_present = [c for c in sort_cols if c in df.columns]
+        if sort_present:
+            df = df.sort_values(sort_present, kind="stable")
+    return df.drop_duplicates(subset=cols_present, keep="last").reset_index(drop=True)
+
+
 def _save_merged(
     storage: Storage,
     dataset_name: str,
@@ -103,12 +126,7 @@ def _save_merged(
 
     if dedup_cols and len(result) > 0:
         # 先按 sort_cols (如 ann_date) 升序, 然后 keep="last" 保留最新
-        if sort_cols:
-            cols_present = [c for c in sort_cols if c in result.columns]
-            if cols_present:
-                result = result.sort_values(cols_present, kind="stable")
-        result = result.drop_duplicates(subset=dedup_cols, keep="last")
-        result = result.reset_index(drop=True)
+        result = _dedup_rows(result, dedup_cols, sort_cols)
 
     storage.save_raw(result, dataset_name, is_force=True)
     logger.info(f"[{dataset_name}] 已保存: {len(result)} 条记录")
@@ -229,6 +247,11 @@ def download_by_period(
             )
             if df is not None and len(df) > 0:
                 if partition_by_period:
+                    # 分区模式同样按 dedup_cols 去重后再落盘: 此前去重仅作用于
+                    # 非分区合并路径, 分区数据集 (如 fund_portfolio) 原样落盘会保留
+                    # 同一报告期"季报前十大 + 半年报/年报全量"两批公告的重复行,
+                    # 聚合 sum(stk_float_ratio) 时造成 fund_hold_ratio 双重计数。
+                    df = _dedup_rows(df, dedup_cols, sort_cols)
                     storage.save_raw_by_date(df, dataset_name, period)
                 with stats_lock:
                     success += 1
