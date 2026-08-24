@@ -71,8 +71,9 @@ _POSITION_RISK_FEATURE_CANDIDATES = [
     'roe_waa', 'pe_ttm', 'debt_to_assets', 'fcf_yield', 'ocf_to_profit',
     'mkt_ret_avg_20', 'mkt_ret_avg_60', 'mkt_vol_20', 'mkt_drawdown_20',
     'mkt_adv_dec_ratio',
-    'north_flow_sum5', 'margin_net_buy', 'winner_rate',
-    'spec_score',
+    # 北向净买入/成交额按口径拆列，非所属口径为 0；广播列不做截面百分位
+    'north_net_buy_sum5', 'north_turnover_sum5', 'north_turnover_flag',
+    'margin_net_buy', 'winner_rate', 'spec_score',
     # 衍生特征（由 _add_derived_features 生成）
     'momentum_decay', 'earnings_yield', 'ret_volatility_ratio',
     # 公告类（数据打通前会因全 NaN/全 0 被有效性过滤自动剔除）

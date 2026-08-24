@@ -1603,7 +1603,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 **另类因子扩展 — 北向资金 / 龙虎榜 / 一致预期** (v0.56.0):
 - 新增 3 大另类因子模块，三者各自配备独立开关（默认关闭，保持基线行为）
-  - **北向资金（north_flow）**：`moneyflow_hsgt` 市场级日度净流入，广播后做 5/20 日均、20 日 z-score、连续同方向天数等截面变换
+  - **北向资金（north）**：`moneyflow_hsgt` 市场级日度数据统一由百万元换算为亿元，并广播到股票截面。2024-08-19 起披露口径由净买入切换为成交额；因子层将其拆为 6 个 `north_net_buy*` 与 6 个 `north_turnover*` 互斥特征，非所属口径为 0，同时输出 `north_turnover_flag`。滚动窗口按口径段独立计算，首次跨制度 OOS 不会把成交额送入净买入语义的模型。
   - **龙虎榜（lhb）**：`top_list` 个股日频上榜数据，同日多次上榜优先取单日榜（净买入绝对值最大的一条，仅连续类理由时保留），按交易日历重采样计算近 5/20 日滚动净额与 20 日上榜次数（未上榜日保留历史累计衰减）；新增 `lhb_cont_on_list`（当日是否因"连续异动"类理由上榜，reason 含"连续"，事件级信号）及 `lhb_cont_up_days_5/20`（近 5/20 交易日连续异动上榜次数累计）；近期空响应不落盘延迟重试、近期空占位自动重新查询防假空
   - **一致预期（consensus）**：`report_rc` 研报滚动聚合，90 日分析师覆盖 / FY1 EPS 均值 / 30 日 EPS 修订比例 / 目标价 / 评级五档量化
 - 开关贯通：`batch_walk_forward.ps1` 新增 `$enable_north / $enable_lhb / $enable_consensus`；`walk_forward.py / train_ml_model.py / build_clean_features.py` 新增 `--enable-{north,lhb,consensus}-features`；`build_clean_features.py --build-all` 自动覆盖新 3 个因子

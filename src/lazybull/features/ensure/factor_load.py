@@ -273,7 +273,11 @@ def _load_factor_data(
     # ── 北向资金（按日分区，市场级广播）──────────────────────────
     # 启用语义: 默认传空 dict (启用占位), 仅当全市场无任何历史数据时才回退 None
     north_flow_today = {}
-    north_hist_dates = [d for d in trading_dates_str if d <= trade_date]
+    # 滚动窗口 20 日、streak 窗口 20 日; 裁剪为近 40 个交易日（2 倍预热）, 避免
+    # 接口临时故障/停更时每次运行对全部缺失历史重复分段查询（北向市场级数据每日
+    # 必存在, 空响应不落空占位; 远历史缺口由 download_raw 批量脚本补齐）。
+    # 窗口化后 streak/z20 不再依赖更长历史, 与离线全量构建无偏差。
+    north_hist_dates = [d for d in trading_dates_str if d <= trade_date][-40:]
     hsgt_df = _try_ensure_historical_moneyflow_hsgt(client, storage, north_hist_dates)
     if hsgt_df is not None and len(hsgt_df) > 0:
         from ...factors.north_flow import build_north_flow_lookup_by_date

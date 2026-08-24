@@ -77,12 +77,19 @@ EXPRESS_FEATURE_COLUMNS = [
 ]
 
 NORTH_FEATURE_COLUMNS = [
-    "north_flow",  # 当日北向净流入（亿元）
-    "north_flow_ma5",  # 5日移动均值
-    "north_flow_ma20",  # 20日移动均值
-    "north_flow_z20",  # 20日滚动 z-score
-    "north_flow_sum5",  # 5日累计净流入
-    "north_flow_sign_streak",  # 连续同方向天数
+    "north_net_buy",  # 切换前当日净买入（亿元），切换后为 0
+    "north_net_buy_ma5",  # 切换前净买入 5 日均值
+    "north_net_buy_ma20",  # 切换前净买入 20 日均值
+    "north_net_buy_z20",  # 切换前净买入 20 日 z-score
+    "north_net_buy_sum5",  # 切换前净买入 5 日累计
+    "north_net_buy_sign_streak",  # 切换前近 20 日连续净流入/流出方向
+    "north_turnover",  # 切换后当日成交额（亿元），切换前为 0
+    "north_turnover_ma5",  # 切换后成交额 5 日均值
+    "north_turnover_ma20",  # 切换后成交额 20 日均值
+    "north_turnover_z20",  # 切换后成交额 20 日 z-score
+    "north_turnover_sum5",  # 切换后成交额 5 日累计
+    "north_turnover_change_streak",  # 切换后近 20 日连续放量/缩量方向
+    "north_turnover_flag",  # 口径指示（0=净买入, 1=成交额）
 ]
 
 LHB_FEATURE_COLUMNS = [

@@ -142,7 +142,9 @@ $enable_express          = $true  # $true 启用 | $false 禁用
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
 $enable_north            = $true  # $true 启用 | $false 禁用
-# 0711 似乎无影响, 那就保持关闭
+# 0711 关闭后无影响
+# 注意: factor_prune=$true 时生产排除清单含全部 13 个 north 因子, 本开关实际不参与训练;
+# 2024-08-19 起披露口径切换已拆为净买入/成交额两套因子（见 v0.95.11）
 
 # ── 龙虎榜因子（top_list 个股级, 2000+积分）──────────────────────
 $enable_lhb              = $true  # $true 启用 | $false 禁用
@@ -167,10 +169,15 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 # 0711关闭后得分上升
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
-$factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+$factor_prune             = $false  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 因子排除列表（可选，0801引入）────────────────────────────────────
-$factor_exclude_file      = "#configs/factor_exclude_list_north_on.json"  # 临时复现 v22712(CAGR>4%): 加回3个report_rc因子; 复现完改回 ""
+# "" = 使用生产默认清单 data/models/factor_exclude_list.json（推荐）
+# 实验清单（不覆盖生产文件）:
+#   configs/factor_exclude_list_north_on.json = 从排除清单放回全部 13 个 north 因子（使其参与训练）
+#   configs/factor_exclude_repro_v22712.json  = 加回 3 个 report_rc 因子
+# 注意: 路径必须是真实存在的文件, 否则因子精简整体跳过（全部因子保留）
+$factor_exclude_file      = ""  # 使用生产默认清单
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all

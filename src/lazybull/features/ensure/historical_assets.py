@@ -290,6 +290,9 @@ def _try_ensure_historical_moneyflow_hsgt(
         for s, e in segments:
             try:
                 df = client.get_moneyflow_hsgt(start_date=s, end_date=e)
+                # 空响应不落空占位: 北向市场级数据每个交易日必存在（沪港通开通后），
+                # 空响应只可能是接口临时故障/停更，落 0 行占位会导致永久丢数。
+                # 重复查询范围由调用方裁剪（factor_load 只传近 40 个交易日）控制。
                 if df is None or df.empty:
                     continue
                 df["trade_date"] = df["trade_date"].astype(str).str.replace("-", "").str[:8]
@@ -297,8 +300,8 @@ def _try_ensure_historical_moneyflow_hsgt(
                     if dt in missing_set:
                         storage.save_raw_by_date(grp, "moneyflow_hsgt", dt)
                         saved += 1
-            except Exception as e:
-                logger.warning(f"北向资金 {s}~{e} 分段下载失败: {e}")
+            except Exception as exc:
+                logger.warning(f"北向资金 {s}~{e} 分段下载失败: {exc}")
         if saved > 0:
             logger.info(f"北向资金历史补齐: 新增 {saved} 个交易日")
 

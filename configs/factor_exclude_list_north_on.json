@@ -1,5 +1,5 @@
 {
-  "description": "北向因子测试实验清单：基于生产 factor_exclude_list.json 移除全部 6 个 north 因子（north_flow 系列），使 enable_north_features 真正参与训练。仅用于实验对比，不覆盖生产文件。",
+  "description": "北向因子测试实验清单：基于生产 factor_exclude_list.json 放回全部 13 个 north 净买入/成交额因子，使 enable_north_features 真正参与训练。仅用于实验对比，不覆盖生产文件。",
   "base_exclude_file": "data/models/factor_exclude_list.json",
   "min_icir": 0.1,
   "min_coverage": 0.3,

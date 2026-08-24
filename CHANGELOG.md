@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.11] - 2026-08-24
+
+### Fixed
+
+- **北向资金跨制度 OOS 因果隔离**：删除同一 `north_flow*` 列跨越净买入/成交额两种语义的设计，拆为 6 个 `north_net_buy*` 与 6 个 `north_turnover*` 因子，并保留 `north_turnover_flag`。两组因子仅在所属口径激活，另一口径统一为 0；因此训练截止 2024-08-19 前的模型不会在首个跨制度 OOS 中把成交额误读为净买入，有新口径训练样本后则可独立学习成交额因子。生产、稀疏候选、复现实验及 north-on 排除清单同步为新 13 列，保持各清单原有策略。
+- **风控百分位完整截面闭环**：`PositionRiskMonitor` 改为接收完整当日特征截面，先按与训练一致的全市场日截面生成 `pct_*`，再筛选单股或持仓，修复持仓子集内排名导致的数值漂移；单股 Monitor 不再因原始 cs 行缺少 `pct_*` 而提前返回 HOLD。`PositionRiskModel.predict_single()` / `predict_batch()` 缺少模型特征时明确报错，不再用 NaN 冒充训练期百分位或在未知范围的批次内自行排名。
+- **风控测试穿透真实入口**：新增 Monitor 单股与批量路径测试，验证三股票截面中的最低值在单股和持仓子集预测中均保持 `1/3` 分位；原单股 NaN 占位测试改为拒绝无截面预测。
+
+### Migration
+
+- 需重新构建 `cs_train` / `cs_infer` 以生成 `north_net_buy*` / `north_turnover*` 新列，并重新训练主模型与风控模型；不兼容旧 north 特征 schema。
+
+## [0.95.10] - 2026-08-24
+
+### Fixed
+
+- **北向资金因子口径切换适配**：2024-08-19 起交易所调整北向披露口径，`moneyflow_hsgt` 的 `hgt/sgt/north_money` 由"当日净买入（可为负）"变为"当日成交额（恒正）"；同时证实该接口**全程单位为百万元**（切换前后一致，沪港通首日 2014-11-17 `hgt=13000` = 130 亿元额度）。`north_flow.py` 现按口径分段处理：全期统一 ÷100 换算亿元；`north_flow_ma5/ma20/z20/sum5` 按口径段独立滚动，窗口不跨切换日；新增 `north_turnover_flag` 口径指示列（0=净流入, 1=成交额）供模型显式区分跨口径样本；`north_flow_sign_streak` 窗口化为近 20 日并按口径段计算方向（净流入符号 / 成交额环比方向），全期有值且不受加载范围裁剪影响；`north_flow_z20` 段内预热不足时置 0 中性，避免全 NaN 列触发推理侧特征质量门禁拒绝整日预测。
+- **北向 ensure 重复查询治理**：北向市场级数据每日必存在，空响应不落空占位（防永久丢数）；单日推理侧将补齐范围裁剪为近 40 个交易日（2 倍滚动窗口预热），接口临时故障/停更时不再对全部缺失历史重复分段查询；远历史缺口由 `download_raw.py` 批量脚本补齐。
+- **风控特征与推理闭环**：`train_position_risk_model.py` 保留 `north_flow_sum5` 候选并新增 `north_turnover_flag`；广播列不做截面百分位（无信息）。`position_risk.py` 推理侧补齐 `pct_*` 截面百分位列（按当日截面 rank 与训练同口径），单股推理缺失 pct 列以 NaN 占位并告警，消除训练含 pct 特征而推理缺列的 KeyError 隐患。
+- **批量脚本配置澄清**：`batch_walk_forward.ps1` 修正 `$enable_north` 注释与值矛盾，`$factor_exclude_file` 改为留空使用生产默认清单（原 `#configs/...` 伪路径不存在时会导致因子精简整体跳过、全部因子保留）；注释修正 `factor_exclude_list_north_on.json` 的真实含义（从排除清单放回 6 个 north 因子）。
+- **生效说明**：存量 `cs_train` / `cs_infer` 分区中的北向因子列仍为旧口径（前段未换算亿元），需重建特征；使用含 north 列模型的实验需重训后生效（当前生产主模型 v22318 不含 north 列，不受影响）；风控模型需重训后吸收新口径与 flag 列。
+
+### Tests
+
+- `test_factor_north_flow.py` 更新：全期单位换算（百万元→亿元）、口径指示列、切换前后 streak 方向定义、streak 20 日窗口封顶、z20 预热置 0、滚动窗口不跨口径。
+- `test_ensure_and_t0_printing.py` 新增：北向空响应不落占位分区。
+- 新增 `test_position_risk_pct_inference.py`：风控推理侧 pct 截面重建、存量 pct 列不覆盖、单股 NaN 占位。
+
 ## [0.95.9] - 2026-08-23
 
 ### Fixed

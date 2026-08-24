@@ -5,8 +5,12 @@ import pandas as pd
 
 from src.lazybull.factors.north_flow import (
     NORTH_COLS,
+    NORTH_NET_BUY_COLS,
+    NORTH_TURNOVER_COLS,
+    NORTH_TURNOVER_SWITCH_DATE,
     build_north_flow_lookup_by_date,
 )
+from src.lazybull.ml.train_core.constants import NORTH_FEATURE_COLUMNS
 
 
 def _make_hsgt_df(n: int = 30) -> pd.DataFrame:
@@ -34,6 +38,11 @@ def test_north_flow_lookup_basic():
             assert col in rec, f"{td} 缺少列 {col}"
 
 
+def test_north_output_schema_matches_training_columns():
+    """因子生产列与主模型 north 训练列必须严格一致。"""
+    assert NORTH_FEATURE_COLUMNS == NORTH_COLS
+
+
 def test_north_flow_empty_input():
     assert build_north_flow_lookup_by_date(pd.DataFrame(), ["20240102"]) == {}
     assert build_north_flow_lookup_by_date(None, ["20240102"]) == {}
@@ -48,8 +57,10 @@ def test_north_flow_fallback_from_hgt_sgt():
         }
     )
     result = build_north_flow_lookup_by_date(df, df["trade_date"].tolist())
-    assert result["20240102"]["north_flow"] == 12.0
-    assert result["20240103"]["north_flow"] == -4.0
+    # 原始单位为百万元, 统一 ÷100 换算亿元
+    assert np.isclose(result["20240102"]["north_net_buy"], 0.12)
+    assert np.isclose(result["20240103"]["north_net_buy"], -0.04)
+    assert result["20240102"]["north_turnover"] == 0.0
 
 
 def test_sign_streak_logic():
@@ -61,8 +72,84 @@ def test_sign_streak_logic():
     )
     result = build_north_flow_lookup_by_date(df, df["trade_date"].tolist())
     # 前两日流入 -> streak=1,2; 第三四日流出 -> -1,-2; 第五日转正 -> 1
-    assert result["20240102"]["north_flow_sign_streak"] == 1.0
-    assert result["20240103"]["north_flow_sign_streak"] == 2.0
-    assert result["20240104"]["north_flow_sign_streak"] == -1.0
-    assert result["20240105"]["north_flow_sign_streak"] == -2.0
-    assert result["20240106"]["north_flow_sign_streak"] == 1.0
+    assert result["20240102"]["north_net_buy_sign_streak"] == 1.0
+    assert result["20240103"]["north_net_buy_sign_streak"] == 2.0
+    assert result["20240104"]["north_net_buy_sign_streak"] == -1.0
+    assert result["20240105"]["north_net_buy_sign_streak"] == -2.0
+    assert result["20240106"]["north_net_buy_sign_streak"] == 1.0
+
+
+def test_north_flow_unit_scale_and_streak_by_era():
+    """全程百万元 ÷100 统一亿元; 成交额口径 streak 按环比方向计算（全期有值）。"""
+    df = pd.DataFrame(
+        {
+            "trade_date": ["20240816", "20240819", "20240820", "20240821"],
+            "north_money": [-6774.99, 88110.55, 89201.95, 84789.27],
+        }
+    )
+    result = build_north_flow_lookup_by_date(df, df["trade_date"].tolist())
+    # 单位: 切换前净买入同为百万元, 全期 ÷100
+    assert np.isclose(result["20240816"]["north_net_buy"], -67.7499)
+    assert result["20240816"]["north_turnover"] == 0.0
+    assert result["20240819"]["north_net_buy"] == 0.0
+    assert np.isclose(result["20240819"]["north_turnover"], 881.1055)
+    # 口径指示列: 切换前 0, 切换后 1
+    assert result["20240816"]["north_turnover_flag"] == 0.0
+    assert result["20240819"]["north_turnover_flag"] == 1.0
+    # 切换前 streak = 净流入符号
+    assert result["20240816"]["north_net_buy_sign_streak"] == -1.0
+    # 切换后 streak = 成交额环比方向: 首日 diff 填 0 -> 0, 升 -> +1, 降 -> -1
+    assert result["20240819"]["north_turnover_change_streak"] == 0.0
+    assert result["20240820"]["north_turnover_change_streak"] == 1.0
+    assert result["20240821"]["north_turnover_change_streak"] == -1.0
+
+
+def test_north_regime_columns_are_mutually_exclusive():
+    """两套口径列互斥，跨制度 OOS 不会把成交额送入净买入列。"""
+    df = pd.DataFrame(
+        {
+            "trade_date": ["20240816", "20240819", "20240820"],
+            "north_money": [-1000.0, 80000.0, 90000.0],
+        }
+    )
+    result = build_north_flow_lookup_by_date(df, df["trade_date"].tolist())
+
+    assert all(result["20240816"][col] == 0.0 for col in NORTH_TURNOVER_COLS)
+    assert all(result["20240819"][col] == 0.0 for col in NORTH_NET_BUY_COLS)
+    assert all(result["20240820"][col] == 0.0 for col in NORTH_NET_BUY_COLS)
+    assert result["20240816"]["north_net_buy"] == -10.0
+    assert result["20240819"]["north_turnover"] == 800.0
+
+
+def test_north_flow_rolling_window_no_cross_era():
+    """滚动窗口不跨口径切换日: 断点后首日窗口仅含成交额口径自身。"""
+    assert NORTH_TURNOVER_SWITCH_DATE == "20240819"
+    df = pd.DataFrame(
+        {
+            "trade_date": ["20240815", "20240816", "20240819", "20240820"],
+            # 前两日=净买入（百万元），后两日=成交额（百万元），全期 ÷100 -> 亿元
+            "north_money": [-10000.0, -20000.0, 10000.0, 20000.0],
+        }
+    )
+    result = build_north_flow_lookup_by_date(df, df["trade_date"].tolist())
+    # 断点后首日: 组内仅 1 天, 窗口不吞断点前负值
+    assert np.isclose(result["20240819"]["north_turnover_ma20"], 100.0)
+    assert np.isclose(result["20240819"]["north_turnover_sum5"], 100.0)
+    assert np.isclose(result["20240819"]["north_turnover_ma5"], 100.0)
+    # 断点后 z20 预热不足（std min_periods=5）置 0 中性（避免全空拒绝预测）
+    assert result["20240819"]["north_turnover_z20"] == 0.0
+    # 断点前最后一日: 窗口不含断点后数据（-100, -200 亿元均值/累计）
+    assert np.isclose(result["20240816"]["north_net_buy_ma20"], -150.0)
+    assert np.isclose(result["20240816"]["north_net_buy_sum5"], -300.0)
+    assert result["20240816"]["north_turnover_sum5"] == 0.0
+    assert result["20240819"]["north_net_buy_sum5"] == 0.0
+
+
+def test_sign_streak_window_cap():
+    """streak 窗口化为近 20 日: 连续同方向超过 20 日封顶 20, 不随加载起点漂移。"""
+    dates = pd.date_range("2024-01-01", periods=25, freq="B").strftime("%Y%m%d")
+    df = pd.DataFrame({"trade_date": dates, "north_money": [10.0] * 25})
+    result = build_north_flow_lookup_by_date(df, dates.tolist())
+    # 第 6 天 -> streak=6; 最后一天连续 25 日但窗口封顶 20
+    assert result[dates[5]]["north_net_buy_sign_streak"] == 6.0
+    assert result[dates[-1]]["north_net_buy_sign_streak"] == 20.0

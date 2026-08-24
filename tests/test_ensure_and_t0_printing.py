@@ -1217,5 +1217,45 @@ def test_load_position_snapshot_ensures_trade_date_clean_data(monkeypatch):
     assert snapshot.total_assets == 500000.0
 
 
+def test_moneyflow_hsgt_empty_response_no_placeholder(monkeypatch):
+    """北向空响应不落任何占位分区（市场级数据每日必存在，防永久丢数）。"""
+    from src.lazybull.features.ensure.historical_assets import (
+        _try_ensure_historical_moneyflow_hsgt,
+    )
+
+    saved = []
+
+    class StubStorage:
+        def is_data_exists(self, kind, asset, dt):
+            return False
+
+        def save_raw_by_date(self, df, asset, dt):
+            saved.append(dt)
+
+        def load_raw_by_date(self, asset, dt):
+            return None
+
+    class StubClient:
+        def get_moneyflow_hsgt(self, start_date=None, end_date=None, **kwargs):
+            return pd.DataFrame()
+
+    loader_mod = importlib.import_module("src.lazybull.data.loader")
+
+    class StubLoader:
+        def __init__(self, storage):
+            pass
+
+        def load_moneyflow_hsgt(self, start, end):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(loader_mod, "DataLoader", StubLoader)
+
+    _try_ensure_historical_moneyflow_hsgt(
+        StubClient(), StubStorage(), ["20200102", "20200103"]
+    )
+
+    assert saved == [], "空响应不应落任何占位分区"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

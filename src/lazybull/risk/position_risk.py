@@ -135,6 +135,39 @@ class PositionRiskResult:
 
 
 # ---------------------------------------------------------------------------
+# 推理侧百分位特征闭环
+# ---------------------------------------------------------------------------
+
+
+def _ensure_pct_columns(features_df: pd.DataFrame, feature_names: List[str]) -> pd.DataFrame:
+    """推理侧补齐截面百分位列 pct_*（训练侧由 train_position_risk_model._add_pct_features
+    生成并写入模型 feature_names, cs 特征截面不含这些列）。
+
+    按当日截面 rank(pct=True) 重建, 与训练侧同口径; 基列缺失时置 NaN 占位。
+    """
+    missing = [c for c in feature_names if c.startswith('pct_') and c not in features_df.columns]
+    if not missing:
+        return features_df
+    df = features_df.copy()
+    for col in missing:
+        base = col[len('pct_'):]
+        if base in df.columns:
+            if 'trade_date' in df.columns:
+                df[col] = df.groupby('trade_date')[base].rank(pct=True)
+            else:
+                df[col] = df[base].rank(pct=True)
+        else:
+            logger.warning(f'风控推理: 百分位基列 {base} 缺失, {col} 以 NaN 占位')
+            df[col] = np.nan
+    return df
+
+
+def _missing_features(features: pd.Series, feature_names: List[str]) -> List[str]:
+    """返回单行输入缺少的模型特征。"""
+    return sorted(set(feature_names) - set(features.index))
+
+
+# ---------------------------------------------------------------------------
 # PositionRiskModel
 # ---------------------------------------------------------------------------
 
@@ -167,6 +200,9 @@ class PositionRiskModel:
         Returns:
             PositionRiskResult
         """
+        missing = _missing_features(features, self.config.feature_names)
+        if missing:
+            raise ValueError(f'单股预测缺少特征 {missing}；pct_* 必须先基于完整当日截面生成')
         X = features[self.config.feature_names].values.reshape(1, -1)
         pred_class = int(self._clf.predict(X)[0])
         proba = self._clf.predict_proba(X)[0]
@@ -190,6 +226,11 @@ class PositionRiskModel:
         if len(features_df) == 0:
             return {}
 
+        missing = sorted(set(self.config.feature_names) - set(features_df.columns))
+        if missing:
+            raise ValueError(
+                f'批量预测缺少特征 {missing}；pct_* 必须先基于完整当日截面生成'
+            )
         X = features_df[self.config.feature_names].values
         pred_classes = self._clf.predict(X)
         probas = self._clf.predict_proba(X)
@@ -259,14 +300,14 @@ class PositionRiskMonitor:
         self,
         ts_code: str,
         date: str,
-        features: pd.Series,
+        features_df: pd.DataFrame,
     ) -> PositionRiskResult:
         """评估单只持仓。
 
         Args:
             ts_code: 股票代码
             date: 评估日期
-            features: 该股票的特征行（必须含模型所需全部列）
+            features_df: 完整当日特征截面，用于按训练口径计算 pct_* 后选取该股票
 
         Returns:
             PositionRiskResult
@@ -275,13 +316,10 @@ class PositionRiskMonitor:
         if date in self._cache and ts_code in self._cache[date]:
             return self._cache[date][ts_code]
 
-        # 检查特征完整性
-        missing = set(self.model.feature_names) - set(features.index)
-        if missing:
-            logger.warning(
-                f"风控模型评估 {ts_code} @ {date}: 缺失特征 {missing}，"
-                f"默认返回 HOLD"
-            )
+        full_features = _ensure_pct_columns(features_df, self.model.feature_names)
+        stock_features = full_features[full_features['ts_code'] == ts_code]
+        if len(stock_features) == 0:
+            logger.warning(f'风控模型评估 {ts_code} @ {date}: 当日截面无该股票，默认返回 HOLD')
             result = PositionRiskResult(
                 ts_code=ts_code,
                 predicted_class=CLASS_HOLD,
@@ -290,7 +328,22 @@ class PositionRiskMonitor:
                 all_probas=np.array([0.33, 0.34, 0.33]),
             )
         else:
-            result = self.model.predict_single(features)
+            features = stock_features.iloc[-1]
+            missing = _missing_features(features, self.model.feature_names)
+            if missing:
+                logger.warning(
+                    f'风控模型评估 {ts_code} @ {date}: 缺失特征 {missing}，'
+                    f'默认返回 HOLD'
+                )
+                result = PositionRiskResult(
+                    ts_code=ts_code,
+                    predicted_class=CLASS_HOLD,
+                    coefficient=1.0,
+                    proba=0.5,
+                    all_probas=np.array([0.33, 0.34, 0.33]),
+                )
+            else:
+                result = self.model.predict_single(features)
 
         # 缓存
         self._cache.setdefault(date, {})[ts_code] = result
@@ -313,7 +366,8 @@ class PositionRiskMonitor:
             {ts_code: PositionRiskResult}
         """
         ts_codes = [p['ts_code'] for p in positions]
-        batch_features = features_df[features_df['ts_code'].isin(ts_codes)]
+        full_features = _ensure_pct_columns(features_df, self.model.feature_names)
+        batch_features = full_features[full_features['ts_code'].isin(ts_codes)]
         batch_results = self.model.predict_batch(batch_features)
 
         # 对不在特征中的持仓，默认 HOLD
@@ -340,41 +394,38 @@ class PositionRiskMonitor:
         self,
         position: Dict,
         date: str,
-        features: pd.Series,
+        features_df: pd.DataFrame,
     ) -> bool:
         """是否应触发提前退出。
 
         Args:
             position: 持仓字典（含 ts_code）
             date: 当前日期
-            features: 该股票特征行
+            features_df: 完整当日特征截面
 
         Returns:
             True if class=REDUCE and proba > threshold
         """
-        result = self.evaluate_position(position['ts_code'], date, features)
-        return (
-            result.predicted_class == CLASS_REDUCE
-            and result.proba >= self.proba_threshold
-        )
+        result = self.evaluate_position(position['ts_code'], date, features_df)
+        return result.predicted_class == CLASS_REDUCE and result.proba >= self.proba_threshold
 
     def get_weight_multiplier(
         self,
         ts_code: str,
         date: str,
-        features: pd.Series,
+        features_df: pd.DataFrame,
     ) -> float:
         """获取仓位调节系数。
 
         Args:
             ts_code: 股票代码
             date: 当前日期
-            features: 该股票特征行
+            features_df: 完整当日特征截面
 
         Returns:
             {0.5, 1.0, 1.5} 之一
         """
-        result = self.evaluate_position(ts_code, date, features)
+        result = self.evaluate_position(ts_code, date, features_df)
         return result.coefficient
 
     # ── 缓存管理 ──────────────────────────────────────────
