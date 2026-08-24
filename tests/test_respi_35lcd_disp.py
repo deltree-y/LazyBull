@@ -1247,6 +1247,7 @@ def test_fetch_realtime_holdings_snapshot_prefers_efinance_over_akshare(monkeypa
     )
 
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr(module, "_should_prefer_daily_holdings_snapshot", lambda now=None: False)
     monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", lambda ts_codes: efinance_df)
     monkeypatch.setattr(
         module,
@@ -1294,6 +1295,7 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_efinance_em
     )
 
     monkeypatch.setattr("src.lazybull.paper.PaperStorage", DummyStorage)
+    monkeypatch.setattr(module, "_should_prefer_daily_holdings_snapshot", lambda now=None: False)
     monkeypatch.setattr(module, "_fetch_realtime_quotes_efinance", lambda ts_codes: pd.DataFrame())
     monkeypatch.setattr(module, "_fetch_realtime_quotes_akshare", lambda ts_codes: akshare_df)
 

@@ -47,7 +47,10 @@ class TestInterfaceRateLimit:
         # 已知低限频接口使用独立 interval；未知接口回退全局 500/分钟
         cyq_limit = client._api_rate_limits["cyq_perf"]
         assert client._request_interval_for("cyq_perf") == pytest.approx(60.0 / cyq_limit)
-        assert client._request_interval_for("daily") == pytest.approx(60.0 / 500)
+        # daily 已配置接口级限频 480（官方 500 次/分钟留 10% 余量），不再回退全局
+        assert client._request_interval_for("daily") == pytest.approx(60.0 / 480)
+        # 真正未配置的接口仍回退全局 500/分钟
+        assert client._request_interval_for("unknown_api_xyz") == pytest.approx(60.0 / 500)
 
     def test_rate_limit_wait_uses_per_api_bucket(self):
         client = _make_client(rate_limit=500)
@@ -92,9 +95,10 @@ class TestInterfaceRateLimit:
                 return pd.DataFrame({"x": [1]})
 
         client.pro = _Pro()
-        client.query("daily", skip_rate_limit=True)
+        client.query("unknown_api_xyz", skip_rate_limit=True)
 
-        assert client._api_rate_limits.get("daily") is None  # 非限流错误不更新
+        # 非限流错误不更新（选用未配置接口，避免与默认限频字典冲突）
+        assert client._api_rate_limits.get("unknown_api_xyz") is None
 
     def test_deterministic_error_not_retried(self):
         """确定性业务错误 (查询数据失败/参数错误) 重试必失败, 应直接抛以节省请求量。"""

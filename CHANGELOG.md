@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.14] - 2026-08-24
+
+### Tests
+
+- **回归测试与既有行为对齐**：`test_tushare_client_rate_limit.py` 中 `daily` 已配置接口级限频 480（官方 500 次/分钟留 10% 余量），改用真正未配置的接口验证“未知接口回退全局 500/分钟”与“非限流错误不更新限频”；`test_respi_35lcd_disp.py` 中 efinance→AKShare 实时快照链路测试显式 mock `_should_prefer_daily_holdings_snapshot`，避免盘后运行时段被“优先日线快照”分支短路。全量 1265 个测试全部通过。
+
 ## [0.95.13] - 2026-08-24
 
 ### Fixed
