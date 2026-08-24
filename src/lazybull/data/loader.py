@@ -10,6 +10,21 @@ from .storage import Storage
 from .loader_announcement import AnnouncementRiskLoaderMixin
 from ..common.date_utils import normalize_series_to_yyyymmdd, normalize_to_yyyymmdd
 
+_CONCAT_ALL_NA_WARNING = (
+    r"The behavior of DataFrame concatenation with empty or all-NA entries is deprecated"
+)
+
+
+def _concat_no_all_na_warning(frames: List[pd.DataFrame]) -> pd.DataFrame:
+    """原样合并 DataFrame，仅屏蔽 pandas 的 empty/all-NA FutureWarning。"""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=FutureWarning,
+            message=_CONCAT_ALL_NA_WARNING,
+        )
+        return pd.concat(frames, ignore_index=True)
+
 
 class DataLoader(AnnouncementRiskLoaderMixin):
     """数据加载器
@@ -203,7 +218,7 @@ class DataLoader(AnnouncementRiskLoaderMixin):
             )
             if extra is not None and len(extra) > 0:
                 if df is not None and len(df) > 0:
-                    df = pd.concat([df, extra], ignore_index=True)
+                    df = _concat_no_all_na_warning([df, extra])
                 else:
                     df = extra
         return df
@@ -257,7 +272,7 @@ class DataLoader(AnnouncementRiskLoaderMixin):
                 seen |= set(new_rows["ts_code"].unique())
         if not extras:
             return None
-        return pd.concat(extras, ignore_index=True)
+        return _concat_no_all_na_warning(extras)
 
     def get_trading_dates(self, start_date: str, end_date: str) -> list:
         """获取指定范围内的交易日列表
@@ -694,16 +709,7 @@ class DataLoader(AnnouncementRiskLoaderMixin):
         if not dfs:
             logger.warning("未找到一致预期研报数据")
             return None
-        # 抑制 pandas 对 concat 含 all-NA 列时的 FutureWarning：
-        # report_rc 按年分区存储，部分分区存在整列全 NA 的情况，
-        # 该警告对结果无影响，仅屏蔽避免刷屏（与 storage.py 统一模式一致）。
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                category=FutureWarning,
-                message=".*DataFrame concatenation with empty or all-NA entries.*",
-            )
-            result = pd.concat(dfs, ignore_index=True)
+        result = _concat_no_all_na_warning(dfs)
         if "report_date" in result.columns:
             result["report_date"] = normalize_series_to_yyyymmdd(result["report_date"])
         return result

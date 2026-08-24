@@ -9,6 +9,7 @@
 """
 
 import tempfile
+import warnings
 
 import pandas as pd
 import pytest
@@ -137,6 +138,59 @@ class TestMigrateSingleFile:
         assert result.iloc[0]["revenue"] == 999.0
         assert result.iloc[0]["yoy_net_profit"] == 99.0
         assert temp_storage.load_raw("express") is None
+
+    def test_migrate_suppresses_all_na_concat_warning(self, temp_storage, monkeypatch):
+        """混合态迁移保留全 NA 列，且不泄露 pandas concat FutureWarning。"""
+        existing = pd.DataFrame(
+            [
+                {
+                    "ts_code": "600000.SH",
+                    "ann_date": "20240125",
+                    "end_date": "20231231",
+                    "optional_metric": None,
+                }
+            ]
+        )
+        legacy = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "ann_date": "20240120",
+                    "end_date": "20231231",
+                }
+            ]
+        )
+        temp_storage.save_raw_by_date(existing, "express", "20231231")
+        temp_storage.save_raw(legacy, "express", is_force=True)
+
+        original_concat = pd.concat
+
+        def concat_with_warning(*args, **kwargs):
+            warnings.warn(
+                "The behavior of DataFrame concatenation with empty or all-NA entries "
+                "is deprecated.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            return original_concat(*args, **kwargs)
+
+        monkeypatch.setattr(pd, "concat", concat_with_warning)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = temp_storage.migrate_raw_single_file_to_partitions(
+                "express",
+                partition_date_col="end_date",
+                dedup_cols=["ts_code", "end_date", "ann_date"],
+            )
+
+        assert result is not None and len(result) == 2
+        assert "optional_metric" in result.columns
+        assert result["optional_metric"].isna().all()
+        assert not any(
+            issubclass(item.category, FutureWarning)
+            and "DataFrame concatenation with empty or all-NA entries" in str(item.message)
+            for item in caught
+        )
 
     def test_invalid_calendar_date_counted_as_skipped(self, temp_storage):
         """八位但非真实日历日期（如 20230230）计入无效跳过，不中断迁移。"""

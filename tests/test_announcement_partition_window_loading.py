@@ -3,6 +3,7 @@
 """公告型季度分区窗口读取回归测试。"""
 
 import tempfile
+import warnings
 
 import pandas as pd
 
@@ -112,3 +113,58 @@ def test_loader_load_cashflow_reads_only_needed_quarter_partitions():
         assert sorted(df["ts_code"].tolist()) == ["000001.SZ", "000002.SZ"]
         assert sorted(df["ann_date"].tolist()) == ["20240430", "20241030"]
         assert sorted(df["f_ann_date"].tolist()) == ["20240501", "20241031"]
+
+
+def test_loader_cashflow_suppresses_all_na_concat_warning(monkeypatch):
+    """窗口内外现金流分区合并不泄露告警，且全 NA 列原样保留。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = Storage(tmpdir)
+        rows_by_period = {
+            "20230930": ("000001.SZ", "20231030"),
+            "20231231": ("000002.SZ", "20240430"),
+            "20240331": ("000003.SZ", "20240501"),
+        }
+        for period, (ts_code, ann_date) in rows_by_period.items():
+            storage.save_raw_by_date(
+                pd.DataFrame(
+                    {
+                        "ts_code": [ts_code],
+                        "ann_date": [ann_date],
+                        "end_date": [period],
+                        "optional_metric": [None],
+                    }
+                ),
+                "cashflow",
+                period,
+            )
+
+        original_concat = pd.concat
+
+        def concat_with_warning(*args, **kwargs):
+            warnings.warn(
+                "The behavior of DataFrame concatenation with empty or all-NA entries "
+                "is deprecated.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            return original_concat(*args, **kwargs)
+
+        monkeypatch.setattr(pd, "concat", concat_with_warning)
+        loader = DataLoader(storage=storage)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = loader.load_cashflow(start_date="20250115", end_date="20250131")
+
+        assert result is not None and len(result) == 3
+        assert sorted(result["ts_code"].tolist()) == [
+            "000001.SZ",
+            "000002.SZ",
+            "000003.SZ",
+        ]
+        assert "optional_metric" in result.columns
+        assert result["optional_metric"].isna().all()
+        assert not any(
+            issubclass(item.category, FutureWarning)
+            and "DataFrame concatenation with empty or all-NA entries" in str(item.message)
+            for item in caught
+        )

@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.13] - 2026-08-24
+
+### Fixed
+
+- **季度公告窗口加载告警降噪**：`DataLoader` 统一通过私有封装执行 DataFrame 合并，精确屏蔽窗口前补充记录及其与窗口内数据合并时 pandas empty/all-NA concat 的 `FutureWarning`；现金流等季度公告数据的行、全 NA 列、dtype 推断输入和加载顺序均保持原样。
+
+### Tests
+
+- `test_announcement_partition_window_loading.py` 新增现金流窗口内外多分区回归测试，验证两层 concat 告警不再泄露，且股票记录与全 NA 可选列完整保留；既有 `report_rc` 告警测试继续通过。
+
+## [0.95.12] - 2026-08-24
+
+### Fixed
+
+- **业绩快报旧单文件迁移告警降噪**：`Storage.migrate_raw_single_file_to_partitions()` 在旧单文件与已有季度分区合并时，精确屏蔽 pandas 对 empty/all-NA concat 的 `FutureWarning`；合并数据、全 NA 列、去重顺序与 raw schema 均保持不变。
+
+### Tests
+
+- `test_express_partition_migration.py` 新增混合态迁移回归测试，验证该告警不再泄露且全 NA 可选列原样保留。
+
 ## [0.95.11] - 2026-08-24
 
 ### Fixed

@@ -492,7 +492,13 @@ class Storage:
             existing = self.load_raw_by_date(name, date_str)
             if existing is not None and len(existing) > 0:
                 # 混合态合并：已有分区数据放在后面，keep="last" 保证同键冲突时新分区优先
-                part = pd.concat([part, existing], ignore_index=True)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        category=FutureWarning,
+                        message=".*DataFrame concatenation with empty or all-NA entries.*",
+                    )
+                    part = pd.concat([part, existing], ignore_index=True)
             if dedup_cols:
                 part = part.drop_duplicates(subset=dedup_cols, keep="last")
             self.save_raw_by_date(part, name, date_str)

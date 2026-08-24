@@ -78,7 +78,7 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(500,3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
 $learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(200)       #. XGB推荐150, LGB推荐200
@@ -141,7 +141,7 @@ $enable_express          = $true  # $true 启用 | $false 禁用
 # 0711关闭后分数大幅下降, 需要保持打开
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
-$enable_north            = $true  # $true 启用 | $false 禁用
+$enable_north            = $false  # $true 启用 | $false 禁用
 # 0711 关闭后无影响
 # 注意: factor_prune=$true 时生产排除清单含全部 13 个 north 因子, 本开关实际不参与训练;
 # 2024-08-19 起披露口径切换已拆为净买入/成交额两套因子（见 v0.95.11）
