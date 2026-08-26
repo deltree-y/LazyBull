@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from scripts import train_ml_model as train_ml_model_module
+from src.lazybull.ml.train_core import prepare_training_data
 from src.lazybull.ml.walk_forward import training_core as core_module
 
 
@@ -21,6 +22,24 @@ def _sample_train_df() -> pd.DataFrame:
             }
         ]
     )
+
+
+def test_consensus_feature_flag_requires_complete_built_schema():
+    with pytest.raises(ValueError, match="一致预期特征 schema 不完整"):
+        prepare_training_data(
+            _sample_train_df(),
+            label_column="neu_y_ret_20",
+            enable_consensus_features=True,
+        )
+
+
+def test_consensus_revision_feature_flag_requires_complete_built_schema():
+    with pytest.raises(ValueError, match="一致预期修正特征 schema 不完整"):
+        prepare_training_data(
+            _sample_train_df(),
+            label_column="neu_y_ret_20",
+            enable_consensus_revision_features=True,
+        )
 
 
 def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
@@ -80,6 +99,22 @@ def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
     assert captured["enable_cashflow_quality_features"] is True
     assert captured["enable_consensus_revision_features"] is True
     assert captured["factor_exclude_file"] == ("configs/factor_exclude_candidate_sparse_v1.json")
+
+
+def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
+    args = types.SimpleNamespace(
+        enable_consensus_features=True,
+        enable_cashflow_quality_features=False,
+        enable_consensus_revision_features=True,
+    )
+
+    metadata = core_module._build_feature_flag_train_params(args)
+
+    assert metadata == {
+        "enable_consensus_features": True,
+        "enable_cashflow_quality_features": False,
+        "enable_consensus_revision_features": True,
+    }
 
 
 def test_multi_seed_ensemble_keeps_top_30pct_with_min_three(monkeypatch):

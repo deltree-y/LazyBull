@@ -29,6 +29,7 @@ from scripts.raw_download.alt import (
     _query_report_rc_adaptive,
     download_report_rc,
 )
+from src.lazybull.data.report_rc import query_report_rc_adaptive
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +62,8 @@ def _make_overlimit_pagination(limit_days=180):
                 "report_date": [kwargs["end_date"]],
                 "org_name": ["x"],
                 "author_name": ["y"],
+                "report_title": ["测试研报"],
+                "quarter": [f"{kwargs['end_date'][:4]}Q4"],
             }
         )
 
@@ -82,6 +85,10 @@ def _make_overlimit_pagination_with_na_col(limit_days=180):
             {
                 "ts_code": ["000001.SZ"],
                 "report_date": [kwargs["end_date"]],
+                "org_name": ["x"],
+                "author_name": ["y"],
+                "report_title": ["测试研报"],
+                "quarter": [f"{kwargs['end_date'][:4]}Q4"],
                 "max_price": [None],  # 全 NaN 列, 触发 concat FutureWarning
             }
         )
@@ -163,7 +170,127 @@ class TestQueryReportRcAdaptive:
         )
 
 
+class TestCommonQueryReportRcAdaptive:
+    """直接覆盖 ensure 与离线下载共用的生产二分函数。"""
+
+    def test_bisects_and_merges_contiguous_ranges(self):
+        successful_ranges = []
+
+        def _query_range(start_date, end_date):
+            days = (
+                datetime.strptime(end_date, "%Y%m%d") - datetime.strptime(start_date, "%Y%m%d")
+            ).days
+            if days > 1:
+                raise RuntimeError("查询数据失败，请确认参数！")
+            successful_ranges.append((start_date, end_date))
+            return pd.DataFrame({"start_date": [start_date], "end_date": [end_date]})
+
+        result = query_report_rc_adaptive(_query_range, "20240101", "20240108")
+
+        assert len(result) == 4
+        assert successful_ranges == [
+            ("20240101", "20240102"),
+            ("20240103", "20240104"),
+            ("20240105", "20240106"),
+            ("20240107", "20240108"),
+        ]
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "查询数据失败: 网络连接中断",
+            "请求失败，请确认参数后重试",
+            "HTTPConnectionPool: Read timed out",
+        ],
+    )
+    def test_non_overlimit_errors_propagate_without_bisect(self, message):
+        calls = []
+
+        def _query_range(start_date, end_date):
+            calls.append((start_date, end_date))
+            raise RuntimeError(message)
+
+        with pytest.raises(RuntimeError, match=message):
+            query_report_rc_adaptive(_query_range, "20240101", "20241231")
+        assert calls == [("20240101", "20241231")]
+
+    def test_single_day_overlimit_fails_without_repeating_same_range(self):
+        calls = []
+
+        def _query_range(start_date, end_date):
+            calls.append((start_date, end_date))
+            raise RuntimeError("查询数据失败，请确认参数！")
+
+        with pytest.raises(RuntimeError, match="二分 6 层后仍失败"):
+            query_report_rc_adaptive(_query_range, "20240101", "20240101")
+        assert calls == [("20240101", "20240101")]
+
+
 class TestDownloadReportRcAdaptive:
+    def test_current_year_partition_resumes_from_latest_report_date(self, monkeypatch):
+        """当前年已有分区仍应从最新研报日次日续传，并与旧分区合并。"""
+        current_year = datetime.now().year
+        year = str(current_year)
+        partition = f"{year}-12-31"
+        existing = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": f"{year}0110",
+                    "org_name": "机构甲",
+                    "author_name": "分析师甲",
+                    "report_title": "旧研报",
+                    "quarter": f"{year}Q4",
+                }
+            ]
+        )
+        captured = []
+
+        def _fake_pagination(client, api_name, page_limit=50000, fields=None, **kwargs):
+            captured.append(kwargs)
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000001.SZ",
+                        "report_date": f"{year}0111",
+                        "org_name": "机构甲",
+                        "author_name": "分析师甲",
+                        "report_title": "新研报",
+                        "quarter": f"{year}Q4",
+                    }
+                ]
+            )
+
+        monkeypatch.setattr(raw_download_alt, "_query_with_pagination", _fake_pagination)
+
+        class _FakeStorage:
+            def __init__(self):
+                self.saved_partitions = {}
+
+            def list_partitions(self, layer, name):
+                return [partition]
+
+            def load_raw_by_date(self, name, period):
+                assert period == partition
+                return existing.copy()
+
+            def save_raw_by_date(self, df, name, period):
+                self.saved_partitions[period] = df.copy()
+
+        storage = _FakeStorage()
+        download_report_rc(
+            client=object(),
+            storage=storage,
+            start_date=f"{year}0101",
+            end_date=f"{year}0112",
+        )
+
+        assert len(captured) == 1
+        assert captured[0]["start_date"] == f"{year}0111"
+        assert captured[0]["end_date"] == f"{year}0112"
+        saved = storage.saved_partitions[partition]
+        assert saved["report_title"].tolist() == ["旧研报", "新研报"]
+
     def test_overlimit_year_downloaded_via_bisect(self, monkeypatch):
         fake_pagination, _ = _make_overlimit_pagination(limit_days=180)
         monkeypatch.setattr(raw_download_alt, "_query_with_pagination", fake_pagination)
@@ -235,6 +362,8 @@ class TestDownloadReportRcAdaptive:
                     "report_date": [kwargs["end_date"]],
                     "org_name": ["x"],
                     "author_name": ["y"],
+                    "report_title": ["测试研报"],
+                    "quarter": [f"{kwargs['end_date'][:4]}Q4"],
                 }
             )
 
@@ -255,15 +384,18 @@ class TestDownloadReportRcAdaptive:
             def save_raw_by_date(self, df, name, period):
                 self.saved_partitions[period] = df.copy()
 
+        storage = _FakeStorage()
         download_report_rc(
             client=object(),
-            storage=_FakeStorage(),
+            storage=storage,
             start_date="20240101",
             end_date="20241231",
             force=True,
         )
 
         assert captured["max_workers"] == _REPORT_RC_CONCURRENCY
+        assert set(storage.saved_partitions) == {"2024-12-31"}
+        assert "report_rc" not in raw_core.ERROR_COLLECTOR._errors
 
     def test_serial_degrade_consistent(self, monkeypatch):
         """串行降级 (_DOWNLOAD_CONCURRENCY=1) 与并发结果一致。"""

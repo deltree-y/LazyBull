@@ -115,12 +115,16 @@ class TestAppendAndSavePartitioned:
                     "ts_code": "000001.SZ",
                     "report_date": "20260410",
                     "org_name": "a",
+                    "author_name": "分析师甲",
+                    "report_title": "2026年研报",
                     "quarter": "2026Q1",
                 },
                 {
                     "ts_code": "000001.SZ",
                     "report_date": "20251230",
                     "org_name": "b",
+                    "author_name": "分析师乙",
+                    "report_title": "2025年研报",
                     "quarter": "2025Q4",
                 },
             ]
@@ -134,6 +138,36 @@ class TestAppendAndSavePartitioned:
             partition_mode="year",
         )
         assert temp_storage.list_partitions("raw", "report_rc") == ["2025-12-31", "2026-12-31"]
+
+    def test_report_rc_dedup_preserves_distinct_reports_with_same_old_four_keys(self, temp_storage):
+        """标题或作者不同即为不同研报，不能被旧四键误删。"""
+        common = {
+            "ts_code": "000001.SZ",
+            "report_date": "20260410",
+            "org_name": "机构甲",
+            "quarter": "2026Q4",
+        }
+        new_df = pd.DataFrame(
+            [
+                {**common, "author_name": "分析师甲", "report_title": "年度报告"},
+                {**common, "author_name": "分析师乙", "report_title": "业绩点评"},
+                {**common, "author_name": "分析师甲", "report_title": "年度报告"},
+            ]
+        )
+
+        _append_and_save_partitioned(
+            temp_storage,
+            "report_rc",
+            new_df,
+            dedup_cols=["ts_code", "report_date", "org_name", "quarter"],
+            partition_date_col="report_date",
+            partition_mode="year",
+        )
+
+        saved = temp_storage.load_raw_by_date("report_rc", "2026-12-31")
+        assert saved is not None
+        assert len(saved) == 2
+        assert set(saved["report_title"]) == {"年度报告", "业绩点评"}
 
     def test_empty_new_df_returns_existing_partitions(self, temp_storage):
         existing = pd.DataFrame(
@@ -247,8 +281,30 @@ class TestLoaderPartitionLoading:
 
     def test_load_report_rc_all_year_partitions(self, temp_storage):
         """load_report_rc: 合并全部年分区, report_date 标准化为 YYYYMMDD。"""
-        df1 = pd.DataFrame([{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}])
-        df2 = pd.DataFrame([{"ts_code": "000001.SZ", "report_date": "20260410", "org_name": "b"}])
+        df1 = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20251230",
+                    "org_name": "a",
+                    "author_name": "分析师甲",
+                    "report_title": "2025年研报",
+                    "quarter": "2025Q4",
+                }
+            ]
+        )
+        df2 = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20260410",
+                    "org_name": "b",
+                    "author_name": "分析师乙",
+                    "report_title": "2026年研报",
+                    "quarter": "2026Q1",
+                }
+            ]
+        )
         temp_storage.save_raw_by_date(df1, "report_rc", "2025-12-31")
         temp_storage.save_raw_by_date(df2, "report_rc", "2026-12-31")
 
@@ -263,6 +319,16 @@ class TestLoaderPartitionLoading:
         loader = DataLoader(temp_storage)
         assert loader.load_report_rc() is None
 
+    def test_load_report_rc_rejects_incomplete_identity_schema(self, temp_storage):
+        """旧弱身份 schema 必须明确失败，提示强制重下。"""
+        old_schema = pd.DataFrame(
+            [{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}]
+        )
+        temp_storage.save_raw_by_date(old_schema, "report_rc", "2025-12-31")
+
+        with pytest.raises(ValueError, match="report_rc 身份 schema 不完整"):
+            DataLoader(temp_storage).load_report_rc()
+
     def test_load_report_rc_all_na_column_no_future_warning(self, temp_storage):
         """含全 NA 列的分区合并时不触发 concat FutureWarning（告警已屏蔽）。
 
@@ -271,9 +337,31 @@ class TestLoaderPartitionLoading:
         concatenation with empty or all-NA entries is deprecated), 纸面交易
         run 时被黄色告警刷屏; load_report_rc 现与 storage.py 统一模式屏蔽该告警。
         """
-        df1 = pd.DataFrame([{"ts_code": "000001.SZ", "report_date": "20251230", "org_name": "a"}])
+        df1 = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000001.SZ",
+                    "report_date": "20251230",
+                    "org_name": "a",
+                    "author_name": "分析师甲",
+                    "report_title": "2025年研报",
+                    "quarter": "2025Q4",
+                }
+            ]
+        )
         # 模拟真实场景: 部分分区整列全 NA (org_name 字段某年全部缺失)
-        df2 = pd.DataFrame([{"ts_code": "000002.SZ", "report_date": "20260410", "org_name": None}])
+        df2 = pd.DataFrame(
+            [
+                {
+                    "ts_code": "000002.SZ",
+                    "report_date": "20260410",
+                    "org_name": None,
+                    "author_name": "分析师乙",
+                    "report_title": "2026年研报",
+                    "quarter": "2026Q1",
+                }
+            ]
+        )
         temp_storage.save_raw_by_date(df1, "report_rc", "2025-12-31")
         temp_storage.save_raw_by_date(df2, "report_rc", "2026-12-31")
 

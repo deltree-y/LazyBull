@@ -1,0 +1,10 @@
+{
+  "description": "龙虎榜弱因子排除实验 v1：仅排除三个当日弱事件因子",
+  "exclude_count": 4,
+  "exclude_factors": [
+    "lhb_cont_on_list",
+    "lhb_net_amount",
+    "lhb_net_rate",
+    "lhb_reason_count"
+  ]
+}

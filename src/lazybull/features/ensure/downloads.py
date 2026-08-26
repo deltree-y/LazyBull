@@ -7,6 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from ...data import DataLoader, Storage, TushareClient
+from ...data.report_rc import REPORT_RC_ROW_KEY_COLUMNS, query_report_rc_adaptive
 from ...data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS
 from .bulk import _bulk_download_by_period, _bulk_download_stk_holdernumber, _query_with_pagination
 from .constants import (
@@ -308,8 +309,13 @@ def _try_download_report_rc(
                 existing_df=existing,
                 trade_date=trade_date,
                 date_col="report_date",
-                dedup_cols=["ts_code", "report_date", "org_name", "quarter"],
-                fetch_by_date=lambda d: client.get_report_rc(report_date=d),
+                dedup_cols=list(REPORT_RC_ROW_KEY_COLUMNS),
+                fetch_by_date=lambda d: _query_with_pagination(
+                    client,
+                    "report_rc",
+                    page_limit=2000,
+                    report_date=d,
+                ),
                 partition_date_col="report_date",
                 partition_mode="year",
             )
@@ -322,17 +328,24 @@ def _try_download_report_rc(
     logger.info(
         f"一致预期数据不足 (当前 {cnt} 条, 阈值 {_MIN_REPORT_RC_RECORDS})，" f"启动按年批量下载..."
     )
-    import datetime as _dt
-
-    current_year = _dt.datetime.now().year
+    target_date = str(trade_date).strip().replace("-", "")[:8]
+    if len(target_date) != 8 or not target_date.isdigit():
+        raise ValueError(f"report_rc 回补目标日期无效: {trade_date}")
+    target_year = int(target_date[:4])
     all_pages: List[pd.DataFrame] = []
-    for year in range(current_year - 5, current_year + 1):
+    for year in range(target_year - 5, target_year + 1):
+        end_date = min(f"{year}1231", target_date)
         try:
-            df = _query_with_pagination(
-                client,
-                "report_rc",
+            df = query_report_rc_adaptive(
+                lambda start_date, end_date: _query_with_pagination(
+                    client,
+                    "report_rc",
+                    page_limit=2000,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
                 start_date=f"{year}0101",
-                end_date=f"{year}1231",
+                end_date=end_date,
             )
             if df is not None and len(df) > 0:
                 all_pages.append(df)
@@ -346,7 +359,7 @@ def _try_download_report_rc(
         storage,
         "report_rc",
         merged,
-        dedup_cols=["ts_code", "report_date", "org_name", "quarter"],
+        dedup_cols=list(REPORT_RC_ROW_KEY_COLUMNS),
         partition_date_col="report_date",
         partition_mode="year",
     )

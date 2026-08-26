@@ -7,6 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from ...data import Storage
+from ...data.report_rc import deduplicate_report_rc
 
 
 def _normalize_date_str(date_value: object) -> Optional[str]:
@@ -110,9 +111,9 @@ def _incremental_catchup_by_calendar_date(
         )
         return existing_df
 
-    start_date = (
-        pd.to_datetime(latest_date, format="%Y%m%d") + pd.Timedelta(days=1)
-    ).strftime("%Y%m%d")
+    start_date = (pd.to_datetime(latest_date, format="%Y%m%d") + pd.Timedelta(days=1)).strftime(
+        "%Y%m%d"
+    )
     pending_dates = _iter_calendar_dates(start_date, target_date)
     if not pending_dates:
         return existing_df
@@ -293,7 +294,14 @@ def _append_and_save_partitioned(
             merged = pd.concat([existing, part], ignore_index=True)
         else:
             merged = part
-        merged = _drop_duplicates_keep_updated(merged, dedup_cols)
+        if dataset_name == "report_rc":
+            merged = deduplicate_report_rc(
+                merged,
+                include_quarter=True,
+                require_full_identity=True,
+            )
+        else:
+            merged = _drop_duplicates_keep_updated(merged, dedup_cols)
         storage.save_raw_by_date(merged, dataset_name, part_date)
 
     logger.info(f"[{dataset_name}] 增量写入 {partition_count} 个分区")

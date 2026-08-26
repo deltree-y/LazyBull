@@ -78,7 +78,7 @@ $task_list               = @("regression")     # regression | classification
 $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regression 有效）
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(500,3000)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
 $learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(200)       #. XGB推荐150, LGB推荐200
@@ -141,7 +141,7 @@ $enable_express          = $true  # $true 启用 | $false 禁用
 # 0711关闭后分数大幅下降, 需要保持打开
 
 # ── 北向资金因子（moneyflow_hsgt 市场级广播, 2000+积分）───────────
-$enable_north            = $false  # $true 启用 | $false 禁用
+$enable_north            = $true  # $true 启用 | $false 禁用
 # 0711 关闭后无影响
 # 注意: factor_prune=$true 时生产排除清单含全部 13 个 north 因子, 本开关实际不参与训练;
 # 2024-08-19 起披露口径切换已拆为净买入/成交额两套因子（见 v0.95.11）
@@ -169,15 +169,14 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 # 0711关闭后得分上升
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
-$factor_prune             = $false  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+$factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 因子排除列表（可选，0801引入）────────────────────────────────────
-# "" = 使用生产默认清单 data/models/factor_exclude_list.json（推荐）
-# 实验清单（不覆盖生产文件）:
-#   configs/factor_exclude_list_north_on.json = 从排除清单放回全部 13 个 north 因子（使其参与训练）
-#   configs/factor_exclude_repro_v22712.json  = 加回 3 个 report_rc 因子
-# 注意: 路径必须是真实存在的文件, 否则因子精简整体跳过（全部因子保留）
-$factor_exclude_file      = ""  # 使用生产默认清单
+# "" = 使用生产默认清单 data/models/factor_exclude_list.json（共 41 个因子）
+# 非空 = 显式清单完全替换生产默认清单（仅排除该清单内因子，不会叠加）
+# 注意: 本变量仅在 $factor_prune = $true 时生效；路径必须是真实存在的文件,
+#       否则因子精简整体跳过（全部因子保留）
+$factor_exclude_file      = "configs/factor_exclude_lhb_weak_v1.json"  # 仅排除 3 个 lhb 弱因子
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all

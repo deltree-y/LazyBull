@@ -7,6 +7,11 @@ from unittest.mock import MagicMock, Mock, patch
 import pandas as pd
 import pytest
 
+import src.lazybull.features.ensure as ensure_module
+import src.lazybull.features.ensure.downloads as ensure_downloads
+import src.lazybull.features.ensure.entry as ensure_entry
+import src.lazybull.features.ensure.factor_load as ensure_factor_load
+import src.lazybull.features.ensure.historical_assets as ensure_hist_assets
 from src.lazybull.data import DataCleaner, DataLoader, Storage, TushareClient
 from src.lazybull.data.ensure import (
     _daily_basic_confirms_daily,
@@ -15,11 +20,6 @@ from src.lazybull.data.ensure import (
     ensure_clean_data_for_date,
     ensure_raw_data_for_date,
 )
-import src.lazybull.features.ensure as ensure_module
-import src.lazybull.features.ensure.downloads as ensure_downloads
-import src.lazybull.features.ensure.entry as ensure_entry
-import src.lazybull.features.ensure.factor_load as ensure_factor_load
-import src.lazybull.features.ensure.historical_assets as ensure_hist_assets
 from src.lazybull.features import FeatureBuilder, ensure_features_for_date
 from src.lazybull.paper import TargetWeight
 from src.lazybull.paper.reporting import load_position_snapshot
@@ -1150,6 +1150,156 @@ def test_incremental_download_functions_delegate_to_range_catchup(
     assert captured["trade_date"] == "20260430"
 
 
+def test_report_rc_incremental_fetches_all_pages(monkeypatch, temp_storage):
+    """report_rc 单日超过 2000 行时必须分页取全，不能推进残缺日水位。"""
+    existing = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "report_date": "20260410",
+                "org_name": "测试机构",
+                "quarter": "2026Q1",
+            }
+        ]
+    )
+    temp_storage.save_raw_by_date(existing, "report_rc", "2026-12-31")
+    monkeypatch.setattr(ensure_downloads, "_MIN_REPORT_RC_RECORDS", 1)
+
+    captured = {}
+
+    def _fake_catchup(**kwargs):
+        captured["day_df"] = kwargs["fetch_by_date"]("20260411")
+        return kwargs["existing_df"]
+
+    monkeypatch.setattr(ensure_downloads, "_incremental_catchup_by_calendar_date", _fake_catchup)
+
+    first_page = pd.DataFrame(
+        {
+            "ts_code": [f"{idx:06d}.SZ" for idx in range(2000)],
+            "report_date": ["20260411"] * 2000,
+        }
+    )
+    second_page = pd.DataFrame(
+        {
+            "ts_code": ["900001.SZ", "900002.SZ", "900003.SZ"],
+            "report_date": ["20260411"] * 3,
+        }
+    )
+    client = MagicMock(spec=TushareClient)
+    client.query.side_effect = [first_page, second_page]
+
+    ensure_module._try_download_report_rc(
+        client=client,
+        storage=temp_storage,
+        trade_date="20260411",
+    )
+
+    assert len(captured["day_df"]) == 2003
+    assert [call.kwargs["offset"] for call in client.query.call_args_list] == [0, 2000]
+    assert all(call.kwargs["limit"] == 2000 for call in client.query.call_args_list)
+
+
+def test_report_rc_bulk_backfill_fetches_all_pages(monkeypatch, temp_storage):
+    """report_rc 历史回补也必须按接口上限 2000 行分页。"""
+    first_page = pd.DataFrame(
+        {
+            "ts_code": [f"{idx:06d}.SZ" for idx in range(2000)],
+            "report_date": ["20200102"] * 2000,
+        }
+    )
+    second_page = pd.DataFrame(
+        {
+            "ts_code": ["900001.SZ", "900002.SZ", "900003.SZ"],
+            "report_date": ["20200102"] * 3,
+        }
+    )
+    client = MagicMock(spec=TushareClient)
+    client.query.side_effect = [first_page, second_page] + [pd.DataFrame()] * 5
+    monkeypatch.setattr(
+        ensure_downloads,
+        "_append_and_save_partitioned",
+        lambda _storage, _dataset_name, new_df, **_kwargs: new_df,
+    )
+
+    result = ensure_module._try_download_report_rc(
+        client=client,
+        storage=temp_storage,
+        trade_date="20260411",
+    )
+
+    assert result is not None
+    assert len(result) == 2003
+    assert [call.kwargs["offset"] for call in client.query.call_args_list[:2]] == [0, 2000]
+    assert all(call.kwargs["limit"] == 2000 for call in client.query.call_args_list)
+
+
+def test_report_rc_bulk_backfill_bisects_overlimit_years(monkeypatch, temp_storage):
+    """report_rc 年度累计查询超限时必须按日期二分，不能整年丢弃。"""
+    failed_ranges = []
+    successful_ranges = []
+
+    def _fake_pagination(_client, _api_name, **kwargs):
+        start_date = kwargs["start_date"]
+        end_date = kwargs["end_date"]
+        span_days = (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days
+        if span_days > 180:
+            failed_ranges.append((start_date, end_date))
+            raise RuntimeError("查询数据失败，请确认参数")
+        successful_ranges.append((start_date, end_date))
+        return pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "report_date": [start_date],
+                "org_name": ["测试机构"],
+                "author_name": ["测试分析师"],
+                "report_title": [f"{start_date}研报"],
+                "quarter": [f"{start_date[:4]}Q4"],
+            }
+        )
+
+    monkeypatch.setattr(ensure_downloads, "_query_with_pagination", _fake_pagination)
+    monkeypatch.setattr(
+        ensure_downloads,
+        "_append_and_save_partitioned",
+        lambda _storage, _dataset_name, new_df, **_kwargs: new_df,
+    )
+
+    result = ensure_module._try_download_report_rc(
+        client=MagicMock(spec=TushareClient),
+        storage=temp_storage,
+        trade_date="20260411",
+    )
+
+    assert result is not None and len(result) > 0
+    assert failed_ranges
+    assert successful_ranges
+    assert all(
+        (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days <= 180
+        for start_date, end_date in successful_ranges
+    )
+
+
+def test_report_rc_bulk_backfill_anchors_to_target_trade_date(monkeypatch, temp_storage):
+    """历史回补围绕目标交易日取近六年，不能使用机器当前年份。"""
+    queried_ranges = []
+
+    def _fake_pagination(_client, _api_name, **kwargs):
+        queried_ranges.append((kwargs["start_date"], kwargs["end_date"]))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(ensure_downloads, "_query_with_pagination", _fake_pagination)
+
+    result = ensure_module._try_download_report_rc(
+        client=MagicMock(spec=TushareClient),
+        storage=temp_storage,
+        trade_date="20180615",
+    )
+
+    assert result is None
+    assert queried_ranges[0][0] == "20130101"
+    assert queried_ranges[-1] == ("20180101", "20180615")
+
+
 def test_load_position_snapshot_ensures_trade_date_clean_data(monkeypatch):
     """查看/打印持仓前应自动补齐当日 clean 数据（缺数据自动下载）。"""
     runner = MagicMock()
@@ -1250,9 +1400,7 @@ def test_moneyflow_hsgt_empty_response_no_placeholder(monkeypatch):
 
     monkeypatch.setattr(loader_mod, "DataLoader", StubLoader)
 
-    _try_ensure_historical_moneyflow_hsgt(
-        StubClient(), StubStorage(), ["20200102", "20200103"]
-    )
+    _try_ensure_historical_moneyflow_hsgt(StubClient(), StubStorage(), ["20200102", "20200103"])
 
     assert saved == [], "空响应不应落任何占位分区"
 

@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.lazybull.common.date_utils import is_recent_date_str
 from src.lazybull.data import Storage, TushareClient
+from src.lazybull.data.report_rc import deduplicate_report_rc, query_report_rc_adaptive
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
 from .periodic import (
@@ -298,16 +299,6 @@ def _next_date_str(date_str: str) -> str:
     return (datetime.strptime(date_str, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
 
 
-def _is_report_rc_overlimit_error(err_msg: str) -> bool:
-    """判断 report_rc 错误是否为"单次查询超限"。
-
-    超限 (offset > 100000) 时 TuShare 返回"查询数据失败，请确认参数！"；
-    网络超时/代理错误 (Read timed out) 等其它错误不是超限, 不应触发二分
-    (二分对全局性问题无意义, 反而浪费时间递归)。
-    """
-    return "查询数据失败" in err_msg or "请确认参数" in err_msg
-
-
 def _query_report_rc_adaptive(
     client: TushareClient,
     start_date: str,
@@ -335,40 +326,19 @@ def _query_report_rc_adaptive(
     Returns:
         区间内的 report_rc DataFrame (可能为空)
     """
-    if start_date > end_date:
-        return pd.DataFrame()
-    try:
-        return _query_with_pagination(
+    return query_report_rc_adaptive(
+        lambda range_start, range_end: _query_with_pagination(
             client,
             "report_rc",
             page_limit=page_limit,
-            start_date=start_date,
-            end_date=end_date,
-        )
-    except Exception as e:
-        if not _is_report_rc_overlimit_error(str(e)):
-            # 非超限错误 (如代理/网络 Read timed out): 二分无意义, 直接上抛,
-            # 由 download_report_rc 记录该年份失败, 重跑时断点续传
-            raise
-        if depth >= max_depth:
-            raise RuntimeError(
-                f"report_rc {start_date}~{end_date} 二分 {max_depth} 层后仍失败: {e}"
-            ) from e
-        # 大年份单次查询超限 -> 自动二分是预期正常流程, 用 debug 而非 warning
-        logger.debug(
-            f"[report_rc] {start_date}~{end_date} 整段查询失败, 自动二分重试 "
-            f"(depth={depth + 1}): {e}"
-        )
-        mid = _mid_date_str(start_date, end_date)
-        left = _query_report_rc_adaptive(client, start_date, mid, page_limit, depth + 1, max_depth)
-        right = _query_report_rc_adaptive(
-            client, _next_date_str(mid), end_date, page_limit, depth + 1, max_depth
-        )
-        parts = [d for d in (left, right) if d is not None and len(d) > 0]
-        if not parts:
-            return pd.DataFrame()
-        # 二分结果合并同样需屏蔽 pandas 的 empty/all-NA concat 告警
-        return _concat_no_warning(parts)
+            start_date=range_start,
+            end_date=range_end,
+        ),
+        start_date=start_date,
+        end_date=end_date,
+        depth=depth,
+        max_depth=max_depth,
+    )
 
 
 def _existing_report_rc_years(storage: Storage) -> Set[str]:
@@ -402,35 +372,61 @@ def download_report_rc(
 
     start_year = _to_int_date(start_date) // 10000
     end_year = _to_int_date(end_date) // 10000
-    years_to_download = [
-        str(y) for y in range(start_year, end_year + 1) if force or str(y) not in existing_years
-    ]
+    current_year = str(datetime.now().year)
+    download_ranges = []
+    for year_int in range(start_year, end_year + 1):
+        year = str(year_int)
+        y_start = max(f"{year}0101", start_date)
+        y_end = min(f"{year}1231", end_date)
+        existing_df = None
+        if not force and year in existing_years:
+            if year != current_year:
+                continue
+            existing_df = storage.load_raw_by_date("report_rc", f"{year}-12-31")
+            if existing_df is not None and len(existing_df) > 0 and "report_date" in existing_df:
+                report_dates = (
+                    existing_df["report_date"]
+                    .astype("string")
+                    .str.replace("-", "", regex=False)
+                    .str[:8]
+                )
+                report_dates = report_dates[report_dates.str.fullmatch(r"\d{8}", na=False)]
+                if not report_dates.empty:
+                    y_start = max(y_start, _next_date_str(str(report_dates.max())))
+        if y_start <= y_end:
+            download_ranges.append((year, y_start, y_end, existing_df))
 
-    if not years_to_download:
-        logger.info("[report_rc] 全部年份已存在, 跳过。如需重下加 --force")
+    if not download_ranges:
+        logger.info("[report_rc] 请求区间已完整覆盖, 跳过。如需重下加 --force")
         return
 
     logger.info(
-        f"[report_rc] 按年下载 {len(years_to_download)} 年 "
-        f"({years_to_download[0]}~{years_to_download[-1]})"
+        f"[report_rc] 按年下载 {len(download_ranges)} 个区间 "
+        f"({download_ranges[0][1]}~{download_ranges[-1][2]})"
     )
 
-    tracker = ProgressTracker(len(years_to_download), label="report_rc", log_every=1)
+    tracker = ProgressTracker(len(download_ranges), label="report_rc", log_every=1)
     success = empty = 0
     # 并发下 success/empty 计数需要线程保护; tracker.tick 内部自带锁, 可安全并发
     stats_lock = threading.Lock()
 
-    def _worker(year: str) -> None:
+    def _worker(download_range) -> None:
         """下载单个年份 report_rc (含超限自动二分) 并独立落盘。"""
         nonlocal success, empty
-        y_start = max(f"{year}0101", start_date)
-        y_end = min(f"{year}1231", end_date)
+        year, y_start, y_end, existing_df = download_range
         try:
             # 按年分页拉取, 规避 report_rc 单次 2000 条上限截断;
             # 单次查询总行数上限 100000 条, 超限年份 (如 2009 起多数年份)
             # 由 _query_report_rc_adaptive 自动二分分片下载
             df = _query_report_rc_adaptive(client, y_start, y_end)
             if df is not None and len(df) > 0:
+                if existing_df is not None and len(existing_df) > 0:
+                    df = _concat_no_warning([existing_df, df])
+                df = deduplicate_report_rc(
+                    df,
+                    include_quarter=True,
+                    require_full_identity=True,
+                )
                 with stats_lock:
                     success += 1
                 logger.info(f"  [report_rc] {year}: {len(df)} 条")
@@ -453,7 +449,7 @@ def download_report_rc(
     # (如 192.168.1.21:18081) 或 TuShare 服务端出现 Read timed out /
     # "查询数据失败" 全局性失败。这里使用保守并发, 优先保证稳定不失败。
     _run_concurrent(
-        years_to_download,
+        download_ranges,
         _worker,
         label="report_rc",
         max_workers=_REPORT_RC_CONCURRENCY,

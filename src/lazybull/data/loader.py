@@ -6,9 +6,10 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from .storage import Storage
-from .loader_announcement import AnnouncementRiskLoaderMixin
 from ..common.date_utils import normalize_series_to_yyyymmdd, normalize_to_yyyymmdd
+from .loader_announcement import AnnouncementRiskLoaderMixin
+from .report_rc import validate_report_rc_identity_schema
+from .storage import Storage
 
 _CONCAT_ALL_NA_WARNING = (
     r"The behavior of DataFrame concatenation with empty or all-NA entries is deprecated"
@@ -471,9 +472,9 @@ class DataLoader(AnnouncementRiskLoaderMixin):
         normalized_trade_date = self._normalize_date(trade_date)
 
         if auto_ensure:
-            from .ensure import ensure_clean_data_for_date
-            from ..data.tushare_client import TushareClient
             from ..data.cleaner import DataCleaner
+            from ..data.tushare_client import TushareClient
+            from .ensure import ensure_clean_data_for_date
 
             _loader = ensure_loader or self
             _cleaner = ensure_cleaner or DataCleaner(verbose=False)
@@ -710,6 +711,7 @@ class DataLoader(AnnouncementRiskLoaderMixin):
             logger.warning("未找到一致预期研报数据")
             return None
         result = _concat_no_all_na_warning(dfs)
+        validate_report_rc_identity_schema(result, include_quarter=True)
         if "report_date" in result.columns:
             result["report_date"] = normalize_series_to_yyyymmdd(result["report_date"])
         return result

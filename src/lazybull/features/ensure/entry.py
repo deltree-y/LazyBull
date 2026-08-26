@@ -155,9 +155,9 @@ def ensure_features_for_date(
         ]
 
         daily_close_lookup = {
-            d: grp[["ts_code", "close_adj"]].copy()
+            d: grp[["ts_code", "close", "close_adj"]].copy()
             for d, grp in daily_clean.groupby("trade_date", sort=False)
-            if "close_adj" in grp.columns
+            if "close" in grp.columns and "close_adj" in grp.columns
         }
         # 未复权收盘价查询（大宗交易折价率需要与原始成交价同口径）
         block_close_lookup = {

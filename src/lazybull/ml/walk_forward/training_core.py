@@ -25,11 +25,25 @@ from src.lazybull.ml.train_core import (
     train_xgboost_model,
     transform_labels_cs_zscore,
 )
+
 from .training_reporting import _safe_float
 
 SEED_ENSEMBLE_KEEP_TOP_RATIO = 0.30
 MIN_MODELS = 3
 SEED_ENSEMBLE_KEEP_MIN_MODELS = MIN_MODELS
+
+
+def _build_feature_flag_train_params(args: Any) -> Dict[str, bool]:
+    """构造需随模型注册保存的可选特征开关。"""
+    return {
+        "enable_consensus_features": bool(getattr(args, "enable_consensus_features", False)),
+        "enable_cashflow_quality_features": bool(
+            getattr(args, "enable_cashflow_quality_features", False)
+        ),
+        "enable_consensus_revision_features": bool(
+            getattr(args, "enable_consensus_revision_features", False)
+        ),
+    }
 
 
 def _build_main_board_codes(stock_basic: pd.DataFrame) -> set:

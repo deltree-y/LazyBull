@@ -3,27 +3,27 @@
 
 FUNDAMENTAL_FEATURE_COLUMNS = [
     # 盈利能力（原始5个 + 新增5个）
-    "zscore_roe_waa",              # 加权平均ROE
-    "zscore_roe_dt",               # 扣非ROE（新版）
-    "zscore_roa",                  # 总资产收益率（新版）
-    "zscore_or_yoy",               # 营业收入同比增速
-    "zscore_netprofit_yoy",        # 净利润同比增速
-    "zscore_profit_dedt",          # 扣非净利润（新版，需zscore后从profit_dedt_yoy得到）
-    "zscore_q_gr_yoy",             # 单季度营收同比增速
-    "zscore_equity_yoy",           # 净资产同比增长率（新版）
-    "zscore_grossprofit_margin",   # 毛利率（新版）
-    "zscore_netprofit_margin",     # 净利率（新版）
+    "zscore_roe_waa",  # 加权平均ROE
+    "zscore_roe_dt",  # 扣非ROE（新版）
+    "zscore_roa",  # 总资产收益率（新版）
+    "zscore_or_yoy",  # 营业收入同比增速
+    "zscore_netprofit_yoy",  # 净利润同比增速
+    "zscore_profit_dedt",  # 扣非净利润（新版，需zscore后从profit_dedt_yoy得到）
+    "zscore_q_gr_yoy",  # 单季度营收同比增速
+    "zscore_equity_yoy",  # 净资产同比增长率（新版）
+    "zscore_grossprofit_margin",  # 毛利率（新版）
+    "zscore_netprofit_margin",  # 净利率（新版）
     # 盈利质量（2个新版）
-    "zscore_cf_sales",             # 经营现金流/营业收入（新版）
-    "zscore_cf_nm",                # 经营现金流/净利润（新版）
+    "zscore_cf_sales",  # 经营现金流/营业收入（新版）
+    "zscore_cf_nm",  # 经营现金流/净利润（新版）
     # 偿债/流动性（原有1个 + 新增2个）
-    "zscore_debt_to_assets",       # 资产负债率
-    "zscore_current_ratio",        # 流动比率（新版）
-    "zscore_quick_ratio",          # 速动比率（新版）
+    "zscore_debt_to_assets",  # 资产负债率
+    "zscore_current_ratio",  # 流动比率（新版）
+    "zscore_quick_ratio",  # 速动比率（新版）
     # 无形资产风险代理 + 运营效率（3个新版）
-    "zscore_int_to_talcap",        # 无形资产/总资本比（替代 goodwill）
-    "zscore_assets_turn",          # 总资产周转率（新版）
-    "zscore_inv_turn",             # 存货周转率（新版）
+    "zscore_int_to_talcap",  # 无形资产/总资本比（替代 goodwill）
+    "zscore_assets_turn",  # 总资产周转率（新版）
+    "zscore_inv_turn",  # 存货周转率（新版）
     # 新鲜度
     "fundamental_freshness_days",  # 最近一次基本面公告距当日天数
 ]
@@ -108,40 +108,41 @@ LHB_FEATURE_COLUMNS = [
 
 CONSENSUS_FEATURE_COLUMNS = [
     "cons_analyst_count_30d",  # 近 30 日覆盖的研报数
-    "cons_eps_mean_fy0",  # 近 90 日当前财年 (FY0) EPS 预测均值
-    "cons_eps_mean_fy1",  # 近 90 日未来第一财年 (FY1) EPS 预测均值
-    "cons_eps_mean_fy2",  # 近 90 日未来第二财年 (FY2) EPS 预测均值
-    "cons_eps_revision_30d",  # 近 30 日 EPS 预测修正率（全预测期）
-    "cons_target_price_mid",  # 近 90 日目标价中值
+    "cons_eps_yield_fym1",  # 上一财年 EPS / 当日未复权收盘价
+    "cons_eps_yield_fy0",  # 当前财年 EPS / 当日未复权收盘价
+    "cons_eps_yield_fy1",  # 未来第一财年 EPS / 当日未复权收盘价
+    "cons_eps_yield_fy2",  # 未来第二财年 EPS / 当日未复权收盘价
+    "cons_eps_revision_30d",  # 近 30 日相对此前 90 日有界修正率（全预测期）
+    "cons_target_upside",  # 目标价中值 / 当日未复权收盘价 - 1
     "cons_rating_score",  # 近 90 日平均评级得分
     "consensus_freshness_days",  # 最近一次研报距当日天数
 ]
 
 ENHANCED_FEATURE_COLUMNS = [
-    "zscore_opening_strength",       # 开盘强度（隔夜情绪代理）
+    "zscore_opening_strength",  # 开盘强度（隔夜情绪代理）
     "zscore_intraday_vol_structure",  # 日内波动结构（多空力量对比）
-    "zscore_order_imbalance",        # 特大单订单失衡
-    "order_imbalance_mean_5",        # 5日订单失衡均值
-    "order_imbalance_mean_20",       # 20日订单失衡均值
+    "zscore_order_imbalance",  # 特大单订单失衡
+    "order_imbalance_mean_5",  # 5日订单失衡均值
+    "order_imbalance_mean_20",  # 20日订单失衡均值
 ]
 
 CASHFLOW_QUALITY_FEATURE_COLUMNS = [
-    "zscore_ocf_to_revenue",         # OCF / 营业收入（现金含量）
-    "zscore_ocf_to_profit",          # OCF / 净利润（利润质量）
-    "zscore_fcf_yield",              # 自由现金流 / 总市值（现金回报率）
-    "zscore_capex_to_ocf",           # 资本支出 / OCF
-    "cashflow_freshness_days",       # 最近一次现金流公告距当日天数
+    "zscore_ocf_to_revenue",  # OCF / 营业收入（现金含量）
+    "zscore_ocf_to_profit",  # OCF / 净利润（利润质量）
+    "zscore_fcf_yield",  # 自由现金流 / 总市值（现金回报率）
+    "zscore_capex_to_ocf",  # 资本支出 / OCF
+    "cashflow_freshness_days",  # 最近一次现金流公告距当日天数
 ]
 
 CONSENSUS_REVISION_FEATURE_COLUMNS = [
-    "zscore_cons_eps_revision_accel",     # EPS 修正加速度
-    "zscore_cons_eps_dispersion",         # 分析师分歧度（负向预警）
-    "zscore_cons_eps_dispersion_chg",     # 分歧度月度变化
-    "zscore_cons_target_upside",          # 目标价上行空间
-    "zscore_cons_target_upside_chg",      # 目标价上行空间月度变化
-    "zscore_cons_analyst_count_chg",      # 覆盖分析师数变化
-    "zscore_cons_rating_upgrade_ratio",   # 评级上调比例
-    "cons_revision_freshness_days",       # 最近一次研报距当日天数
+    "zscore_cons_eps_revision_accel",  # EPS 修正加速度
+    "zscore_cons_eps_dispersion",  # 分析师分歧度（负向预警）
+    "zscore_cons_eps_dispersion_chg",  # 分歧度月度变化
+    "zscore_cons_revision_target_upside",  # 修正窗口目标价上行空间
+    "zscore_cons_target_upside_chg",  # 目标价上行空间月度变化
+    "zscore_cons_analyst_count_chg",  # 覆盖分析师数变化
+    "zscore_cons_rating_upgrade_ratio",  # 评级上调比例
+    "cons_revision_freshness_days",  # 最近一次研报距当日天数
 ]
 
 FRESHNESS_STRATEGY_DROP_ALL = "drop_all"
@@ -172,18 +173,25 @@ EVENT_FRESHNESS_TO_VALUE_COLUMNS = {
     ],
     "consensus_freshness_days": [
         "cons_analyst_count_30d",
+        # 旧绝对值列仅供存量模型推理，新模型使用下方经济归一化列。
+        "cons_eps_mean_fym1",
         "cons_eps_mean_fy0",
         "cons_eps_mean_fy1",
         "cons_eps_mean_fy2",
+        "cons_eps_yield_fym1",
+        "cons_eps_yield_fy0",
+        "cons_eps_yield_fy1",
+        "cons_eps_yield_fy2",
         "cons_eps_revision_30d",
         "cons_target_price_mid",
+        "cons_target_upside",
         "cons_rating_score",
     ],
     "cons_revision_freshness_days": [
         "zscore_cons_eps_revision_accel",
         "zscore_cons_eps_dispersion",
         "zscore_cons_eps_dispersion_chg",
-        "zscore_cons_target_upside",
+        "zscore_cons_revision_target_upside",
         "zscore_cons_target_upside_chg",
         "zscore_cons_analyst_count_chg",
         "zscore_cons_rating_upgrade_ratio",

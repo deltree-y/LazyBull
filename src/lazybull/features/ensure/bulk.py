@@ -22,13 +22,15 @@ def _query_with_pagination(
     api_name: str,
     page_limit: int = 50000,
     fields: Optional[str] = None,
+    max_pages: int = 1000,
     **kwargs,
 ) -> pd.DataFrame:
-    """带分页的 API 调用，自动检测并翻页获取全量数据"""
+    """带分页的 API 调用，自动检测并翻页获取全量数据。"""
     all_pages: List[pd.DataFrame] = []
     offset = 0
-    while True:
-        df = client.pro.query(
+
+    for _ in range(max_pages):
+        df = client.query(
             api_name,
             fields=fields or "",
             limit=page_limit,
@@ -41,6 +43,8 @@ def _query_with_pagination(
         if len(df) < page_limit:
             break
         offset += page_limit
+    else:
+        raise RuntimeError(f"[{api_name}] 达到最大分页数 {max_pages}，无法确认数据已完整下载")
     if not all_pages:
         return pd.DataFrame()
     return pd.concat(all_pages, ignore_index=True)

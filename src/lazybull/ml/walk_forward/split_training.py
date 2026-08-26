@@ -23,11 +23,13 @@ from src.lazybull.ml.train_core import (
     evaluate_validation_daily,
     load_features_data,
 )
+
 from .reporting import build_daily_topk_detail_df
 from .training_core import (
     MIN_MODELS,
     SEED_ENSEMBLE_KEEP_TOP_RATIO,
     _build_ensemble_sub_models,
+    _build_feature_flag_train_params,
     _evaluate_train_result_val_daily,
     _filter_to_main_board,
     _resolve_ensemble_seeds,
@@ -303,12 +305,7 @@ def execute_split_training(
             "pos_quantile": args.pos_quantile if args.task == "classification" else None,
             "pos_topk": args.pos_topk if args.task == "classification" else None,
             "scale_pos_weight_manual": args.scale_pos_weight is not None,
-            "enable_cashflow_quality_features": getattr(
-                args, "enable_cashflow_quality_features", False
-            ),
-            "enable_consensus_revision_features": getattr(
-                args, "enable_consensus_revision_features", False
-            ),
+            **_build_feature_flag_train_params(args),
             "freshness_strategy": getattr(
                 args, "freshness_strategy", FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
             ),

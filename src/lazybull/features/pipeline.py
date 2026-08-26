@@ -305,9 +305,9 @@ def build_features_data(
     logger.info(f"clean日线数据: {len(daily_clean)} 条记录")
 
     daily_close_lookup = {
-        trade_date: grp[["ts_code", "close_adj"]].copy()
+        trade_date: grp[["ts_code", "close", "close_adj"]].copy()
         for trade_date, grp in daily_clean.groupby("trade_date", sort=False)
-        if "close_adj" in grp.columns
+        if "close" in grp.columns and "close_adj" in grp.columns
     }
 
     # 加载 daily_basic 数据
@@ -485,7 +485,11 @@ def build_features_data(
         report_rc_df = loader.load_report_rc()
         if report_rc_df is not None:
             logger.info(f"一致预期研报数据: {len(report_rc_df)} 条")
-            consensus_lookup = build_consensus_lookup_by_date(report_rc_df, trading_dates_str)
+            consensus_lookup = build_consensus_lookup_by_date(
+                report_rc_df,
+                trading_dates_str,
+                daily_data_lookup=daily_close_lookup,
+            )
         else:
             logger.warning("未找到一致预期研报数据，相关特征将为空")
 

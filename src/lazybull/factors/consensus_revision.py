@@ -8,8 +8,8 @@
 - EPS 修正加速度：修正本身在加速还是减速
 - 分析师分歧度：预测标准差/均值（>0.3 提示不确定性高）
 - 分歧度变化：分歧度扩大 = 风险上升
-- 目标价上行空间：当前价距目标价的距离
-- 覆盖分析师数量变化：撤出覆盖 = 强烈负向
+- 修正目标价上行空间：当前价距修正窗口目标价的距离
+- 研报覆盖数量变化：撤出覆盖 = 强烈负向（列名保留 analyst 以兼容旧模型）
 - 评级上调比例：边际情绪改善
 """
 
@@ -19,18 +19,22 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ..common.date_utils import normalize_series_to_yyyymmdd
+from ..data.report_rc import deduplicate_report_rc
+
 # 一致预期修正因子输出列
 CONSENSUS_REVISION_COLS = [
-    "cons_eps_revision_accel",     # EPS 修正加速度（修正变化率）
-    "cons_eps_dispersion",         # 分析师 EPS 预测分歧度
-    "cons_eps_dispersion_chg",     # 分歧度月度变化
-    "cons_target_upside",          # 目标价上行空间
-    "cons_target_upside_chg",      # 目标价上行空间月度变化
-    "cons_analyst_count_chg",      # 覆盖分析师数月度变化
-    "cons_rating_upgrade_ratio",   # 近 30 日评级上调占比
+    "cons_eps_revision_accel",  # EPS 修正加速度（修正变化率）
+    "cons_eps_dispersion",  # 分析师 EPS 预测分歧度
+    "cons_eps_dispersion_chg",  # 分歧度月度变化
+    "cons_revision_target_upside",  # 修正窗口目标价上行空间
+    "cons_target_upside_chg",  # 目标价上行空间月度变化
+    "cons_analyst_count_chg",  # 研报覆盖数月度变化（兼容旧列名）
+    "cons_rating_upgrade_ratio",  # 近 30 日评级上调占比
 ]
 
 CONSENSUS_REVISION_FRESHNESS_COL = "cons_revision_freshness_days"
+_MAX_STATE_AGE_DAYS = 365
 
 
 def _safe_nanstd(values: np.ndarray, ddof: int = 1) -> float:
@@ -48,6 +52,122 @@ def _safe_nanstd(values: np.ndarray, ddof: int = 1) -> float:
     return float(np.nanstd(valid_values, ddof=ddof))
 
 
+def _build_anchor_metrics(
+    report_ord: np.ndarray,
+    coverage_ord: np.ndarray,
+    eps_vals: Optional[np.ndarray],
+    target_vals: Optional[np.ndarray],
+    anchor_ord: int,
+) -> Optional[Dict[str, float]]:
+    """按最新研报日锚定窗口，构造一只股票的修正状态。"""
+    recent_start_ord = int(_offset_date(str(anchor_ord), -90))
+    earlier_start_ord = int(_offset_date(str(anchor_ord), -120))
+    earlier_end_ord = int(_offset_date(str(anchor_ord), -30))
+
+    recent_l = int(np.searchsorted(report_ord, recent_start_ord, side="left"))
+    recent_r = int(np.searchsorted(report_ord, anchor_ord, side="right"))
+    recent_count = recent_r - recent_l
+    if recent_count < 3:
+        return None
+
+    earlier_l = int(np.searchsorted(report_ord, earlier_start_ord, side="left"))
+    earlier_r = int(np.searchsorted(report_ord, earlier_end_ord, side="right"))
+    earlier_count = max(earlier_r - earlier_l, 0)
+    row: Dict[str, float] = {}
+
+    if eps_vals is not None:
+        recent_eps = eps_vals[recent_l:recent_r]
+        eps_mean = _safe_nanmean(recent_eps)
+        recent_std = _safe_nanstd(recent_eps, ddof=1)
+        if (
+            recent_count >= 5
+            and not np.isnan(recent_std)
+            and recent_std > 0
+            and abs(eps_mean) > 1e-6
+        ):
+            row["cons_eps_dispersion"] = float(recent_std / abs(eps_mean))
+        else:
+            row["cons_eps_dispersion"] = np.nan
+
+        if recent_count >= 10:
+            mask = ~np.isnan(recent_eps)
+            if mask.sum() >= 3:
+                x = np.arange(recent_eps.size, dtype=float)
+                slope = np.polyfit(x[mask], recent_eps[mask], 1)[0]
+                eps_masked_mean = _safe_nanmean(recent_eps[mask])
+                row["cons_eps_revision_accel"] = float(slope / (abs(eps_masked_mean) + 1e-6))
+            else:
+                row["cons_eps_revision_accel"] = np.nan
+        else:
+            row["cons_eps_revision_accel"] = np.nan
+
+        if earlier_count >= 5:
+            earlier_eps = eps_vals[earlier_l:earlier_r]
+            earlier_std = _safe_nanstd(earlier_eps, ddof=1)
+            earlier_mean = _safe_nanmean(earlier_eps)
+            if (
+                not np.isnan(earlier_std)
+                and earlier_std > 0
+                and not np.isnan(earlier_mean)
+                and abs(earlier_mean) > 1e-6
+            ):
+                earlier_disp = earlier_std / abs(earlier_mean)
+            else:
+                earlier_disp = np.nan
+            current_disp = row["cons_eps_dispersion"]
+            row["cons_eps_dispersion_chg"] = (
+                float(current_disp - earlier_disp)
+                if not np.isnan(current_disp) and not np.isnan(earlier_disp)
+                else np.nan
+            )
+        else:
+            row["cons_eps_dispersion_chg"] = np.nan
+    else:
+        row["cons_eps_dispersion"] = np.nan
+        row["cons_eps_revision_accel"] = np.nan
+        row["cons_eps_dispersion_chg"] = np.nan
+
+    target_mean = np.nan
+    if target_vals is not None:
+        recent_target = target_vals[recent_l:recent_r]
+        target_mean = _safe_nanmean(recent_target)
+        if earlier_count >= 3:
+            earlier_target = target_vals[earlier_l:earlier_r]
+            earlier_target_mean = _safe_nanmean(earlier_target)
+            if (
+                not np.isnan(target_mean)
+                and not np.isnan(earlier_target_mean)
+                and abs(earlier_target_mean) > 1e-6
+            ):
+                row["cons_target_upside_chg"] = float(target_mean / earlier_target_mean - 1.0)
+            else:
+                row["cons_target_upside_chg"] = np.nan
+        else:
+            row["cons_target_upside_chg"] = np.nan
+    else:
+        row["cons_target_upside_chg"] = np.nan
+    row["_target_mean"] = target_mean
+
+    recent_report_l = int(np.searchsorted(coverage_ord, recent_start_ord, side="left"))
+    recent_report_r = int(np.searchsorted(coverage_ord, anchor_ord, side="right"))
+    earlier_report_l = int(np.searchsorted(coverage_ord, earlier_start_ord, side="left"))
+    earlier_report_r = int(np.searchsorted(coverage_ord, earlier_end_ord, side="right"))
+    recent_report_count = recent_report_r - recent_report_l
+    earlier_report_count = max(earlier_report_r - earlier_report_l, 0)
+    compare_earlier = earlier_report_count if earlier_report_count > 0 else recent_report_count
+    row["cons_analyst_count_chg"] = float(
+        (recent_report_count - compare_earlier) / max(compare_earlier, 1)
+    )
+
+    target_upside_chg = row["cons_target_upside_chg"]
+    row["cons_rating_upgrade_ratio"] = (
+        float(1.0 if target_upside_chg > 0.02 else 0.0)
+        if not np.isnan(target_upside_chg)
+        else np.nan
+    )
+    return row
+
+
 def build_consensus_revision_lookup_by_date(
     report_rc_raw: pd.DataFrame,
     trading_dates: List[str],
@@ -55,14 +175,14 @@ def build_consensus_revision_lookup_by_date(
 ) -> Dict[str, pd.DataFrame]:
     """基于 report_rc 原始数据构建一致预期修正日频查询表
 
-    对每只股票在每个交易日，用最近 90 日内的研报数据计算修正信号。
+    对每只股票按最新研报日锚定最近 90 日窗口计算修正状态，最多保留 365 日。
 
     Args:
-        report_rc_raw: report_rc 原始数据，需包含
-                       ts_code, report_date, rec_fore_Netprofit, rec_target
+        report_rc_raw: report_rc 原始数据，需包含完整研报身份列、quarter，
+                   以及 rec_fore_Netprofit/rec_target 或 np/目标价字段
         trading_dates: 交易日列表
         daily_data_lookup: 日线数据查询表 {trade_date: DataFrame}，
-                          用于获取 close_adj 计算目标价上行空间
+                          用于获取未复权 close 计算目标价上行空间
 
     Returns:
         Dict[str, DataFrame]: {trade_date -> DataFrame(ts_code, cons_eps_revision_accel, ...)}
@@ -72,7 +192,14 @@ def build_consensus_revision_lookup_by_date(
         return {}
 
     df = report_rc_raw.copy()
-    df["report_date"] = df["report_date"].astype(str).str[:8]
+    df["report_date"] = normalize_series_to_yyyymmdd(df["report_date"])
+    df = df[df["report_date"].astype("string").str.fullmatch(r"\d{8}", na=False)].copy()
+    df = deduplicate_report_rc(
+        df,
+        include_quarter=True,
+        require_full_identity=True,
+    )
+    report_identity_df = deduplicate_report_rc(df, include_quarter=False)
 
     # 兼容两套 report_rc 口径：
     # 1) rec_fore_Netprofit / rec_target（部分环境）
@@ -109,9 +236,7 @@ def build_consensus_revision_lookup_by_date(
         agg_cols[target_proxy_col] = "mean"
 
     if not agg_cols:
-        logger.warning(
-            "report_rc 缺少净利润预测与目标价相关列，无法构建一致预期修正因子"
-        )
+        logger.warning("report_rc 缺少净利润预测与目标价相关列，无法构建一致预期修正因子")
         return {}
 
     logger.info(
@@ -122,10 +247,7 @@ def build_consensus_revision_lookup_by_date(
 
     daily = df.groupby(["ts_code", "report_date"], as_index=False).agg(agg_cols)
     # 展平多级列名
-    daily.columns = [
-        "_".join(c).strip("_") if isinstance(c, tuple) else c
-        for c in daily.columns
-    ]
+    daily.columns = ["_".join(c).strip("_") if isinstance(c, tuple) else c for c in daily.columns]
 
     # 重命名为简洁列名
     rename_map = {}
@@ -150,8 +272,8 @@ def build_consensus_revision_lookup_by_date(
     max_report_date = str(daily["report_date"].max())[:8]
     effective_trade_dates = [
         d
-        for d in trading_dates
-        if d >= min_report_date and d <= _offset_date(max_report_date, 90)
+        for d in sorted(set(trading_dates))
+        if d >= min_report_date and d <= _offset_date(max_report_date, _MAX_STATE_AGE_DAYS)
     ]
 
     if not effective_trade_dates:
@@ -164,14 +286,13 @@ def build_consensus_revision_lookup_by_date(
         f"有效交易日 {len(effective_trade_dates)}/{len(trading_dates)}"
     )
 
-    # 预计算交易日整数边界，避免循环中重复日期偏移计算
+    # 预计算交易日与唯一研报日期，避免把同一报告日误当成一位分析师。
     effective_trade_ord = np.array([int(d) for d in effective_trade_dates], dtype=np.int32)
-    recent_start_ord = np.array([int(_offset_date(d, -90)) for d in effective_trade_dates], dtype=np.int32)
-    earlier_start_ord = np.array([int(_offset_date(d, -120)) for d in effective_trade_dates], dtype=np.int32)
-    earlier_end_ord = np.array([int(_offset_date(d, -30)) for d in effective_trade_dates], dtype=np.int32)
-
-    # close_adj 按交易日+股票构建哈希查询，避免 DataFrame 反复过滤
-    close_adj_lookup = _build_close_adj_lookup(daily_data_lookup, effective_trade_dates)
+    coverage_by_stock = {
+        str(ts_code): group["report_date"].astype(np.int32).sort_values().to_numpy()
+        for ts_code, group in report_identity_df.groupby("ts_code", sort=False)
+    }
+    close_lookup = _build_close_lookup(daily_data_lookup, effective_trade_dates)
 
     # 改为按股票遍历，并仅处理该股票的活跃交易日期窗口
     result_rows_by_date: Dict[str, List[dict]] = {}
@@ -183,7 +304,7 @@ def build_consensus_revision_lookup_by_date(
             continue
 
         stock_start_idx = int(np.searchsorted(effective_trade_ord, report_ord[0], side="left"))
-        stock_end_cutoff = int(_offset_date(str(report_ord[-1]), 90))
+        stock_end_cutoff = int(_offset_date(str(report_ord[-1]), _MAX_STATE_AGE_DAYS))
         stock_end_idx = int(np.searchsorted(effective_trade_ord, stock_end_cutoff, side="right"))
 
         if stock_start_idx >= stock_end_idx:
@@ -199,102 +320,40 @@ def build_consensus_revision_lookup_by_date(
             if "target_price" in grp.columns
             else None
         )
+        coverage_ord = coverage_by_stock.get(str(ts_code), report_ord)
+        anchor_cache: Dict[int, Optional[Dict[str, float]]] = {}
 
         for td_idx in range(stock_start_idx, stock_end_idx):
-            recent_l = int(np.searchsorted(report_ord, recent_start_ord[td_idx], side="left"))
-            recent_r = int(np.searchsorted(report_ord, effective_trade_ord[td_idx], side="right"))
-            recent_count = recent_r - recent_l
-            if recent_count < 3:
+            trade_date = effective_trade_dates[td_idx]
+            visible_r = int(np.searchsorted(report_ord, effective_trade_ord[td_idx], side="right"))
+            if visible_r == 0:
+                continue
+            anchor_ord = int(report_ord[visible_r - 1])
+            freshness_days = _days_between(str(anchor_ord), trade_date)
+            if freshness_days > _MAX_STATE_AGE_DAYS:
+                continue
+            if anchor_ord not in anchor_cache:
+                anchor_cache[anchor_ord] = _build_anchor_metrics(
+                    report_ord,
+                    coverage_ord,
+                    eps_vals,
+                    target_vals,
+                    anchor_ord,
+                )
+            anchor_metrics = anchor_cache[anchor_ord]
+            if anchor_metrics is None:
                 continue
 
-            earlier_l = int(np.searchsorted(report_ord, earlier_start_ord[td_idx], side="left"))
-            earlier_r = int(np.searchsorted(report_ord, earlier_end_ord[td_idx], side="right"))
-            earlier_count = max(earlier_r - earlier_l, 0)
-
-            trade_date = effective_trade_dates[td_idx]
-            row = {"ts_code": ts_code}
-
-            if eps_vals is not None:
-                recent_eps = eps_vals[recent_l:recent_r]
-                eps_mean = _safe_nanmean(recent_eps)
-                row["cons_eps_mean_90d"] = eps_mean
-
-                recent_std = _safe_nanstd(recent_eps, ddof=1)
-                if recent_count >= 5 and not np.isnan(recent_std) and recent_std > 0 and abs(eps_mean) > 1e-6:
-                    row["cons_eps_dispersion"] = float(recent_std / abs(eps_mean))
-                else:
-                    row["cons_eps_dispersion"] = np.nan
-
-                if recent_count >= 10:
-                    mask = ~np.isnan(recent_eps)
-                    if mask.sum() >= 3:
-                        x = np.arange(recent_eps.size, dtype=float)
-                        slope = np.polyfit(x[mask], recent_eps[mask], 1)[0]
-                        eps_masked_mean = _safe_nanmean(recent_eps[mask])
-                        row["cons_eps_revision_accel"] = float(slope / (abs(eps_masked_mean) + 1e-6))
-                    else:
-                        row["cons_eps_revision_accel"] = np.nan
-                else:
-                    row["cons_eps_revision_accel"] = np.nan
-
-                if earlier_count >= 5:
-                    earlier_eps = eps_vals[earlier_l:earlier_r]
-                    earlier_std = _safe_nanstd(earlier_eps, ddof=1)
-                    earlier_mean = _safe_nanmean(earlier_eps)
-                    if not np.isnan(earlier_std) and earlier_std > 0 and not np.isnan(earlier_mean) and abs(earlier_mean) > 1e-6:
-                        earlier_disp = earlier_std / abs(earlier_mean)
-                    else:
-                        earlier_disp = np.nan
-                    cur_disp = row.get("cons_eps_dispersion", np.nan)
-                    if not np.isnan(cur_disp) and not np.isnan(earlier_disp):
-                        row["cons_eps_dispersion_chg"] = float(cur_disp - earlier_disp)
-                    else:
-                        row["cons_eps_dispersion_chg"] = np.nan
-                else:
-                    row["cons_eps_dispersion_chg"] = np.nan
-            else:
-                row["cons_eps_mean_90d"] = np.nan
-                row["cons_eps_dispersion"] = np.nan
-                row["cons_eps_revision_accel"] = np.nan
-                row["cons_eps_dispersion_chg"] = np.nan
-
-            if target_vals is not None:
-                recent_target = target_vals[recent_l:recent_r]
-                target_mean = _safe_nanmean(recent_target)
-                close_adj = close_adj_lookup.get(trade_date, {}).get(ts_code, np.nan)
-                if not np.isnan(target_mean) and not np.isnan(close_adj) and close_adj > 0:
-                    row["cons_target_upside"] = float(target_mean / close_adj - 1.0)
-                else:
-                    row["cons_target_upside"] = np.nan
-
-                if earlier_count >= 3:
-                    earlier_target = target_vals[earlier_l:earlier_r]
-                    earlier_target_mean = _safe_nanmean(earlier_target)
-                    if (
-                        not np.isnan(target_mean)
-                        and not np.isnan(earlier_target_mean)
-                        and abs(earlier_target_mean) > 1e-6
-                    ):
-                        row["cons_target_upside_chg"] = float(target_mean / earlier_target_mean - 1.0)
-                    else:
-                        row["cons_target_upside_chg"] = np.nan
-                else:
-                    row["cons_target_upside_chg"] = np.nan
-            else:
-                row["cons_target_upside"] = np.nan
-                row["cons_target_upside_chg"] = np.nan
-
-            compare_earlier = earlier_count if earlier_count > 0 else recent_count
-            row["cons_analyst_count_chg"] = float((recent_count - compare_earlier) / max(compare_earlier, 1))
-
-            target_upside_chg = row.get("cons_target_upside_chg", np.nan)
-            if not np.isnan(target_upside_chg):
-                row["cons_rating_upgrade_ratio"] = float(1.0 if target_upside_chg > 0.02 else 0.0)
-            else:
-                row["cons_rating_upgrade_ratio"] = np.nan
-
-            latest_report = str(report_ord[recent_r - 1])
-            row[CONSENSUS_REVISION_FRESHNESS_COL] = _days_between(latest_report, trade_date)
+            row = dict(anchor_metrics)
+            target_mean = row.pop("_target_mean")
+            close = close_lookup.get(trade_date, {}).get(str(ts_code), np.nan)
+            row["cons_revision_target_upside"] = (
+                float(target_mean / close - 1.0)
+                if not np.isnan(target_mean) and not np.isnan(close) and close > 0
+                else np.nan
+            )
+            row["ts_code"] = ts_code
+            row[CONSENSUS_REVISION_FRESHNESS_COL] = freshness_days
 
             result_rows_by_date.setdefault(trade_date, []).append(row)
 
@@ -318,6 +377,7 @@ def build_consensus_revision_lookup_by_date(
 def _offset_date(date_str: str, offset_days: int) -> str:
     """日期偏移辅助函数。"""
     from datetime import datetime, timedelta
+
     dt = datetime.strptime(date_str[:8], "%Y%m%d")
     return (dt + timedelta(days=offset_days)).strftime("%Y%m%d")
 
@@ -325,6 +385,7 @@ def _offset_date(date_str: str, offset_days: int) -> str:
 def _days_between(date_a: str, date_b: str) -> int:
     """计算两个日期之间的天数。"""
     from datetime import datetime
+
     a = datetime.strptime(date_a[:8], "%Y%m%d")
     b = datetime.strptime(date_b[:8], "%Y%m%d")
     return abs((b - a).days)
@@ -338,11 +399,11 @@ def _pick_first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optiona
     return None
 
 
-def _build_close_adj_lookup(
+def _build_close_lookup(
     daily_data_lookup: Optional[Dict[str, pd.DataFrame]],
     trade_dates: List[str],
 ) -> Dict[str, Dict[str, float]]:
-    """构建 close_adj 的日内哈希索引: trade_date -> {ts_code: close_adj}。"""
+    """构建未复权 close 的日内哈希索引。"""
     if daily_data_lookup is None:
         return {}
 
@@ -351,15 +412,15 @@ def _build_close_adj_lookup(
         price_df = daily_data_lookup.get(trade_date)
         if price_df is None or len(price_df) == 0:
             continue
-        if "ts_code" not in price_df.columns or "close_adj" not in price_df.columns:
+        if "ts_code" not in price_df.columns or "close" not in price_df.columns:
             continue
 
         ts_series = price_df["ts_code"].astype(str)
-        close_series = pd.to_numeric(price_df["close_adj"], errors="coerce")
+        close_series = pd.to_numeric(price_df["close"], errors="coerce")
         day_map: Dict[str, float] = {}
-        for ts_code, close_adj in zip(ts_series, close_series):
-            if not np.isnan(close_adj):
-                day_map[str(ts_code)] = float(close_adj)
+        for ts_code, close in zip(ts_series, close_series):
+            if not np.isnan(close):
+                day_map[str(ts_code)] = float(close)
         if day_map:
             lookup[trade_date] = day_map
 

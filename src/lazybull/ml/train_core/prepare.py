@@ -1,16 +1,13 @@
 # -*- coding: utf-8 -*-
 """prepare：train_core 拆分模块。"""
 
-from loguru import logger
-from pathlib import Path
-from typing import Callable
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Set
 import gc
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Set
+
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 from .constants import (
     ALT_FEATURE_COLUMNS,
@@ -24,23 +21,23 @@ from .constants import (
     FRESHNESS_STRATEGY_DROP_ALL,
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY,
-    FUNDAMENTAL_FEATURE_COLUMNS,
     FUND_FEATURE_COLUMNS,
+    FUNDAMENTAL_FEATURE_COLUMNS,
     LHB_FEATURE_COLUMNS,
     MARGIN_FEATURE_COLUMNS,
     MISSING_MARKER_FEATURE_COLUMNS,
     NORTH_FEATURE_COLUMNS,
     STATE_FRESHNESS_COLUMNS,
 )
-from .split import (
-    split_train_val_by_date,
-    split_val_for_selection_protocol_by_date,
-)
 from .features import (
     _load_factor_exclude_list,
     filter_stable_features,
 )
 from .freshness import apply_event_freshness_decay
+from .split import (
+    split_train_val_by_date,
+    split_val_for_selection_protocol_by_date,
+)
 
 
 def prepare_training_data(
@@ -210,9 +207,7 @@ def prepare_training_data(
 
     # 估值缺失标记因子（可选：旧 schema 特征分区无此列时自动跳过，兼容旧数据直接训练）
     # 新构建的特征分区（含 dv_ttm_missing/pe_ttm_missing）加入训练，模型可显式利用缺失状态
-    available_missing_markers = [
-        col for col in MISSING_MARKER_FEATURE_COLUMNS if col in df.columns
-    ]
+    available_missing_markers = [col for col in MISSING_MARKER_FEATURE_COLUMNS if col in df.columns]
     if available_missing_markers:
         feature_columns.extend(available_missing_markers)
         logger.info(f"启用估值缺失标记因子: {available_missing_markers}")
@@ -306,12 +301,14 @@ def prepare_training_data(
 
     # 一致预期因子（可选, 分析师研报聚合）
     if enable_consensus_features:
-        available_cons = [col for col in CONSENSUS_FEATURE_COLUMNS if col in df.columns]
-        if available_cons:
-            feature_columns.extend(available_cons)
-            logger.info(f"启用一致预期因子: {available_cons}")
-        else:
-            logger.warning("enable_consensus_features=True，但数据中未找到一致预期列，跳过")
+        missing_cons = [col for col in CONSENSUS_FEATURE_COLUMNS if col not in df.columns]
+        if missing_cons:
+            raise ValueError(
+                "enable_consensus_features=True，但一致预期特征 schema 不完整，"
+                f"缺少列: {missing_cons}。请使用 --enable-consensus 重新构建特征"
+            )
+        feature_columns.extend(CONSENSUS_FEATURE_COLUMNS)
+        logger.info(f"启用一致预期因子: {CONSENSUS_FEATURE_COLUMNS}")
 
     # 现金流质量因子（可选，需 cashflow 接口，2000 积分）
     if enable_cashflow_quality_features:
@@ -335,22 +332,25 @@ def prepare_training_data(
 
     # 一致预期修正因子（可选，基于已有 report_rc 构建时序修正信号）
     if enable_consensus_revision_features:
-        available_cr = [
-            col for col in CONSENSUS_REVISION_FEATURE_COLUMNS if col in df.columns
+        missing_revision = [
+            col for col in CONSENSUS_REVISION_FEATURE_COLUMNS if col not in df.columns
         ]
-        if available_cr:
-            feature_columns.extend(available_cr)
-            logger.info(f"启用一致预期修正因子: {available_cr}")
-        else:
-            logger.warning(
-                "enable_consensus_revision_features=True，但数据中未找到一致预期修正列，跳过"
+        if missing_revision:
+            raise ValueError(
+                "enable_consensus_revision_features=True，但一致预期修正特征 schema 不完整，"
+                f"缺少列: {missing_revision}。请使用 --enable-consensus-revision-features "
+                "重新构建特征"
             )
+        feature_columns.extend(CONSENSUS_REVISION_FEATURE_COLUMNS)
+        logger.info(f"启用一致预期修正因子: {CONSENSUS_REVISION_FEATURE_COLUMNS}")
 
     # ── 市值中性化特征：仅纳入核心特征列表中稳定因子对应的 zscore_*_sz 列 ──
     # 避免稀疏因子（如一致预期）的 _sz 列在不同日期间存在/缺失导致 schema 不一致
     sz_cols = [
-        c for c in df.columns
-        if c.startswith("zscore_") and c.endswith("_sz")
+        c
+        for c in df.columns
+        if c.startswith("zscore_")
+        and c.endswith("_sz")
         and c[:-3] in feature_columns  # 仅当基础 zscore_* 列已在核心特征列表中
     ]
     if sz_cols:
@@ -430,7 +430,10 @@ def prepare_training_data(
 
     # ── 内存优化：只保留训练必需的列，避免 copy 时 OOM ──
     needed_cols = set(
-        feature_columns + [label_column, "trade_date", "ts_code"] + filter_columns + decay_helper_cols
+        feature_columns
+        + [label_column, "trade_date", "ts_code"]
+        + filter_columns
+        + decay_helper_cols
     )
     needed_cols &= set(df.columns)  # 仅保留实际存在的列
     kept = list(needed_cols)
@@ -471,9 +474,7 @@ def prepare_training_data(
         if decay_applied_stats:
             logger.info(
                 "事件型 freshness 衰减已应用: "
-                + ", ".join(
-                    [f"{k}->{v}" for k, v in sorted(decay_applied_stats.items())]
-                )
+                + ", ".join([f"{k}->{v}" for k, v in sorted(decay_applied_stats.items())])
             )
 
     # 训练入口特征质量门禁：删除高缺失、全空、常数列
@@ -527,9 +528,7 @@ def prepare_training_data(
                 )
             linked_extra = sorted(linked_removed - base_removed)
             if linked_extra:
-                detail_lines.append(
-                    f"联动移除（{len(linked_extra)}列）: {', '.join(linked_extra)}"
-                )
+                detail_lines.append(f"联动移除（{len(linked_extra)}列）: {', '.join(linked_extra)}")
             if detail_lines:
                 logger.info("训练入口特征清洗明细:\n" + "\n".join(detail_lines))
 
@@ -600,9 +599,7 @@ def prepare_training_data(
 
     # 在标签变换前保存 calibration 原始 df 引用；若 calibration 为空则回退到 es 子集。
     # label_transform_fn 内部会创建新 df，原始 df 不会被修改，无需深拷贝。
-    df_val_split_original = (
-        df_val_split_calib if len(df_val_split_calib) > 0 else df_val_split
-    )
+    df_val_split_original = df_val_split_calib if len(df_val_split_calib) > 0 else df_val_split
 
     # 释放已不再需要的原始/中间 DataFrame，回收 ~4-5 GiB 内存
     # 提前保存后续 data_stats 需要的值

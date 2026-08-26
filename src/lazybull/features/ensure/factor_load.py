@@ -326,7 +326,11 @@ def _load_factor_data(
     if report_rc_df is not None and len(report_rc_df) > 0:
         from ...factors.consensus import build_consensus_lookup_by_date
 
-        cons_lookup = build_consensus_lookup_by_date(report_rc_df, factor_output_dates)
+        cons_lookup = build_consensus_lookup_by_date(
+            report_rc_df,
+            factor_output_dates,
+            daily_data_lookup=daily_close_lookup,
+        )
         cur = cons_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
             consensus_today = cur

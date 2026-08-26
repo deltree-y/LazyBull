@@ -144,27 +144,57 @@ def _build_demean_columns(
     return demean_columns
 
 
-def _build_zscore_columns(
-    result: pd.DataFrame, lookback_windows: List[int]
-) -> List[str]:
+def _build_zscore_columns(result: pd.DataFrame, lookback_windows: List[int]) -> List[str]:
     """构建需要 Z-Score 的特征列名列表。"""
     base = [
-        "pe_ttm", "pb", "bp", "dv_ttm", "log_total_mv",
-        "amount_ma20", "turnover_rate", "volatility_5", "volatility_10",
-        "volatility_20", "net_mf_amount", "ma_deviation_20",
-        "elg_net_amount_sum_20", "acceleration", "macd_hist", "bb_width",
-        "roe_waa", "roe_dt", "roa",
-        "or_yoy", "netprofit_yoy", "profit_dedt",
-        "q_gr_yoy", "equity_yoy",
-        "grossprofit_margin", "netprofit_margin",
-        "debt_to_assets", "current_ratio", "quick_ratio",
-        "cf_sales", "cf_nm", "int_to_talcap",
-        "assets_turn", "inv_turn",
-        "opening_strength", "intraday_vol_structure", "order_imbalance",
-        "ocf_to_revenue", "ocf_to_profit", "fcf_yield", "capex_to_ocf",
-        "cons_eps_revision_accel", "cons_eps_dispersion",
-        "cons_eps_dispersion_chg", "cons_target_upside",
-        "cons_target_upside_chg", "cons_analyst_count_chg",
+        "pe_ttm",
+        "pb",
+        "bp",
+        "dv_ttm",
+        "log_total_mv",
+        "amount_ma20",
+        "turnover_rate",
+        "volatility_5",
+        "volatility_10",
+        "volatility_20",
+        "net_mf_amount",
+        "ma_deviation_20",
+        "elg_net_amount_sum_20",
+        "acceleration",
+        "macd_hist",
+        "bb_width",
+        "roe_waa",
+        "roe_dt",
+        "roa",
+        "or_yoy",
+        "netprofit_yoy",
+        "profit_dedt",
+        "q_gr_yoy",
+        "equity_yoy",
+        "grossprofit_margin",
+        "netprofit_margin",
+        "debt_to_assets",
+        "current_ratio",
+        "quick_ratio",
+        "cf_sales",
+        "cf_nm",
+        "int_to_talcap",
+        "assets_turn",
+        "inv_turn",
+        "opening_strength",
+        "intraday_vol_structure",
+        "order_imbalance",
+        "ocf_to_revenue",
+        "ocf_to_profit",
+        "fcf_yield",
+        "capex_to_ocf",
+        "cons_eps_revision_accel",
+        "cons_eps_dispersion",
+        "cons_eps_dispersion_chg",
+        "cons_target_upside",
+        "cons_revision_target_upside",
+        "cons_target_upside_chg",
+        "cons_analyst_count_chg",
         "cons_rating_upgrade_ratio",
     ]
     existing = [col for col in base if col in result.columns]
@@ -178,9 +208,7 @@ def _build_zscore_columns(
 # ── 向量化单层 demean / zscore ────────────────────────────────
 
 
-def _vectorized_industry_demean(
-    result: pd.DataFrame, columns: List[str]
-) -> pd.DataFrame:
+def _vectorized_industry_demean(result: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     """用 groupby('sw_industry').transform() 一次性去均值。"""
     industry_col = "sw_industry"
     existing = [c for c in columns if c in result.columns]
@@ -197,9 +225,7 @@ def _vectorized_industry_demean(
     return result
 
 
-def _vectorized_industry_zscore(
-    result: pd.DataFrame, columns: List[str]
-) -> pd.DataFrame:
+def _vectorized_industry_zscore(result: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     """用 groupby('sw_industry').transform() 一次性做行业内 Z-Score。"""
     industry_col = "sw_industry"
     existing = [c for c in columns if c in result.columns]

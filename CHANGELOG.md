@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.0] - 2026-08-26
+
+### Added
+
+- **一致预期经济归一化特征**：新增 FY-1 EPS 信息及 `cons_eps_yield_fym1/fy0/fy1/fy2`（预测 EPS / 当日未复权收盘价）、`cons_target_upside`（目标价中值 / 收盘价 - 1）；训练候选切换到可跨股票比较的归一化列，旧 EPS/目标价绝对值列继续产出，仅供存量模型兼容推理。
+- **report_rc 统一身份契约**：以 `ts_code + report_date + org_name + author_name + report_title` 标识唯一研报，追加 `quarter` 标识唯一预测行；离线批量、在线 ensure 与因子覆盖计数共用同一契约。
+
+### Fixed
+
+- **report_rc 下载完整性闭环**：ensure 单日查询与历史年度回补均按接口上限 2000 行分页，历史年度累计查询触发 10 万行上限时自动按日期二分；回补窗口以目标 `trade_date` 为锚取近六年，避免历史回放误拉机器当前年份。批量下载对当前年度已有分区从最大 `report_date` 次日续传并合并写回，不再因年分区存在而全年断更。
+- **研报覆盖数与全聚合去重**：`cons_analyst_count_30d` 及 `cons_analyst_count_chg` 改为唯一研报数，同一研报 FY0/FY1/FY2 多条预测行不再放大覆盖数；基础与修正聚合入口均按统一预测行键去重，标题或作者不同的真实研报不会被旧四键误删。
+- **旧 report_rc schema 明确失败**：DataLoader、公共去重、因子入口与离线/ensure 写入边界均要求完整研报身份列，缺少机构、作者、标题或预测期时直接提示 `--download report_rc --force`，不再静默退化为弱去重键。
+- **评级缺失语义**：补齐 `跑赢行业`、`优于大市`、`Overweight`、`买进`、`BUY` 等映射并统一英文大小写；`无`、空值和未知文本保留 NaN，不再伪造中性 3 分。
+- **一致预期状态与修正稳健性**：基础与修正状态均以最新研报为锚聚合 90 日，最多保留 365 日并交由 freshness 指数衰减，消除第 90 天硬断崖；`cons_eps_revision_30d` 保持全预测期口径，改为近 30 日至少 2 个报告日对比此前 90 日至少 3 个报告日的日度中值，并使用有界对称变化率消除小分母爆炸。
+- **基础/修正目标价口径隔离**：修正因子改用独立的 `cons_revision_target_upside` / `zscore_cons_revision_target_upside`，分母统一为当日未复权收盘价，不再覆盖基础 `cons_target_upside` 或在训练/推理间切换为复权价。
+- **训练开关强契约与元数据**：`enable_consensus_features=True` 与 `enable_consensus_revision_features=True` 均要求对应构建 schema 完整，缺列立即提示重建特征，不再静默少训；split/deploy 模型 `train_params` 均记录全部可选特征开关，并由注册入口测试覆盖。
+
+### Migration
+
+- v0.96.0 首次升级必须对目标训练区间以 `--download report_rc --force` 重下 `raw/report_rc`：旧四键曾误删的同日同机构不同作者/标题研报无法靠增量续传恢复。完成后需以 `--enable-consensus`（按需追加 `--enable-consensus-revision-features`）重建 `cs_train` / `cs_infer`，并重新训练启用一致预期的模型；此后可恢复正常增量续传。
+
 ## [0.95.14] - 2026-08-24
 
 ### Tests
