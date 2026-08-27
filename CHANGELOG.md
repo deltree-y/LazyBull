@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.2] - 2026-08-27
+
+### Docs
+
+- **README 与 CHANGELOG 分工**：移除 README.md 中积累的全部版本 changelog 内容，README 仅保留项目介绍、功能特性、快速开始、使用指南等文档内容；所有版本变更统一记录在 CHANGELOG.md。项目共识（.github/copilot-instructions.md、CLAUDE.md）已同步约定：README 不包含 changelog，禁止再向 README 追加版本变更记录。
+
 ## [0.96.1] - 2026-08-27
 
 ### Changed
