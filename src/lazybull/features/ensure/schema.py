@@ -49,6 +49,13 @@ _REQUIRED_FACTOR_COLS = [
     "consensus_freshness_days",  # 一致预期 freshness
     "cashflow_freshness_days",  # 现金流质量 freshness
     "cons_revision_freshness_days",  # 一致预期修正 freshness
+    "cons_eps_revision_accel",  # 一致预期修正六值列（v2 重做后补检）
+    "cons_eps_dispersion",
+    "cons_eps_dispersion_chg",
+    "cons_target_upside_chg",
+    "cons_analyst_count_chg",
+    "cons_rating_upgrade_ratio",
+    "cons_revision_schema_v2",  # v2 重做哨兵列，缺失即强制重建旧语义缓存
 ]
 
 

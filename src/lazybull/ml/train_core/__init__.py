@@ -21,6 +21,8 @@ from .constants import (
     MARGIN_FEATURE_COLUMNS,
     NORTH_FEATURE_COLUMNS,
     STATE_FRESHNESS_COLUMNS,
+    attach_cons_revision_schema_version,
+    read_cons_revision_schema_version,
 )
 from .freshness import (
     apply_event_freshness_decay,

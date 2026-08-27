@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.1] - 2026-08-27
+
+### Changed
+
+- **一致预期修正因子 v2 重做（经济语义修复）**：`consensus_revision.py` 全面重写，修复全链路审计发现的语义缺陷：
+  - EPS 源列改回 `eps`（v1 误用 `np` 净利润），并按**绝对预测财年**分组（锚定报告年的 FY1 与 FY0 按覆盖报告日数多者优先、持平取 FY1），不再混合多预测期，也杜绝跨年报告的不同 FY1（如 2025 与 2026 财年）混入同一序列；
+  - `cons_eps_dispersion` 改为同日同财年研报级分歧度的时间平均（v1 先按报告日聚合，衡量的是预测随时间波动而非分析师分歧）；
+  - `cons_eps_revision_accel` 改为按报告日真实日历天数的一阶斜率（v1 按研报行序号，初版 v2 误用 yyyymmdd 整数回归）；
+  - `cons_rating_upgrade_ratio` 真实读取 `rating` 列（v1 是目标价变化 2% 的 0/1 别名）；
+  - 删除与基础因子重复的 `cons_revision_target_upside` / `zscore_cons_revision_target_upside`；
+  - 基线指标（目标价/覆盖/评级/分歧度变化）统一为近 30 日 vs 此前 90 日，且两侧窗口在第 -30 日不重叠；
+  - 研报级与身份去重数组显式按报告日升序，杜绝乱序分区导致未来研报进入历史窗口（PIT 前视）；
+  - 输出按当日股票截面 1%/99% winsorize，降低下游 Z-Score 被极值牵引的风险。
+- **哨兵列强制旧缓存重建**：新增 `cons_revision_schema_v2` 列，由 handler 对当日全截面恒写当前版本号（含无修正数据的股票）；ensure schema 必检清单与训练入口均严格校验“哨兵列存在且全量等于当前版本”，旧语义分区或哨兵缺失/NaN 直接失败。
+- **存活列可追溯**：WF summary 新增 `consensus_revision_cols_live` 记录每个 split 门禁后实际存活列（含 `zscore_cons_*_sz` 市值中性化派生列）；正常训练透传 `feature_columns`，skip-training 从独立 `v*_features.json` 补齐；skip-training 复用旧模型时核验开关与 schema 版本一致性并告警（异常版本值安全处理，不中断 split 循环）。
+- **schema 版本全链路记录**：split/deploy/单次训练三个注册入口统一记录 `cons_revision_schema_version`；`ModelRegistry.load_model` 严格加载时对含修正列但未记录 v2 版本（v1 旧语义模型）告警 train/serve 语义偏差风险。
+
+### Fixed
+
+- 目标价与评级聚合改为研报级（同研报多预测期行不重复加权），覆盖计数与数值窗口口径统一；split 结果透传 `feature_columns`，修复存活列汇总始终为空。
+
+### Migration
+
+- v0.96.1 升级后，启用 `--enable-consensus-revision-features` 的区间必须重建 `cs_train` / `cs_infer`（旧缓存缺哨兵列会自动触发 ensure 重建）；无需重下 raw 数据。
+- **旧模型风险提示**：v1 时期的旧模型（如 v22715）注册的 `zscore_cons_*` 列与新构建分区同名，继续推理时会静默读到 v2 语义数值，存在 train/serve 语义偏差；建议停用旧模型或以同一重建后的特征重新训练。
+
 ## [0.96.0] - 2026-08-26
 
 ### Added

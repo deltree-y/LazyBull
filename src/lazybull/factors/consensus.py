@@ -115,6 +115,16 @@ def _parse_quarter_year(quarter) -> Optional[int]:
     return None
 
 
+def parse_quarter_year(quarter) -> Optional[int]:
+    """公共入口：从 quarter 字段解析预测财年（供修正因子等复用）。"""
+    return _parse_quarter_year(quarter)
+
+
+def rating_to_score(rating) -> float:
+    """公共入口：评级文本映射为分数（供修正因子等复用）。"""
+    return _rating_to_score(rating)
+
+
 def _build_close_lookup(
     daily_data_lookup: Optional[Dict[str, pd.DataFrame]],
     trading_dates: List[str],

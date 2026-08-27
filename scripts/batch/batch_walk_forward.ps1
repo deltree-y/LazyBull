@@ -80,12 +80,12 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
 $n_estimators_list       = @(500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
-$learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
+$learning_rate_list      = @(0.01,0.05)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(200)       #. XGB推荐150, LGB推荐200
 $colsample_bytree_list   = @(0.3)       #. XGB/LGB均推荐0.3
 
 $subsample_list          = @(0.8)       #. XGB推荐0.8, LGB推荐0.7
-$reg_alpha_list          = @(0.05)      #. XGB推荐0.05, LGB推荐0.1
+$reg_alpha_list          = @(0.03)      #. XGB推荐0.05, LGB推荐0.1
 $reg_lambda_list         = @(7)         #. XGB推荐5.0, LGB推荐5.0
 $gamma_list              = @(0.5)       #. 映射LGB min_split_gain。XGB推荐0.5, LGB推荐1.0
 $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。LGB推荐63
@@ -169,14 +169,14 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 # 0711关闭后得分上升
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
-$factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+$factor_prune             = $false  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 因子排除列表（可选，0801引入）────────────────────────────────────
 # "" = 使用生产默认清单 data/models/factor_exclude_list.json（共 41 个因子）
 # 非空 = 显式清单完全替换生产默认清单（仅排除该清单内因子，不会叠加）
 # 注意: 本变量仅在 $factor_prune = $true 时生效；路径必须是真实存在的文件,
 #       否则因子精简整体跳过（全部因子保留）
-$factor_exclude_file      = "configs/factor_exclude_lhb_weak_v1.json"  # 仅排除 3 个 lhb 弱因子
+$factor_exclude_file      = ""#configs/factor_exclude_lhb_weak_v1.json"  # 仅排除 3 个 lhb 弱因子
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all

@@ -1,40 +1,74 @@
-"""一致预期修正因子模块
+"""一致预期修正因子模块（v2 重做）
 
-基于 report_rc（一致预期研报）按 report_date 聚合构建时序修正信号。
-当前已有一致预期基础因子（cons_eps_mean_fy1 等），本模块补充时间序列维度的
-"修正方向/加速度/分歧度"信号——这些是 A 股实证中最有效的负向预警因子。
+基于 report_rc（一致预期研报）按 report_date 构建时序修正信号，与基础一致预期因子互补：
+基础因子给出水平状态，本模块给出修正速度/分歧变化/覆盖与评级边际变化。
+
+v2 相对 v1 的经济语义修正：
+- EPS 源列改回 ``eps``（v1 误用 ``np`` 净利润，且未区分预测期），并按预测财年
+  （FY）分组，优先 FY1、回退 FY0，杜绝多预测期混合。
+- ``cons_eps_dispersion`` 改为"同日同 FY 研报级分歧度"的时间平均
+  （v1 先按报告日聚合再取窗口 std，衡量的是预测随时间的波动，并非分析师分歧）。
+- ``cons_eps_revision_accel`` 改为按报告日真实日历时间的一阶斜率
+  （v1 按研报行序号拟合，与时间无关）。
+- ``cons_rating_upgrade_ratio`` 改为真实读取 ``rating`` 列
+  （v1 是目标价变化 >= 2% 的 0/1 别名）。
+- 删除 ``cons_revision_target_upside``（与基础 ``cons_target_upside`` 高度重合）。
+- 输出截面 1%/99% winsorize，避免极端值牵引下游 Z-Score。
+- 新增哨兵列 ``cons_revision_schema_v2``，值恒为 schema 版本号，
+  用于让旧语义缓存（缺该列）在 ensure/schema 校验下强制重建。
+
+保留 v1 契约：输出列名不变（存量模型兼容）、报告日锚定 90 日窗口、
+状态保鲜 365 日、``cons_revision_freshness_days`` freshness 与事件衰减、
+同一研报多预测期行不放大覆盖计数。
 
 核心信号：
-- EPS 修正加速度：修正本身在加速还是减速
-- 分析师分歧度：预测标准差/均值（>0.3 提示不确定性高）
-- 分歧度变化：分歧度扩大 = 风险上升
-- 修正目标价上行空间：当前价距修正窗口目标价的距离
-- 研报覆盖数量变化：撤出覆盖 = 强烈负向（列名保留 analyst 以兼容旧模型）
-- 评级上调比例：边际情绪改善
+- cons_eps_revision_accel  : EPS 修正速度（近 90 日按真实日历天数斜率，锚定年 FY1 优先）
+- cons_eps_dispersion      : 分析师 EPS 分歧度（同日同财年研报级，窗口均值）
+- cons_eps_dispersion_chg  : 分歧度变化（近 30 日 vs 此前 90 日）
+- cons_target_upside_chg   : 目标价均值变化（近 30 日 / 此前 90 日 - 1）
+- cons_analyst_count_chg   : 研报覆盖数变化（近 30 日 vs 此前 90 日折算，研报身份去重）
+- cons_rating_upgrade_ratio: 评级上调占比（近 30 日评级分高于此前 90 日均值的研报占比）
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
 from ..common.date_utils import normalize_series_to_yyyymmdd
-from ..data.report_rc import deduplicate_report_rc
+from ..data.report_rc import deduplicate_report_rc, report_rc_key_columns
+from .consensus import parse_quarter_year, rating_to_score
 
-# 一致预期修正因子输出列
+# 一致预期修正因子输出列（六值列；目标价水平列 v2 起移除）
 CONSENSUS_REVISION_COLS = [
-    "cons_eps_revision_accel",  # EPS 修正加速度（修正变化率）
-    "cons_eps_dispersion",  # 分析师 EPS 预测分歧度
-    "cons_eps_dispersion_chg",  # 分歧度月度变化
-    "cons_revision_target_upside",  # 修正窗口目标价上行空间
-    "cons_target_upside_chg",  # 目标价上行空间月度变化
-    "cons_analyst_count_chg",  # 研报覆盖数月度变化（兼容旧列名）
-    "cons_rating_upgrade_ratio",  # 近 30 日评级上调占比
+    "cons_eps_revision_accel",  # EPS 修正速度（近 90 日按日历时间斜率）
+    "cons_eps_dispersion",  # 分析师 EPS 分歧度（同日同 FY 研报级）
+    "cons_eps_dispersion_chg",  # 分歧度变化（近 30 日 vs 此前 90 日）
+    "cons_target_upside_chg",  # 目标价均值变化（近 30 日 / 此前 90 日 - 1）
+    "cons_analyst_count_chg",  # 研报覆盖数变化（近 30 日 vs 此前 90 日折算）
+    "cons_rating_upgrade_ratio",  # 评级上调占比（真实读取 rating）
 ]
 
 CONSENSUS_REVISION_FRESHNESS_COL = "cons_revision_freshness_days"
+CONSENSUS_REVISION_VERSION_COL = "cons_revision_schema_v2"
+CONSENSUS_REVISION_SCHEMA_VERSION = 2
+
 _MAX_STATE_AGE_DAYS = 365
+_RECENT_WINDOW_DAYS = 90
+_RECENT30_WINDOW_DAYS = 30
+_BASELINE_START_OFFSET_DAYS = -120
+_BASELINE_END_OFFSET_DAYS = -30
+
+_WINSOR_LIMITS = (0.01, 0.99)
+_WINSOR_MIN_VALID = 20
+
+_MIN_RECENT_REPORT_ROWS = 3
+_MIN_DISPERSION_DAYS = 3
+_MIN_DISPERSION_REPORTS_PER_DAY = 2
+_MIN_ACCEL_DAYS = 5
+_MIN_TARGET_EARLIER_VALID = 3
+_MIN_RATING_EARLIER_VALID = 3
 
 
 def _safe_nanstd(values: np.ndarray, ddof: int = 1) -> float:
@@ -52,120 +86,208 @@ def _safe_nanstd(values: np.ndarray, ddof: int = 1) -> float:
     return float(np.nanstd(valid_values, ddof=ddof))
 
 
+def _safe_nanmean(values: np.ndarray) -> float:
+    """对全 NaN/空数组安全求均值，避免 RuntimeWarning。"""
+    if values is None or values.size == 0:
+        return np.nan
+    mask = ~np.isnan(values)
+    if not np.any(mask):
+        return np.nan
+    return float(values[mask].mean())
+
+
 def _build_anchor_metrics(
     report_ord: np.ndarray,
+    eps_vals: np.ndarray,
+    q_year_vals: np.ndarray,
+    ord_days_vals: np.ndarray,
     coverage_ord: np.ndarray,
-    eps_vals: Optional[np.ndarray],
-    target_vals: Optional[np.ndarray],
+    target_ord: np.ndarray,
+    target_vals: np.ndarray,
+    rating_ord: np.ndarray,
+    rating_vals: np.ndarray,
     anchor_ord: int,
 ) -> Optional[Dict[str, float]]:
-    """按最新研报日锚定窗口，构造一只股票的修正状态。"""
-    recent_start_ord = int(_offset_date(str(anchor_ord), -90))
-    earlier_start_ord = int(_offset_date(str(anchor_ord), -120))
-    earlier_end_ord = int(_offset_date(str(anchor_ord), -30))
+    """按最新研报日锚定窗口，构造一只股票的修正状态。
+
+    Args:
+        report_ord: 研报行级报告日期（含多预测期行，int32 升序）
+        eps_vals: 研报行级 eps 预测值（可为 NaN）
+        q_year_vals: 研报行级绝对预测财年（quarter 解析年份；无法解析为 -99）
+        ord_days_vals: 研报行级报告日距 epoch 的天数（真实日历天数，供斜率回归）
+        coverage_ord: 研报身份去重后的报告日期（升序，覆盖计数专用）
+        target_ord: 研报身份去重后的报告日期（升序，目标价专用）
+        target_vals: 研报级目标价（与 target_ord 对齐）
+        rating_ord: 研报身份去重后的报告日期（升序，评级专用）
+        rating_vals: 研报级评级得分（与 rating_ord 对齐）
+        anchor_ord: 最新可见研报日期
+    """
+    recent_start_ord = int(_offset_date(str(anchor_ord), -_RECENT_WINDOW_DAYS))
+    recent30_start_ord = int(_offset_date(str(anchor_ord), -_RECENT30_WINDOW_DAYS))
+    earlier_start_ord = int(_offset_date(str(anchor_ord), _BASELINE_START_OFFSET_DAYS))
+    earlier_end_ord = int(_offset_date(str(anchor_ord), _BASELINE_END_OFFSET_DAYS))
 
     recent_l = int(np.searchsorted(report_ord, recent_start_ord, side="left"))
     recent_r = int(np.searchsorted(report_ord, anchor_ord, side="right"))
-    recent_count = recent_r - recent_l
-    if recent_count < 3:
+    if recent_r - recent_l < _MIN_RECENT_REPORT_ROWS:
         return None
 
-    earlier_l = int(np.searchsorted(report_ord, earlier_start_ord, side="left"))
-    earlier_r = int(np.searchsorted(report_ord, earlier_end_ord, side="right"))
-    earlier_count = max(earlier_r - earlier_l, 0)
+    # 选择目标绝对财年：锚定报告年的 FY1（anchor_year+1）与 FY0（anchor_year）按
+    # 窗口内有效 eps 覆盖报告日数多者优先（持平取 FY1）。绝对财年杜绝跨年报告的不同
+    # FY1（如 2025 与 2026 财年）被混入同一序列产生虚假修正；日数门槛对齐分歧度
+    # 最低要求（3 个报告日），避免少量样本压掉充足回退财年。
+    anchor_year = int(anchor_ord // 10000)
+
+    def _fy_report_days(slice_l: int, slice_r: int, fy_year: int) -> int:
+        mask = (q_year_vals[slice_l:slice_r] == fy_year) & ~np.isnan(eps_vals[slice_l:slice_r])
+        if mask.sum() == 0:
+            return 0
+        return int(np.unique(report_ord[slice_l:slice_r][mask]).size)
+
+    fy1_days = _fy_report_days(recent_l, recent_r, anchor_year + 1)
+    fy0_days = _fy_report_days(recent_l, recent_r, anchor_year)
+    if fy1_days >= _MIN_DISPERSION_DAYS and fy1_days >= fy0_days:
+        target_fy_year = anchor_year + 1
+    elif fy0_days >= _MIN_DISPERSION_DAYS:
+        target_fy_year = anchor_year
+    else:
+        target_fy_year = None
+
     row: Dict[str, float] = {}
 
-    if eps_vals is not None:
-        recent_eps = eps_vals[recent_l:recent_r]
-        eps_mean = _safe_nanmean(recent_eps)
-        recent_std = _safe_nanstd(recent_eps, ddof=1)
-        if (
-            recent_count >= 5
-            and not np.isnan(recent_std)
-            and recent_std > 0
-            and abs(eps_mean) > 1e-6
-        ):
-            row["cons_eps_dispersion"] = float(recent_std / abs(eps_mean))
-        else:
-            row["cons_eps_dispersion"] = np.nan
+    def _eps_dispersion_in_slice(slice_l: int, slice_r: int) -> Optional[float]:
+        """窗口内同日同财年研报级分歧度的时间平均。"""
+        if target_fy_year is None or slice_r - slice_l <= 0:
+            return None
+        mask = (q_year_vals[slice_l:slice_r] == target_fy_year) & ~np.isnan(
+            eps_vals[slice_l:slice_r]
+        )
+        if mask.sum() == 0:
+            return None
+        eps_v = eps_vals[slice_l:slice_r][mask]
+        ord_v = report_ord[slice_l:slice_r][mask]
+        disps: List[float] = []
+        for day in np.unique(ord_v):
+            day_vals = eps_v[ord_v == day]
+            if day_vals.size < _MIN_DISPERSION_REPORTS_PER_DAY:
+                continue
+            day_mean = float(np.mean(day_vals))
+            day_std = float(np.std(day_vals, ddof=1))
+            if abs(day_mean) > 1e-6 and day_std > 0:
+                disps.append(day_std / abs(day_mean))
+        if len(disps) < _MIN_DISPERSION_DAYS:
+            return None
+        return float(np.mean(disps))
 
-        if recent_count >= 10:
-            mask = ~np.isnan(recent_eps)
-            if mask.sum() >= 3:
-                x = np.arange(recent_eps.size, dtype=float)
-                slope = np.polyfit(x[mask], recent_eps[mask], 1)[0]
-                eps_masked_mean = _safe_nanmean(recent_eps[mask])
-                row["cons_eps_revision_accel"] = float(slope / (abs(eps_masked_mean) + 1e-6))
-            else:
-                row["cons_eps_revision_accel"] = np.nan
-        else:
-            row["cons_eps_revision_accel"] = np.nan
+    def _eps_accel_in_slice(slice_l: int, slice_r: int) -> Optional[float]:
+        """窗口内按真实日历天数拟合 EPS 预测中值的一阶斜率。"""
+        if target_fy_year is None or slice_r - slice_l < _MIN_ACCEL_DAYS:
+            return None
+        mask = (q_year_vals[slice_l:slice_r] == target_fy_year) & ~np.isnan(
+            eps_vals[slice_l:slice_r]
+        )
+        if mask.sum() < _MIN_ACCEL_DAYS:
+            return None
+        eps_v = eps_vals[slice_l:slice_r][mask]
+        days_v = ord_days_vals[slice_l:slice_r][mask]
+        by_day: Dict[int, List[float]] = {}
+        for day, val in zip(days_v.tolist(), eps_v.tolist()):
+            by_day.setdefault(int(day), []).append(float(val))
+        days = np.array(sorted(by_day.keys()), dtype=float)
+        medians = np.array([float(np.median(by_day[int(d)])) for d in days], dtype=float)
+        if medians.size < _MIN_ACCEL_DAYS:
+            return None
+        mean_val = float(np.mean(medians))
+        if abs(mean_val) < 1e-9:
+            return None
+        slope = float(np.polyfit(days, medians, 1)[0])
+        return slope / abs(mean_val)
 
-        if earlier_count >= 5:
-            earlier_eps = eps_vals[earlier_l:earlier_r]
-            earlier_std = _safe_nanstd(earlier_eps, ddof=1)
-            earlier_mean = _safe_nanmean(earlier_eps)
-            if (
-                not np.isnan(earlier_std)
-                and earlier_std > 0
-                and not np.isnan(earlier_mean)
-                and abs(earlier_mean) > 1e-6
-            ):
-                earlier_disp = earlier_std / abs(earlier_mean)
-            else:
-                earlier_disp = np.nan
-            current_disp = row["cons_eps_dispersion"]
-            row["cons_eps_dispersion_chg"] = (
-                float(current_disp - earlier_disp)
-                if not np.isnan(current_disp) and not np.isnan(earlier_disp)
-                else np.nan
+    # EPS 分歧度与修正速度（近 90 日窗口）
+    row["cons_eps_dispersion"] = _eps_dispersion_in_slice(recent_l, recent_r)
+    row["cons_eps_revision_accel"] = _eps_accel_in_slice(recent_l, recent_r)
+
+    # 分歧度变化：近 30 日 vs 此前 90 日。earlier 终点用 side="left"（严格小于
+    # anchor-30），与 recent30 起点不重叠，避免第 -30 日被重复计入两侧窗口。
+    recent30_l = int(np.searchsorted(report_ord, recent30_start_ord, side="left"))
+    earlier_l = int(np.searchsorted(report_ord, earlier_start_ord, side="left"))
+    earlier_r = int(np.searchsorted(report_ord, earlier_end_ord, side="left"))
+    current_disp = _eps_dispersion_in_slice(recent30_l, recent_r)
+    earlier_disp = _eps_dispersion_in_slice(earlier_l, earlier_r)
+    row["cons_eps_dispersion_chg"] = (
+        float(current_disp - earlier_disp)
+        if current_disp is not None and earlier_disp is not None
+        else np.nan
+    )
+
+    # 目标价均值变化：近 30 日 vs 此前 90 日（研报级，同研报多预测期行不重复加权）
+    target_recent_l = int(np.searchsorted(target_ord, recent30_start_ord, side="left"))
+    target_recent_r = int(np.searchsorted(target_ord, anchor_ord, side="right"))
+    target_earlier_l = int(np.searchsorted(target_ord, earlier_start_ord, side="left"))
+    target_earlier_r = int(np.searchsorted(target_ord, earlier_end_ord, side="left"))
+    recent_target = target_vals[target_recent_l:target_recent_r]
+    earlier_target = target_vals[target_earlier_l:target_earlier_r]
+    recent_target_valid = recent_target[~np.isnan(recent_target)]
+    earlier_target_valid = earlier_target[~np.isnan(earlier_target)]
+    if recent_target_valid.size >= 1 and earlier_target_valid.size >= _MIN_TARGET_EARLIER_VALID:
+        earlier_target_mean = float(np.mean(earlier_target_valid))
+        if abs(earlier_target_mean) > 1e-6:
+            row["cons_target_upside_chg"] = (
+                float(np.mean(recent_target_valid)) / earlier_target_mean - 1.0
             )
-        else:
-            row["cons_eps_dispersion_chg"] = np.nan
-    else:
-        row["cons_eps_dispersion"] = np.nan
-        row["cons_eps_revision_accel"] = np.nan
-        row["cons_eps_dispersion_chg"] = np.nan
-
-    target_mean = np.nan
-    if target_vals is not None:
-        recent_target = target_vals[recent_l:recent_r]
-        target_mean = _safe_nanmean(recent_target)
-        if earlier_count >= 3:
-            earlier_target = target_vals[earlier_l:earlier_r]
-            earlier_target_mean = _safe_nanmean(earlier_target)
-            if (
-                not np.isnan(target_mean)
-                and not np.isnan(earlier_target_mean)
-                and abs(earlier_target_mean) > 1e-6
-            ):
-                row["cons_target_upside_chg"] = float(target_mean / earlier_target_mean - 1.0)
-            else:
-                row["cons_target_upside_chg"] = np.nan
         else:
             row["cons_target_upside_chg"] = np.nan
     else:
         row["cons_target_upside_chg"] = np.nan
-    row["_target_mean"] = target_mean
 
-    recent_report_l = int(np.searchsorted(coverage_ord, recent_start_ord, side="left"))
-    recent_report_r = int(np.searchsorted(coverage_ord, anchor_ord, side="right"))
-    earlier_report_l = int(np.searchsorted(coverage_ord, earlier_start_ord, side="left"))
-    earlier_report_r = int(np.searchsorted(coverage_ord, earlier_end_ord, side="right"))
-    recent_report_count = recent_report_r - recent_report_l
-    earlier_report_count = max(earlier_report_r - earlier_report_l, 0)
-    compare_earlier = earlier_report_count if earlier_report_count > 0 else recent_report_count
-    row["cons_analyst_count_chg"] = float(
-        (recent_report_count - compare_earlier) / max(compare_earlier, 1)
-    )
+    # 研报覆盖数变化：近 30 日 vs 此前 90 日（折算为 30 日等效）
+    cov_recent30_l = int(np.searchsorted(coverage_ord, recent30_start_ord, side="left"))
+    cov_recent30_r = int(np.searchsorted(coverage_ord, anchor_ord, side="right"))
+    cov_earlier_l = int(np.searchsorted(coverage_ord, earlier_start_ord, side="left"))
+    cov_earlier_r = int(np.searchsorted(coverage_ord, earlier_end_ord, side="left"))
+    recent30_count = cov_recent30_r - cov_recent30_l
+    baseline_equiv = max(cov_earlier_r - cov_earlier_l, 0) / 3.0
+    if baseline_equiv > 0:
+        row["cons_analyst_count_chg"] = float((recent30_count - baseline_equiv) / baseline_equiv)
+    else:
+        row["cons_analyst_count_chg"] = float(recent30_count) if recent30_count > 0 else 0.0
 
-    target_upside_chg = row["cons_target_upside_chg"]
-    row["cons_rating_upgrade_ratio"] = (
-        float(1.0 if target_upside_chg > 0.02 else 0.0)
-        if not np.isnan(target_upside_chg)
-        else np.nan
-    )
+    # 评级上调占比：真实读取 rating，基线为此前 90 日研报级评分均值
+    rating_recent30_l = int(np.searchsorted(rating_ord, recent30_start_ord, side="left"))
+    rating_recent30_r = int(np.searchsorted(rating_ord, anchor_ord, side="right"))
+    rating_earlier_l = int(np.searchsorted(rating_ord, earlier_start_ord, side="left"))
+    rating_earlier_r = int(np.searchsorted(rating_ord, earlier_end_ord, side="left"))
+    earlier_scores = rating_vals[rating_earlier_l:rating_earlier_r]
+    recent_scores = rating_vals[rating_recent30_l:rating_recent30_r]
+    earlier_scores_valid = earlier_scores[~np.isnan(earlier_scores)]
+    recent_scores_valid = recent_scores[~np.isnan(recent_scores)]
+    if earlier_scores_valid.size >= _MIN_RATING_EARLIER_VALID and recent_scores_valid.size >= 1:
+        baseline_score = float(np.mean(earlier_scores_valid))
+        upgrade_count = int((recent_scores_valid > baseline_score).sum())
+        row["cons_rating_upgrade_ratio"] = float(upgrade_count / recent_scores_valid.size)
+    else:
+        row["cons_rating_upgrade_ratio"] = np.nan
+
     return row
+
+
+def _winsorize_cross_section(
+    day_df: pd.DataFrame,
+    cols: List[str],
+    limits: Tuple[float, float] = _WINSOR_LIMITS,
+) -> pd.DataFrame:
+    """按当日股票截面对指定列做 1%/99% winsorize，NaN 保持不动。"""
+    result = day_df.copy()
+    for col in cols:
+        if col not in result.columns:
+            continue
+        values = result[col].to_numpy(dtype=float, copy=True)
+        valid = values[~np.isnan(values)]
+        if valid.size < _WINSOR_MIN_VALID:
+            continue
+        lower, upper = float(np.quantile(valid, limits[0])), float(np.quantile(valid, limits[1]))
+        result[col] = np.clip(values, lower, upper)
+    return result
 
 
 def build_consensus_revision_lookup_by_date(
@@ -178,11 +300,9 @@ def build_consensus_revision_lookup_by_date(
     对每只股票按最新研报日锚定最近 90 日窗口计算修正状态，最多保留 365 日。
 
     Args:
-        report_rc_raw: report_rc 原始数据，需包含完整研报身份列、quarter，
-                   以及 rec_fore_Netprofit/rec_target 或 np/目标价字段
-        trading_dates: 交易日列表
-        daily_data_lookup: 日线数据查询表 {trade_date: DataFrame}，
-                          用于获取未复权 close 计算目标价上行空间
+        report_rc_raw: report_rc 原始数据，需包含完整研报身份列、quarter 与 eps
+        trading_dates: 交易日列表（YYYYMMDD 字符串）
+        daily_data_lookup: v2 起不再使用（已移除目标价水平列），仅保留参数兼容
 
     Returns:
         Dict[str, DataFrame]: {trade_date -> DataFrame(ts_code, cons_eps_revision_accel, ...)}
@@ -194,114 +314,126 @@ def build_consensus_revision_lookup_by_date(
     df = report_rc_raw.copy()
     df["report_date"] = normalize_series_to_yyyymmdd(df["report_date"])
     df = df[df["report_date"].astype("string").str.fullmatch(r"\d{8}", na=False)].copy()
+
+    if "eps" not in df.columns:
+        raise ValueError(
+            "report_rc 缺少 eps 列，无法构建一致预期修正因子（v2 不回退净利润口径）。"
+            "请使用 --download report_rc --force 重下目标区间"
+        )
+
     df = deduplicate_report_rc(
         df,
         include_quarter=True,
         require_full_identity=True,
     )
+
+    # ── 研报级字段（同一研报多预测期行取均值，保证研报权重为 1）──
+    df["eps"] = pd.to_numeric(df["eps"], errors="coerce")
+    max_price = (
+        pd.to_numeric(df["max_price"], errors="coerce")
+        if "max_price" in df.columns
+        else pd.Series(np.nan, index=df.index)
+    )
+    min_price = (
+        pd.to_numeric(df["min_price"], errors="coerce")
+        if "min_price" in df.columns
+        else pd.Series(np.nan, index=df.index)
+    )
+    df["_target_price"] = pd.concat([max_price, min_price], axis=1).mean(axis=1, skipna=True)
+    if "rating" in df.columns:
+        df["_rating_score"] = df["rating"].map(rating_to_score)
+    else:
+        df["_rating_score"] = np.nan
+
+    # 财年定位: 解析研报中 quarter 的预测年份，供 EPS 按绝对财年分组过滤。
+    # 锚定报告年的 FY1（anchor_year+1）优先、FY0（anchor_year）回退，见 _build_anchor_metrics。
+    if "quarter" in df.columns:
+        df["_q_year"] = df["quarter"].map(parse_quarter_year)
+    else:
+        df["_q_year"] = np.nan
+
+    identity_key_cols = report_rc_key_columns(df, include_quarter=False)
+    identity_group_keys = [c for c in identity_key_cols if c in df.columns]
+    if identity_group_keys:
+        identity_group = df.groupby(identity_group_keys, sort=False)
+        df["_target_price"] = identity_group["_target_price"].transform("mean")
+        df["_rating_score"] = identity_group["_rating_score"].transform("mean")
     report_identity_df = deduplicate_report_rc(df, include_quarter=False)
 
-    # 兼容两套 report_rc 口径：
-    # 1) rec_fore_Netprofit / rec_target（部分环境）
-    # 2) np / tp + max_price/min_price（当前主口径）
-    eps_source_col = _pick_first_existing_col(df, ["rec_fore_Netprofit", "np", "tp"])
-    target_source_col = _pick_first_existing_col(df, ["rec_target"])
-
-    # 若无单列目标价，使用 max/min 目标价中位作为回退口径
-    target_proxy_col = None
-    if target_source_col is None and ("max_price" in df.columns or "min_price" in df.columns):
-        max_price = pd.to_numeric(df.get("max_price"), errors="coerce")
-        min_price = pd.to_numeric(df.get("min_price"), errors="coerce")
-        target_proxy_col = "target_price_proxy"
-        if "max_price" in df.columns and "min_price" in df.columns:
-            df[target_proxy_col] = pd.concat([max_price, min_price], axis=1).mean(
-                axis=1,
-                skipna=True,
-            )
-        elif "max_price" in df.columns:
-            df[target_proxy_col] = max_price
-        else:
-            df[target_proxy_col] = min_price
-
-    # 按 ts_code + report_date 分组聚合每日研报
-    # 对同一日多份研报取均值
-    agg_cols = {}
-    if eps_source_col is not None:
-        df[eps_source_col] = pd.to_numeric(df[eps_source_col], errors="coerce")
-        agg_cols[eps_source_col] = ["mean", "std", "count"]
-    if target_source_col is not None:
-        df[target_source_col] = pd.to_numeric(df[target_source_col], errors="coerce")
-        agg_cols[target_source_col] = "mean"
-    elif target_proxy_col is not None:
-        agg_cols[target_proxy_col] = "mean"
-
-    if not agg_cols:
-        logger.warning("report_rc 缺少净利润预测与目标价相关列，无法构建一致预期修正因子")
+    if len(report_identity_df) == 0:
+        logger.warning("report_rc 去重后为空，跳过一致预期修正因子构建")
         return {}
 
-    logger.info(
-        "一致预期修正字段映射: eps={}, target={}",
-        eps_source_col if eps_source_col is not None else "缺失",
-        target_source_col if target_source_col is not None else (target_proxy_col or "缺失"),
+    # 行级与研报级数组都必须按 report_date 升序：searchsorted 窗口定位依赖有序性，
+    # 去重结果继承原始分区顺序，必须显式排序，否则未来研报会被错误计入历史窗口（前视）。
+    df = df.sort_values(["ts_code", "report_date"]).reset_index(drop=True)
+    df["_report_ord"] = df["report_date"].astype(np.int32)
+    df["_ord_days"] = (
+        pd.to_datetime(df["report_date"], format="%Y%m%d", errors="coerce")
+        - pd.Timestamp("1970-01-01")
+    ).dt.days
+    report_identity_df = report_identity_df.sort_values(["ts_code", "report_date"]).reset_index(
+        drop=True
     )
+    report_identity_df["_ident_ord"] = report_identity_df["report_date"].astype(np.int32)
 
-    daily = df.groupby(["ts_code", "report_date"], as_index=False).agg(agg_cols)
-    # 展平多级列名
-    daily.columns = ["_".join(c).strip("_") if isinstance(c, tuple) else c for c in daily.columns]
+    sorted_trading_dates = sorted({d for d in trading_dates if d is not None})
+    if not sorted_trading_dates:
+        return {}
 
-    # 重命名为简洁列名
-    rename_map = {}
-    if eps_source_col is not None:
-        rename_map.update(
-            {
-                f"{eps_source_col}_mean": "eps_pred_mean",
-                f"{eps_source_col}_std": "eps_pred_std",
-                f"{eps_source_col}_count": "analyst_count",
-            }
-        )
-    if target_source_col is not None:
-        rename_map[f"{target_source_col}_mean"] = "target_price"
-    elif target_proxy_col is not None:
-        rename_map[f"{target_proxy_col}_mean"] = "target_price"
-    daily = daily.rename(columns={k: v for k, v in rename_map.items() if k in daily.columns})
-
-    daily = daily.sort_values(["ts_code", "report_date"])
+    # 预计算研报身份去重后的研报级数组（覆盖/目标价/评级），并行数组与日期同步排序
+    ident_by_stock = {}
+    for ts_code, group in report_identity_df.groupby("ts_code", sort=False):
+        ord_arr = group["_ident_ord"].to_numpy(dtype=np.int32)
+        target_arr = pd.to_numeric(group["_target_price"], errors="coerce").to_numpy(dtype=float)
+        rating_arr = pd.to_numeric(group["_rating_score"], errors="coerce").to_numpy(dtype=float)
+        order = np.argsort(ord_arr, kind="stable")
+        ord_arr = ord_arr[order]
+        target_arr = target_arr[order]
+        rating_arr = rating_arr[order]
+        ident_by_stock[str(ts_code)] = {
+            "coverage_ord": ord_arr,
+            "target_ord": ord_arr,
+            "target_vals": target_arr,
+            "rating_ord": ord_arr,
+            "rating_vals": rating_arr,
+        }
 
     # 仅保留可能有数据命中的交易日范围，避免全历史无效遍历
-    min_report_date = str(daily["report_date"].min())[:8]
-    max_report_date = str(daily["report_date"].max())[:8]
+    min_report_ord = int(df["_report_ord"].min())
+    max_report_ord = int(df["_report_ord"].max())
     effective_trade_dates = [
         d
-        for d in sorted(set(trading_dates))
-        if d >= min_report_date and d <= _offset_date(max_report_date, _MAX_STATE_AGE_DAYS)
+        for d in sorted_trading_dates
+        if min_report_ord <= int(d) <= int(_offset_date(str(max_report_ord), _MAX_STATE_AGE_DAYS))
     ]
-
     if not effective_trade_dates:
         logger.info("一致预期修正日频查询表构建完成: 0 个交易日有数据（交易日不在报告覆盖范围）")
         return {}
 
     logger.info(
-        f"一致预期修正构建: {daily['ts_code'].nunique()} 只股票, "
-        f"{daily['report_date'].nunique()} 个报告日, "
+        f"一致预期修正构建: {df['ts_code'].nunique()} 只股票, "
+        f"{df['report_date'].nunique()} 个报告日, "
         f"有效交易日 {len(effective_trade_dates)}/{len(trading_dates)}"
     )
 
-    # 预计算交易日与唯一研报日期，避免把同一报告日误当成一位分析师。
     effective_trade_ord = np.array([int(d) for d in effective_trade_dates], dtype=np.int32)
-    coverage_by_stock = {
-        str(ts_code): group["report_date"].astype(np.int32).sort_values().to_numpy()
-        for ts_code, group in report_identity_df.groupby("ts_code", sort=False)
-    }
-    close_lookup = _build_close_lookup(daily_data_lookup, effective_trade_dates)
-
-    # 改为按股票遍历，并仅处理该股票的活跃交易日期窗口
     result_rows_by_date: Dict[str, List[dict]] = {}
-    grouped_by_stock = list(daily.groupby("ts_code", sort=False))
+    grouped_by_stock = list(df.groupby("ts_code", sort=False))
 
     for stock_idx, (ts_code, grp) in enumerate(grouped_by_stock, 1):
-        report_ord = grp["report_date"].astype(np.int32).to_numpy()
-        if report_ord.size == 0:
+        report_ord = grp["_report_ord"].to_numpy(dtype=np.int32)
+        eps_vals = pd.to_numeric(grp["eps"], errors="coerce").to_numpy(dtype=float)
+        q_year_vals = grp["_q_year"].fillna(-99).astype(np.int32).to_numpy(dtype=np.int32)
+        ord_days_vals = grp["_ord_days"].to_numpy(dtype=float)
+        ident = ident_by_stock.get(str(ts_code))
+        if ident is None:
             continue
+        coverage_ord = ident["coverage_ord"]
+        target_ord = ident["target_ord"]
+        target_vals = ident["target_vals"]
+        rating_ord = ident["rating_ord"]
+        rating_vals = ident["rating_vals"]
 
         stock_start_idx = int(np.searchsorted(effective_trade_ord, report_ord[0], side="left"))
         stock_end_cutoff = int(_offset_date(str(report_ord[-1]), _MAX_STATE_AGE_DAYS))
@@ -310,17 +442,6 @@ def build_consensus_revision_lookup_by_date(
         if stock_start_idx >= stock_end_idx:
             continue
 
-        eps_vals = (
-            pd.to_numeric(grp["eps_pred_mean"], errors="coerce").to_numpy(dtype=float)
-            if "eps_pred_mean" in grp.columns
-            else None
-        )
-        target_vals = (
-            pd.to_numeric(grp["target_price"], errors="coerce").to_numpy(dtype=float)
-            if "target_price" in grp.columns
-            else None
-        )
-        coverage_ord = coverage_by_stock.get(str(ts_code), report_ord)
         anchor_cache: Dict[int, Optional[Dict[str, float]]] = {}
 
         for td_idx in range(stock_start_idx, stock_end_idx):
@@ -335,9 +456,14 @@ def build_consensus_revision_lookup_by_date(
             if anchor_ord not in anchor_cache:
                 anchor_cache[anchor_ord] = _build_anchor_metrics(
                     report_ord,
-                    coverage_ord,
                     eps_vals,
+                    q_year_vals,
+                    ord_days_vals,
+                    coverage_ord,
+                    target_ord,
                     target_vals,
+                    rating_ord,
+                    rating_vals,
                     anchor_ord,
                 )
             anchor_metrics = anchor_cache[anchor_ord]
@@ -345,15 +471,9 @@ def build_consensus_revision_lookup_by_date(
                 continue
 
             row = dict(anchor_metrics)
-            target_mean = row.pop("_target_mean")
-            close = close_lookup.get(trade_date, {}).get(str(ts_code), np.nan)
-            row["cons_revision_target_upside"] = (
-                float(target_mean / close - 1.0)
-                if not np.isnan(target_mean) and not np.isnan(close) and close > 0
-                else np.nan
-            )
             row["ts_code"] = ts_code
             row[CONSENSUS_REVISION_FRESHNESS_COL] = freshness_days
+            row[CONSENSUS_REVISION_VERSION_COL] = CONSENSUS_REVISION_SCHEMA_VERSION
 
             result_rows_by_date.setdefault(trade_date, []).append(row)
 
@@ -368,6 +488,10 @@ def build_consensus_revision_lookup_by_date(
     result_dict: Dict[str, pd.DataFrame] = {
         d: pd.DataFrame(rows) for d, rows in result_rows_by_date.items() if rows
     }
+
+    # 截面 winsorize：按当日股票截面裁剪极端值，降低下游 Z-Score 被牵引的风险
+    for day, day_df in result_dict.items():
+        result_dict[day] = _winsorize_cross_section(day_df, list(CONSENSUS_REVISION_COLS))
 
     hit_dates = len(result_dict)
     logger.info(f"一致预期修正日频查询表构建完成: {hit_dates} 个交易日有数据")
@@ -389,49 +513,3 @@ def _days_between(date_a: str, date_b: str) -> int:
     a = datetime.strptime(date_a[:8], "%Y%m%d")
     b = datetime.strptime(date_b[:8], "%Y%m%d")
     return abs((b - a).days)
-
-
-def _pick_first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    """按优先级返回第一个存在的列名。"""
-    for col in candidates:
-        if col in df.columns:
-            return col
-    return None
-
-
-def _build_close_lookup(
-    daily_data_lookup: Optional[Dict[str, pd.DataFrame]],
-    trade_dates: List[str],
-) -> Dict[str, Dict[str, float]]:
-    """构建未复权 close 的日内哈希索引。"""
-    if daily_data_lookup is None:
-        return {}
-
-    lookup: Dict[str, Dict[str, float]] = {}
-    for trade_date in trade_dates:
-        price_df = daily_data_lookup.get(trade_date)
-        if price_df is None or len(price_df) == 0:
-            continue
-        if "ts_code" not in price_df.columns or "close" not in price_df.columns:
-            continue
-
-        ts_series = price_df["ts_code"].astype(str)
-        close_series = pd.to_numeric(price_df["close"], errors="coerce")
-        day_map: Dict[str, float] = {}
-        for ts_code, close in zip(ts_series, close_series):
-            if not np.isnan(close):
-                day_map[str(ts_code)] = float(close)
-        if day_map:
-            lookup[trade_date] = day_map
-
-    return lookup
-
-
-def _safe_nanmean(values: np.ndarray) -> float:
-    """对全 NaN/空数组安全求均值，避免 RuntimeWarning。"""
-    if values is None or values.size == 0:
-        return np.nan
-    mask = ~np.isnan(values)
-    if not np.any(mask):
-        return np.nan
-    return float(values[mask].mean())

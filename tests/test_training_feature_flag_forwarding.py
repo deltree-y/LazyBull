@@ -42,6 +42,23 @@ def test_consensus_revision_feature_flag_requires_complete_built_schema():
         )
 
 
+def test_consensus_revision_feature_flag_rejects_all_nan_sentinel():
+    """哨兵列全 NaN（未构建或混入旧语义分区）必须失败，不能静默退化为零因子。"""
+    from src.lazybull.ml.train_core.constants import CONSENSUS_REVISION_FEATURE_COLUMNS
+
+    df = _sample_train_df().copy()
+    for col in CONSENSUS_REVISION_FEATURE_COLUMNS:
+        df[col] = 0.0
+    df["cons_revision_schema_v2"] = float("nan")
+
+    with pytest.raises(ValueError, match="哨兵列"):
+        prepare_training_data(
+            df,
+            label_column="neu_y_ret_20",
+            enable_consensus_revision_features=True,
+        )
+
+
 def test_walk_forward_train_window_forwards_new_feature_flags(monkeypatch):
     captured = {}
 

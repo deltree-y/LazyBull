@@ -135,12 +135,11 @@ CASHFLOW_QUALITY_FEATURE_COLUMNS = [
 ]
 
 CONSENSUS_REVISION_FEATURE_COLUMNS = [
-    "zscore_cons_eps_revision_accel",  # EPS 修正加速度
-    "zscore_cons_eps_dispersion",  # 分析师分歧度（负向预警）
-    "zscore_cons_eps_dispersion_chg",  # 分歧度月度变化
-    "zscore_cons_revision_target_upside",  # 修正窗口目标价上行空间
-    "zscore_cons_target_upside_chg",  # 目标价上行空间月度变化
-    "zscore_cons_analyst_count_chg",  # 覆盖分析师数变化
+    "zscore_cons_eps_revision_accel",  # EPS 修正速度（按日历时间斜率）
+    "zscore_cons_eps_dispersion",  # 分析师分歧度（同日同 FY 研报级）
+    "zscore_cons_eps_dispersion_chg",  # 分歧度变化
+    "zscore_cons_target_upside_chg",  # 目标价均值变化
+    "zscore_cons_analyst_count_chg",  # 研报覆盖数变化
     "zscore_cons_rating_upgrade_ratio",  # 评级上调比例
     "cons_revision_freshness_days",  # 最近一次研报距当日天数
 ]
@@ -191,7 +190,6 @@ EVENT_FRESHNESS_TO_VALUE_COLUMNS = {
         "zscore_cons_eps_revision_accel",
         "zscore_cons_eps_dispersion",
         "zscore_cons_eps_dispersion_chg",
-        "zscore_cons_revision_target_upside",
         "zscore_cons_target_upside_chg",
         "zscore_cons_analyst_count_chg",
         "zscore_cons_rating_upgrade_ratio",
@@ -199,3 +197,25 @@ EVENT_FRESHNESS_TO_VALUE_COLUMNS = {
 }
 
 FACTOR_EXCLUDE_LIST_FILE = "factor_exclude_list.json"
+
+
+def attach_cons_revision_schema_version(train_params: dict, enable_flag: bool) -> dict:
+    """当一致预期修正因子开关开启时，在训练元数据中记录修正 schema 版本。
+
+    所有模型注册入口（split/deploy/单次训练）必须共用此函数，保证新旧模型
+    可通过 `cons_revision_schema_version` 机器级区分，推理侧据此识别 v1 旧模型。
+    """
+    if enable_flag:
+        from src.lazybull.factors.consensus_revision import CONSENSUS_REVISION_SCHEMA_VERSION
+
+        train_params["cons_revision_schema_version"] = CONSENSUS_REVISION_SCHEMA_VERSION
+    return train_params
+
+
+def read_cons_revision_schema_version(train_params: dict) -> int:
+    """安全读取修正 schema 版本；缺失或异常内容（如 "v2" 字符串）返回 -1。"""
+    raw = (train_params or {}).get("cons_revision_schema_version")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1

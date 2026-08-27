@@ -341,6 +341,29 @@ def prepare_training_data(
                 f"缺少列: {missing_revision}。请使用 --enable-consensus-revision-features "
                 "重新构建特征"
             )
+        # v2 哨兵校验：防止 v1 旧语义缓存（列同名但经济语义错误）被误用于训练
+        from ...factors.consensus_revision import (
+            CONSENSUS_REVISION_SCHEMA_VERSION,
+            CONSENSUS_REVISION_VERSION_COL,
+        )
+
+        if CONSENSUS_REVISION_VERSION_COL not in df.columns:
+            raise ValueError(
+                "enable_consensus_revision_features=True，但特征分区缺少 v2 哨兵列 "
+                f"{CONSENSUS_REVISION_VERSION_COL}，疑似 v1 旧语义缓存。"
+                "请使用 --enable-consensus-revision-features 重新构建特征"
+            )
+        sentinel_series = df[CONSENSUS_REVISION_VERSION_COL]
+        if (
+            sentinel_series.isna().any()
+            or (sentinel_series.fillna(-1) != CONSENSUS_REVISION_SCHEMA_VERSION).any()
+        ):
+            raise ValueError(
+                "enable_consensus_revision_features=True，但特征分区的哨兵列 "
+                f"{CONSENSUS_REVISION_VERSION_COL} 存在缺失或版本不等于 "
+                f"{CONSENSUS_REVISION_SCHEMA_VERSION}（疑似混入 v1 旧语义分区或未构建），"
+                "请重建训练窗口内全部特征"
+            )
         feature_columns.extend(CONSENSUS_REVISION_FEATURE_COLUMNS)
         logger.info(f"启用一致预期修正因子: {CONSENSUS_REVISION_FEATURE_COLUMNS}")
 

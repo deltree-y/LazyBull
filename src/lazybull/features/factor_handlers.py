@@ -307,11 +307,15 @@ class ConsensusRevisionFactorHandler:
         from ..factors.consensus_revision import (
             CONSENSUS_REVISION_COLS,
             CONSENSUS_REVISION_FRESHNESS_COL,
+            CONSENSUS_REVISION_SCHEMA_VERSION,
+            CONSENSUS_REVISION_VERSION_COL,
         )
 
         result = {}
         if data is not None and len(data) > 0:
-            merge_cols = [c for c in data.columns if c != "ts_code"]
+            merge_cols = [
+                c for c in data.columns if c not in ("ts_code", CONSENSUS_REVISION_VERSION_COL)
+            ]
             merged = _safe_merge_by_ts_code(features, data, merge_cols, "consensus_revision")
             for col in merge_cols:
                 if col in merged.columns:
@@ -320,6 +324,13 @@ class ConsensusRevisionFactorHandler:
             for col in CONSENSUS_REVISION_COLS:
                 result[col] = float("nan")
             result[CONSENSUS_REVISION_FRESHNESS_COL] = float("nan")
+
+        # 哨兵代表构建管线版本而非数据有无：对当日全截面恒写当前版本号
+        # （不经过 merge，无数据的股票也写 2）。这样新构建分区的哨兵列恒等于
+        # 当前版本且无 NaN，训练入口才能可靠拦截混入的旧语义分区。
+        result[CONSENSUS_REVISION_VERSION_COL] = pd.Series(
+            CONSENSUS_REVISION_SCHEMA_VERSION, index=features.index
+        )
         return result
 
 

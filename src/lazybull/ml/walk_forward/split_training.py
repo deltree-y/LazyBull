@@ -20,6 +20,7 @@ from src.lazybull.ml.train_core import (
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     add_blended_return_label,
     apply_serving_event_decay,
+    attach_cons_revision_schema_version,
     evaluate_validation_daily,
     load_features_data,
 )
@@ -296,6 +297,10 @@ def execute_split_training(
 
     algorithm = getattr(args, "algorithm", "xgboost")
     full_train_params = train_params.copy()
+    attach_cons_revision_schema_version(
+        full_train_params,
+        getattr(args, "enable_consensus_revision_features", False),
+    )
     full_train_params.update(
         {
             "algorithm": algorithm,
@@ -410,6 +415,7 @@ def execute_split_training(
         "test_start": split.test_start,
         "test_end": split.test_end,
         "model_version": version,
+        "feature_columns": feature_columns,
         "train_samples": X_train_len,
         "val_samples": X_val_len,
         "val_es_samples": data_stats.get("val_es_samples", X_val_len),

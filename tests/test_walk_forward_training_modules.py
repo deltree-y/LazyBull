@@ -51,3 +51,90 @@ def test_facade_file_has_no_functiondef_nodes():
     tree = ast.parse(source)
     function_defs = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
     assert function_defs == []
+
+
+# ── 一致预期修正 v2 链路缺口回归 ─────────────────────────────
+
+
+def test_skip_training_metadata_reads_feature_columns_from_features_file(tmp_path):
+    """skip-training 的存活列必须从独立 features 文件读取，而不是 metadata 内字段。"""
+    import json
+    import types
+
+    from src.lazybull.ml.walk_forward.runner import _load_skip_training_metadata
+
+    features_file = tmp_path / "v123_features.json"
+    features_file.write_text(
+        json.dumps(["zscore_cons_analyst_count_chg", "zscore_pe_ttm"]),
+        encoding="utf-8",
+    )
+
+    class _StubRegistry:
+        def __init__(self, models_dir, metadata):
+            self.models_dir = models_dir
+            self._metadata = metadata
+
+        def _load_metadata(self, version):
+            return self._metadata
+
+    metadata = {
+        "version": 123,
+        "version_str": "v123",
+        "features_file": features_file.name,
+        "train_params": {"enable_consensus_revision_features": False},
+    }
+    registry = _StubRegistry(tmp_path, metadata)
+    args = types.SimpleNamespace(enable_consensus_revision_features=False)
+
+    result = _load_skip_training_metadata(registry, 123, args)
+
+    assert result is not None
+    assert result["feature_columns"] == ["zscore_cons_analyst_count_chg", "zscore_pe_ttm"]
+
+
+def test_legacy_revision_model_warns_when_schema_version_missing():
+    """含修正列但未记录 v2 schema 版本的旧模型加载时必须告警。"""
+    from loguru import logger as loguru_logger
+
+    from src.lazybull.ml.model_registry import _warn_legacy_consensus_revision_model
+
+    messages = []
+    sink_id = loguru_logger.add(lambda msg: messages.append(str(msg)), level="WARNING")
+    try:
+        _warn_legacy_consensus_revision_model(
+            feature_columns=["zscore_cons_analyst_count_chg"],
+            train_params={"enable_consensus_revision_features": True},
+            version_str="v22715",
+        )
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert any("zscore_cons_analyst_count_chg" in m and "train/serve" in m for m in messages)
+
+    # 已记录 v2 版本的新模型不告警
+    messages.clear()
+    sink_id = loguru_logger.add(lambda msg: messages.append(str(msg)), level="WARNING")
+    try:
+        _warn_legacy_consensus_revision_model(
+            feature_columns=["zscore_cons_analyst_count_chg"],
+            train_params={
+                "enable_consensus_revision_features": True,
+                "cons_revision_schema_version": 2,
+            },
+            version_str="v30000",
+        )
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert messages == []
+
+
+def test_read_cons_revision_schema_version_tolerates_malformed_value():
+    """异常 schema 值（如 \"v2\"）必须安全返回 -1，不能抛异常中断 split 循环。"""
+    from src.lazybull.ml.train_core.constants import read_cons_revision_schema_version
+
+    assert read_cons_revision_schema_version({}) == -1
+    assert read_cons_revision_schema_version({"cons_revision_schema_version": "v2"}) == -1
+    assert read_cons_revision_schema_version({"cons_revision_schema_version": None}) == -1
+    assert read_cons_revision_schema_version({"cons_revision_schema_version": 2}) == 2
+    assert read_cons_revision_schema_version({"cons_revision_schema_version": "2"}) == 2

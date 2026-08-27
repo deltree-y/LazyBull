@@ -192,7 +192,6 @@ def _build_zscore_columns(result: pd.DataFrame, lookback_windows: List[int]) -> 
         "cons_eps_dispersion",
         "cons_eps_dispersion_chg",
         "cons_target_upside",
-        "cons_revision_target_upside",
         "cons_target_upside_chg",
         "cons_analyst_count_chg",
         "cons_rating_upgrade_ratio",

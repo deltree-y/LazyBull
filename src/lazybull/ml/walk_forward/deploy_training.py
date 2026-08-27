@@ -19,6 +19,7 @@ from src.lazybull.ml.run_logger import (
 from src.lazybull.ml.train_core import (
     DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
+    attach_cons_revision_schema_version,
     evaluate_validation_daily,
 )
 
@@ -157,6 +158,10 @@ def execute_deploy_training(
 
     algorithm = getattr(args, "algorithm", "xgboost")
     full_train_params = train_params.copy()
+    attach_cons_revision_schema_version(
+        full_train_params,
+        getattr(args, "enable_consensus_revision_features", False),
+    )
     full_train_params.update(
         {
             "algorithm": algorithm,

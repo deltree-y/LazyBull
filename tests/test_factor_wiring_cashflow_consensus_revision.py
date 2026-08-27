@@ -16,7 +16,10 @@ from src.lazybull.features.ensure import (
     _try_download_cashflow,
     _try_download_fina_indicator,
 )
-from src.lazybull.features.factor_handlers import CashflowQualityFactorHandler
+from src.lazybull.features.factor_handlers import (
+    CashflowQualityFactorHandler,
+    ConsensusRevisionFactorHandler,
+)
 from src.lazybull.features.neutralization import (
     apply_industry_neutralization,
     apply_size_neutralization,
@@ -47,6 +50,31 @@ def test_required_factor_cols_include_new_cashflow_and_consensus_revision_fields
     # v0.95.4 筹码胜率 5 列齐备: 旧 4 列缓存缺 weight_avg_bias 时由 ensure 自动重建
     assert "winner_rate" in _REQUIRED_FACTOR_COLS
     assert "weight_avg_bias" in _REQUIRED_FACTOR_COLS
+
+
+def test_consensus_revision_handler_writes_sentinel_for_full_cross_section():
+    """哨兵列对当日全截面恒写版本号（含无修正数据的股票），保证训练入口可拦截旧分区。"""
+    from src.lazybull.factors.consensus_revision import CONSENSUS_REVISION_VERSION_COL
+
+    handler = ConsensusRevisionFactorHandler()
+    features = pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"]})
+    # 仅 000001.SZ 当日有修正数据
+    data = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "cons_analyst_count_chg": [0.5],
+            CONSENSUS_REVISION_VERSION_COL: [2],
+        }
+    )
+
+    result = handler.apply(features, data, "20240401", None)
+
+    sentinel = result[CONSENSUS_REVISION_VERSION_COL]
+    assert sentinel.tolist() == [2, 2]
+
+    # 无数据日同样全截面写版本号
+    empty_result = handler.apply(features, pd.DataFrame(), "20240401", None)
+    assert empty_result[CONSENSUS_REVISION_VERSION_COL].tolist() == [2, 2]
 
 
 def test_loader_cashflow_normalizes_date_columns():
@@ -279,12 +307,15 @@ def test_try_download_fina_indicator_full_download_uses_explicit_fields():
         captured["partition_by_period"] = partition_by_period
         return None
 
-    with patch(
-        "src.lazybull.features.ensure.downloads._bulk_download_by_period",
-        side_effect=_fake_bulk_download_by_period,
-    ), patch(
-        "src.lazybull.features.ensure.downloads.DataLoader.load_fina_indicator",
-        return_value="ok",
+    with (
+        patch(
+            "src.lazybull.features.ensure.downloads._bulk_download_by_period",
+            side_effect=_fake_bulk_download_by_period,
+        ),
+        patch(
+            "src.lazybull.features.ensure.downloads.DataLoader.load_fina_indicator",
+            return_value="ok",
+        ),
     ):
         result = _try_download_fina_indicator(
             client=object(),
@@ -324,12 +355,15 @@ def test_try_download_cashflow_full_download_uses_quarter_partitions():
         captured["partition_by_period"] = partition_by_period
         return None
 
-    with patch(
-        "src.lazybull.features.ensure.downloads._bulk_download_by_period",
-        side_effect=_fake_bulk_download_by_period,
-    ), patch(
-        "src.lazybull.features.ensure.downloads.DataLoader.load_cashflow",
-        return_value="ok",
+    with (
+        patch(
+            "src.lazybull.features.ensure.downloads._bulk_download_by_period",
+            side_effect=_fake_bulk_download_by_period,
+        ),
+        patch(
+            "src.lazybull.features.ensure.downloads.DataLoader.load_cashflow",
+            return_value="ok",
+        ),
     ):
         result = _try_download_cashflow(
             client=object(),
@@ -400,15 +434,19 @@ def test_try_download_fina_indicator_existing_schema_triggers_period_refresh():
         }
     )
 
-    with patch(
-        "src.lazybull.features.ensure.downloads._refresh_existing_period_rows",
-        side_effect=_fake_refresh_existing_period_rows,
-    ), patch(
-        "src.lazybull.features.ensure.downloads._incremental_catchup_by_calendar_date",
-        side_effect=_fake_incremental_catchup_by_calendar_date,
-    ), patch(
-        "src.lazybull.features.ensure.downloads.DataLoader.load_fina_indicator",
-        return_value=refreshed_df,
+    with (
+        patch(
+            "src.lazybull.features.ensure.downloads._refresh_existing_period_rows",
+            side_effect=_fake_refresh_existing_period_rows,
+        ),
+        patch(
+            "src.lazybull.features.ensure.downloads._incremental_catchup_by_calendar_date",
+            side_effect=_fake_incremental_catchup_by_calendar_date,
+        ),
+        patch(
+            "src.lazybull.features.ensure.downloads.DataLoader.load_fina_indicator",
+            return_value=refreshed_df,
+        ),
     ):
         result = _try_download_fina_indicator(
             client=object(),

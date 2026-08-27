@@ -18,6 +18,7 @@ from src.lazybull.common.config import get_data_root, get_models_root
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
+
 from .backtest import run_oos_backtest
 from .deploy_training import execute_deploy_training
 from .reporting import (
@@ -42,6 +43,59 @@ warnings.filterwarnings(
     category=FutureWarning,
     message=".*DataFrame concatenation with empty or all-NA entries.*",
 )
+
+
+def _load_skip_training_metadata(registry, model_version: int, args):
+    """skip-training 复用旧模型时，核验一致预期修正开关与 schema 版本一致性。
+
+    返回旧模型 metadata（失败时为 None），并从独立 features 文件补齐实际
+    feature_columns，供 result 透传给汇总。开关不一致或旧模型未记录 v2 schema
+    版本时仅告警（模型仍可用），提示消融归因可能把开关语义与模型实际列混为一谈。
+    """
+    from src.lazybull.factors.consensus_revision import CONSENSUS_REVISION_SCHEMA_VERSION
+    from src.lazybull.ml.train_core.constants import read_cons_revision_schema_version
+
+    metadata = registry._load_metadata(model_version)
+    if not metadata:
+        logger.warning(f"[skip-training] 无法读取 v{model_version} 元数据，跳过开关一致性校验")
+        return None
+    train_params = metadata.get("train_params") or {}
+    requested = bool(getattr(args, "enable_consensus_revision_features", False))
+    recorded = bool(train_params.get("enable_consensus_revision_features", False))
+    if requested != recorded:
+        logger.warning(
+            f"[skip-training] v{model_version} 训练时 enable_consensus_revision_features="
+            f"{recorded}，当前 CLI 为 {requested}，开关与模型实际特征不一致，"
+            "消融归因请以模型 metadata 的实际 feature_columns 为准"
+        )
+    if recorded:
+        schema_version = read_cons_revision_schema_version(train_params)
+        if schema_version != CONSENSUS_REVISION_SCHEMA_VERSION:
+            logger.warning(
+                f"[skip-training] v{model_version} 未记录 v2 修正 schema 版本"
+                f"（记录值: {train_params.get('cons_revision_schema_version')}），"
+                "若复用当前特征分区将静默读取 v2 语义列，存在 train/serve 语义偏差，"
+                "建议停用或重训"
+            )
+
+    # 特征列保存在独立 features 文件（metadata 本身不含），补齐后供汇总透传
+    features_file_name = metadata.get("features_file") or f"v{model_version}_features.json"
+    features_file = registry.models_dir / features_file_name
+    feature_columns: List[str] = []
+    if features_file.exists():
+        try:
+            import json
+
+            with open(features_file, encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, list):
+                feature_columns = [str(c) for c in loaded]
+        except (OSError, ValueError) as exc:
+            logger.warning(f"[skip-training] 读取 v{model_version} 特征列表失败: {exc}")
+    else:
+        logger.warning(f"[skip-training] v{model_version} 特征列表文件缺失: {features_file.name}")
+    metadata["feature_columns"] = feature_columns
+    return metadata
 
 
 def _filter_splits_by_selected_indices(
@@ -269,6 +323,7 @@ def run_walk_forward(args) -> None:
                 if skip_training:
                     # 跳过训练，直接用预设版本号构造 result
                     model_version = start_model_version + split.split_index
+                    skip_metadata = _load_skip_training_metadata(registry, model_version, args)
                     logger.info(
                         f"[跳过训练] Split {split.split_index}: "
                         f"使用已有模型 v{model_version}，"
@@ -281,6 +336,7 @@ def run_walk_forward(args) -> None:
                         "test_start": split.test_start,
                         "test_end": split.test_end,
                         "model_version": model_version,
+                        "feature_columns": (skip_metadata or {}).get("feature_columns") or [],
                         "bt_metrics": {},
                     }
                 else:

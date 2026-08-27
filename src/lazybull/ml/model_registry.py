@@ -52,15 +52,28 @@ def _load_xgboost_native(file_path: str, model_type: str):
     return model
 
 
+def _warn_legacy_consensus_revision_model(
+    feature_columns: list, train_params: dict, version_str: str
+) -> None:
+    """模型含一致预期修正列但未记录 v2 schema 版本时告警（v1 旧语义模型）。"""
+    revision_cols = [c for c in feature_columns if str(c).startswith("zscore_cons_")]
+    if revision_cols and (train_params or {}).get("cons_revision_schema_version") is None:
+        logger.warning(
+            f"模型 {version_str} 含一致预期修正列 {revision_cols}，"
+            "但未记录 v2 修正 schema 版本（v1 旧语义模型）。"
+            "若输入特征已重建为 v2，将存在 train/serve 语义偏差，建议停用或重训。"
+        )
+
+
 class ModelRegistry:
     """模型注册表
-    
+
     管理模型版本和元数据，自动维护版本号递增
     """
-    
+
     def __init__(self, models_dir: Optional[str] = None):
         """初始化模型注册表
-        
+
         Args:
             models_dir: 模型存储目录
         """
@@ -89,7 +102,7 @@ class ModelRegistry:
         if not metadata_file.exists():
             return None
 
-        with open(metadata_file, 'r', encoding='utf-8') as f:
+        with open(metadata_file, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def _save_metadata_sidecar(self, metadata: Dict) -> None:
@@ -99,7 +112,7 @@ class ModelRegistry:
             return
 
         metadata_file = self._metadata_file(int(version))
-        with open(metadata_file, 'w', encoding='utf-8') as f:
+        with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     def _read_latest_version_file(self) -> Optional[int]:
@@ -107,21 +120,19 @@ class ModelRegistry:
         if not self.latest_version_file.exists():
             return None
 
-        raw_value = self.latest_version_file.read_text(encoding='utf-8').strip()
+        raw_value = self.latest_version_file.read_text(encoding="utf-8").strip()
         if not raw_value:
             return None
 
         try:
             return int(raw_value)
         except ValueError:
-            logger.warning(
-                f"最新模型版本旁路文件损坏，忽略: {self.latest_version_file}"
-            )
+            logger.warning(f"最新模型版本旁路文件损坏，忽略: {self.latest_version_file}")
             return None
 
     def _save_latest_version_file(self, version: int) -> None:
         """保存最新版本旁路文件。"""
-        self.latest_version_file.write_text(str(version), encoding='utf-8')
+        self.latest_version_file.write_text(str(version), encoding="utf-8")
 
     def _load_next_version_from_registry_tail(self) -> Optional[int]:
         """从注册表尾部快速读取 next_version。"""
@@ -131,10 +142,10 @@ class ModelRegistry:
         file_size = self.registry_file.stat().st_size
         tail_size = min(file_size, 8192)
 
-        with open(self.registry_file, 'rb') as f:
+        with open(self.registry_file, "rb") as f:
             if file_size > tail_size:
                 f.seek(-tail_size, 2)
-            tail_text = f.read().decode('utf-8', errors='ignore')
+            tail_text = f.read().decode("utf-8", errors="ignore")
 
         match = re.search(r'"next_version"\s*:\s*(\d+)', tail_text)
         if match is None:
@@ -150,7 +161,7 @@ class ModelRegistry:
         target_line = f'"version": {version},'
         previous_line = ""
 
-        with open(self.registry_file, 'r', encoding='utf-8') as f:
+        with open(self.registry_file, "r", encoding="utf-8") as f:
             for line in f:
                 if line.strip() != target_line:
                     previous_line = line
@@ -194,36 +205,36 @@ class ModelRegistry:
                 return candidate
 
         return None
-    
+
     def _load_registry(self) -> Dict:
         """加载注册表文件
-        
+
         Returns:
             注册表字典
         """
         if self.registry_file.exists():
-            with open(self.registry_file, 'r', encoding='utf-8') as f:
+            with open(self.registry_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         else:
             return {"models": [], "next_version": 1}
-    
+
     def _save_registry(self) -> None:
         """保存注册表到文件（不自动更新 latest_version_file，由调用方显式控制）"""
         registry = self._ensure_registry_loaded()
-        with open(self.registry_file, 'w', encoding='utf-8') as f:
+        with open(self.registry_file, "w", encoding="utf-8") as f:
             json.dump(registry, f, ensure_ascii=False, indent=2)
 
         logger.debug(f"注册表已保存: {self.registry_file}")
-    
+
     def get_next_version(self) -> int:
         """获取下一个可用版本号
-        
+
         Returns:
             版本号
         """
         registry = self._ensure_registry_loaded()
         return registry.get("next_version", 1)
-    
+
     def register_model(
         self,
         model,
@@ -237,7 +248,7 @@ class ModelRegistry:
         performance_metrics: Optional[Dict] = None,
     ) -> int:
         """注册新模型
-        
+
         Args:
             model: 训练好的模型对象
             model_type: 模型类型（如 "xgboost"）
@@ -248,7 +259,7 @@ class ModelRegistry:
             n_samples: 训练样本数
             train_params: 训练超参数
             performance_metrics: 性能指标（可选）
-            
+
         Returns:
             模型版本号
         """
@@ -284,7 +295,7 @@ class ModelRegistry:
 
         # ── 保存特征列表 ────────────────────────────────────────────────
         features_file = self.models_dir / f"{version_str}_features.json"
-        with open(features_file, 'w', encoding='utf-8') as f:
+        with open(features_file, "w", encoding="utf-8") as f:
             json.dump(feature_columns, f, ensure_ascii=False, indent=2)
 
         # ── 记录元数据 ──────────────────────────────────────────────────
@@ -319,17 +330,17 @@ class ModelRegistry:
         )
 
         return version
-    
+
     def load_model(self, version: Optional[int] = None, strict_version_check: bool = True) -> tuple:
         """加载模型
-        
+
         Args:
             version: 模型版本号，None表示加载最新版本
             strict_version_check: 是否严格检查模型版本元数据（默认 True）
-            
+
         Returns:
             (model, metadata) 元组
-            
+
         Raises:
             ValueError: 当 strict_version_check=True 且模型缺少新版本必需元数据时
         """
@@ -342,38 +353,35 @@ class ModelRegistry:
         metadata = self._load_metadata(version)
         if metadata is None:
             available_versions = [m["version"] for m in self.list_models()]
-            raise ValueError(
-                f"未找到版本 {version} 的模型。"
-                f"可用版本: {available_versions}"
-            )
+            raise ValueError(f"未找到版本 {version} 的模型。" f"可用版本: {available_versions}")
 
         metadata = dict(metadata)
-        
+
         # 严格模式：检查新版本必需的元数据字段
         if strict_version_check:
-            required_fields = ['feature_columns', 'train_params', 'model_type']
+            required_fields = ["feature_columns", "train_params", "model_type"]
             missing_fields = []
-            
+
             # 检查是否有 feature_columns（可能在单独文件中）
             features_file = self.models_dir / metadata.get("features_file", "")
             if not features_file.exists():
-                missing_fields.append('feature_columns (features_file 不存在)')
-            
+                missing_fields.append("feature_columns (features_file 不存在)")
+
             # 检查 train_params
-            if 'train_params' not in metadata or not metadata['train_params']:
-                missing_fields.append('train_params')
-            
+            if "train_params" not in metadata or not metadata["train_params"]:
+                missing_fields.append("train_params")
+
             # 检查 model_type
-            if 'model_type' not in metadata:
-                missing_fields.append('model_type')
-            
+            if "model_type" not in metadata:
+                missing_fields.append("model_type")
+
             if missing_fields:
                 raise ValueError(
                     f"旧模型（版本 {metadata.get('version_str', 'unknown')}）缺少新版本必需的元数据字段：{', '.join(missing_fields)}。\n"
                     f"这些字段对于特征列一致性检查和模型推理至关重要。\n"
                     f"请重新训练模型以生成包含完整元数据的新版本。"
                 )
-        
+
         # 加载模型文件
         # 优先按 metadata 中记录的实际文件名加载，避免被残留的 .json 僵尸文件误导
         model_file = self.models_dir / metadata["model_file"]
@@ -389,51 +397,56 @@ class ModelRegistry:
             # metadata 中记录的文件缺失，回退到同名 .json（可能是旧格式迁移场景）
             model = _load_xgboost_native(str(native_file), metadata.get("model_type", ""))
         else:
-            raise FileNotFoundError(
-                f"模型文件不存在: {model_file} (native: {native_file})"
-            )
-        
+            raise FileNotFoundError(f"模型文件不存在: {model_file} (native: {native_file})")
+
         # 加载特征列表
         features_file = self.models_dir / metadata["features_file"]
         if not features_file.exists():
             raise FileNotFoundError(f"特征列表文件不存在: {features_file}")
-        
-        with open(features_file, 'r', encoding='utf-8') as f:
+
+        with open(features_file, "r", encoding="utf-8") as f:
             feature_columns = json.load(f)
-        
+
         metadata["feature_columns"] = feature_columns
-        
+
+        # 一致预期修正 v2 迁移告警：v1 旧语义模型含修正列但无 schema 版本记录，
+        # 若输入特征已按 v2 重建，同名列将静默产生 train/serve 语义偏差。
+        # 仅告警不阻断，保持存量模型推理可用；生产建议停用此类模型或重训。
+        _warn_legacy_consensus_revision_model(
+            feature_columns,
+            metadata.get("train_params") or {},
+            metadata["version_str"],
+        )
+
         logger.info(
             f"模型已加载: {metadata['version_str']}, "
             f"训练区间={metadata['train_start_date']}至{metadata['train_end_date']}"
         )
-        
+
         return model, metadata
-    
+
     def check_feature_consistency(
-        self,
-        model_metadata: Dict,
-        available_features: List[str]
+        self, model_metadata: Dict, available_features: List[str]
     ) -> None:
         """检查特征列一致性
-        
+
         检查推理数据是否包含模型训练时使用的所有特征列。
-        
+
         Args:
             model_metadata: 模型元数据（来自 load_model）
             available_features: 推理数据中可用的特征列
-            
+
         Raises:
             ValueError: 当缺少必需的特征列时
         """
         if "feature_columns" not in model_metadata:
             raise ValueError("模型元数据中缺少 feature_columns 信息，无法进行特征一致性检查")
-        
+
         required_features = set(model_metadata["feature_columns"])
         available_features_set = set(available_features)
-        
+
         missing_features = required_features - available_features_set
-        
+
         if missing_features:
             raise ValueError(
                 f"推理数据缺少模型训练时使用的特征列（共 {len(missing_features)} 个）：\n"
@@ -441,21 +454,21 @@ class ModelRegistry:
                 f"模型训练特征数: {len(required_features)}, 当前数据特征数: {len(available_features_set)}\n"
                 f"请确保推理数据包含模型训练时的所有特征列。"
             )
-        
+
         logger.debug(
             f"特征列一致性检查通过：模型需要 {len(required_features)} 个特征，"
             f"数据提供 {len(available_features_set)} 个特征"
         )
-    
+
     def list_models(self) -> List[Dict]:
         """列出所有已注册的模型
-        
+
         Returns:
             模型元数据列表
         """
         registry = self._ensure_registry_loaded()
         return registry["models"]
-    
+
     def get_latest_version(self) -> Optional[int]:
         """获取最新模型版本号（跳过分类器等辅助模型，仅返回主预测模型）
 
@@ -471,9 +484,7 @@ class ModelRegistry:
                 if "classifier" not in mt:
                     return latest_version
                 # 是指向分类器，回退到注册表扫描
-                logger.debug(
-                    f"latest_version_file 指向分类器 v{latest_version}，回退到注册表扫描"
-                )
+                logger.debug(f"latest_version_file 指向分类器 v{latest_version}，回退到注册表扫描")
 
         # 旁路文件缺失时，先尝试从注册表尾部读取 next_version 推断最新版本，
         # 避免整包加载大体积 model_registry.json

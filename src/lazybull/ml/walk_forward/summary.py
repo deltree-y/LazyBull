@@ -6,6 +6,25 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from src.lazybull.ml.train_core.constants import CONSENSUS_REVISION_FEATURE_COLUMNS
+
+
+def _live_consensus_revision_cols(result: Dict) -> str:
+    """提取单个 split 实际存活的一致预期修正列（以门禁后 feature_columns 为准）。
+
+    同时识别入模的市值中性化派生列（zscore_cons_*_sz）。
+    """
+    feature_cols = result.get("feature_columns") or []
+    base_cols = {
+        col for col in CONSENSUS_REVISION_FEATURE_COLUMNS if col != "cons_revision_freshness_days"
+    }
+    live = sorted(
+        col
+        for col in feature_cols
+        if col in base_cols or (col.startswith("zscore_cons_") and col.endswith("_sz"))
+    )
+    return ",".join(live)
+
 
 def _topk_key_metrics(metrics: Dict, topk: int) -> Dict[str, Optional[float]]:
     """提取 summary 首列展示的 TopK 重点指标。"""
@@ -182,6 +201,7 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
             "test_start": result["test_start"],
             "test_end": result["test_end"],
             "model_version": result["model_version"],
+            "consensus_revision_cols_live": _live_consensus_revision_cols(result),
             "train_samples": result.get("train_samples"),
             "val_samples": result.get("val_samples"),
             "test_samples": result.get("test_samples"),
