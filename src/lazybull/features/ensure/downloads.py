@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """ensure 子包：因子按需下载（增量优先，数据不足则批量全量）。"""
 
-from typing import Dict, List, Optional
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
 
+from ...common.config import get_tushare_settings
 from ...data import DataLoader, Storage, TushareClient
 from ...data.financial_statement_versions import (
     CASHFLOW_VERSION_DEDUP_COLS,
@@ -14,6 +17,7 @@ from ...data.financial_statement_versions import (
 from ...data.report_rc import REPORT_RC_ROW_KEY_COLUMNS, query_report_rc_adaptive
 from ...data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS
 from .bulk import _bulk_download_by_period, _bulk_download_stk_holdernumber, _query_with_pagination
+from .concat_utils import _concat_no_warning
 from .constants import (
     _FINA_REQUIRED_RAW_COLS,
     _MIN_CASHFLOW_RECORDS,
@@ -131,6 +135,38 @@ def _recent_quarter_periods(trade_date: str, count: int) -> List[str]:
     return periods
 
 
+def _refresh_one_cashflow_period(
+    client: TushareClient,
+    storage: Storage,
+    period: str,
+) -> Tuple[str, bool, int]:
+    """刷新单个报告期的现金流修订版本，返回 (period, 是否成功, 合并后行数)。
+
+    各报告期读写各自独立的分区文件，可安全并发（客户端令牌桶限频线程安全，
+    存储按目标文件派生临时名原子替换）；失败仅影响该期，由调用方汇总后
+    决定水位是否推进（部分失败不推进）。
+    """
+    try:
+        existing = storage.load_raw_by_date("cashflow", period)
+        df = _query_with_pagination(client, "cashflow_vip", page_limit=6400, period=period)
+        if df is None or len(df) == 0:
+            # 已存在的历史分区不应被空响应视为成功，否则迁移水位会永久越过缺口。
+            success = existing is None or len(existing) == 0
+            if not success:
+                logger.warning(f"[cashflow] 修订刷新 {period} 返回空数据，保留原分区并重试")
+            return period, success, 0
+        if existing is not None and len(existing) > 0:
+            merged = _concat_no_warning([existing, df])
+        else:
+            merged = df
+        merged = _drop_duplicates_keep_updated(merged, _CASHFLOW_VERSION_DEDUP_COLS)
+        storage.save_raw_by_date(merged, "cashflow", period)
+        return period, True, len(merged)
+    except Exception as e:
+        logger.warning(f"[cashflow] 修订刷新 {period} 失败: {e}")
+        return period, False, 0
+
+
 def _refresh_cashflow_revisions_if_due(
     client: TushareClient,
     storage: Storage,
@@ -188,29 +224,33 @@ def _refresh_cashflow_revisions_if_due(
         )
 
     periods = list(dict.fromkeys(recent_periods + historical_periods))
+    workers = get_tushare_settings()["download_concurrency"]
+    t0 = time.time()
+    results: List[Tuple[str, bool, int]] = []
+
+    # 各季度分区文件相互独立，可安全并发；逐季结果统一汇总后决定水位推进。
+    if workers <= 1 or len(periods) <= 1:
+        # 串行路径（与 scripts/raw_download 的 _run_concurrent 降级口径一致，便于排障）
+        for idx, period in enumerate(periods, 1):
+            results.append(_refresh_one_cashflow_period(client, storage, period))
+            if idx % 20 == 0 or idx == len(periods):
+                logger.info(f"[cashflow] 修订刷新进度 {idx}/{len(periods)} (串行)")
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="cashflow-refresh") as pool:
+            futures = [
+                pool.submit(_refresh_one_cashflow_period, client, storage, period)
+                for period in periods
+            ]
+            for idx, future in enumerate(as_completed(futures), 1):
+                results.append(future.result())
+                if idx % 20 == 0 or idx == len(periods):
+                    logger.info(f"[cashflow] 修订刷新进度 {idx}/{len(periods)} (并发={workers})")
+
     period_success: Dict[str, bool] = {}
     refreshed_rows = 0
-    for period in periods:
-        try:
-            existing = storage.load_raw_by_date("cashflow", period)
-            df = _query_with_pagination(client, "cashflow_vip", page_limit=6400, period=period)
-            if df is None or len(df) == 0:
-                # 已存在的历史分区不应被空响应视为成功，否则迁移水位会永久越过缺口。
-                period_success[period] = existing is None or len(existing) == 0
-                if not period_success[period]:
-                    logger.warning(f"[cashflow] 修订刷新 {period} 返回空数据，保留原分区并重试")
-                continue
-            if existing is not None and len(existing) > 0:
-                merged = pd.concat([existing, df], ignore_index=True)
-            else:
-                merged = df
-            merged = _drop_duplicates_keep_updated(merged, _CASHFLOW_VERSION_DEDUP_COLS)
-            storage.save_raw_by_date(merged, "cashflow", period)
-            refreshed_rows += len(merged)
-            period_success[period] = True
-        except Exception as e:
-            period_success[period] = False
-            logger.warning(f"[cashflow] 修订刷新 {period} 失败: {e}")
+    for period, success, rows in results:
+        period_success[period] = success
+        refreshed_rows += rows
 
     recent_success = all(period_success.get(period, False) for period in recent_periods)
     if daily_due and recent_success:
@@ -233,7 +273,8 @@ def _refresh_cashflow_revisions_if_due(
 
     logger.info(
         f"[cashflow] 修订刷新完成: 查询 {len(periods)} 个季度, "
-        f"分区累计 {refreshed_rows} 行, full_refresh={full_due}"
+        f"分区累计 {refreshed_rows} 行, full_refresh={full_due}, "
+        f"耗时={time.time() - t0:.0f}秒"
     )
 
 
@@ -502,7 +543,7 @@ def _try_download_report_rc(
             logger.warning(f"  report_rc {year} 年下载失败: {e}")
     if not all_pages:
         return existing
-    merged = pd.concat(all_pages, ignore_index=True)
+    merged = _concat_no_warning(all_pages)
     result = _append_and_save_partitioned(
         storage,
         "report_rc",

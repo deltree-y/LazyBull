@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.4] - 2026-08-28
+
+### Fixed
+
+- **ensure 因子补齐链路 FutureWarning 刷屏**：纸面交易 ensure 自动补齐路径的 5 个模块（bulk/downloads/incremental/historical/historical_assets）共 11 处裸 `pd.concat` 未沿用项目既定屏蔽模式，TuShare 稀疏财务列（部分季度整列为空）在分页合并与新旧合并时触发 pandas empty/all-NA FutureWarning 大量刷屏；新增共享辅助 `_concat_no_warning`（ensure/concat_utils.py）统一替换，与 scripts/raw_download/periodic.py、data/loader.py 既有口径一致——只屏蔽告警，不对数据做任何剔除/补列，raw 层 schema 保持不变。
+
+### Changed
+
+- **现金流修订刷新并发化**：`_refresh_cashflow_revisions_if_due` 的逐季度串行循环改为并发执行，worker 数直读 `tushare.download_concurrency`（为 1 或仅单季度时保持串行路径，与 scripts/raw_download 的 `_run_concurrent` 降级口径一致）；各季度读写各自独立分区文件（客户端令牌桶限频线程安全、存储按目标文件派生临时名原子替换），逐季结果统一汇总后仍按原逻辑门控两个水位（部分失败不推进）。每 90 天一次的全历史复查（86 个季度）由约 14 分钟降至约 1 分钟级，并新增每 20 季度的进度日志与总耗时输出，消除长时间静默。
+
 ## [0.96.3] - 2026-08-28
 
 ### Fixed

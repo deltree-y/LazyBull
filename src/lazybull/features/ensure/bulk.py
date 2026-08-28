@@ -8,14 +8,15 @@ import pandas as pd
 from loguru import logger
 
 from ...data import Storage, TushareClient
+from .concat_utils import _concat_no_warning
 from .incremental import _drop_duplicates_keep_updated
 
 # 各接口单次 limit 上限（与 scripts/raw_download 正式下载口径一致）。
 # 分页粒度若大于接口上限，TuShare 静默截断返回首屏（< 分页粒度即误判"取完"）。
 _API_PAGE_LIMITS = {
-    "cashflow_vip": 6400,        # cashflow_vip 单次 limit 上限
+    "cashflow_vip": 6400,  # cashflow_vip 单次 limit 上限
     "fina_indicator_vip": 12000,  # fina_indicator_vip 单次 limit 上限
-    "fund_portfolio": 8000,       # fund_portfolio 单次 limit 上限
+    "fund_portfolio": 8000,  # fund_portfolio 单次 limit 上限
 }
 
 # 未知接口的回退分页粒度；接入新接口时必须核实其单次上限并登记到 _API_PAGE_LIMITS。
@@ -58,7 +59,7 @@ def _query_with_pagination(
         raise RuntimeError(f"[{api_name}] 达到最大分页数 {max_pages}，无法确认数据已完整下载")
     if not all_pages:
         return pd.DataFrame()
-    return pd.concat(all_pages, ignore_index=True)
+    return _concat_no_warning(all_pages)
 
 
 def _bulk_download_by_period(
@@ -266,9 +267,9 @@ def _save_merged_bulk(
     dedup_cols: Optional[List[str]],
 ) -> pd.DataFrame:
     """合并新旧数据并保存（批量下载中间/最终保存用）"""
-    result = pd.concat(new_dfs, ignore_index=True)
+    result = _concat_no_warning(new_dfs)
     if existing_df is not None and len(existing_df) > 0:
-        result = pd.concat([existing_df, result], ignore_index=True)
+        result = _concat_no_warning([existing_df, result])
     if dedup_cols:
         result = _drop_duplicates_keep_updated(result, dedup_cols)
     storage.save_raw(result, dataset_name, is_force=True)

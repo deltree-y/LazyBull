@@ -10,6 +10,7 @@ from loguru import logger
 from ...common.date_utils import is_recent_date_str
 from ...data import Storage, TushareClient
 from .bulk import _generate_quarter_periods, _query_with_pagination
+from .concat_utils import _concat_no_warning
 from .incremental import _get_latest_date
 
 
@@ -197,7 +198,7 @@ def _try_ensure_historical_fund_portfolio(
 
     if not agg_dfs:
         return None
-    result = pd.concat(agg_dfs, ignore_index=True)
+    result = _concat_no_warning(agg_dfs)
     logger.info(f"基金持仓: 逐分区聚合完成，{len(periods)} 个季度 → {len(result)} 条个股记录")
     return result
 

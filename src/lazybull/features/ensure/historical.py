@@ -9,6 +9,7 @@ from loguru import logger
 from ...data import DataCleaner, DataLoader, Storage, TushareClient
 from ...data.ensure import ensure_clean_data_for_date
 from .bulk import _query_with_pagination, _save_merged_bulk
+from .concat_utils import _concat_no_warning
 from .constants import HISTORICAL_DATA_MONTHS, MAX_HISTORICAL_DAYS
 from .incremental import (
     _append_and_save_partitioned,
@@ -166,7 +167,7 @@ def _refresh_existing_period_rows(
         logger.warning(f"[{dataset_name}] schema 回补未获取到任何数据，保留旧表")
         return existing_df
 
-    refreshed_df = pd.concat(refreshed_dfs, ignore_index=True)
+    refreshed_df = _concat_no_warning(refreshed_dfs)
     merged_df = _merge_refreshed_rows(existing_df, refreshed_df, dedup_cols)
     if partition_date_col and partition_mode:
         _append_and_save_partitioned(

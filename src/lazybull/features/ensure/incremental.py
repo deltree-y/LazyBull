@@ -9,6 +9,7 @@ from loguru import logger
 from ...data import Storage
 from ...data.financial_statement_versions import deduplicate_prefer_latest_update_flag
 from ...data.report_rc import deduplicate_report_rc
+from .concat_utils import _concat_no_warning
 
 
 def _normalize_date_str(date_value: object) -> Optional[str]:
@@ -156,7 +157,7 @@ def _incremental_catchup_by_calendar_date(
     # 避免"水位已提交但数据落盘失败"导致下次跳过该区间造成永久缺失。
     result = existing_df
     if new_dfs:
-        new_merged = pd.concat(new_dfs, ignore_index=True)
+        new_merged = _concat_no_warning(new_dfs)
         if partition_date_col and partition_mode:
             result = _append_and_save_partitioned(
                 storage,
@@ -228,7 +229,7 @@ def _load_all_partitions(storage: Storage, dataset_name: str) -> Optional[pd.Dat
             dfs.append(df)
     if not dfs:
         return None
-    return pd.concat(dfs, ignore_index=True)
+    return _concat_no_warning(dfs)
 
 
 def _drop_duplicates_keep_updated(
@@ -284,7 +285,7 @@ def _append_and_save_partitioned(
         part = part.drop(columns=["_partition_date"])
         existing = storage.load_raw_by_date(dataset_name, part_date)
         if existing is not None and len(existing) > 0:
-            merged = pd.concat([existing, part], ignore_index=True)
+            merged = _concat_no_warning([existing, part])
         else:
             merged = part
         if dataset_name == "report_rc":
@@ -320,7 +321,7 @@ def _append_and_save_raw(
     """
     existing_df = storage.load_raw(dataset_name)
     if existing_df is not None and len(existing_df) > 0:
-        result = pd.concat([existing_df, new_df], ignore_index=True)
+        result = _concat_no_warning([existing_df, new_df])
     else:
         result = new_df.copy()
     result = _drop_duplicates_keep_updated(result, dedup_cols)
