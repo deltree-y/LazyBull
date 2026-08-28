@@ -167,6 +167,7 @@ COL_NAMES = {
     "enable_lhb_features": "龙虎榜因子",
     "enable_consensus_features": "一致预期因子",
     "enable_cashflow_quality_features": "现金流质量因子",
+    "cashflow_quality_cols_live": "现金流质量实际入模列",
     "enable_consensus_revision_features": "一致预期修正因子",
     "oos_backtest": "OOS回测",
     "oos_backtest_months": "OOS回测月数",

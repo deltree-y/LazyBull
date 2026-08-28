@@ -46,14 +46,18 @@ warnings.filterwarnings(
 
 
 def _load_skip_training_metadata(registry, model_version: int, args):
-    """skip-training 复用旧模型时，核验一致预期修正开关与 schema 版本一致性。
+    """skip-training 复用旧模型时，核验一致预期修正/现金流质量开关与 schema 版本一致性。
 
     返回旧模型 metadata（失败时为 None），并从独立 features 文件补齐实际
-    feature_columns，供 result 透传给汇总。开关不一致或旧模型未记录 v2 schema
+    feature_columns，供 result 透传给汇总。开关不一致或旧模型未记录 schema
     版本时仅告警（模型仍可用），提示消融归因可能把开关语义与模型实际列混为一谈。
     """
+    from src.lazybull.factors.cashflow_quality import CASHFLOW_QUALITY_SCHEMA_VERSION
     from src.lazybull.factors.consensus_revision import CONSENSUS_REVISION_SCHEMA_VERSION
-    from src.lazybull.ml.train_core.constants import read_cons_revision_schema_version
+    from src.lazybull.ml.train_core.constants import (
+        read_cashflow_quality_schema_version,
+        read_cons_revision_schema_version,
+    )
 
     metadata = registry._load_metadata(model_version)
     if not metadata:
@@ -76,6 +80,25 @@ def _load_skip_training_metadata(registry, model_version: int, args):
                 f"（记录值: {train_params.get('cons_revision_schema_version')}），"
                 "若复用当前特征分区将静默读取 v2 语义列，存在 train/serve 语义偏差，"
                 "建议停用或重训"
+            )
+
+    # 现金流质量开关与 schema 版本一致性校验（与一致预期修正同级）
+    requested_cfq = bool(getattr(args, "enable_cashflow_quality_features", False))
+    recorded_cfq = bool(train_params.get("enable_cashflow_quality_features", False))
+    if requested_cfq != recorded_cfq:
+        logger.warning(
+            f"[skip-training] v{model_version} 训练时 enable_cashflow_quality_features="
+            f"{recorded_cfq}，当前 CLI 为 {requested_cfq}，开关与模型实际特征不一致，"
+            "消融归因请以模型 metadata 的实际 feature_columns 为准"
+        )
+    if recorded_cfq:
+        recorded_cfq_schema = read_cashflow_quality_schema_version(train_params)
+        if recorded_cfq_schema != CASHFLOW_QUALITY_SCHEMA_VERSION:
+            logger.warning(
+                f"[skip-training] v{model_version} 记录的现金流质量 schema 版本为 "
+                f"{train_params.get('cashflow_quality_schema_version')}，当前构建管线为 "
+                f"v{CASHFLOW_QUALITY_SCHEMA_VERSION}（依赖修订事件驱动 TTM + 确定性"
+                "版本去重），复用该模型存在 train/serve 语义偏差，建议停用或重训"
             )
 
     # 特征列保存在独立 features 文件（metadata 本身不含），补齐后供汇总透传

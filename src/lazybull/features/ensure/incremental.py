@@ -7,6 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from ...data import Storage
+from ...data.financial_statement_versions import deduplicate_prefer_latest_update_flag
 from ...data.report_rc import deduplicate_report_rc
 
 
@@ -234,20 +235,12 @@ def _drop_duplicates_keep_updated(
     df: pd.DataFrame,
     dedup_cols: List[str],
 ) -> pd.DataFrame:
-    """去重时优先保留 update_flag 标记的修正记录（确定性、可复现）。
+    """按键去重，同键冲突时优先保留 TuShare ``update_flag=1`` 最新行。
 
-    TuShare 同 (ts_code, end_date, ann_date) 可能存在多次修订，
-    update_flag 非空表示修正记录。排序后 keep='last' 保证修正版被保留，
-    避免跨次下载因顺序不稳定而选中不同版本。
+    cashflow 使用包含 f_ann_date 的版本键，因此不同可用日版本仍会完整保留；
+    只有同一版本键内部的重复行按官方最新标志确定选择。
     """
-    work = df.copy()
-    if "update_flag" in work.columns:
-        # 仅显式识别 update_flag == "1"（TuShare 文档：1 表示更新/修正记录），
-        # 不臆测任意非空值即为修正版
-        work["_updated"] = work["update_flag"].astype(str).str.strip().eq("1")
-        work = work.sort_values(list(dedup_cols) + ["_updated"], kind="mergesort")
-        work = work.drop(columns=["_updated"])
-    return work.drop_duplicates(subset=dedup_cols, keep="last")
+    return deduplicate_prefer_latest_update_flag(df, dedup_cols)
 
 
 def _append_and_save_partitioned(

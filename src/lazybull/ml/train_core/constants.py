@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """train_core 特征列清单与 freshness 策略常量。"""
 
+from typing import List, Optional
+
 FUNDAMENTAL_FEATURE_COLUMNS = [
     # 盈利能力（原始5个 + 新增5个）
     "zscore_roe_waa",  # 加权平均ROE
@@ -210,6 +212,40 @@ def attach_cons_revision_schema_version(train_params: dict, enable_flag: bool) -
 
         train_params["cons_revision_schema_version"] = CONSENSUS_REVISION_SCHEMA_VERSION
     return train_params
+
+
+def attach_cashflow_quality_train_params(
+    train_params: dict,
+    enable_flag: bool,
+    feature_columns: Optional[List[str]] = None,
+) -> dict:
+    """当现金流质量因子开关开启时，记录语义版本与门禁后实际入模列。
+
+    v0.96.3 起现金流因子为依赖修订事件驱动 TTM + 确定性版本去重；旧模型
+    metadata 缺 `cashflow_quality_schema_version` 或版本不符时，
+    skip-training 校验与推理侧可据此识别旧语义模型。
+    """
+    if enable_flag:
+        from src.lazybull.factors.cashflow_quality import (
+            CASHFLOW_QUALITY_SCHEMA_VERSION,
+            cashflow_quality_live_columns,
+        )
+
+        train_params["cashflow_quality_schema_version"] = CASHFLOW_QUALITY_SCHEMA_VERSION
+        if feature_columns:
+            train_params["cashflow_quality_feature_columns"] = cashflow_quality_live_columns(
+                list(feature_columns)
+            )
+    return train_params
+
+
+def read_cashflow_quality_schema_version(train_params: dict) -> int:
+    """安全读取现金流质量 schema 版本；缺失或异常内容返回 -1。"""
+    raw = (train_params or {}).get("cashflow_quality_schema_version")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1
 
 
 def read_cons_revision_schema_version(train_params: dict) -> int:

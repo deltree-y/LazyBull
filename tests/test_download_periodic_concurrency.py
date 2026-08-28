@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 import scripts.raw_download.core as raw_core
-from scripts.raw_download.periodic import download_by_period
+from scripts.raw_download.periodic import _dedup_rows, download_by_period
 
 
 @pytest.fixture(autouse=True)
@@ -221,3 +221,22 @@ class TestDownloadByPeriodConcurrency:
         assert set(saved["ts_code"]) == {"a", "b"}
         # keep="last" 按 ann_date 升序后保留最晚公告记录
         assert saved[saved["ts_code"] == "a"]["ann_date"].iloc[0] == "20241101"
+
+    def test_dedup_rows_prefers_official_latest_update_flag(self):
+        """同键财报行必须选择 update_flag=1，且不受接口返回顺序影响。"""
+        rows = pd.DataFrame(
+            {
+                "ts_code": ["a", "a"],
+                "end_date": ["20231231", "20231231"],
+                "f_ann_date": ["20240430", "20240430"],
+                "update_flag": [1, 0],
+                "free_cashflow": [1.0, 2.0],
+            }
+        )
+        key = ["ts_code", "end_date", "f_ann_date"]
+
+        forward = _dedup_rows(rows, key, sort_cols=["f_ann_date"])
+        reverse = _dedup_rows(rows.iloc[::-1], key, sort_cols=["f_ann_date"])
+
+        assert forward.loc[0, "free_cashflow"] == 1.0
+        assert reverse.loc[0, "free_cashflow"] == 1.0

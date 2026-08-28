@@ -40,6 +40,20 @@ from .split import (
 )
 
 
+def _get_cashflow_quality_schema_version() -> int:
+    """读取现金流质量因子当前语义版本（训练元数据记录用）。"""
+    from ...factors.cashflow_quality import CASHFLOW_QUALITY_SCHEMA_VERSION
+
+    return int(CASHFLOW_QUALITY_SCHEMA_VERSION)
+
+
+def _cashflow_quality_live_columns(feature_columns: List[str]) -> List[str]:
+    """提取门禁后实际入模的现金流质量列（含 _sz 变体），供汇总记录实际存量。"""
+    from ...factors.cashflow_quality import cashflow_quality_live_columns
+
+    return cashflow_quality_live_columns(feature_columns)
+
+
 def prepare_training_data(
     df: pd.DataFrame,
     label_column: str = "neu_y_ret_20",
@@ -312,14 +326,34 @@ def prepare_training_data(
 
     # 现金流质量因子（可选，需 cashflow 接口，2000 积分）
     if enable_cashflow_quality_features:
-        available_cfq = [col for col in CASHFLOW_QUALITY_FEATURE_COLUMNS if col in df.columns]
-        if available_cfq:
-            feature_columns.extend(available_cfq)
-            logger.info(f"启用现金流质量因子: {available_cfq}")
-        else:
-            logger.warning(
-                "enable_cashflow_quality_features=True，但数据中未找到现金流质量列，跳过"
+        # fail-fast：开关开启时 schema 必须完整，缺列直接失败（与一致预期开关同级）
+        missing_cfq = [col for col in CASHFLOW_QUALITY_FEATURE_COLUMNS if col not in df.columns]
+        if missing_cfq:
+            raise ValueError(
+                "enable_cashflow_quality_features=True，但现金流质量特征 schema 不完整，"
+                f"缺少列: {missing_cfq}。请使用 --enable-cashflow-quality-features 重新构建特征"
             )
+        # 哨兵校验：拦截旧语义缓存（ann_date 口径/累计期口径）被误用于训练
+        from ...factors.cashflow_quality import (
+            CASHFLOW_QUALITY_SCHEMA_VERSION,
+            CASHFLOW_QUALITY_VERSION_COL,
+        )
+
+        sentinel = df[CASHFLOW_QUALITY_VERSION_COL] if CASHFLOW_QUALITY_VERSION_COL in df.columns else None
+        sentinel_valid = (
+            sentinel is not None
+            and not sentinel.isna().any()
+            and bool((sentinel == CASHFLOW_QUALITY_SCHEMA_VERSION).all())
+        )
+        if not sentinel_valid:
+            raise ValueError(
+                "enable_cashflow_quality_features=True，但现金流质量哨兵列 "
+                f"{CASHFLOW_QUALITY_VERSION_COL} 缺失、含 NaN 或版本不等于 "
+                f"{CASHFLOW_QUALITY_SCHEMA_VERSION}；当前特征分区可能为旧语义"
+                "（ann_date 口径/累计期口径），请重建特征"
+            )
+        feature_columns.extend(CASHFLOW_QUALITY_FEATURE_COLUMNS)
+        logger.info(f"启用现金流质量因子: {CASHFLOW_QUALITY_FEATURE_COLUMNS}")
 
     removed_duplicate_features: List[str] = []
     if "zscore_cf_nm" in feature_columns and "zscore_ocf_to_profit" in feature_columns:
@@ -705,6 +739,15 @@ def prepare_training_data(
         "kept_state_freshness_features": state_freshness_cols_kept,
         "event_freshness_columns_used": event_freshness_cols_used,
         "event_decay_applied_stats": decay_applied_stats,
+        # 现金流质量因子：记录哨兵语义版本与门禁后实际入模列，避免汇总只记名义开关
+        "cashflow_quality_schema_version": (
+            _get_cashflow_quality_schema_version() if enable_cashflow_quality_features else None
+        ),
+        "cashflow_quality_feature_columns_live": (
+            _cashflow_quality_live_columns(feature_columns)
+            if enable_cashflow_quality_features
+            else []
+        ),
     }
 
     return (

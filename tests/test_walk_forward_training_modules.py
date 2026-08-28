@@ -5,11 +5,9 @@
 import ast
 from pathlib import Path
 
-from src.lazybull.ml.walk_forward import (
-    training as facade,
-    training_core as core,
-    training_reporting as reporting,
-)
+from src.lazybull.ml.walk_forward import training as facade
+from src.lazybull.ml.walk_forward import training_core as core
+from src.lazybull.ml.walk_forward import training_reporting as reporting
 from src.lazybull.ml.walk_forward.deploy_training import execute_deploy_training
 from src.lazybull.ml.walk_forward.split_training import (
     _build_split_training_candidate,
@@ -121,6 +119,40 @@ def test_legacy_revision_model_warns_when_schema_version_missing():
                 "enable_consensus_revision_features": True,
                 "cons_revision_schema_version": 2,
             },
+            version_str="v30000",
+        )
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert messages == []
+
+
+def test_legacy_cashflow_model_warns_when_schema_missing_or_mismatched():
+    """普通模型加载前必须识别同名异义的旧现金流质量模型。"""
+    from loguru import logger as loguru_logger
+
+    from src.lazybull.factors.cashflow_quality import CASHFLOW_QUALITY_SCHEMA_VERSION
+    from src.lazybull.ml.model_registry import _warn_legacy_cashflow_quality_model
+
+    messages = []
+    sink_id = loguru_logger.add(lambda msg: messages.append(str(msg)), level="WARNING")
+    try:
+        _warn_legacy_cashflow_quality_model(
+            feature_columns=["zscore_fcf_yield", "cashflow_freshness_days"],
+            train_params={"cashflow_quality_schema_version": 2},
+            version_str="v23348",
+        )
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert any("zscore_fcf_yield" in message and "train/serve" in message for message in messages)
+
+    messages.clear()
+    sink_id = loguru_logger.add(lambda msg: messages.append(str(msg)), level="WARNING")
+    try:
+        _warn_legacy_cashflow_quality_model(
+            feature_columns=["zscore_fcf_yield", "cashflow_freshness_days"],
+            train_params={"cashflow_quality_schema_version": CASHFLOW_QUALITY_SCHEMA_VERSION},
             version_str="v30000",
         )
     finally:

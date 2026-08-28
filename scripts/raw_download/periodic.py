@@ -10,6 +10,9 @@ import pandas as pd
 from loguru import logger
 
 from src.lazybull.data import Storage, TushareClient
+from src.lazybull.data.financial_statement_versions import (
+    deduplicate_prefer_latest_update_flag,
+)
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
 
@@ -99,7 +102,7 @@ def _dedup_rows(
         sort_present = [c for c in sort_cols if c in df.columns]
         if sort_present:
             df = df.sort_values(sort_present, kind="stable")
-    return df.drop_duplicates(subset=cols_present, keep="last").reset_index(drop=True)
+    return deduplicate_prefer_latest_update_flag(df, cols_present)
 
 
 def _save_merged(
@@ -190,12 +193,12 @@ def download_by_period(
     page_limit: int = 50000,
     partition_by_period: bool = False,
     sort_cols: Optional[List[str]] = None,
-) -> None:
+) -> bool:
     """按报告期(period)批量下载数据。"""
     periods = _generate_quarter_periods(start_date, end_date)
     if not periods:
         logger.warning(f"[{dataset_name}] 区间内无有效季度")
-        return
+        return False
 
     existing_df = None
     existing_periods: Set[str] = set()
@@ -218,7 +221,7 @@ def download_by_period(
     periods_to_download = [p for p in periods if p not in existing_periods]
     if not periods_to_download:
         logger.info(f"[{dataset_name}] 全部季度已存在, 跳过。如需重下加 --force")
-        return
+        return True
 
     logger.info(
         f"[{dataset_name}] 按季度下载 {len(periods_to_download)} 个 "
@@ -291,3 +294,4 @@ def download_by_period(
             )
 
     logger.info(f"[{dataset_name}] 完成: 成功={success} 空={empty}")
+    return success + empty == len(periods_to_download)

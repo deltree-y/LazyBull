@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 """ensure 子包：因子按需下载（增量优先，数据不足则批量全量）。"""
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
 
 from ...data import DataLoader, Storage, TushareClient
+from ...data.financial_statement_versions import (
+    CASHFLOW_VERSION_DEDUP_COLS,
+    CASHFLOW_VERSIONED_RAW_WATERMARK,
+)
 from ...data.report_rc import REPORT_RC_ROW_KEY_COLUMNS, query_report_rc_adaptive
 from ...data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS
 from .bulk import _bulk_download_by_period, _bulk_download_stk_holdernumber, _query_with_pagination
@@ -22,8 +26,10 @@ from .constants import (
 from .historical import _refresh_existing_period_rows
 from .incremental import (
     _append_and_save_partitioned,
+    _drop_duplicates_keep_updated,
     _incremental_catchup_by_calendar_date,
     _load_all_partitions,
+    _normalize_date_str,
 )
 
 
@@ -94,6 +100,143 @@ def _try_download_fina_indicator(
     return DataLoader(storage).load_fina_indicator(start_date=trade_date, end_date=trade_date)
 
 
+# cashflow 版本化去重键：含 f_ann_date（实际公告日），修订版本按版本保留，
+# 避免弱键 (ts_code, end_date, ann_date) 把未来修订回填到旧公告日（前视污染）。
+_CASHFLOW_VERSION_DEDUP_COLS = list(CASHFLOW_VERSION_DEDUP_COLS)
+
+# 晚到修订刷新：ann_date 增量只会前向查询，ann_date 不变的晚到修订
+# （f_ann_date > ann_date）永远收不到；按报告期重查最近 N 个季度补齐。
+_CASHFLOW_REVISION_REFRESH_PERIODS = 8
+_CASHFLOW_REVISION_REFRESH_WATERMARK = "cashflow_revision_refresh"
+_CASHFLOW_REVISION_FULL_REFRESH_WATERMARK = CASHFLOW_VERSIONED_RAW_WATERMARK
+_CASHFLOW_REVISION_FULL_REFRESH_INTERVAL_DAYS = 90
+
+
+def _recent_quarter_periods(trade_date: str, count: int) -> List[str]:
+    """返回截至 trade_date 最近 count 个季度末日期（YYYYMMDD）。"""
+    dt = pd.to_datetime(trade_date, format="%Y%m%d")
+    year = dt.year
+    quarter_ends = ["0331", "0630", "0930", "1231"]
+    # 最近一个已结束季度（1~3 月属于上一年 Q4）
+    q_index = ((dt.month - 1) // 3 - 1) % 4
+    if dt.month <= 3:
+        year -= 1
+    periods: List[str] = []
+    for _ in range(count):
+        periods.append(f"{year}{quarter_ends[q_index]}")
+        q_index -= 1
+        if q_index < 0:
+            q_index = 3
+            year -= 1
+    return periods
+
+
+def _refresh_cashflow_revisions_if_due(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+) -> None:
+    """刷新现金流版本：近期按日，全历史首次及每 90 天复查。
+
+    以版本化键合并（同报告期多版本共存），PIT 因子层按 f_ann_date 选择当日
+    可见版本。首次升级会重查全部现有分区，修复旧弱键已丢版本的 raw；之后
+    近 8 季度每日刷新，全历史每 90 天复查。各水位仅在对应范围全部成功后推进。
+    """
+    target = _normalize_date_str(trade_date)
+    if target is None:
+        return
+
+    daily_watermark = storage.load_sync_watermark(_CASHFLOW_REVISION_REFRESH_WATERMARK)
+    daily_due = daily_watermark is None or daily_watermark < target
+
+    full_watermark = storage.load_sync_watermark(_CASHFLOW_REVISION_FULL_REFRESH_WATERMARK)
+    try:
+        full_due = (
+            full_watermark is None
+            or (
+                pd.to_datetime(target, format="%Y%m%d")
+                - pd.to_datetime(full_watermark, format="%Y%m%d")
+            ).days
+            >= _CASHFLOW_REVISION_FULL_REFRESH_INTERVAL_DAYS
+        )
+    except (TypeError, ValueError):
+        logger.warning(f"[cashflow] 全历史刷新水位无效，将重新刷新: {full_watermark!r}")
+        full_due = True
+
+    if not daily_due and not full_due:
+        return
+
+    recent_periods = (
+        _recent_quarter_periods(target, _CASHFLOW_REVISION_REFRESH_PERIODS) if daily_due else []
+    )
+    historical_periods: List[str] = []
+    if full_due:
+        try:
+            raw_partitions = storage.list_partitions("raw", "cashflow")
+            partition_values = list(raw_partitions)
+        except (AttributeError, NotImplementedError, TypeError):
+            # 测试桩或兼容存储可能不支持分区枚举；近期刷新仍可继续，
+            # 但不提交全历史水位，待真实 Storage 下次补齐。
+            partition_values = []
+        historical_periods = sorted(
+            {
+                normalized
+                for partition in partition_values
+                if (normalized := _normalize_date_str(partition)) is not None
+            },
+            reverse=True,
+        )
+
+    periods = list(dict.fromkeys(recent_periods + historical_periods))
+    period_success: Dict[str, bool] = {}
+    refreshed_rows = 0
+    for period in periods:
+        try:
+            existing = storage.load_raw_by_date("cashflow", period)
+            df = _query_with_pagination(client, "cashflow_vip", page_limit=6400, period=period)
+            if df is None or len(df) == 0:
+                # 已存在的历史分区不应被空响应视为成功，否则迁移水位会永久越过缺口。
+                period_success[period] = existing is None or len(existing) == 0
+                if not period_success[period]:
+                    logger.warning(f"[cashflow] 修订刷新 {period} 返回空数据，保留原分区并重试")
+                continue
+            if existing is not None and len(existing) > 0:
+                merged = pd.concat([existing, df], ignore_index=True)
+            else:
+                merged = df
+            merged = _drop_duplicates_keep_updated(merged, _CASHFLOW_VERSION_DEDUP_COLS)
+            storage.save_raw_by_date(merged, "cashflow", period)
+            refreshed_rows += len(merged)
+            period_success[period] = True
+        except Exception as e:
+            period_success[period] = False
+            logger.warning(f"[cashflow] 修订刷新 {period} 失败: {e}")
+
+    recent_success = all(period_success.get(period, False) for period in recent_periods)
+    if daily_due and recent_success:
+        storage.save_sync_watermark(_CASHFLOW_REVISION_REFRESH_WATERMARK, target)
+    elif daily_due:
+        logger.warning(
+            f"[cashflow] 近期修订刷新部分失败，下次运行重试: "
+            f"{sum(period_success.get(p, False) for p in recent_periods)}/{len(recent_periods)}"
+        )
+
+    historical_success = all(period_success.get(period, False) for period in historical_periods)
+    if full_due and historical_periods and historical_success:
+        storage.save_sync_watermark(_CASHFLOW_REVISION_FULL_REFRESH_WATERMARK, target)
+    elif full_due and historical_periods:
+        logger.warning(
+            f"[cashflow] 全历史版本刷新部分失败，下次运行重试: "
+            f"{sum(period_success.get(p, False) for p in historical_periods)}/"
+            f"{len(historical_periods)}"
+        )
+
+    logger.info(
+        f"[cashflow] 修订刷新完成: 查询 {len(periods)} 个季度, "
+        f"分区累计 {refreshed_rows} 行, full_refresh={full_due}"
+    )
+
+
 def _try_download_cashflow(
     client: TushareClient,
     storage: Storage,
@@ -101,8 +244,8 @@ def _try_download_cashflow(
 ) -> Optional[pd.DataFrame]:
     """下载现金流量表数据
 
-    数据充足（>= 阈值）：按公告日区间补齐增量。
-    数据不足或不存在：按季度批量下载全量。
+    数据充足（>= 阈值）：按公告日区间补齐增量（版本化去重）。
+    数据不足或不存在：按季度批量下载全量（分页粒度 6400，版本化去重）。
     """
     existing = _load_all_partitions(storage, "cashflow")
 
@@ -114,8 +257,13 @@ def _try_download_cashflow(
                 existing_df=existing,
                 trade_date=trade_date,
                 date_col="ann_date",
-                dedup_cols=["ts_code", "end_date", "ann_date"],
-                fetch_by_date=lambda d: client.query("cashflow_vip", ann_date=d),
+                dedup_cols=_CASHFLOW_VERSION_DEDUP_COLS,
+                fetch_by_date=lambda d: _query_with_pagination(
+                    client,
+                    "cashflow_vip",
+                    page_limit=6400,
+                    ann_date=d,
+                ),
                 partition_date_col="end_date",
                 partition_mode="quarter",
             )
@@ -134,7 +282,7 @@ def _try_download_cashflow(
         storage,
         dataset_name="cashflow",
         api_name="cashflow_vip",
-        dedup_cols=["ts_code", "end_date", "ann_date"],
+        dedup_cols=_CASHFLOW_VERSION_DEDUP_COLS,
         fields=None,
         partition_by_period=True,
     )

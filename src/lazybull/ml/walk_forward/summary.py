@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.ml.train_core.constants import CONSENSUS_REVISION_FEATURE_COLUMNS
+from src.lazybull.ml.train_core.constants import (
+    CONSENSUS_REVISION_FEATURE_COLUMNS,
+)
 
 
 def _live_consensus_revision_cols(result: Dict) -> str:
@@ -24,6 +26,17 @@ def _live_consensus_revision_cols(result: Dict) -> str:
         if col in base_cols or (col.startswith("zscore_cons_") and col.endswith("_sz"))
     )
     return ",".join(live)
+
+
+def _live_cashflow_quality_cols(result: Dict) -> str:
+    """提取单个 split 实际入模的现金流质量列（以门禁后 feature_columns 为准）。
+
+    与名义开关不同，此处记录的是缺失率/常数门禁之后真正进入模型的列，
+    避免"开关开启"被误读为"实验使用了同一组因子"。
+    """
+    from src.lazybull.factors.cashflow_quality import cashflow_quality_live_columns
+
+    return ",".join(cashflow_quality_live_columns(result.get("feature_columns") or []))
 
 
 def _topk_key_metrics(metrics: Dict, topk: int) -> Dict[str, Optional[float]]:
@@ -202,6 +215,7 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
             "test_end": result["test_end"],
             "model_version": result["model_version"],
             "consensus_revision_cols_live": _live_consensus_revision_cols(result),
+            "cashflow_quality_cols_live": _live_cashflow_quality_cols(result),
             "train_samples": result.get("train_samples"),
             "val_samples": result.get("val_samples"),
             "test_samples": result.get("test_samples"),

@@ -65,6 +65,31 @@ def _warn_legacy_consensus_revision_model(
         )
 
 
+def _warn_legacy_cashflow_quality_model(
+    feature_columns: list, train_params: dict, version_str: str
+) -> None:
+    """模型含现金流质量列但 schema 缺失或错版时告警。"""
+    from ..factors.cashflow_quality import (
+        CASHFLOW_QUALITY_SCHEMA_VERSION,
+        cashflow_quality_live_columns,
+    )
+    from .train_core.constants import read_cashflow_quality_schema_version
+
+    cashflow_cols = cashflow_quality_live_columns(list(feature_columns or []))
+    if not cashflow_cols:
+        return
+
+    raw_version = (train_params or {}).get("cashflow_quality_schema_version")
+    schema_version = read_cashflow_quality_schema_version(train_params)
+    if schema_version != CASHFLOW_QUALITY_SCHEMA_VERSION:
+        logger.warning(
+            f"模型 {version_str} 含现金流质量列 {cashflow_cols}，"
+            f"但训练 schema={raw_version!r}，当前要求 schema_v"
+            f"{CASHFLOW_QUALITY_SCHEMA_VERSION}。若输入特征已重建，将存在 "
+            "train/serve 语义偏差，建议停用或重训。"
+        )
+
+
 class ModelRegistry:
     """模型注册表
 
@@ -413,6 +438,11 @@ class ModelRegistry:
         # 若输入特征已按 v2 重建，同名列将静默产生 train/serve 语义偏差。
         # 仅告警不阻断，保持存量模型推理可用；生产建议停用此类模型或重训。
         _warn_legacy_consensus_revision_model(
+            feature_columns,
+            metadata.get("train_params") or {},
+            metadata["version_str"],
+        )
+        _warn_legacy_cashflow_quality_model(
             feature_columns,
             metadata.get("train_params") or {},
             metadata["version_str"],

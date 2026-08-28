@@ -52,6 +52,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **ML 模型训练**: 支持 XGBoost 模型训练，自动验证集评估
 - ✅ **模型优化**: 早停机制、标签 winsorize、正则化、IC/RankIC 评估
 - ✅ **特征优化**: 向量化计算提升特征生成效率
+- ✅ **现金流质量因子**: 基于 `f_ann_date` 的版本化 PIT、依赖修订事件驱动 TTM 与供应商自由现金流口径
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
 - ✅ **成交额过滤**: 在信号生成（选股）阶段过滤成交额后N%的股票，提高持仓流动性
@@ -136,6 +137,9 @@ python scripts/download_raw.py --start-date 20230101 --end-date 20231231
 # 风控公告类数据（质押/解禁/大宗，供风控模型专用因子使用）
 python scripts/download_raw.py --start-date 20230101 --end-date 20231231 --download pledge_stat share_float block_trade
 
+# 现金流质量因子首次启用或升级 schema v3：起点至少早于训练起点两年，并强制重建版本化 raw
+python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --download cashflow --force
+
 # 步骤2: 构建clean和features（假设raw已存在）
 # --horizon / --horizons 二选一必填：
 #   --horizon 20         : 单值模式，仅按主 horizon 对应的 y_ret_20 非空过滤（推荐，保留停牌导致的辅助标签缺失样本）
@@ -145,6 +149,9 @@ python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
 
 # 启用风控公告类因子（质押/解禁/大宗，需先下载 pledge_stat/share_float/block_trade）
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-announcement-risk-features
+
+# 启用现金流质量因子（默认加载两年 TTM 预热；schema v3 会拦截旧缓存）
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-cashflow-quality-features
 
 # 或者只构建clean
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-clean --horizon 20
@@ -221,6 +228,10 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231
 # 自定义超参数训练
 python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
     --n-estimators 200 --max-depth 5 --learning-rate 0.05
+
+# 使用现金流质量因子；旧 schema 模型必须重新训练
+python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
+  --enable-cashflow-quality-features
 
 # 步骤2: 使用 ML 模型运行回测（使用新的默认值）
 # 注意：scripts/run_ml_backtest.py 已删除，回测已并入 walk_forward 滚动回测，

@@ -48,6 +48,7 @@ _REQUIRED_FACTOR_COLS = [
     "lhb_cont_up_days_20",  # 龙虎榜连续异动近 20 日累计（v0.95.0 新增列）
     "consensus_freshness_days",  # 一致预期 freshness
     "cashflow_freshness_days",  # 现金流质量 freshness
+    "cashflow_quality_schema_v2",  # 现金流质量哨兵列（当前值 v3；旧语义缓存自动重建）
     "cons_revision_freshness_days",  # 一致预期修正 freshness
     "cons_eps_revision_accel",  # 一致预期修正六值列（v2 重做后补检）
     "cons_eps_dispersion",

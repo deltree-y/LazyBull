@@ -641,9 +641,9 @@ class DataLoader(AnnouncementRiskLoaderMixin):
         self,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        lookback_years: int = 1,
+        lookback_years: int = 2,
     ) -> Optional[pd.DataFrame]:
-        """加载现金流量表数据（单文件）"""
+        """加载现金流量表数据，默认预热两年以覆盖 TTM 的两个历史依赖期。"""
         df = self._load_quarter_partitioned_raw(
             "cashflow",
             start_date=start_date,

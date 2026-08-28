@@ -267,10 +267,17 @@ class ConsensusFactorHandler:
 
 
 class CashflowQualityFactorHandler:
-    """现金流质量因子（个股级，季度前向填充）。"""
+    """现金流质量因子（个股级，季度前向填充，TTM 口径）。"""
 
     def apply(self, features, data, trade_date, current_data) -> Dict[str, pd.Series]:
-        from ..factors.cashflow_quality import CASHFLOW_COLS, CASHFLOW_FRESHNESS_COL
+        from ..factors.cashflow_quality import (
+            CASHFLOW_COLS,
+            CASHFLOW_FRESHNESS_COL,
+            CASHFLOW_QUALITY_SCHEMA_VERSION,
+            CASHFLOW_QUALITY_VERSION_COL,
+            _CLIP_FCF_YIELD,
+            _MIN_ABS_TOTAL_MV_YUAN,
+        )
 
         result = {}
         if data is not None and len(data) > 0:
@@ -279,7 +286,7 @@ class CashflowQualityFactorHandler:
             for col in merge_cols:
                 if col in merged.columns:
                     result[col] = merged[col]
-            # 计算 fcf_yield
+            # 计算 fcf_yield：FCF(TTM) / 总市值，总市值分母设经济尺度下限并裁剪极端值
             if "fcf" in result and "total_mv" in features.columns:
                 fcf = result.get("fcf")
                 total_mv = features["total_mv"]
@@ -287,16 +294,28 @@ class CashflowQualityFactorHandler:
                     total_mv_yuan = total_mv * 10000.0
                     result["fcf_yield"] = pd.Series(
                         np.where(
-                            total_mv_yuan > 1e-6,
-                            fcf.values / total_mv_yuan.values,
+                            total_mv_yuan.abs() >= _MIN_ABS_TOTAL_MV_YUAN,
+                            np.clip(
+                                fcf.values / total_mv_yuan.values,
+                                _CLIP_FCF_YIELD[0],
+                                _CLIP_FCF_YIELD[1],
+                            ),
                             np.nan,
                         ),
                         index=features.index,
                     )
+            else:
+                result["fcf_yield"] = float("nan")
         else:
             for col in CASHFLOW_COLS:
                 result[col] = float("nan")
             result[CASHFLOW_FRESHNESS_COL] = float("nan")
+
+        # 哨兵代表构建管线语义版本而非数据有无：对当日全截面恒写当前版本号
+        # （不经过 merge，无数据的股票也写版本号），训练入口据此拦截旧语义分区。
+        result[CASHFLOW_QUALITY_VERSION_COL] = pd.Series(
+            CASHFLOW_QUALITY_SCHEMA_VERSION, index=features.index
+        )
         return result
 
 

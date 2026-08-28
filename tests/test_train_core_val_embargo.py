@@ -17,7 +17,6 @@ from src.lazybull.ml.train_core import (
     split_val_for_selection_protocol_by_date,
 )
 
-
 BASE_FEATURE_COLUMNS = [
     "neu_ret_1",
     "neu_ret_20",
@@ -69,12 +68,8 @@ def test_load_factor_exclude_list_caches_by_explicit_file(tmp_path):
 
     train_core_module._factor_exclude_cache.clear()
     try:
-        assert train_core_module._load_factor_exclude_list(exclude_file=first_file) == {
-            "factor_a"
-        }
-        assert train_core_module._load_factor_exclude_list(exclude_file=second_file) == {
-            "factor_b"
-        }
+        assert train_core_module._load_factor_exclude_list(exclude_file=first_file) == {"factor_a"}
+        assert train_core_module._load_factor_exclude_list(exclude_file=second_file) == {"factor_b"}
     finally:
         train_core_module._factor_exclude_cache.clear()
 
@@ -283,12 +278,23 @@ def test_prepare_training_data_includes_missing_markers_when_present():
 
 
 def test_prepare_training_data_deduplicates_cashflow_profit_alias():
+    from src.lazybull.factors.cashflow_quality import (
+        CASHFLOW_QUALITY_SCHEMA_VERSION,
+        CASHFLOW_QUALITY_VERSION_COL,
+    )
+
     df = _make_training_df(n_dates=40, stocks_per_date=2)
     values = np.linspace(0.1, 2.0, len(df))
     df["zscore_cf_nm"] = values
     df["zscore_ocf_to_profit"] = values
     df["zscore_cf_nm_sz"] = values * 0.5
     df["zscore_ocf_to_profit_sz"] = values * 0.5
+    # 现金流质量开关为 fail-fast：schema 必须完整（含哨兵列）
+    df["zscore_ocf_to_revenue"] = values * 0.3
+    df["zscore_fcf_yield"] = values * 0.2
+    df["zscore_capex_to_ocf"] = values * 0.1
+    df["cashflow_freshness_days"] = 10.0
+    df[CASHFLOW_QUALITY_VERSION_COL] = CASHFLOW_QUALITY_SCHEMA_VERSION
 
     result = prepare_training_data(
         df,
@@ -305,6 +311,44 @@ def test_prepare_training_data_deduplicates_cashflow_profit_alias():
     assert "zscore_cf_nm" not in feature_columns
     assert "zscore_cf_nm_sz" not in feature_columns
     assert data_stats["removed_duplicate_features"] == ["zscore_cf_nm"]
+    assert data_stats["cashflow_quality_schema_version"] == CASHFLOW_QUALITY_SCHEMA_VERSION
+
+
+def test_prepare_training_data_cashflow_fail_fast_on_missing_columns():
+    """开关开启但 schema 不完整：必须显式失败，不得静默跳过（审计 fail-open 修复）。"""
+    df = _make_training_df(n_dates=12, stocks_per_date=2)
+
+    with pytest.raises(ValueError, match="现金流质量特征 schema 不完整"):
+        prepare_training_data(
+            df,
+            label_column="y_ret_5",
+            val_ratio=0.4,
+            enable_cashflow_quality_features=True,
+        )
+
+
+def test_prepare_training_data_cashflow_fail_fast_on_sentinel_mismatch():
+    """哨兵列存在但版本不符：必须显式失败，拦截旧语义分区。"""
+    from src.lazybull.factors.cashflow_quality import (
+        CASHFLOW_QUALITY_SCHEMA_VERSION,
+        CASHFLOW_QUALITY_VERSION_COL,
+    )
+
+    df = _make_training_df(n_dates=12, stocks_per_date=2)
+    df["zscore_ocf_to_revenue"] = 0.3
+    df["zscore_ocf_to_profit"] = 0.2
+    df["zscore_fcf_yield"] = 0.1
+    df["zscore_capex_to_ocf"] = 0.05
+    df["cashflow_freshness_days"] = 10.0
+    df[CASHFLOW_QUALITY_VERSION_COL] = CASHFLOW_QUALITY_SCHEMA_VERSION - 1
+
+    with pytest.raises(ValueError, match="现金流质量哨兵列"):
+        prepare_training_data(
+            df,
+            label_column="y_ret_5",
+            val_ratio=0.4,
+            enable_cashflow_quality_features=True,
+        )
 
 
 class _RiskMockModel:

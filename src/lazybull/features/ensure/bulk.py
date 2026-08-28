@@ -10,6 +10,17 @@ from loguru import logger
 from ...data import Storage, TushareClient
 from .incremental import _drop_duplicates_keep_updated
 
+# 各接口单次 limit 上限（与 scripts/raw_download 正式下载口径一致）。
+# 分页粒度若大于接口上限，TuShare 静默截断返回首屏（< 分页粒度即误判"取完"）。
+_API_PAGE_LIMITS = {
+    "cashflow_vip": 6400,        # cashflow_vip 单次 limit 上限
+    "fina_indicator_vip": 12000,  # fina_indicator_vip 单次 limit 上限
+    "fund_portfolio": 8000,       # fund_portfolio 单次 limit 上限
+}
+
+# 未知接口的回退分页粒度；接入新接口时必须核实其单次上限并登记到 _API_PAGE_LIMITS。
+_DEFAULT_PAGE_LIMIT = 50000
+
 
 def _generate_quarter_periods(start_year: int, end_year: int) -> List[str]:
     """生成从 start_year 到 end_year 的所有季度末日期"""
@@ -60,10 +71,11 @@ def _bulk_download_by_period(
     start_year: int = 2012,
     partition_by_period: bool = False,
     force: bool = False,
+    page_limit: Optional[int] = None,
 ) -> Optional[pd.DataFrame]:
     """按报告期(period)批量下载全量数据（自动分页）
 
-    适用于 fina_indicator_vip, forecast_vip, express_vip, fund_portfolio。
+    适用于 fina_indicator_vip, forecast_vip, express_vip, fund_portfolio, cashflow_vip。
     每季度1次 API 调用，替代逐股下载。
     当单季度数据超过上限时自动通过 offset 分页获取全量。
 
@@ -77,11 +89,19 @@ def _bulk_download_by_period(
         start_year: 起始年份
         partition_by_period: 按季度独立分区落盘
         force: 忽略已有数据全量重下（数据不足残缺恢复用，默认 False 走断点续传）
+        page_limit: 分页粒度；None 时按 _API_PAGE_LIMITS 映射解析，
+            未知接口回退 _DEFAULT_PAGE_LIMIT（新接口必须登记上限）
 
     Returns:
         下载并保存后的完整 DataFrame，或 None
     """
     import datetime as _dt
+
+    effective_page_limit = page_limit or _API_PAGE_LIMITS.get(api_name, _DEFAULT_PAGE_LIMIT)
+    logger.info(
+        f"[{dataset_name}] 分页粒度: {effective_page_limit}"
+        + ("（默认回退，请核实接口单次上限）" if api_name not in _API_PAGE_LIMITS else "")
+    )
 
     current_year = _dt.datetime.now().year
     periods = _generate_quarter_periods(start_year, current_year)
@@ -119,6 +139,7 @@ def _bulk_download_by_period(
             df = _query_with_pagination(
                 client,
                 api_name,
+                page_limit=effective_page_limit,
                 fields=fields,
                 period=period,
             )

@@ -341,11 +341,18 @@ def _load_factor_data(
     cons_lookup = None
     gc.collect()
 
-    # ── 现金流质量（按 ann_date 增量）──────────────────────────
+    # ── 现金流质量（按 ann_date 增量 + 修订季度刷新）──────────────
     cashflow_today = pd.DataFrame()
     cashflow_df = loader.load_cashflow(start_date=trade_date, end_date=trade_date)
     if _has_announcement_gap(storage, cashflow_df, "cashflow", "ann_date", trade_date):
         cashflow_df = _try_download_cashflow(client, storage, trade_date)
+    if cashflow_df is not None and len(cashflow_df) > 0:
+        # ann_date 增量捕获不到 ann_date 不变的晚到修订，按天刷新近 N 个季度
+        # （水位控制频率），刷新后重载以保证当日因子可见最新修订版本。
+        from .downloads import _refresh_cashflow_revisions_if_due
+
+        _refresh_cashflow_revisions_if_due(client, storage, trade_date)
+        cashflow_df = loader.load_cashflow(start_date=trade_date, end_date=trade_date)
     if cashflow_df is not None and len(cashflow_df) > 0:
         from ...factors.cashflow_quality import build_cashflow_quality_lookup_by_date
 

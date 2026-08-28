@@ -10,6 +10,10 @@ from loguru import logger
 
 from src.lazybull.common.date_utils import is_recent_date_str
 from src.lazybull.data import Storage, TushareClient
+from src.lazybull.data.financial_statement_versions import (
+    CASHFLOW_VERSION_DEDUP_COLS,
+    CASHFLOW_VERSIONED_RAW_WATERMARK,
+)
 from src.lazybull.data.report_rc import deduplicate_report_rc, query_report_rc_adaptive
 
 from .core import ERROR_COLLECTOR, ProgressTracker, _run_concurrent
@@ -469,18 +473,37 @@ def download_cashflow(
 
     TuShare cashflow_vip 单次 limit 上限 6400，分页粒度必须取 6400，
     否则首屏 6400 条被误判"取完"（实测 2018Q4-2020Q4 共 23 个季度被截断到 6400）。
+
+    去重键含 f_ann_date（版本化）：同报告期的修订记录按实际公告日保留多版本，
+    因子层按 f_ann_date 做 PIT 对齐，避免把未来修订回填到旧公告日。
     """
-    download_by_period(
+    existing_periods = {
+        str(period).replace("-", "")[:8] for period in storage.list_partitions("raw", "cashflow")
+    }
+    covers_existing_history = not existing_periods or all(
+        start_date <= period <= end_date for period in existing_periods
+    )
+    migration_pending = storage.load_sync_watermark(CASHFLOW_VERSIONED_RAW_WATERMARK) is None
+    effective_force = force or (migration_pending and covers_existing_history)
+    if effective_force and not force and existing_periods:
+        logger.warning("[cashflow] 检测到版本化 raw 尚未完成迁移，将重下请求范围内全部季度")
+
+    completed = download_by_period(
         client,
         storage,
         dataset_name="cashflow",
         api_name="cashflow_vip",
         start_date=start_date,
         end_date=end_date,
-        dedup_cols=["ts_code", "end_date", "ann_date"],
+        dedup_cols=list(CASHFLOW_VERSION_DEDUP_COLS),
         fields=None,
-        force=force,
+        force=effective_force,
         page_limit=6400,
         partition_by_period=True,
-        sort_cols=["end_date", "ann_date"],
+        sort_cols=["end_date", "f_ann_date"],
     )
+    if completed and covers_existing_history and effective_force:
+        storage.save_sync_watermark(
+            CASHFLOW_VERSIONED_RAW_WATERMARK,
+            datetime.now().strftime("%Y%m%d"),
+        )

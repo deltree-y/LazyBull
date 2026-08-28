@@ -115,6 +115,39 @@ def test_loader_load_cashflow_reads_only_needed_quarter_partitions():
         assert sorted(df["f_ann_date"].tolist()) == ["20240501", "20241031"]
 
 
+def test_loader_cashflow_default_window_contains_both_ttm_dependencies():
+    """单日加载必须同时包含去年同季度和去年 Q4，不能只补最近一个旧分区。"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = Storage(tmpdir)
+        rows_by_period = {
+            "20230930": ("20231030", 1.0e8),
+            "20231231": ("20240430", 4.0e8),
+            "20240930": ("20241030", 1.5e8),
+        }
+        for period, (ann_date, ocf) in rows_by_period.items():
+            storage.save_raw_by_date(
+                pd.DataFrame(
+                    {
+                        "ts_code": ["000001.SZ"],
+                        "ann_date": [ann_date],
+                        "f_ann_date": [ann_date],
+                        "end_date": [period],
+                        "n_cashflow_act": [ocf],
+                    }
+                ),
+                "cashflow",
+                period,
+            )
+
+        result = DataLoader(storage=storage).load_cashflow(
+            start_date="20250115",
+            end_date="20250115",
+        )
+
+        assert result is not None
+        assert sorted(result["end_date"].tolist()) == ["20230930", "20231231", "20240930"]
+
+
 def test_loader_cashflow_suppresses_all_na_concat_warning(monkeypatch):
     """窗口内外现金流分区合并不泄露告警，且全 NA 列原样保留。"""
     with tempfile.TemporaryDirectory() as tmpdir:

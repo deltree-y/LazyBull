@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.3] - 2026-08-28
+
+### Fixed
+
+- **现金流质量因子全链路审计修复（schema v3）**：
+  - **版本化 PIT**：数据可用时间改取 `f_ann_date`（实际公告日，缺失回退 `ann_date`），去重键改为 `(ts_code, end_date, f_ann_date)`，同报告期修订按版本保留、按交易日选择当日可见最新版本。修复前修订值被回填到原始公告日（实测 002111.SZ 2020 年报修订值 784M 在 2021-04-20 即被特征使用且 freshness=0；全量 6,105 行 `f_ann_date > ann_date`，中位延迟 232 天）；
+  - **事件驱动 TTM**：全部因子改为滚动四季度口径；当前期、去年同季度或去年 Q4 任一版本可用时都会重算当前期快照，修复依赖期晚到修订后 TTM 仍冻结旧值及 freshness 不重置；
+  - **供应商口径自由现金流**：`fcf`/`fcf_yield` 改用 TuShare `free_cashflow` 字段（TTM），不再使用本地 OCF−|capex| 代理混同口径；
+  - **数值稳定性**：分母经济尺度下限（1000 万元）+ 比值有界裁剪（capex_to_ocf ±50、ocf_to_revenue ±10、ocf_to_profit ±50、fcf_yield ±1 且总市值分母下限 1 亿元），替代仅 1e-6 元的弱过滤（修复前 raw 层 capex_to_ocf 最大 197,303）；
+  - **确定性版本去重**：同一 `(ts_code, end_date, f_ann_date)` 内冲突行优先按 TuShare 官方 `update_flag=1` 最新语义选择；标志相同或缺失时以全行内容哈希稳定决胜。离线下载、ensure 合并与因子构建复用同一工具，消除供应商 FCF 随输入行序变化；
+  - **加载与下载完整性**：现金流默认预热由一年改为两年，真实 `20260105` 单日 OCF 非空覆盖由 26 只恢复到 5,689 只；季度和公告日查询均按接口上限 6400 分页；近 8 季度每日刷新，首次升级及之后每 90 天全历史复查，空响应或部分失败不推进水位；
+  - **fail-fast 与哨兵**：`enable_cashflow_quality_features=True` 时训练入口缺列直接失败；稳定列名 `cashflow_quality_schema_v2` 的当前值升为 3，ensure 与训练入口均校验版本，强制旧语义分区重建；
+  - **训练/推理追溯**：WF summary 的 `cashflow_quality_cols_live` 记录门禁后实际入模列并包含 freshness；split/deploy/单次训练记录 schema 与实际列；普通模型加载和 skip-training 均告警旧现金流模型的 train/serve 语义偏差。
+
+### Migration
+
+- 离线启用现金流质量因子前，对所用历史范围执行一次 `python scripts/download_raw.py --start-date <训练起点前至少两年> --end-date <目标日> --download cashflow --force`，随后重建 `cs_train`/`cs_infer`。
+- 纸面 ensure 首次运行会自动重查全部现有 cashflow 分区，之后每 90 天深度复查；近期 8 个季度仍每日刷新。
+- schema v2 及更早缓存和模型与 v3 同名异义，必须重建特征并重训；哨兵值或模型 metadata 版本不符会失败或告警。
+
 ## [0.96.2] - 2026-08-27
 
 ### Docs

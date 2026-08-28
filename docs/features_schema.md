@@ -551,6 +551,36 @@ model.fit(X, y)
 
 详见: [docs/PR/feature_refactoring.md](./PR/feature_refactoring.md)
 
+## 现金流质量因子（v0.96.3 / schema v3：版本化 PIT + 事件驱动 TTM）
+
+### 字段定义
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| ocf | float | TTM 经营活动现金流净额（滚动四个季度） |
+| ocf_to_revenue | float | TTM OCF / TTM 销售商品、提供劳务收到的现金（`c_fr_sale_sg`，非营业收入）；分母经济尺度下限 1000 万元，比值裁剪 ±10 |
+| ocf_to_profit | float | TTM OCF / TTM 净利润；Q1/Q3 期 net_profit 覆盖率约 2%，训练侧按缺失率门禁剔除；分母下限 1000 万元，比值裁剪 ±50 |
+| fcf | float | TTM 自由现金流（TuShare `free_cashflow` 供应商口径） |
+| fcf_yield | float | fcf / 总市值（handler 层计算；总市值分母下限 1 亿元，裁剪 ±1） |
+| capex_to_ocf | float | TTM 资本支出（`c_pay_acq_const_fiolta`）/ TTM OCF；分母下限 1000 万元，比值裁剪 ±50 |
+| cashflow_freshness_days | float | 最近一次现金流公告（f_ann_date）距当日天数 |
+| cashflow_quality_schema_v2 | int | 稳定命名的语义哨兵列（当前恒写版本号 3）；旧语义分区缺失或值不符时自动重建，训练入口校验失败 |
+
+训练列：`zscore_ocf_to_revenue` / `zscore_ocf_to_profit` / `zscore_fcf_yield` / `zscore_capex_to_ocf`（含 `_sz` 市值中性化变体）+ `cashflow_freshness_days`。
+
+### 核心语义（v3）
+
+- **版本化 PIT**：数据可用时间取 `f_ann_date`（实际公告日，缺失回退 `ann_date`）；去重键 `(ts_code, end_date, f_ann_date)` 保留同报告期多次修订；同键冲突优先按 TuShare 官方 `update_flag=1` 最新记录选择，标志相同或缺失时以全行内容哈希稳定决胜，不再依赖输入行序。
+- **事件驱动 TTM**：`TTM(q_y) = cum(q_y) − cum(q_{y−1}) + cum(Q4_{y−1})`。当前期、去年同季度、去年 Q4 任一版本可用时都会生成当前期新快照，依赖期晚到修订会在其可用日重算 TTM 并重置 freshness；Q4 年报退化为当年累计。
+- **数值稳定性**：分母经济尺度下限 + 比值有界裁剪（见上表），负 OCF/负利润的方向信息保留。
+- **数据链路**：cashflow_vip 的季度与公告日查询均按 6400 分页；默认加载两年历史满足 TTM 依赖；近 8 季度每日刷新，首次升级及之后每 90 天全历史复查，水位仅在对应范围全部成功后推进。
+
+### 迁移说明
+
+- 启用 `--enable-cashflow-quality-features` 的区间必须重建 `cs_train` / `cs_infer`；哨兵列值不是 3 时训练入口会明确失败。
+- 离线构建前应对所用历史范围执行 `python scripts/download_raw.py ... --download cashflow --force`；起点至少早于训练起点两年。纸面 ensure 首次运行会自动全历史补齐版本，之后每 90 天复查。
+- schema v2 及更早模型与新分区同名异义，普通加载和 skip-training 均会告警，必须以重建后的特征重新训练。
+
 ## 参考资料
 
 - [TuShare Pro API文档](https://tushare.pro/document/2)
