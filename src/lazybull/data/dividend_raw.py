@@ -22,6 +22,7 @@ import json
 import os
 import tempfile
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Set
 
@@ -43,12 +44,26 @@ _DIVIDEND_COVERAGE_FILE = "_stock_coverage.json"
 _DIVIDEND_COVERAGE_VERSION = 1
 _DIVIDEND_COVERED_STATUSES = {"data", "empty"}
 _DIVIDEND_COVERAGE_STATUSES = _DIVIDEND_COVERED_STATUSES | {"pending", "failed"}
+_CONCAT_ALL_NA_WARNING = (
+    r"The behavior of DataFrame concatenation with empty or all-NA entries is deprecated"
+)
 
 
 def _norm_date_series(s: pd.Series) -> pd.Series:
     """将日期列统一为 YYYYMMDD 字符串（容错 20240101 / 2024-01-01 / datetime）。"""
     out = s.astype(str).str.strip().str.replace("-", "", regex=False).str[:8]
     return out
+
+
+def _concat_dividend_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
+    """原样合并 dividend 数据，仅屏蔽 pandas 已知的 dtype 推断告警。"""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            category=FutureWarning,
+            message=_CONCAT_ALL_NA_WARNING,
+        )
+        return pd.concat(frames, ignore_index=True)
 
 
 def _load_dividend_coverage(storage: Storage) -> Optional[Dict[str, str]]:
@@ -112,7 +127,7 @@ def _existing_dividend_df(storage: Storage) -> Optional[pd.DataFrame]:
             frames.append(df)
     if not frames:
         return None
-    return pd.concat(frames, ignore_index=True)
+    return _concat_dividend_frames(frames)
 
 
 def _save_dividend_by_year(storage: Storage, df: pd.DataFrame) -> None:
@@ -152,6 +167,21 @@ def _deduplicate_dividend(df: pd.DataFrame) -> pd.DataFrame:
     for col in ("ann_date", "ex_date", "imp_ann_date", "end_date"):
         if col in work.columns:
             work[col] = _norm_date_series(work[col])
+    if "ann_date" not in work.columns:
+        raise ValueError("dividend 数据缺少 ann_date，无法去重或按年分区")
+    valid_ann_date = work["ann_date"].str.match(r"^\d{8}$", na=False)
+    valid_ann_date &= pd.to_datetime(work["ann_date"], format="%Y%m%d", errors="coerce").notna()
+    invalid_count = int((~valid_ann_date).sum())
+    if invalid_count > 0:
+        invalid_codes = work.loc[~valid_ann_date, "ts_code"].astype(str).unique().tolist()
+        logger.warning(
+            f"[dividend] 忽略 {invalid_count} 条 ann_date 缺失或非法的记录，"
+            f"股票示例: {', '.join(invalid_codes[:10])}"
+            + (" ..." if len(invalid_codes) > 10 else "")
+        )
+        work = work.loc[valid_ann_date].copy()
+    if len(work) == 0:
+        return work.reset_index(drop=True)
     return deduplicate_prefer_latest_update_flag(
         work,
         list(DIVIDEND_DEDUP_COLS),
@@ -306,7 +336,7 @@ def download_dividend_full(
             frames.append(retained)
         frames.extend(new_dfs)
         if frames:
-            merged = _deduplicate_dividend(pd.concat(frames, ignore_index=True))
+            merged = _deduplicate_dividend(_concat_dividend_frames(frames))
         else:
             columns = existing_df.columns if existing_df is not None else []
             merged = pd.DataFrame(columns=columns)

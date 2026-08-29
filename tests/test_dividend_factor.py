@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """分红政策质量因子测试：PIT 契约（防前视）、送转调整、缺失语义、handler 展开、下载去重。"""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -721,6 +723,42 @@ def test_successful_empty_stock_is_persisted_and_old_partition_removed(tmp_path)
     assert client.calls == ["000003.SZ"]
     assert storage.list_partitions("raw", "dividend") == []
     assert _load_dividend_coverage(storage) == {"000003.SZ": "empty"}
+
+
+def test_download_ignores_invalid_ann_date_and_suppresses_concat_warning(tmp_path, monkeypatch):
+    """缺失公告日不生成非法分区，合并时不泄漏 pandas FutureWarning。"""
+    storage = Storage(str(tmp_path))
+    client = _DividendClientStub(
+        {
+            "000001.SZ": pd.DataFrame([_event_row(ts_code="000001.SZ")]),
+            "000002.SZ": pd.DataFrame([_event_row(ts_code="000002.SZ", ann_date=None)]),
+        }
+    )
+    original_concat = pd.concat
+
+    def _warning_concat(*args, **kwargs):
+        warnings.warn(
+            "The behavior of DataFrame concatenation with empty or all-NA entries "
+            "is deprecated.",
+            FutureWarning,
+        )
+        return original_concat(*args, **kwargs)
+
+    monkeypatch.setattr("src.lazybull.data.dividend_raw.pd.concat", _warning_concat)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = download_dividend_full(
+            client,
+            storage,
+            pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"]}),
+            concurrency=1,
+        )
+
+    leaked = [warning for warning in caught if issubclass(warning.category, FutureWarning)]
+    assert not leaked
+    assert result["ts_code"].tolist() == ["000001.SZ"]
+    assert storage.list_partitions("raw", "dividend") == ["2024-12-31"]
 
 
 def test_ensure_reuses_preloaded_dividend_partitions(tmp_path, monkeypatch):

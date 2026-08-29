@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.98.3] - 2026-08-29
+
+### Fixed
+
+- **分红原始数据脏日期容错**：合并后在去重与分年落盘前校验 `ann_date`，缺失或非法记录按数量及股票样例告警后剔除，避免生成 `None-12-31` 非法分区并中断全市场下载。
+- **分红合并告警降噪**：raw 历史分区与新下载结果合并时，仅精确屏蔽 pandas empty/all-NA dtype 推断 `FutureWarning`，不删除全空列或改变原始 schema。
+
 ## [0.98.2] - 2026-08-29
 
 ### Added
