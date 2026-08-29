@@ -28,7 +28,8 @@ class PaperQueueMixin:
                 'target_weight': ps.target_weight,
                 'reason': ps.reason,
                 'create_date': ps.create_date,
-                'attempts': ps.attempts
+                'attempts': ps.attempts,
+                'last_attempt_date': ps.last_attempt_date,
             })
         
         with open(file_path, 'w', encoding='utf-8') as f:
@@ -143,6 +144,7 @@ class PaperQueueMixin:
                 'original_signal_date': inst.original_signal_date,
                 'desired_position_count': inst.desired_position_count,
                 'retry_attempt': inst.retry_attempt,
+                'replacement_slot_code': inst.replacement_slot_code,
             })
         
         df = pd.DataFrame(data)
@@ -178,6 +180,12 @@ class PaperQueueMixin:
                 original_signal_date=row.get('original_signal_date', ''),
                 desired_position_count=int(row.get('desired_position_count', 0) or 0),
                 retry_attempt=int(row.get('retry_attempt', 0) or 0),
+                replacement_slot_code=(
+                    str(row['replacement_slot_code'])
+                    if 'replacement_slot_code' in df.columns
+                    and pd.notna(row['replacement_slot_code'])
+                    else ''
+                ),
             ))
         
         logger.debug(f"读取交易指令: {file_path} ({len(instructions)} 条)")

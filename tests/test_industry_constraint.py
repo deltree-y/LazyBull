@@ -371,3 +371,16 @@ def test_apply_industry_constraint_preserve_order():
     
     # 结果应保持原始顺序
     assert result == ranked_candidates
+
+
+def test_apply_industry_constraint_counts_existing_portfolio():
+    """分批选股时应把已有持仓计入行业上限。"""
+    result = apply_industry_constraint(
+        [('stock_a', 0.9), ('stock_b', 0.8), ('stock_c', 0.7)],
+        {'stock_a': '银行', 'stock_b': '银行', 'stock_c': '制造'},
+        max_per_industry=2,
+        target_n=2,
+        initial_industry_counts={'银行': 2},
+    )
+
+    assert result == [('stock_c', 0.7)]

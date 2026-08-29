@@ -233,3 +233,4 @@ class TradeInstruction:
     original_signal_date: str = ""  # 原始信号日期（可选，用于补位场景）
     desired_position_count: int = 0  # T0 计划的目标持仓数（用于 T1 限制新开仓槽位）
     retry_attempt: int = 0  # 该指令对应的重试次数（用于补位/重试卖出链路）
+    replacement_slot_code: str = ""  # 补位指令对应的原始失败槽位

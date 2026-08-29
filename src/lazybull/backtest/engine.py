@@ -167,8 +167,33 @@ class BacktestEngine(
         self.verbose = verbose
 
         # 分批调仓参数
+        if not isinstance(stagger_tranches, int):
+            raise TypeError(
+                f"分批调仓批次数必须为整数类型，当前类型: {type(stagger_tranches).__name__}"
+            )
         if stagger_tranches < 1:
             raise ValueError(f"分批调仓批次数必须 >= 1，当前值: {stagger_tranches}")
+        if stagger_tranches > rebalance_freq:
+            raise ValueError(
+                "分批调仓批次数不能超过调仓频率，"
+                f"当前值: {stagger_tranches} > {rebalance_freq}"
+            )
+        configured_top_n = getattr(signal, "top_n", None)
+        if isinstance(configured_top_n, int) and configured_top_n > 0:
+            if stagger_tranches > configured_top_n:
+                raise ValueError(
+                    "分批调仓批次数不能超过目标持仓数，"
+                    f"当前值: {stagger_tranches} > {configured_top_n}"
+                )
+            if (
+                max_weight_per_stock is not None
+                and max_weight_per_stock * configured_top_n < 1 - 1e-12
+            ):
+                raise ValueError(
+                    "max_weight_per_stock 与目标持仓数无法构成满仓组合，需满足 "
+                    "max_weight_per_stock * top_n >= 1，当前值: "
+                    f"{max_weight_per_stock} * {configured_top_n}"
+                )
         self.stagger_tranches = stagger_tranches
 
         self.enable_early_rebalance_on_empty = enable_early_rebalance_on_empty

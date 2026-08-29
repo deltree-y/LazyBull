@@ -281,7 +281,17 @@ def test_run_t0_stagger_uses_overall_top_n_as_desired_position_count():
     runner._save_strategy_state = MagicMock()
 
     runner.paper_storage.check_run_exists.return_value = False
-    runner.paper_storage.load_instructions.return_value = []
+    runner.paper_storage.load_instructions.return_value = [
+        TradeInstruction(
+            ts_code="000099.SZ",
+            action="buy",
+            shares=100,
+            price_type="close",
+            reason="补位-信号生成",
+            source_date="20260120",
+            retry_attempt=1,
+        )
+    ]
     runner.paper_storage.load_rebalance_state.return_value = {}
 
     runner.loader.load_clean_daily.return_value = pd.DataFrame(
@@ -328,6 +338,46 @@ def test_run_t0_stagger_uses_overall_top_n_as_desired_position_count():
 
     assert runner._generate_instructions.called
     assert runner._generate_instructions.call_args.kwargs["desired_position_count"] == 20
+    assert runner._generate_signals.call_args.kwargs["excluded_stocks"] == {"000099.SZ"}
+
+
+def test_stagger_instruction_persists_portfolio_weight_for_retry():
+    """分批指令应保存全组合权重，使失败槽位重试时不会放大预算。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+    runner.account = MagicMock()
+    runner.account.get_positions.return_value = {}
+    runner.account.get_total_value.return_value = 100000.0
+    runner._get_cost_setting = MagicMock(return_value=0.0)
+    target = TargetWeight(ts_code="000001.SZ", target_weight=0.1, reason="信号生成")
+
+    initial = runner._generate_instructions(
+        targets=[target],
+        buy_price_type="close",
+        sell_price_type="open",
+        current_prices={"000001.SZ": 10.0},
+        source_date="20260120",
+        desired_position_count=20,
+        tranche_idx=0,
+        overall_top_n=20,
+        stagger_tranches=2,
+    )
+    retry_target = TargetWeight(
+        ts_code="000001.SZ",
+        target_weight=initial[0].target_weight,
+        reason="补位-信号生成",
+    )
+    retry = runner._generate_instructions(
+        targets=[retry_target],
+        buy_price_type="close",
+        sell_price_type="open",
+        current_prices={"000001.SZ": 10.0},
+        source_date="20260121",
+        desired_position_count=20,
+    )
+
+    assert initial[0].target_weight == pytest.approx(0.05)
+    assert initial[0].shares == 500
+    assert retry[0].shares == initial[0].shares
 
 
 def test_generate_signals_respects_top_n_even_with_trading_config(monkeypatch):
@@ -377,7 +427,7 @@ def test_generate_signals_respects_top_n_even_with_trading_config(monkeypatch):
     runner._generate_ranked_with_lot_constraint = MagicMock(
         return_value=({"000001.SZ": 0.9, "000002.SZ": 0.8}, {"target_n": 5})
     )
-    runner._normalize_signals = MagicMock(return_value={"000001.SZ": 0.5, "000002.SZ": 0.5})
+    runner._normalize_signals = MagicMock(return_value={"000001.SZ": 0.8, "000002.SZ": 0.2})
     runner._enhance_target_info = MagicMock(
         return_value=[
             TargetWeight(ts_code="000001.SZ", target_weight=0.5, reason="信号生成"),
@@ -393,17 +443,21 @@ def test_generate_signals_respects_top_n_even_with_trading_config(monkeypatch):
         top_n=20,
         rebalance_freq=20,
         stagger_tranches=4,
+        max_weight_per_stock=0.15,
     )
 
     targets = runner._generate_signals(
         trade_date="20260120",
         top_n=5,
         trading_config=config,
+        tranche_idx=0,
     )
 
     assert len(targets) == 2
     assert runner._generate_ranked_with_lot_constraint.called
     assert runner._generate_ranked_with_lot_constraint.call_args.args[4] == 5
+    limited_weights = runner._enhance_target_info.call_args.args[0]
+    assert limited_weights == pytest.approx({"000001.SZ": 0.6, "000002.SZ": 0.4})
 
 
 def test_retry_pending_buys_success(broker):

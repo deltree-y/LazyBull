@@ -54,8 +54,35 @@ def temp_storage_with_data():
         nav_data.to_parquet(nav_file, index=False)
         
         # 3. 运行记录
+        rebalance_states = {
+            '20260205': {
+                'last_rebalance_date': '20260205',
+                'last_scheduled_rebalance_date': '20260205',
+                'tranche_anchor_date': '20260205',
+                'rebalance_freq': 5,
+                'stagger_tranches': 3,
+            },
+            '20260208': {
+                'last_rebalance_date': '20260208',
+                'last_scheduled_rebalance_date': '20260207',
+                'tranche_anchor_date': '20260205',
+                'rebalance_freq': 5,
+                'stagger_tranches': 3,
+            },
+            '20260210': {
+                'last_rebalance_date': '20260210',
+                'last_scheduled_rebalance_date': '20260209',
+                'tranche_anchor_date': '20260205',
+                'rebalance_freq': 5,
+                'stagger_tranches': 3,
+            },
+        }
         for date in ['20260205', '20260208', '20260210']:
-            t0_record = {'trade_date': date, 'timestamp': '2026-02-10T12:00:00'}
+            t0_record = {
+                'trade_date': date,
+                'rebalance_state': rebalance_states[date],
+                'timestamp': '2026-02-10T12:00:00',
+            }
             storage.save_run_record('t0', date, t0_record)
             
             t1_record = {'trade_date': date, 'fills_count': 1}
@@ -80,11 +107,7 @@ def temp_storage_with_data():
         storage.save_pending_sells([])
         
         # 6. rebalance_state
-        rebalance_state = {
-            'last_rebalance_date': '20260210',
-            'rebalance_freq': 5
-        }
-        storage.save_rebalance_state(rebalance_state)
+        storage.save_rebalance_state(rebalance_states['20260210'])
         
         yield storage
 
@@ -129,6 +152,9 @@ def test_truncate_since_rebalance_state_rollback(temp_storage_with_data):
     rebalance_state = storage.load_rebalance_state()
     assert rebalance_state is not None
     assert rebalance_state['last_rebalance_date'] == '20260208'
+    assert rebalance_state['last_scheduled_rebalance_date'] == '20260207'
+    assert rebalance_state['tranche_anchor_date'] == '20260205'
+    assert rebalance_state['stagger_tranches'] == 3
 
 
 def test_truncate_since_rebalance_state_delete(temp_storage_with_data):

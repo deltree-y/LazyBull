@@ -697,7 +697,8 @@ def test_storage_save_and_load_pending_sells(temp_storage):
             target_weight=0.0,
             reason='跌停延迟',
             create_date='20260121',
-            attempts=1
+            attempts=1,
+            last_attempt_date='20260122',
         ),
         PendingSell(
             ts_code='000002.SZ',
@@ -719,6 +720,7 @@ def test_storage_save_and_load_pending_sells(temp_storage):
     assert loaded[0].ts_code == '000001.SZ'
     assert loaded[0].shares == 1000
     assert loaded[0].attempts == 1
+    assert loaded[0].last_attempt_date == '20260122'
     assert loaded[1].ts_code == '000002.SZ'
 
 
@@ -1046,7 +1048,8 @@ def test_storage_save_load_instructions(temp_storage):
             price_type='close',
             reason='建仓',
             source_date='20260121',
-            target_weight=0.2
+            target_weight=0.2,
+            replacement_slot_code='000099.SZ',
         ),
         TradeInstruction(
             ts_code='000002.SZ',
@@ -1070,6 +1073,7 @@ def test_storage_save_load_instructions(temp_storage):
     assert loaded[0].ts_code == '000001.SZ'
     assert loaded[0].action == 'buy'
     assert loaded[0].shares == 100
+    assert loaded[0].replacement_slot_code == '000099.SZ'
     assert loaded[1].ts_code == '000002.SZ'
     assert loaded[1].action == 'sell'
     assert loaded[1].shares == 200

@@ -2,7 +2,10 @@
 
 import pytest
 import numpy as np
-from src.lazybull.portfolio.weight_processor import cap_and_normalize_weights
+from src.lazybull.portfolio.weight_processor import (
+    cap_and_normalize_weights,
+    resolve_tranche_weight_cap,
+)
 
 
 def test_cap_and_normalize_basic():
@@ -48,12 +51,7 @@ def test_cap_and_normalize_no_capping():
 
 
 def test_cap_and_normalize_multiple_stocks_capped():
-    """测试多只股票被限权的情况
-    
-    注意：当多只股票权重接近且都需要被限权时，迭代归一化后
-    最终所有权重可能会趋向相等（等权分布）。
-    这是因为限权后剩余权重会被重新分配给所有股票。
-    """
+    """测试约束不可行时严格限权并保留现金。"""
     weights = {
         'stock_a': 0.4,
         'stock_b': 0.35,
@@ -62,12 +60,10 @@ def test_cap_and_normalize_multiple_stocks_capped():
     
     result = cap_and_normalize_weights(weights, max_weight_per_stock=0.3)
     
-    # 权重和为 1
-    assert abs(sum(result.values()) - 1.0) < 1e-10
-    
-    # 在这个测试案例中，经过迭代归一化后，所有股票权重都会趋向 1/3
-    # 这是正常的行为，因为初始权重都比较接近，限权后会重新均衡分配
-    assert all(abs(w - 1/3) < 1e-6 for w in result.values())
+    # 3 * 0.3 < 1，约束不可行时必须严格限权并保留 10% 现金。
+    assert sum(result.values()) == pytest.approx(0.9)
+    assert all(weight == pytest.approx(0.3) for weight in result.values())
+    assert list(result) == list(weights)
 
 
 def test_cap_and_normalize_empty_weights():
@@ -212,3 +208,8 @@ def test_cap_and_normalize_extreme_concentration():
     # 限权后归一化，stock_b 和 stock_c 的权重应增加
     assert result['stock_b'] > 0.03
     assert result['stock_c'] > 0.02
+
+
+def test_resolve_tranche_weight_cap_uses_portfolio_caliber():
+    """全组合 15% 上限在半仓批次中应换算为批内 30%。"""
+    assert resolve_tranche_weight_cap(0.15, 0.5) == pytest.approx(0.3)

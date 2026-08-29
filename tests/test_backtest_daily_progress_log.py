@@ -1,6 +1,7 @@
 """测试每日回测进度日志。"""
 
 import pandas as pd
+import pytest
 import src.lazybull.backtest.engine as engine_module
 
 from src.lazybull.backtest import BacktestEngine
@@ -237,6 +238,96 @@ def test_stagger_signal_plan_keeps_total_target_and_splits_slots(monkeypatch):
         assert signal_plan["target_n"] == expected_count
         assert signal_plan["desired_position_count"] == 5
         assert len(signal_plan["slot_weights"]) == expected_count
+
+
+def test_stagger_signal_plan_applies_portfolio_weight_cap(monkeypatch):
+    """OOS 分批信号应将全组合单股上限换算为批内上限。"""
+    trading_dates = [pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03")]
+    stocks = [f"0000{index:02d}.SZ" for index in range(1, 11)]
+    price_data = pd.DataFrame(
+        [
+            {"trade_date": date.strftime("%Y%m%d"), "ts_code": stock, "close": 10.0}
+            for date in trading_dates
+            for stock in stocks
+        ]
+    )
+    signal = MockSignal(top_n=10)
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=signal,
+        initial_capital=100000.0,
+        rebalance_freq=20,
+        stagger_tranches=2,
+        position_sizing="score",
+        max_weight_per_stock=0.15,
+        verbose=False,
+    )
+    monkeypatch.setattr(engine.universe, "get_stocks", lambda *_args, **_kwargs: stocks)
+    monkeypatch.setattr(
+        signal,
+        "generate_ranked",
+        lambda *_args: [
+            (stock, 9.0 if index == 0 else 1.0)
+            for index, stock in enumerate(stocks)
+        ],
+    )
+
+    engine._generate_signal(
+        date=trading_dates[0],
+        trading_dates=trading_dates,
+        price_data=price_data,
+        date_to_idx={date: index for index, date in enumerate(trading_dates)},
+        tranche_idx=0,
+    )
+
+    weights = engine.pending_signals[trading_dates[0]]["signals"]
+    assert max(weights.values()) == pytest.approx(0.3)
+    assert max(weights.values()) * 0.5 == pytest.approx(0.15)
+
+
+def test_stagger_signal_industry_constraint_counts_existing_positions(monkeypatch):
+    """OOS 后续批次不得再选入已由现有持仓占满的行业。"""
+    trading_dates = [pd.Timestamp("2025-01-02"), pd.Timestamp("2025-01-03")]
+    stocks = ["000001.SZ", "000002.SZ"]
+    price_data = pd.DataFrame(
+        [
+            {"trade_date": date.strftime("%Y%m%d"), "ts_code": stock, "close": 10.0}
+            for date in trading_dates
+            for stock in stocks
+        ]
+    )
+    signal = MockSignal(top_n=1)
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=signal,
+        initial_capital=100000.0,
+        rebalance_freq=20,
+        verbose=False,
+    )
+    engine.positions = {"600000.SH": {"shares": 100}}
+    engine.max_per_industry = 1
+    engine.industry_mapping = {
+        "600000.SH": "银行",
+        "000001.SZ": "银行",
+        "000002.SZ": "医药",
+    }
+    monkeypatch.setattr(engine, "_calculate_portfolio_value", lambda _date: 100000.0)
+    monkeypatch.setattr(engine.universe, "get_stocks", lambda *_args, **_kwargs: stocks)
+    monkeypatch.setattr(
+        signal,
+        "generate_ranked",
+        lambda *_args: [("000001.SZ", 2.0), ("000002.SZ", 1.0)],
+    )
+
+    engine._generate_signal(
+        date=trading_dates[0],
+        trading_dates=trading_dates,
+        price_data=price_data,
+        date_to_idx={date: index for index, date in enumerate(trading_dates)},
+        tranche_idx=0,
+    )
+
+    assert list(engine.pending_signals[trading_dates[0]]["signals"]) == ["000002.SZ"]
 
 
 def test_stagger_tranches_build_full_position_across_batches(monkeypatch):

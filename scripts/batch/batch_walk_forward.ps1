@@ -161,7 +161,7 @@ $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性�
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
 $enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
-# 0711关闭后得分下降
+# 0828关闭后收益及回撤都变得更好, 需要保持关闭
 
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────

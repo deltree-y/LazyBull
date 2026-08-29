@@ -177,17 +177,42 @@ class PaperMaintenanceMixin:
             # 需要回滚：找到 cut_off 之前最近的 t0 记录
             t0_files = sorted([f for f in self.runs_path.glob("t0_*.json")])
             rollback_date = None
+            rollback_record = {}
             
             for t0_file in reversed(t0_files):
                 file_date = t0_file.stem.split('_')[1]
                 if file_date < cut_off_date:
                     rollback_date = file_date
+                    with open(t0_file, 'r', encoding='utf-8') as file:
+                        rollback_record = json.load(file)
                     break
             
             if rollback_date:
-                rebalance_state['last_rebalance_date'] = rollback_date
-                self.save_rebalance_state(rebalance_state)
-                logger.info(f"回滚调仓状态: {rebalance_state.get('last_rebalance_date')} -> {rollback_date}")
+                state_snapshot = rollback_record.get('rebalance_state')
+                if isinstance(state_snapshot, dict) and state_snapshot:
+                    restored_state = dict(state_snapshot)
+                else:
+                    restored_state = {
+                        'last_rebalance_date': rollback_date,
+                        'last_scheduled_rebalance_date': rollback_record.get(
+                            'scheduled_rebalance_date', rollback_date
+                        ),
+                        'rebalance_freq': rollback_record.get(
+                            'rebalance_freq', rebalance_state.get('rebalance_freq')
+                        ),
+                        'stagger_tranches': rollback_record.get(
+                            'stagger_tranches', rebalance_state.get('stagger_tranches', 1)
+                        ),
+                    }
+                    if restored_state['stagger_tranches'] > 1:
+                        restored_state['tranche_anchor_date'] = rollback_record.get(
+                            'tranche_anchor_date', rollback_date
+                        )
+                self.save_rebalance_state(restored_state)
+                logger.info(
+                    f"回滚调仓状态: {rebalance_state.get('last_rebalance_date')} -> "
+                    f"{restored_state.get('last_rebalance_date')}"
+                )
             else:
                 # cut_off 之前没有 t0 记录，删除 rebalance_state
                 rebalance_file = self.runs_path / "rebalance_state.json"

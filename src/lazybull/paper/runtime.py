@@ -174,20 +174,10 @@ def execute_trade_workflow(
         runner, corrected_date, config
     )
 
-    # 已将待重试队列转写为次日明确指令，避免 T1 再直接读取 pending_* 队列。
+    # 已将待重试卖出转写为次日明确指令，避免 T1 再直接读取 pending 队列。
     if pending_sell_actions:
         runner.broker.pending_sells = []
         runner.broker.storage.save_pending_sells([])
-    pending_buys = runner.paper_storage.load_pending_buys()
-    if pending_buys:
-        # 仅在当日已成功转写为明确指令后清空队列。
-        t1_date = runner._get_next_trade_date(corrected_date)
-        planned_next_day = runner.paper_storage.load_instructions(t1_date) if t1_date else []
-        planned_buy_retries = [
-            inst for inst in (planned_next_day or []) if inst.action == "buy" and inst.retry_attempt > 0
-        ]
-        if planned_buy_retries:
-            runner.paper_storage.save_pending_buys([])
 
     # 仅在本日真实执行 T0 时保存 ranked_candidates，
     # 避免非调仓日因补位流程临时调用 generate_ranked 覆盖持久化候选池。
@@ -309,19 +299,43 @@ def _save_next_day_instructions(
     runner: PaperTradingRunner,
     trade_date: str,
     instructions: List[TradeInstruction],
-) -> None:
+) -> List[TradeInstruction]:
     """将 T0 规划结果写入下一交易日指令文件。"""
     if not instructions:
-        return
+        return []
 
     t1_date = runner._get_next_trade_date(trade_date)
     if not t1_date:
         logger.warning(f"{trade_date} 无下一交易日，跳过写入次日指令")
-        return
+        return []
 
     existing = runner.paper_storage.load_instructions(t1_date) or []
     merged = _merge_trade_instructions(existing, instructions)
     runner.paper_storage.save_instructions(t1_date, merged)
+    return merged
+
+
+def _clear_planned_pending_buys(
+    runner: PaperTradingRunner,
+    saved_instructions: List[TradeInstruction],
+) -> None:
+    """仅清除已成功转写为明确指令的补位槽位。"""
+    planned_slot_keys = {
+        (instruction.replacement_slot_code, instruction.original_signal_date)
+        for instruction in saved_instructions
+        if instruction.action == "buy" and instruction.replacement_slot_code
+    }
+    if not planned_slot_keys:
+        return
+
+    pending_buys = runner.paper_storage.load_pending_buys()
+    remaining_pending_buys = [
+        pending_buy
+        for pending_buy in pending_buys
+        if (pending_buy.ts_code, pending_buy.original_signal_date) not in planned_slot_keys
+    ]
+    if len(remaining_pending_buys) != len(pending_buys):
+        runner.paper_storage.save_pending_buys(remaining_pending_buys)
 
 
 def _build_sell_instructions(
@@ -389,6 +403,7 @@ def _plan_pending_buy_retry_instructions(
     }
 
     retry_attempt_by_code: Dict[str, int] = {}
+    pending_slot_by_code: Dict[str, str] = {}
     enriched_targets = []
     for target, pending_buy in zip(replacement_targets, pending_buys):
         target.target_weight = pending_buy.target_weight
@@ -399,6 +414,7 @@ def _plan_pending_buy_retry_instructions(
         target.original_signal_date = pending_buy.original_signal_date or trade_date
         enriched_targets.append(target)
         retry_attempt_by_code[target.ts_code] = int(pending_buy.attempts)
+        pending_slot_by_code[target.ts_code] = pending_buy.ts_code
 
     instructions = runner._generate_instructions(
         targets=enriched_targets,
@@ -410,6 +426,7 @@ def _plan_pending_buy_retry_instructions(
     )
     for instruction in instructions:
         instruction.retry_attempt = retry_attempt_by_code.get(instruction.ts_code, 0)
+        instruction.replacement_slot_code = pending_slot_by_code.get(instruction.ts_code, "")
 
     if instructions:
         logger.info(f"已将 {len(instructions)} 个补位槽位具体化为次日买入指令")
@@ -470,7 +487,8 @@ def _plan_next_day_retry_and_sell_instructions(
     pending_buy_instructions = _plan_pending_buy_retry_instructions(runner, trade_date, config)
     instructions = _merge_trade_instructions(instructions, pending_buy_instructions)
 
-    _save_next_day_instructions(runner, trade_date, instructions)
+    saved_instructions = _save_next_day_instructions(runner, trade_date, instructions)
+    _clear_planned_pending_buys(runner, saved_instructions)
 
     planned_actions.extend(retry_sell_actions)
     planned_actions.extend(filtered_daily_actions)
@@ -669,13 +687,33 @@ def _execute_t1_if_pending(
             ],
             default=0,
         )
-        _handle_failed_buys(
-            runner,
-            trade_date,
-            config,
+        pending_buys = runner._build_pending_buys_from_failed_targets(
             failed_buy_targets,
-            attempt_count=max_retry_attempt,
+            trade_date,
+            attempts=max_retry_attempt,
         )
+        replacement_fills = runner._execute_pending_buys(
+            pending_buys,
+            buy_prices,
+            trade_date,
+            buy_price_type=str(config["buy_price"]),
+            universe_type=str(config.get("universe", "mainboard")),
+            exclude_st=bool(config.get("exclude_st", True)),
+            min_list_days=int(config.get("min_list_days", 365)),
+        )
+        fills.extend(replacement_fills)
+        fills_count += len(replacement_fills)
+        orders_count += len(pending_buys)
+        for fill in replacement_fills:
+            actions.append(
+                {
+                    "ts_code": fill.ts_code,
+                    "action": fill.action,
+                    "shares": fill.shares,
+                    "reason": fill.reason,
+                }
+            )
+        runner.broker.clear_failed_buy_targets()
 
     if fills_count > 0:
         runner.account.update_last_date(trade_date)
@@ -684,12 +722,13 @@ def _execute_t1_if_pending(
         runner._record_nav(trade_date, all_prices)
 
 
+    remaining_pending_buys = runner.paper_storage.load_pending_buys()
     run_record = {
         "trade_date": trade_date,
         "buy_price_type": config["buy_price"],
         "sell_price_type": config["sell_price"],
         "instructions_count": len(instructions) if instructions else 0,
-        "pending_buys_count": len(failed_buy_targets) if failed_buy_targets else 0,
+        "pending_buys_count": len(remaining_pending_buys),
         "orders_count": orders_count,
         "fills_count": fills_count,
         "timestamp": pd.Timestamp.now().isoformat(),

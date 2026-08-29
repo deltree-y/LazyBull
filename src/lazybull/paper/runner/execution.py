@@ -88,6 +88,7 @@ class PaperExecutionMixin:
         tranche_idx = 0
         if force_rebalance:
             logger.warning(f"强制执行 T0，跳过调仓日校验: {corrected_date}")
+            self._resolved_rebalance_plan_date = corrected_date
         else:
             _, tranche_idx = self._check_rebalance_day(
                 corrected_date,
@@ -124,6 +125,15 @@ class PaperExecutionMixin:
         if tranche_target_n <= 0:
             logger.warning(f"{tranche_tag}本批槽位为 0，跳过信号生成")
             return
+
+        t1_date = self._get_next_trade_date(corrected_date)
+        if not t1_date:
+            logger.error(f"无法获取 {corrected_date} 的下一个交易日")
+            return
+        existing_instructions = self.paper_storage.load_instructions(t1_date) or []
+        reserved_buy_stocks = {
+            inst.ts_code for inst in existing_instructions if inst.action == 'buy'
+        }
         
         # 4. 生成信号（ensure_features_for_date 内部自动下载缺失的 raw/clean 数据）
         # 分批调仓时 signal.top_n 保持为总 top_n（用于候选排序范围），
@@ -154,7 +164,9 @@ class PaperExecutionMixin:
             exclude_st=effective_config.exclude_st,
             min_list_days=effective_config.min_list_days,
             protected_stocks=protected_stocks,
+            excluded_stocks=reserved_buy_stocks,
             trading_config=effective_config,
+            tranche_idx=tranche_idx,
         )
         
         if not targets:
@@ -223,15 +235,9 @@ class PaperExecutionMixin:
         # 7. 持久化指令
         logger.info("步骤4: 保存交易指令")
         # T0生成的是T1执行的目标，所以需要获取T1日期
-        t1_date = self._get_next_trade_date(corrected_date)
-        if not t1_date:
-            logger.error(f"无法获取 {corrected_date} 的下一个交易日")
-            return
-        
         # 保存交易指令（指令驱动模式）。
         # 同一交易日内，日度卖出规划可能已先写入次日指令，这里需要做合并而非覆盖。
         # 合并优先级：已存在的条件卖出/止损指令 > 调仓卖出 > 调仓买入。
-        existing_instructions = self.paper_storage.load_instructions(t1_date) or []
         merged_instructions: List[TradeInstruction] = []
         seen_keys = set()
         for inst in [*existing_instructions, *instructions]:
@@ -246,16 +252,26 @@ class PaperExecutionMixin:
             self.paper_storage.save_ranked_candidates(self.signal._last_ranked_candidates, corrected_date)
         
         # 8. 更新调仓状态（分批模式：批次0时更新锚定日）
+        prev_state = self.paper_storage.load_rebalance_state() or {}
+        scheduled_rebalance_date = getattr(
+            self,
+            '_resolved_rebalance_plan_date',
+            corrected_date,
+        )
+        config_changed = (
+            prev_state.get('rebalance_freq', effective_config.rebalance_freq)
+            != effective_config.rebalance_freq
+            or prev_state.get('stagger_tranches', 1) != stagger_tranches
+        )
         rebalance_state = {
             'last_rebalance_date': corrected_date,
+            'last_scheduled_rebalance_date': scheduled_rebalance_date,
             'rebalance_freq': effective_config.rebalance_freq,
             'stagger_tranches': stagger_tranches,
         }
-        if stagger_tranches > 1 and tranche_idx == 0:
-            rebalance_state['tranche_anchor_date'] = corrected_date
+        if stagger_tranches > 1 and (force_rebalance or config_changed or tranche_idx == 0):
+            rebalance_state['tranche_anchor_date'] = scheduled_rebalance_date
         elif stagger_tranches > 1:
-            # 非批次0：保留已有锚定日
-            prev_state = self.paper_storage.load_rebalance_state() or {}
             if prev_state.get('tranche_anchor_date'):
                 rebalance_state['tranche_anchor_date'] = prev_state['tranche_anchor_date']
         self.paper_storage.save_rebalance_state(rebalance_state)
@@ -279,6 +295,10 @@ class PaperExecutionMixin:
             'instructions_count': len(merged_instructions),
             'buy_count': buy_count,
             'sell_count': sell_count,
+            'tranche_idx': tranche_idx,
+            'scheduled_rebalance_date': scheduled_rebalance_date,
+            'stagger_tranches': stagger_tranches,
+            'rebalance_state': rebalance_state,
             'timestamp': pd.Timestamp.now().isoformat()
         }
         self.paper_storage.save_run_record("t0", corrected_date, run_record)

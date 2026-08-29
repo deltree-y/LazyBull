@@ -64,6 +64,7 @@ class PaperInstructionMixin:
         #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
         total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
 
+        capital_fraction = 1.0
         # 分批调仓：按本批槽位占总 top_n 的比例分配组合价值（与回测对齐）
         if stagger_tranches > 1 and overall_top_n and overall_top_n > 0:
             capital_fraction = _shared_tranche_capital_fraction(
@@ -79,6 +80,7 @@ class PaperInstructionMixin:
         desired_position_count = int(desired_position_count or len(ordered_target_codes))
         for ts_code in ordered_target_codes:
             target_weight, reason = target_weights.get(ts_code, (0.0, "退出持仓"))
+            portfolio_target_weight = target_weight * capital_fraction
             pos = current_positions.get(ts_code)
             current_shares = pos.shares if pos else 0
 
@@ -104,7 +106,7 @@ class PaperInstructionMixin:
                         price_type=buy_price_type,
                         reason=reason,
                         source_date=source_date,
-                        target_weight=target_weight,
+                        target_weight=portfolio_target_weight,
                         original_signal_date=source_date,
                         desired_position_count=desired_position_count,
                     ))

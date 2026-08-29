@@ -278,11 +278,11 @@ class PaperReplacementMixin:
         logger.info(f"股票池大小（排除持仓）: {len(stocks)}")
         
         if trading_config is not None:
+            portfolio_top_n = trading_config.top_n
             effective_config = replace(
                 trading_config,
                 buy_price=buy_price_type,
                 universe=universe_type,
-                top_n=failed_count,
                 model_version=(
                     model_version
                     if model_version is not None
@@ -298,6 +298,7 @@ class PaperReplacementMixin:
                 position_sizing=self.position_sizing,
             )
         else:
+            portfolio_top_n = failed_count
             effective_config = TradingConfig(
                 buy_price=buy_price_type,
                 universe=universe_type,
@@ -313,16 +314,16 @@ class PaperReplacementMixin:
         if self.signal is None:
             if model_version is not None:
                 self.signal = MLSignal(
-                    top_n=effective_config.top_n,
+                    top_n=failed_count,
                     model_version=effective_config.model_version,
                     verbose=False,
                 )
             else:
                 logger.warning("未指定信号生成器，使用等权")
                 from ...signals.base import EqualWeightSignal
-                self.signal = EqualWeightSignal(top_n=effective_config.top_n)
+                self.signal = EqualWeightSignal(top_n=failed_count)
         elif hasattr(self.signal, "top_n"):
-            self.signal.top_n = effective_config.top_n
+            self.signal.top_n = failed_count
             if (
                 effective_config.model_version_b is not None
                 and hasattr(self.signal, "update_versions")
@@ -350,12 +351,13 @@ class PaperReplacementMixin:
                     stocks,
                     signal_data,
                     daily_data,
-                    effective_config.top_n,
+                    failed_count,
                     buy_price_type,
                     max_per_industry=effective_config.max_per_industry,
                     industry_mapping=industry_mapping,
                     trading_config=effective_config,
                     existing_positions=current_positions,
+                    portfolio_top_n=portfolio_top_n,
                     return_meta=True,
                 )
             else:

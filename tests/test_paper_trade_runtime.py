@@ -9,10 +9,12 @@ from src.lazybull.paper.reporting import format_trade_result
 from src.lazybull.paper.runtime import (
     PaperTradeExecutionResult,
     PaperTradeRuntimeContext,
+    _clear_planned_pending_buys,
     _execute_t0_if_rebalance_day,
-    _plan_pending_buy_retry_instructions,
     _execute_t1_if_pending,
     _handle_failed_buys,
+    _plan_pending_buy_retry_instructions,
+    _save_next_day_instructions,
     execute_trade_workflow,
 )
 from src.lazybull.paper.models import Fill, PendingBuy, TargetWeight, TradeInstruction
@@ -272,8 +274,8 @@ def test_handle_failed_buys_preserves_original_slot_weight():
     runner.broker.clear_failed_buy_targets.assert_called_once()
 
 
-def test_execute_t1_if_pending_should_defer_failed_buys_to_next_t0(monkeypatch):
-    """T1 主路径的失败买单应转入下一日 T0 规划，而非同日补位执行。"""
+def test_execute_t1_if_pending_replaces_failed_buy_on_same_day(monkeypatch):
+    """T1 买入失败后应按原 T0 排名同日顺延，卖出失败仍走原延期队列。"""
 
     runner = MagicMock()
     runner.paper_storage.check_run_exists.return_value = False
@@ -305,12 +307,32 @@ def test_execute_t1_if_pending_should_defer_failed_buys_to_next_t0(monkeypatch):
         )
     ]
     runner.broker.get_failed_buy_targets.return_value = failed_targets
-
-    handle_calls = []
-
+    pending = PendingBuy(
+        ts_code='000001.SZ',
+        target_weight=0.1,
+        reason='补位-信号生成（涨停）',
+        create_date='20260121',
+        original_signal_date='20260120',
+    )
+    runner._build_pending_buys_from_failed_targets.return_value = [pending]
+    runner._execute_pending_buys.return_value = [
+        Fill(
+            ts_code='000002.SZ',
+            action='buy',
+            shares=1000,
+            price=10.0,
+            amount=10000.0,
+            commission=0.0,
+            stamp_tax=0.0,
+            slippage=0.0,
+            total_cost=0.0,
+            trade_date='20260121',
+            reason='补位-信号生成',
+        )
+    ]
     monkeypatch.setattr(
         'src.lazybull.paper.runtime._handle_failed_buys',
-        lambda *args, **kwargs: handle_calls.append((args, kwargs)),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不应延期到 T2")),
     )
 
     actions = _execute_t1_if_pending(
@@ -325,13 +347,29 @@ def test_execute_t1_if_pending_should_defer_failed_buys_to_next_t0(monkeypatch):
         },
     )
 
-    assert len(handle_calls) == 1
-    assert handle_calls[0][0][1] == '20260121'
-    assert handle_calls[0][0][3] == failed_targets
-    assert handle_calls[0][1]['attempt_count'] == 0
-    runner.broker.clear_failed_buy_targets.assert_not_called()
-    runner._build_pending_buys_from_failed_targets.assert_not_called()
-    runner._execute_pending_buys.assert_not_called()
+    assert actions == [
+        {
+            'ts_code': '000002.SZ',
+            'action': 'buy',
+            'shares': 1000,
+            'reason': '补位-信号生成',
+        }
+    ]
+    runner._build_pending_buys_from_failed_targets.assert_called_once_with(
+        failed_targets,
+        '20260121',
+        attempts=0,
+    )
+    runner._execute_pending_buys.assert_called_once_with(
+        [pending],
+        {'000002.SZ': 10.0},
+        '20260121',
+        buy_price_type='close',
+        universe_type='mainboard',
+        exclude_st=True,
+        min_list_days=365,
+    )
+    runner.broker.clear_failed_buy_targets.assert_called_once()
 
 
 def test_plan_pending_buy_retry_instructions_uses_portfolio_topn_as_slot_limit():
@@ -387,6 +425,97 @@ def test_plan_pending_buy_retry_instructions_uses_portfolio_topn_as_slot_limit()
     assert captured['desired_position_count'] == 20
     assert instructions[0].desired_position_count == 20
     assert instructions[0].retry_attempt == 1
+    assert instructions[0].replacement_slot_code == '000001.SZ'
+
+
+def test_clear_planned_pending_buys_keeps_unplanned_slots():
+    """只清除已落盘的补位槽位，未生成指令的槽位必须继续保留。"""
+    runner = MagicMock()
+    planned = PendingBuy(
+        ts_code='000001.SZ',
+        target_weight=0.05,
+        reason='补位-涨停',
+        create_date='20260120',
+        original_signal_date='20260119',
+    )
+    unplanned = PendingBuy(
+        ts_code='000002.SZ',
+        target_weight=0.05,
+        reason='补位-停牌',
+        create_date='20260120',
+        original_signal_date='20260119',
+    )
+    runner.paper_storage.load_pending_buys.return_value = [planned, unplanned]
+    instructions = [
+        TradeInstruction(
+            ts_code='000003.SZ',
+            action='buy',
+            shares=100,
+            price_type='close',
+            reason='补位-涨停',
+            source_date='20260120',
+            original_signal_date='20260119',
+            replacement_slot_code='000001.SZ',
+        )
+    ]
+
+    _clear_planned_pending_buys(runner, instructions)
+
+    runner.paper_storage.save_pending_buys.assert_called_once_with([unplanned])
+
+
+def test_duplicate_buy_code_keeps_unmerged_replacement_slot():
+    """同股票买单去重后，未落盘的补位槽位必须留待下次规划。"""
+    runner = MagicMock()
+    runner._get_next_trade_date.return_value = '20260121'
+    planned = PendingBuy(
+        ts_code='000001.SZ',
+        target_weight=0.05,
+        reason='补位-涨停',
+        create_date='20260120',
+        original_signal_date='20260119',
+    )
+    unmerged = PendingBuy(
+        ts_code='000002.SZ',
+        target_weight=0.05,
+        reason='补位-停牌',
+        create_date='20260120',
+        original_signal_date='20260119',
+    )
+    existing_instruction = TradeInstruction(
+        ts_code='000003.SZ',
+        action='buy',
+        shares=100,
+        price_type='close',
+        reason='补位-涨停',
+        source_date='20260120',
+        original_signal_date='20260119',
+        replacement_slot_code='000001.SZ',
+    )
+    duplicate_instruction = TradeInstruction(
+        ts_code='000003.SZ',
+        action='buy',
+        shares=100,
+        price_type='close',
+        reason='补位-停牌',
+        source_date='20260120',
+        original_signal_date='20260119',
+        replacement_slot_code='000002.SZ',
+    )
+    runner.paper_storage.load_instructions.return_value = [existing_instruction]
+    runner.paper_storage.load_pending_buys.return_value = [planned, unmerged]
+
+    saved = _save_next_day_instructions(
+        runner,
+        trade_date='20260120',
+        instructions=[duplicate_instruction],
+    )
+    _clear_planned_pending_buys(runner, saved)
+
+    runner.paper_storage.save_instructions.assert_called_once_with(
+        '20260121', [existing_instruction]
+    )
+    runner.paper_storage.save_pending_buys.assert_called_once_with([unmerged])
 
 
 def test_execute_t0_skips_early_rebalance_when_positions_exist():

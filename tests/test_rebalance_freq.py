@@ -7,6 +7,8 @@ import pytest
 
 from src.lazybull.backtest import BacktestEngine
 from src.lazybull.common.cost import CostModel
+from src.lazybull.common.trading_config import TradingConfig
+from src.lazybull.paper.runner import PaperTradingRunner
 from src.lazybull.signals.base import Signal
 from src.lazybull.universe.base import Universe
 
@@ -166,6 +168,86 @@ def test_stagger_tranches_are_evenly_distributed_for_non_divisible_period(
         current - previous
         for previous, current in zip(scheduled_indices[:5], scheduled_indices[1:6])
     ] == [7, 6, 7, 7, 6]
+
+
+def test_trading_config_rejects_invalid_stagger_boundaries():
+    """统一配置应在运行前拒绝会产生空批次或排期覆盖的参数。"""
+    with pytest.raises(ValueError, match="不能超过 top_n"):
+        TradingConfig(top_n=2, rebalance_freq=20, stagger_tranches=3)
+    with pytest.raises(ValueError, match="不能超过 rebalance_freq"):
+        TradingConfig(top_n=20, rebalance_freq=2, stagger_tranches=3)
+
+
+def test_trading_config_rejects_infeasible_stock_weight_cap():
+    """单股上限乘目标持仓数不足 100% 时应明确失败。"""
+    with pytest.raises(ValueError, match="无法构成满仓组合"):
+        TradingConfig(top_n=5, max_weight_per_stock=0.15)
+
+
+def test_backtest_rejects_stagger_tranches_above_frequency():
+    with pytest.raises(ValueError, match="不能超过调仓频率"):
+        BacktestEngine(
+            universe=MockUniverse(['000001.SZ']),
+            signal=MockSignal(),
+            rebalance_freq=2,
+            stagger_tranches=3,
+            verbose=False,
+        )
+
+
+def test_paper_stagger_catches_up_earliest_missed_tranche():
+    """纸面交易漏跑计划日后应先补最早未履行批次。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+    dates = [date.strftime('%Y%m%d') for date in pd.bdate_range('2026-01-05', periods=40)]
+    runner._get_open_trade_dates = lambda: dates
+    state = {
+        'last_rebalance_date': dates[0],
+        'last_scheduled_rebalance_date': dates[0],
+        'tranche_anchor_date': dates[0],
+        'rebalance_freq': 20,
+        'stagger_tranches': 3,
+    }
+
+    assert runner._check_staggered_rebalance_day(dates[8], 20, 3, state) == (True, 1)
+    assert runner._resolved_rebalance_plan_date == dates[7]
+
+
+def test_paper_stagger_resets_cycle_when_configuration_changes():
+    """K 或调仓周期变化时应从当前成功 T0 重建周期。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+    runner.paper_storage = type(
+        'Storage',
+        (),
+        {
+            'load_rebalance_state': lambda self: {
+                'last_rebalance_date': '20260105',
+                'rebalance_freq': 20,
+                'stagger_tranches': 1,
+            }
+        },
+    )()
+
+    assert runner._check_rebalance_day('20260112', 20, stagger_tranches=2) == (True, 0)
+    assert runner._resolved_rebalance_plan_date == '20260112'
+
+
+def test_paper_stagger_recovers_from_invalid_legacy_state_config():
+    """旧状态中的空 freq/K 不应阻断当前交易日重建周期。"""
+    runner = PaperTradingRunner.__new__(PaperTradingRunner)
+    runner.paper_storage = type(
+        'Storage',
+        (),
+        {
+            'load_rebalance_state': lambda self: {
+                'last_rebalance_date': '20260105',
+                'rebalance_freq': '',
+                'stagger_tranches': None,
+            }
+        },
+    )()
+
+    assert runner._check_rebalance_day('20260112', 20, stagger_tranches=2) == (True, 0)
+    assert runner._resolved_rebalance_plan_date == '20260112'
 
 
 def test_rebalance_freq_invalid_integer():

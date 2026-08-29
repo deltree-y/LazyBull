@@ -4,12 +4,13 @@
 from ...common.constants import SHARE_LOT_SIZE
 from ...common.trading_config import TradingConfig
 from ...features import ensure_features_for_date
-from ...portfolio import cap_and_normalize_weights
+from ...portfolio import cap_and_normalize_weights, resolve_tranche_weight_cap
 from ...portfolio.industry_constraint import apply_industry_constraint
 from ...portfolio.industry_constraint import load_industry_mapping
 from ...signals.base import EqualWeightSignal
 from ...signals.ml_signal import MLSignal
 from ...trading.sizing import compute_lot_shares
+from ...trading.stagger import get_tranche_capital_fraction
 from ...universe.base import BasicUniverse
 from ..models import TargetWeight
 from dataclasses import replace
@@ -35,7 +36,9 @@ class PaperSignalMixin:
         exclude_st: bool = True,
         min_list_days: int = 365,
         protected_stocks: Optional[set] = None,
+        excluded_stocks: Optional[set] = None,
         trading_config: Optional[TradingConfig] = None,
+        tranche_idx: int = 0,
     ) -> List[TargetWeight]:
         """生成信号
 
@@ -54,6 +57,7 @@ class PaperSignalMixin:
         Returns:
             目标权重列表
         """
+        portfolio_top_n = trading_config.top_n if trading_config is not None else top_n
         if trading_config is not None:
             # 纸面交易分批模式下，top_n 必须以调用方传入值为准（本批槽位数），
             # 不能被总配置中的 top_n 覆盖，否则会退化为首批一次买满总仓位。
@@ -61,7 +65,6 @@ class PaperSignalMixin:
                 trading_config,
                 buy_price=buy_price_type,
                 universe=universe_type,
-                top_n=top_n,
                 model_version=(
                     model_version
                     if model_version is not None
@@ -171,6 +174,9 @@ class PaperSignalMixin:
             ):
                 self.signal.update_model_version(effective_config.model_version)
         
+        selection_exclusions = set(self.account.get_positions().keys())
+        selection_exclusions.update(excluded_stocks or set())
+
         # 加载行业映射（如果启用行业约束）
         industry_mapping = {}
         if max_per_industry and max_per_industry > 0:
@@ -189,12 +195,13 @@ class PaperSignalMixin:
                     stocks,
                     signal_data,
                     daily_data,
-                    effective_config.top_n,
+                    top_n,
                     buy_price_type,
                     max_per_industry=effective_config.max_per_industry,
                     industry_mapping=industry_mapping,
                     trading_config=effective_config,
-                    existing_positions=set(self.account.get_positions().keys()),
+                    existing_positions=selection_exclusions,
+                    portfolio_top_n=portfolio_top_n,
                     return_meta=True,
                 )
             else:
@@ -203,17 +210,29 @@ class PaperSignalMixin:
                     stocks,
                     {'features': signal_data}
                 )
+                raw_scores = {
+                    ts_code: score
+                    for ts_code, score in raw_scores.items()
+                    if ts_code not in selection_exclusions
+                }
                 signal_meta = {}
 
             signal_dict = self._normalize_signals(raw_scores, trade_date)
 
-            # 与 backtest 保持一致：先做单股限权，避免后续归一化抹掉留仓位效果。
+            # 全组合上限按本批预算比例换算为批内归一化权重上限。
             if effective_config.max_weight_per_stock is not None and signal_dict:
-                from ...portfolio import cap_and_normalize_weights
-
+                tranche_capital_fraction = get_tranche_capital_fraction(
+                    tranche_idx,
+                    portfolio_top_n,
+                    effective_config.stagger_tranches,
+                )
+                tranche_weight_cap = resolve_tranche_weight_cap(
+                    effective_config.max_weight_per_stock,
+                    tranche_capital_fraction,
+                )
                 signal_dict = cap_and_normalize_weights(
                     signal_dict,
-                    max_weight_per_stock=effective_config.max_weight_per_stock,
+                    max_weight_per_stock=tranche_weight_cap,
                     verbose=True,
                 )
         except Exception as e:
@@ -259,6 +278,7 @@ class PaperSignalMixin:
         industry_mapping: Optional[Dict[str, str]] = None,
         trading_config: Optional[TradingConfig] = None,
         existing_positions: Optional[set] = None,
+        portfolio_top_n: Optional[int] = None,
         return_meta: bool = False,
     ) -> Union[Dict[str, float], Tuple[Dict[str, float], Dict[str, object]]]:
         """生成原始分数字典（含行业约束 + 一手可买约束顺延补足）
@@ -294,19 +314,7 @@ class PaperSignalMixin:
 
         original_count = len(ranked_candidates)
 
-        # 应用行业约束（在一手约束之前）
-        if max_per_industry and max_per_industry > 0 and industry_mapping:
-            ranked_candidates = apply_industry_constraint(
-                ranked_candidates=ranked_candidates,
-                industry_mapping=industry_mapping,
-                max_per_industry=max_per_industry,
-                target_n=top_n * 3,  # 多选一些候选，后续一手约束还会筛掉
-                verbose=True,
-            )
-            logger.info(f"行业约束后候选数: {len(ranked_candidates)} (原始 {original_count})")
-
-        # T0 选股应完全排除已持仓，
-        # 避免为已持仓股票生成“补差买单”。
+        # 已持仓和同一执行日已预留买单必须先排除，避免占用候选截断名额。
         if existing_positions:
             before = len(ranked_candidates)
             ranked_candidates = [
@@ -320,6 +328,22 @@ class PaperSignalMixin:
                     f"排除已持仓候选 {excluded} 只，"
                     f"候选数 {before} -> {len(ranked_candidates)}"
                 )
+
+        # 行业约束按最终组合计数，而不是每个批次从零开始。
+        if max_per_industry and max_per_industry > 0 and industry_mapping:
+            initial_industry_counts: Dict[str, int] = {}
+            for ts_code in existing_positions:
+                industry = industry_mapping.get(ts_code, "未知行业")
+                initial_industry_counts[industry] = initial_industry_counts.get(industry, 0) + 1
+            ranked_candidates = apply_industry_constraint(
+                ranked_candidates=ranked_candidates,
+                industry_mapping=industry_mapping,
+                max_per_industry=max_per_industry,
+                target_n=top_n * 3,
+                verbose=True,
+                initial_industry_counts=initial_industry_counts,
+            )
+            logger.info(f"行业约束后候选数: {len(ranked_candidates)} (原始 {original_count})")
 
         logger.info(f"等权+一手约束: 排序候选数 {len(ranked_candidates)}")
 
@@ -342,7 +366,11 @@ class PaperSignalMixin:
         total_capital = self.account.get_total_value(price_map)
         if total_capital <= 0:
             total_capital = self.account.initial_capital
-        equal_weight_value = total_capital / max(target_n, 1)
+        capital_retention_ratio = self._get_cost_setting("capital_retention_ratio", 0.0)
+        total_capital *= 1 - capital_retention_ratio
+        if portfolio_top_n is None and trading_config is not None:
+            portfolio_top_n = trading_config.top_n
+        equal_weight_value = total_capital / max(portfolio_top_n or target_n, 1)
         
         # 从排序候选中筛选可买至少1手的股票，保留原始分数
         selected = []  # List[Tuple[str, float]]

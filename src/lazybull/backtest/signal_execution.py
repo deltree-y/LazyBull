@@ -6,10 +6,20 @@ import pandas as pd
 from loguru import logger
 
 from ..common.date_utils import to_trade_date_str
+from ..portfolio import cap_and_normalize_weights, resolve_tranche_weight_cap
 
 
 class BacktestSignalExecutionMixin:
     """提供信号生成与候选规划相关实现。"""
+
+    def _get_industry_counts(self, stocks: set) -> Dict[str, int]:
+        """统计已有持仓在行业约束中的占用数量。"""
+        industry_mapping = self.industry_mapping or {}
+        industry_counts: Dict[str, int] = {}
+        for stock in stocks:
+            industry = industry_mapping.get(stock, "未知行业")
+            industry_counts[industry] = industry_counts.get(industry, 0) + 1
+        return industry_counts
 
     def _build_signal_data(self, date: pd.Timestamp) -> Optional[Dict]:
         """构建传递给信号生成器的额外数据（扩展点）
@@ -107,6 +117,7 @@ class BacktestSignalExecutionMixin:
         if not ranked_candidates:
             return
 
+        existing_positions = set(self.positions.keys()) if self.positions else set()
         if self.max_per_industry is not None:
             from ..portfolio import apply_industry_constraint
 
@@ -116,10 +127,10 @@ class BacktestSignalExecutionMixin:
                 max_per_industry=self.max_per_industry,
                 target_n=len(ranked_candidates),
                 verbose=self.verbose,
+                initial_industry_counts=self._get_industry_counts(existing_positions),
             )
 
         ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
-        existing_positions = set(self.positions.keys()) if self.positions else set()
         priority_candidates = [
             (stock, score) for stock, score in ranked_candidates if stock not in existing_positions
         ]
@@ -238,6 +249,8 @@ class BacktestSignalExecutionMixin:
         buy_date_str = to_trade_date_str(buy_date)
         buy_date_quote = price_data[price_data["trade_date"] == buy_date_str]
 
+        existing_positions = set(self.positions.keys()) if self.positions else set()
+
         # 应用行业约束（如果启用）
         if self.max_per_industry is not None:
             # 延迟导入
@@ -249,13 +262,13 @@ class BacktestSignalExecutionMixin:
                 max_per_industry=self.max_per_industry,
                 target_n=len(ranked_candidates),  # 保留所有候选，只改变顺序
                 verbose=self.verbose,
+                initial_industry_counts=self._get_industry_counts(existing_positions),
             )
 
         # 扩展点：子类可覆盖此方法对候选列表做额外过滤
         ranked_candidates = self._post_filter_candidates(ranked_candidates, date)
 
         # ── 持仓处理：排除已持仓股票 ──
-        existing_positions = set(self.positions.keys()) if self.positions else set()
         ranked_candidates_for_selection = ranked_candidates
 
         if existing_positions:
@@ -318,6 +331,17 @@ class BacktestSignalExecutionMixin:
 
         # 归一化权重（子类可覆写 _normalize_signals 以实现 ATR 加权等策略）
         signals = self._normalize_signals(signals, date)
+
+        if self.max_weight_per_stock is not None and signals:
+            tranche_weight_cap = resolve_tranche_weight_cap(
+                self.max_weight_per_stock,
+                self._get_tranche_capital_fraction(tranche_idx),
+            )
+            signals = cap_and_normalize_weights(
+                signals,
+                max_weight_per_stock=tranche_weight_cap,
+                verbose=self.verbose,
+            )
 
         # 应用权重限制（如果启用）
         # 同时保存 T0 候选优先级与槽位计划，供 T+1 顺位执行和后续补齐复用。

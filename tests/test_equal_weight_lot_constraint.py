@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from src.lazybull.common.trading_config import TradingConfig
 from src.lazybull.paper import PaperAccount, PaperStorage, TargetWeight
 from src.lazybull.paper.runner import PaperTradingRunner
 from src.lazybull.signals.ml_signal import MLSignal
@@ -273,6 +274,67 @@ def test_equal_weight_lot_constraint_boundary_case(mock_runner):
     assert '000001.SZ' in result
     assert '000002.SZ' not in result
     assert len(result) == 1
+
+
+def test_stagger_lot_constraint_uses_portfolio_slot_budget(mock_runner):
+    """分批预筛必须使用总组合单槽预算，避免放行最终买不到一手的股票。"""
+    date = pd.Timestamp('20260201')
+    stocks = ['000001.SZ', '000002.SZ']
+    daily_data = pd.DataFrame(
+        {
+            'ts_code': stocks,
+            'close': [150.0, 20.0],
+            'open': [150.0, 20.0],
+        }
+    )
+    mock_runner.signal = MagicMock(spec=MLSignal)
+    mock_runner.signal.generate_ranked.return_value = [
+        ('000001.SZ', 0.9),
+        ('000002.SZ', 0.8),
+    ]
+
+    result = mock_runner._generate_ranked_with_lot_constraint(
+        date,
+        stocks,
+        pd.DataFrame({'ts_code': stocks, 'feature1': [1, 2]}),
+        daily_data,
+        top_n=1,
+        buy_price_type='close',
+        trading_config=TradingConfig(top_n=20, stagger_tranches=4),
+    )
+
+    assert result == {'000002.SZ': 0.8}
+
+
+def test_lot_constraint_applies_capital_retention_ratio(mock_runner):
+    """一手预筛应使用扣除现金保留后的真实单槽预算。"""
+    date = pd.Timestamp('20260201')
+    stocks = ['000001.SZ', '000002.SZ']
+    daily_data = pd.DataFrame(
+        {
+            'ts_code': stocks,
+            'close': [45.0, 40.0],
+            'open': [45.0, 40.0],
+        }
+    )
+    mock_runner.signal = MagicMock(spec=MLSignal)
+    mock_runner.signal.generate_ranked.return_value = [
+        ('000001.SZ', 0.9),
+        ('000002.SZ', 0.8),
+    ]
+    mock_runner._get_cost_setting = MagicMock(return_value=0.2)
+
+    result = mock_runner._generate_ranked_with_lot_constraint(
+        date,
+        stocks,
+        pd.DataFrame({'ts_code': stocks, 'feature1': [1, 2]}),
+        daily_data,
+        top_n=1,
+        buy_price_type='close',
+        trading_config=TradingConfig(top_n=20, stagger_tranches=4),
+    )
+
+    assert result == {'000002.SZ': 0.8}
 
 
 def test_equal_weight_lot_constraint_excludes_existing_positions(

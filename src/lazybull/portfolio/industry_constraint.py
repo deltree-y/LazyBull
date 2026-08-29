@@ -91,7 +91,8 @@ def apply_industry_constraint(
     industry_mapping: Dict[str, str],
     max_per_industry: int,
     target_n: int,
-    verbose: bool = False
+    verbose: bool = False,
+    initial_industry_counts: Optional[Dict[str, int]] = None,
 ) -> List[Tuple[str, float]]:
     """应用行业持仓数量约束，从排序候选中选择股票
     
@@ -111,6 +112,7 @@ def apply_industry_constraint(
         max_per_industry: 单个行业最大持仓数量，必须 > 0
         target_n: 目标选股数量
         verbose: 是否输出详细日志
+        initial_industry_counts: 已有持仓及预留买单的行业占用数量
         
     Returns:
         满足行业约束的股票列表 [(股票代码, 分数), ...]
@@ -128,7 +130,7 @@ def apply_industry_constraint(
         return []
     
     selected = []
-    industry_counts = {}  # {行业: 已选数量}
+    industry_counts = dict(initial_industry_counts or {})  # {行业: 已占用及已选数量}
     skipped_by_industry = {}  # {行业: 跳过数量}（用于日志）
     
     for stock, score in ranked_candidates:

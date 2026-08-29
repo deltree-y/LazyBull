@@ -53,6 +53,59 @@ class TradingConfig:
 
     # ─────────────────── 工厂方法 ───────────────────
 
+    def __post_init__(self) -> None:
+        """校验会影响排期唯一性的组合参数。"""
+        if not isinstance(self.top_n, int):
+            raise TypeError(f"top_n 必须为整数类型，当前类型: {type(self.top_n).__name__}")
+        if self.top_n < 1:
+            raise ValueError(f"top_n 必须 >= 1，当前值: {self.top_n}")
+        if self.rebalance_freq is not None:
+            if not isinstance(self.rebalance_freq, int):
+                raise TypeError(
+                    "rebalance_freq 必须为整数类型或 None，"
+                    f"当前类型: {type(self.rebalance_freq).__name__}"
+                )
+            if self.rebalance_freq < 1:
+                raise ValueError(
+                    f"rebalance_freq 必须 >= 1，当前值: {self.rebalance_freq}"
+                )
+        if not isinstance(self.stagger_tranches, int):
+            raise TypeError(
+                "stagger_tranches 必须为整数类型，"
+                f"当前类型: {type(self.stagger_tranches).__name__}"
+            )
+        if self.stagger_tranches < 1:
+            raise ValueError(
+                f"stagger_tranches 必须 >= 1，当前值: {self.stagger_tranches}"
+            )
+        if self.stagger_tranches > self.top_n:
+            raise ValueError(
+                "stagger_tranches 不能超过 top_n，"
+                f"当前值: {self.stagger_tranches} > {self.top_n}"
+            )
+        if self.stagger_tranches > 1 and self.rebalance_freq is None:
+            raise ValueError("启用分批调仓时 rebalance_freq 不能为 None")
+        if (
+            self.rebalance_freq is not None
+            and self.stagger_tranches > self.rebalance_freq
+        ):
+            raise ValueError(
+                "stagger_tranches 不能超过 rebalance_freq，"
+                f"当前值: {self.stagger_tranches} > {self.rebalance_freq}"
+            )
+        if self.max_weight_per_stock is not None:
+            if not 0 < self.max_weight_per_stock <= 1:
+                raise ValueError(
+                    "max_weight_per_stock 必须在 (0, 1] 范围内，"
+                    f"当前值: {self.max_weight_per_stock}"
+                )
+            if self.max_weight_per_stock * self.top_n < 1 - 1e-12:
+                raise ValueError(
+                    "max_weight_per_stock 与 top_n 无法构成满仓组合，"
+                    f"需满足 max_weight_per_stock * top_n >= 1，当前值: "
+                    f"{self.max_weight_per_stock} * {self.top_n}"
+                )
+
     @classmethod
     def from_dict(cls, d: dict) -> "TradingConfig":
         """从字典（如 PaperStorage.load_config()）构建 TradingConfig。

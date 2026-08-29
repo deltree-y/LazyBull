@@ -30,9 +30,9 @@ class TestGetTrancheTargetCount:
         # 5 / 3 = 2/2/1
         assert [get_tranche_target_count(i, 5, 3) for i in range(3)] == [2, 2, 1]
 
-    def test_top_n_less_than_k(self):
-        # 2 / 4 = 1/1/0/0
-        assert [get_tranche_target_count(i, 2, 4) for i in range(4)] == [1, 1, 0, 0]
+    def test_top_n_less_than_k_raises(self):
+        with pytest.raises(ValueError, match="不能超过总目标持仓数"):
+            get_tranche_target_count(0, 2, 4)
 
     def test_sum_equals_total(self):
         for total in [5, 10, 20, 30, 33]:
@@ -63,8 +63,9 @@ class TestGetTrancheCapitalFraction:
                     get_tranche_capital_fraction(i, total, k) for i in range(k)
                 ) == pytest.approx(1.0)
 
-    def test_zero_total_returns_zero(self):
-        assert get_tranche_capital_fraction(0, 0, 3) == 0.0
+    def test_zero_total_raises(self):
+        with pytest.raises(ValueError, match="总目标持仓数"):
+            get_tranche_capital_fraction(0, 0, 3)
 
 
 # ── compute_tranche_schedule ──
@@ -104,6 +105,10 @@ class TestComputeTrancheSchedule:
     def test_invalid_freq_raises(self):
         with pytest.raises(ValueError):
             compute_tranche_schedule(self._make_dates(), 0, 1)
+
+    def test_tranches_cannot_exceed_rebalance_frequency(self):
+        with pytest.raises(ValueError, match="不能超过调仓频率"):
+            compute_tranche_schedule(self._make_dates(), 2, 4)
 
 
 # ── build_tranche_schedule_from_anchor ──

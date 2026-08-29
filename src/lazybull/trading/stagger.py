@@ -33,7 +33,20 @@ def get_tranche_target_count(
     Returns:
         本批次应占用的槽位数
     """
-    if stagger_tranches <= 1:
+    if not isinstance(total_target, int) or total_target < 1:
+        raise ValueError(f"总目标持仓数必须为正整数，当前值: {total_target}")
+    if not isinstance(stagger_tranches, int) or stagger_tranches < 1:
+        raise ValueError(f"分批调仓批次数必须为正整数，当前值: {stagger_tranches}")
+    if stagger_tranches > total_target:
+        raise ValueError(
+            f"分批调仓批次数不能超过总目标持仓数，当前值: {stagger_tranches} > {total_target}"
+        )
+    if not isinstance(tranche_idx, int) or not 0 <= tranche_idx < stagger_tranches:
+        raise ValueError(
+            f"批次索引必须在 [0, {stagger_tranches}) 范围内，当前值: {tranche_idx}"
+        )
+
+    if stagger_tranches == 1:
         return total_target
 
     base_count, remainder = divmod(total_target, stagger_tranches)
@@ -55,9 +68,6 @@ def get_tranche_capital_fraction(
     Returns:
         本批预算比例（0.0 ~ 1.0）
     """
-    if stagger_tranches <= 1 or total_target <= 0:
-        return 1.0 if stagger_tranches <= 1 else 0.0
-
     return get_tranche_target_count(tranche_idx, total_target, stagger_tranches) / total_target
 
 
@@ -81,6 +91,17 @@ def compute_tranche_schedule(
     n = rebalance_freq
     if n <= 0:
         raise ValueError(f"调仓频率必须为正整数，当前值: {n}")
+
+    if not isinstance(stagger_tranches, int):
+        raise TypeError(
+            f"分批调仓批次数必须为整数类型，当前类型: {type(stagger_tranches).__name__}"
+        )
+    if stagger_tranches < 1:
+        raise ValueError(f"分批调仓批次数必须 >= 1，当前值: {stagger_tranches}")
+    if stagger_tranches > n:
+        raise ValueError(
+            f"分批调仓批次数不能超过调仓频率，当前批次数: {stagger_tranches}, 调仓频率: {n}"
+        )
 
     if stagger_tranches <= 1:
         return {trading_dates[i]: 0 for i in range(0, len(trading_dates), n)}
@@ -119,17 +140,6 @@ def build_tranche_schedule_from_anchor(
     Returns:
         字典 {日期: tranche_idx}，仅包含 anchor_date 之后的调仓日
     """
-    if stagger_tranches <= 1:
-        # 不分批：从锚定日开始每隔 rebalance_freq 天
-        schedule: Dict[str, int] = {}
-        try:
-            anchor_idx = trade_dates.index(anchor_date)
-        except ValueError:
-            return schedule
-        for i in range(anchor_idx, len(trade_dates), rebalance_freq):
-            schedule[trade_dates[i]] = 0
-        return schedule
-
     # 找到锚定日在交易日列表中的索引
     try:
         anchor_idx = trade_dates.index(anchor_date)
