@@ -3,7 +3,6 @@
 import io
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -231,50 +230,6 @@ def test_storage_append_trade(temp_storage):
     assert len(trades_df) == 1
     assert trades_df.iloc[0]['ts_code'] == '000001.SZ'
     assert trades_df.iloc[0]['action'] == 'buy'
-
-
-    """strength 模式命中盈利延续保护时应输出 warning 日志。"""
-    runner = PaperTradingRunner.__new__(PaperTradingRunner)
-    runner.account = MagicMock()
-    runner.loader = MagicMock()
-
-    position = Position(
-        ts_code='000001.SZ',
-        shares=100,
-        buy_price=10.0,
-        buy_cost=5.0,
-        buy_date='20260120',
-    )
-    runner.account.get_positions.return_value = {'000001.SZ': position}
-    runner.loader.load_clean_daily_by_date.return_value = pd.DataFrame(
-        [{'ts_code': '000001.SZ', 'close': 11.0}]
-    )
-    runner.loader.load_clean_trade_cal.return_value = pd.DataFrame(
-        {
-            'cal_date': ['20260120', '20260121'],
-            'is_open': [1, 1],
-        }
-    )
-    runner._score_holding_strength = MagicMock(
-        return_value=SimpleNamespace(
-            total=0.72,
-            to_log_str=lambda: 'total=0.720 [ml=0.70 mom=0.60 tech=0.50 fund=0.40 dd=0.80] pnl=10.00%',
-        )
-    )
-
-    config = {
-        'rebalance_freq': 1,
-    }
-
-    stream = io.StringIO()
-    sink_id = logger.add(stream, level='WARNING', format='{level}|{message}')
-    try:
-        pass  # 盈亏动态持仓功能已移除
-    finally:
-        logger.remove(sink_id)
-
-    output = stream.getvalue()
-    assert True  # 桩测试，盈亏动态持仓功能已移除
 
 
 def test_print_t0_targets_marks_protected_stocks_as_retained():

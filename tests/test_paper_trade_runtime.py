@@ -71,8 +71,6 @@ def test_execute_trade_workflow_runs_full_shared_sequence(monkeypatch):
         lambda *_args, **_kwargs: call_order.append("t0")
         or (
             [{"ts_code": "000006.SZ", "target_weight": 0.1, "reason": "补位", "score": None}],
-            1.0,
-            "已移除",
             "success",
             ["000007.SZ"],
         ),
@@ -177,7 +175,7 @@ def test_execute_trade_workflow_skip_save_ranked_candidates_when_no_t0(monkeypat
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
-        lambda *_a, **_k: ([], 1.0, "ECT 未启用", "not_rebalance_day", []),
+        lambda *_a, **_k: ([], "not_rebalance_day", []),
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime.DataLoader",
@@ -226,7 +224,7 @@ def test_execute_trade_workflow_save_ranked_candidates_on_t0_success(monkeypatch
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
-        lambda *_a, **_k: ([{"ts_code": "000001.SZ", "target_weight": 0.1, "reason": "r", "score": None}], 1.0, "ECT 未启用", "success", []),
+        lambda *_a, **_k: ([{"ts_code": "000001.SZ", "target_weight": 0.1, "reason": "r", "score": None}], "success", []),
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime.DataLoader",
@@ -529,7 +527,7 @@ def test_execute_t0_skips_early_rebalance_when_positions_exist():
     runner.broker.pending_sells = []
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
 
-    _, _, _, status, protected = _execute_t0_if_rebalance_day(
+    _, status, protected = _execute_t0_if_rebalance_day(
         runner=runner,
         trade_date="20260120",
         config={
@@ -562,7 +560,7 @@ def test_execute_t0_allows_early_rebalance_when_empty():
     runner._check_rebalance_day.side_effect = RuntimeError("当前不是调仓日")
     runner._get_next_trade_date.return_value = "20260121"
 
-    _, _, _, status, protected = _execute_t0_if_rebalance_day(
+    _, status, protected = _execute_t0_if_rebalance_day(
         runner=runner,
         trade_date="20260120",
         config={
@@ -596,7 +594,7 @@ def test_rebalance_day_executes_run_t0():
     runner.account.get_positions.return_value = {"600925.SH": MagicMock(shares=1000)}
     runner.broker.pending_sells = []
 
-    _, _, _, status, _ = _execute_t0_if_rebalance_day(
+    _, status, _ = _execute_t0_if_rebalance_day(
         runner=runner,
         trade_date="20260120",
         config={
@@ -667,7 +665,7 @@ def test_execute_trade_workflow_ensures_trade_date_clean_data(monkeypatch):
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
-        lambda *_a, **_k: ([], 1.0, "已移除", "not_rebalance_day", []),
+        lambda *_a, **_k: ([], "not_rebalance_day", []),
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime.DataLoader",
@@ -724,7 +722,7 @@ def test_execute_trade_workflow_continues_when_clean_data_ensure_fails(monkeypat
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime._execute_t0_if_rebalance_day",
-        lambda *_a, **_k: ([], 1.0, "已移除", "not_rebalance_day", []),
+        lambda *_a, **_k: ([], "not_rebalance_day", []),
     )
     monkeypatch.setattr(
         "src.lazybull.paper.runtime.DataLoader",

@@ -170,7 +170,7 @@ def execute_trade_workflow(
     )
 
     _report("执行 T0")
-    t0_targets, _, _, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
+    t0_targets, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
 
@@ -825,20 +825,17 @@ def _execute_t0_if_rebalance_day(
     runner: PaperTradingRunner,
     trade_date: str,
     config: Dict[str, object],
-) -> Tuple[List[Dict[str, object]], float, str, str, List[str]]:
+) -> Tuple[List[Dict[str, object]], str, List[str]]:
     """执行 T0（如果是调仓日）。
-    
-    返回值: (targets_info, _dummy1, _dummy2, t0_status, protected_stock_list)
-    注：_dummy1/_dummy2 为兼容旧调用方保留，始终为 1.0 / "已移除"。
+
+    返回值: (targets_info, t0_status, protected_stock_list)
     """
     targets_info: List[Dict[str, object]] = []
-    _dummy_exposure = 1.0
-    _dummy_reason = "已移除"
     protected_stock_list: List[str] = []
 
     if runner.paper_storage.check_run_exists("t0", trade_date):
         logger.info(f"T0 工作流已在 {trade_date} 执行过，跳过")
-        return targets_info, _dummy_exposure, _dummy_reason, "already_run", protected_stock_list
+        return targets_info, "already_run", protected_stock_list
 
     trading_config = TradingConfig.from_dict(config)
 
@@ -869,7 +866,7 @@ def _execute_t0_if_rebalance_day(
             early_rebalance_triggered = True
         else:
             logger.info(f"当前不是调仓日：{exc}")
-            return targets_info, _dummy_exposure, _dummy_reason, "not_rebalance_day", protected_stock_list
+            return targets_info, "not_rebalance_day", protected_stock_list
 
     if not is_rebalance_day:
         if allow_early_rebalance:
@@ -881,7 +878,7 @@ def _execute_t0_if_rebalance_day(
             early_rebalance_triggered = True
         else:
             logger.info("非调仓日，跳过 T0")
-            return targets_info, _dummy_exposure, _dummy_reason, "not_rebalance_day", protected_stock_list
+            return targets_info, "not_rebalance_day", protected_stock_list
 
     if early_rebalance_triggered:
         if early_rebalance_mode == "empty":
@@ -936,4 +933,4 @@ def _execute_t0_if_rebalance_day(
         logger.error(f"T0 执行失败: {exc}")
         t0_status = f"error:{exc}"
 
-    return targets_info, _dummy_exposure, _dummy_reason, t0_status, protected_stock_list
+    return targets_info, t0_status, protected_stock_list

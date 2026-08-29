@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.97.1] - 2026-08-29
+
+### Removed
+
+- **清理 ECT 遗留接口与文档**：`_execute_t0_if_rebalance_day` 返回签名由 5 元组收窄为 3 元组，移除 ECT 下线后遗留的 `_dummy_exposure`/`_dummy_reason` 兼容占位；删除 `tests/test_paper_trading.py` 中"盈亏动态持仓已移除"的残留桩测试残躯；README 移除已下线的"权益曲线交易（ECT）"功能特性说明。
+
 ## [0.97.0] - 2026-08-29
 
 ### Added
