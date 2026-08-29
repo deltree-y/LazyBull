@@ -9,7 +9,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-
 ALT_DATASETS = [
     "fina_indicator",
     "margin_detail",
@@ -22,6 +21,8 @@ ALT_DATASETS = [
     "top_list",
     "report_rc",
     "cashflow",
+    "income",
+    "dividend",
     "pledge_stat",
     "share_float",
     "block_trade",

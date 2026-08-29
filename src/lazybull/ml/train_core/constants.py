@@ -35,6 +35,9 @@ FUNDAMENTAL_FEATURE_COLUMNS = [
 MISSING_MARKER_FEATURE_COLUMNS = [
     "dv_ttm_missing",  # 股息率缺失标记
     "pe_ttm_missing",  # PE 缺失标记
+    # 注意：dividend_hist_missing 不在此处——缺失标记列表按列存在性自动入模，
+    # 会导致开关 A/B 实验（同一份特征分区）关闭组仍泄露分红信息；
+    # 该列随开关显式加入 DIVIDEND_POLICY_FEATURE_COLUMNS。
 ]
 
 MARGIN_FEATURE_COLUMNS = [
@@ -146,6 +149,19 @@ CONSENSUS_REVISION_FEATURE_COLUMNS = [
     "cons_revision_freshness_days",  # 最近一次研报距当日天数
 ]
 
+DIVIDEND_POLICY_FEATURE_COLUMNS = [
+    "zscore_dividend_continuity_5y",  # 近 5 财年正分红年占比
+    "zscore_dividend_stability_5y",  # 年度 DPS 稳健稳定度
+    "zscore_dividend_growth_3y",  # 3 年 DPS 有界对称增长率
+    "zscore_dividend_growth_5y",  # 5 年 DPS 有界对称增长率
+    "zscore_dividend_payout_ratio",  # 现金分红总额/归母净利润
+    "zscore_dividend_yield_hist_12m",  # 近 12 月每股现金分红/收盘价
+    "dividend_days_to_ex_date",  # 自然日距离 0~30；31 表示窗口内无已公告除息事件
+    "dividend_recent_imp_ann_10d",  # 近 10 交易日实施公告计数（原始稠密值）
+    "dividend_freshness_days",  # 最近一次除息距当日天数
+    "dividend_hist_missing",  # 缺失标记（显式随开关入模，不进全局缺失标记列表）
+]
+
 FRESHNESS_STRATEGY_DROP_ALL = "drop_all"
 
 FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY = "state_keep_event_decay"
@@ -159,6 +175,7 @@ STATE_FRESHNESS_COLUMNS = {
     "holder_freshness_days",
     "fund_portfolio_freshness_days",
     "cashflow_freshness_days",
+    "dividend_freshness_days",
 }
 
 EVENT_FRESHNESS_TO_VALUE_COLUMNS = {
@@ -251,6 +268,28 @@ def read_cashflow_quality_schema_version(train_params: dict) -> int:
 def read_cons_revision_schema_version(train_params: dict) -> int:
     """安全读取修正 schema 版本；缺失或异常内容（如 "v2" 字符串）返回 -1。"""
     raw = (train_params or {}).get("cons_revision_schema_version")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1
+
+
+def attach_dividend_train_params(train_params: dict, enable_flag: bool) -> dict:
+    """当分红政策因子开关开启时，在训练元数据中记录 schema 版本。
+
+    所有模型注册入口（split/deploy/单次训练）必须共用此函数，保证新旧模型
+    可通过 `dividend_policy_schema_version` 机器级区分。
+    """
+    if enable_flag:
+        from src.lazybull.factors.dividend import DIVIDEND_POLICY_SCHEMA_VERSION
+
+        train_params["dividend_policy_schema_version"] = DIVIDEND_POLICY_SCHEMA_VERSION
+    return train_params
+
+
+def read_dividend_policy_schema_version(train_params: dict) -> int:
+    """安全读取分红政策 schema 版本；缺失或异常内容返回 -1。"""
+    raw = (train_params or {}).get("dividend_policy_schema_version")
     try:
         return int(raw)
     except (TypeError, ValueError):

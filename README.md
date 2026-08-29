@@ -49,6 +49,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **模型优化**: 早停机制、标签 winsorize、正则化、IC/RankIC 评估
 - ✅ **特征优化**: 向量化计算提升特征生成效率
 - ✅ **现金流质量因子**: 基于 `f_ann_date` 的版本化 PIT、依赖修订事件驱动 TTM 与供应商自由现金流口径
+- 🧪 **分红政策质量因子（待 WF 验证）**: 分红稳定性/增长率、归母净利润支付率 + 双日期稠密事件因子，每股调整口径 PIT 截断、`ex_date` 防前视
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
 - ✅ **成交额过滤**: 在信号生成（选股）阶段过滤成交额后N%的股票，提高持仓流动性
@@ -58,7 +59,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 ### 计划功能 (Roadmap)
 
 - ✅ **纸面交易（Paper Trading）**: 日频工作流，T0 生成信号，T1 执行打印，支持状态持久化
-- 🔲 完整的价值红利因子库
+- 🔲 完整的价值红利因子库（分红政策质量因子 v0.98.2 已实现，待 WF 验证）
 - 🔲 组合优化与风险管理
 - 🔲 云端定时任务
 - 🔲 实盘接口（长期）
@@ -136,6 +137,12 @@ python scripts/download_raw.py --start-date 20230101 --end-date 20231231 --downl
 # 现金流质量因子首次启用或升级 schema v3：起点至少早于训练起点两年，并强制重建版本化 raw
 python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --download cashflow --force
 
+# 分红送股数据（分红政策质量因子，按股全历史查询 + ann_date 年分区）
+python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --download dividend
+
+# 利润表归母净利润（分红支付率，首次接入需强制建立 f_ann_date 版本化季度分区）
+python scripts/download_raw.py --start-date 20170101 --end-date 20231231 --download income --force
+
 # 步骤2: 构建clean和features（假设raw已存在）
 # --horizon / --horizons 二选一必填：
 #   --horizon 20         : 单值模式，仅按主 horizon 对应的 y_ret_20 非空过滤（推荐，保留停牌导致的辅助标签缺失样本）
@@ -148,6 +155,9 @@ python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
 
 # 启用现金流质量因子（默认加载两年 TTM 预热；schema v3 会拦截旧缓存）
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-cashflow-quality-features
+
+# 启用分红政策质量因子（需先下载 dividend + income；哨兵 dividend_schema_v1 当前值 3）
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-dividend-policy-features
 
 # 或者只构建clean
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-clean --horizon 20

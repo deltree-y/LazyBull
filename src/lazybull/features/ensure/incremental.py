@@ -166,6 +166,7 @@ def _incremental_catchup_by_calendar_date(
                 dedup_cols=dedup_cols,
                 partition_date_col=partition_date_col,
                 partition_mode=partition_mode,
+                existing_full_df=existing_df,
             )
         else:
             result = _append_and_save_raw(
@@ -251,6 +252,7 @@ def _append_and_save_partitioned(
     dedup_cols: List[str],
     partition_date_col: str,
     partition_mode: str,
+    existing_full_df: Optional[pd.DataFrame] = None,
 ) -> Optional[pd.DataFrame]:
     """把增量数据按分区日期列路由写入对应分区 (分区内去重), 返回合并后全量。
 
@@ -265,6 +267,7 @@ def _append_and_save_partitioned(
         dedup_cols: 分区内去重列
         partition_date_col: 分区依据的日期列 (forecast 用 end_date; report_rc 用 report_date)
         partition_mode: "quarter" 或 "year"
+        existing_full_df: 调用方已加载的全量数据；提供时直接内存合并返回
 
     Returns:
         合并后的完整 DataFrame (已存在分区 + 新增)
@@ -299,6 +302,15 @@ def _append_and_save_partitioned(
         storage.save_raw_by_date(merged, dataset_name, part_date)
 
     logger.info(f"[{dataset_name}] 增量写入 {partition_count} 个分区")
+    if existing_full_df is not None:
+        result = _concat_no_warning([existing_full_df, new_df])
+        if dataset_name == "report_rc":
+            return deduplicate_report_rc(
+                result,
+                include_quarter=True,
+                require_full_identity=True,
+            )
+        return _drop_duplicates_keep_updated(result, dedup_cols)
     return _load_all_partitions(storage, dataset_name)
 
 

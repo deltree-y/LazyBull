@@ -2,6 +2,68 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.98.2] - 2026-08-29
+
+### Added
+
+- **利润表归母净利润链路**：新增 TuShare `income_vip` 合并报表下载、季度分区加载与纸面交易自动补齐；版本键使用 `(ts_code, end_date, f_ann_date)`（缺失回退 `ann_date`），支付率只读取 `n_income_attr_p`，不再混用现金流量表 `net_profit`。
+
+### Fixed
+
+- **分红事件与缺失语义（schema v3）**：首次实施公告至除息前不再改变 continuity/yield/history 状态；`dividend_days_to_ex_date` 改为自然日 `0~30`，成熟股票 30 日内无已公告除息事件显式编码为 `31`，避免被 60% 缺失门禁静默剔除。
+- **训练事件列有效性**：两个稀有事件因子改用原始稠密值入模，避免全市场同值时 zscore 因零方差整列 NaN；稳定哨兵 `dividend_schema_v1` 升为 `3`。
+- **可选因子缓存契约**：现金流质量、一致预期修正、分红政策三组 schema 按实际构建开关校验；关闭的组不再误伤基础缓存，分红组开启时完整校验原始输出、训练列、freshness、缺失标记与当前哨兵。
+- **分红日增量门控**：逐股历史覆盖完成后不再以全市场总行数决定是否执行日增量；低于 3 万行的完整库也会按 `ann_date` 与 `imp_ann_date` 推进自然日水位，避免新实施公告长期停留在旧快照。
+
+### Changed
+
+- **分红构建性能**：缓存日期预筛前移到数据加载前，离线 lookup 只物化待构建日期；股票日期计算按 64 日分块向量化，并消除逐股 pandas 排序、日期转换和 DataFrame 构造。同机 `1000×250` 基准由 3.254 秒降至 0.549 秒，5000 股单日由 3.793 秒降至 1.090 秒。纸面 dividend 数据复用预加载 DataFrame，消除重复全分区扫描。
+- **income 预热单一职责**：批量与纸面调用方仅传目标日期区间，统一由 `load_income` 默认回看六年，避免调用方先减六年后 loader 再减六年而读取约十二年分区。
+
+### Migration
+
+- 启用分红政策因子的训练区间需先执行 `python scripts/download_raw.py ... --download income --force`，再强制重建 `cs_train` / `cs_infer` 并重训；schema v2 模型不可与 v3 特征混用。
+
+## [0.98.1] - 2026-08-29
+
+### Fixed
+
+- **分红年度状态即时生效（schema v2）**：已实施正分红在 `ex_date` 当日进入连续性、稳定性与增长率窗口；尚未成熟财年不提前记零，财年在次年 9 月 1 日成熟后才将无实施记录解释为停发。稳定哨兵列 `dividend_schema_v1` 的当前值升为 2，旧特征缓存必须重建。
+- **首次分红缺失语义**：仅已发生 `ex_date` 的事件构成分红历史；首次实施公告至除息前继续保持 `dividend_hist_missing=1`（上市满一年），不会被事件行提前翻转。
+- **逐股下载覆盖状态**：新增 `raw/dividend/_stock_coverage.json`，原子持久化 `data/empty/pending/failed`；成功空结果不再重复请求，失败或进程中断保持可重试。
+- **`--force` 权威替换**：按股全历史查询成功后整体替换该股票旧行并清理空年度分区；失败股票保留旧行且标为 `failed`，后续非 force 自动重试。ensure 使用补齐后的数据继续判断，不再在同次运行重复全量请求。
+- **回归保护**：补充 force 部分失败、失败重试、成功空结果、旧分区清理、年度分区范围加载、除息即时生效与首次分红状态测试。
+
+## [0.98.0] - 2026-08-29
+
+### Added
+
+- **分红政策质量因子组（Roadmap Phase 3 红利因子）**：新增 `dividend` 数据接入与 8 个因子：
+  - 状态因子（可用日统一 `ex_date`，仅 `div_proc=实施` 行入因子）：`dividend_continuity_5y`（近 5 个已实施财年正分红年占比，窗口以最新可见年度为锚、上市前年份不计分母）、`dividend_stability_5y`（年度 DPS 的 1-MAD/中位数，样本≥3 且中位数>0）、`dividend_growth_3y/5y`（每股调整 DPS 有界对称增长率）、`dividend_payout_ratio`（现金分红总额/Q4 归母净利润，PIT 双可见）、`dividend_yield_hist_12m`（近 12 个月每股现金分红/未复权收盘价）；
+  - 事件因子（双日期市场效应）：`dividend_days_to_ex_date`（距最近**已公告**未除息事件天数，`imp_ann_date ≤ T` 可见、缺失回退 ann_date、clip 30 日）、`dividend_recent_imp_ann_10d`（近 10 交易日实施公告计数，纯回看窗口 [T-9, T]，公告只影响发布日及之后）；
+  - 附列：`dividend_freshness_days`（注册状态型 freshness）、`dividend_hist_missing`（从未分红=1/有历史=0/上市不足一年=NaN，**随开关显式入模**不进全局缺失标记列表）。
+- **每股调整口径（PIT 截断）**：事件调整基数 `base_i = cash_div_tax_i × Π_{k<i}(1+stk_div_k)`，T 日口径除以 `G(T) = Π_{k: ex_k<=T}(1+stk_div_k)`（仅含 T 前已发生送转，未来送转不影响历史截面）；比率类因子与共同因子无关直接用 base。
+- **数据链路**：TuShare `dividend` 接口接入（按股全历史查询 + 断点续传 + 失败股票告警清单）；raw 按 `ann_date` **年分区**存储（分区模式按枚举加载，与 report_rc 契约一致）；`download_raw.py --download dividend`；纸面 ensure 自动补齐（水位单日增量**同时查询 ann_date 与 imp_ann_date**，避免漏掉实施状态更新）。
+- **单开关与哨兵**：`--enable-dividend-policy-features`（默认关，接入 `batch_walk_forward.ps1`）；哨兵列 `dividend_schema_v1` 由 handler 对当日全截面恒写，训练入口 fail-fast 校验缺失/NaN/版本不符；模型 metadata 记录开关与 schema 版本；skip-training 校验与旧模型加载告警四层兜底。
+- **训练特征列**：行业中性 `zscore_dividend_*` 8 列 + `dividend_freshness_days` + `dividend_hist_missing`（`DIVIDEND_POLICY_FEATURE_COLUMNS`）。
+- **单日/批量一致性**：`build_dividend_lookup_by_date` 支持 `calendar_dates`（完整预热日历），单日推理的近 10 交易日回看窗口与批量构建口径一致。
+
+### Changed
+
+- `features/ensure/factor_load.py` 因子组计数 15 → 16；`ensure/schema.py` 必检列新增分红哨兵与 freshness（旧特征缓存自动重建）。
+
+### Removed
+
+- 首轮移除 `dividend_cash_ratio`（现金总额"元"与送转股数"股"量纲不可比，审查意见）。
+
+### Fixed
+
+- **送转调整方向与 PIT 截断**：改为前复权式当前股本口径 `D_i × G_{i-1} / G_T`（送转后历史每股分红缩小；修复前方向相反）；G(T) 仅含 T 前已发生送转，未来送转不影响历史截面。
+- **同财年多次分红事件级可见**：年度聚合不再取最大 ex 作为可见边界，改为事件级前缀分段，未来第二次分红不污染历史截面。
+- **成熟财年窗口**：财年 y 成熟于 (y+1)-09-01；窗口右端按 T 推算，停发年份作为 0 进入窗口（连续性随停发下降），未实施上年分红成熟前不入窗口。
+- **下载失败与 force 语义**：`--force` 部分失败时旧分区数据保留不删；ensure 每日先补未覆盖股票（失败股票未写分区自动重试）再日期增量。
+- **年分区范围加载**：`load_dividend(start,end)` 改为按年枚举分区后按 `ann_date` 过滤（按日分区接口会漏读 `YYYY-12-31` 年度分区）。
+
 ## [0.97.1] - 2026-08-29
 
 ### Removed

@@ -195,6 +195,14 @@ def _build_zscore_columns(result: pd.DataFrame, lookback_windows: List[int]) -> 
         "cons_target_upside_chg",
         "cons_analyst_count_chg",
         "cons_rating_upgrade_ratio",
+        "dividend_continuity_5y",
+        "dividend_stability_5y",
+        "dividend_growth_3y",
+        "dividend_growth_5y",
+        "dividend_payout_ratio",
+        "dividend_yield_hist_12m",
+        "dividend_days_to_ex_date",
+        "dividend_recent_imp_ann_10d",
     ]
     existing = [col for col in base if col in result.columns]
     for window in lookback_windows:

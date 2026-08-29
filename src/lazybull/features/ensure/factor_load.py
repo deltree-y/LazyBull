@@ -10,6 +10,7 @@ from loguru import logger
 from ...data import DataLoader, Storage, TushareClient
 from .downloads import (
     _try_download_cashflow,
+    _try_download_dividend,
     _try_download_express,
     _try_download_fina_indicator,
     _try_download_forecast,
@@ -23,6 +24,7 @@ from .historical_assets import (
     _try_ensure_historical_moneyflow_hsgt,
     _try_ensure_historical_top_list,
 )
+from .income import _try_download_income
 from .incremental import _get_latest_date
 
 
@@ -388,6 +390,54 @@ def _load_factor_data(
     revision_lookup = None
     gc.collect()
 
+    # ── 分红政策质量（按 ann_date 增量，年分区；单日快照）──────────────
+    dividend_today = pd.DataFrame()
+    dividend_df = loader.load_dividend()
+    if _has_announcement_gap(storage, dividend_df, "dividend", "ann_date", trade_date):
+        dividend_df = _try_download_dividend(
+            client,
+            storage,
+            trade_date,
+            existing_df=dividend_df,
+        )
+    if dividend_df is not None and len(dividend_df) > 0:
+        from ...factors.dividend import build_dividend_lookup_by_date
+
+        list_date_map = None
+        stock_basic = loader.load_stock_basic()
+        if stock_basic is not None and "list_date" in stock_basic.columns:
+            list_date_map = {
+                str(ts): str(d) for ts, d in zip(stock_basic["ts_code"], stock_basic["list_date"])
+            }
+        # 六年回看由 income loader 统一负责，单日推理只传目标交易日。
+        income_for_payout = loader.load_income(trade_date, trade_date)
+        if _has_announcement_gap(storage, income_for_payout, "income", "f_ann_date", trade_date):
+            income_for_payout = _try_download_income(
+                client,
+                storage,
+                trade_date,
+                existing_df=income_for_payout,
+            )
+        if income_for_payout is None or len(income_for_payout) == 0:
+            missing_factors.append("income（分红支付率归母净利润）")
+        dividend_lookup = build_dividend_lookup_by_date(
+            dividend_df,
+            factor_output_dates,
+            income_raw=income_for_payout,
+            list_date_map=list_date_map,
+            calendar_dates=trading_dates_str,
+        )
+        cur = dividend_lookup.get(trade_date)
+        if cur is not None and len(cur) > 0:
+            dividend_today = cur
+        logger.info(f"分红政策因子: 已加载 ({len(dividend_df)} 条原始记录)")
+    else:
+        missing_factors.append("dividend（分红送股）")
+    dividend_df = None
+    dividend_lookup = None
+    income_for_payout = None
+    gc.collect()
+
     # ── 风控公告类（质押，季分区 PIT 前向填充）─────────────────────
     pledge_today = pd.DataFrame()
     pledge_df = loader.load_pledge_stat(start_date, end_date)
@@ -442,7 +492,7 @@ def _load_factor_data(
     gc.collect()
 
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 15
+    total = 16
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -466,6 +516,7 @@ def _load_factor_data(
         consensus_today,
         cashflow_today,
         consensus_revision_today,
+        dividend_today,
         pledge_today,
         share_float_today,
         block_trade_today,

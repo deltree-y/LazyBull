@@ -163,6 +163,9 @@ $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性�
 $enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
 # 0828关闭后收益及回撤都变得更好, 需要保持关闭
 
+# ── 分红政策质量因子（0829需 dividend 接口，2000 积分，需先下载 dividend 数据）─
+$enable_dividend_policy    = $false  # $true 启用 | $false 禁用（实验性因子，默认关）
+
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
 $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验证效果不佳）
@@ -629,6 +632,10 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     if ($enable_cashflow_quality) {
         $pythonCmd += " --enable-cashflow-quality-features"
+    }
+
+    if ($enable_dividend_policy) {
+        $pythonCmd += " --enable-dividend-policy-features"
     }
 
     if ($enable_consensus_revision) {

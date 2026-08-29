@@ -42,6 +42,7 @@ OPTIONAL_FEATURE_FLAG_ATTRS = (
     "enable_consensus_features",
     "enable_cashflow_quality_features",
     "enable_consensus_revision_features",
+    "enable_dividend_policy_features",
     "enable_announcement_risk_features",
 )
 
@@ -164,6 +165,11 @@ def main():
         help="启用一致预期修正因子（基于已有 report_rc 构建时序修正信号，无需额外下载）",
     )
     parser.add_argument(
+        "--enable-dividend-policy-features",
+        action="store_true",
+        help="启用分红政策质量因子（分红稳定性/增长率/支付率/双日期事件，需先下载 dividend 数据）",
+    )
+    parser.add_argument(
         "--enable-announcement-risk-features",
         action="store_true",
         help="启用风控公告类因子（质押/解禁/大宗，PIT 前向填充；需先下载 pledge_stat/share_float/block_trade）",
@@ -196,6 +202,7 @@ def main():
     logger.info(
         f"一致预期修正因子: {'启用' if args.enable_consensus_revision_features else '禁用'}"
     )
+    logger.info(f"分红政策因子: {'启用' if args.enable_dividend_policy_features else '禁用'}")
     logger.info(f"风控公告类因子: {'启用' if args.enable_announcement_risk_features else '禁用'}")
     if args.horizon is not None:
         logger.info(f"标签过滤模式: single (主 horizon={args.horizon})")
@@ -262,6 +269,7 @@ def main():
                 enable_consensus=args.enable_consensus_features,
                 enable_cashflow_quality=args.enable_cashflow_quality_features,
                 enable_consensus_revision=args.enable_consensus_revision_features,
+                enable_dividend_policy=args.enable_dividend_policy_features,
                 enable_announcement_risk=args.enable_announcement_risk_features,
                 use_parallel=args.parallel,
                 parallel_jobs=args.parallel_jobs,

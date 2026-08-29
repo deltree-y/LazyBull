@@ -383,6 +383,14 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         help="启用一致预期修正因子（EPS修正加速度/分歧度等时序信号）",
     )
 
+    # 分红政策质量因子（需 dividend 接口，2000 积分）
+    parser.add_argument(
+        "--enable-dividend-policy-features",
+        action="store_true",
+        default=False,
+        help="启用分红政策质量因子（分红稳定性/增长率/支付率/双日期事件，需先下载 dividend 数据）",
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",

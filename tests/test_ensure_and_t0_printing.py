@@ -692,6 +692,7 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
     )
     captured_dates = {}
     express_ensure_calls = []
+    income_load_calls = []
 
     def _ensure_express(_client, _storage, target_date):
         express_ensure_calls.append(target_date)
@@ -757,6 +758,7 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
             "build_consensus_revision_lookup_by_date",
             "consensus_revision",
         ),
+        ("src.lazybull.factors.dividend", "build_dividend_lookup_by_date", "dividend"),
         ("src.lazybull.factors.risk.announcement_lookup", "build_pledge_lookup_by_date", "pledge"),
         (
             "src.lazybull.factors.risk.announcement_lookup",
@@ -800,6 +802,16 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         def load_cashflow(self, start_date=None, end_date=None):
             return stub_df
 
+        def load_income(self, start_date=None, end_date=None):
+            income_load_calls.append((start_date, end_date))
+            return stub_df.assign(f_ann_date=trade_date)
+
+        def load_dividend(self):
+            return stub_df
+
+        def load_stock_basic(self):
+            return pd.DataFrame({"ts_code": ["000001.SZ"], "list_date": ["19910403"]})
+
         def load_pledge_stat(self, start_date=None, end_date=None):
             return stub_df
 
@@ -826,6 +838,7 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
     assert result[-1] == []
     # 即使公告水位已覆盖，也必须进入 express ensure 检查记录数量完整性。
     assert express_ensure_calls == [trade_date]
+    assert income_load_calls == [(trade_date, trade_date)]
     for output_dates in captured_dates.values():
         assert output_dates == [trade_date]
 
@@ -980,6 +993,7 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
         ensure_entry,
         "_load_factor_data",
         lambda *args, **kwargs: (
+            None,
             None,
             None,
             None,

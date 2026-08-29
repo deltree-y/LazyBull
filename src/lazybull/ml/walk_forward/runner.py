@@ -101,6 +101,28 @@ def _load_skip_training_metadata(registry, model_version: int, args):
                 "版本去重），复用该模型存在 train/serve 语义偏差，建议停用或重训"
             )
 
+    # 分红政策开关与 schema 版本一致性校验（与现金流质量同级）
+    requested_div = bool(getattr(args, "enable_dividend_policy_features", False))
+    recorded_div = bool(train_params.get("enable_dividend_policy_features", False))
+    if requested_div != recorded_div:
+        logger.warning(
+            f"[skip-training] v{model_version} 训练时 enable_dividend_policy_features="
+            f"{recorded_div}，当前 CLI 为 {requested_div}，开关与模型实际特征不一致，"
+            "消融归因请以模型 metadata 的实际 feature_columns 为准"
+        )
+    if recorded_div:
+        from src.lazybull.factors.dividend import DIVIDEND_POLICY_SCHEMA_VERSION
+        from src.lazybull.ml.train_core.constants import read_dividend_policy_schema_version
+
+        recorded_div_schema = read_dividend_policy_schema_version(train_params)
+        if recorded_div_schema != DIVIDEND_POLICY_SCHEMA_VERSION:
+            logger.warning(
+                f"[skip-training] v{model_version} 记录的分红政策 schema 版本为 "
+                f"{train_params.get('dividend_policy_schema_version')}，当前构建管线为 "
+                f"v{DIVIDEND_POLICY_SCHEMA_VERSION}，复用该模型存在 train/serve 语义偏差，"
+                "建议停用或重训"
+            )
+
     # 特征列保存在独立 features 文件（metadata 本身不含），补齐后供汇总透传
     features_file_name = metadata.get("features_file") or f"v{model_version}_features.json"
     features_file = registry.models_dir / features_file_name

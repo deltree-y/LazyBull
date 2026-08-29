@@ -85,14 +85,15 @@ def test_build_features_lhb_passes_warmup_calendar(monkeypatch):
         return {d: pd.DataFrame() for d in trading_dates}
 
     monkeypatch.setattr("src.lazybull.factors.lhb.build_lhb_lookup_by_date", fake_build)
-    # 短路: 所有日期视为已存在且 schema 完整, 只跑到 lhb 加载段
+    # 仅保留首日待构建，其余日期命中缓存；lookup 仍需完整输出区间和预热日历
     monkeypatch.setattr(
         "src.lazybull.features.pipeline._check_features_schema", lambda *a, **k: True
     )
 
     builder = Mock()
+    builder.build_features_for_day.return_value = pd.DataFrame()
     storage = Mock()
-    storage.is_feature_exists.return_value = True  # 全部短路
+    storage.is_feature_exists.side_effect = lambda trade_date: trade_date != start_date
 
     start_date = "20250121"
     end_date = "20250228"

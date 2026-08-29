@@ -9,10 +9,6 @@ from .bulk import (
     _save_merged_bulk,
 )
 from .constants import (
-    FEATURE_DATA_FUTURE_MONTHS,
-    FEATURE_DATA_HISTORY_MONTHS,
-    HISTORICAL_DATA_MONTHS,
-    MAX_HISTORICAL_DAYS,
     _FINA_REQUIRED_RAW_COLS,
     _MIN_CASHFLOW_RECORDS,
     _MIN_EXPRESS_RECORDS,
@@ -20,6 +16,10 @@ from .constants import (
     _MIN_FORECAST_RECORDS,
     _MIN_HOLDER_RECORDS,
     _MIN_REPORT_RC_RECORDS,
+    FEATURE_DATA_FUTURE_MONTHS,
+    FEATURE_DATA_HISTORY_MONTHS,
+    HISTORICAL_DATA_MONTHS,
+    MAX_HISTORICAL_DAYS,
 )
 from .downloads import (
     _try_download_cashflow,
@@ -51,13 +51,22 @@ from .incremental import (
     _normalize_date_str,
 )
 from .industry import _ensure_shenwan_industry
-from .schema import _REQUIRED_FACTOR_COLS, _check_features_schema
+from .schema import (
+    _REQUIRED_FACTOR_COLS,
+    OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY,
+    OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION,
+    OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY,
+    _check_features_schema,
+)
 
 __all__ = [
     "FEATURE_DATA_FUTURE_MONTHS",
     "FEATURE_DATA_HISTORY_MONTHS",
     "HISTORICAL_DATA_MONTHS",
     "MAX_HISTORICAL_DAYS",
+    "OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY",
+    "OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION",
+    "OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY",
     "_FINA_REQUIRED_RAW_COLS",
     "_MIN_CASHFLOW_RECORDS",
     "_MIN_EXPRESS_RECORDS",

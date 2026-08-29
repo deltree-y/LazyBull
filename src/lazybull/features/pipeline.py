@@ -13,7 +13,12 @@ from loguru import logger
 
 from ..data import DataLoader, Storage
 from . import FeatureBuilder
-from .ensure import _check_features_schema
+from .ensure import (
+    OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY,
+    OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION,
+    OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY,
+    _check_features_schema,
+)
 
 
 def _build_features_parallel(
@@ -41,6 +46,7 @@ def _build_features_parallel(
     consensus_lookup,
     cashflow_lookup,
     consensus_revision_lookup,
+    dividend_lookup,
     pledge_lookup,
     share_float_lookup,
     block_trade_lookup,
@@ -109,6 +115,12 @@ def _build_features_parallel(
                 consensus_revision_today = pd.DataFrame()
         else:
             consensus_revision_today = None
+        if dividend_lookup is not None:
+            dividend_today = dividend_lookup.get(trade_date)
+            if dividend_today is None:
+                dividend_today = pd.DataFrame()
+        else:
+            dividend_today = None
         if pledge_lookup is not None:
             pledge_today = pledge_lookup.get(trade_date)
             if pledge_today is None:
@@ -151,6 +163,7 @@ def _build_features_parallel(
             consensus_data=consensus_today,
             cashflow_data=cashflow_today,
             consensus_revision_data=consensus_revision_today,
+            dividend_data=dividend_today,
             pledge_data=pledge_today,
             share_float_data=share_float_today,
             block_trade_data=block_trade_today,
@@ -230,6 +243,7 @@ def build_features_data(
     enable_consensus: bool = False,
     enable_cashflow_quality: bool = False,
     enable_consensus_revision: bool = False,
+    enable_dividend_policy: bool = False,
     enable_announcement_risk: bool = False,
     use_parallel: bool = False,
     parallel_jobs: int = -1,
@@ -256,6 +270,7 @@ def build_features_data(
         enable_consensus: 是否启用一致预期因子
         enable_cashflow_quality: 是否启用现金流质量因子
         enable_consensus_revision: 是否启用一致预期修正因子
+        enable_dividend_policy: 是否启用分红政策质量因子（需先下载 dividend 数据）
         enable_announcement_risk: 是否启用风控公告类因子（质押/解禁/大宗）
     """
     logger.info("=" * 60)
@@ -292,6 +307,38 @@ def build_features_data(
     ]
 
     logger.info(f"共 {len(trading_dates_str)} 个交易日需要构建特征")
+
+    # 在加载 clean/raw 和物化各类 lookup 前确定真正待写日期；续跑全部命中时直接返回。
+    required_optional_groups = {
+        group
+        for enabled, group in (
+            (enable_cashflow_quality, OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY),
+            (enable_consensus_revision, OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION),
+            (enable_dividend_policy, OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY),
+        )
+        if enabled
+    }
+    total_dates = len(trading_dates_str)
+    pending_dates = []
+    skip_count = 0
+    for trade_date in trading_dates_str:
+        if not force and storage.is_feature_exists(trade_date):
+            if _check_features_schema(
+                storage,
+                trade_date,
+                required_optional_groups=required_optional_groups,
+            ):
+                skip_count += 1
+                continue
+            logger.warning(f"  {trade_date} 特征缓存缺少必要列，将重新构建")
+        pending_dates.append(trade_date)
+
+    logger.info(
+        f"共 {total_dates} 个交易日: 跳过 {skip_count} (已存在), " f"待构建 {len(pending_dates)}"
+    )
+    if not pending_dates:
+        logger.info("所有日期特征已存在，无需构建")
+        return
 
     # 加载clean层日线数据（扩展范围以包含足够的 warmup 历史，覆盖 120 个交易日 ≈ 7 个月）
     start_dt = pd.to_datetime(start_date, format="%Y%m%d") - pd.DateOffset(months=7)
@@ -533,6 +580,44 @@ def build_features_data(
                 "请先运行: python scripts/download_raw.py --download report_rc"
             )
 
+    # 加载分红政策质量因子（可选；payout_ratio 需 income Q4 归母净利润）
+    dividend_lookup = None
+    if enable_dividend_policy:
+        from src.lazybull.factors.dividend import build_dividend_lookup_by_date
+
+        dividend_df = loader.load_dividend()
+        if dividend_df is not None and len(dividend_df) > 0:
+            logger.info(f"分红送股数据: {len(dividend_df)} 条")
+            list_date_map = None
+            if "list_date" in stock_basic.columns:
+                list_date_map = {
+                    str(ts): str(d)
+                    for ts, d in zip(stock_basic["ts_code"], stock_basic["list_date"])
+                }
+            # 六年回看由 income loader 统一负责，调用方仅传目标构建区间。
+            income_for_payout = loader.load_income(start_date, end_date)
+            # 近 10 交易日回看窗口需完整预热日历（与龙虎榜同模式），保证批量构建
+            # 区间开头的窗口与单日推理口径一致
+            warm_cal = loader.get_trading_dates(
+                start_dt.strftime("%Y-%m-%d"),
+                end_dt.strftime("%Y-%m-%d"),
+            )
+            calendar_str = [
+                d.strftime("%Y%m%d") if isinstance(d, pd.Timestamp) else d for d in warm_cal
+            ]
+            dividend_lookup = build_dividend_lookup_by_date(
+                dividend_df,
+                pending_dates,
+                income_raw=income_for_payout,
+                list_date_map=list_date_map,
+                calendar_dates=calendar_str,
+            )
+        else:
+            logger.warning(
+                "未找到分红送股数据，分红政策因子将为空。"
+                "请先运行: python scripts/download_raw.py --download dividend"
+            )
+
     # 加载风控公告类数据（可选：质押/解禁/大宗，PIT 日频查询表）
     pledge_lookup = None
     share_float_lookup = None
@@ -599,26 +684,6 @@ def build_features_data(
     # 优化1/4：循环外一次性预计算 daily_adj（含 pre_close_adj）及日期索引字典
     builder.precompute_daily_adj(daily_clean, adj_factor)
 
-    # 预筛：收集待处理日期（跳过已存在且schema完整的）
-    total_dates = len(trading_dates_str)
-    pending_dates = []
-    skip_count = 0
-    for trade_date in trading_dates_str:
-        if not force and storage.is_feature_exists(trade_date):
-            if _check_features_schema(storage, trade_date):
-                skip_count += 1
-                continue
-            logger.warning(f"  {trade_date} 特征缓存缺少必要列，将重新构建")
-        pending_dates.append(trade_date)
-
-    logger.info(
-        f"共 {total_dates} 个交易日: 跳过 {skip_count} (已存在), " f"待构建 {len(pending_dates)}"
-    )
-
-    if not pending_dates:
-        logger.info("所有日期特征已存在，无需构建")
-        return
-
     # ── 判断是否使用并行 ──
     if use_parallel and len(pending_dates) > 4:
         _build_features_parallel(
@@ -646,6 +711,7 @@ def build_features_data(
             consensus_lookup=consensus_lookup,
             cashflow_lookup=cashflow_lookup,
             consensus_revision_lookup=consensus_revision_lookup,
+            dividend_lookup=dividend_lookup,
             pledge_lookup=pledge_lookup,
             share_float_lookup=share_float_lookup,
             block_trade_lookup=block_trade_lookup,
@@ -698,6 +764,12 @@ def build_features_data(
                     consensus_revision_today = pd.DataFrame()
             else:
                 consensus_revision_today = None
+            if dividend_lookup is not None:
+                dividend_today = dividend_lookup.get(trade_date)
+                if dividend_today is None:
+                    dividend_today = pd.DataFrame()
+            else:
+                dividend_today = None
             if pledge_lookup is not None:
                 pledge_today = pledge_lookup.get(trade_date)
                 if pledge_today is None:
@@ -743,6 +815,7 @@ def build_features_data(
                 consensus_data=consensus_today,
                 cashflow_data=cashflow_today,
                 consensus_revision_data=consensus_revision_today,
+                dividend_data=dividend_today,
                 pledge_data=pledge_today,
                 share_float_data=share_float_today,
                 block_trade_data=block_trade_today,

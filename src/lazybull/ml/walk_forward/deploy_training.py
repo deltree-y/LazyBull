@@ -19,8 +19,9 @@ from src.lazybull.ml.run_logger import (
 from src.lazybull.ml.train_core import (
     DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
-    attach_cons_revision_schema_version,
     attach_cashflow_quality_train_params,
+    attach_cons_revision_schema_version,
+    attach_dividend_train_params,
     evaluate_validation_daily,
 )
 
@@ -167,6 +168,10 @@ def execute_deploy_training(
         full_train_params,
         getattr(args, "enable_cashflow_quality_features", False),
         feature_columns=feature_columns,
+    )
+    attach_dividend_train_params(
+        full_train_params,
+        getattr(args, "enable_dividend_policy_features", False),
     )
     full_train_params.update(
         {

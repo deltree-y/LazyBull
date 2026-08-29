@@ -90,6 +90,35 @@ def _warn_legacy_cashflow_quality_model(
         )
 
 
+def _warn_legacy_dividend_policy_model(
+    feature_columns: list, train_params: dict, version_str: str
+) -> None:
+    """模型含分红政策列但未记录 schema 版本时告警。"""
+    raw_event_cols = {
+        "dividend_days_to_ex_date",
+        "dividend_recent_imp_ann_10d",
+    }
+    dividend_cols = [
+        c
+        for c in feature_columns
+        if str(c).startswith("zscore_dividend_") or str(c) in raw_event_cols
+    ]
+    if not dividend_cols:
+        return
+    from ..factors.dividend import DIVIDEND_POLICY_SCHEMA_VERSION
+    from .train_core.constants import read_dividend_policy_schema_version
+
+    raw_version = (train_params or {}).get("dividend_policy_schema_version")
+    schema_version = read_dividend_policy_schema_version(train_params)
+    if schema_version != DIVIDEND_POLICY_SCHEMA_VERSION:
+        logger.warning(
+            f"模型 {version_str} 含分红政策列 {dividend_cols}，"
+            f"但训练 schema={raw_version!r}，当前要求 schema_v"
+            f"{DIVIDEND_POLICY_SCHEMA_VERSION}。若输入特征已重建，将存在 "
+            "train/serve 语义偏差，建议停用或重训。"
+        )
+
+
 class ModelRegistry:
     """模型注册表
 
@@ -443,6 +472,11 @@ class ModelRegistry:
             metadata["version_str"],
         )
         _warn_legacy_cashflow_quality_model(
+            feature_columns,
+            metadata.get("train_params") or {},
+            metadata["version_str"],
+        )
+        _warn_legacy_dividend_policy_model(
             feature_columns,
             metadata.get("train_params") or {},
             metadata["version_str"],

@@ -581,6 +581,41 @@ model.fit(X, y)
 - 离线构建前应对所用历史范围执行 `python scripts/download_raw.py ... --download cashflow --force`；起点至少早于训练起点两年。纸面 ensure 首次运行会自动全历史补齐版本，之后每 90 天复查。
 - schema v2 及更早模型与新分区同名异义，普通加载和 skip-training 均会告警，必须以重建后的特征重新训练。
 
+## 分红政策质量因子（v0.98.2 / schema v3：归母净利润 + 稠密事件编码）
+
+### 字段定义
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| dividend_continuity_5y | float | 近 5 个已知财年正分红年占比；成熟无记录年=0，尚未成熟年份仅在正分红除息后进入；上市前年份不计入分母（`list_date`） |
+| dividend_stability_5y | float | 年度每股分红（调整后）的 1 − MAD/中位数；样本 ≥3 年且中位数>0 才有效，裁剪 ±1 |
+| dividend_growth_3y / 5y | float | 每股调整 DPS 有界对称增长率 g=(curr−prev)/(0.5·(\|curr\|+\|prev\|))，裁剪 ±2；窗口年份未全部覆盖（上市不足）为 NaN |
+| dividend_payout_ratio | float | 最近可见分红年度现金分红总额 / Q4 归母净利润（income `n_income_attr_p`，仅合并报表；PIT=分红 ex_date 与利润表 f_ann_date 回退 ann_date 双可见）；净利润绝对值 <1000 万元或分红无现金为 NaN，裁剪 ±2 |
+| dividend_yield_hist_12m | float | 近 365 自然日内已实施每股现金分红累计（T 日股本口径：base 窗口和 ÷ G(T)）/ 当日未复权收盘价（handler 层计算）；上市满一年且无事件为 0 |
+| dividend_days_to_ex_date | float | 距最近**已公告**未除息事件的自然日天数（公告可见性 `imp_ann_date ≤ T`、缺失回退 `ann_date`）；`0~30` 为有效距离，上市满一年且窗口内无事件为 31 |
+| dividend_recent_imp_ann_10d | float | 近 10 个交易日（[T-9, T] 含 T）内实施公告计数；纯回看窗口，公告只影响发布日及之后，绝不回填发布日前 |
+| dividend_freshness_days | float | 最近一次除息（ex_date）距当日自然日天数（状态型 freshness） |
+| dividend_hist_missing | float | 缺失标记：从未分红=1 / 有分红历史=0 / 上市不足一年=NaN |
+| dividend_schema_v1 | int | 稳定命名的语义哨兵列（当前恒写版本号 3）；旧语义分区缺失或值不符时自动重建，训练入口校验失败 |
+
+训练列：6 个状态/比率 `zscore_dividend_*` 列 + 原始稠密事件列 `dividend_days_to_ex_date` / `dividend_recent_imp_ann_10d` + `dividend_freshness_days` + `dividend_hist_missing`；可用的 `_sz` 市值中性化变体按统一规则追加。
+
+### 核心语义（v3）
+
+- **双日期 PIT**：状态因子可用日统一 `ex_date`（除息日，事实落地、无前视）；事件因子 `dividend_days_to_ex_date` 使用未来 `ex_date` 的前提是该事件已公告（`imp_ann_date ≤ T`，缺失回退 `ann_date`，回退先于日期规范化）——除息日历随实施公告公开，非前视。仅 `div_proc=实施` 行参与因子，预案/决案行保留在 raw 不进入因子。
+- **每股调整口径（PIT 截断，前复权式）**：每股现金分红采用 `cash_div_tax`（税前）；T 日 1 股对应历史（送转前）的 `G_{i-1}/G_T` 股，其中 `G_k = Π_{j<=k}(1+stk_div_j)`，历史每股分红按今天股本 = `D_i × G_{i-1} / G_T`（送转后历史每股分红**缩小**，实现 base_i = D_i×G_{i-1} 与 T 无关、T 日除以 G_T）；比率类因子（连续性/稳定性/增长率）与共同 G_T 约掉直接用 base，近 12 月股息率在 T 日显式除以 G_T。
+- **成熟财年与即时生效**：财年 y 在 (y+1) 年 9 月 1 日成熟；成熟年份无实施记录才解释为停发 0。窗口锚点取最新成熟财年与最新已实施正分红财年的较大值，因此 4–8 月已除息分红立即在 `ex_date` 更新年度状态，尚未完成的缺失财年不提前入分母。同财年多次分红按事件级前缀累加，未来事件不污染历史截面；growth_3y/5y 的端点必须已成熟或已有正分红落地。
+- **缺失语义**：仅 `ex_date ≤ T` 的事件构成已有历史，首次实施公告至除息前不会提前改变 continuity/yield/`dividend_hist_missing`。上市满一年且未来 30 日内无已公告除息事件时 `dividend_days_to_ex_date=31`，两个事件列以原始稠密值入模；`dividend_hist_missing` 显式区分"从未分红"与"上市不足一年"并随开关入模。
+- **数据链路**：dividend raw 按 `ann_date` 年分区；按股全历史覆盖状态原子保存在 `_stock_coverage.json`（`data/empty/pending/failed`），纸面 ensure 同时查询 ann_date 与 imp_ann_date。income raw 按报告期季度分区，仅取 `report_type=1` 合并报表，版本键为 `(ts_code, end_date, f_ann_date)`；实际公告日缺失回退 ann_date，单次按 5000 行分页，增量同时查询 f_ann_date 与 ann_date。
+- **单日/批量一致性**：`build_dividend_lookup_by_date` 支持 `calendar_dates`（完整预热日历），单日推理传入完整日历后近 10 交易日回看窗口与批量构建口径一致。
+- **构建性能**：离线流水线先筛已存在且 schema 完整的日期，只为 pending 日期物化分红截面；内核按股票向量化日期并以 64 日分块输出。纸面链路复用已加载的 dividend DataFrame，避免重复扫描年分区。
+
+### 迁移说明
+
+- 启用 `--enable-dividend-policy-features` 的区间必须重建 `cs_train` / `cs_infer`；哨兵列值不是 3 时训练入口会明确失败。
+- 首次使用前分别执行 `python scripts/download_raw.py ... --download dividend` 与 `python scripts/download_raw.py ... --download income --force`（纸面 ensure 可自动补齐）。
+- 单开关默认关闭；验证通过（CAGR/回撤至少一项改善且另一项不恶化、RankIC 不退化、多数 split 获胜、高股息子集占优）后由 `batch_walk_forward.ps1` 的 `$enable_dividend_policy` 默认启用。
+
 ## 参考资料
 
 - [TuShare Pro API文档](https://tushare.pro/document/2)

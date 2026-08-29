@@ -5,6 +5,12 @@ from typing import Optional
 
 import pandas as pd
 
+from .core import FINA_INDICATOR_DEFAULT_FIELDS
+
+INCOME_DEFAULT_FIELDS = (
+    "ts_code,ann_date,f_ann_date,end_date,report_type,comp_type," "n_income_attr_p,update_flag"
+)
+
 
 class ClientFundamentalMixin:
     """TushareClient 基本面 mixin。"""
@@ -14,7 +20,7 @@ class ClientFundamentalMixin:
         ts_code: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        fields: Optional[str] = None
+        fields: Optional[str] = None,
     ) -> pd.DataFrame:
         """获取财务指标数据（fina_indicator）
 
@@ -132,6 +138,18 @@ class ClientFundamentalMixin:
                 "free_cashflow"
             )
         return self.query("cashflow_vip", fields=fields, period=period)
+
+    def get_income_by_period(
+        self,
+        period: str,
+        fields: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """按报告期获取全市场利润表（income_vip，5000 积分）。"""
+        return self.query(
+            "income_vip",
+            fields=fields or INCOME_DEFAULT_FIELDS,
+            period=period,
+        )
 
     def get_forecast_by_date(
         self,

@@ -14,12 +14,12 @@ from .alt import (
 from .basic import download_basic_data
 from .cli import _bypass_proxy_for_download, _should_bypass_proxy_for_download, main
 from .core import (
+    _DOWNLOAD_CONCURRENCY,
     ALT_DATASETS,
     DAILY_SUBSETS,
     ERROR_COLLECTOR,
     ErrorCollector,
     ProgressTracker,
-    _DOWNLOAD_CONCURRENCY,
     _fmt_duration,
     _run_concurrent,
 )
@@ -35,6 +35,7 @@ from .daily_partition import (
     download_margin_detail,
     download_stock_st,
 )
+from .income import download_income
 from .periodic import (
     _generate_month_periods,
     _generate_quarter_periods,
@@ -67,6 +68,7 @@ __all__ = [
     "download_basic_data",
     "download_by_period",
     "download_cashflow",
+    "download_income",
     "download_cyq_perf",
     "download_daily_data",
     "download_margin_detail",

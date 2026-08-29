@@ -176,6 +176,7 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
         "enable_consensus_revision_features": getattr(
             args, "enable_consensus_revision_features", False
         ),
+        "enable_dividend_policy_features": getattr(args, "enable_dividend_policy_features", False),
         "oos_backtest": getattr(args, "oos_backtest", False),
         "oos_backtest_months": getattr(args, "oos_backtest_months", None),
         "bt_top_n": getattr(args, "bt_top_n", None),

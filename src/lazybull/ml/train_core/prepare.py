@@ -15,6 +15,7 @@ from .constants import (
     CONSENSUS_FEATURE_COLUMNS,
     CONSENSUS_REVISION_FEATURE_COLUMNS,
     CYQ_FEATURE_COLUMNS,
+    DIVIDEND_POLICY_FEATURE_COLUMNS,
     ENHANCED_FEATURE_COLUMNS,
     EVENT_FRESHNESS_TO_VALUE_COLUMNS,
     EXPRESS_FEATURE_COLUMNS,
@@ -71,6 +72,7 @@ def prepare_training_data(
     enable_consensus_features: bool = False,
     enable_cashflow_quality_features: bool = False,
     enable_consensus_revision_features: bool = False,
+    enable_dividend_policy_features: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
     factor_exclude_file: Optional[str] = None,
@@ -339,7 +341,9 @@ def prepare_training_data(
             CASHFLOW_QUALITY_VERSION_COL,
         )
 
-        sentinel = df[CASHFLOW_QUALITY_VERSION_COL] if CASHFLOW_QUALITY_VERSION_COL in df.columns else None
+        sentinel = (
+            df[CASHFLOW_QUALITY_VERSION_COL] if CASHFLOW_QUALITY_VERSION_COL in df.columns else None
+        )
         sentinel_valid = (
             sentinel is not None
             and not sentinel.isna().any()
@@ -400,6 +404,41 @@ def prepare_training_data(
             )
         feature_columns.extend(CONSENSUS_REVISION_FEATURE_COLUMNS)
         logger.info(f"启用一致预期修正因子: {CONSENSUS_REVISION_FEATURE_COLUMNS}")
+
+    # 分红政策质量因子（可选，需 dividend 接口，2000 积分）
+    if enable_dividend_policy_features:
+        # fail-fast：开关开启时 schema 必须完整，缺列直接失败（与现金流/修正开关同级）
+        missing_div = [col for col in DIVIDEND_POLICY_FEATURE_COLUMNS if col not in df.columns]
+        if missing_div:
+            raise ValueError(
+                "enable_dividend_policy_features=True，但分红政策特征 schema 不完整，"
+                f"缺少列: {missing_div}。请使用 --enable-dividend-policy-features 重新构建特征"
+            )
+        # 哨兵校验：拦截旧语义缓存被误用于训练
+        from ...factors.dividend import (
+            DIVIDEND_POLICY_SCHEMA_VERSION,
+            DIVIDEND_POLICY_VERSION_COL,
+        )
+
+        if DIVIDEND_POLICY_VERSION_COL not in df.columns:
+            raise ValueError(
+                "enable_dividend_policy_features=True，但特征分区缺少哨兵列 "
+                f"{DIVIDEND_POLICY_VERSION_COL}，疑似旧语义缓存。"
+                "请使用 --enable-dividend-policy-features 重新构建特征"
+            )
+        sentinel_series = df[DIVIDEND_POLICY_VERSION_COL]
+        if (
+            sentinel_series.isna().any()
+            or (sentinel_series.fillna(-1) != DIVIDEND_POLICY_SCHEMA_VERSION).any()
+        ):
+            raise ValueError(
+                "enable_dividend_policy_features=True，但特征分区的哨兵列 "
+                f"{DIVIDEND_POLICY_VERSION_COL} 存在缺失或版本不等于 "
+                f"{DIVIDEND_POLICY_SCHEMA_VERSION}（疑似混入旧语义分区或未构建），"
+                "请重建训练窗口内全部特征"
+            )
+        feature_columns.extend(DIVIDEND_POLICY_FEATURE_COLUMNS)
+        logger.info(f"启用分红政策因子: {DIVIDEND_POLICY_FEATURE_COLUMNS}")
 
     # ── 市值中性化特征：仅纳入核心特征列表中稳定因子对应的 zscore_*_sz 列 ──
     # 避免稀疏因子（如一致预期）的 _sz 列在不同日期间存在/缺失导致 schema 不一致

@@ -8,6 +8,8 @@ from loguru import logger
 
 from ..common.date_utils import normalize_series_to_yyyymmdd, normalize_to_yyyymmdd
 from .loader_announcement import AnnouncementRiskLoaderMixin
+from .loader_dividend import DividendLoaderMixin
+from .loader_income import IncomeLoaderMixin
 from .report_rc import validate_report_rc_identity_schema
 from .storage import Storage
 
@@ -27,7 +29,7 @@ def _concat_no_all_na_warning(frames: List[pd.DataFrame]) -> pd.DataFrame:
         return pd.concat(frames, ignore_index=True)
 
 
-class DataLoader(AnnouncementRiskLoaderMixin):
+class DataLoader(IncomeLoaderMixin, DividendLoaderMixin, AnnouncementRiskLoaderMixin):
     """数据加载器
 
     提供标准化的数据加载接口

@@ -2,7 +2,7 @@
 """ensure 子包：批量下载、分页查询与合并保存。"""
 
 import time
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import pandas as pd
 from loguru import logger
@@ -15,6 +15,7 @@ from .incremental import _drop_duplicates_keep_updated
 # 分页粒度若大于接口上限，TuShare 静默截断返回首屏（< 分页粒度即误判"取完"）。
 _API_PAGE_LIMITS = {
     "cashflow_vip": 6400,  # cashflow_vip 单次 limit 上限
+    "income_vip": 5000,  # income_vip 保守分页粒度
     "fina_indicator_vip": 12000,  # fina_indicator_vip 单次 limit 上限
     "fund_portfolio": 8000,  # fund_portfolio 单次 limit 上限
 }
@@ -73,6 +74,7 @@ def _bulk_download_by_period(
     partition_by_period: bool = False,
     force: bool = False,
     page_limit: Optional[int] = None,
+    query_kwargs: Optional[Dict[str, str]] = None,
 ) -> Optional[pd.DataFrame]:
     """按报告期(period)批量下载全量数据（自动分页）
 
@@ -143,6 +145,7 @@ def _bulk_download_by_period(
                 page_limit=effective_page_limit,
                 fields=fields,
                 period=period,
+                **(query_kwargs or {}),
             )
             if df is not None and len(df) > 0:
                 if partition_by_period:

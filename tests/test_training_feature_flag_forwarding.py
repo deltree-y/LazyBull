@@ -123,6 +123,7 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         enable_consensus_features=True,
         enable_cashflow_quality_features=False,
         enable_consensus_revision_features=True,
+        enable_dividend_policy_features=False,
     )
 
     metadata = core_module._build_feature_flag_train_params(args)
@@ -131,6 +132,7 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         "enable_consensus_features": True,
         "enable_cashflow_quality_features": False,
         "enable_consensus_revision_features": True,
+        "enable_dividend_policy_features": False,
     }
 
 

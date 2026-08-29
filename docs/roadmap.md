@@ -62,27 +62,29 @@
 **目标**: 实现完整的价值红利因子库
 
 **任务清单**:
-- [ ] 红利因子
-  - 股息率 (dividend_yield)
-  - 分红稳定性 (dividend_stability)
-  - 分红增长率 (dividend_growth)
-- [ ] 价值因子
+- [ ] 红利因子（v0.98.2 代码实现完成，**待 WF 验证后才视为完成**）
+  - 股息率 (dividend_yield → `dv_ttm` + `dividend_yield_hist_12m`)
+  - 分红稳定性 (dividend_stability → `dividend_stability_5y`/`dividend_continuity_5y`)
+  - 分红增长率 (dividend_growth → `dividend_growth_3y/5y`)
+  - 分红支付率 `dividend_payout_ratio`、双日期事件因子
+    `dividend_days_to_ex_date`/`dividend_recent_imp_ann_10d`
+- [x] 价值因子
   - 市盈率 (pe_ratio)
   - 市净率 (pb_ratio)
   - 市销率 (ps_ratio)
   - 股息率 (dv_ratio)
-- [ ] 质量因子
+- [x] 质量因子
   - ROE (return_on_equity)
   - 资产负债率 (debt_ratio)
   - 现金流充裕度
-- [ ] 技术因子
+- [x] 技术因子
   - 动量因子 (momentum)
   - 波动率 (volatility)
   - 成交量指标
-- [ ] 因子合成
-  - 打分法
+- [x] 因子合成
+  - 打分法（等权/因子打分示例）
   - 回归法
-  - 机器学习法
+  - 机器学习法（XGBoost 滚动训练 + 多子集集成）
 
 **输出**:
 - 因子库文档

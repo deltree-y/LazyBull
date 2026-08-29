@@ -15,6 +15,7 @@ from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import Storage, TushareClient
 from src.lazybull.data.tushare_client import FINA_INDICATOR_DEFAULT_FIELDS
 
+from . import core as raw_core
 from .alt import (
     download_cashflow,
     download_moneyflow_hsgt,
@@ -27,11 +28,12 @@ from .announcement_risk import (
     download_pledge_stat,
     download_share_float,
 )
-from . import core as raw_core
 from .basic import download_basic_data
 from .core import ALT_DATASETS, ERROR_COLLECTOR, _fmt_duration
 from .daily import download_daily_data
 from .daily_partition import download_cyq_perf, download_margin_detail, download_stock_st
+from .dividend import download_dividend
+from .income import download_income
 from .periodic import _to_int_date, download_by_period
 
 # 终端/系统常通过环境变量注入 HTTP(S) 代理 (如 PowerShell profile 加载的
@@ -98,7 +100,7 @@ def main():
         default=None,
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
         "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
-        "moneyflow_hsgt, top_list, report_rc, cashflow, pledge_stat, "
+        "moneyflow_hsgt, top_list, report_rc, cashflow, dividend, pledge_stat, "
         "share_float, block_trade, all_alt。不指定时仅下基础+日线",
     )
     parser.add_argument("--all", action="store_true", default=False, help="下载日线 + 全部另类数据")
@@ -376,6 +378,26 @@ def main():
                         args.start_date,
                         args.end_date,
                         force=args.force,
+                    )
+
+                if "income" in download_set:
+                    download_income(
+                        client,
+                        storage,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
+                    )
+
+                if "dividend" in download_set:
+                    download_dividend(
+                        client,
+                        storage,
+                        stock_basic,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
+                        concurrency=args.concurrency,
                     )
 
                 # ── 风控公告类（质押/解禁/大宗）──

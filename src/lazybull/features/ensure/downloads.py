@@ -554,3 +554,73 @@ def _try_download_report_rc(
     )
     logger.info(f"一致预期全量下载完成: 总计 {len(result) if result is not None else 0} 条")
     return result
+
+
+def _try_download_dividend(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+    existing_df: Optional[pd.DataFrame] = None,
+) -> Optional[pd.DataFrame]:
+    """下载分红送股数据（dividend，2000 积分）。
+
+    先按逐股覆盖状态补齐全历史，再按自然日增量推进同步水位；历史总行数
+    只反映分红事件数量，不能作为是否执行日增量的完整性或时效性判据。
+    """
+    from ...data.dividend_raw import (
+        DIVIDEND_DEDUP_COLS,
+        download_dividend_full,
+    )
+
+    existing = existing_df if existing_df is not None else _load_all_partitions(storage, "dividend")
+
+    # 先补未覆盖股票（按股全历史）：已覆盖股票 O(分区扫描) 跳过，失败股票
+    # 保持 failed 状态、成功空结果记为 empty，避免失败被编码为“不分红”，
+    # 也避免真实不分红股票反复查询。
+    stock_basic = storage.load_raw("stock_basic")
+    try:
+        if stock_basic is not None and len(stock_basic) > 0:
+            existing = download_dividend_full(
+                client,
+                storage,
+                stock_basic,
+                existing_df=existing,
+            )
+    except Exception as e:
+        logger.warning(f"dividend 未覆盖股票补齐失败: {e}")
+
+    if existing is None or len(existing) == 0:
+        logger.info("分红送股全历史补齐后仍无数据，跳过日期增量")
+        return existing
+
+    # 单日增量需同时查询 ann_date 与 imp_ann_date：TuShare dividend 表实施
+    # 状态更新不产生新的 ann_date（预案公告日保持不变），只查 ann_date 会漏掉
+    # 当天才发布实施公告的记录。两路结果合并去重（落盘去重键含 div_proc）。
+    def _fetch_dividend_day(d: str) -> Optional[pd.DataFrame]:
+        parts: List[pd.DataFrame] = []
+        for kwarg in ({"ann_date": d}, {"imp_ann_date": d}):
+            day_df = client.get_dividend(**kwarg)
+            if day_df is not None and len(day_df) > 0:
+                parts.append(day_df)
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return _concat_no_warning(parts)
+
+    try:
+        existing = _incremental_catchup_by_calendar_date(
+            storage=storage,
+            dataset_name="dividend",
+            existing_df=existing,
+            trade_date=trade_date,
+            date_col="ann_date",
+            dedup_cols=list(DIVIDEND_DEDUP_COLS),
+            fetch_by_date=_fetch_dividend_day,
+            partition_date_col="ann_date",
+            partition_mode="year",
+        )
+    except Exception as e:
+        logger.warning(f"增量下载 dividend 失败: {e}")
+    # 统一返回全量数据（因子 lookup 需覆盖历史与未来已公告事件）
+    return existing

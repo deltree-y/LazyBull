@@ -48,6 +48,7 @@ class FeatureContext:
     consensus_data: Optional[pd.DataFrame] = None
     cashflow_data: Optional[pd.DataFrame] = None
     consensus_revision_data: Optional[pd.DataFrame] = None
+    dividend_data: Optional[pd.DataFrame] = None
 
     # ── 风控公告类数据（质押/解禁/大宗，PIT 日频截面）──
     pledge_data: Optional[pd.DataFrame] = None

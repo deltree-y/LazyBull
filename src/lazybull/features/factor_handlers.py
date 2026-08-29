@@ -65,6 +65,14 @@ def _get_handler_default_columns(name: str) -> List[str]:
         )
 
         return list(CONSENSUS_REVISION_COLS) + [CONSENSUS_REVISION_FRESHNESS_COL]
+    if name == "dividend_policy":
+        from ..factors.dividend import (
+            DIVIDEND_COLS,
+            DIVIDEND_FRESHNESS_COL,
+            DIVIDEND_HIST_MISSING_COL,
+        )
+
+        return list(DIVIDEND_COLS) + [DIVIDEND_FRESHNESS_COL, DIVIDEND_HIST_MISSING_COL]
     if name == "pledge":
         from .handlers_announcement import PLEDGE_COLS
 
@@ -271,12 +279,12 @@ class CashflowQualityFactorHandler:
 
     def apply(self, features, data, trade_date, current_data) -> Dict[str, pd.Series]:
         from ..factors.cashflow_quality import (
+            _CLIP_FCF_YIELD,
+            _MIN_ABS_TOTAL_MV_YUAN,
             CASHFLOW_COLS,
             CASHFLOW_FRESHNESS_COL,
             CASHFLOW_QUALITY_SCHEMA_VERSION,
             CASHFLOW_QUALITY_VERSION_COL,
-            _CLIP_FCF_YIELD,
-            _MIN_ABS_TOTAL_MV_YUAN,
         )
 
         result = {}
@@ -349,6 +357,114 @@ class ConsensusRevisionFactorHandler:
         # 当前版本且无 NaN，训练入口才能可靠拦截混入的旧语义分区。
         result[CONSENSUS_REVISION_VERSION_COL] = pd.Series(
             CONSENSUS_REVISION_SCHEMA_VERSION, index=features.index
+        )
+        return result
+
+
+class DividendPolicyFactorHandler:
+    """分红政策质量因子（个股级，事件表 PIT 前向填充）。
+
+    缺失语义展开（lookup 仅含"有可见分红事件"或"已公告未除息"的股票行）：
+      - 上市满 365 自然日：从未分红 → continuity=0/yield=0/recent=0/hist_missing=1；
+        其余状态因子（stability/growth/payout/freshness）为 NaN，days_to_ex=31；
+      - 上市不足 365 自然日：全部 NaN。
+    yield_hist_12m 由近 12 月累计每股现金分红除以当日未复权收盘价计算。
+    """
+
+    def apply(self, features, data, trade_date, current_data) -> Dict[str, pd.Series]:
+        from ..factors.dividend import (
+            _CASH_12M_ADJ_COL,
+            _NO_UPCOMING_EX_DAYS,
+            DIVIDEND_COLS,
+            DIVIDEND_FRESHNESS_COL,
+            DIVIDEND_HIST_MISSING_COL,
+            DIVIDEND_POLICY_SCHEMA_VERSION,
+            DIVIDEND_POLICY_VERSION_COL,
+        )
+
+        result: Dict[str, pd.Series] = {}
+        list_days = (
+            features["list_days"]
+            if "list_days" in features.columns
+            else pd.Series(np.nan, index=features.index)
+        )
+        matured = list_days >= 365
+
+        merged = None
+        if data is not None and len(data) > 0:
+            merge_cols = [
+                c for c in data.columns if c != "ts_code" and c != DIVIDEND_POLICY_VERSION_COL
+            ]
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "dividend_policy")
+
+        # ── 事件/状态因子列 ──
+        for col in DIVIDEND_COLS:
+            if col == "dividend_yield_hist_12m":
+                continue  # 单独计算
+            if merged is not None and col in merged.columns:
+                result[col] = merged[col]
+            else:
+                result[col] = pd.Series(np.nan, index=features.index)
+        if merged is not None and DIVIDEND_FRESHNESS_COL in merged.columns:
+            result[DIVIDEND_FRESHNESS_COL] = merged[DIVIDEND_FRESHNESS_COL]
+        else:
+            result[DIVIDEND_FRESHNESS_COL] = pd.Series(np.nan, index=features.index)
+
+        # ── 未命中行语义展开 ──
+        if merged is not None and DIVIDEND_HIST_MISSING_COL in merged.columns:
+            has_history = merged[DIVIDEND_HIST_MISSING_COL].eq(0.0)
+        else:
+            has_history = pd.Series(False, index=features.index)
+
+        # continuity：从未发生除息（上市成熟）→ 0；pre-ex 公告不得改变状态编码
+        continuity = result["dividend_continuity_5y"]
+        result["dividend_continuity_5y"] = continuity.where(
+            ~(matured & ~has_history & continuity.isna()), 0.0
+        )
+        # yield_hist_12m：近 12 月每股现金累计 / 未复权收盘价
+        close_map = None
+        if "close" in current_data.columns and "ts_code" in current_data.columns:
+            close_map = (
+                current_data[["ts_code", "close"]]
+                .drop_duplicates(subset=["ts_code"], keep="last")
+                .set_index("ts_code")["close"]
+            )
+            close_series = features["ts_code"].map(close_map).astype(float)
+        else:
+            close_series = pd.Series(np.nan, index=features.index)
+        if merged is not None and _CASH_12M_ADJ_COL in merged.columns:
+            cash_12m = merged[_CASH_12M_ADJ_COL]
+            yield_series = np.where(close_series > 1e-6, cash_12m / close_series, np.nan)
+            yield_series = pd.Series(yield_series, index=features.index)
+        else:
+            yield_series = pd.Series(np.nan, index=features.index)
+        result["dividend_yield_hist_12m"] = yield_series.where(
+            ~(matured & ~has_history & yield_series.isna()), 0.0
+        )
+
+        # days_to_ex：0~30 为自然日距离；成熟股票无窗口内事件显式编码为 31
+        days_to_ex = result["dividend_days_to_ex_date"]
+        result["dividend_days_to_ex_date"] = days_to_ex.where(
+            ~(matured & days_to_ex.isna()), float(_NO_UPCOMING_EX_DAYS)
+        )
+
+        # recent_imp_ann_10d：无公告 → 0
+        recent = result["dividend_recent_imp_ann_10d"]
+        result["dividend_recent_imp_ann_10d"] = recent.where(
+            ~(matured & ~has_history & recent.isna()), 0.0
+        )
+
+        # hist_missing：已有 ex_date 历史=0；成熟且尚无落地历史=1；未成熟=NaN
+        if merged is not None and DIVIDEND_HIST_MISSING_COL in merged.columns:
+            hist = merged[DIVIDEND_HIST_MISSING_COL]
+        else:
+            hist = pd.Series(np.nan, index=features.index)
+        hist = hist.where(hist.notna(), np.where(matured, 1.0, np.nan))
+        result[DIVIDEND_HIST_MISSING_COL] = hist
+
+        # 哨兵：对当日全截面恒写当前版本号（含无数据股票），训练入口据此拦截旧语义分区
+        result[DIVIDEND_POLICY_VERSION_COL] = pd.Series(
+            DIVIDEND_POLICY_SCHEMA_VERSION, index=features.index
         )
         return result
 
@@ -476,6 +592,11 @@ def create_factor_registry() -> FactorRegistry:
         "consensus_revision",
         ConsensusRevisionFactorHandler(),
         lambda ctx: ctx.consensus_revision_data,
+    )
+    registry.register(
+        "dividend_policy",
+        DividendPolicyFactorHandler(),
+        lambda ctx: ctx.dividend_data,
     )
 
     # 风控公告类（质押/解禁/大宗，PIT 日频截面原始列）

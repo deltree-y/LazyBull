@@ -20,8 +20,9 @@ from src.lazybull.ml.train_core import (
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     add_blended_return_label,
     apply_serving_event_decay,
-    attach_cons_revision_schema_version,
     attach_cashflow_quality_train_params,
+    attach_cons_revision_schema_version,
+    attach_dividend_train_params,
     evaluate_validation_daily,
     load_features_data,
 )
@@ -306,6 +307,10 @@ def execute_split_training(
         full_train_params,
         getattr(args, "enable_cashflow_quality_features", False),
         feature_columns=feature_columns,
+    )
+    attach_dividend_train_params(
+        full_train_params,
+        getattr(args, "enable_dividend_policy_features", False),
     )
     full_train_params.update(
         {

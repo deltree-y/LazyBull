@@ -24,20 +24,19 @@ import gc
 import sys
 import traceback
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
 
 # 添加项目路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 from loguru import logger
 from sklearn.metrics import mean_squared_error, r2_score
 
 from src.lazybull.common.config import get_data_root, get_models_root
 from src.lazybull.common.logger import setup_logger
-
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.run_logger import (
@@ -46,16 +45,17 @@ from src.lazybull.ml.run_logger import (
 )
 from src.lazybull.ml.train_core import (
     add_blended_return_label,
-    attach_cons_revision_schema_version,
     attach_cashflow_quality_train_params,
+    attach_cons_revision_schema_version,
+    attach_dividend_train_params,
+    build_rank_sample_weights,
+    evaluate_validation_daily,
+    generate_classification_labels,
     load_features_data,
     prepare_training_data,
-    transform_labels_cs_zscore,
-    generate_classification_labels,
-    train_xgboost_model,
     train_lightgbm_model,
-    evaluate_validation_daily,
-    build_rank_sample_weights,
+    train_xgboost_model,
+    transform_labels_cs_zscore,
 )
 
 try:
@@ -308,6 +308,13 @@ def main():
     )
 
     parser.add_argument(
+        "--enable-dividend-policy-features",
+        action="store_true",
+        default=False,
+        help="启用分红政策质量因子（分红稳定性/增长率/支付率/双日期事件，需先下载 dividend 数据）",
+    )
+
+    parser.add_argument(
         "--feature-stability-filter",
         action="store_true",
         help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）",
@@ -459,6 +466,7 @@ def main():
             enable_consensus_revision_features=getattr(
                 args, "enable_consensus_revision_features", False
             ),
+            enable_dividend_policy_features=getattr(args, "enable_dividend_policy_features", False),
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
             factor_exclude_file=getattr(args, "factor_exclude_file", None),
@@ -555,6 +563,10 @@ def main():
             getattr(args, "enable_cashflow_quality_features", False),
             feature_columns=feature_columns,
         )
+        attach_dividend_train_params(
+            full_train_params,
+            getattr(args, "enable_dividend_policy_features", False),
+        )
         full_train_params.update(
             {
                 "algorithm": args.algorithm,
@@ -580,6 +592,9 @@ def main():
                 ),
                 "enable_consensus_revision_features": getattr(
                     args, "enable_consensus_revision_features", False
+                ),
+                "enable_dividend_policy_features": getattr(
+                    args, "enable_dividend_policy_features", False
                 ),
                 # 推理侧（MLSignal）按此复现事件型 freshness 衰减，必须与训练一致
                 "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),

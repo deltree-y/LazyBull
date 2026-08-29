@@ -4,7 +4,7 @@
 import threading
 import warnings
 from datetime import datetime
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -193,6 +193,7 @@ def download_by_period(
     page_limit: int = 50000,
     partition_by_period: bool = False,
     sort_cols: Optional[List[str]] = None,
+    query_kwargs: Optional[Dict[str, str]] = None,
 ) -> bool:
     """按报告期(period)批量下载数据。"""
     periods = _generate_quarter_periods(start_date, end_date)
@@ -247,6 +248,7 @@ def download_by_period(
                 page_limit=page_limit,
                 fields=fields,
                 period=period,
+                **(query_kwargs or {}),
             )
             if df is not None and len(df) > 0:
                 if partition_by_period:
