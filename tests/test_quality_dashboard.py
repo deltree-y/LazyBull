@@ -4,7 +4,7 @@ import pandas as pd
 
 from scripts.quality_dashboard import main
 from src.lazybull.data.storage import Storage
-from src.lazybull.quality.report import compare_snapshots
+from src.lazybull.quality.report import compare_snapshots, write_html_report
 
 
 def test_quality_dashboard_writes_html_snapshot_and_returns_error_for_bad_features(
@@ -51,3 +51,30 @@ def test_compare_snapshots_marks_new_resolved_and_persistent_errors():
     changes = compare_snapshots(current, previous)
 
     assert set(changes["change"]) == {"新增异常", "已修复", "持续异常"}
+
+
+def test_html_report_limits_high_cardinality_detail_rows(tmp_path):
+    metrics = pd.DataFrame(
+        [
+            {
+                "layer": "features",
+                "dataset": "cs_train",
+                "partition": f"2026{i:04d}",
+                "metric": "missing_ratio",
+                "column": "factor",
+                "value": 1.0,
+                "threshold": 0.8,
+                "status": "error",
+                "detail": "缺失率超过阈值",
+            }
+            for i in range(150)
+        ]
+    )
+    output_path = tmp_path / "quality_dashboard.html"
+
+    write_html_report(metrics, pd.DataFrame(), output_path, max_detail_rows=100)
+
+    report = output_path.read_text(encoding="utf-8")
+    assert "仅展示前 100 条，共 150 条" in report
+    assert "20260099" in report
+    assert "20260149" not in report

@@ -1,6 +1,7 @@
 import pandas as pd
 
 from src.lazybull.data.storage import Storage
+from src.lazybull.quality import scanner
 from src.lazybull.quality.scanner import evaluate_quality, scan_quality
 
 
@@ -55,3 +56,20 @@ def test_coverage_metric_uses_raw_daily_partitions_as_reference(tmp_path):
         evaluate_quality(metrics, {"coverage_ratio_error": 0.85}).loc[coverage.name, "status"]
         == "error"
     )
+
+
+def test_scan_quality_reports_start_progress_and_completion(tmp_path, monkeypatch):
+    storage = Storage(str(tmp_path))
+    daily = pd.DataFrame({"ts_code": ["000001.SZ"], "trade_date": ["20260828"]})
+    storage.save_raw_by_date(daily, "daily", "20260828")
+    messages = []
+    monkeypatch.setattr(scanner.logger, "info", messages.append)
+
+    scan_quality(
+        storage,
+        {"datasets": {"raw": ["daily"]}, "progress_interval_seconds": 0},
+    )
+
+    assert any("数据质量扫描开始" in message for message in messages)
+    assert any("质量扫描进度" in message for message in messages)
+    assert any("数据质量扫描完成" in message for message in messages)

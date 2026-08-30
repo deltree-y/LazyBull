@@ -1,10 +1,12 @@
 """数据质量全历史扫描。"""
 
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import pandas as pd
 import pyarrow.parquet as pq
+from loguru import logger
 
 from ..data.storage import Storage
 from ..features.ensure.schema import _optional_factor_sentinel_specs
@@ -27,11 +29,26 @@ def scan_quality(
     records: List[Dict[str, Any]] = []
     datasets = config.get("datasets", DEFAULT_DATASETS)
     anomaly_limits = config.get("anomaly_limits", {})
+    plans = [
+        (layer, dataset, _partition_files(storage, layer, dataset, start_date, end_date))
+        for layer, names in datasets.items()
+        for dataset in names
+    ]
+    progress = _ScanProgress(
+        total_partitions=sum(len(files) for _, _, files in plans),
+        interval_seconds=float(config.get("progress_interval_seconds", 15.0)),
+    )
     for layer, names in datasets.items():
         for dataset in names:
-            files = _partition_files(storage, layer, dataset, start_date, end_date)
+            files = next(
+                files
+                for item_layer, item_dataset, files in plans
+                if (item_layer, item_dataset) == (layer, dataset)
+            )
+            progress.dataset_started(layer, dataset, len(files))
             records.extend(_dataset_metrics(storage, layer, dataset, files))
             for file_path, partition in files:
+                progress.before_partition(layer, dataset, partition)
                 records.extend(
                     collect_partition_metrics(
                         file_path,
@@ -43,7 +60,9 @@ def scan_quality(
                 )
                 if layer == "features":
                     records.extend(_sentinel_metrics(file_path, layer, dataset, partition))
+                progress.partition_completed(layer, dataset, partition)
     metrics = pd.DataFrame.from_records(records, columns=_METRIC_COLUMNS)
+    progress.completed(len(metrics))
     return _add_coverage_metrics(metrics, config)
 
 
@@ -58,6 +77,66 @@ _METRIC_COLUMNS = [
     "status",
     "detail",
 ]
+
+
+class _ScanProgress:
+    """按时间间隔汇报分区扫描进度，避免长任务无输出。"""
+
+    def __init__(self, total_partitions: int, interval_seconds: float):
+        self.total_partitions = total_partitions
+        self.interval_seconds = max(interval_seconds, 0.0)
+        self.completed_partitions = 0
+        self.started_at = time.monotonic()
+        self.last_logged_at = self.started_at
+        logger.info(f"数据质量扫描开始：共 {total_partitions} 个分区")
+
+    def dataset_started(self, layer: str, dataset: str, partition_count: int) -> None:
+        logger.info(f"扫描数据集：{layer}/{dataset}，共 {partition_count} 个分区")
+
+    def before_partition(self, layer: str, dataset: str, partition: str) -> None:
+        logger.info(
+            f"质量扫描进行中：即将读取 [{self.completed_partitions + 1}/{self.total_partitions}] "
+            f"{layer}/{dataset}/{partition}"
+        )
+
+    def partition_completed(self, layer: str, dataset: str, partition: str) -> None:
+        self.completed_partitions += 1
+        if self.completed_partitions == self.total_partitions or self._should_log():
+            elapsed = time.monotonic() - self.started_at
+            remaining = self._remaining_seconds(elapsed)
+            logger.info(
+                f"质量扫描进度：{self.completed_partitions}/{self.total_partitions} "
+                f"({self._percentage():.1%})，刚完成 {layer}/{dataset}/{partition}，"
+                f"已耗时 {elapsed:.0f} 秒，预计剩余 {remaining:.0f} 秒"
+            )
+
+    def completed(self, metric_count: int) -> None:
+        elapsed = time.monotonic() - self.started_at
+        logger.info(
+            "数据质量扫描完成："
+            f"{self.completed_partitions} 个分区，{metric_count} 条指标，耗时 {elapsed:.1f} 秒"
+        )
+
+    def _should_log(self) -> bool:
+        now = time.monotonic()
+        if now - self.last_logged_at < self.interval_seconds:
+            return False
+        self.last_logged_at = now
+        return True
+
+    def _remaining_seconds(self, elapsed: float) -> float:
+        if self.completed_partitions == 0:
+            return 0.0
+        return (
+            elapsed
+            / self.completed_partitions
+            * (self.total_partitions - self.completed_partitions)
+        )
+
+    def _percentage(self) -> float:
+        if self.total_partitions == 0:
+            return 1.0
+        return self.completed_partitions / self.total_partitions
 
 
 def evaluate_quality(metrics: pd.DataFrame, config: Mapping[str, Any]) -> pd.DataFrame:

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.99.2] - 2026-08-30
+
+### Fixed
+
+- **数据质量报告可读性**：HTML 不再渲染全历史异常与快照变化明细；每类仅展示前 `quality.html_max_detail_rows` 条（默认 100）并标示总数，完整指标仍保留在同目录 `latest_metrics.parquet`。
+
+## [0.99.1] - 2026-08-30
+
+### Changed
+
+- **数据质量扫描进度**：全历史扫描启动时输出总分区数，进入每个数据集时输出阶段分区数，每次读取 Parquet 前输出当前层、数据集和分区；按 `quality.progress_interval_seconds` 定期输出累计进度、耗时和预计剩余时间，避免长任务无输出。
+
 ## [0.99.0] - 2026-08-30
 
 ### Added

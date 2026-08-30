@@ -39,7 +39,12 @@ def main() -> int:
         previous = pd.read_parquet(snapshot_path) if snapshot_path.exists() else metrics.iloc[0:0]
         changes = compare_snapshots(metrics, previous)
         save_snapshot(metrics, snapshot_path)
-        write_html_report(metrics, changes, output_dir / "quality_dashboard.html")
+        write_html_report(
+            metrics,
+            changes,
+            output_dir / "quality_dashboard.html",
+            max_detail_rows=int(quality_config.get("html_max_detail_rows", 100)),
+        )
         error_count = int((metrics["status"] == "error").sum())
         logger.info(f"数据质量报告已生成: {output_dir}，错误数: {error_count}")
         return 1 if error_count else 0

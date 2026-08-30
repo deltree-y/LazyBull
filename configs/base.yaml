@@ -12,6 +12,8 @@ data:
 # 数据质量看板
 quality:
   output_dir: "data/reports/quality"
+  progress_interval_seconds: 15
+  html_max_detail_rows: 100
   coverage_ratio_error: 0.85
   missing_ratio_error: 0.8
   coverage_required_datasets: ["raw/daily_basic", "clean/daily", "features/cs_train"]

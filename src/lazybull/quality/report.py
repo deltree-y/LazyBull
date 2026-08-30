@@ -22,11 +22,17 @@ def compare_snapshots(current: pd.DataFrame, previous: pd.DataFrame) -> pd.DataF
     return pd.DataFrame.from_records(records, columns=key_columns + ["change"])
 
 
-def write_html_report(metrics: pd.DataFrame, changes: pd.DataFrame, output_path: Path) -> None:
+def write_html_report(
+    metrics: pd.DataFrame,
+    changes: pd.DataFrame,
+    output_path: Path,
+    max_detail_rows: int = 100,
+) -> None:
     """生成可离线打开的数据质量静态 HTML 报告。"""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     errors = metrics[metrics["status"] == "error"]
     warnings = metrics[metrics["status"] == "warning"]
+    issues = metrics[metrics["status"] != "ok"]
     summary = pd.DataFrame(
         [
             {"状态": "错误", "数量": len(errors)},
@@ -36,8 +42,8 @@ def write_html_report(metrics: pd.DataFrame, changes: pd.DataFrame, output_path:
     )
     sections = [
         ("总体状态", summary),
-        ("异常清单", metrics[metrics["status"] != "ok"]),
-        ("快照变化", changes),
+        _limited_section("异常清单", issues, max_detail_rows),
+        _limited_section("快照变化", changes, max_detail_rows),
         (
             "数据集摘要",
             metrics[
@@ -46,12 +52,11 @@ def write_html_report(metrics: pd.DataFrame, changes: pd.DataFrame, output_path:
         ),
         ("特征缺失率 Top 50", _top_missing(metrics)),
     ]
-    body = "".join(
-        f"<section><h2>{title}</h2>{_table(frame)}</section>" for title, frame in sections
-    )
+    body = "".join(f"<section><h2>{title}</h2>{content}</section>" for title, content in sections)
     status = "异常" if len(errors) else "警告" if len(warnings) else "健康"
     document = (
         f"<h1>LazyBull 数据质量看板</h1><p>本次状态：<strong>{status}</strong></p>"
+        "<p>完整指标明细请查看同目录 <code>latest_metrics.parquet</code>。</p>"
         f"{body}</body></html>"
     )
     header = (
@@ -65,6 +70,18 @@ def write_html_report(metrics: pd.DataFrame, changes: pd.DataFrame, output_path:
         ".error{background:#ffe9e7;}.warning{background:#fff6d8;}</style></head><body>"
     )
     output_path.write_text(header + document, encoding="utf-8")
+
+
+def _limited_section(title: str, frame: pd.DataFrame, max_rows: int) -> tuple[str, str]:
+    """将高基数明细限制为可读的前若干行，并保留总量提示。"""
+    limit = max(int(max_rows), 1)
+    displayed = frame.head(limit)
+    suffix = ""
+    if len(frame) > len(displayed):
+        suffix = (
+            f"<p>仅展示前 {len(displayed)} 条，共 {len(frame)} 条；完整明细见 Parquet 快照。</p>"
+        )
+    return title, suffix + _table(displayed)
 
 
 def _error_keys(metrics: pd.DataFrame, key_columns: List[str]) -> set:

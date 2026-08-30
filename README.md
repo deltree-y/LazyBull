@@ -200,7 +200,7 @@ python scripts/quality_dashboard.py
 python scripts/quality_dashboard.py --data-root ./data --start-date 20250101 --end-date 20260830
 ```
 
-退出码 `0` 表示无错误，`1` 表示扫描完成但发现质量错误，`2` 表示扫描执行失败。阈值在 `configs/base.yaml` 的 `quality` 节中统一配置。
+退出码 `0` 表示无错误，`1` 表示扫描完成但发现质量错误，`2` 表示扫描执行失败。扫描时会输出当前分区、累计进度、耗时和预计剩余时间；进度心跳间隔在 `configs/base.yaml` 的 `quality.progress_interval_seconds` 中统一配置。HTML 仅展示前 `quality.html_max_detail_rows` 条异常和快照变化（默认 100），完整明细保存在同目录 `latest_metrics.parquet`。
 
 ##### 纸面交易（Paper Trading）
 
