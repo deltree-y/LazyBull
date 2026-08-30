@@ -1,0 +1,8 @@
+{
+  "description": "分红政策因子排除实验 v1：仅排除模型重要性为 0 的两个噪声占位因子（dividend_days_to_ex_date、dividend_hist_missing），其余 8 个分红因子（含 _sz 变体）保留",
+  "exclude_count": 2,
+  "exclude_factors": [
+    "dividend_days_to_ex_date",
+    "dividend_hist_missing"
+  ]
+}
