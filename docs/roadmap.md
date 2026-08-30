@@ -153,7 +153,7 @@
 - [x] TuShare 主数据源与高积分接口接入。
 - [x] 原始数据分区存储、增量补齐、分页、失败重试与水位管理。
 - [x] report_rc、cashflow、income、dividend 等 PIT/版本化契约。
-- [ ] 数据质量看板：覆盖率、缺失率、异常值、schema 版本和水位状态。
+- [x] 数据质量看板：全历史扫描 raw/clean/cs_train/cs_infer 的覆盖率、缺失率、异常值、schema 版本和水位状态，输出静态 HTML 与 Parquet 快照。
 - [ ] 备用数据源评估：AKShare/eFinance 已用于实时行情，可继续评估 Wind、同花顺 iFind 等。
 
 ### 计算层
@@ -246,6 +246,8 @@
 - [AKShare](https://github.com/akfamily/akshare)：开源财经数据接口。
 
 ## 版本历史
+
+- v0.99.0 (2026-08-30)：新增全历史数据质量看板，支持静态 HTML、Parquet 快照、阈值状态和任务退出码。
 
 - v0.98.3 (2026-08-30)：根据当前项目实现刷新路线图，更新阶段状态、近期优先级和里程碑日期。
 - v0.1.0 (2024-01)：初始路线图，定义 6 个阶段。

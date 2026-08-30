@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.99.0] - 2026-08-30
+
+### Added
+
+- **数据质量看板**：新增 `scripts/quality_dashboard.py` 全历史扫描入口，覆盖 raw、clean、cs_train、cs_infer 分区的水位、覆盖率、缺失率、无穷值、数值异常和 features schema 哨兵版本。
+- **离线质量报告与快照**：生成可离线打开的静态 HTML 和 `latest_metrics.parquet` 指标快照；自动标记新增、修复和持续异常，供后续任务调度与告警系统消费。
+- **集中质量阈值**：`configs/base.yaml` 新增 `quality` 配置，统一管理覆盖率、缺失率、异常数值和需覆盖数据集的阈值；扫描成功但存在错误时返回退出码 `1`。
+
 ## [0.98.3] - 2026-08-29
 
 ### Fixed

@@ -9,6 +9,20 @@ data:
   features: "./data/features"
   reports: "./data/reports"
 
+# 数据质量看板
+quality:
+  output_dir: "data/reports/quality"
+  coverage_ratio_error: 0.85
+  missing_ratio_error: 0.8
+  coverage_required_datasets: ["raw/daily_basic", "clean/daily", "features/cs_train"]
+  anomaly_limits:
+    daily:
+      close: 100000.0
+    cs_train:
+      pe_ttm: 1000.0
+    cs_infer:
+      pe_ttm: 1000.0
+
 # TuShare配置
 tushare:
   max_retries: 3

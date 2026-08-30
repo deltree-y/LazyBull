@@ -51,6 +51,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **现金流质量因子**: 基于 `f_ann_date` 的版本化 PIT、依赖修订事件驱动 TTM 与供应商自由现金流口径
 - 🧪 **分红政策质量因子（待 WF 验证）**: 分红稳定性/增长率、归母净利润支付率 + 双日期稠密事件因子，每股调整口径 PIT 截断、`ex_date` 防前视
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
+- ✅ **数据质量看板**: 扫描 raw/clean/features 分区的覆盖率、缺失率、异常值、schema 版本和同步水位，输出离线 HTML 报告与 Parquet 快照
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
 - ✅ **成交额过滤**: 在信号生成（选股）阶段过滤成交额后N%的股票，提高持仓流动性
 - ✅ **分批调仓**: 总 Top-N 槽位与资金按周期拆批，支持漏批追赶、配置迁移及 T1 失败同日顺位补买
@@ -186,6 +187,20 @@ python scripts/update_basic_data.py --only-stock-basic
 # 强制更新（即使已是最新）
 python scripts/update_basic_data.py --force
 ```
+
+#### 数据质量看板
+
+全历史扫描本地 raw、clean、`cs_train`、`cs_infer` 分区，生成可离线打开的 HTML 报告和 Parquet 指标快照：
+
+```bash
+# 默认读取 configs/base.yaml 的 quality 阈值，输出至 data/reports/quality/
+python scripts/quality_dashboard.py
+
+# 对指定数据目录和日期区间执行诊断
+python scripts/quality_dashboard.py --data-root ./data --start-date 20250101 --end-date 20260830
+```
+
+退出码 `0` 表示无错误，`1` 表示扫描完成但发现质量错误，`2` 表示扫描执行失败。阈值在 `configs/base.yaml` 的 `quality` 节中统一配置。
 
 ##### 纸面交易（Paper Trading）
 
