@@ -239,10 +239,26 @@ def build_dividend_lookup_by_date(
     df = df.dropna(subset=["end_date"])
     df = df[df["end_date"].str.match(r"^\d{8}$", na=False)]
 
-    for col in ("cash_div_tax", "stk_div", "base_share"):
+    for col in ("cash_div_tax", "stk_div"):
         if col not in df.columns:
             df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    # base_share（基准股本，万股）为现金分红总额的必需列：TuShare 默认字段
+    # 不返回该列，历史下载未显式请求时整列缺失。缺列必须明确失败，禁止静默
+    # 填充 0 产出全 NaN 的 dividend_payout_ratio（支付率）。
+    if "base_share" not in df.columns:
+        raise ValueError(
+            "dividend 数据缺少 base_share 列，无法计算现金分红总额。"
+            "请先运行: python scripts/download_raw.py --download dividend --force"
+        )
+    base_share = pd.to_numeric(df["base_share"], errors="coerce")
+    missing_share = int(base_share.isna().sum())
+    if missing_share > 0:
+        logger.warning(
+            f"dividend 数据有 {missing_share} 条实施行缺少 base_share，"
+            "对应年度现金分红总额按 0 计，支付率回退至更早可计算年度"
+        )
+    df["base_share"] = base_share.fillna(0.0)
 
     # 可用日（事件因子公告可见性）：imp_ann_date 优先、缺失回退 ann_date
     if "imp_ann_date" not in df.columns:

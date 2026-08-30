@@ -32,6 +32,7 @@ from loguru import logger
 from .financial_statement_versions import deduplicate_prefer_latest_update_flag
 from .storage import Storage
 from .tushare_client import TushareClient
+from .tushare_client.dividend import DIVIDEND_FIELDS
 
 # 去重键：分红方案身份（div_proc 必入键，预案/决案/实施各行保留）
 DIVIDEND_DEDUP_COLS = ["ts_code", "end_date", "div_proc", "ann_date"]
@@ -222,6 +223,19 @@ def download_dividend_full(
         if existing_df is not None and len(existing_df) > 0 and "ts_code" in existing_df.columns
         else set()
     )
+    # 存量数据缺 base_share 列时（历史下载未显式请求该字段），支付率因子无法计算
+    # 现金分红总额，必须把已覆盖股票整体降级为 failed 触发自动重下；不得静默沿用
+    # 缺列数据产出全 NaN 因子。
+    base_share_missing = (
+        existing_df is not None
+        and len(existing_df) > 0
+        and "base_share" not in existing_df.columns
+    )
+    if base_share_missing:
+        logger.warning(
+            "[dividend] 存量数据缺少 base_share 列（历史下载未请求该字段），"
+            "将自动重下全部已覆盖股票以补齐基准股本"
+        )
     coverage_statuses = _load_dividend_coverage(storage)
     coverage_was_missing = coverage_statuses is None
     coverage_changed = coverage_was_missing
@@ -237,6 +251,12 @@ def download_dividend_full(
         for code in record_codes:
             if code not in coverage_statuses or coverage_statuses[code] == "empty":
                 coverage_statuses[code] = "data"
+                coverage_changed = True
+    if base_share_missing:
+        # 缺 base_share 列的旧数据必须重下：已覆盖状态整体降级为 failed
+        for code, status in list(coverage_statuses.items()):
+            if status == "data":
+                coverage_statuses[code] = "failed"
                 coverage_changed = True
     existing_codes = {
         code for code, status in coverage_statuses.items() if status in _DIVIDEND_COVERED_STATUSES
@@ -269,9 +289,13 @@ def download_dividend_full(
     failed_codes: List[str] = []
 
     def _fetch_one(code: str) -> Optional[pd.DataFrame]:
-        """查询单只股票全历史分红送股记录（异常时返回 None 并记入失败清单）。"""
+        """查询单只股票全历史分红送股记录（异常时返回 None 并记入失败清单）。
+
+        显式携带 DIVIDEND_FIELDS：TuShare 默认字段不返回 base_share，缺失则
+        无法计算现金分红总额（支付率因子会静默全 NaN）。
+        """
         try:
-            return client.query("dividend", ts_code=code)
+            return client.query("dividend", ts_code=code, fields=DIVIDEND_FIELDS)
         except Exception as e:
             logger.warning(f"[dividend] {code} 下载失败: {e}")
             return None

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.99.5] - 2026-08-30
+
+### Fixed
+
+- **分红支付率全 NaN**：TuShare `dividend` 接口默认字段不返回 `base_share`（基准股本），历史下载未显式请求该字段，导致现金分红总额始终为 0、`dividend_payout_ratio` 及其 zscore/_sz 变体全 NaN（质量看板列缺失率 1.0 告警）。修复：所有 dividend 查询显式携带 `DIVIDEND_FIELDS`（含 base_share）；存量缺列数据自动降级覆盖状态触发重下（无需手动 --force）；因子构建缺 base_share 列时明确失败，不再静默产出全 NaN 支付率。修复后需重新下载 dividend 并重建特征分区。
+
+## [0.99.4] - 2026-08-30
+
+### Fixed
+
+- **数据质量报告结构化渲染**：修复 DataFrame 被直接转为连续文本的 HTML 生成错误；报告改为状态卡片、每数据集一行的摘要、紧凑问题表和可横向滚动的表格，避免大量指标无法阅读。
+
 ## [0.99.3] - 2026-08-30
 
 ### Fixed

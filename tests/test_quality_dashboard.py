@@ -76,5 +76,7 @@ def test_html_report_limits_high_cardinality_detail_rows(tmp_path):
 
     report = output_path.read_text(encoding="utf-8")
     assert "仅展示前 100 条，共 150 条" in report
+    assert "<table>" in report
+    assert "<th>数据集</th>" in report
     assert "20260099" in report
     assert "20260149" not in report

@@ -5,6 +5,16 @@ from typing import Optional
 
 import pandas as pd
 
+# 显式请求字段：TuShare `dividend` 接口默认字段不包含 base_share（基准股本，
+# 万股），而不请求该字段服务端不会返回；分红政策因子 dividend_payout_ratio
+# 的现金分红总额 = cash_div_tax（每股税前）× base_share，缺失会导致支付率
+# 静默全 NaN。因此所有 dividend 查询必须显式携带本字段清单。
+DIVIDEND_FIELDS = (
+    "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,"
+    "cash_div,cash_div_tax,record_date,ex_date,pay_date,div_listdate,"
+    "imp_ann_date,base_date,base_share"
+)
+
 
 class ClientDividendMixin:
     """TushareClient 分红送股 mixin。"""
@@ -29,6 +39,8 @@ class ClientDividendMixin:
           - ex_date: 除权除息日
           - record_date: 股权登记日
           - end_date: 分红年度
+          - base_date: 基准日
+          - base_share: 基准股本（万股，必须显式请求，默认字段不返回）
 
         Args:
             ts_code: TS 代码（如 600848.SH）
@@ -47,4 +59,5 @@ class ClientDividendMixin:
             record_date=record_date,
             ex_date=ex_date,
             imp_ann_date=imp_ann_date,
+            fields=DIVIDEND_FIELDS,
         )

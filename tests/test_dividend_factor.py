@@ -630,16 +630,54 @@ def test_deduplicate_dividend_keeps_div_proc_rows():
     assert set(result["div_proc"]) == {"预案", "实施"}
 
 
+def test_lookup_raises_when_base_share_column_missing():
+    """缺 base_share 列必须明确失败，不得静默产出全 NaN 支付率。"""
+    raw = pd.DataFrame([_event_row()]).drop(columns=["base_share"])
+    with pytest.raises(ValueError, match="base_share"):
+        build_dividend_lookup_by_date(raw, ["20240610"])
+
+
+def test_download_requeries_stocks_when_existing_data_lacks_base_share(tmp_path):
+    """存量分区缺 base_share 列时，已覆盖股票整体降级为 failed 自动重下。"""
+    storage = Storage(str(tmp_path))
+    old = pd.DataFrame([_event_row(ts_code="000001.SZ", ann_date="20200401")]).drop(
+        columns=["base_share"]
+    )
+    storage.save_raw_by_date(old, "dividend", "2020-12-31")
+    # 预置覆盖状态为 data，模拟历史下载完成后的状态
+    from src.lazybull.data.dividend_raw import _save_dividend_coverage
+
+    _save_dividend_coverage(storage, {"000001.SZ": "data"})
+
+    new = pd.DataFrame([_event_row(ts_code="000001.SZ", ann_date="20200401")])
+    client = _DividendClientStub({"000001.SZ": new})
+
+    result = download_dividend_full(
+        client,
+        storage,
+        pd.DataFrame({"ts_code": ["000001.SZ"]}),
+        concurrency=1,
+    )
+
+    # 缺列旧数据触发了按股重查
+    assert client.calls == ["000001.SZ"]
+    assert "base_share" in result.columns
+    assert result["base_share"].iloc[0] == pytest.approx(10000.0)
+    assert _load_dividend_coverage(storage) == {"000001.SZ": "data"}
+
+
 class _DividendClientStub:
     """按股票返回预设结果的 dividend 下载测试桩。"""
 
     def __init__(self, responses: dict):
         self.responses = responses
         self.calls = []
+        self.query_kwargs = []
 
-    def query(self, api_name: str, ts_code: str) -> pd.DataFrame:
+    def query(self, api_name: str, ts_code: str = None, **kwargs) -> pd.DataFrame:
         assert api_name == "dividend"
         self.calls.append(ts_code)
+        self.query_kwargs.append(kwargs)
         response = self.responses[ts_code]
         if isinstance(response, Exception):
             raise response
@@ -678,6 +716,8 @@ def test_force_replaces_successful_stock_and_retries_failed_stock(tmp_path):
     second_rows = result[result["ts_code"] == "000002.SZ"]
     assert first_rows["ann_date"].tolist() == ["20200501"]
     assert second_rows["ann_date"].tolist() == ["20200401"]
+    # 下载请求必须显式携带字段清单（base_share 默认不返回）
+    assert all("fields" in kwargs for kwargs in client.query_kwargs)
     assert _load_dividend_coverage(storage) == {
         "000001.SZ": "data",
         "000002.SZ": "failed",

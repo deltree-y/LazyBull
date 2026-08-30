@@ -139,6 +139,7 @@ python scripts/download_raw.py --start-date 20230101 --end-date 20231231 --downl
 python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --download cashflow --force
 
 # 分红送股数据（分红政策质量因子，按股全历史查询 + ann_date 年分区）
+# 必须显式请求 base_share 基准股本用于支付率；存量数据缺该列会自动触发重下，也可手动 --force
 python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --download dividend
 
 # 利润表归母净利润（分红支付率，首次接入需强制建立 f_ann_date 版本化季度分区）
@@ -202,7 +203,7 @@ python scripts/quality_dashboard.py --data-root ./data --start-date 20250101 --e
 
 未传 `--end-date` 时，覆盖率截止日取本地 `raw/daily` 最新分区，不使用当前日期或交易日历外推。各层有效起点和允许尾差由 `quality.coverage_start_dates`、`quality.coverage_tail_lag_trading_days` 配置；`cs_train` 默认允许标签所需的 21 个交易日尾窗。逐分区缺失率保留作明细，错误门禁使用全扫描区间的行数加权缺失率，特征全空列仍会失败。
 
-退出码 `0` 表示无错误，`1` 表示扫描完成但发现质量错误，`2` 表示扫描执行失败。扫描时会输出当前分区、累计进度、耗时和预计剩余时间；进度心跳间隔在 `configs/base.yaml` 的 `quality.progress_interval_seconds` 中统一配置。HTML 仅展示前 `quality.html_max_detail_rows` 条异常和快照变化（默认 100），完整明细保存在同目录 `latest_metrics.parquet`。
+退出码 `0` 表示无错误，`1` 表示扫描完成但发现质量错误，`2` 表示扫描执行失败。扫描时会输出当前分区、累计进度、耗时和预计剩余时间；进度心跳间隔在 `configs/base.yaml` 的 `quality.progress_interval_seconds` 中统一配置。HTML 使用状态卡片、数据集摘要和紧凑表格呈现结果，仅展示前 `quality.html_max_detail_rows` 条异常和快照变化（默认 100），完整明细保存在同目录 `latest_metrics.parquet`。
 
 ##### 纸面交易（Paper Trading）
 

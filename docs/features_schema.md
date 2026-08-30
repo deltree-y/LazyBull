@@ -590,7 +590,7 @@ model.fit(X, y)
 | dividend_continuity_5y | float | 近 5 个已知财年正分红年占比；成熟无记录年=0，尚未成熟年份仅在正分红除息后进入；上市前年份不计入分母（`list_date`） |
 | dividend_stability_5y | float | 年度每股分红（调整后）的 1 − MAD/中位数；样本 ≥3 年且中位数>0 才有效，裁剪 ±1 |
 | dividend_growth_3y / 5y | float | 每股调整 DPS 有界对称增长率 g=(curr−prev)/(0.5·(\|curr\|+\|prev\|))，裁剪 ±2；窗口年份未全部覆盖（上市不足）为 NaN |
-| dividend_payout_ratio | float | 最近可见分红年度现金分红总额 / Q4 归母净利润（income `n_income_attr_p`，仅合并报表；PIT=分红 ex_date 与利润表 f_ann_date 回退 ann_date 双可见）；净利润绝对值 <1000 万元或分红无现金为 NaN，裁剪 ±2 |
+| dividend_payout_ratio | float | 最近可见分红年度现金分红总额 / Q4 归母净利润（income `n_income_attr_p`，仅合并报表；PIT=分红 ex_date 与利润表 f_ann_date 回退 ann_date 双可见）；现金分红总额 = `cash_div_tax` × `base_share`（基准股本，万股，下载必须显式请求该字段）；净利润绝对值 <1000 万元或分红无现金为 NaN，裁剪 ±2 |
 | dividend_yield_hist_12m | float | 近 365 自然日内已实施每股现金分红累计（T 日股本口径：base 窗口和 ÷ G(T)）/ 当日未复权收盘价（handler 层计算）；上市满一年且无事件为 0 |
 | dividend_days_to_ex_date | float | 距最近**已公告**未除息事件的自然日天数（公告可见性 `imp_ann_date ≤ T`、缺失回退 `ann_date`）；`0~30` 为有效距离，上市满一年且窗口内无事件为 31 |
 | dividend_recent_imp_ann_10d | float | 近 10 个交易日（[T-9, T] 含 T）内实施公告计数；纯回看窗口，公告只影响发布日及之后，绝不回填发布日前 |
