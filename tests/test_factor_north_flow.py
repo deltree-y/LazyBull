@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.lazybull.factors.north_flow import (
     NORTH_COLS,
@@ -119,6 +120,42 @@ def test_north_regime_columns_are_mutually_exclusive():
     assert all(result["20240820"][col] == 0.0 for col in NORTH_NET_BUY_COLS)
     assert result["20240816"]["north_net_buy"] == -10.0
     assert result["20240819"]["north_turnover"] == 800.0
+
+
+def test_north_flow_neutralizes_internal_market_holiday_without_hiding_trailing_gap():
+    """源数据区间内的港股休市日取中性值，末尾下载缺口仍保持缺失。"""
+    df = pd.DataFrame(
+        {
+            "trade_date": ["20260630", "20260702"],
+            "north_money": [364452.41, 424018.05],
+        }
+    )
+
+    result = build_north_flow_lookup_by_date(
+        df,
+        ["20260630", "20260701", "20260702", "20260703"],
+    )
+
+    assert all(result["20260701"][column] == 0.0 for column in NORTH_NET_BUY_COLS)
+    assert all(result["20260701"][column] == 0.0 for column in NORTH_TURNOVER_COLS)
+    assert result["20260701"]["north_turnover_flag"] == 1.0
+    assert "20260703" not in result
+
+
+def test_north_flow_internal_holiday_participates_in_following_rolling_window():
+    """内部休市的零成交额应进入后续滚动窗口，不能跨日取更早记录。"""
+    df = pd.DataFrame(
+        {
+            "trade_date": ["20260701", "20260702", "20260706"],
+            "north_money": [10_000.0, 10_000.0, 10_000.0],
+        }
+    )
+    calendar_dates = ["20260701", "20260702", "20260703", "20260706"]
+
+    result = build_north_flow_lookup_by_date(df, calendar_dates)
+
+    assert result["20260703"]["north_turnover_ma5"] == 0.0
+    assert result["20260706"]["north_turnover_ma5"] == pytest.approx(75.0)
 
 
 def test_north_flow_rolling_window_no_cross_era():

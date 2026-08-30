@@ -198,7 +198,7 @@ def ensure_features_for_date(
 
         # 与 build_clean_features 对齐：循环外预计算 daily_adj 与日期索引缓存
         adj_factor = pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"])
-        builder.precompute_daily_adj(daily_clean, adj_factor)
+        builder.precompute_daily_adj(daily_clean, adj_factor, daily_basic_clean)
 
         # 8. 构建特征（adj_factor 传空列结构，复权价来自 clean 日线）
         features_df = builder.build_features_for_day(

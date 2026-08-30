@@ -4,6 +4,7 @@
 from unittest.mock import Mock, patch
 
 import pandas as pd
+import pytest
 
 from scripts.raw_download.income import download_income
 from src.lazybull.data import DataLoader, Storage, TushareClient
@@ -170,7 +171,14 @@ def test_dividend_pipeline_delegates_income_lookback_to_loader(monkeypatch):
 
         def load_income(self, start_date=None, end_date=None):
             self.income_calls.append((start_date, end_date))
-            return pd.DataFrame({"ts_code": ["000001.SZ"]})
+            return pd.DataFrame(
+                {
+                    "ts_code": ["000001.SZ"],
+                    "end_date": ["20231231"],
+                    "f_ann_date": ["20240430"],
+                    "n_income_attr_p": [100_000_000.0],
+                }
+            )
 
     monkeypatch.setattr(
         "src.lazybull.factors.dividend.build_dividend_lookup_by_date",
@@ -192,3 +200,57 @@ def test_dividend_pipeline_delegates_income_lookback_to_loader(monkeypatch):
     )
 
     assert loader.income_calls == [(trade_date, trade_date)]
+
+
+def test_dividend_pipeline_rejects_missing_income():
+    """显式启用分红政策时，缺失 income 不得静默写出全空支付率。"""
+    trade_date = "20250102"
+    loader = Mock()
+    loader.load_clean_trade_cal.return_value = pd.DataFrame(
+        {"cal_date": [trade_date], "is_open": [1]}
+    )
+    loader.load_clean_stock_basic.return_value = pd.DataFrame(
+        {"ts_code": ["000001.SZ"], "list_date": ["19910403"]}
+    )
+    loader.get_trading_dates.return_value = [trade_date]
+    loader.load_clean_daily.return_value = pd.DataFrame(
+        {
+            "trade_date": [trade_date],
+            "ts_code": ["000001.SZ"],
+            "close": [10.0],
+            "close_adj": [10.0],
+        }
+    )
+    loader.load_clean_daily_basic.return_value = None
+    loader.load_clean_moneyflow.return_value = None
+    loader.load_dividend.return_value = pd.DataFrame({"ts_code": ["000001.SZ"]})
+    loader.load_income.return_value = None
+    storage = Mock()
+    storage.is_feature_exists.return_value = False
+
+    with pytest.raises(ValueError, match="raw/income"):
+        build_features_data(
+            storage=storage,
+            loader=loader,
+            builder=Mock(),
+            start_date=trade_date,
+            end_date=trade_date,
+            enable_dividend_policy=True,
+        )
+
+
+def test_dividend_pipeline_rejects_income_without_valid_annual_report():
+    """非空 income 若没有有效年报公告，也不得通过支付率门禁。"""
+    from src.lazybull.factors.dividend import validate_income_for_dividend_payout
+
+    income = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "end_date": ["20231231"],
+            "f_ann_date": [None],
+            "n_income_attr_p": [100_000_000.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="有效合并年报"):
+        validate_income_for_dividend_payout(income)

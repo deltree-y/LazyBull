@@ -62,8 +62,10 @@ def scan_quality(
                     records.extend(_sentinel_metrics(file_path, layer, dataset, partition))
                 progress.partition_completed(layer, dataset, partition)
     metrics = pd.DataFrame.from_records(records, columns=_METRIC_COLUMNS)
+    metrics = _add_column_missing_metrics(metrics, config)
+    metrics = _add_coverage_metrics(metrics, config, scan_start_date=start_date)
     progress.completed(len(metrics))
-    return _add_coverage_metrics(metrics, config)
+    return metrics
 
 
 _METRIC_COLUMNS = [
@@ -144,10 +146,22 @@ def evaluate_quality(metrics: pd.DataFrame, config: Mapping[str, Any]) -> pd.Dat
     result = metrics.copy()
     result["status"] = "ok"
     result["detail"] = ""
-    missing_limit = float(config.get("missing_ratio_error", 1.0))
     for index, row in result.iterrows():
-        if row["metric"] == "missing_ratio" and row["value"] > missing_limit:
-            result.loc[index, ["status", "detail"]] = ["error", "缺失率超过阈值"]
+        if row["metric"] == "column_missing_ratio":
+            missing_limit, enforced = _missing_ratio_rule(
+                config,
+                str(row["layer"]),
+                str(row["dataset"]),
+                str(row["column"]),
+            )
+            result.loc[index, "threshold"] = missing_limit
+            value = float(row["value"])
+            exceeds = value > missing_limit or (missing_limit >= 1.0 and value >= missing_limit)
+            if enforced and exceeds:
+                result.loc[index, ["status", "detail"]] = [
+                    "error",
+                    "扫描区间加权缺失率超过阈值",
+                ]
         elif row["metric"] == "coverage_ratio" and row["value"] < row["threshold"]:
             result.loc[index, ["status", "detail"]] = ["error", "分区覆盖率低于阈值"]
         elif row["metric"] == "infinite_count" and row["value"] > 0:
@@ -157,6 +171,23 @@ def evaluate_quality(metrics: pd.DataFrame, config: Mapping[str, Any]) -> pd.Dat
         elif row["metric"] == "sentinel_version" and row["value"] != row["threshold"]:
             result.loc[index, ["status", "detail"]] = ["error", "schema 哨兵版本不符"]
     return result
+
+
+def _missing_ratio_limit(config: Mapping[str, Any], layer: str, dataset: str, column: str) -> float:
+    return _missing_ratio_rule(config, layer, dataset, column)[0]
+
+
+def _missing_ratio_rule(
+    config: Mapping[str, Any], layer: str, dataset: str, column: str
+) -> tuple[float, bool]:
+    dataset_limits = config.get("missing_ratio_limits", {}).get(f"{layer}/{dataset}", {})
+    if column in dataset_limits:
+        return float(dataset_limits[column]), True
+    required = config.get(
+        "missing_ratio_required_datasets",
+        ["features/cs_train", "features/cs_infer"],
+    )
+    return float(config.get("missing_ratio_error", 1.0)), f"{layer}/{dataset}" in required
 
 
 def save_snapshot(metrics: pd.DataFrame, output_path: Path) -> None:
@@ -222,7 +253,11 @@ def _dataset_metrics(
     return records
 
 
-def _add_coverage_metrics(metrics: pd.DataFrame, config: Mapping[str, Any]) -> pd.DataFrame:
+def _add_coverage_metrics(
+    metrics: pd.DataFrame,
+    config: Mapping[str, Any],
+    scan_start_date: Optional[str] = None,
+) -> pd.DataFrame:
     reference = metrics[
         (metrics["layer"] == "raw")
         & (metrics["dataset"] == "daily")
@@ -239,6 +274,8 @@ def _add_coverage_metrics(metrics: pd.DataFrame, config: Mapping[str, Any]) -> p
     if reference.empty or not daily_partitions:
         return metrics
     required = config.get("coverage_required_datasets", [])
+    start_dates = config.get("coverage_start_dates", {})
+    tail_lags = config.get("coverage_tail_lag_trading_days", {})
     records = []
     threshold = float(config.get("coverage_ratio_error", 0.85))
     for item in required:
@@ -251,6 +288,31 @@ def _add_coverage_metrics(metrics: pd.DataFrame, config: Mapping[str, Any]) -> p
                 "partition",
             ].dropna()
         )
+        ordered_reference = sorted(daily_partitions)
+        configured_start = str(start_dates.get(item, ordered_reference[0])).replace("-", "")
+        if scan_start_date is not None:
+            start_date = max(
+                configured_start,
+                ordered_reference[0],
+                scan_start_date.replace("-", ""),
+            )
+        elif partitions:
+            start_date = max(configured_start, ordered_reference[0], min(partitions))
+        else:
+            start_date = max(configured_start, ordered_reference[0])
+        tail_lag = max(int(tail_lags.get(item, 0)), 0)
+        if tail_lag >= len(ordered_reference):
+            expected_partitions = set()
+        else:
+            end_date = ordered_reference[-(tail_lag + 1)]
+            expected_partitions = {
+                partition for partition in daily_partitions if start_date <= partition <= end_date
+            }
+        coverage_ratio = (
+            len(partitions & expected_partitions) / len(expected_partitions)
+            if expected_partitions
+            else 1.0
+        )
         records.append(
             _record(
                 layer,
@@ -258,8 +320,55 @@ def _add_coverage_metrics(metrics: pd.DataFrame, config: Mapping[str, Any]) -> p
                 None,
                 "coverage_ratio",
                 None,
-                len(partitions & daily_partitions) / len(daily_partitions),
+                coverage_ratio,
                 threshold=threshold,
+            )
+        )
+    return pd.concat([metrics, pd.DataFrame.from_records(records)], ignore_index=True)
+
+
+def _add_column_missing_metrics(metrics: pd.DataFrame, config: Mapping[str, Any]) -> pd.DataFrame:
+    """按扫描区间行数加权汇总列缺失率，避免逐日稀疏状态制造海量误报。"""
+    row_counts = metrics.loc[
+        metrics["metric"] == "rows", ["layer", "dataset", "partition", "value"]
+    ].rename(columns={"value": "row_count"})
+    missing = metrics.loc[
+        metrics["metric"] == "missing_ratio",
+        ["layer", "dataset", "partition", "column", "value"],
+    ]
+    if missing.empty or row_counts.empty:
+        return metrics
+
+    weighted = missing.merge(
+        row_counts,
+        on=["layer", "dataset", "partition"],
+        how="left",
+        validate="many_to_one",
+    )
+    weighted["missing_count"] = weighted["value"].astype(float) * weighted["row_count"].astype(
+        float
+    )
+    dataset_rows = (
+        row_counts.groupby(["layer", "dataset"], sort=False)["row_count"].sum().astype(float)
+    )
+    records = []
+    for (layer, dataset, column), group in weighted.groupby(
+        ["layer", "dataset", "column"], sort=False
+    ):
+        total_rows = float(dataset_rows.loc[(layer, dataset)])
+        present_rows = float(group["row_count"].sum())
+        absent_rows = max(total_rows - present_rows, 0.0)
+        missing_rows = float(group["missing_count"].sum()) + absent_rows
+        ratio = missing_rows / total_rows if total_rows else 0.0
+        records.append(
+            _record(
+                layer,
+                dataset,
+                None,
+                "column_missing_ratio",
+                column,
+                ratio,
+                threshold=_missing_ratio_limit(config, layer, dataset, column),
             )
         )
     return pd.concat([metrics, pd.DataFrame.from_records(records)], ignore_index=True)

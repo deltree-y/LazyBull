@@ -10,7 +10,10 @@ from src.lazybull.factors.risk.announcement_lookup import (
     build_pledge_lookup_by_date,
     build_share_float_lookup_by_date,
 )
-from src.lazybull.factors.risk.factor_registry import compute_all_risk_factors
+from src.lazybull.factors.risk.factor_registry import (
+    compute_all_risk_factors,
+    get_registered_factor_names,
+)
 from src.lazybull.features.handlers_announcement import (
     BlockTradeFactorHandler,
     PledgeFactorHandler,
@@ -261,6 +264,7 @@ def test_announcement_factors_from_wired_columns():
             "unlock_ratio": [0.05, 0.02],
             "block_discount_avg_10d": [-0.03, 0.0],
             "block_discount_days_10d": [2, 0],
+            "short_balance_change_5": [0.2, -0.1],
         }
     )
     results = compute_all_risk_factors(df=features, daily_adj=None, market_state=None)
@@ -280,6 +284,9 @@ def test_announcement_factors_from_wired_columns():
     assert "unlock_ratio" not in results
     assert "block_discount_avg_10d" not in results
     assert "block_discount_days_10d" not in results
+    registered = get_registered_factor_names()
+    assert "short_balance_change_5" in registered
+    assert "short_sell_ratio_5" not in registered
 
 
 def test_pledge_high_flag_percentage_threshold():

@@ -1,6 +1,6 @@
 """公告类低频因子
 
-纳入 v1 的公告类因子（4 种数据源，7 个加工后特征），采用三层加工策略：
+纳入 v1 的公告类因子（4 种数据源，8 个加工后特征），采用三层加工策略：
 - 新鲜度衰减：原始值 × exp(-freshness_days / half_life)
 - Delta-on-Update：仅公告日非零
 - 分档编码：连续值 → 2~3 档风险等级
@@ -9,7 +9,7 @@
   pledge_ratio_decayed, pledge_high_flag, pledge_delta  ← pledge_stat
   unlock_risk_flag, unlock_ratio                          ← share_float
   block_discount_avg_10d, block_discount_days_10d         ← block_trade
-  short_balance_change_5, short_sell_ratio_5              ← margin_detail（已有）
+    short_balance_change_5                                  ← margin_detail（已有）
 
 所有因子通过 @register_risk_factor 装饰器注册到全局注册表。
 """
@@ -221,20 +221,4 @@ def compute_short_balance_change_5(
         cur = df["short_balance"].astype(float)
         prev = df["short_balance_prev5"].astype(float)
         return (cur - prev) / (prev.abs() + _EPS)
-    return pd.Series(np.nan, index=df.index)
-
-
-@register_risk_factor("short_sell_ratio_5")
-def compute_short_sell_ratio_5(
-    df: pd.DataFrame,
-    daily_adj: pd.DataFrame = None,
-    market_state: dict = None,
-    **kwargs,
-) -> pd.Series:
-    """融券卖出量 / 成交量（5 日均值）。
-
-    需要 short_sell_vol 和 vol 列。若无数据，返回 NaN。
-    """
-    if "short_sell_ratio_5" in df.columns:
-        return df["short_sell_ratio_5"].astype(float)
     return pd.Series(np.nan, index=df.index)

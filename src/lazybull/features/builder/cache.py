@@ -105,10 +105,40 @@ class FeatureCacheMixin:
                 setattr(self, name, None)
         self._risk_cache_failed = False
 
-    def precompute_daily_adj(self, daily_data: pd.DataFrame, adj_factor: pd.DataFrame) -> None:
+    def precompute_daily_adj(
+        self,
+        daily_data: pd.DataFrame,
+        adj_factor: pd.DataFrame,
+        daily_basic_data: Optional[pd.DataFrame] = None,
+    ) -> None:
         self._invalidate_precomputed_state()
         logger.info("预计算 daily_adj（含 pre_close_adj）并建立日期索引字典...")
         daily_adj = self._calculate_adj_close(daily_data, adj_factor)
+        if (
+            daily_basic_data is not None
+            and len(daily_basic_data) > 0
+            and {"ts_code", "trade_date", "turnover_rate"}.issubset(daily_basic_data.columns)
+        ):
+            turnover = (
+                daily_basic_data[["ts_code", "trade_date", "turnover_rate"]]
+                .drop_duplicates(["ts_code", "trade_date"], keep="last")
+                .rename(columns={"turnover_rate": "_daily_basic_turnover_rate"})
+            )
+            daily_adj = daily_adj.merge(
+                turnover,
+                on=["ts_code", "trade_date"],
+                how="left",
+                validate="many_to_one",
+            )
+            if "turnover_rate" in daily_adj.columns:
+                daily_adj["turnover_rate"] = daily_adj["turnover_rate"].fillna(
+                    daily_adj["_daily_basic_turnover_rate"]
+                )
+                daily_adj.drop(columns=["_daily_basic_turnover_rate"], inplace=True)
+            else:
+                daily_adj.rename(
+                    columns={"_daily_basic_turnover_rate": "turnover_rate"}, inplace=True
+                )
         daily_adj = daily_adj.sort_values(["ts_code", "trade_date"])
         daily_adj["pre_close_adj"] = daily_adj.groupby("ts_code")["close_adj"].shift(1)
         self._daily_adj_precomputed = daily_adj

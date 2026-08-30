@@ -583,7 +583,10 @@ def build_features_data(
     # 加载分红政策质量因子（可选；payout_ratio 需 income Q4 归母净利润）
     dividend_lookup = None
     if enable_dividend_policy:
-        from src.lazybull.factors.dividend import build_dividend_lookup_by_date
+        from src.lazybull.factors.dividend import (
+            build_dividend_lookup_by_date,
+            validate_income_for_dividend_payout,
+        )
 
         dividend_df = loader.load_dividend()
         if dividend_df is not None and len(dividend_df) > 0:
@@ -596,6 +599,14 @@ def build_features_data(
                 }
             # 六年回看由 income loader 统一负责，调用方仅传目标构建区间。
             income_for_payout = loader.load_income(start_date, end_date)
+            try:
+                validate_income_for_dividend_payout(income_for_payout)
+            except ValueError as exc:
+                raise ValueError(
+                    "启用分红政策因子但 income 无法生成 dividend_payout_ratio: "
+                    f"{exc}。请先运行: "
+                    "python scripts/download_raw.py --download income --force"
+                ) from exc
             # 近 10 交易日回看窗口需完整预热日历（与龙虎榜同模式），保证批量构建
             # 区间开头的窗口与单日推理口径一致
             warm_cal = loader.get_trading_dates(
@@ -613,9 +624,9 @@ def build_features_data(
                 calendar_dates=calendar_str,
             )
         else:
-            logger.warning(
-                "未找到分红送股数据，分红政策因子将为空。"
-                "请先运行: python scripts/download_raw.py --download dividend"
+            raise ValueError(
+                "启用分红政策因子但缺少 raw/dividend 数据。请先运行: "
+                "python scripts/download_raw.py --download dividend"
             )
 
     # 加载风控公告类数据（可选：质押/解禁/大宗，PIT 日频查询表）
@@ -682,7 +693,7 @@ def build_features_data(
     adj_factor = pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"])
 
     # 优化1/4：循环外一次性预计算 daily_adj（含 pre_close_adj）及日期索引字典
-    builder.precompute_daily_adj(daily_clean, adj_factor)
+    builder.precompute_daily_adj(daily_clean, adj_factor, daily_basic_clean)
 
     # ── 判断是否使用并行 ──
     if use_parallel and len(pending_dates) > 4:

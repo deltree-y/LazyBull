@@ -296,6 +296,8 @@ def build_cashflow_quality_lookup_by_date(
         return {}
 
     available_cols = [c for c in CASHFLOW_COLS if c in factor_df.columns and c != "fcf_yield"]
+    sparse_state_cols = [c for c in ["ocf_to_profit"] if c in available_cols]
+    latest_report_cols = [c for c in available_cols if c not in sparse_state_cols]
 
     logger.info(
         f"现金流质量查询表构建(schema_v{CASHFLOW_QUALITY_SCHEMA_VERSION}): "
@@ -303,14 +305,40 @@ def build_cashflow_quality_lookup_by_date(
     )
 
     result_dict = build_latest_announcement_lookup_by_date(
-        factor_df[["ts_code", "avail_date", "end_date"] + available_cols],
+        factor_df[["ts_code", "avail_date", "end_date"] + latest_report_cols],
         trading_dates,
-        value_cols=available_cols,
+        value_cols=latest_report_cols,
         end_col="end_date",
         ann_col="avail_date",
         freshness_col=CASHFLOW_FRESHNESS_COL,
         log_name="现金流质量",
     )
+
+    # TuShare cashflow.net_profit 主要在半年报/年报披露，Q1/Q3 常为空。
+    # 该比率按自身最近一次有效公告推进，避免新季度空字段抹掉旧的真实状态。
+    for column in sparse_state_cols:
+        valid_state = factor_df.dropna(subset=[column])[
+            ["ts_code", "avail_date", "end_date", column]
+        ]
+        state_lookup = build_latest_announcement_lookup_by_date(
+            valid_state,
+            trading_dates,
+            value_cols=[column],
+            end_col="end_date",
+            ann_col="avail_date",
+            log_name=f"现金流质量-{column}",
+        )
+        for trade_date, day_frame in result_dict.items():
+            state_frame = state_lookup.get(trade_date)
+            if state_frame is None or len(state_frame) == 0:
+                day_frame[column] = np.nan
+                continue
+            result_dict[trade_date] = day_frame.merge(
+                state_frame,
+                on="ts_code",
+                how="left",
+                validate="one_to_one",
+            )
 
     logger.info(f"现金流质量日频查询表构建完成: {len(result_dict)} 个交易日")
     return result_dict

@@ -10,7 +10,7 @@ D 类流动性 8 个）改为全周期一次性向量化 rolling 计算，替代
 - 输出为与 daily_adj 行对齐的长表（ts_code / trade_date + 22 个因子列，float32）；
 - 与逐日路径的语义差异：窗口按「最近 N 个交易日」对齐（停牌日为 NaN 并按
   min_periods 跳过），而非「该股最近 N 条观测」；对无停牌的股票两者完全一致；
-- 公告类截面因子（pledge/unlock/block/short 共 9 个）不依赖历史窗口，
+- 公告类截面因子（pledge/unlock/block/short 共 8 个）不依赖历史窗口，
   仍由 factor_registry 逐日计算，不在本模块范围内。
 
 调用方：features/builder.py 的 FeatureBuilder（首次构建时缓存整个周期结果）。

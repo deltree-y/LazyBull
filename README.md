@@ -51,7 +51,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **现金流质量因子**: 基于 `f_ann_date` 的版本化 PIT、依赖修订事件驱动 TTM 与供应商自由现金流口径
 - 🧪 **分红政策质量因子（待 WF 验证）**: 分红稳定性/增长率、归母净利润支付率 + 双日期稠密事件因子，每股调整口径 PIT 截断、`ex_date` 防前视
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
-- ✅ **数据质量看板**: 扫描 raw/clean/features 分区的覆盖率、缺失率、异常值、schema 版本和同步水位，输出离线 HTML 报告与 Parquet 快照
+- ✅ **数据质量看板**: 按本地数据截止日扫描 raw/clean/features 的覆盖率、区间加权缺失率、异常值、schema 版本和同步水位，输出离线 HTML 报告与 Parquet 快照
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
 - ✅ **成交额过滤**: 在信号生成（选股）阶段过滤成交额后N%的股票，提高持仓流动性
 - ✅ **分批调仓**: 总 Top-N 槽位与资金按周期拆批，支持漏批追赶、配置迁移及 T1 失败同日顺位补买
@@ -157,7 +157,7 @@ python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
 # 启用现金流质量因子（默认加载两年 TTM 预热；schema v3 会拦截旧缓存）
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-cashflow-quality-features
 
-# 启用分红政策质量因子（需先下载 dividend + income；哨兵 dividend_schema_v1 当前值 3）
+# 启用分红政策质量因子（需先下载 dividend + 有效 income 合并年报，缺失时构建会直接失败）
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-dividend-policy-features
 
 # 或者只构建clean
@@ -196,9 +196,11 @@ python scripts/update_basic_data.py --force
 # 默认读取 configs/base.yaml 的 quality 阈值，输出至 data/reports/quality/
 python scripts/quality_dashboard.py
 
-# 对指定数据目录和日期区间执行诊断
-python scripts/quality_dashboard.py --data-root ./data --start-date 20250101 --end-date 20260830
+# 对指定数据目录和日期区间执行诊断（end-date 即本次权威截止日）
+python scripts/quality_dashboard.py --data-root ./data --start-date 20250101 --end-date 20260731
 ```
+
+未传 `--end-date` 时，覆盖率截止日取本地 `raw/daily` 最新分区，不使用当前日期或交易日历外推。各层有效起点和允许尾差由 `quality.coverage_start_dates`、`quality.coverage_tail_lag_trading_days` 配置；`cs_train` 默认允许标签所需的 21 个交易日尾窗。逐分区缺失率保留作明细，错误门禁使用全扫描区间的行数加权缺失率，特征全空列仍会失败。
 
 退出码 `0` 表示无错误，`1` 表示扫描完成但发现质量错误，`2` 表示扫描执行失败。扫描时会输出当前分区、累计进度、耗时和预计剩余时间；进度心跳间隔在 `configs/base.yaml` 的 `quality.progress_interval_seconds` 中统一配置。HTML 仅展示前 `quality.html_max_detail_rows` 条异常和快照变化（默认 100），完整明细保存在同目录 `latest_metrics.parquet`。
 

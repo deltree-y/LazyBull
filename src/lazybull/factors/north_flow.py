@@ -34,7 +34,6 @@ from loguru import logger
 
 from ..common.date_utils import normalize_series_to_yyyymmdd
 
-
 NORTH_NET_BUY_COLS = [
     "north_net_buy",
     "north_net_buy_ma5",
@@ -89,6 +88,7 @@ def _compute_sign_streak(series: pd.Series, window: int = 20) -> pd.Series:
 def build_north_flow_lookup_by_date(
     hsgt_df: pd.DataFrame,
     trading_dates: List[str],
+    calendar_dates: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, float]]:
     """构建北向资金市场级因子查询表
 
@@ -98,7 +98,8 @@ def build_north_flow_lookup_by_date(
 
     Args:
         hsgt_df: moneyflow_hsgt 原始 DataFrame, 需含 trade_date, north_money
-        trading_dates: 交易日列表 (YYYYMMDD 字符串)
+        trading_dates: 需要输出的交易日列表 (YYYYMMDD 字符串)
+        calendar_dates: 滚动计算使用的完整 A 股交易日历，默认与输出日期相同
 
     Returns:
         Dict[trade_date -> Dict[col_name -> float]]
@@ -114,15 +115,39 @@ def build_north_flow_lookup_by_date(
     if "north_money" in df.columns:
         df["_north_amount"] = pd.to_numeric(df["north_money"], errors="coerce")
     elif "hgt" in df.columns and "sgt" in df.columns:
-        df["_north_amount"] = (
-            pd.to_numeric(df["hgt"], errors="coerce").fillna(0.0)
-            + pd.to_numeric(df["sgt"], errors="coerce").fillna(0.0)
-        )
+        hgt_amount = pd.to_numeric(df["hgt"], errors="coerce").fillna(0.0)
+        sgt_amount = pd.to_numeric(df["sgt"], errors="coerce").fillna(0.0)
+        df["_north_amount"] = hgt_amount + sgt_amount
     else:
         logger.warning("北向资金因子: 缺少 north_money/hgt/sgt 列")
         return {}
 
     df = df.drop_duplicates("trade_date").sort_values("trade_date").reset_index(drop=True)
+
+    # 港股休市但 A 股开市时接口无记录。内部休市金额按 0 进入后续滚动窗口；
+    # 源数据末尾之后不补值，避免掩盖下载滞后或接口故障。
+    source_start = str(df["trade_date"].min())
+    source_end = str(df["trade_date"].max())
+    source_dates = set(df["trade_date"])
+    calculation_dates = calendar_dates if calendar_dates is not None else trading_dates
+    neutralized_dates = sorted(
+        {
+            trade_date
+            for trade_date in calculation_dates
+            if source_start <= trade_date <= source_end and trade_date not in source_dates
+        }
+    )
+    df["_is_internal_holiday"] = False
+    if neutralized_dates:
+        holiday_rows = pd.DataFrame(
+            {
+                "trade_date": neutralized_dates,
+                "_north_amount": 0.0,
+                "_is_internal_holiday": True,
+            }
+        )
+        df = pd.concat([df, holiday_rows], ignore_index=True, sort=False)
+        df = df.sort_values("trade_date").reset_index(drop=True)
 
     # 口径分段：0=净流入口径（切换日前），1=成交额口径（切换日起）
     df["_era"] = (df["trade_date"] >= NORTH_TURNOVER_SWITCH_DATE).astype(int)
@@ -186,17 +211,23 @@ def build_north_flow_lookup_by_date(
         td = row["trade_date"]
         if td not in date_set:
             continue
-        rec = {}
-        for col in NORTH_COLS:
-            val = row.get(col)
-            rec[col] = float(val) if pd.notna(val) else np.nan
+        if row["_is_internal_holiday"]:
+            rec = {column: 0.0 for column in NORTH_COLS}
+            rec["north_turnover_flag"] = float(td >= NORTH_TURNOVER_SWITCH_DATE)
+        else:
+            rec = {}
+            for col in NORTH_COLS:
+                val = row.get(col)
+                rec[col] = float(val) if pd.notna(val) else np.nan
         result[td] = rec
 
-    pre_n = int((df["_era"] == 0).sum())
-    post_n = int((df["_era"] == 1).sum())
+    source_mask = ~df["_is_internal_holiday"]
+    pre_n = int((source_mask & df["_era"].eq(0)).sum())
+    post_n = int((source_mask & df["_era"].eq(1)).sum())
     logger.info(
         f"北向资金因子查询表: 覆盖 {len(result)}/{len(trading_dates)} 个交易日; "
         f"口径分段: 净流入 {pre_n} 日 / 成交额 {post_n} 日"
+        f"，内部休市中性化 {len(neutralized_dates)} 日"
         f"（全程百万元 ÷{_NORTH_TURNOVER_SCALE:.0f} 统一换算亿元, {NORTH_TURNOVER_SWITCH_DATE} 起切换口径）"
     )
     return result

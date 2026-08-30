@@ -284,7 +284,11 @@ def _load_factor_data(
     if hsgt_df is not None and len(hsgt_df) > 0:
         from ...factors.north_flow import build_north_flow_lookup_by_date
 
-        north_lookup = build_north_flow_lookup_by_date(hsgt_df, factor_output_dates)
+        north_lookup = build_north_flow_lookup_by_date(
+            hsgt_df,
+            factor_output_dates,
+            calendar_dates=north_hist_dates,
+        )
         cur = north_lookup.get(trade_date)
         if cur is not None and len(cur) > 0:
             north_flow_today = cur
@@ -401,7 +405,10 @@ def _load_factor_data(
             existing_df=dividend_df,
         )
     if dividend_df is not None and len(dividend_df) > 0:
-        from ...factors.dividend import build_dividend_lookup_by_date
+        from ...factors.dividend import (
+            build_dividend_lookup_by_date,
+            validate_income_for_dividend_payout,
+        )
 
         list_date_map = None
         stock_basic = loader.load_stock_basic()
@@ -418,8 +425,12 @@ def _load_factor_data(
                 trade_date,
                 existing_df=income_for_payout,
             )
-        if income_for_payout is None or len(income_for_payout) == 0:
-            missing_factors.append("income（分红支付率归母净利润）")
+        try:
+            validate_income_for_dividend_payout(income_for_payout)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"分红支付率依赖的 income 数据补齐失败: trade_date={trade_date}, {exc}"
+            ) from exc
         dividend_lookup = build_dividend_lookup_by_date(
             dividend_df,
             factor_output_dates,

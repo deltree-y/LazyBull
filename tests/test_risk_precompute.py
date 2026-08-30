@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from src.lazybull.factors.risk.factor_registry import compute_all_risk_factors
+from src.lazybull.features import FeatureBuilder
 from src.lazybull.risk.precompute import (
     PRECOMPUTED_RISK_FACTOR_NAMES,
     build_risk_factor_cache_dict,
@@ -114,6 +115,23 @@ class TestPrecomputeBasics:
         assert result["turnover_cv_20"].isna().all()
         assert result["turnover_percentile"].isna().all()
         assert result["var_95_20"].notna().any()
+
+    def test_builder_merges_daily_basic_turnover_before_risk_precompute(self, daily_adj):
+        """换手率来自 daily_basic，必须在风险因子预计算前并入 daily_adj。"""
+        daily = daily_adj.drop(columns=["turnover_rate"])
+        daily_basic = daily_adj[["ts_code", "trade_date", "turnover_rate"]]
+        builder = FeatureBuilder(horizon=20, label_filter_mode="single")
+
+        builder.precompute_daily_adj(
+            daily,
+            pd.DataFrame(columns=["ts_code", "trade_date", "adj_factor"]),
+            daily_basic,
+        )
+        result = precompute_risk_factors(builder._daily_adj_precomputed)
+
+        assert result is not None
+        assert result["turnover_cv_20"].notna().any()
+        assert result["turnover_percentile"].notna().any()
 
     def test_cache_dict_structure(self, daily_adj, precomputed):
         cache = build_risk_factor_cache_dict(precomputed)

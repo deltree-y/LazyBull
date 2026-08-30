@@ -100,7 +100,7 @@ def main():
         default=None,
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
         "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
-        "moneyflow_hsgt, top_list, report_rc, cashflow, dividend, pledge_stat, "
+        "moneyflow_hsgt, top_list, report_rc, cashflow, income, dividend, pledge_stat, "
         "share_float, block_trade, all_alt。不指定时仅下基础+日线",
     )
     parser.add_argument("--all", action="store_true", default=False, help="下载日线 + 全部另类数据")

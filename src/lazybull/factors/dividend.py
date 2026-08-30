@@ -102,6 +102,38 @@ def _bounded_symmetric_growth(curr: float, prev: float) -> float:
 IncomeQ4Events = Tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
+def validate_income_for_dividend_payout(income_raw: Optional[pd.DataFrame]) -> None:
+    """校验 income 是否含有可用于分红支付率的有效年报。"""
+    if income_raw is None or len(income_raw) == 0:
+        raise ValueError("缺少 raw/income 数据")
+    required = {"ts_code", "end_date", "n_income_attr_p"}
+    missing = sorted(required - set(income_raw.columns))
+    if missing:
+        raise ValueError("income 数据缺少支付率必需列: " + ", ".join(missing))
+    if not ({"f_ann_date", "ann_date"} & set(income_raw.columns)):
+        raise ValueError("income 数据缺少支付率必需公告日列: f_ann_date/ann_date")
+
+    work = income_raw.copy()
+    if "report_type" in work.columns:
+        work = work[pd.to_numeric(work["report_type"], errors="coerce").eq(1)]
+    if "f_ann_date" in work.columns:
+        if "ann_date" in work.columns:
+            work = fill_actual_announcement_date(work)
+        available_date = _norm_date_series(work["f_ann_date"])
+    else:
+        available_date = _norm_date_series(work["ann_date"])
+    end_date = _norm_date_series(work["end_date"])
+    profit = pd.to_numeric(work["n_income_attr_p"], errors="coerce")
+    valid = (
+        work["ts_code"].notna()
+        & end_date.str.endswith("1231", na=False)
+        & available_date.str.match(r"^\d{8}$", na=False)
+        & profit.notna()
+    )
+    if not valid.any():
+        raise ValueError("income 数据不含可用于支付率的有效合并年报归母净利润")
+
+
 def _build_income_q4_lookup(
     income_raw: Optional[pd.DataFrame],
 ) -> Dict[str, IncomeQ4Events]:

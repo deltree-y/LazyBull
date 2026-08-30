@@ -804,7 +804,11 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
 
         def load_income(self, start_date=None, end_date=None):
             income_load_calls.append((start_date, end_date))
-            return stub_df.assign(f_ann_date=trade_date)
+            return stub_df.assign(
+                end_date="20251231",
+                f_ann_date=trade_date,
+                n_income_attr_p=100_000_000.0,
+            )
 
         def load_dividend(self):
             return stub_df
@@ -841,6 +845,22 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
     assert income_load_calls == [(trade_date, trade_date)]
     for output_dates in captured_dates.values():
         assert output_dates == [trade_date]
+
+    class MissingIncomeLoader(StubLoader):
+        def load_income(self, start_date=None, end_date=None):
+            return None
+
+    monkeypatch.setattr(ensure_factor_load, "_try_download_income", lambda *args, **kwargs: None)
+    with pytest.raises(RuntimeError, match="income 数据补齐失败"):
+        ensure_module._load_factor_data(
+            loader=MissingIncomeLoader(),
+            client=Mock(),
+            storage=storage,
+            trade_date=trade_date,
+            trading_dates_str=trading_dates,
+            start_date="20260401",
+            end_date=trade_date,
+        )
 
 
 def test_try_ensure_historical_fund_portfolio_builds_and_reuses_agg_cache(

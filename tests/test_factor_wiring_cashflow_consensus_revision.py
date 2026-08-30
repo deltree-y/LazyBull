@@ -198,6 +198,28 @@ def test_cashflow_quality_uses_tushare_capex_field_and_ttm_caliber():
     assert result.loc["000002.SZ", "capex_to_ocf"] == pytest.approx((2e7 - 1e7 + 3e7) / ttm_ocf_neg)
 
 
+def test_cashflow_quality_keeps_latest_valid_profit_ratio_when_new_report_omits_profit():
+    """Q1/Q3 未披露 net_profit 时，不应抹掉半年报/年报的有效利润比。"""
+    raw = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"] * 3,
+            "ann_date": ["20230428", "20240420", "20240430"],
+            "f_ann_date": ["20230428", "20240420", "20240430"],
+            "end_date": ["20230331", "20231231", "20240331"],
+            "n_cashflow_act": [4e7, 2e8, 6e7],
+            "c_pay_acq_const_fiolta": [1e7, 5e7, 2e7],
+            "c_fr_sale_sg": [4e8, 2e9, 6e8],
+            "net_profit": [None, 4e8, None],
+            "free_cashflow": [3e7, 1.5e8, 4e7],
+        }
+    )
+
+    result = build_cashflow_quality_lookup_by_date(raw, ["20240506"])["20240506"]
+
+    assert result.loc[0, "ocf_to_profit"] == pytest.approx(0.5)
+    assert result.loc[0, "cashflow_freshness_days"] == 6
+
+
 def test_cashflow_quality_revision_visible_only_after_f_ann_date():
     """审计回归：修订版本只在 f_ann_date 之后可见，不得回填到原始公告日。"""
     raw = pd.DataFrame(

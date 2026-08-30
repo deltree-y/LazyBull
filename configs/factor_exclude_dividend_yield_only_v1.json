@@ -1,11 +1,12 @@
 {
   "description": "分红政策因子排除实验 v2：分红因子组内仅保留 zscore_dividend_yield_hist_12m（及其自动联动的 _sz 变体），排除其余全部分红因子，用于单独验证近12月股息率因子的边际贡献",
-  "exclude_count": 8,
+  "exclude_count": 9,
   "exclude_factors": [
     "zscore_dividend_continuity_5y",
     "zscore_dividend_stability_5y",
     "zscore_dividend_growth_3y",
     "zscore_dividend_growth_5y",
+    "zscore_dividend_payout_ratio",
     "dividend_days_to_ex_date",
     "dividend_recent_imp_ann_10d",
     "dividend_freshness_days",

@@ -15,15 +15,25 @@ quality:
   progress_interval_seconds: 15
   html_max_detail_rows: 100
   coverage_ratio_error: 0.85
-  missing_ratio_error: 0.8
+  missing_ratio_error: 1.0
+  missing_ratio_required_datasets: ["features/cs_train", "features/cs_infer"]
   coverage_required_datasets: ["raw/daily_basic", "clean/daily", "features/cs_train"]
+  coverage_start_dates:
+    raw/daily_basic: "20050104"
+    clean/daily: "20120104"
+    features/cs_train: "20120104"
+  coverage_tail_lag_trading_days:
+    features/cs_train: 21  # 标签使用 T+1 买入、T+1+20 卖出
+  missing_ratio_limits:
+    features/cs_train:
+      turnover_cv_20: 0.6
+      turnover_percentile: 0.6
+      dividend_payout_ratio: 0.6
+      ocf_to_profit: 0.6
+      cf_nm: 0.6
   anomaly_limits:
     daily:
       close: 100000.0
-    cs_train:
-      pe_ttm: 1000.0
-    cs_infer:
-      pe_ttm: 1000.0
 
 # TuShare配置
 tushare:
