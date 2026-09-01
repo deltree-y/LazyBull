@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.100.0] - 2026-09-01
+
+### Added
+
+- **最小因子实验矩阵**：`batch_walk_forward.ps1` 使用相同 OOS split 配置同批运行共同基线、历史股息率单因子方案和现金流两对精简方案，并以因子参数列及独立汇总文件区分方案；候选方案显式使用独立排除清单，启动前校验清单路径，避免路径错误时静默退化为全因子训练。
+- **现金流两对候选清单闭环**：`factor_exclude_cashflow_keep_2pairs_v1.json` 补充排除 `zscore_ocf_to_profit`，实际只保留 `fcf_yield`、`ocf_to_revenue` 及各自市值中性版本。
+
+### Fixed
+
+- **Walk-forward 链式 CAGR 正确年化**：新增统一链式指标计算模块，按 `(末值/初值)^(252/有效收益区间数)-1` 计算几何年化；各 split 重复的起始净值点不再计入交易日数。WF 完成日志与 Excel 对比表复用同一实现。
+- **链式 Sharpe 口径对齐**：改为使用 split 内日收益和由 3% 年无风险利率折算的日超额收益计算标准年化 Sharpe，不再以 CAGR 除以波动率，也不再把 split 边界重复点当作零收益。
+
+### Tests
+
+- 新增链式 CAGR、有效收益区间和标准 Sharpe 回归测试，以及最小因子清单剩余列与批处理接线契约测试。
+
 ## [0.99.5] - 2026-08-30
 
 ### Fixed

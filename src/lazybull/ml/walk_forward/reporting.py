@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from .chain_metrics import calculate_chain_metrics
+
 
 def build_daily_topk_detail_df(
     df_eval: pd.DataFrame,
@@ -156,20 +158,17 @@ def chain_nav_splits(results: List[Dict], summary_csv_path: str, wf_run_id: str)
         cumulative_nav = scaled[-1]
 
     chain_df = pd.DataFrame(chained_records)
-    total_return = cumulative_nav - 1.0
-    trading_days = len(chain_df)
-    years = trading_days / 252 if trading_days > 0 else 1
-    annual_return = total_return / years if years > 0 else 0
-    cumulative_max = chain_df["nav"].cummax()
-    max_drawdown = ((chain_df["nav"] - cumulative_max) / cumulative_max).min()
-    daily_returns = chain_df["nav"].pct_change().dropna()
-    volatility = daily_returns.std() * (252**0.5)
-    sharpe = (annual_return - 0.03) / volatility if volatility > 0 else 0
+    metrics = calculate_chain_metrics(chain_df)
+    total_return = metrics["total_return"] or 0.0
+    cagr = metrics["cagr"] or 0.0
+    max_drawdown = metrics["max_drawdown"] or 0.0
+    sharpe = metrics["sharpe"] or 0.0
+    trading_days = metrics["trading_days"] or 0
 
     logger.info("=" * 60)
     logger.info("全周期串联净值（Walk-forward Chain）")
     logger.info(f"  总收益:   {total_return*100:.1f}%")
-    logger.info(f"  CAGR:     {annual_return*100:.1f}%")
+    logger.info(f"  CAGR:     {cagr*100:.1f}%")
     logger.info(f"  最大回撤: {max_drawdown*100:.1f}%")
     logger.info(f"  夏普:     {sharpe:.2f}")
     logger.info(f"  交易日数: {trading_days}")

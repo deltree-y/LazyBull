@@ -1,28 +1,26 @@
 # -*- coding: utf-8 -*-
 """汇总CSV / 链式nav / 交易日历 的加载与清洗。"""
 
-from typing import Optional
+import sys
 from bisect import bisect_right
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
-from loguru import logger
 import pandas as pd
 from dateutil.relativedelta import relativedelta
-
-import sys
-from pathlib import Path
+from loguru import logger
 
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.lazybull.data import DataLoader, Storage
-
 from scripts.compare.constants import (
-    SUMMARY_CSV_DTYPE,
     _BT_REBALANCE_FREQ_MAX,
     _TRADE_CAL_CACHE,
     _TRADE_CAL_OPEN_DATES_CACHE,
+    SUMMARY_CSV_DTYPE,
 )
+from src.lazybull.data import DataLoader, Storage
 
 
 def _is_missing_param_value(value) -> bool:
@@ -425,15 +423,17 @@ def _concat_summary_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
 #   "abs_low" → 绝对值越小越好
 # 权重之和应为 1.0
 # ---------------------------------------------------------------------------
-    # ── 回测指标（60%）：真实组合模拟，最直接反映参数优劣 ──────────
-    # ── 统计指标（32%）：辅助验证，防止回测过拟合 ─────────────────
-    # ── 训练质量（8%）：过拟合检测 ────────────────────────────────
+# ── 回测指标（60%）：真实组合模拟，最直接反映参数优劣 ──────────
+# ── 统计指标（32%）：辅助验证，防止回测过拟合 ─────────────────
+# ── 训练质量（8%）：过拟合检测 ────────────────────────────────
 
 
 def load_chain_metrics(
     raw_dir: Optional[Path], wf_run_id: str, source_dir: Optional[Path] = None
 ) -> dict:
     """读取 chain_nav 并计算全周期指标。"""
+    from src.lazybull.ml.walk_forward.chain_metrics import calculate_chain_metrics
+
     empty = {
         "chain_total_return": None,
         "chain_cagr": None,
@@ -455,33 +455,18 @@ def load_chain_metrics(
         logger.warning(f"读取 chain_nav 失败: {chain_path.name} — {exc}")
         return empty
 
-    if chain_df.empty or "nav" not in chain_df.columns:
+    metrics = calculate_chain_metrics(chain_df)
+    if metrics["total_return"] is None:
         return empty
-
-    nav = pd.to_numeric(chain_df["nav"], errors="coerce").dropna()
-    if nav.empty or nav.iloc[0] == 0:
-        return empty
-
-    trading_days = len(nav)
-    years = trading_days / 252 if trading_days > 0 else 0
-    total_return = nav.iloc[-1] / nav.iloc[0] - 1
-    # 简单年化收益率（不假设收益再投入）
-    cagr = (total_return / years) if years > 0 else None
-    cummax = nav.cummax()
-    drawdown = (nav - cummax) / cummax
-    max_drawdown = drawdown.min() if not drawdown.empty else None
-    daily_ret = nav.pct_change().dropna()
-    volatility = daily_ret.std() * (252**0.5) if len(daily_ret) > 1 else None
-    sharpe = None
-    if cagr is not None and volatility is not None and volatility > 0:
-        sharpe = (cagr - 0.03) / volatility
 
     return {
-        "chain_total_return": round(total_return, 6),
-        "chain_cagr": round(cagr, 6) if cagr is not None else None,
-        "chain_max_drawdown": round(max_drawdown, 6) if max_drawdown is not None else None,
-        "chain_sharpe": round(sharpe, 4) if sharpe is not None else None,
-        "chain_trading_days": trading_days,
+        "chain_total_return": round(metrics["total_return"], 6),
+        "chain_cagr": round(metrics["cagr"], 6) if metrics["cagr"] is not None else None,
+        "chain_max_drawdown": (
+            round(metrics["max_drawdown"], 6) if metrics["max_drawdown"] is not None else None
+        ),
+        "chain_sharpe": (round(metrics["sharpe"], 4) if metrics["sharpe"] is not None else None),
+        "chain_trading_days": metrics["trading_days"],
     }
 
 

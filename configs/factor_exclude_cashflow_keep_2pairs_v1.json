@@ -1,8 +1,9 @@
 {
-  "description": "现金流因子裁剪实验 v1：仅排除现金流因子组内的 cashflow_freshness_days 与 capex_to_ocf 组（zscore_capex_to_ocf 联动排除 zscore_capex_to_ocf_sz），保留 fcf_yield 与 ocf_to_revenue 两对因子（含市值中性 _sz 版），实际删 3 列剩 4 列。",
-  "exclude_count": 2,
+  "description": "现金流因子裁剪实验 v1：排除 cashflow_freshness_days、capex_to_ocf 与 ocf_to_profit 组，保留 fcf_yield 与 ocf_to_revenue 两对因子（含市值中性 _sz 版），实际删 5 列剩 4 列。",
+  "exclude_count": 3,
   "exclude_factors": [
     "cashflow_freshness_days",
-    "zscore_capex_to_ocf"
+    "zscore_capex_to_ocf",
+    "zscore_ocf_to_profit"
   ]
 }

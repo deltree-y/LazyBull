@@ -260,7 +260,19 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
 # 步骤2: 使用 ML 模型运行回测（使用新的默认值）
 # 注意：scripts/run_ml_backtest.py 已删除，回测已并入 walk_forward 滚动回测，
 # 或经 src.lazybull.common.backtest_runtime 工厂驱动 BacktestEngineML
+
+# 批量运行最小因子实验（共同基线、历史股息率、两对现金流）
+powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
 ```
+
+批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的
+基线、仅保留 `dividend_yield_hist_12m` 的分红方案，以及仅保留 `fcf_yield` 和
+`ocf_to_revenue`（均含 `_sz` 版）的现金流方案。三组方案复用相同的 OOS split 配置，
+并通过因子开关、精简清单列及独立汇总文件区分；候选清单位于 `configs/factor_exclude_dividend_yield_only_v1.json` 与
+`configs/factor_exclude_cashflow_keep_2pairs_v1.json`，不会覆盖生产排除清单。
+
+Walk-forward 对比表的全周期 CAGR 按有效日收益区间进行几何年化；每个 split 重复的
+起始净值点不计入交易日数，链式 Sharpe 同样只使用 split 内日收益。
 
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型

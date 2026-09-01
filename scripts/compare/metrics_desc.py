@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """指标说明表（Excel 第二 sheet）文案。"""
 
-import pandas as pd
-
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
-
 
 
 def build_metric_descriptions() -> pd.DataFrame:
@@ -204,7 +203,7 @@ def build_metric_descriptions() -> pd.DataFrame:
         (
             "OOS回测",
             "全周期CAGR",
-            "基于 chain_nav 将所有 split 的 OOS 净值顺次串联后得到的全周期复利年化收益，更适合做最终策略筛选",
+            "基于 chain_nav 串联净值按 (末值/初值)^(252/有效收益区间数)-1 计算；split 起始重复净值点不计入年化期数",
             "越高越好（优先看）",
         ),
         (
@@ -222,13 +221,13 @@ def build_metric_descriptions() -> pd.DataFrame:
         (
             "OOS回测",
             "全周期链式夏普",
-            "基于 chain_nav 串联后的全周期夏普比率，使用 3% 无风险利率与全周期日收益波动计算",
+            "基于 split 内日收益计算的标准年化夏普，使用 3% 年无风险利率折算日收益；不把 split 边界重复点作为零收益",
             "越高越好",
         ),
         (
             "OOS回测",
             "全周期链式交易日数",
-            "chain_nav 串联后的交易日总数，用于判断 CAGR 计算口径和样本长度是否一致",
+            "chain_nav 中同一 split 内有效相邻收益区间数，不包含各 split 重复的起始净值点",
             "参考",
         ),
         (
