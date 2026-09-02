@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from src.lazybull.common.config import get_data_root
 from src.lazybull.ml.train_core.constants import (
     CONSENSUS_REVISION_FEATURE_COLUMNS,
 )
@@ -105,6 +106,33 @@ def _sanitize_train_params(raw_params: Dict[str, Any]) -> Dict[str, Any]:
     return params
 
 
+def _collect_data_state_fields(args, wf_run_id: str, output_path: str) -> Dict[str, Any]:
+    """采集数据态血缘：摘要列并入 summary，完整快照落盘为 data_state JSON。
+
+    数据态采集失败仅告警并返回空列，不影响训练结果输出。
+    """
+    from .data_state import collect_data_state, data_state_summary_columns, write_data_state_file
+
+    try:
+        state = collect_data_state(
+            data_root=getattr(args, "data_root", None) or get_data_root(),
+            wf_run_id=wf_run_id,
+            batch_run_id=getattr(args, "batch_run_id", None),
+        )
+    except Exception as exc:
+        logger.warning(f"采集数据态血缘失败，本次汇总不含数据态列: {exc}")
+        return {}
+
+    write_data_state_file(Path(output_path).parent, state)
+    summary_cols = data_state_summary_columns(state)
+    logger.info(
+        f"数据态血缘: id={summary_cols['data_state_id']}"
+        f" git={summary_cols['git_commit']}"
+        f" daily={summary_cols['data_daily_latest']}"
+    )
+    return summary_cols
+
+
 def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_run_id: str) -> None:
     """将所有 walk-forward split 的指标和公共参数写入 CSV。"""
     if not results:
@@ -115,6 +143,7 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
     derived_wf_start_date = getattr(args, "wf_start_date", results[0]["train_start"])
     derived_wf_end_date = getattr(args, "wf_end_date", results[-1]["test_end"])
 
+    data_state_cols = _collect_data_state_fields(args, wf_run_id, output_path)
     train_params_cols = {
         "wf_run_id": wf_run_id,
         "batch_run_id": getattr(args, "batch_run_id", None),
@@ -203,6 +232,8 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
         "selected_split_indices": getattr(args, "selected_split_indices", None),
     }
     train_params_cols = _sanitize_train_params(train_params_cols)
+    # 数据态血缘摘要列（采集失败时为空 dict，历史对比按缺失列处理）
+    train_params_cols.update(data_state_cols)
 
     summary_rows = []
     for result in results:

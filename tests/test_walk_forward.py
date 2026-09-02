@@ -617,7 +617,7 @@ class TestWalkForwardCSV:
 
 
 
-    def test_write_walk_forward_summary_clears_inactive_conditional_params(self):
+    def test_write_walk_forward_summary_clears_inactive_conditional_params(self, monkeypatch):
         """未启用父开关时，summary 不应写入误导性的默认子参数。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, "test_summary_inactive.csv")
@@ -636,6 +636,12 @@ class TestWalkForwardCSV:
 
             from src.lazybull.ml.walk_forward.summary import write_walk_forward_summary
             import types
+
+            # 数据态血缘采集依赖真实数据目录，与本测试无关，直接旁路
+            monkeypatch.setattr(
+                "src.lazybull.ml.walk_forward.summary._collect_data_state_fields",
+                lambda args, wf_run_id, output_path: {},
+            )
 
             mock_args = types.SimpleNamespace(
                 wf_start_date="20200101", wf_end_date="20230630",

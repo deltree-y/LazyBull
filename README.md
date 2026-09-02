@@ -274,6 +274,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
 Walk-forward 对比表的全周期 CAGR 按有效日收益区间进行几何年化；每个 split 重复的
 起始净值点不计入交易日数，链式 Sharpe 同样只使用 split 内日收益。
 
+**数据态血缘与跨数据态告警：** 每次 walk-forward 运行会采集当前 git 版本（含工作区
+脏标记）与关键数据水位（raw/daily 等最新分区、cs_train 最新分区、dividend 覆盖状态
+摘要），完整快照落盘为汇总同目录的 `data_state_{wf_run_id}.json`，摘要列
+（数据态ID、Git版本、raw/daily水位等）并入 summary CSV 与对比表。同一配置在不同
+数据态下复跑的结果不可比；`compare_walk_forward.py` 检测到对比表内存在多个数据态时
+会输出显式告警，配置差异只在同一数据态内比较。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）

@@ -74,6 +74,52 @@ def test_load_factor_exclude_list_caches_by_explicit_file(tmp_path):
         train_core_module._factor_exclude_cache.clear()
 
 
+def test_load_factor_exclude_list_missing_explicit_file_raises(tmp_path):
+    """显式清单路径不存在时必须报错，禁止静默跳过精简。"""
+    train_core_module._factor_exclude_cache.clear()
+    try:
+        with pytest.raises(FileNotFoundError, match="因子精简已启用但排除清单不存在"):
+            train_core_module._load_factor_exclude_list(exclude_file=tmp_path / "not_exist.json")
+    finally:
+        train_core_module._factor_exclude_cache.clear()
+
+
+def test_load_factor_exclude_list_missing_default_file_raises(tmp_path):
+    """factor_prune 启用但生产默认清单未生成时必须报错并提示生成方式。"""
+    train_core_module._factor_exclude_cache.clear()
+    try:
+        with pytest.raises(FileNotFoundError, match="generate_factor_exclude_list"):
+            train_core_module._load_factor_exclude_list(models_dir=tmp_path / "models")
+    finally:
+        train_core_module._factor_exclude_cache.clear()
+
+
+def test_load_factor_exclude_list_invalid_json_raises(tmp_path):
+    """清单内容非法 JSON 时必须报错而非降级为空清单。"""
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("{not-a-json", encoding="utf-8")
+
+    train_core_module._factor_exclude_cache.clear()
+    try:
+        with pytest.raises(ValueError, match="因子排除清单加载失败"):
+            train_core_module._load_factor_exclude_list(exclude_file=bad_file)
+    finally:
+        train_core_module._factor_exclude_cache.clear()
+
+
+def test_load_factor_exclude_list_missing_exclude_factors_raises(tmp_path):
+    """清单缺少 exclude_factors 字段时必须报错。"""
+    bad_file = tmp_path / "bad_schema.json"
+    bad_file.write_text(json.dumps({"min_icir": 0.1}), encoding="utf-8")
+
+    train_core_module._factor_exclude_cache.clear()
+    try:
+        with pytest.raises(ValueError, match="exclude_factors"):
+            train_core_module._load_factor_exclude_list(exclude_file=bad_file)
+    finally:
+        train_core_module._factor_exclude_cache.clear()
+
+
 def _make_training_df(n_dates: int, stocks_per_date: int, seed: int = 7) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     rows = []

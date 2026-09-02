@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.102.0] - 2026-09-02
+
+### Added
+
+- **Walk-forward 数据态血缘**：新增 `src/lazybull/ml/walk_forward/data_state.py`，每次运行采集代码态（git commit + 工作区脏标记，git 不可用时降级为空）与数据态（`daily`/`adj_factor`/`daily_basic`/`moneyflow`/`stk_limit`/`suspend`/`stock_st`/`margin_detail` 最新分区、`features/cs_train` 最新分区、dividend 逐股覆盖状态摘要，复用 `dividend_raw.summarize_dividend_coverage`）。完整快照落盘为汇总同目录 `data_state_{wf_run_id}.json`，摘要六列（`data_state_id`/`git_commit`/`git_dirty`/`data_daily_latest`/`data_cs_train_latest`/`data_dividend_coverage`）并入 summary CSV；数据态 ID 为排除运行标识与采集时间后的稳定短指纹。采集失败仅告警，不影响训练结果输出。
+- **对比表跨数据态告警**：新增 `scripts/compare/data_state.py`，`compare_walk_forward.py` 在构建对比表后按数据态 ID 分组统计；同一对比表混入多个数据态时输出显式告警（各数据态的运行清单、git 版本与 raw/daily 水位），并提示配置差异只在同一数据态内比较。数据态列进入 `PARAM_COLS` 中文映射与 batches 实验对比核心列（历史运行无血缘记录统一归入"未知"态，不触发告警）。
+
+### Changed
+
+- **因子精简清单严格校验**：`factor_prune` 启用时，排除清单（显式 `--factor-exclude-file` 或生产默认 `data/models/factor_exclude_list.json`）缺失直接抛 `FileNotFoundError`、JSON 非法或缺少 `exclude_factors` 字段抛 `ValueError` 终止训练，不再告警后静默降级为全因子训练（静默降级会产生与无精简完全相同的实验结果，浪费整轮 walk-forward，实测 0801 两次实验因此无效）。`batch_walk_forward.ps1` 内路径说明同步更新。
+
+### Tests
+
+- 新增 `tests/test_walk_forward_data_state.py`（15 项）：水位采集与空目录降级、数据态 ID 稳定性与水位敏感性、摘要列格式、血缘 JSON 落盘与写盘失败降级、summary 集成（含数据态列与采集失败旁路）、跨数据态告警的命中/静默/未知态边界；`test_train_core_val_embargo.py` 新增清单缺失/非法 JSON/缺 `exclude_factors` 报错测试。
+
 ## [0.101.1] - 2026-09-02
 
 ### Fixed

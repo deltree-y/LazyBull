@@ -115,6 +115,22 @@ def _save_dividend_coverage(storage: Storage, statuses: Dict[str, str]) -> None:
         raise
 
 
+def summarize_dividend_coverage(storage: Storage) -> Optional[Dict[str, int]]:
+    """汇总逐股覆盖状态计数（data/empty/pending/failed），供数据态血缘记录。
+
+    Returns:
+        各状态计数；覆盖状态文件不存在（从未执行 dividend 回补）时返回 None。
+    """
+    statuses = _load_dividend_coverage(storage)
+    if statuses is None:
+        return None
+    summary = {status: 0 for status in sorted(_DIVIDEND_COVERAGE_STATUSES)}
+    for status in statuses.values():
+        summary[status] = summary.get(status, 0) + 1
+    summary["total"] = len(statuses)
+    return summary
+
+
 def _existing_dividend_df(storage: Storage) -> Optional[pd.DataFrame]:
     """从年分区加载已有 dividend 数据（分区模式必须按分区枚举读取）。
 

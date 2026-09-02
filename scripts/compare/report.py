@@ -16,6 +16,7 @@ from scripts.compare.constants import (
     COL_NAMES,
     SCORE_CONFIG,
 )
+from scripts.compare.data_state import warn_cross_data_state
 from scripts.compare.loading import (
     build_auto_compare_jobs,
     load_all_summaries_from_raw_dirs,
@@ -75,6 +76,10 @@ def generate_comparison_report(
     if comp_df.empty:
         logger.warning(f"[{source_label}] 构建对比表失败，跳过")
         return False
+
+    # 数据态一致性检查：跨数据态的运行混在一张表时必须显式告警
+    if warn_cross_data_state(comp_df):
+        logger.warning(f"[{source_label}] 本次对比表包含多个数据态，相关结论需冻结数据态复跑确认")
 
     comp_df.insert(1, "综合得分", compute_composite_score(comp_df))
     comp_df.insert(2, "选股综合得分", compute_selection_score(comp_df))

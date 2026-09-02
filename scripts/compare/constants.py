@@ -185,6 +185,13 @@ COL_NAMES = {
     "skip_training": "跳过训练",
     "start_model_version": "起始模型版本",
     "no_deploy_train": "禁用部署训练",
+    # 数据态血缘
+    "data_state_id": "数据态ID",
+    "git_commit": "Git版本",
+    "git_dirty": "Git脏标记",
+    "data_daily_latest": "raw/daily水位",
+    "data_cs_train_latest": "cs_train水位",
+    "data_dividend_coverage": "dividend覆盖",
 }
 
 
@@ -193,6 +200,8 @@ BATCH_EXPERIMENT_CORE_COLS = [
     "最新运行时间",
     "批次ID",
     "批次时间段",
+    "数据态ID",
+    "Git版本",
     "最终日期",
     "综合得分",
     "选股综合得分",
@@ -339,6 +348,13 @@ PARAM_COLS = [
     "skip_training",
     "start_model_version",
     "no_deploy_train",
+    # 数据态血缘（0902引入）：跨数据态的运行结果不可直接比较
+    "data_state_id",
+    "git_commit",
+    "git_dirty",
+    "data_daily_latest",
+    "data_cs_train_latest",
+    "data_dividend_coverage",
 ]
 
 

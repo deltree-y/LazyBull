@@ -30,12 +30,20 @@ def _load_factor_exclude_list(
     从 data/models/factor_exclude_list.json 读取排除的因子名称。
     该文件由 scripts/ana/generate_factor_exclude_list.py 生成。
 
+    严格模式：factor_prune 启用意味着本次训练必须执行因子精简，
+    清单缺失或非法时直接抛异常终止训练，禁止静默降级为"全部因子保留"
+    （静默跳过会产生与无精简完全相同的实验结果，浪费整轮 walk-forward）。
+
     Args:
         models_dir: 模型目录，为 None 时自动从 config 推断
         exclude_file: 显式排除清单路径；未提供时读取模型目录下的默认清单
 
     Returns:
-        排除的因子名称集合（空集合表示未找到排除列表或列表为空）
+        排除的因子名称集合
+
+    Raises:
+        FileNotFoundError: 排除清单文件不存在
+        ValueError: 排除清单内容非法（JSON 解析失败或缺少 exclude_factors）
     """
     if exclude_file is None:
         if models_dir is None:
@@ -50,26 +58,35 @@ def _load_factor_exclude_list(
         return _factor_exclude_cache[exclude_file]
 
     if not exclude_file.exists():
-        logger.warning(f"因子排除列表不存在: {exclude_file}，跳过因子精简")
-        _factor_exclude_cache[exclude_file] = set()
-        return _factor_exclude_cache[exclude_file]
+        raise FileNotFoundError(
+            f"因子精简已启用但排除清单不存在: {exclude_file}。"
+            f"请先运行 scripts/ana/generate_factor_exclude_list.py 生成生产默认清单，"
+            f"或通过 --factor-exclude-file 显式指定已存在的清单文件（注意使用相对项目根的路径）。"
+        )
 
     try:
         with open(exclude_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        exclude_list = data.get("exclude_factors", [])
-        _factor_exclude_cache[exclude_file] = set(exclude_list)
-        logger.info(
-            f"已加载因子排除列表: {exclude_file}，"
-            f"{len(_factor_exclude_cache[exclude_file])} 个因子 "
-            f"(min_icir={data.get('min_icir')}, "
-            f"min_coverage={data.get('min_coverage')})"
+    except (json.JSONDecodeError, OSError) as e:
+        raise ValueError(f"因子排除清单加载失败: {exclude_file}，{e}") from e
+
+    if not isinstance(data, dict) or not isinstance(data.get("exclude_factors"), list):
+        raise ValueError(
+            f"因子排除清单格式非法: {exclude_file}，"
+            f"缺少 exclude_factors 列表字段。"
+            f"该文件应由 scripts/ana/generate_factor_exclude_list.py 生成。"
         )
-        return _factor_exclude_cache[exclude_file]
-    except (json.JSONDecodeError, KeyError, OSError) as e:
-        logger.warning(f"加载因子排除列表失败: {exclude_file}，{e}，跳过因子精简")
-        _factor_exclude_cache[exclude_file] = set()
-        return _factor_exclude_cache[exclude_file]
+
+    exclude_list = data.get("exclude_factors", [])
+    _factor_exclude_cache[exclude_file] = set(exclude_list)
+    logger.info(
+        f"已加载因子排除列表: {exclude_file}，"
+        f"{len(_factor_exclude_cache[exclude_file])} 个因子 "
+        f"(min_icir={data.get('min_icir')}, "
+        f"min_coverage={data.get('min_coverage')})"
+    )
+    return _factor_exclude_cache[exclude_file]
+
 
 def filter_stable_features(
     df_train: pd.DataFrame,

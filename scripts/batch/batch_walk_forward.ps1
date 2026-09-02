@@ -158,6 +158,7 @@ $enable_consensus        = $true  # $true 启用 | $false 禁用
 
 # ── 一致预期修正因子（0512基于已有 report_rc 构建时序修正信号，无需额外下载）─
 $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
+# 0902 经多次验证, 此因子带来负向影响且有过拟合现象, 不应再打开实验
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
 $enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
@@ -172,14 +173,14 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 # 0711关闭后得分上升
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
-$factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+$factor_prune             = $false  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 因子排除列表（可选，0801引入）────────────────────────────────────
 # "" = 使用生产默认清单 data/models/factor_exclude_list.json（共 41 个因子）
 # 非空 = 显式清单完全替换生产默认清单（仅排除该清单内因子，不会叠加）
-# 注意: 本变量仅在 $factor_prune = $true 时生效；路径必须是真实存在的文件,
-#       否则因子精简整体跳过（全部因子保留）
-$factor_exclude_file      = "configs/factor_exclude_dividend_yield_only_v1.json"  
+# 注意: 本变量仅在 $factor_prune = $true 时生效；路径必须真实存在,
+#       否则训练直接报错终止（不会静默跳过精简）
+$factor_exclude_file      = ""#configs/factor_exclude_dividend_yield_only_v1.json"  
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all
