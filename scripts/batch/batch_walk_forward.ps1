@@ -164,7 +164,7 @@ $enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性�
 # 0828关闭后收益及回撤都变得更好, 需要保持关闭
 
 # ── 分红政策质量因子（0829需 dividend 接口，2000 积分，需先下载 dividend 数据）─
-$enable_dividend_policy    = $false  # $true 启用 | $false 禁用（实验性因子，默认关）
+$enable_dividend_policy    = $true  # $true 启用 | $false 禁用（实验性因子，默认关）
 
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────
@@ -172,14 +172,14 @@ $feature_stability_filter = $false  # $true 启用 | $false 禁用（实验验�
 # 0711关闭后得分上升
 
 # ── 因子精简（基于IC分析排除低效因子, 0606引入）────────────────────────
-$factor_prune             = $false  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
+$factor_prune             = $true  # $true 启用 | $false 禁用（需先运行 generate_factor_exclude_list.py）
 
 # ── 因子排除列表（可选，0801引入）────────────────────────────────────
 # "" = 使用生产默认清单 data/models/factor_exclude_list.json（共 41 个因子）
 # 非空 = 显式清单完全替换生产默认清单（仅排除该清单内因子，不会叠加）
 # 注意: 本变量仅在 $factor_prune = $true 时生效；路径必须是真实存在的文件,
 #       否则因子精简整体跳过（全部因子保留）
-$factor_exclude_file      = ""  
+$factor_exclude_file      = "configs/factor_exclude_dividend_yield_only_v1.json"  
 
 # ── freshness 处理策略（P2-C）────────────────────────────────────────────
 $freshness_strategy             = "state_keep_event_decay"  # state_keep_event_decay | state_keep_event_no_decay | drop_all

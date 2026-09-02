@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 
@@ -47,7 +48,10 @@ def collect_partition_metrics(
                 int(values.nunique(dropna=True)),
             )
         )
-        if np.issubdtype(values.dtype, np.number):
+        # 用 pyarrow 原生类型判断而非 np.issubdtype：pandas 3.0 起字符串列默认为
+        # StringDtype，np.issubdtype 无法解释该 dtype 会抛 TypeError。
+        col_type = table.schema.field(column_name).type
+        if pa.types.is_integer(col_type) or pa.types.is_floating(col_type):
             numeric_values = values.dropna()
             infinite_count = int(np.isinf(numeric_values).sum())
             metrics.append(

@@ -1,16 +1,17 @@
 # Core dependencies
-# 注意：TensorFlow 2.10 仅支持 Python 3.9-3.10
-# 在 Python 3.11+ 环境下，TensorFlow >= 2.12
-# 本项目目标环境为 Python 3.9.13 + TensorFlow 2.10.1
+# 本项目目标环境为 Python 3.12 + xgboost >= 3.4
+# （xgboost 3.0 起提供 RTX 50 系 Blackwell/ sm_120 原生支持，且要求 Python >= 3.10）
 # 当前requirements.txt为简化依赖，适用于开发测试
 # 生产环境请使用 Poetry 管理精确版本
-pandas>=1.5.0
-numpy>=1.23.0
+pandas>=3.0.0
+numpy>=2.0.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
 requests>=2.28.0
 pyarrow>=10.0.0
 loguru>=0.6.0
+wcwidth>=0.6.0
+matplotlib>=3.9.0
 tushare>=1.2.89
 akshare>=1.17.78
 efinance>=0.5.5.2
@@ -19,21 +20,22 @@ python-dateutil>=2.8.2
 openpyxl>=3.0.0
 
 # Machine Learning dependencies
-xgboost>=1.7.0
-scikit-learn>=1.2.0
+xgboost>=3.4.0
+lightgbm>=4.6.0
+scikit-learn>=1.6.0
 joblib>=1.2.0
-scipy>=1.9.0
+scipy>=1.13.0
 
 # Development dependencies
 pytest>=7.2.0
 pytest-cov>=4.0.0
-black>=22.10.0
+black>=24.0.0
 flake8>=5.0.0
 isort>=5.10.0
 
-# Optional: 钉钉机器人服务
-dingtalk-stream>=1.0.0
+# Optional: 钉钉机器人服务（PyPI 最高 0.24.x，无 1.x 版本）
+dingtalk-stream>=0.24.0
 
-# Optional: 树莓派硬件驱动
-gpiod>=1.5.0
+# Optional: 树莓派硬件驱动（仅 Linux 可装）
+gpiod>=1.5.0; sys_platform == "linux"
 psutil>=5.9.0

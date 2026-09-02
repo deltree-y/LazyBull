@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.101.1] - 2026-09-02
+
+### Fixed
+
+- **训练日志列扩展碎片化告警**：pandas 3.0 / Python 3.12 下 walk-forward 遇到新增字段时，`ml/run_logger.py` 逐列执行 `existing_df[col] = None` 扩展表头，对两万余行、200+ 列的 DataFrame 重复 insert 引发 `PerformanceWarning`（DataFrame highly fragmented），每字段刷屏一次。修复：移除逐列填充循环（连同未使用的 `all_columns`），新增列改由 `pd.concat` 按列名对齐时自动补 NaN，行为与原实现等价（全空新增列同样不会落盘）。新增列扩展碎片化回归测试：以 50 列旧表 + 150 个新增字段构造告警场景并将 `PerformanceWarning` 升级为错误，旧写法下测试直接失败。
+
+## [0.101.0] - 2026-09-01
+
+### Changed
+
+- **训练框架升级至 xgboost 3.4.1，运行时 Python 3.9 → 3.12**：根治 RTX 50 系（Blackwell, sm_120）GPU 训练偶发驱动 TDR 重置后同进程所有 split 连锁 `cudaErrorUnknown(999)` 失败的根因——xgboost 2.1.4 无 Blackwell 原生 kernel，属兼容边缘组合（事件日志 nvlddmkm TDR 序列佐证）。xgboost 3.x 要求 Python ≥3.10（3.4.x 要求 ≥3.12），依赖随 pip 解析升级（pandas 3.0、numpy 2.5、scikit-learn 1.9、scipy 1.18、pyarrow 25）。已训练的旧模型 JSON 由 3.x 向后兼容加载，纸面交易与回测链路不受影响。GPU 冒烟测试验证 Blackwell CUDA 训练/预测链路畅通。
+- **无验证集早停语义显式化**：xgboost ≥2.1 在构造函数携带 `early_stopping_rounds` 且 `fit` 未提供 `eval_set` 时会自动从训练集切 20% 作早停验证，导致实际训练样本悄然减少；`train_core/xgb.py` 现于无验证集时显式移除早停参数，保持"无验证集 = 固定 n_estimators"的既有语义。
+
+### Fixed
+
+- **pandas 3.0 兼容（质量扫描）**：pandas 3.0 起字符串列默认为 `StringDtype`，`quality/metrics.py` 的 `np.issubdtype(dtype, np.number)` 无法解释该 dtype 而抛 `TypeError`；改为 pyarrow 原生 `is_integer/is_floating` 判断，行为与旧版对齐。
+- **依赖清单补漏与错误下限修正**：requirements.txt 补充直接依赖 `wcwidth`（表格中文对齐）、`lightgbm`（训练算法二选一）、`matplotlib`（回撤归因分析），此前依赖其它包传递带入；修正 `dingtalk-stream` 不存在的 `>=1.0.0` 下限（PyPI 最高 0.24.x）；`gpiod` 添加 `sys_platform == "linux"` 环境标记，Windows 全量安装不再失败。
+
 ## [0.100.0] - 2026-09-01
 
 ### Added

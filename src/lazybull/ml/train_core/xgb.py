@@ -275,6 +275,13 @@ def train_xgboost_model(
         if len(val_dates) > 0:
             y_val = _returns_to_grades(y_val, val_dates)
 
+    # xgboost >= 2.1：构造函数携带 early_stopping_rounds 而 fit 未提供 eval_set 时，
+    # 会自动从训练集切出 20% 作为早停验证集，导致实际训练样本悄然减少。
+    # 无验证集时显式移除早停参数，保持"无验证集 = 固定 n_estimators"的既有语义。
+    if train_params.get("early_stopping_rounds") and len(X_val) == 0:
+        train_params.pop("early_stopping_rounds", None)
+        logger.info("无验证集，已禁用早停（避免 xgboost 自动切分训练数据）")
+
     # 创建并训练模型
     if use_lambdarank:
         model = xgb.XGBRanker(**train_params)

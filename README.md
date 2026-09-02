@@ -4,7 +4,7 @@
 
 **专注价值红利策略的量化投资框架**
 
-[![Python](https://img.shields.io/badge/Python-3.9.13-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [功能特性](#功能特性) • [快速开始](#快速开始) • [项目结构](#项目结构) • [文档](#文档) • [计划功能](#计划功能-roadmap)
@@ -73,7 +73,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 
 ### 环境要求
 
-- Python: 3.9.13
+- Python: 3.12
 - 操作系统: Linux/macOS/Windows
 
 ### 方式一: 使用Poetry安装（推荐）

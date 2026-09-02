@@ -1,10 +1,13 @@
 """训练运行日志模块测试"""
 
 import tempfile
+import warnings
 from pathlib import Path
 
 import pandas as pd
 import pytest
+from pandas.errors import PerformanceWarning
+
 import src.lazybull.ml.run_logger as run_logger_module
 
 from src.lazybull.ml.run_logger import (
@@ -498,3 +501,38 @@ def test_full_workflow(temp_csv_dir):
     assert list(df["n_estimators"]) == [200, 250, 300]
     assert df.iloc[0]["train_mse"] == pytest.approx(0.01, rel=1e-6)
     assert df.iloc[2]["train_mse"] == pytest.approx(0.012, rel=1e-6)
+
+
+def test_write_training_run_to_csv_column_expansion_no_fragmentation(temp_csv_dir):
+    """列扩展不得逐列为旧表 insert 新列（多次 insert 会触发 pandas 碎片化 PerformanceWarning）"""
+    csv_path = Path(temp_csv_dir) / "test_runs.csv"
+
+    # 预置一个 50 列的现有日志表（模拟已有多列的训练运行日志）
+    base_df = pd.DataFrame({f"legacy_col_{i:03d}": [i, i + 1, i + 2] for i in range(50)})
+    base_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    # 新记录携带 150 个新字段：逐列 insert 超过 pandas 碎片化告警阈值（约 100 块）
+    record = TrainingRunRecord(
+        timestamp="2024-01-02 10:00:00",
+        model_version=2,
+        task="regression",
+        n_estimators=300,
+    )
+    record.additional_metrics = {f"new_field_{i:03d}": float(i) for i in range(150)}
+
+    # PerformanceWarning 升级为错误，回归时（重新逐列 insert）测试直接失败
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", PerformanceWarning)
+        write_training_run_to_csv(record, str(csv_path))
+
+    # 行为验证：表头扩展、旧记录新字段为空、新记录有值、旧字段保留
+    df = pd.read_csv(csv_path)
+    assert len(df) == 4
+    assert "new_field_000" in df.columns
+    assert "new_field_149" in df.columns
+    assert df.iloc[:3]["new_field_000"].isna().all()
+    assert df.iloc[3]["new_field_000"] == 0.0
+    assert df.iloc[3]["new_field_149"] == 149.0
+    assert "legacy_col_000" in df.columns
+    assert df.iloc[0]["legacy_col_000"] == 0
+    assert pd.isna(df.iloc[3]["legacy_col_000"])

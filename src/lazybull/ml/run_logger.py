@@ -195,17 +195,14 @@ def write_training_run_to_csv(
             # 读取完整的现有数据
             existing_df = pd.read_csv(csv_path, encoding="utf-8-sig", low_memory=False)
 
-            # 为新增列填充空值
-            for col in added_columns:
-                existing_df[col] = None
-
             # 确保新记录包含所有现有列
-            all_columns = existing_columns | new_columns
             for col in existing_columns:
                 if col not in record_dict:
                     record_dict[col] = None
 
             # 合并数据（过滤全空列，避免 pandas FutureWarning）
+            # 注意：新增列不逐列写入 existing_df——多次 insert 会导致内存块碎片化
+            # 并触发 pandas PerformanceWarning，依赖 concat 按列名对齐自动补 NaN
             new_row_df = pd.DataFrame([record_dict])
             existing_df = existing_df.dropna(axis=1, how="all")
             new_row_df = new_row_df.dropna(axis=1, how="all")
