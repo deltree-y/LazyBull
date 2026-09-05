@@ -13,7 +13,7 @@ from src.lazybull.ml.walk_forward import data_state
 
 
 def _make_fake_data_root(tmpdir):
-    """构造带水位的数据目录：raw/daily 两个分区 + features/cs_train 一个分区。"""
+    """构造带水位的数据目录：raw/daily（带横线分区名）+ features/cs_train（8 位纯数字分区名）。"""
     daily_dir = os.path.join(str(tmpdir), "raw", "daily")
     os.makedirs(daily_dir, exist_ok=True)
     for date in ("2026-01-04", "2026-01-05"):
@@ -21,7 +21,7 @@ def _make_fake_data_root(tmpdir):
             f.write(b"stub")
     cs_train_dir = os.path.join(str(tmpdir), "features", "cs_train")
     os.makedirs(cs_train_dir, exist_ok=True)
-    with open(os.path.join(cs_train_dir, "2026-01-05.parquet"), "wb") as f:
+    with open(os.path.join(cs_train_dir, "20260105.parquet"), "wb") as f:
         f.write(b"stub")
     return str(tmpdir)
 
@@ -44,9 +44,19 @@ class TestDataStateCollection:
         assert state["git_dirty"] is False
         assert state["wf_run_id"] == "wf_test_001"
         assert state["raw_latest_partitions"]["daily"] == "2026-01-05"
-        assert state["features_cs_train_latest"] == "2026-01-05"
+        # features 层分区名为 YYYYMMDD 纯数字格式，应与 raw 层一并识别
+        assert state["features_cs_train_latest"] == "20260105"
         # 未执行 dividend 回补时覆盖状态为 None
         assert state["dividend_coverage"] is None
+
+    def test_latest_partition_accepts_both_formats(self, tmp_path):
+        """分区名识别应同时兼容 YYYY-MM-DD 与 YYYYMMDD 两种格式。"""
+        target = tmp_path / "mixed"
+        target.mkdir()
+        for name in ("2025-12-31.parquet", "20260105.parquet", "ignore.txt", "bad1234.parquet"):
+            with open(target / name, "wb") as f:
+                f.write(b"stub")
+        assert data_state._latest_partition_date(target) == "20260105"
 
     def test_collect_data_state_empty_root(self, tmp_path):
         """空数据目录下各水位应为 None，且不抛异常。"""
@@ -112,6 +122,8 @@ class TestDataStateFile:
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["wf_run_id"] == "wf_test_002"
         assert "raw_latest_partitions" in payload
+        # JSON 自描述：附带数据态指纹，且与摘要列一致
+        assert payload["data_state_id"] == data_state.compute_data_state_id(state)
 
     def test_write_failure_returns_none(self, tmp_path, monkeypatch):
         """写盘失败只告警并返回 None，不抛异常阻断训练输出。"""

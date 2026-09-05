@@ -30,7 +30,7 @@ $wf_period_configs = @(
         SplitCount = 14
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
-        StartModelVersion = 22626
+        StartModelVersion = 23682
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
         SelectedSplits = @()
     }
@@ -99,8 +99,8 @@ $early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| r
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(120)         #50
-$rank_weight_list        = @(100)         #3
+$rank_weight_topk_list   = @(50,100,150)         # 120
+$rank_weight_list        = @(100)         # 100
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
 # ── 时间衰减权重 ──────────────────────────────────────────────
@@ -158,14 +158,15 @@ $enable_consensus        = $true  # $true 启用 | $false 禁用
 
 # ── 一致预期修正因子（0512基于已有 report_rc 构建时序修正信号，无需额外下载）─
 $enable_consensus_revision = $false  # $true 启用 | $false 禁用（实验性因子）
-# 0902 经多次验证, 此因子带来负向影响且有过拟合现象, 不应再打开实验
+# 0902-经多次验证, 此因子带来负向影响且有过拟合现象, 不应再打开实验
 
 # ── 现金流质量因子（0512需 cashflow 接口，2000 积分，需先下载 cashflow 数据）─
-$enable_cashflow_quality   = $false  # $true 启用 | $false 禁用（实验性因子）
-# 0828关闭后收益及回撤都变得更好, 需要保持关闭
+$enable_cashflow_quality   = $true  # $true 启用 | $false 禁用（实验性因子）
+# 0828关闭后收益及回撤都变得更好, 需要保持关闭. 0902-打开较好
 
 # ── 分红政策质量因子（0829需 dividend 接口，2000 积分，需先下载 dividend 数据）─
-$enable_dividend_policy    = $true  # $true 启用 | $false 禁用（实验性因子，默认关）
+$enable_dividend_policy    = $false  # $true 启用 | $false 禁用（实验性因子，默认关）
+# 0902-关闭较好
 
 ### 以下为训练功能选择
 # ── 特征稳定性筛选（移除跨时期IC方向不一致的特征, 0326引入）──────────────

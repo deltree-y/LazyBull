@@ -36,8 +36,8 @@ _DATA_STATE_RAW_DATASETS = (
 
 _DATA_STATE_FILE_TEMPLATE = "data_state_{wf_run_id}.json"
 
-# 计算数据态 ID 时排除的易变字段（运行标识与采集时间不参与指纹）
-_STATE_ID_EXCLUDED_KEYS = ("collected_at", "wf_run_id", "batch_run_id")
+# 计算数据态 ID 时排除的易变字段（运行标识、采集时间与指纹本身不参与指纹）
+_STATE_ID_EXCLUDED_KEYS = ("collected_at", "wf_run_id", "batch_run_id", "data_state_id")
 
 # 项目根目录（src/lazybull/ml/walk_forward/data_state.py -> 项目根）
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -75,18 +75,25 @@ def _git_state() -> Dict[str, Any]:
         return {"git_commit": None, "git_dirty": None}
 
 
+def _is_partition_stem(stem: str) -> bool:
+    """识别分区文件名：raw/clean 层为 YYYY-MM-DD（10 位带横线），features 层为 YYYYMMDD（8 位纯数字）。"""
+    if len(stem) == 10 and stem[4] == "-" and stem[7] == "-":
+        return stem[:4].isdigit() and stem[5:7].isdigit() and stem[8:].isdigit()
+    if len(stem) == 8 and stem.isdigit():
+        return True
+    return False
+
+
 def _latest_partition_date(directory: Path) -> Optional[str]:
-    """返回目录内最新分区日期（YYYY-MM-DD 文件名），无分区时返回 None。"""
+    """返回目录内最新分区日期（按磁盘上的原始文件名记录），无分区时返回 None。"""
     if not directory.exists():
         return None
     dates = [
         path.stem
         for path in directory.iterdir()
-        if path.suffix in (".parquet", ".csv")
-        and len(path.stem) == 10
-        and path.stem[4] == "-"
-        and path.stem[7] == "-"
+        if path.suffix in (".parquet", ".csv") and _is_partition_stem(path.stem)
     ]
+    # 同一目录内分区格式一致（raw 带横线 / features 纯数字），字典序即为时间序
     return max(dates) if dates else None
 
 
@@ -151,13 +158,18 @@ def data_state_summary_columns(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def write_data_state_file(output_dir: Path, state: Dict[str, Any]) -> Optional[Path]:
-    """将数据态快照写入 summary 同目录，便于人工核对完整水位。"""
+    """将数据态快照写入 summary 同目录，便于人工核对完整水位。
+
+    落盘内容额外附带 data_state_id，使 JSON 自描述；指纹计算仍基于原始 state
+    （排除运行标识与采集时间），附带字段不影响指纹。
+    """
     wf_run_id = state.get("wf_run_id") or "unknown"
     path = Path(output_dir) / _DATA_STATE_FILE_TEMPLATE.format(wf_run_id=wf_run_id)
+    payload = {**state, "data_state_id": compute_data_state_id(state)}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as file:
-            json.dump(state, file, ensure_ascii=False, indent=2, default=str)
+            json.dump(payload, file, ensure_ascii=False, indent=2, default=str)
         return path
     except OSError as exc:
         logger.warning(f"写入数据态血缘文件失败（不影响训练结果）: {path}，{exc}")

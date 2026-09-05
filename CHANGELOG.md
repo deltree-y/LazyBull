@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.102.2] - 2026-09-05
+
+### Removed
+
+- **删除遗留过期测试** `test_batch_script_scans_baseline_and_two_minimal_factor_experiments`：该测试断言的 ps1 `factor_experiment_configs` 实验矩阵早已被 `$wf_period_configs` 重构移除，断言永远失败且无约束价值。同文件保留的候选排除清单内容校验测试（`test_minimal_factor_exclude_lists_leave_only_intended_base_features`）不受影响。
+
+## [0.102.1] - 2026-09-03
+
+### Fixed
+
+- **数据态水位 features 分区识别修正**：`_latest_partition_date` 原先只识别 `YYYY-MM-DD`（10 位带横线）分区名，而 features 层（cs_train/cs_infer）分区名为 `YYYYMMDD`（8 位纯数字），导致数据态快照与 summary 中 `cs_train水位` 恒为空、且该维度未参与数据态指纹。现兼容两种分区名格式（按磁盘原始文件名记录），数据态 ID 自本版本起包含 cs_train 水位（与 0.102.0 产出的指纹不互认，属预期断裂）。
+- **数据态 JSON 自描述**：`data_state_{wf_run_id}.json` 落盘内容附带 `data_state_id`，指纹计算对已含指纹字段的 payload 幂等（`data_state_id` 与运行标识、采集时间一同排除）。
+
 ## [0.102.0] - 2026-09-02
 
 ### Added

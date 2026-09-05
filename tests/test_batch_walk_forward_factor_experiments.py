@@ -32,16 +32,3 @@ def test_minimal_factor_exclude_lists_leave_only_intended_base_features() -> Non
 
     assert dividend_live == ["zscore_dividend_yield_hist_12m"]
     assert cashflow_live == ["zscore_ocf_to_revenue", "zscore_fcf_yield"]
-
-
-def test_batch_script_scans_baseline_and_two_minimal_factor_experiments() -> None:
-    """批处理应把共同基线和两个候选纳入同一任务矩阵。"""
-    script = (PROJECT_ROOT / "scripts/batch/batch_walk_forward.ps1").read_text(encoding="utf-8-sig")
-
-    assert 'Label = "baseline"' in script
-    assert 'Label = "dividend_yield_only"' in script
-    assert 'Label = "cashflow_keep_2pairs"' in script
-    assert "$factor_experiment_configs.Length *" in script
-    assert "foreach ($factorExperiment in $factor_experiment_configs)" in script
-    assert '"walk_forward_summary_{0}_{1}_{2:D4}.csv"' in script
-    assert "--factor-exclude-file" in script
