@@ -17,6 +17,7 @@ import pandas as pd
 import xgboost as xgb
 
 from .features import _format_feature_importance_compact
+from .eval import make_neg_rank_ic_daily
 from .eval import neg_rank_ic
 
 def train_xgboost_model(
@@ -43,6 +44,7 @@ def train_xgboost_model(
     df_val_for_group: Optional[pd.DataFrame] = None,
     early_stopping_rounds: Optional[int] = 200,
     early_stopping_metric: str = "auto",
+    min_best_iteration: int = 0,
 ) -> tuple:
     """训练 XGBoost 模型（支持回归、分类和排序学习）
 
@@ -69,7 +71,12 @@ def train_xgboost_model(
         objective_type: 目标函数类型，"mse"（回归，默认）或 "lambdarank"（排序学习，
                         直接优化股票排序而非预测收益绝对值，与 RankIC 评估指标对齐）
         df_train_for_group: 训练集 DataFrame（仅 lambdarank 需要，用于提取 trade_date 分组信息）
-        df_val_for_group: 验证集 DataFrame（仅 lambdarank 需要，用于提取 trade_date 分组信息）
+        df_val_for_group: 验证集 DataFrame（lambdarank 与 rank_ic_daily 早停指标需要，
+                        用于提取 trade_date 分组信息，行序必须与 X_val 一致）
+        min_best_iteration: best_iteration 下限监控阈值，默认 0（禁用）。
+                        启用早停且 best_iteration 低于该值时仅告警并在 train_params 中
+                        标记 best_iteration_floor_triggered，不改变模型行为（早停验证段
+                        被极端事件主导时 best_iteration 会异常小，属诊断信号）
 
     Returns:
         (model, train_params, train_metrics, val_metrics) 元组
@@ -128,10 +135,34 @@ def train_xgboost_model(
         logger.info("使用 LambdaRank 排序学习目标（直接优化股票排序，与 RankIC 评估对齐）")
 
     # 统一确定 eval_metric：
-    # - regression + rank_ic: 使用自定义 Spearman 指标（可用于早停）
+    # - regression + rank_ic: 整段 Spearman 指标（可用于早停）
+    # - regression + rank_ic_daily: 逐日截面 Spearman 均值指标（与 daily_rankic 评估口径一致，
+    #   避免整段指标被单一事件期样本主导）
     # - 其余 regression: mae
     # - classification: auc
-    if early_stopping_metric == "rank_ic" and task == "regression":
+    if early_stopping_metric == "rank_ic_daily" and task == "regression" and len(X_val) > 0:
+        if (
+            df_val_for_group is None
+            or len(df_val_for_group) != len(X_val)
+            or "trade_date" not in df_val_for_group.columns
+        ):
+            raise ValueError(
+                "early_stopping_metric=rank_ic_daily 需要 df_val_for_group 为与 X_val 行序一致"
+                f"且包含 trade_date 列的 DataFrame（实际: "
+                f"{'None' if df_val_for_group is None else f'len={len(df_val_for_group)}'}"
+                f" vs X_val len={len(X_val)}）"
+            )
+        val_dates_for_metric = df_val_for_group["trade_date"].values
+        xgb_eval_metric = make_neg_rank_ic_daily(val_dates_for_metric)
+        logger.info(
+            f"早停指标: 逐日截面 Spearman RankIC 均值（共 {len(set(val_dates_for_metric))} 个交易日，"
+            "与 daily_rankic 评估口径一致）"
+        )
+    elif early_stopping_metric == "rank_ic_daily" and task == "regression":
+        # 无验证集时早停后续会被禁用，metric 降级为 mae 保持既有语义
+        xgb_eval_metric = "mae"
+        logger.warning("rank_ic_daily 早停指标在无验证集时降级为 mae（早停将被禁用）")
+    elif early_stopping_metric == "rank_ic" and task == "regression":
         xgb_eval_metric = neg_rank_ic
     else:
         xgb_eval_metric = "mae" if task == "regression" else "auc"
@@ -430,8 +461,24 @@ def train_xgboost_model(
         logger.warning("验证集为空，无法评估")
 
     # 添加 best_iteration 到 train_params
+    # best_iteration 下限监控：早停验证段被极端事件主导时 best_iteration 会异常小，
+    # 此处只告警与标记，不改变模型行为（回退轮数会改变全部下游对比语义，由调用方显式决策）。
+    best_iteration_floor_triggered = False
     if len(X_val) > 0 and hasattr(model, "best_iteration"):
-        train_params["best_iteration"] = int(model.best_iteration)
+        best_it = int(model.best_iteration)
+        train_params["best_iteration"] = best_it
+        if early_stopping_rounds and min_best_iteration > 0 and best_it < min_best_iteration:
+            best_iteration_floor_triggered = True
+            val_es_range = "N/A"
+            if df_val_for_group is not None and "trade_date" in df_val_for_group.columns:
+                val_dates_series = df_val_for_group["trade_date"]
+                val_es_range = f"{val_dates_series.min()} ~ {val_dates_series.max()}"
+            logger.warning(
+                f"best_iteration={best_it} 低于下限 {min_best_iteration}，"
+                f"早停验证段 {val_es_range} 可能被极端事件主导或信号过弱，"
+                "建议检查该窗口的 val_es 日期区间与市场事件重叠情况"
+            )
+    train_params["best_iteration_floor_triggered"] = best_iteration_floor_triggered
     train_params["early_stopping_metric"] = early_stopping_metric
     # 确保 eval_metric 可序列化（callable 替换为函数名）
     if callable(train_params.get("eval_metric")):

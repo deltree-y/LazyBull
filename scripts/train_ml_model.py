@@ -506,7 +506,8 @@ def main():
             extra_kwargs["objective_type"] = args.objective
             if args.objective == "lambdarank":
                 extra_kwargs["df_train_for_group"] = df_train_split
-                extra_kwargs["df_val_for_group"] = df_val_split
+            # 验证集 df 无条件传入：lambdarank 分组与 rank_ic_daily 早停指标共用
+            extra_kwargs["df_val_for_group"] = df_val_split
 
         model, train_params, train_metrics, val_metrics = train_fn(
             X_train,

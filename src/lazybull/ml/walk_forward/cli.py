@@ -175,8 +175,21 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         "--early-stopping-metric",
         type=str,
         default="rank_ic",
-        choices=["auto", "rank_ic"],
-        help="早停监控指标：auto（mae/auc，默认指标）或 rank_ic（Spearman Rank IC，尺度无关，跨 split 更稳定）。默认 rank_ic",
+        choices=["auto", "rank_ic", "rank_ic_daily"],
+        help=(
+            "早停监控指标：auto（mae/auc，默认指标）；rank_ic（整段 Spearman Rank IC）；"
+            "rank_ic_daily（逐日截面 Spearman RankIC 均值，与 daily_rankic 评估口径一致，"
+            "避免整段指标被单一事件期样本主导）。默认 rank_ic"
+        ),
+    )
+    parser.add_argument(
+        "--min-best-iteration",
+        type=int,
+        default=0,
+        help=(
+            "best_iteration 下限监控阈值，默认 0（禁用）。启用早停且 best_iteration 低于该值时"
+            "告警并在 summary 中标记 best_iteration_floor_triggered，不改变模型行为"
+        ),
     )
     parser.add_argument(
         "--oos-detail-metrics",

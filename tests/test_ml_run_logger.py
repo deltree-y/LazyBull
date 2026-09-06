@@ -43,7 +43,8 @@ def sample_train_params():
         "tree_method": "hist",
         "random_state": 42,
         "n_jobs": -1,
-        "best_iteration": 150
+        "best_iteration": 150,
+        "best_iteration_floor_triggered": True
     }
 
 
@@ -342,6 +343,7 @@ def test_create_training_run_record_from_training_session(
     assert record.label_transform == "cs_zscore"
     assert record.winsorize_p == 0.01
     assert record.best_iteration == 150
+    assert record.best_iteration_floor_triggered is True
     
     # 验证数据统计
     assert record.trade_days_count == 200

@@ -217,6 +217,21 @@ def execute_deploy_training(
 
     logger.info(f"部署模型已注册: v{version}")
 
+    # 部署轮健康度简报：部署模型无 OOS 可评，验证段（早停窗口）质量是唯一健康度信号。
+    # 部署窗口尾部紧贴当前行情，best_iteration 偏低与 val_daily_rankic_ir 偏弱通常
+    # 反映验证段与训练主体的制度断裂（信号早熟），需结合后续纸面表现判断。
+    floor_flag_deploy = bool(train_params.get("best_iteration_floor_triggered", False))
+    logger.info(
+        "部署轮健康度简报: "
+        f"best_iteration={train_params.get('best_iteration')}"
+        f"{'（低于下限，请检查）' if floor_flag_deploy else ''}, "
+        f"val_es={data_stats.get('val_es_start_date')}~{data_stats.get('val_es_end_date')}"
+        f"（{data_stats.get('val_es_n_dates')}日）, "
+        f"val_daily_rankic_ir={val_daily_metrics.get('daily_rankic_ir')}, "
+        f"val_daily_rankic_mean={val_daily_metrics.get('daily_rankic_mean')}, "
+        f"val_top30_return_mean={val_daily_metrics.get('top30_return_mean')}"
+    )
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     ffi_deploy = data_stats.get("feature_filter_info")
@@ -295,6 +310,9 @@ def execute_deploy_training(
         "val_embargo_days": data_stats.get("val_embargo_days", 0),
         "test_samples": 0,
         "best_iteration": train_params.get("best_iteration"),
+        "best_iteration_floor_triggered": bool(
+            train_params.get("best_iteration_floor_triggered", False)
+        ),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
         "test_daily_metrics": {},
     }

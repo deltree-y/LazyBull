@@ -286,6 +286,13 @@ def aggregate_run(group: pd.DataFrame) -> dict:
             "best_iter_std"
         ] = None
 
+    # 早停下限触发监控：触发 split 多说明早停验证段被极端事件主导，训练复杂度选择不可靠
+    if "best_iteration_floor_triggered" in group.columns:
+        flag = group["best_iteration_floor_triggered"].fillna(False).astype(bool)
+        row["best_iter_floor_splits"] = int(flag.sum())
+    else:
+        row["best_iter_floor_splits"] = None
+
     return row
 
 
@@ -354,6 +361,7 @@ def build_comparison_table(all_df: pd.DataFrame, raw_dir: Optional[Path] = None)
         "best_iter_min",
         "best_iter_max",
         "best_iter_std",
+        "best_iter_floor_splits",
     ]
 
     param_cols_ordered = [c for c in PARAM_COLS if c != "wf_run_id"]

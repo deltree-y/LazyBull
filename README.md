@@ -286,7 +286,7 @@ Walk-forward 对比表的全周期 CAGR 按有效日收益区间进行几何年�
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）
 - **训练时自动切分验证集**（默认最后 20% 时间作为验证集）
 - **训练结束后打印验证集评估结果**（MSE、RMSE、R2、IC、RankIC）
-- **使用早停机制**（early_stopping_rounds=30）防止过拟合
+- **使用早停机制**（early_stopping_rounds）防止过拟合，早停指标可选整段 `rank_ic` 或逐日截面 `rank_ic_daily`（与 daily_rankic 评估口径一致），并支持 `--min-best-iteration` 下限监控告警
 - **标签 winsorize 处理**减少极端值影响
 - **增加正则化参数**（L1/L2）提升泛化能力
 - 模型自动保存到 `data/models` 目录

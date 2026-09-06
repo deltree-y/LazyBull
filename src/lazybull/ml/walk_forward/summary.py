@@ -252,6 +252,7 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
             "val_samples": result.get("val_samples"),
             "test_samples": result.get("test_samples"),
             "best_iteration": result.get("best_iteration"),
+            "best_iteration_floor_triggered": result.get("best_iteration_floor_triggered"),
             "val_rankic_ir": result.get("val_rankic_ir"),
         }
         row.update(test_daily)

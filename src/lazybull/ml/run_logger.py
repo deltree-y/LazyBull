@@ -83,6 +83,7 @@ class TrainingRunRecord:
 
     # 训练结果
     best_iteration: Optional[int] = None  # 最佳迭代次数
+    best_iteration_floor_triggered: Optional[bool] = None  # best_iteration 低于下限监控阈值
 
     # 训练集评估指标（回归）
     train_mse: Optional[float] = None
@@ -309,6 +310,7 @@ def create_training_run_record_from_training_session(
         val_end_date=data_stats.get("val_end_date", ""),
         val_ratio=data_stats.get("val_ratio", 0.2),
         best_iteration=train_params.get("best_iteration"),
+        best_iteration_floor_triggered=train_params.get("best_iteration_floor_triggered"),
         train_mse=train_metrics.get("mse"),
         train_rmse=train_metrics.get("rmse"),
         train_r2=train_metrics.get("r2"),

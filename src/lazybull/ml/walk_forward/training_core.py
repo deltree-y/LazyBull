@@ -235,7 +235,10 @@ def _train_model_on_window(
         extra_kwargs["objective_type"] = objective_type
         if objective_type == "lambdarank":
             extra_kwargs["df_train_for_group"] = df_train_split
-            extra_kwargs["df_val_for_group"] = df_val_split
+        # 验证集 df 无条件传入：lambdarank 分组与 rank_ic_daily 早停指标共用
+        # （df_val_split 为 ES 段，行序与 X_val 一致；行数不一致时训练函数会明确报错）
+        extra_kwargs["df_val_for_group"] = df_val_split
+        extra_kwargs["min_best_iteration"] = getattr(args, "min_best_iteration", 0)
 
     es_rounds = args.early_stopping_rounds if args.early_stopping_rounds else None
 

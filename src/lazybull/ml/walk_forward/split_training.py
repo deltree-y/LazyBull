@@ -434,6 +434,9 @@ def execute_split_training(
         "val_embargo_days": data_stats.get("val_embargo_days", 0),
         "test_samples": len(df_test_eval),
         "best_iteration": train_params.get("best_iteration"),
+        "best_iteration_floor_triggered": bool(
+            train_params.get("best_iteration_floor_triggered", False)
+        ),
         "val_rankic_ir": val_daily_metrics.get("daily_rankic_ir"),
         "test_daily_metrics": test_daily_metrics,
         "_topk_detail_df": topk_detail_df,

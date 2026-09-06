@@ -95,6 +95,7 @@ COL_NAMES = {
     "best_iter_min": "最佳迭代最小值",
     "best_iter_max": "最佳迭代最大值",
     "best_iter_std": "最佳迭代标准差",
+    "best_iter_floor_splits": "触发早停下限split数",
     # 跨时间段稳定性
     "period_count": "时间段数",
     "period_labels": "时间段列表",

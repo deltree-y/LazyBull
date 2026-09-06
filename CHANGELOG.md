@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.103.0] - 2026-09-05
+
+### Added
+
+- **逐日截面早停指标 `rank_ic_daily`**：背景是 walk-forward 观测到越靠近当前的 split 早停越快（best_iteration 从数百轮降至 13~86 轮），定位为早停验证段（训练窗口尾部 9 个月的 val_es 段）在滚动后依次踩中 2022-2024 制度剧变事件（放开修复、微盘危机、924 脉冲），而原整段 Spearman 早停指标（`neg_rank_ic`）把约 85 万样本拍平计算，被单一事件期样本主导导致 RankIC 极早见顶。新增 `train_core/eval.py::daily_spearman_mean`（按交易日分组逐日截面 Spearman 再取均值，与 `evaluate_validation_daily` 的 daily_rankic 评估口径对齐）与 `make_neg_rank_ic_daily`（注入验证集 trade_date 分组，XGBoost callable eval_metric 用；标签侧秩与分组统计首次调用预计算，预测侧秩 numpy 向量化，85 万样本约 160ms/轮）。`--early-stopping-metric` 新增 `rank_ic_daily` 取值；`training_core` 将 ES 段验证 df（含 trade_date，与 X_val 行序一致）无条件传入训练函数，行数不一致时明确报错不静默降级。指标实现为模块级可 pickle 的 callable 类 `DailySpearmanRankIC`：XGBoost sklearn wrapper 会把 eval_metric 存入模型对象，模型注册 `joblib.dump` 对函数按模块路径查找引用，闭包函数会触发 `PicklingError`（实测 Split 0 训练评估正常但注册落盘失败），类实例方案随实例状态序列化 dates，修复该问题并新增 pickle 往返回归测试。
+- **best_iteration 下限监控**：新增 `--min-best-iteration`（默认 0 禁用）。启用早停且 best_iteration 低于阈值时仅告警（日志含 ES 段日期范围）并在 `train_params`/summary CSV 标记 `best_iteration_floor_triggered`，不改变模型行为（回退轮数会改变全部下游对比语义，由调用方显式决策）。对比工具新增 `best_iter_floor_splits`（触发下限 split 数）列与中文映射，与既有 `best_iter_mean/min/max/std`、`val_rankic_ir_mean` 共同构成早停健康度监控。
+
+### Changed
+
+- `batch_walk_forward.ps1` 早停指标切换为 `rank_ic_daily` 并启用 `--min-best-iteration 30`；注意与历史运行的 summary 混排对比时早停口径不同，需冻结数据态分别评估。
+- `train_ml_model.py` 验证集 df 无条件传入训练函数（与 walk_forward 一致，供 rank_ic_daily 使用）。
+- **部署轮可观测性补充**：部署模型无 OOS 可评，验证段（早停窗口）质量是唯一健康度信号。部署模型注册后新增一行健康度简报日志（best_iteration、val_es 日期段与天数、val_daily_rankic_ir/mean、val_top30_return_mean、早停下限触发状态）；`ml_train_runs.csv` 训练记录新增 `best_iteration_floor_triggered` 列（split 行与 deploy 行统一）。实测两轮部署轮的 val_daily_rankic_ir（0.57~0.69）为全部训练最低，best_iteration 偏低与验证段信号早熟（窗口尾部行情与训练主体制度断裂）一致，属正常现象而非训练故障。
+
+### Tests
+
+- 新增 `tests/test_train_core_daily_rank_ic_metric.py`：逐日 Spearman 与 scipy 逐日均值一致性、完美单调/反向、单样本组与常数组剔除、NaN/inf 行剔除、闭包名称与分组敏感性、rank_ic_daily 接线与缺参报错、best_iteration 下限触发/禁用标记，共 9 项（不依赖真实配置与真实数据）。
+
 ## [0.102.2] - 2026-09-05
 
 ### Removed

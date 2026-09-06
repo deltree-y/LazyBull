@@ -30,7 +30,7 @@ $wf_period_configs = @(
         SplitCount = 14
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
-        StartModelVersion = 23682
+        StartModelVersion = 23682#,23682
         #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
         SelectedSplits = @()
     }
@@ -68,7 +68,7 @@ $wf_period_configs = @(
 # ── Walk-forward 窗口配置 ─────────────────────────────────────
 $train_window_years_list = @(6)             # 训练窗口年数
 $test_window_months_list = @(6)             # 测试窗口月数（建议与标签持仓周期接近）
-$val_ratio_list          = @(0.2)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
+$val_ratio_list          = @(0.2, 0.25)           # 训练数据内部验证集比例，可改为 @(0.1, 0.15, 0.2) 扫描
 
 # ── 标签与任务 ────────────────────────────────────────────────
 $algorithm_list          = @("xgboost")        # xgboost | lightgbm（训练算法）
@@ -78,7 +78,7 @@ $label_transform_list    = @("cs_zscore")      # raw | cs_zscore（仅 regressio
 $neutral_label_blend_weight_list = @(0)  # 0=纯行业中性标签，1=纯原始收益标签
 
 # ── 模型超参（想对比的参数放多个值，其余放单个值）──────────────
-$n_estimators_list       = @(500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
+$n_estimators_list       = @(1500)      #. 树数量上限（配合早停，可多值扫描，如 @(500, 1000, 2000)）
 $max_depth_list          = @(5)         #. XGB推荐9, LGB推荐5
 $learning_rate_list      = @(0.03)      #0.009. XGB推荐0.005, LGB推荐0.005
 $min_child_weight_list   = @(200)       #. XGB推荐150, LGB推荐200
@@ -94,12 +94,13 @@ $num_leaves_list         = @(63)        #  仅LightGBM有效，XGBoost忽略。L
 $objective_list          = @("mse")  # mse | lambdarank（排序学习，直接优化股票排序）
 # ── 早停配置 ───────────────────────────────────────────────────
 $early_stopping_rounds_list = @(50)    # 早停轮数，设为 0 则禁用早停（固定 n_estimators 棵树），可多值扫描如 @(100, 300, 500)
-$early_stopping_metric   = "rank_ic"       # 早停指标：auto（mae/auc）| rank_ic（Spearman，尺度无关更稳定）
+$early_stopping_metric   = "rank_ic_daily"  # 早停指标：auto（mae/auc）| rank_ic（整段Spearman）| rank_ic_daily（逐日截面Spearman均值，与daily_rankic评估口径一致）
+$min_best_iteration      = 30          # best_iteration 下限监控，低于该值告警并在 summary 标记（0=禁用）
 
 
 # ── rank-weight 配置（固定，不参与组合扫描）─────────────────────
 $rank_weight_enabled     = $true   # $true 启用 | $false 禁用
-$rank_weight_topk_list   = @(50,100,150)         # 120
+$rank_weight_topk_list   = @(120)         # 120
 $rank_weight_list        = @(100)         # 100
 $rank_weight_topk_weight_mode = "linear_decay"   # linear_decay | flat
 
@@ -207,7 +208,7 @@ $oos_backtest            = $true            # $true 启用 | $false 禁用
 # 以下基础参数仅在 $oos_backtest = $true 时透传给 walk_forward.py
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 
-$bt_top_n_list           = @(30)            # 回测持仓 Top N
+$bt_top_n_list           = @(20)            # 回测持仓 Top N
 $bt_rebalance_freq_list  = @($null)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
@@ -556,6 +557,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                  " --data-root $data_root" +
                  " --early-stopping-rounds $early_stopping_rounds" +
                  " --early-stopping-metric $early_stopping_metric" +
+                 " --min-best-iteration $min_best_iteration" +
                  " --time-decay-half-life $time_decay_half_life" +
                  " --freshness-strategy $freshness_strategy" +
                  " --event-freshness-half-life-days $event_freshness_half_life_days" +

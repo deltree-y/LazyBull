@@ -179,7 +179,9 @@ def run_walk_forward(args) -> None:
     logger.info(f"行业中性标签混合权重: {args.neutral_label_blend_weight:.2f}")
     logger.info(f"任务类型: {args.task}")
     logger.info(
-        f"早停: rounds={args.early_stopping_rounds if args.early_stopping_rounds else '禁用'}, metric={args.early_stopping_metric}"
+        f"早停: rounds={args.early_stopping_rounds if args.early_stopping_rounds else '禁用'}, "
+        f"metric={args.early_stopping_metric}, "
+        f"min_best_iteration={getattr(args, 'min_best_iteration', 0) or '禁用'}"
     )
     logger.info(
         f"多种子筛选: top_ratio={args.ensemble_seed_keep_top_ratio:.0%}, "
