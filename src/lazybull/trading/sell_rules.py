@@ -3,7 +3,11 @@
 回测（T0 排队 / T+1 执行）与纸面交易（调仓卖出指令）共用的
 持有期到期判定与调仓卖出候选筛选。
 
-两侧的既有口径差异通过参数保留：
+到期日统一契约：持有 rebalance_freq-1 个交易日时 T0 生成卖出信号，
+T+1 执行日恰为持有期满当天开盘（买入日 B 后第 rebalance_freq 个交易日开盘），
+与调仓路径的卖出时点（信号日 S 买入于 S+1 开盘执行、下轮信号 S+rebalance_freq）一致。
+
+- 日常到期判定（回测/纸面统一）= max(1, holding_period - 1)
 - 回测调仓卖出阈值 = max(0, holding_period - 1)
 - 纸面调仓卖出阈值 = max(1, rebalance_freq - 1)
 """
@@ -12,9 +16,18 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 
-def is_holding_period_expired(holding_days: int, holding_period: int) -> bool:
-    """持有期是否到期（holding_days >= holding_period）。"""
-    return holding_days >= holding_period
+def is_holding_period_exit_due(holding_days: int, holding_period: int) -> bool:
+    """日常持有期到期判定（回测/纸面统一契约）。
+
+    阈值 = max(1, holding_period - 1)：持有 holding_period-1 个交易日时判定到期，
+    T0 生成卖出信号，T+1 执行日恰为持有期满当天开盘，与纸面
+    evaluate_holding_period_actions 及调仓卖出路径保持同一到期时点。
+
+    Args:
+        holding_days: 已持有交易日数（按交易日索引差计算）
+        holding_period: 持有期（交易日），通常等于 rebalance_freq
+    """
+    return holding_days >= max(1, int(holding_period) - 1)
 
 
 def min_holding_days_for_rebalance_sell(rebalance_freq: int, floor: int = 0) -> int:

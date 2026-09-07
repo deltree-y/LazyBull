@@ -20,7 +20,7 @@ from .buy_plan import (
 )
 from .sell_rules import (
     RebalanceSellDecision,
-    is_holding_period_expired,
+    is_holding_period_exit_due,
     min_holding_days_for_rebalance_sell,
     select_rebalance_sell_candidates,
 )
@@ -42,7 +42,7 @@ __all__ = [
     "SlotMatchResult",
     "fill_slots_from_candidates",
     "RebalanceSellDecision",
-    "is_holding_period_expired",
+    "is_holding_period_exit_due",
     "min_holding_days_for_rebalance_sell",
     "select_rebalance_sell_candidates",
     "compute_kelly_weights",

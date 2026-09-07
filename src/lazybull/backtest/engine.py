@@ -308,7 +308,7 @@ class BacktestEngine(
         )
         sell_price_type = "开盘价" if self.sell_timing == "open" else "收盘价"
         logger.info(
-            f"交易规则: T日生成信号 -> T+1日收盘价买入 -> 满{self.holding_period}天后T0生成卖出信号 -> 下一交易日{sell_price_type}卖出"
+            f"交易规则: T日生成信号 -> T+1日收盘价买入 -> 持有{max(1, self.holding_period - 1)}天后T0生成卖出信号 -> 下一交易日{sell_price_type}卖出（执行日恰为持有期满当天）"
         )
         logger.info(f"价格口径: 成交使用不复权 close/open, 绩效使用后复权 close_adj/open_adj")
 

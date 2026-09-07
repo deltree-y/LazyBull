@@ -9,7 +9,7 @@ from ..common.date_utils import to_trade_date_str
 from ..common.trade_status import is_tradeable
 from ..risk.stop_loss_checker import check_positions_stop_loss
 from ..trading.sell_rules import (
-    is_holding_period_expired,
+    is_holding_period_exit_due,
     min_holding_days_for_rebalance_sell,
     select_rebalance_sell_candidates,
 )
@@ -120,8 +120,9 @@ class BacktestSellExecutionMixin:
             # 计算持有天数（交易日）
             holding_days = current_idx - anchor_idx
 
-            # 持有期到期 → T0 生成卖出信号，T+1 执行（共享判定口径）
-            if is_holding_period_expired(holding_days, self.holding_period):
+            # 持有期到期 → T0 生成卖出信号，T+1 执行（与纸面统一：持有 holding_period-1 天触发，
+            # T+1 执行日恰为持有期满当天开盘，对齐纸面 evaluate_holding_period_actions）
+            if is_holding_period_exit_due(holding_days, self.holding_period):
                 self.pending_condition_sells[stock] = {
                     "trigger_date": date,
                     "sell_type": "holding_period",

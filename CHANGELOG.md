@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.103.1] - 2026-09-07
+
+### Fixed
+
+- **回测日常持有期到期判定与纸面统一**：背景是新风控模型方案（`docs/plans/terminal_loss_risk_model_plan.md` 7.2 节 P0）评审中发现的到期日契约不一致——纸面日常到期阈值 `max(1, rebalance_freq-1)`，持有 19 天生成卖单、B+20 开盘执行，与调仓路径一致；而回测日常到期判定 `is_holding_period_expired` 为持有 `holding_period`（20）天触发、B+21 开盘执行，比自身调仓路径（B+20 开盘）晚一天，且该差异恰在延期、错位等风控最活跃的场景显现。现将 `trading/sell_rules.py::is_holding_period_expired` 替换为 `is_holding_period_exit_due`（阈值 `max(1, holding_period-1)`，T0 生成卖出信号、T+1 执行日恰为持有期满当天开盘），`trading/__init__.py` 导出同步，`backtest/sell_execution.py` 到期判定改调新函数，`backtest/engine.py` 初始化日志文本同步。已审计不动：`run_loop.py` 周期推进与空仓提前调仓判定、调仓卖出阈值 `floor=0`、reporting 字段名（语义独立，避免调仓时点整体前移引入额外交互）。
+- **基线影响提示**：回测持有期卖出提前一个交易日执行，walk-forward 指标（链式 CAGR/Sharpe/换手）将变化，属执行契约修正而非策略改进；冻结新基线前历史对比不得与本版本后的结果混排。
+
+### Tests
+
+- `test_trading_sell_rules.py`：到期判定单测替换为新契约（`holding_period-1` 触发、`holding_period=1` 下限保护）。
+- `test_paper_holding_period_alignment.py`：新增跨侧阈值一致性测试——回测 `is_holding_period_exit_due` 与纸面 `min_holding_days_for_rebalance_sell(freq, floor=1)` 对 freq ∈ {1,2,5,10,20} 的触发边界完全一致。
+- `test_backtest_t1.py`：新增回测引擎级到期时点测试（`holding_period=20` 下 B+18 不触发、B+19 触发 T0 信号、B+20 持有期满当天执行）。
+
 ## [0.103.0] - 2026-09-05
 
 ### Added

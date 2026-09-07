@@ -261,6 +261,79 @@ def test_holding_period_sell_uses_t0_signal_and_t1_execution():
     assert trades.iloc[0]['sell_type'] == 'holding_period'
 
 
+def test_holding_period_exit_triggers_at_freq_minus_one_for_paper_alignment():
+    """到期日统一契约：持有 rebalance_freq-1 天触发，T+1 执行日恰为持有期满当天。
+
+    买入日 B=trading_dates[1]，holding_period=20：
+    - B+18（持有 18 天）不触发；
+    - B+19（持有 19 天 = rebalance_freq-1）触发 T0 卖出信号；
+    - B+20（持有期满当天）执行，与纸面 evaluate_holding_period_actions 同一时点。
+    """
+    trading_dates = [pd.Timestamp(d) for d in pd.date_range('2023-01-02', periods=23, freq='B')]
+    date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+    price_data = pd.DataFrame(
+        {
+            'ts_code': ['000001.SZ'] * len(trading_dates),
+            'trade_date': [date.strftime('%Y%m%d') for date in trading_dates],
+            'close': [10.0] * len(trading_dates),
+        }
+    )
+
+    engine = BacktestEngine(
+        universe=MockUniverse(),
+        signal=MockSignal(),
+        initial_capital=100000,
+        cost_model=CostModel(),
+        rebalance_freq=20,
+        holding_period=20,
+        enable_pending_order=False,
+        enable_position_completion=False,
+        verbose=False,
+    )
+    engine.price_data_cache = price_data.copy()
+    engine._prepare_price_index(price_data)
+    engine.positions = {
+        '000001.SZ': {
+            'shares': 100,
+            'buy_date': trading_dates[1],
+            'buy_trade_price': 10.0,
+            'buy_pnl_price': 10.0,
+            'buy_cost_cash': 0.0,
+        }
+    }
+
+    buy_idx = 1
+    # B+18：持有 18 天，未到期
+    engine._check_and_sell(
+        date=trading_dates[buy_idx + 18],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+    assert '000001.SZ' not in engine.pending_condition_sells
+
+    # B+19：持有 19 天 = rebalance_freq-1，触发 T0 卖出信号
+    engine._check_and_sell(
+        date=trading_dates[buy_idx + 19],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+    assert '000001.SZ' in engine.pending_condition_sells
+    assert engine.pending_condition_sells['000001.SZ']['trigger_date'] == trading_dates[buy_idx + 19]
+    assert engine.pending_condition_sells['000001.SZ']['sell_type'] == 'holding_period'
+
+    # B+20：持有期满当天执行
+    engine._execute_pending_condition_sells(
+        date=trading_dates[buy_idx + 20],
+        trading_dates=trading_dates,
+        date_to_idx=date_to_idx,
+    )
+    trades = engine.get_trades()
+    assert len(trades) == 1
+    assert trades.iloc[0]['action'] == 'sell'
+    assert trades.iloc[0]['date'] == trading_dates[buy_idx + 20]
+    assert trades.iloc[0]['sell_type'] == 'holding_period'
+
+
 def test_holding_period_sell_generates_refill_buy_on_t1_without_profit_mode():
     """未启用盈亏动态持仓时，持有期卖出也应在下一交易日先卖后补位买入。"""
 

@@ -1,19 +1,27 @@
 """trading.sell_rules 共享卖出规则测试"""
 
 from src.lazybull.trading.sell_rules import (
-    is_holding_period_expired,
+    is_holding_period_exit_due,
     min_holding_days_for_rebalance_sell,
     select_rebalance_sell_candidates,
 )
 
 
-class TestHoldingPeriodExpired:
-    def test_expired(self):
-        assert is_holding_period_expired(5, 5)
-        assert is_holding_period_expired(6, 5)
+class TestHoldingPeriodExitDue:
+    def test_exit_due_at_period_minus_one(self):
+        """持有 holding_period-1 天即到期（T+1 执行日恰为持有期满当天）"""
+        assert is_holding_period_exit_due(4, 5)
+        assert is_holding_period_exit_due(5, 5)
+        assert is_holding_period_exit_due(19, 20)
 
-    def test_not_expired(self):
-        assert not is_holding_period_expired(4, 5)
+    def test_not_exit_due_before_threshold(self):
+        assert not is_holding_period_exit_due(3, 5)
+        assert not is_holding_period_exit_due(18, 20)
+
+    def test_floor_one_for_tiny_period(self):
+        """holding_period=1 时阈值下限为 1，持有 0 天（当日）不触发"""
+        assert not is_holding_period_exit_due(0, 1)
+        assert is_holding_period_exit_due(1, 1)
 
 
 class TestMinHoldingDaysForRebalanceSell:

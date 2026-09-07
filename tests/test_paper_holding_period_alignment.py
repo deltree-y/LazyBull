@@ -178,3 +178,23 @@ def test_evaluate_holding_period_actions_keeps_young_and_excluded_positions():
 
         assert protected == set()
         assert sell_actions == []
+
+
+def test_holding_period_exit_threshold_matches_backtest_contract():
+    """回测日常到期判定与纸面到期阈值必须同一口径（max(1, freq-1)）。
+
+    到期日统一契约：持有 rebalance_freq-1 个交易日时 T0 生成卖出信号，
+    T+1 执行日恰为持有期满当天开盘。
+    """
+    from src.lazybull.trading.sell_rules import (
+        is_holding_period_exit_due,
+        min_holding_days_for_rebalance_sell,
+    )
+
+    for freq in [1, 2, 5, 10, 20]:
+        paper_threshold = min_holding_days_for_rebalance_sell(freq, floor=1)
+        # 恰好达到阈值：回测判定到期，纸面路径也允许卖出
+        assert is_holding_period_exit_due(paper_threshold, freq), f"freq={freq}"
+        # 差一天：两侧均不触发
+        assert not is_holding_period_exit_due(paper_threshold - 1, freq), f"freq={freq}"
+        assert paper_threshold == max(1, freq - 1), f"freq={freq}"
