@@ -201,7 +201,7 @@ $deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(2)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -221,9 +221,9 @@ $bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null =
 # ── OOS 仓位管理模式（仅在 $oos_backtest = $true 时参与回测）──────
 # equal：等权 | score：按分数比例 | kelly：凯利公式 | half_kelly：半凯利（更稳健）
 # 仅当 mode 为 kelly / half_kelly 时，Kelly 参数才会真正生效
-$position_sizing_list             = @('equal')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
-$kelly_vol_window_list           = @(60)      # Kelly 波动率窗口（交易日，可多值如 @(40, 60, 120)）
-$kelly_max_leverage_list          = @(0.2)    # Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
+$position_sizing_list             = @('kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
+$kelly_vol_window_list           = @(60)      #60 Kelly 波动率窗口（交易日，可多值如 @(40, 60, 120)）
+$kelly_max_leverage_list          = @(0.2)    #0.2 Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
 # ── 空仓/持有期拖尾提前调仓（独立开关）────
 $enable_early_rebalance_on_empty_list = @($true)  # 可多值如 @($false, $true)

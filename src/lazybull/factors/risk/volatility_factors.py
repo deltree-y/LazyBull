@@ -9,6 +9,8 @@ v2：_prepare_stock_ohlc 改为返回 pivot DataFrame（MultiIndex 列），
 全部 6 个因子改为全向量化计算，消除 5000 股 Python 逐股迭代。
 """
 
+from typing import List
+
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -207,3 +209,47 @@ def compute_gap_risk(
     n_valid = ohlc['open_adj'].notna().sum(axis=0)
     result[n_valid < 10] = np.nan
     return _align_to_df(result, df)
+
+
+# ═══════════════════════════════════════════════════════════════
+# sigma_daily_20：期末异常亏损任务的严格日历对齐原始波动尺度
+# （docs/plans/terminal_loss_risk_model_plan.md 2.4/3.2 契约）
+# ═══════════════════════════════════════════════════════════════
+
+def compute_sigma_daily_panel(
+    daily_df: pd.DataFrame,
+    calendar_dates: List[str],
+    window: int = 20,
+) -> pd.DataFrame:
+    """计算 sigma_daily_20 面板（日期 × 股票），严格日历对齐、未年化。
+
+    与本文件其他因子的 tail(window) 压缩窗口不同：窗口按全市场交易日历对齐，
+    截至 T 的最近 window 个日历交易日槽必须全部有有效收益（close_adj 存在且
+    能构成收益），停牌缺行不压缩成"最近 window 条有数据记录"；任一缺失即 NaN
+    （标记不可用，不靠隐式下限制造标签）。零波动（std=0，如长期一字板）同样
+    返回 0，由调用方按"无效"处理（方案 2.4.3）。
+
+    不注册进 cs_train/cs_infer 标准特征流水线：本尺度由 terminal_loss
+    训练/数据集构建侧独立计算（与 clean/daily 同源），第一轮交付不改动
+    主链路特征 schema；后续接入 shadow 时再评估是否纳入公共因子路径。
+
+    Args:
+        daily_df: 长表，需含 ts_code, trade_date, close_adj（复权收盘）
+        calendar_dates: 完整交易日历（升序，YYYYMMDD 字符串）
+        window: 波动窗口（默认 20 个交易日）
+
+    Returns:
+        DataFrame，index=calendar_dates，columns=ts_code，值为样本标准差
+        （ddof=1，小数不年化）；窗口不足/缺行为 NaN
+    """
+    if daily_df is None or len(daily_df) == 0:
+        return pd.DataFrame(index=calendar_dates)
+
+    close_pivot = daily_df.pivot_table(
+        index='trade_date', columns='ts_code', values='close_adj', aggfunc='last'
+    )
+    # reindex 到完整日历：停牌缺行成为 NaN 槽位，阻止窗口压缩
+    close_pivot = close_pivot.reindex(calendar_dates)
+    ret = close_pivot.pct_change()
+    sigma = ret.rolling(window, min_periods=window).std()
+    return sigma

@@ -265,6 +265,30 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
 powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
 ```
 
+#### 期末异常亏损风控模型（terminal_loss）
+
+预测持仓在剩余持有期期末发生波动标准化异常亏损的概率，用于到期前风险退出
+（方案见 `docs/plans/terminal_loss_risk_model_plan.md`）：
+
+```bash
+# 第一阶段：标签与离线模型（独立标签，不写回 cs_train/cs_infer）
+python scripts/train_terminal_risk_model.py \
+    --start-date 20210104 --end-date 20260731 \
+    --train-start 20210104 --train-end 20241231 \
+    --es-start 20250102 --es-end 20251231
+
+# 输出：data/models/terminal_loss/ 下模型 artifact（joblib + JSON 元数据）、
+# 概率质量报告（terminal_loss_report.json）、h×σ 校准表与标签覆盖分布（CSV）
+# 内存与抽样：全网格标签按 50 交易日分块构建，每组 (股票,日) 抽 2 个期限、
+# 每 3 个交易日取 1（--h-per-group / --every-n-days 可调，参数落入元数据）
+# 训练设备默认 cuda（与主模型一致），--device cpu 可切换
+
+# 滚动 Walk-forward（8 折研究型 WF：排序信息量的时间稳定性验证）
+powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.ps1
+# 完成后自动汇总：data/walk_forward/terminal_risk_wf/summary.csv
+# 门禁：跨折 lift = ES PR-AUC / ES 事件率，最小值 >= 1.1 才建议进入第二阶段
+```
+
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的
 基线、仅保留 `dividend_yield_hist_12m` 的分红方案，以及仅保留 `fcf_yield` 和
 `ocf_to_revenue`（均含 `_sz` 版）的现金流方案。三组方案复用相同的 OOS split 配置，
@@ -424,6 +448,7 @@ LazyBull/
 │   ├── build_clean_features.py # 构建clean和features
 │   ├── update_basic_data.py   # 更新trade_cal和stock_basic
 │   ├── train_ml_model.py      # 训练 ML 模型
+│   ├── train_terminal_risk_model.py # 期末异常亏损风控模型训练
 │   ├── run_backtest.py        # 运行回测
 │   ├── run_ml_backtest.py     # 运行 ML 信号回测
 │   ├── compare_walk_forward.py # 实验对比与稳定性汇总（薄入口）

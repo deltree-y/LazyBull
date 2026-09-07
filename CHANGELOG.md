@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.104.0] - 2026-09-07
+
+### Added
+
+- **期末异常亏损风险模型第一阶段（标签与离线模型）**：按 `docs/plans/terminal_loss_risk_model_plan.md` v2 实施，新增 `src/lazybull/risk/terminal_loss/` 包（labels/dataset/train/model 四模块）与训练入口 `scripts/train_terminal_risk_model.py`，产出独立标签与首轮二分类模型，不写回 cs_train/cs_infer、不改动主链路特征 schema。
+- **标签构建（labels.py）**：`R = open_adj(E)/open_adj(T+1)-1`、`Y = 1[R < -k·σ·√h]`，h 为日历位置差（到期日契约：买入日 B 后第 rebalance_freq 个交易日开盘）。状态四态互斥（valid/immature/endpoint_missing/sigma_unavailable，优先级 immature 最高），T 日停牌无行不生成、T+1/E 停牌标记 endpoint_missing、零波动与缺失 sigma 标记不可用，均不标记安全不前填价格；E 日跌停保留标签并单独标记 execution_blocked。面板未对齐必须报错，拒绝静默 reindex。
+- **sigma_daily_20 严格日历口径（factors/risk/volatility_factors.py）**：新增 `compute_sigma_daily_panel`，窗口按全市场交易日历对齐（reindex 后停牌缺行为 NaN 槽），最近 20 个日历交易日槽须全部有有效收益才产出样本标准差（ddof=1、未年化小数）——与既有 risk 因子的 tail(window) 压缩窗口不同，停牌缺行不压缩；不注册进 cs_train/cs_infer 标准流水线，由 terminal_loss 数据集侧独立计算。
+- **数据集构建（dataset.py）**：33 列冻结特征 manifest（32 原方案列 + `expected_vol_over_horizon = σ·√h` 复合尺度）；pct_* 百分位基于标签过滤前的完整当日母截面生成（先全截面排名后筛行，mkt_* 广播列不做同日百分位）；manifest 缺整列必须报错不逐日静默缩减；样本权重 = 1/期限网格大小（组内总权重归一，未成熟期限不机械重归一）；`split_stages_with_label_isolation` 按 `label_end_date < 下一阶段起点` 执行多期限标签隔离（短 h 已成熟可保留，同一 (股票,日) 的多 h 随 T 整组同阶段）。
+- **训练与评估（train.py/model.py）**：XGBoost 二分类（binary:logistic、内置 logloss 早停、depth3/lr0.03 保守起点），正则尺度决策 A（权重 1/20 且正则参数保持原值，策略标识落入元数据）；概率质量报告含 logloss/Brier/PR-AUC、分 h 事件率、h × σ 分位双维校准表（高 σ 组界限天然宽松的偏差显式呈现）；Platt sigmoid 校准器（独立段拟合，单一类别拒绝拟合）；模型 artifact（joblib + JSON sidecar）含任务/特征/配置/抽样元数据与版本校验，缺列预测拒绝执行。
+- **分块与预登记抽样（内存契约）**：全区间全网格标签约 2 亿行不可行，脚本按日期分块（默认 50 交易日）构建标签并立即关联特征；随后执行预登记抽样——每组 (股票,日) 确定性抽取 2 个 h（哈希偏移轮转，跨组覆盖全部 1..20）、交易日等距抽样（默认 every 3 日），抽样参数与全网格事件率落入报告。
+- **训练入口**：`scripts/train_terminal_risk_model.py`，数据起点自动前移 sigma 预热，输出模型、概率质量报告（JSON）、h×σ 校准表（CSV）、标签覆盖分布（CSV）；pct_* 母截面取自 cs_train（y_ret 标签有效域）作为已知限制登记入元数据，二阶段用持仓快照复核。
+- **GPU 训练支持**：风险模型训练默认 `device=cuda`（与主模型 `ml/train_core/xgb.py` 配置一致），CLI `--device cpu` 可切换；训练设备落入模型元数据。
+- **滚动 WF 批量脚本**：`scripts/batch/batch_terminal_risk_wf.ps1`（第一阶段研究型 WF）——8 折滚动训练（Train 约 3 年滚动窗 + ES 6 个月互不重叠，覆盖 2022H2..2026H1 的多行情制度），每折独立输出目录、失败不连坐，支持 depth 消融位（数组即多组实验）；`--max-depth` CLI 参数配套。不含 C/V 段与组合回测（依赖第二阶段持仓快照与 policy，方案 5.2/5.5 完整 WF 待二阶段后补齐）。
+- **WF 汇总工具**：`scripts/summarize_terminal_risk_wf.py` 扫描各折 report 拼 summary CSV（lift = ES PR-AUC / ES 事件率、pred_bias = mean_pred − 事件率等 15 列），打印跨折 lift 均值/最小值/标准差与门禁结论（lift 最小值 ≥ 阈值默认 1.1 才建议进入第二阶段）；报告新增整体 mean_pred 指标。
+
+### Tests
+
+- 新增 41 项测试（全部合成数据，不依赖真实配置与真实数据）：`test_terminal_loss_labels.py`（open/open 端点数学、h 边界与 √h 界限、immature/endpoint/sigma 状态与优先级、跌停保留标记、输入不可变、面板失配报错、sigma 严格日历与复权口径）13 项；`test_terminal_loss_dataset.py`（manifest 33 列冻结与缺列报错、全截面百分位先排名后筛行语义锁定、σ√h 派生、矩阵 schema/权重/sigma 关联、缺特征日跳过、标签隔离与同组同阶段、h 抽样确定性与全覆盖、日期抽样整截面保留）15 项；`test_terminal_loss_train_model.py`（早停训练与元数据、缺列/空段报错、完美预测指标、h×σ 校准表、Platt 单调与单一类别拒绝、模型契约/落盘往返/版本校验）13 项；`test_summarize_terminal_risk_wf.py`（lift/pred_bias 计算、stage_dates 提取、缺 report 跳过）2 项。测试训练统一显式 `device=cpu`，不依赖 GPU。
+
 ## [0.103.1] - 2026-09-07
 
 ### Fixed
