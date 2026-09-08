@@ -3,15 +3,16 @@
 import pytest
 
 import src.lazybull.common.config as config_module
-
 from src.lazybull.common.config import (
     Config,
     get_cost_settings,
     get_data_path,
     get_data_root,
+    get_ml_train_runs_csv,
     get_models_root,
     get_paper_root,
     get_reports_root,
+    get_stock_selection_models_root,
     get_tushare_settings,
     normalize_shenwan_level,
 )
@@ -26,15 +27,15 @@ def test_config_init():
 def test_config_set_get():
     """测试配置设置和获取"""
     config = Config()
-    
+
     # 设置简单值
     config.set("test.key", "value")
     assert config.get("test.key") == "value"
-    
+
     # 设置嵌套值
     config.set("test.nested.key", 123)
     assert config.get("test.nested.key") == 123
-    
+
     # 获取不存在的键
     assert config.get("not.exist", "default") == "default"
 
@@ -42,10 +43,10 @@ def test_config_set_get():
 def test_config_nested_keys():
     """测试嵌套键访问"""
     config = Config()
-    
+
     config.set("level1.level2.level3", "deep")
     assert config.get("level1.level2.level3") == "deep"
-    
+
     # 获取中间层级
     level2 = config.get("level1.level2")
     assert isinstance(level2, dict)
@@ -55,10 +56,10 @@ def test_config_nested_keys():
 def test_config_get_env(monkeypatch):
     """测试环境变量获取"""
     config = Config()
-    
+
     # 设置环境变量
     monkeypatch.setenv("TEST_VAR", "test_value")
-    
+
     assert config.get_env("TEST_VAR") == "test_value"
     assert config.get_env("NOT_EXIST", "default") == "default"
 
@@ -93,6 +94,17 @@ def test_project_default_helpers(monkeypatch, tmp_path):
     assert get_data_path("raw") == str(data_root / "raw")
     assert get_data_path("clean") == str(tmp_path / "clean_area")
     assert get_models_root() == str(data_root / "models")
+    # 选股模型子目录（与 risk/terminal_loss 平级）与训练日志路径
+    assert get_stock_selection_models_root() == str(data_root / "models" / "stock_selection")
+    assert get_stock_selection_models_root(str(data_root)) == str(
+        data_root / "models" / "stock_selection"
+    )
+    assert get_ml_train_runs_csv() == str(
+        data_root / "models" / "stock_selection" / "ml_train_runs.csv"
+    )
+    assert get_ml_train_runs_csv(str(data_root)) == str(
+        data_root / "models" / "stock_selection" / "ml_train_runs.csv"
+    )
     assert get_reports_root() == str(data_root / "reports")
     assert get_paper_root() == str(data_root / "paper")
     tushare_settings = get_tushare_settings()

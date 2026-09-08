@@ -342,7 +342,11 @@ def test_train_ml_model_main_forwards_new_feature_flags(monkeypatch):
     monkeypatch.setattr(train_ml_model_module, "Storage", lambda *args, **kwargs: object())
     monkeypatch.setattr(train_ml_model_module, "DataLoader", lambda *args, **kwargs: object())
     monkeypatch.setattr(train_ml_model_module, "ModelRegistry", lambda *args, **kwargs: object())
-    monkeypatch.setattr(train_ml_model_module, "get_models_root", lambda *args, **kwargs: "models")
+    monkeypatch.setattr(
+        train_ml_model_module,
+        "get_stock_selection_models_root",
+        lambda *args, **kwargs: "models",
+    )
     monkeypatch.setattr(
         train_ml_model_module,
         "load_features_data",

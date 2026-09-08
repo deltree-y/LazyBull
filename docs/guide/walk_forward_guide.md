@@ -148,7 +148,7 @@ Walk-forward 运行后会生成以下文件：
 
 ### 1. ml_train_runs.csv
 
-位置：`data/models/ml_train_runs.csv`
+位置：`data/models/stock_selection/ml_train_runs.csv`
 
 每个 split 的训练记录都会追加到这个文件，包含：
 - 训练配置（日期区间、标签、任务类型）
@@ -173,9 +173,9 @@ Walk-forward 运行后会生成以下文件：
 
 ### 3. 模型文件
 
-位置：`data/models/v{XX}_model.joblib`
+位置：`data/models/stock_selection/v{XX}_model.joblib`
 
-每个 split 都会注册一个独立的模型版本，保存在 models 目录。
+每个 split 都会注册一个独立的模型版本，保存在 models/stock_selection 目录。
 
 ## 结果分析
 

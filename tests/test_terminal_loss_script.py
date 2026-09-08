@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from scripts.train_terminal_risk_model import main as train_main
-from src.lazybull.risk.terminal_loss import BASE_FEATURES
+from src.lazybull.risk.terminal_loss import BASE_FEATURES, TerminalLossModel
 
 N_DAYS = 70
 WARMUP = 22  # sigma 窗口 20 + pct_change 首行 + 余量
@@ -29,9 +29,9 @@ def synthetic_env(tmp_path):
     cs_dir = tmp_path / "features" / "cs_train"
     cs_dir.mkdir(parents=True)
 
-    pd.DataFrame(
-        {"exchange": "SSE", "cal_date": cal_str, "is_open": 1}
-    ).to_parquet(clean_dir / "trade_cal.parquet")
+    pd.DataFrame({"exchange": "SSE", "cal_date": cal_str, "is_open": 1}).to_parquet(
+        clean_dir / "trade_cal.parquet"
+    )
 
     for i, d in enumerate(cal_str):
         day = pd.DataFrame(
@@ -77,24 +77,39 @@ def synthetic_env(tmp_path):
     }
 
 
-def test_script_end_to_end(synthetic_env, monkeypatch):
-    """主链路：面板加载→sigma→标签→矩阵→分割→训练→报告与模型落盘。"""
-    env = synthetic_env
+def _run_train(env, monkeypatch, extra_argv):
+    """以给定 argv 运行训练脚本主入口，返回 0 表示成功。"""
     argv = [
         "train_terminal_risk_model.py",
-        "--data-root", env["data_root"],
-        "--output-dir", env["out_dir"],
-        "--start-date", env["train"][0],
-        "--end-date", env["end"],
-        "--train-start", env["train"][0],
-        "--train-end", env["train"][1],
-        "--es-start", env["es"][0],
-        "--es-end", env["es"][1],
-        "--n-estimators", "40",
-        "--device", "cpu",
-    ]
+        "--data-root",
+        env["data_root"],
+        "--output-dir",
+        env["out_dir"],
+        "--start-date",
+        env["train"][0],
+        "--end-date",
+        env["end"],
+        "--train-start",
+        env["train"][0],
+        "--train-end",
+        env["train"][1],
+        "--es-start",
+        env["es"][0],
+        "--es-end",
+        env["es"][1],
+        "--n-estimators",
+        "40",
+        "--device",
+        "cpu",
+    ] + extra_argv
     monkeypatch.setattr(sys, "argv", argv)
-    assert train_main() == 0
+    return train_main()
+
+
+def test_script_flat_mode_end_to_end(synthetic_env, monkeypatch):
+    """--fixed-name 模式回归：固定名四件套覆盖落盘（WF 折目录行为）。"""
+    env = synthetic_env
+    assert _run_train(env, monkeypatch, ["--fixed-name"]) == 0
 
     out = Path(env["out_dir"])
     assert (out / "terminal_loss_model.joblib").exists()
@@ -113,3 +128,60 @@ def test_script_end_to_end(synthetic_env, monkeypatch):
     assert meta["task_id"] == "terminal_vol_scaled_loss"
     assert len(meta["feature_names"]) == 33
     assert meta["metadata"]["known_limitations"]
+
+
+def test_script_versioned_mode_end_to_end(synthetic_env, monkeypatch):
+    """默认版本化模式：同目录连续两次训练产生 v1/v2 两套产物且互不覆盖。"""
+    env = synthetic_env
+    assert _run_train(env, monkeypatch, []) == 0
+    assert _run_train(env, monkeypatch, []) == 0
+
+    out = Path(env["out_dir"])
+    # 不存在 flat 固定名产物
+    assert not (out / "terminal_loss_model.joblib").exists()
+
+    for v in ("v1", "v2"):
+        assert (out / f"{v}_model.joblib").exists()
+        assert (out / f"{v}_features.json").exists()
+        assert (out / f"{v}_metadata.json").exists()
+        assert (out / f"{v}_report.json").exists()
+        assert (out / f"{v}_calibration_by_h_sigma.csv").exists()
+        assert (out / f"{v}_label_coverage.csv").exists()
+
+    assert (out / "latest_model_version.txt").read_text(encoding="utf-8").strip() == "2"
+    with open(out / "model_registry.json", encoding="utf-8") as f:
+        registry = json.load(f)
+    assert registry["next_version"] == 3
+    assert [m["version"] for m in registry["models"]] == [1, 2]
+    assert all(m["model_type"] == "xgboost_terminal_loss" for m in registry["models"])
+    assert all(m["label_column"] == "loss_label" for m in registry["models"])
+
+    with open(out / "v1_features.json", encoding="utf-8") as f:
+        features = json.load(f)
+    assert len(features) == 33
+
+    # 元数据包含训练/标签配置快照与 ES 概率质量指标
+    with open(out / "v1_metadata.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["train_params"]["train_config"]["max_depth"] == 3
+    assert meta["train_params"]["label_config"]["task_id"] == "terminal_vol_scaled_loss"
+    assert meta["performance_metrics"]["es_logloss"] >= 0
+    # 合成数据事件率可能为 0，此时 lift 必须为 None（与 summarize 口径一致）
+    if meta["performance_metrics"]["es_event_rate"] > 0:
+        assert meta["performance_metrics"]["lift"] is not None
+    else:
+        assert meta["performance_metrics"]["lift"] is None
+
+    # 注册表可加载模型实例并直接预测（joblib 分支 = TerminalLossModel 实例）
+    from src.lazybull.ml.model_registry import ModelRegistry
+    from src.lazybull.risk.terminal_loss import TERMINAL_LOSS_FEATURES
+
+    model, loaded_meta = ModelRegistry(models_dir=str(out)).load_model(version=1)
+    assert isinstance(model, TerminalLossModel)
+    assert loaded_meta["version"] == 1
+    infer_df = pd.DataFrame(
+        {c: np.random.default_rng(0).normal(0, 1, 3) for c in TERMINAL_LOSS_FEATURES}
+    )
+    proba = model.predict_proba(infer_df)
+    assert proba.shape == (3,)
+    assert ((proba >= 0) & (proba <= 1)).all()

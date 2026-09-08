@@ -5,6 +5,8 @@
 # 全部完成后自动运行 summarize_terminal_risk_wf.py 拼接 summary 并打印跨折门禁
 # （lift = ES PR-AUC / ES 事件率，lift 最小值 >= 阈值才建议进入第二阶段）。
 #
+# 每折训练使用 --fixed-name 固定名覆盖模式（研究型折产物，供汇总工具读取）。
+#
 # 本脚本不含 C 段（校准）/ V 段（阈值）/ OOS 组合回测——这些依赖第二阶段的
 # 持仓快照与 policy，完整 WF 待二阶段后补齐（方案 5.2/5.5）。
 #
@@ -83,7 +85,8 @@ foreach ($depth in $max_depth_list) {
             " --k $k --h-max $h_max --sigma-window $sigma_window" +
             " --max-depth $depth --n-estimators $n_estimators --random-state $random_state" +
             " --h-per-group $h_per_group --every-n-days $every_n_days --chunk-days $chunk_days" +
-            " --device $device"
+            " --device $device" +
+            " --fixed-name"
 
         # 注意：训练脚本读取 [TrainStart, EsEnd] 之后 h_max+1 个交易日的端点数据，
         # 最后一折（2026H1）的 E 最远落在 2026-07-末，数据末端须覆盖。

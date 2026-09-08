@@ -50,7 +50,7 @@ python scripts/train_ml_model.py \
 2. 使用全量特征列训练 XGBoost 回归模型
 3. 标签为 `y_ret_5`（未来 5 个交易日的收益率）
 4. 自动过滤不可交易样本（ST、停牌、涨跌停等）
-5. 模型保存到 `data/models/` 目录
+5. 模型保存到 `data/models/stock_selection/` 目录
 6. 版本号自动递增（v1, v2, v3...）
 7. 元数据记录到 `model_registry.json`
 
@@ -63,7 +63,7 @@ python scripts/train_ml_model.py \
 2024-01-17 15:30:10.000 | INFO     | 开始训练 XGBoost 模型...
 2024-01-17 15:32:00.000 | INFO     | 模型训练完成
 2024-01-17 15:32:00.000 | INFO     | 训练集性能: MSE=0.001234, RMSE=0.035128, R2=0.4567
-2024-01-17 15:32:01.000 | INFO     | 模型已保存: data/models/v1_model.joblib
+2024-01-17 15:32:01.000 | INFO     | 模型已保存: data/models/stock_selection/v1_model.joblib
 2024-01-17 15:32:01.000 | INFO     | 模型已注册: v1, 类型=xgboost, 训练区间=20230101至20231231
 ```
 
@@ -96,7 +96,7 @@ python scripts/train_ml_model.py \
 
 ```bash
 # 查看模型目录
-ls -lh data/models/
+ls -lh data/models/stock_selection/
 
 # 输出示例：
 # v1_model.joblib         # 模型文件
@@ -109,7 +109,7 @@ ls -lh data/models/
 查看模型注册表：
 
 ```bash
-cat data/models/model_registry.json
+cat data/models/stock_selection/model_registry.json
 ```
 
 **注册表格式：**
@@ -388,7 +388,7 @@ from src.lazybull.signals import MLSignal
 from src.lazybull.ml import ModelRegistry
 
 # 1. 查看已训练的模型
-registry = ModelRegistry(models_dir="./data/models")
+registry = ModelRegistry(models_dir="./data/models/stock_selection")
 models = registry.list_models()
 for model in models:
     print(f"版本: {model['version_str']}, "
@@ -399,7 +399,7 @@ for model in models:
 signal = MLSignal(
     top_n=30,
     model_version=None,  # None 表示使用最新版本
-    models_dir="./data/models",
+    models_dir="./data/models/stock_selection",
     weight_method="equal"
 )
 

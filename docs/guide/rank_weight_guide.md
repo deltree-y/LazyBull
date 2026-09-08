@@ -104,7 +104,7 @@ rank-weight: 已启用（topk=30, weight=5.0）
 
 ```python
 import pandas as pd
-df = pd.read_csv('data/models/ml_train_runs.csv')
+df = pd.read_csv('data/models/stock_selection/ml_train_runs.csv')
 print(df[['model_version', 'rank_weight_enabled', 'rank_weight_topk',
           'rank_weight_weight', 'daily_rankic_mean']].tail(5))
 ```

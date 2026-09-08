@@ -8,10 +8,10 @@ from typing import Optional
 
 from loguru import logger
 
-from .config import get_models_root
 from ..signals.base import Signal
 from ..signals.ensemble_signal import EnsembleSignal
 from ..signals.ml_signal import MLSignal
+from .config import get_stock_selection_models_root
 from .trading_config import TradingConfig
 
 
@@ -31,7 +31,7 @@ def create_signal(
     Returns:
         Signal 实例
     """
-    resolved_models_dir = models_dir or get_models_root()
+    resolved_models_dir = models_dir or get_stock_selection_models_root()
 
     signal_a = MLSignal(
         top_n=config.top_n,

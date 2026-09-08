@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from ..common.config import get_models_root
+from ..common.config import get_stock_selection_models_root
 from ..data import DataLoader, Storage, ensure_clean_data_for_date
 from ..ml import ModelRegistry
 from .models import normalize_trade_reason
@@ -43,7 +43,7 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
     if not config:
         return "未找到配置文件，请先编辑 data/paper/config.yaml 或运行 config 命令设置配置。"
 
-    registry = ModelRegistry(models_dir=models_dir or get_models_root())
+    registry = ModelRegistry(models_dir=models_dir or get_stock_selection_models_root())
     models = registry.list_models()
     if not models:
         return "没有已注册的模型。请先使用 train_ml_model.py 训练模型。"
@@ -290,7 +290,9 @@ def format_next_day_instructions(
         resolved_stock_names = _build_stock_names(loader)
 
     buy_instructions = [instruction for instruction in instructions if instruction.action == "buy"]
-    sell_instructions = [instruction for instruction in instructions if instruction.action == "sell"]
+    sell_instructions = [
+        instruction for instruction in instructions if instruction.action == "sell"
+    ]
 
     lines = [f"下一交易日指令 ({next_trade_date})"]
     if not instructions:

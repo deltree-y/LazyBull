@@ -149,7 +149,7 @@ python scripts/train_ml_model.py \
 
 ### 模型元数据
 
-训练完成后，模型元数据保存在 `data/models/model_registry.json`：
+训练完成后，模型元数据保存在 `data/models/stock_selection/model_registry.json`：
 
 ```json
 {

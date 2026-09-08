@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from src.lazybull.common.config import get_ml_train_runs_csv
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.ensemble import EnsembleModel
@@ -412,9 +413,7 @@ def execute_split_training(
         test_end_date=split.test_end,
     )
 
-    csv_path = (
-        args.run_log_csv if args.run_log_csv else f"{args.data_root}/models/ml_train_runs.csv"
-    )
+    csv_path = args.run_log_csv if args.run_log_csv else get_ml_train_runs_csv(args.data_root)
     write_training_run_to_csv(run_record, csv_path)
 
     logger.info(f"训练运行日志已记录到: {csv_path}")

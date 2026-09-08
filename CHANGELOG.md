@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.105.0] - 2026-09-08
+
+### Added
+
+- **terminal_loss 模型多版本保存（ModelRegistry 版本化）**：新增 `src/lazybull/risk/terminal_loss/artifacts.py`（flat/版本化双模式公共落盘层，并加入包导出），`scripts/train_terminal_risk_model.py` 默认走版本化——每次训练经 `register_model` 注册新版本（永不覆盖），产出 `v{N}_model.joblib / v{N}_features.json / v{N}_metadata.json / v{N}_report.json / v{N}_calibration_by_h_sigma.csv / v{N}_label_coverage.csv` 与目录级 `model_registry.json / latest_model_version.txt`，与选股模型版本管理机制一致；train/label 配置快照、预登记抽样参数、stage_dates、best_iteration 与 ES 概率质量指标（logloss/brier/pr_auc/lift/pred_bias，口径与 `summarize_terminal_risk_wf.py` 对齐）全量入元数据。model_type 固定 `xgboost_terminal_loss`（禁止包含 "classifier" 子串——`ModelRegistry.get_latest_version` 会跳过含该子串的 model_type，目录内 registry 将因此取不到 latest，已加守护测试）。版本化产物 joblib 内为 `TerminalLossModel` 实例（外层包装无 `save_model` 属性走 joblib 分支），经 `registry.load_model(version)` 直接返回可预测实例；版本字段仍在实例 `config.artifact_version` 与元数据中。新增 `--fixed-name` 开关保持固定文件名覆盖模式（WF 折目录研究场景，`batch_terminal_risk_wf.ps1` 已显式追加该开关，每折固定名产物与汇总工具零改动）。
+- **选股模型目录辅助函数**：`common/config.py` 新增 `get_stock_selection_models_root(data_root)` 与 `get_ml_train_runs_csv(data_root)`（入参为 data 根目录，None 时读 `data.root` 配置），统一选股模型目录与训练运行日志路径推导。
+
+### Changed
+
+- **选股模型目录迁移至 `data/models/stock_selection/`**：与 `models/risk`、`models/terminal_loss` 平级对称，`data/models` 根目录不再平铺模型文件。切换 12 处调用点：`MLSignal` / `signal_factory` / `paper reporting` 默认目录、`backtest_runtime` 与 `walk_forward runner` 的 registry 及持久化信号、`train_ml_model.py` registry 与日志路径、`deploy_training / split_training` 的 `ml_train_runs.csv` 默认路径与 CLI 帮助文本、`analyze_factor_stability / analyze_factor_importance` 的 models_dir。`get_models_root` 保留 models 根目录语义（`factor_exclude_list.json` 生产因子裁剪清单固定根目录，因子裁剪契约不变）。`ml_train_runs.csv` 随选股模型目录迁移，并顺带修复未传 `--data-root` 时日志写入字面量 `None/models/` 目录的缺陷（三处调用点同 pattern）。历史 4038 套模型文件、`model_registry.json`、`latest_model_version.txt`、`ml_train_runs.csv` 已物理迁移至子目录（同卷 rename，版本号连续，paper 配置 `model_version` 引用不受影响；`model_bak/`、`model_reg_bak/` 保留原处）。`data/models/terminal_loss/` 下首轮 flat 五件套与后续版本化 v\* 产物共存，未做清理。
+- **文档路径同步**：CLAUDE.md（目录职责、数据流、新增"模型目录契约"）、README.md、`docs/ml_usage_guide.md`、`docs/guide/{walk_forward,rank_weight,ml_label_horizon}_guide.md` 中模型目录示例路径更新。
+
+### Tests
+
+- `test_config.py` 新增选股模型目录（默认与显式 data_root）与训练日志路径断言；`test_terminal_loss_script.py` 原 e2e 改为 `--fixed-name` flat 模式回归（断言不变），新增版本化 e2e（同目录连续两次训练产生 v1/v2 两套产物、registry 递增、metadata 契约、`load_model` 实例往返预测）；新增 `test_terminal_loss_artifacts.py`（model_type 守护、performance_metrics 口径、flat 五件套、两次注册版本共存与加载实例可用）。
+
 ## [0.104.1] - 2026-09-08
 
 ### Fixed

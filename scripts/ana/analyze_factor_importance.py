@@ -119,9 +119,7 @@ def _get_category(feature_name: str) -> str:
     return FACTOR_CATEGORY.get(feature_name, "其他")
 
 
-def load_models_and_importance(
-    models_dir: Path, registry: dict, last_n: int = 0
-) -> pd.DataFrame:
+def load_models_and_importance(models_dir: Path, registry: dict, last_n: int = 0) -> pd.DataFrame:
     """从已保存的模型中提取 feature importance
 
     Args:
@@ -321,9 +319,7 @@ def print_report(stats: pd.DataFrame, cat_stats: pd.DataFrame, low_value: pd.Dat
             "mean_contribution_pct",
         ]
     ].copy()
-    bottom15["mean_contribution_pct"] = bottom15["mean_contribution_pct"].map(
-        lambda x: f"{x:.2%}"
-    )
+    bottom15["mean_contribution_pct"] = bottom15["mean_contribution_pct"].map(lambda x: f"{x:.2%}")
     bottom15["mean_importance"] = bottom15["mean_importance"].map(lambda x: f"{x:.4f}")
     bottom15["mean_rank"] = bottom15["mean_rank"].map(lambda x: f"{x:.1f}")
     bottom15["zero_ratio"] = bottom15["zero_ratio"].map(lambda x: f"{x:.1%}")
@@ -332,9 +328,7 @@ def print_report(stats: pd.DataFrame, cat_stats: pd.DataFrame, low_value: pd.Dat
     # 4. 分类统计
     print("\n── 按因子类别汇总 " + "─" * 62)
     cat_display = cat_stats.copy()
-    cat_display["total_contribution"] = cat_display["total_contribution"].map(
-        lambda x: f"{x:.2%}"
-    )
+    cat_display["total_contribution"] = cat_display["total_contribution"].map(lambda x: f"{x:.2%}")
     cat_display["avg_contribution"] = cat_display["avg_contribution"].map(lambda x: f"{x:.2%}")
     cat_display["best_rank"] = cat_display["best_rank"].map(lambda x: f"{x:.1f}")
     cat_display["worst_rank"] = cat_display["worst_rank"].map(lambda x: f"{x:.1f}")
@@ -390,7 +384,7 @@ def main():
     setup_logger("INFO")
 
     data_root = Path(args.data_root or get_data_root())
-    models_dir = data_root / "models"
+    models_dir = data_root / "models" / "stock_selection"
     output_path = args.output or str(
         Path(get_reports_root(str(data_root / "reports") if args.data_root else None))
         / "factor_importance.csv"

@@ -21,10 +21,13 @@ python scripts/train_terminal_risk_model.py \
     --start-date 20190102 --end-date 20260630 \
     --train-start 20190102 --train-end 20231231 \
     --es-start 20240102 --es-end 20240628
+
+产物保存双模式：默认走 ModelRegistry 版本化（每次训练注册新版本 v{N}，
+不覆盖历史）；--fixed-name 为固定文件名覆盖模式，供 WF 折目录等研究场景
+（batch_terminal_risk_wf.ps1 已显式使用该开关）。
 """
 
 import argparse
-import json
 import sys
 import warnings
 from pathlib import Path
@@ -43,11 +46,13 @@ from src.lazybull.factors.risk.volatility_factors import (  # noqa: E402
 from src.lazybull.risk.terminal_loss import (  # noqa: E402
     BASE_FEATURES,
     TERMINAL_LOSS_FEATURES,
+    TERMINAL_LOSS_MODEL_TYPE,
     StageSpec,
     TerminalLossLabelConfig,
     TerminalLossModel,
     TerminalLossModelConfig,
     TerminalLossTrainConfig,
+    build_performance_metrics,
     build_terminal_loss_labels,
     build_training_matrix,
     empty_training_matrix,
@@ -55,6 +60,8 @@ from src.lazybull.risk.terminal_loss import (  # noqa: E402
     load_clean_daily_panels,
     load_cs_train_days,
     load_trade_calendar,
+    save_flat_artifacts,
+    save_versioned_artifacts,
     split_stages_with_label_isolation,
     subsample_dates,
     subsample_h_per_group,
@@ -68,9 +75,12 @@ from src.lazybull.risk.terminal_loss.labels import (  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="期末异常亏损风险模型训练（第一阶段）")
     parser.add_argument("--data-root", default="data", help="数据根目录")
-    parser.add_argument("--output-dir", default="data/models/terminal_loss",
-                        help="模型与报告输出目录")
-    parser.add_argument("--start-date", required=True, help="数据起点 YYYYMMDD（自动前移 sigma 预热）")
+    parser.add_argument(
+        "--output-dir", default="data/models/terminal_loss", help="模型与报告输出目录"
+    )
+    parser.add_argument(
+        "--start-date", required=True, help="数据起点 YYYYMMDD（自动前移 sigma 预热）"
+    )
     parser.add_argument("--end-date", required=True, help="数据终点 YYYYMMDD")
     parser.add_argument("--train-start", required=True, help="Train 段起点 YYYYMMDD")
     parser.add_argument("--train-end", required=True, help="Train 段终点 YYYYMMDD")
@@ -80,22 +90,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--h-max", type=int, default=20, help="期限网格上限")
     parser.add_argument("--sigma-window", type=int, default=20, help="sigma 日历窗口")
     parser.add_argument("--n-estimators", type=int, default=500)
-    parser.add_argument("--max-depth", type=int, default=3,
-                        help="树最大深度（消融实验位）")
+    parser.add_argument("--max-depth", type=int, default=3, help="树最大深度（消融实验位）")
     parser.add_argument("--random-state", type=int, default=42)
-    parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
-                        help="XGBoost 训练设备（默认 cuda，与主模型一致；GPU 不稳定时可切 cpu）")
-    parser.add_argument("--chunk-days", type=int, default=50,
-                        help="标签构建分块的交易日数（内存控制）")
-    parser.add_argument("--h-per-group", type=int, default=2,
-                        help="每组 (股票,日) 抽取的期限数（预登记抽样）")
-    parser.add_argument("--every-n-days", type=int, default=3,
-                        help="交易日等距抽样间隔（预登记抽样，1=不抽）")
+    parser.add_argument(
+        "--device",
+        default="cuda",
+        choices=["cuda", "cpu"],
+        help="XGBoost 训练设备（默认 cuda，与主模型一致；GPU 不稳定时可切 cpu）",
+    )
+    parser.add_argument(
+        "--chunk-days", type=int, default=50, help="标签构建分块的交易日数（内存控制）"
+    )
+    parser.add_argument(
+        "--h-per-group", type=int, default=2, help="每组 (股票,日) 抽取的期限数（预登记抽样）"
+    )
+    parser.add_argument(
+        "--every-n-days", type=int, default=3, help="交易日等距抽样间隔（预登记抽样，1=不抽）"
+    )
+    parser.add_argument(
+        "--fixed-name",
+        action="store_true",
+        help="固定文件名覆盖模式（WF 折目录研究用）；"
+        "默认为 ModelRegistry 版本化保存（每次训练新增版本，不覆盖）",
+    )
     return parser.parse_args()
 
 
-def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_panel,
-                         calendar):
+def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_panel, calendar):
     """分块构建训练矩阵：每块标签构建后立即关联特征并抽样，控制峰值内存。
 
     块面板向后多切 h_max+1 日，使块内所有 h 的标签端点落在真实数据上
@@ -109,7 +130,7 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
     valid_event_sum, valid_count = 0, 0
 
     for c0 in range(0, len(feature_dates), args.chunk_days):
-        chunk_dates = feature_dates[c0:c0 + args.chunk_days]
+        chunk_dates = feature_dates[c0 : c0 + args.chunk_days]
         i0, i1 = pos_of[chunk_dates[0]], pos_of[chunk_dates[-1]]
         i_end = min(i1 + 1 + label_config.h_max + 1, n)
         sub_cal = calendar[i0:i_end]
@@ -130,9 +151,7 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
         valid_event_sum += int(valid["loss_label"].sum())
         valid_count += len(valid)
 
-        features_by_date = load_cs_train_days(
-            args.data_root, chunk_dates, BASE_FEATURES
-        )
+        features_by_date = load_cs_train_days(args.data_root, chunk_dates, BASE_FEATURES)
         piece = build_training_matrix(labels, features_by_date, sigma_panel)
         piece = subsample_h_per_group(piece, n_h=args.h_per_group)
         matrix_pieces.append(piece)
@@ -144,15 +163,11 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
     # 空块（如 ES 终点日全部 immature）由 empty_training_matrix 保持数值
     # dtype，避免 concat 把整列提升为 object；全空时走空矩阵由主流程报错
     matrix = (
-        pd.concat(matrix_pieces, ignore_index=True)
-        if matrix_pieces
-        else empty_training_matrix()
+        pd.concat(matrix_pieces, ignore_index=True) if matrix_pieces else empty_training_matrix()
     )
     matrix = subsample_dates(matrix, every_n=args.every_n_days)
     coverage_df = (
-        pd.Series(coverage_counter, name="count")
-        .rename_axis(["h", "label_status"])
-        .reset_index()
+        pd.Series(coverage_counter, name="count").rename_axis(["h", "label_status"]).reset_index()
     )
     logger.info(
         f"训练矩阵（含日期抽样 1/{args.every_n_days}）: {len(matrix)} 行；"
@@ -175,7 +190,7 @@ def main() -> int:
 
     # sigma 预热：数据加载起点前移 sigma_window+2 个交易日
     pre_calendar = load_trade_calendar(args.data_root, "19900101", args.start_date)
-    warmup_dates = pre_calendar[-(args.sigma_window + 2):]
+    warmup_dates = pre_calendar[-(args.sigma_window + 2) :]
     data_start = warmup_dates[0] if warmup_dates else args.start_date
     logger.info(
         f"数据区间 [{data_start},{args.end_date}]（含 sigma 预热前移），"
@@ -186,9 +201,7 @@ def main() -> int:
         args.data_root, data_start, args.end_date
     )
     close_long = close_panel.stack().rename("close_adj").reset_index()
-    sigma_panel = compute_sigma_daily_panel(
-        close_long, calendar, window=args.sigma_window
-    )
+    sigma_panel = compute_sigma_daily_panel(close_long, calendar, window=args.sigma_window)
 
     matrix, coverage_df, valid_event_sum, valid_count = build_matrix_chunked(
         args, label_config, open_panel, sigma_panel, limit_panel, calendar
@@ -251,32 +264,38 @@ def main() -> int:
             },
             "full_grid_valid_event_rate": valid_event_sum / max(valid_count, 1),
             "pct_cross_section_source": "cs_train（y_ret 标签有效域，已知限制登记）",
-            "known_limitations": [
-                "pct_* 母截面为 cs_train 过滤后域，分母较完整日截面窄约 5%~10%"
-            ],
+            "known_limitations": ["pct_* 母截面为 cs_train 过滤后域，分母较完整日截面窄约 5%~10%"],
         },
     )
-    TerminalLossModel(model_config, result.classifier).save(
-        str(out_dir / "terminal_loss_model.joblib")
-    )
-    with open(out_dir / "terminal_loss_report.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "es": _report_to_json(es_report),
-                "train": _report_to_json(train_report),
-                "label_coverage": coverage_df.to_dict(orient="records"),
-                "isolation_dropped": split.isolation_dropped,
-            },
-            f,
-            ensure_ascii=False,
-            indent=2,
+    model = TerminalLossModel(model_config, result.classifier)
+    report_payload = {
+        "es": _report_to_json(es_report),
+        "train": _report_to_json(train_report),
+        "label_coverage": coverage_df.to_dict(orient="records"),
+        "isolation_dropped": split.isolation_dropped,
+    }
+    if args.fixed_name:
+        save_flat_artifacts(
+            out_dir,
+            model,
+            report_payload,
+            es_report["calibration_by_h_sigma"],
+            coverage_df,
         )
-    es_report["calibration_by_h_sigma"].to_csv(
-        out_dir / "calibration_by_h_sigma.csv", index=False, encoding="utf-8-sig"
-    )
-    coverage_df.to_csv(
-        out_dir / "label_coverage.csv", index=False, encoding="utf-8-sig"
-    )
+    else:
+        version = save_versioned_artifacts(
+            out_dir,
+            model,
+            train_start_date=args.train_start,
+            train_end_date=args.train_end,
+            n_samples=int(model_config.metadata["n_train"]),
+            train_params=model_config.metadata,
+            performance_metrics=build_performance_metrics(es_report, train_report),
+            report_payload=report_payload,
+            calibration_df=es_report["calibration_by_h_sigma"],
+            coverage_df=coverage_df,
+        )
+        logger.info(f"已注册 {TERMINAL_LOSS_MODEL_TYPE} v{version}（每次训练新增版本，不覆盖）")
     logger.info(
         f"ES 段概率质量: logloss={es_report['logloss']:.4f}, "
         f"brier={es_report['brier']:.4f}, pr_auc={es_report['pr_auc']:.4f}, "

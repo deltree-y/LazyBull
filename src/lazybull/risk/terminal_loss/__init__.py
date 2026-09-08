@@ -6,19 +6,18 @@
 - dataset: 多期限瘦表、时间分割、样本关联（第一阶段）
 - train: 二分类训练、早停、校准与元数据（第一阶段）
 - model: 加载、输入契约、批量预测（第一/二阶段）
+- artifacts: 产物落盘 flat/版本化双模式（版本化复用 ModelRegistry）
 
 因子本体归 factors/risk（含 sigma_daily_20 严格日历口径面板）；
 本包只保留标签、训练与决策逻辑，不复制因子实现。
 """
 
-from .labels import (
-    LABEL_STATUS_ENDPOINT_MISSING,
-    LABEL_STATUS_IMMATURE,
-    LABEL_STATUS_SIGMA_UNAVAILABLE,
-    LABEL_STATUS_VALID,
-    TerminalLossLabelConfig,
-    build_terminal_loss_labels,
-    summarize_label_coverage,
+from .artifacts import (
+    TERMINAL_LOSS_LABEL_COLUMN,
+    TERMINAL_LOSS_MODEL_TYPE,
+    build_performance_metrics,
+    save_flat_artifacts,
+    save_versioned_artifacts,
 )
 from .dataset import (
     BASE_FEATURES,
@@ -39,6 +38,15 @@ from .dataset import (
     subsample_h_per_group,
     validate_feature_manifest,
 )
+from .labels import (
+    LABEL_STATUS_ENDPOINT_MISSING,
+    LABEL_STATUS_IMMATURE,
+    LABEL_STATUS_SIGMA_UNAVAILABLE,
+    LABEL_STATUS_VALID,
+    TerminalLossLabelConfig,
+    build_terminal_loss_labels,
+    summarize_label_coverage,
+)
 from .model import TerminalLossModel, TerminalLossModelConfig
 from .train import (
     SigmoidCalibrator,
@@ -49,6 +57,11 @@ from .train import (
 )
 
 __all__ = [
+    "TERMINAL_LOSS_LABEL_COLUMN",
+    "TERMINAL_LOSS_MODEL_TYPE",
+    "build_performance_metrics",
+    "save_flat_artifacts",
+    "save_versioned_artifacts",
     "LABEL_STATUS_ENDPOINT_MISSING",
     "LABEL_STATUS_IMMATURE",
     "LABEL_STATUS_SIGMA_UNAVAILABLE",

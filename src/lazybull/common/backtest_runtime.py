@@ -16,7 +16,7 @@ from ..backtest import BacktestEngineML
 from ..common.cost import CostModel
 from ..signals.ml_signal import MLSignal
 from ..universe import BasicUniverse
-from .config import get_models_root
+from .config import get_stock_selection_models_root
 from .signal_factory import create_signal
 from .trading_config import TradingConfig
 
@@ -49,9 +49,7 @@ def build_walk_forward_trading_config(args, *, model_version: int) -> TradingCon
         min_list_days=getattr(args, "bt_min_list_days", 365),
         stop_loss_enabled=getattr(args, "bt_stop_loss_enabled", False),
         stop_loss_drawdown_pct=getattr(args, "bt_stop_loss_drawdown_pct", 30.0),
-        stop_loss_consecutive_limit_down=getattr(
-            args, "bt_stop_loss_consecutive_limit_down", 2
-        ),
+        stop_loss_consecutive_limit_down=getattr(args, "bt_stop_loss_consecutive_limit_down", 2),
         position_sizing=getattr(args, "position_sizing", "equal"),
         kelly_vol_window=getattr(args, "kelly_vol_window", 60),
         kelly_max_leverage=getattr(args, "kelly_max_leverage", 0.25),
@@ -69,13 +67,12 @@ def create_or_reuse_signal(
     verbose: bool = False,
 ):
     """创建或复用共享的 MLSignal。"""
-    models_dir = get_models_root(str(Path(data_root) / "models") if data_root else None)
+    models_dir = get_stock_selection_models_root(data_root)
 
     if persistent_signal is not None:
         persistent_signal.top_n = trading_config.top_n
-        if (
-            trading_config.model_version_b is not None
-            and hasattr(persistent_signal, "update_versions")
+        if trading_config.model_version_b is not None and hasattr(
+            persistent_signal, "update_versions"
         ):
             persistent_signal.update_versions(
                 trading_config.model_version,
@@ -129,6 +126,3 @@ def create_backtest_engine_from_config(
         min_buy_value_ratio=trading_config.min_buy_value_ratio,
         enable_early_rebalance_on_empty=trading_config.enable_early_rebalance_on_empty,
     )
-
-
-

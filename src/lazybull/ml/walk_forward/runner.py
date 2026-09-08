@@ -14,7 +14,7 @@ from typing import List
 from dateutil.relativedelta import relativedelta
 from loguru import logger
 
-from src.lazybull.common.config import get_data_root, get_models_root
+from src.lazybull.common.config import get_data_root, get_stock_selection_models_root
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
@@ -220,11 +220,7 @@ def run_walk_forward(args) -> None:
         # 初始化组件
         storage = Storage(root_path=args.data_root)
         loader = DataLoader(storage)
-        registry = ModelRegistry(
-            models_dir=get_models_root(
-                str(Path(args.data_root) / "models") if args.data_root else None
-            )
-        )
+        registry = ModelRegistry(models_dir=get_stock_selection_models_root(args.data_root))
 
         # 加载股票基本信息（OOS 回测需要）
         stock_basic = None
@@ -358,9 +354,7 @@ def run_walk_forward(args) -> None:
             persistent_signal = MLSignal(
                 top_n=args.bt_top_n,
                 model_version=None,  # 首次 split 时通过 update_model_version 设置
-                models_dir=get_models_root(
-                    str(Path(args.data_root) / "models") if args.data_root else None
-                ),
+                models_dir=get_stock_selection_models_root(args.data_root),
                 verbose=False,
             )
             logger.info(f"持久化 MLSignal 已创建，将跨 {len(splits)} 个 split 复用")

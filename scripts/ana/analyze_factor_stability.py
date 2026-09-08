@@ -247,7 +247,7 @@ def main() -> None:
     setup_logger("INFO")
     versions = parse_versions(args.versions)
     data_root = Path(args.data_root or get_data_root())
-    models_dir = data_root / "models"
+    models_dir = data_root / "models" / "stock_selection"
     output_path = (
         Path(args.output)
         if args.output

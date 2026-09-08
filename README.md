@@ -277,8 +277,10 @@ python scripts/train_terminal_risk_model.py \
     --train-start 20210104 --train-end 20241231 \
     --es-start 20250102 --es-end 20251231
 
-# 输出：data/models/terminal_loss/ 下模型 artifact（joblib + JSON 元数据）、
-# 概率质量报告（terminal_loss_report.json）、h×σ 校准表与标签覆盖分布（CSV）
+# 输出：data/models/terminal_loss/ 下按 ModelRegistry 版本化保存（每次训练
+# 注册新版本 v{N}，不覆盖历史）：模型 artifact、v{N}_report.json 概率质量报告、
+# v{N}_calibration_by_h_sigma.csv 校准表与 v{N}_label_coverage.csv 覆盖分布；
+# --fixed-name 为固定文件名覆盖模式（供 WF 折目录等研究场景）
 # 内存与抽样：全网格标签按 50 交易日分块构建，每组 (股票,日) 抽 2 个期限、
 # 每 3 个交易日取 1（--h-per-group / --every-n-days 可调，参数落入元数据）
 # 训练设备默认 cuda（与主模型一致），--device cpu 可切换
@@ -313,7 +315,7 @@ Walk-forward 对比表的全周期 CAGR 按有效日收益区间进行几何年�
 - **使用早停机制**（early_stopping_rounds）防止过拟合，早停指标可选整段 `rank_ic` 或逐日截面 `rank_ic_daily`（与 daily_rankic 评估口径一致），并支持 `--min-best-iteration` 下限监控告警
 - **标签 winsorize 处理**减少极端值影响
 - **增加正则化参数**（L1/L2）提升泛化能力
-- 模型自动保存到 `data/models` 目录
+- 模型自动保存到 `data/models/stock_selection` 目录（与 risk、terminal_loss 平级）
 - 版本号自动递增（v1, v2, v3...）
 - 元数据记录在 `model_registry.json`
 - 支持排序选股 Top N 策略
@@ -327,12 +329,15 @@ Walk-forward 对比表的全周期 CAGR 按有效日收益区间进行几何年�
 
 **查看模型文件：**
 ```bash
-ls data/models/              # ML 模型目录
-  ├── model_registry.json    # 模型版本注册表
-  ├── v1_model.joblib        # 模型文件
-  ├── v1_features.json       # 特征列表
-  ├── v2_model.joblib
-  └── v2_features.json
+ls data/models/                     # ML 模型根目录（三平级模型家族）
+  ├── stock_selection/              # 选股模型
+  │   ├── model_registry.json       # 模型版本注册表
+  │   ├── v1_model.joblib           # 模型文件
+  │   ├── v1_features.json          # 特征列表
+  │   ├── v2_model.joblib
+  │   └── v2_features.json
+  ├── risk/                         # 持仓风控模型（独立 registry）
+  └── terminal_loss/                # 期末异常亏损模型（独立 registry，版本化保存）
 ```
 
 #### 查看数据
@@ -435,9 +440,10 @@ LazyBull/
 │   ├── clean/                 # 清洗后数据（支持按日分区）
 │   │   └── {name}/            # 按日分区: YYYY-MM-DD.parquet
 │   ├── features/              # 特征数据
-│   ├── models/                # ML 模型目录
-│   │   ├── model_registry.json  # 模型版本注册表
-│   │   └── v*_model.joblib    # 训练好的模型文件
+│   ├── models/                # ML 模型根目录
+│   │   ├── stock_selection/   # 选股模型（model_registry.json + v*_model.joblib）
+│   │   ├── risk/              # 持仓风控模型
+│   │   └── terminal_loss/     # 期末异常亏损模型（版本化保存）
 │   └── reports/               # 回测报告
 ├── docs/                       # 文档
 │   ├── data_contract.md       # 数据契约

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..common.config import get_models_root
+from ..common.config import get_stock_selection_models_root
 from ..ml import ModelRegistry
 from ..ml.train_core import (
     DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
@@ -59,7 +59,7 @@ class MLSignal(Signal):
         super().__init__("ml_signal")
         self.top_n = top_n
         self.model_version = model_version
-        self.models_dir = models_dir or get_models_root()
+        self.models_dir = models_dir or get_stock_selection_models_root()
 
         self.min_amount_ma20 = min_amount_ma20
         self.min_total_mv = min_total_mv
@@ -116,9 +116,7 @@ class MLSignal(Signal):
                 f"特征数={self.metadata['feature_count']}"
             )
 
-    def _apply_selection_filters(
-        self, features_df: pd.DataFrame
-    ) -> Tuple[pd.DataFrame, int, int]:
+    def _apply_selection_filters(self, features_df: pd.DataFrame) -> Tuple[pd.DataFrame, int, int]:
         """选股阶段过滤（实盘/回测共用）
 
         规则（均使用特征文件中的原始列，z-score 归一化不影响这些列）：
@@ -206,9 +204,7 @@ class MLSignal(Signal):
                 )
             elif (non_null == 0).all():
                 if not col.startswith(broadcast_prefixes):
-                    warn_cols.append(
-                        (col, "全零（可能为合法状态，如全部不分红/未上榜/未亏损）")
-                    )
+                    warn_cols.append((col, "全零（可能为合法状态，如全部不分红/未上榜/未亏损）"))
             elif len(non_null) >= 2 and non_null.nunique() <= 1:
                 if not col.startswith(broadcast_prefixes):
                     warn_cols.append((col, "截面常量（无区分度）"))
@@ -246,9 +242,7 @@ class MLSignal(Signal):
             衰减后的 DataFrame。
         """
         train_params = self.metadata.get("train_params", {}) if self.metadata else {}
-        strategy = train_params.get(
-            "freshness_strategy", FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY
-        )
+        strategy = train_params.get("freshness_strategy", FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY)
         if strategy != FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY:
             return features_df
         half_life_days = float(

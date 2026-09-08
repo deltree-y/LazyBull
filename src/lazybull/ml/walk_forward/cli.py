@@ -415,7 +415,7 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         "--run-log-csv",
         type=str,
         default=None,
-        help="训练运行日志CSV路径，默认为 {data_root}/models/ml_train_runs.csv",
+        help="训练运行日志CSV路径，默认为 {data_root}/models/stock_selection/ml_train_runs.csv",
     )
     parser.add_argument(
         "--wf-summary-csv",

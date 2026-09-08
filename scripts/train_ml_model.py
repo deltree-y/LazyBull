@@ -35,7 +35,11 @@ import pandas as pd
 from loguru import logger
 from sklearn.metrics import mean_squared_error, r2_score
 
-from src.lazybull.common.config import get_data_root, get_models_root
+from src.lazybull.common.config import (
+    get_data_root,
+    get_ml_train_runs_csv,
+    get_stock_selection_models_root,
+)
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
@@ -361,7 +365,7 @@ def main():
         "--run-log-csv",
         type=str,
         default=None,
-        help="训练运行日志CSV路径，默认为 {data_root}/ml_train_runs.csv",
+        help="训练运行日志CSV路径，默认为 {data_root}/models/stock_selection/ml_train_runs.csv",
     )
 
     args = parser.parse_args()
@@ -398,11 +402,7 @@ def main():
         # 初始化组件
         storage = Storage(root_path=args.data_root)
         loader = DataLoader(storage)
-        registry = ModelRegistry(
-            models_dir=get_models_root(
-                str(Path(args.data_root) / "models") if args.data_root else None
-            )
-        )
+        registry = ModelRegistry(models_dir=get_stock_selection_models_root(args.data_root))
 
         # 1. 加载特征数据
         df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)
@@ -620,7 +620,7 @@ def main():
 
         logger.info("=" * 60)
         logger.info(f"模型训练完成！版本: v{version}")
-        logger.info(f"模型保存路径: {args.data_root}/models/")
+        logger.info(f"模型保存路径: {registry.models_dir}")
         logger.info("=" * 60)
 
         # 5. 记录训练运行日志到CSV
@@ -675,7 +675,7 @@ def main():
             if args.run_log_csv is not None:
                 csv_path = args.run_log_csv
             else:
-                csv_path = f"{args.data_root}/models/ml_train_runs.csv"
+                csv_path = get_ml_train_runs_csv(args.data_root)
 
             # 写入CSV
             write_training_run_to_csv(run_record, csv_path)

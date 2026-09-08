@@ -10,21 +10,21 @@ from dotenv import load_dotenv
 
 class Config:
     """配置管理类
-    
+
     支持从YAML文件加载配置，并支持环境变量覆盖
     """
-    
+
     def __init__(self, config_path: Optional[str] = None):
         """初始化配置
-        
+
         Args:
             config_path: 配置文件路径，如不提供则使用默认base.yaml
         """
         self._config: Dict[str, Any] = {}
-        
+
         # 加载环境变量
         load_dotenv()
-        
+
         # 加载配置文件
         if config_path:
             self.load_config(config_path)
@@ -33,30 +33,30 @@ class Config:
             default_config = Path(__file__).parent.parent.parent.parent / "configs" / "base.yaml"
             if default_config.exists():
                 self.load_config(str(default_config))
-    
+
     def load_config(self, config_path: str) -> None:
         """加载YAML配置文件
-        
+
         Args:
             config_path: 配置文件路径
         """
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
             self._config.update(config or {})
-    
+
     def merge_config(self, config_path: str) -> None:
         """合并另一个配置文件（覆盖已有配置）
-        
+
         Args:
             config_path: 配置文件路径
         """
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
             self._deep_update(self._config, config or {})
-    
+
     def _deep_update(self, base: Dict, update: Dict) -> None:
         """深度更新字典
-        
+
         Args:
             base: 基础字典
             update: 更新字典
@@ -66,20 +66,20 @@ class Config:
                 self._deep_update(base[key], value)
             else:
                 base[key] = value
-    
+
     def get(self, key: str, default: Any = None) -> Any:
         """获取配置项，支持点号分隔的嵌套键
-        
+
         Args:
             key: 配置键，支持 'data.root' 格式
             default: 默认值
-            
+
         Returns:
             配置值
         """
-        keys = key.split('.')
+        keys = key.split(".")
         value = self._config
-        
+
         for k in keys:
             if isinstance(value, dict):
                 value = value.get(k)
@@ -87,38 +87,38 @@ class Config:
                     return default
             else:
                 return default
-        
+
         return value
-    
+
     def set(self, key: str, value: Any) -> None:
         """设置配置项
-        
+
         Args:
             key: 配置键，支持 'data.root' 格式
             value: 配置值
         """
-        keys = key.split('.')
+        keys = key.split(".")
         config = self._config
-        
+
         for k in keys[:-1]:
             if k not in config:
                 config[k] = {}
             config = config[k]
-        
+
         config[keys[-1]] = value
-    
+
     def get_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """获取环境变量
-        
+
         Args:
             key: 环境变量名
             default: 默认值
-            
+
         Returns:
             环境变量值
         """
         return os.getenv(key, default)
-    
+
     @property
     def all(self) -> Dict[str, Any]:
         """返回所有配置"""
@@ -139,10 +139,10 @@ def get_config() -> Config:
 
 def init_config(config_path: str) -> Config:
     """初始化全局配置
-    
+
     Args:
         config_path: 配置文件路径
-        
+
     Returns:
         配置实例
     """
@@ -166,9 +166,7 @@ def normalize_shenwan_level(level: Optional[str], default: str = "l2") -> str:
     """
     normalized = str(level or default).strip().lower()
     if normalized not in {"l1", "l2", "l3"}:
-        raise ValueError(
-            f"shenwan_level 仅支持 'l1'、'l2'、'l3'，当前值: {level}"
-        )
+        raise ValueError(f"shenwan_level 仅支持 'l1'、'l2'、'l3'，当前值: {level}")
     return normalized
 
 
@@ -186,6 +184,7 @@ def get_data_root(default: str = "./data") -> str:
     if not path.is_absolute():
         # 相对路径基于项目根目录解析，避免 CWD 不同导致找不到文件
         from .. import PROJECT_ROOT
+
         path = PROJECT_ROOT / path
     return str(path)
 
@@ -245,14 +244,36 @@ def get_respi_local_dir() -> str:
     path = Path(local_dir)
     if not path.is_absolute():
         from .. import PROJECT_ROOT
+
         path = PROJECT_ROOT / path
     path.mkdir(parents=True, exist_ok=True)
     return str(path)
 
 
 def get_models_root(default: Optional[str] = None) -> str:
-    """获取模型目录，默认派生自 data.root/models。"""
+    """获取模型目录，默认派生自 data.root/models。
+
+    注意：这是 models 根目录（factor_exclude_list.json 等全局训练输入所在地），
+    各模型家族应使用各自子目录——选股模型用 get_stock_selection_models_root，
+    风控/terminal_loss 传各自子目录。
+    """
     return default or str(Path(get_data_root()) / "models")
+
+
+def get_stock_selection_models_root(data_root: Optional[str] = None) -> str:
+    """获取选股模型目录：{data_root}/models/stock_selection（与 risk/terminal_loss 平级）。
+
+    Args:
+        data_root: 数据根目录；None 时读取配置 data.root。
+            注意入参语义是 data 根目录，与 get_models_root(default=完整目录) 不同。
+    """
+    root = Path(data_root) if data_root else Path(get_data_root())
+    return str(root / "models" / "stock_selection")
+
+
+def get_ml_train_runs_csv(data_root: Optional[str] = None) -> str:
+    """获取选股训练运行日志路径：{选股模型目录}/ml_train_runs.csv（随模型目录迁移）。"""
+    return str(Path(get_stock_selection_models_root(data_root)) / "ml_train_runs.csv")
 
 
 def get_reports_root(default: Optional[str] = None) -> str:
