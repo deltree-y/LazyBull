@@ -16,6 +16,7 @@ from src.lazybull.risk.terminal_loss.dataset import (
     add_pct_features,
     attach_horizon_features,
     build_training_matrix,
+    empty_training_matrix,
     split_stages_with_label_isolation,
     subsample_dates,
     subsample_h_per_group,
@@ -137,6 +138,46 @@ class TestBuildTrainingMatrix:
         matrix = build_training_matrix(labels, features_by_date, sigma_panel)
         assert set(matrix["trade_date"]) <= set(CAL[:5])
         assert len(matrix) > 0
+
+    def test_empty_matrix_keeps_numeric_schema(self):
+        """空标签的返回必须与非空路径同列同 dtype（分块 concat 契约）。"""
+        labels, sigma_panel = self._labels()
+        matrix = build_training_matrix(
+            labels.iloc[0:0], {}, sigma_panel
+        )
+        assert matrix.empty
+        assert list(matrix.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES
+        for col in TERMINAL_LOSS_FEATURES:
+            assert pd.api.types.is_numeric_dtype(matrix[col]), col
+        assert matrix["h"].dtype == np.int64
+        assert matrix["remaining_intervals"].dtype == np.int64
+
+    def test_all_immature_piece_concat_keeps_numeric_dtypes(self):
+        """回归（WF 2024H2 折失败）：数据末端整块 immature 产生的空块
+        与正常块 concat 后，特征列不得被提升为 object（XGBoost 拒绝输入）。"""
+        labels, sigma_panel = self._labels()
+        features_by_date = {d: _day_features(["A", "B"], seed=i) for i, d in enumerate(CAL)}
+        matrix = build_training_matrix(
+            labels, features_by_date, sigma_panel, DatasetConfig(horizon_grid_size=20)
+        )
+        assert len(matrix) > 0
+        # 末日标签全部 immature（E 超出日历末端）→ 空块
+        last_day = labels[labels["trade_date"] == CAL[-1]]
+        assert (last_day["label_status"] == "immature").all()
+        empty_piece = build_training_matrix(last_day, features_by_date, sigma_panel)
+        assert empty_piece.empty
+        combined = pd.concat([matrix, empty_piece], ignore_index=True)
+        for col in TERMINAL_LOSS_FEATURES:
+            assert pd.api.types.is_numeric_dtype(combined[col]), col
+        assert len(combined) == len(matrix)
+
+    def test_empty_training_matrix_helper_schema(self):
+        """empty_training_matrix 直接产出的空帧即数值 dtype。"""
+        empty = empty_training_matrix()
+        assert empty.empty
+        assert list(empty.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES
+        for col in TERMINAL_LOSS_FEATURES:
+            assert pd.api.types.is_numeric_dtype(empty[col]), col
 
 
 class TestStageIsolation:

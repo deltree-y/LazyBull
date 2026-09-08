@@ -1,4 +1,4 @@
-# batch_terminal_risk_wf.ps1
+﻿# batch_terminal_risk_wf.ps1
 # 期末异常亏损风险模型滚动 Walk-forward 批量脚本（第一阶段研究型 WF）
 #
 # 每折：滚动 Train（约 3 年）+ ES（6 个月，互不重叠）→ 独立概率质量报告；

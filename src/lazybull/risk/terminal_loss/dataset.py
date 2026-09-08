@@ -97,6 +97,30 @@ class DatasetConfig:
     horizon_grid_size: int = 20
 
 
+def empty_training_matrix() -> pd.DataFrame:
+    """构造与正常输出同列同 dtype 的空训练矩阵（schema 契约）。
+
+    分块构建时，数据末端的块可能整块无 valid 标签（如 ES 终点日全部
+    h 端点超出数据末端，均 immature）。``pd.DataFrame(columns=...)``
+    产生的空帧全列为 object dtype，与其他块 ``pd.concat`` 后整列被
+    提升为 object，XGBoost 将拒绝输入（dtypes must be int/float/bool）。
+    空矩阵必须保持与非空路径一致的列与 dtype。
+    """
+    dtypes: Dict[str, str] = {
+        "ts_code": "object",
+        "trade_date": "object",
+        "label_end_date": "object",
+        "h": "int64",
+        "remaining_intervals": "int64",
+    }
+    return pd.DataFrame(
+        {
+            c: pd.Series(dtype=dtypes.get(c, "float64"))
+            for c in META_COLUMNS + TERMINAL_LOSS_FEATURES
+        }
+    )
+
+
 def validate_feature_manifest(available_columns: Sequence[str]) -> None:
     """校验冻结 manifest 完整性：缺列必须失败，不静默缩减。"""
     available = set(available_columns)
@@ -170,12 +194,12 @@ def build_training_matrix(
     """
     cfg = config or DatasetConfig()
     if labels_df.empty:
-        return pd.DataFrame(columns=META_COLUMNS + TERMINAL_LOSS_FEATURES)
+        return empty_training_matrix()
 
     valid = labels_df[labels_df["label_status"] == LABEL_STATUS_VALID].copy()
     if valid.empty:
         logger.warning("标签表无 valid 行，训练矩阵为空")
-        return pd.DataFrame(columns=META_COLUMNS + TERMINAL_LOSS_FEATURES)
+        return empty_training_matrix()
 
     sigma_stack = sigma_panel.stack()
     sigma_stack.index = sigma_stack.index.set_names(["trade_date", "ts_code"])
@@ -202,7 +226,7 @@ def build_training_matrix(
         logger.warning(f"特征母截面缺失 {skipped_days} 个交易日，相关标签行被跳过")
 
     if not pieces:
-        return pd.DataFrame(columns=META_COLUMNS + TERMINAL_LOSS_FEATURES)
+        return empty_training_matrix()
     matrix = pd.concat(pieces, ignore_index=True)
 
     matrix = attach_horizon_features(matrix)

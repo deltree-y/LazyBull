@@ -26,10 +26,14 @@ python scripts/train_terminal_risk_model.py \
 import argparse
 import json
 import sys
+import warnings
 from pathlib import Path
 
 import pandas as pd
 from loguru import logger
+
+# GPU 训练 + CPU numpy 输入预测时的数据结构回退告警（与主模型 walk_forward/runner.py 同处理）
+warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -46,6 +50,7 @@ from src.lazybull.risk.terminal_loss import (  # noqa: E402
     TerminalLossTrainConfig,
     build_terminal_loss_labels,
     build_training_matrix,
+    empty_training_matrix,
     evaluate_probability_quality,
     load_clean_daily_panels,
     load_cs_train_days,
@@ -136,7 +141,13 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
             f"矩阵 {len(piece)} 行（含 h 抽样 1/{args.h_per_group}）"
         )
 
-    matrix = pd.concat(matrix_pieces, ignore_index=True)
+    # 空块（如 ES 终点日全部 immature）由 empty_training_matrix 保持数值
+    # dtype，避免 concat 把整列提升为 object；全空时走空矩阵由主流程报错
+    matrix = (
+        pd.concat(matrix_pieces, ignore_index=True)
+        if matrix_pieces
+        else empty_training_matrix()
+    )
     matrix = subsample_dates(matrix, every_n=args.every_n_days)
     coverage_df = (
         pd.Series(coverage_counter, name="count")

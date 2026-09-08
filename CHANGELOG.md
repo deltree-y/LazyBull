@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.104.1] - 2026-09-08
+
+### Fixed
+
+- **terminal_loss 空分块 object dtype 污染训练输入**：滚动 WF 中折 2024H2（`--end-date=20241231`）训练失败，XGBoost 报 `DataFrame.dtypes must be int, float, bool` 且全部 33 特征列为 object。根因是该折 feature_dates 共 851 个交易日 = 17×50+1，最后一块仅剩 ES 终点日单独一天，其全部 h 标签端点超出数据末端（immature），`build_training_matrix` 走空返回路径 `pd.DataFrame(columns=...)` 产出全列 object 的空帧，与其他 17 个 float64 正常块 `pd.concat` 后整列被提升为 object。修复：`dataset.py` 新增 `empty_training_matrix()`（与非空路径同列同 dtype 的空矩阵，ts_code/trade_date/label_end_date 为 object，h/remaining_intervals 为 int64，其余全 float64），`build_training_matrix` 三处空返回统一改用；训练脚本 `build_matrix_chunked` 的 concat 增加全空列表防御（`pd.concat([])` 会直接抛异常绕过 `matrix.empty` 检查）。空块本身属正常业务语义（数据末端 immature），仅消除 schema 副作用。
+
+### Tests
+
+- `test_terminal_loss_dataset.py` 新增 3 项：空标签返回的空矩阵列与 dtype 契约、数据末端整块 immature 空块与正常块 concat 后特征列保持数值 dtype（本次 WF 失败的最小复现回归）、`empty_training_matrix()` 直出 schema 校验。
+
 ## [0.104.0] - 2026-09-07
 
 ### Added
