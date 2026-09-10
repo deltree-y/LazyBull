@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""期末异常亏损风险模型滚动 WF 汇总工具
+r"""期末异常亏损风险模型滚动 WF 汇总工具
 
 扫描 batch_terminal_risk_wf.ps1 产出的各折目录（terminal_loss_report.json），
 拼接 summary CSV 并打印跨折门禁结论。

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.105.1] - 2026-09-10
+
+### Fixed
+
+- **summarize_terminal_risk_wf.py docstring 无效转义告警**：运行 `py .\scripts\summarize_terminal_risk_wf.py ...` 时打印 `SyntaxWarning: invalid escape sequence '\s'`。根因为模块 docstring 用法示例中的 Windows 路径 `.\scripts\...` 含 `\s`，Python 3.12 起无效转义序列升级为 SyntaxWarning（未来版本将成为 SyntaxError）。修复：docstring 改为 raw string（`r"""..."""`）。行为无变化（`\s` 本就按字面保留），全项目仅此一处（grep `py \.[\\/]` 确认）。
+
 ## [0.105.0] - 2026-09-08
 
 ### Added
