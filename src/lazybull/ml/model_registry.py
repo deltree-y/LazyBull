@@ -540,6 +540,32 @@ class ModelRegistry:
         registry = self._ensure_registry_loaded()
         return registry["models"]
 
+    def list_sidecar_models(self) -> List[Dict]:
+        """仅扫描单模型元数据旁路文件列出模型（不依赖 model_registry.json）。
+
+        用于注册表文件缺失或为空时的回退场景（如模型目录仅包含
+        v{N}_metadata.json 旁路文件而未迁移整包注册表）。
+
+        Returns:
+            按版本号升序排列的模型元数据列表；损坏的旁路文件告警后跳过
+        """
+        models: List[Dict] = []
+        for metadata_file in sorted(self.models_dir.glob("v*_metadata.json")):
+            match = re.fullmatch(r"v(\d+)_metadata\.json", metadata_file.name)
+            if match is None:
+                continue
+            version = int(match.group(1))
+            try:
+                metadata = self._load_metadata_sidecar(version)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning(f"读取模型元数据旁路文件失败，跳过: {metadata_file.name}, 错误: {exc}")
+                continue
+            if isinstance(metadata, dict) and metadata.get("version") is not None:
+                models.append(metadata)
+
+        models.sort(key=lambda m: m["version"])
+        return models
+
     def get_latest_version(self) -> Optional[int]:
         """获取最新模型版本号（跳过分类器等辅助模型，仅返回主预测模型）
 

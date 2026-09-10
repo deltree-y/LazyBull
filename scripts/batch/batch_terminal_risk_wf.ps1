@@ -50,9 +50,9 @@ $sigma_window   = 20
 
 # ── 训练超参（消融位：数组即多组实验，Label 会追加后缀 _d*/_lr*）────
 $max_depth_list     = @(5)      # 例：@(2, 3) 做深度消融（后缀 _d*）
-$learning_rate_list = @(0.01)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
-$n_estimators       = 2000       # 树数量上限（配合早停）
-$early_stopping_rounds = 200     # ES 段 logloss 早停轮数
+$learning_rate_list = @(0.04)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
+$n_estimators       = 1000       # 树数量上限（配合早停）
+$early_stopping_rounds = 50     # ES 段 logloss 早停轮数
 $subsample          = 0.8
 $colsample_bytree   = 0.8
 $reg_lambda         = 1.0

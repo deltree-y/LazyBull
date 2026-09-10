@@ -116,6 +116,32 @@ def test_load_specific_version_without_registry_file_uses_metadata_sidecar(temp_
     assert metadata["feature_columns"] == ["feature1", "feature2"]
 
 
+def test_list_sidecar_models_without_registry_file(temp_models_dir):
+    """测试注册表缺失时可仅凭旁路元数据文件列出模型。"""
+    registry = ModelRegistry(models_dir=temp_models_dir)
+    for version_target in range(2):
+        registry.register_model(
+            model=MockModel(),
+            model_type="xgboost",
+            train_start_date="20230101",
+            train_end_date="20231231",
+            feature_columns=["feature1", "feature2"],
+            label_column="y_ret_5",
+            n_samples=1000 + version_target,
+            train_params={"n_estimators": 100},
+        )
+
+    (Path(temp_models_dir) / "model_registry.json").unlink()
+    # 写入损坏的旁路文件，验证告警跳过不抛异常
+    (Path(temp_models_dir) / "v3_metadata.json").write_text("{broken json", encoding="utf-8")
+
+    reloaded_registry = ModelRegistry(models_dir=temp_models_dir)
+    models = reloaded_registry.list_sidecar_models()
+
+    assert [m["version"] for m in models] == [1, 2]
+    assert models[-1]["n_samples"] == 1001
+
+
 def test_load_specific_version_streams_large_registry_without_full_load(temp_models_dir, monkeypatch):
     """测试旧模型在无旁路文件时可按版本流式读取注册表。"""
     models_dir = Path(temp_models_dir)

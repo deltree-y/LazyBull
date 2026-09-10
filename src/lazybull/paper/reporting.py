@@ -46,6 +46,10 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
     registry = ModelRegistry(models_dir=models_dir or get_stock_selection_models_root())
     models = registry.list_models()
     if not models:
+        # model_registry.json 缺失或为空时，回退扫描单模型元数据旁路文件
+        # （v{N}_metadata.json），保证仅迁移模型文件时仍可查询模型信息。
+        models = registry.list_sidecar_models()
+    if not models:
         return "没有已注册的模型。请先使用 train_ml_model.py 训练模型。"
 
     target_version = config.get("model_version")
