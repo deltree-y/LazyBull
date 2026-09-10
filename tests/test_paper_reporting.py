@@ -1,5 +1,6 @@
-"""纸面交易展示模块测试（format_model_info 模型信息回退路径）。"""
+"""纸面交易展示模块测试（format_model_info 模型信息回退与限幅路径）。"""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,7 @@ import pytest
 
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.paper import format_model_info
+from src.lazybull.paper.reporting import MODEL_INFO_MAX_CHARS
 
 
 class _MockModel:
@@ -53,6 +55,28 @@ def _register_model(models_dir: Path, version_tag: int) -> None:
     )
 
 
+def _write_raw_metadata(models_dir: Path, version: int, extra: dict) -> None:
+    """直接写入旁路元数据文件（format_model_info 只读元数据，无需模型文件）。"""
+    metadata = {
+        "version": version,
+        "version_str": f"v{version}",
+        "model_type": "xgboost",
+        "model_file": f"v{version}_model.joblib",
+        "features_file": f"v{version}_features.json",
+        "train_start_date": "20240101",
+        "train_end_date": "20241231",
+        "feature_count": 3,
+        "label_column": "y_ret_5",
+        "n_samples": 1000,
+        "train_params": {},
+        "performance_metrics": {},
+        "created_at": "2026-01-01 00:00:00",
+    }
+    metadata.update(extra)
+    with open(models_dir / f"v{version}_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+
 def test_format_model_info_falls_back_to_metadata_sidecar(tmp_path, paper_config):
     """model_registry.json 缺失时应回退读取 v{N}_metadata.json 旁路文件。"""
     _register_model(tmp_path, 1)
@@ -92,3 +116,34 @@ def test_format_model_info_specified_version_from_sidecar(tmp_path, paper_config
 
     assert "当前模型: v1" in text
     assert "(最新)" not in text
+
+
+def test_format_model_info_truncates_oversized_output(tmp_path, paper_config):
+    """超长 metadata（如内嵌大清单的 train_params）输出不得超出钉钉消息上限。"""
+    oversized_params = {f"param_{i}": "x" * 200 for i in range(60)}
+    _write_raw_metadata(tmp_path, 1, {"train_params": oversized_params})
+
+    text = format_model_info(models_dir=str(tmp_path))
+
+    assert len(text) <= MODEL_INFO_MAX_CHARS
+    assert "内容过长已截断" in text
+    assert "当前模型: v1" in text
+
+
+def test_format_model_info_truncates_single_huge_param_value(tmp_path, paper_config):
+    """单个超大参数值应被截断展示，不影响其余参数。"""
+    params = {
+        "huge_stock_list": "600000.SH," * 500,
+        "normal_param": 42,
+    }
+    _write_raw_metadata(tmp_path, 1, {"train_params": params})
+
+    text = format_model_info(models_dir=str(tmp_path))
+
+    assert "normal_param: 42" in text
+    # 超长值截断后以省略号结尾
+    assert "huge_stock_list: " in text
+    huge_line = next(line for line in text.splitlines() if "huge_stock_list" in line)
+    assert len(huge_line) < 120
+    assert huge_line.endswith("...")
+    assert len(text) <= MODEL_INFO_MAX_CHARS

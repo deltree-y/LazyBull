@@ -36,6 +36,13 @@ class PaperPositionSnapshot:
     rebalance_info: str
 
 
+# format_model_info 输出长度上限：钉钉单条消息约 2 万字节上限，中文按 3 字节算，
+# 2000 字符是安全值；超长回复会被钉钉 API 拒绝导致用户端"无回复"。
+MODEL_INFO_MAX_CHARS = 2000
+# 单个训练参数值的展示截断长度（超长值通常是内嵌列表/清单，展示无意义）
+_MODEL_INFO_PARAM_VALUE_MAX_CHARS = 80
+
+
 def format_model_info(models_dir: Optional[str] = None) -> str:
     """获取当前配置使用的模型信息。"""
     storage = PaperStorage()
@@ -84,7 +91,10 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
     if train_params:
         lines.append("  训练参数:")
         for key, value in train_params.items():
-            lines.append(f"    {key}: {value}")
+            value_text = str(value)
+            if len(value_text) > _MODEL_INFO_PARAM_VALUE_MAX_CHARS:
+                value_text = value_text[: _MODEL_INFO_PARAM_VALUE_MAX_CHARS - 3] + "..."
+            lines.append(f"    {key}: {value_text}")
 
     performance = target_meta.get("performance_metrics", {})
     if performance:
@@ -131,7 +141,10 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
         lines.append(f"  模型A: v{config.get('model_version', '最新')} (权重 {weight_a})")
         lines.append(f"  模型B: v{config['model_version_b']} (权重 {1 - weight_a})")
 
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if len(text) > MODEL_INFO_MAX_CHARS:
+        text = text[: MODEL_INFO_MAX_CHARS - 30] + "\n...(内容过长已截断)"
+    return text
 
 
 def load_position_snapshot(

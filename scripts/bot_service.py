@@ -40,6 +40,10 @@ DINGTALK_WEBHOOK = os.getenv("DINGTALK_WEBHOOK")
 
 logging.basicConfig(level=logging.INFO)
 
+# 钉钉单条消息内容约 2 万字节上限（中文 3 字节/字符），超长会被 API 拒绝且库内部
+# 仅打日志不抛异常，最终表现为用户端"无回复"。所有回复出口统一按此截断兜底。
+_REPLY_MAX_CHARS = 6000
+
 
 class ProgressReporter:
     """定时向钉钉发送进度消息，防止长时间任务无响应
@@ -204,6 +208,9 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         dingtalk_stream 库的 reply_text 可能内部吞掉异常只打日志，
         因此通过拦截 logging 记录来检测失败，并自动重试或降级到 Webhook。
         """
+        if len(text) > _REPLY_MAX_CHARS:
+            logging.warning(f"回复文本超长({len(text)}字符)，截断至 {_REPLY_MAX_CHARS}")
+            text = text[: _REPLY_MAX_CHARS - 30] + "\n...(内容过长已截断)"
         if incoming is not None:
             if self._try_stream_reply(lambda: self.reply_text(text, incoming), max_retries):
                 return
@@ -213,6 +220,9 @@ class SimpleHandler(dts.AsyncChatbotHandler):
 
     def _safe_reply_markdown(self, title: str, text: str, incoming, max_retries: int = 2):
         """安全回复 Markdown：带重试 + Webhook 降级"""
+        if len(text) > _REPLY_MAX_CHARS:
+            logging.warning(f"Markdown 回复超长({len(text)}字符)，截断至 {_REPLY_MAX_CHARS}")
+            text = text[: _REPLY_MAX_CHARS - 30] + "\n...(内容过长已截断)"
         if incoming is not None:
             if self._try_stream_reply(
                 lambda: self.reply_markdown(title, text, incoming), max_retries

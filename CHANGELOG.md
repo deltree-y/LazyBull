@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **钉钉 model 命令无回复根因：超长回复被钉钉 API 拒绝**：服务端日志显示 `format_model_info` 生成 58738 字符回复——WF 折模型 metadata 的 `performance_metrics.validation_daily/test_daily` 内嵌大量 `diagnostic_*` 诊断字段（当月 Top300 股票清单单字段近 3000 字符），且 `format_model_info` 对 `train_params` 全量展开，最终文本远超钉钉单条消息约 2 万字节上限，钉钉 API 直接拒绝（dingtalk_stream 库内部吞异常仅打日志），重试与 Webhook 降级后用户端仍表现为"无响应"。双层修复：
+  - **源头限幅**（`paper/reporting.py`）：`train_params` 单值超 80 字符截断展示（超长值通常是内嵌清单，逐项展示无意义）；整体输出硬上限 `MODEL_INFO_MAX_CHARS=2000` 字符，超长尾部追加"（内容过长已截断）"。已用真实大 metadata（v22264）验证输出限幅至 1983 字符。
+  - **通道兜底**（`bot_service.py`）：`_safe_reply` / `_safe_reply_markdown` 统一按 `_REPLY_MAX_CHARS=6000` 截断（约 1.8 万字节，留余量），防止未来任何命令生成超长内容后再次静默失败。
 - **钉钉 model 命令兼容缺失 model_registry.json**：`paper/reporting.py::format_model_info` 此前仅依赖 `ModelRegistry.list_models()`（只读整包 `model_registry.json`），注册表文件缺失或为空时直接返回"没有已注册的模型"，而模型目录里实际存在 `v{N}_metadata.json` 旁路元数据（如仅迁移模型文件目录的场景）。现在注册表为空时回退调用新增的 `ModelRegistry.list_sidecar_models()`——仅扫描 `v{N}_metadata.json` 旁路文件、按版本号升序返回，损坏的旁路文件告警后跳过；指定版本查询同样能从旁路文件命中。注册表存在时优先走原路径，行为不变。已用真实模型文件模拟 registry 缺失场景验证：`format_model_info` 正常返回完整模型信息。新增注册表缺失回退、损坏文件跳过、指定版本命中测试（`tests/test_ml.py`、`tests/test_paper_reporting.py`）。
 - **handle_model 过程日志**：`bot_service.py::handle_model` 在查询成功时记录返回文本长度、异常时记录完整堆栈，配合既有的 Stream 重试/Webhook 降级日志，可在服务端日志中唯一定位"无回复"属于查询异常、回复发送失败还是进程代码未更新。
 
