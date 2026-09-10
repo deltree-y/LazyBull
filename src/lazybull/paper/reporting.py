@@ -38,9 +38,44 @@ class PaperPositionSnapshot:
 
 # format_model_info 输出长度上限：钉钉单条消息约 2 万字节上限，中文按 3 字节算，
 # 2000 字符是安全值；超长回复会被钉钉 API 拒绝导致用户端"无回复"。
+# 输出内容本身只含精选关键信息，此上限仅作防御兜底。
 MODEL_INFO_MAX_CHARS = 2000
 # 单个训练参数值的展示截断长度（超长值通常是内嵌列表/清单，展示无意义）
 _MODEL_INFO_PARAM_VALUE_MAX_CHARS = 80
+# 训练参数白名单：钉钉 model 命令只展示关键超参，其余省略
+# （train_params 可能内嵌大清单/诊断字段，全量展开会撑爆单条消息）。
+_MODEL_INFO_KEY_PARAMS = (
+    "algorithm",
+    "task",
+    "objective",
+    "eval_metric",
+    "label_transform",
+    "n_estimators",
+    "best_iteration",
+    "early_stopping_rounds",
+    "early_stopping_metric",
+    "max_depth",
+    "learning_rate",
+    "subsample",
+    "colsample_bytree",
+    "gamma",
+    "reg_alpha",
+    "reg_lambda",
+    "min_child_weight",
+    "tree_method",
+    "device",
+    "winsorize_p",
+    "ensemble_seeds",
+    "ensemble_weight_mode",
+)
+
+
+def _find_model_meta(models: List[Dict], version: int) -> Optional[Dict]:
+    """在模型元数据列表中按版本查找单条记录。"""
+    for model in models:
+        if model.get("version") == version:
+            return model
+    return None
 
 
 def format_model_info(models_dir: Optional[str] = None) -> str:
@@ -51,27 +86,45 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
         return "未找到配置文件，请先编辑 data/paper/config.yaml 或运行 config 命令设置配置。"
 
     registry = ModelRegistry(models_dir=models_dir or get_stock_selection_models_root())
-    models = registry.list_models()
-    if not models:
-        # model_registry.json 缺失或为空时，回退扫描单模型元数据旁路文件
-        # （v{N}_metadata.json），保证仅迁移模型文件时仍可查询模型信息。
-        models = registry.list_sidecar_models()
-    if not models:
-        return "没有已注册的模型。请先使用 train_ml_model.py 训练模型。"
+    registry_models = registry.list_models()
+    # 旁路元数据文件独立扫描：registry 与 v{N}_metadata.json 可能不同步
+    # （如 registry 为陈旧整包、实际使用模型仅有 sidecar），需按版本回退取用。
+    sidecar_models = registry.list_sidecar_models()
 
     target_version = config.get("model_version")
     target_meta = None
     if target_version is not None:
-        for model in models:
-            if model["version"] == target_version:
-                target_meta = model
-                break
+        # 注册表优先；注册表不含该版本时回退旁路元数据文件
+        target_meta = _find_model_meta(
+            registry_models, target_version
+        ) or _find_model_meta(sidecar_models, target_version)
     else:
-        target_meta = models[-1]
+        # 未指定版本：以 latest_model_version.txt（get_latest_version）为准，
+        # 旁路缺失时回退注册表/旁路文件中的最新一条。
+        latest_version = registry.get_latest_version()
+        if latest_version is not None:
+            target_meta = _find_model_meta(
+                registry_models, latest_version
+            ) or _find_model_meta(sidecar_models, latest_version)
+        if target_meta is None:
+            candidates = registry_models or sidecar_models
+            target_meta = candidates[-1] if candidates else None
 
     if target_meta is None:
-        available_versions = [model["version"] for model in models]
-        return f"未找到版本 {target_version} 的模型。可用版本: {available_versions}"
+        if target_version is not None:
+            available_versions = sorted(
+                {m["version"] for m in registry_models} | {m["version"] for m in sidecar_models}
+            )
+            # 数百个版本号会撑爆单条消息，只展示最近若干个
+            if len(available_versions) > 10:
+                available_text = (
+                    f"可用版本共 {len(available_versions)} 个，"
+                    f"最近 10 个: {available_versions[-10:]}"
+                )
+            else:
+                available_text = f"可用版本: {available_versions}"
+            return f"未找到版本 {target_version} 的模型。{available_text}"
+        return "没有已注册的模型。请先使用 train_ml_model.py 训练模型。"
 
     lines = []
     version_label = target_meta["version_str"]
@@ -89,12 +142,19 @@ def format_model_info(models_dir: Optional[str] = None) -> str:
 
     train_params = target_meta.get("train_params", {})
     if train_params:
-        lines.append("  训练参数:")
-        for key, value in train_params.items():
-            value_text = str(value)
+        lines.append("  训练参数(关键):")
+        shown_count = 0
+        for key in _MODEL_INFO_KEY_PARAMS:
+            if key not in train_params:
+                continue
+            value_text = str(train_params[key])
             if len(value_text) > _MODEL_INFO_PARAM_VALUE_MAX_CHARS:
                 value_text = value_text[: _MODEL_INFO_PARAM_VALUE_MAX_CHARS - 3] + "..."
             lines.append(f"    {key}: {value_text}")
+            shown_count += 1
+        omitted_count = len(train_params) - shown_count
+        if omitted_count > 0:
+            lines.append(f"    (其余 {omitted_count} 个参数省略)")
 
     performance = target_meta.get("performance_metrics", {})
     if performance:
