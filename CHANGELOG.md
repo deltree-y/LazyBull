@@ -6,7 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **钉钉 model 命令兼容缺失 model_registry.json**：`paper/reporting.py::format_model_info` 此前仅依赖 `ModelRegistry.list_models()`（只读整包 `model_registry.json`），注册表文件缺失或为空时直接返回"没有已注册的模型"，而模型目录里实际存在 `v{N}_metadata.json` 旁路元数据（如仅迁移模型文件目录的场景）。现在注册表为空时回退调用新增的 `ModelRegistry.list_sidecar_models()`——仅扫描 `v{N}_metadata.json` 旁路文件、按版本号升序返回，损坏的旁路文件告警后跳过；指定版本查询同样能从旁路文件命中。注册表存在时优先走原路径，行为不变。新增注册表缺失回退、损坏文件跳过、指定版本命中测试（`tests/test_ml.py`、`tests/test_paper_reporting.py`）。
+- **钉钉 model 命令兼容缺失 model_registry.json**：`paper/reporting.py::format_model_info` 此前仅依赖 `ModelRegistry.list_models()`（只读整包 `model_registry.json`），注册表文件缺失或为空时直接返回"没有已注册的模型"，而模型目录里实际存在 `v{N}_metadata.json` 旁路元数据（如仅迁移模型文件目录的场景）。现在注册表为空时回退调用新增的 `ModelRegistry.list_sidecar_models()`——仅扫描 `v{N}_metadata.json` 旁路文件、按版本号升序返回，损坏的旁路文件告警后跳过；指定版本查询同样能从旁路文件命中。注册表存在时优先走原路径，行为不变。已用真实模型文件模拟 registry 缺失场景验证：`format_model_info` 正常返回完整模型信息。新增注册表缺失回退、损坏文件跳过、指定版本命中测试（`tests/test_ml.py`、`tests/test_paper_reporting.py`）。
+- **handle_model 过程日志**：`bot_service.py::handle_model` 在查询成功时记录返回文本长度、异常时记录完整堆栈，配合既有的 Stream 重试/Webhook 降级日志，可在服务端日志中唯一定位"无回复"属于查询异常、回复发送失败还是进程代码未更新。
 
 ## [0.107.3] - 2026-09-10
 

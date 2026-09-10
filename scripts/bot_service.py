@@ -400,8 +400,10 @@ class SimpleHandler(dts.AsyncChatbotHandler):
         """
         try:
             text = format_model_info()
+            logging.info(f"模型信息查询成功，文本长度 {len(text)}")
             self._safe_reply_markdown("模型信息", text, incoming)
         except Exception as e:
+            logging.error(f"查询模型信息异常: {traceback.format_exc()}")
             self._safe_reply(f"查询模型信息失败: {e}", incoming)
 
     def handle_help(self, args, incoming):
