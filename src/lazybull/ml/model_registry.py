@@ -22,17 +22,24 @@ from ..common.config import get_models_root
 
 @contextmanager
 def _suppress_xgboost_pickle_warning():
-    """上下文管理器：抑制 XGBoost 跨版本 pickle 反序列化告警。
+    """上下文管理器：抑制 XGBoost pickle 反序列化链路的已知告警。
 
-    XGBoost 在 pickle 加载旧版模型时会从 pickle.py 模块发出 UserWarning，
-    无法通过 module="xgboost" 过滤。使用 message 匹配精确屏蔽。
+    两类告警均从 pickle.py 的 setstate 发出（警告位置在 pickle 模块，
+    无法通过 module="xgboost" 过滤），使用 message 正则从头匹配精确屏蔽：
+    1. 跨版本 pickle 反序列化告警（loading a serialized model）；
+    2. GPU 训练模型在无 GPU 环境（如纸面交易容器）加载时的自动回退告警——
+       模型参数携带 device=cuda，XGBoost 反序列化时探测不到 GPU 会降级 CPU
+       并发出 grow_gpu_hist updater 更换与设备回退三类 UserWarning。
     """
+    patterns = (
+        ".*loading a serialized model.*",
+        ".*Changing updater from.*grow_gpu_hist.*",
+        ".*No visible GPU is found.*",
+        ".*Device is changed from GPU to CPU.*",
+    )
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            category=UserWarning,
-            message=".*loading a serialized model.*",
-        )
+        for pattern in patterns:
+            warnings.filterwarnings("ignore", category=UserWarning, message=pattern)
         yield
 
 

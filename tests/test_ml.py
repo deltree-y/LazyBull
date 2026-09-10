@@ -1,7 +1,9 @@
 """ML 模块测试"""
 
 import json
+import re
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Dict
 
@@ -432,3 +434,43 @@ def test_list_models(temp_models_dir):
     assert models[0]["version"] == 1
     assert models[1]["version"] == 2
     assert models[2]["version"] == 3
+
+
+# GPU 训练模型在无 GPU 环境加载时 XGBoost 发出的三条回退告警原文
+# （前缀为 XGBoost 日志时间戳，UserWarning message 从该完整字符串起始）
+_GPU_FALLBACK_MESSAGES = [
+    "[10:22:34] WARNING: /__w/xgboost/xgboost/src/gbm/gbtree.cc:439: "
+    "Changing updater from `grow_gpu_hist` to `grow_quantile_histmaker`.",
+    "[10:22:34] WARNING: /__w/xgboost/xgboost/src/context.cc:55: "
+    "No visible GPU is found, setting device to CPU.",
+    "[10:22:34] WARNING: /__w/xgboost/xgboost/src/context.cc:218: "
+    "Device is changed from GPU to CPU as we couldn't find any available GPU on the system.",
+]
+
+
+def test_suppress_xgboost_pickle_warning_gpu_fallback():
+    """GPU 回退类告警在抑制上下文内被屏蔽，上下文外照常发出"""
+    from src.lazybull.ml.model_registry import _suppress_xgboost_pickle_warning
+
+    for msg in _GPU_FALLBACK_MESSAGES:
+        # 上下文外：警告正常发出（同时验证匹配正则可用）
+        with pytest.warns(UserWarning, match=re.escape(msg)):
+            warnings.warn(msg, UserWarning)
+
+        # 抑制上下文内：simplefilter("error") 下未被屏蔽的告警会抛异常，
+        # 不抛即说明该告警被精确屏蔽
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with _suppress_xgboost_pickle_warning():
+                warnings.warn(msg, UserWarning)
+
+
+def test_suppress_xgboost_pickle_warning_keeps_unrelated_warnings():
+    """非已知类别的 UserWarning 不被误屏蔽"""
+    from src.lazybull.ml.model_registry import _suppress_xgboost_pickle_warning
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(UserWarning):
+            with _suppress_xgboost_pickle_warning():
+                warnings.warn("模型特征列数与输入不一致", UserWarning)

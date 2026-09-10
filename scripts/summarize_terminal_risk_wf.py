@@ -32,11 +32,12 @@ py .\scripts\summarize_terminal_risk_wf.py --wf-root data\walk_forward\terminal_
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -195,6 +196,40 @@ def _fmt(value: object, spec: str = ".3f") -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "NA"
     return format(value, spec)
+
+
+# ── 控制台彩色输出（优胜者高亮）────────────────────────────────────────
+# Windows 传统 conhost 默认不解析 ANSI 转义码，os.system("") 借 cmd 短暂运行
+# 激活当前控制台 VT 模式（Win11 默认 Windows Terminal 原生支持，调用无副作用）；
+# 重定向/管道（非 tty）时不加色码，保证落盘与管道文本干净。
+_COLOR_ENABLED = sys.stdout.isatty()
+
+_BOLD_CYAN = "1;36"    # 标题与分隔线（信息性）
+_BOLD_GREEN = "1;92"   # 优胜者（历史最优签名/分数/表格首行）
+_BOLD_YELLOW = "1;93"  # 刷新提示
+_YELLOW = "93"         # 未达提示（弱于刷新）
+
+
+def _enable_vt() -> None:
+    """Windows 控制台启用 ANSI 转义处理（非 Windows 平台无操作）。"""
+    if os.name == "nt":
+        os.system("")
+
+
+def _c(text: str, code: str) -> str:
+    """按需包裹 ANSI 色码（非终端输出时保持纯文本）。"""
+    if not _COLOR_ENABLED:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def _highlight_first_row(df: pd.DataFrame, code: str) -> str:
+    """to_string 输出中高亮首个数据行（表已按分数降序，首行即优胜行）。"""
+    rendered = df.to_string(index=False)
+    lines = rendered.splitlines()
+    if len(lines) < 2:
+        return rendered
+    return "\n".join([lines[0], _c(lines[1], code), *lines[2:]])
 
 
 def collect_fold_rows(wf_root: Path) -> pd.DataFrame:
@@ -475,6 +510,7 @@ def main() -> int:
                              "历史比较仍基于既有台账 + 当次内存拼接）")
     args = parser.parse_args()
 
+    _enable_vt()
     wf_root = Path(args.wf_root)
     if not wf_root.exists():
         logger.error(f"目录不存在: {wf_root}")
@@ -508,7 +544,7 @@ def main() -> int:
     tuning_table.to_csv(out_scores, index=False, encoding="utf-8-sig")
     logger.info(f"tuning_scores 已写入 {out_scores}（{len(tuning_table)} 组）")
     print()
-    print(tuning_table.to_string(index=False))
+    print(_highlight_first_row(tuning_table, _BOLD_CYAN))
 
     for _, row in tuning_table.iterrows():
         conclusion = (
@@ -526,15 +562,18 @@ def main() -> int:
 
     best = tuning_table.iloc[0]
     print()
-    print("=" * 68)
-    print(f"调参指标（本次最优）: 超参组 {best['suffix']}  调参分 = {_fmt(best['tuning_score'])}")
+    print(_c("=" * 68, _BOLD_CYAN))
+    print(_c(
+        f"调参指标（本次最优）: 超参组 {best['suffix']}  调参分 = {_fmt(best['tuning_score'])}",
+        _BOLD_CYAN,
+    ))
     print(
         f"  tuning_score = 0.5×lift_geo_mean({_fmt(best['lift_geo_mean'])}) + "
         f"0.5×lift_min({_fmt(best['lift_min'])})；"
         f"{int(best['n_folds_valid_lift'])}/{int(best['n_folds'])} 折有效 lift，"
         f"门禁{'通过' if best['gate_pass'] else '未通过'}"
     )
-    print("=" * 68)
+    print(_c("=" * 68, _BOLD_CYAN))
 
     # ── 历史比较（超参签名为身份键；--no-history 时仅内存拼当次，不落盘）──
     history_records = build_history_records(
@@ -550,7 +589,7 @@ def main() -> int:
         logger.warning("历史比较表为空（无有效调参分），跳过历史最优输出")
         return 0
     print()
-    print(history_table.to_string(index=False))
+    print(_highlight_first_row(history_table, _BOLD_GREEN))
 
     hist_best = history_table.iloc[0]
     cur_score = best["tuning_score"]
@@ -560,20 +599,24 @@ def main() -> int:
         and float(cur_score) >= float(hist_best["score_best"])
     )
     print()
-    print("=" * 68)
-    print(
+    print(_c("=" * 68, _BOLD_CYAN))
+    print(_c(
         f"历史最优（含当次，共 {int(history_table['runs'].sum())} 次汇总、"
-        f"{len(history_table)} 个超参组）"
-    )
-    print(f"  最优超参签名: {hist_best['param_signature']}")
+        f"{len(history_table)} 个超参组）",
+        _BOLD_CYAN,
+    ))
+    print(f"  最优超参签名: {_c(str(hist_best['param_signature']), _BOLD_GREEN)}")
     print(
-        f"  历史最好调参分 = {_fmt(hist_best['score_best'])}"
+        f"  历史最好调参分 = {_c(_fmt(hist_best['score_best']), _BOLD_GREEN)}"
         f"（{int(hist_best['runs'])} 次运行，best @ {hist_best['best_timestamp']}，"
         f"lift_min_best={_fmt(hist_best['lift_min_best'])}，"
         f"门禁通过率 {float(hist_best['gate_pass_rate']):.0%}）"
     )
     if cur_reaches_best:
-        print(f"  ★ 当次超参组 {best['suffix']} 达到/刷新历史最优（调参分 {_fmt(cur_score)}）")
+        print(_c(
+            f"  ★ 当次超参组 {best['suffix']} 达到/刷新历史最优（调参分 {_fmt(cur_score)}）",
+            _BOLD_YELLOW,
+        ))
     else:
         gap = (
             float(cur_score) - float(hist_best["score_best"])
@@ -581,11 +624,12 @@ def main() -> int:
             else None
         )
         gap_str = f"{gap:+.3f}" if gap is not None else "NA"
-        print(
+        print(_c(
             f"  当次最优 {best['suffix']}: 调参分 {_fmt(cur_score)} —— "
-            f"未达历史最优（差距 {gap_str}）"
-        )
-    print("=" * 68)
+            f"未达历史最优（差距 {gap_str}）",
+            _YELLOW,
+        ))
+    print(_c("=" * 68, _BOLD_CYAN))
     return 0
 
 

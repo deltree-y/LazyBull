@@ -531,9 +531,9 @@ class DataLoader(IncomeLoaderMixin, DividendLoaderMixin, AnnouncementRiskLoaderM
         if df is None:
             df = self.storage.load_raw("fina_indicator")
         if df is None:
-            logger.warning(
-                "未找到财务指标数据！\n" "请先运行: python scripts/download_fina_indicator.py"
-            )
+            # 仅提示缺失，不在此处建议手动命令：ensure 链路会自动批量下载，
+            # 离线构建链路的补齐提示由 features/pipeline.py 负责
+            logger.warning("未找到财务指标数据（fina_indicator）")
             return None
 
         # 日期列标准化为 YYYYMMDD 字符串

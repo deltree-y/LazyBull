@@ -323,6 +323,23 @@ def test_collect_and_tuning_table_end_to_end(tmp_path):
     assert bool(d3["gate_pass"])
 
 
+def test_color_helpers(monkeypatch):
+    """彩色输出：非终端不加色码（管道/重定向干净），终端包裹 ANSI 转义。"""
+    import scripts.summarize_terminal_risk_wf as mod
+
+    monkeypatch.setattr(mod, "_COLOR_ENABLED", False)
+    assert mod._c("文本", "1;92") == "文本"
+    df = pd.DataFrame({"a": [1, 2]})
+    assert "\033[" not in mod._highlight_first_row(df, "1;92")
+
+    monkeypatch.setattr(mod, "_COLOR_ENABLED", True)
+    assert mod._c("文本", "1;92") == "\033[1;92m文本\033[0m"
+    highlighted = mod._highlight_first_row(df, "1;92")
+    assert "\033[1;92m" in highlighted
+    # 仅首个数据行高亮，其余行保持纯文本
+    assert highlighted.count("\033[1;92m") == 1
+
+
 def test_main_no_history_flag(tmp_path, monkeypatch):
     """main() 端到端：--no-history 时不生成台账，summary/tuning_scores 正常落盘。"""
     _write_fold(tmp_path, "2022H2", pr_auc=0.12, event_rate=0.1, mean_pred=0.11)

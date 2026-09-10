@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.107.3] - 2026-09-10
+
+### Fixed
+
+- **抑制模型加载时 XGBoost GPU 回退告警噪音**：GPU 机器训练的选股模型参数携带 `device=cuda`，纸面交易在无 GPU 容器中 `joblib.load` 反序列化时，XGBoost 自动降级 CPU 并从 pickle 层发出三类 UserWarning（`grow_gpu_hist` updater 更换 / `No visible GPU is found` / `Device is changed from GPU to CPU`），每个模型对象加载触发一轮，属无害噪音。扩展 `model_registry.py::_suppress_xgboost_pickle_warning` 的 message 正则一并屏蔽（原有过滤器仅匹配跨版本反序列化告警）；推理结果不受影响（CPU `hist` 树结构一致）。新增屏蔽正反两向测试（上下文外照常发出、上下文内精确屏蔽、无关告警不误伤）。
+
+## [0.107.2] - 2026-09-10
+
+### Fixed
+
+- **移除误导性的 fina_indicator 手动下载提示**：`data/loader.py::load_fina_indicator` 数据缺失时此前提示"请先运行: python scripts/download_fina_indicator.py"——该脚本并不存在，且纸面交易/ensure 链路紧接着就会按季度批量自动下载（`features/ensure/downloads.py`），提示与实际行为矛盾。改为中性缺失提示；离线构建链路的补齐指引仍由 `features/pipeline.py` 给出（指向真实入口 `download_raw.py --download fina_indicator`）。
+
 ## [0.107.1] - 2026-09-10
 
 ### Fixed
@@ -26,10 +38,11 @@ All notable changes to this project will be documented in this file.
   - **超参签名（历史比较的身份键，meta 为权威）**：折 sidecar（terminal_loss_model.json）的 train_config 消融位（depth/lr/n_estimators/early_stopping_rounds/subsample/colsample_bytree/reg_lambda）+ label_config 任务定义（k/h_max/sigma_window）+ sampling 预登记抽样（h_per_group/every_n_days）拼成紧凑签名串；random_state/device 与策略 A 不变量不入签。目录后缀仅是展示分组名——**同一后缀下不同批次超参其实不同**（如 `(baseline)` 目录从 depth=3 改跑 depth=4），调参表分组键升级为后缀 × 签名，同后缀不同签名自动拆行并提示，禁止混比；summary/tuning_scores 新增 depth/learning_rate/param_signature 列（meta 权威、后缀解析兜底）。
   - **历史最优自动比较**：每次汇总末尾读回台账（含当次行，按 timestamp+签名去重防双计）+ 当次记录，按超参签名聚合输出历史比较表（runs / score_best / score_median / score_latest / lift_min_best / 门禁通过率 / best_timestamp），醒目打印**历史最优超参签名**与当次是否达到/刷新最优（`--no-history` 时仅内存拼当次比较、不落盘）；"效果最好"判定口径 = score_best（历史最高单次调参分），score_median 供同签名多次运行参考。旧台账（无 param_signature 列）按 `(legacy) {suffix}` 回退身份独立成组；未登记签名回退拼接后缀，不同后缀不因同为未登记而合并。
   - 产物：`summary.csv`（每折，不变）+ `tuning_scores.csv`（每超参组，当次覆盖）+ `tuning_history.csv`（按组追加）。`batch_terminal_risk_wf.ps1` 命令行零改动（汇总本就在 batch 末尾自动运行），仅同步头部注释。
+  - **优胜者彩色高亮**：汇总控制台的本次/历史最优信息改用 ANSI 彩色打印——青色标题与分隔线、亮绿标记历史优胜者（签名/调参分/历史表首行）、亮黄标记"★ 刷新历史最优"（未达提示用弱黄色）；tuning 表首行（当次组内第一名）青色高亮。Windows 传统 conhost 经 `os.system("")` 激活 VT 转义处理（Win11 默认 Windows Terminal 原生支持）；重定向/管道（非 tty）自动退化为纯文本，落盘与管道输出不含色码。
 
 ### Tests
 
-- 新增 `tests/test_summarize_terminal_risk_wf.py`（10 项，合成折目录不依赖真实数据）：后缀解析三形态与未知尾缀兜底；超参签名完整串与缺键返回 None；分组聚合调参分手算期望、门禁按组判定、降序排序、None lift 折剔除；同后缀不同 depth 签名拆行（防目录残留旧消融折混比）；台账连续追加两轮且二次写入不重复 BOM；历史最优跨次比较（旧高分胜出 / 当次刷新标记 is_current_best）、追加模式按 timestamp+签名去重防双计；旧 schema 台账（无 param_signature 列）legacy 回退不崩不混；假折目录端到端（lift = pr_auc/事件率口径、meta 权威超参提取）；`main()` 端到端 `--no-history` 不生成台账与默认追加台账两分支。
+- 新增 `tests/test_summarize_terminal_risk_wf.py`（11 项，合成折目录不依赖真实数据）：后缀解析三形态与未知尾缀兜底；超参签名完整串与缺键返回 None；分组聚合调参分手算期望、门禁按组判定、降序排序、None lift 折剔除；同后缀不同 depth 签名拆行（防目录残留旧消融折混比）；台账连续追加两轮且二次写入不重复 BOM；历史最优跨次比较（旧高分胜出 / 当次刷新标记 is_current_best）、追加模式按 timestamp+签名去重防双计；旧 schema 台账（无 param_signature 列）legacy 回退不崩不混；假折目录端到端（lift = pr_auc/事件率口径、meta 权威超参提取）；彩色工具 tty 开/关两态（非终端无色码、终端仅首行高亮）；`main()` 端到端 `--no-history` 不生成台账与默认追加台账两分支。
 
 ## [0.106.0] - 2026-09-10
 
