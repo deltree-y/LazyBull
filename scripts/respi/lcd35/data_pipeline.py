@@ -37,86 +37,44 @@ def _build_cycle_close_map(df: Optional[pd.DataFrame]) -> dict[str, float]:
     return close_map
 
 
-def _normalize_cycle_positions(positions: dict) -> dict[str, dict[str, float]]:
-    """将账户持仓归一化为周期图计算可直接消费的数值结构。"""
-    normalized: dict[str, dict[str, float]] = {}
-    for ts_code, pos in positions.items():
-        shares_float = _coerce_float(getattr(pos, 'shares', 0))
-        if shares_float is None or not np.isfinite(shares_float):
-            continue
-        shares = int(shares_float)
-        if shares <= 0:
-            continue
-
-        buy_price_float = _coerce_float(getattr(pos, 'buy_price', 0.0))
-        if buy_price_float is None or not np.isfinite(buy_price_float) or buy_price_float <= 0:
-            buy_price_float = 0.0
-
-        normalized[ts_code] = {
-            'shares': shares,
-            'buy_price': buy_price_float,
-        }
-    return normalized
-
-
 def _fetch_cycle_chart_data() -> Optional[dict]:
-    """获取持仓周期内的上证/深证/中证800指数和持仓组合涨跌幅数据。
-
-    基于账户持仓状态 + TuShare daily API 计算每日组合市值，
-    不依赖 NAV 记录（NAV 可能不完整）。
-
-    Returns:
-        dict: {
-            'dates': list[str],          # 交易日期列表
-            'index_pct': list[float],    # 上证指数累计涨跌幅(%)
-            'shenzhen_pct': list[float], # 深证指数累计涨跌幅(%)
-            'csi800_pct': list[float],   # 中证800累计涨跌幅(%)
-            'portfolio_pct': list[float] # 持仓组合累计涨跌幅(%)
-        }
-        None: 数据不可用
-    """
+    """按真实账户净值构建周期收益，与三个指数对齐到共同有效日期。"""
     from src.lazybull.paper import PaperStorage
+    from src.lazybull.paper.performance import build_account_value_series
     from src.lazybull.data.tushare_client import TushareClient
 
     paper_storage = PaperStorage(
         root_path=get_paper_root(), verbose=False, smb_reader=_smb_reader
     )
 
-    # 获取上次调仓日期作为周期起点
     rebalance_state = paper_storage.load_rebalance_state()
     if rebalance_state is None:
         return None
-    start_date = rebalance_state.get('last_rebalance_date')
+    start_date = (
+        rebalance_state.get('tranche_anchor_date')
+        if int(rebalance_state.get('stagger_tranches', 1)) > 1 else None
+    ) or rebalance_state.get('last_rebalance_date')
     rebalance_freq = rebalance_state.get('rebalance_freq')
     if not start_date:
         return None
 
-    # 获取账户持仓
-    account_state = paper_storage.load_account_state()
-    if account_state is None or not account_state.positions:
-        return None
-
-    positions = account_state.positions  # {ts_code: Position}
-    normalized_positions = _normalize_cycle_positions(positions)
-    if not normalized_positions:
-        _emit_diag("抓周期无有效持仓：持仓数值字段不可用，周期图跳过")
-        return None
-
-    cash = account_state.cash
-    cash_float = _coerce_float(cash)
-    if cash_float is None or not np.isfinite(cash_float):
-        cash_float = 0.0
     current_dt = datetime.now()
-    today_str = current_dt.strftime("%Y%m%d")
-    cache_scope_date = today_str
+    cache_scope_date = current_dt.strftime("%Y%m%d")
     target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
+    if target_cycle_date is None:
+        return None
+    account_values = build_account_value_series(
+        paper_storage.load_all_nav(), start_date, target_cycle_date
+    )
+    if account_values.empty:
+        _emit_diag("周期图缺少真实净值记录，等待纸面交易写入，不回填历史持仓")
+        return None
     cycle_cache_key = _build_cycle_chart_cache_key(
         cache_scope_date,
         target_cycle_date,
         start_date,
         rebalance_freq,
-        cash,
-        positions,
+        account_values,
     )
     cached_chart_data = _get_cached_cycle_chart_data(cycle_cache_key, cache_scope_date)
     if cached_chart_data is not None:
@@ -128,20 +86,19 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         with _fetch_network_context():
             client = TushareClient(verbose=False)
 
-            # 上证与深证指数日线（以此确定交易日序列）
             shanghai_df = client.query(
                 "index_daily", ts_code=SHANGHAI_INDEX_CODE,
-                start_date=start_date, end_date=today_str,
+                start_date=start_date, end_date=target_cycle_date,
                 fields="trade_date,close"
             )
             shenzhen_df = client.query(
                 "index_daily", ts_code=SHENZHEN_INDEX_CODE,
-                start_date=start_date, end_date=today_str,
+                start_date=start_date, end_date=target_cycle_date,
                 fields="trade_date,close"
             )
             csi800_df = client.query(
                 "index_daily", ts_code=CSI800_INDEX_CODE,
-                start_date=start_date, end_date=today_str,
+                start_date=start_date, end_date=target_cycle_date,
                 fields="trade_date,close"
             )
         if (
@@ -163,29 +120,14 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         shanghai_close_map = _build_cycle_close_map(shanghai_df)
         shenzhen_close_map = _build_cycle_close_map(shenzhen_df)
         csi800_close_map = _build_cycle_close_map(csi800_df)
-        trade_dates = [
-            d for d in shanghai_df['trade_date'].map(_normalize_cycle_trade_date).dropna().tolist()
-            if d in shenzhen_close_map and d in csi800_close_map
-        ]
+        trade_dates = sorted(
+            set(account_values.index)
+            & shanghai_close_map.keys()
+            & shenzhen_close_map.keys()
+            & csi800_close_map.keys()
+        )
         if len(trade_dates) < 1:
             return None
-
-        # T0 为信号生成日（调仓日），股票于 T1 才实际买入，跳过 T0 让折线图从 T1 开始
-        # 这样 T1 作为起点 = 原点（0%），避免多画一天导致 T1 当日已偏离原点
-        if len(trade_dates) > 1 and trade_dates[0] == start_date:
-            trade_dates = trade_dates[1:]
-
-        # 逐股获取日线收盘价
-        stock_closes: dict[str, dict[str, float]] = {}
-        for ts_code in normalized_positions:
-            with _fetch_network_context():
-                df = client.query(
-                    "daily", ts_code=ts_code,
-                    start_date=start_date, end_date=today_str,
-                    fields="trade_date,close"
-                )
-            if df is not None and not df.empty:
-                stock_closes[ts_code] = _build_cycle_close_map(df)
     except Exception as exc:
         _emit_diag(
             "抓周期失败: "
@@ -194,25 +136,13 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
         )
         return None
 
-    # 计算每日组合市值
-    base_value: Optional[float] = None
-    portfolio_pct: list[float] = []
-    for d in trade_dates:
-        market_value = 0.0
-        for ts_code, pos in normalized_positions.items():
-            closes = stock_closes.get(ts_code, {})
-            price = closes.get(d, pos['buy_price'])  # 停牌等无数据时回退到买入价
-            price_float = _coerce_float(price)
-            if price_float is None or not np.isfinite(price_float) or price_float <= 0:
-                continue
-            market_value += price_float * pos['shares']
-        total_value = market_value + cash_float
-        if base_value is None:
-            base_value = total_value
-        if base_value is None or abs(base_value) < 1e-12:
-            portfolio_pct.append(0.0)
-        else:
-            portfolio_pct.append((total_value / base_value - 1) * 100)
+    base_value = float(account_values.loc[trade_dates[0]])
+    if base_value <= 0:
+        _emit_diag(f"周期图起始总资产不可用: date={trade_dates[0]}, value={base_value}")
+        return None
+    if trade_dates[0] != start_date:
+        _emit_diag(f"周期图起点净值或指数缺失，实际起点为 {trade_dates[0]}，计划起点 {start_date}")
+    portfolio_pct = ((account_values.loc[trade_dates] / base_value - 1) * 100).tolist()
 
     # 上证/深证指数涨跌幅
     shanghai_base_close = shanghai_close_map[trade_dates[0]]
@@ -239,7 +169,7 @@ def _fetch_cycle_chart_data() -> Optional[dict]:
 
     _trace_diag(
         "抓周期完成: "
-        f"trade_dates={len(trade_dates)}, stocks={len(normalized_positions)}, "
+        f"trade_dates={len(trade_dates)}, source=account_nav, "
         f"cost={time.monotonic() - fetch_started_at:.2f}s"
     )
 
@@ -747,26 +677,31 @@ def _build_post_close_daily_snapshot(
 
 def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     """获取当前持仓实时行情快照。"""
+    from functools import partial
+
     from src.lazybull.paper import PaperStorage
+    from src.lazybull.paper.performance import calculate_annualized_return, load_account_start_date
 
     paper_root = get_paper_root()
     paper_storage = PaperStorage(
         root_path=paper_root, verbose=False, smb_reader=_smb_reader
     )
-    config = paper_storage.load_config() or {}
+    config = paper_storage.load_config()
+    if config is None and _smb_reader is not None:
+        _emit_diag("远端配置读取失败，保留上次快照")
+        return None
+    config = config or {}
 
     try:
         initial_capital = float(config.get('initial_capital', 500000.0))
     except (TypeError, ValueError):
         initial_capital = 500000.0
 
-    try:
-        horizon = int(config.get('horizon', 20))
-    except (TypeError, ValueError):
-        horizon = 20
-
     account_state = paper_storage.load_account_state()
     if account_state is None:
+        if _smb_reader is not None:
+            _emit_diag("远端账户读取失败，保留上次快照，不视为空仓")
+            return None
         positions = {}
         cash = initial_capital
     else:
@@ -775,38 +710,10 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
         if cash is None:
             cash = initial_capital
 
-    account_start_date = str(config.get('account_start_date', '') or '').strip()
-    if not account_start_date:
-        try:
-            nav_df = paper_storage.load_all_nav()
-            if nav_df is not None and len(nav_df) > 0 and 'trade_date' in nav_df.columns:
-                first_trade_date = str(nav_df['trade_date'].iloc[0]).strip()
-                if first_trade_date.isdigit() and len(first_trade_date) == 8:
-                    account_start_date = first_trade_date
-        except Exception:
-            account_start_date = ''
-
-    def _annualized_return_from_snapshot(
-        initial_capital_value: float,
-        current_value: float,
-        current_date: str,
-    ) -> Optional[float]:
-        if current_value <= 0 or initial_capital_value <= 0:
-            return 0.0
-        if not account_start_date or not current_date:
-            return None
-        try:
-            start_dt = pd.to_datetime(account_start_date, format='%Y%m%d')
-            current_dt = pd.to_datetime(str(current_date), format='%Y%m%d')
-            days = int((current_dt - start_dt).days)
-            if days < 1:
-                return 0.0
-            total_profit = current_value - initial_capital_value
-            return (total_profit / initial_capital_value) * (365.0 / days) * 100
-        except Exception:
-            return None
-
-    annualized_return_func = _annualized_return_from_snapshot
+    annualized_return_func = partial(
+        calculate_annualized_return,
+        account_start_date=load_account_start_date(paper_storage, config),
+    )
 
     snapshot = {
         'positions': positions,
@@ -820,6 +727,7 @@ def _fetch_realtime_holdings_snapshot() -> Optional[dict]:
     }
 
     if not positions:
+        _set_cached_holdings_snapshot(snapshot)
         _trace_diag("抓快照跳过: 当前无持仓")
         return snapshot
 
@@ -1613,6 +1521,11 @@ def _refresh_display_state(
                     source = str(holdings_snapshot.get('quote_source', '')).strip().upper()
                     with state.lock:
                         state.quote_source_tag = source if source in ('T', 'A', 'D') else '-'
+                        if pos_count == 0:
+                            state.stock_rankings = []
+                            state.industry_panel = None
+                            state.industry_panel_cycle = None
+                            state.industry_panel_intraday = None
                     # 即便摘要计算失败，也至少更新时间戳，避免长期显示 --:--
                     latest_update_time = datetime.now().strftime("%H:%M")
                 else:

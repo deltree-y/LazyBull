@@ -118,6 +118,42 @@ class TestSMBFileReader:
         r.set_cache("k", "v")
         assert r.get_cached("k", -1) is None
 
+    def test_json_refreshes_same_day_after_ttl(self):
+        reader = self._reader(b'{"cash":1000}', cache_ttl_seconds=180)
+        with patch("src.lazybull.common.smb_client.time.monotonic", return_value=100):
+            assert reader.read_json("state/account.json")["cash"] == 1000
+        reader._read_file_raw.return_value = b'{"cash":2000}'
+        with patch("src.lazybull.common.smb_client.time.monotonic", return_value=279):
+            assert reader.read_json("state/account.json")["cash"] == 1000
+        with patch("src.lazybull.common.smb_client.time.monotonic", return_value=280):
+            assert reader.read_json("state/account.json")["cash"] == 2000
+        assert reader._read_file_raw.call_count == 2
+
+    def test_failed_refresh_does_not_renew_cache(self):
+        reader = self._reader(b'{"cash":1000}', cache_ttl_seconds=0)
+        reader.read_json("state/account.json")
+        reader._read_file_raw.side_effect = [ConnectionError("offline"), b'{"cash":2000}']
+        with pytest.raises(ConnectionError):
+            reader.read_json("state/account.json")
+        assert reader.read_json("state/account.json")["cash"] == 2000
+
+    def test_missing_nav_is_not_cached(self):
+        reader = self._reader()
+        buffer = io.BytesIO()
+        pd.DataFrame({"total_value": [1000]}).to_parquet(buffer)
+        reader._read_file_raw.side_effect = [FileNotFoundError("pending"), buffer.getvalue()]
+        assert reader.read_parquet("nav/nav.parquet") is None
+        assert reader.read_parquet("nav/nav.parquet")["total_value"].iloc[0] == 1000
+
+    def test_concurrent_reads_share_cache(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        reader = self._reader(b'{"cash":1000}')
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(reader.read_json, ["state/account.json"] * 8))
+        assert all(result["cash"] == 1000 for result in results)
+        assert reader._read_file_raw.call_count == 1
+
 
 # ============================================================
 # _read_file_raw — mock subprocess.run

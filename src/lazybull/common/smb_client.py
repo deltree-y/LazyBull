@@ -13,11 +13,14 @@ import json
 import os
 import subprocess
 import tempfile
-from typing import Optional
+import threading
+import time
+from typing import Callable, Optional, TypeVar
 
 import pandas as pd
 from loguru import logger
 
+CachedValue = TypeVar("CachedValue")
 
 class SMBFileReader:
     """SMB 远端文件只读客户端（基于 smbclient 命令行）。
@@ -38,6 +41,7 @@ class SMBFileReader:
         password: str = "",
         port: int = 445,
         timeout: int = 15,
+        cache_ttl_seconds: float = 180.0,
     ):
         self.host = host
         self.share = share
@@ -46,6 +50,8 @@ class SMBFileReader:
         self.password = password
         self.port = port
         self.timeout = timeout
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self._cache_lock = threading.RLock()
         self._cache: dict[str, tuple[float, object]] = {}
         self._cache_date: str = ""  # 缓存所属日期（YYYYMMDD），换日自动清空
 
@@ -191,17 +197,20 @@ class SMBFileReader:
             self._cache.clear()
             self._cache_date = today
 
-    def _cached_read(self, relative_path: str, reader_func):
-        """带每日缓存的读取：同一天同一文件只走一次 SMB。"""
-        self._check_daily_cache()
-        cache_key = f"smb://{relative_path}"
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached[1]
-        data = reader_func()
-        import time
-        self._cache[cache_key] = (time.monotonic(), data)
-        return data
+    def _cached_read(
+        self, relative_path: str, reader_func: Callable[[], CachedValue]
+    ) -> CachedValue:
+        """按有效期合并并发读取；失败不续期，下次调用继续尝试。"""
+        with self._cache_lock:
+            self._check_daily_cache()
+            cache_key = f"smb://{relative_path}"
+            cached = self._cache.get(cache_key)
+            if cached is not None and time.monotonic() - cached[0] < self.cache_ttl_seconds:
+                return cached[1]
+            data = reader_func()
+            if data is not None:
+                self._cache[cache_key] = (time.monotonic(), data)
+            return data
 
     def read_json(self, relative_path: str) -> dict:
         def _read():
@@ -258,7 +267,8 @@ class SMBFileReader:
         self._cache[relative_path] = (time.monotonic(), data)
 
     def clear_cache(self) -> None:
-        self._cache.clear()
+        with self._cache_lock:
+            self._cache.clear()
 
 
 def parse_smb_url(url: str) -> dict:

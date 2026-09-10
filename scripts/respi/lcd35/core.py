@@ -276,7 +276,7 @@ def _set_cached_holdings_snapshot(snapshot: Optional[dict]) -> None:
     if not isinstance(snapshot, dict):
         return
     quote_df = snapshot.get("quotes")
-    if quote_df is None or getattr(quote_df, "empty", True):
+    if snapshot.get("positions") != {} and (quote_df is None or getattr(quote_df, "empty", True)):
         return
 
     cloned_snapshot = _clone_holdings_snapshot(snapshot)

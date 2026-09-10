@@ -91,7 +91,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigma-window", type=int, default=20, help="sigma 日历窗口")
     parser.add_argument("--n-estimators", type=int, default=500)
     parser.add_argument("--max-depth", type=int, default=3, help="树最大深度（消融实验位）")
+    parser.add_argument("--learning-rate", type=float, default=0.03, help="学习率（消融实验位）")
+    parser.add_argument(
+        "--early-stopping-rounds", type=int, default=30, help="ES 段 logloss 早停轮数"
+    )
+    parser.add_argument("--subsample", type=float, default=0.8)
+    parser.add_argument("--colsample-bytree", type=float, default=0.8)
+    parser.add_argument("--reg-lambda", type=float, default=1.0)
     parser.add_argument("--random-state", type=int, default=42)
+    # min_child_weight / scale_pos_weight / eval_metric 不暴露 CLI：
+    # min_child_weight=1 与样本权重 1/期限网格大小 绑定（正则尺度策略 A 的设计
+    # 不变量，单一 (股票,日) 组无法独自成叶）；scale_pos_weight 会破坏自然事件率
+    # 口径（抽样保留自然事件率、概率校准优先）；早停指标契约固定 logloss。
     parser.add_argument(
         "--device",
         default="cuda",
@@ -184,6 +195,11 @@ def main() -> int:
     train_config = TerminalLossTrainConfig(
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,
+        learning_rate=args.learning_rate,
+        early_stopping_rounds=args.early_stopping_rounds,
+        subsample=args.subsample,
+        colsample_bytree=args.colsample_bytree,
+        reg_lambda=args.reg_lambda,
         random_state=args.random_state,
         device=args.device,
     )

@@ -7,9 +7,34 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def isolated_lcd_runtime(monkeypatch, tmp_path):
+    from src.lazybull.common import config
+
+    settings = SimpleNamespace(
+        merge_config=lambda path: None,
+        get=lambda key, default=None: default,
+    )
+    monkeypatch.setattr(config, 'get_config', lambda: settings)
+    monkeypatch.setattr(config, 'get_data_root', lambda: str(tmp_path / 'data'))
+    monkeypatch.setattr(config, 'get_paper_root', lambda: str(tmp_path / 'paper'))
+    monkeypatch.setattr(config, 'get_paper_remote', lambda: '')
+    monkeypatch.setattr(config, 'get_respi_local_dir', lambda: str(tmp_path))
+    monkeypatch.setitem(sys.modules, 'efinance', SimpleNamespace(
+        stock=SimpleNamespace(get_latest_quote=lambda codes: None)
+    ))
+    monkeypatch.setitem(sys.modules, 'akshare', SimpleNamespace())
+
+    def reject_network(*args, **kwargs):
+        raise AssertionError('LCD 测试禁止访问真实网络')
+
+    monkeypatch.setattr('requests.sessions.Session.request', reject_network)
 
 
 def _load_module():
@@ -20,6 +45,7 @@ def _load_module():
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
+    module._refresh_realtime_index_pcts_async = lambda: None
     return module
 
 
@@ -129,6 +155,61 @@ def test_format_rebalance_status_shows_next_date_and_clamps_negative_days():
     formatted = module._format_rebalance_status("20260410", -2)
 
     assert formatted == "下次调仓:04/10/剩0天"
+
+
+@pytest.mark.parametrize('tranches,last_index,scheduled_index,today_index,next_index', [
+    (1, 0, 0, 4, 20),
+    (4, 0, 0, 4, 5),
+    (3, 0, 0, 4, 7),
+    (3, 7, 7, 8, 13),
+    (4, 12, 5, 13, 10),
+])
+def test_rebalance_status_matches_shared_schedule(
+    monkeypatch, tranches, last_index, scheduled_index, today_index, next_index
+):
+    from src.lazybull.paper.runner.rebalance import PaperRebalanceMixin
+
+    module = _load_module()
+    dates = pd.bdate_range('20260901', periods=45).strftime('%Y%m%d').tolist()
+    rebalance = {
+        'last_rebalance_date': dates[last_index],
+        'last_scheduled_rebalance_date': dates[scheduled_index],
+        'tranche_anchor_date': dates[0],
+        'rebalance_freq': 20,
+        'stagger_tranches': tranches,
+    }
+    storage = SimpleNamespace(load_rebalance_state=lambda: rebalance)
+    calendar = pd.DataFrame({'cal_date': dates, 'is_open': 1})
+    loader = SimpleNamespace(load_clean_trade_cal=lambda: calendar)
+    now = datetime.strptime(dates[today_index], '%Y%m%d')
+    monkeypatch.setattr(module, 'datetime', SimpleNamespace(now=lambda: now))
+    monkeypatch.setattr('src.lazybull.paper.PaperStorage', lambda **kwargs: storage)
+    monkeypatch.setattr('src.lazybull.data.Storage', lambda **kwargs: None)
+    monkeypatch.setattr('src.lazybull.data.DataLoader', lambda **kwargs: loader)
+
+    assert module._calc_rebalance_status() == (dates[next_index], max(0, next_index - today_index))
+    if tranches > 1:
+        runner = SimpleNamespace(_get_open_trade_dates=lambda: dates)
+        allowed, _ = PaperRebalanceMixin._check_staggered_rebalance_day(
+            runner, dates[max(next_index, today_index)], 20, tranches, rebalance
+        )
+        assert allowed
+        assert runner._resolved_rebalance_plan_date == dates[next_index]
+
+
+def test_rebalance_status_returns_unknown_when_calendar_ends(monkeypatch):
+    module = _load_module()
+    storage = SimpleNamespace(load_rebalance_state=lambda: {
+        'last_rebalance_date': '20260901', 'rebalance_freq': 20
+    })
+    loader = SimpleNamespace(load_clean_trade_cal=lambda: pd.DataFrame({
+        'cal_date': ['20260901'], 'is_open': [1]
+    }))
+    monkeypatch.setattr(module, 'datetime', SimpleNamespace(now=lambda: datetime(2026, 9, 1)))
+    monkeypatch.setattr('src.lazybull.paper.PaperStorage', lambda **kwargs: storage)
+    monkeypatch.setattr('src.lazybull.data.Storage', lambda **kwargs: None)
+    monkeypatch.setattr('src.lazybull.data.DataLoader', lambda **kwargs: loader)
+    assert module._calc_rebalance_status() == (None, None)
 
 
 def test_format_quote_update_time_prefers_quote_time_hour_and_minute():
@@ -1226,6 +1307,9 @@ def test_fetch_realtime_holdings_snapshot_prefers_efinance_over_akshare(monkeypa
         def load_config(self):
             return {"initial_capital": 100000.0}
 
+        def load_all_nav(self):
+            return None
+
         def load_account_state(self):
             return SimpleNamespace(
                 positions={
@@ -1274,6 +1358,9 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_akshare_when_efinance_em
         def load_config(self):
             return {"initial_capital": 100000.0}
 
+        def load_all_nav(self):
+            return None
+
         def load_account_state(self):
             return SimpleNamespace(
                 positions={
@@ -1318,6 +1405,9 @@ def test_fetch_realtime_holdings_snapshot_returns_empty_when_efinance_and_akshar
         def load_config(self):
             return {"initial_capital": 100000.0}
 
+        def load_all_nav(self):
+            return None
+
         def load_account_state(self):
             return SimpleNamespace(
                 positions={
@@ -1348,6 +1438,9 @@ def test_fetch_realtime_holdings_snapshot_falls_back_to_daily_close_post_close(m
 
         def load_config(self):
             return {"initial_capital": 100000.0}
+
+        def load_all_nav(self):
+            return None
 
         def load_account_state(self):
             return SimpleNamespace(
@@ -1430,6 +1523,9 @@ def test_fetch_realtime_holdings_snapshot_prefers_daily_snapshot_before_open(mon
 
         def load_config(self):
             return {"initial_capital": 100000.0}
+
+        def load_all_nav(self):
+            return None
 
         def load_account_state(self):
             return SimpleNamespace(
@@ -1682,6 +1778,66 @@ def test_fetch_realtime_holdings_snapshot_builds_annualized_func_from_config(mon
     assert summary is not None
     assert summary["total_pnl_pct"] > 0
     assert summary["annual_return_pct"] > 0
+
+
+def test_lcd_annualized_uses_shared_implementation_even_when_flat(monkeypatch):
+    from src.lazybull.paper.broker.positions import PaperPositionsMixin
+    from src.lazybull.paper.performance import calculate_annualized_return
+
+    module = _load_module()
+    storage = SimpleNamespace(
+        load_config=lambda: {'initial_capital': 10000.0},
+        load_all_nav=lambda: pd.DataFrame({'trade_date': ['20250702', '20250101']}),
+        load_account_state=lambda: SimpleNamespace(positions={}, cash=11000.0),
+    )
+    monkeypatch.setattr('src.lazybull.paper.PaperStorage', lambda **kwargs: storage)
+    snapshot = module._fetch_realtime_holdings_snapshot()
+    snapshot['current_date'] = '20250702'
+    assert snapshot['annualized_return_func'].func is calculate_annualized_return
+    summary = module._build_realtime_portfolio_summary(snapshot)
+    broker = SimpleNamespace(storage=storage)
+    expected = PaperPositionsMixin._calculate_annualized_return(
+        broker, 10000.0, 11000.0, '20250702'
+    )
+    assert summary['pos_count'] == 0
+    assert summary['annual_return_pct'] == pytest.approx(expected)
+    assert summary['annual_return_pct'] == pytest.approx(21.0633821537)
+
+
+def test_remote_account_failure_does_not_become_empty_account(monkeypatch):
+    module = _load_module()
+    storage = SimpleNamespace(
+        load_config=lambda: {'initial_capital': 10000.0},
+        load_account_state=lambda: None,
+    )
+    monkeypatch.setattr(module, '_smb_reader', object())
+    monkeypatch.setattr('src.lazybull.paper.PaperStorage', lambda **kwargs: storage)
+    assert module._fetch_realtime_holdings_snapshot() is None
+
+
+def test_empty_account_refresh_clears_old_rankings_and_updates_cache(monkeypatch):
+    module = _load_module()
+    storage = SimpleNamespace(
+        load_config=lambda: {'initial_capital': 10000.0, 'account_start_date': '20250101'},
+        load_account_state=lambda: SimpleNamespace(positions={}, cash=11000.0),
+    )
+    monkeypatch.setattr('src.lazybull.paper.PaperStorage', lambda **kwargs: storage)
+    monkeypatch.setattr(module, '_calc_rebalance_status', lambda: (None, None))
+    monkeypatch.setattr(module, '_build_intraday_chart', lambda chart, snapshot: None)
+    monkeypatch.setattr(module, '_build_industry_panel', lambda *args, **kwargs: None)
+    state = module.DisplayState()
+    state.stock_rankings = [{'code': '000001'}]
+    state.industry_panel = {'rows': ['old']}
+    state.industry_panel_cycle = state.industry_panel
+    state.industry_panel_intraday = state.industry_panel
+    module._refresh_display_state(state, refresh_realtime=True)
+    assert state.summary['pos_count'] == 0
+    assert state.summary['total_assets'] == 11000.0
+    assert state.stock_rankings == []
+    assert state.industry_panel is None
+    assert state.industry_panel_cycle is None
+    assert state.industry_panel_intraday is None
+    assert module._get_cached_holdings_snapshot()['positions'] == {}
 
 
 def test_fetch_realtime_index_pcts_prefers_snapshot_data():
@@ -2393,6 +2549,37 @@ def test_draw_industry_panel_page_duration_is_proportional_to_page_size():
     assert any(text.startswith("页2/") for text in late_texts)
 
 
+@pytest.mark.parametrize('hour', [8, 16, 20])
+def test_remote_refresh_continues_after_chart_catches_up(monkeypatch, hour):
+    module = _load_module()
+    monkeypatch.setattr(module, '_smb_reader', object())
+    monkeypatch.setattr(module, '_is_realtime_quote_window', lambda now=None: False)
+    monkeypatch.setattr(module, '_is_trade_day', lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(module, '_get_target_cycle_data_date', lambda *args, **kwargs: '20260909')
+    chart = {'dates': ['20260901', '20260909']}
+    now = datetime(2026, 9, 10, hour)
+    policy = module._get_refresh_policy(chart, now=now)
+    assert policy == {'refresh_cycle': True, 'refresh_realtime': True}
+    assert module._is_cycle_refresh_due(
+        chart, True, now - timedelta(seconds=module.REFRESH_INTERVAL - 1), '20260909', now
+    )[0] is False
+    assert module._is_cycle_refresh_due(
+        chart, True, now - timedelta(seconds=module.REFRESH_INTERVAL), '20260909', now
+    )[0] is True
+
+
+def test_remote_refresh_stops_when_screen_is_off_and_data_is_complete(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, '_smb_reader', object())
+    monkeypatch.setattr(module, '_is_realtime_quote_window', lambda now=None: False)
+    monkeypatch.setattr(module, '_is_trade_day', lambda now=None, allow_load=False: True)
+    monkeypatch.setattr(module, '_get_target_cycle_data_date', lambda *args, **kwargs: '20260910')
+    policy = module._get_refresh_policy(
+        {'dates': ['20260910']}, now=datetime(2026, 9, 10, 23)
+    )
+    assert policy == {'refresh_cycle': False, 'refresh_realtime': False}
+
+
 def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: False)
@@ -2737,11 +2924,10 @@ def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkey
         def load_rebalance_state(self):
             return {"last_rebalance_date": "20260401", "rebalance_freq": 5}
 
-        def load_account_state(self):
-            return SimpleNamespace(
-                positions={"000001.SZ": SimpleNamespace(shares=100, buy_price=10.0)},
-                cash=5000.0,
-            )
+        def load_all_nav(self):
+            return pd.DataFrame({
+                'trade_date': ['20260401', '20260407'], 'total_value': [6000.0, 6100.0]
+            })
 
     class DummyClient:
         def __init__(self, verbose=False):
@@ -2782,7 +2968,8 @@ def test_fetch_cycle_chart_data_uses_same_day_cache_when_target_available(monkey
 
     assert first_chart is not None
     assert second_chart is not None
-    assert len(query_calls) == 4
+    assert len(query_calls) == 3
+    assert all(api == 'index_daily' for api, _ in query_calls)
     assert first_chart == second_chart
 
 
@@ -2797,18 +2984,18 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
         def load_rebalance_state(self):
             return {"last_rebalance_date": "20260401", "rebalance_freq": 5}
 
-        def load_account_state(self):
-            return SimpleNamespace(
-                positions={"000001.SZ": SimpleNamespace(shares=100, buy_price=10.0)},
-                cash=5000.0,
-            )
+        def load_all_nav(self):
+            return pd.DataFrame({
+                'trade_date': ['20260401', '20260407', '20260408'],
+                'total_value': [6000.0, 6100.0, 6150.0],
+            })
 
     class DummyClient:
         def __init__(self, verbose=False):
             pass
 
         def query(self, api_name, **kwargs):
-            fetch_round = query_call_count["value"] // 4
+            fetch_round = query_call_count["value"] // 3
             query_call_count["value"] += 1
             if api_name == "index_daily":
                 trade_dates = ["20260401", "20260407"] if fetch_round == 0 else ["20260401", "20260408"]
@@ -2851,10 +3038,10 @@ def test_fetch_cycle_chart_data_retries_until_target_trade_day_available(monkeyp
     assert first_chart["dates"][-1] == "20260407"
     assert second_chart["dates"][-1] == "20260408"
     assert third_chart["dates"][-1] == "20260408"
-    assert query_call_count["value"] == 8
+    assert query_call_count["value"] == 6
 
 
-def test_fetch_cycle_chart_data_tolerates_string_account_numbers(monkeypatch):
+def test_fetch_cycle_chart_data_tolerates_string_nav_numbers(monkeypatch):
     module = _load_module()
 
     class DummyStorage:
@@ -2864,14 +3051,11 @@ def test_fetch_cycle_chart_data_tolerates_string_account_numbers(monkeypatch):
         def load_rebalance_state(self):
             return {"last_rebalance_date": "20260401", "rebalance_freq": "5"}
 
-        def load_account_state(self):
-            return SimpleNamespace(
-                positions={
-                    "000001.SZ": SimpleNamespace(shares="100", buy_price="10.0"),
-                    "000002.SZ": SimpleNamespace(shares="200", buy_price="20.0"),
-                },
-                cash="5000.0",
-            )
+        def load_all_nav(self):
+            return pd.DataFrame({
+                'trade_date': ['20260401', '20260407'],
+                'total_value': ['10000.0', '10500.0'],
+            })
 
     class DummyClient:
         def __init__(self, verbose=False):
@@ -2913,8 +3097,67 @@ def test_fetch_cycle_chart_data_tolerates_string_account_numbers(monkeypatch):
     chart = module._fetch_cycle_chart_data()
 
     assert chart is not None
-    assert chart["dates"] == ["20260407"]
-    assert chart["portfolio_pct"] == [0.0]
+    assert chart["dates"] == ["20260401", "20260407"]
+    assert chart["portfolio_pct"] == pytest.approx([0.0, 5.0])
+
+
+def test_cycle_chart_uses_nav_when_flat_and_invalidates_after_revision(monkeypatch):
+    module = _load_module()
+    nav = pd.DataFrame({
+        'trade_date': ['20260901', '20260902', '20260904', '20260907'],
+        'total_value': [1000.0, 999.0, 1100.0, 1100.0],
+    })
+    storage = SimpleNamespace(
+        load_rebalance_state=lambda: {
+            'last_rebalance_date': '20260904',
+            'tranche_anchor_date': '20260901',
+            'stagger_tranches': 4,
+            'rebalance_freq': 20,
+        },
+        load_all_nav=lambda: nav.copy(),
+    )
+    calls = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, api, **kwargs):
+            assert api == 'index_daily'
+            assert kwargs['start_date'] == '20260901'
+            assert kwargs['end_date'] == '20260907'
+            calls.append(kwargs['ts_code'])
+            return pd.DataFrame({
+                'trade_date': ['20260901', '20260902', '20260903', '20260904', '20260907'],
+                'close': [100.0] * 5,
+            })
+
+    monkeypatch.setattr('src.lazybull.paper.PaperStorage', lambda **kwargs: storage)
+    monkeypatch.setattr('src.lazybull.data.tushare_client.TushareClient', Client)
+    monkeypatch.setattr(module, '_get_target_cycle_data_date', lambda *args, **kwargs: '20260907')
+    first = module._fetch_cycle_chart_data()
+    assert first['dates'] == nav['trade_date'].tolist()
+    assert first['portfolio_pct'] == pytest.approx([0.0, -0.1, 10.0, 10.0])
+    assert first['portfolio_label'] == '账户'
+    assert first['base_value'] == 1000.0
+    assert module._fetch_cycle_chart_data() == first
+    assert len(calls) == 3
+
+    nav.loc[3, 'total_value'] = 1200.0
+    revised = module._fetch_cycle_chart_data()
+    assert revised['portfolio_pct'][-1] == pytest.approx(20.0)
+    assert len(calls) == 6
+
+
+def test_cycle_chart_without_nav_does_not_synthesize_holdings_history(monkeypatch):
+    module = _load_module()
+    storage = SimpleNamespace(
+        load_rebalance_state=lambda: {'last_rebalance_date': '20260901', 'rebalance_freq': 20},
+        load_all_nav=lambda: None,
+    )
+    monkeypatch.setattr('src.lazybull.paper.PaperStorage', lambda **kwargs: storage)
+    monkeypatch.setattr(module, '_get_target_cycle_data_date', lambda *args, **kwargs: '20260907')
+    assert module._fetch_cycle_chart_data() is None
 
 
 def test_refresh_display_state_reuses_single_holdings_snapshot(monkeypatch):

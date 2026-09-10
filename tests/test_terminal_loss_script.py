@@ -130,6 +130,47 @@ def test_script_flat_mode_end_to_end(synthetic_env, monkeypatch):
     assert meta["metadata"]["known_limitations"]
 
 
+def test_script_hyperparam_cli_passthrough(synthetic_env, monkeypatch):
+    """超参 CLI 透传回归：--learning-rate 等新参数落入 train_config 快照。"""
+    env = synthetic_env
+    assert (
+        _run_train(
+            env,
+            monkeypatch,
+            [
+                "--learning-rate",
+                "0.1",
+                "--early-stopping-rounds",
+                "5",
+                "--subsample",
+                "0.9",
+                "--colsample-bytree",
+                "0.7",
+                "--reg-lambda",
+                "2.5",
+            ],
+        )
+        == 0
+    )
+
+    out = Path(env["out_dir"])
+    with open(out / "v1_metadata.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    cfg = meta["train_params"]["train_config"]
+    assert cfg["learning_rate"] == 0.1
+    assert cfg["early_stopping_rounds"] == 5
+    assert cfg["subsample"] == 0.9
+    assert cfg["colsample_bytree"] == 0.7
+    assert cfg["reg_lambda"] == 2.5
+    # 设计不变量：未暴露 CLI 的契约超参保持默认（正则尺度策略 A）
+    assert cfg["min_child_weight"] == 1.0
+    assert cfg["scale_pos_weight"] == 1.0
+    assert cfg["eval_metric"] == "logloss"
+    assert cfg["regularization_scale_policy"] == (
+        "A_keep_regularization_with_1_over_grid_weights"
+    )
+
+
 def test_script_versioned_mode_end_to_end(synthetic_env, monkeypatch):
     """默认版本化模式：同目录连续两次训练产生 v1/v2 两套产物且互不覆盖。"""
     env = synthetic_env

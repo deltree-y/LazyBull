@@ -2,8 +2,11 @@
 # 期末异常亏损风险模型滚动 Walk-forward 批量脚本（第一阶段研究型 WF）
 #
 # 每折：滚动 Train（约 3 年）+ ES（6 个月，互不重叠）→ 独立概率质量报告；
-# 全部完成后自动运行 summarize_terminal_risk_wf.py 拼接 summary 并打印跨折门禁
-# （lift = ES PR-AUC / ES 事件率，lift 最小值 >= 阈值才建议进入第二阶段）。
+# 全部完成后自动运行 summarize_terminal_risk_wf.py 拼接 summary、按 _d*/_lr*
+# 消融后缀 × 折 meta 超参签名分组输出调参分（tuning_score = 0.5×lift几何均值
+# + 0.5×组内lift最小值，绝对量纲跨 batch 可比）并按组判定门禁（组内 lift 最小
+# 值 >= 阈值才建议进入第二阶段）；随后与 tuning_history.csv 台账按签名聚合自动
+# 比较历史、醒目打印历史最优超参与当次是否刷新（--no-history 跳过台账追加）。
 #
 # 每折训练使用 --fixed-name 固定名覆盖模式（研究型折产物，供汇总工具读取）。
 #
@@ -45,10 +48,18 @@ $k              = 1.0
 $h_max          = 20
 $sigma_window   = 20
 
-# ── 训练超参（消融位：数组即多组实验，Label 会追加后缀）────────────
-$max_depth_list   = @(3)      # 例：@(2, 3) 做深度消融
-$n_estimators     = 500
-$random_state     = 42
+# ── 训练超参（消融位：数组即多组实验，Label 会追加后缀 _d*/_lr*）────
+$max_depth_list     = @(2)      # 例：@(2, 3) 做深度消融（后缀 _d*）
+$learning_rate_list = @(0.01,0.02,0.03,0.04,0.05)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
+$n_estimators       = 1000       # 树数量上限（配合早停）
+$early_stopping_rounds = 100     # ES 段 logloss 早停轮数
+$subsample          = 0.8
+$colsample_bytree   = 0.8
+$reg_lambda         = 1.0
+$random_state       = 42
+# 注：min_child_weight / scale_pos_weight / eval_metric 未透传——前两者为
+# 正则尺度策略 A 的设计不变量（min_child_weight 与样本权重 1/网格大小绑定，
+# scale_pos_weight 会破坏自然事件率口径），早停指标契约固定 logloss。
 
 # ── 预登记抽样（与首轮一致；变更必须登记，勿按 OOS 结果回调）───────
 $h_per_group      = 2
@@ -60,40 +71,47 @@ $chunk_days       = 50
 # ============================================================
 
 $failed = @()
-$total = ($folds | Where-Object { $_.Selected }).Count * $max_depth_list.Count
+$total = ($folds | Where-Object { $_.Selected }).Count * $max_depth_list.Count * $learning_rate_list.Count
 $done = 0
 
 foreach ($depth in $max_depth_list) {
-    $suffix = if ($max_depth_list.Count -gt 1) { "_d$depth" } else { "" }
-    foreach ($fold in $folds) {
-        if (-not $fold.Selected) { continue }
-        $done++
-        $out_dir = Join-Path $wf_root "$($fold.Label)$suffix"
-        Write-Host ""
-        Write-Host "==== [$done/$total] terminal_loss WF 折 $($fold.Label)$suffix (depth=$depth) ====" -ForegroundColor Cyan
-        Write-Host "      Train [$($fold.TrainStart),$($fold.TrainEnd)]  ES [$($fold.EsStart),$($fold.EsEnd)]"
+    $depthSuffix = if ($max_depth_list.Count -gt 1) { "_d$depth" } else { "" }
+    foreach ($lr in $learning_rate_list) {
+        $lrSuffix = if ($learning_rate_list.Count -gt 1) { "_lr$lr" } else { "" }
+        $suffix = "$depthSuffix$lrSuffix"
+        foreach ($fold in $folds) {
+            if (-not $fold.Selected) { continue }
+            $done++
+            $out_dir = Join-Path $wf_root "$($fold.Label)$suffix"
+            Write-Host ""
+            Write-Host "==== [$done/$total] terminal_loss WF 折 $($fold.Label)$suffix (depth=$depth, lr=$lr) ====" -ForegroundColor Cyan
+            Write-Host "      Train [$($fold.TrainStart),$($fold.TrainEnd)]  ES [$($fold.EsStart),$($fold.EsEnd)]"
 
-        $pythonCmd = "py .\scripts\train_terminal_risk_model.py" +
-            " --data-root $data_root" +
-            " --output-dir $out_dir" +
-            " --start-date $($fold.TrainStart)" +
-            " --end-date $($fold.EsEnd)" +
-            " --train-start $($fold.TrainStart)" +
-            " --train-end $($fold.TrainEnd)" +
-            " --es-start $($fold.EsStart)" +
-            " --es-end $($fold.EsEnd)" +
-            " --k $k --h-max $h_max --sigma-window $sigma_window" +
-            " --max-depth $depth --n-estimators $n_estimators --random-state $random_state" +
-            " --h-per-group $h_per_group --every-n-days $every_n_days --chunk-days $chunk_days" +
-            " --device $device" +
-            " --fixed-name"
+            $pythonCmd = "py .\scripts\train_terminal_risk_model.py" +
+                " --data-root $data_root" +
+                " --output-dir $out_dir" +
+                " --start-date $($fold.TrainStart)" +
+                " --end-date $($fold.EsEnd)" +
+                " --train-start $($fold.TrainStart)" +
+                " --train-end $($fold.TrainEnd)" +
+                " --es-start $($fold.EsStart)" +
+                " --es-end $($fold.EsEnd)" +
+                " --k $k --h-max $h_max --sigma-window $sigma_window" +
+                " --max-depth $depth --learning-rate $lr --n-estimators $n_estimators" +
+                " --early-stopping-rounds $early_stopping_rounds" +
+                " --subsample $subsample --colsample-bytree $colsample_bytree --reg-lambda $reg_lambda" +
+                " --random-state $random_state" +
+                " --h-per-group $h_per_group --every-n-days $every_n_days --chunk-days $chunk_days" +
+                " --device $device" +
+                " --fixed-name"
 
-        # 注意：训练脚本读取 [TrainStart, EsEnd] 之后 h_max+1 个交易日的端点数据，
-        # 最后一折（2026H1）的 E 最远落在 2026-07-末，数据末端须覆盖。
-        Invoke-Expression $pythonCmd
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "折 $($fold.Label)$suffix 训练失败（exit=$LASTEXITCODE），跳过继续" -ForegroundColor Red
-            $failed += "$($fold.Label)$suffix"
+            # 注意：训练脚本读取 [TrainStart, EsEnd] 之后 h_max+1 个交易日的端点数据，
+            # 最后一折（2026H1）的 E 最远落在 2026-07-末，数据末端须覆盖。
+            Invoke-Expression $pythonCmd
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "折 $($fold.Label)$suffix 训练失败（exit=$LASTEXITCODE），跳过继续" -ForegroundColor Red
+                $failed += "$($fold.Label)$suffix"
+            }
         }
     }
 }

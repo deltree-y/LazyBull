@@ -283,12 +283,23 @@ python scripts/train_terminal_risk_model.py \
 # --fixed-name 为固定文件名覆盖模式（供 WF 折目录等研究场景）
 # 内存与抽样：全网格标签按 50 交易日分块构建，每组 (股票,日) 抽 2 个期限、
 # 每 3 个交易日取 1（--h-per-group / --every-n-days 可调，参数落入元数据）
+# 训练超参：--max-depth / --learning-rate / --n-estimators / --early-stopping-rounds
+#           / --subsample / --colsample-bytree / --reg-lambda 可透传
+#（min_child_weight 与 scale_pos_weight 为正则尺度策略 A 设计不变量，不暴露）
 # 训练设备默认 cuda（与主模型一致），--device cpu 可切换
 
 # 滚动 Walk-forward（8 折研究型 WF：排序信息量的时间稳定性验证）
 powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.ps1
 # 完成后自动汇总：data/walk_forward/terminal_risk_wf/summary.csv
-# 门禁：跨折 lift = ES PR-AUC / ES 事件率，最小值 >= 1.1 才建议进入第二阶段
+# 门禁：跨折 lift = ES PR-AUC / ES 事件率，组内最小值 >= 1.1 才建议进入第二阶段
+# 调参指标（超参消融对比用）：折目录按 _d*/_lr* 后缀 × 折 meta 超参签名分组，
+# 每超参组一行 → tuning_scores.csv；台账 tuning_history.csv 按组追加（跨 batch
+# 纵向对比，--no-history 跳过）
+# 调参分 tuning_score = 0.5×组内lift几何均值 + 0.5×组内lift最小值（绝对量纲，
+# 跨 batch 直接可比：几何均值代表平均排序能力，最小值代表最差折稳健性）
+# 历史最优自动比较：汇总末尾按超参签名聚合台账（含当次），醒目打印历史最优
+# 超参签名与当次是否刷新；超参身份以折 meta（train/label/sampling 配置）为
+# 权威——同后缀不同批次超参（如 baseline 从 depth=3 改跑 depth=4）自动拆组
 ```
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的
@@ -800,6 +811,18 @@ costs:
 - 未显式传入 `--data-root` 时，训练、回测、walk-forward、因子分析、纸面交易与树莓派显示脚本都会使用 `configs/base.yaml` 中的项目默认路径。
 - `data.root`、`data.raw`、`data.clean`、`data.features`、`data.reports` 为当前真实接线的数据目录配置；模型目录与纸面交易目录默认分别派生为 `data.root/models` 与 `data.root/paper`。
 - 命令行显式指定路径或参数时，仍优先于项目配置。
+
+### 树莓派 LCD35
+
+运行 `python scripts/respi/lcd35_display.py`。入口自动合并
+`configs/runtime_respi.yaml`，通过 `data.paper_remote` 读取 NAS 上的纸面账户；
+认证由 `LAZYBULL_SMB_USER`、`LAZYBULL_SMB_PASS` 环境变量提供，系统需安装 `smbclient`。
+
+- 远端文件缓存有效期为 180 秒；亮屏期间（06:00 至 23:00）持续按需同步，盘中摘要约每 3 分钟刷新，周期图及盘外同步沿用 10 分钟节奏。读取失败保留最近有效快照。
+- “下次调仓”展示下一未履行的 T0 计划日，复用交易层分批排期；漏批时显示待补执行日期及剩余 0 天，T1 实际成交仍以纸面交易指令为准。
+- 周期图的“账户”曲线使用 `nav/nav.parquet` 中的真实总资产，包含现金、成交成本和已实现盈亏；普通模式从最近调仓信号日开始，分批模式从批次锚定日开始，并与指数对齐到共同有效日期。
+- 净值缺失不回填、不倒推；起点记录缺失时从首个共同有效日期起算并记录告警，完全无记录时不生成新图。日内“持仓”图仍展示当前持仓的日内涨跌，与账户周期收益区别使用。
+- 纸面交易和 LCD 年化统一调用 `src/lazybull/paper/performance.py`，按实际自然日计算复合年化；起始日优先取 `account_start_date`，未配置时取最早有效净值日期。空仓后的已实现收益仍计入年化。
 
 ---
 

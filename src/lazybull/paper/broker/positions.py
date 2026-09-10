@@ -3,6 +3,7 @@
 
 from ...common.print_table import format_row
 from ...trading.sizing import compute_min_buy_value_threshold
+from ..performance import calculate_annualized_return, load_account_start_date
 from loguru import logger
 from typing import Dict
 from typing import Optional
@@ -245,43 +246,9 @@ class PaperPositionsMixin:
         Returns:
             年化收益率（百分比），如果无法计算则返回 None
         """
-        # 空仓时年化收益率为 0
-        if current_value <= 0 or initial_capital <= 0:
-            return 0.0
-        
-        # 尝试从配置获取账户起始日期
-        config = self.storage.load_config()
-        account_start_date = None
-        
-        if config and 'account_start_date' in config:
-            account_start_date = config['account_start_date']
-        
-        # 如果没有起始日期，尝试从 NAV 记录获取最早日期
-        if not account_start_date:
-            nav_df = self.storage.load_all_nav()
-            if nav_df is not None and len(nav_df) > 0:
-                # 获取最早的交易日期
-                account_start_date = str(nav_df['trade_date'].iloc[0])
-        
-        # 如果仍然没有起始日期，返回 None
-        if not account_start_date or not current_date:
-            return None
-        
-        # 计算持有天数
-        try:
-            start_dt = pd.to_datetime(account_start_date, format='%Y%m%d')
-            current_dt = pd.to_datetime(current_date, format='%Y%m%d')
-            days = (current_dt - start_dt).days
-            
-            # 如果天数太少（例如小于1天），返回 0
-            if days < 1:
-                return 0.0
-
-            # 复合年化收益率 (CAGR)
-            # 年化收益率 = ((当前总资产 / 初始资金) ^ (365 / 持有天数) - 1) * 100
-            annualized = ((current_value / initial_capital) ** (365.0 / days) - 1.0) * 100
-            return annualized
-            
-        except Exception as e:
-            logger.warning(f"计算年化收益率失败: {e}")
-            return None
+        return calculate_annualized_return(
+            initial_capital,
+            current_value,
+            current_date,
+            load_account_start_date(self.storage),
+        )

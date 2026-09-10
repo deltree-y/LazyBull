@@ -616,27 +616,12 @@ def build_realtime_portfolio_summary_from_quotes(
     annualized_return_func: Optional[Callable[[float, float, str], Optional[float]]] = None,
 ) -> Optional[Dict]:
     """基于已获取的实时行情 DataFrame 计算持仓摘要。"""
-    if not positions:
-        total_assets = cash
-        total_pnl_pct = (
-            (total_assets - initial_capital) / initial_capital * 100 if initial_capital > 0 else 0.0
-        )
-        return {
-            "pos_count": 0,
-            "market_value": 0.0,
-            "total_assets": total_assets,
-            "float_pnl_pct": 0.0,
-            "total_pnl_pct": total_pnl_pct,
-            "annual_return_pct": 0.0,
-            "quote_time": "",
-        }
-
-    if rt_df is None or rt_df.empty:
+    if positions and (rt_df is None or rt_df.empty):
         return None
 
     prices: Dict[str, float] = {}
     quote_time = _extract_latest_quote_time(rt_df)
-    for _, row in rt_df.iterrows():
+    for _, row in (rt_df.iterrows() if rt_df is not None else []):
         ts_code = str(row.get("TS_CODE", ""))
         if ts_code:
             pos = positions.get(ts_code)
@@ -711,6 +696,10 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
 
     current_date = pd.Timestamp.today().strftime("%Y%m%d")
 
+    annualized_return_func = getattr(runner.broker, "_calculate_annualized_return", None)
+    if not callable(annualized_return_func):
+        annualized_return_func = None
+
     if not positions:
         return build_realtime_portfolio_summary_from_quotes(
             positions=positions,
@@ -718,6 +707,7 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
             initial_capital=initial_capital,
             current_date=current_date,
             rt_df=None,
+            annualized_return_func=annualized_return_func,
         )
 
     ts_codes_str = ",".join(positions.keys())
@@ -730,10 +720,6 @@ def get_realtime_portfolio_summary() -> Optional[Dict]:
 
     if rt_df is None or rt_df.empty:
         return None
-
-    annualized_return_func = getattr(runner.broker, "_calculate_annualized_return", None)
-    if not callable(annualized_return_func):
-        annualized_return_func = None
 
     return build_realtime_portfolio_summary_from_quotes(
         positions=positions,

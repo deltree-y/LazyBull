@@ -364,7 +364,7 @@ def _build_cycle_chart_payload(
         'x_end_label': f"{slot_count}天" if slot_count > point_count else _format_mmdd(dates[-1]),
         'index_label': '上证',
         'shenzhen_label': '深证',
-        'portfolio_label': '持仓',
+        'portfolio_label': '账户',
         'csi800_label': '中证800',
         'base_value': base_value,
     }
@@ -1089,6 +1089,11 @@ def _should_show_intraday_chart(
     return not _has_cycle_data_for_target(cycle_chart_data, target_cycle_date)
 
 
+def _is_remote_sync_window(now: datetime) -> bool:
+    """远端账户在亮屏时段持续同步，不因行情收盘而停止。"""
+    return _smb_reader is not None and 6 <= now.hour < 23
+
+
 def _get_refresh_policy(
     cycle_chart_data: Optional[dict],
     intraday_chart_data: Optional[dict] = None,
@@ -1096,10 +1101,11 @@ def _get_refresh_policy(
 ) -> dict:
     """返回当前时段的数据刷新策略。"""
     current_dt = now or datetime.now()
+    remote_sync = _is_remote_sync_window(current_dt)
     realtime_active = _is_realtime_quote_window(current_dt)
     if realtime_active:
         return {
-            'refresh_cycle': False,
+            'refresh_cycle': remote_sync,
             'refresh_realtime': True,
         }
 
@@ -1116,8 +1122,8 @@ def _get_refresh_policy(
         current_dt,
     )
     return {
-        'refresh_cycle': need_cycle_refresh,
-        'refresh_realtime': need_intraday_completion or need_morning_completion,
+        'refresh_cycle': need_cycle_refresh or remote_sync,
+        'refresh_realtime': need_intraday_completion or need_morning_completion or remote_sync,
     }
 
 
@@ -1191,7 +1197,10 @@ def _is_cycle_refresh_due(
     target_cycle_date = _get_target_cycle_data_date(current_dt, allow_load=True)
     if not refresh_allowed or target_cycle_date is None:
         return False, target_cycle_date
-    if _has_cycle_data_for_target(cycle_chart_data, target_cycle_date):
+    if (
+        _has_cycle_data_for_target(cycle_chart_data, target_cycle_date)
+        and not _is_remote_sync_window(current_dt)
+    ):
         return False, target_cycle_date
     if last_target_date != target_cycle_date:
         return True, target_cycle_date

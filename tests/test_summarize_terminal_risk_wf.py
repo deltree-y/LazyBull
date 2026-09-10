@@ -1,62 +1,350 @@
-"""terminal_loss 滚动 WF 汇总工具测试（合成 report 目录）"""
+"""terminal_risk WF 汇总工具测试（合成折目录，不依赖真实数据）
+
+覆盖：消融后缀解析、超参签名（meta 权威）、分组聚合调参分、历史台账追加、
+跨 batch 历史最优比较（含旧 schema 兼容）。
+"""
 
 import json
+import sys
 from pathlib import Path
 
-from scripts.summarize_terminal_risk_wf import collect_fold_rows
+import pandas as pd
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts.summarize_terminal_risk_wf import (
+    BASELINE_LABEL,
+    HISTORY_RUN_COLUMNS,
+    HISTORY_TABLE_COLUMNS,
+    TUNING_COLUMNS,
+    UNREGISTERED_SIGNATURE,
+    append_history_records,
+    build_history_records,
+    build_history_table,
+    build_param_signature,
+    build_tuning_table,
+    collect_fold_rows,
+    main,
+    parse_experiment_suffix,
+)
+
+_TRAIN_CFG = {
+    "max_depth": 3,
+    "learning_rate": 0.03,
+    "n_estimators": 500,
+    "early_stopping_rounds": 30,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_lambda": 1.0,
+}
+_LABEL_CFG = {
+    "task_id": "terminal_vol_scaled_loss",
+    "h_min": 1,
+    "h_max": 20,
+    "sigma_window": 20,
+    "loss_sigma_multiple": 1.0,
+}
+_SAMPLING_CFG = {"chunk_days": 50, "h_per_group": 2, "every_n_days": 3}
 
 
-def _write_fold(root: Path, name: str, pr_auc: float, event_rate: float,
-                mean_pred: float, n: int = 1000):
-    fold_dir = root / name
+def _write_fold(
+    wf_root: Path,
+    name: str,
+    pr_auc: float,
+    event_rate: float,
+    mean_pred: float = None,
+    depth: int = 3,
+) -> None:
+    """写一个假折目录（report + 模型元数据，字段口径与训练产物一致）。"""
+    fold_dir = wf_root / name
     fold_dir.mkdir(parents=True)
+    es_section = {
+        "n": 1000,
+        "event_rate": event_rate,
+        "logloss": 0.3,
+        "brier": 0.1,
+        "pr_auc": pr_auc,
+    }
+    if mean_pred is not None:
+        es_section["mean_pred"] = mean_pred
     with open(fold_dir / "terminal_loss_report.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "es": {
-                    "n": n, "event_rate": event_rate, "mean_pred": mean_pred,
-                    "logloss": 0.31, "brier": 0.08, "pr_auc": pr_auc,
-                },
-                "train": {"n": n * 3, "event_rate": 0.14, "logloss": 0.37,
-                          "brier": 0.12, "pr_auc": 0.33},
-                "label_coverage": [],
-                "isolation_dropped": {"train": 1},
+        json.dump({"es": es_section, "train": {"event_rate": event_rate}}, f)
+    meta = {
+        "train_config": {**_TRAIN_CFG, "max_depth": depth},
+        "label_config": _LABEL_CFG,
+        "metadata": {
+            "stage_dates": {
+                "train": ["20230101", "20231231"],
+                "es": ["20240101", "20240630"],
             },
-            f,
-        )
+            "best_iteration": 123,
+            "n_train": 5000,
+            "n_es": 1000,
+            "sampling": _SAMPLING_CFG,
+        },
+    }
     with open(fold_dir / "terminal_loss_model.json", "w", encoding="utf-8") as f:
-        json.dump(
+        json.dump(meta, f)
+
+
+def _summary_row(fold: str, lift: float, pred_bias: float = 0.0) -> dict:
+    """直接构造窄 summary 行（同时覆盖缺超参列的容错路径）。"""
+    return {"fold": fold, "lift": lift, "pred_bias": pred_bias}
+
+
+def test_parse_experiment_suffix():
+    """后缀解析：baseline / _d* / _d*_lr* 三种形态与未知尾缀兜底。"""
+    assert parse_experiment_suffix("2022H2") == {
+        "suffix": "",
+        "depth": None,
+        "learning_rate": None,
+    }
+    assert parse_experiment_suffix("2022H2_d3") == {
+        "suffix": "_d3",
+        "depth": 3,
+        "learning_rate": None,
+    }
+    parsed = parse_experiment_suffix("2022H2_d3_lr0.05")
+    assert parsed["suffix"] == "_d3_lr0.05"
+    assert parsed["depth"] == 3
+    assert parsed["learning_rate"] == pytest.approx(0.05)
+    # 未知尾缀按无后缀处理（同后缀目录仍聚同组），保证新后缀类型不中断汇总
+    assert parse_experiment_suffix("2022H2_x9")["suffix"] == ""
+
+
+def test_build_param_signature():
+    """超参签名：完整配置产出预期串；缺任一键返回 None。"""
+    meta = {
+        "train_config": _TRAIN_CFG,
+        "label_config": _LABEL_CFG,
+        "metadata": {"sampling": _SAMPLING_CFG},
+    }
+    assert build_param_signature(meta) == (
+        "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0"
+        "|k=1.0|hmax=20|sigw=20|hpg=2|end=3"
+    )
+    assert build_param_signature({}) is None
+    broken = {
+        "train_config": {k: v for k, v in _TRAIN_CFG.items() if k != "reg_lambda"},
+        "label_config": _LABEL_CFG,
+        "metadata": {"sampling": _SAMPLING_CFG},
+    }
+    assert build_param_signature(broken) is None
+
+
+def test_build_tuning_table_score_and_gate():
+    """分组聚合：调参分手算期望、门禁按组判定、排序降序、None lift 剔除。"""
+    summary = pd.DataFrame(
+        [
+            _summary_row("2022H2", 1.2, 0.01),
+            _summary_row("2023H1", 1.8, 0.02),
+            _summary_row("2022H2_d3", 1.5, -0.01),
+            _summary_row("2023H1_d3", 1.05, -0.02),
+            # 事件率 0 折 lift 为 None：剔除聚合并计入 n_folds 差额
+            _summary_row("2024H1_d3", None, 0.0),
+        ]
+    )
+    table = build_tuning_table(summary, lift_min_threshold=1.1)
+
+    assert list(table.columns) == TUNING_COLUMNS
+    assert len(table) == 2
+
+    base = table[table["suffix"] == BASELINE_LABEL].iloc[0]
+    base_geo = (1.2 * 1.8) ** 0.5
+    assert base["n_folds"] == 2
+    assert base["n_folds_valid_lift"] == 2
+    assert base["lift_geo_mean"] == pytest.approx(base_geo)
+    assert base["lift_min"] == pytest.approx(1.2)
+    assert base["tuning_score"] == pytest.approx(0.5 * (base_geo + 1.2))
+    assert bool(base["gate_pass"])  # lift_min 1.2 >= 1.1 门禁通过
+    # 窄 summary 缺超参列 → 容错为未登记签名（带后缀保持组间区分）
+    assert base["param_signature"].startswith(UNREGISTERED_SIGNATURE)
+
+    d3 = table[table["suffix"] == "_d3"].iloc[0]
+    d3_geo = (1.5 * 1.05) ** 0.5
+    assert d3["n_folds"] == 3
+    assert d3["n_folds_valid_lift"] == 2
+    assert d3["lift_geo_mean"] == pytest.approx(d3_geo)
+    assert d3["lift_min"] == pytest.approx(1.05)
+    assert d3["tuning_score"] == pytest.approx(0.5 * (d3_geo + 1.05))
+    assert not bool(d3["gate_pass"])  # lift_min 1.05 < 1.1 门禁未通过
+
+    # baseline 调参分更高 → rank=1 且排序在前
+    assert table.iloc[0]["suffix"] == BASELINE_LABEL
+    assert table.iloc[0]["rank"] == 1
+
+
+def test_tuning_table_splits_same_suffix_by_signature(tmp_path):
+    """同后缀不同超参签名（目录残留旧消融折）必须拆行，禁止混比。"""
+    _write_fold(tmp_path, "2022H2", pr_auc=0.12, event_rate=0.1, depth=3)
+    _write_fold(tmp_path, "2023H1", pr_auc=0.18, event_rate=0.1, depth=4)
+
+    summary = collect_fold_rows(tmp_path)
+    table = build_tuning_table(summary, lift_min_threshold=1.1)
+    # 同 (baseline) 后缀、两个 depth → 两行，签名不同
+    assert len(table) == 2
+    assert set(table["depth"]) == {3, 4}
+    assert table["param_signature"].nunique() == 2
+    # depth 从折 meta 读取（权威），不依赖后缀
+    row_d4 = table[table["depth"] == 4].iloc[0]
+    assert row_d4["suffix"] == BASELINE_LABEL
+    assert "d=4|" in row_d4["param_signature"]
+
+
+def test_append_history_records_rounds(tmp_path):
+    """台账追加：连续两次调用累计两轮行；二次写入不重复 BOM、读回列名正常。"""
+    history_csv = tmp_path / "tuning_history.csv"
+    table = build_tuning_table(
+        pd.DataFrame([_summary_row("2022H2", 1.3), _summary_row("2022H2_d3", 1.5)]),
+        lift_min_threshold=1.1,
+    )
+    records = build_history_records(table, "wf", 1.1)
+    assert list(records.columns) == HISTORY_RUN_COLUMNS
+    assert append_history_records(history_csv, records) == 2
+    assert append_history_records(history_csv, records) == 2
+
+    history = pd.read_csv(history_csv, encoding="utf-8-sig")
+    assert list(history.columns) == HISTORY_RUN_COLUMNS
+    assert len(history) == 4
+    assert set(history["suffix"]) == {BASELINE_LABEL, "_d3"}
+    # 追加行不携带 BOM：第二次写入的行能作为数据行读回（列数一致无脏列）
+    assert history["tuning_score"].notna().all()
+
+
+def test_history_table_best_and_refresh(tmp_path):
+    """历史最优：旧台账高分签名胜出；当次达到历史最好时标记刷新。"""
+    history_csv = tmp_path / "tuning_history.csv"
+
+    # 历史运行：_d3 签名调参分 1.5（时间戳 2026-09-01）
+    old_table = build_tuning_table(
+        pd.DataFrame([_summary_row("2022H2_d3", 1.5)]), lift_min_threshold=1.1
+    )
+    old_records = build_history_records(old_table, "wf", 1.1, timestamp="2026-09-01T00:00:00")
+    assert append_history_records(history_csv, old_records) == 1
+
+    # 当次运行：baseline 1.2 → 未达历史最优，最优行 is_current_best=False
+    cur_table = build_tuning_table(
+        pd.DataFrame([_summary_row("2022H2", 1.2)]), lift_min_threshold=1.1
+    )
+    cur_records = build_history_records(cur_table, "wf", 1.1, timestamp="2026-09-10T00:00:00")
+    table = build_history_table(history_csv, cur_records)
+    assert list(table.columns) == HISTORY_TABLE_COLUMNS
+    best = table.iloc[0]
+    assert best["score_best"] == pytest.approx(1.5)
+    assert not bool(best["is_current_best"])  # pandas 往返后为 numpy.bool_
+    assert best["runs"] == 1
+    # 当次 baseline 组签名未登记但与 _d3 组区分开（不因同为未登记而合并）
+    assert table.iloc[-1]["param_signature"].startswith(UNREGISTERED_SIGNATURE)
+
+    # 台账落盘后（含当次行），baseline 组 runs=2 且中位数出现
+    append_history_records(history_csv, cur_records)
+    # 追加模式去重：台账已含当次行时再拼同 timestamp 内存记录不得双计
+    table_dedup = build_history_table(history_csv, cur_records)
+    dedup_base = table_dedup[table_dedup["suffix"] == BASELINE_LABEL].iloc[0]
+    assert dedup_base["runs"] == 1
+    table2 = build_history_table(
+        history_csv,
+        build_history_records(cur_table, "wf", 1.1, timestamp="2026-09-11T00:00:00"),
+    )
+    base_row = table2[table2["suffix"] == BASELINE_LABEL].iloc[0]
+    assert base_row["runs"] == 2
+    assert base_row["score_median"] == pytest.approx(1.2)
+
+    # 当次 baseline 提高到 1.6 → 刷新历史最优且最优行标记为当次
+    win_table = build_tuning_table(
+        pd.DataFrame([_summary_row("2022H2", 1.6)]), lift_min_threshold=1.1
+    )
+    win_records = build_history_records(win_table, "wf", 1.1, timestamp="2026-09-12T00:00:00")
+    table3 = build_history_table(history_csv, win_records)
+    assert table3.iloc[0]["score_best"] == pytest.approx(1.6)
+    assert bool(table3.iloc[0]["is_current_best"])
+
+
+def test_history_table_legacy_schema_compat(tmp_path):
+    """旧台账（无 param_signature 列）读回不崩，签名回退 (legacy) 不与真签名合并。"""
+    history_csv = tmp_path / "tuning_history.csv"
+    legacy = pd.DataFrame(
+        [
             {
-                "task_id": "terminal_vol_scaled_loss",
-                "feature_names": ["f1"],
-                "metadata": {
-                    "stage_dates": {
-                        "train": ["20210101", "20241231"],
-                        "es": ["20250101", "20250630"],
-                    },
-                    "best_iteration": 128,
-                    "n_train": n * 3,
-                    "n_es": n,
-                },
-            },
-            f,
-        )
+                "timestamp": "2026-09-01T00:00:00",
+                "wf_root": "wf",
+                "lift_min_threshold": 1.1,
+                "suffix": "_d3",
+                "depth": 3,
+                "learning_rate": 0.03,
+                "n_folds": 8,
+                "n_folds_valid_lift": 8,
+                "tuning_score": 1.4,
+                "lift_geo_mean": 1.5,
+                "lift_min": 1.3,
+                "lift_std": 0.1,
+                "pred_bias_mean": 0.01,
+                "gate_pass": True,
+            }
+        ]
+    )
+    legacy.to_csv(history_csv, index=False, encoding="utf-8-sig")
+
+    cur_table = build_tuning_table(
+        pd.DataFrame([_summary_row("2022H2", 1.2)]), lift_min_threshold=1.1
+    )
+    cur_records = build_history_records(cur_table, "wf", 1.1, timestamp="2026-09-10T00:00:00")
+    table = build_history_table(history_csv, cur_records)
+    # 旧行独立成组（legacy 签名），当次行独立成组（未登记签名），两组互不合并
+    assert len(table) == 2
+    assert table.iloc[0]["param_signature"].startswith("(legacy)")
+    assert table.iloc[0]["score_best"] == pytest.approx(1.4)
+    # gate_pass 经 CSV 字符串往返后仍正确聚成通过率
+    assert table.iloc[0]["gate_pass_rate"] == pytest.approx(1.0)
 
 
-def test_collect_rows_lift_and_bias(tmp_path):
-    _write_fold(tmp_path, "2024H1", pr_auc=0.12, event_rate=0.10, mean_pred=0.145)
-    _write_fold(tmp_path, "2025H2", pr_auc=0.09, event_rate=0.09, mean_pred=0.13)
+def test_collect_and_tuning_table_end_to_end(tmp_path):
+    """假折目录端到端：lift 口径（pr_auc/事件率）与分组、(baseline) 标签。"""
+    _write_fold(tmp_path, "2022H2", pr_auc=0.12, event_rate=0.1, mean_pred=0.11)
+    _write_fold(tmp_path, "2022H2_d3", pr_auc=0.15, event_rate=0.1, mean_pred=0.09)
+
     summary = collect_fold_rows(tmp_path)
     assert len(summary) == 2
-    row = summary[summary["fold"] == "2024H1"].iloc[0]
-    assert row["lift"] == 1.2
-    assert abs(row["pred_bias"] - 0.045) < 1e-9
-    assert row["es_start"] == "20250101"
-    assert row["best_iteration"] == 128
+    by_fold = summary.set_index("fold")
+    assert by_fold.loc["2022H2", "lift"] == pytest.approx(1.2)
+    assert by_fold.loc["2022H2", "pred_bias"] == pytest.approx(0.11 - 0.1)
+    assert by_fold.loc["2022H2_d3", "lift"] == pytest.approx(1.5)
+    # 超参签名与 depth 从折 meta 提取（权威口径）
+    assert by_fold.loc["2022H2_d3", "depth"] == 3
+    assert by_fold.loc["2022H2_d3", "learning_rate"] == pytest.approx(0.03)
+    assert by_fold.loc["2022H2", "param_signature"].startswith("d=3|lr=0.03")
+
+    table = build_tuning_table(summary, lift_min_threshold=1.1)
+    suffixes = set(table["suffix"])
+    assert suffixes == {BASELINE_LABEL, "_d3"}
+    d3 = table[table["suffix"] == "_d3"].iloc[0]
+    assert d3["tuning_score"] == pytest.approx(0.5 * (1.5 + 1.5))
+    assert bool(d3["gate_pass"])
 
 
-def test_missing_report_skipped(tmp_path):
-    _write_fold(tmp_path, "2024H1", pr_auc=0.12, event_rate=0.10, mean_pred=0.14)
-    (tmp_path / "empty_fold").mkdir()
-    summary = collect_fold_rows(tmp_path)
-    assert list(summary["fold"]) == ["2024H1"]
+def test_main_no_history_flag(tmp_path, monkeypatch):
+    """main() 端到端：--no-history 时不生成台账，summary/tuning_scores 正常落盘。"""
+    _write_fold(tmp_path, "2022H2", pr_auc=0.12, event_rate=0.1, mean_pred=0.11)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["summarize_terminal_risk_wf.py", "--wf-root", str(tmp_path), "--no-history"],
+    )
+    assert main() == 0
+    assert (tmp_path / "summary.csv").exists()
+    assert (tmp_path / "tuning_scores.csv").exists()
+    assert not (tmp_path / "tuning_history.csv").exists()
+
+
+def test_main_appends_history_by_default(tmp_path, monkeypatch):
+    """main() 端到端：默认追加台账，重复运行累计两轮（跨 batch 纵向对比）。"""
+    _write_fold(tmp_path, "2022H2", pr_auc=0.12, event_rate=0.1, mean_pred=0.11)
+    argv = ["summarize_terminal_risk_wf.py", "--wf-root", str(tmp_path)]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert main() == 0
+    assert main() == 0
+    history = pd.read_csv(tmp_path / "tuning_history.csv", encoding="utf-8-sig")
+    assert len(history) == 2
+    assert history["suffix"].tolist() == [BASELINE_LABEL, BASELINE_LABEL]
+    assert history["param_signature"].nunique() == 1

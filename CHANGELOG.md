@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.107.1] - 2026-09-10
+
+### Fixed
+
+- **LCD 与纸面交易绩效共用**：账户起始日解析、自然日复合年化统一归入 `paper/performance.py`，broker 与 LCD 调用同一实现；空仓后仍计算已实现收益的年化，清仓同步清空旧排行榜和行业统计。
+- **LCD 真实账户周期图**：从 `nav/nav.parquet` 的日度 `total_value` 计算收益，同日取最后记录；分批模式以 `tranche_anchor_date` 为起点，保留信号日基准，计入实际成交成本及已实现盈亏。不再按当前持仓回填历史，不填补缺失净值；净值修订后图表缓存失效。
+- **LCD 调仓倒计时**：复用 `trading/stagger.py` 排期，识别分批锚定日及已履行计划日，非整除周期和漏批追赶与纸面交易一致。
+- **SMB 当日同步**：文件缓存改为 180 秒有效期，合并并发读取，失败不续期；远端模式亮屏期间继续同步，盘外沿用 10 分钟唤醒节奏，不再因当日图表齐全而停止。远端账户或配置读取失败保留旧快照，不伪装为空仓新账户。
+
+### Tests
+
+- 补充跨端年化一致性、空仓收益、分批/漏批排期、真实 NAV 缺失与修订、SMB 过期/失败/并发测试；LCD 测试隔离真实配置、网络及后台行情刷新。
+
+## [0.107.0] - 2026-09-10
+
+### Added
+
+- **terminal_risk WF 调参指标输出（调参分 + 超参分组 + 历史台账）**：`scripts/summarize_terminal_risk_wf.py` 此前把所有折混在一张 summary 表里，`_d*`/`_lr*` 超参消融目录共存时无法横向对比，也没有跨 batch 可比的单一调参指标。新增三块能力：
+  - **按消融后缀分组聚合**：折目录名尾部解析 `_d{depth}` / `_lr{lr}` 后缀（可叠加，正则锚定结尾；无法识别的尾缀按无后缀处理归 baseline 组，保证新后缀类型不中断汇总），同后缀折聚合为一行（`parse_experiment_suffix` / `build_tuning_table`）。
+  - **调参分 tuning_score = 0.5×组内 lift 几何均值 + 0.5×组内 lift 最小值**：绝对量纲、跨 batch 直接可比（区别于选股模型 Alpha 百分位分）——几何均值代表平均排序能力，最小值代表最差折稳健性、与门禁阈值直接挂钩；lift 缺失或非正（ES 事件率 0）的折剔除聚合并以 `n_folds_valid_lift` 单列计数。门禁从全体折混合 lift_min 改为**按组判定**（多组消融时混合门禁无意义，单组时等价）；`pred_bias` 保持展示不进分数（方案约定：C 段校准前的已知漂移是校准输入信号而非选型指标）。控制台末尾醒目打印本次最优超参组的单一调参分。
+  - **调参台账 `tuning_history.csv`**：每次汇总按组追加一行（时间戳 + wf_root + 门禁阈值 + 全部分项指标），积累跨 batch 调参记录供 Excel 纵向对比；首次创建写 utf-8-sig 表头、追加写无 BOM utf-8（规避 pandas utf-8-sig 追加模式重复写 BOM 污染中间行的缺陷）；`--no-history` 可跳过。
+  - **超参签名（历史比较的身份键，meta 为权威）**：折 sidecar（terminal_loss_model.json）的 train_config 消融位（depth/lr/n_estimators/early_stopping_rounds/subsample/colsample_bytree/reg_lambda）+ label_config 任务定义（k/h_max/sigma_window）+ sampling 预登记抽样（h_per_group/every_n_days）拼成紧凑签名串；random_state/device 与策略 A 不变量不入签。目录后缀仅是展示分组名——**同一后缀下不同批次超参其实不同**（如 `(baseline)` 目录从 depth=3 改跑 depth=4），调参表分组键升级为后缀 × 签名，同后缀不同签名自动拆行并提示，禁止混比；summary/tuning_scores 新增 depth/learning_rate/param_signature 列（meta 权威、后缀解析兜底）。
+  - **历史最优自动比较**：每次汇总末尾读回台账（含当次行，按 timestamp+签名去重防双计）+ 当次记录，按超参签名聚合输出历史比较表（runs / score_best / score_median / score_latest / lift_min_best / 门禁通过率 / best_timestamp），醒目打印**历史最优超参签名**与当次是否达到/刷新最优（`--no-history` 时仅内存拼当次比较、不落盘）；"效果最好"判定口径 = score_best（历史最高单次调参分），score_median 供同签名多次运行参考。旧台账（无 param_signature 列）按 `(legacy) {suffix}` 回退身份独立成组；未登记签名回退拼接后缀，不同后缀不因同为未登记而合并。
+  - 产物：`summary.csv`（每折，不变）+ `tuning_scores.csv`（每超参组，当次覆盖）+ `tuning_history.csv`（按组追加）。`batch_terminal_risk_wf.ps1` 命令行零改动（汇总本就在 batch 末尾自动运行），仅同步头部注释。
+
+### Tests
+
+- 新增 `tests/test_summarize_terminal_risk_wf.py`（10 项，合成折目录不依赖真实数据）：后缀解析三形态与未知尾缀兜底；超参签名完整串与缺键返回 None；分组聚合调参分手算期望、门禁按组判定、降序排序、None lift 折剔除；同后缀不同 depth 签名拆行（防目录残留旧消融折混比）；台账连续追加两轮且二次写入不重复 BOM；历史最优跨次比较（旧高分胜出 / 当次刷新标记 is_current_best）、追加模式按 timestamp+签名去重防双计；旧 schema 台账（无 param_signature 列）legacy 回退不崩不混；假折目录端到端（lift = pr_auc/事件率口径、meta 权威超参提取）；`main()` 端到端 `--no-history` 不生成台账与默认追加台账两分支。
+
+## [0.106.0] - 2026-09-10
+
+### Added
+
+- **terminal_loss 训练超参 CLI 透传**：`scripts/train_terminal_risk_model.py` 此前仅暴露 `--max-depth / --n-estimators / --random-state`，批量 WF 无法控制训练动态核心超参。新增 `--learning-rate`（默认 0.03）、`--early-stopping-rounds`（默认 30，ES 段 logloss）、`--subsample`（0.8）、`--colsample-bytree`（0.8）、`--reg-lambda`（1.0），默认值与 `TerminalLossTrainConfig` 一致，经 `asdict` 落入模型元数据（满足"禁止不登记"契约）。`min_child_weight`（与样本权重 1/期限网格大小绑定的正则尺度策略 A 不变量）与 `scale_pos_weight`（破坏自然事件率口径）不暴露，代码内注释登记原因；`eval_metric` 契约固定 logloss 不变。
+- **batch_terminal_risk_wf.ps1 超参补齐与学习率消融位**：配置区新增 `learning_rate_list`（数组消融位，多值时折目录追加 `_lr*` 后缀，与 `_d*` 深度后缀可叠加）、`early_stopping_rounds / subsample / colsample_bytree / reg_lambda` 标量直传，全部拼入每折训练命令；总任务数计数同步乘上学习率组合数。`summarize_terminal_risk_wf.py` 以整目录名为 fold 标识、不解析后缀，消融目录自动进入 summary 无需改动。
+
+### Tests
+
+- `test_terminal_loss_script.py` 新增 `test_script_hyperparam_cli_passthrough`：versioned 模式断言五个新超参落入 `train_params.train_config` 快照，同时守护未暴露契约超参保持默认（min_child_weight=1.0、scale_pos_weight=1.0、eval_metric=logloss、策略 A 标识）。
+
 ## [0.105.1] - 2026-09-10
 
 ### Fixed

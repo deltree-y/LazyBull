@@ -157,6 +157,7 @@ def _calc_rebalance_status() -> tuple[Optional[str], Optional[int]]:
     """计算下次调仓日期及剩余交易日。"""
     from src.lazybull.paper import PaperStorage
     from src.lazybull.data import DataLoader, Storage
+    from src.lazybull.trading.stagger import build_tranche_schedule_from_anchor
 
     rebalance_state = PaperStorage(
         root_path=get_paper_root(), smb_reader=_smb_reader
@@ -171,12 +172,13 @@ def _calc_rebalance_status() -> tuple[Optional[str], Optional[int]]:
 
     try:
         rebalance_freq_int = int(rebalance_freq)
+        stagger_tranches = int(rebalance_state.get('stagger_tranches', 1))
         loader = DataLoader(storage=Storage(root_path=get_data_root()))
         trade_cal = loader.load_clean_trade_cal()
         if trade_cal is None:
             return None, None
 
-        trade_dates = trade_cal[trade_cal['is_open'] == 1]['cal_date'].tolist()
+        trade_dates = sorted(set(trade_cal.loc[trade_cal['is_open'] == 1, 'cal_date'].astype(str)))
 
         today_str = datetime.now().strftime("%Y%m%d")
         current_date = today_str if today_str in trade_dates else next(
@@ -185,13 +187,28 @@ def _calc_rebalance_status() -> tuple[Optional[str], Optional[int]]:
         if current_date is None:
             return None, None
 
-        last_idx = trade_dates.index(last_rebalance_date)
+        anchor_date = (
+            rebalance_state.get('tranche_anchor_date') or last_rebalance_date
+            if stagger_tranches > 1 else last_rebalance_date
+        )
+        last_scheduled_date = (
+            rebalance_state.get('last_scheduled_rebalance_date', last_rebalance_date)
+            if stagger_tranches > 1 else last_rebalance_date
+        )
+        schedule = build_tranche_schedule_from_anchor(
+            anchor_date, trade_dates, rebalance_freq_int, stagger_tranches
+        )
+        next_rebalance_date = min(
+            (date for date in schedule if date > last_scheduled_date), default=None
+        )
+        if next_rebalance_date is None:
+            return None, None
         current_idx = trade_dates.index(current_date)
-        next_idx = last_idx + rebalance_freq_int
-        next_rebalance_date = trade_dates[next_idx] if next_idx < len(trade_dates) else None
+        next_idx = trade_dates.index(next_rebalance_date)
         days_to_rebalance = max(next_idx - current_idx, 0)
         return next_rebalance_date, days_to_rebalance
-    except Exception:
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        _emit_diag(f"调仓日期计算失败: {exc}")
         return None, None
 
 
@@ -224,32 +241,15 @@ def _build_cycle_chart_cache_key(
     target_cycle_date: Optional[str],
     start_date: str,
     rebalance_freq: object,
-    cash: object,
-    positions: dict,
+    account_values: pd.Series,
 ) -> tuple:
-    """构建周期图当日缓存键，状态变化时自动失效。"""
-    cash_float = _coerce_float(cash)
-    if cash_float is None:
-        cash_float = 0.0
-
-    positions_signature = tuple(
-        sorted(
-            (
-                ts_code,
-                int(getattr(pos, 'shares', 0)),
-                round(float(getattr(pos, 'buy_price', 0.0)), 6),
-            )
-            for ts_code, pos in positions.items()
-        )
-    )
-
+    """净值补写或修订时失效，不依赖当前持仓组成。"""
     return (
         cache_scope_date,
         target_cycle_date or "",
         str(start_date),
         str(rebalance_freq),
-        round(cash_float, 6),
-        positions_signature,
+        tuple(account_values.items()),
     )
 
 
