@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.108.3] - 2026-09-11
+
+### Fixed
+
+- **门禁区间重判默认选中历史实验组，导致"分析的不是刚跑的那批"**：`scripts/analyze_terminal_risk_gate.py` 的 `--signature` 默认取 `tuning_scores.csv` **首行（调参分最高组）**。当 `--wf-root` 下同时存在多批实验时（实测：旧轮次 `2022H2_lr0.05`… 目录组 `d=6|lr=0.05|nest=1000|esr=100` 排名第一，新跑的无后缀目录组 `d=5|lr=0.04|nest=1000|esr=50` 排名第三），不加参数重判会静默落到**旧组**上——既给出与刚跑结果无关的门禁区间，又因旧目录缺 ES 逐行预测而报"8 个折缺 ES 逐行预测"，掩盖了逐折区间。
+  - **修复**：新增 `--select {latest,best}`（**默认 `latest`**）——按**折目录写入时间最新**选择即"刚跑完的那批"；`best` 保留原语义（`tuning_scores.csv` 排名第一）；`--signature` 仍为最高优先级。新增 `--list-groups` 列出全部分组（折目录、最新写入时间、调参分/排名、超参签名）后退出。运行日志与终端输出均回显选中的签名、所属折目录与最新写入时间；当选组不是排名第一时给出提示（含 `--select best` 用法）。`--wf-root` 分组表由 `summary.csv` × `tuning_scores.csv` 左连接得到（`load_group_table` / `pick_signature` / `format_groups` 均为可测函数）。
+  - **实测效果**（本次 8 折批次，`d=5|lr=0.04|nest=1000|esr=50`）：折级 min=1.151（点估计通过）、达标折 8/8、均值 lift 90% 区间 [1.306, 1.834]；逐折 10 日块区间 2022H2 1.151 [1.001, 1.763]、2023H1 1.250 [1.166, 1.395]、2023H2 1.490 [1.350, 1.855]、2024H1 2.146 [1.401, 2.421]、2024H2 1.460 [1.143, 2.143]、2025H1 2.495 [1.878, 3.313]、2025H2 1.248 [1.110, 1.383]、2026H1 1.190 [1.098, 1.269]——最弱两折（2022H2、2026H1）区间下限触及/低于阈值。
+
+### Tests
+
+- 新增 `test_terminal_loss_gate_analysis.py`（12 项）：分组表按折目录最新写入时间排序并左连接调参分/排名、缺 `param_signature` 报错、无折目录的组不参与 `latest`；`--select latest` 取最新组、`--select best` 取 rank 1（即使其目录更旧）、`--signature` 覆盖两者、空分组返回 None、无 rank 列时 `best` 回退 latest；`format_groups` 渲染目录/排名/调参分与"无折目录"占位；未知签名报错、按签名取子集。
+
 ## [0.108.2] - 2026-09-11
 
 ### Fixed
