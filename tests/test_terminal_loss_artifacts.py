@@ -12,6 +12,7 @@ from src.lazybull.risk.terminal_loss import (
     TerminalLossModelConfig,
     build_performance_metrics,
     save_flat_artifacts,
+    save_terminal_loss_artifacts,
     save_versioned_artifacts,
 )
 from src.lazybull.risk.terminal_loss.train import TerminalLossTrainConfig
@@ -165,3 +166,73 @@ class TestSaveVersionedArtifacts:
         proba = loaded.predict_proba(infer_df)
         assert proba.shape == (2,)
         assert ((proba >= 0) & (proba <= 1)).all()
+
+
+def _es_predictions(n: int = 6) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "trade_date": ["20240102", "20240102", "20240103", "20240103", "20240104", "20240104"][
+                :n
+            ],
+            "ts_code": [f"00000{i}.SZ" for i in range(n)],
+            "h": [1, 2, 1, 2, 1, 2][:n],
+            "loss_label": [0, 1, 0, 0, 1, 0][:n],
+            "p_loss": [0.1, 0.7, 0.2, 0.3, 0.8, 0.4][:n],
+        }
+    )
+
+
+class TestSaveTerminalLossArtifacts:
+    """统一落盘：始终注册制版本化，fixed_name 仅追加别名（A4 防单副本丢失）。"""
+
+    def _save(self, tmp_path, fixed_name: bool, es_predictions=None):
+        return save_terminal_loss_artifacts(
+            tmp_path,
+            _tiny_model(tmp_path),
+            fixed_name=fixed_name,
+            train_start_date="20240102",
+            train_end_date="20241231",
+            n_samples=200,
+            train_params={"n_train": 200},
+            performance_metrics={"es_logloss": 0.6},
+            report_payload=_report_payload(),
+            calibration_df=_calibration_df(),
+            coverage_df=_coverage_df(),
+            es_predictions=es_predictions,
+        )
+
+    def test_fixed_name_writes_alias_plus_version(self, tmp_path):
+        saved = self._save(tmp_path, fixed_name=True, es_predictions=_es_predictions())
+        assert saved["version"] == 1
+        assert saved["fixed_name"] is True
+        assert (tmp_path / "terminal_loss_model.joblib").exists()
+        assert (tmp_path / "v1_model.joblib").exists()
+        assert (tmp_path / "v1_metadata.json").exists()
+        assert (tmp_path / "terminal_loss_es_predictions.parquet").exists()
+        assert (tmp_path / "v1_es_predictions.parquet").exists()
+
+    def test_alias_overwrite_keeps_previous_version(self, tmp_path):
+        """别名可被覆盖，但版本历史保留——旧行为下第二个模型会整目录丢失。"""
+        self._save(tmp_path, fixed_name=True)
+        saved = self._save(tmp_path, fixed_name=True)
+        assert saved["version"] == 2
+        for v in ("v1", "v2"):
+            assert (tmp_path / f"{v}_model.joblib").exists()
+        assert (tmp_path / "latest_model_version.txt").read_text(encoding="utf-8").strip() == "2"
+
+    def test_without_fixed_name_no_alias(self, tmp_path):
+        self._save(tmp_path, fixed_name=False)
+        assert not (tmp_path / "terminal_loss_model.joblib").exists()
+        assert (tmp_path / "v1_model.joblib").exists()
+
+    def test_es_predictions_missing_column_raises(self, tmp_path):
+        bad = _es_predictions().drop(columns=["p_loss"])
+        with pytest.raises(ValueError, match="ES 评估行缺少列"):
+            self._save(tmp_path, fixed_name=True, es_predictions=bad)
+
+    def test_es_predictions_dtype_is_compact(self, tmp_path):
+        self._save(tmp_path, fixed_name=False, es_predictions=_es_predictions())
+        frame = pd.read_parquet(tmp_path / "v1_es_predictions.parquet")
+        assert frame["loss_label"].dtype == np.int8
+        assert frame["p_loss"].dtype == np.float32
+        assert frame["h"].dtype == np.int16

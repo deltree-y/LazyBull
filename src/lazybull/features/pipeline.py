@@ -12,6 +12,7 @@ import pandas as pd
 from loguru import logger
 
 from ..data import DataLoader, Storage
+from ..data.loader_announcement import ANNOUNCEMENT_PIT_LOOKBACK_START
 from . import FeatureBuilder
 from .ensure import (
     OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY,
@@ -640,8 +641,13 @@ def build_features_data(
             build_share_float_lookup_by_date,
         )
 
-        # 质押（季分区，回溯 start_dt 覆盖 PIT 前向填充所需历史期）
-        pledge_df = loader.load_pledge_stat(start_dt.strftime("%Y%m%d"), end_dt.strftime("%Y%m%d"))
+        # 质押（季分区，PIT 前向填充）：必须从全量历史起点加载，不能用批次预热
+        # 窗口（start_dt）——季频数据在窗口内可能一个季度分区都没有，会导致质押列
+        # 整列缺失、pledge_high_flag/pledge_delta 被静默零填充，并使各日期 schema
+        # 不一致。上界仍取 end_dt，避免未来分区泄露。
+        pledge_df = loader.load_pledge_stat(
+            ANNOUNCEMENT_PIT_LOOKBACK_START, end_dt.strftime("%Y%m%d")
+        )
         if pledge_df is not None and len(pledge_df) > 0:
             logger.info(f"质押数据: {len(pledge_df)} 条")
             pledge_lookup = build_pledge_lookup_by_date(pledge_df, trading_dates_str)

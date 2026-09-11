@@ -277,10 +277,17 @@ python scripts/train_terminal_risk_model.py \
     --train-start 20210104 --train-end 20241231 \
     --es-start 20250102 --es-end 20251231
 
-# 输出：data/models/terminal_loss/ 下按 ModelRegistry 版本化保存（每次训练
-# 注册新版本 v{N}，不覆盖历史）：模型 artifact、v{N}_report.json 概率质量报告、
-# v{N}_calibration_by_h_sigma.csv 校准表与 v{N}_label_coverage.csv 覆盖分布；
-# --fixed-name 为固定文件名覆盖模式（供 WF 折目录等研究场景）
+# 输出：始终经 ModelRegistry 版本化保存（每次训练注册新版本 v{N}，不覆盖历史）：
+# 模型 artifact、v{N}_report.json 概率质量报告、v{N}_calibration_by_h_sigma.csv
+# 校准表、v{N}_label_coverage.csv 覆盖分布、v{N}_es_predictions.parquet ES 逐行预测
+#（供门禁区间重采样，--no-es-predictions 可跳过）；--fixed-name 只额外写一套固定名
+# 别名供既有工具读取（别名可被覆盖，版本历史才是唯一副本）
+# pct 母截面：pct_* 分母取自 clean/daily 全量化重建的标签过滤前完整同日截面
+#（cs_train 行已按 y_ret 标签有效性过滤，分母窄约 10%），四个基列与特征流水线
+# 同一实现，并在交集上与 cs_train 同名列逐值校验（超容差即报错）
+# 报告门禁：各 label_status 占比、缺失组 vs valid 组的代理画像与当日截面分位
+# 条件事件率、endpoint_delayed 敏感性，按预登记阈值（缺失占比 >= 1%）判定
+# 是否必须补做敏感性
 # 内存与抽样：全网格标签按 50 交易日分块构建，每组 (股票,日) 抽 2 个期限、
 # 每 3 个交易日取 1（--h-per-group / --every-n-days 可调，参数落入元数据）
 # 训练超参：--max-depth / --learning-rate / --n-estimators / --early-stopping-rounds
@@ -300,6 +307,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.
 # 历史最优自动比较：汇总末尾按超参签名聚合台账（含当次），醒目打印历史最优
 # 超参签名与当次是否刷新；超参身份以折 meta（train/label/sampling 配置）为
 # 权威——同后缀不同批次超参（如 baseline 从 depth=3 改跑 depth=4）自动拆组
+
+# 门禁区间重判（点估计余量薄时必看：判断"通过"是否只是超参选择的结果）
+python scripts/analyze_terminal_risk_gate.py --wf-root data\walk_forward\terminal_risk_wf
+# 折级口径：8 折 = 8 个独立制度，输出折间分布（min/median/max/std）、达标折占比、
+# 均值 lift 的 90% 自举区间；产物 gate_ci.csv
+# 注意折级自举抽不到比观测最小值更差的折，"最差折是否真高于阈值"须看逐折分块区间
+# 逐折口径（需 ES 逐行预测，训练已默认落盘）：按连续交易日分块做 moving-block
+# bootstrap，块长默认 5/10/20 日（方案第 6 节的 40 日块是组合级多年 OOS 口径，
+# ES 段只有几十个交易日，用 40 日会使块数不足甚至退化为原样本）；产物 gate_ci_block.csv
 ```
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的

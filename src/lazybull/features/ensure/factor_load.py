@@ -8,6 +8,7 @@ import pandas as pd
 from loguru import logger
 
 from ...data import DataLoader, Storage, TushareClient
+from ...data.loader_announcement import ANNOUNCEMENT_PIT_LOOKBACK_START
 from .downloads import (
     _try_download_cashflow,
     _try_download_dividend,
@@ -450,8 +451,10 @@ def _load_factor_data(
     gc.collect()
 
     # ── 风控公告类（质押，季分区 PIT 前向填充）─────────────────────
+    # 必须从全量历史起点加载：季频数据在近期窗口内可能没有分区（如 2024-07 的
+    # 最新质押季度为 2023-06-30），只传 start_date 会取不到数据、使质押列消失。
     pledge_today = pd.DataFrame()
-    pledge_df = loader.load_pledge_stat(start_date, end_date)
+    pledge_df = loader.load_pledge_stat(ANNOUNCEMENT_PIT_LOOKBACK_START, end_date)
     if pledge_df is not None and len(pledge_df) > 0:
         from ...factors.risk.announcement_lookup import build_pledge_lookup_by_date
 

@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.108.2] - 2026-09-11
+
+### Fixed
+
+- **母截面「数据态漂移」系误判：真实根因是母截面历史窗口过短（停牌复牌日收益口径不一致）**：v0.108.1 把 2024H2 折的 `cvar_95_20` 差异归因为"`300630.SZ` 某日收益被修订（−20% → −19.64%）、cs_train 分区陈旧"，该结论**错误**。
+  - **逐行追踪后的真实机制**：该股 **20240430→20240708 停牌**（clean/daily 期间无行），复牌日 20240708 的收益按"股票自身上一可用行"计算。特征流水线加载 `daily_clean` 的窗口是 `start_date − 7 个月`（`features/pipeline.py`），能取到 20240430 行（`close_adj=43.4967`）→ 收益 −20.0%、`cvar_95_20 = −0.2`，与 cs_train 完全一致（重建后逐值复核亦为 −0.2）；而母截面只用 **30 个交易日**预热，20240430 落在窗外 → 0708 收益为 NaN → cvar 退化成 0709 的 −19.6356%。差异因此**逐日连续重现**（连续 10 个交易日各 1 行），但并非数据被修订。另以受控实验确认口径来源：`precompute_risk_factors` 在 `pre_close_adj` 缺失时退化为 `close_adj.pct_change`，两者对复牌日给出不同结果，故窗口必须与流水线一致。
+  - **修复**：`mother_section.py` 用 `MOTHER_HISTORY_MONTHS = 7`（替换 `MOTHER_WARMUP_DAYS = 30`），`_trade_calendar_window` 按 `首个目标日 − 7 个月` 取交易日轴，与特征流水线同一窗口规则；`build_mother_section` 移除 `warmup_days` 参数（无调用方传参）。
+  - **验证**：对 20240722–20240802 这 10 个日期（48,702 行交集）重算，四列 `max_abs_diff` 全部为 **0.0**、离群 0 行——**无需重刷任何 cs_train 分区**。重跑折 2024H2 端到端确认（含 8.1 覆盖审计与注册制落盘）。
+  - **顺带健壮性**：历史窗口内整天无 `clean/daily` 行（占位分区 / 全市场停市）时不再 `KeyError`，改为显式告警且该日不参与窗口。
+- **局部重建 cs_train 时质押因子整列消失（PIT 前向填充加载窗口过短）**：`features/pipeline.py` 与 `features/ensure/factor_load.py` 此前按"批次预热窗口"（`start_date − 7 个月`）加载 `pledge_stat`。质押是**季频**数据，窗口内可能一个季度分区都没有（重建 20240722–20240802 时窗口起点为 20231222，而当时最新质押季度是 20230630）→ `pledge_ratio`/`pledge_freshness_days`/`pledge_ratio_prev` 三列整列消失（383→380 列，各日期 schema 不一致），`pledge_ratio_decayed` 全 NaN，`pledge_high_flag`/`pledge_delta` 被静默零填充（把"数据缺失"伪装成"无质押风险"，违反禁止静默零因子契约）。
+  - **修复**：新增单一来源常量 `data/loader_announcement.py::ANNOUNCEMENT_PIT_LOOKBACK_START = "20100101"`，质押一律从该起点加载、上界仍传 `end_date`（不泄露未来分区）；两处调用点（离线 pipeline、纸面 ensure）同步。
+  - **验证**：宽窗口下 20240802 的 `pledge_ratio`（3606/3606）、`pledge_freshness_days`（3606/3606）、`pledge_ratio_prev`（3483/3483）与生产分区**逐值完全一致**（容差 1e-9）。
+  - **边界登记**：`share_float`（年分区、按公告日 PIT 选取"最近未解禁"）**不在**本次修复范围——改成全量历史会改变 `days_to_unlock`/`unlock_ratio` 取值（实测非空行 873→713），属"PIT 选取窗口语义"的独立决策，需单独评估后再动。
+- **局部重建 cs_train 与批量构建不等价（操作结论，同步写入 CLAUDE 契约）**：20240722–20240802 的局部重建除质押外还移走了 `macd_*`、`turnover_percentile`、`vol_regime_percentile`、`mkt_ma250_ratio`、`days_to_unlock` 等多列数值——这些因子依赖**加载窗口长度**（252 日百分位、EMA 预热、市场 MA250），而生产分区来自更宽的批量构建窗口。故：**不要用局部重建覆盖生产 cs_train**；确需局部重建时必须先冻结并登记窗口口径。（本次重建产物已用备份回滚。）
+
+### Tests
+
+- `test_terminal_loss_mother_section.py` 新增「停牌复牌日收益必须取停牌前最后一行」用例：合成单股停牌 16 个交易日后复牌、复牌日相对停牌前一行 −35%，断言母截面 `cvar_95_20` 等于该收益；并用 `monkeypatch` 把 `MOTHER_HISTORY_MONTHS` 缩到 1 个月反证旧口径会丢掉该收益（22 项）。
+- 新增 `test_pit_announcement_lookback_window.py`（2 项）：离线 `build_features_data` 与纸面 `_load_factor_data` 加载质押时必须传 `ANNOUNCEMENT_PIT_LOOKBACK_START` 且上界为 `end_date`（= `start − 1 个月`）。
+
+## [0.108.1] - 2026-09-11
+
+### Fixed
+
+- **母截面一致性校验把稀疏数据态漂移误判为实现漂移、导致整折训练中断**：v0.108.0 新增的校验（`mother_section.validate_mother_section_against_cs_train`）用"任一超容差即报错"，实测在折 2024H2 上被 1 行差异打断训练（`ValueError: 母截面与 cs_train 同名列不一致（最大绝对差 {'cvar_95_20': 0.003643721342086792}）`）。
+  - **根因（已枚举到行）**：`300630.SZ` 的 `cvar_95_20` 在 cs_train 中为 `-0.200000`，而用当前 `clean/daily` 重算为 `-0.196356`；该股某日收益被修订（−20% → −19.64%），修订日落在 20240722–20240802 **连续 10 个交易日**各自的 20 日窗口内，因此逐日重现同一差异。全窗口扫描（20210701–20241231，851 个交易日）显示仅此一只股票、10 行超容差（约 414 万行交集的 1.4e-5），其余四列最大绝对差均为 0——属数据态漂移而非实现差异，旧判据无法区分。
+  - **修复（窗口级判定）**：校验拆成三步——`validate_mother_section_against_cs_train` 逐块只**统计**（分块构建时每块仅 50 个交易日，块内占比会把小块噪声当信号），`merge_mother_section_validation` **合并**各块统计并在总分母上重算占比，`assert_mother_section_validation_ok` 在训练前做**窗口级判定**。
+  - **判据只用行占比 + 幅度**：超容差行占交集行数 > `MOTHER_OUTLIER_SHARE_LIMIT`（1e-4）、或任一列最大绝对差 > `MOTHER_HARD_ATOL`（0.05）→ 判实现漂移并报错（换实现、整段因子口径变更、整日批量重算均会触发）；未超限时告警并把离群明细（日期/列/股票/差值，最多 5 条样例 + 按列计数）登记进 `mother_section_validation.outliers` 落盘到模型元数据，不阻断训练但禁止静默掩过。**已移除"涉及日期数/日占比"判据**：实测日占比随窗口长短剧烈变化（10/123 日 = 8% 会被误报，10/851 日 = 1.2% 则通过），是伪影而非信号。另新增"无任何交集行即报错"，避免索引/证券域全不匹配时空校验静默通过。
+  - **真实验证**：重跑此前失败的折 2024H2（20210701–20241231）已正常完成并注册 `v1`（ES logloss 0.3142 / brier 0.0891 / pr_auc 0.1437 / 事件率 0.0999）；含漂移日的短窗口（123 日 / 59.5 万行交集）日志为「存在 10 行数据态差异（占窗口交集 1.68e-05，涉及 10/123 日，不阻断训练）：明细已登记至元数据 outliers」，训练正常完成。
+
+### Tests
+
+- `test_terminal_loss_mother_section.py` 由 11 项扩到 21 项：精确一致时离群为 0；全部行偏移 / 稀疏但幅度超 `hard_atol` 均判系统性报错；稀疏漂移在放宽阈值下走"告警 + 登记"分支（断言离群行数、涉及日期数、样例字段与 float32 精度下的差值）；同一漂移在生产阈值下仍被拦下（防阈值被偷偷放宽）；**窗口级聚合稀释单块占比**、**列最大差取各块最大值**、**空零件报错**、**行占比超限报错**、**稀疏漂移不因涉及日期多而报错（日占比不是判据）**；无交集报错；空母截面帧按日跳过。
+
+## [0.108.0] - 2026-09-10
+
+### Added
+
+- **terminal_loss 第一阶段收尾：pct 母截面重建 + 覆盖审计 + 门禁区间 + 注册制落盘**。首轮 8 折 WF（2022H2..2026H1）显示最优组 `depth=5/lr=0.04/nest=1000/esr=50` 的 `lift_min=1.151`（阈值 1.1，余量仅 4.6%），且折间 `std=0.53`、`pred_bias` 跨折从 −0.103 到 +0.049；本版补齐第一阶段剩余门禁项与防单副本丢失的落盘契约。
+  - **pct_* 母截面重建（`risk/terminal_loss/mother_section.py`，新文件）**：`pct_*` 分母此前取自 `cs_train`（已按 `y_ret` 标签有效性过滤，实测同日 4698/5344 ≈ 88%，分母窄约 10%），违反方案 4.4。现从 `clean/daily` 全量化重建**标签过滤前的完整同日截面**（证券域 = 当日有行全部股票，因子不可得为 NaN 但不剔除行），四个基列复用特征流水线同一实现：`cvar_95_20`/`max_drawdown_20`/`amihud_illiq_20` 走 `precompute_risk_factors`（FeatureBuilder 主路径），`ret_20` 走 `_calculate_window_features_static`（含观测数不足置 NaN 契约）；`vol`/`amount` 列为必需（`ret_20` 共享实现的输入），开高低价为可选。真实数据实测：100+ 交易日、25 万+ 行交集上四列最大绝对差均为 **0**（与 `cs_train` 逐值一致）。新增 `validate_mother_section_against_cs_train` 在交集上逐值校验（容差 1e-6），不一致即报错，防止"母截面换了另一套实现"静默发生。
+  - **`add_pct_features(day_df, mother_df)` 契约变更**：必须显式传入完整母截面，先丢弃输入中已有的 `pct_*` 再按母截面重排（避免 merge 产生 `_x/_y` 后缀把旧分母带进矩阵）；训练行不在母截面证券域内必须报错，禁止以 NaN 冒充百分位；`build_training_matrix` 新增 `mother_by_date` 必填参数，有训练行但缺母截面即报错（不做隐式回退）。
+  - **覆盖审计（`risk/terminal_loss/coverage_audit.py`，新文件）**：补齐方案 8.1 的"停牌/无端点样本占比与可观测代理事件率差异"与 `endpoint_delayed` 敏感性。`LabelCoverageAccumulator` 跨块累计 `(h, label_status)` 计数与 valid 行数/事件数/execution_blocked 数后再算比率（修掉分块场景下"块内均值的均值"这一错误口径），`status_share()` 输出各状态占比；`ProxyProfileAccumulator` 输出缺失组 vs valid 组的代理画像（sigma/amihud/ret_20/cvar）与 valid 行按**当日截面分位桶**的条件事件率，并按缺失组画像给出隐含事件率（只作偏差方向/量级诊断，不进任何分数）；`delayed_endpoint_sensitivity` 对 `endpoint_missing` 行用 E 之后首个有报价开盘价重算标签，分别统计可评估行、T+1 缺失与超出搜索窗行数；`coverage_audit_required` 按预登记阈值（缺失占比 ≥ 1%）判定是否必须补做敏感性，占比与代理差异无论是否触发都写入报告。真实数据抽测：端点缺失 2.35 万行中 8502 行可评估（事件率 0.105），sigma 画像隐含事件率比 valid 高 +0.044、cvar 低 −0.046，方向可解释。
+  - **分块重采样与门禁区间（`risk/terminal_loss/block_stats.py` + `scripts/analyze_terminal_risk_gate.py`，新文件）**：块单位固定为完整交易日截面（moving-block，块内整截面进出），提供 `moving_block_metric_ci` / `moving_block_metric_sensitivity` / `block_paired_delta` / `fold_level_gate`。门禁重判分两级：折级（8 折 = 8 个独立制度，输出折间 min/median/max/std、达标折占比、均值 lift 自举区间）与逐折（ES 段 moving-block 区间，需 ES 逐行预测）。**口径边界显式登记**：折级自举对"最小值"统计量是退化的（重采样抽不到比观测最小值更差的折，`min_ci_degenerate=True`），故不再输出误导性的 `P(min lift ≥ 阈值)`，"最差折是否真高于阈值"改由逐折区间回答。块长不得 ≥ 可用交易日数（重采样退化为原样本、区间宽度恒为 0），必须报错或跳过而非静默缩小；ES 段默认 5/10/20 日块（`ES_BLOCK_DAYS`），方案第 6 节的 40 日块登记为组合级多年 OOS 口径（`PRIMARY_BLOCK_DAYS`）。产物 `gate_ci.csv` / `gate_ci_block.csv`。
+  - **ES 逐行预测落盘**：训练新增 `*_es_predictions.parquet`（`trade_date/ts_code/h/loss_label/p_loss`，紧凑 dtype int16/int8/float32），门禁区间重采样必需（只有聚合指标无法自举）；`--no-es-predictions` 可跳过。
+  - **报告门禁补全**：`label_coverage` 长表新增 valid 组 `event_rate` 与 `execution_blocked_count`；`best_iteration` 登记入元数据（此前只打日志，导致 `summary.csv` 的 `best_iteration` 列恒为空）；报告新增 `coverage_audit` 段与 `mother_section_validation` 统计；`pct_cross_section_source` 登记为"clean/daily 完整同日母截面"，移除旧的 cs_train 过滤域 `known_limitations`。
+
+### Changed
+
+- **terminal_loss 一律注册制版本化，`--fixed-name` 降级为附加别名**：此前 `--fixed-name`（WF 折目录）只写一套固定名文件，同配置再次训练即整目录覆盖，模型只剩一个副本、无法追溯。现统一落盘入口 `save_terminal_loss_artifacts`：**任何模式都先经 ModelRegistry 注册 `v{N}`**（模型 + features + metadata + report + 校准表 + 覆盖表 + ES 评估行，永不覆盖），`--fixed-name` 只额外写固定名别名供既有工具按固定文件名读取；别名可被覆盖、不构成唯一副本。
+- **`summarize_terminal_risk_wf.py` 支持版本化产物回退**：折目录固定名别名缺失时回退最高版本 `v{N}_report.json` / `v{N}_metadata.json`，并新增 `_normalize_meta` 统一两种元数据形状（折 sidecar 的顶层 `train_config` 与注册表 metadata 的 `train_params` 内嵌配置），避免仅注册过的折被静默跳过。
+
+### Tests
+
+- 新增 `test_terminal_loss_mother_section.py`（11 项）：母截面四列齐全、复现特征流水线取值（交集最大绝对差为 0）、证券域 = 当日有行股票、预热后 `ret_20` 可用、缺分区/缺必需列报错、开高低价可选、一致性校验不一致报错与缺 cs_train 分区报错。
+- 新增 `test_terminal_loss_coverage_audit.py`（16 项）：分块累计等于单帧口径（反例：块内均值平均 = 0.75 vs 正解 0.8）、`execution_blocked` 仅计 valid、占比按 h 归一、代理画像分组、当日截面分位桶条件事件率、隐含事件率区间性、预登记阈值触发/不触发、delayed 敏感性四种计数（可评估/T+1 缺失/超窗/仅审计端点缺失）。
+- 新增 `test_terminal_loss_block_stats.py`（20 项）：lift 口径、块单位整截面、种子可复现、ES 默认块长与组合级块长、不可行块长跳过而非缩小、块长 ≥ 交易日数显式报错、成对比较（同臂零差值、优臂检出、行数/键/标签不一致报错）、折级门禁（达标折占比、均值区间、min 退化标记）。
+- `test_terminal_loss_dataset.py` 改为断言母截面语义：分母只能来自母截面（子集排名将得 1/2 而非 2/3）、训练行自带基列不参与排名、母截面缺列/缺日/证券域外报错、矩阵 `pct_*` 逐值等于母截面分位。
+- `test_terminal_loss_script.py` 合成环境补齐 `vol/amount/开高低` 与母截面一致的四个基列（脚本会在交集上校验），新增固定名 + 注册制并存、重复训练保留 v1/v2、`best_iteration` 与审计段落盘断言（原 `known_limitations` 断言删除）。
+- `test_terminal_loss_artifacts.py` 新增 5 项统一落盘用例（别名 + 版本并存、别名覆盖但版本历史保留、无别名模式、ES 评估行缺列报错、紧凑 dtype）；`test_summarize_terminal_risk_wf.py` 新增版本化回退与目录缺产物跳过 2 项。
+- 全量回归 1626 项通过；真实数据短窗口冒烟（2023H1）验证母截面校验、覆盖审计、delayed 敏感性、注册制与 ES 评估行落盘。
+
 ## [0.107.4] - 2026-09-10
 
 ### Fixed

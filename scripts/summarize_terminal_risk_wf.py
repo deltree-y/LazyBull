@@ -168,6 +168,26 @@ def parse_experiment_suffix(fold_name: str) -> dict:
     }
 
 
+def _normalize_meta(meta: dict) -> dict:
+    """统一两种元数据形状：折 sidecar 与注册表 metadata。
+
+    - 折 sidecar（固定名别名 terminal_loss_model.json）：顶层 train_config /
+      label_config，sampling 在 metadata 内；
+    - 注册表 metadata（v{N}_metadata.json）：配置全在 train_params 内。
+
+    归一后统一从 train_config / label_config / metadata 读取，避免两套键名
+    在两处代码里分叉。
+    """
+    if "train_params" in meta:
+        params = meta.get("train_params") or {}
+        return {
+            "train_config": params.get("train_config") or {},
+            "label_config": params.get("label_config") or {},
+            "metadata": params,
+        }
+    return meta
+
+
 def build_param_signature(meta: dict) -> Optional[str]:
     """从折 sidecar 元数据构建超参签名（历史比较的身份键）。
 
@@ -204,10 +224,10 @@ def _fmt(value: object, spec: str = ".3f") -> str:
 # 重定向/管道（非 tty）时不加色码，保证落盘与管道文本干净。
 _COLOR_ENABLED = sys.stdout.isatty()
 
-_BOLD_CYAN = "1;36"    # 标题与分隔线（信息性）
-_BOLD_GREEN = "1;92"   # 优胜者（历史最优签名/分数/表格首行）
+_BOLD_CYAN = "1;36"  # 标题与分隔线（信息性）
+_BOLD_GREEN = "1;92"  # 优胜者（历史最优签名/分数/表格首行）
 _BOLD_YELLOW = "1;93"  # 刷新提示
-_YELLOW = "93"         # 未达提示（弱于刷新）
+_YELLOW = "93"  # 未达提示（弱于刷新）
 
 
 def _enable_vt() -> None:
@@ -232,6 +252,32 @@ def _highlight_first_row(df: pd.DataFrame, code: str) -> str:
     return "\n".join([lines[0], _c(lines[1], code), *lines[2:]])
 
 
+def _resolve_fold_artifacts(fold_dir: Path) -> tuple:
+    """定位折的报告与 sidecar：固定名别名优先，否则回退最高版本化产物。
+
+    训练脚本自 v0.108.0 起始终写注册制版本化产物（``v{N}_report.json`` /
+    ``v{N}_metadata.json``），``--fixed-name`` 只是附加别名。别名缺失时
+    必须能读版本化文件，否则仅注册过的折会被静默跳过。
+
+    Returns:
+        (report_path, meta_path)：不存在时对应项为 None
+    """
+    fixed_report = fold_dir / "terminal_loss_report.json"
+    fixed_meta = fold_dir / "terminal_loss_model.json"
+    if fixed_report.exists():
+        return fixed_report, fixed_meta if fixed_meta.exists() else None
+    versioned = sorted(
+        fold_dir.glob("v*_report.json"),
+        key=lambda p: int(p.name.split("_")[0].lstrip("v")),
+    )
+    if not versioned:
+        return None, None
+    latest = versioned[-1]
+    version_str = latest.name.split("_")[0]
+    meta_candidate = fold_dir / f"{version_str}_metadata.json"
+    return latest, meta_candidate if meta_candidate.exists() else None
+
+
 def collect_fold_rows(wf_root: Path) -> pd.DataFrame:
     """读取各折目录的 report 与模型元数据，拼 summary 行。
 
@@ -240,10 +286,9 @@ def collect_fold_rows(wf_root: Path) -> pd.DataFrame:
     """
     rows = []
     for fold_dir in sorted(p for p in wf_root.iterdir() if p.is_dir()):
-        report_path = fold_dir / "terminal_loss_report.json"
-        meta_path = fold_dir / "terminal_loss_model.json"
-        if not report_path.exists():
-            logger.warning(f"跳过 {fold_dir.name}: 缺 terminal_loss_report.json")
+        report_path, meta_path = _resolve_fold_artifacts(fold_dir)
+        if report_path is None:
+            logger.warning(f"跳过 {fold_dir.name}: 缺 terminal_loss_report.json / v*_report.json")
             continue
         with open(report_path, encoding="utf-8") as f:
             report = json.load(f)
@@ -253,9 +298,9 @@ def collect_fold_rows(wf_root: Path) -> pd.DataFrame:
         n_train = es_n = None
         train_cfg = {}
         param_signature = None
-        if meta_path.exists():
+        if meta_path is not None:
             with open(meta_path, encoding="utf-8") as f:
-                meta = json.load(f)
+                meta = _normalize_meta(json.load(f))
             metadata = meta.get("metadata", {})
             stage_dates = metadata.get("stage_dates", {})
             best_iteration = metadata.get("best_iteration")
@@ -318,8 +363,8 @@ def build_tuning_table(summary: pd.DataFrame, lift_min_threshold: float) -> pd.D
             work[col] = parsed[col].to_numpy()
     if "param_signature" not in work.columns:
         work["param_signature"] = None
-    work["signature"] = work["param_signature"].astype(object).where(
-        work["param_signature"].notna(), ""
+    work["signature"] = (
+        work["param_signature"].astype(object).where(work["param_signature"].notna(), "")
     )
 
     # 同后缀出现多个签名 → 提示拆行（旧消融折残留或后缀与 meta 不一致）
@@ -341,7 +386,9 @@ def build_tuning_table(summary: pd.DataFrame, lift_min_threshold: float) -> pd.D
         lr_vals = group["learning_rate"].dropna()
         lift_geo: Optional[float] = float(np.exp(np.log(valid).mean())) if len(valid) else None
         lift_min: Optional[float] = float(valid.min()) if len(valid) else None
-        tuning_score: Optional[float] = 0.5 * (lift_geo + lift_min) if lift_geo is not None else None
+        tuning_score: Optional[float] = (
+            0.5 * (lift_geo + lift_min) if lift_geo is not None else None
+        )
         rows.append(
             {
                 "suffix": suffix if suffix else BASELINE_LABEL,
@@ -402,9 +449,7 @@ def append_history_records(history_csv: Path, records: pd.DataFrame) -> int:
     if records.empty:
         return 0
     if history_csv.exists():
-        records.to_csv(
-            history_csv, mode="a", header=False, index=False, encoding="utf-8"
-        )
+        records.to_csv(history_csv, mode="a", header=False, index=False, encoding="utf-8")
     else:
         records.to_csv(history_csv, index=False, encoding="utf-8-sig")
     return len(records)
@@ -423,18 +468,12 @@ def _load_history_csv(history_csv: Path) -> pd.DataFrame:
     if "param_signature" not in legacy.columns:
         legacy["param_signature"] = fallback
     else:
-        mask = legacy["param_signature"].isna() | (
-            legacy["param_signature"].astype(str) == ""
-        )
-        legacy.loc[mask, "param_signature"] = [
-            f for f, m in zip(fallback, mask) if m
-        ]
+        mask = legacy["param_signature"].isna() | (legacy["param_signature"].astype(str) == "")
+        legacy.loc[mask, "param_signature"] = [f for f, m in zip(fallback, mask) if m]
     return legacy
 
 
-def build_history_table(
-    history_csv: Path, current_records: pd.DataFrame
-) -> pd.DataFrame:
+def build_history_table(history_csv: Path, current_records: pd.DataFrame) -> pd.DataFrame:
     """台账（含当次记录）按超参签名聚合，输出历史最优比较表。
 
     "效果最好"判定口径 = score_best（历史最高单次调参分）；score_median
@@ -459,9 +498,7 @@ def build_history_table(
         )
     else:
         all_rows["_gate"] = False
-    current_stamps = (
-        set(current_records["timestamp"]) if not current_records.empty else set()
-    )
+    current_stamps = set(current_records["timestamp"]) if not current_records.empty else set()
 
     rows = []
     for signature, group in all_rows.groupby("param_signature", dropna=False, sort=False):
@@ -501,13 +538,18 @@ def build_history_table(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="terminal_loss 滚动 WF 汇总")
-    parser.add_argument("--wf-root", default="data/walk_forward/terminal_risk_wf",
-                        help="各折输出目录的父目录")
-    parser.add_argument("--lift-min-threshold", type=float, default=1.1,
-                        help="组内 lift 最小值门禁（默认 1.1）")
-    parser.add_argument("--no-history", action="store_true",
-                        help="跳过 tuning_history.csv 台账追加（默认每次按组追加；"
-                             "历史比较仍基于既有台账 + 当次内存拼接）")
+    parser.add_argument(
+        "--wf-root", default="data/walk_forward/terminal_risk_wf", help="各折输出目录的父目录"
+    )
+    parser.add_argument(
+        "--lift-min-threshold", type=float, default=1.1, help="组内 lift 最小值门禁（默认 1.1）"
+    )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help="跳过 tuning_history.csv 台账追加（默认每次按组追加；"
+        "历史比较仍基于既有台账 + 当次内存拼接）",
+    )
     args = parser.parse_args()
 
     _enable_vt()
@@ -533,8 +575,7 @@ def main() -> int:
     bias = summary["pred_bias"].dropna()
     if len(bias):
         logger.info(
-            f"pred_bias 跨折: mean={bias.mean():+.4f}（正值=概率高估，"
-            f"C 段校准的输入信号）"
+            f"pred_bias 跨折: mean={bias.mean():+.4f}（正值=概率高估，" f"C 段校准的输入信号）"
         )
     print(summary.to_string(index=False))
 
@@ -563,10 +604,12 @@ def main() -> int:
     best = tuning_table.iloc[0]
     print()
     print(_c("=" * 68, _BOLD_CYAN))
-    print(_c(
-        f"调参指标（本次最优）: 超参组 {best['suffix']}  调参分 = {_fmt(best['tuning_score'])}",
-        _BOLD_CYAN,
-    ))
+    print(
+        _c(
+            f"调参指标（本次最优）: 超参组 {best['suffix']}  调参分 = {_fmt(best['tuning_score'])}",
+            _BOLD_CYAN,
+        )
+    )
     print(
         f"  tuning_score = 0.5×lift_geo_mean({_fmt(best['lift_geo_mean'])}) + "
         f"0.5×lift_min({_fmt(best['lift_min'])})；"
@@ -576,9 +619,7 @@ def main() -> int:
     print(_c("=" * 68, _BOLD_CYAN))
 
     # ── 历史比较（超参签名为身份键；--no-history 时仅内存拼当次，不落盘）──
-    history_records = build_history_records(
-        tuning_table, str(wf_root), args.lift_min_threshold
-    )
+    history_records = build_history_records(tuning_table, str(wf_root), args.lift_min_threshold)
     history_csv = wf_root / "tuning_history.csv"
     if not args.no_history:
         appended = append_history_records(history_csv, history_records)
@@ -600,11 +641,13 @@ def main() -> int:
     )
     print()
     print(_c("=" * 68, _BOLD_CYAN))
-    print(_c(
-        f"历史最优（含当次，共 {int(history_table['runs'].sum())} 次汇总、"
-        f"{len(history_table)} 个超参组）",
-        _BOLD_CYAN,
-    ))
+    print(
+        _c(
+            f"历史最优（含当次，共 {int(history_table['runs'].sum())} 次汇总、"
+            f"{len(history_table)} 个超参组）",
+            _BOLD_CYAN,
+        )
+    )
     print(f"  最优超参签名: {_c(str(hist_best['param_signature']), _BOLD_GREEN)}")
     print(
         f"  历史最好调参分 = {_c(_fmt(hist_best['score_best']), _BOLD_GREEN)}"
@@ -613,10 +656,12 @@ def main() -> int:
         f"门禁通过率 {float(hist_best['gate_pass_rate']):.0%}）"
     )
     if cur_reaches_best:
-        print(_c(
-            f"  ★ 当次超参组 {best['suffix']} 达到/刷新历史最优（调参分 {_fmt(cur_score)}）",
-            _BOLD_YELLOW,
-        ))
+        print(
+            _c(
+                f"  ★ 当次超参组 {best['suffix']} 达到/刷新历史最优（调参分 {_fmt(cur_score)}）",
+                _BOLD_YELLOW,
+            )
+        )
     else:
         gap = (
             float(cur_score) - float(hist_best["score_best"])
@@ -624,11 +669,13 @@ def main() -> int:
             else None
         )
         gap_str = f"{gap:+.3f}" if gap is not None else "NA"
-        print(_c(
-            f"  当次最优 {best['suffix']}: 调参分 {_fmt(cur_score)} —— "
-            f"未达历史最优（差距 {gap_str}）",
-            _YELLOW,
-        ))
+        print(
+            _c(
+                f"  当次最优 {best['suffix']}: 调参分 {_fmt(cur_score)} —— "
+                f"未达历史最优（差距 {gap_str}）",
+                _YELLOW,
+            )
+        )
     print(_c("=" * 68, _BOLD_CYAN))
     return 0
 

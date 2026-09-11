@@ -6,7 +6,7 @@
 
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import joblib
 import numpy as np
@@ -34,12 +34,8 @@ class TerminalLossModelConfig:
     task_id: str
     feature_names: List[str]
     artifact_version: int = MODEL_ARTIFACT_VERSION
-    train_config: TerminalLossTrainConfig = field(
-        default_factory=TerminalLossTrainConfig
-    )
-    label_config: TerminalLossLabelConfig = field(
-        default_factory=TerminalLossLabelConfig
-    )
+    train_config: TerminalLossTrainConfig = field(default_factory=TerminalLossTrainConfig)
+    label_config: TerminalLossLabelConfig = field(default_factory=TerminalLossLabelConfig)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -65,8 +61,7 @@ class TerminalLossModel:
         missing = [c for c in self.config.feature_names if c not in features_df.columns]
         if missing:
             raise ValueError(
-                f"预测输入缺少特征列: {missing}；特征清单已冻结，"
-                f"请检查特征母截面构建"
+                f"预测输入缺少特征列: {missing}；特征清单已冻结，" f"请检查特征母截面构建"
             )
         X = features_df[self.config.feature_names]
         return self._clf.predict_proba(X)[:, 1]
@@ -92,9 +87,7 @@ class TerminalLossModel:
         payload = joblib.load(path)
         version = payload.get("artifact_version")
         if version != MODEL_ARTIFACT_VERSION:
-            raise ValueError(
-                f"artifact 版本不符: 期望 {MODEL_ARTIFACT_VERSION}, 实际 {version}"
-            )
+            raise ValueError(f"artifact 版本不符: 期望 {MODEL_ARTIFACT_VERSION}, 实际 {version}")
         raw = payload["config"]
         config = TerminalLossModelConfig(
             task_id=raw["task_id"],

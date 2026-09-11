@@ -9,7 +9,12 @@ import pandas as pd
 import pytest
 
 from scripts.train_terminal_risk_model import main as train_main
-from src.lazybull.risk.terminal_loss import BASE_FEATURES, TerminalLossModel
+from src.lazybull.risk.terminal_loss import (
+    BASE_FEATURES,
+    MOTHER_SECTION_FACTORS,
+    TerminalLossModel,
+    build_mother_section,
+)
 
 N_DAYS = 70
 WARMUP = 22  # sigma 窗口 20 + pct_change 首行 + 余量
@@ -34,18 +39,11 @@ def synthetic_env(tmp_path):
     )
 
     for i, d in enumerate(cal_str):
-        day = pd.DataFrame(
-            {
-                "ts_code": codes,
-                "open_adj": 100 + rng.normal(0, 1.5, len(codes)).cumsum() * 0 + 100 * 0,
-                "close_adj": [100.0] * len(codes),
-                "is_limit_down": 0,
-            }
-        )
-        # 生成有波动的价格路径（每股独立随机游走）
+        # 生成有波动的价格路径（每股独立随机游走），含 vol/amount
+        # （ret_20 共享实现与 amihud 因子的必需输入）
         if i == 0:
-            day["open_adj"] = 100.0
-            day["close_adj"] = 100.0
+            opens = [100.0] * len(codes)
+            closes = [100.0] * len(codes)
         else:
             prev = 100.0
             opens, closes = [], []
@@ -55,16 +53,34 @@ def synthetic_env(tmp_path):
                 cl = o * (1 + r)
                 opens.append(o)
                 closes.append(cl)
-            day["open_adj"] = opens
-            day["close_adj"] = closes
+        day = pd.DataFrame(
+            {
+                "ts_code": codes,
+                "trade_date": [d] * len(codes),
+                "open_adj": opens,
+                "close_adj": closes,
+                "high_adj": [max(o, c) * 1.005 for o, c in zip(opens, closes)],
+                "low_adj": [min(o, c) * 0.995 for o, c in zip(opens, closes)],
+                "vol": [1_000_000.0] * len(codes),
+                "amount": [100_000.0] * len(codes),
+                "is_limit_down": 0,
+            }
+        )
         day.to_parquet(daily_dir / f"{d[:4]}-{d[4:6]}-{d[6:8]}.parquet")
 
-        # cs_train 仅 train/es 区间生成（特征列全量随机）
-        if i >= WARMUP:
-            feat = {"ts_code": codes}
-            for col in BASE_FEATURES:
-                feat[col] = rng.normal(0, 1, len(codes))
-            pd.DataFrame(feat).to_parquet(cs_dir / f"{d}.parquet")
+    # cs_train：除四个 pct 基列外特征列随机；四个基列直接取母截面重建结果
+    # （训练脚本会在交集上逐值校验，不一致即报错——这是契约而非测试细节）
+    targets = cal_str[WARMUP:]
+    mother = build_mother_section(str(tmp_path), targets)
+    random_base_features = [c for c in BASE_FEATURES if c not in MOTHER_SECTION_FACTORS]
+    for d in targets:
+        feat = {"ts_code": codes}
+        for col in random_base_features:
+            feat[col] = rng.normal(0, 1, len(codes))
+        frame = pd.DataFrame(feat)
+        if d in mother:
+            frame = frame.merge(mother[d], on="ts_code", how="left")
+        frame.to_parquet(cs_dir / f"{d}.parquet")
 
     out_dir = tmp_path / "models" / "terminal_loss"
     return {
@@ -107,7 +123,7 @@ def _run_train(env, monkeypatch, extra_argv):
 
 
 def test_script_flat_mode_end_to_end(synthetic_env, monkeypatch):
-    """--fixed-name 模式回归：固定名四件套覆盖落盘（WF 折目录行为）。"""
+    """--fixed-name 模式：固定名别名 + 注册制版本化产物并存。"""
     env = synthetic_env
     assert _run_train(env, monkeypatch, ["--fixed-name"]) == 0
 
@@ -116,18 +132,48 @@ def test_script_flat_mode_end_to_end(synthetic_env, monkeypatch):
     assert (out / "terminal_loss_model.json").exists()
     assert (out / "terminal_loss_report.json").exists()
     assert (out / "calibration_by_h_sigma.csv").exists()
+    # 别名不再是唯一副本：同目录已注册 v1（永不覆盖）
+    assert (out / "v1_model.joblib").exists()
+    assert (out / "v1_metadata.json").exists()
+    assert (out / "terminal_loss_es_predictions.parquet").exists()
 
     with open(out / "terminal_loss_report.json", encoding="utf-8") as f:
         report = json.load(f)
     assert report["es"]["n"] > 0
     assert 0.0 <= report["es"]["event_rate"] <= 1.0
     assert report["es"]["logloss"] > 0
-    # 模型元数据落盘了已知限制登记（pct 母截面口径）
+    # 报告门禁：覆盖审计（占比/代理/延迟端点/预登记规则）随报告落盘
+    audit = report["coverage_audit"]
+    assert audit["status_share"]
+    assert "required" in audit
+    assert audit["required"]["threshold"] == 0.01
+    assert "delayed_endpoint" in audit
+    assert audit["mother_section_validation"]["checked_dates"] > 0
+
     with open(out / "terminal_loss_model.json", encoding="utf-8") as f:
         meta = json.load(f)
     assert meta["task_id"] == "terminal_vol_scaled_loss"
     assert len(meta["feature_names"]) == 33
-    assert meta["metadata"]["known_limitations"]
+    # best_iteration 必须登记（WF 汇总与早停健康度都从 sidecar 读取）
+    assert meta["metadata"]["best_iteration"] is not None
+    # pct 母截面口径登记为完整同日截面（不再是 cs_train 过滤域已知限制）
+    assert "完整同日母截面" in meta["metadata"]["pct_cross_section_source"]
+    assert "known_limitations" not in meta["metadata"]
+    assert meta["metadata"]["mother_section_validation"]["checked_dates"] > 0
+
+
+def test_script_fixed_name_keeps_history(synthetic_env, monkeypatch):
+    """同一折目录重复训练：别名被覆盖但版本历史保留（旧行为下模型会丢失）。"""
+    env = synthetic_env
+    assert _run_train(env, monkeypatch, ["--fixed-name"]) == 0
+    assert _run_train(env, monkeypatch, ["--fixed-name"]) == 0
+
+    out = Path(env["out_dir"])
+    for v in ("v1", "v2"):
+        assert (out / f"{v}_model.joblib").exists()
+        assert (out / f"{v}_metadata.json").exists()
+        assert (out / f"{v}_es_predictions.parquet").exists()
+    assert (out / "latest_model_version.txt").read_text(encoding="utf-8").strip() == "2"
 
 
 def test_script_hyperparam_cli_passthrough(synthetic_env, monkeypatch):
@@ -166,9 +212,7 @@ def test_script_hyperparam_cli_passthrough(synthetic_env, monkeypatch):
     assert cfg["min_child_weight"] == 1.0
     assert cfg["scale_pos_weight"] == 1.0
     assert cfg["eval_metric"] == "logloss"
-    assert cfg["regularization_scale_policy"] == (
-        "A_keep_regularization_with_1_over_grid_weights"
-    )
+    assert cfg["regularization_scale_policy"] == ("A_keep_regularization_with_1_over_grid_weights")
 
 
 def test_script_versioned_mode_end_to_end(synthetic_env, monkeypatch):

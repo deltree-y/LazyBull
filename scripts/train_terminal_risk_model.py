@@ -12,25 +12,32 @@
 （every_n），抽样参数落入模型元数据。抽样保留自然事件率，覆盖分布
 随报告落盘。
 
-已知限制（首轮登记）：pct_* 百分位母截面取自 cs_train（其行已按
-y_ret_* 标签有效性过滤，分母较完整日截面窄约 5%~10%）；训练与后续
-推理将使用同一母截面口径保证一致性，二阶段用持仓快照复核该偏差。
+pct_* 分母契约（方案 4.4）：分母取自 ``clean/daily`` 全量化重建的
+**标签过滤前完整同日母截面**（``mother_section``，四个基列与特征流水线
+同一实现），并在交集上与 ``cs_train`` 同名列逐值校验（超容差即报错）。
+不再使用 cs_train（y_ret 标签有效域）当分母。
+
+报告门禁（方案 8.1）：除 ES/Train 概率质量外，报告含
+- 各 label_status 按 h 的占比（含 execution_blocked 计数）
+- 缺失组 vs valid 组的代理画像与当日截面分位条件事件率
+- endpoint_delayed 敏感性（E 之后首个有报价开盘价重算标签）
+- 按预登记阈值（1%）判定的"是否必须补做敏感性"结论
+
+产物落盘：始终经 ModelRegistry 版本化注册（每次训练新增 v{N}，永不覆盖，
+研究折目录同样适用）；``--fixed-name`` 额外写固定名别名供既有工具读取。
 
 用法示例：
 python scripts/train_terminal_risk_model.py \
     --start-date 20190102 --end-date 20260630 \
     --train-start 20190102 --train-end 20231231 \
     --es-start 20240102 --es-end 20240628
-
-产物保存双模式：默认走 ModelRegistry 版本化（每次训练注册新版本 v{N}，
-不覆盖历史）；--fixed-name 为固定文件名覆盖模式，供 WF 折目录等研究场景
-（batch_terminal_risk_wf.ps1 已显式使用该开关）。
 """
 
 import argparse
 import sys
 import warnings
 from pathlib import Path
+from typing import Any, Dict, List
 
 import pandas as pd
 from loguru import logger
@@ -44,31 +51,41 @@ from src.lazybull.factors.risk.volatility_factors import (  # noqa: E402
     compute_sigma_daily_panel,
 )
 from src.lazybull.risk.terminal_loss import (  # noqa: E402
+    AUDIT_PROXY_COLUMNS,
     BASE_FEATURES,
     TERMINAL_LOSS_FEATURES,
     TERMINAL_LOSS_MODEL_TYPE,
+    LabelCoverageAccumulator,
+    ProxyProfileAccumulator,
     StageSpec,
     TerminalLossLabelConfig,
     TerminalLossModel,
     TerminalLossModelConfig,
     TerminalLossTrainConfig,
+    build_mother_section,
     build_performance_metrics,
     build_terminal_loss_labels,
     build_training_matrix,
+    coverage_audit_required,
+    delayed_endpoint_sensitivity,
     empty_training_matrix,
     evaluate_probability_quality,
     load_clean_daily_panels,
     load_cs_train_days,
     load_trade_calendar,
-    save_flat_artifacts,
-    save_versioned_artifacts,
+    save_terminal_loss_artifacts,
     split_stages_with_label_isolation,
     subsample_dates,
     subsample_h_per_group,
     train_terminal_loss_model,
+    validate_mother_section_against_cs_train,
 )
-from src.lazybull.risk.terminal_loss.labels import (  # noqa: E402
-    summarize_label_coverage,
+from src.lazybull.risk.terminal_loss.coverage_audit import (  # noqa: E402
+    DELAYED_SEARCH_WINDOW_DAYS,
+)
+from src.lazybull.risk.terminal_loss.mother_section import (  # noqa: E402
+    assert_mother_section_validation_ok,
+    merge_mother_section_validation,
 )
 
 
@@ -121,8 +138,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fixed-name",
         action="store_true",
-        help="固定文件名覆盖模式（WF 折目录研究用）；"
-        "默认为 ModelRegistry 版本化保存（每次训练新增版本，不覆盖）",
+        help="额外写一套固定名别名（WF 折目录研究用）；"
+        "模型始终经 ModelRegistry 版本化保存（每次训练新增版本，不覆盖）",
+    )
+    parser.add_argument(
+        "--no-es-predictions",
+        action="store_true",
+        help="不落盘 ES 逐行预测（默认落盘，供门禁区间重判 block_stats 使用）",
     )
     return parser.parse_args()
 
@@ -130,21 +152,28 @@ def parse_args() -> argparse.Namespace:
 def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_panel, calendar):
     """分块构建训练矩阵：每块标签构建后立即关联特征并抽样，控制峰值内存。
 
-    块面板向后多切 h_max+1 日，使块内所有 h 的标签端点落在真实数据上
-    （非 immature）；数据真实末端的 immature 语义保持正确。
+    块面板向后多切 h_max+1 日（使块内所有 h 的标签端点落在真实数据上，
+    非 immature），再多切 DELAYED_SEARCH_WINDOW_DAYS 日供 endpoint_delayed
+    敏感性在块内完成（方案 2.4 第 6 条）。
+
+    同时累计三项报告门禁输入（全部可跨块累加）：
+    - 标签覆盖计数与 valid 组事件率（LabelCoverageAccumulator）
+    - 缺失/valid 组的代理画像与当日截面分位条件事件率（ProxyProfileAccumulator）
+    - endpoint_delayed 敏感性（改用 E 之后首个有报价开盘价重算标签）
     """
     feature_dates = [d for d in calendar if args.train_start <= d <= args.es_end]
     n = len(calendar)
     pos_of = {d: i for i, d in enumerate(calendar)}
     matrix_pieces = []
-    coverage_counter = {}
-    valid_event_sum, valid_count = 0, 0
+    coverage = LabelCoverageAccumulator()
+    profile = ProxyProfileAccumulator(proxies=tuple(AUDIT_PROXY_COLUMNS))
+    delayed_totals: Dict[str, int] = {}
+    mother_validation_parts: List[Dict[str, Any]] = []
 
     for c0 in range(0, len(feature_dates), args.chunk_days):
         chunk_dates = feature_dates[c0 : c0 + args.chunk_days]
         i0, i1 = pos_of[chunk_dates[0]], pos_of[chunk_dates[-1]]
-        i_end = min(i1 + 1 + label_config.h_max + 1, n)
-        sub_cal = calendar[i0:i_end]
+        i_end = min(i1 + 1 + label_config.h_max + 1 + DELAYED_SEARCH_WINDOW_DAYS, n)
         labels = build_terminal_loss_labels(
             open_panel.iloc[i0:i_end],
             sigma_panel.iloc[i0:i_end],
@@ -154,16 +183,34 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
         # 块面板尾部的端点区日期也会作为 T 生成（短 h 可 valid），
         # 它们属于下一块的块日期：过滤避免误报特征缺失与重复纳入
         labels = labels[labels["trade_date"].isin(set(chunk_dates))]
-        # 覆盖统计累计（块内按状态计数；valid 组累计事件数）
-        counts = labels.groupby(["h", "label_status"]).size()
-        for (h, status), cnt in counts.items():
-            coverage_counter[(h, status)] = coverage_counter.get((h, status), 0) + int(cnt)
-        valid = labels[labels["label_status"] == "valid"]
-        valid_event_sum += int(valid["loss_label"].sum())
-        valid_count += len(valid)
+        coverage.add(labels)
+        audit_labels = labels.rename(columns={"sigma_at_t": "sigma_daily_20"})
 
         features_by_date = load_cs_train_days(args.data_root, chunk_dates, BASE_FEATURES)
-        piece = build_training_matrix(labels, features_by_date, sigma_panel)
+        # pct_* 分母：标签过滤前的完整同日母截面（方案 4.4），
+        # 与特征流水线同一实现，并在交集上做逐值一致性校验
+        mother_by_date = build_mother_section(args.data_root, chunk_dates)
+        # 逐块只统计，窗口级汇总后再判定（块内只有 50 个交易日，块内占比判定
+        # 会把"3 个修订日"这类极小样本误判为实现漂移）
+        mother_validation_parts.append(
+            validate_mother_section_against_cs_train(args.data_root, mother_by_date, chunk_dates)
+        )
+        proxy_long = pd.concat(
+            [df.assign(trade_date=d) for d, df in mother_by_date.items()], ignore_index=True
+        )
+        profile.add(audit_labels, proxy_long)
+        # delayed 敏感性读标签表自带的 sigma_at_t（母截面/审计帧用 sigma_daily_20 命名）
+        _accumulate_delayed(
+            delayed_totals,
+            delayed_endpoint_sensitivity(
+                labels,
+                open_panel.iloc[i0:i_end],
+                label_config,
+                max_delay_days=DELAYED_SEARCH_WINDOW_DAYS,
+            ),
+        )
+
+        piece = build_training_matrix(labels, features_by_date, sigma_panel, mother_by_date)
         piece = subsample_h_per_group(piece, n_h=args.h_per_group)
         matrix_pieces.append(piece)
         logger.info(
@@ -177,14 +224,45 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
         pd.concat(matrix_pieces, ignore_index=True) if matrix_pieces else empty_training_matrix()
     )
     matrix = subsample_dates(matrix, every_n=args.every_n_days)
-    coverage_df = (
-        pd.Series(coverage_counter, name="count").rename_axis(["h", "label_status"]).reset_index()
+    coverage_df = coverage.to_frame()
+    mother_validation = assert_mother_section_validation_ok(
+        merge_mother_section_validation(mother_validation_parts)
     )
     logger.info(
         f"训练矩阵（含日期抽样 1/{args.every_n_days}）: {len(matrix)} 行；"
-        f"全网格 valid 事件率 {valid_event_sum / max(valid_count, 1):.4f}"
+        f"全网格 valid 事件率 {coverage.valid_event_sum / max(coverage.valid_count, 1):.4f}"
     )
-    return matrix, coverage_df, valid_event_sum, valid_count
+    status_share = coverage.status_share()
+    audit = {
+        "status_share": status_share.to_dict(orient="records"),
+        "proxy_profile": profile.profile_table().to_dict(orient="records"),
+        "proxy_conditional_event_rate": profile.conditional_table().to_dict(orient="records"),
+        "implied_missing_event_rate": profile.implied_missing_event_rate().to_dict(
+            orient="records"
+        ),
+        "delayed_endpoint": delayed_totals,
+        "required": coverage_audit_required(status_share),
+        "mother_section_validation": mother_validation,
+    }
+    return {
+        "matrix": matrix,
+        "coverage_df": coverage_df,
+        "valid_event_sum": coverage.valid_event_sum,
+        "valid_count": coverage.valid_count,
+        "coverage_audit": audit,
+    }
+
+
+def _accumulate_delayed(acc: Dict[str, int], result: Dict[str, Any]) -> None:
+    """累计 endpoint_delayed 敏感性计数（跨块求和）。"""
+    for key in (
+        "n_endpoint_missing",
+        "n_evaluated",
+        "n_t1_missing",
+        "n_delay_unavailable",
+        "n_event",
+    ):
+        acc[key] = acc.get(key, 0) + int(result["total"].get(key, 0))
 
 
 def main() -> int:
@@ -219,9 +297,10 @@ def main() -> int:
     close_long = close_panel.stack().rename("close_adj").reset_index()
     sigma_panel = compute_sigma_daily_panel(close_long, calendar, window=args.sigma_window)
 
-    matrix, coverage_df, valid_event_sum, valid_count = build_matrix_chunked(
-        args, label_config, open_panel, sigma_panel, limit_panel, calendar
-    )
+    built = build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_panel, calendar)
+    matrix = built["matrix"]
+    coverage_df = built["coverage_df"]
+    coverage_audit = built["coverage_audit"]
     if matrix.empty:
         logger.error("训练矩阵为空，终止")
         return 1
@@ -251,9 +330,10 @@ def main() -> int:
     )
 
     # 概率质量报告：ES 段（早停参考）+ Train 段（过拟合差距诊断）
+    es_prob = result.classifier.predict_proba(es_df[TERMINAL_LOSS_FEATURES])[:, 1]
     es_report = evaluate_probability_quality(
         es_df["loss_label"].to_numpy(),
-        result.classifier.predict_proba(es_df[TERMINAL_LOSS_FEATURES])[:, 1],
+        es_prob,
         es_df["h"].to_numpy(),
         sigma_values=es_df["sigma_daily_20"].to_numpy(),
     )
@@ -262,6 +342,19 @@ def main() -> int:
         result.classifier.predict_proba(train_df[TERMINAL_LOSS_FEATURES])[:, 1],
         train_df["h"].to_numpy(),
     )
+    # ES 逐行预测落盘：门禁区间重判（block_stats）需要逐行预测，
+    # 只有聚合指标无法重采样；--no-es-predictions 可跳过
+    es_predictions = None
+    if not args.no_es_predictions:
+        es_predictions = pd.DataFrame(
+            {
+                "trade_date": es_df["trade_date"].to_numpy(),
+                "ts_code": es_df["ts_code"].to_numpy(),
+                "h": es_df["h"].to_numpy(),
+                "loss_label": es_df["loss_label"].to_numpy(),
+                "p_loss": es_prob,
+            }
+        )
 
     # 保存模型与报告
     out_dir = Path(args.output_dir)
@@ -278,9 +371,14 @@ def main() -> int:
                 "h_per_group": args.h_per_group,
                 "every_n_days": args.every_n_days,
             },
-            "full_grid_valid_event_rate": valid_event_sum / max(valid_count, 1),
-            "pct_cross_section_source": "cs_train（y_ret 标签有效域，已知限制登记）",
-            "known_limitations": ["pct_* 母截面为 cs_train 过滤后域，分母较完整日截面窄约 5%~10%"],
+            "full_grid_valid_event_rate": built["valid_event_sum"] / max(built["valid_count"], 1),
+            "pct_cross_section_source": (
+                "clean/daily 完整同日母截面（标签过滤前，mother_section 重建，"
+                "与特征流水线同一实现的四个基列）"
+            ),
+            "mother_section_validation": coverage_audit.get("mother_section_validation", {}),
+            "coverage_audit_required": coverage_audit.get("required", {}),
+            "es_predictions": None if es_predictions is None else int(len(es_predictions)),
         },
     )
     model = TerminalLossModel(model_config, result.classifier)
@@ -289,29 +387,28 @@ def main() -> int:
         "train": _report_to_json(train_report),
         "label_coverage": coverage_df.to_dict(orient="records"),
         "isolation_dropped": split.isolation_dropped,
+        "coverage_audit": coverage_audit,
     }
-    if args.fixed_name:
-        save_flat_artifacts(
-            out_dir,
-            model,
-            report_payload,
-            es_report["calibration_by_h_sigma"],
-            coverage_df,
-        )
-    else:
-        version = save_versioned_artifacts(
-            out_dir,
-            model,
-            train_start_date=args.train_start,
-            train_end_date=args.train_end,
-            n_samples=int(model_config.metadata["n_train"]),
-            train_params=model_config.metadata,
-            performance_metrics=build_performance_metrics(es_report, train_report),
-            report_payload=report_payload,
-            calibration_df=es_report["calibration_by_h_sigma"],
-            coverage_df=coverage_df,
-        )
-        logger.info(f"已注册 {TERMINAL_LOSS_MODEL_TYPE} v{version}（每次训练新增版本，不覆盖）")
+    # 统一落盘：总是注册制版本化（v{N} 永不覆盖）；--fixed-name 额外写固定名
+    # 别名供 summarize_terminal_risk_wf.py 等既有工具零改动读取
+    saved = save_terminal_loss_artifacts(
+        out_dir,
+        model,
+        fixed_name=bool(args.fixed_name),
+        train_start_date=args.train_start,
+        train_end_date=args.train_end,
+        n_samples=int(model_config.metadata["n_train"]),
+        train_params=model_config.metadata,
+        performance_metrics=build_performance_metrics(es_report, train_report),
+        report_payload=report_payload,
+        calibration_df=es_report["calibration_by_h_sigma"],
+        coverage_df=coverage_df,
+        es_predictions=es_predictions,
+    )
+    logger.info(
+        f"已注册 {TERMINAL_LOSS_MODEL_TYPE} {saved['version_str']}"
+        f"（每次训练新增版本，不覆盖）" + ("；已写固定名别名" if saved["fixed_name"] else "")
+    )
     logger.info(
         f"ES 段概率质量: logloss={es_report['logloss']:.4f}, "
         f"brier={es_report['brier']:.4f}, pr_auc={es_report['pr_auc']:.4f}, "

@@ -142,6 +142,9 @@ def train_terminal_loss_model(
     best_iteration = int(getattr(clf, "best_iteration", cfg.n_estimators) or cfg.n_estimators)
 
     meta: Dict[str, Any] = {
+        # best_iteration 必须落盘：WF 汇总（summarize_terminal_risk_wf）与早停健康度
+        # 监控都从 sidecar 的 metadata.best_iteration 读取，缺登记即静默为空列
+        "best_iteration": best_iteration,
         "n_train": int(len(train_matrix)),
         "n_es": int(len(es_matrix)),
         "train_event_rate": float(y_train.mean()),
@@ -222,9 +225,13 @@ def evaluate_probability_quality(
             valid = ~np.isnan(sig_h)
             if valid.sum() < sigma_bins:
                 rows.append(
-                    {"h": int(h), "sigma_bin": "all", "n": int(valid.sum()),
-                     "event_rate": float(y_true[m_h][valid].mean()) if valid.any() else np.nan,
-                     "mean_pred": float(p_pred[m_h][valid].mean()) if valid.any() else np.nan}
+                    {
+                        "h": int(h),
+                        "sigma_bin": "all",
+                        "n": int(valid.sum()),
+                        "event_rate": float(y_true[m_h][valid].mean()) if valid.any() else np.nan,
+                        "mean_pred": float(p_pred[m_h][valid].mean()) if valid.any() else np.nan,
+                    }
                 )
                 continue
             qs = np.nanquantile(sig_h, np.linspace(0, 1, sigma_bins + 1))

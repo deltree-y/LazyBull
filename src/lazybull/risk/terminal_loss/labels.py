@@ -21,8 +21,8 @@
   T+1/E/sigma 的缺失由 label_status 表达。
 """
 
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -30,7 +30,7 @@ import pandas as pd
 # ── 标签状态常量（互斥，优先级 immature > endpoint_missing > sigma）──────
 
 LABEL_STATUS_VALID = "valid"
-LABEL_STATUS_IMMATURE = "immature"                  # E 超出日历数据末端
+LABEL_STATUS_IMMATURE = "immature"  # E 超出日历数据末端
 LABEL_STATUS_ENDPOINT_MISSING = "endpoint_missing"  # T+1 或 E 停牌缺行
 LABEL_STATUS_SIGMA_UNAVAILABLE = "sigma_unavailable"  # sigma 缺失或零波动
 
@@ -112,9 +112,11 @@ def build_terminal_loss_labels(
     sigma_ok = ~np.isnan(sigma_np) & (sigma_np > 0)  # 零波动视为不可用
 
     if limit_down_panel is not None:
-        limit_np = limit_down_panel.reindex(
-            index=open_adj_panel.index, columns=open_adj_panel.columns
-        ).fillna(0).to_numpy()
+        limit_np = (
+            limit_down_panel.reindex(index=open_adj_panel.index, columns=open_adj_panel.columns)
+            .fillna(0)
+            .to_numpy()
+        )
     else:
         limit_np = np.zeros_like(open_np)
 
@@ -197,13 +199,116 @@ def summarize_label_coverage(labels_df: pd.DataFrame) -> pd.DataFrame:
         DataFrame：h × label_status 行数透视，valid 组附事件率与
         execution_blocked 计数
     """
-    if labels_df.empty:
+    if labels_df is None or labels_df.empty:
         return pd.DataFrame()
-    pivot = labels_df.groupby(["h", "label_status"]).size().unstack(fill_value=0)
-    valid = labels_df[labels_df["label_status"] == LABEL_STATUS_VALID]
-    if not valid.empty:
-        pivot["event_rate"] = valid.groupby("h")["loss_label"].mean()
-        pivot["execution_blocked_count"] = valid.groupby("h")[
-            "execution_blocked"
-        ].sum()
+    return _coverage_pivot(LabelCoverageAccumulator().add(labels_df))
+
+
+#: 覆盖长表列（分块累计产出的报告列，含 valid 组事件率与执行受阻计数）
+COVERAGE_COLUMNS: List[str] = [
+    "h",
+    "label_status",
+    "count",
+    "event_rate",
+    "execution_blocked_count",
+]
+
+
+@dataclass
+class LabelCoverageAccumulator:
+    """分块标签构建的覆盖累计器（跨块求和后再算比率）。
+
+    分块构建无法在块内得到最终覆盖率：均值不可累加，必须先累计
+    「valid 行数 / 事件数 / execution_blocked 数」，全部块处理完再一次性
+    求比率。原来的单块 ``groupby(...).mean()`` 只能在单帧场景使用，误用于
+    分块会得到「块内均值的均值」这一错口径。
+
+    Attributes:
+        counts: {(h, label_status): 行数}
+        valid_rows / valid_events / execution_blocked: 按 h 累计的 valid 行数、
+        事件数与 E 日执行受阻（跌停）数
+    """
+
+    counts: Dict[Tuple[int, str], int] = field(default_factory=dict)
+    valid_rows: Dict[int, int] = field(default_factory=dict)
+    valid_events: Dict[int, int] = field(default_factory=dict)
+    execution_blocked: Dict[int, int] = field(default_factory=dict)
+
+    def add(self, labels_df: pd.DataFrame) -> "LabelCoverageAccumulator":
+        """累计一块标签表的覆盖计数（原地更新并返回自身，便于链式调用）。"""
+        if labels_df is None or labels_df.empty:
+            return self
+        for (h, status), cnt in labels_df.groupby(["h", "label_status"]).size().items():
+            key = (int(h), str(status))
+            self.counts[key] = self.counts.get(key, 0) + int(cnt)
+        valid = labels_df[labels_df["label_status"] == LABEL_STATUS_VALID]
+        if not valid.empty:
+            grouped = valid.groupby("h")
+            for h, cnt in grouped.size().items():
+                self.valid_rows[int(h)] = self.valid_rows.get(int(h), 0) + int(cnt)
+            for h, ev in grouped["loss_label"].sum().items():
+                self.valid_events[int(h)] = self.valid_events.get(int(h), 0) + int(ev)
+            for h, blocked in grouped["execution_blocked"].sum().items():
+                self.execution_blocked[int(h)] = self.execution_blocked.get(int(h), 0) + int(
+                    blocked
+                )
+        return self
+
+    @property
+    def valid_count(self) -> int:
+        """全期限 valid 行数合计（全网格事件率分母）。"""
+        return int(sum(self.valid_rows.values()))
+
+    @property
+    def valid_event_sum(self) -> int:
+        """全期限 valid 事件数合计（全网格事件率分子）。"""
+        return int(sum(self.valid_events.values()))
+
+    def to_frame(self) -> pd.DataFrame:
+        """覆盖长表（含 valid 组事件率与执行受阻计数）。
+
+        ``event_rate`` / ``execution_blocked_count`` 仅对 valid 行给出，
+        其余状态为 NaN（非 valid 行没有标签，不存在事件率）。
+        """
+        rows = []
+        for (h, status), cnt in sorted(self.counts.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+            is_valid = status == LABEL_STATUS_VALID
+            n_valid = self.valid_rows.get(h, 0)
+            rows.append(
+                {
+                    "h": h,
+                    "label_status": status,
+                    "count": cnt,
+                    "event_rate": (
+                        self.valid_events.get(h, 0) / n_valid if is_valid and n_valid else np.nan
+                    ),
+                    "execution_blocked_count": (
+                        self.execution_blocked.get(h, 0) if is_valid else np.nan
+                    ),
+                }
+            )
+        if not rows:
+            return pd.DataFrame(columns=COVERAGE_COLUMNS)
+        return pd.DataFrame(rows, columns=COVERAGE_COLUMNS)
+
+    def status_share(self) -> pd.DataFrame:
+        """按 h 的状态占比表（方案 8.1 报告门禁：停牌/不可用样本占比）。"""
+        frame = self.to_frame()
+        if frame.empty:
+            return pd.DataFrame(columns=["h", "label_status", "count", "share"])
+        frame = frame.copy()
+        frame["share"] = frame["count"] / frame.groupby("h")["count"].transform("sum")
+        return frame[["h", "label_status", "count", "share"]]
+
+
+def _coverage_pivot(acc: LabelCoverageAccumulator) -> pd.DataFrame:
+    """把累计器结果转成 h × status 透视（单帧便利入口使用）。"""
+    frame = acc.to_frame()
+    if frame.empty:
+        return pd.DataFrame()
+    pivot = frame.pivot(index="h", columns="label_status", values="count").fillna(0).astype(int)
+    if LABEL_STATUS_VALID in pivot.columns:
+        valid_rows = frame.loc[frame["label_status"] == LABEL_STATUS_VALID].set_index("h")
+        pivot["event_rate"] = valid_rows["event_rate"]
+        pivot["execution_blocked_count"] = valid_rows["execution_blocked_count"]
     return pivot

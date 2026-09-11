@@ -121,8 +121,7 @@ def test_build_param_signature():
         "metadata": {"sampling": _SAMPLING_CFG},
     }
     assert build_param_signature(meta) == (
-        "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0"
-        "|k=1.0|hmax=20|sigw=20|hpg=2|end=3"
+        "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0" "|k=1.0|hmax=20|sigw=20|hpg=2|end=3"
     )
     assert build_param_signature({}) is None
     broken = {
@@ -321,6 +320,56 @@ def test_collect_and_tuning_table_end_to_end(tmp_path):
     d3 = table[table["suffix"] == "_d3"].iloc[0]
     assert d3["tuning_score"] == pytest.approx(0.5 * (1.5 + 1.5))
     assert bool(d3["gate_pass"])
+
+
+def test_collect_fold_rows_falls_back_to_versioned_artifacts(tmp_path):
+    """仅注册制产物（无固定名别名）的折仍须被汇总，不得静默跳过。"""
+    fold_dir = tmp_path / "2024H1"
+    fold_dir.mkdir(parents=True)
+    with open(fold_dir / "v2_report.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "es": {"n": 500, "event_rate": 0.1, "logloss": 0.3, "brier": 0.1, "pr_auc": 0.2},
+                "train": {"event_rate": 0.1},
+            },
+            f,
+        )
+    with open(fold_dir / "v2_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "version": 2,
+                "train_params": {
+                    "train_config": _TRAIN_CFG,
+                    "label_config": _LABEL_CFG,
+                    "sampling": _SAMPLING_CFG,
+                    "stage_dates": {"train": ["a", "b"], "es": ["c", "d"]},
+                    "best_iteration": 77,
+                    "n_train": 4000,
+                    "n_es": 500,
+                },
+                "performance_metrics": {"lift": 2.0},
+            },
+            f,
+        )
+    summary = collect_fold_rows(tmp_path)
+    assert len(summary) == 1
+    row = summary.iloc[0]
+    assert row["fold"] == "2024H1"
+    assert row["lift"] == pytest.approx(2.0)
+    # best_iteration 从注册表元数据读出（v0.108.0 起才登记进 metadata）
+    assert row["best_iteration"] == 77
+    assert row["train_start"] == "a"
+    # train_params 形状归一后签名与折 sidecar 一致
+    assert row["param_signature"].startswith("d=3|lr=0.03")
+    assert row["depth"] == 3
+
+
+def test_collect_fold_rows_skips_dir_without_artifacts(tmp_path):
+    """既无固定名也无版本化产物的目录：跳过并记录，不抛异常。"""
+    (tmp_path / "empty_fold").mkdir(parents=True)
+    _write_fold(tmp_path, "2022H2", pr_auc=0.12, event_rate=0.1)
+    summary = collect_fold_rows(tmp_path)
+    assert list(summary["fold"]) == ["2022H2"]
 
 
 def test_color_helpers(monkeypatch):

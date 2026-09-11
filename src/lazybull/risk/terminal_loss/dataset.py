@@ -2,8 +2,11 @@
 
 实现 docs/plans/terminal_loss_risk_model_plan.md 第 4/5/6 节契约：
 
-- pct_* 百分位必须基于标签过滤前的完整当日母截面生成（方案 4.4），
-  先全截面排名、再筛有效标签行，禁止先筛持仓/有效行再排名；
+- pct_* 百分位必须基于标签过滤前的完整当日母截面生成（方案 4.4）：
+  调用方传入的母截面来自 ``mother_section.build_mother_section``（clean/daily
+  全量化重建、与特征流水线同一实现的四个基列），先全截面排名、再筛有效
+  标签行；禁止用 cs_train 过滤后的行重建分母（分母窄 5%~10%），也禁止
+  先筛持仓/有效行再排名；
 - mkt_* 广播列不做同日百分位（同日所有股票相同，排名无意义）；
 - 特征 manifest 冻结：缺整列必须失败，不逐日静默缩减列数（方案 3.2）；
 - 样本权重 = 1/期限网格大小（方案第 6 节规则 1：每个 (ts_code,
@@ -53,7 +56,7 @@ BASE_FEATURES: List[str] = [
     "mkt_adv_dec_ratio",
 ]
 
-#: pct_* 派生列 → 百分位基列（基列须在 cs_train 完整母截面中）
+#: pct_* 派生列 → 百分位基列（基列由完整同日母截面提供，见 mother_section）
 PCT_FEATURE_BASES: Dict[str, str] = {
     "pct_ret_20": "ret_20",
     "pct_cvar_95_20": "cvar_95_20",
@@ -69,8 +72,8 @@ DERIVED_FEATURES: List[str] = [
 ]
 
 #: 完整冻结 manifest（33 列）
-TERMINAL_LOSS_FEATURES: List[str] = DERIVED_FEATURES + BASE_FEATURES + list(
-    PCT_FEATURE_BASES.keys()
+TERMINAL_LOSS_FEATURES: List[str] = (
+    DERIVED_FEATURES + BASE_FEATURES + list(PCT_FEATURE_BASES.keys())
 )
 
 #: 训练矩阵元数据列（非特征）
@@ -133,22 +136,64 @@ def validate_feature_manifest(available_columns: Sequence[str]) -> None:
         )
 
 
-def add_pct_features(day_df: pd.DataFrame) -> pd.DataFrame:
-    """对完整当日母截面生成 pct_* 百分位列（方案 4.2/4.3）。
+def add_pct_features(day_df: pd.DataFrame, mother_df: pd.DataFrame) -> pd.DataFrame:
+    """基于完整同日母截面生成 pct_* 百分位列（方案 4.2/4.3/4.4）。
 
-    必须传入标签过滤前的完整截面（含全部有效证券），百分位分母与
-    训练/推理保持一致；mkt_* 广播列不做同日百分位。
+    百分位分母必须是**标签过滤前的完整当日截面**（``mother_section``
+    的产物，证券域为该日 clean/daily 全部有行股票）。传入 cs_train 当日
+    子集会收窄分母（实测约 88%），因此本函数强制要求显式传入母截面，
+    不做隐式回退。
 
     Args:
-        day_df: 单日完整母截面，含 PCT_FEATURE_BASES 的基列
+        day_df: 当日训练行（含 manifest 基础列与 ts_code）
+        mother_df: 完整同日母截面（ts_code + PCT_FEATURE_BASES 的四个基列）
 
     Returns:
-        追加 pct_* 列后的副本；基列缺失时明确报错
+        追加 pct_* 列后的副本（行序与 day_df 一致）
+
+    Raises:
+        ValueError: day_df 缺 manifest 基础列、母截面缺基列，或 day_df 的
+            股票不在母截面证券域内（数据链路不一致，禁止静默给 NaN）
     """
-    validate_feature_manifest(day_df.columns)
-    out = day_df.copy()
+    missing_manifest = [c for c in BASE_FEATURES if c not in day_df.columns]
+    if missing_manifest:
+        raise ValueError(
+            f"特征母截面缺少 manifest 基础列: {sorted(set(missing_manifest))}；"
+            f"特征清单冻结（方案 3.2），禁止静默缩减列数，请检查特征构建"
+        )
+    if mother_df is None or mother_df.empty:
+        raise ValueError(
+            "pct_* 必须基于完整同日母截面生成（方案 4.4），母截面为空；"
+            "请检查 mother_section.build_mother_section 是否覆盖该交易日"
+        )
+    base_cols = list(PCT_FEATURE_BASES.values())
+    missing_mother = [c for c in base_cols if c not in mother_df.columns]
+    if missing_mother:
+        raise ValueError(
+            f"完整母截面缺少 pct 基列: {sorted(set(missing_mother))}；"
+            f"pct_* 分母不可缺列，拒绝继续"
+        )
+    mother_codes = set(mother_df["ts_code"])
+    absent = ~day_df["ts_code"].isin(mother_codes)
+    if bool(absent.any()):
+        sample = day_df.loc[absent, "ts_code"].head(5).tolist()
+        raise ValueError(
+            f"{int(absent.sum())} 行股票不在完整母截面中（示例 {sample}）："
+            f"母截面证券域与当日行情不一致，拒绝以 NaN 冒充百分位"
+        )
+
+    mother_pct = mother_df[["ts_code"] + base_cols].copy()
     for pct_col, base_col in PCT_FEATURE_BASES.items():
-        out[pct_col] = out[base_col].rank(pct=True)
+        mother_pct[pct_col] = mother_pct[base_col].rank(pct=True)
+    # pct_* 是本函数的派生输出：输入若已带同名列（旧口径产物），必须先丢弃
+    # 再按母截面重算，避免 merge 产生 _x/_y 后缀把旧分母悄悄带进矩阵
+    day = day_df.drop(columns=list(PCT_FEATURE_BASES), errors="ignore")
+    out = day.merge(
+        mother_pct[["ts_code"] + list(PCT_FEATURE_BASES)],
+        on="ts_code",
+        how="left",
+        validate="many_to_one",
+    )
     return out
 
 
@@ -163,8 +208,8 @@ def attach_horizon_features(matrix: pd.DataFrame) -> pd.DataFrame:
     """
     out = matrix.copy()
     out["remaining_intervals"] = out["h"].astype(int)
-    out["expected_vol_over_horizon"] = (
-        out["sigma_daily_20"].astype(float) * np.sqrt(out["h"].astype(int))
+    out["expected_vol_over_horizon"] = out["sigma_daily_20"].astype(float) * np.sqrt(
+        out["h"].astype(int)
     )
     return out
 
@@ -173,18 +218,21 @@ def build_training_matrix(
     labels_df: pd.DataFrame,
     features_by_date: Dict[str, pd.DataFrame],
     sigma_panel: pd.DataFrame,
+    mother_by_date: Dict[str, pd.DataFrame],
     config: Optional[DatasetConfig] = None,
     label_config: Optional[TerminalLossLabelConfig] = None,
 ) -> pd.DataFrame:
     """关联标签瘦表与特征母截面，产出训练矩阵。
 
-    约定：features_by_date 的键为 trade_date，值为该日完整母截面
-    （不含 pct_*，由本函数统一生成，保证"先全截面排名、再筛行"）。
+    约定：features_by_date 的键为 trade_date，值为该日训练行
+    （不含 pct_*，由本函数统一生成，保证"先全截面排名、再筛行"）；
+    mother_by_date 为同日**标签过滤前的完整母截面**，是 pct_* 的分母。
 
     Args:
         labels_df: build_terminal_loss_labels 输出的瘦标签表
-        features_by_date: {trade_date: 当日完整特征母截面}
+        features_by_date: {trade_date: 当日训练行特征}
         sigma_panel: sigma_daily_20 面板（index=trade_date, columns=ts_code）
+        mother_by_date: {trade_date: 完整当日母截面（pct 基列）}
         config: 数据集配置
         label_config: 标签配置（用于日志与 manifest 校验的 h 网格）
 
@@ -203,9 +251,7 @@ def build_training_matrix(
 
     sigma_stack = sigma_panel.stack()
     sigma_stack.index = sigma_stack.index.set_names(["trade_date", "ts_code"])
-    valid["sigma_daily_20"] = valid.set_index(
-        ["trade_date", "ts_code"]
-    ).index.map(sigma_stack)
+    valid["sigma_daily_20"] = valid.set_index(["trade_date", "ts_code"]).index.map(sigma_stack)
 
     pieces: List[pd.DataFrame] = []
     skipped_days = 0
@@ -214,7 +260,13 @@ def build_training_matrix(
         if day_features is None or day_features.empty:
             skipped_days += 1
             continue
-        day_features = add_pct_features(day_features)
+        mother = mother_by_date.get(trade_date)
+        if mother is None or mother.empty:
+            raise ValueError(
+                f"{trade_date} 有训练行但缺少完整母截面：pct_* 分母不可用，"
+                f"禁止退化为过滤后子集排名（方案 4.4）"
+            )
+        day_features = add_pct_features(day_features, mother)
         merged = day_labels.merge(
             day_features[["ts_code"] + BASE_FEATURES + list(PCT_FEATURE_BASES)],
             on="ts_code",
@@ -234,9 +286,7 @@ def build_training_matrix(
     dropped = int((matrix["sigma_daily_20"].isna()).sum())
     if dropped:
         # sigma 来自标签构造同一面板，valid 行不应缺失；出现即数据链路异常
-        raise ValueError(
-            f"关联后 {dropped} 行 sigma_daily_20 缺失，sigma 面板与标签股票域不一致"
-        )
+        raise ValueError(f"关联后 {dropped} 行 sigma_daily_20 缺失，sigma 面板与标签股票域不一致")
     return matrix[META_COLUMNS + TERMINAL_LOSS_FEATURES]
 
 
@@ -284,14 +334,10 @@ def split_stages_with_label_isolation(
         return result
 
     for i, stage in enumerate(stages):
-        in_range = (matrix["trade_date"] >= stage.start) & (
-            matrix["trade_date"] <= stage.end
-        )
+        in_range = (matrix["trade_date"] >= stage.start) & (matrix["trade_date"] <= stage.end)
         if i + 1 < len(stages):
             next_start = stages[i + 1].start
-            isolated = matrix["label_end_date"].notna() & (
-                matrix["label_end_date"] >= next_start
-            )
+            isolated = matrix["label_end_date"].notna() & (matrix["label_end_date"] >= next_start)
             keep = in_range & ~isolated
             result.isolation_dropped[stage.name] = int((in_range & isolated).sum())
         else:
@@ -348,16 +394,13 @@ def load_clean_daily_panels(
     long_rows: List[pd.DataFrame] = []
     for d in calendar:
         path = f"{data_root}/clean/daily/{_to_dash_date(d)}.parquet"
-        day = pd.read_parquet(
-            path, columns=["ts_code", "open_adj", "close_adj", "is_limit_down"]
-        )
+        day = pd.read_parquet(path, columns=["ts_code", "open_adj", "close_adj", "is_limit_down"])
         long_rows.append(day.assign(trade_date=d))
     long_df = pd.concat(long_rows, ignore_index=True)
 
     def _pivot(value_col: str) -> pd.DataFrame:
-        return (
-            long_df.pivot(index="trade_date", columns="ts_code", values=value_col)
-            .reindex(calendar)
+        return long_df.pivot(index="trade_date", columns="ts_code", values=value_col).reindex(
+            calendar
         )
 
     open_panel = _pivot("open_adj")
@@ -423,17 +466,13 @@ def subsample_h_per_group(
             keep_table[off, grid[(p + off) % n_g]] = True
 
     group_keys = matrix["ts_code"].str.cat(matrix["trade_date"], sep="|")
-    offsets = (
-        pd.util.hash_pandas_object(group_keys, index=False).to_numpy() % n_g
-    )
+    offsets = pd.util.hash_pandas_object(group_keys, index=False).to_numpy() % n_g
     h_arr = matrix["h"].to_numpy(dtype=int)
     keep = keep_table[offsets, h_arr]
     return matrix[keep].reset_index(drop=True)
 
 
-def subsample_dates(
-    matrix: pd.DataFrame, every_n: int = 1
-) -> pd.DataFrame:
+def subsample_dates(matrix: pd.DataFrame, every_n: int = 1) -> pd.DataFrame:
     """按交易日序列位置等距抽样（every_n=3 即每 3 个交易日取 1）。
 
     抽样按日期位置而非日期字符串哈希，保证同日全截面整组保留或剔除
