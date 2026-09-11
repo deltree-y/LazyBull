@@ -56,13 +56,13 @@ from src.lazybull.risk.terminal_loss import (  # noqa: E402
     TERMINAL_LOSS_FEATURES,
     TERMINAL_LOSS_MODEL_TYPE,
     LabelCoverageAccumulator,
+    MotherSectionCache,
     ProxyProfileAccumulator,
     StageSpec,
     TerminalLossLabelConfig,
     TerminalLossModel,
     TerminalLossModelConfig,
     TerminalLossTrainConfig,
-    build_mother_section,
     build_performance_metrics,
     build_terminal_loss_labels,
     build_training_matrix,
@@ -116,10 +116,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--colsample-bytree", type=float, default=0.8)
     parser.add_argument("--reg-lambda", type=float, default=1.0)
     parser.add_argument("--random-state", type=int, default=42)
-    # min_child_weight / scale_pos_weight / eval_metric 不暴露 CLI：
+    parser.add_argument(
+        "--eval-metric",
+        default="logloss",
+        choices=["logloss", "rank_ic_daily"],
+        help="早停指标：logloss（概率校准口径，默认）或 rank_ic_daily"
+        "（逐日截面 Spearman 均值，与门禁 lift 同向）；两种口径是不同的超参签名，"
+        "不得并入同一组比较",
+    )
+    # min_child_weight / scale_pos_weight 不暴露 CLI：
     # min_child_weight=1 与样本权重 1/期限网格大小 绑定（正则尺度策略 A 的设计
     # 不变量，单一 (股票,日) 组无法独自成叶）；scale_pos_weight 会破坏自然事件率
-    # 口径（抽样保留自然事件率、概率校准优先）；早停指标契约固定 logloss。
+    # 口径（抽样保留自然事件率、概率校准优先）。
     parser.add_argument(
         "--device",
         default="cuda",
@@ -169,6 +177,11 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
     profile = ProxyProfileAccumulator(proxies=tuple(AUDIT_PROXY_COLUMNS))
     delayed_totals: Dict[str, int] = {}
     mother_validation_parts: List[Dict[str, Any]] = []
+    # 母截面历史窗口按折准备一次（含 7 个月预热），各分块只切片：
+    # 逐块重建窗口会重复加载分区与重算风控因子（实测折耗时 3~4 倍）。
+    mother_cache = MotherSectionCache(
+        args.data_root, feature_dates[0], feature_dates[-1]
+    )
 
     for c0 in range(0, len(feature_dates), args.chunk_days):
         chunk_dates = feature_dates[c0 : c0 + args.chunk_days]
@@ -189,7 +202,7 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
         features_by_date = load_cs_train_days(args.data_root, chunk_dates, BASE_FEATURES)
         # pct_* 分母：标签过滤前的完整同日母截面（方案 4.4），
         # 与特征流水线同一实现，并在交集上做逐值一致性校验
-        mother_by_date = build_mother_section(args.data_root, chunk_dates)
+        mother_by_date = mother_cache.build(chunk_dates)
         # 逐块只统计，窗口级汇总后再判定（块内只有 50 个交易日，块内占比判定
         # 会把"3 个修订日"这类极小样本误判为实现漂移）
         mother_validation_parts.append(
@@ -279,6 +292,7 @@ def main() -> int:
         colsample_bytree=args.colsample_bytree,
         reg_lambda=args.reg_lambda,
         random_state=args.random_state,
+        eval_metric=args.eval_metric,
         device=args.device,
     )
 

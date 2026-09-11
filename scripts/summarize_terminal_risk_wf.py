@@ -66,8 +66,14 @@ SUMMARY_COLUMNS = [
     "param_signature",
 ]
 
-# 折目录名尾部消融后缀：_d{depth} 与 _lr{lr} 可叠加，均可省略（锚定结尾）
-_SUFFIX_PATTERN = re.compile(r"(?:_d(?P<depth>\d+))?(?:_lr(?P<lr>\d+(?:\.\d+)?))?$")
+# 折目录名尾部消融后缀：_d{depth} / _lr{lr} / _w{years}y / _s{seed} 可叠加，
+# 均可省略（锚定结尾）。后缀仅供展示分组，超参身份以折 sidecar 签名为权威。
+_SUFFIX_PATTERN = re.compile(
+    r"(?:_d(?P<depth>\d+))?"
+    r"(?:_lr(?P<lr>\d+(?:\.\d+)?))?"
+    r"(?:_w(?P<window>\d+)y)?"
+    r"(?:_s(?P<seed>\d+))?$"
+)
 
 # baseline 组展示名（分组键为空串，展示与键分离避免与真实后缀冲突）
 BASELINE_LABEL = "(baseline)"
@@ -97,7 +103,9 @@ HISTORY_RUN_COLUMNS = ["timestamp", "wf_root", "lift_min_threshold"] + [
 ]
 
 # ── 超参签名（历史比较的身份键；折 sidecar 为权威，目录后缀仅作展示）──────
-# train_config：影响训练动态的消融位；random_state/device 不入签名
+# train_config：影响训练动态的消融位。random_state 是**多种子消融维度**，
+# 必须入签名——否则多随机种子的折会被并进同一组，门禁会取跨种子最小值，
+# 既污染分组语义又使门禁虚高（v0.108.5 起）。device 不入签名。
 _SIGNATURE_TRAIN_KEYS = [
     "max_depth",
     "learning_rate",
@@ -106,6 +114,8 @@ _SIGNATURE_TRAIN_KEYS = [
     "subsample",
     "colsample_bytree",
     "reg_lambda",
+    "random_state",
+    "eval_metric",
 ]
 # label_config：改 k 即改任务，必须入签名
 _SIGNATURE_LABEL_KEYS = ["loss_sigma_multiple", "h_max", "sigma_window"]
@@ -119,6 +129,8 @@ _SIGNATURE_KEY_ALIASES = {
     "subsample": "sub",
     "colsample_bytree": "col",
     "reg_lambda": "lam",
+    "random_state": "s",
+    "eval_metric": "em",
     "loss_sigma_multiple": "k",
     "h_max": "hmax",
     "sigma_window": "sigw",
@@ -154,17 +166,29 @@ def parse_experiment_suffix(fold_name: str) -> dict:
     可能不一致，如目录残留旧消融折未清理）。
     """
     match = _SUFFIX_PATTERN.search(fold_name)
-    if match is None or (match.group("depth") is None and match.group("lr") is None):
-        return {"suffix": "", "depth": None, "learning_rate": None}
+    if match is None or not any(match.group(k) for k in ("depth", "lr", "window", "seed")):
+        return {
+            "suffix": "",
+            "depth": None,
+            "learning_rate": None,
+            "train_window_years": None,
+            "seed": None,
+        }
     parts = []
     if match.group("depth"):
         parts.append(f"_d{match.group('depth')}")
     if match.group("lr"):
         parts.append(f"_lr{match.group('lr')}")
+    if match.group("window"):
+        parts.append(f"_w{match.group('window')}y")
+    if match.group("seed"):
+        parts.append(f"_s{match.group('seed')}")
     return {
         "suffix": "".join(parts),
         "depth": int(match.group("depth")) if match.group("depth") else None,
         "learning_rate": float(match.group("lr")) if match.group("lr") else None,
+        "train_window_years": (int(match.group("window")) if match.group("window") else None),
+        "seed": int(match.group("seed")) if match.group("seed") else None,
     }
 
 
@@ -188,14 +212,32 @@ def _normalize_meta(meta: dict) -> dict:
     return meta
 
 
+def _signature_window_years(meta: dict) -> Optional[int]:
+    """训练窗口年数（由 ``stage_dates.train`` 起止日计算，跨折不变量）。
+
+    训练窗口长度是**消融维度**（例 3 年 vs 5 年），必须入签名，否则不同窗口
+    的折会被并进同一组。起止日缺失或非法时返回 None（调用方使整条签名返回
+    None，独立成组，不与真签名合并）。
+    """
+    dates = ((meta.get("metadata") or {}).get("stage_dates") or {}).get("train")
+    if not dates or len(dates) != 2 or not all(dates):
+        return None
+    start = pd.to_datetime(str(dates[0]), format="%Y%m%d", errors="coerce")
+    end = pd.to_datetime(str(dates[1]), format="%Y%m%d", errors="coerce")
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return None
+    return int(round(((end - start).days + 1) / 365.25))
+
+
 def build_param_signature(meta: dict) -> Optional[str]:
     """从折 sidecar 元数据构建超参签名（历史比较的身份键）。
 
-    签名 = train_config 消融位 + label_config 任务定义 + sampling 预登记抽样，
-    如 "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0|k=1.0|hmax=20|
-    sigw=20|hpg=2|end=3"。任一配置段缺键时返回 None（调用方回退展示名，
-    独立成组不与真签名合并）；random_state/device 与策略 A 不变量
-    （min_child_weight/scale_pos_weight）不入签名。
+    签名 = train_config 消融位（含 random_state 多种子维度）+ label_config
+    任务定义 + sampling 预登记抽样 + 训练窗口年数，如
+    "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0|s=42
+    |k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=3"。任一配置段缺键、或训练起止日
+    无法解析时返回 None（调用方回退展示名，独立成组不与真签名合并）；
+    device 与策略 A 不变量（min_child_weight/scale_pos_weight）不入签名。
     """
     sections = (
         (meta.get("train_config") or {}, _SIGNATURE_TRAIN_KEYS),
@@ -208,6 +250,10 @@ def build_param_signature(meta: dict) -> Optional[str]:
             if key not in cfg:
                 return None
             parts.append(f"{_SIGNATURE_KEY_ALIASES.get(key, key)}={cfg[key]}")
+    window_years = _signature_window_years(meta)
+    if window_years is None:
+        return None
+    parts.append(f"wy={window_years}")
     return "|".join(parts)
 
 

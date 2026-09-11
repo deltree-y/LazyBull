@@ -247,7 +247,13 @@ class DailySpearmanRankIC:
             "sum_yr2": sum_yr2,
         }
 
-    def __call__(self, y_true, y_pred) -> float:
+    def __call__(self, y_true, y_pred, sample_weight=None) -> float:
+        """XGBoost callable 入口。
+
+        ``sample_weight`` 仅为兼容"训练时传了 ``sample_weight_eval_set``"的调用
+        路径（XGBoost sklearn wrapper 会把权重作为关键字传入）：逐日截面 RankIC
+        是纯排序量，不按样本权重加权，与 ``daily_spearman_mean`` 口径一致。
+        """
         if self._state is None:
             self._prepare(y_true)
         p = np.asarray(y_pred, dtype=float)

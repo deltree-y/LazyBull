@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.108.7] - 2026-09-11
+
+### Added
+
+- **terminal_loss 早停指标可切排序口径（`--eval-metric`）**：新增 `--eval-metric {logloss,rank_ic_daily}`（默认 `logloss` 保持不变）。`rank_ic_daily` 复用 `ml/train_core/eval.py::make_neg_rank_ic_daily`（逐日截面 Spearman 均值，与门禁 lift 同向；模块级类实例，满足早停指标可 pickle 契约），交易日分组取 ES 矩阵的 `trade_date`（行序与 `eval_set` 一致，缺列必须报错）；未知取值明确失败，不静默回退。动机：门禁判的是排序（lift），而 logloss 早停偏向概率校准口径；两种口径是不同的超参签名。
+- **`em=` 入超参签名**：`summarize_terminal_risk_wf.py` 的签名新增 `eval_metric`（别名 `em`），跨早停口径的折禁止并组比较（与 `s=`/`wy=` 同理）。
+
+### Fixed
+
+- **逐日 RankIC 指标兼容加权校验集**：XGBoost sklearn wrapper 在传 `sample_weight_eval_set` 时会把权重作为关键字传入 callable，`DailySpearmanRankIC.__call__` 因此报 `TypeError`。现接受并忽略 `sample_weight`（RankIC 是纯排序量、不按样本权重加权，与 `daily_spearman_mean` 口径一致），并补测试锁定“加权 ES 路径 + rank_ic_daily 早停 + 模型可 joblib.dump”。
+
+### Tests
+
+- `test_terminal_loss_train_model.py` 新增 3 项：`rank_ic_daily` 早停可训练且口径入元数据、模型可 pickle；未知早停指标报错；`rank_ic_daily` 缺 `trade_date` 报错（合成矩阵补 `trade_date` 列）。
+- `test_summarize_terminal_risk_wf.py`：夹具补 `eval_metric`，签名期望串补 `em=logloss`。
+
+## [0.108.6] - 2026-09-11
+
+### Fixed
+
+- **停牌跨度超过历史窗口时，母截面复牌日收益退化 → 母截面校验误报“实现漂移”并中断训练**：5 年训练窗口下折 `2022H2` 训练被拦下——`cvar_95_20` 最大绝对差 **0.189**（超幅度上限 0.05）、仅 50 行（行占比 1.15e-05）。
+  - **根因（已枚举到行）**：`002025.SZ`（2017-07-04 复牌）、`600673.SH`（2017-11-27 复牌）停牌跨度**大于 7 个月历史窗口**。收益按股票自身上一可用行计算，这两只股票的复牌日落在窗口内、但它们的“上一可用行”落在窗口外 → 母截面 `ret_1` 退化为 NaN（cvar 取窗口内次差日 −0.0813 / −0.0349），而 cs_train 由批量构建（窗口远宽于 7 个月）已算出真实复牌日收益（−0.0997 / −0.0576）→ 差异达 0.019 / 0.189 并逐日重现。已用 pipeline 真实路径（`FeatureBuilder.precompute_daily_adj` + `_get_risk_factor_cache`）验证 cs_train 取值可精确复现，确认 cs_train 无错、错在母截面窗口。
+  - **修复（按需回补前收，而非全量加长窗口）**：新增 `_probe_previous_close` / `_attach_resumption_returns`——只在“股票的窗口内首行不是窗口首日”时才向前逐个分区回找其前一可用行（命中即停），把 `ret_1 = close_adj/前收 − 1` 显式传给 `precompute_risk_factors`（不再依赖窗口内 `pct_change`）。新上市股票用 `clean/stock_basic.list_date` 排除，避免每年数百只 IPO 把回找扫描拖到数据起点（5 年窗口实际只回找 214 只 / 392 个分区，准备耗时 33 s）；数据起点之前仍无行的真·上市首行保持 NaN 并告警。
+  - **验证**：折 `2022H2`（5 年窗口，1340 日 / 434 万行交集）与折 `2024H2`（851 日 / 366 万行）四列 `max_abs_diff` **全为 0.0**、离群 0 行；两只触发股票单点 diff = 0.00e+00。
+
+### Tests
+
+- `test_terminal_loss_mother_section.py` 新增“停牌跨度超过历史窗口”用例（400 交易日合成环境：停牌 6.4 个月跨越窗口起点、复牌日收益为窗口内最差项）+ 复牌日收益必须来自窗口外前收；原“窗口缩短→收益消失”反证改为“窗口缩短不再改变复牌日收益”（前收按需回补使取值与窗口长度无关）；另断言窗口内新上市股票不被伪造前收（27 项）。
+
+## [0.108.5] - 2026-09-11
+
+### Added
+
+- **训练窗口年数与随机种子作为 WF 批量脚本的配置项**（`scripts/batch/batch_terminal_risk_wf.ps1`）：新增 `$train_window_years_list`（数组即窗口消融，目录后缀 `_w{N}y`）与 `$random_state_list`（数组即多种子消融，后缀 `_s{N}`），与已有的 `$max_depth_list`/`$learning_rate_list` 同级。Train 段不再硬编码在折表里，统一由 `TrainStart = EsStart − N 年`、`TrainEnd = EsStart − 1 天` 派生（N=3 与首轮基线逐日一致，已用 PowerShell 验证）；折表只保留 `Label/EsStart/EsEnd/Selected`，避免两处真相。
+  - **窗口越界不静默截短**：脚本启动时从 `data/features/cs_train` 读取数据可用起点（当前 2012-01-04），任一组合的派生 `TrainStart` 早于该起点时该组合判失败并跳过（计入失败清单），不静默改成较短窗口。
+- **多种子/多窗口作为签名维度**（`scripts/summarize_terminal_risk_wf.py`）：超参签名新增 `s={random_state}` 与 `wy={训练窗口年数}`（由 `stage_dates.train` 起止日计算，跨折不变量），后缀解析同步支持 `_w{N}y` / `_s{N}`。**这是必须的**：否则多随机种子/多训练窗口的折会被并进同一组，`lift_min` 取到跨种子最小值、分组语义被污染（也会让"多跑几个种子凑好看的最小组内最小 lift"成为漏洞）。训练起止日无法解析时整条签名返回 None，按既有约定独立成组，不与真签名合并。
+
+### Tests
+
+- `test_summarize_terminal_risk_wf.py`：`_TRAIN_CFG` 补 `random_state`；签名期望串补 `s=42` 与 `wy=1`；新增“缺训练起止日 → 签名 None”“种子/窗口不同 → 签名必须不同（`s=`/`wy=` 分别生效）”；后缀解析补 `_w5y` / `_s7` / `_d5_lr0.04_w5y_s7` 叠加形态；版本化产物回退用例改用真实起止日。
+
+## [0.108.4] - 2026-09-11
+
+### Changed
+
+- **母截面历史窗口按折复用（训练提速）**：`risk/terminal_loss/mother_section.py` 拆出两阶段——`_prepare_mother_window`（加载历史窗口 + 风控预计算）与 `_build_mother_frames`（按目标日切片 + 窗口特征），并新增 `MotherSectionCache`。`train_terminal_risk_model.py` 改为**每折准备一次窗口**、各 50 交易日分块只切片，替代此前"每块都重建窗口"（重复加载 ~200 个 clean/daily 分区并重算 22 个风控因子）。缓存窗口取 `[首个目标日 − 7 个月, 最后一个目标日]`，是各分块窗口的**超集**：风控因子为向后看的滚动/截面量，日期 d 的取值只依赖 d 及其之前的行，因此窗口加长不改变结果（新增测试逐值锁定等价性）。目标日不在缓存窗口内必须报错，不静默产出空截面。
+
+### Tests
+
+- `test_terminal_loss_mother_section.py` 新增 4 项：缓存帧与逐块构建逐值一致（刻意用不同窗口验证超集性质）、多次 build 只加载/预计算一次、缓存窗口外目标日报错、空日期返回空字典（26 项）。
+
 ## [0.108.3] - 2026-09-11
 
 ### Fixed

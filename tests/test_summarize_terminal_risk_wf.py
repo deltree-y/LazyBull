@@ -37,6 +37,8 @@ _TRAIN_CFG = {
     "subsample": 0.8,
     "colsample_bytree": 0.8,
     "reg_lambda": 1.0,
+    "random_state": 42,
+    "eval_metric": "logloss",
 }
 _LABEL_CFG = {
     "task_id": "terminal_vol_scaled_loss",
@@ -94,34 +96,48 @@ def _summary_row(fold: str, lift: float, pred_bias: float = 0.0) -> dict:
 
 
 def test_parse_experiment_suffix():
-    """后缀解析：baseline / _d* / _d*_lr* 三种形态与未知尾缀兜底。"""
-    assert parse_experiment_suffix("2022H2") == {
+    """后缀解析：baseline / _d* / _d*_lr* / _w*y / _s* 与未知尾缀兜底。"""
+    empty = {
         "suffix": "",
         "depth": None,
         "learning_rate": None,
+        "train_window_years": None,
+        "seed": None,
     }
+    assert parse_experiment_suffix("2022H2") == empty
     assert parse_experiment_suffix("2022H2_d3") == {
+        **empty,
         "suffix": "_d3",
         "depth": 3,
-        "learning_rate": None,
     }
     parsed = parse_experiment_suffix("2022H2_d3_lr0.05")
     assert parsed["suffix"] == "_d3_lr0.05"
     assert parsed["depth"] == 3
     assert parsed["learning_rate"] == pytest.approx(0.05)
+    # 训练窗口年数与随机种子后缀（v0.108.5 新增消融位）
+    assert parse_experiment_suffix("2022H2_w5y")["train_window_years"] == 5
+    assert parse_experiment_suffix("2022H2_w5y")["suffix"] == "_w5y"
+    assert parse_experiment_suffix("2022H2_s7")["seed"] == 7
+    combined = parse_experiment_suffix("2022H2_d5_lr0.04_w5y_s7")
+    assert combined["suffix"] == "_d5_lr0.04_w5y_s7"
+    assert (combined["depth"], combined["train_window_years"], combined["seed"]) == (5, 5, 7)
     # 未知尾缀按无后缀处理（同后缀目录仍聚同组），保证新后缀类型不中断汇总
     assert parse_experiment_suffix("2022H2_x9")["suffix"] == ""
 
 
 def test_build_param_signature():
-    """超参签名：完整配置产出预期串；缺任一键返回 None。"""
+    """超参签名：完整配置产出预期串；缺任一键或训练起止日不可解析返回 None。"""
     meta = {
         "train_config": _TRAIN_CFG,
         "label_config": _LABEL_CFG,
-        "metadata": {"sampling": _SAMPLING_CFG},
+        "metadata": {
+            "sampling": _SAMPLING_CFG,
+            "stage_dates": {"train": ["20230101", "20231231"], "es": ["20240101", "20240630"]},
+        },
     }
     assert build_param_signature(meta) == (
-        "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0" "|k=1.0|hmax=20|sigw=20|hpg=2|end=3"
+        "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0|s=42|em=logloss"
+        "|k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=1"
     )
     assert build_param_signature({}) is None
     broken = {
@@ -130,6 +146,38 @@ def test_build_param_signature():
         "metadata": {"sampling": _SAMPLING_CFG},
     }
     assert build_param_signature(broken) is None
+    # 缺训练起止日（无法算窗口年数）→ 返回 None，独立成组不与其他签名混组
+    no_dates = {
+        "train_config": _TRAIN_CFG,
+        "label_config": _LABEL_CFG,
+        "metadata": {"sampling": _SAMPLING_CFG},
+    }
+    assert build_param_signature(no_dates) is None
+
+
+def test_param_signature_separates_seed_and_window():
+    """随机种子与训练窗口年数都是签名维度：多种子/多窗口不得并入同一组。"""
+
+    def _meta(seed: int, train_start: str) -> dict:
+        return {
+            "train_config": {**_TRAIN_CFG, "random_state": seed},
+            "label_config": _LABEL_CFG,
+            "metadata": {
+                "sampling": _SAMPLING_CFG,
+                "stage_dates": {
+                    "train": [train_start, "20240630"],
+                    "es": ["20240701", "20241231"],
+                },
+            },
+        }
+
+    base = build_param_signature(_meta(42, "20210701"))
+    other_seed = build_param_signature(_meta(7, "20210701"))
+    longer_window = build_param_signature(_meta(42, "20190701"))
+    assert "|s=42|" in base and base.endswith("|wy=3")
+    assert "|s=7|" in other_seed and other_seed.endswith("|wy=3")
+    assert "|s=42|" in longer_window and longer_window.endswith("|wy=5")
+    assert len({base, other_seed, longer_window}) == 3
 
 
 def test_build_tuning_table_score_and_gate():
@@ -342,7 +390,10 @@ def test_collect_fold_rows_falls_back_to_versioned_artifacts(tmp_path):
                     "train_config": _TRAIN_CFG,
                     "label_config": _LABEL_CFG,
                     "sampling": _SAMPLING_CFG,
-                    "stage_dates": {"train": ["a", "b"], "es": ["c", "d"]},
+                    "stage_dates": {
+                        "train": ["20230101", "20231231"],
+                        "es": ["20240101", "20240630"],
+                    },
                     "best_iteration": 77,
                     "n_train": 4000,
                     "n_es": 500,
@@ -358,7 +409,7 @@ def test_collect_fold_rows_falls_back_to_versioned_artifacts(tmp_path):
     assert row["lift"] == pytest.approx(2.0)
     # best_iteration 从注册表元数据读出（v0.108.0 起才登记进 metadata）
     assert row["best_iteration"] == 77
-    assert row["train_start"] == "a"
+    assert row["train_start"] == "20230101"
     # train_params 形状归一后签名与折 sidecar 一致
     assert row["param_signature"].startswith("d=3|lr=0.03")
     assert row["depth"] == 3

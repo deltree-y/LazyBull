@@ -75,9 +75,10 @@ from .labels import (
 from .model import TerminalLossModel, TerminalLossModelConfig
 from .mother_section import (
     MOTHER_HARD_ATOL,
+    MOTHER_HISTORY_MONTHS,
     MOTHER_OUTLIER_SHARE_LIMIT,
     MOTHER_SECTION_FACTORS,
-    MOTHER_HISTORY_MONTHS,
+    MotherSectionCache,
     assert_mother_section_validation_ok,
     build_mother_section,
     load_clean_daily_long,
@@ -124,9 +125,10 @@ __all__ = [
     "build_terminal_loss_labels",
     "summarize_label_coverage",
     "MOTHER_HARD_ATOL",
+    "MOTHER_HISTORY_MONTHS",
     "MOTHER_OUTLIER_SHARE_LIMIT",
     "MOTHER_SECTION_FACTORS",
-    "MOTHER_HISTORY_MONTHS",
+    "MotherSectionCache",
     "assert_mother_section_validation_ok",
     "build_mother_section",
     "load_clean_daily_long",

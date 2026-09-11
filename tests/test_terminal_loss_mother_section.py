@@ -123,6 +123,84 @@ def _write_suspension_env(tmp_path):
     return cal, -0.35
 
 
+def _write_long_suspension_env(tmp_path):
+    """构造"停牌跨度超过历史窗口"的合成环境（400 交易日）。
+
+    价格路径：day 0~249 连续；day 250~385 无行（停牌约 6.4 个月，跨越目标日
+    前 7 个月窗口起点）；day 386 复牌，相对 day 249 跌 35%；其后小幅波动。
+    目标日 = day 399（最后一天）：母截面的 20 日窗口含复牌日，而停牌前行落在
+    7 个月窗口之外 → 必须靠前收回补才能算出复牌日收益。
+
+    Returns:
+        (cal, resume_ret)：交易日列表与复牌日相对停牌前一行的收益
+    """
+    dates = pd.bdate_range("2023-01-02", periods=400)
+    cal = [d.strftime("%Y%m%d") for d in dates]
+    clean_dir = tmp_path / "clean"
+    daily_dir = clean_dir / "daily"
+    daily_dir.mkdir(parents=True)
+    pd.DataFrame({"exchange": "SSE", "cal_date": cal, "is_open": 1}).to_parquet(
+        clean_dir / "trade_cal.parquet"
+    )
+
+    gap = range(250, 386)
+    suspended_close = 100.0
+    resume_close = suspended_close * 0.65
+    for i, d in enumerate(cal):
+        rows = []
+        if i not in gap:
+            if i <= 250:
+                close_a = suspended_close
+            elif i == 386:
+                close_a = resume_close
+            else:
+                close_a = resume_close * (1 + 0.002 * (i - 386))
+            rows.append(
+                {
+                    "ts_code": CODES[0],
+                    "trade_date": d,
+                    "close_adj": close_a,
+                    "open_adj": close_a * 0.995,
+                    "high_adj": close_a * 1.005,
+                    "low_adj": close_a * 0.995,
+                    "vol": 1_000_000.0,
+                    "amount": 100_000.0,
+                }
+            )
+        # 第二只股票：窗口内才出现（上市首行无前收），用于验证不伪造前收
+        if i >= 300:
+            rows.append(
+                {
+                    "ts_code": CODES[1],
+                    "trade_date": d,
+                    "close_adj": 50.0 + (i - 300) * 0.01,
+                    "open_adj": 50.0,
+                    "high_adj": 50.5,
+                    "low_adj": 49.5,
+                    "vol": 1_000_000.0,
+                    "amount": 100_000.0,
+                }
+            )
+        if not rows:
+            # 两只股票都无行的交易日（停牌中）：写空分区，保持分区连续
+            frame = pd.DataFrame(
+                {
+                    "ts_code": pd.Series(dtype=str),
+                    "trade_date": pd.Series(dtype=str),
+                    "close_adj": pd.Series(dtype="float64"),
+                    "open_adj": pd.Series(dtype="float64"),
+                    "high_adj": pd.Series(dtype="float64"),
+                    "low_adj": pd.Series(dtype="float64"),
+                    "vol": pd.Series(dtype="float64"),
+                    "amount": pd.Series(dtype="float64"),
+                }
+            )
+        else:
+            frame = pd.DataFrame(rows)
+        frame.to_parquet(daily_dir / f"{d[:4]}-{d[4:6]}-{d[6:8]}.parquet")
+    return cal, -0.35
+
+
 def _write_cs_train(tmp_path, dates, mother, offset=0.0):
     """按母截面写 cs_train 分区（offset 用于制造不一致）。"""
     cs_dir = tmp_path / "features" / "cs_train"
@@ -213,13 +291,90 @@ class TestBuildMotherSection:
         value = frame.loc[frame["ts_code"] == CODES[0], "cvar_95_20"].iloc[0]
         assert value == pytest.approx(resume_ret, abs=1e-9)
 
-        # 反证：把历史窗口缩到 1 个月（旧口径的等效效果）→ 停牌前行在窗外，
-        # 复牌日收益消失，最差收益退化为窗口内其它交易日。
+        # 窗口缩短不再改变复牌日收益：前收按需跨窗口边界回补（v0.108.6），
+        # 因此取值与窗口长度无关（历史行为会退化为 NaN → cvar 取其他交易日）
         monkeypatch.setattr(mother_mod, "MOTHER_HISTORY_MONTHS", 1)
-        weak = build_mother_section(str(tmp_path), [target])
-        weak_frame = weak[target]
-        weak_value = weak_frame.loc[weak_frame["ts_code"] == CODES[0], "cvar_95_20"].iloc[0]
-        assert not np.isclose(weak_value, resume_ret, atol=1e-3)
+        short_window = build_mother_section(str(tmp_path), [target])
+        short_frame = short_window[target]
+        short_value = short_frame.loc[short_frame["ts_code"] == CODES[0], "cvar_95_20"].iloc[0]
+        assert short_value == pytest.approx(resume_ret, abs=1e-9)
+
+    def test_resumption_pre_close_resolved_beyond_long_window(self, tmp_path):
+        """停牌跨度超过历史窗口时，复牌日收益仍须按窗口外前一可用行计算。
+
+        真实触发：002025.SZ / 600673.SH 停牌跨度大于 7 个月窗口，复牌日收益在
+        母截面退化为 NaN，而 cs_train（批量构建，窗口远宽）已算出该收益，
+        cvar_95_20 差异最高 0.19 并被幅度上限拦下。
+        """
+        cal, resume_ret = _write_long_suspension_env(tmp_path)
+        target = cal[-1]
+        mother = build_mother_section(str(tmp_path), [target])
+        frame = mother[target]
+        value = frame.loc[frame["ts_code"] == CODES[0], "cvar_95_20"].iloc[0]
+        assert value == pytest.approx(resume_ret, abs=1e-9)
+        # 另一只股票（窗口内上市首行、无前收）不得崩溃，也不得被回补成伪造值
+        listed = frame.loc[frame["ts_code"] == CODES[1]].iloc[0]
+        assert np.isfinite(listed["max_drawdown_20"])
+
+
+class TestMotherSectionCache:
+    def test_cached_frames_match_uncached(self, tmp_path):
+        """缓存窗口是分块窗口的超集：同一日期的四列取值必须逐值一致。"""
+        import src.lazybull.risk.terminal_loss.mother_section as mother_mod
+
+        cal = _write_env(tmp_path)
+        targets = cal[30:33]
+        plain = build_mother_section(str(tmp_path), targets)
+        # 刻意用不同的窗口（起点更早、终点更晚）构造缓存
+        cache = mother_mod.MotherSectionCache(str(tmp_path), cal[20], cal[-1])
+        cached = cache.build(targets)
+        assert sorted(cached) == sorted(targets)
+        for d in targets:
+            pd.testing.assert_frame_equal(plain[d], cached[d])
+
+    def test_cache_loads_window_once(self, tmp_path, monkeypatch):
+        """多次 build 只加载/预计算一次历史窗口（折耗时 3~4 倍的根因）。"""
+        import src.lazybull.risk.terminal_loss.mother_section as mother_mod
+
+        cal = _write_env(tmp_path)
+        calls = {"load": 0, "precompute": 0}
+        real_load = mother_mod.load_clean_daily_long
+        from src.lazybull.risk import precompute as precompute_mod
+
+        def _counting_load(data_root, dates):
+            calls["load"] += 1
+            return real_load(data_root, dates)
+
+        real_pre = precompute_mod.precompute_risk_factors
+
+        def _counting_pre(daily):
+            calls["precompute"] += 1
+            return real_pre(daily)
+
+        monkeypatch.setattr(mother_mod, "load_clean_daily_long", _counting_load)
+        monkeypatch.setattr(precompute_mod, "precompute_risk_factors", _counting_pre)
+        cache = mother_mod.MotherSectionCache(str(tmp_path), cal[20], cal[-1])
+        first = cache.build(cal[30:31])
+        second = cache.build(cal[31:33])
+        assert calls["load"] == 1
+        assert calls["precompute"] == 1
+        assert len(first) == 1 and len(second) == 2
+
+    def test_cache_rejects_date_outside_window(self, tmp_path):
+        """目标日不在缓存窗口内必须报错，不静默产出空截面。"""
+        import src.lazybull.risk.terminal_loss.mother_section as mother_mod
+
+        cal = _write_env(tmp_path)
+        cache = mother_mod.MotherSectionCache(str(tmp_path), cal[20], cal[30])
+        with pytest.raises(ValueError, match="母截面缓存不含目标日"):
+            cache.build([cal[35]])
+
+    def test_cache_empty_dates_returns_empty(self, tmp_path):
+        import src.lazybull.risk.terminal_loss.mother_section as mother_mod
+
+        cal = _write_env(tmp_path)
+        cache = mother_mod.MotherSectionCache(str(tmp_path), cal[20], cal[30])
+        assert cache.build([]) == {}
 
 
 def _validation_stub(

@@ -46,6 +46,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ...common.date_utils import normalize_series_to_yyyymmdd
+
 #: 参与 pct_* 的四个基列（方案 3.2 第 29~32 项）
 MOTHER_SECTION_FACTORS: List[str] = [
     "ret_20",
@@ -79,6 +81,12 @@ _CLEAN_DAILY_REQUIRED = ["ts_code", "trade_date", "close_adj", "vol", "amount"]
 #: clean/daily 可选列（缺失时对应因子输出 NaN，不视为链路失败）
 _CLEAN_DAILY_OPTIONAL = ["open_adj", "high_adj", "low_adj"]
 
+#: 回补停牌复牌日前收时只需的列（窗口外逐个分区回找）
+_PROBE_COLUMNS = ["ts_code", "close_adj"]
+
+#: 前收回找下界（早于本地 clean/daily 起点即可；到点回找自然停止）
+_DATA_PROBE_FLOOR = "20000101"
+
 
 def _clean_daily_path(data_root: str, yyyymmdd: str) -> str:
     return f"{data_root}/clean/daily/{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}.parquet"
@@ -96,6 +104,133 @@ def _clean_daily_columns(path: str) -> List[str]:
             f"数据链路不完整，拒绝继续"
         )
     return _CLEAN_DAILY_REQUIRED + [c for c in _CLEAN_DAILY_OPTIONAL if c in names]
+
+
+def _probe_previous_close(
+    data_root: str, before_date: str, codes: Sequence[str]
+) -> Dict[str, float]:
+    """回找给定股票在 ``before_date`` 之前最后一个可用行的复权收盘价。
+
+    停牌跨度可大于历史窗口：这类股票的"复牌日"落在窗口内、而它的"上一可用行"
+    落在窗口外（实测 002025.SZ、600673.SH 的停牌跨越 7 个月窗口起点，复牌日
+    收益在母截面退化为 NaN，而 cs_train 由批量构建（窗口远宽）已算出该收益，
+    使 cvar_95_20 差异高达 0.19 并被幅度上限拦下）。此处**按需**逐个分区向前
+    回找这几只股票的前一可用行（命中即停，不做全量加长窗口），保证复牌日收益
+    与 cs_train 同口径。
+
+    Args:
+        data_root: 数据根目录
+        before_date: 目标日（不含当天）
+        codes: 需要回找的股票
+
+    Returns:
+        {ts_code: close_adj}；数据起点之前仍无行（真·上市首行）的股票不在结果中
+    """
+    import pyarrow.parquet as pq
+
+    from .dataset import load_trade_calendar
+
+    remaining = set(str(c) for c in codes)
+    if not remaining:
+        return {}
+    found: Dict[str, float] = {}
+    cal = load_trade_calendar(data_root, _DATA_PROBE_FLOOR, before_date)
+    cal = [d for d in cal if d < before_date]
+    if not cal:
+        logger.warning(f"回补停牌复牌日前收: {before_date} 之前无交易日，跳过 {len(remaining)} 只")
+        return {}
+    probed = 0
+    for d in reversed(cal):
+        path = _clean_daily_path(data_root, d)
+        if not os.path.exists(path):
+            continue
+        names = pq.read_schema(path).names
+        cols = [c for c in _PROBE_COLUMNS if c in names]
+        if "ts_code" not in cols or "close_adj" not in cols:
+            continue
+        day = pd.read_parquet(path, columns=cols)
+        hit = day[day["ts_code"].isin(remaining)]
+        probed += 1
+        if len(hit):
+            for code, value in zip(hit["ts_code"], hit["close_adj"]):
+                if pd.notna(value):
+                    found[str(code)] = float(value)
+            remaining -= set(str(c) for c in hit.loc[hit["close_adj"].notna(), "ts_code"])
+            if not remaining:
+                break
+    if remaining:
+        logger.warning(
+            f"回补停牌复牌日前收: {len(remaining)} 只股票在数据起点 {cal[0]} 之前仍无行"
+            f"（真·上市首行，收益保持 NaN）：{sorted(remaining)[:5]}"
+        )
+    if found:
+        logger.info(
+            f"停牌复牌日前收回补: 命中 {len(found)} 只（回找 {probed} 个分区，"
+            f"目标日 {before_date} 之前）"
+        )
+    return found
+
+
+def _listing_dates(data_root: str) -> Dict[str, str]:
+    """读取股票上市日（用于回找前收时排除真·上市首行）。
+
+    上市日不早于窗口首日的股票在窗口内不可能有前收，回找它们只会把扫描一路
+    拖到数据起点（每年数百只新上市）。缺少 stock_basic 时返回空字典（回找照常）。
+    """
+    import pyarrow.parquet as pq
+
+    path = f"{data_root}/clean/stock_basic.parquet"
+    if not os.path.exists(path):
+        logger.warning(f"缺少 {path}：停牌复牌日前收回补无法排除新上市股票")
+        return {}
+    names = pq.read_schema(path).names
+    if "ts_code" not in names or "list_date" not in names:
+        logger.warning(f"{path} 缺少 ts_code/list_date：前收回补无法排除新上市股票")
+        return {}
+    df = pd.read_parquet(path, columns=["ts_code", "list_date"])
+    df["list_date"] = normalize_series_to_yyyymmdd(df["list_date"])
+    df = df.dropna(subset=["list_date"])
+    return {str(c): str(d) for c, d in zip(df["ts_code"], df["list_date"])}
+
+
+def _attach_resumption_returns(
+    data_root: str, daily: pd.DataFrame, window_first_date: str
+) -> pd.DataFrame:
+    """为 frame 附上 ``ret_1``（含停牌复牌日的窗口外前收回补）。
+
+    收益定义与特征流水线一致：``close_adj / 上一可用行 close_adj − 1``（按股票
+    自身行序，停牌期无行）。仅当股票的**窗口内首行**不是窗口首日（说明它中途
+    才出现，可能是复牌日）且窗口内无前收时，才回找窗口外前一可用行；上市日
+    不早于窗口首日的（新上市）直接跳过，避免无效扫描。
+
+    Args:
+        data_root: 数据根目录
+        daily: ``load_clean_daily_long`` 的长表
+        window_first_date: 窗口首个交易日（YYYYMMDD）
+
+    Returns:
+        带 ``ret_1`` 列的新 frame（不修改入参）
+    """
+    out = daily.copy()
+    out["trade_date"] = out["trade_date"].astype(str)
+    out = out.sort_values(["ts_code", "trade_date"], kind="stable")
+    out["pre_close_adj"] = out.groupby("ts_code")["close_adj"].shift(1)
+
+    first_date = out.groupby("ts_code")["trade_date"].transform("min")
+    suspect = (out["trade_date"] == first_date) & (first_date > window_first_date)
+    codes = out.loc[suspect, "ts_code"].unique().tolist()
+    if codes:
+        listed = _listing_dates(data_root)
+        codes = [c for c in codes if listed.get(str(c), "00000000") < window_first_date]
+    if codes:
+        probed = _probe_previous_close(data_root, window_first_date, codes)
+        if probed:
+            idx = out.index[suspect]
+            fill = [probed.get(str(code), np.nan) for code in out.loc[idx, "ts_code"]]
+            out.loc[idx, "pre_close_adj"] = fill
+    out["ret_1"] = out["close_adj"] / out["pre_close_adj"] - 1.0
+    out = out.drop(columns=["pre_close_adj"]).reset_index(drop=True)
+    return out
 
 
 def load_clean_daily_long(data_root: str, dates: Sequence[str]) -> pd.DataFrame:
@@ -130,15 +265,61 @@ def build_mother_section(
     Returns:
         {trade_date: DataFrame(ts_code + MOTHER_SECTION_FACTORS)}；
         证券域为该日 clean/daily 有行的全部股票，因子不可得处为 NaN
-    """
-    from ..precompute import precompute_risk_factors  # 同包（risk）内复用
 
+    注：按块循环构建（如 ``train_terminal_risk_model.py`` 的 50 交易日分块）时，
+    应用 ``MotherSectionCache`` 复用历史窗口（每块重建窗口会重复加载分区与预计算）。
+    """
     targets = sorted({str(d) for d in dates})
     if not targets:
         return {}
+    prepared = _prepare_mother_window(data_root, targets[0], targets[-1])
+    return _build_mother_frames(prepared, targets)
 
-    calendar = _trade_calendar_window(data_root, targets[0], targets[-1])
+
+class MotherSectionCache:
+    """折内复用母截面历史窗口（一次加载 + 一次风控预计算，多块共享）。
+
+    缓存窗口取 ``[首个目标日 - MOTHER_HISTORY_MONTHS, 最后一个目标日]``，
+    是各分块窗口的**超集**：风控因子为向后看的滚动/截面量，日期 d 的取值只
+    依赖 d 及其之前的行，因此窗口加长不改变结果（由测试锁定等价性）。
+
+    用法：
+        cache = MotherSectionCache(data_root, fold_first_date, fold_last_date)
+        mother_by_date = cache.build(chunk_dates)
+    """
+
+    def __init__(self, data_root: str, first_date: str, last_date: str) -> None:
+        self.data_root = data_root
+        self._prepared = _prepare_mother_window(data_root, first_date, last_date)
+
+    def build(self, dates: Sequence[str]) -> Dict[str, pd.DataFrame]:
+        """基于已准备好的窗口构建给定日期的母截面（仅切片 + 窗口特征）。"""
+        targets = sorted({str(d) for d in dates})
+        if not targets:
+            return {}
+        calendar = self._prepared["calendar"]
+        outside = [d for d in targets if d not in self._prepared["rows_by_date"]]
+        if outside:
+            raise ValueError(
+                f"母截面缓存不含目标日 {outside[:3]}（缓存窗口 {calendar[0]}~{calendar[-1]}），"
+                f"请用覆盖全部目标日的窗口构造缓存"
+            )
+        return _build_mother_frames(self._prepared, targets)
+
+
+def _prepare_mother_window(data_root: str, first_date: str, last_date: str) -> Dict[str, Any]:
+    """加载历史窗口并预计算风控因子（母截面构建的第一阶段）。
+
+    Returns:
+        {"calendar": [...], "rows_by_date": {...}, "risk_by_date": {...},
+         "risk_cols": [...]}
+    """
+    from ..precompute import precompute_risk_factors  # 同包（risk）内复用
+
+    calendar = _trade_calendar_window(data_root, first_date, last_date)
     daily = load_clean_daily_long(data_root, calendar)
+    # 收益（含停牌复牌日的窗口外前收回补，见 _attach_resumption_returns）
+    daily = _attach_resumption_returns(data_root, daily, calendar[0])
     risk_long = precompute_risk_factors(daily)
     if risk_long is None:
         raise ValueError(
@@ -150,8 +331,6 @@ def build_mother_section(
         raise ValueError(f"风控因子预计算缺少 pct 基列: {missing_risk}（因子契约变更须同步本模块）")
     risk_long = risk_long[["ts_code", "trade_date"] + risk_cols].copy()
     risk_long["trade_date"] = risk_long["trade_date"].astype(str)
-
-    from ...features.builder import _calculate_window_features_static
 
     rows_by_date: Dict[str, pd.DataFrame] = {}
     for d, sub in daily.groupby("trade_date", sort=False):
@@ -167,6 +346,28 @@ def build_mother_section(
     risk_by_date: Dict[str, pd.DataFrame] = {}
     for d, sub in risk_long.groupby("trade_date", sort=False):
         risk_by_date[str(d)] = sub
+    logger.info(
+        f"母截面窗口已准备: {calendar[0]}~{calendar[-1]}（{len(calendar)} 个交易日，"
+        f"{len(rows_by_date)} 日有行）"
+    )
+    return {
+        "calendar": calendar,
+        "rows_by_date": rows_by_date,
+        "risk_by_date": risk_by_date,
+        "risk_cols": risk_cols,
+    }
+
+
+def _build_mother_frames(
+    prepared: Dict[str, Any], targets: Sequence[str]
+) -> Dict[str, pd.DataFrame]:
+    """基于已准备窗口产出各目标日的母截面（母截面构建的第二阶段）。"""
+    from ...features.builder import _calculate_window_features_static
+
+    calendar: List[str] = prepared["calendar"]
+    rows_by_date: Dict[str, pd.DataFrame] = prepared["rows_by_date"]
+    risk_by_date: Dict[str, pd.DataFrame] = prepared["risk_by_date"]
+    risk_cols: List[str] = prepared["risk_cols"]
 
     window = 20
     out: Dict[str, pd.DataFrame] = {}

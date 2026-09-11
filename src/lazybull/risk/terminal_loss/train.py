@@ -2,8 +2,10 @@
 
 实现 docs/plans/terminal_loss_risk_model_plan.md 3.6/3.7/8.1 契约：
 
-- 早停指标使用内置 logloss（概率质量优先，服务后续校准），PR-AUC 仅
-  记录展示不参与早停；如需自定义指标必须模块级可 pickle（早停指标契约）；
+- 早停指标：默认 `logloss`（概率质量优先，服务后续校准），可切
+  `rank_ic_daily`（逐日截面 Spearman 均值，与门禁 lift 同向；实现复用
+  `ml/train_core/eval.py::make_neg_rank_ic_daily`，模块级可 pickle 满足
+  早停指标契约）；两种口径是不同签名，不得混组比较；
 - 样本权重按方案第 6 节规则 1 传入（每行 1/期限网格大小）；
 - 正则尺度决策 A（权重 1/20、正则参数保持原值：等效正则增强，且
   min_child_weight=1 使单一 (股票,日) 组无法独自成叶），策略标识落入
@@ -27,9 +29,16 @@ from sklearn.metrics import (
 )
 from xgboost import XGBClassifier
 
+from ...ml.train_core.eval import make_neg_rank_ic_daily
 from .labels import TerminalLossLabelConfig
 
 REG_SCALE_POLICY_A = "A_keep_regularization_with_1_over_grid_weights"
+
+#: 逐日截面 Spearman RankIC 均值早停指标（与门禁 lift 同向）
+EVAL_METRIC_RANK_IC_DAILY = "rank_ic_daily"
+
+#: 支持的早停指标（未知取值必须明确失败，禁止静默回退）
+SUPPORTED_EVAL_METRICS = ("logloss", EVAL_METRIC_RANK_IC_DAILY)
 
 
 @dataclass(frozen=True)
@@ -103,6 +112,10 @@ def train_terminal_loss_model(
     """
     cfg = train_config or TerminalLossTrainConfig()
     lcfg = label_config or TerminalLossLabelConfig()
+    if cfg.eval_metric not in SUPPORTED_EVAL_METRICS:
+        raise ValueError(
+            f"不支持的早停指标 {cfg.eval_metric!r}（可用: {list(SUPPORTED_EVAL_METRICS)}）"
+        )
     missing = [c for c in feature_names if c not in train_matrix.columns]
     if missing:
         raise ValueError(f"训练矩阵缺少特征列: {missing}")
@@ -115,9 +128,23 @@ def train_terminal_loss_model(
     X_es = es_matrix[feature_names]
     y_es = es_matrix["loss_label"].astype(int)
 
+    # 早停指标：rank_ic_daily 用 ES 段的 trade_date 分组（行序必须与 eval_set 一致）
+    if cfg.eval_metric == EVAL_METRIC_RANK_IC_DAILY:
+        if "trade_date" not in es_matrix.columns:
+            raise ValueError("eval_metric=rank_ic_daily 需要 ES 矩阵包含 trade_date 列")
+        eval_metric: Any = make_neg_rank_ic_daily(
+            es_matrix["trade_date"].astype(str).to_numpy()
+        )
+        logger.info(
+            f"早停指标: 逐日截面 Spearman RankIC 均值（ES 段 "
+            f"{es_matrix['trade_date'].nunique()} 个交易日，与门禁 lift 同向）"
+        )
+    else:
+        eval_metric = cfg.eval_metric
+
     clf = XGBClassifier(
         objective="binary:logistic",
-        eval_metric=cfg.eval_metric,
+        eval_metric=eval_metric,
         max_depth=cfg.max_depth,
         learning_rate=cfg.learning_rate,
         n_estimators=cfg.n_estimators,

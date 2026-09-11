@@ -20,7 +20,7 @@ from src.lazybull.risk.terminal_loss.train import (
 FEATURES = ["f1", "f2", "remaining_intervals"]
 
 
-def _synthetic_matrix(n: int, seed: int, signal: float = 2.0):
+def _synthetic_matrix(n: int, seed: int, signal: float = 2.0, with_dates: int = 20):
     """弱信号合成矩阵：p = sigmoid(signal * f1)，标签按 p 伯努利抽样。"""
     rng = np.random.default_rng(seed)
     f1 = rng.normal(0, 1, n)
@@ -28,12 +28,14 @@ def _synthetic_matrix(n: int, seed: int, signal: float = 2.0):
     h = rng.integers(1, 21, n)
     p = 1 / (1 + np.exp(-signal * f1))
     y = (rng.random(n) < p).astype(int)
+    dates = pd.bdate_range("2024-01-02", periods=with_dates).strftime("%Y%m%d")
     return pd.DataFrame(
         {
             "f1": f1,
             "f2": f2,
             "remaining_intervals": h,
             "h": h,
+            "trade_date": rng.choice(dates, n),
             "loss_label": y,
             "sample_weight": np.full(n, 1 / 20),
         }
@@ -55,6 +57,50 @@ class TestTrain:
         assert meta["train_config"]["regularization_scale_policy"].startswith("A_")
         assert meta["n_train"] == 800 and meta["n_es"] == 300
         assert 0.0 < meta["train_event_rate"] < 1.0
+
+    def test_rank_ic_daily_early_stopping_metric(self, tmp_path):
+        """早停指标可切逐日截面 RankIC（与门禁 lift 同向），口径入元数据。"""
+        train_df = _synthetic_matrix(800, seed=11)
+        es_df = _synthetic_matrix(300, seed=12)
+        result = train_terminal_loss_model(
+            train_df,
+            es_df,
+            FEATURES,
+            TerminalLossTrainConfig(
+                n_estimators=60,
+                early_stopping_rounds=10,
+                device="cpu",
+                eval_metric="rank_ic_daily",
+            ),
+        )
+        assert 0 < result.best_iteration <= 60
+        assert result.to_metadata()["train_config"]["eval_metric"] == "rank_ic_daily"
+        # 指标对象必须可 pickle（模型注册 joblib.dump 要求，闭包会触发 PicklingError）
+        joblib.dump(result.classifier, tmp_path / "model.joblib")
+
+    def test_unknown_eval_metric_raises(self):
+        """未知早停指标必须明确失败，不静默回退到 logloss。"""
+        train_df = _synthetic_matrix(200, seed=13)
+        es_df = _synthetic_matrix(100, seed=14)
+        with pytest.raises(ValueError, match="不支持的早停指标"):
+            train_terminal_loss_model(
+                train_df,
+                es_df,
+                FEATURES,
+                TerminalLossTrainConfig(device="cpu", eval_metric="auc"),
+            )
+
+    def test_rank_ic_daily_requires_trade_date(self):
+        """rank_ic_daily 需要 ES 矩阵带 trade_date 分组列，缺列明确报错。"""
+        train_df = _synthetic_matrix(200, seed=15).drop(columns=["trade_date"])
+        es_df = _synthetic_matrix(100, seed=16).drop(columns=["trade_date"])
+        with pytest.raises(ValueError, match="需要 ES 矩阵包含 trade_date"):
+            train_terminal_loss_model(
+                train_df,
+                es_df,
+                FEATURES,
+                TerminalLossTrainConfig(device="cpu", eval_metric="rank_ic_daily"),
+            )
 
     def test_missing_feature_column_raises(self):
         train_df = _synthetic_matrix(100, seed=3)
