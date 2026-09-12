@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,6 +25,7 @@ from scripts.analyze_terminal_risk_gate import (  # noqa: E402
     load_group_table,
     pick_signature,
 )
+from scripts.analyze_terminal_risk_gate import main as gate_main  # noqa: E402
 
 _SIG_OLD = "d=6|lr=0.05|nest=1000|esr=100"
 _SIG_NEW = "d=5|lr=0.04|nest=1000|esr=50"
@@ -168,6 +170,85 @@ class TestFormatGroups:
         text = format_groups(groups)
         assert "无折目录" in text
         assert "rank=-" in text and "调参分=-" in text
+
+
+class TestScoreModes:
+    """双判据（raw + daynorm）必须同时写入产物（v0.110.0）。"""
+
+    def _write_dual_root(self, tmp_path: Path) -> Path:
+        folds = ["2022H2", "2023H1"]
+        pd.DataFrame(
+            [{"fold": f, "lift": 1.2, "param_signature": _SIG_NEW} for f in folds]
+        ).to_csv(tmp_path / "summary.csv", index=False)
+        rng = np.random.default_rng(0)
+        for fold in folds:
+            fold_dir = tmp_path / fold
+            fold_dir.mkdir(parents=True)
+            rows = []
+            for i in range(40):
+                for j in range(20):
+                    p = float(np.clip(rng.normal(0.3, 0.15), 0.01, 0.99))
+                    rows.append(
+                        {
+                            "trade_date": f"2024{(i // 20) + 1:02d}{(i % 20) + 1:02d}",
+                            "ts_code": f"0000{j:02d}.SZ",
+                            "h": (j % 20) + 1,
+                            "loss_label": int(rng.random() < p),
+                            "p_loss": p,
+                        }
+                    )
+            pd.DataFrame(rows).to_parquet(
+                fold_dir / "terminal_loss_es_predictions.parquet", index=False
+            )
+        return tmp_path
+
+    def test_main_writes_both_score_modes(self, tmp_path, monkeypatch):
+        root = self._write_dual_root(tmp_path)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "analyze_terminal_risk_gate.py",
+                "--wf-root",
+                str(root),
+                "--score-mode",
+                "both",
+                "--n-resamples",
+                "50",
+                "--block-resamples",
+                "20",
+            ],
+        )
+        assert gate_main() == 0
+        gate = pd.read_csv(root / "gate_ci.csv")
+        assert set(gate["score_mode"]) == {"raw", "daynorm"}
+        block = pd.read_csv(root / "gate_ci_block.csv")
+        assert set(block["score_mode"]) == {"raw", "daynorm"}
+        assert set(block["block_days"]) == {5, 10, 20}
+        assert set(block["fold"]) == {"2022H2", "2023H1"}
+
+    def test_main_single_mode_writes_one_criterion(self, tmp_path, monkeypatch):
+        root = self._write_dual_root(tmp_path)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "analyze_terminal_risk_gate.py",
+                "--wf-root",
+                str(root),
+                "--score-mode",
+                "daynorm",
+                "--n-resamples",
+                "50",
+                "--block-resamples",
+                "20",
+            ],
+        )
+        assert gate_main() == 0
+        gate = pd.read_csv(root / "gate_ci.csv")
+        assert set(gate["score_mode"]) == {"daynorm"}
+        block = pd.read_csv(root / "gate_ci_block.csv")
+        assert set(block["score_mode"]) == {"daynorm"}
 
 
 class TestCollectFoldLifts:

@@ -14,8 +14,15 @@ r"""terminal_loss WF 门禁区间重判（方案第 6 节规则 4/5、8.1）
    块长默认取 ES 段口径（5/10/20 日）——方案第 6 节的 40 日块是组合级
    多年 OOS 口径，ES 段只有几十个交易日，用 40 日会使块数不足。
 
-产物：``gate_ci.csv``（折级）与 ``gate_ci_block.csv``（逐折分块区间），
-均写入 ``--wf-root``。
+产物：``gate_ci.csv``（折级，每行一个判据）与 ``gate_ci_block.csv``（逐折
+分块区间，每行 = 折 × 块长 × 判据），均写入 ``--wf-root``。
+
+双判据（v0.110.0，强制并列）：同一批折必须同时给出两种分数口径——
+``raw``（``p_loss``：跨日期水平对齐 + 当日截面排序混合）与 ``daynorm``
+（``p_loss_daypct``：当日截面百分位，只反映截面排序）。实测两者在 8 折上
+差异巨大且方向不一致（raw 高的折大量收益来自跨日水平对齐，而弱折的截面
+排序可能反而更好），失败折也不同，只报一个口径会得出片面结论。两口径共用
+阈值，且都必须满足“逐折区间下限 > 阈值”。
 
 分组选择（关键：``--wf-root`` 下常有多个历史实验组，选错就会重判到别的组）：
 
@@ -32,7 +39,7 @@ py .\scripts\analyze_terminal_risk_gate.py --wf-root data\walk_forward\terminal_
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -40,14 +47,18 @@ from loguru import logger
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.lazybull.risk.terminal_loss import (  # noqa: E402
+    DAY_NORM_SCORE_COL,
     BootstrapConfig,
+    add_day_percentile_score,
     fold_level_gate,
     moving_block_metric_sensitivity,
 )
+from src.lazybull.risk.terminal_loss.block_stats import lift as lift_metric  # noqa: E402
 
 #: 折级台账列
 GATE_COLUMNS = [
     "param_signature",
+    "score_mode",
     "n_folds",
     "point_min",
     "point_median",
@@ -67,6 +78,7 @@ GATE_COLUMNS = [
 #: 逐折分块区间列
 BLOCK_COLUMNS = [
     "fold",
+    "score_mode",
     "metric",
     "block_days",
     "point",
@@ -110,6 +122,14 @@ def parse_args() -> argparse.Namespace:
         "--no-block",
         action="store_true",
         help="跳过逐折分块区间（无 ES 逐行预测时可用）",
+    )
+    parser.add_argument(
+        "--score-mode",
+        default="both",
+        choices=["both", "raw", "daynorm"],
+        help="分数口径：both（默认，双判据并列）/ raw（p_loss，跨日水平+截面混合）"
+        "/ daynorm（当日截面百分位，只反映截面排序）。实测两口径的失败折不同，"
+        "只报其中之一会得出片面结论",
     )
     return parser.parse_args()
 
@@ -242,6 +262,28 @@ def find_es_predictions(wf_root: Path, fold: str) -> Optional[Path]:
     return versioned[-1] if versioned else None
 
 
+def fold_daynorm_lifts(wf_root: Path, folds: List[str]) -> Dict[str, float]:
+    """逐折 daynorm（当日截面百分位）点估计 lift。
+
+    raw 口径的折 lift 取自 ``summary.csv``（训练产物报告）；daynorm 没有落盘
+    点估计，需从 ES 逐行预测现算（同一份预测、同一 lift 定义，只换分数列）。
+    缺逐行预测的折不进入返回字典（调用方告警并按可用折判定）。
+    """
+    out: Dict[str, float] = {}
+    for fold in folds:
+        path = find_es_predictions(wf_root, fold)
+        if path is None:
+            continue
+        frame = add_day_percentile_score(pd.read_parquet(path))
+        value = lift_metric(
+            frame["loss_label"].to_numpy(),
+            frame[DAY_NORM_SCORE_COL].to_numpy(dtype=float),
+        )
+        if value is not None and pd.notna(value):
+            out[fold] = float(value)
+    return out
+
+
 def main() -> int:
     args = parse_args()
     wf_root = Path(args.wf_root)
@@ -281,32 +323,62 @@ def main() -> int:
             f"如需重判该组请加 --select best 或 --signature <签名>"
         )
 
-    gate = fold_level_gate(
-        subset["lift"].tolist(),
-        lift_min_threshold=args.threshold,
-        n_resamples=args.n_resamples,
-        seed=args.seed,
+    modes: List[str] = (
+        ["raw", "daynorm"] if args.score_mode == "both" else [args.score_mode]
     )
-    row = {
-        "param_signature": signature,
-        "n_folds": gate["n_folds"],
-        "point_min": gate["point_min"],
-        "point_median": gate["point_median"],
-        "point_mean": gate["point_mean"],
-        "point_max": gate["point_max"],
-        "fold_std": gate["fold_std"],
-        "point_gate_pass": gate["point_gate_pass"],
-        "fold_min_pass_share": gate["fold_min_pass_share"],
-        "ci_mean_low": gate["ci_mean"][0],
-        "ci_mean_high": gate["ci_mean"][1],
-        "prob_mean_pass": gate["prob_mean_pass"],
-        "threshold": gate["threshold"],
-        "n_resamples": gate["n_resamples"],
-        "seed": gate["seed"],
-    }
+    fold_names = [str(f) for f in subset["fold"].tolist()]
+    daynorm_lifts = fold_daynorm_lifts(wf_root, fold_names) if "daynorm" in modes else {}
+
+    gates: Dict[str, Dict[str, Any]] = {}
+    gate_rows: List[dict] = []
+    for mode in modes:
+        if mode == "raw":
+            lifts = subset["lift"].tolist()
+        else:
+            lifts = [daynorm_lifts[f] for f in fold_names if f in daynorm_lifts]
+            absent = [f for f in fold_names if f not in daynorm_lifts]
+            if absent:
+                logger.warning(
+                    f"daynorm 口径缺 {len(absent)} 个折的 ES 逐行预测"
+                    f"（{absent[:3]}...）：该口径按可用折判定，不得静默当成已覆盖"
+                )
+        valid = [v for v in lifts if v is not None and pd.notna(v)]
+        if not valid:
+            logger.warning(f"{mode} 口径无有效折 lift，跳过该判据")
+            continue
+        gate = fold_level_gate(
+            lifts,
+            lift_min_threshold=args.threshold,
+            n_resamples=args.n_resamples,
+            seed=args.seed,
+        )
+        gates[mode] = gate
+        gate_rows.append(
+            {
+                "param_signature": signature,
+                "score_mode": mode,
+                "n_folds": gate["n_folds"],
+                "point_min": gate["point_min"],
+                "point_median": gate["point_median"],
+                "point_mean": gate["point_mean"],
+                "point_max": gate["point_max"],
+                "fold_std": gate["fold_std"],
+                "point_gate_pass": gate["point_gate_pass"],
+                "fold_min_pass_share": gate["fold_min_pass_share"],
+                "ci_mean_low": gate["ci_mean"][0],
+                "ci_mean_high": gate["ci_mean"][1],
+                "prob_mean_pass": gate["prob_mean_pass"],
+                "threshold": gate["threshold"],
+                "n_resamples": gate["n_resamples"],
+                "seed": gate["seed"],
+            }
+        )
+    if not gate_rows:
+        logger.error("两种口径都无有效折 lift，无法重判门禁")
+        return 1
     gate_csv = wf_root / "gate_ci.csv"
-    pd.DataFrame([row])[GATE_COLUMNS].to_csv(gate_csv, index=False, encoding="utf-8-sig")
-    logger.info(f"折级门禁区间已写入 {gate_csv}")
+    pd.DataFrame(gate_rows)[GATE_COLUMNS].to_csv(gate_csv, index=False, encoding="utf-8-sig")
+    logger.info(f"折级门禁区间已写入 {gate_csv}（{len(gate_rows)} 个判据：{list(gates)}）")
 
     print("")
     print("  ── terminal_loss 折级门禁重判（折为单位，8 折 = 8 个独立制度）──")
@@ -328,24 +400,32 @@ def main() -> int:
                 "  提示          : tuning_scores 排名第一为另一组；"
                 "如需重判请用 --select best 或 --signature"
             )
-    print(
-        f"  折间分布      : min={gate['point_min']:.3f}  median={gate['point_median']:.3f}  "
-        f"mean={gate['point_mean']:.3f}  max={gate['point_max']:.3f}  "
-        f"std={gate['fold_std']:.3f}"
-    )
-    print(
-        f"  原口径        : min ≥ {gate['threshold']} "
-        f"{'通过' if gate['point_gate_pass'] else '不通过'}；"
-        f"达标折 {gate['fold_min_pass_share'] * 100:.0f}%（{gate['n_folds']} 折）"
-    )
-    print(
-        f"  均值 lift 区间: [{gate['ci_mean'][0]:.3f}, {gate['ci_mean'][1]:.3f}]"
-        f"（{int(gate['ci_level'] * 100)}%，P(均值 ≥ 阈值) = {gate['prob_mean_pass']:.2f}）"
-    )
+    for mode in modes:
+        gate = gates.get(mode)
+        if gate is None:
+            continue
+        label = "raw（跨日水平 + 当日截面混合）" if mode == "raw" else "daynorm（当日截面排序）"
+        print(f"  ── 判据 {mode}: {label} ──")
+        print(
+            f"  折间分布      : min={gate['point_min']:.3f}  median={gate['point_median']:.3f}  "
+            f"mean={gate['point_mean']:.3f}  max={gate['point_max']:.3f}  "
+            f"std={gate['fold_std']:.3f}"
+        )
+        print(
+            f"  点估计判据    : min ≥ {gate['threshold']} "
+            f"{'通过' if gate['point_gate_pass'] else '不通过'}；"
+            f"达标折 {gate['fold_min_pass_share'] * 100:.0f}%（{gate['n_folds']} 折）"
+        )
+        print(
+            f"  均值 lift 区间: [{gate['ci_mean'][0]:.3f}, {gate['ci_mean'][1]:.3f}]"
+            f"（{int(gate['ci_level'] * 100)}%，P(均值 ≥ 阈值) = {gate['prob_mean_pass']:.2f}）"
+        )
     print(
         "  口径边界      : 折级自举只能反映「换一批制度」，重采样抽不到比观测最小值\n"
         "                  更差的折，因此它无法判定最差折是否真正高于阈值；\n"
-        "                  该问题须看下面的逐折分块区间（需 ES 逐行预测）。"
+        "                  该问题须看下面的逐折分块区间（需 ES 逐行预测）。\n"
+        "  双判据要求    : raw 与 daynorm 的失败折可能不同（实测确实不同），两个\n"
+        "                  口径都要看逐折区间下限，不得只报其中一个。"
     )
     print("")
 
@@ -357,35 +437,43 @@ def main() -> int:
     for fold in subset["fold"].tolist():
         path = find_es_predictions(wf_root, fold)
         if path is None:
-            missing.append(fold)
+            missing.append(str(fold))
             continue
         frame = pd.read_parquet(path)
-        cfg = BootstrapConfig(n_resamples=args.block_resamples, seed=args.seed)
-        try:
-            results = moving_block_metric_sensitivity(frame, metric="lift", config=cfg)
-        except ValueError as exc:
-            logger.warning(f"{fold}: 分块区间不可行（{exc}）")
-            missing.append(fold)
-            continue
-        for result in results:
-            block_rows.append({"fold": fold, **result})
-        logger.info(
-            f"{fold}: 日块 {results[0]['n_days']} 天，主块长 {
-                results[min(1, len(results) - 1)]['block_days']
-            } 日 lift = {results[0]['point']:.3f} "
-            f"[{results[min(1, len(results) - 1)]['ci_low']:.3f}, "
-            f"{results[min(1, len(results) - 1)]['ci_high']:.3f}]"
-        )
+        frames = {"raw": frame}
+        if "daynorm" in modes:
+            frames["daynorm"] = add_day_percentile_score(frame)
+        for mode in modes:
+            cfg = BootstrapConfig(n_resamples=args.block_resamples, seed=args.seed)
+            score_col = "p_loss" if mode == "raw" else DAY_NORM_SCORE_COL
+            try:
+                results = moving_block_metric_sensitivity(
+                    frames[mode], metric="lift", config=cfg, score_col=score_col
+                )
+            except ValueError as exc:
+                logger.warning(f"{fold}[{mode}]: 分块区间不可行（{exc}）")
+                missing.append(f"{fold}[{mode}]")
+                continue
+            for result in results:
+                block_rows.append({"fold": fold, "score_mode": mode, **result})
+            main_idx = min(1, len(results) - 1)
+            logger.info(
+                f"{fold}[{mode}]: 日块 {results[0]['n_days']} 天，主块长 "
+                f"{results[main_idx]['block_days']} 日 lift = {results[0]['point']:.3f} "
+                f"[{results[main_idx]['ci_low']:.3f}, {results[main_idx]['ci_high']:.3f}]"
+            )
     if missing:
         logger.warning(
-            f"{len(missing)} 个折缺 ES 逐行预测（{missing[:3]}...）："
+            f"{len(missing)} 项缺 ES 逐行预测（{missing[:3]}...）："
             f"逐折区间需重跑训练（去掉 --no-es-predictions）；"
             f"若这些折不属于刚跑的那批，请用 --list-groups 核对分组后用 --select/--signature 指定"
         )
     if block_rows:
         block_csv = wf_root / "gate_ci_block.csv"
         pd.DataFrame(block_rows)[BLOCK_COLUMNS].to_csv(block_csv, index=False, encoding="utf-8-sig")
-        logger.info(f"逐折分块区间已写入 {block_csv}")
+        logger.info(
+            f"逐折分块区间已写入 {block_csv}（{len(block_rows)} 行 = 折 × 块长 × 判据）"
+        )
     return 0
 
 

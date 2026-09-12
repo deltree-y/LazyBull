@@ -6,7 +6,9 @@ import pytest
 
 from src.lazybull.risk.terminal_loss import (
     BLOCK_DAYS_SENSITIVITY,
+    DAY_NORM_SCORE_COL,
     BootstrapConfig,
+    add_day_percentile_score,
     block_paired_delta,
     fold_level_gate,
     moving_block_metric_ci,
@@ -36,6 +38,25 @@ def _es_frame(n_days: int = 60, n_stocks: int = 30, seed: int = 0) -> pd.DataFra
 
 
 class TestLiftMetric:
+    def test_day_percentile_is_within_day_and_monotone(self):
+        frame = _es_frame(n_days=3, n_stocks=10, seed=5)
+        out = add_day_percentile_score(frame)
+        assert DAY_NORM_SCORE_COL in out.columns
+        for _, g in out.groupby("trade_date"):
+            assert g[DAY_NORM_SCORE_COL].between(0.0, 1.0, inclusive="right").all()
+            assert g.sort_values("p_loss")[DAY_NORM_SCORE_COL].is_monotonic_increasing
+
+    def test_day_percentile_keeps_nan_and_rejects_bad_input(self):
+        frame = _es_frame(n_days=3, n_stocks=5, seed=6)
+        frame.loc[frame.index[:3], "p_loss"] = np.nan
+        out = add_day_percentile_score(frame)
+        # 缺失值保持缺失（不得填 0.5 把"无分数"伪装成中性排序）
+        assert out[DAY_NORM_SCORE_COL].isna().sum() >= 3
+        with pytest.raises(ValueError, match="缺少源分数列"):
+            add_day_percentile_score(frame, src_col="ghost")
+        with pytest.raises(ValueError, match="为空"):
+            add_day_percentile_score(pd.DataFrame())
+
     def test_lift_equals_pr_auc_over_event_rate(self):
         y = np.array([0, 0, 1, 1, 0, 1, 0, 0])
         p = np.array([0.1, 0.2, 0.9, 0.8, 0.3, 0.7, 0.2, 0.1])
@@ -48,6 +69,38 @@ class TestLiftMetric:
 
 
 class TestMovingBlockCi:
+    def test_daynorm_score_isolates_cross_sectional_ranking(self):
+        """daynorm 口径不受跨日水平平移影响，raw 口径受影响（v0.110.0 双判据）。"""
+        frame = _es_frame(n_days=40, n_stocks=20, seed=8)
+        shifted = frame.copy()
+        days = sorted(shifted["trade_date"].unique())
+        upper = set(days[len(days) // 2 :])
+        mask = shifted["trade_date"].isin(upper)
+        shifted.loc[mask, "p_loss"] = shifted.loc[mask, "p_loss"] + 5.0
+        cfg = BootstrapConfig(block_days=10, n_resamples=20, seed=3)
+        raw_a = moving_block_metric_ci(frame, metric="lift", config=cfg)["point"]
+        raw_b = moving_block_metric_ci(shifted, metric="lift", config=cfg)["point"]
+        dn_a = moving_block_metric_ci(
+            add_day_percentile_score(frame),
+            metric="lift",
+            config=cfg,
+            score_col=DAY_NORM_SCORE_COL,
+        )["point"]
+        dn_b = moving_block_metric_ci(
+            add_day_percentile_score(shifted),
+            metric="lift",
+            config=cfg,
+            score_col=DAY_NORM_SCORE_COL,
+        )["point"]
+        # raw 池化口径把跨日水平也当信息；daynorm 只保留当日截面排序
+        assert raw_a != pytest.approx(raw_b)
+        assert dn_a == pytest.approx(dn_b)
+
+    def test_missing_score_col_rejected(self):
+        frame = _es_frame(n_days=30, n_stocks=10, seed=9)
+        with pytest.raises(ValueError, match="缺少分数列"):
+            moving_block_metric_ci(frame, metric="lift", score_col=DAY_NORM_SCORE_COL)
+
     def test_point_matches_lift_and_seed_reproducible(self):
         frame = _es_frame()
         cfg = BootstrapConfig(block_days=10, n_resamples=50, seed=7)

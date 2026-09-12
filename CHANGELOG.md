@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.110.0] - 2026-09-12
+
+### Added
+
+- **门禁双判据：raw + daynorm 并列（terminal_loss）**：门禁 `lift` 原为单一口径（`p_loss` 池化 PR-AUC / 事件率）。实测该口径把两种能力混在一起——**跨日期水平对齐**（regime/校准）与**当日截面排序**——且在 8 折上两者方向不一致（`2022H2` raw 1.735 / daynorm 1.102，`2024H1` 2.091 / 1.137；反之 `2025H2` raw 1.082 / daynorm 1.440，`2023H1` 1.181 / 1.318），失败折也不同（raw 弱折 `2025H2`、daynorm 弱折 `2023H2` 0.961）。现强制并列登记两个口径：
+  - `raw`：`p_loss`（原口径）；
+  - `daynorm`：`p_loss_daypct`（按 `trade_date` 分组取百分位：逐日单调变换只保留当日截面排序，缺失值保持缺失不填 0.5）。
+  - `block_stats.py` 新增 `DAY_NORM_SCORE_COL` 与 `add_day_percentile_score`；`moving_block_metric_ci` / `moving_block_metric_sensitivity` / `block_paired_delta` 新增 `score_col` 参数（缺列明确报错，不静默回退，返回值登记 `score_col`）。
+  - `analyze_terminal_risk_gate.py` 新增 `--score-mode {both,raw,daynorm}`（默认 `both`）：`gate_ci.csv` 每行一个判据，`gate_ci_block.csv` 每行 = 折 × 块长 × 判据（新增 `score_mode` 列）；缺 daynorm 所需 ES 逐行预测的折会告警并按可用折判定。
+  - 两口径**共用阈值**（1.1）且都必须满足“逐折区间下限 > 阈值”；禁止只报一个口径宣布通过。
+
+### Tests
+
+- `test_terminal_loss_block_stats.py`：daynorm 助手（逐日百分位在 (0,1]、日内单调、NaN 保持、非法输入报错）、`score_col` 缺列报错、**跨日水平平移不影响 daynorm 但影响 raw**。
+- `test_terminal_loss_gate_analysis.py`：新增 `TestScoreModes`——`--score-mode both` 产出两判据（折级与逐折分块 CSV 均含 `score_mode`），`--score-mode daynorm` 只产出单一判据。
+
 ## [0.109.0] - 2026-09-12
 
 ### Changed

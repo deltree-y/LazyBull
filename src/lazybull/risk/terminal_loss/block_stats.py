@@ -84,6 +84,44 @@ def get_metric(name: str) -> Callable[[np.ndarray, np.ndarray], Optional[float]]
     return _METRICS[name]
 
 
+#: daynorm 口径分数列名（当日截面百分位；见 ``add_day_percentile_score``）
+DAY_NORM_SCORE_COL = "p_loss_daypct"
+
+
+def add_day_percentile_score(
+    df: pd.DataFrame,
+    src_col: str = "p_loss",
+    dst_col: str = DAY_NORM_SCORE_COL,
+) -> pd.DataFrame:
+    """追加当日截面百分位分数列（daynorm 口径）。
+
+    用途（v0.110.0 门禁双判据）：原始 ``p_loss`` 的池化 PR-AUC 把两种能力
+    混在一起——跨日期水平对齐（regime/校准）与当日截面排序。按 ``trade_date``
+    分组取百分位后，池化指标只反映**当日截面排序**，可与 raw 口径并列判定。
+
+    逐日单调变换：不改变当日截面排序，只去掉跨日水平差异。缺失值保持缺失
+    （不填 0.5，避免把"无分数"伪装成中性排序）。
+
+    Args:
+        df: 含 trade_date 与分数列的评估行
+        src_col: 源分数列（默认 ``p_loss``）
+        dst_col: 目标列名（默认 ``DAY_NORM_SCORE_COL``）
+
+    Returns:
+        副本 DataFrame，含 ``dst_col``
+
+    Raises:
+        ValueError: 评估行为空或缺源分数列
+    """
+    if df is None or df.empty:
+        raise ValueError("评估行为空，无法生成当日截面百分位分数")
+    if src_col not in df.columns:
+        raise ValueError(f"缺少源分数列 {src_col!r}，无法生成 {dst_col}")
+    out = df.copy()
+    out[dst_col] = out.groupby("trade_date")[src_col].rank(pct=True)
+    return out
+
+
 def _day_slices(df: pd.DataFrame) -> tuple:
     """按交易日切行索引（输入按 trade_date 稳定排序）。
 
@@ -126,27 +164,38 @@ def moving_block_metric_ci(
     df: pd.DataFrame,
     metric: str = "lift",
     config: Optional[BootstrapConfig] = None,
+    score_col: str = "p_loss",
 ) -> Dict[str, Any]:
     """按日期块重采样给出指标区间（单折/单策略）。
 
     Args:
-        df: 含 trade_date / loss_label / p_loss 的评估行
+        df: 含 trade_date / loss_label 与分数列的评估行
         metric: 指标名（lift / pr_auc / brier / event_rate）
         config: 重采样配置
+        score_col: 分数列名。``p_loss`` = raw 口径（跨日水平 + 当日截面
+            排序混合）；``DAY_NORM_SCORE_COL`` = daynorm 口径（只反映当日
+            截面排序，由 ``add_day_percentile_score`` 生成）。两个口径是
+            并列判据（v0.110.0），不得只报其中之一。
 
     Returns:
         dict：point / ci_low / ci_high / std / n_days / block_days / n_resamples
+            / score_col
 
     Raises:
-        ValueError: 块长不小于交易日数（重采样会退化为原样本）
+        ValueError: 块长不小于交易日数（重采样会退化为原样本），或缺分数列
     """
     cfg = config or BootstrapConfig()
     fn = get_metric(metric)
     if df is None or df.empty:
         raise ValueError("评估行为空，无法重采样")
     frame = df.sort_values("trade_date", kind="stable").reset_index(drop=True)
+    if score_col not in frame.columns:
+        raise ValueError(
+            f"评估行缺少分数列 {score_col!r}（列: {sorted(frame.columns)}）；"
+            f"daynorm 口径请先用 add_day_percentile_score 生成 {DAY_NORM_SCORE_COL}"
+        )
     y = frame["loss_label"].to_numpy()
-    p = frame["p_loss"].to_numpy(dtype=float)
+    p = frame[score_col].to_numpy(dtype=float)
     point = fn(y, p)
     _, order, uniq, first, counts = _day_slices(frame)
     if cfg.block_days >= len(uniq):
@@ -168,6 +217,7 @@ def moving_block_metric_ci(
     alpha = (1.0 - cfg.ci) / 2.0
     return {
         "metric": metric,
+        "score_col": score_col,
         "point": point,
         "ci_low": float(np.quantile(arr, alpha)),
         "ci_high": float(np.quantile(arr, 1.0 - alpha)),
@@ -185,12 +235,14 @@ def moving_block_metric_sensitivity(
     metric: str = "lift",
     block_days_list: Sequence[int] = ES_BLOCK_DAYS_SENSITIVITY,
     config: Optional[BootstrapConfig] = None,
+    score_col: str = "p_loss",
 ) -> List[Dict[str, Any]]:
     """主块长 + 敏感性块长下的区间；不可行块长跳过并告警。
 
     默认使用 ES 段块长（见 ``ES_BLOCK_DAYS`` 注释）：组合级多年 OOS 口径
     请显式传 ``BLOCK_DAYS_SENSITIVITY``。块长超过可用交易日数的项会被跳过
-    （而非静默缩小块长），全部不可行时明确报错。
+    （而非静默缩小块长），全部不可行时明确报错。``score_col`` 透传到
+    ``moving_block_metric_ci``（raw/daynorm 双口径，v0.110.0）。
     """
     base = config or BootstrapConfig()
     n_days = df["trade_date"].astype(str).nunique() if df is not None and not df.empty else 0
@@ -206,7 +258,9 @@ def moving_block_metric_sensitivity(
             seed=base.seed,
             ci=base.ci,
         )
-        out.append(moving_block_metric_ci(df, metric=metric, config=cfg))
+        out.append(
+            moving_block_metric_ci(df, metric=metric, config=cfg, score_col=score_col)
+        )
     if skipped:
         logger.warning(f"块长 {skipped} 不小于交易日数 {n_days}，已跳过（不得静默缩小块长）")
     if not out:
@@ -222,6 +276,7 @@ def block_paired_delta(
     df_b: pd.DataFrame,
     metric: str = "lift",
     config: Optional[BootstrapConfig] = None,
+    score_col: str = "p_loss",
     key_columns: Sequence[str] = ("trade_date", "ts_code", "h"),
 ) -> Dict[str, Any]:
     """成对比较：两策略在同一日期块抽样下的指标差值区间（方案 5.5）。
@@ -252,9 +307,12 @@ def block_paired_delta(
     if not np.array_equal(a["loss_label"].to_numpy(), b["loss_label"].to_numpy()):
         raise ValueError("成对比较的 loss_label 必须一致（同一标签、不同预测）")
 
+    for frame_name, frame in (("A", a), ("B", b)):
+        if score_col not in frame.columns:
+            raise ValueError(f"成对比较的 {frame_name} 缺少分数列 {score_col!r}")
     y = a["loss_label"].to_numpy()
-    pa = a["p_loss"].to_numpy(dtype=float)
-    pb = b["p_loss"].to_numpy(dtype=float)
+    pa = a[score_col].to_numpy(dtype=float)
+    pb = b[score_col].to_numpy(dtype=float)
     delta_point = fn(y, pa) - fn(y, pb) if fn(y, pa) is not None and fn(y, pb) is not None else None
     _, order, uniq, first, counts = _day_slices(a)
     if cfg.block_days >= len(uniq):
@@ -276,6 +334,7 @@ def block_paired_delta(
     alpha = (1.0 - cfg.ci) / 2.0
     return {
         "metric": metric,
+        "score_col": score_col,
         "delta_point": delta_point,
         "delta_mean": float(arr.mean()),
         "ci_low": float(np.quantile(arr, alpha)),
