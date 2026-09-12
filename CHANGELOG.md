@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
   - 折报告新增 `val` 段概率质量（早停段审计）；`build_performance_metrics` 旁路登记 `val_logloss` / `val_brier` / `val_pr_auc` / `val_event_rate`，**不参与 lift / pred_bias 门禁口径**。
 - **`valm=` 入超参签名**：`summarize_terminal_risk_wf.py` 由 `stage_dates.val` 计算早停段月数并入签名（`...|wy=7|valm=6`）；缺 `stage_dates.val` 的旧产物显式记为 `valm=0`（旧协议"早停即评估"），非法区间返回 None 独立成组——新旧协议产物**不得混组比较**。折目录后缀新增 `_v{N}m`（恒追加，避免与旧协议同名目录互相覆盖）。
 - **`batch_terminal_risk_wf.ps1` 三段派生**：`ValStart = EsStart − $val_months(6) 月`、`ValEnd = EsStart − 1 天`、`TrainEnd = ValStart − 1 天`、`TrainStart = ValStart − N 年`（训练窗口年数语义不变）；早停段起点早于数据起点时与训练窗口同样判失败跳过（不静默截短）；控制台回显三段区间。
+- **协议参数消融位接入批处理（`valm=` / `em=`）**：`$val_months` → `$val_months_list`（每个值**恒**入目录名 `_v{N}m`，避免与旧协议目录互相覆盖），新增 `$eval_metric_list`（透传 `--eval-metric`，多值时追加 `_emlogloss` / `_emrank_ic` 后缀）；组合展开为"训练窗口 × 早停段 × 早停指标"单层循环（`$armCombos`），`$total` 同步计数。两个维度都已在签名里（`valm=` / `em=`），跨值禁止混组比较；`summarize_terminal_risk_wf.py` 的后缀解析同步支持 `_em*`（后缀仅展示，meta 为权威）。
 
 ### Tests
 
@@ -19,7 +20,7 @@ All notable changes to this project will be documented in this file.
 - `test_terminal_loss_dataset.py`：新增三段逐段隔离测试（Train/Val 各自剔除跨段未成熟行，ES 末段无隔离）。
 - `test_terminal_loss_script.py`：端到端改为 Train/Val/ES 三段，校验 `report["val"]`、`stage_dates.val`、`n_val`、`n_es`。
 - `test_terminal_loss_artifacts.py`：Val 指标仅旁路登记、门禁字段逐值不变。
-- `test_summarize_terminal_risk_wf.py`：`_v{N}m` 后缀解析、`valm=` 签名、旧协议 `valm=0` 隔离、非法 Val 区间返回 None。
+- `test_summarize_terminal_risk_wf.py`：`_v{N}m` / `_em*` 后缀解析、`valm=` 签名、旧协议 `valm=0` 隔离、非法 Val 区间返回 None。
 
 ## [0.108.8] - 2026-09-11
 

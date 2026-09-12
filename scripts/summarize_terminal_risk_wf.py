@@ -67,13 +67,14 @@ SUMMARY_COLUMNS = [
 ]
 
 # 折目录名尾部消融后缀：_d{depth} / _lr{lr} / _w{years}y / _v{months}m /
-# _s{seed} 可叠加，均可省略（锚定结尾）。后缀仅供展示分组，超参身份以折
-# sidecar 签名为权威。
+# _em{metric} / _s{seed} 可叠加，均可省略（锚定结尾）。后缀仅供展示分组，
+# 超参身份以折 sidecar 签名为权威。
 _SUFFIX_PATTERN = re.compile(
     r"(?:_d(?P<depth>\d+))?"
     r"(?:_lr(?P<lr>\d+(?:\.\d+)?))?"
     r"(?:_w(?P<window>\d+)y)?"
     r"(?:_v(?P<valm>\d+)m)?"
+    r"(?:_em(?P<emetric>[a-z_]+))?"
     r"(?:_s(?P<seed>\d+))?$"
 )
 
@@ -162,15 +163,15 @@ def parse_experiment_suffix(fold_name: str) -> dict:
     """解析折目录名尾部的超参消融后缀。
 
     batch_terminal_risk_wf.ps1 在消融数组多值时给折目录追加 _d{depth} /
-    _lr{lr} / _w{years}y 后缀，单值时无后缀；早停段（Val）自 v0.109.0 起恒
-    追加 _v{months}m（标识"早停段与评估段分离"的新协议，旧产物无此后缀）。
-    无法识别的尾缀按无后缀处理（同后缀目录仍会聚到同组），保证新后缀类型
-    不中断汇总。注意：后缀仅是展示分组名，超参身份以折 sidecar 签名为权威
-    （后缀与 meta 可能不一致，如目录残留旧消融折未清理）。
+    _lr{lr} / _w{years}y / _em{metric} 后缀，单值时无后缀；早停段（Val）自
+    v0.109.0 起恒追加 _v{months}m（标识"早停段与评估段分离"的新协议，旧产物
+    无此后缀）。无法识别的尾缀按无后缀处理（同后缀目录仍会聚到同组），保证
+    新后缀类型不中断汇总。注意：后缀仅是展示分组名，超参身份以折 sidecar
+    签名为权威（后缀与 meta 可能不一致，如目录残留旧消融折未清理）。
     """
     match = _SUFFIX_PATTERN.search(fold_name)
     if match is None or not any(
-        match.group(k) for k in ("depth", "lr", "window", "valm", "seed")
+        match.group(k) for k in ("depth", "lr", "window", "valm", "emetric", "seed")
     ):
         return {
             "suffix": "",
@@ -178,6 +179,7 @@ def parse_experiment_suffix(fold_name: str) -> dict:
             "learning_rate": None,
             "train_window_years": None,
             "val_months": None,
+            "eval_metric": None,
             "seed": None,
         }
     parts = []
@@ -189,6 +191,8 @@ def parse_experiment_suffix(fold_name: str) -> dict:
         parts.append(f"_w{match.group('window')}y")
     if match.group("valm"):
         parts.append(f"_v{match.group('valm')}m")
+    if match.group("emetric"):
+        parts.append(f"_em{match.group('emetric')}")
     if match.group("seed"):
         parts.append(f"_s{match.group('seed')}")
     return {
@@ -197,6 +201,7 @@ def parse_experiment_suffix(fold_name: str) -> dict:
         "learning_rate": float(match.group("lr")) if match.group("lr") else None,
         "train_window_years": (int(match.group("window")) if match.group("window") else None),
         "val_months": int(match.group("valm")) if match.group("valm") else None,
+        "eval_metric": match.group("emetric") or None,
         "seed": int(match.group("seed")) if match.group("seed") else None,
     }
 

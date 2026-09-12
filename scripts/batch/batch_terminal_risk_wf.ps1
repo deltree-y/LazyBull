@@ -67,10 +67,12 @@ $sigma_window   = 20
 # ── 训练超参（消融位：数组即多组实验，Label 依次追加 _d*/_lr*/_w*/*_s*）──
 $max_depth_list     = @(5)      # 例：@(2, 3) 做深度消融（后缀 _d*）
 $learning_rate_list = @(0.04)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
-# 早停段（Val）月数：早停只用这一段，ES 段只用于评估/门禁（v0.109.0 协议）。
-# TrainEnd 由 EsStart-1 天前移到 ValStart-1 天；该值恒入目录名（_v{N}m），
-# 避免与旧协议同名折目录互相覆盖，并作为签名维度 valm= 记录。
-$val_months = 6
+# 早停段（Val）月数（消融位）：早停只用这一段，ES 段只用于评估/门禁
+# （v0.109.0 协议）。TrainEnd 由 EsStart-1 天前移到 ValStart-1 天；该值
+# **恒入**目录名（_v{N}m，含单值），避免与旧协议（valm=0）同名折目录互相
+# 覆盖；签名维度为 `valm=`。例：@(3, 6, 12) 做早停段长度消融（看早停点
+# 决策稳定性），默认 6（半年）。
+$val_months_list = @(6)
 
 # 训练窗口年数（消融位；TrainStart = ValStart - N 年）：
 # 例：@(3, 5) 做窗口消融（后缀 _w{N}y）。窗口起点早于数据可用起点（cs_train
@@ -83,13 +85,18 @@ $train_window_years_list = @(7)
 # 例：@(42, 7, 2024)（后缀 _s*）。注意种子是签名维度，多种子不会被混入同组。
 $random_state_list  = @(42)
 $n_estimators       = 1000       # 树数量上限（配合早停）
-$early_stopping_rounds = 50     # ES 段 logloss 早停轮数
+$early_stopping_rounds = 50     # Val 段（早停段）早停轮数
 $subsample          = 0.8
 $colsample_bytree   = 0.8
 $reg_lambda         = 1.0
-# 注：min_child_weight / scale_pos_weight / eval_metric 未透传——前两者为
-# 正则尺度策略 A 的设计不变量（min_child_weight 与样本权重 1/网格大小绑定，
-# scale_pos_weight 会破坏自然事件率口径），早停指标契约固定 logloss。
+# 早停指标（消融位）：logloss（概率校准口径）| rank_ic_daily（逐日截面
+# Spearman 均值，与门禁 lift 同向，复用 ml/train_core/eval.py）。两种口径
+# 是不同签名（`em=`），禁止混组比较。例：@("logloss", "rank_ic_daily")
+# 做口径消融（后缀 _em*，仅多值时追加，保持 baseline 目录名稳定）。
+$eval_metric_list   = @("logloss")
+# 注：min_child_weight / scale_pos_weight 未透传——两者为正则尺度策略 A 的
+# 设计不变量（min_child_weight 与样本权重 1/网格大小绑定，scale_pos_weight
+# 会破坏自然事件率口径）。
 
 # ── 预登记抽样（v0.108.8 变更：every_n_days 3 → 1，必须登记且不得按 OOS 回调）──
 # every_n_days=1：矩阵不再按日期等距抽样（训练行数 ×3，ES 评估网格从 1/3 日
@@ -109,7 +116,8 @@ $chunk_days       = 50
 $failed = @()
 $selected_folds = @($folds | Where-Object { $_.Selected })
 $total = $selected_folds.Count * $max_depth_list.Count * $learning_rate_list.Count *
-    $train_window_years_list.Count * $random_state_list.Count
+    $train_window_years_list.Count * $val_months_list.Count * $eval_metric_list.Count *
+    $random_state_list.Count
 $done = 0
 
 # 数据可用起点：cs_train 首个分区（训练窗口越界时判失败，不静默截短窗口）
@@ -119,20 +127,41 @@ $data_floor = (Get-ChildItem $cs_train_dir -Filter *.parquet -ErrorAction Silent
 if (-not $data_floor) { throw "未找到 cs_train 分区（$cs_train_dir）：请先构建特征" }
 Write-Host "数据可用起点: $data_floor" -ForegroundColor DarkGray
 
+# 训练窗口 × 早停段月数 × 早停指标 的组合展开（单层循环，避免更深嵌套）
+$armCombos = @()
+foreach ($years in $train_window_years_list) {
+    foreach ($valMonths in $val_months_list) {
+        foreach ($evalMetric in $eval_metric_list) {
+            $windowSuffix = if ($train_window_years_list.Count -gt 1) { "_w${years}y" } else { "" }
+            # 早停段长度恒入后缀（含单值）：旧协议产物无 _v{N}m，避免目录互相覆盖
+            $valSuffix = "_v${valMonths}m"
+            $metricSuffix = if ($eval_metric_list.Count -gt 1) {
+                "_em" + ($evalMetric -replace "_daily", "")
+            } else { "" }
+            $armCombos += [PSCustomObject]@{
+                Years      = $years
+                ValMonths  = $valMonths
+                EvalMetric = $evalMetric
+                Suffix     = "$windowSuffix$valSuffix$metricSuffix"
+            }
+        }
+    }
+}
+
 foreach ($depth in $max_depth_list) {
     $depthSuffix = if ($max_depth_list.Count -gt 1) { "_d$depth" } else { "" }
     foreach ($lr in $learning_rate_list) {
         $lrSuffix = if ($learning_rate_list.Count -gt 1) { "_lr$lr" } else { "" }
-        foreach ($years in $train_window_years_list) {
-            $windowSuffix = if ($train_window_years_list.Count -gt 1) { "_w${years}y" } else { "" }
-            # 早停段长度恒入后缀：旧协议产物无 _v{N}m，避免同名目录被覆盖
-            $valSuffix = "_v${val_months}m"
+        foreach ($combo in $armCombos) {
+            $years = $combo.Years
+            $valMonths = $combo.ValMonths
+            $evalMetric = $combo.EvalMetric
             foreach ($seed in $random_state_list) {
                 $seedSuffix = if ($random_state_list.Count -gt 1) { "_s$seed" } else { "" }
-                $suffix = "$depthSuffix$lrSuffix$windowSuffix$valSuffix$seedSuffix"
+                $suffix = "$depthSuffix$lrSuffix$($combo.Suffix)$seedSuffix"
                 foreach ($fold in $selected_folds) {
                     $esStartDate = [datetime]::ParseExact($fold.EsStart, "yyyyMMdd", $null)
-                    $valStartDate = $esStartDate.AddMonths(-$val_months)
+                    $valStartDate = $esStartDate.AddMonths(-$valMonths)
                     $valStart = $valStartDate.ToString("yyyyMMdd")
                     $valEnd = $esStartDate.AddDays(-1).ToString("yyyyMMdd")
                     $trainStart = $valStartDate.AddYears(-$years).ToString("yyyyMMdd")
@@ -150,7 +179,7 @@ foreach ($depth in $max_depth_list) {
                     }
                     $out_dir = Join-Path $wf_root "$($fold.Label)$suffix"
                     Write-Host ""
-                    Write-Host "==== [$done/$total] terminal_loss WF 折 $($fold.Label)$suffix (depth=$depth, lr=$lr, 窗口=${years}年, seed=$seed) ====" -ForegroundColor Cyan
+                    Write-Host "==== [$done/$total] terminal_loss WF 折 $($fold.Label)$suffix (depth=$depth, lr=$lr, 窗口=${years}年, 早停段=${valMonths}月, em=$evalMetric, seed=$seed) ====" -ForegroundColor Cyan
                     Write-Host "      Train [$trainStart,$trainEnd]  Val(早停) [$valStart,$valEnd]  ES(评估) [$($fold.EsStart),$($fold.EsEnd)]"
 
                     $pythonCmd = "py .\scripts\train_terminal_risk_model.py" +
@@ -169,6 +198,7 @@ foreach ($depth in $max_depth_list) {
                         " --early-stopping-rounds $early_stopping_rounds" +
                         " --subsample $subsample --colsample-bytree $colsample_bytree --reg-lambda $reg_lambda" +
                         " --random-state $seed" +
+                        " --eval-metric $evalMetric" +
                         " --h-per-group $h_per_group --every-n-days $every_n_days --chunk-days $chunk_days" +
                         " --device $device" +
                         " --fixed-name"

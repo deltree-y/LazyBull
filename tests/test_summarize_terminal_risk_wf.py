@@ -96,13 +96,14 @@ def _summary_row(fold: str, lift: float, pred_bias: float = 0.0) -> dict:
 
 
 def test_parse_experiment_suffix():
-    """后缀解析：baseline / _d* / _d*_lr* / _w*y / _v*m / _s* 与未知尾缀兜底。"""
+    """后缀解析：baseline / _d* / _d*_lr* / _w*y / _v*m / _em* / _s* 与未知尾缀兜底。"""
     empty = {
         "suffix": "",
         "depth": None,
         "learning_rate": None,
         "train_window_years": None,
         "val_months": None,
+        "eval_metric": None,
         "seed": None,
     }
     assert parse_experiment_suffix("2022H2") == empty
@@ -122,14 +123,18 @@ def test_parse_experiment_suffix():
     # 早停段月数后缀（v0.109.0 新增：早停段与评估段分离）
     assert parse_experiment_suffix("2022H2_v6m")["val_months"] == 6
     assert parse_experiment_suffix("2022H2_v6m")["suffix"] == "_v6m"
-    combined = parse_experiment_suffix("2022H2_d5_lr0.04_w5y_v6m_s7")
-    assert combined["suffix"] == "_d5_lr0.04_w5y_v6m_s7"
+    # 早停指标后缀（v0.109.0 新增消融位；meta 的 `em=` 才是权威身份）
+    assert parse_experiment_suffix("2022H2_v6m_emrank_ic")["eval_metric"] == "rank_ic"
+    assert parse_experiment_suffix("2022H2_v6m_emrank_ic")["suffix"] == "_v6m_emrank_ic"
+    combined = parse_experiment_suffix("2022H2_d5_lr0.04_w5y_v6m_emlogloss_s7")
+    assert combined["suffix"] == "_d5_lr0.04_w5y_v6m_emlogloss_s7"
     assert (
         combined["depth"],
         combined["train_window_years"],
         combined["val_months"],
+        combined["eval_metric"],
         combined["seed"],
-    ) == (5, 5, 6, 7)
+    ) == (5, 5, 6, "logloss", 7)
     # 未知尾缀按无后缀处理（同后缀目录仍聚同组），保证新后缀类型不中断汇总
     assert parse_experiment_suffix("2022H2_x9")["suffix"] == ""
 
