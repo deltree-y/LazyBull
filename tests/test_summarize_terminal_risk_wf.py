@@ -96,12 +96,13 @@ def _summary_row(fold: str, lift: float, pred_bias: float = 0.0) -> dict:
 
 
 def test_parse_experiment_suffix():
-    """后缀解析：baseline / _d* / _d*_lr* / _w*y / _s* 与未知尾缀兜底。"""
+    """后缀解析：baseline / _d* / _d*_lr* / _w*y / _v*m / _s* 与未知尾缀兜底。"""
     empty = {
         "suffix": "",
         "depth": None,
         "learning_rate": None,
         "train_window_years": None,
+        "val_months": None,
         "seed": None,
     }
     assert parse_experiment_suffix("2022H2") == empty
@@ -118,9 +119,17 @@ def test_parse_experiment_suffix():
     assert parse_experiment_suffix("2022H2_w5y")["train_window_years"] == 5
     assert parse_experiment_suffix("2022H2_w5y")["suffix"] == "_w5y"
     assert parse_experiment_suffix("2022H2_s7")["seed"] == 7
-    combined = parse_experiment_suffix("2022H2_d5_lr0.04_w5y_s7")
-    assert combined["suffix"] == "_d5_lr0.04_w5y_s7"
-    assert (combined["depth"], combined["train_window_years"], combined["seed"]) == (5, 5, 7)
+    # 早停段月数后缀（v0.109.0 新增：早停段与评估段分离）
+    assert parse_experiment_suffix("2022H2_v6m")["val_months"] == 6
+    assert parse_experiment_suffix("2022H2_v6m")["suffix"] == "_v6m"
+    combined = parse_experiment_suffix("2022H2_d5_lr0.04_w5y_v6m_s7")
+    assert combined["suffix"] == "_d5_lr0.04_w5y_v6m_s7"
+    assert (
+        combined["depth"],
+        combined["train_window_years"],
+        combined["val_months"],
+        combined["seed"],
+    ) == (5, 5, 6, 7)
     # 未知尾缀按无后缀处理（同后缀目录仍聚同组），保证新后缀类型不中断汇总
     assert parse_experiment_suffix("2022H2_x9")["suffix"] == ""
 
@@ -135,9 +144,10 @@ def test_build_param_signature():
             "stage_dates": {"train": ["20230101", "20231231"], "es": ["20240101", "20240630"]},
         },
     }
+    # valm=0：v0.109.0 之前的旧协议（早停即评估），与新协议批次天然分属不同组
     assert build_param_signature(meta) == (
         "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0|s=42|em=logloss"
-        "|k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=1"
+        "|k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=1|valm=0"
     )
     assert build_param_signature({}) is None
     broken = {
@@ -174,10 +184,30 @@ def test_param_signature_separates_seed_and_window():
     base = build_param_signature(_meta(42, "20210701"))
     other_seed = build_param_signature(_meta(7, "20210701"))
     longer_window = build_param_signature(_meta(42, "20190701"))
-    assert "|s=42|" in base and base.endswith("|wy=3")
-    assert "|s=7|" in other_seed and other_seed.endswith("|wy=3")
-    assert "|s=42|" in longer_window and longer_window.endswith("|wy=5")
+    assert "|s=42|" in base and base.endswith("|wy=3|valm=0")
+    assert "|s=7|" in other_seed and other_seed.endswith("|wy=3|valm=0")
+    assert "|s=42|" in longer_window and longer_window.endswith("|wy=5|valm=0")
     assert len({base, other_seed, longer_window}) == 3
+
+
+def test_param_signature_separates_val_segment():
+    """早停段月数是签名维度：旧协议（valm=0）不得与新协议批次并组比较。"""
+
+    def _meta(val) -> dict:
+        stage_dates = {"train": ["20230101", "20231231"], "es": ["20250101", "20250630"]}
+        if val is not None:
+            stage_dates["val"] = val
+        return {
+            "train_config": _TRAIN_CFG,
+            "label_config": _LABEL_CFG,
+            "metadata": {"sampling": _SAMPLING_CFG, "stage_dates": stage_dates},
+        }
+
+    assert build_param_signature(_meta(None)).endswith("|valm=0")
+    assert build_param_signature(_meta(["20240701", "20241231"])).endswith("|valm=6")
+    # 非法 Val 区间（起止倒置）→ 整条签名返回 None（数据问题独立成组，
+    # 不得静默当成旧协议 valm=0）
+    assert build_param_signature(_meta(["20241231", "20240701"])) is None
 
 
 def test_build_tuning_table_score_and_gate():

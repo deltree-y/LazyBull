@@ -311,6 +311,36 @@ class TestStageIsolation:
         result = split_stages_with_label_isolation(matrix, [StageSpec("train", CAL[0], CAL[2])])
         assert result.stages["train"].empty
 
+    def test_three_stage_isolation_val_before_es(self):
+        """三段（train/val/es）逐段隔离：Val 是早停段，ES 是纯评估段（v0.109.0）。"""
+        matrix = pd.DataFrame(
+            {
+                "ts_code": ["A"] * 6,
+                "trade_date": [CAL[0], CAL[0], CAL[3], CAL[3], CAL[6], CAL[6]],
+                "h": [1, 5, 1, 5, 1, 5],
+                # label_end 落点：idx2/idx6/idx5/idx9/idx8/idx9
+                "label_end_date": [CAL[2], CAL[6], CAL[5], CAL[9], CAL[8], CAL[9]],
+                "loss_label": [1, 0, 1, 0, 1, 0],
+            }
+        )
+        stages = [
+            StageSpec("train", CAL[0], CAL[0]),
+            StageSpec("val", CAL[3], CAL[3]),
+            StageSpec("es", CAL[6], CAL[6]),
+        ]
+        result = split_stages_with_label_isolation(matrix, stages)
+        # Train：h=1 的 label_end=CAL[2] < Val 起点 CAL[3] 保留；
+        # h=5 的 label_end=CAL[6] >= CAL[3] 剔除
+        assert len(result.stages["train"]) == 1
+        assert result.isolation_dropped["train"] == 1
+        # Val：h=1 的 label_end=CAL[5] < ES 起点 CAL[6] 保留；
+        # h=5 的 label_end=CAL[9] >= CAL[6] 剔除
+        assert len(result.stages["val"]) == 1
+        assert result.isolation_dropped["val"] == 1
+        # ES 评估段是最后一段：无下一阶段，行不受隔离
+        assert len(result.stages["es"]) == 2
+        assert result.isolation_dropped["es"] == 0
+
 
 class TestSubsampling:
     def _matrix(self, n_codes=50, n_days=30):

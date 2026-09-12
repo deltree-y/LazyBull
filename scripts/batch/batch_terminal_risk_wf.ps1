@@ -1,8 +1,9 @@
 ﻿# batch_terminal_risk_wf.ps1
 # 期末异常亏损风险模型滚动 Walk-forward 批量脚本（第一阶段研究型 WF）
 #
-# 每折：滚动 Train（由 $train_window_years_list 决定年数）+ ES（6 个月，互不重叠）
-# → 独立概率质量报告；全部完成后自动运行 summarize_terminal_risk_wf.py 拼接
+# 每折：滚动 Train（由 $train_window_years_list 决定年数）+ Val（早停段，由
+# $val_months 决定）+ ES（6 个月，互不重叠）→ 独立概率质量报告；全部完成后
+# 自动运行 summarize_terminal_risk_wf.py 拼接
 # summary、按 _d*/_lr*/_w*/*_s* 消融后缀 × 折 meta 超参签名分组输出调参分
 # （tuning_score = 0.5×lift几何均值 + 0.5×组内lift最小值，绝对量纲跨 batch 可比）
 # 并按组判定门禁（组内 lift 最小值 >= 阈值才建议进入第二阶段）；随后与
@@ -12,6 +13,10 @@
 # 注意：随机种子与训练窗口年数都是**签名维度**（v0.108.5 起）：多种子/多窗口
 # 的折不会被并进同一组，因此不能靠多跑几个种子去“凑”一个好看的最小组内最小
 # lift；集成（多种子平均预测）必须作为单独方案显式评估。
+#
+# v0.109.0 协议变更（必须登记）：早停只用 Val 段，ES 段只用于评估/门禁。
+# 旧批次的门禁 lift 算在早停选择段上（乐观偏差），其目录名不含 _v{N}m 后缀、
+# 签名带 valm=0；新旧不可混组比较（分组已按签名隔离，勿手工并组）。
 #
 # 每折训练使用 --fixed-name（研究型折产物）：注意它自 v0.108.0 起是**附加**
 # 固定名别名，模型本体始终经 ModelRegistry 版本化注册（v{N} 永不覆盖），
@@ -33,11 +38,15 @@ $device      = "cuda"     # cuda | cpu（GPU 不稳定时可切 cpu）
 $run_summary = $true      # 全部完成后运行汇总工具
 
 # ── 折定义（ES 段 6 个月互不重叠，覆盖 2022H2..2026H1）────────────
-# Train 段由 $train_window_years_list 派生：TrainStart = EsStart - N 年，
-# TrainEnd = EsStart - 1 天（N=3 与首轮基线完全一致）；日期为自然日边界，
-# 训练脚本内部按交易日历过滤。
+# 三段由配置派生（日期为自然日边界，训练脚本按交易日历过滤，并按
+# label_end_date < 下一段起点 做多期限标签隔离）：
+#   ValStart   = EsStart - $val_months 月
+#   ValEnd     = EsStart - 1 天
+#   TrainEnd   = ValStart - 1 天
+#   TrainStart = ValStart - N 年（N = $train_window_years_list）
+# 即 Train 不再直接贴到 ES 起点：中间一段留给早停（Val），ES 保持纯评估。
 # Label      : 目录名与汇总标识
-# EsStart/EsEnd : ES 段自然日边界
+# EsStart/EsEnd : ES 评估段自然日边界
 # Selected   : $false 跳过该折（结果保留不删）
 $folds = @(
     [PSCustomObject]@{ Label = "2022H2"; EsStart = "20220701"; EsEnd = "20221231"; Selected = $true  }
@@ -58,14 +67,21 @@ $sigma_window   = 20
 # ── 训练超参（消融位：数组即多组实验，Label 依次追加 _d*/_lr*/_w*/*_s*）──
 $max_depth_list     = @(5)      # 例：@(2, 3) 做深度消融（后缀 _d*）
 $learning_rate_list = @(0.04)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
-# 训练窗口年数（消融位；TrainStart = EsStart - N 年）：
+# 早停段（Val）月数：早停只用这一段，ES 段只用于评估/门禁（v0.109.0 协议）。
+# TrainEnd 由 EsStart-1 天前移到 ValStart-1 天；该值恒入目录名（_v{N}m），
+# 避免与旧协议同名折目录互相覆盖，并作为签名维度 valm= 记录。
+$val_months = 6
+
+# 训练窗口年数（消融位；TrainStart = ValStart - N 年）：
 # 例：@(3, 5) 做窗口消融（后缀 _w{N}y）。窗口起点早于数据可用起点（cs_train
 # 首个分区）时该组合直接判失败并跳过，不静默截短窗口；
 # 数据自 2012-01 起，最长 10 年窗口仍然可行。
-$train_window_years_list = @(5)
+# v0.108.8 登记：单折配对实验（2023H1，every_n_days=1）显示 7 年窗口
+# （lift 1.386 / 10 日块下限 1.207）优于 5 年（1.243 / 1.110），故默认取 7 年。
+$train_window_years_list = @(7)
 # 随机种子（消融位；多种子用于量化种子方差）：
 # 例：@(42, 7, 2024)（后缀 _s*）。注意种子是签名维度，多种子不会被混入同组。
-$random_state_list  = @(42,7,2024)
+$random_state_list  = @(42)
 $n_estimators       = 1000       # 树数量上限（配合早停）
 $early_stopping_rounds = 50     # ES 段 logloss 早停轮数
 $subsample          = 0.8
@@ -75,9 +91,15 @@ $reg_lambda         = 1.0
 # 正则尺度策略 A 的设计不变量（min_child_weight 与样本权重 1/网格大小绑定，
 # scale_pos_weight 会破坏自然事件率口径），早停指标契约固定 logloss。
 
-# ── 预登记抽样（与首轮一致；变更必须登记，勿按 OOS 结果回调）───────
-$h_per_group      = 2
-$every_n_days     = 3
+# ── 预登记抽样（v0.108.8 变更：every_n_days 3 → 1，必须登记且不得按 OOS 回调）──
+# every_n_days=1：矩阵不再按日期等距抽样（训练行数 ×3，ES 评估网格从 1/3 日
+# 加密为全部交易日）。动机：门禁判据是逐折 moving-block 区间下限 > 1.1，评估
+# 网格只有 1/3 日会让区间宽度虚大、且不同训练窗口的臂采样相位不同（不可配对
+# 比较）。单折实测（2023H1）：10 日块下限 1.063（end=3）→ 1.110（end=1），
+# 训练行 263 万 → 788 万，折耗时 6 → 8 分钟。
+# 注意：该变更同时改变训练数据量，跨 end 值的对比属不同签名（`end=`），禁止混组。
+$h_per_group      = 2        # 每期限组内抽样 h 数（保持 2 不变）
+$every_n_days     = 1        # v0.108.8 登记变更（原 3）
 $chunk_days       = 50
 
 # ============================================================
@@ -103,14 +125,24 @@ foreach ($depth in $max_depth_list) {
         $lrSuffix = if ($learning_rate_list.Count -gt 1) { "_lr$lr" } else { "" }
         foreach ($years in $train_window_years_list) {
             $windowSuffix = if ($train_window_years_list.Count -gt 1) { "_w${years}y" } else { "" }
+            # 早停段长度恒入后缀：旧协议产物无 _v{N}m，避免同名目录被覆盖
+            $valSuffix = "_v${val_months}m"
             foreach ($seed in $random_state_list) {
                 $seedSuffix = if ($random_state_list.Count -gt 1) { "_s$seed" } else { "" }
-                $suffix = "$depthSuffix$lrSuffix$windowSuffix$seedSuffix"
+                $suffix = "$depthSuffix$lrSuffix$windowSuffix$valSuffix$seedSuffix"
                 foreach ($fold in $selected_folds) {
                     $esStartDate = [datetime]::ParseExact($fold.EsStart, "yyyyMMdd", $null)
-                    $trainStart = $esStartDate.AddYears(-$years).ToString("yyyyMMdd")
-                    $trainEnd = $esStartDate.AddDays(-1).ToString("yyyyMMdd")
+                    $valStartDate = $esStartDate.AddMonths(-$val_months)
+                    $valStart = $valStartDate.ToString("yyyyMMdd")
+                    $valEnd = $esStartDate.AddDays(-1).ToString("yyyyMMdd")
+                    $trainStart = $valStartDate.AddYears(-$years).ToString("yyyyMMdd")
+                    $trainEnd = $valStartDate.AddDays(-1).ToString("yyyyMMdd")
                     $done++
+                    if ($valStart -lt $data_floor) {
+                        Write-Host "折 $($fold.Label)$suffix 早停段起点 $valStart 早于数据起点 $data_floor：跳过（不静默截短窗口）" -ForegroundColor Red
+                        $failed += "$($fold.Label)$suffix(窗口越界)"
+                        continue
+                    }
                     if ($trainStart -lt $data_floor) {
                         Write-Host "折 $($fold.Label)$suffix 训练窗口起点 $trainStart 早于数据起点 $data_floor：跳过（不静默截短窗口）" -ForegroundColor Red
                         $failed += "$($fold.Label)$suffix(窗口越界)"
@@ -119,7 +151,7 @@ foreach ($depth in $max_depth_list) {
                     $out_dir = Join-Path $wf_root "$($fold.Label)$suffix"
                     Write-Host ""
                     Write-Host "==== [$done/$total] terminal_loss WF 折 $($fold.Label)$suffix (depth=$depth, lr=$lr, 窗口=${years}年, seed=$seed) ====" -ForegroundColor Cyan
-                    Write-Host "      Train [$trainStart,$trainEnd]  ES [$($fold.EsStart),$($fold.EsEnd)]"
+                    Write-Host "      Train [$trainStart,$trainEnd]  Val(早停) [$valStart,$valEnd]  ES(评估) [$($fold.EsStart),$($fold.EsEnd)]"
 
                     $pythonCmd = "py .\scripts\train_terminal_risk_model.py" +
                         " --data-root $data_root" +
@@ -128,6 +160,8 @@ foreach ($depth in $max_depth_list) {
                         " --end-date $($fold.EsEnd)" +
                         " --train-start $trainStart" +
                         " --train-end $trainEnd" +
+                        " --val-start $valStart" +
+                        " --val-end $valEnd" +
                         " --es-start $($fold.EsStart)" +
                         " --es-end $($fold.EsEnd)" +
                         " --k $k --h-max $h_max --sigma-window $sigma_window" +

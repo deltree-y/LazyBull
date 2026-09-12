@@ -59,34 +59,47 @@ def _write_es_predictions(path: Path, es_predictions: Optional[pd.DataFrame]) ->
 
 
 def build_performance_metrics(
-    es_report: Dict[str, Any], train_report: Dict[str, Any]
+    es_report: Dict[str, Any],
+    train_report: Dict[str, Any],
+    val_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """从概率质量报告提取注册用指标（口径与 summarize_terminal_risk_wf 对齐）。
 
     lift = ES PR-AUC / ES 事件率（相对 null 基线的排序信息量）；
     pred_bias = ES mean_pred - ES 事件率（校准漂移，正值=概率高估）。
+
+    ES 是**评估段**（不参与早停，方案 5.2）；``val_report`` 为早停段报告，
+    仅旁路登记 val_* 审计列（判断早停段与评估段的差距），不参与门禁口径。
     """
     event_rate = es_report.get("event_rate")
     mean_pred = es_report.get("mean_pred")
-    return _json_safe(
-        {
-            "es_logloss": es_report.get("logloss"),
-            "es_brier": es_report.get("brier"),
-            "es_pr_auc": es_report.get("pr_auc"),
-            "es_event_rate": event_rate,
-            "es_mean_pred": mean_pred,
-            "lift": (
-                es_report["pr_auc"] / event_rate
-                if event_rate is not None and event_rate > 0
-                else None
-            ),
-            "pred_bias": (
-                mean_pred - event_rate if mean_pred is not None and event_rate is not None else None
-            ),
-            "train_logloss": train_report.get("logloss"),
-            "train_event_rate": train_report.get("event_rate"),
-        }
-    )
+    metrics = {
+        "es_logloss": es_report.get("logloss"),
+        "es_brier": es_report.get("brier"),
+        "es_pr_auc": es_report.get("pr_auc"),
+        "es_event_rate": event_rate,
+        "es_mean_pred": mean_pred,
+        "lift": (
+            es_report["pr_auc"] / event_rate
+            if event_rate is not None and event_rate > 0
+            else None
+        ),
+        "pred_bias": (
+            mean_pred - event_rate if mean_pred is not None and event_rate is not None else None
+        ),
+        "train_logloss": train_report.get("logloss"),
+        "train_event_rate": train_report.get("event_rate"),
+    }
+    if val_report is not None:
+        metrics.update(
+            {
+                "val_logloss": val_report.get("logloss"),
+                "val_brier": val_report.get("brier"),
+                "val_pr_auc": val_report.get("pr_auc"),
+                "val_event_rate": val_report.get("event_rate"),
+            }
+        )
+    return _json_safe(metrics)
 
 
 def save_flat_artifacts(

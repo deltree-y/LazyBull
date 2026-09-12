@@ -272,16 +272,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
 
 ```bash
 # 第一阶段：标签与离线模型（独立标签，不写回 cs_train/cs_infer）
+# 三段：Train（拟合）| Val（早停）| ES（评估/门禁），逐段按 label_end_date 隔离；
+# 早停段与评估段必须分离（v0.109.0）：早停只用 Val 段，ES 段只用于概率质量报告
+# 与门禁评估——把门禁指标算在早停选择段上会带乐观偏差（旧产物签名 valm=0，
+# 与新结果不可并组比较）
 python scripts/train_terminal_risk_model.py \
     --start-date 20210104 --end-date 20260731 \
     --train-start 20210104 --train-end 20241231 \
-    --es-start 20250102 --es-end 20251231
+    --val-start 20250102 --val-end 20250630 \
+    --es-start 20250701 --es-end 20251231
 
 # 输出：始终经 ModelRegistry 版本化保存（每次训练注册新版本 v{N}，不覆盖历史）：
 # 模型 artifact、v{N}_report.json 概率质量报告、v{N}_calibration_by_h_sigma.csv
 # 校准表、v{N}_label_coverage.csv 覆盖分布、v{N}_es_predictions.parquet ES 逐行预测
 #（供门禁区间重采样，--no-es-predictions 可跳过）；--fixed-name 只额外写一套固定名
 # 别名供既有工具读取（别名可被覆盖，版本历史才是唯一副本）
+# 报告段：v{N}_report.json 同时含 es（评估段，门禁 lift 口径）与 val（早停段，
+# 旁路审计；不参与 lift/pred_bias），train 段用于过拟合差距诊断
 # pct 母截面：pct_* 分母取自 clean/daily 全量化重建的标签过滤前完整同日截面
 #（cs_train 行已按 y_ret 标签有效性过滤，分母窄约 10%），四个基列与特征流水线
 # 同一实现，并在交集上与 cs_train 同名列逐值校验（超容差即报错）

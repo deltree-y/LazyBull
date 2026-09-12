@@ -87,8 +87,9 @@ def synthetic_env(tmp_path):
         "data_root": str(tmp_path),
         "out_dir": str(out_dir),
         "cal": cal_str,
-        "train": (cal_str[WARMUP], cal_str[WARMUP + 23]),
-        "es": (cal_str[WARMUP + 24], cal_str[WARMUP + 38]),
+        "train": (cal_str[WARMUP], cal_str[WARMUP + 19]),
+        "val": (cal_str[WARMUP + 23], cal_str[WARMUP + 30]),
+        "es": (cal_str[WARMUP + 34], cal_str[WARMUP + 44]),
         "end": cal_str[-1],
     }
 
@@ -109,6 +110,10 @@ def _run_train(env, monkeypatch, extra_argv):
         env["train"][0],
         "--train-end",
         env["train"][1],
+        "--val-start",
+        env["val"][0],
+        "--val-end",
+        env["val"][1],
         "--es-start",
         env["es"][0],
         "--es-end",
@@ -142,6 +147,9 @@ def test_script_flat_mode_end_to_end(synthetic_env, monkeypatch):
     assert report["es"]["n"] > 0
     assert 0.0 <= report["es"]["event_rate"] <= 1.0
     assert report["es"]["logloss"] > 0
+    # 早停段（Val）与评估段（ES）分离：两段报告并存，Val 段不进 lift 门禁口径
+    assert report["val"]["n"] > 0
+    assert 0.0 <= report["val"]["event_rate"] <= 1.0
     # 报告门禁：覆盖审计（占比/代理/延迟端点/预登记规则）随报告落盘
     audit = report["coverage_audit"]
     assert audit["status_share"]
@@ -156,6 +164,11 @@ def test_script_flat_mode_end_to_end(synthetic_env, monkeypatch):
     assert len(meta["feature_names"]) == 33
     # best_iteration 必须登记（WF 汇总与早停健康度都从 sidecar 读取）
     assert meta["metadata"]["best_iteration"] is not None
+    # 三段日期与两段行数必须登记（早停只用 Val，ES 只用于评估；v0.109.0 协议）
+    assert meta["metadata"]["stage_dates"]["val"] == list(env["val"])
+    assert meta["metadata"]["stage_dates"]["es"] == list(env["es"])
+    assert meta["metadata"]["n_val"] > 0
+    assert meta["metadata"]["n_es"] > 0
     # pct 母截面口径登记为完整同日截面（不再是 cs_train 过滤域已知限制）
     assert "完整同日母截面" in meta["metadata"]["pct_cross_section_source"]
     assert "known_limitations" not in meta["metadata"]

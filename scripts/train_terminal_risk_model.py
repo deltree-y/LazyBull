@@ -2,9 +2,13 @@
 """期末异常亏损风险模型训练入口（第一阶段：标签与离线模型）
 
 按 docs/plans/terminal_loss_risk_model_plan.md 8.1 实施：构建独立标签
-（不写回 cs_train/cs_infer）→ 冻结 manifest 特征矩阵 → Train/ES 分割
-（label_end_date 隔离）→ 二分类训练（logloss 早停）→ 概率质量报告
+（不写回 cs_train/cs_infer）→ 冻结 manifest 特征矩阵 → Train/Val/ES 三段
+分割（label_end_date 隔离）→ 二分类训练（**Val 段**早停）→ 概率质量报告
 （分 h、h × σ 分位、事件率、覆盖分布）。
+
+早停段与评估段分离（方案 5.2，v0.109.0 修复）：早停只用 Val 段（Train 尾部
+留出的内部验证段），ES 段只用于概率质量报告与门禁评估——把门禁指标算在早停
+选择段上会带乐观偏差。三段都必须满足 ``label_end_date < 下一段起点``。
 
 内存与抽样契约（方案第 6 节）：全区间全网格标签约 2 亿行不可行，脚本按
 日期分块构建标签并立即关联特征；随后执行预登记抽样——每组 (股票, 日)
@@ -29,8 +33,9 @@ pct_* 分母契约（方案 4.4）：分母取自 ``clean/daily`` 全量化重�
 用法示例：
 python scripts/train_terminal_risk_model.py \
     --start-date 20190102 --end-date 20260630 \
-    --train-start 20190102 --train-end 20231231 \
-    --es-start 20240102 --es-end 20240628
+    --train-start 20190102 --train-end 20211231 \
+    --val-start 20220101 --val-end 20220630 \
+    --es-start 20220701 --es-end 20221231
 """
 
 import argparse
@@ -101,8 +106,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end-date", required=True, help="数据终点 YYYYMMDD")
     parser.add_argument("--train-start", required=True, help="Train 段起点 YYYYMMDD")
     parser.add_argument("--train-end", required=True, help="Train 段终点 YYYYMMDD")
-    parser.add_argument("--es-start", required=True, help="ES 段起点 YYYYMMDD")
-    parser.add_argument("--es-end", required=True, help="ES 段终点 YYYYMMDD")
+    parser.add_argument(
+        "--val-start", required=True, help="Val 段起点 YYYYMMDD（早停段，须早于 ES 段）"
+    )
+    parser.add_argument("--val-end", required=True, help="Val 段终点 YYYYMMDD（早停段）")
+    parser.add_argument(
+        "--es-start", required=True, help="ES 段起点 YYYYMMDD（评估段，不参与早停）"
+    )
+    parser.add_argument("--es-end", required=True, help="ES 段终点 YYYYMMDD（评估段）")
     parser.add_argument("--k", type=float, default=1.0, help="异常亏损波动倍数（训练前固定）")
     parser.add_argument("--h-max", type=int, default=20, help="期限网格上限")
     parser.add_argument("--sigma-window", type=int, default=20, help="sigma 日历窗口")
@@ -323,33 +334,46 @@ def main() -> int:
         matrix,
         [
             StageSpec("train", args.train_start, args.train_end),
+            StageSpec("val", args.val_start, args.val_end),
             StageSpec("es", args.es_start, args.es_end),
         ],
     )
-    train_df, es_df = split.stages["train"], split.stages["es"]
-    if train_df.empty or es_df.empty:
-        logger.error(f"分割后 Train={len(train_df)} 行 / ES={len(es_df)} 行，存在空段，终止")
+    train_df, val_df = split.stages["train"], split.stages["val"]
+    es_df = split.stages["es"]
+    if train_df.empty or val_df.empty or es_df.empty:
+        logger.error(
+            f"分割后 Train={len(train_df)} 行 / Val={len(val_df)} 行 / ES={len(es_df)} 行，"
+            f"存在空段，终止"
+        )
         return 1
 
     result = train_terminal_loss_model(
         train_df,
-        es_df,
+        val_df,
         TERMINAL_LOSS_FEATURES,
         train_config=train_config,
         label_config=label_config,
         stage_dates={
             "train": (args.train_start, args.train_end),
+            "val": (args.val_start, args.val_end),
             "es": (args.es_start, args.es_end),
         },
     )
 
-    # 概率质量报告：ES 段（早停参考）+ Train 段（过拟合差距诊断）
+    # 概率质量报告：ES 段（评估/门禁，不参与早停）+ Val 段（早停参考）
+    # + Train 段（过拟合差距诊断）
     es_prob = result.classifier.predict_proba(es_df[TERMINAL_LOSS_FEATURES])[:, 1]
     es_report = evaluate_probability_quality(
         es_df["loss_label"].to_numpy(),
         es_prob,
         es_df["h"].to_numpy(),
         sigma_values=es_df["sigma_daily_20"].to_numpy(),
+    )
+    val_report = evaluate_probability_quality(
+        val_df["loss_label"].to_numpy(),
+        result.classifier.predict_proba(val_df[TERMINAL_LOSS_FEATURES])[:, 1],
+        val_df["h"].to_numpy(),
+        sigma_values=val_df["sigma_daily_20"].to_numpy(),
     )
     train_report = evaluate_probability_quality(
         train_df["loss_label"].to_numpy(),
@@ -385,6 +409,11 @@ def main() -> int:
                 "h_per_group": args.h_per_group,
                 "every_n_days": args.every_n_days,
             },
+            # ES 评估段行数/事件率由调用方登记（train_* 只登记早停段 Val）；
+            # summary.csv 的 n_es 语义保持为"评估段行数"（门禁口径不变）
+            "n_es": int(len(es_df)),
+            "es_event_rate": float(es_df["loss_label"].to_numpy().mean()),
+            "es_h_distribution": es_df["h"].value_counts().sort_index().to_dict(),
             "full_grid_valid_event_rate": built["valid_event_sum"] / max(built["valid_count"], 1),
             "pct_cross_section_source": (
                 "clean/daily 完整同日母截面（标签过滤前，mother_section 重建，"
@@ -398,6 +427,7 @@ def main() -> int:
     model = TerminalLossModel(model_config, result.classifier)
     report_payload = {
         "es": _report_to_json(es_report),
+        "val": _report_to_json(val_report),
         "train": _report_to_json(train_report),
         "label_coverage": coverage_df.to_dict(orient="records"),
         "isolation_dropped": split.isolation_dropped,
@@ -413,7 +443,7 @@ def main() -> int:
         train_end_date=args.train_end,
         n_samples=int(model_config.metadata["n_train"]),
         train_params=model_config.metadata,
-        performance_metrics=build_performance_metrics(es_report, train_report),
+        performance_metrics=build_performance_metrics(es_report, train_report, val_report),
         report_payload=report_payload,
         calibration_df=es_report["calibration_by_h_sigma"],
         coverage_df=coverage_df,
@@ -424,9 +454,14 @@ def main() -> int:
         f"（每次训练新增版本，不覆盖）" + ("；已写固定名别名" if saved["fixed_name"] else "")
     )
     logger.info(
-        f"ES 段概率质量: logloss={es_report['logloss']:.4f}, "
+        f"ES 段概率质量（评估段，不参与早停）: logloss={es_report['logloss']:.4f}, "
         f"brier={es_report['brier']:.4f}, pr_auc={es_report['pr_auc']:.4f}, "
         f"事件率={es_report['event_rate']:.4f}"
+    )
+    logger.info(
+        f"Val 段概率质量（早停段）: logloss={val_report['logloss']:.4f}, "
+        f"brier={val_report['brier']:.4f}, pr_auc={val_report['pr_auc']:.4f}, "
+        f"事件率={val_report['event_rate']:.4f}"
     )
     logger.info(f"输出目录: {out_dir}")
     return 0

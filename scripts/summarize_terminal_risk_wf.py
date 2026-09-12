@@ -66,12 +66,14 @@ SUMMARY_COLUMNS = [
     "param_signature",
 ]
 
-# 折目录名尾部消融后缀：_d{depth} / _lr{lr} / _w{years}y / _s{seed} 可叠加，
-# 均可省略（锚定结尾）。后缀仅供展示分组，超参身份以折 sidecar 签名为权威。
+# 折目录名尾部消融后缀：_d{depth} / _lr{lr} / _w{years}y / _v{months}m /
+# _s{seed} 可叠加，均可省略（锚定结尾）。后缀仅供展示分组，超参身份以折
+# sidecar 签名为权威。
 _SUFFIX_PATTERN = re.compile(
     r"(?:_d(?P<depth>\d+))?"
     r"(?:_lr(?P<lr>\d+(?:\.\d+)?))?"
     r"(?:_w(?P<window>\d+)y)?"
+    r"(?:_v(?P<valm>\d+)m)?"
     r"(?:_s(?P<seed>\d+))?$"
 )
 
@@ -160,18 +162,22 @@ def parse_experiment_suffix(fold_name: str) -> dict:
     """解析折目录名尾部的超参消融后缀。
 
     batch_terminal_risk_wf.ps1 在消融数组多值时给折目录追加 _d{depth} /
-    _lr{lr} 后缀（可叠加，如 2022H2_d4_lr0.03）；单值时无后缀。无法识别的
-    尾缀按无后缀处理（同后缀目录仍会聚到同组），保证新后缀类型不中断汇总。
-    注意：后缀仅是展示分组名，超参身份以折 sidecar 签名为权威（后缀与 meta
-    可能不一致，如目录残留旧消融折未清理）。
+    _lr{lr} / _w{years}y 后缀，单值时无后缀；早停段（Val）自 v0.109.0 起恒
+    追加 _v{months}m（标识"早停段与评估段分离"的新协议，旧产物无此后缀）。
+    无法识别的尾缀按无后缀处理（同后缀目录仍会聚到同组），保证新后缀类型
+    不中断汇总。注意：后缀仅是展示分组名，超参身份以折 sidecar 签名为权威
+    （后缀与 meta 可能不一致，如目录残留旧消融折未清理）。
     """
     match = _SUFFIX_PATTERN.search(fold_name)
-    if match is None or not any(match.group(k) for k in ("depth", "lr", "window", "seed")):
+    if match is None or not any(
+        match.group(k) for k in ("depth", "lr", "window", "valm", "seed")
+    ):
         return {
             "suffix": "",
             "depth": None,
             "learning_rate": None,
             "train_window_years": None,
+            "val_months": None,
             "seed": None,
         }
     parts = []
@@ -181,6 +187,8 @@ def parse_experiment_suffix(fold_name: str) -> dict:
         parts.append(f"_lr{match.group('lr')}")
     if match.group("window"):
         parts.append(f"_w{match.group('window')}y")
+    if match.group("valm"):
+        parts.append(f"_v{match.group('valm')}m")
     if match.group("seed"):
         parts.append(f"_s{match.group('seed')}")
     return {
@@ -188,6 +196,7 @@ def parse_experiment_suffix(fold_name: str) -> dict:
         "depth": int(match.group("depth")) if match.group("depth") else None,
         "learning_rate": float(match.group("lr")) if match.group("lr") else None,
         "train_window_years": (int(match.group("window")) if match.group("window") else None),
+        "val_months": int(match.group("valm")) if match.group("valm") else None,
         "seed": int(match.group("seed")) if match.group("seed") else None,
     }
 
@@ -229,15 +238,36 @@ def _signature_window_years(meta: dict) -> Optional[int]:
     return int(round(((end - start).days + 1) / 365.25))
 
 
+def _signature_val_months(meta: dict) -> Optional[int]:
+    """早停段（Val）月数（由 ``stage_dates.val`` 起止日计算，跨折不变量）。
+
+    早停段长度决定门禁指标是否为"未参与早停的干净评估"（v0.109.0 协议），
+    必须入签名。缺 ``stage_dates.val``（v0.109.0 之前的旧产物：早停即评估）
+    返回 0，作为旧协议显式标签，绝不允许与新协议批次并组比较；起止日存在
+    但非法时返回 None（调用方使整条签名返回 None，独立成组）。
+    """
+    dates = ((meta.get("metadata") or {}).get("stage_dates") or {}).get("val")
+    if not dates:
+        return 0
+    if len(dates) != 2 or not all(dates):
+        return None
+    start = pd.to_datetime(str(dates[0]), format="%Y%m%d", errors="coerce")
+    end = pd.to_datetime(str(dates[1]), format="%Y%m%d", errors="coerce")
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return None
+    return int(round(((end - start).days + 1) / 30.44))
+
+
 def build_param_signature(meta: dict) -> Optional[str]:
     """从折 sidecar 元数据构建超参签名（历史比较的身份键）。
 
     签名 = train_config 消融位（含 random_state 多种子维度）+ label_config
-    任务定义 + sampling 预登记抽样 + 训练窗口年数，如
+    任务定义 + sampling 预登记抽样 + 训练窗口年数 + 早停段月数，如
     "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0|s=42
-    |k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=3"。任一配置段缺键、或训练起止日
-    无法解析时返回 None（调用方回退展示名，独立成组不与真签名合并）；
+    |k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=3|valm=6"。任一配置段缺键、或训练
+    起止日无法解析时返回 None（调用方回退展示名，独立成组不与真签名合并）；
     device 与策略 A 不变量（min_child_weight/scale_pos_weight）不入签名。
+    ``valm=0`` 表示 v0.109.0 之前"早停即评估"的旧协议产物。
     """
     sections = (
         (meta.get("train_config") or {}, _SIGNATURE_TRAIN_KEYS),
@@ -254,6 +284,10 @@ def build_param_signature(meta: dict) -> Optional[str]:
     if window_years is None:
         return None
     parts.append(f"wy={window_years}")
+    val_months = _signature_val_months(meta)
+    if val_months is None:
+        return None
+    parts.append(f"valm={val_months}")
     return "|".join(parts)
 
 

@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.0] - 2026-09-12
+
+### Changed
+
+- **terminal_loss 早停段与评估段分离（协议修复，必须登记）**：原先 `--es-start/--es-end` 指定的 ES 段既用于 XGBoost 早停（`train.py` 里 `eval_set=[(X_es, y_es)]` 决定 `best_iteration`），又用于门禁指标 `lift`（`train_terminal_risk_model.py` 的 `es_report`），等于**在模型选择段上评估**，与方案 §5.2"ES：决定最佳树数……评估在 OOS i"及"参与筛选的段不得复用为独立验证集"的契约相悖——此前所有门禁数字（含 8 折批的 1.237 / 1.082 / 1.089）都带乐观偏差。
+  - 新增 `--val-start/--val-end`（必填）作为**早停段**；三段按 `label_end_date < 下一段起点` 逐段隔离：`Train | 隔离 | Val（早停）| 隔离 | ES（评估）`。
+  - `train_terminal_loss_model(train_matrix, val_matrix, ...)`：早停只用 Val；元数据登记 `n_val` / `val_event_rate` / `val_h_distribution` 与 `stage_dates.val`；ES 段行数/事件率（`n_es` / `es_event_rate`）改由调用方按评估矩阵登记（summary.csv 的 `n_es` 语义仍为"评估段行数"，门禁口径不变）。
+  - 折报告新增 `val` 段概率质量（早停段审计）；`build_performance_metrics` 旁路登记 `val_logloss` / `val_brier` / `val_pr_auc` / `val_event_rate`，**不参与 lift / pred_bias 门禁口径**。
+- **`valm=` 入超参签名**：`summarize_terminal_risk_wf.py` 由 `stage_dates.val` 计算早停段月数并入签名（`...|wy=7|valm=6`）；缺 `stage_dates.val` 的旧产物显式记为 `valm=0`（旧协议"早停即评估"），非法区间返回 None 独立成组——新旧协议产物**不得混组比较**。折目录后缀新增 `_v{N}m`（恒追加，避免与旧协议同名目录互相覆盖）。
+- **`batch_terminal_risk_wf.ps1` 三段派生**：`ValStart = EsStart − $val_months(6) 月`、`ValEnd = EsStart − 1 天`、`TrainEnd = ValStart − 1 天`、`TrainStart = ValStart − N 年`（训练窗口年数语义不变）；早停段起点早于数据起点时与训练窗口同样判失败跳过（不静默截短）；控制台回显三段区间。
+
+### Tests
+
+- `test_terminal_loss_train_model.py`：新增"早停只由 Val 段决定"（Val 信号强弱改变 `best_iteration`）与"三段日期登记"；`n_val` 断言替换原 `n_es`；`rank_ic_daily` 缺 `trade_date` 的报错文案改为 Val。
+- `test_terminal_loss_dataset.py`：新增三段逐段隔离测试（Train/Val 各自剔除跨段未成熟行，ES 末段无隔离）。
+- `test_terminal_loss_script.py`：端到端改为 Train/Val/ES 三段，校验 `report["val"]`、`stage_dates.val`、`n_val`、`n_es`。
+- `test_terminal_loss_artifacts.py`：Val 指标仅旁路登记、门禁字段逐值不变。
+- `test_summarize_terminal_risk_wf.py`：`_v{N}m` 后缀解析、`valm=` 签名、旧协议 `valm=0` 隔离、非法 Val 区间返回 None。
+
+## [0.108.8] - 2026-09-11
+
+### Changed
+
+- **预登记抽样变更：`every_n_days` 3 → 1（门禁评估网格加密 + 训练行 ×3）**：门禁判据是"逐折 moving-block 区间下限 > 1.1"，而此前矩阵按日期位置每 3 个交易日抽 1（`dataset.py::subsample_dates` 用 `unique_dates[::3]`），导致 ①ES 评估网格只有 1/3 交易日、区间宽度虚大；②**不同训练窗口的臂采样相位不同、键交集为 0，跨窗口比较不可配对**。现登记改为 1（不再按日期抽样）。阈值、指标、折定义、`h_per_group` 均不变——门禁口径一个字没改。
+  - **单折实测（2023H1，5 年窗口，seed 42）**：10 日块区间下限 **1.063 → 1.110**（5/20 日 1.124/1.119），lift 1.197 → 1.243，训练行 263 万 → 788 万，折耗时 6 → 8 分钟。
+  - **配对窗口对比（同为 end=1）**：7 年窗口 lift **1.386**、10 日下限 **1.207** 全面优于 5 年（1.243 / 1.110）——这次比较没有采样相位噪声；而 end=3 下 7 年（1.242/1.046）与 5 年（1.197/1.063）的差异不可比。
+  - **顺带修掉的现象**：弱折早停过早（2023H1 end=3 时 `best_iteration=2`，模型近乎未训练；end=1 后为 5/8 轮），因为训练数据变多后 ES 段 logloss 不再立即恶化。
+- **`batch_terminal_risk_wf.ps1` 默认配置更新**：`$train_window_years_list = @(7)`、`$every_n_days = 1`（两处变更均已登记在脚本注释中，含实测依据与"跨 `end=` 值禁止混组比较"的说明）。
+
 ## [0.108.7] - 2026-09-11
 
 ### Added

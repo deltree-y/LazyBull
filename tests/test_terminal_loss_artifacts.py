@@ -77,6 +77,18 @@ class TestPerformanceMetrics:
         m = build_performance_metrics(es, {})
         assert m["lift"] is None
 
+    def test_val_report_is_sidecar_only(self):
+        """Val 段（早停段）指标只作旁路登记，不改变 lift/pred_bias 门禁口径。"""
+        es = {"logloss": 0.6, "brier": 0.2, "pr_auc": 0.45, "event_rate": 0.3, "mean_pred": 0.28}
+        train = {"logloss": 0.4, "event_rate": 0.3}
+        val = {"logloss": 0.5, "brier": 0.18, "pr_auc": 0.40, "event_rate": 0.25}
+        base = build_performance_metrics(es, train)
+        with_val = build_performance_metrics(es, train, val)
+        # 门禁口径字段逐值不变
+        assert {k: with_val[k] for k in base} == base
+        assert with_val["val_pr_auc"] == 0.40
+        assert with_val["val_event_rate"] == 0.25
+
 
 class TestSaveFlatArtifacts:
     def test_fixed_name_five_files(self, tmp_path):

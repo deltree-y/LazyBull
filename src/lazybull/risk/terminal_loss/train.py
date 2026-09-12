@@ -2,6 +2,9 @@
 
 实现 docs/plans/terminal_loss_risk_model_plan.md 3.6/3.7/8.1 契约：
 
+- 早停段与评估段分离（方案 5.2，v0.109.0 修复）：早停只使用 Val 段
+  （Train 尾部留出的内部验证段），ES 段只用于概率质量报告与门禁评估，
+  **不参与早停**——把门禁指标算在早停选择段上会带乐观偏差；
 - 早停指标：默认 `logloss`（概率质量优先，服务后续校准），可切
   `rank_ic_daily`（逐日截面 Spearman 均值，与门禁 lift 同向；实现复用
   `ml/train_core/eval.py::make_neg_rank_ic_daily`，模块级可 pickle 满足
@@ -90,18 +93,19 @@ class TerminalLossTrainResult:
 
 def train_terminal_loss_model(
     train_matrix: pd.DataFrame,
-    es_matrix: pd.DataFrame,
+    val_matrix: pd.DataFrame,
     feature_names: List[str],
     train_config: Optional[TerminalLossTrainConfig] = None,
     label_config: Optional[TerminalLossLabelConfig] = None,
     stage_dates: Optional[Dict[str, Tuple[str, str]]] = None,
 ) -> TerminalLossTrainResult:
-    """训练期末异常亏损二分类模型（Train 拟合 + ES 早停）。
+    """训练期末异常亏损二分类模型（Train 拟合 + Val 早停，ES 仅评估）。
 
     Args:
         train_matrix: 训练段矩阵（TERMINAL_LOSS_FEATURES + loss_label +
             sample_weight，由 build_training_matrix 产出）
-        es_matrix: 早停段矩阵（同 schema）
+        val_matrix: 早停段（Val）矩阵（同 schema）：早停段必须与评估段（ES）
+            分离，且满足 ``label_end_date < ES 段起点``（方案 5.2/5.3）
         feature_names: 冻结特征清单（列缺失必须报错）
         train_config: 训练超参
         label_config: 标签配置（落入元数据）
@@ -119,25 +123,25 @@ def train_terminal_loss_model(
     missing = [c for c in feature_names if c not in train_matrix.columns]
     if missing:
         raise ValueError(f"训练矩阵缺少特征列: {missing}")
-    if train_matrix.empty or es_matrix.empty:
-        raise ValueError("训练段或早停段为空，拒绝训练")
+    if train_matrix.empty or val_matrix.empty:
+        raise ValueError("训练段或早停段(Val)为空，拒绝训练")
 
     X_train = train_matrix[feature_names]
     y_train = train_matrix["loss_label"].astype(int)
     w_train = train_matrix["sample_weight"].astype(float)
-    X_es = es_matrix[feature_names]
-    y_es = es_matrix["loss_label"].astype(int)
+    X_val = val_matrix[feature_names]
+    y_val = val_matrix["loss_label"].astype(int)
 
-    # 早停指标：rank_ic_daily 用 ES 段的 trade_date 分组（行序必须与 eval_set 一致）
+    # 早停指标：rank_ic_daily 用 Val 段的 trade_date 分组（行序必须与 eval_set 一致）
     if cfg.eval_metric == EVAL_METRIC_RANK_IC_DAILY:
-        if "trade_date" not in es_matrix.columns:
-            raise ValueError("eval_metric=rank_ic_daily 需要 ES 矩阵包含 trade_date 列")
+        if "trade_date" not in val_matrix.columns:
+            raise ValueError("eval_metric=rank_ic_daily 需要 Val 矩阵包含 trade_date 列")
         eval_metric: Any = make_neg_rank_ic_daily(
-            es_matrix["trade_date"].astype(str).to_numpy()
+            val_matrix["trade_date"].astype(str).to_numpy()
         )
         logger.info(
-            f"早停指标: 逐日截面 Spearman RankIC 均值（ES 段 "
-            f"{es_matrix['trade_date'].nunique()} 个交易日，与门禁 lift 同向）"
+            f"早停指标: 逐日截面 Spearman RankIC 均值（Val 段 "
+            f"{val_matrix['trade_date'].nunique()} 个交易日，与门禁 lift 同向）"
         )
     else:
         eval_metric = cfg.eval_metric
@@ -162,8 +166,8 @@ def train_terminal_loss_model(
         X_train,
         y_train,
         sample_weight=w_train,
-        eval_set=[(X_es, y_es)],
-        sample_weight_eval_set=[(es_matrix["sample_weight"].astype(float),)],
+        eval_set=[(X_val, y_val)],
+        sample_weight_eval_set=[(val_matrix["sample_weight"].astype(float),)],
         verbose=False,
     )
     best_iteration = int(getattr(clf, "best_iteration", cfg.n_estimators) or cfg.n_estimators)
@@ -173,17 +177,20 @@ def train_terminal_loss_model(
         # 监控都从 sidecar 的 metadata.best_iteration 读取，缺登记即静默为空列
         "best_iteration": best_iteration,
         "n_train": int(len(train_matrix)),
-        "n_es": int(len(es_matrix)),
+        # n_val = 早停段（Val）行数；评估段（ES）行数 n_es 由调用方按评估矩阵登记
+        # （早停段与评估段分离：门禁指标不得来自早停选择段，方案 5.2）
+        "n_val": int(len(val_matrix)),
         "train_event_rate": float(y_train.mean()),
-        "es_event_rate": float(y_es.mean()),
+        "val_event_rate": float(y_val.mean()),
         "stage_dates": {k: list(v) for k, v in (stage_dates or {}).items()},
         "train_h_distribution": train_matrix["h"].value_counts().sort_index().to_dict(),
-        "es_h_distribution": es_matrix["h"].value_counts().sort_index().to_dict(),
+        "val_h_distribution": val_matrix["h"].value_counts().sort_index().to_dict(),
     }
     logger.info(
         f"terminal_loss 训练完成: train={len(train_matrix)} 行"
-        f"(事件率 {y_train.mean():.4f}), es={len(es_matrix)} 行"
-        f"(事件率 {y_es.mean():.4f}), best_iteration={best_iteration}"
+        f"(事件率 {y_train.mean():.4f}), val={len(val_matrix)} 行"
+        f"(事件率 {y_val.mean():.4f}), best_iteration={best_iteration}"
+        f"（早停只用 Val 段，ES 段仅用于评估）"
     )
     return TerminalLossTrainResult(
         classifier=clf,

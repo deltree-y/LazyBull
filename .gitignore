@@ -61,6 +61,7 @@ copilot-instructions.md
 .env.local
 
 # Data files (keep raw/clean/features structure but ignore contents)
+data/backup/*
 data/raw/*
 !data/raw/.gitkeep
 data/clean/*
