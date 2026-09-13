@@ -49,6 +49,10 @@ htmlcov/
 .claude/
 CLAUDE.md
 
+#copilot
+.copilot-preblack/
+
+
 #github
 .github/
 copilot-instructions.md
