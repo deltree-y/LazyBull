@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.112.0] - 2026-09-13
+
+### Added
+
+- **第三判据 `dayauc`（基准率不变的排序量，terminal_loss）**：`lift = PR-AUC / 事件率` 带**基准率压缩**——同样的排序质量在高事件率折上 lift 天然更低（完美排序上限 = 1/事件率：21.7% → 4.6，9.1% → 11.0）。实测 2024H1 事件率 21.7%（全场最高）、日内 RankIC 0.1294（8 折中游），而 daynorm lift 是全场最低（1.1816，区间下限 1.0964 贴线 1.1）→ 这是判据的已知性质，不是“不会排序”。新增 `block_stats.auc_lift = 2×AUC`（随机 = 1.0，延用同一阈值 1.1；单类别返回 None 不伪造 0.5），作为**并列的第三判据**交叉验证：
+  - `analyze_terminal_risk_gate.py --score-mode {both,raw,daynorm,dayauc,all}`（`both` 保持 v0.110.0 行为不变；`all` = 三判据）；`gate_ci.csv` 新增 `metric` 列，逐折分块 CSV 每行 = 折 × 块长 × 判据。
+  - 契约：`dayauc` **只作并列报告**，不得用它单独宣布通过、也不得绕过两个 lift 判据；第三判据必须对基线同样重算（禁止只对新臂生效）。
+- **按折并行开关 `--block-jobs`**：逐折区间是（折 × 判据）相互独立的任务（各自同种子），并行与串行**逐位等价**。实测单臂 8 折 × 3 块长 × 2 判据从 ≈30 分钟（串行）降到几分钟；`--block-jobs 1`（默认）保留原串行路径。
+
+### Changed
+
+- **排序目标（rank_pairwise）的默认停点口径：`ndcg` → `auc`**。旧口径下 ndcg 在 Val 上极早饱和：实测 4/8 折在 ≤63 棵就停（2024H1 仅 4 棵），isotonic 校准后**每日只有 22–240 个不同分数**（binary 臂 5800–9325）→ 日内排序被并列值压平（2024H1 有 20% 的交易日 RankIC 为负，daynorm 三块长全失败 1.005–1.029）。改用 XGBoost 内置 `auc`（池化 AUC）：与第三判据 ``auc_lift`` 同向、基准率不变。
+  - 为什么不用逐日 RankIC：XGBRanker 下自定义 callable 不可用——带 qid 的 eval_set 把**组级**数组传给 feval（实测 300 行 Val / 22 日 → 传入 22 个预测值），与逐行指标的行序契约冲突（`IndexError`）。
+  - `ndcg` 保留供对照（显式指定即可用）；逐日 `rank_ic_daily` 仅对 binary 目标开放。
+- **目标 × 指标合法组合显式化**：新增 `train.ALLOWED_METRICS`（binary：logloss / rank_ic_daily；rank_pairwise：auc / ndcg），非法组合一律报错，不静默回退；`--eval-metric` 的 CLI 默认改为 `None` 并按目标解析（binary→logloss，rank_pairwise→auc；单一确定性规则，不是多层回退）。
+- **批处理**：`$eval_metric_list` 仅对 binary 臂生效；排序臂恒用 `auc` 并**恒加 `_em*` 后缀**（`_emauc`）——避免与 `em=ndcg` 的旧产物落到同一折目录（签名不同，不得混组、也不得静默覆写）。
+
+### Tests
+
+- `test_terminal_loss_block_stats.py`：新增 `TestAucLiftMetric`——随机排序 ≈1.0 / 完美排序 = 2.0 / 单类别 None / **基准率翻倍时 auc_lift 基本不变而 lift 压缩 > 3**（判据动机的直接验证）/ `moving_block_metric_ci` 支持 `auc_lift`。
+- `test_terminal_loss_gate_analysis.py`：`--score-mode all` 三判据（含 `metric` 列逐值映射、折 × 块长 × 判据行数）、`--block-jobs 2` 与串行逐位等价（`assert_frame_equal`）。
+- `test_terminal_loss_train_model.py`：排序目标默认口径断言改为 `auc`；`ndcg` 显式可用；`rank_ic_daily` 对排序目标报错（qid 不兼容）；目标×指标非法组合报错文案更新。
+- `test_terminal_loss_script.py`：CLI 默认解析（rank→auc）与显式非法组合报错。
+
+### 记录（四臂三判据区间实测，2026-09-13）
+
+判据 = 逐折 moving-block 区间下限 > 1.1，三块长（5/10/20 日）× 8 折 = 24 组合/判据：
+
+| 臂 | raw 失败 | daynorm 失败 | dayauc 失败 | 合计 |
+|---|---|---|---|---|
+| 基线（full，d5/lr0.04/wy7，binary） | 6（2023H1、2025H2） | 9（2022H2、2023H2、2024H1） | 9（同左三折） | 24/72 |
+| **core + binary** | 0 | 2（2024H1 bd10/bd20） | 2（2024H1 bd10/bd20） | **4/72** |
+| core + rank_pairwise（em=ndcg） | 1（2023H1 bd20） | 3（2024H1 三块长） | 6（2024H1 + 2025H1） | 10/72 |
+
+- 基线按**显式 v1 版本产物**重建（`*_v6m` 折目录的固定名别名已被后续实验覆写，summary.csv 已无基线签名），与已归档双判据逐值交叉校验，最大绝对差 2.22e-16（即同口径复现）。
+- **第三判据没有救回 2024H1**：其 `dayauc` point 1.1438 为全场最低（其余折 1.1747–1.2938），bd10/bd20 下限 1.0939/1.0850 仍 < 1.1 → 该折是真实的截面排序弱折（2024Q1，事件率 21.7%），不是基准率压缩伪影。第三判据的价值在别处：折间离散度 0.049（daynorm 0.109）+ 发现 daynorm 漏掉的 rank 臂 2025H1 弱点。
+- 结论：core 特征集把失败组合 **24 → 4**，且失败性质由"多折深亏（最低 0.936）"变为"**单折贴线**（最低 1.085）"；下一步目标因此唯一化——2024H1 的当日截面排序。
+
 ## [0.111.0] - 2026-09-12
 
 ### Added

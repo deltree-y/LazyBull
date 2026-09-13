@@ -58,7 +58,9 @@ from src.lazybull.factors.risk.volatility_factors import (  # noqa: E402
 from src.lazybull.risk.terminal_loss import (  # noqa: E402
     AUDIT_PROXY_COLUMNS,
     BASE_FEATURES,
+    EVAL_METRIC_AUC,
     FEATURE_SET_CHOICES,
+    OBJECTIVE_RANK_PAIRWISE,
     SUPPORTED_OBJECTIVES,
     TERMINAL_LOSS_MODEL_TYPE,
     LabelCoverageAccumulator,
@@ -149,15 +151,18 @@ def parse_args() -> argparse.Namespace:
         choices=list(SUPPORTED_OBJECTIVES),
         help="训练目标：binary（binary:logistic，输出即概率）/ "
         "rank_pairwise（rank:pairwise + qid=trade_date，只学当日截面排序，"
-        "再用 Val 段 isotonic 映射回概率）；排序目标必须配 --eval-metric ndcg",
+        "再用 Val 段 isotonic 映射回概率）",
     )
     parser.add_argument(
         "--eval-metric",
-        default="logloss",
-        choices=["logloss", "rank_ic_daily", "ndcg"],
-        help="早停指标：logloss（概率校准口径，默认）、rank_ic_daily"
-        "（逐日截面 Spearman 均值，与门禁 lift 同向）、ndcg（仅排序目标）；"
-        "不同口径是不同的超参签名，不得并入同一组比较",
+        default=None,
+        choices=["logloss", "rank_ic_daily", "ndcg", "auc"],
+        help="早停指标：默认按 --objective 解析（binary→logloss；"
+        "rank_pairwise→auc，与门禁第三判据 auc_lift 同向、基准率不变）。"
+        "也可显式指定 logloss（概率校准）、rank_ic_daily（逐日截面 Spearman"
+        "均值，仅 binary）、ndcg（排序列表口径，仅 rank_pairwise，Val 上极易"
+        "饱和，供对照）、auc（池化 AUC，仅 rank_pairwise）。非法组合由训练入口"
+        "报错——不同口径是不同的超参签名，不得混组比较",
     )
     # min_child_weight / scale_pos_weight 不暴露 CLI：
     # min_child_weight=1 与样本权重 1/期限网格大小 绑定（正则尺度策略 A 的设计
@@ -313,6 +318,11 @@ def _accumulate_delayed(acc: Dict[str, int], result: Dict[str, Any]) -> None:
 
 def main() -> int:
     args = parse_args()
+    # 早停指标：默认按目标解析（单一确定性规则，不是多层回退）：
+    # binary → logloss（概率校准）；rank_pairwise → auc（与门禁 auc_lift 同向）
+    eval_metric = args.eval_metric or (
+        EVAL_METRIC_AUC if args.objective == OBJECTIVE_RANK_PAIRWISE else "logloss"
+    )
     label_config = TerminalLossLabelConfig(
         h_max=args.h_max, sigma_window=args.sigma_window, loss_sigma_multiple=args.k
     )
@@ -325,10 +335,11 @@ def main() -> int:
         colsample_bytree=args.colsample_bytree,
         reg_lambda=args.reg_lambda,
         random_state=args.random_state,
-        eval_metric=args.eval_metric,
+        eval_metric=eval_metric,
         objective=args.objective,
         device=args.device,
     )
+    logger.info(f"训练目标={args.objective}，早停指标={eval_metric}")
 
     # sigma 预热：数据加载起点前移 sigma_window+2 个交易日
     pre_calendar = load_trade_calendar(args.data_root, "19900101", args.start_date)

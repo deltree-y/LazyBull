@@ -306,9 +306,13 @@ python scripts/train_terminal_risk_model.py \
 # daynorm 1.119→1.392）；ic_admit = 训练段逐日截面 Spearman IC 降序 top-k
 #（--ic-top-k 默认 8，只抽日不抽行，必含期限与 σ；选中列与 IC 值随折落盘）
 # 训练目标（--objective，v0.111.0）：binary 输出即概率（默认）；rank_pairwise =
-# rank:pairwise + qid=trade_date（只学当日截面排序，必须配 --eval-metric ndcg），
-# 排序分数必须经 **Val 段 isotonic 校准** 才是概率，校准器随 artifact 落盘
-#（缺校准器预测直接报错）。特征集与目标都是签名维度（fs= / obj=），禁止混组比较
+# rank:pairwise + qid=trade_date（只学当日截面排序），再用 Val 段 isotonic 校准
+# 映射回概率（校准器随 artifact 落盘，缺校准器预测直接报错）
+# 早停指标（--eval-metric，默认按目标解析：binary→logloss、rank→auc）：
+# logloss（概率校准）/ rank_ic_daily（逐日截面 Spearman，仅 binary）/ auc
+#（池化 AUC，仅 rank；与门禁第三判据 auc_lift 同向且基准率不变）/ ndcg（仅 rank，
+# 列表口径且 Val 上极易饱和，仅供对照）。非法组合由训练入口报错
+# 特征集与目标、早停口径都是签名维度（fs= / obj= / em=），禁止混组比较
 
 # 滚动 Walk-forward（8 折研究型 WF：排序信息量的时间稳定性验证）
 powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.ps1
@@ -325,17 +329,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.
 
 # 门禁区间重判（点估计余量薄时必看：判断"通过"是否只是超参选择的结果）
 python scripts/analyze_terminal_risk_gate.py --wf-root data\walk_forward\terminal_risk_wf
-# 双判据并列（v0.110.0，--score-mode {both,raw,daynorm}，默认 both）：raw = p_loss
-#（跨日期水平对齐 + 当日截面排序混合），daynorm = p_loss_daypct（当日截面百分位，
-# 只反映截面排序）；两口径共用阈值 1.1 且都必须"逐折区间下限 > 阈值"才能算通过，
-# 只报一个口径属口径选择偏差（实测两口径的失败折不重叠）
+# 双判据并列（v0.110.0，--score-mode {both,raw,daynorm,dayauc,all}，默认 both）：
+# raw = p_loss（跨日期水平对齐 + 当日截面排序混合），daynorm = p_loss_daypct
+#（当日截面百分位，只反映截面排序）；两口径共用阈值 1.1 且都必须"逐折区间下限 >
+# 阈值"才能算通过，只报一个口径属口径选择偏差（实测失败折不重叠）
+# 第三判据 dayauc（v0.112.0）：daynorm 分数上的 auc_lift = 2×AUC（随机 = 1.0，共用
+# 阈值）。lift = PR-AUC/事件率 带基准率压缩（完美排序上限 = 1/事件率），实测
+# 2024H1 事件率 21.7%（最高）而日内 RankIC 中游、daynorm lift 全场最低；dayauc
+# 只作并列交叉验证，不得单独宣布通过或绕过两个 lift 判据；--score-mode all 出三判据
 # 折级口径：8 折 = 8 个独立制度，输出折间分布（min/median/max/std）、达标折占比、
-# 均值 lift 的 90% 自举区间；产物 gate_ci.csv（每行 = 判据）
+# 均值 lift 的 90% 自举区间；产物 gate_ci.csv（每行 = 判据，含 metric 列）
 # 注意折级自举抽不到比观测最小值更差的折，"最差折是否真高于阈值"须看逐折分块区间
 # 逐折口径（需 ES 逐行预测，训练已默认落盘）：按连续交易日分块做 moving-block
 # bootstrap，块长默认 5/10/20 日（方案第 6 节的 40 日块是组合级多年 OOS 口径，
 # ES 段只有几十个交易日，用 40 日会使块数不足甚至退化为原样本）；
 # 产物 gate_ci_block.csv（每行 = 折 × 块长 × 判据）
+# 提速（v0.112.0）：--block-jobs N 按（折 × 判据）并行，与串行逐位等价
+#（实测单臂串行 ≈30 分钟 → 并行几分钟），如：--score-mode all --block-jobs 8
 ```
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的

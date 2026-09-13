@@ -11,7 +11,9 @@ from src.lazybull.risk.terminal_loss.model import (
     TerminalLossModelConfig,
 )
 from src.lazybull.risk.terminal_loss.train import (
+    EVAL_METRIC_AUC,
     EVAL_METRIC_NDCG,
+    EVAL_METRIC_RANK_IC_DAILY,
     OBJECTIVE_RANK_PAIRWISE,
     SigmoidCalibrator,
     TerminalLossTrainConfig,
@@ -92,7 +94,7 @@ class TestTrain:
                 train_df,
                 es_df,
                 FEATURES,
-                TerminalLossTrainConfig(device="cpu", eval_metric="auc"),
+                TerminalLossTrainConfig(device="cpu", eval_metric="aucpr"),
             )
 
     def test_rank_ic_daily_requires_trade_date(self):
@@ -273,7 +275,7 @@ class TestRankPairwiseObjective:
     """排序目标（v0.111.0）：rank:pairwise + qid=trade_date + Val isotonic 校准。"""
 
     @staticmethod
-    def _result(seed: int = 31):
+    def _result(seed: int = 31, eval_metric: str = EVAL_METRIC_AUC):
         return train_terminal_loss_model(
             _synthetic_matrix(600, seed=seed),
             _synthetic_matrix(300, seed=seed + 1),
@@ -283,7 +285,7 @@ class TestRankPairwiseObjective:
                 early_stopping_rounds=5,
                 device="cpu",
                 objective=OBJECTIVE_RANK_PAIRWISE,
-                eval_metric=EVAL_METRIC_NDCG,
+                eval_metric=eval_metric,
             ),
         )
 
@@ -306,7 +308,29 @@ class TestRankPairwiseObjective:
         # 目标与校准口径必须入元数据（无校准的排序分数不是概率，政策层不可用）
         assert meta["objective"] == OBJECTIVE_RANK_PAIRWISE
         assert meta["calibration"] == "isotonic_val"
+        # 默认停点口径是 XGBoost 内置 auc（与门禁第三判据 auc_lift 同向）
+        assert meta["train_config"]["eval_metric"] == EVAL_METRIC_AUC
         assert 0 < result.best_iteration <= 60
+
+    def test_ndcg_metric_still_supported_for_rank(self):
+        """ndcg 保留供对照：显式指定时可用，但记录在签名里（em=ndcg）。"""
+        result = self._result(eval_metric=EVAL_METRIC_NDCG)
+        assert type(result.classifier).__name__ == "XGBRanker"
+        assert result.to_metadata()["train_config"]["eval_metric"] == EVAL_METRIC_NDCG
+
+    def test_rank_ic_daily_rejected_for_rank_objective(self):
+        """逐日 RankIC 是逐行 callable，在 XGBRanker 的 qid eval_set 下不兼容。"""
+        with pytest.raises(ValueError, match="不允许 eval_metric"):
+            train_terminal_loss_model(
+                _synthetic_matrix(200, seed=61),
+                _synthetic_matrix(100, seed=62),
+                FEATURES,
+                TerminalLossTrainConfig(
+                    device="cpu",
+                    objective=OBJECTIVE_RANK_PAIRWISE,
+                    eval_metric=EVAL_METRIC_RANK_IC_DAILY,
+                ),
+            )
 
     def test_calibrated_probability_is_monotone_in_score(self):
         result = self._result()
@@ -350,7 +374,8 @@ class TestRankPairwiseObjective:
     def test_objective_and_metric_combinations_validated(self):
         train_df = _synthetic_matrix(200, seed=41)
         val_df = _synthetic_matrix(100, seed=42)
-        with pytest.raises(ValueError, match="早停指标必须为"):
+        # 排序目标不允许概率口径早停（logloss 是二分类默认，必须显式换口径）
+        with pytest.raises(ValueError, match="不允许 eval_metric"):
             train_terminal_loss_model(
                 train_df,
                 val_df,
@@ -361,7 +386,8 @@ class TestRankPairwiseObjective:
                     eval_metric="logloss",
                 ),
             )
-        with pytest.raises(ValueError, match="只对 objective=rank_pairwise 有效"):
+        # 二分类目标不允许列表口径 ndcg
+        with pytest.raises(ValueError, match="不允许 eval_metric"):
             train_terminal_loss_model(
                 train_df,
                 val_df,
@@ -387,6 +413,6 @@ class TestRankPairwiseObjective:
                 TerminalLossTrainConfig(
                     device="cpu",
                     objective=OBJECTIVE_RANK_PAIRWISE,
-                    eval_metric=EVAL_METRIC_NDCG,
+                    eval_metric=EVAL_METRIC_AUC,
                 ),
             )

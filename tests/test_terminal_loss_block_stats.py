@@ -14,7 +14,7 @@ from src.lazybull.risk.terminal_loss import (
     moving_block_metric_ci,
     moving_block_metric_sensitivity,
 )
-from src.lazybull.risk.terminal_loss.block_stats import lift
+from src.lazybull.risk.terminal_loss.block_stats import auc_lift, lift
 
 
 def _es_frame(n_days: int = 60, n_stocks: int = 30, seed: int = 0) -> pd.DataFrame:
@@ -254,3 +254,68 @@ class TestFoldLevelGate:
         lifts = [1.12, 1.12, 1.12, 1.12]
         gate = fold_level_gate(lifts, lift_min_threshold=1.1, n_resamples=100, seed=5)
         assert gate["prob_mean_pass"] == 1.0
+
+
+class TestAucLiftMetric:
+    """auc_lift = 2×AUC：基准率不变的排序口径（v0.112.0，第三判据）。"""
+
+    @staticmethod
+    def _frame(base_rate: float, n_days: int = 20, n_stocks: int = 60, seed: int = 1):
+        """合成“近乎完美排序”的 ES 行：分数 = 潜在风险 + 微噪声，标签取分数最高前 k。"""
+        rng = np.random.default_rng(seed)
+        k = max(1, int(round(base_rate * n_stocks)))
+        rows = []
+        for i in range(n_days):
+            score = rng.normal(0, 1, n_stocks) + 0.05 * rng.normal(0, 1, n_stocks)
+            label = np.zeros(n_stocks, dtype=int)
+            label[np.argsort(-score)[:k]] = 1
+            for j in range(n_stocks):
+                rows.append(
+                    {
+                        "trade_date": f"2024{(i // 20) + 1:02d}{(i % 20) + 1:02d}",
+                        "ts_code": f"0000{j:02d}.SZ",
+                        "h": (j % 20) + 1,
+                        "loss_label": int(label[j]),
+                        "p_loss": float(score[j]),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_random_ranking_is_one(self):
+        rng = np.random.default_rng(3)
+        labels = rng.integers(0, 2, 5000)
+        scores = rng.random(5000)
+        assert auc_lift(labels, scores) == pytest.approx(1.0, abs=0.03)
+
+    def test_perfect_ranking_is_two(self):
+        labels = np.array([1, 1, 0, 0])
+        scores = np.array([0.9, 0.8, 0.2, 0.1])
+        assert auc_lift(labels, scores) == pytest.approx(2.0)
+
+    def test_single_class_returns_none(self):
+        """单类别（重采样块内全 0）返回 None，不伪造成 0.5。"""
+        assert auc_lift(np.zeros(10, dtype=int), np.linspace(0, 1, 10)) is None
+
+    def test_base_rate_invariance_versus_lift(self):
+        """同一排序质量下：事件率翻倍时 auc_lift 基本不变，而 lift 被基准率压缩。"""
+        low = self._frame(0.10, seed=7)
+        high = self._frame(0.40, seed=7)
+        auc_low = auc_lift(low["loss_label"].to_numpy(), low["p_loss"].to_numpy())
+        auc_high = auc_lift(high["loss_label"].to_numpy(), high["p_loss"].to_numpy())
+        lift_low = lift(low["loss_label"].to_numpy(), low["p_loss"].to_numpy())
+        lift_high = lift(high["loss_label"].to_numpy(), high["p_loss"].to_numpy())
+        assert auc_low == pytest.approx(2.0, abs=0.05)
+        assert auc_high == pytest.approx(2.0, abs=0.05)
+        assert abs(auc_low - auc_high) < 0.05
+        assert lift_low - lift_high > 3.0
+
+    def test_block_ci_supports_auc_lift(self):
+        frame = self._frame(0.2, n_days=40, seed=9)
+        out = moving_block_metric_ci(
+            frame,
+            metric="auc_lift",
+            config=BootstrapConfig(block_days=5, n_resamples=30),
+            score_col="p_loss",
+        )
+        assert out["metric"] == "auc_lift"
+        assert out["ci_low"] <= out["point"] <= out["ci_high"]

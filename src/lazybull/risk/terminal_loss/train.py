@@ -44,8 +44,21 @@ EVAL_METRIC_RANK_IC_DAILY = "rank_ic_daily"
 #: 排序目标（rank_pairwise）的早停指标（只对排序目标有效）
 EVAL_METRIC_NDCG = "ndcg"
 
+#: 排序目标的**默认**早停指标：XGBoost 内置 ``auc``（池化 AUC）。
+#: 为什么用 auc 而不是逐日 RankIC（v0.112.0）：XGBRanker 下自定义 callable 不可用
+#: ——带 qid 的 eval_set 传给 feval 的是**组级**数组（实测 300 行 Val / 22 日 →
+#: 传入 22 个预测值），与逐行 RankIC 指标的行序契约冲突（IndexError）。AUC 与
+#: 门禁第三判据 ``auc_lift = 2×AUC`` 同向且**基准率不变**，是 rank 目标下可用的
+#: 最接近口径；``ndcg`` 保留供对照（Val 上极易饱和，实测 4/8 折在 ≤63 棵就停）。
+EVAL_METRIC_AUC = "auc"
+
 #: 支持的早停指标（未知取值必须明确失败，禁止静默回退）
-SUPPORTED_EVAL_METRICS = ("logloss", EVAL_METRIC_RANK_IC_DAILY, EVAL_METRIC_NDCG)
+SUPPORTED_EVAL_METRICS = (
+    "logloss",
+    EVAL_METRIC_RANK_IC_DAILY,
+    EVAL_METRIC_NDCG,
+    EVAL_METRIC_AUC,
+)
 
 #: 训练目标（v0.111.0，显式枚举）
 #: - binary：XGBClassifier(objective=binary:logistic)，输出即概率；
@@ -55,6 +68,17 @@ SUPPORTED_EVAL_METRICS = ("logloss", EVAL_METRIC_RANK_IC_DAILY, EVAL_METRIC_NDCG
 OBJECTIVE_BINARY = "binary"
 OBJECTIVE_RANK_PAIRWISE = "rank_pairwise"
 SUPPORTED_OBJECTIVES = (OBJECTIVE_BINARY, OBJECTIVE_RANK_PAIRWISE)
+
+#: 目标 × 早停指标合法组合（非法组合必须报错，不静默回退）：
+#: - binary：logloss（概率校准）/ rank_ic_daily（逐日截面排序）；
+#: - rank_pairwise：auc（**默认**，池化 AUC，与门禁第三判据 auc_lift 同向、
+#:   基准率不变）/ ndcg（列表口径，Val 上极易饱和，保留供对照）。
+#: 自定义 callable（如逐日 RankIC）在 XGBRanker 下不可用：带 qid 的
+#: eval_set 会把**组级**数组传给 feval，与逐行指标的行序契约冲突。
+ALLOWED_METRICS: Dict[str, Tuple[str, ...]] = {
+    OBJECTIVE_BINARY: ("logloss", EVAL_METRIC_RANK_IC_DAILY),
+    OBJECTIVE_RANK_PAIRWISE: (EVAL_METRIC_AUC, EVAL_METRIC_NDCG),
+}
 
 
 @dataclass(frozen=True)
@@ -146,23 +170,20 @@ def train_terminal_loss_model(
         raise ValueError(
             f"不支持的训练目标 {cfg.objective!r}（可用: {list(SUPPORTED_OBJECTIVES)}）"
         )
+    allowed_metrics = ALLOWED_METRICS[cfg.objective]
+    if cfg.eval_metric not in allowed_metrics:
+        raise ValueError(
+            f"objective={cfg.objective} 不允许 eval_metric={cfg.eval_metric!r}："
+            f"可用 {list(allowed_metrics)}。排序目标的早停必须用排序口径"
+            f"（auc / ndcg），二分类目标不能用列表口径 ndcg；逐日 RankIC 只对"
+            f"二分类生效（XGBRanker 的 qid eval_set 不兼容逐行 callable）"
+        )
     calibrator: Optional[Any] = None
     if cfg.objective == OBJECTIVE_RANK_PAIRWISE:
-        if cfg.eval_metric != EVAL_METRIC_NDCG:
-            raise ValueError(
-                f"objective={OBJECTIVE_RANK_PAIRWISE} 的早停指标必须为 "
-                f"{EVAL_METRIC_NDCG}（当前 {cfg.eval_metric!r}）：排序目标不与"
-                f"概率口径早停指标混用"
-            )
         clf, calibrator, best_iteration = _fit_rank_pairwise(
             train_matrix, val_matrix, feature_names, cfg
         )
     else:
-        if cfg.eval_metric == EVAL_METRIC_NDCG:
-            raise ValueError(
-                f"eval_metric={EVAL_METRIC_NDCG} 只对 objective="
-                f"{OBJECTIVE_RANK_PAIRWISE} 有效（当前 objective={cfg.objective!r}）"
-            )
         X_train = train_matrix[feature_names]
         y_train = train_matrix["loss_label"].astype(int)
         w_train = train_matrix["sample_weight"].astype(float)
@@ -263,14 +284,20 @@ def _fit_rank_pairwise(
     还会花容量拟合跨日水平——该成分在样本外是 regime 赌注（σ→事件率符号会
     翻），学它既不可靠又挤占排序能力。单折实测 daynorm 1.119→1.334。
 
+    早停口径（v0.112.0）：默认 ``auc``（XGBoost 内置池化 AUC，与门禁第三判据
+    ``auc_lift`` 同向且基准率不变）；``ndcg`` 保留供对照——它在 Val 上极易饱和，
+    实测有 4/8 折在 ≤63 棵就停（2024H1 仅 4 棵），校准后分数大量并列（每日仅
+    22–240 个不同值 vs binary 的 5800–9325），日内排序被压平。逐行 callable
+    （如逐日 RankIC）在 XGBRanker 下不可用（qid eval_set 传组级数组）。
+
     排序分数不是概率，因此必须在 **Val 段**（未经 ES）拟合 isotonic 回归映射
     回概率：阈值政策与概率质量报告都依赖概率语义。
 
     Returns:
-        (ranker, calibrator, best_iteration)：best_iteration 为 ndcg 早停点
+        (ranker, calibrator, best_iteration)：best_iteration 为早停口径的停点
 
     Raises:
-        ValueError: train/val 缺 trade_date，或 qid 分组不可用
+        ValueError: train/val 缺 trade_date，或早停指标不可用
     """
     for name, frame in (("train", train_matrix), ("val", val_matrix)):
         if "trade_date" not in frame.columns:
@@ -280,12 +307,14 @@ def _fit_rank_pairwise(
             )
     tr = train_matrix.sort_values("trade_date", kind="stable")
     va = val_matrix.sort_values("trade_date", kind="stable")
+    # 早停指标为 XGBoost 内置字符串（auc / ndcg）：带 qid 的 eval_set 会把
+    # 组级数组传给 callable，逐行自定义指标在 XGBRanker 下不可用（实测报错）。
     # scale_pos_weight 不透传：排序目标按同日内成对比较，正例权重参数对
     # rank:pairwise 无语义（传入会被静默忽略，不如显式不传）；min_child_weight
     # 仍按正则尺度策略 A 的不变量透传。
     ranker = XGBRanker(
         objective="rank:pairwise",
-        eval_metric=EVAL_METRIC_NDCG,
+        eval_metric=cfg.eval_metric,
         max_depth=cfg.max_depth,
         learning_rate=cfg.learning_rate,
         n_estimators=cfg.n_estimators,
@@ -310,7 +339,7 @@ def _fit_rank_pairwise(
     calibrator.fit(ranker.predict(va[feature_names]), va["loss_label"].astype(float))
     best_iteration = int(getattr(ranker, "best_iteration", cfg.n_estimators) or cfg.n_estimators)
     logger.info(
-        f"排序目标训练完成: rank:pairwise(ndcg 早停={best_iteration})，"
+        f"排序目标训练完成: rank:pairwise({cfg.eval_metric} 早停={best_iteration})，"
         f"Val 段 isotonic 校准已拟合（{len(va)} 行）"
     )
     return ranker, calibrator, best_iteration

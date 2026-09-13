@@ -177,9 +177,9 @@ class TestScoreModes:
 
     def _write_dual_root(self, tmp_path: Path) -> Path:
         folds = ["2022H2", "2023H1"]
-        pd.DataFrame(
-            [{"fold": f, "lift": 1.2, "param_signature": _SIG_NEW} for f in folds]
-        ).to_csv(tmp_path / "summary.csv", index=False)
+        pd.DataFrame([{"fold": f, "lift": 1.2, "param_signature": _SIG_NEW} for f in folds]).to_csv(
+            tmp_path / "summary.csv", index=False
+        )
         rng = np.random.default_rng(0)
         for fold in folds:
             fold_dir = tmp_path / fold
@@ -249,6 +249,67 @@ class TestScoreModes:
         assert set(gate["score_mode"]) == {"daynorm"}
         block = pd.read_csv(root / "gate_ci_block.csv")
         assert set(block["score_mode"]) == {"daynorm"}
+
+    def test_main_all_writes_three_criteria(self, tmp_path, monkeypatch):
+        """`--score-mode all`：三个判据并列，dayauc 用 auc_lift（基准率不变）。"""
+        root = self._write_dual_root(tmp_path)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "analyze_terminal_risk_gate.py",
+                "--wf-root",
+                str(root),
+                "--score-mode",
+                "all",
+                "--n-resamples",
+                "50",
+                "--block-resamples",
+                "20",
+            ],
+        )
+        assert gate_main() == 0
+        gate = pd.read_csv(root / "gate_ci.csv")
+        assert set(gate["score_mode"]) == {"raw", "daynorm", "dayauc"}
+        assert dict(zip(gate["score_mode"], gate["metric"])) == {
+            "raw": "lift",
+            "daynorm": "lift",
+            "dayauc": "auc_lift",
+        }
+        block = pd.read_csv(root / "gate_ci_block.csv")
+        # 折 × 块长 × 判据
+        assert len(block) == 2 * 3 * 3
+        assert set(block["score_mode"]) == {"raw", "daynorm", "dayauc"}
+        assert set(block.loc[block["score_mode"] == "dayauc", "metric"]) == {"auc_lift"}
+
+    def test_block_jobs_matches_serial(self, tmp_path, monkeypatch):
+        """`--block-jobs` 并行与串行逐位等价（同种子、任务相互独立）。"""
+        root = self._write_dual_root(tmp_path)
+
+        def _run(extra: list):
+            monkeypatch.setattr(
+                sys,
+                "argv",
+                [
+                    "analyze_terminal_risk_gate.py",
+                    "--wf-root",
+                    str(root),
+                    "--score-mode",
+                    "all",
+                    "--n-resamples",
+                    "50",
+                    "--block-resamples",
+                    "20",
+                ]
+                + extra,
+            )
+            assert gate_main() == 0
+            return pd.read_csv(root / "gate_ci_block.csv"), pd.read_csv(root / "gate_ci.csv")
+
+        serial_block, serial_gate = _run([])
+        parallel_block, parallel_gate = _run(["--block-jobs", "2"])
+        pd.testing.assert_frame_equal(serial_block, parallel_block)
+        pd.testing.assert_frame_equal(serial_gate, parallel_gate)
 
 
 class TestCollectFoldLifts:

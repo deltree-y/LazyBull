@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 from loguru import logger
-from sklearn.metrics import average_precision_score, brier_score_loss
+from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_score
 
 #: 组合级成对比较的主块长（交易日，方案第 6 节规则 4 预登记的研究起点，
 #: 用于多年 OOS 上的策略对比，如第二阶段七组对照）
@@ -69,8 +69,26 @@ def lift(y_true: np.ndarray, p_pred: np.ndarray) -> Optional[float]:
     return float(average_precision_score(y_true, np.asarray(p_pred, dtype=float))) / rate
 
 
+def auc_lift(y_true: np.ndarray, p_pred: np.ndarray) -> Optional[float]:
+    """auc_lift = 2 × AUC（随机排序 = 1.0，与 ``lift`` 共享阈值语义）。
+
+    为什么需要它（v0.112.0）：``lift = PR-AUC / 事件率`` 带**基准率压缩**——
+    同等的排序质量在高事件率折上 lift 天然更低（完美排序的上限 1/事件率：
+    事件率 21.7% → 4.6，9.1% → 11.0）。实测 2024H1 事件率 21.7%（全场
+    最高）而日内 RankIC 0.1294 属中游，daynorm lift 却是全场最低（1.1816，
+    区间下限 1.0964 贴线）。AUC 是“随机正例排在随机负例之上”的概率，
+    **与基准率无关**，乘 2 后随机 = 1.0，可延用同一阈值（1.1 = 比随机好
+    10%）。单类别（全 0 或全 1）返回 None，不伪造成 0.5。
+    """
+    y = np.asarray(y_true)
+    if y.size == 0 or y.min() == y.max():
+        return None
+    return float(2.0 * roc_auc_score(y, np.asarray(p_pred, dtype=float)))
+
+
 _METRICS: Dict[str, Callable[[np.ndarray, np.ndarray], Optional[float]]] = {
     "lift": lift,
+    "auc_lift": auc_lift,
     "pr_auc": lambda y, p: float(average_precision_score(y, np.asarray(p, dtype=float))),
     "brier": lambda y, p: float(brier_score_loss(y, np.asarray(p, dtype=float))),
     "event_rate": lambda y, p: float(np.asarray(y).mean()),
@@ -170,12 +188,15 @@ def moving_block_metric_ci(
 
     Args:
         df: 含 trade_date / loss_label 与分数列的评估行
-        metric: 指标名（lift / pr_auc / brier / event_rate）
+        metric: 指标名（lift / auc_lift / pr_auc / brier / event_rate）；
+            ``auc_lift`` 为基准率不变的排序口径（随机 = 1.0）
         config: 重采样配置
         score_col: 分数列名。``p_loss`` = raw 口径（跨日水平 + 当日截面
             排序混合）；``DAY_NORM_SCORE_COL`` = daynorm 口径（只反映当日
             截面排序，由 ``add_day_percentile_score`` 生成）。两个口径是
-            并列判据（v0.110.0），不得只报其中之一。
+            并列判据（v0.110.0），不得只报其中之一；第三个判据
+            （daynorm 分数 + auc_lift 指标，v0.112.0）用基准率不变的排序量
+            交叉验证 daynorm 的贴线折。
 
     Returns:
         dict：point / ci_low / ci_high / std / n_days / block_days / n_resamples
@@ -258,9 +279,7 @@ def moving_block_metric_sensitivity(
             seed=base.seed,
             ci=base.ci,
         )
-        out.append(
-            moving_block_metric_ci(df, metric=metric, config=cfg, score_col=score_col)
-        )
+        out.append(moving_block_metric_ci(df, metric=metric, config=cfg, score_col=score_col))
     if skipped:
         logger.warning(f"块长 {skipped} 不小于交易日数 {n_days}，已跳过（不得静默缩小块长）")
     if not out:

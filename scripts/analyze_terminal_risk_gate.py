@@ -24,6 +24,17 @@ r"""terminal_loss WF 门禁区间重判（方案第 6 节规则 4/5、8.1）
 排序可能反而更好），失败折也不同，只报一个口径会得出片面结论。两口径共用
 阈值，且都必须满足“逐折区间下限 > 阈值”。
 
+第三判据（v0.112.0）：``dayauc`` = daynorm 分数上的 ``auc_lift = 2×AUC``。
+``lift = PR-AUC / 事件率`` 带**基准率压缩**（完美排序的上限 1/事件率：
+事件率 21.7% → 4.6，9.1% → 11.0），实测 2024H1 事件率 21.7%（全场最高）
+而日内 RankIC 0.1294 属中游，daynorm lift 却是全场最低；AUC 与基准率无关
+且随机 = 1.0，可延用同一阈值。**``dayauc`` 必须与两个 lift 判据并列报告
+（``--score-mode all``），不得用它单独宣布通过或绕过 lift 口径。**
+
+按折并行（v0.112.0）：``--block-jobs N``（默认 1 = 串行）。逐折区间是
+ 折 × 判据 的独立任务（各自同种子），并行与串行**逐位等价**，仅改变耗时
+（实测 8 折 × 3 块长 × 2 判据从 ≈30 分钟降到几分钟）。
+
 分组选择（关键：``--wf-root`` 下常有多个历史实验组，选错就会重判到别的组）：
 
 - ``--select latest``（默认）：取**折目录写入时间最新**的组，即“刚跑完的那批”；
@@ -53,12 +64,38 @@ from src.lazybull.risk.terminal_loss import (  # noqa: E402
     fold_level_gate,
     moving_block_metric_sensitivity,
 )
-from src.lazybull.risk.terminal_loss.block_stats import lift as lift_metric  # noqa: E402
+from src.lazybull.risk.terminal_loss.block_stats import get_metric  # noqa: E402
+
+#: 判据 → (分数列, 指标名)。三个判据并列报告（v0.112.0）：
+#: raw = 跨日水平 + 当日截面混合；daynorm = 只反映当日截面排序（lift）；
+#: dayauc = 当日截面排序的**基准率不变**口径（2×AUC，随机 = 1.0）。
+_CRITERIA: Dict[str, tuple] = {
+    "raw": ("p_loss", "lift"),
+    "daynorm": (DAY_NORM_SCORE_COL, "lift"),
+    "dayauc": (DAY_NORM_SCORE_COL, "auc_lift"),
+}
+
+#: 分数口径 → 判据组合（``both`` 保持 v0.110.0 行为不变）
+_SCORE_MODE_CRITERIA: Dict[str, List[str]] = {
+    "both": ["raw", "daynorm"],
+    "all": ["raw", "daynorm", "dayauc"],
+    "raw": ["raw"],
+    "daynorm": ["daynorm"],
+    "dayauc": ["dayauc"],
+}
+
+#: 判据展示名
+CRITERION_LABELS: Dict[str, str] = {
+    "raw": "raw（跨日水平 + 当日截面混合，lift）",
+    "daynorm": "daynorm（当日截面排序，lift）",
+    "dayauc": "dayauc（当日截面排序，auc_lift=2×AUC，基准率不变）",
+}
 
 #: 折级台账列
 GATE_COLUMNS = [
     "param_signature",
     "score_mode",
+    "metric",
     "n_folds",
     "point_min",
     "point_median",
@@ -126,10 +163,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--score-mode",
         default="both",
-        choices=["both", "raw", "daynorm"],
-        help="分数口径：both（默认，双判据并列）/ raw（p_loss，跨日水平+截面混合）"
-        "/ daynorm（当日截面百分位，只反映截面排序）。实测两口径的失败折不同，"
-        "只报其中之一会得出片面结论",
+        choices=["both", "raw", "daynorm", "dayauc", "all"],
+        help="分数/指标口径：both（默认，双 lift 判据）/ all（三判据：raw + "
+        "daynorm + dayauc）/ raw（p_loss，lift）/ daynorm（当日截面百分位，lift）"
+        "/ dayauc（当日截面百分位，auc_lift=2×AUC，基准率不变）。实测各口径的"
+        "失败折不同，只报其中之一会得出片面结论；dayauc 只作并列报告，"
+        "不得用于单独宣布通过",
+    )
+    parser.add_argument(
+        "--block-jobs",
+        type=int,
+        default=1,
+        help="逐折分块区间的并行进程数（1=串行，默认）。逐折×判据任务相互独立，"
+        "并行与串行逐位等价（同种子），只影响耗时",
     )
     return parser.parse_args()
 
@@ -262,26 +308,75 @@ def find_es_predictions(wf_root: Path, fold: str) -> Optional[Path]:
     return versioned[-1] if versioned else None
 
 
-def fold_daynorm_lifts(wf_root: Path, folds: List[str]) -> Dict[str, float]:
-    """逐折 daynorm（当日截面百分位）点估计 lift。
+def fold_metric_lifts(
+    wf_root: Path, folds: List[str], criterion: str = "daynorm"
+) -> Dict[str, float]:
+    """逐折点估计（从 ES 逐行预测现算，供 daynorm / dayauc 判据）。
 
-    raw 口径的折 lift 取自 ``summary.csv``（训练产物报告）；daynorm 没有落盘
-    点估计，需从 ES 逐行预测现算（同一份预测、同一 lift 定义，只换分数列）。
+    raw 口径的折 lift 取自 ``summary.csv``（训练产物报告）；daynorm/dayauc
+    没有落盘点估计，需从 ES 逐行预测现算（同一份预测、只换分数列与指标）。
     缺逐行预测的折不进入返回字典（调用方告警并按可用折判定）。
+
+    Args:
+        criterion: ``daynorm``（当日百分位 + lift）或 ``dayauc``
+            （当日百分位 + auc_lift）；未知取值报错（不静默回退）
     """
+    if criterion not in ("daynorm", "dayauc"):
+        raise ValueError(f"未知判据 {criterion!r}（仅支持 daynorm / dayauc）")
+    _, metric_name = _CRITERIA[criterion]
+    fn = get_metric(metric_name)
     out: Dict[str, float] = {}
     for fold in folds:
         path = find_es_predictions(wf_root, fold)
         if path is None:
             continue
         frame = add_day_percentile_score(pd.read_parquet(path))
-        value = lift_metric(
+        value = fn(
             frame["loss_label"].to_numpy(),
             frame[DAY_NORM_SCORE_COL].to_numpy(dtype=float),
         )
         if value is not None and pd.notna(value):
             out[fold] = float(value)
     return out
+
+
+def fold_daynorm_lifts(wf_root: Path, folds: List[str]) -> Dict[str, float]:
+    """逐折 daynorm（当日截面百分位）点估计 lift（向后兼容的薄封装）。"""
+    return fold_metric_lifts(wf_root, folds, criterion="daynorm")
+
+
+def block_ci_task(
+    task: Dict[str, Any],
+) -> Dict[str, Any]:
+    """单个（折 × 判据）的逐折分块区间任务（供串行/并行调度）。
+
+    并行等价性由“每任务自包含 + 同种子”保证：任务之间不共享随机状态，
+    结果与串行逐位一致（仅日志顺序可能不同）。模块级函数（非闭包），
+    以满足 joblib 进程池的可序列化要求。
+    """
+    fold = str(task["fold"])
+    criterion = str(task["criterion"])
+    score_col, metric_name = _CRITERIA[criterion]
+    path = find_es_predictions(Path(task["wf_root"]), fold)
+    if path is None:
+        return {"fold": fold, "criterion": criterion, "rows": [], "missing": "无逐行预测"}
+    frame = pd.read_parquet(path)
+    if score_col != "p_loss":
+        frame = add_day_percentile_score(frame)
+    cfg = BootstrapConfig(n_resamples=int(task["block_resamples"]), seed=int(task["seed"]))
+    try:
+        results = moving_block_metric_sensitivity(
+            frame, metric=metric_name, config=cfg, score_col=score_col
+        )
+    except ValueError as exc:
+        return {
+            "fold": fold,
+            "criterion": criterion,
+            "rows": [],
+            "missing": str(exc),
+        }
+    rows = [{"fold": fold, "score_mode": criterion, **result} for result in results]
+    return {"fold": fold, "criterion": criterion, "rows": rows, "missing": None}
 
 
 def main() -> int:
@@ -323,11 +418,13 @@ def main() -> int:
             f"如需重判该组请加 --select best 或 --signature <签名>"
         )
 
-    modes: List[str] = (
-        ["raw", "daynorm"] if args.score_mode == "both" else [args.score_mode]
-    )
+    modes: List[str] = list(_SCORE_MODE_CRITERIA[args.score_mode])
     fold_names = [str(f) for f in subset["fold"].tolist()]
-    daynorm_lifts = fold_daynorm_lifts(wf_root, fold_names) if "daynorm" in modes else {}
+    fold_lifts: Dict[str, Dict[str, float]] = {}
+    for mode in modes:
+        if mode == "raw":
+            continue
+        fold_lifts[mode] = fold_metric_lifts(wf_root, fold_names, criterion=mode)
 
     gates: Dict[str, Dict[str, Any]] = {}
     gate_rows: List[dict] = []
@@ -335,16 +432,17 @@ def main() -> int:
         if mode == "raw":
             lifts = subset["lift"].tolist()
         else:
-            lifts = [daynorm_lifts[f] for f in fold_names if f in daynorm_lifts]
-            absent = [f for f in fold_names if f not in daynorm_lifts]
+            available = fold_lifts[mode]
+            lifts = [available[f] for f in fold_names if f in available]
+            absent = [f for f in fold_names if f not in available]
             if absent:
                 logger.warning(
-                    f"daynorm 口径缺 {len(absent)} 个折的 ES 逐行预测"
-                    f"（{absent[:3]}...）：该口径按可用折判定，不得静默当成已覆盖"
+                    f"{mode} 判据缺 {len(absent)} 个折的 ES 逐行预测"
+                    f"（{absent[:3]}...）：该判据按可用折判定，不得静默当成已覆盖"
                 )
         valid = [v for v in lifts if v is not None and pd.notna(v)]
         if not valid:
-            logger.warning(f"{mode} 口径无有效折 lift，跳过该判据")
+            logger.warning(f"{mode} 判据无有效折取值，跳过该判据")
             continue
         gate = fold_level_gate(
             lifts,
@@ -357,6 +455,7 @@ def main() -> int:
             {
                 "param_signature": signature,
                 "score_mode": mode,
+                "metric": _CRITERIA[mode][1],
                 "n_folds": gate["n_folds"],
                 "point_min": gate["point_min"],
                 "point_median": gate["point_median"],
@@ -404,7 +503,7 @@ def main() -> int:
         gate = gates.get(mode)
         if gate is None:
             continue
-        label = "raw（跨日水平 + 当日截面混合）" if mode == "raw" else "daynorm（当日截面排序）"
+        label = CRITERION_LABELS[mode]
         print(f"  ── 判据 {mode}: {label} ──")
         print(
             f"  折间分布      : min={gate['point_min']:.3f}  median={gate['point_median']:.3f}  "
@@ -424,8 +523,9 @@ def main() -> int:
         "  口径边界      : 折级自举只能反映「换一批制度」，重采样抽不到比观测最小值\n"
         "                  更差的折，因此它无法判定最差折是否真正高于阈值；\n"
         "                  该问题须看下面的逐折分块区间（需 ES 逐行预测）。\n"
-        "  双判据要求    : raw 与 daynorm 的失败折可能不同（实测确实不同），两个\n"
-        "                  口径都要看逐折区间下限，不得只报其中一个。"
+        "  多判据要求    : raw / daynorm / dayauc 的失败折可能不同（实测确实不同），\n"
+        "                  每个口径都要看逐折区间下限，不得只报其中一个；\n"
+        "                  dayauc（基准率不变）只作并列交叉验证，不单独宣布通过。"
     )
     print("")
 
@@ -434,34 +534,45 @@ def main() -> int:
 
     block_rows: List[dict] = []
     missing: List[str] = []
-    for fold in subset["fold"].tolist():
-        path = find_es_predictions(wf_root, fold)
-        if path is None:
-            missing.append(str(fold))
+    tasks = [
+        {
+            "wf_root": str(wf_root),
+            "fold": fold,
+            "criterion": mode,
+            "block_resamples": args.block_resamples,
+            "seed": args.seed,
+        }
+        for fold in subset["fold"].tolist()
+        for mode in modes
+    ]
+    if args.block_jobs and args.block_jobs > 1:
+        from joblib import Parallel, delayed
+
+        logger.info(
+            f"逐折分块区间并行: {args.block_jobs} 进程 × {len(tasks)} 个（折 × 判据）任务"
+            f"（与串行逐位等价）"
+        )
+        results = Parallel(n_jobs=int(args.block_jobs))(delayed(block_ci_task)(t) for t in tasks)
+    else:
+        results = [block_ci_task(t) for t in tasks]
+    for task, res in zip(tasks, results):
+        fold = str(task["fold"])
+        mode = str(task["criterion"])
+        if res["missing"]:
+            missing.append(f"{fold}[{mode}]")
+            logger.warning(f"{fold}[{mode}]: 分块区间不可行（{res['missing']}）")
             continue
-        frame = pd.read_parquet(path)
-        frames = {"raw": frame}
-        if "daynorm" in modes:
-            frames["daynorm"] = add_day_percentile_score(frame)
-        for mode in modes:
-            cfg = BootstrapConfig(n_resamples=args.block_resamples, seed=args.seed)
-            score_col = "p_loss" if mode == "raw" else DAY_NORM_SCORE_COL
-            try:
-                results = moving_block_metric_sensitivity(
-                    frames[mode], metric="lift", config=cfg, score_col=score_col
-                )
-            except ValueError as exc:
-                logger.warning(f"{fold}[{mode}]: 分块区间不可行（{exc}）")
-                missing.append(f"{fold}[{mode}]")
-                continue
-            for result in results:
-                block_rows.append({"fold": fold, "score_mode": mode, **result})
-            main_idx = min(1, len(results) - 1)
-            logger.info(
-                f"{fold}[{mode}]: 日块 {results[0]['n_days']} 天，主块长 "
-                f"{results[main_idx]['block_days']} 日 lift = {results[0]['point']:.3f} "
-                f"[{results[main_idx]['ci_low']:.3f}, {results[main_idx]['ci_high']:.3f}]"
-            )
+        rows = res["rows"]
+        if not rows:
+            missing.append(f"{fold}[{mode}]")
+            continue
+        block_rows.extend(rows)
+        main_idx = min(1, len(rows) - 1)
+        logger.info(
+            f"{fold}[{mode}]: 日块 {rows[0]['n_days']} 天，主块长 "
+            f"{rows[main_idx]['block_days']} 日 {rows[0]['metric']} = {rows[0]['point']:.3f} "
+            f"[{rows[main_idx]['ci_low']:.3f}, {rows[main_idx]['ci_high']:.3f}]"
+        )
     if missing:
         logger.warning(
             f"{len(missing)} 项缺 ES 逐行预测（{missing[:3]}...）："
@@ -471,9 +582,7 @@ def main() -> int:
     if block_rows:
         block_csv = wf_root / "gate_ci_block.csv"
         pd.DataFrame(block_rows)[BLOCK_COLUMNS].to_csv(block_csv, index=False, encoding="utf-8-sig")
-        logger.info(
-            f"逐折分块区间已写入 {block_csv}（{len(block_rows)} 行 = 折 × 块长 × 判据）"
-        )
+        logger.info(f"逐折分块区间已写入 {block_csv}（{len(block_rows)} 行 = 折 × 块长 × 判据）")
     return 0
 
 

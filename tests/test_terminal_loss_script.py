@@ -349,3 +349,26 @@ def test_script_rank_pairwise_end_to_end(synthetic_env, monkeypatch):
     infer_df = pd.DataFrame([{c: 0.0 for c in model.feature_names}])
     proba = model.predict_proba(infer_df)
     assert 0.0 <= float(proba[0]) <= 1.0
+
+
+def test_script_rank_pairwise_default_metric_is_auc(synthetic_env, monkeypatch):
+    """--objective rank_pairwise 未显式给 --eval-metric：解析为 auc。
+
+    默认按目标解析是单一确定性规则（binary→logloss，rank→auc），
+    不是多层回退；显式非法组合由训练入口报错。
+    """
+    env = synthetic_env
+    assert _run_train(env, monkeypatch, ["--fixed-name", "--objective", "rank_pairwise"]) == 0
+
+    with open(Path(env["out_dir"]) / "terminal_loss_model.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["train_config"]["eval_metric"] == "auc"
+    assert meta["train_config"]["objective"] == "rank_pairwise"
+    assert meta["metadata"]["calibration"] == "isotonic_val"
+
+
+def test_script_rejects_illegal_objective_metric_pair(synthetic_env, monkeypatch):
+    """显式非法组合（排序目标 + logloss 早停）必须报错，不静默回退。"""
+    env = synthetic_env
+    with pytest.raises(ValueError, match="不允许 eval_metric"):
+        _run_train(env, monkeypatch, ["--objective", "rank_pairwise", "--eval-metric", "logloss"])

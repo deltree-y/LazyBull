@@ -65,7 +65,7 @@ $h_max          = 20
 $sigma_window   = 20
 
 # ── 训练超参（消融位：数组即多组实验，Label 依次追加 _d*/_lr*/_w*/*_s*）──
-$max_depth_list     = @(4)      # 例：@(2, 3) 做深度消融（后缀 _d*）
+$max_depth_list     = @(4,5)      # 例：@(2, 3) 做深度消融（后缀 _d*）
 $learning_rate_list = @(0.04)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
 # 早停段（Val）月数（消融位）：早停只用这一段，ES 段只用于评估/门禁
 # （v0.109.0 协议）。TrainEnd 由 EsStart-1 天前移到 ValStart-1 天；该值
@@ -89,10 +89,11 @@ $early_stopping_rounds = 50     # Val 段（早停段）早停轮数
 $subsample          = 0.8
 $colsample_bytree   = 0.8
 $reg_lambda         = 1.0
-# 早停指标（消融位）：logloss（概率校准口径）| rank_ic_daily（逐日截面
-# Spearman 均值，与门禁 lift 同向，复用 ml/train_core/eval.py）。两种口径
-# 是不同签名（`em=`），禁止混组比较。例：@("logloss", "rank_ic_daily")
+# 早停指标（消融位，仅对 binary 臂生效）：logloss（概率校准口径）| rank_ic_daily
+# （逐日截面 Spearman 均值，与门禁 lift 同向，复用 ml/train_core/eval.py）。
+# 两种口径是不同签名（`em=`），禁止混组比较。例：@("logloss", "rank_ic_daily")
 # 做口径消融（后缀 _em*，仅多值时追加，保持 baseline 目录名稳定）。
+# 注：排序臂（rank_pairwise）的早停恒为 auc，不受本列表影响。
 $eval_metric_list   = @("logloss")
 # 特征集（消融位）：full（冻结 33 列）| core（波动状态 10 列）| ic_admit
 # （训练段单变量 |IC| 降序 top-k）。非 full 值时目录追加 _fs* 后缀（单值也
@@ -102,8 +103,12 @@ $feature_set_list   = @("core")
 $ic_top_k           = 8          # ic_admit 入选列数（必选列另计）
 # 训练目标（消融位）：binary（binary:logistic，输出即概率）| rank_pairwise
 # （rank:pairwise + qid=trade_date，只学当日截面排序，再用 Val 段 isotonic
-# 映射回概率）。非 binary 时目录追加 _obj* 后缀；排序目标的早停指标强制为
-# ndcg（忽略 $eval_metric_list，训练入口对非法组合直接报错）。
+# 映射回概率）。非 binary 时目录追加 _obj* 后缀；排序臂的早停指标恒为
+# auc（池化 AUC，与门禁 auc_lift 同向且基准率不变；em=ndcg 已实测在 Val 上
+# 极早饱和 → 欠训练），并恒加 _em* 后缀，避免与 em=ndcg 旧产物落到同一折目录。
+# 只跑排序臂时把本行改为 @("rank_pairwise")（否则 binary 臂会重跑一遍）。
+# 当前配置：只跑排序臂（auc 停点重训）；跑完要恢复双臂时改回
+# @("binary","rank_pairwise")。
 $objective_list     = @("binary","rank_pairwise")
 # 注：min_child_weight / scale_pos_weight 未透传——两者为正则尺度策略 A 的
 # 设计不变量（min_child_weight 与样本权重 1/网格大小绑定，scale_pos_weight
@@ -163,15 +168,17 @@ $armCombos = @()
 foreach ($years in $train_window_years_list) {
     foreach ($valMonths in $val_months_list) {
         foreach ($goal in $goalCombos) {
-            # 排序目标只允许 ndcg 早停（训练入口对非法组合直接报错）：忽略
-            # $eval_metric_list 消融，恒为单条 ndcg 臂
-            $metricList = if ($goal.Objective -eq "rank_pairwise") { @("ndcg") } else { $eval_metric_list }
+            # 排序臂早停由目标决定（auc，与门禁 auc_lift 同向）：忽略
+            # $eval_metric_list 消融，恒为单条臂；且恒加 _em* 后缀——签名不同
+            # （em=ndcg 的旧产物）不得混组，也不得静默覆写同一目录
+            $metricList = if ($goal.Objective -eq "rank_pairwise") { @("auc") } else { $eval_metric_list }
             $metricMulti = $metricList.Count -gt 1
+            $forceMetricSuffix = $goal.Objective -eq "rank_pairwise"
             foreach ($evalMetric in $metricList) {
                 $windowSuffix = if ($train_window_years_list.Count -gt 1) { "_w${years}y" } else { "" }
                 # 早停段长度恒入后缀（含单值）：旧协议产物无 _v{N}m，避免目录互相覆盖
                 $valSuffix = "_v${valMonths}m"
-                $metricSuffix = if ($metricMulti) {
+                $metricSuffix = if ($metricMulti -or $forceMetricSuffix) {
                     "_em" + ($evalMetric -replace "_daily", "")
                 } else { "" }
                 $armCombos += [PSCustomObject]@{
