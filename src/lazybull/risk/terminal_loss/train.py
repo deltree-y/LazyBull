@@ -9,6 +9,9 @@
   `rank_ic_daily`（逐日截面 Spearman 均值，与门禁 lift 同向；实现复用
   `ml/train_core/eval.py::make_neg_rank_ic_daily`，模块级可 pickle 满足
   早停指标契约）；两种口径是不同签名，不得混组比较；
+- 排序目标（rank_pairwise）的早停口径见 `_fit_rank_pairwise`：默认 `auc`
+  由自实现回调 `ml/train_core/eval.py::ValPooledAUCStopping` 承担（v0.112.1
+  ——XGBoost 内置 ranking AUC 的 O(n_g²) 成对展开会超过 int32 上限）；
 - 样本权重按方案第 6 节规则 1 传入（每行 1/期限网格大小）；
 - 正则尺度决策 A（权重 1/20、正则参数保持原值：等效正则增强，且
   min_child_weight=1 使单一 (股票,日) 组无法独自成叶），策略标识落入
@@ -31,9 +34,9 @@ from sklearn.metrics import (
     brier_score_loss,
     log_loss,
 )
-from xgboost import XGBClassifier, XGBRanker
+from xgboost import DMatrix, XGBClassifier, XGBRanker
 
-from ...ml.train_core.eval import make_neg_rank_ic_daily
+from ...ml.train_core.eval import ValPooledAUCStopping, make_neg_rank_ic_daily
 from .labels import TerminalLossLabelConfig
 
 REG_SCALE_POLICY_A = "A_keep_regularization_with_1_over_grid_weights"
@@ -44,12 +47,16 @@ EVAL_METRIC_RANK_IC_DAILY = "rank_ic_daily"
 #: 排序目标（rank_pairwise）的早停指标（只对排序目标有效）
 EVAL_METRIC_NDCG = "ndcg"
 
-#: 排序目标的**默认**早停指标：XGBoost 内置 ``auc``（池化 AUC）。
+#: 排序目标的**默认**早停指标：Val 段池化 ROC AUC（全体行，不分组）。
 #: 为什么用 auc 而不是逐日 RankIC（v0.112.0）：XGBRanker 下自定义 callable 不可用
 #: ——带 qid 的 eval_set 传给 feval 的是**组级**数组（实测 300 行 Val / 22 日 →
 #: 传入 22 个预测值），与逐行 RankIC 指标的行序契约冲突（IndexError）。AUC 与
 #: 门禁第三判据 ``auc_lift = 2×AUC`` 同向且**基准率不变**，是 rank 目标下可用的
 #: 最接近口径；``ndcg`` 保留供对照（Val 上极易饱和，实测 4/8 折在 ≤63 棵就停）。
+#: v0.112.1 起 auc 早停由自实现回调（``ValPooledAUCStopping``）承担，**不再**把
+#: ``eval_metric="auc"`` 交给 XGBoost 内置评估：内置 ranking AUC 对每个 query
+#: group 做 O(n_g²) 成对展开并断言 Σ(n_g+2)(n_g-1)/2 < INT32_MAX，6 个月 Val 段
+#: 实测 29.7 亿 > 21.47 亿（GPU 后端），8 折 rank 臂每折必然 XGBoostError。
 EVAL_METRIC_AUC = "auc"
 
 #: 支持的早停指标（未知取值必须明确失败，禁止静默回退）
@@ -71,8 +78,8 @@ SUPPORTED_OBJECTIVES = (OBJECTIVE_BINARY, OBJECTIVE_RANK_PAIRWISE)
 
 #: 目标 × 早停指标合法组合（非法组合必须报错，不静默回退）：
 #: - binary：logloss（概率校准）/ rank_ic_daily（逐日截面排序）；
-#: - rank_pairwise：auc（**默认**，池化 AUC，与门禁第三判据 auc_lift 同向、
-#:   基准率不变）/ ndcg（列表口径，Val 上极易饱和，保留供对照）。
+#: - rank_pairwise：auc（**默认**，自实现回调池化 AUC，与门禁第三判据
+#:   auc_lift 同向、基准率不变）/ ndcg（内置列表口径，Val 上极易饱和，保留供对照）。
 #: 自定义 callable（如逐日 RankIC）在 XGBRanker 下不可用：带 qid 的
 #: eval_set 会把**组级**数组传给 feval，与逐行指标的行序契约冲突。
 ALLOWED_METRICS: Dict[str, Tuple[str, ...]] = {
@@ -284,11 +291,18 @@ def _fit_rank_pairwise(
     还会花容量拟合跨日水平——该成分在样本外是 regime 赌注（σ→事件率符号会
     翻），学它既不可靠又挤占排序能力。单折实测 daynorm 1.119→1.334。
 
-    早停口径（v0.112.0）：默认 ``auc``（XGBoost 内置池化 AUC，与门禁第三判据
-    ``auc_lift`` 同向且基准率不变）；``ndcg`` 保留供对照——它在 Val 上极易饱和，
-    实测有 4/8 折在 ≤63 棵就停（2024H1 仅 4 棵），校准后分数大量并列（每日仅
-    22–240 个不同值 vs binary 的 5800–9325），日内排序被压平。逐行 callable
-    （如逐日 RankIC）在 XGBRanker 下不可用（qid eval_set 传组级数组）。
+    早停口径（v0.112.1）：
+        - ``auc``（默认）：**自实现** Val 段池化 ROC AUC 早停
+          （``ml/train_core/eval.py::ValPooledAUCStopping``；after_iteration 只
+          预测新增的一棵树并累加 margin，逐轮算 sklearn ROC AUC）。**不**把
+          ``eval_metric="auc"`` 交给 XGBoost 内置评估：内置 ranking AUC 会对每个
+          query group 做 O(n_g²) 成对展开并断言 Σ(n_g+2)(n_g-1)/2 < INT32_MAX，
+          6 个月 Val 段（每个交易日一个 group × 每日数千行）实测 29.7 亿 >
+          21.47 亿，GPU 后端每折必然 XGBoostError。
+        - ``ndcg``：保留内置早停（排序后逐位置计算，无成对展开规模问题），但它在
+          Val 上极易饱和——实测有 4/8 折在 ≤63 棵就停（2024H1 仅 4 棵），校准后
+          分数大量并列（每日仅 22–240 个不同值 vs binary 的 5800–9325），仅供对照。
+        逐行 callable（如逐日 RankIC）在 XGBRanker 下不可用（qid eval_set 传组级数组）。
 
     排序分数不是概率，因此必须在 **Val 段**（未经 ES）拟合 isotonic 回归映射
     回概率：阈值政策与概率质量报告都依赖概率语义。
@@ -307,18 +321,14 @@ def _fit_rank_pairwise(
             )
     tr = train_matrix.sort_values("trade_date", kind="stable")
     va = val_matrix.sort_values("trade_date", kind="stable")
-    # 早停指标为 XGBoost 内置字符串（auc / ndcg）：带 qid 的 eval_set 会把
-    # 组级数组传给 callable，逐行自定义指标在 XGBRanker 下不可用（实测报错）。
     # scale_pos_weight 不透传：排序目标按同日内成对比较，正例权重参数对
     # rank:pairwise 无语义（传入会被静默忽略，不如显式不传）；min_child_weight
     # 仍按正则尺度策略 A 的不变量透传。
-    ranker = XGBRanker(
+    ranker_kwargs: Dict[str, Any] = dict(
         objective="rank:pairwise",
-        eval_metric=cfg.eval_metric,
         max_depth=cfg.max_depth,
         learning_rate=cfg.learning_rate,
         n_estimators=cfg.n_estimators,
-        early_stopping_rounds=cfg.early_stopping_rounds,
         subsample=cfg.subsample,
         colsample_bytree=cfg.colsample_bytree,
         reg_lambda=cfg.reg_lambda,
@@ -327,17 +337,54 @@ def _fit_rank_pairwise(
         tree_method="hist",
         device=cfg.device,
     )
-    ranker.fit(
-        tr[feature_names],
-        tr["loss_label"].astype(int),
-        qid=_qid(tr["trade_date"]),
-        eval_set=[(va[feature_names], va["loss_label"].astype(int))],
-        eval_qid=[_qid(va["trade_date"])],
-        verbose=False,
-    )
+    if cfg.eval_metric == EVAL_METRIC_AUC:
+        # 自实现池化 AUC 早停（v0.112.1）：逐树 margin 增量 + sklearn ROC AUC，
+        # 无 query group 成对展开，绕开 XGBoost 内置 ranking AUC 的 int32 上限。
+        dval = DMatrix(va[feature_names], label=va["loss_label"].astype(float))
+        stopper = ValPooledAUCStopping(
+            dval, va["loss_label"].astype(int), cfg.early_stopping_rounds
+        )
+        ranker = XGBRanker(callbacks=[stopper], **ranker_kwargs)
+        ranker.fit(
+            tr[feature_names],
+            tr["loss_label"].astype(int),
+            qid=_qid(tr["trade_date"]),
+            verbose=False,
+        )
+        best_iteration = stopper.best_iteration
+    else:
+        # ndcg：列表口径无成对展开规模问题，保留内置早停（带 qid 的 eval_set
+        # 不能接逐行 callable，实测报错，故不接受其他自定义指标）。
+        ranker = XGBRanker(
+            eval_metric=cfg.eval_metric,
+            early_stopping_rounds=cfg.early_stopping_rounds,
+            **ranker_kwargs,
+        )
+        ranker.fit(
+            tr[feature_names],
+            tr["loss_label"].astype(int),
+            qid=_qid(tr["trade_date"]),
+            eval_set=[(va[feature_names], va["loss_label"].astype(int))],
+            eval_qid=[_qid(va["trade_date"])],
+            verbose=False,
+        )
+        best_iteration = int(
+            getattr(ranker, "best_iteration", cfg.n_estimators) or cfg.n_estimators
+        )
+    # 物理裁剪到停点：XGBoost 官方推荐的取停点模型方式（``bst[0:best+1]``）。
+    # 必须裁剪：auc 路径没有内置早停，wrapper 默认预测会退回全部树，把停点后
+    # 多跑的 patience 棵树也算进去（校准器是在停点分数上拟合的）；裁剪后模型
+    # 本体即停点模型，模型层 predict 无需任何 iteration_range 处理。
+    # ndcg 路径内置早停未触发时 wrapper best_iteration 缺省为 n_estimators
+    # （历史语义：标记“跑满”），必须夹紧到实际最后一棵树再切片，否则越界。
+    n_trees = ranker.get_booster().num_boosted_rounds()
+    best_iteration = min(best_iteration, n_trees - 1)
+    ranker._Booster = ranker.get_booster()[0 : best_iteration + 1]
+    if cfg.eval_metric == EVAL_METRIC_AUC:
+        # 回调持有 Val DMatrix 与逐轮 margin：清引用，避免序列化携带大数据
+        ranker.set_params(callbacks=None)
     calibrator = IsotonicRegression(out_of_bounds="clip")
     calibrator.fit(ranker.predict(va[feature_names]), va["loss_label"].astype(float))
-    best_iteration = int(getattr(ranker, "best_iteration", cfg.n_estimators) or cfg.n_estimators)
     logger.info(
         f"排序目标训练完成: rank:pairwise({cfg.eval_metric} 早停={best_iteration})，"
         f"Val 段 isotonic 校准已拟合（{len(va)} 行）"

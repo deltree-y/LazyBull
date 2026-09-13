@@ -3,13 +3,16 @@
 
 from loguru import logger
 from scipy.stats import spearmanr
+from sklearn.metrics import roc_auc_score
 from src.lazybull.ml.eval_utils import compute_diagnostic_statistics
 from src.lazybull.ml.eval_utils import evaluate_predictions_by_date
 from src.lazybull.ml.eval_utils import print_diagnostic_report
 from src.lazybull.ml.eval_utils import summarize_daily_metrics
+from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
+from xgboost.callback import TrainingCallback
 import numpy as np
 import pandas as pd
 
@@ -101,6 +104,7 @@ def evaluate_validation_daily(
     result.update({f"diagnostic_{k}": v for k, v in diagnostics.items()})
 
     return result
+
 
 def neg_rank_ic(y_true, y_pred):
     """Spearman Rank IC（XGBoost sklearn 早停用）。
@@ -284,7 +288,86 @@ def make_neg_rank_ic_daily(dates):
     """
     return DailySpearmanRankIC(dates)
 
+
 def _rank_ic_eval_lgb(y_true, y_pred):
     """Spearman Rank IC（LightGBM 早停用，higher_is_better=True）"""
     corr, _ = spearmanr(y_true, y_pred)
     return "rank_ic", float(corr if not np.isnan(corr) else 0), True
+
+
+class ValPooledAUCStopping(TrainingCallback):
+    """排列目标（rank:pairwise）的 Val 段池化 ROC AUC 早停回调（逐树 margin 增量）。
+
+    为什么自实现（v0.112.1）：XGBoost 内置 ranking ``auc`` 会对每个 query group
+    做完整成对展开（``RankingAUC`` 中 ``n_threads = Σ_g (n_g+2)(n_g-1)/2``），并
+    断言该值 < ``INT32_MAX``。terminal_loss 的 Val 段是“每个交易日一个 group ×
+    每日数千行”结构，6 个月 Val 的成对数实测 29.7 亿 > 21.47 亿（GPU 后端
+    ``auc.cu:520`` 直接 XGBoostError，8 折 rank 臂每折必然复现）。本回调用
+    O(n) 的逐树 margin 增量 + sklearn 池化 ROC AUC 替代，无任何组规模上限，
+    口径与门禁第三判据 ``auc_lift = 2×AUC`` 同向。
+
+    实现要点：
+        - ``after_iteration`` 只预测**新增的一棵树**
+          （``iteration_range=(epoch, epoch+1)``）并累加 margin：XGBoost 对任意
+          iteration_range 都会附加同一个 base_score 常数，累加结果与真实 margin
+          只差“所有样本相同的常数”，不改变 AUC 排序（已与全量截断预测逐值
+          对比验证：AUC 完全一致，max_abs_diff=0）。
+        - 早停语义与 XGBoost 内置一致：连续 ``rounds`` 轮无严格改善即停。
+          调用方必须用 ``best_iteration``（0-based）把模型裁剪/截断到停点
+          （``iteration_range=(0, best_iteration+1)``）——未使用内置早停时
+          wrapper 默认预测会退回“全部树”，把停点之后多跑的树也算进去。
+
+    Attributes:
+        best_iteration: 取得最优池化 AUC 的树索引（0-based）
+        best_score: 最优池化 AUC（Val 段全体行，不分组）
+    """
+
+    def __init__(self, dval: Any, y_val: Any, rounds: int) -> None:
+        """
+        Args:
+            dval: Val 段 DMatrix（预测用，行序与 y_val 一致）
+            y_val: Val 段 0/1 标签
+            rounds: 早停 patience（连续无改善轮数），必须 >= 1
+        """
+        if int(rounds) < 1:
+            raise ValueError(f"池化 AUC 早停 patience 必须 >= 1，收到 {rounds!r}")
+        y = np.asarray(y_val, dtype=int).ravel()
+        if int(dval.num_row()) != len(y):
+            raise ValueError(
+                f"池化 AUC 早停的 Val DMatrix 行数 {int(dval.num_row())} "
+                f"与标签长度 {len(y)} 不一致"
+            )
+        if np.unique(y).size < 2:
+            raise ValueError("Val 段标签只有一个类别，无法计算池化 AUC 早停")
+        self._dval = dval
+        self._y = y
+        self._rounds = int(rounds)
+        self._margin: Optional[np.ndarray] = None
+        self._best_score = float("-inf")
+        self._best_iteration = 0
+        self._since_best = 0
+
+    def after_iteration(self, model: Any, epoch: int, evals_log: Any) -> bool:
+        inc = model.predict(self._dval, output_margin=True, iteration_range=(epoch, epoch + 1))
+        inc = np.asarray(inc, dtype=np.float64).ravel()
+        self._margin = inc if self._margin is None else self._margin + inc
+        score = float(roc_auc_score(self._y, self._margin))
+        if score > self._best_score:
+            self._best_score = score
+            self._best_iteration = int(epoch)
+            self._since_best = 0
+        else:
+            self._since_best += 1
+            if self._since_best >= self._rounds:
+                return True
+        return False
+
+    @property
+    def best_iteration(self) -> int:
+        """最优池化 AUC 对应的树索引（0-based；调用方负责裁剪/截断）。"""
+        return self._best_iteration
+
+    @property
+    def best_score(self) -> float:
+        """最优池化 AUC（Val 段全体行的 ROC AUC）。"""
+        return self._best_score

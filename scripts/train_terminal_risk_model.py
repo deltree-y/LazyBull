@@ -158,7 +158,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         choices=["logloss", "rank_ic_daily", "ndcg", "auc"],
         help="早停指标：默认按 --objective 解析（binary→logloss；"
-        "rank_pairwise→auc，与门禁第三判据 auc_lift 同向、基准率不变）。"
+        "rank_pairwise→auc：自实现回调池化 AUC，与门禁第三判据 auc_lift 同向、"
+        "基准率不变，不用 XGBoost 内置 ranking auc 的 O(n²) 成对展开）。"
         "也可显式指定 logloss（概率校准）、rank_ic_daily（逐日截面 Spearman"
         "均值，仅 binary）、ndcg（排序列表口径，仅 rank_pairwise，Val 上极易"
         "饱和，供对照）、auc（池化 AUC，仅 rank_pairwise）。非法组合由训练入口"

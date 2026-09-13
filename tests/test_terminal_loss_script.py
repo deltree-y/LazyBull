@@ -356,9 +356,30 @@ def test_script_rank_pairwise_default_metric_is_auc(synthetic_env, monkeypatch):
 
     默认按目标解析是单一确定性规则（binary→logloss，rank→auc），
     不是多层回退；显式非法组合由训练入口报错。
+
+    注：合成价格路径在 k=1.0 下事件率≈0（原 Val 窗口隔离后只有 6 行且全是
+    同一类，池化 AUC 无定义），这里放宽标签阈值 k=0.2 并加宽 Val 段让 Val
+    出现两类样本——仅测试数据参数，不涉及生产逻辑。
     """
     env = synthetic_env
-    assert _run_train(env, monkeypatch, ["--fixed-name", "--objective", "rank_pairwise"]) == 0
+    assert (
+        _run_train(
+            env,
+            monkeypatch,
+            [
+                "--fixed-name",
+                "--objective",
+                "rank_pairwise",
+                "--k",
+                "0.05",
+                "--val-start",
+                env["cal"][WARMUP + 20],
+                "--val-end",
+                env["cal"][WARMUP + 33],
+            ],
+        )
+        == 0
+    )
 
     with open(Path(env["out_dir"]) / "terminal_loss_model.json", encoding="utf-8") as f:
         meta = json.load(f)

@@ -93,7 +93,8 @@ $reg_lambda         = 1.0
 # （逐日截面 Spearman 均值，与门禁 lift 同向，复用 ml/train_core/eval.py）。
 # 两种口径是不同签名（`em=`），禁止混组比较。例：@("logloss", "rank_ic_daily")
 # 做口径消融（后缀 _em*，仅多值时追加，保持 baseline 目录名稳定）。
-# 注：排序臂（rank_pairwise）的早停恒为 auc，不受本列表影响。
+# 注：排序臂（rank_pairwise）的早停恒为 auc（自实现池化 AUC 回调，不用
+# XGBoost 内置 ranking auc 的 O(n²) 成对展开），不受本列表影响。
 $eval_metric_list   = @("logloss")
 # 特征集（消融位）：full（冻结 33 列）| core（波动状态 10 列）| ic_admit
 # （训练段单变量 |IC| 降序 top-k）。非 full 值时目录追加 _fs* 后缀（单值也
@@ -104,8 +105,10 @@ $ic_top_k           = 8          # ic_admit 入选列数（必选列另计）
 # 训练目标（消融位）：binary（binary:logistic，输出即概率）| rank_pairwise
 # （rank:pairwise + qid=trade_date，只学当日截面排序，再用 Val 段 isotonic
 # 映射回概率）。非 binary 时目录追加 _obj* 后缀；排序臂的早停指标恒为
-# auc（池化 AUC，与门禁 auc_lift 同向且基准率不变；em=ndcg 已实测在 Val 上
-# 极早饱和 → 欠训练），并恒加 _em* 后缀，避免与 em=ndcg 旧产物落到同一折目录。
+# auc（自实现回调池化 AUC，与门禁 auc_lift 同向且基准率不变；不用 XGBoost
+# 内置 ranking auc——大 query group 下 O(n²) 成对展开会超 int32 上限必然
+# 崩溃；em=ndcg 已实测在 Val 上极早饱和 → 欠训练），并恒加 _em* 后缀，
+# 避免与 em=ndcg 旧产物落到同一折目录。
 # 只跑排序臂时把本行改为 @("rank_pairwise")（否则 binary 臂会重跑一遍）。
 # 当前配置：只跑排序臂（auc 停点重训）；跑完要恢复双臂时改回
 # @("binary","rank_pairwise")。
@@ -131,8 +134,8 @@ $chunk_days       = 50
 
 $failed = @()
 $selected_folds = @($folds | Where-Object { $_.Selected })
-# 臂总数：排序目标恒为单条 ndcg 臂（忽略 eval_metric 消融），binary 用 eval_metric
-# 数量；目标维度另乘特征集个数
+# 臂总数：排序目标恒为单条 auc 臂（自实现池化 AUC 回调，忽略 eval_metric
+# 消融），binary 用 eval_metric 数量；目标维度另乘特征集个数
 $metricArmCount = 0
 foreach ($obj in $objective_list) {
     $metricArmCount += if ($obj -eq "rank_pairwise") { 1 } else { $eval_metric_list.Count }
@@ -168,7 +171,8 @@ $armCombos = @()
 foreach ($years in $train_window_years_list) {
     foreach ($valMonths in $val_months_list) {
         foreach ($goal in $goalCombos) {
-            # 排序臂早停由目标决定（auc，与门禁 auc_lift 同向）：忽略
+            # 排序臂早停由目标决定（auc：自实现池化 AUC 回调，与门禁 auc_lift
+            # 同向；不用 XGBoost 内置 ranking auc 的 O(n²) 成对展开）：忽略
             # $eval_metric_list 消融，恒为单条臂；且恒加 _em* 后缀——签名不同
             # （em=ndcg 的旧产物）不得混组，也不得静默覆写同一目录
             $metricList = if ($goal.Objective -eq "rank_pairwise") { @("auc") } else { $eval_metric_list }

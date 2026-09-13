@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.112.1] - 2026-09-13
+
+### Fixed
+
+- **`rank_pairwise` + `auc` 早停改为自实现池化 AUC 回调，修复大 query group 下的必然崩溃（terminal_loss）**：XGBoost 内置 ranking AUC 会对每个 query group 做 O(n_g²) 成对展开（`auc.cu` 的 `RankingAUC` 断言 `Σ_g (n_g+2)(n_g-1)/2 < INT32_MAX`）。terminal_loss 的 Val 段是“每个交易日一个 group × 每日数千行”结构，6 个月 Val 实测 **29.7 亿 > 21.47 亿**，GPU 后端直接 `XGBoostError`（`auc.cu:520`，2022H2 首折报错值 2,974,102,963），`_emauc` 批次的 8 折 rank 臂每折必然失败。修复：
+  - 新增 `ml/train_core/eval.py::ValPooledAUCStopping`（`TrainingCallback`）：`after_iteration` 只预测**新增的一棵树**（`iteration_range=(epoch, epoch+1)`）并累加 margin，逐轮用 sklearn 池化 ROC AUC 评估——O(n) 无组规模上限，口径与门禁第三判据 `auc_lift` 同向；累加产生的 base_score 常数偏移不影响排序（已与全量截断预测逐值对比，AUC 完全一致）。
+  - `auc` 路径**不再**把 `eval_metric="auc"` / `eval_set` 交给 XGBoost 内置评估（防回归测试锁定）；`ndcg` 保留内置路径（列表口径无成对展开规模问题）。
+  - 训练完成后将 booster **物理裁剪**到停点（`bst[0:best_iteration+1]`，XGBoost 官方切片）：内置早停未触发时 wrapper `best_iteration` 缺省为 `n_estimators`，先夹紧到实际树数；模型本体即停点模型，模型层 `predict_proba` 不依赖 wrapper 的隐式截断、也不使用停点后多跑的树。回调引用（Val DMatrix / 逐轮 margin）在拟合后被清理，避免序列化进模型。
+
+### Tests
+
+- 新增 `test_terminal_loss_rank_early_stop.py`：大 query group（2 天 × 65000 行，旧内置 auc 实测报错值 4,224,935,000）训练正常；逐树增量 AUC 与全量截断预测一致（`abs=1e-12`）；spy 锁定 auc 路径不传 `eval_set`/`eval_qid` 且构造不含 `eval_metric="auc"`；停点裁剪契约（`num_boosted_rounds == best_iteration + 1`，默认预测 == 显式截断预测）；回调参数校验。
+- `test_terminal_loss_script.py`：rank 默认口径（auc）端到端测试放宽标签阈值 `k=0.05` 并加宽 Val 段（合成数据在 k=1.0 下 Val 只有 6 行同一类，池化 AUC 无定义）——仅测试数据参数。
+
 ## [0.112.0] - 2026-09-13
 
 ### Added

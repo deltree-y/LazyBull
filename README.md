@@ -307,11 +307,14 @@ python scripts/train_terminal_risk_model.py \
 #（--ic-top-k 默认 8，只抽日不抽行，必含期限与 σ；选中列与 IC 值随折落盘）
 # 训练目标（--objective，v0.111.0）：binary 输出即概率（默认）；rank_pairwise =
 # rank:pairwise + qid=trade_date（只学当日截面排序），再用 Val 段 isotonic 校准
-# 映射回概率（校准器随 artifact 落盘，缺校准器预测直接报错）
+# 映射回概率（校准器随 artifact 落盘，缺校准器预测直接报错）；训练完成后模型
+# 物理裁剪到停点树（v0.112.1），默认预测即停点模型
 # 早停指标（--eval-metric，默认按目标解析：binary→logloss、rank→auc）：
 # logloss（概率校准）/ rank_ic_daily（逐日截面 Spearman，仅 binary）/ auc
-#（池化 AUC，仅 rank；与门禁第三判据 auc_lift 同向且基准率不变）/ ndcg（仅 rank，
-# 列表口径且 Val 上极易饱和，仅供对照）。非法组合由训练入口报错
+#（池化 AUC，仅 rank；自实现回调逐树增量评估，v0.112.1 起不再用 XGBoost
+# 内置 ranking auc——其按 query group 做 O(n²) 成对展开会超 int32 上限；与
+# 门禁第三判据 auc_lift 同向且基准率不变）/ ndcg（仅 rank，列表口径且 Val 上
+# 极易饱和，仅供对照）。非法组合由训练入口报错
 # 特征集与目标、早停口径都是签名维度（fs= / obj= / em=），禁止混组比较
 
 # 滚动 Walk-forward（8 折研究型 WF：排序信息量的时间稳定性验证）

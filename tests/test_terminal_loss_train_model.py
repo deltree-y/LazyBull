@@ -308,7 +308,8 @@ class TestRankPairwiseObjective:
         # 目标与校准口径必须入元数据（无校准的排序分数不是概率，政策层不可用）
         assert meta["objective"] == OBJECTIVE_RANK_PAIRWISE
         assert meta["calibration"] == "isotonic_val"
-        # 默认停点口径是 XGBoost 内置 auc（与门禁第三判据 auc_lift 同向）
+        # 默认停点口径是池化 AUC（自实现回调 ValPooledAUCStopping，与门禁第三
+        # 判据 auc_lift 同向；不用 XGBoost 内置 ranking auc 的 O(n²) 成对展开）
         assert meta["train_config"]["eval_metric"] == EVAL_METRIC_AUC
         assert 0 < result.best_iteration <= 60
 
