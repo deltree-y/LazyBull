@@ -61,6 +61,7 @@ from src.lazybull.risk.terminal_loss import (  # noqa: E402
     EVAL_METRIC_AUC,
     FEATURE_SET_CHOICES,
     OBJECTIVE_RANK_PAIRWISE,
+    STATE_FEATURES,
     SUPPORTED_OBJECTIVES,
     TERMINAL_LOSS_MODEL_TYPE,
     LabelCoverageAccumulator,
@@ -238,7 +239,9 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
         coverage.add(labels)
         audit_labels = labels.rename(columns={"sigma_at_t": "sigma_daily_20"})
 
-        features_by_date = load_cs_train_days(args.data_root, chunk_dates, BASE_FEATURES)
+        features_by_date = load_cs_train_days(
+            args.data_root, chunk_dates, BASE_FEATURES + STATE_FEATURES
+        )
         # pct_* 分母：标签过滤前的完整同日母截面（方案 4.4），
         # 与特征流水线同一实现，并在交集上做逐值一致性校验
         mother_by_date = mother_cache.build(chunk_dates)

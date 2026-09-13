@@ -48,10 +48,12 @@ from .coverage_audit import (
 )
 from .dataset import (
     BASE_FEATURES,
+    CORE_STATE_FEATURES,
     DERIVED_FEATURES,
     FEATURE_SET_CHOICES,
     IC_ADMIT_MANDATORY,
     META_COLUMNS,
+    STATE_FEATURES,
     TERMINAL_LOSS_FEATURES,
     VOL_STATE_CORE_FEATURES,
     DatasetConfig,
@@ -81,7 +83,7 @@ from .labels import (
     build_terminal_loss_labels,
     summarize_label_coverage,
 )
-from .model import TerminalLossModel, TerminalLossModelConfig
+from .model import RANK_TIE_BREAK_EPS, TerminalLossModel, TerminalLossModelConfig
 from .mother_section import (
     MOTHER_HARD_ATOL,
     MOTHER_HISTORY_MONTHS,
@@ -155,10 +157,12 @@ __all__ = [
     "merge_mother_section_validation",
     "validate_mother_section_against_cs_train",
     "BASE_FEATURES",
+    "CORE_STATE_FEATURES",
     "DERIVED_FEATURES",
     "FEATURE_SET_CHOICES",
     "IC_ADMIT_MANDATORY",
     "META_COLUMNS",
+    "STATE_FEATURES",
     "TERMINAL_LOSS_FEATURES",
     "VOL_STATE_CORE_FEATURES",
     "DatasetConfig",
@@ -178,6 +182,7 @@ __all__ = [
     "validate_feature_manifest",
     "TerminalLossModel",
     "TerminalLossModelConfig",
+    "RANK_TIE_BREAK_EPS",
     "ALLOWED_METRICS",
     "EVAL_METRIC_AUC",
     "EVAL_METRIC_NDCG",

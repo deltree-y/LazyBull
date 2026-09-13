@@ -8,10 +8,12 @@ import pytest
 
 from src.lazybull.risk.terminal_loss.dataset import (
     BASE_FEATURES,
+    CORE_STATE_FEATURES,
     DERIVED_FEATURES,
     FEATURE_SET_CHOICES,
     IC_ADMIT_MANDATORY,
     META_COLUMNS,
+    STATE_FEATURES,
     TERMINAL_LOSS_FEATURES,
     VOL_STATE_CORE_FEATURES,
     DatasetConfig,
@@ -55,12 +57,13 @@ def _panels():
 
 
 def _day_features(codes, seed=0):
-    """单日训练行：manifest 基础列全量给值。"""
+    """单日训练行：manifest 基础列 + 风格/状态列全量给值。"""
     rng = np.random.default_rng(seed)
     return pd.DataFrame(
         {
             "ts_code": list(codes),
             **{c: rng.normal(0, 1, len(codes)) for c in BASE_FEATURES},
+            **{c: rng.normal(0, 1, len(codes)) for c in STATE_FEATURES},
         }
     )
 
@@ -97,6 +100,14 @@ class TestManifest:
     def test_missing_column_raises(self):
         with pytest.raises(ValueError, match="缺少 manifest"):
             validate_feature_manifest(["ts_code"] + BASE_FEATURES[:-1])
+
+    def test_state_axis_is_separate_from_frozen_manifest(self):
+        """风格/状态轴不得并入冻结 manifest（full 保持 33 列，签名不变）。"""
+        assert len(TERMINAL_LOSS_FEATURES) == 33
+        assert not set(STATE_FEATURES) & set(TERMINAL_LOSS_FEATURES)
+        assert CORE_STATE_FEATURES == VOL_STATE_CORE_FEATURES + STATE_FEATURES
+        assert len(CORE_STATE_FEATURES) == 12
+        assert "core_state" in FEATURE_SET_CHOICES
 
 
 class TestPctFeatures:
@@ -177,8 +188,8 @@ class TestBuildTrainingMatrix:
             _mother_by_date(["A", "B", "C"], CAL),
             DatasetConfig(horizon_grid_size=20),
         )
-        # 列契约：元数据 + 33 特征
-        assert list(matrix.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES
+        # 列契约：元数据 + 33 冻结特征 + 风格/状态轴（v0.113.0）
+        assert list(matrix.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES + STATE_FEATURES
         # 仅 valid 行：A 股每股 10 T × 2 h - immature(2+3) = 15；B 股 15
         assert len(matrix) == 30
         # 权重 = 1/20（组内总权重归一，未成熟不重归一）
@@ -227,8 +238,8 @@ class TestBuildTrainingMatrix:
         labels, sigma_panel = self._labels()
         matrix = build_training_matrix(labels.iloc[0:0], {}, sigma_panel, {})
         assert matrix.empty
-        assert list(matrix.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES
-        for col in TERMINAL_LOSS_FEATURES:
+        assert list(matrix.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES + STATE_FEATURES
+        for col in TERMINAL_LOSS_FEATURES + STATE_FEATURES:
             assert pd.api.types.is_numeric_dtype(matrix[col]), col
         assert matrix["h"].dtype == np.int64
         assert matrix["remaining_intervals"].dtype == np.int64
@@ -260,8 +271,8 @@ class TestBuildTrainingMatrix:
         """empty_training_matrix 直接产出的空帧即数值 dtype。"""
         empty = empty_training_matrix()
         assert empty.empty
-        assert list(empty.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES
-        for col in TERMINAL_LOSS_FEATURES:
+        assert list(empty.columns) == META_COLUMNS + TERMINAL_LOSS_FEATURES + STATE_FEATURES
+        for col in TERMINAL_LOSS_FEATURES + STATE_FEATURES:
             assert pd.api.types.is_numeric_dtype(empty[col]), col
 
 
@@ -431,6 +442,19 @@ class TestFeatureSetResolution:
         names, record = resolve_feature_set("core", matrix)
         assert names == VOL_STATE_CORE_FEATURES and record["feature_set"] == "core"
         assert record["selected"] == VOL_STATE_CORE_FEATURES
+
+    def test_core_state_resolves_and_requires_state_columns(self):
+        """core_state = 波动状态 + 风格/状态轴；缺列必须报错，不静默降级。"""
+        matrix = self._feature_matrix()
+        matrix = pd.concat(
+            [matrix, pd.DataFrame({c: np.zeros(len(matrix)) for c in STATE_FEATURES})], axis=1
+        )
+        names, record = resolve_feature_set("core_state", matrix)
+        assert names == CORE_STATE_FEATURES
+        assert record["feature_set"] == "core_state"
+        assert record["selected"] == CORE_STATE_FEATURES
+        with pytest.raises(ValueError, match="core_state 特征集需要风格/状态列"):
+            resolve_feature_set("core_state", self._feature_matrix())
 
     def test_unknown_feature_set_raises(self):
         with pytest.raises(ValueError, match="未知 feature_set"):

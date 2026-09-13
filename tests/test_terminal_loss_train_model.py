@@ -7,8 +7,10 @@ import joblib
 
 from src.lazybull.risk.terminal_loss.model import (
     MODEL_ARTIFACT_VERSION,
+    RANK_TIE_BREAK_EPS,
     TerminalLossModel,
     TerminalLossModelConfig,
+    _restore_ranking_resolution,
 )
 from src.lazybull.risk.terminal_loss.train import (
     EVAL_METRIC_AUC,
@@ -271,6 +273,38 @@ class TestTerminalLossModel:
             TerminalLossModel.load(path)
 
 
+class TestRankingResolutionRestore:
+    """isotonic 档位内恢复严格排序（v0.112.2；小改动、不改变概率语义）。"""
+
+    def test_monotone_in_score_within_same_level(self):
+        base = np.full(5, 0.2)
+        scores = np.array([-2.0, -0.5, 0.0, 0.5, 2.0])
+        out = _restore_ranking_resolution(base, scores)
+        assert np.all(np.diff(out) > 0)
+        assert np.all((out >= 0.0) & (out <= 1.0))
+        assert np.allclose(out, 0.2, atol=1e-8)
+
+    def test_level_order_preserved_and_bounds_stay_in_range(self):
+        base = np.array([0.0, 0.0, 0.5, 1.0, 1.0])
+        scores = np.array([1.0, -1.0, 0.0, -1.0, 1.0])
+        out = _restore_ranking_resolution(base, scores)
+        assert out[0] > out[1]  # 同档内按原始分数
+        assert out[2] > out[0] and out[3] > out[2] and out[4] > out[3]  # 档位顺序
+        assert out.min() >= 0.0 and out.max() <= 1.0
+
+    def test_identical_scores_stay_tied(self):
+        base = np.array([0.3, 0.3])
+        scores = np.array([1.5, 1.5])
+        out = _restore_ranking_resolution(base, scores)
+        assert out[0] == out[1]
+
+    def test_perturbation_is_negligible(self):
+        base = np.array([0.0, 0.5, 1.0])
+        scores = np.array([-3.0, 0.0, 3.0])
+        out = _restore_ranking_resolution(base, scores)
+        assert np.max(np.abs(out - base)) <= 3 * RANK_TIE_BREAK_EPS
+
+
 class TestRankPairwiseObjective:
     """排序目标（v0.111.0）：rank:pairwise + qid=trade_date + Val isotonic 校准。"""
 
@@ -348,6 +382,33 @@ class TestRankPairwiseObjective:
         assert ((prob >= 0) & (prob <= 1)).all()
         order = np.argsort(raw)
         assert np.all(np.diff(prob[order]) >= -1e-12)
+
+    def test_calibration_keeps_full_ranking_resolution(self):
+        """校准档位不得压平排序：输出必须恢复全分辨率的严格序（v0.112.2）。
+
+        背景（实测）：sklearn 1.9 的 IsotonicRegression 在大样本上把拟合压缩
+        成很少的档位（合成 20 万样本 → transform 只有 10 个不同输出；生产
+        rank 折 100 万行 Val → 67–127 档），直接当 p_loss 输出会让每日只剩
+        几十个不同分数（实测 26–289 vs binary 5800–9325），门禁三个只看排序
+        的判据被系统性压低。
+        """
+        result = self._result()
+        model = self._model(result)
+        n = 400
+        frame = pd.DataFrame(
+            {
+                "f1": np.linspace(-3.0, 3.0, n),
+                "f2": np.linspace(2.0, -2.0, n),
+                "remaining_intervals": np.arange(n) % 20 + 1,
+            }
+        )
+        prob = model.predict_proba(frame)
+        raw = result.classifier.predict(frame[FEATURES])
+        assert ((prob >= 0) & (prob <= 1)).all()
+        # 全分辨率：不同分数 ⇒ 不同输出（只有同分数才允许并列）
+        assert len(np.unique(prob)) == len(np.unique(raw))
+        order = np.argsort(raw, kind="stable")
+        assert np.all(np.diff(prob[order]) >= 0)
 
     def test_save_load_roundtrip_keeps_calibrator(self, tmp_path):
         model = self._model(self._result())

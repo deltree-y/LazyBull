@@ -94,7 +94,40 @@ VOL_STATE_CORE_FEATURES: List[str] = [
 ]
 
 #: 特征集选项（显式枚举；未知取值必须报错，禁止隐式回退到 full）
-FEATURE_SET_CHOICES = ("full", "core", "ic_admit")
+#: - full: 33 列冻结 manifest；core: 波动状态 10 列；
+#: - core_state: 波动状态 + 风格/状态轴（v0.113.0）；
+#: - ic_admit: 训练段 |IC| 准入。
+FEATURE_SET_CHOICES = ("full", "core", "core_state", "ic_admit")
+
+#: 风格/状态轴扩展列（v0.113.0，仅 ``core_state`` 使用）：冻结 manifest 33 列
+#: 全为波动/量价/市场广播列，不含任何截面风格轴。2024H1 弱折诊断（2026-09-13）
+#: 显示低 mkt_vol 半区（含 202401 崩盘月，事件率 52.8%）单独过不了门禁
+#: （daynorm 下限 1.034 / dayauc 下限 1.058），而该月截面主导轴是规模
+#: （小盘 = 异常亏损方向，与训练史一致、可直接学到），core 看不到该轴：
+#: 1 月 size 单因子 AUC 0.635 vs 模型 0.557；组合后整折 dayauc
+#: 1.1433 → 1.1874（in-sample 上限，门禁只需 +0.0063）。
+#: PIT：两列均为 T 日收盘可得（daily_basic 市值 / 质押公告日衰减），标签自
+#: T+1 开盘起算，无未来信息；列由 cs_train 特征母截面直接提供，
+#: **不并入冻结 manifest**（``full`` 保持 33 列，既有签名不变）。
+#: 未纳入的候选列（is_loss / turnover_percentile / pb）在跨段方向翻转，
+#: 加列会引入不稳定性，暂不启用。
+#: 提示：本轴已于 2026-09-14 8 折实测**否定**（不得默认启用）。实测：三判据
+#: 点估计 7/8 折下降（raw geo 1.5282→1.4723、daynorm geo 1.3634→1.3253、
+#: dayauc geo 1.2295→1.2180）；门禁逐折区间 daynorm 失败 3/48（2024H1 缺
+#: 0.0255/0.0444/0.0539，core 为 2/48 缺 0.0006/0.0058）、dayauc 失败 3/24
+#: （缺 0.0276/0.0431/0.0492，core 为 2/24 缺 0.0063/0.0142）。机制：风格列
+#: gain 占比仅 7–11%（波动族仍 60–70%，不是“模型改学风格”），但停点大幅前移
+#: （2023H2 628→99 棵、2026H1 337→27 棵）、**Val 与 ES logloss 同向变差**
+#: （各 7/8 折）→ 这 2 列在当前正则化/早停配置下是净损失。代码与测试保留
+#: 供复现与其它配置下的重新验证；详见 CHANGELOG 0.113.0 与 plan
+#: 实施状态补充（2026-09-14）。
+STATE_FEATURES: List[str] = [
+    "log_total_mv",
+    "pledge_ratio_decayed",
+]
+
+#: ``core_state`` = 波动率状态核心 + 风格/状态轴（v0.113.0）
+CORE_STATE_FEATURES: List[str] = VOL_STATE_CORE_FEATURES + STATE_FEATURES
 
 #: ic_admit 必含列（期限与尺度直接入模，不参与筛选）
 IC_ADMIT_MANDATORY: List[str] = ["remaining_intervals", "sigma_daily_20"]
@@ -134,6 +167,9 @@ def empty_training_matrix() -> pd.DataFrame:
     产生的空帧全列为 object dtype，与其他块 ``pd.concat`` 后整列被
     提升为 object，XGBoost 将拒绝输入（dtypes must be int/float/bool）。
     空矩阵必须保持与非空路径一致的列与 dtype。
+
+    列清单含 ``STATE_FEATURES``（v0.113.0）：风格/状态轴恒随矩阵，仅
+    ``core_state`` 特征集使用。
     """
     dtypes: Dict[str, str] = {
         "ts_code": "object",
@@ -145,7 +181,7 @@ def empty_training_matrix() -> pd.DataFrame:
     return pd.DataFrame(
         {
             c: pd.Series(dtype=dtypes.get(c, "float64"))
-            for c in META_COLUMNS + TERMINAL_LOSS_FEATURES
+            for c in META_COLUMNS + TERMINAL_LOSS_FEATURES + STATE_FEATURES
         }
     )
 
@@ -226,10 +262,11 @@ def resolve_feature_set(
     train_matrix: pd.DataFrame,
     top_k: int = 8,
 ) -> Tuple[List[str], Dict[str, object]]:
-    """按特征集选项解析模型输入清单（v0.111.0，显式枚举不隐式回退）。
+    """按特征集选项解析模型输入清单（v0.111.0/v0.113.0，显式枚举不隐式回退）。
 
     - ``full``：33 列冻结 manifest（方案 3.2）；
     - ``core``：``VOL_STATE_CORE_FEATURES``（波动率/尺度状态 + 期限）；
+    - ``core_state``：``CORE_STATE_FEATURES``（波动状态 + 风格/状态轴，v0.113.0）；
     - ``ic_admit``：训练段 IC 准入（见 ``select_ic_admit_features``）。
 
     Returns:
@@ -237,7 +274,7 @@ def resolve_feature_set(
         top_k / ic 审计字段，由调用方写入模型元数据
 
     Raises:
-        ValueError: 未知 feature_set
+        ValueError: 未知 feature_set，或 core_state 所需风格/状态列缺失
     """
     if feature_set == "full":
         return list(TERMINAL_LOSS_FEATURES), {
@@ -248,6 +285,17 @@ def resolve_feature_set(
         return list(VOL_STATE_CORE_FEATURES), {
             "feature_set": "core",
             "selected": list(VOL_STATE_CORE_FEATURES),
+        }
+    if feature_set == "core_state":
+        missing = [c for c in CORE_STATE_FEATURES if c not in train_matrix.columns]
+        if missing:
+            raise ValueError(
+                f"core_state 特征集需要风格/状态列 {sorted(missing)}，"
+                f"当前训练矩阵缺列：请检查 cs_train 特征母截面是否含 STATE_FEATURES"
+            )
+        return list(CORE_STATE_FEATURES), {
+            "feature_set": "core_state",
+            "selected": list(CORE_STATE_FEATURES),
         }
     if feature_set == "ic_admit":
         names, ic = select_ic_admit_features(train_matrix, top_k=top_k)
@@ -361,7 +409,8 @@ def build_training_matrix(
         label_config: 标签配置（用于日志与 manifest 校验的 h 网格）
 
     Returns:
-        训练矩阵：META_COLUMNS + TERMINAL_LOSS_FEATURES，
+        训练矩阵：META_COLUMNS + TERMINAL_LOSS_FEATURES + STATE_FEATURES
+        （风格/状态轴恒随矩阵，v0.113.0；仅 ``core_state`` 使用），
         仅含 label_status == valid 的行，sample_weight = 1/网格大小
     """
     cfg = config or DatasetConfig()
@@ -391,8 +440,15 @@ def build_training_matrix(
                 f"禁止退化为过滤后子集排名（方案 4.4）"
             )
         day_features = add_pct_features(day_features, mother)
+        missing_state = [c for c in STATE_FEATURES if c not in day_features.columns]
+        if missing_state:
+            raise ValueError(
+                f"{trade_date} cs_train 特征母截面缺少风格/状态列 "
+                f"{sorted(missing_state)}；矩阵 schema 恒含 STATE_FEATURES"
+                f"（core_state 特征集依赖），禁止静默降级为 NaN，请检查特征构建"
+            )
         merged = day_labels.merge(
-            day_features[["ts_code"] + BASE_FEATURES + list(PCT_FEATURE_BASES)],
+            day_features[["ts_code"] + BASE_FEATURES + list(PCT_FEATURE_BASES) + STATE_FEATURES],
             on="ts_code",
             how="inner",
         )
@@ -411,7 +467,7 @@ def build_training_matrix(
     if dropped:
         # sigma 来自标签构造同一面板，valid 行不应缺失；出现即数据链路异常
         raise ValueError(f"关联后 {dropped} 行 sigma_daily_20 缺失，sigma 面板与标签股票域不一致")
-    return matrix[META_COLUMNS + TERMINAL_LOSS_FEATURES]
+    return matrix[META_COLUMNS + TERMINAL_LOSS_FEATURES + STATE_FEATURES]
 
 
 @dataclass

@@ -301,13 +301,18 @@ python scripts/train_terminal_risk_model.py \
 #           / --subsample / --colsample-bytree / --reg-lambda 可透传
 #（min_child_weight 与 scale_pos_weight 为正则尺度策略 A 设计不变量，不暴露）
 # 训练设备默认 cuda（与主模型一致），--device cpu 可切换
-# 特征集（--feature-set，v0.111.0）：full 33 列冻结清单（默认）；core = 波动率/
-# 尺度状态 + 期限 10 列（标签已按 σ√h 归一化，可学截面信息集中于此；单折实测
-# daynorm 1.119→1.392）；ic_admit = 训练段逐日截面 Spearman IC 降序 top-k
-#（--ic-top-k 默认 8，只抽日不抽行，必含期限与 σ；选中列与 IC 值随折落盘）
+# 特征集（--feature-set，v0.111.0/v0.113.0）：full 33 列冻结清单（默认）；core =
+# 波动率/尺度状态 + 期限 10 列（标签已按 σ√h 归一化，可学截面信息集中于此；
+# 单折实测 daynorm 1.119→1.392）；core_state = core + 风格/状态轴 12 列
+#（v0.113.0：log_total_mv + pledge_ratio_decayed）——**已于 2026-09-14 8 折实测
+# 否定，不得默认启用**（三判据点估计 7/8 折下降、2024H1 区间缺口从 0.0006
+# 扩到 0.0444；机制是 2 列扰动改变早停轨迹），保留仅供复现；ic_admit = 训练
+# 段逐日截面 Spearman IC 降序 top-k（--ic-top-k 默认 8，只抽日不抽行，必含
+# 期限与 σ；选中列与 IC 值随折落盘）
 # 训练目标（--objective，v0.111.0）：binary 输出即概率（默认）；rank_pairwise =
 # rank:pairwise + qid=trade_date（只学当日截面排序），再用 Val 段 isotonic 校准
-# 映射回概率（校准器随 artifact 落盘，缺校准器预测直接报错）；训练完成后模型
+# 映射回概率（校准器随 artifact 落盘，缺校准器预测直接报错）；校准档位内按原始
+# 分数恢复严格序（v0.112.2，否则 isotonic 的大样本压缩会把日内排序压成并列值）；训练完成后模型
 # 物理裁剪到停点树（v0.112.1），默认预测即停点模型
 # 早停指标（--eval-metric，默认按目标解析：binary→logloss、rank→auc）：
 # logloss（概率校准）/ rank_ic_daily（逐日截面 Spearman，仅 binary）/ auc

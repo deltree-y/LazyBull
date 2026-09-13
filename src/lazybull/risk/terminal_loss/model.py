@@ -18,6 +18,37 @@ from .train import OBJECTIVE_RANK_PAIRWISE, TerminalLossTrainConfig
 
 MODEL_ARTIFACT_VERSION = 1
 
+#: 排序目标输出恢复排序分辨率的扰动尺度（严格单调、离散度 ≤ 2e-9）。
+#: 背景（实测）：sklearn 1.9 的 ``IsotonicRegression`` 在大样本上会把拟合
+#: 压缩成极少档位（合成实验 20 万样本 → ``transform`` 只有 10 个不同输出；
+#: 生产 rank 折的 100 万行 Val → 133–254 个阈值 / 67–127 个输出档），直接
+#: 输出会把模型完整的日内排序压成并列值——rank 臂实测每日只有 26–289 个
+#: 不同 ``p_loss``（binary 臂 5800–9325），使门禁三个判据（全部只看排序）
+#: 系统性偏低。这里在档位内按原始分数恢复严格排序，幅度远小于档间距
+#: （实测 ≥1e-3），因此概率校准语义不变。
+RANK_TIE_BREAK_EPS = 1e-9
+
+
+def _restore_ranking_resolution(
+    base: np.ndarray, scores: np.ndarray, eps: float = RANK_TIE_BREAK_EPS
+) -> np.ndarray:
+    """在校准档位内按原始排序分数恢复严格排序（v0.112.2）。
+
+    ``scores`` 先压到 (-1, 1)，再映射到 [0, 1] 的极小扰动：
+
+        p = base * (1 - 2ε) + ε * (1 + t) / 2,   t = s / (1 + |s|)
+
+    - 同一档位内：不并列，按原始分数严格递增；
+    - 不同档位间：档间距 g 的保持条件是 g > ε / (1 - 2ε) ≈ 1e-9（实测档间距
+      ≥1e-3，远满足）→ 档位顺序不变；
+    - 输出恒在 [0, 1]（不用 clip，避免边界档位重新并回并列）；
+    - 同一输入分数 → 同一输出（不引入随机性）。
+    """
+    b = np.asarray(base, dtype=float)
+    s = np.asarray(scores, dtype=float)
+    t = s / (1.0 + np.abs(s))
+    return b * (1.0 - 2.0 * eps) + eps * (1.0 + t) / 2.0
+
 
 @dataclass
 class TerminalLossModelConfig:
@@ -81,8 +112,15 @@ class TerminalLossModel:
                     "objective=rank_pairwise 的模型必须携带 Val 段 isotonic 校准器"
                     "（排序分数不是概率）；缺校准器不得静默当概率输出"
                 )
-            scores = np.asarray(self._clf.predict(X), dtype=float)
-            return np.asarray(self._calibrator.transform(scores), dtype=float)
+            # 注意：XGBoost 返回 float32，而 isotonic 的输出 dtype 随输入——
+            # float32 在 0.08 附近的量化步长约 7e-9，会盖过下面的 tie-break
+            # 扰动（并把概率切成 ~7e-9 的网格冲掉排序）。先升到 float64。
+            scores = np.asarray(self._clf.predict(X), dtype=np.float64)
+            base = np.asarray(self._calibrator.transform(scores), dtype=np.float64)
+            # 校准档位会合并大量并列值（sklearn isotonic 大样本压缩，见
+            # RANK_TIE_BREAK_EPS 注释）：在档内按原始分数恢复严格排序，
+            # 否则门禁的排序类判据（lift / auc_lift）会被系统性压低。
+            return _restore_ranking_resolution(base, scores)
         return self._clf.predict_proba(X)[:, 1]
 
     # ── 序列化 ────────────────────────────────────────────

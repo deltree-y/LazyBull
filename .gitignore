@@ -97,5 +97,12 @@ docs/plans
 # Poetry
 poetry.lock
 
-# temp
+# temp（项目共识：所有临时文件统一放仓库根 temp/ 下，见 CLAUDE.md §7.7 与
+# .github/copilot-instructions.md §1.4；目录内容整体忽略，仅保留 .gitkeep）
+temp/*
+!temp/.gitkeep
+_tmp_*
+_tmp_*.log
+
+# temp（旧式兜底）
 to_be_del*/*

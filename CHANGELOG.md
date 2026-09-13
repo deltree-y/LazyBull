@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.113.0] - 2026-09-13
+
+### Added
+
+- **`core_state` 特征集：给 terminal_loss 补上截面风格/状态轴**：冻结 manifest 33 列全为波动/量价/市场广播列。2024H1 弱折诊断（2026-09-13）定位到低 `mkt_vol_20` 半区 58 日（含 202401 崩盘月，事件率 52.8%）单独过不了门禁（daynorm 下限 1.034 / dayauc 下限 1.058），而该月截面主导轴是规模（小盘 = 异常亏损方向，与训练史一致、可直接学到），`core` 看不到该轴：1 月 size 单因子 AUC 0.635 vs 模型 0.557。新增 `STATE_FEATURES = [log_total_mv, pledge_ratio_decayed]`、`CORE_STATE_FEATURES = VOL_STATE_CORE_FEATURES + STATE_FEATURES`（12 列），`FEATURE_SET_CHOICES` 增 `core_state`；风格列由 cs_train 特征母截面直接提供并**恒随训练矩阵**（`META_COLUMNS + 33 冻结列 + STATE_FEATURES`，缺列报错），但**不并入冻结 manifest**——`full` 保持 33 列、既有签名不变；`resolve_feature_set("core_state", ...)` 缺风格列时明确失败，不静默降级。两列均 PIT 安全（T 日收盘可得，标签自 T+1 开盘起算）。折目录后缀 `_fscore_state`（`fs=` 为签名维度，禁止与其他特征集混组比较）。
+
+### Changed
+
+- `scripts/batch/batch_terminal_risk_wf.ps1`：默认配置切到 `core_state` × `binary`（单变量验证；**当日实测为负结果后已回滚到 `core`**，见下方记录；排序臂 v0.112.2 修复后的重训排在后续）。
+
+### Tests
+
+- `test_terminal_loss_dataset.py`：风格轴与冻结 manifest 互斥、`core_state` 解析与缺列报错、矩阵 schema（含空矩阵路径）包含风格列；`test_terminal_loss_script.py`：合成 cs_train 增风格列 + `--feature-set core_state` 端到端元数据校验。
+
+### 记录（core_state 8 折实测：负结果，2026-09-14）
+
+- **结论：`core_state` 被否定，不得默认启用**（代码与测试保留，供复现与其它配置下的重新验证）。8 折 d5/binary 实测三判据点估计 **7/8 折下降**：raw geo 1.5282→1.4723 / min 1.4103→1.3183；daynorm geo 1.3634→1.3253 / min 1.1809→1.1428；dayauc geo 1.2295→1.2180 / min 1.1433→1.1132。门禁逐折分块区间：daynorm 失败 **3/48**（2024H1 bd5/10/20 缺 0.0255/0.0444/0.0539，core 为 2/48 缺 0.0006/0.0058）、dayauc 失败 **3/24**（缺 0.0276/0.0431/0.0492，core 为 2/24 缺 0.0063/0.0142）；raw 两臂均 0 失败。
+- **机制**：风格列 gain 占比仅 7–11%（波动族仍 60–70%，不是“模型改学风格”），但停点大幅前移（2023H2 628→99 棵、2026H1 337→27 棵、2024H2 242→43 棵），且 **Val 与 ES logloss 同向变差**（各 7/8 折）→ 不是“过拟合 Val”，而是这 2 列在当前正则化/早停配置下是净损失（列数变化改变 greedy 分裂与 colsample 采样比例，Val 轨迹形状改变使早停落在过早点）。
+- **推论（比结论本身更重要）**：仅更换 12 列中的 2 列（gain 占比 <11%）就能让逐折 lift 变化 0.030–0.106（raw）/ 0.002–0.070（daynorm），而 2024H1 卡门禁的缺口只有 0.0006–0.0058 —— **缺口比流程自身的扰动带小 5–100 倍**。因此在当前 ES 段长度与早停配置下，逐折 lift 的可复现性不足以支撑 0.001 级判定；继续在特征集上追这 0.000x 不是有效策略，合法路径只有预登记加长 ES 段（提高统计功效，全折一致受益）或接受并登记该折为数据 regime 限制。
+- 归档：`archives/gate_ci_all_core_state_binary.csv`、`archives/gate_ci_block_all_core_state_binary.csv`。
+
+### Docs
+
+- **项目共识：临时文件统一放 `temp/`**（2026-09-14）——`.gitignore` 整体忽略 `temp/*` 并保留 `temp/.gitkeep`，同时加入 `_tmp_*` 兜底规则；规则写入 `CLAUDE.md` §7.7 与 `.github/copilot-instructions.md` §1.4（含「收尾必须主动删除」「结论必须落正式文档」）。
+- **新增 `docs/terminal_loss_risk_register.md`（风险登记）**：登记 **R-001「2024H1 折研究门禁边际不达标」为 accepted**——填入三判据区间事实（daynorm bd10/20 缺 0.0006/0.0058、dayauc 缺 0.0063/0.0142，raw 全过）、根因（202401 崩盘月事件率 52.8% + 折内 regime 反差 + σ 归一化失效）、已排除的四条修复路径、影响量化（缺口小于流程扰动带 5–100 倍）、缓解措施（政策层双条件门控/regime 感知/事件复核）与复审条件；策略层面结论写明“该折最弱区正是策略持仓域 → 缓解必须落在政策层”。
+- **新增 `docs/plans/terminal_loss_policy_layer_plan.md`（第二阶段政策层设计草案）**：定义目标与四维预登记判据（风险改善/收益代价/交易成本/稳健性）、双条件门控（当日截面百分位 + 绝对概率）、regime 分段阈值校准（C/V 段，禁按 OOS 回调）、与现有卖出/分批调仓链路复用点、P2-1～P2-5 交付路径与门禁、明确不做的事（不再为 2024H1 做特征/配置搜索、不重启用已否定变体、不改研究门禁协议）。
+
+## [0.112.2] - 2026-09-13
+
+### Fixed
+
+- **排序目标（rank_pairwise）的输出被校准档位压平（terminal_loss）**：`IsotonicRegression` 在现代 sklearn 上会把大样本拟合压缩成极少档位（实测：合成 20 万样本 → `transform` 只有 **10 个不同输出值**；生产 rank 折 100 万行 Val → 133–254 个阈值 / **67–127 个输出档**）。直接把校准值当 `p_loss` 输出，会把模型完整的日内排序压成并列值——rank 臂实测每日仅 **26–289** 个不同 `p_loss`（binary 臂 5800–9325），使门禁三个只看排序的判据（raw lift / daynorm lift / dayauc）被系统性压低，**“排序目标不如二分类”的结论在此之前不成立**。
+  - `model.py` 新增 `_restore_ranking_resolution(base, scores, eps=RANK_TIE_BREAK_EPS)`：在校准档位内按原始排序分数恢复严格序，`p = base·(1-2ε) + ε·(1+t)/2`（`t = s/(1+|s|)`，ε=1e-9）。档间距 g 的保持条件是 g > ε/(1-2ε) ≈ 1e-9（实测档间距 ≥1e-3）→ 概率校准语义不变；输出恒在 [0,1]（不用 clip，避免边界档位重新并回并列）；相同分数仍并列（不引入随机性）。
+  - **顺带修掉一个 float32 量化**：XGBoost 预测返回 float32，而 isotonic 输出 dtype 随输入——float32 在 0.08 附近量化步长约 7e-9，足以冲掉档内排序；`predict_proba` 与校准拟合均改为先升到 float64。
+- 影响面：只影响 `objective=rank_pairwise` 的预测输出（binary 无校准器，行为不变）；已有 rank 产物仍是“被压平”的分数，**要拿到公平比较必须重训**。
+
+### Tests
+
+- `test_terminal_loss_train_model.py`：新增 `TestRankingResolutionRestore`（同档内严格递增 / 档位顺序保持且边界在 [0,1] / 同分数仍并列 / 扰动幅度 ≤3ε）与 `test_calibration_keeps_full_ranking_resolution`（400 个不同分数 → 400 个不同输出且严格保序）。
+
 ## [0.112.1] - 2026-09-13
 
 ### Fixed

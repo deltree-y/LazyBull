@@ -65,7 +65,7 @@ $h_max          = 20
 $sigma_window   = 20
 
 # ── 训练超参（消融位：数组即多组实验，Label 依次追加 _d*/_lr*/_w*/*_s*）──
-$max_depth_list     = @(4,5)      # 例：@(2, 3) 做深度消融（后缀 _d*）
+$max_depth_list     = @(5)      # 例：@(2, 3) 做深度消融（后缀 _d*）
 $learning_rate_list = @(0.04)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
 # 早停段（Val）月数（消融位）：早停只用这一段，ES 段只用于评估/门禁
 # （v0.109.0 协议）。TrainEnd 由 EsStart-1 天前移到 ValStart-1 天；该值
@@ -96,10 +96,15 @@ $reg_lambda         = 1.0
 # 注：排序臂（rank_pairwise）的早停恒为 auc（自实现池化 AUC 回调，不用
 # XGBoost 内置 ranking auc 的 O(n²) 成对展开），不受本列表影响。
 $eval_metric_list   = @("logloss")
-# 特征集（消融位）：full（冻结 33 列）| core（波动状态 10 列）| ic_admit
-# （训练段单变量 |IC| 降序 top-k）。非 full 值时目录追加 _fs* 后缀（单值也
-# 追加，避免覆盖基线目录，与 _v{N}m 同约定）；特征集是签名维度（`fs=`），
-# 禁止混组比较。例：@("core") 或 @("full", "ic_admit")
+# 特征集（消融位）：full（冻结 33 列）| core（波动状态 10 列）| core_state
+# （波动状态 + 风格/状态轴 12 列，v0.113.0）| ic_admit（训练段单变量 |IC|
+# 降序 top-k）。非 full 值时目录追加 _fs* 后缀（单值也追加，避免覆盖基线
+# 目录，与 _v{N}m 同约定）；特征集是签名维度（`fs=`），禁止混组比较。
+# 例：@("core") 或 @("full", "ic_admit")
+# 注：core_state 已于 2026-09-14 实测否定（8 折三判据点估计 7/8 折下降、
+# 2024H1 区间缺口从 0.0006 扩到 0.0444）→ 默认已回滚到 core，不再启用；
+# 也勿靠加列去追 2024H1 的 0.000x 缺口（小于流程自身扰动带）。
+# 详见 CHANGELOG 0.113.0 与 plan 实施状态补充。
 $feature_set_list   = @("core")
 $ic_top_k           = 8          # ic_admit 入选列数（必选列另计）
 # 训练目标（消融位）：binary（binary:logistic，输出即概率）| rank_pairwise
@@ -110,9 +115,9 @@ $ic_top_k           = 8          # ic_admit 入选列数（必选列另计）
 # 崩溃；em=ndcg 已实测在 Val 上极早饱和 → 欠训练），并恒加 _em* 后缀，
 # 避免与 em=ndcg 旧产物落到同一折目录。
 # 只跑排序臂时把本行改为 @("rank_pairwise")（否则 binary 臂会重跑一遍）。
-# 当前配置：只跑排序臂（auc 停点重训）；跑完要恢复双臂时改回
-# @("binary","rank_pairwise")。
-$objective_list     = @("binary","rank_pairwise")
+# 当前配置：只跑 binary 臂（core_state 特征集首测，单变量原则）；排
+# 序臂的 v0.112.2 修复后重训排在后面，避免两个变量同时动导致归因不清。
+$objective_list     = @("binary")
 # 注：min_child_weight / scale_pos_weight 未透传——两者为正则尺度策略 A 的
 # 设计不变量（min_child_weight 与样本权重 1/网格大小绑定，scale_pos_weight
 # 会破坏自然事件率口径）。

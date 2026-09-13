@@ -11,7 +11,9 @@ import pytest
 from scripts.train_terminal_risk_model import main as train_main
 from src.lazybull.risk.terminal_loss import (
     BASE_FEATURES,
+    CORE_STATE_FEATURES,
     MOTHER_SECTION_FACTORS,
+    STATE_FEATURES,
     TERMINAL_LOSS_FEATURES,
     VOL_STATE_CORE_FEATURES,
     TerminalLossModel,
@@ -78,6 +80,9 @@ def synthetic_env(tmp_path):
     for d in targets:
         feat = {"ts_code": codes}
         for col in random_base_features:
+            feat[col] = rng.normal(0, 1, len(codes))
+        # 风格/状态轴（v0.113.0，core_state 特征集）：矩阵 schema 恒含
+        for col in STATE_FEATURES:
             feat[col] = rng.normal(0, 1, len(codes))
         frame = pd.DataFrame(feat)
         if d in mother:
@@ -298,6 +303,18 @@ def test_script_core_feature_set_metadata(synthetic_env, monkeypatch):
     # 特征集入元数据（summarize 的 `fs=` 签名与门禁分组依赖它）
     assert meta["metadata"]["feature_set"]["feature_set"] == "core"
     assert meta["metadata"]["feature_set"]["selected"] == VOL_STATE_CORE_FEATURES
+
+
+def test_script_core_state_feature_set_metadata(synthetic_env, monkeypatch):
+    """--feature-set core_state：清单 = 波动状态 + 风格/状态轴，且入元数据。"""
+    env = synthetic_env
+    assert _run_train(env, monkeypatch, ["--fixed-name", "--feature-set", "core_state"]) == 0
+
+    with open(Path(env["out_dir"]) / "terminal_loss_model.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["feature_names"] == CORE_STATE_FEATURES
+    assert meta["metadata"]["feature_set"]["feature_set"] == "core_state"
+    assert meta["metadata"]["feature_set"]["selected"] == CORE_STATE_FEATURES
 
 
 def test_script_ic_admit_feature_set_records_selection(synthetic_env, monkeypatch):

@@ -384,7 +384,12 @@ def _fit_rank_pairwise(
         # 回调持有 Val DMatrix 与逐轮 margin：清引用，避免序列化携带大数据
         ranker.set_params(callbacks=None)
     calibrator = IsotonicRegression(out_of_bounds="clip")
-    calibrator.fit(ranker.predict(va[feature_names]), va["loss_label"].astype(float))
+    # float64 拟合：XGBoost 预测为 float32，而 isotonic 的输出 dtype 随输入，
+    # float32 量化会污染校准档位（实测 0.08 附近步长 ~7e-9，足以冲掉档内排序）。
+    calibrator.fit(
+        np.asarray(ranker.predict(va[feature_names]), dtype=np.float64),
+        va["loss_label"].astype(float),
+    )
     logger.info(
         f"排序目标训练完成: rank:pairwise({cfg.eval_metric} 早停={best_iteration})，"
         f"Val 段 isotonic 校准已拟合（{len(va)} 行）"
