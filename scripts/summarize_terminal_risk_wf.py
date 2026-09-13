@@ -67,14 +67,18 @@ SUMMARY_COLUMNS = [
 ]
 
 # 折目录名尾部消融后缀：_d{depth} / _lr{lr} / _w{years}y / _v{months}m /
-# _em{metric} / _s{seed} 可叠加，均可省略（锚定结尾）。后缀仅供展示分组，
-# 超参身份以折 sidecar 签名为权威。
+# _em{metric} / _fs{feature_set} / _obj{objective} / _s{seed} 可叠加，均可省略
+# （锚定结尾）。后缀仅供展示分组，超参身份以折 sidecar 签名为权威。
+# 注意：文字部分用**惰性量词**——贪婪的 `[a-z_]+` 会让 `_em` 吞掉后续
+# `_fs*`/`_s*`（实测 `_v6m_emlogloss_fscore_s7` 被解析成 em=logloss_fscore）。
 _SUFFIX_PATTERN = re.compile(
     r"(?:_d(?P<depth>\d+))?"
     r"(?:_lr(?P<lr>\d+(?:\.\d+)?))?"
     r"(?:_w(?P<window>\d+)y)?"
     r"(?:_v(?P<valm>\d+)m)?"
-    r"(?:_em(?P<emetric>[a-z_]+))?"
+    r"(?:_em(?P<emetric>[a-z_]+?))?"
+    r"(?:_fs(?P<fset>[a-z_]+?))?"
+    r"(?:_obj(?P<obj>[a-z_]+?))?"
     r"(?:_s(?P<seed>\d+))?$"
 )
 
@@ -140,8 +144,6 @@ _SIGNATURE_KEY_ALIASES = {
     "h_per_group": "hpg",
     "every_n_days": "end",
 }
-
-# 历史比较表列（台账 + 当次记录按超参签名聚合）
 HISTORY_TABLE_COLUMNS = [
     "history_rank",
     "param_signature",
@@ -171,7 +173,7 @@ def parse_experiment_suffix(fold_name: str) -> dict:
     """
     match = _SUFFIX_PATTERN.search(fold_name)
     if match is None or not any(
-        match.group(k) for k in ("depth", "lr", "window", "valm", "emetric", "seed")
+        match.group(k) for k in ("depth", "lr", "window", "valm", "emetric", "fset", "obj", "seed")
     ):
         return {
             "suffix": "",
@@ -180,6 +182,8 @@ def parse_experiment_suffix(fold_name: str) -> dict:
             "train_window_years": None,
             "val_months": None,
             "eval_metric": None,
+            "feature_set": None,
+            "objective": None,
             "seed": None,
         }
     parts = []
@@ -193,6 +197,10 @@ def parse_experiment_suffix(fold_name: str) -> dict:
         parts.append(f"_v{match.group('valm')}m")
     if match.group("emetric"):
         parts.append(f"_em{match.group('emetric')}")
+    if match.group("fset"):
+        parts.append(f"_fs{match.group('fset')}")
+    if match.group("obj"):
+        parts.append(f"_obj{match.group('obj')}")
     if match.group("seed"):
         parts.append(f"_s{match.group('seed')}")
     return {
@@ -202,6 +210,8 @@ def parse_experiment_suffix(fold_name: str) -> dict:
         "train_window_years": (int(match.group("window")) if match.group("window") else None),
         "val_months": int(match.group("valm")) if match.group("valm") else None,
         "eval_metric": match.group("emetric") or None,
+        "feature_set": match.group("fset") or None,
+        "objective": match.group("obj") or None,
         "seed": int(match.group("seed")) if match.group("seed") else None,
     }
 
@@ -263,16 +273,46 @@ def _signature_val_months(meta: dict) -> Optional[int]:
     return int(round(((end - start).days + 1) / 30.44))
 
 
+def _signature_objective(meta: dict) -> Optional[str]:
+    """训练目标（``train_config.objective``；v0.111.0 之前无此键 → binary）。
+
+    目标是**任务定义的一部分**：排序目标（rank_pairwise）只学当日截面排序，
+    与概率口径（binary）不是同一个模型，必须入签名，否则两种目标会被并进
+    同一组。缺键按 binary 处理（旧产物训练入口只有二分类一条路径）；取值
+    非字符串或为空时返回 None（整条签名退回未登记，独立成组）。
+    """
+    value = (meta.get("train_config") or {}).get("objective", "binary")
+    return str(value) if isinstance(value, str) and value else None
+
+
+def _signature_feature_set(meta: dict) -> Optional[str]:
+    """特征集（``metadata.feature_set.feature_set``；v0.111.0 之前 → full）。
+
+    特征集决定入模列（full 冻结 33 列 / core 波动状态 10 列 / ic_admit 训练段
+    单变量 |IC| top-k），不同特征集不可并组比较。缺键按 full 处理（旧产物
+    即冻结清单训练）；记录存在但缺名字或类型非法时返回 None。
+    """
+    record = (meta.get("metadata") or {}).get("feature_set")
+    if record is None:
+        return "full"
+    if not isinstance(record, dict):
+        return None
+    value = record.get("feature_set")
+    return str(value) if isinstance(value, str) and value else None
+
+
 def build_param_signature(meta: dict) -> Optional[str]:
     """从折 sidecar 元数据构建超参签名（历史比较的身份键）。
 
     签名 = train_config 消融位（含 random_state 多种子维度）+ label_config
-    任务定义 + sampling 预登记抽样 + 训练窗口年数 + 早停段月数，如
+    任务定义 + sampling 预登记抽样 + 训练窗口年数 + 早停段月数 + 训练目标
+    + 特征集，如
     "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0|s=42
-    |k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=3|valm=6"。任一配置段缺键、或训练
-    起止日无法解析时返回 None（调用方回退展示名，独立成组不与真签名合并）；
-    device 与策略 A 不变量（min_child_weight/scale_pos_weight）不入签名。
-    ``valm=0`` 表示 v0.109.0 之前"早停即评估"的旧协议产物。
+    |k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=3|valm=6|obj=binary|fs=full"。
+    任一配置段缺键、或训练起止日无法解析时返回 None（调用方回退展示名，独立
+    成组不与真签名合并）；device 与策略 A 不变量（min_child_weight/
+    scale_pos_weight）不入签名。``valm=0`` 表示 v0.109.0 之前"早停即评估"的
+    旧协议产物；``obj``/``fs`` 缺键表示 v0.111.0 之前的 binary + full 产物。
     """
     sections = (
         (meta.get("train_config") or {}, _SIGNATURE_TRAIN_KEYS),
@@ -293,6 +333,14 @@ def build_param_signature(meta: dict) -> Optional[str]:
     if val_months is None:
         return None
     parts.append(f"valm={val_months}")
+    objective = _signature_objective(meta)
+    if objective is None:
+        return None
+    parts.append(f"obj={objective}")
+    feature_set = _signature_feature_set(meta)
+    if feature_set is None:
+        return None
+    parts.append(f"fs={feature_set}")
     return "|".join(parts)
 
 

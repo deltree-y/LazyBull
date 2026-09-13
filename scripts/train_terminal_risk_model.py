@@ -58,7 +58,8 @@ from src.lazybull.factors.risk.volatility_factors import (  # noqa: E402
 from src.lazybull.risk.terminal_loss import (  # noqa: E402
     AUDIT_PROXY_COLUMNS,
     BASE_FEATURES,
-    TERMINAL_LOSS_FEATURES,
+    FEATURE_SET_CHOICES,
+    SUPPORTED_OBJECTIVES,
     TERMINAL_LOSS_MODEL_TYPE,
     LabelCoverageAccumulator,
     MotherSectionCache,
@@ -78,6 +79,7 @@ from src.lazybull.risk.terminal_loss import (  # noqa: E402
     load_clean_daily_panels,
     load_cs_train_days,
     load_trade_calendar,
+    resolve_feature_set,
     save_terminal_loss_artifacts,
     split_stages_with_label_isolation,
     subsample_dates,
@@ -128,12 +130,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reg-lambda", type=float, default=1.0)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
+        "--feature-set",
+        default="full",
+        choices=list(FEATURE_SET_CHOICES),
+        help="特征集：full（冻结 33 列）/ core（10 列波动状态核心）/ "
+        "ic_admit（按训练段单变量 |IC| 降序取 top-k）；不同特征集是不同超参签名，"
+        "不得并入同一组比较",
+    )
+    parser.add_argument(
+        "--ic-top-k",
+        type=int,
+        default=8,
+        help="--feature-set ic_admit 的入选列数（必选列另计；只抽日不抽行）",
+    )
+    parser.add_argument(
+        "--objective",
+        default="binary",
+        choices=list(SUPPORTED_OBJECTIVES),
+        help="训练目标：binary（binary:logistic，输出即概率）/ "
+        "rank_pairwise（rank:pairwise + qid=trade_date，只学当日截面排序，"
+        "再用 Val 段 isotonic 映射回概率）；排序目标必须配 --eval-metric ndcg",
+    )
+    parser.add_argument(
         "--eval-metric",
         default="logloss",
-        choices=["logloss", "rank_ic_daily"],
-        help="早停指标：logloss（概率校准口径，默认）或 rank_ic_daily"
-        "（逐日截面 Spearman 均值，与门禁 lift 同向）；两种口径是不同的超参签名，"
-        "不得并入同一组比较",
+        choices=["logloss", "rank_ic_daily", "ndcg"],
+        help="早停指标：logloss（概率校准口径，默认）、rank_ic_daily"
+        "（逐日截面 Spearman 均值，与门禁 lift 同向）、ndcg（仅排序目标）；"
+        "不同口径是不同的超参签名，不得并入同一组比较",
     )
     # min_child_weight / scale_pos_weight 不暴露 CLI：
     # min_child_weight=1 与样本权重 1/期限网格大小 绑定（正则尺度策略 A 的设计
@@ -190,9 +214,7 @@ def build_matrix_chunked(args, label_config, open_panel, sigma_panel, limit_pane
     mother_validation_parts: List[Dict[str, Any]] = []
     # 母截面历史窗口按折准备一次（含 7 个月预热），各分块只切片：
     # 逐块重建窗口会重复加载分区与重算风控因子（实测折耗时 3~4 倍）。
-    mother_cache = MotherSectionCache(
-        args.data_root, feature_dates[0], feature_dates[-1]
-    )
+    mother_cache = MotherSectionCache(args.data_root, feature_dates[0], feature_dates[-1])
 
     for c0 in range(0, len(feature_dates), args.chunk_days):
         chunk_dates = feature_dates[c0 : c0 + args.chunk_days]
@@ -304,6 +326,7 @@ def main() -> int:
         reg_lambda=args.reg_lambda,
         random_state=args.random_state,
         eval_metric=args.eval_metric,
+        objective=args.objective,
         device=args.device,
     )
 
@@ -347,10 +370,25 @@ def main() -> int:
         )
         return 1
 
+    # 特征集解析（A，v0.111.0）：full / core / ic_admit
+    # ic_admit 只在训练段上做单变量 |IC| 排序（只抽日不抽行），未入选列仍留在
+    # 矩阵里，但冻结清单（feature_names）才是训练与推理的共同契约
+    feature_names, feature_set_record = resolve_feature_set(
+        args.feature_set, train_df, top_k=args.ic_top_k
+    )
+    logger.info(
+        f"特征集 {args.feature_set}: {len(feature_names)} 列"
+        + (
+            f"（ic_admit top_k={args.ic_top_k}，入选 {feature_set_record.get('selected')}）"
+            if feature_set_record.get("feature_set") == "ic_admit"
+            else ""
+        )
+    )
+
     result = train_terminal_loss_model(
         train_df,
         val_df,
-        TERMINAL_LOSS_FEATURES,
+        feature_names,
         train_config=train_config,
         label_config=label_config,
         stage_dates={
@@ -359,10 +397,22 @@ def main() -> int:
             "es": (args.es_start, args.es_end),
         },
     )
+    # 概率语义统一入口：rank_pairwise 必须经 Val isotonic 校准才是概率，
+    # 报告/落盘/后续政策一律走模型封装，禁止脚本自行分支绕过校准
+    model = TerminalLossModel(
+        TerminalLossModelConfig(
+            task_id=label_config.task_id,
+            feature_names=feature_names,
+            train_config=result.train_config,
+            label_config=result.label_config,
+        ),
+        result.classifier,
+        result.calibrator,
+    )
 
     # 概率质量报告：ES 段（评估/门禁，不参与早停）+ Val 段（早停参考）
     # + Train 段（过拟合差距诊断）
-    es_prob = result.classifier.predict_proba(es_df[TERMINAL_LOSS_FEATURES])[:, 1]
+    es_prob = model.predict_proba(es_df)
     es_report = evaluate_probability_quality(
         es_df["loss_label"].to_numpy(),
         es_prob,
@@ -371,13 +421,13 @@ def main() -> int:
     )
     val_report = evaluate_probability_quality(
         val_df["loss_label"].to_numpy(),
-        result.classifier.predict_proba(val_df[TERMINAL_LOSS_FEATURES])[:, 1],
+        model.predict_proba(val_df),
         val_df["h"].to_numpy(),
         sigma_values=val_df["sigma_daily_20"].to_numpy(),
     )
     train_report = evaluate_probability_quality(
         train_df["loss_label"].to_numpy(),
-        result.classifier.predict_proba(train_df[TERMINAL_LOSS_FEATURES])[:, 1],
+        model.predict_proba(train_df),
         train_df["h"].to_numpy(),
     )
     # ES 逐行预测落盘：门禁区间重判（block_stats）需要逐行预测，
@@ -397,13 +447,11 @@ def main() -> int:
     # 保存模型与报告
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    model_config = TerminalLossModelConfig(
-        task_id=label_config.task_id,
-        feature_names=TERMINAL_LOSS_FEATURES,
-        train_config=result.train_config,
-        label_config=result.label_config,
-        metadata={
+    model_config = model.config
+    model_config.metadata.update(
+        {
             **result.to_metadata(),
+            "feature_set": feature_set_record,
             "sampling": {
                 "chunk_days": args.chunk_days,
                 "h_per_group": args.h_per_group,
@@ -422,9 +470,8 @@ def main() -> int:
             "mother_section_validation": coverage_audit.get("mother_section_validation", {}),
             "coverage_audit_required": coverage_audit.get("required", {}),
             "es_predictions": None if es_predictions is None else int(len(es_predictions)),
-        },
+        }
     )
-    model = TerminalLossModel(model_config, result.classifier)
     report_payload = {
         "es": _report_to_json(es_report),
         "val": _report_to_json(val_report),

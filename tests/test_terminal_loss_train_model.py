@@ -11,6 +11,8 @@ from src.lazybull.risk.terminal_loss.model import (
     TerminalLossModelConfig,
 )
 from src.lazybull.risk.terminal_loss.train import (
+    EVAL_METRIC_NDCG,
+    OBJECTIVE_RANK_PAIRWISE,
     SigmoidCalibrator,
     TerminalLossTrainConfig,
     evaluate_probability_quality,
@@ -47,10 +49,10 @@ class TestTrain:
         train_df = _synthetic_matrix(800, seed=1)
         es_df = _synthetic_matrix(300, seed=2)
         result = train_terminal_loss_model(
-            train_df, es_df, FEATURES,
-            TerminalLossTrainConfig(
-                n_estimators=120, early_stopping_rounds=10, device="cpu"
-            ),
+            train_df,
+            es_df,
+            FEATURES,
+            TerminalLossTrainConfig(n_estimators=120, early_stopping_rounds=10, device="cpu"),
         )
         assert 0 < result.best_iteration <= 120
         meta = result.to_metadata()
@@ -148,16 +150,12 @@ class TestTrain:
         train_df = _synthetic_matrix(100, seed=3)
         es_df = _synthetic_matrix(50, seed=4)
         with pytest.raises(ValueError, match="缺少特征列"):
-            train_terminal_loss_model(
-                train_df, es_df, FEATURES + ["ghost_col"]
-            )
+            train_terminal_loss_model(train_df, es_df, FEATURES + ["ghost_col"])
 
     def test_empty_stage_rejected(self):
         train_df = _synthetic_matrix(100, seed=5)
         with pytest.raises(ValueError, match="为空"):
-            train_terminal_loss_model(
-                train_df, train_df.iloc[:0], FEATURES
-            )
+            train_terminal_loss_model(train_df, train_df.iloc[:0], FEATURES)
 
 
 class TestEvaluateQuality:
@@ -219,10 +217,10 @@ class TestTerminalLossModel:
         train_df = _synthetic_matrix(400, seed=9)
         es_df = _synthetic_matrix(200, seed=10)
         result = train_terminal_loss_model(
-            train_df, es_df, FEATURES,
-            TerminalLossTrainConfig(
-                n_estimators=40, early_stopping_rounds=5, device="cpu"
-            ),
+            train_df,
+            es_df,
+            FEATURES,
+            TerminalLossTrainConfig(n_estimators=40, early_stopping_rounds=5, device="cpu"),
         )
         config = TerminalLossModelConfig(
             task_id=result.label_config.task_id,
@@ -235,8 +233,7 @@ class TestTerminalLossModel:
 
     def test_predict_proba_contract(self):
         model = self._model()
-        df = pd.DataFrame({"f1": [0.1, -0.2], "f2": [0.0, 0.3],
-                           "remaining_intervals": [5, 19]})
+        df = pd.DataFrame({"f1": [0.1, -0.2], "f2": [0.0, 0.3], "remaining_intervals": [5, 19]})
         p = model.predict_proba(df)
         assert len(p) == 2
         assert ((p > 0) & (p < 1)).all()
@@ -254,9 +251,7 @@ class TestTerminalLossModel:
         loaded = TerminalLossModel.load(path)
         assert loaded.feature_names == model.feature_names
         df = pd.DataFrame({"f1": [0.3], "f2": [0.1], "remaining_intervals": [10]})
-        np.testing.assert_allclose(
-            loaded.predict_proba(df), model.predict_proba(df)
-        )
+        np.testing.assert_allclose(loaded.predict_proba(df), model.predict_proba(df))
         assert (tmp_path / "terminal_loss_model.json").exists()
 
     def test_artifact_version_mismatch_rejected(self, tmp_path):
@@ -272,3 +267,126 @@ class TestTerminalLossModel:
         )
         with pytest.raises(ValueError, match="版本不符"):
             TerminalLossModel.load(path)
+
+
+class TestRankPairwiseObjective:
+    """排序目标（v0.111.0）：rank:pairwise + qid=trade_date + Val isotonic 校准。"""
+
+    @staticmethod
+    def _result(seed: int = 31):
+        return train_terminal_loss_model(
+            _synthetic_matrix(600, seed=seed),
+            _synthetic_matrix(300, seed=seed + 1),
+            FEATURES,
+            TerminalLossTrainConfig(
+                n_estimators=60,
+                early_stopping_rounds=5,
+                device="cpu",
+                objective=OBJECTIVE_RANK_PAIRWISE,
+                eval_metric=EVAL_METRIC_NDCG,
+            ),
+        )
+
+    @staticmethod
+    def _model(result) -> TerminalLossModel:
+        config = TerminalLossModelConfig(
+            task_id=result.label_config.task_id,
+            feature_names=result.feature_names,
+            train_config=result.train_config,
+            label_config=result.label_config,
+            metadata=result.to_metadata(),
+        )
+        return TerminalLossModel(config, result.classifier, result.calibrator)
+
+    def test_trains_ranker_with_val_isotonic_calibration(self):
+        result = self._result()
+        assert type(result.classifier).__name__ == "XGBRanker"
+        assert result.calibrator is not None
+        meta = result.to_metadata()
+        # 目标与校准口径必须入元数据（无校准的排序分数不是概率，政策层不可用）
+        assert meta["objective"] == OBJECTIVE_RANK_PAIRWISE
+        assert meta["calibration"] == "isotonic_val"
+        assert 0 < result.best_iteration <= 60
+
+    def test_calibrated_probability_is_monotone_in_score(self):
+        result = self._result()
+        model = self._model(result)
+        df = pd.DataFrame(
+            {
+                "f1": [0.1, -0.2, 0.5, 0.0],
+                "f2": [0.0, 0.3, -0.1, 0.2],
+                "remaining_intervals": [5, 19, 3, 10],
+            }
+        )
+        prob = model.predict_proba(df)
+        raw = result.classifier.predict(df[FEATURES])
+        assert ((prob >= 0) & (prob <= 1)).all()
+        order = np.argsort(raw)
+        assert np.all(np.diff(prob[order]) >= -1e-12)
+
+    def test_save_load_roundtrip_keeps_calibrator(self, tmp_path):
+        model = self._model(self._result())
+        path = str(tmp_path / "rank_model.joblib")
+        model.save(path)
+        loaded = TerminalLossModel.load(path)
+        df = pd.DataFrame({"f1": [0.3], "f2": [0.1], "remaining_intervals": [10]})
+        np.testing.assert_allclose(loaded.predict_proba(df), model.predict_proba(df))
+        # 排序模型 + 校准器必须可 pickle（模型注册 joblib.dump 的硬要求）
+        joblib.dump(model, tmp_path / "registry.joblib")
+
+    def test_rank_model_without_calibrator_rejected(self):
+        result = self._result()
+        config = TerminalLossModelConfig(
+            task_id=result.label_config.task_id,
+            feature_names=result.feature_names,
+            train_config=result.train_config,
+            label_config=result.label_config,
+        )
+        model = TerminalLossModel(config, result.classifier)  # 故意不传校准器
+        df = pd.DataFrame({"f1": [0.3], "f2": [0.1], "remaining_intervals": [10]})
+        with pytest.raises(ValueError, match="必须携带 Val 段 isotonic 校准器"):
+            model.predict_proba(df)
+
+    def test_objective_and_metric_combinations_validated(self):
+        train_df = _synthetic_matrix(200, seed=41)
+        val_df = _synthetic_matrix(100, seed=42)
+        with pytest.raises(ValueError, match="早停指标必须为"):
+            train_terminal_loss_model(
+                train_df,
+                val_df,
+                FEATURES,
+                TerminalLossTrainConfig(
+                    device="cpu",
+                    objective=OBJECTIVE_RANK_PAIRWISE,
+                    eval_metric="logloss",
+                ),
+            )
+        with pytest.raises(ValueError, match="只对 objective=rank_pairwise 有效"):
+            train_terminal_loss_model(
+                train_df,
+                val_df,
+                FEATURES,
+                TerminalLossTrainConfig(device="cpu", eval_metric=EVAL_METRIC_NDCG),
+            )
+        with pytest.raises(ValueError, match="不支持的训练目标"):
+            train_terminal_loss_model(
+                train_df,
+                val_df,
+                FEATURES,
+                TerminalLossTrainConfig(device="cpu", objective="lambdarank"),
+            )
+
+    def test_rank_pairwise_requires_trade_date(self):
+        train_df = _synthetic_matrix(200, seed=43).drop(columns=["trade_date"])
+        val_df = _synthetic_matrix(100, seed=44)
+        with pytest.raises(ValueError, match="需要train矩阵包含 trade_date"):
+            train_terminal_loss_model(
+                train_df,
+                val_df,
+                FEATURES,
+                TerminalLossTrainConfig(
+                    device="cpu",
+                    objective=OBJECTIVE_RANK_PAIRWISE,
+                    eval_metric=EVAL_METRIC_NDCG,
+                ),
+            )

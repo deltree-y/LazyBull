@@ -76,6 +76,32 @@ TERMINAL_LOSS_FEATURES: List[str] = (
     DERIVED_FEATURES + BASE_FEATURES + list(PCT_FEATURE_BASES.keys())
 )
 
+#: 波动率状态核心清单（v0.111.0，机制驱动）：标签已按 σ√h 归一化，可学的截面
+#: 信息集中在“波动率/尺度状态 + 期限”。全量 33 列时 Val logloss 在第 7 棵树
+#: 即触底（模型几乎未训练）；核心子集在单折把 daynorm 1.119→1.392、
+#: raw 1.232→1.585（日志 data/walk_forward/terminal_risk_wf/screen_v0v3.log）。
+VOL_STATE_CORE_FEATURES: List[str] = [
+    "remaining_intervals",
+    "sigma_daily_20",
+    "expected_vol_over_horizon",
+    "cvar_95_20",
+    "max_drawdown_20",
+    "downside_vol_20",
+    "parkinson_vol_20",
+    "vol_of_vol_20",
+    "amount_cv_20",
+    "vol_ratio_5_20",
+]
+
+#: 特征集选项（显式枚举；未知取值必须报错，禁止隐式回退到 full）
+FEATURE_SET_CHOICES = ("full", "core", "ic_admit")
+
+#: ic_admit 必含列（期限与尺度直接入模，不参与筛选）
+IC_ADMIT_MANDATORY: List[str] = ["remaining_intervals", "sigma_daily_20"]
+
+#: ic_admit 筛选的抽日间隔（交易日；只抽日不抽行，否则日内排名失真）
+IC_ADMIT_SAMPLE_EVERY = 5
+
 #: 训练矩阵元数据列（非特征）
 META_COLUMNS: List[str] = [
     "ts_code",
@@ -134,6 +160,104 @@ def validate_feature_manifest(available_columns: Sequence[str]) -> None:
             f"特征母截面缺少 manifest 基础列: {sorted(set(missing))}；"
             f"特征清单冻结（方案 3.2），禁止静默缩减列数，请检查特征构建"
         )
+
+
+def _zscore_by_group(values: pd.Series, groups: pd.Series) -> pd.Series:
+    """按分组做 z-score（组内标准差为 0 时返回 NaN，不伪造成 0）。"""
+    mean = values.groupby(groups).transform("mean")
+    std = values.groupby(groups).transform("std")
+    return (values - mean) / std.replace(0.0, np.nan)
+
+
+def select_ic_admit_features(
+    train_matrix: pd.DataFrame,
+    candidates: Optional[Sequence[str]] = None,
+    top_k: int = 8,
+) -> Tuple[List[str], Dict[str, float]]:
+    """在训练段按逐日截面 Spearman IC 选列（``ic_admit`` 特征集，v0.111.0）。
+
+    只用训练段（不触碰 Val/ES）：每 ``IC_ADMIT_SAMPLE_EVERY`` 个交易日取 1 个
+    **完整横截面**（只抽日、不抽行，否则日内排名失真），对候选列计算逐日
+    Spearman IC 均值，按 |IC| 降序取 top-k，并入 ``IC_ADMIT_MANDATORY``。
+    选中列与 IC 值由调用方登记入元数据（procedure 冻结、输出随折记录）。
+
+    Args:
+        train_matrix: 训练段矩阵（须含 trade_date / loss_label 与候选列）
+        candidates: 候选列（默认 ``TERMINAL_LOSS_FEATURES`` 去掉 mandatory）
+        top_k: 入选列数（不含 mandatory）
+
+    Returns:
+        (feature_names, ic)：feature_names = mandatory 在前 + 按 |IC| 降序的 top-k
+
+    Raises:
+        ValueError: 训练段为空、top_k <= 0、候选列缺失或不足
+    """
+    if train_matrix is None or train_matrix.empty:
+        raise ValueError("ic_admit 筛选需要非空训练段矩阵")
+    if top_k <= 0:
+        raise ValueError(f"ic_admit 的 top_k 必须为正整数，当前 {top_k}")
+    pool = [c for c in (candidates or TERMINAL_LOSS_FEATURES) if c not in IC_ADMIT_MANDATORY]
+    missing = [c for c in pool if c not in train_matrix.columns]
+    if missing:
+        raise ValueError(f"ic_admit 候选列缺列: {sorted(missing)}；禁止静默跳过")
+    if len(pool) < top_k:
+        raise ValueError(f"ic_admit 候选列不足: 需要 {top_k}，实际 {len(pool)}")
+
+    days = sorted(train_matrix["trade_date"].astype(str).unique())
+    sampled = set(days[::IC_ADMIT_SAMPLE_EVERY])
+    sub = train_matrix[train_matrix["trade_date"].astype(str).isin(sampled)]
+    dates = sub["trade_date"].astype(str)
+    y_z = _zscore_by_group(sub["loss_label"].astype(float).groupby(dates).rank(), dates)
+    ic: Dict[str, float] = {}
+    for col in pool:
+        x_rank = sub[col].groupby(dates).rank()
+        x_z = _zscore_by_group(x_rank, dates)
+        daily = (y_z * x_z).groupby(dates).mean()
+        value = float(daily.mean()) if len(daily) else 0.0
+        ic[col] = value if np.isfinite(value) else 0.0
+    ranked = sorted(pool, key=lambda c: abs(ic[c]), reverse=True)[:top_k]
+    feature_names = list(IC_ADMIT_MANDATORY) + ranked
+    logger.info(f"ic_admit 选列（训练段 {len(sampled)}/{len(days)} 日）: {feature_names}")
+    return feature_names, ic
+
+
+def resolve_feature_set(
+    feature_set: str,
+    train_matrix: pd.DataFrame,
+    top_k: int = 8,
+) -> Tuple[List[str], Dict[str, object]]:
+    """按特征集选项解析模型输入清单（v0.111.0，显式枚举不隐式回退）。
+
+    - ``full``：33 列冻结 manifest（方案 3.2）；
+    - ``core``：``VOL_STATE_CORE_FEATURES``（波动率/尺度状态 + 期限）；
+    - ``ic_admit``：训练段 IC 准入（见 ``select_ic_admit_features``）。
+
+    Returns:
+        (feature_names, record)：record 含 feature_set / selected 与（ic_admit 时）
+        top_k / ic 审计字段，由调用方写入模型元数据
+
+    Raises:
+        ValueError: 未知 feature_set
+    """
+    if feature_set == "full":
+        return list(TERMINAL_LOSS_FEATURES), {
+            "feature_set": "full",
+            "selected": list(TERMINAL_LOSS_FEATURES),
+        }
+    if feature_set == "core":
+        return list(VOL_STATE_CORE_FEATURES), {
+            "feature_set": "core",
+            "selected": list(VOL_STATE_CORE_FEATURES),
+        }
+    if feature_set == "ic_admit":
+        names, ic = select_ic_admit_features(train_matrix, top_k=top_k)
+        return names, {
+            "feature_set": "ic_admit",
+            "top_k": int(top_k),
+            "selected": list(names),
+            "ic": {k: round(float(v), 6) for k, v in ic.items()},
+        }
+    raise ValueError(f"未知 feature_set {feature_set!r}（可用: {list(FEATURE_SET_CHOICES)}）")
 
 
 def add_pct_features(day_df: pd.DataFrame, mother_df: pd.DataFrame) -> pd.DataFrame:

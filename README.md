@@ -301,6 +301,14 @@ python scripts/train_terminal_risk_model.py \
 #           / --subsample / --colsample-bytree / --reg-lambda 可透传
 #（min_child_weight 与 scale_pos_weight 为正则尺度策略 A 设计不变量，不暴露）
 # 训练设备默认 cuda（与主模型一致），--device cpu 可切换
+# 特征集（--feature-set，v0.111.0）：full 33 列冻结清单（默认）；core = 波动率/
+# 尺度状态 + 期限 10 列（标签已按 σ√h 归一化，可学截面信息集中于此；单折实测
+# daynorm 1.119→1.392）；ic_admit = 训练段逐日截面 Spearman IC 降序 top-k
+#（--ic-top-k 默认 8，只抽日不抽行，必含期限与 σ；选中列与 IC 值随折落盘）
+# 训练目标（--objective，v0.111.0）：binary 输出即概率（默认）；rank_pairwise =
+# rank:pairwise + qid=trade_date（只学当日截面排序，必须配 --eval-metric ndcg），
+# 排序分数必须经 **Val 段 isotonic 校准** 才是概率，校准器随 artifact 落盘
+#（缺校准器预测直接报错）。特征集与目标都是签名维度（fs= / obj=），禁止混组比较
 
 # 滚动 Walk-forward（8 折研究型 WF：排序信息量的时间稳定性验证）
 powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.ps1
@@ -317,12 +325,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.
 
 # 门禁区间重判（点估计余量薄时必看：判断"通过"是否只是超参选择的结果）
 python scripts/analyze_terminal_risk_gate.py --wf-root data\walk_forward\terminal_risk_wf
+# 双判据并列（v0.110.0，--score-mode {both,raw,daynorm}，默认 both）：raw = p_loss
+#（跨日期水平对齐 + 当日截面排序混合），daynorm = p_loss_daypct（当日截面百分位，
+# 只反映截面排序）；两口径共用阈值 1.1 且都必须"逐折区间下限 > 阈值"才能算通过，
+# 只报一个口径属口径选择偏差（实测两口径的失败折不重叠）
 # 折级口径：8 折 = 8 个独立制度，输出折间分布（min/median/max/std）、达标折占比、
-# 均值 lift 的 90% 自举区间；产物 gate_ci.csv
+# 均值 lift 的 90% 自举区间；产物 gate_ci.csv（每行 = 判据）
 # 注意折级自举抽不到比观测最小值更差的折，"最差折是否真高于阈值"须看逐折分块区间
 # 逐折口径（需 ES 逐行预测，训练已默认落盘）：按连续交易日分块做 moving-block
 # bootstrap，块长默认 5/10/20 日（方案第 6 节的 40 日块是组合级多年 OOS 口径，
-# ES 段只有几十个交易日，用 40 日会使块数不足甚至退化为原样本）；产物 gate_ci_block.csv
+# ES 段只有几十个交易日，用 40 日会使块数不足甚至退化为原样本）；
+# 产物 gate_ci_block.csv（每行 = 折 × 块长 × 判据）
 ```
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的

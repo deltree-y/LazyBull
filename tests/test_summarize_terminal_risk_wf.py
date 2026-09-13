@@ -96,7 +96,8 @@ def _summary_row(fold: str, lift: float, pred_bias: float = 0.0) -> dict:
 
 
 def test_parse_experiment_suffix():
-    """后缀解析：baseline / _d* / _d*_lr* / _w*y / _v*m / _em* / _s* 与未知尾缀兜底。"""
+    """后缀解析：baseline / _d* / _d*_lr* / _w*y / _v*m / _em* / _fs* / _obj* / _s*
+    与未知尾缀兜底。"""
     empty = {
         "suffix": "",
         "depth": None,
@@ -104,6 +105,8 @@ def test_parse_experiment_suffix():
         "train_window_years": None,
         "val_months": None,
         "eval_metric": None,
+        "feature_set": None,
+        "objective": None,
         "seed": None,
     }
     assert parse_experiment_suffix("2022H2") == empty
@@ -126,15 +129,30 @@ def test_parse_experiment_suffix():
     # 早停指标后缀（v0.109.0 新增消融位；meta 的 `em=` 才是权威身份）
     assert parse_experiment_suffix("2022H2_v6m_emrank_ic")["eval_metric"] == "rank_ic"
     assert parse_experiment_suffix("2022H2_v6m_emrank_ic")["suffix"] == "_v6m_emrank_ic"
-    combined = parse_experiment_suffix("2022H2_d5_lr0.04_w5y_v6m_emlogloss_s7")
-    assert combined["suffix"] == "_d5_lr0.04_w5y_v6m_emlogloss_s7"
+    # 特征集与训练目标后缀（v0.111.0 新增消融位：非默认值恒追加）
+    assert parse_experiment_suffix("2022H2_v6m_fscore")["feature_set"] == "core"
+    assert parse_experiment_suffix("2022H2_v6m_fscore")["suffix"] == "_v6m_fscore"
+    assert parse_experiment_suffix("2022H2_v6m_fsic_admit")["feature_set"] == "ic_admit"
+    assert parse_experiment_suffix("2022H2_v6m_objrank_pairwise")["objective"] == ("rank_pairwise")
+    assert parse_experiment_suffix("2022H2_v6m_objrank_pairwise")["suffix"] == (
+        "_v6m_objrank_pairwise"
+    )
+    combined = parse_experiment_suffix("2022H2_d5_lr0.04_w5y_v6m_emlogloss_fscore_s7")
+    assert combined["suffix"] == "_d5_lr0.04_w5y_v6m_emlogloss_fscore_s7"
     assert (
         combined["depth"],
         combined["train_window_years"],
         combined["val_months"],
         combined["eval_metric"],
+        combined["feature_set"],
         combined["seed"],
-    ) == (5, 5, 6, "logloss", 7)
+    ) == (5, 5, 6, "logloss", "core", 7)
+    goal_combined = parse_experiment_suffix("2022H2_v6m_fscore_objrank_pairwise")
+    assert goal_combined["suffix"] == "_v6m_fscore_objrank_pairwise"
+    assert (goal_combined["feature_set"], goal_combined["objective"]) == (
+        "core",
+        "rank_pairwise",
+    )
     # 未知尾缀按无后缀处理（同后缀目录仍聚同组），保证新后缀类型不中断汇总
     assert parse_experiment_suffix("2022H2_x9")["suffix"] == ""
 
@@ -150,9 +168,10 @@ def test_build_param_signature():
         },
     }
     # valm=0：v0.109.0 之前的旧协议（早停即评估），与新协议批次天然分属不同组
+    # obj/fs：v0.111.0 之前的产物无这两段，按 binary + full 入签名
     assert build_param_signature(meta) == (
         "d=3|lr=0.03|nest=500|esr=30|sub=0.8|col=0.8|lam=1.0|s=42|em=logloss"
-        "|k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=1|valm=0"
+        "|k=1.0|hmax=20|sigw=20|hpg=2|end=3|wy=1|valm=0|obj=binary|fs=full"
     )
     assert build_param_signature({}) is None
     broken = {
@@ -189,9 +208,9 @@ def test_param_signature_separates_seed_and_window():
     base = build_param_signature(_meta(42, "20210701"))
     other_seed = build_param_signature(_meta(7, "20210701"))
     longer_window = build_param_signature(_meta(42, "20190701"))
-    assert "|s=42|" in base and base.endswith("|wy=3|valm=0")
-    assert "|s=7|" in other_seed and other_seed.endswith("|wy=3|valm=0")
-    assert "|s=42|" in longer_window and longer_window.endswith("|wy=5|valm=0")
+    assert "|s=42|" in base and base.endswith("|wy=3|valm=0|obj=binary|fs=full")
+    assert "|s=7|" in other_seed and other_seed.endswith("|wy=3|valm=0|obj=binary|fs=full")
+    assert "|s=42|" in longer_window and longer_window.endswith("|wy=5|valm=0|obj=binary|fs=full")
     assert len({base, other_seed, longer_window}) == 3
 
 
@@ -208,11 +227,45 @@ def test_param_signature_separates_val_segment():
             "metadata": {"sampling": _SAMPLING_CFG, "stage_dates": stage_dates},
         }
 
-    assert build_param_signature(_meta(None)).endswith("|valm=0")
-    assert build_param_signature(_meta(["20240701", "20241231"])).endswith("|valm=6")
+    assert build_param_signature(_meta(None)).endswith("|valm=0|obj=binary|fs=full")
+    assert build_param_signature(_meta(["20240701", "20241231"])).endswith(
+        "|valm=6|obj=binary|fs=full"
+    )
     # 非法 Val 区间（起止倒置）→ 整条签名返回 None（数据问题独立成组，
     # 不得静默当成旧协议 valm=0）
     assert build_param_signature(_meta(["20241231", "20240701"])) is None
+
+
+def test_param_signature_separates_objective_and_feature_set():
+    """训练目标与特征集都是签名维度：binary 与 rank_pairwise（或 full 与 core）
+    不得并入同一组取跨组最小值。"""
+
+    def _meta(objective=None, feature_set=None) -> dict:
+        train_cfg = dict(_TRAIN_CFG)
+        if objective is not None:
+            train_cfg["objective"] = objective
+        metadata = {
+            "sampling": _SAMPLING_CFG,
+            "stage_dates": {"train": ["20220101", "20231231"], "es": ["20240101", "20240630"]},
+        }
+        if feature_set is not None:
+            metadata["feature_set"] = {"feature_set": feature_set, "selected": ["sigma_daily_20"]}
+        return {"train_config": train_cfg, "label_config": _LABEL_CFG, "metadata": metadata}
+
+    legacy = build_param_signature(_meta())
+    binary_core = build_param_signature(_meta(feature_set="core"))
+    rank_full = build_param_signature(_meta(objective="rank_pairwise"))
+    rank_core = build_param_signature(_meta(objective="rank_pairwise", feature_set="core"))
+    assert legacy.endswith("|obj=binary|fs=full")
+    assert binary_core.endswith("|obj=binary|fs=core")
+    assert rank_full.endswith("|obj=rank_pairwise|fs=full")
+    assert rank_core.endswith("|obj=rank_pairwise|fs=core")
+    assert len({legacy, binary_core, rank_full, rank_core}) == 4
+    # feature_set 记录类型非法（如误写成字符串）→ 整条签名返回 None，
+    # 不得静默当成 full 与基线混组
+    broken = _meta()
+    broken["metadata"]["feature_set"] = "core"
+    assert build_param_signature(broken) is None
 
 
 def test_build_tuning_table_score_and_gate():

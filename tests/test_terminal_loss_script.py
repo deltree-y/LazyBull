@@ -12,6 +12,8 @@ from scripts.train_terminal_risk_model import main as train_main
 from src.lazybull.risk.terminal_loss import (
     BASE_FEATURES,
     MOTHER_SECTION_FACTORS,
+    TERMINAL_LOSS_FEATURES,
+    VOL_STATE_CORE_FEATURES,
     TerminalLossModel,
     build_mother_section,
 )
@@ -283,3 +285,67 @@ def test_script_versioned_mode_end_to_end(synthetic_env, monkeypatch):
     proba = model.predict_proba(infer_df)
     assert proba.shape == (3,)
     assert ((proba >= 0) & (proba <= 1)).all()
+
+
+def test_script_core_feature_set_metadata(synthetic_env, monkeypatch):
+    """--feature-set core：模型清单 = 波动状态核心列，且特征集落盘（签名维度）。"""
+    env = synthetic_env
+    assert _run_train(env, monkeypatch, ["--fixed-name", "--feature-set", "core"]) == 0
+
+    with open(Path(env["out_dir"]) / "terminal_loss_model.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["feature_names"] == VOL_STATE_CORE_FEATURES
+    # 特征集入元数据（summarize 的 `fs=` 签名与门禁分组依赖它）
+    assert meta["metadata"]["feature_set"]["feature_set"] == "core"
+    assert meta["metadata"]["feature_set"]["selected"] == VOL_STATE_CORE_FEATURES
+
+
+def test_script_ic_admit_feature_set_records_selection(synthetic_env, monkeypatch):
+    """--feature-set ic_admit：训练段选列与 IC 审计值随折落盘。"""
+    env = synthetic_env
+    assert (
+        _run_train(
+            env, monkeypatch, ["--fixed-name", "--feature-set", "ic_admit", "--ic-top-k", "3"]
+        )
+        == 0
+    )
+
+    with open(Path(env["out_dir"]) / "terminal_loss_model.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    record = meta["metadata"]["feature_set"]
+    assert record["feature_set"] == "ic_admit"
+    assert record["top_k"] == 3
+    assert len(record["selected"]) == 5  # mandatory 2 + top_k 3
+    assert meta["feature_names"] == record["selected"]
+    assert len(record["ic"]) == len(TERMINAL_LOSS_FEATURES) - 2
+
+
+def test_script_rank_pairwise_end_to_end(synthetic_env, monkeypatch):
+    """--objective rank_pairwise：排序分数必须经 Val isotonic 回概率后落盘。"""
+    env = synthetic_env
+    assert (
+        _run_train(
+            env,
+            monkeypatch,
+            ["--fixed-name", "--objective", "rank_pairwise", "--eval-metric", "ndcg"],
+        )
+        == 0
+    )
+    out = Path(env["out_dir"])
+    with open(out / "terminal_loss_model.json", encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["train_config"]["objective"] == "rank_pairwise"
+    assert meta["train_config"]["eval_metric"] == "ndcg"
+    assert meta["metadata"]["objective"] == "rank_pairwise"
+    assert meta["metadata"]["calibration"] == "isotonic_val"
+    assert meta["metadata"]["best_iteration"] is not None
+
+    with open(out / "terminal_loss_report.json", encoding="utf-8") as f:
+        report = json.load(f)
+    assert 0.0 <= report["es"]["mean_pred"] <= 1.0
+
+    # 校准器随 artifact 持久化：重新加载后仍能输出概率（缺校准器会报错）
+    model = TerminalLossModel.load(str(out / "terminal_loss_model.joblib"))
+    infer_df = pd.DataFrame([{c: 0.0 for c in model.feature_names}])
+    proba = model.predict_proba(infer_df)
+    assert 0.0 <= float(proba[0]) <= 1.0

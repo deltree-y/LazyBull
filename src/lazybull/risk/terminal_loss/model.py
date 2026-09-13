@@ -14,7 +14,7 @@ import pandas as pd
 from loguru import logger
 
 from .labels import TerminalLossLabelConfig
-from .train import TerminalLossTrainConfig
+from .train import OBJECTIVE_RANK_PAIRWISE, TerminalLossTrainConfig
 
 MODEL_ARTIFACT_VERSION = 1
 
@@ -40,11 +40,22 @@ class TerminalLossModelConfig:
 
 
 class TerminalLossModel:
-    """期末异常亏损二分类模型封装。"""
+    """期末异常亏损模型封装。
 
-    def __init__(self, config: TerminalLossModelConfig, classifier: Any) -> None:
+    ``binary`` 目标：classifier 直接输出概率；
+    ``rank_pairwise`` 目标：classifier 输出排序分数，必须经 Val 段 isotonic
+    校准器映射回概率（缺校准器报错，不得静默当概率用）。
+    """
+
+    def __init__(
+        self,
+        config: TerminalLossModelConfig,
+        classifier: Any,
+        calibrator: Any = None,
+    ) -> None:
         self.config = config
         self._clf = classifier
+        self._calibrator = calibrator
 
     # ── 预测 ──────────────────────────────────────────────
 
@@ -64,6 +75,14 @@ class TerminalLossModel:
                 f"预测输入缺少特征列: {missing}；特征清单已冻结，" f"请检查特征母截面构建"
             )
         X = features_df[self.config.feature_names]
+        if self.config.train_config.objective == OBJECTIVE_RANK_PAIRWISE:
+            if self._calibrator is None:
+                raise ValueError(
+                    "objective=rank_pairwise 的模型必须携带 Val 段 isotonic 校准器"
+                    "（排序分数不是概率）；缺校准器不得静默当概率输出"
+                )
+            scores = np.asarray(self._clf.predict(X), dtype=float)
+            return np.asarray(self._calibrator.transform(scores), dtype=float)
         return self._clf.predict_proba(X)[:, 1]
 
     # ── 序列化 ────────────────────────────────────────────
@@ -74,6 +93,7 @@ class TerminalLossModel:
             "artifact_version": MODEL_ARTIFACT_VERSION,
             "config": asdict(self.config),
             "classifier": self._clf,
+            "calibrator": self._calibrator,
         }
         joblib.dump(payload, path)
         sidecar = path.rsplit(".", 1)[0] + ".json"
@@ -97,7 +117,7 @@ class TerminalLossModel:
             label_config=TerminalLossLabelConfig(**raw.get("label_config", {})),
             metadata=raw.get("metadata", {}),
         )
-        return cls(config, payload["classifier"])
+        return cls(config, payload["classifier"], payload.get("calibrator"))
 
     @property
     def feature_names(self) -> List[str]:

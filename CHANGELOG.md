@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.0] - 2026-09-12
+
+### Added
+
+- **terminal_loss 特征集可切（`--feature-set`，机制驱动）**：8 折结果指向一个具体机制——标签本身已按 `σ√h` 归一化，可学的截面信息集中在"波动率/尺度状态 + 期限"，而 33 列冻结清单直接喂给一个 Val logloss 第 7 轮就触底（`best_iteration=7`）的模型时，容量被稀释到几乎无法训练。现新增三个显式特征集（未知取值报错，不隐式回退）：
+  - `full`（默认）：33 列冻结 manifest，行为完全不变；
+  - `core`：`VOL_STATE_CORE_FEATURES`（10 列：`remaining_intervals`、`sigma_daily_20`、`expected_vol_over_horizon`、`cvar_95_20`、`max_drawdown_20`、`downside_vol_20`、`parkinson_vol_20`、`vol_of_vol_20`、`amount_cv_20`、`vol_ratio_5_20`）；单折（2023H2）实测 daynorm 1.119→1.392、raw 1.232→1.585；
+  - `ic_admit`：只在**训练段**按逐日截面 Spearman IC 选列（`select_ic_admit_features`，每 5 个交易日取 1 个**完整横截面**——只抽日不抽行，否则日内排名失真；`remaining_intervals`/`sigma_daily_20` 为必含列不参与筛选；按 |IC| 降序取 top-k，`--ic-top-k` 默认 8），选中列与 IC 值随折写入元数据（可重建"当时选了什么、依据什么"）。
+  - `resolve_feature_set()` 返回 `(feature_names, record)`，记录写入模型元数据 `metadata.feature_set`；训练与推理共用同一冻结清单。
+
+- **terminal_loss 训练目标可切（`--objective`）：排序目标 + Val isotonic 校准**：决策只需要"当日截面排序"，而池化 logloss 还会花容量拟合跨日水平——该成分在样本外是 regime 赌注（`Spearman(当日事件率, 日均σ)` 8 折中 6 折为负、2025H2/2026H1 翻正），学它既不可靠又挤占排序能力。
+  - `binary`（默认）：`XGBClassifier(binary:logistic)`，输出即概率，行为不变；
+  - `rank_pairwise`：`XGBRanker(objective="rank:pairwise", eval_metric="ndcg")`，按 `trade_date` 分组 `qid`（同日内成对比较，只学截面排序）；排序分数不是概率，因此**必须在 Val 段拟合 isotonic 回归**映射回概率（阈值政策与概率质量报告仍拿概率语义），校准器随 artifact 落盘。
+  - 组合校验显式失败：`rank_pairwise` 必须配 `--eval-metric ndcg`、`ndcg` 只对排序目标有效、未知目标报错——不静默回退。
+  - `TerminalLossModel` 新增 `calibrator`：`predict_proba` 按目标分支，排序目标缺校准器直接报错（不得把排序分数当概率用）；save/load 持久化校准器（`MODEL_ARTIFACT_VERSION` 保持 1，`calibrator` 为可选键，旧产物 = binary）。
+  - 元数据新增 `objective` 与 `calibration`（`none` / `isotonic_val`）；`train_terminal_risk_model.py` 的 ES/Val/Train 三段概率一律经模型封装预测，不再直接调 `classifier.predict_proba`（否则校准会被静默绕过）。
+- **`obj=` / `fs=` 入超参签名**：`summarize_terminal_risk_wf.py` 签名新增训练目标（`obj=`，缺键按 `binary`）与特征集（`fs=`，缺键按 `full`，记录类型非法返回 None 独立成组）；折目录后缀新增 `_fs*` / `_obj*`（非默认值恒追加）。
+- **批处理新增两个消融维度**：`batch_terminal_risk_wf.ps1` 新增 `$feature_set_list` / `$objective_list`（`$ic_top_k` 透传）；排序目标恒为单条 `ndcg` 臂（忽略 `$eval_metric_list`，不生成非法组合），`$total` 同步计数。
+
+### Fixed
+
+- **折目录后缀解析歧义**：`_em` 组原用贪婪 `[a-z_]+`，会把后续 `_fs*`/`_s*` 一起吞掉（实测 `..._v6m_emlogloss_fscore_s7` 解析成 `em=logloss_fscore`），使展示分组名错位；文字段改为惰性量词（后缀只是展示名，超参身份仍以 meta 签名为权威）。
+
+### Tests
+
+- `test_terminal_loss_dataset.py`：`TestFeatureSetResolution`——core ⊆ full / 冻结清单解析 / 未知取值报错 / ic_admit 必含列在前且与标签单调的列排第一 + IC 审计落盘 / 确定性 / 只抽日不抽行（单日矩阵等价）/ 空矩阵·top_k·缺列·候选不足四个守卫。
+- `test_terminal_loss_train_model.py`：`TestRankPairwiseObjective`——训练产出 `XGBRanker` + isotonic 校准且元数据登记；校准后概率单调于排序分数；save/load 保留校准器且可 pickle；缺校准器预测报错；目标×指标非法组合报错；缺 `trade_date` 报错。
+- `test_terminal_loss_script.py`：CLI 端到端 `--feature-set core`（清单与元数据）、`--feature-set ic_admit`（选列数与 IC 覆盖清单）、`--objective rank_pairwise --eval-metric ndcg`（元数据 + ES 概率口径 + 重载预测）。
+- `test_summarize_terminal_risk_wf.py`：`_fs*`/`_obj*` 后缀解析、`obj=`/`fs=` 签名维度与旧产物缺键默认、非法 feature_set 记录返回 None。
+
 ## [0.110.0] - 2026-09-12
 
 ### Added

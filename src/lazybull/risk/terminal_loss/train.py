@@ -24,13 +24,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from loguru import logger
+from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
     log_loss,
 )
-from xgboost import XGBClassifier
+from xgboost import XGBClassifier, XGBRanker
 
 from ...ml.train_core.eval import make_neg_rank_ic_daily
 from .labels import TerminalLossLabelConfig
@@ -40,8 +41,20 @@ REG_SCALE_POLICY_A = "A_keep_regularization_with_1_over_grid_weights"
 #: 逐日截面 Spearman RankIC 均值早停指标（与门禁 lift 同向）
 EVAL_METRIC_RANK_IC_DAILY = "rank_ic_daily"
 
+#: 排序目标（rank_pairwise）的早停指标（只对排序目标有效）
+EVAL_METRIC_NDCG = "ndcg"
+
 #: 支持的早停指标（未知取值必须明确失败，禁止静默回退）
-SUPPORTED_EVAL_METRICS = ("logloss", EVAL_METRIC_RANK_IC_DAILY)
+SUPPORTED_EVAL_METRICS = ("logloss", EVAL_METRIC_RANK_IC_DAILY, EVAL_METRIC_NDCG)
+
+#: 训练目标（v0.111.0，显式枚举）
+#: - binary：XGBClassifier(objective=binary:logistic)，输出即概率；
+#: - rank_pairwise：XGBRanker(rank:pairwise, qid=trade_date) 只学“当日截面排序”
+#:   （单折 2023H2：daynorm 1.119→1.334、raw 1.232→1.472），再用 Val 段
+#:   isotonic 映射回概率——阈值政策仍拿到概率语义；校准器随 artifact 落盘。
+OBJECTIVE_BINARY = "binary"
+OBJECTIVE_RANK_PAIRWISE = "rank_pairwise"
+SUPPORTED_OBJECTIVES = (OBJECTIVE_BINARY, OBJECTIVE_RANK_PAIRWISE)
 
 
 @dataclass(frozen=True)
@@ -64,6 +77,7 @@ class TerminalLossTrainConfig:
     scale_pos_weight: float = 1.0
     random_state: int = 42
     eval_metric: str = "logloss"
+    objective: str = OBJECTIVE_BINARY
     device: str = "cuda"
     regularization_scale_policy: str = REG_SCALE_POLICY_A
 
@@ -78,6 +92,8 @@ class TerminalLossTrainResult:
     label_config: TerminalLossLabelConfig
     feature_names: List[str]
     metadata: Dict[str, Any] = field(default_factory=dict)
+    #: 排序目标的 Val 段 isotonic 校准器（binary 目标为 None）
+    calibrator: Optional[Any] = None
 
     def to_metadata(self) -> Dict[str, Any]:
         """导出 JSON 安全的元数据。"""
@@ -126,51 +142,72 @@ def train_terminal_loss_model(
     if train_matrix.empty or val_matrix.empty:
         raise ValueError("训练段或早停段(Val)为空，拒绝训练")
 
-    X_train = train_matrix[feature_names]
-    y_train = train_matrix["loss_label"].astype(int)
-    w_train = train_matrix["sample_weight"].astype(float)
-    X_val = val_matrix[feature_names]
-    y_val = val_matrix["loss_label"].astype(int)
-
-    # 早停指标：rank_ic_daily 用 Val 段的 trade_date 分组（行序必须与 eval_set 一致）
-    if cfg.eval_metric == EVAL_METRIC_RANK_IC_DAILY:
-        if "trade_date" not in val_matrix.columns:
-            raise ValueError("eval_metric=rank_ic_daily 需要 Val 矩阵包含 trade_date 列")
-        eval_metric: Any = make_neg_rank_ic_daily(
-            val_matrix["trade_date"].astype(str).to_numpy()
+    if cfg.objective not in SUPPORTED_OBJECTIVES:
+        raise ValueError(
+            f"不支持的训练目标 {cfg.objective!r}（可用: {list(SUPPORTED_OBJECTIVES)}）"
         )
-        logger.info(
-            f"早停指标: 逐日截面 Spearman RankIC 均值（Val 段 "
-            f"{val_matrix['trade_date'].nunique()} 个交易日，与门禁 lift 同向）"
+    calibrator: Optional[Any] = None
+    if cfg.objective == OBJECTIVE_RANK_PAIRWISE:
+        if cfg.eval_metric != EVAL_METRIC_NDCG:
+            raise ValueError(
+                f"objective={OBJECTIVE_RANK_PAIRWISE} 的早停指标必须为 "
+                f"{EVAL_METRIC_NDCG}（当前 {cfg.eval_metric!r}）：排序目标不与"
+                f"概率口径早停指标混用"
+            )
+        clf, calibrator, best_iteration = _fit_rank_pairwise(
+            train_matrix, val_matrix, feature_names, cfg
         )
     else:
-        eval_metric = cfg.eval_metric
+        if cfg.eval_metric == EVAL_METRIC_NDCG:
+            raise ValueError(
+                f"eval_metric={EVAL_METRIC_NDCG} 只对 objective="
+                f"{OBJECTIVE_RANK_PAIRWISE} 有效（当前 objective={cfg.objective!r}）"
+            )
+        X_train = train_matrix[feature_names]
+        y_train = train_matrix["loss_label"].astype(int)
+        w_train = train_matrix["sample_weight"].astype(float)
+        X_val = val_matrix[feature_names]
+        y_val = val_matrix["loss_label"].astype(int)
 
-    clf = XGBClassifier(
-        objective="binary:logistic",
-        eval_metric=eval_metric,
-        max_depth=cfg.max_depth,
-        learning_rate=cfg.learning_rate,
-        n_estimators=cfg.n_estimators,
-        early_stopping_rounds=cfg.early_stopping_rounds,
-        subsample=cfg.subsample,
-        colsample_bytree=cfg.colsample_bytree,
-        reg_lambda=cfg.reg_lambda,
-        min_child_weight=cfg.min_child_weight,
-        scale_pos_weight=cfg.scale_pos_weight,
-        random_state=cfg.random_state,
-        tree_method="hist",
-        device=cfg.device,
-    )
-    clf.fit(
-        X_train,
-        y_train,
-        sample_weight=w_train,
-        eval_set=[(X_val, y_val)],
-        sample_weight_eval_set=[(val_matrix["sample_weight"].astype(float),)],
-        verbose=False,
-    )
-    best_iteration = int(getattr(clf, "best_iteration", cfg.n_estimators) or cfg.n_estimators)
+        # 早停指标：rank_ic_daily 用 Val 段的 trade_date 分组（行序必须与 eval_set 一致）
+        if cfg.eval_metric == EVAL_METRIC_RANK_IC_DAILY:
+            if "trade_date" not in val_matrix.columns:
+                raise ValueError("eval_metric=rank_ic_daily 需要 Val 矩阵包含 trade_date 列")
+            eval_metric: Any = make_neg_rank_ic_daily(
+                val_matrix["trade_date"].astype(str).to_numpy()
+            )
+            logger.info(
+                f"早停指标: 逐日截面 Spearman RankIC 均值（Val 段 "
+                f"{val_matrix['trade_date'].nunique()} 个交易日，与门禁 lift 同向）"
+            )
+        else:
+            eval_metric = cfg.eval_metric
+
+        clf = XGBClassifier(
+            objective="binary:logistic",
+            eval_metric=eval_metric,
+            max_depth=cfg.max_depth,
+            learning_rate=cfg.learning_rate,
+            n_estimators=cfg.n_estimators,
+            early_stopping_rounds=cfg.early_stopping_rounds,
+            subsample=cfg.subsample,
+            colsample_bytree=cfg.colsample_bytree,
+            reg_lambda=cfg.reg_lambda,
+            min_child_weight=cfg.min_child_weight,
+            scale_pos_weight=cfg.scale_pos_weight,
+            random_state=cfg.random_state,
+            tree_method="hist",
+            device=cfg.device,
+        )
+        clf.fit(
+            X_train,
+            y_train,
+            sample_weight=w_train,
+            eval_set=[(X_val, y_val)],
+            sample_weight_eval_set=[(val_matrix["sample_weight"].astype(float),)],
+            verbose=False,
+        )
+        best_iteration = int(getattr(clf, "best_iteration", cfg.n_estimators) or cfg.n_estimators)
 
     meta: Dict[str, Any] = {
         # best_iteration 必须落盘：WF 汇总（summarize_terminal_risk_wf）与早停健康度
@@ -180,16 +217,18 @@ def train_terminal_loss_model(
         # n_val = 早停段（Val）行数；评估段（ES）行数 n_es 由调用方按评估矩阵登记
         # （早停段与评估段分离：门禁指标不得来自早停选择段，方案 5.2）
         "n_val": int(len(val_matrix)),
-        "train_event_rate": float(y_train.mean()),
-        "val_event_rate": float(y_val.mean()),
+        "train_event_rate": float(train_matrix["loss_label"].mean()),
+        "val_event_rate": float(val_matrix["loss_label"].mean()),
+        "objective": cfg.objective,
+        "calibration": ("isotonic_val" if cfg.objective == OBJECTIVE_RANK_PAIRWISE else "none"),
         "stage_dates": {k: list(v) for k, v in (stage_dates or {}).items()},
         "train_h_distribution": train_matrix["h"].value_counts().sort_index().to_dict(),
         "val_h_distribution": val_matrix["h"].value_counts().sort_index().to_dict(),
     }
     logger.info(
-        f"terminal_loss 训练完成: train={len(train_matrix)} 行"
-        f"(事件率 {y_train.mean():.4f}), val={len(val_matrix)} 行"
-        f"(事件率 {y_val.mean():.4f}), best_iteration={best_iteration}"
+        f"terminal_loss 训练完成: objective={cfg.objective}, train={len(train_matrix)} 行"
+        f"(事件率 {train_matrix['loss_label'].mean():.4f}), val={len(val_matrix)} 行"
+        f"(事件率 {val_matrix['loss_label'].mean():.4f}), best_iteration={best_iteration}"
         f"（早停只用 Val 段，ES 段仅用于评估）"
     )
     return TerminalLossTrainResult(
@@ -199,7 +238,82 @@ def train_terminal_loss_model(
         label_config=lcfg,
         feature_names=list(feature_names),
         metadata=meta,
+        calibrator=calibrator,
     )
+
+
+# ── 排序目标训练路径（rank_pairwise）─────────────────────────────
+
+
+def _qid(dates: pd.Series) -> np.ndarray:
+    """trade_date → 连续整数分组号（XGBoost ranking 的 qid，要求已按分组排序）。"""
+    _, inv = np.unique(dates.astype(str).to_numpy(), return_inverse=True)
+    return inv.astype(int)
+
+
+def _fit_rank_pairwise(
+    train_matrix: pd.DataFrame,
+    val_matrix: pd.DataFrame,
+    feature_names: List[str],
+    cfg: TerminalLossTrainConfig,
+) -> Tuple[Any, Any, int]:
+    """排序目标：XGBRanker(rank:pairwise, qid=trade_date) + Val isotonic 校准。
+
+    为什么用排序目标（v0.111.0）：决策只需要“当日截面排序”，而池化 logloss
+    还会花容量拟合跨日水平——该成分在样本外是 regime 赌注（σ→事件率符号会
+    翻），学它既不可靠又挤占排序能力。单折实测 daynorm 1.119→1.334。
+
+    排序分数不是概率，因此必须在 **Val 段**（未经 ES）拟合 isotonic 回归映射
+    回概率：阈值政策与概率质量报告都依赖概率语义。
+
+    Returns:
+        (ranker, calibrator, best_iteration)：best_iteration 为 ndcg 早停点
+
+    Raises:
+        ValueError: train/val 缺 trade_date，或 qid 分组不可用
+    """
+    for name, frame in (("train", train_matrix), ("val", val_matrix)):
+        if "trade_date" not in frame.columns:
+            raise ValueError(
+                f"objective={OBJECTIVE_RANK_PAIRWISE} 需要{name}矩阵包含 trade_date"
+                f"（qid 分组列），缺列不得静默回退到 binary"
+            )
+    tr = train_matrix.sort_values("trade_date", kind="stable")
+    va = val_matrix.sort_values("trade_date", kind="stable")
+    # scale_pos_weight 不透传：排序目标按同日内成对比较，正例权重参数对
+    # rank:pairwise 无语义（传入会被静默忽略，不如显式不传）；min_child_weight
+    # 仍按正则尺度策略 A 的不变量透传。
+    ranker = XGBRanker(
+        objective="rank:pairwise",
+        eval_metric=EVAL_METRIC_NDCG,
+        max_depth=cfg.max_depth,
+        learning_rate=cfg.learning_rate,
+        n_estimators=cfg.n_estimators,
+        early_stopping_rounds=cfg.early_stopping_rounds,
+        subsample=cfg.subsample,
+        colsample_bytree=cfg.colsample_bytree,
+        reg_lambda=cfg.reg_lambda,
+        min_child_weight=cfg.min_child_weight,
+        random_state=cfg.random_state,
+        tree_method="hist",
+        device=cfg.device,
+    )
+    ranker.fit(
+        tr[feature_names],
+        tr["loss_label"].astype(int),
+        qid=_qid(tr["trade_date"]),
+        eval_set=[(va[feature_names], va["loss_label"].astype(int))],
+        eval_qid=[_qid(va["trade_date"])],
+        verbose=False,
+    )
+    calibrator = IsotonicRegression(out_of_bounds="clip")
+    calibrator.fit(ranker.predict(va[feature_names]), va["loss_label"].astype(float))
+    best_iteration = int(getattr(ranker, "best_iteration", cfg.n_estimators) or cfg.n_estimators)
+    logger.info(
+        f"排序目标训练完成: rank:pairwise(ndcg 早停={best_iteration})，"
+        f"Val 段 isotonic 校准已拟合（{len(va)} 行）"
+    )
+    return ranker, calibrator, best_iteration
 
 
 # ── 概率质量评估（方案 8.1 报告门禁）──────────────────────────────

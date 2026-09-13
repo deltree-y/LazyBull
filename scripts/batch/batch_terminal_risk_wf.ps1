@@ -65,7 +65,7 @@ $h_max          = 20
 $sigma_window   = 20
 
 # ── 训练超参（消融位：数组即多组实验，Label 依次追加 _d*/_lr*/_w*/*_s*）──
-$max_depth_list     = @(5)      # 例：@(2, 3) 做深度消融（后缀 _d*）
+$max_depth_list     = @(4)      # 例：@(2, 3) 做深度消融（后缀 _d*）
 $learning_rate_list = @(0.04)   # 例：@(0.03, 0.05) 做学习率消融（后缀 _lr*）
 # 早停段（Val）月数（消融位）：早停只用这一段，ES 段只用于评估/门禁
 # （v0.109.0 协议）。TrainEnd 由 EsStart-1 天前移到 ValStart-1 天；该值
@@ -80,7 +80,7 @@ $val_months_list = @(6)
 # 数据自 2012-01 起，最长 10 年窗口仍然可行。
 # v0.108.8 登记：单折配对实验（2023H1，every_n_days=1）显示 7 年窗口
 # （lift 1.386 / 10 日块下限 1.207）优于 5 年（1.243 / 1.110），故默认取 7 年。
-$train_window_years_list = @(7)
+$train_window_years_list = @(5)
 # 随机种子（消融位；多种子用于量化种子方差）：
 # 例：@(42, 7, 2024)（后缀 _s*）。注意种子是签名维度，多种子不会被混入同组。
 $random_state_list  = @(42)
@@ -94,6 +94,17 @@ $reg_lambda         = 1.0
 # 是不同签名（`em=`），禁止混组比较。例：@("logloss", "rank_ic_daily")
 # 做口径消融（后缀 _em*，仅多值时追加，保持 baseline 目录名稳定）。
 $eval_metric_list   = @("logloss")
+# 特征集（消融位）：full（冻结 33 列）| core（波动状态 10 列）| ic_admit
+# （训练段单变量 |IC| 降序 top-k）。非 full 值时目录追加 _fs* 后缀（单值也
+# 追加，避免覆盖基线目录，与 _v{N}m 同约定）；特征集是签名维度（`fs=`），
+# 禁止混组比较。例：@("core") 或 @("full", "ic_admit")
+$feature_set_list   = @("core")
+$ic_top_k           = 8          # ic_admit 入选列数（必选列另计）
+# 训练目标（消融位）：binary（binary:logistic，输出即概率）| rank_pairwise
+# （rank:pairwise + qid=trade_date，只学当日截面排序，再用 Val 段 isotonic
+# 映射回概率）。非 binary 时目录追加 _obj* 后缀；排序目标的早停指标强制为
+# ndcg（忽略 $eval_metric_list，训练入口对非法组合直接报错）。
+$objective_list     = @("binary","rank_pairwise")
 # 注：min_child_weight / scale_pos_weight 未透传——两者为正则尺度策略 A 的
 # 设计不变量（min_child_weight 与样本权重 1/网格大小绑定，scale_pos_weight
 # 会破坏自然事件率口径）。
@@ -115,9 +126,15 @@ $chunk_days       = 50
 
 $failed = @()
 $selected_folds = @($folds | Where-Object { $_.Selected })
+# 臂总数：排序目标恒为单条 ndcg 臂（忽略 eval_metric 消融），binary 用 eval_metric
+# 数量；目标维度另乘特征集个数
+$metricArmCount = 0
+foreach ($obj in $objective_list) {
+    $metricArmCount += if ($obj -eq "rank_pairwise") { 1 } else { $eval_metric_list.Count }
+}
 $total = $selected_folds.Count * $max_depth_list.Count * $learning_rate_list.Count *
-    $train_window_years_list.Count * $val_months_list.Count * $eval_metric_list.Count *
-    $random_state_list.Count
+    $train_window_years_list.Count * $val_months_list.Count * $feature_set_list.Count *
+    $metricArmCount * $random_state_list.Count
 $done = 0
 
 # 数据可用起点：cs_train 首个分区（训练窗口越界时判失败，不静默截短窗口）
@@ -127,22 +144,44 @@ $data_floor = (Get-ChildItem $cs_train_dir -Filter *.parquet -ErrorAction Silent
 if (-not $data_floor) { throw "未找到 cs_train 分区（$cs_train_dir）：请先构建特征" }
 Write-Host "数据可用起点: $data_floor" -ForegroundColor DarkGray
 
-# 训练窗口 × 早停段月数 × 早停指标 的组合展开（单层循环，避免更深嵌套）
+# 目标维度组合（特征集 × 训练目标；后缀 _fs* / _obj*，非默认值恒追加）
+$goalCombos = @()
+foreach ($featureSet in $feature_set_list) {
+    foreach ($objective in $objective_list) {
+        $fsSuffix = if ($featureSet -ne "full") { "_fs$featureSet" } else { "" }
+        $objSuffix = if ($objective -ne "binary") { "_obj$objective" } else { "" }
+        $goalCombos += [PSCustomObject]@{
+            FeatureSet = $featureSet
+            Objective  = $objective
+            Suffix     = "$fsSuffix$objSuffix"
+        }
+    }
+}
+
+# 训练窗口 × 早停段月数 × 目标维度 × 早停指标 的组合展开（单层循环，避免更深嵌套）
 $armCombos = @()
 foreach ($years in $train_window_years_list) {
     foreach ($valMonths in $val_months_list) {
-        foreach ($evalMetric in $eval_metric_list) {
-            $windowSuffix = if ($train_window_years_list.Count -gt 1) { "_w${years}y" } else { "" }
-            # 早停段长度恒入后缀（含单值）：旧协议产物无 _v{N}m，避免目录互相覆盖
-            $valSuffix = "_v${valMonths}m"
-            $metricSuffix = if ($eval_metric_list.Count -gt 1) {
-                "_em" + ($evalMetric -replace "_daily", "")
-            } else { "" }
-            $armCombos += [PSCustomObject]@{
-                Years      = $years
-                ValMonths  = $valMonths
-                EvalMetric = $evalMetric
-                Suffix     = "$windowSuffix$valSuffix$metricSuffix"
+        foreach ($goal in $goalCombos) {
+            # 排序目标只允许 ndcg 早停（训练入口对非法组合直接报错）：忽略
+            # $eval_metric_list 消融，恒为单条 ndcg 臂
+            $metricList = if ($goal.Objective -eq "rank_pairwise") { @("ndcg") } else { $eval_metric_list }
+            $metricMulti = $metricList.Count -gt 1
+            foreach ($evalMetric in $metricList) {
+                $windowSuffix = if ($train_window_years_list.Count -gt 1) { "_w${years}y" } else { "" }
+                # 早停段长度恒入后缀（含单值）：旧协议产物无 _v{N}m，避免目录互相覆盖
+                $valSuffix = "_v${valMonths}m"
+                $metricSuffix = if ($metricMulti) {
+                    "_em" + ($evalMetric -replace "_daily", "")
+                } else { "" }
+                $armCombos += [PSCustomObject]@{
+                    Years      = $years
+                    ValMonths  = $valMonths
+                    EvalMetric = $evalMetric
+                    FeatureSet = $goal.FeatureSet
+                    Objective  = $goal.Objective
+                    Suffix     = "$windowSuffix$valSuffix$metricSuffix$($goal.Suffix)"
+                }
             }
         }
     }
@@ -156,6 +195,8 @@ foreach ($depth in $max_depth_list) {
             $years = $combo.Years
             $valMonths = $combo.ValMonths
             $evalMetric = $combo.EvalMetric
+            $featureSet = $combo.FeatureSet
+            $objective = $combo.Objective
             foreach ($seed in $random_state_list) {
                 $seedSuffix = if ($random_state_list.Count -gt 1) { "_s$seed" } else { "" }
                 $suffix = "$depthSuffix$lrSuffix$($combo.Suffix)$seedSuffix"
@@ -179,7 +220,7 @@ foreach ($depth in $max_depth_list) {
                     }
                     $out_dir = Join-Path $wf_root "$($fold.Label)$suffix"
                     Write-Host ""
-                    Write-Host "==== [$done/$total] terminal_loss WF 折 $($fold.Label)$suffix (depth=$depth, lr=$lr, 窗口=${years}年, 早停段=${valMonths}月, em=$evalMetric, seed=$seed) ====" -ForegroundColor Cyan
+                    Write-Host "==== [$done/$total] terminal_loss WF 折 $($fold.Label)$suffix (depth=$depth, lr=$lr, 窗口=${years}年, 早停段=${valMonths}月, em=$evalMetric, fs=$featureSet, obj=$objective, seed=$seed) ====" -ForegroundColor Cyan
                     Write-Host "      Train [$trainStart,$trainEnd]  Val(早停) [$valStart,$valEnd]  ES(评估) [$($fold.EsStart),$($fold.EsEnd)]"
 
                     $pythonCmd = "py .\scripts\train_terminal_risk_model.py" +
@@ -199,6 +240,7 @@ foreach ($depth in $max_depth_list) {
                         " --subsample $subsample --colsample-bytree $colsample_bytree --reg-lambda $reg_lambda" +
                         " --random-state $seed" +
                         " --eval-metric $evalMetric" +
+                        " --feature-set $featureSet --ic-top-k $ic_top_k --objective $objective" +
                         " --h-per-group $h_per_group --every-n-days $every_n_days --chunk-days $chunk_days" +
                         " --device $device" +
                         " --fixed-name"

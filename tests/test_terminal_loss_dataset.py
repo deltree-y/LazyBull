@@ -9,14 +9,19 @@ import pytest
 from src.lazybull.risk.terminal_loss.dataset import (
     BASE_FEATURES,
     DERIVED_FEATURES,
+    FEATURE_SET_CHOICES,
+    IC_ADMIT_MANDATORY,
     META_COLUMNS,
     TERMINAL_LOSS_FEATURES,
+    VOL_STATE_CORE_FEATURES,
     DatasetConfig,
     StageSpec,
     add_pct_features,
     attach_horizon_features,
     build_training_matrix,
     empty_training_matrix,
+    resolve_feature_set,
+    select_ic_admit_features,
     split_stages_with_label_isolation,
     subsample_dates,
     subsample_h_per_group,
@@ -382,3 +387,90 @@ class TestSubsampling:
             assert set(day_rows["ts_code"]) == {"C000", "C001", "C002"}
             assert set(day_rows["h"]) == set(range(1, 21))
         assert len(subsample_dates(matrix, every_n=1)) == len(matrix)
+
+
+class TestFeatureSetResolution:
+    """特征集解析（v0.111.0）：full / core / ic_admit 显式枚举，不隐式回退。"""
+
+    @staticmethod
+    def _feature_matrix(n_days: int = 5, n_codes: int = 8, seed: int = 7) -> pd.DataFrame:
+        """完整 33 列 manifest + 元数据列的最小训练矩阵（cvar 与标签强相关）。
+
+        ``resolve_feature_set`` 默认候选池是全量冻结清单，因此矩阵必须带齐
+        全部列（缺列在实现里是硬错误，不静默跳过）。
+        """
+        rng = np.random.default_rng(seed)
+        noise_cols = [c for c in TERMINAL_LOSS_FEATURES if c not in IC_ADMIT_MANDATORY]
+        rows = []
+        for day in range(2, 2 + n_days):
+            signal = rng.normal(0, 1, n_codes)
+            for i in range(n_codes):
+                row = {
+                    "ts_code": f"{i:06d}.SZ",
+                    "trade_date": f"202401{day:02d}",
+                    "h": 5,
+                    "sample_weight": 1 / 20,
+                    "loss_label": int(signal[i] > 0),
+                    "remaining_intervals": 5,
+                    "sigma_daily_20": float(np.exp(rng.normal(0, 0.2))),
+                }
+                row.update({c: float(rng.normal(0, 1)) for c in noise_cols})
+                row["cvar_95_20"] = float(signal[i])  # 截面内与标签单调
+                rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_core_is_subset_of_frozen_manifest(self):
+        assert set(VOL_STATE_CORE_FEATURES) <= set(TERMINAL_LOSS_FEATURES)
+        assert len(VOL_STATE_CORE_FEATURES) == len(set(VOL_STATE_CORE_FEATURES))
+        assert set(IC_ADMIT_MANDATORY) <= set(VOL_STATE_CORE_FEATURES)
+
+    def test_full_and_core_resolve_to_frozen_lists(self):
+        matrix = self._feature_matrix()
+        names, record = resolve_feature_set("full", matrix)
+        assert names == TERMINAL_LOSS_FEATURES and record["feature_set"] == "full"
+        names, record = resolve_feature_set("core", matrix)
+        assert names == VOL_STATE_CORE_FEATURES and record["feature_set"] == "core"
+        assert record["selected"] == VOL_STATE_CORE_FEATURES
+
+    def test_unknown_feature_set_raises(self):
+        with pytest.raises(ValueError, match="未知 feature_set"):
+            resolve_feature_set("top10", self._feature_matrix())
+        assert "top10" not in FEATURE_SET_CHOICES
+
+    def test_ic_admit_keeps_mandatory_and_ranks_by_abs_ic(self):
+        matrix = self._feature_matrix()
+        names, record = resolve_feature_set("ic_admit", matrix, top_k=2)
+        assert names[: len(IC_ADMIT_MANDATORY)] == IC_ADMIT_MANDATORY
+        # 与标签截面单调的 cvar 必须排第一（其余为噪声列）
+        assert names[len(IC_ADMIT_MANDATORY)] == "cvar_95_20"
+        assert len(names) == len(IC_ADMIT_MANDATORY) + 2
+        assert record["feature_set"] == "ic_admit" and record["top_k"] == 2
+        # IC 审计值随折落盘（供重建“当时选了什么、依据什么”）
+        assert record["ic"]["cvar_95_20"] > 0.5
+
+    def test_ic_admit_is_deterministic(self):
+        matrix = self._feature_matrix()
+        first, first_ic = resolve_feature_set("ic_admit", matrix, top_k=3)
+        second, second_ic = resolve_feature_set("ic_admit", matrix, top_k=3)
+        assert first == second and first_ic == second_ic
+
+    def test_ic_admit_selects_days_not_rows(self):
+        """只抽日不抽行：IC 的每日截面排名基于完整当日行，不因日内抽样失真。"""
+        matrix = self._feature_matrix(n_days=5)
+        names, _ = resolve_feature_set("ic_admit", matrix, top_k=2)
+        first_day = matrix["trade_date"].unique()[0]
+        names_first_day, _ = resolve_feature_set(
+            "ic_admit", matrix[matrix["trade_date"] == first_day], top_k=2
+        )
+        assert names == names_first_day
+
+    def test_ic_admit_input_guards(self):
+        matrix = self._feature_matrix()
+        with pytest.raises(ValueError, match="需要非空训练段矩阵"):
+            select_ic_admit_features(matrix.iloc[0:0])
+        with pytest.raises(ValueError, match="top_k 必须为正整数"):
+            select_ic_admit_features(matrix, top_k=0)
+        with pytest.raises(ValueError, match="候选列缺列"):
+            select_ic_admit_features(matrix, candidates=["missing_col"], top_k=1)
+        with pytest.raises(ValueError, match="候选列不足"):
+            select_ic_admit_features(matrix, candidates=["cvar_95_20"], top_k=2)
