@@ -362,7 +362,13 @@ python scripts/analyze_terminal_risk_gate.py --wf-root data\walk_forward\termina
 #    组合总值/买入日/信号日/持有交易日数/到期执行日/剩余持有交易日
 #    只读旁路：开关对成交与净值逐位一致；到期执行日按标准持有期推算，
 #    超出回测窗口记空值（动态延期不在本表口径内）
-# 2) 离线打分（按"该日期时 Train/Val 都已结束"的折模型，无前视）：
+# 2) 离线打分（按"该日期时 Train/Val 都已结束"的折模型，无前视）
+#    推荐用批量入口：按 WF batch（data/walk_forward/batches/*）选择快照打分
+powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_policy_sidecar.ps1 -ListBatches
+powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_policy_sidecar.ps1 `
+    -Batch wf_batch_20260914_081944 -Arms _d5_v6m_fscore -PHi 0.90,0.95,0.99 -PAbs 0.05,0.10,0.15,0.20
+#    -Batch latest（默认）= 自动选最新含快照的 batch；产物落 <batch>\policy_sidecar<arm>\
+#    也可直接用 Python 入口（默认扫 data/walk_forward/raw 下全部快照）：
 python scripts/analyze_policy_sidecar.py --arm _d5_v6m_fscore
 # 产物（中文表头，utf-8-sig 可直接 Excel 打开）：
 #   {risk-root}/archives/policy_sidecar{arm}/风险台账.csv

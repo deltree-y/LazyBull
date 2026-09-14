@@ -15,7 +15,7 @@
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false   # $true 启用 | $false 禁用
+$skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -201,7 +201,7 @@ $deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(2)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -763,3 +763,4 @@ if ($shutdown_on_complete) {
     Write-Host "`n[!] 倒计时结束，正在关机..." -ForegroundColor Red
     Stop-Computer -Force
 }
+

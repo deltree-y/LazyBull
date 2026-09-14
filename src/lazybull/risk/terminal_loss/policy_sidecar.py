@@ -98,6 +98,10 @@ SIGMA_WINDOW = 20
 #: 模型期限网格上限（与 TerminalLossLabelConfig 默认一致）
 HORIZON_MAX = 20
 
+#: 标签网格分块交易日数（多年 OOS 上一次生成全网格会达上亿行，内存不可接受；
+#: 块尾按 h_max + 1 多切，保证端点落在真实数据上）
+LABEL_CHUNK_DAYS = 60
+
 
 @dataclass(frozen=True)
 class FoldModel:
@@ -206,6 +210,23 @@ def _sigma_lookup(data_root: str, calendar: Sequence[str]) -> pd.DataFrame:
     return stacked
 
 
+def _read_feature_day(path: Path, needed: Sequence[str]) -> pd.DataFrame:
+    """按需列读取 cs_train 分区（缺列明确报错；避免整表 383 列带来无谓 IO）。"""
+    import pyarrow.parquet as pq
+
+    available = set(pq.ParquetFile(path).schema.names)
+    missing = [c for c in needed if c not in available]
+    if missing:
+        raise ValueError(
+            f"{path.name} 缺少打分所需列 {sorted(missing)}；"
+            f"（``full`` 的 pct_* 不在 cs_train 内，请使用 core / core_state 特征集）"
+        )
+    columns = sorted(set(needed) | {"ts_code"})
+    frame = pd.read_parquet(path, columns=columns)
+    frame["ts_code"] = frame["ts_code"].astype(str)
+    return frame
+
+
 def _attach_inputs(
     frame: pd.DataFrame,
     data_root: str,
@@ -223,13 +244,7 @@ def _attach_inputs(
         path = feature_root / f"{date}.parquet"
         if not path.exists():
             raise ValueError(f"缺少 cs_train 分区 {path}（台账日期 {date} 需要特征列）")
-        day = pd.read_parquet(path)
-        missing = [c for c in needed if c not in day.columns]
-        if missing:
-            raise ValueError(
-                f"{path.name} 缺少打分所需列 {sorted(missing)}；"
-                f"（``full`` 的 pct_* 不在 cs_train 内，请使用 core / core_state 特征集）"
-            )
+        day = _read_feature_day(path, needed)
         day = day[["ts_code"] + needed].copy()
         day["date"] = date
         pieces.append(day)
@@ -246,11 +261,14 @@ def _attach_labels(
     data_root: str,
     folds: Sequence[FoldModel],
     calendar: Sequence[str],
+    chunk_days: int = LABEL_CHUNK_DAYS,
 ) -> pd.DataFrame:
     """按折分别调用规范标签实现，并按其 (T, 股票, h) 关联事后结果。
 
     每个折用自己的 ``loss_sigma_multiple`` / ``h_max``（折间超参可能不同，
-    混用会改变标签定义）。
+    混用会改变标签定义）。**标签网格按交易日分块构建**：全网格一次生成会
+    在多年 OOS 上产生上亿行（内存不可接受），分块后只保留台账需要的
+    (T, 股票, h) 键，块尾多切 ``h_max + 1`` 日以保证端点落在真实数据上。
     """
     open_panel, close_panel, _, _ = load_clean_daily_panels(data_root, calendar[0], calendar[-1])
     sigma_panel = compute_sigma_daily_panel(
@@ -261,15 +279,36 @@ def _attach_labels(
     pieces: List[pd.DataFrame] = []
     for fold_name, part in frame.groupby("fold", sort=False):
         fold = next(item for item in folds if item.fold == fold_name)
-        labels = build_terminal_loss_labels(
-            open_panel,
-            sigma_panel,
-            TerminalLossLabelConfig(
-                h_min=1, h_max=fold.h_max, loss_sigma_multiple=fold.loss_sigma_multiple
-            ),
+        config = TerminalLossLabelConfig(
+            h_min=1, h_max=fold.h_max, loss_sigma_multiple=fold.loss_sigma_multiple
         )
+        wanted = part[["date", "ts_code"]].drop_duplicates()
+        collected: List[pd.DataFrame] = []
+        for chunk_start in range(0, len(calendar), chunk_days):
+            chunk = list(calendar[chunk_start : chunk_start + chunk_days])
+            chunk_dates = set(chunk)
+            keys = wanted[wanted["date"].isin(chunk_dates)]
+            if keys.empty:
+                continue
+            tail = calendar[
+                chunk_start : min(len(calendar), chunk_start + chunk_days + fold.h_max + 1)
+            ]
+            labels = build_terminal_loss_labels(open_panel.loc[tail], sigma_panel.loc[tail], config)
+            needed_keys = set(zip(keys["date"], keys["ts_code"]))
+            hit = labels[
+                [
+                    (date, code) in needed_keys
+                    for date, code in zip(labels["trade_date"], labels["ts_code"])
+                ]
+            ]
+            collected.append(hit[keep])
+        if not collected:
+            part = part.assign(terminal_return=np.nan, loss_label=np.nan, label_status=None)
+            pieces.append(part)
+            continue
+        labels = pd.concat(collected, ignore_index=True)
         merged = part.merge(
-            labels[keep],
+            labels,
             left_on=["date", "ts_code", "remaining_intervals"],
             right_on=["trade_date", "ts_code", "h"],
             how="left",
@@ -288,9 +327,21 @@ def _attach_labels(
 
 
 def _default_model_loader(path: str) -> Any:
+    """加载折模型：固定名别名是 payload dict，必须经 ``TerminalLossModel.load`` 还原。
+
+    （``v{N}_model.joblib`` 才是可直接 ``joblib.load`` 的模型实例；policy sidecar
+    统一读固定名别名，保证"读的就是既有工具看到的那份"。）
+    """
     import joblib
 
-    return joblib.load(path)
+    from .model import TerminalLossModel
+
+    payload = joblib.load(path)
+    if isinstance(payload, TerminalLossModel):
+        return payload
+    if isinstance(payload, dict):
+        return TerminalLossModel.load(path)
+    raise ValueError(f"无法识别的模型 artifact 类型 {type(payload).__name__}: {path}")
 
 
 def score_holdings(
