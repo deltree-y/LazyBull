@@ -27,6 +27,8 @@ from ..trading.stagger import get_tranche_capital_fraction as _shared_tranche_ca
 from ..trading.stagger import get_tranche_target_count as _shared_tranche_target_count
 from ..universe.base import Universe
 from .buy_execution import BacktestBuyExecutionMixin
+from .exposure_override import BacktestExposureOverrideMixin
+from .exposure_trim import BacktestExposureTrimMixin
 from .holdings_snapshot import BacktestHoldingsSnapshotMixin
 from .pending_execution import BacktestPendingExecutionMixin
 from .reporting import BacktestReportingMixin, _format_rebalance_decision_summary
@@ -42,6 +44,8 @@ class BacktestEngine(
     BacktestSignalExecutionMixin,
     BacktestPendingExecutionMixin,
     BacktestHoldingsSnapshotMixin,
+    BacktestExposureOverrideMixin,
+    BacktestExposureTrimMixin,
     BacktestRunLoopMixin,
 ):
     """回测引擎
@@ -255,6 +259,12 @@ class BacktestEngine(
         # 政策旁路（terminal_loss P2-1）：逐日持仓快照，只读记录不参与决策
         self.holdings_snapshots: List[Dict] = []
         self.record_holdings_snapshot: bool = False
+        # 政策层 E2（P2-3 shadow）：目标总仓位 ≤ λ，默认关闭（None = 不启用，逐位一致）
+        self.exposure_table: Optional[Dict[str, float]] = None
+        self.exposure_stats = None
+        self._exposure_missing_dates: Dict[str, int] = {}
+        # 每日风控减仓状态（暴露门控主动减仓；未设置暴露系数表时不产生副作用）
+        self._init_exposure_trim_state()
 
         # 仓位补齐状态跟踪
         # {调仓日期: {未成交股票列表, 目标数量, 候选列表, 剩余权重字典}}

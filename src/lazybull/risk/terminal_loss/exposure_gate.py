@@ -815,6 +815,70 @@ def write_gate_outputs(
     return paths
 
 
+def export_exposure_table(
+    judged: pd.DataFrame,
+    out_path: Path,
+    arm_label: Optional[str] = None,
+    trading_days: Optional[Sequence[str]] = None,
+) -> Path:
+    """把逐日判定表导出为引擎可读的**两列**系数表（`日期, 暴露系数`）。
+
+    **台账缺口处理**：判定表只覆盖“当日有持仓且可打分”的交易日（实测缺 13%，最长连续 14 日），
+    直接落盘会让引擎在缺口日按 1.0 兜底（等于规则大半未生效）。传入 ``trading_days``
+    （交易日历）后，会在判定表首末日期之间按日历补齐，**缺失交易日沿用前一交易日状态**
+    （持仓与状态不会凭空消失，且不使用任何未来信息）。
+
+    Args:
+        judged: 单臂的逐日判定表（可含多臂，此时用 ``arm_label`` 过滤）
+        out_path: 输出 CSV 路径
+        arm_label: 需要导出哪一臂（None 表示仅当判定表只含一臂时可用）
+        trading_days: 交易日历（YYYYMMDD 字符串序列）；None 表示不补缺口
+
+    Raises:
+        ValueError: 未指定臂而表含多臂、日期重复或缺少必要列
+    """
+    frame = judged
+    if arm_label is not None:
+        frame = frame[frame["arm"] == arm_label]
+        if frame.empty:
+            raise ValueError(f"逐日判定表中没有臂 {arm_label!r}")
+    elif frame["arm"].nunique() > 1:
+        raise ValueError(
+            f"逐日判定表含多个臂 {sorted(frame['arm'].unique())}；导出系数表必须显式指定臂"
+        )
+    if "exposure_multiplier" not in frame.columns:
+        raise ValueError("逐日判定表缺少 exposure_multiplier 列，无法导出系数表")
+    table = frame[["date", "exposure_multiplier"]].rename(
+        columns={"date": "日期", "exposure_multiplier": "暴露系数"}
+    )
+    table["日期"] = table["日期"].astype(str)
+    duplicated = table["日期"][table["日期"].duplicated()].unique().tolist()
+    if duplicated:
+        raise ValueError(f"逐日判定表日期重复（{duplicated[:3]}），禁止导出歧义系数表")
+    table = table.sort_values("日期").reset_index(drop=True)
+    if trading_days is not None:
+        span = [
+            str(day)
+            for day in trading_days
+            if table["日期"].iloc[0] <= str(day) <= table["日期"].iloc[-1]
+        ]
+        if not span:
+            raise ValueError("交易日历与判定表区间无交集，无法补齐系数表")
+        filled = (
+            table.set_index("日期")
+            .reindex(span)
+            .ffill()
+            .reset_index()
+            .rename(columns={"index": "日期"})
+        )
+        filled["暴露系数"] = filled["暴露系数"].astype(float)
+        table = filled
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(out_path, index=False, encoding="utf-8-sig")
+    return out_path
+
+
 def _columns_map(chinese: Sequence[str], keys: Sequence[str]) -> Dict[str, str]:
     """{内部键: 中文列名}；数量不一致直接报错（防止两处漂移）。"""
     if len(chinese) != len(keys):

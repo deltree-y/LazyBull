@@ -540,6 +540,17 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         help="分批调仓批次数（默认1=不分批）。设为K时将资金分成K份错开调仓，降低时点风险",
     )
 
+    # 政策层 E2 shadow（P2-3）
+    parser.add_argument(
+        "--exposure-table",
+        default=None,
+        help=(
+            "暴露系数表 CSV 路径（两列：日期, 暴露系数；系数落于 (0,1]）。"
+            "启用后 OOS 回测的买入预算基数乘上信号日的暴露系数（缩减/暂停加仓）；"
+            "表为 None 时不启用（成交与净值与改动前逐位一致）。文件名建议 ASCII"
+        ),
+    )
+
     # 仓位管理模式
     parser.add_argument(
         "--position-sizing",

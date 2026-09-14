@@ -44,6 +44,7 @@ def run_oos_backtest(
     enable_early_rebalance_on_empty: bool = True,
     initial_capital: float = 1000000.0,
     split_num: Optional[int] = None,
+    exposure_table: Optional[Dict[str, float]] = None,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测并返回组合级绩效指标。"""
     data_root = data_root or get_data_root()
@@ -145,6 +146,8 @@ def run_oos_backtest(
     )
     # 政策旁路（terminal_loss P2-1）：开启逐日持仓快照（只读，不影响任何决策）
     engine.record_holdings_snapshot = True
+    # 政策层 E2（P2-3 shadow）：装载暴露系数表（None = 不启用，成交与净值逐位一致）
+    engine.set_exposure_table(exposure_table, verbose=exposure_table is not None)
 
     nav_curve = engine.run(
         start_date=pd.Timestamp(bt_start),

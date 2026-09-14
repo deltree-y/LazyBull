@@ -1,4 +1,4 @@
-"""terminal_loss 政策层 E2 入口：条件暴露门控的校准 + 三臂离线评估（P2-2 一阶筛选）。
+﻿"""terminal_loss 政策层 E2 入口：条件暴露门控的校准 + 三臂离线评估（P2-2 一阶筛选）。
 
 用法（示例，按 WF 批次自动找台账）：
 
@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 from typing import List
 
+import pandas as pd
 from loguru import logger
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -34,6 +35,7 @@ from src.lazybull.risk.terminal_loss.exposure_gate import (  # noqa: E402
     ARMS,
     ExposureGateConfig,
     RollingGateConfig,
+    export_exposure_table,
     read_ledger_frames,
     run_exposure_gate,
     run_rolling_gate,
@@ -42,6 +44,23 @@ from src.lazybull.risk.terminal_loss.exposure_gate import (  # noqa: E402
 )
 
 ARM_BY_LABEL = {label: key for key, label in ARM_LABELS.items()}
+
+
+def _arm_label(arm: str, args: argparse.Namespace) -> str:
+    """与 run_*_gate 内部保持一致的臂标签（固定口径用内置标签，滚动口径加窗口后缀）。"""
+    if args.threshold_mode == "rolling":
+        return f"{ARM_LABELS[arm]}-滚动{args.window_days}日"
+    return ARM_LABELS[arm]
+
+
+def _load_trading_days(args: argparse.Namespace, daily: pd.DataFrame) -> List[str]:
+    """加载判定表区间内的交易日历（用于导出系数表时补齐台账缺口）。"""
+    from src.lazybull.risk.terminal_loss.dataset import load_trade_calendar
+
+    start, end = str(daily["date"].min()), str(daily["date"].max())
+    days = [str(day) for day in load_trade_calendar(args.calendar_root, start, end)]
+    logger.info(f"交易日历: {start}~{end} 共 {len(days)} 日（用于补齐台账缺口）")
+    return days
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,6 +112,20 @@ def parse_args() -> argparse.Namespace:
         "--min-layer-days", type=int, default=20, help="层内校准日数下限（低于即拒绝校准）"
     )
     parser.add_argument("--out-dir", default=None, help="输出目录（默认 <batch>/暴露门控E2）")
+    parser.add_argument(
+        "--calendar-root",
+        default="data",
+        help="交易日历所在数据根目录（导出系数表时用于补齐台账缺口，默认 data）",
+    )
+    parser.add_argument(
+        "--export-table",
+        action="store_true",
+        default=False,
+        help=(
+            "额外导出引擎可读的两列暴露系数表（每个臂一份，`暴露系数表_<臂>.csv`），"
+            "供 walk_forward.py --exposure-table 做 P2-3 shadow 回测"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -183,6 +216,25 @@ def main() -> None:
     logger.info(f"产物目录: {out_dir}")
     for name, path in paths.items():
         logger.info(f"  {name}: {path.name}")
+    if args.export_table:
+        mode_tag = "rolling" if args.threshold_mode == "rolling" else "fixed"
+        trading_days = _load_trading_days(args, daily)
+        for arm in args.arms:
+            label = daily.loc[daily["arm"] == _arm_label(arm, args), "arm"].unique()
+            if label.size != 1:
+                raise SystemExit(f"臂 {arm} 的标签不唯一: {label.tolist()}")
+            suffix = f"_{args.window_days}d" if args.threshold_mode == "rolling" else ""
+            table_path = export_exposure_table(
+                daily,
+                out_dir / f"exposure_table_{arm}_{mode_tag}{suffix}.csv",
+                arm_label=str(label[0]),
+                trading_days=trading_days,
+            )
+            logger.info(
+                f"  暴露系数表: {table_path.name}"
+                f"（{len(pd.read_csv(table_path, encoding='utf-8-sig'))} 日，含缺口顺延；文件名用 ASCII"
+                f"避免 PowerShell 传参转码）"
+            )
 
     tables = to_chinese_tables(calibration, daily, (overall, by_fold))
     evaluated = tables["eval"]

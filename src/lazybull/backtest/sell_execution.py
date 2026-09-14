@@ -310,19 +310,32 @@ class BacktestSellExecutionMixin:
         sell_type: str = "holding_period",
         sell_reason: Optional[str] = None,
         trigger_type: Optional[str] = None,
+        fraction: float = 1.0,
+        allow_pending: bool = True,
     ) -> None:
-        """卖出股票（在 T+n 日以收盘价卖出）
+        """卖出股票（在 T+n 日以开盘价/收盘价卖出）
 
         带交易状态检查的卖出方法。如果启用延迟订单功能，会检查股票是否可交易。
 
         Args:
             date: 卖出日期（T+n）
             stock: 股票代码
-            sell_type: 卖出类型，'holding_period' 或 'stop_loss'
-            sell_reason: 卖出原因描述（止损时使用）
+            sell_type: 卖出类型，'holding_period' / 'stop_loss' / 'risk_trim'
+            sell_reason: 卖出原因描述（止损/风控减仓时使用）
             trigger_type: 触发类型（止损时使用）
+            fraction: 卖出比例（风控减仓用，∈(0, 1]）；1.0 = 整仓卖出
+            allow_pending: 不可交易时是否加入延迟订单队列；风控减仓传 False
+                （延迟队列按整仓卖出语义重试，会把减仓放大成清仓）
         """
-        self._sell_stock_with_status_check(date, stock, sell_type, sell_reason, trigger_type)
+        self._sell_stock_with_status_check(
+            date,
+            stock,
+            sell_type,
+            sell_reason,
+            trigger_type,
+            fraction=fraction,
+            allow_pending=allow_pending,
+        )
 
     def _sell_stock_with_status_check(
         self,
@@ -331,6 +344,8 @@ class BacktestSellExecutionMixin:
         sell_type: str = "holding_period",
         sell_reason: Optional[str] = None,
         trigger_type: Optional[str] = None,
+        fraction: float = 1.0,
+        allow_pending: bool = True,
     ) -> None:
         """卖出股票（带交易状态检查）
 
@@ -340,9 +355,12 @@ class BacktestSellExecutionMixin:
         Args:
             date: 卖出日期
             stock: 股票代码
-            sell_type: 卖出类型，'holding_period' 或 'stop_loss'
-            sell_reason: 卖出原因描述（止损时使用）
+            sell_type: 卖出类型，'holding_period' / 'stop_loss' / 'risk_trim'
+            sell_reason: 卖出原因描述（止损/风控减仓时使用）
             trigger_type: 触发类型（止损时使用）
+            fraction: 卖出比例（风控减仓用，∈(0, 1]）；1.0 = 整仓卖出
+            allow_pending: 不可交易时是否加入延迟订单队列；风控减仓传 False
+                （延迟队列是按整仓卖出语义重试的，会把减仓放大成清仓）
         """
         # 检查交易状态
         if self.enable_pending_order and self.price_data_cache is not None:
@@ -356,7 +374,7 @@ class BacktestSellExecutionMixin:
                 is_suspended_flag = suspend_calendar.is_suspended(stock, trade_date_str)
                 if is_suspended_flag:
                     # 停牌，加入延迟队列
-                    if self.pending_order_manager:
+                    if self.pending_order_manager and allow_pending:
                         self.pending_order_manager.add_order(
                             stock=stock,
                             action="sell",
@@ -378,7 +396,7 @@ class BacktestSellExecutionMixin:
             ]
             if date_quote.empty:
                 # 当日行情数据为空，无法判断交易状态，加入延迟队列
-                if self.pending_order_manager:
+                if self.pending_order_manager and allow_pending:
                     self.pending_order_manager.add_order(
                         stock=stock,
                         action="sell",
@@ -396,7 +414,7 @@ class BacktestSellExecutionMixin:
 
             if not tradeable:
                 # 不可交易（跌停等），加入延迟队列
-                if self.pending_order_manager:
+                if self.pending_order_manager and allow_pending:
                     self.pending_order_manager.add_order(
                         stock=stock,
                         action="sell",
@@ -410,7 +428,28 @@ class BacktestSellExecutionMixin:
                 return
 
         # 可交易，直接卖出
-        self._sell_stock_direct(date, stock, sell_type, sell_reason, trigger_type)
+        self._sell_stock_direct(
+            date, stock, sell_type, sell_reason, trigger_type, fraction=fraction
+        )
+
+    def _resolve_trim_shares(self, total_shares: int, fraction: float) -> int:
+        """计算按比例卖出时应卖出的股数（A 股规则：整手卖出，剩余不足一手整仓卖出）
+
+        Args:
+            total_shares: 当前总持股数
+            fraction: 卖出比例，∈(0, 1]；1.0 表示整仓卖出
+
+        Returns:
+            应卖出股数；0 表示不执行（按手数取整后不足 100 股）
+        """
+        if fraction >= 1.0:
+            return total_shares
+        raw_shares = int(total_shares * fraction)
+        trim_shares = raw_shares // 100 * 100
+        if total_shares - trim_shares < 100:
+            # 剩余不足一手，无法保留 → 整仓卖出
+            trim_shares = total_shares
+        return trim_shares
 
     def _sell_stock_direct(
         self,
@@ -419,6 +458,7 @@ class BacktestSellExecutionMixin:
         sell_type: str = "holding_period",
         sell_reason: Optional[str] = None,
         trigger_type: Optional[str] = None,
+        fraction: float = 1.0,
     ) -> None:
         """直接卖出股票（不检查交易状态）
 
@@ -429,13 +469,20 @@ class BacktestSellExecutionMixin:
         - sell_timing='close': 使用收盘价（默认）
         - sell_timing='open': 使用开盘价，如果开盘价不存在则降级到收盘价
 
+        ``fraction < 1`` 时**只卖出一部分**（风控减仓）：卖出股数按手数取整，
+        若卖出后剩余不足一手则整仓卖出；剩余持仓的每股成本基准不变，
+        ``buy_cost_cash`` 按剩余比例缩减。
+
         Args:
             date: 卖出日期（T+n）
             stock: 股票代码
-            sell_type: 卖出类型，'holding_period' 或 'stop_loss'
-            sell_reason: 卖出原因描述（止损时使用）
+            sell_type: 卖出类型，'holding_period' / 'stop_loss' / 'risk_trim'
+            sell_reason: 卖出原因描述（止损/风控减仓时使用）
             trigger_type: 触发类型（止损时使用）
+            fraction: 卖出比例（风控减仓用，∈(0, 1]）；1.0 = 整仓卖出
         """
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError(f"fraction 必须落于 (0, 1]，当前 {fraction}")
         if stock not in self.positions or self.positions[stock]["shares"] == 0:
             return
 
@@ -479,7 +526,10 @@ class BacktestSellExecutionMixin:
                 sell_pnl_price = sell_trade_price
 
         # 获取持仓信息
-        shares = self.positions[stock]["shares"]
+        total_shares = self.positions[stock]["shares"]
+        shares = self._resolve_trim_shares(total_shares, fraction)
+        if shares <= 0:
+            return
         buy_date = self.positions[stock]["buy_date"]
         signal_date = self.positions[stock].get("signal_date", buy_date)
         buy_trade_price = self.positions[stock]["buy_trade_price"]
@@ -512,7 +562,13 @@ class BacktestSellExecutionMixin:
         )
 
         # 更新持仓和资金
-        del self.positions[stock]
+        remaining_shares = total_shares - shares
+        if remaining_shares > 0:
+            # 部分卖出：保留剩余持仓，每股成本基准不变，总现金支出按剩余比例缩减
+            self.positions[stock]["shares"] = remaining_shares
+            self.positions[stock]["buy_cost_cash"] = buy_cost_cash * remaining_shares / total_shares
+        else:
+            del self.positions[stock]
         self.current_capital += sell_proceeds
 
         # 如果是止损卖出，清理止损监控器中的持仓状态
@@ -539,8 +595,8 @@ class BacktestSellExecutionMixin:
             "sell_timing": self.sell_timing,  # 新增：卖出时机（open/close）
         }
 
-        # 如果是止损卖出，添加止损相关信息
-        if sell_type == "stop_loss":
+        # 如果是止损/风控减仓卖出，添加触发信息
+        if sell_type in ("stop_loss", "risk_trim"):
             trade_record["sell_reason"] = sell_reason
             trade_record["trigger_type"] = trigger_type
 

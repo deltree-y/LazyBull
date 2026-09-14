@@ -118,10 +118,16 @@ class BacktestRunLoopMixin:
                     # 执行条件卖出（Tn+1 执行：亏损提前换出、整体止盈、持有期到期）
                     self._execute_pending_condition_sells(date, trading_dates, date_to_idx)
 
+                    # 执行风控减仓（Tn+1 执行：暴露门控每日判定生成的按比例减仓单）
+                    self._execute_pending_exposure_trims(date, trading_dates, date_to_idx)
+
                     # 检查卖出条件并生成 T0 卖出信号
                     # - 持有期到期 / 盈利延续到期：写入 pending_condition_sells，Tn+1 执行
                     # - 亏损提前换出 / 整体止盈：写入 pending_condition_sells，Tn+1 执行
                     self._check_and_sell(date, trading_dates, date_to_idx)
+
+                    # 暴露门控每日判定：组合超配则把全部持仓按比例排队到 T+1 减仓
+                    self._queue_exposure_trim(date, trading_dates, date_to_idx)
 
                     # 执行待执行的买入操作（Tn+1）
                     self._execute_pending_buys(date, trading_dates, date_to_idx)

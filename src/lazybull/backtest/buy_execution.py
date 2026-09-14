@@ -120,6 +120,9 @@ class BacktestBuyExecutionMixin:
         if self.stagger_tranches > 1:
             current_value *= self._get_tranche_capital_fraction(tranche_idx)
 
+        # 暴露覆盖（P2-3）：按信号日的暴露系数缩减买入预算（未启用时乘 1.0，逐位一致）
+        current_value *= self._get_exposure_multiplier(signal_date)
+
         planned_buys: List[Dict] = []
         successful_buys: List[Dict] = []
         failed_buys: List[Dict] = []
@@ -495,6 +498,8 @@ class BacktestBuyExecutionMixin:
             # 分批调仓时，补齐预算也按本批槽位比例分配，与正常买入路径一致。
             if self.stagger_tranches > 1:
                 current_value *= self._get_tranche_capital_fraction(completion_tranche_idx)
+            # 暴露覆盖（P2-3）：补齐同样受暴露系数约束，否则降暴露会被补齐买回
+            current_value *= self._get_exposure_multiplier(original_signal_date)
             remaining_unfilled_slots = []
             bought_stock_set = set()  # 跟踪已买入的股票，避免重复买入
             untradeable_stocks = set()  # 当天不可交易的股票，跳过后续槽位的重复尝试

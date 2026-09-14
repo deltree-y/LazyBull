@@ -7,8 +7,15 @@
 #   全部完成后自动运行 compare_walk_forward.py 生成对比 Excel。
 #
 # 示例启动：
-#   powershell -ExecutionPolicy Bypass -File .\scripts\batch_walk_forward.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\batch_walk_forward.ps1# 命令行覆盖暴露系数表（影子实验用，不影响默认生产行为）：
+#   powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 -ExposureTable "temp\exposure_e2_rolling250.csv"
 
+param(
+    # 暴露门控系数表（两列 CSV：日期, 暴露系数）；留空 = 不启用暴露覆盖
+    [string]$ExposureTable = "",
+    # 影子多臂实验省时开关：加上 -SkipCompare 则不跑运行后自动汇总对比
+    [switch]$SkipCompare
+)
 # ============================================================
 #  参数配置区（修改这里控制实验组合）
 # ============================================================
@@ -16,6 +23,10 @@
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 $skip_training           = $true   # $true 启用 | $false 禁用
+
+# ── 暴露门控系数表（影子实验；留空 = 不启用）───────────────────
+# 可用命令行 -ExposureTable 覆盖；系数表落于 (0,1]，缺失日按 1.0 处理
+$exposure_table          = $ExposureTable
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -234,12 +245,16 @@ $bt_stop_loss_enabled                 = $false   # $true 启用 | $false 禁用
 # 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
 $bt_stop_loss_drawdown_pct_list       = @(20) # 回撤止损阈值（%）
 $bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
-
+# ── 政策层 E2 shadow（P2-3）──────────────────────────────
+# 空字符串 = 不启用（成交与净值与改动前逐位一致）；否则指向两列 CSV（日期, 暴露系数）
+# 路径必须 ASCII（PowerShell 组装命令串会转码中文）；导出时务必按交易日历补齐台账缺口
+# 取值直接来自顶部 param -ExposureTable（留空即生产默认：不启用）
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
 
 # ── 运行后自动汇总对比（强烈建议保持 $true）──────────────────
-$run_compare_after       = $true
+# 命令行加 -SkipCompare 则跳过（影子实验只关心逐折净值时省时）
+$run_compare_after       = -not $SkipCompare
 
 # ── 全部完成后是否倒计时关机 ──────────────────────────────────
 $shutdown_on_complete    = $false
@@ -673,6 +688,9 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
                           " --bt-stop-loss-drawdown-pct $bt_stop_loss_drawdown_pct" +
                           " --bt-stop-loss-consecutive-limit-down $bt_stop_loss_consecutive_limit_down"
         }
+        if ($exposure_table -ne "") {
+            $pythonCmd += " --exposure-table `"$exposure_table`""
+        }
     } else {
         $pythonCmd += " --no-oos-backtest"
     }
@@ -763,4 +781,8 @@ if ($shutdown_on_complete) {
     Write-Host "`n[!] 倒计时结束，正在关机..." -ForegroundColor Red
     Stop-Computer -Force
 }
+
+
+
+
 

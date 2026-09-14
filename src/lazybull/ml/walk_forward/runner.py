@@ -14,6 +14,7 @@ from typing import List
 from dateutil.relativedelta import relativedelta
 from loguru import logger
 
+from src.lazybull.backtest.exposure_override import load_exposure_table
 from src.lazybull.common.config import get_data_root, get_stock_selection_models_root
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
@@ -216,6 +217,15 @@ def run_walk_forward(args) -> None:
             logger.info(f"  分批调仓: {args.stagger_tranches} 批")
     effective_data_root = args.data_root or get_data_root()
     logger.info(f"数据目录: {effective_data_root}")
+
+    exposure_table = None
+    if getattr(args, "exposure_table", None):
+        exposure_table = load_exposure_table(Path(args.exposure_table))
+        reduced = sum(1 for value in exposure_table.values() if value < 1.0)
+        logger.info(
+            f"  暴露覆盖（P2-3 shadow）: {args.exposure_table} → {len(exposure_table)} 日"
+            f"（降暴露 {reduced} 日，系数集合={sorted(set(exposure_table.values()))}）"
+        )
 
     try:
         # 初始化组件
@@ -430,6 +440,7 @@ def run_walk_forward(args) -> None:
                             enable_early_rebalance_on_empty=args.enable_early_rebalance_on_empty,
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,
+                            exposure_table=exposure_table,
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)
