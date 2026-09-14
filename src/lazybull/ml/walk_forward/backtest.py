@@ -143,6 +143,8 @@ def run_oos_backtest(
         completion_window_days=5,
         enable_pending_order=True,
     )
+    # 政策旁路（terminal_loss P2-1）：开启逐日持仓快照（只读，不影响任何决策）
+    engine.record_holdings_snapshot = True
 
     nav_curve = engine.run(
         start_date=pd.Timestamp(bt_start),
@@ -191,4 +193,5 @@ def run_oos_backtest(
     metrics["_nav_curve"] = nav_curve
     metrics["_trades"] = engine.get_trades()
     metrics["_execution_attribution"] = engine.get_execution_attribution()
+    metrics["_holdings_snapshot"] = engine.get_holdings_snapshot()
     return metrics

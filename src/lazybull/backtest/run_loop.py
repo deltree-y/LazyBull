@@ -281,6 +281,13 @@ class BacktestRunLoopMixin:
                         "market_value": portfolio_value - self.current_capital,
                     }
                 )
+                # 政策旁路（terminal_loss P2-1）：逐日持仓快照，仅记录不参与决策
+                self._record_holdings_snapshot(
+                    date=date,
+                    portfolio_value=portfolio_value,
+                    trading_dates=trading_dates,
+                    date_to_idx=date_to_idx,
+                )
         finally:
             logger.remove(deferred_sink_id)
             self._deferred_day_logs = []

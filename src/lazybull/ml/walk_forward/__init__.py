@@ -10,6 +10,7 @@ from .cli import (
 from .reporting import (
     build_daily_topk_detail_df,
     chain_nav_splits,
+    write_walk_forward_holdings_snapshot,
     write_walk_forward_topk_details,
     write_walk_forward_trade_details,
 )
@@ -89,6 +90,7 @@ __all__ = [
     "run_oos_backtest",
     "run_walk_forward",
     "write_walk_forward_summary",
+    "write_walk_forward_holdings_snapshot",
     "write_walk_forward_topk_details",
     "write_walk_forward_trade_details",
 ]

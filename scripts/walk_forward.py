@@ -17,6 +17,7 @@ from src.lazybull.ml.walk_forward.cli import (
 from src.lazybull.ml.walk_forward.reporting import (
     build_daily_topk_detail_df,
     chain_nav_splits,
+    write_walk_forward_holdings_snapshot,
     write_walk_forward_topk_details,
     write_walk_forward_trade_details,
 )

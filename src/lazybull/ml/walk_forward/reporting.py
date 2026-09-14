@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ...common.sidecar_schema import SNAPSHOT_COLUMNS_ZH, to_chinese
 from .chain_metrics import calculate_chain_metrics
 
 
@@ -123,6 +124,37 @@ def write_walk_forward_trade_details(
             exported_count += 1
     if exported_count > 0:
         logger.info(f"已导出 walk-forward 交易归因明细: {exported_count} 个文件 -> {output_dir}")
+
+
+def write_walk_forward_holdings_snapshot(
+    results: List[Dict], summary_csv_path: str, wf_run_id: str
+) -> None:
+    """导出各 split 的逐日持仓快照（政策旁路 P2-1，**中文表头**）。
+
+    表结构见 ``common.sidecar_schema.SNAPSHOT_KEYS``；中文表头是用户可见产物的
+    统一约定（2026-09-14 共识），内部键只用于代码与 join。
+    """
+    output_dir = Path(summary_csv_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    exported_count = 0
+    for result in results:
+        snapshot = result.get("_holdings_snapshot")
+        if snapshot is None or snapshot.empty:
+            continue
+        frame = to_chinese(snapshot.copy(), SNAPSHOT_COLUMNS_ZH)
+        frame.insert(0, "运行标识", wf_run_id)
+        frame.insert(1, "折序号", result.get("split_index"))
+        frame.insert(2, "模型版本", result.get("model_version"))
+        frame["日期"] = frame["日期"].astype(str).str.slice(0, 10)
+        for column in ("买入日", "信号日", "到期执行日"):
+            if column in frame.columns:
+                frame[column] = frame[column].astype(str)
+        split_index = result.get("split_index")
+        filename = f"walk_forward_持仓快照_{wf_run_id}_split{int(split_index):02d}.csv"
+        frame.to_csv(output_dir / filename, index=False, encoding="utf-8-sig")
+        exported_count += 1
+    if exported_count > 0:
+        logger.info(f"已导出 walk-forward 持仓快照: {exported_count} 个文件 -> {output_dir}")
 
 
 def chain_nav_splits(results: List[Dict], summary_csv_path: str, wf_run_id: str) -> None:

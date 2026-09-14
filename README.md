@@ -354,6 +354,28 @@ python scripts/analyze_terminal_risk_gate.py --wf-root data\walk_forward\termina
 # 产物 gate_ci_block.csv（每行 = 折 × 块长 × 判据）
 # 提速（v0.112.0）：--block-jobs N 按（折 × 判据）并行，与串行逐位等价
 #（实测单臂串行 ≈30 分钟 → 并行几分钟），如：--score-mode all --block-jobs 8
+
+# 政策旁路（P2-1，v0.114.0）：持仓快照 + 离线打分（全部中文表头）
+# 1) 持仓快照：跑一次带 OOS 回测的 walk_forward 即自动导出（每 split 一份）
+#    data/walk_forward/raw/walk_forward_持仓快照_{wf_run_id}_splitNN.csv
+#    字段：运行标识/折序号/模型版本 + 日期/股票代码/持仓股数/持仓市值/持仓权重/
+#    组合总值/买入日/信号日/持有交易日数/到期执行日/剩余持有交易日
+#    只读旁路：开关对成交与净值逐位一致；到期执行日按标准持有期推算，
+#    超出回测窗口记空值（动态延期不在本表口径内）
+# 2) 离线打分（按"该日期时 Train/Val 都已结束"的折模型，无前视）：
+python scripts/analyze_policy_sidecar.py --arm _d5_v6m_fscore
+# 产物（中文表头，utf-8-sig 可直接 Excel 打开）：
+#   {risk-root}/archives/policy_sidecar{arm}/风险台账.csv
+#     （风险概率 / 当日截面分位 / 日波动率 / 持有期预期波动 / 市场波动状态 /
+#       事后实际收益 / 是否异常亏损 / 事后可避免损失 / 主策略最后持仓日）
+#   触发清单.csv（双条件命中：正确拦截 / 误杀；可选漏报）
+#   阈值扫描.csv（截面分位阈值 × 绝对概率阈值 → 拦截率/误杀率/漏报率/收益代价）
+# 常用参数：--p-hi 0.90 0.95 0.99 --p-abs 0.05 0.10 0.15 0.20
+#           --no-daypct（跳过截面分位，阈值扫描随之不可用）
+# 口径硬约束：标签经 build_terminal_loss_labels 按折的 k/h_max 关联；
+# σ 用 compute_sigma_daily_panel；当日截面分位在完整同日截面内计算；
+# 剩余持有交易日超出 [1, h_max] 直接报错；full 特征集的 pct_* 不在 cs_train
+# 内 → 明确报错（请用 core / core_state）
 ```
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的

@@ -27,6 +27,7 @@ from ..trading.stagger import get_tranche_capital_fraction as _shared_tranche_ca
 from ..trading.stagger import get_tranche_target_count as _shared_tranche_target_count
 from ..universe.base import Universe
 from .buy_execution import BacktestBuyExecutionMixin
+from .holdings_snapshot import BacktestHoldingsSnapshotMixin
 from .pending_execution import BacktestPendingExecutionMixin
 from .reporting import BacktestReportingMixin, _format_rebalance_decision_summary
 from .run_loop import BacktestRunLoopMixin
@@ -40,6 +41,7 @@ class BacktestEngine(
     BacktestSellExecutionMixin,
     BacktestSignalExecutionMixin,
     BacktestPendingExecutionMixin,
+    BacktestHoldingsSnapshotMixin,
     BacktestRunLoopMixin,
 ):
     """回测引擎
@@ -250,6 +252,9 @@ class BacktestEngine(
         self.portfolio_values: List[Dict] = []  # 组合价值历史
         self.trades: List[Dict] = []  # 交易记录
         self.execution_attribution_records: List[Dict] = []  # 信号槽位到实际成交的旁路记录
+        # 政策旁路（terminal_loss P2-1）：逐日持仓快照，只读记录不参与决策
+        self.holdings_snapshots: List[Dict] = []
+        self.record_holdings_snapshot: bool = False
 
         # 仓位补齐状态跟踪
         # {调仓日期: {未成交股票列表, 目标数量, 候选列表, 剩余权重字典}}

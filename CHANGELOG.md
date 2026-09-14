@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.114.0] - 2026-09-14
+
+### Added
+
+- **政策旁路 P2-1：主策略 OOS 逐日持仓快照（只读，中文表头）**：新增 `backtest/holdings_snapshot.py::BacktestHoldingsSnapshotMixin`（引擎默认关闭、`ml/walk_forward` 的 OOS 回测显式开启），在每日估值后追加一行：日期/股票代码/持仓股数/持仓市值/持仓权重/组合总值/买入日/信号日/持有交易日数/到期执行日/剩余持有交易日；估值口径与 `_calculate_portfolio_value` 一致但**不写回任何状态**，开关对成交与净值逐位一致（测试锁定）。到期执行日按**标准持有期**推算（`买入日位置 + holding_period`），超出回测窗口记空值不猜测；`剩余持有交易日 h = 到期位置 − T 位置 − 1`（与标签 `E = T+1+h` 完全一致）。导出由 `ml/walk_forward/reporting.py::write_walk_forward_holdings_snapshot` 完成，文件名 `walk_forward_持仓快照_{wf_run_id}_splitNN.csv`。
+- **政策旁路打分链路（离线回放，P2-1）**：新增 `risk/terminal_loss/policy_sidecar.py` 与入口 `scripts/analyze_policy_sidecar.py`——按“该日期时 Train/Val 都已结束”的规则选折模型（无前视；区间外日期跳过并告警），用规范实现打分并产出三张**中文表头**表：
+  - `风险台账.csv`（风险概率 / 当日截面分位 / 日波动率 / 持有期预期波动 / 市场波动状态 / 事后实际收益 / 是否异常亏损 / 事后可避免损失 / 主策略最后持仓日）
+  - `触发清单.csv`（双条件命中：正确拦截 / 误杀，可选漏报）
+  - `阈值扫描.csv`（截面分位阈值 × 绝对概率阈值 → 触发笔数与占比 / 事件拦截率 / 误杀率 / 误杀且上涨占比 / 漏报率 / 两侧平均事后收益 / 事后可避免损失合计）
+  硬约束：标签一律经 `labels.build_terminal_loss_labels` 按折自己的 `k`/`h_max` 生成后关联（禁止复制公式）；σ 一律用 `compute_sigma_daily_panel`；`当日截面分位` 必须在**完整同日截面**内先排名再取持仓；`剩余持有交易日` 超出 [1, h_max] 直接报错；模型 `feature_names` 中 cs_train 不可得的列（如 `full` 的 `pct_*`）明确报错不降级。
+- **`common/sidecar_schema.py`：政策旁路表结构的唯一来源（中文列名）**：内部键 → 中文列名的映射与列序集中定义，生产者（回测快照导出）与消费者（打分链路）同源，缺列硬报错；叶子模块无项目内依赖，避免 `backtest → risk → ml` 循环导入。
+- 用户可见旁路产物**一律中文表头**（项目共识，与持仓台账/触发清单/阈值扫描一致）。
+
+### Tests
+
+- 新增 `tests/test_backtest_holdings_snapshot.py`（6 项）：快照行算术（持有天数/到期执行日/剩余持有期/权重）、默认关闭零记录、空仓不记录、**只读不写回持仓字典**、交易日映射缺失报错、窗口外记空值、引擎内置 mixin 契约。
+- 新增 `tests/test_policy_sidecar.py`（10 项）：折索引排序与元数据校验、**严格无前视**选择规则、台账打分（截面分位分母 = 当日完整截面、标签经规范实现关联）、h=0 剔除与超网格报错、缺分区/缺列显式报错、触发清单三类事件与阈值扫描口径、三张表的中文表头冻结。
+- `tests/test_walk_forward.py` 新增持仓快照导出用例（列序 = 运行标识/折序号/模型版本 + 冻结中文列）。
+
+### Docs
+
+- `CLAUDE.md`：新增「政策旁路契约（terminal_loss P2-1）」并补 `common/sidecar_schema.py`、`scripts/analyze_policy_sidecar.py` 到目录职责。
+- `README.md`：补充持仓快照导出说明与 `analyze_policy_sidecar.py` 用法。
+- `docs/plans/terminal_loss_policy_layer_plan.md`：追加 P2-1 字段级设计与实施状态；`docs/terminal_loss_risk_register.md`：R-001 缓解措施标注 P2-1 已落地。
+
 ## [0.113.0] - 2026-09-13
 
 ### Added

@@ -23,6 +23,7 @@ from .backtest import run_oos_backtest
 from .deploy_training import execute_deploy_training
 from .reporting import (
     chain_nav_splits,
+    write_walk_forward_holdings_snapshot,
     write_walk_forward_topk_details,
     write_walk_forward_trade_details,
 )
@@ -440,6 +441,9 @@ def run_walk_forward(args) -> None:
                         execution_attribution = bt_metrics.pop("_execution_attribution", None)
                         if execution_attribution is not None:
                             result["_execution_attribution"] = execution_attribution
+                        holdings_snapshot = bt_metrics.pop("_holdings_snapshot", None)
+                        if holdings_snapshot is not None:
+                            result["_holdings_snapshot"] = holdings_snapshot
                         result["bt_metrics"] = bt_metrics
                     except Exception as e:
                         logger.error(f"Split {split.split_index} OOS回测失败: {e}")
@@ -501,6 +505,9 @@ def run_walk_forward(args) -> None:
                 write_walk_forward_topk_details(results, summary_csv_path, wf_run_id)
 
             write_walk_forward_trade_details(results, summary_csv_path, wf_run_id)
+
+            # 政策旁路 P2-1：逐日持仓快照（中文表头，供 terminal_loss 政策层离线打分）
+            write_walk_forward_holdings_snapshot(results, summary_csv_path, wf_run_id)
 
             # ── 串联各 split 的 OOS 回测净值曲线 ──────────────────
             chain_nav_splits(results, summary_csv_path, wf_run_id)
