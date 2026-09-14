@@ -23,7 +23,9 @@ def setup_logger(
     
     Args:
         log_level: 日志级别
-        log_file: 日志文件路径，None则只输出到控制台
+        log_file: 日志文件路径，None则只输出到控制台。临时 log 文件统一写仓库根
+            ``logs/`` 目录（``common.config.get_logs_dir()``），禁止写在仓库根
+            或业务目录（项目共识，见 CLAUDE.md §7.7）
         rotation: 日志轮转大小
         retention: 日志保留时间
         format_string: 日志格式字符串

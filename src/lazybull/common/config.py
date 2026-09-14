@@ -226,6 +226,22 @@ def get_paper_remote() -> Optional[str]:
     return get_config().get("data.paper_remote")
 
 
+def get_logs_dir() -> str:
+    """获取临时日志目录：仓库根 logs/（项目共识，见 CLAUDE.md §7.7）。
+
+    临时 log 文件（终端重定向输出、loguru ``log_file``、一次性诊断脚本输出等）
+    统一写入该目录，禁止写在仓库根或业务目录；目录不存在时自动创建。
+
+    Returns:
+        日志目录绝对路径
+    """
+    from .. import PROJECT_ROOT
+
+    path = PROJECT_ROOT / "logs"
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 def get_respi_local_dir() -> str:
     """获取 LCD35 本地工作目录（日志、日内图缓存等）。
 

@@ -1,5 +1,7 @@
 """测试配置管理模块"""
 
+from pathlib import Path
+
 import pytest
 
 import src.lazybull.common.config as config_module
@@ -8,6 +10,7 @@ from src.lazybull.common.config import (
     get_cost_settings,
     get_data_path,
     get_data_root,
+    get_logs_dir,
     get_ml_train_runs_csv,
     get_models_root,
     get_paper_root,
@@ -116,3 +119,14 @@ def test_project_default_helpers(monkeypatch, tmp_path):
     assert cost_settings["min_commission"] == 6.0
     assert cost_settings["stamp_tax"] == 0.0006
     assert cost_settings["slippage"] == 0.0007
+
+
+def test_get_logs_dir_creates_project_logs_dir(monkeypatch, tmp_path):
+    """临时日志目录固定为仓库根 logs/，不存在时自动创建（项目共识，见 CLAUDE.md §7.7）"""
+    monkeypatch.setattr("src.lazybull.PROJECT_ROOT", tmp_path)
+
+    logs_dir = get_logs_dir()
+    assert Path(logs_dir) == tmp_path / "logs"
+    assert Path(logs_dir).is_dir()
+    # 幂等：重复调用返回同一路径，不报错
+    assert get_logs_dir() == logs_dir

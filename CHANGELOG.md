@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.114.1] - 2026-09-14
+
+### Changed
+
+- **项目共识：临时 log 文件统一写仓库根 `logs/` 目录**——终端重定向输出、loguru `log_file`、
+  一次性诊断脚本输出等临时 log 一律写入 `logs/`，禁止散落在仓库根或业务目录。新增唯一入口
+  `common/config.py::get_logs_dir()`（单默认值：仓库根 `logs/`，不存在时自动创建）；
+  `common/logger.py::setup_logger` 文档同步说明规范。`.gitignore` 中 `logs/` 改为「整体忽略 +
+  保留 `logs/.gitkeep`」（`*.log` 继续全局忽略）；仓库根与 `data/walk_forward/terminal_risk_wf/`
+  下既有 29 个散落临时 log 已迁移至 `logs/`（文件名不变），`risk/terminal_loss/dataset.py`
+  注释中的引用路径同步更新。例外：设备端运行日志（树莓派 LCD 的
+  `/tmp/lazybull_lcd35/`）维持既有本地契约。
+
+### Tests
+
+- `tests/test_config.py`：新增 `get_logs_dir()` 用例——固定指向仓库根 `logs/`、不存在时自动创建、重复调用幂等。
+
+### Docs
+
+- `CLAUDE.md`：§3.3 目录索引新增 `logs/`（`temp/` 语义收窄为临时脚本/中间产物）、§7.7 增补临时 log
+  规范（含命名建议 `logs/<用途>_<日期>.log` 与设备端例外）、§10.3 禁忌补充。
+- `.github/copilot-instructions.md` §1.4 同步登记同一规范。
+- `README.md`：项目结构树补充 `logs/`、`temp/` 条目，开发规范补充临时文件/日志约定。
+
 ## [0.114.0] - 2026-09-14
 
 ### Added

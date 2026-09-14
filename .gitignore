@@ -84,9 +84,11 @@ data/walk_forward/*
 data_f1b7bac
 .venv312/*
 
-# Logs
+# Logs（项目共识：所有临时 log 文件统一写仓库根 logs/ 下，见 CLAUDE.md §7.7 与
+# .github/copilot-instructions.md §1.4；目录内容整体忽略，仅保留 .gitkeep）
 *.log
-logs/
+logs/*
+!logs/.gitkeep
 
 # Docs
 docs/plans

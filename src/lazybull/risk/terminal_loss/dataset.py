@@ -79,7 +79,7 @@ TERMINAL_LOSS_FEATURES: List[str] = (
 #: 波动率状态核心清单（v0.111.0，机制驱动）：标签已按 σ√h 归一化，可学的截面
 #: 信息集中在“波动率/尺度状态 + 期限”。全量 33 列时 Val logloss 在第 7 棵树
 #: 即触底（模型几乎未训练）；核心子集在单折把 daynorm 1.119→1.392、
-#: raw 1.232→1.585（日志 data/walk_forward/terminal_risk_wf/screen_v0v3.log）。
+#: raw 1.232→1.585（日志 logs/screen_v0v3.log）。
 VOL_STATE_CORE_FEATURES: List[str] = [
     "remaining_intervals",
     "sigma_daily_20",

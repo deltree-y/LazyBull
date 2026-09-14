@@ -595,6 +595,8 @@ LazyBull/
 │   ├── test_config.py         # 配置测试
 │   ├── test_cost.py           # 成本模型测试
 │   └── test_calendar.py       # 日历测试
+├── logs/                       # 临时日志目录（项目共识：临时 log 统一写这里，已 gitignore）
+├── temp/                       # 临时文件目录（项目共识：临时脚本/中间产物，已 gitignore）
 ├── .env.example               # 环境变量模板
 ├── .gitignore                 # Git忽略文件
 ├── pyproject.toml             # Poetry配置
@@ -1032,6 +1034,7 @@ class MyStrategy(Signal):
 - 保持测试覆盖率 > 80%
 - 遵循现有代码风格
 - 更新相关文档
+- 临时文件统一放 `temp/`、临时日志统一放 `logs/`（均已 gitignore，可随时清理）
 
 ---
 
