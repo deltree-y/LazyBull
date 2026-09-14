@@ -106,6 +106,131 @@ SCAN_COLUMNS_ZH: List[str] = [
 ]
 
 
+# ── 表 5：暴露门控校准（E2，一行 = 一个臂）──────────────────────────
+
+GATE_CALIBRATION_KEYS: List[str] = [
+    "arm",
+    "calib_start",
+    "calib_end",
+    "calib_days",
+    "regime_quantile",
+    "regime_threshold",
+    "score_quantile",
+    "score_threshold",
+    "de_exposure_multiplier",
+    "layer_days",
+    "calib_trigger_days",
+    "calib_trigger_share",
+]
+
+GATE_CALIBRATION_COLUMNS_ZH: List[str] = [
+    "臂",
+    "校准段起",
+    "校准段止",
+    "校准交易日数",
+    "波动分位参数",
+    "市场波动阈值",
+    "得分分位参数",
+    "得分阈值",
+    "降暴露系数",
+    "层内校准日数",
+    "校准段触发日数",
+    "校准段触发占比",
+]
+
+# ── 表 6：暴露门控逐日判定（一行 = 某臂某交易日）────────────────────
+
+GATE_DAILY_KEYS: List[str] = [
+    "arm",
+    "date",
+    "fold",
+    "threshold_mode",
+    "window_days",
+    "regime_threshold",
+    "mkt_vol_20",
+    "vol_percentile",
+    "p_loss_mean",
+    "score_threshold",
+    "layer_score_percentile",
+    "holdings",
+    "weight_sum",
+    "day_weighted_return",
+    "day_mean_return",
+    "triggered",
+    "first_trigger",
+    "exposure_multiplier",
+    "in_calibration",
+]
+
+GATE_DAILY_COLUMNS_ZH: List[str] = [
+    "臂",
+    "日期",
+    "风险模型折",
+    "阈值口径",
+    "窗口日数",
+    "市场波动阈值",
+    "市场波动状态",
+    "波动分位",
+    "组合平均风险概率",
+    "得分阈值",
+    "层内得分分位",
+    "持仓数",
+    "组合权重和",
+    "当日加权事后收益",
+    "当日平均事后收益",
+    "是否触发",
+    "是否首触",
+    "暴露系数",
+    "是否校准段",
+]
+
+# ── 表 7：暴露门控评估（一行 = 某臂 × 口径 × 分组/折）────────────────
+
+GATE_EVAL_KEYS: List[str] = [
+    "arm",
+    "scope",
+    "group",
+    "fold",
+    "days",
+    "trigger_days",
+    "trigger_share",
+    "first_trigger_days",
+    "first_trigger_share",
+    "trigger_mean_return",
+    "nontrigger_mean_return",
+    "return_gap",
+    "trigger_loss_day_rate",
+    "nontrigger_loss_day_rate",
+    "trigger_event_rate",
+    "nontrigger_event_rate",
+    "gain_term",
+    "cost_term",
+    "net_daily_delta",
+]
+
+GATE_EVAL_COLUMNS_ZH: List[str] = [
+    "臂",
+    "口径",
+    "分组",
+    "风险模型折",
+    "交易日数",
+    "触发日数",
+    "触发占比",
+    "首触日数",
+    "首触占比",
+    "触发日平均加权收益",
+    "未触发日平均加权收益",
+    "收益差",
+    "触发日亏损日频率",
+    "未触发日亏损日频率",
+    "触发日事件率",
+    "未触发日事件率",
+    "收益项",
+    "成本项",
+    "净增量（日均口径）",
+]
+
+
 def to_chinese(frame, mapping: Dict[str, str]):
     """按映射把内部英文列名改为中文表头（缺列报错，不静默丢列）。
 
