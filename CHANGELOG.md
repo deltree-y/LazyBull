@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.119.0] - 2026-09-15
+
+### Added
+
+- **因子体检工具（选股因子健康检查）**：新增薄入口 `scripts/analyze_factor_health.py` +
+  子包 `scripts/factor_health/`（`constants.py` / `scan.py` / `analysis.py` / `report.py`）。
+  一次运行产出：① 覆盖率（全期 + 分年最小值）；② 逐日截面 RankIC（均值/
+  标准差/`ic_ir`/`t`、分年、高-低波动分层）；③ 采样日平均截面相关矩阵与层次聚类（簇内代表 =
+  `|ic_ir|` 最大者）；④ 既有模型（含 `EnsembleModel`）的因子使用度（gain 份额、分裂使用率）；
+  ⑤ 五张候选清单（低覆盖 / 跨期翻号 / 弱信息 / 几乎未用 / 同簇冗余）+ markdown 报告
+  + **三份可直接用于 `--factor-prune --factor-exclude-file` 的排除清单 JSON**。
+  关键口径：市场级截面常数（截面 IC 无定义）单独识别、不计入截面 IC 筛选；负 IC **不**判为坏因子
+  （只标记“不稳定/低信息/未被使用”）；候选清单是**实验输入而非结论**，采纳必须走 WF A/B。
+  CLI 主要参数：`--start/--end/--every`（采样区间与步长）、`--feature-file`、`--skip-models`、
+  `--model-versions`、`--usage-model-count`、`--no-mainboard-filter`，以及全部判定阈值
+  （`--low-coverage` / `--weak-abs-t` / `--cluster-abs-corr` 等）。日志落 `logs/`，产物默认落
+  `data/reports/factor_health/<时间戳>/`。
+- 测试：`tests/test_analyze_factor_health.py`（11 项）覆盖特征名映射、家族继承、版本规格解析、
+  逐日 RankIC（零方差列跳过）、分区/采样日选择、跨年翻号统计、层次聚类、候选规则、
+  模型使用度（假 loader，含集成展开）与**端到端**（合成 cs_train 分区 → 台账 → 报告 → 产物 + 排除清单）。
+
+### 记录（因子体检首轮正式运行，2026-09-15）
+
+- 运行：`python scripts/analyze_factor_health.py --start 20200101 --every 3`；对象 = 生产 `v24052` 入模的
+  **154 个特征**（2020-01 ~ 2026-07 采样 525 个交易日，主板域 3482 只，15 个注册模型 / 45 个子模型的
+  gain 份额与分裂使用率）。耗时约 95 秒。
+- 产物归档：`data/reports/factor_health/20260915_183955/`；三份排除清单另复制到
+  `configs/factor_exclude_health_{weak,dedup,weak_dedup}_v1.json` 供 WF A/B 直接引用。
+- 结果：市场级截面常数 **17**、孪生对 **37**（`X/X_sz`）、低覆盖 **5**、跨期翻号 **30**、
+  弱信息 **14**、几乎未用 **3**、同簇冗余 **49**（43 个多成员簇）。
+- 与 2026-09-14 临时脚本首轮（`data/reports/factor_health/20260914/`，**已废弃**）的差异：① 低覆盖 6→5
+  （修复 `coverage_min_year` 统计口径，此前 `north_net_buy` 因该列被误判）；② 同簇冗余 48→49
+  （相关性采样集合不同）。其余口径完全一致，结论不变。
+
 ## [0.118.0] - 2026-09-14
 
 ### Added

@@ -205,6 +205,38 @@ python scripts/quality_dashboard.py --data-root ./data --start-date 20250101 --e
 
 退出码 `0` 表示无错误，`1` 表示扫描完成但发现质量错误，`2` 表示扫描执行失败。扫描时会输出当前分区、累计进度、耗时和预计剩余时间；进度心跳间隔在 `configs/base.yaml` 的 `quality.progress_interval_seconds` 中统一配置。HTML 使用状态卡片、数据集摘要和紧凑表格呈现结果，仅展示前 `quality.html_max_detail_rows` 条异常和快照变化（默认 100），完整明细保存在同目录 `latest_metrics.parquet`。
 
+#### 因子体检（Factor Health Check）
+
+对当前生产模型的特征清单做一次体检：覆盖率、逐日截面 RankIC（分年 + 高低波动分层）、
+平均截面相关矩阵聚类（识别孪生与冗余簇）、既有模型的因子使用度（gain 份额 / 分裂使用率）：
+
+```bash
+# 默认：全历史（2020 起）每 3 个交易日采样，特征清单取最新注册模型，产物落 data/reports/factor_health/<时间戳>/
+python scripts/analyze_factor_health.py
+
+# 指定区间与步长；跳过模型加载（只看 IC/覆盖/聚类）
+python scripts/analyze_factor_health.py --start 20200101 --end 20260702 --every 3 --skip-models
+
+# 指定特征清单与模型版本范围（默认取最近 15 个注册版本）
+python scripts/analyze_factor_health.py --feature-file data/models/stock_selection/v24052_features.json \
+    --model-versions 24050-24052
+```
+
+产物：`factor_health_report.md`（结论 + 家族画像 + 候选清单）、`factor_register.csv`（逐因子台账）、
+`daily_ic.csv.gz`、`corr_matrix.csv`、`clusters.csv`、`candidates_*.csv`，
+以及 **三份可直接喂给 WF 实验的排除清单**（`exclude_weak_v1.json` / `exclude_dedup_v1.json` /
+`exclude_weak_dedup_v1.json`）：
+
+```bash
+# 用于单变量消融：弱信息+未用（B）/ 同簇去重（A）分开做，每次只动一个变量
+python scripts/walk_forward.py --factor-prune \
+    --factor-exclude-file data/reports/factor_health/<时间戳>/exclude_dedup_v1.json
+```
+
+口径提示：市场级截面常数（截面 IC 无定义）单独识别、不参与截面 IC 筛选；
+负 IC **不**等于坏因子（模型自行学习方向）；候选清单只是**实验输入**，
+采纳必须走 WF A/B 对照（预登记判据 + 噪声带）判定。
+
 ##### 纸面交易（Paper Trading）
 
 LazyBull 支持纸面交易工作流，用于模拟实盘交易：
@@ -637,6 +669,8 @@ LazyBull/
 │   ├── run_ml_backtest.py     # 运行 ML 信号回测
 │   ├── compare_walk_forward.py # 实验对比与稳定性汇总（薄入口）
 │   ├── compare/               # 实验对比分析子包（constants/loading/aggregate/scoring/...）
+│   ├── analyze_factor_health.py # 因子体检（薄入口）
+│   ├── factor_health/         # 因子体检子包（constants/scan/analysis/report）
 │   └── ana/
 │       ├── analyze_factor_importance.py # 因子重要性分析
 │       └── analyze_factor_stability.py  # 集成模型因子使用稳定性分析

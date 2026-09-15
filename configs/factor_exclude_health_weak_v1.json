@@ -1,0 +1,22 @@
+{
+  "description": "因子体检：弱信息(|t|<阈值 且 gain<阈值)+几乎未使用（使用率/gain 低于阈值）",
+  "exclude_count": 16,
+  "exclude_factors": [
+    "express_roe",
+    "forecast_chg_mid",
+    "fund_count_chg",
+    "lhb_cont_on_list",
+    "lhb_cont_up_days_5",
+    "lhb_net_amount",
+    "zscore_current_ratio_sz",
+    "zscore_equity_yoy",
+    "zscore_equity_yoy_sz",
+    "zscore_inv_turn_sz",
+    "zscore_netprofit_margin",
+    "zscore_netprofit_yoy",
+    "zscore_quick_ratio_sz",
+    "zscore_roa",
+    "zscore_roe_dt",
+    "zscore_roe_waa"
+  ]
+}
