@@ -22,6 +22,19 @@ All notable changes to this project will be documented in this file.
 - 测试：`tests/test_analyze_factor_health.py`（11 项）覆盖特征名映射、家族继承、版本规格解析、
   逐日 RankIC（零方差列跳过）、分区/采样日选择、跨年翻号统计、层次聚类、候选规则、
   模型使用度（假 loader，含集成展开）与**端到端**（合成 cs_train 分区 → 台账 → 报告 → 产物 + 排除清单）。
+- **口径交换排除清单**：`build_exclude_lists(register, clusters)` 新增第 4 份 `exclude_dedup_plain_v1.json`
+  （`prefer_plain_representatives`：同一簇划分下代表改为优先保留非 `_sz` 口径）。动机：默认代表按 `|ic_ir|`
+  选出，而实测 37 对孪生中 **31 对是 `_sz`（市值中性化）口径更高**、被删的 49 列中 42 列是 plain 版，
+  因此“直接去重”会**隐式削减 size 暴露**，必须与口径交换清单成对做单变量对照才能归因。
+  首轮正式运行的交换清单已落 `configs/factor_exclude_health_plain_v1.json`（49 列，与默认去重清单同规模，28 对换边）。
+- **折子集链式对比工具**：新增薄入口 `scripts/compare_wf_fold_subset.py` + `scripts/compare/fold_subset.py`。
+  只读既有 `chain_nav_*.csv` / `walk_forward_summary_*.csv` / `data_state_*.json`，按 `split_index` 子集
+  重算链式指标（子集净值归一化到起点后复用 `ml/walk_forward/chain_metrics.py`），输出
+  `折子集对比.csv` / `逐折对比.csv` / `折子集对比说明.md`（中文表头，默认落 `data/reports/wf_fold_subset/<时间戳>/`）。
+  **折集合、逐折窗口（`test_start`~`test_end`）、数据态 ID 任一不一致直接报错**；动机是消融实验可用
+  `--selected-split-indices` 只跑部分折省时（实测约 0.9h/臂 vs 全 14 折约 2h/臂），但必须与基线在同一折子集上可比。
+- 测试新增：`tests/test_compare_wf_fold_subset.py`（12 项：折规格解析、加载/警告、子集归一化与手工值对齐、
+  跨折边界不计收益、逐折收益与回撤、折集合/窗口/数据态不一致报错、汇总列与重复列校验）。
 
 ### 记录（因子体检首轮正式运行，2026-09-15）
 

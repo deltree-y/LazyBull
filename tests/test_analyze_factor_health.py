@@ -19,6 +19,7 @@ from scripts.factor_health.analysis import (
     flag_candidates,
     map_booster_scores,
     parse_version_spec,
+    prefer_plain_representatives,
 )
 from scripts.factor_health.constants import HealthThresholds
 from scripts.factor_health.report import (
@@ -191,6 +192,75 @@ class _FakeEnsemble:
         self.models = models
 
 
+def test_prefer_plain_representatives_swaps_sz_side():
+    clusters = pd.DataFrame(
+        [
+            {
+                "cluster_id": 1,
+                "size": 2,
+                "members": "zscore_bp|zscore_bp_sz",
+                "representative": "zscore_bp_sz",
+            },
+            {
+                "cluster_id": 2,
+                "size": 2,
+                "members": "zscore_fcf_yield_sz|zscore_ocf_to_profit_sz",
+                "representative": "zscore_fcf_yield_sz",
+            },
+        ]
+    )
+    register = pd.DataFrame(
+        {"ic_ir": [0.9, 0.5, 0.3, 0.2]},
+        index=["zscore_bp_sz", "zscore_bp", "zscore_fcf_yield_sz", "zscore_ocf_to_profit_sz"],
+    )
+    swapped = prefer_plain_representatives(clusters, register).set_index("cluster_id")
+    # 有 plain 成员的簇：代表换成 plain（即便原本 _sz 的 |ic_ir| 更高）
+    assert swapped.loc[1, "representative"] == "zscore_bp"
+    assert bool(swapped.loc[1, "swapped"])
+    # 全为 _sz 的簇：保持不变
+    assert swapped.loc[2, "representative"] == "zscore_fcf_yield_sz"
+    assert not bool(swapped.loc[2, "swapped"])
+
+
+def test_build_exclude_lists_includes_plain_swap():
+    register = pd.DataFrame(
+        {
+            "flag_weak": [False, False, False, False],
+            "flag_unused": [False, False, False, False],
+            # 默认去重清单剔除非代表成员：此处模拟真实情形（孪生对里代表为 _sz、被删的是 plain）
+            "flag_dup": [True, False, False, True],
+        },
+        index=["zscore_bp", "zscore_bp_sz", "lhb_on_list", "lhb_reason_count"],
+    )
+    clusters = pd.DataFrame(
+        [
+            {
+                "cluster_id": 1,
+                "size": 2,
+                "members": "zscore_bp|zscore_bp_sz",
+                "representative": "zscore_bp_sz",
+            },
+            {
+                "cluster_id": 2,
+                "size": 2,
+                "members": "lhb_on_list|lhb_reason_count",
+                "representative": "lhb_on_list",
+            },
+        ]
+    )
+    register["ic_ir"] = [0.6, 0.7, 0.5, 0.4]
+    lists = build_exclude_lists(register, clusters)
+    assert set(lists) == {
+        "exclude_weak_v1",
+        "exclude_dedup_v1",
+        "exclude_weak_dedup_v1",
+        "exclude_dedup_plain_v1",
+    }
+    assert lists["exclude_dedup_v1"]["factors"] == ["lhb_reason_count", "zscore_bp"]
+    # 口径交换：孪生对改为剔除 _sz 一侧（lhb 簇保持默认代表）
+    assert lists["exclude_dedup_plain_v1"]["factors"] == ["lhb_reason_count", "zscore_bp_sz"]
+
+
 def test_compute_model_usage_with_fake_loader(tmp_path):
     (tmp_path / "v2_model.joblib").write_bytes(b"")
     usage = compute_model_usage(
@@ -289,7 +359,7 @@ def test_end_to_end_scan_register_and_outputs(tmp_path):
         clusters,
         candidates,
         report,
-        build_exclude_lists(register),
+        build_exclude_lists(register, clusters),
     )
     for name in (
         "factor_register.csv",
@@ -300,10 +370,16 @@ def test_end_to_end_scan_register_and_outputs(tmp_path):
         "exclude_weak_v1.json",
         "exclude_dedup_v1.json",
         "exclude_weak_dedup_v1.json",
+        "exclude_dedup_plain_v1.json",
     ):
         assert (out_dir / name).exists(), name
     payload = json.loads((out_dir / "exclude_dedup_v1.json").read_text(encoding="utf-8"))
     assert payload["exclude_count"] == len(payload["exclude_factors"]) == 1
+    plain_payload = json.loads(
+        (out_dir / "exclude_dedup_plain_v1.json").read_text(encoding="utf-8")
+    )
+    # 孪生对（twin_feature / twin_feature_sz）在口径交换清单中应剔除 _sz 一侧
+    assert plain_payload["exclude_factors"] == ["twin_feature_sz"]
 
 
 def test_average_correlation_handles_empty_and_nan():

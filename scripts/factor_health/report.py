@@ -39,13 +39,21 @@ def summarize(register: pd.DataFrame, clusters: pd.DataFrame) -> Dict[str, Any]:
     }
 
 
-def build_exclude_lists(register: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """构建三份实验排除清单（弱信息+未用、去重、并集）。"""
+def build_exclude_lists(
+    register: pd.DataFrame, clusters: Optional[pd.DataFrame] = None
+) -> Dict[str, Dict[str, Any]]:
+    """构建实验排除清单（弱信息+未用、去重、并集，以及可选的口径交换）。
+
+    Args:
+        register: 因子台账。
+        clusters: 聚类表；提供时会额外产出「口径交换」清单（同一簇划分下改为
+            优先保留非 ``_sz`` 口径），用于把去重效应与 size 暴露变化分开归因。
+    """
     weak = register[register["flag_weak"]].index.tolist()
     unused = register[register["flag_unused"]].index.tolist()
     dedup = register[register["flag_dup"]].index.tolist()
     weak_unused = sorted(set(weak) | set(unused))
-    return {
+    payload: Dict[str, Dict[str, Any]] = {
         "exclude_weak_v1": {
             "description": "因子体检：弱信息(|t|<阈值 且 gain<阈值)+几乎未使用（使用率/gain 低于阈值）",
             "factors": weak_unused,
@@ -59,6 +67,40 @@ def build_exclude_lists(register: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "factors": sorted(set(weak_unused) | set(dedup)),
         },
     }
+    if clusters is not None and not clusters.empty:
+        payload["exclude_dedup_plain_v1"] = {
+            "description": (
+                "因子体检：口径交换去重（同一簇划分，代表改为优先保留非 _sz 口径）——"
+                "用于把「去重效应」与「size（市值中性化）暴露变化」分开归因"
+            ),
+            "factors": plain_preference_dedup(register, clusters),
+        }
+    return payload
+
+
+def plain_preference_dedup(register: pd.DataFrame, clusters: pd.DataFrame) -> List[str]:
+    """口径交换清单：同一簇划分下，代表改为优先保留非 ``_sz`` 口径后应剔除的成员。"""
+    from scripts.factor_health.analysis import prefer_plain_representatives
+
+    swapped = prefer_plain_representatives(clusters, register)
+    market_level = (
+        register["market_level"]
+        if "market_level" in register.columns
+        else pd.Series(False, index=register.index)
+    )
+    dropped: List[str] = []
+    for _, row in swapped.iterrows():
+        members = [name for name in str(row["members"]).split("|") if name]
+        if len(members) <= 1:
+            continue
+        representative = str(row["representative"])
+        for name in members:
+            if name == representative or name not in register.index:
+                continue
+            if bool(market_level.get(name, False)):
+                continue
+            dropped.append(name)
+    return sorted(set(dropped))
 
 
 def build_report_markdown(
@@ -172,7 +214,12 @@ def build_report_markdown(
     )
     lines.append(
         "- 建议实验：弱信息+未用 并集与同簇去重**分开做两轮**温和裁剪（`--factor-prune --factor-exclude-file`），"
-        "单变量对照；本目录已生成三份可直接使用的排除清单 JSON。"
+        "单变量对照；本目录已生成可直接使用的排除清单 JSON。"
+    )
+    lines.append(
+        "- **口径交换清单**（`exclude_dedup_plain_v1.json`）：同一簇划分下改为优先保留非 `_sz`（未做市值中性化）口径，"
+        "用于把「去重效应」与「size 暴露变化」分开归因；孪生对里多数 `_sz` 口径 |IC-IR| 更高，"
+        "直接用默认去重清单会同时削减 size 暴露。"
     )
     lines.append("")
     return "\n".join(lines)

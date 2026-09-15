@@ -406,6 +406,43 @@ def attach_clusters(register: pd.DataFrame, clusters: pd.DataFrame) -> pd.DataFr
     return register
 
 
+def prefer_plain_representatives(
+    clusters: pd.DataFrame, register: pd.DataFrame, score_column: str = "ic_ir"
+) -> pd.DataFrame:
+    """按「孪生对优先保留非 ``_sz`` 口径」重选簇代表（簇划分保持不变）。
+
+    用于把「去重效应」与「size（市值中性化）暴露变化」分开归因：默认代表按 ``|ic_ir|``
+    选出，而实测 37 对孪生中有 31 对是 ``_sz`` 口径更高，因此直接用默认去重清单会隐式削减
+    size 暴露，必须配合「口径交换」清单做单变量对照。
+
+    Args:
+        clusters: :func:`cluster_features` 产物（含 members/representative）。
+        register: 因子台账（提供打分列，索引 = 特征名）。
+        score_column: 代表选择依据的列名（取绝对值，值大者优先）。
+
+    Returns:
+        与输入同形的 DataFrame，``representative`` 列已替换，并新增 ``swapped`` 列
+        标记该簇是否发生了口径交换。
+    """
+    if clusters.empty:
+        return clusters.copy()
+    scores = register[score_column].abs().fillna(0.0)
+    rows: List[Dict[str, object]] = []
+    for _, row in clusters.iterrows():
+        members = [name for name in str(row["members"]).split("|") if name]
+        plain_members = [name for name in members if not name.endswith("_sz")]
+        original = str(row["representative"])
+        if plain_members:
+            representative = str(scores.reindex(plain_members).idxmax())
+        else:
+            representative = original
+        record = row.to_dict()
+        record["representative"] = representative
+        record["swapped"] = representative != original
+        rows.append(record)
+    return pd.DataFrame(rows)
+
+
 def candidate_tables(register: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     """产出五类候选表（列结构统一，供 CSV 落盘与报告引用）。"""
     display = [c for c in _VALUE_COLUMNS if c in register.columns]

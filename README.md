@@ -237,6 +237,10 @@ python scripts/walk_forward.py --factor-prune \
 负 IC **不**等于坏因子（模型自行学习方向）；候选清单只是**实验输入**，
 采纳必须走 WF A/B 对照（预登记判据 + 噪声带）判定。
 
+另生成一份**口径交换清单** `exclude_dedup_plain_v1.json`（同一簇划分，代表改为优先保留非 `_sz`
+口径，与默认去重清单同规模）：孪生对里多数 `_sz`（市值中性化）口径 |IC-IR| 更高，直接用默认去重清单会
+同时削减 size 暴露，因此两条清单必须成对做单变量对照。
+
 ##### 纸面交易（Paper Trading）
 
 LazyBull 支持纸面交易工作流，用于模拟实盘交易：
@@ -517,6 +521,20 @@ Walk-forward 对比表的全周期 CAGR 按有效日收益区间进行几何年�
 数据态下复跑的结果不可比；`compare_walk_forward.py` 检测到对比表内存在多个数据态时
 会输出显式告警，配置差异只在同一数据态内比较。
 
+**折子集（省时消融）对比：** 消融实验若用 `walk_forward.py --selected-split-indices` 只跑部分折
+以省时，必须与基线在**同一折子集**上比较：
+
+```bash
+python scripts/compare_wf_fold_subset.py \
+    --baseline data/walk_forward/batches/wf_batch_<基线> \
+    --arm data/walk_forward/batches/wf_batch_<臂> --splits 8-13
+```
+
+该工具只读既有 `chain_nav` / summary / 数据态快照，按折子集重算链式指标（子集净值先
+归一化到子集起点，再复用 `ml/walk_forward/chain_metrics.py` 口径），输出 `折子集对比.csv`
+（含 ΔCAGR / Δ最大回撤 / Δ夏普 与逐折同向数）与 `逐折对比.csv`（中文表头，默认落
+`data/reports/wf_fold_subset/<时间戳>/`）。折集合、逐折窗口或数据态 ID 不一致会直接报错终止。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）
@@ -668,7 +686,8 @@ LazyBull/
 │   ├── run_backtest.py        # 运行回测
 │   ├── run_ml_backtest.py     # 运行 ML 信号回测
 │   ├── compare_walk_forward.py # 实验对比与稳定性汇总（薄入口）
-│   ├── compare/               # 实验对比分析子包（constants/loading/aggregate/scoring/...）
+│   ├── compare/               # 实验对比分析子包（constants/loading/aggregate/scoring/fold_subset/...）
+│   ├── compare_wf_fold_subset.py # 折子集链式对比（薄入口；省时消融实验的可比对照）
 │   ├── analyze_factor_health.py # 因子体检（薄入口）
 │   ├── factor_health/         # 因子体检子包（constants/scan/analysis/report）
 │   └── ana/
