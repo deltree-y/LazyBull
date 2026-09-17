@@ -11,6 +11,7 @@ import pandas as pd
 from loguru import logger
 
 from ..common.config import get_stock_selection_models_root
+from ..factors.availability import ensure_availability_markers
 from ..ml import ModelRegistry
 from ..ml.train_core import (
     DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
@@ -310,6 +311,10 @@ class MLSignal(Signal):
 
         # 特征列一致性检查 (缺失列以 NaN 自动补齐, 由 XGBoost/LightGBM 原生 NaN 处理)
         required_features = set(self.metadata.get("feature_columns", []))
+        # 运行时可用性标记：只补模型需要的标记（结构性缺失显式化，不写回特征产物）
+        added_markers = ensure_availability_markers(features_df, required_features)
+        if added_markers:
+            logger.debug(f"{date.date()} 可用性标记补齐: {added_markers}")
         missing = required_features - set(features_df.columns)
         if missing:
             for col in missing:
@@ -424,6 +429,10 @@ class MLSignal(Signal):
 
         # 特征列一致性检查 (缺失列以 NaN 自动补齐, 由 XGBoost/LightGBM 原生 NaN 处理)
         required_features = set(self.metadata.get("feature_columns", []))
+        # 运行时可用性标记：只补模型需要的标记（结构性缺失显式化，不写回特征产物）
+        added_markers = ensure_availability_markers(features_df, required_features)
+        if added_markers:
+            logger.debug(f"{date.date()} 可用性标记补齐: {added_markers}")
         missing = required_features - set(features_df.columns)
         if missing:
             for col in missing:

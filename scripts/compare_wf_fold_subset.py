@@ -30,6 +30,7 @@ import pandas as pd
 from loguru import logger
 
 from scripts.compare.fold_subset import (
+    bootstrap_table,
     compare_runs,
     load_run,
     parse_split_spec,
@@ -55,6 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-label", default="", help="基线标签，默认取目录名")
     parser.add_argument("--splits", default="", help="折子集规格（如 8-13）；默认全部折")
     parser.add_argument(
+        "--bootstrap",
+        type=int,
+        default=1000,
+        help="折级自举次数（0 = 跳过；判定口径见 docs/factor_pruning_ab_protocol.md）",
+    )
+    parser.add_argument("--bootstrap-seed", type=int, default=42, help="自举随机种子")
+    parser.add_argument(
+        "--allow-state-mismatch",
+        action="store_true",
+        help="数据态 ID 不一致时仅告警（仅限“仅 git 标记不同、数据水位一致”的显式例外）",
+    )
+    parser.add_argument(
         "--out", default="", help="产物目录，默认 data/reports/wf_fold_subset/<时间戳>"
     )
     return parser
@@ -77,10 +90,12 @@ def main() -> None:
     if not arms:
         raise SystemExit("至少需要一个 --arm 对照臂")
 
-    validate_alignment([baseline] + arms)
+    validate_alignment([baseline] + arms, allow_state_mismatch=args.allow_state_mismatch)
     splits = parse_split_spec(args.splits) if args.splits else None
 
-    result = compare_runs(baseline, arms, splits)
+    result = compare_runs(
+        baseline, arms, splits, allow_state_mismatch=args.allow_state_mismatch
+    )
     summary = result["summary"]
     folds = result["folds"]
 
@@ -112,6 +127,8 @@ def main() -> None:
         "> 口径：子集指标 = 过滤目标折后净值归一化到起点，复用 `ml/walk_forward/chain_metrics.py`；",
         "> 逐折指标按折内起止净值计算。跨折边界收益不计入交易日数，与全周期口径一致。",
         "> 数据态不可复用时应重新冻结数据态复跑，禁止跨数据态比较。",
+        f"> 判据自举：折级有放回重采样 {args.bootstrap} 次（种子 {args.bootstrap_seed}），"
+        "判定规则见 `docs/factor_pruning_ab_protocol.md`（ΔCAGR/Δ夏普 自举区间下限 > 0、ΔMaxDD ≥ 0、逐折同向 ≥ 70%）。",
     ]
     (out_dir / "折子集对比说明.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -121,6 +138,18 @@ def main() -> None:
     ):
         logger.info("汇总表:\n" + summary.to_string(index=False))
         logger.info("逐折收益:\n" + result["fold_returns"].round(4).to_string())
+
+    if args.bootstrap > 0:
+        criteria = bootstrap_table(
+            baseline,
+            arms,
+            target_splits,
+            n_boot=args.bootstrap,
+            seed=args.bootstrap_seed,
+            allow_state_mismatch=args.allow_state_mismatch,
+        )
+        criteria.to_csv(out_dir / "判据结论.csv", index=False, encoding="utf-8-sig")
+        logger.info("预登记判据（折级自举）:\n" + criteria.to_string(index=False))
 
 
 if __name__ == "__main__":

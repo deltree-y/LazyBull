@@ -404,6 +404,17 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         help="启用分红政策质量因子（分红稳定性/增长率/支付率/双日期事件，需先下载 dividend 数据）",
     )
 
+    # 运行时可用性标记（结构性缺失显式化；不改特征产物）
+    parser.add_argument(
+        "--enable-availability-markers",
+        action="store_true",
+        default=False,
+        help=(
+            "启用运行时可用性标记因子（has_cons_coverage/has_margin_balance/"
+            "has_fund_holding/has_express_data；训练与推理同时按现有列派生，不修改特征分区）"
+        ),
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",

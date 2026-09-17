@@ -38,6 +38,7 @@ from .block_stats import (
     lift,
     moving_block_metric_ci,
     moving_block_metric_sensitivity,
+    paired_day_mean_ci,
 )
 from .coverage_audit import (
     AUDIT_PROXY_COLUMNS,
@@ -132,6 +133,7 @@ __all__ = [
     "lift",
     "moving_block_metric_ci",
     "moving_block_metric_sensitivity",
+    "paired_day_mean_ci",
     "AUDIT_PROXY_COLUMNS",
     "DELAYED_SENSITIVITY_SHARE_THRESHOLD",
     "ProxyProfileAccumulator",

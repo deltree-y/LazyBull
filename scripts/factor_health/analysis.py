@@ -61,6 +61,9 @@ def family_of(name: str) -> str:
         return membership[name[:-3]]
     if name.endswith("_freshness_days"):
         return "meta-freshness"
+    if str(name).startswith("has_"):
+        # 运行时可用性标记（factors/availability.py 定义，不写回特征分区）
+        return "availability_marker"
     return "base-其他"
 
 

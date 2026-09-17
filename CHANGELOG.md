@@ -2,6 +2,210 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### 记录（stk_holdertrade Phase 0 PIT 审计，2026-09-17）
+
+结论见 `docs/stk_holdertrade_pit_audit.md`：**PIT 合格 → 可进 Phase 1**。关键事实：
+
+- 字段：`ts_code/ann_date/holder_name/holder_type/in_de/change_vol/change_ratio/after_share/after_ratio/avg_price/total_share`；
+  **无 `begin_date`/`close_date`**（没有变动期间，只能按公告日使用）；
+- `ann_date` 缺失 0%、且 100% 合法 → PIT 锚点可用；历史可回溯（2018/2021/2024 窗口均可拉，单股可拉 2010+ 全历史）；
+- **单次 3000 行、静默截断**（超出返回最新 3000 行）；`limit/offset` 分页有效；
+- **无自然唯一键**：`ts_code+ann_date` 重复 67.1%，**全字段完全重复 24.7%** ⇒ 必须全字段去重 + 按 `(ts_code, ann_date)` 聚合；
+- 稀疏：披露季每日行数中位 24、每日股票数中位 12（全市场 5607）⇒ 必须状态保留 + `freshness_days` + 公共衰减；
+- **PIT 严格性**：未截断窗口下窄窗与宽窗切片**逐行一致**（无“当前值快照”式字段）。
+
+## [0.122.0] - 2026-09-17
+
+### Added
+
+- **日频信号级配对对比（筛选尺子）**：新增薄入口 `scripts/compare_wf_signal_metrics.py` +
+  模块 `scripts/compare/signal_metrics.py`，把 WF 单臂对比从「14 个折净值读数」提升到
+  「14 折 × 约 1700 个交易日的逐日配对读数」：
+  - 数据源：`walk_forward_topk_details_*.csv`（逐日 Top-K 明细，含 `pred_score` 与真实持有期收益）；
+  - 配对：两臂**同一天相减**（市场共同冲击抵消），差值序列按**交易日分块**自举
+    （块长默认 20/40/60 日）；块长不得 ≥ 交易日数（退化为原样本会给出"零不确定性"假象，直接报错）；
+  - 产物（中文表头，落 `data/reports/wf_signal_compare/<时间戳>/`）：`日频信号对比.csv`
+    （点估计 / 相对基线水平 / 95% 区间 / 正差值概率 / 逐日同向占比 / 折内同向折数 / 折内Δ中位数）、
+    `逐折信号对比.csv`、`口径说明.md`；
+  - 折集合、逐折窗口、数据态 ID 复用 `scripts/compare/fold_subset.py::validate_alignment` 校验；
+    两臂交易日集合不一致默认报错（配对设计失效不得静默继续）。
+  - 公共统计入口：`risk/terminal_loss/block_stats.py::paired_day_mean_ci`（与既有
+    `block_paired_delta` 共用分块抽样实现，禁止另写一套重采样）。
+  - **口径边界**（写入代码 docstring 与产物说明）：信号级代理不含交易成本/调仓节奏/Kelly 仓位/路径效应，
+    只作**筛选**；最终裁决仍看链式净值（ΔMaxDD 为主判据）。
+- 测试：新增 `tests/test_signal_metrics.py`（6 项：面板构建与对齐、交易日不一致默认报错/显式放行、
+  缺产物报错、块自举可复现与块长守卫、NaN 日剔除计数、指标表单位与折内同向）。
+
+### 首轮标定与台账（只读，2026-09-17）
+
+产物 `data/reports/wf_signal_compare/20260917_ledger/`（14 折 × 1725 个交易日；基线 = 154 列全特征）。
+基线水平：Top20/Top30 平均持有期收益（`neu_y_ret_20`）≈ **114 bps**，命中率 ≈ 50%。
+
+| 臂 | 指标（Top30，40 日块） | 点估计 | 95% 区间 | 正差值概率 | 相对基线 |
+|---|---|---|---|---|---|
+| 换种子 B0 | Δ平均持有期收益 | −1.34 bps | [−11.24, +7.85] | 0.337 | −1.2% |
+| 裁剪 A | Δ平均持有期收益 | −28.45 bps | [−57.29, **+0.41**] | 0.026 | **−24.9%** |
+| 标记 markers | Δ平均持有期收益 | −10.89 bps | [−24.89, **−0.02**] | 0.024 | **−9.5%** |
+
+**三条结论（登记进契约）**：
+
+1. **日频尺子的噪声带 = ±10 bps（≈ ±9% 相对）/ Δ命中率 ±0.6pp**——精确口径：B0 臂仅把
+   `ensemble_seeds` 由 `42,61,82` 改为 `43,62,83`（其余参数逐字相同），在 Top20/Top30 × 20/40/60 日块
+   共 6 个 95% 区间上半宽 8.4~11.8 bps（中位 ≈9.5）、单侧最大 11.8 bps，取整为 ±10 bps；
+   相对值 = 10 ÷ 基线水平（114 bps）≈ 8.8%；中心 ≈ 0（点估计 −1.3~+2.5 bps）——比净值口径
+   （±3.6~5.8pp CAGR）细，但仍是「相对 ~9%」量级，不是万能放大镜；
+   （局限：该带只由**一个**噪声臂标定，真值可能在 ±8~13 bps；提高稳定性需 2~3 个种子臂平均，MDE ∝ 1/√k）
+2. **换种子不降信号质量，列集扰动降**：B0 中心 ≈ 0，而裁剪 A（删列）−25%、标记 markers（加列）−9.5%
+   ⇒ 净值口径上看到的 −5.8pp/−5.84pp **不是纯噪声**，列集增删本身在降低所选组合的持有期收益
+   （机理与 `core_state` 加 2 列即改变列抽样/早停轨迹一致）；
+3. 因此**"加列"默认带有稀释成本**（`colsample_bytree=0.3` 下每棵树看到的信息列被摊薄）：
+   新增数据/因子必须先在信号层过尺子（相对 −9% 以上才值得跑全量净值 A/B），
+   且不得再用单臂净值口径追列级效应。
+
+## [0.121.0] - 2026-09-16
+
+### Added
+
+- **运行时可用性标记因子**：新增模块 `src/lazybull/factors/availability.py`，把**结构性缺失**显式化
+  （诊断 v2 结论：一致预期 44~63%、两融资格 22%→71%、基金持仓、业绩快报的缺失由资格/覆盖/披露决定，
+  且只是规模代理）。`has_*` 标记 = 「该股当日至少一个来源列有值」，**运行时派生**：
+  - 训练侧 `ml/train_core/prepare.py::prepare_training_data(enable_availability_markers=...)`，
+    标记进入 `feature_columns`（随模型 `v{N}_features.json` 落盘、`train_params` 记录开关）；
+  - 推理侧 `signals/ml_signal.py` 两个预测入口在缺失列补齐**之前**按模型 `feature_columns` 派生，
+    因此不会把标记静默补成 NaN（train/serve 由模型驱动天然对齐）；
+  - **不写回 cs_train / cs_infer 任何产物**（无需重建分区）；来源列缺失时跳过并告警，不产出常量零列。
+  CLI：`scripts/train_ml_model.py` 与 `scripts/walk_forward.py` 新增 `--enable-availability-markers`（默认关闭）。
+- **模型列集审计**：新增薄入口 `scripts/audit_model_columns.py` + 子包 `scripts/model_audit/`
+  （constants/columns/report）。只读各版本 `*_features.json`，产出：
+  ① **列集配置分组**（同一目录内按列集完全一致聚类——避免把「换配置」误读成「掉列」）；
+  ② **配置差异对比**（各配置相对最新配置的缺失列/多出列）；
+  ③ **列集漂移台账**（逐版本新增/移除明细）；④ **列集出现频次**（常驻/新增/已移除/间断出现 + 家族归属）；
+  ⑤ **跨来源列集差异**（部署目录 vs 训练折目录的两两差异）。
+  支持 `--source LABEL=PATH`（可重复）与 `--last N`；产物中文表头，落 `data/reports/model_column_audit/<时间戳>/`。
+- `scripts/factor_health/analysis.py::family_of` 补充 `has_*` → `availability_marker` 家族口径。
+- 测试：新增 `tests/test_availability_markers.py`（8 项：任一非空语义 / 来源缺失跳过 / 按需过滤 /
+  不覆盖既有列 / 训练-推理逐值一致 / 训练开关入列 / 推理侧物化而非补 NaN）与
+  `tests/test_audit_model_columns.py`（11 项：来源解析 / 扫描排序与报错 / 存在矩阵 / 漂移台账 /
+  频次状态规则 / 家族归属 / 跨来源差异 / 产物与报告）。
+
+### Fixed
+
+- **OOS 评估侧缺失可用性标记（2026-09-16 实测 14/14 折全灭）**：`execute_split_training` 的
+  测试集由 `load_features_data` 单独加载、不经 `prepare_training_data`，因此不含 `has_*` 列，
+  `df_test_eval[feature_columns]` 直接 `KeyError`。修复：OOS 侧（与 MLSignal 同语义）在切片前
+  `ensure_availability_markers(df_test_eval, feature_columns)`，并对特征列缺失给出显式报错而非
+  pandas 隐式 KeyError；`factors/availability.py` 改为**一次多列赋值**（消除大 DataFrame 分片告警）；
+  新增回归测试 `test_oos_eval_frame_derivation_matches_training`（训练/OOS 标记逐值一致 + 可切片）。
+
+### 记录（可用性标记 A/B 实验，2026-09-16）
+
+预登记：`docs/availability_markers_ab_protocol.md`（判据与冻结命令实验前确定）。14 折串行单臂，
+批次 `data/walk_forward/batches/avail_markers_20260916_v2/`（`wf_20260916_184356_6d3ca6d7`，14/14 成功，1h58m），
+对比产物 `data/reports/wf_fold_subset/avail_markers_20260916/`（两臂 `data_state_id` 相同 = `8d33174f`，无例外）。
+
+| 指标（全周期链式） | 基线 | markers | Δ |
+|---|---|---|---|
+| CAGR | 0.2216 | 0.1632 | −5.84pp（自举 [−10.36, −1.78]） |
+| 最大回撤 | −0.2400 | −0.2612 | −2.12pp（更深） |
+| 夏普 | 0.9066 | 0.6756 | −0.231（[−0.421, −0.073]） |
+| 逐折同向 | — | 11/14 | ≥10 ✓ |
+
+**判定：不通过**（四条判据过 1 条）→ **不采纳**。关键机理核查：4 个标记在末折集成模型中
+gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_coverage` 2 次、`has_express_data` 1 次、
+`has_margin_balance` 9 次），即**本臂几乎没有引入信息增量**；其 −5.84pp 与列裁剪臂（−5.79pp）、
+换种子噪声带（−3.62pp）同量级，属**列集扰动带内的重复实现**（加 4 列改变 `colsample_bytree` 抽样流与早停轨迹，
+与 `core_state` 加 2 列即让停点 628→99 棵的现象同源）。因此本结论登记为「**不采纳 + 效应不可判定**」，
+**不得**当作「可得性信息无用」的证据；后续若要利用资格/覆盖信息，载体应是**样本域或标签**（分域训练/评估、
+分组校准），而不是再加 0/1 列。
+
+### 首轮审计结论（只读，2026-09-16）
+`data/reports/model_column_audit/20260916/`（`models/stock_selection` 最近 60 个版本）：
+
+- 60 个版本实际只有 **12 套列集配置**（58~154 列），每套配置重复出现在 2~12 个连续版本里；
+  **版本号序列不能当血缘**——逐版本 diff 里的「新增/移除 15 列」绝大多数是**换配置**（开关不同），
+  不是数据链路掉列。
+- 真正的「已移除」列只有 2 个：`express_surprise`（13/60）、`express_revenue_yoy`（27/60），
+  形态为**间断出现**，与业绩快报稀疏 + 逐折缺失率门禁（0.6）一致；
+- 「间断出现」97 列中绝大部分为开关驱动的家族列（cyq 5 / margin 3 / north_turnover 7 / lhb 等），
+  属配置差异，可在 `配置差异对比.csv` 中逐列核对。
+
+## [0.120.0] - 2026-09-16
+
+### Added
+
+- **因子诊断 v2**：新增薄入口 `scripts/analyze_factor_diagnosis.py` + 模块 `scripts/factor_health/diagnose.py`，
+  在体检（v1）台账基础上回答“**哪条候选值不值得改数据**”：
+  ① **偏 IC** —— 逐日 `rank(特征) ~ rank(簇代表)` 的秩残差与 `rank(标签)` 的相关（跨日均值/t 值），
+  这才是“冗余”的硬定义（仅高相关不足以判定）；残差无方差（单调复制）记为增量信息恰为 0；
+  ② **覆盖-标签差** —— 有值/缺失子样本的标签中位差 + **规模分位差**（判定缺失是否只是规模代理）；
+  ③ **使用度稳定性** —— 跨模型版本（含集成子模型）gain 份额的均值/标准差/变异系数（稳定出力 vs 偶发出力）。
+  三项汇总为《数据改良候选清单》（A 覆盖缺口 / B 无增量信息 / C 有信号未被使用 / D 使用不稳定 /
+  E 缺失携带信息），每行附**预期效应量级**与**可检出性**（以 14 折 MDE≈5pp 为标尺）。
+  只读 cs_train 与模型文件，产物落 `data/reports/factor_diagnosis/<时间戳>/`。
+- **折级自举判定**：`scripts/compare/fold_subset.py` 新增 `per_fold_returns` /
+  `chain_metrics_from_fold_returns` / `bootstrap_delta` / `bootstrap_table`（重采样单位 = 完整折，
+  默认 1000 次、种子 42），入口 `--bootstrap` 输出 `判据结论.csv`（点估计 + 95% 区间 + 四条预登记判据）；
+  新增 `--allow-state-mismatch`（仅限“仅 git 标记不同、数据水位一致”的显式例外）。
+- 测试：新增 `tests/test_factor_diagnosis.py`（5 项：偏 IC 区分复制与独立信息、样本不足跳过、
+  覆盖-标签差与规模差、使用度 CV、候选清单五类与标尺列）；`tests/test_compare_wf_fold_subset.py` 扩至 16 项。
+
+### 记录（因子去重 / 口径交换 A-B 实验，2026-09-16）
+
+预登记：`docs/factor_pruning_ab_protocol.md`（判据、判读矩阵、命令模板均实验前冻结）。三臂串行：
+基线（154 列）→ A 去重 → D 口径交换，各 14 折（`--no-deploy-train`、`stagger=2/top_n=20`）。
+
+| 运行 | 全周期CAGR | 全周期最大回撤 | 全周期夏普 | ΔCAGR | ΔMaxDD | Δ夏普 | 逐折同向 |
+|---|---|---|---|---|---|---|---|
+| 基线 | 0.2216 | −0.2400 | 0.9066 | — | — | — | — |
+| A / D（结果逐位相同） | 0.1637 | −0.3215 | 0.6788 | −0.0579 | −0.0815 | −0.2278 | 12/14 |
+
+**判定：不通过**（ΔCAGR、Δ夏普 自举区间下限均 < 0，回撤加深 8.15pp）→ **不采纳因子去重裁剪**，
+生产 `factor_prune` 维持关闭。两个必须登记的发现：
+
+1. **D 臂无效对照**：`--factor-exclude-file` 在 `ml/train_core/prepare.py` 中对 `zscore_x` / `zscore_x_sz`
+   做**成对联动删除**，因此“保留 plain / 保留 `_sz`”两种清单效果等价（A ≡ D 逐位相同）——
+   **size（市值中性化）暴露这一维本轮无法回答**，需换实验载体并重新预登记。
+2. **体检去重清单与联动语义冲突**：剔除非代表的 plain 列会连带删除它的 `_sz` 孪生（往往正是代表本人），
+   49 列清单实际删除 **82 列**（33 列联动），估值/质量/现金流家族的 `zscore_*` 几乎整族消失
+   （折内入模列数 140~154 → 58~72）——本轮实质测的是“整族删除”，而非“去重”。
+   诊断 v2 的偏 IC 复核进一步显示：49 条去重候选中真正“无增量信息”的仅 **8** 条（见下）。
+
+### 记录（因子诊断 v2 首轮，2026-09-16）
+
+- 运行：`python scripts/analyze_factor_diagnosis.py --start 20200101 --every 3`（约 1.5 分钟）；
+  产物 `data/reports/factor_diagnosis/20260916/`（`partial_ic.csv` / `coverage_return.csv` /
+  `usage_stability.csv` / `column_year_profile.csv` / `column_year_summary.csv` /
+  `数据改良候选清单.csv` / `因子诊断报告.md`）。
+- 候选统计：**A 覆盖缺口 5**、**B 无增量信息 8**、**C 有信号未被使用 2**、**D 使用不稳定 3**、**F 口径退化 2**、E 0。
+- **覆盖缺口不得默认“补数据”**（逐项核对 raw 层）：`cons_*` 是分析师覆盖/披露率下降（`raw/report_rc` 已有 2006+）；
+  margin 三列是**两融标的资格扩张**（2013 年 22% → 2026 年 71%；`raw/margin_detail` 已有 2010-03 起）；
+  cyq 家族 2018 前整族缺失（TuShare 接口起点 2018-01-02）；north 家族 2014-11 前无值（沪港通开通）。
+  有值/缺失的标签中位差 ≈ 0（42~46% 正差占比）而规模分位差 +0.75~+0.90 ⇒ **缺失只是规模代理**（故 E 类为 0）。
+- **F 口径退化（新类型）**：`rqye_rzye_ratio` 近年截面 std 中位仅为历史峰值的 **0.039×**
+  （2021-2023 高分散 regimen → 2024-07 转融券暂停后回落）；`holder_num_chg_2q` 为 **0.063×**。
+- 其他关键结论：真冗余仅 **8** 列（非体检的 49 列，解释“整族删除”必败）；
+  LHB 矛盾族（`lhb_cont_on_list`/`lhb_cont_up_days_5`/`_20`）同时命中 C（强 IC 未用）与 D（120 版本 CV 1.1~1.3）。
+
+### 记录（B0 噪声带对照，2026-09-16）
+
+目的：量出“什么都不改”时的 Δ 分布（同配置**仅换集成种子** 42,61,82 → 43,62,83），
+为后续所有微创臂提供判据参照。运行 1h55m，产物 `data/reports/wf_fold_subset/noise_band_b0_20260916_123214/`。
+
+| 指标 | 噪声臂（仅换种子） | 82 列裁剪臂（对照） |
+|---|---|---|
+| ΔCAGR | **−3.62pp**，自举区间 [−7.71, +0.36] | −5.79pp，[−15.12, +2.94] |
+| ΔMaxDD | **−0.59pp**，[−6.91, +4.30] | −8.15pp，[−16.16, +2.94] |
+| Δ夏普 | **−0.144**，[−0.304, +0.012] | −0.228，[−0.604, +0.118] |
+| 逐折差值 SD | 3.53pp | 8.13pp |
+
+**结论**：① 单臂对比在 **CAGR/夏普** 维度的可检出下限为 **5~8pp**（裁剪臂的 −5.79pp 落在噪声区间内，
+**不可区分**）；② **ΔMaxDD 是低噪声判据**（噪声仅 −0.59pp），裁剪臂的 −8.15pp **超出噪声区间**——
+即“回撤变差”才是有统计意义的结论，A-B 实验的“不采纳”判定应以回撤为主依据；
+③ 提高分辨率遵循 √n / √k 规律（28 折仅换 1.41×、3 组种子平均换 1.73×），
+成本却分别为 2× / 3×，**性价比低**；列级（0~1pp）候选不得用 WF 追。
+
 ## [0.119.0] - 2026-09-15
 
 ### Added
@@ -35,6 +239,10 @@ All notable changes to this project will be documented in this file.
   `--selected-split-indices` 只跑部分折省时（实测约 0.9h/臂 vs 全 14 折约 2h/臂），但必须与基线在同一折子集上可比。
 - 测试新增：`tests/test_compare_wf_fold_subset.py`（12 项：折规格解析、加载/警告、子集归一化与手工值对齐、
   跨折边界不计收益、逐折收益与回撤、折集合/窗口/数据态不一致报错、汇总列与重复列校验）。
+- 判据自举：`scripts/compare/fold_subset.py` 新增 `per_fold_returns` / `chain_metrics_from_fold_returns` /
+  `bootstrap_delta` / `bootstrap_table`（重采样单位 = 完整折，默认 1000 次、种子 42），
+  `compare_wf_fold_subset.py --bootstrap` 输出 `判据结论.csv`（ΔCAGR/ΔMaxDD/Δ夏普 点估计 + 自举 95% 区间 +
+  逐折同向数 + 四条预登记判据）；测试增至 16 项。
 
 ### 记录（因子体检首轮正式运行，2026-09-15）
 

@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from src.lazybull.factors.availability import derive_availability_markers
+
 from .constants import (
     ALT_FEATURE_COLUMNS,
     CASHFLOW_QUALITY_FEATURE_COLUMNS,
@@ -73,6 +75,7 @@ def prepare_training_data(
     enable_cashflow_quality_features: bool = False,
     enable_consensus_revision_features: bool = False,
     enable_dividend_policy_features: bool = False,
+    enable_availability_markers: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
     factor_exclude_file: Optional[str] = None,
@@ -233,6 +236,16 @@ def prepare_training_data(
             f"{MISSING_MARKER_FEATURE_COLUMNS}（旧 schema 特征分区），"
             "缺失标记特征将被跳过；如需启用请重建特征"
         )
+
+    # 运行时可用性标记（结构性缺失显式化；由 factors/availability.py 统一派生，
+    # 不写回 cs_train/cs_infer 任何产物；推理侧由模型 feature_columns 驱动对齐）
+    if enable_availability_markers:
+        added_markers = derive_availability_markers(df)
+        if added_markers:
+            feature_columns.extend(added_markers)
+            logger.info(f"启用可用性标记因子: {added_markers}")
+        else:
+            logger.warning("可用性标记未派生（来源列缺失或已存在），已跳过")
 
     # 基本面因子（可选）
     if enable_fundamental_features:
@@ -473,7 +486,6 @@ def prepare_training_data(
             feature_columns = [c for c in feature_columns if c not in expanded_excludes]
             removed = before - len(feature_columns)
             logger.info(f"因子精简: 排除 {removed} 个因子, 剩余 {len(feature_columns)} 个")
-
     freshness_cols = [c for c in feature_columns if "freshness" in c]
     removed_freshness_features: List[str] = []
     event_freshness_cols_used: List[str] = []

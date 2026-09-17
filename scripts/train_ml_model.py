@@ -319,6 +319,16 @@ def main():
     )
 
     parser.add_argument(
+        "--enable-availability-markers",
+        action="store_true",
+        default=False,
+        help=(
+            "启用运行时可用性标记因子（has_cons_coverage/has_margin_balance/"
+            "has_fund_holding/has_express_data；训练与推理同时按现有列派生，不修改特征分区）"
+        ),
+    )
+
+    parser.add_argument(
         "--feature-stability-filter",
         action="store_true",
         help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）",
@@ -467,6 +477,7 @@ def main():
                 args, "enable_consensus_revision_features", False
             ),
             enable_dividend_policy_features=getattr(args, "enable_dividend_policy_features", False),
+            enable_availability_markers=getattr(args, "enable_availability_markers", False),
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
             factor_exclude_file=getattr(args, "factor_exclude_file", None),
@@ -597,6 +608,7 @@ def main():
                 "enable_dividend_policy_features": getattr(
                     args, "enable_dividend_policy_features", False
                 ),
+                "enable_availability_markers": getattr(args, "enable_availability_markers", False),
                 # 推理侧（MLSignal）按此复现事件型 freshness 衰减，必须与训练一致
                 "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),
                 "event_freshness_half_life_days": getattr(

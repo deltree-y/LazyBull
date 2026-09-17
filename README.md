@@ -241,6 +241,65 @@ python scripts/walk_forward.py --factor-prune \
 口径，与默认去重清单同规模）：孪生对里多数 `_sz`（市值中性化）口径 |IC-IR| 更高，直接用默认去重清单会
 同时削减 size 暴露，因此两条清单必须成对做单变量对照。
 
+#### 因子诊断 v2（增量信息 / 覆盖显著性 / 使用度稳定性）
+
+在体检台账基础上回答“**哪条候选值不值得改数据**”，只读 cs_train 与模型文件：
+
+```bash
+# 默认取 data/reports/factor_health 最新台账；产物落 data/reports/factor_diagnosis/<时间戳>/
+python scripts/analyze_factor_diagnosis.py --start 20200101 --every 3
+```
+
+三项诊断：**偏 IC**（控制簇代表后的秩残差 IC——“冗余”的硬定义，仅 `|ρ|` 高不足以判定）、
+**覆盖-标签差**（有值/缺失子样本的标签中位差 + 规模分位差，判定缺失是否只是规模代理）、
+**使用度稳定性**（跨模型版本 gain 份额的变异系数）；另有**逐年覆盖/幅度剖面**
+（每年一个代表分区）用于判根因：**源头起点**（如 cyq 2018+、north 2014-11+）、**资格/覆盖扩张**（如两融标的扩容）、
+**覆盖收缩**（如研报披露率下降）、**口径退化**（近年截面幅度不足历史峰值 10%，如转融券暂停后的 `rqye_rzye_ratio`）。
+输出《数据改良候选清单》（A 覆盖缺口 / B 无增量信息 / C 有信号未被使用 / D 使用不稳定 / E 缺失携带信息 /
+F 口径退化），每行标注**预期效应量级**与**可检出性**（以 14 折 MDE≈5pp 为标尺：列级 0~1pp 的改动不可判定）。
+⚠️ **覆盖缺口不得默认“补数据”**：本地 raw 已含 2005+ 数据，缺口多来自 TuShare 起点、标的资格或披露口径。
+
+#### 运行时可用性标记因子（结构性缺失显式化）
+
+诊断 v2 的结论是「一致预期 / 两融 / 基金持仓 / 业绩快报的缺失是**结构性的**（资格名单、覆盖、披露口径），
+且只是规模代理」。这类信息不必改数据就能显式喂给模型：
+
+```bash
+# 训练与滚动训练：启用运行时可用性标记（默认关闭；不改任何特征分区）
+python scripts/train_ml_model.py --start-date 20200101 --end-date 20231231 --enable-availability-markers
+python scripts/walk_forward.py --split-count 14 --enable-availability-markers
+```
+
+- 标记：`has_cons_coverage` / `has_margin_balance` / `has_fund_holding` / `has_express_data`，
+  语义为「该股当日**至少一个**来源列有值」；
+- 派生位置：训练侧 `prepare.py` 组装训练矩阵时、推理侧 `signals/ml_signal.py` 预测前
+  （**按模型 `feature_columns` 驱动**，所以 train/serve 天然一致，不会静默补成 NaN）；
+- `cs_train` / `cs_infer` 分区**完全不改动**；来源列缺失时跳过并告警，不产出常量零列。
+
+#### 模型列集审计（列集漂移 / 配置分组）
+
+列集本身就是模型契约：线上推理的特征矩阵与训练矩阵若不是同一套列，模型默认行为就变了。
+本工具只读各版本 `*_features.json`，回答「**哪一列掉了、是掉列还是换配置**」：
+
+```bash
+# 最近 40 个版本（默认 source: deploy=data/models/stock_selection）
+python scripts/audit_model_columns.py --last 40
+
+# 多来源对照（部署目录 vs 训练折目录）；--last 0 = 全部版本
+python scripts/audit_model_columns.py --source deploy=data/models/stock_selection \
+    --source fold0=data/walk_forward/batches/<batch>/fold_0 --last 0
+```
+
+产物（中文表头，落 `data/reports/model_column_audit/<时间戳>/`）：
+`列集配置分组.csv`（按列集完全一致聚类——同一目录会累积多套实验配置，逐版本 diff 会把「换配置」误读成「掉列」）、
+`配置差异对比.csv`（各配置相对最新配置的缺失列/多出列）、`列集漂移台账.csv`（逐版本新增/移除明细）、
+`列集出现频次.csv`（常驻/新增/已移除/间断出现 + 家族归属）、`跨来源列集差异.csv`（部署 vs 折目录两两差异）、
+`模型列集审计.md`。
+
+口径提示：`express_*` 一类稀疏列在不同训练窗口下缺失率不同，会被训练入口缺失率门禁（默认 0.6）
+逐折丢列——表现为**间断出现**，属可解释漂移但必须登记；开关驱动的家族列（cyq/margin/north_turnover/lhb）
+差异属**配置差异**，应在 `配置差异对比.csv` 里核对而非视为数据缺口。
+
 ##### 纸面交易（Paper Trading）
 
 LazyBull 支持纸面交易工作流，用于模拟实盘交易：
@@ -535,6 +594,31 @@ python scripts/compare_wf_fold_subset.py \
 （含 ΔCAGR / Δ最大回撤 / Δ夏普 与逐折同向数）与 `逐折对比.csv`（中文表头，默认落
 `data/reports/wf_fold_subset/<时间戳>/`）。折集合、逐折窗口或数据态 ID 不一致会直接报错终止。
 
+**日频信号级配对对比（筛选尺子）：** 链式净值口径的噪声带极宽——同配置**仅换随机种子**即
+ΔCAGR −3.6pp，列集增删更到 −5.8pp 量级，而列级改动的预期效应只有 0~1pp，**在净值口径上判不出来**。
+`walk_forward_topk_details_*.csv` 保留了逐日 Top-K 明细（`pred_score` + 真实持有期收益），
+可把评估单位从「14 个折净值读数」提升到「14 折 × 约 1700 个交易日的**逐日配对读数**」：
+
+```bash
+# 标定噪声带：同配置仅换种子
+python scripts/compare_wf_signal_metrics.py \
+    --baseline data/walk_forward/batches/<基线> --arm data/walk_forward/batches/<换种子臂> \
+    --baseline-label 基线 --arm-label 换种子B0
+
+# 多个候选臂一次过尺子
+python scripts/compare_wf_signal_metrics.py --baseline <基线> \
+    --arm <臂A> --arm <臂B> --arm-label A --arm-label B
+```
+
+做法：两臂在**同一天**相减（市场共同冲击自动抵消），差值序列按**交易日分块**自举（块长默认
+20/40/60 日，复用 `risk/terminal_loss/block_stats.py::paired_day_mean_ci`），输出
+`日频信号对比.csv`（点估计 / 相对基线水平 / 95% 区间 / 正差值概率 / 折内同向折数）、
+`逐折信号对比.csv` 与 `口径说明.md`，落 `data/reports/wf_signal_compare/<时间戳>/`。
+
+**口径边界（不得省略）**：该口径是**信号级代理**，不含交易成本、调仓节奏、Kelly 仓位与路径效应，
+**只能用于筛选**（"这个改动是否真的动了信号"）；最终裁决仍以链式净值判据为准（**ΔMaxDD 为主判据**），
+且只对通过筛选的改动花 2 小时跑全量。首次标定（2026-09-17）见 `CHANGELOG.md` 0.122.0。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）
@@ -686,10 +770,14 @@ LazyBull/
 │   ├── run_backtest.py        # 运行回测
 │   ├── run_ml_backtest.py     # 运行 ML 信号回测
 │   ├── compare_walk_forward.py # 实验对比与稳定性汇总（薄入口）
-│   ├── compare/               # 实验对比分析子包（constants/loading/aggregate/scoring/fold_subset/...）
+│   ├── compare/               # 实验对比分析子包（constants/loading/aggregate/scoring/fold_subset/signal_metrics/...）
 │   ├── compare_wf_fold_subset.py # 折子集链式对比（薄入口；省时消融实验的可比对照）
+│   ├── compare_wf_signal_metrics.py # 日频信号级配对对比（薄入口；筛选尺子+噪声带标定） ✅ v0.122.0
 │   ├── analyze_factor_health.py # 因子体检（薄入口）
-│   ├── factor_health/         # 因子体检子包（constants/scan/analysis/report）
+│   ├── factor_health/         # 因子体检子包（constants/scan/analysis/report/diagnose）
+│   ├── analyze_factor_diagnosis.py # 因子诊断 v2（薄入口；偏 IC/覆盖显著性/使用度稳定性）
+│   ├── audit_model_columns.py # 模型列集审计（薄入口；列集漂移/配置分组/跨来源差异） ✅ v0.121.0
+│   ├── model_audit/           # 模型列集审计子包（constants/columns/report） ✅ v0.121.0
 │   └── ana/
 │       ├── analyze_factor_importance.py # 因子重要性分析
 │       └── analyze_factor_stability.py  # 集成模型因子使用稳定性分析
@@ -711,6 +799,7 @@ LazyBull/
 │   │   ├── industry.py             # 行业相关（alpha/偏离）
 │   │   ├── momentum.py             # 动量加速度
 │   │   ├── volume.py               # 量能突变
+│   │   ├── availability.py         # 运行时可用性标记（has_*，不改特征分区） ✅ v0.121.0
 │   │   └── risk/                   # 风控模型专用因子子包 ✅ v0.92.4
 │   │       ├── factor_registry.py      # 因子注册表 + compute_all_risk_factors()
 │   │       ├── downside_factors.py     # 下行风险（VaR/CVaR/偏度/峰度）

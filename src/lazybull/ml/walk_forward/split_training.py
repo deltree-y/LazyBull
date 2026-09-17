@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.lazybull.common.config import get_ml_train_runs_csv
 from src.lazybull.data import DataLoader, Storage
+from src.lazybull.factors.availability import ensure_availability_markers
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.ensemble import EnsembleModel
 from src.lazybull.ml.run_logger import (
@@ -241,6 +242,19 @@ def execute_split_training(
             args, "event_freshness_half_life_days", DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS
         ),
     )
+
+    # OOS 评估侧与 MLSignal 一致：按模型特征列派生运行时可用性标记
+    derived_markers = ensure_availability_markers(df_test_eval, feature_columns)
+    if derived_markers:
+        logger.info(f"OOS 测试集派生可用性标记: {derived_markers}")
+
+    missing_test_columns = [col for col in feature_columns if col not in df_test_eval.columns]
+    if missing_test_columns:
+        raise ValueError(
+            "OOS 测试集缺少模型特征列（禁止静默降级）: "
+            f"{missing_test_columns[:10]}{'...' if len(missing_test_columns) > 10 else ''}"
+            f"（共 {len(missing_test_columns)} 列）"
+        )
 
     X_test_features = df_test_eval[feature_columns]
 

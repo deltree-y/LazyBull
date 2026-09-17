@@ -132,8 +132,13 @@ def load_run(target: Path, label: Optional[str] = None) -> RunArtifacts:
     )
 
 
-def validate_alignment(runs: Sequence[RunArtifacts]) -> None:
-    """校验折集合、逐折窗口与数据态 ID 一致（不一致直接报错）。"""
+def validate_alignment(runs: Sequence[RunArtifacts], allow_state_mismatch: bool = False) -> None:
+    """校验折集合、逐折窗口与数据态 ID 一致（不一致直接报错）。
+
+    Args:
+        runs: 参与对比的运行（第 0 个为基线）。
+        allow_state_mismatch: 数据态 ID 不一致时仅告警（用于“仅 git 标记不同、数据水位一致”的显式例外）。
+    """
     if not runs:
         raise ValueError("未提供任何运行")
     basis = runs[0]
@@ -168,7 +173,11 @@ def validate_alignment(runs: Sequence[RunArtifacts]) -> None:
     states = {run.label: run.data_state_id for run in runs}
     distinct = {value for value in states.values() if value is not None}
     if len(distinct) > 1:
-        raise ValueError(f"数据态不一致（需冻结数据态复跑）: {states}")
+        message = f"数据态不一致（需冻结数据态复跑）: {states}"
+        if allow_state_mismatch:
+            logger.warning(message + " —— 已按 --allow-state-mismatch 继续，请确认数据水位一致")
+        else:
+            raise ValueError(message)
     if any(value is None for value in states.values()):
         logger.warning(f"部分运行缺少数据态 ID，无法完整校验: {states}")
 
@@ -176,6 +185,164 @@ def validate_alignment(runs: Sequence[RunArtifacts]) -> None:
 def split_set(run: RunArtifacts) -> List[int]:
     """该运行可用的折号（升序）。"""
     return sorted(run.chain["split_index"].unique().tolist())
+
+
+def per_fold_returns(
+    run: RunArtifacts, splits: Optional[Sequence[int]] = None
+) -> Dict[int, np.ndarray]:
+    """逐折的折内日收益序列（跨折边界不计入收益）。"""
+    target = set(splits) if splits is not None else None
+    result: Dict[int, np.ndarray] = {}
+    for split, segment in run.chain.groupby("split_index"):
+        split = int(split)
+        if target is not None and split not in target:
+            continue
+        ordered = segment.sort_values("date") if "date" in segment.columns else segment
+        nav = pd.to_numeric(ordered["nav"], errors="coerce").to_numpy(dtype=float)
+        nav = nav[~np.isnan(nav)]
+        if nav.size < 2 or np.any(nav[:-1] == 0):
+            result[split] = np.array([], dtype=float)
+            continue
+        result[split] = nav[1:] / nav[:-1] - 1.0
+    for split in target or []:
+        result.setdefault(int(split), np.array([], dtype=float))
+    return result
+
+
+def chain_metrics_from_fold_returns(
+    fold_returns: Sequence[np.ndarray],
+    annual_trading_days: int = 252,
+    annual_risk_free_rate: float = 0.03,
+) -> Dict[str, Optional[float]]:
+    """由逐折日收益序列重建链式指标（口径与 ``calculate_chain_metrics`` 一致）。"""
+    arrays = [array for array in fold_returns if array.size > 0]
+    if not arrays:
+        return {"total_return": None, "cagr": None, "max_drawdown": None, "sharpe": None}
+    returns = np.concatenate(arrays)
+    nav = np.cumprod(1.0 + returns)
+    peak = np.maximum.accumulate(nav)
+    max_drawdown = float(((nav - peak) / peak).min())
+    days = int(returns.size)
+    cagr = float(nav[-1] ** (annual_trading_days / days) - 1) if days > 0 and nav[-1] > 0 else None
+    sharpe = None
+    if days > 1:
+        std = returns.std(ddof=1)
+        if std > 0:
+            daily_rf = (1 + annual_risk_free_rate) ** (1 / annual_trading_days) - 1
+            sharpe = float((returns.mean() - daily_rf) / std * np.sqrt(annual_trading_days))
+    return {
+        "total_return": float(nav[-1] - 1),
+        "cagr": cagr,
+        "max_drawdown": max_drawdown,
+        "sharpe": sharpe,
+    }
+
+
+def bootstrap_delta(
+    baseline: RunArtifacts,
+    arm: RunArtifacts,
+    splits: Sequence[int],
+    n_boot: int = 1000,
+    seed: int = 42,
+    align_criteria_ratio: float = 0.7,
+) -> Dict[str, object]:
+    """折级自举的 Δ 区间与预登记判定（对折做有放回重采样）。
+
+    重采样单位 = 完整折（14 折为 14 个制度），每轮把抽中的折按原口径重建成链式净值后重算指标。
+    判定（与 ``docs/factor_pruning_ab_protocol.md`` 预登记一致）：
+    ① ΔCAGR > 0 且自举 95% 区间下限 > 0；② Δ夏普 > 0 且下限 > 0；
+    ③ Δ最大回撤 ≥ 0（不得牺牲）；④ 逐折收益同向折数 ≥ ``align_criteria_ratio`` × 折数。
+    """
+    splits = list(splits)
+    if not splits:
+        raise ValueError("折子集为空，无法自举")
+    base_folds = per_fold_returns(baseline, splits)
+    arm_folds = per_fold_returns(arm, splits)
+    rng = np.random.default_rng(seed)
+    deltas: Dict[str, List[float]] = {"cagr": [], "max_drawdown": [], "sharpe": []}
+    for _ in range(int(n_boot)):
+        picks = rng.integers(0, len(splits), size=len(splits))
+        base_metrics = chain_metrics_from_fold_returns([base_folds[splits[i]] for i in picks])
+        arm_metrics = chain_metrics_from_fold_returns([arm_folds[splits[i]] for i in picks])
+        for key in deltas:
+            left, right = arm_metrics[key], base_metrics[key]
+            if left is None or right is None:
+                continue
+            deltas[key].append(float(left - right))
+
+    base_chain = subset_metrics(baseline, splits)
+    arm_chain = subset_metrics(arm, splits)
+    point = {
+        "ΔCAGR": arm_chain["子集CAGR"] - base_chain["子集CAGR"],
+        "ΔMaxDD": arm_chain["子集最大回撤"] - base_chain["子集最大回撤"],
+        "Δ夏普": arm_chain["子集夏普"] - base_chain["子集夏普"],
+    }
+    intervals = {}
+    for key, label in (("cagr", "ΔCAGR"), ("max_drawdown", "ΔMaxDD"), ("sharpe", "Δ夏普")):
+        values = np.array(deltas[key], dtype=float)
+        if values.size == 0:
+            intervals[label] = (None, None)
+        else:
+            intervals[label] = (
+                float(np.percentile(values, 2.5)),
+                float(np.percentile(values, 97.5)),
+            )
+
+    base_fold = fold_table(baseline, splits).set_index("折序号")["折收益"]
+    arm_fold = fold_table(arm, splits).set_index("折序号")["折收益"]
+    valid = base_fold.notna() & arm_fold.notna()
+    aligned = int((np.sign(arm_fold[valid]) == np.sign(base_fold[valid])).sum())
+    required = int(np.ceil(align_criteria_ratio * len(splits)))
+
+    cagr_pass = (
+        point["ΔCAGR"] is not None
+        and intervals["ΔCAGR"][0] is not None
+        and (point["ΔCAGR"] > 0 and intervals["ΔCAGR"][0] > 0)
+    )
+    sharpe_pass = (
+        point["Δ夏普"] is not None
+        and intervals["Δ夏普"][0] is not None
+        and (point["Δ夏普"] > 0 and intervals["Δ夏普"][0] > 0)
+    )
+    drawdown_pass = point["ΔMaxDD"] is not None and point["ΔMaxDD"] >= 0
+    align_pass = aligned >= required
+    return {
+        "运行": arm.label,
+        "ΔCAGR": point["ΔCAGR"],
+        "ΔCAGR下限": intervals["ΔCAGR"][0],
+        "ΔCAGR上限": intervals["ΔCAGR"][1],
+        "ΔMaxDD": point["ΔMaxDD"],
+        "ΔMaxDD下限": intervals["ΔMaxDD"][0],
+        "ΔMaxDD上限": intervals["ΔMaxDD"][1],
+        "Δ夏普": point["Δ夏普"],
+        "Δ夏普下限": intervals["Δ夏普"][0],
+        "Δ夏普上限": intervals["Δ夏普"][1],
+        "逐折同向数": aligned,
+        "折数": len(splits),
+        "同向门槛": required,
+        "CAGR判据": "通过" if cagr_pass else "不通过",
+        "夏普判据": "通过" if sharpe_pass else "不通过",
+        "回撤判据": "通过" if drawdown_pass else "不通过",
+        "同向判据": "通过" if align_pass else "不通过",
+        "判定": (
+            "通过" if (cagr_pass and sharpe_pass and drawdown_pass and align_pass) else "不通过"
+        ),
+    }
+
+
+def bootstrap_table(
+    baseline: RunArtifacts,
+    arms: Sequence[RunArtifacts],
+    splits: Optional[Sequence[int]] = None,
+    n_boot: int = 1000,
+    seed: int = 42,
+    allow_state_mismatch: bool = False,
+) -> pd.DataFrame:
+    """对所有对照臂产出折级自举判定表（中文表头）。"""
+    target_splits = sorted(splits) if splits else split_set(baseline)
+    validate_alignment([baseline] + list(arms), allow_state_mismatch=allow_state_mismatch)
+    rows = [bootstrap_delta(baseline, arm, target_splits, n_boot=n_boot, seed=seed) for arm in arms]
+    return pd.DataFrame(rows)
 
 
 def fold_table(run: RunArtifacts, splits: Sequence[int]) -> pd.DataFrame:
@@ -254,10 +421,11 @@ def compare_runs(
     baseline: RunArtifacts,
     arms: Sequence[RunArtifacts],
     splits: Optional[Sequence[int]] = None,
+    allow_state_mismatch: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """产出折子集对比表与逐折明细表（中文表头）。"""
     runs = [baseline] + list(arms)
-    validate_alignment(runs)
+    validate_alignment(runs, allow_state_mismatch=allow_state_mismatch)
 
     available = split_set(baseline)
     target_splits = sorted(splits) if splits else available

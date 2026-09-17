@@ -12,11 +12,14 @@ import pytest
 
 from scripts.compare.fold_subset import (
     RunArtifacts,
+    bootstrap_table,
+    chain_metrics_from_fold_returns,
     compare_runs,
     fold_table,
     full_metrics,
     load_run,
     parse_split_spec,
+    per_fold_returns,
     subset_metrics,
     validate_alignment,
 )
@@ -196,3 +199,64 @@ def test_fold_table_handles_empty_segment(tmp_path):
     table = fold_table(run, [2]).set_index("折序号")
     assert np.isnan(table.loc[2, "折收益"])
     assert table.loc[2, "折交易日数"] == 0
+
+
+def test_chain_metrics_from_fold_returns_matches_manual():
+    returns = np.array([0.01, -0.02, 0.03, -0.01, 0.02])
+    metrics = chain_metrics_from_fold_returns([returns, np.array([0.005])])
+    combined = np.concatenate([returns, np.array([0.005])])
+    nav = np.cumprod(1 + combined)
+    peak = np.maximum.accumulate(nav)
+    assert metrics["total_return"] == pytest.approx(nav[-1] - 1, rel=1e-12)
+    assert metrics["max_drawdown"] == pytest.approx(((nav - peak) / peak).min(), rel=1e-12)
+    assert metrics["cagr"] == pytest.approx(nav[-1] ** (252 / len(combined)) - 1, rel=1e-12)
+    assert metrics["sharpe"] == pytest.approx(
+        (combined.mean() - ((1.03) ** (1 / 252) - 1)) / combined.std(ddof=1) * np.sqrt(252), rel=1e-9
+    )
+    empty = chain_metrics_from_fold_returns([np.array([])])
+    assert empty["total_return"] is None and empty["cagr"] is None
+
+
+def test_per_fold_returns_excludes_cross_split_point(tmp_path):
+    _write_run(tmp_path, "base", daily_returns={0: [0.01] * 4, 1: [0.02] * 4, 2: [0.03] * 4})
+    run = load_run(tmp_path / "base")
+    folds = per_fold_returns(run)
+    assert sorted(folds) == [0, 1, 2]
+    for split, values in folds.items():
+        assert values.size == 3  # 4 行 -> 3 个折内收益区间（首行为起点）
+        assert np.allclose(values, {0: 0.01, 1: 0.02, 2: 0.03}[split])
+
+
+def test_bootstrap_table_criteria_and_direction(tmp_path):
+    splits = (0, 1, 2, 3)
+    baseline = {split: [0.0, 0.010, -0.005, 0.020, -0.005] for split in splits}
+    stronger = {split: [0.0, 0.013, -0.002, 0.023, -0.002] for split in splits}
+    weaker = {split: [0.0, 0.004, -0.012, 0.008, -0.014] for split in splits}
+    _write_run(tmp_path, "base", splits=splits, daily_returns=baseline)
+    _write_run(tmp_path, "stronger", splits=splits, daily_returns=stronger)
+    _write_run(tmp_path, "weaker", splits=splits, daily_returns=weaker)
+    base = load_run(tmp_path / "base", label="基线")
+    strong = load_run(tmp_path / "stronger", label="更强")
+    weak = load_run(tmp_path / "weaker", label="更弱")
+
+    table = bootstrap_table(base, [strong, weak], list(splits), n_boot=200, seed=7).set_index("运行")
+    assert table.loc["更强", "ΔCAGR"] > 0
+    assert table.loc["更强", "ΔCAGR下限"] > 0
+    assert table.loc["更强", "CAGR判据"] == "通过"
+    assert table.loc["更强", "回撤判据"] == "通过"
+    assert table.loc["更强", "逐折同向数"] == len(splits)
+    assert table.loc["更强", "同向门槛"] == 3  # ceil(0.7 × 4)
+
+    assert table.loc["更弱", "ΔCAGR"] < 0
+    assert table.loc["更弱", "CAGR判据"] == "不通过"
+    assert table.loc["更弱", "判定"] == "不通过"
+
+
+def test_bootstrap_table_requires_splits(tmp_path):
+    _write_run(tmp_path, "base")
+    _write_run(tmp_path, "arm")
+    base = load_run(tmp_path / "base")
+    arm = load_run(tmp_path / "arm")
+    table = bootstrap_table(base, [arm], [0, 1, 2], n_boot=50, seed=1)
+    assert set(table.columns) >= {"运行", "判定", "ΔMaxDD上限", "同向门槛"}
+    assert table.loc[0, "折数"] == 3

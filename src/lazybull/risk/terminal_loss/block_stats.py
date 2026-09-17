@@ -290,6 +290,81 @@ def moving_block_metric_sensitivity(
     return out
 
 
+def paired_day_mean_ci(
+    deltas: np.ndarray,
+    days: Sequence[str],
+    config: Optional[BootstrapConfig] = None,
+    units: str = "",
+) -> Dict[str, Any]:
+    """逐日配对差值的均值区间（组合级多年 OOS 口径，交易日分块自举）。
+
+    用途：把「两个臂在**同一天**上的日频指标之差」做块自举，得到均值的区间。
+    与 :func:`block_paired_delta` 的区别是评估单位：后者按（日 × 股票 × 期限）
+    的多行面板算指标（lift 等），本函数直接接收**每天一个数**的差值序列
+    （如 Top-K 日均收益、命中率），因此适用于逐日信号级对比。
+
+    配对的意义：同一天的 A、B 差值把市场共同冲击消掉，方差远小于两条独立
+    区间的重叠比较（方案第 6 节规则 5）。块自举保留块内（连续交易日）的时序
+    依赖，块长 ``block_days`` 必须小于交易日数，否则重采样退化为原样本、区间
+    宽度恒为 0（明确报错，禁止静默缩小块长）。
+
+    Args:
+        deltas: 逐日配对差值（与 ``days`` 等长、一一对应）；含 NaN 的日会被剔除并计数
+        days: 交易日标签（``YYYYMMDD`` 字符串），需与 ``deltas`` 等长
+        config: 重采样配置（块长默认 ``PRIMARY_BLOCK_DAYS``）
+        units: 单位说明（仅回填到结果里，便于报表展示）
+
+    Returns:
+        dict：``delta_point``/``ci_low``/``ci_high``/``prob_positive``/
+        ``day_share_positive``/``n_days``/``n_days_dropped``/``block_days`` 等
+    """
+    cfg = config or BootstrapConfig()
+    values = np.asarray(deltas, dtype=float)
+    labels = np.asarray([str(d) for d in days])
+    if values.size != labels.size:
+        raise ValueError(f"deltas({values.size}) 与 days({labels.size}) 长度不一致")
+    if values.size == 0:
+        raise ValueError("逐日配对差值为空，无法给出区间")
+    finite = np.isfinite(values)
+    dropped = int((~finite).sum())
+    values, labels = values[finite], labels[finite]
+    if values.size == 0:
+        raise ValueError("逐日配对差值全为非有限值，无法给出区间")
+
+    frame = pd.DataFrame({"trade_date": labels, "delta": values})
+    _, order, uniq, first, counts = _day_slices(frame)
+    if cfg.block_days >= len(uniq):
+        raise ValueError(
+            f"块长 {cfg.block_days} ≥ 交易日数 {len(uniq)}：重采样退化为原样本、"
+            f"区间宽度恒为 0（组合级比较请用更小且小于交易日数的块长）"
+        )
+    rng = np.random.default_rng(cfg.seed)
+    deltas_resampled: List[float] = []
+    for _ in range(cfg.n_resamples):
+        idx = _resample_indices(rng, uniq, first, counts, order, cfg.block_days)
+        if idx.size == 0:
+            continue
+        deltas_resampled.append(float(values[idx].mean()))
+    arr = np.asarray(deltas_resampled, dtype=float)
+    if arr.size == 0:
+        raise ValueError("重采样全部无效，无法给出区间")
+    alpha = (1.0 - cfg.ci) / 2.0
+    return {
+        "units": units,
+        "delta_point": float(values.mean()),
+        "ci_low": float(np.quantile(arr, alpha)),
+        "ci_high": float(np.quantile(arr, 1.0 - alpha)),
+        "prob_positive": float((arr > 0).mean()),
+        "day_share_positive": float((values > 0).mean()),
+        "n_days": int(len(uniq)),
+        "n_days_dropped": dropped,
+        "block_days": int(cfg.block_days),
+        "n_resamples": int(arr.size),
+        "ci_level": cfg.ci,
+        "seed": cfg.seed,
+    }
+
+
 def block_paired_delta(
     df_a: pd.DataFrame,
     df_b: pd.DataFrame,
