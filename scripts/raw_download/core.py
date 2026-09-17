@@ -23,6 +23,7 @@ ALT_DATASETS = [
     "cashflow",
     "income",
     "dividend",
+    "stk_holdertrade",
     "pledge_stat",
     "share_float",
     "block_trade",

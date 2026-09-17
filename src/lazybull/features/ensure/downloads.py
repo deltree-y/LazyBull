@@ -3,6 +3,7 @@
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -367,6 +368,34 @@ def _try_download_stk_holdernumber(
         storage,
         dedup_cols=["ts_code", "end_date"],
     )
+
+
+def _try_download_stk_holdertrade(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+) -> Optional[pd.DataFrame]:
+    """下载/增量补齐股东增减持数据（stk_holdertrade，按 ann_date 年分区）。
+
+    水位 = 分区内最大 `ann_date`，重拉窗口由 `download_holdertrade` 内部收窄
+    （回拉 `HOLDERTRADE_RESUME_OVERLAP_DAYS` 天防同日补录/更正）；
+    失败仅告警不阻断纸面链路（Phase 1 阶段尚无因子消费该数据）。
+    """
+    from ...data.holdertrade_raw import (
+        HOLDERTRADE_RESUME_OVERLAP_DAYS,
+        download_holdertrade,
+        load_holdertrade,
+    )
+
+    lookback_days = max(90, HOLDERTRADE_RESUME_OVERLAP_DAYS * 2)
+    start_date = (
+        datetime.strptime(str(trade_date), "%Y%m%d") - timedelta(days=lookback_days)
+    ).strftime("%Y%m%d")
+    try:
+        download_holdertrade(client, storage, start_date=start_date, end_date=str(trade_date))
+    except Exception as e:  # noqa: BLE001 - 纸面链路必须 fail-soft
+        logger.warning(f"增量下载 stk_holdertrade 失败: {e}")
+    return load_holdertrade(storage)
 
 
 def _try_download_forecast(

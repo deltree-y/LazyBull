@@ -11,8 +11,8 @@
 | 接口名 | `stk_holdertrade`（积分门槛已满足，8000 分账号可调） |
 | 返回字段 | `ts_code, ann_date, holder_name, holder_type, in_de, change_vol, change_ratio, after_share, after_ratio, avg_price, total_share` |
 | **缺失字段** | **无 `begin_date` / `close_date`** —— 没有"变动期间"，只能按**公告日**使用（对事件型因子足够：公告日当天事件信息完整） |
-| 单次上限 | **3000 行，静默截断**（超出不报错，返回**最新 3000 行**；实测 6 个月窗口只回 3~6 月） |
-| 分页 | `limit` / `offset` **有效**（offset 后移 → 返回更早的公告日；默认按 ann_date 降序） |
+| 单次上限 | **单页 3000 行**（per-request，不是数据上限）；超出时**不报错**，默认按 `ann_date` 降序返回**最新 3000 行** |
+| 分页 | `limit` / `offset` **有效且能取全**：实测 2024H1 分页合计 4559 行（去重 4478）与**逐月拼装逐行一致**；2019 全年分页到取空 = 19571 行；offset 21000 仍有效，无总量硬上限。**跨页会重复行**（同日行被切到两页，81/4559 ≈ 1.8%）⇒ 分页后必须去重 |
 | 单股查询 | `ts_code` 不带日期可拉**全历史**（600519.SH：16 行，覆盖 2010~2025，7 个年份） |
 | 历史可回溯 | 2018 / 2021 / 2024 / 2026 窗口均可拉取 ✓ |
 
@@ -68,8 +68,8 @@
 
 ## 六、Phase 1 硬约束（审计产出，必须落到实现与测试）
 
-1. **3000 行静默截断**：下载必须按 `offset` 分页读满或按日期二分到 <3000 行/次；
-   **每次拉取后校验行数**（`len(df) < 3000` 或分页合计一致），触顶必须继续二分/翻页，禁止当作完整数据。
+1. **必须分页读满**：`limit=3000` + `offset` 递增直到返回空（**触顶页 =3000 时必须继续翻页**，不得当作完整数据）；
+   分页后**全字段去重**（跨页重复 ≈1.8%，源内重复 24.7%）；测试断言用「分页合计 == 逐日期窗口独立拉取合计」锁定完整性。
 2. **全字段去重**（24.7% 整行重复），去重后仍保留 `(ts_code, ann_date)` 多行聚合语义；
    禁止引入弱键唯一性假设。
 3. **PIT 锚点 = `ann_date`**：分区/水位按公告日推进（沿 `dividend` 的按年分区 + `report_rc` 的增量水位模式）；
@@ -84,3 +84,49 @@ Phase 1 完成后按既有协议走 Phase 2（因子构建）/ Phase 3（离线�
 
 预期管理（沿既有先例）：新数据集被否的概率不低（参照 dividend / consensus_revision），
 因此 Phase 1 采用**薄接入、默认关、可回退**。
+
+## 八、Phase 1 落地（2026-09-17 完成）
+
+**落盘布局（决策）**：`data/raw/stk_holdertrade/YYYY-12-31.parquet`——**按 `ann_date` 年分区**。
+选年分区而非整体单文件/半年/季度：① 全年实测 1.9 万行（2019）→ 年文件 <2MB，按季/半年分区过碎；
+② 当前年度续传 + 合并只动 1 个分区；③ 与 dividend / report_rc 年分区语义一致，复用 `Storage` 既有能力。
+
+| 组件 | 位置 |
+|---|---|
+| 客户端 getter | `tushare_client/alt.py::get_stk_holdertrade`（docstring 标注分页限制） |
+| raw 核心 | `src/lazybull/data/holdertrade_raw.py`（下载/去重/年分区/水位/加载） |
+| 薄包装 | `scripts/raw_download/holdertrade.py` + `--download stk_holdertrade`（已入 `ALT_DATASETS`） |
+| loader | `DataLoader.load_stk_holdertrade()` |
+| 纸面 ensure | `features/ensure/downloads.py::_try_download_stk_holdertrade` + `factor_load.py` 挂点（**仅维持 raw 新鲜**，失败仅告警） |
+| 测试 | `tests/test_holdertrade_raw.py`（9 项，含**分页取全 + 跨页重叠行**） |
+
+**冒烟证据（真实 API）**：2024-03-01~04-30 拉取 **1476 行**（去重后；Phase 0 审计 raw 计数 1516，
+差值为整行重复）✓；分区仅 `2024-12-31` ✓；水位 `20240430` ✓；二次调用零请求（幂等）✓。
+
+**项目共识**：本次教训（单页上限 + 超限不报错 + 跨页重复）已写入 `CLAUDE.md` /
+`.github/copilot-instructions.md` 的《TuShare 分页读取契约》与《stk_holdertrade 数据集契约》。
+
+## 九、生产全历史回补（2026-09-17）
+
+`python scripts/download_raw.py --start-date 20100101 --end-date 20260917 --download stk_holdertrade`
+→ **201 个月窗口、39 秒、退出码 0、无错误**；落盘 **17 个年分区**（2010-12-31 ~ 2026-12-31），
+年文件 91KB~760KB（最大 2020 年），**全库 176,762 行**（已全字段去重），水位 `20260917`。
+
+| 年 | 行数 | 年 | 行数 |
+|---|---|---|---|
+| 2010 | 1,795 | 2019 | 19,477 |
+| 2011 | 2,274 | 2020 | **20,540**（峰值） |
+| 2012 | 2,835 | 2021 | 18,921 |
+| 2013 | 4,288 | 2022 | 15,339 |
+| 2014 | 5,564 | 2023 | 13,057 |
+| 2015 | 10,636 | 2024 | 9,873 |
+| 2016 | 8,068 | 2025 | 13,679 |
+| 2017 | 8,305 | 2026（至 09-17） | 7,939 |
+| 2018 | 14,172 | | |
+
+全库字段缺失率（相对 Phase 0 的 4 窗口样本，长历史下更低）：
+`change_ratio` 0.02%、`after_share` 12.3%、`after_ratio` 16.1%、`total_share` 10.4%、`avg_price` 28.5%；
+`ts_code/ann_date/holder_name/holder_type/in_de/change_vol` 均为 0%。
+分布：`in_de` DE 132,093(74.7%) / IN 44,669(25.3%)；`holder_type` C 94,466 / G 48,765 / P 33,531。
+
+`DataLoader().load_stk_holdertrade()` 端到端读回 176,762 行 ✓；后续每日由纸面 ensure 自动增量续传。

@@ -415,6 +415,14 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # 股东增减持因子（需先用 --enable-holdertrade-features 构建特征）
+    parser.add_argument(
+        "--enable-holdertrade-features",
+        action="store_true",
+        default=False,
+        help=("启用股东增减持因子（需先下载 stk_holdertrade 并以其开关重建特征分区）"),
+    )
+
     # 其他参数
     parser.add_argument(
         "--data-root",

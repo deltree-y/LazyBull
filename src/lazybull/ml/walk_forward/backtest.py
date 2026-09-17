@@ -13,6 +13,7 @@ from ...common.backtest_runtime import (
 from ...common.config import get_data_root
 from ...common.trading_config import TradingConfig
 from ...data import DataLoader, Storage
+from ...factors.holdertrade import derive_holdertrade_columns
 from ...universe import BasicUniverse
 
 
@@ -45,8 +46,14 @@ def run_oos_backtest(
     initial_capital: float = 1000000.0,
     split_num: Optional[int] = None,
     exposure_table: Optional[Dict[str, float]] = None,
+    holdertrade_lookup: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> Dict:
-    """对单个 split 模型运行 OOS 回测并返回组合级绩效指标。"""
+    """对单个 split 模型运行 OOS 回测并返回组合级绩效指标。
+
+    Args:
+        holdertrade_lookup: 股东增减持运行时查询表（与训练侧同一张）；提供时逐日
+            补齐本族列，避免 MLSignal 因 cs_train 无本族列而静默补 NaN。
+    """
     data_root = data_root or get_data_root()
     logger.info(f"OOS 回测: {bt_start} ~ {bt_end}（模型 v{model_version}, Top{bt_top_n}）")
 
@@ -88,6 +95,15 @@ def run_oos_backtest(
         features = storage.load_cs_train_day(trade_date)
         if features is not None and len(features) > 0:
             features_by_date[trade_date] = features
+
+    # 股东增减持因子为**运行时派生**（cs_train 不含本族列）：回测复用同一张查询表
+    # 逐日补齐，否则 MLSignal 预测将因缺列而静默补 NaN（train/serve 偏差）。
+    if holdertrade_lookup:
+        derived_days = 0
+        for trade_date, features in features_by_date.items():
+            if derive_holdertrade_columns(features, holdertrade_lookup):
+                derived_days += 1
+        logger.info(f"OOS 回测特征派生股东增减持列: {derived_days}/{len(features_by_date)} 日")
 
     if not features_by_date:
         logger.warning(f"OOS回测: 无特征数据 {bt_start}~{bt_end}，跳过")

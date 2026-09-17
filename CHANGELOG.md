@@ -2,6 +2,156 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.124.0] - 2026-09-17
+
+### Added
+
+- **stk_holdertrade（股东增减持）Phase 2：因子构建 + 训练/推理接线**（默认关、可回退）：
+  - `src/lazybull/factors/holdertrade.py`：`aggregate_holdertrade_events`（按 `(ts_code, ann_date)`
+    聚合：比例**求和**、增/减披露 flag 取 **max**——源数据 24.7% 整行重复，按行计数会放大成"多笔"）
+    + `build_holdertrade_lookup_by_date`（逐股 `searchsorted` 向量化滚动窗口和，只输出
+    **90 日内有公告的股票**，活跃集中位约 970 只/日）。
+    **9 个输出列**：`ht_net_ratio_30d` / `ht_net_ratio_90d` / `ht_net_ratio_30d_exec`（高管 G）/
+    `ht_net_ratio_30d_other` / `ht_buy_count_30d` / `ht_sell_count_30d` / `ht_net_count_90d` /
+    `ht_net_ratio_accel`（30 日净 − 90 日净/3）/ `ht_freshness_days`，外加哨兵列
+    `holdertrade_schema_v1`（当前值 `1`，恒写全截面含无事件股票）。
+  - **口径决策**：幅值用 `change_ratio`（缺失 0.02%）而非 `change_vol × avg_price`（`avg_price`
+    缺失 28.5% 且需再除流通市值）；窗口一律**自然日**开区间 `(T−W, T]`，PIT 锚点只允许 `ann_date`；
+    **不做事件新鲜度指数衰减**——滚动窗口本身即带衰减（事件滑出窗口归零），叠加公共衰减会双重衰减。
+  - **稀疏性处理**：查询表只含活跃股票，消费侧
+    `features/factor_handlers.py::HoldertradeFactorHandler` 对缺失**显式填 0**
+    （语义 = 窗口内无增减持），使 8 个因子列在全市场口径下全覆盖，避免被训练入口 0.6 缺失率门禁
+    整体删除（Phase 0 审计标记的风险点）；`ht_freshness_days` 保持 NaN（无事件无新鲜度语义）。
+  - 接线（**运行时派生，不写回 cs_train**，与可用性标记同一先例）：`factors/holdertrade.py::derive_holdertrade_columns`
+    （复用 handler 的 0 填充/哨兵语义，已存在列不覆盖）+ `load_holdertrade_lookup` /
+    `build_holdertrade_runtime_lookup(loader, start, end)`；训练侧由 `walk_forward` / `train_ml_model`
+    一次性构建查询表挂到 `args.holdertrade_lookup`（全折共用）→ `prepare_training_data(..., holdertrade_lookup=...)`
+    在特征清洗**之前**就地拼接；OOS 评估侧 `ml/walk_forward/split_training.py` 按模型特征列同样派生；
+    OOS 回测侧 `ml/walk_forward/backtest.py` 在把逐日特征交给 MLSignal **之前**派生
+    （cs_train 无本族列，否则会被静默补 NaN，形成 train/serve 偏差）；
+    推理侧（纸面）由 `features/ensure/factor_load.py` 每日构建查询表交给 handler 产出。
+    **cs_train 无需重建**（23 GB / 3,518 分区不动）：本族列不进入特征分区，实测查询表开销秒级。
+  - 可选物化路径仍保留：`scripts/build_clean_features.py --enable-holdertrade-features`
+    （以及 `--build-all`）会把本族列写入特征分区，配套可选 schema 组
+    `OPTIONAL_FACTOR_GROUP_HOLDERTRADE`（带哨兵）在开启时校验列完整性与版本。
+  - 测试：新增 `tests/test_holdertrade_runtime.py`（8 项：填充语义与哨兵、不覆盖已有列、
+    无查询表按 0、`wanted` 子集、缺键列/非唯一索引报错、无未来泄露对照、loader 空 raw）
+    + `tests/test_holdertrade_oos_backtest_wiring.py`（2 项：OOS 回测逐日派生本族列 / 未传查询表时不派生）
+    + `tests/test_holdertrade_factors.py`（13 项：同日多笔求和 / 同日增减净额 / 非法日期剔除 /
+    重复行不静默 / 30 日窗口边界为自然日 / 高管与非高管拆分 / 计数与加速度 / 窗口滑出归零与 90 日后
+    行消失 / 无未来泄露 / 空输入 / 列集与训练常量一致 / handler 关族返回空、缺失填 0 与哨兵、
+    空日 schema 一致）；`tests/test_optional_feature_schema.py` 把新组纳入参数化；
+    `tests/test_ensure_and_t0_printing.py` 同步 `_load_factor_data` 18 元组返回。
+
+### 端到端冒烟（2026-09-17，1 折 WF，链路验收）
+
+`walk_forward.py --split-count 1 --final-date 20241231 --train-window-years 6 --test-window-months 6
+--oos-backtest --enable-holdertrade-features`（约 7 分钟，含训练 + OOS 评估 + OOS 回测 + 部署训练）：
+
+| 环节 | 证据 |
+|---|---|
+| 查询表 | 1,597 个交易日（派生区间 20180606~20241231），构建约 3 秒，全折共用 |
+| 训练入口 | 派生 10 列；哨兵被常数门禁移除、`ht_freshness_days` 被 0.6 缺失率门禁移除 ⇒ 模型实际使用 **8 个 ht 因子列**（`v24124_features.json` 共 60 列） |
+| OOS 评估 | 派生 8 列（与模型列集一致，无 KeyError） |
+| OOS 回测 | 派生 **123/123 日** → 回测完成（总收益 19.02%、年化 38.98%、最大回撤 −16.86%、夏普 1.16；仅冒烟用途，非实验结论） |
+
+产物：`data/walk_forward/smoke_ht_20260917/`（summary / 成交 / 持仓快照 / topk 明细 / 链式净值 / 数据态），
+模型注册 v24124（折）+ v24125（部署）。注意：冒烟折 `best_iteration=1`（触下限告警），属该验证窗口
+自身的问题，不代表因子质量。
+
+### Phase 3：因子体检 / 诊断（2026-09-17，结论见 `docs/holdertrade_factor_health.md`）
+
+- **新增可复现入口** `scripts/materialize_factor_health_snapshot.py`：把「生产特征清单 + 运行时派生列」
+  物化成独立临时数据根（只保留体检工具实际读取的列；`clean/raw/models` 以目录联接复用生产），
+  在同一进程内把工具 `data.root` 指向该根并驱动体检 + 诊断——**运行时派生家族因此可被体检/诊断扫描**，
+  且不改动任何生产数据。测试：`tests/test_materialize_factor_health_snapshot.py`（3 项，合成数据）。
+- **扫描口径**：2020-01-01~2026-07-02、每 3 交易日（525 分区）、主板 3,482 只、
+  特征清单 = 生产基线 v24123（158 列，剔除 4 个运行时 marker）+ 10 个本族列 = 164 列。
+  产物归档 `data/reports/factor_health/holdertrade_20260917/`、`data/reports/factor_diagnosis/holdertrade_20260917/`。
+- **结论**：
+  - 覆盖：8 个因子列逐年 **100%**（窗口外显式 0 生效）；`ht_freshness_days` 20%（**设计性缺失**，
+    不是数据缺口，不得当"补数据"候选）。
+  - IC（vs `neu_y_ret_20`）：`ht_net_ratio_90d` **+0.0213**（t=15.2，7/7 年正）与 `ht_net_count_90d`
+    **+0.0207**（t=15.0，7/7 正）最强；`ht_sell_count_30d` **−0.0120**（t=−10.9，6/7 负）；
+    `ht_net_ratio_accel` −0.0087（7/7 负，但其为净额线性组合的镜像，**不得按符号解释**）；
+    `ht_buy_count_30d` **−0.0003**（t=−0.32，|IC| 分位 0.7%）为唯一弱列。
+  - 正交性：每列与 154 个既有列的 **max |ρ| ≤ 0.15**（最高 `list_days` 0.149）⇒ 与现有家族基本正交。
+  - 冗余：体检标记 2 对孪生（`net_ratio_90d`~`net_count_90d`、`net_ratio_30d`~`net_ratio_30d_other`），
+    但偏 IC 分别 t=6.9 / 6.2 ⇒ **按相关删列会丢信息**（再次印证"偏 IC 才是冗余硬定义"）。
+  - 使用度：体检/诊断工具只加载 `_model.joblib`，冒烟折模型为 `_model.json` ⇒ 工具侧使用度为"缺失"
+    （**不可读作未被使用**）；补偿统计（`ht_usage_manual.csv`）显示 8 列在冒烟模型里 gain 份额合计
+    ≈5.7%（v24124）/ ≈4.8%（v24125），全部列均有分裂。
+  - 诊断候选清单（17 条）中仅 1 条与本族相关（`ht_freshness_days` 的 A 覆盖缺口，根因判定"正常结构性"）。
+- **下一步（Phase 4）**：效应量级仍属列级（0~1pp）⇒ 按 v0.120.0 契约不可判定，
+  必须先过 v0.122.0 **信号层尺子**（噪声带 ±10 bps ≈ ±9% 相对），再决定是否跑全量净值 A/B；
+  `ht_buy_count_30d` 作为独立消融位。
+
+### Phase 4：WF A/B 结果（2026-09-17）——**结论：不采纳**
+
+- 预登记判据：`docs/plans/holdertrade_ab_prereg.md`（跑前写定）；报告：`docs/holdertrade_wf_ab_result.md`。
+- 两臂：14 折 × 3 种子（42,61,82）、`final_date=20260105`、train 6y/test 6m、数据态 ID `2a732925`
+  （同一数据态）；A0 基线 52 列（1h28m）、A1 加 ht 60 列（1h35m），除 ht 开关外逐字相同。
+- **判据 1（信号层）**：Δ平均持有期收益 **+5.03 bps**（Top20）/ **+7.00 bps**（Top30），
+  相对 +5.5% / +7.6%，均落 ±10 bps 噪声带内 ⇒ **不可判定**（Top30 正差值概率 0.88、折内同向 9/14）。
+- **判据 2（净值层，链式 + 折级自举 2000）**：ΔCAGR **+0.34pp**（[−2.84, +3.91]）、
+  **ΔMaxDD −6.52pp（恶化）**、Δ夏普 **+0.006**（[−0.138, +0.133]）；链式 MaxDD 由 −22.79% → **−29.30%**；
+  逐折 CAGR 差正 7 / 负 7；逐折 MaxDD 改善 **仅 5/14**（预登记要求 ≥ 9/14）⇒ **主判据失败 ⇒ 不通过**。
+- **处置**：`--enable-holdertrade-features` **保持默认关**，本族列不进生产列集与纸面链路；
+  **禁止**用特征集消融位搜索（如删 `ht_buy_count_30d`）替代判据（预登记已约束）。
+- **解读**：信号层微正而净值回撤显著恶化，属“加列扰动改变早停轨迹/组合路径”（对照 v0.113.0 `core_state`）；
+  单臂 ΔCAGR 可检出下限 5~8pp ⇒ +0.34pp 属不可判定区间，结论应表述为**未观察到收益改善且回撤恶化**。
+- 顺带修复（纯性能，两臂结束后才改、取值不变）：`derive_holdertrade_columns` 改为**批量赋值**，
+  消除大特征帧上的 `PerformanceWarning: highly fragmented`。
+
+### 项目共识（新增契约）
+
+- **stk_holdertrade 因子契约（v0.124.0）**：因子只认 `ann_date`（无 `begin_date/close_date`），
+  窗口为**自然日**；比例列求和、披露 flag 取 max（禁止按行计数）；消费侧对窗口外股票**显式填 0**
+  以保证全市场覆盖（禁止让稀疏列被 0.6 缺失率门禁整体删除）；**不做公共事件衰减**（窗口滑动即衰减）；
+  哨兵列 `holdertrade_schema_v1` 恒写当前版本且校验版本不符必须失败。
+  **本族默认“运行时派生”**（与可用性标记同一先例）：训练侧 `prepare_training_data(holdertrade_lookup=...)`、
+  OOS 评估侧 `split_training.py`、OOS 回测侧 `backtest.py`、推理侧纸面 handler **四处同语义**；
+  **禁止**依赖 cs_train 重建（旧缓存无本族列）；
+  若确实要物化分区列，必须显式 `--enable-holdertrade-features` 并同步可选 schema 组。新增因子列必须同时进
+  `factors/holdertrade.py::HOLDERTRADE_COLS` 与 `ml/train_core/constants.py::HOLDERTRADE_FEATURE_COLUMNS`，
+  并同步 `scripts/factor_health` 家族映射与 `scripts/compare` 开关展示名。
+
+## [0.123.0] - 2026-09-17
+
+### Added
+
+- **stk_holdertrade（股东增减持）Phase 1 接入**（薄接入、默认关、可回退）：
+  - `src/lazybull/data/holdertrade_raw.py`：按月窗口 + **分页读满**（单页 3000）→ **全字段去重**
+    → **按 `ann_date` 年分区**落盘（`data/raw/stk_holdertrade/YYYY-12-31.parquet`，沿 dividend 模式）；
+    水位 = 分区内最大 `ann_date`，增量回拉 `HOLDERTRADE_RESUME_OVERLAP_DAYS=3` 天防同日补录/更正；
+    非法/缺失 `ann_date` 剔除并告警（禁止伪年分区）。
+  - `TushareClient.get_stk_holdertrade()`（单股/单区间查询，docstring 标注分页限制）；
+    `DataLoader.load_stk_holdertrade()`；`scripts/raw_download/holdertrade.py` 薄包装 +
+    `--download stk_holdertrade`（已加入 `ALT_DATASETS` 与 CLI 帮助）；
+    纸面 `_load_factor_data` 挂 ensure（**仅维持 raw 新鲜**，Phase 2 因子接入前不参与特征，失败仅告警）。
+  - **为什么按年分区**（而不是整体单文件/半年/季度）：全年实测 1.9 万行（2019）→ 年文件 <2MB；
+    当前年度续传只动 1 个分区；与 dividend / report_rc 的年分区语义一致，复用既有 `Storage` 分区能力。
+  - 测试：`tests/test_holdertrade_raw.py`（9 项：月份窗口切分/边界、日期归一化与整行去重、
+    **分页取全（含跨页重叠行）**、年分区、水位续传与回拉窗口、force 全量、空数据不建分区、
+    旧分区清理、水位常量边界）。真实数据冒烟：2024-03-01~04-30 拉取 1476 行（去重后），
+    与 Phase 0 审计基准一致（raw 1516 → 去重 1476），二次调用零请求（幂等）。
+
+**生产全历史回补（2026-09-17）**：`--download stk_holdertrade --start-date 20100101 --end-date 20260917`
+→ 201 个月窗口、**39 秒**、退出码 0；落盘 **17 个年分区**（2010~2026，年文件 91KB~760KB）
+**共 176,762 行**（已全字段去重），水位 `20260917`；2020 年为峰值 20,540 行；
+`DataLoader.load_stk_holdertrade()` 端到端读回一致。年分区决策得到验证：全库单年 <800KB，
+当前年度续传只动 1 个分区。
+
+### 项目共识（新增契约）
+
+- **TuShare 分页读取契约**（写入 `CLAUDE.md` / `.github/copilot-instructions.md`）：
+  接口普遍有**单次请求行数上限**且**超限不报错**（默认只回最新 N 行）⇒ 凡新增/改造 TuShare 拉取必须
+  ① 翻页读到返回空（触顶页继续翻，`_query_with_pagination` + `max_pages` 兜底告警）；
+  ② 分页后**全字段去重**（跨页重复实测 ≈1.8%）；③ 用「分页合计 == 按更小日期窗口独立拉取合计」作完整性断言；
+  ④ 已知总量上限接口走自适应二分。**禁止以"单次调用成功"作为数据完整的依据**。
+- **stk_holdertrade 数据集契约**：年分区布局、全字段去重（无自然键）、`ann_date` 唯一 PIT 锚点、
+  水位与回拉语义、稀疏性处理要求（状态保留 + freshness 衰减 + 显式处理 0.6 缺失率门禁）。
+
 ## [Unreleased]
 
 ### 记录（stk_holdertrade Phase 0 PIT 审计，2026-09-17）
@@ -11,7 +161,9 @@ All notable changes to this project will be documented in this file.
 - 字段：`ts_code/ann_date/holder_name/holder_type/in_de/change_vol/change_ratio/after_share/after_ratio/avg_price/total_share`；
   **无 `begin_date`/`close_date`**（没有变动期间，只能按公告日使用）；
 - `ann_date` 缺失 0%、且 100% 合法 → PIT 锚点可用；历史可回溯（2018/2021/2024 窗口均可拉，单股可拉 2010+ 全历史）；
-- **单次 3000 行、静默截断**（超出返回最新 3000 行）；`limit/offset` 分页有效；
+- **单页 3000 行**（per-request 上限，**不是**数据上限）：不传 `limit/offset` 时不报错、只返回最新 3000 行；
+  `limit/offset` 分页**有效且能取全**（实测 2024H1：分页 4559 行与逐月拼装**逐行一致**；2019 全年分页 19571 行，无总量硬上限）；
+  **跨页会重复行**（同日行被切到两页，81/4559 ≈ 1.8%）⇒ 分页后必须去重；
 - **无自然唯一键**：`ts_code+ann_date` 重复 67.1%，**全字段完全重复 24.7%** ⇒ 必须全字段去重 + 按 `(ts_code, ann_date)` 聚合；
 - 稀疏：披露季每日行数中位 24、每日股票数中位 12（全市场 5607）⇒ 必须状态保留 + `freshness_days` + 公共衰减；
 - **PIT 严格性**：未截断窗口下窄窗与宽窗切片**逐行一致**（无“当前值快照”式字段）。

@@ -17,6 +17,7 @@ from .downloads import (
     _try_download_forecast,
     _try_download_report_rc,
     _try_download_stk_holdernumber,
+    _try_download_stk_holdertrade,
 )
 from .historical_assets import (
     _try_ensure_historical_cyq_perf,
@@ -186,6 +187,42 @@ def _load_factor_data(
     # 释放股东人数中间数据
     stk_holdernumber = None
     holder_lookup = None
+    gc.collect()
+
+    # ── 股东增减持（滚动窗口聚合，PIT 按 ann_date）────
+    # 水位判定走「分区内最大 ann_date」（只读分区内 ann_date 单列，不做全量加载）；
+    # raw 保鲜失败仅告警（不阻断纸面链路），但因子查询表始终构建（数据缺失时输出 0 填充列，
+    # 保证推理侧 schema 与训练一致）——与 dividend 同模式：纸面侧恒产出本族列。
+    from ...data.holdertrade_raw import holdertrade_latest_ann_date
+
+    holdertrade_today = pd.DataFrame()
+    try:
+        latest_holdertrade = holdertrade_latest_ann_date(storage)
+        if latest_holdertrade is None or latest_holdertrade < str(trade_date):
+            _try_download_stk_holdertrade(client, storage, trade_date)
+            latest_holdertrade = holdertrade_latest_ann_date(storage)
+        holdertrade_df = loader.load_stk_holdertrade()
+        if holdertrade_df is not None and len(holdertrade_df) > 0:
+            from ...factors.holdertrade import build_holdertrade_lookup_by_date
+
+            holdertrade_lookup = build_holdertrade_lookup_by_date(
+                holdertrade_df, factor_output_dates
+            )
+            cur = holdertrade_lookup.get(trade_date)
+            if cur is not None and len(cur) > 0:
+                holdertrade_today = cur
+            else:
+                # 该交易日无活跃公告：输出空表（handler 会填 0，保证逐日 schema 一致）
+                holdertrade_today = pd.DataFrame()
+            logger.info(
+                f"股东增减持因子: 已加载（覆盖至 {latest_holdertrade}，"
+                f"当日活跃 {len(holdertrade_today)} 只）"
+            )
+        else:
+            missing_factors.append("stk_holdertrade（股东增减持）")
+    except Exception as e:  # noqa: BLE001 - 保鲜/构建失败不阻断纸面链路
+        logger.warning(f"股东增减持数据 ensure 跳过（当日因子按 0 处理）: {e}")
+        holdertrade_today = pd.DataFrame()
     gc.collect()
 
     # ── 业绩预告 ────────────────────────────────────────────
@@ -531,6 +568,7 @@ def _load_factor_data(
         cashflow_today,
         consensus_revision_today,
         dividend_today,
+        holdertrade_today,
         pledge_today,
         share_float_today,
         block_trade_today,

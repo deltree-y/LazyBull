@@ -46,6 +46,24 @@ MARGIN_FEATURE_COLUMNS = [
     "rqye_rzye_ratio",  # 融券/融资余额比
 ]
 
+# 股东增减持因子（stk_holdertrade，Phase 2；随开关显式入模）
+# 口径：滚动窗口聚合（自然日 30/90），幅值用 change_ratio（占流通比例，缺失 0.02%），
+# PIT 锚点 = ann_date；窗口内无事件由 handler 显式填 0 ⇒ 全市场全覆盖
+# （避免稀疏列被训练入口 0.6 缺失率门禁整体删除）。
+# 哨兵列 holdertrade_schema_v1 随开关入模并校验语义版本。
+HOLDERTRADE_FEATURE_COLUMNS = [
+    "ht_net_ratio_30d",  # 30 日净增持占流通比例（%）
+    "ht_net_ratio_90d",  # 90 日净增持占流通比例（%）
+    "ht_net_ratio_30d_exec",  # 30 日高管净增持占流通比例（%）
+    "ht_net_ratio_30d_other",  # 30 日非高管净增持占流通比例（%）
+    "ht_buy_count_30d",  # 30 日内出现增持披露的公告日数
+    "ht_sell_count_30d",  # 30 日内出现减持披露的公告日数
+    "ht_net_count_90d",  # 90 日净披露日数（增持日数 − 减持日数）
+    "ht_net_ratio_accel",  # 近期强度加速度 = 30 日净比例 − 90 日净比例/3
+    "ht_freshness_days",  # 最近一次公告距当日自然日数（仅窗口内有事件时非空）
+    "holdertrade_schema_v1",  # schema 哨兵列（值 = 当前语义版本）
+]
+
 ALT_FEATURE_COLUMNS = [
     # 股东人数 (2)
     "holder_num_chg",  # 股东人数环比变动率

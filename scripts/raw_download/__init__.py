@@ -13,6 +13,7 @@ from .alt import (
 )
 from .basic import download_basic_data
 from .cli import _bypass_proxy_for_download, _should_bypass_proxy_for_download, main
+from .holdertrade import download_stk_holdertrade
 from .core import (
     _DOWNLOAD_CONCURRENCY,
     ALT_DATASETS,

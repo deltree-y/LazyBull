@@ -18,6 +18,7 @@ from .ensure import (
     OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY,
     OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION,
     OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY,
+    OPTIONAL_FACTOR_GROUP_HOLDERTRADE,
     _check_features_schema,
 )
 
@@ -48,6 +49,7 @@ def _build_features_parallel(
     cashflow_lookup,
     consensus_revision_lookup,
     dividend_lookup,
+    holdertrade_lookup,
     pledge_lookup,
     share_float_lookup,
     block_trade_lookup,
@@ -122,6 +124,13 @@ def _build_features_parallel(
                 dividend_today = pd.DataFrame()
         else:
             dividend_today = None
+
+        if holdertrade_lookup is not None:
+            holdertrade_today = holdertrade_lookup.get(trade_date)
+            if holdertrade_today is None:
+                holdertrade_today = pd.DataFrame()
+        else:
+            holdertrade_today = None
         if pledge_lookup is not None:
             pledge_today = pledge_lookup.get(trade_date)
             if pledge_today is None:
@@ -165,6 +174,7 @@ def _build_features_parallel(
             cashflow_data=cashflow_today,
             consensus_revision_data=consensus_revision_today,
             dividend_data=dividend_today,
+            holdertrade_data=holdertrade_today,
             pledge_data=pledge_today,
             share_float_data=share_float_today,
             block_trade_data=block_trade_today,
@@ -245,6 +255,7 @@ def build_features_data(
     enable_cashflow_quality: bool = False,
     enable_consensus_revision: bool = False,
     enable_dividend_policy: bool = False,
+    enable_holdertrade: bool = False,
     enable_announcement_risk: bool = False,
     use_parallel: bool = False,
     parallel_jobs: int = -1,
@@ -272,6 +283,7 @@ def build_features_data(
         enable_cashflow_quality: 是否启用现金流质量因子
         enable_consensus_revision: 是否启用一致预期修正因子
         enable_dividend_policy: 是否启用分红政策质量因子（需先下载 dividend 数据）
+        enable_holdertrade: 是否启用股东增减持因子（需先下载 stk_holdertrade 数据）
         enable_announcement_risk: 是否启用风控公告类因子（质押/解禁/大宗）
     """
     logger.info("=" * 60)
@@ -316,6 +328,7 @@ def build_features_data(
             (enable_cashflow_quality, OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY),
             (enable_consensus_revision, OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION),
             (enable_dividend_policy, OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY),
+            (enable_holdertrade, OPTIONAL_FACTOR_GROUP_HOLDERTRADE),
         )
         if enabled
     }
@@ -630,6 +643,21 @@ def build_features_data(
                 "python scripts/download_raw.py --download dividend"
             )
 
+    # 加载股东增减持数据（可选：滚动窗口聚合，PIT 按 ann_date）
+    holdertrade_lookup = None
+    if enable_holdertrade:
+        from src.lazybull.factors.holdertrade import build_holdertrade_lookup_by_date
+
+        holdertrade_df = loader.load_stk_holdertrade()
+        if holdertrade_df is not None and len(holdertrade_df) > 0:
+            logger.info(f"股东增减持数据: {len(holdertrade_df)} 条（明细行）")
+            holdertrade_lookup = build_holdertrade_lookup_by_date(holdertrade_df, trading_dates_str)
+        else:
+            raise ValueError(
+                "启用股东增减持因子但缺少 raw/stk_holdertrade 数据。请先运行: "
+                "python scripts/download_raw.py --download stk_holdertrade"
+            )
+
     # 加载风控公告类数据（可选：质押/解禁/大宗，PIT 日频查询表）
     pledge_lookup = None
     share_float_lookup = None
@@ -729,6 +757,7 @@ def build_features_data(
             cashflow_lookup=cashflow_lookup,
             consensus_revision_lookup=consensus_revision_lookup,
             dividend_lookup=dividend_lookup,
+            holdertrade_lookup=holdertrade_lookup,
             pledge_lookup=pledge_lookup,
             share_float_lookup=share_float_lookup,
             block_trade_lookup=block_trade_lookup,
@@ -787,6 +816,12 @@ def build_features_data(
                     dividend_today = pd.DataFrame()
             else:
                 dividend_today = None
+            if holdertrade_lookup is not None:
+                holdertrade_today = holdertrade_lookup.get(trade_date)
+                if holdertrade_today is None:
+                    holdertrade_today = pd.DataFrame()
+            else:
+                holdertrade_today = None
             if pledge_lookup is not None:
                 pledge_today = pledge_lookup.get(trade_date)
                 if pledge_today is None:
@@ -833,6 +868,7 @@ def build_features_data(
                 cashflow_data=cashflow_today,
                 consensus_revision_data=consensus_revision_today,
                 dividend_data=dividend_today,
+                holdertrade_data=holdertrade_today,
                 pledge_data=pledge_today,
                 share_float_data=share_float_today,
                 block_trade_data=block_trade_today,

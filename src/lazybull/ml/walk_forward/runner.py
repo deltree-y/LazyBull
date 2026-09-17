@@ -311,6 +311,20 @@ def run_walk_forward(args) -> None:
             logger.error("--skip-training 模式必须指定 --start-model-version")
             sys.exit(1)
 
+        # 股东增减持因子：**运行时派生**（不写回 cs_train）→ 按 WF 覆盖区间构建查询表；
+        # 折目录只做切片，全部折共用同一张表（查询表按自然日窗口，与请求区间无关）。
+        args.holdertrade_lookup = None
+        if getattr(args, "enable_holdertrade_features", False):
+            from src.lazybull.factors.holdertrade import build_holdertrade_runtime_lookup
+
+            args.holdertrade_lookup = build_holdertrade_runtime_lookup(
+                loader, args.wf_start_date, args.wf_end_date
+            )
+            logger.info(
+                f"股东增减持运行时查询表: {len(args.holdertrade_lookup)} 个交易日"
+                f"（派生区间 {args.wf_start_date}~{args.wf_end_date}）"
+            )
+
         deploy_train_start = None
         deploy_train_end_for_run = None
         if not args.no_deploy_train and not skip_training:
@@ -441,6 +455,7 @@ def run_walk_forward(args) -> None:
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,
                             exposure_table=exposure_table,
+                            holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)

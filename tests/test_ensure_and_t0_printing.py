@@ -813,6 +813,17 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         def load_dividend(self):
             return stub_df
 
+        def load_stk_holdertrade(self):
+            return pd.DataFrame(
+                {
+                    "ts_code": ["000001.SZ"],
+                    "ann_date": [trade_date],
+                    "in_de": ["IN"],
+                    "holder_type": ["G"],
+                    "change_ratio": [0.5],
+                }
+            )
+
         def load_stock_basic(self):
             return pd.DataFrame({"ts_code": ["000001.SZ"], "list_date": ["19910403"]})
 
@@ -1013,6 +1024,7 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
         ensure_entry,
         "_load_factor_data",
         lambda *args, **kwargs: (
+            None,
             None,
             None,
             None,

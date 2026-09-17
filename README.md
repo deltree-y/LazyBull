@@ -50,6 +50,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **特征优化**: 向量化计算提升特征生成效率
 - ✅ **现金流质量因子**: 基于 `f_ann_date` 的版本化 PIT、依赖修订事件驱动 TTM 与供应商自由现金流口径
 - 🧪 **分红政策质量因子（待 WF 验证）**: 分红稳定性/增长率、归母净利润支付率 + 双日期稠密事件因子，每股调整口径 PIT 截断、`ex_date` 防前视
+- 🧪 **股东增减持因子（stk_holdertrade，待 WF 验证）**: 30/90 日自然日窗口的净增持比例（含高管/非高管拆分）、披露日计数与强度加速度，`ann_date` 唯一 PIT 锚点，窗口外显式填 0 保证全市场覆盖
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
 - ✅ **数据质量看板**: 按本地数据截止日扫描 raw/clean/features 的覆盖率、区间加权缺失率、异常值、schema 版本和同步水位，输出离线 HTML 报告与 Parquet 快照
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
@@ -142,6 +143,10 @@ python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --downl
 # 必须显式请求 base_share 基准股本用于支付率；存量数据缺该列会自动触发重下，也可手动 --force
 python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --download dividend
 
+# 股东增减持数据（stk_holdertrade，按月窗口分页读满 + ann_date 年分区）
+# 接口单页上限 3000 行且超限不报错，必须按月窗口 + offset 翻页；水位=分区内最大 ann_date，自动增量续传
+python scripts/download_raw.py --start-date 20200101 --end-date 20231231 --download stk_holdertrade
+
 # 利润表归母净利润（分红支付率，首次接入需强制建立 f_ann_date 版本化季度分区）
 python scripts/download_raw.py --start-date 20170101 --end-date 20231231 --download income --force
 
@@ -160,6 +165,10 @@ python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231
 
 # 启用分红政策质量因子（需先下载 dividend + 有效 income 合并年报，缺失时构建会直接失败）
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-dividend-policy-features
+
+# 启用股东增减持因子（物化到特征分区；窗口外显式填 0，9 列全覆盖）
+# 注意：训练/OOS 评估默认走**运行时派生**（不写分区），无需此步
+python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --horizon 20 --enable-holdertrade-features
 
 # 或者只构建clean
 python scripts/build_clean_features.py --start-date 20230101 --end-date 20231231 --only-clean --horizon 20
@@ -240,6 +249,26 @@ python scripts/walk_forward.py --factor-prune \
 另生成一份**口径交换清单** `exclude_dedup_plain_v1.json`（同一簇划分，代表改为优先保留非 `_sz`
 口径，与默认去重清单同规模）：孪生对里多数 `_sz`（市值中性化）口径 |IC-IR| 更高，直接用默认去重清单会
 同时削减 size 暴露，因此两条清单必须成对做单变量对照。
+
+#### 运行时派生家族的体检扫描（快照物化）
+
+股东增减持（`stk_holdertrade`）等**运行时派生**家族列不写入 `cs_train`，而体检/诊断工具只读分区。
+`scripts/materialize_factor_health_snapshot.py` 把「特征清单 + 运行时派生列」物化成**独立临时数据根**
+（只保留工具实际读取的列，2 GB 量级），以目录联接复用生产 `clean/raw/models`，再把工具的
+`data.root` 指向该根，**不改动任何生产数据、口径与生产一致**：
+
+```bash
+python scripts/materialize_factor_health_snapshot.py \
+  --start 20200101 --end 20260702 --every 3 \
+  --with-holdertrade \
+  --feature-file data/models/stock_selection/v24123_features.json \
+  --skip-usage --usage-model-count 2 \
+  --out-root temp/ht_health_root_20260917
+```
+
+产物：`<out-root>/reports/factor_health|factor_diagnosis/`（台账、候选清单、报告、特征清单）。
+`--skip-usage` 用于模型以 `_model.json`（而非 `_model.joblib`）落盘时——此时工具侧使用度为“缺失”，
+**不可读作“未被使用”**，需另行统计。结论示例见 `docs/holdertrade_factor_health.md`。
 
 #### 因子诊断 v2（增量信息 / 覆盖显著性 / 使用度稳定性）
 
@@ -351,6 +380,10 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
 # 使用现金流质量因子；旧 schema 模型必须重新训练
 python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
   --enable-cashflow-quality-features
+
+# 使用股东增减持因子（**运行时派生**，无需重建 cs_train；需先下载 stk_holdertrade 年分区）
+python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
+  --enable-holdertrade-features
 
 # 步骤2: 使用 ML 模型运行回测（使用新的默认值）
 # 注意：scripts/run_ml_backtest.py 已删除，回测已并入 walk_forward 滚动回测，
@@ -776,6 +809,7 @@ LazyBull/
 │   ├── analyze_factor_health.py # 因子体检（薄入口）
 │   ├── factor_health/         # 因子体检子包（constants/scan/analysis/report/diagnose）
 │   ├── analyze_factor_diagnosis.py # 因子诊断 v2（薄入口；偏 IC/覆盖显著性/使用度稳定性）
+│   ├── materialize_factor_health_snapshot.py # 体检快照物化（运行时派生列 → 临时数据根 + 驱动体检/诊断） ✅ v0.124.0
 │   ├── audit_model_columns.py # 模型列集审计（薄入口；列集漂移/配置分组/跨来源差异） ✅ v0.121.0
 │   ├── model_audit/           # 模型列集审计子包（constants/columns/report） ✅ v0.121.0
 │   └── ana/

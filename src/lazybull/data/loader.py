@@ -559,6 +559,16 @@ class DataLoader(IncomeLoaderMixin, DividendLoaderMixin, AnnouncementRiskLoaderM
         df = self.storage.load_raw("margin_detail")
         return df
 
+    def load_stk_holdertrade(self, years: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+        """加载股东增减持数据（按 ann_date 年分区；可指定年份子集）。"""
+        from .holdertrade_raw import load_holdertrade
+
+        df = load_holdertrade(self.storage, years=years)
+        if df is None or len(df) == 0:
+            logger.warning("未找到股东增减持数据（stk_holdertrade）")
+            return None
+        return df
+
     def load_stk_holdernumber(self) -> Optional[pd.DataFrame]:
         """加载股东人数数据（单文件）"""
         df = self.storage.load_raw("stk_holdernumber")

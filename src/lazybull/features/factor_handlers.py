@@ -73,6 +73,10 @@ def _get_handler_default_columns(name: str) -> List[str]:
         )
 
         return list(DIVIDEND_COLS) + [DIVIDEND_FRESHNESS_COL, DIVIDEND_HIST_MISSING_COL]
+    if name == "holdertrade":
+        from ..factors.holdertrade import available_holdertrade_columns
+
+        return available_holdertrade_columns()
     if name == "pledge":
         from .handlers_announcement import PLEDGE_COLS
 
@@ -143,6 +147,48 @@ class HolderFactorHandler:
         merge_cols = [c for c in data.columns if c != "ts_code"]
         merged = _safe_merge_by_ts_code(features, data, merge_cols, "holder")
         return {col: merged[col] for col in merge_cols if col in merged.columns}
+
+
+class HoldertradeFactorHandler:
+    """股东增减持因子（滚动窗口聚合，PIT 按 ann_date）。
+
+    **缺失填 0 的语义**：查询表只输出「90 日内有公告」的股票；其余股票（窗口内无事件）
+    一律填 0（净变动为 0），从而 8 个因子列在全市场口径下全覆盖，
+    不会因稀疏被训练入口 0.6 缺失率门禁整体删除（Phase 0 审计标记的风险点）。
+    哨兵列恒写当前 schema 版本（含无事件股票），供训练入口校验语义。
+    """
+
+    def apply(self, features, data, trade_date, current_data) -> Dict[str, pd.Series]:
+        from ..factors.holdertrade import (
+            HOLDERTRADE_COLS,
+            HOLDERTRADE_FRESHNESS_COL,
+            HOLDERTRADE_SCHEMA_VERSION,
+            HOLDERTRADE_VERSION_COL,
+        )
+
+        # data is None ⇒ 该构建未启用本族因子（不输出任何列，保持与 dividend 等一致）；
+        # data 为空 DataFrame ⇒ 该交易日无活跃公告（仍输出 0 填充列，保证逐日 schema 一致）。
+        if data is None:
+            return {}
+        result: Dict[str, pd.Series] = {}
+        merged = None
+        if len(data) > 0:
+            merge_cols = [c for c in data.columns if c != "ts_code"]
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "holdertrade")
+        for col in HOLDERTRADE_COLS:
+            if merged is not None and col in merged.columns:
+                # 窗口内无事件 ⇒ 0；保证覆盖率（见类 docstring）
+                result[col] = merged[col].fillna(0.0).astype("float32")
+            else:
+                result[col] = pd.Series(0.0, index=features.index, dtype="float32")
+        if merged is not None and HOLDERTRADE_FRESHNESS_COL in merged.columns:
+            result[HOLDERTRADE_FRESHNESS_COL] = merged[HOLDERTRADE_FRESHNESS_COL].astype("float32")
+        else:
+            result[HOLDERTRADE_FRESHNESS_COL] = pd.Series(np.nan, index=features.index)
+        result[HOLDERTRADE_VERSION_COL] = pd.Series(
+            np.int8(HOLDERTRADE_SCHEMA_VERSION), index=features.index
+        )
+        return result
 
 
 class EarningsFactorHandler:
@@ -597,6 +643,11 @@ def create_factor_registry() -> FactorRegistry:
         "dividend_policy",
         DividendPolicyFactorHandler(),
         lambda ctx: ctx.dividend_data,
+    )
+    registry.register(
+        "holdertrade",
+        HoldertradeFactorHandler(),
+        lambda ctx: ctx.holdertrade_data,
     )
 
     # 风控公告类（质押/解禁/大宗，PIT 日频截面原始列）

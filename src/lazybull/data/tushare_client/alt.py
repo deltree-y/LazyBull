@@ -222,3 +222,33 @@ class ClientAltMixin:
         if end_date is not None:
             kwargs["end_date"] = end_date
         return self.query("report_rc", **kwargs)
+
+    def get_stk_holdertrade(
+        self,
+        ts_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取股东增减持数据（stk_holdertrade）。
+
+        **注意分页**：接口单次请求最多 3000 行，超出时**不报错**、默认返回最新 3000 行；
+        批量下载必须走 `client._query_with_pagination(page_limit=3000, ...)` 或
+        `data/holdertrade_raw.py::download_holdertrade()`，本方法只用于单笔/单股查询。
+
+        Args:
+            ts_code: 股票代码（可选；单独指定可拉该股全历史）
+            start_date: 公告日期起（YYYYMMDD，可选）
+            end_date: 公告日期止（YYYYMMDD，可选）
+
+        Returns:
+            DataFrame，字段：ts_code, ann_date, holder_name, holder_type, in_de,
+            change_vol, change_ratio, after_share, after_ratio, avg_price, total_share
+        """
+        kwargs: dict = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        return self.query("stk_holdertrade", **kwargs)

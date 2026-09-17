@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
 """walk-forward 对比脚本常量与列名配置。"""
 
+import sys
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
-import sys
-from pathlib import Path
-
 project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(project_root))
-
 
 
 SUMMARY_CSV_DTYPE = {
@@ -168,6 +166,9 @@ COL_NAMES = {
     "enable_lhb_features": "龙虎榜因子",
     "enable_consensus_features": "一致预期因子",
     "enable_cashflow_quality_features": "现金流质量因子",
+    "enable_dividend_policy_features": "分红政策因子",
+    "enable_holdertrade_features": "股东增减持因子",
+    "enable_availability_markers": "可用性标记",
     "cashflow_quality_cols_live": "现金流质量实际入模列",
     "enable_consensus_revision_features": "一致预期修正因子",
     "oos_backtest": "OOS回测",
@@ -518,74 +519,13 @@ CANDIDATE_MIN_CHAIN_MAX_DRAWDOWN = -0.35
 CANDIDATE_MIN_CHAIN_CAGR_WORST = -0.05
 
 
+# 末段可能被 final_date 截断；此时无法由边界稳定反推调仓频率，跳过该 probe。
 
 
+# 同一批边界约束下，满足条件的最小频率就是实际调仓频率；更大的倍数只是在个别窗口上“碰巧也对齐”。
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # 末段可能被 final_date 截断；此时无法由边界稳定反推调仓频率，跳过该 probe。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # 同一批边界约束下，满足条件的最小频率就是实际调仓频率；更大的倍数只是在个别窗口上“碰巧也对齐”。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # 显式排除单个 frame 内全 NA 列，保持 pandas 旧版 concat 的 dtype 推断语义。
-
-
+# 显式排除单个 frame 内全 NA 列，保持 pandas 旧版 concat 的 dtype 推断语义。
 
 
 # ---------------------------------------------------------------------------

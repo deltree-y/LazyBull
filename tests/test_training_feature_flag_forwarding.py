@@ -42,6 +42,52 @@ def test_consensus_revision_feature_flag_requires_complete_built_schema():
         )
 
 
+def _holdertrade_lookup():
+    """合成查询表：与 tests/test_holdertrade_factors.py 同一事件样例。"""
+    from src.lazybull.factors.holdertrade import build_holdertrade_lookup_by_date
+
+    raw = pd.DataFrame(
+        [
+            ("000001.SZ", "20240102", "G", "IN", 0.5),
+            ("000001.SZ", "20240102", "G", "IN", 0.3),
+        ],
+        columns=["ts_code", "ann_date", "holder_type", "in_de", "change_ratio"],
+    )
+    return build_holdertrade_lookup_by_date(raw, ["20240102"])
+
+
+def test_holdertrade_feature_flag_requires_runtime_lookup():
+    """本族列运行时派生：未提供查询表必须明确失败，不得静默降级。"""
+    with pytest.raises(ValueError, match="holdertrade_lookup"):
+        prepare_training_data(
+            _sample_train_df(),
+            label_column="neu_y_ret_20",
+            enable_holdertrade_features=True,
+        )
+
+
+def test_holdertrade_feature_flag_rejects_stale_sentinel_in_partition():
+    """特征分区自带本族列（旧语义）时必须失败：运行时派生不覆盖已有列。"""
+    from src.lazybull.factors.holdertrade import (
+        HOLDERTRADE_SCHEMA_VERSION,
+        HOLDERTRADE_VERSION_COL,
+    )
+    from src.lazybull.ml.train_core.constants import HOLDERTRADE_FEATURE_COLUMNS
+
+    df = _sample_train_df().copy()
+    for col in HOLDERTRADE_FEATURE_COLUMNS:
+        df[col] = 0.0
+    df[HOLDERTRADE_VERSION_COL] = HOLDERTRADE_SCHEMA_VERSION - 1
+
+    with pytest.raises(ValueError, match="哨兵列"):
+        prepare_training_data(
+            df,
+            label_column="neu_y_ret_20",
+            enable_holdertrade_features=True,
+            holdertrade_lookup=_holdertrade_lookup(),
+        )
+
+
 def test_consensus_revision_feature_flag_rejects_all_nan_sentinel():
     """哨兵列全 NaN（未构建或混入旧语义分区）必须失败，不能静默退化为零因子。"""
     from src.lazybull.ml.train_core.constants import CONSENSUS_REVISION_FEATURE_COLUMNS
@@ -125,6 +171,7 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         enable_consensus_revision_features=True,
         enable_dividend_policy_features=False,
         enable_availability_markers=True,
+        enable_holdertrade_features=True,
     )
 
     metadata = core_module._build_feature_flag_train_params(args)
@@ -135,6 +182,7 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         "enable_consensus_revision_features": True,
         "enable_dividend_policy_features": False,
         "enable_availability_markers": True,
+        "enable_holdertrade_features": True,
     }
 
 

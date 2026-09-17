@@ -329,6 +329,13 @@ def main():
     )
 
     parser.add_argument(
+        "--enable-holdertrade-features",
+        action="store_true",
+        default=False,
+        help="启用股东增减持因子（需先下载 stk_holdertrade 并以其开关重建特征分区）",
+    )
+
+    parser.add_argument(
         "--feature-stability-filter",
         action="store_true",
         help="启用特征稳定性筛选（移除跨时期IC方向不一致的特征）",
@@ -414,6 +421,16 @@ def main():
         loader = DataLoader(storage)
         registry = ModelRegistry(models_dir=get_stock_selection_models_root(args.data_root))
 
+        # 股东增减持因子：运行时派生（不写回 cs_train）→ 按训练区间构建查询表
+        args.holdertrade_lookup = None
+        if getattr(args, "enable_holdertrade_features", False):
+            from src.lazybull.factors.holdertrade import build_holdertrade_runtime_lookup
+
+            args.holdertrade_lookup = build_holdertrade_runtime_lookup(
+                loader, args.start_date, args.end_date
+            )
+            logger.info(f"股东增减持运行时查询表: {len(args.holdertrade_lookup)} 个交易日")
+
         # 1. 加载特征数据
         df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)
         total_samples = len(df)
@@ -478,6 +495,8 @@ def main():
             ),
             enable_dividend_policy_features=getattr(args, "enable_dividend_policy_features", False),
             enable_availability_markers=getattr(args, "enable_availability_markers", False),
+            enable_holdertrade_features=getattr(args, "enable_holdertrade_features", False),
+            holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
             factor_exclude_file=getattr(args, "factor_exclude_file", None),
@@ -609,6 +628,7 @@ def main():
                     args, "enable_dividend_policy_features", False
                 ),
                 "enable_availability_markers": getattr(args, "enable_availability_markers", False),
+                "enable_holdertrade_features": getattr(args, "enable_holdertrade_features", False),
                 # 推理侧（MLSignal）按此复现事件型 freshness 衰减，必须与训练一致
                 "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),
                 "event_freshness_half_life_days": getattr(

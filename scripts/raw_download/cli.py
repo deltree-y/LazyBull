@@ -33,6 +33,7 @@ from .core import ALT_DATASETS, ERROR_COLLECTOR, _fmt_duration
 from .daily import download_daily_data
 from .daily_partition import download_cyq_perf, download_margin_detail, download_stock_st
 from .dividend import download_dividend
+from .holdertrade import download_stk_holdertrade
 from .income import download_income
 from .periodic import _to_int_date, download_by_period
 
@@ -100,8 +101,8 @@ def main():
         default=None,
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
         "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
-        "moneyflow_hsgt, top_list, report_rc, cashflow, income, dividend, pledge_stat, "
-        "share_float, block_trade, all_alt。不指定时仅下基础+日线",
+        "moneyflow_hsgt, top_list, report_rc, cashflow, income, dividend, stk_holdertrade, "
+        "pledge_stat, share_float, block_trade, all_alt。不指定时仅下基础+日线",
     )
     parser.add_argument("--all", action="store_true", default=False, help="下载日线 + 全部另类数据")
     # 修复 #10: --resume 此前未使用, 改为从 help 中说明它等价于默认行为
@@ -398,6 +399,15 @@ def main():
                         args.end_date,
                         force=args.force,
                         concurrency=args.concurrency,
+                    )
+
+                if "stk_holdertrade" in download_set:
+                    download_stk_holdertrade(
+                        client,
+                        storage,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
                     )
 
                 # ── 风控公告类（质押/解禁/大宗）──

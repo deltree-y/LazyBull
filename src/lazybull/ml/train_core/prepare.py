@@ -26,6 +26,7 @@ from .constants import (
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY,
     FUND_FEATURE_COLUMNS,
     FUNDAMENTAL_FEATURE_COLUMNS,
+    HOLDERTRADE_FEATURE_COLUMNS,
     LHB_FEATURE_COLUMNS,
     MARGIN_FEATURE_COLUMNS,
     MISSING_MARKER_FEATURE_COLUMNS,
@@ -75,6 +76,8 @@ def prepare_training_data(
     enable_cashflow_quality_features: bool = False,
     enable_consensus_revision_features: bool = False,
     enable_dividend_policy_features: bool = False,
+    enable_holdertrade_features: bool = False,
+    holdertrade_lookup: Optional[dict] = None,
     enable_availability_markers: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
@@ -101,6 +104,10 @@ def prepare_training_data(
         feature_columns_override: 若提供，则在训练入口特征质量门禁之后强制将特征列
             对齐到该列表（用于多窗口集成统一子模型特征 schema），数据中缺失的列补 NaN。
             默认 None（不启用）。
+        holdertrade_lookup: 股东增减持因子运行时查询表（`{trade_date: DataFrame}`，
+            由 `factors.holdertrade.load_holdertrade_lookup` 构建）。启用
+            `enable_holdertrade_features` 时**必须提供**：本族列一律**运行时派生**，
+            不写入 cs_train（与可用性标记同一先例）。
         freshness_strategy: freshness 处理策略。
             - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
             - state_keep_event_no_decay：状态型 freshness 保留，事件型 freshness 删除且不衰减对应特征值
@@ -452,6 +459,49 @@ def prepare_training_data(
             )
         feature_columns.extend(DIVIDEND_POLICY_FEATURE_COLUMNS)
         logger.info(f"启用分红政策因子: {DIVIDEND_POLICY_FEATURE_COLUMNS}")
+
+    if enable_holdertrade_features:
+        # 本族列**运行时派生**（不写回 cs_train）：与可用性标记同一先例，保证
+        # cs_train 不被重建污染；查询表由调用方（CLI / walk_forward）构建并传入。
+        from ...factors.holdertrade import (
+            HOLDERTRADE_SCHEMA_VERSION,
+            HOLDERTRADE_VERSION_COL,
+            derive_holdertrade_columns,
+        )
+
+        if holdertrade_lookup is None:
+            raise ValueError(
+                "enable_holdertrade_features=True 需要传入 holdertrade_lookup"
+                "（股东增减持因子为运行时派生：本族列不写入 cs_train）。"
+                "请通过 train_ml_model.py / walk_forward.py 的"
+                " --enable-holdertrade-features 启用，或先运行"
+                " python scripts/download_raw.py --download stk_holdertrade"
+            )
+        derived_ht = derive_holdertrade_columns(
+            df,
+            holdertrade_lookup,
+            wanted=HOLDERTRADE_FEATURE_COLUMNS,
+            log_prefix="[训练入口] ",
+        )
+        valid_cols = {c for c in df.columns}
+        missing_ht = [col for col in HOLDERTRADE_FEATURE_COLUMNS if col not in valid_cols]
+        if missing_ht:
+            raise ValueError(
+                "enable_holdertrade_features=True，但股东增减持特征 schema 不完整，"
+                f"缺少列: {missing_ht}（已尝试运行时派生 {derived_ht}）。"
+                "请检查 raw/stk_holdertrade 数据与查询表日期覆盖"
+            )
+        # 哨兵校验：拦截旧语义特征分区（若分区自带本族列则不会被派生覆盖）被误用
+        ht_sentinel = df[HOLDERTRADE_VERSION_COL]
+        if ht_sentinel.isna().any() or (ht_sentinel.fillna(-1) != HOLDERTRADE_SCHEMA_VERSION).any():
+            raise ValueError(
+                "enable_holdertrade_features=True，但特征分区的哨兵列 "
+                f"{HOLDERTRADE_VERSION_COL} 存在缺失或版本不等于 "
+                f"{HOLDERTRADE_SCHEMA_VERSION}（疑似混入旧语义分区），"
+                "请确认特征分区不含本族列（本族列一律运行时派生）"
+            )
+        feature_columns.extend(HOLDERTRADE_FEATURE_COLUMNS)
+        logger.info(f"启用股东增减持因子（运行时派生）: {HOLDERTRADE_FEATURE_COLUMNS}")
 
     # ── 市值中性化特征：仅纳入核心特征列表中稳定因子对应的 zscore_*_sz 列 ──
     # 避免稀疏因子（如一致预期）的 _sz 列在不同日期间存在/缺失导致 schema 不一致

@@ -180,6 +180,7 @@ def ensure_features_for_date(
             cashflow_today,
             consensus_revision_today,
             dividend_today,
+            holdertrade_today,
             pledge_today,
             share_float_today,
             block_trade_today,
@@ -227,6 +228,7 @@ def ensure_features_for_date(
             cashflow_data=cashflow_today,
             consensus_revision_data=consensus_revision_today,
             dividend_data=dividend_today,
+            holdertrade_data=holdertrade_today,
             pledge_data=pledge_today,
             share_float_data=share_float_today,
             block_trade_data=block_trade_today,
@@ -242,6 +244,7 @@ def ensure_features_for_date(
         north_flow_today = lhb_today = consensus_today = None
         cashflow_today = consensus_revision_today = None
         dividend_today = pledge_today = share_float_today = block_trade_today = None
+        holdertrade_today = None
         gc.collect()
 
         # 9. 保存结果

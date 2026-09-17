@@ -46,6 +46,7 @@ def _build_feature_flag_train_params(args: Any) -> Dict[str, bool]:
         "enable_dividend_policy_features": bool(
             getattr(args, "enable_dividend_policy_features", False)
         ),
+        "enable_holdertrade_features": bool(getattr(args, "enable_holdertrade_features", False)),
         "enable_availability_markers": bool(getattr(args, "enable_availability_markers", False)),
     }
 
@@ -191,6 +192,8 @@ def _train_model_on_window(
             args, "enable_consensus_revision_features", False
         ),
         enable_dividend_policy_features=getattr(args, "enable_dividend_policy_features", False),
+        enable_holdertrade_features=getattr(args, "enable_holdertrade_features", False),
+        holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
         enable_availability_markers=getattr(args, "enable_availability_markers", False),
         feature_stability_filter=args.feature_stability_filter,
         factor_prune=args.factor_prune,
