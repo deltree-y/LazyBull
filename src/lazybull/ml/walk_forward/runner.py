@@ -325,6 +325,19 @@ def run_walk_forward(args) -> None:
                 f"（派生区间 {args.wf_start_date}~{args.wf_end_date}）"
             )
 
+        # 股票回购因子：同一先例（运行时派生、全折共用一张查询表）
+        args.repurchase_lookup = None
+        if getattr(args, "enable_repurchase_features", False):
+            from src.lazybull.factors.repurchase import build_repurchase_runtime_lookup
+
+            args.repurchase_lookup = build_repurchase_runtime_lookup(
+                loader, args.wf_start_date, args.wf_end_date
+            )
+            logger.info(
+                f"股票回购运行时查询表: {len(args.repurchase_lookup)} 个交易日"
+                f"（派生区间 {args.wf_start_date}~{args.wf_end_date}）"
+            )
+
         deploy_train_start = None
         deploy_train_end_for_run = None
         if not args.no_deploy_train and not skip_training:
@@ -456,6 +469,7 @@ def run_walk_forward(args) -> None:
                             split_num=split.split_index,
                             exposure_table=exposure_table,
                             holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
+                            repurchase_lookup=getattr(args, "repurchase_lookup", None),
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)

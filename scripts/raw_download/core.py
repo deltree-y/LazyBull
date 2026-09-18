@@ -24,6 +24,7 @@ ALT_DATASETS = [
     "income",
     "dividend",
     "stk_holdertrade",
+    "repurchase",
     "pledge_stat",
     "share_float",
     "block_trade",

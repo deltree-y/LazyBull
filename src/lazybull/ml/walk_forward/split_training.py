@@ -15,6 +15,8 @@ from src.lazybull.factors.holdertrade import (
     available_holdertrade_columns as _HOLDERTRADE_OUTPUT_COLS,
 )
 from src.lazybull.factors.holdertrade import derive_holdertrade_columns
+from src.lazybull.factors.repurchase import available_repurchase_columns as _REPURCHASE_OUTPUT_COLS
+from src.lazybull.factors.repurchase import derive_repurchase_columns
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.ensemble import EnsembleModel
 from src.lazybull.ml.run_logger import (
@@ -264,6 +266,19 @@ def execute_split_training(
         )
         if derived_ht:
             logger.info(f"OOS 测试集派生股东增减持列: {derived_ht}")
+
+    # 股票回购因子同为运行时派生（不写入 cs_train）：按模型特征列就地拼接
+    rp_lookup = getattr(args, "repurchase_lookup", None)
+    rp_output_cols = _REPURCHASE_OUTPUT_COLS()
+    if rp_lookup is not None and any(col in feature_columns for col in rp_output_cols):
+        derived_rp = derive_repurchase_columns(
+            df_test_eval,
+            rp_lookup,
+            wanted=feature_columns,
+            log_prefix="[OOS 评估] ",
+        )
+        if derived_rp:
+            logger.info(f"OOS 测试集派生股票回购列: {derived_rp}")
 
     missing_test_columns = [col for col in feature_columns if col not in df_test_eval.columns]
     if missing_test_columns:

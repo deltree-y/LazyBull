@@ -136,3 +136,32 @@ def test_load_lookup_from_loader_handles_empty_raw():
     assert load_holdertrade_lookup(_Loader(pd.DataFrame()), DATES) == {}
     loaded = load_holdertrade_lookup(_Loader(_raw()), DATES)
     assert set(loaded) == {"20240111", "20240216"}
+
+
+def test_feature_set_columns_full_and_core():
+    """列集开关是签名维度：full = 全列，core = 证据支持的 4 列 + 哨兵，未知取值直接报错。"""
+    from src.lazybull.factors.holdertrade import (
+        HOLDERTRADE_CORE_COLS,
+        holdertrade_feature_columns,
+    )
+
+    full = holdertrade_feature_columns("full")
+    assert set(full) == set(HOLDERTRADE_FEATURE_COLUMNS)
+    core = holdertrade_feature_columns("core")
+    assert core == list(HOLDERTRADE_CORE_COLS) + [HOLDERTRADE_VERSION_COL]
+    assert set(core).issubset(set(full))
+    with pytest.raises(ValueError, match="未知 holdertrade 列集"):
+        holdertrade_feature_columns("whatever")
+
+
+def test_derive_core_set_only_writes_core_columns(lookup):
+    frame = _frame()
+    from src.lazybull.factors.holdertrade import (
+        HOLDERTRADE_CORE_COLS,
+        holdertrade_feature_columns,
+    )
+
+    derived = derive_holdertrade_columns(frame, lookup, wanted=holdertrade_feature_columns("core"))
+    assert set(derived) == set(HOLDERTRADE_CORE_COLS) | {HOLDERTRADE_VERSION_COL}
+    assert "ht_buy_count_30d" not in frame.columns  # 简化列集不产出被剔除列
+    assert frame["ht_net_ratio_90d"].notna().all()

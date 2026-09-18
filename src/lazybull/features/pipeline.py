@@ -19,6 +19,7 @@ from .ensure import (
     OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION,
     OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY,
     OPTIONAL_FACTOR_GROUP_HOLDERTRADE,
+    OPTIONAL_FACTOR_GROUP_REPURCHASE,
     _check_features_schema,
 )
 
@@ -50,6 +51,7 @@ def _build_features_parallel(
     consensus_revision_lookup,
     dividend_lookup,
     holdertrade_lookup,
+    repurchase_lookup,
     pledge_lookup,
     share_float_lookup,
     block_trade_lookup,
@@ -131,6 +133,12 @@ def _build_features_parallel(
                 holdertrade_today = pd.DataFrame()
         else:
             holdertrade_today = None
+        if repurchase_lookup is not None:
+            repurchase_today = repurchase_lookup.get(trade_date)
+            if repurchase_today is None:
+                repurchase_today = pd.DataFrame()
+        else:
+            repurchase_today = None
         if pledge_lookup is not None:
             pledge_today = pledge_lookup.get(trade_date)
             if pledge_today is None:
@@ -175,6 +183,7 @@ def _build_features_parallel(
             consensus_revision_data=consensus_revision_today,
             dividend_data=dividend_today,
             holdertrade_data=holdertrade_today,
+            repurchase_data=repurchase_today,
             pledge_data=pledge_today,
             share_float_data=share_float_today,
             block_trade_data=block_trade_today,
@@ -256,6 +265,7 @@ def build_features_data(
     enable_consensus_revision: bool = False,
     enable_dividend_policy: bool = False,
     enable_holdertrade: bool = False,
+    enable_repurchase: bool = False,
     enable_announcement_risk: bool = False,
     use_parallel: bool = False,
     parallel_jobs: int = -1,
@@ -284,6 +294,7 @@ def build_features_data(
         enable_consensus_revision: 是否启用一致预期修正因子
         enable_dividend_policy: 是否启用分红政策质量因子（需先下载 dividend 数据）
         enable_holdertrade: 是否启用股东增减持因子（需先下载 stk_holdertrade 数据）
+        enable_repurchase: 是否启用股票回购因子（需先下载 repurchase 数据）
         enable_announcement_risk: 是否启用风控公告类因子（质押/解禁/大宗）
     """
     logger.info("=" * 60)
@@ -329,6 +340,7 @@ def build_features_data(
             (enable_consensus_revision, OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION),
             (enable_dividend_policy, OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY),
             (enable_holdertrade, OPTIONAL_FACTOR_GROUP_HOLDERTRADE),
+            (enable_repurchase, OPTIONAL_FACTOR_GROUP_REPURCHASE),
         )
         if enabled
     }
@@ -658,6 +670,21 @@ def build_features_data(
                 "python scripts/download_raw.py --download stk_holdertrade"
             )
 
+    # 加载股票回购数据（可选：滚动窗口聚合，PIT 按 ann_date）
+    repurchase_lookup = None
+    if enable_repurchase:
+        from src.lazybull.factors.repurchase import build_repurchase_lookup_by_date
+
+        repurchase_df = loader.load_repurchase()
+        if repurchase_df is not None and len(repurchase_df) > 0:
+            logger.info(f"股票回购数据: {len(repurchase_df)} 条（公告明细行）")
+            repurchase_lookup = build_repurchase_lookup_by_date(repurchase_df, trading_dates_str)
+        else:
+            raise ValueError(
+                "启用股票回购因子但缺少 raw/repurchase 数据。请先运行: "
+                "python scripts/download_raw.py --download repurchase"
+            )
+
     # 加载风控公告类数据（可选：质押/解禁/大宗，PIT 日频查询表）
     pledge_lookup = None
     share_float_lookup = None
@@ -758,6 +785,7 @@ def build_features_data(
             consensus_revision_lookup=consensus_revision_lookup,
             dividend_lookup=dividend_lookup,
             holdertrade_lookup=holdertrade_lookup,
+            repurchase_lookup=repurchase_lookup,
             pledge_lookup=pledge_lookup,
             share_float_lookup=share_float_lookup,
             block_trade_lookup=block_trade_lookup,
@@ -822,6 +850,12 @@ def build_features_data(
                     holdertrade_today = pd.DataFrame()
             else:
                 holdertrade_today = None
+            if repurchase_lookup is not None:
+                repurchase_today = repurchase_lookup.get(trade_date)
+                if repurchase_today is None:
+                    repurchase_today = pd.DataFrame()
+            else:
+                repurchase_today = None
             if pledge_lookup is not None:
                 pledge_today = pledge_lookup.get(trade_date)
                 if pledge_today is None:
@@ -869,6 +903,7 @@ def build_features_data(
                 consensus_revision_data=consensus_revision_today,
                 dividend_data=dividend_today,
                 holdertrade_data=holdertrade_today,
+                repurchase_data=repurchase_today,
                 pledge_data=pledge_today,
                 share_float_data=share_float_today,
                 block_trade_data=block_trade_today,

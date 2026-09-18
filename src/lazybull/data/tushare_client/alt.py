@@ -252,3 +252,34 @@ class ClientAltMixin:
         if end_date is not None:
             kwargs["end_date"] = end_date
         return self.query("stk_holdertrade", **kwargs)
+
+    def get_repurchase(
+        self,
+        ts_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取股票回购数据（repurchase）。
+
+        **注意分页**：接口单次请求最多 2000 行，超出时**不报错**、默认返回最新 2000 行
+        （实测 2022 全年真实 6034 行，不翻页丢 67%）；批量下载必须走
+        `client._query_with_pagination(page_limit=2000, ...)` 或
+        `data/repurchase_raw.py::download_repurchase()`，本方法只用于单笔/单股查询。
+
+        Args:
+            ts_code: 股票代码（可选；单独指定可拉该股全历史）
+            start_date: 公告日期起（YYYYMMDD，可选）
+            end_date: 公告日期止（YYYYMMDD，可选）
+
+        Returns:
+            DataFrame，字段：ts_code, ann_date, end_date, proc, exp_date,
+            vol, amount, high_limit, low_limit
+        """
+        kwargs: dict = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        return self.query("repurchase", **kwargs)

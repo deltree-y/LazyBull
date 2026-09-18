@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """raw_download 子包门面（re-export 全部公共符号）。
 
 由 scripts/download_raw.py 薄入口委托运行；也支持 `from scripts import raw_download`。
@@ -14,6 +14,7 @@ from .alt import (
 from .basic import download_basic_data
 from .cli import _bypass_proxy_for_download, _should_bypass_proxy_for_download, main
 from .holdertrade import download_stk_holdertrade
+from .repurchase import download_repurchase_dataset
 from .core import (
     _DOWNLOAD_CONCURRENCY,
     ALT_DATASETS,

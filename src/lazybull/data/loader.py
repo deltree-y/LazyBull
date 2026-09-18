@@ -569,6 +569,16 @@ class DataLoader(IncomeLoaderMixin, DividendLoaderMixin, AnnouncementRiskLoaderM
             return None
         return df
 
+    def load_repurchase(self, years: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+        """加载股票回购数据（按 ann_date 年分区；可指定年份子集）。"""
+        from .repurchase_raw import load_repurchase
+
+        df = load_repurchase(self.storage, years=years)
+        if df is None or len(df) == 0:
+            logger.warning("未找到股票回购数据（repurchase）")
+            return None
+        return df
+
     def load_stk_holdernumber(self) -> Optional[pd.DataFrame]:
         """加载股东人数数据（单文件）"""
         df = self.storage.load_raw("stk_holdernumber")

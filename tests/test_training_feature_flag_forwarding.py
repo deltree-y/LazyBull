@@ -172,6 +172,8 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         enable_dividend_policy_features=False,
         enable_availability_markers=True,
         enable_holdertrade_features=True,
+        holdertrade_feature_set="core",
+        enable_repurchase_features=True,
     )
 
     metadata = core_module._build_feature_flag_train_params(args)
@@ -183,6 +185,8 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         "enable_dividend_policy_features": False,
         "enable_availability_markers": True,
         "enable_holdertrade_features": True,
+        "holdertrade_feature_set": "core",
+        "enable_repurchase_features": True,
     }
 
 

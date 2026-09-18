@@ -16,6 +16,7 @@ from .downloads import (
     _try_download_fina_indicator,
     _try_download_forecast,
     _try_download_report_rc,
+    _try_download_repurchase,
     _try_download_stk_holdernumber,
     _try_download_stk_holdertrade,
 )
@@ -223,6 +224,41 @@ def _load_factor_data(
     except Exception as e:  # noqa: BLE001 - 保鲜/构建失败不阻断纸面链路
         logger.warning(f"股东增减持数据 ensure 跳过（当日因子按 0 处理）: {e}")
         holdertrade_today = pd.DataFrame()
+    gc.collect()
+
+    # ── 股票回购（滚动窗口聚合，PIT 按 ann_date）────
+    # 同 holdertrade 模式：水位判定走向分区内最大 ann_date；raw 保鲜失败仅告警，
+    # 但因子查询表始终构建（数据缺失时输出 0 填充列，保证推理侧 schema 与训练一致）。
+    from ...data.repurchase_raw import repurchase_latest_ann_date
+
+    repurchase_today = pd.DataFrame()
+    try:
+        latest_repurchase = repurchase_latest_ann_date(storage)
+        if latest_repurchase is None or latest_repurchase < str(trade_date):
+            _try_download_repurchase(client, storage, trade_date)
+            latest_repurchase = repurchase_latest_ann_date(storage)
+        repurchase_df = loader.load_repurchase()
+        if repurchase_df is not None and len(repurchase_df) > 0:
+            from ...factors.repurchase import build_repurchase_lookup_by_date
+
+            repurchase_lookup = build_repurchase_lookup_by_date(
+                repurchase_df, factor_output_dates
+            )
+            cur = repurchase_lookup.get(trade_date)
+            if cur is not None and len(cur) > 0:
+                repurchase_today = cur
+            else:
+                # 该交易日无活跃公告：输出空表（handler 会填 0，保证逐日 schema 一致）
+                repurchase_today = pd.DataFrame()
+            logger.info(
+                f"股票回购因子: 已加载（覆盖至 {latest_repurchase}，"
+                f"当日活跃 {len(repurchase_today)} 只）"
+            )
+        else:
+            missing_factors.append("repurchase（股票回购）")
+    except Exception as e:  # noqa: BLE001 - 保鲜/构建失败不阻断纸面链路
+        logger.warning(f"股票回购数据 ensure 跳过（当日因子按 0 处理）: {e}")
+        repurchase_today = pd.DataFrame()
     gc.collect()
 
     # ── 业绩预告 ────────────────────────────────────────────
@@ -543,7 +579,7 @@ def _load_factor_data(
     gc.collect()
 
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 16
+    total = 17
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -569,6 +605,7 @@ def _load_factor_data(
         consensus_revision_today,
         dividend_today,
         holdertrade_today,
+        repurchase_today,
         pledge_today,
         share_float_today,
         block_trade_today,

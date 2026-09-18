@@ -208,6 +208,8 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
         "enable_dividend_policy_features": getattr(args, "enable_dividend_policy_features", False),
         "enable_availability_markers": getattr(args, "enable_availability_markers", False),
         "enable_holdertrade_features": getattr(args, "enable_holdertrade_features", False),
+        "holdertrade_feature_set": getattr(args, "holdertrade_feature_set", "full"),
+        "enable_repurchase_features": getattr(args, "enable_repurchase_features", False),
         "oos_backtest": getattr(args, "oos_backtest", False),
         "oos_backtest_months": getattr(args, "oos_backtest_months", None),
         "bt_top_n": getattr(args, "bt_top_n", None),

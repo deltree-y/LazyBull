@@ -14,6 +14,7 @@ from ...common.config import get_data_root
 from ...common.trading_config import TradingConfig
 from ...data import DataLoader, Storage
 from ...factors.holdertrade import derive_holdertrade_columns
+from ...factors.repurchase import derive_repurchase_columns
 from ...universe import BasicUniverse
 
 
@@ -47,12 +48,14 @@ def run_oos_backtest(
     split_num: Optional[int] = None,
     exposure_table: Optional[Dict[str, float]] = None,
     holdertrade_lookup: Optional[Dict[str, pd.DataFrame]] = None,
+    repurchase_lookup: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测并返回组合级绩效指标。
 
     Args:
         holdertrade_lookup: 股东增减持运行时查询表（与训练侧同一张）；提供时逐日
             补齐本族列，避免 MLSignal 因 cs_train 无本族列而静默补 NaN。
+        repurchase_lookup: 股票回购运行时查询表（与训练侧同一张）；语义同上。
     """
     data_root = data_root or get_data_root()
     logger.info(f"OOS 回测: {bt_start} ~ {bt_end}（模型 v{model_version}, Top{bt_top_n}）")
@@ -104,6 +107,14 @@ def run_oos_backtest(
             if derive_holdertrade_columns(features, holdertrade_lookup):
                 derived_days += 1
         logger.info(f"OOS 回测特征派生股东增减持列: {derived_days}/{len(features_by_date)} 日")
+
+    # 股票回购因子同为运行时派生（cs_train 不含本族列）：复用同一张查询表逐日补齐
+    if repurchase_lookup:
+        rp_days = 0
+        for trade_date, features in features_by_date.items():
+            if derive_repurchase_columns(features, repurchase_lookup):
+                rp_days += 1
+        logger.info(f"OOS 回测特征派生股票回购列: {rp_days}/{len(features_by_date)} 日")
 
     if not features_by_date:
         logger.warning(f"OOS回测: 无特征数据 {bt_start}~{bt_end}，跳过")

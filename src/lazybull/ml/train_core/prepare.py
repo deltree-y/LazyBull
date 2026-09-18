@@ -31,6 +31,7 @@ from .constants import (
     MARGIN_FEATURE_COLUMNS,
     MISSING_MARKER_FEATURE_COLUMNS,
     NORTH_FEATURE_COLUMNS,
+    REPURCHASE_FEATURE_COLUMNS,
     STATE_FRESHNESS_COLUMNS,
 )
 from .features import (
@@ -78,6 +79,9 @@ def prepare_training_data(
     enable_dividend_policy_features: bool = False,
     enable_holdertrade_features: bool = False,
     holdertrade_lookup: Optional[dict] = None,
+    holdertrade_feature_set: str = "full",
+    enable_repurchase_features: bool = False,
+    repurchase_lookup: Optional[dict] = None,
     enable_availability_markers: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
@@ -108,6 +112,13 @@ def prepare_training_data(
             由 `factors.holdertrade.load_holdertrade_lookup` 构建）。启用
             `enable_holdertrade_features` 时**必须提供**：本族列一律**运行时派生**，
             不写入 cs_train（与可用性标记同一先例）。
+        holdertrade_feature_set: 股东增减持列集取值（`full` / `core`）。**超参签名维度**，
+            禁止跨取值并组比较；`core` = Phase 3 证据支持的 4 列（见
+            `factors.holdertrade.HOLDERTRADE_CORE_COLS`）加哨兵列。
+        repurchase_lookup: 股票回购因子运行时查询表（`{trade_date: DataFrame}`，
+            由 `factors.repurchase.load_repurchase_lookup` 构建）。启用
+            `enable_repurchase_features` 时**必须提供**：本族列一律**运行时派生**，
+            不写入 cs_train（与股东增减持同一先例）。
         freshness_strategy: freshness 处理策略。
             - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
             - state_keep_event_no_decay：状态型 freshness 保留，事件型 freshness 删除且不衰减对应特征值
@@ -467,6 +478,7 @@ def prepare_training_data(
             HOLDERTRADE_SCHEMA_VERSION,
             HOLDERTRADE_VERSION_COL,
             derive_holdertrade_columns,
+            holdertrade_feature_columns,
         )
 
         if holdertrade_lookup is None:
@@ -477,14 +489,15 @@ def prepare_training_data(
                 " --enable-holdertrade-features 启用，或先运行"
                 " python scripts/download_raw.py --download stk_holdertrade"
             )
+        ht_columns = holdertrade_feature_columns(holdertrade_feature_set)
         derived_ht = derive_holdertrade_columns(
             df,
             holdertrade_lookup,
-            wanted=HOLDERTRADE_FEATURE_COLUMNS,
+            wanted=ht_columns,
             log_prefix="[训练入口] ",
         )
         valid_cols = {c for c in df.columns}
-        missing_ht = [col for col in HOLDERTRADE_FEATURE_COLUMNS if col not in valid_cols]
+        missing_ht = [col for col in ht_columns if col not in valid_cols]
         if missing_ht:
             raise ValueError(
                 "enable_holdertrade_features=True，但股东增减持特征 schema 不完整，"
@@ -500,8 +513,53 @@ def prepare_training_data(
                 f"{HOLDERTRADE_SCHEMA_VERSION}（疑似混入旧语义分区），"
                 "请确认特征分区不含本族列（本族列一律运行时派生）"
             )
-        feature_columns.extend(HOLDERTRADE_FEATURE_COLUMNS)
-        logger.info(f"启用股东增减持因子（运行时派生）: {HOLDERTRADE_FEATURE_COLUMNS}")
+        feature_columns.extend(ht_columns)
+        logger.info(
+            f"启用股东增减持因子（运行时派生，列集={holdertrade_feature_set}）: {ht_columns}"
+        )
+
+    if enable_repurchase_features:
+        # 本族列同为**运行时派生**（不写回 cs_train）：查询表由调用方（CLI / walk_forward）构建。
+        from ...factors.repurchase import (
+            REPURCHASE_SCHEMA_VERSION,
+            REPURCHASE_VERSION_COL,
+            derive_repurchase_columns,
+        )
+
+        if repurchase_lookup is None:
+            raise ValueError(
+                "enable_repurchase_features=True 需要传入 repurchase_lookup"
+                "（股票回购因子为运行时派生：本族列不写入 cs_train）。"
+                "请通过 train_ml_model.py / walk_forward.py 的"
+                " --enable-repurchase-features 启用，或先运行"
+                " python scripts/download_raw.py --download repurchase"
+            )
+        rp_columns = list(REPURCHASE_FEATURE_COLUMNS)
+        derived_rp = derive_repurchase_columns(
+            df,
+            repurchase_lookup,
+            wanted=rp_columns,
+            log_prefix="[训练入口] ",
+        )
+        valid_cols = {c for c in df.columns}
+        missing_rp = [col for col in rp_columns if col not in valid_cols]
+        if missing_rp:
+            raise ValueError(
+                "enable_repurchase_features=True，但股票回购特征 schema 不完整，"
+                f"缺少列: {missing_rp}（已尝试运行时派生 {derived_rp}）。"
+                "请检查 raw/repurchase 数据与查询表日期覆盖"
+            )
+        # 哨兵校验：拦截旧语义特征分区（若分区自带本族列则不会被派生覆盖）被误用
+        rp_sentinel = df[REPURCHASE_VERSION_COL]
+        if rp_sentinel.isna().any() or (rp_sentinel.fillna(-1) != REPURCHASE_SCHEMA_VERSION).any():
+            raise ValueError(
+                "enable_repurchase_features=True，但特征分区的哨兵列 "
+                f"{REPURCHASE_VERSION_COL} 存在缺失或版本不等于 "
+                f"{REPURCHASE_SCHEMA_VERSION}（疑似混入旧语义分区），"
+                "请确认特征分区不含本族列（本族列一律运行时派生）"
+            )
+        feature_columns.extend(rp_columns)
+        logger.info(f"启用股票回购因子（运行时派生）: {rp_columns}")
 
     # ── 市值中性化特征：仅纳入核心特征列表中稳定因子对应的 zscore_*_sz 列 ──
     # 避免稀疏因子（如一致预期）的 _sz 列在不同日期间存在/缺失导致 schema 不一致

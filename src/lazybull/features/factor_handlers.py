@@ -77,6 +77,10 @@ def _get_handler_default_columns(name: str) -> List[str]:
         from ..factors.holdertrade import available_holdertrade_columns
 
         return available_holdertrade_columns()
+    if name == "repurchase":
+        from ..factors.repurchase import available_repurchase_columns
+
+        return available_repurchase_columns()
     if name == "pledge":
         from .handlers_announcement import PLEDGE_COLS
 
@@ -187,6 +191,42 @@ class HoldertradeFactorHandler:
             result[HOLDERTRADE_FRESHNESS_COL] = pd.Series(np.nan, index=features.index)
         result[HOLDERTRADE_VERSION_COL] = pd.Series(
             np.int8(HOLDERTRADE_SCHEMA_VERSION), index=features.index
+        )
+        return result
+
+
+class RepurchaseFactorHandler:
+    """股票回购因子（滚动窗口聚合，PIT 按 ann_date）。
+
+    **缺失填 0 的语义**：查询表只输出「180 日内有公告」的股票；其余股票（窗口内无回购计划）
+    一律填 0，从而 4 个因子列在全市场口径下全覆盖，不会因稀疏被训练入口 0.6 缺失率门禁
+    整体删除（口径定稿见 `docs/repurchase_pit_audit.md` §6.1）。
+    哨兵列恒写当前 schema 版本（含无事件股票），供训练入口校验语义。
+
+    数值实现统一落在 `factors/repurchase.py::build_repurchase_feature_frame`
+    （训练 / OOS 评估 / OOS 回测侧运行时派生复用同一实现，保证四侧逐值一致）。
+    """
+
+    def apply(self, features, data, trade_date, current_data) -> Dict[str, pd.Series]:
+        from ..factors.repurchase import (
+            REPURCHASE_SCHEMA_VERSION,
+            REPURCHASE_VERSION_COL,
+            build_repurchase_feature_frame,
+        )
+
+        # data is None ⇒ 该构建未启用本族因子（不输出任何列，保持与 holdertrade 等一致）；
+        # data 为空 DataFrame ⇒ 该交易日无活跃公告（仍输出 0 填充列，保证逐日 schema 一致）。
+        if data is None:
+            return {}
+        if len(data) == 0:
+            merged = None
+        else:
+            merge_cols = [c for c in data.columns if c != "ts_code"]
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "repurchase")
+        frame = build_repurchase_feature_frame(features, merged)
+        result: Dict[str, pd.Series] = {col: frame[col] for col in frame.columns}
+        result[REPURCHASE_VERSION_COL] = pd.Series(
+            np.int8(REPURCHASE_SCHEMA_VERSION), index=features.index
         )
         return result
 
@@ -648,6 +688,11 @@ def create_factor_registry() -> FactorRegistry:
         "holdertrade",
         HoldertradeFactorHandler(),
         lambda ctx: ctx.holdertrade_data,
+    )
+    registry.register(
+        "repurchase",
+        RepurchaseFactorHandler(),
+        lambda ctx: ctx.repurchase_data,
     )
 
     # 风控公告类（质押/解禁/大宗，PIT 日频截面原始列）

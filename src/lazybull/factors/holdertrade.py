@@ -43,6 +43,23 @@ HOLDERTRADE_COLS = [
 #: 公告新鲜度（自然日；仅窗口内有事件的股票非空）
 HOLDERTRADE_FRESHNESS_COL = "ht_freshness_days"
 
+#: **精简列集（core）**：只保留 Phase 3 体检/诊断证据支持的 4 列
+#: （`docs/holdertrade_factor_health.md`）——最强且逐年同号的两列（90 日净额 / 90 日净披露日数，
+#: IC t≈15、7/7 年正、偏 IC t=6.9）+ 30 日减持披露计数（t=−10.9）+ 30 日净额（t=8.8）。
+#: 剔除：`ht_buy_count_30d`（t=−0.32）、`ht_net_ratio_accel`（净额线性组合镜像）、
+#: `ht_freshness_days`（符号翻转）、`ht_net_ratio_30d_other`（与 `ht_net_ratio_30d` 同簇）。
+HOLDERTRADE_CORE_COLS = [
+    "ht_net_ratio_90d",
+    "ht_net_count_90d",
+    "ht_sell_count_30d",
+    "ht_net_ratio_30d",
+]
+
+#: 列集开关取值（签名维度，禁止跨取值并组比较）
+HOLDERTRADE_FEATURE_SET_FULL = "full"
+HOLDERTRADE_FEATURE_SET_CORE = "core"
+HOLDERTRADE_FEATURE_SETS = (HOLDERTRADE_FEATURE_SET_FULL, HOLDERTRADE_FEATURE_SET_CORE)
+
 #: schema 哨兵列与当前版本（语义重做时递增；训练入口校验）
 HOLDERTRADE_VERSION_COL = "holdertrade_schema_v1"
 HOLDERTRADE_SCHEMA_VERSION = 1
@@ -247,6 +264,17 @@ def build_holdertrade_lookup_by_date(
 def available_holdertrade_columns() -> List[str]:
     """因子模块输出的全部列（含哨兵列），用于 schema 与 handler 默认列。"""
     return list(HOLDERTRADE_COLS) + [HOLDERTRADE_FRESHNESS_COL, HOLDERTRADE_VERSION_COL]
+
+
+def holdertrade_feature_columns(feature_set: str = HOLDERTRADE_FEATURE_SET_FULL) -> List[str]:
+    """按列集取值返回训练/派生使用的列清单（含哨兵列，单一取值判定，无回退）。"""
+    if feature_set == HOLDERTRADE_FEATURE_SET_FULL:
+        return available_holdertrade_columns()
+    if feature_set == HOLDERTRADE_FEATURE_SET_CORE:
+        return list(HOLDERTRADE_CORE_COLS) + [HOLDERTRADE_VERSION_COL]
+    raise ValueError(
+        f"未知 holdertrade 列集: {feature_set!r}（可选 {list(HOLDERTRADE_FEATURE_SETS)}）"
+    )
 
 
 def load_holdertrade_lookup(

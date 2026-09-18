@@ -827,6 +827,18 @@ def test_load_factor_data_only_builds_trade_date_output(monkeypatch):
         def load_stock_basic(self):
             return pd.DataFrame({"ts_code": ["000001.SZ"], "list_date": ["19910403"]})
 
+        def load_repurchase(self, years=None):
+            return pd.DataFrame(
+                {
+                    "ts_code": ["000001.SZ"],
+                    "ann_date": [trade_date],
+                    "proc": ["实施"],
+                    "amount": [1.0e8],
+                    "vol": [1.0e6],
+                    "high_limit": [12.0],
+                }
+            )
+
         def load_pledge_stat(self, start_date=None, end_date=None):
             return stub_df
 
@@ -1024,6 +1036,7 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
         ensure_entry,
         "_load_factor_data",
         lambda *args, **kwargs: (
+            None,
             None,
             None,
             None,

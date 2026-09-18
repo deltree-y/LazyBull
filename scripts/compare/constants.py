@@ -168,6 +168,8 @@ COL_NAMES = {
     "enable_cashflow_quality_features": "现金流质量因子",
     "enable_dividend_policy_features": "分红政策因子",
     "enable_holdertrade_features": "股东增减持因子",
+    "holdertrade_feature_set": "增减持列集",
+    "enable_repurchase_features": "股票回购因子",
     "enable_availability_markers": "可用性标记",
     "cashflow_quality_cols_live": "现金流质量实际入模列",
     "enable_consensus_revision_features": "一致预期修正因子",

@@ -398,6 +398,34 @@ def _try_download_stk_holdertrade(
     return load_holdertrade(storage)
 
 
+def _try_download_repurchase(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+) -> Optional[pd.DataFrame]:
+    """下载/增量补齐股票回购数据（repurchase，按 ann_date 年分区）。
+
+    水位 = 分区内最大 `ann_date`，重拉窗口由 `download_repurchase` 内部收窄
+    （回拉 `REPURCHASE_RESUME_OVERLAP_DAYS` 天防同日补录/更正）；
+    失败仅告警不阻断纸面链路。
+    """
+    from ...data.repurchase_raw import (
+        REPURCHASE_RESUME_OVERLAP_DAYS,
+        download_repurchase,
+        load_repurchase,
+    )
+
+    lookback_days = max(180, REPURCHASE_RESUME_OVERLAP_DAYS * 2)
+    start_date = (
+        datetime.strptime(str(trade_date), "%Y%m%d") - timedelta(days=lookback_days)
+    ).strftime("%Y%m%d")
+    try:
+        download_repurchase(client, storage, start_date=start_date, end_date=str(trade_date))
+    except Exception as e:  # noqa: BLE001 - 纸面链路必须 fail-soft
+        logger.warning(f"增量下载 repurchase 失败: {e}")
+    return load_repurchase(storage)
+
+
 def _try_download_forecast(
     client: TushareClient,
     storage: Storage,

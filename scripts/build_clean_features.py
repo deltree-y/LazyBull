@@ -44,6 +44,7 @@ OPTIONAL_FEATURE_FLAG_ATTRS = (
     "enable_consensus_revision_features",
     "enable_dividend_policy_features",
     "enable_holdertrade_features",
+    "enable_repurchase_features",
     "enable_announcement_risk_features",
 )
 
@@ -180,6 +181,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--enable-repurchase-features",
+        action="store_true",
+        default=False,
+        help=(
+            "启用股票回购因子（90/180 日已回购金额增量占流通市值、已执行标志、价格上限空间；"
+            "需先下载 repurchase 数据）。注意：常规训练/回测/纸面为**运行时派生**，"
+            "无需重建特征；本开关仅用于确需把本族列物化进特征分区（如因子体检扫描）的场景"
+        ),
+    )
+    parser.add_argument(
         "--enable-announcement-risk-features",
         action="store_true",
         help="启用风控公告类因子（质押/解禁/大宗，PIT 前向填充；需先下载 pledge_stat/share_float/block_trade）",
@@ -214,6 +225,7 @@ def main():
     )
     logger.info(f"分红政策因子: {'启用' if args.enable_dividend_policy_features else '禁用'}")
     logger.info(f"股东增减持因子: {'启用' if args.enable_holdertrade_features else '禁用'}")
+    logger.info(f"股票回购因子: {'启用' if args.enable_repurchase_features else '禁用'}")
     logger.info(f"风控公告类因子: {'启用' if args.enable_announcement_risk_features else '禁用'}")
     if args.horizon is not None:
         logger.info(f"标签过滤模式: single (主 horizon={args.horizon})")
@@ -282,6 +294,7 @@ def main():
                 enable_consensus_revision=args.enable_consensus_revision_features,
                 enable_dividend_policy=args.enable_dividend_policy_features,
                 enable_holdertrade=args.enable_holdertrade_features,
+                enable_repurchase=args.enable_repurchase_features,
                 enable_announcement_risk=args.enable_announcement_risk_features,
                 use_parallel=args.parallel,
                 parallel_jobs=args.parallel_jobs,

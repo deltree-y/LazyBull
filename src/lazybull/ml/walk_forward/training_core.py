@@ -33,8 +33,8 @@ MIN_MODELS = 3
 SEED_ENSEMBLE_KEEP_MIN_MODELS = MIN_MODELS
 
 
-def _build_feature_flag_train_params(args: Any) -> Dict[str, bool]:
-    """构造需随模型注册保存的可选特征开关。"""
+def _build_feature_flag_train_params(args: Any) -> Dict[str, Any]:
+    """构造需随模型注册保存的可选特征开关（含列集等字符串型签名维度）。"""
     return {
         "enable_consensus_features": bool(getattr(args, "enable_consensus_features", False)),
         "enable_cashflow_quality_features": bool(
@@ -47,6 +47,8 @@ def _build_feature_flag_train_params(args: Any) -> Dict[str, bool]:
             getattr(args, "enable_dividend_policy_features", False)
         ),
         "enable_holdertrade_features": bool(getattr(args, "enable_holdertrade_features", False)),
+        "holdertrade_feature_set": str(getattr(args, "holdertrade_feature_set", "full")),
+        "enable_repurchase_features": bool(getattr(args, "enable_repurchase_features", False)),
         "enable_availability_markers": bool(getattr(args, "enable_availability_markers", False)),
     }
 
@@ -194,6 +196,9 @@ def _train_model_on_window(
         enable_dividend_policy_features=getattr(args, "enable_dividend_policy_features", False),
         enable_holdertrade_features=getattr(args, "enable_holdertrade_features", False),
         holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
+        holdertrade_feature_set=getattr(args, "holdertrade_feature_set", "full"),
+        enable_repurchase_features=getattr(args, "enable_repurchase_features", False),
+        repurchase_lookup=getattr(args, "repurchase_lookup", None),
         enable_availability_markers=getattr(args, "enable_availability_markers", False),
         feature_stability_filter=args.feature_stability_filter,
         factor_prune=args.factor_prune,

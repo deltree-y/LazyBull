@@ -51,6 +51,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - ✅ **现金流质量因子**: 基于 `f_ann_date` 的版本化 PIT、依赖修订事件驱动 TTM 与供应商自由现金流口径
 - 🧪 **分红政策质量因子（待 WF 验证）**: 分红稳定性/增长率、归母净利润支付率 + 双日期稠密事件因子，每股调整口径 PIT 截断、`ex_date` 防前视
 - 🧪 **股东增减持因子（stk_holdertrade，待 WF 验证）**: 30/90 日自然日窗口的净增持比例（含高管/非高管拆分）、披露日计数与强度加速度，`ann_date` 唯一 PIT 锚点，窗口外显式填 0 保证全市场覆盖
+- 🧪 **股票回购因子（repurchase，待 WF 验证）**: 90/180 日自然日窗口的**已回购金额增量 / 流通市值**（执行类公告为累计口径 ⇒ 取增量，禁止直接求和）、已执行标志、回购价上限相对现价空间，`ann_date` 唯一 PIT 锚点，窗口外显式填 0 保证全市场覆盖
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
 - ✅ **数据质量看板**: 按本地数据截止日扫描 raw/clean/features 的覆盖率、区间加权缺失率、异常值、schema 版本和同步水位，输出离线 HTML 报告与 Parquet 快照
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
@@ -146,6 +147,10 @@ python scripts/download_raw.py --start-date 20210101 --end-date 20231231 --downl
 # 股东增减持数据（stk_holdertrade，按月窗口分页读满 + ann_date 年分区）
 # 接口单页上限 3000 行且超限不报错，必须按月窗口 + offset 翻页；水位=分区内最大 ann_date，自动增量续传
 python scripts/download_raw.py --start-date 20200101 --end-date 20231231 --download stk_holdertrade
+
+# 股票回购数据（repurchase，按月窗口分页读满 + ann_date 年分区）
+# 接口单页上限 2000 行且超限不报错（2022 全年真实 6034 行，不翻页丢 67%）；水位=分区内最大 ann_date
+python scripts/download_raw.py --start-date 20100101 --end-date 20260917 --download repurchase
 
 # 利润表归母净利润（分红支付率，首次接入需强制建立 f_ann_date 版本化季度分区）
 python scripts/download_raw.py --start-date 20170101 --end-date 20231231 --download income --force
@@ -384,6 +389,10 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
 # 使用股东增减持因子（**运行时派生**，无需重建 cs_train；需先下载 stk_holdertrade 年分区）
 python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
   --enable-holdertrade-features
+
+# 使用股票回购因子（**运行时派生**，无需重建 cs_train；需先下载 repurchase 年分区）
+python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
+  --enable-repurchase-features
 
 # 步骤2: 使用 ML 模型运行回测（使用新的默认值）
 # 注意：scripts/run_ml_backtest.py 已删除，回测已并入 walk_forward 滚动回测，

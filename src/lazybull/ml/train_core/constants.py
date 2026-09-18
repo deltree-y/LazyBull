@@ -64,6 +64,20 @@ HOLDERTRADE_FEATURE_COLUMNS = [
     "holdertrade_schema_v1",  # schema 哨兵列（值 = 当前语义版本）
 ]
 
+# 股票回购因子（repurchase，Phase 2；随开关显式入模）
+# 口径：公告级滚动窗口聚合（自然日 90/180），金额缺失**不兜底**（不做 vol × high_limit 近似），
+# PIT 锚点 = ann_date；窗口内无公告由 handler 显式填 0 ⇒ 全市场全覆盖
+# （避免稀疏列被训练入口 0.6 缺失率门禁整体删除）。
+# 哨兵列 repurchase_schema_v1 随开关入模并校验语义版本。
+REPURCHASE_FEATURE_COLUMNS = [
+    "rp_amount_to_mv_90d",  # 近 90 自然日公告回购金额 ÷ 流通市值
+    "rp_amount_to_mv_180d",  # 近 180 自然日公告回购金额 ÷ 流通市值
+    "rp_exec_flag_90d",  # 90 日内是否出现「实施/完成」阶段公告（0/1）
+    "rp_price_headroom",  # 窗口内最新 high_limit ÷ 当日 VWAP − 1
+    "rp_freshness_days",  # 最近一次公告距当日自然日数（仅窗口内有事件时非空）
+    "repurchase_schema_v1",  # schema 哨兵列（值 = 当前语义版本）
+]
+
 ALT_FEATURE_COLUMNS = [
     # 股东人数 (2)
     "holder_num_chg",  # 股东人数环比变动率

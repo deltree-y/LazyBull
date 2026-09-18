@@ -332,7 +332,23 @@ def main():
         "--enable-holdertrade-features",
         action="store_true",
         default=False,
-        help="启用股东增减持因子（需先下载 stk_holdertrade 并以其开关重建特征分区）",
+        help="启用股东增减持因子（运行时派生；需先下载 stk_holdertrade）",
+    )
+    parser.add_argument(
+        "--holdertrade-feature-set",
+        choices=("full", "core"),
+        default="full",
+        help=(
+            "股东增减持列集：full=全部 8 因子列+freshness+哨兵；core=仅保留证据支持的 4 列+哨兵"
+            "（超参签名维度，禁止跨取值并组比较）"
+        ),
+    )
+
+    parser.add_argument(
+        "--enable-repurchase-features",
+        action="store_true",
+        default=False,
+        help="启用股票回购因子（运行时派生；需先下载 repurchase）",
     )
 
     parser.add_argument(
@@ -431,6 +447,16 @@ def main():
             )
             logger.info(f"股东增减持运行时查询表: {len(args.holdertrade_lookup)} 个交易日")
 
+        # 股票回购因子：同一先例（运行时派生，不写回 cs_train）
+        args.repurchase_lookup = None
+        if getattr(args, "enable_repurchase_features", False):
+            from src.lazybull.factors.repurchase import build_repurchase_runtime_lookup
+
+            args.repurchase_lookup = build_repurchase_runtime_lookup(
+                loader, args.start_date, args.end_date
+            )
+            logger.info(f"股票回购运行时查询表: {len(args.repurchase_lookup)} 个交易日")
+
         # 1. 加载特征数据
         df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)
         total_samples = len(df)
@@ -497,6 +523,9 @@ def main():
             enable_availability_markers=getattr(args, "enable_availability_markers", False),
             enable_holdertrade_features=getattr(args, "enable_holdertrade_features", False),
             holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
+            holdertrade_feature_set=getattr(args, "holdertrade_feature_set", "full"),
+            enable_repurchase_features=getattr(args, "enable_repurchase_features", False),
+            repurchase_lookup=getattr(args, "repurchase_lookup", None),
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
             factor_exclude_file=getattr(args, "factor_exclude_file", None),
@@ -629,6 +658,8 @@ def main():
                 ),
                 "enable_availability_markers": getattr(args, "enable_availability_markers", False),
                 "enable_holdertrade_features": getattr(args, "enable_holdertrade_features", False),
+                "holdertrade_feature_set": getattr(args, "holdertrade_feature_set", "full"),
+                "enable_repurchase_features": getattr(args, "enable_repurchase_features", False),
                 # 推理侧（MLSignal）按此复现事件型 freshness 衰减，必须与训练一致
                 "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),
                 "event_freshness_half_life_days": getattr(

@@ -124,6 +124,86 @@ def test_materialize_requires_raw_holdertrade_when_enabled(fake_production, tmp_
         snapshot.materialize(args)
 
 
+def test_materialize_derives_repurchase_columns(fake_production, tmp_path):
+    """repurchase 家族：派生需要 circ_mv/amount/vol，但派生后不得写进快照。"""
+    cs_dir = fake_production / "features" / "cs_train"
+    for path in cs_dir.glob("*.parquet"):
+        frame = pd.read_parquet(path)
+        frame["circ_mv"] = [100000.0, 200000.0]
+        frame["amount"] = [10000.0, 20000.0]
+        frame["vol"] = [10000.0, 20000.0]
+        frame.to_parquet(path, index=False)
+    raw_dir = fake_production / "raw" / "repurchase"
+    raw_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            ("000001.SZ", "20200102", "实施", 1.0e8, 1.0e6, 12.0),
+            ("000002.SZ", "20200103", "预案", 5.0e7, None, 8.0),
+        ],
+        columns=["ts_code", "ann_date", "proc", "amount", "vol", "high_limit"],
+    ).to_parquet(raw_dir / "2020-12-31.parquet", index=False)
+
+    out_root = tmp_path / "snapshot_rp"
+    feature_file = tmp_path / "features_rp.json"
+    feature_file.write_text(json.dumps(["some_feature"]), encoding="utf-8")
+    args = snapshot.build_parser().parse_args(
+        [
+            "--out-root",
+            str(out_root),
+            "--start",
+            "20200101",
+            "--end",
+            "20200131",
+            "--every",
+            "1",
+            "--with-repurchase",
+            "--feature-file",
+            str(feature_file),
+        ]
+    )
+    meta = snapshot.materialize(args)
+    assert meta["files"] == 6
+
+    day = pd.read_parquet(out_root / "features" / "cs_train" / "20200102.parquet")
+    # 000001.SZ：增量 1.0e8 元 ÷ 流通市值 100000 万元(=1e9 元) = 0.1
+    assert day.loc[day["ts_code"] == "000001.SZ", "rp_amount_to_mv_90d"].iloc[0] == pytest.approx(
+        0.1
+    )
+    # 000002.SZ 窗口内无公告 ⇒ 显式 0
+    assert day.loc[day["ts_code"] == "000002.SZ", "rp_amount_to_mv_90d"].iloc[0] == 0.0
+    assert day["repurchase_schema_v1"].eq(1).all()
+    # 派生支撑列不落盘
+    for col in ("circ_mv", "amount", "vol"):
+        assert col not in day.columns
+
+    features = json.loads((out_root / "feature_file.json").read_text(encoding="utf-8"))
+    assert "rp_amount_to_mv_90d" in features
+    assert "repurchase_schema_v1" in features
+
+
+def test_materialize_requires_raw_repurchase_when_enabled(fake_production, tmp_path):
+    out_root = tmp_path / "snapshot_rp2"
+    feature_file = tmp_path / "features_rp2.json"
+    feature_file.write_text(json.dumps(["some_feature"]), encoding="utf-8")
+    args = snapshot.build_parser().parse_args(
+        [
+            "--out-root",
+            str(out_root),
+            "--start",
+            "20200101",
+            "--end",
+            "20200131",
+            "--every",
+            "1",
+            "--with-repurchase",
+            "--feature-file",
+            str(feature_file),
+        ]
+    )
+    with pytest.raises(ValueError, match="repurchase"):
+        snapshot.materialize(args)
+
+
 def test_main_rejects_out_root_inside_production(fake_production):
     args = [
         "--out-root",

@@ -420,7 +420,24 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         "--enable-holdertrade-features",
         action="store_true",
         default=False,
-        help=("启用股东增减持因子（需先下载 stk_holdertrade 并以其开关重建特征分区）"),
+        help=("启用股东增减持因子（运行时派生；需先下载 stk_holdertrade）"),
+    )
+    parser.add_argument(
+        "--holdertrade-feature-set",
+        choices=("full", "core"),
+        default="full",
+        help=(
+            "股东增减持列集：full=全部 8 因子列+freshness+哨兵；core=仅保留证据支持的 4 列+哨兵"
+            "（超参签名维度，禁止跨取值并组比较）"
+        ),
+    )
+
+    # 股票回购因子（运行时派生；需先下载 repurchase）
+    parser.add_argument(
+        "--enable-repurchase-features",
+        action="store_true",
+        default=False,
+        help="启用股票回购因子（运行时派生；需先下载 repurchase）",
     )
 
     # 其他参数

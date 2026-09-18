@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """物化"体检快照"并驱动因子体检/诊断（运行时派生列的离线扫描入口）。
 
-**为什么需要它**：股东增减持（stk_holdertrade）等家族列按契约**运行时派生**，不写入生产
-`features/cs_train`；而 `analyze_factor_health.py` / `analyze_factor_diagnosis.py` 只读分区。
-本脚本把「特征清单 + 运行时派生列」物化成**独立临时数据根**（不触碰生产数据），再把工具的
-`data.root` 指向该根运行，从而复用同一套体检/诊断口径。
+**为什么需要它**：股东增减持（stk_holdertrade）/ 股票回购（repurchase）等家族列按契约
+**运行时派生**，不写入生产 `features/cs_train`；而 `analyze_factor_health.py` /
+`analyze_factor_diagnosis.py` 只读分区。本脚本把「特征清单 + 运行时派生列」物化成
+**独立临时数据根**（不触碰生产数据），再把工具的 `data.root` 指向该根运行，从而复用同一套体检/诊断口径。
 
 做三件事：
 1. 物化：按采样间隔取 `--start~--end` 的分区，只保留体检实际读取的列
@@ -17,6 +17,10 @@
     python scripts/materialize_factor_health_snapshot.py \
         --start 20200101 --end 20260702 --every 3 \
         --with-holdertrade --out-root temp/ht_health_root_20260917
+
+    python scripts/materialize_factor_health_snapshot.py \
+        --start 20200101 --end 20260702 --every 3 \
+        --with-repurchase --out-root temp/rp_health_root_20260918
 """
 
 import argparse
@@ -65,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="派生股东增减持列（stk_holdertrade，运行时派生家族）",
     )
+    parser.add_argument(
+        "--with-repurchase",
+        action="store_true",
+        help="派生股票回购列（repurchase，运行时派生家族）",
+    )
     parser.add_argument("--skip-health", action="store_true", help="只物化，不跑体检")
     parser.add_argument(
         "--skip-usage",
@@ -111,6 +120,47 @@ def _ensure_link(link: Path, target: Path) -> None:
     logger.info(f"目录联接: {link} -> {target}")
 
 
+def _runtime_family_specs(enabled: Dict[str, bool]) -> Dict[str, Dict[str, object]]:
+    """构造运行时派生家族规格（列清单 / raw 加载 / 查询表构建 / 就地派生 / 支撑列）。
+
+    新增运行时家族时在此登记即可（脚本主体不再出现家族分支）。
+    """
+    specs: Dict[str, Dict[str, object]] = {}
+    if enabled.get("holdertrade"):
+        from src.lazybull.factors.holdertrade import (
+            available_holdertrade_columns,
+            build_holdertrade_lookup_by_date,
+            derive_holdertrade_columns,
+        )
+
+        specs["holdertrade"] = {
+            "columns": available_holdertrade_columns(),
+            "load_raw": lambda loader: loader.load_stk_holdertrade(),
+            "build_lookup": build_holdertrade_lookup_by_date,
+            "derive": derive_holdertrade_columns,
+            "extra_cols": [],
+            "download_name": "stk_holdertrade",
+        }
+    if enabled.get("repurchase"):
+        from src.lazybull.factors.repurchase import (
+            available_repurchase_columns,
+            build_repurchase_lookup_by_date,
+            derive_repurchase_columns,
+        )
+
+        specs["repurchase"] = {
+            "columns": available_repurchase_columns(),
+            "load_raw": lambda loader: loader.load_repurchase(),
+            "build_lookup": build_repurchase_lookup_by_date,
+            "derive": derive_repurchase_columns,
+            # 派生需要当日价格与流通市值（VWAP = amount × 10 ÷ vol）；这是**读取支撑列**，
+            # 派生后不写入快照（体检工具不读它们），见 materialize 的 frame[available] 裁剪
+            "extra_cols": ["circ_mv", "amount", "vol"],
+            "download_name": "repurchase",
+        }
+    return specs
+
+
 def materialize(args: argparse.Namespace) -> Dict[str, object]:
     """物化分区与运行时列，返回元信息。"""
     storage = Storage()
@@ -124,12 +174,18 @@ def materialize(args: argparse.Namespace) -> Dict[str, object]:
 
     feature_file = _resolve_feature_file(args.feature_file)
     features: List[str] = list(json.loads(feature_file.read_text(encoding="utf-8")))
+    specs = _runtime_family_specs(
+        {
+            "holdertrade": bool(args.with_holdertrade),
+            "repurchase": bool(args.with_repurchase),
+        }
+    )
     runtime_cols: List[str] = []
-    if args.with_holdertrade:
-        from src.lazybull.factors.holdertrade import available_holdertrade_columns
-
-        runtime_cols = [c for c in available_holdertrade_columns() if c not in features]
-        features += runtime_cols
+    for spec in specs.values():
+        for col in spec["columns"]:  # type: ignore[union-attr]
+            if col not in features:
+                features.append(col)
+                runtime_cols.append(col)
     # 运行时派生列不在分区中，扫描前必须从清单剔除（否则 read_parquet 缺列报错）
     features = [c for c in features if c in _partition_columns(src_dir, args.start, args.end)]
     features += runtime_cols
@@ -142,34 +198,47 @@ def materialize(args: argparse.Namespace) -> Dict[str, object]:
     files = files[:: max(int(args.every), 1)]
     if not files:
         raise FileNotFoundError(f"{src_dir} 在 {args.start}~{args.end} 无分区")
-    available = [c for c in dict.fromkeys(SUPPORT_COLS + features) if c in _schema_names(files)]
+    schema = _schema_names(files)
+    base_cols = [c for c in dict.fromkeys(SUPPORT_COLS + features) if c in schema]
+    # 运行时派生列**不在分区 schema 中**（由派生写入帧）：不进 read_cols，但必须进快照列集
+    write_cols = base_cols + [c for c in runtime_cols if c not in base_cols]
+    read_cols = list(base_cols)
+    for spec in specs.values():
+        for col in spec["extra_cols"]:  # type: ignore[union-attr]
+            if col in schema and col not in read_cols:
+                read_cols.append(col)
     logger.info(
         f"物化 {len(files)} 个分区（{files[0].stem}~{files[-1].stem}），"
-        f"列 {len(available)}（运行时列 {len(runtime_cols)}）"
+        f"列 {len(write_cols)}（运行时列 {len(runtime_cols)}，家族 {sorted(specs)}）"
     )
 
-    lookup = None
-    if runtime_cols:
-        from src.lazybull.factors.holdertrade import (
-            build_holdertrade_lookup_by_date,
-            derive_holdertrade_columns,
-        )
-
+    lookups: Dict[str, object] = {}
+    if specs:
         loader = DataLoader(storage)
-        raw = loader.load_stk_holdertrade()
-        if raw is None or len(raw) == 0:
-            raise ValueError("启用 --with-holdertrade 但缺少 raw/stk_holdertrade 数据")
-        lookup = build_holdertrade_lookup_by_date(raw, [p.stem for p in files])
+        dates = [p.stem for p in files]
+        for name, spec in specs.items():
+            raw = spec["load_raw"](loader)  # type: ignore[operator]
+            if raw is None or len(raw) == 0:
+                raise ValueError(
+                    f"启用运行时家族 {name} 但缺少对应 raw 数据"
+                    f"（{spec.get('download_name', name)}: 请先运行 "
+                    f"python scripts/download_raw.py --download {spec.get('download_name', name)}）"
+                )
+            lookups[name] = spec["build_lookup"](raw, dates)  # type: ignore[operator]
+            logger.info(f"运行时家族 {name}: 查询表 {len(lookups[name])} 个交易日")  # type: ignore[arg-type]
 
     started = time.perf_counter()
     total_bytes = 0
     for index, path in enumerate(files, start=1):
-        frame = pd.read_parquet(path, columns=available)
-        if runtime_cols:
-            derive_holdertrade_columns(frame, lookup, wanted=runtime_cols)
-            blank = [c for c in runtime_cols if frame[c].isna().all()]
+        frame = pd.read_parquet(path, columns=read_cols)
+        for name, spec in specs.items():
+            cols = spec["columns"]  # type: ignore[assignment]
+            spec["derive"](frame, lookups[name], wanted=cols)  # type: ignore[operator]
+            blank = [c for c in cols if frame[c].isna().all()]  # type: ignore[union-attr]
             if blank:
-                raise RuntimeError(f"{path.stem} 运行时列全空: {blank}")
+                raise RuntimeError(f"{path.stem} {name} 运行时列全空: {blank}")
+        if len(read_cols) != len(write_cols):
+            frame = frame[write_cols]  # 派生支撑列不落盘
         target = cs_dir / f"{path.stem}.parquet"
         frame.to_parquet(target, index=False)
         total_bytes += target.stat().st_size

@@ -34,6 +34,8 @@ from .daily import download_daily_data
 from .daily_partition import download_cyq_perf, download_margin_detail, download_stock_st
 from .dividend import download_dividend
 from .holdertrade import download_stk_holdertrade
+from .repurchase import download_repurchase_dataset
+from .repurchase import download_repurchase_dataset
 from .income import download_income
 from .periodic import _to_int_date, download_by_period
 
@@ -102,6 +104,7 @@ def main():
         help="指定另类数据集, 可多选。可选: fina_indicator, margin_detail, "
         "stk_holdernumber, forecast, cyq_perf, express, fund_portfolio, "
         "moneyflow_hsgt, top_list, report_rc, cashflow, income, dividend, stk_holdertrade, "
+        "repurchase, "
         "pledge_stat, share_float, block_trade, all_alt。不指定时仅下基础+日线",
     )
     parser.add_argument("--all", action="store_true", default=False, help="下载日线 + 全部另类数据")
@@ -403,6 +406,15 @@ def main():
 
                 if "stk_holdertrade" in download_set:
                     download_stk_holdertrade(
+                        client,
+                        storage,
+                        args.start_date,
+                        args.end_date,
+                        force=args.force,
+                    )
+
+                if "repurchase" in download_set:
+                    download_repurchase_dataset(
                         client,
                         storage,
                         args.start_date,

@@ -2,6 +2,150 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.126.0] - 2026-09-18
+
+### Added
+
+- **repurchase（股票回购）Phase 2：因子构建 + 四侧运行时派生接线**（最小列集、默认关、可回退）：
+  - `src/lazybull/factors/repurchase.py`：`aggregate_repurchase_events`（`(ts_code, ann_date)` 事件化：
+    金额取增量、`exec` 取 max、`high_limit` 取非空最大）、`build_repurchase_lookup_by_date`
+    （自然日 90/180 开区间窗口，只输出 180 日内有公告的股票）、`available_repurchase_columns`、
+    `derive_repurchase_columns`（训练/OOS 侧就地派生，已存在列不覆盖）、
+    `build_repurchase_runtime_lookup`（按区间一次性建表，全折共用）、
+    `build_repurchase_feature_frame`（数值单一实现：金额占流通市值 + 价格上限空间）、
+    `repurchase_coverage_report`。
+  - 因子列（4 值列 + 新鲜度 + 哨兵 `repurchase_schema_v1`）：
+    `rp_amount_to_mv_90d` / `rp_amount_to_mv_180d`（**执行类公告增量金额 / 流通市值**）、
+    `rp_exec_flag_90d`（90 日内是否出现实施/完成）、`rp_price_headroom`（窗口内最新 `high_limit ÷ VWAP − 1`）、
+    `rp_freshness_days`。
+  - 接线（与可用性标记 / 股东增减持同一先例，**不写回 cs_train / cs_infer**）：
+    `features/factor_handlers.py::RepurchaseFactorHandler` + 注册表；`features/context.py` /
+    `builder/orchestration.py` / `pipeline.py`（`enable_repurchase`）；
+    `features/ensure/schema.py::OPTIONAL_FACTOR_GROUP_REPURCHASE`；
+    纸面链路 `ensure/factor_load.py`（当日查询表 + fail-soft）与 `ensure/entry.py`；
+    训练侧 `ml/train_core/prepare.py::prepare_training_data(enable_repurchase_features, repurchase_lookup)`
+    （派生 + 哨兵校验）；OOS 评估 `walk_forward/split_training.py`；OOS 回测 `walk_forward/backtest.py`；
+    CLI `--enable-repurchase-features`（`walk_forward.py` / `train_ml_model.py`）+
+    `runner.py` 建表 + `training_core.py` 入 `train_params` + `summary.py` 汇总列 +
+    `scripts/compare/constants.py` 展示名。
+  - 测试：`tests/test_repurchase_factors.py`（30 项）、`tests/test_repurchase_oos_backtest_wiring.py`（2 项）、
+    `tests/test_ensure_and_t0_printing.py`（StubLoader + 18 元组）、
+    `tests/test_training_feature_flag_forwarding.py`（metadata 断言）、`test_optional_feature_schema.py`（参数化）。
+    全量 **1940 passed**。
+
+### Fixed
+
+- **执行类 `amount` 为累计口径 ⇒ 窗口内直接求和会把同一笔回购重复计 10 倍以上**（实现期实测发现，
+  已先改方案 `docs/repurchase_pit_audit.md` §6.1 第 4.1 条再改代码）：
+  同一股票同 `proc` 连续公告的金额中位"末/首"比：完成 **12.5**（3,144 组）、实施 12.6、停止 17.7，
+  且 23.6% 的组金额完全单调非降（`600382.SH` 2024 逐月 `完成` 行 2.52e8→2.74e8→…→3.29e8）。
+  - 改为**增量口径**：`增量 = 本行金额 − 上一有效执行类行金额`；更小（新计划/修正）或首行 ⇒ 增量 = 本行金额；
+    `amount` 缺失 ⇒ 增量 0 且不更新基线（缺失不兜底）。
+  - **次级排序键 `end_date`（进度报告期）为必需项**：同日多行若按文件行序处理，遇到 `end_date` 与行序
+    不一致的两行（实测 `300138.SZ` 20240604 同时报 20240531/20240603 两期）会把"回落"误判为新计划、
+    虚增一整笔累计金额；修复后该股当期增量 0.592e8（= 0.395e8 + 0.198e8）✓。
+  - 非执行类行（预案/股东大会通过）的 `amount` 是**计划金额**且同一计划跨期重复披露
+    （股东大会通过组末首比中位 1.04）⇒ 不进入强度列，只贡献价格上限与新鲜度。
+  - 效果（cs_train 20240705 实测）：`rp_amount_to_mv_180d` 非零占比 31.8%、最大 **0.143**
+    （修复前 0.92，明显虚高）；单日活跃股票中位 1,846 只（查询表构建 0.8s / 242 交易日）。
+- **`amount` 整列缺失/全空直接报错**（禁止静默零因子）；`circ_mv` / `amount` / `vol` 缺列同样硬报错
+  （即使当日无活跃公告也校验，避免无事件日静默通过）。
+
+### 记录（实现期实测，2026-09-18）
+
+- **训练入口门禁行为（与 stk_holdertrade 一致）**：6 列中 4 个值列入模（NaN 0.0000%），
+  `rp_freshness_days` 被「>0.6 缺失率」门禁删除、`repurchase_schema_v1` 被「常数列」门禁删除——
+  哨兵列只承担入口 schema 校验语义，不参与训练；开关关闭时本族列完全不入模（对照验证通过）。
+- 纸面 ensure 侧新增 `_try_download_repurchase`（回拉窗口 180 天，fail-soft）；
+  `_load_factor_data` 返回元组 18 元（覆盖组计数 16 → 17）。
+
+### 记录（repurchase Phase 3 因子体检与诊断，2026-09-18）
+
+产物 `data/reports/factor_health/repurchase_20260918/` + `data/reports/factor_diagnosis/repurchase_20260918/`，
+结论全文 `docs/repurchase_factor_health.md`。基线 `v24123_features.json` + 6 个 repurchase 列 = **160 列**、
+525 个采样交易日（20200102~20260702，every 3）。
+
+- `scripts/materialize_factor_health_snapshot.py` 扩展 **`--with-repurchase`** + 家族登记表
+  `_runtime_family_specs`（新增运行时家族只需登记，脚本主体无家族分支）；repurchase 派生需
+  `circ_mv/amount/vol`（VWAP）但体检不读 ⇒ **派生支撑列读出后不写入快照**（`read_cols` 与 `write_cols` 分离）。
+- **关键发现（不利于本族）**：4 个值列设计性全覆盖（1.000）、无逐年收缩、口径无退化；
+  但家族内**只有 `rp_price_headroom` 有跨期稳定的截面信息**（IC +0.0104、t=+7.90、**7/7 年同号**），
+  强度仅居全表 **59 百分位**（中位水平）；`rp_amount_to_mv_90d`(18%) / `rp_exec_flag_90d`(10%) /
+  `rp_amount_to_mv_180d`(**6%**) 均在底部区段且 2021–2023 持续反向；
+  `rp_exec_flag_90d` 控制 90d 金额后偏 IC **t=−2.79**（显著负增量信息）⇒ 应剔除。
+  **参照系**：已判定失败的 stk_holdertrade 最强列（t≈+15.2、7/7 正，约全表 90 百分位）仍没过净值为判据。
+- 家族各轴**不与既有特征共线**（除家族内 90d/exec 同簇）⇒ 弱的原因不是“重复”。
+- 使用度**本轮不可观测**：尚无模型启用 `--enable-repurchase-features`，`gain_present_ratio=0.0` 属“尚未观测”，
+  **不得读作“模型不用”**（同 stk_holdertrade 口径约束）。
+- 候选清单命中：仅 1 条（A 覆盖缺口 `rp_freshness_days`，根因正常结构性，勿默认补数据）；
+  其余 15 条与 repurchase 无关。
+
+### 记录（disclosure_date Phase 0 PIT 审计：不合格 → 放弃，2026-09-18）
+
+审计全文 `docs/disclosure_date_pit_audit.md`（数据层第 3 个候选的预登记放弃条件："若 TuShare 只给当前值则放弃"）。
+
+- 接口 `disclosure_date` 每报告期**只有 1 行/股票**（`(ts_code, end_date)` 重复 **0**；20231231 期 5,374 行），
+  返回列 `ts_code / ann_date / end_date / pre_date / actual_date`，**无 `modify_date` / 无版本行**。
+- **判别证据**：`pre_date == actual_date` 占比 **99.7% / 99.9% / 99.8%**（20231231 / 20240630 / 20250630 三期）
+  ——远高于 A 股"预约日≠实际披露日"的真实比例 ⇒ `pre_date` 已被改写为**最终实际披露日**，
+  给的是"当前值"不是"当时值" ⇒ 用作事前特征 = 未来函数，且接口自身无法还原历史时点值。
+  另：未来期（`end_date=20261231`）当前返回 0 行，计划需临近年末才生成。
+- **结论**：触发预登记放弃条件 ⇒ **不新增 raw 数据集、不接因子**（本次仅探测，未落地任何代码）。
+- **替代路径（零新增数据，待决策）**：法定截止日（4/30、8/31、10/31）+ 实际披露日 ⇒
+  `disclose_pressure`（临近截止未披露）/ `disclose_lead_days`（提前天数）/ `disclose_delay_flag`（逾期）；
+  启动条件 = 先证明控制 `express`/`forecast`/`fundamental_freshness_days` 后偏 IC 显著（|t| ≥ 3 量级），
+  否则只作登记不开工。
+
+## [0.125.0] - 2026-09-17
+
+### Added
+
+- **repurchase（股票回购）Phase 1 接入**（薄接入、默认关、可回退）：
+  - `src/lazybull/data/repurchase_raw.py`：按月窗口 + **分页读满（单页 2000）** → **全字段去重**
+    → **按 `ann_date` 年分区**落盘（`data/raw/repurchase/YYYY-12-31.parquet`）；水位 = 分区内最大 `ann_date`，
+    增量回拉 `REPURCHASE_RESUME_OVERLAP_DAYS=3` 天；非法/缺失 `ann_date` 剔除并告警（禁止伪年分区）。
+  - `TushareClient.get_repurchase()`（单笔/单股查询，docstring 标注分页限制）；
+    `DataLoader.load_repurchase()`；`scripts/raw_download/repurchase.py` 薄包装 + `--download repurchase`
+    （已入 `ALT_DATASETS` 与 CLI 帮助）。
+  - 测试：`tests/test_repurchase_raw.py`（9 项：月窗口边界、非法 ann_date 剔除与归一化去重、
+    **分页取全含跨页重复**、年分区与子集加载、水位续传与回拉窗口、force 全量清旧分区、空窗口不建分区、
+    单页上限常量锁定）。
+
+**生产全历史回补（2026-09-17）**：`--download repurchase --start-date 20100101 --end-date 20260917`
+→ 201 个月窗口、**60 秒**、退出码 0、无任何下载错误；落盘 **17 个年分区**（2010~2026，年文件 6 KB ~ 124 KB）
+**共 63,639 行**（已全字段去重，整行重复 0），水位 `20260917`；峰值 2024 年 13,403 行；
+唯一股票 3,745 只；字段缺失率 `end_date` 37.3% / `vol` 37.5% / `exp_date` 91.4% / `amount` 5.7% /
+`high_limit` 11.4% / `low_limit` 29.5%；`proc` 分布：完成 37,976 / 预案 16,255 / 股东大会通过 7,490 /
+实施 1,887 / 停止 31；每日行数中位 10（最大 362）；二次调用**零请求**（幂等）。
+年分区决策得到验证：全库最大年文件仅 124 KB，当前年度续传只动 1 个分区。
+
+### 记录（repurchase Phase 0 PIT 审计，2026-09-17）
+
+结论见 `docs/repurchase_pit_audit.md`：**PIT 合格 → 可进 Phase 1**（数据层第 2 项，接在 stk_holdertrade 之后）。
+关键事实（全部实测，日志 `logs/repurchase_audit_20260917.log`）：
+
+- 字段 9 列：`ts_code/ann_date/end_date/proc/exp_date/vol/amount/high_limit/low_limit`；
+  **无 `begin_date`**，`end_date` 是进度报告期 ⇒ PIT 锚点只能是 `ann_date`（缺失 0%、100% 合法）；
+- **单页上限 2000 行且超限静默**（不传 limit → 只回最新 2000；limit=3000/5000 仍 2000）⇒ 必须 `offset` 翻页；
+  2022 全年真实 6,034 行，不翻页会丢 67%；
+- **完整性断言通过**：分页合计 6,034 == 逐月独立拉取合计 6,034，按全字段排序**逐行 0 差异**；跨页重复 0.31%；
+- **PIT 严格性通过**：窄窗 vs 宽窗切片逐值 0 差异；历史可回溯（2018/2021/2024 窗口；单股全历史可拉）；
+- **无自然唯一键**：`ts_code+ann_date` 重复 2.70%、`+proc` 2.40%、整行重复 0.30% ⇒ 全字段去重、多行明细保留；
+- 稀疏：每日行数中位 16（最大 110），覆盖 41% 交易日 ⇒ 因子需窗口聚合 + 窗口外显式填 0；
+- `proc` 多阶段状态机（预案/股东大会通过/实施/完成/停止）⇒ 进度类因子必须做**计划级版本化**（Phase 2 再定），
+  本轮优先公告级窗口聚合。
+
+Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 + 翻页读到空、**全字段去重**、
+`(ts_code, ann_date, proc)` 多行保留、水位 = 分区内最大 `ann_date`（回拉 3 天）、按 `ann_date` **年分区**落盘。
+
+### 项目共识（新增契约，2026-09-17）
+
+- **新增数据集 raw 存储契约**：任何新增原始数据集的**存储布局必须在方案阶段**（`docs/*_pit_audit.md`
+  或计划文档）**写定并登记**，作为实现验收项，实现不得自行决定；布局须明确「分区维度与粒度 / 文件命名 /
+  水位字段 / 增量回拉窗口 / 去重口径」。**默认按年分区**（`data/raw/<dataset>/YYYY-12-31.parquet`，
+  沿 dividend / stk_holdertrade 模式），仅当有实测理由才改（单年体量过大→季度；按日期查询 API→日分区）；
+  实现与方案不一致时必须**先改方案再改代码**。repurchase 已按此登记（`docs/repurchase_pit_audit.md` §5.1）。
+
 ## [0.124.0] - 2026-09-17
 
 ### Added
@@ -102,6 +246,21 @@ All notable changes to this project will be documented in this file.
   单臂 ΔCAGR 可检出下限 5~8pp ⇒ +0.34pp 属不可判定区间，结论应表述为**未观察到收益改善且回撤恶化**。
 - 顺带修复（纯性能，两臂结束后才改、取值不变）：`derive_holdertrade_columns` 改为**批量赋值**，
   消除大特征帧上的 `PerformanceWarning: highly fragmented`。
+
+### Phase 4b：A2 精简列集（第二轮）——**同样不通过，家族终结**
+
+- 新增签名维度 `--holdertrade-feature-set {full,core}`（`factors.holdertrade.HOLDERTRADE_CORE_COLS`，
+  入 `train_params` / summary 列 / compare 展示名）；`core` = `ht_net_ratio_90d` + `ht_net_count_90d`
+  + `ht_sell_count_30d` + `ht_net_ratio_30d` + 哨兵（取值**只由 Phase 3 证据决定**，不看 A1 净值读数）。
+- **A2 结果**（14 折，18:28→20:02，训练矩阵 56 列）：信号层 Δ平均持有期收益 **−11.25 bps（Top20，相对 −12.2%）**
+  / −9.59 bps（Top30）、Δ命中率 −0.95pp ⇒ **判据 1 不通过**；净值层 ΔCAGR **−2.43pp**、
+  **ΔMaxDD −2.31pp**、Δ夏普 **−0.104** ⇒ **判据 2 不通过**。
+- **总判定：本族终结**（两轮 full/core 均不通过且第二轮信号层反而显著转负）——**不再开新臂、不做进一步消融位搜索**；
+  `--enable-holdertrade-features` 永不需要开启，代码/数据/接线保留（默认关、可回溯）。
+- **机理解读**：A1 微正 / A2 转负，与 v0.113.0 `core_state` 同源——列集扰动改变早停轨迹与集成选择路径，
+  其量级可超过列级效应；叠加单臂 ΔCAGR 可检出下限 5~8pp，单臂读数不足以支撑"某列有效/无效"结论。
+- 数据态放行登记：A0/A1 在 `c47069d`、A2 在 `28a63a9`（期间提交），数据指纹逐字段相同、代码差异对两臂惰性
+  ⇒ 以 `--allow-state-mismatch` 显式放行（见 `docs/holdertrade_wf_ab_result.md` §7.4）。
 
 ### 项目共识（新增契约）
 
