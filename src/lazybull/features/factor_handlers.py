@@ -81,6 +81,10 @@ def _get_handler_default_columns(name: str) -> List[str]:
         from ..factors.repurchase import available_repurchase_columns
 
         return available_repurchase_columns()
+    if name == "top10fh":
+        from ..factors.top10_floatholders import available_top10fh_columns
+
+        return available_top10fh_columns()
     if name == "pledge":
         from .handlers_announcement import PLEDGE_COLS
 
@@ -227,6 +231,42 @@ class RepurchaseFactorHandler:
         result: Dict[str, pd.Series] = {col: frame[col] for col in frame.columns}
         result[REPURCHASE_VERSION_COL] = pd.Series(
             np.int8(REPURCHASE_SCHEMA_VERSION), index=features.index
+        )
+        return result
+
+
+class Top10FhFactorHandler:
+    """十大流通股东因子（状态型：报告期状态保留 + freshness，PIT 按 ann_date）。
+
+    **填充语义（与事件族相反）**：有已披露报告的股票 ⇒ 值列为真实值
+    （**0 = 前 10 中无此类持有人**，是有效观测）；**未披露股票 ⇒ NaN**，
+    **禁止填 0**（口径定稿见 `docs/top10_floatholders_pit_audit.md` §6.4）。
+    哨兵列恒写当前 schema 版本（含未披露股票），供训练入口校验语义。
+
+    数值实现统一落在 `factors/top10_floatholders.py::build_top10fh_feature_frame`
+    （训练 / OOS 评估 / OOS 回测侧运行时派生复用同一实现，保证四侧逐值一致）。
+    """
+
+    def apply(self, features, data, trade_date, current_data) -> Dict[str, pd.Series]:
+        from ..factors.top10_floatholders import (
+            TOP10FH_SCHEMA_VERSION,
+            TOP10FH_VERSION_COL,
+            build_top10fh_feature_frame,
+        )
+
+        # data is None ⇒ 该构建未启用本族因子（不输出任何列，保持与 holdertrade 等一致）；
+        # data 为空 DataFrame ⇒ 该交易日无已披露报告（仍输出 NaN 列，保证逐日 schema 一致）。
+        if data is None:
+            return {}
+        if len(data) == 0:
+            merged = None
+        else:
+            merge_cols = [c for c in data.columns if c != "ts_code"]
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "top10fh")
+        frame = build_top10fh_feature_frame(features, merged, trade_date)
+        result: Dict[str, pd.Series] = {col: frame[col] for col in frame.columns}
+        result[TOP10FH_VERSION_COL] = pd.Series(
+            np.int8(TOP10FH_SCHEMA_VERSION), index=features.index
         )
         return result
 
@@ -693,6 +733,11 @@ def create_factor_registry() -> FactorRegistry:
         "repurchase",
         RepurchaseFactorHandler(),
         lambda ctx: ctx.repurchase_data,
+    )
+    registry.register(
+        "top10fh",
+        Top10FhFactorHandler(),
+        lambda ctx: ctx.top10fh_data,
     )
 
     # 风控公告类（质押/解禁/大宗，PIT 日频截面原始列）

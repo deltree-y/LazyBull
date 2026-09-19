@@ -1054,6 +1054,7 @@ def test_ensure_features_aligns_build_window_and_precompute(monkeypatch):
             None,
             None,
             None,
+            None,
             [],
         ),
     )

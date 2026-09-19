@@ -338,6 +338,22 @@ def run_walk_forward(args) -> None:
                 f"（派生区间 {args.wf_start_date}~{args.wf_end_date}）"
             )
 
+        # 十大流通股东因子：同一先例（运行时派生、全折共用同一份报告期面板）
+        args.top10fh_panel = None
+        if getattr(args, "enable_top10fh_features", False):
+            from src.lazybull.factors.top10_floatholders import load_top10fh_panel
+
+            args.top10fh_panel = load_top10fh_panel(loader)
+            if args.top10fh_panel is None or len(args.top10fh_panel) == 0:
+                raise ValueError(
+                    "enable_top10fh_features=True 但 raw/top10_floatholders 为空。请先运行: "
+                    "python scripts/download_raw.py --download top10_floatholders"
+                )
+            logger.info(
+                f"十大流通股东报告期面板: {len(args.top10fh_panel):,} 行 / "
+                f"{args.top10fh_panel['ts_code'].nunique():,} 只股票"
+            )
+
         deploy_train_start = None
         deploy_train_end_for_run = None
         if not args.no_deploy_train and not skip_training:
@@ -470,6 +486,7 @@ def run_walk_forward(args) -> None:
                             exposure_table=exposure_table,
                             holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
                             repurchase_lookup=getattr(args, "repurchase_lookup", None),
+                            top10fh_panel=getattr(args, "top10fh_panel", None),
                         )
                         # 提取 nav_curve 用于串联，不写入 CSV
                         nav_curve = bt_metrics.pop("_nav_curve", None)

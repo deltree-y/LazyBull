@@ -20,6 +20,7 @@ from .ensure import (
     OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY,
     OPTIONAL_FACTOR_GROUP_HOLDERTRADE,
     OPTIONAL_FACTOR_GROUP_REPURCHASE,
+    OPTIONAL_FACTOR_GROUP_TOP10FH,
     _check_features_schema,
 )
 
@@ -52,6 +53,7 @@ def _build_features_parallel(
     dividend_lookup,
     holdertrade_lookup,
     repurchase_lookup,
+    top10fh_panel,
     pledge_lookup,
     share_float_lookup,
     block_trade_lookup,
@@ -139,6 +141,14 @@ def _build_features_parallel(
                 repurchase_today = pd.DataFrame()
         else:
             repurchase_today = None
+        if top10fh_panel is not None:
+            from src.lazybull.factors.top10_floatholders import build_top10fh_day_frame
+
+            top10fh_today = build_top10fh_day_frame(top10fh_panel, trade_date)
+            if top10fh_today is None:
+                top10fh_today = pd.DataFrame()
+        else:
+            top10fh_today = None
         if pledge_lookup is not None:
             pledge_today = pledge_lookup.get(trade_date)
             if pledge_today is None:
@@ -184,6 +194,7 @@ def _build_features_parallel(
             dividend_data=dividend_today,
             holdertrade_data=holdertrade_today,
             repurchase_data=repurchase_today,
+            top10fh_data=top10fh_today,
             pledge_data=pledge_today,
             share_float_data=share_float_today,
             block_trade_data=block_trade_today,
@@ -266,6 +277,7 @@ def build_features_data(
     enable_dividend_policy: bool = False,
     enable_holdertrade: bool = False,
     enable_repurchase: bool = False,
+    enable_top10fh: bool = False,
     enable_announcement_risk: bool = False,
     use_parallel: bool = False,
     parallel_jobs: int = -1,
@@ -295,6 +307,7 @@ def build_features_data(
         enable_dividend_policy: 是否启用分红政策质量因子（需先下载 dividend 数据）
         enable_holdertrade: 是否启用股东增减持因子（需先下载 stk_holdertrade 数据）
         enable_repurchase: 是否启用股票回购因子（需先下载 repurchase 数据）
+        enable_top10fh: 是否启用十大流通股东因子（需先下载 top10_floatholders 数据）
         enable_announcement_risk: 是否启用风控公告类因子（质押/解禁/大宗）
     """
     logger.info("=" * 60)
@@ -341,6 +354,7 @@ def build_features_data(
             (enable_dividend_policy, OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY),
             (enable_holdertrade, OPTIONAL_FACTOR_GROUP_HOLDERTRADE),
             (enable_repurchase, OPTIONAL_FACTOR_GROUP_REPURCHASE),
+            (enable_top10fh, OPTIONAL_FACTOR_GROUP_TOP10FH),
         )
         if enabled
     }
@@ -685,6 +699,25 @@ def build_features_data(
                 "python scripts/download_raw.py --download repurchase"
             )
 
+    # 加载十大流通股东数据（可选：报告期状态保留 + freshness，PIT 按 ann_date）
+    top10fh_panel = None
+    if enable_top10fh:
+        from src.lazybull.factors.top10_floatholders import load_top10fh_panel
+
+        try:
+            top10fh_panel = load_top10fh_panel(loader)
+        except Exception as exc:  # noqa: BLE001 - 缺列/空数据必须显式报错，不得静默降级
+            raise ValueError(
+                f"启用十大流通股东因子但面板构建失败: {exc}。请检查 raw/top10_floatholders 数据"
+                "（python scripts/download_raw.py --download top10_floatholders）"
+            ) from exc
+        if top10fh_panel is None or len(top10fh_panel) == 0:
+            raise ValueError(
+                "启用十大流通股东因子但缺少 raw/top10_floatholders 数据。请先运行: "
+                "python scripts/download_raw.py --download top10_floatholders"
+            )
+        logger.info(f"十大流通股东数据: {len(top10fh_panel)} 个报告期行（面板）")
+
     # 加载风控公告类数据（可选：质押/解禁/大宗，PIT 日频查询表）
     pledge_lookup = None
     share_float_lookup = None
@@ -786,6 +819,7 @@ def build_features_data(
             dividend_lookup=dividend_lookup,
             holdertrade_lookup=holdertrade_lookup,
             repurchase_lookup=repurchase_lookup,
+            top10fh_panel=top10fh_panel,
             pledge_lookup=pledge_lookup,
             share_float_lookup=share_float_lookup,
             block_trade_lookup=block_trade_lookup,
@@ -856,6 +890,12 @@ def build_features_data(
                     repurchase_today = pd.DataFrame()
             else:
                 repurchase_today = None
+            if top10fh_panel is not None:
+                from src.lazybull.factors.top10_floatholders import build_top10fh_day_frame
+
+                top10fh_today = build_top10fh_day_frame(top10fh_panel, trade_date)
+            else:
+                top10fh_today = None
             if pledge_lookup is not None:
                 pledge_today = pledge_lookup.get(trade_date)
                 if pledge_today is None:
@@ -904,6 +944,7 @@ def build_features_data(
                 dividend_data=dividend_today,
                 holdertrade_data=holdertrade_today,
                 repurchase_data=repurchase_today,
+                top10fh_data=top10fh_today,
                 pledge_data=pledge_today,
                 share_float_data=share_float_today,
                 block_trade_data=block_trade_today,

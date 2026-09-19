@@ -350,6 +350,30 @@ def main():
         default=False,
         help="启用股票回购因子（运行时派生；需先下载 repurchase）",
     )
+    parser.add_argument(
+        "--repurchase-feature-set",
+        choices=("full", "headroom"),
+        default="full",
+        help=(
+            "股票回购列集：full=4 个值列+freshness+哨兵；headroom=仅 rp_price_headroom+freshness+哨兵"
+            "（超参签名维度，禁止跨取值并组比较）"
+        ),
+    )
+    parser.add_argument(
+        "--enable-top10fh-features",
+        action="store_true",
+        default=False,
+        help="启用十大流通股东因子（运行时派生；需先下载 top10_floatholders）",
+    )
+    parser.add_argument(
+        "--top10fh-feature-set",
+        choices=("full", "concentration"),
+        default="full",
+        help=(
+            "十大流通股东列集：full=6 个值列+freshness+哨兵；concentration=仅 tfh_concentration_chg+哨兵"
+            "（超参签名维度，禁止跨取值并组比较）"
+        ),
+    )
 
     parser.add_argument(
         "--feature-stability-filter",
@@ -457,6 +481,22 @@ def main():
             )
             logger.info(f"股票回购运行时查询表: {len(args.repurchase_lookup)} 个交易日")
 
+        # 十大流通股东因子：同一先例（运行时派生、报告期面板，不写回 cs_train）
+        args.top10fh_panel = None
+        if getattr(args, "enable_top10fh_features", False):
+            from src.lazybull.factors.top10_floatholders import load_top10fh_panel
+
+            args.top10fh_panel = load_top10fh_panel(loader)
+            if args.top10fh_panel is None or len(args.top10fh_panel) == 0:
+                raise ValueError(
+                    "enable_top10fh_features=True 但 raw/top10_floatholders 为空。请先运行: "
+                    "python scripts/download_raw.py --download top10_floatholders"
+                )
+            logger.info(
+                f"十大流通股东报告期面板: {len(args.top10fh_panel):,} 行 / "
+                f"{args.top10fh_panel['ts_code'].nunique():,} 只股票"
+            )
+
         # 1. 加载特征数据
         df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)
         total_samples = len(df)
@@ -526,6 +566,10 @@ def main():
             holdertrade_feature_set=getattr(args, "holdertrade_feature_set", "full"),
             enable_repurchase_features=getattr(args, "enable_repurchase_features", False),
             repurchase_lookup=getattr(args, "repurchase_lookup", None),
+            repurchase_feature_set=getattr(args, "repurchase_feature_set", "full"),
+            enable_top10fh_features=getattr(args, "enable_top10fh_features", False),
+            top10fh_panel=getattr(args, "top10fh_panel", None),
+            top10fh_feature_set=getattr(args, "top10fh_feature_set", "full"),
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
             factor_exclude_file=getattr(args, "factor_exclude_file", None),
@@ -660,6 +704,9 @@ def main():
                 "enable_holdertrade_features": getattr(args, "enable_holdertrade_features", False),
                 "holdertrade_feature_set": getattr(args, "holdertrade_feature_set", "full"),
                 "enable_repurchase_features": getattr(args, "enable_repurchase_features", False),
+                "repurchase_feature_set": getattr(args, "repurchase_feature_set", "full"),
+                "enable_top10fh_features": getattr(args, "enable_top10fh_features", False),
+                "top10fh_feature_set": getattr(args, "top10fh_feature_set", "full"),
                 # 推理侧（MLSignal）按此复现事件型 freshness 衰减，必须与训练一致
                 "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),
                 "event_freshness_half_life_days": getattr(

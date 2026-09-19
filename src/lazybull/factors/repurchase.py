@@ -41,12 +41,18 @@ from loguru import logger
 
 from ..common.date_utils import normalize_series_to_yyyymmdd
 
+#: 列名常量
+REPURCHASE_AMOUNT_90D_COL = "rp_amount_to_mv_90d"
+REPURCHASE_AMOUNT_180D_COL = "rp_amount_to_mv_180d"
+REPURCHASE_EXEC_COL = "rp_exec_flag_90d"
+REPURCHASE_HEADROOM_COL = "rp_price_headroom"
+
 #: 因子值列（滚动窗口聚合；由 handler 缺失填 0 后全覆盖）
 REPURCHASE_COLS = [
-    "rp_amount_to_mv_90d",  # 近 90 自然日公告回购金额 ÷ 流通市值
-    "rp_amount_to_mv_180d",  # 近 180 自然日公告回购金额 ÷ 流通市值
-    "rp_exec_flag_90d",  # 90 日内是否出现「实施/完成」阶段公告（0/1）
-    "rp_price_headroom",  # 窗口内最新 high_limit ÷ 当日 VWAP − 1
+    REPURCHASE_AMOUNT_90D_COL,  # 近 90 自然日公告回购金额 ÷ 流通市值
+    REPURCHASE_AMOUNT_180D_COL,  # 近 180 自然日公告回购金额 ÷ 流通市值
+    REPURCHASE_EXEC_COL,  # 90 日内是否出现「实施/完成」阶段公告（0/1）
+    REPURCHASE_HEADROOM_COL,  # 窗口内最新 high_limit ÷ 当日 VWAP − 1
 ]
 
 #: 公告新鲜度（自然日；仅窗口内有事件的股票非空）
@@ -55,6 +61,14 @@ REPURCHASE_FRESHNESS_COL = "rp_freshness_days"
 #: schema 哨兵列与当前版本（语义重做时递增；训练入口校验）
 REPURCHASE_VERSION_COL = "repurchase_schema_v1"
 REPURCHASE_SCHEMA_VERSION = 1
+
+#: 列集开关取值（**超参签名维度**，禁止跨取值并组比较）
+#: - full：4 个值列 + freshness + 哨兵；
+#: - headroom：**单列** `rp_price_headroom` + freshness + 哨兵
+#:   （依据 Phase 3 体检：家族内只有该列有跨期稳定信息，见 `docs/repurchase_factor_health.md`）。
+REPURCHASE_FEATURE_SET_FULL = "full"
+REPURCHASE_FEATURE_SET_HEADROOM = "headroom"
+REPURCHASE_FEATURE_SETS = (REPURCHASE_FEATURE_SET_FULL, REPURCHASE_FEATURE_SET_HEADROOM)
 
 #: 窗口（自然日）
 SHORT_WINDOW_DAYS = 90
@@ -327,6 +341,19 @@ def build_repurchase_lookup_by_date(
 def available_repurchase_columns() -> List[str]:
     """因子模块输出的全部列（含哨兵列），用于 schema 与 handler 默认列。"""
     return list(REPURCHASE_COLS) + [REPURCHASE_FRESHNESS_COL, REPURCHASE_VERSION_COL]
+
+
+def repurchase_feature_columns(
+    feature_set: str = REPURCHASE_FEATURE_SET_FULL,
+) -> List[str]:
+    """按列集取值返回训练/派生使用的列清单（含哨兵列，单一取值判定，无回退）。"""
+    if feature_set == REPURCHASE_FEATURE_SET_FULL:
+        return available_repurchase_columns()
+    if feature_set == REPURCHASE_FEATURE_SET_HEADROOM:
+        return [REPURCHASE_HEADROOM_COL, REPURCHASE_FRESHNESS_COL, REPURCHASE_VERSION_COL]
+    raise ValueError(
+        f"未知 repurchase 列集: {feature_set!r}（可选 {list(REPURCHASE_FEATURE_SETS)}）"
+    )
 
 
 def load_repurchase_lookup(loader: Any, trading_dates: List[str]) -> Dict[str, pd.DataFrame]:

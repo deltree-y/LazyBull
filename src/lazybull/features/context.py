@@ -51,6 +51,7 @@ class FeatureContext:
     dividend_data: Optional[pd.DataFrame] = None
     holdertrade_data: Optional[pd.DataFrame] = None
     repurchase_data: Optional[pd.DataFrame] = None
+    top10fh_data: Optional[pd.DataFrame] = None
 
     # ── 风控公告类数据（质押/解禁/大宗，PIT 日频截面）──
     pledge_data: Optional[pd.DataFrame] = None

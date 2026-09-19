@@ -78,6 +78,22 @@ REPURCHASE_FEATURE_COLUMNS = [
     "repurchase_schema_v1",  # schema 哨兵列（值 = 当前语义版本）
 ]
 
+# 十大流通股东因子（top10_floatholders，Phase 2；随开关显式入模）
+# 口径：报告期**状态保留 + freshness**（PIT 锚点 = ann_date；不设窗口、不做硬断崖），
+# 长线机构按 holder_type **整串相等**白名单（社保/养老/年金/保险/保险资管）；
+# 填充语义与事件族**相反**：未披露股票 ⇒ 值列 NaN（**禁止 0 填充**），
+# 哨兵列 tfh_schema_v1 随开关入模并校验语义版本。
+TOP10FH_FEATURE_COLUMNS = [
+    "tfh_top10_ratio",  # 前 10 大流通股东合计占流通比（%）
+    "tfh_top1_ratio",  # 第一大流通股东占流通比（%）
+    "tfh_inst_ratio",  # 长线机构合计占流通比（%）
+    "tfh_inst_count",  # 长线机构户数（0~10）
+    "tfh_social_security_flag",  # 前 10 中是否出现社保类持有人（0/1）
+    "tfh_concentration_chg",  # 集中度环比变化（百分点；对齐上一已存报告期）
+    "tfh_freshness_days",  # 距该报告期 ann_date 的自然日数（未披露 ⇒ NaN）
+    "tfh_schema_v1",  # schema 哨兵列（值 = 当前语义版本）
+]
+
 ALT_FEATURE_COLUMNS = [
     # 股东人数 (2)
     "holder_num_chg",  # 股东人数环比变动率

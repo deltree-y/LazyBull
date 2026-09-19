@@ -426,6 +426,36 @@ def _try_download_repurchase(
     return load_repurchase(storage)
 
 
+def _try_download_top10fh(
+    client: TushareClient,
+    storage: Storage,
+    trade_date: str,
+) -> Optional[pd.DataFrame]:
+    """下载/增量补齐十大流通股东数据（top10_floatholders，按 end_date 年分区）。
+
+    水位 = 分区内最大 `end_date`（报告期）；增量口径由 `download_top10fh`
+    内部解析（回拉最近 `TOP10FH_RESUME_OVERLAP_PERIODS` 个已存报告期 +
+    补齐区间内**尚无数据**的报告期——按报告期批量拉取的数据集缺一期即永久空洞）；
+    失败仅告警不阻断纸面链路。
+    """
+    from ...data.top10_floatholders_raw import TOP10FH_RESUME_OVERLAP_PERIODS, download_top10fh
+
+    start_year = int(str(trade_date)[:4]) - 1
+    try:
+        download_top10fh(
+            client,
+            storage,
+            start_date=f"{start_year}0101",
+            end_date=str(trade_date),
+        )
+    except Exception as e:  # noqa: BLE001 - 纸面链路必须 fail-soft
+        logger.warning(f"增量下载 top10_floatholders 失败: {e}")
+    logger.debug(
+        f"top10_floatholders 增量回拉窗口: 最近 {TOP10FH_RESUME_OVERLAP_PERIODS} 个已存报告期 + 缺口期"
+    )
+    return None
+
+
 def _try_download_forecast(
     client: TushareClient,
     storage: Storage,

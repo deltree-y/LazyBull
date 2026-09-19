@@ -174,6 +174,9 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         enable_holdertrade_features=True,
         holdertrade_feature_set="core",
         enable_repurchase_features=True,
+        repurchase_feature_set="headroom",
+        enable_top10fh_features=True,
+        top10fh_feature_set="concentration",
     )
 
     metadata = core_module._build_feature_flag_train_params(args)
@@ -187,6 +190,9 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         "enable_holdertrade_features": True,
         "holdertrade_feature_set": "core",
         "enable_repurchase_features": True,
+        "repurchase_feature_set": "headroom",
+        "enable_top10fh_features": True,
+        "top10fh_feature_set": "concentration",
     }
 
 

@@ -19,6 +19,7 @@ from .downloads import (
     _try_download_repurchase,
     _try_download_stk_holdernumber,
     _try_download_stk_holdertrade,
+    _try_download_top10fh,
 )
 from .historical_assets import (
     _try_ensure_historical_cyq_perf,
@@ -241,9 +242,7 @@ def _load_factor_data(
         if repurchase_df is not None and len(repurchase_df) > 0:
             from ...factors.repurchase import build_repurchase_lookup_by_date
 
-            repurchase_lookup = build_repurchase_lookup_by_date(
-                repurchase_df, factor_output_dates
-            )
+            repurchase_lookup = build_repurchase_lookup_by_date(repurchase_df, factor_output_dates)
             cur = repurchase_lookup.get(trade_date)
             if cur is not None and len(cur) > 0:
                 repurchase_today = cur
@@ -578,8 +577,41 @@ def _load_factor_data(
     block_trade_lookup = None
     gc.collect()
 
+    # ── 十大流通股东（报告期状态保留 + freshness，PIT 按 ann_date）──
+    # 面板容器（逐日全市场稠密 ⇒ 不用逐日字典）：raw 按年分区，只加载近 3 年
+    # （环比变化列需要上一已存报告期，3 年足够覆盖）；保鲜失败仅告警，
+    # 因子查询表始终构建（数据缺失时输出 NaN 列，保证推理侧 schema 与训练一致）。
+    from ...data.top10_floatholders_raw import top10fh_latest_end_date
+
+    top10fh_today = pd.DataFrame()
+    try:
+        from ...factors.top10_floatholders import (
+            build_top10fh_day_frame,
+            build_top10fh_panel,
+        )
+
+        current_year = int(str(trade_date)[:4])
+        latest_period = top10fh_latest_end_date(storage)
+        # 水位滞后于本年度首个报告期 ⇒ 尝试增量保鲜（fail-soft）
+        if latest_period is None or latest_period < f"{current_year}0331":
+            _try_download_top10fh(client, storage, trade_date)
+        years = [str(y) for y in (current_year, current_year - 1, current_year - 2)]
+        raw_top10fh = loader.load_top10_floatholders(years=years)
+        if raw_top10fh is not None and len(raw_top10fh) > 0:
+            panel = build_top10fh_panel(raw_top10fh)
+            top10fh_today = build_top10fh_day_frame(panel, trade_date)
+            logger.info(
+                f"十大流通股东因子: 已加载（面板 {len(panel):,} 行，当日截面 {len(top10fh_today)} 只）"
+            )
+        else:
+            missing_factors.append("top10_floatholders（十大流通股东）")
+    except Exception as e:  # noqa: BLE001 - 保鲜/构建失败不阻断纸面链路
+        logger.warning(f"十大流通股东数据 ensure 跳过（当日因子按未披露处理）: {e}")
+        top10fh_today = pd.DataFrame()
+    gc.collect()
+
     # ── 汇总报告 ────────────────────────────────────────────
-    total = 17
+    total = 18
     loaded = total - len(missing_factors)
     if missing_factors:
         logger.warning(
@@ -606,6 +638,7 @@ def _load_factor_data(
         dividend_today,
         holdertrade_today,
         repurchase_today,
+        top10fh_today,
         pledge_today,
         share_float_today,
         block_trade_today,

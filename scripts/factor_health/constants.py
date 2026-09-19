@@ -24,6 +24,8 @@ FAMILY_CONSTANT_NAMES: Dict[str, str] = {
     "DIVIDEND_POLICY_FEATURE_COLUMNS": "dividend",
     "MISSING_MARKER_FEATURE_COLUMNS": "missing_marker",
     "HOLDERTRADE_FEATURE_COLUMNS": "holdertrade",
+    "REPURCHASE_FEATURE_COLUMNS": "repurchase",
+    "TOP10FH_FEATURE_COLUMNS": "top10fh",
 }
 
 # 基础特征清单（prepare.py 内联列表）按主题分组，仅用于报告归类展示

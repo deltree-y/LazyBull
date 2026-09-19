@@ -17,6 +17,10 @@ from src.lazybull.factors.holdertrade import (
 from src.lazybull.factors.holdertrade import derive_holdertrade_columns
 from src.lazybull.factors.repurchase import available_repurchase_columns as _REPURCHASE_OUTPUT_COLS
 from src.lazybull.factors.repurchase import derive_repurchase_columns
+from src.lazybull.factors.top10_floatholders import (
+    available_top10fh_columns as _TOP10FH_OUTPUT_COLS,
+)
+from src.lazybull.factors.top10_floatholders import derive_top10fh_columns
 from src.lazybull.ml import ModelRegistry
 from src.lazybull.ml.ensemble import EnsembleModel
 from src.lazybull.ml.run_logger import (
@@ -279,6 +283,19 @@ def execute_split_training(
         )
         if derived_rp:
             logger.info(f"OOS 测试集派生股票回购列: {derived_rp}")
+
+    # 十大流通股东因子同为运行时派生（不写入 cs_train）：按模型特征列就地拼接
+    tfh_panel = getattr(args, "top10fh_panel", None)
+    tfh_output_cols = _TOP10FH_OUTPUT_COLS()
+    if tfh_panel is not None and any(col in feature_columns for col in tfh_output_cols):
+        derived_tfh = derive_top10fh_columns(
+            df_test_eval,
+            tfh_panel,
+            wanted=feature_columns,
+            log_prefix="[OOS 评估] ",
+        )
+        if derived_tfh:
+            logger.info(f"OOS 测试集派生十大流通股东列: {derived_tfh}")
 
     missing_test_columns = [col for col in feature_columns if col not in df_test_eval.columns]
     if missing_test_columns:

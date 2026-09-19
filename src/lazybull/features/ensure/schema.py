@@ -55,6 +55,7 @@ OPTIONAL_FACTOR_GROUP_CONSENSUS_REVISION = "consensus_revision"
 OPTIONAL_FACTOR_GROUP_DIVIDEND_POLICY = "dividend_policy"
 OPTIONAL_FACTOR_GROUP_HOLDERTRADE = "holdertrade"
 OPTIONAL_FACTOR_GROUP_REPURCHASE = "repurchase"
+OPTIONAL_FACTOR_GROUP_TOP10FH = "top10fh"
 
 _OPTIONAL_FACTOR_REQUIRED_COLS: Dict[str, List[str]] = {
     OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY: [
@@ -110,6 +111,16 @@ _OPTIONAL_FACTOR_REQUIRED_COLS: Dict[str, List[str]] = {
         "rp_freshness_days",
         "repurchase_schema_v1",
     ],
+    OPTIONAL_FACTOR_GROUP_TOP10FH: [
+        "tfh_top10_ratio",
+        "tfh_top1_ratio",
+        "tfh_inst_ratio",
+        "tfh_inst_count",
+        "tfh_social_security_flag",
+        "tfh_concentration_chg",
+        "tfh_freshness_days",
+        "tfh_schema_v1",
+    ],
 }
 
 # 兼容既有导入：表示基础列与全部可选组的并集，不再直接用于配置感知校验。
@@ -140,6 +151,10 @@ def _optional_factor_sentinel_specs() -> Dict[str, Tuple[str, int]]:
         REPURCHASE_SCHEMA_VERSION,
         REPURCHASE_VERSION_COL,
     )
+    from ...factors.top10_floatholders import (
+        TOP10FH_SCHEMA_VERSION,
+        TOP10FH_VERSION_COL,
+    )
 
     return {
         OPTIONAL_FACTOR_GROUP_CASHFLOW_QUALITY: (
@@ -161,6 +176,10 @@ def _optional_factor_sentinel_specs() -> Dict[str, Tuple[str, int]]:
         OPTIONAL_FACTOR_GROUP_REPURCHASE: (
             REPURCHASE_VERSION_COL,
             REPURCHASE_SCHEMA_VERSION,
+        ),
+        OPTIONAL_FACTOR_GROUP_TOP10FH: (
+            TOP10FH_VERSION_COL,
+            TOP10FH_SCHEMA_VERSION,
         ),
     }
 

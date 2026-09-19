@@ -579,6 +579,18 @@ class DataLoader(IncomeLoaderMixin, DividendLoaderMixin, AnnouncementRiskLoaderM
             return None
         return df
 
+    def load_top10_floatholders(
+        self, years: Optional[List[str]] = None
+    ) -> Optional[pd.DataFrame]:
+        """加载十大流通股东数据（按 end_date 报告期年分区；可指定年份子集）。"""
+        from .top10_floatholders_raw import load_top10fh
+
+        df = load_top10fh(self.storage, years=years)
+        if df is None or len(df) == 0:
+            logger.warning("未找到十大流通股东数据（top10_floatholders）")
+            return None
+        return df
+
     def load_stk_holdernumber(self) -> Optional[pd.DataFrame]:
         """加载股东人数数据（单文件）"""
         df = self.storage.load_raw("stk_holdernumber")

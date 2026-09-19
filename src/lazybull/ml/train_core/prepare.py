@@ -31,7 +31,6 @@ from .constants import (
     MARGIN_FEATURE_COLUMNS,
     MISSING_MARKER_FEATURE_COLUMNS,
     NORTH_FEATURE_COLUMNS,
-    REPURCHASE_FEATURE_COLUMNS,
     STATE_FRESHNESS_COLUMNS,
 )
 from .features import (
@@ -82,6 +81,10 @@ def prepare_training_data(
     holdertrade_feature_set: str = "full",
     enable_repurchase_features: bool = False,
     repurchase_lookup: Optional[dict] = None,
+    repurchase_feature_set: str = "full",
+    enable_top10fh_features: bool = False,
+    top10fh_panel: Optional[pd.DataFrame] = None,
+    top10fh_feature_set: str = "full",
     enable_availability_markers: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
@@ -119,6 +122,17 @@ def prepare_training_data(
             由 `factors.repurchase.load_repurchase_lookup` 构建）。启用
             `enable_repurchase_features` 时**必须提供**：本族列一律**运行时派生**，
             不写入 cs_train（与股东增减持同一先例）。
+        repurchase_feature_set: 股票回购列集取值（`full` / `headroom`）。**超参签名维度**，
+            禁止跨取值并组比较；`headroom` = **单列** `rp_price_headroom` 加哨兵列
+            （Phase 3 体检显示家族内仅该列有跨期稳定信息）。
+        top10fh_panel: 十大流通股东**报告期面板**（由 `factors.top10_floatholders.build_top10fh_panel`
+            构建；每股每报告期一行）。启用 `enable_top10fh_features` 时**必须提供**：
+            本族列一律**运行时派生**，不写入 cs_train（与股东增减持/股票回购同一先例）。
+            本族逐日全市场稠密 ⇒ 用面板容器而非逐日字典（内存原因，见审计 §6.5）。
+        top10fh_feature_set: 十大流通股东列集取值（`full` / `concentration`）。**超参签名维度**，
+            禁止跨取值并组比较；`concentration` = **单列** `tfh_concentration_chg` + 哨兵
+            （Phase 3 体检：家族内仅该列有强信息且正交；不含 freshness——与
+            `fundamental_freshness_days` ρ=0.999 重复）。
         freshness_strategy: freshness 处理策略。
             - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
             - state_keep_event_no_decay：状态型 freshness 保留，事件型 freshness 删除且不衰减对应特征值
@@ -524,6 +538,7 @@ def prepare_training_data(
             REPURCHASE_SCHEMA_VERSION,
             REPURCHASE_VERSION_COL,
             derive_repurchase_columns,
+            repurchase_feature_columns,
         )
 
         if repurchase_lookup is None:
@@ -534,7 +549,7 @@ def prepare_training_data(
                 " --enable-repurchase-features 启用，或先运行"
                 " python scripts/download_raw.py --download repurchase"
             )
-        rp_columns = list(REPURCHASE_FEATURE_COLUMNS)
+        rp_columns = repurchase_feature_columns(repurchase_feature_set)
         derived_rp = derive_repurchase_columns(
             df,
             repurchase_lookup,
@@ -559,7 +574,55 @@ def prepare_training_data(
                 "请确认特征分区不含本族列（本族列一律运行时派生）"
             )
         feature_columns.extend(rp_columns)
-        logger.info(f"启用股票回购因子（运行时派生）: {rp_columns}")
+        logger.info(f"启用股票回购因子（运行时派生，列集={repurchase_feature_set}）: {rp_columns}")
+
+    if enable_top10fh_features:
+        # 本族列同为**运行时派生**（不写回 cs_train）：报告期面板由调用方（CLI / walk_forward）构建。
+        from ...factors.top10_floatholders import (
+            TOP10FH_SCHEMA_VERSION,
+            TOP10FH_VERSION_COL,
+            derive_top10fh_columns,
+            top10fh_feature_columns,
+        )
+
+        if top10fh_panel is None:
+            raise ValueError(
+                "enable_top10fh_features=True 需要传入 top10fh_panel"
+                "（十大流通股东因子为运行时派生：本族列不写入 cs_train）。"
+                "请通过 train_ml_model.py / walk_forward.py 的"
+                " --enable-top10fh-features 启用，或先运行"
+                " python scripts/download_raw.py --download top10_floatholders"
+            )
+        tfh_columns = top10fh_feature_columns(top10fh_feature_set)
+        derived_tfh = derive_top10fh_columns(
+            df,
+            top10fh_panel,
+            wanted=tfh_columns,
+            log_prefix="[训练入口] ",
+        )
+        valid_cols = {c for c in df.columns}
+        missing_tfh = [col for col in tfh_columns if col not in valid_cols]
+        if missing_tfh:
+            raise ValueError(
+                "enable_top10fh_features=True，但十大流通股东特征 schema 不完整，"
+                f"缺少列: {missing_tfh}（已尝试运行时派生 {derived_tfh}）。"
+                "请检查 raw/top10_floatholders 数据与报告期面板"
+            )
+        # 哨兵校验：拦截旧语义特征分区（若分区自带本族列则不会被派生覆盖）被误用
+        tfh_sentinel = df[TOP10FH_VERSION_COL]
+        if tfh_sentinel.isna().any() or (
+            tfh_sentinel.fillna(-1) != TOP10FH_SCHEMA_VERSION
+        ).any():
+            raise ValueError(
+                "enable_top10fh_features=True，但特征分区的哨兵列 "
+                f"{TOP10FH_VERSION_COL} 存在缺失或版本不等于 "
+                f"{TOP10FH_SCHEMA_VERSION}（疑似混入旧语义分区），"
+                "请确认特征分区不含本族列（本族列一律运行时派生）"
+            )
+        feature_columns.extend(tfh_columns)
+        logger.info(
+            f"启用十大流通股东因子（运行时派生，列集={top10fh_feature_set}）: {tfh_columns}"
+        )
 
     # ── 市值中性化特征：仅纳入核心特征列表中稳定因子对应的 zscore_*_sz 列 ──
     # 避免稀疏因子（如一致预期）的 _sz 列在不同日期间存在/缺失导致 schema 不一致

@@ -2,6 +2,171 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.2] - 2026-09-19
+
+### Added
+
+- **`--top10fh-feature-set {full,concentration}` 列集开关**（超参签名维度，禁止跨取值并组比较）：
+  `concentration` = **单列 `tfh_concentration_chg` + 哨兵**；**故意不含 freshness**——
+  `tfh_freshness_days` 与 `fundamental_freshness_days` 实测 ρ=0.999（同一"报告新鲜度"轴），
+  且本族 freshness 为全市场覆盖、**不会**被缺失率门禁自动删除，纳入会把"1 列对照"变成
+  "1 值列 + 1 重复列"（口径定稿 §6.6 同步）。接线：`factors/top10_floatholders.py::top10fh_feature_columns`、
+  `prepare.py`、`training_core.py`（入 `train_params`）、`summary.py`、`walk_forward.py` / `train_ml_model.py` CLI、
+  `scripts/compare/constants.py` 展示名。
+- 测试：`tests/test_top10fh_factors.py` 新增单列集断言（含"不含 freshness"与未知取值报错）、
+  `tests/test_training_feature_flag_forwarding.py` metadata 含 `top10fh_feature_set`。
+
+### 记录（top10_floatholders Phase 4：单列 A 臂 A/B，**不通过 ⇒ 不采纳、家族终结**，2026-09-19）
+
+预登记 `docs/plans/top10fh_ab_prereg.md`（跑前写定）；报告 `docs/top10fh_wf_ab_result.md`。
+
+| 判据 | 结果 | 判定 |
+|---|---|---|
+| 判据 1 信号层 Δ平均持有期收益 ≥ −10 bps | **−18.08 bps**（Top20，相对 **−19.6%**）/ −16.36 bps（Top30）；95% 区间 **[−34.5, −0.9] / [−31.2, −1.6]**（三个块长上界**全部为负**） | ❌ 不通过（**非"带内不可判定"**，而是可检出的负效应） |
+| 判据 2 净值层 ΔMaxDD ≥ 0 且逐折 ≥ 9/14 | **ΔMaxDD −5.24pp**（回撤变大）、逐折改善 **8/14** | ❌ 不通过 |
+| 辅助 | ΔCAGR −3.45pp、Δ夏普 −0.133（落噪声带内、方向为负） | — |
+
+- 链式净值：B0 **17.58% / −22.79% / 0.731** → A **14.13% / −28.02% / 0.598**；
+  逐折收益为正仅 6/14，ΔMaxDD 点估计被折 6（−4.64pp）与折 5 拉负（中位 +0.54pp）。
+- **参照系**：holdertrade A2（4 列）−11.25 bps、repurchase 单列 −12.19 bps——
+  本臂单列 **−18.08 bps 为三轮最差** ⇒ 问题不在"列数稀释"，而是该列把排序往低效方向拽
+  （与预登记的方向风险一致：集中度变化与"户数下降/超跌集中"同向）。
+- 可比性放行（三点，沿 repurchase 先例）：逐折窗口逐字一致；B0 summary **连 `enable_top10fh_features`
+  列都没有**（开关天然惰性）；逐折 `*_features.json` B0 52 列无 `tfh_*` / A 臂 53 列恰为 `{tfh_concentration_chg}`。
+  ⚠️ `data_state_id` 相同**不构成**代码同一性证据（其间已新增本族开关代码）。
+- **处置**：开关保持**默认关**；**不再开新臂、禁止消融位搜索**；生产特征分区未写入任何 `tfh_*` 列
+  （仍为运行时派生）。三轮数据层家族（holdertrade / repurchase / top10fh）全部不通过且
+  "单列最好列"也一致为负 ⇒ 进一步支持「加列默认带稀释成本」契约。
+
+## [0.127.1] - 2026-09-18
+
+### Added
+
+- **top10_floatholders（十大流通股东）Phase 2：因子构建 + 四侧运行时派生接线**
+  （最小列集、默认关、可回退；口径定稿见 `docs/top10_floatholders_pit_audit.md` §6）：
+  - `src/lazybull/factors/top10_floatholders.py`：
+    `aggregate_top10fh_periods`（报告期聚合）、`build_top10fh_panel`（**报告期面板**：每股每报告期一行
+      + 环比变化列 + PIT 去重）、`build_top10fh_day_frame`（单日截面）、
+    `build_top10fh_lookup_by_date`（逐日表，**仅单日/短区间**）、`available_top10fh_columns`、
+    `top10fh_feature_columns`、`load_top10fh_panel`、`build_top10fh_feature_frame`（当日数值单一实现）、
+    `derive_top10fh_columns`（训练/OOS 侧就地派生）、`top10fh_coverage_report`。
+  - 因子列（6 值列 + freshness + 哨兵 `tfh_schema_v1`）：
+    `tfh_top10_ratio`（前 10 合计占流通比）、`tfh_top1_ratio`（第一大占流通比）、
+    `tfh_inst_ratio`（长线机构合计占流通比）、`tfh_inst_count`（长线机构户数）、
+    `tfh_social_security_flag`（社保类出现 0/1）、`tfh_concentration_chg`（集中度环比变化）、
+    `tfh_freshness_days`（距报告期 `ann_date` 自然日数）。
+  - **口径要点**：长线机构按 `holder_type` **整串相等**白名单（6 类：社保基金、社保机构 / 基本养老保险基金 /
+    企业年金 / 保险投资组合 / 保险资管产品 / 金融机构—保险公司，实测合计 4.66% 行占比；
+    基金类与资管/券商/信托**不纳入**，避免与 `fund_portfolio` 重叠）；同键同名多行取 `hold_amount` 最大行；
+    组内按金额降序取前 10；`hold_float_ratio` 组级缺失 6.99% ⇒ **缺失行按 0 贡献跳过**（不整组置 NaN）；
+    `tfh_top1_ratio` 取组内 max（同股同期流通股本一致 ⇒ 与金额最大行等价且可跳过缺失）；
+    环比变化对齐**上一已存报告期**（不用源侧 `hold_change`，缺失 22–55%）；
+    PIT = `ann_ord ≤ T` 的最新一次披露（同日多报告期取 `end_ord` 更大者），**状态保留 + freshness、不做硬断崖**。
+  - **填充语义（与事件族相反，登记在案）**：有已披露报告 ⇒ 真实值（**0 = 前 10 无此类持有人**）；
+    无任何已披露报告（新股）⇒ 值列与 freshness **NaN**，**禁止 0 填充**；哨兵列对全部行写当前版本。
+  - **运行时容器偏离既有逐日字典模式（原因登记）**：本族逐日全市场稠密（~5,500 只/日）⇒
+    训练/OOS 侧一律用**面板**（全历史 27 万行）经 `derive_top10fh_columns` 按 `ts_code` 分组 + `ann_ord`
+    向后匹配一次性对齐，**不物化逐日表**；`build_top10fh_lookup_by_date` 仅用于单日/短区间（超 260 日直接报错）。
+  - 接线（与可用性标记 / 股东增减持 / 股票回购同一先例，**不写回 cs_train / cs_infer**）：
+    `features/factor_handlers.py::Top10FhFactorHandler` + 注册表；`features/context.py` /
+    `builder/orchestration.py` / `pipeline.py`（`enable_top10fh` + 面板按日切片）；
+    `features/ensure/schema.py::OPTIONAL_FACTOR_GROUP_TOP10FH`（8 列 + 哨兵校验）；
+    纸面 `ensure/factor_load.py`（近 3 年 raw 面板 + fail-soft）与 `ensure/entry.py`；
+    训练侧 `ml/train_core/prepare.py::prepare_training_data(enable_top10fh_features, top10fh_panel)`
+    （派生 + 哨兵校验）；OOS 评估 `walk_forward/split_training.py`；OOS 回测 `walk_forward/backtest.py`；
+    CLI `--enable-top10fh-features`（`walk_forward.py` / `train_ml_model.py`）+ `runner.py` / `train_ml_model.py`
+    建面板 + `training_core.py` 入 `train_params` + `summary.py` 汇总列 + `scripts/compare/constants.py` 展示名；
+    `scripts/build_clean_features.py --enable-top10fh-features`（仅用于确需物化分区列的场景）。
+  - 体检就绪：`scripts/materialize_factor_health_snapshot.py --with-top10fh`（家族登记表新增一项，容器为面板）+
+    `scripts/factor_health/constants.py` 家族映射（`TOP10FH_FEATURE_COLUMNS` → `top10fh`）。
+  - 测试：`tests/test_top10fh_factors.py`（20 项：聚合/白名单/PIT/环比/handler/派生/列清单单一来源）、
+    `tests/test_top10fh_wiring.py`（5 项：训练入口需面板 + 哨兵拦截 + 派生入模 + OOS 回测派生/不派生）。
+    全量 **1984 passed**。
+
+### 记录（真实数据核验，2026-09-18）
+
+- **报告期面板**：247,006 行 / 6,171 只 / 78 个报告期，构建 9.1s；值列 NaN：`tfh_top10_ratio`/
+  `tfh_top1_ratio` 0.33%、`tfh_inst_ratio`/`tfh_inst_count`/`tfh_social_security_flag` 0% 、
+  `tfh_concentration_chg` 2.70%（首期无上一期）。
+- **单日截面**（20250630）：5,995 只（raw daily 5,405 只 ⇒ 含停牌/未交易股票）；
+  `tfh_top10_ratio` 分位 [21.5, 46.5, 72.2]、`tfh_inst_ratio` 分位 [0, 0, 1.53]、
+  `tfh_concentration_chg` 分位 [−2.76, −0.11, 1.85]。
+- **cs_train 真实分区派生冒烟**（20230630 / 20240102 / 20240628 / 20250630）：每分区 4.4k~5.0k 行、
+  派生 8 列 0.66s；值列 NaN **0.02%~0.06%**（未披露股票极少 ⇒ 不会被训练入口 0.6 缺失率门禁整体删除）；
+  `tfh_freshness_days` 中位 **62~66 天**；哨兵取值恒为 1。
+
+### 记录（top10_floatholders Phase 3 因子体检与诊断，2026-09-19）
+
+结论全文 `docs/top10_floatholders_factor_health.md`；产物 `data/reports/factor_health/top10fh_20260919/` +
+`data/reports/factor_diagnosis/top10fh_20260919/`。基线 `v24123_features.json`（与 stk_holdertrade / repurchase
+Phase 3 同一基线）+ 8 个 top10fh 列 = **162 列**、525 个采样交易日（20200102~20260702，every 3）。
+快照物化 + 体检 + 诊断全程 **8.5 分钟**（物化 525 分区 ≈6 min / 2.33 GB、体检 ≈1 min、诊断 ≈1.5 min）；
+物化器经家族登记表兼容"面板容器"（无需脚本主体改动）。
+
+- **覆盖率**：7 个值/freshness 列全期 1.000（2022 起 0.9994~0.9998，未披露股票极少），
+  低覆盖候选 0 条；口径退化检查 7 列全部"正常"（`collapse_ratio` 0.63~1.13）。
+- **强弱画像"一强 + 两中 + 四弱"**：
+  ⭐ `tfh_concentration_chg`（集中度环比变化）**IC +0.0156、IC-IR 0.573、t=+13.12（|t| 全表 76.5 百分位）、
+  6/7 年同号、高/低波动两 regime 同号（0.0135/0.0176）**，且家族内外均正交（最大 |ρ| 0.20）；
+  ✅ `tfh_top10_ratio` / `tfh_top1_ratio` 7/7 年同号但强度中位（|IC| ≈0.016~0.017，46~48 百分位）、
+  两者 ρ=0.79 同源；
+  ❌ `tfh_inst_ratio`（**偏 IC t=−5.58**，控制 `tfh_inst_count` 后显著负增量；且 ρ=0.990 与其同列 ⇒ `flag_dup`）、
+  `tfh_inst_count`（|IC| 1.9 百分位）、`tfh_social_security_flag`（翻号 + 与 inst 轴 ρ≈0.71）、
+  `tfh_freshness_days`（与 `fundamental_freshness_days` **ρ=0.999** ⇒ 与既有 freshness 完全重复）。
+- **正交性**：集中度轴对既有列 |ρ| ≤ 0.38（最强 `zscore_turnover_rate` −0.381、`cost_concentration` +0.333）；
+  `concentration_chg` 最强既有相关是 `holder_num_chg_2q` **−0.197**（集中度上升 ≈ 股东户数下降，
+  经济含义一致但远低于去重阈值）；机构轴与 `fund_portfolio` 家族 ρ≈**0.42**（部分重叠，不得当作完全正交）。
+- **候选项**：《数据改良候选清单》14 条中 **0 条**涉及 `tfh_*`；使用度 `gain_present_ratio=0.0` 属
+  "**尚未观测**"（无模型启用本族开关），**不得**读作"模型不用"。
+- **Phase 4 建议（登记待决策）**：**不跑 6/7 列全量 A/B**（列级预期效应落噪声带内、4 列为噪声/重复，
+  全列臂只会把稀释成本与噪声混在一起，结论必然"不通过"且无法归因）；若要做，
+  **唯一合理 A 臂 = 单列 `tfh_concentration_chg`**（同时是"加 1 列"的最干净稀释对照），
+  需先加列集开关 `--top10fh-feature-set {full,concentration}`，成本约 1.5~2 h。
+  无论是否开臂，本轮**不设默认开启**；**禁止**用列集开关之外的消融位搜索挑列。
+
+## [0.127.0] - 2026-09-18
+
+### Added
+
+- **top10_floatholders（十大流通股东）Phase 1：raw 接入 + 全历史回补**（薄接入、默认关、可回退；
+  Phase 0 审计合格见 `docs/top10_floatholders_pit_audit.md`，数据层第 4 个候选、第 3 个已被否）：
+  - `src/lazybull/data/top10_floatholders_raw.py`：`quarter_ends`（报告期枚举）、
+    `deduplicate_top10fh`（`ann_date`/`end_date` 规范化 + 非法剔除告警 + 全字段整行去重）、
+    `save_top10fh_by_year`（**按 `end_date` 年分区** `data/raw/top10_floatholders/YYYY-12-31.parquet`，
+    落盘前剔除陈旧分区）、`load_top10fh`、`top10fh_latest_end_date`（水位 = 分区内 max(`end_date`)）、
+    `resolve_incremental_periods`（**缺口补齐**：回拉最近 `TOP10FH_RESUME_OVERLAP_PERIODS=2` 个已存报告期
+    ∪ 区间内尚无数据的报告期——按报告期批量拉取的数据集缺一期即永久空洞，不得只从水位往后续传）、
+    `download_top10fh`（分页读满 + 年分区落盘 + 摘要）。
+  - 客户端 `TushareClient.get_top10_floatholders`（**单页上限 6000 且超限静默**：`limit=10000` 仍回 6000
+    ⇒ 固定 `limit=6000` + `offset` 翻页读到空）；**禁用 `start_date/end_date` 参数**（实测语义不透明），
+    增量一律按 `period`。
+  - 薄包装 `scripts/raw_download/top10_floatholders.py` + `download_raw.py --download top10_floatholders`
+    登记（`ALT_DATASETS` / CLI 帮助 / 调度 / `__init__` 导出）+ `DataLoader.load_top10_floatholders`。
+  - 测试 `tests/test_top10_floatholders_raw.py`（15 项）：模拟**静默截断**的假客户端（`min(page_limit, api_page_limit)`）
+    验证「触顶页继续翻」、跨页重复去重、年分区与陈旧分区清理、水位与缺口补齐、幂等、非法 `end_date` 报错。
+  - **生产回补实测（20070101~20260918，一次调用）**：**78 个报告期 / 2,887,432 行 / 20 个年分区
+    （2007-12-31 ~ 2026-12-31）**、年文件 1.39 MB（2007）~ 6.42 MB（2025）、耗时 **6m59s**、无错误；
+    报告期与分区年份逐一校验一致（无伪分区）、`ann_date` 非法 0 行、`ann_date < end_date` 0 行
+    （PIT 天然延后可见）；第二次调用仅回拉 2 期 + 补齐缺口，总行数不变（幂等）。
+    全量测试 **1959 passed**（+15）。
+
+### Fixed
+
+- **增量续传口径（实现期修正，已先改方案再改代码）**：首版按「水位之后 + 最近 2 期」续传，会**永久跳过
+  区间内更早的缺口报告期**——本数据集按报告期批量拉取，缺一期就是永久空洞（与按日期分区的
+  repurchase/holdertrade 语义不同）。改为 **缺口补齐**：`periods = 区间内尚无数据的报告期 ∪ 最近 2 个已存报告期`，
+  并把「回拉下界」限定为最近已存期的下界（不再被更早的缺口期拉低）。
+  实测：存量 2 期时本次拉取 78 期（2 回拉 + 76 补齐）。
+
+### 记录（验收口径修正：唯一键并非全历史唯一，2026-09-18）
+
+Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, holder_name)` 重复 0；
+**全历史落盘验收实测 861 组 / 1,731 行 / 0.06%**：全部是**同一 `ann_date` 下同名持有人出现两行不同金额**
+（例 `000001.SZ` 20110818 海通证券 47,886,357 / 49,305,821；`000011.SZ` 20260829 深圳市投资控股
+301,411,311 / 303,411,311），疑为同一公告的修订版与初版并存；加 `hold_amount` 后全库重复 0。
+⇒ **Phase 2 聚合必须登记**：同键多行**取 `hold_amount` 最大行**，**禁止求和**（重复计同一笔持仓）、
+**禁止按行取前 N**（会把同一人当成两个名次）。审计 §4/§7/§8 已同步（含"按 `end_date` 年分区"的笔误修正）。
+
 ## [0.126.0] - 2026-09-18
 
 ### Added
@@ -51,6 +216,50 @@ All notable changes to this project will be documented in this file.
 - **`amount` 整列缺失/全空直接报错**（禁止静默零因子）；`circ_mv` / `amount` / `vol` 缺列同样硬报错
   （即使当日无活跃公告也校验，避免无事件日静默通过）。
 
+### 记录（repurchase Phase 4：单列臂 A/B 预登记与运行，2026-09-18）
+
+预登记 `docs/plans/repurchase_ab_prereg.md`（跑前写定，不得按结果修改判据）；
+新增**列集开关** `--repurchase-feature-set {full,headroom}`（超参签名维度，沿 stk_holdertrade 先例）：
+`full` = 4 个值列 + freshness + 哨兵；`headroom` = **单列** `rp_price_headroom` + freshness + 哨兵
+（依据 Phase 3：家族内仅该列有跨期稳定信息）。接线：`factors/repurchase.py::repurchase_feature_columns`、
+`prepare_training_data(repurchase_feature_set=...)`、`walk_forward.py` / `train_ml_model.py` CLI、
+`train_params` 与 summary 列、`scripts/compare/constants.py` 展示名；测试新增列集校验 3 项。
+
+- **A 臂 = 单列 `rp_price_headroom`**（同时是“加 1 列”的最干净稀释对照）；B0 复用既有 14 折基线
+  `data/walk_forward/batches/phase4_ht_ab_20260917_base/`（不重跑，省 1.5 h）。
+- 判据与 stk_holdertrade A/B 完全一致（信号层 ±10 bps 尺子 + 净值层 ΔMaxDD 主判据 + 逐折同向数），
+  并**预登记了归因约束**：`high_limit ÷ VWAP − 1` 在下跌后变大，与反转/超跌同向，
+  即使通过也只能归因为“该代理有效”，需另做“剔除价格分子”对照才能归因到回购本身。
+- **结论（跑完当日）：不通过 ⇒ 不采纳，家族终结**（报告 `docs/repurchase_wf_ab_result.md`）：
+  A 臂 14/14 折、1h32m（查询表 3,185 交易日、2.17M 活跃事件行；每折仅多 1 列）：
+  **判据 1 信号层 Δ −12.19 bps（Top20，相对 −13.2%）/ −12.98 bps（Top30）⇒ 超 −10 bps 门槛“加列稀释”不通过**；
+  **判据 2 主判据 ΔMaxDD +2.58pp（点估计达标）但逐折 MaxDD 改善仅 7/14（要求 ≥9/14）⇒ 不通过**；
+  辅助 ΔCAGR −3.23pp / Δ夏普 −0.126（均在噪声带内、方向为负）；逐折收益 12/14 变差。
+  链式净值：B0 CAGR 17.58%/MaxDD −22.79%/夏普 0.731 → A 14.35%/−20.21%/0.605。
+  **参照**：holdertrade A1（8 列）+5.03/+7.00 bps、A2（4 列）−11.25 bps；本臂**1 列比 4 列还差**
+  ⇒ 不是单纯列数稀释，而是该列把排序往低效方向拽（与反转/超跌同向的解释一致）。
+- 运行：`--batch-run-id phase4_rp_headroom_20260918`，日志 `logs/phase4_rp_headroom_20260918.log`。
+
+### 记录（top10_floatholders Phase 0 PIT 审计：合格 → 可进 Phase 1，2026-09-18）
+
+审计全文 `docs/top10_floatholders_pit_audit.md`（数据层第 4 个候选；第 3 个 disclosure_date 已否）。
+
+- 接口 `top10_floatholders`（十大流通股东，9 列，含 `holder_name/hold_amount/hold_ratio/
+  hold_float_ratio/hold_change/holder_type`）；**按 `period` 批量拉取**，每期 5.5 万行 / 5,559 只股票。
+- **分页契约**：**单页 6000（`limit=10000` 仍回 6000，静默截断）** ⇒ 必须分页；
+  `period=20231231` 分页读满 **54,890 行 / 10 页**；**跨页重复 0**（与前两族的 1.8% / 0.31% 不同）。
+- **完整性断言通过**：25 只单股独立拉取 250 行与分页子集按键对齐后**逐列 0 差异**（首轮"逐行不一致"经定向诊断
+  确认为**排序伪影**——`hold_change` 含 NaN + 重复排序键；教训：完整性测试必须按键对齐比较）。
+- **PIT 合格**：`ann_date` 缺失/非法 **0%**；同期多版本（>1 个 ann_date）仅 **0.02% / 0%**（两期）
+  ⇒ **无需版本状态机**，按 `ann_date ≤ T` 过滤即可；历史可回溯到 **2007 年**。
+  ⚠️ `start_date/end_date` 参数语义不透明（疑似按报告期过滤）⇒ **Phase 1 禁用**，增量一律按 `period`。
+- **唯一键** = `(ts_code, end_date, ann_date, holder_name)`（重复 0）；行数分布 =10 占 96%、<10 占 3.0%、>10 占 1.0%。
+- 缺失率：`hold_float_ratio` 1.11%、**`hold_change` 23.69%**（环比应自算，不用该列）。
+- **正交价值**：`holder_type` 可显式识别 **社保基金 1.54% / 保险投资组合 1.16% / 基本养老保险基金 0.43%**
+  等长线机构——现有 `holder_num`（散户户数）/ `fund_portfolio`（公募）/ `margin` 均不覆盖。
+- **存储布局（§5.1 方案阶段已定）**：**按年分区** `data/raw/top10_floatholders/YYYY-12-31.parquet`；
+  水位 = 分区内 max(`end_date`)；刷新 = 重拉最近 2 个已存报告期 + 新期；全字段去重；年文件预估 3~6 MB。
+
 ### 记录（实现期实测，2026-09-18）
 
 - **训练入口门禁行为（与 stk_holdertrade 一致）**：6 列中 4 个值列入模（NaN 0.0000%），
@@ -95,6 +304,22 @@ All notable changes to this project will be documented in this file.
   `disclose_pressure`（临近截止未披露）/ `disclose_lead_days`（提前天数）/ `disclose_delay_flag`（逾期）；
   启动条件 = 先证明控制 `express`/`forecast`/`fundamental_freshness_days` 后偏 IC 显著（|t| ≥ 3 量级），
   否则只作登记不开工。
+
+### 记录（数据层新候选盘点，2026-09-18）
+
+前三个候选（stk_holdertrade / repurchase / disclosure_date）全部有结论后重新**实测盘点** TuShare 接口
+（不读文档推断），全文 `docs/data_layer_candidate_survey.md`：
+
+- 候选实测（可用性 / **批量能力** / PIT 锚点 / 体量）：
+  **① `top10_floatholders`**：按 `period` 批量可取（**单页上限 6,000 行需 offset 翻页**）、
+  PIT 锚点 `ann_date` ✓、全历史 ≈ 400 万行 ⇒ **首选**（正交轴 = 保险/社保/QFII/私募/大户持仓结构）。
+  **② `fina_audit`**：✓ 可用但**必须逐股查询**（按日期/报告期均报「必填参数, ts_code」）⇒ 全量 ≈ 5,000 次调用；
+  抽样 148 只实测：非标意见 **5.13%**（带强调 2.98% / 无法表示 1.32% / 保留 0.83%）、`audit_fees` 缺失 57.4%、
+  `ann_date` 缺失 0.37%、`ann_date − end_date` 中位 110 天、全市场 ~5,000 行/年 ⇒ **次选**（信号正交、风控用）。
+  **③ `stk_surv`**：按日期批量（单页 400）但**无 `ann_date`**（只有 `surv_date`）⇒ 需保守锚定 `+3 交易日`。
+  **④ `index_weight`**：可行、PIT 干净、匹配度一般（备选）。
+- 淘汰：`fina_mainbz`（必须逐股 × 逐期 = 40 万次调用）、`stk_factor_pro`（261 列与自算技术因子冗余）、
+  `cyq_chips`（全市场约 20 亿行）、`anns_d`（**无接口权限**）、北向个股持仓（口径切换后不再披露）。
 
 ## [0.125.0] - 2026-09-17
 

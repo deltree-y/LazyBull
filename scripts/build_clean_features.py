@@ -45,6 +45,7 @@ OPTIONAL_FEATURE_FLAG_ATTRS = (
     "enable_dividend_policy_features",
     "enable_holdertrade_features",
     "enable_repurchase_features",
+    "enable_top10fh_features",
     "enable_announcement_risk_features",
 )
 
@@ -191,6 +192,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--enable-top10fh-features",
+        action="store_true",
+        default=False,
+        help=(
+            "启用十大流通股东因子（前 10 集中度/第一大/长线机构占比与户数/社保标志/环比变化；"
+            "需先下载 top10_floatholders 数据）。注意：常规训练/回测/纸面为**运行时派生**，"
+            "无需重建特征；本开关仅用于确需把本族列物化进特征分区（如因子体检扫描）的场景"
+        ),
+    )
+    parser.add_argument(
         "--enable-announcement-risk-features",
         action="store_true",
         help="启用风控公告类因子（质押/解禁/大宗，PIT 前向填充；需先下载 pledge_stat/share_float/block_trade）",
@@ -226,6 +237,7 @@ def main():
     logger.info(f"分红政策因子: {'启用' if args.enable_dividend_policy_features else '禁用'}")
     logger.info(f"股东增减持因子: {'启用' if args.enable_holdertrade_features else '禁用'}")
     logger.info(f"股票回购因子: {'启用' if args.enable_repurchase_features else '禁用'}")
+    logger.info(f"十大流通股东因子: {'启用' if args.enable_top10fh_features else '禁用'}")
     logger.info(f"风控公告类因子: {'启用' if args.enable_announcement_risk_features else '禁用'}")
     if args.horizon is not None:
         logger.info(f"标签过滤模式: single (主 horizon={args.horizon})")
@@ -295,6 +307,7 @@ def main():
                 enable_dividend_policy=args.enable_dividend_policy_features,
                 enable_holdertrade=args.enable_holdertrade_features,
                 enable_repurchase=args.enable_repurchase_features,
+                enable_top10fh=args.enable_top10fh_features,
                 enable_announcement_risk=args.enable_announcement_risk_features,
                 use_parallel=args.parallel,
                 parallel_jobs=args.parallel_jobs,

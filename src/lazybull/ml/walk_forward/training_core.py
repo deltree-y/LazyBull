@@ -49,6 +49,9 @@ def _build_feature_flag_train_params(args: Any) -> Dict[str, Any]:
         "enable_holdertrade_features": bool(getattr(args, "enable_holdertrade_features", False)),
         "holdertrade_feature_set": str(getattr(args, "holdertrade_feature_set", "full")),
         "enable_repurchase_features": bool(getattr(args, "enable_repurchase_features", False)),
+        "repurchase_feature_set": str(getattr(args, "repurchase_feature_set", "full")),
+        "enable_top10fh_features": bool(getattr(args, "enable_top10fh_features", False)),
+        "top10fh_feature_set": str(getattr(args, "top10fh_feature_set", "full")),
         "enable_availability_markers": bool(getattr(args, "enable_availability_markers", False)),
     }
 
@@ -199,6 +202,10 @@ def _train_model_on_window(
         holdertrade_feature_set=getattr(args, "holdertrade_feature_set", "full"),
         enable_repurchase_features=getattr(args, "enable_repurchase_features", False),
         repurchase_lookup=getattr(args, "repurchase_lookup", None),
+        repurchase_feature_set=getattr(args, "repurchase_feature_set", "full"),
+        enable_top10fh_features=getattr(args, "enable_top10fh_features", False),
+        top10fh_panel=getattr(args, "top10fh_panel", None),
+        top10fh_feature_set=getattr(args, "top10fh_feature_set", "full"),
         enable_availability_markers=getattr(args, "enable_availability_markers", False),
         feature_stability_filter=args.feature_stability_filter,
         factor_prune=args.factor_prune,

@@ -439,6 +439,32 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         default=False,
         help="启用股票回购因子（运行时派生；需先下载 repurchase）",
     )
+    parser.add_argument(
+        "--repurchase-feature-set",
+        choices=("full", "headroom"),
+        default="full",
+        help=(
+            "股票回购列集：full=4 个值列+freshness+哨兵；headroom=仅 rp_price_headroom+freshness+哨兵"
+            "（超参签名维度，禁止跨取值并组比较）"
+        ),
+    )
+
+    # 十大流通股东因子（运行时派生；需先下载 top10_floatholders）
+    parser.add_argument(
+        "--enable-top10fh-features",
+        action="store_true",
+        default=False,
+        help="启用十大流通股东因子（运行时派生；需先下载 top10_floatholders）",
+    )
+    parser.add_argument(
+        "--top10fh-feature-set",
+        choices=("full", "concentration"),
+        default="full",
+        help=(
+            "十大流通股东列集：full=6 个值列+freshness+哨兵；concentration=仅 tfh_concentration_chg+哨兵"
+            "（超参签名维度，禁止跨取值并组比较）"
+        ),
+    )
 
     # 其他参数
     parser.add_argument(

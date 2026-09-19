@@ -26,6 +26,7 @@ from src.lazybull.factors.repurchase import (
     build_repurchase_feature_frame,
     build_repurchase_lookup_by_date,
     derive_repurchase_columns,
+    repurchase_feature_columns,
 )
 from src.lazybull.features.factor_handlers import RepurchaseFactorHandler
 from src.lazybull.ml.train_core.constants import REPURCHASE_FEATURE_COLUMNS
@@ -403,3 +404,25 @@ def test_derive_requires_unique_index(lookup):
 def test_feature_columns_consistent_with_factor_columns():
     """列集双处单一来源：factors 与 train_core.constants 必须一致（有测试锁定）。"""
     assert REPURCHASE_FEATURE_COLUMNS == available_repurchase_columns()
+
+
+def test_feature_set_columns_full_and_headroom():
+    """列集开关：full = 4 值列 + freshness + 哨兵；headroom = 单值列 + freshness + 哨兵。"""
+    assert repurchase_feature_columns("full") == available_repurchase_columns()
+    assert repurchase_feature_columns("headroom") == [
+        "rp_price_headroom",
+        REPURCHASE_FRESHNESS_COL,
+        REPURCHASE_VERSION_COL,
+    ]
+    with pytest.raises(ValueError, match="未知 repurchase 列集"):
+        repurchase_feature_columns("unknown")
+
+
+def test_derive_headroom_set_only_writes_headroom(lookup):
+    """单列臂：只派生 headroom（+ freshness + 哨兵），其余值列不得出现。"""
+    features = _features_frame(["000001.SZ"])
+    wanted = repurchase_feature_columns("headroom")
+    added = derive_repurchase_columns(features, lookup, wanted=wanted)
+    assert sorted(added) == sorted(wanted)
+    assert "rp_amount_to_mv_90d" not in features.columns
+    assert features["rp_price_headroom"].iloc[0] == pytest.approx(0.2, rel=1e-6)

@@ -182,6 +182,7 @@ def ensure_features_for_date(
             dividend_today,
             holdertrade_today,
             repurchase_today,
+            top10fh_today,
             pledge_today,
             share_float_today,
             block_trade_today,
@@ -231,6 +232,7 @@ def ensure_features_for_date(
             dividend_data=dividend_today,
             holdertrade_data=holdertrade_today,
             repurchase_data=repurchase_today,
+            top10fh_data=top10fh_today,
             pledge_data=pledge_today,
             share_float_data=share_float_today,
             block_trade_data=block_trade_today,
@@ -248,6 +250,7 @@ def ensure_features_for_date(
         dividend_today = pledge_today = share_float_today = block_trade_today = None
         holdertrade_today = None
         repurchase_today = None
+        top10fh_today = None
         gc.collect()
 
         # 9. 保存结果

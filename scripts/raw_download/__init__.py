@@ -15,6 +15,7 @@ from .basic import download_basic_data
 from .cli import _bypass_proxy_for_download, _should_bypass_proxy_for_download, main
 from .holdertrade import download_stk_holdertrade
 from .repurchase import download_repurchase_dataset
+from .top10_floatholders import download_top10fh_dataset
 from .core import (
     _DOWNLOAD_CONCURRENCY,
     ALT_DATASETS,

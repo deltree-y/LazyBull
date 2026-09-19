@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="派生股票回购列（repurchase，运行时派生家族）",
     )
+    parser.add_argument(
+        "--with-top10fh",
+        action="store_true",
+        help="派生十大流通股东列（top10_floatholders，运行时派生家族）",
+    )
     parser.add_argument("--skip-health", action="store_true", help="只物化，不跑体检")
     parser.add_argument(
         "--skip-usage",
@@ -158,6 +163,22 @@ def _runtime_family_specs(enabled: Dict[str, bool]) -> Dict[str, Dict[str, objec
             "extra_cols": ["circ_mv", "amount", "vol"],
             "download_name": "repurchase",
         }
+    if enabled.get("top10fh"):
+        from src.lazybull.factors.top10_floatholders import (
+            available_top10fh_columns,
+            build_top10fh_panel,
+            derive_top10fh_columns,
+        )
+
+        specs["top10fh"] = {
+            "columns": available_top10fh_columns(),
+            "load_raw": lambda loader: loader.load_top10_floatholders(),
+            # 本族逐日全市场稠密 ⇒ 容器为**报告期面板**（不用逐日字典，见审计 §6.5）
+            "build_lookup": lambda raw, dates: build_top10fh_panel(raw),
+            "derive": derive_top10fh_columns,
+            "extra_cols": [],
+            "download_name": "top10_floatholders",
+        }
     return specs
 
 
@@ -178,6 +199,7 @@ def materialize(args: argparse.Namespace) -> Dict[str, object]:
         {
             "holdertrade": bool(args.with_holdertrade),
             "repurchase": bool(args.with_repurchase),
+            "top10fh": bool(args.with_top10fh),
         }
     )
     runtime_cols: List[str] = []
@@ -225,7 +247,8 @@ def materialize(args: argparse.Namespace) -> Dict[str, object]:
                     f"python scripts/download_raw.py --download {spec.get('download_name', name)}）"
                 )
             lookups[name] = spec["build_lookup"](raw, dates)  # type: ignore[operator]
-            logger.info(f"运行时家族 {name}: 查询表 {len(lookups[name])} 个交易日")  # type: ignore[arg-type]
+            container_size = len(lookups[name])  # type: ignore[arg-type]
+            logger.info(f"运行时家族 {name}: 容器 {container_size} 项")
 
     started = time.perf_counter()
     total_bytes = 0

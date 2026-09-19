@@ -52,6 +52,7 @@ LazyBull 是一个轻量级的A股量化研究与回测框架，专注于**价�
 - 🧪 **分红政策质量因子（待 WF 验证）**: 分红稳定性/增长率、归母净利润支付率 + 双日期稠密事件因子，每股调整口径 PIT 截断、`ex_date` 防前视
 - 🧪 **股东增减持因子（stk_holdertrade，待 WF 验证）**: 30/90 日自然日窗口的净增持比例（含高管/非高管拆分）、披露日计数与强度加速度，`ann_date` 唯一 PIT 锚点，窗口外显式填 0 保证全市场覆盖
 - 🧪 **股票回购因子（repurchase，待 WF 验证）**: 90/180 日自然日窗口的**已回购金额增量 / 流通市值**（执行类公告为累计口径 ⇒ 取增量，禁止直接求和）、已执行标志、回购价上限相对现价空间，`ann_date` 唯一 PIT 锚点，窗口外显式填 0 保证全市场覆盖
+- 🧪 **十大流通股东因子（top10_floatholders，待 WF 验证）**: 报告期状态保留 + freshness（`ann_date` 唯一 PIT 锚点）；前 10 集中度 / 第一大占比 / **长线机构**（社保·养老·年金·保险）合计占比与户数 / 社保标志 / 集中度环比变化；未披露股票为 NaN（**禁止 0 填充**）
 - ✅ **IC优化指南**: 提供系统性的 IC/RankIC 提升方案和诊断工具
 - ✅ **数据质量看板**: 按本地数据截止日扫描 raw/clean/features 的覆盖率、区间加权缺失率、异常值、schema 版本和同步水位，输出离线 HTML 报告与 Parquet 快照
 - ✅ **默认参数优化**: Top N=5, 初始资金=50万, 周频调仓, 默认排除ST
@@ -151,6 +152,11 @@ python scripts/download_raw.py --start-date 20200101 --end-date 20231231 --downl
 # 股票回购数据（repurchase，按月窗口分页读满 + ann_date 年分区）
 # 接口单页上限 2000 行且超限不报错（2022 全年真实 6034 行，不翻页丢 67%）；水位=分区内最大 ann_date
 python scripts/download_raw.py --start-date 20100101 --end-date 20260917 --download repurchase
+
+# 十大流通股东数据（top10_floatholders，按报告期批量拉取 + end_date 年分区）
+# 接口单页上限 6000 行且超限不报错（单期 5.5 万行 / 10 页）；水位=分区内最大 end_date，
+# 增量 = 回拉最近 2 个已存报告期 + 补齐区间内尚无数据的报告期（缺一期就是永久空洞）
+python scripts/download_raw.py --start-date 20070101 --end-date 20260918 --download top10_floatholders
 
 # 利润表归母净利润（分红支付率，首次接入需强制建立 f_ann_date 版本化季度分区）
 python scripts/download_raw.py --start-date 20170101 --end-date 20231231 --download income --force
@@ -270,6 +276,8 @@ python scripts/materialize_factor_health_snapshot.py \
   --skip-usage --usage-model-count 2 \
   --out-root temp/ht_health_root_20260917
 ```
+
+家族开关：`--with-holdertrade` / `--with-repurchase` / `--with-top10fh`（可在一次运行中并列）。
 
 产物：`<out-root>/reports/factor_health|factor_diagnosis/`（台账、候选清单、报告、特征清单）。
 `--skip-usage` 用于模型以 `_model.json`（而非 `_model.joblib`）落盘时——此时工具侧使用度为“缺失”，
@@ -393,6 +401,10 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
 # 使用股票回购因子（**运行时派生**，无需重建 cs_train；需先下载 repurchase 年分区）
 python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
   --enable-repurchase-features
+
+# 使用十大流通股东因子（**运行时派生**，无需重建 cs_train；需先下载 top10_floatholders 年分区）
+python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
+  --enable-top10fh-features
 
 # 步骤2: 使用 ML 模型运行回测（使用新的默认值）
 # 注意：scripts/run_ml_backtest.py 已删除，回测已并入 walk_forward 滚动回测，
@@ -789,8 +801,9 @@ LazyBull/
 │   ├── runtime_local.yaml     # 本地运行配置
 │   └── runtime_cloud.yaml     # 云端运行配置
 ├── data/                       # 数据目录
-│   ├── raw/                   # 原始数据（支持按日分区）
+│   ├── raw/                   # 原始数据（按日分区，部分数据集按年分区见下）
 │   │   └── {name}/            # 按日分区: YYYY-MM-DD.parquet
+│   │                          # 按年分区: YYYY-12-31.parquet（dividend/stk_holdertrade/repurchase/top10_floatholders）
 │   ├── clean/                 # 清洗后数据（支持按日分区）
 │   │   └── {name}/            # 按日分区: YYYY-MM-DD.parquet
 │   ├── features/              # 特征数据

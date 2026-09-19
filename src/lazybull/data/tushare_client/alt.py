@@ -42,6 +42,36 @@ class ClientAltMixin:
             kwargs["end_date"] = end_date
         return self.query("cyq_perf", **kwargs)
 
+    def get_top10_floatholders(
+        self,
+        ts_code: Optional[str] = None,
+        period: Optional[str] = None,
+        ann_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """获取十大流通股东数据（top10_floatholders）。
+
+        **单页 6000 行且超限不报错**（Phase 0 实测：`limit=10000` 仍回 6000）⇒ 批量拉取必须
+        用 `_query_with_pagination(page_limit=6000)` 按 `period` 翻页读满；
+        **不要使用 `start_date/end_date`**（审计 §3：语义不透明，疑似按报告期过滤）；
+        PIT 锚点 = `ann_date`（缺失 0%）。本方法只用于单笔/单股查询。
+
+        Args:
+            ts_code: 股票代码
+            period: 报告期，格式 YYYYMMDD（如 20231231）
+            ann_date: 公告日期，格式 YYYYMMDD（返回行会跨多个报告期，慎用）
+
+        Returns:
+            十大流通股东 DataFrame
+        """
+        kwargs = {}
+        if ts_code is not None:
+            kwargs["ts_code"] = ts_code
+        if period is not None:
+            kwargs["period"] = period
+        if ann_date is not None:
+            kwargs["ann_date"] = ann_date
+        return self.query("top10_floatholders", **kwargs)
+
     def get_fund_portfolio(
         self,
         ts_code: Optional[str] = None,
