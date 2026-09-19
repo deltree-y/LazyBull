@@ -19,6 +19,11 @@ from src.lazybull.common.config import get_data_root, get_stock_selection_models
 from src.lazybull.common.logger import setup_logger
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.ml import ModelRegistry
+from src.lazybull.risk.terminal_loss.exposure_online import (
+    DailyExposureProvider,
+    OnlinePolicyConfig,
+    log_exported_table_provenance,
+)
 
 from .backtest import run_oos_backtest
 from .deploy_training import execute_deploy_training
@@ -37,6 +42,59 @@ from .utils import (
     print_splits_summary,
     resolve_deploy_train_window,
 )
+
+
+def write_policy_lambda_series(provider, summary_csv_path, wf_run_id: str) -> None:
+    """落盘在线政策的逐日 λ 与统计（`policy_lambda_<run_id>.csv` / `.json`）。
+
+    CSV 是**证据归档**（可回放、可对比），不参与决胜：引擎不读它。
+    除 `date`/`multiplier` 外并入日级面板列（折号/市场波动/平均风险分等）供审计；
+    未被判定的日期（无持仓/窗口不足）无面板行，只保留顺延后的 λ。
+    """
+    import json
+
+    out_dir = Path(summary_csv_path).parent
+    series = provider.lambda_series()
+    if series.empty:
+        logger.warning("在线政策：无判定日，跳过逐日 λ 落盘")
+        return
+    panel = provider.daily_series()
+    if not panel.empty and "date" in panel.columns:
+        series = series.merge(panel, on="date", how="left")
+    csv_path = out_dir / f"policy_lambda_{wf_run_id}.csv"
+    series.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    summary = provider.stats_summary()
+    summary["lambda_days"] = int(len(series))
+    summary["lambda_trigger_days"] = int((series["multiplier"] < 1.0).sum())
+    json_path = out_dir / f"policy_lambda_{wf_run_id}.json"
+    json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(
+        f"在线政策逐日 λ 已落盘: {csv_path.name}（{summary['lambda_days']} 日，"
+        f"降暴露 {summary['lambda_trigger_days']} 日）"
+    )
+
+
+def build_online_policy_provider(args, data_root: str) -> DailyExposureProvider:
+    """构建在线政策 provider（P2-5：λ_t 随持仓现算；不读任何预导出系数表）。"""
+    policy_root = getattr(args, "policy_model_root", None)
+    arm_suffix = getattr(args, "policy_arm_suffix", None)
+    if not policy_root:
+        raise ValueError("--exposure-policy 需要同时提供 --policy-model-root（折模型来源）")
+    if not arm_suffix:
+        raise ValueError(
+            "--exposure-policy 需要同时提供 --policy-arm-suffix（折目录后缀，如 _d5_v6m_fscore）"
+        )
+    config = OnlinePolicyConfig.parse(args.exposure_policy)
+    return DailyExposureProvider(
+        config,
+        risk_root=policy_root,
+        arm_suffix=arm_suffix,
+        data_root=str(data_root),
+        coverage_start=getattr(args, "policy_coverage_start", None),
+        book="pre_exec",
+        verbose=True,
+    )
+
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*mismatched devices.*")
 # test 期延伸到数据末尾时，标签列（如 y_ret_20）在最近 N 个交易日全为 NaN，concat 时触发此警告
@@ -225,6 +283,18 @@ def run_walk_forward(args) -> None:
         logger.info(
             f"  暴露覆盖（P2-3 shadow）: {args.exposure_table} → {len(exposure_table)} 日"
             f"（降暴露 {reduced} 日，系数集合={sorted(set(exposure_table.values()))}）"
+        )
+        # 冻结产物溯源：打印 meta，缺失时告警（表绑定持仓路径，改配置必须重导）
+        log_exported_table_provenance(Path(args.exposure_table))
+    if getattr(args, "exposure_policy", None) and exposure_table is not None:
+        raise ValueError("--exposure-policy 与 --exposure-table 互斥（单变量直读，禁止叠加）")
+    exposure_policy = None
+    if getattr(args, "exposure_policy", None):
+        exposure_policy = build_online_policy_provider(args, effective_data_root)
+        logger.info(
+            f"  暴露政策（P2-5 在线现算）: {exposure_policy.config.describe()}"
+            f"（指纹 {exposure_policy.fingerprint}，模型根 {exposure_policy.risk_root}"
+            f"{exposure_policy.arm_suffix}）"
         )
 
     try:
@@ -484,10 +554,9 @@ def run_walk_forward(args) -> None:
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,
                             exposure_table=exposure_table,
+                            exposure_policy=exposure_policy,
                             exposure_replenish=bool(getattr(args, "exposure_replenish", False)),
-                            exposure_trim_tolerance=getattr(
-                                args, "exposure_trim_tolerance", None
-                            ),
+                            exposure_trim_tolerance=getattr(args, "exposure_trim_tolerance", None),
                             holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
                             repurchase_lookup=getattr(args, "repurchase_lookup", None),
                             top10fh_panel=getattr(args, "top10fh_panel", None),
@@ -572,6 +641,10 @@ def run_walk_forward(args) -> None:
 
             # ── 串联各 split 的 OOS 回测净值曲线 ──────────────────
             chain_nav_splits(results, summary_csv_path, wf_run_id)
+
+            # 在线政策（P2-5）：逐日 λ 与统计落盘（审计与口径比对）
+            if exposure_policy is not None:
+                write_policy_lambda_series(exposure_policy, summary_csv_path, wf_run_id)
         else:
             logger.warning("没有成功完成的训练，跳过生成汇总文件")
 

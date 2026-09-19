@@ -471,7 +471,7 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "暴露门控**对称回补**（P2-4）：上限放开且存在未回补减仓额时，T+1 按比例把持仓补回；"
-            "需与 --exposure-table 同时使用"
+            "需与 --exposure-table 或 --exposure-policy 同时使用"
         ),
     )
     parser.add_argument(
@@ -626,6 +626,31 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
             "启用后 OOS 回测的买入预算基数乘上信号日的暴露系数（缩减/暂停加仓）；"
             "表为 None 时不启用（成交与净值与改动前逐位一致）。文件名建议 ASCII"
         ),
+    )
+    # 政策层 P2-5：在线现算（λ_t 随持仓实时计算，不读预导出表）
+    parser.add_argument(
+        "--exposure-policy",
+        default=None,
+        help=(
+            "在线暴露政策 `k=v,k=v`（如 arm=combined,mode=rolling,window=250,regime_q=0.6667,"
+            "score_q=0.5,lambda=0.5）；与 --exposure-table 互斥。"
+            "需同时给出 --policy-model-root 与 --policy-arm-suffix"
+        ),
+    )
+    parser.add_argument(
+        "--policy-model-root",
+        default=None,
+        help="terminal_loss 折模型根目录（如 data/walk_forward/terminal_risk_wf）",
+    )
+    parser.add_argument(
+        "--policy-arm-suffix",
+        default=None,
+        help="折目录后缀（如 _d5_v6m_fscore），决定使用哪套风险模型",
+    )
+    parser.add_argument(
+        "--policy-coverage-start",
+        default=None,
+        help="政策覆盖起点（YYYYMMDD，含）；默认不限（由折 ES 区间决定是否判定）",
     )
 
     # 仓位管理模式

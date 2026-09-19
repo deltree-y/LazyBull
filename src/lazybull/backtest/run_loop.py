@@ -36,6 +36,8 @@ class BacktestRunLoopMixin:
 
         # 创建日期到索引的映射，优化查找效率
         date_to_idx = {date: idx for idx, date in enumerate(trading_dates)}
+        # 在线政策 provider（P2-5）需要当日交易日位置（剩余持有交易日口径与快照一致）
+        self._trade_date_index = date_to_idx
 
         # 准备价格索引（使用 MultiIndex，替代嵌套字典）
         self._prepare_price_index(price_data)

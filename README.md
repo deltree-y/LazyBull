@@ -584,7 +584,7 @@ python scripts/calibrate_exposure_gate.py `
 
 ### 暴露覆盖影子回测（P2-3，引擎侧真实成交）
 
-把 E2 的逐日暴露系数表（`--export-table` 产物，两列 CSV：`日期, 暴露系数`）接入回测引擎，
+把 E2 的逐日暴露系数表（`--export-table` 产物，两列 CSV：`日期, 暴露系数`；现已同时写 `<table>.csv.meta.json` 记录策略口径与导出源）接入回测引擎，
 即可在同批模型、同期间的 14 折 OOS 上真实对比（约 10 分钟/臂）：
 
 ```powershell
@@ -617,6 +617,39 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 （减仓现金等下一次调仓才回补，+7.14pp / 总 +10.47pp）；② 收益 ≈95% 集中在 2024-01/02 与 2025-04/10
 （2024-11 反为 −3.32pp）；③ 逐折收益仅 2/4 为正，跨折稳健的是**回撤与波动**。
 三条未验证项（参数敏感性 / 对称回补 / 事件依赖）与完整归因见 `docs/terminal_loss_risk_register.md` R-004 §8。
+
+### 暴露政策在线现算（P2-5，v0.127.4：不再需要导出系数表）
+
+系数表与持仓路径绑定（换任何影响持仓的配置都要重算），所以现在**直接把策略写成参数**，
+由引擎逐日现算 λ_t（`f(折模型, 判定日持仓, 当日截面)`，与离线判定**共用同一套实现**）：
+
+```powershell
+# 默认臂已就位（脚本配置区 $exposure_arm_list = e2online），直接跑即可：
+#   $policy_model_root = "data\walk_forward\terminal_risk_wf"   # 折模型来源
+#   $policy_arm_suffix = "_d5_v6m_fscore"
+#   $exposure_arm_list = @( [PSCustomObject]@{ Name = "e2online";
+#       Policy = "arm=combined,mode=rolling,window=250,regime_q=0.6667,score_q=0.5,lambda=0.5";
+#       Table = ""; Replenish = $false; Tolerance = 0; StopLoss = $false } )
+powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 -SkipCompare
+
+# 需要基线对照（不启用政策、与历史基线逐位一致）时：命令行一键切回 neutral 臂
+powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 -NoExposure -SkipCompare
+
+# 多臂对照：在配置区清单里并列多条 [PSCustomObject]（每条跑一遍，臂名自动拼进 batch label）
+```
+
+- `Policy`（在线）与 `Table`（原系数表，已退化为缓存/回放）**互斥**；命令行同名参数退化为
+  “单臂覆盖”（给出任一暴露参数即忽略清单，不叠加）；`-NoExposure` = 命令行一键基线臂；
+  只给 `-ExposureReplenish`/`-TrimTolerance` 而不给政策源会**直接报错**（禁止静默忽略）；
+- λ_t 用**判定时点持仓**（当日执行前），逐日归档 `raw/policy_lambda_<run_id>.csv`（含日级面板列）
+  + `.json`（策略口径/模型来源/指纹/统计），便于审计与回放；
+- 默认覆盖各折 ES 全区间（2022-07 起）；需要与历史扫描同覆盖时用 `--policy-coverage-start 20240102`
+  （**只抑制动作、不抑制历史**，阈值窗口不冷启动）。
+
+**在线口径复核（2026-09-19）**：崩盘月贡献逐值可复现（2024-01 +6.00pp / 2024-02 +4.04pp 与冻结表臂相同），
+但**主判据不可复现**——冻结表臂 ΔMaxDD +1.02pp vs 在线臂（同覆盖）**−0.15pp**，
+差异归因于 5/446 日 λ 翻转改写的 2024-06/07 路径 ⇒ 暴露政策保留为**可选能力（默认关）**，
+**不得**以回撤改善为由启用；详情与两个在线通路缺陷的修复见 `docs/terminal_loss_policy_online_result.md`。
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的
 基线、仅保留 `dividend_yield_hist_12m` 的分红方案，以及仅保留 `fcf_yield` 和

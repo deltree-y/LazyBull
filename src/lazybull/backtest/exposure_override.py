@@ -19,7 +19,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 from loguru import logger
@@ -53,17 +53,69 @@ class BacktestExposureOverrideMixin:
 
     #: 日期(YYYYMMDD) → 暴露系数；None 表示不启用
     exposure_table: Optional[Dict[str, float]] = None
+    #: 在线政策 provider（terminal_loss P2-5）：需实现 ``multiplier_for(date, holdings)``
+    exposure_policy_provider: Any = None
+    #: 在线 provider 统计（由 provider 自身持有，此处仅记录摘要）
+    exposure_policy_summary: Optional[Dict[str, object]] = None
     #: 查表统计
     exposure_stats: Optional[ExposureOverrideStats] = None
     #: 未在表中出现的日期集合（用于告警样例）
     _exposure_missing_dates: Dict[str, int] = {}
 
+    def _has_exposure_source(self) -> bool:
+        """是否启用任一种暴露政策源（系数表 或 在线 provider）。"""
+        return bool(self.exposure_table) or self.exposure_policy_provider is not None
+
     def _date_key(self, date) -> str:
         """统一日期键格式（YYYYMMDD）。"""
         return str(date)[:10].replace("-", "")
 
+    def _get_holdings_rows_for_policy(self, date) -> pd.DataFrame:
+        """当前持仓行（供在线 provider 打分；与持仓快照同列名）。"""
+        portfolio_value = self._calculate_portfolio_value(date)
+        rows = []
+        for stock in self.positions:
+            value = self._position_market_value(date, stock)
+            rows.append(
+                {
+                    "ts_code": stock,
+                    "weight": (value / portfolio_value) if portfolio_value else None,
+                    "remaining_intervals": self._remaining_intervals(date, stock),
+                }
+            )
+        return pd.DataFrame(rows, columns=["ts_code", "weight", "remaining_intervals"])
+
+    def _remaining_intervals(self, date, stock: str) -> Optional[int]:
+        """剩余持有交易日（与持仓快照同一口径：E = 买入位置 + holding_period）。"""
+        info = self.positions.get(stock) or {}
+        buy_date = info.get("buy_date")
+        if buy_date is None or not hasattr(self, "_trade_date_index"):
+            return None
+        buy_idx = self._trade_date_index.get(buy_date)
+        idx = self._trade_date_index.get(date)
+        if buy_idx is None or idx is None:
+            return None
+        return int(buy_idx + self.holding_period - idx - 1)
+
     def _get_exposure_multiplier(self, date) -> float:
-        """查当日暴露系数；未启用或日期缺失均返回 1.0。"""
+        """取当日暴露系数；未启用或日期缺失均返回 1.0。
+
+        优先级：在线 provider（现算，P2-5）> 系数表；两者均为空时直接返回 1.0
+        （默认关闭必须与改动前逐位一致）。
+        """
+        if self.exposure_policy_provider is not None and not self.exposure_table:
+            holdings = self._get_holdings_rows_for_policy(date)
+            multiplier = float(self.exposure_policy_provider.multiplier_for(date, holdings))
+            if not 0.0 < multiplier <= 1.0:
+                raise ValueError(
+                    f"在线政策 provider 返回非法系数 {multiplier}（日期 {self._date_key(date)}）；"
+                    f"政策层只允许降暴露，禁止加杠杆"
+                )
+            if self.exposure_stats is not None:
+                self.exposure_stats.covered_days += 1
+                if multiplier < 1.0:
+                    self.exposure_stats.reduced_days += 1
+            return multiplier
         if not self.exposure_table:
             return 1.0
         key = self._date_key(date)
@@ -129,8 +181,59 @@ class BacktestExposureOverrideMixin:
             self.exposure_table = None
             self.exposure_stats = None
 
+    def set_exposure_policy(
+        self,
+        provider: Any,
+        verbose: bool = True,
+        replenish: bool = False,
+        trim_tolerance: Optional[float] = None,
+    ) -> None:
+        """装载**在线政策 provider**（terminal_loss P2-5：λ_t 随持仓现算）。
+
+        Args:
+            provider: 需实现 ``multiplier_for(date, holdings) -> λ``；None = 关闭（逐位一致）
+            verbose: 是否打印装载日志
+            replenish: 是否启用对称回补（P2-4）
+            trim_tolerance: 减仓/回补共用容差；None = 保留引擎默认
+        """
+        if trim_tolerance is not None:
+            if not 0.0 < float(trim_tolerance) < 1.0:
+                raise ValueError(f"trim_tolerance 必须落于 (0, 1)，当前 {trim_tolerance}")
+            self.exposure_trim_tolerance = float(trim_tolerance)
+        if provider is not None and not hasattr(provider, "multiplier_for"):
+            raise TypeError(
+                "在线政策 provider 必须实现 multiplier_for(date, holdings)；"
+                "传入函数/其他对象一律拒绝（避免第二套接口）"
+            )
+        self.exposure_policy_provider = provider
+        self.exposure_replenish_enabled = bool(replenish) and provider is not None
+        if provider is None:
+            self.exposure_policy_summary = None
+            return
+        self.exposure_table = None
+        self.exposure_stats = ExposureOverrideStats()
+        self._exposure_missing_dates = {}
+        if verbose:
+            summary = getattr(provider, "stats_summary", None)
+            detail = summary() if callable(summary) else {}
+            self.exposure_policy_summary = detail
+            logger.info(
+                "暴露政策已启用（在线现算）: "
+                f"{detail.get('policy_config', 'provider')}"
+                f"（指纹 {detail.get('policy_fingerprint', 'n/a')}）"
+            )
+
     def get_exposure_report(self) -> Dict[str, object]:
-        """返回查表统计（未启用时为 enabled=False）。"""
+        """返回政策源统计（未启用时为 enabled=False）。"""
+        if self.exposure_policy_provider is not None and not self.exposure_table:
+            summary = getattr(self.exposure_policy_provider, "stats_summary", None)
+            detail = dict(summary() if callable(summary) else {})
+            detail["enabled"] = True
+            detail["source"] = "online"
+            stats = self.exposure_stats or ExposureOverrideStats()
+            detail["covered_days"] = stats.covered_days
+            detail["reduced_days"] = stats.reduced_days
+            return detail
         if not self.exposure_table:
             return {"enabled": False}
         stats = self.exposure_stats or ExposureOverrideStats()

@@ -68,7 +68,7 @@ class BacktestExposureTrimMixin:
             trading_dates: 交易日列表（保持接口一致，本方法不使用）
             date_to_idx: 日期到索引映射（保持接口一致，本方法不使用）
         """
-        if self.exposure_table is None or not self.positions:
+        if not self._has_exposure_source() or not self.positions:
             return
 
         multiplier = self._get_exposure_multiplier(date)
@@ -139,7 +139,9 @@ class BacktestExposureTrimMixin:
             trading_dates: 交易日列表（保持接口一致，本方法不使用）
             date_to_idx: 日期到索引映射（保持接口一致，本方法不使用）
         """
-        if self.exposure_table is None or not self.pending_exposure_trims:
+        # 注意：政策源可能是在线 provider（此时 exposure_table 为 None），
+        # 必须统一用 _has_exposure_source 判定，否则减仓单会被静默丢弃
+        if not self._has_exposure_source() or not self.pending_exposure_trims:
             return
 
         pending = self.pending_exposure_trims

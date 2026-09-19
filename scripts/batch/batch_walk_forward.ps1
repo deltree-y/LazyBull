@@ -7,13 +7,27 @@
 #   全部完成后自动运行 compare_walk_forward.py 生成对比 Excel。
 #
 # 示例启动：
-#   powershell -ExecutionPolicy Bypass -File .\scripts\batch_walk_forward.ps1# 命令行覆盖暴露系数表（影子实验用，不影响默认生产行为）：
-#   powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 -ExposureTable "temp\exposure_e2_rolling250.csv"
+#   powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
+# 暴露政策（默认启用，配在下方“参数配置区”的 $exposure_arm_list）：
+#   默认臂 e2online = E2-滚动250、λ=0.5、在线现算；
+#   · 命令行一键切回基线：-NoExposure
+#   · 命令行临时换策略：-ExposurePolicy "arm=combined,..." -SkipCompare
+#   · 与 R-004 §9 同覆盖：-PolicyCoverageStart 20240102
 
 param(
-    # 暴露门控系数表（两列 CSV：日期, 暴露系数）；留空 = 不启用暴露覆盖
+    # 本块全部是【命令行覆盖参数】：留空 = 用下方“参数配置区”的默认值（生产取值一律在配置区，不在这里）
+    # 暴露门控系数表（两列 CSV：日期, 暴露系数）；留空 = 不用表（是否启用政策由配置区臂清单决定）
     [string]$ExposureTable = "",
-    # 暴露门控对称回补（P2-4；需同时传 -ExposureTable）
+    # 在线暴露政策（P2-5，`k=v,k=v`，如 arm=combined,mode=rolling,window=250,regime_q=0.6667,score_q=0.5,lambda=0.5）
+    # 与 -ExposureTable 互斥；给出后 λ_t 随持仓逐日现算（不读预导出表）
+    [string]$ExposurePolicy = "",
+    # terminal_loss 折模型根目录（在线政策必需；留空 = 用配置区默认）
+    [string]$PolicyModelRoot = "",
+    # 折目录后缀（在线政策必需；如 _d5_v6m_fscore）
+    [string]$PolicyArmSuffix = "",
+    # 政策覆盖起点（YYYYMMDD；留空 = 由折 ES 区间决定）
+    [string]$PolicyCoverageStart = "",
+    # 暴露门控对称回补（P2-4；必须与 -ExposurePolicy 或 -ExposureTable 同传，否则直接报错）
     [switch]$ExposureReplenish,
     # 减仓/回补共用容差（组合总值比例，如 0.06）；<=0 = 用引擎默认 3%
     [double]$TrimTolerance = 0,
@@ -21,6 +35,8 @@ param(
     [switch]$StopLoss,
     # 止损回撤阈值（%，仅在 -StopLoss 时生效）
     [int]$StopLossDrawdownPct = 20,
+    # 一键切回基线臂（不启用暴露政策/系数表；与暴露类参数互斥）
+    [switch]$NoExposure,
     # 影子多臂实验省时开关：加上 -SkipCompare 则不跑运行后自动汇总对比
     [switch]$SkipCompare
 )
@@ -32,13 +48,70 @@ param(
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
 $skip_training           = $true   # $true 启用 | $false 禁用
 
-# ── 暴露门控系数表（影子实验；留空 = 不启用）───────────────────
-# 可用命令行 -ExposureTable 覆盖；系数表落于 (0,1]，缺失日按 1.0 处理
-$exposure_table          = $ExposureTable
-# 对称回补（P2-4）：仅当同时给出系数表时生效
-$exposure_replenish      = [bool]$ExposureReplenish
-# 减仓/回补共用容差（<=0 = 引擎默认 3%）
-$exposure_trim_tolerance = $TrimTolerance
+# ── 政策层（暴露门控）配置 ─────────────────────────────
+# 模型来源（在线现算必需）：终端损失模型的折目录根与后缀
+$policy_model_root       = if ($PolicyModelRoot -ne "") { $PolicyModelRoot } else { "data\walk_forward\terminal_risk_wf" }
+$policy_arm_suffix       = if ($PolicyArmSuffix -ne "") { $PolicyArmSuffix } else { "_d5_v6m_fscore" }
+# 覆盖起点：留空 = 各折 ES 全区间（2022-07 起生效，推荐、贴近实盘）；
+# 需与 R-004 §9 总扫描同覆盖时填 "20240102"（只抑制动作、不抑制阈值历史）
+$policy_coverage_start   = $PolicyCoverageStart
+
+# ── 暴露臂清单（每个元素一个臂；Policy 与 Table 互斥，同时给出直接报错）──
+# Name      : 臂名（拼进 batch-period-label，便于汇总/产物分辨）
+# Policy    : 在线政策 spec（空 = 不用；需 $policy_model_root / $policy_arm_suffix）
+# Table     : 系数表 CSV（空 = 不用；仅用于回放/缓存，正确性绑定一份持仓路径）
+# Replenish : 对称回补（P2-4）；Tolerance : 减仓/回补容差（0 = 引擎默认 3%）
+# StopLoss  : 该臂启用止损
+#
+# 默认臂 = R-004 §9 扫描的**登记基准臂**（E2-滚动250、λ=0.5、在线现算、不裁剪覆盖）：
+#   · λ∈{0.3,0.5,0.7} 与 q_regime=0.50 五个臂中，该组是预登记判据通过且逐折 MaxDD 4/4 的基准；
+#   · λ=0.3 数值更大（ΔMaxDD +1.41pp / Δ收益 +23.2pp）但已登记为“滞留行为收益驱动的放大”，
+#     **不得读作更优参数** ⇒ 不默认；
+#   · Replenish（对称回补）已登记「回补生效但代价可见」（Δ收益 −5.41pp、ΔMaxDD 几乎不变）⇒ 默认关；
+#   · StopLoss 对照已登记不通过（ΔMaxDD −0.14pp、逐折 3/4）⇒ 默认关；
+#   · 在线口径复核：崩盘月贡献逐值可复现（2024-01/02），但主判据 ΔMaxDD 由 +1.02pp（冻结表）
+#     变为 −0.15pp（在线同覆盖）⇒ 默认值用于**日常回测一致性**，不得当作已证实的回撤改善
+#     （见 docs/terminal_loss_policy_online_result.md）。
+$exposure_arm_list = @(
+    [PSCustomObject]@{
+        Name = "e2online"; Policy = "arm=combined,mode=rolling,window=250,regime_q=0.6667,score_q=0.5,lambda=0.5"
+        Table = ""; Replenish = $false; Tolerance = 0; StopLoss = $false
+    }
+    # 需要基线对照（不启用政策、与历史基线逐位一致）时，换成下面这一臂：
+    #[PSCustomObject]@{ Name = "neutral"; Policy = ""; Table = ""; Replenish = $false; Tolerance = 0; StopLoss = $false }
+)
+# 命令行覆盖：给出任一暴露参数 ⇒ 忽略上面清单，按命令行构造单臂（不叠加）
+# -NoExposure = 强制基线臂（与暴露类参数互斥）
+if ($NoExposure -and (
+    $ExposureTable -ne "" -or $ExposurePolicy -ne "" -or [bool]$ExposureReplenish -or $TrimTolerance -gt 0
+)) {
+    throw "-NoExposure 与 -ExposurePolicy / -ExposureTable / -ExposureReplenish / -TrimTolerance 互斥"
+}
+$cli_arm_specified = (
+    $ExposureTable -ne "" -or $ExposurePolicy -ne "" -or [bool]$ExposureReplenish -or
+    $TrimTolerance -gt 0 -or [bool]$StopLoss -or [bool]$NoExposure
+)
+if ($cli_arm_specified) {
+    $cli_policy    = if ($NoExposure) { "" } else { $ExposurePolicy }
+    $cli_table     = if ($NoExposure) { "" } else { $ExposureTable }
+    $cli_replenish = if ($NoExposure) { $false } else { [bool]$ExposureReplenish }
+    $cli_tolerance = if ($NoExposure) { 0 } else { $TrimTolerance }
+    $cli_arm_name  = if ($NoExposure) { "neutral" } else { "cli" }
+    $exposure_arm_list = @(
+        [PSCustomObject]@{
+            Name = $cli_arm_name; Policy = $cli_policy; Table = $cli_table
+            Replenish = $cli_replenish; Tolerance = $cli_tolerance; StopLoss = [bool]$StopLoss
+        }
+    )
+}
+foreach ($arm in $exposure_arm_list) {
+    if ($arm.Policy -ne "" -and $arm.Table -ne "") {
+        throw "暴露臂 $($arm.Name): Policy 与 Table 互斥（单变量直读）"
+    }
+    if (($arm.Replenish -or $arm.Tolerance -gt 0) -and $arm.Policy -eq "" -and $arm.Table -eq "") {
+        throw "暴露臂 $($arm.Name): 回补/容差需要同时给出 -ExposurePolicy 或 -ExposureTable（无政策源时回补无意义，禁止静默忽略）"
+    }
+}
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -224,7 +297,7 @@ $deploy_train            = $true   # $true 启用 | $false 禁用
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
-$stagger_tranches_list   = @(1)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+$stagger_tranches_list   = @(2)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -251,16 +324,13 @@ $kelly_max_leverage_list          = @(0.2)    #0.2 Kelly 单股仓位上限（�
 # ── 空仓/持有期拖尾提前调仓（独立开关）────
 $enable_early_rebalance_on_empty_list = @($true)  # 可多值如 @($false, $true)
 
-# ── OOS 止损（总开关）────────────────────────────────────────
-# 0426这里应为true
-$bt_stop_loss_enabled                 = [bool]$StopLoss   # $true 启用 | $false 禁用（可用 -StopLoss 打开）
-# 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
+# ── OOS 止损（总开关）─────────────────────────────────────
+# 每臂由 $exposure_arm_list.StopLoss 控制（见上方臂清单）；下方参数仅在启用时生效
 $bt_stop_loss_drawdown_pct_list       = @($StopLossDrawdownPct) # 回撤止损阈值（%）
 $bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
-# ── 政策层 E2 shadow（P2-3）──────────────────────────────
-# 空字符串 = 不启用（成交与净值与改动前逐位一致）；否则指向两列 CSV（日期, 暴露系数）
-# 路径必须 ASCII（PowerShell 组装命令串会转码中文）；导出时务必按交易日历补齐台账缺口
-# 取值直接来自顶部 param -ExposureTable（留空即生产默认：不启用）
+# ── 政策层（暴露门控 P2-3 / 在线现算 P2-5）──────────────────
+# 取值来自上方 $exposure_arm_list（每个元素一个臂）；逐个拼进 python 命令。
+# 系数表路径必须 ASCII（PowerShell 组装命令串会转码中文）；导出时务必按交易日历补齐台账缺口。
 # ── 路径 ─────────────────────────────────────────────────────
 $data_root               = "./data"
 
@@ -488,7 +558,8 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $enable_early_rebalance_on_empty_list.Length *
               $position_sizing_list.Length *
               $kelly_vol_window_list.Length *
-              $kelly_max_leverage_list.Length
+              $kelly_max_leverage_list.Length *
+              $exposure_arm_list.Length
 
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -497,6 +568,8 @@ Write-Host "  批次ID     : $batch_run_id" -ForegroundColor Cyan
 Write-Host "  时间段数   : $($normalized_wf_period_configs.Count)" -ForegroundColor Cyan
 Write-Host "  时间段列表 : $periodSummary" -ForegroundColor Cyan
 Write-Host "  总任务数   : $totalTasks" -ForegroundColor Cyan
+Write-Host "  暴露臂     : $(($exposure_arm_list | ForEach-Object { $_.Name }) -join ', ')" -ForegroundColor Cyan
+Write-Host "  风险模型源 : $policy_model_root ($policy_arm_suffix)" -ForegroundColor Cyan
 Write-Host "  数据目录   : $data_root" -ForegroundColor Cyan
 Write-Host "  批次目录   : $batch_output_root" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
@@ -539,8 +612,15 @@ foreach ($enable_early_rebalance_on_empty in $enable_early_rebalance_on_empty_li
 foreach ($position_sizing in $position_sizing_list) {
 foreach ($kelly_vol_window in $kelly_vol_window_list) {
 foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
+foreach ($exposure_arm in $exposure_arm_list) {
 
     $count++
+    $arm_name        = [string]$exposure_arm.Name
+    $arm_policy      = [string]$exposure_arm.Policy
+    $arm_table       = [string]$exposure_arm.Table
+    $arm_replenish   = [bool]$exposure_arm.Replenish
+    $arm_tolerance   = [double]$exposure_arm.Tolerance
+    $arm_stop_loss   = [bool]$exposure_arm.StopLoss
     $split_count = $wfPeriod.SplitCount
     $final_date = $wfPeriod.FinalDate
     $period_label = $wfPeriod.Label
@@ -550,6 +630,9 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         "{0}_{1}" -f $period_label, $final_date
     } else {
         $period_label
+    }
+    if ($arm_name -ne "" -and $arm_name -ne "neutral" -and $arm_name -ne "cli") {
+        $batch_period_label = "{0}_{1}" -f $batch_period_label, $arm_name
     }
     $start_model_version = $wfPeriod.StartModelVersion
     $selected_splits = @($wfPeriod.SelectedSplits)
@@ -695,18 +778,28 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         if ($null -ne $bt_max_per_industry) {
             $pythonCmd += " --bt-max-per-industry $bt_max_per_industry"
         }
-        if ($bt_stop_loss_enabled) {
+        if ($arm_stop_loss) {
             $pythonCmd += " --bt-stop-loss-enabled" +
                           " --bt-stop-loss-drawdown-pct $bt_stop_loss_drawdown_pct" +
                           " --bt-stop-loss-consecutive-limit-down $bt_stop_loss_consecutive_limit_down"
         }
-        if ($exposure_table -ne "") {
-            $pythonCmd += " --exposure-table `"$exposure_table`""
-            if ($exposure_replenish) {
+        if ($arm_policy -ne "") {
+            $pythonCmd += " --exposure-policy `"$arm_policy`"" +
+                          " --policy-model-root `"$policy_model_root`"" +
+                          " --policy-arm-suffix $policy_arm_suffix"
+            if ($policy_coverage_start -ne "") {
+                $pythonCmd += " --policy-coverage-start $policy_coverage_start"
+            }
+        }
+        if ($arm_table -ne "") {
+            $pythonCmd += " --exposure-table `"$arm_table`""
+        }
+        if ($arm_policy -ne "" -or $arm_table -ne "") {
+            if ($arm_replenish) {
                 $pythonCmd += " --exposure-replenish"
             }
-            if ($exposure_trim_tolerance -gt 0) {
-                $pythonCmd += " --exposure-trim-tolerance $exposure_trim_tolerance"
+            if ($arm_tolerance -gt 0) {
+                $pythonCmd += " --exposure-trim-tolerance $arm_tolerance"
             }
         }
     } else {
@@ -733,9 +826,9 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
 
     Write-Host ""
     if ($continue_days -gt 1) {
-        Write-Host "[任务 $count / $totalTasks][时间段 $period_label][split=$split_count, final=$final_date][day=$($continue_offset + 1)/$continue_days]" -ForegroundColor Green
+        Write-Host "[任务 $count / $totalTasks][时间段 $period_label][臂 $arm_name][split=$split_count, final=$final_date][day=$($continue_offset + 1)/$continue_days]" -ForegroundColor Green
     } else {
-        Write-Host "[任务 $count / $totalTasks][时间段 $period_label][split=$split_count, final=$final_date]" -ForegroundColor Green
+        Write-Host "[任务 $count / $totalTasks][时间段 $period_label][臂 $arm_name][split=$split_count, final=$final_date]" -ForegroundColor Green
     }
     Write-Host $pythonCmd -ForegroundColor Gray
     Write-Host ""
@@ -762,7 +855,7 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合循环）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合+暴露臂）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

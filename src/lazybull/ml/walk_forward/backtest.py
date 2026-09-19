@@ -1,6 +1,6 @@
 """Walk-forward 单 split OOS 回测执行。"""
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 from loguru import logger
@@ -48,6 +48,7 @@ def run_oos_backtest(
     initial_capital: float = 1000000.0,
     split_num: Optional[int] = None,
     exposure_table: Optional[Dict[str, float]] = None,
+    exposure_policy: Any = None,
     exposure_replenish: bool = False,
     exposure_trim_tolerance: Optional[float] = None,
     holdertrade_lookup: Optional[Dict[str, pd.DataFrame]] = None,
@@ -194,6 +195,14 @@ def run_oos_backtest(
         replenish=exposure_replenish,
         trim_tolerance=exposure_trim_tolerance,
     )
+    # 政策层 P2-5：在线现算 provider（与系数表互斥；None = 不启用）
+    if exposure_policy is not None:
+        engine.set_exposure_policy(
+            exposure_policy,
+            verbose=True,
+            replenish=exposure_replenish,
+            trim_tolerance=exposure_trim_tolerance,
+        )
 
     nav_curve = engine.run(
         start_date=pd.Timestamp(bt_start),
@@ -231,7 +240,10 @@ def run_oos_backtest(
     }
     split_tag = f"Split {split_num} | " if split_num is not None else ""
     # 政策层 E2（P2-3 shadow）：减仓/回补统计（未启用暴露表时不输出）
-    if getattr(engine, "exposure_table", None) is not None:
+    if (
+        getattr(engine, "exposure_table", None) is not None
+        or getattr(engine, "exposure_policy_provider", None) is not None
+    ):
         logger.info(f"{split_tag}暴露门控减仓统计: {engine.get_exposure_trim_report()}")
         logger.info(f"{split_tag}暴露门控回补统计: {engine.get_exposure_replenish_report()}")
     logger.info(

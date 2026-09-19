@@ -84,7 +84,7 @@ class BacktestExposureReplenishMixin:
             trading_dates: 交易日列表（保持接口一致，本方法不使用）
             date_to_idx: 日期到索引映射（保持接口一致，本方法不使用）
         """
-        if not self.exposure_replenish_enabled or self.exposure_table is None:
+        if not self.exposure_replenish_enabled or not self._has_exposure_source():
             return
         budget = float(getattr(self, "exposure_release_budget", 0.0) or 0.0)
         if budget <= 0:

@@ -2,6 +2,109 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.4] - 2026-09-19
+
+### Added
+
+- **政策层在线暴露系数（terminal_loss P2-5）：λ_t 随持仓逐日现算，回测不再依赖预导出系数表**。
+  - 新模块 `src/lazybull/risk/terminal_loss/exposure_online.py`：
+    - `OnlinePolicyConfig`：策略配置（`arm/mode/window/min_window/regime_q/score_q/lambda/cost_bps/min_layer/calib_*`），
+      `parse()` 为**单变量直读**（未知键直接报错），`describe()` 规范串入 summary，`fingerprint()` 供系数表绑定；
+    - `DailyExposureProvider`：逐日计算 λ_t，**与离线链路共用同一套实现**——折模型映射
+      （`load_fold_index` + `select_fold_for_date`）、打分输入装配（`_attach_inputs`）、
+      事后标签（`build_terminal_loss_labels`，成熟后入账 + `valid` 过滤）、
+      日级聚合与判定（`build_daily_frame` + `apply_rolling_gate` / `calibrate_gate`+`apply_gate`）；
+      **禁止任何公式复制**；
+    - **语义 S1（引擎唯一口径）**：λ_t 用**判定时点持仓**（当日执行前）计算，与"买入预算 ×
+      **信号日** λ"契约一致，也是实盘可实现的形态。离线台账用的是**收盘后**持仓 ⇒ 两者不逐位相等，
+      差异只来自当日持仓口径，需单独度量并登记；
+    - **同日单次评估**：引擎在 T0 判定与 T+1（买入按信号日取 λ）各调一次 ⇒ provider 对同一日期
+      返回首次结果（缓存），不重复打分、不污染面板；
+    - **未成熟日仍在面板**：离线台账事后建立、面板含全部日；若在线丢掉未成熟日会让滚动窗口缺日、
+      阈值不同。成熟后若标签非法则从面板剔除（影响后续阈值）；
+    - `replay_lambda_series()`：用离线持仓快照回放 provider（**自证**：收盘口径下应与冻结表逐值一致）；
+    - `write_exported_table_meta()` / `load_exported_table_meta()`：系数表 meta（策略口径 + 模型来源 + 指纹）；
+      新增 `log_exported_table_provenance()`：回放系数表时**打印来源、缺失 meta 时告警**
+      （表为冻结产物、绑定一份持仓路径，改过任何影响持仓的配置后必须重导；表与在线政策互斥 ⇒
+      不做强制指纹比对，只做来源可见性）。
+  - 引擎接口：`backtest/exposure_override.py::set_exposure_policy(provider)`（provider 必须实现
+    `multiplier_for(date, holdings)`，传入函数或其他对象直接 `TypeError`）；
+    `_has_exposure_source()` 统一政策源判定（系数表 **或** 在线 provider），
+    减仓/回补 guard 同步改用该入口；**默认关闭仍逐位一致**。
+  - WF 接线：`walk_forward.py` 新增 `--exposure-policy "k=v,k=v"`、`--policy-model-root`、
+    `--policy-arm-suffix`、`--policy-coverage-start`；`--exposure-policy` 与 `--exposure-table`
+    **互斥**（同时给出直接报错）；`runner.py` 一次性构建 provider 并在各折间复用（台账跨折累积）。
+  - **`batch_walk_forward.ps1`：暴露臂清单进配置区**（所有参数统一在该脚本配置）：
+    `$exposure_arm_list`（每元素 `Name/Policy/Table/Replenish/Tolerance/StopLoss`），
+    **默认臂 = 登记基准臂 `e2online`**（E2-滚动250、λ=0.5、在线现算、不裁剪覆盖），
+    同行注释保留可一键切回的 `neutral` 基线臂，并写明不默认 λ=0.3（滞留行为收益、不得读作更优）/
+    回补（生效但代价可见）/ 止损（对照不通过）的登记依据；
+    新增最内层臂循环，臂名拼进 `--batch-period-label` 与任务日志，`$totalTasks` 自动乘臂数，
+    头部打印臂清单与风险模型源；命令行参数退化为“单臂覆盖”（给出任一暴露参数即忽略清单，不叠加）；
+    `Policy` 与 `Table` 同时给出直接报错。
+  - **命令行基线开关与静默丢参防护**：新增 `-NoExposure`（一键切回 neutral 基线臂，与暴露类参数互斥）；
+    `-ExposureReplenish`/`-TrimTolerance` 在无政策源时**直接报错**（旧行为是静默丢弃该标志，
+    配合新的默认臂会静默丢掉政策）；`param()` 块统一加注“本块均为命令行覆盖参数，生产取值在配置区”。
+- 测试：`tests/test_exposure_online.py`（18 项：配置解析/校验、窗口不足不判定、触发与非触发、
+  ES 覆盖外不判定、无持仓不判定、标签成熟与非法剔除、λ 序列排序与覆盖、覆盖起点只抑制动作、
+  λ 落盘 CSV/JSON、引擎接口的默认关闭/provider 现算/非法返回值/拒绝非 provider 对象/表与 provider 互斥、
+  **在线源下减仓单必须真正执行**（回归））。
+
+### Fixed
+
+- **在线政策源下减仓单被静默丢弃**（端到端验证发现，仅影响在线通路）：`backtest/exposure_trim.py::_execute_pending_exposure_trims`
+  残留 `exposure_table is None` 判定 ⇒ 表为 `None` 时（即在线 provider 路径）**直接返回、pending 卖单被丢弃**：
+  实测判定 154 日 / 生成卖单 176 笔 / **成交 0 笔**。改用 `_has_exposure_source()`（统一政策源判定），
+  并新增回归测试 `test_online_provider_trim_orders_do_execute`（判定 → T+1 执行 → `risk_trim` 成交 + 释放额累计）。
+- **`--policy-coverage-start` 冷启动陷阱**（同上）：早期实现“生效日之前直接返回 1.0 且不评估”
+  ⇒ 面板无行、滚动阈值从生效日重算 ⇒ **生效初期数十个交易日永不触发**（实测使 2024-01 整月失效，
+  与冻结表 35 日差异且方向高度集中）。改为**只抑制动作、不抑制历史**（照常打分/入面板/成熟，
+  被抑制触发日计入 `pre_coverage_trigger_days`），与离线导出“历史全量 + 表按窗口裁剪”的口径对齐；
+  新增回归测试 `test_provider_coverage_start_suppresses_action_but_keeps_history`。
+- 两个缺陷均**只存在于在线通路**（冻结表通路不受影响）⇒ 不影响 R-004 §8/§9 任何登记值。
+
+### Verification
+
+- **在线 vs 冻结系数表（同一持仓台账回放，`book=end_of_day`）**：466 日中一致 463、未回放 2（`20240611`/`20250612`，
+  表值 1.0 的非触发日）、λ 不同 1（`20250211`，表 1.0 / 在线 0.5，标签成熟时点差异，**已登记**）；
+  回放触发 137 日（表 90 日 λ<1 / 回放 91 日）。
+- **引擎实跑（S1 语义，`book=pre_exec`）vs 冻结表**：窗口 466 日中共同覆盖 446、一致 **439**、**λ 翻转 7 日**
+  （4 日表 1.0/在线 0.5、3 日反之；翻转率 1.6%、方向混合）——但该差异**含路径分叉**分量
+  （在线臂不裁剪时在 2023-04 起就触发，见下条），不等于纯语义差；纯语义差由自证条目给出（1/466）。
+- **覆盖口径必须显式**：在线臂默认覆盖各折 ES 全区间（实测 1630 日序列 / 153 触发日：2023 年 62、2024 年 48、2025 年 43，
+  其中窗口外 66 日），而 §9 总扫描用的冻结表**被裁剪在 2024-01-02~2025-12-04**
+  ⇒ 两者净值**不可直接比**（在线臂进入窗口时持仓路径已不同）；同覆盖对照需 `--policy-coverage-start`。
+- **同覆盖对照（`--policy-coverage-start 20240102`，修正冷启动陷阱后）**：λ 差异 35 日 → **5 日**（466 日中一致 441）
+  ⇒ 冷启动修复有效；净值层（窗口 2024-01-02~2025-12-04，基线 A0）：
+
+  | 臂 | Δ收益 | ΔMaxDD | ΔSharpe | 减仓（笔/万元） |
+  |---|---|---|---|---|
+  | A1 冻结表（§9 登记臂） | +17.30pp | **+1.02pp** | +0.3759 | 156 / 384.1 |
+  | N1 在线（全区间） | +16.17pp | **−0.17pp** | +0.3491 | 121 / 292.1 |
+  | N2 在线（同覆盖） | +13.46pp | **−0.15pp** | +0.2986 | 138 / 336.3 |
+
+- **重大登记（在线口径复核结论）**：崩盘月贡献**逐值可复现**（N2 与 A1 的按月归因在 2024-01 +6.00pp / 2024-02 +4.04pp 完全相同）
+  ⇒ 实现同源；但**主判据 ΔMaxDD 不可复现**（−0.15pp vs +1.02pp），差异只能归因于 **5/446 日 λ 翻转（1.1%）**
+  改写的 2024-06/07 路径（各臂谷底同日 2024-09-18，链式回撤由峰-谷结构决定）。
+  收益维度仍以**信号期外（λ=1 日）**为主（6.57~8.01pp，占合计 81%~87%）⇒ 与「收益不可外推」登记一致。
+  **稳健性含义（新登记）**：ΔMaxDD 的“低噪声主判据”适用范围必须限定为**同一 λ 序列内**比较，
+  **不得**用于跨实现（离线表 vs 引擎在线）结论互换；政策层降级为**可选能力（默认关）、不得以回撤改善为由启用**。
+- **缺陷修复（端到端验证产出）**：执行侧残留 `exposure_table is None` 判定 ⇒ 在线政策源下减仓单被**静默丢弃**
+  （实测判定 154 日 / 生成卖单 176 笔 / 成交 0 笔）；改用 `_has_exposure_source()` 后正常成交，
+  并新增回归测试 `test_online_provider_trim_orders_do_execute`。
+- 计算成本实测：在线 λ_t 现算 ≈**0.26 s/日**（日历 0.03 + `clean/daily` 30 日窗口 0.15 + σ 面板 0.10 + 横截面装配 0.02 + 推理 <0.01），
+  回测数千交易日为分钟级，无需保留 CSV 通路。
+- 逐日 λ 归档升级为 `date/multiplier` + **日级面板列**（左连；未被判定日无面板行），
+  JSON 元数据补充 `lambda_days` / `lambda_trigger_days`（原 `judged_days` 字段名与语义不符，已纠正）。
+- **离线导出线接线 meta**：`scripts/calibrate_exposure_gate.py --export-table` 现在每张表同时写
+  `<table>.csv.meta.json`（策略口径 + 指纹 + 导出源/批次 + 生效起点 + 导出时间）；
+  已用基准命令重导验证：表内容 md5 **与既有登记表逐位相同**（不改变已登记产物），仅新增 meta；
+  回放侧由 `log_exported_table_provenance()` 打印来源、缺 meta 时告警。
+- **默认臂接线复核（2026-09-19）**：用脚本配置区默认臂（`e2online`，**不带任何命令行覆盖**）跑完整 14 折，
+  与已验证的命令行覆盖臂逐值比对：**λ 序列 1630 日零差异**、`chain_nav` **md5 相同**、
+  summary 仅 `batch_period_label`（臂名）不同 ⇒ 配置区路径与命令行路径**完全等价**。
+- 详细记录：`docs/terminal_loss_policy_online_result.md`。
+
 ## [0.127.3] - 2026-09-19
 
 ### Added

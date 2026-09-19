@@ -22,6 +22,7 @@
 import argparse
 import glob
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -41,6 +42,10 @@ from src.lazybull.risk.terminal_loss.exposure_gate import (  # noqa: E402
     run_rolling_gate,
     to_chinese_tables,
     write_gate_outputs,
+)
+from src.lazybull.risk.terminal_loss.exposure_online import (  # noqa: E402
+    OnlinePolicyConfig,
+    write_exported_table_meta,
 )
 
 ARM_BY_LABEL = {label: key for key, label in ARM_LABELS.items()}
@@ -89,8 +94,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-window-days", type=int, default=60, help="rolling 口径窗口内最少交易日"
     )
-    parser.add_argument("--calibration-start", default=None, help="校准段起点（YYYYMMDD，fixed 口径必填）")
-    parser.add_argument("--calibration-end", default=None, help="校准段终点（YYYYMMDD，fixed 口径必填）")
+    parser.add_argument(
+        "--calibration-start", default=None, help="校准段起点（YYYYMMDD，fixed 口径必填）"
+    )
+    parser.add_argument(
+        "--calibration-end", default=None, help="校准段终点（YYYYMMDD，fixed 口径必填）"
+    )
     parser.add_argument(
         "--eval-start", default=None, help="评估段起点（默认=校准段终点之后首个交易日，由数据决定）"
     )
@@ -156,7 +165,9 @@ def main() -> None:
 
     if args.threshold_mode == "fixed":
         if not args.calibration_start or not args.calibration_end:
-            raise SystemExit("--threshold-mode fixed 必须提供 --calibration-start/--calibration-end")
+            raise SystemExit(
+                "--threshold-mode fixed 必须提供 --calibration-start/--calibration-end"
+            )
         eval_start = args.eval_start
         if eval_start is None:
             # 未显式给起点时，用校准段终点加一天，交由数据自然裁剪（不做交易日历外推）
@@ -207,10 +218,14 @@ def main() -> None:
         calibration, daily, (overall, by_fold) = run_rolling_gate(ledger, configs, eval_segment)
         out_suffix = f"_滚动{args.window_days}日"
 
-    out_dir = Path(args.out_dir) if args.out_dir else (
-        Path(args.data_root) / args.batch / f"暴露门控E2{out_suffix}"
-        if args.batch
-        else Path(".") / f"暴露门控E2{out_suffix}"
+    out_dir = (
+        Path(args.out_dir)
+        if args.out_dir
+        else (
+            Path(args.data_root) / args.batch / f"暴露门控E2{out_suffix}"
+            if args.batch
+            else Path(".") / f"暴露门控E2{out_suffix}"
+        )
     )
     paths = write_gate_outputs(out_dir, calibration, daily, (overall, by_fold))
     logger.info(f"产物目录: {out_dir}")
@@ -230,19 +245,63 @@ def main() -> None:
                 arm_label=str(label[0]),
                 trading_days=trading_days,
             )
+            # 写 meta：表为**冻结产物**（绑定一份持仓路径），改任何影响持仓的配置后必须重导；
+            # meta 供回放时追溯策略口径/导出源/时间（引擎不做强制比对，只打印来源）
+            policy_spec = (
+                f"arm={arm},mode={args.threshold_mode},window={args.window_days},"
+                f"min_window={args.min_window_days},regime_q={args.regime_quantile},"
+                f"score_q={args.score_quantile},lambda={args.de_exposure},"
+                f"cost_bps={args.cost_bps},min_layer={args.min_layer_days}"
+            )
+            if args.threshold_mode == "fixed":
+                policy_spec += (
+                    f",calib_start={args.calibration_start},calib_end={args.calibration_end}"
+                )
+            write_exported_table_meta(
+                table_path,
+                policy_config=OnlinePolicyConfig.parse(policy_spec),
+                risk_root="offline-ledger",
+                arm_suffix="",
+                coverage_start=args.eval_start,
+                extra={
+                    "exported_from": "calibrate_exposure_gate.py（离线台账导出口径）",
+                    "batch": str(args.batch or ""),
+                    "threshold_mode": args.threshold_mode,
+                    "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
             logger.info(
                 f"  暴露系数表: {table_path.name}"
                 f"（{len(pd.read_csv(table_path, encoding='utf-8-sig'))} 日，含缺口顺延；文件名用 ASCII"
-                f"避免 PowerShell 传参转码）"
+                f"避免 PowerShell 传参转码；已写 meta）"
             )
 
     tables = to_chinese_tables(calibration, daily, (overall, by_fold))
     evaluated = tables["eval"]
-    cols = ["臂", "口径", "分组", "交易日数", "触发日数", "触发占比", "收益项", "成本项", "净增量（日均口径）"]
+    cols = [
+        "臂",
+        "口径",
+        "分组",
+        "交易日数",
+        "触发日数",
+        "触发占比",
+        "收益项",
+        "成本项",
+        "净增量（日均口径）",
+    ]
     print("\n=== 暴露门控评估（一阶代理；正数=降暴露带来净增量）===")
     print(evaluated[cols].round(5).to_string(index=False))
-    cols_kpi = ["臂", "口径", "分组", "触发日平均加权收益", "未触发日平均加权收益",
-                "触发日亏损日频率", "未触发日亏损日频率", "触发日事件率", "未触发日事件率"]
+    cols_kpi = [
+        "臂",
+        "口径",
+        "分组",
+        "触发日平均加权收益",
+        "未触发日平均加权收益",
+        "触发日亏损日频率",
+        "未触发日亏损日频率",
+        "触发日事件率",
+        "未触发日事件率",
+    ]
     print("\n=== 触发性与风险改善 ===")
     print(evaluated[cols_kpi].round(4).to_string(index=False))
     print("\n=== 校准阈值 ===")
