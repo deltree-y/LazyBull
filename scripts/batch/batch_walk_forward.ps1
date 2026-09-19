@@ -13,6 +13,14 @@
 param(
     # 暴露门控系数表（两列 CSV：日期, 暴露系数）；留空 = 不启用暴露覆盖
     [string]$ExposureTable = "",
+    # 暴露门控对称回补（P2-4；需同时传 -ExposureTable）
+    [switch]$ExposureReplenish,
+    # 减仓/回补共用容差（组合总值比例，如 0.06）；<=0 = 用引擎默认 3%
+    [double]$TrimTolerance = 0,
+    # 回撤侧对照：启用止损（与暴露门控合并成一次回撤侧总扫描）
+    [switch]$StopLoss,
+    # 止损回撤阈值（%，仅在 -StopLoss 时生效）
+    [int]$StopLossDrawdownPct = 20,
     # 影子多臂实验省时开关：加上 -SkipCompare 则不跑运行后自动汇总对比
     [switch]$SkipCompare
 )
@@ -27,6 +35,10 @@ $skip_training           = $true   # $true 启用 | $false 禁用
 # ── 暴露门控系数表（影子实验；留空 = 不启用）───────────────────
 # 可用命令行 -ExposureTable 覆盖；系数表落于 (0,1]，缺失日按 1.0 处理
 $exposure_table          = $ExposureTable
+# 对称回补（P2-4）：仅当同时给出系数表时生效
+$exposure_replenish      = [bool]$ExposureReplenish
+# 减仓/回补共用容差（<=0 = 引擎默认 3%）
+$exposure_trim_tolerance = $TrimTolerance
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────
 # Label                : 时间段标签，仅用于日志/汇总展示
@@ -241,9 +253,9 @@ $enable_early_rebalance_on_empty_list = @($true)  # 可多值如 @($false, $true
 
 # ── OOS 止损（总开关）────────────────────────────────────────
 # 0426这里应为true
-$bt_stop_loss_enabled                 = $false   # $true 启用 | $false 禁用
+$bt_stop_loss_enabled                 = [bool]$StopLoss   # $true 启用 | $false 禁用（可用 -StopLoss 打开）
 # 以下参数仅在 $bt_stop_loss_enabled = $true 时生效
-$bt_stop_loss_drawdown_pct_list       = @(20) # 回撤止损阈值（%）
+$bt_stop_loss_drawdown_pct_list       = @($StopLossDrawdownPct) # 回撤止损阈值（%）
 $bt_stop_loss_consecutive_limit_down_list = @(2) # 连续跌停止损天数
 # ── 政策层 E2 shadow（P2-3）──────────────────────────────
 # 空字符串 = 不启用（成交与净值与改动前逐位一致）；否则指向两列 CSV（日期, 暴露系数）
@@ -690,6 +702,12 @@ foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
         }
         if ($exposure_table -ne "") {
             $pythonCmd += " --exposure-table `"$exposure_table`""
+            if ($exposure_replenish) {
+                $pythonCmd += " --exposure-replenish"
+            }
+            if ($exposure_trim_tolerance -gt 0) {
+                $pythonCmd += " --exposure-trim-tolerance $exposure_trim_tolerance"
+            }
         }
     } else {
         $pythonCmd += " --no-oos-backtest"

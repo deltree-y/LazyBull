@@ -89,8 +89,26 @@ class BacktestExposureOverrideMixin:
                 self.exposure_stats.reduced_days += 1
         return multiplier
 
-    def set_exposure_table(self, table: Optional[Dict[str, float]], verbose: bool = True) -> None:
-        """装载暴露系数表（重复调用覆盖旧表并重置统计）。"""
+    def set_exposure_table(
+        self,
+        table: Optional[Dict[str, float]],
+        verbose: bool = True,
+        replenish: bool = False,
+        trim_tolerance: Optional[float] = None,
+    ) -> None:
+        """装载暴露系数表（重复调用覆盖旧表并重置统计）。
+
+        Args:
+            table: {YYYYMMDD: 系数}；None / 空 = 关闭暴露覆盖（逐位一致）
+            verbose: 是否打印装载日志
+            replenish: 是否启用**对称回补**（P2-4；仅在 table 非空时生效）
+            trim_tolerance: 减仓/回补**共用容差**（组合总值比例）；None = 保留引擎默认（3%）
+        """
+        if trim_tolerance is not None:
+            if not 0.0 < float(trim_tolerance) < 1.0:
+                raise ValueError(f"trim_tolerance 必须落于 (0, 1)，当前 {trim_tolerance}")
+            self.exposure_trim_tolerance = float(trim_tolerance)
+        self.exposure_replenish_enabled = bool(replenish) and bool(table)
         if table is not None:
             cleaned: Dict[str, float] = {}
             for key, value in table.items():

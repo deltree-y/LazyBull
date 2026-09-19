@@ -2592,11 +2592,11 @@ def test_get_refresh_policy_stops_outside_refresh_after_today_cycle_data(monkeyp
 
     refresh_waiting = module._get_refresh_policy(
         {"dates": ["20260401", "20260406"]},
-        datetime(2026, 4, 7, 20, 0, 0),
+        now=datetime(2026, 4, 7, 20, 0, 0),
     )
     refresh_done = module._get_refresh_policy(
         {"dates": ["20260401", "20260407"]},
-        datetime(2026, 4, 7, 20, 0, 0),
+        now=datetime(2026, 4, 7, 20, 0, 0),
     )
 
     assert refresh_waiting == {"refresh_cycle": True, "refresh_realtime": False}
@@ -2614,13 +2614,13 @@ def test_get_refresh_policy_keeps_cycle_and_realtime_refresh_intraday(monkeypatc
     )
     outside_policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260406"]},
-        datetime(2026, 4, 7, 20, 0, 0),
+        now=datetime(2026, 4, 7, 20, 0, 0),
     )
 
     monkeypatch.setattr(module, "_is_realtime_quote_window", lambda now=None: True)
     intraday_policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260407"]},
-        datetime(2026, 4, 7, 10, 0, 0),
+        now=datetime(2026, 4, 7, 10, 0, 0),
     )
 
     assert outside_policy == {"refresh_cycle": True, "refresh_realtime": False}
@@ -2724,7 +2724,7 @@ def test_get_refresh_policy_pauses_realtime_during_lunch(monkeypatch):
 
     policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260407"]},
-        datetime(2026, 4, 7, 12, 0, 0),
+        now=datetime(2026, 4, 7, 12, 0, 0),
     )
 
     assert policy == {"refresh_cycle": False, "refresh_realtime": False}
@@ -2827,7 +2827,7 @@ def test_get_refresh_policy_retries_latest_trade_day_on_weekend_when_missing(mon
 
     policy = module._get_refresh_policy(
         {"dates": ["20260401", "20260409"]},
-        datetime(2026, 4, 11, 20, 0, 0),
+        now=datetime(2026, 4, 11, 20, 0, 0),
     )
 
     assert policy == {"refresh_cycle": True, "refresh_realtime": False}

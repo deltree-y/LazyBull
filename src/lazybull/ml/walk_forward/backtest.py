@@ -48,6 +48,8 @@ def run_oos_backtest(
     initial_capital: float = 1000000.0,
     split_num: Optional[int] = None,
     exposure_table: Optional[Dict[str, float]] = None,
+    exposure_replenish: bool = False,
+    exposure_trim_tolerance: Optional[float] = None,
     holdertrade_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     repurchase_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     top10fh_panel: Optional[pd.DataFrame] = None,
@@ -186,7 +188,12 @@ def run_oos_backtest(
     # 政策旁路（terminal_loss P2-1）：开启逐日持仓快照（只读，不影响任何决策）
     engine.record_holdings_snapshot = True
     # 政策层 E2（P2-3 shadow）：装载暴露系数表（None = 不启用，成交与净值逐位一致）
-    engine.set_exposure_table(exposure_table, verbose=exposure_table is not None)
+    engine.set_exposure_table(
+        exposure_table,
+        verbose=exposure_table is not None,
+        replenish=exposure_replenish,
+        trim_tolerance=exposure_trim_tolerance,
+    )
 
     nav_curve = engine.run(
         start_date=pd.Timestamp(bt_start),
@@ -223,6 +230,10 @@ def run_oos_backtest(
         "bt_top_n": bt_top_n,
     }
     split_tag = f"Split {split_num} | " if split_num is not None else ""
+    # 政策层 E2（P2-3 shadow）：减仓/回补统计（未启用暴露表时不输出）
+    if getattr(engine, "exposure_table", None) is not None:
+        logger.info(f"{split_tag}暴露门控减仓统计: {engine.get_exposure_trim_report()}")
+        logger.info(f"{split_tag}暴露门控回补统计: {engine.get_exposure_replenish_report()}")
     logger.info(
         f"\n{'#' * 80}\n"
         f"{split_tag}{bt_start}-{bt_end}\n"

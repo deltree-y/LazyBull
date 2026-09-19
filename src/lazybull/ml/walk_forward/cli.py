@@ -465,6 +465,21 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
             "（超参签名维度，禁止跨取值并组比较）"
         ),
     )
+    parser.add_argument(
+        "--exposure-replenish",
+        action="store_true",
+        default=False,
+        help=(
+            "暴露门控**对称回补**（P2-4）：上限放开且存在未回补减仓额时，T+1 按比例把持仓补回；"
+            "需与 --exposure-table 同时使用"
+        ),
+    )
+    parser.add_argument(
+        "--exposure-trim-tolerance",
+        type=float,
+        default=None,
+        help="暴露门控减仓/回补共用容差（组合总值比例，默认引擎 3%%）",
+    )
 
     # 其他参数
     parser.add_argument(

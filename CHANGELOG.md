@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.3] - 2026-09-19
+
+### Added
+
+- **暴露门控对称回补（terminal_loss P2-4）引擎实现**：`src/lazybull/backtest/exposure_replenish.py`
+  （`BacktestExposureReplenishMixin`）——减仓的对称操作，用于消除 R-004 §8 登记的
+  「**68% 收益来自信号期外滞留**」这一行为依赖：
+  - **判定（T0）**：`date in pending_signals`（**新调仓计划生成日**）时**不干预**并清零释放额
+    （新计划用同一笔现金重新分配仓位）；两次调仓之间，若暴露上限放开且存在未回补释放额，
+    按 `回补额 = min(可用现金, 未回补释放额, λ_t×组合总值 − 当前持仓市值)` 排队到 T+1；
+  - **执行（T+1 开盘）**：对**全部持仓按市值比例**加仓（不做个股选择），跳过正在排队卖出的股票，
+    不可买入（停牌/涨停/无行情）跳过并**退回额度**、次日重判；未花完的额度同样退回；
+  - **不重置买入日**（持有期与退出计划不变）、`buy_cost_cash` 按加权平均累加；
+  - **引擎默认关闭**（`exposure_replenish_enabled=False`）：不产生任何副作用，与既有回测逐位一致；
+    `--exposure-replenish` 仅在给出 `--exposure-table` 时生效。
+  - 买入侧新增 `buy_execution.py::_add_to_position`（对已持仓按目标金额部分买入，与减仓 `fraction` 对称）；
+    减仓侧新增 `exposure_release_budget`（每次部分卖出成交后累计，回补成交后扣减）。
+  - 接线：`backtest/run_loop.py`（每日判定 + T+1 执行，执行排在计划买入之后）、
+    `ml/walk_forward/{backtest,runner,cli}.py`（`--exposure-replenish` / `--exposure-trim-tolerance`）、
+    `scripts/batch/batch_walk_forward.ps1`（`-ExposureReplenish` / `-TrimTolerance` / `-StopLoss` /
+    `-StopLossDrawdownPct`）。
+  - 测试：`tests/test_backtest_exposure_replenish.py`（16 项：开关关闭无副作用、计划生成日清零、
+    补齐在途不阻断、三选一上界、容差跳过、比例分配、卖出队列跳过、额度退回与次日重试、
+    买入日不重置、减仓→释放额→回补整链、全 1 表无回补）。
+
+- **回撤侧总扫描分析工具**（薄入口 + 子包，结果为 R-004 收尾证据）：
+  `scripts/analyze_drawdown_sweep.py` + `scripts/compare/drawdown_sweep.py`——统一口径比较
+  「暴露门控 / 对称回补 / 止损」影子臂：
+  窗口 = **与评估段相交的整折**（口径同 R-004 §7/§8）、切片归一化后复用
+  `ml/walk_forward/chain_metrics.py`；逐折指标取汇总 CSV 全折口径；日差归因按
+  「信号期内（λ<1）/ 信号期外（λ=1）」分组（折边界重复日按前一折保留）+ 按月归因；
+  窗口外（split ≤ 9）与基线净值逐位一致校验；成交按 `sell_type/buy_type` 分类统计。
+  **已用既有四臂（A0/A1/纯 regime/纯分数）复现 R-004 §8 全部登记值**：
+  0.3325/0.5055、Δ收益 +0.1730、ΔMaxDD +0.0102、ΔSharpe +0.3759、减仓 156 笔 / 384.1 万、
+  逐折 MaxDD 4/4；按月归因 2024-01 +6.00pp、2024-02 +4.04pp、2024-11 −3.32pp 亦逐值一致。
+  测试：`tests/test_drawdown_sweep.py`（11 项，全合成数据）。
+
+### 记录（R-004 P2-4 回撤侧总扫描：**回撤维度保留、收益维度不可外推**，2026-09-19）
+
+预登记 `docs/plans/drawdown_side_sweep_prereg.md`（跑前定稿）；报告
+`docs/terminal_loss_drawdown_sweep_result.md`；R-004 状态 `mitigated-qualified` →
+**`mitigated-qualified-drawdown-only`**。8 个新臂（每臂 14 折 OOS，8.4~10.2 分钟）。
+
+| 臂（vs A0，窗口 = split 10~13） | ΔMaxDD | 逐折改善 | Δ收益 | 判定 |
+|---|---|---|---|---|
+| A1 E2-滚动250（基准） | +1.02pp | 4/4 | +17.30pp | ✅ |
+| B1 λ=0.3 | **+1.41pp** | 4/4 | +23.20pp | ✅ |
+| B2 λ=0.7 | +0.53pp | 4/4 | +9.99pp | ✅ |
+| B3 W=120 | **−0.24pp** | 3/4 | +4.14pp | ❌ |
+| B4 q_regime=0.50 | +0.30pp | 4/4 | +4.62pp | ✅（收效甚微） |
+| B5 q_score=0.70 | **−0.16pp** | 3/4 | +10.13pp | ❌ |
+| B6 容差 6% | +1.02pp | 4/4 | +17.30pp | ✅（与 A1 **逐值相同** ⇒ 该窗口容差不生效） |
+| C1 **对称回补** | +1.00pp | 4/4 | +11.90pp | ✅（未达"滞留消除"，见下） |
+| D1 **止损启用**（无暴露表） | **−0.14pp** | 3/4 | +3.06pp | ❌ |
+
+- **λ 稳健（3/3）**，但 ΔMaxDD 与 Δ收益**同时随 (1−λ) 单调放大**（+1.41/+1.02/+0.53pp、
+  +23.2/+17.3/+10.0pp、减仓 548.6/384.1/220.8 万）⇒ 符合「滞留现金规模驱动」的行为解释，
+  **不是**信号质量提升；λ=0.3 的 +23.2pp 不得当更优参数。
+- **W 与 q_score 不稳健**（ΔMaxDD 转负、逐折 3/4）⇒ 政策层**对阈值选取敏感**，
+  单点（W=250、q_score=0.5）不是"平台区"。
+- **C1 对称回补**：8 个触发日、143 单/140 成交、买入 313.9 万 = 释放额 427.5 万的 73%；
+  信号期外占比 **68.0%→56.1%**（要求 ≤50%）⇒ 预登记判据**未全过**，登记「**回补生效但代价可见**」：
+  Δ收益 −5.41pp（≈放弃 31% 超额收益）而 **ΔMaxDD 几乎不变**；按月证据 **2024-02 的 +4.04pp 滞留收益被归零**
+  （C1 −0.01pp）、2025-04 转为 +2.99pp ⇒ §8「信号期外滞留」中行为性部分**不可再生**；
+  额外往返成本 ≈ **0.29pp/窗口（超 0.2pp 线，登记为代价）**。
+- **D1 止损对照**：主判据不通过 ⇒ 登记「**政策层有增量**」；口径警告：止损在全部 14 折生效，
+  窗口外逐位一致判据对该臂**不适用**。
+- **可比性放行（三点）**：两批 `data_state` JSON 扁平 diff 仅 5 个字段（`batch_run_id`/`collected_at`/
+  `data_state_id`/`git_commit`/`wf_run_id`），**raw/clean/cs_train 分区指纹与 dividend 覆盖摘要逐项相同**；
+  14 折窗口逐字一致；17 个特征开关列无差异；各臂开关落参已在日志核对。全部暴露臂 split 0~9 与 A0 **逐位一致** ✓。
+- 本轮同时确认：`scripts/analyze_drawdown_sweep.py` + `scripts/compare/drawdown_sweep.py`
+  **逐值复现 §8 全部登记值**（含按月归因 2024-01 +6.00 / 2024-02 +4.04 / 2024-11 −3.32pp）。
+- **处置**：**不再开新臂、禁止消融位搜索**；回补保留为**可选引擎能力（默认关）**；
+  日后仅当有新信息（新数据源 / 新标签目标域 / 组合级载体）才允许重开且需重新预登记。
+
+### Fixed
+
+- `tests/test_respi_35lcd_disp.py`：6 处 `_get_refresh_policy` 调用把 `now` 位置参数错传为
+  `intraday_chart_data`（签名演进遗留），导致 3 项 LCD 刷新策略测试在 HEAD 上失败；
+  改为 `now=` 关键字调用后恢复。
+
 ## [0.127.2] - 2026-09-19
 
 ### Added

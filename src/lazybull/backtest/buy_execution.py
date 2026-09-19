@@ -758,6 +758,82 @@ class BacktestBuyExecutionMixin:
             }
         )
 
+    def _add_to_position(
+        self,
+        date: pd.Timestamp,
+        stock: str,
+        target_value: float,
+        buy_type: str = "risk_replenish",
+        buy_reason: Optional[str] = None,
+    ) -> float:
+        """对**已有持仓**按目标金额加仓（部分买入；与风控减仓 `fraction` 对称）
+
+        与 `_buy_stock_direct` 的差异（因为 `_buy_stock_direct` 对已持仓股票直接跳过）：
+        - 只对已有持仓生效（不存在持仓时返回 0，不建仓）；
+        - **不重置买入日/持有期**（加仓不改变退出计划）；`buy_cost_cash` 累加（加权平均成本）；
+        - 不应用最小买入门槛（`min_buy_value_ratio`）：比例加仓语义优先，
+          金额不足一手的股票由 `compute_lot_shares` 自然跳过；
+        - 资金不足时按可用现金缩量（与 `_buy_stock_direct` 同一处理）。
+
+        Args:
+            date: 买入日期（T+1 开盘/收盘，与全局买卖时点一致）
+            stock: 股票代码
+            target_value: 目标加仓金额（元）
+            buy_type: 买入类型标记（落盘到成交记录，供归因使用）
+            buy_reason: 买入原因描述
+
+        Returns:
+            实际现金支出（含手续费）；未成交返回 0.0。
+        """
+        if stock not in self.positions or self.positions[stock]["shares"] <= 0:
+            return 0.0
+        if target_value <= 0:
+            return 0.0
+
+        trade_price = self._get_trade_price(date, stock)
+        if trade_price is None:
+            return 0.0
+
+        shares = compute_lot_shares(target_value, trade_price)
+        if shares == 0:
+            return 0.0
+
+        amount = shares * trade_price
+        cost = self.cost_model.calculate_buy_cost(amount)
+        total_cost_cash = amount + cost
+        if total_cost_cash > self.current_capital:
+            if self.current_capital <= cost:
+                return 0.0
+            shares = compute_lot_shares(self.current_capital - cost, trade_price)
+            if shares == 0:
+                return 0.0
+            amount = shares * trade_price
+            cost = self.cost_model.calculate_buy_cost(amount)
+            total_cost_cash = amount + cost
+
+        position = self.positions[stock]
+        position["shares"] = int(position["shares"]) + int(shares)
+        # 加权平均成本：累加现金支出（原买入日/持有期不变）
+        position["buy_cost_cash"] = float(position.get("buy_cost_cash", 0.0)) + total_cost_cash
+        self.current_capital -= total_cost_cash
+
+        self.trades.append(
+            {
+                "date": date,
+                "signal_date": date,
+                "stock": stock,
+                "action": "buy",
+                "price": trade_price,
+                "shares": shares,
+                "amount": amount,
+                "cost": cost,
+                "buy_type": buy_type,
+                "buy_reason": buy_reason,
+                "buy_date": position.get("buy_date"),
+            }
+        )
+        return float(total_cost_cash)
+
     def _buy_stock(
         self,
         date: pd.Timestamp,

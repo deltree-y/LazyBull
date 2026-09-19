@@ -484,6 +484,10 @@ def run_walk_forward(args) -> None:
                             initial_capital=args.bt_initial_capital,
                             split_num=split.split_index,
                             exposure_table=exposure_table,
+                            exposure_replenish=bool(getattr(args, "exposure_replenish", False)),
+                            exposure_trim_tolerance=getattr(
+                                args, "exposure_trim_tolerance", None
+                            ),
                             holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
                             repurchase_lookup=getattr(args, "repurchase_lookup", None),
                             top10fh_panel=getattr(args, "top10fh_panel", None),

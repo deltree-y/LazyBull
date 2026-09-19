@@ -50,6 +50,9 @@ class BacktestExposureTrimMixin:
             "trim_sold_amount": 0.0,  # 减仓成交金额合计
             "skipped_days_below_tolerance": 0,  # 超配但未达容差的交易日数
         }
+        # 减仓释放的现金额度（**未回补部分**）：供对称回补（exposure_replenish.py）使用。
+        # 每次部分卖出成交后累加，由回补模块在回补成交后扣减（单一数值定义，无多层回退）。
+        self.exposure_release_budget: float = 0.0
 
     # ------------------------------------------------------------------ T0：判定
     def _queue_exposure_trim(
@@ -168,6 +171,8 @@ class BacktestExposureTrimMixin:
                 self.exposure_trim_stats["trim_orders_sold"] += 1
                 if price is not None:
                     self.exposure_trim_stats["trim_sold_amount"] += sold_shares * price
+                    # 释放额度累加（对称回补的上界；见 exposure_replenish.py）
+                    self.exposure_release_budget += sold_shares * price
             else:
                 self.exposure_trim_stats["trim_orders_skipped"] += 1
                 if self.verbose:
@@ -179,4 +184,5 @@ class BacktestExposureTrimMixin:
         report: Dict[str, object] = dict(self.exposure_trim_stats or {})
         report["tolerance"] = self.exposure_trim_tolerance
         report["pending_orders"] = len(self.pending_exposure_trims)
+        report["release_budget"] = float(getattr(self, "exposure_release_budget", 0.0) or 0.0)
         return report

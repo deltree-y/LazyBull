@@ -129,8 +129,14 @@ class BacktestRunLoopMixin:
                     # 暴露门控每日判定：组合超配则把全部持仓按比例排队到 T+1 减仓
                     self._queue_exposure_trim(date, trading_dates, date_to_idx)
 
+                    # 暴露门控对称回补判定（P2-4）：上限放开且存在未回补减仓额时排队到 T+1 买入
+                    self._queue_exposure_replenish(date, trading_dates, date_to_idx)
+
                     # 执行待执行的买入操作（Tn+1）
                     self._execute_pending_buys(date, trading_dates, date_to_idx)
+
+                    # 执行对称回补买入（Tn+1；在买入计划之后执行，保证调仓计划优先使用现金）
+                    self._execute_pending_exposure_replenishes(date, trading_dates, date_to_idx)
 
                     # 空仓提前调仓 / 盈利延续拖尾提前调仓：
                     # 场景 A（空仓）：持仓全部卖出，资金闲置 → 立即触发新一轮信号

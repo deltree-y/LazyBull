@@ -28,6 +28,7 @@ from ..trading.stagger import get_tranche_target_count as _shared_tranche_target
 from ..universe.base import Universe
 from .buy_execution import BacktestBuyExecutionMixin
 from .exposure_override import BacktestExposureOverrideMixin
+from .exposure_replenish import BacktestExposureReplenishMixin
 from .exposure_trim import BacktestExposureTrimMixin
 from .holdings_snapshot import BacktestHoldingsSnapshotMixin
 from .pending_execution import BacktestPendingExecutionMixin
@@ -46,6 +47,7 @@ class BacktestEngine(
     BacktestHoldingsSnapshotMixin,
     BacktestExposureOverrideMixin,
     BacktestExposureTrimMixin,
+    BacktestExposureReplenishMixin,
     BacktestRunLoopMixin,
 ):
     """回测引擎
@@ -265,6 +267,8 @@ class BacktestEngine(
         self._exposure_missing_dates: Dict[str, int] = {}
         # 每日风控减仓状态（暴露门控主动减仓；未设置暴露系数表时不产生副作用）
         self._init_exposure_trim_state()
+        # 每日对称回补状态（暴露门控 P2-4；默认关闭，逐位一致）
+        self._init_exposure_replenish_state()
 
         # 仓位补齐状态跟踪
         # {调仓日期: {未成交股票列表, 目标数量, 候选列表, 剩余权重字典}}
@@ -769,6 +773,22 @@ class BacktestEngine(
             market_value += shares * trade_price
 
         return self.current_capital + market_value
+
+    def _position_market_value(self, date: pd.Timestamp, stock: str) -> Optional[float]:
+        """单只持仓的市值（价格口径与 `_calculate_portfolio_value` 完全一致：
+        当日成交价 → 最后已知价 → 买入价兜底），非持仓或市值不可用返回 None。
+        """
+        info = self.positions.get(stock)
+        if not info or info.get("shares", 0) <= 0:
+            return None
+        trade_price = self._get_trade_price(date, stock)
+        if trade_price is None:
+            trade_price = info.get("last_known_price")
+            if trade_price is None:
+                trade_price = info.get("buy_trade_price", 0.0)
+        if trade_price is None or trade_price <= 0:
+            return None
+        return float(info["shares"]) * float(trade_price)
 
     def _generate_nav_curve(self) -> pd.DataFrame:
         """生成净值曲线

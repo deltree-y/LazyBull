@@ -59,7 +59,7 @@ class _StubEngine:
         self.kwargs = kwargs
         self.record_holdings_snapshot = False
 
-    def set_exposure_table(self, table, verbose=False):
+    def set_exposure_table(self, table, verbose=False, replenish=False, trim_tolerance=None):
         self.exposure_table = table
 
     def run(self, **kwargs):
