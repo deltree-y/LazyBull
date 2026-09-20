@@ -9,10 +9,14 @@
 # 示例启动：
 #   powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
 # 暴露政策（默认启用，配在下方“参数配置区”的 $exposure_arm_list）：
-#   默认臂 e2online = E2-滚动250、λ=0.5、在线现算；
-#   · 命令行一键切回基线：-NoExposure
+#   默认臂 e2online_r = E2-滚动250、λ=0.5、在线现算、**对称回补开**、不裁剪覆盖
+#   （2026-09-20 转正：回补默认开 + 覆盖起点 20181126，登记见 docs/terminal_loss_risk_register.md R-007 §6/§7）；
+#   · 命令行一键切回基线（无政策）：-NoExposure
 #   · 命令行临时换策略：-ExposurePolicy "arm=combined,..." -SkipCompare
+#     （注意：命令行给任一暴露参数会**整体替换**臂清单 ⇒ 如需保留回补请同时加 -ExposureReplenish）
+#   · 跳过 OOS00 弱折（R-006）的覆盖起点：-PolicyCoverageStart 20190527
 #   · 与 R-004 §9 同覆盖：-PolicyCoverageStart 20240102
+#   · 折模型源 = 与选股 OOS 对齐的 14 折集（2026-09-20 起默认）
 
 param(
     # 本块全部是【命令行覆盖参数】：留空 = 用下方“参数配置区”的默认值（生产取值一律在配置区，不在这里）
@@ -25,9 +29,10 @@ param(
     [string]$PolicyModelRoot = "",
     # 折目录后缀（在线政策必需；如 _d5_v6m_fscore）
     [string]$PolicyArmSuffix = "",
-    # 政策覆盖起点（YYYYMMDD；留空 = 由折 ES 区间决定）
+    # 政策覆盖起点（YYYYMMDD；留空 = 用配置区默认 "20181126" = 不裁剪全 14 折）
     [string]$PolicyCoverageStart = "",
     # 暴露门控对称回补（P2-4；必须与 -ExposurePolicy 或 -ExposureTable 同传，否则直接报错）
+    # 默认臂 e2online_r 已开启回补；本参数仅在“命令行覆盖臂清单”时需要显式给出
     [switch]$ExposureReplenish,
     # 减仓/回补共用容差（组合总值比例，如 0.06）；<=0 = 用引擎默认 3%
     [double]$TrimTolerance = 0,
@@ -49,12 +54,15 @@ param(
 $skip_training           = $true   # $true 启用 | $false 禁用
 
 # ── 政策层（暴露门控）配置 ─────────────────────────────
-# 模型来源（在线现算必需）：终端损失模型的折目录根与后缀
-$policy_model_root       = if ($PolicyModelRoot -ne "") { $PolicyModelRoot } else { "data\walk_forward\terminal_risk_wf" }
-$policy_arm_suffix       = if ($PolicyArmSuffix -ne "") { $PolicyArmSuffix } else { "_d5_v6m_fscore" }
-# 覆盖起点：留空 = 各折 ES 全区间（2022-07 起生效，推荐、贴近实盘）；
-# 需与 R-004 §9 总扫描同覆盖时填 "20240102"（只抑制动作、不抑制阈值历史）
-$policy_coverage_start   = $PolicyCoverageStart
+# 模型来源（在线现算必需）：**与选股 OOS 14 折对齐的折集**（2026-09-20 起为默认；
+# 旧 8 折日历半年集仍在 data\walk_forward\terminal_risk_wf，不再被本脚本默认使用）
+$policy_model_root       = if ($PolicyModelRoot -ne "") { $PolicyModelRoot } else { "data\walk_forward\terminal_risk_wf_oos14" }
+$policy_arm_suffix       = if ($PolicyArmSuffix -ne "") { $PolicyArmSuffix } else { "_v6m_fscore" }
+# 覆盖起点：默认 "20181126" = **不裁剪**（覆盖全 14 折；= 回补转正臂 e2online_r 的实测配置）。
+#   若需跳过最早的 OOS00 弱折（lift 1.077 < 1.1，见 R-006）⇒ 显式填 "20190527"；
+#   若需与 R-004 §9 总扫描同覆盖 ⇒ 填 "20240102"。
+#   语义 = **只抑制动作、不抑制阈值历史**（阈值窗口不冷启动）。
+$policy_coverage_start   = if ($PolicyCoverageStart -ne "") { $PolicyCoverageStart } else { "20181126" }
 
 # ── 暴露臂清单（每个元素一个臂；Policy 与 Table 互斥，同时给出直接报错）──
 # Name      : 臂名（拼进 batch-period-label，便于汇总/产物分辨）
@@ -63,22 +71,32 @@ $policy_coverage_start   = $PolicyCoverageStart
 # Replenish : 对称回补（P2-4）；Tolerance : 减仓/回补容差（0 = 引擎默认 3%）
 # StopLoss  : 该臂启用止损
 #
-# 默认臂 = R-004 §9 扫描的**登记基准臂**（E2-滚动250、λ=0.5、在线现算、不裁剪覆盖）：
-#   · λ∈{0.3,0.5,0.7} 与 q_regime=0.50 五个臂中，该组是预登记判据通过且逐折 MaxDD 4/4 的基准；
+# 默认臂 e2online_r = R-004 §9 登记基准参数（E2-滚动250、λ=0.5、在线现算、不裁剪覆盖）
+#   **+ 对称回补开（2026-09-20 转正，登记 docs/terminal_loss_risk_register.md R-007 §6/§7）**：
+#   · λ∈{0.3,0.5,0.7} 与 q_regime=0.50 五个臂中，基准组为预登记判据通过且逐折 MaxDD 4/4 者；
 #   · λ=0.3 数值更大（ΔMaxDD +1.41pp / Δ收益 +23.2pp）但已登记为“滞留行为收益驱动的放大”，
 #     **不得读作更优参数** ⇒ 不默认；
-#   · Replenish（对称回补）已登记「回补生效但代价可见」（Δ收益 −5.41pp、ΔMaxDD 几乎不变）⇒ 默认关；
+#   · 回补转正依据 = **语义自洽**（λ 回满后应回满仓；现金拖累是 P2-4 已登记缺陷）
+#     + 单臂实测方向一致（R vs A：ΔCAGR +1.20pp / ΔMaxDD +1.63pp，逐折年化改善 8/14；
+#     窗口分解：16 个恢复窗口中 11 个正贡献）；
+#   · **可外推性声明（必须随结论报告）**：回补的收益增量为“方向偏正、量级不可承诺”
+#     （单窗口 ±3pp 量级事件会再现，如 split2 2020-03 的 −3.42pp）；**回撤改善不可外推**
+#     （全链 −20.25%→−18.62% 由 split6 单折驱动）；不得把本次读数当作预期收益；
 #   · StopLoss 对照已登记不通过（ΔMaxDD −0.14pp、逐折 3/4）⇒ 默认关；
-#   · 在线口径复核：崩盘月贡献逐值可复现（2024-01/02），但主判据 ΔMaxDD 由 +1.02pp（冻结表）
-#     变为 −0.15pp（在线同覆盖）⇒ 默认值用于**日常回测一致性**，不得当作已证实的回撤改善
+#   · 在线口径复核：崩盘月贡献逐值可复现（2024-01/02），主判据 ΔMaxDD 对 λ 扰动敏感
+#     ⇒ 默认值用于**日常回测一致性**，不得当作已证实的回撤改善
 #     （见 docs/terminal_loss_policy_online_result.md）。
+#   · 需要“无回补”对照（2026-09-20 前旧 e2online 口径）时：把本臂 Replenish 改 $false
+#     或克隆一行 Name="e2online"；需要纯基线时换成下方 neutral 臂。
 $exposure_arm_list = @(
     [PSCustomObject]@{
-        Name = "e2online"; Policy = "arm=combined,mode=rolling,window=250,regime_q=0.6667,score_q=0.5,lambda=0.5"
-        Table = ""; Replenish = $false; Tolerance = 0; StopLoss = $false
+        Name = "e2online_r"; Policy = "arm=combined,mode=rolling,window=250,regime_q=0.75,score_q=0.5,lambda=0.5"
+        Table = ""; Replenish = $true; Tolerance = 0; StopLoss = $false
     }
     # 需要基线对照（不启用政策、与历史基线逐位一致）时，换成下面这一臂：
     #[PSCustomObject]@{ Name = "neutral"; Policy = ""; Table = ""; Replenish = $false; Tolerance = 0; StopLoss = $false }
+    # 需要“无回补”政策对照（旧 e2online 口径）时，改用下面这一臂：
+    #[PSCustomObject]@{ Name = "e2online"; Policy = "arm=combined,mode=rolling,window=250,regime_q=0.75,score_q=0.5,lambda=0.5"; Table = ""; Replenish = $false; Tolerance = 0; StopLoss = $false }
 )
 # 命令行覆盖：给出任一暴露参数 ⇒ 忽略上面清单，按命令行构造单臂（不叠加）
 # -NoExposure = 强制基线臂（与暴露类参数互斥）
@@ -111,6 +129,14 @@ foreach ($arm in $exposure_arm_list) {
     if (($arm.Replenish -or $arm.Tolerance -gt 0) -and $arm.Policy -eq "" -and $arm.Table -eq "") {
         throw "暴露臂 $($arm.Name): 回补/容差需要同时给出 -ExposurePolicy 或 -ExposureTable（无政策源时回补无意义，禁止静默忽略）"
     }
+}
+# 防护：给出模型源/覆盖起点但**没有任何臂启用政策** ⇒ 这些参数不会生效，不得静默忽略
+$policy_source_given = ($PolicyModelRoot -ne "" -or $PolicyArmSuffix -ne "" -or $PolicyCoverageStart -ne "")
+$any_policy_enabled = @($exposure_arm_list | Where-Object { $_.Policy -ne "" }).Count -gt 0
+if ($policy_source_given -and -not $any_policy_enabled) {
+    throw ("已给出 -PolicyModelRoot/-PolicyArmSuffix/-PolicyCoverageStart，但当前臂清单没有任何 Policy" +
+           "（仅 neutral，或 -NoExposure）⇒ 暴露政策不会启用、上述参数不会生效。" +
+           "请同时给出 -ExposurePolicy（spec 字符串），或把配置区的 e2online 臂注释切换放开。")
 }
 
 # ── Walk-forward 时间段配置（支持多组）───────────────────────

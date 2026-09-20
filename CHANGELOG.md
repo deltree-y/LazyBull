@@ -2,6 +2,102 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.7] - 2026-09-20
+
+### Changed
+
+- **暴露政策默认臂转正：`e2online_r`（对称回补开 + 不裁剪覆盖）**——`batch_walk_forward.ps1` 配置区：
+  `Name="e2online_r"`、`Replenish=$true`、`$policy_coverage_start` 默认 `"20181126"`；
+  登记、依据与**可外推性声明**见 `docs/terminal_loss_risk_register.md` **R-007 §7**：
+  - 依据 = 语义自洽（λ 回满后应回满仓；现金拖累是 P2-4 已登记缺陷）+ §6 单臂方向一致
+    （ΔCAGR +1.20pp / ΔMaxDD +1.63pp / Δ总收益 +26.66pp，逐折 8/14；16 个恢复窗口 11 正 / 5 负，
+    方向与窗口内市场涨跌一致，最大负项 split2 2020-03 −3.42pp）；
+  - **可外推性**：收益增量“方向偏正、量级不可承诺”（机制期望 ≈0.5pp/年；单窗口 ±3pp 事件会再现）；
+    **回撤改善不可外推**（−20.25%→−18.62% 由 split6 单折驱动）⇒ **转正 ≠ 收益承诺**；
+  - 命名与旧 `e2online`（无回补）区分（label `0101_e2online_r`）；注释保留 `e2online`（无回补）
+    与 `neutral`（基线）对照臂；命令行覆盖臂清单时会整体替换 ⇒ 保回补需同时 `-ExposureReplenish`（注释已提醒）；
+  - README 暴露政策小节与 CLAUDE.md 契约同步（默认覆盖起点改述为 20181126；R-006 的跳过方式改述为显式参数）。
+
+### Verification
+
+- PS1 语法检查通过；转正默认臂（无任何暴露参数）实跑批次 `wf_batch_20260920_160406`
+  与 §6 的 R 臂（`wf_batch_20260920_151922`）**逐位一致性自证通过**：
+  chain_nav nav（1714 行）、λ 台账 6 列、14 折 trades 金额（最大差 0.000000）、
+  summary 折内指标（annual/MaxDD/Sharpe/total 最大差 0）全部逐位一致 ⇒ 配置区默认 =
+  命令行单臂语义（仅 label/run_id 元数据不同；默认 label `0101_e2online_r`）；
+- 合成校验：逐折重标定重建链（B.split0 × R.split1..13）= **306.41% / CAGR 23.10% / MaxDD −18.62% /
+  Sharpe 1.026**（若需跳过 OOS00 时的预期读数），且重建 R 与实测逐值一致（total/CAGR/MaxDD/Sharpe）。
+
+## [0.127.6] - 2026-09-20
+
+### Added
+
+- **政策层“滞留低仓”归因登记（R-007）**：三批严格可比回测（同选股模型 24008~24021、同参数、
+  同数据态 `6e740c49`）——`e2online` 两轮覆盖起点对照（cov=20181126 / 20190527）与无政策基线
+  （`wf_batch_20260919_215753`）：
+  - 两轮差异**只存在 OOS00 折**，逐日分解：设计内（λ<1）净 **−1.28pp**、λ=1 滞留段 **+2.81pp**
+    ⇒ 表面优势全部由“减仓现金未回补”的 5 月低仓承载；**默认 `20190527` 维持**（R-006 §6）；
+  - 全 14 折三分类归因（active/stuck/normal）：active 合计 +1.46pp（单折 −5.32 ~ +4.95）、
+    stuck 合计 −1.25pp（split10 2024-01 +4.28、split0 2019-05 +2.65 主导）；总 −0.35pp ≈ 链式 CAGR 差；
+  - 三方净值：全链 MaxDD −24.00% → −20.25%（+3.75pp）、vol 21.40→18.35、Sharpe 0.921→1.038、
+    CAGR 22.57%→22.52%（持平）；**改善读数由滞留承载，不得外推**（与 R-004 §8 同源）；
+- **回补对照臂（单变量）**：`cov=20181126 + --exposure-replenish`，与 A 臂唯一差异 = `Replenish`；
+  预登记口径见 `docs/terminal_loss_risk_register.md` R-007 §4（判据用分段/事件口径，全链 MaxDD 仅辅助）。
+  **结果（R-007 §6）**：全链 **320.24% / CAGR 23.72% / MaxDD −18.62% / Sharpe 1.073**；
+  vs A：Δ总收益 **+26.66pp**、ΔCAGR +1.20pp、**ΔMaxDD +1.63pp**；vs 无政策基线 ΔMaxDD +5.38pp；
+  逐折年化改善 8/14（split0 +5.23 / split6 +4.42 / split3 +3.78；唯一显著负项 split2 −4.19）；
+  全折归因 R vs 基线 total **+6.20pp**（A 为 −0.35pp）⇒ **加回补后政策层才有实质正收益**；
+  机制：回补只作用于“λ 回满后、调仓前”窗口，**滞留段（split0 5 月 / split10 1 月）未被触及**
+  （释放额于调仓日清零），故滞留红利两臂同样保留；
+  与 R-004 §9 C1（旧 8 折源、−5.41pp）**不可互换**；**默认保持关**（转正需单独决策）。
+
+### Verification
+
+- 两轮批次：`wf_batch_20260920_142835`（A）/ `wf_batch_20260920_144611`（B）；基线：`wf_batch_20260919_215753`；
+  回补臂：`wf_batch_20260920_151922`（R）；同一 `data_state_id = 6e740c49`、同选股模型 24008~24021；
+- B 的 OOS00 折与基线逐位一致（无政策路径可复现）；13 折两轮逐位一致；回补臂 λ 与 A 仅 1 天差异（20251209）；
+- 回补统计（日志）：合计成交 320 笔、买入 ≈ 764 万、生效窗口全折合计 ≈ 150 天。
+
+## [0.127.5] - 2026-09-20
+
+### Added
+
+- **terminal_loss 折集与选股模型 OOS 折对齐（14 折，消除 2018-11~2022-06 政策盲区）**：
+  `scripts/batch/batch_terminal_risk_wf.ps1` 的 `$folds` 由“日历半年 8 折（2022H2..2026H1）”
+  改为**逐一对齐选股 WF 的 14 个 test 窗**（OOS00_201811 … OOS13_202506，覆盖 2018-11-26 ~ 2025-12-12）；
+  输出改到独立根目录 `data\walk_forward\terminal_risk_wf_oos14`（旧 8 折集原样保留）。
+  - **对齐规则**（写进脚本注释）：① ES 起点 = 选股 test 窗首日；② ES 末端 = `min(bt_end, 下一窗首日−1)`
+    （各折 ES 互不重叠）；③ 之所以必须对齐：`select_fold_for_date` 取“`val_end ≤ date` 中最大者”，
+    只有 ES 对齐窗首日才能保证**该窗全程只用 Val 已在窗前的模型**（无前视）且**窗内不换模**（1:1 可归因）；
+  - `$train_window_years_list` 由 5 改 **6**（贴近选股模型 6 年窗前口径；对齐折集下 **7 年不可行**——
+    最早折 TrainStart 会到 2011-05，早于数据起点 20120104，脚本按规则跳过而不静默截短）；
+  - 实证：`load_fold_index(新根, "_v6m_fscore")` 返回 14 折；每个 OOS 窗首日选中的正是对应折且被其 ES 覆盖。
+- **clean 数据边界延展（2011Q4）**：最早折（OOS00，TrainStart 20120526）的**母截面需再前推 7 个月**
+  的 `clean/daily`；原 clean 层自 2012-01-04 起 ⇒ 按契约直接报错（拒绝静默跳过）。用
+  `build_clean_features.py --only-clean --start-date 20111001 --end-date 20111231 --horizon 20`
+  补建 60 个分区（clean/daily 3539 → 3599），OOS00 重训成功。
+- 策略侧默认源切换到新折集：`batch_walk_forward.ps1` 的 `$policy_model_root =
+  data\walk_forward\terminal_risk_wf_oos14`、`$policy_arm_suffix = _v6m_fscore`；
+  `$policy_coverage_start` **默认 "20190527"**（跳过门禁未达标的 OOS00 折；填 "20181126" = 不裁剪）。
+
+### Fixed
+
+- **`batch_walk_forward.ps1` 静默无效防护**：给出了 `-PolicyModelRoot` / `-PolicyArmSuffix` / `-PolicyCoverageStart`，
+  但臂清单里**没有任何 Policy**（仅 `neutral` 或 `-NoExposure`）时，这组参数不会生效——
+  旧行为静默无事发生；现改为**直接报错**并提示“同时给出 `-ExposurePolicy` 或放开配置区 e2online 臂”。
+
+### Verification
+
+- **14 折全部训练完成**（gate 口径：组内 lift 最小值 ≥ 1.1）：`14/14` 折有有效 lift，
+  `tuning_score = 1.233`（= 0.5×lift_geo_mean 1.389 + 0.5×lift_min 1.077），**gate_pass = False**；
+  唯一未达标折 = **OOS00_201811（2018-11-26~2019-05-26，lift 1.077）**，其余 13 折 lift ∈ [1.26, 1.71]
+  （峰值在 OOS11_202406 = 1.706）。
+  ⇒ 处理：不动模型（**不为单个折调参/加列**，见风险登记纪律），而是**默认不在该折上启用政策**
+  （`--policy-coverage-start 20190527`）。
+- **与旧 8 折集对照（同族签名、wy=5）**：tuning_score 1.469 / lift_geo 1.528 / **lift_min 1.410**。
+  旧集 lift_min 更高属**样本选择效应**（只覆盖 2022H2 起的模型强势期）；新集把 2019-05~2022-06 的 7 个窗
+  （含 2020-02/03 疫情崩盘、2021 分化年、2022H1 熊市）纳入考核 ⇒ 最差折降到 1.26~1.08 属预期内的“样本更难”。
+
 ## [0.127.4] - 2026-09-19
 
 ### Added

@@ -471,9 +471,14 @@ python scripts/train_terminal_risk_model.py \
 # 极易饱和，仅供对照）。非法组合由训练入口报错
 # 特征集与目标、早停口径都是签名维度（fs= / obj= / em=），禁止混组比较
 
-# 滚动 Walk-forward（8 折研究型 WF：排序信息量的时间稳定性验证）
+# 滚动 Walk-forward（14 折研究型 WF：与选股模型 OOS 折**逐一对齐**，覆盖 2018-11-26~2025-12-12）
 powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_terminal_risk_wf.ps1
-# 完成后自动汇总：data/walk_forward/terminal_risk_wf/summary.csv
+# 完成后自动汇总：data/walk_forward/terminal_risk_wf_oos14/summary.csv
+# 折表：OOS00_201811 … OOS13_202506（ES = 选股 WF 的 test 窗，末端取 min(bt_end, 下一窗首日−1)；
+#   Train = ValStart−6 年、Val = ES 前 6 个月；旧 8 折日历半年集仍在 terminal_risk_wf）
+# 首轮实测（2026-09-20）：14/14 折有 lift，tuning_score 1.233，但 lift_min = 1.077（OOS00）
+#   < 1.1 ⇒ 门禁不通过；该折处理见 R-006（政策默认转正后为不裁剪 20181126，
+#   如需跳过弱点折可显式 --policy-coverage-start 20190527）
 # 门禁：跨折 lift = ES PR-AUC / ES 事件率，组内最小值 >= 1.1 才建议进入第二阶段
 # 调参指标（超参消融对比用）：折目录按 _d*/_lr* 后缀 × 折 meta 超参签名分组，
 # 每超参组一行 → tuning_scores.csv；台账 tuning_history.csv 按组追加（跨 batch
@@ -624,12 +629,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 由引擎逐日现算 λ_t（`f(折模型, 判定日持仓, 当日截面)`，与离线判定**共用同一套实现**）：
 
 ```powershell
-# 默认臂已就位（脚本配置区 $exposure_arm_list = e2online），直接跑即可：
-#   $policy_model_root = "data\walk_forward\terminal_risk_wf"   # 折模型来源
-#   $policy_arm_suffix = "_d5_v6m_fscore"
-#   $exposure_arm_list = @( [PSCustomObject]@{ Name = "e2online";
-#       Policy = "arm=combined,mode=rolling,window=250,regime_q=0.6667,score_q=0.5,lambda=0.5";
-#       Table = ""; Replenish = $false; Tolerance = 0; StopLoss = $false } )
+# 默认臂已就位（脚本配置区 $exposure_arm_list = e2online_r，2026-09-20 转正：回补开），直接跑即可：
+#   $policy_model_root = "data\walk_forward\terminal_risk_wf_oos14"   # 与选股 OOS 对齐的 14 折集
+#   $policy_arm_suffix = "_v6m_fscore"
+#   $exposure_arm_list = @( [PSCustomObject]@{ Name = "e2online_r";
+#       Policy = "arm=combined,mode=rolling,window=250,regime_q=0.75,score_q=0.5,lambda=0.5";
+#       Table = ""; Replenish = $true; Tolerance = 0; StopLoss = $false } )
 powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 -SkipCompare
 
 # 需要基线对照（不启用政策、与历史基线逐位一致）时：命令行一键切回 neutral 臂
@@ -643,13 +648,21 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
   只给 `-ExposureReplenish`/`-TrimTolerance` 而不给政策源会**直接报错**（禁止静默忽略）；
 - λ_t 用**判定时点持仓**（当日执行前），逐日归档 `raw/policy_lambda_<run_id>.csv`（含日级面板列）
   + `.json`（策略口径/模型来源/指纹/统计），便于审计与回放；
-- 默认覆盖各折 ES 全区间（2022-07 起）；需要与历史扫描同覆盖时用 `--policy-coverage-start 20240102`
-  （**只抑制动作、不抑制历史**，阈值窗口不冷启动）。
+- 默认覆盖起点 `20181126`（= 不裁剪全 14 折；只抑制动作、不抑制阈值历史的语义不变）；
+  跳过门禁未达标的 OOS00 折（R-006）显式填 `20190527`；与历史扫描同覆盖用 `--policy-coverage-start 20240102`。
 
 **在线口径复核（2026-09-19）**：崩盘月贡献逐值可复现（2024-01 +6.00pp / 2024-02 +4.04pp 与冻结表臂相同），
 但**主判据不可复现**——冻结表臂 ΔMaxDD +1.02pp vs 在线臂（同覆盖）**−0.15pp**，
-差异归因于 5/446 日 λ 翻转改写的 2024-06/07 路径 ⇒ 暴露政策保留为**可选能力（默认关）**，
-**不得**以回撤改善为由启用；详情与两个在线通路缺陷的修复见 `docs/terminal_loss_policy_online_result.md`。
+差异归因于 5/446 日 λ 翻转改写的 2024-06/07 路径 ⇒ **“以回撤改善为由启用”不被支持**，
+政策的默认启用改由下述**回补转正**承载；详情与两个在线通路缺陷的修复见 `docs/terminal_loss_policy_online_result.md`。
+
+**对称回补转正（2026-09-20，v0.127.7）**：默认臂改为 `e2online_r`（E2-滚动250、λ=0.5、在线、**回补开**、
+不裁剪覆盖）。依据 = 语义自洽（λ 回满后应回满仓；现金拖累是 P2-4 已登记缺陷）+ 单臂实测
+（R vs A：ΔCAGR +1.20pp / ΔMaxDD +1.63pp / Δ总收益 +26.66pp，逐折年化改善 8/14；
+16 个恢复窗口 11 正 / 5 负，方向与窗口内市场涨跌一致，最大负项 split2 2020-03 −3.42pp）。
+**可外推性声明**：收益增量“方向偏正、量级不可承诺”（机制期望 ≈0.5pp/年；单窗口 ±3pp 事件会再现）；
+**回撤改善不可外推**（−20.25%→−18.62% 由 split6 单折驱动）；**转正 ≠ 收益承诺**。
+详见 `docs/terminal_loss_risk_register.md` R-007 §6/§7。
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的
 基线、仅保留 `dividend_yield_hist_12m` 的分红方案，以及仅保留 `fcf_yield` 和

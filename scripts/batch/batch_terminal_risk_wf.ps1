@@ -2,7 +2,7 @@
 # 期末异常亏损风险模型滚动 Walk-forward 批量脚本（第一阶段研究型 WF）
 #
 # 每折：滚动 Train（由 $train_window_years_list 决定年数）+ Val（早停段，由
-# $val_months 决定）+ ES（6 个月，互不重叠）→ 独立概率质量报告；全部完成后
+# $val_months 决定）+ ES（评估段，与选股模型 OOS 折逐一对应）→ 独立概率质量报告；全部完成后
 # 自动运行 summarize_terminal_risk_wf.py 拼接
 # summary、按 _d*/_lr*/_w*/*_s* 消融后缀 × 折 meta 超参签名分组输出调参分
 # （tuning_score = 0.5×lift几何均值 + 0.5×组内lift最小值，绝对量纲跨 batch 可比）
@@ -33,31 +33,54 @@
 # ============================================================
 
 $data_root   = "data"
-$wf_root     = "data\walk_forward\terminal_risk_wf"   # 各折输出父目录
+# 各折输出父目录：**与选股模型 OOS 14 折对齐的折集**（独立根目录，不覆盖历史折集）
+# 旧折集（8 折日历半年 ES，2022H2..2026H1）保留在 data\walk_forward\terminal_risk_wf
+$wf_root     = "data\walk_forward\terminal_risk_wf_oos14"
 $device      = "cuda"     # cuda | cpu（GPU 不稳定时可切 cpu）
 $run_summary = $true      # 全部完成后运行汇总工具
 
-# ── 折定义（ES 段 6 个月互不重叠，覆盖 2022H2..2026H1）────────────
+# ── 折定义：与选股模型 OOS 折**逐一对齐**（14 折，覆盖 2018-11-26..2025-12-12）──
+# 来源：选股 WF 的 14 个 test 窗（`walk_forward.py --split-count 14 --final-date 20260105
+# --test-window-months 6`；逐折窗口见任意 batch 的 raw/walk_forward_summary_*.csv 的
+# test_start/test_end/bt_start/bt_end 列）。
+#
+# 对齐规则（为什么不能只按日历半年切）：
+#   1) `select_fold_for_date` 取 "val_end <= date 中 val_end 最大" 的折 ⇒ 只有把 ES 起点
+#      对齐到 OOS 窗首日，才能保证**该窗全程只用 Val 已在窗前的模型**（无前视），
+#      且**窗内不中途换模型**（1:1 对应，便于归因）；
+#   2) ES 末端取 "下一窗首日 − 1 天" 与 bt_end 的较小值 ⇒ 各折 ES 互不重叠；
+#   3) 覆盖必须回到 2018-11-26（首个 OOS 窗），否则 2018H2~2022H1 的政策盲区无法消除。
+#
 # 三段由配置派生（日期为自然日边界，训练脚本按交易日历过滤，并按
 # label_end_date < 下一段起点 做多期限标签隔离）：
 #   ValStart   = EsStart - $val_months 月
 #   ValEnd     = EsStart - 1 天
 #   TrainEnd   = ValStart - 1 天
-#   TrainStart = ValStart - N 年（N = $train_window_years_list）
+#   TrainStart = ValStart - N 年（N = $train_window_years_list；对齐折集下
+#                 N=6 时最早折 TrainStart=20120526 ≥ 数据起点 20120104；
+#                 N=7 会越界被跳过，不得用「加长窗口」而非起跳过）
 # 即 Train 不再直接贴到 ES 起点：中间一段留给早停（Val），ES 保持纯评估。
-# Label      : 目录名与汇总标识
-# EsStart/EsEnd : ES 评估段自然日边界
+# Label      : 目录名与汇总标识（OOS{序号}_{窗首月}）
+# EsStart/EsEnd : ES 评估段自然日边界（= 选股 OOS 窗，末端截到下一窗前）
 # Selected   : $false 跳过该折（结果保留不删）
 $folds = @(
-    [PSCustomObject]@{ Label = "2022H2"; EsStart = "20220701"; EsEnd = "20221231"; Selected = $true  }
-    [PSCustomObject]@{ Label = "2023H1"; EsStart = "20230101"; EsEnd = "20230630"; Selected = $true  }
-    [PSCustomObject]@{ Label = "2023H2"; EsStart = "20230701"; EsEnd = "20231231"; Selected = $true  }
-    [PSCustomObject]@{ Label = "2024H1"; EsStart = "20240101"; EsEnd = "20240630"; Selected = $true  }
-    [PSCustomObject]@{ Label = "2024H2"; EsStart = "20240701"; EsEnd = "20241231"; Selected = $true  }
-    [PSCustomObject]@{ Label = "2025H1"; EsStart = "20250101"; EsEnd = "20250630"; Selected = $true  }
-    [PSCustomObject]@{ Label = "2025H2"; EsStart = "20250701"; EsEnd = "20251231"; Selected = $true  }
-    [PSCustomObject]@{ Label = "2026H1"; EsStart = "20260101"; EsEnd = "20260630"; Selected = $true  }
+    [PSCustomObject]@{ Label = "OOS00_201811"; EsStart = "20181126"; EsEnd = "20190526"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS01_201905"; EsStart = "20190527"; EsEnd = "20191125"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS02_201911"; EsStart = "20191126"; EsEnd = "20200526"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS03_202005"; EsStart = "20200527"; EsEnd = "20201127"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS04_202011"; EsStart = "20201130"; EsEnd = "20210530"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS05_202105"; EsStart = "20210531"; EsEnd = "20211130"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS06_202112"; EsStart = "20211201"; EsEnd = "20220601"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS07_202206"; EsStart = "20220602"; EsEnd = "20221202"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS08_202212"; EsStart = "20221205"; EsEnd = "20230605"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS09_202306"; EsStart = "20230606"; EsEnd = "20231206"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS10_202312"; EsStart = "20231207"; EsEnd = "20240607"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS11_202406"; EsStart = "20240611"; EsEnd = "20241210"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS12_202412"; EsStart = "20241211"; EsEnd = "20250611"; Selected = $true }
+    [PSCustomObject]@{ Label = "OOS13_202506"; EsStart = "20250612"; EsEnd = "20251212"; Selected = $true }
 )
+
+
 
 # ── 标签配置（训练前冻结；改 k 即改任务，勿在 OOS 上调）──────────
 $k              = 1.0
@@ -75,12 +98,13 @@ $learning_rate_list = @(0.04)   # 例：@(0.03, 0.05) 做学习率消融（后�
 $val_months_list = @(6)
 
 # 训练窗口年数（消融位；TrainStart = ValStart - N 年）：
-# 例：@(3, 5) 做窗口消融（后缀 _w{N}y）。窗口起点早于数据可用起点（cs_train
-# 首个分区）时该组合直接判失败并跳过，不静默截短窗口；
-# 数据自 2012-01 起，最长 10 年窗口仍然可行。
-# v0.108.8 登记：单折配对实验（2023H1，every_n_days=1）显示 7 年窗口
-# （lift 1.386 / 10 日块下限 1.207）优于 5 年（1.243 / 1.110），故默认取 7 年。
-$train_window_years_list = @(5)
+# 例：@(3, 6) 做窗口消融（后缀 _w{N}y）。窗口起点早于数据可用起点（cs_train
+# 首个分区）时该组合直接判失败并跳过，不静默截短窗口。
+# 取值 6（2026-09-20 变更）：① 与选股模型的窗前口径（6 年）对齐（ES 段对齐不
+# 受此影响，此处只影响窗前信息量）；② 旧折集登记过“更长窗口更好”（2023H1
+# 单折配对：7 年 lift 1.386 / 块下限 1.207 vs 5 年 1.243 / 1.110）；
+# ③ 对齐折集下 7 年不可行（最早折越数据起点）⇒ 6 是全覆盖折集的上限。
+$train_window_years_list = @(6)
 # 随机种子（消融位；多种子用于量化种子方差）：
 # 例：@(42, 7, 2024)（后缀 _s*）。注意种子是签名维度，多种子不会被混入同组。
 $random_state_list  = @(42)
