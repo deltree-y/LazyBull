@@ -38,6 +38,7 @@ from src.lazybull.ml.train_core import (
     evaluate_validation_daily,
     load_features_data,
 )
+from src.lazybull.signals.downside_penalty import apply_downside_penalty
 
 from .reporting import build_daily_topk_detail_df
 from .training_core import (
@@ -173,51 +174,30 @@ def _build_split_training_candidate(
     }
 
 
-def execute_split_training(
+def evaluate_test_window(
     split: WalkForwardSplit,
-    wf_run_id: str,
+    model,
+    feature_columns: List[str],
     storage: Storage,
     loader: DataLoader,
-    registry: ModelRegistry,
     args,
     main_board_codes: set,
     topk_values: List[int],
-    trade_cal: Optional[pd.DataFrame] = None,
 ) -> Dict:
-    """执行单个 split 的训练。"""
-    logger.info("=" * 80)
-    logger.info(f"开始训练 Split {split.split_index}")
-    logger.info(f"  训练区间: {split.train_start} 至 {split.train_end}")
-    logger.info(f"  测试区间: {split.test_start} 至 {split.test_end}")
-    logger.info("=" * 80)
+    """在测试窗口上执行 OOS 评估（逐日 Top-K 明细 + 测试指标）。
 
-    selected_candidate = _build_split_training_candidate(
-        split,
-        storage,
-        loader,
-        args,
-        main_board_codes,
-        topk_values,
-        trade_cal,
-        candidate_name="base",
+    训练路径（``execute_split_training``）与 skip-training 评估路径
+    （``execute_skip_training_evaluation``）共用本函数，保证两边过滤/派生口径一致。
+
+    A5：启用下行风险惩罚（``args.downside_penalty > 0``）时，逐日 Top-K 明细使用
+    「分位(score) − λ×风险分位」调整后的分数（母截面 = 评估域，与既有信号层尺子同域；
+    执行侧母截面为候选域，差异登记见 docs/plans/downside_penalty_prereg.md）。
+    λ=0 时不得改动任何列，保证与基线逐位一致。
+    """
+    df_test, _test_days_count = load_features_data(
+        storage, loader, split.test_start, split.test_end
     )
-    ensemble_meta = selected_candidate.get("ensemble_meta", {})
-
-    model = selected_candidate["model"]
-    feature_columns = selected_candidate["feature_columns"]
-    train_params = selected_candidate["train_params"]
-    train_metrics = selected_candidate["train_metrics"]
-    val_metrics = selected_candidate["val_metrics"]
-    val_daily_metrics = selected_candidate["val_daily_metrics"]
-    data_stats = selected_candidate["data_stats"]
-    train_days_count = selected_candidate["train_days_count"]
-    total_train_samples = selected_candidate["total_train_samples"]
-    X_train_len = selected_candidate["X_train_len"]
-    X_val_len = selected_candidate["X_val_len"]
-
-    df_test, test_days_count = load_features_data(storage, loader, split.test_start, split.test_end)
     df_test = _filter_to_main_board(df_test, main_board_codes, "测试窗口")
-    total_test_samples = len(df_test)
 
     logger.info("=" * 60)
     logger.info("样本外测试集评估（OOS Evaluation）")
@@ -316,11 +296,36 @@ def execute_split_training(
 
     test_score_column = "pred_score"
 
+    # A5 信号层明细口径：启用惩罚时明细使用调整后分数（母截面 = 评估域，与既有尺子同域；
+    # 执行侧母截面为候选域，差异登记见 docs/plans/downside_penalty_prereg.md）
+    detail_score_column = test_score_column
+    penalty_value = float(getattr(args, "downside_penalty", 0.0) or 0.0)
+    if penalty_value > 0:
+        penalty_column = str(getattr(args, "downside_penalty_column", "downside_vol_20"))
+        df_test_eval["adj_score"] = df_test_eval["pred_score"]
+        stats = apply_downside_penalty(
+            df_test_eval,
+            score_column="adj_score",
+            risk_column=penalty_column,
+            penalty=penalty_value,
+            date_column="trade_date",
+        )
+        detail_score_column = "adj_score"
+        nan_note = (
+            f"；风险缺失 {stats['risk_nan_rows']} 行按截面中位处理"
+            if stats["risk_nan_rows"]
+            else ""
+        )
+        logger.info(
+            f"OOS 评估侧下行风险惩罚: λ={penalty_value:g}, 列={penalty_column}, "
+            f"评估域={stats['rows']} 行 / {stats['days']} 日{nan_note}"
+        )
+
     topk_detail_df = build_daily_topk_detail_df(
         df_eval=df_test_eval,
         original_return_col=evaluation_label_column,
         topk_values=(20, 30),
-        score_column=test_score_column,
+        score_column=detail_score_column,
     )
 
     test_daily_metrics = evaluate_validation_daily(
@@ -333,6 +338,123 @@ def execute_split_training(
         emit_logs=False,
         prediction_col=test_score_column,
     )
+
+    return {
+        "topk_detail_df": topk_detail_df,
+        "test_daily_metrics": test_daily_metrics,
+        "test_samples": int(len(df_test_eval)),
+    }
+
+
+def execute_skip_training_evaluation(
+    split: WalkForwardSplit,
+    wf_run_id: str,
+    storage: Storage,
+    loader: DataLoader,
+    registry: ModelRegistry,
+    args,
+    main_board_codes: set,
+    topk_values: List[int],
+    model_version: int,
+) -> Dict:
+    """skip-training 模式下的 OOS 评估（不训练、不注册新版本、不写训练台账）。
+
+    用途：惩罚/政策类实验复用旧折模型时，仍需标准逐日 Top-K 明细（信号层尺子）
+    与测试指标；配 ``--skip-training-eval`` 开启，默认跳过以保持 NAV-only 复跑的最小开销。
+    """
+    logger.info("=" * 80)
+    logger.info(f"[跳过训练] 评估 Split {split.split_index}（模型 v{model_version}）")
+    logger.info(f"  测试区间: {split.test_start} 至 {split.test_end}")
+    logger.info("=" * 80)
+
+    model, metadata = registry.load_model(version=model_version, strict_version_check=True)
+    feature_columns = list(metadata.get("feature_columns") or [])
+    if not feature_columns:
+        raise ValueError(
+            f"[skip-training-eval] v{model_version} 缺少 feature_columns，禁止静默降级"
+        )
+
+    test_eval = evaluate_test_window(
+        split=split,
+        model=model,
+        feature_columns=feature_columns,
+        storage=storage,
+        loader=loader,
+        args=args,
+        main_board_codes=main_board_codes,
+        topk_values=topk_values,
+    )
+    _print_oos_focus_panel(split.split_index, test_eval["test_daily_metrics"])
+
+    return {
+        "split_index": split.split_index,
+        "train_start": split.train_start,
+        "train_end": split.train_end,
+        "test_start": split.test_start,
+        "test_end": split.test_end,
+        "model_version": model_version,
+        "feature_columns": feature_columns,
+        "test_samples": test_eval["test_samples"],
+        "test_daily_metrics": test_eval["test_daily_metrics"],
+        "_topk_detail_df": test_eval["topk_detail_df"],
+        "skipped_training": True,
+    }
+
+
+def execute_split_training(
+    split: WalkForwardSplit,
+    wf_run_id: str,
+    storage: Storage,
+    loader: DataLoader,
+    registry: ModelRegistry,
+    args,
+    main_board_codes: set,
+    topk_values: List[int],
+    trade_cal: Optional[pd.DataFrame] = None,
+) -> Dict:
+    """执行单个 split 的训练。"""
+    logger.info("=" * 80)
+    logger.info(f"开始训练 Split {split.split_index}")
+    logger.info(f"  训练区间: {split.train_start} 至 {split.train_end}")
+    logger.info(f"  测试区间: {split.test_start} 至 {split.test_end}")
+    logger.info("=" * 80)
+
+    selected_candidate = _build_split_training_candidate(
+        split,
+        storage,
+        loader,
+        args,
+        main_board_codes,
+        topk_values,
+        trade_cal,
+        candidate_name="base",
+    )
+    ensemble_meta = selected_candidate.get("ensemble_meta", {})
+
+    model = selected_candidate["model"]
+    feature_columns = selected_candidate["feature_columns"]
+    train_params = selected_candidate["train_params"]
+    train_metrics = selected_candidate["train_metrics"]
+    val_metrics = selected_candidate["val_metrics"]
+    val_daily_metrics = selected_candidate["val_daily_metrics"]
+    data_stats = selected_candidate["data_stats"]
+    train_days_count = selected_candidate["train_days_count"]
+    total_train_samples = selected_candidate["total_train_samples"]
+    X_train_len = selected_candidate["X_train_len"]
+    X_val_len = selected_candidate["X_val_len"]
+
+    test_eval = evaluate_test_window(
+        split=split,
+        model=model,
+        feature_columns=feature_columns,
+        storage=storage,
+        loader=loader,
+        args=args,
+        main_board_codes=main_board_codes,
+        topk_values=topk_values,
+    )
+    topk_detail_df = test_eval["topk_detail_df"]
+    test_daily_metrics = test_eval["test_daily_metrics"]
 
     _print_oos_focus_panel(split.split_index, test_daily_metrics)
 
@@ -494,7 +616,7 @@ def execute_split_training(
         "val_es_samples": data_stats.get("val_es_samples", X_val_len),
         "val_embargo_samples": data_stats.get("val_embargo_samples", 0),
         "val_embargo_days": data_stats.get("val_embargo_days", 0),
-        "test_samples": len(df_test_eval),
+        "test_samples": test_eval["test_samples"],
         "best_iteration": train_params.get("best_iteration"),
         "best_iteration_floor_triggered": bool(
             train_params.get("best_iteration_floor_triggered", False)

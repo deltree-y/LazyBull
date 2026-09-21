@@ -103,6 +103,9 @@ def _sanitize_train_params(raw_params: Dict[str, Any]) -> Dict[str, Any]:
     if params.get("position_sizing") not in ("kelly", "half_kelly"):
         clear("kelly_vol_window", "kelly_max_leverage")
 
+    if not params.get("downside_penalty"):
+        clear("downside_penalty_column")
+
     return params
 
 
@@ -235,8 +238,11 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
         "enable_early_rebalance_on_empty": getattr(args, "enable_early_rebalance_on_empty", True),
         "no_deploy_train": getattr(args, "no_deploy_train", False),
         "skip_training": getattr(args, "skip_training", False),
+        "skip_training_eval": getattr(args, "skip_training_eval", False),
         "start_model_version": getattr(args, "start_model_version", None),
         "selected_split_indices": getattr(args, "selected_split_indices", None),
+        "downside_penalty": getattr(args, "downside_penalty", 0.0),
+        "downside_penalty_column": getattr(args, "downside_penalty_column", "downside_vol_20"),
     }
     train_params_cols = _sanitize_train_params(train_params_cols)
     # 数据态血缘摘要列（采集失败时为空 dict，历史对比按缺失列处理）

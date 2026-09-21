@@ -318,6 +318,26 @@ python scripts/walk_forward.py --split-count 14 --enable-availability-markers
   （**按模型 `feature_columns` 驱动**，所以 train/serve 天然一致，不会静默补成 NaN）；
 - `cs_train` / `cs_infer` 分区**完全不改动**；来源列缺失时跳过并告警，不产出常量零列。
 
+#### 下行风险惩罚（A5 路由型，默认关；WF A/B 未通过）
+
+对候选排序做一次**后处理**（不改训练列集、不碰 colsample 稀释通道）：
+`score' = 分位(score) − λ×风险分位`，λ 冻结网格 {0, 0.25, 0.5}（0=关闭且与基线逐位一致）：
+
+```bash
+# 滚动训练（惩罚在推理侧生效，可配 --skip-training --skip-training-eval 复用旧折模型，零训练成本）
+python scripts/walk_forward.py --split-count 14 --skip-training --start-model-version 24126 \
+  --skip-training-eval --downside-penalty 0.25 --downside-penalty-column downside_vol_20
+# 纸面交易配置
+python scripts/paper_trade.py config --downside-penalty 0.25
+```
+
+- 口径：风险方向白名单（`downside_vol_20` 越大越危险；`cvar_95_20` 越负越危险）；风险分位缺失按截面中位；缺列必报错；
+- `--skip-training-eval`：skip 模式下补跑 OOS 评估（逐日 Top-K 明细 + 测试指标，**不注册模型、不写训练台账**）；
+- 预登记 `docs/plans/downside_penalty_prereg.md`；**结论（2026-09-21）：不通过 ⇒ 不采纳**——
+  信号层 Δ −43.4 bps（Top20，相对 −47%；三块长区间全负）、净值 ΔCAGR −5.62pp / ΔMaxDD +0.89pp / Δ夏普 −0.188；
+  机制根因 = rank 空间相减在 λ=0.25 即强倾斜（Top20 重叠 26.8%、换入 14.6 只/日）。
+  详见 `docs/downside_penalty_wf_ab_result.md` ⇒ **生产默认关闭，不再开新臂、禁止消融位搜索**。
+
 #### 模型列集审计（列集漂移 / 配置分组）
 
 列集本身就是模型契约：线上推理的特征矩阵与训练矩阵若不是同一套列，模型默认行为就变了。

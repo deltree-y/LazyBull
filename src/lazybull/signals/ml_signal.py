@@ -20,12 +20,18 @@ from ..ml.train_core import (
     apply_event_freshness_decay,
 )
 from .base import Signal
+from .downside_penalty import (
+    DOWNSIDE_PENALTY_COLUMNS,
+    RISK_NAN_FILL,
+    apply_downside_penalty,
+)
 
 
 class MLSignal(Signal):
     """ML 信号生成器
 
-    基于机器学习模型预测，选择预测收益最高的 Top N 股票
+    基于机器学习模型预测，选择预测收益最高的 Top N 股票。
+    支持 A5 路由型下行风险惩罚（``downside_penalty``，排序后处理，不改模型列集）。
     """
 
     # 申万一级行业：银行(801780)、非银金融(801790，含保险/券商)
@@ -44,6 +50,8 @@ class MLSignal(Signal):
         max_total_mv: float = 15000000.0,
         exclude_financial: bool = True,
         verbose: bool = True,
+        downside_penalty: float = 0.0,
+        downside_penalty_column: str = "downside_vol_20",
     ):
         """初始化 ML 信号
 
@@ -56,6 +64,9 @@ class MLSignal(Signal):
             max_total_mv: 总市值上限（万元），默认15000000（=1500亿元）
             exclude_financial: 是否剔除金融股（银行/非银金融），默认True
             verbose: 是否输出详细日志，默认True
+            downside_penalty: 路由型下行风险惩罚强度 λ（冻结网格 {0, 0.25, 0.5}；
+                0=关闭且与基线逐位一致；>0 时对候选排序做 score−λ×风险分位 后处理）
+            downside_penalty_column: 惩罚所用风险列（登记白名单见 signals/downside_penalty.py）
         """
         super().__init__("ml_signal")
         self.top_n = top_n
@@ -67,6 +78,21 @@ class MLSignal(Signal):
         self.max_total_mv = max_total_mv
         self.exclude_financial = exclude_financial
         self.verbose = verbose
+        # A5 路由型下行风险惩罚（排序后处理；λ=0 严格 no-op，与基线逐位一致）
+        self.downside_penalty = float(downside_penalty or 0.0)
+        if self.downside_penalty < 0 or self.downside_penalty >= 1:
+            raise ValueError(
+                f"downside_penalty 必须落于 [0, 1)，当前值: {self.downside_penalty}"
+            )
+        self.downside_penalty_column = str(downside_penalty_column)
+        if (
+            self.downside_penalty > 0
+            and self.downside_penalty_column not in DOWNSIDE_PENALTY_COLUMNS
+        ):
+            raise ValueError(
+                f"未登记的下行风险惩罚列：{self.downside_penalty_column}；"
+                f"允许值：{sorted(DOWNSIDE_PENALTY_COLUMNS)}"
+            )
         # 延迟加载模型
         self.model = None
         self.metadata = None
@@ -75,11 +101,17 @@ class MLSignal(Signal):
         # 缓存最近一次排序候选列表（供持仓强势度评分查询）
         self._last_ranked_candidates: List[tuple] = []
 
+        penalty_info = (
+            f", downside_penalty={self.downside_penalty:g}"
+            f"({self.downside_penalty_column})"
+            if self.downside_penalty > 0
+            else ""
+        )
         logger.info(
             f"ML 信号初始化: top_n={top_n}, model_version={model_version}, "
             f"min_amount_ma20={min_amount_ma20:.0f}千元, "
             f"total_mv=[{min_total_mv/10000:.0f}亿,{max_total_mv/10000:.0f}亿], "
-            f"exclude_financial={exclude_financial}"
+            f"exclude_financial={exclude_financial}{penalty_info}"
         )
 
     def update_model_version(self, new_version: int) -> None:
@@ -268,6 +300,31 @@ class MLSignal(Signal):
             )
         return features_df
 
+    def _apply_downside_penalty(self, features_df: pd.DataFrame, score_column: str) -> None:
+        """A5 路由型下行风险惩罚（原地调整 score_column）。
+
+        只在 ``self.downside_penalty > 0`` 时调用；λ=0 必须走调用方 no-op 分支，
+        以保证与基线逐位一致。母截面 = 当日候选域（universe ∩ 选股过滤后）。
+        """
+        stats = apply_downside_penalty(
+            features_df,
+            score_column=score_column,
+            risk_column=self.downside_penalty_column,
+            penalty=self.downside_penalty,
+        )
+        message = (
+            f"下行风险惩罚: λ={self.downside_penalty:g}, 列={self.downside_penalty_column}, "
+            f"候选域={stats['rows']} 行"
+        )
+        if stats["risk_nan_rows"] > 0:
+            logger.warning(
+                f"{message}；风险缺失 {stats['risk_nan_rows']} 行按截面中位 {RISK_NAN_FILL} 处理"
+            )
+        elif self.verbose:
+            logger.info(message)
+        else:
+            logger.debug(message)
+
     def generate(self, date: pd.Timestamp, universe: List[str], data: Dict) -> Dict[str, float]:
         """生成 ML 信号
 
@@ -356,6 +413,10 @@ class MLSignal(Signal):
 
         features_df["ml_score"] = predictions
         score_column = "ml_score"
+
+        # A5：路由型下行风险惩罚（λ=0 严格 no-op，与基线逐位一致）
+        if self.downside_penalty > 0:
+            self._apply_downside_penalty(features_df, score_column)
 
         # 按预测分数排序，选择 Top N
         features_df = features_df.sort_values(score_column, ascending=False)
@@ -474,6 +535,10 @@ class MLSignal(Signal):
 
         features_df["ml_score"] = predictions
         score_column = "ml_score"
+
+        # A5：路由型下行风险惩罚（λ=0 严格 no-op，与基线逐位一致）
+        if self.downside_penalty > 0:
+            self._apply_downside_penalty(features_df, score_column)
 
         # 按预测分数排序，返回所有候选
         features_df = features_df.sort_values(score_column, ascending=False)

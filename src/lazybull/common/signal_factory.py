@@ -33,11 +33,20 @@ def create_signal(
     """
     resolved_models_dir = models_dir or get_stock_selection_models_root()
 
+    # A5 下行风险惩罚参数（排序后处理，不改模型列集；默认 0=关闭）
+    penalty_kwargs = {
+        "downside_penalty": float(getattr(config, "downside_penalty", 0.0) or 0.0),
+        "downside_penalty_column": str(
+            getattr(config, "downside_penalty_column", "downside_vol_20")
+        ),
+    }
+
     signal_a = MLSignal(
         top_n=config.top_n,
         model_version=config.model_version,
         models_dir=resolved_models_dir,
         verbose=verbose,
+        **penalty_kwargs,
     )
 
     if config.model_version_b is None:
@@ -48,6 +57,7 @@ def create_signal(
         model_version=config.model_version_b,
         models_dir=resolved_models_dir,
         verbose=verbose,
+        **penalty_kwargs,
     )
     logger.info(
         f"创建双模型集成信号: A=v{config.model_version}, "

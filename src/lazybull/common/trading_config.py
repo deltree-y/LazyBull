@@ -43,6 +43,10 @@ class TradingConfig:
     kelly_vol_window: int = 60  # Kelly 波动率估计窗口（交易日）
     kelly_max_leverage: float = 0.25  # 单只股票 Kelly 仓位上限（占总资产）
 
+    # ── 信号层下行风险惩罚（A5；排序后处理，不改训练列集） ──
+    downside_penalty: float = 0.0
+    downside_penalty_column: str = "downside_vol_20"
+
     # ── 其他（仅 paper_trade 使用，backtest 不需要） ──
     buy_price: str = "close"
     sell_price: str = "open"
@@ -105,6 +109,12 @@ class TradingConfig:
                     f"需满足 max_weight_per_stock * top_n >= 1，当前值: "
                     f"{self.max_weight_per_stock} * {self.top_n}"
                 )
+        if self.downside_penalty is None:
+            self.downside_penalty = 0.0
+        if self.downside_penalty < 0 or self.downside_penalty >= 1:
+            raise ValueError(
+                f"downside_penalty 必须落于 [0, 1)，当前值: {self.downside_penalty}"
+            )
 
     @classmethod
     def from_dict(cls, d: dict) -> "TradingConfig":
@@ -377,6 +387,29 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         type=float,
         default=0.25,
         help="Kelly 单只股票仓位上限（占总资产），默认 0.25",
+    )
+
+    # ── 信号层下行风险惩罚（A5；排序后处理，不改训练列集） ──
+    from ..signals.downside_penalty import DOWNSIDE_PENALTY_COLUMNS, DOWNSIDE_PENALTY_GRID
+
+    parser.add_argument(
+        "--downside-penalty",
+        type=float,
+        default=0.0,
+        choices=DOWNSIDE_PENALTY_GRID,
+        help=(
+            "下行风险惩罚强度 λ（冻结网格 0/0.25/0.5；0=关闭且与基线逐位一致）："
+            "对候选排序做 score−λ×风险分位 后处理，不改模型列集；"
+            "预登记见 docs/plans/downside_penalty_prereg.md"
+        ),
+    )
+    parser.add_argument(
+        "--downside-penalty-column",
+        choices=tuple(DOWNSIDE_PENALTY_COLUMNS),
+        default="downside_vol_20",
+        help=(
+            "惩罚所用风险列：downside_vol_20=主臂；cvar_95_20=稳健性对照（不得用于宣布通过）"
+        ),
     )
 
     # ── 空仓提前调仓 ──

@@ -7,6 +7,7 @@ from typing import List, Optional
 
 from loguru import logger
 
+from ...signals.downside_penalty import DOWNSIDE_PENALTY_COLUMNS, DOWNSIDE_PENALTY_GRID
 from .training_core import (
     SEED_ENSEMBLE_KEEP_MIN_MODELS,
     SEED_ENSEMBLE_KEEP_TOP_RATIO,
@@ -592,6 +593,27 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         help="OOS 回测单行业最大持仓数量，默认不限制",
     )
 
+    # 信号层下行风险惩罚（A5：路由型，排序后处理；不改训练列集）
+    parser.add_argument(
+        "--downside-penalty",
+        type=float,
+        default=0.0,
+        choices=DOWNSIDE_PENALTY_GRID,
+        help=(
+            "下行风险惩罚强度 λ（冻结网格 0/0.25/0.5；0=关闭且与基线逐位一致）："
+            "对候选排序做 score−λ×风险分位 后处理；超参签名维度，禁止跨取值并组比较。"
+            "预登记见 docs/plans/downside_penalty_prereg.md"
+        ),
+    )
+    parser.add_argument(
+        "--downside-penalty-column",
+        choices=tuple(DOWNSIDE_PENALTY_COLUMNS),
+        default="downside_vol_20",
+        help=(
+            "惩罚所用风险列：downside_vol_20=主臂；cvar_95_20=稳健性对照（不得用于宣布通过）"
+        ),
+    )
+
     # OOS 回测止损参数
     parser.add_argument(
         "--bt-stop-loss-enabled", action="store_true", default=False, help="启用 OOS 回测止损功能"
@@ -700,6 +722,15 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         default=None,
         help="skip-training 模式下第一个 split 对应的模型版本号，后续 split 依次 +1",
     )
+    parser.add_argument(
+        "--skip-training-eval",
+        action="store_true",
+        default=False,
+        help=(
+            "skip-training 模式下补跑 OOS 评估（逐日 Top-K 明细 + 测试指标，不注册新模型、"
+            "不写训练台账）；用于复用旧模型的惩罚/政策类实验（默认跳过以保持最小开销）"
+        ),
+    )
     return parser
 
 
@@ -731,6 +762,10 @@ def parse_walk_forward_args(argv: Optional[List[str]] = None):
         parser.error("--neutral-label-blend-weight 仅支持 regression 任务")
     if args.neutral_label_blend_weight > 0 and args.skip_training:
         parser.error("混合标签必须重新训练，不能与 --skip-training 同时使用")
+    if getattr(args, "skip_training_eval", False) and not args.skip_training:
+        parser.error(
+            "--skip-training-eval 仅在 --skip-training 模式下有效（复用旧模型补跑 OOS 评估）"
+        )
     if args.neutral_label_blend_weight > 0 and not args.label_column.startswith("neu_y_ret_"):
         parser.error("混合标签要求 --label 使用 neu_y_ret_N")
 

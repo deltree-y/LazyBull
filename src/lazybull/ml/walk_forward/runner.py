@@ -33,7 +33,7 @@ from .reporting import (
     write_walk_forward_topk_details,
     write_walk_forward_trade_details,
 )
-from .split_training import execute_split_training
+from .split_training import execute_skip_training_evaluation, execute_split_training
 from .summary import write_walk_forward_summary
 from .training_core import _build_main_board_codes
 from .utils import (
@@ -480,6 +480,10 @@ def run_walk_forward(args) -> None:
                 model_version=None,  # 首次 split 时通过 update_model_version 设置
                 models_dir=get_stock_selection_models_root(args.data_root),
                 verbose=False,
+                downside_penalty=float(getattr(args, "downside_penalty", 0.0) or 0.0),
+                downside_penalty_column=str(
+                    getattr(args, "downside_penalty_column", "downside_vol_20")
+                ),
             )
             logger.info(f"持久化 MLSignal 已创建，将跨 {len(splits)} 个 split 复用")
 
@@ -494,16 +498,30 @@ def run_walk_forward(args) -> None:
                         f"使用已有模型 v{model_version}，"
                         f"测试区间 {split.test_start} ~ {split.test_end}"
                     )
-                    result = {
-                        "split_index": split.split_index,
-                        "train_start": split.train_start,
-                        "train_end": split.train_end,
-                        "test_start": split.test_start,
-                        "test_end": split.test_end,
-                        "model_version": model_version,
-                        "feature_columns": (skip_metadata or {}).get("feature_columns") or [],
-                        "bt_metrics": {},
-                    }
+                    if getattr(args, "skip_training_eval", False):
+                        # A5/政策类实验：复用同一批折模型时仍需标准逐日明细与测试指标
+                        result = execute_skip_training_evaluation(
+                            split=split,
+                            wf_run_id=wf_run_id,
+                            storage=storage,
+                            loader=loader,
+                            registry=registry,
+                            args=args,
+                            main_board_codes=main_board_codes,
+                            topk_values=topk_values,
+                            model_version=model_version,
+                        )
+                    else:
+                        result = {
+                            "split_index": split.split_index,
+                            "train_start": split.train_start,
+                            "train_end": split.train_end,
+                            "test_start": split.test_start,
+                            "test_end": split.test_end,
+                            "model_version": model_version,
+                            "feature_columns": (skip_metadata or {}).get("feature_columns") or [],
+                            "bt_metrics": {},
+                        }
                 else:
                     result = execute_split_training(
                         split=split,

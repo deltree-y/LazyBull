@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.8] - 2026-09-21
+
+### Added
+
+- **A5 路由型下行风险惩罚（downside penalty）工具落地**（排序后处理载体；**默认关**）：
+  - 新模块 `src/lazybull/signals/downside_penalty.py`：`score' = 分位(score) − λ×风险分位`；
+    风险方向**单处定义**（`downside_vol_20` 越大越危险；`cvar_95_20` 越负越危险）；
+    风险缺失按截面中位 0.5 处理并计数；**λ=0 严格 no-op**（与基线逐位一致）；缺列必报错；
+    λ 冻结网格 {0, 0.25, 0.5}（CLI choices 强制，禁止事后扩展）。
+  - 接线：`MLSignal.generate_ranked` / `generate`（母截面 = 当日候选域，universe ∩ 选股过滤后）；
+    `TradingConfig`（+2 字段与校验）、`signal_factory`（Ensemble 子信号各自应用）、
+    `paper_trade.py config`（沿 `add_trading_args`）、walk_forward CLI/summary（超参签名与 summary 列）。
+  - **OOS 评估明细侧**同步：`split_training.evaluate_test_window` 在启用惩罚时用调整后分数导出逐日
+    Top-K 明细（母截面 = 评估域，与既有信号层尺子同域；执行侧为候选域，两口径差异登记于预登记文档 §1）。
+  - 评估块重构为共用函数 `evaluate_test_window`；新增 `execute_skip_training_evaluation` +
+    `--skip-training-eval`（skip 模式补跑 OOS 评估：**不注册新模型、不写训练台账**），
+    支持惩罚/政策类实验复用同一批折模型（省训练、配对最干净）。
+  - 预登记：`docs/plans/downside_penalty_prereg.md`（λ/方向/NaN/母截面/臂/判据/数据态放行 全部跑前钉死）。
+- **smoke 读数（fold0，非判据）**：λ=0.25 下 Top20 重叠仅 **22.6%**、66% 新入选来自 base Top30 之外
+  （rank 空间相减在 λ=0.25 即强倾斜）；单折 Δ −23.4 bps（Top20）。产物
+  `data/walk_forward/batches/phase4_a5_smoke_20260921/`。
+
+### Verification
+
+- 新增 `tests/test_ml_signal_downside_penalty.py`（12 项：公式/方向/NaN/报错/集成/透传）；
+  相邻回归 `test_ml_signal.py`、`test_walk_forward*.py` 全通过。
+- **B0' vs B0 忠实性自证**：skip-eval 复跑与全量训练路径的 fold0 top20 明细 **100% 同码、pred_score 最大差 0**。
+- **A5 WF A/B 结论（2026-09-21，报告 `docs/downside_penalty_wf_ab_result.md`）：不通过 ⇒ 不采纳**——
+  主臂 dv025（λ=0.25，复用折模型 v24126~v24139、14 折、政策层关）信号层 **Δ −43.43 bps（Top20，相对 −47.1%）**
+  （三块长 95% 区间全负）；净值层 ΔCAGR −5.62pp / ΔMaxDD +0.89pp（逐折改善 10/14）/ Δ夏普 −0.188 ⇒ 判据 1 止损。
+  机制根因：**rank 空间相减在 λ=0.25 即强倾斜**（全 14 折 Top20 集合重叠 26.8%、换入 14.6 只/日）。
+  开关保持默认关；不再开新臂、禁止消融位搜索（描述臂 dv050/cv025 读数见报告 §6）。
+
 ## [0.127.7] - 2026-09-20
 
 ### Changed
