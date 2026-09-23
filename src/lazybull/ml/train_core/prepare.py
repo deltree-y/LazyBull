@@ -85,6 +85,8 @@ def prepare_training_data(
     enable_top10fh_features: bool = False,
     top10fh_panel: Optional[pd.DataFrame] = None,
     top10fh_feature_set: str = "full",
+    enable_top_inst_features: bool = False,
+    top_inst_lookup: Optional[dict] = None,
     enable_availability_markers: bool = False,
     feature_stability_filter: bool = False,
     factor_prune: bool = False,
@@ -133,6 +135,10 @@ def prepare_training_data(
             禁止跨取值并组比较；`concentration` = **单列** `tfh_concentration_chg` + 哨兵
             （Phase 3 体检：家族内仅该列有强信息且正交；不含 freshness——与
             `fundamental_freshness_days` ρ=0.999 重复）。
+        top_inst_lookup: 龙虎榜机构席位因子运行时查询表（`{trade_date: DataFrame}`，
+            由 `factors.top_inst.build_top_inst_runtime_lookup` 构建）。启用
+            `enable_top_inst_features` 时**必须提供**：本族列一律**运行时派生**，
+            不写入 cs_train（与股东增减持/股票回购同一先例）。
         freshness_strategy: freshness 处理策略。
             - state_keep_event_decay（默认）：状态型 freshness 保留，事件型 freshness 仅用于衰减对应特征值
             - state_keep_event_no_decay：状态型 freshness 保留，事件型 freshness 删除且不衰减对应特征值
@@ -623,6 +629,51 @@ def prepare_training_data(
         logger.info(
             f"启用十大流通股东因子（运行时派生，列集={top10fh_feature_set}）: {tfh_columns}"
         )
+
+    if enable_top_inst_features:
+        # 本族列同为**运行时派生**（不写回 cs_train）：查询表由调用方（CLI / walk_forward）构建。
+        from ...factors.top_inst import (
+            TOP_INST_SCHEMA_VERSION,
+            TOP_INST_VERSION_COL,
+            derive_top_inst_columns,
+            top_inst_feature_columns,
+        )
+
+        if top_inst_lookup is None:
+            raise ValueError(
+                "enable_top_inst_features=True 需要传入 top_inst_lookup"
+                "（龙虎榜机构席位因子为运行时派生：本族列不写入 cs_train）。"
+                "请通过 walk_forward.py 的 --enable-top-inst-features 启用，"
+                "且 raw/top_inst 年分区已下载"
+            )
+        ti_columns = top_inst_feature_columns()
+        derived_ti = derive_top_inst_columns(
+            df,
+            top_inst_lookup,
+            wanted=ti_columns,
+            log_prefix="[训练入口] ",
+        )
+        valid_cols = {c for c in df.columns}
+        missing_ti = [col for col in ti_columns if col not in valid_cols]
+        if missing_ti:
+            raise ValueError(
+                "enable_top_inst_features=True，但龙虎榜机构席位特征 schema 不完整，"
+                f"缺少列: {missing_ti}（已尝试运行时派生 {derived_ti}）。"
+                "请检查 raw/top_inst 数据与查询表日期覆盖"
+            )
+        # 哨兵校验：拦截旧语义特征分区（若分区自带本族列则不会被派生覆盖）被误用
+        ti_sentinel = df[TOP_INST_VERSION_COL]
+        if ti_sentinel.isna().any() or (
+            ti_sentinel.fillna(-1) != TOP_INST_SCHEMA_VERSION
+        ).any():
+            raise ValueError(
+                "enable_top_inst_features=True，但特征分区的哨兵列 "
+                f"{TOP_INST_VERSION_COL} 存在缺失或版本不等于 "
+                f"{TOP_INST_SCHEMA_VERSION}（疑似混入旧语义分区），"
+                "请确认特征分区不含本族列（本族列一律运行时派生）"
+            )
+        feature_columns.extend(ti_columns)
+        logger.info(f"启用龙虎榜机构席位因子（运行时派生）: {ti_columns}")
 
     # ── 市值中性化特征：仅纳入核心特征列表中稳定因子对应的 zscore_*_sz 列 ──
     # 避免稀疏因子（如一致预期）的 _sz 列在不同日期间存在/缺失导致 schema 不一致

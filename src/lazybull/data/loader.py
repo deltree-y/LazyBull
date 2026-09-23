@@ -579,6 +579,16 @@ class DataLoader(IncomeLoaderMixin, DividendLoaderMixin, AnnouncementRiskLoaderM
             return None
         return df
 
+    def load_top_inst(self, years: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+        """加载龙虎榜机构席位数据（按 trade_date 年分区；可指定年份子集）。"""
+        from .top_inst_raw import load_top_inst
+
+        df = load_top_inst(self.storage, years=years)
+        if df is None or len(df) == 0:
+            logger.warning("未找到龙虎榜机构席位数据（top_inst）")
+            return None
+        return df
+
     def load_top10_floatholders(
         self, years: Optional[List[str]] = None
     ) -> Optional[pd.DataFrame]:

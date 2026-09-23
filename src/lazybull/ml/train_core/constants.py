@@ -210,6 +210,17 @@ DIVIDEND_POLICY_FEATURE_COLUMNS = [
     "dividend_hist_missing",  # 缺失标记（显式随开关入模，不进全局缺失标记列表）
 ]
 
+#: 龙虎榜机构席位因子（top_inst，运行时派生；与 `factors/top_inst.py::TOP_INST_COLS`
+#: 双处单一来源，有测试锁定一致）
+TOP_INST_FEATURE_COLUMNS = [
+    "ti_inst_net_ratio",  # 当日机构净买 ÷ 流通市值
+    "ti_inst_buy_ratio",  # 当日机构买入 ÷ 流通市值
+    "ti_inst_sell_ratio",  # 当日机构卖出 ÷ 流通市值
+    "ti_inst_net_sum_20",  # 近 20 交易日净买累计 ÷ 流通市值
+    "ti_inst_days_20",  # 近 20 交易日机构出现天数
+    "ti_schema_v1",  # schema 哨兵（当前值 1）
+]
+
 FRESHNESS_STRATEGY_DROP_ALL = "drop_all"
 
 FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY = "state_keep_event_decay"

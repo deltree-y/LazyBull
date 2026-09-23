@@ -271,6 +271,43 @@ class Top10FhFactorHandler:
         return result
 
 
+class TopInstFactorHandler:
+    """龙虎榜机构席位因子（20 交易日滚动窗口，PIT 按 trade_date 当日盘后可用）。
+
+    **缺失填 0 的语义**：查询表只输出「近 20 交易日有机构记录」的股票；其余股票
+    （窗口内无机构事件）一律填 0，5 个因子列在全市场口径下全覆盖，不会因稀疏被
+    训练入口 0.6 缺失率门禁整体删除（与 holdertrade / repurchase 同结构，
+    数据侧口径见 `docs/top_inst_factor_health.md`）。
+    哨兵列恒写当前 schema 版本（含无记录股票），供消费侧校验语义。
+
+    数值实现统一落在 `factors/top_inst.py::build_top_inst_feature_frame`
+    （训练 / OOS 评估 / OOS 回测侧运行时派生复用同一实现，保证各侧逐值一致）。
+    """
+
+    def apply(self, features, data, trade_date, current_data) -> Dict[str, pd.Series]:
+        from ..factors.top_inst import (
+            TOP_INST_SCHEMA_VERSION,
+            TOP_INST_VERSION_COL,
+            build_top_inst_feature_frame,
+        )
+
+        # data is None ⇒ 该构建未启用本族因子（不输出任何列，保持与 holdertrade 等一致）；
+        # data 为空 DataFrame ⇒ 该交易日无活跃记录（仍输出 0 填充列，保证逐日 schema 一致）。
+        if data is None:
+            return {}
+        if len(data) == 0:
+            merged = None
+        else:
+            merge_cols = [c for c in data.columns if c != "ts_code"]
+            merged = _safe_merge_by_ts_code(features, data, merge_cols, "top_inst")
+        frame = build_top_inst_feature_frame(features, merged)
+        result: Dict[str, pd.Series] = {col: frame[col] for col in frame.columns}
+        result[TOP_INST_VERSION_COL] = pd.Series(
+            np.int8(TOP_INST_SCHEMA_VERSION), index=features.index
+        )
+        return result
+
+
 class EarningsFactorHandler:
     """业绩预告/快报因子。"""
 

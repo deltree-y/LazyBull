@@ -177,6 +177,7 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         repurchase_feature_set="headroom",
         enable_top10fh_features=True,
         top10fh_feature_set="concentration",
+        enable_top_inst_features=True,
     )
 
     metadata = core_module._build_feature_flag_train_params(args)
@@ -193,6 +194,7 @@ def test_walk_forward_registered_metadata_includes_consensus_feature_flag():
         "repurchase_feature_set": "headroom",
         "enable_top10fh_features": True,
         "top10fh_feature_set": "concentration",
+        "enable_top_inst_features": True,
     }
 
 

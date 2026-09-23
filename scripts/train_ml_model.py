@@ -374,6 +374,15 @@ def main():
             "（超参签名维度，禁止跨取值并组比较）"
         ),
     )
+    parser.add_argument(
+        "--enable-top-inst-features",
+        action="store_true",
+        default=False,
+        help=(
+            "启用龙虎榜机构席位因子（top_inst，运行时派生；需 raw/top_inst 年分区已下载，"
+            "见 docs/top_inst_factor_health.md）"
+        ),
+    )
 
     parser.add_argument(
         "--feature-stability-filter",
@@ -497,6 +506,21 @@ def main():
                 f"{args.top10fh_panel['ts_code'].nunique():,} 只股票"
             )
 
+        # 龙虎榜机构席位因子：同一先例（运行时派生、逐日查询表，不写回 cs_train）
+        args.top_inst_lookup = None
+        if getattr(args, "enable_top_inst_features", False):
+            from src.lazybull.factors.top_inst import build_top_inst_runtime_lookup
+
+            args.top_inst_lookup = build_top_inst_runtime_lookup(
+                loader, args.start_date, args.end_date
+            )
+            if not args.top_inst_lookup:
+                raise ValueError(
+                    "enable_top_inst_features=True 但 raw/top_inst 为空。请确认 "
+                    "data/raw/top_inst/ 年分区已下载"
+                )
+            logger.info(f"龙虎榜机构席位运行时查询表: {len(args.top_inst_lookup)} 个交易日")
+
         # 1. 加载特征数据
         df, trade_days_count = load_features_data(storage, loader, args.start_date, args.end_date)
         total_samples = len(df)
@@ -570,6 +594,8 @@ def main():
             enable_top10fh_features=getattr(args, "enable_top10fh_features", False),
             top10fh_panel=getattr(args, "top10fh_panel", None),
             top10fh_feature_set=getattr(args, "top10fh_feature_set", "full"),
+            enable_top_inst_features=getattr(args, "enable_top_inst_features", False),
+            top_inst_lookup=getattr(args, "top_inst_lookup", None),
             feature_stability_filter=args.feature_stability_filter,
             factor_prune=args.factor_prune,
             factor_exclude_file=getattr(args, "factor_exclude_file", None),
@@ -707,6 +733,7 @@ def main():
                 "repurchase_feature_set": getattr(args, "repurchase_feature_set", "full"),
                 "enable_top10fh_features": getattr(args, "enable_top10fh_features", False),
                 "top10fh_feature_set": getattr(args, "top10fh_feature_set", "full"),
+                "enable_top_inst_features": getattr(args, "enable_top_inst_features", False),
                 # 推理侧（MLSignal）按此复现事件型 freshness 衰减，必须与训练一致
                 "freshness_strategy": getattr(args, "freshness_strategy", "state_keep_event_decay"),
                 "event_freshness_half_life_days": getattr(

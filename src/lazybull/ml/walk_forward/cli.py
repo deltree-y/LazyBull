@@ -435,6 +435,15 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
 
     # 股票回购因子（运行时派生；需先下载 repurchase）
     parser.add_argument(
+        "--enable-top-inst-features",
+        action="store_true",
+        default=False,
+        help=(
+            "启用龙虎榜机构席位因子（top_inst，运行时派生；需 raw/top_inst 年分区已下载，"
+            "见 docs/top_inst_factor_health.md）"
+        ),
+    )
+    parser.add_argument(
         "--enable-repurchase-features",
         action="store_true",
         default=False,

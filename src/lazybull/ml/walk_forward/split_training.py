@@ -17,6 +17,8 @@ from src.lazybull.factors.holdertrade import (
 from src.lazybull.factors.holdertrade import derive_holdertrade_columns
 from src.lazybull.factors.repurchase import available_repurchase_columns as _REPURCHASE_OUTPUT_COLS
 from src.lazybull.factors.repurchase import derive_repurchase_columns
+from src.lazybull.factors.top_inst import available_top_inst_columns as _TOP_INST_OUTPUT_COLS
+from src.lazybull.factors.top_inst import derive_top_inst_columns
 from src.lazybull.factors.top10_floatholders import (
     available_top10fh_columns as _TOP10FH_OUTPUT_COLS,
 )
@@ -276,6 +278,19 @@ def evaluate_test_window(
         )
         if derived_tfh:
             logger.info(f"OOS 测试集派生十大流通股东列: {derived_tfh}")
+
+    # 龙虎榜机构席位因子同为运行时派生（不写入 cs_train）：按模型特征列就地拼接
+    ti_lookup = getattr(args, "top_inst_lookup", None)
+    ti_output_cols = _TOP_INST_OUTPUT_COLS()
+    if ti_lookup is not None and any(col in feature_columns for col in ti_output_cols):
+        derived_ti = derive_top_inst_columns(
+            df_test_eval,
+            ti_lookup,
+            wanted=feature_columns,
+            log_prefix="[OOS 评估] ",
+        )
+        if derived_ti:
+            logger.info(f"OOS 测试集派生龙虎榜机构席位列: {derived_ti}")
 
     missing_test_columns = [col for col in feature_columns if col not in df_test_eval.columns]
     if missing_test_columns:

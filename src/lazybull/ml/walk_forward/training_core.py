@@ -52,6 +52,7 @@ def _build_feature_flag_train_params(args: Any) -> Dict[str, Any]:
         "repurchase_feature_set": str(getattr(args, "repurchase_feature_set", "full")),
         "enable_top10fh_features": bool(getattr(args, "enable_top10fh_features", False)),
         "top10fh_feature_set": str(getattr(args, "top10fh_feature_set", "full")),
+        "enable_top_inst_features": bool(getattr(args, "enable_top_inst_features", False)),
         "enable_availability_markers": bool(getattr(args, "enable_availability_markers", False)),
     }
 
@@ -206,6 +207,8 @@ def _train_model_on_window(
         enable_top10fh_features=getattr(args, "enable_top10fh_features", False),
         top10fh_panel=getattr(args, "top10fh_panel", None),
         top10fh_feature_set=getattr(args, "top10fh_feature_set", "full"),
+        enable_top_inst_features=getattr(args, "enable_top_inst_features", False),
+        top_inst_lookup=getattr(args, "top_inst_lookup", None),
         enable_availability_markers=getattr(args, "enable_availability_markers", False),
         feature_stability_filter=args.feature_stability_filter,
         factor_prune=args.factor_prune,

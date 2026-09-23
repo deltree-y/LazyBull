@@ -16,6 +16,7 @@ from ...data import DataLoader, Storage
 from ...factors.holdertrade import derive_holdertrade_columns
 from ...factors.repurchase import derive_repurchase_columns
 from ...factors.top10_floatholders import derive_top10fh_columns
+from ...factors.top_inst import derive_top_inst_columns
 from ...universe import BasicUniverse
 
 
@@ -54,6 +55,7 @@ def run_oos_backtest(
     holdertrade_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     repurchase_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     top10fh_panel: Optional[pd.DataFrame] = None,
+    top_inst_lookup: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测并返回组合级绩效指标。
 
@@ -130,6 +132,14 @@ def run_oos_backtest(
             if derive_top10fh_columns(features, top10fh_panel):
                 tfh_days += 1
         logger.info(f"OOS 回测特征派生十大流通股东列: {tfh_days}/{len(features_by_date)} 日")
+
+    # 龙虎榜机构席位因子同为运行时派生（cs_train 不含本族列）：复用同一张查询表逐日补齐
+    if top_inst_lookup:
+        ti_days = 0
+        for trade_date, features in features_by_date.items():
+            if derive_top_inst_columns(features, top_inst_lookup):
+                ti_days += 1
+        logger.info(f"OOS 回测特征派生龙虎榜机构席位列: {ti_days}/{len(features_by_date)} 日")
 
     if not features_by_date:
         logger.warning(f"OOS回测: 无特征数据 {bt_start}~{bt_end}，跳过")
