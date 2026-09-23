@@ -145,6 +145,7 @@ class PaperQueueMixin:
                 'desired_position_count': inst.desired_position_count,
                 'retry_attempt': inst.retry_attempt,
                 'replacement_slot_code': inst.replacement_slot_code,
+                'keep_buy_date': bool(getattr(inst, 'keep_buy_date', False)),
             })
         
         df = pd.DataFrame(data)
@@ -185,6 +186,11 @@ class PaperQueueMixin:
                     if 'replacement_slot_code' in df.columns
                     and pd.notna(row['replacement_slot_code'])
                     else ''
+                ),
+                keep_buy_date=(
+                    bool(row['keep_buy_date'])
+                    if 'keep_buy_date' in df.columns and pd.notna(row['keep_buy_date'])
+                    else False
                 ),
             ))
         

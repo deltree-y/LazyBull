@@ -27,6 +27,7 @@ class PaperInstructionMixin:
         tranche_idx: int = 0,
         overall_top_n: Optional[int] = None,
         stagger_tranches: int = 1,
+        budget_multiplier: float = 1.0,
     ) -> List[TradeInstruction]:
         """从目标权重生成明确的交易指令
 
@@ -43,6 +44,7 @@ class PaperInstructionMixin:
             tranche_idx: 分批调仓批次索引（0-based）
             overall_top_n: 组合最终总持仓数（分批时使用）
             stagger_tranches: 分批调仓批次数（1=不分批）
+            budget_multiplier: 买入预算系数（暴露政策 λ；默认 1.0=不缩放）
 
         Returns:
             交易指令列表
@@ -63,6 +65,10 @@ class PaperInstructionMixin:
 
         #total_capital = self.account.initial_capital #???应使用当前总资产,可以乘一个系数
         total_capital = self.account.get_total_value(current_prices) * (1 - capital_retention_ratio)  # 乘以系数以留出现金空间，避免过度买入
+        if budget_multiplier < 1.0:
+            # 暴露政策：买入预算基数 × λ（存量暴露由每日减仓控制，增量不买回）
+            total_capital *= max(0.0, budget_multiplier)
+            logger.info(f"  暴露政策买入预算缩放: λ={budget_multiplier:.2f}")
 
         capital_fraction = 1.0
         # 分批调仓：按本批槽位占总 top_n 的比例分配组合价值（与回测对齐）

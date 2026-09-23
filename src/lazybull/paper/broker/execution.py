@@ -186,6 +186,8 @@ class PaperExecutionMixin:
             price_type = inst.price_type
             reason = inst.reason
             original_signal_date = getattr(inst, 'original_signal_date', '') or inst.source_date
+            # 暴露门控回补：加仓保留买入日；失败**不进补位队列**（由次日判定重试）
+            keep_buy_date = bool(getattr(inst, 'keep_buy_date', False))
 
             current_position = self.account.get_position(ts_code)
             if (
@@ -209,6 +211,9 @@ class PaperExecutionMixin:
             
             # 检查价格数据
             if ts_code not in buy_prices:
+                if keep_buy_date:
+                    logger.warning(f"回补买入 {ts_code} 无价格数据，跳过并等待次日判定重试")
+                    continue
                 logger.warning(f"股票 {ts_code} 无买入价格数据，加入补位计划")
                 failed_buy_targets.append(TargetWeight(
                     ts_code=ts_code,
@@ -221,6 +226,11 @@ class PaperExecutionMixin:
             # 检查可交易性
             can_buy, check_reason = self._check_can_buy(ts_code, tradability)
             if not can_buy:
+                if keep_buy_date:
+                    logger.warning(
+                        f"回补买入 {ts_code} 不可买入（{check_reason}），跳过并等待次日判定重试"
+                    )
+                    continue
                 logger.warning(f"股票 {ts_code} 不可买入: {check_reason}，加入补位计划")
                 failed_buy_targets.append(TargetWeight(
                     ts_code=ts_code,
@@ -248,6 +258,12 @@ class PaperExecutionMixin:
                     actual_shares = 0
                 
                 if actual_shares <= 0:
+                    if keep_buy_date:
+                        logger.warning(
+                            f"回补买入 {ts_code} 现金不足（不足 1 手），"
+                            "跳过并等待次日判定重试"
+                        )
+                        continue
                     logger.warning(f"股票 {ts_code} 现金不足，不足1手，加入补位计划")
                     failed_buy_targets.append(TargetWeight(
                         ts_code=ts_code,
@@ -264,6 +280,12 @@ class PaperExecutionMixin:
             # 创建订单并执行
             actual_buy_value = actual_shares * price
             if min_buy_value_threshold > 0 and actual_buy_value < min_buy_value_threshold:
+                if keep_buy_date:
+                    logger.warning(
+                        f"回补买入 {ts_code} 买入后市值 {actual_buy_value:.2f} 低于阈值 "
+                        f"{min_buy_value_threshold:.2f}，跳过并等待次日判定重试"
+                    )
+                    continue
                 logger.warning(
                     f"股票 {ts_code} 买入后市值 {actual_buy_value:.2f} 低于阈值 "
                     f"{min_buy_value_threshold:.2f}，加入补位计划"
@@ -285,12 +307,14 @@ class PaperExecutionMixin:
                 price=price,
                 target_weight=inst.target_weight,
                 current_weight=0.0,  # 指令模式不需要权重
-                reason=reason
+                reason=reason,
+                keep_buy_date=keep_buy_date,
             )
 
             fill = self._execute_single_order(
                 order, trade_date, price_type,
                 buy_atr_pct=atr_map.get(ts_code, 0.0),
+                keep_buy_date=keep_buy_date,
             )
             if fill:
                 fills.append(fill)
@@ -338,6 +362,7 @@ class PaperExecutionMixin:
         trade_date: str,
         price_type: str,
         buy_atr_pct: float = 0.0,
+        keep_buy_date: bool = False,
     ) -> Optional[Fill]:
         """执行单个订单
 
@@ -346,6 +371,7 @@ class PaperExecutionMixin:
             trade_date: 交易日期
             price_type: 价格类型 open/close
             buy_atr_pct: 买入时 ATR 百分比（仅买入时使用）
+            keep_buy_date: 加仓时保留原买入日（暴露门控回补语义；默认 False）
 
         Returns:
             成交记录，失败返回None
@@ -382,6 +408,7 @@ class PaperExecutionMixin:
                 buy_date=trade_date,
                 buy_pnl_price=buy_pnl_price,
                 buy_atr_pct=buy_atr_pct,
+                keep_buy_date=keep_buy_date,
             )
             
             # 创建成交记录

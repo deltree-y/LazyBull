@@ -154,3 +154,36 @@ def compute_min_buy_value_threshold(
         return 0.0
     avg_position_value = total_assets / float(target_count)
     return avg_position_value * ratio
+
+
+def resolve_trim_shares(
+    total_shares: int,
+    fraction: float,
+    lot_size: int = 100,
+) -> int:
+    """按比例卖出时的整手股数（回测与纸面共用口径，暴露门控减仓用）。
+
+    规则（A 股）：整手卖出；剩余不足一手时**整仓卖出**（无法保留零股）。
+
+    Args:
+        total_shares: 当前总持股数
+        fraction: 卖出比例，落在 (0, 1]；1.0 表示整仓卖出
+        lot_size: 每手股数（默认 100）
+
+    Returns:
+        应卖出股数；0 表示不执行
+    """
+    total_shares = int(total_shares or 0)
+    lot_size = int(lot_size or 0)
+    if total_shares <= 0 or lot_size <= 0:
+        return 0
+    fraction = float(fraction or 0.0)
+    if fraction <= 0:
+        return 0
+    if fraction >= 1.0:
+        return total_shares
+    trim_shares = int(total_shares * fraction) // lot_size * lot_size
+    if total_shares - trim_shares < lot_size:
+        # 剩余不足一手，无法保留 → 整仓卖出（含零股/小额持仓：50 股×0.5 ⇒ 50 股）
+        return total_shares
+    return trim_shares

@@ -414,6 +414,65 @@ class DailyExposureProvider:
         )
         return payload
 
+    # ------------------------------------------------- 跨进程状态（纸面逐日运行）
+    def export_state(self) -> Dict[str, Any]:
+        """导出跨进程可恢复状态（纸面逐日独立进程运行必需）。
+
+        覆盖：已入账面板 ``_frames``、待成熟行 ``_pending``、λ 缓存与上一次判定值。
+        折模型与价格面板不导出（按折按需重建）；滚动阈值完全由面板决定，
+        恢复后判定与连续运行**逐值一致**（有 round-trip 测试锁定）。
+        """
+
+        def _dump(frames: Dict[str, pd.DataFrame]) -> Dict[str, List[Dict[str, Any]]]:
+            dumped: Dict[str, List[Dict[str, Any]]] = {}
+            for day, frame in frames.items():
+                if frame is None or len(frame) == 0:
+                    continue
+                dumped[str(day)] = frame.to_dict(orient="records")
+            return dumped
+
+        return {
+            "version": 1,
+            "fingerprint": self.fingerprint,
+            "frames": _dump(self._frames),
+            "pending": _dump(self._pending),
+            "cache": {str(key): float(value) for key, value in self._cache.items()},
+            "last_multiplier": float(self._last_multiplier),
+        }
+
+    def restore_state(self, payload: Dict[str, Any]) -> None:
+        """恢复 ``export_state`` 导出的状态（指纹不一致直接报错，禁止跨口径续用）。"""
+        if not payload:
+            return
+        if int(payload.get("version", 0)) != 1:
+            raise ValueError(f"未知 provider 状态版本: {payload.get('version')!r}")
+        fingerprint = str(payload.get("fingerprint", ""))
+        if fingerprint and fingerprint != self.fingerprint:
+            raise ValueError(
+                f"provider 状态指纹不匹配（{fingerprint} != {self.fingerprint}）："
+                "策略或模型源已变化，必须清空状态重算"
+            )
+
+        def _load(records) -> Dict[str, pd.DataFrame]:
+            frames: Dict[str, pd.DataFrame] = {}
+            for day, rows in (records or {}).items():
+                frame = pd.DataFrame(rows or [])
+                if frame.empty:
+                    continue
+                if "remaining_intervals" in frame.columns:
+                    frame["remaining_intervals"] = pd.to_numeric(
+                        frame["remaining_intervals"], errors="coerce"
+                    )
+                frames[str(day)] = frame
+            return frames
+
+        self._frames = _load(payload.get("frames"))
+        self._pending = _load(payload.get("pending"))
+        self._cache = {
+            str(key): float(value) for key, value in (payload.get("cache") or {}).items()
+        }
+        self._last_multiplier = float(payload.get("last_multiplier", 1.0) or 1.0)
+
     # ------------------------------------------------------------- 内部实现
     def _calendar_list(self) -> List[str]:
         if self._calendar is None:

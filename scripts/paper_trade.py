@@ -86,6 +86,21 @@ def run_config(args):
     trading_config = TradingConfig.from_args(args)
     new_config = trading_config.to_dict()
 
+    # 暴露政策参数不在 TradingConfig 白名单内：显式给出才写入（None = 不改动原值）
+    for key in (
+        "exposure_policy",
+        "policy_model_root",
+        "policy_arm_suffix",
+        "policy_coverage_start",
+        "exposure_trim_tolerance",
+    ):
+        value = getattr(args, key, None)
+        if value is not None:
+            new_config[key] = value
+    replenish = getattr(args, "exposure_replenish", None)
+    if replenish is not None:
+        new_config["exposure_replenish"] = bool(replenish)
+
     # 加载已有配置作为基础，仅覆盖与默认值不同的字段（即用户明确指定的参数）
     storage = PaperStorage()
     existing_config = storage.load_config() or {}
@@ -144,7 +159,14 @@ def run_main(args):
         f"  最小买入市值比例: {config.get('min_buy_value_ratio', 0.2):.0%}（相对平均仓位）"
     )
     logger.info(f"  止损开关: {config['stop_loss_enabled']}")
-    logger.info(f"  ECT开关: {config.get('equity_curve_enabled', False)}")
+    exposure_setting = config.get("exposure_policy")
+    if exposure_setting:
+        logger.info(
+            f"  暴露政策: 启用（{exposure_setting}，模型根 {config.get('policy_model_root', '-')}，"
+            f"回补 {'开' if config.get('exposure_replenish') else '关'}）"
+        )
+    else:
+        logger.info("  暴露政策: 关闭")
     if config.get("max_per_industry"):
         logger.info(f"  单行业最大持仓: {config['max_per_industry']}")
     if config.get("max_weight_per_stock"):
@@ -758,7 +780,7 @@ def main():
 
     # config 子命令 — 使用公共参数注册函数
     config_parser = subparsers.add_parser("config", help="设置全局配置（持久化）")
-    add_trading_args(config_parser, include_price=True)
+    add_trading_args(config_parser, include_price=True, include_exposure=True)
 
     # run 子命令
     run_parser = subparsers.add_parser("run", help="每日运行入口，自动编排执行各项动作")

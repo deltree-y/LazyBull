@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.10] - 2026-09-23
+
+### Added
+
+- **纸面交易暴露政策接线（terminal_loss P2-3/P2-4/P2-5 纸面实现，默认关）**：
+  - 新模块 `src/lazybull/paper/exposure_policy.py`：`PaperExposureSettings`（单变量直读 `exposure` 配置区）
+    + `PaperExposurePolicy`（评估/判定/结算/状态）+ `ensure_paper_exposure_policy`（runner 级惰性装配）。
+    评估**复用** `risk/terminal_loss/exposure_online.DailyExposureProvider`（禁止复制公式）；
+    减仓/回补语义对齐 `backtest/exposure_trim.py` / `backtest/exposure_replenish.py`（容差/整手/跳过卖出队列）。
+  - 执行链路：判定日 λ 在 **T1 执行前**评估（对齐引擎语义 S1）；减仓/回补指令**追加到既有 T+1 指令文件**
+    （复用 T0/T1 链路，不新增执行路径）；`run_t0` 买入预算与 `_execute_pending_buys` 补齐两条路径乘同一 λ
+    （同日缓存单次评估）；回补指令 `keep_buy_date=True`（加仓不重置买入日、失败不进补位队列）。
+  - 状态持久化：`data/paper/state/exposure_policy.json`（释放额/待结算计划/λ 缓存/provider 面板快照）；
+    指纹或版本不一致**清空并告警**（禁止静默续用）；数据类异常**降级顺延**上次 λ（fail-soft，非静默）。
+  - provider 跨进程状态：`exposure_online.export_state()/restore_state()`（纸面逐日独立进程必需）——
+    恢复后同日返回缓存值、面板逐值一致、新一日判定与连续运行相同；指纹不符/未知版本直接报错。
+  - 底层共用：`trading/sizing.py::resolve_trim_shares`（回测/纸面共用整手减仓取整，引擎侧改为转发，
+    取整语义与原引擎逐位一致）；`paper/models.py` 指令/订单字段 + `storage/queue.py` 持久化 `keep_buy_date`
+    （旧指令文件无该列时默认 False，向后兼容）；`paper/account.py::add_position(keep_buy_date=...)`
+    保留原买入日/绩效价/ATR。
+  - CLI/配置：`paper_trade.py config` 新增 `--exposure-policy / --policy-model-root / --policy-arm-suffix /
+    --policy-coverage-start / --exposure-replenish | --no-exposure-replenish / --exposure-trim-tolerance`；
+    `data/paper/config.yaml` 新增 `exposure` 区块（默认 `exposure_policy: null` 全关）；
+    `bot_service.py` 共享同一 workflow，自动继承。
+- **纸面配置清理（已下线功能）**：`paper/storage/config.py` 新增 `RETIRED_CONFIG_KEYS` /
+  `RETIRED_CONFIG_PREFIXES` + `is_retired_config_field()`，**所有保存/生成路径**（`paper_trade.py config`、
+  reset-t0 后刷新、重建脚本）统一剔除历史遗留区块（holding_management / weakness_exit / equity_curve /
+  market_regime / industry / signal_gate / stop_loss_trailing_*）并记日志；`data/paper/config.yaml` 已按新模板重建
+  （250→98 行）；`downside_penalty` / `downside_penalty_column` 从 `extra:` 升格为正式 `signal_penalty` 区块。
+
+### Changed
+
+- `--help` 文本中的 Unicode 减号（U+2212，GBK 控制台无法编码导致 `config --help` 崩溃）改为 ASCII 写法
+  （`trading_config.py` / `walk_forward/cli.py` 两处）。
+
+### Verification
+
+- 新增 `tests/test_paper_exposure_policy.py`（26 项：配置校验 / 减仓 / 回补 / 结算 / 状态 round-trip /
+  装配缓存 / keep_buy_date 链路）；`tests/test_exposure_online.py` 补 3 项跨进程状态 round-trip
+  （含指纹与版本拒绝）；修复 `test_buy_replacement.py` 桩配置未给 `load_config` 契约的缺口。
+- 全量 `pytest tests`：**2084 passed**（含 `test_backtest_exposure_trim.py` 取整语义逐位对齐旧引擎）。
+- CLI 冒烟：`paper_trade.py config --help` 新参数全部注册可见；`bot_service.py` 经 `execute_trade_workflow` 共享链路。
+
 ## [0.127.9] - 2026-09-23
 
 ### Added

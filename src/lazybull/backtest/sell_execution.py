@@ -13,6 +13,7 @@ from ..trading.sell_rules import (
     min_holding_days_for_rebalance_sell,
     select_rebalance_sell_candidates,
 )
+from ..trading.sizing import resolve_trim_shares
 
 
 class BacktestSellExecutionMixin:
@@ -433,23 +434,8 @@ class BacktestSellExecutionMixin:
         )
 
     def _resolve_trim_shares(self, total_shares: int, fraction: float) -> int:
-        """计算按比例卖出时应卖出的股数（A 股规则：整手卖出，剩余不足一手整仓卖出）
-
-        Args:
-            total_shares: 当前总持股数
-            fraction: 卖出比例，∈(0, 1]；1.0 表示整仓卖出
-
-        Returns:
-            应卖出股数；0 表示不执行（按手数取整后不足 100 股）
-        """
-        if fraction >= 1.0:
-            return total_shares
-        raw_shares = int(total_shares * fraction)
-        trim_shares = raw_shares // 100 * 100
-        if total_shares - trim_shares < 100:
-            # 剩余不足一手，无法保留 → 整仓卖出
-            trim_shares = total_shares
-        return trim_shares
+        """计算按比例卖出时应卖出的股数（委托 ``trading.sizing.resolve_trim_shares``，回测/纸面共用）。"""
+        return resolve_trim_shares(total_shares, fraction)
 
     def _sell_stock_direct(
         self,

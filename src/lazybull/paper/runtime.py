@@ -133,6 +133,19 @@ def execute_trade_workflow(
     except Exception as exc:
         logger.warning(f"补齐 {corrected_date} 的 clean 数据失败: {exc}")
 
+    # 暴露政策（terminal_loss P2-5 纸面接线）：判定日在 T1 执行**前**评估 λ，
+    # 对应引擎语义 S1（λ_t 用判定时点=执行前持仓）；run_t0 买入缩放与每日判定复用同一取值。
+    _report("暴露政策评估")
+    exposure_policy = None
+    try:
+        from .exposure_policy import ensure_paper_exposure_policy
+
+        exposure_policy = ensure_paper_exposure_policy(runner)
+    except ValueError as exc:
+        raise RuntimeError(f"暴露政策配置错误: {exc}") from exc
+    if exposure_policy is not None:
+        exposure_policy.evaluate(corrected_date)
+
     # T1 必须只执行上一交易日 T0 已落盘的指令，不能在执行日临时增删单。
     _report("执行 T1 指令")
     t1_actions = _execute_t1_if_pending(runner, corrected_date, config)
@@ -173,6 +186,22 @@ def execute_trade_workflow(
     t0_targets, t0_status, protected_stocks = _execute_t0_if_rebalance_day(
         runner, corrected_date, config
     )
+
+    # 暴露政策每日判定（减仓/回补 → 追加 T+1 指令；新调仓计划生成日清零释放额）
+    if exposure_policy is not None:
+        _report("暴露政策判定")
+        try:
+            policy_t1_date = runner._get_next_trade_date(corrected_date)
+            if policy_t1_date:
+                exposure_policy.plan(
+                    corrected_date,
+                    t1_date=policy_t1_date,
+                    is_plan_day=(t0_status == "success"),
+                )
+            else:
+                logger.warning("无法获取下一交易日，暴露政策判定跳过")
+        except Exception as exc:
+            logger.warning(f"暴露政策判定失败（不阻断主流程）: {exc}")
 
     # 已将待重试卖出转写为次日明确指令，避免 T1 再直接读取 pending 队列。
     if pending_sell_actions:
@@ -721,6 +750,13 @@ def _execute_t1_if_pending(
         all_prices = {**sell_prices, **buy_prices}
         runner._record_nav(trade_date, all_prices)
 
+    # 暴露政策结算：减仓成交额累加释放额；回补计划按实际成交退回差额（未花完不丢）
+    exposure_policy = getattr(runner, "exposure_policy", None)
+    if exposure_policy is not None:
+        try:
+            exposure_policy.settle(trade_date, list(fills or []))
+        except Exception as exc:
+            logger.warning(f"暴露政策结算失败（不阻断主流程）: {exc}")
 
     remaining_pending_buys = runner.paper_storage.load_pending_buys()
     run_record = {

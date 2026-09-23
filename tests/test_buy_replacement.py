@@ -293,6 +293,7 @@ def test_run_t0_stagger_uses_overall_top_n_as_desired_position_count():
         )
     ]
     runner.paper_storage.load_rebalance_state.return_value = {}
+    runner.paper_storage.load_config.return_value = {}  # 未启用暴露政策（load_config 契约为 dict）
 
     runner.loader.load_clean_daily.return_value = pd.DataFrame(
         {

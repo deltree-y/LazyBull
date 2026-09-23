@@ -72,7 +72,75 @@ CONFIG_SECTION_LAYOUT = [
             "universe",
         ],
     ),
+    (
+        "exposure",
+        "暴露政策（terminal_loss；默认关）",
+        [
+            "exposure_policy 为策略字符串（如 arm=combined,mode=rolling,window=250,regime_q=0.75,score_q=0.5,lambda=0.5）；null = 关闭。",
+            "启用时必须同时给出 policy_model_root（终损折模型根目录）与 policy_arm_suffix（如 _v6m_fscore）。",
+            "exposure_replenish 为对称回补开关；exposure_trim_tolerance 为减仓/回补共用容差（组合总值比例，默认 0.03）。",
+            "policy_coverage_start 为生效起点（此日之前只累积阈值历史、不动作）。",
+        ],
+        [
+            "exposure_policy",
+            "policy_model_root",
+            "policy_arm_suffix",
+            "policy_coverage_start",
+            "exposure_replenish",
+            "exposure_trim_tolerance",
+        ],
+    ),
+    (
+        "signal_penalty",
+        "信号层下行风险惩罚（A5；默认关）",
+        [
+            "downside_penalty 为惩罚强度 λ（冻结网格 0 / 0.25 / 0.5；0 = 关闭且与基线逐位一致）。",
+            "downside_penalty_column 为所用风险列（downside_vol_20 = 主臂；cvar_95_20 = 对照）。",
+        ],
+        [
+            "downside_penalty",
+            "downside_penalty_column",
+        ],
+    ),
 ]
+
+#: 已下线功能的配置键（历史模板遗留）：保存/生成配置时一律剔除，避免 reset/刷新后复活。
+#: 键名或前缀命中任一规则即视为已下线。
+RETIRED_CONFIG_KEYS = {
+    "holding_management",  # 盈亏动态持仓（实现已移除）
+    "enable_profit_based_holding",
+    "use_atr_for_early_exit",
+    "atr_multiplier",
+    "take_profit_threshold",
+    "take_profit_refill",
+    "weakness_exit",  # 表现弱势退出（实现已移除）
+    "equity_curve",  # 权益曲线交易 ECT（已下线）
+    "market_regime",  # 市场择时（未实现）
+    "industry",  # 行业动量/轮动（未实现）
+    "signal_gate_mode",  # 信号入口门控（未实现）
+    "stop_loss_trailing_enabled",  # 移动止损（未实现）
+    "stop_loss_trailing_pct",
+}
+
+RETIRED_CONFIG_PREFIXES = (
+    "equity_curve_",
+    "market_regime_",
+    "weakness_exit_",
+    "industry_momentum_",
+    "industry_rotation_",
+    "profit_extension_",
+    "early_exit_",
+    "holding_bonus_",
+    "signal_gate_",
+)
+
+
+def is_retired_config_field(key: str) -> bool:
+    """判断配置键是否属于已下线功能（单处定义，供保存/生成路径统一剔除）。"""
+    key = str(key or "")
+    if key in RETIRED_CONFIG_KEYS:
+        return True
+    return any(key.startswith(prefix) for prefix in RETIRED_CONFIG_PREFIXES)
 
 CONFIG_SECTION_NAMES = {section_name for section_name, _, _, _ in CONFIG_SECTION_LAYOUT}
 
@@ -109,6 +177,22 @@ CONFIG_SECTION_RENDER_GROUPS = {
         ),
     ],
     "paper_trade": [("基础执行参数（始终生效）", CONFIG_SECTION_LAYOUT[4][3])],
+    "exposure": [
+        ("总开关（null = 关闭；关闭后以下参数不生效）", ["exposure_policy"]),
+        (
+            "以下参数仅在 exposure_policy 非 null 时生效",
+            [
+                "policy_model_root",
+                "policy_arm_suffix",
+                "policy_coverage_start",
+                "exposure_replenish",
+                "exposure_trim_tolerance",
+            ],
+        ),
+    ],
+    "signal_penalty": [
+        ("始终生效（λ=0 时无行为变化）", ["downside_penalty", "downside_penalty_column"]),
+    ],
 }
 
 class PaperConfigMixin:
@@ -234,10 +318,16 @@ class PaperConfigMixin:
         return flattened
 
     def _normalize_config(self, config: dict) -> dict:
-        """将配置补齐为完整 TradingConfig 视图。"""
+        """将配置补齐为完整 TradingConfig 视图（并剔除已下线功能的遗留键）。"""
         normalized = self._flatten_grouped_config(config)
         if "position_sizing" not in normalized and "weight_method" in normalized:
             normalized["position_sizing"] = normalized["weight_method"]
+
+        retired = sorted(key for key in normalized if is_retired_config_field(key))
+        for key in retired:
+            normalized.pop(key, None)
+        if retired:
+            logger.info(f"已剔除已下线功能的配置键（{len(retired)} 个）: {retired}")
 
         trading_config = TradingConfig.from_dict(normalized).to_dict()
         extra_keys = {

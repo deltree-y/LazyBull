@@ -275,6 +275,62 @@ def test_lambda_series_is_sorted_and_covers_consumed_days(provider):
     assert series["multiplier"].tolist() == [1.0, 1.0, 0.5, 0.5]
 
 
+# -------------------------------------------------------- 跨进程状态 round-trip
+def _new_provider(arm_suffix: str = "_stub") -> DailyExposureProvider:
+    """按 fixture 相同打桩参数构造新实例（纸面逐日独立进程场景）。"""
+    config = OnlinePolicyConfig.parse(
+        "arm=combined,mode=rolling,window=2,min_window=2,regime_q=0.5,score_q=0.5,lambda=0.5"
+    )
+    return DailyExposureProvider(
+        config,
+        risk_root="unused",
+        arm_suffix=arm_suffix,
+        data_root="data",
+        model_loader=lambda path: _StubModel(0.9),
+    )
+
+
+def test_provider_state_export_restore_round_trip(provider):
+    """导出→恢复后：已评估日返回缓存值、面板逐值一致、新一日判定与连续运行相同。"""
+    seq = ["20240102", "20240103", "20240104", "20240105"]
+    first = [provider.multiplier_for(day, _holdings()) for day in seq]
+    assert first == [1.0, 1.0, 0.5, 0.5]
+
+    payload = provider.export_state()
+    assert payload["fingerprint"] == provider.fingerprint
+
+    clone = _new_provider()
+    clone.restore_state(payload)
+    # 恢复后重放：全部命中缓存（不重算、不重复污染面板）
+    assert [clone.multiplier_for(day, _holdings()) for day in seq] == first
+    assert clone.stats["cached_days"] == len(seq)
+    # 面板逐值一致（滚动阈值完全由面板决定）
+    pd.testing.assert_frame_equal(
+        provider._ledger().reset_index(drop=True),  # noqa: SLF001 - 测试内部口径
+        clone._ledger().reset_index(drop=True),  # noqa: SLF001 - 测试内部口径
+    )
+    # 恢复后继续运行：新一日判定必须与连续运行相同（阈值历史未丢失）
+    assert clone.multiplier_for("20240108", _holdings()) == provider.multiplier_for(
+        "20240108", _holdings()
+    )
+
+
+def test_provider_state_restore_rejects_fingerprint_mismatch(provider):
+    """指纹不一致 ⇒ 直接报错（策略/模型源变化禁止静默续用）。"""
+    payload = provider.export_state()
+    clone = _new_provider(arm_suffix="_other")
+    with pytest.raises(ValueError, match="指纹"):
+        clone.restore_state(payload)
+
+
+def test_provider_state_restore_rejects_unknown_version(provider):
+    payload = provider.export_state()
+    payload["version"] = 99
+    clone = _new_provider()
+    with pytest.raises(ValueError, match="版本"):
+        clone.restore_state(payload)
+
+
 # ------------------------------------------------------------------ 引擎
 class _PolicyStub:
     """引擎侧最小桩（只需给政策源用到的接口）。"""

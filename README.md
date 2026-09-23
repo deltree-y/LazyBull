@@ -684,6 +684,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 **回撤改善不可外推**（−20.25%→−18.62% 由 split6 单折驱动）；**转正 ≠ 收益承诺**。
 详见 `docs/terminal_loss_risk_register.md` R-007 §6/§7。
 
+**纸面交易接线（v0.127.10）**：`paper_trade.py` / `bot_service.py`（共享 `execute_trade_workflow`）
+已接同一在线判定链路——判定日 λ 在 **T1 执行前**评估，减仓/回补指令**追加到既有 T+1 指令文件**，
+复用 T0/T1 链路（不新增执行路径）；回补加仓保留原买入日；状态落
+`data/paper/state/exposure_policy.json`（换策略/模型源指纹变化自动清空重算）。配置入口：
+`data/paper/config.yaml` 的 `exposure` 区块（默认 `exposure_policy: null` = 关闭且零副作用）。
+
+```powershell
+# 启用示例（在线现算 + 对称回补；与回测默认臂同口径）
+python scripts\paper_trade.py config `
+  --exposure-policy "arm=combined,mode=rolling,window=250,regime_q=0.75,score_q=0.5,lambda=0.5" `
+  --policy-model-root "data\walk_forward\terminal_risk_wf_oos14" `
+  --policy-arm-suffix "_v6m_fscore" `
+  --exposure-replenish
+
+# 关闭（恢复默认；回补开关一并写回 false）
+python scripts\paper_trade.py config --no-exposure-replenish --exposure-policy ""
+```
+
+已知差异（登记）：补齐（pending_buys）路径的买入缩放取**执行日** λ（回测取信号日，≤1 个交易日）；
+折集覆盖区间之外（例如 2026 年超出终损折集）λ 顺延为 1.0（不动作）；
+数据类异常（当日特征构建失败/打分输入缺失）告警 + 降级顺延，非静默。
+
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的
 基线、仅保留 `dividend_yield_hist_12m` 的分红方案，以及仅保留 `fcf_yield` 和
 `ocf_to_revenue`（均含 `_sz` 版）的现金流方案。三组方案复用相同的 OOS split 配置，

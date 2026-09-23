@@ -137,6 +137,7 @@ class PaperAccount:
         status: str = "持有",
         notes: str = "",
         buy_atr_pct: float = 0.0,
+        keep_buy_date: bool = False,
     ) -> None:
         """增加持仓
 
@@ -149,6 +150,8 @@ class PaperAccount:
             status: 持仓状态
             notes: 备注信息
             buy_atr_pct: 买入时 ATR 百分比（用于 ATR 动态止损）
+            keep_buy_date: 加仓时是否保留原买入日与绩效/ATR 记录
+                （暴露门控回补语义：持有期与退出计划不变；默认 False=更新为最新买入日）
         """
         if ts_code in self.state.positions:
             # 已有持仓，累加
@@ -162,15 +165,23 @@ class PaperAccount:
                 shares=total_shares,
                 buy_price=avg_price,
                 buy_cost=total_cost,
-                buy_date=buy_date,  # 更新为最新买入日期
+                buy_date=(pos.buy_date if keep_buy_date else buy_date),
                 buy_pnl_price=(
-                    buy_pnl_price
-                    if buy_pnl_price > 0
-                    else getattr(pos, "buy_pnl_price", 0.0)
+                    getattr(pos, "buy_pnl_price", 0.0)
+                    if keep_buy_date
+                    else (
+                        buy_pnl_price
+                        if buy_pnl_price > 0
+                        else getattr(pos, "buy_pnl_price", 0.0)
+                    )
                 ),
                 status=status,
                 notes=notes,
-                buy_atr_pct=buy_atr_pct if buy_atr_pct > 0 else getattr(pos, 'buy_atr_pct', 0.0),
+                buy_atr_pct=(
+                    getattr(pos, 'buy_atr_pct', 0.0)
+                    if keep_buy_date
+                    else (buy_atr_pct if buy_atr_pct > 0 else getattr(pos, 'buy_atr_pct', 0.0))
+                ),
             )
             logger.debug(f"累加持仓 {ts_code}: {shares} 股，总持仓: {total_shares} 股")
         else:

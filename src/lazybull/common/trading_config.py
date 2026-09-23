@@ -163,13 +163,14 @@ class TradingConfig:
 # ─────────────────── argparse 注册函数 ───────────────────
 
 
-def add_trading_args(parser, *, include_price: bool = False) -> None:
+def add_trading_args(parser, *, include_price: bool = False, include_exposure: bool = False) -> None:
     """向 argparse parser 注册公共策略参数。
 
     Args:
         parser: argparse.ArgumentParser 或子 parser
         include_price: 是否注册 buy_price / sell_price / initial_capital / horizon / universe
                        （paper_trade 的 config 子命令需要，backtest 一般不需要）
+        include_exposure: 是否注册暴露政策参数（纸面 config 用；默认关，不影响既有调用方）
     """
     # ── 模型 ──
     parser.add_argument(
@@ -399,7 +400,7 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
         choices=DOWNSIDE_PENALTY_GRID,
         help=(
             "下行风险惩罚强度 λ（冻结网格 0/0.25/0.5；0=关闭且与基线逐位一致）："
-            "对候选排序做 score−λ×风险分位 后处理，不改模型列集；"
+            "对候选排序做 score 减 lambda*风险分位 后处理，不改模型列集；"
             "预登记见 docs/plans/downside_penalty_prereg.md"
         ),
     )
@@ -452,4 +453,54 @@ def add_trading_args(parser, *, include_price: bool = False) -> None:
             choices=["mainboard", "all"],
             default="mainboard",
             help="股票池类型（默认：mainboard）",
+        )
+
+    # ── 暴露政策（terminal_loss P2-5 纸面接线；默认关，需要显式启用）──
+    if include_exposure:
+        parser.add_argument(
+            "--exposure-policy",
+            type=str,
+            default=None,
+            help=(
+                "暴露政策策略字符串（如 arm=combined,mode=rolling,window=250,"
+                "regime_q=0.75,score_q=0.5,lambda=0.5）；默认 None=关闭；"
+                "启用时必须同时给出 --policy-model-root 与 --policy-arm-suffix"
+            ),
+        )
+        parser.add_argument(
+            "--policy-model-root",
+            type=str,
+            default=None,
+            help="终损折模型根目录（如 data/walk_forward/terminal_risk_wf_oos14）",
+        )
+        parser.add_argument(
+            "--policy-arm-suffix",
+            type=str,
+            default=None,
+            help="终损折目录后缀（如 _v6m_fscore）",
+        )
+        parser.add_argument(
+            "--policy-coverage-start",
+            type=str,
+            default=None,
+            help="生效起点 YYYYMMDD（此前只累积阈值历史、不动作；默认全区间）",
+        )
+        parser.add_argument(
+            "--exposure-replenish",
+            action="store_true",
+            default=None,
+            dest="exposure_replenish",
+            help="启用对称回补（仅在 exposure_policy 启用时生效）",
+        )
+        parser.add_argument(
+            "--no-exposure-replenish",
+            action="store_false",
+            dest="exposure_replenish",
+            help="关闭对称回补（写回配置；无政策源时不允许置真）",
+        )
+        parser.add_argument(
+            "--exposure-trim-tolerance",
+            type=float,
+            default=None,
+            help="减仓/回补共用容差（组合总值比例，默认 0.03）",
         )

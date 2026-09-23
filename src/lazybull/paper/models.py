@@ -99,6 +99,7 @@ class Order:
     target_weight: float  # 目标权重
     current_weight: float  # 当前权重
     reason: str = "目标调仓"  # 交易原因
+    keep_buy_date: bool = False  # 加仓时保留原买入日（暴露门控回补，默认 False=重置）
 
 
 @dataclass
@@ -234,3 +235,4 @@ class TradeInstruction:
     desired_position_count: int = 0  # T0 计划的目标持仓数（用于 T1 限制新开仓槽位）
     retry_attempt: int = 0  # 该指令对应的重试次数（用于补位/重试卖出链路）
     replacement_slot_code: str = ""  # 补位指令对应的原始失败槽位
+    keep_buy_date: bool = False  # 加仓时保留原买入日（暴露门控回补；同时抑制失败补位）

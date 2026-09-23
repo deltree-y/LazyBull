@@ -24,6 +24,18 @@ from typing import Tuple
 import pandas as pd
 
 class PaperExecutionMixin:
+    def _exposure_budget_multiplier(self, trade_date: str) -> float:
+        """暴露政策买入预算系数（λ）：关闭或未启用返回 1.0，配置错误直接报错。"""
+        from ..exposure_policy import ensure_paper_exposure_policy
+
+        try:
+            policy = ensure_paper_exposure_policy(self)
+        except ValueError as exc:
+            raise RuntimeError(f"暴露政策配置错误: {exc}") from exc
+        if policy is None:
+            return 1.0
+        return float(policy.multiplier(trade_date))
+
     def run_t0(
         self,
         trade_date: str,
@@ -204,6 +216,7 @@ class PaperExecutionMixin:
             tranche_idx=tranche_idx,
             overall_top_n=overall_top_n,
             stagger_tranches=stagger_tranches,
+            budget_multiplier=self._exposure_budget_multiplier(corrected_date),
         )
 
         # 调仓日同步生成卖出指令：将不在新目标且非保护持仓排队到 T+1 卖出，
@@ -540,6 +553,8 @@ class PaperExecutionMixin:
         current_total_value = self.account.get_total_value(buy_prices)
         if current_total_value <= 0:
             current_total_value = float(getattr(self.account, "initial_capital", 0.0) or 0.0)
+        # 暴露政策：补位买入预算同样乘 λ（与调仓路径一致；取执行日 λ，已登记与回测“信号日”的 ≤1 日差异）
+        pending_budget_value = current_total_value * self._exposure_budget_multiplier(trade_date)
         # 与 broker 路径保持一致：补位买入也要满足最小买入后市值阈值
         min_buy_value_threshold = self.broker._get_min_buy_value_threshold(buy_prices)
         
@@ -585,7 +600,7 @@ class PaperExecutionMixin:
                 ts_code=ts_code,
                 price=price,
                 target_weight=pending_buy.target_weight,
-                current_total_value=current_total_value,
+                current_total_value=pending_budget_value,
             )
             if buy_shares <= 0:
                 return False, f"资金/股数约束({share_reason})"
@@ -602,7 +617,7 @@ class PaperExecutionMixin:
                 ts_code=ts_code,
                 price=price,
                 target_weight=pending_buy.target_weight,
-                current_total_value=current_total_value,
+                current_total_value=pending_budget_value,
             )
             if buy_shares <= 0:
                 return False
