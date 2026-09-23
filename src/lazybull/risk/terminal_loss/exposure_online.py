@@ -339,11 +339,15 @@ class DailyExposureProvider:
     # ------------------------------------------------------------------ 对外
     @property
     def fingerprint(self) -> str:
-        """政策指纹（策略定义 + 模型来源）：用于把导出的系数表绑定到口径。"""
+        """政策指纹（策略定义 + 折后缀）：把状态/预热/导出表绑定到口径。
+
+        **机器无关**：只含策略串与折目录后缀，**不含模型根绝对路径** ⇒
+        预热文件与状态文件可跨机器拷贝复用；**模型内容**的一致性由预热文件里的
+        ``folds_digest``（折模型内容摘要，由 ``folds_model_digest`` 计算）单独校验。
+        """
         payload = "|".join(
             [
                 self.config.describe(),
-                str(Path(self.risk_root).resolve()),
                 self.arm_suffix,
             ]
         )
@@ -598,20 +602,26 @@ class DailyExposureProvider:
             )
         h_max = max(self._h_max_for(fold), 1)
         lo = max(0, start_idx - 30)
-        hi = min(len(calendar), end_idx + h_max + 3)
+        required_hi = min(len(calendar), end_idx + h_max + 3)
         if through is not None:
             through_pos = self._calendar_pos.get(to_date_str(through))
             if through_pos is not None:
-                need_hi = min(len(calendar), through_pos + h_max + 3)
-                if need_hi > hi:
-                    hi = min(len(calendar), need_hi + _PANEL_EXTEND_BUFFER)
-                    data_end_pos = self._data_end_pos()
-                    if data_end_pos is not None:
-                        hi = min(hi, data_end_pos + 1)  # 不得越过 clean/daily 数据末端
-                    hi = max(hi, min(len(calendar), through_pos + 1))  # 至少覆盖判定日本身
+                required_hi = max(required_hi, min(len(calendar), through_pos + h_max + 3))
+        data_end_pos = self._data_end_pos()
+        effective_end = (
+            min(len(calendar), data_end_pos + 1) if data_end_pos is not None else len(calendar)
+        )
+        # 缓存命中按“真实需求”判断（数据能满足的部分），避免延展缓冲导致逐日重载
+        covered_need = min(required_hi, effective_end)
         cached = self._panels.get(fold.fold)
-        if cached is not None and int(cached[3]) >= hi:
+        if cached is not None and int(cached[3]) >= covered_need:
             return cached[0], cached[1], cached[2]
+        hi = required_hi
+        if self.coverage_mode == "serving":
+            # 实盘模式：一次性向前延展缓冲（减少重复加载）；并夹紧 clean/daily 数据末端
+            hi = min(len(calendar), required_hi + _PANEL_EXTEND_BUFFER)
+        hi = min(hi, effective_end)
+        hi = max(hi, covered_need)
         span = calendar[lo:hi]
         open_panel, close_panel, _, _ = load_clean_daily_panels(
             self.data_root, span[0], span[-1]

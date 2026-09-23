@@ -414,6 +414,16 @@ def test_stats_summary_reports_mode_and_pin(provider):
     assert pinned.stats_summary()["policy_pinned_fold"] == "2024H1"
 
 
+def test_fingerprint_is_machine_independent(provider):
+    """指纹不含模型根绝对路径 ⇒ 预热/状态文件可跨机器拷贝（模型一致性由 folds_digest 校验）。"""
+    other = _new_provider()
+    other.risk_root = "D:/somewhere/else/terminal_risk_wf_oos14"
+    assert other.fingerprint == provider.fingerprint
+    changed = _new_provider(arm_suffix="_vother")
+    assert changed.fingerprint != provider.fingerprint
+    assert len(provider.fingerprint) == 16
+
+
 # ------------------------------------------------------------------ 引擎
 class _PolicyStub:
     """引擎侧最小桩（只需给政策源用到的接口）。"""

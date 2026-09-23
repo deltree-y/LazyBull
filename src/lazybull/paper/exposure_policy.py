@@ -249,11 +249,26 @@ class PaperExposurePolicy:
                     "折模型已重训，请重新生成预热文件；本次忽略预热"
                 )
                 return
+        warmup_policy = str(payload.get("policy") or "")
+        if warmup_policy and warmup_policy != self.settings.policy:
+            logger.warning(
+                "暴露政策预热与当前策略串不一致（提示，将以指纹结果为准）：\n"
+                f"  预热文件: {warmup_policy}\n"
+                f"  当前配置: {self.settings.policy}"
+            )
         provider_state = payload.get("provider") or {}
         try:
             provider.restore_state(provider_state)
         except ValueError as exc:
-            logger.warning(f"暴露政策预热恢复失败（忽略）: {exc}")
+            logger.warning(
+                f"暴露政策预热恢复失败（忽略）: {exc}\n"
+                f"  预热文件: policy={warmup_policy or '-'} | arm_suffix="
+                f"{payload.get('arm_suffix', '-')} | fingerprint="
+                f"{payload.get('policy_fingerprint', '-')}\n"
+                f"  当前状态: policy={self.settings.policy} | arm_suffix="
+                f"{self.settings.arm_suffix} | fingerprint="
+                f"{provider.fingerprint}"
+            )
             return
         coverage = payload.get("coverage") or {}
         self._warmup_days = int(provider.evaluated_day_count())
