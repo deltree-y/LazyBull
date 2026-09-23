@@ -78,6 +78,8 @@ CONFIG_SECTION_LAYOUT = [
         [
             "exposure_policy 为策略字符串（如 arm=combined,mode=rolling,window=250,regime_q=0.75,score_q=0.5,lambda=0.5）；null = 关闭。",
             "启用时必须同时给出 policy_model_root（终损折模型根目录）与 policy_arm_suffix（如 _v6m_fscore）。",
+            "policy_fold 留空=自动取最新可用折（实盘模式：训练/早停结束即可持续使用）；填折名（如 OOS13_202506）则固定该折。",
+            "policy_warmup_file 为预热面板文件；留空=默认 <policy_model_root>/paper_warmup/state.json（不存在则跳过预热）。",
             "exposure_replenish 为对称回补开关；exposure_trim_tolerance 为减仓/回补共用容差（组合总值比例，默认 0.03）。",
             "policy_coverage_start 为生效起点（此日之前只累积阈值历史、不动作）。",
         ],
@@ -85,9 +87,11 @@ CONFIG_SECTION_LAYOUT = [
             "exposure_policy",
             "policy_model_root",
             "policy_arm_suffix",
+            "policy_fold",
             "policy_coverage_start",
             "exposure_replenish",
             "exposure_trim_tolerance",
+            "policy_warmup_file",
         ],
     ),
     (
@@ -151,6 +155,8 @@ SECTION_DEFAULT_EXTRAS = {
     "policy_coverage_start": None,
     "exposure_replenish": False,
     "exposure_trim_tolerance": None,
+    "policy_fold": None,
+    "policy_warmup_file": None,
 }
 
 
@@ -203,9 +209,11 @@ CONFIG_SECTION_RENDER_GROUPS = {
             [
                 "policy_model_root",
                 "policy_arm_suffix",
+                "policy_fold",
                 "policy_coverage_start",
                 "exposure_replenish",
                 "exposure_trim_tolerance",
+                "policy_warmup_file",
             ],
         ),
     ],

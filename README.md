@@ -704,8 +704,29 @@ python scripts\paper_trade.py config --no-exposure-replenish --exposure-policy "
 ```
 
 已知差异（登记）：补齐（pending_buys）路径的买入缩放取**执行日** λ（回测取信号日，≤1 个交易日）；
-折集覆盖区间之外（例如 2026 年超出终损折集）λ 顺延为 1.0（不动作）；
 数据类异常（当日特征构建失败/打分输入缺失）告警 + 降级顺延，非静默。
+
+**实盘模式与预热面板（v0.127.12）**：纸面以 `serving` 模式运行——终损折模型只要
+“训练/早停段已结束”（`date > val_end`）就可持续使用，**不再受折 ES 窗口上界限制**
+（2026 年及以后用最新可用折，如 `OOS13_202506`）；也可在 `exposure` 区块用 `policy_fold`
+固定指定折（默认 `null` = 自动最新可用折）。
+
+为避免启动初期“阈值窗口不足（< 60 交易日）不判定”，用**回测持仓快照**生成**预热面板**——
+预热文件是**自包含的 1 MB 级 JSON**（不引用任何快照文件），**纸面机不需要任何回测产物**，
+在生成端产出后拷贝即可：
+
+```powershell
+# ① 生成端（有 data\walk_forward\batches\* 回测产物的机器）——先列候选，显式选与纸面策略参数一致的批
+py -3 scripts\prepare_paper_exposure_warmup.py --list-batches
+py -3 scripts\prepare_paper_exposure_warmup.py `
+  --snapshot-dir "data\walk_forward\batches\<所选批次>\raw"
+# 默认输出 <policy_model_root>/paper_warmup/state.json；默认回看 270 交易日；
+# 策略串/模型根/后缀默认从 data/paper/config.yaml 的 exposure 配置读取
+
+# ② 纸面机：把 state.json 拷到 <policy_model_root>/paper_warmup/ 下
+#    （或任意路径 + exposure.policy_warmup_file 指向）；纸面启动时仅当面板为空才恢复；
+#    折模型重训后必须重新生成（文件内含折模型内容摘要，失配时纸面告警忽略）
+```
 
 批量脚本的 `factor_experiment_configs` 默认使用相同参数运行三组方案：不启用候选因子的
 基线、仅保留 `dividend_yield_hist_12m` 的分红方案，以及仅保留 `fcf_yield` 和

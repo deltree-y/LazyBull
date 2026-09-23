@@ -48,6 +48,7 @@ from ..features import ensure_features_for_date
 from ..risk.terminal_loss.exposure_online import (
     DailyExposureProvider,
     OnlinePolicyConfig,
+    folds_model_digest,
     to_date_str,
 )
 from ..trading.sizing import compute_lot_shares, resolve_trim_shares
@@ -61,6 +62,10 @@ TRIM_REASON_PREFIX = "暴露门控减仓"
 REPLENISH_REASON_PREFIX = "暴露门控回补"
 
 _STATE_VERSION = 1
+
+#: 预热面板文件标识（P2a：由 scripts/prepare_paper_exposure_warmup.py 生成）
+_WARMUP_KIND = "paper_exposure_warmup"
+_WARMUP_VERSION = 1
 
 
 def _default_state() -> Dict[str, Any]:
@@ -83,6 +88,7 @@ def _default_state() -> Dict[str, Any]:
         "replenish_budget_reset_days": 0,
         "replenish_expired_refunds": 0,
         "skipped_duplicate_plan_days": 0,
+        "warmup_days": 0,
     }
 
 
@@ -96,6 +102,8 @@ class PaperExposureSettings:
     coverage_start: Optional[str] = None
     replenish: bool = False
     trim_tolerance: float = DEFAULT_TRIM_TOLERANCE
+    pinned_fold: Optional[str] = None  # 指定折名则固定使用该折；None=自动取最新可用折
+    warmup_file: Optional[str] = None  # 预热面板文件；None=默认 <model_root>/paper_warmup/state.json
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> Optional["PaperExposureSettings"]:
@@ -119,6 +127,8 @@ class PaperExposureSettings:
         if not 0.0 < tolerance < 1.0:
             raise ValueError(f"exposure_trim_tolerance 必须落于 (0, 1)，当前 {tolerance}")
         coverage = str(config.get("policy_coverage_start") or "").strip() or None
+        pinned = str(config.get("policy_fold") or "").strip() or None
+        warmup = str(config.get("policy_warmup_file") or "").strip() or None
         return cls(
             policy=str(raw).strip(),
             model_root=model_root,
@@ -126,6 +136,8 @@ class PaperExposureSettings:
             coverage_start=coverage,
             replenish=bool(config.get("exposure_replenish", False)),
             trim_tolerance=tolerance,
+            pinned_fold=pinned,
+            warmup_file=warmup,
         )
 
 
@@ -154,6 +166,7 @@ class PaperExposurePolicy:
         self._last_judged_date: str = ""
         self.stats: Dict[str, Any] = _default_state()
         self._state_loaded = False
+        self._warmup_days: int = 0
 
     # ------------------------------------------------------------------ 生命周期
     def bind(self) -> None:
@@ -173,17 +186,85 @@ class PaperExposurePolicy:
             coverage_start=self.settings.coverage_start,
             book="pre_exec",
             verbose=False,
+            coverage_mode="serving",
+            pinned_fold=self.settings.pinned_fold,
         )
         self._provider = provider
         self._load_state()
+        self._apply_warmup_if_needed()
         logger.info(
-            "纸面暴露政策已启用（在线现算）: {}（指纹 {}，模型根 {}，覆盖起点 {}，回补 {}，容差 {:.1%}）".format(
+            "纸面暴露政策已启用（在线现算/实盘模式）: {}（指纹 {}，模型根 {}，折 {}，覆盖起点 {}，回补 {}，容差 {:.1%}）".format(
                 policy_config.describe(),
                 provider.fingerprint,
                 self.settings.model_root,
+                self.settings.pinned_fold or "自动（最新可用）",
                 self.settings.coverage_start or "全区间",
                 "开" if self.settings.replenish else "关",
                 self.settings.trim_tolerance,
+            )
+        )
+
+    # ------------------------------------------------------------------ 预热面板（P2a）
+    def _warmup_path(self) -> Path:
+        """预热面板文件路径：默认 ``<policy_model_root>/paper_warmup/state.json``。"""
+        if self.settings.warmup_file:
+            return Path(self.settings.warmup_file)
+        return Path(self.settings.model_root) / "paper_warmup" / "state.json"
+
+    def _apply_warmup_if_needed(self) -> None:
+        """首次绑定且面板为空时，用预热文件填充面板历史（阈值窗口预热）。
+
+        - 仅当 provider 面板为空（无纸面状态或已被指纹失效清空）时才应用；
+        - 校验：文件标识/版本、折模型内容摘要（重训后失配 → 告警忽略）、
+          provider 自带指纹校验（``restore_state`` 内部）；
+        - 预热是增强项：任何不满足都只告警，不阻断主流程。
+        """
+        provider = self._provider
+        if provider is None:
+            return
+        if provider.evaluated_day_count() > 0:
+            return
+        path = self._warmup_path()
+        if not path.exists():
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(f"暴露政策预热文件读取失败（忽略）: {path}（{exc}）")
+            return
+        if payload.get("kind") != _WARMUP_KIND or int(payload.get("version", 0)) != _WARMUP_VERSION:
+            logger.warning(f"暴露政策预热文件格式不符（忽略）: {path}")
+            return
+        digest = str(payload.get("folds_digest", ""))
+        if digest:
+            try:
+                current = folds_model_digest(self.settings.model_root, self.settings.arm_suffix)
+            except Exception as exc:  # noqa: BLE001 - 摘要失败不阻断（restore 指纹仍兜底）
+                logger.warning(f"暴露政策预热折模型摘要计算失败（跳过校验）: {exc}")
+                current = ""
+            if current and current != digest:
+                logger.warning(
+                    f"暴露政策预热与当前折模型不一致（digest {digest} != {current}）："
+                    "折模型已重训，请重新生成预热文件；本次忽略预热"
+                )
+                return
+        provider_state = payload.get("provider") or {}
+        try:
+            provider.restore_state(provider_state)
+        except ValueError as exc:
+            logger.warning(f"暴露政策预热恢复失败（忽略）: {exc}")
+            return
+        coverage = payload.get("coverage") or {}
+        self._warmup_days = int(provider.evaluated_day_count())
+        self.stats["warmup_days"] = self._warmup_days
+        logger.info(
+            "暴露政策预热面板已恢复：{} 个交易日（{}~{}，{} 行）← {}".format(
+                self._warmup_days,
+                coverage.get("first_day", "-"),
+                coverage.get("last_day", "-"),
+                coverage.get("rows", "-"),
+                path,
             )
         )
 
@@ -329,6 +410,8 @@ class PaperExposurePolicy:
                 "release_budget": float(self._release_budget),
                 "pending_settle_days": len(self._pending_settle),
                 "fingerprint": self._provider.fingerprint if self._provider else "",
+                "pinned_fold": self.settings.pinned_fold or "",
+                "warmup_file": str(self._warmup_path()),
             }
         )
         return payload

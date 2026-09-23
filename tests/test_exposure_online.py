@@ -35,7 +35,16 @@ from src.lazybull.risk.terminal_loss.exposure_online import (  # noqa: E402
 )
 from src.lazybull.risk.terminal_loss.policy_sidecar import FoldModel  # noqa: E402
 
-DAYS = ["20240102", "20240103", "20240104", "20240105", "20240108", "20240109"]
+DAYS = [
+    "20240102",
+    "20240103",
+    "20240104",
+    "20240105",
+    "20240108",
+    "20240109",
+    "20240110",
+    "20240111",
+]
 
 D0_TS = pd.Timestamp("2024-01-02")
 D1_TS = pd.Timestamp("2024-01-03")
@@ -73,10 +82,16 @@ def provider(monkeypatch):
     monkeypatch.setattr(online, "load_fold_index", lambda *a, **k: [_fold()])
     monkeypatch.setattr(online, "load_trade_calendar", lambda *a, **k: list(DAYS))
 
-    def fake_panels(self, fold):
+    def fake_panels(self, fold, through=None):
         index = pd.Index(DAYS, name="trade_date")
         open_panel = pd.DataFrame({"600000.SH": 10.0, "000001.SZ": 10.0}, index=index)
         sigma_panel = pd.DataFrame({"600000.SH": 0.02, "000001.SZ": 0.02}, index=index)
+        # 与真实实现一致：σ 长表随面板一起维护（供 _attach_inputs 使用）
+        stacked = sigma_panel.stack().rename("sigma_daily_20").reset_index()
+        stacked.columns = ["date", "ts_code", "sigma_daily_20"]
+        stacked["date"] = stacked["date"].astype(str)
+        stacked["ts_code"] = stacked["ts_code"].astype(str)
+        self._sigma_long[fold.fold] = stacked
         return open_panel, sigma_panel, list(DAYS)
 
     monkeypatch.setattr(DailyExposureProvider, "_panels_for", fake_panels)
@@ -130,6 +145,8 @@ VOL_BY_DAY = {
     "20240105": 0.90,
     "20240108": 0.95,
     "20240109": 0.10,
+    "20240110": 0.90,
+    "20240111": 0.91,
 }
 INVALID: dict = {}
 
@@ -276,8 +293,13 @@ def test_lambda_series_is_sorted_and_covers_consumed_days(provider):
 
 
 # -------------------------------------------------------- 跨进程状态 round-trip
-def _new_provider(arm_suffix: str = "_stub") -> DailyExposureProvider:
-    """按 fixture 相同打桩参数构造新实例（纸面逐日独立进程场景）。"""
+def _new_provider(
+    arm_suffix: str = "_stub",
+    *,
+    coverage_mode: str = "es",
+    pinned_fold=None,
+) -> DailyExposureProvider:
+    """按 fixture 相同打桩参数构造新实例（跨进程/实盘模式场景）。"""
     config = OnlinePolicyConfig.parse(
         "arm=combined,mode=rolling,window=2,min_window=2,regime_q=0.5,score_q=0.5,lambda=0.5"
     )
@@ -287,6 +309,8 @@ def _new_provider(arm_suffix: str = "_stub") -> DailyExposureProvider:
         arm_suffix=arm_suffix,
         data_root="data",
         model_loader=lambda path: _StubModel(0.9),
+        coverage_mode=coverage_mode,
+        pinned_fold=pinned_fold,
     )
 
 
@@ -329,6 +353,65 @@ def test_provider_state_restore_rejects_unknown_version(provider):
     clone = _new_provider()
     with pytest.raises(ValueError, match="版本"):
         clone.restore_state(payload)
+
+
+# ------------------------------------------------------- 实盘模式 / 指定折（P1）
+def test_serving_mode_extends_beyond_es_end(provider):
+    """serving 模式在 ES 窗口之后继续判定（超出上界计入 post_es_serving_days）。"""
+    serving = _new_provider(coverage_mode="serving")
+    assert serving.multiplier_for("20240102", _holdings()) == 1.0  # 窗口不足
+    assert serving.multiplier_for("20240103", _holdings()) == 1.0  # 窗口不足
+    assert serving.multiplier_for("20240104", _holdings()) == 0.5  # 触发
+    assert serving.multiplier_for("20240109", _holdings()) == 1.0  # 波动低，不触发
+    # 20240110 超出折（es_end=20240109）：serving 继续判定（不再被 ES 上界拦下）
+    assert serving.multiplier_for("20240110", _holdings()) == 0.5
+    assert serving.stats["post_es_serving_days"] == 1
+    assert serving.stats["skipped_out_of_coverage"] == 0
+
+
+def test_serving_mode_still_requires_past_val_end(provider):
+    """serving 仍要求 date > val_end（val_end 当天不可用，防前视）。"""
+    serving = _new_provider(coverage_mode="serving")
+    assert serving.multiplier_for("20231231", _holdings()) == 1.0  # == val_end
+    assert serving.stats["skipped_out_of_coverage"] == 1
+    assert serving.multiplier_for("20240102", _holdings()) == 1.0  # 已可用（但窗口不足）
+    assert serving.stats["skipped_window_short"] == 1
+
+
+def test_es_mode_unchanged_beyond_es_end(provider):
+    """默认 es 模式行为不变：ES 窗口之外不判定（顺延）。"""
+    es = _new_provider()
+    assert es.multiplier_for("20240102", _holdings()) == 1.0
+    assert es.multiplier_for("20240103", _holdings()) == 1.0
+    assert es.multiplier_for("20240104", _holdings()) == 0.5
+    assert es.multiplier_for("20240110", _holdings()) == 0.5  # 覆盖外 → 顺延
+    assert es.stats["skipped_out_of_coverage"] == 1
+    assert es.stats["post_es_serving_days"] == 0
+
+
+def test_pin_fold_uses_designated_fold(provider):
+    """pin 指定折：固定该折打分，配合 serving 可在 ES 窗口外继续判定。"""
+    pinned = _new_provider(coverage_mode="serving", pinned_fold="2024H1")
+    assert pinned.pinned_fold == "2024H1"
+    assert pinned.multiplier_for("20240102", _holdings()) == 1.0  # 窗口不足
+    assert pinned.multiplier_for("20240103", _holdings()) == 1.0
+    assert pinned.multiplier_for("20240104", _holdings()) == 0.5
+    assert pinned.multiplier_for("20240110", _holdings()) == 0.5  # 超出 ES 仍判定
+    assert pinned.stats["post_es_serving_days"] == 1
+
+
+def test_pin_fold_rejects_unknown_name(provider):
+    with pytest.raises(ValueError, match="policy_fold"):
+        _new_provider(pinned_fold="OOS99_209901")
+
+
+def test_stats_summary_reports_mode_and_pin(provider):
+    summary = provider.stats_summary()
+    assert summary["policy_coverage_mode"] == "es"
+    assert summary["policy_pinned_fold"] == ""
+    pinned = _new_provider(coverage_mode="serving", pinned_fold="2024H1")
+    assert pinned.stats_summary()["policy_coverage_mode"] == "serving"
+    assert pinned.stats_summary()["policy_pinned_fold"] == "2024H1"
 
 
 # ------------------------------------------------------------------ 引擎

@@ -480,6 +480,21 @@ def add_trading_args(parser, *, include_price: bool = False, include_exposure: b
             help="终损折目录后缀（如 _v6m_fscore）",
         )
         parser.add_argument(
+            "--policy-fold",
+            type=str,
+            default=None,
+            help=(
+                "固定使用指定折（如 OOS13_202506）；默认空=自动取最新可用折"
+                "（实盘模式：训练/早停结束即可持续使用，ES 窗口之外也判定）"
+            ),
+        )
+        parser.add_argument(
+            "--policy-warmup-file",
+            type=str,
+            default=None,
+            help="预热面板文件路径；默认空=<policy_model_root>/paper_warmup/state.json",
+        )
+        parser.add_argument(
             "--policy-coverage-start",
             type=str,
             default=None,

@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.12] - 2026-09-23
+
+### Added
+
+- **纸面暴露政策实盘模式（P1）**：`DailyExposureProvider` 新增 `coverage_mode`
+  （`es` = 回测评估协议，默认；`serving` = 实盘：只要求 `date > val_end`，ES 窗口之外
+  **继续使用**该折模型预测）与 `pinned_fold`（指定折名固定使用；构造期校验，无效折名报错）。
+  纸面 `bind()` 以 `serving` 模式构造并透传 `policy_fold` 配置；超出 ES 上界仍判定的天数
+  计入 `post_es_serving_days`。**回测侧不传新参数 ⇒ 逐位不变**；模式/pin **不入指纹**
+  （打分口径不变，面板状态可安全复用）。
+- **面板按需延展**：`_panels_for(fold, through=...)` 在判定日超出折窗口时向前延展
+  （缓冲 120 交易日）并**夹紧 `clean/daily` 数据末端**；σ 长表随面板同步重建。
+  回测协议路径无感知（`through` 总在基线窗口内）。
+- **预热面板（P2a）**：新脚本 `scripts/prepare_paper_exposure_warmup.py`——用回测持仓快照
+  回放 provider（默认回看 270 交易日），导出**自包含**预热文件到
+  `<policy_model_root>/paper_warmup/state.json`（**快照批必须显式指定** `--snapshot-dir`，
+  `--list-batches` 列出候选与参数摘要；不再隐式选“最新批”）；**产物可跨机拷贝**——
+  纸面机无需任何回测产物，仅需折模型目录一致；纸面启动时**面板为空**才恢复
+  （含折模型内容摘要校验，重训后失配则告警忽略）；配置 `policy_warmup_file` 可覆盖默认路径。
+- **新配置键**：`policy_fold`（默认 null=自动最新可用折）、`policy_warmup_file`（默认 null=约定路径）；
+  CLI `--policy-fold` / `--policy-warmup-file`；模板从零生成时两者默认可见（`SECTION_DEFAULT_EXTRAS`）。
+
+### Changed
+
+- 纸面暴露政策在折集覆盖区间之外（如 2026 年）**不再静默顺延**：serving 模式改用
+  “最新已训练完的折”持续判定；预热面板消除启动初期（< min_window=60 交易日）的冷启动盲区。
+
+### Verification
+
+- 预热生成实测：20241105~20251212（270 交易日 / 4605 行 / 1.0 MB，耗时 ≈ 41 s）；
+  与同批回测 λ 对照——差异全部可由“冷启动期 + book 边缘翻转（4 日，P2-5 登记同量级）”解释。
+- 端到端：恢复预热后对 `20260702`（超折集 ES 五个多月）判定正常
+  （λ=1.0，`post_es_serving_days=1`，面板延展生效，无 σ 缺失）。
+- 测试：`test_exposure_online` +6（serving/边界/pin/统计）、`test_paper_exposure_policy` +5
+  （settings/预热恢复与跳过/格式拒绝/bind 接线）、`test_prepare_warmup_script` +4
+  （候选扫描/入口校验）、`test_paper_config_cleanup` 补默认键断言；
+  全量 **2104 passed**。
+
 ## [0.127.11] - 2026-09-23
 
 ### Fixed

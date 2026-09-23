@@ -91,6 +91,8 @@ def run_config(args):
         "exposure_policy",
         "policy_model_root",
         "policy_arm_suffix",
+        "policy_fold",
+        "policy_warmup_file",
         "policy_coverage_start",
         "exposure_trim_tolerance",
     ):

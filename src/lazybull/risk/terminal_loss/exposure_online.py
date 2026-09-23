@@ -23,6 +23,18 @@
 
 **同日单次评估**：引擎会在 T0 判定与 T+1（买入按**信号日**取 λ）各调一次；
 ``multiplier_for`` 对同一日期返回**首次评估结果**（缓存），不重复打分、不污染面板。
+
+**覆盖模式（``coverage_mode``）**：
+
+- ``"es"``（回测评估协议，默认）：只在该日期落入某折的 ES 窗口时判定
+  ——保证 OOS 每段日期只由一个折评估、指标可比、无前视；
+- ``"serving"``（实盘/纸面）：只要求 ``date > val_end``（该折训练段+早停段都已结束，**无前视**），
+  ES 窗口之外**继续使用**该折模型——即“用至今最新的、训练已完成的折持续预测”。
+  超出 ES 上界仍判定的天数计入 ``post_es_serving_days``。
+
+``pinned_fold`` 指定时固定使用该折（构造期校验折名存在；判定仍要求 ``date > val_end``）。
+**模式与 pin 都不改变打分口径**（同一行集打出的 p_loss 相同）⇒ provider 面板状态
+在两模式间可安全复用；指纹不包含二者。
 """
 
 from __future__ import annotations
@@ -50,6 +62,7 @@ from .exposure_gate import (
 )
 from .labels import TerminalLossLabelConfig, build_terminal_loss_labels
 from .policy_sidecar import (
+    FoldModel,
     _attach_inputs,
     _default_model_loader,
     _read_snapshot,
@@ -85,6 +98,9 @@ _LEDGER_COLUMNS = [
     "loss_label",
     "label_status",
 ]
+
+#: 实盘模式下面板向前延展的缓冲交易日数（减少重复加载；回测协议模式不触发）
+_PANEL_EXTEND_BUFFER = 120
 
 
 def to_date_str(value: Any) -> str:
@@ -251,10 +267,18 @@ class DailyExposureProvider:
         coverage_start: Optional[str] = None,
         book: str = "pre_exec",
         verbose: bool = False,
+        coverage_mode: str = "es",
+        pinned_fold: Optional[str] = None,
         model_loader=None,
     ) -> None:
         if book not in ("pre_exec", "end_of_day"):
             raise ValueError(f"未知持仓口径 {book!r}；合法取值 ['pre_exec', 'end_of_day']")
+        if coverage_mode not in ("es", "serving"):
+            raise ValueError(
+                f"未知覆盖模式 {coverage_mode!r}；合法取值 "
+                "['es'（回测评估协议，仅 ES 窗口内判定）, "
+                "'serving'（实盘：训练/早停结束即可持续使用）]"
+            )
         self.config = config
         self.risk_root = str(risk_root)
         self.arm_suffix = str(arm_suffix)
@@ -263,11 +287,25 @@ class DailyExposureProvider:
         self.coverage_start = to_date_str(coverage_start) if coverage_start else None
         self.book = book
         self.verbose = verbose
+        self.coverage_mode = coverage_mode
         self._model_loader = model_loader or _default_model_loader
         self.folds = load_fold_index(self.risk_root, self.arm_suffix)
+        self.pinned_fold: Optional[str] = str(pinned_fold) if pinned_fold else None
+        self._pinned_fold: Optional[FoldModel] = None
+        if self.pinned_fold:
+            self._pinned_fold = next(
+                (item for item in self.folds if item.fold == self.pinned_fold), None
+            )
+            if self._pinned_fold is None:
+                available = ", ".join(item.fold for item in self.folds)
+                raise ValueError(
+                    f"policy_fold={self.pinned_fold!r} 不在折列表（可用: {available}）"
+                )
         self._models: Dict[str, Any] = {}
         self._sigma_long: Dict[str, pd.DataFrame] = {}
-        self._panels: Dict[str, Tuple[pd.DataFrame, pd.DataFrame, List[str]]] = {}
+        self._panels: Dict[str, Tuple[pd.DataFrame, pd.DataFrame, List[str], int]] = {}
+        self._data_end_pos_computed = False
+        self._data_end_pos_cache: Optional[int] = None
         # 已打分日行的**面板**（未成熟日带 NaN 标签；成熟后回填/剔除非法行）
         self._frames: Dict[str, pd.DataFrame] = {}
         self._pending: Dict[str, pd.DataFrame] = {}
@@ -294,6 +332,7 @@ class DailyExposureProvider:
             "pending_rows": 0,
             "cached_days": 0,
             "carried_forward_days": 0,
+            "post_es_serving_days": 0,
             "dropped_days": [],
         }
 
@@ -332,23 +371,26 @@ class DailyExposureProvider:
         return result
 
     def _evaluate(self, date_str: str, holdings: pd.DataFrame) -> Optional[float]:
-        fold = select_fold_for_date(date_str, self.folds)
+        fold = self._pick_fold(date_str)
         if fold is None:
             self.stats["skipped_no_model"] += 1
             return None
-        if not (fold.es_start <= date_str <= fold.es_end):
+        if not self._is_fold_usable(date_str, fold):
             self.stats["skipped_out_of_coverage"] += 1
             if self.verbose:
                 logger.info(
-                    f"暴露门控在线判定: {date_str} 不在折 {fold.fold} 的 ES 覆盖区间"
-                    f"（{fold.es_start}~{fold.es_end}），不判定"
+                    f"暴露门控在线判定: {date_str} 不满足折 {fold.fold} 的可用边界"
+                    f"（val_end={fold.val_end}，ES {fold.es_start}~{fold.es_end}，"
+                    f"模式={self.coverage_mode}），不判定"
                 )
             return None
+        if self.coverage_mode == "serving" and date_str > fold.es_end:
+            self.stats["post_es_serving_days"] += 1
         rows = self._normalize_holdings(date_str, fold.fold, holdings)
         if rows.empty:
             self.stats["skipped_no_holdings"] += 1
             return None
-        scored = self._score_rows(fold, rows)
+        scored = self._score_rows(fold, rows, date_str)
         scored["terminal_return"] = np.nan
         scored["loss_label"] = np.nan
         scored["label_status"] = "pending"
@@ -377,6 +419,18 @@ class DailyExposureProvider:
                 f"（折 {fold.fold}，持仓 {len(rows)} 只）"
             )
         return multiplier
+
+    def _pick_fold(self, date_str: str) -> Optional[FoldModel]:
+        """选择打分折：pin 指定优先，否则取 ``val_end <= date`` 的最新可用折。"""
+        if self._pinned_fold is not None:
+            return self._pinned_fold
+        return select_fold_for_date(date_str, self.folds)
+
+    def _is_fold_usable(self, date_str: str, fold: FoldModel) -> bool:
+        """可用性边界：回测协议 = ES 窗口内；实盘 = 训练/早停结束即可（无前视）。"""
+        if self.coverage_mode == "serving":
+            return date_str > fold.val_end
+        return fold.es_start <= date_str <= fold.es_end
 
     def daily_series(self) -> pd.DataFrame:
         """已入账的日级面板（date/fold/mkt_vol_20/p_loss_mean/…），供审计。"""
@@ -410,9 +464,23 @@ class DailyExposureProvider:
                 "policy_arm_suffix": self.arm_suffix,
                 "policy_book": self.book,
                 "policy_coverage_start": self.coverage_start or "",
+                "policy_coverage_mode": self.coverage_mode,
+                "policy_pinned_fold": self.pinned_fold or "",
             }
         )
         return payload
+
+    def evaluated_day_count(self) -> int:
+        """已入账面板的交易日数（纸面预热判断“面板是否为空”用）。"""
+        return len(self._frames)
+
+    def advance_label_maturation(self, through_date: Any) -> None:
+        """把待成熟标签推进到 ``through_date``（含）为止的成熟检查。
+
+        预热回放收尾用：回放最后一批持仓日后，用日历上更晚的交易日驱动成熟，
+        避免把“本可成熟”的行残留进导出状态。``through_date`` 必须是交易日。
+        """
+        self._mature_pending(to_date_str(through_date))
 
     # ------------------------------------------------- 跨进程状态（纸面逐日运行）
     def export_state(self) -> Dict[str, Any]:
@@ -510,54 +578,87 @@ class DailyExposureProvider:
             self._models[fold.fold] = self._model_loader(str(fold.model_path))
         return self._models[fold.fold]
 
-    def _panels_for(self, fold) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
-        """折内数据面板（open/σ）+ 折内交易日轴；按折缓存，用完即释放。"""
-        if fold.fold not in self._panels:
-            calendar = self._calendar_list()
-            # 折的 ES 边界可能不是交易日（如 20221231 为周六）⇒ 用二分定位到日历内位置
-            start_idx = bisect_left(calendar, fold.es_start)
-            end_idx = bisect_right(calendar, fold.es_end) - 1
-            if end_idx < 0 or start_idx >= len(calendar):
-                raise ValueError(
-                    f"折 {fold.fold} 的 ES 区间 {fold.es_start}~{fold.es_end} "
-                    f"落在交易日历之外，无法加载面板"
-                )
-            h_max = max(self._h_max_for(fold), 1)
-            lo = max(0, start_idx - 30)
-            hi = min(len(calendar), end_idx + h_max + 3)
-            span = calendar[lo:hi]
-            open_panel, close_panel, _, _ = load_clean_daily_panels(
-                self.data_root, span[0], span[-1]
-            )
-            from ...factors.risk.volatility_factors import compute_sigma_daily_panel
+    def _panels_for(
+        self, fold, through: Optional[str] = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
+        """折内数据面板（open/σ）+ 折内交易日轴；按折缓存，用完即释放。
 
-            sigma_panel = compute_sigma_daily_panel(
-                close_panel.stack().rename("close_adj").reset_index(),
-                list(span),
-                window=20,
+        ``through`` 给出实际需要的判定日/标签端点时，面板会按需向前延展
+        （实盘模式下判定日可能远晚于折的 ES 窗口；延展带缓冲以减少重复加载）。
+        回测协议（es）下 through 总在基线窗口内，行为与改造前逐位一致。
+        """
+        calendar = self._calendar_list()
+        # 折的 ES 边界可能不是交易日（如 20221231 为周六）⇒ 用二分定位到日历内位置
+        start_idx = bisect_left(calendar, fold.es_start)
+        end_idx = bisect_right(calendar, fold.es_end) - 1
+        if end_idx < 0 or start_idx >= len(calendar):
+            raise ValueError(
+                f"折 {fold.fold} 的 ES 区间 {fold.es_start}~{fold.es_end} "
+                f"落在交易日历之外，无法加载面板"
             )
-            self._panels[fold.fold] = (open_panel, sigma_panel, list(span))
-            logger.info(
-                f"暴露门控在线: 已加载折 {fold.fold} 面板"
-                f"（{span[0]}~{span[-1]}，{len(span)} 个交易日）"
-            )
-        return self._panels[fold.fold]
+        h_max = max(self._h_max_for(fold), 1)
+        lo = max(0, start_idx - 30)
+        hi = min(len(calendar), end_idx + h_max + 3)
+        if through is not None:
+            through_pos = self._calendar_pos.get(to_date_str(through))
+            if through_pos is not None:
+                need_hi = min(len(calendar), through_pos + h_max + 3)
+                if need_hi > hi:
+                    hi = min(len(calendar), need_hi + _PANEL_EXTEND_BUFFER)
+                    data_end_pos = self._data_end_pos()
+                    if data_end_pos is not None:
+                        hi = min(hi, data_end_pos + 1)  # 不得越过 clean/daily 数据末端
+                    hi = max(hi, min(len(calendar), through_pos + 1))  # 至少覆盖判定日本身
+        cached = self._panels.get(fold.fold)
+        if cached is not None and int(cached[3]) >= hi:
+            return cached[0], cached[1], cached[2]
+        span = calendar[lo:hi]
+        open_panel, close_panel, _, _ = load_clean_daily_panels(
+            self.data_root, span[0], span[-1]
+        )
+        from ...factors.risk.volatility_factors import compute_sigma_daily_panel
+
+        sigma_panel = compute_sigma_daily_panel(
+            close_panel.stack().rename("close_adj").reset_index(),
+            list(span),
+            window=20,
+        )
+        self._panels[fold.fold] = (open_panel, sigma_panel, list(span), hi)
+        stacked = sigma_panel.stack().rename("sigma_daily_20").reset_index()
+        stacked.columns = ["date", "ts_code", "sigma_daily_20"]
+        stacked["date"] = stacked["date"].astype(str)
+        stacked["ts_code"] = stacked["ts_code"].astype(str)
+        self._sigma_long[fold.fold] = stacked
+        logger.info(
+            f"暴露门控在线: 已加载折 {fold.fold} 面板"
+            f"（{span[0]}~{span[-1]}，{len(span)} 个交易日）"
+        )
+        return self._panels[fold.fold][0], self._panels[fold.fold][1], self._panels[fold.fold][2]
 
     @staticmethod
     def _h_max_for(fold) -> int:
         return int(getattr(fold, "h_max", 20) or 20)
 
-    def _score_rows(self, fold, rows: pd.DataFrame) -> pd.DataFrame:
+    def _data_end_pos(self) -> Optional[int]:
+        """clean/daily 最后一个有序分区在交易日历中的位置（面板延展不得越界）。"""
+        if self._data_end_pos_computed:
+            return self._data_end_pos_cache
+        self._data_end_pos_computed = True
+        daily_dir = Path(self.data_root) / "clean" / "daily"
+        try:
+            stems = [path.stem for path in daily_dir.glob("*.parquet")]
+        except OSError:
+            stems = []
+        if stems:
+            last_day = to_date_str(max(stems))
+            self._data_end_pos_cache = self._calendar_pos.get(last_day)
+        return self._data_end_pos_cache
+
+    def _score_rows(self, fold, rows: pd.DataFrame, date_str: str) -> pd.DataFrame:
         """按折模型给当日持仓打分（复用离线装配实现；缺列明确报错）。"""
         model = self._model_for(fold)
         feature_names = list(getattr(model, "feature_names", None) or fold.feature_names)
-        open_panel, sigma_panel, span = self._panels_for(fold)
-        if fold.fold not in self._sigma_long:
-            stacked = sigma_panel.stack().rename("sigma_daily_20").reset_index()
-            stacked.columns = ["date", "ts_code", "sigma_daily_20"]
-            stacked["date"] = stacked["date"].astype(str)
-            stacked["ts_code"] = stacked["ts_code"].astype(str)
-            self._sigma_long[fold.fold] = stacked
+        self._panels_for(fold, through=date_str)
         scored = _attach_inputs(
             rows.copy(),
             self.data_root,
@@ -601,8 +702,8 @@ class DailyExposureProvider:
             day_pos = self._calendar_pos[day]
             if today_pos < day_pos + h_max + 1:
                 continue  # 仍不成熟
-            open_panel, sigma_panel, span = self._panels_for(fold)
             tail = calendar[day_pos : min(len(calendar), day_pos + h_max + 2)]
+            open_panel, sigma_panel, span = self._panels_for(fold, through=tail[-1])
             label_config = TerminalLossLabelConfig(
                 h_min=1,
                 h_max=h_max,
@@ -695,6 +796,15 @@ class DailyExposureProvider:
             date_str,
         )
         return judged
+
+
+def folds_model_digest(risk_root: str, arm_suffix: str) -> str:
+    """折模型文件内容摘要：把预热面板状态绑定到模型源（折模型重训后校验失配）。"""
+    parts = []
+    for fold in load_fold_index(risk_root, arm_suffix):
+        data = fold.model_path.read_bytes()
+        parts.append(f"{fold.fold}:{hashlib.sha1(data).hexdigest()[:12]}")
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 def replay_lambda_series(

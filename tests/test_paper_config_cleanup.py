@@ -74,6 +74,8 @@ def test_fresh_generation_includes_exposure_section(tmp_path):
     assert "exposure:" in raw
     assert "exposure_policy: null" in raw
     assert "policy_model_root: null" in raw
+    assert "policy_fold: null" in raw
+    assert "policy_warmup_file: null" in raw
     assert "exposure_replenish: false" in raw
     assert "signal_penalty:" in raw
     assert "extra:" not in raw

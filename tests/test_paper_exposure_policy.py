@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +49,7 @@ class _StubProvider:
         self._fp = fingerprint
         self.restored = None
         self.calls = 0
+        self.panel_days = 0  # 面板天数（模拟 evaluated_day_count）
 
     @property
     def fingerprint(self) -> str:
@@ -56,6 +58,9 @@ class _StubProvider:
     def multiplier_for(self, date, holdings) -> float:
         self.calls += 1
         return self.multiplier
+
+    def evaluated_day_count(self) -> int:
+        return int(self.panel_days)
 
     def export_state(self) -> dict:
         return {"version": 1, "fingerprint": self._fp, "frames": {}, "pending": {}}
@@ -222,6 +227,23 @@ def test_settings_parses_valid_config():
     assert default.trim_tolerance == DEFAULT_TRIM_TOLERANCE
     assert default.coverage_start is None
     assert default.replenish is False
+    assert default.pinned_fold is None
+    assert default.warmup_file is None
+
+
+def test_settings_parse_pin_and_warmup_file():
+    settings = PaperExposureSettings.from_config(
+        {
+            "exposure_policy": POLICY_SPEC,
+            "policy_model_root": "data/x",
+            "policy_arm_suffix": "_v6m",
+            "policy_fold": "OOS13_202506",
+            "policy_warmup_file": "data/x/paper_warmup/state.json",
+        }
+    )
+    assert settings is not None
+    assert settings.pinned_fold == "OOS13_202506"
+    assert settings.warmup_file == "data/x/paper_warmup/state.json"
 
 
 # ------------------------------------------------------------------ 减仓判定
@@ -477,6 +499,80 @@ def test_stats_summary_contains_policy_identity(tmp_path):
     assert summary["policy"] == POLICY_SPEC
     assert summary["fingerprint"] == "fp-test"
     assert summary["trim_tolerance"] == DEFAULT_TRIM_TOLERANCE
+
+
+# ------------------------------------------------------------------ 装配
+# ----------------------------------------------------------- 预热 / 实盘模式接线
+def test_warmup_restored_when_panel_empty(tmp_path):
+    """面板为空且存在预热文件 ⇒ 恢复 provider 状态（P2a）。"""
+    warmup = tmp_path / "warmup.json"
+    warmup.write_text(
+        json.dumps(
+            {
+                "kind": "paper_exposure_warmup",
+                "version": 1,
+                "coverage": {"first_day": "20250102", "last_day": "20251212", "rows": 4000},
+                "provider": {
+                    "version": 1,
+                    "fingerprint": "fp-test",
+                    "frames": {},
+                    "pending": {},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    policy, _ = _make_policy(tmp_path)
+    policy.settings.warmup_file = str(warmup)
+    policy._apply_warmup_if_needed()  # noqa: SLF001
+    assert policy._provider.restored is not None  # noqa: SLF001
+
+
+def test_warmup_skipped_when_panel_not_empty(tmp_path):
+    """已有面板（续跑）时不灌预热（避免覆盖运行期面板）。"""
+    warmup = tmp_path / "warmup.json"
+    warmup.write_text(json.dumps({"kind": "paper_exposure_warmup", "version": 1}), encoding="utf-8")
+    policy, _ = _make_policy(tmp_path)
+    policy.settings.warmup_file = str(warmup)
+    policy._provider.panel_days = 5  # noqa: SLF001 - 模拟已有面板
+    policy._apply_warmup_if_needed()  # noqa: SLF001
+    assert policy._provider.restored is None  # noqa: SLF001
+
+
+def test_warmup_ignored_on_bad_format(tmp_path):
+    warmup = tmp_path / "warmup.json"
+    warmup.write_text(json.dumps({"kind": "other", "version": 1}), encoding="utf-8")
+    policy, _ = _make_policy(tmp_path)
+    policy.settings.warmup_file = str(warmup)
+    policy._apply_warmup_if_needed()  # noqa: SLF001
+    assert policy._provider.restored is None  # noqa: SLF001
+
+
+def test_bind_uses_serving_mode_and_pin(tmp_path, monkeypatch):
+    """bind 必须以实盘模式（serving）构造 provider，并透传 pin 折。"""
+    captured = {}
+
+    class _FakeProvider(_StubProvider):
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+            super().__init__()
+
+    monkeypatch.setattr("src.lazybull.paper.exposure_policy.DailyExposureProvider", _FakeProvider)
+    model_root = tmp_path / "model_root"
+    model_root.mkdir()
+    settings = PaperExposureSettings(
+        policy=POLICY_SPEC,
+        model_root=str(model_root),
+        arm_suffix="_stub",
+        pinned_fold="OOS13_202506",
+    )
+    account = _StubAccount(1000.0, {})
+    runner = _StubRunner(tmp_path, dict(DEFAULT_PRICES), account)
+    policy = PaperExposurePolicy(runner, settings, data_root=str(tmp_path))
+    policy.bind()
+    assert captured.get("coverage_mode") == "serving"
+    assert captured.get("pinned_fold") == "OOS13_202506"
 
 
 # ------------------------------------------------------------------ 装配
