@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.13] - 2026-09-23
+
+### Fixed
+
+- **纸面交易日志告警清理（三条，均有环境相关性根因）**：
+  1. **XGBoost 跨版本反序列化告警**（从 `pickle.py` 的 `setstate` 发出）：暴露政策折模型加载器
+     （`risk/terminal_loss/policy_sidecar.py::_default_model_loader`）与 `TerminalLossModel.load`
+     未走告警抑制器。修复：抑制器公共化为 `common/xgboost_compat.py`（单一来源，
+     `ml/model_registry.py` 保留旧名 `_suppress_xgboost_pickle_warning` 别名），两处加载点套用。
+  2. **`volatility_factors.py` 的 `pct_change()` 弃用告警 + 行为漂移**：`compute_sigma_daily_panel`
+     未显式传 `fill_method`——pandas 2.x（运行机）默认 `'pad'` 会把停牌 NaN 槽前向填充
+     （与契约“任一缺失即 NaN、窗口不压缩”相悖且发弃用告警），pandas 3.0（开发机）默认已为 `None`
+     ⇒ 同一代码在两台机器行为不一致。修复：显式 `pct_change(fill_method=None)`；同步显式化
+     回测/报表链路四处无参调用（`backtest/engine.py` 个股波动、`backtest/reporter.py` 与
+     `ml/walk_forward/backtest.py` 净值波动、`scripts/compare/drawdown_sweep.py` 日收益）。
+     **影响面（口径修正，须登记）**：仅“20 日窗口内含停牌/缺行”的股票-日——sigma 由
+     “被前向填充后算出数值”变为 NaN（标签侧计 `sigma_unavailable`、政策侧按缺失处理），
+     与既有契约测试 `test_strict_calendar_alignment_no_window_compression` 的口径一致。
+  3. **`exposure_gate.py` 的 object 下转弃用告警**：`first_trigger` 计算中布尔列 `groupby.shift(1)`
+     因引入 NaN 提升为 object，随后 `fillna(False)` 下转在 pandas 2.x 触发 `FutureWarning`。
+     修复：`shift(1, fill_value=False).astype(bool)`（`apply_gate` / `apply_rolling_gate` 两处），
+     结果 dtype 在 2.x/3.x 恒为纯布尔。
+
+### Verification
+
+- 新增测试 5 项：`test_exposure_gate`（首触无 FutureWarning + dtype 纯布尔）、`test_ml`
+  （跨版本消息精确屏蔽 + 旧入口与公共模块单一来源）、`test_policy_sidecar`（折模型加载器抑制）、
+  `test_terminal_loss_train_model`（`TerminalLossModel.load` 抑制）。
+- 相关 5 个测试文件 **98 passed**。
+
 ## [0.127.12] - 2026-09-23
 
 ### Added

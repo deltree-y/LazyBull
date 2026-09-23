@@ -3,6 +3,8 @@
 测试全部基于合成台账，不依赖真实数据与真实配置。
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -263,6 +265,32 @@ def test_first_trigger_marks_run_start_only(tmp_path):
     assert judged["triggered"].tolist() == [False, True, True, True, False, True]
     assert judged["first_trigger"].tolist() == [False, True, False, True, False, True]
     assert judged["exposure_multiplier"].tolist() == [1.0, 0.5, 0.5, 0.5, 1.0, 0.5]
+
+
+def test_first_trigger_warning_free_and_bool_dtype(tmp_path):
+    """首触标记计算不产生 pandas 弃用告警，且列 dtype 为纯布尔。
+
+    （pandas 2.x 下布尔列 plain shift 会经 object 中途态 + fillna 下转触发
+    FutureWarning，且结果 dtype 随版本漂移；修复后 2.x/3.x 行为一致。）
+    """
+    frame = make_ledger(days=6, per_day=1)
+    frame["市场波动状态"] = [0.01, 0.05, 0.05, 0.05, 0.01, 0.05]
+    frame["风险概率"] = 0.2
+    ledger = read_ledger_frames([write_ledger(tmp_path, frame)])
+    daily = build_daily_frame(ledger)
+    start, end = daily["date"].iloc[0], daily["date"].iloc[-1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        calib = calibrate_gate(
+            daily, ExposureGateConfig(arm="regime", regime_quantile=0.4), start, end
+        )
+        judged = apply_gate(daily, calib, start, end)
+        rolling, _ = apply_rolling_gate(
+            daily, RollingGateConfig(window_days=30, min_window_days=2), start, end
+        )
+    assert judged["first_trigger"].dtype == bool
+    assert judged["first_trigger"].tolist() == [False, True, False, True, False, True]
+    assert rolling["first_trigger"].dtype == bool
 
 
 def test_gate_evaluation_direction_and_cost(tmp_path):

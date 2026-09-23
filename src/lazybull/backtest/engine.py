@@ -558,8 +558,8 @@ class BacktestEngine(
             if len(recent_prices) < 2:
                 return self.vol_epsilon
 
-            # 计算日收益率
-            returns = recent_prices.pct_change().dropna()
+            # 计算日收益率（显式 fill_method=None：停牌缺价不得被前向填充冒充零收益）
+            returns = recent_prices.pct_change(fill_method=None).dropna()
 
             if len(returns) < 2:
                 return self.vol_epsilon

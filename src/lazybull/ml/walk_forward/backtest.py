@@ -231,7 +231,7 @@ def run_oos_backtest(
     trading_days = len(nav_curve)
     years = trading_days / 252
     annual_return = total_return / years if years > 0 else 0
-    daily_returns = nav_curve["nav"].pct_change().dropna()
+    daily_returns = nav_curve["nav"].pct_change(fill_method=None).dropna()
     volatility = daily_returns.std() * (252**0.5)
     sharpe = (annual_return - 0.03) / volatility if volatility > 0 else 0
     calmar = annual_return / abs(max_drawdown) if max_drawdown != 0 else 0

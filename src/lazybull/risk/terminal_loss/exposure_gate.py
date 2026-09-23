@@ -428,8 +428,14 @@ def apply_gate(
         segment["regime_threshold"],
         segment["score_threshold"],
     )
-    prev = judged.groupby("fold", sort=False)["triggered"].shift(1)
-    judged["first_trigger"] = judged["triggered"] & ~prev.fillna(False).astype(bool)
+    # shift 必须带 fill_value：布尔列 plain shift 会因引入 NaN 提升为 object，
+    # 随后的 fillna 下转在 pandas 2.x 触发弃用告警，且结果 dtype 不稳定
+    prev = (
+        judged.groupby("fold", sort=False)["triggered"]
+        .shift(1, fill_value=False)
+        .astype(bool)
+    )
+    judged["first_trigger"] = judged["triggered"] & ~prev
     judged["exposure_multiplier"] = np.where(
         judged["triggered"], calibration.de_exposure_multiplier, 1.0
     )
@@ -563,8 +569,13 @@ def apply_rolling_gate(
         pd.Series(score_thr, index=segment.index),
     )
     judged.loc[judged["regime_threshold"].isna(), "triggered"] = False
-    prev = judged.groupby("fold", sort=False)["triggered"].shift(1)
-    judged["first_trigger"] = judged["triggered"] & ~prev.fillna(False).astype(bool)
+    # 同上：shift 带 fill_value=False，避免布尔列经 object 中途态与 fillna 下转
+    prev = (
+        judged.groupby("fold", sort=False)["triggered"]
+        .shift(1, fill_value=False)
+        .astype(bool)
+    )
+    judged["first_trigger"] = judged["triggered"] & ~prev
     judged["exposure_multiplier"] = np.where(
         judged["triggered"], config.de_exposure_multiplier, 1.0
     )

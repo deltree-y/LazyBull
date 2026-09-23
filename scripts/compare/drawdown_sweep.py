@@ -169,7 +169,7 @@ def per_fold_metrics(batch_dir: Path) -> pd.DataFrame:
 def _daily_returns(series: pd.DataFrame) -> pd.Series:
     """按 date 索引的日收益（折边界重复日保留**前一折**行，其日收益为真实日收益）。"""
     ordered = series.sort_values(["split_index", "date"]).copy()
-    ordered["ret"] = ordered.groupby("split_index")["nav"].pct_change()
+    ordered["ret"] = ordered.groupby("split_index")["nav"].pct_change(fill_method=None)
     ordered = ordered.drop_duplicates(subset=["date"], keep="first")
     return ordered.set_index("date")["ret"]
 

@@ -162,7 +162,7 @@ class Reporter:
         annual_return = (total_return / years) if years > 0 else 0
         
         # 波动率（年化）
-        daily_returns = nav_curve['nav'].pct_change().dropna()
+        daily_returns = nav_curve['nav'].pct_change(fill_method=None).dropna()
         volatility = daily_returns.std() * (252 ** 0.5)
         
         # 夏普比率（假设无风险利率为3%）

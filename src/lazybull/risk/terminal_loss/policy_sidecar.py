@@ -38,6 +38,7 @@ from ...common.sidecar_schema import (
     TRIGGER_COLUMNS_ZH,
     select_chinese,
 )
+from ...common.xgboost_compat import suppress_xgboost_pickle_warning
 from ...factors.risk.volatility_factors import compute_sigma_daily_panel
 from .dataset import (
     attach_horizon_features,
@@ -336,11 +337,12 @@ def _default_model_loader(path: str) -> Any:
 
     from .model import TerminalLossModel
 
-    payload = joblib.load(path)
-    if isinstance(payload, TerminalLossModel):
-        return payload
-    if isinstance(payload, dict):
-        return TerminalLossModel.load(path)
+    with suppress_xgboost_pickle_warning():
+        payload = joblib.load(path)
+        if isinstance(payload, TerminalLossModel):
+            return payload
+        if isinstance(payload, dict):
+            return TerminalLossModel.load(path)
     raise ValueError(f"无法识别的模型 artifact 类型 {type(payload).__name__}: {path}")
 
 

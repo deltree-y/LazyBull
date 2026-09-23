@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
+from ...common.xgboost_compat import suppress_xgboost_pickle_warning
 from .labels import TerminalLossLabelConfig
 from .train import OBJECTIVE_RANK_PAIRWISE, TerminalLossTrainConfig
 
@@ -141,8 +142,13 @@ class TerminalLossModel:
 
     @classmethod
     def load(cls, path: str) -> "TerminalLossModel":
-        """加载模型 artifact，校验任务与结构版本。"""
-        payload = joblib.load(path)
+        """加载模型 artifact，校验任务与结构版本。
+
+        反序列化在 ``suppress_xgboost_pickle_warning`` 上下文中进行
+        （旧版本 xgboost 保存的模型解锁时的跨版本告警，属无害噪音）。
+        """
+        with suppress_xgboost_pickle_warning():
+            payload = joblib.load(path)
         version = payload.get("artifact_version")
         if version != MODEL_ARTIFACT_VERSION:
             raise ValueError(f"artifact 版本不符: 期望 {MODEL_ARTIFACT_VERSION}, 实际 {version}")

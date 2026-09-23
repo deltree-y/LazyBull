@@ -250,6 +250,8 @@ def compute_sigma_daily_panel(
     )
     # reindex 到完整日历：停牌缺行成为 NaN 槽位，阻止窗口压缩
     close_pivot = close_pivot.reindex(calendar_dates)
-    ret = close_pivot.pct_change()
+    # 显式 fill_method=None：不得对停牌/缺行 NaN 做前向填充（契约：任一缺失即 NaN、
+    # 窗口不压缩）；同时消除 pandas 2.x 默认 'pad' 的弃用告警与环境相关行为漂移
+    ret = close_pivot.pct_change(fill_method=None)
     sigma = ret.rolling(window, min_periods=window).std()
     return sigma
