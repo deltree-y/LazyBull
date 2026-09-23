@@ -688,7 +688,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 已接同一在线判定链路——判定日 λ 在 **T1 执行前**评估，减仓/回补指令**追加到既有 T+1 指令文件**，
 复用 T0/T1 链路（不新增执行路径）；回补加仓保留原买入日；状态落
 `data/paper/state/exposure_policy.json`（换策略/模型源指纹变化自动清空重算）。配置入口：
-`data/paper/config.yaml` 的 `exposure` 区块（默认 `exposure_policy: null` = 关闭且零副作用）。
+`data/paper/config.yaml` 的 `exposure` 区块（默认 `exposure_policy: null` = 关闭且零副作用；
+即从零生成配置文件时该区块也会自动出现，v0.127.11 起）。
 
 ```powershell
 # 启用示例（在线现算 + 对称回补；与回测默认臂同口径）

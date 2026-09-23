@@ -106,6 +106,8 @@ CONFIG_SECTION_LAYOUT = [
 
 #: 已下线功能的配置键（历史模板遗留）：保存/生成配置时一律剔除，避免 reset/刷新后复活。
 #: 键名或前缀命中任一规则即视为已下线。
+#: 注：整块键（如 ``signal_gate`` 值本身是 dict 的旧嵌套形态）必须用**精确键**登记；
+#: 展平只对已知区块生效，未知块会原样保留。
 RETIRED_CONFIG_KEYS = {
     "holding_management",  # 盈亏动态持仓（实现已移除）
     "enable_profit_based_holding",
@@ -117,7 +119,11 @@ RETIRED_CONFIG_KEYS = {
     "equity_curve",  # 权益曲线交易 ECT（已下线）
     "market_regime",  # 市场择时（未实现）
     "industry",  # 行业动量/轮动（未实现）
-    "signal_gate_mode",  # 信号入口门控（未实现）
+    "signal_gate",  # 信号入口门控整块（v0.90.2 已删除死接口）
+    "signal_gate_mode",
+    "time_stop_loss_enabled",  # 时间止损（未进入共享配置/引擎）
+    "time_stop_loss_days",
+    "time_stop_loss_profit_ratio",
     "stop_loss_trailing_enabled",  # 移动止损（未实现）
     "stop_loss_trailing_pct",
 }
@@ -132,7 +138,20 @@ RETIRED_CONFIG_PREFIXES = (
     "early_exit_",
     "holding_bonus_",
     "signal_gate_",
+    "signal_confidence_gate_",  # 旧扁平形态
+    "time_stop_loss_",
 )
+
+#: 区块内"非 TradingConfig 标准字段"的默认值：保存/生成路径缺键时补齐，
+#: 保证从零生成或历史文件刷新后模板区块仍然可见（null / False 即关闭语义，无副作用）。
+SECTION_DEFAULT_EXTRAS = {
+    "exposure_policy": None,
+    "policy_model_root": None,
+    "policy_arm_suffix": None,
+    "policy_coverage_start": None,
+    "exposure_replenish": False,
+    "exposure_trim_tolerance": None,
+}
 
 
 def is_retired_config_field(key: str) -> bool:
@@ -328,6 +347,9 @@ class PaperConfigMixin:
             normalized.pop(key, None)
         if retired:
             logger.info(f"已剔除已下线功能的配置键（{len(retired)} 个）: {retired}")
+
+        for key, value in SECTION_DEFAULT_EXTRAS.items():
+            normalized.setdefault(key, value)
 
         trading_config = TradingConfig.from_dict(normalized).to_dict()
         extra_keys = {

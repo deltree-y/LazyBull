@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.11] - 2026-09-23
+
+### Fixed
+
+- **纸面配置从零生成时缺失 `exposure` 区块**：`exposure` 系列键不属于 `TradingConfig`，
+  删除 `config.yaml` 后运行 `paper_trade.py config` 重新生成时该区块不出现（功能不可见、无法发现）。
+  修复：`paper/storage/config.py` 新增 `SECTION_DEFAULT_EXTRAS`，`_normalize_config` 对缺键补默认
+  （`exposure_policy: null` 等，运行时零副作用、不影响显式配置值）——任何保存/生成路径
+  （含 reset-t0 刷新、历史文件重写）都会展示该区块。
+- **历史 `extra` 区块残留 `signal_gate` / `time_stop_loss_*`**：`signal_gate` 整块（旧嵌套形态，
+  值本身是 dict，展平只对已知区块生效）与 `time_stop_loss_*`（v0.90.2 已删除的死接口）
+  漏在黑名单外，带这些键的旧文件经 `config` 命令刷新后会原样重生到 `extra:` 区块。
+  修复：`RETIRED_CONFIG_KEYS` 补 `signal_gate`（精确键）/ `signal_gate_mode` / `time_stop_loss_*` 三键，
+  `RETIRED_CONFIG_PREFIXES` 补 `signal_confidence_gate_` / `time_stop_loss_`。
+
+### Verification
+
+- 新增 `tests/test_paper_config_cleanup.py`（5 项：黑名单判定 / 从零生成含 exposure 区块且无 extra /
+  历史样式文件刷新彻底净化且 exposure 配置保留 / 显式配置 round-trip / 保存幂等）。
+- 真实链路复现：删除 `data/paper/config.yaml` 后 `config --model-version 24022` 重新生成——
+  修复前 80 行且无 `exposure`，修复后 98 行含默认 `exposure` 区块、无 `extra`（配置文件已按用户原值恢复）。
+- 全量 `pytest tests`：**2089 passed**。
+
 ## [0.127.10] - 2026-09-23
 
 ### Added
