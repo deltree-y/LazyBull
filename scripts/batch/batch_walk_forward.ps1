@@ -34,6 +34,9 @@ param(
     # 暴露门控对称回补（P2-4；必须与 -ExposurePolicy 或 -ExposureTable 同传，否则直接报错）
     # 默认臂 e2online_r 已开启回补；本参数仅在“命令行覆盖臂清单”时需要显式给出
     [switch]$ExposureReplenish,
+    # 建仓折扣回补（A3 v2；必须与 -ExposureReplenish 同用）：λ<1 信号日的买入预算折扣
+    # 按实际成交额入回补释放额，λ 恢复后由既有回补机制买回（默认关，逐位一致）
+    [switch]$ExposureBudgetDiscount,
     # 减仓/回补共用容差（组合总值比例，如 0.06）；<=0 = 用引擎默认 3%
     [double]$TrimTolerance = 0,
     # 回撤侧对照：启用止损（与暴露门控合并成一次回撤侧总扫描）
@@ -101,24 +104,32 @@ $exposure_arm_list = @(
 # 命令行覆盖：给出任一暴露参数 ⇒ 忽略上面清单，按命令行构造单臂（不叠加）
 # -NoExposure = 强制基线臂（与暴露类参数互斥）
 if ($NoExposure -and (
-    $ExposureTable -ne "" -or $ExposurePolicy -ne "" -or [bool]$ExposureReplenish -or $TrimTolerance -gt 0
+    $ExposureTable -ne "" -or $ExposurePolicy -ne "" -or [bool]$ExposureReplenish -or
+    [bool]$ExposureBudgetDiscount -or $TrimTolerance -gt 0
 )) {
-    throw "-NoExposure 与 -ExposurePolicy / -ExposureTable / -ExposureReplenish / -TrimTolerance 互斥"
+    throw "-NoExposure 与 -ExposurePolicy / -ExposureTable / -ExposureReplenish / -ExposureBudgetDiscount / -TrimTolerance 互斥"
+}
+# 建仓折扣回补必须与对称回补同用（折扣记账服务于回补；引擎层同校验，此处提前失败）
+if ([bool]$ExposureBudgetDiscount -and -not [bool]$ExposureReplenish) {
+    throw "-ExposureBudgetDiscount 必须与 -ExposureReplenish 同用（单开会记了没人回补）"
 }
 $cli_arm_specified = (
     $ExposureTable -ne "" -or $ExposurePolicy -ne "" -or [bool]$ExposureReplenish -or
+    [bool]$ExposureBudgetDiscount -or
     $TrimTolerance -gt 0 -or [bool]$StopLoss -or [bool]$NoExposure
 )
 if ($cli_arm_specified) {
     $cli_policy    = if ($NoExposure) { "" } else { $ExposurePolicy }
     $cli_table     = if ($NoExposure) { "" } else { $ExposureTable }
     $cli_replenish = if ($NoExposure) { $false } else { [bool]$ExposureReplenish }
+    $cli_budget    = if ($NoExposure) { $false } else { [bool]$ExposureBudgetDiscount }
     $cli_tolerance = if ($NoExposure) { 0 } else { $TrimTolerance }
     $cli_arm_name  = if ($NoExposure) { "neutral" } else { "cli" }
     $exposure_arm_list = @(
         [PSCustomObject]@{
             Name = $cli_arm_name; Policy = $cli_policy; Table = $cli_table
-            Replenish = $cli_replenish; Tolerance = $cli_tolerance; StopLoss = [bool]$StopLoss
+            Replenish = $cli_replenish; BudgetDiscount = $cli_budget
+            Tolerance = $cli_tolerance; StopLoss = [bool]$StopLoss
         }
     )
 }
@@ -128,6 +139,10 @@ foreach ($arm in $exposure_arm_list) {
     }
     if (($arm.Replenish -or $arm.Tolerance -gt 0) -and $arm.Policy -eq "" -and $arm.Table -eq "") {
         throw "暴露臂 $($arm.Name): 回补/容差需要同时给出 -ExposurePolicy 或 -ExposureTable（无政策源时回补无意义，禁止静默忽略）"
+    }
+    $arm_has_budget = $arm.PSObject.Properties.Name -contains 'BudgetDiscount' -and [bool]$arm.BudgetDiscount
+    if ($arm_has_budget -and -not [bool]$arm.Replenish) {
+        throw "暴露臂 $($arm.Name): BudgetDiscount 必须与 Replenish 同用（折扣记账服务于回补）"
     }
 }
 # 防护：给出模型源/覆盖起点但**没有任何臂启用政策** ⇒ 这些参数不会生效，不得静默忽略
@@ -645,6 +660,10 @@ foreach ($exposure_arm in $exposure_arm_list) {
     $arm_policy      = [string]$exposure_arm.Policy
     $arm_table       = [string]$exposure_arm.Table
     $arm_replenish   = [bool]$exposure_arm.Replenish
+    # 建仓折扣回补（A3 v2）：默认 $false；开启时 λ<1 信号日的买入折扣入回补释放额
+    $arm_budget_discount = if ($exposure_arm.PSObject.Properties.Name -contains 'BudgetDiscount') {
+        [bool]$exposure_arm.BudgetDiscount
+    } else { $false }
     $arm_tolerance   = [double]$exposure_arm.Tolerance
     $arm_stop_loss   = [bool]$exposure_arm.StopLoss
     $split_count = $wfPeriod.SplitCount
@@ -823,6 +842,9 @@ foreach ($exposure_arm in $exposure_arm_list) {
         if ($arm_policy -ne "" -or $arm_table -ne "") {
             if ($arm_replenish) {
                 $pythonCmd += " --exposure-replenish"
+            }
+            if ($arm_budget_discount) {
+                $pythonCmd += " --exposure-budget-discount-replenish"
             }
             if ($arm_tolerance -gt 0) {
                 $pythonCmd += " --exposure-trim-tolerance $arm_tolerance"

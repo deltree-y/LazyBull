@@ -68,6 +68,7 @@ class BacktestExposureReplenishMixin:
             "skipped_days_below_tolerance": 0,  # 差额未达容差的交易日数
             "skipped_days_no_budget": 0,  # 无未回补释放额的交易日数
             "budget_reset_on_rebalance": 0,  # 新调仓计划生成而归零释放额的次数
+            "budget_discount_release_amount": 0.0,  # 建仓折扣入释放额累计（A3 v2）
         }
 
     # ------------------------------------------------------------------ T0：判定

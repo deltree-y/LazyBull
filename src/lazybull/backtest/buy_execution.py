@@ -167,6 +167,11 @@ class BacktestBuyExecutionMixin:
 
             if trade_executed:
                 successful_buys.append(buy_detail.copy())
+                # 建仓折扣回补（A3 v2）：λ<1 信号日的买入按实际成交额把预算折扣入回补释放额
+                # （开关关闭或 λ=1 时无副作用，逐位一致）
+                self._record_budget_discount_release(
+                    signal_date, float(self.trades[-1].get("amount", 0.0) or 0.0)
+                )
                 return True
 
             return False
@@ -537,6 +542,16 @@ class BacktestBuyExecutionMixin:
 
                     # 检查是否买入成功
                     if stock in self.positions:
+                        # 建仓折扣回补（A3 v2）：补齐路径与主路径同一记账口径
+                        if (
+                            self.trades
+                            and self.trades[-1].get("action") == "buy"
+                            and self.trades[-1].get("stock") == stock
+                        ):
+                            self._record_budget_discount_release(
+                                original_signal_date,
+                                float(self.trades[-1].get("amount", 0.0) or 0.0),
+                            )
                         bought_stocks.append(stock)
                         bought_stock_set.add(stock)  # 记录已买入
                         bought_for_this_slot = True

@@ -626,6 +626,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 2. **暂停加仓**（`exposure_override.py`）：把调仓与补齐两条买入路径的预算基数乘上 λ，
    避免减仓后在缺口日买回。
 
+配套两条回补（均默认关、逐位一致）：
+
+- **对称回补**（`exposure_replenish.py`，P2-4）：λ 回满且存在未回补减仓额时，
+  T+1 按市值比例把持仓买回（`--exposure-replenish`）。
+- **建仓折扣回补**（A3 v2，v0.127.14）：λ<1 信号日的买入预算折扣按实际成交额记入回补释放额
+  （`成交额 × (1/λ − 1)`），λ 恢复后由同一回补机制买回（`--exposure-budget-discount-replenish`，
+  必须与回补同用）——否则建仓恰逢政策期的批次会半额挂到下一次调仓轮换。
+
 未设置系数表时两条路径都不生效（成交与净值与改动前逐位一致）。
 
 **四臂实测（2026-09-14，14 折 OOS，窗口 20240102~20251204）**

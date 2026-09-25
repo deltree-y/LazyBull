@@ -485,6 +485,17 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--exposure-budget-discount-replenish",
+        action="store_true",
+        default=False,
+        help=(
+            "暴露门控**建仓折扣回补**（A3 v2 / P2-4 镜像缺口）：λ<1 信号日的买入预算折扣"
+            "按实际成交额记入回补释放额，λ 恢复后由既有回补机制买回"
+            "（否则建仓恰逢政策期的批次会半额挂到下一次轮换）；"
+            "必须与 --exposure-replenish 同用；默认关（逐位一致）"
+        ),
+    )
+    parser.add_argument(
         "--exposure-trim-tolerance",
         type=float,
         default=None,

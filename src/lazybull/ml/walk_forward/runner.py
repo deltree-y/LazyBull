@@ -594,6 +594,9 @@ def run_walk_forward(args) -> None:
                             exposure_policy=exposure_policy,
                             exposure_replenish=bool(getattr(args, "exposure_replenish", False)),
                             exposure_trim_tolerance=getattr(args, "exposure_trim_tolerance", None),
+                            exposure_budget_discount_replenish=bool(
+                                getattr(args, "exposure_budget_discount_replenish", False)
+                            ),
                             holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
                             repurchase_lookup=getattr(args, "repurchase_lookup", None),
                             top10fh_panel=getattr(args, "top10fh_panel", None),

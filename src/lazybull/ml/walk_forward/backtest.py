@@ -52,6 +52,7 @@ def run_oos_backtest(
     exposure_policy: Any = None,
     exposure_replenish: bool = False,
     exposure_trim_tolerance: Optional[float] = None,
+    exposure_budget_discount_replenish: bool = False,
     holdertrade_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     repurchase_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     top10fh_panel: Optional[pd.DataFrame] = None,
@@ -204,6 +205,7 @@ def run_oos_backtest(
         verbose=exposure_table is not None,
         replenish=exposure_replenish,
         trim_tolerance=exposure_trim_tolerance,
+        budget_discount_replenish=exposure_budget_discount_replenish,
     )
     # 政策层 P2-5：在线现算 provider（与系数表互斥；None = 不启用）
     if exposure_policy is not None:
@@ -212,6 +214,7 @@ def run_oos_backtest(
             verbose=True,
             replenish=exposure_replenish,
             trim_tolerance=exposure_trim_tolerance,
+            budget_discount_replenish=exposure_budget_discount_replenish,
         )
 
     nav_curve = engine.run(

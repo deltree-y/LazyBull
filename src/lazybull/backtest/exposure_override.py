@@ -61,10 +61,54 @@ class BacktestExposureOverrideMixin:
     exposure_stats: Optional[ExposureOverrideStats] = None
     #: 未在表中出现的日期集合（用于告警样例）
     _exposure_missing_dates: Dict[str, int] = {}
+    #: 建仓折扣回补（A3 v2 / P2-4 镜像缺口）：λ<1 信号日的买入预算折扣按实际成交额
+    #: 记入回补释放额（`exposure_release_budget`），λ 恢复后由既有回补机制买回。
+    #: 默认 False：不产生任何副作用，与既有回测逐位一致。
+    exposure_budget_discount_replenish: bool = False
 
     def _has_exposure_source(self) -> bool:
         """是否启用任一种暴露政策源（系数表 或 在线 provider）。"""
         return bool(self.exposure_table) or self.exposure_policy_provider is not None
+
+    def _record_budget_discount_release(self, signal_date, amount: float) -> None:
+        """建仓折扣入回补释放额（A3 v2 / P2-4 镜像缺口，2026-09-25）。
+
+        背景：λ<1 信号日的买入预算被乘以 λ（P2-3），若建仓恰逢政策期，该批次只建了
+        λ 比例的仓位；政策恢复后折扣部分**不在减仓释放额记账内**（回补只记减仓动作），
+        半额仓位会挂到下一次批次轮换（实测 OOS12：17 只 0.47 权重持续 23 个交易日）。
+
+        口径：实际成交额 A 对应"未打折时应买 A/λ"，折扣额 = A × (1/λ − 1)；
+        与减仓释放额共用同一余额（`exposure_release_budget`）与同一回补规则
+        （上界三选一 / T+1 执行 / 新调仓计划日清零——全部语义不变）。
+
+        副作用边界：开关关闭或 λ=1 时**不产生任何副作用**（逐位一致）。
+        回补买入本身不走本记账（其执行路径不调用本方法），不会循环记账。
+
+        Args:
+            signal_date: 买入计划的信号日（λ 取信号日口径，与预算缩放一致）
+            amount: 实际成交金额（元）
+        """
+        if not self.exposure_budget_discount_replenish:
+            return
+        if amount is None or amount <= 0:
+            return
+        multiplier = self._get_exposure_multiplier(signal_date)
+        if multiplier >= 1.0:
+            return
+        discount = float(amount) * (1.0 / multiplier - 1.0)
+        self.exposure_release_budget = float(
+            getattr(self, "exposure_release_budget", 0.0) or 0.0
+        ) + discount
+        stats = getattr(self, "exposure_replenish_stats", None)
+        if stats is not None:
+            stats["budget_discount_release_amount"] = (
+                float(stats.get("budget_discount_release_amount", 0.0)) + discount
+            )
+        logger.debug(
+            f"建仓折扣入释放额: 信号日 {self._date_key(signal_date)} λ={multiplier:.3f} "
+            f"成交额 {amount:.2f} → 折扣 {discount:.2f}（累计释放额 "
+            f"{self.exposure_release_budget:.2f}）"
+        )
 
     def _date_key(self, date) -> str:
         """统一日期键格式（YYYYMMDD）。"""
@@ -147,6 +191,7 @@ class BacktestExposureOverrideMixin:
         verbose: bool = True,
         replenish: bool = False,
         trim_tolerance: Optional[float] = None,
+        budget_discount_replenish: bool = False,
     ) -> None:
         """装载暴露系数表（重复调用覆盖旧表并重置统计）。
 
@@ -160,6 +205,12 @@ class BacktestExposureOverrideMixin:
             if not 0.0 < float(trim_tolerance) < 1.0:
                 raise ValueError(f"trim_tolerance 必须落于 (0, 1)，当前 {trim_tolerance}")
             self.exposure_trim_tolerance = float(trim_tolerance)
+        if budget_discount_replenish and not replenish:
+            raise ValueError(
+                "budget_discount_replenish 必须与 replenish=True 同用"
+                "（折扣记账服务于回补，单开会记了没人回补）"
+            )
+        self.exposure_budget_discount_replenish = bool(budget_discount_replenish) and bool(table)
         self.exposure_replenish_enabled = bool(replenish) and bool(table)
         if table is not None:
             cleaned: Dict[str, float] = {}
@@ -187,6 +238,7 @@ class BacktestExposureOverrideMixin:
         verbose: bool = True,
         replenish: bool = False,
         trim_tolerance: Optional[float] = None,
+        budget_discount_replenish: bool = False,
     ) -> None:
         """装载**在线政策 provider**（terminal_loss P2-5：λ_t 随持仓现算）。
 
@@ -195,17 +247,27 @@ class BacktestExposureOverrideMixin:
             verbose: 是否打印装载日志
             replenish: 是否启用对称回补（P2-4）
             trim_tolerance: 减仓/回补共用容差；None = 保留引擎默认
+            budget_discount_replenish: 是否启用**建仓折扣回补**（A3 v2：λ<1 信号日的买入
+                预算折扣按实际成交额入回补释放额；必须与 replenish=True 同用）
         """
         if trim_tolerance is not None:
             if not 0.0 < float(trim_tolerance) < 1.0:
                 raise ValueError(f"trim_tolerance 必须落于 (0, 1)，当前 {trim_tolerance}")
             self.exposure_trim_tolerance = float(trim_tolerance)
+        if budget_discount_replenish and not replenish:
+            raise ValueError(
+                "budget_discount_replenish 必须与 replenish=True 同用"
+                "（折扣记账服务于回补，单开会记了没人回补）"
+            )
         if provider is not None and not hasattr(provider, "multiplier_for"):
             raise TypeError(
                 "在线政策 provider 必须实现 multiplier_for(date, holdings)；"
                 "传入函数/其他对象一律拒绝（避免第二套接口）"
             )
         self.exposure_policy_provider = provider
+        self.exposure_budget_discount_replenish = (
+            bool(budget_discount_replenish) and replenish and provider is not None
+        )
         self.exposure_replenish_enabled = bool(replenish) and provider is not None
         if provider is None:
             self.exposure_policy_summary = None

@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.14] - 2026-09-25
+
+### Added
+
+- **建仓折扣回补（A3 v2 / P2-4 镜像缺口，暴露政策族）**：λ<1 信号日的买入预算被 P2-3 乘以 λ 后，
+  建仓恰逢政策期的批次只建 λ 比例仓位，政策恢复后折扣部分**不在回补释放额记账内**（回补只记
+  减仓动作），半额仓位会挂到下一次批次轮换（Phase 0 D3 口径修正后的实证：OOS12 2025-01 连续
+  23 个交易日 17 只持仓 / 权重和 0.47）。本版把「建仓折扣」纳入回补释放额记账：
+  - 引擎（`backtest/exposure_override.py`）：新增 `_record_budget_discount_release`——按实际成交额
+    记折扣 `成交额 × (1/λ − 1)` 入既有 `exposure_release_budget`（与减仓释放共用余额与全部回补
+    规则：上界三选一 / T+1 执行 / 新调仓计划日清零）；`set_exposure_policy / set_exposure_table`
+    新增 `budget_discount_replenish` 参数（**必须与 `replenish=True` 同用**，单开报错）；
+  - 记账点（`backtest/buy_execution.py`）：主买入路径与补齐路径成交确认后各调用一次
+    （回补买入自身不走本记账，无循环）；
+  - 接线：`ml/walk_forward/backtest.py` / `runner.py` / CLI `--exposure-budget-discount-replenish` /
+    `batch_walk_forward.ps1` 臂字段 `BudgetDiscount`（含 CLI `-ExposureBudgetDiscount` 覆盖与
+    「必须与回补同用」双重校验）；回补统计新增 `budget_discount_release_amount`；
+  - **默认关闭、逐位一致**（全量 2118 项测试通过，含暴露政策族 121 项）；
+  - 预登记：`docs/plans/slot_refill_ab_prereg.md`（v2；A/B 判据为验收式三条件）；
+    纸面侧接线**待回测 A/B 放行后补**（沿既有先例登记）。
+  - **A/B 裁决（2026-09-25，两臂同波次 `wf_batch_20260925_140938`）：不采纳、关闭**——机制判据
+    大幅达成（折后期高现金 61→4 天、非政策日现金 11.15%→8.38%、10 折记账 ~757 万元），但方向判据
+    失败（ΔCAGR ≈ 0 / **ΔMaxDD −1.14pp**，恶化集中 split10 2024-01 崩盘段 −2.88pp 与 split11
+    −1.43pp，其余 12 折几乎逐位不变）⇒ 「**建仓折扣有择时价值**」登记在案：政策期少建仓本身是
+    保护，λ 恢复 ≠ 风险解除，机械回补削弱该隐式保护而收益零增益。功能保留默认关、生产不启用、
+    不再开新臂（重开仅限政策恢复信号改进且需新预登记）。
+
+### Diagnostics
+
+- **Phase 0 组合层诊断包**（预登记 `docs/plans/p0_diagnostics_prereg.md`，全部只读）：
+  - D1/D2：Top-K 集中度与 Kelly 仓位模式双双关闭（全 14 折主对比 −6.2bps / 等权与分数加权
+    MaxDD 一致恶化 1.62pp——Kelly「不加分但减震」获双证）；
+  - D3：**口径修正**——`policy_lambda` 台账的 `weight_sum/holdings` 是政策面板口径非真实持仓
+    （批次衔接日错报半仓；快照证实卖旧买新同日），快照口径真实现金为非政策日均值 11.15%；
+  - D4：市场级择时 0/21 配置过三判据，B1/B2 永久关闭；
+  - D5：扩展域探针——主板 25-50 亿段迁移 RankIC 0.137 **高于训练域对照 0.102**、创业板 ≥50 亿
+    0.114（均 8/8 年全正），C 方案（域扩展）开臂（预登记 `docs/plans/domain_expansion_ab_prereg.md`）。
+
 ## [0.127.13] - 2026-09-23
 
 ### Fixed
