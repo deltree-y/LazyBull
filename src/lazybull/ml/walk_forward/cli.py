@@ -444,6 +444,18 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--stock-domain",
+        choices=("main", "main_small", "main_gem"),
+        default="main",
+        help=(
+            "选股域（universe/domains.py 单一来源；超参签名维度，禁止跨取值并组比较）："
+            "main=主板50-1500亿（生产现状）；main_small=主板25-1500亿（C1 小市值臂，"
+            "训练池与 main 相同可 skip-training 复用模型）；main_gem=主板+创业板≥50亿"
+            "（C2 创业板臂，训练池扩展必须全折重训）。markets 同步作用于训练池与回测"
+            " universe，市值上下限只作用于 MLSignal 推理过滤（训练维持宽域学排序语义）"
+        ),
+    )
+    parser.add_argument(
         "--enable-repurchase-features",
         action="store_true",
         default=False,

@@ -18,6 +18,7 @@ from ...factors.repurchase import derive_repurchase_columns
 from ...factors.top10_floatholders import derive_top10fh_columns
 from ...factors.top_inst import derive_top_inst_columns
 from ...universe import BasicUniverse
+from ...universe.domains import domain_market_whitelist
 
 
 def run_oos_backtest(
@@ -53,6 +54,7 @@ def run_oos_backtest(
     exposure_replenish: bool = False,
     exposure_trim_tolerance: Optional[float] = None,
     exposure_budget_discount_replenish: bool = False,
+    stock_domain: str = "main",
     holdertrade_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     repurchase_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     top10fh_panel: Optional[pd.DataFrame] = None,
@@ -175,7 +177,9 @@ def run_oos_backtest(
         stock_basic=stock_basic,
         exclude_st=bt_exclude_st,
         min_list_days=bt_min_list_days,
-        markets=["主板"],
+        # 域市场白名单（universe/domains.py 单一来源；默认主板与历史行为逐位一致；
+        # main_gem 放开创业板；市值上下限在 MLSignal 侧过滤）
+        markets=domain_market_whitelist(stock_domain),
         verbose=False,
     )
     signal = create_or_reuse_signal(

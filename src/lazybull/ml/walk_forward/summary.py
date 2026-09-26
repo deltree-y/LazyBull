@@ -217,6 +217,7 @@ def write_walk_forward_summary(results: List[Dict], output_path: str, args, wf_r
         "enable_top10fh_features": getattr(args, "enable_top10fh_features", False),
         "top10fh_feature_set": getattr(args, "top10fh_feature_set", "full"),
         "enable_top_inst_features": getattr(args, "enable_top_inst_features", False),
+        "stock_domain": str(getattr(args, "stock_domain", "main") or "main"),
         "oos_backtest": getattr(args, "oos_backtest", False),
         "oos_backtest_months": getattr(args, "oos_backtest_months", None),
         "bt_top_n": getattr(args, "bt_top_n", None),

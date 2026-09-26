@@ -430,6 +430,11 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
 # 注意：scripts/run_ml_backtest.py 已删除，回测已并入 walk_forward 滚动回测，
 # 或经 src.lazybull.common.backtest_runtime 工厂驱动 BacktestEngineML
 
+# 选股域（单一来源 universe/domains.py；--stock-domain 为超参签名维度）：
+#   main=主板50-1500亿（默认，生产现状）| main_small=主板25-1500亿（训练池同 main 可 skip 复用）
+#   main_gem=主板+创业板≥50亿（训练池扩展，必须全折重训）
+python scripts/walk_forward.py --split-count 14 --final-date 20260105 --stock-domain main_small
+
 # 批量运行最小因子实验（共同基线、历史股息率、两对现金流）
 powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
 ```

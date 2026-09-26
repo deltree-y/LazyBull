@@ -36,6 +36,7 @@ SEED_ENSEMBLE_KEEP_MIN_MODELS = MIN_MODELS
 def _build_feature_flag_train_params(args: Any) -> Dict[str, Any]:
     """构造需随模型注册保存的可选特征开关（含列集等字符串型签名维度）。"""
     return {
+        "stock_domain": str(getattr(args, "stock_domain", "main") or "main"),
         "enable_consensus_features": bool(getattr(args, "enable_consensus_features", False)),
         "enable_cashflow_quality_features": bool(
             getattr(args, "enable_cashflow_quality_features", False)
@@ -57,22 +58,30 @@ def _build_feature_flag_train_params(args: Any) -> Dict[str, Any]:
     }
 
 
-def _build_main_board_codes(stock_basic: pd.DataFrame) -> set:
-    """从 stock_basic 构建主板股票代码集合。"""
+def _build_main_board_codes(stock_basic: pd.DataFrame, markets: tuple = ("主板",)) -> set:
+    """从 stock_basic 构建域股票代码集合（默认主板 = 生产现状）。
+
+    Args:
+        stock_basic: 股票基础信息
+        markets: 市场白名单（来自 ``universe/domains.py`` 域定义；C 臂域扩展）。
+            默认 ``("主板",)`` 与历史行为逐位一致。
+    """
     if stock_basic is None or len(stock_basic) == 0:
         raise ValueError("stock_basic 为空，无法构建主板股票池")
     if "ts_code" not in stock_basic.columns or "market" not in stock_basic.columns:
         raise ValueError("stock_basic 缺少 ts_code/market 列，无法做主板过滤")
 
-    board_df = stock_basic[stock_basic["market"] == "主板"]
+    board_df = stock_basic[stock_basic["market"].isin(markets)]
     board_codes = set(board_df["ts_code"].astype(str).tolist())
     if not board_codes:
-        raise ValueError("stock_basic 中 market=主板 的股票为空，无法做主板过滤")
+        raise ValueError(
+            f"stock_basic 中 market∈{list(markets)} 的股票为空，无法构建域股票池"
+        )
     return board_codes
 
 
 def _filter_to_main_board(df: pd.DataFrame, main_board_codes: set, stage: str) -> pd.DataFrame:
-    """按主板股票池过滤样本，确保训练/评估与交易口径一致。"""
+    """按域股票池过滤样本，确保训练/评估与交易口径一致（池由 ``_build_main_board_codes`` 构建）。"""
     if df is None or len(df) == 0:
         return df
     if "ts_code" not in df.columns:

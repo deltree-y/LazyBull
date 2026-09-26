@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.127.15] - 2026-09-26
+
+### Added
+
+- **选股域开关（C 臂域扩展基础设施，预登记 `docs/plans/domain_expansion_ab_prereg.md`）**：
+  依据 Phase 0 D5 迁移性探针（主板 25-50 亿段 RankIC 0.1369 高于训练域对照 0.1021、创业板 ≥50 亿
+  0.1142，均 8/8 年全正），把"选股域"从散落硬编码收敛为**单一来源** `universe/domains.py`：
+  - 域注册表 `main`（主板 50-1500 亿，生产现状）/ `main_small`（C1：主板 25-1500 亿，仅放开推理侧
+    市值下限）/ `main_gem`（C2：主板+创业板 ≥50 亿，市场白名单放开）；未知域名 fail-fast；
+  - **两侧同源接线**：`markets` 同时作用于训练股票池（`training_core._build_main_board_codes(markets=...)`，
+    默认 `("主板",)` 与历史逐位一致）与回测 universe（`ml/walk_forward/backtest.py`）；市值上下限只作用
+    于 MLSignal 推理过滤（`runner.py` 持久化信号构造从域解析传入）——训练侧维持"宽域学排序"现状语义；
+  - **推论（实现即用）**：`main_small` 训练池与 `main` 相同（`domain_training_pool_unchanged`）⇒ C1 臂
+    可 skip-training 复用生产模型；`main_gem` 训练池扩展 ⇒ C2 臂必须全折重训；
+  - CLI `--stock-domain {main,main_small,main_gem}`（入 `train_params` 与 summary 列 = 超参签名维度，
+    禁止跨取值并组比较）；`batch_walk_forward.ps1` 新增 `$stock_domain_list` 消融维度（非 main 取值
+    自动拼进 batch 标签 `dom_*`）；
+  - 新增测试 7 项（`tests/test_stock_domain.py`：注册表封闭、未知域报错、训练池不变性、默认参数
+    逐位一致、创业板入池/科创板排除）+ 1 项期望字典同步；全量 2125 项通过。
+
 ## [0.127.14] - 2026-09-25
 
 ### Added

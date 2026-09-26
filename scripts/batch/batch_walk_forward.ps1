@@ -54,7 +54,7 @@ param(
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $true   # $true 启用 | $false 禁用
+$skip_training           = $false  # C2 重训批（2026-09-26 临时，跑完还原 $true）
 
 # ── 政策层（暴露门控）配置 ─────────────────────────────
 # 模型来源（在线现算必需）：**与选股 OOS 14 折对齐的折集**（2026-09-20 起为默认；
@@ -168,8 +168,8 @@ $wf_period_configs = @(
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
         StartModelVersion = 24008#,23682
-        #SelectedSplits = @(0,4,5,7,8,9,10,12,13)
         SelectedSplits = @()
+        #SelectedSplits = @(8, 9, 10, 11, 12, 13)  # C2 六折快筛（2026-09-26 临时，跑完还原 @()）
     }
     #[PSCustomObject]@{
     #    Label = "0109"
@@ -334,11 +334,16 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $true   # $true 启用 | $false 禁用
+$deploy_train            = $false  # C2 实验批（2026-09-26 临时，跑完还原 $true）
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
 $stagger_tranches_list   = @(2)    # 1=不分批, 4=分4批（等效每rebalance_freq/4天调仓1/4仓位）
+
+# ── 选股域（universe/domains.py 单一来源；超参签名维度，数组即消融）──────
+# main=主板50-1500亿（生产现状）| main_small=主板25-1500亿（C1，训练池同 main 可 skip 复用）
+# main_gem=主板+创业板≥50亿（C2，训练池扩展必须重训）；非 main 取值自动拼进 batch 标签
+$stock_domain_list       = @("main", "main_gem")  # C2 重训快筛（2026-09-26 临时，跑完还原为 @("main")）
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -587,6 +592,7 @@ $totalTasks = $normalized_wf_period_configs.Length *
               $time_decay_half_life_list.Length *
               $rank_weight_topk_list.Length *
               $rank_weight_list.Length *
+              $stock_domain_list.Length *
               $bt_top_n_list.Length *
               $bt_rebalance_freq_list.Length *
               $bt_sell_timing_list.Length *
@@ -650,6 +656,7 @@ foreach ($bt_stop_loss_drawdown_pct in $bt_stop_loss_drawdown_pct_list) {
 foreach ($bt_stop_loss_consecutive_limit_down in $bt_stop_loss_consecutive_limit_down_list) {
 foreach ($stagger_tranches in $stagger_tranches_list) {
 foreach ($enable_early_rebalance_on_empty in $enable_early_rebalance_on_empty_list) {
+foreach ($stock_domain in $stock_domain_list) {
 foreach ($position_sizing in $position_sizing_list) {
 foreach ($kelly_vol_window in $kelly_vol_window_list) {
 foreach ($kelly_max_leverage in $kelly_max_leverage_list) {
@@ -678,6 +685,9 @@ foreach ($exposure_arm in $exposure_arm_list) {
     }
     if ($arm_name -ne "" -and $arm_name -ne "neutral" -and $arm_name -ne "cli") {
         $batch_period_label = "{0}_{1}" -f $batch_period_label, $arm_name
+    }
+    if ($stock_domain -ne "main") {
+        $batch_period_label = "{0}_dom_{1}" -f $batch_period_label, $stock_domain
     }
     $start_model_version = $wfPeriod.StartModelVersion
     $selected_splits = @($wfPeriod.SelectedSplits)
@@ -810,7 +820,7 @@ foreach ($exposure_arm in $exposure_arm_list) {
     }
 
     if ($oos_backtest) {
-        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-initial-capital $bt_initial_capital --bt-sell-timing $bt_sell_timing --bt-min-list-days $bt_min_list_days"
+        $pythonCmd += " --oos-backtest --oos-backtest-months $oos_backtest_months --bt-top-n $bt_top_n --bt-initial-capital $bt_initial_capital --bt-sell-timing $bt_sell_timing --bt-min-list-days $bt_min_list_days --stock-domain $stock_domain"
         if ($null -ne $bt_rebalance_freq) {
             $pythonCmd += " --bt-rebalance-freq $bt_rebalance_freq"
         }
@@ -903,7 +913,7 @@ foreach ($exposure_arm in $exposure_arm_list) {
     Write-Host "预计还需: $($eta.ToString('hh\:mm\:ss'))" -ForegroundColor Yellow
     Write-Host "预计完成: $($etaTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Magenta
 
-}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合+暴露臂）
+}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}  #  end foreach（时间段+参数组合+选股域+暴露臂）
 
 # ── 全部完成 ──────────────────────────────────────────────────
 $totalTimer.Stop()

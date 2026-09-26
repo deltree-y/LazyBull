@@ -36,6 +36,7 @@ from .reporting import (
 from .split_training import execute_skip_training_evaluation, execute_split_training
 from .summary import write_walk_forward_summary
 from .training_core import _build_main_board_codes
+from src.lazybull.universe.domains import domain_market_whitelist, resolve_stock_domain
 from .utils import (
     WalkForwardSplit,
     generate_walk_forward_splits_by_count,
@@ -313,15 +314,20 @@ def run_walk_forward(args) -> None:
                 logger.warning("无法加载股票基本信息，OOS 回测将被禁用")
                 args.oos_backtest = False
 
-        # 训练/评估统一使用主板股票池，保证与交易口径一致
+        # 训练/评估统一使用域股票池（默认主板 = 生产现状），保证与交易口径一致
         if stock_basic is None:
             stock_basic = loader.load_clean_stock_basic()
         if stock_basic is None:
             stock_basic = loader.load_stock_basic()
         if stock_basic is None:
             raise ValueError("无法加载股票基本信息，无法执行主板过滤训练")
-        main_board_codes = _build_main_board_codes(stock_basic)
-        logger.info(f"主板股票池加载完成: {len(main_board_codes)} 只")
+        stock_domain = str(getattr(args, "stock_domain", "main") or "main")
+        domain_markets = domain_market_whitelist(stock_domain)
+        main_board_codes = _build_main_board_codes(stock_basic, markets=tuple(domain_markets))
+        logger.info(
+            f"域股票池加载完成（--stock-domain {stock_domain}，markets={domain_markets}）: "
+            f"{len(main_board_codes)} 只"
+        )
 
         # 生成 walk-forward ID
         wf_run_id = f"wf_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
@@ -494,17 +500,29 @@ def run_walk_forward(args) -> None:
         if args.oos_backtest:
             from src.lazybull.signals import MLSignal
 
+            # 推理侧市值上下限来自域定义（universe/domains.py 单一来源；
+            # main_small 放开下限至 25 亿，main_gem 维持 50 亿——市场白名单在 universe 侧放开）
+            bt_domain = resolve_stock_domain(
+                str(getattr(args, "stock_domain", "main") or "main")
+            )
             persistent_signal = MLSignal(
                 top_n=args.bt_top_n,
                 model_version=None,  # 首次 split 时通过 update_model_version 设置
                 models_dir=get_stock_selection_models_root(args.data_root),
+                min_total_mv=float(bt_domain["min_total_mv_wan"]),  # type: ignore[arg-type]
+                max_total_mv=float(bt_domain["max_total_mv_wan"]),  # type: ignore[arg-type]
                 verbose=False,
                 downside_penalty=float(getattr(args, "downside_penalty", 0.0) or 0.0),
                 downside_penalty_column=str(
                     getattr(args, "downside_penalty_column", "downside_vol_20")
                 ),
             )
-            logger.info(f"持久化 MLSignal 已创建，将跨 {len(splits)} 个 split 复用")
+            logger.info(
+                f"持久化 MLSignal 已创建（域 {getattr(args, 'stock_domain', 'main')}，"
+                f"市值区间 [{bt_domain['min_total_mv_wan']:.0f}, "
+                f"{bt_domain['max_total_mv_wan']:.0f}] 万元），"
+                f"将跨 {len(splits)} 个 split 复用"
+            )
 
         for split in splits:
             try:
@@ -597,6 +615,7 @@ def run_walk_forward(args) -> None:
                             exposure_budget_discount_replenish=bool(
                                 getattr(args, "exposure_budget_discount_replenish", False)
                             ),
+                            stock_domain=stock_domain,
                             holdertrade_lookup=getattr(args, "holdertrade_lookup", None),
                             repurchase_lookup=getattr(args, "repurchase_lookup", None),
                             top10fh_panel=getattr(args, "top10fh_panel", None),
