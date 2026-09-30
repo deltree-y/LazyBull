@@ -54,7 +54,7 @@ param(
 
 # ── 跳过训练，仅调参回测（复用已有模型）──────────────────────
 # 使用场景：模型已训练完毕，只想调整回测参数（止盈/止损/仓位等）时，跳过耗时的训练步骤
-$skip_training           = $false  # C2 重训批（2026-09-26 临时，跑完还原 $true）
+$skip_training           = $true  # C2 重训批（2026-09-26 临时，跑完还原 $true）
 
 # ── 政策层（暴露门控）配置 ─────────────────────────────
 # 模型来源（在线现算必需）：**与选股 OOS 14 折对齐的折集**（2026-09-20 起为默认；
@@ -167,7 +167,7 @@ $wf_period_configs = @(
         SplitCount = 14
         FinalDate = "20260105"# 20251231
         ContinueDays = 1
-        StartModelVersion = 24008#,23682
+        StartModelVersion = 24008#,24008,24274
         SelectedSplits = @()
         #SelectedSplits = @(8, 9, 10, 11, 12, 13)  # C2 六折快筛（2026-09-26 临时，跑完还原 @()）
     }
@@ -334,7 +334,7 @@ $enable_enhanced           = $true # $true 启用 | $false 禁用
 # 0429关闭后CAGR下降约3%, 回撤保持不变
 
 # ── 部署模型训练（walk-forward完成后自动训练部署模型）──────────
-$deploy_train            = $false  # C2 实验批（2026-09-26 临时，跑完还原 $true）
+$deploy_train            = $true  # C2 实验批（2026-09-26 临时，跑完还原 $true）
 
 ### 以下为回测功能选择
 # ── 分批调仓（将资金分K份错开调仓，降低时点风险）────────────
@@ -343,7 +343,7 @@ $stagger_tranches_list   = @(2)    # 1=不分批, 4=分4批（等效每rebalance
 # ── 选股域（universe/domains.py 单一来源；超参签名维度，数组即消融）──────
 # main=主板50-1500亿（生产现状）| main_small=主板25-1500亿（C1，训练池同 main 可 skip 复用）
 # main_gem=主板+创业板≥50亿（C2，训练池扩展必须重训）；非 main 取值自动拼进 batch 标签
-$stock_domain_list       = @("main", "main_gem")  # C2 重训快筛（2026-09-26 临时，跑完还原为 @("main")）
+$stock_domain_list       = @("main") 
 
 # ── OOS 回测（每个 split 训练后运行真实组合回测）──────────────
 $oos_backtest            = $true            # $true 启用 | $false 禁用
@@ -351,7 +351,7 @@ $oos_backtest            = $true            # $true 启用 | $false 禁用
 $oos_backtest_months     = 0                # 回测时长（月），0 = 自动对齐 test_window_months
 
 $bt_top_n_list           = @(20)            # 回测持仓 Top N
-$bt_rebalance_freq_list  = @($null)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
+$bt_rebalance_freq_list  = @(20)            # 调仓频率（可多值扫描；@($null) 表示从标签自动推断）
 $bt_initial_capital      = 1000000          # 回测初始资金（默认：100万）
 $bt_sell_timing_list     = @("open")        # 卖出时机：open | close
 $bt_exclude_st           = $true            # $true 排除 ST | $false 不排除
@@ -363,7 +363,7 @@ $bt_max_per_industry_list = @($null)        # 单行业最大持仓数，$null =
 # ── OOS 仓位管理模式（仅在 $oos_backtest = $true 时参与回测）──────
 # equal：等权 | score：按分数比例 | kelly：凯利公式 | half_kelly：半凯利（更稳健）
 # 仅当 mode 为 kelly / half_kelly 时，Kelly 参数才会真正生效
-$position_sizing_list             = @('kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
+$position_sizing_list             = @('half_kelly')#, 'score', 'kelly', 'half_kelly') # equal | score | kelly | half_kelly
 $kelly_vol_window_list           = @(60)      #60 Kelly 波动率窗口（交易日，可多值如 @(40, 60, 120)）
 $kelly_max_leverage_list          = @(0.2)    #0.2 Kelly 单股仓位上限（可多值，如 @(0.15, 0.25)）
 
