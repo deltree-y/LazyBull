@@ -7,13 +7,13 @@
 
 | 文件 | 内容 | 状态 |
 |---|---|---|
-| [v2_architecture_plan_frozen.md](v2_architecture_plan_frozen.md) | v2 架构方案冻结版（F5 = 工作稿 v1.11，P0 评审第二轮） | P0 待确认 |
-| [protocols.md](protocols.md) | 模块协议层（F5 = 草案 v0.7；§11 对照表已打钩 22/22 + 止盈行 + 双层归属） | P0 待确认 |
-| [baseline_freeze.md](baseline_freeze.md) | 基线双臂冻结（B0/B1 配置指纹 + 逐折收益路径 + 附录 A 127 键快照） | 已冻结（2026-09-30；附录 A F2 补） |
-| [runs_artifact_contract.md](runs_artifact_contract.md) | runs 产物契约（账本 / 逐日明细 / 报告字段级 schema + 转换器契约 + topk_detail + policy_lambda 条件条款） | P0 待确认（F2） |
-| [events_state_schema.md](events_state_schema.md) | 事件库 / 状态库统一 schema + 公告源试数据协议（词表已修 + 审计样本量升级） | P0 待确认（F2） |
-| [hypothesis_ledger_schema.md](hypothesis_ledger_schema.md) | 假设台账 schema（含候选池分母 / α 预算 / 顺序检验规格——块方差已拍板） | P0 待确认（F2） |
-| [netting_freeze.md](netting_freeze.md) | 净额化冻结文档（分层语义 / 状态机表 / 三恒等式 / lot 模型 + 同向分摊 / 双口径 / 兜底链） | P0 待确认（F3） |
+| [v2_architecture_plan_frozen.md](v2_architecture_plan_frozen.md) | v2 架构方案冻结版（F5 = 工作稿 v1.11，P0 评审第二轮） | **已生效（2026-10-01 P0 确认）** |
+| [protocols.md](protocols.md) | 模块协议层（F5 = 草案 v0.7；§11 对照表已打钩 22/22 + 止盈行 + 双层归属） | **已生效（2026-10-01 P0 确认）** |
+| [baseline_freeze.md](baseline_freeze.md) | 基线双臂冻结（B0/B1 配置指纹 + 逐折收益路径 + 附录 A 127 键快照） | **已生效（2026-09-30 冻结，2026-10-01 随 P0 确认）** |
+| [runs_artifact_contract.md](runs_artifact_contract.md) | runs 产物契约（账本 / 逐日明细 / 报告字段级 schema + 转换器契约 + topk_detail + policy_lambda 条件条款） | **已生效（2026-10-01 P0 确认）** |
+| [events_state_schema.md](events_state_schema.md) | 事件库 / 状态库统一 schema + 公告源试数据协议（词表已修 + 审计样本量升级） | **已生效（2026-10-01 P0 确认）** |
+| [hypothesis_ledger_schema.md](hypothesis_ledger_schema.md) | 假设台账 schema（含候选池分母 / α 预算 / 顺序检验规格——块方差已拍板） | **已生效（2026-10-01 P0 确认）** |
+| [netting_freeze.md](netting_freeze.md) | 净额化冻结文档（分层语义 / 状态机表 / 三恒等式 / lot 模型 + 同向分摊 / 双口径 / 兜底链） | **已生效（2026-10-01 P0 确认）** |
 
 配套（非契约但属 P0 交付）：术语库 `docs/glossary/terms.yaml`（首版 71 条）；
 复杂度 hook `scripts/check/check_complexity.py`（存量棘轮基线同目录 `complexity_baseline.json`）；

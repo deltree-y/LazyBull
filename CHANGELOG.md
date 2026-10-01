@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.201.0] - 2026-10-01
+
+### Changed
+
+- **P0 闸门通过**：六份契约（方案冻结版 F5 / 协议 F5 / runs F2 / events-state F2 /
+  假设台账 F2 / 净额化 F3）+ 基线冻结（含附录 A 127 键快照）经逐份确认**正式生效**；
+  3 项设计层拍板落定（抵消红利双口径并列 / 归还死局传导链不开被动卖出活口 /
+  置信序列方差按持有期块）。P0 阶段关闭，进入 P1 数据底座（∥ P5a 证据机器）。
+
 ## [0.200.3] - 2026-10-01
 
 ### Added
