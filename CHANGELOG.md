@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.2] - 2026-10-01
+
+### Changed
+
+- **v2 方案与协议双轨合并为单文件制**（治理改动，无代码变更）：原「`docs/plans/` 工作稿 +
+  `docs/contracts/` 冻结版」双轨退役，契约文件本身即唯一载体——
+  - **方案冻结版升至 F6（= 工作稿 v1.12）**：合入 P5a-1 实现评审 R-09 程序修正（§3.5 合成臂
+    构造规则改「基线 + 噪声实现 + 等值平移」、检出概率升级为 M 个噪声实现检出频率、双指标判据）；
+    合并后正文与工作稿 v1.12 逐字一致（已 diff 验证）。此前 F5 停在 v1.11、工作稿已演进至 v1.12，
+    存在版本漂移（协议草案头部「配套方案 v1.11」即为同步欠账实例）。
+  - **协议升至 F6（= v0.7，内容零变更，纯载体合并）**：两份协议正文 diff 确认逐字一致，
+    仅消除双轨。
+  - **修订流程（写入两份契约头部与 `docs/contracts/README.md`）**：直接在契约文件修订 → 头部
+    版本表登记草案行（状态列新增）→ 评审通过改「生效」并 commit；**生效才 commit**——git 历史
+    只保留生效版本快照，裁决引用「F 版本号 + commit」。原工作稿 gitignore 无版本历史的缺陷
+    （v1.12 修订仅存单份本地文件）随之消除。
+  - 工作稿历史版本备份至 `docs/plans/v2/backup/`（`v2_architecture_plan_v1_12_backup.md` /
+    `v2_protocols_v0_7_backup.md`）；`docs/plans/v2/` 仅存 backup。
+  - 同步：CLAUDE.md §5 v2 契约区（F6 + 单文件制登记）与文档归档规范（plans/v2 职责描述）、
+    `docs/contracts/README.md` 目录表；术语库 R-09 修订确认已同步（无欠账）；
+    review 文档（append-only）按契约不回改。
+  - **方案文件更名**（同日，单文件制收尾）：`v2_architecture_plan_frozen.md` → `v2_architecture_plan.md`
+    （git mv 保留历史）——方案持续演进（F 系列 append-only），frozen 后缀在单文件制下名不副实；
+    标题改「（正式契约）」与 protocols.md 对齐；头部补「冻结」语义澄清；全仓路径引用同步
+    （CHANGELOG 历史条目按归档规范同步路径）。
+
 ## [0.203.1] - 2026-10-01
 
 ### Fixed
@@ -272,7 +298,8 @@ All notable changes to this project will be documented in this file.
   （L1 信号信息 / L2 判定分辨率 / L3 风险结构）后，启动整体重构。本版为 P0 冻结阶段，
   **不含任何行为变更**（MVP 只做可归因等价复刻，禁止宣称收益 / 回撤突破）：
   - **方案与协议冻结**：架构方案经三轮外部评审（R1+R2 存档 + R3 收尾）落档为
-    `docs/contracts/v2_architecture_plan_frozen.md`（F1 = 工作稿 v1.7b）；模块协议层经
+    `docs/contracts/v2_architecture_plan.md`（F1 = 工作稿 v1.7b；原名 `v2_architecture_plan_frozen.md`，
+    2026-10-01 随单文件制更名，历史条目路径同步）；模块协议层经
     两轮评审（R4 / R5）转正为 `docs/contracts/protocols.md`（F1 = 草案 v0.3，
     含 §11 协议↔旧引擎语义对照表）。核心设计：多袖子（信息进袖子不进列）、唯一内核
     （三宿主适配器）、证据机器（配对制度重排 / 判据自洽性标定 / 假设台账）、契约化防腐化。

@@ -1,22 +1,25 @@
 # LazyBull v2 模块协议层（正式契约）
 
-> **P0 落档标记**：本文档自 `docs/plans/v2/v2_protocols.md` v0.7（2026-10-01）转正为正式契约。
+> **单文件制（F6 起生效，2026-10-01）**：原「plans/ 草案 + contracts/ 契约」双轨合并，本文件为**唯一载体**；
+> 草案已退役，历史版本备份于 `docs/plans/v2/backup/`。修订流程：直接在本文件修订 → 头部版本表登记新行
+> （状态=**草案**）→ 经评审后该行改「**生效**」并 commit（**git 历史只保留生效版本**，草稿不 commit）。
 > 生效状态：**已于 2026-10-01 P0 确认通过，正式生效**。代码实现以本文档为唯一接口依据。
 
-| 契约版本 | 落档日期 | 来源草案 | 变更摘要 |
-|---|---|---|---|
-| F1（= v0.3） | 2026-09-30 | plans/v2/v2_protocols.md v0.3 | 首次转正（经 R4 / R5 两轮评审） |
-| F2（= v0.4） | 2026-10-01 | plans/v2/v2_protocols.md v0.4 | 方案 v1.8 回写：新增 FundSchedulerProtocol + PanelFrame.available_columns_at + VirtualAccount.borrowed_credit |
-| F3（= v0.5） | 2026-10-01 | plans/v2/v2_protocols.md v0.5 | P0 交付：§11 协议↔旧引擎语义对照表逐项打钩（22/22） |
-| F4（= v0.6） | 2026-10-01 | plans/v2/v2_protocols.md v0.6 | P0 评审第一轮：路径勘误 + FundScheduler 归还规则对齐 |
-| F5（= v0.7） | 2026-10-01 | plans/v2/v2_protocols.md v0.7 | P0 评审第二轮：§11 打钩依据补代码态、内核内部语义对账清单化、payload 类型化欠账、止盈行 + 止损双层归属 |
+| 契约版本 | 落档日期 | 来源 | 状态 | 变更摘要 |
+|---|---|---|---|---|
+| F1（= v0.3） | 2026-09-30 | plans/v2/v2_protocols.md v0.3 | 生效 | 首次转正（经 R4 / R5 两轮评审） |
+| F2（= v0.4） | 2026-10-01 | plans/v2/v2_protocols.md v0.4 | 生效 | 方案 v1.8 回写：新增 FundSchedulerProtocol + PanelFrame.available_columns_at + VirtualAccount.borrowed_credit |
+| F3（= v0.5） | 2026-10-01 | plans/v2/v2_protocols.md v0.5 | 生效 | P0 交付：§11 协议↔旧引擎语义对照表逐项打钩（22/22） |
+| F4（= v0.6） | 2026-10-01 | plans/v2/v2_protocols.md v0.6 | 生效 | P0 评审第一轮：路径勘误 + FundScheduler 归还规则对齐 |
+| F5（= v0.7） | 2026-10-01 | plans/v2/v2_protocols.md v0.7 | 生效 | P0 评审第二轮：§11 打钩依据补代码态、内核内部语义对账清单化、payload 类型化欠账、止盈行 + 止损双层归属 |
+| F6（= v0.7，内容零变更） | 2026-10-01 | 本文件单文件制修订 | 生效 | 双轨合并为单文件制（草案 v0.7 与 F5 正文逐字一致，仅载体合并；草案退役，备份入 plans/v2/backup/） |
 
 ---
 ---
-# LazyBull v2 模块协议层（Protocol 定义草案）
+# LazyBull v2 模块协议层（Protocol 定义）
 
-> 版本：v0.7（2026-10-01，配套方案 v1.11；P0 评审第二轮：§11 打钩依据补代码态、内核内部语义对账清单化、payload 类型化欠账登记）
-> 状态：待 P0 落档转正；本文档为接口契约的代码形态草案
+> 版本：v0.7（2026-10-01，配套方案 F6 = v1.12；P0 评审第二轮：§11 打钩依据补代码态、内核内部语义对账清单化、payload 类型化欠账登记）
+> 状态：**已生效**（F6；后续修订按头部单文件制流程登记）
 > 技术选型：Python 3.12 `typing.Protocol`（结构化子类型，无须显式继承）+ frozen dataclass + `pandas.DataFrame` / `datetime.date`
 > 设计原则：① 数据面与计算面分离；② 袖子零互 import；③ 跨模块对象不可变；④ 所有协议方法标注**幂等性**与**副作用**
 > **设计方法论（R4 教训）**：先枚举现实引擎语义（R1 侦察事实），再让类型覆盖它——禁止先定义理想类型再让引擎适应类型
