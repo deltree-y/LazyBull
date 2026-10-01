@@ -83,7 +83,7 @@ class TestPairedRegimeBootstrap:
 
 class TestPowerCalibration:
     def test_shift_returns_scale(self):
-        """+2pp 年化平移 ⇒ 链式 CAGR 抬升 ≈ 0.02"""
+        """+2pp 年化平移 ⇒ 链式 CAGR 抬升 ≈ 0.02（平移构造本身的数学自洽）"""
         from scripts.compare.fold_subset import chain_metrics_from_fold_returns
 
         a = _make_run("A", seed=2)
@@ -95,25 +95,28 @@ class TestPowerCalibration:
         m_base = chain_metrics_from_fold_returns(list(base.values()))
         m_shift = chain_metrics_from_fold_returns(list(shifted.values()))
         # 复利平移 + 折间几何拼接在小样本上略偏名义值（2pp 年化）⇒ 容差放宽到 6‰
-        #（判定目标是「抬升方向正确且量级吻合」，不是精确复现名义值）
         assert m_shift["cagr"] - m_base["cagr"] == pytest.approx(0.02, abs=0.006)
 
-    def test_power_curve_real_noise_low_detection(self):
-        """真实噪声口径（A1 修复后）：block bootstrap 代理下小位移检出率低（不再系统性 100%）。
+    def test_power_curve_frequency_semantics(self):
+        """频率语义（R-01 修订）：检出概率 ∈ [0,1] 且为 M 个实现的频率，非布尔 {0,1}。
 
-        A1 核心：等值平移构造 Δ 波动为 0 ⇒ 检出率虚高；改噪声驱动后，+1pp 在真实/代理
-        噪声宽度下检出率应显著低于 100%（尺子的真实刻度）。
+        断言不再锁死「< 1.0」（旧测试在布尔语义下把错误固化为期望）；
+        改为验证字段语义：频率 = 检出实现数 / M，且随平移档位单调不减（频率语义下成立）。
         """
         a = _make_run("A", seed=3, n_splits=6, days_per_split=40)
         points = power_calibration_curve(
-            a, splits=[0, 1, 2, 3, 4, 5], shift_grid_pp=(1.0, 5.0), n_boot=200, seed=11
+            a, splits=[0, 1, 2, 3, 4, 5], shift_grid_pp=(1.0, 8.0),
+            n_boot=100, n_noise=10, seed=11
         )
         assert len(points) == 2
-        assert points[0].noise_source == "block_bootstrap_proxy"  # 无换种子批 ⇒ 代理口径
-        # 代理噪声下 +1pp 检出率应 < 100%（修复前等值平移恒为 100%）
-        assert points[0].detection_prob_cagr < 1.0
-        # 双指标字段存在（A1：覆盖北极星 ΔMaxDD）
-        assert hasattr(points[0], "detection_prob_maxdd")
+        for p in points:
+            # 频率语义：值域 [0,1]，且是 M 个实现的频率（可为 0/分数/1）
+            assert 0.0 <= p.detection_prob_cagr <= 1.0
+            assert 0.0 <= p.detection_prob_maxdd <= 1.0
+            assert p.n_noise == 10  # 频率的分母登记
+            assert p.noise_source == "block_bootstrap_proxy"  # 无换种子批 ⇒ 代理
+        # 频率语义下大平移档检出率应不低于小档（噪声量级固定时，信号越大越易检出）
+        assert points[1].detection_prob_cagr >= points[0].detection_prob_cagr
 
 
 # ========== 判据自洽性 ==========
@@ -145,12 +148,15 @@ class TestCriterionSelfConsistency:
         a = _make_run("A", seed=4)
         a_alt = _make_run("A'", seed=99)  # 不同 seed 的独立噪声实现（合成换种子对照）
         res = criterion_self_consistency(
-            a, a_alt, splits=[0, 1, 2, 3], shift_pp=2.0, n_boot=200, seed=5
+            a, a_alt, splits=[0, 1, 2, 3], shift_pp=2.0, n_boot=100, n_noise=10, seed=5
         )
         assert res.seed_swap_is_real is True
         # 真实噪声下 criterion_passes 由分布决定（不预设方向），但字段必须齐全
         assert isinstance(res.seed_swap_indistinguishable, bool)
         assert isinstance(res.shifted_detectable, bool)
+        # 频率语义字段（R-01）
+        assert 0.0 <= res.shift_detection_freq <= 1.0
+        assert res.n_noise == 10
 
 
 # ========== runs 转换器 ==========

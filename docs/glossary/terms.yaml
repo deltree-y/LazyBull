@@ -157,12 +157,13 @@ terms:
 
   - term: 功效标定
     aliases: [power calibration]
-    one_liner: 证据机器的"出厂刻度表"——合成臂 +1/+2/+5pp 年化 → 检出概率曲线
+    one_liner: 证据机器的"出厂刻度表"——合成臂 +δ 年化 → 检出频率曲线
     layman: 新秤买回家先称标准砝码：放 1 克、2 克、5 克砝码看秤能不能读出来，读不出来就知道秤的极限
-    example: 合成臂构造 = 折内日收益等值平移；+2pp 臂应判"可检出"、A vs A 换种子应判"不可区分"
-    source: v2 方案 §3.5；P5a-1 交付物
+    example: 合成臂 = 基线 + 噪声实现（换种子差重采样）+ 平移；检出概率 = 20 个噪声实现中"配对重排 Δ 区间下界>0"的频率；+2pp 检出 5%、+8pp 检出 50%（真实刻度，非等值平移的伪 100%）
+    source: v2 方案 §3.5（v1.12 修订）；P5a-1 交付物
     related: [判据自洽性, MDE, 制度重排]
     introduced: "2026-09-30"
+    revised: "2026-10-01：检出概率升级频率语义（P5a-1 评审 R-01）"
 
   - term: 判据自洽性
     aliases: [criterion self-consistency]

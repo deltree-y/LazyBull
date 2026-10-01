@@ -101,7 +101,7 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 
 ## 7.1 folds/<split_id>/topk_detail.csv（F2 新增，P0 评审 5-A——信号层尺子输入）
 
-逐日 Top-K 明细是信号层尺子（`src/lazybull/compare/signal_metrics.py`）的唯一输入，必须在 schema 内：
+逐日 Top-K 明细是信号层尺子（`scripts/compare/signal_metrics.py`，v0.122.0 落位）的唯一输入，必须在 schema 内：
 
 | 字段 | 说明 |
 |---|---|
