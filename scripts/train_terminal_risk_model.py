@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """期末异常亏损风险模型训练入口（第一阶段：标签与离线模型）
 
-按 docs/plans/terminal_loss_risk_model_plan.md 8.1 实施：构建独立标签
+按 docs/plans/terminal_loss/terminal_loss_risk_model_plan.md 8.1 实施：构建独立标签
 （不写回 cs_train/cs_infer）→ 冻结 manifest 特征矩阵 → Train/Val/ES 三段
 分割（label_end_date 隔离）→ 二分类训练（**Val 段**早停）→ 概率质量报告
 （分 h、h × σ 分位、事件率、覆盖分布）。

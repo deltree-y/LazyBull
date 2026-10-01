@@ -1,7 +1,7 @@
 """回撤侧总扫描分析（terminal_loss 政策层 P2-4 前置条件）
 
 用途：对一组「暴露门控 / 对称回补 / 止损」影子臂做统一口径比较，回答预登记判据
-（见 `docs/plans/drawdown_side_sweep_prereg.md`）：
+（见 `docs/plans/terminal_loss/drawdown_side_sweep_prereg.md`）：
 
 - 窗口指标（累计收益 / CAGR / MaxDD / 波动 / Sharpe）：先按窗口切片并**归一化到切片起点**，
   再复用 `ml/walk_forward/chain_metrics.py`（**禁止**自建年化公式）；

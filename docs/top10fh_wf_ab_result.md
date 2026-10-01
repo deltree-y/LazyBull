@@ -1,6 +1,6 @@
 # top10_floatholders 单列 A 臂 A/B 结论（Phase 4）
 
-> 2026-09-19 · 预登记 `docs/plans/top10fh_ab_prereg.md`（**跑前写定**，本文件不得修改其判据）
+> 2026-09-19 · 预登记 `docs/plans/data_families/top10fh_ab_prereg.md`（**跑前写定**，本文件不得修改其判据）
 > 产物：`data/reports/wf_signal_compare/phase4_tfh_conc_20260919/`、`data/reports/wf_fold_subset/phase4_tfh_conc_20260919/`
 > 日志：`logs/phase4_tfh_conc_20260919.log`（训练）、`logs/tfh_ab_signal_20260919.log`、`logs/tfh_ab_fold_subset_20260919.log`
 

@@ -193,7 +193,7 @@ def evaluate_test_window(
 
     A5：启用下行风险惩罚（``args.downside_penalty > 0``）时，逐日 Top-K 明细使用
     「分位(score) − λ×风险分位」调整后的分数（母截面 = 评估域，与既有信号层尺子同域；
-    执行侧母截面为候选域，差异登记见 docs/plans/downside_penalty_prereg.md）。
+    执行侧母截面为候选域，差异登记见 docs/plans/stock_selection/downside_penalty_prereg.md）。
     λ=0 时不得改动任何列，保证与基线逐位一致。
     """
     df_test, _test_days_count = load_features_data(
@@ -312,7 +312,7 @@ def evaluate_test_window(
     test_score_column = "pred_score"
 
     # A5 信号层明细口径：启用惩罚时明细使用调整后分数（母截面 = 评估域，与既有尺子同域；
-    # 执行侧母截面为候选域，差异登记见 docs/plans/downside_penalty_prereg.md）
+    # 执行侧母截面为候选域，差异登记见 docs/plans/stock_selection/downside_penalty_prereg.md）
     detail_score_column = test_score_column
     penalty_value = float(getattr(args, "downside_penalty", 0.0) or 0.0)
     if penalty_value > 0:

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """建仓折扣回补（A3 v2 / P2-4 镜像缺口）单元测试。
 
-硬契约（预登记 docs/plans/slot_refill_ab_prereg.md §2）：
+硬契约（预登记 docs/plans/terminal_loss/slot_refill_ab_prereg.md §2）：
 1. **默认关闭逐位一致**：`exposure_budget_discount_replenish=False` 或 λ=1 时记账无任何副作用；
 2. **记账口径**：折扣额 = 实际成交额 × (1/λ − 1)（λ<1 信号日）；
 3. **必须与回补同开**：单开 `budget_discount_replenish` 直接报错（记了没人回补）；

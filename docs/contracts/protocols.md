@@ -29,7 +29,7 @@
 
 | 版本 | 日期 | 变更摘要 | 兼容性 |
 |---|---|---|---|
-| v0.1 | 2026-09-30 | 首版草案（备份：`docs/plans/v2/v2_protocols_v01_backup.md`） | — |
+| v0.1 | 2026-09-30 | 首版草案（备份：`docs/plans/v2/backup/v2_protocols_v01_backup.md`） | — |
 | v0.2 | 2026-09-30 | R4 评审修正：H1 Price/Money 回退浮点（整分化移实盘留白）；H2 Trainer 集成语义 + Orchestrator 拆分；H3 协议边界定位声明 + 延迟订单最小语义；H4 lot 批次结构；H5 台账写入走 DataStore；H6 协议类型上移 common/protocols；M1~M8 逐项修正；新增 §11 协议↔旧引擎语义对照表 | 破坏（值对象类型 / 依赖方向 / 多个签名变更） |
 | v0.3 | 2026-09-30 | R5 收尾修正：§11 对照表补 5 行（估值价格回退链 / holdings_snapshot / stop_loss_checker / Kelly 权重归一化 / 分批排期锚定差异）+ 非穷尽声明；`OrderReason.CONDITION_SELL`；`LedgerEntry` frozen dataclass 替代裸 Mapping（台账 schema 类型化）；`Position.__post_init__` 聚合不变量校验；`execute_daily` 补两阶段注释（与纸面 run_t0/run_t1 的形态差异说明）；`ExactMoney` 标注伪代码留白 | 兼容（新增枚举值 / 新增类型 / 注释补强；无签名破坏） |
 | v0.4 | 2026-10-01 | 方案 v1.8 回写：新增 `FundSchedulerProtocol`（跨袖资金调度，对应方案 §4.9 软隔离+临时借用——名义配额 / 闲置借用 / 归还规则 / 虚拟占用费）；`PanelFrame` 补 `available_from` 查询接口（对应 M1.5 样本起点扩展的 manifest 列级可用起点）；`VirtualAccount` 补 `borrowed_credit` 占用条目字段 | 兼容（新增协议 / 新增字段 / 新增方法；无签名破坏） |

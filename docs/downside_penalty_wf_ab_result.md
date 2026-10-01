@@ -1,6 +1,6 @@
 # A5 路由型下行风险惩罚 WF A/B 结论（Phase 4）
 
-> 2026-09-21 · 预登记 `docs/plans/downside_penalty_prereg.md`（**跑前写定**，本文件不得修改其判据）
+> 2026-09-21 · 预登记 `docs/plans/stock_selection/downside_penalty_prereg.md`（**跑前写定**，本文件不得修改其判据）
 > 产物：`data/walk_forward/batches/phase4_a5_base_20260921/`、`phase4_a5_dv025_20260921/`、
 > `phase4_a5_dv050_20260921/`、`phase4_a5_cv025_20260921/`；
 > `data/reports/wf_signal_compare/phase4_a5_dv025_20260921/`、`data/reports/wf_fold_subset/phase4_a5_dv025_20260921/`

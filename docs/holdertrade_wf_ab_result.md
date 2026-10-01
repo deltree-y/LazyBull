@@ -1,7 +1,7 @@
 # stk_holdertrade 家族 WF A/B 结果（Phase 4）
 
 > 日期：2026-09-17　版本：v0.124.0
-> 预登记判据：`docs/plans/holdertrade_ab_prereg.md`（**跑前写定**）
+> 预登记判据：`docs/plans/data_families/holdertrade_ab_prereg.md`（**跑前写定**）
 > 判据协议：`docs/factor_pruning_ab_protocol.md`（ΔCAGR/Δ夏普 自举区间下限 > 0、ΔMaxDD ≥ 0、逐折同向 ≥ 70%）
 > 数据态 ID：`2a732925`（两臂同一数据态，可同日对比）
 
@@ -81,7 +81,7 @@ A1 运行日志确认运行时派生生效：查询表 3,185 个交易日 / 259 
 
 ## 7. A2（core 精简列集，第二轮）——同样不通过，本族终结
 
-预登记见 `docs/plans/holdertrade_ab_prereg.md` §7（取值只由 Phase 3 证据决定、只跑一次、不迭代）。
+预登记见 `docs/plans/data_families/holdertrade_ab_prereg.md` §7（取值只由 Phase 3 证据决定、只跑一次、不迭代）。
 A2 = `--enable-holdertrade-features --holdertrade-feature-set core`，
 列集 = `ht_net_ratio_90d` + `ht_net_count_90d` + `ht_sell_count_30d` + `ht_net_ratio_30d` + 哨兵（5 列 → 训练矩阵 56 列）。
 运行：`data/walk_forward/batches/phase4b_ht_core_20260917/`（14/14 折，18:28→20:02，1h34m）。
@@ -142,7 +142,7 @@ python scripts/walk_forward.py <共同参数> --enable-holdertrade-features \
   --batch-run-id phase4_ht_ab_20260917_ht \
   --wf-summary-csv data/walk_forward/batches/phase4_ht_ab_20260917_ht/raw/walk_forward_summary_ht_0001.csv
 
-# 判据 1 / 判据 2（共同参数见 docs/plans/holdertrade_ab_prereg.md §6）
+# 判据 1 / 判据 2（共同参数见 docs/plans/data_families/holdertrade_ab_prereg.md §6）
 python scripts/compare_wf_signal_metrics.py --baseline <A0> --arm <A1> --topk 20 30 --block-days 20 40 60
 python scripts/compare_wf_fold_subset.py --baseline <A0> --arm <A1> --bootstrap 2000
 ```

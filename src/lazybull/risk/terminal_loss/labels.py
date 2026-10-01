@@ -1,6 +1,6 @@
 """剩余持有期期末异常亏损标签构建
 
-实现 docs/plans/terminal_loss_risk_model_plan.md 第 2 节契约：
+实现 docs/plans/terminal_loss/terminal_loss_risk_model_plan.md 第 2 节契约：
 
 - ``R_{i,T,h} = open_adj(E) / open_adj(T+1) - 1``（T+1 与 E 均为全市场交易日历日）
 - ``Y_{i,T,h} = 1[R < -k * sigma_daily_20(T) * sqrt(h)]``

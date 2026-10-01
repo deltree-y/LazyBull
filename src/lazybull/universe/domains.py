@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """选股域定义（单一来源）——训练侧 / OOS 评估侧 / OOS 回测侧 / 推理侧共用。
 
-C 臂（域扩展 A/B，预登记 ``docs/plans/domain_expansion_ab_prereg.md``）的域开关。
+C 臂（域扩展 A/B，预登记 ``docs/plans/stock_selection/domain_expansion_ab_prereg.md``）的域开关。
 依据 Phase 0 D5 迁移性探针（2026-09-24）：主板 25-50 亿段迁移 RankIC 0.1369 高于
 训练域对照 0.1021、创业板 ≥50 亿段 0.1142，两段 8/8 年全正。
 

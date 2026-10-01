@@ -634,7 +634,7 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         help=(
             "下行风险惩罚强度 λ（冻结网格 0/0.25/0.5；0=关闭且与基线逐位一致）："
             "对候选排序做 score 减 lambda*风险分位 后处理；超参签名维度，禁止跨取值并组比较。"
-            "预登记见 docs/plans/downside_penalty_prereg.md"
+            "预登记见 docs/plans/stock_selection/downside_penalty_prereg.md"
         ),
     )
     parser.add_argument(

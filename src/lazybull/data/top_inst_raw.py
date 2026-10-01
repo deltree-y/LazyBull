@@ -2,7 +2,7 @@
 """top_inst（龙虎榜机构席位）raw 层：按 `trade_date` 年分区加载与去重防御。
 
 数据契约（探索期下载，2026-09-23；见 `docs/top_inst_factor_health.md` §2 与
-`docs/plans/top_inst_factor_plan.md`）：
+`docs/plans/data_families/top_inst_factor_plan.md`）：
 
 - 存储：`data/raw/top_inst/YYYY-12-31.parquet`（按 **trade_date** 年分区，沿既有年分区模式）；
 - 采集协议：逐交易日 + 单页 `limit=2000` + `offset` 翻页读到空（实测单日峰值 4,559 行 > 单页上限，

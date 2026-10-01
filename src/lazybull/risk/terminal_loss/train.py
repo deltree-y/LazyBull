@@ -1,6 +1,6 @@
 """期末异常亏损二分类训练与概率质量评估
 
-实现 docs/plans/terminal_loss_risk_model_plan.md 3.6/3.7/8.1 契约：
+实现 docs/plans/terminal_loss/terminal_loss_risk_model_plan.md 3.6/3.7/8.1 契约：
 
 - 早停段与评估段分离（方案 5.2，v0.109.0 修复）：早停只使用 Val 段
   （Train 尾部留出的内部验证段），ES 段只用于概率质量报告与门禁评估，

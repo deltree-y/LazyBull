@@ -333,7 +333,7 @@ python scripts/paper_trade.py config --downside-penalty 0.25
 
 - 口径：风险方向白名单（`downside_vol_20` 越大越危险；`cvar_95_20` 越负越危险）；风险分位缺失按截面中位；缺列必报错；
 - `--skip-training-eval`：skip 模式下补跑 OOS 评估（逐日 Top-K 明细 + 测试指标，**不注册模型、不写训练台账**）；
-- 预登记 `docs/plans/downside_penalty_prereg.md`；**结论（2026-09-21）：不通过 ⇒ 不采纳**——
+- 预登记 `docs/plans/stock_selection/downside_penalty_prereg.md`；**结论（2026-09-21）：不通过 ⇒ 不采纳**——
   信号层 Δ −43.4 bps（Top20，相对 −47%；三块长区间全负）、净值 ΔCAGR −5.62pp / ΔMaxDD +0.89pp / Δ夏普 −0.188；
   机制根因 = rank 空间相减在 λ=0.25 即强倾斜（Top20 重叠 26.8%、换入 14.6 只/日）。
   详见 `docs/downside_penalty_wf_ab_result.md` ⇒ **生产默认关闭，不再开新臂、禁止消融位搜索**。
@@ -442,7 +442,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1
 #### 期末异常亏损风控模型（terminal_loss）
 
 预测持仓在剩余持有期期末发生波动标准化异常亏损的概率，用于到期前风险退出
-（方案见 `docs/plans/terminal_loss_risk_model_plan.md`）：
+（方案见 `docs/plans/terminal_loss/terminal_loss_risk_model_plan.md`）：
 
 ```bash
 # 第一阶段：标签与离线模型（独立标签，不写回 cs_train/cs_infer）

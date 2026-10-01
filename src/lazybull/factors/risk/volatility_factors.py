@@ -213,7 +213,7 @@ def compute_gap_risk(
 
 # ═══════════════════════════════════════════════════════════════
 # sigma_daily_20：期末异常亏损任务的严格日历对齐原始波动尺度
-# （docs/plans/terminal_loss_risk_model_plan.md 2.4/3.2 契约）
+# （docs/plans/terminal_loss/terminal_loss_risk_model_plan.md 2.4/3.2 契约）
 # ═══════════════════════════════════════════════════════════════
 
 def compute_sigma_daily_panel(

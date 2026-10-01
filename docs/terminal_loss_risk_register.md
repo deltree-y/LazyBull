@@ -34,7 +34,7 @@
 3. **结构错位**：低 σ 半区（≈策略实际持仓域：大盘/红利/低换手）日内 AUC 0.5815，
    高 σ 半区 0.7243——模型最弱处正是策略作业区。
 
-### 3. 已排除的修复路径（证据见 `docs/plans/terminal_loss_risk_model_plan.md` 实施状态补充）
+### 3. 已排除的修复路径（证据见 `docs/plans/terminal_loss/terminal_loss_risk_model_plan.md` 实施状态补充）
 
 | 路径 | 结果 |
 |---|---|
@@ -57,13 +57,13 @@
 1. 其余 7 折三判据全部通过，raw 口径 24/24 通过；
 2. 缺口小于流程扰动带（可复现性不足，不构成"模型不可用"证据）；
 3. 根因定位到具体月份与机制，且属数据 regime 而非实现缺陷；
-4. 政策层缓解措施已立项（`docs/plans/terminal_loss_policy_layer_plan.md`）。
+4. 政策层缓解措施已立项（`docs/plans/terminal_loss/terminal_loss_policy_layer_plan.md`）。
 
 ### 6. 缓解措施（政策层，第二阶段实施）
 
 - **双条件门控**：当日截面百分位（排序）与绝对概率（regime 水平）**同时**满足才触发退出；
   两者在 2024H1 有互补性（日内排序弱、跨日水平强）。【2026-09-14 已落地工具链：
-  P2-1 持仓快照 + 离线打分 + 阈值扫描，见 `docs/plans/terminal_loss_policy_layer_plan.md` §5】
+  P2-1 持仓快照 + 离线打分 + 阈值扫描，见 `docs/plans/terminal_loss/terminal_loss_policy_layer_plan.md` §5】
 - **regime 感知**：低 `mkt_vol_20` 半区（历史事件率反直觉升高）单独设定阈值/仓位上限。
 - **事件驱动复核**：季报窗口、质押/解禁公告密集期的持仓复核清单。
 
@@ -77,7 +77,7 @@
 
 - `data/walk_forward/terminal_risk_wf/archives/gate_ci_block_all_core_binary.csv`（core 基线三判据区间）
 - `data/walk_forward/terminal_risk_wf/archives/gate_ci_block_all_core_state_binary.csv`（负结果臂）
-- `docs/plans/terminal_loss_risk_model_plan.md` 实施状态补充（2026-09-13 / 2026-09-14）
+- `docs/plans/terminal_loss/terminal_loss_risk_model_plan.md` 实施状态补充（2026-09-13 / 2026-09-14）
 - 折级产物：`data/walk_forward/terminal_risk_wf/{折}_d5_v6m_fscore/terminal_loss_es_predictions.parquet`
 
 ---
@@ -216,7 +216,7 @@ CI 两两重叠 → 判定 **“用无条件日均可得分阈值做组合级减
 4. 层内阈值当前为**折内样本内中位**（可行性检查口径），生产规则必须在独立 C/V 段预登记校准；
 5. 该结构本质是“regime 内横截面排序”，与 R-001 的“低 `mkt_vol_20` 区间失败”属同一现象的两面。
 
-**后续**：条件化版本作为 P2-2 候选保留（设计见 `docs/plans/terminal_loss_policy_layer_plan.md` §7.5），
+**后续**：条件化版本作为 P2-2 候选保留（设计见 `docs/plans/terminal_loss/terminal_loss_policy_layer_plan.md` §7.5），
 必须带“纯 regime 分层”与“纯模型分数”两条对照臂，否则无法证明增量。
 
 ---
@@ -416,7 +416,7 @@ E2 落地后（v0.116.0）用**净值缩放近似**（`m_t = λ if 前一日判�
 
 ### 9. P2-4 回撤侧总扫描（2026-09-19，v0.127.3）：**回撤维度保留、收益维度不可外推**
 
-预登记 `docs/plans/drawdown_side_sweep_prereg.md`（跑前定稿）；完整报告
+预登记 `docs/plans/terminal_loss/drawdown_side_sweep_prereg.md`（跑前定稿）；完整报告
 `docs/terminal_loss_drawdown_sweep_result.md`。8 个新臂（λ∈{0.3,0.7}、W=120、q_regime=0.50、
 q_score=0.70、容差 6%、**对称回补**、**止损启用对照**），每臂 14 折 OOS，分析工具
 `scripts/analyze_drawdown_sweep.py` + `scripts/compare/drawdown_sweep.py`——**已用既有四臂逐值复现 §8 全部登记值**

@@ -1,6 +1,6 @@
 # repurchase 家族 WF A/B 结果（Phase 4，`rp_price_headroom` 单列臂）
 
-> 2026-09-18 · 预登记 `docs/plans/repurchase_ab_prereg.md`（跑前写定）· 结论：**不通过 ⇒ 不采纳，家族终结**
+> 2026-09-18 · 预登记 `docs/plans/data_families/repurchase_ab_prereg.md`（跑前写定）· 结论：**不通过 ⇒ 不采纳，家族终结**
 > 产物：`data/reports/wf_signal_compare/phase4_rp_headroom_20260918/`、`data/reports/wf_fold_subset/phase4_rp_headroom_20260918/`
 
 ## 1. 两臂

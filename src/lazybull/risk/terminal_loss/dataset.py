@@ -1,6 +1,6 @@
 """期末异常亏损数据集构建：多期限瘦表、特征矩阵、时间分割与隔离
 
-实现 docs/plans/terminal_loss_risk_model_plan.md 第 4/5/6 节契约：
+实现 docs/plans/terminal_loss/terminal_loss_risk_model_plan.md 第 4/5/6 节契约：
 
 - pct_* 百分位必须基于标签过滤前的完整当日母截面生成（方案 4.4）：
   调用方传入的母截面来自 ``mother_section.build_mother_section``（clean/daily

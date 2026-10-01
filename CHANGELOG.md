@@ -301,7 +301,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **选股域开关（C 臂域扩展基础设施，预登记 `docs/plans/domain_expansion_ab_prereg.md`）**：
+- **选股域开关（C 臂域扩展基础设施，预登记 `docs/plans/stock_selection/domain_expansion_ab_prereg.md`）**：
   依据 Phase 0 D5 迁移性探针（主板 25-50 亿段 RankIC 0.1369 高于训练域对照 0.1021、创业板 ≥50 亿
   0.1142，均 8/8 年全正），把"选股域"从散落硬编码收敛为**单一来源** `universe/domains.py`：
   - 域注册表 `main`（主板 50-1500 亿，生产现状）/ `main_small`（C1：主板 25-1500 亿，仅放开推理侧
@@ -342,7 +342,7 @@ All notable changes to this project will be documented in this file.
     `batch_walk_forward.ps1` 臂字段 `BudgetDiscount`（含 CLI `-ExposureBudgetDiscount` 覆盖与
     「必须与回补同用」双重校验）；回补统计新增 `budget_discount_release_amount`；
   - **默认关闭、逐位一致**（全量 2118 项测试通过，含暴露政策族 121 项）；
-  - 预登记：`docs/plans/slot_refill_ab_prereg.md`（v2；A/B 判据为验收式三条件）；
+  - 预登记：`docs/plans/terminal_loss/slot_refill_ab_prereg.md`（v2；A/B 判据为验收式三条件）；
     纸面侧接线**待回测 A/B 放行后补**（沿既有先例登记）。
   - **A/B 裁决（2026-09-25，两臂同波次 `wf_batch_20260925_140938`）：不采纳、关闭**——机制判据
     大幅达成（折后期高现金 61→4 天、非政策日现金 11.15%→8.38%、10 折记账 ~757 万元），但方向判据
@@ -353,14 +353,14 @@ All notable changes to this project will be documented in this file.
 
 ### Diagnostics
 
-- **Phase 0 组合层诊断包**（预登记 `docs/plans/p0_diagnostics_prereg.md`，全部只读）：
+- **Phase 0 组合层诊断包**（预登记 `docs/plans/stock_selection/p0_diagnostics_prereg.md`，全部只读）：
   - D1/D2：Top-K 集中度与 Kelly 仓位模式双双关闭（全 14 折主对比 −6.2bps / 等权与分数加权
     MaxDD 一致恶化 1.62pp——Kelly「不加分但减震」获双证）；
   - D3：**口径修正**——`policy_lambda` 台账的 `weight_sum/holdings` 是政策面板口径非真实持仓
     （批次衔接日错报半仓；快照证实卖旧买新同日），快照口径真实现金为非政策日均值 11.15%；
   - D4：市场级择时 0/21 配置过三判据，B1/B2 永久关闭；
   - D5：扩展域探针——主板 25-50 亿段迁移 RankIC 0.137 **高于训练域对照 0.102**、创业板 ≥50 亿
-    0.114（均 8/8 年全正），C 方案（域扩展）开臂（预登记 `docs/plans/domain_expansion_ab_prereg.md`）。
+    0.114（均 8/8 年全正），C 方案（域扩展）开臂（预登记 `docs/plans/stock_selection/domain_expansion_ab_prereg.md`）。
 
 ## [0.127.13] - 2026-09-23
 
@@ -523,7 +523,7 @@ All notable changes to this project will be documented in this file.
   上榜域内 buy/sell +0.049 t=4.7）⇒ 由“体检止损”改判为“值得进 WF 由训练裁决”；
   **接线完成**（运行时派生）：`factors/top_inst.py`、`data/top_inst_raw.py`、`TopInstFactorHandler`、
   训练/OOS 评估/OOS 回测三侧 + `--enable-top-inst-features`（12 项单元测试 + 真实数据冒烟通过）；
-  **WF A/B（6 折 8-13，预登记 `docs/plans/top_inst_ab_prereg.md`；数据态与 B20 逐位相同 `511c92f4`；
+  **WF A/B（6 折 8-13，预登记 `docs/plans/data_families/top_inst_ab_prereg.md`；数据态与 B20 逐位相同 `511c92f4`；
   首折校验 153=148+5 列逐位通过）：不通过**——信号层 Δ +6.77 bps（Top20，区间 [−11.2,+21.9] 三块长跨 0，
   首个非负读数但不显著）；净值 ΔMaxDD **−3.07pp**、逐折改善 **0/6**、ΔCAGR −3.04pp、Δ夏普 −0.135。
   ⇒ 「加列默认带稀释成本」第 4 次独立支持；不再开新臂、禁止消融位搜索；
@@ -546,7 +546,7 @@ All notable changes to this project will be documented in this file.
   - 评估块重构为共用函数 `evaluate_test_window`；新增 `execute_skip_training_evaluation` +
     `--skip-training-eval`（skip 模式补跑 OOS 评估：**不注册新模型、不写训练台账**），
     支持惩罚/政策类实验复用同一批折模型（省训练、配对最干净）。
-  - 预登记：`docs/plans/downside_penalty_prereg.md`（λ/方向/NaN/母截面/臂/判据/数据态放行 全部跑前钉死）。
+  - 预登记：`docs/plans/stock_selection/downside_penalty_prereg.md`（λ/方向/NaN/母截面/臂/判据/数据态放行 全部跑前钉死）。
 - **smoke 读数（fold0，非判据）**：λ=0.25 下 Top20 重叠仅 **22.6%**、66% 新入选来自 base Top30 之外
   （rank 空间相减在 λ=0.25 即强倾斜）；单折 Δ −23.4 bps（Top20）。产物
   `data/walk_forward/batches/phase4_a5_smoke_20260921/`。
@@ -800,7 +800,7 @@ All notable changes to this project will be documented in this file.
 
 ### 记录（R-004 P2-4 回撤侧总扫描：**回撤维度保留、收益维度不可外推**，2026-09-19）
 
-预登记 `docs/plans/drawdown_side_sweep_prereg.md`（跑前定稿）；报告
+预登记 `docs/plans/terminal_loss/drawdown_side_sweep_prereg.md`（跑前定稿）；报告
 `docs/terminal_loss_drawdown_sweep_result.md`；R-004 状态 `mitigated-qualified` →
 **`mitigated-qualified-drawdown-only`**。8 个新臂（每臂 14 折 OOS，8.4~10.2 分钟）。
 
@@ -858,7 +858,7 @@ All notable changes to this project will be documented in this file.
 
 ### 记录（top10_floatholders Phase 4：单列 A 臂 A/B，**不通过 ⇒ 不采纳、家族终结**，2026-09-19）
 
-预登记 `docs/plans/top10fh_ab_prereg.md`（跑前写定）；报告 `docs/top10fh_wf_ab_result.md`。
+预登记 `docs/plans/data_families/top10fh_ab_prereg.md`（跑前写定）；报告 `docs/top10fh_wf_ab_result.md`。
 
 | 判据 | 结果 | 判定 |
 |---|---|---|
@@ -1058,7 +1058,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 
 ### 记录（repurchase Phase 4：单列臂 A/B 预登记与运行，2026-09-18）
 
-预登记 `docs/plans/repurchase_ab_prereg.md`（跑前写定，不得按结果修改判据）；
+预登记 `docs/plans/data_families/repurchase_ab_prereg.md`（跑前写定，不得按结果修改判据）；
 新增**列集开关** `--repurchase-feature-set {full,headroom}`（超参签名维度，沿 stk_holdertrade 先例）：
 `full` = 4 个值列 + freshness + 哨兵；`headroom` = **单列** `rp_price_headroom` + freshness + 哨兵
 （依据 Phase 3：家族内仅该列有跨期稳定信息）。接线：`factors/repurchase.py::repurchase_feature_columns`、
@@ -1297,7 +1297,7 @@ Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 +
 
 ### Phase 4：WF A/B 结果（2026-09-17）——**结论：不采纳**
 
-- 预登记判据：`docs/plans/holdertrade_ab_prereg.md`（跑前写定）；报告：`docs/holdertrade_wf_ab_result.md`。
+- 预登记判据：`docs/plans/data_families/holdertrade_ab_prereg.md`（跑前写定）；报告：`docs/holdertrade_wf_ab_result.md`。
 - 两臂：14 折 × 3 种子（42,61,82）、`final_date=20260105`、train 6y/test 6m、数据态 ID `2a732925`
   （同一数据态）；A0 基线 52 列（1h28m）、A1 加 ht 60 列（1h35m），除 ht 开关外逐字相同。
 - **判据 1（信号层）**：Δ平均持有期收益 **+5.03 bps**（Top20）/ **+7.00 bps**（Top30），
@@ -1736,14 +1736,14 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 
 ### Docs
 
-- `CLAUDE.md`（脚本目录新增批量入口）、`README.md`（用法改为按 batch 打分）、`docs/plans/terminal_loss_policy_layer_plan.md` §5.4 同步。
+- `CLAUDE.md`（脚本目录新增批量入口）、`README.md`（用法改为按 batch 打分）、`docs/plans/terminal_loss/terminal_loss_policy_layer_plan.md` §5.4 同步。
 
 ### 记录（P2-1 首轮真实持仓实测，2026-09-14）
 
 - 数据：`wf_batch_20260914_081944`（14 个 split 持仓快照；723 交易日 / 6735 行持仓 / 事件率 16.82%；745 个早于最早折的日期已跳过）。
 - **个股截面分位门控不可用**：事件拦截率 ≈ 触发占比（P_hi=0.90：17.6% vs 14.7%，提升 1.20；P_hi=0.99：1.06% vs 1.19%），误杀率 ~80%，**可避免损失合计为负**（−3.46 @0.95/0.10）；2024H1 反向（触发组 5.2% vs 未触发 27.0%）。
 - **组合级水平有信息**：均值校准 0.1681 vs 事件率 0.1682；日级 Spearman +0.219；按日均风险概率分半，高半区事件率 22.8% vs 11.1%、平均事后收益 +0.23% vs +1.23%。
-- 结论：政策层门控对象改为**组合级风险预算/减仓**（`docs/plans/terminal_loss_policy_layer_plan.md` §7.3），并登记为风险项 **R-002（已接受）**。
+- 结论：政策层门控对象改为**组合级风险预算/减仓**（`docs/plans/terminal_loss/terminal_loss_policy_layer_plan.md` §7.3），并登记为风险项 **R-002（已接受）**。
 
 ### 记录（P2-1 次轮复核，2026-09-14，`wf_batch_20260914_084247`）
 
@@ -1808,7 +1808,7 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 
 - `CLAUDE.md`：新增「政策旁路契约（terminal_loss P2-1）」并补 `common/sidecar_schema.py`、`scripts/analyze_policy_sidecar.py` 到目录职责。
 - `README.md`：补充持仓快照导出说明与 `analyze_policy_sidecar.py` 用法。
-- `docs/plans/terminal_loss_policy_layer_plan.md`：追加 P2-1 字段级设计与实施状态；`docs/terminal_loss_risk_register.md`：R-001 缓解措施标注 P2-1 已落地。
+- `docs/plans/terminal_loss/terminal_loss_policy_layer_plan.md`：追加 P2-1 字段级设计与实施状态；`docs/terminal_loss_risk_register.md`：R-001 缓解措施标注 P2-1 已落地。
 
 ## [0.113.0] - 2026-09-13
 
@@ -1835,7 +1835,7 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 
 - **项目共识：临时文件统一放 `temp/`**（2026-09-14）——`.gitignore` 整体忽略 `temp/*` 并保留 `temp/.gitkeep`，同时加入 `_tmp_*` 兜底规则；规则写入 `CLAUDE.md` §7.7 与 `.github/copilot-instructions.md` §1.4（含「收尾必须主动删除」「结论必须落正式文档」）。
 - **新增 `docs/terminal_loss_risk_register.md`（风险登记）**：登记 **R-001「2024H1 折研究门禁边际不达标」为 accepted**——填入三判据区间事实（daynorm bd10/20 缺 0.0006/0.0058、dayauc 缺 0.0063/0.0142，raw 全过）、根因（202401 崩盘月事件率 52.8% + 折内 regime 反差 + σ 归一化失效）、已排除的四条修复路径、影响量化（缺口小于流程扰动带 5–100 倍）、缓解措施（政策层双条件门控/regime 感知/事件复核）与复审条件；策略层面结论写明“该折最弱区正是策略持仓域 → 缓解必须落在政策层”。
-- **新增 `docs/plans/terminal_loss_policy_layer_plan.md`（第二阶段政策层设计草案）**：定义目标与四维预登记判据（风险改善/收益代价/交易成本/稳健性）、双条件门控（当日截面百分位 + 绝对概率）、regime 分段阈值校准（C/V 段，禁按 OOS 回调）、与现有卖出/分批调仓链路复用点、P2-1～P2-5 交付路径与门禁、明确不做的事（不再为 2024H1 做特征/配置搜索、不重启用已否定变体、不改研究门禁协议）。
+- **新增 `docs/plans/terminal_loss/terminal_loss_policy_layer_plan.md`（第二阶段政策层设计草案）**：定义目标与四维预登记判据（风险改善/收益代价/交易成本/稳健性）、双条件门控（当日截面百分位 + 绝对概率）、regime 分段阈值校准（C/V 段，禁按 OOS 回调）、与现有卖出/分批调仓链路复用点、P2-1～P2-5 交付路径与门禁、明确不做的事（不再为 2024H1 做特征/配置搜索、不重启用已否定变体、不改研究门禁协议）。
 
 ## [0.112.2] - 2026-09-13
 
@@ -2203,7 +2203,7 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 
 ### Added
 
-- **期末异常亏损风险模型第一阶段（标签与离线模型）**：按 `docs/plans/terminal_loss_risk_model_plan.md` v2 实施，新增 `src/lazybull/risk/terminal_loss/` 包（labels/dataset/train/model 四模块）与训练入口 `scripts/train_terminal_risk_model.py`，产出独立标签与首轮二分类模型，不写回 cs_train/cs_infer、不改动主链路特征 schema。
+- **期末异常亏损风险模型第一阶段（标签与离线模型）**：按 `docs/plans/terminal_loss/terminal_loss_risk_model_plan.md` v2 实施，新增 `src/lazybull/risk/terminal_loss/` 包（labels/dataset/train/model 四模块）与训练入口 `scripts/train_terminal_risk_model.py`，产出独立标签与首轮二分类模型，不写回 cs_train/cs_infer、不改动主链路特征 schema。
 - **标签构建（labels.py）**：`R = open_adj(E)/open_adj(T+1)-1`、`Y = 1[R < -k·σ·√h]`，h 为日历位置差（到期日契约：买入日 B 后第 rebalance_freq 个交易日开盘）。状态四态互斥（valid/immature/endpoint_missing/sigma_unavailable，优先级 immature 最高），T 日停牌无行不生成、T+1/E 停牌标记 endpoint_missing、零波动与缺失 sigma 标记不可用，均不标记安全不前填价格；E 日跌停保留标签并单独标记 execution_blocked。面板未对齐必须报错，拒绝静默 reindex。
 - **sigma_daily_20 严格日历口径（factors/risk/volatility_factors.py）**：新增 `compute_sigma_daily_panel`，窗口按全市场交易日历对齐（reindex 后停牌缺行为 NaN 槽），最近 20 个日历交易日槽须全部有有效收益才产出样本标准差（ddof=1、未年化小数）——与既有 risk 因子的 tail(window) 压缩窗口不同，停牌缺行不压缩；不注册进 cs_train/cs_infer 标准流水线，由 terminal_loss 数据集侧独立计算。
 - **数据集构建（dataset.py）**：33 列冻结特征 manifest（32 原方案列 + `expected_vol_over_horizon = σ·√h` 复合尺度）；pct_* 百分位基于标签过滤前的完整当日母截面生成（先全截面排名后筛行，mkt_* 广播列不做同日百分位）；manifest 缺整列必须报错不逐日静默缩减；样本权重 = 1/期限网格大小（组内总权重归一，未成熟期限不机械重归一）；`split_stages_with_label_isolation` 按 `label_end_date < 下一阶段起点` 执行多期限标签隔离（短 h 已成熟可保留，同一 (股票,日) 的多 h 随 T 整组同阶段）。
@@ -2222,7 +2222,7 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 
 ### Fixed
 
-- **回测日常持有期到期判定与纸面统一**：背景是新风控模型方案（`docs/plans/terminal_loss_risk_model_plan.md` 7.2 节 P0）评审中发现的到期日契约不一致——纸面日常到期阈值 `max(1, rebalance_freq-1)`，持有 19 天生成卖单、B+20 开盘执行，与调仓路径一致；而回测日常到期判定 `is_holding_period_expired` 为持有 `holding_period`（20）天触发、B+21 开盘执行，比自身调仓路径（B+20 开盘）晚一天，且该差异恰在延期、错位等风控最活跃的场景显现。现将 `trading/sell_rules.py::is_holding_period_expired` 替换为 `is_holding_period_exit_due`（阈值 `max(1, holding_period-1)`，T0 生成卖出信号、T+1 执行日恰为持有期满当天开盘），`trading/__init__.py` 导出同步，`backtest/sell_execution.py` 到期判定改调新函数，`backtest/engine.py` 初始化日志文本同步。已审计不动：`run_loop.py` 周期推进与空仓提前调仓判定、调仓卖出阈值 `floor=0`、reporting 字段名（语义独立，避免调仓时点整体前移引入额外交互）。
+- **回测日常持有期到期判定与纸面统一**：背景是新风控模型方案（`docs/plans/terminal_loss/terminal_loss_risk_model_plan.md` 7.2 节 P0）评审中发现的到期日契约不一致——纸面日常到期阈值 `max(1, rebalance_freq-1)`，持有 19 天生成卖单、B+20 开盘执行，与调仓路径一致；而回测日常到期判定 `is_holding_period_expired` 为持有 `holding_period`（20）天触发、B+21 开盘执行，比自身调仓路径（B+20 开盘）晚一天，且该差异恰在延期、错位等风控最活跃的场景显现。现将 `trading/sell_rules.py::is_holding_period_expired` 替换为 `is_holding_period_exit_due`（阈值 `max(1, holding_period-1)`，T0 生成卖出信号、T+1 执行日恰为持有期满当天开盘），`trading/__init__.py` 导出同步，`backtest/sell_execution.py` 到期判定改调新函数，`backtest/engine.py` 初始化日志文本同步。已审计不动：`run_loop.py` 周期推进与空仓提前调仓判定、调仓卖出阈值 `floor=0`、reporting 字段名（语义独立，避免调仓时点整体前移引入额外交互）。
 - **基线影响提示**：回测持有期卖出提前一个交易日执行，walk-forward 指标（链式 CAGR/Sharpe/换手）将变化，属执行契约修正而非策略改进；冻结新基线前历史对比不得与本版本后的结果混排。
 
 ### Tests

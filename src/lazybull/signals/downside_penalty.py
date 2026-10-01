@@ -15,7 +15,7 @@
 - 执行侧（`MLSignal.generate_ranked` / `generate`）：当日**候选域**（universe ∩ 选股过滤后）；
 - OOS 评估明细侧（`split_training.evaluate_test_window`）：**评估域**（与既有信号层尺子同域）。
 
-预登记（口径/网格/判据）：`docs/plans/downside_penalty_prereg.md`；
+预登记（口径/网格/判据）：`docs/plans/stock_selection/downside_penalty_prereg.md`；
 契约条目：CLAUDE.md「低波惩罚契约（A5）」。
 """
 

@@ -1,6 +1,6 @@
 # 回撤侧总扫描结果（R-004 P2-4 前置条件复核）
 
-> 预登记：`docs/plans/drawdown_side_sweep_prereg.md`（开跑前定稿）
+> 预登记：`docs/plans/terminal_loss/drawdown_side_sweep_prereg.md`（开跑前定稿）
 > 关联：`docs/terminal_loss_risk_register.md` R-004 §8（登记三条未验证项）
 > 执行：2026-09-19，8 个新臂（每臂 14 折 OOS，8.4~10.2 分钟），分析脚本
 > `scripts/analyze_drawdown_sweep.py` + `scripts/compare/drawdown_sweep.py`

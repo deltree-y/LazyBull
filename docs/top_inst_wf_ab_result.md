@@ -1,6 +1,6 @@
 # top_inst（龙虎榜机构席位）WF A/B 结果
 
-> v0.127.9 / 2026-09-23 ｜ 预登记：`docs/plans/top_inst_ab_prereg.md` ｜ 体检：`docs/top_inst_factor_health.md`
+> v0.127.9 / 2026-09-23 ｜ 预登记：`docs/plans/data_families/top_inst_ab_prereg.md` ｜ 体检：`docs/top_inst_factor_health.md`
 > 归档：`data/reports/top_inst_ab_20260923/`（虚拟臂目录 + 逐折对比 + 信号层产物副本）
 
 ## 1. 判决（结论先行）

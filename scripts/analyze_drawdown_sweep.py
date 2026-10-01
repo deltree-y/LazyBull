@@ -1,7 +1,7 @@
 """回撤侧总扫描分析入口（terminal_loss 政策层 P2-4 前置条件）
 
 薄入口：CLI + 编排 `scripts/compare/drawdown_sweep.py`（口径与实现见模块 docstring）。
-预登记：`docs/plans/drawdown_side_sweep_prereg.md`。
+预登记：`docs/plans/terminal_loss/drawdown_side_sweep_prereg.md`。
 
 用法示例：
 

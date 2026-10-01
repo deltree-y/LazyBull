@@ -1,6 +1,6 @@
 """期末异常亏损风险模型（terminal_vol_scaled_loss）
 
-按 docs/plans/terminal_loss_risk_model_plan.md 实施的分阶段模块：
+按 docs/plans/terminal_loss/terminal_loss_risk_model_plan.md 实施的分阶段模块：
 
 - labels: 标签、端点与成熟度校验（第一阶段）
 - dataset: 多期限瘦表、时间分割、样本关联（第一阶段）

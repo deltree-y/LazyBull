@@ -1,7 +1,7 @@
 # top_inst（龙虎榜机构席位）因子体检结果
 
 > v0.127.9 / 2026-09-23 ｜ 报告路径：`docs/top_inst_factor_health.md`
-> 预登记方案：`docs/plans/top_inst_factor_plan.md`
+> 预登记方案：`docs/plans/data_families/top_inst_factor_plan.md`
 > 原始数据：`data/raw/top_inst/`（2012-01-04 ~ 2026-09-22，15 个年分区，2,686,011 行）
 
 ## 1. 判决（结论先行）
@@ -123,5 +123,5 @@ v2 改为**按年分块 + 每年立即写盘 + 断点续传**（跳过已存在�
 
 - 列集审计/信号层筛选契约：列级效应（0~1pp）落噪声带内**不得开 WF 实验**；
 - "加列默认带稀释成本"：新增因子必须先过信号层尺子（相对降幅 ≥9% 才值得跑全量 A/B）；
-- 新增数据集 raw 存储契约：布局已在方案阶段写定（`docs/plans/top_inst_factor_plan.md`）并以此实现；
+- 新增数据集 raw 存储契约：布局已在方案阶段写定（`docs/plans/data_families/top_inst_factor_plan.md`）并以此实现；
 - 因子体检契约：候选清单是实验输入而非生产裁剪依据；负 IC 不等于坏因子，但**偏 IC 归零 = 无增量信息**（诊断标签 B）。

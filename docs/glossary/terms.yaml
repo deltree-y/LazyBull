@@ -641,7 +641,7 @@ terms:
     aliases: [preregistration, prereg]
     one_liner: 实验开工前把假设/判据/裁决规则写成文档冻结——结果出来后再改判据无效
     layman: 考试前先把评分标准贴在墙上；考完再改标准就是耍赖
-    example: docs/plans/*_prereg.md 系列（10 份）；holdertrade 两轮判据均预登记后才跑
+    example: docs/plans/**/*_prereg.md 系列（10 份）；holdertrade 两轮判据均预登记后才跑
     source: CLAUDE.md 契约族；假设台账 schema
     related: [假设台账, 候选池分母, α 预算]
     introduced: "2026-09-30"

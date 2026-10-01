@@ -1,6 +1,6 @@
 # 持有期结构实验（5 日 vs 20 日标签）· 结果与判决（2026-09-23）
 
-> 预登记：`docs/plans/h5_horizon_ab_prereg.md`（判据已预注册，未经更换）。
+> 预登记：`docs/plans/stock_selection/h5_horizon_ab_prereg.md`（判据已预注册，未经更换）。
 > 产物归档：`data/reports/h5_horizon_ab_20260923/`（两臂 summary + 对齐分析 CSV + 分析脚本）。
 > 运行：B20 `wf_20260923_074630`（07:46~08:46，60 分钟）；H5 `wf_20260923_084748`（≈1 小时）。串行执行，无并行。
 
