@@ -56,7 +56,8 @@ scripts/                # 薄入口脚本 + 子包（compare/、factor_health/�
 tests/                  # pytest 测试（180+ 个 test_*.py 文件）
 configs/                # base.yaml（默认唯一自动加载）+ 因子排除清单 JSON + runtime_*.yaml（手工覆盖示例）
 data/                   # 数据与产物：raw/ clean/ features/ models/ paper/ reports/ walk_forward/ ledger/
-docs/                   # 文档；contracts/（v2 契约区）、plans/（本地计划，gitignore）、review/（检视意见归档）
+docs/                   # 文档；按类别归档（contracts / data / experiments / guide / glossary / PR / reports + 本地 plans / review），
+                        # 顶层仅 3 份治理文档（roadmap / BREAKING_CHANGES / terminal_loss_risk_register）；规范见 CLAUDE.md §5
 logs/                   # 临时日志唯一去处（gitignore）
 temp/                   # 临时脚本/中间产物唯一去处（gitignore）
 examples/               # 示例
@@ -179,6 +180,7 @@ pytest tests/ --cov=src/lazybull         # 覆盖率（目标 > 80%）
 - **pct_\* 母截面**：分母必须来自 `clean/daily` 重建的标签过滤前完整同日截面（`build_mother_section`），禁止用 cs_train 当分母，禁止在持仓子集内重排。
 - **旁路只读**：持仓快照、执行归因等旁路产物不得写回持仓状态、不参与买卖判断；中文表头产物的列名唯一来源 `common/sidecar_schema.py`。
 - **数据态血缘**：walk-forward 每次运行采集 git 版本 + 数据水位（`data_state_{wf_run_id}.json`）；同一对比表混入多数据态必须告警，配置差异只在同一数据态内比较。
+- **文档归档**：`docs/` 顶层禁止散文件（仅 roadmap / BREAKING_CHANGES / terminal_loss_risk_register 三份治理文档）；新文档按类别归入子目录（contracts / data / experiments / guide / glossary / PR / reports；plans / review 为本地区）；**移动文档必须全仓同步引用**（含 CHANGELOG 历史条目、代码注释、CLAUDE.md / copilot-instructions 等本地文件），以终端全量扫描验证。
 - **检视意见文档**统一归档 `docs/review/`（append-only）；复杂度 hook = `scripts/check/check_complexity.py`（棘轮基线只缩不扩）。
 - **不要**：破坏 cs_train 与 cs_infer 的 schema 一致性；绕过 T0/T1 指令链路；用局部重建覆盖生产 cs_train 分区；把 changelog 写进 README。
 
@@ -194,5 +196,5 @@ pytest tests/ --cov=src/lazybull         # 覆盖率（目标 > 80%）
 - `README.md` — 项目介绍与完整使用文档（各工具命令、口径说明）。
 - `CHANGELOG.md` — 版本变更唯一记录。
 - `docs/data/data_contract.md` / `docs/guide/backtest_assumptions.md` / `docs/data/features_schema.md` — 数据契约、回测假设、特征标签定义。
-- `docs/contracts/` — v2 契约区；`docs/plans/` — 本地计划（gitignore）；`docs/review/` — 检视意见。
+- `docs/` — 按类别归档：`contracts/`（v2 契约区）、`data/`（数据契约与审计）、`experiments/`（实验协议）、`guide/`（使用指南）、`reports/`（结果报告）、`PR/`（历史记录）；`plans/`、`review/` 为本地区（gitignore）；顶层仅 roadmap / BREAKING_CHANGES / terminal_loss_risk_register。
 - `docs/terminal_loss_risk_register.md` — terminal_loss 风险登记（事实/根因/影响/缓解/复审）。
