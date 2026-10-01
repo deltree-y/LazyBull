@@ -1,15 +1,18 @@
-"""v2 公共值对象（协议草案 v0.3 §0 的落地实现）。
+"""v2 公共值对象（协议 v0.5 §0 的落地实现，含 v0.4 新增字段）。
 
 口径要点（与协议一致）：
 - 价格 / 金额一律浮点，与旧引擎数值路径一致（MVP 唯一口径；整分化是实盘指令层留白）。
 - 内部一律类型化 TradeDate / TSCode；边界处（分区名 / config / CLI / parquet 列）
   由 TradeDate.from_str 单点转换。
 - Mapping 字段的浅不可变由实现侧以 MappingProxyType / frozendict 强制。
+- v0.4 新增：VirtualAccount.borrowed_credit（跨袖资金借用占用）、
+  PanelFrame.available_columns_at（列级可用起点查询，方案 M1.5）。
+- P0 评审（C1）：Position 禁止「空 lots 且非零 shares」的矛盾态。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
@@ -135,23 +138,31 @@ class Position:
     lots: Sequence[Lot]
 
     def __post_init__(self) -> None:
-        if self.lots:
-            lot_shares = sum(lot.shares.value for lot in self.lots)
-            if self.shares.value != lot_shares:
+        if not self.lots:
+            # P0 评审（C1）：空 lots 且非零 shares 是自相矛盾的账本地基值，构造即失败
+            if self.shares.value != 0:
                 raise ValueError(
-                    f"Position({self.ts_code.value}): shares({self.shares.value})"
-                    f" != Σ lots.shares({lot_shares})"
+                    f"Position({self.ts_code.value}): 空 lots 不允许携带非零 shares({self.shares.value})"
                 )
-            lot_cost = sum(lot.cost_basis.value for lot in self.lots)
-            if abs(self.cost_basis.value - lot_cost) > 1e-6:
-                raise ValueError(
-                    f"Position({self.ts_code.value}): cost_basis({self.cost_basis.value})"
-                    f" != Σ lots.cost_basis({lot_cost})"
-                )
+            return
+        lot_shares = sum(lot.shares.value for lot in self.lots)
+        if self.shares.value != lot_shares:
+            raise ValueError(
+                f"Position({self.ts_code.value}): shares({self.shares.value})"
+                f" != Σ lots.shares({lot_shares})"
+            )
+        lot_cost = sum(lot.cost_basis.value for lot in self.lots)
+        if abs(self.cost_basis.value - lot_cost) > 1e-6:
+            raise ValueError(
+                f"Position({self.ts_code.value}): cost_basis({self.cost_basis.value})"
+                f" != Σ lots.cost_basis({lot_cost})"
+            )
 
     @property
     def first_buy_date(self) -> TradeDate:
-        """持有期计算口径：最早批次买入日。"""
+        """持有期计算口径：最早批次买入日。空 lots（零持仓视图）无买入日语义，显式报错。"""
+        if not self.lots:
+            raise ValueError(f"Position({self.ts_code.value}): 空 lots 无 first_buy_date")
         return min(lot.buy_date for lot in self.lots)
 
 
@@ -175,12 +186,17 @@ class Account:
 
 @dataclass(frozen=True, slots=True)
 class VirtualAccount:
-    """袖子虚拟账本（逻辑分账；lot 级）。"""
+    """袖子虚拟账本（逻辑分账；lot 级）。
+
+    borrowed_credit（协议 v0.4，方案 §4.9）：当前借入的资金额度（其他袖子的闲置额度）；
+    正 = 借入，负 = 借出。三恒等式验算时该条目在 Σ袖子虚拟现金 内对消（Σ borrowed_credit ≡ 0）。
+    """
 
     sleeve_id: str
     cash: Money
     positions: Mapping[TSCode, VirtualPosition]
     total_value: Money
+    borrowed_credit: Money = Money(0.0)  # 跨袖资金借用占用（默认 0 = 无借用）
 
 
 # ========== 交易指令与成交 ==========
@@ -267,16 +283,30 @@ class LabelQuery:
 
 @dataclass(frozen=True, slots=True)
 class PanelFrame:
-    """特征面板（DataFrame 包装，附加 manifest 指纹）。"""
+    """特征面板（DataFrame 包装，附加 manifest 指纹与列级可用起点）。"""
 
     df: pd.DataFrame  # index = (trade_date, ts_code)
     manifest_version: str
+    # 列名 → 可用起点（manifest available_from，协议 v0.4 / 方案 M1.5）；空映射 = 未登记
+    available_from: Mapping[str, "TradeDate"] = field(default_factory=dict)
 
     def validate_schema(self, expected_columns: Sequence[str]) -> None:
         """校验列集合（缺列硬报错）。"""
         missing = [c for c in expected_columns if c not in self.df.columns]
         if missing:
             raise ValueError(f"PanelFrame 缺列: {missing[:5]}{'...' if len(missing) > 5 else ''}")
+
+    def available_columns_at(self, date: TradeDate) -> Sequence[str]:
+        """返回指定日期的可用列集（协议 v0.4，方案 M1.5 分时段变列集训练用）。
+
+        仅返回 available_from <= date 的列；未登记起点的列视为恒可用
+        （宽松默认——列名合法性与起点登记的严格校验归 store 层 load_features）。
+        """
+        return [
+            c
+            for c in self.df.columns
+            if self.available_from.get(c) is None or self.available_from[c] <= date
+        ]
 
 
 # ========== 信号与模型 ==========

@@ -1,18 +1,20 @@
-﻿# LazyBull v2 模块协议层（正式契约）
+# LazyBull v2 模块协议层（正式契约）
 
-> **P0 落档标记**：本文档自 `docs/plans/v2_protocols.md` v0.4（2026-10-01）转正为正式契约。
+> **P0 落档标记**：本文档自 `docs/plans/v2_protocols.md` v0.6（2026-10-01）转正为正式契约。
 > 生效状态：**待 P0 确认**。代码实现以本文档为唯一接口依据。
 
 | 契约版本 | 落档日期 | 来源草案 | 变更摘要 |
 |---|---|---|---|
 | F1（= v0.3） | 2026-09-30 | plans/v2_protocols.md v0.3 | 首次转正（经 R4 / R5 两轮评审） |
-| F2（= v0.4） | 2026-10-01 | plans/v2_protocols.md v0.4 | 方案 v1.8 回写：新增 FundSchedulerProtocol（跨袖资金调度，方案 §4.9）+ PanelFrame.available_columns_at（样本起点 available_from，方案 M1.5）+ VirtualAccount.borrowed_credit 占用条目 |
+| F2（= v0.4） | 2026-10-01 | plans/v2_protocols.md v0.4 | 方案 v1.8 回写：新增 FundSchedulerProtocol + PanelFrame.available_columns_at + VirtualAccount.borrowed_credit |
+| F3（= v0.5） | 2026-10-01 | plans/v2_protocols.md v0.5 | P0 交付：§11 协议↔旧引擎语义对照表逐项打钩（22/22，R1 侦察 + 代码抽查核实） |
+| F4（= v0.6） | 2026-10-01 | plans/v2_protocols.md v0.6 | P0 评审第一轮：§9 落档清单路径勘误（v2 命名空间）+ §0 标题同步；FundScheduler 归还规则对齐方案 §4.9 v1.10（放弃新下单优先、被动卖出默认禁止） |
 
 ---
 ---
 # LazyBull v2 模块协议层（Protocol 定义草案）
 
-> 版本：v0.4（2026-10-01，配套方案 v1.8；补跨袖资金调度协议 + 样本起点 available_from 查询）
+> 版本：v0.6（2026-10-01，配套方案 v1.10；P0 评审第一轮：路径勘误 + 归还规则语义对齐）
 > 状态：待 P0 落档转正；本文档为接口契约的代码形态草案
 > 技术选型：Python 3.12 `typing.Protocol`（结构化子类型，无须显式继承）+ frozen dataclass + `pandas.DataFrame` / `datetime.date`
 > 设计原则：① 数据面与计算面分离；② 袖子零互 import；③ 跨模块对象不可变；④ 所有协议方法标注**幂等性**与**副作用**
@@ -30,10 +32,14 @@
 | v0.2 | 2026-09-30 | R4 评审修正：H1 Price/Money 回退浮点（整分化移实盘留白）；H2 Trainer 集成语义 + Orchestrator 拆分；H3 协议边界定位声明 + 延迟订单最小语义；H4 lot 批次结构；H5 台账写入走 DataStore；H6 协议类型上移 common/protocols；M1~M8 逐项修正；新增 §11 协议↔旧引擎语义对照表 | 破坏（值对象类型 / 依赖方向 / 多个签名变更） |
 | v0.3 | 2026-09-30 | R5 收尾修正：§11 对照表补 5 行（估值价格回退链 / holdings_snapshot / stop_loss_checker / Kelly 权重归一化 / 分批排期锚定差异）+ 非穷尽声明；`OrderReason.CONDITION_SELL`；`LedgerEntry` frozen dataclass 替代裸 Mapping（台账 schema 类型化）；`Position.__post_init__` 聚合不变量校验；`execute_daily` 补两阶段注释（与纸面 run_t0/run_t1 的形态差异说明）；`ExactMoney` 标注伪代码留白 | 兼容（新增枚举值 / 新增类型 / 注释补强；无签名破坏） |
 | v0.4 | 2026-10-01 | 方案 v1.8 回写：新增 `FundSchedulerProtocol`（跨袖资金调度，对应方案 §4.9 软隔离+临时借用——名义配额 / 闲置借用 / 归还规则 / 虚拟占用费）；`PanelFrame` 补 `available_from` 查询接口（对应 M1.5 样本起点扩展的 manifest 列级可用起点）；`VirtualAccount` 补 `borrowed_credit` 占用条目字段 | 兼容（新增协议 / 新增字段 / 新增方法；无签名破坏） |
+| v0.5 | 2026-10-01 | P0 交付：§11 协议↔旧引擎语义对照表逐项打钩（22/22）；核对依据 = R1 侦察三项硬事实 + 2026-10-01 代码抽查（16 个关键符号 / 文件逐一定位核实） | 兼容（仅确认列状态变更与注释，无签名破坏） |
+| v0.6 | 2026-10-01 | P0 评审第一轮：§9 落档清单路径勘误（v2 命名空间：`src/lazybull/v2/common/types.py`，迁移期统一落 v2/，P4 全切换后评估展平）；§0 标题同步；FundScheduler 归还规则对齐方案 §4.9 v1.10（放弃新下单优先、被动卖出默认禁止——OrderReason 无枚举） | 兼容（路径勘误 / 文档语义收紧；无签名破坏） |
 
 ---
 
-## 0. 公共类型（common/types.py）
+## 0. 公共类型（v2/common/types.py）
+
+> 命名空间约定（v0.6 勘误）：迁移期 v2 代码统一落 `src/lazybull/v2/`（v1 的 common 在用、不可混入），P4 全切换后评估展平。
 
 ```python
 from __future__ import annotations
@@ -169,7 +175,11 @@ class OrderType(Enum):
     # 未来扩展：LIMIT / TWAP 等
 
 class OrderReason(Enum):
-    """指令来源（审计与 §4.7 退役复核的聚合维度；封闭枚举，新增须登记；对照每日 15 个有序钩子清单补全）"""
+    """指令来源（审计与 §4.7 退役复核的聚合维度；封闭枚举，新增须登记；对照每日 15 个有序钩子清单补全）
+
+    注（v0.6）：跨袖资金借用的「被动归还卖出」**无枚举、默认禁止**（方案 §4.9 v1.10——
+    归还以放弃自身新下单实现；若未来确需被动卖出，必须先在此登记枚举 + 预登记）。
+    """
     REBALANCE = "rebalance"        # 调仓
     EXPIRY = "expiry"              # 到期
     STOP_LOSS = "stop_loss"        # 止损
@@ -648,6 +658,8 @@ class FundScheduler(Protocol):
     核心语义：物理现金池唯一；各袖有名义配额（决定常规下单上限）；
     快袖可借用慢袖当日闲置额度（记虚拟占用条目 VirtualAccount.borrowed_credit）；
     被借方到调仓日必须次日 T+1 归还，禁止滚动拖欠。
+    **归还手段（v0.6 对齐方案 §4.9 v1.10）**：归还 = 借入方**放弃自身新下单**（只压下单额度、
+    不动存量持仓）；**被动卖出默认禁止**（OrderReason 无对应枚举，实现侧不存在该路径）。
     与净额化正交：净额化在物理指令层，借用只在虚拟额度层。
     """
 
@@ -683,10 +695,13 @@ class FundScheduler(Protocol):
         date: TradeDate,
         virtual_accounts: Mapping[str, VirtualAccount],
     ) -> Sequence[Order]:
-        """归还结算：被借方到调仓日 / 产生下单需求时，生成借入方的归还指令
-        （卖出现有持仓腾挪，或放弃自身新下单）；禁止滚动拖欠。
+        """归还结算：被借方到调仓日 / 产生下单需求时，清平借入方的到期占用。
 
-        返回：归还所需的卖出指令（T+1 执行）。
+        归还以「借入方放弃自身新下单」实现（压减其当日可下单额度，方案 §4.9 v1.10）；
+        **被动卖出默认禁止 ⇒ 当前版本恒返回空序列**（返回类型保留，为未来枚举登记后的
+        极端情形留白）；禁止滚动拖欠。
+
+        返回：归还相关指令（本期恒为空；归还经由额度压减体现，不产生卖出单）。
         副作用：清平到期占用条目。
         """
         ...
@@ -927,9 +942,9 @@ evidence -/-> （直接写文件；台账经 DataStore）
 
 ## 9. P0 落档清单
 
-- [ ] 本文档转正为 `docs/contracts/protocols.md`；
-- [ ] `src/lazybull/common/types.py` 创建（公共类型；含 `TradeDate.from_str` 边界单点转换）；
-- [ ] `src/lazybull/common/protocols/` 创建（全部协议定义集中于此，R4-H6）；
+- [x] 本文档转正为 `docs/contracts/protocols.md`；
+- [x] `src/lazybull/v2/common/types.py` 创建（公共类型；含 `TradeDate.from_str` 边界单点转换）——**路径勘误（v0.6）**：迁移期 v2 代码统一落 `src/lazybull/v2/` 命名空间（v1 的 common 在用、不可混入），P4 全切换后评估展平；
+- [ ] `src/lazybull/v2/common/protocols/` 创建（全部协议定义集中于此，R4-H6；同上 v2 命名空间约定）；
 - [ ] mypy 配置开启 `strict` 模式 + import-linter 依赖方向校验脚本；
 - [ ] 每个协议的**参考实现**（`NullImplementation`，返回空结果）用于测试替身；
 - [ ] 构造性对账三件套测试用例（净额化 / 三恒等式 / 虚拟子袖逐位一致）；
@@ -946,33 +961,39 @@ evidence -/-> （直接写文件；台账经 DataStore）
 
 ---
 
-## 11. 协议 ↔ 旧引擎语义对照表（R4-P0 新增；P0 冻结前逐项打钩）
+## 11. 协议 ↔ 旧引擎语义对照表（R4-P0 新增；**P0 已逐项打钩**，2026-10-01）
 
 > 用途：确认现实引擎的每一类语义在协议层有归属（协议表达 / 内核内部声明 / 显式不支持），
 > 防止协议成为 P2a 的第一批对账失败点。输入 = R1 侦察事实。
-> **非穷尽声明（R5）**：本表按当前侦察深度列出，P0 冻结前须按 R1 侦察报告全文逐项核对补全。
+> **非穷尽声明（R5）**：本表按当前侦察深度列出；P0 已按 R1 侦察报告全文逐项核对补全。
+> **打钩依据（P0，2026-10-01）**：「现实位置」列经代码抽查逐行核实——关键符号 / 文件全部定位
+> （`keep_buy_date` / `pending_condition_sells` / `_normalize_signals` / `_kelly_weights`（回测与纸面各一份包装已核实）/
+> `ensemble_seeds` / `stop_loss_checker`（sell_execution.py 单实现 + paper/runtime.py 复用）/ `is_holding_period_exit_due`（trading/sell_rules.py 单源）/
+> `min_commission` + `stamp_tax`（common/cost.py）/ `EXPOSURE_TRIM_TOLERANCE` / `TradingConfig`（common/trading_config.py）/
+> `holdings_snapshot.py` / `ml/walk_forward/data_state.py` / 延迟订单（backtest/pending_execution.py + 纸面 storage/queue.py 两套）等）；
+> 「协议层归属」列经协议全文核对（类型 / 协议 / 边界声明逐项存在）。
 
 | 旧引擎语义 | 现实位置（R1 侦察） | 协议层归属 | 确认 |
 |---|---|---|---|
-| T+1 开盘复权价成交（浮点） | backtest 引擎 / cost.py | `Executor.execute_daily` + `Price(float)`（H1 已修） | ☐ |
-| **估值价格回退链（R5 补，三端合一最重要漂移点之一）** | 回测 4 处 + 纸面前收回退，**两套平行实现** | 内核估值模块统一实现；`Ledger` / 快照经同一入口取价 | ☐ |
-| 每日 15 个有序钩子（到期/止损/止盈/条件卖出/减仓/回补/补齐/调仓…） | 回测每日循环 | **内核内部**（§3 边界声明） | ☐ |
-| 指令按 (action, ts_code) 去重合并（既有指令优先） | 执行链路 | **内核内部**（§3 边界声明） | ☐ |
-| 延迟订单队列（max_retry / 超 rebalance_freq×0.5 过期） | 延迟订单模块 ×2 | **内核内部**；最小语义已登记（§3） | ☐ |
-| 减仓 / 回补不进延迟队列（防放大成清仓） | 暴露政策链路 | **协议注释写死**（§3 特例） | ☐ |
-| 条件卖出队列（pending_condition_sells） | 回测每日循环 | **内核内部**；`OrderReason.CONDITION_SELL`（R5 补） | ☐ |
-| 3 种子集成（ensemble_seeds 42/61/82） | EnsembleSignal / 注册表 | `ModelConfig.ensemble_seeds` + `Trainer` 集成语义（H2 已修） | ☐ |
-| walk_forward 编排（训练→评估→回测→data_state→summary） | ml/walk_forward/runner.py | `WalkForwardOrchestrator`（H2 已修） | ☐ |
-| 到期判定（持有 rebalance_freq-1 日 T0 生成卖出） | trading/sell_rules.py | `common/rules/` 共享纯函数（§6 登记） | ☐ |
-| **止损检查器（stop_loss_checker，单实现两侧共用）** | risk/ 止损模块 | `common/rules/` 共享纯函数（R5 补登记） | ☐ |
-| 分批调仓排期（stagger_tranches） | trading/stagger.py | `common/rules/` 共享纯函数（§6 登记） | ☐ |
-| **分批排期锚定差异（回测区间起点 vs 纸面 anchor 重建，R5 补）** | stagger 两侧调用点 | `common/rules/` 共享纯函数 + **锚定语义入参化**（anchor 由调用方显式传入，禁止各自推导） | ☐ |
-| **Kelly 仓位 / 权重归一化两份包装（`_kelly_weights` / `_normalize_signals` 回测与纸面各一份，R5 补）** | trading/ 纯函数已单源 + **包装层两份** | 纯函数归 `common/rules/`；**包装层合并为 `core/decision` 唯一实现** | ☐ |
-| 回补不重置买入日 + 补齐算新持仓（A3） | 账本层 | `Lot` / `Position.lots`（H4 已修） | ☐ |
-| 净额化到期归属（最早买入虚拟份额优先） | v2 新增 | `VirtualPosition.lots`（H4 已修，P6.5 前定型） | ☐ |
-| 代码态 + 数据态双指纹 | ml/walk_forward/data_state.py | `DataState.code_digest`（M2 已修） | ☐ |
-| TradingConfig 类型化配置 | common/（dataclass） | `ExecutionContext.config: TradingConfigLike`（M3 已修） | ☐ |
-| 滑点 / 执行缺口归因 | 执行归因链路 | **执行归因层**（非 Fill 字段，M1 已修） | ☐ |
-| 最低佣金 5 元 / 印花税单边 | cost.py | 内核成本模块（`Money` 浮点路径覆盖） | ☐ |
-| 假设台账 append-only 写入 | v2 新增 | `DataStore.append_ledger_entry(LedgerEntry)`（H5+R5 已修） | ☐ |
-| **持仓快照（holdings_snapshot，只读旁路，R5 补）** | backtest/holdings_snapshot.py（引擎默认关闭、WF OOS 显式开启） | **内核内部旁路**；产物 schema 归《runs 产物契约》，不进协议层 | ☐ |
+| T+1 开盘复权价成交（浮点） | backtest 引擎 / cost.py | `Executor.execute_daily` + `Price(float)`（H1 已修） | ✅ |
+| **估值价格回退链（R5 补，三端合一最重要漂移点之一）** | 回测 4 处 + 纸面前收回退，**两套平行实现** | 内核估值模块统一实现；`Ledger` / 快照经同一入口取价 | ✅ |
+| 每日 15 个有序钩子（到期/止损/止盈/条件卖出/减仓/回补/补齐/调仓…） | 回测每日循环 | **内核内部**（§3 边界声明） | ✅ |
+| 指令按 (action, ts_code) 去重合并（既有指令优先） | 执行链路 | **内核内部**（§3 边界声明） | ✅ |
+| 延迟订单队列（max_retry / 超 rebalance_freq×0.5 过期） | 延迟订单模块 ×2 | **内核内部**；最小语义已登记（§3） | ✅ |
+| 减仓 / 回补不进延迟队列（防放大成清仓） | 暴露政策链路 | **协议注释写死**（§3 特例） | ✅ |
+| 条件卖出队列（pending_condition_sells） | 回测每日循环 | **内核内部**；`OrderReason.CONDITION_SELL`（R5 补） | ✅ |
+| 3 种子集成（ensemble_seeds 42/61/82） | EnsembleSignal / 注册表 | `ModelConfig.ensemble_seeds` + `Trainer` 集成语义（H2 已修） | ✅ |
+| walk_forward 编排（训练→评估→回测→data_state→summary） | ml/walk_forward/runner.py | `WalkForwardOrchestrator`（H2 已修） | ✅ |
+| 到期判定（持有 rebalance_freq-1 日 T0 生成卖出） | trading/sell_rules.py | `common/rules/` 共享纯函数（§6 登记） | ✅ |
+| **止损检查器（stop_loss_checker，单实现两侧共用）** | risk/ 止损模块 | `common/rules/` 共享纯函数（R5 补登记） | ✅ |
+| 分批调仓排期（stagger_tranches） | trading/stagger.py | `common/rules/` 共享纯函数（§6 登记） | ✅ |
+| **分批排期锚定差异（回测区间起点 vs 纸面 anchor 重建，R5 补）** | stagger 两侧调用点 | `common/rules/` 共享纯函数 + **锚定语义入参化**（anchor 由调用方显式传入，禁止各自推导） | ✅ |
+| **Kelly 仓位 / 权重归一化两份包装（`_kelly_weights` / `_normalize_signals` 回测与纸面各一份，R5 补）** | trading/ 纯函数已单源 + **包装层两份** | 纯函数归 `common/rules/`；**包装层合并为 `core/decision` 唯一实现** | ✅ |
+| 回补不重置买入日 + 补齐算新持仓（A3） | 账本层 | `Lot` / `Position.lots`（H4 已修） | ✅ |
+| 净额化到期归属（最早买入虚拟份额优先） | v2 新增 | `VirtualPosition.lots`（H4 已修，P6.5 前定型） | ✅ |
+| 代码态 + 数据态双指纹 | ml/walk_forward/data_state.py | `DataState.code_digest`（M2 已修） | ✅ |
+| TradingConfig 类型化配置 | common/（dataclass） | `ExecutionContext.config: TradingConfigLike`（M3 已修） | ✅ |
+| 滑点 / 执行缺口归因 | 执行归因链路 | **执行归因层**（非 Fill 字段，M1 已修） | ✅ |
+| 最低佣金 5 元 / 印花税单边 | cost.py | 内核成本模块（`Money` 浮点路径覆盖） | ✅ |
+| 假设台账 append-only 写入 | v2 新增 | `DataStore.append_ledger_entry(LedgerEntry)`（H5+R5 已修） | ✅ |
+| **持仓快照（holdings_snapshot，只读旁路，R5 补）** | backtest/holdings_snapshot.py（引擎默认关闭、WF OOS 显式开启） | **内核内部旁路**；产物 schema 归《runs 产物契约》，不进协议层 | ✅ |

@@ -1,0 +1,113 @@
+# LazyBull v2 假设台账 schema（正式契约）
+
+> **P0 落档标记**：本文档冻结假设台账的条目 schema、多重比较控制规则（候选池分母 / α 预算）与
+> 影子账本顺序检验规格。台账是 v2 的"记忆"——机器可读的证伪清单，新系统的 alpha 之一就是它。
+> 生效状态：**待 P0 确认**。
+> 对齐协议层：条目类型 = `LedgerEntry`（`docs/contracts/protocols.md` §0）；写入唯一入口 = `DataStore.append_ledger_entry`。
+
+| 契约版本 | 落档日期 | 来源 | 变更摘要 |
+|---|---|---|---|
+| F1 | 2026-10-01 | 方案 v1.8 §3.5 / §0.3 + R1-2 / R1-3 修正 | 首次落档 |
+
+---
+
+## 1. 定位
+
+- 台账回答三个问题：**我们试过什么（含候选池全貌）、结论是什么（含不采纳）、什么条件下允许重开**。
+- 机器可读：证据机器 / 报告系统直接消费；人读视图（HTML）由报告层从同一数据源生成。
+- **append-only**：历史条目禁止修改；修订 = 追加新条目并 `supersedes` 旧条目。
+
+## 2. 存储与写入
+
+- 物理形态：`data/ledger/hypotheses.jsonl`（UTF-8，一行一个 JSON 条目，git diff 可读）。
+- 写入唯一入口：`DataStore.append_ledger_entry(LedgerEntry)`（证据层只消费该 API，不直接写文件——"evidence 不写资产"与台账 append-only 由此不矛盾）。
+- `LedgerEntry` 骨架（协议层已定）：`hypothesis_id / kind / payload / data_state / registered_at`；
+  本文档冻结的是 **`payload` 的子字段 schema**（协议层标注"P0 落档时定稿"的欠账，本契约偿还）。
+
+## 3. 条目 schema（payload 字段级）
+
+### 3.1 公共字段（两类条目必有）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `schema_version` | int | 当前 = 1；语义变更必须递增并保留历史条目可读 |
+| `title` | str | 一句话标题 |
+| `vehicle` | str | 载体类别：`sleeve` / `factor_family` / `rule` / `policy` / `data_source` |
+| `tags` | list[str] | 自由标签（家族名、报告缩写等） |
+
+### 3.2 `kind = "prereg"`（预登记条目）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `statement` | str | 可证伪的假设陈述（含方向与量级预期） |
+| `arms` | list[object] | 实验臂定义（臂名 / 配置差异点 / 模型或信号来源） |
+| `metrics` | object | `primary`（主判据）+ `guards`（护栏清单），指标必须引用 metrics_v1 且标注适用域 |
+| `decision_rule` | str | 裁决规则的形式化条件（通过 / 不通过 / 终止的判据组合，禁止事后改写） |
+| `noise_band` | object | 适用噪声带声明（口径 + 数值 + 出处标定批次） |
+| `candidate_pool_denominator` | int | **候选池分母**：本假设从多大的候选集合中选出（见 §4） |
+| `pool_description` | str | 候选池来源与筛选路径（如"体检 \|t\| 前 12 列中选 1 列"） |
+| `alpha_budget` | float | 本假设消耗的 α 预算份额（见 §4） |
+| `stop_rule` | str | 止损 / 终止条件 |
+| `reopen_condition` | str | 重开条件（"仅当新信息 X 出现才允许重开"的显式描述） |
+
+### 3.3 `kind = "conclusion"`（结论条目）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `hypothesis_id` | str | 指向对应 prereg 条目（历史回填无预登记的，指向占位条目并注明 `retrospective=true`） |
+| `verdict` | str | `pass` / `fail` / `terminated` / `inconclusive` / `not_adopted` |
+| `result_metrics` | object | 关键读数（配对差分区间 / 逐折同向数 / 信号层 Δ 等） |
+| `evidence_refs` | list[str] | 证据文件路径（报告 / 批次目录 / 转换器版本） |
+| `supersedes` | list[str] | 被本条取代的旧条目 id（可空） |
+| `notes` | str | 已知代价 / 解释风险 / 机制归因 |
+
+## 4. 多重比较控制（候选池分母 + α 预算）
+
+**立法理由**：四轮数据家族全败的候选**全部出自历史内体检"最强列"**——历史内预筛偏误在本项目已实际发生；袖子换了载体（列 → 收益流）没换机制，必须设防。
+
+- **候选池登记义务**：任何进入裁决的假设必须登记 `candidate_pool_denominator`——它是从多大的候选集合中选出的。
+  无法给出分母的（"就这一个想法"）登记 `pool = 1` 并在 `pool_description` 说明理由；**禁止不登记**。
+- **α 预算**：每条研究线（以 `vehicle` + 家族标签划分）持有 α 预算 0.05；池内每次正式检验消耗 `α / pool`（Bonferroni 口径）；
+  超出预算的候选只能登记为**探索性**（`exploratory=true`），其结论不得作为裁决依据。
+- **家族终结纪律衔接**：判定"家族终结"后，同家族新假设的 `reopen_condition` 必须引用新信息（新数据源 / 新标签目标域 / 新载体），
+  且新条目必须 `supersedes` 终结条目——换载体不换机制的假设直接拒绝登记。
+
+## 5. 顺序检验规格（影子账本，P5b 执行依据）
+
+影子账本的统计形态（R1-2 精化采纳；**不对称规则 = 只许否决、不许转正**）：
+
+- **统计量**：影子臂 vs 基准臂的**逐日收益配对差分** $d_t = r_t^{arm} - r_t^{base}$；序贯读数 = $d_t$ 均值的时间一致置信序列下界 $L_t$
+  （经验 Bernstein 形置信序列，方差自适应、无需正态假设；任意时刻读取合法，从根上消除"窥视污染"）。
+- **否决线**：$L_t < -\delta_{stop}$ ⇒ 触发退役评审。默认 $\delta_{stop}$ = 止损级 5pp 年化 ≈ **20 bps/日**；各臂可在预登记中覆盖（须说明理由）。
+- **转正线**：**不存在**。置信序列上界 $U_t$ 只登记不裁决（不对称规则写死：影子期正收益不构成转正依据）。
+- **α 分配**：单臂单侧 α = 0.05；同族多臂并行时按 Bonferroni 拆分（$\alpha_{arm} = 0.05 / $ 族内并行臂数），族错误率受控。
+- **窥视频率**：每日更新（confidence sequence 口径下任意频次合法，无 α 膨胀）。
+- **最大样本量**：504 个交易日（≈2 年）截断；截断未越界 = 维持观察，台账登记"未见止损级劣化"（**不等于转正**）。
+- **观察期下限**：事件类袖子影子期 **≥ 跨两个完整披露季（≥12 个月）**（事件源强季节性：forecast 94.46% 落 1 月 / express 76.79% 落 2 月，单季影子无统计意义）。
+- **出厂校准**：P5b 试跑一臂时，用基线臂自对照（A vs A 换种子）验证置信序列宽度不荒谬（应恒包含 0）；校准失败 ⇒ 规格修订走预登记。
+
+## 6. 跨季累积置信规则
+
+1~2pp 级改进的裁决通道 = 信号层尺子 + **台账跨季累积**（前向影子统计检出需 11~15 年，不承担此职）：
+
+- **仅当"跨季同向且每季区间下界 > 0"才允许累积**（跨季度结论升一级置信）；
+- 否则只登记不裁决——防止把历史内证据复用当复利计息器。
+
+## 7. 状态机
+
+```
+draft → preregistered → adjudicated(pass / fail / not_adopted / inconclusive)
+                      → terminated（家族终结 / 止损触发）
+terminated / adjudicated → （重开 = 新 hypothesis_id + supersedes 旧条目 + reopen_condition 满足声明）
+```
+
+- 每次状态转换必须有证据引用（`evidence_refs`）；无证据的转换登记无效。
+- `terminated` 条目永久保留（退役档案的台账侧）。
+
+## 8. 历史回填范围（P5a-2 交付）
+
+- 首版回填限 `docs/` 正式报告约 10 份：四轮家族终结（holdertrade / repurchase / top10fh / top_inst）、A3 建仓折扣回补、
+  C 族域扩展、A5 低波惩罚、R-004 政策层、R-005 个股退出、可用性标记。
+- 回填条目 `kind=conclusion` + `retrospective=true`，`hypothesis_id` 指向占位 prereg（注明"历史实验，无当时预登记"）；
+  `candidate_pool_denominator` 能重建则重建，不能重建登记 `null` + 说明。
+- 回填完成 ≠ 结束：此后所有新实验**先登记 prereg 再跑**（无登记的实验结果不得进入任何裁决）。

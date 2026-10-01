@@ -1,0 +1,655 @@
+# LazyBull 术语库（唯一数据源，契约 §4.5）
+#
+# 契约条文：任何新术语首次引入时必须同步登记，含五项——
+#   one_liner（一句话定义）/ layman（面向小白的解释）/ example（带具体数字的实例）/ source（出处）/ related（相关术语）。
+# append-only：修订保留历史（改条目加 revised 行，禁止原地改写）；唯一 owner = 项目所有者本人。
+# 引用统计：scripts/check/glossary_refs.py；HTML 生成器按"近 90 天被引用次数"排序（P6 落地）。
+
+version: 1
+updated: "2026-10-01"
+
+terms:
+  # ========== 架构核心 ==========
+  - term: 袖子
+    aliases: [sleeve]
+    one_liner: 一块独立管理、独立记账、独立验收的资金流
+    layman: 像一个账户里分出几个"抽屉"，每个抽屉一套策略、一笔钱、一本账，互不干扰，最后在账户层面汇总
+    example: 价值策略管 70 万、事件漂移管 30 万，各自买卖自己的股票，月底分别看两个"抽屉"的收益 / 回撤
+    source: v2 方案 §3.2
+    related: [虚拟账本, 独立存活判据, 净额化]
+    introduced: "2026-09-30"
+
+  - term: 虚拟账本
+    aliases: [virtual ledger, VirtualAccount]
+    one_liner: 每个袖子独立记账的账本（现金 / 持仓 / NAV），物理上全组合只有一个账户
+    layman: 真实账户只有一个，但账本上给每只袖子单开一页，像家庭记账里"买菜钱""交通费"分列
+    example: 物理账户现金 100 万；虚拟账本记 A 袖 70 万、B 袖 30 万，三恒等式要求 70+30 ≡ 100
+    source: v2 方案 §3.2；净额化冻结文档 §4
+    related: [袖子, 净额化, 三恒等式]
+    introduced: "2026-09-30"
+
+  - term: 三恒等式
+    aliases: [virtual-physical identities]
+    one_liner: Σ袖子虚拟{现金, 持仓股数, NAV} ≡ 物理账本，逐日成立，破缺即报错
+    layman: 各"抽屉"记的钱、股票、总资产加起来必须恒等于保险柜里的真实总数，一分不差
+    example: A 袖现金 70 万 + B 袖现金 30 万 ≡ 物理现金 100 万；任一日不等 ⇒ CI 报错停止
+    source: 净额化冻结文档 §4
+    related: [虚拟账本, 净额化, lot]
+    introduced: "2026-10-01"
+
+  - term: lot
+    aliases: [批次, 持仓批次]
+    one_liner: 持仓按"每次买入一批"记录（买入日 / 股数 / 买入价），卖出按最早买入日优先消耗
+    layman: 同一只股票分三次买的，账上记三行而不是合并成一行；卖的时候先卖最早买的那批
+    example: X 股 3 月买 1000 股 @10 元、4 月补齐 500 股 @11 元 ⇒ 两个 lot；卖出 1200 股先耗 3 月那批
+    source: 净额化冻结文档 §5；A3 回补契约
+    related: [三恒等式, 回补, 虚拟账本]
+    introduced: "2026-10-01"
+
+  - term: 净额化
+    aliases: [netting]
+    one_liner: 跨袖子同股买卖先抵消，抵消部分只在虚拟账本内部转账，仅净额部分生成市场指令
+    layman: A 抽屉要卖 100 股、B 抽屉要买 100 股同一只股票，就不用真去市场买卖，账本上直接过户
+    example: A 卖 X 1000 股 + B 买 X 600 股 ⇒ 市场只卖 400 股，省 600 股往返费用 ≈ 18.9bps×2
+    source: v2 方案 §3.2；净额化冻结文档 §2
+    related: [虚拟账本, 三恒等式, 费用最小化]
+    introduced: "2026-09-30"
+
+  - term: 软隔离
+    aliases: [soft isolation, 临时借用]
+    one_liner: 各袖有名义资金配额，闲置资金可被其他袖子临时借用（记虚拟占用），调仓日必须归还
+    layman: 每个抽屉有自己的预算，但谁的钱暂时闲着，别的抽屉可以打个借条先用，到期必还
+    example: A 袖 70 万配额只用 50 万时，B 袖可借用 20 万；B 到调仓日次日 T+1 必须归还
+    source: v2 方案 §4.9（2026-10-01 拍板）
+    related: [袖子, 虚拟账本, 净额化]
+    introduced: "2026-10-01"
+
+  - term: 编码单元
+    aliases: [coding unit]
+    one_liner: 工作量计价单位，1 单元 ≈ 一个 Copilot 会话完成的自包含改动（含测试）
+    layman: 衡量"干一活儿"的尺子，像装修队按"一个房间"报价而不是按小时
+    example: 阶段预算"P2a 内核搬运 2~3 单元"；归因预算上限 3 单元——超 3 次会话修不好就停手复盘
+    source: v2 方案 §8（v1.6）
+    related: [归因预算, M1 总放弃判据]
+    introduced: "2026-09-30"
+
+  - term: 软生产
+    aliases: [soft production]
+    one_liner: 纸面 / 钉钉链路的定位——每日不断档但允许迁移期降级运行；只有实盘才叫生产
+    layman: 纸面交易像"演习"，每天都练但不能叫实战；演习允许临时降级，实战不允许
+    example: 迁移期纸面链路可降级运行，但 P4 切换窗口仍受 SLA 约束（连续 10 交易日准点 100%）
+    source: v2 方案 §9（v1.6 澄清）
+    related: [SLA, 每日运行契约]
+    introduced: "2026-09-30"
+
+  # ========== 证据机器 ==========
+  - term: 制度重排
+    aliases: [regime permutation, 折重排]
+    one_liner: 把 14 折的逐折收益路径当"制度积木"做序列自举，生成成百条合成历史看结论稳不稳
+    layman: 把历史切成 14 段，像洗牌一样重新排列组合出几百条"平行世界"，看策略在这些世界里表现分布
+    example: 14 折重排 1000 次 ⇒ ΔMaxDD 分布 P(Δ>0)=0.83，最差排列 −2.1pp ⇒ 结论对历史顺序不敏感
+    source: v2 方案 §3.5；fold_subset.py::bootstrap_delta
+    related: [配对差分, 自举, 折, 功效标定]
+    introduced: "2026-09-30"
+
+  - term: 配对差分
+    aliases: [paired delta, 配对重排差分]
+    one_liner: 两臂共用同一折排列集各自重拼净值后比较 Δ 分布——制度重排的**唯一裁决口径**
+    layman: 两个选手在同一批"平行世界"里分别比赛，逐世界比输赢，而不是各比各的平均分
+    example: 两臂共用 1000 组排列：ΔCAGR 中位 +1.2pp、P(Δ>0)=0.78；非配对 p90 比较被禁止用于裁决
+    source: v2 方案 §3.5（v1.6 定死）；block_paired_delta 契约
+    related: [制度重排, 块自举, 北极星判据]
+    introduced: "2026-09-30"
+
+  - term: 自举
+    aliases: [bootstrap, 自助法]
+    one_liner: 有放回地重采样已有数据来估计统计量分布的方法
+    layman: 只有一副牌，想知道"运气成分"多大——把牌反复打乱重发很多次，看结果波动范围
+    example: 14 折收益有放回抽 1000 次 ⇒ ΔCAGR 95% 区间 [−7.71, +0.36]pp（换种子噪声带实测）
+    source: 净值判据噪声带契约
+    related: [块自举, 制度重排, 配对差分]
+    introduced: "2026-09-30"
+
+  - term: 块自举
+    aliases: [block bootstrap, 分块自举]
+    one_liner: 按连续交易日块（而非逐日）重采样的自举，保留时间序列内部的相关结构
+    layman: 洗牌时不一张张抽而是一沓沓抽，因为相邻日子的行情是相关联的
+    example: 信号层尺子用 20/40/60 交易日块重采样；块长必须小于总交易日数否则退化报错
+    source: 信号层筛选契约；block_stats.py
+    related: [自举, 配对差分, 信号层尺子]
+    introduced: "2026-09-30"
+
+  - term: 信号层尺子
+    aliases: [signal ruler, ±10bps 尺子]
+    one_liner: 逐日 Top-K 明细的同日配对差分 + 分块自举——列级/信号级改动进净值裁决前的筛选关
+    layman: 改动好不好先在"选股眼光"层面量一量（不含成本与仓位），够格才值得跑两小时的完整回测
+    example: 噪声带 ±10bps（≈±9% 相对）；repurchase 单列 Δ −12.19bps 超线 ⇒ 直接否决，省 1.5h 净值 A/B
+    source: 信号层筛选契约（v0.122.0）；v2 方案 §3.5
+    related: [噪声带, 配对差分, MDE 层级表]
+    introduced: "2026-09-30"
+
+  - term: 噪声带
+    aliases: [noise band]
+    one_liner: 同一配置仅换随机种子产生的指标波动范围——小于它的改进统计上读不出
+    layman: 秤的最小刻度；轻于刻度的东西称不出来，但不代表没有重量
+    example: 换种子实测 ΔCAGR ±3~5pp、ΔMaxDD ±0.6pp ⇒ <5pp 的 CAGR 改进在 14 折设计下不可判定
+    source: 净值判据噪声带契约（v0.120.0）
+    related: [MDE, 信号层尺子, 判据自洽性]
+    introduced: "2026-09-30"
+
+  - term: MDE
+    aliases: [最小可检出效应, minimum detectable effect]
+    one_liner: 当前实验设计下能统计读出的最小改进幅度
+    layman: 尺子的最小刻度；小于刻度的改进测不出来，但不代表不存在
+    example: 同配置仅换种子：CAGR 波动 ±3~5pp ⇒ 改进 <5pp 读不出；MaxDD 波动 ±0.6pp ⇒ 更细可读
+    source: 净值判据噪声带契约；v2 方案 §4.5 示例
+    related: [噪声带, MDE 层级表, 功效标定]
+    introduced: "2026-09-30"
+
+  - term: MDE 层级表
+    aliases: [MDE ladder]
+    one_liner: 不同层级改动的最小可检出效应分级表——列级 ±10bps / 袖内净值 ±5pp / 跨袖与组合层 ±5~8pp+
+    layman: 不同大小的改动用不同刻度的尺子：调一列用细尺，调整个组合用粗尺，拿错尺子的结论无效
+    example: 列级候选效应 0~1pp 落净值尺（±5pp）噪声带内 ⇒ 登记项，不得开 WF 实验
+    source: v2 方案 §3.5（v1.6）
+    related: [MDE, 噪声带, 信号层尺子]
+    introduced: "2026-09-30"
+
+  - term: 功效标定
+    aliases: [power calibration]
+    one_liner: 证据机器的"出厂刻度表"——合成臂 +1/+2/+5pp 年化 → 检出概率曲线
+    layman: 新秤买回家先称标准砝码：放 1 克、2 克、5 克砝码看秤能不能读出来，读不出来就知道秤的极限
+    example: 合成臂构造 = 折内日收益等值平移；+2pp 臂应判"可检出"、A vs A 换种子应判"不可区分"
+    source: v2 方案 §3.5；P5a-1 交付物
+    related: [判据自洽性, MDE, 制度重排]
+    introduced: "2026-09-30"
+
+  - term: 判据自洽性
+    aliases: [criterion self-consistency]
+    one_liner: 基准袖子自己都过不了的判据不得用于裁决——判据必须先通过"考考官"测试
+    layman: 面试官自己先做一遍考卷，自己都不及格的考题不能用来刷人
+    example: 基准袖夏普 0.98 在自相关修正下 95% 区间下界为负 ⇒ "独立夏普下界 >0" 这种判据直接作废
+    source: v2 方案 §3.2 准入判据（v1.6）
+    related: [功效标定, 独立存活判据, 噪声带]
+    introduced: "2026-09-30"
+
+  - term: 独立存活判据
+    aliases: [standalone survival criteria]
+    one_liner: 袖子准入门槛——独立夏普区间 + 与存量袖子低相关（三口径区间上界 <0.3）+ 有明确容量
+    layman: 新抽屉要开张必须证明：自己单独做能赚钱、和现有抽屉不靠同一个行情吃饭、装得下要投的钱
+    example: 相关三口径 = 全样本 / 调仓频收益 / 崩盘段条件相关；点估计噪声 ±0.07~0.10 ⇒ 判区间上界
+    source: v2 方案 §3.2（准入判据反转，v1.6）
+    related: [袖子, 判据自洽性, 准入判据反转]
+    introduced: "2026-09-30"
+
+  - term: 准入判据反转
+    aliases: [admission criteria inversion]
+    one_liner: 新袖子不再问"对主模型有没有增量 IC"，改问"能否独立存活"——四连败证明列入口已堵死
+    layman: 以前招新人看"能不能帮老员工干活"，现在看"自己单干能不能活"——因为老员工的锅已经塞不下更多菜了
+    example: holdertrade 等四轮家族"增量 IC"全败 ⇒ v2 改以独立夏普区间 + 低相关三口径裁决
+    source: v2 方案 §3.2；CLAUDE.md v2 契约区
+    related: [独立存活判据, 候选池分母, 袖子]
+    introduced: "2026-09-30"
+
+  - term: 假设台账
+    aliases: [hypothesis ledger]
+    one_liner: 机器可读的证伪清单——假设 / 预登记 / 数据态 / 结论 / 重开条件，append-only
+    layman: 实验的"日记本+判决书"合一：每试一个想法先登记预期，结束后登记结论和什么条件下允许翻案
+    example: 四轮家族终结条目各含 verdict=terminated 与 reopen_condition="仅新数据源/新标签域"
+    source: v2 方案 §3.5；hypothesis_ledger_schema.md
+    related: [候选池分母, α 预算, 预登记]
+    introduced: "2026-09-30"
+
+  - term: 候选池分母
+    aliases: [candidate pool denominator]
+    one_liner: 一个进入裁决的假设是从多大的候选集合中选出来的——控制历史内预筛偏误
+    layman: 从 100 个果子里挑出最红的 1 个去参赛，必须如实申报"我是从 100 个里挑的"，否则评奖失真
+    example: 四轮全败家族的候选全部出自体检"最强列"（分母未登记）⇒ 偏误已实际发生，v2 强制登记
+    source: hypothesis_ledger_schema.md §4；R1-3
+    related: [α 预算, 假设台账, 准入判据反转]
+    introduced: "2026-10-01"
+
+  - term: α 预算
+    aliases: [alpha budget]
+    one_liner: 每条研究线的多重比较错误率预算（默认 0.05），池内每次检验消耗 α/pool
+    layman: 误报额度：每条研究线只有 5% 的"冤枉好想法"配额，试的候选越多、每个候选分到的额度越少
+    example: 池 12 个候选 ⇒ 单个检验 α=0.05/12≈0.004；超预算的候选只能登记"探索性"不进裁决
+    source: hypothesis_ledger_schema.md §4
+    related: [候选池分母, 假设台账, 顺序检验]
+    introduced: "2026-10-01"
+
+  - term: 顺序检验
+    aliases: [sequential test, 置信序列, confidence sequence]
+    one_liner: 影子账本的逐日裁决统计——时间一致置信序列下界跌破 −δ_stop 即触发退役评审，只否决不转正
+    layman: 每天都可以合法地看一眼"新策略是不是明显更差"（−20bps/日线），踩线就停；但"明显更好"不算数
+    example: δ_stop = 5pp 年化 ≈ 20bps/日；事件类袖子影子期下限 = 跨两个完整披露季（≥12 个月）
+    source: hypothesis_ledger_schema.md §5；R1-2
+    related: [影子账本, α 预算, 假设台账]
+    introduced: "2026-10-01"
+
+  - term: 影子账本
+    aliases: [shadow ledger, 前向影子]
+    one_liner: 多臂纸面并行 + 顺序检验，用未来数据做止损级仲裁；只许否决、不许凭正收益转正
+    layman: 让几个候选策略用假钱先跑一年，跑得明显太差的淘汰；但跑得好的也不能直接上岗
+    example: 单市场 2pp 纯前向统计检出需 11~15 年 ⇒ 影子只承担 ≥5pp 止损级仲裁与工程形式确认
+    source: v2 方案 §3.5（不对称规则 v1.6）
+    related: [顺序检验, 假设台账, 软生产]
+    introduced: "2026-09-30"
+
+  - term: 入场点敏感度
+    aliases: [entry-point sensitivity]
+    one_liner: 「以历史任意交易日为起点入场」的结果分布——报告口径 = 最差 K 起点 + 中位数/离散度
+    layman: 同一只基金，1 月买入和 6 月买入结局差多少；差得越多说明「入场运气」成分越大
+    example: 1,700 个滑窗起点的有效自由度 ≈ 折数级 ⇒ 分位数精读是伪精度，禁止
+    source: v2 方案 §3.5（v1.6）
+    related: [爬坡建仓, 制度重排, 功效标定]
+    introduced: "2026-09-30"
+
+  - term: 爬坡建仓
+    aliases: [ramp-up]
+    one_liner: 从零/大幅建仓不一次满仓，分 K 批（约 3~5 个调仓周期）爬到目标暴露，速度由慢变量状态调节
+    layman: 下水游泳先走到膝盖、再到腰、再到肩，而不是直接跳——水凉（状态差）就走得更慢
+    example: 立项门 = P5a-2 入场敏感度宽度超阈值；对持续在场账户一年最多触发一次
+    source: v2 方案 §3.3
+    related: [入场点敏感度, 暴露系数 λ, 状态调速]
+    introduced: "2026-09-30"
+
+  - term: 三段账本
+    aliases: [three-ledger attribution]
+    one_liner: 任何净值差异拆成 信号层 Δ / 执行层 Δ / β 暴露 Δ / 成本 Δ，归因做进默认产物
+    layman: 收益对不上账时，分四个格子找原因：选股变了？成交价滑了？市场暴露变了？手续费变了？
+    example: C vs B 爬坡臂比较前必须先扣除 β 暴露 Δ，否则暴露差异被误读为爬坡价值
+    source: v2 方案 §3.5
+    related: [执行缺口, 配对差分, 暴露系数 λ]
+    introduced: "2026-09-30"
+
+  # ========== 数据与特征 ==========
+  - term: PIT
+    aliases: [point-in-time, 时点正确性]
+    one_liner: 任何数据只能按"当时可得"的时间点进入决策，禁止未来信息泄漏
+    layman: 做 3 月的决策只能用 3 月已经公布的数据，不能用 5 月才公告的 3 月财报
+    example: 财报 4 月 30 日公告 ⇒ 4 月 29 日的特征里不得出现该报表数值；锚点 = f_ann_date/ann_date
+    source: 现金流/分红等 PIT 契约族；v2 方案 §3.1
+    related: [knowledge_date, 可用起点, freshness]
+    introduced: "2026-09-30"
+
+  - term: knowledge_date
+    aliases: [知识时间]
+    one_liner: 数据对系统可得的时点（公告日口径），与事件经济时点 event_date 分离
+    layman: 公司"的事发生在 3 月 31 日，但你 4 月 30 日才知道——4 月 30 日才是你能用它做决策的日子
+    example: top10fh：event_date=报告期 2024-12-31，knowledge_date=公告日 2025-03-15
+    source: events_state_schema.md §1
+    related: [PIT, 事件库, 可用起点]
+    introduced: "2026-10-01"
+
+  - term: 可用起点
+    aliases: [available_from]
+    one_liner: 一列因子历史上首次可被系统使用的日期，写入 manifest——回填新因子只允许在起点后参与训练
+    layman: 每列数据有自己的"出生日期"；不能因为它今天存在，就假装它十年前也存在
+    example: 北向成交额口径 2024-08-19 起 ⇒ available_from=20240819，之前的训练样本不得用该列
+    source: 数据存储契约 v2 manifest schema；M1.5
+    related: [manifest, PIT, 样本起点扩展]
+    introduced: "2026-09-30"
+
+  - term: freshness
+    aliases: [新鲜度, freshness_days]
+    one_liner: 公告型数据距其公告日的自然日数，作为特征列显式入模（替代硬断崖）
+    layman: 一条消息的"出厂天数"：越久越不新鲜，模型自己学会打折，而不是到 90 天突然当作没有
+    example: 分红公告后第 5 天 freshness=5，第 100 天 =100；指数衰减半衰期由 train_params 记录
+    source: 事件衰减契约；公告类因子契约族
+    related: [PIT, 事件衰减, 哨兵列]
+    introduced: "2026-09-30"
+
+  - term: 哨兵列
+    aliases: [sentinel column, schema_vN]
+    one_liner: 恒写当前版本号的标记列（<family>_schema_vN），训练入口校验缺失/版本不符必须失败
+    layman: 数据包裹上的"版本封条"：封条不对或没有封条，直接拒收，防止拿错版本的原料下锅
+    example: dividend_schema_v1 当前值=3；cons_revision_schema_v2 语义重做时递增
+    source: 一致预期/分红等契约族
+    related: [freshness, manifest, 数据态]
+    introduced: "2026-09-30"
+
+  - term: 母截面
+    aliases: [mother section]
+    one_liner: 标签过滤前的完整同日全市场截面——pct_* 百分位的唯一分母来源
+    layman: 排名必须在"全班同学"里排，不能在"已录取名单"里排——否则分数线是假的
+    example: cs_train 有效域同日约 88% ⇒ 用它当分母会窄约 10%；母截面从 clean/daily 全量重建
+    source: pct_* 母截面契约（v0.108.0）
+    related: [pct_*, 缺失率门禁, cs_train]
+    introduced: "2026-09-30"
+
+  - term: 缺失率门禁
+    aliases: [missing-rate gate, 0.6 门禁]
+    one_liner: 训练入口对缺失率 >0.6 的特征列整列删除的过滤规则
+    layman: 一列数据超过六成行是空的，就整列不要——稀稀拉拉的数据比没有更害人
+    example: rp_freshness_days 因缺失率被删 ⇒ 稀疏事件族必须对窗口外股票显式填 0 才能存活
+    source: 训练入口契约族（holdertrade/repurchase 契约）
+    related: [母截面, 运行时派生, 哨兵列]
+    introduced: "2026-09-30"
+
+  - term: 运行时派生
+    aliases: [runtime derivation]
+    one_liner: 因子列不写回特征分区，在训练/评估/回测/纸面四侧运行时按同一函数现场拼接的模式
+    layman: 不提前把菜切好放冰箱（重建 23GB 分区），而是每家厨房（四个消费侧）用同一把刀现场切
+    example: holdertrade 8 列：训练 CLI 构建查询表 → prepare_training_data 派生；禁止写回 cs_train
+    source: stk_holdertrade 运行时派生契约（v0.124.0）
+    related: [缺失率门禁, cs_train, 因子归属契约]
+    introduced: "2026-09-30"
+
+  - term: manifest
+    aliases: [列清单, 特征清单]
+    one_liner: 特征面板的列级元数据唯一来源（group/source/definition_version/available_from/指纹）
+    layman: 仓库的"货架台账"：每列数据是什么、从哪来、哪天开始能用、内容指纹，都记在这本账上
+    example: v2 后"列集双处同步+测试锁定"模式退休，manifest 成为列清单单一来源
+    source: 数据存储契约 v2（§4.1）
+    related: [可用起点, 列族, 哨兵列]
+    introduced: "2026-09-30"
+
+  - term: 列族
+    aliases: [column group, 列族文件]
+    one_liner: 特征面板按逻辑相关性分组的物理文件单元（panel/YYYYMMDD/<group>.parquet）
+    layman: 把几百列特征按"亲属关系"分成几捆存放，取用一捆比翻整个仓库快
+    example: 全历史按日×列族 ≈2.1 万个 ~2MB 文件；读 5 列慢 5.1 倍 ⇒ 催生冷热分层
+    source: 数据存储契约 v2（§4.1）；R1.3-1
+    related: [manifest, 冷热分层, 两阶段提交]
+    introduced: "2026-09-30"
+
+  - term: 冷热分层
+    aliases: [hot/cold tiering]
+    one_liner: 特征热区按日分区（写入友好）、封存后按月压实进 panel_archive（读取友好）
+    layman: 近期的文件放桌面天天用，旧文件打包进箱子——桌面不乱，找旧东西也不难
+    example: 压实后 2.1 万文件 → ~1,000 个；单文件软上限 256MB、软下限 32MB
+    source: 数据存储契约 v2（§4.1，v1.6）
+    related: [列族, manifest, 两阶段提交]
+    introduced: "2026-09-30"
+
+  - term: 两阶段提交
+    aliases: [two-phase commit]
+    one_liner: 分区写入先落临时名、再原子纳入 manifest、孤儿文件定期 GC、单机写锁
+    layman: 发货先把包裹放暂存区，登记完台账才正式上架；断电了暂存区的包裹会被清理，不会卖出货架上没有的东西
+    example: 写 panel/20261001/core.parquet ⇒ 先写 .tmp 文件 → 校验指纹 → 原子改名 → manifest 登记
+    source: 数据存储契约 v2 补丁 4
+    related: [manifest, 列族, 冷热分层]
+    introduced: "2026-09-30"
+
+  - term: 数据态
+    aliases: [data state, data_state_id]
+    one_liner: 关键数据集最新分区 + cs_train 分区的稳定指纹——实验可比性的数据前提
+    layman: 实验记录的"食材批次号"：两批实验只有食材批次相同，结果差异才能归因到做法
+    example: B0/B1 双臂 data_state=9d0408ee 相同 + git b9d866e 相同 ⇒ 唯一差异是政策开关，可比
+    source: 数据态血缘契约；baseline_freeze.md
+    related: [配置指纹, 代码态, 基线冻结]
+    introduced: "2026-09-30"
+
+  - term: 配置指纹
+    aliases: [config fingerprint]
+    one_liner: 影响持仓的配置参数集合的哈希——改任一键 ⇒ 指纹变 ⇒ 对比工具必须告警
+    layman: 实验的"配方指纹"：盐多一勺指纹就变，防止拿红烧肉的菜谱去评价清蒸鱼
+    example: 基线冻结时 diff 发现 32/127 列不同，仅 bt_top_n 是实质配置差异 ⇒ 揪出不可比批次
+    source: runs_artifact_contract.md §2/附录 A；baseline_freeze.md
+    related: [数据态, 基线冻结, 折子集对比]
+    introduced: "2026-10-01"
+
+  - term: 事件库
+    aliases: [events, 事件表]
+    one_liner: 公告流做成去重对齐的一等公民事件表（七元组 schema），不再是窗口聚合因子列的附属
+    layman: 把"公司公告"从报表的脚注升级成独立的档案柜：每条公告一张卡片，谁、哪天发生、哪天知道
+    example: 四族映射：holder_trade / repurchase / top10_float_holders / top_inst_seat
+    source: events_state_schema.md §1-2；v2 方案 §3.1
+    related: [knowledge_date, PIT, 状态库]
+    introduced: "2026-10-01"
+
+  - term: 状态库
+    aliases: [state, 市场状态库]
+    one_liner: 每日波动/流动性/宽度/风格动量等市场状态的独立物化资产，策略层与证据层共用
+    layman: 每天给市场拍一张"体检快照"（发不发烧、血流快不快），策略和复盘都引用同一张
+    example: state/regime/YYYYMMDD.parquet + definition_version；历史按当时版本冻结禁止改写
+    source: events_state_schema.md §3；v2 方案 §3.1
+    related: [事件库, definition_version, 暴露系数 λ]
+    introduced: "2026-10-01"
+
+  # ========== 模型与训练 ==========
+  - term: 折
+    aliases: [fold, split]
+    one_liner: walk-forward 滚动训练的一个训练-测试窗口单元（14 折 = 14 段滚动 OOS 窗口）
+    layman: 把历史切成 14 段接力赛：每段用前几年训练、后几个月实测，14 段接起来才是完整成绩
+    example: 14 折 OOS 覆盖 2018-11~2025-12；判据"逐折改善 ≥9/14"= 至少 9 段接力赢基线
+    source: walk_forward 契约族；v2 方案 §3.5
+    related: [walk-forward, OOS, 制度重排]
+    introduced: "2026-09-30"
+
+  - term: walk-forward
+    aliases: [滚动训练,  WF]
+    one_liner: 滚动窗口训练-评估框架：每折用截止当日的数据训练，在后续未见窗口评估
+    layman: 像学生每年用过去的教材模考下一年的真题，永远不许偷看答案
+    example: scripts/walk_forward.py --split-count 14；单臂 14 折 ≈1.5~2h 机器时间
+    source: CLAUDE.md 数据流 §4.1
+    related: [折, OOS, 链式净值]
+    introduced: "2026-09-30"
+
+  - term: OOS
+    aliases: [out-of-sample, 样本外]
+    one_liner: 模型从未见过的数据窗口上的评估——所有裁决只认 OOS 证据
+    layman: 考试必须用没做过的卷子；做过的题考满分不算本事
+    example: 集成验证契约：子模型筛选只用晚于全部训练及早停截止日的共同未见 calibration
+    source: CLAUDE.md 集成验证契约
+    related: [walk-forward, 折, PIT]
+    introduced: "2026-09-30"
+
+  - term: 链式净值
+    aliases: [chain nav]
+    one_liner: 各折 OOS 窗口净值首尾相接合成的全历史净值——CAGR/夏普按链式口径几何年化
+    layman: 14 段接力赛的成绩条接成一根完整长条，接口处的重复起点不重复计日子
+    example: chain_metrics.py 统一口径；各 split 重复的起始净值点不计入交易日数
+    source: 链式绩效契约
+    related: [折, walk-forward, 基线冻结]
+    introduced: "2026-09-30"
+
+  - term: RankIC
+    aliases: [秩相关, 截面 RankIC]
+    one_liner: 预测分数与次日/未来收益的逐日截面秩相关系数——排序能力的日频度量
+    layman: 每天把股票按预测分排队，再看实际涨跌排名，两个排名的相似度就是当天的"眼光分"
+    example: 早停指标 neg_rank_ic；top10fh 集中度变化 IC +0.0156、t=+13.12 属全表 76.5 百分位
+    source: 早停指标契约
+    related: [偏 IC, 因子体检, 信号层尺子]
+    introduced: "2026-09-30"
+
+  - term: 偏 IC
+    aliases: [partial IC, 增量 IC]
+    one_liner: 控制既有特征簇后的秩残差相关——"这列还有没有被用过的信息"的硬定义
+    layman: 新员工入职后问的不是"他聪不聪明"，而是"他会的活儿里有没有老员工不会的"
+    example: tfh_inst_ratio 偏 IC t=−5.58（控制 inst_count 后显著负增量）⇒ 应剔除
+    source: 因子诊断契约（v0.120.0）
+    related: [RankIC, 因子体检, 候选池分母]
+    introduced: "2026-09-30"
+
+  - term: 因子体检
+    aliases: [factor health check]
+    one_liner: 覆盖率/跨期稳定性/聚类/模型使用度的只读扫描——产出候选清单而非裁剪依据
+    layman: 给所有因子做年度体检：谁出勤率低、谁体检指标翻号、谁和别人撞衫——开检查单，不开处方
+    example: analyze_factor_health.py；候选清单只是实验输入，采纳必须经 WF A/B
+    source: 因子体检契约（v0.119.0）
+    related: [偏 IC, 候选生成器 E0, 缺失率门禁]
+    introduced: "2026-09-30"
+
+  - term: 候选生成器 E0
+    aliases: [candidate generator, E0]
+    one_liner: 证据机器四级漏斗的第一级——体检/诊断工具在 v2 的归属（候选生成层）
+    layman: 漏斗最上面的"海选入口"：体检报告不负责裁决，只负责把值得细看的候选递上去
+    example: 四级漏斗 = 候选生成 → 信号尺子 → 净值分布 → 影子；P0 登记接口、不迁移实现
+    source: 数据存储契约 v2 补丁 6；R1.3-11
+    related: [因子体检, 信号层尺子, 假设台账]
+    introduced: "2026-10-01"
+
+  - term: colsample 稀释
+    aliases: [列采样稀释]
+    one_liner: XGBoost colsample_bytree 下新增弱列会摊薄强列被选中的概率——"加列"默认带成本
+    layman: 每棵树随机抓一把特征用；往袋子里多塞几个没用的球，好球被抓到的概率就小了
+    example: 信号层标定：加 4 列标记 Δ −9.5%、裁剪 A −24.9% ⇒ 新因子必须先过尺子再谈净值
+    source: 信号层筛选契约（2026-09-17 标定）
+    related: [信号层尺子, 噪声带, 因子体检]
+    introduced: "2026-09-30"
+
+  # ========== 组合与执行 ==========
+  - term: Kelly
+    aliases: [凯利仓位, half_kelly]
+    one_liner: 按胜率/赔率与波动估计的仓位公式；项目用半凯利 + 上限约束
+    layman: 赢面大时下重注、赢面小时下轻注的数学公式；我们故意只用一半剂量求稳
+    example: 生产配置 half_kelly、vol 窗口 60、max_leverage 0.2；纯函数在 trading/sizing.py
+    source: 分批调仓契约 / 仓位计算链路
+    related: [T0/T1, 暴露系数 λ, 换手迟滞]
+    introduced: "2026-09-30"
+
+  - term: β
+    aliases: [beta, 市场暴露]
+    one_liner: 组合对市场波动的敏感度；v2 删除 β 目标域管理（现货多头下无独立调节工具）
+    layman: 水温计：市场涨 1% 组合涨多少。没法只调水温不游泳 ⇒ 不当独立控制量
+    example: §3.3 删 β 目标域——β 只能是袖子资金分配的输出；防"β 管理"为名重新引入无解自由度
+    source: v2 方案 §3.3（v1.6）
+    related: [暴露系数 λ, 回撤, 三段账本]
+    introduced: "2026-09-30"
+
+  - term: 暴露系数 λ
+    aliases: [lambda, exposure lambda]
+    one_liner: 政策层输出的持仓上限乘数（0~1]，买入预算基数 ×λ + 超限按比例减仓
+    layman: 风险大时给仓位打个折扣：λ=0.5 就是最多只许半仓，多出的部分第二天开盘卖掉
+    example: e2online_r 臂 λ=0.5、滚动 250 日窗口；在线口径 ΔMaxDD −0.15pp ⇒ R-004 降级冻结表口径
+    source: 暴露覆盖契约 / 暴露政策在线现算契约
+    related: [政策层, 回补, 三段账本]
+    introduced: "2026-09-30"
+
+  - term: 回补
+    aliases: [replenish, 对称回补]
+    one_liner: 减仓释放的现金在暴露上限放开后按持仓市值比例买回的对称机制（不重置买入日）
+    layman: 之前嫌危险卖掉了一部分，警报解除后按比例买回来——原来的"持有天数"不清零重算
+    example: R-007 §6：回补臂 ΔCAGR +1.20pp / ΔMaxDD +1.63pp ⇒ 2026-09-20 转正为默认 e2online_r
+    source: 暴露覆盖契约（P2-4，v0.127.3）
+    related: [暴露系数 λ, lot, 政策层]
+    introduced: "2026-09-30"
+
+  - term: 政策层
+    aliases: [policy layer, e2online_r]
+    one_liner: terminal_loss 风险模型的组合级暴露门控（降暴露 + 回补）——v2 迁移前裁决对象
+    layman: 一个"天气不好就少出门"的组合级开关；v2 要开庭裁决它值不值得搬进新家
+    example: P1.5 多判据裁决：配对 ΔCAGR 分布 + 亏损日频率/幅度 + §4.8 结构成本；败者退役
+    source: v2 方案 §8-P1.5；§4.8
+    related: [暴露系数 λ, 回补, 耦合度契约]
+    introduced: "2026-09-30"
+
+  - term: 换手迟滞
+    aliases: [turnover hysteresis, 无交易区]
+    one_liner: 目标权重变化小于阈值不交易的缓冲区——防止微小信号变化引发来回交易
+    layman: 空调 26 度才启动、24 度才停机，中间 2 度是"不动作区"，防止压缩机频繁启停
+    example: 组合层四件硬约束之一（市值分位带宽 / 行业上限 / 个股权重上限 / 换手迟滞）
+    source: v2 方案 §3.3
+    related: [费用最小化, 净额化, 硬约束]
+    introduced: "2026-09-30"
+
+  - term: T0/T1
+    aliases: [T0 信号 T1 执行]
+    one_liner: T 日收盘后生成信号（T0），T+1 日开盘价成交（T1）的执行链路口径
+    layman: 今晚想好明天买什么，明早开盘价成交——决策与成交之间隔一夜，模拟真实手工操作
+    example: 执行时点契约：全部交易统一 T+1 开盘价；跌停卖不出顺延下一交易日
+    source: 执行时点契约 v1.2
+    related: [执行缺口, 到期, 延迟订单]
+    introduced: "2026-09-30"
+
+  - term: 到期
+    aliases: [holding period exit, 持有期到期]
+    one_liner: 持有满 rebalance_freq-1 个交易日后 T0 生成卖出信号、T+1 开盘执行
+    layman: 每只股票的"保质期"：买回来第 20 天到期，到期就列入卖出清单
+    example: 回测与纸面共用 trading/sell_rules.py::is_holding_period_exit_due，禁止各自重算阈值
+    source: 到期日契约
+    related: [T0/T1, 分批调仓, 延迟订单]
+    introduced: "2026-09-30"
+
+  - term: 分批调仓
+    aliases: [stagger, stagger_tranches]
+    one_liner: 总持仓槽位与预算拆成 K 批按周期排期执行，不放大最终持仓数
+    layman: 搬家不是一天搬完：20 件家具分 2 批，这周一批下周一批，总数还是 20 件
+    example: 生产 top_n=20 / stagger_tranches=2；K ≤ min(top_n, rebalance_freq)
+    source: 分批调仓契约
+    related: [到期, Kelly, T0/T1]
+    introduced: "2026-09-30"
+
+  - term: 执行缺口
+    aliases: [execution gap, 信号-成交缺口]
+    one_liner: 信号价到实际成交价的收益损耗分解——护栏指标，不得扩大
+    layman: 看上一只股票时的价格 vs 实际买到的价格之间的差，像网购时"加入购物车后涨价"
+    example: analyze_signal_execution_gap.py 分析 Top30 信号 → 实际买入 → 真实持仓的转化损耗
+    source: 交易归因契约；metrics_v1 护栏
+    related: [T0/T1, 三段账本, 交易归因]
+    introduced: "2026-09-30"
+
+  # ========== 指标与统计 ==========
+  - term: 夏普
+    aliases: [Sharpe, 夏普比率]
+    one_liner: 超额收益 ÷ 波动的风险调整收益指标；链式口径基于折内日超额收益
+    layman: 每承受一分颠簸换来多少收益；同样的收益，坐平稳的车比分过山车的车分数高
+    example: 基线 B1 夏普 1.09 vs B0 1.049；噪声带 ±0.14 ⇒ 差 0.04 不可区分
+    source: 链式绩效契约；baseline_freeze.md
+    related: [Calmar, 回撤, 噪声带]
+    introduced: "2026-09-30"
+
+  - term: 回撤
+    aliases: [drawdown, MaxDD, 最大回撤]
+    one_liner: 净值从历史高点回落的最大幅度——项目主判据（低噪声维度）
+    layman: 账户从最高峰最多跌到过多深的谷底；登山时最深掉进了多深的坑
+    example: 换种子 ΔMaxDD 仅 ±0.6pp ⇒ 主判据；B1 −19.4% vs B0 −25.43%（+6.0pp 改善待裁决）
+    source: 净值判据噪声带契约；metrics_v1 北极星
+    related: [夏普, Calmar, 配对差分]
+    introduced: "2026-09-30"
+
+  - term: Calmar
+    aliases: [卡玛比率]
+    one_liner: 年化收益 ÷ 最大回撤——收益对最深坑的性价比
+    layman: 赚的每一分钱要冒多大的坑；赚 20% 只掉过 10% 的坑（Calmar=2）优于掉 40% 的坑（0.5）
+    example: 链式 B0 17.58%/−22.79% ⇒ Calmar≈0.77；repurchase A 臂 14.35%/−20.21% ⇒ 0.71
+    source: metrics_v1 副判据
+    related: [回撤, 夏普, CAGR]
+    introduced: "2026-09-30"
+
+  - term: LTTB
+    aliases: [保形降采样]
+    one_liner: Largest-Triangle-Three-Buckets 时间序列降采样算法——报告曲线超 ~2000 点先降采样再渲染
+    layman: 把两万个点的曲线压成两千个点，但肉眼看形状几乎不变——只为网页打开快
+    example: 报告系统数据量方案：净值/水下曲线 LTTB 后渲染，单页目标 ≤3MB、打开 <2s
+    source: v2 方案 §6
+    related: [报告系统, 趋势库]
+    introduced: "2026-09-30"
+
+  - term: 逐折改善
+    aliases: [per-fold improvement]
+    one_liner: A/B 实验中实验臂在多少折上优于基线的计数判据（常与区间判据并列）
+    layman: 14 段接力赛里赢了几段；平均赢不算赢，赢得够多段才算真赢
+    example: repurchase 单列 ΔMaxDD 点估计 +2.58pp 达标但逐折仅 7/14（要求 ≥9/14）⇒ 不通过
+    source: 折子集对比契约 / 各 A/B 预登记
+    related: [折, 配对差分, 噪声带]
+    introduced: "2026-09-30"
+
+  - term: 基线冻结
+    aliases: [baseline freeze]
+    one_liner: 启动日现产线默认配置实测值 + 配置指纹 + 逐折收益路径的存档——迁移验收的锚
+    layman: 搬家前给旧房子拍全景照片存档：新家验收时对照照片，而不是对照记忆
+    example: B0=wf_batch_20260930_171221 / B1=wf_batch_20260930_172037，同数据态 9d0408ee
+    source: baseline_freeze.md；v2 方案 §5
+    related: [配置指纹, 数据态, 链式净值]
+    introduced: "2026-09-30"
+
+  - term: 预登记
+    aliases: [preregistration, prereg]
+    one_liner: 实验开工前把假设/判据/裁决规则写成文档冻结——结果出来后再改判据无效
+    layman: 考试前先把评分标准贴在墙上；考完再改标准就是耍赖
+    example: docs/plans/*_prereg.md 系列（10 份）；holdertrade 两轮判据均预登记后才跑
+    source: CLAUDE.md 契约族；假设台账 schema
+    related: [假设台账, 候选池分母, α 预算]
+    introduced: "2026-09-30"
+
+  - term: 归因预算
+    aliases: [attribution budget]
+    one_liner: 迁移验收允许的差异归因工作量上限（3 编码单元）——超限触发停止规则
+    layman: 搬家后"东西为什么对不上"的解释额度：超过 3 次会话还没对齐，就停下来开大会找根因
+    example: P2a 验收：成交逐笔一致 + 净值 1e-6；归因预算超 3 单元 ⇒ 停止规则
+    source: v2 方案 §8（P2a 行）；R1-4
+    related: [编码单元, 分级验收, M1 总放弃判据]
+    introduced: "2026-09-30"

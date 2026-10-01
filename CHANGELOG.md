@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.200.2] - 2026-10-01
+
+### Fixed
+
+- **P0 外部评审第一轮（A/B/C 三类 10 项全部接受）**：
+  - **A1 基线数字矛盾**：方案 §5 / §8.1 移除 0929 弃用批次引用（22.9%/−27.9%），改引
+    `baseline_freeze.md` 冻结值（B0 22.41%/−25.43%/1.049、B1 24.3%/−19.4%/1.09）
+    为唯一权威（方案 v1.10 / 冻结版 F4）。
+  - **A2 协议路径勘误**：§0 标题与 §9 落档清单改 `src/lazybull/v2/` 命名空间并加注
+    「迁移期统一落 v2/，P4 全切换后评估展平」（协议 v0.6 / 冻结版 F4）。
+  - **A3 types.py 补齐协议 v0.4 欠账**：`VirtualAccount.borrowed_credit`（跨袖借用占用条目）
+    + `PanelFrame.available_columns_at`（列级可用起点查询，含 `available_from` 映射字段）。
+  - **B1 归还规则隐患**：方案 §4.9 优先级写死——归还 = 借入方**放弃自身新下单**优先，
+    **被动卖出现有持仓默认禁止**（`OrderReason` 无对应枚举；未来确需须先登记枚举 + 预登记）；
+    FundScheduler.settle_due 同步（本期恒返回空序列）；netting_freeze 升 F2。
+  - **B2** 存储契约目录树补 `data/ledger/hypotheses.jsonl`；
+    **B3** check_complexity.py / glossary_refs.py 控制台输出显式 UTF-8（GBK 乱码防御）；
+    **B4** contracts/README 分级口径与方案 §0.12 对齐（分级暂不采纳，索引层可选标注）。
+  - **C1** `Position` 构造禁止「空 lots 且非零 shares」；`first_buy_date` 空 lots 显式报错；
+    **C2** baseline_freeze 章节重编号（§6→§5）；
+    **C3** 登记 P1.5 附录归因任务：+6.0pp MaxDD 构成 = R-004 冻结表口径 +1.02pp + R-007 回补
+    +1.63pp + 窗口/配置差异（约 3pp 未分解）——禁止把混合差值记在单一组件名下。
+
+### Added
+
+- 测试：`tests/test_v2_types.py`（11 项：Position 不变量含空 lots 禁令 / borrowed_credit /
+  available_columns_at / validate_schema）。
+
+## [0.200.1] - 2026-10-01
+
+### Added
+
+- **P0 冻结交付物补齐（闸门 = 逐份确认，确认后 P1 开工）**：
+  - **四份契约落档**（`docs/contracts/`，均 F1）：`runs_artifact_contract.md`（runs 产物字段级
+    schema：batch_meta / summary / chain_nav / trades / daily / attribution / holdings_snapshot
+    + 读取不变量 + 旧产物一次性转换器契约，字段依据基线批次实测表头）；`events_state_schema.md`
+    （events 七元组统一 schema + 四族实例映射 + state 定义版本冻结 + 公告源试数据协议
+    （披露时点 PIT 抽样审计 / 反爬降级阶梯））；`hypothesis_ledger_schema.md`（payload 子字段
+    定稿（偿还协议层 LedgerEntry 欠账）；候选池分母 + α 预算多重比较控制；顺序检验规格 =
+    时间一致置信序列 + 单侧否决线 ≈20bps/日 + 只否决不转正）；`netting_freeze.md`（分层语义
+    A/B 两区 / 状态机表 S1~S7 / 三恒等式验收口径 / lot 批次模型与费用归属 / 构造性对账三件套）。
+  - **工具两件**：`scripts/check/check_complexity.py`（契约 §4.4 工具化：文件 / 函数行数 +
+    嵌套深度 AST 检查 + flake8 C901；**存量棘轮基线** `scripts/check/complexity_baseline.json`
+    ——81 条存量硬超限登记不阻塞，新增硬超限即失败，基线只缩不扩）与
+    `scripts/check/glossary_refs.py`（术语引用统计：全量 + 近 90 天 git 触及口径）。
+  - **术语库首版**：`docs/glossary/terms.yaml` 71 条（契约要求 ≥40），每条五件
+    （一句话定义 / 小白版 / 带数字实例 / 出处 / 相关术语）。
+  - **迁移清单核对补全**：方案 §4.3 补入 stagger / sell_rules / 行业约束 / holdings_snapshot
+    四行（R2.4 指出的在用未列组件）；「在用但未列入清单 = 遗漏」规则生效。
+  - **协议 §11 打钩完成**：协议↔旧引擎语义对照表 22/22 ✅（依据 = R1 侦察硬事实 +
+    2026-10-01 代码抽查 16 个关键符号逐一定位）；协议升 v0.5 / 冻结版 F3，方案升 v1.9 / 冻结版 F3。
+  - **「准入判据反转」写入 CLAUDE.md**（独立存活三件套 + 候选池分母 / α 预算多重比较控制）。
+  - 测试：`tests/test_check_complexity.py`（9 项）+ `tests/test_glossary_refs.py`（5 项）。
+
 ## [0.200.0] - 2026-09-30
 
 ### Added
