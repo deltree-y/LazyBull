@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.200.0] - 2026-09-30
+
+### Added
+
+- **v2 架构重构启动（P0 冻结，版本号自 v0.200 起跳）**：在 v0.127.x 触及三处上限
+  （L1 信号信息 / L2 判定分辨率 / L3 风险结构）后，启动整体重构。本版为 P0 冻结阶段，
+  **不含任何行为变更**（MVP 只做可归因等价复刻，禁止宣称收益 / 回撤突破）：
+  - **方案与协议冻结**：架构方案经三轮外部评审（R1+R2 存档 + R3 收尾）落档为
+    `docs/contracts/v2_architecture_plan_frozen.md`（F1 = 工作稿 v1.7b）；模块协议层经
+    两轮评审（R4 / R5）转正为 `docs/contracts/protocols.md`（F1 = 草案 v0.3，
+    含 §11 协议↔旧引擎语义对照表）。核心设计：多袖子（信息进袖子不进列）、唯一内核
+    （三宿主适配器）、证据机器（配对制度重排 / 判据自洽性标定 / 假设台账）、契约化防腐化。
+  - **代码骨架**：新建 `src/lazybull/v2/` 命名空间与 `v2/common/types.py` 公共值对象层
+    （TradeDate/TSCode/Price/Money/Lot/Position/Account/Order/Fill/PanelFrame/ModelConfig/
+    DataState/LedgerEntry 等；Price/Money 浮点与旧引擎数值路径一致；Position 带 lot 批次
+    聚合不变量校验；OrderReason 封闭枚举 10 值）。依赖方向将由 import-linter 强制。
+  - **基线双臂冻结**（`docs/contracts/baseline_freeze.md`）：B0（neutral 无政策）与
+    B1（e2online_r 含政策）各存配置指纹 + 逐折收益路径，供 P1.5 政策层迁移前裁决。
+    两臂同出自 `scripts/batch/batch_walk_forward.ps1` 配置区当前值（Top20 / 分批 2 批 /
+    half_kelly（窗 60、上限 0.2）/ 初始资金 100 万 / 上市 365 天 / 单股上限 0.15），
+    同数据态 `9d0408ee`、同 git `b9d866e`：B0 = `wf_batch_20260930_171221`（-NoExposure）、
+    B1 = `wf_batch_20260930_172037`（默认臂 e2online_r）。
+    实测（14 折 / 1,700 交易日）：B0 CAGR 22.41% / MaxDD −25.43% / 夏普 1.049；
+    B1 CAGR 24.3% / MaxDD −19.4% / 夏普 1.09——**B1 三项全胜（MaxDD +6.0pp 改善）**，
+    但与 R-004 在线复核方向相反（窗口 / 配置不同）⇒ P1.5 必须多判据组合 + 配对重排裁决，
+    禁止单点读数定去留。（教训：0929 扫描批次 top_n=10 不可当默认基线，已弃用。）
+  - 阶段序列：P0 冻结 → P1 数据底座 ∥ P5a 证据机器 → P1.5 政策层裁决 → P2a/P2b 内核 →
+    P3 训练迁移 → P4 纸面打通（MVP = P0~P4）；M2 证据 / M3 新袖子 / M4 实盘后续。
+
+### Changed
+
+- 版本号规则：v2 重构期自 v0.200.0 起跳；阶段未完全落地前只递增补丁位（沿用既有规则）。
+
 ## [0.127.15] - 2026-09-26
 
 ### Added
