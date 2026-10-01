@@ -101,3 +101,54 @@ P1.5 必须按多判据组合（配对 ΔCAGR 分布 + 亏损日频率/幅度 + 
 注意 **R-004 时代的对照组无回补组件**——本节早前把方向相反仅归因于「窗口 + 配置」两项，
 漏了回补构成项。P1.5 裁决报告附录必须做 +6.0pp 的**显式分解归因**（政策门控 / 回补 /
 窗口与配置各占多少），禁止把混合差值整体记在单一组件名下。
+
+## 附录 A：127 键配置指纹快照（F2 补，P0 评审 5-C——runs 契约附录 A 的唯一参照）
+
+> 口径 = **全键入指纹 − 显式排除清单**（fail-safe 方向）；排除清单见本附录末尾。
+> 本快照是 runs_artifact_contract.md 附录 A 的落盘位置；P5a-1 转换器实现必须从此导入排除清单，禁止重写。
+
+**快照（127 键，自 B0/B1 批次 summary 表头提取；暂存登记，P5a-1 转换器落地时替换为代码导入）**：
+
+```
+说明, Top20_list, Top30_list, Top20_hit_rate, Top20_avg_return_median, Top20_lift_mean,
+Top30_hit_rate, Top30_avg_return_median, Top30_lift_mean, split_index,
+train_start, train_end, test_start, test_end, model_version,
+consensus_revision_cols_live, cashflow_quality_cols_live, train_samples, val_samples, test_samples,
+best_iteration, best_iteration_floor_triggered, val_rankic_ir,
+bt_total_return, bt_annual_return, bt_max_drawdown, bt_volatility, bt_sharpe, bt_calmar,
+bt_trading_days, bt_start, bt_end, bt_top_n, wf_run_id, batch_run_id, batch_period_label,
+split_count, final_date, wf_start_date, wf_end_date, algorithm,
+train_window_years, test_window_months, val_ratio, label_column, neutral_label_blend_weight,
+task, label_transform, n_estimators, max_depth, num_leaves,
+learning_rate, subsample, colsample_bytree, min_child_weight, gamma,
+reg_alpha, reg_lambda, early_stopping_rounds, early_stopping_metric, rank_weight_enabled,
+rank_weight_topk, rank_weight, rank_weight_topk_weight_mode, time_decay_half_life, freshness_strategy,
+event_freshness_half_life_days, objective, enable_fundamental, enable_alt, enable_margin,
+enable_cyq, enable_fund, enable_express, feature_stability_filter, factor_prune,
+factor_exclude_file, ensemble_offsets, ensemble_seeds, ensemble_seed_keep_top_ratio, ensemble_seed_keep_min_models,
+enable_enhanced_features, enable_north_features, enable_lhb_features, enable_consensus_features, enable_cashflow_quality_features,
+enable_consensus_revision_features, enable_dividend_policy_features, enable_availability_markers, enable_holdertrade_features, holdertrade_feature_set,
+enable_repurchase_features, repurchase_feature_set, enable_top10fh_features, top10fh_feature_set, enable_top_inst_features,
+stock_domain, oos_backtest, oos_backtest_months, bt_rebalance_freq, bt_initial_capital,
+bt_sell_timing, bt_exclude_st, bt_min_list_days, bt_max_weight_per_stock, bt_max_per_industry,
+bt_stop_loss_enabled, bt_stop_loss_drawdown_pct, bt_stop_loss_consecutive_limit_down, position_sizing, kelly_vol_window,
+kelly_max_leverage, stagger_tranches, enable_early_rebalance_on_empty, no_deploy_train, skip_training,
+skip_training_eval, start_model_version, selected_split_indices, downside_penalty, downside_penalty_column,
+data_state_id, git_commit, git_dirty, data_daily_latest, data_cs_train_latest,
+data_dividend_coverage
+```
+
+**排除清单（fail-safe 唯一例外，共 10 键不入指纹）**：
+`wf_run_id, batch_run_id, batch_period_label, data_state_id, git_commit, git_dirty,`
+`data_daily_latest, data_cs_train_latest, data_dividend_coverage` + 统计输出类前缀（`bt_*, *_samples, best_iteration*`，
+即 `bt_total_return, bt_annual_return, bt_max_drawdown, bt_volatility, bt_sharpe, bt_calmar, bt_trading_days,`
+`bt_start, bt_end, train_samples, val_samples, test_samples, best_iteration, best_iteration_floor_triggered`）。
+注：`bt_top_n` 等 `bt_*` 前缀中**仅统计输出**排除；`bt_top_n, bt_rebalance_freq, bt_initial_capital, bt_sell_timing,`
+`bt_exclude_st, bt_min_list_days, bt_max_weight_per_stock, bt_max_per_industry, bt_stop_loss_*` 等**配置键一律入指纹**。
+
+**Δ（B1−B0）= +6.0pp MaxDD 的构成归因（P1.5 附录任务登记，2026-10-01 P0 评审）**：
+现有证据链上该差值 ≈ 冻结表口径回撤改善（+1.02pp，R-004）+ 回补增量（+1.63pp，R-007 §6）
++ 窗口（4 折 vs 14 折）/ 配置（top_n=10→20 等）差异（剩余约 3pp 未分解）。
+注意 **R-004 时代的对照组无回补组件**——本节早前把方向相反仅归因于「窗口 + 配置」两项，
+漏了回补构成项。P1.5 裁决报告附录必须做 +6.0pp 的**显式分解归因**（政策门控 / 回补 /
+窗口与配置各占多少），禁止把混合差值整体记在单一组件名下。

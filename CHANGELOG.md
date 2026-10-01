@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.200.3] - 2026-10-01
+
+### Added
+
+- **P0 六项闸门审阅意见落档**：`docs/review/p0_gate_review_20261001.md` —— 对方案冻结版 F4（§4.3 迁移清单）/
+  协议 F4（§11 打钩注记）/ netting_freeze F2（§5 费用归属）/ 假设台账 schema F1（§5 顺序检验）/
+  runs 产物契约 F1（§9 + 附录 A）/ events-state schema F1（§2 + §4）六份闸门文档的独立审阅记录：
+  8 项建议确认前处理（events 词表自相矛盾 / runs topk 明细缺 schema / runs 表头映射偏差 /
+  runs 附录 A 悬空引用 / 止损检查器归属冲突 / 同向合并分摊缺失 / 影子 d_t 自相关与校准判据 /
+  contracts README 索引滞后）+ 18 项建议补充；附审阅方法与验证证据（代码抽查 11 锚点 / 产物表头实测）。
+- **检视意见文档规范（新契约条目）**：所有检视 / 评审意见类文档（对方案、契约、代码、实验结果的审阅
+  记录）统一归入 `docs/review/`（命名建议 `<主题>_<YYYYMMDD>.md`；append-only，禁止散落仓库根或业务目录）；
+  `CLAUDE.md`（§5 契约区 + §3.3 目录表）与 `.github/copilot-instructions.md`（§1.5）同步登记。
+
 ## [0.200.2] - 2026-10-01
 
 ### Fixed

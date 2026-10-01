@@ -1,20 +1,21 @@
 # LazyBull v2 模块协议层（正式契约）
 
-> **P0 落档标记**：本文档自 `docs/plans/v2_protocols.md` v0.6（2026-10-01）转正为正式契约。
+> **P0 落档标记**：本文档自 `docs/plans/v2_protocols.md` v0.7（2026-10-01）转正为正式契约。
 > 生效状态：**待 P0 确认**。代码实现以本文档为唯一接口依据。
 
 | 契约版本 | 落档日期 | 来源草案 | 变更摘要 |
 |---|---|---|---|
 | F1（= v0.3） | 2026-09-30 | plans/v2_protocols.md v0.3 | 首次转正（经 R4 / R5 两轮评审） |
 | F2（= v0.4） | 2026-10-01 | plans/v2_protocols.md v0.4 | 方案 v1.8 回写：新增 FundSchedulerProtocol + PanelFrame.available_columns_at + VirtualAccount.borrowed_credit |
-| F3（= v0.5） | 2026-10-01 | plans/v2_protocols.md v0.5 | P0 交付：§11 协议↔旧引擎语义对照表逐项打钩（22/22，R1 侦察 + 代码抽查核实） |
-| F4（= v0.6） | 2026-10-01 | plans/v2_protocols.md v0.6 | P0 评审第一轮：§9 落档清单路径勘误（v2 命名空间）+ §0 标题同步；FundScheduler 归还规则对齐方案 §4.9 v1.10（放弃新下单优先、被动卖出默认禁止） |
+| F3（= v0.5） | 2026-10-01 | plans/v2_protocols.md v0.5 | P0 交付：§11 协议↔旧引擎语义对照表逐项打钩（22/22） |
+| F4（= v0.6） | 2026-10-01 | plans/v2_protocols.md v0.6 | P0 评审第一轮：路径勘误 + FundScheduler 归还规则对齐 |
+| F5（= v0.7） | 2026-10-01 | plans/v2_protocols.md v0.7 | P0 评审第二轮：§11 打钩依据补代码态、内核内部语义对账清单化、payload 类型化欠账、止盈行 + 止损双层归属 |
 
 ---
 ---
 # LazyBull v2 模块协议层（Protocol 定义草案）
 
-> 版本：v0.6（2026-10-01，配套方案 v1.10；P0 评审第一轮：路径勘误 + 归还规则语义对齐）
+> 版本：v0.7（2026-10-01，配套方案 v1.11；P0 评审第二轮：§11 打钩依据补代码态、内核内部语义对账清单化、payload 类型化欠账登记）
 > 状态：待 P0 落档转正；本文档为接口契约的代码形态草案
 > 技术选型：Python 3.12 `typing.Protocol`（结构化子类型，无须显式继承）+ frozen dataclass + `pandas.DataFrame` / `datetime.date`
 > 设计原则：① 数据面与计算面分离；② 袖子零互 import；③ 跨模块对象不可变；④ 所有协议方法标注**幂等性**与**副作用**
@@ -34,6 +35,7 @@
 | v0.4 | 2026-10-01 | 方案 v1.8 回写：新增 `FundSchedulerProtocol`（跨袖资金调度，对应方案 §4.9 软隔离+临时借用——名义配额 / 闲置借用 / 归还规则 / 虚拟占用费）；`PanelFrame` 补 `available_from` 查询接口（对应 M1.5 样本起点扩展的 manifest 列级可用起点）；`VirtualAccount` 补 `borrowed_credit` 占用条目字段 | 兼容（新增协议 / 新增字段 / 新增方法；无签名破坏） |
 | v0.5 | 2026-10-01 | P0 交付：§11 协议↔旧引擎语义对照表逐项打钩（22/22）；核对依据 = R1 侦察三项硬事实 + 2026-10-01 代码抽查（16 个关键符号 / 文件逐一定位核实） | 兼容（仅确认列状态变更与注释，无签名破坏） |
 | v0.6 | 2026-10-01 | P0 评审第一轮：§9 落档清单路径勘误（v2 命名空间：`src/lazybull/v2/common/types.py`，迁移期统一落 v2/，P4 全切换后评估展平）；§0 标题同步；FundScheduler 归还规则对齐方案 §4.9 v1.10（放弃新下单优先、被动卖出默认禁止——OrderReason 无枚举） | 兼容（路径勘误 / 文档语义收紧；无签名破坏） |
+| v0.7 | 2026-10-01 | P0 评审第二轮：§11 打钩依据补核实代码态（commit）；「内核内部」语义单列 P2a 对账用例分片（2-B）；LedgerEntry.payload 类型化欠账登记入 §10（2-C）；§11 补止盈行 + 止损检查器双层归属对齐方案 v1.11（1-A） | 兼容（注记 / 清单 / 登记；无签名破坏） |
 
 ---
 
@@ -957,7 +959,8 @@ evidence -/-> （直接写文件；台账经 DataStore）
 1. **分钟线协议**：`MinuteBar` / `TickData` 值对象 + `load_intraday` 方法（试数据通过后补）；
 2. **实盘宿主**：`LiveHostProtocol` + `ExactMoney` 落地（券商接口就绪后补）；
 3. **暴露政策协议**：若 P1.5 裁决保留，需 `ExposurePolicyProtocol`（含 λ 序列对账口径）；
-4. **候选生成器 E0**：`CandidateGeneratorProtocol`（体检 / 诊断工具的 v2 接口）。
+4. **候选生成器 E0**：`CandidateGeneratorProtocol`（体检 / 诊断工具的 v2 接口）；
+5. **LedgerEntry.payload 类型化**（P0 评审 2-C）：当前仍为 `Mapping[str, Any]`（v0.3 版本行注释「schema 子字段 P0 冻结」已过期——假设台账 schema F1 §3 已冻结字段级）；编码期升级为 `PreregPayload | ConclusionPayload`（或 TypedDict），本行登记欠账。
 
 ---
 
@@ -972,6 +975,12 @@ evidence -/-> （直接写文件；台账经 DataStore）
 > `min_commission` + `stamp_tax`（common/cost.py）/ `EXPOSURE_TRIM_TOLERANCE` / `TradingConfig`（common/trading_config.py）/
 > `holdings_snapshot.py` / `ml/walk_forward/data_state.py` / 延迟订单（backtest/pending_execution.py + 纸面 storage/queue.py 两套）等）；
 > 「协议层归属」列经协议全文核对（类型 / 协议 / 边界声明逐项存在）。
+> **核实代码态（v0.7 补登记，P0 评审 2-A）**：2026-10-01，git `b9d866e`（与基线双臂同代）；
+> 迁移期「行为冻结」下风险可控，但 **P2a 开工前必须补一次「§11 快速复核」清单项**（距核实可能数月）。
+> **「内核内部」语义对账清单化（v0.7，P0 评审 2-B）**：§11 归属「内核内部」的 5 类语义
+> （每日 15 个有序钩子 / 指令 (action,ts_code) 去重合并 / 延迟订单队列 / 条件卖出队列 / 减仓回补不进队列）
+> 单列成 **P2a 对账用例分片**——每条内部语义一条对账断言，并入方案 §9.1 对账门检查清单
+> （协议层无形式化接口，行为等价性只能靠对账门兑底，内部漂移难以定位 ⇒ 显式清单化）。
 
 | 旧引擎语义 | 现实位置（R1 侦察） | 协议层归属 | 确认 |
 |---|---|---|---|
@@ -985,7 +994,8 @@ evidence -/-> （直接写文件；台账经 DataStore）
 | 3 种子集成（ensemble_seeds 42/61/82） | EnsembleSignal / 注册表 | `ModelConfig.ensemble_seeds` + `Trainer` 集成语义（H2 已修） | ✅ |
 | walk_forward 编排（训练→评估→回测→data_state→summary） | ml/walk_forward/runner.py | `WalkForwardOrchestrator`（H2 已修） | ✅ |
 | 到期判定（持有 rebalance_freq-1 日 T0 生成卖出） | trading/sell_rules.py | `common/rules/` 共享纯函数（§6 登记） | ✅ |
-| **止损检查器（stop_loss_checker，单实现两侧共用）** | risk/ 止损模块 | `common/rules/` 共享纯函数（R5 补登记） | ✅ |
+| **止损检查器（stop_loss_checker，单实现两侧共用）** | risk/ 止损模块 | **双层归属（v0.7，P0 评审 1-A，对齐方案 §4.3 v1.11）**：纯判定函数 → `common/rules/` 共享纯函数；执行链调用编排 → `core/decision` | ✅ |
+| **止盈检查器（take_profit，v0.7 补行，P0 评审 1-A）** | risk/ 止盈模块 | 同上：纯函数 → `common/rules/`；编排 → `core/decision` | ✅ |
 | 分批调仓排期（stagger_tranches） | trading/stagger.py | `common/rules/` 共享纯函数（§6 登记） | ✅ |
 | **分批排期锚定差异（回测区间起点 vs 纸面 anchor 重建，R5 补）** | stagger 两侧调用点 | `common/rules/` 共享纯函数 + **锚定语义入参化**（anchor 由调用方显式传入，禁止各自推导） | ✅ |
 | **Kelly 仓位 / 权重归一化两份包装（`_kelly_weights` / `_normalize_signals` 回测与纸面各一份，R5 补）** | trading/ 纯函数已单源 + **包装层两份** | 纯函数归 `common/rules/`；**包装层合并为 `core/decision` 唯一实现** | ✅ |

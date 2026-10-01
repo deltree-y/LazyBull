@@ -8,6 +8,7 @@
 | 契约版本 | 落档日期 | 来源 | 变更摘要 |
 |---|---|---|---|
 | F1 | 2026-10-01 | 方案 v1.8 §4.1 / §8 + 基线批次（wf_batch_20260930_171221 / 172037）产物实测表头 | 首次落档 |
+| F2 | 2026-10-01 | P0 评审第二轮（5-A~5-E） | 补 topk_detail.csv schema（信号层尺子输入，卡 P5a-1）；trades 补 4 列映射 + policy_lambda 条件条款 + attribution 头部 3 列；附录 A 改 fail-safe 指纹口径 + baseline_freeze 补快照；重建标注位；文件缺失三态通则 |
 
 ---
 
@@ -21,8 +22,10 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 └── folds/<split_id>/                 # split_id = split00, split01, ...
     ├── trades.csv                    # 成交账本
     ├── daily.csv                     # 逐日组合明细（持仓市值 / 现金 / NAV / 当日指令计数）
+    ├── topk_detail.csv               # 逐日 Top-K 明细（信号层尺子输入；可缺，见 §9 通则）
     ├── attribution.csv               # 执行归因（旁路语义，不参与成交判断）
-    └── holdings_snapshot.csv         # 持仓快照（可选旁路；引擎默认关闭、OOS 显式开启）
+    ├── holdings_snapshot.csv         # 持仓快照（可选旁路；引擎默认关闭、OOS 显式开启）
+    └── policy_lambda.csv/.json       # 政策层 λ 台账（条件条款：仅政策层保留时存在，见 §8.1）
 ```
 
 **命名规则**：目录 / 文件名 / 字段名一律 **ASCII**（禁中文、禁空格——PowerShell 转码教训；旧产物"持仓快照"等中文名属转换器映射范围，中文展示由报告层渲染负责）。
@@ -79,15 +82,36 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 | `buy_date, buy_price` | 同左 | 卖出行的对应买入信息（卖出行 `buy_date` 必填） |
 | `buy_pnl_price, sell_pnl_price, pnl_profit_amount, pnl_profit_pct` | 同左 | 盈亏口径（现语义不变） |
 | `sell_type, sell_timing` | 同左 | 卖出类型 / 时点 |
-| `lot_id` | —（v2 新增） | 归属 lot（净额化冻结文档 §5；旧产物转换时按 FIFO 重建并标注 `lot_reconstructed=true`） |
+| `sell_reason, trigger_type, buy_type, buy_reason` | 同左（F2 补，P0 评审 5-B 实测偏差） | 卖出/买入原因与触发类型明细（语义沿用现引擎） |
+| `lot_id` | —（v2 新增） | 归属 lot（净额化冻结文档 §5；旧产物转换时按 FIFO 重建并标注，见 §5.1） |
 | `tranche_idx` | —（v2 新增，可空） | 分批调仓批次号（沿分批调仓契约） |
+
+### 5.1 重建标注字段位（F2，P0 评审 5-D）
+
+- `lot_id` 重建标注 = **文件级 meta**：`folds/<split_id>/_meta.json` 的 `trades.lot_reconstructed=true`；
+- `daily.csv` 重建标注 = 同文件 `daily.daily_reconstructed=true`（§9 通则 6）；
+- 不加布尔列（行级标注会混入数值列，违背「字段级 schema 全 ASCII 且语义单一」）。
 
 ## 6. folds/<split_id>/attribution.csv（执行归因，字段级）
 
-自旧 `walk_forward_execution_attribution_*` 映射：`signal_date, ranking_date, execution_date, execution_stage, tranche_idx,`
+自旧 `walk_forward_execution_attribution_*` 映射：`wf_run_id, split_index, model_version`（F2 补头部三列，P0 评审 5-B）、`signal_date, ranking_date, execution_date, execution_stage, tranche_idx,`
 `planned_ts_code(←planned_stock), actual_ts_code(←actual_stock), planned_rank, actual_rank, pred_score, target_weight,`
 `status, reason, buy_price, signal_price, signal_to_buy_return`。
 语义不变：**旁路记录，不参与候选选择、资金计算或成交判断**（交易归因契约）。
+
+## 7.1 folds/<split_id>/topk_detail.csv（F2 新增，P0 评审 5-A——信号层尺子输入）
+
+逐日 Top-K 明细是信号层尺子（`src/lazybull/compare/signal_metrics.py`）的唯一输入，必须在 schema 内：
+
+| 字段 | 说明 |
+|---|---|
+| `wf_run_id, split_index, test_start, test_end, model_version` | 头部血缘（现产物同名字段） |
+| `trade_date, topk, rank, ts_code` | 交易日 / Top-K 口径（20/30）/ 名次 / 股票 |
+| `pred_score, true_return, score_column, ml_score, risk_score, final_score` | 分数与真实收益（现产物同名字段） |
+
+**缺失语义（P0 评审 7-C 实测）**：基线批次 B0/B1 **均无** topk 明细，四个历史实验批次全有 ⇒ 同一 schema 下文件时有时无；
+属「可缺 + 可重建」类（见 §9 通则）——缺失时转换器从 trades + summary 无法完整重建（pred_score 不可复原），
+必须标注 `_meta.json: topk_detail.missing=true` 并在证据机器侧降级（该折不参与信号层尺子，只参与净值层）。
 
 ## 7. folds/<split_id>/holdings_snapshot.csv（持仓快照，字段级）
 
@@ -112,14 +136,31 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 | `n_positions, n_buys, n_sells, turnover_amount` | 持仓数 / 当日买卖计数 / 换手金额 |
 | `exposure_lambda` | 暴露系数（政策层启用时记录；未启用恒 1.0）——λ 序列逐日一致验收的载体 |
 
+### 8.1 folds/<split_id>/policy_lambda.csv/.json（F2 新增，P0 评审 5-B 条件条款）
+
+政策层 λ 台账是 P1.5 裁决的验收依赖物（政策层保留时）：
+- **条件条款**：仅当政策层（e2online_r 等）启用时存在；退役时不收（明确登记「退役批次无此文件」）；
+- csv 字段（实测）：`date, multiplier, mkt_vol_20, p_loss_mean, holdings, weight_sum, day_mean_return, event_rate, day_weighted_return, loss_day, fold`；
+- json = 配套 meta（策略口径 / 折源 / 指纹）；
+- 注意口径教训（R-007 §6 登记）：`holdings / weight_sum` 是 terminal_loss 政策面板口径**非真实持仓**，消费方不得当真实持仓用。
+
 ## 9. 读取不变量（证据机器读入时的硬校验）
+
+**文件缺失语义通则（F2，P0 评审 5-E）**：每类文件必须归属三态之一——
+**必须报错**（trades / summary / chain_nav / batch_meta，缺失即批次非法）/
+**可缺 + 可重建**（daily 从账本+快照重建、holdings_snapshot 旁路）/
+**可缺 + 不可重建**（topk_detail 缺失即该折降级，见 §7.1）。禁止默认「缺 = 跳过」。
 
 1. `trades.action ∈ {buy, sell}`；卖出行 `buy_date` 非空且不晚于 `trade_date`。
 2. `chain_nav` 折内日期严格递增；`summary.bt_total_return` 与 chain_nav 折内起止重算值容差 **1e-6**。
 3. `batch_meta.config_fingerprint` 重算一致；`data_state.data_state_id` 与逐折 summary 列一致。
 4. 同日同 `(action, ts_code)` 指令已在引擎内合并（账本内不得出现同日同股同向两行）；出现 ⇒ 报错（属引擎 bug，不是数据问题）。
 5. 文件名 / 字段名全 ASCII；发现中文字段 ⇒ 提示先跑转换器。
-6. 缺失 `daily.csv`（旧产物无此文件）⇒ 转换器从账本 + 快照重建，重建产物标注 `daily_reconstructed=true`。
+6. 缺失 `daily.csv`（旧产物无此文件）⇒ 转换器从账本 + 快照重建，重建产物记 `_meta.json: daily.daily_reconstructed=true`。
+7. **列级校验（F2，P0 评审 5-B 通则）**：目标列集合 = 契约集合——转换器必须产出「源→目标映射 + **丢弃列清单**」，
+   行数校验（源 vs 目标）之外，列集合不一致必须报错（静默丢列发现不了）。
+8. **跨折衔接（F2 补）**：chain_nav 后折首行日期 = 前折末行日期（折界重复点语义，不计入交易日数）；
+   daily 与 trades 交叉对账（`n_buys / n_sells` 与 trades 当日计数一致、末行 `total_value` 与 chain_nav 衔接）。
 
 ## 10. 转换器契约（旧 WF 产物 → 本 schema）
 
@@ -127,8 +168,10 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 - 转换报告：行数校验（源 vs 目标）、字段映射表、抽样 md5（每文件 ≥3 行）一并产出。
 - 验收：P5a-1 用 3 个已登记历史实验（holdertrade A2 / repurchase / top10fh）重算与既有报表逐项一致——同时验收转换器与证据机器读入链路。
 
-## 附录 A：配置指纹键清单
+## 附录 A：配置指纹键清单（F2 修订，P0 评审 5-C——fail-safe 方向）
 
-- 口径：以基线冻结（`docs/contracts/baseline_freeze.md`）所用配置提取实现为准（127 键 diff 口径）；
-  排除运行标识类（`wf_run_id, batch_run_id, batch_period_label`）与统计输出类（`bt_*, key_*, *_samples, best_iteration*`）列。
-- 本清单的代码承载（独立模块 + 单测）随 P5a-1 转换器一并落地；落地前以 baseline_freeze 附录快照为唯一参照。
+- **口径写死**：**全键入指纹 − 显式排除清单**（fail-safe；新增键默认进指纹，防「漏加进清单就逃逸校验」）。
+- **排除清单**（唯一例外，列全）：运行标识类（`wf_run_id, batch_run_id, batch_period_label, registered_at`）+
+  统计输出类（`bt_*, key_*, *_samples, best_iteration*`）。**任何其他键一律入指纹**。
+- **127 键快照**：以 `docs/contracts/baseline_freeze.md` 附录 A 为唯一参照（F2 补全——原悬空引用已修复）；
+  代码承载（独立模块 + 单测）随 P5a-1 转换器一并落地，实现必须从该快照导入排除清单，禁止重写。
