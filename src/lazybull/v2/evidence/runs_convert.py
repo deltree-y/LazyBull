@@ -2,12 +2,18 @@
 """旧 walk-forward 产物 → runs 产物契约（F2）的一次性转换器。
 
 契约依据（`docs/contracts/runs_artifact_contract.md` F2）：
-- **数值逐位不动**：只做目录搬迁 / 重命名 / 字段名映射 / 编码规范化；
-  禁止任何数值重算（lot_id / daily.csv 为标注性重建，例外已注明）；
+- **数值逐位不动**：只做目录搬迁 / 重命名 / 字段名映射 / 编码规范化 / 列集对齐
+  （多列丢弃、缺列补 NA 并登记 contract_missing；lot_id / daily.csv 为标注性重建，
+  例外已注明）；
 - 转换报告：行数校验（源 vs 目标）+ 字段映射表 + **丢弃列清单**（契约 §9 通则 7）
-  + 抽样 md5（每文件 ≥3 行）一并产出；
+  + 缺列登记 + 抽样 md5（每文件 ≥3 行），一并落盘
+  `<target_root>/<batch_id>.convert_report.json`（批次目录外，保持 runs 目录契约纯净）；
 - 文件缺失三态（契约 §9 通则）：trades / summary / chain_nav / batch_meta 必须存在；
-  daily 可重建；topk_detail 可缺但不可重建（缺则标 `topk_detail.missing=true`）。
+  daily 可重建（无源标 `daily.missing=true`）；topk_detail 可缺但不可重建
+  （缺则标 `topk_detail.missing=true`）。
+
+契约列集与配置指纹排除清单分别从 `runs_schema.py` / `fingerprint_keys.py` 导入
+（单一来源，禁止重写）。
 
 验收：P5a-1 用 3 个已登记历史实验（holdertrade A2 / repurchase / top10fh）
 重算与既有报表逐项一致——同时验收转换器与证据机器读入链路。
@@ -17,12 +23,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
+
+from src.lazybull.v2.evidence.fingerprint_keys import config_fingerprint_keys, fingerprint
+from src.lazybull.v2.evidence.runs_schema import (
+    ATTR_CONTRACT_COLS,
+    SNAP_CONTRACT_COLS,
+    TOPK_CONTRACT_COLS,
+    TRADES_CONTRACT_COLS,
+)
 
 # ---- 字段映射（契约 F2 §5 / §6 / §7 / §7.1；源列名 → 目标列名） ----
 
@@ -54,37 +68,13 @@ _ATTR_RENAME = {"planned_stock": "planned_ts_code", "actual_stock": "actual_ts_c
 # summary：KEY_* 前缀大写 → 小写蛇形（契约 §3 信号层口径）
 _SUMMARY_KEY_PREFIX = "KEY_"
 
-# trades 契约列集（契约 §5 + F2 补 4 列；R-06-#7 列集校验）
-_TRADES_CONTRACT_COLS = [
-    "wf_run_id", "split_index", "model_version", "trade_date", "signal_date",
-    "ts_code", "action", "price", "shares", "amount", "cost",
-    "buy_date", "buy_price", "buy_pnl_price", "sell_pnl_price",
-    "pnl_profit_amount", "pnl_profit_pct", "sell_type", "sell_timing",
-    "sell_reason", "trigger_type", "buy_type", "buy_reason",  # F2 补（历史批可缺）
-    "lot_id", "tranche_idx",  # v2 新增
-]
-
-# attribution 契约列集（契约 §6，含 F2 补头部三列）
-_ATTR_CONTRACT_COLS = [
-    "wf_run_id", "split_index", "model_version", "signal_date", "ranking_date",
-    "execution_date", "execution_stage", "tranche_idx", "planned_ts_code",
-    "actual_ts_code", "planned_rank", "actual_rank", "pred_score", "target_weight",
-    "status", "reason", "buy_price", "signal_price", "signal_to_buy_return",
-]
-
-# topk_detail 契约列集（契约 §7.1）
-_TOPK_CONTRACT_COLS = [
-    "wf_run_id", "split_index", "test_start", "test_end", "model_version",
-    "trade_date", "topk", "rank", "ts_code", "pred_score", "true_return",
-    "score_column", "ml_score", "risk_score", "final_score",
-]
-
-# 快照契约列集（契约 §7，中文映射后的 ASCII 列）
-_SNAP_CONTRACT_COLS = [
-    "run_id", "split_index", "model_version", "trade_date", "ts_code",
-    "shares", "market_value", "weight", "total_value", "buy_date",
-    "signal_date", "held_days", "due_date", "remaining_days",
-]
+#: 已知实验臂开关 → 臂标签（summary 配置列值为真时计入 batch_meta.arms）
+_ARM_SWITCHES = {
+    "enable_holdertrade_features": "holdertrade",
+    "enable_repurchase_features": "repurchase",
+    "enable_top10fh_features": "top10fh",
+    "enable_top_inst_features": "top_inst",
+}
 
 
 @dataclass
@@ -97,6 +87,7 @@ class ConvertedFile:
     rows_out: int
     mapping: Dict[str, str] = field(default_factory=dict)
     dropped_columns: List[str] = field(default_factory=list)
+    contract_missing: List[str] = field(default_factory=list)  # 契约缺列（已补 NA，登记不阻断）
     sample_md5: str = ""  # 抽样 md5（前 3 行）
 
 
@@ -124,43 +115,40 @@ def _write_parquet(df: pd.DataFrame, path: Path) -> None:
     df.to_parquet(path, index=False)
 
 
+def _norm_date_key(s: pd.Series) -> pd.Series:
+    """日期键规范化（YYYYMMDD 字符串）：兼容 str / int / Timestamp / ISO 日期。"""
+    return s.astype(str).str.replace("-", "", regex=False).str[:8]
+
+
 def _convert_one(
     src: Path,
     dst: Path,
     rename: Dict[str, str],
     report_files: List[ConvertedFile],
-    keep_only: Optional[List[str]] = None,
     contract_cols: Optional[List[str]] = None,
-    strict_contract: bool = False,
 ) -> Optional[ConvertedFile]:
-    """单文件转换：读源 → 改名 → 列级映射/丢弃登记 → 写目标（parquet）。
+    """单文件转换：读源 → 改名 → 列集对齐（多列丢弃 / 缺列补 NA）→ 写目标（parquet）。
 
     Args:
-        contract_cols: 契约列集（R-06-#7 列级校验）；给出时校验缺列/多列并登记
-        strict_contract: True 时列集合不一致报错；False 时记 dropped/missing 并继续
+        contract_cols: 契约列集（契约 §9.7 / §10）；给出时目标列集合严格等于契约集合，
+            多列进 dropped_columns，缺列补 NA 并进 contract_missing 登记。
     """
     if not src.exists():
         return None
     df = pd.read_csv(src, encoding="utf-8-sig")
     rows_in = len(df)
-    mapped = {c: rename.get(c, c) for c in df.columns}
+    mapped = {c: rename.get(c, c) for c in df.columns}  # rename 前构造，保留真实映射
     df = df.rename(columns=rename)
-    if keep_only is not None:
-        keep = [c for c in keep_only if c in df.columns]
-        dropped = [c for c in df.columns if c not in keep]
-        df = df[keep]
-    else:
-        dropped = []
-    # 列集合校验（R-06-#7）
+    dropped: List[str] = []
     contract_missing: List[str] = []
-    contract_extra: List[str] = []
     if contract_cols is not None:
+        dropped = [c for c in df.columns if c not in contract_cols]
+        if dropped:
+            df = df[[c for c in df.columns if c in contract_cols]]
         contract_missing = [c for c in contract_cols if c not in df.columns]
-        contract_extra = [c for c in df.columns if c not in contract_cols]
-        if strict_contract and (contract_missing or contract_extra):
-            raise ValueError(
-                f"{src.name}: 列集合与契约不符——缺 {contract_missing}，多 {contract_extra}"
-            )
+        for c in contract_missing:
+            df[c] = pd.NA  # 缺列补 NA（schema 对齐；源缺事实进 contract_missing）
+        df = df[[c for c in contract_cols]]  # 列序对齐契约
     _write_parquet(df, dst)
     rec = ConvertedFile(
         source=src.name,
@@ -168,10 +156,10 @@ def _convert_one(
         rows_in=rows_in,
         rows_out=len(df),
         mapping=mapped,
-        dropped_columns=dropped + contract_extra,
+        dropped_columns=dropped,
+        contract_missing=contract_missing,
         sample_md5=_sample_md5(df),
     )
-    rec.__dict__["contract_missing"] = contract_missing  # 登记缺列（不阻断）
     report_files.append(rec)
     return rec
 
@@ -180,6 +168,7 @@ def convert_wf_batch(
     source_dir: Path,
     target_root: Path,
     batch_id: str,
+    baseline_ref: Optional[str] = None,
 ) -> ConvertReport:
     """把一个旧 WF 批次目录转换为 runs 契约 schema。
 
@@ -187,10 +176,10 @@ def convert_wf_batch(
         source_dir: 旧批次 raw 目录（含 chain_nav_* / walk_forward_* / data_state_*）
         target_root: runs 根目录（产出落 target_root/<batch_id>/）
         batch_id: 新批次 ID（ASCII）
+        baseline_ref: 对照批次 id（契约 §2：A/B 实验臂必填，基线批为 None）
     """
     source_dir = Path(source_dir)
     out_dir = Path(target_root) / batch_id
-    folds_dir = out_dir / "folds"
     report = ConvertReport(
         batch_id=batch_id, source_dir=str(source_dir), target_dir=str(out_dir)
     )
@@ -206,6 +195,7 @@ def convert_wf_batch(
         report.errors.append("缺 walk_forward_summary_*.csv")
     if report.errors:
         report.row_check_pass = False
+        _write_report(report, target_root)
         return report
 
     # chain_nav：数值逐位不动（契约 §4）
@@ -213,115 +203,36 @@ def convert_wf_batch(
     _write_parquet(chain, out_dir / "chain_nav.parquet")
     report.files.append(
         ConvertedFile(
-            source=chain_files[-1].name,
-            target="chain_nav.parquet",
-            rows_in=len(chain),
-            rows_out=len(chain),
-            sample_md5=_sample_md5(chain),
+            source=chain_files[-1].name, target="chain_nav.parquet",
+            rows_in=len(chain), rows_out=len(chain), sample_md5=_sample_md5(chain),
         )
     )
 
-    # summary：KEY_* → 小写蛇形 + 非 ASCII 列进丢弃清单（契约 §3/§9.5；R-06 修复）
-    summary = pd.read_csv(summary_files[-1], encoding="utf-8-sig")
-    summary_rename = {
-        c: c.lower() for c in summary.columns if c.startswith(_SUMMARY_KEY_PREFIX)
-    }
-    summary = summary.rename(columns=summary_rename)
-    # 非 ASCII 列（中文诊断列）进丢弃清单——诊断展示口径，不进裁决 schema
-    non_ascii_cols = [c for c in summary.columns if not str(c).isascii()]
-    summary_dropped = list(non_ascii_cols)
-    summary = summary[[c for c in summary.columns if str(c).isascii()]]
-    # 补 batch_id 标识列（契约 §3；R-06-#10）
-    summary["batch_id"] = batch_id
-    _write_parquet(summary, out_dir / "summary.parquet")
-    report.files.append(
-        ConvertedFile(
-            source=summary_files[-1].name,
-            target="summary.parquet",
-            rows_in=len(summary),
-            rows_out=len(summary),
-            mapping={c: summary_rename.get(c, c) for c in summary.columns},
-            dropped_columns=summary_dropped,
-            sample_md5=_sample_md5(summary),
-        )
-    )
+    summary = _convert_summary_block(summary_files[-1], batch_id, out_dir, report)
 
     # ---- 逐折文件 ----
     split_ids = sorted(
-        {
-            p.stem.split("_split")[-1]
-            for p in source_dir.glob("walk_forward_trades_*_split*.csv")
-        }
+        {p.stem.split("_split")[-1]
+         for p in source_dir.glob("walk_forward_trades_*_split*.csv")}
     )
     if not split_ids:
         report.missing_required.append("trades")
         report.errors.append("缺 walk_forward_trades_*_split*.csv")
         report.row_check_pass = False
+        _write_report(report, target_root)
         return report  # 无折则直接返回（契约 §9 三态=必须报错）
 
-    # ---- 逐折文件 ----
+    # policy_lambda 台账（契约 §8.1 条件条款）：fold 循环前读取，供 daily 的 λ 列按日 join
+    lambda_by_fold = _read_policy_lambda(source_dir, out_dir, report)
+
     n_topk = 0
     folds_missing_topk: List[str] = []
     for split_id in split_ids:
-        fold_dir = folds_dir / f"split{split_id}"
-        fold_meta: Dict[str, object] = {}
-        # trades（契约 §9 三态=必须报错；R-06-#9 不再静默跳过）
-        trades_files = sorted(source_dir.glob(f"walk_forward_trades_*_split{split_id}.csv"))
-        if not trades_files:
-            report.errors.append(f"split{split_id}: 缺 trades（契约三态=必须报错）")
-            report.row_check_pass = False
-            continue
-        trades_rec = _convert_one(
-            trades_files[-1],
-            fold_dir / "trades.parquet",
-            _TRADES_RENAME,
-            report.files,
-            contract_cols=_TRADES_CONTRACT_COLS,
-            strict_contract=False,  # 历史批缺 F2 补 4 列属常态（登记不阻断）
-        )
-        # lot_id 重建（契约 §5 例外条款）：按 FIFO 从 trades 的 buy_date 重建归属批次
-        if trades_rec is not None:
-            trades_df = pd.read_parquet(fold_dir / "trades.parquet")
-            trades_df = _rebuild_lot_id(trades_df)
-            _write_parquet(trades_df, fold_dir / "trades.parquet")
-            fold_meta["trades.lot_reconstructed"] = True
-        # attribution（契约 §6）
-        attr_files = sorted(source_dir.glob(f"walk_forward_execution_attribution_*_split{split_id}.csv"))
-        if attr_files:
-            _convert_one(
-                attr_files[-1], fold_dir / "attribution.parquet", _ATTR_RENAME,
-                report.files, contract_cols=_ATTR_CONTRACT_COLS,
-            )
-        # 持仓快照（契约 §7，中文表头映射）
-        snap_files = sorted(source_dir.glob(f"walk_forward_持仓快照_*_split{split_id}.csv"))
-        if snap_files:
-            _convert_one(
-                snap_files[-1], fold_dir / "holdings_snapshot.parquet",
-                _HOLDINGS_COLS_ZH2EN, report.files, contract_cols=_SNAP_CONTRACT_COLS,
-            )
-        # topk_detail（契约 §7.1；可缺但不可重建——折级降级标注 R-06-#8）
-        topk_files = sorted(source_dir.glob(f"walk_forward_topk_details_*_split{split_id}.csv"))
-        if topk_files:
+        has_topk = _convert_fold(source_dir, split_id, out_dir, lambda_by_fold, batch_id, report)
+        if has_topk is True:
             n_topk += 1
-            _convert_one(
-                topk_files[-1], fold_dir / "topk_detail.parquet", {},
-                report.files, contract_cols=_TOPK_CONTRACT_COLS,
-            )
-        else:
-            fold_meta["topk_detail.missing"] = True
+        elif has_topk is False:
             folds_missing_topk.append(split_id)
-        # daily.csv 重建（契约 §9 三态=可缺+可重建；R-06-#1）：从 trades + 快照重建
-        daily_df = _rebuild_daily(trades_df if trades_rec else None,
-                                   pd.read_parquet(fold_dir / "holdings_snapshot.parquet") if snap_files else None)
-        if daily_df is not None:
-            _write_parquet(daily_df, fold_dir / "daily.parquet")
-            fold_meta["daily.daily_reconstructed"] = True
-        # 折级 _meta.json（契约 §5.1/§7.1/§9.6；R-06-#2）
-        if fold_meta:
-            fold_dir.mkdir(parents=True, exist_ok=True)
-            (fold_dir / "_meta.json").write_text(
-                json.dumps(fold_meta, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
 
     if n_topk == 0 and split_ids:
         # 契约 §7.1：缺失即降级标注（证据机器侧该折不参与信号层尺子）
@@ -329,64 +240,7 @@ def convert_wf_batch(
         report.meta_notes["topk_detail.missing_folds"] = ",".join(folds_missing_topk)
         logger.warning(f"{batch_id}: 全折缺 topk_detail，标注降级（基线批常见）")
 
-    # ---- policy_lambda（契约 §8.1 条件条款；R-06-#4） ----
-    policy_lambda_files = sorted(source_dir.glob("policy_lambda_*.csv"))
-    if policy_lambda_files:
-        pl = pd.read_csv(policy_lambda_files[-1], encoding="utf-8-sig")
-        _write_parquet(pl, out_dir / "policy_lambda.parquet")
-        report.files.append(
-            ConvertedFile(
-                source=policy_lambda_files[-1].name, target="policy_lambda.parquet",
-                rows_in=len(pl), rows_out=len(pl), sample_md5=_sample_md5(pl),
-            )
-        )
-        json_files = sorted(source_dir.glob("policy_lambda_*.json"))
-        if json_files:
-            (out_dir / "policy_lambda.json").write_text(
-                json_files[-1].read_text(encoding="utf-8"), encoding="utf-8"
-            )
-
-    # ---- batch_meta.json（契约 §2 全字段；R-06-#5） ----
-    data_state_files = sorted(source_dir.glob("data_state_*.json"))
-    data_state: Dict[str, object] = {}
-    if data_state_files:
-        try:
-            data_state = json.loads(data_state_files[-1].read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            report.meta_notes["data_state_parse_error"] = str(exc)
-
-    # 从 summary 提取配置与代码态（契约 §2；指纹 = 附录 A 排除清单后的全键）
-    config: Dict[str, object] = {}
-    code_state: Dict[str, object] = {}
-    arms: List[str] = []
-    if not summary.empty:
-        row = summary.iloc[-1]
-        for k in ("git_commit", "git_dirty"):
-            if k in summary.columns:
-                code_state[k] = str(row[k]) if pd.notna(row[k]) else None
-        # 配置指纹键（全键 − 排除清单；附录 A fail-safe 口径）
-        fp_keys = _config_fingerprint_keys(summary.columns.tolist())
-        config = {k: (row[k].item() if hasattr(row[k], "item") else row[k])
-                  for k in fp_keys if k in summary.columns and pd.notna(row[k])}
-        if "enable_repurchase_features" in summary.columns:
-            arms.append("repurchase")
-    config_fingerprint = _fingerprint(config)
-
-    batch_meta = {
-        "schema_version": 1,
-        "batch_id": batch_id,
-        "created_at": pd.Timestamp.now().isoformat(),
-        "host_mode": "backtest",  # WF OOS 回测批
-        "source": "converted_from_legacy_wf_batch",
-        "source_dir": str(source_dir),
-        "code_state": code_state,
-        "data_state": data_state,
-        "config": config,
-        "config_fingerprint": config_fingerprint,
-        "baseline_ref": None,
-        "arms": arms,
-        "meta_notes": report.meta_notes,
-    }
+    batch_meta = _build_batch_meta(source_dir, batch_id, summary, baseline_ref, report)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "batch_meta.json").write_text(
         json.dumps(batch_meta, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
@@ -398,22 +252,257 @@ def convert_wf_batch(
             report.row_check_pass = False
             report.errors.append(f"{rec.source}: 行数不一致 {rec.rows_in}→{rec.rows_out}")
 
+    _write_report(report, target_root)
     return report
 
 
-# ---- lot_id / daily 重建（契约 §5 例外条款 / §9 三态；R-06-#1/#3） ----
+def _convert_summary_block(
+    summary_file: Path, batch_id: str, out_dir: Path, report: ConvertReport
+) -> pd.DataFrame:
+    """summary：KEY_* → 小写蛇形 + 非 ASCII 列进丢弃清单（契约 §3/§9.5）+ batch_id 补列。"""
+    summary = pd.read_csv(summary_file, encoding="utf-8-sig")
+    # 映射表在 rename 前构造（源列名 → 目标列名，契约 §10 审计可对账）
+    summary_mapping = {
+        c: (c.lower() if c.startswith(_SUMMARY_KEY_PREFIX) else c) for c in summary.columns
+    }
+    summary_rename = {k: v for k, v in summary_mapping.items() if k != v}
+    # 非 ASCII 列（中文诊断列）进丢弃清单——诊断展示口径，不进裁决 schema
+    summary_dropped = [c for c in summary.columns if not str(c).isascii()]
+    summary = summary.rename(columns=summary_rename)
+    summary = summary[[c for c in summary.columns if str(c).isascii()]].copy()
+    # 补 batch_id 标识列（契约 §3）
+    summary["batch_id"] = batch_id
+    _write_parquet(summary, out_dir / "summary.parquet")
+    report.files.append(
+        ConvertedFile(
+            source=summary_file.name,
+            target="summary.parquet",
+            rows_in=len(summary),
+            rows_out=len(summary),
+            mapping=summary_mapping,
+            dropped_columns=summary_dropped,
+            sample_md5=_sample_md5(summary),
+        )
+    )
+    return summary
 
 
-def _rebuild_lot_id(trades: pd.DataFrame) -> pd.DataFrame:
-    """按 FIFO 从 trades 重建 lot_id（v2 新增列，契约 §5）。
+def _convert_fold(
+    source_dir: Path,
+    split_id: str,
+    out_dir: Path,
+    lambda_by_fold: Dict[int, Dict[str, float]],
+    batch_id: str,
+    report: ConvertReport,
+) -> Optional[bool]:
+    """单折转换（trades/attribution/快照/topk/daily + 折级 _meta.json）。
+
+    Returns:
+        True/False = 该折有/无 topk_detail；None = 缺 trades（已记 error，跳过本折）。
+    """
+    fold_dir = out_dir / "folds" / f"split{split_id}"
+    fold_meta: Dict[str, object] = {}
+    # trades（契约 §9 三态=必须报错；不静默跳过）
+    trades_files = sorted(source_dir.glob(f"walk_forward_trades_*_split{split_id}.csv"))
+    if not trades_files:
+        report.errors.append(f"split{split_id}: 缺 trades（契约三态=必须报错）")
+        report.row_check_pass = False
+        return None
+    _convert_one(
+        trades_files[-1], fold_dir / "trades.parquet", _TRADES_RENAME,
+        report.files, contract_cols=TRADES_CONTRACT_COLS,
+    )
+    # lot_id 重建（契约 §5 例外条款）：FIFO + 卖出行自带 buy_date 交叉校验
+    trades_df = pd.read_parquet(fold_dir / "trades.parquet")
+    trades_df, fifo_violations = _rebuild_lot_id(trades_df)
+    _write_parquet(trades_df, fold_dir / "trades.parquet")
+    fold_meta["trades.lot_reconstructed"] = True
+    if fifo_violations:
+        fold_meta["lot_id.fifo_violations"] = fifo_violations
+        logger.warning(
+            f"{batch_id}/split{split_id}: lot_id FIFO 重建与卖出行 buy_date "
+            f"不一致 {fifo_violations} 行（引擎非 FIFO 卖出），归属按 FIFO 口径"
+        )
+    # attribution（契约 §6）
+    attr_files = sorted(source_dir.glob(f"walk_forward_execution_attribution_*_split{split_id}.csv"))
+    if attr_files:
+        _convert_one(
+            attr_files[-1], fold_dir / "attribution.parquet", _ATTR_RENAME,
+            report.files, contract_cols=ATTR_CONTRACT_COLS,
+        )
+    # 持仓快照（契约 §7，中文表头映射）
+    snap_files = sorted(source_dir.glob(f"walk_forward_持仓快照_*_split{split_id}.csv"))
+    snap_df = None
+    if snap_files:
+        _convert_one(
+            snap_files[-1], fold_dir / "holdings_snapshot.parquet",
+            _HOLDINGS_COLS_ZH2EN, report.files, contract_cols=SNAP_CONTRACT_COLS,
+        )
+        snap_df = pd.read_parquet(fold_dir / "holdings_snapshot.parquet")
+    # topk_detail（契约 §7.1；可缺但不可重建——折级降级标注）
+    topk_files = sorted(source_dir.glob(f"walk_forward_topk_details_*_split{split_id}.csv"))
+    has_topk = bool(topk_files)
+    if has_topk:
+        _convert_one(
+            topk_files[-1], fold_dir / "topk_detail.parquet", {},
+            report.files, contract_cols=TOPK_CONTRACT_COLS,
+        )
+    else:
+        fold_meta["topk_detail.missing"] = True
+    # daily.csv 重建（契约 §9 三态=可缺+可重建）：从 trades + 快照重建；无源标注
+    daily_df = _rebuild_daily(
+        trades_df, snap_df, lambda_by_fold.get(int(split_id)) if split_id.isdigit() else None
+    )
+    if daily_df is not None:
+        _write_parquet(daily_df, fold_dir / "daily.parquet")
+        fold_meta["daily.daily_reconstructed"] = True
+    else:
+        fold_meta["daily.missing"] = True  # 可缺+可重建但无源：标注降级（同 topk 口径）
+    # 折级 _meta.json（契约 §5.1/§7.1/§9.6）
+    if fold_meta:
+        fold_dir.mkdir(parents=True, exist_ok=True)
+        (fold_dir / "_meta.json").write_text(
+            json.dumps(fold_meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    return has_topk
+
+
+def _build_batch_meta(
+    source_dir: Path,
+    batch_id: str,
+    summary: pd.DataFrame,
+    baseline_ref: Optional[str],
+    report: ConvertReport,
+) -> Dict[str, object]:
+    """batch_meta.json 组装（契约 §2 全字段；指纹 = 附录 A 排除清单后的全键）。"""
+    data_state_files = sorted(source_dir.glob("data_state_*.json"))
+    data_state: Dict[str, object] = {}
+    if data_state_files:
+        try:
+            data_state = json.loads(data_state_files[-1].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            report.meta_notes["data_state_parse_error"] = str(exc)
+
+    config: Dict[str, object] = {}
+    code_state: Dict[str, object] = {}
+    arms: List[str] = []
+    if not summary.empty:
+        row = summary.iloc[-1]
+        for k in ("git_commit", "git_dirty"):
+            if k in summary.columns:
+                code_state[k] = str(row[k]) if pd.notna(row[k]) else None
+        fp_keys = config_fingerprint_keys(summary.columns.tolist())
+        config = {k: (row[k].item() if hasattr(row[k], "item") else row[k])
+                  for k in fp_keys if k in summary.columns and pd.notna(row[k])}
+        for switch, arm in _ARM_SWITCHES.items():
+            if switch in summary.columns and pd.notna(row[switch]) and bool(row[switch]):
+                arms.append(arm)
+    return {
+        "schema_version": 1,
+        "batch_id": batch_id,
+        "created_at": pd.Timestamp.now().isoformat(),
+        "host_mode": "backtest",  # WF OOS 回测批
+        "source": "converted_from_legacy_wf_batch",
+        "source_dir": str(source_dir),
+        "code_state": code_state,
+        "data_state": data_state,
+        "config": config,
+        "config_fingerprint": fingerprint(config),
+        "baseline_ref": baseline_ref,  # 契约 §2：A/B 实验臂必填，基线批为 null
+        "arms": arms,
+        "meta_notes": report.meta_notes,
+    }
+
+
+def _write_report(report: ConvertReport, target_root: Path) -> None:
+    """转换报告落盘（契约 §10 审计产物；批次目录外，不污染 runs schema 目录）。"""
+    target_root = Path(target_root)
+    target_root.mkdir(parents=True, exist_ok=True)
+    payload = asdict(report)
+    (target_root / f"{report.batch_id}.convert_report.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
+
+
+def _read_policy_lambda(
+    source_dir: Path, out_dir: Path, report: ConvertReport
+) -> Dict[int, Dict[str, float]]:
+    """收编 policy_lambda 台账（契约 §8.1 条件条款），返回 {折号: {YYYYMMDD: multiplier}}。"""
+    lambda_by_fold: Dict[int, Dict[str, float]] = {}
+    policy_lambda_files = sorted(source_dir.glob("policy_lambda_*.csv"))
+    if not policy_lambda_files:
+        return lambda_by_fold
+    pl = pd.read_csv(policy_lambda_files[-1], encoding="utf-8-sig")
+    _write_parquet(pl, out_dir / "policy_lambda.parquet")
+    report.files.append(
+        ConvertedFile(
+            source=policy_lambda_files[-1].name, target="policy_lambda.parquet",
+            rows_in=len(pl), rows_out=len(pl), sample_md5=_sample_md5(pl),
+        )
+    )
+    json_files = sorted(source_dir.glob("policy_lambda_*.json"))
+    if json_files:
+        (out_dir / "policy_lambda.json").write_text(
+            json_files[-1].read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    if {"date", "multiplier", "fold"} <= set(pl.columns):
+        pl = pl.copy()
+        pl["date_key"] = _norm_date_key(pl["date"])
+        for fold_no, grp in pl.groupby("fold"):
+            lambda_by_fold[int(fold_no)] = dict(
+                zip(grp["date_key"], grp["multiplier"].astype(float))
+            )
+    else:
+        report.meta_notes["policy_lambda.schema_unexpected"] = (
+            f"缺 date/multiplier/fold 列: {pl.columns.tolist()[:10]}"
+        )
+        logger.warning(f"policy_lambda 台账列不符契约 §8.1，λ 不 join 进 daily: {pl.columns.tolist()[:10]}")
+    return lambda_by_fold
+
+
+# ---- lot_id / daily 重建（契约 §5 例外条款 / §9 三态） ----
+
+
+def _consume_lots_fifo(
+    lots: List[Dict[str, object]], shares: float, sell_buy_date: object
+) -> Tuple[List[str], bool]:
+    """FIFO 消耗 lot 栈，返回 (消耗的 lot_id 列表, 是否与卖出行 buy_date 不一致)。"""
+    remaining = shares
+    consumed: List[str] = []
+    first_lot_buy_date = None
+    while remaining > 0 and lots:
+        head = lots[0]
+        if first_lot_buy_date is None:
+            first_lot_buy_date = head["buy_date"]
+        take = min(head["shares"], remaining)
+        consumed.append(head["lot_id"])
+        head["shares"] -= take
+        remaining -= take
+        if head["shares"] <= 0:
+            lots.pop(0)
+    violation = (
+        first_lot_buy_date is not None
+        and pd.notna(sell_buy_date)
+        and pd.notna(first_lot_buy_date)
+        and str(sell_buy_date) != str(first_lot_buy_date)
+    )
+    return consumed, violation
+
+
+def _rebuild_lot_id(trades: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    """按 FIFO 从 trades 重建 lot_id（v2 新增列，契约 §5），并交叉校验卖出行 buy_date。
 
     规则：每次 buy 开新 lot（lot_id = buy_date_序号）；sell 按最早买入日优先消耗；
-    卖出行回填被消耗的 lot_id（多 lot 消耗时用「首 lot」并标注）。
+    卖出行回填被消耗的 lot_id（多 lot 消耗时用「|」连接）。
+    交叉校验：卖出行自带 buy_date（引擎口径的真实买入日）与 FIFO 首消耗 lot 的
+    buy_date 不一致即计数（引擎到期/止损/止盈/补位卖出非严格 FIFO）——
+    返回 (trades, 不一致行数)，由调用方登记 `_meta.json: lot_id.fifo_violations`。
     """
     if "ts_code" not in trades.columns or "action" not in trades.columns:
-        return trades
+        return trades, 0
     trades = trades.copy()
     trades["lot_id"] = ""
+    violations = 0
     # 按 ts_code + trade_date 排序，逐股维护 lot 栈
     for ts_code, grp in trades.groupby("ts_code"):
         lots: List[Dict[str, object]] = []  # {lot_id, shares, buy_date}
@@ -423,25 +512,24 @@ def _rebuild_lot_id(trades: pd.DataFrame) -> pd.DataFrame:
                 lots.append({"lot_id": lot_id, "shares": row["shares"], "buy_date": row.get("buy_date")})
                 trades.at[idx, "lot_id"] = lot_id
             elif row["action"] == "sell":
-                # FIFO 消耗
-                remaining = row["shares"]
-                consumed: List[str] = []
-                while remaining > 0 and lots:
-                    head = lots[0]
-                    take = min(head["shares"], remaining)
-                    consumed.append(head["lot_id"])
-                    head["shares"] -= take
-                    remaining -= take
-                    if head["shares"] <= 0:
-                        lots.pop(0)
+                consumed, violation = _consume_lots_fifo(lots, row["shares"], row.get("buy_date"))
+                violations += int(violation)
                 trades.at[idx, "lot_id"] = "|".join(consumed) if consumed else ""
-    return trades
+    return trades, violations
 
 
 def _rebuild_daily(
-    trades: Optional[pd.DataFrame], snapshot: Optional[pd.DataFrame]
+    trades: Optional[pd.DataFrame],
+    snapshot: Optional[pd.DataFrame],
+    lambda_series: Optional[Dict[str, float]] = None,
 ) -> Optional[pd.DataFrame]:
-    """从 trades + 快照重建 daily.csv（契约 §8；R-06-#1）。"""
+    """从 trades + 快照重建 daily.csv（契约 §8）。
+
+    Args:
+        lambda_series: 政策层 λ 台账（{YYYYMMDD: multiplier}，来自 policy_lambda）；
+            给出时 exposure_lambda 按日 join（台账未覆盖日按未启用口径 1.0），
+            无台账恒 1.0（契约 §8：未启用恒 1.0）。
+    """
     if snapshot is None:
         return None
     daily = snapshot.groupby("trade_date").agg(
@@ -468,30 +556,8 @@ def _rebuild_daily(
     daily = daily.sort_values("trade_date").reset_index(drop=True)
     daily["nav"] = daily["total_value"] / daily["total_value"].iloc[0]
     daily["daily_return"] = daily["nav"].pct_change().fillna(0.0)
-    daily["exposure_lambda"] = 1.0  # 政策层未启用恒 1.0
+    if lambda_series:
+        daily["exposure_lambda"] = _norm_date_key(daily["trade_date"]).map(lambda_series).fillna(1.0)
+    else:
+        daily["exposure_lambda"] = 1.0  # 无政策层台账恒 1.0（契约 §8）
     return daily
-
-
-def _fingerprint(config: Dict[str, object]) -> str:
-    """配置指纹（附录 A fail-safe：规范化序列化 sha256 短指纹）。"""
-    import hashlib
-
-    norm = json.dumps(config, sort_keys=True, default=str, ensure_ascii=False)
-    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
-
-
-def _config_fingerprint_keys(all_cols: List[str]) -> List[str]:
-    """配置指纹键清单（附录 A fail-safe：全键 − 显式排除清单）。"""
-    exclude_exact = {
-        "wf_run_id", "batch_run_id", "batch_period_label", "registered_at",
-        "data_state_id", "git_commit", "git_dirty",
-        "data_daily_latest", "data_cs_train_latest", "data_dividend_coverage",
-    }
-    exclude_prefix = ("bt_total_return", "bt_annual_return", "bt_max_drawdown",
-                      "bt_volatility", "bt_sharpe", "bt_calmar", "bt_trading_days",
-                      "bt_start", "bt_end", "train_samples", "val_samples",
-                      "test_samples", "best_iteration", "key_")
-    return [
-        c for c in all_cols
-        if c not in exclude_exact and not any(c.startswith(p) for p in exclude_prefix)
-    ]

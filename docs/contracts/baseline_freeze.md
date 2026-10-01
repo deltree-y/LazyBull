@@ -102,12 +102,14 @@ P1.5 必须按多判据组合（配对 ΔCAGR 分布 + 亏损日频率/幅度 + 
 漏了回补构成项。P1.5 裁决报告附录必须做 +6.0pp 的**显式分解归因**（政策门控 / 回补 /
 窗口与配置各占多少），禁止把混合差值整体记在单一组件名下。
 
-## 附录 A：127 键配置指纹快照（F2 补，P0 评审 5-C——runs 契约附录 A 的唯一参照）
+## 附录 A：127 键配置指纹快照（F3 修订——runs 契约附录 A 的逐键对账基准）
 
 > 口径 = **全键入指纹 − 显式排除清单**（fail-safe 方向）；排除清单见本附录末尾。
-> 本快照是 runs_artifact_contract.md 附录 A 的落盘位置；P5a-1 转换器实现必须从此导入排除清单，禁止重写。
+> **唯一权威源 = 代码模块 `src/lazybull/v2/evidence/fingerprint_keys.py`**（F3 起）；
+> 本快照为 127 键逐键对账基准（`tests/test_v2_fingerprint_keys.py`），文档清单与代码
+> 不一致时以代码为准并回写本文档。
 
-**快照（127 键，自 B0/B1 批次 summary 表头提取；暂存登记，P5a-1 转换器落地时替换为代码导入）**：
+**快照（127 键，自 B0/B1 批次 summary 表头提取）**：
 
 ```
 说明, Top20_list, Top30_list, Top20_hit_rate, Top20_avg_return_median, Top20_lift_mean,
@@ -138,11 +140,13 @@ data_state_id, git_commit, git_dirty, data_daily_latest, data_cs_train_latest,
 data_dividend_coverage
 ```
 
-**排除清单（fail-safe 唯一例外，共 10 键不入指纹）**：
-`wf_run_id, batch_run_id, batch_period_label, data_state_id, git_commit, git_dirty,`
-`data_daily_latest, data_cs_train_latest, data_dividend_coverage` + 统计输出类前缀（`bt_*, *_samples, best_iteration*`，
-即 `bt_total_return, bt_annual_return, bt_max_drawdown, bt_volatility, bt_sharpe, bt_calmar, bt_trading_days,`
-`bt_start, bt_end, train_samples, val_samples, test_samples, best_iteration, best_iteration_floor_triggered`）。
+**排除清单（fail-safe 唯一例外；F3 勘误——补登 `registered_at` 与 `key_*`，与代码模块对齐）**：
+- 运行标识类（4 键）：`wf_run_id, batch_run_id, batch_period_label, registered_at`（F3 补登；
+  快照 127 键中无 `registered_at`——注册时元数据，不入 summary 表头）；
+- 数据/代码态（6 键）：`data_state_id, git_commit, git_dirty, data_daily_latest, data_cs_train_latest, data_dividend_coverage`；
+- 统计输出类：逐折回测指标 9 列（`bt_total_return, bt_annual_return, bt_max_drawdown, bt_volatility, bt_sharpe, bt_calmar, bt_trading_days,`
+  `bt_start, bt_end`）+ 训练产出（`train_samples, val_samples, test_samples, best_iteration, best_iteration_floor_triggered`）
+  + 信号层统计前缀 `key_*`（F3 补登：KEY_* 映射列，即快照的 `Top20_hit_rate` 等 9 键的转换后形态）。
 注：`bt_top_n` 等 `bt_*` 前缀中**仅统计输出**排除；`bt_top_n, bt_rebalance_freq, bt_initial_capital, bt_sell_timing,`
 `bt_exclude_st, bt_min_list_days, bt_max_weight_per_stock, bt_max_per_industry, bt_stop_loss_*` 等**配置键一律入指纹**。
 

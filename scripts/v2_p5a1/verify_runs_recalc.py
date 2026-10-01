@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """P5a-1 A3 验收（正式脚本，R-08 修复：脚本 + 报告 + 校验表三件套）。
 
-3 个历史实验批（holdertrade A1 / repurchase / top10fh）：
+3 个历史实验批（holdertrade A2 core / repurchase / top10fh，契约 §10 登记口径）：
 ① runs_convert 转换为 runs 契约 schema；② runs_loader 读入（证据机器通路）；
 ③ 链式全周期指标重算与历史报告登记值逐项比对；④ 产出校验表 CSV + 报告 JSON。
 
-产物落盘 data/reports/p5a1_a3_recalc_<date>.{json,csv}。
+产物落盘 data/reports/p5a1_a3_recalc_<date>.{csv,json}。
+
+勘误登记（v0.203.1）：v0.203.0 曾误用 holdertrade **B0 基线批**
+（phase4_ht_ab_20260917_base）错标 `holdertrade_A1_full` 验收；契约 §10 登记对象为
+A2 core 臂（phase4b_ht_core_20260917，报告 §7.2 值 15.147% / −25.09% / 0.6275），
+本次改回契约口径。
 
 用法：
     python scripts/v2_p5a1/verify_runs_recalc.py [--out-root temp/runs_converted]
@@ -32,15 +37,19 @@ from scripts.compare.fold_subset import (  # noqa: E402
 from src.lazybull.v2.evidence.runs_convert import convert_wf_batch  # noqa: E402
 from src.lazybull.v2.evidence.runs_loader import load_runs_batch  # noqa: E402
 
-# 验收批（P5a-1 契约登记的 3 个历史实验）
+# 验收批（P5a-1 契约 §10 登记的 3 个历史实验；holdertrade 为 A2 core 臂）
 BATCHES = {
-    "holdertrade_A1_full": ROOT / "data" / "walk_forward" / "batches" / "phase4_ht_ab_20260917_base" / "raw",
+    "holdertrade_A2_core": ROOT / "data" / "walk_forward" / "batches" / "phase4b_ht_core_20260917" / "raw",
     "repurchase_headroom": ROOT / "data" / "walk_forward" / "batches" / "phase4_rp_headroom_20260918" / "raw",
     "top10fh_concentration": ROOT / "data" / "walk_forward" / "batches" / "phase4_tfh_conc_20260919" / "raw",
 }
+# 三批的共同对照基线（契约 §2 baseline_ref；holdertrade A0 / repurchase B0 / top10fh B0
+# 均为同一批次，见 docs/*_wf_ab_result.md 批次表）
+BASELINE_REF = "phase4_ht_ab_20260917_base"
 # 历史报告登记的链式全周期值（docs/*_wf_ab_result.md，4 位小数截断）
 LEGACY_CHAIN = {
-    "holdertrade_A1_full": {"cagr": 0.1758, "max_drawdown": -0.2279, "sharpe": 0.7312},
+    # holdertrade_wf_ab_result.md §7.2（A2 core 臂）：15.147% / −25.09% / 0.6275
+    "holdertrade_A2_core": {"cagr": 0.1514, "max_drawdown": -0.2509, "sharpe": 0.6275},
     "repurchase_headroom": {"cagr": 0.1435, "max_drawdown": -0.2021, "sharpe": 0.6049},
     "top10fh_concentration": {"cagr": 0.1413, "max_drawdown": -0.2802, "sharpe": 0.5978},
 }
@@ -69,8 +78,8 @@ def main(argv=None) -> int:
             print(f"[{label}] 缺批次目录，跳过")
             all_ok = False
             continue
-        # ① 转换
-        report = convert_wf_batch(raw_dir, out_root, label)
+        # ① 转换（A/B 臂批登记 baseline_ref，契约 §2）
+        report = convert_wf_batch(raw_dir, out_root, label, baseline_ref=BASELINE_REF)
         # ② 证据机器读入（runs_loader 通路 + 读取不变量硬校验）
         try:
             batch = load_runs_batch(out_root / label)

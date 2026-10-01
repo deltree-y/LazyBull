@@ -9,6 +9,7 @@
 |---|---|---|---|
 | F1 | 2026-10-01 | 方案 v1.8 §4.1 / §8 + 基线批次（wf_batch_20260930_171221 / 172037）产物实测表头 | 首次落档 |
 | F2 | 2026-10-01 | P0 评审第二轮（5-A~5-E） | 补 topk_detail.csv schema（信号层尺子输入，卡 P5a-1）；trades 补 4 列映射 + policy_lambda 条件条款 + attribution 头部 3 列；附录 A 改 fail-safe 指纹口径 + baseline_freeze 补快照；重建标注位；文件缺失三态通则 |
+| F3 | 2026-10-01 | P5a-1 收尾独立检视（docs/review/p5a1_closeout_review_20261001.md CO-03/CO-04/CO-06） | 附录 A 排除清单与 baseline_freeze 双源不一致勘误（取并集口径，唯一代码承载 = `v2/evidence/fingerprint_keys.py`）；§9.2 对账容差实测登记；§9.8 daily/chain_nav 起止比对账补相对容差 1e-3（快照重建口径与引擎净值实测差 ~3e-4）；daily 无源缺失补 `daily.missing` 标注位 |
 
 ---
 
@@ -89,7 +90,10 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 ### 5.1 重建标注字段位（F2，P0 评审 5-D）
 
 - `lot_id` 重建标注 = **文件级 meta**：`folds/<split_id>/_meta.json` 的 `trades.lot_reconstructed=true`；
+  FIFO 重建与卖出行自带 `buy_date` 交叉校验的不一致计数记 `lot_id.fifo_violations`（F3 补；
+  引擎到期/止损/止盈/补位卖出非严格 FIFO，>0 即转换报告可见）；
 - `daily.csv` 重建标注 = 同文件 `daily.daily_reconstructed=true`（§9 通则 6）；
+  重建无源标注 = `daily.missing=true`（F3 补，§9 通则 6）；
 - 不加布尔列（行级标注会混入数值列，违背「字段级 schema 全 ASCII 且语义单一」）。
 
 ## 6. folds/<split_id>/attribution.csv（执行归因，字段级）
@@ -156,11 +160,14 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 3. `batch_meta.config_fingerprint` 重算一致；`data_state.data_state_id` 与逐折 summary 列一致。
 4. 同日同 `(action, ts_code)` 指令已在引擎内合并（账本内不得出现同日同股同向两行）；出现 ⇒ 报错（属引擎 bug，不是数据问题）。
 5. 文件名 / 字段名全 ASCII；发现中文字段 ⇒ 提示先跑转换器。
-6. 缺失 `daily.csv`（旧产物无此文件）⇒ 转换器从账本 + 快照重建，重建产物记 `_meta.json: daily.daily_reconstructed=true`。
+6. 缺失 `daily.csv`（旧产物无此文件）⇒ 转换器从账本 + 快照重建，重建产物记 `_meta.json: daily.daily_reconstructed=true`；
+   重建无源（快照缺失）⇒ 记 `_meta.json: daily.missing=true` 降级标注（F3 补，与 topk_detail.missing 同口径）。
 7. **列级校验（F2，P0 评审 5-B 通则）**：目标列集合 = 契约集合——转换器必须产出「源→目标映射 + **丢弃列清单**」，
    行数校验（源 vs 目标）之外，列集合不一致必须报错（静默丢列发现不了）。
 8. **跨折衔接（F2 补）**：chain_nav 后折首行日期 = 前折末行日期（折界重复点语义，不计入交易日数）；
-   daily 与 trades 交叉对账（`n_buys / n_sells` 与 trades 当日计数一致、末行 `total_value` 与 chain_nav 衔接）。
+   daily 与 trades 交叉对账（`n_buys / n_sells` 与 trades 当日计数一致、末行 `total_value` 与 chain_nav 衔接——
+   F3 补容差登记：折内 total_value 起止比 vs nav 起止比，相对容差 **1e-3**；
+   daily 自快照重建，与引擎净值存在实测 ~3e-4 稳定口径差）。
 
 ## 10. 转换器契约（旧 WF 产物 → 本 schema）
 
@@ -168,10 +175,20 @@ data/runs/<batch_id>/                 # batch_id = ASCII：<类型>_<YYYYMMDD>_<
 - 转换报告：行数校验（源 vs 目标）、字段映射表、抽样 md5（每文件 ≥3 行）一并产出。
 - 验收：P5a-1 用 3 个已登记历史实验（holdertrade A2 / repurchase / top10fh）重算与既有报表逐项一致——同时验收转换器与证据机器读入链路。
 
-## 附录 A：配置指纹键清单（F2 修订，P0 评审 5-C——fail-safe 方向）
+## 附录 A：配置指纹键清单（F3 修订——双源消歧，代码承载为唯一权威源）
 
 - **口径写死**：**全键入指纹 − 显式排除清单**（fail-safe；新增键默认进指纹，防「漏加进清单就逃逸校验」）。
-- **排除清单**（唯一例外，列全）：运行标识类（`wf_run_id, batch_run_id, batch_period_label, registered_at`）+
-  统计输出类（`bt_*, key_*, *_samples, best_iteration*`）。**任何其他键一律入指纹**。
-- **127 键快照**：以 `docs/contracts/baseline_freeze.md` 附录 A 为唯一参照（F2 补全——原悬空引用已修复）；
-  代码承载（独立模块 + 单测）随 P5a-1 转换器一并落地，实现必须从该快照导入排除清单，禁止重写。
+- **唯一权威源 = 代码模块 `src/lazybull/v2/evidence/fingerprint_keys.py`**（F3 起；
+  转换器 / 读入桥 / 对账测试一律从该模块导入，禁止重写；127 键逐键对账测试
+  `tests/test_v2_fingerprint_keys.py`）。
+- **排除清单**（F3 并集口径，消除 F2 与 baseline_freeze 快照的双源不一致）：
+  - 运行标识类（4）：`wf_run_id, batch_run_id, batch_period_label, registered_at`；
+  - 数据/代码态（6，batch_meta 专属字段承载）：`data_state_id, git_commit, git_dirty,`
+    `data_daily_latest, data_cs_train_latest, data_dividend_coverage`；
+  - 统计输出类：逐折回测指标 9 列（`bt_total_return, bt_annual_return, bt_max_drawdown,`
+    `bt_volatility, bt_sharpe, bt_calmar, bt_trading_days, bt_start, bt_end`——
+    **仅统计列**排除，`bt_top_n, bt_rebalance_freq` 等配置键一律入指纹）+
+    训练产出（`train_samples, val_samples, test_samples, best_iteration,`
+    `best_iteration_floor_triggered`）+ 信号层统计前缀（`key_*`，KEY_* 映射列）。
+- **127 键快照**：以 `docs/contracts/baseline_freeze.md` 附录 A 为参照（F3 起
+  排除清单语义以代码模块为准，快照为逐键对账基准）。

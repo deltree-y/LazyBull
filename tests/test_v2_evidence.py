@@ -335,6 +335,133 @@ class TestRunsConvert:
         assert report.row_check_pass is False
         assert "summary" in report.missing_required
 
+    def test_report_mapping_and_missing_visible(self, tmp_path):
+        """转换报告（契约 §10 审计产物）：真实映射表 + 缺列登记 + JSON 落盘。"""
+        import json
+
+        raw = _make_legacy_batch(tmp_path)
+        out_root = tmp_path / "runs"
+        report = convert_wf_batch(raw, out_root, "audit_batch")
+        # ① 映射表含 KEY_* → key_* 真实映射（rename 前构造，非恒等）
+        summary_rec = next(f for f in report.files if f.target == "summary.parquet")
+        assert summary_rec.mapping.get("KEY_Top20_hit_rate") == "key_top20_hit_rate"
+        # ② 中文诊断列真丢弃并进 dropped_columns
+        assert "KEY_说明" in summary_rec.dropped_columns
+        summary = pd.read_parquet(out_root / "audit_batch" / "summary.parquet")
+        assert "KEY_说明" not in summary.columns
+        # ③ contract_missing 是声明字段：trades 源缺 lot_id / tranche_idx（v2 新增列）
+        trades_rec = next(f for f in report.files if f.target == "trades.parquet")
+        assert "lot_id" in trades_rec.contract_missing
+        # ④ 报告 JSON 落盘且缺列登记可见（dataclass 序列化）
+        payload = json.loads((out_root / "audit_batch.convert_report.json").read_text(encoding="utf-8"))
+        trades_payload = next(f for f in payload["files"] if f["target"] == "trades.parquet")
+        assert "lot_id" in trades_payload["contract_missing"]
+
+    def test_extra_columns_truly_dropped(self, tmp_path):
+        """契约外多列：真丢弃（产物无该列）且进 dropped_columns——不错标。"""
+        raw = _make_legacy_batch(tmp_path)
+        trades_csv = next(raw.glob("walk_forward_trades_*.csv"))
+        df = pd.read_csv(trades_csv, encoding="utf-8-sig")
+        df["rogue_extra"] = 1  # 契约外列
+        df.to_csv(trades_csv, index=False, encoding="utf-8-sig")
+        out_root = tmp_path / "runs"
+        report = convert_wf_batch(raw, out_root, "drop_batch")
+        trades = pd.read_parquet(out_root / "drop_batch" / "folds" / "split00" / "trades.parquet")
+        assert "rogue_extra" not in trades.columns
+        trades_rec = next(f for f in report.files if f.target == "trades.parquet")
+        assert "rogue_extra" in trades_rec.dropped_columns
+
+    def test_missing_contract_columns_filled_na(self, tmp_path):
+        """源缺契约列 ⇒ 补 NA 对齐 schema + contract_missing 登记（loader 可全等校验）。"""
+        raw = _make_legacy_batch(tmp_path)
+        trades_csv = next(raw.glob("walk_forward_trades_*.csv"))
+        df = pd.read_csv(trades_csv, encoding="utf-8-sig")
+        df = df.drop(columns=["sell_reason", "trigger_type", "buy_type", "buy_reason"])
+        df.to_csv(trades_csv, index=False, encoding="utf-8-sig")
+        report = convert_wf_batch(raw, tmp_path / "runs", "na_batch")
+        rec = next(f for f in report.files if f.target == "trades.parquet")
+        for c in ("sell_reason", "trigger_type", "buy_type", "buy_reason"):
+            assert c in rec.contract_missing
+        from src.lazybull.v2.evidence.runs_schema import TRADES_CONTRACT_COLS
+
+        trades = pd.read_parquet(tmp_path / "runs" / "na_batch" / "folds" / "split00" / "trades.parquet")
+        assert trades.columns.tolist() == TRADES_CONTRACT_COLS  # 列序对齐契约
+
+    def test_daily_missing_marked(self, tmp_path):
+        """快照缺失 ⇒ daily 不产出且折级 _meta.json 标 daily.missing（降级可见）。"""
+        import json
+
+        raw = _make_legacy_batch(tmp_path)
+        for p in raw.glob("walk_forward_持仓快照_*.csv"):
+            p.unlink()
+        convert_wf_batch(raw, tmp_path / "runs", "no_snap")
+        fold_dir = tmp_path / "runs" / "no_snap" / "folds" / "split00"
+        assert not (fold_dir / "daily.parquet").exists()
+        meta = json.loads((fold_dir / "_meta.json").read_text(encoding="utf-8"))
+        assert meta.get("daily.missing") is True
+
+    def test_lot_id_fifo_violation_counted(self, tmp_path):
+        """非 FIFO 卖出（先卖后买的 lot）⇒ lot_id.fifo_violations 计数进 _meta.json。"""
+        import json
+
+        raw = _make_legacy_batch(tmp_path)
+        trades_csv = next(raw.glob("walk_forward_trades_*.csv"))
+        df = pd.read_csv(trades_csv, encoding="utf-8-sig")
+        # 构造非 FIFO：原买行改到 0102，追加 0103 第二买，卖行自带 buy_date=0103
+        # （引擎口径卖的是后买的 lot；FIFO 首消耗 0102 的 lot ⇒ 不一致 1 行）
+        df.loc[0, "date"] = 20240102
+        df.loc[0, "buy_date"] = 20240102
+        buy2 = df.iloc[0].copy()
+        buy2["date"] = 20240103
+        buy2["buy_date"] = 20240103
+        sell = df.iloc[0].copy()
+        sell["date"] = 20240104
+        sell["action"] = "sell"
+        sell["buy_date"] = 20240103
+        sell["sell_pnl_price"] = 10.5
+        sell["pnl_profit_amount"] = 45.0
+        sell["pnl_profit_pct"] = 0.045
+        sell["sell_type"] = "expiry"
+        sell["sell_timing"] = "close"
+        pd.concat([df, pd.DataFrame([buy2, sell])], ignore_index=True).to_csv(
+            trades_csv, index=False, encoding="utf-8-sig")
+        convert_wf_batch(raw, tmp_path / "runs", "fifo_batch")
+        meta = json.loads(
+            (tmp_path / "runs" / "fifo_batch" / "folds" / "split00" / "_meta.json").read_text(
+                encoding="utf-8"))
+        assert meta.get("lot_id.fifo_violations") == 1
+
+    def test_policy_lambda_joined_into_daily(self, tmp_path):
+        """政策臂批：有台账时 daily.exposure_lambda 按日 join（不再恒 1.0）。"""
+        raw = _make_legacy_batch(tmp_path)
+        pd.DataFrame({
+            "date": ["20240103"], "multiplier": [0.5], "mkt_vol_20": [0.2],
+            "p_loss_mean": [0.1], "holdings": [1], "weight_sum": [0.05],
+            "day_mean_return": [0.0], "event_rate": [0.1], "day_weighted_return": [0.0],
+            "loss_day": [True], "fold": [0],
+        }).to_csv(raw / "policy_lambda_x_0001.csv", index=False, encoding="utf-8-sig")
+        out_root = tmp_path / "runs"
+        convert_wf_batch(raw, out_root, "policy_batch")
+        assert (out_root / "policy_batch" / "policy_lambda.parquet").exists()
+        daily = pd.read_parquet(out_root / "policy_batch" / "folds" / "split00" / "daily.parquet")
+        assert daily["exposure_lambda"].iloc[0] == 0.5  # 台账日 join
+        assert daily["exposure_lambda"].isna().sum() == 0
+
+    def test_arms_and_baseline_ref(self, tmp_path):
+        """arms 按开关列**值**判定（列存在但 False 不计）；baseline_ref 透传 batch_meta。"""
+        import json
+
+        raw = _make_legacy_batch(tmp_path)
+        summary_csv = next(raw.glob("walk_forward_summary_*.csv"))
+        df = pd.read_csv(summary_csv, encoding="utf-8-sig")
+        df["enable_repurchase_features"] = False  # 列存在但值为假 ⇒ 不计入 arms
+        df["enable_holdertrade_features"] = True
+        df.to_csv(summary_csv, index=False, encoding="utf-8-sig")
+        convert_wf_batch(raw, tmp_path / "runs", "arms_batch", baseline_ref="b0_batch")
+        meta = json.loads((tmp_path / "runs" / "arms_batch" / "batch_meta.json").read_text(encoding="utf-8"))
+        assert meta["arms"] == ["holdertrade"]
+        assert meta["baseline_ref"] == "b0_batch"
+
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

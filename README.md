@@ -797,6 +797,21 @@ python scripts/compare_wf_signal_metrics.py --baseline <基线> \
 **只能用于筛选**（"这个改动是否真的动了信号"）；最终裁决仍以链式净值判据为准（**ΔMaxDD 为主判据**），
 且只对通过筛选的改动花 2 小时跑全量。首次标定（2026-09-17）见 `CHANGELOG.md` 0.122.0。
 
+**v2 证据机器通路（P5a-1，v0.203.x）：** 回测/实验产物以 runs 契约 schema 为准
+（`docs/contracts/runs_artifact_contract.md`），旧 walk-forward 批次经一次性转换器对齐，
+读入桥对契约 §9 不变量做硬校验（列集合/指纹重算/数据态/跨折衔接/daily-trades 对账等），
+信号层尺子固化为 `src/lazybull/v2/evidence/signal_ruler.py`（判据口径沿历史四轮：
+点估计破 ±10bps 噪声带或相对降幅 ≥9% ⇒ 不过尺）。A3 验收（3 个已登记历史实验
+转换 → 读入 → 链式重算与既有报表逐项一致）：
+
+```bash
+python scripts/v2_p5a1/verify_runs_recalc.py
+```
+
+产物 `data/reports/p5a1_a3_recalc_<日期>.{csv,json}`（校验表 + 报告）；转换器审计产物
+`<out_root>/<batch_id>.convert_report.json`（行数校验 / 字段映射表 / 丢弃列清单 /
+缺列登记 / 抽样 md5）。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）

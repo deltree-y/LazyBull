@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.1] - 2026-10-01
+
+### Fixed
+
+- **P5a-1 收尾专项检视修复**（`docs/review/p5a1_closeout_review_20261001.md` CO-01~CO-10 全量接受）：
+  - **CO-01（阻塞）A3 验收 holdertrade 批三重错位勘误**：0.203.0 误用 **B0 基线批**
+    （`phase4_ht_ab_20260917_base`）错标 `holdertrade_A1_full`（登记值 0.1758/−0.2279/0.7312
+    实为 B0 值；A1 真值 17.924%/−29.30%）——0.203.0「3 历史批全过」表述随之失真，
+    更正为「2 批（repurchase/top10fh）对臂值 + 1 批对基线值一致」。本次按契约 §10
+    登记口径改用 **A2 core 臂**（`phase4b_ht_core_20260917`，登记值取报告 §7.2：
+    0.1514/−0.2509/0.6275），重跑刷新 `data/reports/p5a1_a3_recalc_20261001.{csv,json}`；
+    错标产物已作废（勘误前不得引用其 holdertrade 行）。
+  - **CO-02（阻塞）信号层尺子恢复生产版配对硬校验**：`(split_index, trade_date)` 双键
+    outer 配对，未完全对齐必须报错（`allow_day_mismatch` 显式降级），`ruler_from_runs`
+    补两臂折集合 + 数据态 ID 校验（沿 `validate_alignment` 语义）；docstring 勘误——
+    如实登记「复用 `paired_day_mean_ci` 核心，配对与面板按生产 `signal_metrics.py`
+    语义重组装」，删除「薄封装、不复制公式」不实声明。
+  - **CO-03 配置指纹排除清单代码承载落地**（0.202.0 自列收尾任务补做）：新增
+    `v2/evidence/fingerprint_keys.py` 为唯一权威源（转换器/读入桥/测试一律导入，
+    禁止重写），127 键逐键对账测试 `tests/test_v2_fingerprint_keys.py`（解析
+    baseline_freeze 快照，漂移即失败）；两份契约附录 A 双源不一致勘误（F3 修订：
+    并集口径——补登 `registered_at` / `key_*`，`bt_*` 限定 9 个统计列、配置键入指纹）。
+  - **CO-04 runs_loader 契约 §9 全量硬校验**（原实现仅约 3/8 且 docstring 虚假声明）：
+    补 §9.2 严格递增（重复日期不再漏放）+ `bt_total_return` 折内对账（容差 1e-6）、
+    §9.3 指纹重算 + 数据态 ID 一致、§9.4 同日同 (action, ts_code) 重复报错、§9.7
+    列集合全等校验（契约列集常量见新增 `v2/evidence/runs_schema.py`，与转换器共用
+    单一来源）、§9.8 跨折 nav 衔接 + daily/trades 交叉对账（起止比相对容差 1e-3，
+    实测快照重建口径差 ~3e-4，已登记契约 F3）；folds/ 目录与 trades 缺失报错
+    （契约三态「必须报错」原被静默跳过）。
+  - **CO-05 转换报告三处失真**：契约外多列**真丢弃**（原错标 dropped 实际写入目标）、
+    字段映射表改在 rename 前构造（原恒等映射不含 KEY_*→key_* 实际映射）、
+    `contract_missing` 升为 `ConvertedFile` 声明字段并随转换报告落盘
+    `<out_root>/<batch_id>.convert_report.json`（批次目录外，保持 runs 目录契约纯净）。
+  - **CO-06 lot_id/daily 重建加固**：FIFO 重建与卖出行自带 `buy_date` 交叉校验，
+    不一致计数记 `_meta.json: lot_id.fifo_violations`；有 policy_lambda 台账时
+    daily.exposure_lambda 按日 join（原恒 1.0 对政策臂是错误值）；快照缺失时
+    daily 不产出并标注 `daily.missing=true`（与 topk_detail 降级同口径）。
+  - **CO-07 尺子判据口径对齐历史四轮**：阻断恢复**点估计**口径（Δ ≤ −10bps 或相对
+    降幅 ≥9%），95% 区间按块长敏感性 20/40/60 三档报告仅作可读性参考；Δ命中率
+    ±0.6pp 噪声带只作带内/超带标注不进判定（历史从未以命中率阻断）；
+    `RELATIVE_GATE` 注释修正（原注释与代码语义相反）。
+  - **CO-08 杂项**：全折缺 topk_detail 时报契约降级错误（原 pandas 原生 concat 错误
+    使降级分支不可达）；`arms` 按全部已知实验臂开关的**值**判定（原只查
+    `enable_repurchase_features` 一列的存在性）；`convert_wf_batch` 新增
+    `baseline_ref` 参数（契约 §2「A/B 实验必填」，A3 三批登记 `phase4_ht_ab_20260917_base`）；
+    尺子面板补 `rank <= topk` 过滤与必需列存在性校验（对齐生产）。
+  - **CO-09/CO-10 测试与文档**：runs_loader 新增 17 项硬校验测试（原零测试）；
+    转换器报告内容/λ join/arms/baseline_ref/FIFO 违规等 7 项断言；尺子重写为 14 项
+    （含点估计口径锁定与两臂校验）；CLAUDE.md §3.1 补 `src/lazybull/v2` 目录职责、
+    v2 契约区条目登记 P5a-1 交付物；README 补 A3 验收脚本使用说明。
+
+### Changed
+
+- 版本号 0.203.0 → 0.203.1（P5a-1 收尾检视修复：阻塞 2 项 + 契约/验收级 5 项 + 杂项 3 项全落地）。
+
 ## [0.203.0] - 2026-10-01
 
 ### Added
