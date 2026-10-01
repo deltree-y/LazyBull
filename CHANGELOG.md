@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.201.3] - 2026-10-01
+
+### Fixed
+
+- **P5a-1 外部评审修复（A1~A4 全部接受）**：
+  - **A1（最重要）功效标定构造缺陷**：等值平移把 Δ 分布宽度构造没了（实测自证矛盾：
+    等值平移 +1pp 检出 ≈100%，而真实 B0 vs B1 +1.78pp 不可区分 P=0.78）⇒ 改**真实换种子
+    噪声驱动**（首选 `arm = B0 + (B0′−B0) + δ`，B0′=seeds 43,62,83 批在库；备选 block
+    bootstrap 代理并标注 `noise_source`）；检出判据覆盖**双指标**（ΔCAGR + ΔMaxDD 北极星）。
+    **真实口径实测**：+1/+2/+5pp 双指标检出概率全 0%——尺子的真实刻度（功效不足），
+    一次性修订窗口与 P1.5 fallback 不再被短路。
+  - **A2 判据自洽性未真实发生**：恒等对照平凡通过 ⇒ 接真实换种子批（`arm_a_alt_seed`），
+    恒等自检标注「不作数」（`seed_swap_is_real=False` 且 criterion_passes 恒 False）；
+    双指标标定函数 `criterion_self_consistency_dual`。
+  - **A3「3 个历史实验重算一致」验收完成（3/3）**：holdertrade_A1 / repurchase / top10fh
+    三批转换（各 58 文件、行数校验过）+ 证据机器读入 + 链式全周期指标重算与历史报告一致
+    （差异 ~1e-5，4 位小数截断内）+ 逐折收益路径一致。**口径登记**：逐折年化 bt_annual_return
+    是展示口径（含日化因子差异），链式全周期才是裁决口径；转换产物数值逐位不动已验证。
+  - **A4 台账契约第一执行阶段即被违反**：建 `data/ledger/hypotheses.jsonl`（git 跟踪，
+    契约 7-B）；补登 P1.5 裁决规则 prereg（H-P1.5-policy-layer-adjudication，含主判据衔接
+    注记 / 噪声带标定出处 / fallback）；B0/B1 配对重排证据落盘
+    `data/reports/p5a1_B0_B1_paired_regime_20261001.json` 并被 prereg 的 conclusion 条目引用。
+
 ## [0.201.2] - 2026-10-01
 
 ### Added

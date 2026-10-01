@@ -98,30 +98,38 @@ class TestPowerCalibration:
         #（判定目标是「抬升方向正确且量级吻合」，不是精确复现名义值）
         assert m_shift["cagr"] - m_base["cagr"] == pytest.approx(0.02, abs=0.006)
 
-    def test_power_curve_monotone(self):
-        """功效曲线：+5pp 检出概率应 ≥ +1pp（同 seed 配对）"""
+    def test_power_curve_real_noise_low_detection(self):
+        """真实噪声口径（A1 修复后）：block bootstrap 代理下小位移检出率低（不再系统性 100%）。
+
+        A1 核心：等值平移构造 Δ 波动为 0 ⇒ 检出率虚高；改噪声驱动后，+1pp 在真实/代理
+        噪声宽度下检出率应显著低于 100%（尺子的真实刻度）。
+        """
         a = _make_run("A", seed=3, n_splits=6, days_per_split=40)
         points = power_calibration_curve(
             a, splits=[0, 1, 2, 3, 4, 5], shift_grid_pp=(1.0, 5.0), n_boot=200, seed=11
         )
         assert len(points) == 2
-        assert points[1].shift_annual_pp == 5.0
-        assert points[1].detection_prob >= points[0].detection_prob
+        assert points[0].noise_source == "block_bootstrap_proxy"  # 无换种子批 ⇒ 代理口径
+        # 代理噪声下 +1pp 检出率应 < 100%（修复前等值平移恒为 100%）
+        assert points[0].detection_prob_cagr < 1.0
+        # 双指标字段存在（A1：覆盖北极星 ΔMaxDD）
+        assert hasattr(points[0], "detection_prob_maxdd")
 
 
 # ========== 判据自洽性 ==========
 
 
 class TestCriterionSelfConsistency:
-    def test_identity_passes_self_check(self):
-        """arm_a_alt_seed=None（恒等自检）⇒ 换种子不可区分必为 True"""
+    def test_identity_self_check_marked_not_counted(self):
+        """arm_a_alt_seed=None（恒等自检）⇒ 不作数：criterion_passes 恒 False 并标注。"""
         a = _make_run("A", seed=4)
         res = criterion_self_consistency(
             a, None, splits=[0, 1, 2, 3], shift_pp=2.0, n_boot=200, seed=5
         )
-        assert res.seed_swap_indistinguishable is True  # 恒等对照
-        assert res.shifted_detectable is True  # +2pp 应可检出
-        assert res.criterion_passes is True
+        assert res.seed_swap_indistinguishable is True  # 恒等对照 Δ 恒 0
+        assert res.seed_swap_is_real is False  # 非真实换种子批
+        assert res.criterion_passes is False  # 恒等自检不作数（A2）
+        assert "恒等自检" in res.note
 
     def test_no_shift_may_fail_detection(self):
         """shift_pp=0（无改进）⇒ 可检出性应为 False（判据不把零改进当改进）"""
@@ -131,6 +139,18 @@ class TestCriterionSelfConsistency:
         )
         assert res.shifted_detectable is False
         assert res.criterion_passes is False
+
+    def test_real_seed_swap_populates_result(self):
+        """真实换种子批（独立 seed 合成）⇒ seed_swap_is_real=True，结果字段齐全。"""
+        a = _make_run("A", seed=4)
+        a_alt = _make_run("A'", seed=99)  # 不同 seed 的独立噪声实现（合成换种子对照）
+        res = criterion_self_consistency(
+            a, a_alt, splits=[0, 1, 2, 3], shift_pp=2.0, n_boot=200, seed=5
+        )
+        assert res.seed_swap_is_real is True
+        # 真实噪声下 criterion_passes 由分布决定（不预设方向），但字段必须齐全
+        assert isinstance(res.seed_swap_indistinguishable, bool)
+        assert isinstance(res.shifted_detectable, bool)
 
 
 # ========== runs 转换器 ==========
