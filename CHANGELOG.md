@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.201.2] - 2026-10-01
+
+### Added
+
+- **P5a-1 证据机器·核心（只读，与 P1 并行）落地**：`src/lazybull/v2/evidence/` 四模块——
+  - `regime_resample.py`（**配对制度重排**，裁决唯一口径：两臂共用同一折排列集比较 Δ 分布；
+    复用生产 `scripts/compare/fold_subset.py::per_fold_returns + chain_metrics_from_fold_returns`
+    配对骨架，不复制公式）；
+  - `power_calibration.py`（**功效标定**：折内日收益等值平移构造合成臂 +1/+2/+5pp，
+    配对口径下读检出概率；构造规则预登记写死，所有分布标注有效自由度 ≈ 折数级）；
+  - `criterion_calibration.py`（**判据自洽性标定**：A vs A 换种子应判不可区分、+2pp 平移应判
+    可检出；基准袖过不了的判据不得用于裁决——喂 metrics_v1 一次性修订窗口与 P1.5 fallback）；
+  - `runs_convert.py`（**旧 WF 产物 → runs 契约 F2 一次性转换器**：数值逐位不动、KEY_* 转小写、
+    中文快照表头映射、topk_detail 缺失降级标注、batch_meta 从 data_state 带入、行数校验 +
+    字段映射 + 丢弃列清单 + 抽样 md5 转换报告）。
+  - **真实产物冒烟通过**：转换器跑 repurchase 历史批（58 文件、行数校验过）；配对重排跑
+    B0 vs B1（14 折）——ΔMaxDD 中位 +4.89pp / P(Δ>0)=0.98 / 95%区间 [+0.28pp, +10.49pp]（下界 >0），
+    Δ夏普 P(Δ>0)=1.00；ΔCAGR 中位 +1.78pp / P=0.78 / 区间跨 0（[-3.00pp, +6.51pp]）——
+    **第一组配对口径证据：B1 政策层在回撤与夏普维度显著占优，但 CAGR 维度不可区分**（喂 P1.5）。
+  - 测试：`tests/test_v2_evidence.py` 9 项全过（配对性自检 / 平移可检出 / 转换器字段映射 /
+    缺失三态 / 行数校验）。
+
+## [0.201.1] - 2026-10-01
+
+### Added
+
+- **P1 数据底座开工——ensure 可复现性探测（口径 A）完成**：
+  - 探针 `scripts/v2_p1/probe_ensure_repro.py`（只读、不触发下载/重建）；
+    结论报告 `docs/v2_p1_ensure_repro_probe.md`。
+  - **实测约束登记**：cs_infer 按设计只滚动保留最新交易日（单日快照），方案原文
+    「抽 3 个月分区比对」在产物层不可行 ⇒ 拆口径 A（同日比对，已执行）与口径 B
+    （历史区间重放，登记为 P1 后续任务、机器时间另申请）。
+  - **口径 A 结果（20260702，5158 行交集）**：非截面口径列逐值一致率 100%（0 漂移）
+    ⇒ **可复现**；两类预期内差异单列登记——截面口径差异 104 列（zscore_*_sz 全族 +
+    vol_regime_percentile，批量全市场截面 vs 单日可得截面的边界差异，属 R1-4 已登记的
+    构建窗口口径漂移、非实现 bug）+ 运行时派生列 24 列（三族契约设计）。
+  - **对 P1 回填的约束**：单表 features 构建器必须冻结截面口径（全市场统一截面），
+    否则回填携带同类口径位移；写进 P1 回填的「构建窗口口径冻结」前置。
+
 ## [0.201.0] - 2026-10-01
 
 ### Changed
