@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.3] - 2026-10-01
+
+### Changed
+
+- **v2 §5 一次性修订窗口执行（方案 F7 草案，拍板 A1/B1/C1）**：P5a-1 功效标定与判据
+  自洽性产出后，metrics_v1 预留的一次性修订窗口执行一次并关闭——
+  - **密网格功效标定补测**（决策 B1）：`data/reports/p5a1_power_calibration_densegrid_20261001.json`
+    （网格 {2,5,8,10,12,15}pp；同种子同配置，前 3 档与既有产物逐位复现 ✓）。
+    ΔCAGR 检出频率 5%/20%/50%/75%/85%/100%，ΔMaxDD 0%/5%/5%/10%/20%/25%。
+  - **12pp 档判据自洽性确认**（决策 C1）：`data/reports/p5a1_criterion_consistency_12pp_20261001.json`
+    ——ΔCAGR 换种子不可区分 ✓ + 检出频率 85% ≥80% ✓ **通过**；ΔMaxDD 25% 不通过
+    （平移型改进不改回撤结构，低检出属尺子的正确行为，裁决域 = 回撤型改进）。
+    **口径说明**：12pp 档 ΔMaxDD 在 densegrid 网格运行 = 20%、本单档运行 = 25%——
+    同种子同 M/n_boot，差异来自 RNG 流消耗顺序，M=20 频率分辨率内一致，引用以 densegrid 为准。
+  - **方案 F7**（`docs/contracts/v2_architecture_plan.md` v1.13，经两轮评审收口后生效——
+    首轮 A-1~B-3、第二轮 F7R-01~06）：
+    ① §5 主判据补**功效适用域**明文（配对 ΔMaxDD 裁决域 = 回撤型改进；收益型改进走配对
+    ΔCAGR + §0.3 通道分派）；② §3.5 **MDE 层级表定稿**（袖内净值 5pp→**12pp** = 80% 检出点、
+    跨袖与组合层 5~8pp+→**≥12pp**、标定网格 {2,5,8,10,12,15}pp 定稿）+ §5 副判据噪声带
+    实测化（<8pp 不作裁决性精读）；③ §3.2 准入判据①自洽性平移档 2pp→**12pp** +
+    净值层受理门槛（承诺效应 <MDE 的候选走信号层尺子 / 影子否决线 / 台账跨季累积）；
+    ④ 评审收口（F7R-01）：§3.5 出厂曲线与 §8.1-M2 ⑥ 残留「+1/+2/+5pp」改引定稿网格。
+  - **台账决议条目** `H-v2-metrics-revision-window-20261001`（append-only，
+    supersedes `H-P5a1-calibration-correction-20261001`）；**P1.5 衔接确认**：原 2pp 档
+    功效不足 ⇒ prereg 的 fallback 已触发，P1.5 按预登记走结构判据 + R-007 定性裁决并
+    登记「统计不可裁决」。
+  - **决策记录落盘** `docs/review/v2_revision_window_f7_decision_20261001.md`（append-only，
+    含 A/B/C 全量备选集与落选理由、复现命令勘误（补 `--shift-pp 12`）与分节产物口径登记；
+    待办两项——回撤型功效刻度缺口 → P5b、`run_power_calibration.py` 输出后缀参数化 +
+    分节/命名输出 → P5a-2；末节附第二轮独立复核 F7R-01~06 处理记录）。
+  - F7R-05 残留旧标尺文本：`README.md` / `.github/copilot-instructions.md` 本次补注记
+    （指向 v2 §3.5 定稿）；`scripts/` 三处输出文本属代码，随后续小版本随附注记（决策记录 §6.6）。
+  - 术语库同步（噪声带 / MDE / MDE 层级表 / 功效标定**四条**）；CLAUDE.md v2 契约区与
+    v0.120.0 噪声带条目同步注记；`docs/contracts/README.md` 目录表登记 F7 草案。
+
 ## [0.203.2] - 2026-10-01
 
 ### Changed

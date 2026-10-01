@@ -9,7 +9,7 @@
 
 | 文件 | 内容 | 状态 |
 |---|---|---|
-| [v2_architecture_plan.md](v2_architecture_plan.md) | v2 架构方案（F6 = v1.12；P5a-1 R-09 合成臂构造修正 + 单文件制；原名 `v2_architecture_plan_frozen.md`，2026-10-01 更名去 frozen 后缀） | **已生效（2026-10-01，F6）** |
+| [v2_architecture_plan.md](v2_architecture_plan.md) | v2 架构方案（**F7 = v1.13**：§5 一次性修订窗口执行——主判据功效适用域 + MDE 袖内净值 12pp 定稿 + 准入判据①档位 2pp→12pp，经两轮评审收口；原名 `v2_architecture_plan_frozen.md`，2026-10-01 更名去 frozen 后缀） | **已生效（2026-10-01，F7）** |
 | [protocols.md](protocols.md) | 模块协议层（F6 = v0.7 内容零变更，载体合并；§11 对照表已打钩 22/22 + 止盈行 + 双层归属） | **已生效（2026-10-01，F6）** |
 | [baseline_freeze.md](baseline_freeze.md) | 基线双臂冻结（B0/B1 配置指纹 + 逐折收益路径 + 附录 A 127 键快照） | **已生效（2026-09-30 冻结，2026-10-01 随 P0 确认）** |
 | [runs_artifact_contract.md](runs_artifact_contract.md) | runs 产物契约（账本 / 逐日明细 / 报告字段级 schema + 转换器契约 + topk_detail + policy_lambda 条件条款） | **已生效（2026-10-01 P0 确认）** |
