@@ -151,6 +151,17 @@ class TestRulerVerdict:
         assert "超带" in v.note
         assert v.passes is True  # 命中率不进判定（Δ收益为正 ⇒ 过尺）
 
+    def test_nan_value_not_misreported_as_misalignment(self):
+        """键对齐但值 NaN（某日 true_return 全缺）⇒ 不误报未对齐；
+        NaN 日由下游分块自举剔除（生产 n_days_dropped 语义）。"""
+        days = pd.date_range("2024-01-01", periods=30).strftime("%Y%m%d")
+        base = _mk_topk(days, seed=1, ret_mean=0.001)
+        arm = _mk_topk(days, seed=1, ret_mean=0.001)
+        arm.loc[arm["trade_date"] == days[5], "true_return"] = np.nan  # 键在、值全缺
+        v = ruler_verdict(base, arm, topk=20, block_days_list=[5], seed=1)
+        assert v.n_signal_days == 30  # 配对键全保留（不误报、不缩样本）
+        assert np.isfinite(v.delta_return_bps)  # NaN 日已被下游剔除，裁决正常产出
+
 
 # ---- ruler_from_runs（经 runs_loader 全校验） ----
 

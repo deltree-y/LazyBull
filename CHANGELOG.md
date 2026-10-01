@@ -49,9 +49,14 @@ All notable changes to this project will be documented in this file.
     `baseline_ref` 参数（契约 §2「A/B 实验必填」，A3 三批登记 `phase4_ht_ab_20260917_base`）；
     尺子面板补 `rank <= topk` 过滤与必需列存在性校验（对齐生产）。
   - **CO-09/CO-10 测试与文档**：runs_loader 新增 17 项硬校验测试（原零测试）；
-    转换器报告内容/λ join/arms/baseline_ref/FIFO 违规等 7 项断言；尺子重写为 14 项
+    转换器报告内容/λ join/arms/baseline_ref/FIFO 违规等 7 项断言；尺子重写为 15 项
     （含点估计口径锁定与两臂校验）；CLAUDE.md §3.1 补 `src/lazybull/v2` 目录职责、
-    v2 契约区条目登记 P5a-1 交付物；README 补 A3 验收脚本使用说明。
+    v2 契约区条目登记 P5a-1 交付物、技术栈表依赖勘误（PyArrow ^25→^21、
+    black ^22.10→^24.0，与 pyproject.toml 对齐）；README 补 A3 验收脚本使用说明。
+  - **复核轻微项（review §4）**：`_pair_panels` 改**按键**判对齐（键不一致才报错；
+    键对齐但值 NaN 的行保留，交 `paired_day_mean_ci` 剔除并计 `n_days_dropped`——
+    与生产 `align_panels` 语义逐点对齐，消除「值缺日误报未对齐」偏差）；A2 cagr 登记值
+    0.1514 为 4 位截断口径（与脚本既有三条登记值同口径，Δ<1e-4 容差内，维持不改）。
 
 ### Changed
 

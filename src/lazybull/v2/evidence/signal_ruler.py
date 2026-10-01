@@ -88,23 +88,28 @@ def _daily_topk_hit_rate(topk_df: pd.DataFrame, topk: int) -> pd.Series:
 def _pair_panels(
     base_ret: pd.Series, arm_ret: pd.Series, allow_day_mismatch: bool
 ) -> tuple:
-    """(split_index, trade_date) 双键 outer 配对；未完全对齐报错（生产 align_panels 语义）。"""
-    merged = pd.concat(
-        [base_ret.rename("base"), arm_ret.rename("arm")], axis=1, join="outer"
-    )
-    both = merged.dropna()
-    if len(both) != len(base_ret) or len(both) != len(arm_ret):
-        only_base = len(base_ret) - len(both)
-        only_arm = len(arm_ret) - len(both)
+    """(split_index, trade_date) 双键**按键**配对（生产 align_panels 语义）。
+
+    对齐判定只看键（等价生产 merge indicator）：键不一致 ⇒ 报错（配对设计失效，
+    `allow_day_mismatch` 显式降级为告警）；**键对齐但值为 NaN 的行保留**，
+    由下游 `paired_day_mean_ci` 剔除并计 `n_days_dropped`（不用 dropna 判对齐，
+    否则「true_return 全缺的信号日」会被误报为未对齐）。
+    """
+    missing_in_arm = base_ret.index.difference(arm_ret.index)
+    missing_in_base = arm_ret.index.difference(base_ret.index)
+    if len(missing_in_arm) or len(missing_in_base):
         message = (
-            f"两臂逐日面板未完全对齐（仅基线有 {only_base} 行，仅臂有 {only_arm} 行）——"
-            "折集合/窗口/股票池不同则配对设计失效"
+            f"两臂逐日面板未完全对齐（仅基线有 {len(missing_in_arm)} 行，仅臂有 "
+            f"{len(missing_in_base)} 行）——折集合/窗口/股票池不同则配对设计失效"
         )
         if allow_day_mismatch:
             logger.warning(message)
         else:
             raise ValueError(message)
-    return both["base"], both["arm"]
+    common = base_ret.index.intersection(arm_ret.index)
+    if len(common) == 0:
+        raise ValueError("两臂无共同信号日——无法配对")
+    return base_ret.loc[common], arm_ret.loc[common]
 
 
 def ruler_verdict(
