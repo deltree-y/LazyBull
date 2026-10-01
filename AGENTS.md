@@ -193,6 +193,6 @@ pytest tests/ --cov=src/lazybull         # 覆盖率（目标 > 80%）
 - `CLAUDE.md` — **代理权威契约库**（目录职责、数据流、全部设计契约、开发规范、命令清单）。
 - `README.md` — 项目介绍与完整使用文档（各工具命令、口径说明）。
 - `CHANGELOG.md` — 版本变更唯一记录。
-- `docs/data_contract.md` / `docs/backtest_assumptions.md` / `docs/features_schema.md` — 数据契约、回测假设、特征标签定义。
+- `docs/data/data_contract.md` / `docs/guide/backtest_assumptions.md` / `docs/data/features_schema.md` — 数据契约、回测假设、特征标签定义。
 - `docs/contracts/` — v2 契约区；`docs/plans/` — 本地计划（gitignore）；`docs/review/` — 检视意见。
 - `docs/terminal_loss_risk_register.md` — terminal_loss 风险登记（事实/根因/影响/缓解/复审）。

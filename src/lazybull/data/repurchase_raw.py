@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """repurchase（股票回购）raw 层：拉取、水位、按年分区落盘。
 
-Phase 0 审计结论见 `docs/repurchase_pit_audit.md`，实现必须遵守：
+Phase 0 审计结论见 `docs/data/repurchase_pit_audit.md`，实现必须遵守：
 
 - **单页 2000 行（per-request）**：不传 `limit/offset` 时**不报错**、只返回最新 2000 行
   （实测 2022 全年真实 6,034 行，不翻页丢 67%）⇒ 必须分页读到返回空（触顶页继续翻）；

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """十大流通股东因子（factors/top10_floatholders.py）与 handler 的专项测试。
 
-口径要点（见 `docs/top10_floatholders_pit_audit.md` §6 口径定稿）：
+口径要点（见 `docs/data/top10_floatholders_pit_audit.md` §6 口径定稿）：
 - 同 `(ts_code, end_date, ann_date, holder_name)` 多行 ⇒ 取 `hold_amount` 最大行；
 - 组内按 `hold_amount` 降序取前 10 行；
 - 长线机构按 `holder_type` **整串相等**白名单（`金融机构—证券公司`/`公益基金`/`保险公司` 不得误纳）；

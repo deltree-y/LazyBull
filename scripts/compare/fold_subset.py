@@ -249,7 +249,7 @@ def bootstrap_delta(
     """折级自举的 Δ 区间与预登记判定（对折做有放回重采样）。
 
     重采样单位 = 完整折（14 折为 14 个制度），每轮把抽中的折按原口径重建成链式净值后重算指标。
-    判定（与 ``docs/factor_pruning_ab_protocol.md`` 预登记一致）：
+    判定（与 ``docs/experiments/factor_pruning_ab_protocol.md`` 预登记一致）：
     ① ΔCAGR > 0 且自举 95% 区间下限 > 0；② Δ夏普 > 0 且下限 > 0；
     ③ Δ最大回撤 ≥ 0（不得牺牲）；④ 逐折收益同向折数 ≥ ``align_criteria_ratio`` × 折数。
     """

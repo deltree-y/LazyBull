@@ -318,5 +318,5 @@ horizon: 10  # 新增字段
 ## 参考资料
 
 - 相关 Issue：horizon 写死导致训练回测不一致
-- 相关文档：`docs/paper_trading_guide.md`
+- 相关文档：`docs/guide/paper_trading_guide.md`
 - 测试文件：`tests/test_multi_horizon_labels.py`（多 horizon 标签测试）

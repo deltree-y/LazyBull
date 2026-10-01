@@ -146,6 +146,6 @@ python scripts/train_ml_model.py --start-date 20230101 --end-date 20231231 \
 - `pyproject.toml`：`0.11.0` -> `0.12.0`
 - `README.md`：更新当前版本描述
 - `CHANGELOG.md`：新增 v0.12.0 条目
-- `docs/features_schema.md`：更新行业字段说明（sw_industry* 命名）
+- `docs/data/features_schema.md`：更新行业字段说明（sw_industry* 命名）
 - `docs/PR/sw_industry_l2_and_rank_weight.md`：本文档
 - `docs/guide/rank_weight_guide.md`：rank-weight 使用与验证指南

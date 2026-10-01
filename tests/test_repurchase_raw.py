@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """repurchase（股票回购）raw 层（分页下载 / 去重 / 年分区 / 水位）专项测试。
 
-对照 Phase 0 审计（`docs/repurchase_pit_audit.md`）：单页上限 2000、offset 可翻页、
+对照 Phase 0 审计（`docs/data/repurchase_pit_audit.md`）：单页上限 2000、offset 可翻页、
 跨页重复、无自然唯一键（`ts_code+ann_date` 可重复）、`ann_date` 为唯一 PIT 锚点。
 """
 

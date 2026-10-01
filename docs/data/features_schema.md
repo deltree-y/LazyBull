@@ -622,4 +622,4 @@ model.fit(X, y)
 - [XGBoost官方文档](https://xgboost.readthedocs.io/)
 - [因子扩展开发指南](./guide/factor_extension.md)
 - 项目README: `README.md`
-- 数据契约: `docs/data_contract.md`
+- 数据契约: `docs/data/data_contract.md`

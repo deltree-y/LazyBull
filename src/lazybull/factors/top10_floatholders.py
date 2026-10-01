@@ -1,7 +1,7 @@
 """十大流通股东因子模块（top10_floatholders）。
 
 数据来源：TuShare `top10_floatholders`（Phase 0 审计与 **Phase 2 口径定稿**见
-`docs/top10_floatholders_pit_audit.md` §5.1 / §6），raw 按 `end_date`（报告期）年分区落盘
+`docs/data/top10_floatholders_pit_audit.md` §5.1 / §6），raw 按 `end_date`（报告期）年分区落盘
 （`data/raw/top10_floatholders/YYYY-12-31.parquet`）。
 
 **PIT 契约**：`ann_date` 是唯一可用时间（缺失 0%，且实测 `ann_date ≥ end_date`）；T 日可见 =
@@ -72,7 +72,7 @@ TOP10FH_SCHEMA_VERSION = 1
 #: 列集开关取值（**超参签名维度**，禁止跨取值并组比较）
 #: - full：6 个值列 + freshness + 哨兵；
 #: - concentration：**单列** `tfh_concentration_chg` + 哨兵
-#:   （依据 Phase 3 体检：家族内仅该列有强信息，且正交；见 `docs/top10_floatholders_factor_health.md`）。
+#:   （依据 Phase 3 体检：家族内仅该列有强信息，且正交；见 `docs/reports/top10_floatholders_factor_health.md`）。
 #:   注意：`concentration` **不含 freshness**——`tfh_freshness_days` 与 `fundamental_freshness_days`
 #:   实测 ρ=0.999（同一“报告新鲜度”轴），且其为全市场覆盖而**不会**被缺失率门禁自动删除，
 #:   纳入会把测试变成“1 值列 + 1 重复列”，不得作为单列对照（口径定稿 §6.6）。

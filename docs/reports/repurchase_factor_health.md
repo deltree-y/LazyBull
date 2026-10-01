@@ -1,6 +1,6 @@
 # repurchase（股票回购）因子体检与诊断结论（Phase 3）
 
-> 2026-09-18 · 口径定稿见 `docs/repurchase_pit_audit.md` §6.1 · 快照数据根 `temp/rp_health_root_20260918`（临时）
+> 2026-09-18 · 口径定稿见 `docs/data/repurchase_pit_audit.md` §6.1 · 快照数据根 `temp/rp_health_root_20260918`（临时）
 > 产物：`data/reports/factor_health/repurchase_20260918/`、`data/reports/factor_diagnosis/repurchase_20260918/`
 
 ## 0. 为什么需要"快照物化"

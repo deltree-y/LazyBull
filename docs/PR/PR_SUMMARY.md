@@ -195,7 +195,7 @@ python -m py_compile src/lazybull/paper/*.py scripts/paper_trade.py tests/test_p
 
 ## 文档更新
 
-更新了`docs/paper_trading_guide.md`，新增或修改了以下章节：
+更新了`docs/guide/paper_trading_guide.md`，新增或修改了以下章节：
 
 1. **T0工作流参数说明**：添加了weight_method参数和数据下载机制变更说明
 2. **T1工作流参数说明**：添加了价格口径支持和可交易性检查说明
@@ -210,7 +210,7 @@ python -m py_compile src/lazybull/paper/*.py scripts/paper_trade.py tests/test_p
 ```
 
 具体变更：
-- `docs/paper_trading_guide.md`: +71/-2（文档更新）
+- `docs/guide/paper_trading_guide.md`: +71/-2（文档更新）
 - `scripts/paper_trade.py`: +56/-1（CLI增强）
 - `src/lazybull/data/loader.py`: +24/0（新增方法）
 - `src/lazybull/paper/account.py`: +18/-2（支持新字段）
@@ -269,7 +269,7 @@ python scripts/paper_trade.py positions \
 
 ## 参考资料
 
-- [纸面交易使用指南](docs/paper_trading_guide.md)
+- [纸面交易使用指南](../guide/paper_trading_guide.md)
 - [数据清洗模块](src/lazybull/data/cleaner.py)
 - [信号生成模块](src/lazybull/signals/ml_signal.py)
 - [单元测试](tests/test_paper_trading.py)

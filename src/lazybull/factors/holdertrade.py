@@ -1,6 +1,6 @@
 """股东增减持因子模块（stk_holdertrade）。
 
-数据来源：TuShare `stk_holdertrade`（Phase 0 审计见 `docs/stk_holdertrade_pit_audit.md`），
+数据来源：TuShare `stk_holdertrade`（Phase 0 审计见 `docs/data/stk_holdertrade_pit_audit.md`），
 raw 按 `ann_date` 年分区落盘（`data/raw/stk_holdertrade/YYYY-12-31.parquet`）。
 
 **PIT 契约**：唯一可用时间是 `ann_date`（无 `begin_date/close_date`），因此 T 日特征只允许
@@ -44,7 +44,7 @@ HOLDERTRADE_COLS = [
 HOLDERTRADE_FRESHNESS_COL = "ht_freshness_days"
 
 #: **精简列集（core）**：只保留 Phase 3 体检/诊断证据支持的 4 列
-#: （`docs/holdertrade_factor_health.md`）——最强且逐年同号的两列（90 日净额 / 90 日净披露日数，
+#: （`docs/reports/holdertrade_factor_health.md`）——最强且逐年同号的两列（90 日净额 / 90 日净披露日数，
 #: IC t≈15、7/7 年正、偏 IC t=6.9）+ 30 日减持披露计数（t=−10.9）+ 30 日净额（t=8.8）。
 #: 剔除：`ht_buy_count_30d`（t=−0.32）、`ht_net_ratio_accel`（净额线性组合镜像）、
 #: `ht_freshness_days`（符号翻转）、`ht_net_ratio_30d_other`（与 `ht_net_ratio_30d` 同簇）。

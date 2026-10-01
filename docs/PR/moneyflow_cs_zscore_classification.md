@@ -23,7 +23,7 @@
   - 设为**强制依赖**：缺失时抛出异常并提示如何下载
   - 在 `download_raw.py` 脚本中同步集成
 
-- 更新 `docs/data_contract.md`：补充 moneyflow 数据契约
+- 更新 `docs/data/data_contract.md`：补充 moneyflow 数据契约
 
 #### 1.2 Clean/Loader 层
 

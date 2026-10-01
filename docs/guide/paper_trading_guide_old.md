@@ -422,8 +422,8 @@ custom_cost = CostModel(
 
 ## 相关文档
 
-- [回测引擎说明](../docs/backtest_assumptions.md)
-- [数据契约](../docs/data_contract.md)
+- [回测引擎说明](backtest_assumptions.md)
+- [数据契约](../data/data_contract.md)
 - [ML 模型训练](../README.md#机器学习模型训练与回测)
 
 ## 支持

@@ -116,11 +116,11 @@ targets = self._generate_signals(
 ### 1. CHANGELOG.md（新建）
 - 记录 v0.3.5 版本变更
 
-### 2. docs/paper_trading_guide.md
+### 2. docs/guide/paper_trading_guide.md
 - 核心特性列表中新增此功能
 - 新增专门章节详细说明工作原理、示例、日志输出
 
-### 3. docs/paper_vs_backtest_alignment.md（新建）
+### 3. docs/guide/paper_vs_backtest_alignment.md（新建）
 - 对比纸面交易和回测引擎的行为差异
 - 说明纸面交易更严格（T0提前过滤 vs T+1事后计算）
 - 建议保持现状
@@ -200,8 +200,8 @@ targets = self._generate_signals(
 
 **文档**：
 - `CHANGELOG.md`（新增）
-- `docs/paper_trading_guide.md`（+66行）
-- `docs/paper_vs_backtest_alignment.md`（新增）
+- `docs/guide/paper_trading_guide.md`（+66行）
+- `docs/guide/paper_vs_backtest_alignment.md`（新增）
 
 **配置**：
 - `pyproject.toml`（版本号更新）

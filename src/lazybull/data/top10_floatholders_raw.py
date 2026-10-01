@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """top10_floatholders（十大流通股东）raw 层：拉取、水位、按年分区落盘。
 
-Phase 0 审计结论见 `docs/top10_floatholders_pit_audit.md`，实现必须遵守：
+Phase 0 审计结论见 `docs/data/top10_floatholders_pit_audit.md`，实现必须遵守：
 
 - **单页 6000 行（per-request）**：`limit=10000` 仍只回 6000 且**不报错**（静默截断）
   ⇒ 必须 `offset` 翻页读到空（触顶页继续翻，`max_pages` 兜底告警）；

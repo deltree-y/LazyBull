@@ -204,7 +204,7 @@ class RepurchaseFactorHandler:
 
     **缺失填 0 的语义**：查询表只输出「180 日内有公告」的股票；其余股票（窗口内无回购计划）
     一律填 0，从而 4 个因子列在全市场口径下全覆盖，不会因稀疏被训练入口 0.6 缺失率门禁
-    整体删除（口径定稿见 `docs/repurchase_pit_audit.md` §6.1）。
+    整体删除（口径定稿见 `docs/data/repurchase_pit_audit.md` §6.1）。
     哨兵列恒写当前 schema 版本（含无事件股票），供训练入口校验语义。
 
     数值实现统一落在 `factors/repurchase.py::build_repurchase_feature_frame`
@@ -240,7 +240,7 @@ class Top10FhFactorHandler:
 
     **填充语义（与事件族相反）**：有已披露报告的股票 ⇒ 值列为真实值
     （**0 = 前 10 中无此类持有人**，是有效观测）；**未披露股票 ⇒ NaN**，
-    **禁止填 0**（口径定稿见 `docs/top10_floatholders_pit_audit.md` §6.4）。
+    **禁止填 0**（口径定稿见 `docs/data/top10_floatholders_pit_audit.md` §6.4）。
     哨兵列恒写当前 schema 版本（含未披露股票），供训练入口校验语义。
 
     数值实现统一落在 `factors/top10_floatholders.py::build_top10fh_feature_frame`
@@ -277,7 +277,7 @@ class TopInstFactorHandler:
     **缺失填 0 的语义**：查询表只输出「近 20 交易日有机构记录」的股票；其余股票
     （窗口内无机构事件）一律填 0，5 个因子列在全市场口径下全覆盖，不会因稀疏被
     训练入口 0.6 缺失率门禁整体删除（与 holdertrade / repurchase 同结构，
-    数据侧口径见 `docs/top_inst_factor_health.md`）。
+    数据侧口径见 `docs/reports/top_inst_factor_health.md`）。
     哨兵列恒写当前 schema 版本（含无记录股票），供消费侧校验语义。
 
     数值实现统一落在 `factors/top_inst.py::build_top_inst_feature_frame`

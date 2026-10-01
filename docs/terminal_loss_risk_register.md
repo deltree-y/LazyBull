@@ -417,7 +417,7 @@ E2 落地后（v0.116.0）用**净值缩放近似**（`m_t = λ if 前一日判�
 ### 9. P2-4 回撤侧总扫描（2026-09-19，v0.127.3）：**回撤维度保留、收益维度不可外推**
 
 预登记 `docs/plans/terminal_loss/drawdown_side_sweep_prereg.md`（跑前定稿）；完整报告
-`docs/terminal_loss_drawdown_sweep_result.md`。8 个新臂（λ∈{0.3,0.7}、W=120、q_regime=0.50、
+`docs/reports/terminal_loss_drawdown_sweep_result.md`。8 个新臂（λ∈{0.3,0.7}、W=120、q_regime=0.50、
 q_score=0.70、容差 6%、**对称回补**、**止损启用对照**），每臂 14 折 OOS，分析工具
 `scripts/analyze_drawdown_sweep.py` + `scripts/compare/drawdown_sweep.py`——**已用既有四臂逐值复现 §8 全部登记值**
 （0.3325/0.5055、Δ收益 +0.1730、ΔMaxDD +0.0102、ΔSharpe +0.3759、减仓 156 笔/384.1 万、逐折 4/4、
@@ -462,7 +462,7 @@ q_score=0.70、容差 6%、**对称回补**、**止损启用对照**），每臂
 
 动机：λ_t 依赖持仓 ⇒ 冻结系数表与持仓路径绑定，换任何影响持仓的配置都必须重算导出
 （且无法回答实盘当日口径）。故把 λ_t 改为**逐日现算**（`risk/terminal_loss/exposure_online.py`，
-全部复用离线判定实现），系数表退化为可选缓存/导出；完整记录 `docs/terminal_loss_policy_online_result.md`。
+全部复用离线判定实现），系数表退化为可选缓存/导出；完整记录 `docs/reports/terminal_loss_policy_online_result.md`。
 
 - **语义 S1（引擎唯一口径）**：λ_t 用**判定时点持仓**（当日执行前）；离线台账用**收盘后**持仓
   ⇒ 两者**不逐位相等**，差异只能度量与登记，**不得**声称等价；

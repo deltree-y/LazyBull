@@ -309,7 +309,7 @@ Tn 日（attempt_count=5）:
 - [x] 更新 `pyproject.toml` 版本号: 0.3.6 → 0.3.7
 - [x] 创建 `docs/PR/fix_replenishment_daily_regeneration.md`（本文档）
 - [ ] 更新 `CHANGELOG.md`
-- [ ] 更新 `docs/paper_trading_guide.md` 说明新补位机制
+- [ ] 更新 `docs/guide/paper_trading_guide.md` 说明新补位机制
 
 ## 相关文件清单
 

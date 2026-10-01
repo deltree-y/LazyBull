@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """top_inst（龙虎榜机构席位）raw 层：按 `trade_date` 年分区加载与去重防御。
 
-数据契约（探索期下载，2026-09-23；见 `docs/top_inst_factor_health.md` §2 与
+数据契约（探索期下载，2026-09-23；见 `docs/reports/top_inst_factor_health.md` §2 与
 `docs/plans/data_families/top_inst_factor_plan.md`）：
 
 - 存储：`data/raw/top_inst/YYYY-12-31.parquet`（按 **trade_date** 年分区，沿既有年分区模式）；

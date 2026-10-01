@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--bootstrap",
         type=int,
         default=1000,
-        help="折级自举次数（0 = 跳过；判定口径见 docs/factor_pruning_ab_protocol.md）",
+        help="折级自举次数（0 = 跳过；判定口径见 docs/experiments/factor_pruning_ab_protocol.md）",
     )
     parser.add_argument("--bootstrap-seed", type=int, default=42, help="自举随机种子")
     parser.add_argument(
@@ -128,7 +128,7 @@ def main() -> None:
         "> 逐折指标按折内起止净值计算。跨折边界收益不计入交易日数，与全周期口径一致。",
         "> 数据态不可复用时应重新冻结数据态复跑，禁止跨数据态比较。",
         f"> 判据自举：折级有放回重采样 {args.bootstrap} 次（种子 {args.bootstrap_seed}），"
-        "判定规则见 `docs/factor_pruning_ab_protocol.md`（ΔCAGR/Δ夏普 自举区间下限 > 0、ΔMaxDD ≥ 0、逐折同向 ≥ 70%）。",
+        "判定规则见 `docs/experiments/factor_pruning_ab_protocol.md`（ΔCAGR/Δ夏普 自举区间下限 > 0、ΔMaxDD ≥ 0、逐折同向 ≥ 70%）。",
     ]
     (out_dir / "折子集对比说明.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

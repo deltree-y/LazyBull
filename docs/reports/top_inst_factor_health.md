@@ -1,6 +1,6 @@
 # top_inst（龙虎榜机构席位）因子体检结果
 
-> v0.127.9 / 2026-09-23 ｜ 报告路径：`docs/top_inst_factor_health.md`
+> v0.127.9 / 2026-09-23 ｜ 报告路径：`docs/reports/top_inst_factor_health.md`
 > 预登记方案：`docs/plans/data_families/top_inst_factor_plan.md`
 > 原始数据：`data/raw/top_inst/`（2012-01-04 ~ 2026-09-22，15 个年分区，2,686,011 行）
 
@@ -9,7 +9,7 @@
 > **⚠️ 2026-09-23 改判声明**：下文的“不进入 WF”结论已被当日追加补测**推翻**——
 > 追加控制波动/换手后 buy/sell/days 偏 IC 转正（t≈6）、上榜域内 buy/sell +0.049（t≈4.7）、
 > 体检口径无法裁决真伪 ⇒ 已转入 WF A/B 由训练裁决。**最终结论见
-> `docs/top_inst_wf_ab_result.md`**（WF 不通过 ⇒ 不采纳、家族终结）。
+> `docs/reports/top_inst_wf_ab_result.md`**（WF 不通过 ⇒ 不采纳、家族终结）。
 > 本文档正文保留原始体检读数（历史记录），请以 WF 报告为准。
 
 **（原文）不通过体检，不进入 WF A/B（净值实验）——本数据源在"机构净买"口径下无可靠增量。**

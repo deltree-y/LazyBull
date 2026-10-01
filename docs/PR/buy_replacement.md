@@ -384,7 +384,7 @@ python scripts/paper_trade.py run --trade-date 20260122
 - [x] 更新 `pyproject.toml` 版本号: 0.3.5 → 0.3.6
 - [x] 创建 `docs/PR/buy_replacement.md`（本文档）
 - [ ] 更新 `CHANGELOG.md`
-- [ ] 更新 `docs/paper_trading_guide.md` 增加补位机制说明
+- [ ] 更新 `docs/guide/paper_trading_guide.md` 增加补位机制说明
 
 ## 相关 Issue
 

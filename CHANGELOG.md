@@ -176,7 +176,7 @@ All notable changes to this project will be documented in this file.
 
 - **P1 数据底座开工——ensure 可复现性探测（口径 A）完成**：
   - 探针 `scripts/v2_p1/probe_ensure_repro.py`（只读、不触发下载/重建）；
-    结论报告 `docs/v2_p1_ensure_repro_probe.md`。
+    结论报告 `docs/reports/v2_p1_ensure_repro_probe.md`。
   - **实测约束登记**：cs_infer 按设计只滚动保留最新交易日（单日快照），方案原文
     「抽 3 个月分区比对」在产物层不可行 ⇒ 拆口径 A（同日比对，已执行）与口径 B
     （历史区间重放，登记为 P1 后续任务、机器时间另申请）。
@@ -517,7 +517,7 @@ All notable changes to this project will be documented in this file.
   同榜单新旧文本格式成对重复；`side` 修正后语义 0=买入榜 / 1=卖出榜。
   清洗四步（列修正 → (席位,side,修正后金额三元组) 去重 → 单日榜优先 → 机构行 sum）后
   与 `top_list` 对照中位误差 **0.0%**（<5% 占 62%~86%）。
-- **因子体检 + WF A/B 全链（报告 `docs/top_inst_factor_health.md` / `docs/top_inst_wf_ab_result.md`）：
+- **因子体检 + WF A/B 全链（报告 `docs/reports/top_inst_factor_health.md` / `docs/reports/top_inst_wf_ab_result.md`）：
   不通过 ⇒ 不采纳、家族终结**——
   体检发现“口径依赖的残余结构”（仅控 lhb+规模时全部归零；**追加控波动/换手后 buy/sell/days 转正 t≈6**；
   上榜域内 buy/sell +0.049 t=4.7）⇒ 由“体检止损”改判为“值得进 WF 由训练裁决”；
@@ -556,7 +556,7 @@ All notable changes to this project will be documented in this file.
 - 新增 `tests/test_ml_signal_downside_penalty.py`（12 项：公式/方向/NaN/报错/集成/透传）；
   相邻回归 `test_ml_signal.py`、`test_walk_forward*.py` 全通过。
 - **B0' vs B0 忠实性自证**：skip-eval 复跑与全量训练路径的 fold0 top20 明细 **100% 同码、pred_score 最大差 0**。
-- **A5 WF A/B 结论（2026-09-21，报告 `docs/downside_penalty_wf_ab_result.md`）：不通过 ⇒ 不采纳**——
+- **A5 WF A/B 结论（2026-09-21，报告 `docs/reports/downside_penalty_wf_ab_result.md`）：不通过 ⇒ 不采纳**——
   主臂 dv025（λ=0.25，复用折模型 v24126~v24139、14 折、政策层关）信号层 **Δ −43.43 bps（Top20，相对 −47.1%）**
   （三块长 95% 区间全负）；净值层 ΔCAGR −5.62pp / ΔMaxDD +0.89pp（逐折改善 10/14）/ Δ夏普 −0.188 ⇒ 判据 1 止损。
   机制根因：**rank 空间相减在 λ=0.25 即强倾斜**（全 14 折 Top20 集合重叠 26.8%、换入 14.6 只/日）。
@@ -759,7 +759,7 @@ All notable changes to this project will be documented in this file.
 - **默认臂接线复核（2026-09-19）**：用脚本配置区默认臂（`e2online`，**不带任何命令行覆盖**）跑完整 14 折，
   与已验证的命令行覆盖臂逐值比对：**λ 序列 1630 日零差异**、`chain_nav` **md5 相同**、
   summary 仅 `batch_period_label`（臂名）不同 ⇒ 配置区路径与命令行路径**完全等价**。
-- 详细记录：`docs/terminal_loss_policy_online_result.md`。
+- 详细记录：`docs/reports/terminal_loss_policy_online_result.md`。
 
 ## [0.127.3] - 2026-09-19
 
@@ -801,7 +801,7 @@ All notable changes to this project will be documented in this file.
 ### 记录（R-004 P2-4 回撤侧总扫描：**回撤维度保留、收益维度不可外推**，2026-09-19）
 
 预登记 `docs/plans/terminal_loss/drawdown_side_sweep_prereg.md`（跑前定稿）；报告
-`docs/terminal_loss_drawdown_sweep_result.md`；R-004 状态 `mitigated-qualified` →
+`docs/reports/terminal_loss_drawdown_sweep_result.md`；R-004 状态 `mitigated-qualified` →
 **`mitigated-qualified-drawdown-only`**。8 个新臂（每臂 14 折 OOS，8.4~10.2 分钟）。
 
 | 臂（vs A0，窗口 = split 10~13） | ΔMaxDD | 逐折改善 | Δ收益 | 判定 |
@@ -858,7 +858,7 @@ All notable changes to this project will be documented in this file.
 
 ### 记录（top10_floatholders Phase 4：单列 A 臂 A/B，**不通过 ⇒ 不采纳、家族终结**，2026-09-19）
 
-预登记 `docs/plans/data_families/top10fh_ab_prereg.md`（跑前写定）；报告 `docs/top10fh_wf_ab_result.md`。
+预登记 `docs/plans/data_families/top10fh_ab_prereg.md`（跑前写定）；报告 `docs/reports/top10fh_wf_ab_result.md`。
 
 | 判据 | 结果 | 判定 |
 |---|---|---|
@@ -883,7 +883,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **top10_floatholders（十大流通股东）Phase 2：因子构建 + 四侧运行时派生接线**
-  （最小列集、默认关、可回退；口径定稿见 `docs/top10_floatholders_pit_audit.md` §6）：
+  （最小列集、默认关、可回退；口径定稿见 `docs/data/top10_floatholders_pit_audit.md` §6）：
   - `src/lazybull/factors/top10_floatholders.py`：
     `aggregate_top10fh_periods`（报告期聚合）、`build_top10fh_panel`（**报告期面板**：每股每报告期一行
       + 环比变化列 + PIT 去重）、`build_top10fh_day_frame`（单日截面）、
@@ -937,7 +937,7 @@ All notable changes to this project will be documented in this file.
 
 ### 记录（top10_floatholders Phase 3 因子体检与诊断，2026-09-19）
 
-结论全文 `docs/top10_floatholders_factor_health.md`；产物 `data/reports/factor_health/top10fh_20260919/` +
+结论全文 `docs/reports/top10_floatholders_factor_health.md`；产物 `data/reports/factor_health/top10fh_20260919/` +
 `data/reports/factor_diagnosis/top10fh_20260919/`。基线 `v24123_features.json`（与 stk_holdertrade / repurchase
 Phase 3 同一基线）+ 8 个 top10fh 列 = **162 列**、525 个采样交易日（20200102~20260702，every 3）。
 快照物化 + 体检 + 诊断全程 **8.5 分钟**（物化 525 分区 ≈6 min / 2.33 GB、体检 ≈1 min、诊断 ≈1.5 min）；
@@ -969,7 +969,7 @@ Phase 3 同一基线）+ 8 个 top10fh 列 = **162 列**、525 个采样交易�
 ### Added
 
 - **top10_floatholders（十大流通股东）Phase 1：raw 接入 + 全历史回补**（薄接入、默认关、可回退；
-  Phase 0 审计合格见 `docs/top10_floatholders_pit_audit.md`，数据层第 4 个候选、第 3 个已被否）：
+  Phase 0 审计合格见 `docs/data/top10_floatholders_pit_audit.md`，数据层第 4 个候选、第 3 个已被否）：
   - `src/lazybull/data/top10_floatholders_raw.py`：`quarter_ends`（报告期枚举）、
     `deduplicate_top10fh`（`ann_date`/`end_date` 规范化 + 非法剔除告警 + 全字段整行去重）、
     `save_top10fh_by_year`（**按 `end_date` 年分区** `data/raw/top10_floatholders/YYYY-12-31.parquet`，
@@ -1041,7 +1041,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 ### Fixed
 
 - **执行类 `amount` 为累计口径 ⇒ 窗口内直接求和会把同一笔回购重复计 10 倍以上**（实现期实测发现，
-  已先改方案 `docs/repurchase_pit_audit.md` §6.1 第 4.1 条再改代码）：
+  已先改方案 `docs/data/repurchase_pit_audit.md` §6.1 第 4.1 条再改代码）：
   同一股票同 `proc` 连续公告的金额中位"末/首"比：完成 **12.5**（3,144 组）、实施 12.6、停止 17.7，
   且 23.6% 的组金额完全单调非降（`600382.SH` 2024 逐月 `完成` 行 2.52e8→2.74e8→…→3.29e8）。
   - 改为**增量口径**：`增量 = 本行金额 − 上一有效执行类行金额`；更小（新计划/修正）或首行 ⇒ 增量 = 本行金额；
@@ -1070,7 +1070,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 - 判据与 stk_holdertrade A/B 完全一致（信号层 ±10 bps 尺子 + 净值层 ΔMaxDD 主判据 + 逐折同向数），
   并**预登记了归因约束**：`high_limit ÷ VWAP − 1` 在下跌后变大，与反转/超跌同向，
   即使通过也只能归因为“该代理有效”，需另做“剔除价格分子”对照才能归因到回购本身。
-- **结论（跑完当日）：不通过 ⇒ 不采纳，家族终结**（报告 `docs/repurchase_wf_ab_result.md`）：
+- **结论（跑完当日）：不通过 ⇒ 不采纳，家族终结**（报告 `docs/reports/repurchase_wf_ab_result.md`）：
   A 臂 14/14 折、1h32m（查询表 3,185 交易日、2.17M 活跃事件行；每折仅多 1 列）：
   **判据 1 信号层 Δ −12.19 bps（Top20，相对 −13.2%）/ −12.98 bps（Top30）⇒ 超 −10 bps 门槛“加列稀释”不通过**；
   **判据 2 主判据 ΔMaxDD +2.58pp（点估计达标）但逐折 MaxDD 改善仅 7/14（要求 ≥9/14）⇒ 不通过**；
@@ -1082,7 +1082,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 
 ### 记录（top10_floatholders Phase 0 PIT 审计：合格 → 可进 Phase 1，2026-09-18）
 
-审计全文 `docs/top10_floatholders_pit_audit.md`（数据层第 4 个候选；第 3 个 disclosure_date 已否）。
+审计全文 `docs/data/top10_floatholders_pit_audit.md`（数据层第 4 个候选；第 3 个 disclosure_date 已否）。
 
 - 接口 `top10_floatholders`（十大流通股东，9 列，含 `holder_name/hold_amount/hold_ratio/
   hold_float_ratio/hold_change/holder_type`）；**按 `period` 批量拉取**，每期 5.5 万行 / 5,559 只股票。
@@ -1111,7 +1111,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 ### 记录（repurchase Phase 3 因子体检与诊断，2026-09-18）
 
 产物 `data/reports/factor_health/repurchase_20260918/` + `data/reports/factor_diagnosis/repurchase_20260918/`，
-结论全文 `docs/repurchase_factor_health.md`。基线 `v24123_features.json` + 6 个 repurchase 列 = **160 列**、
+结论全文 `docs/reports/repurchase_factor_health.md`。基线 `v24123_features.json` + 6 个 repurchase 列 = **160 列**、
 525 个采样交易日（20200102~20260702，every 3）。
 
 - `scripts/materialize_factor_health_snapshot.py` 扩展 **`--with-repurchase`** + 家族登记表
@@ -1131,7 +1131,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 
 ### 记录（disclosure_date Phase 0 PIT 审计：不合格 → 放弃，2026-09-18）
 
-审计全文 `docs/disclosure_date_pit_audit.md`（数据层第 3 个候选的预登记放弃条件："若 TuShare 只给当前值则放弃"）。
+审计全文 `docs/data/disclosure_date_pit_audit.md`（数据层第 3 个候选的预登记放弃条件："若 TuShare 只给当前值则放弃"）。
 
 - 接口 `disclosure_date` 每报告期**只有 1 行/股票**（`(ts_code, end_date)` 重复 **0**；20231231 期 5,374 行），
   返回列 `ts_code / ann_date / end_date / pre_date / actual_date`，**无 `modify_date` / 无版本行**。
@@ -1148,7 +1148,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 ### 记录（数据层新候选盘点，2026-09-18）
 
 前三个候选（stk_holdertrade / repurchase / disclosure_date）全部有结论后重新**实测盘点** TuShare 接口
-（不读文档推断），全文 `docs/data_layer_candidate_survey.md`：
+（不读文档推断），全文 `docs/data/data_layer_candidate_survey.md`：
 
 - 候选实测（可用性 / **批量能力** / PIT 锚点 / 体量）：
   **① `top10_floatholders`**：按 `period` 批量可取（**单页上限 6,000 行需 offset 翻页**）、
@@ -1186,7 +1186,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 
 ### 记录（repurchase Phase 0 PIT 审计，2026-09-17）
 
-结论见 `docs/repurchase_pit_audit.md`：**PIT 合格 → 可进 Phase 1**（数据层第 2 项，接在 stk_holdertrade 之后）。
+结论见 `docs/data/repurchase_pit_audit.md`：**PIT 合格 → 可进 Phase 1**（数据层第 2 项，接在 stk_holdertrade 之后）。
 关键事实（全部实测，日志 `logs/repurchase_audit_20260917.log`）：
 
 - 字段 9 列：`ts_code/ann_date/end_date/proc/exp_date/vol/amount/high_limit/low_limit`；
@@ -1200,7 +1200,7 @@ Phase 0 审计在 2 个报告期样本上测得 `(ts_code, end_date, ann_date, h
 - `proc` 多阶段状态机（预案/股东大会通过/实施/完成/停止）⇒ 进度类因子必须做**计划级版本化**（Phase 2 再定），
   本轮优先公告级窗口聚合。
 
-Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 + 翻页读到空、**全字段去重**、
+Phase 1 硬约束（写入 `docs/data/repurchase_pit_audit.md` §7）：单页 2000 + 翻页读到空、**全字段去重**、
 `(ts_code, ann_date, proc)` 多行保留、水位 = 分区内最大 `ann_date`（回拉 3 天）、按 `ann_date` **年分区**落盘。
 
 ### 项目共识（新增契约，2026-09-17）
@@ -1209,7 +1209,7 @@ Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 +
   或计划文档）**写定并登记**，作为实现验收项，实现不得自行决定；布局须明确「分区维度与粒度 / 文件命名 /
   水位字段 / 增量回拉窗口 / 去重口径」。**默认按年分区**（`data/raw/<dataset>/YYYY-12-31.parquet`，
   沿 dividend / stk_holdertrade 模式），仅当有实测理由才改（单年体量过大→季度；按日期查询 API→日分区）；
-  实现与方案不一致时必须**先改方案再改代码**。repurchase 已按此登记（`docs/repurchase_pit_audit.md` §5.1）。
+  实现与方案不一致时必须**先改方案再改代码**。repurchase 已按此登记（`docs/data/repurchase_pit_audit.md` §5.1）。
 
 ## [0.124.0] - 2026-09-17
 
@@ -1268,7 +1268,7 @@ Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 +
 模型注册 v24124（折）+ v24125（部署）。注意：冒烟折 `best_iteration=1`（触下限告警），属该验证窗口
 自身的问题，不代表因子质量。
 
-### Phase 3：因子体检 / 诊断（2026-09-17，结论见 `docs/holdertrade_factor_health.md`）
+### Phase 3：因子体检 / 诊断（2026-09-17，结论见 `docs/reports/holdertrade_factor_health.md`）
 
 - **新增可复现入口** `scripts/materialize_factor_health_snapshot.py`：把「生产特征清单 + 运行时派生列」
   物化成独立临时数据根（只保留体检工具实际读取的列；`clean/raw/models` 以目录联接复用生产），
@@ -1297,7 +1297,7 @@ Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 +
 
 ### Phase 4：WF A/B 结果（2026-09-17）——**结论：不采纳**
 
-- 预登记判据：`docs/plans/data_families/holdertrade_ab_prereg.md`（跑前写定）；报告：`docs/holdertrade_wf_ab_result.md`。
+- 预登记判据：`docs/plans/data_families/holdertrade_ab_prereg.md`（跑前写定）；报告：`docs/reports/holdertrade_wf_ab_result.md`。
 - 两臂：14 折 × 3 种子（42,61,82）、`final_date=20260105`、train 6y/test 6m、数据态 ID `2a732925`
   （同一数据态）；A0 基线 52 列（1h28m）、A1 加 ht 60 列（1h35m），除 ht 开关外逐字相同。
 - **判据 1（信号层）**：Δ平均持有期收益 **+5.03 bps**（Top20）/ **+7.00 bps**（Top30），
@@ -1325,7 +1325,7 @@ Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 +
 - **机理解读**：A1 微正 / A2 转负，与 v0.113.0 `core_state` 同源——列集扰动改变早停轨迹与集成选择路径，
   其量级可超过列级效应；叠加单臂 ΔCAGR 可检出下限 5~8pp，单臂读数不足以支撑"某列有效/无效"结论。
 - 数据态放行登记：A0/A1 在 `c47069d`、A2 在 `28a63a9`（期间提交），数据指纹逐字段相同、代码差异对两臂惰性
-  ⇒ 以 `--allow-state-mismatch` 显式放行（见 `docs/holdertrade_wf_ab_result.md` §7.4）。
+  ⇒ 以 `--allow-state-mismatch` 显式放行（见 `docs/reports/holdertrade_wf_ab_result.md` §7.4）。
 
 ### 项目共识（新增契约）
 
@@ -1380,7 +1380,7 @@ Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 +
 
 ### 记录（stk_holdertrade Phase 0 PIT 审计，2026-09-17）
 
-结论见 `docs/stk_holdertrade_pit_audit.md`：**PIT 合格 → 可进 Phase 1**。关键事实：
+结论见 `docs/data/stk_holdertrade_pit_audit.md`：**PIT 合格 → 可进 Phase 1**。关键事实：
 
 - 字段：`ts_code/ann_date/holder_name/holder_type/in_de/change_vol/change_ratio/after_share/after_ratio/avg_price/total_share`；
   **无 `begin_date`/`close_date`**（没有变动期间，只能按公告日使用）；
@@ -1477,7 +1477,7 @@ Phase 1 硬约束（写入 `docs/repurchase_pit_audit.md` §7）：单页 2000 +
 
 ### 记录（可用性标记 A/B 实验，2026-09-16）
 
-预登记：`docs/availability_markers_ab_protocol.md`（判据与冻结命令实验前确定）。14 折串行单臂，
+预登记：`docs/experiments/availability_markers_ab_protocol.md`（判据与冻结命令实验前确定）。14 折串行单臂，
 批次 `data/walk_forward/batches/avail_markers_20260916_v2/`（`wf_20260916_184356_6d3ca6d7`，14/14 成功，1h58m），
 对比产物 `data/reports/wf_fold_subset/avail_markers_20260916/`（两臂 `data_state_id` 相同 = `8d33174f`，无例外）。
 
@@ -1529,7 +1529,7 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 
 ### 记录（因子去重 / 口径交换 A-B 实验，2026-09-16）
 
-预登记：`docs/factor_pruning_ab_protocol.md`（判据、判读矩阵、命令模板均实验前冻结）。三臂串行：
+预登记：`docs/experiments/factor_pruning_ab_protocol.md`（判据、判读矩阵、命令模板均实验前冻结）。三臂串行：
 基线（154 列）→ A 去重 → D 口径交换，各 14 折（`--no-deploy-train`、`stagger=2/top_n=20`）。
 
 | 运行 | 全周期CAGR | 全周期最大回撤 | 全周期夏普 | ΔCAGR | ΔMaxDD | Δ夏普 | 逐折同向 |
@@ -2183,7 +2183,7 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 ### Changed
 
 - **选股模型目录迁移至 `data/models/stock_selection/`**：与 `models/risk`、`models/terminal_loss` 平级对称，`data/models` 根目录不再平铺模型文件。切换 12 处调用点：`MLSignal` / `signal_factory` / `paper reporting` 默认目录、`backtest_runtime` 与 `walk_forward runner` 的 registry 及持久化信号、`train_ml_model.py` registry 与日志路径、`deploy_training / split_training` 的 `ml_train_runs.csv` 默认路径与 CLI 帮助文本、`analyze_factor_stability / analyze_factor_importance` 的 models_dir。`get_models_root` 保留 models 根目录语义（`factor_exclude_list.json` 生产因子裁剪清单固定根目录，因子裁剪契约不变）。`ml_train_runs.csv` 随选股模型目录迁移，并顺带修复未传 `--data-root` 时日志写入字面量 `None/models/` 目录的缺陷（三处调用点同 pattern）。历史 4038 套模型文件、`model_registry.json`、`latest_model_version.txt`、`ml_train_runs.csv` 已物理迁移至子目录（同卷 rename，版本号连续，paper 配置 `model_version` 引用不受影响；`model_bak/`、`model_reg_bak/` 保留原处）。`data/models/terminal_loss/` 下首轮 flat 五件套与后续版本化 v\* 产物共存，未做清理。
-- **文档路径同步**：CLAUDE.md（目录职责、数据流、新增"模型目录契约"）、README.md、`docs/ml_usage_guide.md`、`docs/guide/{walk_forward,rank_weight,ml_label_horizon}_guide.md` 中模型目录示例路径更新。
+- **文档路径同步**：CLAUDE.md（目录职责、数据流、新增"模型目录契约"）、README.md、`docs/guide/ml_usage_guide.md`、`docs/guide/{walk_forward,rank_weight,ml_label_horizon}_guide.md` 中模型目录示例路径更新。
 
 ### Tests
 
@@ -4342,7 +4342,7 @@ gain 份额合计 ≈0.78%（`has_fund_holding` **0 次分裂**、`has_cons_cove
 
 ### Docs
 
-- `docs/data_contract.md` 新增设计约束：
+- `docs/data/data_contract.md` 新增设计约束：
   - 涨跌停标记仅在 cleaner 层处理，features 层只复用。
   - 各层日期字段统一为 YYYYMMDD 字符串。
 

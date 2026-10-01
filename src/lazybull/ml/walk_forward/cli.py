@@ -440,7 +440,7 @@ def build_walk_forward_parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "启用龙虎榜机构席位因子（top_inst，运行时派生；需 raw/top_inst 年分区已下载，"
-            "见 docs/top_inst_factor_health.md）"
+            "见 docs/reports/top_inst_factor_health.md）"
         ),
     )
     parser.add_argument(

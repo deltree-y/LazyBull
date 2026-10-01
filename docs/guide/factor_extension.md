@@ -476,7 +476,7 @@ def test_williams_r_exists(...):
 
 ### 5. 更新文档
 
-在 `docs/features_schema.md` 中添加字段说明。
+在 `docs/data/features_schema.md` 中添加字段说明。
 
 ---
 

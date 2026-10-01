@@ -94,6 +94,7 @@ logs/*
 !logs/.gitkeep
 
 # Docs
+docs/
 docs/plans
 docs/review
 

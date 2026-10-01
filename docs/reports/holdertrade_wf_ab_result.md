@@ -2,7 +2,7 @@
 
 > 日期：2026-09-17　版本：v0.124.0
 > 预登记判据：`docs/plans/data_families/holdertrade_ab_prereg.md`（**跑前写定**）
-> 判据协议：`docs/factor_pruning_ab_protocol.md`（ΔCAGR/Δ夏普 自举区间下限 > 0、ΔMaxDD ≥ 0、逐折同向 ≥ 70%）
+> 判据协议：`docs/experiments/factor_pruning_ab_protocol.md`（ΔCAGR/Δ夏普 自举区间下限 > 0、ΔMaxDD ≥ 0、逐折同向 ≥ 70%）
 > 数据态 ID：`2a732925`（两臂同一数据态，可同日对比）
 
 ## 1. 两臂

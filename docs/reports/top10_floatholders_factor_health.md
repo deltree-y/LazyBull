@@ -1,6 +1,6 @@
 # top10_floatholders（十大流通股东）因子体检与诊断结论（Phase 3）
 
-> 2026-09-19 · 口径定稿见 `docs/top10_floatholders_pit_audit.md` §6 · 快照数据根 `temp/top10fh_health_root_20260919`（临时，跑完即删）
+> 2026-09-19 · 口径定稿见 `docs/data/top10_floatholders_pit_audit.md` §6 · 快照数据根 `temp/top10fh_health_root_20260919`（临时，跑完即删）
 > 产物：`data/reports/factor_health/top10fh_20260919/`、`data/reports/factor_diagnosis/top10fh_20260919/`
 > 运行：`logs/top10fh_health_20260919.log`（物化 525 分区 8.5 分钟，2.33 GB / 162 列）
 

@@ -16,7 +16,7 @@
 ## 二、冻结配置
 
 对照臂：`data/walk_forward/batches/factor_ab_20260916_071157_base/raw/`（154 列基线，
-与 `docs/factor_pruning_ab_protocol.md` 同一次运行）；
+与 `docs/experiments/factor_pruning_ab_protocol.md` 同一次运行）；
 实验臂：`data/walk_forward/batches/avail_markers_20260916_v2/raw/`。
 
 除 `--enable-availability-markers` 外**完全一致**（与 A-B 实验同一命令模板）：

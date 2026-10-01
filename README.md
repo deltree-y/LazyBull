@@ -281,7 +281,7 @@ python scripts/materialize_factor_health_snapshot.py \
 
 产物：`<out-root>/reports/factor_health|factor_diagnosis/`（台账、候选清单、报告、特征清单）。
 `--skip-usage` 用于模型以 `_model.json`（而非 `_model.joblib`）落盘时——此时工具侧使用度为“缺失”，
-**不可读作“未被使用”**，需另行统计。结论示例见 `docs/holdertrade_factor_health.md`。
+**不可读作“未被使用”**，需另行统计。结论示例见 `docs/reports/holdertrade_factor_health.md`。
 
 #### 因子诊断 v2（增量信息 / 覆盖显著性 / 使用度稳定性）
 
@@ -336,7 +336,7 @@ python scripts/paper_trade.py config --downside-penalty 0.25
 - 预登记 `docs/plans/stock_selection/downside_penalty_prereg.md`；**结论（2026-09-21）：不通过 ⇒ 不采纳**——
   信号层 Δ −43.4 bps（Top20，相对 −47%；三块长区间全负）、净值 ΔCAGR −5.62pp / ΔMaxDD +0.89pp / Δ夏普 −0.188；
   机制根因 = rank 空间相减在 λ=0.25 即强倾斜（Top20 重叠 26.8%、换入 14.6 只/日）。
-  详见 `docs/downside_penalty_wf_ab_result.md` ⇒ **生产默认关闭，不再开新臂、禁止消融位搜索**。
+  详见 `docs/reports/downside_penalty_wf_ab_result.md` ⇒ **生产默认关闭，不再开新臂、禁止消融位搜索**。
 
 #### 模型列集审计（列集漂移 / 配置分组）
 
@@ -389,7 +389,7 @@ python scripts/paper_trade.py real --ret-profit-only
 - 成本计算（佣金、印花税、滑点）
 - **实时行情查看**（`real` 子命令，基于 Tushare `realtime_quote` 接口）
 
-详见 [纸面交易使用指南](docs/paper_trading_guide.md)
+详见 [纸面交易使用指南](docs/guide/paper_trading_guide.md)
 
 #### 运行回测
 
@@ -687,7 +687,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 **在线口径复核（2026-09-19）**：崩盘月贡献逐值可复现（2024-01 +6.00pp / 2024-02 +4.04pp 与冻结表臂相同），
 但**主判据不可复现**——冻结表臂 ΔMaxDD +1.02pp vs 在线臂（同覆盖）**−0.15pp**，
 差异归因于 5/446 日 λ 翻转改写的 2024-06/07 路径 ⇒ **“以回撤改善为由启用”不被支持**，
-政策的默认启用改由下述**回补转正**承载；详情与两个在线通路缺陷的修复见 `docs/terminal_loss_policy_online_result.md`。
+政策的默认启用改由下述**回补转正**承载；详情与两个在线通路缺陷的修复见 `docs/reports/terminal_loss_policy_online_result.md`。
 
 **对称回补转正（2026-09-20，v0.127.7）**：默认臂改为 `e2online_r`（E2-滚动250、λ=0.5、在线、**回补开**、
 不裁剪覆盖）。依据 = 语义自洽（λ 回满后应回满仓；现金拖累是 P2-4 已登记缺陷）+ 单臂实测
@@ -1036,16 +1036,16 @@ LazyBull/
 
 ## 📚 文档
 
-- [数据契约](docs/data_contract.md): 各数据层的字段规范与主键约定
-- [回测假设](docs/backtest_assumptions.md): 回测系统的假设、简化与局限性
-- [特征与标签定义](docs/features_schema.md): 日频特征构建、标签计算、过滤规则说明
-- [涨跌停与停牌处理指南](docs/trade_status_guide.md): 涨跌停与停牌状态的自动处理机制
-- [纸面交易使用指南](docs/paper_trading_guide.md): 纸面交易（Paper Trading）完整使用指南 ⭐ 新增
+- [数据契约](docs/data/data_contract.md): 各数据层的字段规范与主键约定
+- [回测假设](docs/guide/backtest_assumptions.md): 回测系统的假设、简化与局限性
+- [特征与标签定义](docs/data/features_schema.md): 日频特征构建、标签计算、过滤规则说明
+- [涨跌停与停牌处理指南](docs/guide/trade_status_guide.md): 涨跌停与停牌状态的自动处理机制
+- [纸面交易使用指南](docs/guide/paper_trading_guide.md): 纸面交易（Paper Trading）完整使用指南 ⭐ 新增
 - [项目路线图](docs/roadmap.md): 分阶段开发计划
-- [IC与RankIC优化指南](docs/ic_optimization_guide.md): 提升模型预测能力的系统性优化方案
-- [成交额过滤指南](docs/amount_filter_guide.md): 成交额过滤功能说明与配置
-- [分批调仓指南](docs/batch_rebalance_guide.md): 分批调仓功能说明与配置
-- [止损触发指南](docs/stop_loss_guide.md): 止损触发功能说明与配置
+- [IC与RankIC优化指南](docs/guide/ic_optimization_guide.md): 提升模型预测能力的系统性优化方案
+- [成交额过滤指南](docs/guide/amount_filter_guide.md): 成交额过滤功能说明与配置
+- [分批调仓指南](docs/guide/batch_rebalance_guide.md): 分批调仓功能说明与配置
+- [止损触发指南](docs/guide/stop_loss_guide.md): 止损触发功能说明与配置
 - [重大变更说明](docs/BREAKING_CHANGES.md): v0.4.0 版本的 Breaking Changes ⚠️ 重要
 - [项目更新记录](docs/PR/UPDATES.md): 历史版本更新说明
 - [重构总结](docs/PR/REFACTOR_SUMMARY.md): 代码重构文档
@@ -1439,7 +1439,7 @@ class MyStrategy(Signal):
 
 1. **历史回测不代表未来**: 过去的表现不预示未来收益
 2. **数据质量**: TuShare数据可能存在错误或延迟
-3. **简化假设**: 当前版本存在多项简化（详见 [回测假设](docs/backtest_assumptions.md)）
+3. **简化假设**: 当前版本存在多项简化（详见 [回测假设](docs/guide/backtest_assumptions.md)）
 4. **仅供研究**: 本项目仅用于量化研究学习，不构成投资建议
 
 ---

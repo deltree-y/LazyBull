@@ -340,7 +340,7 @@ python scripts/run_ml_backtest.py \
 
 ### 更新文档
 - `CHANGELOG.md`：添加 0.5.0 版本条目
-- `docs/features_schema.md`：更新特征列表（TODO）
+- `docs/data/features_schema.md`：更新特征列表（TODO）
 
 ## 版本号
 
@@ -350,7 +350,7 @@ python scripts/run_ml_backtest.py \
 ## 未来改进方向
 
 ### 短期
-- [ ] 更新 `docs/features_schema.md`，详细说明多 horizon 标签
+- [ ] 更新 `docs/data/features_schema.md`，详细说明多 horizon 标签
 - [ ] 添加 notebook 示例，展示不同 horizon 的回测对比
 - [ ] 优化错误提示信息的可读性
 

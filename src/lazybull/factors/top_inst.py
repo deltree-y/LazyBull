@@ -3,7 +3,7 @@
 
 数据来源：TuShare `top_inst`，raw 按 `trade_date` 年分区落盘
 （`data/raw/top_inst/YYYY-12-31.parquet`）。数据契约与全库清洗验证见
-`docs/top_inst_factor_health.md`（§2 存储布局 / §3 清洗口径 / §4 体检结果）。
+`docs/reports/top_inst_factor_health.md`（§2 存储布局 / §3 清洗口径 / §4 体检结果）。
 
 **数据源结构缺陷与清洗口径（`clean_top_inst`，体检报告 §3 全库实测）**：
 
@@ -80,7 +80,7 @@ _REQUIRED_RAW_COLS = ["ts_code", "trade_date", "exalter", "side", "buy", "sell",
 def clean_top_inst(df: pd.DataFrame) -> pd.DataFrame:
     """清洗 raw top_inst（S1 列互换修正 → S2 三元组去重 → S3 单日榜优先）。
 
-    口径为体检全库验证版（`docs/top_inst_factor_health.md` §3.4）：
+    口径为体检全库验证版（`docs/reports/top_inst_factor_health.md` §3.4）：
     清洗后 `sum(net_buy)`（股票日）与 `top_list` 股票级 `net_amount` 中位相对误差 0.0%。
 
     Args:

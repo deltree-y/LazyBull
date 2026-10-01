@@ -1,7 +1,7 @@
 """股票回购因子模块（repurchase）。
 
 数据来源：TuShare `repurchase`（Phase 0 审计与 **Phase 2 口径定稿**见
-`docs/repurchase_pit_audit.md` §5.1 / §6.1），raw 按 `ann_date` 年分区落盘
+`docs/data/repurchase_pit_audit.md` §5.1 / §6.1），raw 按 `ann_date` 年分区落盘
 （`data/raw/repurchase/YYYY-12-31.parquet`）。
 
 **PIT 契约**：raw 无 `begin_date`，`end_date` 是进度报告期而非"发生日"，因此唯一可用时间是
@@ -65,7 +65,7 @@ REPURCHASE_SCHEMA_VERSION = 1
 #: 列集开关取值（**超参签名维度**，禁止跨取值并组比较）
 #: - full：4 个值列 + freshness + 哨兵；
 #: - headroom：**单列** `rp_price_headroom` + freshness + 哨兵
-#:   （依据 Phase 3 体检：家族内只有该列有跨期稳定信息，见 `docs/repurchase_factor_health.md`）。
+#:   （依据 Phase 3 体检：家族内只有该列有跨期稳定信息，见 `docs/reports/repurchase_factor_health.md`）。
 REPURCHASE_FEATURE_SET_FULL = "full"
 REPURCHASE_FEATURE_SET_HEADROOM = "headroom"
 REPURCHASE_FEATURE_SETS = (REPURCHASE_FEATURE_SET_FULL, REPURCHASE_FEATURE_SET_HEADROOM)

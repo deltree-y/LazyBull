@@ -88,7 +88,7 @@ $policy_coverage_start   = if ($PolicyCoverageStart -ne "") { $PolicyCoverageSta
 #   · StopLoss 对照已登记不通过（ΔMaxDD −0.14pp、逐折 3/4）⇒ 默认关；
 #   · 在线口径复核：崩盘月贡献逐值可复现（2024-01/02），主判据 ΔMaxDD 对 λ 扰动敏感
 #     ⇒ 默认值用于**日常回测一致性**，不得当作已证实的回撤改善
-#     （见 docs/terminal_loss_policy_online_result.md）。
+#     （见 docs/reports/terminal_loss_policy_online_result.md）。
 #   · 需要“无回补”对照（2026-09-20 前旧 e2online 口径）时：把本臂 Replenish 改 $false
 #     或克隆一行 Name="e2online"；需要纯基线时换成下方 neutral 臂。
 $exposure_arm_list = @(

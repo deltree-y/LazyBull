@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """top10_floatholders（十大流通股东）raw 层（分页下载 / 去重 / 年分区 / 水位）专项测试。
 
-对照 Phase 0 审计（`docs/top10_floatholders_pit_audit.md`）：单页上限 6000（`limit=10000` 仍回 6000）、
+对照 Phase 0 审计（`docs/data/top10_floatholders_pit_audit.md`）：单页上限 6000（`limit=10000` 仍回 6000）、
 offset 可翻页、跨页重复 0、唯一键 `(ts_code, end_date, ann_date, holder_name)`、
 `ann_date` 为 PIT 锚点（缺失 0%）、按 `period`（报告期）批量拉取、增量回拉最近 2 个已存报告期。
 """

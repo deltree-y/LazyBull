@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """stk_holdertrade（股东增减持）raw 层：拉取、水位、按年分区落盘。
 
-Phase 0 审计结论见 `docs/stk_holdertrade_pit_audit.md`，实现必须遵守：
+Phase 0 审计结论见 `docs/data/stk_holdertrade_pit_audit.md`，实现必须遵守：
 
 - **单页 3000 行（per-request）**：不传 `limit/offset` 时**不报错**、只返回最新 3000 行
   ⇒ 必须分页读到返回空（触顶页继续翻），否则静默丢历史；
