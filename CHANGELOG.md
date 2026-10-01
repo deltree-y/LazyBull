@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.0] - 2026-10-01
+
+### Added
+
+- **P5a-1 收尾专项（实现评审 R-05~R-08 落地）**：
+  - **runs 读入桥** `src/lazybull/v2/evidence/runs_loader.py`（R-05）：证据机器只认 runs
+    schema 的通路——契约 §9 读取不变量硬校验（必需文件缺失报错 / trades action 闭集 +
+    卖出行 buy_date 校验 / chain_nav 折内单调（修 astype(str) 字典序误报）/ 列名全 ASCII
+    校验）+ `to_run_artifacts()` 转证据机器复用格式。
+  - **转换器缺口补齐** `runs_convert.py`（R-06 多项）：daily.csv 从 trades+快照重建
+    （§9 三态可重建）+ 折级 `_meta.json`（lot/topk/daily 重建标注载体）+ lot_id 按 FIFO
+    重建（§5 例外条款）+ policy_lambda.csv/.json 条件条款收编 + batch_meta 补全字段
+    （created_at/host_mode/code_state/config/指纹/arms）+ trades 缺失报错（不再静默跳过）
+    + 列集合校验（契约列集，缺列/多列登记进 dropped_columns）+ topk 折级降级标注 +
+    summary 非 ASCII 列（中文诊断列）进丢弃清单 + batch_id 补列。
+  - **A3 验收重做（三件套）** `scripts/v2_p5a1/verify_runs_recalc.py`（R-08）：
+    3 历史批转换 → runs_loader 读入 → 链式全周期重算与历史报告逐项一致（Δ~1e-5）
+    ⇒ 产物 `data/reports/p5a1_a3_recalc_20261001.{csv,json}`（校验表 + 报告），**全过**。
+  - **信号层尺子固化** `src/lazybull/v2/evidence/signal_ruler.py`（R-07，P5a-1 交付物④）：
+    薄封装生产尺子 `scripts/compare/signal_metrics.py` 的配对差分 + 分块自举
+    （`block_stats.paired_day_mean_ci`），输入改 runs schema 的 topk_detail（经 runs_loader）；
+    噪声带 ±10bps / 相对降幅 ≥9% 门槛写死；缺失降级条款登记。
+  - 测试：`tests/test_v2_signal_ruler.py` 5 项（同臂 Δ=0 / 优臂正 Δ / 无共同日报错 /
+    噪声带阻断 / 区间有序）；全套 15 项过。
+
+### Changed
+
+- 版本号 0.202.0 → 0.203.0（证据机器通路闭环：转换 → 读入 → 重算 → 尺子，四件套齐）。
+
 ## [0.202.0] - 2026-10-01
 
 ### Fixed
