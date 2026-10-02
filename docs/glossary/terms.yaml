@@ -526,10 +526,11 @@ terms:
     aliases: [replenish, 对称回补]
     one_liner: 减仓释放的现金在暴露上限放开后按持仓市值比例买回的对称机制（不重置买入日）
     layman: 之前嫌危险卖掉了一部分，警报解除后按比例买回来——原来的"持有天数"不清零重算
-    example: R-007 §6：回补臂 ΔCAGR +1.20pp / ΔMaxDD +1.63pp ⇒ 2026-09-20 转正为默认 e2online_r
+    example: R-007 §6/§7：回补组件增量（R−A 口径）ΔCAGR +1.20pp / ΔMaxDD +1.63pp；vs 基线合计 ΔCAGR +1.15pp / ΔMaxDD +5.38pp ⇒ 2026-09-20 转正为默认 e2online_r
     source: 暴露覆盖契约（P2-4，v0.127.3）
     related: [暴露系数 λ, lot, 政策层]
     introduced: "2026-09-30"
+    revised: "2026-10-02：口径标注更正（F8R-C8）——+1.20/+1.63 为 R−A 组件增量口径，vs 基线为 +1.15/+5.38"
 
   - term: 政策层
     aliases: [policy layer, e2online_r]
@@ -599,7 +600,7 @@ terms:
     aliases: [drawdown, MaxDD, 最大回撤]
     one_liner: 净值从历史高点回落的最大幅度——项目主判据（低噪声维度）
     layman: 账户从最高峰最多跌到过多深的谷底；登山时最深掉进了多深的坑
-    example: 换种子 ΔMaxDD 仅 ±0.6pp ⇒ 主判据；B1 −19.4% vs B0 −25.43%（+6.0pp 改善待裁决）
+    example: 换种子 ΔMaxDD 仅 ±0.6pp ⇒ 主判据；B1 −19.4% vs B0 −25.43%（+6.0pp 差异已经 P1.5 裁决处理：e2online_r 退役、迁移目标 B0，方案 F8）
     source: 净值判据噪声带契约；metrics_v1 北极星
     related: [夏普, Calmar, 配对差分]
     introduced: "2026-09-30"

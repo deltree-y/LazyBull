@@ -663,6 +663,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 
 ```powershell
 # 默认臂已就位（脚本配置区 $exposure_arm_list = e2online_r，2026-09-20 转正：回补开），直接跑即可：
+# （P1.5 已裁决：该臂于 v2 切换日退役，迁移期默认不变——方案 F8 / docs/reports/p15_policy_layer_adjudication_20261001.md）
 #   $policy_model_root = "data\walk_forward\terminal_risk_wf_oos14"   # 与选股 OOS 对齐的 14 折集
 #   $policy_arm_suffix = "_v6m_fscore"
 #   $exposure_arm_list = @( [PSCustomObject]@{ Name = "e2online_r";
@@ -695,6 +696,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\batch\batch_walk_forward.ps1 
 16 个恢复窗口 11 正 / 5 负，方向与窗口内市场涨跌一致，最大负项 split2 2020-03 −3.42pp）。
 **可外推性声明**：收益增量“方向偏正、量级不可承诺”（机制期望 ≈0.5pp/年；单窗口 ±3pp 事件会再现）；
 **回撤改善不可外推**（−20.25%→−18.62% 由 split6 单折驱动）；**转正 ≠ 收益承诺**。
+**P1.5 迁移前裁决（2026-10-01，方案 F8）：e2online_r 于 v2 切换日退役**——迁移期默认臂不变、
+直接跑即可；裁决报告 `docs/reports/p15_policy_layer_adjudication_20261001.md`。
 详见 `docs/terminal_loss_risk_register.md` R-007 §6/§7。
 
 **纸面交易接线（v0.127.10）**：`paper_trade.py` / `bot_service.py`（共享 `execute_trade_workflow`）
