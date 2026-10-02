@@ -9,6 +9,7 @@
 |---|---|---|---|
 | F1 | 2026-10-01 | 方案 v1.8 §3.5 / §0.3 + R1-2 / R1-3 修正 | 首次落档 |
 | F2 | 2026-10-01 | P0 评审第二轮 | 4-A（拍板）：置信序列方差改持有期块方差 + 校准判据可操作化（≥20 次 A vs A 换种子）；4-B α 扣减时点写死（登记即锁定）；4-C §5/§6 机器边界；4-D 披露季措辞修正；⚪ 小点（时间戳校验 / 回填 α 口径） |
+| F3 | 2026-10-02 | P5a-2 回填实践 + F9 评审（B-2/B-3/C-7） | §8 补三条：占位 prereg 字段级豁免（`retrospective_placeholder=true` 允许 arms/metrics/noise_band/stop_rule 空值）+「正式报告约 10 份」措辞改「正式登记结论约 10 项」+ 回填绕过 DataStore 的技术债登记（DataStore 落地后须对全量条目跑 schema 校验回补） |
 
 ---
 
@@ -122,3 +123,14 @@ terminated / adjudicated → （重开 = 新 hypothesis_id + supersedes 旧条�
   `candidate_pool_denominator` 能重建则重建，不能重建登记 `null` + 说明；**回填条目的 `alpha_budget` 记 `null`、不消耗未来预算**（F2 补）。
 - **时间戳校验（F2，P0 评审 ⚪）**：新实验的产物时间戳必须**晚于**对应 prereg 的 `registered_at`，否则不得进裁决（防先跑后登记）。
 - 回填完成 ≠ 结束：此后所有新实验**先登记 prereg 再跑**（无登记的实验结果不得进入任何裁决）。
+- **占位 prereg 字段豁免（F3，F9 评审 B-2）**：回填占位 prereg（`retrospective_placeholder=true`）允许
+  `arms / metrics / noise_band / stop_rule` 空值；该字段语义 = 回填占位、仅供 conclusion 挂接。
+- **证据源形态（F3，F9 评审 C-7）**：本节「首版回填限 docs/ 正式报告约 10 份」口径改「**限正式登记结论
+  约 10 项**」——A3 / C 族等结论正式登记于 CLAUDE.md 契约条目与本地 prereg，无独立 `docs/reports/*_result.md`，
+  实质合规。
+- **写入入口豁免与技术债（F3，F9 评审 B-3）**：P5a-2 回填（20 条）为一次性人工构建（DataStore 尚未建成，
+  P5a-2 与 P1 并行，不视为违规）；**DataStore 落地后须对全量条目跑 schema 校验回补**。
+- **结论类条目公共字段关系（F3，F9 评审②-07）**：结论类条目不带 `vehicle` / `tags`，与 §3.1「公共字段
+  两类必有」的书实差异登记——结论类以 `hypothesis_id` 挂接 prereg 为准，分类字段不重复。
+- **本地预登记文档属合法证据引用（F3，F9 评审②-08）**：`evidence_refs` 允许引用 `docs/plans/`（本地
+  gitignore 预登记文档）——A3 / C 族 / R-005 等历史结论的 prereg 载体即在此。

@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.5] - 2026-10-02
+
+### Added
+
+- **P5a-2 证据机器·记忆落地**（方案 §8-P5a-2，三交付）：
+  - **假设台账历史结论回填**：10 族 ×（占位 prereg + conclusion）= 20 条（台账 5→25 条）——
+    holdertrade / repurchase / top10fh / top_inst 四轮家族终结 + A5 downside_penalty +
+    A3 建仓折扣回补 + C 族域扩展 + R-004 政策层在线复核 + R-005 个股退出 + 可用性标记；
+    全部 `alpha_budget=null`（不消耗未来预算，schema §8）、10 条 conclusion 均 `retrospective=true`；候选池分母
+    可重建者已重建（8/4/6/5/4/1/2/1/1/4）。回填顺带发现历史欠账：**R-005 节从未落盘
+    风险登记册**（实质内容在 CLAUDE.md 契约条目），已在条目 notes 注明。
+  - **入场点敏感度报告**：正式入口 `scripts/v2_p5a2/run_entry_sensitivity.py` + 报告
+    `docs/reports/p5a2_entry_sensitivity_20261002.md` + JSON 产物——1,462 个起点
+    （≥252 日窗口）：CAGR 中位 B1 21.25% / B0 19.51%，IQR 宽 4.58/5.15pp，最差起点年化
+    仍双位数正（16.53% / 12.59%），MaxDD 与入场点几乎无关；**敏感度宽度 < 净值层 MDE
+    （12pp）** ⇒ §3.3 爬坡立项门素材倾向不立项（正式判定走预登记）。
+  - **F7 待办偿还**：`run_power_calibration.py` 增 `--out-name`（同日重跑防覆盖台账引用
+    产物）+ `--sections both/curve/consistency`（densegrid / consistency 分节产物可原位产出）
+    + `--purpose`；冒烟通过。
+  - 测试：新增 11 项（CLI 分节/命名 7 + 敏感度口径 4，全过）。
+
+### Changed
+
+- 版本号 0.203.4 → 0.203.5（P5a-2 三交付落地）；方案 F9 登记生效（§8-P5a-2 行标执行完毕，两轮评审收口）。
+- **F9R 评审收口**（`docs/review/v2_architecture_f9_review_20261002.md`，逐项甄别后全量处置）：
+  **A 类** = 台账 `H-backfill-top_inst` 口径更正（「逐折收益改善 0/6」实为逐折 ΔMaxDD 计数
+  错位——收益实为 2/6（split8 +7.87 / split12 +2.22）；符号检验 p 值改标双尾，源报告
+  「单尾 p≈0.031」误标随附注明）；**B 类** = 敏感度宽度主口径写死（IQR + 最差−中位双口径并引、
+  不取全距；方案 §3.3 立项门同步）+ 台账 schema F3（占位 prereg 字段豁免 / 证据源形态 /
+  DataStore 技术债登记）+ R-005 补录风险登记册 + README 补 P5a-2 通路；**C 类** = RNG 分节
+  逐位一致登记（脚本 docstring）+ `--out-name` 后缀 strip + docstring 口径修正 +
+  CLAUDE.md 头部版本补齐 + 测试名实相符改造（`_build_parser` 抽取）。
+  **第二轮**（`docs/review/v2_architecture_f9_review2_20261002.md`，F9R②-01~10）：
+  §3.5 口径句补 min_days=252 执行细化（实测 1,462 起点）+ §3.3 立项门补判定素材与
+  「不立项分支无需补立预登记」程序注记 + 术语库两词条同步（入场点敏感度 / 爬坡建仓）+
+  报告两处文字勘误 + CHANGELOG retrospective 措辞修正 + schema F3 补两条（结论类公共字段
+  关系 / 本地预登记文档合法证据引用）+ r005 evidence_refs 补 plan 路径 + 敏感度脚本
+  通用性定位登记；F9R-04 commit 清单（README 索引行 / 报告 `git add -f` / 本地文件状态词）
+  转生效时执行。
+
 ## [0.203.4] - 2026-10-01
 
 ### Changed

@@ -815,6 +815,16 @@ python scripts/v2_p5a1/verify_runs_recalc.py
 `<out_root>/<batch_id>.convert_report.json`（行数校验 / 字段映射表 / 丢弃列清单 /
 缺列登记 / 抽样 md5）。
 
+**v2 证据机器·记忆（P5a-2，v0.203.5）：** 假设台账 `data/ledger/hypotheses.jsonl`
+（10 族历史结论回填 + 占位 prereg，append-only）；入场点敏感度报告（§3.3 爬坡立项门输入；
+最差 K 起点 + 中位/离散度口径，分位数精读禁止）：
+
+```bash
+python scripts/v2_p5a2/run_entry_sensitivity.py            # 入场点敏感度（B0/B1 冻结批）
+python scripts/v2_p5a1/run_power_calibration.py --shift-grid 2 5 8 10 12 15 --out-name <名>  # 功效标定
+#  --sections both|curve|consistency 分节输出；--out-name 防同日覆盖（台账引用产物）
+```
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）
