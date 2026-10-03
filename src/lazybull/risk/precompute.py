@@ -118,6 +118,42 @@ def _cvar_from_windows(sw: np.ndarray, nvalid: np.ndarray) -> np.ndarray:
     return np.where(m > 0, tail_sum / np.maximum(m, 1), q)
 
 
+def _skew_from_windows(sw: np.ndarray, nvalid: np.ndarray) -> np.ndarray:
+    """偏度（Fisher-Pearson 无偏 G1，NaN 安全）。
+
+    pandas 3.0 rolling.skew 存在回归：序列中一旦出现 ≥ 窗口长度的全 NaN 段，
+    后续所有窗口均卡死为 NaN（pandas 2.3.3 无此问题，已在 venv 双版本实证）。
+    本实现按中心矩公式计算，与 pandas 2.x rolling.skew 逐位一致（max|Δ| ≈ 1e-15，
+    验证脚本 temp/p1_verify_skew_formula.py）；NaN 位置掩码为 0 不参与矩累计。
+    """
+    n = nvalid.astype(np.float64)
+    x = np.where(np.isnan(sw), 0.0, sw)
+    mu = x.sum(axis=2) / np.maximum(n, 1)
+    xc = np.where(np.isnan(sw), 0.0, sw - mu[..., None])
+    m2 = (xc**2).sum(axis=2) / np.maximum(n, 1)
+    m3 = (xc**3).sum(axis=2) / np.maximum(n, 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.sqrt(n * (n - 1)) / (n - 2) * m3 / np.where(m2 > 0, m2, np.nan) ** 1.5
+
+
+def _kurt_from_windows(sw: np.ndarray, nvalid: np.ndarray) -> np.ndarray:
+    """超额峰度（Fisher 无偏 G2，NaN 安全；与 pandas 2.x rolling.kurt 逐位一致）。
+
+    回归背景同 `_skew_from_windows`；公式 = (n+1)(n−1)/((n−2)(n−3)) · m4/m2²
+    − 3(n−1)²/((n−2)(n−3))，m2/m4 为 /n 中心矩。
+    """
+    n = nvalid.astype(np.float64)
+    x = np.where(np.isnan(sw), 0.0, sw)
+    mu = x.sum(axis=2) / np.maximum(n, 1)
+    xc = np.where(np.isnan(sw), 0.0, sw - mu[..., None])
+    m2 = (xc**2).sum(axis=2) / np.maximum(n, 1)
+    m4 = (xc**4).sum(axis=2) / np.maximum(n, 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return (n + 1) * (n - 1) / ((n - 2) * (n - 3)) * m4 / np.where(m2 > 0, m2, np.nan) ** 2 - (
+            3 * (n - 1) ** 2 / ((n - 2) * (n - 3))
+        )
+
+
 def _max_drawdown_from_windows(sw: np.ndarray, nvalid: np.ndarray) -> np.ndarray:
     """窗口内最大回撤：min(price / cummax(price) - 1)。"""
     cummax = np.fmax.accumulate(sw, axis=2)
@@ -143,6 +179,175 @@ def _days_since_vol_max_from_windows(sw: np.ndarray, nvalid: np.ndarray) -> np.n
 # ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
+
+
+def _fill_downside_factors(
+    results: Dict[str, pd.DataFrame],
+    ret: Optional[pd.DataFrame],
+    close: Optional[pd.DataFrame],
+    idx: pd.Index,
+    cols: pd.Index,
+) -> None:
+    """A 类：下行风险（A1~A8）。"""
+    if ret is not None:
+        # A1 下行波动率：clip(upper=0) 保留 NaN，正收益归零
+        results["downside_vol_20"] = ret.clip(upper=0.0).rolling(20, min_periods=5).std(ddof=0)
+
+        # A2 下行相关性：市场下跌日的 stock_ret vs mkt_ret 滚动相关
+        mkt_ret = ret.mean(axis=1)
+        down_mask = mkt_ret < 0
+        ret_down = ret.copy()
+        ret_down.loc[~down_mask] = np.nan
+        mkt_down = mkt_ret.where(down_mask)
+        results["downside_corr_20"] = ret_down.rolling(20, min_periods=5).corr(mkt_down)
+
+        # A3 历史 VaR 95%
+        results["var_95_20"] = ret.rolling(20, min_periods=5).quantile(0.05)
+
+        # A4 CVaR 95%（滑窗排序 + 尾部均值，与逐日 quantile 语义一致）
+        results["cvar_95_20"] = pd.DataFrame(
+            _rolling_window_chunked(ret.to_numpy(), 20, _cvar_from_windows, min_valid=10),
+            index=idx,
+            columns=cols,
+        )
+
+        # A7/A8 偏度、峰度（NaN 安全实现，替代 pandas 3.0 rolling.skew/kurt——
+        # 该版本存在回归：全 NaN 窗口出现后后续窗口全部卡死 NaN；
+        # 本实现与 pandas 2.x 语义逐位一致，修复登记 = 冻结文档 §8 D-05）
+        results["skewness_20"] = pd.DataFrame(
+            _rolling_window_chunked(ret.to_numpy(), 20, _skew_from_windows, min_valid=5),
+            index=idx,
+            columns=cols,
+        )
+        results["kurtosis_20"] = pd.DataFrame(
+            _rolling_window_chunked(ret.to_numpy(), 20, _kurt_from_windows, min_valid=5),
+            index=idx,
+            columns=cols,
+        )
+
+    if close is not None:
+        # A5 最大回撤（20 日）
+        results["max_drawdown_20"] = pd.DataFrame(
+            _rolling_window_chunked(
+                close.to_numpy(), 20, _max_drawdown_from_windows, min_valid=1
+            ),
+            index=idx,
+            columns=cols,
+        )
+        # A6 回撤持续天数（60 日窗口内距峰值的交易日数）
+        results["drawdown_duration"] = pd.DataFrame(
+            _rolling_window_chunked(
+                close.to_numpy(), 60, _drawdown_duration_from_windows, min_valid=2
+            ),
+            index=idx,
+            columns=cols,
+        )
+
+
+def _fill_volatility_factors(
+    results: Dict[str, pd.DataFrame],
+    open_: Optional[pd.DataFrame],
+    high: Optional[pd.DataFrame],
+    low: Optional[pd.DataFrame],
+    close: Optional[pd.DataFrame],
+) -> None:
+    """B 类：波动结构（B1~B6）。"""
+    if high is not None and low is not None:
+        hl_sq = np.log(high / low.clip(lower=_EPS)) ** 2
+        n_hl = hl_sq.rolling(20, min_periods=5).count()
+        results["parkinson_vol_20"] = (
+            np.sqrt(hl_sq.rolling(20, min_periods=5).sum() / (4.0 * _LOG_2 * n_hl)) * _SQRT_252
+        )
+        if close is not None:
+            results["high_low_range_ratio"] = (
+                ((high - low) / close.clip(lower=_EPS)).rolling(20, min_periods=5).mean()
+            )
+
+    if close is not None:
+        daily_ret = close.pct_change(fill_method=None)
+        cnt_close_80 = close.notna().rolling(80, min_periods=1).sum()
+
+        # B2 波动率的波动率
+        rolling_vol = daily_ret.rolling(20, min_periods=5).std() * _SQRT_252
+        vol_of_vol = rolling_vol.rolling(60, min_periods=20).std()
+        results["vol_of_vol_20"] = vol_of_vol.where(cnt_close_80 >= 40)
+
+        # B3 波动率历史分位（252 日滚动 rank）
+        rv_regime = daily_ret.rolling(20, min_periods=10).std() * _SQRT_252
+        rank_min = rv_regime.rolling(252, min_periods=1).rank(method="min")
+        rank_cnt = rv_regime.rolling(252, min_periods=1).count()
+        pct = (rank_min - 1.0) / rank_cnt.where(rank_cnt > 0)
+        cnt_close_252 = close.notna().rolling(252, min_periods=1).sum()
+        results["vol_regime_percentile"] = pct.where(cnt_close_252 >= 60)
+
+        # B4 GARCH 波动持续性：平方收益的一阶自相关（60 日）
+        sq_ret = daily_ret**2
+        persistence = sq_ret.rolling(60, min_periods=30).corr(sq_ret.shift(1))
+        results["garch_persistence"] = persistence.where(cnt_close_80 >= 30)
+
+    if open_ is not None and low is not None:
+        # B6 向下跳空频率
+        gap_down = (open_ < low.shift(1)).astype(float)
+        gap_mean = gap_down.rolling(20, min_periods=1).mean()
+        cnt_open_21 = open_.notna().rolling(21, min_periods=1).sum()
+        results["gap_risk"] = gap_mean.where(cnt_open_21 >= 10)
+
+
+def _fill_liquidity_factors(
+    results: Dict[str, pd.DataFrame],
+    close: Optional[pd.DataFrame],
+    vol: Optional[pd.DataFrame],
+    amount: Optional[pd.DataFrame],
+    turnover: Optional[pd.DataFrame],
+    idx: pd.Index,
+    cols: pd.Index,
+) -> None:
+    """D 类：流动性（D1~D8）。"""
+    if turnover is not None:
+        results["turnover_cv_20"] = turnover.rolling(20, min_periods=10).std() / (
+            turnover.rolling(20, min_periods=10).mean() + _EPS
+        )
+        t_rank = turnover.rolling(252, min_periods=1).rank(method="min")
+        t_cnt = turnover.rolling(252, min_periods=1).count()
+        t_pct = (t_rank - 1.0) / t_cnt.where(t_cnt > 0)
+        results["turnover_percentile"] = t_pct.where(t_cnt >= 60)
+
+    if amount is not None:
+        results["amount_cv_20"] = amount.rolling(20, min_periods=10).std() / (
+            amount.rolling(20, min_periods=10).mean() + _EPS
+        )
+
+    if close is not None and amount is not None:
+        daily_ret_c = close.pct_change(fill_method=None)
+        cnt_close_20 = close.notna().rolling(20, min_periods=1).sum()
+        illiq = (daily_ret_c.abs() / amount.clip(lower=_EPS)).rolling(
+            20, min_periods=10
+        ).mean() * 1e6
+        results["amihud_illiq_20"] = illiq.where(cnt_close_20 >= 10)
+
+    if vol is not None:
+        vol_5 = vol.rolling(5, min_periods=1).mean()
+        vol_20 = vol.rolling(20, min_periods=10).mean()
+        results["vol_ratio_5_20"] = vol_5 / (vol_20 + _EPS)
+
+        climax = pd.DataFrame(
+            _rolling_window_chunked(
+                vol.to_numpy(), 20, _days_since_vol_max_from_windows, min_valid=1
+            ),
+            index=idx,
+            columns=cols,
+        )
+        cnt_vol_60 = vol.notna().rolling(60, min_periods=1).sum()
+        results["volume_climax_days"] = climax.where(cnt_vol_60 >= 10)
+
+    if close is not None and vol is not None:
+        daily_ret_v = close.pct_change(fill_method=None)
+        cnt_close_20v = close.notna().rolling(20, min_periods=1).sum()
+        up_vol = vol.where(daily_ret_v > 0).rolling(20, min_periods=1).mean()
+        down_vol = vol.where(daily_ret_v < 0).rolling(20, min_periods=1).mean()
+        results["up_down_vol_ratio"] = (up_vol / (down_vol + _EPS)).where(cnt_close_20v >= 10)
+
+        results["volume_price_divergence"] = close.rolling(10, min_periods=8).corr(vol)
 
 
 def precompute_risk_factors(daily_adj: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -235,139 +440,9 @@ def precompute_risk_factors(daily_adj: pd.DataFrame) -> Optional[pd.DataFrame]:
         warnings.filterwarnings(
             "ignore", message="All-NaN slice encountered", category=RuntimeWarning
         )
-
-        # ── A 类：下行风险 ──────────────────────────────────────
-        if ret is not None:
-            # A1 下行波动率：clip(upper=0) 保留 NaN，正收益归零
-            results["downside_vol_20"] = ret.clip(upper=0.0).rolling(20, min_periods=5).std(ddof=0)
-
-            # A2 下行相关性：市场下跌日的 stock_ret vs mkt_ret 滚动相关
-            mkt_ret = ret.mean(axis=1)
-            down_mask = mkt_ret < 0
-            ret_down = ret.copy()
-            ret_down.loc[~down_mask] = np.nan
-            mkt_down = mkt_ret.where(down_mask)
-            results["downside_corr_20"] = ret_down.rolling(20, min_periods=5).corr(mkt_down)
-
-            # A3 历史 VaR 95%
-            results["var_95_20"] = ret.rolling(20, min_periods=5).quantile(0.05)
-
-            # A4 CVaR 95%（滑窗排序 + 尾部均值，与逐日 quantile 语义一致）
-            results["cvar_95_20"] = pd.DataFrame(
-                _rolling_window_chunked(ret.to_numpy(), 20, _cvar_from_windows, min_valid=10),
-                index=idx,
-                columns=cols,
-            )
-
-            # A7/A8 偏度、峰度
-            results["skewness_20"] = ret.rolling(20, min_periods=5).skew()
-            results["kurtosis_20"] = ret.rolling(20, min_periods=5).kurt()
-
-        if close is not None:
-            # A5 最大回撤（20 日）
-            results["max_drawdown_20"] = pd.DataFrame(
-                _rolling_window_chunked(
-                    close.to_numpy(), 20, _max_drawdown_from_windows, min_valid=1
-                ),
-                index=idx,
-                columns=cols,
-            )
-            # A6 回撤持续天数（60 日窗口内距峰值的交易日数）
-            results["drawdown_duration"] = pd.DataFrame(
-                _rolling_window_chunked(
-                    close.to_numpy(), 60, _drawdown_duration_from_windows, min_valid=2
-                ),
-                index=idx,
-                columns=cols,
-            )
-
-        # ── B 类：波动结构 ──────────────────────────────────────
-        if high is not None and low is not None:
-            hl_sq = np.log(high / low.clip(lower=_EPS)) ** 2
-            n_hl = hl_sq.rolling(20, min_periods=5).count()
-            results["parkinson_vol_20"] = (
-                np.sqrt(hl_sq.rolling(20, min_periods=5).sum() / (4.0 * _LOG_2 * n_hl)) * _SQRT_252
-            )
-            if close is not None:
-                results["high_low_range_ratio"] = (
-                    ((high - low) / close.clip(lower=_EPS)).rolling(20, min_periods=5).mean()
-                )
-
-        if close is not None:
-            daily_ret = close.pct_change(fill_method=None)
-            cnt_close_80 = close.notna().rolling(80, min_periods=1).sum()
-
-            # B2 波动率的波动率
-            rolling_vol = daily_ret.rolling(20, min_periods=5).std() * _SQRT_252
-            vol_of_vol = rolling_vol.rolling(60, min_periods=20).std()
-            results["vol_of_vol_20"] = vol_of_vol.where(cnt_close_80 >= 40)
-
-            # B3 波动率历史分位（252 日滚动 rank）
-            rv_regime = daily_ret.rolling(20, min_periods=10).std() * _SQRT_252
-            rank_min = rv_regime.rolling(252, min_periods=1).rank(method="min")
-            rank_cnt = rv_regime.rolling(252, min_periods=1).count()
-            pct = (rank_min - 1.0) / rank_cnt.where(rank_cnt > 0)
-            cnt_close_252 = close.notna().rolling(252, min_periods=1).sum()
-            results["vol_regime_percentile"] = pct.where(cnt_close_252 >= 60)
-
-            # B4 GARCH 波动持续性：平方收益的一阶自相关（60 日）
-            sq_ret = daily_ret**2
-            persistence = sq_ret.rolling(60, min_periods=30).corr(sq_ret.shift(1))
-            results["garch_persistence"] = persistence.where(cnt_close_80 >= 30)
-
-        if open_ is not None and low is not None:
-            # B6 向下跳空频率
-            gap_down = (open_ < low.shift(1)).astype(float)
-            gap_mean = gap_down.rolling(20, min_periods=1).mean()
-            cnt_open_21 = open_.notna().rolling(21, min_periods=1).sum()
-            results["gap_risk"] = gap_mean.where(cnt_open_21 >= 10)
-
-        # ── D 类：流动性 ────────────────────────────────────────
-        if turnover is not None:
-            results["turnover_cv_20"] = turnover.rolling(20, min_periods=10).std() / (
-                turnover.rolling(20, min_periods=10).mean() + _EPS
-            )
-            t_rank = turnover.rolling(252, min_periods=1).rank(method="min")
-            t_cnt = turnover.rolling(252, min_periods=1).count()
-            t_pct = (t_rank - 1.0) / t_cnt.where(t_cnt > 0)
-            results["turnover_percentile"] = t_pct.where(t_cnt >= 60)
-
-        if amount is not None:
-            results["amount_cv_20"] = amount.rolling(20, min_periods=10).std() / (
-                amount.rolling(20, min_periods=10).mean() + _EPS
-            )
-
-        if close is not None and amount is not None:
-            daily_ret_c = close.pct_change(fill_method=None)
-            cnt_close_20 = close.notna().rolling(20, min_periods=1).sum()
-            illiq = (daily_ret_c.abs() / amount.clip(lower=_EPS)).rolling(
-                20, min_periods=10
-            ).mean() * 1e6
-            results["amihud_illiq_20"] = illiq.where(cnt_close_20 >= 10)
-
-        if vol is not None:
-            vol_5 = vol.rolling(5, min_periods=1).mean()
-            vol_20 = vol.rolling(20, min_periods=10).mean()
-            results["vol_ratio_5_20"] = vol_5 / (vol_20 + _EPS)
-
-            climax = pd.DataFrame(
-                _rolling_window_chunked(
-                    vol.to_numpy(), 20, _days_since_vol_max_from_windows, min_valid=1
-                ),
-                index=idx,
-                columns=cols,
-            )
-            cnt_vol_60 = vol.notna().rolling(60, min_periods=1).sum()
-            results["volume_climax_days"] = climax.where(cnt_vol_60 >= 10)
-
-        if close is not None and vol is not None:
-            daily_ret_v = close.pct_change(fill_method=None)
-            cnt_close_20v = close.notna().rolling(20, min_periods=1).sum()
-            up_vol = vol.where(daily_ret_v > 0).rolling(20, min_periods=1).mean()
-            down_vol = vol.where(daily_ret_v < 0).rolling(20, min_periods=1).mean()
-            results["up_down_vol_ratio"] = (up_vol / (down_vol + _EPS)).where(cnt_close_20v >= 10)
-
-            results["volume_price_divergence"] = close.rolling(10, min_periods=8).corr(vol)
+        _fill_downside_factors(results, ret, close, idx, cols)
+        _fill_volatility_factors(results, open_, high, low, close)
+        _fill_liquidity_factors(results, close, vol, amount, turnover, idx, cols)
 
     # ── 展平回长表（与 daily_adj 行对齐）────────────────────
     date_pos = idx.get_indexer(base["trade_date"])

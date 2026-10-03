@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.9] - 2026-10-03
+
+### Added
+
+- **P1 单元 3：口径 B 探测 + 冻结参照实现**（机器任务 A，报告
+  `docs/reports/v2_p1_ensure_replay_frozen_ref_20261003.md`）：
+  - **口径 B**（20260401~20260630，60 交易日重放 vs cs_train）：行集 60/60 零差异，23 个
+    差异列全部归因（D-04 四类 + D-05）⇒ 数值路径可复现，全量重放启动。
+  - **冻结参照全量重放**：`scripts/v2_p1/run_frozen_reference.py`（5 年 ×3 分块 + Y−2 预热
+    钳制 + 断点续跑）+ `v2/store/replay_compare.py` 对账器（atol=1e-6、NaN 语义、三段式
+    聚合、归因标注）+ 薄入口 `compare_replay.py`；3,518/3,518 分区落盘、0 失败日。
+  - **全量对账终版**（`data/reports/v2_p1_frozen_ref_compare_20261003.json`）：126/381 列
+    差异 **100% 五类归因**（L1 cs_train 2012 冷启动血缘 / L2 2013~15 公式版本血缘——
+    downside_vol 比值中位 2.87~2.96、macd 未复权口径 / D-04 数据态漂移 / D-05 环境漂移
+    [已修复] / 42 列 2012 schema 缺失）；**2018 起（当前公式版本构建区）参照与 cs_train
+    全列逐值一致**，实现路径可复现性确立。
+  - **基线判定（契约 R1-4）**：**重建基线**——单元 4 验收口径 = 严格门（v2 panel vs 冻结
+    参照，母截面三段式阈值）+ 归因门（v2 panel vs cs_train，预期差异 = 上述五类清单）。
+  - 测试：replay_compare 13 例。
+
+### Fixed
+
+- **pandas 3.0 rolling.skew/kurt 回归修复（D-05，用户裁决：修复后回填）**：pandas 3.0.x
+  的 rolling.skew/kurt 在序列曾出现 ≥窗口长度的全 NaN 段后后续窗口永久卡死 NaN
+  （venv 实证 3.0.0/3.0.4/3.0.5 中招、2.3.3 正常；本机 2026-09-01 升级 3.0.5 ⇒
+  cs_train（08-31 构建）干净、此后构建中毒）。`risk/precompute.py` A7/A8 改为中心矩公式
+  NaN 安全实现（与 pandas 2.x 逐位一致 max|Δ|≈1e-15；真实数据全截面验证 20260401 全部
+  5,069 股 skewness_20 ≡ cs_train max|Δ|=0、kurtosis_20 max|Δ|=6e-8）；冻结参照全量
+  3,518 分区两列补丁重建。**现役模型 154 列不含 22 个批量风控列 ⇒ 生产信号无直接影响**；
+  修复恢复旧链 cs_infer 与冻结基线的一致性（仅限非模型消费列）。回归测试
+  `TestRollingSkewKurtNanSafety`（中毒模式防护 + Series 独立参照逐值一致）。
+- `precompute_risk_factors` 按类族拆分三个辅助函数（254→114 行，复杂度 hook 新增硬超限
+  归零；纯代码搬移零行为变化）。
+
+### Changed
+
+- 冻结文档 `docs/data/v2_p1_build_freeze.md` §8 差异台账追加 D-05（pandas 回归与修复）、
+  D-06（cs_train 2012 冷启动血缘）、D-07（2013~15 公式版本血缘 + moneyflow 2011-12 修订
+  + north 2015-01 覆盖）；单元 3 报告 §8 登记机器耗时台账（实际 ~372 min vs 授权 ~155 min，
+  超时主因 = 调查驱动 + 分块固定成本，属契约「口径漂移处置另计」）与单元 4 防复发清单
+  （统一分块约定 / 指纹跳过替代 schema 列数 / 回填期依赖链冻结）。
+- 版本号 0.203.8 → 0.203.9（P1 单元 3 落地；分阶段功能小版本递增）。
+
 ## [0.203.8] - 2026-10-03
 
 ### Added

@@ -279,3 +279,69 @@ class TestBuilderIntegration:
         # clear_caches 释放风控缓存
         builder.clear_caches()
         assert builder._risk_factor_cache_dict is None
+
+
+class TestRollingSkewKurtNanSafety:
+    """pandas 3.0 rolling.skew/kurt NaN 中毒回归防护（修复登记：冻结文档 §8 D-05）。
+
+    pandas 3.0.x 的 rolling.skew 在序列曾出现 ≥ 窗口长度的全 NaN 段后，后续
+    所有窗口均卡死为 NaN（kurt 在部分模式下同病）。precompute 已改用中心矩
+    公式的 NaN 安全实现（与 pandas 2.x rolling 语义逐位一致）。本类锁定：
+    长停牌股在全 NaN 段之后的完整窗口上必须产出非 NaN 且与 Series 级
+    skew/kurt 独立参照一致（Series.skew/kurt 不受 rolling 回归影响）。
+    """
+
+    def _make_gap_daily_adj(self) -> pd.DataFrame:
+        """构造含 25 个连续交易日缺口（长停牌）的单股日线。"""
+        rng = np.random.RandomState(7)
+        dates = pd.bdate_range("2024-01-02", periods=139).strftime("%Y%m%d").tolist()
+        keep = dates[:52] + dates[77:]  # 位置 52~76 共 25 日缺失（≥ 窗口 20）
+        rets = rng.normal(0.0005, 0.02, len(keep))
+        close = 10.0 * np.cumprod(1 + rets)
+        df = pd.DataFrame(
+            {
+                "ts_code": "600001.SH",
+                "trade_date": keep,
+                "close_adj": close,
+                "vol": rng.uniform(1e4, 1e6, len(keep)),
+            }
+        )
+        df = df.sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+        df["pre_close_adj"] = df.groupby("ts_code")["close_adj"].shift(1)
+        return df
+
+    def test_skew_kurt_not_stuck_after_all_nan_window(self):
+        daily_adj = self._make_gap_daily_adj()
+        result = precompute_risk_factors(daily_adj)
+        assert result is not None
+        code = "600001.SH"
+        sub = result[result["ts_code"] == code].set_index("trade_date")
+        # 缺口后第 25 个交易日（窗口已完全落在缺口之后，20 日窗口内无 NaN）
+        dates = sorted(daily_adj["trade_date"].unique().tolist())
+        target = dates[52 + 25 + 20]  # 缺口后首个「窗口无 NaN」的日期之后
+        row = sub.loc[target]
+        assert pd.notna(row["skewness_20"]), f"{target} skewness_20 被 NaN 中毒"
+        assert pd.notna(row["kurtosis_20"]), f"{target} kurtosis_20 被 NaN 中毒"
+
+    def test_skew_kurt_match_series_reference(self):
+        """与 Series 级 skew/kurt 独立参照逐值一致（float32 存储，atol=1e-6）。"""
+        daily_adj = self._make_gap_daily_adj()
+        result = precompute_risk_factors(daily_adj)
+        assert result is not None
+        code = "600001.SH"
+        sub = result[result["ts_code"] == code].set_index("trade_date")
+        px = daily_adj[daily_adj["ts_code"] == code].set_index("trade_date")["close_adj"]
+        ret = px / px.shift(1) - 1
+        # 对全部「20 日窗口内无 NaN」的日期逐一比对（输出为 float32，容差按 float32 精度）
+        checked = 0
+        for i in range(19, len(ret)):
+            w = ret.iloc[i - 19 : i + 1]
+            if w.isna().any():
+                continue
+            d = ret.index[i]
+            exp_sk = w.skew()
+            exp_ku = w.kurt()
+            assert abs(sub.loc[d, "skewness_20"] - exp_sk) < 1e-6, f"{d} skewness_20 不符"
+            assert abs(sub.loc[d, "kurtosis_20"] - exp_ku) < 1e-6, f"{d} kurtosis_20 不符"
+            checked += 1
+        assert checked >= 30, f"有效比对样本不足（{checked}）"
