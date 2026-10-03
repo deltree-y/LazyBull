@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.6] - 2026-10-02
+
+### Added
+
+- **P1 数据底座开工·步骤 0 冻结物落档**（方案 §8-P1「开工前冻结构建窗口口径」执行）：
+  `docs/data/v2_p1_build_freeze.md` 单文件承载六项冻结——① 构建窗口口径（回填区间
+  20120104~20260702 / 预热前 7 月+后 1 月 / horizons {5,10,20} + label_filter_mode=all /
+  行业+规模双中性化）；② **截面口径核心**：行过滤（步骤 11）先于中性化（步骤 12），
+  `zscore_*`/`neu_*`/`mkt_*` 全在过滤后截面计算（orchestration.py:204-229，0.201.1 探测
+  教训登记；panel 行口径拍板 = 与 cs_train 逐行一致，全截面分母由 normalized+母截面承担）；
+  ③ 列族分组表（383 列 → panel 8 族 + labels 3 表，脚本校验全覆盖/无重复/无遗漏）；
+  ④ 冷热分层参数（热区 12 个月日分区 / 冷区 2012-01~2025-06 月压实 ≈1,300 文件 /
+  256MB 上限+32MB 软下限；labels 成熟度封存时点 = T+20 端点可算日）；⑤ raw 快照
+  （34 数据集水位 + 10 项 sha256 抽验指纹，与 B0/B1 同数据态 `9d0408ee` 复核一致，
+  git `d729f82`）；⑥ 运行时派生四族物化拍板（§4.3 派生退役：ht_*/rp_*/tfh_*/ti_*/has_*
+  物化进 announcement 族、status=deprecated、默认链路不消费，对账按列交集口径）。
+- 采集脚本与中间产物（temp/）：`p1_gen_column_groups_20261002.py`（分组映射生成+校验）、
+  `p1_column_groups_20261002.json`、`p1_cs_train_columns_20261002.txt`、
+  `p1_snapshot_fingerprints_20261002.json`。
+
+### Changed
+
+- 版本号 0.203.5 → 0.203.6（P1 步骤 0 冻结物落档；分阶段功能小版本递增）。
+
 ## [0.203.5] - 2026-10-02
 
 ### Added
