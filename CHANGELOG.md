@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.7] - 2026-10-02
+
+### Added
+
+- **P1 单元 1：v2 store 基础设施落地**（方案 §4.1/§4.3 + protocols §1.1/§1.2 代码化，全部新文件、旧数据层零改动）：
+  - `v2/common/protocols/store.py`：`DataStore` / `FeatureBuilder` 两个 `@runtime_checkable`
+    Protocol（签名与语义注释逐字对齐协议文档，signal/core/hosts/evidence 留 TODO 占位）。
+  - `v2/store/manifest.py`：manifest 单一来源（列级 group/source/definition_version/
+    available_from/backfilled_at/status + per-分区 sha256 内容指纹 + 依赖声明 + labels
+    封存水位只进不退）；原子写 + 深拷贝防篡改。
+  - `v2/store/data_store.py::PanelDataStore`：**两阶段提交**（.tmp → sha256 → 原子纳入
+    manifest；同日同族重写指纹一致放行、不一致 RuntimeError——R4-M8 显式冲突检测）+
+    单机写锁（O_EXCL 原子创建、psutil stale 抢占、同实例可重入）+ 孤儿 .tmp GC +
+    热/冷区合并读取（冷区为准裁决）+ `load_features` 列名登记与 `available_from` 越界
+    硬报错（PIT 语义）+ labels 生命周期（forming 幂等可重写 / sealed 拒改写，
+    `sealed_through` 水位推进）+ `append_ledger_entry` 台账唯一写入口（含 id 查重）。
+  - **台账 F3 §8 技术债偿还**：`v2/store/ledger_validate.py` + 薄入口
+    `scripts/v2_p1/backfill_ledger_validate.py`——真实台账 25 条全量 schema 校验
+    **全部 pass、0 fail**（含占位 prereg 豁免口径），报告落
+    `data/reports/v2_p1_ledger_validate_20261003.json`。
+  - 测试 74 例（manifest 21 + data_store 31 + ledger_validate 22，tmp_path 合成数据）；
+    既有 v2 测试 157/157 未破坏；复杂度 hook 新增硬超限 0。
+
+### Changed
+
+- 版本号 0.203.6 → 0.203.7（P1 单元 1 落地；分阶段功能小版本递增）。
+
 ## [0.203.6] - 2026-10-02
 
 ### Added

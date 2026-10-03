@@ -1,1 +1,5 @@
 """v2 公共层：值对象 + 协议 + 跨端共享纯函数。"""
+
+from src.lazybull.v2.common import protocols
+
+__all__ = ["protocols"]
