@@ -294,3 +294,21 @@ class Manifest:
         current = self.label_sealed_through(label_name)
         if current is None or date_str > current:
             self._label_entry(label_name)["sealed_through"] = date_str
+
+    # ---------- 依赖声明 ----------
+
+    def register_dependencies(
+        self,
+        raw_datasets: list[str] | None = None,
+        factor_functions: Mapping[str, str] | None = None,
+    ) -> None:
+        """登记依赖声明（raw 清单 + factors 派生函数标识；幂等合并，去重保序）。"""
+        deps = self._data["dependencies"]
+        if raw_datasets is not None:
+            merged = list(dict.fromkeys([*deps.get("raw_datasets", []), *raw_datasets]))
+            deps["raw_datasets"] = merged
+        if factor_functions is not None:
+            deps["factor_functions"] = {
+                **deps.get("factor_functions", {}),
+                **dict(factor_functions),
+            }

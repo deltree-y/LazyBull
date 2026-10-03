@@ -230,25 +230,77 @@ class PanelDataStore:
             raise RuntimeError(
                 f"特征分区必须单日且与 date 参数一致: 期望 {date_str}，实得 {sorted(dates)[:5]}"
             )
-        for col in df.columns:
-            if col in _KEY_COLUMNS:
-                continue
-            try:
-                meta = self.manifest.column_meta(col)
-            except KeyError as exc:
-                raise RuntimeError(
-                    f"列未登记 manifest，拒绝写入: {col!r}（{date_str}/{group}）"
-                ) from exc
-            if meta["group"] != group:
-                raise RuntimeError(
-                    f"列 {col!r} 登记在族 {meta['group']!r}，拒绝写入族 {group!r} 的分区"
-                )
+        self._validate_group_columns(group, df, context=f"{date_str}/{group}")
         month = f"{date_str[:4]}-{date_str[4:6]}"
         archive_file = self.archive_dir / month / f"{group}.parquet"
         if archive_file.exists():
             raise RuntimeError(
                 f"分区已封存（冷区存在同月同族文件 {archive_file}），拒绝热区写入: {date_str}/{group}"
             )
+
+    def _validate_group_columns(self, group: str, df: pd.DataFrame, context: str) -> None:
+        """列级校验：非键列必须已登记 manifest 且登记族与目标族一致。"""
+        for col in df.columns:
+            if col in _KEY_COLUMNS:
+                continue
+            try:
+                meta = self.manifest.column_meta(col)
+            except KeyError as exc:
+                raise RuntimeError(f"列未登记 manifest，拒绝写入: {col!r}（{context}）") from exc
+            if meta["group"] != group:
+                raise RuntimeError(
+                    f"列 {col!r} 登记在族 {meta['group']!r}，拒绝写入族 {group!r} 的分区"
+                )
+
+    # ========== 写入：features 冷区（封存月分区） ==========
+
+    def append_archive_features(self, month: str, group: str, df: pd.DataFrame) -> None:
+        """落冷区月分区（``panel_archive/YYYY-MM/<group>.parquet``；两阶段提交 + 写锁）。
+
+        历史分区禁止原地修改：指纹一致 no-op、不一致 raise RuntimeError
+        （口径修正 = 新列名 / 版本升级，不是覆盖旧分区）。
+        """
+        self._validate_archive_write(month, group, df)
+        rel_path = f"panel_archive/{month}/{group}.parquet"
+        with self._lock:
+            part_dir = self.archive_dir / month
+            part_dir.mkdir(parents=True, exist_ok=True)
+            self._gc_orphans(part_dir)
+            final_path = part_dir / f"{group}.parquet"
+            tmp_path = part_dir / f"{group}.parquet.tmp"
+            df.to_parquet(tmp_path, index=False)
+            fingerprint = sha256_16_of_file(tmp_path)
+            existing_fp = self.manifest.partition_fingerprint(rel_path)
+            if existing_fp is not None:
+                tmp_path.unlink(missing_ok=True)
+                if existing_fp == fingerprint:
+                    logger.info(f"冷区分区指纹一致 no-op: {rel_path}")
+                    return
+                raise RuntimeError(
+                    f"冷区历史分区禁止原地修改: {rel_path}"
+                    f"（已登记 {existing_fp} ≠ 新内容 {fingerprint}；口径修正请走新列名/版本升级）"
+                )
+            os.replace(tmp_path, final_path)
+            self.manifest.register_partition(rel_path, fingerprint, rows=len(df), zone="archive")
+            self.manifest.save()
+            logger.info(f"冷区分区落盘: {rel_path}（{len(df)} 行，指纹 {fingerprint}）")
+
+    def _validate_archive_write(self, month: str, group: str, df: pd.DataFrame) -> None:
+        """冷区写前校验：月份格式、族名、键列、全部日期落在月内、列已登记且族一致。"""
+        if len(month) != 7 or month[4] != "-":
+            raise RuntimeError(f"冷区月份须为 YYYY-MM 格式，实得 {month!r}")
+        if group not in VALID_GROUPS:
+            raise RuntimeError(f"非法列族 {group!r}（合法值 {sorted(VALID_GROUPS)}）")
+        missing_keys = [c for c in _KEY_COLUMNS if c not in df.columns]
+        if missing_keys:
+            raise RuntimeError(f"冷区分区缺键列 {missing_keys}（{month}/{group}）")
+        dates = df["trade_date"].astype(str)
+        out_of_month = dates[(dates.str.slice(0, 4) + "-" + dates.str.slice(4, 6)) != month]
+        if len(out_of_month) > 0:
+            raise RuntimeError(
+                f"冷区月分区含月外日期: {sorted(out_of_month.unique())[:5]}（{month}/{group}）"
+            )
+        self._validate_group_columns(group, df, context=f"{month}/{group}")
 
     @staticmethod
     def _gc_orphans(directory: Path) -> None:

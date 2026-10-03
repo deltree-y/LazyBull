@@ -1,6 +1,14 @@
 # v2 P1 数据底座·构建冻结物（开工前冻结）
 
-> 版本：v1（2026-10-02）　状态：**已生效**（P1 开工闸门，随计划批准生效）
+> 版本：v2（2026-10-03）　状态：**已生效**（P1 开工闸门，随计划批准生效）
+> **版本行**：v1（2026-10-02，commit `3d2bd78`）首次生效；v2（2026-10-03）**重冻结修订**——
+> ① §1 `label_filter_mode` 勘误 all→**single**（单元 2 开关标定实证：cs_train 全历史分区含
+> y_ret_5/y_ret_10 NaN 行而 y_ret_20 恒非空 ⇒ 生产构建走 `--horizon 20` 单值分支，仅按主
+> horizon 过滤；若按 all 回填每日多滤 2~9 行、占比 4e-4~1.8e-3 > 验收门 1e-4。基线产物不变，
+> 属冻结文字勘误，差异台账回溯标注见 §8）；② §3 labels 列名适配登记（y_ret_N/neu_y_ret_N →
+> store 口径 label_value/neu_label_value）；③ §1 补 build_daily 捕获区间口径（[D−7月, D]
+> 捕获、只落 D，对齐 cs_infer 通路 `FEATURE_DATA_HISTORY_MONTHS=7`；[D,D] 单日捕获会把
+> 北向 rolling 列在长度 1 交易日序列上算错，标定实证 4684/4684 行超容差）。
 > 依据：`docs/contracts/v2_architecture_plan.md` §8-P1 行「开工前冻结构建窗口口径」+ §4.1 数据存储契约 + P1 实施计划（2026-10-02 批准）。
 > 冻结纪律：本文 commit（git `d729f82` 之后首个 P1 提交）后口径即冻结；此后任何改变构建行为的代码改动触发**重冻结程序**（对应段基线重冻结 + 差异台账回溯标注，沿方案 §9.1 基线稳定条款）。
 
@@ -11,13 +19,15 @@
 | 回填区间 | **20120104 ~ 20260702**（= cs_train 现产物覆盖区间，3,518 交易日） | 现产物实测 |
 | 预热窗口 | 加载窗口 = 起点**前 7 个自然月** + 终点**后 1 个自然月**；fund_portfolio 单独回溯 18 个月 | `features/pipeline.py:383-385,490-495` |
 | 标签口径 | T 日信号，**T+1 收盘（close_adj）买入，T+1+N 开盘（open_adj）卖出**；`y_ret_N = open_adj(T+1+N)/close_adj(T+1) − 1` | `features/labels.py:6-8,98-101` |
-| horizons | **{5, 10, 20}**（多值模式 ⇒ `label_filter_mode="all"`，行须三标签全非空才保留） | `scripts/build_clean_features.py:263-270` |
+| horizons | **{5, 10, 20} 全量生成**（builder `horizons=[5,10,20]`），主 horizon=20，**`label_filter_mode="single"`**（仅按 y_ret_20 非空过滤；生产构建走 `--horizon 20` 单值分支——v2 重冻结勘误：v1 误记 "all"，实证 cs_train 全历史分区含 y_ret_5/10 NaN 行而 y_ret_20 恒非空） | `scripts/build_clean_features.py:254-262`；单元 2 标定 `temp/p1_flag_calib_20261003.json` |
 | require_label | True（cs_train 语义；无标签拒绝落盘沿 `storage.py:592-597`） | 现产物契约 |
 | 样本过滤 | `is_st==0 & list_days>=365 & is_suspended==0`（min_list_days=365） | `builder/static_extra.py:450` |
 | 中性化 | **行业（申万）+ 规模双开**（现产物同时含 `zscore_*` 57 列与 `zscore_*_sz` 56 列） | 现产物实测 |
 | 可选因子组 | 以现产物实际列集为准（哨兵 `cashflow_quality_schema_v2` / `cons_revision_schema_v2` / `dividend_schema_v1` 在列；holdertrade/repurchase/top10fh/top_inst 四族**不**在 cs_train 列集，见 §6 物化拍板） | 现产物实测 |
 
-**截面口径（核心，0.201.1 探测教训登记）**：构建编排顺序冻结为——合并标签 → 过滤标记 → **行过滤（步骤 11）→ 中性化（步骤 12）→ 个股特征 → 市场状态**（`features/builder/orchestration.py:204-229`）。即 **`zscore_*` / `neu_*` / `mkt_*` 全部在「过滤后截面」上计算**（过滤后截面 = 上述样本过滤 + 标签全非空后的同日行集）。回填构建器必须保持同一顺序与同一截面；单日增量构建（影子通路）必须使用与批量回填**完全一致**的过滤口径（全市场统一截面），禁止以当日局部截面重排。
+**截面口径（核心，0.201.1 探测教训登记）**：构建编排顺序冻结为——合并标签 → 过滤标记 → **行过滤（步骤 11）→ 中性化（步骤 12）→ 个股特征 → 市场状态**（`features/builder/orchestration.py:204-229`）。即 **`zscore_*` / `neu_*` / `mkt_*` 全部在「过滤后截面」上计算**（过滤后截面 = 上述样本过滤 + y_ret_20 非空后的同日行集）。回填构建器必须保持同一顺序与同一截面；单日增量构建（影子通路）必须使用与批量回填**完全一致**的过滤口径（全市场统一截面），禁止以当日局部截面重排。
+
+**单日增量构建捕获区间（v2 补登）**：`build_daily(D)` 的构建驱动区间为 **[D−7 个自然月, D]**（捕获后 sink 只落 D 日），对齐纸面 cs_infer 通路 `FEATURE_DATA_HISTORY_MONTHS=7`（`features/ensure/constants.py:7`）——[D, D] 单日捕获会把北向 rolling 列（`north_*_ma5/ma20/z20/sum5/sign_streak` 等）在长度 1 的交易日序列上算错（单元 2 标定实证 4684/4684 行超容差）。
 
 **panel 行口径拍板**：v2 panel 与 cs_train **逐行一致**（同一过滤后截面）——等价复刻优先；全截面分母需求（pct_* 母截面、M1.5 覆盖率剖面）由 normalized + 母截面构建器承担，不从 panel 取（沿 `risk/terminal_loss/mother_section.py` 契约不变）。
 
@@ -44,7 +54,7 @@
 - **热区**：最近 **12 个自然月**按日分区 `data/features/panel/YYYYMMDD/<group>.parquet`（N=12 依据：覆盖 7 个月预热窗口 + 影子对账窗口 + 单日增量构建期）。
 - **冷区**：封存月压实 `data/features/panel_archive/YYYY-MM/<group>.parquet`，范围 2012-01 ~ 2025-06（162 月 × 8 族 ≈ 1,300 文件，贴合方案 ~1,000 量级估计）。
 - **单文件规则**：软上限 256MB（超限按列子族拆分）、软下限 32MB（欠限触发压实评审）；回填时逐文件校验并登记。
-- **labels**：`data/labels/y_ret_{5,10,20}/YYYYMMDD.parquet`（日分区，不分冷热；单表列 = `ts_code, trade_date, y_ret_N, neu_y_ret_N, maturity_status`）。
+- **labels**：`data/labels/y_ret_{5,10,20}/YYYYMMDD.parquet`（日分区，不分冷热；单表列 = `ts_code, trade_date, label_value, neu_label_value, maturity_status`——**v2 适配登记**：v1 文字 `y_ret_N, neu_y_ret_N` 按 store 统一口径命名为 `label_value`（= y_ret_N 值）/ `neu_label_value`（= neu_y_ret_N 值），`v2/store/labels_builder.py` docstring 同源登记）。
 - **labels 成熟度生命周期**：封存时点 = T + max(h)=T+20 端点可算日（T+1 起算第 20 个交易日存在）；封存前幂等可重写（`maturity_status=forming`），封存后拒绝改写（`maturity_status=sealed`）；回填区间内全部标签已成熟（区间末端 20260702 的 T+20 ≈ 20260730 ≤ raw 末端 2026-07-31）。
 
 ## 4. manifest 规格要点（单元 1 实现的输入）
@@ -71,6 +81,15 @@
 - 出口 = 残差 100% 归因（差异逐列归因：截面口径 / 派生物化 / 数据态）。
 - 性能闸门：全历史跨列族加载 ≤ 现状 1.5 倍（双口径：抽 5 列 + 全列）。
 - 新增列只写新文件（历史分区指纹零改动校验）。
+
+## 8. 差异台账（重冻结/口径修订回溯标注，append-only）
+
+| 日期 | 条目 | 内容 | 证据 |
+|---|---|---|---|
+| 2026-10-03 | D-01 | **§1 `label_filter_mode` 勘误 all→single**：v1 依「三列标签都在」推断多值模式；单元 2 标定实证 cs_train 全历史分区含 y_ret_5/10 NaN 行而 y_ret_20 恒非空 ⇒ 生产走 `--horizon 20` 单值分支。影响：若按 all 回填每日多滤 2~9 行（4e-4~1.8e-3 > 门限 1e-4）。处置：冻结文字修订，基线产物（cs_train）不变、无需重跑；`V2PanelBuilder` 按 single 实现。 | `temp/p1_flag_calib_20261003.json` |
+| 2026-10-03 | D-02 | **build_daily 捕获区间补登 [D−7月, D]**：[D,D] 单日捕获使北向 rolling 列在长度 1 交易日序列上算错（4684/4684 行超容差）；对齐 cs_infer 通路 7 个月历史窗口，sink 只落 D。 | 同上 |
+| 2026-10-03 | D-03 | **§3 labels 列名适配**：y_ret_N/neu_y_ret_N → label_value/neu_label_value（store 统一口径）。 | `v2/store/labels_builder.py` |
+| 2026-10-03 | D-04 | **已知数据态漂移预告（单元 4 对账将现身，先登记）**：① share_float/block_trade/top_list raw 水位（2026-08-05/07）晚于基线数据态 8 数据集（2026-07-31）⇒ days_to_unlock/unlock_ratio/unlock_risk_flag 等列对账差异属预期数据态漂移（§5 水位已如实登记，不重冻结）；② raw daily 2024-01-16/17 分区丢 2 只停牌股行 ⇒ downside_corr_20 等权市场序列微移（当日 max 0.011）；③ 季频财务/基金持仓 raw 修订 ⇒ dividend_payout_ratio/cf_nm/fund_* 等 NaN 型差异。均走 §7 数据态漂移告警 + 离群登记通道，残差 100% 归因。 | 单元 2 标定报告 |
 
 ## 附录 A：列族分组逐列清单
 

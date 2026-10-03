@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.8] - 2026-10-03
+
+### Added
+
+- **P1 单元 2：normalized 只读转换器 + panel/labels 构建器落地**（全部新文件为主，旧数据/特征层零改动）：
+  - `v2/store/column_groups.py`：冻结分组表代码化（单一来源）——PANEL_GROUPS 8 族 377 列 +
+    MATERIALIZED_DERIVED 物化 34 列（ht 10/rp 6/tfh 8/ti 6/has 4，进 announcement 族、
+    status=deprecated）+ LABEL_TABLES 3 表 + 映射完备性校验。
+  - `v2/store/normalized.py`：raw → `data/normalized/` 只读转换器（复用 DataCleaner 同一
+    实现、与 build_clean.py 逐日段同序；契约命名 `daily/YYYYMMDD.parquet`；原子写可覆盖
+    ——normalized 是缓存）+ `reconcile_daily_vs_clean`（atol=1e-6 逐值对账）。
+  - `v2/store/labels_builder.py`：labels 独立成表（label_value/neu_label_value 列名口径）
+    + 成熟度 sealed/forming 判定（idx(T)+1+20 ⟺ sealed）+ 与 store 生命周期联动。
+  - `v2/store/panel_builder.py::V2PanelBuilder`（FeatureBuilder 协议实现）：**捕获复用**
+    策略——`_CaptureStorage` 拦截旧 pipeline 输出（数值路径原样跑、行为冻结），单日/回填
+    双入口；冷区月缓冲 flush（`_ArchiveMonthBuffer`）+ `PanelDataStore.append_archive_features`
+    （两阶段 + 指纹一致 no-op / 不一致 raise，历史分区禁止原地修改）+ `bootstrap_manifest`
+    （列登记 + dependencies.raw_datasets）；ti_*/has_* 经 `build_top_inst_feature_frame` /
+    `derive_availability_markers` 同一数值实现后置物化。
+  - 测试 48 例（column_groups 映射完备 / normalized 合成全通路 / labels 成熟度边界 /
+    panel 拆分与归档缓冲），store 系列累计 122 例；全量 -k v2 回归 205/205。
+
+### Changed
+
+- **冻结文档 v1→v2 重冻结修订**（`docs/data/v2_p1_build_freeze.md`，差异台账 §8 新增
+  D-01~D-04 四条）：① §1 `label_filter_mode` 勘误 all→single（单元 2 开关标定实证：生产
+  构建走 `--horizon 20` 单值分支，cs_train 全历史分区 y_ret_5/10 有 NaN 行而 y_ret_20
+  恒非空；若按 all 回填每日多滤 2~9 行、占比超验收门 1e-4）；② build_daily 捕获区间补登
+  [D−7月, D]（[D,D] 把北向 rolling 列算错，对齐 cs_infer 通路）；③ labels 列名适配
+  label_value/neu_label_value；④ 数据态漂移预告登记（share_float/block_trade/top_list
+  水位晚于基线 8 数据集 + raw daily 2024-01 丢 2 停牌股行 + 季频财务修订——单元 4 对账
+  走告警+离群登记通道，不重冻结）。
+- **开关标定落地**（`temp/p1_flag_calib_20261003.py` + JSON 产物）：生产 flags 18 项定案，
+  20240102 单日列集 407 == 383 ∪ ht/rp/tfh 24（缺失 0/多出 0）、行集 4686 == 4686、
+  价格-量价列逐位一致；21 列差异全部归因（数据态漂移，已登记冻结文档 D-04）。
+- 版本号 0.203.7 → 0.203.8（P1 单元 2 落地；分阶段功能小版本递增）。
+
 ## [0.203.7] - 2026-10-02
 
 ### Added
