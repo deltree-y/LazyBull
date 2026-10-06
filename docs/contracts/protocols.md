@@ -13,7 +13,7 @@
 | F4（= v0.6） | 2026-10-01 | plans/v2/v2_protocols.md v0.6 | 生效 | P0 评审第一轮：路径勘误 + FundScheduler 归还规则对齐 |
 | F5（= v0.7） | 2026-10-01 | plans/v2/v2_protocols.md v0.7 | 生效 | P0 评审第二轮：§11 打钩依据补代码态、内核内部语义对账清单化、payload 类型化欠账、止盈行 + 止损双层归属 |
 | F6（= v0.7，内容零变更） | 2026-10-01 | 本文件单文件制修订 | 生效 | 双轨合并为单文件制（草案 v0.7 与 F5 正文逐字一致，仅载体合并；草案退役，备份入 plans/v2/backup/） |
-| F7 | 2026-10-06 | P1 三评审整改（R3-10） | 随 P1 评审整改登记，待下轮评审追认 | PanelFrame.manifest_version 注释勘误：schema 版本而非内容指纹；内容身份由新增的 PanelFrame.manifest_fingerprint 承载（sha256-16，剔除 updated_at） |
+| F7 | 2026-10-06 | P1 三评审整改（R3-10） | 生效 | PanelFrame.manifest_version 注释勘误：schema 版本而非内容指纹；内容身份由新增的 PanelFrame.manifest_fingerprint 承载（sha256-16，剔除 updated_at）。登记即生效：R3-10 评审意见即修订依据，版本/指纹为正交概念、分离设计无争议（2026-10-06 裁决确认，不另走评审轮） |
 
 ---
 ---

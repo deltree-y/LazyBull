@@ -30,7 +30,8 @@ All notable changes to this project will be documented in this file.
   - **文档勘误与导航同步**：总验收报告 D-12 修复计数终态口径勘误（651 分区 / repairs
     707 条 / 13,802 分区，以第二份评审 §3.1 为准）；剖面报告 R3-13 证据边界收回；
     冻结文档 §7/§3 补注 + §8 D-13 增补 + §9 评审整改登记；protocols.md PanelFrame
-    manifest_version 注释勘误（F7 草案登记）；CLAUDE.md / AGENTS.md / README.md
+    manifest_version 注释勘误（F7 登记即生效：追认依据 = R3-10 评审意见本身 + 版本/指纹
+    概念分离裁决，2026-10-06 用户确认）；CLAUDE.md / AGENTS.md / README.md
     导航同步 P1 架构。
 
 ## [0.204.0] - 2026-10-06

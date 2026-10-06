@@ -10,7 +10,7 @@
 | 文件 | 内容 | 状态 |
 |---|---|---|
 | [v2_architecture_plan.md](v2_architecture_plan.md) | v2 架构方案（**F9 = v1.15**：P5a-2 执行登记——台账回填 10 族 20 条 / 入场点敏感度报告 / 标定脚本参数化；**F8 = v1.14**：P1.5 裁决——e2online_r 退役、迁移目标 B0（生效时点 = v2 切换日）；**F7 = v1.13**：§5 一次性修订窗口执行——主判据功效适用域 + MDE 袖内净值 12pp 定稿；原名 `v2_architecture_plan_frozen.md`，2026-10-01 更名去 frozen 后缀） | **已生效（2026-10-02，F9）** |
-| [protocols.md](protocols.md) | 模块协议层（F6 = v0.7 内容零变更，载体合并；§11 对照表已打钩 22/22 + 止盈行 + 双层归属） | **已生效（2026-10-01，F6）** |
+| [protocols.md](protocols.md) | 模块协议层（F6 = v0.7 内容零变更，载体合并；**F7**：P1 R3-10 勘误——manifest_version 为 schema 版本、内容身份由新增 manifest_fingerprint 承载，登记即生效；§11 对照表已打钩 22/22 + 止盈行 + 双层归属） | **已生效（2026-10-06，F7）** |
 | [baseline_freeze.md](baseline_freeze.md) | 基线双臂冻结（B0/B1 配置指纹 + 逐折收益路径 + 附录 A 127 键快照） | **已生效（2026-09-30 冻结，2026-10-01 随 P0 确认）** |
 | [runs_artifact_contract.md](runs_artifact_contract.md) | runs 产物契约（账本 / 逐日明细 / 报告字段级 schema + 转换器契约 + topk_detail + policy_lambda 条件条款） | **已生效（2026-10-01 P0 确认）** |
 | [events_state_schema.md](events_state_schema.md) | 事件库 / 状态库统一 schema + 公告源试数据协议（词表已修 + 审计样本量升级） | **已生效（2026-10-01 P0 确认）** |
