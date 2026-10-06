@@ -660,3 +660,112 @@ terms:
     source: v2 方案 §8（P2a 行）；R1-4
     related: [编码单元, 分级验收, M1 总放弃判据]
     introduced: "2026-09-30"
+
+  # ========== P1 数据底座（2026-10-06 单元 0~5 收口登记） ==========
+  - term: 冻结参照
+    aliases: [frozen reference]
+    one_liner: 冻结 raw 快照 + 旧代码单遍全量重放出的 cs_train 副本，作 panel 对账基线
+    layman: 用"当时的原料和当时的配方"重新烤一次蛋糕，看新厨房（v2 store）烤出来的是不是同一个味
+    example: temp/p1_frozen_reference 3,518 分区；严格门 = panel vs 冻结参照（31 列超门 100% 归因后 PASS）
+    source: v2 方案 R1-4；P1 单元 3 报告
+    related: [重建基线, 行为冻结, 差异台账]
+    introduced: "2026-10-06"
+
+  - term: 重建基线
+    aliases: [rebuild baseline]
+    one_liner: 对账基线的判定结论——基线不是现产物本身，而是可复现现产物的重建结果
+    layman: 验收尺子不是"老蛋糕"而是"按老配方重做的蛋糕"；重做得出来才证明配方没丢
+    example: 单元 3 基线判定（契约 R1-4）= 重建基线：ensure 补齐分区可复现性探测通过后才允许全量重放
+    source: v2 方案 R1-4（探测先行条款）；P1 单元 3 报告 §4
+    related: [冻结参照, 口径 B]
+    introduced: "2026-10-06"
+
+  - term: 口径 B
+    aliases: [caliber B, 探测窗口 B]
+    one_liner: ensure 可复现性的小规模探测窗口（20260401~20260630，60 交易日）
+    layman: 全量重放前先拿 3 个月"试烤"：新补的分区能不能复现现产物，先小范围验证再放大
+    example: 口径 B 探测 23 个差异列全部归因（D-04 四类 + D-05）⇒ 全量重放启动
+    source: v2 方案 R1-4 之 1；P1 单元 3 报告 §2
+    related: [重建基线, 冻结参照]
+    introduced: "2026-10-06"
+
+  - term: 锚定效应
+    aliases: [anchor effect, 缓存锚定]
+    one_liner: 批量缓存以首个 pending 日为锚点向前取 120 交易日切片 ⇒ 同一日值随构建上下文变化
+    layman: 长记忆指标（EMA/250 日窗）像"从哪天开始记日记"：起记日不同，早期几页内容就不同
+    example: D-11：参照单调用锚 20120104 vs panel 分块锚 20170103/20220104 ⇒ 002260.SZ 2022-05 复牌簇 macd 几何收敛差 ~0.8/日
+    source: 冻结文档 §8 D-11（_slice_by_trading_days 机制实证）
+    related: [长记忆列, 差异台账, 严格门]
+    introduced: "2026-10-06"
+
+  - term: 严格门
+    aliases: [strict gate]
+    one_liner: panel vs 冻结参照的逐值对账门；出口 = 残差 100% 归因登记类（L1/D-04/D-11/D-12 豁免）
+    layman: 新蛋糕和参照蛋糕逐格对比：每一格不一样都必须说出已登记的典故，说不出来就算烤糊了
+    example: 3,518 日 ×381 列：31 列超门 100% 归因（D-12×3/D-04③×14/D-04④×4/D-11×9/纯孤立单点×1）⇒ PASS
+    source: 冻结文档 §7；v2/store/panel_reconcile.py
+    related: [归因门, 差异台账, 豁免登记]
+    introduced: "2026-10-06"
+
+  - term: 归因门
+    aliases: [attribution gate]
+    one_liner: panel vs cs_train 的对账门；差异须 100% 落入五类预期清单（越界即失败）
+    layman: 和生产老蛋糕对比允许有差异，但每种差异都必须事先点过名；冒出新花样就不行
+    example: 126 列差异 100% 归因零越界（L1×94/D-04×19/D-12×3/D-14×5/L1+孤立单点×6）⇒ PASS
+    source: 冻结文档 §7 + 单元 3 §4a 五类清单；v2/store/panel_reconcile.py
+    related: [严格门, 构建血缘, 差异台账]
+    introduced: "2026-10-06"
+
+  - term: 修复通道
+    aliases: [repair channel]
+    one_liner: 构建缺陷修复的专用写接口（repair 追加/replace_days 按日替换/rewrite 列值修正/resync 指纹再同步），理由强制登记
+    layman: 正式产品出厂后发现瑕疵，只能走"返修登记窗口"——修什么、为什么修都记账；改配方（口径）不许走这窗口
+    example: D-10 边界 5 日修复性合并；D-12 修复 rewrite_partition 174 分区/233,194 单元格，manifest.repairs 全量审计轨迹
+    source: v2/store/data_store.py（4 API）；冻结文档 §8 D-10/D-13
+    related: [两阶段提交, manifest, 豁免登记]
+    introduced: "2026-10-06"
+
+  - term: 豁免登记
+    aliases: [exemption registration]
+    one_liner: 经裁决的差异类从「逐值一致」改为「豁免 + 全归因登记」的治理动作（须用户裁决 + 台账落档）
+    layman: 某种差异被法官正式裁定"合法"：以后不再拦它，但每出现一次仍要登记在案
+    example: D-13：panel 解锁族保留全量 PIT 修复，严格门/归因门对 3 列豁免登记；双恒等式 11,032,382 股票-日 0 偏差作证
+    source: 冻结文档 §8 D-13（2026-10-06 用户裁决）
+    related: [修复通道, 严格门, 归因门]
+    introduced: "2026-10-06"
+
+  - term: 影子通路
+    aliases: [shadow path]
+    one_liner: 单日增量构建（build_daily(D)，捕获窗 [D−7 个自然月, D]）喂影子门的每日通路
+    layman: 每天收盘后给面板"续一天"的流水线；续的这格必须和批量重做的同格对得上账
+    example: 单元 5 验收：build_daily(20260702) vs 同窗批量参照 375+6 列 0 差异（判据 B）
+    source: v2 方案 R1-4 之 3/D2/D3；冻结文档 §1 D-02
+    related: [捕获复用, 严格门, cs_infer]
+    introduced: "2026-10-06"
+
+  - term: 捕获复用
+    aliases: [capture-reuse]
+    one_liner: V2PanelBuilder 拦截旧 pipeline 输出（数值路径原样跑）再拆分落 store 的构建策略
+    layman: 不重写配方，而是在老厨房出菜口接个分装盘：菜还是那道菜，按新餐具规格分装
+    example: _CaptureStorage 拦截 build_features_data 逐日大表 ⇒ 8 族分区；A/B 实证 vs 旧直写 1,908 行 5 列 max|Δ|=0
+    source: v2/store/panel_builder.py；P1 单元 4 报告 §5
+    related: [影子通路, 行为冻结, 物化]
+    introduced: "2026-10-06"
+
+  - term: 构建血缘
+    aliases: [build lineage, L1/L2 血缘]
+    one_liner: 数据产物因构建时点/上下文不同携带的代际特征（L1 = 2012 冷启动零预热/schema 演进；L2 = 2013~15 公式版本）
+    layman: 同一列数据，"哪年哪月用什么锅煮的"会留下痕迹；对账时认得出痕迹就不算烤糊
+    example: L1：cs_train 2012 分区 330~336 列 schema、首 ~20 日 1,600+ 股 NaN（归因门 L1×94 列）
+    source: 冻结文档 §8 D-06/D-07；单元 3 报告 §4a
+    related: [归因门, 数据态, 差异台账]
+    introduced: "2026-10-06"
+
+  - term: 差异台账
+    aliases: [difference ledger]
+    one_liner: 所有「接受的不一致」（已知口径差异/环境差异）的强制登记表，append-only，禁止静默接受
+    layman: 允许蛋糕和老配方有出入，但每一处出入都必须写进"出入登记簿"——没登记就当烤糊处理
+    example: 冻结文档 §8 D-01~D-14（label_filter_mode 勘误/pandas 回归/锚定机制/D-12 截断与裁决等）
+    source: v2 方案 §9.1；冻结文档 §8
+    related: [行为冻结, 基线冻结, 豁免登记]
+    introduced: "2026-10-06"
