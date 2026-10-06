@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.204.4] - 2026-10-06
+
+### Added
+
+- **M1.5 + 标签刷新义务立项落档**（用户拍板 2026-10-06；决策记录
+  `docs/review/v2_m15_label_refresh_decision_20261006.md`）：
+  - **M1.5 样本起点扩展立项**：P1 列级可用起点剖面建议（2007~2011 幸存 85.7~87.0%、
+    增量 +19% > 15% 停止线）经用户裁决立项；prereg `H-M1.5-sample-start-extension`
+    （主判据 = 配对制度重排 ΔMaxDD 分布，MDE 袖内净值 12pp，α=0.05，pool=1）。
+    实施时点 = P3 训练迁移后（新 `train/*` 上一次实现）；前置准备（available_from
+    语义裁决 + 2007~2011 raw 只读核查 + 回填耗时估算）可在 P2a 期间穿插。
+  - **日更段标签刷新义务立项**（R3-03 连带义务，0.204.2 登记）：prereg
+    `H-label-refresh-forming-sealed`（验收 = R3-03 登记 6 条，工程裁决不进 α 体系）。
+    实施时点 = P2a 闸门关闭后、P3 前，与 P1 遗留 store 改进项（总验收报告 §7.4）
+    捆绑为同一次 store 迭代。
+  - **排期决策**：两项均不进入 P2a（§9.1 行为冻结：迁移段禁止混入功能变更）；
+    落选方案与理由见决策记录 §2.4。
+  - 两条 prereg 经 `PanelDataStore.append_ledger_entry` 唯一入口写入，台账全量
+    schema 校验 27/27 通过；P1 总验收报告 §7.5 append-only 闭环登记。
+  - 契约层登记（方案 §8.1-M1.5 行标「已立项」等）列为欠账，随下一次契约修订
+    窗口（F11）一并进行。
+
+### Fixed
+
+- `docs/contracts/README.md` 索引行同步：方案现行生效版 F9 → **F10**（0.204.3 漏同步）。
+
 ## [0.204.3] - 2026-10-06
 
 ### Added
