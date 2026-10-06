@@ -303,9 +303,11 @@ class V2PanelBuilder:
         2012 起回填消失）。过滤口径与批量回填完全一致（全市场统一截面，
         禁止以当日局部截面重排，冻结 §1）。
 
-        标签不可终 fail-fast（R3-03 防御性收口）：T+21 端点超数据水位/加载窗口的
-        目标日直接 RuntimeError（不再走到缺日断言报误导性「缺日」）；当日特征日更
-        依赖未来标签、样本域需契约裁决，历史影子通路不受影响。
+        标签不可终 fail-fast（R3-03 防御性收口，已裁决待实施——冻结文档 §9.2）：
+        T+21 端点超数据水位/加载窗口的目标日直接 RuntimeError（不再走到缺日断言
+        报误导性「缺日」）。裁决（2026-10-06）：build_daily 应走 require_label=False
+        结构域（对齐旧链 cs_infer 先例，行域由写侧决定、消费侧统一读时过滤）；
+        日更通路实施前本防御保持 fail-fast，历史影子通路不受影响。
         """
         date_str = str(date)
         use_groups = self._normalize_groups(groups)
@@ -313,7 +315,8 @@ class V2PanelBuilder:
         if not self._filter_label_starved([date_str], calendar, date_str):
             raise RuntimeError(
                 f"{date_str} 标签不可终（T+21 端点超数据水位/加载窗口）：当日特征日更依赖"
-                "未来标签，样本域需契约裁决（登记号 R3-03），历史影子通路不受影响"
+                "未来标签；R3-03 已裁决（冻结文档 §9.2：build_daily 走 require_label=False "
+                "结构域），日更通路尚未实施、本防御保持 fail-fast，历史影子通路不受影响"
             )
         ti_lookup = self._build_ti_lookup_for_day(calendar, date_str)
         capture_start = self._daily_capture_start(date_str)
