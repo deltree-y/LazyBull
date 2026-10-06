@@ -150,6 +150,7 @@ class PanelDataStore:
         self._root = Path(data_root)
         self._manifest: Manifest | None = None
         self._lock = _WriteLock(self.features_dir / ".write.lock")
+        self._manifest_defer = 0  # defer_manifest_save 计数（批量回填防 manifest O(n²) 落盘）
 
     # ---------- 路径布局 ----------
 
@@ -184,6 +185,35 @@ class PanelDataStore:
             self._manifest = Manifest(self.features_dir / "manifest.json")
         return self._manifest
 
+    def _maybe_save_manifest(self) -> None:
+        """manifest 落盘（延迟模式外）；延迟模式内跳过（出口统一落盘）。"""
+        if self._manifest_defer == 0:
+            self.manifest.save()
+
+    def defer_manifest_save(self):
+        """批量写入期延迟 manifest 落盘的上下文管理器（可重入）。
+
+        动机：manifest 随分区数线性膨胀，逐分区落盘是全量回填的 O(n²) 瓶颈。
+        崩溃语义：延迟期内崩溃 ⇒ 盘上 manifest 不含已写分区登记 ⇒ 重跑按
+        「未登记允许重写」覆盖孤儿分区并重新登记，两阶段提交语义不变。
+        """
+        return self._ManifestDefer(self)
+
+    class _ManifestDefer:
+        """defer_manifest_save 的上下文实现（计数可重入）。"""
+
+        def __init__(self, store: "PanelDataStore") -> None:
+            self._store = store
+
+        def __enter__(self) -> None:
+            self._store._manifest_defer += 1
+            return None
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            self._store._manifest_defer -= 1
+            if self._store._manifest_defer == 0:
+                self._store.manifest.save()  # 出口统一落盘（含异常路径——已写分区先落账）
+
     def write_lock(self) -> _WriteLock:
         """单机写锁上下文管理器（``with store.write_lock():``）。"""
         return self._lock
@@ -215,7 +245,7 @@ class PanelDataStore:
                 )
             os.replace(tmp_path, final_path)
             self.manifest.register_partition(rel_path, fingerprint, rows=len(df), zone="hot")
-            self.manifest.save()
+            self._maybe_save_manifest()
             logger.info(f"特征分区落盘: {rel_path}（{len(df)} 行，指纹 {fingerprint}）")
 
     def _validate_feature_write(self, date_str: str, group: str, df: pd.DataFrame) -> None:
@@ -254,6 +284,133 @@ class PanelDataStore:
 
     # ========== 写入：features 冷区（封存月分区） ==========
 
+    def repair_archive_partition(
+        self, month: str, group: str, df_new_days: pd.DataFrame, reason: str
+    ) -> dict[str, Any]:
+        """修复性合并冷区月分区：仅存单元格逐值不变、仅追加缺失日（构建缺陷修复通道）。
+
+        与 `append_archive_features` 的「历史分区禁止原地修改」不同：本 API 只允许
+        行超集追加（新日的 (trade_date, ts_code) 键不得与存量相交），并在 manifest
+        登记修复理由（`repairs` 审计轨迹）。口径修正仍走新列名/版本升级，禁止借用本通道。
+        """
+        if not reason or not reason.strip():
+            raise RuntimeError("修复性合并必须登记理由（reason 非空）")
+        rel_path = f"panel_archive/{month}/{group}.parquet"
+        with self._lock:
+            final_path = self.archive_dir / month / f"{group}.parquet"
+            old_fp = self.manifest.partition_fingerprint(rel_path)
+            if old_fp is None or not final_path.exists():
+                raise RuntimeError(f"修复目标分区不存在或未登记: {rel_path}（新建请走 append）")
+            df_old = pd.read_parquet(final_path)
+            new_days = sorted(df_new_days["trade_date"].astype(str).unique().tolist())
+            overlap = sorted(set(df_old["trade_date"].astype(str)) & set(new_days))
+            if overlap:
+                raise RuntimeError(f"修复追加日与存量相交: {overlap[:5]}（{rel_path}）")
+            keys_old = pd.MultiIndex.from_frame(df_old[["trade_date", "ts_code"]].astype(str))
+            keys_new = pd.MultiIndex.from_frame(df_new_days[["trade_date", "ts_code"]].astype(str))
+            if not keys_old.is_unique or not keys_new.is_unique:
+                raise RuntimeError(f"修复合并键 (trade_date, ts_code) 不唯一（{rel_path}）")
+            merged = (
+                pd.concat([df_old, df_new_days], ignore_index=True)
+                .sort_values(["trade_date", "ts_code"])
+                .reset_index(drop=True)
+            )
+            self._validate_archive_write(month, group, merged)
+            part_dir = self.archive_dir / month
+            tmp_path = part_dir / f"{group}.parquet.tmp"
+            merged.to_parquet(tmp_path, index=False)
+            new_fp = sha256_16_of_file(tmp_path)
+            os.replace(tmp_path, final_path)
+            self.manifest.register_partition(rel_path, new_fp, rows=len(merged), zone="archive")
+            self.manifest.register_repair(rel_path, reason, new_days, old_fp, new_fp)
+            self._maybe_save_manifest()
+            logger.warning(
+                f"冷区修复性合并: {rel_path}（追加 {len(new_days)} 日 {new_days}，"
+                f"{len(df_old)}→{len(merged)} 行；理由：{reason}）"
+            )
+            return {"rel_path": rel_path, "added_dates": new_days, "rows": len(merged)}
+
+    def replace_archive_days(
+        self, month: str, group: str, df_days: pd.DataFrame, reason: str
+    ) -> dict[str, Any]:
+        """修复性按日替换冷区月分区：仅替换指定日的行（存量其余日逐位保留）。
+
+        与 `repair_archive_partition`（追加缺失日）互补：本通道服务「已落盘日内容
+        错误」的修复（如构建窗口截断/环境污染），要求目标日 ⊆ 存量日集；存量其余日
+        的行在新内容中逐位保留（拼接自原文件，不重算）。理由强制登记（manifest.repairs
+        记 mode="replace_days"）。
+        """
+        if not reason or not reason.strip():
+            raise RuntimeError("修复性替换必须登记理由（reason 非空）")
+        rel_path = f"panel_archive/{month}/{group}.parquet"
+        with self._lock:
+            final_path = self.archive_dir / month / f"{group}.parquet"
+            old_fp = self.manifest.partition_fingerprint(rel_path)
+            if old_fp is None or not final_path.exists():
+                raise RuntimeError(f"修复目标分区不存在或未登记: {rel_path}（新建请走 append）")
+            df_old = pd.read_parquet(final_path)
+            days = sorted(df_days["trade_date"].astype(str).unique().tolist())
+            if not days:
+                raise RuntimeError(f"修复替换内容为空（{rel_path}）")
+            existing_days = set(df_old["trade_date"].astype(str))
+            missing = sorted(set(days) - existing_days)
+            if missing:
+                raise RuntimeError(f"修复替换日不在存量分区: {missing}（{rel_path}；缺失日请走 repair 追加）")
+            kept = df_old[~df_old["trade_date"].astype(str).isin(days)]
+            merged = (
+                pd.concat([kept, df_days], ignore_index=True)
+                .sort_values(["trade_date", "ts_code"])
+                .reset_index(drop=True)
+            )
+            self._validate_archive_write(month, group, merged)
+            part_dir = self.archive_dir / month
+            tmp_path = part_dir / f"{group}.parquet.tmp"
+            merged.to_parquet(tmp_path, index=False)
+            new_fp = sha256_16_of_file(tmp_path)
+            os.replace(tmp_path, final_path)
+            self.manifest.register_partition(rel_path, new_fp, rows=len(merged), zone="archive")
+            self.manifest.register_repair(rel_path, f"[replace_days] {reason}", days, old_fp, new_fp)
+            self._maybe_save_manifest()
+            logger.warning(
+                f"冷区修复性替换: {rel_path}（替换 {len(days)} 日 {days}；理由：{reason}）"
+            )
+            return {"rel_path": rel_path, "replaced_dates": days, "rows": len(merged)}
+
+    def rewrite_partition(self, rel_path: str, df: pd.DataFrame, reason: str) -> None:
+        """修复性整体重写单个分区（列级修正/缺陷修复通道，两阶段提交 + 理由登记）。
+
+        区别于 append（指纹一致才放行）：本通道允许内容变化，但必须登记理由
+        （manifest.repairs 记 mode="rewrite_partition"）。仅服务已登记的构建缺陷
+        修复（如 D-12 前瞻窗截断的列值修正）；口径演进仍走新列名/版本升级。
+        rel_path 形如 ``panel/YYYYMMDD/<group>.parquet`` 或
+        ``panel_archive/YYYY-MM/<group>.parquet``。
+        """
+        if not reason or not reason.strip():
+            raise RuntimeError("修复性重写必须登记理由（reason 非空）")
+        with self._lock:
+            if rel_path.startswith("panel_archive/"):
+                final_path = self.archive_dir / rel_path.removeprefix("panel_archive/")
+            elif rel_path.startswith("panel/"):
+                final_path = self.panel_dir / rel_path.removeprefix("panel/")
+            else:
+                raise RuntimeError(f"非法分区路径（须 panel/ 或 panel_archive/ 前缀）: {rel_path}")
+            old_fp = self.manifest.partition_fingerprint(rel_path)
+            if old_fp is None or not final_path.exists():
+                raise RuntimeError(f"修复目标分区不存在或未登记: {rel_path}（新建请走 append）")
+            for key_col in ("trade_date", "ts_code"):
+                if key_col not in df.columns:
+                    raise RuntimeError(f"修复重写缺键列 {key_col!r}（{rel_path}）")
+            part_dir = final_path.parent
+            tmp_path = part_dir / f"{final_path.name}.tmp"
+            df.to_parquet(tmp_path, index=False)
+            new_fp = sha256_16_of_file(tmp_path)
+            os.replace(tmp_path, final_path)
+            zone = "archive" if rel_path.startswith("panel_archive/") else "hot"
+            self.manifest.register_partition(rel_path, new_fp, rows=len(df), zone=zone)
+            self.manifest.register_repair(rel_path, f"[rewrite_partition] {reason}", [], old_fp, new_fp)
+            self._maybe_save_manifest()
+            logger.warning(f"分区修复性重写: {rel_path}（{len(df)} 行；理由：{reason}）")
+
     def append_archive_features(self, month: str, group: str, df: pd.DataFrame) -> None:
         """落冷区月分区（``panel_archive/YYYY-MM/<group>.parquet``；两阶段提交 + 写锁）。
 
@@ -282,7 +439,7 @@ class PanelDataStore:
                 )
             os.replace(tmp_path, final_path)
             self.manifest.register_partition(rel_path, fingerprint, rows=len(df), zone="archive")
-            self.manifest.save()
+            self._maybe_save_manifest()
             logger.info(f"冷区分区落盘: {rel_path}（{len(df)} 行，指纹 {fingerprint}）")
 
     def _validate_archive_write(self, month: str, group: str, df: pd.DataFrame) -> None:
@@ -417,11 +574,8 @@ class PanelDataStore:
         if not parts:
             return None
         df = pd.concat(parts, ignore_index=True)
-        for col in cols:  # 分区早于列登记（available_from 场景）⇒ 整列 NaN
-            if col not in df.columns:
-                df[col] = float("nan")
-                logger.debug(f"族 {group} 分区缺已登记列 {col}，补 NaN")
-        return df[list(_KEY_COLUMNS) + cols]
+        # 分区早于列登记（available_from 场景）⇒ 整列 NaN；reindex 一次补齐防碎片化
+        return df.reindex(columns=[*_KEY_COLUMNS, *cols])
 
     @staticmethod
     def _months_in_range(start_str: str, end_str: str) -> list[str]:
@@ -445,10 +599,8 @@ class PanelDataStore:
         for frame in frames[1:]:
             merged = merged.merge(frame, on=list(_KEY_COLUMNS), how="outer")
         merged = merged.set_index(list(_KEY_COLUMNS)).sort_index()
-        for col in data_cols:
-            if col not in merged.columns:
-                merged[col] = float("nan")
-        return merged[data_cols]
+        # reindex 一次性补齐缺列（NaN）+ 按请求列序裁剪（避免逐列插入碎片化）
+        return merged.reindex(columns=data_cols)
 
     # ========== 写入 / 读取：labels ==========
 
@@ -463,7 +615,7 @@ class PanelDataStore:
             self._gc_orphans(label_dir)
             for date_str, day_df in work.groupby("trade_date"):
                 self._append_label_partition(label_name, label_dir, str(date_str), day_df)
-            self.manifest.save()
+            self._maybe_save_manifest()
 
     def _validate_label_df(self, label_name: str, df: pd.DataFrame) -> None:
         """标签写前校验：maturity_status 必有且取值合法；键列与 label_value 齐全；单日成熟度一致。"""
@@ -592,6 +744,46 @@ class PanelDataStore:
     def get_manifest(self) -> Mapping[str, Any]:
         """manifest 快照（MappingProxyType 包裹的深拷贝；外层与嵌套改动都不影响内部）。"""
         return types.MappingProxyType(self.manifest.snapshot())
+
+    def resync_partition_fingerprints(self, reason: str) -> dict[str, int]:
+        """指纹再同步（管理操作）：重算全部已登记分区的文件指纹并校正登记。
+
+        服务场景：修复性写入在 manifest 落盘阶段被中断（瞬时文件锁等）后，
+        盘上分区内容与登记指纹不一致——以盘上内容为准重同步，并对每个被校正的
+        分区登记一条 resync 审计（manifest.repairs，mode="resync"）。返回统计。
+        """
+        if not reason or not reason.strip():
+            raise RuntimeError("指纹再同步必须登记理由（reason 非空）")
+        with self._lock:
+            stats = {"checked": 0, "resynced": 0, "missing_file": 0}
+            for rel_path, meta in list(self.manifest.snapshot()["partitions"].items()):
+                stats["checked"] += 1
+                if rel_path.startswith("panel_archive/"):
+                    fp = self.archive_dir / rel_path.removeprefix("panel_archive/")
+                elif rel_path.startswith("panel/"):
+                    fp = self.panel_dir / rel_path.removeprefix("panel/")
+                else:
+                    fp = self.labels_dir / rel_path.removeprefix("labels/")
+                if not fp.exists():
+                    stats["missing_file"] += 1
+                    logger.error(f"已登记分区文件缺失: {rel_path}")
+                    continue
+                current = sha256_16_of_file(fp)
+                if current != meta["sha256_16"]:
+                    old_fp = meta["sha256_16"]
+                    self.manifest.register_partition(
+                        rel_path, current, rows=meta.get("rows", 0), zone=meta.get("zone", "hot")
+                    )
+                    self.manifest.register_repair(
+                        rel_path, f"[resync] {reason}", [], old_fp, current
+                    )
+                    stats["resynced"] += 1
+            self.manifest.save()
+            logger.warning(
+                f"指纹再同步完成：检查 {stats['checked']}，校正 {stats['resynced']}，"
+                f"缺文件 {stats['missing_file']}（理由：{reason}）"
+            )
+            return stats
 
     # ========== 后续单元留白（签名已按协议冻结） ==========
 

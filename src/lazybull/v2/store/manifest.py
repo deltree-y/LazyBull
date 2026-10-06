@@ -29,6 +29,7 @@ import copy
 import hashlib
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -155,14 +156,26 @@ class Manifest:
         return data
 
     def save(self) -> None:
-        """原子写（tmp + replace）；``updated_at`` 在落盘时刷新。"""
+        """原子写（tmp + replace）；``updated_at`` 在落盘时刷新。
+
+        Windows 上偶发 AV/索引器瞬时占用 manifest.json 致 os.replace 被拒
+        （WinError 5）——带有限退避重试（P1 单元 4 D-12 修复实证）。
+        """
         self._data["updated_at"] = _now_iso()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._path.with_suffix(".json.tmp")
         tmp_path.write_text(
             json.dumps(self._data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        os.replace(tmp_path, self._path)
+        last_exc: OSError | None = None
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, self._path)
+                return
+            except PermissionError as exc:  # Windows 瞬时占用
+                last_exc = exc
+                time.sleep(0.2 * (attempt + 1))
+        raise RuntimeError(f"manifest 落盘连续被拒（5 次）: {self._path}") from last_exc
 
     def snapshot(self) -> dict[str, Any]:
         """全量深拷贝快照（防外部篡改内部状态）。"""
@@ -257,6 +270,30 @@ class Manifest:
         """分区内容指纹；未登记返回 None。"""
         meta = self._data["partitions"].get(rel_path)
         return str(meta["sha256_16"]) if meta is not None else None
+
+    def register_repair(
+        self, rel_path: str, reason: str, added_dates: list[str], old_fp: str, new_fp: str
+    ) -> None:
+        """登记一次修复性合并（append-only 审计轨迹；不改变分区注册表语义）。
+
+        修复 ≠ 口径修正：既有单元格逐值不变、仅追加缺失日。调用方（store 层）
+        负责校验行超集语义，此处只留痕。
+        """
+        repairs = self._data.setdefault("repairs", [])
+        repairs.append(
+            {
+                "rel_path": rel_path,
+                "reason": reason,
+                "added_dates": sorted(added_dates),
+                "old_fingerprint": old_fp,
+                "new_fingerprint": new_fp,
+                "repaired_at": _now_iso(),
+            }
+        )
+
+    def repairs(self) -> list[dict[str, Any]]:
+        """全部修复登记（深拷贝）。"""
+        return copy.deepcopy(self._data.get("repairs", []))
 
     # ---------- labels 分区与封存水位 ----------
 

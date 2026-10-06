@@ -305,11 +305,15 @@ class V2PanelBuilder:
         end_date: TradeDate,
         groups: Sequence[str],
         store: Any,
+        keep_dates: Optional[set[str]] = None,
     ) -> None:
         """历史回填（冷热分层：<=20250630 冷区月分区，其后热区日分区；可重入续传）。
 
         防冲突：store 两阶段提交（指纹一致放行/no-op、不一致报错），重跑即续传。
-        缺日显式报错（pipeline 逐日吞异常，此处兜底，禁止静默缺口落盘）。
+        keep_dates 非空时 sink 只落 keep 内的日（管线仍 force=True 全量构建——
+        分块重叠日以不同预热窗重建时 EMA/长记忆列尾差 >1e-6，重复 append 必触发
+        指纹冲突；sink 丢弃重叠日 ⇒ panel ≡ 参照，见单元 4 构造约束）。
+        断言：keep_dates 内全部捕获（缺日显式报错，禁止静默缺口落盘）。
         """
         start_str, end_str = str(start_date), str(end_date)
         use_groups = self._normalize_groups(groups)
@@ -317,21 +321,34 @@ class V2PanelBuilder:
         range_dates = [d for d in calendar if start_str <= d <= end_str]
         if not range_dates:
             raise ValueError(f"回填区间无交易日: {start_str}~{end_str}")
+        if keep_dates is not None:
+            unknown = sorted(set(keep_dates) - set(range_dates))
+            if unknown:
+                raise ValueError(f"keep_dates 含区间外日期: {unknown[:5]}（{start_str}~{end_str}）")
+            if not keep_dates:
+                logger.info(
+                    f"backfill {start_str}~{end_str}: keep_dates 为空（全部已写），跳过构建"
+                )
+                return
         ti_lookup = load_top_inst_lookup(self._loader, range_dates)
         buffer = _ArchiveMonthBuffer(store, use_groups)
-        captured = self._run_capture(start_str, end_str)
-        for trade_date, df_day in captured:
-            materialized = self._materialize_day(df_day, trade_date, ti_lookup)
-            append_labels_for_day(store, materialized, calendar)
-            frames = {g: f for g, f in _split_groups(materialized).items() if g in use_groups}
-            if trade_date <= ARCHIVE_HOT_BOUNDARY:
-                buffer.add(trade_date, frames)
-            else:
-                buffer.flush()
-                for group, frame in frames.items():
-                    store.append_features(TradeDate.from_str(trade_date), group, frame)
-        buffer.flush()
-        self._assert_days_captured(captured, range_dates)
+        captured = self._run_capture(start_str, end_str, keep_dates=keep_dates)
+        # manifest 逐分区落盘是全量回填 O(n²) 瓶颈 ⇒ 延迟到本块出口统一落盘
+        with store.defer_manifest_save():
+            for trade_date, df_day in captured:
+                materialized = self._materialize_day(df_day, trade_date, ti_lookup)
+                append_labels_for_day(store, materialized, calendar)
+                frames = {g: f for g, f in _split_groups(materialized).items() if g in use_groups}
+                if trade_date <= ARCHIVE_HOT_BOUNDARY:
+                    buffer.add(trade_date, frames)
+                else:
+                    buffer.flush()
+                    for group, frame in frames.items():
+                        store.append_features(TradeDate.from_str(trade_date), group, frame)
+            buffer.flush()
+        expected = keep_dates if keep_dates is not None else range_dates
+        expected = self._filter_label_starved(expected, calendar, end_str)
+        self._assert_days_captured(captured, expected)
 
     # ---------- 捕获驱动与后置物化 ----------
 
@@ -408,6 +425,44 @@ class V2PanelBuilder:
         hi = idx + 1
         window_dates = calendar[lo:hi]
         return load_top_inst_lookup(self._loader, window_dates)
+
+    def _filter_label_starved(
+        self, days: Iterable[str], calendar: Sequence[str], end_str: str
+    ) -> list[str]:
+        """剔除数据视界内标签不可终日（T+21 端点超出管线加载窗口或数据水位）。
+
+        管线加载窗口 = end+1 个自然月（pipeline.py:384-385）；数据水位 = clean daily
+        最大分区日。端点超界 ⇒ 标签全 NaN ⇒ require_label 语义下当日无产出
+        （与 cs_train 区间末端语义一致）。冻结全区间末端 20260702 不触发
+        （T+21=20260730 ≤ 20260731 水位）；冒烟/短窗口可能触发。
+        """
+        load_end = (pd.to_datetime(end_str, format="%Y%m%d") + pd.DateOffset(months=1)).strftime(
+            "%Y%m%d"
+        )
+        horizon = min(load_end, self._data_horizon())
+        cal_index = {d: i for i, d in enumerate(calendar)}
+        buildable, starved = [], []
+        for day in days:
+            idx = cal_index.get(day)
+            endpoint = calendar[idx + 21] if idx is not None and idx + 21 < len(calendar) else None
+            if endpoint is not None and endpoint <= horizon:
+                buildable.append(day)
+            else:
+                starved.append(day)
+        if starved:
+            logger.warning(
+                f"标签不可终日 {len(starved)} 天（T+21 端点 > {horizon}），"
+                f"按数据视界语义排除: {starved[:5]}"
+            )
+        return buildable
+
+    def _data_horizon(self) -> str:
+        """clean daily 数据水位（最大分区日，YYYYMMDD）。"""
+        daily_dir = self._loader.storage.clean_path / "daily"
+        stems = [p.stem.replace("-", "") for p in daily_dir.glob("*.parquet")]
+        if not stems:
+            raise ValueError(f"clean daily 分区目录为空: {daily_dir}")
+        return max(stems)
 
     def _load_shenwan(self) -> Optional[pd.DataFrame]:
         """申万行业数据（行业中性化必需；生产开关恒开）。"""

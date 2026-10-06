@@ -22,8 +22,8 @@ from src.lazybull.v2.store.panel_builder import (
 )
 
 _CODES = ["600000.SH", "000001.SZ", "000002.SZ"]
-#: 26 天真实日期序列（20250620~20250715），跨冷热边界 20250630
-_CALENDAR = [(date(2025, 6, 20) + timedelta(days=i)).strftime("%Y%m%d") for i in range(26)]
+#: 60 天真实日期序列（20250620 起），跨冷热边界 20250630 且覆盖 T+21 标签端点
+_CALENDAR = [(date(2025, 6, 20) + timedelta(days=i)).strftime("%Y%m%d") for i in range(60)]
 
 
 def _big_day(date: str) -> pd.DataFrame:
@@ -205,8 +205,15 @@ class TestArchiveMonthBuffer:
 class TestBackfillRouting:
     def _builder_with_stub(self, monkeypatch, captured):
         builder = V2PanelBuilder(loader=Mock())
-        monkeypatch.setattr(builder, "_run_capture", lambda s, e: captured)
+        monkeypatch.setattr(
+            builder,
+            "_run_capture",
+            lambda s, e, keep_dates=None: [
+                (d, df) for d, df in captured if keep_dates is None or d in keep_dates
+            ],
+        )
         monkeypatch.setattr(builder, "_full_calendar", lambda: list(_CALENDAR))
+        monkeypatch.setattr(builder, "_data_horizon", lambda: "20991231")  # 数据水位打桩
         monkeypatch.setattr(
             "src.lazybull.v2.store.panel_builder.load_top_inst_lookup", lambda loader, dates: {}
         )

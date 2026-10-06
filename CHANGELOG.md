@@ -2,6 +2,73 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.10] - 2026-10-06
+
+### Added
+
+- **P1 单元 4：panel 全历史回填 + 三重闸门验收**（机器任务 B，报告
+  `docs/reports/v2_p1_backfill_reconcile_20261005.md`）：
+  - **全量回填**：`scripts/v2_p1/backfill_panel.py`（V2PanelBuilder 捕获复用旧管线、
+    串行、分块约定与冻结参照同源 `_iter_chunks(...,5)`；keep_dates = 块内覆盖日 −
+    manifest 已写日，重叠区 sink 丢弃规避 EMA 长尾冲突）——**3,518 交易日全量落盘、
+    0 失败日**，分块耗时 32.8+63.0+104.0 = **199.9 min**（授权 3.5~4h 区间内）；
+    热区 244 日 ×8 族 + 冷区 162 月 ×8 族（`panel_archive/`）+ labels 3 表 ×3,518 日；
+    manifest 登记 13,787 分区（features 3,248 + labels 10,539）+ 411 列。
+  - **严格门 PASS**（panel vs 冻结参照，`data/reports/v2_p1_panel_reconcile_final_20261006.json`）：
+    3,518 日零缺日、行集零差异；31 列超门 **100% 归因登记类**（D-12 豁免 ×3 /
+    D-04③ ×8+6 / D-04④ ×4 / D-11 ×8+1 / 纯孤立单点 ×1）、零未归因。判定语义 = 冻结 §7
+    出口机械化（`_classify_strict_column`：差异列须全部落入登记类，任一未归因或行集
+    差异 ⇒ FAIL）。
+  - **归因门 PASS**（panel vs cs_train，`data/reports/v2_p1_panel_vs_cstrain_final_20261006.json`）：
+    126 列差异 **100% 归因、零越界**（L1 ×94 / L1+孤立单点 ×6 / D-12 ×3 / D-04 各条 ×19 /
+    D-14 专项 ×5）。
+  - **性能闸门 PASS**：全历史跨列族全列加载 76.6s vs 基线 295.3s = **0.26×**（≪1.5× 门，
+    `data/reports/v2_p1_panel_perf_20261005.json`）。
+  - **闸门③ PASS**（D-13 口径：scratch 重建 + 逐列内容比对 + 豁免列登记，
+    `logs/v2_p1_verify_immutable_final_20261006.log`）：层 0 store 往返 no-op + 层 1 热区日
+    + 层 2 冷区月分块上下文重建，16 个目标分区构建通道列逐值一致、差异 0 项。
+  - **修复通道**（`PanelDataStore`）：`repair_archive_partition`（行超集追加）/
+    `replace_archive_days`（按日替换）/ `rewrite_partition`（列值修正重写）/
+    `resync_partition_fingerprints`（指纹再同步）——构建缺陷修复专用，理由强制登记
+    `manifest.repairs` 审计轨迹；口径修正仍走新列名/版本升级禁令不变。`manifest.save`
+    加 Windows 瞬时锁重试。
+  - 测试：`test_v2_store_repair_boundary.py` 11 例、`test_v2_store_panel_reconcile.py`
+    31 例（严格/归因分类器全类边界）、`test_v2_store_backfill_driver.py`（D-10 日级精度
+    语义修正陈旧断言）；v2 系列累计 270 例全绿。
+
+### Fixed
+
+- **D-10 分块边界 5 日缺口修复**：分块末标签不成熟（T+21 端点超出分块加载窗）+
+  已写判定月粒度盲区 ⇒ 20161228/29/30、20211230/31 未落盘；按参照同预热窗重建缺口日
+  修复性合并入月归档（labels 直写补齐 3,513→3,518）；`_written_days` 改冷区**日级精度**
+  （核 core 族分区实际日期集）防复发。
+- **D-12 解禁前瞻列全量覆盖修复**（2026-10-06 用户裁决落地，冻结文档 §8 D-13）：
+  全量 share_float（2005~2026 全分区）+ 全日历重建解禁查询表，panel 全分区逐日整列
+  覆盖 days_to_unlock/unlock_ratio/unlock_risk_flag（`rewrite_partition`，174 分区 /
+  233,194 单元格）——panel 该族 = **PIT 完整语义**；参照/cs_train 保持旧链区间截断
+  行为（行为冻结不动）；旧链 pipeline 加载口径修复转为 P1 后独立项随袖子 B 评审。
+  豁免量化证据（`data/reports/v2_p1_d12_exemption_evidence_20261006.json`）：panel ≡
+  全量查询表 且 参照 ≡ 窗口查询表，双恒等式 11,032,382 股票-日 0 偏差 ⇒ 残差 100% =
+  加载窗内容差。现役模型 154 列不含该族 ⇒ 零生产影响。
+- **D-14 归因门 5 列越界定界**（单元 3 遗留「待调查」闭环）：skewness/kurtosis = L1 +
+  D-05 实现对偶数值尾（rolling vs 中心矩实现在 2015 停牌簇等数值不稳定股翻转，晚日
+  ≤25 股且 ≤1.5%）；zscore_macd_hist(_sz) = L1 macd-EMA 冷启动长尾（至 2013-09）+
+  D-11 分块锚定；downside_corr_20 = L1 + 2013-09/10 cs_train 构建环境血缘块（pandas
+  2.x vs 3.0.5 滚动聚合行为差推断，输入数据与代码 git 实证逐字节相同）+ D-04② +
+  孤立单点。`_classify_attrib_special` 按定界归因（越界仍 FAIL）。
+
+### Changed
+
+- 冻结文档 `docs/data/v2_p1_build_freeze.md` §8 差异台账追加 D-09（参照分块 1 逐日
+  回退污染 + 重叠区 schema 校验驱动覆盖；v2 侧已写判定一律走 manifest 存在性）、
+  D-10（边界缺口与修复性合并）、D-11（市场状态/技术缓存锚定机制：参照终态 = 单调用
+  `--chunk-years 0` 锚定 20120104）、D-12（公告前瞻查询区间终点截断）+ D-13（D-12
+  裁决落地：panel 保留全量 PIT 修复 + 严格门豁免登记 + 严格门判定机械化 + D-11 锚定
+  窗定界 + 纯孤立单点阈；勘误 D-12「float_date 年分区」实为 **ann_date** 年分区）+
+  D-14（归因门 5 列复核定界）。单元 4 报告 §8 机器台账 ~13.7h（授权任务 B 199.9 min
+  在区间内，其余为 D-09/D-10/D-12 缺陷处置与裁决落地，契约「口径漂移处置另计」）。
+- 版本号 0.203.9 → 0.203.10（P1 单元 4 落地；分阶段功能小版本递增）。
+
 ## [0.203.9] - 2026-10-03
 
 ### Added
