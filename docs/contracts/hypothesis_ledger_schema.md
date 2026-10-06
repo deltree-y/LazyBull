@@ -10,6 +10,7 @@
 | F1 | 2026-10-01 | 方案 v1.8 §3.5 / §0.3 + R1-2 / R1-3 修正 | 首次落档 |
 | F2 | 2026-10-01 | P0 评审第二轮 | 4-A（拍板）：置信序列方差改持有期块方差 + 校准判据可操作化（≥20 次 A vs A 换种子）；4-B α 扣减时点写死（登记即锁定）；4-C §5/§6 机器边界；4-D 披露季措辞修正；⚪ 小点（时间戳校验 / 回填 α 口径） |
 | F3 | 2026-10-02 | P5a-2 回填实践 + F9 评审（B-2/B-3/C-7） | §8 补三条：占位 prereg 字段级豁免（`retrospective_placeholder=true` 允许 arms/metrics/noise_band/stop_rule 空值）+「正式报告约 10 份」措辞改「正式登记结论约 10 项」+ 回填绕过 DataStore 的技术债登记（DataStore 落地后须对全量条目跑 schema 校验回补） |
+| F4 | 2026-10-07 | P2a T0 评审 R1-14（字段漂移登记） | §3.2 补 `supersede_reasons` 字段登记（list[str]，可选；prereg 修订换版时的取代理由逐条列明，配合 append-only 顶部条款与 §4「新条目必须 supersedes」使用）。登记即生效：R1-14 评审意见即修订依据（字段本身已被评审认定为良好的可审计性增强，问题只在未登记），沿 protocols F7（R3-10）先例 |
 
 ---
 
@@ -51,6 +52,7 @@
 | `alpha_budget` | float | 本假设消耗的 α 预算份额（见 §4） |
 | `stop_rule` | str | 止损 / 终止条件 |
 | `reopen_condition` | str | 重开条件（"仅当新信息 X 出现才允许重开"的显式描述） |
+| `supersede_reasons` | list[str] | **可选（F4 登记）**：本条取代旧条目时的取代理由逐条列明；仅在 `supersedes` 非空时有意义（修订换版场景，配合顶部 append-only 条款「修订 = 追加新条目并 supersedes 旧条目」） |
 
 ### 3.3 `kind = "conclusion"`（结论条目）
 
