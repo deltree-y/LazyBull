@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.204.3] - 2026-10-06
+
+### Added
+
+- **在用全域闭包检查脚本** `scripts/check/check_inuse_closure.py`（F10R-4 评审整改：
+  对账底稿正式化）：两条主链路三入口 ast 全量 import 闭包（含函数体内惰性 import）+
+  factor_registry 动态加载并集，输出在用清单 / 包级计数 / 守恒校验（退出码），
+  `--json-out` 结构化底稿；测试 `tests/test_check_inuse_closure.py` 6 项（合成树机制
+  单测：闭包展开 / 相对导入层级 / 大小写精确匹配 / BOM 容错 / 动态并集 + 真实仓棘轮
+  锚定 196/200/49 + 底稿 fixture 逐集合比对）；底稿 fixture
+  `tests/fixtures/inuse_closure_baseline_20261006.json` 进版本控制（`data/reports/`
+  整体 gitignore 仅本地归档，对齐 P1 列族 fixture 先例）。
+
+### Changed
+
+- **v2 P2a 前置：在用全域对账完成 + PositionRiskModel 裁决不迁移**（方案 §4.3 v1.11-1B
+  条款执行，报告 `docs/reports/v2_p2a_inuse_audit_20261006.md`；方案 F10 草案登记）：
+  - **采集口径**：静态闭包 196 + 动态加载 4 = **在用全域 200**，守恒 249 = 200 + 49；
+    钉钉链路 bot_service 闭包 163 ⊂ 主链路核对通过。动态加载缺口被证实（4 个风控因子
+    模块仅经注册机制进链路），"静态+动态两源并集"要求必要。
+  - **清零判定通过**：在用 200 模块全部可由 §4.3 笼统映射（目录级）或组件清单（风控
+    家族级）覆盖，无双盲区遗漏 ⇒ **P2a 满足开工前提**。
+  - **PositionRiskModel 裁决（用户 2026-10-06）：不迁移**——不在两条主链路 import 闭包内
+    （唯一引用 = 离线训练脚本 `scripts/train_position_risk_model.py`；推理/OOS 回测/纸面
+    无 `models/risk` 加载点）；本体随 §4.7 退役评审处置，评审前视为「在用但无消费方」、
+    禁止新增投入（对齐 terminal_loss 家族 F8 先例）。
+  - **首轮评审 R1~R4 处置（报告 §9）**：R1 数量守恒修正（初版 §2 包级数字手写失准加总
+    223、§6 口径 53→49、v2 分类 22→24、离线 13→14、补 position_features 漏分类）；R2
+    sidecar_schema 由"随政策层退役"改拆分归属（持仓快照 / WF 报告 / 政策链三方共享，
+    快照列名与中文表头迁 v2 公共表结构模块唯一来源）；R3 保留链表述修正——`risk/precompute`
+    输出为 **22 个基础风险因子**（仍随 store 迁移），`pct_*` 截面百分位派生属模型专用
+    能力（`position_risk.py::_ensure_pct_columns` + 训练侧 `_add_pct_features`）连同
+    无引用孤儿 `factors/risk/position_features.py` 随模型不迁移；R4 底稿正式化（见 Added）。
+  - 八项防漏搬显式登记（signal_factory / backtest_runtime / smb_client / sidecar_schema /
+    risk.precompute / 三组多实现并存形态 / lgb 算法位等，报告 §5-B）；两表交叉核对无
+    需回写契约的缺口（报告 §7）；附带发现：CLAUDE.md §5「前置信号门控三模式」描述过时
+    （v0.90.2 已删死接口）、`backtest/eval_panel` 为无引用孤儿模块。
+
 ## [0.204.2] - 2026-10-06
 
 ### Changed
