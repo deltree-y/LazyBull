@@ -9,6 +9,7 @@
 |---|---|---|---|
 | F1 | 2026-10-01 | 方案 v1.8 §4.1 / §7 + 四族数据集契约 | 首次落档 |
 | F2 | 2026-10-01 | P0 评审第二轮（6-A~6-C） | 扩 revision_policy/dedup_rule 封闭词表（修 §2 违反 §1 的自相矛盾）；存量公告型数据集映射补全计划；公告源审计样本量升级（≥60）+ 前视/延迟分离 + 分层抽样 |
+| F3 | 2026-10-06 | P1 单元 5（F2 §2 欠账偿还） | 存量公告型四族映射补全落地（forecast / express / dividend / share_float，键与重复率经全量实证扫描） |
 
 ---
 
@@ -44,12 +45,17 @@
 | 股票回购 | `repurchase` | `end_date`（进度报告期，可空 ⇒ 空时 = `ann_date`） | `ann_date` | `(ts_code, ann_date, proc)` | `keep_all`（阶段机多行明细：预案/通过/实施/完成） | `full_row`（跨页重复 0.31%） |
 | 十大流通股东 | `top10_float_holders` | `end_date`（报告期） | `ann_date` | `(ts_code, end_date, ann_date, holder_name)` | `keep_max:hold_amount`（同键多行 0.06%，取金额最大行，禁止求和） | `full_row`（跨页重复 0） |
 | 龙虎榜机构席位 | `top_inst_seat` | `trade_date` | `trade_date`（当日收盘后披露） | `(ts_code, trade_date, exalter, side, reason)` | `priority:single_day_first`（F2：单日榜优先，剔除 reason 含「连续/累计」行，无单日榜才保留连续榜） | `correct_swap_then_key_tuple`（F2：先列修正 buy/sell 互换，再按键 + 金额三元组去重；多步管线见 `_meta.json: cleaning_pipeline_ref`） |
+| 业绩预告（F3 补） | `forecast` | `end_date`（预告对应报告期） | `ann_date` | `(ts_code, ann_date, end_date, type)`（F3 全量实证：唯一，重复 0） | `keep_all`（首次 + 修正预告全留；`first_ann_date`/`change_reason` 标记修正链，同 `(ts_code,end_date,type)` 多版 6.42%，下游按 T 时点取最新） | `full_row`（F3 实证：整行重复 0） |
+| 业绩快报（F3 补） | `express` | `end_date`（报告期） | `ann_date` | `(ts_code, ann_date, end_date)`（F3 实证：唯一，重复 0；同 `(ts_code,end_date)` 多版 0.05%） | `keep_all`（多版快报全留，`update_flag` 标记） | `full_row`（F3 实证：整行重复 0） |
+| 分红送股（F3 补） | `dividend` | `ex_date`（除息日=经济时点；仅实施阶段可得，缺失回退 `end_date` 报告期） | `ann_date`（`div_proc=实施` 时取 `imp_ann_date`——除息日的系统可得时点；清洗规则见 `_meta.json: cleaning_pipeline_ref`） | `(ts_code, ann_date, end_date, div_proc)`（F3 实证：唯一，重复 0） | `keep_all`（预案/实施阶段机明细全留） | `full_row`（F3 实证：整行重复 0；imp_ann_date/ex_date 仅 22.3% 行有值=实施阶段，余为预案占位） |
+| 限售解禁（F3 补） | `share_float_unlock` | `float_date`（解禁日） | `ann_date` | `(ts_code, ann_date, float_date, holder_name)`（F3 实证：唯一，重复 0） | `keep_all`（单持有人明细全留；同批解禁聚合下游做——`announcement_lookup.py:195` groupby 求和同口径；同 `(ts_code,float_date,holder_name)` 多次公告 20.3% 为再公告/更新） | `full_row`（F3 实证：整行重复 0） |
 
 - 四族的抓取协议（分页上限 / 水位 / 回拉窗口）仍归各自数据集契约；本表只冻结**事件抽象层的映射口径**。
 - 新事件族入库 = 在本表追加一行并经评审（closed registry 语义）。
-- **存量公告型数据集映射补全计划（F2，P0 评审 6-B）**：方案 §3.1 规划的公告流含预告 / 快报 / 分红 / 解禁等，
-  §2 当前只映射四族；**迁移路径**——P1 数据底座阶段按「袖子 B 立项所需优先」顺序补映射（forecast / express / dividend / share_float），
-  未映射的存量数据集**不进入**封闭注册表、不得被事件构建器消费（防「目录在但语义未冻结」的灰区）。
+- **存量公告型数据集映射补全（F2 计划 → F3 落地）**：方案 §3.1 规划的公告流含预告 / 快报 / 分红 / 解禁等；
+  F2 时 §2 只映射四族，迁移路径定为 P1 数据底座阶段补映射——**F3（2026-10-06，P1 单元 5）已补全 forecast /
+  express / dividend / share_float 四行**（键与重复率经全量实证扫描）；其余未映射的存量数据集
+  **不进入**封闭注册表、不得被事件构建器消费（防「目录在但语义未冻结」的灰区）。
 
 ## 3. state 统一 schema
 

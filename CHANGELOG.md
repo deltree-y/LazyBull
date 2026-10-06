@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.203.11] - 2026-10-06
+
+### Added
+
+- **P1 单元 5：起点剖面 + 新增列演练 + events 映射 + 影子通路验收**（报告
+  `docs/reports/v2_p1_unit5_profile_drill_events_shadow_20261006.md`）：
+  - **列级可用起点剖面**（M1.5 前置诊断，`scripts/v2_p1/profile_column_availability.py`
+    只读 0.4 min，专题报告 `docs/reports/v2_p1_column_availability_20261006.md`）：
+    2007~2011 段现役模型 154 列门禁幸存 85.7~87.0%（被淘汰 20 列全部源头硬缺席/内禀
+    稀疏：north/cyq/margin），瓶颈非「门禁拖死」；可挽回样本 ≈210 万股票-日（≈+19%，
+    >15% 停止线）⇒ **建议立项「分时段变列集训练」（起点 2007），立项与否待用户裁决**。
+    附带登记：剖面 `available_from` 值与 store 硬查询屏障语义冲突 ⇒ manifest 写入推迟到
+    M1.5 立项实施（届时先裁决 available_from 语义）。
+  - **新增列演练**（`tests/test_v2_new_column_drill.py` 2 例）：新增因子列全生命周期语义
+    可执行验证——登记为前提 / 追溯改写拒绝（热区指纹冲突 + 封存月原地修改拒绝）/ 新增列
+    只写新文件（旧分区指纹零变化）/ 登记前分区读取整列 NaN / available_from 越界查询拒绝。
+  - **events 四族映射补全**（`docs/contracts/events_state_schema.md` **F3 修订**，F2 §2
+    欠账落地）：forecast / express / dividend / share_float_unlock 四行七元组规格，
+    键与重复率全量实证（forecast/express/share_float 键唯一重复 0；dividend 实施行
+    knowledge_date 取 imp_ann_date）；封闭注册表语义不变。
+  - **影子通路验收 PASS**（`scripts/v2_p1/shadow_path_acceptance.py`，产物
+    `data/reports/v2_p1_shadow_path_acceptance_20260702.json`）：判据 B（同窗等价）——
+    shadow ≡ 同窗批量参照（build_features_data 同捕获窗）特征 375 列 + 标签 6 列 **0 差异**；
+    参照判据（vs panel 当日）22 列差异全部落入登记类（D-13 豁免族 / 公告季频加载窗截断族
+    / fund −18mo 窗沿族 / macd EMA 重排噪声 / mkt warmup 深度差 / zscore 连锁）；
+    cs_infer 对照为信息登记项（差异 = raw 2026-08-30/31 刷新数据态边界）。
+  - 调查教训登记：锚定敏感列的对账窗口必须精确到交易日，「D−7 个自然月」= 日历月减法
+    （20260702→20251202；参照起点取错一天曾致 mkt/macd 全行小差，A/B flags 对照排除
+    ht/rp/tfh 开关影响后定位）。
+
+### Changed
+
+- 版本号 0.203.10 → 0.203.11（P1 单元 5 落地；分阶段功能小版本递增）。
+
 ## [0.203.10] - 2026-10-06
 
 ### Added
