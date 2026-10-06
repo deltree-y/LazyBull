@@ -9,20 +9,25 @@
 - manifest：``features/manifest.json``
 - 假设台账：``ledger/hypotheses.jsonl``（append-only，本类是唯一写入口）
 - 单机写锁：``features/.write.lock``
+- manifest WAL：``features/manifest_wal.jsonl``（登记事件先写 WAL 再改内存，
+  崩溃后下次打开自动重放补登记 + 压实，闭合两阶段提交的崩溃窗口）
 
 写入纪律（协议 §8 R4-M8）：
 - append_features 两阶段提交：临时文件 → 算指纹 → 与 manifest 已有指纹比对
-  （一致放行 / 不一致 RuntimeError）→ 原子 replace + manifest 原子登记；
+  （一致放行 / 不一致 RuntimeError）→ 原子 replace → WAL 追加 → manifest 原子登记；
 - append_labels 封存前幂等可重写、封存后拒绝改写；
 - append_ledger_entry 防冲突（hypothesis_id 唯一）；
-- 所有写路径持单机写锁 + 提交前孤儿 .tmp GC。
+- 所有写路径持单机写锁 + 锁内 manifest sync（脏且盘上被外部改动 ⇒ fail-closed）
+  + 提交前孤儿 .tmp GC。
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import socket
+import time
 import types
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +46,7 @@ from src.lazybull.v2.common.types import (
     TradeDate,
     TSCode,
 )
+from src.lazybull.v2.store.column_groups import LABEL_TABLES
 from src.lazybull.v2.store.manifest import (
     VALID_GROUPS,
     Manifest,
@@ -88,19 +94,38 @@ class _WriteLock:
         self._create_lock_file()
         self._depth = 1
 
-    def release(self) -> None:
+    def release(self, during_exception: bool = False) -> None:
         if self._depth == 0:
             raise RuntimeError(f"写锁未持有却 release: {self._path}")
         self._depth -= 1
         if self._depth == 0:
-            self._path.unlink(missing_ok=True)
+            self._unlink_lock_file(during_exception)
+
+    def _unlink_lock_file(self, during_exception: bool) -> None:
+        """删除锁文件（有限退避重试 3 次）。
+
+        Windows 瞬时占用（PermissionError）不掩盖锁内原始异常：锁内已有异常在飞
+        ⇒ 降级 warning；无异常在飞且重试仍失败 ⇒ 抛 RuntimeError。
+        """
+        last_exc: OSError | None = None
+        for attempt in range(3):
+            try:
+                self._path.unlink(missing_ok=True)
+                return
+            except OSError as exc:
+                last_exc = exc
+                time.sleep(0.1 * (attempt + 1))
+        if during_exception:
+            logger.warning(f"写锁文件删除失败（锁内已有异常在飞，降级不掩盖）: {self._path}（{last_exc}）")
+            return
+        raise RuntimeError(f"写锁文件删除连续失败（3 次）: {self._path}") from last_exc
 
     def __enter__(self) -> "_WriteLock":
         self.acquire()
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.release()
+        self.release(during_exception=exc_type is not None)
 
     def _create_lock_file(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,23 +204,42 @@ class PanelDataStore:
         return self._root / "ledger" / "hypotheses.jsonl"
 
     @property
+    def wal_path(self) -> Path:
+        """manifest 登记事件 WAL（``features/manifest_wal.jsonl``，jsonl 逐行追加）。"""
+        return self.features_dir / "manifest_wal.jsonl"
+
+    @property
     def manifest(self) -> Manifest:
-        """manifest 内存视图（懒加载；文件不存在时按空骨架起步）。"""
+        """manifest 内存视图（懒加载；文件不存在时按空骨架起步；加载后立即 WAL 重放）。"""
         if self._manifest is None:
             self._manifest = Manifest(self.features_dir / "manifest.json")
+            self._replay_wal()
         return self._manifest
+
+    def _save_manifest(self) -> None:
+        """manifest 落盘 + WAL 压实（落盘成功后 WAL 事件已全部进 manifest，截断之）。"""
+        self.manifest.save()
+        self._truncate_wal()
+
+    def _truncate_wal(self) -> None:
+        """压实 WAL（删除；manifest 落盘是其事件已持久化的前提）。"""
+        try:
+            self.wal_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(f"WAL 压实删除失败（下次打开重放兜底，幂等无害）: {self.wal_path}（{exc}）")
 
     def _maybe_save_manifest(self) -> None:
         """manifest 落盘（延迟模式外）；延迟模式内跳过（出口统一落盘）。"""
         if self._manifest_defer == 0:
-            self.manifest.save()
+            self._save_manifest()
 
     def defer_manifest_save(self):
         """批量写入期延迟 manifest 落盘的上下文管理器（可重入）。
 
         动机：manifest 随分区数线性膨胀，逐分区落盘是全量回填的 O(n²) 瓶颈。
-        崩溃语义：延迟期内崩溃 ⇒ 盘上 manifest 不含已写分区登记 ⇒ 重跑按
-        「未登记允许重写」覆盖孤儿分区并重新登记，两阶段提交语义不变。
+        崩溃语义（WAL 闭合）：延迟期内崩溃 ⇒ 盘上分区 + WAL 登记事件保留 ⇒
+        下次 store 打开自动重放补登记（重放后 save + 压实）；此后重跑按
+        指纹一致 no-op / 不一致报错，两阶段提交语义闭合。
         """
         return self._ManifestDefer(self)
 
@@ -212,7 +256,141 @@ class PanelDataStore:
         def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
             self._store._manifest_defer -= 1
             if self._store._manifest_defer == 0:
-                self._store.manifest.save()  # 出口统一落盘（含异常路径——已写分区先落账）
+                # 出口统一落盘（含异常路径——已写分区先落账）；落盘前 sync 防并发覆盖
+                self._store._sync_manifest_under_lock()
+                self._store._save_manifest()
+
+    # ---------- manifest WAL（登记事件先写 WAL 再改内存；崩溃后重放补登记） ----------
+
+    def _wal_append(self, event: dict[str, Any]) -> None:
+        """追加一行 WAL 事件（flush；调用方须在写锁内、物理写成功后、内存登记前）。"""
+        self.wal_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.wal_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+            f.flush()
+
+    def _wal_register_partition(self, rel_path: str, fp: str, rows: int, zone: str) -> None:
+        self._wal_append(
+            {"op": "register_partition", "rel_path": rel_path, "sha256_16": fp,
+             "rows": rows, "zone": zone}
+        )
+        self.manifest.register_partition(rel_path, fp, rows=rows, zone=zone)
+
+    def _wal_register_label_partition(
+        self, label_name: str, date_str: str, fp: str, rows: int
+    ) -> None:
+        self._wal_append(
+            {"op": "register_label_partition", "label_name": label_name, "date": date_str,
+             "sha256_16": fp, "rows": rows}
+        )
+        self.manifest.register_label_partition(label_name, date_str, fp, rows)
+
+    def _wal_set_label_sealed_through(self, label_name: str, date_str: str) -> None:
+        self._wal_append(
+            {"op": "set_label_sealed_through", "label_name": label_name, "date": date_str}
+        )
+        self.manifest.set_label_sealed_through(label_name, date_str)
+
+    def _wal_register_repair(
+        self, rel_path: str, reason: str, added_dates: list[str], old_fp: str, new_fp: str
+    ) -> None:
+        self._wal_append(
+            {"op": "register_repair", "rel_path": rel_path, "reason": reason,
+             "added_dates": sorted(added_dates),
+             "old_fingerprint": old_fp, "new_fingerprint": new_fp}
+        )
+        self.manifest.register_repair(rel_path, reason, added_dates, old_fp, new_fp)
+
+    def _replay_wal(self) -> None:
+        """WAL 重放：逐行应用 manifest 缺失或指纹不同的事件（采用 WAL 并 warning）。
+
+        WAL 与 manifest 一致（正常路径）时零应用零落盘；有应用则立即 save + 压实。
+        坏行跳过并告警（WAL 是崩溃恢复旁路，不让单行损坏阻塞打开）。
+        """
+        wal = self.wal_path
+        try:
+            if not wal.exists() or wal.stat().st_size == 0:
+                return
+        except OSError:
+            return
+        applied = 0
+        with open(wal, encoding="utf-8") as f:
+            for line_no, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    applied += self._apply_wal_event(json.loads(line))
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                    logger.warning(f"WAL 第 {line_no} 行损坏跳过: {wal}（{exc}）")
+        if applied:
+            logger.warning(f"WAL 重放补登记 {applied} 条事件（崩溃恢复），落盘并压实: {wal}")
+            self._save_manifest()
+
+    def _apply_wal_event(self, event: dict[str, Any]) -> int:
+        """应用单行 WAL 事件（manifest 缺失或指纹不同才落），返回应用数（0/1）。"""
+        op = event.get("op")
+        if op == "register_partition":
+            if self.manifest.partition_fingerprint(event["rel_path"]) == event["sha256_16"]:
+                return 0
+            logger.warning(f"WAL 补登记分区: {event['rel_path']}")
+            self.manifest.register_partition(
+                event["rel_path"], event["sha256_16"],
+                rows=int(event["rows"]), zone=str(event["zone"]),
+            )
+            return 1
+        if op == "register_label_partition":
+            if self.manifest.label_partition_fingerprint(
+                event["label_name"], event["date"]
+            ) == event["sha256_16"]:
+                return 0
+            logger.warning(f"WAL 补登记标签分区: {event['label_name']}/{event['date']}")
+            self.manifest.register_label_partition(
+                event["label_name"], event["date"], event["sha256_16"], int(event["rows"])
+            )
+            return 1
+        if op == "set_label_sealed_through":
+            current = self.manifest.label_sealed_through(event["label_name"])
+            if current is not None and current >= event["date"]:
+                return 0
+            logger.warning(f"WAL 补登记封存水位: {event['label_name']} -> {event['date']}")
+            self.manifest.set_label_sealed_through(event["label_name"], event["date"])
+            return 1
+        if op == "register_repair":
+            dup = any(
+                r["rel_path"] == event["rel_path"]
+                and r["reason"] == event["reason"]
+                and r["old_fingerprint"] == event["old_fingerprint"]
+                and r["new_fingerprint"] == event["new_fingerprint"]
+                for r in self.manifest.repairs()
+            )
+            if dup:
+                return 0
+            logger.warning(f"WAL 补登记修复审计: {event['rel_path']}")
+            self.manifest.register_repair(
+                event["rel_path"], event["reason"],
+                list(event["added_dates"]), event["old_fingerprint"], event["new_fingerprint"],
+            )
+            return 1
+        raise ValueError(f"未知 WAL 事件类型: {op!r}")
+
+    def _sync_manifest_under_lock(self) -> None:
+        """写锁内（及 defer 出口落盘前）的 manifest 同步。
+
+        非脏且盘上变化 ⇒ reload + WAL 重放（吸收其他实例已落盘的登记）；
+        脏且盘上被外部改动 ⇒ RuntimeError（并发冲突，fail-closed——继续写会用
+        旧快照全量覆盖，丢失外部已保存的登记）。
+        """
+        m = self.manifest  # 懒加载内含 WAL 重放
+        if not m.changed_on_disk():
+            return
+        if m.dirty:
+            raise RuntimeError(
+                f"manifest 并发冲突（fail-closed）: {m.path} 盘上已被外部改动，"
+                "而本实例持有未落盘登记；请重开实例后重跑"
+            )
+        m.reload()
+        self._replay_wal()
 
     def write_lock(self) -> _WriteLock:
         """单机写锁上下文管理器（``with store.write_lock():``）。"""
@@ -226,6 +404,7 @@ class PanelDataStore:
         self._validate_feature_write(date_str, group, df)
         rel_path = f"panel/{date_str}/{group}.parquet"
         with self._lock:
+            self._sync_manifest_under_lock()
             part_dir = self.panel_dir / date_str
             part_dir.mkdir(parents=True, exist_ok=True)
             self._gc_orphans(part_dir)
@@ -244,7 +423,7 @@ class PanelDataStore:
                     "同日同族重复写仅在内容逐位一致时放行（R4-M8 防冲突语义）"
                 )
             os.replace(tmp_path, final_path)
-            self.manifest.register_partition(rel_path, fingerprint, rows=len(df), zone="hot")
+            self._wal_register_partition(rel_path, fingerprint, len(df), "hot")
             self._maybe_save_manifest()
             logger.info(f"特征分区落盘: {rel_path}（{len(df)} 行，指纹 {fingerprint}）")
 
@@ -260,6 +439,8 @@ class PanelDataStore:
             raise RuntimeError(
                 f"特征分区必须单日且与 date 参数一致: 期望 {date_str}，实得 {sorted(dates)[:5]}"
             )
+        if df.duplicated(subset=list(_KEY_COLUMNS)).any():
+            raise RuntimeError(f"特征分区键 (trade_date, ts_code) 重复（{date_str}/{group}）")
         self._validate_group_columns(group, df, context=f"{date_str}/{group}")
         month = f"{date_str[:4]}-{date_str[4:6]}"
         archive_file = self.archive_dir / month / f"{group}.parquet"
@@ -297,6 +478,7 @@ class PanelDataStore:
             raise RuntimeError("修复性合并必须登记理由（reason 非空）")
         rel_path = f"panel_archive/{month}/{group}.parquet"
         with self._lock:
+            self._sync_manifest_under_lock()
             final_path = self.archive_dir / month / f"{group}.parquet"
             old_fp = self.manifest.partition_fingerprint(rel_path)
             if old_fp is None or not final_path.exists():
@@ -321,8 +503,8 @@ class PanelDataStore:
             merged.to_parquet(tmp_path, index=False)
             new_fp = sha256_16_of_file(tmp_path)
             os.replace(tmp_path, final_path)
-            self.manifest.register_partition(rel_path, new_fp, rows=len(merged), zone="archive")
-            self.manifest.register_repair(rel_path, reason, new_days, old_fp, new_fp)
+            self._wal_register_partition(rel_path, new_fp, len(merged), "archive")
+            self._wal_register_repair(rel_path, reason, new_days, old_fp, new_fp)
             self._maybe_save_manifest()
             logger.warning(
                 f"冷区修复性合并: {rel_path}（追加 {len(new_days)} 日 {new_days}，"
@@ -344,6 +526,7 @@ class PanelDataStore:
             raise RuntimeError("修复性替换必须登记理由（reason 非空）")
         rel_path = f"panel_archive/{month}/{group}.parquet"
         with self._lock:
+            self._sync_manifest_under_lock()
             final_path = self.archive_dir / month / f"{group}.parquet"
             old_fp = self.manifest.partition_fingerprint(rel_path)
             if old_fp is None or not final_path.exists():
@@ -368,8 +551,8 @@ class PanelDataStore:
             merged.to_parquet(tmp_path, index=False)
             new_fp = sha256_16_of_file(tmp_path)
             os.replace(tmp_path, final_path)
-            self.manifest.register_partition(rel_path, new_fp, rows=len(merged), zone="archive")
-            self.manifest.register_repair(rel_path, f"[replace_days] {reason}", days, old_fp, new_fp)
+            self._wal_register_partition(rel_path, new_fp, len(merged), "archive")
+            self._wal_register_repair(rel_path, f"[replace_days] {reason}", days, old_fp, new_fp)
             self._maybe_save_manifest()
             logger.warning(
                 f"冷区修复性替换: {rel_path}（替换 {len(days)} 日 {days}；理由：{reason}）"
@@ -388,6 +571,7 @@ class PanelDataStore:
         if not reason or not reason.strip():
             raise RuntimeError("修复性重写必须登记理由（reason 非空）")
         with self._lock:
+            self._sync_manifest_under_lock()
             if rel_path.startswith("panel_archive/"):
                 final_path = self.archive_dir / rel_path.removeprefix("panel_archive/")
             elif rel_path.startswith("panel/"):
@@ -397,19 +581,32 @@ class PanelDataStore:
             old_fp = self.manifest.partition_fingerprint(rel_path)
             if old_fp is None or not final_path.exists():
                 raise RuntimeError(f"修复目标分区不存在或未登记: {rel_path}（新建请走 append）")
-            for key_col in ("trade_date", "ts_code"):
-                if key_col not in df.columns:
-                    raise RuntimeError(f"修复重写缺键列 {key_col!r}（{rel_path}）")
+            self._validate_rewrite_payload(rel_path, df)
             part_dir = final_path.parent
             tmp_path = part_dir / f"{final_path.name}.tmp"
             df.to_parquet(tmp_path, index=False)
             new_fp = sha256_16_of_file(tmp_path)
             os.replace(tmp_path, final_path)
             zone = "archive" if rel_path.startswith("panel_archive/") else "hot"
-            self.manifest.register_partition(rel_path, new_fp, rows=len(df), zone=zone)
-            self.manifest.register_repair(rel_path, f"[rewrite_partition] {reason}", [], old_fp, new_fp)
+            self._wal_register_partition(rel_path, new_fp, len(df), zone)
+            self._wal_register_repair(rel_path, f"[rewrite_partition] {reason}", [], old_fp, new_fp)
             self._maybe_save_manifest()
             logger.warning(f"分区修复性重写: {rel_path}（{len(df)} 行；理由：{reason}）")
+
+    def _validate_rewrite_payload(self, rel_path: str, df: pd.DataFrame) -> None:
+        """rewrite 结构校验：热区复用 _validate_feature_write、冷区复用 _validate_archive_write。
+
+        rewrite 允许内容变化（不校验指纹不变），但结构口径（键列/单日或月内/
+        键唯一/列登记）与 append 完全一致。
+        """
+        segs = rel_path.split("/")
+        if len(segs) != 3:
+            raise RuntimeError(f"非法分区路径（须 <zone>/<key>/<group>.parquet 三段）: {rel_path}")
+        group = segs[-1].removesuffix(".parquet")
+        if rel_path.startswith("panel_archive/"):
+            self._validate_archive_write(segs[1], group, df)
+        else:
+            self._validate_feature_write(segs[1], group, df)
 
     def append_archive_features(self, month: str, group: str, df: pd.DataFrame) -> None:
         """落冷区月分区（``panel_archive/YYYY-MM/<group>.parquet``；两阶段提交 + 写锁）。
@@ -420,6 +617,7 @@ class PanelDataStore:
         self._validate_archive_write(month, group, df)
         rel_path = f"panel_archive/{month}/{group}.parquet"
         with self._lock:
+            self._sync_manifest_under_lock()
             part_dir = self.archive_dir / month
             part_dir.mkdir(parents=True, exist_ok=True)
             self._gc_orphans(part_dir)
@@ -438,19 +636,21 @@ class PanelDataStore:
                     f"（已登记 {existing_fp} ≠ 新内容 {fingerprint}；口径修正请走新列名/版本升级）"
                 )
             os.replace(tmp_path, final_path)
-            self.manifest.register_partition(rel_path, fingerprint, rows=len(df), zone="archive")
+            self._wal_register_partition(rel_path, fingerprint, len(df), "archive")
             self._maybe_save_manifest()
             logger.info(f"冷区分区落盘: {rel_path}（{len(df)} 行，指纹 {fingerprint}）")
 
     def _validate_archive_write(self, month: str, group: str, df: pd.DataFrame) -> None:
-        """冷区写前校验：月份格式、族名、键列、全部日期落在月内、列已登记且族一致。"""
-        if len(month) != 7 or month[4] != "-":
+        """冷区写前校验：月份格式、族名、键列、键唯一、全部日期落在月内、列已登记且族一致。"""
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
             raise RuntimeError(f"冷区月份须为 YYYY-MM 格式，实得 {month!r}")
         if group not in VALID_GROUPS:
             raise RuntimeError(f"非法列族 {group!r}（合法值 {sorted(VALID_GROUPS)}）")
         missing_keys = [c for c in _KEY_COLUMNS if c not in df.columns]
         if missing_keys:
             raise RuntimeError(f"冷区分区缺键列 {missing_keys}（{month}/{group}）")
+        if df.duplicated(subset=list(_KEY_COLUMNS)).any():
+            raise RuntimeError(f"冷区分区键 (trade_date, ts_code) 重复（{month}/{group}）")
         dates = df["trade_date"].astype(str)
         out_of_month = dates[(dates.str.slice(0, 4) + "-" + dates.str.slice(4, 6)) != month]
         if len(out_of_month) > 0:
@@ -469,10 +669,12 @@ class PanelDataStore:
     # ========== 读取：features ==========
 
     def load_features(self, query: FeatureQuery) -> PanelFrame:
-        """加载特征面板（manifest 校验列名合法性与 available_from 越界）。
+        """加载特征面板（manifest 校验列名合法性与 available_from 越界；core 左表锚定）。
 
-        core 左表语义在外层；本方法只按请求列所在族读文件，同族 concat、
-        跨族 (trade_date, ts_code) outer join 后按请求列裁剪，族缺日整族 NaN 计数登记。
+        core 锚定在本方法内实现（冻结 §4 契约）：拼接键 (trade_date, ts_code)，
+        始终加载 core 族键域作左表，其余族 left join 进 core 键域——core 缺的日/键
+        不进结果，非 core 族多出的键被裁掉（debug 计数登记），族缺日整族 NaN；
+        仅请求键列 ⇒ 返回 core 键域空列帧；core 分区整体缺失（冷/热均无）⇒ 空结果。
         """
         col_meta = self._check_feature_query(query)
         start_str, end_str = _date_str(query.start_date), _date_str(query.end_date)
@@ -480,13 +682,30 @@ class PanelDataStore:
         for col, meta in col_meta.items():
             groups.setdefault(str(meta["group"]), []).append(col)
         hot_dates = self._hot_dates_in_range(start_str, end_str)
-        frames: list[pd.DataFrame] = []
-        for group, cols in groups.items():
-            frame = self._load_group_frame(group, cols, start_str, end_str, hot_dates)
-            if frame is not None:
-                frames.append(frame)
         data_cols = [c for c in query.columns if c not in _KEY_COLUMNS]
-        df = self._merge_group_frames(frames, data_cols)
+        core_frame = self._load_group_frame(
+            "core", groups.pop("core", []), start_str, end_str, hot_dates
+        )
+        if core_frame is None:
+            df = _empty_panel_df(data_cols)
+        else:
+            merged = core_frame
+            core_keys = pd.MultiIndex.from_frame(core_frame[list(_KEY_COLUMNS)])
+            for group, cols in groups.items():
+                frame = self._load_group_frame(group, cols, start_str, end_str, hot_dates)
+                if frame is None:
+                    continue
+                dropped = int(
+                    (~pd.MultiIndex.from_frame(frame[list(_KEY_COLUMNS)]).isin(core_keys)).sum()
+                )
+                if dropped:
+                    logger.debug(f"族 {group} 多出 core 键域的 {dropped} 键被裁掉（core 左表锚定）")
+                merged = merged.merge(frame, on=list(_KEY_COLUMNS), how="left")
+            merged = merged.set_index(list(_KEY_COLUMNS)).sort_index()
+            if not merged.index.is_unique:
+                raise RuntimeError("load_features 合并后键 (trade_date, ts_code) 不唯一")
+            # reindex 一次性补齐缺列（NaN）+ 按请求列序裁剪（避免逐列插入碎片化）
+            df = merged.reindex(columns=data_cols)
         if query.universe:
             codes = {_ts_code_str(c) for c in query.universe}
             df = df[df.index.get_level_values("ts_code").isin(codes)]
@@ -499,6 +718,7 @@ class PanelDataStore:
             df=df,
             manifest_version=self.manifest.manifest_version,
             available_from=available_from,
+            manifest_fingerprint=self.manifest.content_fingerprint(),
         )
 
     def _check_feature_query(self, query: FeatureQuery) -> dict[str, dict[str, Any]]:
@@ -560,8 +780,17 @@ class PanelDataStore:
                 continue  # 该月已封存，冷区为准
             hot_file = self.panel_dir / date_str / f"{group}.parquet"
             if hot_file.exists():
-                parts.append(pd.read_parquet(hot_file))
                 present_hot.add(date_str)
+                hot_df = pd.read_parquet(hot_file)
+                # 热区整文件读入后按分区名日期过滤（与冷区同口径；防御性，正常应为零过滤）
+                mask = hot_df["trade_date"].astype(str) == date_str
+                if not mask.all():
+                    logger.warning(
+                        f"热区日分区含分区名外日期（读入已过滤）: {hot_file} "
+                        f"实得 {sorted(hot_df.loc[~mask, 'trade_date'].astype(str).unique())[:5]}"
+                    )
+                    hot_df = hot_df[mask]
+                parts.append(hot_df)
         missing = (
             hot_dates
             - present_hot
@@ -590,18 +819,6 @@ class PanelDataStore:
                 year, month = year + 1, 1
         return months
 
-    @staticmethod
-    def _merge_group_frames(frames: list[pd.DataFrame], data_cols: list[str]) -> pd.DataFrame:
-        """跨族 (trade_date, ts_code) outer join，裁剪请求列，index=(trade_date, ts_code)。"""
-        if not frames:
-            return _empty_panel_df(data_cols)
-        merged = frames[0]
-        for frame in frames[1:]:
-            merged = merged.merge(frame, on=list(_KEY_COLUMNS), how="outer")
-        merged = merged.set_index(list(_KEY_COLUMNS)).sort_index()
-        # reindex 一次性补齐缺列（NaN）+ 按请求列序裁剪（避免逐列插入碎片化）
-        return merged.reindex(columns=data_cols)
-
     # ========== 写入 / 读取：labels ==========
 
     def append_labels(self, label_name: str, df: pd.DataFrame) -> None:
@@ -610,6 +827,7 @@ class PanelDataStore:
         work = df.copy()
         work["trade_date"] = work["trade_date"].astype(str)
         with self._lock:
+            self._sync_manifest_under_lock()
             label_dir = self.labels_dir / label_name
             label_dir.mkdir(parents=True, exist_ok=True)
             self._gc_orphans(label_dir)
@@ -623,6 +841,10 @@ class PanelDataStore:
         missing = [c for c in required if c not in df.columns]
         if missing:
             raise ValueError(f"标签 {label_name} 写入缺列 {missing}（须含 {required}）")
+        if not df["trade_date"].astype(str).str.fullmatch(r"\d{8}").all():
+            raise ValueError(f"标签 {label_name} trade_date 须为恰 8 位数字日（YYYYMMDD）")
+        if df.duplicated(subset=list(_KEY_COLUMNS)).any():
+            raise ValueError(f"标签 {label_name} 键 (trade_date, ts_code) 重复")
         bad = set(df["maturity_status"].astype(str).unique()) - _MATURITY_VALUES
         if bad:
             raise ValueError(f"标签 {label_name} maturity_status 取值非法: {sorted(bad)}")
@@ -653,13 +875,20 @@ class PanelDataStore:
             )
         else:  # 新分区，或 forming 分区内容变化 ⇒ 幂等重写
             os.replace(tmp_path, final_path)
-            self.manifest.register_label_partition(label_name, date_str, fingerprint, len(day_df))
+            self._wal_register_label_partition(label_name, date_str, fingerprint, len(day_df))
             logger.info(f"标签分区落盘: {label_name}/{date_str}（{len(day_df)} 行）")
         if is_sealed_data:
-            self.manifest.set_label_sealed_through(label_name, date_str)
+            self._wal_set_label_sealed_through(label_name, date_str)
 
     def load_labels(self, query: LabelQuery) -> pd.DataFrame:
-        """按区间读标签日分区，返回 index=(trade_date, ts_code)、columns=[label_value, maturity_status]。"""
+        """按区间读标签日分区，返回 index=(trade_date, ts_code)、columns=[label_value, maturity_status]。
+
+        variant=raw ⇒ label_value 取原值列；variant=neu ⇒ 取 neu_label_value
+        （输出 shape 不变）。未知标签名（∉ LABEL_TABLES）⇒ ValueError，
+        与「合法但无分区 ⇒ 空」区分。
+        """
+        if query.label_name not in LABEL_TABLES:
+            raise ValueError(f"未知标签名: {query.label_name!r}（合法值 {sorted(LABEL_TABLES)}）")
         label_dir = self.labels_dir / query.label_name
         start_str, end_str = _date_str(query.start_date), _date_str(query.end_date)
         parts: list[pd.DataFrame] = []
@@ -674,11 +903,16 @@ class PanelDataStore:
         if not parts:
             return _empty_panel_df(["label_value", "maturity_status"])
         df = pd.concat(parts, ignore_index=True)
-        missing = [c for c in ("label_value", "maturity_status") if c not in df.columns]
+        required = ["label_value", "maturity_status"]
+        if query.variant == "neu":
+            required.append("neu_label_value")
+        missing = [c for c in required if c not in df.columns]
         if missing:
             raise ValueError(
                 f"标签 {query.label_name} 分区缺协议列 {missing}（label_value 由 labels_builder 落盘统一）"
             )
+        if query.variant == "neu":
+            df["label_value"] = df["neu_label_value"]
         df["trade_date"] = df["trade_date"].astype(str)
         df = df.set_index(list(_KEY_COLUMNS)).sort_index()
         if query.universe:
@@ -703,6 +937,7 @@ class PanelDataStore:
             "registered_at": entry.registered_at,
         }
         with self._lock:
+            self._sync_manifest_under_lock()
             if entry.hypothesis_id in self._existing_ledger_ids():
                 raise ValueError(f"台账 hypothesis_id 重复（防冲突）: {entry.hypothesis_id!r}")
             self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
@@ -746,7 +981,7 @@ class PanelDataStore:
         return types.MappingProxyType(self.manifest.snapshot())
 
     def resync_partition_fingerprints(self, reason: str) -> dict[str, int]:
-        """指纹再同步（管理操作）：重算全部已登记分区的文件指纹并校正登记。
+        """指纹再同步（管理操作）：重算全部已登记分区（panel 热/冷区 + labels）的文件指纹并校正登记。
 
         服务场景：修复性写入在 manifest 落盘阶段被中断（瞬时文件锁等）后，
         盘上分区内容与登记指纹不一致——以盘上内容为准重同步，并对每个被校正的
@@ -755,35 +990,51 @@ class PanelDataStore:
         if not reason or not reason.strip():
             raise RuntimeError("指纹再同步必须登记理由（reason 非空）")
         with self._lock:
+            self._sync_manifest_under_lock()
             stats = {"checked": 0, "resynced": 0, "missing_file": 0}
-            for rel_path, meta in list(self.manifest.snapshot()["partitions"].items()):
-                stats["checked"] += 1
+            snapshot = self.manifest.snapshot()
+            for rel_path, meta in list(snapshot["partitions"].items()):
                 if rel_path.startswith("panel_archive/"):
                     fp = self.archive_dir / rel_path.removeprefix("panel_archive/")
-                elif rel_path.startswith("panel/"):
-                    fp = self.panel_dir / rel_path.removeprefix("panel/")
                 else:
-                    fp = self.labels_dir / rel_path.removeprefix("labels/")
-                if not fp.exists():
-                    stats["missing_file"] += 1
-                    logger.error(f"已登记分区文件缺失: {rel_path}")
-                    continue
-                current = sha256_16_of_file(fp)
-                if current != meta["sha256_16"]:
-                    old_fp = meta["sha256_16"]
-                    self.manifest.register_partition(
-                        rel_path, current, rows=meta.get("rows", 0), zone=meta.get("zone", "hot")
+                    fp = self.panel_dir / rel_path.removeprefix("panel/")
+                self._resync_one(rel_path, fp, meta, reason, stats)
+            for label_name, entry in snapshot["labels"].items():
+                for filename, meta in list(entry["partitions"].items()):
+                    rel_path = f"labels/{label_name}/{filename}"
+                    self._resync_one(
+                        rel_path, self.labels_dir / label_name / filename, meta, reason, stats
                     )
-                    self.manifest.register_repair(
-                        rel_path, f"[resync] {reason}", [], old_fp, current
-                    )
-                    stats["resynced"] += 1
-            self.manifest.save()
+            self._save_manifest()
             logger.warning(
                 f"指纹再同步完成：检查 {stats['checked']}，校正 {stats['resynced']}，"
                 f"缺文件 {stats['missing_file']}（理由：{reason}）"
             )
             return stats
+
+    def _resync_one(
+        self, rel_path: str, fp: Path, meta: dict[str, Any], reason: str, stats: dict[str, int]
+    ) -> None:
+        """单分区指纹核对/校正（labels 分区经 register_label_partition 落登记）。"""
+        stats["checked"] += 1
+        if not fp.exists():
+            stats["missing_file"] += 1
+            logger.error(f"已登记分区文件缺失: {rel_path}")
+            return
+        current = sha256_16_of_file(fp)
+        if current == meta["sha256_16"]:
+            return
+        old_fp = str(meta["sha256_16"])
+        rows = int(meta.get("rows", 0))
+        if rel_path.startswith("labels/"):
+            label_name, filename = rel_path.split("/")[1:]
+            self._wal_register_label_partition(
+                label_name, filename.removesuffix(".parquet"), current, rows
+            )
+        else:
+            self._wal_register_partition(rel_path, current, rows, str(meta.get("zone", "hot")))
+        self._wal_register_repair(rel_path, f"[resync] {reason}", [], old_fp, current)
+        stats["resynced"] += 1
 
     # ========== 后续单元留白（签名已按协议冻结） ==========
 

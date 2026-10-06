@@ -63,14 +63,15 @@ def _is_empty(value: Any) -> bool:
 
 
 def _check_common(obj: dict[str, Any], reasons: list[str]) -> None:
-    """① schema_version==1；② hypothesis_id 非空；③ kind 合法。"""
+    """① schema_version==1；② hypothesis_id 非空；③ kind 合法（类型守卫：非 str 直接判非法）。"""
     if obj.get("schema_version") != 1:
         reasons.append(f"schema_version 应为 1，实得 {obj.get('schema_version')!r}")
     hypothesis_id = obj.get("hypothesis_id")
     if not isinstance(hypothesis_id, str) or not hypothesis_id.strip():
         reasons.append(f"hypothesis_id 为空或类型非法: {hypothesis_id!r}")
-    if obj.get("kind") not in VALID_KINDS:
-        reasons.append(f"kind 非法: {obj.get('kind')!r}（合法值 {sorted(VALID_KINDS)}）")
+    kind = obj.get("kind")
+    if not isinstance(kind, str) or kind not in VALID_KINDS:
+        reasons.append(f"kind 非法: {kind!r}（合法值 {sorted(VALID_KINDS)}）")
 
 
 def _check_prereg_field(key: str, value: Any, placeholder: bool, reasons: list[str]) -> None:
@@ -99,7 +100,7 @@ def _check_prereg_payload(payload: dict[str, Any], reasons: list[str]) -> None:
         if key in payload:
             _check_prereg_field(key, payload[key], placeholder, reasons)
     vehicle = payload.get("vehicle")
-    if vehicle is not None and vehicle not in VALID_VEHICLES:
+    if vehicle is not None and (not isinstance(vehicle, str) or vehicle not in VALID_VEHICLES):
         reasons.append(f"prereg vehicle 非法: {vehicle!r}（合法值 {sorted(VALID_VEHICLES)}）")
     if "tags" in payload and not isinstance(payload["tags"], list):
         reasons.append(f"prereg tags 须为 list，实得 {type(payload['tags']).__name__}")
@@ -114,7 +115,7 @@ def _check_conclusion_payload(payload: dict[str, Any], reasons: list[str]) -> No
     if missing:
         reasons.append(f"conclusion payload 缺字段: {missing}")
     verdict = payload.get("verdict")
-    if "verdict" in payload and verdict not in VALID_VERDICTS:
+    if "verdict" in payload and (not isinstance(verdict, str) or verdict not in VALID_VERDICTS):
         reasons.append(f"conclusion verdict 非法: {verdict!r}（合法值 {sorted(VALID_VERDICTS)}）")
     link = payload.get("hypothesis_id")
     if "hypothesis_id" in payload and (not isinstance(link, str) or not link.strip()):

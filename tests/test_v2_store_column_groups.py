@@ -67,7 +67,7 @@ class TestMappingCompleteness:
     def test_frozen_json_consistency(self):
         """与冻结生成物逐项一致（JSON 是生成中间物，本断言防代码表被手工改漂移）。"""
         frozen = json.loads(
-            (_ROOT / "temp" / "p1_column_groups_20261002.json").read_text(encoding="utf-8")
+            (_ROOT / "tests" / "fixtures" / "p1_column_groups_20261002.json").read_text(encoding="utf-8")
         )
         for group, cols in frozen.items():
             if group == "labels":

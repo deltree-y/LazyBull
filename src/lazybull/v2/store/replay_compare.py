@@ -4,7 +4,9 @@
 三段式（沿母截面先例）：
 1. 日级统计：逐日逐列比对（行集 ts_code 差集、列交集、数值 atol=1e-6 且 NaN==NaN
    视为一致、非数值列精确相等）；
-2. 合并：日级计数合并为全窗口列级口径（超容差行占比在合并分母上重算，禁止逐日平均）；
+2. 合并：日级计数合并为全窗口列级口径（超容差行占比在合并分母上重算，禁止逐日平均；
+   分母 = 全窗口该列实际可比日的可比行数合计，含零差异日——零差异日的分母由日级
+   ``col_rows`` 透传，R3-04 整改前分母只累计差异日，会高估占比误报超门）；
 3. 判定：列级 超容差行占比 > 1e-4 或 max|Δ| > 0.05 ⇒ ``over_gate=True``；
    每个差异列带 ``attribution``（命中冻结 §8 D-04 清单的填对应条目；zscore/neu 子列
    随被归因母列标记派生连锁；未命中填 "待调查"）。
@@ -98,13 +100,21 @@ def _resolve_cs_dir(root: Path | str) -> Path:
 def _compare_numeric_column(
     left: pd.Series, right: pd.Series, atol: float
 ) -> tuple[int, float, pd.Series]:
-    """数值列比对：返回 (超容差行数, max|Δ|, 超容差行布尔掩码)。NaN==NaN 一致。"""
+    """数值列比对：返回 (超容差行数, max|Δ|, 超容差行布尔掩码)。NaN==NaN 一致。
+
+    max|Δ| 只取数值差：over 行全为 NaN 型差异（两侧 isna 不一致）时 diff[over]
+    全 NaN、.max() 得 nan——此处显式归零，不靠 pandas/Python 默认行为侥幸。
+    """
     lval = pd.to_numeric(left, errors="coerce")
     rval = pd.to_numeric(right, errors="coerce")
     both_nan = lval.isna() & rval.isna()
     diff = (lval - rval).abs()
     over = ((diff > atol) | (lval.isna() != rval.isna())) & ~both_nan
-    max_abs = float(diff[over].max()) if bool(over.any()) else 0.0
+    if bool(over.any()):
+        peak = diff[over].max()
+        max_abs = 0.0 if pd.isna(peak) else float(peak)
+    else:
+        max_abs = 0.0
     return int(over.sum()), max_abs, over
 
 
@@ -113,6 +123,11 @@ def _compare_nonnumeric_column(left: pd.Series, right: pd.Series) -> tuple[int, 
     both_nan = left.isna() & right.isna()
     ne = (left != right) & ~both_nan
     return int(ne.sum()), ne
+
+
+def _count_nan_mismatch(left: pd.Series, right: pd.Series) -> int:
+    """NaN 型差异行数（两侧 isna 不一致；D-04③/④ 纯 NaN 型判定的日级统计口径）。"""
+    return int((left.isna() != right.isna()).sum())
 
 
 def _to_json_value(value: Any) -> Any:
@@ -180,6 +195,7 @@ def _compare_one_day(date: str, replay_dir: Path, cs_dir: Path) -> dict[str, Any
         col_stats[col] = {
             "rows": len(common_codes),
             "over_rows": over,
+            "over_nan_rows": _count_nan_mismatch(lcol, rcol),
             "max_abs_diff": max_abs,
             "samples": _column_samples(mask, lcol, rcol),
         }
@@ -192,9 +208,12 @@ def _compare_one_day(date: str, replay_dir: Path, cs_dir: Path) -> dict[str, Any
         "codes_only_cs_train": sorted(cs_codes - replay_codes)[:_SAMPLE_CAP],
         "n_codes_only_replay": len(replay_codes - cs_codes),
         "n_codes_only_cs_train": len(cs_codes - replay_codes),
-        "cols_only_replay": sorted(set(replay.columns) - set(cs.columns)),
-        "cols_only_cs_train": sorted(set(cs.columns) - set(replay.columns)),
+        # 键列噪声在源头剔除（列集差异只登记真实特征/标签列）
+        "cols_only_replay": sorted(set(replay.columns) - set(cs.columns) - set(_KEY_COLUMNS)),
+        "cols_only_cs_train": sorted(set(cs.columns) - set(replay.columns) - set(_KEY_COLUMNS)),
         "common_cols": common_cols,
+        # 当日每个 common 列的可比行数（含零差异列；R3-04 全窗口分母的数据来源）
+        "col_rows": {col: len(common_codes) for col in common_cols},
         "columns": col_stats,
     }
 
@@ -202,6 +221,7 @@ def _compare_one_day(date: str, replay_dir: Path, cs_dir: Path) -> dict[str, Any
 def _merge_day_results(day_results: list[dict[str, Any]]) -> dict[str, Any]:
     """三段式后两段：日级统计合并为全窗口列级口径 + 判定与归因。"""
     merged: dict[str, Any] = {}
+    col_total_rows: dict[str, int] = {}
     row_diff_days = []
     missing_days = []
     cols_only_replay: set[str] = set()
@@ -224,11 +244,13 @@ def _merge_day_results(day_results: list[dict[str, Any]]) -> dict[str, Any]:
             )
         cols_only_replay.update(day["cols_only_replay"])
         cols_only_cs.update(day["cols_only_cs_train"])
+        # 分母全窗口累计（含零差异日；列在某日不可比则当日不计入——R3-04）
+        for col, n_rows in day.get("col_rows", {}).items():
+            col_total_rows[col] = col_total_rows.get(col, 0) + n_rows
         for col, stat in day["columns"].items():
             agg = merged.setdefault(
                 col, {"total_rows": 0, "over_rows": 0, "max_abs_diff": 0.0, "samples": []}
             )
-            agg["total_rows"] += stat["rows"]
             agg["over_rows"] += stat["over_rows"]
             agg["max_abs_diff"] = max(agg["max_abs_diff"], stat["max_abs_diff"])
             if len(agg["samples"]) < _SAMPLE_CAP:
@@ -237,6 +259,8 @@ def _merge_day_results(day_results: list[dict[str, Any]]) -> dict[str, Any]:
                 agg["samples"].extend(stat["samples"])
                 agg["samples"] = agg["samples"][:_SAMPLE_CAP]
     for col, agg in merged.items():
+        # over_share 分母 = 全窗口该列实际可比日的可比行数合计（不是有差异日的行数）
+        agg["total_rows"] = col_total_rows.get(col, 0)
         agg["over_share"] = agg["over_rows"] / agg["total_rows"] if agg["total_rows"] else 0.0
         agg["over_gate"] = bool(
             agg["over_share"] > GATE_OVER_SHARE or agg["max_abs_diff"] > GATE_MAX_ABS_DIFF

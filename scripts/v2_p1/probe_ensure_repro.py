@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """P1 先行探针：ensure 链路可复现性探测（v2 P1 阶段）。
 
+**注意：口径 A 已被单元 3 口径 B（replay_compare）取代，本脚本仅历史诊断留存，
+其『一致』结论不作验收证据。**
+
 目的（方案 §8-P1 闸门）：判定「同一 raw 快照 → 同一特征产物」是否成立，
 即 ensure 增量链路（cs_infer）与 build_clean_features 批量链路（cs_train）
 在同一 raw 上是否逐值一致（1e-6 容差，对齐母截面先例）。

@@ -33,7 +33,7 @@
 
 ## 2. 列族分组表（383 列 → panel 8 族 + labels 3 表；逐列映射冻结）
 
-校验：383 列全覆盖、无重复、无遗漏、无越界（生成脚本 `temp/p1_gen_column_groups_20261002.py`，产物 `temp/p1_column_groups_20261002.json`；单元 2 将代码化为 `v2/store/column_groups.py` 单一来源）。
+校验：383 列全覆盖、无重复、无遗漏、无越界（产物归档 `tests/fixtures/p1_column_groups_20261002.json`，生成脚本为一次性 temp 物已按 §7.7 清理；单元 2 起代码化为 `v2/store/column_groups.py` 单一来源）。
 
 | 族 | 列数 | 内容 |
 |---|---|---|
@@ -47,7 +47,7 @@
 | `neutralized` | 117 | zscore_* 57 + zscore_*_sz 56 + zscore_size + neu_ret_1/5/10/20 |
 | **labels**（独立成表） | 6 | y_ret_5/10/20 + neu_y_ret_5/10/20（训练默认标签 = `neu_y_ret_20`，`ml/train_core/prepare.py:63`） |
 
-逐列清单见附录 A（与 `temp/p1_column_groups_20261002.json` 逐项一致）。
+逐列清单见附录 A（与 `tests/fixtures/p1_column_groups_20261002.json` 逐项一致）。
 
 ## 3. 冷热分层参数（P1 一次性定型）
 
@@ -56,6 +56,7 @@
 - **单文件规则**：软上限 256MB（超限按列子族拆分）、软下限 32MB（欠限触发压实评审）；回填时逐文件校验并登记。
 - **labels**：`data/labels/y_ret_{5,10,20}/YYYYMMDD.parquet`（日分区，不分冷热；单表列 = `ts_code, trade_date, label_value, neu_label_value, maturity_status`——**v2 适配登记**：v1 文字 `y_ret_N, neu_y_ret_N` 按 store 统一口径命名为 `label_value`（= y_ret_N 值）/ `neu_label_value`（= neu_y_ret_N 值），`v2/store/labels_builder.py` docstring 同源登记）。
 - **labels 成熟度生命周期**：封存时点 = T + max(h)=T+20 端点可算日（T+1 起算第 20 个交易日存在）；封存前幂等可重写（`maturity_status=forming`），封存后拒绝改写（`maturity_status=sealed`）；回填区间内全部标签已成熟（区间末端 20260702 的 T+20 ≈ 20260730 ≤ raw 末端 2026-07-31）。
+  **措辞补注（2026-10-06 评审 P2）**：「T+20 端点可算日」的代码语义 = 交易日历中 `idx(T)+21` 存在且端点 ≤ 数据水位（T+1 起第 20 个交易日），与 §1 标签公式端点 T+1+N 严格一致——**代码正确，勿按字面「修」成 off-by-one**；本轮整改已把数据水位纳入判定（评审 R3-06）。
 
 ## 4. manifest 规格要点（单元 1 实现的输入）
 
@@ -78,6 +79,7 @@
 ## 7. 验收闸门参数（单元 4 执行）
 
 - 对账门：母截面三段式（块级逐值 atol=1e-6 → 合并 → 判定）；实现漂移判据 = 超容差行占比 > 1e-4 或任一列 max|Δ| > 0.05 ⇒ raise；极稀疏差异 ⇒ 数据态漂移告警 + 离群登记（沿 `MOTHER_OUTLIER_SHARE_LIMIT` / `MOTHER_HARD_ATOL`）。
+- **注（2026-10-06 评审整改，R2-4②）**：上句「超门 ⇒ raise」的字面口径已被 D-13 机械化出口取代——终态出口为「**超门 + 落入登记归因类 ⇒ 放行**」（登记类 = L1 / D-04 / D-11 / D-12 豁免 / 纯数据态孤立单点，类外 ⇒ FAIL）。此处补注防后人照字面回改实现。
 - 出口 = 残差 100% 归因（差异逐列归因：截面口径 / 派生物化 / 数据态）。
 - 性能闸门：全历史跨列族加载 ≤ 现状 1.5 倍（双口径：抽 5 列 + 全列）。
 - 新增列只写新文件（历史分区指纹零改动校验）。
@@ -99,10 +101,53 @@
 | 2026-10-05 | D-12 | **公告前瞻查询的区间终点截断（PIT 完整性缺陷，口径裁决待办）**：`load_share_float`/`load_block_trade` 按构建区间 [start, end+1mo] 加载（share_float 按 float_date 年分区）——分块回填/单日 cs_infer 的加载窗截断 ⇒ 解禁/大宗的「已公告未解禁」（ann_date≤T<float_date）远年记录在窗尾丢失 ⇒ unlock_ratio/days_to_unlock 等前瞻列在分块早期年代与 cs_train（全区间覆盖）值不同（实证：panel 分块 1 的 2014-01 段 vs 全区间参照 max\|Δ\|=89.8）。**质押族已按「全量历史起点加载」处理（pipeline.py:736 先例），share_float/block_trade 未跟进**。影响面：现役模型 154 列不含该族 ⇒ 无生产信号影响；但袖子 B/D（事件/公司行为）将消费公告数据。**处置：差异台账登记 + 口径裁决待办**（候选：公告前瞻查询改为全量历史起点+全量前向覆盖加载，与 pledge 先例对齐；该改动改变旧链行为，按行为冻结纪律须随对应段切换一并评审，或作 P1 后独立修复项），建议随袖子 B 立项的数据工作一并裁决。 | 单元 4 严格门/归因门复核证据链 |
 | 2026-10-06 | D-13 | **D-12 口径裁决落地（用户裁决：panel 保留全量 PIT 修复 + 严格门豁免登记）**：① 单元 4 已对 panel 执行 D-12 修复（全量 share_float 2005~2026 分区 + 全日历重建解禁查询表，`rewrite_partition` 重写 174 分区 / 233,194 单元格；首轮在 manifest 落盘阶段撞 Windows 瞬时锁中断，第二轮完成——manifest.save 已加瞬时锁重试，事后只读扫描 3,248 登记分区指纹零失同步）。② 修复后严格门该族差异不降反升（unlock_ratio 超门行 138,717→428,106 等）——实证根因：**panel 语义 = PIT 完整，参照/cs_train = 旧链加载窗截断**（[起点−7月, 终点+1月] ⇒ 丢 ann_date ≤2010 分区与末年分区）；探针 000011.SZ@20120104 panel=201 天/0.1667 与全量手工核算一致（2009-10-28 公告批），参照 NaN。③ 裁决：**panel 保留修复值**（新底座直接消费正确语义，袖子 B 数据工作输入）；参照与 cs_train 生产链保持旧行为（行为冻结不动）；旧链 pipeline 加载口径修复转为 P1 后独立项随袖子 B 评审；现役模型 154 列不含该族 ⇒ 零生产影响。④ 豁免登记：严格门/归因门对 days_to_unlock/unlock_ratio/unlock_risk_flag 从「逐值一致」改「豁免 + 差异全归因登记」（`panel_reconcile.py::D12_EXEMPT_COLUMNS`）；**严格门判定同步机械化为 §7 出口「残差 100% 归因」**（登记类 = L1 / D-04 / D-11 / D-12 豁免 / 纯数据态孤立单点，类外 ⇒ FAIL）——同步细化：D-11 锚定影响窗定界 20170103~20170831 / 20220104~20220930（120 交易日切片 + 复牌股 EMA 收敛尾，实证 002260.SZ 2022-05 复牌簇几何收敛 ~0.8/日；窗内非长记忆列稀疏伴随单点同归 D-11），纯孤立单点阈 = 日数 ≤10 且总量 ≤20 行且单日 ≤1% 且 max\|Δ\|≤0.05（百分位秩单步翻转类，超幅/密集 ⇒ 调查）。⑤ 量化证据：`data/reports/v2_p1_d12_exemption_evidence_20261006.json`（panel ≡ 全量查询表 且 参照 ≡ 窗口查询表 双恒等式全量核对 ⇒ 残差 = 加载窗内容差，无第四来源）。⑥ **勘误 D-12 原文**：「share_float 按 float_date 年分区」有误——实际按 **ann_date** 年分区（`loader_announcement.py:8,60-67` 模块契约与 raw 分区内容实证），本条目以此为准。 | 严格门终版 `v2_p1_panel_reconcile_final_20261006.json`；豁免证据 JSON；探针 000011.SZ/000156.SZ |
 | 2026-10-06 | D-14 | **归因门 5 列越界的复核定界（单元 3 遗留「待调查」闭环；panel ≡ 参照 ⇒ 差异源在 cs_train 侧）**：归因门（panel vs cs_train）复核中 downside_corr_20 / kurtosis_20 / skewness_20 / zscore_macd_hist / zscore_macd_hist_sz 五列越出原五类清单，经全量差异日诊断（`data/reports/v2_p1_attrib_violators_diag_20261006.json`，11,032,382 股票-日）+ 严格门交叉验证（panel 与冻结参照在该五列零差异或仅 D-11 簇）+ git/pandas 环境比对，定界为三个已登记机理的组合，均非实现漂移：① **skewness_20/kurtosis_20 = L1 主体 + D-05 实现对偶数值尾**——cs_train 由 pandas 2.x `rolling.skew/kurt` 计算（2026-08-31 构建），panel/参照为中心矩 NaN 安全实现（D-05 修复），数值不稳定股（近恒定收益/停牌簇）翻转：晚日逐日 ≤25 股且 ≤1.5%（实证 skewness ≤3 股/0.18%；kurtosis ≤23 股/1.32% 聚于 2015-04~08 极端行情簇；max\|Δ\|=35.1 @20150326 300288.SZ 同簇）；② **zscore_macd_hist(_sz) = L1 macd-EMA 冷启动长尾 + D-11 + 孤立单点**——cs_train 2012 冷启动 EMA 链收敛实测拖尾至 2013-09-04（1 行拖尾至 2013-09-18；单元 3 报告将该列_sz 列「待调查」，本条目闭环）+ 2022-05 复牌簇（002260.SZ，同严格门 D-11）+ 稀疏孤立单点（≤5 行且 ≤1%）；③ **downside_corr_20 = L1 + 2013-09/10 cs_train 构建环境血缘块 + D-04② + 孤立单点**——20130917~20131023 连续 17 日近全截面差异（~98% 行）：cs_train 由 pandas 2.x 构建（2026-08-31）、panel/参照由 pandas 3.0.5 构建，输入数据与代码逐字节相同（clean/daily 2013-09 分区 08-31 后未变、`risk/precompute.py` A2 实现 08-31 至今未变，git 实证），推断为 pandas 版本滚动聚合行为差被该年代数据触发的局部板块（20 日窗扫过触发日 ⇒ 连续 17 日）；另含 D-04②（2024-01 窗）与 2021-12 两点稀疏单点（1 行/日）。**共同前提：风控 22 列与 zscore 派生均不在现役模型 154 列 ⇒ 零生产影响（D-05 已登记）**。处置：`panel_reconcile.py::_classify_attrib_special` 按上述定界归因（越界仍 FAIL）。 | 诊断 JSON；严格门终版；`git show 77adea3^:src/lazybull/risk/precompute.py` 对照 |
+| 2026-10-06 | D-13 增补①（三评审：第二份 §3.1 / R2-5②） | **D-12 修复计数终态口径**：共 **651 个分区有变化** = 首轮 476 条 `[rewrite_partition]` + 中断分区 1 个（`panel_archive/2016-10/announcement`——rewrite 登记随 manifest 落盘失败（WinError 5）丢失，由 02:46 resync 记录承接）+ 第二轮 174 条 `[rewrite_partition]`；manifest.repairs 终态 **707 条** = 650 `[rewrite_partition]` + 40 边界回补 + 16 `[replace_days]` + 1 `[resync]`；两轮修正单元格合计 758,672 + 233,194 = **991,866**（中断分区未计入）；守恒 812 = 651 + 161（无变化分区 161）。D-13 ①原文「重写 174 分区 / 233,194 单元格」为第二轮续跑段局部计数，以本增补为准。 | 第二份评审 §3.1（两轮修复运行日志 + manifest + resync 三方闭合）；总验收报告 §7.1 |
+| 2026-10-06 | D-13 增补②（三评审：R2-5①） | **repairs reason 编号映射说明**：40 条边界回补记录的 reason 文本写「单元 4 分块边界缺口回补（**D-09**）」——该事件在差异台账中的编号为 **D-10**（D-09 是参照污染事件）；repairs 记录 append-only 不回改，特此注明编号映射。 | 第二份评审 R2-5 |
+
+## 9. 评审整改登记（2026-10-06，三评审）
+
+> 依据：`docs/review/v2_p1_impl_review{,2,3}_20261006.md`。本节登记三评审驱动的整改落点；
+> 实现常量名以代码为准（本节只写机制与阈值数值，不引用常量名）。
+
+### 9.1 对账门收紧（P1-1/2/3 + R2-1，四件套）
+
+1. **verdict 结构项判定**：`cols_only_*` / `missing_ref_days` 非空不再静默 PASS——加合法性
+   判定（日期上界 + 白名单 + 键列噪声剔除），越界即 FAIL；结构项白名单：CYQ 5 列仅允许
+   `last ≤ 20171229` 的日；结构项 2012 冷启动段上界 `20121231`。
+2. **D-04 归因收紧**：① 子项（share_float/block_trade/top_list 水位族）日期下界
+   `20260101`；③/④ 子项（季频财务/基金持仓 raw 修订族）只允许**纯 NaN 形态 + 日期窗
+   `[20161201, 20260702]`**——值错位型漂移不再可经 D-04 放行。
+3. **D-14 专项三上限**（天数 / 累计行数 / max|Δ|，任一超限即 FAIL）：skewness ≤250 天 /
+   ≤40000 行 / max|Δ|≤5；kurtosis ≤750 天 / ≤40000 行 / max|Δ|≤40；zscore_macd_hist
+   ≤500 天 / ≤600000 行 / max|Δ|≤20；downside_corr ≤200 天 / ≤300000 行 / max|Δ|≤1.5。
+   **D-11 锚定敏感列补窗内超幅上限 5.0**（关闭「窗内任意量级放行」形态，R2-1）。
+4. **比较分母修正（R3-04）**：三段式比较的超门占比分母 = **全窗口可比行数**（零差异日
+   不再从分母剔除；两套比较器共用统计逻辑）。
+
+### 9.2 已知限制登记
+
+- **R3-03（契约级待裁决项）**：`build_daily` 依赖未来标签（require_label=True 的样本域
+  语义），当日日更在「价格水位 = 当日」场景不可用——当前已 **fail-fast 显式报错**
+  （目标日无捕获 ⇒ 缺日断言失败），不静默产出；日更样本域与历史冻结样本域的关系属契约级
+  裁决项，待用户拍板。**不得全局关闭 require_label 作捷径**（会改变已冻结的历史行集与
+  截面中性化）。
+- **available_from 全 null 非缺陷**：M1.5 立项前已批准延期（单元 5 §5 语义冲突登记；
+  第三份评审 R3-07 复核确认不作为新缺陷）。
+
+### 9.3 冻结参照与 fixture 迁移（P1-8）
+
+- 冻结参照迁至 **`data/frozen_reference/v2_p1/`**（原 `temp/p1_frozen_reference/` 作废；
+  迁移后复核 features/cs_train 分区数 = 3,518 一致；24GB 已加入 .gitignore）。
+  注：本文档正文不含该路径引用（评审所述「冻结文档 6 处引用」实分布在总验收报告 /
+  单元 3 报告 / 术语库 / scripts 默认值——文档侧随各处勘误与术语库修订同步，scripts 侧
+  默认路径由代码整改组处置）。
+- 列族分组表 JSON 副本落 **`tests/fixtures/p1_column_groups_20261002.json`**（
+  `tests/test_v2_store_column_groups.py` 改读该路径，防漂移断言不再依赖 temp/）；
+  本文 §2/附录 A 引用的 temp 原物仍在 temp/ 留档，既有引用不受影响。
 
 ## 附录 A：列族分组逐列清单
 
-（与 `temp/p1_column_groups_20261002.json` 一致；单元 2 起以 `v2/store/column_groups.py` 为代码单一来源，本附录留档备查。）
+（与 `tests/fixtures/p1_column_groups_20261002.json` 一致；单元 2 起以 `v2/store/column_groups.py` 为代码单一来源，本附录留档备查。）
 
 - **core（52）**：amount, amount_ma10, amount_ma20, amount_ma5, bp, circ_mv, dv_ttm, dv_ttm_missing, ep_ttm, in_date, intraday_vol_structure, is_limit_down, is_limit_up, is_loss, is_st, is_suspended, list_days, log_circ_mv, log_total_mv, ma_deviation_10, ma_deviation_20, ma_deviation_5, opening_strength, pb, pe_ttm, pe_ttm_missing, ps_ttm, ret_1, ret_10, ret_20, ret_5, sw_industry, sw_industry_code, sw_industry_id, sw_l1, sw_l1_code, sw_l1_id, sw_l2, sw_l2_code, sw_l2_id, sw_l3, sw_l3_code, total_mv, tradable, trade_date, ts_code, turnover_rate, vol, vol_ratio_10, vol_ratio_20, vol_ratio_5, volume_ratio
 - **fundamental（69）**：assets_turn, capex_to_ocf, cashflow_freshness_days, cashflow_quality_schema_v2, cf_nm, cf_sales, cons_analyst_count_30d, cons_analyst_count_chg, cons_eps_dispersion, cons_eps_dispersion_chg, cons_eps_mean_fy0, cons_eps_mean_fy1, cons_eps_mean_fy2, cons_eps_mean_fym1, cons_eps_revision_30d, cons_eps_revision_accel, cons_eps_yield_fy0, cons_eps_yield_fy1, cons_eps_yield_fy2, cons_eps_yield_fym1, cons_rating_score, cons_rating_upgrade_ratio, cons_revision_freshness_days, cons_revision_schema_v2, cons_target_price_mid, cons_target_upside, cons_target_upside_chg, consensus_freshness_days, current_ratio, debt_to_assets, dividend_continuity_5y, dividend_days_to_ex_date, dividend_freshness_days, dividend_growth_3y, dividend_growth_5y, dividend_hist_missing, dividend_payout_ratio, dividend_recent_imp_ann_10d, dividend_schema_v1, dividend_stability_5y, dividend_yield_hist_12m, equity_yoy, express_freshness_days, express_profit_yoy, express_revenue_yoy, express_roe, express_surprise, fcf, fcf_yield, forecast_chg_mid, forecast_freshness_days, forecast_type_score, fundamental_freshness_days, grossprofit_margin, int_to_talcap, inv_turn, netprofit_margin, netprofit_yoy, ocf, ocf_to_profit, ocf_to_revenue, or_yoy, profit_dedt, q_gr_yoy, q_ocf_to_sales, quick_ratio, roa, roe_dt, roe_waa

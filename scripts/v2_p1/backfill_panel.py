@@ -52,11 +52,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", default="20120104", help="回填起点 YYYYMMDD")
     parser.add_argument("--end-date", default="20260702", help="回填终点 YYYYMMDD")
     parser.add_argument(
-        "--data-root", default="data", help="v2 store 数据根（冒烟传 temp/ 下路径）"
+        "--data-root", default=str(ROOT / "data"), help="v2 store 数据根（冒烟传 temp/ 下路径）"
     )
     parser.add_argument("--chunk-years", type=int, default=5, help="分块年数（默认 5，与参照一致）")
     parser.add_argument("--serial", action="store_true", help="显式标记串行（构建固定串行）")
-    return parser.parse_args()
+    args = parser.parse_args()
+    # fail-fast（R3-08）：分块参数必须 ≥1，否则 _iter_chunks 不推进/倒退 ⇒ 无限循环
+    if args.chunk_years < 1:
+        parser.error(
+            f"--chunk-years 必须 ≥1（当前 {args.chunk_years}）：0 = 单调用语义，"
+            "仅 run_frozen_reference 支持，本脚本不提供"
+        )
+    return args
 
 
 def _written_days(store: PanelDataStore, coverage: list[str]) -> set[str]:
@@ -94,9 +101,19 @@ def _written_days(store: PanelDataStore, coverage: list[str]) -> set[str]:
         return cold_day_cache[month]
 
     written: set[str] = set()
+
+    def _hot_files_exist(date: str) -> bool:
+        """热区已登记日核对 8 族文件实际存在（登记 ≠ 盘上文件，D-10 镜像教训）。"""
+        day_dir = store.panel_dir / date
+        missing = sorted(g for g in all_groups if not (day_dir / f"{g}.parquet").exists())
+        if missing:
+            logger.warning(f"热区 {date} 已登记 8 族但缺文件 {missing}，按未写处理（将重建）")
+            return False
+        return True
+
     for date in coverage:
         if date > ARCHIVE_HOT_BOUNDARY:
-            if hot_days.get(date, set()) >= all_groups:
+            if hot_days.get(date, set()) >= all_groups and _hot_files_exist(date):
                 written.add(date)
         else:
             month = f"{date[:4]}-{date[4:6]}"

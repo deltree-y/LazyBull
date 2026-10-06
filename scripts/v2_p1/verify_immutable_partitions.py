@@ -17,6 +17,9 @@ announcement/risk 两族剔除该 3 列后逐值比对，其余 6 族全列逐�
 
 任何构建通道列差异 ⇒ 出口 1（实现漂移 / 历史分区被改写嫌疑）。
 
+产物：data/reports/v2_p1_immutable_partitions_<date>.json（checked/stale/missing 计数
+与结论，含三层比对明细）+ 控制台汇总。
+
 用法：
     python scripts/v2_p1/verify_immutable_partitions.py --data-root data \
         --hot-date 20260603 --cold-month 2025-05 \
@@ -26,7 +29,9 @@ announcement/risk 两族剔除该 3 列后逐值比对，其余 6 族全列逐�
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -152,18 +157,54 @@ def main() -> int:
     hot_rels = [f"panel/{args.hot_date}/{g}.parquet" for g in _GROUPS]
     cold_rels = [f"panel_archive/{args.cold_month}/{g}.parquet" for g in _GROUPS]
     targets = hot_rels + cold_rels
+
+    # 机器产物（评审整改：闸门③ PASS 结论落盘，与其他 v2_p1 产物同风格）
+    report: dict = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "data_root": args.data_root,
+        "hot_date": args.hot_date,
+        "cold_month": args.cold_month,
+        "chunk_start": args.chunk_start,
+        "chunk_end": args.chunk_end,
+        "checked": len(targets),
+        "missing": {"count": 0, "partitions": []},
+        "stale": {"count": 0, "partitions": []},
+        "layers": {"layer0_roundtrip": None, "layer1_hot": None, "layer2_cold": None},
+        "d12_exempt_columns": list(_D12_COLS),
+        "verdict": {"pass": False, "conclusion": "未完成"},
+        "problems": [],
+    }
+
+    def _finalize(passed: bool, conclusion: str) -> int:
+        report["verdict"] = {"pass": passed, "conclusion": conclusion}
+        out = (
+            ROOT / "data" / "reports"
+            / f"v2_p1_immutable_partitions_{datetime.now():%Y%m%d}.json"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"报告: {out}")
+        return 0 if passed else 1
+
     before = _fingerprints(store, targets)
     missing = [rel for rel, fp in before.items() if fp is None]
     if missing:
+        report["missing"] = {"count": len(missing), "partitions": missing}
         print(f"目标分区未登记 manifest（无法验证）: {missing[:5]}")
-        return 1
+        return _finalize(False, f"目标分区未登记 manifest {len(missing)} 个")
 
     # 层 0：store 级往返 no-op（廉价 sanity）
     _store_roundtrip_noop(store, args.hot_date)
     mid = _fingerprints(store, targets)
-    if any(mid[rel] != before[rel] for rel in targets):
+    stale0 = [rel for rel in targets if mid[rel] != before[rel]]
+    report["layers"]["layer0_roundtrip"] = {
+        "stale_count": len(stale0),
+        "stale_partitions": stale0,
+    }
+    if stale0:
+        report["stale"] = {"count": len(stale0), "partitions": stale0}
         print("FAIL: store 级往返后指纹变化")
-        return 1
+        return _finalize(False, f"store 级往返后指纹变化 {len(stale0)} 个分区")
     logger.info("层 0（store 往返 no-op）通过")
 
     scratch_store = PanelDataStore(args.scratch_root)
@@ -178,13 +219,14 @@ def main() -> int:
         keep_dates={args.hot_date},
     )
     hot_problems = _compare_all(store, scratch_store, hot_rels, "层1-热区日")
+    report["layers"]["layer1_hot"] = {"problem_count": len(hot_problems)}
     logger.info(f"层 1（热区日重建 {args.hot_date}）：差异 {len(hot_problems)} 项")
 
     # 层 2：冷区月同上下文重建落 scratch（终点必须与原分块一致）
     month_dates = [d for d in builder._full_calendar() if f"{d[:4]}-{d[4:6]}" == args.cold_month]
     if not month_dates:
         print(f"冷区月无交易日: {args.cold_month}")
-        return 1
+        return _finalize(False, f"冷区月无交易日: {args.cold_month}")
     builder.backfill(
         TradeDate.from_str(args.chunk_start),
         TradeDate.from_str(args.chunk_end),
@@ -193,19 +235,24 @@ def main() -> int:
         keep_dates=set(month_dates),
     )
     cold_problems = _compare_all(store, scratch_store, cold_rels, "层2-冷区月")
+    report["layers"]["layer2_cold"] = {"problem_count": len(cold_problems)}
     logger.info(f"层 2（冷区月重建 {args.cold_month}）：差异 {len(cold_problems)} 项")
 
     problems = hot_problems + cold_problems
+    report["problems"] = problems
+    stale_rels = sorted({p.split("] ", 1)[0].split("/", 1)[-1] for p in problems})
     if problems:
+        report["stale"] = {"count": len(stale_rels), "partitions": stale_rels}
         print(f"FAIL: 构建通道差异 {len(problems)} 项")
         for p in problems[:20]:
             print(f"  {p}")
-        return 1
-    print(
-        f"PASS: {len(targets)} 个已写分区内容不变（store 往返 + 热区日 + 冷区月三层重建比对；"
+        return _finalize(False, f"构建通道差异 {len(problems)} 项")
+    conclusion = (
+        f"{len(targets)} 个已写分区内容不变（store 往返 + 热区日 + 冷区月三层重建比对；"
         f"D-12 豁免列 {len(_D12_COLS)} 个按 D-13 登记剔除，证据独立治理）"
     )
-    return 0
+    print(f"PASS: {conclusion}")
+    return _finalize(True, conclusion)
 
 
 if __name__ == "__main__":

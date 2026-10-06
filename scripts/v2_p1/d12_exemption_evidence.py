@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """v2 P1 单元 4·D-12 豁避免责证据：解锁族严格门残差 = 加载窗内容差（全量证明）。
 
+**一次性脚本，已执行完毕，效果持久化于 manifest.repairs；保留作审计轨迹。**
+
 证明结构（三个恒等式闭合）：
 1. panel == 全量历史查询表（修复写入值的独立复算校验，全股票-日）；
 2. 参照 == 旧链窗口查询表（load_share_float(20110604, 20260802) + 窗内交易日，
@@ -126,7 +128,7 @@ def main() -> int:
     # 4) 参照实际值（逐日分区投影两列；早期分区缺列按全 NaN 处理——L1 schema 血缘）
     import pyarrow.parquet as pq
 
-    ref_dir = ROOT / "temp" / "p1_frozen_reference" / "features" / "cs_train"
+    ref_dir = ROOT / "data" / "frozen_reference" / "v2_p1" / "features" / "cs_train"
     ref_parts = []
     for path in sorted(ref_dir.glob("*.parquet")):
         available = set(pq.ParquetFile(path).schema_arrow.names)

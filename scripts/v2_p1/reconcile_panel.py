@@ -3,12 +3,13 @@
 
 用法：
     python scripts/v2_p1/reconcile_panel.py --mode strict \
-        [--panel-root data] [--ref-root temp/p1_frozen_reference] \
+        [--panel-root data] [--ref-root data/frozen_reference/v2_p1] \
         [--start 20120104] [--end 20260702] [--jobs -1] [--out PATH]
     python scripts/v2_p1/reconcile_panel.py --mode attrib [--ref-root data/features/cs_train] ...
 
-mode：strict = panel vs 冻结参照（预期全零，任一差异即实现漂移 ⇒ 出口 1）；
-attrib = panel vs cs_train（差异须 100% 落入五类预期清单 ⇒ 出口 1 并输出越界清单）。
+mode：strict = panel vs 冻结参照（出口 = 残差 100% 归因登记类（L1/D-04/D-11/D-12 豁免）
++ 结构项合法性判定（行集零差异）；未归因差异即实现漂移嫌疑 ⇒ 出口 1）；
+attrib = panel vs cs_train（差异须 100% 落入五类预期清单且行集零差异 ⇒ 出口 1 并输出越界清单）。
 产物：--out 指定 JSON（默认 data/reports/v2_p1_panel_reconcile_<date>.json /
 v2_p1_panel_vs_cstrain_<date>.json）+ 控制台汇总。
 业务逻辑：`src/lazybull/v2/store/panel_reconcile.py`（scripts 薄入口契约）。
@@ -60,7 +61,7 @@ def main() -> int:
         Path(args.ref_root)
         if args.ref_root
         else (
-            ROOT / "temp" / "p1_frozen_reference"
+            ROOT / "data" / "frozen_reference" / "v2_p1"
             if args.mode == "strict"
             else ROOT / "data" / "features" / "cs_train"
         )

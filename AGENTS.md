@@ -5,7 +5,7 @@
 
 ## 1. 项目概览
 
-- **名称**：LazyBull（当前版本见 `pyproject.toml`，如 v0.203.0）。
+- **名称**：LazyBull（当前版本见 `pyproject.toml`，如 v0.204.1）。
 - **定位**：A 股量化研究、训练、回测、纸面交易一体化框架，专注**价值红利策略**。
 - **语言/运行时**：Python 3.12，包管理用 Poetry（`pyproject.toml`），也可用 pip + `requirements.txt`。
 - **数据源**：TuShare Pro 为主（辅以 akshare、efinance）；Token 经 `.env` 的 `TS_TOKEN` 注入（python-dotenv 加载）。
@@ -47,15 +47,15 @@ src/lazybull/           # 全部源代码（Poetry src 布局）
 ├── portfolio/          # 组合与行业约束、权重处理
 ├── paper/              # 纸面交易：账户、券商、存储、runtime、reporting、performance.py（年化唯一实现）
 ├── universe/           # 选股域（domains.py 为域定义单一来源）
-├── v2/                 # v2 契约区实现（evidence/runs_loader、signal_ruler 等证据机器通路）
+├── v2/                 # v2 契约区实现（store/ P1 数据底座、common/protocols 协议层、evidence/ 证据机器通路）
 ├── drv/                # 树莓派 LCD 驱动
 └── live/               # 实盘接口预留（TODO）
 
 scripts/                # 薄入口脚本 + 子包（compare/、factor_health/、model_audit/、raw_download/、
-                        # check/、batch/、respi/、ana/ 等）
+                        # check/、batch/、respi/、ana/、v2_p1/（P1 数据底座构建/对账/验收） 等）
 tests/                  # pytest 测试（180+ 个 test_*.py 文件）
 configs/                # base.yaml（默认唯一自动加载）+ 因子排除清单 JSON + runtime_*.yaml（手工覆盖示例）
-data/                   # 数据与产物：raw/ clean/ features/ models/ paper/ reports/ walk_forward/ ledger/
+data/                   # 数据与产物：raw/ clean/ features/（含 panel 热区/panel_archive 冷区）labels/ models/ paper/ reports/ walk_forward/ ledger/ frozen_reference/v2_p1/（P1 验收基准）
 docs/                   # 文档；按类别归档（contracts / data / experiments / guide / glossary / PR / reports + 本地 plans / review），
                         # 顶层仅 3 份治理文档（roadmap / BREAKING_CHANGES / terminal_loss_risk_register）；规范见 CLAUDE.md §5
 logs/                   # 临时日志唯一去处（gitignore）

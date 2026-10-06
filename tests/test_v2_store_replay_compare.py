@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """v2 重放对账器测试（tmp_path 合成双分区，不触碰真实 data/）。
 
-覆盖：完全一致（零差异）、行集差集、列差（仅单侧列登记）、超容差数值差、
-atol 边界、NaN==NaN 语义、单侧 NaN 计数、非数值列精确相等、归因字段
-（D-04 命中/派生连锁/待调查）、over_gate 判定（占比与 max|Δ| 双判据）、
+覆盖：完全一致（零差异）、行集差集、列差（仅单侧列登记，键列噪声源头剔除）、
+超容差数值差、atol 边界、NaN==NaN 语义、单侧 NaN 计数、全 NaN 型差异 max|Δ| 显式归零、
+非数值列精确相等、归因字段（D-04 命中/派生连锁/待调查）、over_gate 判定
+（占比与 max|Δ| 双判据）、R3-04 全窗口分母（含零差异日 / 列部分日不可比）、
 样例上限、missing 日登记。
 """
 
@@ -80,6 +81,18 @@ class TestDifferences:
         assert report["cols_only_cs_train"] == ["new_col"]
         assert report["cols_only_replay"] == []
 
+    def test_key_columns_excluded_from_cols_only(self, two_roots):
+        """键列噪声源头剔除：一侧缺 trade_date 列也不登记进 cols_only_*。"""
+        replay, cs = two_roots
+        df_replay = pd.DataFrame(
+            {"ts_code": _CODES, "close": [10.0, 20.0, 30.0], "sw_industry": ["银行"] * 3}
+        )
+        _write_day(replay, "20240102", df_replay)  # 无 trade_date 列
+        _write_day(cs, "20240102", _day("20240102", [10.0, 20.0, 30.0]))
+        report = compare_partitions(replay, cs, ["20240102"], n_jobs=1)
+        assert report["cols_only_replay"] == []
+        assert report["cols_only_cs_train"] == []  # trade_date 被剔除，不登记
+
     def test_numeric_over_tolerance(self, two_roots):
         replay, cs = two_roots
         _write_day(replay, "20240102", _day("20240102", [10.0, 20.0, 30.0]))
@@ -116,6 +129,25 @@ class TestDifferences:
         assert fund["over_rows"] == 1
         assert fund["max_abs_diff"] == 0.0  # NaN 型差异无数值差
         assert fund["attribution"].startswith("D-04③")
+
+    def test_all_nan_type_diff_max_abs_zero(self, two_roots):
+        """over 行全为 NaN 型差异 ⇒ max|Δ| 显式 0.0（不依赖 pandas .max() 的 nan 侥幸）。"""
+        replay, cs = two_roots
+        _write_day(
+            replay,
+            "20240102",
+            _day("20240102", [10.0, 20.0, 30.0], extra={"fund_count": [1.0, 2.0, 3.0]}),
+        )
+        _write_day(
+            cs,
+            "20240102",
+            _day("20240102", [10.0, 20.0, 30.0], extra={"fund_count": [None, None, None]}),
+        )
+        report = compare_partitions(replay, cs, ["20240102"], n_jobs=1)
+        fund = report["columns"]["fund_count"]
+        assert fund["over_rows"] == 3
+        assert fund["max_abs_diff"] == 0.0
+        assert not pd.isna(fund["max_abs_diff"])
 
     def test_nonnumeric_equality(self, two_roots):
         replay, cs = two_roots
@@ -157,6 +189,49 @@ class TestDifferences:
         assert close["over_share"] == pytest.approx(5e-4)
         assert close["max_abs_diff"] < GATE_MAX_ABS_DIFF
         assert close["over_gate"] is True
+
+
+class TestFullWindowDenominator:
+    """R3-04 整改：over_share 分母 = 全窗口该列实际可比日的可比行数合计（含零差异日）。"""
+
+    def test_over_share_uses_full_window(self, two_roots):
+        """反例：20 日 × 5000 行仅 1 日 1 格差 0.01 ⇒ 正确占比 1e-5（过 1e-4 门）；
+        旧口径分母只算差异日 ⇒ 2e-4 误报超门。"""
+        replay, cs = two_roots
+        dates = [f"202401{d:02d}" for d in range(1, 21)]  # 20240101~20240120
+        codes = [f"{600000 + i}.SH" for i in range(5000)]
+        for date in dates:
+            base = pd.DataFrame({"trade_date": date, "ts_code": codes, "close": [10.0] * 5000})
+            _write_day(replay, date, base)
+            cs_day = base.copy()
+            if date == "20240110":
+                cs_day.loc[0, "close"] = 10.01  # 单格差 0.01
+            _write_day(cs, date, cs_day)
+        report = compare_partitions(replay, cs, dates, n_jobs=1)
+        close = report["columns"]["close"]
+        assert close["over_rows"] == 1
+        assert close["total_rows"] == 20 * 5000  # 全窗口分母（含 19 个零差异日）
+        assert close["over_share"] == pytest.approx(1e-5)
+        assert close["over_gate"] is False  # 1e-5 ≤ 1e-4 且 max|Δ|=0.01 ≤ 0.05
+
+    def test_denominator_counts_only_comparable_days(self, two_roots):
+        """列在部分日不可比（不在当日 common_cols）⇒ 分母只计实际可比日。"""
+        replay, cs = two_roots
+        extra = {"extra_col": [1.0, 2.0, 3.0]}
+        _write_day(replay, "20240102", _day("20240102", [10.0, 20.0, 30.0], extra=extra))
+        _write_day(
+            cs,
+            "20240102",
+            _day("20240102", [10.0, 20.0, 30.0], extra={"extra_col": [1.0, 2.5, 3.0]}),
+        )
+        # 第 2 日：仅 replay 侧有 extra_col ⇒ 当日该列不可比
+        _write_day(replay, "20240103", _day("20240103", [10.0, 20.0, 30.0], extra=extra))
+        _write_day(cs, "20240103", _day("20240103", [10.0, 20.0, 30.0]))
+        report = compare_partitions(replay, cs, ["20240102", "20240103"], n_jobs=1)
+        col = report["columns"]["extra_col"]
+        assert col["over_rows"] == 1
+        assert col["total_rows"] == 3  # 只计 20240102 可比日
+        assert col["over_share"] == pytest.approx(1 / 3)
 
 
 class TestAttribution:

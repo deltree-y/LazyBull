@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""归因门 5 个越界列的全量差异日诊断（panel vs cs_train，与对账门同比对口径）。"""
+"""归因门 5 个越界列的全量差异日诊断（panel vs cs_train，与对账门同比对口径）。
+
+**一次性脚本，已执行完毕，效果持久化于 manifest.repairs；保留作审计轨迹。**
+"""
 from __future__ import annotations
 
 import json
@@ -78,9 +81,9 @@ def main() -> int:
         }
         print(f"{col}: over={out[col]['total_over']} days={len(days)} late_over={out[col]['late_over']}")
 
-    Path("data/reports/v2_p1_attrib_violators_diag_20261006.json").write_text(
-        json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    out_path = ROOT / "data" / "reports" / "v2_p1_attrib_violators_diag_20261006.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"耗时 {(time.time()-t0)/60:.1f} min")
     return 0
 

@@ -186,5 +186,54 @@ class TestFingerprint:
         assert sha256_16_of_file(p) == hashlib.sha256(b"lazybull").hexdigest()[:16]
 
 
+class TestContentFingerprint:
+    """manifest 内容指纹（R3-10）：内容演进变化、updated_at 剔除、同内容稳定。"""
+
+    def test_stable_for_same_content(self, manifest_path):
+        m = Manifest(manifest_path)
+        m.register_column("ret_1", "core", "clean/daily")
+        assert m.content_fingerprint() == m.content_fingerprint()
+
+    def test_changes_on_register_column_and_partition(self, manifest_path):
+        m = Manifest(manifest_path)
+        fp0 = m.content_fingerprint()
+        m.register_column("ret_1", "core", "clean/daily")
+        fp1 = m.content_fingerprint()
+        assert fp1 != fp0
+        m.register_partition("panel/20260105/core.parquet", "abc123", rows=10, zone="hot")
+        assert m.content_fingerprint() != fp1
+
+    def test_updated_at_excluded(self, manifest_path):
+        m = Manifest(manifest_path)
+        m.register_column("ret_1", "core", "clean/daily")
+        fp_before = m.content_fingerprint()
+        m.save()  # updated_at 落盘刷新不影响内容指纹
+        assert m.content_fingerprint() == fp_before
+
+
+class TestDirtyAndReload:
+    """dirty 标记生命周期 + 盘上变化检测（WAL/sync 的判定基元）。"""
+
+    def test_dirty_set_on_register_cleared_on_save(self, manifest_path):
+        m = Manifest(manifest_path)
+        assert not m.dirty
+        m.register_column("ret_1", "core", "src")
+        assert m.dirty
+        m.save()
+        assert not m.dirty
+
+    def test_changed_on_disk_and_reload_if_changed(self, manifest_path):
+        m = Manifest(manifest_path)
+        m.save()
+        assert not m.changed_on_disk()
+        m2 = Manifest(manifest_path)  # 另一实例登记并落盘
+        m2.register_column("x", "core", "s")
+        m2.save()
+        assert m.changed_on_disk()
+        assert m.reload_if_changed() is True
+        assert m.has_column("x")
+        assert m.reload_if_changed() is False  # 无变化不重读
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -34,6 +34,7 @@ from src.lazybull.features.pipeline import build_features_data
 from src.lazybull.v2.common.types import TradeDate
 from src.lazybull.v2.store.column_groups import (
     ARCHIVE_HOT_BOUNDARY,
+    LABEL_VALUE_COLUMNS,
     MATERIALIZED_COLUMNS,
     PANEL_GROUPS,
     columns_of_group,
@@ -45,6 +46,15 @@ __all__ = ["V2PanelBuilder", "bootstrap_manifest"]
 
 _KEY_COLUMNS = ("trade_date", "ts_code")
 _ALL_GROUPS = tuple(PANEL_GROUPS)
+
+#: 捕获大表封闭列集（_split_groups 闭合断言用）：全族列 ∪ 物化列 ∪ 6 标签列 ∪ 键列
+#: （377+34+6+2=419；标签列名取 LABEL_VALUE_COLUMNS 单一来源，不重复硬编码）
+_ALLOWED_CAPTURE_COLUMNS = frozenset(
+    {c for group in PANEL_GROUPS for c in columns_of_group(group)}
+    | set(MATERIALIZED_COLUMNS)
+    | set(LABEL_VALUE_COLUMNS)
+    | set(_KEY_COLUMNS)
+)
 
 #: 族级来源标识（manifest columns.source 一句话口径）
 _GROUP_SOURCES = {
@@ -136,7 +146,14 @@ def _split_groups(df_day: pd.DataFrame) -> dict[str, pd.DataFrame]:
     announcement = 10 基础列 + 34 物化列；族内列允许个别日期整列缺失 ⇒ 补 NaN
     （物化列天然稀疏 + 族缺日整族 NaN 语义）；6 个标签列不属于任何 panel 族，
     拆分即剥离（labels 由 labels_builder 先行抽走）。
+    列集闭合断言：大表非键列 ⊆ 全族列 ∪ MATERIALIZED ∪ 6 标签列（377+34+6+2=419
+    列的封闭列集）——列新增/改名必须显式登记，禁止静默 reindex 丢列。
     """
+    unknown = sorted(set(df_day.columns) - _ALLOWED_CAPTURE_COLUMNS)
+    if unknown:
+        raise RuntimeError(
+            f"单日大表含未登记列 {unknown[:10]}（须登记进 column_groups 单一来源，禁止静默丢列）"
+        )
     frames: dict[str, pd.DataFrame] = {}
     for group in PANEL_GROUPS:
         data_cols = [c for c in columns_of_group(group) if c not in _KEY_COLUMNS]
@@ -150,22 +167,29 @@ def bootstrap_manifest(store: Any) -> None:
 
     available_from=None（恒可用，单元 5 剖面报告回填精化）；物化列 status="deprecated"
     （已终结家族，物化是数据资产合规，不代表重开实验），其余 "active"。
+    已登记列只校验 group/definition_version 一致（冲突 ⇒ ValueError），治理元数据
+    （available_from/backfilled_at/status 等）保留不动；未登记列才 register_column。
     """
     validate_mapping()
     manifest = store.manifest
+    planned: list[tuple[str, str, str, str]] = []  # (列, 族, source, status)
     for group, cols in PANEL_GROUPS.items():
         for col in cols:
-            manifest.register_column(
-                col, group, source=_GROUP_SOURCES[group], definition_version="v1"
-            )
+            planned.append((col, group, _GROUP_SOURCES[group], "active"))
     for col in MATERIALIZED_COLUMNS:
-        manifest.register_column(
-            col,
-            "announcement",
-            source=_MATERIALIZED_SOURCE,
-            definition_version="v1",
-            status="deprecated",
-        )
+        planned.append((col, "announcement", _MATERIALIZED_SOURCE, "deprecated"))
+    for col, group, source, status in planned:
+        if manifest.has_column(col):
+            meta = manifest.column_meta(col)
+            conflicts = [
+                f"{key} 已登记 {meta.get(key)!r} ≠ bootstrap {expected!r}"
+                for key, expected in (("group", group), ("definition_version", "v1"))
+                if meta.get(key) != expected
+            ]
+            if conflicts:
+                raise ValueError(f"列 {col} bootstrap 与既有登记冲突: {conflicts}")
+            continue  # 已登记 ⇒ 治理元数据保留不动
+        manifest.register_column(col, group, source=source, definition_version="v1", status=status)
     manifest.register_dependencies(
         raw_datasets=list(_RAW_DEPENDENCIES), factor_functions=dict(_FACTOR_FUNCTIONS)
     )
@@ -278,16 +302,25 @@ class V2PanelBuilder:
         长记忆特征亦退化；带预热段后与批量回填口径一致（长记忆 EMA 尾部随
         2012 起回填消失）。过滤口径与批量回填完全一致（全市场统一截面，
         禁止以当日局部截面重排，冻结 §1）。
+
+        标签不可终 fail-fast（R3-03 防御性收口）：T+21 端点超数据水位/加载窗口的
+        目标日直接 RuntimeError（不再走到缺日断言报误导性「缺日」）；当日特征日更
+        依赖未来标签、样本域需契约裁决，历史影子通路不受影响。
         """
         date_str = str(date)
         use_groups = self._normalize_groups(groups)
         calendar = self._full_calendar()
+        if not self._filter_label_starved([date_str], calendar, date_str):
+            raise RuntimeError(
+                f"{date_str} 标签不可终（T+21 端点超数据水位/加载窗口）：当日特征日更依赖"
+                "未来标签，样本域需契约裁决（登记号 R3-03），历史影子通路不受影响"
+            )
         ti_lookup = self._build_ti_lookup_for_day(calendar, date_str)
         capture_start = self._daily_capture_start(date_str)
         captured = self._run_capture(capture_start, date_str, keep_dates={date_str})
         for trade_date, df_day in captured:
             materialized = self._materialize_day(df_day, trade_date, ti_lookup)
-            append_labels_for_day(store, materialized, calendar)
+            append_labels_for_day(store, materialized, calendar, data_end=self._data_horizon())
             frames = _split_groups(materialized)
             for group in use_groups:
                 store.append_features(TradeDate.from_str(trade_date), group, frames[group])
@@ -337,7 +370,7 @@ class V2PanelBuilder:
         with store.defer_manifest_save():
             for trade_date, df_day in captured:
                 materialized = self._materialize_day(df_day, trade_date, ti_lookup)
-                append_labels_for_day(store, materialized, calendar)
+                append_labels_for_day(store, materialized, calendar, data_end=self._data_horizon())
                 frames = {g: f for g, f in _split_groups(materialized).items() if g in use_groups}
                 if trade_date <= ARCHIVE_HOT_BOUNDARY:
                     buffer.add(trade_date, frames)

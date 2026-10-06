@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """v2 P1 单元 4·D-12 修复：解禁前瞻列全量覆盖修正。
 
+**一次性脚本，已执行完毕，效果持久化于 manifest.repairs；保留作审计轨迹。**
+
 缺陷：share_float 按构建区间加载（float_date 年分区），分块回填的块加载窗截断 ⇒
 「已公告未解禁」远年记录丢失 ⇒ days_to_unlock/unlock_ratio/unlock_risk_flag 在
 分块早期年代值偏缺。修复：以**全量 share_float（全历史起点）+ 全日历**重建解禁
@@ -15,7 +17,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -24,6 +25,9 @@ sys.path.insert(0, str(ROOT))
 
 from src.lazybull.data.loader import DataLoader  # noqa: E402
 from src.lazybull.data.storage import Storage  # noqa: E402
+from src.lazybull.factors.risk.announcement_factors import (  # noqa: E402
+    compute_unlock_risk_flag,
+)
 from src.lazybull.factors.risk.announcement_lookup import (  # noqa: E402
     build_share_float_lookup_by_date,
 )
@@ -33,14 +37,14 @@ _REASON = "D-12 修复：解禁前瞻列全量历史起点+全区间覆盖重建
 
 
 def _risk_flag(days_to_unlock: pd.Series) -> pd.Series:
-    """unlock_risk_flag = f(days_to_unlock)：<30天=2，30-90天=1，>90天或无=0
-    （factors/risk/announcement_factors.py::compute_unlock_risk_flag 同一口径）。"""
-    days = days_to_unlock.astype(float)
-    result = pd.Series(0.0, index=days_to_unlock.index)
-    result[(days > 0) & (days <= 30)] = 2.0
-    result[(days > 30) & (days <= 90)] = 1.0
-    result[days.isna() | (days <= 0) | (days > 90)] = 0.0
-    return result
+    """unlock_risk_flag = f(days_to_unlock)：<30天=2，30-90天=1，>90天或无=0。
+
+    评审整改（复制公式消除）：原实现复制了公式本体，现改为 import 复用
+    `factors/risk/announcement_factors.py::compute_unlock_risk_flag`（单参 DataFrame
+    可调用，其余参数有默认值）；`.astype(float)` 保持与本脚本既有输出 dtype 一致。
+    """
+    frame = pd.DataFrame({"days_to_unlock": days_to_unlock})
+    return compute_unlock_risk_flag(frame).astype(float)
 
 
 def _correct_day_maps(lookup: dict, date: str) -> tuple[dict, dict]:

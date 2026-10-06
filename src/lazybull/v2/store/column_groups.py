@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """v2 panel 列族分组表（冻结物 `docs/data/v2_p1_build_freeze.md` §2/§6 的代码单一来源）。
 
-由 `temp/p1_column_groups_20261002.json`（383 列 → 8 panel 族 + labels，已校验全覆盖、
+由 `tests/fixtures/p1_column_groups_20261002.json`（383 列 → 8 panel 族 + labels，已校验全覆盖、
 无重复、无遗漏）一次性固化为代码常量——JSON 只是生成中间物，**不是运行时依赖**。
 
 - PANEL_GROUPS：8 族共 377 列（core 52 / fundamental 69 / moneyflow 44 / technical 43 /

@@ -825,6 +825,25 @@ python scripts/v2_p5a1/run_power_calibration.py --shift-grid 2 5 8 10 12 15 --ou
 #  --sections both|curve|consistency 分节输出；--out-name 防同日覆盖（台账引用产物）
 ```
 
+**v2 数据底座（P1，v0.204.x）：** 单表 features 全历史回填 + labels + manifest 已落地并验收
+（总验收报告 `docs/reports/v2_p1_final_report_20261006.md`，构建冻结
+`docs/data/v2_p1_build_freeze.md`）。数据资产：`data/features/panel/`（热区
+20250701~20260702，244 日 × 8 族）+ `data/features/panel_archive/`（冷区 2012-01~2025-06，
+162 月 × 8 族）+ `data/labels/y_ret_{5,10,20}/`（3 表 × 3,518 日，全 sealed）+
+`data/features/manifest.json`（411 列登记 + 分区指纹 + 依赖声明 + repairs 审计轨迹）；
+冻结验收基准 `data/frozen_reference/v2_p1/`（3,518 分区）。命令入口：
+
+```bash
+python scripts/v2_p1/backfill_panel.py               # 全历史回填（冷热分层）
+python scripts/v2_p1/reconcile_panel.py              # 严格门 + 归因门对账（vs 冻结参照 / cs_train）
+python scripts/v2_p1/verify_immutable_partitions.py  # 不可变分区指纹校验
+python scripts/v2_p1/bench_panel_perf.py             # 性能闸门（全历史跨列族加载）
+python scripts/v2_p1/shadow_path_acceptance.py       # 影子通路验收
+```
+
+**注意：P1 未切换生产链路**——现役训练/回测/纸面仍走 cs_train/cs_infer，panel 底座待
+后续阶段裁决接入。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）

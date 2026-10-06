@@ -8,6 +8,7 @@ append_labels forming 可重写 / sealed 拒改写 / 指纹一致 no-op、append
 
 import json
 import types
+from pathlib import Path
 
 import pandas as pd
 import psutil
@@ -22,6 +23,7 @@ from src.lazybull.v2.common.types import (
     TSCode,
 )
 from src.lazybull.v2.store.data_store import PanelDataStore
+from src.lazybull.v2.store.manifest import Manifest
 
 _D1 = TradeDate.from_str("20260105")
 _D2 = TradeDate.from_str("20260106")
@@ -392,6 +394,285 @@ class TestGetManifest:
             snapshot["columns"] = {}
         snapshot["columns"]["ret_1"]["group"] = "hacked"  # 嵌套篡改不渗回内部
         assert store.manifest.column_group("ret_1") == "core"
+
+
+class TestWalCrashRecovery:
+    """WAL 崩溃恢复（R2-6 回归）：崩溃丢登记 ⇒ 打开重放补登记 ⇒ 不可变保护恢复生效。"""
+
+    @staticmethod
+    def _crash_save(monkeypatch) -> None:
+        """模拟 manifest 落盘时进程崩溃：save 抛异常 ⇒ WAL 保留、manifest 未更新。"""
+
+        def _crash(self):
+            raise RuntimeError("模拟崩溃")
+
+        monkeypatch.setattr(Manifest, "save", _crash)
+
+    def test_sealed_label_crash_replay(self, tmp_path, monkeypatch):
+        store = _make_store(tmp_path)
+        self._crash_save(monkeypatch)
+        with pytest.raises(RuntimeError, match="模拟崩溃"):
+            store.append_labels("y_ret_20", _label_df("20260105", maturity="sealed"))
+        monkeypatch.undo()
+        wal = tmp_path / "features" / "manifest_wal.jsonl"
+        assert wal.exists() and wal.read_text(encoding="utf-8").strip()  # 事件已累积
+        on_disk = Manifest(tmp_path / "features" / "manifest.json")
+        assert on_disk.label_partition_fingerprint("y_ret_20", "20260105") is None  # 登记未落盘
+        store2 = PanelDataStore(tmp_path)  # 打开即 WAL 重放补登记 + 压实
+        assert store2.manifest.label_partition_fingerprint("y_ret_20", "20260105") is not None
+        assert store2.manifest.label_sealed_through("y_ret_20") == "20260105"
+        assert not wal.exists()  # 重放后压实
+        with pytest.raises(RuntimeError, match="已封存"):  # 封存保护恢复生效
+            store2.append_labels(
+                "y_ret_20", _label_df("20260105", values=(9.9, 9.9), maturity="sealed")
+            )
+        store2.append_labels("y_ret_20", _label_df("20260105", maturity="sealed"))  # 同值 no-op
+
+    def test_archive_crash_replay(self, tmp_path, monkeypatch):
+        """冷区同构用例：崩溃丢冷区登记 ⇒ 重放补登记 ⇒ 原地修改仍被拒。"""
+        store = _make_store(tmp_path)
+        self._crash_save(monkeypatch)
+        df = pd.DataFrame(
+            {"trade_date": ["20250506"] * 2, "ts_code": _CODES, "ret_1": [0.01, -0.02]}
+        )
+        with pytest.raises(RuntimeError, match="模拟崩溃"):
+            store.append_archive_features("2025-05", "core", df)
+        monkeypatch.undo()
+        on_disk = Manifest(tmp_path / "features" / "manifest.json")
+        assert on_disk.partition_fingerprint("panel_archive/2025-05/core.parquet") is None
+        store2 = PanelDataStore(tmp_path)
+        assert store2.manifest.partition_fingerprint("panel_archive/2025-05/core.parquet")
+        with pytest.raises(RuntimeError, match="禁止原地修改"):
+            store2.append_archive_features("2025-05", "core", df.assign(ret_1=[9.9, 9.9]))
+        store2.append_archive_features("2025-05", "core", df)  # 指纹一致 no-op
+
+    def test_two_instances_sequential_writes(self, tmp_path):
+        """A 落盘后 B（持旧快照）写：B 锁内 sync 重载，A/B 登记俱在。"""
+        store_a = _make_store(tmp_path)
+        store_b = PanelDataStore(tmp_path)
+        _ = store_b.manifest  # B 触达 manifest（持旧快照）
+        store_a.append_features(_D1, "core", _feature_df("20260105"))
+        store_b.append_features(_D2, "core", _feature_df("20260106"))
+        partitions = store_b.get_manifest()["partitions"]
+        assert "panel/20260105/core.parquet" in partitions
+        assert "panel/20260106/core.parquet" in partitions
+
+    def test_dirty_instance_conflict_fail_closed(self, tmp_path):
+        """B 持未落盘登记（脏）时 A 落盘 ⇒ B 写时 RuntimeError（并发冲突 fail-closed）。"""
+        store_a = _make_store(tmp_path)
+        store_b = PanelDataStore(tmp_path)
+        store_b.manifest.register_column("dirty_col", "core", "test")  # 脏（未落盘）
+        store_a.append_features(_D1, "core", _feature_df("20260105"))
+        with pytest.raises(RuntimeError, match="并发冲突"):
+            store_b.append_features(_D2, "core", _feature_df("20260106"))
+
+    def test_defer_wal_accumulates_and_compacts(self, tmp_path):
+        """defer 期内 WAL 累积多日事件，出口统一落盘 + 压实。"""
+        store = _make_store(tmp_path)
+        wal = tmp_path / "features" / "manifest_wal.jsonl"
+        with store.defer_manifest_save():
+            store.append_features(_D1, "core", _feature_df("20260105"))
+            store.append_features(_D2, "core", _feature_df("20260106"))
+            assert wal.exists()
+            assert len(wal.read_text(encoding="utf-8").strip().splitlines()) == 2
+        assert not wal.exists()  # 出口压实
+        assert store.manifest.partition_fingerprint("panel/20260106/core.parquet") is not None
+
+
+class TestWriteLockRelease:
+    """写锁释放的 unlink 失败处理（有限退避重试 + 不掩盖锁内原异常）。"""
+
+    @staticmethod
+    def _patch_unlink(monkeypatch, lock_path: Path, fail_times: int) -> list[int]:
+        calls: list[int] = []
+        real_unlink = Path.unlink
+
+        def flaky(self, *args, **kwargs):
+            if self == lock_path and len(calls) < fail_times:
+                calls.append(1)
+                raise PermissionError("模拟瞬时占用")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", flaky)
+        return calls
+
+    def test_unlink_failure_does_not_mask_inner_exception(self, tmp_path, monkeypatch):
+        store = _make_store(tmp_path)
+        calls = self._patch_unlink(monkeypatch, tmp_path / "features" / ".write.lock", 99)
+        with pytest.raises(ValueError, match="内部异常"):
+            with store.write_lock():
+                raise ValueError("内部异常")
+        assert len(calls) == 3  # 重试 3 次后降级 warning，原异常不被掩盖
+
+    def test_unlink_persistent_failure_raises(self, tmp_path, monkeypatch):
+        store = _make_store(tmp_path)
+        self._patch_unlink(monkeypatch, tmp_path / "features" / ".write.lock", 99)
+        with pytest.raises(RuntimeError, match="写锁文件删除连续失败"):
+            with store.write_lock():
+                pass
+
+    def test_unlink_transient_failure_recovers(self, tmp_path, monkeypatch):
+        store = _make_store(tmp_path)
+        calls = self._patch_unlink(monkeypatch, tmp_path / "features" / ".write.lock", 1)
+        with store.write_lock():  # 第 2 次重试成功，不报错
+            pass
+        assert len(calls) == 1
+
+
+class TestCoreAnchorLoad:
+    """load_features 的 core 左表锚定（R3-02）：core 键域为左表，非 core 多出键被裁。"""
+
+    def _anchored_store(self, tmp_path) -> PanelDataStore:
+        """core 两日 A/B + moneyflow 仅 D1 的 A。"""
+        store = _make_store(tmp_path)
+        store.append_features(_D1, "core", _feature_df("20260105"))
+        store.append_features(_D2, "core", _feature_df("20260106"))
+        mf = pd.DataFrame(
+            {"trade_date": ["20260105"], "ts_code": ["600000.SH"], "net_mf_amount": [100.0]}
+        )
+        store.append_features(_D1, "moneyflow", mf)
+        return store
+
+    def test_non_core_query_anchored_to_core_domain(self, tmp_path):
+        store = self._anchored_store(tmp_path)
+        frame = store.load_features(
+            FeatureQuery(columns=["net_mf_amount"], start_date=_D1, end_date=_D2)
+        )
+        df = frame.df
+        assert len(df) == 4  # 行集 = core 键域（D1/D2 × A/B）
+        assert df.loc[("20260105", "600000.SH"), "net_mf_amount"] == 100.0
+        assert pd.isna(df.loc[("20260105", "000001.SZ"), "net_mf_amount"])  # 缺键整族 NaN
+        assert pd.isna(df.loc[("20260106", "600000.SH"), "net_mf_amount"])  # 缺日整族 NaN
+        assert frame.manifest_fingerprint == store.manifest.content_fingerprint()
+        assert frame.manifest_version == "1"  # schema 版本（与内容指纹区分）
+
+    def test_keys_only_query_returns_core_domain(self, tmp_path):
+        store = self._anchored_store(tmp_path)
+        frame = store.load_features(
+            FeatureQuery(columns=["trade_date", "ts_code"], start_date=_D1, end_date=_D2)
+        )
+        assert frame.df.shape == (4, 0)  # core 键域空列帧
+        assert frame.df.index.names == ["trade_date", "ts_code"]
+
+    def test_non_core_extra_keys_trimmed(self, tmp_path):
+        store = _make_store(tmp_path)
+        store.append_features(_D1, "core", _feature_df("20260105"))
+        mf = pd.DataFrame(
+            {
+                "trade_date": ["20260105"] * 3,
+                "ts_code": [*_CODES, "300999.SZ"],  # 多出 core 键域的 C
+                "net_mf_amount": [1.0, 2.0, 3.0],
+            }
+        )
+        store.append_features(_D1, "moneyflow", mf)
+        frame = store.load_features(
+            FeatureQuery(columns=["net_mf_amount"], start_date=_D1, end_date=_D1)
+        )
+        assert set(frame.df.index.get_level_values("ts_code")) == set(_CODES)
+
+    def test_core_missing_entirely_empty_result(self, tmp_path):
+        """core 分区整体缺失（冷/热均无）⇒ 空结果（现状语义保持）。"""
+        store = _make_store(tmp_path)
+        mf = pd.DataFrame(
+            {"trade_date": ["20260105"], "ts_code": ["600000.SH"], "net_mf_amount": [100.0]}
+        )
+        store.append_features(_D1, "moneyflow", mf)
+        frame = store.load_features(
+            FeatureQuery(columns=["net_mf_amount"], start_date=_D1, end_date=_D1)
+        )
+        assert frame.df.empty
+
+    def test_duplicate_keys_in_partition_raise(self, tmp_path):
+        """合并后键唯一断言（防御：盘上分区被旁路污染出重复键）。"""
+        store = _make_store(tmp_path)
+        part_dir = tmp_path / "features" / "panel" / "20260105"
+        part_dir.mkdir(parents=True)
+        pd.concat([_feature_df("20260105"), _feature_df("20260105")]).to_parquet(
+            part_dir / "core.parquet", index=False
+        )
+        with pytest.raises(RuntimeError, match="不唯一"):
+            store.load_features(FeatureQuery(columns=["ret_1"], start_date=_D1, end_date=_D1))
+
+    def test_hot_partition_wrong_date_rows_filtered(self, tmp_path):
+        """热区读路径日期过滤（防御：分区文件混入分区名外日期行）。"""
+        store = _make_store(tmp_path)
+        part_dir = tmp_path / "features" / "panel" / "20260105"
+        part_dir.mkdir(parents=True)
+        pd.concat([_feature_df("20260105"), _feature_df("20260106")]).to_parquet(
+            part_dir / "core.parquet", index=False
+        )
+        frame = store.load_features(FeatureQuery(columns=["ret_1"], start_date=_D1, end_date=_D1))
+        assert set(frame.df.index.get_level_values("trade_date")) == {"20260105"}
+
+
+class TestLabelVariant:
+    """load_labels 变体路由（R3-05）：raw/neu 取值、未知标签名报错。"""
+
+    def _store_with_neu(self, tmp_path) -> PanelDataStore:
+        store = _make_store(tmp_path)
+        df = _label_df("20260105")
+        df["neu_label_value"] = [0.005, -0.005]
+        store.append_labels("y_ret_20", df)
+        return store
+
+    def test_raw_and_neu_variants(self, tmp_path):
+        store = self._store_with_neu(tmp_path)
+        raw = store.load_labels(LabelQuery(label_name="y_ret_20", start_date=_D1, end_date=_D1))
+        neu = store.load_labels(
+            LabelQuery(label_name="y_ret_20", start_date=_D1, end_date=_D1, variant="neu")
+        )
+        assert raw["label_value"].tolist() == [-0.01, 0.03]  # index 按 ts_code 排序
+        assert neu["label_value"].tolist() == [-0.005, 0.005]
+        assert list(neu.columns) == ["label_value", "maturity_status"]  # 输出 shape 不变
+
+    def test_unknown_label_name_raises(self, tmp_path):
+        store = _make_store(tmp_path)
+        with pytest.raises(ValueError, match="未知标签名"):
+            store.load_labels(LabelQuery(label_name="no_such_label", start_date=_D1, end_date=_D1))
+
+
+class TestResyncFingerprints:
+    """resync_partition_fingerprints（panel 热区 + labels 分区覆盖）。"""
+
+    def test_hot_partition_resync(self, tmp_path):
+        store = _make_store(tmp_path)
+        store.append_features(_D1, "core", _feature_df("20260105"))
+        rel = "panel/20260105/core.parquet"
+        old_fp = store.manifest.partition_fingerprint(rel)
+        # 旁路篡改盘上文件（模拟修复写入在 manifest 落盘阶段中断后的不一致）
+        _feature_df("20260105", values=(7.7, 8.8)).to_parquet(
+            tmp_path / "features" / "panel" / "20260105" / "core.parquet", index=False
+        )
+        stats = store.resync_partition_fingerprints("测试 resync")
+        assert stats["resynced"] == 1 and stats["missing_file"] == 0
+        assert store.manifest.partition_fingerprint(rel) != old_fp
+        assert any(r["reason"].startswith("[resync]") for r in store.manifest.repairs())
+
+    def test_consistent_partition_noop(self, tmp_path):
+        store = _make_store(tmp_path)
+        store.append_features(_D1, "core", _feature_df("20260105"))
+        stats = store.resync_partition_fingerprints("无需校正")
+        assert stats == {"checked": 1, "resynced": 0, "missing_file": 0}
+        assert store.manifest.repairs() == []
+
+    def test_labels_partition_resync(self, tmp_path):
+        store = _make_store(tmp_path)
+        store.append_labels("y_ret_20", _label_df("20260105"))
+        old_fp = store.manifest.label_partition_fingerprint("y_ret_20", "20260105")
+        _label_df("20260105", values=(7.7, 8.8)).to_parquet(
+            tmp_path / "labels" / "y_ret_20" / "20260105.parquet", index=False
+        )
+        stats = store.resync_partition_fingerprints("labels 校正")
+        assert stats["resynced"] == 1
+        assert store.manifest.label_partition_fingerprint("y_ret_20", "20260105") != old_fp
+        assert any("labels/y_ret_20" in r["rel_path"] for r in store.manifest.repairs())
+
+    def test_missing_file_counted(self, tmp_path):
+        store = _make_store(tmp_path)
+        store.append_features(_D1, "core", _feature_df("20260105"))
+        (tmp_path / "features" / "panel" / "20260105" / "core.parquet").unlink()
+        stats = store.resync_partition_fingerprints("缺文件")
+        assert stats["missing_file"] == 1 and stats["resynced"] == 0
 
 
 if __name__ == "__main__":

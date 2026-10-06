@@ -125,16 +125,54 @@ class Manifest:
 
     def __init__(self, path: Path | str) -> None:
         self._path = Path(path)
-        if self._path.exists():
-            self._data = self._load_and_validate()
-        else:
-            self._data = _default_data()
+        self._dirty = False  # 未落盘登记标记（任何 register_*/set_* 置脏，save 成功清脏）
+        self._disk_stat: tuple[int, int] | None = None  # 加载/保存时的 (mtime_ns, size) 快照
+        self.reload()
 
     # ---------- 加载 / 保存 ----------
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def dirty(self) -> bool:
+        """是否有未落盘的登记（并发冲突 fail-closed 判定用）。"""
+        return self._dirty
+
+    def _file_stat(self) -> tuple[int, int] | None:
+        """盘上文件 (mtime_ns, size)；不存在返回 None。"""
+        try:
+            st = self._path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def reload(self) -> None:
+        """从盘上重读（不存在则空骨架）；清脏并刷新盘上快照。"""
+        self._data = self._load_and_validate() if self._path.exists() else _default_data()
+        self._disk_stat = self._file_stat()
+        self._dirty = False
+
+    def changed_on_disk(self) -> bool:
+        """盘上文件相对加载/保存时快照是否变化（mtime_ns+size 比对）。"""
+        return self._file_stat() != self._disk_stat
+
+    def reload_if_changed(self) -> bool:
+        """盘上变化则重读（返回是否重读）；脏检查与并发裁决归调用方（store 写锁内）。"""
+        if not self.changed_on_disk():
+            return False
+        self.reload()
+        return True
+
+    def content_fingerprint(self) -> str:
+        """manifest 内容指纹：剔除 updated_at 的 canonical JSON（sort_keys+紧凑分隔符）取 sha256_16。
+
+        manifest_version 只是 schema 常量；内容演进（列/分区/labels 登记变化）由本指纹承载。
+        """
+        data = {k: v for k, v in self._data.items() if k != "updated_at"}
+        canonical = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return sha256_16_of_bytes(canonical.encode("utf-8"))
 
     def _load_and_validate(self) -> dict[str, Any]:
         try:
@@ -160,6 +198,7 @@ class Manifest:
 
         Windows 上偶发 AV/索引器瞬时占用 manifest.json 致 os.replace 被拒
         （WinError 5）——带有限退避重试（P1 单元 4 D-12 修复实证）。
+        落盘成功即清脏并刷新盘上快照（并发 sync 判定基准）。
         """
         self._data["updated_at"] = _now_iso()
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +210,8 @@ class Manifest:
         for attempt in range(5):
             try:
                 os.replace(tmp_path, self._path)
+                self._disk_stat = self._file_stat()
+                self._dirty = False
                 return
             except PermissionError as exc:  # Windows 瞬时占用
                 last_exc = exc
@@ -218,6 +259,7 @@ class Manifest:
             "backfilled_at": backfilled_at,
             "status": status,
         }
+        self._dirty = True
 
     def register_columns(self, columns: Mapping[str, Mapping[str, Any]]) -> None:
         """批量登记列（每项字段同 register_column，缺省字段走默认值）。"""
@@ -260,6 +302,7 @@ class Manifest:
             "written_at": _now_iso(),
             "zone": zone,
         }
+        self._dirty = True
 
     def partition_meta(self, rel_path: str) -> dict[str, Any] | None:
         """分区元数据（深拷贝）；未登记返回 None。"""
@@ -290,6 +333,7 @@ class Manifest:
                 "repaired_at": _now_iso(),
             }
         )
+        self._dirty = True
 
     def repairs(self) -> list[dict[str, Any]]:
         """全部修复登记（深拷贝）。"""
@@ -315,6 +359,7 @@ class Manifest:
             "written_at": _now_iso(),
             "zone": zone,
         }
+        self._dirty = True
 
     def label_partition_fingerprint(self, label_name: str, date_str: str) -> str | None:
         """标签分区内容指纹；未登记返回 None。"""
@@ -331,6 +376,7 @@ class Manifest:
         current = self.label_sealed_through(label_name)
         if current is None or date_str > current:
             self._label_entry(label_name)["sealed_through"] = date_str
+            self._dirty = True
 
     # ---------- 依赖声明 ----------
 
@@ -349,3 +395,4 @@ class Manifest:
                 **deps.get("factor_functions", {}),
                 **dict(factor_functions),
             }
+        self._dirty = True

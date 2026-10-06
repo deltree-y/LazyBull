@@ -38,6 +38,8 @@ class DataStore(Protocol):
     def load_features(self, query: FeatureQuery) -> PanelFrame:
         """加载特征面板（唯一读取入口，manifest 校验列名合法性与 available_from）。
 
+        core 左表锚定（冻结 §4）：拼接键 (trade_date, ts_code)，core 族键域为左表，
+        其余族 left join（core 缺的日/键不进结果；族缺日整族 NaN）。
         幂等：是
         副作用：无
         失败：列名未登记或 available_from 越界 ⇒ ValueError
@@ -48,6 +50,8 @@ class DataStore(Protocol):
         """加载标签表。
 
         返回：index = (trade_date, ts_code)，columns = [label_value, maturity_status]
+        variant=raw ⇒ label_value 取原值列；variant=neu ⇒ 取 neu_label_value
+        （输出 shape 不变）。未知标签名 ⇒ ValueError；合法但无分区 ⇒ 空。
         """
         ...
 

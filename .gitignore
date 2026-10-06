@@ -82,6 +82,9 @@ data/paper/*
 data/walk_forward/*
 !data/walk_forward/.gitkeep
 data/labels/*
+!data/labels/.gitkeep
+# v2 P1 冻结验收基准（约 24GB，3518 分区）：内容整体忽略
+data/frozen_reference/
 # 假设台账（v2 P0 评审 7-B 明文约束）：必须保持 git 跟踪（修订历史审计语义依赖 git diff），
 # 禁止顺手 ignore；不写任何 ignore 规则 = 默认跟踪，本注释即明文登记。
 # data/ledger/  （不 ignore；docs/contracts/hypothesis_ledger_schema.md §2）

@@ -81,14 +81,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out-dir",
         default=str(ROOT / "temp" / "p1_frozen_reference"),
-        help="scratch 写侧根（分区落 <out-dir>/features/cs_train/）",
+        help=(
+            "scratch 写侧根（分区落 <out-dir>/features/cs_train/）；"
+            "正式冻结基准位于 data/frozen_reference/v2_p1，重新生成需走晋升流程"
+        ),
     )
     parser.add_argument("--jobs", type=int, default=-1, help="并行 worker 数（-1 = 全核）")
     parser.add_argument(
         "--serial",
         action="store_true",
-        default=True,
-        help="串行构建（默认，对齐生产；--parallel 关闭）",
+        default=False,
+        help="显式指定强制串行（默认串行由 --parallel 缺省保证；与 --parallel 同给时串行优先）",
     )
     parser.add_argument(
         "--parallel",
@@ -114,7 +117,14 @@ def _iter_chunks(start_date: str, end_date: str, chunk_years: int) -> list[tuple
 
     起点前移 2 年 ⇒ 每个新建日有效历史 ≥ 19 个月（EMA/MA250 长尾收敛）；
     分块内已建分区经管线跳过逻辑自然只建覆盖段年份（断点续跑）。
+    chunk_years < 1 不推进/倒退 ⇒ 入口拒绝（0 = 单调用，请走
+    run_frozen_reference --chunk-years 0 的单调用特判，不经本函数）。
     """
+    if chunk_years < 1:
+        raise ValueError(
+            f"chunk_years 必须 ≥1（当前 {chunk_years}）：0/负数会导致分块不推进、无限循环；"
+            "单调用（chunk_years=0 语义）请走 run_frozen_reference --chunk-years 0"
+        )
     start_year, end_year = int(start_date[:4]), int(end_date[:4])
     chunks = []
     year = start_year
@@ -195,6 +205,9 @@ def main() -> int:
             logger.info(
                 f"单调用 + 预热段: 管线起点 {chunk_start}（比对窗口 {args.start_date}~{args.end_date}）"
             )
+    elif args.chunk_years < 0:
+        logger.error(f"--chunk-years 必须 ≥0（当前 {args.chunk_years}）：负数分块不推进、会无限循环")
+        return 1
     else:
         chunks = _iter_chunks(args.start_date, args.end_date, args.chunk_years)
     logger.info(

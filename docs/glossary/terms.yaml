@@ -666,7 +666,7 @@ terms:
     aliases: [frozen reference]
     one_liner: 冻结 raw 快照 + 旧代码单遍全量重放出的 cs_train 副本，作 panel 对账基线
     layman: 用"当时的原料和当时的配方"重新烤一次蛋糕，看新厨房（v2 store）烤出来的是不是同一个味
-    example: temp/p1_frozen_reference 3,518 分区；严格门 = panel vs 冻结参照（31 列超门 100% 归因后 PASS）
+    example: data/frozen_reference/v2_p1 3,518 分区（2026-10-06 自 temp/ 迁出）；严格门 = panel vs 冻结参照（31 列超门 100% 归因后 PASS）
     source: v2 方案 R1-4；P1 单元 3 报告
     related: [重建基线, 行为冻结, 差异台账]
     introduced: "2026-10-06"

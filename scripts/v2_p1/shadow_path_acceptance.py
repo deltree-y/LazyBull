@@ -267,14 +267,23 @@ def main() -> int:
             report["primary_ref_batch"] = {"status": f"参照分区缺失: {ref_day_file}"}
             n_problem += 1
     else:
-        report["primary_ref_batch"] = {"status": "未提供 --ref-batch-dir，判据 B 跳过"}
+        # 主判据 B 未执行不得判 PASS（R2-3/P1-7）：跳过 = 问题项，退出码 1
+        report["primary_ref_batch"] = {"status": "skipped_no_ref_batch_dir"}
+        n_problem += 1
+        logger.error("未提供 --ref-batch-dir：主判据 B 未执行，本验收不得判 PASS")
 
+    primary_skipped = (
+        isinstance(report["primary_ref_batch"], dict)
+        and report["primary_ref_batch"].get("status") == "skipped_no_ref_batch_dir"
+    )
     report["verdict"] = {
         "pass": n_problem == 0,
         "rule": (
-            f"主判据 shadow≡cs_infer（atol={_ATOL}，D-04① 数据态登记）；"
+            f"主判据 B：shadow ≡ 同窗批量参照（atol={_ATOL}，预期全零/ulp）；"
+            "cs_infer 对照为信息登记项不进判定；"
             "参照判据 shadow vs panel 差异全部落入登记类（D-13/窗截断/ulp/warmup/zscore 连锁）；"
             "labels 全零"
+            + ("；主判据 B 未执行（缺 --ref-batch-dir），不得判 PASS" if primary_skipped else "")
         ),
         "problem_items": n_problem,
         "elapsed_min": round((time.time() - t0) / 60, 1),

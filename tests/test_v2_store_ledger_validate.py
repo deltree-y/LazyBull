@@ -267,6 +267,57 @@ class TestCli:
         report = json.loads(out.read_text(encoding="utf-8"))
         assert report["failed"] == 1
 
+    def test_cli_type_error_entries_exit_1_no_crash(self, tmp_path):
+        """R3-09：类型错误条目（kind/vehicle/verdict 非 str）逐条 fail，不中断整批。"""
+        ledger = _write_ledger(
+            tmp_path,
+            [
+                _entry("H-bad", [], _prereg_payload()),  # kind=list
+                _entry("H-ok", "prereg", _prereg_payload()),
+            ],
+        )
+        out = tmp_path / "report.json"
+        proc = self._run_cli(ledger, out)
+        assert proc.returncode == 1
+        assert "TypeError" not in proc.stderr and "Traceback" not in proc.stderr
+        report = json.loads(out.read_text(encoding="utf-8"))
+        assert report["total"] == 2 and report["failed"] == 1 and report["passed"] == 1
+
+
+class TestTypeGuards:
+    """R3-09：合法 JSON 但类型错误的 kind/vehicle/verdict 记为该条目失败原因，不抛 TypeError。"""
+
+    def test_non_str_kind_fails_batch_continues(self, tmp_path):
+        report = validate_ledger(
+            _write_ledger(
+                tmp_path,
+                [
+                    _entry("H-bad", [], _prereg_payload()),
+                    _entry("H-ok", "prereg", _prereg_payload()),
+                ],
+            )
+        )
+        bad = _by_line(report, 1)
+        assert bad["status"] == "fail"
+        assert any("kind 非法" in r for r in bad["reasons"])
+        assert _by_line(report, 2)["status"] == "pass"
+
+    def test_non_str_vehicle_fails(self, tmp_path):
+        report = validate_ledger(
+            _write_ledger(tmp_path, [_entry("H-1", "prereg", _prereg_payload(vehicle={}))])
+        )
+        entry = _by_line(report, 1)
+        assert entry["status"] == "fail"
+        assert any("vehicle 非法" in r for r in entry["reasons"])
+
+    def test_non_str_verdict_fails(self, tmp_path):
+        report = validate_ledger(
+            _write_ledger(tmp_path, [_entry("H-2", "conclusion", _conclusion_payload(verdict=[]))])
+        )
+        entry = _by_line(report, 1)
+        assert entry["status"] == "fail"
+        assert any("verdict 非法" in r for r in entry["reasons"])
+
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

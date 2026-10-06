@@ -273,22 +273,36 @@ class FeatureQuery:
 
 @dataclass(frozen=True, slots=True)
 class LabelQuery:
-    """标签查询。"""
+    """标签查询（variant 选择取值变体：raw=label_value 原值 / neu=neu_label_value 中性化变体）。
+
+    输出 shape 与变体无关（columns=[label_value, maturity_status]），
+    label_value 承载所选变体的值。
+    """
 
     label_name: str
     start_date: TradeDate
     end_date: TradeDate
     universe: Sequence[TSCode] | None = None
+    variant: str = "raw"  # "raw" / "neu"
+
+    def __post_init__(self) -> None:
+        if self.variant not in ("raw", "neu"):
+            raise ValueError(f"标签变体非法: {self.variant!r}（合法值 raw/neu）")
 
 
 @dataclass(frozen=True, slots=True)
 class PanelFrame:
-    """特征面板（DataFrame 包装，附加 manifest 指纹与列级可用起点）。"""
+    """特征面板（DataFrame 包装，附加 manifest 内容指纹与列级可用起点）。
+
+    manifest_version 是 manifest schema 版本（常量 "1"）；内容演进指纹由
+    manifest_fingerprint 承载（剔除 updated_at 的 canonical JSON sha256_16）。
+    """
 
     df: pd.DataFrame  # index = (trade_date, ts_code)
     manifest_version: str
     # 列名 → 可用起点（manifest available_from，协议 v0.4 / 方案 M1.5）；空映射 = 未登记
     available_from: Mapping[str, "TradeDate"] = field(default_factory=dict)
+    manifest_fingerprint: str = ""  # manifest 内容指纹（load_features 填充；空 = 未采集）
 
     def validate_schema(self, expected_columns: Sequence[str]) -> None:
         """校验列集合（缺列硬报错）。"""

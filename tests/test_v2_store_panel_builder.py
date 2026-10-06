@@ -92,6 +92,12 @@ class TestSplitGroups:
             c for c in PANEL_GROUPS["technical"] if c not in ("trade_date", "ts_code")
         ]
 
+    def test_unregistered_column_raises(self):
+        """列集闭合断言：列新增/改名未登记 ⇒ 显式失败而非静默 reindex 丢列。"""
+        df = _big_day("20250627").assign(mystery_new_col=1.0)
+        with pytest.raises(RuntimeError, match="未登记列"):
+            _split_groups(df)
+
 
 class TestBootstrapManifest:
     def test_register_all_columns_and_dependencies(self, tmp_path):
@@ -113,6 +119,32 @@ class TestBootstrapManifest:
         bootstrap_manifest(store)
         bootstrap_manifest(store)  # 幂等重跑不报错
         assert len(store.get_manifest()["columns"]) == 411
+
+    def test_existing_governance_metadata_preserved(self, tmp_path):
+        """R3-07：bootstrap 重跑不覆盖已登记列的治理元数据。"""
+        store = PanelDataStore(tmp_path)
+        bootstrap_manifest(store)
+        store.manifest.register_column(
+            "ret_1",
+            "core",
+            source="clean/daily",
+            available_from="20130101",
+            backfilled_at="2026-10-01T00:00:00",
+            status="deprecated",
+        )
+        bootstrap_manifest(store)
+        meta = store.manifest.column_meta("ret_1")
+        assert meta["available_from"] == "20130101"
+        assert meta["backfilled_at"] == "2026-10-01T00:00:00"
+        assert meta["status"] == "deprecated"
+        assert len(store.get_manifest()["columns"]) == 411  # 仍幂等
+
+    def test_conflict_with_existing_registration_raises(self, tmp_path):
+        store = PanelDataStore(tmp_path)
+        store.manifest.register_column("ret_1", "core", "src", definition_version="v2")
+        store.manifest.save()
+        with pytest.raises(ValueError, match="冲突"):
+            bootstrap_manifest(store)
 
 
 @pytest.fixture
@@ -200,6 +232,45 @@ class TestArchiveMonthBuffer:
 
     def test_flush_without_buffer_noop(self, bootstrapped_store):
         _ArchiveMonthBuffer(bootstrapped_store, ["core"]).flush()  # 不报错
+
+
+class TestBuildDailyLabelStarved:
+    """build_daily 标签不可终 fail-fast（R3-03 防御性收口）。"""
+
+    def _stub(self, monkeypatch, captured, horizon):
+        builder = V2PanelBuilder(loader=Mock())
+        monkeypatch.setattr(
+            builder,
+            "_run_capture",
+            lambda s, e, keep_dates=None: [
+                (d, df) for d, df in captured if keep_dates is None or d in keep_dates
+            ],
+        )
+        monkeypatch.setattr(builder, "_full_calendar", lambda: list(_CALENDAR))
+        monkeypatch.setattr(builder, "_data_horizon", lambda: horizon)
+        monkeypatch.setattr(
+            "src.lazybull.v2.store.panel_builder.load_top_inst_lookup", lambda loader, dates: {}
+        )
+        return builder
+
+    def test_unsealable_day_fail_fast(self, bootstrapped_store, tmp_path, monkeypatch):
+        """T+21 端点超数据水位 ⇒ RuntimeError（文案含 R3-03），不落盘不报误导性缺日。"""
+        from src.lazybull.v2.common.types import TradeDate
+
+        day = _CALENDAR[0]  # 端点 _CALENDAR[21]=20250711 > 水位 _CALENDAR[20]=20250710
+        builder = self._stub(monkeypatch, [(day, _big_day(day))], horizon=_CALENDAR[20])
+        with pytest.raises(RuntimeError, match="R3-03"):
+            builder.build_daily(TradeDate.from_str(day), ["core"], bootstrapped_store)
+        assert not (tmp_path / "features" / "panel" / day).exists()  # 未落盘
+
+    def test_buildable_day_proceeds(self, bootstrapped_store, tmp_path, monkeypatch):
+        from src.lazybull.v2.common.types import TradeDate
+
+        day = _CALENDAR[0]
+        builder = self._stub(monkeypatch, [(day, _big_day(day))], horizon="20991231")
+        builder.build_daily(TradeDate.from_str(day), ["core"], bootstrapped_store)
+        assert (tmp_path / "features" / "panel" / day / "core.parquet").exists()
+        assert (tmp_path / "labels" / "y_ret_20" / f"{day}.parquet").exists()
 
 
 class TestBackfillRouting:

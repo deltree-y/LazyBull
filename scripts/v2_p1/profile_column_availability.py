@@ -350,6 +350,7 @@ def main() -> int:
         col_available_from[col] = avail
 
     # 门禁仿真：现役模型 154 列逐年幸存率
+    # 模型版本升级后此剖面语义需重新标定（硬编码 v24288 列集快照）
     model_cols = json.load(open(ROOT / "data/models/stock_selection/v24288_features.json", encoding="utf-8"))
     model_cols = [c for c in model_cols if c in col_year_cov]
     gate: dict[str, dict] = {}

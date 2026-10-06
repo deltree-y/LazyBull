@@ -136,6 +136,55 @@ class TestReplaceArchiveDays:
             )
 
 
+class TestRewriteStructuralValidation:
+    """rewrite_partition 结构校验（热区复用单日/列登记、冷区复用月内/列登记、键唯一）。"""
+
+    def test_hot_rewrite_multi_day_rejected(self, store):
+        from src.lazybull.v2.common.types import TradeDate
+
+        store.append_features(TradeDate.from_str("20240103"), "core", _day_df("20240103", ["A", "B"], 1.0))
+        df = pd.concat([_day_df("20240103", ["A"], 1.0), _day_df("20240104", ["A"], 2.0)])
+        with pytest.raises(RuntimeError, match="单日"):
+            store.rewrite_partition("panel/20240103/core.parquet", df, reason="多日应拒绝")
+
+    def test_cold_rewrite_out_of_month_rejected(self, store):
+        store.append_archive_features("2024-01", "core", _day_df("20240102", ["A", "B"], 1.0))
+        with pytest.raises(RuntimeError, match="月外日期"):
+            store.rewrite_partition(
+                "panel_archive/2024-01/core.parquet",
+                _day_df("20240201", ["A"], 1.0),
+                reason="月外应拒绝",
+            )
+
+    def test_rewrite_duplicate_keys_rejected(self, store):
+        store.append_archive_features("2024-01", "core", _day_df("20240102", ["A", "B"], 1.0))
+        dup = pd.concat([_day_df("20240102", ["A"], 1.0), _day_df("20240102", ["A"], 2.0)])
+        with pytest.raises(RuntimeError, match="重复"):
+            store.rewrite_partition(
+                "panel_archive/2024-01/core.parquet", dup, reason="重复键应拒绝"
+            )
+
+    def test_rewrite_unregistered_column_rejected(self, store):
+        store.append_archive_features("2024-01", "core", _day_df("20240102", ["A"], 1.0))
+        with pytest.raises(RuntimeError, match="未登记"):
+            store.rewrite_partition(
+                "panel_archive/2024-01/core.parquet",
+                _day_df("20240102", ["A"], 1.0).assign(mystery=1.0),
+                reason="未登记列应拒绝",
+            )
+
+    def test_hot_rewrite_content_change_ok(self, store):
+        """rewrite 允许内容变化（不误加指纹不变校验），结构合法即放行。"""
+        from src.lazybull.v2.common.types import TradeDate
+
+        store.append_features(TradeDate.from_str("20240103"), "core", _day_df("20240103", ["A", "B"], 1.0))
+        store.rewrite_partition(
+            "panel/20240103/core.parquet", _day_df("20240103", ["A", "B"], 9.0), reason="列值修正"
+        )
+        df = pd.read_parquet(store.panel_dir / "20240103" / "core.parquet")
+        assert df["vol"].tolist() == [9.0, 10.0]
+
+
 class TestColdDayLevelWritten:
     """backfill_panel._written_days 的冷区日级精度（月登记但缺日 ⇒ 未写）。"""
 

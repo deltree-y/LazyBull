@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.204.1] - 2026-10-06
+
+### Fixed
+
+- **v2 P1 数据底座三评审驱动整改**（依据：`docs/review/v2_p1_impl_review_20261006.md` /
+  `v2_p1_impl_review2_20261006.md` / `v2_p1_impl_review3_20261006.md`）：
+  - **对账门收紧四件套**（P1-1/2/3 + R2-1）：verdict 结构项（cols_only/missing_ref_days）
+    合法性判定（白名单 + 日期上界 + 键列噪声剔除）；D-04 归因收紧（①子项日期下界
+    20260101，③/④子项限纯 NaN 形态 + 日期窗 [20161201, 20260702]）；D-14 专项三上限
+    （天数/累计行数/max|Δ|）与 D-11 窗内超幅上限 5.0；比较分母修正为全窗口可比行
+    （R3-04，零差异日不再从分母剔除）。
+  - **store 崩溃窗口 WAL + 多实例登记保护**（P1-4/5 + R3-01）：写前日志
+    `manifest_wal.jsonl`（物理写后即记、打开 store 自动重放压实），崩溃窗口内
+    sealed 标签/冷区不再可被无审计改写；写锁内 manifest 快照同步，多实例顺序
+    写入不再以旧快照覆盖彼此登记（脏实例遇外部变更 fail-closed）。
+  - **core 左表锚定**（R3-02）：load_features 统一以 core 键域为锚，查询行集不再随
+    请求列集变化。
+  - **标签变体路由与成熟度数据视界**（R3-05/06）：neu 标签有正式查询路由；成熟度判定
+    纳入数据水位（未来日历存在不再视为端点可算）。
+  - **脚本修复**：`run_frozen_reference.py --parallel` 恒失效（P1-6）；分块参数 0/负数
+    守卫（R3-08）；影子验收主判据 fail-closed（P1-7，缺省不再 PASS）；性能门双口径
+    补齐（R3-11）。
+  - **冻结参照迁移**：`temp/p1_frozen_reference/` → `data/frozen_reference/v2_p1/`
+    （3,518 分区复核一致；P1-8）；列族分组 JSON fixture 化至
+    `tests/fixtures/p1_column_groups_20261002.json`，防漂移测试不再依赖 temp/。
+  - **文档勘误与导航同步**：总验收报告 D-12 修复计数终态口径勘误（651 分区 / repairs
+    707 条 / 13,802 分区，以第二份评审 §3.1 为准）；剖面报告 R3-13 证据边界收回；
+    冻结文档 §7/§3 补注 + §8 D-13 增补 + §9 评审整改登记；protocols.md PanelFrame
+    manifest_version 注释勘误（F7 草案登记）；CLAUDE.md / AGENTS.md / README.md
+    导航同步 P1 架构。
+
 ## [0.204.0] - 2026-10-06
 
 ### Added

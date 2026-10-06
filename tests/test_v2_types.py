@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from src.lazybull.v2.common.types import (
+    LabelQuery,
     Lot,
     Money,
     PanelFrame,
@@ -131,6 +132,26 @@ class TestPanelFrameAvailableColumns:
         with pytest.raises(ValueError, match="缺列"):
             frame.validate_schema(["old_col", "not_exist"])
         frame.validate_schema(["old_col", "new_col"])  # 不报错
+
+
+class TestLabelQueryVariant:
+    """LabelQuery.variant（R3-05）：raw/neu 合法值 + 非法值构造即拒。"""
+
+    def test_default_raw(self):
+        q = LabelQuery(label_name="y_ret_20", start_date=_D1, end_date=_D2)
+        assert q.variant == "raw"
+
+    def test_invalid_variant_rejected(self):
+        with pytest.raises(ValueError, match="变体非法"):
+            LabelQuery(label_name="y_ret_20", start_date=_D1, end_date=_D2, variant="bad")
+
+
+class TestPanelFrameManifestFingerprint:
+    """PanelFrame.manifest_fingerprint（R3-10）：默认空串，由 load_features 填充。"""
+
+    def test_default_empty(self):
+        frame = PanelFrame(df=pd.DataFrame({"x": [1.0]}), manifest_version="1")
+        assert frame.manifest_fingerprint == ""
 
 
 if __name__ == "__main__":

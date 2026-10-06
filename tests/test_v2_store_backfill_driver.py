@@ -82,6 +82,14 @@ class TestWrittenDays:
         _write_hot(store, "20260603", groups=_GROUPS[:7])  # 缺一族
         assert _written_days(store, ["20260603"]) == set()
 
+    def test_hot_day_registered_but_file_missing(self, tmp_path):
+        """热区 8 族全登记但盘上文件丢失 ⇒ 按未写处理（D-10 镜像教训）。"""
+        store = PanelDataStore(tmp_path)
+        bootstrap_manifest(store)
+        _write_hot(store, "20260603")
+        (store.panel_dir / "20260603" / "core.parquet").unlink()
+        assert _written_days(store, ["20260603"]) == set()
+
     def test_cold_month_day_precision(self, tmp_path):
         store = PanelDataStore(tmp_path)
         bootstrap_manifest(store)

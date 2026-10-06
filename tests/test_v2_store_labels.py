@@ -10,6 +10,8 @@ sealed/forming 边界（22 交易日合成日历：idx=0 sealed、idx≥1 formin
 import pandas as pd
 import pytest
 
+from datetime import date, timedelta
+
 from src.lazybull.v2.store.data_store import PanelDataStore
 from src.lazybull.v2.store.labels_builder import (
     append_labels_for_day,
@@ -18,8 +20,8 @@ from src.lazybull.v2.store.labels_builder import (
 )
 
 _CODES = ["600000.SH", "000001.SZ", "000002.SZ"]
-#: 22 个交易日的合成日历（idx+1+20 < 22 ⟺ idx==0 才 sealed）
-_CALENDAR_22 = [f"2024{m:02d}" for m in range(101, 123)]
+#: 22 个交易日的合成日历（idx+1+20 < 22 ⟺ idx==0 才 sealed；恰 8 位数字日契约）
+_CALENDAR_22 = [(date(2024, 1, 2) + timedelta(days=i)).strftime("%Y%m%d") for i in range(22)]
 
 
 def _big_day(date: str, labels: tuple = (0.01, 0.02, 0.03)) -> pd.DataFrame:
@@ -51,6 +53,20 @@ class TestMaturityStatus:
     def test_date_not_in_calendar_raises(self):
         with pytest.raises(ValueError, match="不在交易日历"):
             maturity_status_for("20990101", _CALENDAR_22)
+
+    def test_data_end_gates_sealed(self):
+        """R3-06：日历存在 ≠ 数据可算——端点超数据水位（data_end）⇒ forming。"""
+        day0 = _CALENDAR_22[0]  # 日历端点 _CALENDAR_22[21] 存在
+        endpoint = _CALENDAR_22[21]
+        assert maturity_status_for(day0, _CALENDAR_22, data_end=None) == "sealed"  # 不约束
+        assert maturity_status_for(day0, _CALENDAR_22, data_end=endpoint) == "sealed"  # 端点 ≤ 水位
+        assert maturity_status_for(day0, _CALENDAR_22, data_end=_CALENDAR_22[20]) == "forming"
+
+    def test_extract_labels_data_end_passthrough(self):
+        tables = extract_labels(_big_day(_CALENDAR_22[0]), _CALENDAR_22, data_end=_CALENDAR_22[20])
+        assert tables["y_ret_5"]["maturity_status"].iloc[0] == "forming"
+        tables = extract_labels(_big_day(_CALENDAR_22[0]), _CALENDAR_22, data_end="20991231")
+        assert tables["y_ret_5"]["maturity_status"].iloc[0] == "sealed"
 
 
 class TestExtractLabels:
