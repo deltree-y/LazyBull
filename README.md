@@ -844,6 +844,14 @@ python scripts/v2_p1/shadow_path_acceptance.py       # 影子通路验收
 **注意：P1 未切换生产链路**——现役训练/回测/纸面仍走 cs_train/cs_infer，panel 底座待
 后续阶段裁决接入。
 
+**v2 内核搬运（P2a，v0.205.0）：** 旧回测内核已纯搬运落位 `src/lazybull/v2/`
+（`common/rules` 共享纯函数 + `core/{decision,accounting,execution,signal}` +
+`hosts/backtest`；数值路径零重新设计、行为冻结），B0 冻结基线 14 折重放八道门全 PASS
+（成交 3,214 行 9 列逐位一致、链式净值 1,714 行 max|Δ|=0.0；退役 exposure 政策族与
+downside_penalty 挂载按裁决摘除，λ>0 显式 fail-fast）。实施规划
+`docs/plans/v2/p2a_implementation_plan_20261006.md`（本地）。**注意：P2a 未切换生产链路**——
+现役训练/回测/纸面仍走旧内核，v2 内核经 P2b/P3/P4 推进接入。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）

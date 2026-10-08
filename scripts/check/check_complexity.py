@@ -27,6 +27,8 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -90,9 +92,27 @@ def _max_nesting(node: ast.AST, depth: int = 0) -> int:
     return best
 
 
+def _repo_rel_key(path: Path, root: Path) -> str:
+    """统一违规路径键：仓库相对 + 正斜杠 + Windows 大小写归一（跨入口 / 跨机器稳定）。
+
+    P2a-T1 复审 R2-T1-R2-01：flake8 回传的绝对路径直接入键，会在盘符大小写
+    （d: vs D:，Windows pathlib 比较大小写不敏感但字符串比较敏感）或仓库目录
+    变化时把已登记存量误判为新增；相对化 + posix 化 + ``os.path.normcase``
+    大小写归一消除该依赖（POSIX 下 normcase 为恒等，不影响大小写敏感系统）。
+    """
+    for p in (path, path.resolve()):
+        for r in (root, root.resolve()):
+            try:
+                rel = p.relative_to(r)
+                return os.path.normcase(str(rel)).replace("\\", "/")
+            except ValueError:
+                continue
+    return os.path.normcase(str(path)).replace("\\", "/")
+
+
 def check_file(path: Path, root: Path) -> FileReport:
     """对单文件执行行数 / 函数行数 / 嵌套深度检查"""
-    rel = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
+    rel = _repo_rel_key(path, root)
     report = FileReport(path=rel)
     waived = _has_waiver(path)
     report.waived = waived
@@ -164,10 +184,16 @@ def check_file(path: Path, root: Path) -> FileReport:
     return report
 
 
-def check_mccabe(paths: List[Path]) -> List[Violation]:
-    """经 flake8 跑 mccabe 圈复杂度硬检查；flake8 不可用时降级为告警并跳过"""
+def check_mccabe(paths: List[Path], root: Path) -> List[Violation]:
+    """经 flake8 跑 mccabe 圈复杂度硬检查；flake8 不可用时降级为告警并跳过
+
+    格式串必须含 ``%(code)s``（P2a-T1 评审 R2-T1-01 修复）：旧格式只有
+    ``%(path)s:%(row)d: %(text)s``，输出行不含 "C901" 字样，下游按 "C901"
+    过滤会把全部真实超限静默丢弃（漏报缺陷）。
+    路径键统一经 ``_repo_rel_key`` 相对化（R2-T1-R2-01 修复）。
+    """
     cmd = [sys.executable, "-m", "flake8", f"--max-complexity={MCCABE_HARD}",
-           "--select=C901", "--format=%(path)s:%(row)d: %(text)s"]
+           "--select=C901", "--format=%(path)s:%(row)d: %(code)s %(text)s"]
     cmd += [str(p) for p in paths]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -178,12 +204,17 @@ def check_mccabe(paths: List[Path]) -> List[Violation]:
         print(f"[warn] flake8 执行异常（退出码 {proc.returncode}）：{proc.stderr.strip()}", file=sys.stderr)
         return []
     violations: List[Violation] = []
+    # 贪婪 path 段兼容 Windows 盘符冒号（D:\...）；仅采集 C901 行
+    line_re = re.compile(r"^(?P<path>.*):(?P<row>\d+): (?P<code>C901) (?P<text>.*)$")
     for line in proc.stdout.splitlines():
-        if "C901" not in line:
+        m = line_re.match(line.strip())
+        if not m:
             continue
-        path_part, _, rest = line.partition(":")
-        p = Path(path_part.strip())
-        violations.append(Violation(str(p), "mccabe", "hard", rest.strip(), _has_waiver(p)))
+        p = Path(m.group("path").strip())
+        violations.append(
+            Violation(_repo_rel_key(p, root), "mccabe", "hard", m.group("text").strip(),
+                      _has_waiver(p))
+        )
     return violations
 
 
@@ -244,7 +275,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     reports = [check_file(f, root) for f in files]
     violations: List[Violation] = [v for r in reports for v in r.violations]
     if not args.skip_mccabe:
-        violations.extend(check_mccabe(paths))
+        violations.extend(check_mccabe(paths, root))
 
     if args.write_baseline:
         write_baseline(root / args.write_baseline, violations)

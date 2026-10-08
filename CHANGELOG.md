@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.205.0] - 2026-10-08
+
+### Added
+
+- **v2 P2a 内核搬运完全落地（T0.5~T8 收口）**——旧回测内核**纯搬运**落位
+  `v2/core/*` + `v2/hosts/backtest`（数值路径零重新设计、行为冻结；旧生产实现
+  零改动、切换前保持生产可用；实施规划 `docs/plans/v2/p2a_implementation_plan_20261006.md`，
+  本地，T0 五轮评审 + 逐 task 评审处置全闭环）：
+  - **交付面**：`v2/common/`（rules 4 件 + 支撑 8 件 + 协议层 signal/core/hosts
+    共 12 协议）；`v2/core/decision/`（buy_plan / sizing / industry_constraint /
+    weight_processor / params / weighting）；`v2/core/accounting/`（state / nav /
+    exports / holdings_snapshot）；`v2/core/execution/`（run_loop / buy / sell /
+    signal / pending / pending_order / price_index / engine_utils / reporting +
+    **组装体 engine.py**（7 mixin 原序组合）+ ml_signal_feed）；`v2/core/signal/`
+    （base / ml_signal / ensemble / factory）；`v2/hosts/backtest/`（runtime /
+    replay / reporter + **runs_writer** = runs 契约正式出口）；验收工具
+    `scripts/v2_p2a/`（replay_b0 / input_manifest / check_replay_closure_diff /
+    compare_replay_vs_b0）。
+  - **退役摘除（D6，F8 裁决执行）**：3 个 exposure mixin（override / trim /
+    replenish）与 A5 downside_penalty 挂载不迁——退役符号清单（41 项冻结集）
+    扫描 0 残留、11 处默认路径调用点清理、λ>0 与非默认 exposure 配置显式
+    fail-fast；B0 默认下逐位等价由 3 条隔离测试 + 重放兜底。
+  - **§4.4 迁移即重构**：存量超限提取式拆分 15 处（engine.__init__ / run /
+    _execute_pending_buys / _process_position_completion / _generate_signal /
+    compute_kelly_weights / cap_and_normalize_weights 等），新路径硬超限 0、
+    复杂度基线键零新增。
+  - **验收八道门全 PASS**（B0 冻结基线 14 折重放，批次
+    `data/runs/p2a_b0replay_20261008_144307_d79f3f`）：① 数据身份（输入哈希
+    清单 5,573 项逐字节 + 窗口抽查 0 差异）② 代码态（重放执行闭包 diff 白名单外
+    0 件）③ 配置指纹（95 键 × 14 折全量键值一致，仅 batch_id 迁移标识登记放行）
+    ④ **成交 3,214 行 9 列逐位一致**（并列互换计数 0；attribution 1,751 行
+    二次交叉，唯一规范化 = wf_run_id）⑤ **净值：链式 1,714 行 max|Δ|=0.0
+    逐位一致**（chain_metrics 同口径全等）⑥ 内核内部语义（黄金钩子序列 /
+    退役隔离 / 延迟队列与条件卖出 3 触发器断言）⑦ λ 条款不启用（B0 无 λ）
+    ⑧ runs 产物写出即过读回硬校验。**归因预算消耗 = 0**（预检 2 项缺陷均为
+    验收工具/驱动装配缺陷）；应急旧链对照重放三方逐位一致（B0 可复现性双证）。
+  - **测试**：P2a 等价套件 264 项（T1 37 + T2 25 + T3 33 + T4 38 + T5 39 +
+    T6 46 + T7 46）+ 棘轮/复杂度 18 项；全量 2,773 项全绿。
+  - **T8 收尾**：复制件沿袭格式债统一清理 24 件（black / isort / 死 import /
+    死绑定删除——F841 带副作用者保留调用去绑定；逐件决策与「旧件保持原样」
+    声明见实施规划 §16）；MVP 总账 v5 回填（已耗编码 ≈21 单元 / 机器
+    ≈25.5~27h；3× 停止线 57 单元 / 48h 内余量 ≈24~28 单元 / 9~10.5h）。
+  - **口径观察登记**：`baseline_freeze` §5 表头值（CAGR 22.41% / Sharpe 1.049）
+    与 `chain_metrics` 口径（22.61% / 0.9157）存在年化/夏普口径差（交易日 vs
+    自然日复合、无风险利率处理）；门 5 验收对象（链式净值数值本身）逐位一致，
+    表头口径差随 P3 核对（实施规划 §16）。
+
+### Changed
+
+- 版本号 0.204.5 → **0.205.0**（P2a 内核搬运分阶段功能完全落地，大版本递增，
+  沿 P1 收口同例；T1~T7 各 task 按 R1-4 用户裁决不拆 commit、版本随 T8 一并同步）。
+  **生产链路未切换**：现役训练/回测/纸面仍走旧内核，v2 内核经 P2b/P3/P4 推进接入。
+
 ## [0.204.5] - 2026-10-07
 
 ### Changed

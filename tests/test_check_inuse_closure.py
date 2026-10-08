@@ -20,9 +20,29 @@ sys.path.insert(0, str(SCRIPTS_CHECK))
 
 import check_inuse_closure as cic  # noqa: E402
 
-# 真实仓 ratchet 基线（2026-10-06 对账定稿；P2a 迁移后显式更新）
+# 真实仓 ratchet 基线（2026-10-06 对账定稿；P2a 迁移后显式更新：
+# T1（2026-10-07）新增 v2/common 复制件 13 模块（rules×5 + 支撑×8），
+# 均不在两条主链路闭包内 ⇒ 不在用 49→62、全仓 249→262；静态闭包与在用数不变；
+# T2（2026-10-07）新增 v2/common/protocols 定义件 3 模块（signal/core/hosts，
+# 纯 Protocol 定义、无实现侧消费方）⇒ 不在用 62→65、全仓 262→265；其余不变；
+# T4（2026-10-07）新增 v2/core 部件 15 模块（decision 2 + execution 3 +
+# accounting 4 + signal 1 + 包 __init__×5），均不在两条主链路闭包内
+# ⇒ 不在用 65→80、全仓 265→280；静态闭包与在用数不变；
+# T3（2026-10-07）新增 v2/core/decision 复制件 4 模块（buy_plan/sizing/
+# industry_constraint/weight_processor），均不在两条主链路闭包内
+# ⇒ 不在用 80→84、全仓 280→284；静态闭包与在用数不变；
+# T5（2026-10-07）新增 v2/core/execution 交付件 8 模块（run_loop/
+# buy_execution/sell_execution/signal_execution/pending_execution/
+# reporting/engine/ml_signal_feed），均不在两条主链路闭包内
+# ⇒ 不在用 84→92、全仓 284→292；静态闭包与在用数不变；
+# T6（2026-10-08）新增 v2/core/signal 交付件 3 模块（ml_signal/
+# ensemble_signal/factory），均不在两条主链路闭包内
+# ⇒ 不在用 92→95、全仓 292→295；静态闭包与在用数不变；
+# T7（2026-10-08）新增 v2/hosts/backtest 交付件 6 模块（包 __init__×2 +
+# runtime/replay/reporter/runs_writer），均不在两条主链路闭包内
+# ⇒ 不在用 95→101、全仓 295→301；静态闭包与在用数不变）
 INUSE_BASELINE = 200
-NOTIN_BASELINE = 49
+NOTIN_BASELINE = 101
 STATIC_BASELINE = 196
 
 

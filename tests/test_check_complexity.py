@@ -110,5 +110,54 @@ def test_baseline_ratchet(tmp_path, monkeypatch):
     assert check_complexity.main(["--paths", ".", "--skip-mccabe", "--baseline", "base.json"]) == 0
 
 
+def test_mccabe_c901_actually_collected(tmp_path):
+    """C901 非零诊断必须被采集（R2-T1-01 回归：旧格式串缺 %(code)s 导致静默漏报）。"""
+    pytest.importorskip("flake8")
+    branches = "\n".join(f"    if x == {i}:\n        y = {i}" for i in range(15))
+    p = _write(tmp_path, "complex_mod.py", f"def f(x):\n{branches}\n    return y\n")
+    violations = check_complexity.check_mccabe([tmp_path], tmp_path)
+    assert any(
+        v.kind == "mccabe" and v.level == "hard" and "too complex" in v.detail
+        for v in violations
+    ), f"C901 诊断未被采集（漏报回归）：{violations}"
+    assert any(p.name in v.path for v in violations)
+
+
+_COMPLEX_BODY = "\n".join(f"    if x == {i}:\n        y = {i}" for i in range(15))
+
+
+def test_mccabe_baseline_keys_repo_relative_posix(tmp_path, monkeypatch):
+    """R2-T1-R2-01 回归：基线键一律仓库相对 + 正斜杠，且新增超限仍失败。"""
+    pytest.importorskip("flake8")
+    import json
+
+    _write(tmp_path, "complex_mod.py", f"def f(x):\n{_COMPLEX_BODY}\n    return y\n")
+    monkeypatch.chdir(tmp_path)
+    assert check_complexity.main(["--paths", ".", "--write-baseline", "base.json"]) == 0
+    keys = json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))["keys"]
+    assert any(k.startswith("complex_mod.py|mccabe|") for k in keys)
+    for k in keys:
+        path_part = k.split("|")[0]
+        assert "\\" not in path_part, f"基线键含反斜杠：{k}"
+        assert not Path(path_part).is_absolute(), f"基线键为绝对路径：{k}"
+    # 基线复跑通过；新增真实超限仍返回非零
+    assert check_complexity.main(["--paths", ".", "--baseline", "base.json"]) == 0
+    _write(tmp_path, "complex_mod2.py", f"def g(x):\n{_COMPLEX_BODY}\n    return y\n")
+    assert check_complexity.main(["--paths", ".", "--baseline", "base.json"]) == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows 盘符大小写语义")
+def test_gate_matches_under_case_variant_paths(tmp_path, monkeypatch):
+    """R2-T1-R2-01 回归：入口路径盘符大小写变化（d: vs D:）不影响存量命中。"""
+    pytest.importorskip("flake8")
+    target = _write(tmp_path, "complex_mod.py", f"def f(x):\n{_COMPLEX_BODY}\n    return y\n")
+    monkeypatch.chdir(tmp_path)
+    assert check_complexity.main(["--paths", ".", "--write-baseline", "base.json"]) == 0
+    # 用大小写翻转的绝对路径输入（模拟小写 d: 入口），同一存量必须仍命中基线
+    variant = str(target).swapcase()
+    rc = check_complexity.main(["--paths", variant, "--baseline", "base.json"])
+    assert rc == 0, "盘符/路径大小写变化导致存量被误判为新增"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

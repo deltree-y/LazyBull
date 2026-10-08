@@ -214,6 +214,38 @@ def _check_daily_trades_xref(fold: RunsFold, chain_seg: pd.DataFrame) -> None:
         )
 
 
+def _load_fold_dir(fold_dir: Path) -> Optional[RunsFold]:
+    """读入单个折目录（§4.4 提取式拆分，P2a-T1）；非 split 目录或目录名无法解析时跳过。"""
+    if not fold_dir.is_dir() or not fold_dir.name.startswith("split"):
+        return None
+    try:
+        split_idx = int(fold_dir.name.replace("split", ""))
+    except ValueError:
+        return None
+    fold = RunsFold(split_index=split_idx)
+    trades_path = fold_dir / "trades.parquet"
+    if not trades_path.exists():
+        raise FileNotFoundError(
+            f"{fold_dir} 缺 trades.parquet（契约三态=必须报错）"
+        )
+    fold.trades = pd.read_parquet(trades_path)
+    _check_ascii_columns(fold.trades, f"folds/{fold_dir.name}/trades")
+    _check_column_set(fold.trades, FOLD_FILE_CONTRACT_COLS["trades"],
+                      f"folds/{fold_dir.name}/trades")
+    _check_trades(fold.trades, f"folds/{fold_dir.name}/trades")
+    for name in ("daily", "attribution", "holdings_snapshot", "topk_detail"):
+        p = fold_dir / f"{name}.parquet"
+        if p.exists():
+            df = pd.read_parquet(p)
+            _check_ascii_columns(df, f"folds/{fold_dir.name}/{name}")
+            _check_column_set(df, FOLD_FILE_CONTRACT_COLS[name], f"folds/{fold_dir.name}/{name}")
+            setattr(fold, name, df)
+    meta_file = fold_dir / "_meta.json"
+    if meta_file.exists():
+        fold.meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    return fold
+
+
 def load_runs_batch(batch_dir: Path) -> RunsBatch:
     """读入一个 runs 批次（契约 schema），并做契约 §9 读取不变量硬校验。"""
     batch_dir = Path(batch_dir)
@@ -245,34 +277,9 @@ def load_runs_batch(batch_dir: Path) -> RunsBatch:
     if not folds_dir.exists():
         raise FileNotFoundError(f"{batch_dir} 缺 folds/ 目录（trades 契约三态=必须报错）")
     for fold_dir in sorted(folds_dir.iterdir()):
-        if not fold_dir.is_dir() or not fold_dir.name.startswith("split"):
-            continue
-        try:
-            split_idx = int(fold_dir.name.replace("split", ""))
-        except ValueError:
-            continue
-        fold = RunsFold(split_index=split_idx)
-        trades_path = fold_dir / "trades.parquet"
-        if not trades_path.exists():
-            raise FileNotFoundError(
-                f"{fold_dir} 缺 trades.parquet（契约三态=必须报错）"
-            )
-        fold.trades = pd.read_parquet(trades_path)
-        _check_ascii_columns(fold.trades, f"folds/{fold_dir.name}/trades")
-        _check_column_set(fold.trades, FOLD_FILE_CONTRACT_COLS["trades"],
-                          f"folds/{fold_dir.name}/trades")
-        _check_trades(fold.trades, f"folds/{fold_dir.name}/trades")
-        for name in ("daily", "attribution", "holdings_snapshot", "topk_detail"):
-            p = fold_dir / f"{name}.parquet"
-            if p.exists():
-                df = pd.read_parquet(p)
-                _check_ascii_columns(df, f"folds/{fold_dir.name}/{name}")
-                _check_column_set(df, FOLD_FILE_CONTRACT_COLS[name], f"folds/{fold_dir.name}/{name}")
-                setattr(fold, name, df)
-        meta_file = fold_dir / "_meta.json"
-        if meta_file.exists():
-            fold.meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        folds[split_idx] = fold
+        fold = _load_fold_dir(fold_dir)
+        if fold is not None:
+            folds[fold.split_index] = fold
 
     # 折集合一致（summary / chain_nav / folds 目录三方）
     summary_splits = set(summary["split_index"].astype(int).tolist())

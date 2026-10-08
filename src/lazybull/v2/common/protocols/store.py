@@ -5,7 +5,8 @@
 （幂等 / 防冲突 / 副作用 / 失败语义，对应 §8 行为语义矩阵 R4-M8：
 幂等 = 重复执行无害且成功；防冲突 = 重复执行校验一致性、不一致显式报错）。
 
-本文件只承载 §1 数据面协议；signal / core / hosts / evidence 协议占位见文末 TODO。
+本文件只承载 §1 数据面协议；§2 signal.py / §3 core.py / §4 hosts.py 已随
+P2a T2 落位；evidence.py（§5）不在 P2a 范围，随证据层扩展补齐。
 """
 
 from __future__ import annotations
@@ -150,8 +151,3 @@ class FeatureBuilder(Protocol):
         副作用：批量写分区
         """
         ...
-
-
-# TODO(后续单元)：signal.py（Signal / DecisionMaker 等 §2~§3 协议）、
-# core.py（Executor / Ledger / PortfolioMerger §3~§4）、hosts.py（§5）、
-# evidence.py（HypothesisLedger / RegimeResampler §6）协议定义，本单元不实现。

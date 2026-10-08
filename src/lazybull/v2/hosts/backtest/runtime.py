@@ -1,0 +1,143 @@
+"""回测运行时共享工具（P2a-T7 迁移复制件，行为冻结）。
+
+与旧模块 ``common/backtest_runtime.py`` 双源并存至 v2 切换；差异仅限
+import 改指：
+
+- ``BacktestEngineML`` → ``src.lazybull.v2.core.execution.ml_signal_feed``（T5 组装件）；
+- ``CostModel`` → ``src.lazybull.v2.common.cost``（T1 复制件）；
+- ``MLSignal``（类型标注）→ ``src.lazybull.v2.core.signal.ml_signal``（T6 复制件）；
+- ``create_signal`` → ``src.lazybull.v2.core.signal.factory``（T6 复制件）；
+- ``TradingConfig`` → ``src.lazybull.v2.common.trading_config``（T1 复制件）；
+- ``get_stock_selection_models_root`` → 旧 ``src.lazybull.common.config``
+  （只读过渡依赖，config 为全局单例不复制，去除节点 P4 展平/切换评审，
+  同 T1 cost.py 范式）；
+- ``BasicUniverse`` → 旧 ``src.lazybull.universe``（永久沿用，§3.5 登记表）。
+
+将 walk_forward / run_ml_backtest 的策略配置映射、信号创建、
+BacktestEngineML 构造和滚动质量状态恢复统一到一个模块，
+避免多个脚本各自维护一套参数透传逻辑。
+"""
+
+import re
+from typing import Optional
+
+import pandas as pd
+
+# 只读过渡依赖（T0 规划 §3.5 / V2R-02）：config 为全局单例，不复制，
+# 只读引用旧模块保持配置状态天然一致；去除节点 = P4 展平/切换评审。
+from src.lazybull.common.config import get_stock_selection_models_root
+
+# 只读永久沿用（§3.5 登记表）：选股域与 universe 不迁移。
+from src.lazybull.universe import BasicUniverse
+from src.lazybull.v2.common.cost import CostModel
+from src.lazybull.v2.common.trading_config import TradingConfig
+from src.lazybull.v2.core.execution.ml_signal_feed import BacktestEngineML
+from src.lazybull.v2.core.signal.factory import create_signal
+from src.lazybull.v2.core.signal.ml_signal import MLSignal
+
+
+def infer_rebalance_freq_from_label(label_column: Optional[str], default: int = 20) -> int:
+    """根据标签列名推断调仓频率。"""
+    if not label_column:
+        return default
+    match = re.search(r"(\d+)", label_column)
+    if match:
+        return int(match.group(1))
+    return default
+
+
+def build_walk_forward_trading_config(args, *, model_version: int) -> TradingConfig:
+    """将 walk_forward 参数映射为统一 TradingConfig。"""
+    rebalance_freq = getattr(args, "bt_rebalance_freq", None)
+    if rebalance_freq is None:
+        rebalance_freq = infer_rebalance_freq_from_label(getattr(args, "label_column", None))
+
+    return TradingConfig(
+        model_version=model_version,
+        top_n=getattr(args, "bt_top_n", 30),
+        rebalance_freq=rebalance_freq,
+        stagger_tranches=getattr(args, "stagger_tranches", 1),
+        max_per_industry=getattr(args, "bt_max_per_industry", None),
+        max_weight_per_stock=getattr(args, "bt_max_weight_per_stock", None),
+        enable_early_rebalance_on_empty=getattr(args, "enable_early_rebalance_on_empty", True),
+        exclude_st=getattr(args, "bt_exclude_st", True),
+        min_list_days=getattr(args, "bt_min_list_days", 365),
+        stop_loss_enabled=getattr(args, "bt_stop_loss_enabled", False),
+        stop_loss_drawdown_pct=getattr(args, "bt_stop_loss_drawdown_pct", 30.0),
+        stop_loss_consecutive_limit_down=getattr(args, "bt_stop_loss_consecutive_limit_down", 2),
+        position_sizing=getattr(args, "position_sizing", "equal"),
+        kelly_vol_window=getattr(args, "kelly_vol_window", 60),
+        kelly_max_leverage=getattr(args, "kelly_max_leverage", 0.25),
+        min_buy_value_ratio=getattr(args, "min_buy_value_ratio", 0.2),
+        initial_capital=getattr(args, "bt_initial_capital", 1000000.0),
+        sell_price=getattr(args, "bt_sell_timing", "open"),
+    )
+
+
+def create_or_reuse_signal(
+    trading_config: TradingConfig,
+    *,
+    data_root: Optional[str] = None,
+    persistent_signal: Optional[MLSignal] = None,
+    verbose: bool = False,
+):
+    """创建或复用共享的 MLSignal。"""
+    models_dir = get_stock_selection_models_root(data_root)
+
+    if persistent_signal is not None:
+        persistent_signal.top_n = trading_config.top_n
+        if trading_config.model_version_b is not None and hasattr(
+            persistent_signal, "update_versions"
+        ):
+            persistent_signal.update_versions(
+                trading_config.model_version,
+                trading_config.model_version_b,
+            )
+        else:
+            persistent_signal.update_model_version(trading_config.model_version)
+        return persistent_signal
+
+    return create_signal(trading_config, models_dir=models_dir, verbose=verbose)
+
+
+def create_backtest_engine_from_config(
+    *,
+    trading_config: TradingConfig,
+    universe: BasicUniverse,
+    signal,
+    features_by_date: dict,
+    stock_basic: pd.DataFrame,
+    data_storage,
+    initial_capital: Optional[float] = None,
+    sell_timing: Optional[str] = None,
+    verbose: bool = False,
+    completion_window_days: int = 5,
+    enable_pending_order: bool = True,
+    cost_model: Optional[CostModel] = None,
+) -> BacktestEngineML:
+    """根据统一 TradingConfig 构造 BacktestEngineML。"""
+    return BacktestEngineML(
+        universe=universe,
+        signal=signal,
+        features_by_date=features_by_date,
+        initial_capital=(
+            trading_config.initial_capital if initial_capital is None else initial_capital
+        ),
+        cost_model=cost_model or CostModel(),
+        rebalance_freq=trading_config.rebalance_freq,
+        stagger_tranches=trading_config.stagger_tranches,
+        stop_loss_config=trading_config.create_stop_loss_config(),
+        sell_timing=sell_timing or trading_config.sell_price,
+        enable_pending_order=enable_pending_order,
+        completion_window_days=completion_window_days,
+        verbose=verbose,
+        data_storage=data_storage,
+        max_weight_per_stock=trading_config.max_weight_per_stock,
+        max_per_industry=trading_config.max_per_industry,
+        stock_basic=stock_basic,
+        position_sizing=trading_config.position_sizing,
+        kelly_vol_window=trading_config.kelly_vol_window,
+        kelly_max_leverage=trading_config.kelly_max_leverage,
+        min_buy_value_ratio=trading_config.min_buy_value_ratio,
+        enable_early_rebalance_on_empty=trading_config.enable_early_rebalance_on_empty,
+    )

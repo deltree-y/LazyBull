@@ -314,7 +314,7 @@ def _convert_fold(
     )
     # lot_id 重建（契约 §5 例外条款）：FIFO + 卖出行自带 buy_date 交叉校验
     trades_df = pd.read_parquet(fold_dir / "trades.parquet")
-    trades_df, fifo_violations = _rebuild_lot_id(trades_df)
+    trades_df, fifo_violations = rebuild_lot_id(trades_df)
     _write_parquet(trades_df, fold_dir / "trades.parquet")
     fold_meta["trades.lot_reconstructed"] = True
     if fifo_violations:
@@ -324,7 +324,9 @@ def _convert_fold(
             f"不一致 {fifo_violations} 行（引擎非 FIFO 卖出），归属按 FIFO 口径"
         )
     # attribution（契约 §6）
-    attr_files = sorted(source_dir.glob(f"walk_forward_execution_attribution_*_split{split_id}.csv"))
+    attr_files = sorted(
+        source_dir.glob(f"walk_forward_execution_attribution_*_split{split_id}.csv")
+    )
     if attr_files:
         _convert_one(
             attr_files[-1], fold_dir / "attribution.parquet", _ATTR_RENAME,
@@ -463,7 +465,7 @@ def _read_policy_lambda(
 # ---- lot_id / daily 重建（契约 §5 例外条款 / §9 三态） ----
 
 
-def _consume_lots_fifo(
+def consume_lots_fifo(
     lots: List[Dict[str, object]], shares: float, sell_buy_date: object
 ) -> Tuple[List[str], bool]:
     """FIFO 消耗 lot 栈，返回 (消耗的 lot_id 列表, 是否与卖出行 buy_date 不一致)。"""
@@ -489,7 +491,7 @@ def _consume_lots_fifo(
     return consumed, violation
 
 
-def _rebuild_lot_id(trades: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+def rebuild_lot_id(trades: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     """按 FIFO 从 trades 重建 lot_id（v2 新增列，契约 §5），并交叉校验卖出行 buy_date。
 
     规则：每次 buy 开新 lot（lot_id = buy_date_序号）；sell 按最早买入日优先消耗；
@@ -509,13 +511,21 @@ def _rebuild_lot_id(trades: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
         for idx, row in grp.sort_values("trade_date").iterrows():
             if row["action"] == "buy":
                 lot_id = f"{row.get('buy_date', row['trade_date'])}_{len(lots)}"
-                lots.append({"lot_id": lot_id, "shares": row["shares"], "buy_date": row.get("buy_date")})
+                lots.append(
+                    {"lot_id": lot_id, "shares": row["shares"], "buy_date": row.get("buy_date")}
+                )
                 trades.at[idx, "lot_id"] = lot_id
             elif row["action"] == "sell":
-                consumed, violation = _consume_lots_fifo(lots, row["shares"], row.get("buy_date"))
+                consumed, violation = consume_lots_fifo(lots, row["shares"], row.get("buy_date"))
                 violations += int(violation)
                 trades.at[idx, "lot_id"] = "|".join(consumed) if consumed else ""
     return trades, violations
+
+
+# 向后兼容别名（P2a-T7：lot_id 重建提为公开名供 hosts/backtest/runs_writer 复用；
+# 旧私有名保留为同一函数对象别名，零行为变化）
+_consume_lots_fifo = consume_lots_fifo
+_rebuild_lot_id = rebuild_lot_id
 
 
 def _rebuild_daily(
@@ -557,7 +567,9 @@ def _rebuild_daily(
     daily["nav"] = daily["total_value"] / daily["total_value"].iloc[0]
     daily["daily_return"] = daily["nav"].pct_change().fillna(0.0)
     if lambda_series:
-        daily["exposure_lambda"] = _norm_date_key(daily["trade_date"]).map(lambda_series).fillna(1.0)
+        daily["exposure_lambda"] = (
+            _norm_date_key(daily["trade_date"]).map(lambda_series).fillna(1.0)
+        )
     else:
         daily["exposure_lambda"] = 1.0  # 无政策层台账恒 1.0（契约 §8）
     return daily

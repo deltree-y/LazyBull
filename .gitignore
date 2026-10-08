@@ -66,6 +66,8 @@ copilot-instructions.md
 
 # Data files (keep raw/clean/features structure but ignore contents)
 data/backup/*
+data/runs/*
+!data/runs/.gitkeep
 data/raw/*
 !data/raw/.gitkeep
 data/clean/*

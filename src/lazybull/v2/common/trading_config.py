@@ -1,0 +1,590 @@
+"""统一策略参数配置模块
+
+将 paper_trade.py / run_ml_backtest.py / bot_service.py 中重复定义的
+策略参数（止损、组合约束、模型选择等）抽取为公共 dataclass + argparse 注册函数，
+消除三套脚本之间的参数定义不一致。
+
+v2 迁移复制件（P2a-T1，行为冻结）：与旧模块 ``common/trading_config.py``
+双源并存至 v2 切换；差异 = 两处 import 改指（见下注记）+ add_trading_args
+按 §4.4「迁移即重构」提取式拆分（参数注册语义不变，见文件尾部注记）。
+"""
+
+from dataclasses import asdict, dataclass
+from typing import Optional
+
+# v2 内部依赖：StopLossConfig 已随 T1 复制到 v2/common/rules/，改指 v2 复制件。
+from src.lazybull.v2.common.rules.stop_loss import StopLossConfig
+
+# ─────────────────── TradingConfig 校验器（§4.4「迁移即重构」提取，P2a-T1） ──
+# 旧 __post_init__ 单函数圈复杂度 16 > 硬上限 12（旧路径已在基线，复制到新路径 =
+# 新增未豁免硬超限，禁止新增基线键），按校验段原顺序提取为模块级纯函数；
+# 判定条件与错误消息逐字保留（新旧异常类型+消息比对由等价测试锁定）。
+
+
+def _validate_top_n(top_n: int) -> None:
+    if not isinstance(top_n, int):
+        raise TypeError(f"top_n 必须为整数类型，当前类型: {type(top_n).__name__}")
+    if top_n < 1:
+        raise ValueError(f"top_n 必须 >= 1，当前值: {top_n}")
+
+
+def _validate_rebalance_freq(rebalance_freq: Optional[int]) -> None:
+    if rebalance_freq is not None:
+        if not isinstance(rebalance_freq, int):
+            raise TypeError(
+                "rebalance_freq 必须为整数类型或 None，"
+                f"当前类型: {type(rebalance_freq).__name__}"
+            )
+        if rebalance_freq < 1:
+            raise ValueError(f"rebalance_freq 必须 >= 1，当前值: {rebalance_freq}")
+
+
+def _validate_stagger_tranches(
+    stagger_tranches: int, top_n: int, rebalance_freq: Optional[int]
+) -> None:
+    if not isinstance(stagger_tranches, int):
+        raise TypeError(
+            "stagger_tranches 必须为整数类型，" f"当前类型: {type(stagger_tranches).__name__}"
+        )
+    if stagger_tranches < 1:
+        raise ValueError(f"stagger_tranches 必须 >= 1，当前值: {stagger_tranches}")
+    if stagger_tranches > top_n:
+        raise ValueError(
+            "stagger_tranches 不能超过 top_n，" f"当前值: {stagger_tranches} > {top_n}"
+        )
+    if stagger_tranches > 1 and rebalance_freq is None:
+        raise ValueError("启用分批调仓时 rebalance_freq 不能为 None")
+    if rebalance_freq is not None and stagger_tranches > rebalance_freq:
+        raise ValueError(
+            "stagger_tranches 不能超过 rebalance_freq，"
+            f"当前值: {stagger_tranches} > {rebalance_freq}"
+        )
+
+
+def _validate_max_weight_per_stock(max_weight_per_stock: Optional[float], top_n: int) -> None:
+    if max_weight_per_stock is not None:
+        if not 0 < max_weight_per_stock <= 1:
+            raise ValueError(
+                "max_weight_per_stock 必须在 (0, 1] 范围内，" f"当前值: {max_weight_per_stock}"
+            )
+        if max_weight_per_stock * top_n < 1 - 1e-12:
+            raise ValueError(
+                "max_weight_per_stock 与 top_n 无法构成满仓组合，"
+                f"需满足 max_weight_per_stock * top_n >= 1，当前值: "
+                f"{max_weight_per_stock} * {top_n}"
+            )
+
+
+def _normalize_downside_penalty(downside_penalty: Optional[float]) -> float:
+    if downside_penalty is None:
+        downside_penalty = 0.0
+    if downside_penalty < 0 or downside_penalty >= 1:
+        raise ValueError(f"downside_penalty 必须落于 [0, 1)，当前值: {downside_penalty}")
+    return downside_penalty
+
+
+@dataclass
+class TradingConfig:
+    """统一策略参数"""
+
+    # ── 模型 ──
+    model_version: Optional[int] = None
+    model_version_b: Optional[int] = None
+    ensemble_weight_a: float = 0.5
+
+    # ── 组合 ──
+    top_n: int = 30
+
+    rebalance_freq: Optional[int] = 20
+    stagger_tranches: int = 1
+    max_per_industry: Optional[int] = None
+    max_weight_per_stock: Optional[float] = None
+    enable_early_rebalance_on_empty: bool = True  # 空仓时提前触发新一轮调仓
+
+    # ── 股票池 ──
+    exclude_st: bool = True
+    min_list_days: int = 365
+
+    # ── 止损 ──
+    stop_loss_enabled: bool = False
+    stop_loss_drawdown_pct: float = 30.0
+    stop_loss_consecutive_limit_down: int = 2
+
+    # ── 仓位管理模式 ──
+    position_sizing: str = "equal"  # equal|score|kelly|half_kelly
+    kelly_vol_window: int = 60  # Kelly 波动率估计窗口（交易日）
+    kelly_max_leverage: float = 0.25  # 单只股票 Kelly 仓位上限（占总资产）
+
+    # ── 信号层下行风险惩罚（A5；排序后处理，不改训练列集） ──
+    downside_penalty: float = 0.0
+    downside_penalty_column: str = "downside_vol_20"
+
+    # ── 其他（仅 paper_trade 使用，backtest 不需要） ──
+    buy_price: str = "close"
+    sell_price: str = "open"
+    initial_capital: float = 500000.0
+    min_buy_value_ratio: float = 0.2  # 买入后最小持仓市值占“平均仓位市值”比例（0=关闭）
+    horizon: int = 5
+    universe: str = "mainboard"
+
+    # ─────────────────── 工厂方法 ───────────────────
+
+    def __post_init__(self) -> None:
+        """校验会影响排期唯一性的组合参数。"""
+        _validate_top_n(self.top_n)
+        _validate_rebalance_freq(self.rebalance_freq)
+        _validate_stagger_tranches(self.stagger_tranches, self.top_n, self.rebalance_freq)
+        _validate_max_weight_per_stock(self.max_weight_per_stock, self.top_n)
+        self.downside_penalty = _normalize_downside_penalty(self.downside_penalty)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TradingConfig":
+        """从字典（如 PaperStorage.load_config()）构建 TradingConfig。
+
+        忽略字典中不属于 TradingConfig 字段的键，
+        对缺失的键使用 dataclass 默认值。
+        """
+        valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
+        normalized = dict(d)
+        if "position_sizing" not in normalized and "weight_method" in normalized:
+            normalized["position_sizing"] = normalized["weight_method"]
+        filtered = {k: v for k, v in normalized.items() if k in valid_keys}
+        return cls(**filtered)
+
+    @classmethod
+    def from_args(cls, args) -> "TradingConfig":
+        """从 argparse Namespace 构建 TradingConfig。
+
+        只取 TradingConfig 中定义的字段，忽略其余 CLI 参数。
+        """
+        valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
+        args_dict = vars(args)
+
+        d = {k: v for k, v in args_dict.items() if k in valid_keys}
+
+        return cls(**d)
+
+    def to_dict(self) -> dict:
+        """转为普通字典（用于持久化）"""
+        return asdict(self)
+
+    # ─────────────────── 配置对象构建 ───────────────────
+
+    def create_stop_loss_config(self) -> Optional[StopLossConfig]:
+        """构建 StopLossConfig（不启用时返回 None）"""
+        if not self.stop_loss_enabled:
+            return None
+        return StopLossConfig(
+            enabled=True,
+            drawdown_pct=self.stop_loss_drawdown_pct,
+            consecutive_limit_down_days=self.stop_loss_consecutive_limit_down,
+        )
+
+
+# ─────────────────── argparse 注册函数 ───────────────────
+#
+# §4.4「迁移即重构」提取式拆分（P2a-T1，D8）：旧 add_trading_args 单体 362 行
+# 超函数行数硬上限 150（旧路径已在复杂度基线，复制到新路径 = 新增未豁免硬超限，
+# 禁止新增基线键），按既有注册分节原顺序拆为分节 helper，add_trading_args 只保留
+# 编排；注册参数 / 顺序 / 默认值 / help 文本全部不变（新旧 parsed namespace +
+# format_help 比对由 tests/test_v2_p2a_t1_equivalence.py 锁定）。
+
+
+def add_trading_args(
+    parser, *, include_price: bool = False, include_exposure: bool = False
+) -> None:
+    """向 argparse parser 注册公共策略参数。
+
+    Args:
+        parser: argparse.ArgumentParser 或子 parser
+        include_price: 是否注册 buy_price / sell_price / initial_capital / horizon / universe
+                       （paper_trade 的 config 子命令需要，backtest 一般不需要）
+        include_exposure: 是否注册暴露政策参数（纸面 config 用；默认关，不影响既有调用方）
+    """
+    _add_model_args(parser)
+    _add_portfolio_args(parser)
+    _add_universe_args(parser)
+    _add_stop_loss_args(parser)
+    _add_market_regime_args(parser)
+    _add_industry_momentum_args(parser)
+    _add_position_sizing_args(parser)
+    _add_downside_penalty_args(parser)
+    _add_early_rebalance_args(parser)
+    if include_price:
+        _add_price_args(parser)
+    if include_exposure:
+        _add_exposure_args(parser)
+
+
+def _add_model_args(parser) -> None:
+    # ── 模型 ──
+    parser.add_argument(
+        "--model-version", type=int, default=None, help="ML模型版本号（可选，默认最新版本）"
+    )
+    parser.add_argument(
+        "--model-version-b",
+        type=int,
+        default=None,
+        help="第二个模型版本号（用于集成），指定后自动启用双模型 Ensemble",
+    )
+    parser.add_argument(
+        "--ensemble-weight-a",
+        type=float,
+        default=0.5,
+        help="集成时模型A的排名权重，模型B权重为 1 - 该值，默认 0.5",
+    )
+
+
+def _add_portfolio_args(parser) -> None:
+    # ── 组合 ──
+    parser.add_argument("--top-n", type=int, default=30, help="持仓股票数（默认：30）")
+    # ── 市场自适应 Top-N ──
+    parser.add_argument(
+        "--market-adaptive-topn-enabled",
+        action="store_true",
+        default=False,
+        help="启用市场状态自适应选股数量：趋势市集中、震荡市分散",
+    )
+    parser.add_argument(
+        "--market-adaptive-topn-bull-factor",
+        type=float,
+        default=0.7,
+        help="趋势向上时集中系数（默认：0.7，即top_n×0.7）",
+    )
+    parser.add_argument(
+        "--market-adaptive-topn-bear-factor",
+        type=float,
+        default=1.5,
+        help="趋势向下/震荡时分散系数（默认：1.5，即top_n×1.5）",
+    )
+
+    parser.add_argument(
+        "--rebalance-freq", type=int, default=20, help="调仓频率（交易日数），默认20"
+    )
+    parser.add_argument(
+        "--stagger-tranches",
+        type=int,
+        default=1,
+        help="分批调仓批次数（默认1=不分批）。设为K时资金分K份错开调仓，降低时点风险",
+    )
+    parser.add_argument(
+        "--max-per-industry", type=int, default=None, help="单行业最大持仓数量（默认：不限制）"
+    )
+    parser.add_argument(
+        "--max-weight-per-stock",
+        type=float,
+        default=None,
+        help="单股最大权重，如 0.05 表示 5%%（默认：不限制）",
+    )
+
+
+def _add_universe_args(parser) -> None:
+    # ── 股票池 ──
+    parser.add_argument(
+        "--exclude-st", action="store_true", default=True, help="排除ST股票（默认：启用）"
+    )
+    parser.add_argument(
+        "--no-exclude-st", action="store_false", dest="exclude_st", help="不排除ST股票"
+    )
+    parser.add_argument("--min-list-days", type=int, default=365, help="最少上市天数（默认：365）")
+
+
+def _add_stop_loss_args(parser) -> None:
+    # ── 止损 ──
+    parser.add_argument(
+        "--stop-loss-enabled", action="store_true", default=False, help="启用止损功能"
+    )
+    parser.add_argument(
+        "--stop-loss-drawdown-pct", type=float, default=30.0, help="回撤止损百分比（默认：30.0）"
+    )
+    parser.add_argument(
+        "--stop-loss-trailing-enabled", action="store_true", default=False, help="启用移动止损"
+    )
+    parser.add_argument(
+        "--stop-loss-trailing-pct", type=float, default=15.0, help="移动止损百分比（默认：15.0）"
+    )
+    parser.add_argument(
+        "--stop-loss-consecutive-limit-down",
+        type=int,
+        default=2,
+        help="连续跌停触发天数（默认：2）",
+    )
+
+
+def _add_market_regime_args(parser) -> None:
+    # ── 市场择时仓位管理 ──
+    parser.add_argument(
+        "--market-regime-enabled",
+        action="store_true",
+        default=False,
+        help="启用市场择时仓位管理",
+    )
+    parser.add_argument(
+        "--market-regime-mode",
+        type=str,
+        default="vol_target",
+        choices=["binary", "vol_target", "trend", "combined"],
+        help="市场择时模式（默认：vol_target）",
+    )
+    parser.add_argument(
+        "--market-regime-bear-threshold",
+        type=float,
+        default=-0.03,
+        help="binary模式：mkt_ret_avg_20低于此值判定熊市（默认：-0.03）",
+    )
+    parser.add_argument(
+        "--market-regime-bear-exposure",
+        type=float,
+        default=0.3,
+        help="binary模式：熊市仓位系数（默认：0.3）",
+    )
+    parser.add_argument(
+        "--market-regime-vol-target",
+        type=float,
+        default=0.20,
+        help="vol_target/combined模式：年化波动率目标（默认：0.20）",
+    )
+    parser.add_argument(
+        "--market-regime-trend-threshold",
+        type=float,
+        default=1.0,
+        help="trend/combined模式：mkt_ma_trend降仓阈值（默认：1.0）",
+    )
+    parser.add_argument(
+        "--market-regime-min-exposure",
+        type=float,
+        default=0.2,
+        help="非binary模式最低仓位下限（默认：0.2）",
+    )
+    parser.add_argument(
+        "--market-regime-combine-method",
+        type=str,
+        default="min",
+        choices=["min", "multiply"],
+        help="combined模式组合方式（默认：min）",
+    )
+    _add_market_regime_guard_args(parser)
+
+
+def _add_market_regime_guard_args(parser) -> None:
+    parser.add_argument(
+        "--market-regime-trend-guard",
+        action="store_true",
+        default=True,
+        dest="market_regime_trend_guard",
+        help="combined模式：上行趋势跳过vol降仓（默认：启用）",
+    )
+    parser.add_argument(
+        "--no-market-regime-trend-guard",
+        action="store_false",
+        dest="market_regime_trend_guard",
+        help="combined模式：关闭趋势保护",
+    )
+    parser.add_argument(
+        "--market-regime-drawdown-guard",
+        action="store_true",
+        default=False,
+        dest="market_regime_drawdown_guard",
+        help="回撤保护：已大幅下跌时停止降仓",
+    )
+    parser.add_argument(
+        "--no-market-regime-drawdown-guard",
+        action="store_false",
+        dest="market_regime_drawdown_guard",
+        help="关闭回撤保护",
+    )
+    parser.add_argument(
+        "--market-regime-drawdown-threshold",
+        type=float,
+        default=-0.08,
+        help="回撤保护阈值（默认：-0.08）",
+    )
+
+
+def _add_industry_momentum_args(parser) -> None:
+    # ── 行业动量过滤 & 行业轮动加权 ──
+    parser.add_argument(
+        "--industry-momentum-filter",
+        action="store_true",
+        default=False,
+        help="启用行业动量过滤：剔除弱势行业股票",
+    )
+    parser.add_argument(
+        "--industry-momentum-bottom-pct",
+        type=float,
+        default=0.5,
+        help="剔除行业动量排名后X%%的行业（默认：0.5）",
+    )
+    parser.add_argument(
+        "--industry-rotation-enhanced",
+        action="store_true",
+        default=False,
+        help="启用行业轮动加权：按行业动量排名对候选分数做乘性调整（强势加分、弱势扣分）",
+    )
+    parser.add_argument(
+        "--industry-rotation-alpha",
+        type=float,
+        default=0.3,
+        help="行业轮动加权强度（0=不调整, 1=强调整），默认 0.3",
+    )
+
+
+def _add_position_sizing_args(parser) -> None:
+    # ── 仓位管理模式 ──
+    parser.add_argument(
+        "--position-sizing",
+        type=str,
+        default="equal",
+        choices=["equal", "score", "kelly", "half_kelly"],
+        help="仓位管理模式: equal=等权, score=按分数, kelly=Kelly最优, half_kelly=半Kelly(更保守)",
+    )
+    parser.add_argument(
+        "--kelly-vol-window",
+        type=int,
+        default=60,
+        help="Kelly 波动率估计窗口（交易日），默认 60",
+    )
+    parser.add_argument(
+        "--kelly-max-leverage",
+        type=float,
+        default=0.25,
+        help="Kelly 单只股票仓位上限（占总资产），默认 0.25",
+    )
+
+
+def _add_downside_penalty_args(parser) -> None:
+    # ── 信号层下行风险惩罚（A5；排序后处理，不改训练列集） ──
+    # 只读过渡依赖（T0 规划 §3.5 补登记，T1 实测）：A5 已裁决不迁（D6），
+    # 此处仅借用冻结网格/列白名单常量保留参数签名（B3），λ>0 的 fail-fast 由
+    # v2 信号侧（T6）兜底；去除节点 = 退役组件随切换清理。
+    from src.lazybull.signals.downside_penalty import (
+        DOWNSIDE_PENALTY_COLUMNS,
+        DOWNSIDE_PENALTY_GRID,
+    )
+
+    parser.add_argument(
+        "--downside-penalty",
+        type=float,
+        default=0.0,
+        choices=DOWNSIDE_PENALTY_GRID,
+        help=(
+            "下行风险惩罚强度 λ（冻结网格 0/0.25/0.5；0=关闭且与基线逐位一致）："
+            "对候选排序做 score 减 lambda*风险分位 后处理，不改模型列集；"
+            "预登记见 docs/plans/stock_selection/downside_penalty_prereg.md"
+        ),
+    )
+    parser.add_argument(
+        "--downside-penalty-column",
+        choices=tuple(DOWNSIDE_PENALTY_COLUMNS),
+        default="downside_vol_20",
+        help=("惩罚所用风险列：downside_vol_20=主臂；cvar_95_20=稳健性对照（不得用于宣布通过）"),
+    )
+
+
+def _add_early_rebalance_args(parser) -> None:
+    # ── 空仓提前调仓 ──
+    parser.add_argument(
+        "--no-early-rebalance-on-empty",
+        dest="enable_early_rebalance_on_empty",
+        action="store_false",
+        default=True,
+        help="禁用空仓/持有期拖尾时的提前调仓（默认启用）",
+    )
+
+
+def _add_price_args(parser) -> None:
+    # ── paper_trade 专用 ──
+    parser.add_argument(
+        "--buy-price",
+        choices=["open", "close"],
+        default="close",
+        help="买入价格类型（默认：close）",
+    )
+    parser.add_argument(
+        "--sell-price",
+        choices=["open", "close"],
+        default="open",
+        help="卖出价格类型（默认：open）",
+    )
+    parser.add_argument(
+        "--initial-capital", type=float, default=500000.0, help="初始资金（默认：500000）"
+    )
+    parser.add_argument(
+        "--min-buy-value-ratio",
+        type=float,
+        default=0.2,
+        help="买入后最小持仓市值占平均仓位市值比例（默认：0.2，设为0可关闭）",
+    )
+    parser.add_argument("--horizon", type=int, default=5, help="特征构建的预测周期（天数），默认5")
+    parser.add_argument(
+        "--universe",
+        choices=["mainboard", "all"],
+        default="mainboard",
+        help="股票池类型（默认：mainboard）",
+    )
+
+
+def _add_exposure_args(parser) -> None:
+    # ── 暴露政策（terminal_loss P2-5 纸面接线；默认关，需要显式启用）──
+    parser.add_argument(
+        "--exposure-policy",
+        type=str,
+        default=None,
+        help=(
+            "暴露政策策略字符串（如 arm=combined,mode=rolling,window=250,"
+            "regime_q=0.75,score_q=0.5,lambda=0.5）；默认 None=关闭；"
+            "启用时必须同时给出 --policy-model-root 与 --policy-arm-suffix"
+        ),
+    )
+    parser.add_argument(
+        "--policy-model-root",
+        type=str,
+        default=None,
+        help="终损折模型根目录（如 data/walk_forward/terminal_risk_wf_oos14）",
+    )
+    parser.add_argument(
+        "--policy-arm-suffix",
+        type=str,
+        default=None,
+        help="终损折目录后缀（如 _v6m_fscore）",
+    )
+    parser.add_argument(
+        "--policy-fold",
+        type=str,
+        default=None,
+        help=(
+            "固定使用指定折（如 OOS13_202506）；默认空=自动取最新可用折"
+            "（实盘模式：训练/早停结束即可持续使用，ES 窗口之外也判定）"
+        ),
+    )
+    parser.add_argument(
+        "--policy-warmup-file",
+        type=str,
+        default=None,
+        help="预热面板文件路径；默认空=<policy_model_root>/paper_warmup/state.json",
+    )
+    parser.add_argument(
+        "--policy-coverage-start",
+        type=str,
+        default=None,
+        help="生效起点 YYYYMMDD（此前只累积阈值历史、不动作；默认全区间）",
+    )
+    parser.add_argument(
+        "--exposure-replenish",
+        action="store_true",
+        default=None,
+        dest="exposure_replenish",
+        help="启用对称回补（仅在 exposure_policy 启用时生效）",
+    )
+    parser.add_argument(
+        "--no-exposure-replenish",
+        action="store_false",
+        dest="exposure_replenish",
+        help="关闭对称回补（写回配置；无政策源时不允许置真）",
+    )
+    parser.add_argument(
+        "--exposure-trim-tolerance",
+        type=float,
+        default=None,
+        help="减仓/回补共用容差（组合总值比例，默认 0.03）",
+    )
