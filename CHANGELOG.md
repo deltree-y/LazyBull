@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.205.1] - 2026-10-08
+
+### Changed
+
+- **检视评审契约扩展（4 条）+ `docs/review/` 目录重组（52 份按阶段迁移）**（项目共识，2026-10-08）：
+  - **契约扩展**（`CLAUDE.md` §5「检视意见文档契约」「文档归档规范」、`.github/copilot-instructions.md`
+    §1.5/§1.6、`AGENTS.md` 同步）：① **评审独立性**——评审专家不得阅读其他评审专家的意见
+    （含同批次、同对象的他评文档），必须独立思考、独立形成意见；② **落档位置与命名**——一律落
+    `docs/review/` 下阶段 / 主题子目录，**根下禁止散文件**，文件名必须含「评审对象 + 评审专家名
+    （或专家独有 ID）」，避免不同专家的评审输出重名；③ **作者逐条甄别**——评审意见不必然正确，
+    作者必须逐条分析后决定是否接纳，**不接纳（或部分不接纳）必须给出详细明确的原因说明**
+    （含证据 / 事实依据），禁止默认全盘接受或默默忽略；④ **引用同步范围明确**——移动 / 重命名
+    文档的引用同步覆盖全部文档——**含 `docs/review/**` 既有评审正文内的路径字符同步修订**
+    （append-only 的路径字符例外，不改意见内容与结论）；**仅两类历史归档不回改**（`data/reports/**`
+    快照 / `data/ledger/**` 台账，append-only）。连带：`CLAUDE.md` 头部版本补齐 v0.204.1 → v0.205.1
+    （偿还 P2a 收口 F1 登记项）。
+  - **目录重组**（52 份全部迁出根目录，按评审对象所属阶段）：`v2_p0/`（5：P0 闸门 + 方案 R1/R2 与
+    协议评审 + F7 评审与修订窗口决策）、`v2_p15/`（2：F8 = P1.5 裁决执行评审）、`v2_p1/`（4：P1 三份
+    实现评审 + M1.5 / 标签刷新立项决策）、`v2_p2a/`（37：实施规划五轮评审 + T1/T4 与 task1~7 评审 /
+    复检 + F11 / 协议 F8 / 总账评审 + 收口）、`v2_p5a1/`（2：实现评审 + 收尾检视）、`v2_p5a2/`（2：
+    F9 两轮评审）；**既有文件名保持原样**（新命名规则自本版起适用于新产出，不追溯改名）。
+  - **全仓引用同步**（终端全量扫描验证）：`CHANGELOG.md` 历史条目 / `CLAUDE.md` / `AGENTS.md` /
+    `.github/copilot-instructions.md` / `docs/contracts/**` / `docs/data/**` / `docs/reports/**` /
+    `docs/plans/**` 活文档（含 `docs/plans/v2/backup/**` 历史备份）全部更新到新路径；
+    `docs/review` 既有评审正文内 5 处路径引用一并同步修订（append-only 的路径字符例外）；
+    两类历史归档（`data/reports/**`、`data/ledger/**`）内历史引用按上条口径不回改。
+
 ## [0.205.0] - 2026-10-08
 
 ### Added
@@ -91,7 +118,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - **M1.5 + 标签刷新义务立项落档**（用户拍板 2026-10-06；决策记录
-  `docs/review/v2_m15_label_refresh_decision_20261006.md`）：
+  `docs/review/v2_p1/v2_m15_label_refresh_decision_20261006.md`）：
   - **M1.5 样本起点扩展立项**：P1 列级可用起点剖面建议（2007~2011 幸存 85.7~87.0%、
     增量 +19% > 15% 停止线）经用户裁决立项；prereg `H-M1.5-sample-start-extension`
     （主判据 = 配对制度重排 ΔMaxDD 分布，MDE 袖内净值 12pp，α=0.05，pool=1）。
@@ -190,8 +217,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **v2 P1 数据底座三评审驱动整改**（依据：`docs/review/v2_p1_impl_review_20261006.md` /
-  `v2_p1_impl_review2_20261006.md` / `v2_p1_impl_review3_20261006.md`）：
+- **v2 P1 数据底座三评审驱动整改**（依据：`docs/review/v2_p1/v2_p1_impl_review_20261006.md` /
+  `docs/review/v2_p1/v2_p1_impl_review2_20261006.md` / `docs/review/v2_p1/v2_p1_impl_review3_20261006.md`）：
   - **对账门收紧四件套**（P1-1/2/3 + R2-1）：verdict 结构项（cols_only/missing_ref_days）
     合法性判定（白名单 + 日期上界 + 键列噪声剔除）；D-04 归因收紧（①子项日期下界
     20260101，③/④子项限纯 NaN 形态 + 日期窗 [20161201, 20260702]）；D-14 专项三上限
@@ -499,7 +526,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - 版本号 0.203.4 → 0.203.5（P5a-2 三交付落地）；方案 F9 登记生效（§8-P5a-2 行标执行完毕，两轮评审收口）。
-- **F9R 评审收口**（`docs/review/v2_architecture_f9_review_20261002.md`，逐项甄别后全量处置）：
+- **F9R 评审收口**（`docs/review/v2_p5a2/v2_architecture_f9_review_20261002.md`，逐项甄别后全量处置）：
   **A 类** = 台账 `H-backfill-top_inst` 口径更正（「逐折收益改善 0/6」实为逐折 ΔMaxDD 计数
   错位——收益实为 2/6（split8 +7.87 / split12 +2.22）；符号检验 p 值改标双尾，源报告
   「单尾 p≈0.031」误标随附注明）；**B 类** = 敏感度宽度主口径写死（IQR + 最差−中位双口径并引、
@@ -507,7 +534,7 @@ All notable changes to this project will be documented in this file.
   DataStore 技术债登记）+ R-005 补录风险登记册 + README 补 P5a-2 通路；**C 类** = RNG 分节
   逐位一致登记（脚本 docstring）+ `--out-name` 后缀 strip + docstring 口径修正 +
   CLAUDE.md 头部版本补齐 + 测试名实相符改造（`_build_parser` 抽取）。
-  **第二轮**（`docs/review/v2_architecture_f9_review2_20261002.md`，F9R②-01~10）：
+  **第二轮**（`docs/review/v2_p5a2/v2_architecture_f9_review2_20261002.md`，F9R②-01~10）：
   §3.5 口径句补 min_days=252 执行细化（实测 1,462 起点）+ §3.3 立项门补判定素材与
   「不立项分支无需补立预登记」程序注记 + 术语库两词条同步（入场点敏感度 / 爬坡建仓）+
   报告两处文字勘误 + CHANGELOG retrospective 措辞修正 + schema F3 补两条（结论类公共字段
@@ -533,8 +560,8 @@ All notable changes to this project will be documented in this file.
     含重开条件两条：回撤型功效标定频率语义可检出 / 消除链式依赖的新形态）。
   - 方案 F8（正文登记五处：§4.3 迁移清单行 / §5 迁移目标 / §9.1 λ 条款 / §8-P1.5 行 /
     §8.1-M1 行）；CLAUDE.md 契约区同步。
-  - **F8 两轮评审收口**（`docs/review/v2_architecture_f8_review_20261002.md` F8R-01~11 +
-    `docs/review/v2_p15_f8_draft_review_20261002.md` F8R-A1~C8，逐项甄别后接受）：
+  - **F8 两轮评审收口**（`docs/review/v2_p15/v2_architecture_f8_review_20261002.md` F8R-01~11 +
+    `docs/review/v2_p15/v2_p15_f8_draft_review_20261002.md` F8R-A1~C8，逐项甄别后接受）：
     **A 类** = 裁决报告补 §8 附录「+6.0pp 显式分解归因」（baseline_freeze §5 的 P0 预登记义务，
     门控含滞留 ≈+3.7 / 回补 ≈+1.6 / 数据态与窗口残余 ≈+0.6，口径不可精确相加）+ 预期管理
     （v2 组合回撤特征向 B0 档 −25.43% 靠拢 = 裁决的已知接受项，非迁移回归 bug）；
@@ -573,7 +600,7 @@ All notable changes to this project will be documented in this file.
     supersedes `H-P5a1-calibration-correction-20261001`）；**P1.5 衔接确认**：原 2pp 档
     功效不足 ⇒ prereg 的 fallback 已触发，P1.5 按预登记走结构判据 + R-007 定性裁决并
     登记「统计不可裁决」。
-  - **决策记录落盘** `docs/review/v2_revision_window_f7_decision_20261001.md`（append-only，
+  - **决策记录落盘** `docs/review/v2_p0/v2_revision_window_f7_decision_20261001.md`（append-only，
     含 A/B/C 全量备选集与落选理由、复现命令勘误（补 `--shift-pp 12`）与分节产物口径登记；
     待办两项——回撤型功效刻度缺口 → P5b、`run_power_calibration.py` 输出后缀参数化 +
     分节/命名输出 → P5a-2；末节附第二轮独立复核 F7R-01~06 处理记录）。
@@ -612,7 +639,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **P5a-1 收尾专项检视修复**（`docs/review/p5a1_closeout_review_20261001.md` CO-01~CO-10 全量接受）：
+- **P5a-1 收尾专项检视修复**（`docs/review/v2_p5a1/p5a1_closeout_review_20261001.md` CO-01~CO-10 全量接受）：
   - **CO-01（阻塞）A3 验收 holdertrade 批三重错位勘误**：0.203.0 误用 **B0 基线批**
     （`phase4_ht_ab_20260917_base`）错标 `holdertrade_A1_full`（登记值 0.1758/−0.2279/0.7312
     实为 B0 值；A1 真值 17.924%/−29.30%）——0.203.0「3 历史批全过」表述随之失真，
@@ -701,7 +728,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **P5a-1 实现评审修复（`docs/review/p5a1_impl_review_20261001.md`，R-01~R-11 全部接受）**：
+- **P5a-1 实现评审修复（`docs/review/v2_p5a1/p5a1_impl_review_20261001.md`，R-01~R-11 全部接受）**：
   - **R-01/R-02/R-03 标定层重做（推翻 v0.201.3 错误登记）**：功效标定与判据自洽性的
     「检出概率」原是单次实现的布尔 {0,1}，且被单一换种子对的 −3.62pp 负偏置绑定；
     `_block_bootstrap_noise_arm` 丢失平移（任何 δ 实为零位移臂）、`_real_noise_arm` 有死项。
@@ -806,7 +833,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **P0 六项闸门审阅意见落档**：`docs/review/p0_gate_review_20261001.md` —— 对方案冻结版 F4（§4.3 迁移清单）/
+- **P0 六项闸门审阅意见落档**：`docs/review/v2_p0/p0_gate_review_20261001.md` —— 对方案冻结版 F4（§4.3 迁移清单）/
   协议 F4（§11 打钩注记）/ netting_freeze F2（§5 费用归属）/ 假设台账 schema F1（§5 顺序检验）/
   runs 产物契约 F1（§9 + 附录 A）/ events-state schema F1（§2 + §4）六份闸门文档的独立审阅记录：
   8 项建议确认前处理（events 词表自相矛盾 / runs topk 明细缺 schema / runs 表头映射偏差 /

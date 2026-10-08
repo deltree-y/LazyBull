@@ -184,7 +184,7 @@ pytest tests/ --cov=src/lazybull         # 覆盖率（目标 > 80%）
 - **旁路只读**：持仓快照、执行归因等旁路产物不得写回持仓状态、不参与买卖判断；中文表头产物的列名唯一来源 `common/sidecar_schema.py`。
 - **数据态血缘**：walk-forward 每次运行采集 git 版本 + 数据水位（`data_state_{wf_run_id}.json`）；同一对比表混入多数据态必须告警，配置差异只在同一数据态内比较。
 - **文档归档**：`docs/` 顶层禁止散文件（仅 roadmap / BREAKING_CHANGES / terminal_loss_risk_register 三份治理文档）；新文档按类别归入子目录（contracts / data / experiments / guide / glossary / PR / reports；plans / review 为本地区）；**移动文档必须全仓同步引用**（含 CHANGELOG 历史条目、代码注释、CLAUDE.md / copilot-instructions 等本地文件），以终端全量扫描验证。
-- **检视意见文档**统一归档 `docs/review/`（append-only）；复杂度 hook = `scripts/check/check_complexity.py`（棘轮基线只缩不扩）。
+- **检视意见文档**统一归档 `docs/review/<阶段/主题>/`（按阶段建子目录、根下禁散文件；文件名须含评审对象 + 评审专家标识，避免重名；**评审专家不得阅读他人评审意见**、须独立成文；**作者须逐条甄别**、不接纳的意见须写明详细原因；append-only，**仅迁移路径字符同步修订为例外**）；复杂度 hook = `scripts/check/check_complexity.py`（棘轮基线只缩不扩）。
 - **不要**：破坏 cs_train 与 cs_infer 的 schema 一致性；绕过 T0/T1 指令链路；用局部重建覆盖生产 cs_train 分区；把 changelog 写进 README。
 
 ## 9. 安全注意事项

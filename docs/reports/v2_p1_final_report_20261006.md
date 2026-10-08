@@ -90,8 +90,8 @@ P1 数据底座**完全落地**：v2 panel/labels/manifest 资产齐备且经三
 ## 7. 勘误（2026-10-06 三评审后）
 
 > append-only 增补：本节只追加勘误与登记，不回改上文；依据 = 三份评审
-> `docs/review/v2_p1_impl_review_20261006.md`（第一份）/
-> `v2_p1_impl_review2_20261006.md`（第二份）/ `v2_p1_impl_review3_20261006.md`（第三份）。
+> `docs/review/v2_p1/v2_p1_impl_review_20261006.md`（第一份）/
+> `docs/review/v2_p1/v2_p1_impl_review2_20261006.md`（第二份）/ `docs/review/v2_p1/v2_p1_impl_review3_20261006.md`（第三份）。
 
 ### 7.1 D-12 修复计数终态口径（P1-10，以第二份评审 §3.1 为准）
 
@@ -154,5 +154,5 @@ R3-12）；§1「raw 单一写入 + 只读转换器（影子门数据来源）�
   语义裁决 + 2007~2011 raw 只读核查 + 回填耗时估算）可在 P2a 期间穿插。
 - **标签刷新义务 ⇒ 已立项**（用户 2026-10-06）。prereg `H-label-refresh-forming-sealed`；
   实施时点 = P2a 闸门关闭后、P3 前，与 §7.4 改进项捆绑为同一次 store 迭代。
-- 排期决策全文：`docs/review/v2_m15_label_refresh_decision_20261006.md`；契约层登记
+- 排期决策全文：`docs/review/v2_p1/v2_m15_label_refresh_decision_20261006.md`；契约层登记
   （方案 §8.1-M1.5 行等）随下一次修订窗口（F11）一并进行。

@@ -9,7 +9,7 @@
 |---|---|---|---|
 | F1 | 2026-10-01 | 方案 v1.8 §4.1 / §8 + 基线批次（wf_batch_20260930_171221 / 172037）产物实测表头 | 首次落档 |
 | F2 | 2026-10-01 | P0 评审第二轮（5-A~5-E） | 补 topk_detail.csv schema（信号层尺子输入，卡 P5a-1）；trades 补 4 列映射 + policy_lambda 条件条款 + attribution 头部 3 列；附录 A 改 fail-safe 指纹口径 + baseline_freeze 补快照；重建标注位；文件缺失三态通则 |
-| F3 | 2026-10-01 | P5a-1 收尾独立检视（docs/review/p5a1_closeout_review_20261001.md CO-03/CO-04/CO-06） | 附录 A 排除清单与 baseline_freeze 双源不一致勘误（取并集口径，唯一代码承载 = `v2/evidence/fingerprint_keys.py`）；§9.2 对账容差实测登记；§9.8 daily/chain_nav 起止比对账补相对容差 1e-3（快照重建口径与引擎净值实测差 ~3e-4）；daily 无源缺失补 `daily.missing` 标注位 |
+| F3 | 2026-10-01 | P5a-1 收尾独立检视（docs/review/v2_p5a1/p5a1_closeout_review_20261001.md CO-03/CO-04/CO-06） | 附录 A 排除清单与 baseline_freeze 双源不一致勘误（取并集口径，唯一代码承载 = `v2/evidence/fingerprint_keys.py`）；§9.2 对账容差实测登记；§9.8 daily/chain_nav 起止比对账补相对容差 1e-3（快照重建口径与引擎净值实测差 ~3e-4）；daily 无源缺失补 `daily.missing` 标注位 |
 
 ---
 
