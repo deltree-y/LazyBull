@@ -254,7 +254,7 @@ class TargetPortfolio:
     """目标组合（袖子输出 / 组合层输入）。"""
 
     sleeve_id: str
-    target_weights: Mapping[TSCode, Weight]  # Σ = 1.0（袖子内部归一）
+    target_weights: Mapping[TSCode, Weight]  # Σ=1.0（上游不变量；P2b 直通不重复校验，F9）
     as_of_date: TradeDate
 
 

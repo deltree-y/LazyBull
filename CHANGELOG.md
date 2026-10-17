@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.205.2] - 2026-10-16
+
+### Changed
+
+- **v2 P2b T0.5 契约修订生效（方案 F12 + 协议 F9，2026-10-16，两位专家评审通过 + 用户确认）**：
+  - **方案 F12（v1.18）**：§4.10 补单袖直通过渡结构——当批相对目标语义、core 内部端口 +
+    hosts 只读适配、`BacktestEngine` 类级默认关闭、P4 删除过渡件、`Account.nav` 归
+    `core/accounting` 唯一派生入口；§8-P2b 预算定稿 **2 单元**，验收固定三条比较边
+    （关闭 vs P2a runs 精确 / 关闭 vs 旧 B0 raw 既有门 / 开启 vs 关闭精确）、三边两侧
+    NAV 有限性前置、A1/S6 分离证据、真实调用计数、模型实际路径与参照文件核验、
+    稳定工作树摘要与环境版本证据。实施依据 = `docs/plans/v2/p2b_implementation_plan_20261016.md` v3。
+  - **协议 F9（v0.9）**：`PortfolioMerger.merge` 的 Σ=1 明确为**上游前置条件**——P2b
+    单袖直通不重复运行时校验、不新增权重判定分支，亦不授权新输入生产者绕过归一化；
+    多袖校验形态随 P6.5 另行预登记。`net_across_sleeves` 同期仅支持 S6 单袖透传，
+    混合 `source_sleeve` fail-fast；反向抵消、同向分摊、自拆与三恒等式仍归 P6.5。
+    `docs/contracts/protocols.md` 与 `v2/common/{protocols/core.py,types.py}` 同批同步，
+    **公开签名不变**。
+  - **治理与预算**：MVP 总账 v6 重算剩余桶（P2b=2；编码余量 ≈24~27 单元、机器余量不变），
+    不重开 Q1~Q3；契约索引同步。提交约定 = **T0.5 独立生效提交 + T1~T5 一次收口提交**；
+    版本号 0.205.1 → **0.205.2**（契约修订小版本）。**T1 尚未启动；生效提交完成后方可开始。**
+
 ## [0.205.1] - 2026-10-08
 
 ### Changed
