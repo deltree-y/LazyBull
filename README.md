@@ -852,6 +852,32 @@ downside_penalty 挂载按裁决摘除，λ>0 显式 fail-fast）。实施规划
 `docs/plans/v2/p2a_implementation_plan_20261006.md`（本地）。**注意：P2a 未切换生产链路**——
 现役训练/回测/纸面仍走旧内核，v2 内核经 P2b/P3/P4 推进接入。
 
+**v2 单袖合并器（P2b，v0.206.0）：** `core/decision/portfolio_merger.py` 提供
+A1 单袖目标直通与 S6 单袖指令透传；混合袖输入显式 fail-fast。回测宿主通过只读适配器
+接入真实 `merge()`，引擎类级 `merge_port=None` 默认关闭，只有下列显式重放驱动可开启；
+开启/关闭共用 P2a B0 单一配置源，不新增生产 CLI 或全局配置开关：
+
+```bash
+# 关闭臂（14 折）；预检可追加 --splits 0,1,2
+python scripts/v2_p2b/replay_merger.py --mode legacy_bypass --batch-id <关闭批ID>
+
+# 开启臂（独立运行态，baseline_ref 指向当前关闭批）
+python scripts/v2_p2b/replay_merger.py --mode single_sleeve_passthrough \
+  --baseline-ref <关闭批ID> --batch-id <开启批ID>
+
+# 三条比较边；子集预检比对才追加 --allow-subset
+python scripts/v2_p2b/compare_merger_batches.py \
+  --closed-batch data/runs/<关闭批ID> \
+  --enabled-batch data/runs/<开启批ID> \
+  --input-identity-verified
+```
+
+`--input-identity-verified` 只允许在两臂均已由 `replay_merger` 完成运行前后完整
+preflight 后使用；它只是向比对器显式声明门 1 已完成，**不是跳过或替代门 1 的豁免**。
+
+**边界：P2b 仍未切换生产链路**——多袖净额化、虚拟账本、三恒等式与订单级真实接线
+归 P6.5，纸面同源和过渡适配器删除归 P4；本阶段不宣称收益改善。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）

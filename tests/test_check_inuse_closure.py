@@ -40,9 +40,16 @@ import check_inuse_closure as cic  # noqa: E402
 # ⇒ 不在用 92→95、全仓 292→295；静态闭包与在用数不变；
 # T7（2026-10-08）新增 v2/hosts/backtest 交付件 6 模块（包 __init__×2 +
 # runtime/replay/reporter/runs_writer），均不在两条主链路闭包内
-# ⇒ 不在用 95→101、全仓 295→301；静态闭包与在用数不变）
+# ⇒ 不在用 95→101、全仓 295→301；静态闭包与在用数不变；
+# P2b-T1（2026-10-17）新增 v2/core/decision 交付件 1 模块（portfolio_merger，
+# 单袖合并器 + core 内部过渡端口），不在两条主链路闭包内
+# ⇒ 不在用 101→102、全仓 301→302；静态闭包与在用数不变；
+# 本 task 连带 black 存量格式化重排 4 处——注释间距与括号合并，纯格式、行为不变；
+# P2b-T2（2026-10-17）新增 v2/hosts/backtest 交付件 1 模块（merger_adapter，
+# 宿主只读适配器），不在两条主链路闭包内
+# ⇒ 不在用 102→103、全仓 302→303；静态闭包与在用数不变）
 INUSE_BASELINE = 200
-NOTIN_BASELINE = 101
+NOTIN_BASELINE = 103
 STATIC_BASELINE = 196
 
 
@@ -82,7 +89,7 @@ def test_static_closure_spans_lazy_and_function_level_imports(fake_repo: Path):
     lb = {m for m in closure if m.startswith("src.lazybull")}
     assert "src.lazybull.alpha.core" in lb
     assert "src.lazybull.alpha.helper" in lb
-    assert "src.lazybull.beta.leaf" in lb          # 经 beta/__init__ 相对导入
+    assert "src.lazybull.beta.leaf" in lb  # 经 beta/__init__ 相对导入
     assert "scripts.entry_main" in closure
 
 
@@ -94,13 +101,9 @@ def test_case_sensitive_module_resolution(fake_repo: Path):
 
 def test_dynamic_union_and_conservation(fake_repo: Path, monkeypatch: pytest.MonkeyPatch):
     """动态加载清单并入在用全域；守恒 = 在用 + 不在用 = 全仓。"""
-    monkeypatch.setattr(
-        cic, "DYNAMIC_RISK_MODULES", ["src.lazybull.alpha.hidden_dyn"]
-    )
+    monkeypatch.setattr(cic, "DYNAMIC_RISK_MODULES", ["src.lazybull.alpha.hidden_dyn"])
     # 额外落一个只有动态加载可达的模块
-    (fake_repo / "src" / "lazybull" / "alpha" / "hidden_dyn.py").write_text(
-        "", encoding="utf-8"
-    )
+    (fake_repo / "src" / "lazybull" / "alpha" / "hidden_dyn.py").write_text("", encoding="utf-8")
     report = cic.build_inuse_report(["scripts/entry_main.py"])
     assert report["dynamic_extra"] == ["src.lazybull.alpha.hidden_dyn"]
     assert report["conservation_ok"] is True
@@ -130,9 +133,7 @@ def test_real_repo_matches_committed_baseline_fixture():
     """实时计算与已提交底稿 fixture 逐集合一致（底稿 = 可复核证据，进版本控制）。"""
     import json
 
-    fixture = (
-        Path(__file__).resolve().parent / "fixtures" / "inuse_closure_baseline_20261006.json"
-    )
+    fixture = Path(__file__).resolve().parent / "fixtures" / "inuse_closure_baseline_20261006.json"
     baseline = json.loads(fixture.read_text(encoding="utf-8"))
     report = cic.build_inuse_report()
     assert set(report["inuse_modules"]) == set(baseline["inuse_modules"])

@@ -6,7 +6,7 @@
 # 引用统计：scripts/check/glossary_refs.py；HTML 生成器按"近 90 天被引用次数"排序（P6 落地）。
 
 version: 1
-updated: "2026-10-01"
+updated: "2026-10-17"
 
 terms:
   # ========== 架构核心 ==========
@@ -54,6 +54,15 @@ terms:
     source: v2 方案 §3.2；净额化冻结文档 §2
     related: [虚拟账本, 三恒等式, 费用最小化]
     introduced: "2026-09-30"
+
+  - term: 单袖直通
+    aliases: [single-sleeve passthrough, A1 直通退化]
+    one_liner: 只有一个袖子时，合并器原样传递该袖目标与指令，不重排、不重归一、不新增权重判定
+    layman: 只有一个抽屉时，汇总柜台把清单原封不动递出去，不偷偷改数字或顺序
+    example: "权重 {X: 0.6, Y: 0.4} 合并后仍是同一映射与顺序；P2b 14 折开启/关闭全产物精确一致，真实 merge 调用 175 次"
+    source: v2 方案 F12 §4.10；协议 F9 §3.4；净额化冻结文档 A 区 A1/S6
+    related: [袖子, 净额化, 基线冻结]
+    introduced: "2026-10-17"
 
   - term: 软隔离
     aliases: [soft isolation, 临时借用]

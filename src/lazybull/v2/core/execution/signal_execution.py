@@ -15,6 +15,11 @@ D8 提取式拆分（T5 落位时执行）：旧路径基线在册硬超限 ``_g
 按「提取模块级私有 helper + 委托」拆出 5 个模块级私有函数
 （排序候选准备 / T+1 买入日解析 / 行业约束与候选过滤 / 批次目标数量解析 /
 权重归一化与上限 / 信号计划入队），公开签名、数值操作顺序、日志文本逐字保留。
+
+P2b-T2 修订（D3，方案 F12 §4.10）：``_normalize_and_cap_signals`` 内新增迁移期
+合并接缝——``_normalize_signals`` 之后、批次限权之前，``self.merge_port`` 为
+None（默认关闭）时严格跳过（关闭态逐位一致）；开启时经宿主适配器调用真实
+``merge()``，输入为当批归一化权重（当批相对语义，非整袖全账户配置）。
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -176,9 +181,26 @@ def _normalize_and_cap_signals(
     date: pd.Timestamp,
     tranche_idx: int,
 ) -> Dict[str, float]:
-    """归一化权重并按批次资金比例套单股权重上限（D8 提取件，顺序不变）。"""
+    """归一化权重并按批次资金比例套单股权重上限（D8 提取件，顺序不变）。
+
+    P2b-T2 接缝（D3 唯一接缝）：归一化之后、批次限权之前可选经过迁移期
+    合并端口；``merge_port=None``（默认关闭）严格跳过，关闭态逐位一致。
+    """
     # 归一化权重（子类可覆写 _normalize_signals 以实现 ATR 加权等策略）
     signals = self._normalize_signals(signals, date)
+
+    # P2b-T2 迁移期合并接缝：开启时经宿主适配器调用真实 merge()；
+    # 输入为当批归一化权重（当批相对语义，非整袖/全账户资产配置）。
+    # 条件卖出补位与 T+1 槽位顺位计划是执行阶段局部计划，不经此接缝（D3）。
+    if self.merge_port is not None:
+        signals = self.merge_port.merge_legacy_batch_targets(
+            weights=signals,
+            date=date,
+            cash=self.current_capital,
+            total_value=self._last_rebalance_nav,
+            positions=self.positions,
+            initial_capital=self.initial_capital,
+        )
 
     if self.max_weight_per_stock is not None and signals:
         tranche_weight_cap = resolve_tranche_weight_cap(

@@ -16,6 +16,11 @@ import 改指：
 将 walk_forward / run_ml_backtest 的策略配置映射、信号创建、
 BacktestEngineML 构造和滚动质量状态恢复统一到一个模块，
 避免多个脚本各自维护一套参数透传逻辑。
+
+P2b-T3 差异登记：新增迁移期合并模式的构造后装配helper。缺省与显式
+``legacy_bypass`` 均不创建适配器、不写实例端口；只有
+``single_sleeve_passthrough`` 在引擎构造后注入宿主适配器。袖子 ID
+``value`` 由本模块模块级常量唯一持有（D6，P3 改由袖子注册表供给）。
 """
 
 import re
@@ -34,6 +39,38 @@ from src.lazybull.v2.common.trading_config import TradingConfig
 from src.lazybull.v2.core.execution.ml_signal_feed import BacktestEngineML
 from src.lazybull.v2.core.signal.factory import create_signal
 from src.lazybull.v2.core.signal.ml_signal import MLSignal
+from src.lazybull.v2.hosts.backtest.merger_adapter import LegacyMergerAdapter
+
+MERGER_SLEEVE_ID = "value"
+LEGACY_BYPASS = "legacy_bypass"
+SINGLE_SLEEVE_PASSTHROUGH = "single_sleeve_passthrough"
+MERGER_MODES = frozenset({LEGACY_BYPASS, SINGLE_SLEEVE_PASSTHROUGH})
+
+
+def validate_merger_mode(merger_mode: Optional[str]) -> Optional[str]:
+    """校验迁移期合并模式；未知模式显式失败，禁止回退 bypass。"""
+    if merger_mode is not None and merger_mode not in MERGER_MODES:
+        raise ValueError(
+            f"未知 P2b 合并模式 {merger_mode!r}；合法取值={sorted(MERGER_MODES)}，"
+            "缺省 None 表示旧 P2a 调用，禁止静默回退 legacy_bypass"
+        )
+    return merger_mode
+
+
+def configure_merger_mode(engine: BacktestEngineML, merger_mode: Optional[str]):
+    """在引擎构造后按显式模式装配适配器；关闭态保持实例属性零新增。"""
+    mode = validate_merger_mode(merger_mode)
+    if mode != SINGLE_SLEEVE_PASSTHROUGH:
+        return None
+    adapter = LegacyMergerAdapter(MERGER_SLEEVE_ID)
+    engine.merge_port = adapter
+    return adapter
+
+
+def get_merger_call_count(engine: BacktestEngineML) -> int:
+    """读取本折适配器的真实 merge 调用数；无实例端口时计 0。"""
+    port = vars(engine).get("merge_port")
+    return 0 if port is None else int(port.call_count)
 
 
 def infer_rebalance_freq_from_label(label_column: Optional[str], default: int = 20) -> int:

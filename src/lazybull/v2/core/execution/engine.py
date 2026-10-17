@@ -33,6 +33,12 @@ exposure 参数，天然 fail-fast（传 ``exposure_table=...`` 抛 TypeError，
   import（去除节点 P2b/P3）；
 - ``Signal`` / ``CostModel`` / ``StopLossConfig`` 改指 v2 复制件
   （仅作 ``__init__`` 签名类型标注）。
+
+P2b-T2 修订（方案 F12 §4.10 / 评审 R8 方案 A）：类体新增唯一类级默认
+``merge_port = None``（迁移期合并端口，关闭态）——不改构造器、MRO、实例状态
+初始化或账户所有权（实例 ``vars`` 零新增，t4/t7 锚不动）；显式开启时由 v2
+replay 组合根在构造完成后装配 hosts 适配器实例（``BacktestEngineML`` 继承）。
+P4 原生 Account/TargetPortfolio 边界接通后删除该类级槽位。
 """
 
 from typing import Dict, List, Optional
@@ -118,6 +124,12 @@ class BacktestEngine(
 
     # 常量：每年交易日数量（用于年化波动率计算）
     TRADING_DAYS_PER_YEAR = 252
+
+    # P2b-T2 迁移期合并端口（方案 F12 §4.10 / 评审 R8 方案 A）：唯一类级默认
+    # None = 关闭态；只有显式开启时，组合根才在构造完成后执行
+    # ``engine.merge_port = adapter``（实例属性，hosts 适配器）。
+    # P4 原生边界接通后删除。
+    merge_port = None
 
     def __init__(
         self,

@@ -23,6 +23,10 @@ D8 拆分（T7 实测触发）：旧 ``run_oos_backtest`` 在全仓复杂度基�
 （func_lines / mccabe 21 两条），逐字复制即新增未豁免硬超限 ⇒ 按 D8 同例
 提取式拆分为 4 个模块级 helper（fail-fast / 日线加载 / 单族派生 / 指标段），
 语句、守卫条件、日志文本与顺序逐字保留，行为零变化。
+
+P2b-T3 差异登记：新增缺省 ``None`` 的合并模式透传、构造后适配器装配和
+逐折真实 ``merge()`` 调用计数采集。缺省调用不向引擎工厂新增 kwargs，
+成交、净值与公开 metrics 行为不变。
 """
 
 from typing import Any, Callable, Dict, Optional
@@ -47,9 +51,12 @@ from src.lazybull.universe import BasicUniverse
 from src.lazybull.universe.domains import domain_market_whitelist
 from src.lazybull.v2.common.trading_config import TradingConfig
 from src.lazybull.v2.hosts.backtest.runtime import (
+    configure_merger_mode,
     create_backtest_engine_from_config,
     create_or_reuse_signal,
+    get_merger_call_count,
     infer_rebalance_freq_from_label,
+    validate_merger_mode,
 )
 
 
@@ -243,10 +250,12 @@ def _assemble_replay_engine(
     bt_sell_timing: str,
     bt_exclude_st: bool,
     bt_min_list_days: int,
+    merger_mode: Optional[str] = None,
 ):
     """universe / signal / 引擎装配（D8 提取自 run_oos_backtest；调用顺序逐字保留）。
 
     侧效应：``engine.record_holdings_snapshot = True``（快照是 runs 产物数据源）。
+    P2b-T3：合并适配器只在引擎构造完成后按显式模式装配（D4/D6）。
     """
     universe = BasicUniverse(
         stock_basic=stock_basic,
@@ -276,6 +285,7 @@ def _assemble_replay_engine(
         completion_window_days=5,
         enable_pending_order=True,
     )
+    configure_merger_mode(engine, merger_mode)
     # 政策旁路（terminal_loss P2-1）：开启逐日持仓快照（只读，不影响任何决策）
     engine.record_holdings_snapshot = True
     # D6 摘除：旧侧此处的 engine.set_exposure_table(...)（None = 不启用，B0 下 no-op
@@ -367,6 +377,7 @@ def run_oos_backtest(
     repurchase_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     top10fh_panel: Optional[pd.DataFrame] = None,
     top_inst_lookup: Optional[Dict[str, pd.DataFrame]] = None,
+    merger_mode: Optional[str] = None,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测并返回组合级绩效指标。
 
@@ -376,7 +387,10 @@ def run_oos_backtest(
         repurchase_lookup: 股票回购运行时查询表（与训练侧同一张）；语义同上。
         top10fh_panel: 十大流通股东**报告期面板**（与训练侧同一份）；提供时逐日派生补齐本族列
             （本族逐日全市场稠密 ⇒ 用面板而非逐日字典）。
+        merger_mode: P2b 迁移期合并模式；None=旧 P2a 调用，其余合法模式由
+            runtime 封闭集合校验，未知值直接失败。
     """
+    validate_merger_mode(merger_mode)
     _fail_fast_retired_exposure(
         exposure_table,
         exposure_policy,
@@ -444,6 +458,7 @@ def run_oos_backtest(
         bt_sell_timing,
         bt_exclude_st,
         bt_min_list_days,
+        merger_mode=merger_mode,
     )
 
     nav_curve = engine.run(
@@ -461,4 +476,5 @@ def run_oos_backtest(
     metrics["_trades"] = engine.get_trades()
     metrics["_execution_attribution"] = engine.get_execution_attribution()
     metrics["_holdings_snapshot"] = engine.get_holdings_snapshot()
+    metrics["_merger_call_count"] = get_merger_call_count(engine)
     return metrics

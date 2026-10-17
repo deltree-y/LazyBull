@@ -21,6 +21,11 @@ B0 配置按 ``docs/contracts/baseline_freeze.md`` §2 写死为常量（其来�
 **机器时间纪律**：本脚本读取真实生产数据与折模型，属规划 §5 门 1-5 的机器
 时间任务（预检 3 折 ≈30min / 全量 14 折 1.5~2h，分次申请），不进 pytest。
 
+P2b-T3 差异登记：新增缺省 None 的合并模式、证据 notes 与 runs 标识注入点；
+B0 配置仍由本文件唯一持有。旧调用不加 ``merger_*`` 配置键，批次 ID、source、
+arms、baseline_ref、meta notes、成交与净值均保持原样；模式键不进入门 1 的
+``build_manifest_config_snapshot``（D7 选项 a）。
+
 用法：
     python scripts/v2_p2a/replay_b0.py                      # 全量 14 折
     python scripts/v2_p2a/replay_b0.py --splits 0,1,2       # 预检子集
@@ -61,6 +66,7 @@ from src.lazybull.v2.core.signal.ml_signal import MLSignal
 from src.lazybull.v2.evidence.fingerprint_keys import fingerprint
 from src.lazybull.v2.hosts.backtest.replay import run_oos_backtest
 from src.lazybull.v2.hosts.backtest.runs_writer import write_runs_batch
+from src.lazybull.v2.hosts.backtest.runtime import MERGER_SLEEVE_ID, validate_merger_mode
 
 # ── B0 配置常量（baseline_freeze.md §2 写死；指纹键值与冻结批次的核对 = 验收门 3） ──
 B0_SPLIT_COUNT = 14
@@ -277,21 +283,139 @@ def make_batch_id(config: Dict[str, object], now: Optional[datetime] = None) -> 
     return f"p2a_b0replay_{now:%Y%m%d_%H%M%S}_{fp6}"
 
 
+_MERGER_NOTE_KEYS = frozenset(
+    {
+        "merger.mode",
+        "merger.sleeve_id",
+        "merger.call_count",
+        "merger.call_count_by_fold",
+    }
+)
+
+
+def _apply_merger_mode_to_config(config: Dict[str, object], merger_mode: Optional[str]) -> None:
+    """显式 P2b 模式进入 runs 配置指纹；门 1 快照不调用本helper（D7-a）。"""
+    if merger_mode is not None:
+        config["merger_mode"] = merger_mode
+        config["merger_sleeve_id"] = MERGER_SLEEVE_ID
+
+
+def _build_replay_meta_notes(
+    results: Sequence[Dict[str, object]],
+    merger_mode: Optional[str],
+    extra_meta_notes: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """从逐折实际采集值生成合并证据；缺省模式不新增任何键。"""
+    notes = dict(extra_meta_notes or {})
+    if merger_mode is None:
+        return notes
+    by_fold = {
+        str(int(result["split_index"])): int(result.get("merger_call_count", 0))
+        for result in results
+    }
+    notes.update(
+        {
+            "merger.mode": merger_mode,
+            "merger.sleeve_id": MERGER_SLEEVE_ID,
+            "merger.call_count": str(sum(by_fold.values())),
+            "merger.call_count_by_fold": json.dumps(
+                by_fold, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+        }
+    )
+    return notes
+
+
+def _run_b0_split(
+    split: WalkForwardSplit,
+    *,
+    storage: Storage,
+    loader: DataLoader,
+    trade_cal,
+    stock_basic,
+    data_root: str,
+    persistent_signal: MLSignal,
+    models_root: str,
+    merger_mode: Optional[str],
+) -> Dict[str, object]:
+    """执行单折并组装 runs 结果（P2b-T3 提取式拆分，调用参数与顺序不变）。"""
+    model_version = B0_START_MODEL_VERSION + split.split_index
+    bt_start = split.test_start
+    bt_end = (
+        datetime.strptime(bt_start, "%Y%m%d") + relativedelta(months=B0_OOS_BACKTEST_MONTHS)
+    ).strftime("%Y%m%d")
+    logger.info(f"[Split {split.split_index}] v{model_version} 回测 {bt_start} ~ {bt_end}")
+    metrics = run_oos_backtest(
+        model_version=model_version,
+        bt_start=bt_start,
+        bt_end=bt_end,
+        storage=storage,
+        loader=loader,
+        trade_cal=trade_cal,
+        stock_basic=stock_basic,
+        label_column=B0_LABEL_COLUMN,
+        bt_top_n=B0_BT_TOP_N,
+        bt_rebalance_freq=B0_BT_REBALANCE_FREQ,
+        data_root=data_root,
+        persistent_signal=persistent_signal,
+        bt_exclude_st=True,
+        bt_min_list_days=B0_BT_MIN_LIST_DAYS,
+        bt_sell_timing=B0_BT_SELL_TIMING,
+        bt_max_weight_per_stock=B0_BT_MAX_WEIGHT_PER_STOCK,
+        bt_max_per_industry=None,
+        bt_stop_loss_enabled=False,
+        position_sizing=B0_POSITION_SIZING,
+        kelly_vol_window=B0_KELLY_VOL_WINDOW,
+        kelly_max_leverage=B0_KELLY_MAX_LEVERAGE,
+        stagger_tranches=B0_STAGGER_TRANCHES,
+        enable_early_rebalance_on_empty=True,
+        initial_capital=float(B0_BT_INITIAL_CAPITAL),
+        split_num=split.split_index,
+        stock_domain=B0_STOCK_DOMAIN,
+        holdertrade_lookup=None,
+        repurchase_lookup=None,
+        top10fh_panel=None,
+        top_inst_lookup=None,
+        merger_mode=merger_mode,
+    )
+    if not metrics:
+        raise RuntimeError(f"Split {split.split_index} OOS 回测返回空（数据缺失或日历异常）")
+    feature_columns = _live_feature_columns(models_root, model_version)
+    return {
+        "split_index": split.split_index,
+        "model_version": model_version,
+        "train_start": split.train_start,
+        "train_end": split.train_end,
+        "test_start": split.test_start,
+        "test_end": split.test_end,
+        "metrics": {k: v for k, v in metrics.items() if not k.startswith("_")},
+        "nav_curve": metrics["_nav_curve"],
+        "trades": metrics["_trades"],
+        "attribution": metrics["_execution_attribution"],
+        "holdings_snapshot": metrics["_holdings_snapshot"],
+        "config_overrides": _live_config_overrides(feature_columns),
+        "merger_call_count": int(metrics.get("_merger_call_count", 0)),
+    }
+
+
 def replay_b0(
     *,
     splits_subset: Optional[Sequence[int]] = None,
     data_root: Optional[str] = None,
     runs_root: Optional[str] = None,
     batch_id: Optional[str] = None,
+    merger_mode: Optional[str] = None,
+    extra_meta_notes: Optional[Dict[str, str]] = None,
+    baseline_ref: Optional[str] = None,
+    arms: Optional[Sequence[str]] = None,
+    source: Optional[str] = None,
 ) -> Path:
-    """B0 重放主流程：切分 → 逐折 v2 OOS 回测 → runs 契约批次写出。
+    """B0 重放主流程：切分 → 逐折 v2 OOS 回测 → runs 契约批次写出。"""
+    validate_merger_mode(merger_mode)
+    note_conflicts = _MERGER_NOTE_KEYS & set(extra_meta_notes or {})
+    if note_conflicts:
+        raise ValueError(f"extra_meta_notes 与合并内建证据键冲突: {sorted(note_conflicts)}")
 
-    Args:
-        splits_subset: 折子集（预检用，如 [0, 1, 2]）；None = 全量 14 折
-        data_root: 数据根目录（None = 配置默认）
-        runs_root: runs 根目录（None = <data_root>/runs）
-        batch_id: 批次 ID（None = 自动生成 p2a_b0replay_<时间戳>_<fp6>）
-    """
     data_root = data_root or get_data_root()
     runs_root = runs_root or str(Path(data_root) / "runs")
     storage = Storage(root_path=data_root)
@@ -315,11 +439,11 @@ def replay_b0(
             raise ValueError(f"--splits 子集 {sorted(selected)} 与生成的切分无交集")
 
     config = build_batch_config(splits)
+    _apply_merger_mode_to_config(config, merger_mode)
     batch_id = batch_id or make_batch_id(config)
     config["batch_run_id"] = batch_id
     logger.info(f"B0 重放批次: {batch_id}（{len(splits)} 折）")
 
-    # 数据态血缘（只读过渡依赖，见模块头登记表）
     data_state = collect_data_state(data_root, wf_run_id=batch_id, batch_run_id=batch_id)
     data_state["data_state_id"] = compute_data_state_id(data_state)
     code_state = {
@@ -327,12 +451,11 @@ def replay_b0(
         "git_dirty": data_state.get("git_dirty"),
     }
 
-    # 跨折持久化 MLSignal（v2 信号；构造参数同旧 runner.py:508 装配段）
     models_root = get_stock_selection_models_root(data_root)
     bt_domain = resolve_stock_domain(B0_STOCK_DOMAIN)
     persistent_signal = MLSignal(
         top_n=B0_BT_TOP_N,
-        model_version=None,  # 首折经 update_model_version 设置
+        model_version=None,
         models_dir=models_root,
         min_total_mv=float(bt_domain["min_total_mv_wan"]),  # type: ignore[arg-type]
         max_total_mv=float(bt_domain["max_total_mv_wan"]),  # type: ignore[arg-type]
@@ -340,68 +463,23 @@ def replay_b0(
         downside_penalty=0.0,
         downside_penalty_column="downside_vol_20",
     )
-
-    results: List[Dict[str, object]] = []
-    for split in splits:
-        model_version = B0_START_MODEL_VERSION + split.split_index
-        bt_start = split.test_start
-        bt_end = (
-            datetime.strptime(bt_start, "%Y%m%d") + relativedelta(months=B0_OOS_BACKTEST_MONTHS)
-        ).strftime("%Y%m%d")
-        logger.info(f"[Split {split.split_index}] v{model_version} 回测 {bt_start} ~ {bt_end}")
-        metrics = run_oos_backtest(
-            model_version=model_version,
-            bt_start=bt_start,
-            bt_end=bt_end,
+    results = [
+        _run_b0_split(
+            split,
             storage=storage,
             loader=loader,
             trade_cal=trade_cal,
             stock_basic=stock_basic,
-            label_column=B0_LABEL_COLUMN,
-            bt_top_n=B0_BT_TOP_N,
-            bt_rebalance_freq=B0_BT_REBALANCE_FREQ,
             data_root=data_root,
             persistent_signal=persistent_signal,
-            bt_exclude_st=True,
-            bt_min_list_days=B0_BT_MIN_LIST_DAYS,
-            bt_sell_timing=B0_BT_SELL_TIMING,
-            bt_max_weight_per_stock=B0_BT_MAX_WEIGHT_PER_STOCK,
-            bt_max_per_industry=None,
-            bt_stop_loss_enabled=False,
-            position_sizing=B0_POSITION_SIZING,
-            kelly_vol_window=B0_KELLY_VOL_WINDOW,
-            kelly_max_leverage=B0_KELLY_MAX_LEVERAGE,
-            stagger_tranches=B0_STAGGER_TRANCHES,
-            enable_early_rebalance_on_empty=True,
-            initial_capital=float(B0_BT_INITIAL_CAPITAL),
-            split_num=split.split_index,
-            stock_domain=B0_STOCK_DOMAIN,
-            # B0 四族运行时派生全关（baseline_freeze §2：enable_* = false）
-            holdertrade_lookup=None,
-            repurchase_lookup=None,
-            top10fh_panel=None,
-            top_inst_lookup=None,
+            models_root=models_root,
+            merger_mode=merger_mode,
         )
-        if not metrics:
-            raise RuntimeError(f"Split {split.split_index} OOS 回测返回空（数据缺失或日历异常）")
-        feature_columns = _live_feature_columns(models_root, model_version)
-        results.append(
-            {
-                "split_index": split.split_index,
-                "model_version": model_version,
-                "train_start": split.train_start,
-                "train_end": split.train_end,
-                "test_start": split.test_start,
-                "test_end": split.test_end,
-                "metrics": {k: v for k, v in metrics.items() if not k.startswith("_")},
-                "nav_curve": metrics["_nav_curve"],
-                "trades": metrics["_trades"],
-                "attribution": metrics["_execution_attribution"],
-                "holdings_snapshot": metrics["_holdings_snapshot"],
-                "config_overrides": _live_config_overrides(feature_columns),
-            }
-        )
+        for split in splits
+    ]
 
+    meta_notes = _build_replay_meta_notes(results, merger_mode, extra_meta_notes)
+    effective_arms = tuple(arms) if arms is not None else ((merger_mode,) if merger_mode else ())
     out_dir = write_runs_batch(
         results,
         batch_id=batch_id,
@@ -409,9 +487,10 @@ def replay_b0(
         config=config,
         code_state=code_state,
         data_state=data_state,
-        baseline_ref=None,  # B0 基线批（契约 §2：基线批为 null）
-        arms=(),
-        source="v2_p2a_native_replay",
+        baseline_ref=baseline_ref,
+        arms=effective_arms,
+        source=source or "v2_p2a_native_replay",
+        extra_meta_notes=meta_notes or None,
     )
     logger.info(f"B0 重放完成: {out_dir}")
     return out_dir

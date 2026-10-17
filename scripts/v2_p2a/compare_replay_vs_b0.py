@@ -18,6 +18,9 @@ wf_start_date/wf_end_date 两子集依赖键。
 
 输出总 PASS/FAIL 与逐门差异清单。本工具读取真实产物，属机器时间任务，
 不进 pytest（pytest 以合成批次驱动比对函数）。
+
+P2b-T3 差异登记：新增可选显式参照文件集、模式键期望值与逐名身份规范化
+参数，供三边比对复用既有原语；所有参数缺省时 P2a 门 3/4/5 行为不变。
 """
 
 from __future__ import annotations
@@ -72,6 +75,16 @@ class CompareReport:
         return not (self.gate3_diffs or self.gate4_diffs or self.gate5_diffs)
 
 
+@dataclass(frozen=True)
+class RawReferenceFiles:
+    """P2b 显式解析后的旧 B0 raw 参照文件集（禁止多命中取最后一份）。"""
+
+    summary: Path
+    chain_nav: Path
+    trades: Dict[int, Path]
+    attribution: Dict[int, Optional[Path]]
+
+
 def _norm_date_str(value: object) -> object:
     """日期值规范化（YYYYMMDD 字符串）；空值归一 None。"""
     if value is None or (not isinstance(value, str) and pd.isna(value)):
@@ -120,22 +133,68 @@ def _values_equal(a: object, b: object) -> bool:
     return na == nb
 
 
+def _check_new_only_expected(
+    new_summary: pd.DataFrame,
+    key: str,
+    expected: object,
+    report: CompareReport,
+) -> None:
+    """P2b 新侧独有键必须逐折等于预登记期望值（不是无条件豁免）。"""
+    bad = [
+        int(row["split_index"])
+        for _, row in new_summary.iterrows()
+        if not _values_equal(row[key], expected)
+    ]
+    if bad:
+        report.gate3_diffs.append(f"门3 新侧独有键 {key} 错值折={bad}，期望={expected!r}")
+    else:
+        report.notes.append(f"门3 登记放行: 新侧独有键 {key}={expected!r}（逐折核验）")
+
+
+def _compare_shared_fingerprint_value(
+    key: str,
+    split: int,
+    row_new: pd.Series,
+    row_frozen: pd.Series,
+    shared_expected_values: Dict[str, Sequence[object]],
+    report: CompareReport,
+) -> None:
+    """共享键普通等值比较，或按 P2b 预登记的前后期望值比较。"""
+    if key not in shared_expected_values:
+        if not _values_equal(row_new[key], row_frozen[key]):
+            report.gate3_diffs.append(
+                f"门3 错值: split{split:02d}.{key}: 新={row_new[key]!r} vs "
+                f"冻结={row_frozen[key]!r}"
+            )
+        return
+    expected_new, expected_frozen = shared_expected_values[key]
+    if not _values_equal(row_new[key], expected_new) or not _values_equal(
+        row_frozen[key], expected_frozen
+    ):
+        report.gate3_diffs.append(
+            f"门3 前后期望值不符: split{split:02d}.{key}: 新={row_new[key]!r} "
+            f"(期望 {expected_new!r}) vs 冻结={row_frozen[key]!r} (期望 {expected_frozen!r})"
+        )
+
+
 def compare_fingerprint_gate(
     new_summary: pd.DataFrame,
     frozen_summary: pd.DataFrame,
     report: CompareReport,
     *,
     allow_subset: bool = False,
+    migration_only_values: Optional[Dict[str, object]] = None,
+    shared_expected_values: Optional[Dict[str, Sequence[object]]] = None,
+    normalized_shared_keys: Sequence[str] = (),
 ) -> None:
     """门 3：配置指纹全量键值比对（逐折；缺键/多键/错值出清单）。
 
-    折集合纪律（R2-T7-03）：默认完整终验模式要求折集全等，缺折/多折即失败；
-    仅显式预检（``allow_subset=True``）允许子集，且要求新侧折集 ⊆ 冻结折集，
-    此时 ``wf_start_date``/``wf_end_date``（由筛选后 splits 端点推导，旧 runner
-    同口径）登记跳过值比对；完整模式下两键照常比对。
+    默认参数保持 P2a 门 3 原行为。P2b 可选参数分别表达新侧独有键的期望值、
+    共享键的前后期望值，以及已单独完成批内身份核验后的逐名运行身份规范化。
     """
+    migration_values = migration_only_values or {}
+    expected_values = shared_expected_values or {}
     frozen = frozen_summary.copy()
-    # 冻结 CSV 的 KEY_* 列小写化（契约 §3 口径），非 ASCII 诊断列剔除
     frozen = frozen.rename(columns={c: c.lower() for c in frozen.columns if c.startswith("KEY_")})
     frozen = frozen[[c for c in frozen.columns if str(c).isascii()]]
 
@@ -144,6 +203,8 @@ def compare_fingerprint_gate(
     for key in sorted(new_keys - frozen_keys):
         if key in MIGRATION_ONLY_KEYS:
             report.notes.append(f"门3 登记放行（迁移专用标识）: 新侧多键 {key}")
+        elif key in migration_values:
+            _check_new_only_expected(new_summary, key, migration_values[key], report)
         else:
             report.gate3_diffs.append(f"门3 多键: {key}（新侧有、冻结侧无）")
     for key in sorted(frozen_keys - new_keys):
@@ -168,21 +229,20 @@ def compare_fingerprint_gate(
                 f"门3 子集预检模式（显式启用）: 新 {sorted(new_splits)} ⊆ 冻结 "
                 f"{sorted(frozen_splits)}；仅比对交集"
             )
-            # 子集预检时两窗口键由筛选后 splits 端点推导（旧 runner 同口径），
-            # 与冻结全量批必然不同——登记跳过值比对（仅显式预检分支）
             report.notes.append(
                 "门3 子集模式：wf_start_date/wf_end_date 为子集依赖键，登记跳过值比对"
             )
             subset_keys = {"wf_start_date", "wf_end_date"}
+    shared_keys = (new_keys & frozen_keys) - subset_keys - set(normalized_shared_keys)
+    for key in sorted(set(normalized_shared_keys) & new_keys & frozen_keys):
+        report.notes.append(f"门3 运行身份规范化（批内身份已先核验）: {key}")
     for split in sorted(frozen_splits & new_splits):
         row_new = new_summary[new_summary["split_index"].astype(int) == split].iloc[0]
         row_frozen = frozen[frozen["split_index"].astype(int) == split].iloc[0]
-        for key in sorted(new_keys & frozen_keys - subset_keys):
-            if not _values_equal(row_new[key], row_frozen[key]):
-                report.gate3_diffs.append(
-                    f"门3 错值: split{split:02d}.{key}: 新={row_new[key]!r} vs "
-                    f"冻结={row_frozen[key]!r}"
-                )
+        for key in sorted(shared_keys):
+            _compare_shared_fingerprint_value(
+                key, split, row_new, row_frozen, expected_values, report
+            )
 
 
 def _frozen_glob(frozen_dir: Path, pattern: str) -> Optional[Path]:
@@ -236,15 +296,9 @@ def _gate4_frame(fold_dir_frame: pd.DataFrame, rename: Dict[str, str]) -> pd.Dat
 
 
 def _compare_attribution(
-    fold: "RunsFold", frozen_dir: Path, tag: str, report: CompareReport
+    fold: "RunsFold", attr_path: Optional[Path], tag: str, report: CompareReport
 ) -> None:
-    """attribution 二次交叉（无条件执行，R1-T7-01/R2-T7-01 修复）。
-
-    严格口径：冻结侧/新侧单侧缺失 ⇒ 失败（B0 冻结批 14 份全在，缺失即异常）；
-    列集合不一致 ⇒ 失败（禁止交集比对静默丢列）；行序与值全列逐位比对。
-    唯一规范化 = ``wf_run_id``（迁移专用运行标识，登记后与成交 9 列白名单同口径）。
-    """
-    attr_path = _frozen_glob(frozen_dir, f"walk_forward_execution_attribution_*_{tag}.csv")
+    """attribution 二次交叉（全列、行序、逐位；唯一规范化 wf_run_id）。"""
     if attr_path is None and fold.attribution is None:
         report.notes.append(f"门4 {tag}: attribution 双侧缺失，登记跳过")
         return
@@ -263,7 +317,6 @@ def _compare_attribution(
             new_attr[col] = new_attr[col].map(_norm_date_str)
         if col in frozen_attr.columns:
             frozen_attr[col] = frozen_attr[col].map(_norm_date_str)
-    # 迁移专用运行标识规范化（登记一次；其余列不做任何豁免）
     if "wf_run_id" in new_attr.columns and "wf_run_id" in frozen_attr.columns:
         new_attr["wf_run_id"] = "<normalized>"
         frozen_attr["wf_run_id"] = "<normalized>"
@@ -284,11 +337,22 @@ def _compare_attribution(
         report.gate4_diffs.append(f"门4 {tag}: attribution 全列比对不一致")
 
 
-def compare_trades_gate(new_batch: RunsBatch, frozen_dir: Path, report: CompareReport) -> None:
+def compare_trades_gate(
+    new_batch: RunsBatch,
+    frozen_dir: Path,
+    report: CompareReport,
+    *,
+    reference_files: Optional[RawReferenceFiles] = None,
+) -> None:
     """门 4：成交 9 列逐折逐位比对 + 并列互换计数；attribution 无条件二次交叉。"""
     for split_index, fold in sorted(new_batch.folds.items()):
         tag = f"split{split_index:02d}"
-        frozen_path = _frozen_glob(frozen_dir, f"walk_forward_trades_*_{tag}.csv")
+        if reference_files is None:
+            frozen_path = _frozen_glob(frozen_dir, f"walk_forward_trades_*_{tag}.csv")
+            attr_path = _frozen_glob(frozen_dir, f"walk_forward_execution_attribution_*_{tag}.csv")
+        else:
+            frozen_path = reference_files.trades.get(split_index)
+            attr_path = reference_files.attribution.get(split_index)
         if frozen_path is None:
             report.gate4_diffs.append(f"门4 {tag}: 冻结侧缺 trades CSV")
             continue
@@ -301,19 +365,27 @@ def compare_trades_gate(new_batch: RunsBatch, frozen_dir: Path, report: CompareR
                 report.gate4_diffs.append(f"门4 {tag}: 成交 9 列逐位不一致（多重集亦不等）")
             elif swapped > 0:
                 report.gate4_diffs.append(f"门4 {tag}: 并列互换 {swapped} 行（要求 = 0）")
-        # attribution 二次交叉：独立于成交比对**无条件执行**（R1-T7-01/R2-T7-01）
-        _compare_attribution(fold, frozen_dir, tag, report)
+        _compare_attribution(fold, attr_path, tag, report)
 
 
 def compare_nav_gate(
-    new_batch: RunsBatch, frozen_dir: Path, report: CompareReport, *, allow_subset: bool = False
+    new_batch: RunsBatch,
+    frozen_dir: Path,
+    report: CompareReport,
+    *,
+    allow_subset: bool = False,
+    reference_files: Optional[RawReferenceFiles] = None,
 ) -> None:
     """门 5：逐折日净值 + 链式净值全表（容差 1e-6；冻结 date 为折内序号，按位次）。
 
     折集合纪律同门 3（R2-T7-03）：默认完整模式要求折集全等；显式预检才允许
-    真子集比对交集。
+    真子集比对交集。P2b 可传显式参照文件集；缺省沿用 P2a glob 行为。
     """
-    chain_path = _frozen_glob(frozen_dir, "chain_nav_*.csv")
+    chain_path = (
+        _frozen_glob(frozen_dir, "chain_nav_*.csv")
+        if reference_files is None
+        else reference_files.chain_nav
+    )
     if chain_path is None:
         report.gate5_diffs.append("门5: 冻结侧缺 chain_nav_*.csv")
         return
@@ -372,19 +444,28 @@ def compare_nav_gate(
 
 
 def compare_replay_vs_b0(
-    new_batch_dir: Path, frozen_dir: Path, *, allow_subset: bool = False
+    new_batch_dir: Path,
+    frozen_dir: Path,
+    *,
+    allow_subset: bool = False,
+    reference_files: Optional[RawReferenceFiles] = None,
+    migration_only_values: Optional[Dict[str, object]] = None,
+    shared_expected_values: Optional[Dict[str, Sequence[object]]] = None,
+    normalized_shared_keys: Sequence[str] = (),
 ) -> CompareReport:
     """门 3/4/5 总入口：新 runs 批目录 + B0 冻结批 raw 目录 → 比对报告。
 
-    Args:
-        allow_subset: 显式预检模式（R2-T7-03：仅此时允许新侧折集为冻结折集
-            真子集、仅比对交集，并豁免 wf_start_date/wf_end_date 两子集依赖键）；
-            默认完整终验模式要求折集全等。
+    缺省调用完全保持 P2a 行为。P2b 通过可选参数注入显式参照文件集与预登记
+    模式键规则，复用同一指纹、成交、归因和净值比较原语。
     """
     report = CompareReport()
     new_batch = load_runs_batch(Path(new_batch_dir))
     frozen_dir = Path(frozen_dir)
-    summary_path = _frozen_glob(frozen_dir, "walk_forward_summary_*.csv")
+    summary_path = (
+        _frozen_glob(frozen_dir, "walk_forward_summary_*.csv")
+        if reference_files is None
+        else reference_files.summary
+    )
     if summary_path is None:
         report.gate3_diffs.append("门3: 冻结侧缺 walk_forward_summary_*.csv")
     else:
@@ -392,10 +473,22 @@ def compare_replay_vs_b0(
             summary_path, encoding="utf-8-sig", float_precision="round_trip"
         )
         compare_fingerprint_gate(
-            new_batch.summary, frozen_summary, report, allow_subset=allow_subset
+            new_batch.summary,
+            frozen_summary,
+            report,
+            allow_subset=allow_subset,
+            migration_only_values=migration_only_values,
+            shared_expected_values=shared_expected_values,
+            normalized_shared_keys=normalized_shared_keys,
         )
-    compare_trades_gate(new_batch, frozen_dir, report)
-    compare_nav_gate(new_batch, frozen_dir, report, allow_subset=allow_subset)
+    compare_trades_gate(new_batch, frozen_dir, report, reference_files=reference_files)
+    compare_nav_gate(
+        new_batch,
+        frozen_dir,
+        report,
+        allow_subset=allow_subset,
+        reference_files=reference_files,
+    )
     return report
 
 

@@ -28,6 +28,10 @@
   ``chain_nav_splits`` 中 nav 曲线 RangeIndex 下的实际行为）；
 - topk_detail 不写（B0 无该产物）⇒ 每折 ``_meta.json: topk_detail.missing=true``
   + 批次 meta_notes 登记（同 runs_convert 口径）。
+
+P2b-T3 差异登记：``write_runs_batch`` 新增缺省为 None 的
+``extra_meta_notes``，承载合并模式、真实调用计数、工作树/环境与参照摘要；
+缺省产物完全不变，内建键冲突 fail-fast（D7）。
 """
 
 from __future__ import annotations
@@ -375,6 +379,7 @@ def write_runs_batch(
     baseline_ref: Optional[str] = None,
     arms: Iterable[str] = (),
     source: str = "v2_p2a_native_replay",
+    extra_meta_notes: Optional[Dict[str, str]] = None,
 ) -> Path:
     """把一批逐折回测结果写为 runs 契约批次目录，并用读入桥自校验。
 
@@ -390,6 +395,8 @@ def write_runs_batch(
         baseline_ref: 对照批次 id（基线批为 None）
         arms: 本批次包含的臂标签
         source: 产物来源标识
+        extra_meta_notes: P2b 可选证据 notes（键和值均须为字符串）；缺省 None
+            时 P2a 产物键集与内容不变，与内建 topk 键冲突直接失败。
 
     Returns:
         批次目录路径（``runs_root/<batch_id>``）
@@ -403,7 +410,21 @@ def write_runs_batch(
     ordered = _validate_results(results)
 
     out_dir = Path(runs_root) / batch_id
-    meta_notes: Dict[str, str] = {}
+    meta_notes: Dict[str, str] = dict(extra_meta_notes or {})
+    invalid_notes = [key for key, value in meta_notes.items() if not isinstance(value, str)]
+    if invalid_notes or any(not isinstance(key, str) or not key for key in meta_notes):
+        raise ValueError(f"extra_meta_notes 必须使用非空字符串键和字符串值: {invalid_notes}")
+    reserved_notes = {"topk_detail.missing", "topk_detail.missing_folds"}
+    if config.get("merger_mode") is None:
+        reserved_notes |= {
+            "merger.mode",
+            "merger.sleeve_id",
+            "merger.call_count",
+            "merger.call_count_by_fold",
+        }
+    conflicts = sorted(reserved_notes & set(meta_notes))
+    if conflicts:
+        raise ValueError(f"extra_meta_notes 与 runs 内建证据键冲突: {conflicts}")
 
     # 逐折产物
     for result in ordered:

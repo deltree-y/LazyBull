@@ -12,8 +12,8 @@
   "src.lazybull.factors.risk.liquidity_factors"
  ],
  "inuse_count": 200,
- "all_modules_count": 301,
- "notin_count": 101,
+ "all_modules_count": 303,
+ "notin_count": 103,
  "conservation_ok": true,
  "missing_files": [],
  "pkg_count": {
@@ -291,6 +291,7 @@
   "src.lazybull.v2.core.decision.buy_plan",
   "src.lazybull.v2.core.decision.industry_constraint",
   "src.lazybull.v2.core.decision.params",
+  "src.lazybull.v2.core.decision.portfolio_merger",
   "src.lazybull.v2.core.decision.sizing",
   "src.lazybull.v2.core.decision.weight_processor",
   "src.lazybull.v2.core.decision.weighting",
@@ -322,6 +323,7 @@
   "src.lazybull.v2.evidence.signal_ruler",
   "src.lazybull.v2.hosts",
   "src.lazybull.v2.hosts.backtest",
+  "src.lazybull.v2.hosts.backtest.merger_adapter",
   "src.lazybull.v2.hosts.backtest.replay",
   "src.lazybull.v2.hosts.backtest.reporter",
   "src.lazybull.v2.hosts.backtest.runs_writer",

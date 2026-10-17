@@ -7,9 +7,13 @@
 含估值回退链 2 处（D4，旧 engine.py:743 / :777，原样搬运）：当日成交价
 → 仓位缓存最后已知价 → 买入价兜底；回退链收敛为单一 helper 是切换后
 改进项（F11 勘误协议 §11 登记），迁移期逐点等价锁定。
+
+P2b-T2 修订（D5/CX-02，方案 F12 §4.10）：新增 ``calculate_nav`` 作为账本层
+**唯一 NAV 派生入口**（标量与 pandas Series 双形态，保留索引、dtype、NaN
+与原运算次序）；``generate_nav_curve`` 同批委托该入口，既有曲线数值不变。
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import pandas as pd
 from loguru import logger
@@ -86,6 +90,20 @@ def position_market_value(
     return float(info["shares"]) * float(trade_price)
 
 
+def calculate_nav(
+    total_value: Union[float, pd.Series],
+    initial_capital: float,
+) -> Union[float, pd.Series]:
+    """净值（NAV）唯一派生入口（账本层，P2b-T2 新增）。
+
+    口径 = ``total_value / initial_capital``（``total_value`` 为组合总值，
+    非相对 NAV）。标量与 pandas Series 双形态：Series 输入保留索引、dtype、
+    NaN 与原运算次序——不转列表、不逐行强制 float、不额外舍入。
+    非有限值拒绝属 P2b 验收器职责（D10），本默认计算入口不做有限性拒绝。
+    """
+    return total_value / initial_capital
+
+
 def generate_nav_curve(
     portfolio_values: List[Dict],
     initial_capital: float,
@@ -100,6 +118,6 @@ def generate_nav_curve(
         净值曲线DataFrame
     """
     df = pd.DataFrame(portfolio_values)
-    df["nav"] = df["portfolio_value"] / initial_capital
+    df["nav"] = calculate_nav(df["portfolio_value"], initial_capital)
     df["return"] = df["nav"] - 1.0
     return df

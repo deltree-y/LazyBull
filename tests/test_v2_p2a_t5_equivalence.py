@@ -966,7 +966,8 @@ def test_retired_symbol_scanner_catches_mutations():
     assert misplaced == [], f"相对导入归属他处误报: {misplaced}"
 
 
-# 正式零残留扫描面（模块级冻结：27 个文件，其中 5 个包初始化文件）
+# 正式零残留扫描面（模块级冻结：31 个文件——T6 后 30、P2b-T1 新增
+# core/decision/portfolio_merger.py 起 31，其中 5 个包初始化文件）
 _V2_CORE_DIR = _REPO_ROOT / "src" / "lazybull" / "v2" / "core"
 _V2_CORE_SCAN_FILES = sorted(_V2_CORE_DIR.rglob("*.py"))
 _V2_CORE_INIT_FILES = [path for path in _V2_CORE_SCAN_FILES if path.name == "__init__.py"]
@@ -988,14 +989,17 @@ def test_v2_core_no_retired_exposure_symbols():
 
 
 def test_importer_package_of_scanned_files_exact():
-    """文件入口回归（R2-T5-R3-01）：扫描面 30 文件的所属包 == 各自真实父目录。
+    """文件入口回归（R2-T5-R3-01）：扫描面 31 文件的所属包 == 各自真实父目录。
 
     普通模块与包初始化文件统一取文件父目录的点分路径；锚定扫描面构成
-    （30 个文件、其中恰 5 个 ``__init__.py``），防扫描面漂移后断言空转。
+    （31 个文件、其中恰 5 个 ``__init__.py``），防扫描面漂移后断言空转。
     （T6 注记：core/signal 新增 ml_signal / ensemble_signal / factory 三件，
     扫描面 27→30，属规划内增长；__init__.py 5 个不变。）
+    （P2b-T1 注记：core/decision 新增 portfolio_merger 一件（单袖合并器 +
+    core 内部过渡端口），扫描面 30→31，属 P2b 规划 §4 预登记增长；
+    __init__.py 5 个不变。）
     """
-    assert len(_V2_CORE_SCAN_FILES) == 30
+    assert len(_V2_CORE_SCAN_FILES) == 31
     assert len(_V2_CORE_INIT_FILES) == 5
     for path in _V2_CORE_SCAN_FILES:
         expected = ".".join(path.resolve().parent.relative_to(_REPO_ROOT).parts)
