@@ -8,12 +8,32 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
 
+from src.lazybull.data import TushareClient
 from src.lazybull.paper import PaperStorage, PaperTradingRunner
 from src.lazybull.paper.models import PendingBuy, Position
+
+
+@pytest.fixture
+def mock_runner_client(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    """使用合成客户端与初始化配置，隔离令牌和生产配置。"""
+    client = Mock(spec=TushareClient)
+    monkeypatch.setattr("src.lazybull.paper.runner.TushareClient", Mock(return_value=client))
+    monkeypatch.setattr(
+        "src.lazybull.common.cost.get_cost_settings",
+        lambda: {
+            "commission_rate": 0.0003,
+            "min_commission": 5.0,
+            "stamp_tax": 0.0005,
+            "slippage": 0.0,
+        },
+    )
+    monkeypatch.setattr("src.lazybull.features.builder.cache.get_shenwan_level", lambda: "L3")
+    return client
 
 
 @pytest.fixture
@@ -24,7 +44,7 @@ def temp_storage():
         yield storage, tmpdir
 
 
-def test_replenishment_with_existing_positions_no_sell(temp_storage):
+def test_replenishment_with_existing_positions_no_sell(temp_storage, mock_runner_client):
     """测试：存在持仓 + 仅补位计划时，验证数据结构正确
     
     场景模拟：
@@ -40,9 +60,11 @@ def test_replenishment_with_existing_positions_no_sell(temp_storage):
     # 1. 设置初始账户状态（持有27只股票）
     runner = PaperTradingRunner(
         initial_capital=500000.0,
+        data_root=tmpdir,
         paper_root=tmpdir,
         verbose=False
     )
+    assert runner.client is mock_runner_client
     
     # 模拟27只持仓
     existing_positions = {}
@@ -118,10 +140,10 @@ def test_replenishment_with_existing_positions_no_sell(temp_storage):
     
     # 模拟 T1 执行流程（简化版）
     from src.lazybull.paper.models import TargetWeight
-    
+
     # 只处理 pending_buys
     # 由于补位股票无价格数据，它们会失败但不会触发卖出
-    
+
     # 验证：现有持仓数量不变
     positions_before = len(runner.account.get_positions())
     assert positions_before == 27, "应该有27只持仓"
@@ -131,7 +153,7 @@ def test_replenishment_with_existing_positions_no_sell(temp_storage):
     # pending_buys 机制只处理买入，不影响现有持仓
 
 
-def test_replenishment_correct_flow(temp_storage):
+def test_replenishment_correct_flow(temp_storage, mock_runner_client):
     """测试：正确的补位流程（使用 pending_buys）
     
     验证：
@@ -145,9 +167,11 @@ def test_replenishment_correct_flow(temp_storage):
     # 1. 设置初始账户
     runner = PaperTradingRunner(
         initial_capital=500000.0,
+        data_root=tmpdir,
         paper_root=tmpdir,
         verbose=False
     )
+    assert runner.client is mock_runner_client
     
     # 27只持仓
     existing_positions = {}

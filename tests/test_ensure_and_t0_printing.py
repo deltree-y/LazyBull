@@ -88,6 +88,23 @@ def mock_client():
 
 
 @pytest.fixture
+def mock_runner_client(monkeypatch: pytest.MonkeyPatch, mock_client: Mock) -> Mock:
+    """隔离打印测试的客户端与初始化配置，不读取真实令牌或生产配置。"""
+    monkeypatch.setattr("src.lazybull.paper.runner.TushareClient", Mock(return_value=mock_client))
+    monkeypatch.setattr(
+        "src.lazybull.common.cost.get_cost_settings",
+        lambda: {
+            "commission_rate": 0.0003,
+            "min_commission": 5.0,
+            "stamp_tax": 0.0005,
+            "slippage": 0.0,
+        },
+    )
+    monkeypatch.setattr("src.lazybull.features.builder.cache.get_shenwan_level", lambda: "L3")
+    return mock_client
+
+
+@pytest.fixture
 def temp_storage():
     """临时存储"""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -416,11 +433,12 @@ def test_ensure_clean_rebuilds_cached_daily_with_invalid_adjusted_prices(mock_cl
     assert rebuilt["close_adj"].notna().all()
 
 
-def test_print_t0_targets():
+def test_print_t0_targets(mock_runner_client):
     """测试 T0 打印信息"""
     with tempfile.TemporaryDirectory() as tmpdir:
         # 创建 runner
         runner = PaperTradingRunner(initial_capital=500000.0, data_root=tmpdir, paper_root=tmpdir)
+        assert runner.client is mock_runner_client
 
         # 创建测试数据
         targets = [
@@ -453,11 +471,12 @@ def test_print_t0_targets():
         assert success is True
 
 
-def test_enhance_target_info():
+def test_enhance_target_info(mock_runner_client):
     """测试增强目标信息"""
     with tempfile.TemporaryDirectory() as tmpdir:
         # 创建 runner
         runner = PaperTradingRunner(initial_capital=500000.0, data_root=tmpdir, paper_root=tmpdir)
+        assert runner.client is mock_runner_client
 
         # 创建测试数据
         signal_dict = {
