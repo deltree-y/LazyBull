@@ -5,7 +5,7 @@
 
 ## 1. 项目概览
 
-- **名称**：LazyBull（当前版本见 `pyproject.toml`，如 v0.206.0）。
+- **名称**：LazyBull（当前版本见 `pyproject.toml`，如 v0.206.1）。
 - **定位**：A 股量化研究、训练、回测、纸面交易一体化框架，专注**价值红利策略**。
 - **语言/运行时**：Python 3.12，包管理用 Poetry（`pyproject.toml`），也可用 pip + `requirements.txt`。
 - **数据源**：TuShare Pro 为主（辅以 akshare、efinance）；Token 经 `.env` 的 `TS_TOKEN` 注入（python-dotenv 加载）。
@@ -161,6 +161,7 @@ pytest tests/ --cov=src/lazybull         # 覆盖率（目标 > 80%）
 1. 代码改动必须同步更新：**CHANGELOG.md**（版本变更唯一去处）、**README.md**（只承载介绍与使用文档，**禁止混入 changelog**）、**pyproject.toml**（版本号）。
 2. 版本号规则：功能完全落地前只递增小版本号（0.127.0 → 0.127.1，分阶段功能各 Phase 算同一功能）；完全落地后才递增大版本号；Bugfix/优化/重构递增小版本号。
 3. 若实现与 `CLAUDE.md` 契约不一致，必须同步更新 `CLAUDE.md`。
+4. 分阶段提交默认采用方案 F13 / §4.11 两段式：T0.5 治理文档独立生效提交，T1~T5 实现代码在最终验收后一次收口提交；逐 task 闭合不等于逐 task 提交，阶段单提交或其他拆分方式须先获用户明确批准。
 
 ### 7.3 临时文件规范（项目共识）
 
