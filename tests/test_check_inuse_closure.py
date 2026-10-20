@@ -47,9 +47,16 @@ import check_inuse_closure as cic  # noqa: E402
 # 本 task 连带 black 存量格式化重排 4 处——注释间距与括号合并，纯格式、行为不变；
 # P2b-T2（2026-10-17）新增 v2/hosts/backtest 交付件 1 模块（merger_adapter，
 # 宿主只读适配器），不在两条主链路闭包内
-# ⇒ 不在用 102→103、全仓 302→303；静态闭包与在用数不变）
+# ⇒ 不在用 102→103、全仓 302→303；静态闭包与在用数不变；
+# P3-pre-T1（2026-10-18）新增 v2/store 交付件 3 模块（write_lock/manifest_wal/
+# reconcile_rules），均不在两条主链路闭包内
+# ⇒ 不在用 103→106、全仓 303→306；静态闭包与在用数不变；
+# P3-pre-T2（2026-10-18）新增 v2/store/row_domain 1 模块，不在两条主链路闭包内
+# ⇒ 不在用 106→107、全仓 306→307；静态闭包与在用数不变；
+# P3-pre-T3（2026-10-18）新增 v2/store 交付件 2 模块（label_refresh/store_identity），
+# 均不在两条主链路闭包内 ⇒ 不在用 107→109、全仓 307→309；静态闭包与在用数不变）
 INUSE_BASELINE = 200
-NOTIN_BASELINE = 103
+NOTIN_BASELINE = 109
 STATIC_BASELINE = 196
 
 

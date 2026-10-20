@@ -33,120 +33,78 @@ from loguru import logger
 from src.lazybull.v2.common.types import FeatureQuery, TradeDate
 from src.lazybull.v2.store.column_groups import LABEL_TABLES, PANEL_GROUPS
 from src.lazybull.v2.store.data_store import PanelDataStore
+from src.lazybull.v2.store.reconcile_rules import (
+    _D11_TEXT,
+    _D11_WINDOWS,
+    _D12_TEXT,
+    _D14_DOWNSIDE_CORR_LINEAGE_END,
+    _D14_DOWNSIDE_CORR_MAX_ABS,
+    _D14_DOWNSIDE_CORR_MAX_DAYS,
+    _D14_DOWNSIDE_CORR_MAX_OVER,
+    _D14_KURT_MAX_ABS,
+    _D14_KURT_MAX_LATE_DAYS,
+    _D14_KURT_MAX_LATE_OVER,
+    _D14_SKEW_KURT_MAX_DAY_ROWS,
+    _D14_SKEW_KURT_MAX_DAY_SHARE,
+    _D14_SKEW_MAX_ABS,
+    _D14_SKEW_MAX_LATE_DAYS,
+    _D14_SKEW_MAX_LATE_OVER,
+    _D14_SPARSE_MAX_DAY_ROWS,
+    _D14_ZSCORE_MACD_EMA_TAIL_END,
+    _D14_ZSCORE_MACD_MAX_ABS,
+    _D14_ZSCORE_MACD_MAX_DAYS,
+    _D14_ZSCORE_MACD_MAX_OVER,
+    _L1_TAIL_END,
+    _LONG_WINDOW_PREFIXES,
+    _SCATTER_DAY_SHARE,
+    _SCATTER_PURE_MAX_DAYS,
+    _SCATTER_PURE_MAX_ROWS,
+    _SCATTER_TOTAL_SHARE,
+    ATTRIB_VIOLATION_TEXT,
+    COMPARE_ATOL,
+    CYQ5_COLUMNS,
+    CYQ5_LAST_DAY,
+    D04_1_DIFF_START,
+    D04_2_RANGE,
+    D04_3_4_RANGE,
+    D11_ANCHOR_MAX_ABS,
+    D12_EXEMPT_COLUMNS,
+    D14_DOWNSIDE_CORR_COLUMNS,
+    D14_DOWNSIDE_CORR_TEXT,
+    D14_SKEW_KURT_COLUMNS,
+    D14_SKEW_KURT_TEXT,
+    D14_ZSCORE_MACD_COLUMNS,
+    D14_ZSCORE_MACD_TEXT,
+)
+from src.lazybull.v2.store.reconcile_rules import GATE_MAX_ABS_DIFF as _GATE_MAX_ABS
+from src.lazybull.v2.store.reconcile_rules import GATE_OVER_SHARE as _GATE_SHARE
+from src.lazybull.v2.store.reconcile_rules import L1_BOUNDARY_END
+from src.lazybull.v2.store.reconcile_rules import L1_LONG_TAIL_END as _L1_LONG_TAIL_END
+from src.lazybull.v2.store.reconcile_rules import (
+    L1_SCATTER_TEXT,
+    L1_TEXT,
+    L2_RANGE,
+    SCHEMA_EVOLUTION_END,
+    STRICT_SCATTER_TEXT,
+    STRICT_UNATTRIBUTED_TEXT,
+    attribute_column,
+)
+from src.lazybull.v2.store.reconcile_rules import derived_parent as _derived_parent
 from src.lazybull.v2.store.replay_compare import (
     _KEY_COLUMNS,
     _column_samples,
     _compare_nonnumeric_column,
     _compare_numeric_column,
     _count_nan_mismatch,
-    attribute_column,
 )
 
 __all__ = ["reconcile_panel", "L1_BOUNDARY_END", "L2_RANGE", "D04_2_RANGE"]
-
-#: L1/L2 血缘差异日边界（单元 3 报告 §4a；单元 4 复核更正：L2 实为参照侧污染，见 D-09）
-L1_BOUNDARY_END = "20121231"
-L2_RANGE = ("20130101", "20151231")
-#: D-04② 登记事件日窗口（2024-01-16/17 丢行 + 20 日窗口余波）
-D04_2_RANGE = ("20240101", "20240331")
-#: L1 长尾末（与 L1_BOUNDARY_END 同值，语义别名：长窗列 EMA/250 日长尾自然延伸至 2012 年底）
-_L1_TAIL_END = L1_BOUNDARY_END
-#: 长窗/EMA/风控族的 L1 长尾延伸边界（250 日窗口与 EMA 链自 2012 冷启动成熟需 ~1.5 年）
-_L1_LONG_TAIL_END = "20130630"
-_LONG_WINDOW_PREFIXES = (
-    "mkt_",
-    "macd_",
-    "vol_regime",
-    "turnover_percentile",
-    "skewness",
-    "kurtosis",
-    "downside_",
-    "var_95",
-    "cvar_95",
-    "zscore_macd",
-    "volatility_",
-    "parkinson",
-    "garch_",
-    "vol_of_vol",
-    "vol_ratio_5_20",
-    "amihud",
-    "atr_",
-    "bb_",
-)
-#: 数据态孤立单点的判定阈值：单日超门行占比 ≤1% 且期外累计 ≤0.1%
-_SCATTER_DAY_SHARE = 0.01
-_SCATTER_TOTAL_SHARE = 0.001
-
-#: D-12 裁决豁免列族（2026-10-06 用户裁决，冻结文档 §8 D-13）：panel 解锁前瞻列
-#: 经全量 share_float（2005~2026 全分区）+ 全日历重建查询表重写，语义 = PIT 完整；
-#: 参照/cs_train 保持旧链区间截断行为（行为冻结不动）⇒ 严格门/归因门对该族从
-#: 「逐值一致」改为「豁免 + 差异全归因登记」（参照缺 ann≤2010 分区与末年分区的内容差）。
-D12_EXEMPT_COLUMNS = frozenset({"days_to_unlock", "unlock_ratio", "unlock_risk_flag"})
-_D12_TEXT = "D-12 公告前瞻截断豁免（裁决 2026-10-06：panel 全量 PIT vs 旧链区间截断）"
-
-#: D-11 分块锚定影响窗（严格门专用）：panel 回填分块覆盖段起点 20170103/20220104，
-#: 批量缓存锚定 120 交易日长尾 ≈ 6 个自然月；复牌股伴随事件（实证 002260.SZ 2022-05
-#: 复牌 ⇒ EMA 链几何收敛 0.8/日，持续 ~4 个月）再留 3 个月余量 ⇒ 边界 +9 个月；
-#: 参照为单调用锚定 20120104。窗口内长记忆列（EMA/MA250/滚动族及其 zscore/neu 派生）
-#: 及稀疏伴随单点差异属预期锚定效应。
-_D11_WINDOWS = (("20170103", "20170831"), ("20220104", "20220930"))
-_D11_TEXT = "D-11 分块锚定效应（panel 分块锚 20170103/20220104 vs 参照单调用锚 20120104）"
-
-#: 纯数据态孤立单点判定阈值（严格门专用）：全日稀疏（每日 ≤1%）+ 总量 ≤20 行
-#: + 日数 ≤10 + max|Δ| ≤ 0.05（超幅单点一律调查，不登记）
-_SCATTER_PURE_MAX_DAYS = 10
-_SCATTER_PURE_MAX_ROWS = 20
-
-# ========== 对账门收紧常量（v2 P1 三轮评审整改 R3-04 / P1-1 / P1-2 / P1-3 / R2-1）==========
-# 实证来源：终版验收产物 data/reports/v2_p1_panel_reconcile_final_20261006.json（strict）
-# 与 data/reports/v2_p1_panel_vs_cstrain_final_20261006.json（attrib）。
-# 哲学 = fail-closed（对照 D-13 先例）：越界即 FAIL，须调查并重新登记，不留静默放行口。
-
-#: 结构合法性：CYQ5 物化列白名单（参照侧 cyq_perf 数据态差异；实证恰这 5 列 ×
-#: 20120104~20171229 落在 cols_only_panel）
-CYQ5_COLUMNS = frozenset(
-    {
-        "cost_concentration",
-        "weight_avg_bias",
-        "winner_rate",
-        "winner_rate_chg_5",
-        "winner_rate_chg_20",
-    }
-)
-#: CYQ5 登记差异末日上界（实证 last=20171229）
-CYQ5_LAST_DAY = "20171229"
-#: 2012 冷启动 schema 演进边界：cols_only_panel / cols_only_ref_days 登记日 ≤ 此 ⇒ 合法
-SCHEMA_EVOLUTION_END = "20121231"
-
-#: D-04③/④ 登记差异窗（实证 first=20161228；上界 20260702 = 终版参照构建数据态水位）
-D04_3_4_RANGE = ("20161201", "20260702")
-#: D-04① 差异日下界（水位类差异只会出现在接近参照构建数据态的近期窗口；
-#: lhb/block_discount 终版零差异——本规则对存量无约束、对未来漂移 fail-closed）
-D04_1_DIFF_START = "20260101"
-#: D-11 锚定分支超幅上限（实证窗内最大 kurtosis_20=2.326；窗内任意密度放行、超幅拒）
-D11_ANCHOR_MAX_ABS = 5.0
-
-#: D-14 专项三上限（天数 / 累计 over / max|Δ|，越任一 ⇒ 越界；括注终版产物实证值）
-_D14_SKEW_MAX_LATE_DAYS = 250  # 实证 194
-_D14_SKEW_MAX_LATE_OVER = 40000  # 实证总 33355
-_D14_SKEW_MAX_ABS = 5.0  # 实证 3.121
-_D14_KURT_MAX_LATE_DAYS = 750  # 实证 658
-_D14_KURT_MAX_LATE_OVER = 40000  # 实证总 34492
-_D14_KURT_MAX_ABS = 40.0  # 实证 35.13（2015 极端行情簇）
-_D14_ZSCORE_MACD_MAX_DAYS = 500  # 实证 410 / 413
-_D14_ZSCORE_MACD_MAX_OVER = 600000  # 实证 348151 / 471326
-_D14_ZSCORE_MACD_MAX_ABS = 20.0  # 实证 14.28 / 15.29
-_D14_DOWNSIDE_CORR_MAX_DAYS = 200  # 实证 147
-_D14_DOWNSIDE_CORR_MAX_OVER = 300000  # 实证 255697
-_D14_DOWNSIDE_CORR_MAX_ABS = 1.5  # 实证 1.116
 
 #: panel 特征列（377 − 2 键列 = 375；键列以 index 承载）
 PANEL_FEATURE_COLUMNS: tuple[str, ...] = tuple(
     c for cols in PANEL_GROUPS.values() for c in cols if c not in ("trade_date", "ts_code")
 )
 
-_GATE_SHARE = 1e-4
-_GATE_MAX_ABS = 0.05
 _SAMPLE_CAP = 5
 
 
@@ -226,7 +184,7 @@ def _compare_day(date: str, ref: pd.DataFrame, panel_day: pd.DataFrame) -> dict[
     for col in common_cols:
         lcol, rcol = left[col], right[col]
         if pd.api.types.is_numeric_dtype(lcol) and pd.api.types.is_numeric_dtype(rcol):
-            over, max_abs, mask = _compare_numeric_column(lcol, rcol, 1e-6)
+            over, max_abs, mask = _compare_numeric_column(lcol, rcol, COMPARE_ATOL)
         else:
             over, mask = _compare_nonnumeric_column(lcol, rcol)
             max_abs = 0.0
@@ -289,62 +247,54 @@ def _classify_attrib_special(
       3.0.5 滚动聚合行为差推断，20 日窗连续 17 日板块 ≤20131031）+ D-04②
       （2024-01 窗口）+ 稀疏孤立单点（2021-12）。
 
-    三上限（R3 评审 P1-3 整改；常量见模块顶部 _D14_*，注释括注实证值）：
+    三上限（R3 评审 P1-3 整改；常量见 reconcile_rules.py 的 _D14_* 登记）：
     差异天数上限、累计 over 上限（skew/kurt 只计 late 日求和）、max|Δ| 上限，
     越任一 ⇒ 越界。
     """
-    if col in ("skewness_20", "kurtosis_20"):
+    if col in D14_SKEW_KURT_COLUMNS:
         late = [(d, o, t) for d, o, t, _ in diff_days if d > _L1_LONG_TAIL_END]
         if col == "skewness_20":
             caps = (_D14_SKEW_MAX_LATE_DAYS, _D14_SKEW_MAX_LATE_OVER, _D14_SKEW_MAX_ABS)
         else:
             caps = (_D14_KURT_MAX_LATE_DAYS, _D14_KURT_MAX_LATE_OVER, _D14_KURT_MAX_ABS)
         ok = (
-            all(o <= 25 and (t == 0 or o / t <= 0.015) for _, o, t in late)
+            all(
+                o <= _D14_SKEW_KURT_MAX_DAY_ROWS
+                and (t == 0 or o / t <= _D14_SKEW_KURT_MAX_DAY_SHARE)
+                for _, o, t in late
+            )
             and len(late) <= caps[0]
             and sum(o for _, o, _ in late) <= caps[1]
             and max_abs_diff <= caps[2]
         )
-        return (
-            "L1 + D-05 实现对偶数值尾（rolling vs 中心矩实现的边界股翻转，"
-            "逐日 ≤25 股且 ≤1.5%，聚 2015 停牌簇，受天数/累计/超幅三上限约束；现役模型不含）",
-            not ok,
-        )
-    if col in ("zscore_macd_hist", "zscore_macd_hist_sz"):
+        return (D14_SKEW_KURT_TEXT, not ok)
+    if col in D14_ZSCORE_MACD_COLUMNS:
         ok = (
             all(
-                d <= "20130930"
+                d <= _D14_ZSCORE_MACD_EMA_TAIL_END
                 or any(lo <= d <= hi for lo, hi in _D11_WINDOWS)
-                or (o <= 5 and t > 0 and o / t <= _SCATTER_DAY_SHARE)
+                or (o <= _D14_SPARSE_MAX_DAY_ROWS and t > 0 and o / t <= _SCATTER_DAY_SHARE)
                 for d, o, t, _ in diff_days
             )
             and len(diff_days) <= _D14_ZSCORE_MACD_MAX_DAYS
             and sum(o for _, o, *_ in diff_days) <= _D14_ZSCORE_MACD_MAX_OVER
             and max_abs_diff <= _D14_ZSCORE_MACD_MAX_ABS
         )
-        return (
-            "L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）"
-            "+ 稀疏孤立单点（受天数/累计/超幅三上限约束）",
-            not ok,
-        )
-    if col == "downside_corr_20":
+        return (D14_ZSCORE_MACD_TEXT, not ok)
+    if col in D14_DOWNSIDE_CORR_COLUMNS:
         lo2, hi2 = D04_2_RANGE
         ok = (
             all(
-                d <= "20131031"
+                d <= _D14_DOWNSIDE_CORR_LINEAGE_END
                 or lo2 <= d <= hi2
-                or (o <= 5 and t > 0 and o / t <= _SCATTER_DAY_SHARE)
+                or (o <= _D14_SPARSE_MAX_DAY_ROWS and t > 0 and o / t <= _SCATTER_DAY_SHARE)
                 for d, o, t, _ in diff_days
             )
             and len(diff_days) <= _D14_DOWNSIDE_CORR_MAX_DAYS
             and sum(o for _, o, *_ in diff_days) <= _D14_DOWNSIDE_CORR_MAX_OVER
             and max_abs_diff <= _D14_DOWNSIDE_CORR_MAX_ABS
         )
-        return (
-            "L1 + 2013-09/10 cs_train 构建环境血缘块（pandas 2.x vs 3.0.5 滚动聚合"
-            "行为差推断）+ D-04② + 稀疏孤立单点（受天数/累计/超幅三上限约束）",
-            not ok,
-        )
+        return (D14_DOWNSIDE_CORR_TEXT, not ok)
     return None
 
 
@@ -412,41 +362,23 @@ def _classify_attrib_column(
     l1_end = _L1_LONG_TAIL_END if col.startswith(_LONG_WINDOW_PREFIXES) else _L1_TAIL_END
     dates = [d for d, *_ in diff_days]
     if all(d <= l1_end for d in dates):
-        return ("L1 2012 构建血缘（冷启动零预热/schema 演进）", False)
+        return (L1_TEXT, False)
     late = [(d, o, t) for d, o, t, _ in diff_days if d > l1_end]
     total_over = sum(o for _, o, *_ in diff_days)
     late_over = sum(o for _, o, _ in late)
     late_sparse = all(o / t <= _SCATTER_DAY_SHARE for _, o, t in late if t > 0)
     late_tiny = total_over > 0 and (late_over / total_over) <= _SCATTER_TOTAL_SHARE
     if late_sparse and late_tiny:
-        return ("L1 血缘 + 数据态孤立单点（期外每日 ≤1% 且累计 ≤0.1%）", False)
-    return ("越界（第六类/日期越出登记边界，须调查）", True)
+        return (L1_SCATTER_TEXT, False)
+    return (ATTRIB_VIOLATION_TEXT, True)
 
 
 def _is_anchor_sensitive(col: str) -> bool:
     """长记忆列判定（D-11 锚定效应的易感列）：长窗前缀族或其 zscore/neu 派生子列。"""
     if col.startswith(_LONG_WINDOW_PREFIXES):
         return True
-    for prefix in ("zscore_", "neu_"):
-        if col.startswith(prefix):
-            plen = len(prefix)  # 切片界先赋值（black/flake8 E203 兼容）
-            parent = col[plen:]
-            if parent.endswith("_sz"):
-                parent = parent[: -len("_sz")]
-            return parent.startswith(_LONG_WINDOW_PREFIXES)
-    return False
-
-
-def _derived_parent(col: str) -> str | None:
-    """zscore_X / zscore_X_sz / neu_X 派生列的母列名（非派生列返回 None）。"""
-    for prefix in ("zscore_", "neu_"):
-        if col.startswith(prefix):
-            plen = len(prefix)  # 切片界先赋值（black/flake8 E203 兼容）
-            parent = col[plen:]
-            if parent.endswith("_sz"):
-                parent = parent[: -len("_sz")]
-            return parent
-    return None
+    parent = _derived_parent(col)
+    return parent is not None and parent.startswith(_LONG_WINDOW_PREFIXES)
 
 
 def _classify_strict_column(
@@ -490,21 +422,21 @@ def _classify_strict_column(
         return (_D11_TEXT + "（伴随稀疏单点）", False)
     l1_end = _L1_LONG_TAIL_END if col.startswith(_LONG_WINDOW_PREFIXES) else _L1_TAIL_END
     if all(d <= l1_end for d in dates):
-        return ("L1 2012 构建血缘（冷启动零预热/schema 演进）", False)
+        return (L1_TEXT, False)
     late = [(d, o, t) for d, o, t, _ in diff_days if d > l1_end]
     late_over = sum(o for _, o, _ in late)
     late_sparse = all(o / t <= _SCATTER_DAY_SHARE for _, o, t in late if t > 0)
     late_tiny = total_over > 0 and (late_over / total_over) <= _SCATTER_TOTAL_SHARE
     if late_sparse and late_tiny:
-        return ("L1 血缘 + 数据态孤立单点（期外每日 ≤1% 且累计 ≤0.1%）", False)
+        return (L1_SCATTER_TEXT, False)
     if (
         len(dates) <= _SCATTER_PURE_MAX_DAYS
         and total_over <= _SCATTER_PURE_MAX_ROWS
         and all_sparse
         and max_abs_diff <= _GATE_MAX_ABS
     ):
-        return ("数据态孤立单点（纯：全日稀疏微量，单日 ≤1% 且总量 ≤20 行）", False)
-    return ("未归因（差异模式越出登记类边界，实现漂移嫌疑，须调查）", True)
+        return (STRICT_SCATTER_TEXT, False)
+    return (STRICT_UNATTRIBUTED_TEXT, True)
 
 
 def _merge_and_judge(day_results: list[dict[str, Any]], mode: str) -> dict[str, Any]:

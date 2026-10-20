@@ -18,11 +18,18 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 from loguru import logger
+
+from src.lazybull.v2.store.reconcile_rules import (
+    COMPARE_ATOL,
+    GATE_MAX_ABS_DIFF,
+    GATE_OVER_SHARE,
+    attribute_column,
+)
 
 __all__ = [
     "COMPARE_ATOL",
@@ -32,62 +39,8 @@ __all__ = [
     "attribute_column",
 ]
 
-COMPARE_ATOL = 1e-6
-GATE_OVER_SHARE = 1e-4
-GATE_MAX_ABS_DIFF = 0.05
 _SAMPLE_CAP = 5
 _KEY_COLUMNS = ("trade_date", "ts_code")
-
-#: D-04①：share_float/block_trade/top_list 水位晚于基线数据态（直接列）
-_D04_1_EXACT = {"days_to_unlock", "unlock_ratio", "unlock_risk_flag"}
-_D04_1_PREFIXES = ("block_discount_", "lhb_")
-#: D-04②：raw daily 2024-01-16/17 丢停牌股行（等权市场序列微移）
-_D04_2_EXACT = {"downside_corr_20"}
-#: D-04③：季频财务/基金持仓 raw 修订（NaN 型差异，单元 2 标定实证集）
-_D04_3_EXACT = {"dividend_payout_ratio", "cf_nm", "ocf_to_profit"}
-_D04_3_PREFIXES = ("fund_",)
-#: D-04④：margin_detail raw 分区修订（丢行；单元 3 探测实证 2026-04-17 分区缺行）
-_D04_4_EXACT = {"rzye_chg_5", "rzye_chg_20", "short_balance_change_5", "short_sell_vol_change_5"}
-#: D-05：pandas 3.0 rolling.skew/kurt 回归（环境漂移，已修复；残留差异 = 异常待查）
-_D05_EXACT = {"skewness_20", "kurtosis_20"}
-
-_D04_1_TEXT = "D-04① share_float/block_trade/top_list 水位晚于基线数据态"
-_D04_2_TEXT = "D-04② raw daily 2024-01-16/17 分区丢行（等权市场序列微移）"
-_D04_3_TEXT = "D-04③ 季频财务/基金持仓 raw 修订"
-_D04_4_TEXT = "D-04④ margin_detail raw 分区修订（丢行）"
-_D05_TEXT = "D-05 pandas 3.0 rolling.skew/kurt 回归（已修复，残留=异常）"
-
-
-def _attribute_base(col: str) -> Optional[str]:
-    """基础列归因（未命中返回 None）。"""
-    if col in _D04_1_EXACT or col.startswith(_D04_1_PREFIXES):
-        return _D04_1_TEXT
-    if col in _D04_2_EXACT:
-        return _D04_2_TEXT
-    if col in _D04_3_EXACT or col.startswith(_D04_3_PREFIXES):
-        return _D04_3_TEXT
-    if col in _D04_4_EXACT:
-        return _D04_4_TEXT
-    if col in _D05_EXACT:
-        return _D05_TEXT
-    return None
-
-
-def attribute_column(col: str) -> str:
-    """列归因：基础列查 D-04 清单；zscore_X / zscore_X_sz / neu_X 子列随母列归因。"""
-    base = _attribute_base(col)
-    if base is not None:
-        return base
-    for prefix in ("zscore_", "neu_"):
-        if col.startswith(prefix):
-            plen = len(prefix)  # 切片界先赋值（black/flake8 E203 兼容）
-            parent = col[plen:]
-            if parent.endswith("_sz"):
-                parent = parent[: -len("_sz")]
-            parent_attr = _attribute_base(parent)
-            if parent_attr is not None:
-                return f"{parent_attr}（zscore/neu 派生连锁）"
-    return "待调查"
 
 
 def _resolve_cs_dir(root: Path | str) -> Path:

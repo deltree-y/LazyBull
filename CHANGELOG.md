@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.207.0] - 2026-10-20
+
+### Added
+
+- **v2 P3 前工程义务完整落地（T0.5~T5）：日更双通路 + 标签专用刷新 + P1 遗留 store 改进**：
+  - **日更双通路（R3-03）**：冻结段（≤20260702）`label_filtered` 与日更段（≥20260703）
+    `structural` 双口径落地；新增 `v2/store/row_domain.py` 为段边界与行域派生/校验唯一来源；
+    manifest 新增行域段、逐分区 row_domain 与刷新审计字段（13,802 个既有登记只做元数据迁移、
+    parquet 零改动、迁移审计恰一次，repairs 707 条逐项保留）；backfill 拒绝跨缝；
+    结构性初建三表一律强制 forming，sealed 只能由标签专用刷新产生。
+  - **标签专用刷新**：新增 `v2/store/label_refresh.py`，按 E20=idx(T)+21 精确端点复用
+    `compute_forward_returns` 与 `apply_industry_neutralization` 重算 raw+neu 三表（禁止整日
+    重建）；意图/完成恰一次审计（`label_refresh_intents`/`label_refreshes` append-only、
+    与 repairs 分离、稳定事件键、superseded/orphan 只追加）；崩溃分级恢复——普通续跑、
+    replace→WAL 受控 roll-forward、同代回滚；配套 `store_identity.py` 输入/代码/环境身份。
+  - **store 工程偿还（P1 §7.4 六项闭环）**：`data_store.py` 无行为变化拆分出
+    `write_lock.py`/`manifest_wal.py`（`PanelDataStore` 公共签名 25 项不变；文件从 1,067 行
+    降至 806 行，残余软义务如实登记、复杂度硬基线未扩）；归因登记
+    单源 `reconcile_rules.py`（replay_compare/panel_reconcile/attrib_violators_diag 共同消费）；
+    backfill 与 build_daily 共用 25 交易日 ti lookup 切片（起点前补 24 日；块头与全历史
+    lookup 逐值一致）；manifest 上一代 `.bak`
+    原子备份 + dry-run 显式恢复 `scripts/v2_p1/recover_manifest.py`（bak 失败中止主提交，
+    禁止自动空骨架/resync）；WAL 未知事件 fail-closed 不压实；一次性写修复脚本按 Q3 裁决退役。
+  - **日更入口与验收工具**：新增 `scripts/v2_p3_pre/`（migrate_store_manifest /
+    update_daily_store / verify_store_iteration / verify_iteration_parts）；生产执行一律
+    先 dry-run（逐日计划 + 耗时/授权守卫）再单独授权 `--execute`。
+  - **真实验收（T4，B/C/D 分次授权）**：真实日更 20260703/20260731 forming + Q6 键集精确
+    相等锚；历史影子 20 日 forming→sealed 与 P1 原 sealed raw+neu 60 表逐值精确一致
+    （8.83s ≤ 60s 硬门，`build_features_data=0`，幂等与六场景故障门全过）；ti 块头分层判据
+    （整数列/当日值列逐位一致 + 浮点累计列容差比对，2026-10-19 用户批准的判据级修订）；
+    strict/attrib 小窗口对账 PASS、全历史读性能双口径 ≤×1.5；生产追加 21 日全部 forming
+    （panel 3,248→3,416、labels 三表各 3,518→3,539，冻结段与 cs_train/cs_infer 零写入）。
+  - 工程验收：全量 pytest **3,055 passed / 0 failed**，复杂度新增硬超限 0，格式与在用闭包
+    守恒通过；术语库新增「行域 / forming / sealed」五件。实施登记
+    `docs/plans/v2/p3_pre_label_refresh_store_t0_plan_20261017.md`（本地）；MVP 总账升级 v10。
+    版本号 0.206.1 → **0.207.0**（P3 前工程义务完整落地）。
+
+### Fixed
+
+- **文档勘误（`docs/data/features_schema.md`，仅三处已登记旧示例）**：标签公式更正为
+  T+1 收盘买入 → T+1+N 开盘卖出（`features/labels.py::compute_forward_returns`）；
+  `list_days < 60` 更正为 `min_list_days=365`；标签过滤示例更正为
+  `label_filter_mode="single"`（y_ret_20 主标签非空，训练读时仍按实际标签列 dropna）；
+  其余章节未改。
+
 ## [0.206.1] - 2026-10-18
 
 ### Changed

@@ -133,6 +133,8 @@ class FeatureBuilder(Protocol):
     ) -> None:
         """构建指定日的特征分区。
 
+        行域：冻结历史段为 label_filtered；日更段为 structural，不叠未来标签过滤，
+        训练消费仍按实际标签列读时 dropna。
         防冲突：重复调用 ⇒ 内容指纹一致才放行（同 append_features 语义）
         副作用：调用 store.append_features
         依赖：normalized 数据 + factors/ 计算函数
@@ -146,8 +148,9 @@ class FeatureBuilder(Protocol):
         groups: Sequence[str],
         store: DataStore,
     ) -> None:
-        """历史回填（冷热分层后写冷区；按日分区幂等可重入，重跑即续传）。
+        """历史回填（冷热分层后写冷区；仅服务冻结段 label_filtered 行域）。
 
+        热区逐日与完整未登记冷月可续传；已登记部分月不能普通 append，缺日须走显式修复通道。
         副作用：批量写分区
         """
         ...

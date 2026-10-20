@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """v2 P1 单元 4·D-12 豁避免责证据：解锁族严格门残差 = 加载窗内容差（全量证明）。
 
-**一次性脚本，已执行完毕，效果持久化于 manifest.repairs；保留作审计轨迹。**
+**历史诊断：不直接调用业务写 API，不作为独立验收门。
+若生产 manifest WAL 有待压实事件，PanelDataStore 会按既有恢复语义补登记并压实；
+除此之外仅写证据报告。正式判定以 panel_reconcile 与既有验收记录为准。**
 
 证明结构（三个恒等式闭合）：
 1. panel == 全量历史查询表（修复写入值的独立复算校验，全股票-日）；
@@ -76,7 +78,9 @@ def _match_stats(actual: pd.Series, expected: pd.Series, name: str) -> dict:
                     "ts_code": str(code),
                     "actual": None if pd.isna(val) else float(val),
                     "expected": (
-                        None if pd.isna(aligned.loc[(date, code)]) else float(aligned.loc[(date, code)])
+                        None
+                        if pd.isna(aligned.loc[(date, code)])
+                        else float(aligned.loc[(date, code)])
                     ),
                 }
             )

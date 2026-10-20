@@ -23,14 +23,22 @@
 
 ### 标签字段
 
+标签计算唯一实现入口为 `src/lazybull/features/labels.py::compute_forward_returns`：
+信号日 T → T+1 收盘买入（close_adj）→ T+1+N 开盘卖出（open_adj）。
+
 | 字段名 | 类型 | 说明 | 计算方式 |
 |--------|------|------|----------|
-| y_ret_5 | float | 未来5日后复权收益率 | (close_adj(t+5) / close_adj(t)) - 1 |
+| y_ret_5 | float | 未来5日收益率 | open_adj(T+6) / close_adj(T+1) - 1 |
+| y_ret_10 | float | 未来10日收益率 | open_adj(T+11) / close_adj(T+1) - 1 |
+| y_ret_20 | float | 未来20日收益率 | open_adj(T+21) / close_adj(T+1) - 1 |
 
 **说明**：
-- t+5 表示当前交易日之后的第5个交易日
-- 使用后复权收盘价计算，消除分红送股的影响
-- 标签缺失的样本（如未来停牌、退市）会被自动剔除
+- T+k 表示完整交易日历上信号日之后第 k 个交易日（索引口径 idx(T)+k）；标签 y_ret_N 的
+  买入端点为 T+1、卖出端点为 T+1+N（实现 `sell_idx = current_idx + 1 + horizon`，
+  见 `labels.py`），与同表公式一致
+- 买入/卖出端点均使用复权价（close_adj / open_adj），消除分红送股的影响
+- 端点精确交易日缺行、缺列或买入价 ≤1e-6 时该键标签为 NaN，不做向前/向后填充；
+  训练侧过滤规则见下文「股票池过滤规则」
 
 ### 特征字段
 
@@ -339,17 +347,19 @@ close_adj = close × adj_factor
    - 判断标准：股票名称包含"ST"、"*ST"、"S*ST"、"退"等
    - 剔除原因：风险高、流动性差、涨跌停限制不同
 
-2. **上市不满60天** (`list_days < 60`)
-   - 判断标准：从上市日期到当前交易日的自然日天数 < 60
+2. **上市不满365个自然日** (`list_days < 365`)
+   - 判断标准：从上市日期到当前交易日的自然日天数 < 365（`min_list_days=365`，
+     实现见 `src/lazybull/features/builder/static_extra.py::_apply_filters_static`）
    - 剔除原因：历史数据不足、价格波动大、缺乏稳定性
 
 3. **停牌股票** (`is_suspended=1`)
    - 判断标准：当日成交量为0，或在停复牌记录中
    - 剔除原因：无法交易
 
-4. **标签缺失** (`y_ret_5 is NaN`)
-   - 判断标准：未来5个交易日的收盘价缺失
-   - 剔除原因：无法计算标签，无法用于训练
+4. **主标签缺失** (`y_ret_20 is NaN`，`label_filter_mode="single"`)
+   - 判断标准：未来20日收益主标签无法计算（cs_train 写侧仅按主标签 single 口径过滤，
+     实现见 `static_extra.py::_apply_filters_static`；训练读时仍按实际使用的标签列 dropna）
+   - 剔除原因：无法计算主标签，无法用于训练
 
 ### 不剔除但标记的情况
 

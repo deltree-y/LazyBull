@@ -831,7 +831,8 @@ python scripts/v2_p5a1/run_power_calibration.py --shift-grid 2 5 8 10 12 15 --ou
 20250701~20260702，244 日 × 8 族）+ `data/features/panel_archive/`（冷区 2012-01~2025-06，
 162 月 × 8 族）+ `data/labels/y_ret_{5,10,20}/`（3 表 × 3,518 日，全 sealed）+
 `data/features/manifest.json`（411 列登记 + 分区指纹 + 依赖声明 + repairs 审计轨迹）；
-冻结验收基准 `data/frozen_reference/v2_p1/`（3,518 分区）。命令入口：
+冻结验收基准 `data/frozen_reference/v2_p1/`（3,518 分区；上述标签 3,518 日全 sealed 为
+P1 验收时点口径，日更段追加后现状见下文 P3 前段落）。命令入口：
 
 ```bash
 python scripts/v2_p1/backfill_panel.py               # 全历史回填（冷热分层）
@@ -877,6 +878,35 @@ preflight 后使用；它只是向比对器显式声明门 1 已完成，**不�
 
 **边界：P2b 仍未切换生产链路**——多袖净额化、虚拟账本、三恒等式与订单级真实接线
 归 P6.5，纸面同源和过渡适配器删除归 P4；本阶段不宣称收益改善。
+
+**v2 日更双通路与标签专用刷新（P3 前工程义务，v0.207.0）：** 冻结段 `label_filtered`
+（≤20260702）与日更段 `structural`（≥20260703）双口径落地：日更段只做结构过滤、不因
+未来标签不可算而拒绝落盘，结构性初建三表一律 forming；forming→sealed 只能由标签专用
+刷新路径（E20=idx(T)+21 到达实际加载水位后逐日追赶）产生。行域与刷新审计随 manifest
+迁移登记（13,802 个既有分区仅元数据迁移、parquet 零改动；repairs 707 条逐项保留）。
+命令入口（涉及生产写入的 migrate/update 均默认 dry-run，须单独授权后 `--execute`；
+verify 只读生产输入、只写 scratch 与正式报告）：
+
+```bash
+# manifest 行域迁移（一次性，已完成并审计）
+python scripts/v2_p3_pre/migrate_store_manifest.py --data-root data \
+  --backup-root data/backup/v2_p3_pre/<RUN_ID>
+
+# 日更追加 / 标签追赶（逐日 build_daily；--refresh-only 仅标签追赶；--recover-event 受控恢复）
+python scripts/v2_p3_pre/update_daily_store.py --start-date 20260703 --data-root data \
+  --backup-root data/backup/v2_p3_pre/<RUN_ID>
+
+# store 迭代验收（真实日更 forming + 历史影子 sealed/性能 + 幂等/故障门）
+python scripts/v2_p3_pre/verify_store_iteration.py --dates 20260703,20260731 \
+  --historical-shadow-count 20 --scratch-root temp/<SCRATCH> --out data/reports/<报告>.json
+
+# manifest 损坏恢复（dry-run 默认；--execute 另案授权）
+python scripts/v2_p1/recover_manifest.py --data-root data
+```
+
+**边界：本期仍未切换生产链路**——现役训练/回测/纸面仍走 cs_train/cs_infer 与旧内核；
+v2 panel/labels 供 P3 只读消费，P3 开工硬门与训练适配契约见实施规划（本地
+`docs/plans/v2/p3_pre_label_refresh_store_t0_plan_20261017.md`）§6。
 
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型

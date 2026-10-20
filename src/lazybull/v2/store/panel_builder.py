@@ -41,6 +41,7 @@ from src.lazybull.v2.store.column_groups import (
     validate_mapping,
 )
 from src.lazybull.v2.store.labels_builder import append_labels_for_day
+from src.lazybull.v2.store.row_domain import row_domain_for_date
 
 __all__ = ["V2PanelBuilder", "bootstrap_manifest"]
 
@@ -171,29 +172,33 @@ def bootstrap_manifest(store: Any) -> None:
     （available_from/backfilled_at/status 等）保留不动；未登记列才 register_column。
     """
     validate_mapping()
-    manifest = store.manifest
-    planned: list[tuple[str, str, str, str]] = []  # (列, 族, source, status)
-    for group, cols in PANEL_GROUPS.items():
-        for col in cols:
-            planned.append((col, group, _GROUP_SOURCES[group], "active"))
-    for col in MATERIALIZED_COLUMNS:
-        planned.append((col, "announcement", _MATERIALIZED_SOURCE, "deprecated"))
-    for col, group, source, status in planned:
-        if manifest.has_column(col):
-            meta = manifest.column_meta(col)
-            conflicts = [
-                f"{key} 已登记 {meta.get(key)!r} ≠ bootstrap {expected!r}"
-                for key, expected in (("group", group), ("definition_version", "v1"))
-                if meta.get(key) != expected
-            ]
-            if conflicts:
-                raise ValueError(f"列 {col} bootstrap 与既有登记冲突: {conflicts}")
-            continue  # 已登记 ⇒ 治理元数据保留不动
-        manifest.register_column(col, group, source=source, definition_version="v1", status=status)
-    manifest.register_dependencies(
-        raw_datasets=list(_RAW_DEPENDENCIES), factor_functions=dict(_FACTOR_FUNCTIONS)
-    )
-    manifest.save()
+    with store.write_lock():
+        store._wal.sync_manifest_under_lock()
+        manifest = store.manifest
+        planned: list[tuple[str, str, str, str]] = []  # (列, 族, source, status)
+        for group, cols in PANEL_GROUPS.items():
+            for col in cols:
+                planned.append((col, group, _GROUP_SOURCES[group], "active"))
+        for col in MATERIALIZED_COLUMNS:
+            planned.append((col, "announcement", _MATERIALIZED_SOURCE, "deprecated"))
+        for col, group, source, status in planned:
+            if manifest.has_column(col):
+                meta = manifest.column_meta(col)
+                conflicts = [
+                    f"{key} 已登记 {meta.get(key)!r} ≠ bootstrap {expected!r}"
+                    for key, expected in (("group", group), ("definition_version", "v1"))
+                    if meta.get(key) != expected
+                ]
+                if conflicts:
+                    raise ValueError(f"列 {col} bootstrap 与既有登记冲突: {conflicts}")
+                continue  # 已登记 ⇒ 治理元数据保留不动
+            manifest.register_column(
+                col, group, source=source, definition_version="v1", status=status
+            )
+        manifest.register_dependencies(
+            raw_datasets=list(_RAW_DEPENDENCIES), factor_functions=dict(_FACTOR_FUNCTIONS)
+        )
+        store._wal.save()
     logger.info(
         f"manifest bootstrap 完成: {sum(len(c) for c in PANEL_GROUPS.values())} 列 + "
         f"{len(MATERIALIZED_COLUMNS)} 物化列，raw 依赖 {len(_RAW_DEPENDENCIES)} 项"
@@ -201,7 +206,10 @@ def bootstrap_manifest(store: Any) -> None:
 
 
 class _ArchiveMonthBuffer:
-    """backfill 冷区月缓冲：同自然月的族帧攒批，月切换 / flush 时落 append_archive_features。"""
+    """backfill 冷区月缓冲：同自然月的族帧攒批，月切换 / flush 时落 append_archive_features。
+
+    仅完整未登记月可走普通续传；已登记部分月须走显式修复通道，不借本缓冲追加。
+    """
 
     def __init__(self, store: Any, groups: Sequence[str]) -> None:
         self._store = store
@@ -260,6 +268,15 @@ class V2PanelBuilder:
             label_filter_mode="single",
             verbose=verbose,
         )
+        # 结构段仅取消标签行过滤；_builder 继续指向冻结构建器，兼容既有私有调用。
+        self._structural_builder = LegacyFeatureBuilder(
+            min_list_days=min_list_days,
+            horizon=20,
+            horizons=[5, 10, 20],
+            require_label=False,
+            label_filter_mode="single",
+            verbose=verbose,
+        )
 
     @staticmethod
     def _build_flags() -> dict[str, bool]:
@@ -303,27 +320,35 @@ class V2PanelBuilder:
         2012 起回填消失）。过滤口径与批量回填完全一致（全市场统一截面，
         禁止以当日局部截面重排，冻结 §1）。
 
-        标签不可终 fail-fast（R3-03 防御性收口，已裁决待实施——冻结文档 §9.2）：
-        T+21 端点超数据水位/加载窗口的目标日直接 RuntimeError（不再走到缺日断言
-        报误导性「缺日」）。裁决（2026-10-06）：build_daily 应走 require_label=False
-        结构域（对齐旧链 cs_infer 先例，行域由写侧决定、消费侧统一读时过滤）；
-        日更通路实施前本防御保持 fail-fast，历史影子通路不受影响。
+        行域由 row_domain_for_date 唯一分派：冻结段（<=20260702）保留
+        require_label=True 与标签不可终 fail-fast（R3-03）；结构段（>=20260703）
+        走 require_label=False，不执行该 fail-fast，初建标签强制 forming，
+        因而未来标签尚未成熟的 y_ret_20=NaN 行也可落盘。
         """
         date_str = str(date)
+        structural = row_domain_for_date(date_str) == "structural"
         use_groups = self._normalize_groups(groups)
         calendar = self._full_calendar()
-        if not self._filter_label_starved([date_str], calendar, date_str):
+        if not structural and not self._filter_label_starved([date_str], calendar, date_str):
             raise RuntimeError(
-                f"{date_str} 标签不可终（T+21 端点超数据水位/加载窗口）：当日特征日更依赖"
-                "未来标签；R3-03 已裁决（冻结文档 §9.2：build_daily 走 require_label=False "
-                "结构域），日更通路尚未实施、本防御保持 fail-fast，历史影子通路不受影响"
+                f"{date_str} 标签不可终（T+21 端点超数据水位/加载窗口）：冻结段特征依赖"
+                "未来标签，R3-03 防御保持 fail-fast；>=20260703 结构段由 build_daily "
+                "自动分派，不受此限制"
             )
         ti_lookup = self._build_ti_lookup_for_day(calendar, date_str)
         capture_start = self._daily_capture_start(date_str)
-        captured = self._run_capture(capture_start, date_str, keep_dates={date_str})
+        captured = self._run_capture(
+            capture_start, date_str, keep_dates={date_str}, structural=structural
+        )
         for trade_date, df_day in captured:
             materialized = self._materialize_day(df_day, trade_date, ti_lookup)
-            append_labels_for_day(store, materialized, calendar, data_end=self._data_horizon())
+            append_labels_for_day(
+                store,
+                materialized,
+                calendar,
+                data_end=self._data_horizon(),
+                force_forming=structural,
+            )
             frames = _split_groups(materialized)
             for group in use_groups:
                 store.append_features(TradeDate.from_str(trade_date), group, frames[group])
@@ -343,15 +368,24 @@ class V2PanelBuilder:
         store: Any,
         keep_dates: Optional[set[str]] = None,
     ) -> None:
-        """历史回填（冷热分层：<=20250630 冷区月分区，其后热区日分区；可重入续传）。
+        """历史回填（冷热分层：<=20250630 冷区月分区，其后热区日分区）。
 
-        防冲突：store 两阶段提交（指纹一致放行/no-op、不一致报错），重跑即续传。
+        防冲突：store 两阶段提交（指纹一致放行/no-op、不一致报错）。热区逐日与
+        完整未登记冷月可续传；已登记部分月不能普通 append，缺日须走显式修复通道。
         keep_dates 非空时 sink 只落 keep 内的日（管线仍 force=True 全量构建——
         分块重叠日以不同预热窗重建时 EMA/长记忆列尾差 >1e-6，重复 append 必触发
         指纹冲突；sink 丢弃重叠日 ⇒ panel ≡ 参照，见单元 4 构造约束）。
         断言：keep_dates 内全部捕获（缺日显式报错，禁止静默缺口落盘）。
         """
         start_str, end_str = str(start_date), str(end_date)
+        if (
+            row_domain_for_date(start_str) != "label_filtered"
+            or row_domain_for_date(end_str) != "label_filtered"
+        ):
+            raise RuntimeError(
+                f"backfill 仅允许冻结段（<=20260702），实得 {start_str}~{end_str}；"
+                "跨缝或结构段请改用 build_daily 逐日构建"
+            )
         use_groups = self._normalize_groups(groups)
         calendar = self._full_calendar()
         range_dates = [d for d in calendar if start_str <= d <= end_str]
@@ -366,7 +400,8 @@ class V2PanelBuilder:
                     f"backfill {start_str}~{end_str}: keep_dates 为空（全部已写），跳过构建"
                 )
                 return
-        ti_lookup = load_top_inst_lookup(self._loader, range_dates)
+        lookup_dates = self._ti_lookup_dates(calendar, range_dates[0], range_dates[-1])
+        ti_lookup = load_top_inst_lookup(self._loader, lookup_dates)
         buffer = _ArchiveMonthBuffer(store, use_groups)
         captured = self._run_capture(start_str, end_str, keep_dates=keep_dates)
         # manifest 逐分区落盘是全量回填 O(n²) 瓶颈 ⇒ 延迟到本块出口统一落盘
@@ -393,11 +428,14 @@ class V2PanelBuilder:
         start_str: str,
         end_str: str,
         keep_dates: Optional[set[str]] = None,
+        *,
+        structural: bool = False,
     ) -> list[tuple[str, pd.DataFrame]]:
         """跑旧 pipeline（force=True 绕过跳过），捕获逐日大表。
 
         keep_dates 非空时 sink 只保留指定日（预热日的帧不进内存累积，
-        单日通路防 ~140 日大表占内存）。
+        单日通路防 ~140 日大表占内存）。structural=True 仅切换结构段私有
+        构建器；默认仍走冻结构建器，保持 backfill 与既有调用不变。
         """
         captured: list[tuple[str, pd.DataFrame]] = []
 
@@ -409,10 +447,11 @@ class V2PanelBuilder:
             root_path=self._loader.storage.root_path,
             sink=_sink,
         )
+        feature_builder = self._structural_builder if structural else self._builder
         build_features_data(
             capture,
             self._loader,
-            self._builder,
+            feature_builder,
             start_str,
             end_str,
             force=True,
@@ -452,14 +491,24 @@ class V2PanelBuilder:
         open_dates = dates[trade_cal["is_open"] == 1]
         return sorted(open_dates.tolist())
 
+    @staticmethod
+    def _ti_lookup_dates(calendar: list[str], start_str: str, end_str: str) -> list[str]:
+        """ti lookup 日历：区间起点前留 24 日，与实际 20 日滚动窗共享单一切片口径。"""
+        if start_str not in calendar:
+            raise ValueError(f"{start_str} 不在交易日历中")
+        if end_str not in calendar:
+            raise ValueError(f"{end_str} 不在交易日历中")
+        start_idx = calendar.index(start_str)
+        end_idx = calendar.index(end_str)
+        if start_idx > end_idx:
+            raise ValueError(f"ti lookup 起始日期晚于结束日期: {start_str} > {end_str}")
+        lo = max(0, start_idx - 24)
+        hi = end_idx + 1
+        return calendar[lo:hi]
+
     def _build_ti_lookup_for_day(self, calendar: list[str], date_str: str) -> dict:
         """单日 ti 查询表（窗口 [T-19,T] 需 20 个交易日，留 25 天余量切片）。"""
-        if date_str not in calendar:
-            raise ValueError(f"{date_str} 不在交易日历中")
-        idx = calendar.index(date_str)
-        lo = max(0, idx - 24)  # 切片上下界先行赋值（black/flake8 E203 兼容：界内不放表达式）
-        hi = idx + 1
-        window_dates = calendar[lo:hi]
+        window_dates = self._ti_lookup_dates(calendar, date_str, date_str)
         return load_top_inst_lookup(self._loader, window_dates)
 
     def _filter_label_starved(

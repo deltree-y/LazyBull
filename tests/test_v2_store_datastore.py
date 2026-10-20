@@ -112,6 +112,32 @@ class TestAppendFeaturesTwoPhase:
         loaded = pd.read_parquet(part_dir / "core.parquet")  # 原分区内容未被污染
         assert loaded["ret_1"].tolist() == [0.01, -0.02]
 
+    def test_same_dataframe_different_parquet_bytes_rejected(self, tmp_path, monkeypatch):
+        """同一逻辑表以不同写参产生不同字节时，仍按物理指纹 fail-closed。"""
+        from src.lazybull.v2.store.manifest import sha256_16_of_file
+
+        store = _make_store(tmp_path)
+        df = _feature_df("20260105")
+        store.append_features(_D1, "core", df)
+        rel_path = "panel/20260105/core.parquet"
+        final_path = tmp_path / "features" / rel_path
+        original_fp = store.manifest.partition_fingerprint(rel_path)
+        alternate = tmp_path / "alternate.parquet"
+        df.to_parquet(alternate, index=False, compression="gzip")
+        assert sha256_16_of_file(alternate) != original_fp
+
+        real_to_parquet = pd.DataFrame.to_parquet
+
+        def write_gzip(self, path, *args, **kwargs):
+            kwargs["compression"] = "gzip"
+            return real_to_parquet(self, path, *args, **kwargs)
+
+        monkeypatch.setattr(pd.DataFrame, "to_parquet", write_gzip)
+        with pytest.raises(RuntimeError, match="指纹冲突"):
+            store.append_features(_D1, "core", df)
+        assert store.manifest.partition_fingerprint(rel_path) == original_fp
+        assert sha256_16_of_file(final_path) == original_fp
+
     def test_unregistered_column_raises(self, tmp_path):
         store = _make_store(tmp_path)
         df = _feature_df("20260105").assign(mystery=1.0)
@@ -283,6 +309,18 @@ class TestLoadFeatures:
         assert frame.df.empty
         assert frame.df.index.names == ["trade_date", "ts_code"]
 
+    def test_online_load_does_not_rehash_partitions(self, tmp_path, monkeypatch):
+        """在线读取不新增逐文件哈希；完整指纹核验仍属离线路径。"""
+        store = _make_store(tmp_path)
+        store.append_features(_D1, "core", _feature_df("20260105"))
+
+        def unexpected_hash(path):
+            raise AssertionError(f"在线读取不应重算文件指纹: {path}")
+
+        monkeypatch.setattr("src.lazybull.v2.store.data_store.sha256_16_of_file", unexpected_hash)
+        frame = store.load_features(FeatureQuery(columns=["ret_1"], start_date=_D1, end_date=_D1))
+        assert len(frame.df) == 2
+
 
 class TestLabels:
     def test_forming_rewrite_allowed(self, tmp_path):
@@ -314,6 +352,60 @@ class TestLabels:
         store.append_labels("y_ret_20", _label_df("20260106", maturity="sealed"))
         with pytest.raises(RuntimeError, match="已封存"):
             store.append_labels("y_ret_20", _label_df("20260105", values=(9.9, 9.9)))
+
+    def test_new_earlier_forming_partition_blocked_by_watermark(self, tmp_path):
+        store = _make_store(tmp_path)
+        store.append_labels("y_ret_20", _label_df("20260106", maturity="sealed"))
+        label_dir = tmp_path / "labels" / "y_ret_20"
+        later_path = label_dir / "20260106.parquet"
+        later_before = later_path.read_bytes()
+        wal_before = store.wal_path.read_bytes() if store.wal_path.exists() else None
+
+        with pytest.raises(RuntimeError, match="拒绝水位内新增 forming 或改写"):
+            store.append_labels("y_ret_20", _label_df("20260105", maturity="forming"))
+
+        assert list(label_dir.glob("20260105.parquet*")) == []
+        assert store.manifest.label_partition_fingerprint("y_ret_20", "20260105") is None
+        assert later_path.read_bytes() == later_before
+        wal_after = store.wal_path.read_bytes() if store.wal_path.exists() else None
+        assert wal_after == wal_before
+        store.append_labels("y_ret_20", _label_df("20260106", maturity="sealed"))
+        assert later_path.read_bytes() == later_before
+
+    def test_new_earlier_sealed_partition_allowed_for_historical_backfill(self, tmp_path):
+        store = _make_store(tmp_path)
+        store.append_labels("y_ret_20", _label_df("20260106", maturity="sealed"))
+        store.append_labels("y_ret_20", _label_df("20260105", maturity="sealed"))
+        assert (tmp_path / "labels" / "y_ret_20" / "20260105.parquet").exists()
+        assert store.manifest.label_sealed_through("y_ret_20") == "20260106"
+
+    @pytest.mark.parametrize("preserve_wal", [False, True], ids=["wal-absent", "wal-preserved"])
+    def test_invalid_calendar_date_rejected_before_any_physical_write(self, tmp_path, preserve_wal):
+        store = _make_store(tmp_path)
+        manifest_before = store.manifest.path.read_bytes()
+        wal_before = None
+        if preserve_wal:
+            wal_before = (
+                json.dumps(
+                    {
+                        "op": "set_label_sealed_through",
+                        "label_name": "y_ret_20",
+                        "date": "20260101",
+                    }
+                )
+                + "\n"
+            ).encode("utf-8")
+            store.wal_path.write_bytes(wal_before)
+
+        with pytest.raises(ValueError, match="trade_date 非法日期 '20260231'"):
+            store.append_labels("y_ret_20", _label_df("20260231"))
+
+        final_path = tmp_path / "labels" / "y_ret_20" / "20260231.parquet"
+        assert not final_path.exists()
+        assert list(final_path.parent.glob("20260231.parquet*")) == []
+        assert store.manifest.path.read_bytes() == manifest_before
+        wal_after = store.wal_path.read_bytes() if store.wal_path.exists() else None
+        assert wal_after == wal_before
 
     def test_missing_maturity_status_raises(self, tmp_path):
         store = _make_store(tmp_path)

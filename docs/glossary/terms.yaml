@@ -6,7 +6,7 @@
 # 引用统计：scripts/check/glossary_refs.py；HTML 生成器按"近 90 天被引用次数"排序（P6 落地）。
 
 version: 1
-updated: "2026-10-17"
+updated: "2026-10-20"
 
 terms:
   # ========== 架构核心 ==========
@@ -778,3 +778,31 @@ terms:
     source: v2 方案 §9.1；冻结文档 §8
     related: [行为冻结, 基线冻结, 豁免登记]
     introduced: "2026-10-06"
+
+  # ========== P3 前 store 迭代（2026-10-20 T5 收口登记） ==========
+  - term: 行域
+    aliases: [row domain, row_domain]
+    one_liner: v2 store 分区按日期所属口径段的机器可读标记（label_filtered / structural），派生与校验唯一来源是 row_domain.py
+    layman: 给每一天的数据贴上"按哪套规矩筛出来的"标签：缝前（≤20260702）按老规矩再叠主标签过滤，缝后（≥20260703）只做结构过滤、不看未来标签
+    example: 20260702 分区 row_domain=label_filtered；20260703 起 = structural；backfill 跨缝直接 fail-fast，调用方不能传入任意行域
+    source: docs/data/v2_p1_build_freeze.md §10（Q1~Q6 裁决）；v2/store/row_domain.py
+    related: [forming, sealed, 差异台账]
+    introduced: "2026-10-20"
+
+  - term: forming
+    aliases: [forming 状态, 未封存]
+    one_liner: 标签分区的"未封存"成熟度状态——E20 端点不在日历或晚于实际加载水位，允许重写
+    layman: 像"还没到交卷时间的答题卡"：答案（未来 20 日卖出价）还没揭晓，先占个位子，到点才封存
+    example: 20260703 的 E20=20260803 晚于 clean 水位 20260731 ⇒ 三表 forming；结构性初建一律 forming，sealed 只能由标签专用刷新产生
+    source: v2/store/labels_builder.py::maturity_status_for；p3_pre 规划 §3.1
+    related: [sealed, 行域]
+    introduced: "2026-10-20"
+
+  - term: sealed
+    aliases: [sealed 状态, 已封存]
+    one_liner: 标签分区的"已封存"成熟度状态——E20 ≤ 实际加载水位且经专用刷新核验落盘，普通写入拒绝修改
+    layman: 这是「已到交卷时间并封存归档的答题卡」：答案揭晓、核对无误后盖章，之后谁都不能再改
+    example: 冻结段 3,518 日全 sealed；日更段 sealed 须有匹配的 label_refreshes 完成审计；sealed 日 y_ret_20 全 NaN 被 readiness 拒绝
+    source: v2/store/labels_builder.py::maturity_status_for；p3_pre 规划 §3.4
+    related: [forming, 行域]
+    introduced: "2026-10-20"

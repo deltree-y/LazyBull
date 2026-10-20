@@ -12,8 +12,8 @@
   "src.lazybull.factors.risk.liquidity_factors"
  ],
  "inuse_count": 200,
- "all_modules_count": 303,
- "notin_count": 103,
+ "all_modules_count": 309,
+ "notin_count": 109,
  "conservation_ok": true,
  "missing_files": [],
  "pkg_count": {
@@ -331,12 +331,18 @@
   "src.lazybull.v2.store",
   "src.lazybull.v2.store.column_groups",
   "src.lazybull.v2.store.data_store",
+  "src.lazybull.v2.store.label_refresh",
   "src.lazybull.v2.store.labels_builder",
   "src.lazybull.v2.store.ledger_validate",
   "src.lazybull.v2.store.manifest",
+  "src.lazybull.v2.store.manifest_wal",
   "src.lazybull.v2.store.normalized",
   "src.lazybull.v2.store.panel_builder",
   "src.lazybull.v2.store.panel_reconcile",
-  "src.lazybull.v2.store.replay_compare"
+  "src.lazybull.v2.store.reconcile_rules",
+  "src.lazybull.v2.store.replay_compare",
+  "src.lazybull.v2.store.row_domain",
+  "src.lazybull.v2.store.store_identity",
+  "src.lazybull.v2.store.write_lock"
  ]
 }

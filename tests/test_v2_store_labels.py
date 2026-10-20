@@ -7,10 +7,10 @@ sealed/forming 边界（22 交易日合成日历：idx=0 sealed、idx≥1 formin
 （forming 可重写 / sealed 拒改写 / 指纹一致 no-op）。
 """
 
+from datetime import date, timedelta
+
 import pandas as pd
 import pytest
-
-from datetime import date, timedelta
 
 from src.lazybull.v2.store.data_store import PanelDataStore
 from src.lazybull.v2.store.labels_builder import (
@@ -118,6 +118,22 @@ class TestAppendLabelsForDay:
         append_labels_for_day(store, _big_day(sealed_day), _CALENDAR_22)  # 指纹一致 no-op
         with pytest.raises(RuntimeError, match="已封存"):
             append_labels_for_day(store, _big_day(sealed_day, labels=(0.9, 0.9, 0.9)), _CALENDAR_22)
+
+    def test_force_forming_overrides_global_water(self, tmp_path):
+        """结构段初建标签即使按日历与全局水位可封存，也必须保持 forming。"""
+        store = PanelDataStore(tmp_path)
+        day = _CALENDAR_22[0]
+        append_labels_for_day(
+            store,
+            _big_day(day),
+            _CALENDAR_22,
+            data_end="20991231",
+            force_forming=True,
+        )
+        for name in ("y_ret_5", "y_ret_10", "y_ret_20"):
+            table = pd.read_parquet(tmp_path / "labels" / name / f"{day}.parquet")
+            assert table["maturity_status"].unique().tolist() == ["forming"]
+            assert store.manifest.label_sealed_through(name) is None
 
     def test_all_three_tables_written(self, tmp_path):
         store = PanelDataStore(tmp_path)

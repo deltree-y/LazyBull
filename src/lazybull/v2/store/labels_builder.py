@@ -92,7 +92,12 @@ def extract_labels(
 
 
 def append_labels_for_day(
-    store: object, df_day: pd.DataFrame, trading_dates: Sequence[str], data_end: str | None = None
+    store: object,
+    df_day: pd.DataFrame,
+    trading_dates: Sequence[str],
+    data_end: str | None = None,
+    *,
+    force_forming: bool = False,
 ) -> None:
     """抽取并逐表落 store（store.append_labels 的 sealed/forming 语义随之强制生效）。
 
@@ -101,8 +106,13 @@ def append_labels_for_day(
         df_day: 构建完成的单日大表
         trading_dates: 交易日历（全量）
         data_end: 数据水位（透传成熟度判定；None = 不约束）
+        force_forming: 是否无视日历与全局水位强制写为 forming；仅供结构段初建标签使用，
+            避免全局水位提前封存尚无成熟未来标签的分区。
     """
-    for label_name, table in extract_labels(df_day, trading_dates, data_end=data_end).items():
+    tables = extract_labels(df_day, trading_dates, data_end=data_end)
+    for label_name, table in tables.items():
+        if force_forming:
+            table = table.assign(maturity_status="forming")
         store.append_labels(label_name, table)
         logger.debug(
             f"标签落盘: {label_name}（{table['maturity_status'].iloc[0]}，{len(table)} 行）"

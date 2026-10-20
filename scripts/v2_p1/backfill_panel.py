@@ -9,8 +9,8 @@
   「未写日」（keep_dates = 块内覆盖日 − manifest 已写日；管线仍 force=True 全量
   构建，重叠日重建后 sink 丢弃，与参照同值）；
 - 已写判定（labels 不参与）：热区（>20250630）= 该日 8 族 panel 分区全登记；
-  冷区（≤20250630）= 该月 8 族 panel_archive 分区全登记（缺一 ⇒ 整月未写，
-  重跑时已登记族指纹一致 no-op）；
+  冷区（≤20250630）= 该月 8 族 panel_archive 分区全登记（缺一 ⇒ 整月未写）；
+  完整未登记月才可普通续传，已登记部分月普通 append 仍拒绝，缺日须走显式修复通道；
 - 写窗口：panel 只写 ≥20120104 的日；串行构建（并行 `_trading_date_index` 缓存
   留白见单元 3 报告 §5-③，`--serial` 仅作显式标记）。
 
@@ -43,6 +43,7 @@ from src.lazybull.v2.common.types import TradeDate  # noqa: E402
 from src.lazybull.v2.store.column_groups import ARCHIVE_HOT_BOUNDARY, PANEL_GROUPS  # noqa: E402
 from src.lazybull.v2.store.data_store import PanelDataStore  # noqa: E402
 from src.lazybull.v2.store.panel_builder import V2PanelBuilder, bootstrap_manifest  # noqa: E402
+from src.lazybull.v2.store.row_domain import LABEL_FILTERED_THROUGH  # noqa: E402
 
 _GROUPS = tuple(PANEL_GROUPS)
 
@@ -62,6 +63,11 @@ def _parse_args() -> argparse.Namespace:
         parser.error(
             f"--chunk-years 必须 ≥1（当前 {args.chunk_years}）：0 = 单调用语义，"
             "仅 run_frozen_reference 支持，本脚本不提供"
+        )
+    if args.start_date > LABEL_FILTERED_THROUGH or args.end_date > LABEL_FILTERED_THROUGH:
+        parser.error(
+            f"backfill 仅允许冻结段（<={LABEL_FILTERED_THROUGH}）；"
+            "跨缝或结构段请使用 update_daily_store.py 逐日 build_daily"
         )
     return args
 

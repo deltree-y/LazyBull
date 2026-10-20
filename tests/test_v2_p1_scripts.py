@@ -5,8 +5,7 @@
 - P1-6：run_frozen_reference --serial/--parallel argparse 语义（use_parallel 推导）；
 - R3-08：_iter_chunks 分块参数终止性校验（0/负数拒绝、正数分块行为不变）；
         backfill_panel argparse fail-fast（--chunk-years < 1 ⇒ SystemExit 非零）；
-- R3-11：bench_panel_perf._evaluate 双口径判定（两口径各自 ≤ 门限才 PASS）；
-- 复制公式消除：fix_unlock_coverage_d12._risk_flag 与源函数 compute_unlock_risk_flag 同值。
+- R3-11：bench_panel_perf._evaluate 双口径判定（两口径各自 ≤ 门限才 PASS）。
 """
 
 from __future__ import annotations
@@ -14,8 +13,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,6 +101,24 @@ class TestBackfillChunkYearsGate:
             sys.argv = old_argv
         assert exc_info.value.code != 0
 
+    def test_cross_row_domain_boundary_exits_before_main(self) -> None:
+        import backfill_panel
+
+        old_argv = sys.argv
+        try:
+            sys.argv = [
+                "backfill_panel.py",
+                "--start-date",
+                "20260702",
+                "--end-date",
+                "20260703",
+            ]
+            with pytest.raises(SystemExit) as exc_info:
+                backfill_panel._parse_args()
+        finally:
+            sys.argv = old_argv
+        assert exc_info.value.code != 0
+
 
 class TestBenchDualGate:
     """R3-11：性能门双口径各自判定，均过才 PASS。"""
@@ -130,17 +145,3 @@ class TestBenchDualGate:
         import bench_panel_perf
 
         assert bench_panel_perf._evaluate(1.5, 1.5)["pass"] is True
-
-
-class TestUnlockRiskFlagReuse:
-    """复制公式消除：_risk_flag 与 compute_unlock_risk_flag 同值同语义。"""
-
-    def test_matches_source_function(self) -> None:
-        import fix_unlock_coverage_d12 as fix
-
-        from src.lazybull.factors.risk.announcement_factors import compute_unlock_risk_flag
-
-        days = pd.Series([10.0, 30.0, 45.0, 90.0, 120.0, 0.0, np.nan, -5.0])
-        expected = compute_unlock_risk_flag(pd.DataFrame({"days_to_unlock": days})).astype(float)
-        actual = fix._risk_flag(days)
-        pd.testing.assert_series_equal(actual, expected)

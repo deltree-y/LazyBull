@@ -457,6 +457,31 @@ class TestAttribSpecial:
         _, violated = _classify_attrib_column("downside_corr_20", days, 2.0)
         assert violated
 
+    def test_skew_kurt_day_density_boundaries(self):
+        early = [("20120201", 100, 1683, 0)]
+        exact_share = early + [("20150522", 15, 1000, 0)]
+        assert not _classify_attrib_column("skewness_20", exact_share, 1.0)[1]
+        over_share = early + [("20150522", 25, 1000, 0)]
+        assert _classify_attrib_column("skewness_20", over_share, 1.0)[1]
+        over_rows = early + [("20150522", 26, 5000, 0)]
+        assert _classify_attrib_column("skewness_20", over_rows, 1.0)[1]
+
+    def test_zscore_macd_date_and_sparse_boundaries(self):
+        tail = [("20130930", 100, 5000, 0)]
+        assert not _classify_attrib_column("zscore_macd_hist", tail, 1.0)[1]
+        after_tail = [("20131001", 100, 5000, 0)]
+        assert _classify_attrib_column("zscore_macd_hist", after_tail, 1.0)[1]
+        exact_sparse = [("20200102", 5, 500, 0)]
+        assert not _classify_attrib_column("zscore_macd_hist", exact_sparse, 1.0)[1]
+        over_sparse = [("20200102", 6, 500, 0)]
+        assert _classify_attrib_column("zscore_macd_hist", over_sparse, 1.0)[1]
+
+    def test_downside_corr_lineage_date_boundary(self):
+        tail = [("20131031", 100, 5000, 0)]
+        assert not _classify_attrib_column("downside_corr_20", tail, 1.0)[1]
+        after_tail = [("20131101", 100, 5000, 0)]
+        assert _classify_attrib_column("downside_corr_20", after_tail, 1.0)[1]
+
 
 class TestStrictClassify:
     """严格门类判定（出口 = 残差 100% 归因：L1/D-04/D-11/D-12 豁免/纯孤立单点外 ⇒ 未归因）。"""

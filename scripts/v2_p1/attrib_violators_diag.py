@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """归因门 5 个越界列的全量差异日诊断（panel vs cs_train，与对账门同比对口径）。
 
-**一次性脚本，已执行完毕，效果持久化于 manifest.repairs；保留作审计轨迹。**
+**历史诊断：不直接调用业务写 API，不作为独立验收门。
+若生产 manifest WAL 有待压实事件，PanelDataStore 会按既有恢复语义补登记并压实；
+除此之外仅写诊断报告。正式判定以 panel_reconcile 为准。**
 """
+
 from __future__ import annotations
 
 import json
@@ -17,9 +20,14 @@ sys.path.insert(0, str(ROOT))
 
 from src.lazybull.v2.common.types import FeatureQuery, TradeDate  # noqa: E402
 from src.lazybull.v2.store.data_store import PanelDataStore  # noqa: E402
+from src.lazybull.v2.store.reconcile_rules import (  # noqa: E402
+    ATTRIB_DIAG_COLUMNS,
+    COMPARE_ATOL,
+    L1_LONG_TAIL_END,
+)
 
-COLS = ["downside_corr_20", "kurtosis_20", "skewness_20", "zscore_macd_hist", "zscore_macd_hist_sz"]
-ATOL = 1e-6
+COLS = list(ATTRIB_DIAG_COLUMNS)
+ATOL = COMPARE_ATOL
 
 
 def main() -> int:
@@ -64,10 +72,8 @@ def main() -> int:
         over &= ~both_nan
         by_day = over.groupby(level="trade_date").sum()
         day_rows = over.groupby(level="trade_date").size()
-        days = [
-            [d, int(by_day[d]), int(day_rows[d])] for d in by_day.index if by_day[d] > 0
-        ]
-        l1_end = "20130630"
+        days = [[d, int(by_day[d]), int(day_rows[d])] for d in by_day.index if by_day[d] > 0]
+        l1_end = L1_LONG_TAIL_END
         late = [d for d in days if d[0] > l1_end]
         out[col] = {
             "total_over": int(over.sum()),
@@ -79,7 +85,9 @@ def main() -> int:
             "days_le_20130630": [d for d in days if d[0] <= l1_end][:10],
             "n_days_le_l1": sum(1 for d in days if d[0] <= l1_end),
         }
-        print(f"{col}: over={out[col]['total_over']} days={len(days)} late_over={out[col]['late_over']}")
+        total_over = out[col]["total_over"]
+        late_over = out[col]["late_over"]
+        print(f"{col}: over={total_over} days={len(days)} late_over={late_over}")
 
     out_path = ROOT / "data" / "reports" / "v2_p1_attrib_violators_diag_20261006.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)

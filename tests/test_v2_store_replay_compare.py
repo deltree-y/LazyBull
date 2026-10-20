@@ -252,5 +252,28 @@ class TestAttribution:
         assert attribute_column("some_mystery_col") == "待调查"
 
 
+class TestReconcileRuleRegistry:
+    def test_all_consumers_share_single_registry(self):
+        from scripts.v2_p1 import attrib_violators_diag as diag
+        from src.lazybull.v2.store import panel_reconcile, reconcile_rules, replay_compare
+
+        assert replay_compare.attribute_column is reconcile_rules.attribute_column
+        assert replay_compare.COMPARE_ATOL is reconcile_rules.COMPARE_ATOL
+        assert panel_reconcile.attribute_column is reconcile_rules.attribute_column
+        assert panel_reconcile._derived_parent is reconcile_rules.derived_parent
+        assert panel_reconcile.CYQ5_COLUMNS is reconcile_rules.CYQ5_COLUMNS
+        assert panel_reconcile.D04_2_RANGE is reconcile_rules.D04_2_RANGE
+        assert panel_reconcile._D14_SPARSE_MAX_DAY_ROWS is reconcile_rules._D14_SPARSE_MAX_DAY_ROWS
+        assert (
+            panel_reconcile._D14_ZSCORE_MACD_EMA_TAIL_END
+            is reconcile_rules._D14_ZSCORE_MACD_EMA_TAIL_END
+        )
+        assert diag.COLS == list(reconcile_rules.ATTRIB_DIAG_COLUMNS)
+        assert diag.ATOL is reconcile_rules.COMPARE_ATOL
+        assert reconcile_rules.D04_2_RANGE == ("20240101", "20240331")
+        assert reconcile_rules.D04_3_4_RANGE == ("20161201", "20260702")
+        assert reconcile_rules.D11_ANCHOR_MAX_ABS == 5.0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
