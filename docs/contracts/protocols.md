@@ -3,7 +3,7 @@
 > **单文件制（F6 起生效，2026-10-01）**：原「plans/ 草案 + contracts/ 契约」双轨合并，本文件为**唯一载体**；
 > 草案已退役，历史版本备份于 `docs/plans/v2/backup/`。修订流程：直接在本文件修订 → 头部版本表登记新行
 > （状态=**草案**）→ 经评审后该行改「**生效**」并 commit（**git 历史只保留生效版本**，草稿不 commit）。
-> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F9（2026-10-16，P2b 单袖直通过渡口径，随方案 F12 同批生效；两位专家评审通过 + 用户确认）**。代码实现以本文档为唯一接口依据。
+> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F10（2026-10-20，P3 T0.5a 训练协议修订包：ModelConfig 字段扩展 / 日期换算注记 / 编排参数 / 产物边界四键 / 依赖表注记，随方案 F14 同批生效；开工硬门 #6 评审处置闭合 + 用户确认）**。代码实现以本文档为唯一接口依据。
 
 | 契约版本 | 落档日期 | 来源 | 状态 | 变更摘要 |
 |---|---|---|---|---|
@@ -16,13 +16,14 @@
 | F7 | 2026-10-06 | P1 三评审整改（R3-10） | 生效 | PanelFrame.manifest_version 注释勘误：schema 版本而非内容指纹；内容身份由新增的 PanelFrame.manifest_fingerprint 承载（sha256-16，剔除 updated_at）。登记即生效：R3-10 评审意见即修订依据，版本/指纹为正交概念、分离设计无争议（2026-10-06 裁决确认，不另走评审轮） |
 | F8（= v0.8） | 2026-10-06 | 本文件单文件制修订（P2a T0 评审勘误包） | **生效**（2026-10-07，随方案 F11 同批：评审通过 + T0.5 裁决落档） | §11 勘误三条：①「止盈检查器」行无在用对照物（risk/ 无止盈模块、git 全历史无 take_profit、仅存纸面退役键与注释残影；`OrderReason.TAKE_PROFIT` 无生产者）——改登记为已退役机制描述，条件卖出触发器实测 = rebalance / holding_period / stop_loss 三种；②「估值价格回退链」行「回测 4 处」实测 **5 处**；③ §3「每日 15 个有序钩子」括注含不存在的止盈语义，以代码调用点枚举为准。另：§11「Kelly 包装两份」行的「合并唯一实现」兑现节点登记 = P4 前完成预登记裁决 + P4 验收前落实并验证（以方案 §4.10 到期表为准、迁移期该表优先）；§11 快速复核（v0.7 2-A，P2a 开工前要求）已执行，证据 = T0 五轮评审复核记录（`docs/plans/v2/p2a_implementation_plan_20261006.md` §8） |
 | F9（= v0.9） | 2026-10-16 | 本文件单文件制修订（P2b 单袖直通过渡口径） | **生效**（2026-10-16：两位专家评审通过（reviewer1/reviewer2）+ 用户确认同提交落档；随方案 F12 同批） | §3.4 `PortfolioMerger.merge` 的「Σ袖子目标权重 = 1.0（合并前各自归一）」明确为**上游前置条件**：P2b 单袖直通不重复运行时校验、不新增判定分支，亦不授权新输入生产者绕过归一化；多袖期是否运行时校验、容差与失败模式随 P6.5 另行预登记，不在本版预判。`net_across_sleeves` 同期仅支持 S6 单袖指令原样透传，混合 `source_sleeve` fail-fast；反向抵消、同向分摊、自拆与三恒等式仍归 P6.5。`TargetPortfolio.target_weights` 注释同步指向上游不变量；`src/lazybull/v2/common/{protocols/core.py,types.py}` 同批同步，**公开签名不变** |
+| F10（= v0.10） | 2026-10-20 | 本文件单文件制修订（P3 T0.5a 契约修订包，随方案 F14 同批；Q8-①③ 2026-10-20 用户批准） | **生效**（2026-10-20 用户确认；开工硬门 #6 两轮评审处置闭合，随方案 F14 同批） | ① §2.2 训练协议：`ModelConfig` 增可选字段 `label_spec` / `feature_recipe` / `split_spec` / `domain`（版本号 + 规范化序列化 + 入模型 metadata 与配置指纹；默认 None/空映射、frozen、canonical JSON、映射不可变）；**`model_family` 语义不变 = 家族目录名（选股 = `stock_selection`），算法名由 `hyperparams.algorithm` 承载**；`val_window_months` 改可选（比例模式置 None）；`train_fold` 注记显式四日期由编排器按现役规则换算、train 侧不得二次比例切分；训练统计（train_samples/best_iteration/val_*）从注册表 metadata 读取、`train_fold` 返回签名不变；`WalkForwardOrchestrator.run` 增编排参数（`test_window_months` / `selected_split_indices` / `skip_training` / `start_model_version` / `skip_training_eval` / `deploy_train`）；② 产物边界注记（Q3-C）：WF 编排产物保持现格式与路径、回测批次落 runs/，经 wf_run_id ↔ 回测批 ID ↔ 模型版本 ↔ data_state 四键关联，验收含「从 wf_run_id 定位完整批次证据」；③ §7 依赖表注记：train 依赖不含 sleeves / universe（规格与域解析由薄入口/宿主注入） |
 
 ---
 ---
 # LazyBull v2 模块协议层（Protocol 定义）
 
-> 版本：v0.9（2026-10-16；配套方案 F12 = v1.18）
-> 状态：**已生效**（F9：两位专家评审通过 + 用户确认；与方案 F12 同批独立提交）
+> 版本：v0.10（2026-10-20；配套方案 F14 = v1.20）
+> 状态：**已生效**（F10：开工硬门 #6 评审处置闭合 + 用户确认；与方案 F14 同批独立提交）
 > 技术选型：Python 3.12 `typing.Protocol`（结构化子类型，无须显式继承）+ frozen dataclass + `pandas.DataFrame` / `datetime.date`
 > 设计原则：① 数据面与计算面分离；② 袖子零互 import；③ 跨模块对象不可变；④ 所有协议方法标注**幂等性**与**副作用**
 > **设计方法论（R4 教训）**：先枚举现实引擎语义（R1 侦察事实），再让类型覆盖它——禁止先定义理想类型再让引擎适应类型
@@ -512,7 +513,7 @@ class Trainer(Protocol):
 
     def train_fold(
         self,
-        config: ModelConfig,  # ensemble_seeds 非空即集成
+        config: ModelConfig,  # ensemble_seeds 非空即集成；F10：增可选 label_spec/feature_recipe/split_spec/domain（版本化 + 规范化序列化 + 入 metadata/指纹；默认 None/空映射、frozen），val_window_months 改可选（split_spec.val_ratio 比例模式置 None）；model_family = 家族目录名（选股 = stock_selection）语义不变，算法名由 hyperparams.algorithm 承载；显式四日期由编排器换算、train 侧不得二次比例切分
         train_start: TradeDate,
         train_end: TradeDate,
         val_start: TradeDate,
@@ -541,13 +542,44 @@ class WalkForwardOrchestrator(Protocol):
         final_date: TradeDate,
         trainer: Trainer,
         store: DataStore,
+        # F10 增补编排参数（可选；宿主编排开关，不进 ModelConfig）：
+        #   test_window_months: int（折窗宽，生产 = 6）
+        #   selected_split_indices / skip_training / start_model_version /
+        #   skip_training_eval / deploy_train（P3 期强制 False，Q10-B）
     ) -> str:
         """运行滚动训练全流程
 
         返回：wf_run_id（批次标识，产物落 runs/<wf_run_id>/）
+        F10 注记：WF 编排产物（summary/reporting/台账）保持现格式与路径、
+        回测批次落 runs/<批ID>/，经 wf_run_id ↔ 回测批 ID ↔ 模型版本 ↔
+        data_state 四键关联；验收含「从 wf_run_id 定位完整批次证据」。
         """
         ...
 ```
+
+**F10 增补（P3 T0.5a，已生效 2026-10-20；接口签名已并入上方代码块标注）**：
+
+- `ModelConfig` 增可选字段 `label_spec` / `feature_recipe` / `split_spec` / `domain`
+  （均带版本号 + 规范化序列化，入模型 metadata 与配置指纹——「同列集不同配方」必须可审计）；
+  字段语义：默认 `None` / 空映射、frozen、canonical JSON、映射不可变；
+  `val_window_months` 改可选（`split_spec.val_ratio` 比例模式下置 None）；
+  **`model_family` 语义不变 = 家族目录名（选股 = `stock_selection`），算法名由
+  `hyperparams.algorithm` 承载**；
+- `train_fold` 的显式四日期（train_start/end、val_start/end）由编排器按现役规则换算
+  （train/val-raw 窗；ES/calibration/embargo 尾部拆分留在 train 侧按
+  `label_delta = max(horizon+1, 5)` 执行，不经协议参数）；train 侧收到显式日期后
+  **不得再次按比例切分**（`val_ratio` 只在编排器换算一次）；
+- 训练统计（`train_samples` / `best_iteration` / `val_*`）从注册表 metadata 读取（既有旁路），
+  `train_fold` 仍只返回版本号、不改签名；
+- `WalkForwardOrchestrator.run` 增编排参数：`test_window_months`（折窗宽）/
+  `selected_split_indices` / `skip_training` / `start_model_version` / `skip_training_eval` /
+  `deploy_train`（宿主编排开关，不进 ModelConfig）；
+- 产物边界（Q3-C）：WF 编排产物（summary / reporting / 训练台账）保持现格式与路径，
+  回测批次落 `runs/<批ID>/`；两者经 `wf_run_id ↔ 回测批 ID ↔ 模型版本 ↔ data_state 文件`
+  四键关联；验收含「从 wf_run_id 定位完整批次证据」；
+- §7 依赖表注记：`train` 依赖 = `common.types, common.protocols, store`——**不含 sleeves /
+  universe**（袖子规格与域解析由薄入口/宿主注入：`universe/domains.py` 单一来源解析为
+  显式 `training_universe` 股票池传入）。
 
 ---
 
@@ -935,6 +967,9 @@ sleeves -/-> sleeves（互 import）
 evidence -/-> （直接写文件；台账经 DataStore）
 
 # 注：runs/ 是数据目录不是模块，不属于依赖图（R4-H6 修正：从依赖表移除）
+# F10 增补：train 依赖不含 sleeves / universe——袖子规格与选股域解析
+# 由薄入口/宿主注入（universe/domains.py 单一来源解析为显式 training_universe 传入）；
+# common 不得依赖任何业务包（store/core/train/sleeves/factors/universe/hosts/evidence/report/quality）（随方案 F14 同批）
 ```
 
 ---

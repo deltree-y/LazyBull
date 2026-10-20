@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.207.2] - 2026-10-20
+
+### Added
+
+- **v2 P3 T0.5a 治理生效（方案 F14 + 协议 F10，2026-10-20 用户确认）**：P3 训练迁移开工硬门 #6
+  闭合——Q1~Q12 全部裁决落档（实施规划 `docs/plans/v2/p3_implementation_plan_20261020.md` §13，
+  本地）：terminal_loss 封存处置（Q1-A）、G-code 配对参照（Q2-A）、WF 产物现状拆分 + 四键关联
+  （Q3-C）、model_registry 读写一体整移 common（Q4-D）、LightGBM 退役备用臂（Q6-A）、
+  预算实耗登记 + 机器 >10min 授权（Q7）、G-data 判定表（Q9-A/Q11-A：ΔCAGR ±8pp 严格大于 /
+  ΔSharpe 同档映射 / ΔMaxDD 零容忍 + 归因出口；判定基线 = B0' 臂①产物，Q12-A；原 B0 降为
+  回归边/历史参照，批次更正 `wf_batch_20260930_171221`）等。
+  - 方案 **F14**：§4.3 common 职责补模型版本注册表 + 业务包禁令；§4.10 到期表补改期 P4 三组件 +
+    cs_train 验证源例外（去除节点 P4 评审，含到期复核条件与升级路径）；§5 补 P3 适用注记
+    （G-data 判定表）；§8-P3 补 Q7 预算口径注记。
+  - 协议 **F10**：§2.2 ModelConfig 增 `label_spec`/`feature_recipe`/`split_spec`/`domain`
+    可选字段（版本化 + 规范化序列化 + 入 metadata/指纹）+ train_fold 日期换算注记 +
+    Orchestrator 编排参数 + 产物边界四键注记；§7 依赖表注记（train 不含 sleeves/universe）。
+  - T0 双轮 + T0.5a 两轮评审共 69 条意见全部接纳闭合；`docs/contracts/README.md` 版本摘要同步；
+    MVP 总账 v11/v12（本地）。版本号 0.207.1 → **0.207.2**（契约修订小版本）。
+
 ## [0.207.1] - 2026-10-20
 
 ### Added
