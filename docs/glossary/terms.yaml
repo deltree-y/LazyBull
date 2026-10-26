@@ -879,3 +879,67 @@ terms:
     source: P3 实施规划 §19.4/§19.22；data/frozen_reference/v2_p3/t5_regression_edge_verdict_20261025.json
     related: [G-code, 差异台账]
     introduced: "2026-10-25"
+
+  # ========== v2 P4（2026-10-26，T0.5a 登记） ==========
+  - term: run_step
+    aliases: [共同日级阶段入口]
+    one_liner: 从回测主循环提取的日级阶段入口；连续 run = 初始化 + 循环调用 run_step，纸面宿主逐日驱动同一实现
+    layman: 把"一口气跑完一年"的循环拆成"跑一天"的标准动作，回测天天调用它，纸面每天只调用一次——两边是同一个动作，不是两套代码
+    example: 门 2 证明：同一区间连续 run 与逐日 run_step + 落盘恢复，成交逐笔一致、NAV max|Δ| ≤ 1e-6
+    source: P4 实施规划 v5 §3-D1；docs/plans/v2/p4_implementation_plan_20261026.md
+    related: [EngineState, 基线保持门, 纸面同源]
+    introduced: "2026-10-26"
+
+  - term: EngineState
+    aliases: [引擎状态快照]
+    one_liner: v2 内核跨日状态的值对象快照（账户/队列/排期锚/候选恢复等），export/restore 接缝的载体，缺字段 fail-fast
+    layman: 引擎每天下班前把"脑子里的全部记忆"存盘，明天上班原样恢复——存漏一项，第二天就不是同一个人了
+    example: 字段含 current_capital / positions / pending_signals / tranche_anchor_date 等；往返断言 = export→restore→export 字节一致
+    source: P4 实施规划 v5 §3-D2 + §15.3 状态映射表
+    related: [run_step, 基线保持门]
+    introduced: "2026-10-26"
+
+  - term: 基线保持门
+    aliases: [门 2b, baseline preservation gate]
+    one_liner: 连续 run（当前代码态）vs P4 前冻结基线产物的精确重放比对（成交逐笔 + 链式净值 1e-6 + 指纹逐折），T1 后与 T3 后各必过一次
+    layman: 改造后的引擎先跟"改造前的标准答案"对一次分——防止两条新路径互相作证、一起做错也发现不了
+    example: 复用 p2a_b0replay_20261008_144307_d79f3f 冻结批 + compare_replay_vs_b0.py，机器分钟级
+    source: P4 实施规划 v5 §6 门 2b（三专家复核收敛项 R1R-P4-02/R2-P4-R1-02/N-1）
+    related: [run_step, 回归边, 行为冻结]
+    introduced: "2026-10-26"
+
+  - term: 影子三臂
+    aliases: [paper shadow three arms]
+    one_liner: P4 影子门的三臂制：现役默认臂（仅信息性）+ 旧侧 neutral 参照臂 + v2 shadow 臂；验收边 = v2 shadow vs 旧 neutral
+    layman: 三条"模拟跑道"同时跑：老规则跑道作裁判对照，新跑道是被考者，现役跑道只围观不作数
+    example: 三臂同一冻结快照起跑、隔离根各写各的；fills 按冻结执行配置（buy=close/sell=open）真实行情记账
+    source: P4 实施规划 v5 §6 门 5 + Q4；方案 §5 P4 适用注记（F17）
+    related: [完整决策输入指纹, 影子账本, 归因词表]
+    introduced: "2026-10-26"
+
+  - term: 完整决策输入指纹
+    aliases: [full decision input fingerprint]
+    one_liner: 影子门硬判定 3 的输入身份：日期相位 + 合并目标 + 账户持仓 + 队列/锚/候选恢复状态 + 市场数据 + 配置/模型/执行配置；一致 ⇒ 输出逐笔一致
+    layman: 判断"两天输入完全一样"不能只看模型读了什么，还要看账户里有什么、排队等什么——否则持仓不同的两天会被误判成"该出一样的指令"
+    example: 模型/行情相同但持仓不同的日期不触发零差异断言（归 holding_path 桶因果验证）；字段清单 T0.5a 冻结
+    source: P4 实施规划 v5 §6 门 5 + §15.4（reviewer2 R2-P4-R2-01）
+    related: [影子三臂, holding_path, 配置指纹]
+    introduced: "2026-10-26"
+
+  - term: 就绪门
+    aliases: [readiness gate]
+    one_liner: 信号生成前的数据就绪量化校验：当日分区存在 + 行数区间 + 逐列来源清单 + 缺失率阈值 + 未覆盖列直接失败
+    layman: 开工前点货：货不齐就停工告警，绝不用昨天的剩菜充数
+    example: 派生族开关与模型 metadata 不一致 ⇒ 当日直接失败并登记缺口
+    source: P4 实施规划 v5 §3-D4；方案 §4.6 数据就绪契约
+    related: [行域, 数据就绪契约]
+    introduced: "2026-10-26"
+
+  - term: paper_replay
+    aliases: [纸面回放模式]
+    one_liner: 纸面宿主以逐日步进方式跑历史区间的回放形态（runs 契约 host_mode 之一），与回测宿主同区间比对逐笔一致
+    layman: 让纸面系统在历史数据上"复盘演练"，证明它和回测引擎是同一个脑子
+    example: 窗口 ⊆ structural 段（≥20260703）+ 逐日行域断言；门 3 成交逐笔一致 + 净值 1e-6
+    source: P4 实施规划 v5 §3-D5；runs 产物契约 §2 host_mode
+    related: [run_step, 基线保持门, 行域]
+    introduced: "2026-10-26"
