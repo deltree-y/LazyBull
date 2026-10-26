@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.208.4] - 2026-10-26
+
+### Performance
+
+- **v2 orchestrator e2e 测试套件提速 4.2 倍**（28 项，975.9s → 230.6s，
+  仅测试文件 `tests/test_v2_train_wf_orchestrator_e2e.py` 内部改动，证据面不变）：
+  - `_populate_store` 夹具填充套入生产既有 `store.defer_manifest_save()`——
+    此前每个 panel 根 1760 次带锁写入逐次触发 manifest 全量落盘（O(n²)，
+    单根约 46s，占套件总时长约 75%），改为批量结束统一落盘一次；
+  - 新增 3 个 module 级共享只读数据根夹具（普通 panel / cs_train / kernel），
+    15 个内容完全相同的测试由各自重建（17 个 panel 根）改为复用（每类建一次）；
+    内容异值的 4 处（salt panel / kernel salt / kernel 反向标签 / 创业板根）保持
+    独立构建；`_new_trainer` 增 `models_root` 参数，共享数据根时模型注册表
+    仍落各测试私有输出位（防跨测试版本号累加）。
+
 ## [0.208.3] - 2026-10-26
 
 ### Fixed

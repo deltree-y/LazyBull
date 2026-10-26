@@ -175,38 +175,42 @@ def _populate_store(
     store.manifest.save()
     from src.lazybull.v2.store.column_groups import PANEL_GROUPS
 
-    for day_idx, day in enumerate(_days()):
-        rows = rows_fn(day, day_idx)
-        for group in PANEL_GROUPS:
-            if group == "core":
-                core_cols = ("trade_date", "ts_code") + tuple(_BASE_COLUMNS) + tuple(_FILTER_COLS)
-                payload = {col: rows[col] for col in core_cols}
-            else:
-                # readiness 要求八族当日齐备(T1 夹具口径:非 core 族仅键列)
-                payload = {"trade_date": rows["trade_date"], "ts_code": rows["ts_code"]}
-            store.append_features(TradeDate.from_str(day), group, pd.DataFrame(payload))
-        for table_idx, table in enumerate(LABEL_TABLES):
-            raw_col = _LABEL_COLS[table_idx]  # y_ret_5/10/20
-            neu_col = _LABEL_COLS[table_idx + 3]  # neu_y_ret_5/10/20
-            store.append_labels(
-                table,
-                pd.DataFrame(
-                    {
-                        "ts_code": rows["ts_code"],
-                        "trade_date": rows["trade_date"],
-                        "label_value": rows[raw_col],
-                        "neu_label_value": rows[neu_col],
-                        "maturity_status": ["sealed"] * len(rows["ts_code"]),
-                    },
-                    columns=[
-                        "ts_code",
-                        "trade_date",
-                        "label_value",
-                        "neu_label_value",
-                        "maturity_status",
-                    ],  # readiness 协议列序强校验
-                ),
-            )
+    # 批量回填延迟 manifest 落盘(160 天 × 11 次写入;非延迟模式逐次全量落盘为 O(n²))
+    with store.defer_manifest_save():
+        for day_idx, day in enumerate(_days()):
+            rows = rows_fn(day, day_idx)
+            for group in PANEL_GROUPS:
+                if group == "core":
+                    core_cols = (
+                        ("trade_date", "ts_code") + tuple(_BASE_COLUMNS) + tuple(_FILTER_COLS)
+                    )
+                    payload = {col: rows[col] for col in core_cols}
+                else:
+                    # readiness 要求八族当日齐备(T1 夹具口径:非 core 族仅键列)
+                    payload = {"trade_date": rows["trade_date"], "ts_code": rows["ts_code"]}
+                store.append_features(TradeDate.from_str(day), group, pd.DataFrame(payload))
+            for table_idx, table in enumerate(LABEL_TABLES):
+                raw_col = _LABEL_COLS[table_idx]  # y_ret_5/10/20
+                neu_col = _LABEL_COLS[table_idx + 3]  # neu_y_ret_5/10/20
+                store.append_labels(
+                    table,
+                    pd.DataFrame(
+                        {
+                            "ts_code": rows["ts_code"],
+                            "trade_date": rows["trade_date"],
+                            "label_value": rows[raw_col],
+                            "neu_label_value": rows[neu_col],
+                            "maturity_status": ["sealed"] * len(rows["ts_code"]),
+                        },
+                        columns=[
+                            "ts_code",
+                            "trade_date",
+                            "label_value",
+                            "neu_label_value",
+                            "maturity_status",
+                        ],  # readiness 协议列序强校验
+                    ),
+                )
     return store
 
 
@@ -275,8 +279,12 @@ def _config() -> ModelConfig:
     )
 
 
-def _new_trainer(root: Path, *, source_mode: str, store=None) -> V2Trainer:
-    registry = ModelRegistry(models_dir=str(root / "out" / "models" / "stock_selection"))
+def _new_trainer(
+    root: Path, *, source_mode: str, store=None, models_root: Optional[Path] = None
+) -> V2Trainer:
+    # models_root 独立传参:共享只读数据根时注册表仍落各测试私有输出位(防跨测试版本累加)
+    models_base = models_root if models_root is not None else root / "out"
+    registry = ModelRegistry(models_dir=str(models_base / "models" / "stock_selection"))
     storage, loader = _old_path_objects(root)
     return V2Trainer(
         registry=registry,
@@ -403,6 +411,37 @@ def _write_engine_daily(root: Path) -> None:
                 "tradable": [1] * n,
             }
         ).to_parquet(daily / f"{day[:4]}-{day[4:6]}-{day[6:]}.parquet", index=False)
+
+
+# ---------------------------------------------------------------------------
+# 模块级共享只读数据根(同值夹具建一次复用;测试对数据根只读,产物一律写各自
+# tmp_path 输出根;test_data_state_covers_train_labels_and_suspend 仅做增量补文件)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def shared_panel_root(tmp_path_factory) -> Path:
+    """普通 panel 根(salt=0;11 处复用)。"""
+    root = tmp_path_factory.mktemp("shared_panel") / "root"
+    _build_panel_root(root)
+    return root
+
+
+@pytest.fixture(scope="module")
+def shared_cs_root(tmp_path_factory) -> Path:
+    """cs_train 根(6 处复用)。"""
+    root = tmp_path_factory.mktemp("shared_cs") / "root"
+    _build_cs_train_root(root)
+    return root
+
+
+@pytest.fixture(scope="module")
+def shared_kernel_root(tmp_path_factory) -> Path:
+    """kernel panel 根 + 引擎全列行情(3 处复用;真实 replay 消费)。"""
+    root = tmp_path_factory.mktemp("shared_kernel") / "root"
+    _build_kernel_panel_root(root)
+    _write_engine_daily(root)
+    return root
 
 
 def _make_ml_signal(models_dir: Path, *, top_n: int = 2):
@@ -645,9 +684,8 @@ def _runs_writer_adapter(
 
 
 class TestCsTrainParityWithLegacy:
-    def test_single_fold_ensemble_parity(self, tmp_path):
-        cs_root = tmp_path / "cs"
-        _build_cs_train_root(cs_root)
+    def test_single_fold_ensemble_parity(self, tmp_path, shared_cs_root):
+        cs_root = shared_cs_root
         days = _days()
         outer_start, outer_end = days[0], days[_TRAIN_DAYS - 1]
         params = _params()
@@ -735,7 +773,7 @@ class TestCsTrainParityWithLegacy:
         )
 
         # 新臂:cs_train_verify + 显式缝(编排器换算)
-        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY)
+        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY, models_root=tmp_path)
         config = _config()
         trade_dates = days[:_TRAIN_DAYS]
         t_start, t_end, v_start, v_end = resolve_explicit_split_dates(
@@ -794,15 +832,14 @@ class TestCsTrainParityWithLegacy:
         with pytest.raises(ValueError, match="隔离带"):
             resolve_explicit_split_dates(days[0], days[10], 0.2, days[:11], _DELTA)
 
-    def test_r206_full_segment_reconciliation(self, tmp_path, monkeypatch):
+    def test_r206_full_segment_reconciliation(self, tmp_path, shared_cs_root, monkeypatch):
         """R2-06 全段对账:旧 ``_train_model_on_window``(args 路径)vs 新 ``train_fold``
         (cs_train_verify + 显式缝)——逐折 train/val-raw/ES/calibration/embargo 日期 +
         样本数逐项相等;``df_train_split`` (trade_date, ts_code) 键集全等;rank_weight
         样本权重逐项相等(两侧真实调用点 monkeypatch 捕获,非重导实现;两臂同开
         rank_weight_enabled=True 且 topk=10 < 24 股截面,权重非平凡)。
         """
-        cs_root = tmp_path / "cs"
-        _build_cs_train_root(cs_root)
+        cs_root = shared_cs_root
         days = _days()
         storage, loader = _old_path_objects(cs_root)
 
@@ -842,7 +879,7 @@ class TestCsTrainParityWithLegacy:
         )
 
         # 新臂:cs_train_verify + 显式缝(单种子 ⇒ train_fold 直走同一 _train_model_on_window)
-        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY)
+        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY, models_root=tmp_path)
         config = _config_with(
             hyperparams_over={"rank_weight_enabled": True, "rank_weight_topk": 10},
             ensemble_seeds=(42,),
@@ -933,9 +970,9 @@ def _stub_backtest_runner(**kwargs) -> Dict[str, Any]:
 
 
 class TestPanelEndToEnd:
-    def test_orchestrator_single_fold_run(self, tmp_path):
-        root = tmp_path / "iso"
-        store = _build_panel_root(root)
+    def test_orchestrator_single_fold_run(self, tmp_path, shared_panel_root):
+        root = shared_panel_root
+        store = PanelDataStore(root)
         output_root = tmp_path / "out"
         days = _days()
         registry = ModelRegistry(models_dir=str(output_root / "models" / "stock_selection"))
@@ -1018,10 +1055,11 @@ class TestPanelEndToEnd:
 
 
 class TestDualSourceMechanism:
-    def test_same_values_panel_vs_cs_train_parity(self, tmp_path):
-        panel_store = _build_panel_root(tmp_path / "panel_root")
-        cs_root = tmp_path / "cs_root"
-        _build_cs_train_root(cs_root)
+    def test_same_values_panel_vs_cs_train_parity(
+        self, tmp_path, shared_panel_root, shared_cs_root
+    ):
+        panel_store = PanelDataStore(shared_panel_root)
+        cs_root = shared_cs_root
         days = _days()
         config = _config()
         trade_dates = days[:_TRAIN_DAYS]
@@ -1035,7 +1073,9 @@ class TestDualSourceMechanism:
             source_mode="panel",
             frame_cache=TrainingFrameCache(),
         )
-        trainer_cs = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY)
+        trainer_cs = _new_trainer(
+            cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY, models_root=tmp_path / "m2"
+        )
         # 合成日历超出生产冻结边界:经构造参数显式放宽(验收夹具;生产回放默认 20260702)
 
         v1 = trainer_panel.train_fold(config, t_start, t_end, v_start, v_end, panel_store)
@@ -1063,11 +1103,11 @@ class TestDualSourceMechanism:
 
 
 class TestDiscrimination:
-    def test_panel_path_never_calls_load_cs_train_day(self, tmp_path, monkeypatch):
+    def test_panel_path_never_calls_load_cs_train_day(self, shared_panel_root):
         """v2 OOS 默认(panel)路径禁止旧 load_cs_train_day(拦截计数 = 0)。"""
         from src.lazybull.v2.hosts.backtest import replay as replay_mod
 
-        store = _build_panel_root(tmp_path / "root")
+        store = PanelDataStore(shared_panel_root)
         calls: List[str] = []
 
         class _StorageSpy:
@@ -1115,13 +1155,13 @@ class TestDiscrimination:
         expected = _cell_value(_TRAIN_DAYS, 0, 0, salt=9.0)
         assert day_frame["neu_ret_1"].iloc[0] == pytest.approx(expected)
 
-    def test_panel_mode_rejects_lookups_and_skips_derive(self, tmp_path, monkeypatch):
+    def test_panel_mode_rejects_lookups_and_skips_derive(self, monkeypatch, shared_panel_root):
         """panel 模式传 lookup ⇒ 报错;derive 函数零调用(防双写,§3.3-③)。"""
         from src.lazybull.factors import holdertrade as ht_mod
         from src.lazybull.v2.common.types import ReplayContractError
         from src.lazybull.v2.hosts.backtest import replay as replay_mod
 
-        store = _build_panel_root(tmp_path / "root")
+        store = PanelDataStore(shared_panel_root)
         derive_calls: List[str] = []
         monkeypatch.setattr(
             ht_mod, "derive_holdertrade_columns", lambda *a, **k: derive_calls.append("ht")
@@ -1160,11 +1200,11 @@ class TestDiscrimination:
         )
         assert derive_calls == []
 
-    def test_panel_missing_data_fails_no_fallback(self, tmp_path):
+    def test_panel_missing_data_fails_no_fallback(self, shared_panel_root):
         """panel 模式缺数据 ⇒ RuntimeError(旧特征读取回退已显式关闭)。"""
         from src.lazybull.v2.hosts.backtest import replay as replay_mod
 
-        store = _build_panel_root(tmp_path / "root")
+        store = PanelDataStore(shared_panel_root)
         with pytest.raises(RuntimeError, match="旧特征读取回退已显式关闭"):
             replay_mod._select_replay_features(
                 "panel",
@@ -1264,9 +1304,8 @@ class TestProtocolAndRetired:
 
 
 class TestEvalParityWithLegacy:
-    def test_evaluate_test_window_parity(self, tmp_path):
-        cs_root = tmp_path / "cs"
-        _build_cs_train_root(cs_root)
+    def test_evaluate_test_window_parity(self, shared_cs_root):
+        cs_root = shared_cs_root
         days = _days()
         params = _params()
         storage, loader = _old_path_objects(cs_root)
@@ -1393,12 +1432,11 @@ class TestEvalParityWithLegacy:
 
 
 class TestReviewFixesP1:
-    def test_classification_path_frame_returned(self, tmp_path):
+    def test_classification_path_frame_returned(self, tmp_path, shared_cs_root):
         """codex-R04:分类任务 generate_classification_labels 新帧必须传回训练链路。"""
-        cs_root = tmp_path / "cs"
-        _build_cs_train_root(cs_root)
+        cs_root = shared_cs_root
         days = _days()
-        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY)
+        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY, models_root=tmp_path)
         config = ModelConfig(
             model_family="stock_selection",
             feature_columns=(),
@@ -1426,10 +1464,10 @@ class TestReviewFixesP1:
         result = trainer.last_fold_result
         assert result is not None and result.label_column == "neu_y_ret_20_binary"
 
-    def test_frame_cache_cleared_per_fold(self, tmp_path):
+    def test_frame_cache_cleared_per_fold(self, tmp_path, shared_panel_root):
         """P1-2/R02:两折运行,每折后帧缓存清空(失败路径同覆盖)。"""
-        root = tmp_path / "iso"
-        store = _build_panel_root(root)
+        root = shared_panel_root
+        store = PanelDataStore(root)
         output_root = tmp_path / "out"
         days = _days()
         registry = ModelRegistry(models_dir=str(output_root / "models" / "stock_selection"))
@@ -1472,10 +1510,10 @@ class TestReviewFixesP1:
         assert observed and all(count == 0 for count in observed)
         assert len(observed) >= 3
 
-    def test_signal_factory_required_when_backtest(self, tmp_path):
+    def test_signal_factory_required_when_backtest(self, tmp_path, shared_panel_root):
         """P1-3/R03:oos_backtest=True 且未注入 signal_factory ⇒ fail-fast。"""
-        root = tmp_path / "iso"
-        store = _build_panel_root(root)
+        root = shared_panel_root
+        store = PanelDataStore(root)
         registry = ModelRegistry(models_dir=str(tmp_path / "m"))
         trainer = V2Trainer(registry=registry, main_board_codes=_main_codes(), source_mode="panel")
         storage, loader = _old_path_objects(root)
@@ -1490,10 +1528,10 @@ class TestReviewFixesP1:
         with pytest.raises(ValueError, match="signal_factory"):
             orch.run(_config(), 1, _days()[-1], trainer, store, test_window_months=1)
 
-    def test_data_state_covers_train_labels_and_suspend(self, tmp_path):
+    def test_data_state_covers_train_labels_and_suspend(self, tmp_path, shared_panel_root):
         """P1-1/R01:数据态清单覆盖训练窗 panel 分区 + 全部 labels 分区 + raw/suspend。"""
-        root = tmp_path / "iso"
-        store = _build_panel_root(root)
+        root = shared_panel_root
+        store = PanelDataStore(root)
         # raw/suspend 逐日分区(内核停牌日历实际读取)
         suspend_dir = root / "raw" / "suspend"
         suspend_dir.mkdir(parents=True, exist_ok=True)
@@ -1543,14 +1581,14 @@ class TestReviewFixesP1:
         summary_df = pd.read_csv(summary_csv, encoding="utf-8-sig")
         assert summary_df["data_state_id"].iloc[0] == payload["data_state_id"]
 
-    def test_drift_passthrough_not_swallowed(self, tmp_path, monkeypatch):
+    def test_drift_passthrough_not_swallowed(self, tmp_path, monkeypatch, shared_panel_root):
         """P2-1:输入漂移异常穿透 split 级 continue(run 必须失败)。"""
         from src.lazybull.v2.store.store_identity import InputIdentityDriftError
         from src.lazybull.v2.train.walk_forward import orchestrator as orch_mod
         from src.lazybull.v2.train.walk_forward import split_training as st_mod
 
-        root = tmp_path / "iso"
-        store = _build_panel_root(root)
+        root = shared_panel_root
+        store = PanelDataStore(root)
         registry = ModelRegistry(models_dir=str(tmp_path / "m"))
         trainer = V2Trainer(registry=registry, main_board_codes=_main_codes(), source_mode="panel")
         storage, loader = _old_path_objects(root)
@@ -1572,14 +1610,13 @@ class TestReviewFixesP1:
         with pytest.raises(InputIdentityDriftError):
             orch.run(_config(), 1, _days()[-1], trainer, store, test_window_months=1)
 
-    def test_f10_spec_wired_into_metadata(self, tmp_path):
+    def test_f10_spec_wired_into_metadata(self, tmp_path, shared_cs_root):
         """P1-4/R05:三 spec 原文 + canonical digest + domain + 配方字段入注册 metadata。"""
         from src.lazybull.v2.store.store_identity import canonical_json_sha256
 
-        cs_root = tmp_path / "cs"
-        _build_cs_train_root(cs_root)
+        cs_root = shared_cs_root
         days = _days()
-        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY)
+        trainer = _new_trainer(cs_root, source_mode=SOURCE_CS_TRAIN_VERIFY, models_root=tmp_path)
         config = _config()
         trade_dates = days[:_TRAIN_DAYS]
         t_start, t_end, v_start, v_end = resolve_explicit_split_dates(
@@ -1633,10 +1670,11 @@ class TestReviewFixesP1:
 class TestRealReplayKernelIntegration:
     """真实 v2 内核回测实际消费 panel 特征(非 stub),差异进入信号/成交/净值。"""
 
-    def test_real_replay_consumes_panel_with_discrimination(self, tmp_path, monkeypatch):
-        root = tmp_path / "base"
-        store = _build_kernel_panel_root(root)
-        _write_engine_daily(root)
+    def test_real_replay_consumes_panel_with_discrimination(
+        self, tmp_path, monkeypatch, shared_kernel_root
+    ):
+        root = shared_kernel_root
+        store = PanelDataStore(root)
         models_dir = tmp_path / "registry" / "stock_selection"
         feature_columns = _train_panel_fold_v1(root, store, models_dir)
 
@@ -1671,7 +1709,7 @@ class TestRealReplayKernelIntegration:
             metrics_base, metrics_salt
         ), "异值 panel 未进入决策——两臂 metrics/成交/净值完全一致"
 
-    def test_same_version_different_model_root_binding(self, tmp_path):
+    def test_same_version_different_model_root_binding(self, tmp_path, shared_kernel_root):
         """双根同号异模型守卫:信号 models_dir 绑定根决定实际消费的模型内容。
 
         根 A / 根 B 各注册同版本号 v1 的不同内容模型(异种子 + 异超参);
@@ -1680,9 +1718,8 @@ class TestRealReplayKernelIntegration:
         缺省信号工厂在 oos_backtest=True 时的 ValueError 已由
         test_signal_factory_required_when_backtest 覆盖,不重复。
         """
-        root_a = tmp_path / "a"
-        store_a = _build_kernel_panel_root(root_a)
-        _write_engine_daily(root_a)
+        root_a = shared_kernel_root
+        store_a = PanelDataStore(root_a)
         models_a = tmp_path / "reg_a" / "stock_selection"
         feature_columns = _train_panel_fold_v1(root_a, store_a, models_a)
 
@@ -1710,12 +1747,11 @@ class TestRealReplayKernelIntegration:
 class TestRunsBatchHostAdapter:
     """orchestrator.run 经 ``runs_batch_writer`` 适配器产出 runs 契约批次。"""
 
-    def test_orchestrator_runs_batch_with_real_kernel(self, tmp_path):
+    def test_orchestrator_runs_batch_with_real_kernel(self, tmp_path, shared_kernel_root):
         from src.lazybull.v2.hosts.backtest.replay import run_oos_backtest
 
-        root = tmp_path / "iso"
-        store = _build_kernel_panel_root(root)
-        _write_engine_daily(root)
+        root = shared_kernel_root
+        store = PanelDataStore(root)
         output_root = tmp_path / "out"
         runs_root = tmp_path / "runs"
         days = _days()
@@ -1840,9 +1876,9 @@ class TestDomainFilterOrder:
 class TestDeployOutputIsolation:
     """§17.10-9:deploy 训练只写隔离 output_root,只读 data_root 不触碰。"""
 
-    def test_deploy_model_registers_to_output_root_only(self, tmp_path):
-        root = tmp_path / "iso"
-        store = _build_panel_root(root)
+    def test_deploy_model_registers_to_output_root_only(self, tmp_path, shared_panel_root):
+        root = shared_panel_root
+        store = PanelDataStore(root)
         output_root = tmp_path / "out"
         days = _days()
         models_dir = output_root / "models" / "stock_selection"
