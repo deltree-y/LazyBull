@@ -10,6 +10,8 @@ import json
 import os
 import re
 import types
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -29,13 +31,36 @@ from src.lazybull.v2.store.column_groups import LABEL_TABLES
 from src.lazybull.v2.store.manifest import VALID_GROUPS, Manifest, sha256_16_of_file
 from src.lazybull.v2.store.manifest_wal import ManifestDefer, ManifestWal
 from src.lazybull.v2.store.row_domain import row_domain_for_date, row_domain_for_partition
+from src.lazybull.v2.store.store_identity import (
+    InputIdentityDriftError,
+    file_identity,
+    verify_file_identities,
+)
 from src.lazybull.v2.store.write_lock import _WriteLock
 
-__all__ = ["PanelDataStore"]
+__all__ = ["PanelDataStore", "StoreReadReceipt"]
 
 _KEY_COLUMNS = ("trade_date", "ts_code")
 _LEDGER_KINDS = frozenset({"prereg", "conclusion"})
 _MATURITY_VALUES = frozenset({"forming", "sealed"})
+
+
+@dataclass(frozen=True)
+class StoreReadReceipt:
+    """单次 store 读取的只收回执（P3-T3，§13.3.5 方案 P2：读前采集 + 读后核验）。
+
+    ``files`` = 本次查询**实际读取**的分区文件身份清单（``store_identity.file_identity``
+    记录，显示路径以 store root 为基准）——清单单一来源 = 读取动作本身，不另造
+    冷热区解析规则（R7）。读取完成后已对全部文件重算核验（``verified=True`` 才产出）；
+    读取期间任一文件漂移 ⇒ ``InputIdentityDriftError``，不产出 receipt。
+    """
+
+    kind: str  # "features" / "labels"
+    start_date: str
+    end_date: str
+    files: tuple[dict[str, Any], ...]
+    collected_at: str
+    verified: bool = True
 
 
 def _date_str(date: TradeDate | str) -> str:
@@ -54,7 +79,16 @@ def _empty_panel_df(columns: Sequence[str]) -> pd.DataFrame:
 
 
 class PanelDataStore:
-    """DataStore Protocol 的 panel 实现（构造参数 data_root 默认 ``data/``）。"""
+    """DataStore Protocol 的 panel 实现（构造参数 data_root 默认 ``data/``）。
+
+    读取回执(P3-T3,§13.3.5 P2):``load_features`` / ``load_labels`` 读前逐文件
+    采集、读后统一核验(漂移 ⇒ InputIdentityDriftError);会话级累积经
+    ``read_receipts`` / ``consumed_files`` 只读属性暴露,``reset_read_receipts``
+    由编排器在 run 开始调用。**单线程顺序调用约定**:读取不支持并发/嵌套
+    (``_begin_read`` 重入 ⇒ RuntimeError),编排/回放均为单线程顺序读取。
+    **会话累积无上限**:非编排器消费者(脚本/长生命周期进程)直接复用 store 时,
+    须自行在任务边界调用 ``reset_read_receipts()``(复核处置 reviewer1-P3-6)。
+    """
 
     def __init__(self, data_root: Path | str = "data") -> None:
         self._root = Path(data_root)
@@ -63,6 +97,137 @@ class PanelDataStore:
         self._wal = ManifestWal(self)
         self._wal_stat: tuple[int, int] | None = None  # 已吸收 WAL 的 (mtime_ns, size) 代际
         self._manifest_defer = 0  # defer_manifest_save 计数（批量回填防 manifest O(n²) 落盘）
+        self._last_read_receipt: StoreReadReceipt | None = None  # 最近一次读取回执（P3-T3）
+        self._read_records: list[dict[str, Any]] | None = None  # 读取中缓冲（None = 非读取态）
+        # P3-T3 评审处置（reviewer1-P1-1 ≡ codex-R01）：会话级累积——单槽
+        # last_read_receipt 覆盖语义下中间读取（训练窗/labels）会丢失；累积器在
+        # run 开始时由编排器 reset_read_receipts() 清空、收尾统一消费。
+        self._receipt_log: list[StoreReadReceipt] = []
+        self._consumed_files_log: list[dict[str, Any]] = []
+
+    # ---------- 读取回执（P3-T3，§13.3.5 方案 P2；单线程顺序调用约定） ----------
+
+    @property
+    def last_read_receipt(self) -> StoreReadReceipt | None:
+        """最近一次 load_features / load_labels 的只收回执（每次读取覆盖；None = 未读过）。"""
+        return self._last_read_receipt
+
+    @property
+    def read_receipts(self) -> tuple[StoreReadReceipt, ...]:
+        """会话级回执累积（自上次 ``reset_read_receipts`` 起全部读取）。"""
+        return tuple(self._receipt_log)
+
+    @property
+    def consumed_files(self) -> tuple[dict[str, Any], ...]:
+        """会话级消费文件身份累积（receipt 文件 + ``register_external_read`` 登记）。
+
+        同路径不去重（消费方 ``collect_consumed_file_identities`` 合并去重）；
+        返回浅拷贝元组，外部修改不影响内部日志。
+        """
+        return tuple(self._consumed_files_log)
+
+    def reset_read_receipts(self) -> None:
+        """清空会话级累积（编排器 run 开始时调用；单线程顺序调用约定）。"""
+        self._receipt_log.clear()
+        self._consumed_files_log.clear()
+
+    def register_external_read(self, path: Path | str) -> None:
+        """会话级外部读取登记（便捷形态 = begin+finish;供 label_refresh 收敛路径等
+        不经 load_features/load_labels 的 store 数据文件读取使用）。
+
+        **口径勘误(复核二 codex):本便捷形态 = begin+finish 紧邻连用,不含读取
+        动作,**不防「读取期间替换」**;防洗白须在读取前调 ``begin_external_read``、
+        读取后调 ``finish_external_read``(绑定形态,label_refresh 收敛路径即此用法)。
+        本便捷形态仅用于「登记当前内容 + 即时一致性核验」。
+        """
+        self.finish_external_read(self.begin_external_read(path))
+
+    def begin_external_read(self, path: Path | str) -> dict[str, Any]:
+        """外部读取**读前**身份采集（P3-T3 复核处置 codex-F01：读前采集与读取
+        绑定，读后必须经 ``finish_external_read`` 核验同一身份——仅读后采集会被
+        「读取期间替换」洗白为新基线）。"""
+        return file_identity(path, base_dir=self._root)
+
+    def finish_external_read(self, record: dict[str, Any]) -> None:
+        """读后核验（同文件重算比对）+ 会话清单登记（去重）。"""
+        mismatches = verify_file_identities([record], base_dir=self._root)
+        if mismatches:
+            raise InputIdentityDriftError(f"外部读取期间文件漂移（读后核验失败）: {mismatches[0]}")
+        existing = {(r["path"], r["sha256"], r["size"]) for r in self._consumed_files_log}
+        key = (record["path"], record["sha256"], record["size"])
+        if key not in existing:
+            self._consumed_files_log.append(record)
+
+    # ---------- 读取回执（P3-T3，§13.3.5 方案 P2；单线程顺序调用约定） ----------
+
+    def _begin_read(self) -> None:
+        """进入读取态（嵌套读取拒绝——训练/回放为单线程顺序调用约定）。"""
+        if self._read_records is not None:
+            raise RuntimeError("store 读取嵌套调用（回执缓冲非空），违反单线程顺序读取约定")
+        self._read_records = []
+
+    def _track_read(self, path: Path) -> None:
+        """读取动作点的读前身份采集（清单单一来源 = 实际读取动作）。"""
+        if self._read_records is not None:
+            self._read_records.append(file_identity(path, base_dir=self._root))
+
+    def _abort_read(self) -> None:
+        """读取异常：丢弃缓冲，不产出 receipt。"""
+        self._read_records = None
+
+    def _finalize_read(self, kind: str, start_str: str, end_str: str) -> None:
+        """读后核验并产出 receipt：全部文件重算，任一漂移 ⇒ InputIdentityDriftError。
+
+        P3-T3 复核处置（codex-F01）增补：panel/labels 分区额外比对 manifest
+        登记指纹（sha256 前 16 位）——「manifest 登记值不变而物理文件变更」
+        （读取窗口跨越登记后篡改）⇒ 拒绝（§5-1 明文用例）；无登记 ⇒ 跳过
+        （孤儿分区由 readiness 校验拦截，非本层职责）。
+        """
+        records = self._read_records or []
+        self._read_records = None
+        mismatches = verify_file_identities(records, base_dir=self._root)
+        if mismatches:
+            raise InputIdentityDriftError(
+                f"store {kind} 读取期间文件漂移（读后核验失败）: {mismatches[:5]}"
+                f"{'...' if len(mismatches) > 5 else ''}（共 {len(mismatches)} 个）"
+            )
+        self._verify_manifest_registration(records)
+        self._last_read_receipt = StoreReadReceipt(
+            kind=kind,
+            start_date=start_str,
+            end_date=end_str,
+            files=tuple(records),
+            collected_at=datetime.now().isoformat(timespec="seconds"),
+            verified=True,
+        )
+        # 会话级累积（P3-T3 评审处置 P1-1/R01）
+        self._receipt_log.append(self._last_read_receipt)
+        self._consumed_files_log.extend(records)
+
+    def _verify_manifest_registration(self, records: list[dict[str, Any]]) -> None:
+        """分区文件与 manifest 登记指纹比对（codex-F01；登记缺失跳过）。"""
+        snapshot = self.manifest.snapshot()
+        partitions = snapshot.get("partitions", {})
+        drifted: list[str] = []
+        for record in records:
+            display = record["path"]
+            registered: str | None = None
+            if display.startswith("features/"):
+                meta = partitions.get(display[len("features/") :])
+                registered = (meta or {}).get("sha256_16")
+            elif display.startswith("labels/"):
+                parts = display.split("/")
+                if len(parts) == 3:
+                    registered = self.manifest.label_partition_fingerprint(
+                        parts[1], parts[2].removesuffix(".parquet")
+                    )
+            if registered is not None and record["sha256"][:16] != registered:
+                drifted.append(display)
+        if drifted:
+            raise InputIdentityDriftError(
+                f"分区物理内容与 manifest 登记指纹不一致（登记不变而文件变更）: "
+                f"{drifted[:5]}{'...' if len(drifted) > 5 else ''}（共 {len(drifted)} 个）"
+            )
 
     # ---------- 路径布局 ----------
 
@@ -416,27 +581,39 @@ class PanelDataStore:
             groups.setdefault(str(meta["group"]), []).append(col)
         hot_dates = self._hot_dates_in_range(start_str, end_str)
         data_cols = [c for c in query.columns if c not in _KEY_COLUMNS]
-        core_frame = self._load_group_frame(
-            "core", groups.pop("core", []), start_str, end_str, hot_dates
-        )
+        self._begin_read()
+        try:
+            core_frame = self._load_group_frame(
+                "core", groups.pop("core", []), start_str, end_str, hot_dates
+            )
+            # 逐族读取并立即合并（中间帧随循环释放;core 缺失 ⇒ 不读他族直接空,
+            # 与 T1 前语义逐位一致;P3-T3 评审处置 reviewer1-P3-11 内存回归恢复)
+            merged: pd.DataFrame | None = None
+            if core_frame is not None:
+                merged = core_frame
+                core_keys = pd.MultiIndex.from_frame(core_frame[list(_KEY_COLUMNS)])
+                for group, cols in groups.items():
+                    frame = self._load_group_frame(group, cols, start_str, end_str, hot_dates)
+                    if frame is None:
+                        continue
+                    dropped = int(
+                        (~pd.MultiIndex.from_frame(frame[list(_KEY_COLUMNS)]).isin(core_keys)).sum()
+                    )
+                    if dropped:
+                        logger.debug(
+                            f"族 {group} 多出 core 键域的 {dropped} 键被裁掉（core 左表锚定）"
+                        )
+                    merged = merged.merge(frame, on=list(_KEY_COLUMNS), how="left")
+                merged = merged.set_index(list(_KEY_COLUMNS)).sort_index()
+                if not merged.index.is_unique:
+                    raise RuntimeError("load_features 合并后键 (trade_date, ts_code) 不唯一")
+        except Exception:
+            self._abort_read()
+            raise
+        self._finalize_read("features", start_str, end_str)
         if core_frame is None:
             df = _empty_panel_df(data_cols)
         else:
-            merged = core_frame
-            core_keys = pd.MultiIndex.from_frame(core_frame[list(_KEY_COLUMNS)])
-            for group, cols in groups.items():
-                frame = self._load_group_frame(group, cols, start_str, end_str, hot_dates)
-                if frame is None:
-                    continue
-                dropped = int(
-                    (~pd.MultiIndex.from_frame(frame[list(_KEY_COLUMNS)]).isin(core_keys)).sum()
-                )
-                if dropped:
-                    logger.debug(f"族 {group} 多出 core 键域的 {dropped} 键被裁掉（core 左表锚定）")
-                merged = merged.merge(frame, on=list(_KEY_COLUMNS), how="left")
-            merged = merged.set_index(list(_KEY_COLUMNS)).sort_index()
-            if not merged.index.is_unique:
-                raise RuntimeError("load_features 合并后键 (trade_date, ts_code) 不唯一")
             # reindex 一次性补齐缺列（NaN）+ 按请求列序裁剪（避免逐列插入碎片化）
             df = merged.reindex(columns=data_cols)
         if query.universe:
@@ -502,7 +679,9 @@ class PanelDataStore:
             if (self.archive_dir / m / f"{group}.parquet").exists()
         }
         for month in sorted(archived_months):
-            month_df = pd.read_parquet(self.archive_dir / month / f"{group}.parquet")
+            month_path = self.archive_dir / month / f"{group}.parquet"
+            self._track_read(month_path)
+            month_df = pd.read_parquet(month_path)
             dates = month_df["trade_date"].astype(str)
             month_df = month_df[(dates >= start_str) & (dates <= end_str)]
             if not month_df.empty:
@@ -514,6 +693,7 @@ class PanelDataStore:
             hot_file = self.panel_dir / date_str / f"{group}.parquet"
             if hot_file.exists():
                 present_hot.add(date_str)
+                self._track_read(hot_file)
                 hot_df = pd.read_parquet(hot_file)
                 # 热区整文件读入后按分区名日期过滤（与冷区同口径；防御性，正常应为零过滤）
                 mask = hot_df["trade_date"].astype(str) == date_str
@@ -631,14 +811,21 @@ class PanelDataStore:
         label_dir = self.labels_dir / query.label_name
         start_str, end_str = _date_str(query.start_date), _date_str(query.end_date)
         parts: list[pd.DataFrame] = []
-        if label_dir.exists():
-            for file in sorted(label_dir.glob("*.parquet")):
-                if (
-                    len(file.stem) == 8
-                    and file.stem.isdigit()
-                    and start_str <= file.stem <= end_str
-                ):
-                    parts.append(pd.read_parquet(file))
+        self._begin_read()
+        try:
+            if label_dir.exists():
+                for file in sorted(label_dir.glob("*.parquet")):
+                    if (
+                        len(file.stem) == 8
+                        and file.stem.isdigit()
+                        and start_str <= file.stem <= end_str
+                    ):
+                        self._track_read(file)
+                        parts.append(pd.read_parquet(file))
+        except Exception:
+            self._abort_read()
+            raise
+        self._finalize_read("labels", start_str, end_str)
         if not parts:
             return _empty_panel_df(["label_value", "maturity_status"])
         df = pd.concat(parts, ignore_index=True)

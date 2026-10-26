@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Protocol, Sequence, runtime_checkable
 
 from src.lazybull.v2.common.protocols.store import DataStore
 from src.lazybull.v2.common.types import (
@@ -82,6 +82,13 @@ class Trainer(Protocol):
 
         返回：模型版本号（ModelRegistry 注册；集成 = 单一注册版本 + 子模型 metadata）
         副作用：写模型文件 + 注册表
+
+        F10 注记（P3）：四显式日期 ↔ 旧字段映射——``train_start/train_end`` = 实际
+        训练窗，``val_start/val_end`` = val-raw 窗（embargo/ES/calibration 尾部拆分前）；
+        ES/calibration/embargo 尾部拆分留在 train 侧内部执行，不经协议参数；
+        **显式日期换算职责在编排器，train 侧不再二次比例切分**；训练统计
+        （train_samples / best_iteration / val_*）从注册表 metadata 读取（既有旁路），
+        本方法仍只返回版本号、不改签名语义（S3）。
         """
         ...
 
@@ -103,9 +110,26 @@ class WalkForwardOrchestrator(Protocol):
         final_date: TradeDate,
         trainer: Trainer,
         store: DataStore,
+        *,
+        test_window_months: int = 6,
+        selected_split_indices: Sequence[int] | None = None,
+        skip_training: bool = False,
+        start_model_version: int | None = None,
+        skip_training_eval: bool = False,
+        deploy_train: bool = False,
     ) -> str:
         """运行滚动训练全流程。
 
         返回：wf_run_id（批次标识，产物落 runs/<wf_run_id>/）
+
+        F10 编排参数（P3 增补，宿主编排模式开关，不进 ModelConfig）：
+        ``test_window_months``（折窗宽，生产 = 6）/ ``selected_split_indices`` /
+        ``skip_training`` + ``start_model_version``（skip 必须带起始版本，实现内校验）/
+        ``skip_training_eval`` / ``deploy_train``（**P3 回放默认 False**——Q10-B 已裁决：
+        显式关闭 deploy 训练并登记理由，生产部署训练留 P4 验证）。
+
+        Q3-C 产物边界注记：summary/reporting 沿用现格式与路径、回测批次落 runs；
+        四键关联 = wf_run_id ↔ 回测批 ID ↔ 模型版本 ↔ data_state 文件，
+        实现侧必须支持「从 wf_run_id 定位完整批次证据」。
         """
         ...

@@ -19,6 +19,35 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 import pandas as pd
 
+
+def to_plain_data(value: Any) -> Any:
+    """映射/序列递归转纯数据形态（MappingProxy → dict、tuple → list;叶子原样）。
+
+    P3-T3 复核处置（codex-F02）：入参为 MappingProxyType 时同样脱钩
+    （代理底层原字典的修改不得穿透已构造配置）。
+    """
+    if isinstance(value, Mapping):
+        return {key: to_plain_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_plain_data(item) for item in value]
+    return value
+
+
+def _freeze_plain_mapping(value: Any) -> Any:
+    """纯数据递归不可变快照：dict → MappingProxyType、list → tuple(叶子原样)。
+
+    前置输入须为 JSON 可序列化纯数据（spec/hyperparams 契约）;新建容器树
+    与原对象零共享 ⇒ 调用方后续修改不穿透。
+    """
+    from types import MappingProxyType
+
+    plain = to_plain_data(value)
+    if isinstance(plain, dict):
+        return MappingProxyType({key: _freeze_plain_mapping(item) for key, item in plain.items()})
+    if isinstance(plain, list):
+        return tuple(_freeze_plain_mapping(item) for item in plain)
+    return plain
+
 __all__ = [
     "TradeDate",
     "TSCode",
@@ -346,18 +375,60 @@ class RankedCandidates:
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
-    """模型配置（袖子规格的一部分）。"""
+    """模型配置（袖子规格的一部分）。
+
+    F10 扩展（P3，Q8-① 已批准）：新增 ``label_spec`` / ``feature_recipe`` /
+    ``split_spec`` / ``domain`` 四字段（默认 None/"main"，规范化序列化 canonical JSON
+    由模型 metadata 与配置指纹侧消费）；``val_window_months`` 改可选
+    （比例模式置 None，日期换算职责在编排器）。
+    ``model_family`` 语义不变 = 家族目录名（选股 = ``stock_selection``），算法名由
+    ``hyperparams.algorithm`` 承载（C03）。
+
+    列集三层语义（§13.3.1 冻结）：``feature_recipe`` = 配方（开关 + 排除清单 +
+    门禁参数）；``feature_columns`` = 候选超集；逐折实际列集 = 门禁裁剪结果，
+    只写模型 metadata，不得写成静态声明。
+
+    映射不可变（F10 S2 + T3 评审 codex-R05 处置）：``hyperparams`` / ``label_spec`` /
+    ``feature_recipe`` / ``split_spec`` 在构造时深拷贝并快照为 ``MappingProxyType``
+    ——调用方随后修改原映射不影响本配置。
+    """
 
     model_family: str
     feature_columns: Sequence[str]
     label_name: str
     hyperparams: Mapping[str, Any]
     train_window_months: int
-    val_window_months: int
+    val_window_months: int | None = None  # F10：比例模式置 None
     ensemble_seeds: Sequence[int] = ()  # 空 = 单模型；生产 A = 3 种子
+    label_spec: Mapping[str, Any] | None = None  # 标签系规格（版本化 + canonical JSON）
+    feature_recipe: Mapping[str, Any] | None = None  # 特征配方（版本化 + canonical JSON）
+    split_spec: Mapping[str, Any] | None = None  # 切分规格（版本化 + canonical JSON）
+    domain: str = (
+        "main"  # 域标识；解析为显式股票池的职责在调用方/薄入口（train 不 import universe）
+    )
+
+    def __post_init__(self) -> None:
+        # 映射不可变快照（复核处置 codex-F02）：入参统一先解包为纯 dict 树
+        # （MappingProxy 入参同样脱钩），再递归冻结——嵌套 dict/list 亦不可变；
+        # 调用方随后修改原映射（含代理底层）不影响本配置。
+        for name in ("hyperparams", "label_spec", "feature_recipe", "split_spec"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _freeze_plain_mapping(value))
 
 
 # ========== 数据态与审计 ==========
+
+
+class ReplayContractError(RuntimeError):
+    """OOS 回测 / 编排守卫契约错误（P3-T3 复核处置 reviewer1-P1-1）。
+
+    语义：缺分区日 / 冻结上界越界 / 列集校验失败 / 特征源守卫拒绝等**守卫类**
+    失败必须 fail-fast 穿透「失败记日志置空继续」的容错 except（split 级
+    continue / 回测级 bt_metrics={}）；区别于回测引擎内部的数据/数值失败
+    （旧语义保持可吞）。
+    """
+
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,7 +3,7 @@
 > **单文件制（F6 起生效，2026-10-01）**：原「plans/ 草案 + contracts/ 契约」双轨合并，本文件为**唯一载体**；
 > 草案已退役，历史版本备份于 `docs/plans/v2/backup/`。修订流程：直接在本文件修订 → 头部版本表登记新行
 > （状态=**草案**）→ 经评审后该行改「**生效**」并 commit（**git 历史只保留生效版本**，草稿不 commit）。
-> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F10（2026-10-20，P3 T0.5a 训练协议修订包：ModelConfig 字段扩展 / 日期换算注记 / 编排参数 / 产物边界四键 / 依赖表注记，随方案 F14 同批生效；开工硬门 #6 评审处置闭合 + 用户确认）**。代码实现以本文档为唯一接口依据。
+> 生效状态：**已于 2026-10-01 P0 确认通过；现行生效版 = F11（2026-10-22 起草 / 2026-10-23 用户批准生效，P3 T4 评审处置包：§6 补 SleeveRegistry 协议代码化过渡注记——P3 期 `v2/sleeves/_registry.py` 为 SleeveSpec 注册表（唯一袖子入口），协议代码化兑现节点 = P4/P5 袖子信号迁移评审；随方案 F15 同批）**。代码实现以本文档为唯一接口依据。
 
 | 契约版本 | 落档日期 | 来源 | 状态 | 变更摘要 |
 |---|---|---|---|---|
@@ -17,13 +17,14 @@
 | F8（= v0.8） | 2026-10-06 | 本文件单文件制修订（P2a T0 评审勘误包） | **生效**（2026-10-07，随方案 F11 同批：评审通过 + T0.5 裁决落档） | §11 勘误三条：①「止盈检查器」行无在用对照物（risk/ 无止盈模块、git 全历史无 take_profit、仅存纸面退役键与注释残影；`OrderReason.TAKE_PROFIT` 无生产者）——改登记为已退役机制描述，条件卖出触发器实测 = rebalance / holding_period / stop_loss 三种；②「估值价格回退链」行「回测 4 处」实测 **5 处**；③ §3「每日 15 个有序钩子」括注含不存在的止盈语义，以代码调用点枚举为准。另：§11「Kelly 包装两份」行的「合并唯一实现」兑现节点登记 = P4 前完成预登记裁决 + P4 验收前落实并验证（以方案 §4.10 到期表为准、迁移期该表优先）；§11 快速复核（v0.7 2-A，P2a 开工前要求）已执行，证据 = T0 五轮评审复核记录（`docs/plans/v2/p2a_implementation_plan_20261006.md` §8） |
 | F9（= v0.9） | 2026-10-16 | 本文件单文件制修订（P2b 单袖直通过渡口径） | **生效**（2026-10-16：两位专家评审通过（reviewer1/reviewer2）+ 用户确认同提交落档；随方案 F12 同批） | §3.4 `PortfolioMerger.merge` 的「Σ袖子目标权重 = 1.0（合并前各自归一）」明确为**上游前置条件**：P2b 单袖直通不重复运行时校验、不新增判定分支，亦不授权新输入生产者绕过归一化；多袖期是否运行时校验、容差与失败模式随 P6.5 另行预登记，不在本版预判。`net_across_sleeves` 同期仅支持 S6 单袖指令原样透传，混合 `source_sleeve` fail-fast；反向抵消、同向分摊、自拆与三恒等式仍归 P6.5。`TargetPortfolio.target_weights` 注释同步指向上游不变量；`src/lazybull/v2/common/{protocols/core.py,types.py}` 同批同步，**公开签名不变** |
 | F10（= v0.10） | 2026-10-20 | 本文件单文件制修订（P3 T0.5a 契约修订包，随方案 F14 同批；Q8-①③ 2026-10-20 用户批准） | **生效**（2026-10-20 用户确认；开工硬门 #6 两轮评审处置闭合，随方案 F14 同批） | ① §2.2 训练协议：`ModelConfig` 增可选字段 `label_spec` / `feature_recipe` / `split_spec` / `domain`（版本号 + 规范化序列化 + 入模型 metadata 与配置指纹；默认 None/空映射、frozen、canonical JSON、映射不可变）；**`model_family` 语义不变 = 家族目录名（选股 = `stock_selection`），算法名由 `hyperparams.algorithm` 承载**；`val_window_months` 改可选（比例模式置 None）；`train_fold` 注记显式四日期由编排器按现役规则换算、train 侧不得二次比例切分；训练统计（train_samples/best_iteration/val_*）从注册表 metadata 读取、`train_fold` 返回签名不变；`WalkForwardOrchestrator.run` 增编排参数（`test_window_months` / `selected_split_indices` / `skip_training` / `start_model_version` / `skip_training_eval` / `deploy_train`）；② 产物边界注记（Q3-C）：WF 编排产物保持现格式与路径、回测批次落 runs/，经 wf_run_id ↔ 回测批 ID ↔ 模型版本 ↔ data_state 四键关联，验收含「从 wf_run_id 定位完整批次证据」；③ §7 依赖表注记：train 依赖不含 sleeves / universe（规格与域解析由薄入口/宿主注入） |
+| F11（= v0.11） | 2026-10-22 | 本文件单文件制修订（P3 T4 评审处置包：reviewer2 R2-T4-01 P1 + reviewer1 P3-9；实施规划 §18.11） | **生效**（2026-10-23 用户批准；reviewer1 复核一通过 + reviewer2 复核一确认草案内容可接受；随 P3 T5 收口提交落档） | §6 补过渡注记：P3 期 `v2/sleeves/_registry.py` 为 **SleeveSpec 注册表**（`get_sleeve_spec` / `list_sleeve_ids`，注册条目 = 规格对象而非信号类），**不是** §6 `SleeveRegistry` 协议的代码化；差异理由 = 信号实现 P3 期维持 `v2/core/signal/` 单处（P3 实施规划 §1.1-4）且 sleeves → core import 违反 §7 依赖方向，现行 `register/get/list_all` + `signal_class: type[Signal]` 签名本期无可实现形态（MLSignal 未实现协议 Signal）；`SleeveRegistry` 协议代码化兑现节点 = 信号实现迁入 sleeves 的阶段（**P4/P5 袖子信号迁移评审**，到期表登记随方案 F15 同批）；过渡期 spec 注册表为**唯一袖子入口**，hosts/薄入口经规格对象 + `signal_impl` 限定名字符串解析装配信号；**禁止以接口别名将 spec 与 signal_class 两种返回语义视为等价** |
 
 ---
 ---
 # LazyBull v2 模块协议层（Protocol 定义）
 
-> 版本：v0.10（2026-10-20；配套方案 F14 = v1.20）
-> 状态：**已生效**（F10：开工硬门 #6 评审处置闭合 + 用户确认；与方案 F14 同批独立提交）
+> 版本：v0.11（2026-10-22 起草 / 2026-10-23 用户批准生效；配套方案 F15 = v1.21）
+> 状态：**已生效**（F11：P3 T4 评审处置包——§6 SleeveRegistry 协议代码化过渡注记；reviewer1/reviewer2 复核一通过 + 用户批准；与方案 F15 同批，随 P3 T5 收口提交落档）
 > 技术选型：Python 3.12 `typing.Protocol`（结构化子类型，无须显式继承）+ frozen dataclass + `pandas.DataFrame` / `datetime.date`
 > 设计原则：① 数据面与计算面分离；② 袖子零互 import；③ 跨模块对象不可变；④ 所有协议方法标注**幂等性**与**副作用**
 > **设计方法论（R4 教训）**：先枚举现实引擎语义（R1 侦察事实），再让类型覆盖它——禁止先定义理想类型再让引擎适应类型
@@ -940,6 +941,12 @@ class SleeveRegistry(Protocol):
         """列出全部已注册袖子"""
         ...
 ```
+
+**P3 过渡注记（F11）**：截至 P3-T4，本节 `SleeveRegistry` 协议的代码化
+**未落地**；现行实现 = `v2/sleeves/_registry.py` 的 `SleeveSpec` 注册表
+（规格对象注册，`get_sleeve_spec` / `list_sleeve_ids`；封闭性与「注册文件唯一」
+纪律同本节，未知袖子 fail-fast）。差异理由与兑现节点见头部版本表 F11 行与方案
+§4.10 到期表；过渡期禁止把 spec 与 `signal_class` 两种返回语义以接口别名视为等价。
 
 **跨端共享纯函数登记（R4 轻微 6）**：`sell_rules`（到期判定阈值）与 `stagger`（分批排期）属「禁止任何一侧自行重算」契约 ⇒ 归属 `common/rules/` 共享纯函数模块，回测与纸面同源码调用；协议层无独立接口，在此登记归属。
 

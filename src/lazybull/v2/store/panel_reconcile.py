@@ -68,6 +68,7 @@ from src.lazybull.v2.store.reconcile_rules import (
     D04_2_RANGE,
     D04_3_4_RANGE,
     D11_ANCHOR_MAX_ABS,
+    D11_SPARSE_COMPANION_TEXT,
     D12_EXEMPT_COLUMNS,
     D14_DOWNSIDE_CORR_COLUMNS,
     D14_DOWNSIDE_CORR_TEXT,
@@ -419,7 +420,7 @@ def _classify_strict_column(
     if in_d11 and _is_anchor_sensitive(col) and max_abs_diff <= D11_ANCHOR_MAX_ABS:
         return (_D11_TEXT, False)
     if in_d11 and all_sparse and total_over <= _SCATTER_PURE_MAX_ROWS:
-        return (_D11_TEXT + "（伴随稀疏单点）", False)
+        return (D11_SPARSE_COMPANION_TEXT, False)
     l1_end = _L1_LONG_TAIL_END if col.startswith(_LONG_WINDOW_PREFIXES) else _L1_TAIL_END
     if all(d <= l1_end for d in dates):
         return (L1_TEXT, False)

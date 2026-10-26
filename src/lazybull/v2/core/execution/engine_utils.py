@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from src.lazybull.data.storage import Storage  # 只读过渡依赖（§3.5；去除节点 P2b/P3）
+from src.lazybull.data.storage import Storage  # 只读过渡依赖（§3.5；去除节点 P4（F14））
 from src.lazybull.v2.common.rules.stagger import compute_tranche_schedule
 from src.lazybull.v2.common.suspend_calendar import SuspendCalendar, get_suspend_calendar
 

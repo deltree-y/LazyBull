@@ -27,9 +27,28 @@ D8 拆分（T7 实测触发）：旧 ``run_oos_backtest`` 在全仓复杂度基�
 P2b-T3 差异登记：新增缺省 ``None`` 的合并模式透传、构造后适配器装配和
 逐折真实 ``merge()`` 调用计数采集。缺省调用不向引擎工厂新增 kwargs，
 成交、净值与公开 metrics 行为不变。
+
+P3-T3 特征源改造（§3.3 本期清偿 / §17.4）：
+- 新增 ``feature_source`` / ``store`` / ``acceptance_purpose`` 三参数；
+  **默认 ``feature_source="panel"``**——OOS 特征改指 store panel（整窗
+  ``load_features`` + 按日切分），**显式关闭旧特征读取回退**（panel 缺数据
+  ⇒ RuntimeError，旧「警告跳过」语义不再适用）；panel 模式传四族 lookup ⇒
+  ValueError（物化直读，防 derive 双写，§3.3-③）；
+- ``cs_train_verify`` = §3.1 例外验收源（旧逐日读取路径逐字保留，含空跳过回退），
+  白名单守卫：调用方限 scripts/v2_p3/ + scripts/v2_p2a/ + scripts/v2_p2b/ + tests/
+  （P2a/P2b 工具为 §7.1 回归边明文允许的 cs_train 验收源使用方）；
+- 既有调用方（replay_b0 / replay_merger）已显式改传 ``cs_train_verify`` +
+  ``regression_edge``（修改面入回滚清单，§17.9-12）；
+- 字符串常量与适配层双源等价（hosts 依赖表不含 train，协议 §7——
+  等价断言测试锁定，防漂移）；
+- 行情读（``loader.load_clean_daily`` / 日历）保留旧 DataLoader——行情/日历类
+  过渡依赖同 F14 改期 P4 口径（state.py / engine_utils.py / suspend_calendar.py
+  三处的同族补充登记，§17.3 接线表 #4）。
 """
 
-from typing import Any, Callable, Dict, Optional
+import inspect
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -37,7 +56,8 @@ from loguru import logger
 # 只读过渡依赖（去除节点 P4）：config 为全局单例，不复制（§3.5 / V2R-02）。
 from src.lazybull.common.config import get_data_root
 
-# 只读过渡依赖（去除节点 P2b/P3，D2）：数据面在 P2a 沿用旧 cs_train 单通道。
+# 只读过渡依赖（去除节点 P2b/P3 → P3-T3 起仅限 cs_train_verify 验收例外路径,
+# P4 评审清偿）：panel 默认路径不再使用旧特征读取。
 from src.lazybull.data import DataLoader, Storage
 
 # 运行时派生四族因子（永久沿用，§3.5 登记表）：factors 不迁移。
@@ -50,6 +70,7 @@ from src.lazybull.factors.top_inst import derive_top_inst_columns
 from src.lazybull.universe import BasicUniverse
 from src.lazybull.universe.domains import domain_market_whitelist
 from src.lazybull.v2.common.trading_config import TradingConfig
+from src.lazybull.v2.common.types import FeatureQuery, ReplayContractError, TradeDate
 from src.lazybull.v2.hosts.backtest.runtime import (
     configure_merger_mode,
     create_backtest_engine_from_config,
@@ -58,6 +79,85 @@ from src.lazybull.v2.hosts.backtest.runtime import (
     infer_rebalance_freq_from_label,
     validate_merger_mode,
 )
+
+# ---------------------------------------------------------------------------
+# P3-T3 特征源（§17.4）
+# ---------------------------------------------------------------------------
+
+#: OOS 特征源封闭集合：panel（默认，store panel 直读）/ cs_train_verify（验收例外）
+FEATURE_SOURCE_PANEL = "panel"
+FEATURE_SOURCE_CS_TRAIN_VERIFY = "cs_train_verify"
+
+#: cs_train_verify 验收用途白名单（与 v2/train/data_adapter.ACCEPTANCE_PURPOSES 双源
+#: 等价——hosts 依赖表不含 train（协议 §7），等价断言测试锁定防漂移）
+REPLAY_ACCEPTANCE_PURPOSES = frozenset({"g_code_parity", "regression_edge"})
+
+#: cs_train_verify 调用方白名单（仓库相对路径前缀；P2a/P2b 工具 = §7.1 回归边
+#: 明文允许的验收源使用方）
+_REPLAY_CS_TRAIN_CALLER_PREFIXES = (
+    "scripts/v2_p3/",
+    "scripts/v2_p2a/",
+    "scripts/v2_p2b/",
+    "tests/",
+)
+#: 引擎/宿主内部帧前缀（守卫跳过：orchestrator 经 backtest 薄组装调用属合法内部链）
+_REPLAY_INTERNAL_PREFIXES = (
+    "src/lazybull/v2/hosts/backtest/",
+    "src/lazybull/v2/train/",
+)
+
+#: 仓库根（replay.py 位于 src/lazybull/v2/hosts/backtest/）
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+_REPLAY_SELF_REL = "src/lazybull/v2/hosts/backtest/replay.py"
+
+
+def _repo_relative_path(filename: str) -> Optional[str]:
+    """绝对路径 → 仓库相对正斜杠路径;仓外/伪文件名(REPL/-c/`<stdin>`)⇒ None。"""
+    try:
+        return Path(filename).resolve().relative_to(_REPO_ROOT).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+def _assert_replay_cs_train_reachable(acceptance_purpose: Optional[str]) -> None:
+    """cs_train_verify 验收可达性守卫（用途白名单 + 调用方文件白名单，fail-closed）。
+
+    P3-T3 评审处置（codex-R06）：调用帧统一规范为**仓库相对路径**后做前缀校验
+    （仓外路径 ⇒ None ⇒ 拒绝）；仅精确跳过本模块自身与内部包前缀，删除
+    「任意 replay.py / 含 inspect 帧」的泛化跳帧。
+    """
+    if acceptance_purpose not in REPLAY_ACCEPTANCE_PURPOSES:
+        raise ReplayContractError(
+            f"cs_train 验收源模式必须声明验收用途（{sorted(REPLAY_ACCEPTANCE_PURPOSES)}）: "
+            f"{acceptance_purpose!r}"
+        )
+    frame = inspect.currentframe()
+    if frame is None:
+        raise ReplayContractError("cs_train 验收源模式调用方守卫：无法获取调用栈（fail-closed）")
+    try:
+        caller = frame.f_back  # 本函数 → run_oos_backtest 内联点
+        while caller is not None:
+            rel = _repo_relative_path(caller.f_code.co_filename)
+            if rel is None:
+                raise ReplayContractError(
+                    "cs_train 验收源模式仅允许仓内验收入口调用"
+                    f"（{_REPLAY_CS_TRAIN_CALLER_PREFIXES}），实际调用方不在仓库内: "
+                    f"{caller.f_code.co_filename}"
+                )
+            if rel == _REPLAY_SELF_REL or any(
+                rel.startswith(prefix) for prefix in _REPLAY_INTERNAL_PREFIXES
+            ):
+                caller = caller.f_back
+                continue
+            if any(rel.startswith(prefix) for prefix in _REPLAY_CS_TRAIN_CALLER_PREFIXES):
+                return
+            raise ReplayContractError(
+                "cs_train 验收源模式仅允许验收入口调用"
+                f"（{_REPLAY_CS_TRAIN_CALLER_PREFIXES}），实际调用方: {rel}"
+            )
+        raise ReplayContractError("cs_train 验收源模式调用方守卫：调用栈无外部帧（fail-closed）")
+    finally:
+        del frame
 
 
 def _fail_fast_retired_exposure(
@@ -140,7 +240,7 @@ def _derive_feature_family(
     logger.info(f"OOS 回测特征派生{log_label}列: {derived_days}/{len(features_by_date)} 日")
 
 
-def _load_replay_features(
+def _load_replay_features_cs_train(
     storage: Storage,
     trade_dates: list,
     bt_start: str,
@@ -150,7 +250,7 @@ def _load_replay_features(
     top10fh_panel: Optional[pd.DataFrame],
     top_inst_lookup: Optional[Dict[str, pd.DataFrame]],
 ) -> Optional[Dict[str, pd.DataFrame]]:
-    """特征分区加载 + 四族运行时派生补齐（D8 提取；守卫与日志文本逐字保留）。
+    """特征分区加载 + 四族运行时派生补齐（cs_train 验收例外路径，语句逐字保留）。
 
     Returns:
         features_by_date；None = 旧侧早退（``return {}``）触发条件（无特征数据）。
@@ -190,6 +290,138 @@ def _load_replay_features(
         logger.warning(f"OOS回测: 无特征数据 {bt_start}~{bt_end}，跳过")
         return None
     return features_by_date
+
+
+def _split_panel_frame_by_date(panel_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """panel 整窗帧（index=(trade_date, ts_code)）按日切分为逐日平铺帧。
+
+    输出形态镜像 cs_train 日分区（trade_date/ts_code 为列）；行序 = panel 排序
+    索引序（与 cs_train 分区存储序的差异属 G-data 归因范围，§17.4-②）。
+    """
+    features_by_date: Dict[str, pd.DataFrame] = {}
+    if panel_df is None or panel_df.empty:
+        return features_by_date
+    flat = panel_df.reset_index()
+    flat["trade_date"] = flat["trade_date"].astype(str)
+    for trade_date, day_df in flat.groupby("trade_date", sort=True):
+        features_by_date[str(trade_date)] = day_df.reset_index(drop=True)
+    return features_by_date
+
+
+def _load_replay_features_panel(
+    store: Any,
+    trade_dates: list,
+    bt_start: str,
+    bt_end: str,
+    holdertrade_lookup: Optional[Dict[str, pd.DataFrame]],
+    repurchase_lookup: Optional[Dict[str, pd.DataFrame]],
+    top10fh_panel: Optional[pd.DataFrame],
+    top_inst_lookup: Optional[Dict[str, pd.DataFrame]],
+    feature_columns: Optional[List[str]] = None,
+) -> Dict[str, pd.DataFrame]:
+    """OOS 特征 panel 路径（P3-T3 默认）：整窗 ``load_features``（全登记列）+
+    按日切分；四族物化直读（传 lookup ⇒ ValueError 防双写）；**显式关闭旧
+    特征读取回退**——缺数据 ⇒ RuntimeError（旧「警告跳过 return {}」语义不再适用）。
+    """
+    retired_lookups = {
+        "holdertrade_lookup": holdertrade_lookup,
+        "repurchase_lookup": repurchase_lookup,
+        "top10fh_panel": top10fh_panel,
+        "top_inst_lookup": top_inst_lookup,
+    }
+    supplied = [name for name, value in retired_lookups.items() if value is not None]
+    if supplied:
+        raise ReplayContractError(
+            f"panel 模式四族已物化直读，禁止传运行时派生 lookup（防双写/覆盖，§3.3-③）: "
+            f"{supplied}"
+        )
+    # P3-T3 评审处置(reviewer1-P2-4):列集收窄——显式给定时按折模型实际特征列
+    # 查询(内存/IO 收敛;MLSignal 只消费模型列,缺列由 check_feature_consistency
+    # 硬报错兜住);None ⇒ 全登记列(回放工具兼容路径)
+    if feature_columns:
+        query_columns = list(dict.fromkeys(feature_columns))
+    else:
+        snapshot = store.manifest.snapshot()
+        query_columns = sorted(snapshot["columns"])
+    # P3-T3 复核二处置(reviewer1-P1-1 剩余 ≡ codex-F05):
+    # ① 按协议转换为 TradeDate(store 的 available_from PIT 比较要求类型化,
+    #    字符串直传会抛 TypeError);
+    # ② 列集未登记 / PIT 越界等契约校验错误(ValueError/TypeError)包装为
+    #    ReplayContractError 穿透「容错吞掉」路径(守卫契约,types.py:423)
+    try:
+        panel_frame = store.load_features(
+            FeatureQuery(
+                columns=query_columns,
+                start_date=TradeDate.from_str(bt_start),
+                end_date=TradeDate.from_str(bt_end),
+            )
+        )
+    except (ValueError, TypeError) as exc:
+        raise ReplayContractError(
+            f"OOS回测(panel) 特征查询契约失败（列登记/PIT/类型守卫）: {exc}"
+        ) from exc
+    features_by_date = _split_panel_frame_by_date(panel_frame.df)
+    if not features_by_date:
+        raise ReplayContractError(
+            f"OOS回测(panel): 无特征数据 {bt_start}~{bt_end}"
+            "（旧特征读取回退已显式关闭；请检查 panel 分区覆盖或改用验收例外模式）"
+        )
+    days_without_partition = [day for day in trade_dates if day not in features_by_date]
+    if days_without_partition:
+        # P3-T3 评审处置(reviewer1-P2-4):部分缺日硬失败(与适配层覆盖校验同口径;
+        # 旧「warning 后继续」会静默少日);**全空 ⇒ 上一分支(回退关闭语义)**
+        raise ReplayContractError(
+            f"OOS回测(panel): {len(days_without_partition)}/{len(trade_dates)} 个交易日缺 "
+            f"core 分区（如 {days_without_partition[:5]}），请检查 panel 分区覆盖"
+        )
+    return features_by_date
+
+
+def _select_replay_features(
+    feature_source: str,
+    store: Any,
+    acceptance_purpose: Optional[str],
+    storage: Storage,
+    trade_dates: list,
+    bt_start: str,
+    bt_end: str,
+    holdertrade_lookup: Optional[Dict[str, pd.DataFrame]],
+    repurchase_lookup: Optional[Dict[str, pd.DataFrame]],
+    top10fh_panel: Optional[pd.DataFrame],
+    top_inst_lookup: Optional[Dict[str, pd.DataFrame]],
+    feature_columns: Optional[List[str]] = None,
+) -> Optional[Dict[str, pd.DataFrame]]:
+    """特征源分派（P3-T3）：panel 默认 / cs_train_verify 验收例外（白名单守卫）。"""
+    if feature_source == FEATURE_SOURCE_PANEL:
+        if store is None:
+            raise ReplayContractError("panel 特征源模式必须提供 PanelDataStore（store=）")
+        return _load_replay_features_panel(
+            store,
+            trade_dates,
+            bt_start,
+            bt_end,
+            holdertrade_lookup,
+            repurchase_lookup,
+            top10fh_panel,
+            top_inst_lookup,
+            feature_columns,
+        )
+    if feature_source == FEATURE_SOURCE_CS_TRAIN_VERIFY:
+        _assert_replay_cs_train_reachable(acceptance_purpose)
+        return _load_replay_features_cs_train(
+            storage,
+            trade_dates,
+            bt_start,
+            bt_end,
+            holdertrade_lookup,
+            repurchase_lookup,
+            top10fh_panel,
+            top_inst_lookup,
+        )
+    raise ReplayContractError(
+        f"未知 OOS 特征源: {feature_source!r}"
+        f"（合法值 {FEATURE_SOURCE_PANEL!r} / {FEATURE_SOURCE_CS_TRAIN_VERIFY!r}）"
+    )
 
 
 def _build_replay_trading_config(
@@ -339,6 +571,38 @@ def _compute_replay_metrics(
     return metrics
 
 
+def _run_replay_engine_and_collect(
+    engine: Any,
+    bt_start: str,
+    bt_end: str,
+    trade_dates: list,
+    price_data: pd.DataFrame,
+    bt_top_n: int,
+    split_num: Optional[int],
+) -> Dict:
+    """引擎运行 + 指标与下划线键产物挂载(P3-T3 提取自 run_oos_backtest 尾段,逐字)。
+
+    返回空 dict = 旧侧「净值曲线为空跳过」早退触发条件。
+    """
+    nav_curve = engine.run(
+        start_date=pd.Timestamp(bt_start),
+        end_date=pd.Timestamp(bt_end),
+        trading_dates=[pd.Timestamp(date) for date in trade_dates],
+        price_data=price_data,
+    )
+    if nav_curve is None or nav_curve.empty or "nav" not in nav_curve.columns:
+        logger.warning("OOS回测: 净值曲线为空，跳过")
+        return {}
+
+    metrics = _compute_replay_metrics(nav_curve, bt_start, bt_end, bt_top_n, split_num)
+    metrics["_nav_curve"] = nav_curve
+    metrics["_trades"] = engine.get_trades()
+    metrics["_execution_attribution"] = engine.get_execution_attribution()
+    metrics["_holdings_snapshot"] = engine.get_holdings_snapshot()
+    metrics["_merger_call_count"] = get_merger_call_count(engine)
+    return metrics
+
+
 def run_oos_backtest(
     model_version: int,
     bt_start: str,
@@ -378,17 +642,29 @@ def run_oos_backtest(
     top10fh_panel: Optional[pd.DataFrame] = None,
     top_inst_lookup: Optional[Dict[str, pd.DataFrame]] = None,
     merger_mode: Optional[str] = None,
+    feature_source: str = FEATURE_SOURCE_PANEL,
+    store: Any = None,
+    acceptance_purpose: Optional[str] = None,
+    feature_columns: Optional[List[str]] = None,
 ) -> Dict:
     """对单个 split 模型运行 OOS 回测并返回组合级绩效指标。
 
     Args:
         holdertrade_lookup: 股东增减持运行时查询表（与训练侧同一张）；提供时逐日
             补齐本族列，避免 MLSignal 因 cs_train 无本族列而静默补 NaN。
+            **仅 cs_train_verify 模式可用**；panel 模式四族物化直读，传 ⇒ ValueError。
         repurchase_lookup: 股票回购运行时查询表（与训练侧同一张）；语义同上。
         top10fh_panel: 十大流通股东**报告期面板**（与训练侧同一份）；提供时逐日派生补齐本族列
             （本族逐日全市场稠密 ⇒ 用面板而非逐日字典）。
         merger_mode: P2b 迁移期合并模式；None=旧 P2a 调用，其余合法模式由
             runtime 封闭集合校验，未知值直接失败。
+        feature_source: OOS 特征源（P3-T3）：``panel``（默认，store panel 整窗直读，
+            缺数据 ⇒ RuntimeError）/ ``cs_train_verify``（§3.1 例外验收源，
+            白名单守卫 + 必须声明 ``acceptance_purpose``）。
+        store: panel 模式必填的 PanelDataStore（只读消费；读取回执随 store 产出）。
+        acceptance_purpose: cs_train_verify 模式必填（回归边 = ``regression_edge``）。
+        feature_columns: panel 模式列集收窄（P3-T3 P2-4）：折模型实际特征列;
+            None ⇒ 全登记列（回放工具兼容路径）。
     """
     validate_merger_mode(merger_mode)
     _fail_fast_retired_exposure(
@@ -411,7 +687,10 @@ def run_oos_backtest(
         & (trade_cal["is_open"] == 1)
     ]["cal_date"].tolist()
 
-    features_by_date = _load_replay_features(
+    features_by_date = _select_replay_features(
+        feature_source,
+        store,
+        acceptance_purpose,
         storage,
         trade_dates,
         bt_start,
@@ -420,6 +699,7 @@ def run_oos_backtest(
         repurchase_lookup,
         top10fh_panel,
         top_inst_lookup,
+        feature_columns,
     )
     if features_by_date is None:
         return {}
@@ -461,20 +741,6 @@ def run_oos_backtest(
         merger_mode=merger_mode,
     )
 
-    nav_curve = engine.run(
-        start_date=pd.Timestamp(bt_start),
-        end_date=pd.Timestamp(bt_end),
-        trading_dates=[pd.Timestamp(date) for date in trade_dates],
-        price_data=price_data,
+    return _run_replay_engine_and_collect(
+        engine, bt_start, bt_end, trade_dates, price_data, bt_top_n, split_num
     )
-    if nav_curve is None or nav_curve.empty or "nav" not in nav_curve.columns:
-        logger.warning("OOS回测: 净值曲线为空，跳过")
-        return {}
-
-    metrics = _compute_replay_metrics(nav_curve, bt_start, bt_end, bt_top_n, split_num)
-    metrics["_nav_curve"] = nav_curve
-    metrics["_trades"] = engine.get_trades()
-    metrics["_execution_attribution"] = engine.get_execution_attribution()
-    metrics["_holdings_snapshot"] = engine.get_holdings_snapshot()
-    metrics["_merger_call_count"] = get_merger_call_count(engine)
-    return metrics

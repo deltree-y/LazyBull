@@ -939,6 +939,11 @@ def test_t4_suite_forbids_real_config_read(monkeypatch):
             "-q",
             "-k",
             "not test_t4_suite_forbids_real_config_read",
+            # --basetemp 指向仓库 temp/（§19.31 根因修复，同 T6）：避开默认
+            # pytest-of-<user> 编号目录 garbage 清理被 IDE sitecustomize shim
+            # 的 shutil.rmtree bulk-delete 保护打断（SystemExit(1)）
+            "--basetemp",
+            str(Path(__file__).resolve().parents[1] / "temp" / "t4_inner_pytest"),
             str(Path(__file__)),
         ],
         plugins=[counter],

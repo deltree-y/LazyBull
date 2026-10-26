@@ -44,6 +44,7 @@ __all__ = [
     "plan_label_refreshes",
     "refresh_labels_for_day",
     "validate_label_day_readiness",
+    "validate_label_day_readiness_and_collect",
 ]
 
 _HORIZONS = [5, 10, 20]
@@ -275,7 +276,9 @@ def _validate_panel_groups(store: Any, trade_date: str, *, check_keys: bool) -> 
             raise LabelRefreshRecoveryError(f"panel 登记指纹与文件不一致: {rel_path}")
         if not check_keys:
             continue
+        _read_token = _begin_store_read(store, path)
         frame = pd.read_parquet(path, columns=["trade_date", "ts_code"])
+        _finish_store_read(store, _read_token)
         day = frame[frame["trade_date"].astype(str) == trade_date]
         if day.duplicated(["trade_date", "ts_code"]).any():
             raise RuntimeError(f"panel 分区存在重复键: {rel_path}")
@@ -431,6 +434,22 @@ def _validate_label_registration(
         )
 
 
+def _begin_store_read(store: Any, path: Path) -> Any:
+    """读前身份采集（P3-T3 复核处置 codex-F01:与读取绑定,读后必须
+    ``_finish_store_read`` 核验同一身份;不支持的 store(旧桩)返回 None）。"""
+    begin = getattr(store, "begin_external_read", None)
+    return begin(path) if begin is not None else None
+
+
+def _finish_store_read(store: Any, record: Any) -> None:
+    """读后核验 + 会话清单登记（record=None ⇒ 无操作）。"""
+    if record is None:
+        return
+    finish = getattr(store, "finish_external_read", None)
+    if finish is not None:
+        finish(record)
+
+
 def _read_and_validate_label(
     store: Any,
     name: str,
@@ -443,7 +462,9 @@ def _read_and_validate_label(
     path = _label_path(store, name, trade_date)
     if not path.is_file():
         raise RuntimeError(f"缺标签分区: {name}/{trade_date}")
+    _read_token = _begin_store_read(store, path)
     actual = pd.read_parquet(path)
+    _finish_store_read(store, _read_token)
     if list(actual.columns) != _LABEL_COLUMNS:
         raise RuntimeError(f"标签 schema 不一致: {name}/{trade_date}: {list(actual.columns)}")
     if actual.duplicated(["trade_date", "ts_code"]).any():
@@ -472,20 +493,27 @@ def _read_and_validate_label(
     return actual, status, fingerprint
 
 
-def _read_and_validate_labels(
+def _read_and_validate_labels_collect(
     store: Any,
     trade_date: str,
     panel_keys: pd.MultiIndex,
     *,
     expected_tables: Mapping[str, pd.DataFrame] | None = None,
     output_fingerprints: Mapping[str, str] | None = None,
-) -> tuple[str, dict[str, str], dict[str, int]]:
+) -> tuple[str, dict[str, str], dict[str, int], dict[str, pd.DataFrame]]:
+    """``_read_and_validate_labels`` 的收集变体（P3-T2 加载成本门，§16.5-②）。
+
+    校验语义与 ``_read_and_validate_labels`` 完全一致（同一内部读取路径），
+    额外返回当日三表**已读已校验**的完整标签帧，供调用方复用（消除训练适配层
+    readiness 与标签装配的双通道重复全量读）。
+    """
     if output_fingerprints is not None:
         validate_label_output_fingerprints(output_fingerprints, context=f"{trade_date} 完成审计")
     snapshot = store.manifest.snapshot()
     statuses: dict[str, str] = {}
     fingerprints: dict[str, str] = {}
     rows: dict[str, int] = {}
+    frames: dict[str, pd.DataFrame] = {}
     for name in _LABEL_NAMES:
         expected = expected_tables.get(name) if expected_tables is not None else None
         output_fp = output_fingerprints.get(name) if output_fingerprints is not None else None
@@ -495,13 +523,35 @@ def _read_and_validate_labels(
         statuses[name] = status
         fingerprints[name] = fingerprint
         rows[name] = len(actual)
+        frames[name] = actual
     if len(set(statuses.values())) != 1:
         raise RuntimeError(f"三表成熟度不一致: {statuses}")
     status = statuses[_LABEL_NAMES[0]]
     if status == "sealed":
-        y20 = pd.read_parquet(_label_path(store, "y_ret_20", trade_date), columns=["label_value"])
+        y20_path = _label_path(store, "y_ret_20", trade_date)
+        _read_token = _begin_store_read(store, y20_path)
+        y20 = pd.read_parquet(y20_path, columns=["label_value"])
+        _finish_store_read(store, _read_token)
         if y20["label_value"].notna().sum() == 0:
             raise RuntimeError(f"{trade_date} sealed 日 y_ret_20 非空行数为 0")
+    return status, fingerprints, rows, frames
+
+
+def _read_and_validate_labels(
+    store: Any,
+    trade_date: str,
+    panel_keys: pd.MultiIndex,
+    *,
+    expected_tables: Mapping[str, pd.DataFrame] | None = None,
+    output_fingerprints: Mapping[str, str] | None = None,
+) -> tuple[str, dict[str, str], dict[str, int]]:
+    status, fingerprints, rows, _frames = _read_and_validate_labels_collect(
+        store,
+        trade_date,
+        panel_keys,
+        expected_tables=expected_tables,
+        output_fingerprints=output_fingerprints,
+    )
     return status, fingerprints, rows
 
 
@@ -922,20 +972,24 @@ def refresh_labels_for_day(
         )
 
 
-def validate_label_day_readiness(
+def validate_label_day_readiness_and_collect(
     store: Any,
     trade_date: str,
     *,
     consumer: bool = True,
     trading_dates: Sequence[str] | None = None,
     input_watermark: str | None = None,
-) -> dict[str, Any]:
-    """日级两阶段 readiness；consumer=False 仅用于崩溃后的恢复检查。"""
+) -> tuple[dict[str, Any], dict[str, pd.DataFrame]]:
+    """``validate_label_day_readiness`` 的收集变体（P3-T2 加载成本门，§16.5-②）。
+
+    readiness 校验语义完全一致；额外返回当日三表**已读已校验**的完整标签帧
+    （消除训练适配层 readiness 与标签装配的双通道重复全量读）。
+    """
     date = str(trade_date)
     core_keys = _validate_panel_groups(store, date, check_keys=True)
     if core_keys is None:
         raise RuntimeError(f"{date} 缺 core 键域")
-    status, fingerprints, rows = _read_and_validate_labels(store, date, core_keys)
+    status, fingerprints, rows, frames = _read_and_validate_labels_collect(store, date, core_keys)
     completion: dict[str, Any] | None = None
     if status == "sealed" and consumer and row_domain_for_date(date) == "structural":
         matches = []
@@ -971,7 +1025,7 @@ def validate_label_day_readiness(
         and maturity_status_for(date, trading_dates, data_end=input_watermark) == "sealed"
     ):
         raise RuntimeError(f"{date} E20 已到水位仍为 {status}")
-    return {
+    readiness = {
         "trade_date": date,
         "ready": True,
         "consumer": consumer,
@@ -981,3 +1035,23 @@ def validate_label_day_readiness(
         "completion_event_key": completion.get("event_key") if completion else None,
         "orphan_intents": _orphan_intents(store, date),
     }
+    return readiness, frames
+
+
+def validate_label_day_readiness(
+    store: Any,
+    trade_date: str,
+    *,
+    consumer: bool = True,
+    trading_dates: Sequence[str] | None = None,
+    input_watermark: str | None = None,
+) -> dict[str, Any]:
+    """日级两阶段 readiness；consumer=False 仅用于崩溃后的恢复检查。"""
+    readiness, _frames = validate_label_day_readiness_and_collect(
+        store,
+        trade_date,
+        consumer=consumer,
+        trading_dates=trading_dates,
+        input_watermark=input_watermark,
+    )
+    return readiness

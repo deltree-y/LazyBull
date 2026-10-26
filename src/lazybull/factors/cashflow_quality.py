@@ -40,8 +40,13 @@ CASHFLOW_FRESHNESS_COL = "cashflow_freshness_days"
 # 现金流质量因子 schema 哨兵：v3 = 依赖修订事件驱动 TTM + 确定性版本去重。
 # handler 对当日全截面恒写当前版本号（含无数据股票），训练入口校验
 # 哨兵列缺失、NaN 或版本不符必须失败；语义重做时递增哨兵值。
-CASHFLOW_QUALITY_SCHEMA_VERSION = 3
-CASHFLOW_QUALITY_VERSION_COL = "cashflow_quality_schema_v2"
+# schema 描述唯一来源 = v2/common/model_schema.py（P3-T2 上移，R2-02；factors → common 合规），
+# 本模块 re-export 保持旧导入路径（同一对象，行为逐位不变）。
+from src.lazybull.v2.common.model_schema import (  # noqa: F401
+    CASHFLOW_QUALITY_SCHEMA_VERSION,
+    CASHFLOW_QUALITY_VERSION_COL,
+    cashflow_quality_live_columns,
+)
 
 # ── 数值稳定性参数 ───────────────────────────────────────────
 # 分母最小绝对值（元）。低于该经济尺度（1000 万元）视为不可信，比值置 NaN。
@@ -342,16 +347,3 @@ def build_cashflow_quality_lookup_by_date(
 
     logger.info(f"现金流质量日频查询表构建完成: {len(result_dict)} 个交易日")
     return result_dict
-
-
-def cashflow_quality_live_columns(feature_columns: List[str]) -> List[str]:
-    """从训练门禁后的 feature_columns 中提取实际入模的现金流质量列（含 _sz 变体）。"""
-    base = {
-        "zscore_ocf_to_revenue",
-        "zscore_ocf_to_profit",
-        "zscore_fcf_yield",
-        "zscore_capex_to_ocf",
-        "cashflow_freshness_days",
-    }
-    sz = {f"{c}_sz" for c in base if c != "cashflow_freshness_days"}
-    return sorted(c for c in feature_columns if c in base or c in sz)

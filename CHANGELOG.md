@@ -2,6 +2,195 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.208.3] - 2026-10-26
+
+### Fixed
+
+- **P3 T5 复审三处置（reviewer2 复审三「暂不通过」1 项 P1，实施规划 §19.30）**：
+  - 闭市判定读取门消除**校验/使用分离**（R2-T5AE-R3-01）：raw `moneyflow_hsgt`
+    与源侧 cs_train 两条读取路径重构为「读取一次 → 校验该字节 → 解析同一
+    缓冲区」——「预哈希后按路径重读解析」的两读间隙替换不再可能，台账哈希
+    = 实际解析字节；cs_train 分支补内容身份校验（③，仅闭市候选日触发，不
+    扩展普通评分日）。缺失候选/快照外立即拒绝、收尾闭合核验、未激活逐位
+    不变、读取间删除竞态安全全部保持。
+  - 新增分离消除证明测试（激活态解析全部经 BytesIO、路径二次读取为 0）、
+    cs_train 内容替换反例（改空 ⇒ ③立即拒绝 + 恢复对照通过）、竞态安全
+    测试；既有 gate 反例与四正例回归保持（18 → 21 项）。
+
+### Changed
+
+- 16 套件 467 项全绿；black/isort/flake8 全净；复杂度门双口径 exit=0。
+  读取门保护声明边界登记于 §19.30（评分主体读取面归消费快照终态硬门，
+  同缓冲级绑定属 P4 评审决策点）。
+- **F11 全量复跑（用户授权，最终代码态）PASS**：run ID
+  `p3_t5_f11_20261026_r1`（14m35s，a 节缓存 100% 命中 22,169/0；a 节
+  closed、拒绝 0、登记结构差异 40、f 节 attribution_closed=true）。三道门
+  以最终代码态重取全 PASS（`t5_{gcode,gdata}_verdict_20261026_final.json`
+  + `t5_regression_edge_final_20261026`）。**方案 F16 生效**（2026-10-26
+  用户批准：D-11 伴随稀疏单点实际显现与 F11 接受边界正式登记）。
+- **F11 人读报告默认名 bug 修复**：`run_id[:8]` 对带下划线 run_id 截断
+  → 与 JSON 同名规范 `{run_id}.md`。
+- **全量回归 3,877 项全绿**（最终代码态，
+  `logs/full_pytest_t5_closeout_r5_20261026.log`，34m45s；基线 3,851 →
+  3,877 只增不减）。过程中暴露并修复 T3~T7 五个同构守卫测试的进程内
+  嵌套复跑在 IDE sitecustomize shim（safe-delete bulk-delete 保护）下于
+  `pytest_sessionfinish` tmp 目录清理处被打断的问题（SystemExit(1)/挂起；
+  inner 测试内容本身全绿）——inner 复跑改用仓库 `temp/` 下 `--basetemp`
+  隔离（T6 另含一次重试），守卫本体（真实配置读取拦截）不放宽；测试
+  运行以 `CODEBUDDY_SAFE_DELETE_ENABLED=0`（IDE shim 官方开关）声明豁免
+  会话级删除保护（实施规划 §19.31 根因链完整登记）。
+- **P3 整体一次收口提交**（§8.3）：T0.5b 验收工具 + T1~T5 全部交付
+  （src/lazybull/v2 训练迁移与共享件、scripts/v2_p3 验收工具、tests、
+  契约/文档同步、CHANGELOG/pyproject）。生产链路仍未切换（P4 消费）。
+
+## [0.208.2] - 2026-10-26
+
+### Fixed
+
+- **P3 T5 复审二处置（reviewer2 复审二「暂不通过」1 项 P1，实施规划 §19.29）**：
+  - 闭市判定**读取门与台账**（R2-T5AE-R2-01）：读取动作绑定冻结快照身份——
+    跑前缺失候选一旦被实际读取（含「创建→读取→移除」）在读取动作处**立即拒绝**，
+    不再依赖收尾目录重枚举；快照外实读候选 / 读时内容与登记身份不符 ⇒ 立即
+    拒绝；通过后登记读取台账（路径 + 读时哈希）。补评分与主臂评分共用同一
+    读取约束（`raw_read_guard`，收尾闭合核验保持并联执行）；未激活 = 现行为
+    逐位不变。新增贯通真实闭市读取的反例复现（转立即拒绝）与 gate 单元五项，
+    既有四正例（常驻新增/替换/始终缺失未读取/窗外追加）保持不误报。
+  - 上轮新增测试文件格式清理（black/isort/E501，reviewer2 复审二 §5）。
+
+### Changed
+
+- 测试 11 → 18 项（消费闭合核验 + 读取门）；16 套件 464 项全绿；复杂度门
+  双口径 exit=0。F11 全量复跑（新 run ID，≈15min）与 F16 草案批准仍待
+  用户授权——正式复跑为 T5 验收闭合前置。
+
+## [0.208.1] - 2026-10-26
+
+### Fixed
+
+- **P3 T5 复审一处置（reviewer2 复审一「暂不通过」2 项 P1，实施规划 §19.28）**：
+  - 归因门兜底收紧（R2-T5AE-R1-01）：strict 稀疏伴随 fallback 仅限归因门第六类
+    （词表无类）缺口；归因门明确类越界（D-14 专项三上限 / D-04 登记窗）保留
+    否决效力，不得被无超幅检查的稀疏伴随分支覆盖。新增「稀疏但超幅」反例
+    （`zscore_macd_hist` maxΔ=21.0、`skewness_20` maxΔ=6.0 ⇒ 拒绝）；
+    实际显现的 `amplitude` 0.0/NaN 伴随单点保持放行。
+  - 消费集合闭合核验（R2-T5AE-R1-02）：快照支持缺失候选登记（`missing` 态）；
+    新增闭合核验（清单身份 + 缺失候选态 + 重枚举闭合三硬门）；补评分入口、
+    主臂运行后复核与续跑核验、回归边入口统一接线——快照后新增实读候选
+    （含评分期间新建的采集时缺失 raw 文件）即 FAIL，旧格式快照向后兼容。
+- **F11 接受边界契约登记**：`v2_architecture_plan.md` F16 草案 + §8-P3 尾注——
+  D-11 伴随稀疏单点在 P3 T5 实际显现（8 折 `amplitude` 单点），接受边界 =
+  归因第六类 ∧ strict 稀疏伴随分支 ∧ 专项否决；密集/窗外/超幅仍拒。
+- 格式项：`panel_reconcile.py` isort 排序；`t05b_evidence.py` E501；
+  `t05b_fingerprint.py` re-export F401 登记；`t5_guarded_rescore.py` F821。
+
+### Changed
+
+- 新增测试 16 项（闭合核验 11 + 归因否决 5）；聚焦 15 套件 450 项全绿；
+  复杂度门双口径 exit=0。既有 14 份消费快照（9 份补评分 + 三臂主批 + 双跑 +
+  回归边）按新闭合核验重验全部零漂移，历史证据在新规则下成立。
+- F11 全量复跑（新 run ID，≈15min）待用户授权后执行。
+
+## [0.208.0] - 2026-10-25
+
+### Added
+
+- **P3 T5 训练迁移验收**：三臂（臂① legacy×cs_train / 臂② v2×cs_train /
+  臂③ v2×panel）全部 PASS。G-code（臂① vs 臂②）：14/14 逐折指纹逐位一致、
+  成交逐笔精确、链式净值 max|Δ|=0、信号/评估 top-k 零互换；G-data（臂③ vs B0'）：
+  ΔCAGR +0.445pp（±8pp 带内）、ΔMaxDD −3.77pp 经 F11 归因闭合后放行登记、
+  ΔSharpe −0.0096；回归边：冻结旧模型 + P2b `legacy_bypass` 复跑 vs
+  `p2b_t5_closed_20261017_203508` 成对精确 PASS。三臂证据根
+  `data/frozen_reference/v2_p3/`。
+- 新增 `scripts/v2_p3/` 验收工具：三臂批驱动、G-code/G-data 比较门、F11 数据影响
+  归因（a~g 七节 + 归因闭合）、闭市排除日窄口径、袖子身份与真实信号路径 top-k 辅证。
+- F11 归因结构白名单复用 `CYQ5_COLUMNS`/`CYQ5_LAST_DAY`/`SCHEMA_EVOLUTION_END`；
+  D-11 复牌窗伴随稀疏单点仅经 strict 分类器 fallback 放行（不放开密集/窗外差异）。
+- 新增/补充 P3 T5 验收测试（含 CYQ5 结构白名单、D-11 稀疏单点、闭市排除日、
+  袖子身份等），聚焦 87 项全绿。
+
+### Fixed
+
+- F11 首轮归因因两处**验收工具缺口**失败（非数据面失控）：CYQ5 结构白名单未复用、
+  `amplitude` 单行 `0.0 vs NaN` 未走 D-11 伴随单点分支；修复后 F11-r2 PASS
+  （a 节 closed、拒绝 0、结构破坏 0、登记结构差异 40、缓存 100% 命中）。
+- 回归边首轮误用 `replay_b0` 默认 P2a 模式（缺 `merger_mode`/`merger_sleeve_id`）；
+  改用 P2b `legacy_bypass` 关闭模式复跑后 PASS，元信息与冻结批逐项一致。
+- 修复 orchestrator e2e 测试对 `data_state_id` 的数值推断脆弱性：该列是标识符，
+  形如 `631630e6` 时会被 `read_csv` 推断成 float（`631630000000.0`）；测试改为
+  显式 `dtype={"data_state_id": str}` 读取。**非生产代码回归**（runs 契约产物走
+  parquet，JSON 侧本身为字符串）。
+- **P3 T5 A~E 三专家评审整改（2026-10-25）**：D-11 归因兜底收窄为结构化
+  `D11_SPARSE_COMPANION_TEXT` 精确分支，不再用 `startswith("D-11")` 放行长记忆主分支；
+  闭市日判定 raw `moneyflow_hsgt` 纳入 T5 臂消费字节门（历史快照保留，三臂
+  fold06/07/08 受保护补评分 9/9 PASS）；新增 `regression_edge_runner.py`，固定 P2b
+  `legacy_bypass` 四元组 + 模型/输入前后身份核验（`t5_regression_edge_guarded_r2_20261025`
+  PASS、12,360 输入、零漂移）；输出级一致性纳入已登记结构差异；G-code/G-data 新增
+  闭市排除日臂间子门；CLAUDE §7.6 补验收工具修复报备程序契约。
+  F11 新 run `p3_t5_f11_20261025_reviewfix` **PASS**（a 节 closed / 136 差异列 /
+  拒绝 0 / 结构破坏 0 / 登记结构 40 / 输出一致性 true，14m40s）。
+- 评审整改收尾两项（2026-10-25，同上评审处置）：① `tests/test_v2_p3_t5_arm_runner.py`
+  生产数据夹具补齐 `raw/moneyflow_hsgt`（与另两处夹具同构），修复 20 项夹具缺口失败；
+  ② 抽取 `t05b_baselines.py::_dated_files_upto_frozen` 供消费集合与闭市日输入两处目录枚举
+  复用，消除新增圈复杂度硬超限（报错文案与行为逐条不变）。复杂度双口径门恢复 exit=0
+  （新增硬超限 0、基线 136/199、豁免 0/3）。
+
+### Changed
+
+- 版本 0.208.0（评审处置保持该版本；一次收口提交 = 一个版本条目，后续中版本递增
+  对齐「评审通过 + 收口提交」）。
+- **P3 仍未切换生产链路**——v2 panel/labels 供 P4 消费，现役
+  训练/回测/纸面继续走 cs_train/cs_infer 与旧内核。
+- **G-data PASS 的语义是“差异可归因”，不是“panel ≈ cs_train”**：实测成交键集
+  对称差逐折 >80%、预测同键改分近全量（max|Δ| 0.3~1.3）、max|Δnav| 5.689e-01、
+  ΔMaxDD −3.77pp；P4 消费必须带此量级登记（R1-P3-4）。
+- 全量回归 **3,851 项全绿**（最终代码态，`logs/full_pytest_reviewfix_r3_20261025.log`，
+  32m37s）。计数较阶段 F 的 3,841 增加 10 项，来自评审整改新增用例（D-11 主干分支
+  反例 2 项、输出级一致性 2 项、闭市排除日臂间子门 3 项、消费集合守卫 1 项、
+  回归边守卫 2 项）。裸跑无失败；前一轮全量暴露的 20 项失败（`test_v2_p3_t5_arm_runner.py`
+  生产夹具缺 `raw/moneyflow_hsgt`）已修复，见上「Fixed」。
+- 阶段 F 收口前置复杂度整改：`v2/train/walk_forward/orchestrator.py::run` 拆为
+  `_validate_run_prerequisites` + `_prepare_run_context`；`scripts/v2_p3/t05b_fingerprint.py`
+  的 Stock Connect 识别抽为 `t05b_stock_connect.py` 并 re-export；验收工具单入口
+  `score_model_fingerprint` 按 CLAUDE §7.8 临时开发文件契约登记复杂度豁免（不扩基线）。
+  复杂度门生产口径与双口径均 exit=0（新增硬超限 0、基线 199、豁免 3）。
+
+## [0.207.7] - 2026-10-24
+
+### Fixed
+
+- P3 T5 阶段 D 臂①评分阻塞：北向（Stock Connect）闭市日 `north_net_buy` 全空被
+  MLSignal 质量门禁拒绝，导致覆盖完整性门失败。按用户裁决新增**窄口径**合法闭市日
+  排除：仅当 raw `moneyflow_hsgt` 的 `hgt/sgt/north_money` 全空且源侧
+  `north_net_buy` 全空时登记 `excluded_days`（原因 `stock_connect_closed`）；
+  覆盖门改为「已评分日 ∪ 已登记闭市日 == 独立预期日」，双跑要求两侧排除集合一致；
+  其余任何拒绝/缺日仍 FAIL；默认无闭市日路径行为逐位不变。
+
+## [0.207.6] - 2026-10-24
+
+### Fixed
+
+- 修复 P3 T5 袖子身份的兼容性缺口：`V2Trainer` 增加类级默认 `_sleeve_identity = None`，
+  兼容单元测试经 `__new__` 构造的部分初始化实例；编排器对非 `V2Trainer` 训练桩读取
+  袖子身份改为 `getattr(..., None)`，宿主携带身份而 trainer 未实现
+  `bind_sleeve_identity` 时给出明确 `TypeError`。修复全量回归 13 项失败
+  （`test_v2_p3_t3_recheck1_fixes.py`），复跑 **3,818 项全绿**（34m41s）。
+
+## [0.207.5] - 2026-10-24
+
+### Fixed
+
+- 修复 P3 T5 信号辅证候选域：复用回放同参数的 `BasicUniverse` 和当日 clean 行情，
+  排除上市不足 365 日、ST、停牌或缺行情股票；评估 Top-K 辅证逐折校验，任一折缺失即失败。
+- 修复归因消费身份绑定：交易日历实际来源纳入台账，cs_train 实际读取及缓存命中后即时
+  核验内容身份，报告结束后重核实读集合，拒绝日历缩域和读取期间变更导致的假通过。
+
+## [0.207.4] - 2026-10-23
+
+### Fixed
+
+- 修复 P3 T5 派生调用点扫描测试对临时目录位置的依赖：显式隔离合成仓库根，允许
+  `--basetemp` 指向仓库 `temp/`，扫描器的生产行为保持不变。
+
 ## [0.207.3] - 2026-10-20
 
 ### Added

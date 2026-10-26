@@ -167,7 +167,7 @@ def _git_output(repo_root: Path, args: Sequence[str]) -> str:
             text=True,
             encoding="utf-8",
         )
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, subprocess.SubprocessError) as exc:  # 含 TimeoutExpired(高负载下 git 偶发超时)
         raise RuntimeError(f"采集 git 工作树身份失败: {repo_root}（{exc}）") from exc
     return completed.stdout.strip()
 

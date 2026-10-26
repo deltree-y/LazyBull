@@ -1,0 +1,309 @@
+# v2 P3 T5 数据影响归因报告（F11，p3_t5_f11_20261025）
+
+- 生成时间：2026-10-25T15:47:56
+- 臂②（新实现 × cs_train 验证源）：`data\frozen_reference\v2_p3\t5_arm2_v2_cs_train_20261025`
+- 臂③（新实现 × panel）：`data\frozen_reference\v2_p3\t5_arm3_v2_panel_20261025`
+- B0' 冻结目录：`data\frozen_reference\v2_p3\b0_prime`
+- 生产数据根：`data`
+- 口径声明：判定比较（臂③ vs B0'，f 节）与归因比较（臂③ vs 臂②，a~e 节）是两份独立证据，禁止混用；列级归因不直接当交易路径等价。
+
+## 放行依据（h 节）
+
+- **总判定：FAIL**
+- a 节归因闭合：**未闭合**（差异列 136 个，拒绝项 8 个；行集/结构/缺日破坏项 40 个）
+- f 节 G-data 判定表：ΔCAGR = +0.45pp（±8pp 带，严格大于、等号带内）/ ΔMaxDD = -3.77pp（零容忍 + 归因出口）/ ΔSharpe = -0.0096（记录不设带）⇒ **FAIL**（归因闭合标记 = False，来源 = a 节闭合 ∧ 输出级一致性，R2-T5A-05）
+- g 节代码态一致断言：臂② source_digest == 臂③ source_digest ⇒ **一致**
+- 归因闭合声明：归因闭合 = a 节闭合（差异列 100% F11 词表分类、无拒绝项、完整覆盖：days_compared == 预期日数且非零）∧ 输出级一致性（R2-T5A-05：规则① 零输入差异 ⇒ 零输出差异；规则② 逐折对应——任一折输出劣化须该折 a 节有已登记消费列差异）；词表唯一来源 `v2/store/reconcile_rules.py` + `panel_reconcile._classify_attrib_column`；未分类/越界即拒绝项并置总判定 FAIL。
+
+## a. 逐折 × 消费列输入差异（归因比较：臂③ vs 臂② 的唯一变量 = 数据源）
+
+- 数值口径：atol=1e-6、NaN==NaN（`panel_reconcile._compare_day` 复用）
+- 完整覆盖前置（R2-T5A-04）：预期日域 = trade_cal `is_open=1` ∩ boundary 窗口；`days_compared == 预期日数` 且非零才可闭合；窗口内非开市日显式登记 excluded 计数
+- 跨折单日结果缓存（P2-7/R1-04）：命中率 59.8%（hits=13259 / misses=8910，命名空间 `d6fa228f971df863`，格式版本 v3），目录 `data\reports\attribution_cache`
+- panel 月帧 LRU 复用（P3-N4）：命中率 0.0%（hits=0 / misses=1108，容量 3）
+- 闭合：**否**
+- split00：消费列 140 个，窗口 20121123~20181123 ∪ 20181126~20190524，预期日 1579 / 比较 1579 日（剔除非开市 793 日），差异列 7 个，折闭合 是
+  - `fund_count`：over 51/3525493 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 51/3525493 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 51/3525493 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `zscore_macd_hist`：over 7190/3525493 行，max|Δ|=6.196e+00，差异日 20121123~20130918（182 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 96065/3525493 行，max|Δ|=4.988e+00，差异日 20121123~20130918（184 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 29682/3525493 行，max|Δ|=2.477e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 664058/3525493 行，max|Δ|=2.725e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split01：消费列 140 个，窗口 20130524~20190524 ∪ 20190527~20191125，预期日 1586 / 比较 1586 日（剔除非开市 789 日），差异列 7 个，折闭合 是
+  - `fund_count`：over 51/3683820 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 51/3683820 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 51/3683820 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `zscore_macd_hist`：over 1861/3683820 行，max|Δ|=9.041e-03，差异日 20130524~20130918（72 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 25347/3683820 行，max|Δ|=7.794e-03，差异日 20130524~20130918（72 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 29682/3683820 行，max|Δ|=2.477e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 664058/3683820 行，max|Δ|=2.725e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split02：消费列 141 个，窗口 20131125~20191125 ∪ 20191126~20200526，预期日 1585 / 比较 1585 日（剔除非开市 790 日），差异列 5 个，折闭合 是
+  - `fund_count`：over 51/3817571 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 51/3817571 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 51/3817571 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `zscore_ocf_to_profit`：over 29682/3817571 行，max|Δ|=2.477e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 664058/3817571 行，max|Δ|=2.725e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split03：消费列 149 个，窗口 20140526~20200526 ∪ 20200527~20201127，预期日 1589 / 比较 1589 日（剔除非开市 789 日），差异列 7 个，折闭合 否
+  - `fund_count`：over 51/3974699 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 51/3974699 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 51/3974699 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 296/3974699 行，max|Δ|=0.000e+00，差异日 20161228~20200807（88 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 70/3974699 行，max|Δ|=0.000e+00，差异日 20170710~20200717（20 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_ocf_to_profit`：over 29682/3974699 行，max|Δ|=2.477e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 664058/3974699 行，max|Δ|=2.725e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split04：消费列 149 个，窗口 20141127~20201127 ∪ 20201130~20210528，预期日 1583 / 比较 1583 日（剔除非开市 790 日），差异列 7 个，折闭合 否
+  - `fund_count`：over 51/4130666 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 51/4130666 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 51/4130666 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 296/4130666 行，max|Δ|=0.000e+00，差异日 20161228~20200807（88 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 70/4130666 行，max|Δ|=0.000e+00，差异日 20170710~20200717（20 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_ocf_to_profit`：over 29682/4130666 行，max|Δ|=2.477e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 664058/4130666 行，max|Δ|=2.725e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split05：消费列 148 个，窗口 20150528~20210528 ∪ 20210531~20211130，预期日 1586 / 比较 1586 日（剔除非开市 791 日），差异列 7 个，折闭合 否
+  - `fund_count`：over 51/4344423 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 51/4344423 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 51/4344423 行，max|Δ|=0.000e+00，差异日 20170104~20170328（51 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 296/4344423 行，max|Δ|=0.000e+00，差异日 20161228~20200807（88 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 70/4344423 行，max|Δ|=0.000e+00，差异日 20170710~20200717（20 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_ocf_to_profit`：over 29682/4344423 行，max|Δ|=2.477e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 664058/4344423 行，max|Δ|=2.725e+00，差异日 20161228~20180829（282 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split06：消费列 148 个，窗口 20151130~20211130 ∪ 20211201~20220601，预期日 1582 / 比较 1582 日（剔除非开市 794 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/4586517 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 1318/4586517 行，max|Δ|=0.000e+00，差异日 20170104~20220601（150 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 2114/4586517 行，max|Δ|=0.000e+00，差异日 20211230~20220601（99 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 1318/4586517 行，max|Δ|=0.000e+00，差异日 20170104~20220601（150 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 2114/4586517 行，max|Δ|=0.000e+00，差异日 20211230~20220601（99 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 1318/4586517 行，max|Δ|=0.000e+00，差异日 20170104~20220601（150 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 316/4586517 行，max|Δ|=0.000e+00，差异日 20161228~20220218（108 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 75/4586517 行，max|Δ|=0.000e+00，差异日 20170710~20220121（25 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 210/4586517 行，max|Δ|=3.415e-02，差异日 20220505~20220517（9 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23853/4586517 行，max|Δ|=7.716e-02，差异日 20220505~20220517（9 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 61310/4586517 行，max|Δ|=2.477e+00，差异日 20161228~20220601（381 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 1043174/4586517 行，max|Δ|=2.725e+00，差异日 20161228~20220601（381 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split07：消费列 148 个，窗口 20160601~20220601 ∪ 20220602~20221202，预期日 1583 / 比较 1583 日（剔除非开市 793 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/4843633 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 2206/4843633 行，max|Δ|=0.000e+00，差异日 20170104~20221202（275 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 3737/4843633 行，max|Δ|=0.000e+00，差异日 20211230~20221202（224 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 2206/4843633 行，max|Δ|=0.000e+00，差异日 20170104~20221202（275 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 3737/4843633 行，max|Δ|=0.000e+00，差异日 20211230~20221202（224 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 2206/4843633 行，max|Δ|=0.000e+00，差异日 20170104~20221202（275 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 666/4843633 行，max|Δ|=0.000e+00，差异日 20161228~20221118（148 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 165/4843633 行，max|Δ|=0.000e+00，差异日 20170710~20221028（35 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 213/4843633 行，max|Δ|=3.415e-02，差异日 20220505~20220825（12 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23857/4843633 行，max|Δ|=7.716e-02，差异日 20220505~20220826（13 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 78671/4843633 行，max|Δ|=2.477e+00，差异日 20161228~20221202（506 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 1553642/4843633 行，max|Δ|=2.725e+00，差异日 20161228~20221202（506 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split08：消费列 148 个，窗口 20161202~20221202 ∪ 20221205~20230605，预期日 1581 / 比较 1581 日（剔除非开市 794 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/5093700 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 2849/5093700 行，max|Δ|=0.000e+00，差异日 20170104~20230605（396 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 4747/5093700 行，max|Δ|=0.000e+00，差异日 20211230~20230605（345 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 2849/5093700 行，max|Δ|=0.000e+00，差异日 20170104~20230605（396 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 4747/5093700 行，max|Δ|=0.000e+00，差异日 20211230~20230605（345 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 2849/5093700 行，max|Δ|=0.000e+00，差异日 20170104~20230605（396 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 666/5093700 行，max|Δ|=0.000e+00，差异日 20161228~20221118（148 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 165/5093700 行，max|Δ|=0.000e+00，差异日 20170710~20221028（35 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 213/5093700 行，max|Δ|=3.415e-02，差异日 20220505~20220825（12 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23857/5093700 行，max|Δ|=7.716e-02，差异日 20220505~20220826（13 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 89465/5093700 行，max|Δ|=2.477e+00，差异日 20161228~20230605（627 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 2018136/5093700 行，max|Δ|=2.725e+00，差异日 20161228~20230605（627 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split09：消费列 148 个，窗口 20170605~20230605 ∪ 20230606~20231206，预期日 1585 / 比较 1585 日（剔除非开市 791 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/5380045 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 3235/5380045 行，max|Δ|=0.000e+00，差异日 20211230~20231206（469 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 5434/5380045 行，max|Δ|=0.000e+00，差异日 20211230~20231206（469 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 3235/5380045 行，max|Δ|=0.000e+00，差异日 20211230~20231206（469 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 5434/5380045 行，max|Δ|=0.000e+00，差异日 20211230~20231206（469 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 3235/5380045 行，max|Δ|=0.000e+00，差异日 20211230~20231206（469 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 690/5380045 行，max|Δ|=0.000e+00，差异日 20170710~20230804（160 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 175/5380045 行，max|Δ|=0.000e+00，差异日 20170710~20230714（40 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 213/5380045 行，max|Δ|=3.415e-02，差异日 20220505~20220825（12 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23857/5380045 行，max|Δ|=7.716e-02，差异日 20220505~20220826（13 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 70379/5380045 行，max|Δ|=2.472e+00，差异日 20170605~20231206（649 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 2242589/5380045 行，max|Δ|=2.725e+00，差异日 20170605~20231206（649 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split10：消费列 148 个，窗口 20171206~20231206 ∪ 20231207~20240607，预期日 1578 / 比较 1578 日（剔除非开市 798 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/5645116 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 3430/5645116 行，max|Δ|=0.000e+00，差异日 20211230~20240607（589 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 5829/5645116 行，max|Δ|=0.000e+00，差异日 20211230~20240607（589 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 3430/5645116 行，max|Δ|=0.000e+00，差异日 20211230~20240607（589 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 5829/5645116 行，max|Δ|=0.000e+00，差异日 20211230~20240607（589 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 3430/5645116 行，max|Δ|=0.000e+00，差异日 20211230~20240607（589 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 670/5645116 行，max|Δ|=0.000e+00，差异日 20190708~20230804（140 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 170/5645116 行，max|Δ|=0.000e+00，差异日 20190708~20230714（35 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 213/5645116 行，max|Δ|=3.415e-02，差异日 20220505~20220825（12 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23857/5645116 行，max|Δ|=7.716e-02，差异日 20220505~20220826（13 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 67654/5645116 行，max|Δ|=1.921e+00，差异日 20171215~20240422（656 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 2370757/5645116 行，max|Δ|=2.398e+00，差异日 20171215~20240422（656 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split11：消费列 147 个，窗口 20180607~20240607 ∪ 20240611~20241210，预期日 1581 / 比较 1581 日（剔除非开市 795 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/5941343 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 3602/5941343 行，max|Δ|=0.000e+00，差异日 20211230~20241210（713 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 6381/5941343 行，max|Δ|=0.000e+00，差异日 20211230~20241210（713 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 3602/5941343 行，max|Δ|=0.000e+00，差异日 20211230~20241210（713 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 6381/5941343 行，max|Δ|=0.000e+00，差异日 20211230~20241210（713 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 3602/5941343 行，max|Δ|=0.000e+00，差异日 20211230~20241210（713 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 710/5941343 行，max|Δ|=0.000e+00，差异日 20190708~20241115（180 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 180/5941343 行，max|Δ|=0.000e+00，差异日 20190708~20241025（45 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 213/5941343 行，max|Δ|=3.415e-02，差异日 20220505~20220825（12 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23857/5941343 行，max|Δ|=7.716e-02，差异日 20220505~20220826（13 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 65841/5941343 行，max|Δ|=1.217e+00，差异日 20180626~20240422（605 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 2246350/5941343 行，max|Δ|=1.392e+00，差异日 20180626~20240422（605 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split12：消费列 154 个，窗口 20181210~20241210 ∪ 20241211~20250611，预期日 1575 / 比较 1575 日（剔除非开市 801 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/6166697 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 3689/6166697 行，max|Δ|=0.000e+00，差异日 20211230~20250611（800 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 6761/6166697 行，max|Δ|=0.000e+00，差异日 20211230~20250611（832 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 3689/6166697 行，max|Δ|=0.000e+00，差异日 20211230~20250611（800 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 6761/6166697 行，max|Δ|=0.000e+00，差异日 20211230~20250611（832 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 3689/6166697 行，max|Δ|=0.000e+00，差异日 20211230~20250611（800 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 730/6166697 行，max|Δ|=0.000e+00，差异日 20190708~20250217（200 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 185/6166697 行，max|Δ|=0.000e+00，差异日 20190708~20250117（50 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 213/6166697 行，max|Δ|=3.415e-02，差异日 20220505~20220825（12 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23857/6166697 行，max|Δ|=7.716e-02，差异日 20220505~20220826（13 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 64469/6166697 行，max|Δ|=1.217e+00，差异日 20211230~20240422（558 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 2131990/6166697 行，max|Δ|=1.392e+00，差异日 20211230~20240422（558 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+- split13：消费列 154 个，窗口 20190611~20250611 ∪ 20250612~20260105，预期日 1596 / 比较 1596 日（剔除非开市 805 日），差异列 12 个，折闭合 否
+  - `amplitude`：over 1/6495335 行，max|Δ|=0.000e+00，差异日 20220505~20220505（1 日）⇒ 越界（第六类/日期越出登记边界，须调查）（拒绝项）
+  - `fund_count`：over 3746/6495335 行，max|Δ|=0.000e+00，差异日 20211230~20250829（857 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_count_chg`：over 6875/6495335 行，max|Δ|=0.000e+00，差异日 20211230~20250829（889 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio`：over 3746/6495335 行，max|Δ|=0.000e+00，差异日 20211230~20250829（857 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_hold_ratio_chg`：over 6875/6495335 行，max|Δ|=0.000e+00，差异日 20211230~20250829（889 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `fund_portfolio_freshness_days`：over 3746/6495335 行，max|Δ|=0.000e+00，差异日 20211230~20250829（857 日）⇒ D-04③ 季频财务/基金持仓 raw 修订
+  - `rzye_chg_20`：over 750/6495335 行，max|Δ|=0.000e+00，差异日 20190708~20250808（220 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `rzye_chg_5`：over 190/6495335 行，max|Δ|=0.000e+00，差异日 20190708~20250718（55 日）⇒ D-04④ margin_detail raw 分区修订（丢行）
+  - `zscore_macd_hist`：over 213/6495335 行，max|Δ|=3.415e-02，差异日 20220505~20220825（12 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_macd_hist_sz`：over 23857/6495335 行，max|Δ|=7.716e-02，差异日 20220505~20220826（13 日）⇒ L1 macd-EMA 冷启动长尾（至 2013-09）+ D-11 分块锚定（2022-05 复牌簇）+ 稀疏孤立单点（受天数/累计/超幅三上限约束）
+  - `zscore_ocf_to_profit`：over 64469/6495335 行，max|Δ|=1.217e+00，差异日 20211230~20240422（558 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+  - `zscore_ocf_to_profit_sz`：over 2131990/6495335 行，max|Δ|=1.392e+00，差异日 20211230~20240422（558 日）⇒ D-04③ 季频财务/基金持仓 raw 修订（zscore/neu 派生连锁）
+
+## b. 预测影响（逐折指纹 + 预测行键集/逐值对比）
+
+- 证据粒度 = 逐折 predictions.parquet 键集对称差 + 交集键 %.17g 逐值 diff + fingerprint/n_rows/score_days 元数据（预测行持久化跨路契约）；臂②=cs_train_verify 源行集（隐含标签非空）、臂③=panel 源行集（无标签条件），两源口径不同（t05b_fingerprint reviewer1-S7 注记），指纹不一致不直接判实现漂移，仅登记为数据面切换影响证据
+- split00：指纹 不一致，n_rows 287255 vs 287255（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 287255 键，同键改分 287255 行（max|Δ|=+1.2502）
+  - 臂② signal_topk：rows=2380，days=119，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2380，days=119，empty_days=[]（展示登记，判定归 gates）
+- split01：指纹 不一致，n_rows 302456 vs 302456（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 302456 键，同键改分 302456 行（max|Δ|=+1.3206）
+  - 臂② signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+- split02：指纹 不一致，n_rows 293362 vs 293362（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 293362 键，同键改分 293362 行（max|Δ|=+0.7855）
+  - 臂② signal_topk：rows=2400，days=120，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2400，days=120，empty_days=[]（展示登记，判定归 gates）
+- split03：指纹 不一致，n_rows 304905 vs 304905（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 304905 键，同键改分 304905 行（max|Δ|=+0.9209）
+  - 臂② signal_topk：rows=2500，days=125，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2500，days=125，empty_days=[]（展示登记，判定归 gates）
+- split04：指纹 不一致，n_rows 296717 vs 296717（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 296717 键，同键改分 296717 行（max|Δ|=+0.9636）
+  - 臂② signal_topk：rows=2400，days=120，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2400，days=120，empty_days=[]（展示登记，判定归 gates）
+- split05：指纹 不一致，n_rows 317246 vs 317246（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 317246 键，同键改分 317246 行（max|Δ|=+0.4678）
+  - 臂② signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+- split06：指纹 不一致，n_rows 308377 vs 308377（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 308377 键，同键改分 308377 行（max|Δ|=+1.0489）
+  - 臂② signal_topk：rows=2340，days=117，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2340，days=117，empty_days=[]（展示登记，判定归 gates）
+- split07：指纹 不一致，n_rows 337281 vs 337281（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 337281 键，同键改分 337281 行（max|Δ|=+0.5480）
+  - 臂② signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+- split08：指纹 不一致，n_rows 331788 vs 331788（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 331788 键，同键改分 331788 行（max|Δ|=+0.9437）
+  - 臂② signal_topk：rows=2380，days=119，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2380，days=119，empty_days=[]（展示登记，判定归 gates）
+- split09：指纹 不一致，n_rows 350239 vs 350239（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 350239 键，同键改分 350238 行（max|Δ|=+0.6306）
+  - 臂② signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+- split10：指纹 不一致，n_rows 341339 vs 341339（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 341339 键，同键改分 341338 行（max|Δ|=+0.5226）
+  - 臂② signal_topk：rows=2400，days=120，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2400，days=120，empty_days=[]（展示登记，判定归 gates）
+- split11：指纹 不一致，n_rows 352664 vs 352664（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 352664 键，同键改分 352664 行（max|Δ|=+0.3038）
+  - 臂② signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2480，days=124，empty_days=[]（展示登记，判定归 gates）
+- split12：指纹 不一致，n_rows 340226 vs 340226（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 340226 键，同键改分 340226 行（max|Δ|=+0.3537）
+  - 臂② signal_topk：rows=2380，days=119，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2380，days=119，empty_days=[]（展示登记，判定归 gates）
+- split13：指纹 不一致，n_rows 401701 vs 401701（Δ=0），score_days 对称差 0 日
+  - 预测行：键集对称差 0 个（仅臂② 0 / 仅臂③ 0，同日换股候选日 0 个），交集 401701 键，同键改分 401701 行（max|Δ|=+0.3974）
+  - 臂② signal_topk：rows=2800，days=140，empty_days=[]（展示登记，判定归 gates）
+  - 臂③ signal_topk：rows=2800，days=140，empty_days=[]（展示登记，判定归 gates）
+
+## c. 成交影响（臂② vs 臂③ runs trades）
+
+- split00：行数 220 vs 220，键集对称差 382 个，交集 29 行（price max|Δ|=0.000e+00, shares max|Δ|=8.400e+03, amount max|Δ|=4.847e+04）
+- split01：行数 240 vs 240，键集对称差 396 个，交集 42 行（price max|Δ|=0.000e+00, shares max|Δ|=5.500e+03, amount max|Δ|=3.597e+04）
+- split02：行数 220 vs 220，键集对称差 352 个，交集 44 行（price max|Δ|=0.000e+00, shares max|Δ|=1.140e+04, amount max|Δ|=3.997e+04）
+- split03：行数 240 vs 238，键集对称差 382 个，交集 48 行（price max|Δ|=0.000e+00, shares max|Δ|=6.800e+03, amount max|Δ|=4.454e+04）
+- split04：行数 220 vs 220，键集对称差 296 个，交集 72 行（price max|Δ|=0.000e+00, shares max|Δ|=1.090e+04, amount max|Δ|=3.597e+04）
+- split05：行数 238 vs 240，键集对称差 336 个，交集 71 行（price max|Δ|=0.000e+00, shares max|Δ|=7.300e+03, amount max|Δ|=6.147e+04）
+- split06：行数 220 vs 220，键集对称差 346 个，交集 47 行（price max|Δ|=0.000e+00, shares max|Δ|=1.050e+04, amount max|Δ|=3.759e+04）
+- split07：行数 240 vs 240，键集对称差 418 个，交集 31 行（price max|Δ|=0.000e+00, shares max|Δ|=1.070e+04, amount max|Δ|=5.307e+04）
+- split08：行数 220 vs 220，键集对称差 348 个，交集 46 行（price max|Δ|=0.000e+00, shares max|Δ|=1.070e+04, amount max|Δ|=8.314e+04）
+- split09：行数 240 vs 240，键集对称差 470 个，交集 5 行（price max|Δ|=0.000e+00, shares max|Δ|=8.100e+03, amount max|Δ|=3.688e+04）
+- split10：行数 216 vs 208，键集对称差 408 个，交集 8 行（price max|Δ|=0.000e+00, shares max|Δ|=9.700e+03, amount max|Δ|=3.967e+04）
+- split11：行数 240 vs 238，键集对称差 474 个，交集 2 行（price max|Δ|=0.000e+00, shares max|Δ|=3.200e+03, amount max|Δ|=2.826e+04）
+- split12：行数 220 vs 216，键集对称差 394 个，交集 21 行（price max|Δ|=0.000e+00, shares max|Δ|=7.800e+03, amount max|Δ|=3.463e+04）
+- split13：行数 240 vs 240，键集对称差 450 个，交集 15 行（price max|Δ|=0.000e+00, shares max|Δ|=1.550e+04, amount max|Δ|=6.913e+04）
+
+## d. 持仓影响（holdings_snapshot）
+
+- split00：行数 2260 vs 2260，键集对称差 3832 个，交集 344 行（shares max|Δ|=1.020e+04, market_value max|Δ|=5.040e+04, weight max|Δ|=4.065e-02）
+- split01：行数 2400 vs 2400，键集对称差 3860 个，交集 470 行（shares max|Δ|=6.800e+03, market_value max|Δ|=3.608e+04, weight max|Δ|=3.598e-02）
+- split02：行数 2280 vs 2280，键集对称差 3510 个，交集 525 行（shares max|Δ|=1.920e+04, market_value max|Δ|=5.369e+04, weight max|Δ|=5.068e-02）
+- split03：行数 2380 vs 2360，键集对称差 3692 个，交集 524 行（shares max|Δ|=2.430e+04, market_value max|Δ|=6.269e+04, weight max|Δ|=4.847e-02）
+- split04：行数 2280 vs 2280，键集对称差 2960 个，交集 800 行（shares max|Δ|=1.090e+04, market_value max|Δ|=3.793e+04, weight max|Δ|=3.915e-02）
+- split05：行数 2339 vs 2359，键集对称差 3010 个，交集 844 行（shares max|Δ|=8.200e+03, market_value max|Δ|=6.147e+04, weight max|Δ|=5.380e-02）
+- split06：行数 2280 vs 2280，键集对称差 3446 个，交集 557 行（shares max|Δ|=1.050e+04, market_value max|Δ|=4.462e+04, weight max|Δ|=4.269e-02）
+- split07：行数 2380 vs 2380，键集对称差 3972 个，交集 394 行（shares max|Δ|=1.070e+04, market_value max|Δ|=5.478e+04, weight max|Δ|=5.067e-02）
+- split08：行数 2300 vs 2300，键集对称差 3480 个，交集 560 行（shares max|Δ|=1.070e+04, market_value max|Δ|=8.432e+04, weight max|Δ|=8.154e-02）
+- split09：行数 2360 vs 2360，键集对称差 4508 个，交集 106 行（shares max|Δ|=8.100e+03, market_value max|Δ|=3.815e+04, weight max|Δ|=3.722e-02）
+- split10：行数 2242 vs 2166，键集对称差 4112 个，交集 148 行（shares max|Δ|=1.300e+04, market_value max|Δ|=5.967e+04, weight max|Δ|=6.756e-02）
+- split11：行数 2380 vs 2361，键集对称差 4725 个，交集 8 行（shares max|Δ|=3.200e+03, market_value max|Δ|=2.931e+04, weight max|Δ|=2.683e-02）
+- split12：行数 2260 vs 2222，键集对称差 3906 个，交集 288 行（shares max|Δ|=7.800e+03, market_value max|Δ|=3.572e+04, weight max|Δ|=4.008e-02）
+- split13：行数 2400 vs 2400，键集对称差 4320 个，交集 240 行（shares max|Δ|=1.550e+04, market_value max|Δ|=7.998e+04, weight max|Δ|=6.041e-02）
+
+## e. 净值影响（chain_nav 逐日差 + 逐折 daily 汇总差）
+
+- 链式净值：max|Δnav| = 5.689e-01，末折末日 Δnav = +0.0977
+- split00 daily：日域对称差 0 日，共同日 119 日（nav max|Δ|=1.484e-01, total_value max|Δ|=1.484e+05）
+- split01 daily：日域对称差 0 日，共同日 126 日（nav max|Δ|=4.790e-02, total_value max|Δ|=4.790e+04）
+- split02 daily：日域对称差 0 日，共同日 120 日（nav max|Δ|=9.291e-02, total_value max|Δ|=9.291e+04）
+- split03 daily：日域对称差 0 日，共同日 125 日（nav max|Δ|=6.283e-02, total_value max|Δ|=6.283e+04）
+- split04 daily：日域对称差 0 日，共同日 120 日（nav max|Δ|=1.006e-01, total_value max|Δ|=1.006e+05）
+- split05 daily：日域对称差 0 日，共同日 124 日（nav max|Δ|=5.525e-02, total_value max|Δ|=5.525e+04）
+- split06 daily：日域对称差 0 日，共同日 120 日（nav max|Δ|=3.715e-02, total_value max|Δ|=3.715e+04）
+- split07 daily：日域对称差 0 日，共同日 125 日（nav max|Δ|=1.264e-01, total_value max|Δ|=1.264e+05）
+- split08 daily：日域对称差 0 日，共同日 121 日（nav max|Δ|=1.284e-01, total_value max|Δ|=1.284e+05）
+- split09 daily：日域对称差 0 日，共同日 124 日（nav max|Δ|=6.230e-02, total_value max|Δ|=6.230e+04）
+- split10 daily：日域对称差 0 日，共同日 120 日（nav max|Δ|=1.349e-01, total_value max|Δ|=1.349e+05）
+- split11 daily：日域对称差 0 日，共同日 125 日（nav max|Δ|=1.595e-01, total_value max|Δ|=1.595e+05）
+- split12 daily：日域对称差 0 日，共同日 119 日（nav max|Δ|=1.073e-01, total_value max|Δ|=1.073e+05）
+- split13 daily：日域对称差 0 日，共同日 126 日（nav max|Δ|=1.801e-01, total_value max|Δ|=1.801e+05）
+
+## f. 链式指标判定表（G-data：臂③ vs B0'，判定比较）
+
+- 臂③：cagr=0.2301397746733862，max_drawdown=-0.2920070571894796，sharpe=0.9055973836336063
+- B0'：cagr=0.22568733439542，max_drawdown=-0.2543376239835965，sharpe=0.9152338996625407
+- 判定：**FAIL**（恰好 ΔCAGR = −8pp 为带内（等号带内，C02）；ΔCAGR < −8pp（严格大于）为超带；ΔMaxDD 更负即劣化，零容忍 + 归因出口）
+- 归因闭合并联接线：maxdd_attribution_closed 与 cagr_attribution_closed 并联同一输入 = 本报告归因闭合标记（= a 节闭合 ∧ 输出级一致性：规则① 零输入差异 ⇒ 零输出差异；规则② 逐折对应——任一折输出劣化须该折 a 节有已登记消费列差异（词表分类在册），§13.3.6 ΔMaxDD 逐折归因闭合按规则②落地）；判定表两个「归因出口」由同一闭合源驱动，不直接等 a 节 closed，不另行独立归因
+
+## g. 身份附录（代码态 + 环境 + 数据态 + 消费快照当前态复核）
+
+- 臂②：source_digest=`2f03ef6e5a9a0234f7c4933a9ea3bff3f939d380860d062e2ab2b40a420e4e64`，git=ec1efd0a49232f73038bfbbf43032d4dabb8bcd9（dirty=True），environment=`{'python': '3.12.10', 'pandas': '3.0.5', 'numpy': '2.5.2', 'pyarrow': '25.0.1', 'xgboost': '3.4.1', 'cpu_count': 20, 'env_vars': {'OMP_NUM_THREADS': None, 'OPENBLAS_NUM_THREADS': None, 'MKL_NUM_THREADS': None, 'NUMEXPR_NUM_THREADS': None, 'CUDA_VISIBLE_DEVICES': None}}`，data_state_id=`2239c219`
+  - 消费快照 `data\frozen_reference\v2_p3\t5_arm2_v2_cs_train_20261025\consumption_snapshot.json`，当前态复核 零漂移（漂移 0 项）
+- 臂③：source_digest=`2f03ef6e5a9a0234f7c4933a9ea3bff3f939d380860d062e2ab2b40a420e4e64`，git=ec1efd0a49232f73038bfbbf43032d4dabb8bcd9（dirty=True），environment=`{'python': '3.12.10', 'pandas': '3.0.5', 'numpy': '2.5.2', 'pyarrow': '25.0.1', 'xgboost': '3.4.1', 'cpu_count': 20, 'env_vars': {'OMP_NUM_THREADS': None, 'OPENBLAS_NUM_THREADS': None, 'MKL_NUM_THREADS': None, 'NUMEXPR_NUM_THREADS': None, 'CUDA_VISIBLE_DEVICES': None}}`，data_state_id=`c2746fa5`
+  - 消费快照 `data\frozen_reference\v2_p3\t5_arm3_v2_panel_20261025\consumption_snapshot.json`，当前态复核 零漂移（漂移 0 项）
+- B0'：source_digest=`2f03ef6e5a9a0234f7c4933a9ea3bff3f939d380860d062e2ab2b40a420e4e64`，git=ec1efd0a49232f73038bfbbf43032d4dabb8bcd9（dirty=True），environment=`{'python': '3.12.10', 'pandas': '3.0.5', 'numpy': '2.5.2', 'pyarrow': '25.0.1', 'xgboost': '3.4.1', 'cpu_count': 20, 'env_vars': {'OMP_NUM_THREADS': None, 'OPENBLAS_NUM_THREADS': None, 'MKL_NUM_THREADS': None, 'NUMEXPR_NUM_THREADS': None, 'CUDA_VISIBLE_DEVICES': None}}`，data_state_id=`2239c219`
+- 本脚本：source_digest=`2f03ef6e5a9a0234f7c4933a9ea3bff3f939d380860d062e2ab2b40a420e4e64`，git=ec1efd0a49232f73038bfbbf43032d4dabb8bcd9（dirty=True）
+
+## 证据链接
+
+- 机器可读全量证据：`data\reports\v2_p3_data_impact_p3_t5_f11_20261025.json`
+- 臂② runs 批次：`data\frozen_reference\v2_p3\t5_arm2_v2_cs_train_20261025\runs\wf_20261025_091825_f9aeeb97`
+- 臂③ runs 批次：`data\frozen_reference\v2_p3\t5_arm3_v2_panel_20261025\runs\wf_20261025_150116_d1ad63ed`
+

@@ -1,7 +1,26 @@
 # -*- coding: utf-8 -*-
-"""train_core 特征列清单与 freshness 策略常量。"""
+"""train_core 特征列清单与 freshness 策略常量。
+
+P3-T2 单一来源登记（§16.1-C）：freshness 策略名 / 默认半衰期 /
+`EVENT_FRESHNESS_TO_VALUE_COLUMNS` 唯一来源 = `v2/common/freshness.py`；
+`read_*_schema_version` 三纯函数唯一来源 = `v2/common/model_schema.py`；
+本模块 re-export 保持旧导入路径（同一对象，生产行为逐位不变）。
+"""
 
 from typing import List, Optional
+
+from src.lazybull.v2.common.freshness import (  # noqa: F401
+    DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
+    EVENT_FRESHNESS_TO_VALUE_COLUMNS,
+    FRESHNESS_STRATEGY_DROP_ALL,
+    FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
+    FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY,
+)
+from src.lazybull.v2.common.model_schema import (  # noqa: F401
+    read_cashflow_quality_schema_version,
+    read_cons_revision_schema_version,
+    read_dividend_policy_schema_version,
+)
 
 FUNDAMENTAL_FEATURE_COLUMNS = [
     # 盈利能力（原始5个 + 新增5个）
@@ -221,57 +240,12 @@ TOP_INST_FEATURE_COLUMNS = [
     "ti_schema_v1",  # schema 哨兵（当前值 1）
 ]
 
-FRESHNESS_STRATEGY_DROP_ALL = "drop_all"
-
-FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY = "state_keep_event_decay"
-
-FRESHNESS_STRATEGY_STATE_KEEP_EVENT_NO_DECAY = "state_keep_event_no_decay"
-
-DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS = 45.0
-
 STATE_FRESHNESS_COLUMNS = {
     "fundamental_freshness_days",
     "holder_freshness_days",
     "fund_portfolio_freshness_days",
     "cashflow_freshness_days",
     "dividend_freshness_days",
-}
-
-EVENT_FRESHNESS_TO_VALUE_COLUMNS = {
-    "forecast_freshness_days": [
-        "forecast_type_score",
-        "forecast_chg_mid",
-    ],
-    "express_freshness_days": [
-        "express_revenue_yoy",
-        "express_profit_yoy",
-        "express_roe",
-        "express_surprise",
-    ],
-    "consensus_freshness_days": [
-        "cons_analyst_count_30d",
-        # 旧绝对值列仅供存量模型推理，新模型使用下方经济归一化列。
-        "cons_eps_mean_fym1",
-        "cons_eps_mean_fy0",
-        "cons_eps_mean_fy1",
-        "cons_eps_mean_fy2",
-        "cons_eps_yield_fym1",
-        "cons_eps_yield_fy0",
-        "cons_eps_yield_fy1",
-        "cons_eps_yield_fy2",
-        "cons_eps_revision_30d",
-        "cons_target_price_mid",
-        "cons_target_upside",
-        "cons_rating_score",
-    ],
-    "cons_revision_freshness_days": [
-        "zscore_cons_eps_revision_accel",
-        "zscore_cons_eps_dispersion",
-        "zscore_cons_eps_dispersion_chg",
-        "zscore_cons_target_upside_chg",
-        "zscore_cons_analyst_count_chg",
-        "zscore_cons_rating_upgrade_ratio",
-    ],
 }
 
 FACTOR_EXCLUDE_LIST_FILE = "factor_exclude_list.json"
@@ -315,24 +289,6 @@ def attach_cashflow_quality_train_params(
     return train_params
 
 
-def read_cashflow_quality_schema_version(train_params: dict) -> int:
-    """安全读取现金流质量 schema 版本；缺失或异常内容返回 -1。"""
-    raw = (train_params or {}).get("cashflow_quality_schema_version")
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return -1
-
-
-def read_cons_revision_schema_version(train_params: dict) -> int:
-    """安全读取修正 schema 版本；缺失或异常内容（如 "v2" 字符串）返回 -1。"""
-    raw = (train_params or {}).get("cons_revision_schema_version")
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return -1
-
-
 def attach_dividend_train_params(train_params: dict, enable_flag: bool) -> dict:
     """当分红政策因子开关开启时，在训练元数据中记录 schema 版本。
 
@@ -344,12 +300,3 @@ def attach_dividend_train_params(train_params: dict, enable_flag: bool) -> dict:
 
         train_params["dividend_policy_schema_version"] = DIVIDEND_POLICY_SCHEMA_VERSION
     return train_params
-
-
-def read_dividend_policy_schema_version(train_params: dict) -> int:
-    """安全读取分红政策 schema 版本；缺失或异常内容返回 -1。"""
-    raw = (train_params or {}).get("dividend_policy_schema_version")
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return -1

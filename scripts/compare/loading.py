@@ -432,7 +432,7 @@ def load_chain_metrics(
     raw_dir: Optional[Path], wf_run_id: str, source_dir: Optional[Path] = None
 ) -> dict:
     """读取 chain_nav 并计算全周期指标。"""
-    from src.lazybull.ml.walk_forward.chain_metrics import calculate_chain_metrics
+    from src.lazybull.v2.common.chain_metrics import calculate_chain_metrics
 
     empty = {
         "chain_total_return": None,

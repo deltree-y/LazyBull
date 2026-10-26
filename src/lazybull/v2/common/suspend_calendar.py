@@ -12,7 +12,7 @@ import pandas as pd
 from loguru import logger
 
 # 只读过渡依赖（T0 规划 §3.5）：data.storage 不复制，
-# 去除节点 = P2b/P3 数据面切换 panel（D2）。
+# 去除节点 = P4（F14）数据面切换 panel（D2）。
 from src.lazybull.data.storage import Storage
 
 

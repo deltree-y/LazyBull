@@ -58,6 +58,7 @@ _PROTOCOLS_DIR = (
 )
 
 _POK = inspect.Parameter.POSITIONAL_OR_KEYWORD
+_KW = inspect.Parameter.KEYWORD_ONLY
 _EMPTY = inspect.Parameter.empty
 _NONE_TYPE = type(None)
 # 协议方法的 self 项：位置或关键字传参、无默认值、无注解
@@ -178,6 +179,9 @@ class TestFullSignatureLock:
         )
 
     def test_walk_forward_orchestrator_run(self):
+        # F10（P3，Q8-① 已批准）：run 增 6 个 keyword-only 编排参数
+        # （test_window_months / selected_split_indices / skip_training /
+        # start_model_version / skip_training_eval / deploy_train）。
         assert _full_signature(WalkForwardOrchestrator.run) == (
             (
                 _SELF,
@@ -186,6 +190,12 @@ class TestFullSignatureLock:
                 ("final_date", _POK, _EMPTY, TradeDate),
                 ("trainer", _POK, _EMPTY, Trainer),
                 ("store", _POK, _EMPTY, DataStore),
+                ("test_window_months", _KW, 6, int),
+                ("selected_split_indices", _KW, None, Sequence[int] | None),
+                ("skip_training", _KW, False, bool),
+                ("start_model_version", _KW, None, int | None),
+                ("skip_training_eval", _KW, False, bool),
+                ("deploy_train", _KW, False, bool),
             ),
             str,
         )
@@ -377,6 +387,13 @@ class _StubOrchestrator:
         final_date: TradeDate,
         trainer: Trainer,
         store: DataStore,
+        *,
+        test_window_months: int = 6,
+        selected_split_indices: Sequence[int] | None = None,
+        skip_training: bool = False,
+        start_model_version: int | None = None,
+        skip_training_eval: bool = False,
+        deploy_train: bool = False,
     ) -> str:
         return "wf_run_1"
 

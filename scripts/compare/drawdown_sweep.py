@@ -26,7 +26,7 @@ import pandas as pd
 from loguru import logger
 
 from src.lazybull.data import DataLoader, Storage
-from src.lazybull.ml.walk_forward.chain_metrics import calculate_chain_metrics
+from src.lazybull.v2.common.chain_metrics import calculate_chain_metrics
 
 #: 引擎侧成交类型（唯一来源：backtest/exposure_trim.py 与 buy_execution._add_to_position）
 TRIM_SELL_TYPE = "risk_trim"

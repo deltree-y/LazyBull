@@ -5,7 +5,7 @@
 
 ## 1. 项目概览
 
-- **名称**：LazyBull（当前版本见 `pyproject.toml`，如 v0.207.0）。
+- **名称**：LazyBull（当前版本见 `pyproject.toml`，如 v0.208.0）。
 - **定位**：A 股量化研究、训练、回测、纸面交易一体化框架，专注**价值红利策略**。
 - **语言/运行时**：Python 3.12，包管理用 Poetry（`pyproject.toml`），也可用 pip + `requirements.txt`。
 - **数据源**：TuShare Pro 为主（辅以 akshare、efinance）；Token 经 `.env` 的 `TS_TOKEN` 注入（python-dotenv 加载）。
@@ -34,10 +34,10 @@ src/lazybull/           # 全部源代码（Poetry src 布局）
 │   └── risk/           # 风控模型专用因子子包（@register_risk_factor 注册）
 ├── features/           # 特征工程（builder.py，120 日预热）、pipeline.py 批量流水线、ensure.py
 ├── quality/            # 数据质量扫描与 HTML 看板
-├── ml/                 # 训练与注册
-│   ├── train_core/     # prepare/eval/labels/weights/freshness/xgb/lgb
-│   ├── walk_forward/   # 滚动训练 + OOS 回测 + 链式指标 chain_metrics.py + 数据态血缘 data_state.py
-│   └── model_registry.py  # 模型版本注册（ModelRegistry，含旁路 metadata）
+├── ml/                 # 旧生产训练与注册（生产未切换；新落点见 v2/train、共享件见 v2/common）
+│   ├── train_core/     # prepare/eval/labels/weights/freshness/xgb/lgb（旧生产实现；新落点见 v2/train/core、v2/common）
+│   ├── walk_forward/   # 滚动训练 + OOS 回测 + 链式指标/数据态血缘（新落点见 v2/common/chain_metrics.py、v2/train/walk_forward/data_state.py；旧生产未切换）
+│   └── model_registry.py  # 旧生产模型注册（v2 整移件见 v2/common/model_registry.py；生产未切换）
 ├── backtest/           # 回测引擎（engine.py / engine_ml.py）、买卖执行拆分、报告、
 │                       # 暴露政策模块（exposure_override/trim/replenish）、持仓快照（只读旁路）
 ├── trading/            # 回测/纸面共享决策核心（买入计划、卖出规则 sell_rules.py、分批排期 stagger.py）
@@ -51,17 +51,19 @@ src/lazybull/           # 全部源代码（Poetry src 布局）
 │                       # reconcile_rules/row_domain/label_refresh/store_identity、common/protocols
 │                       # 协议层 + P2a 复制件、
 │                       # evidence/ 证据机器通路、core/ P2a 内核 + P2b 单袖合并器、
-│                       # hosts/backtest P2a 宿主 + P2b 只读合并适配器）
+│                       # hosts/backtest P2a 宿主 + P2b 只读合并适配器、
+│                       # train/ P3 训练适配与 WF 编排、sleeves/ value 袖 spec）
 ├── drv/                # 树莓派 LCD 驱动
 └── live/               # 实盘接口预留（TODO）
 
 scripts/                # 薄入口脚本 + 子包（compare/、factor_health/、model_audit/、raw_download/、
                         # check/、batch/、respi/、ana/、v2_p1/（P1 数据底座构建/对账/验收，含 recover_manifest）、
                         # v2_p2a/（P2a 八道门工具）、v2_p2b/（P2b 重放/三边验收工具）、
-                        # v2_p3_pre/（P3 前：行域迁移/日更与标签刷新/验收工具，默认 dry-run） 等）
+                        # v2_p3_pre/（P3 前：行域迁移/日更与标签刷新/验收工具，默认 dry-run）、
+                        # v2_p3/（P3 T5 三臂/比较门/F11 归因验收工具） 等）
 tests/                  # pytest 测试（180+ 个 test_*.py 文件）
 configs/                # base.yaml（默认唯一自动加载）+ 因子排除清单 JSON + runtime_*.yaml（手工覆盖示例）
-data/                   # 数据与产物：raw/ clean/ features/（含 panel 热区/panel_archive 冷区）labels/ models/ paper/ reports/ walk_forward/ ledger/ frozen_reference/v2_p1/（P1 验收基准）runs/（v2 runs 契约结构，P2a 起）backup/v2_p3_pre/（P3 前 run 级同代快照）
+data/                   # 数据与产物：raw/ clean/ features/（含 panel 热区/panel_archive 冷区）labels/ models/ paper/ reports/ walk_forward/ ledger/ frozen_reference/v2_p1/（P1 验收基准）/v2_p3/（T5 三臂与 B0' 证据）runs/（v2 runs 契约结构，P2a 起）backup/v2_p3_pre/（P3 前 run 级同代快照）
 docs/                   # 文档；按类别归档（contracts / data / experiments / guide / glossary / PR / reports + 本地 plans / review），
                         # 顶层仅 3 份治理文档（roadmap / BREAKING_CHANGES / terminal_loss_risk_register）；规范见 CLAUDE.md §5
 logs/                   # 临时日志唯一去处（gitignore）
@@ -176,6 +178,15 @@ pytest tests/ --cov=src/lazybull         # 覆盖率（目标 > 80%）
 
 - 通用选股因子 → `src/lazybull/factors/`；风控模型专用因子 → `factors/risk/` 子包（`@register_risk_factor` 注册）。
 - 新增功能尽量对应新增文件，不持续累积大文件。
+
+### 7.5 临时开发文件与复杂度豁免（v2 P3 T5 契约，2026-10-24）
+
+- **临时开发文件**（项目结束后不会被最终项目使用的文件，**包含测试文件**）不受复杂度、
+  函数契约约束；`tests/` 全量豁免。
+- 阶段专用验收工具（`scripts/v2_p3/`、`scripts/v2_p3_pre/` 等，明确验收专用、不入生产链路）
+  按临时开发文件处理；`src/lazybull/**` 与生产入口脚本**不在豁免范围**。
+- 复杂度 hook 双口径：`--paths src/lazybull` 与 `--paths src/lazybull scripts` 均须
+  `exit=0`、新增硬超限 0、棘轮键零新增；基线只缩不扩。
 
 ## 8. 关键架构契约与禁忌（节选，完整见 CLAUDE.md §5）
 

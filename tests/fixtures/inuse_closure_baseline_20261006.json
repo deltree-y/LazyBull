@@ -4,16 +4,16 @@
   "D:/my_pro/LazyBull/scripts/compare_walk_forward.py",
   "D:/my_pro/LazyBull/scripts/paper_trade.py"
  ],
- "static_closure_count": 196,
+ "static_closure_count": 200,
  "dynamic_extra": [
   "src.lazybull.factors.risk.announcement_factors",
   "src.lazybull.factors.risk.derived_factors",
   "src.lazybull.factors.risk.downside_factors",
   "src.lazybull.factors.risk.liquidity_factors"
  ],
- "inuse_count": 200,
- "all_modules_count": 309,
- "notin_count": 109,
+ "inuse_count": 204,
+ "all_modules_count": 351,
+ "notin_count": 147,
  "conservation_ok": true,
  "missing_files": [],
  "pkg_count": {
@@ -30,7 +30,8 @@
   "risk": 10,
   "signals": 4,
   "trading": 4,
-  "universe": 2
+  "universe": 2,
+  "v2": 4
  },
  "inuse_modules": [
   "src.lazybull",
@@ -232,7 +233,11 @@
   "src.lazybull.trading.stagger",
   "src.lazybull.universe",
   "src.lazybull.universe.base",
-  "src.lazybull.universe.domains"
+  "src.lazybull.universe.domains",
+  "src.lazybull.v2.common.chain_metrics",
+  "src.lazybull.v2.common.eval_utils",
+  "src.lazybull.v2.common.freshness",
+  "src.lazybull.v2.common.model_schema"
  ],
  "notin_modules": [
   "src.lazybull.backtest.eval_panel",
@@ -265,6 +270,7 @@
   "src.lazybull.v2.common.cost",
   "src.lazybull.v2.common.date_utils",
   "src.lazybull.v2.common.feature_utils",
+  "src.lazybull.v2.common.model_registry",
   "src.lazybull.v2.common.protocols",
   "src.lazybull.v2.common.protocols.core",
   "src.lazybull.v2.common.protocols.hosts",
@@ -328,6 +334,12 @@
   "src.lazybull.v2.hosts.backtest.reporter",
   "src.lazybull.v2.hosts.backtest.runs_writer",
   "src.lazybull.v2.hosts.backtest.runtime",
+  "src.lazybull.v2.sleeves",
+  "src.lazybull.v2.sleeves._registry",
+  "src.lazybull.v2.sleeves.spec",
+  "src.lazybull.v2.sleeves.value",
+  "src.lazybull.v2.sleeves.value.feature_columns",
+  "src.lazybull.v2.sleeves.value.spec",
   "src.lazybull.v2.store",
   "src.lazybull.v2.store.column_groups",
   "src.lazybull.v2.store.data_store",
@@ -343,6 +355,37 @@
   "src.lazybull.v2.store.replay_compare",
   "src.lazybull.v2.store.row_domain",
   "src.lazybull.v2.store.store_identity",
-  "src.lazybull.v2.store.write_lock"
+  "src.lazybull.v2.store.write_lock",
+  "src.lazybull.v2.train",
+  "src.lazybull.v2.train.core",
+  "src.lazybull.v2.train.core.constants",
+  "src.lazybull.v2.train.core.eval",
+  "src.lazybull.v2.train.core.features",
+  "src.lazybull.v2.train.core.labels",
+  "src.lazybull.v2.train.core.prepare",
+  "src.lazybull.v2.train.core.prepare_families",
+  "src.lazybull.v2.train.core.runtime_derive",
+  "src.lazybull.v2.train.core.split",
+  "src.lazybull.v2.train.core.weights",
+  "src.lazybull.v2.train.core.xgb",
+  "src.lazybull.v2.train.data_adapter",
+  "src.lazybull.v2.train.ensemble",
+  "src.lazybull.v2.train.frame_cache",
+  "src.lazybull.v2.train.run_logger",
+  "src.lazybull.v2.train.trainer",
+  "src.lazybull.v2.train.walk_forward",
+  "src.lazybull.v2.train.walk_forward.backtest",
+  "src.lazybull.v2.train.walk_forward.data_state",
+  "src.lazybull.v2.train.walk_forward.deploy_training",
+  "src.lazybull.v2.train.walk_forward.identity_collect",
+  "src.lazybull.v2.train.walk_forward.orchestrator",
+  "src.lazybull.v2.train.walk_forward.reporting",
+  "src.lazybull.v2.train.walk_forward.skip_meta",
+  "src.lazybull.v2.train.walk_forward.split_training",
+  "src.lazybull.v2.train.walk_forward.summary",
+  "src.lazybull.v2.train.walk_forward.training",
+  "src.lazybull.v2.train.walk_forward.training_core",
+  "src.lazybull.v2.train.walk_forward.training_reporting",
+  "src.lazybull.v2.train.walk_forward.utils"
  ]
 }

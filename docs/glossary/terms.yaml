@@ -6,7 +6,7 @@
 # 引用统计：scripts/check/glossary_refs.py；HTML 生成器按"近 90 天被引用次数"排序（P6 落地）。
 
 version: 1
-updated: "2026-10-20"
+updated: "2026-10-25"
 
 terms:
   # ========== 架构核心 ==========
@@ -806,3 +806,76 @@ terms:
     source: v2/store/labels_builder.py::maturity_status_for；p3_pre 规划 §3.4
     related: [forming, 行域]
     introduced: "2026-10-20"
+
+  # ========== P3 T5 验收（2026-10-25 收口登记） ==========
+  - term: 三臂
+    aliases: [three arms, T5 arms]
+    one_liner: P3 T5 验收的三条独立运行臂——臂① legacy×cs_train、臂② v2×cs_train、臂③ v2×panel
+    layman: 同一套选股流程分别用"老引擎 / 新引擎 / 新数据"各跑一遍，像三条流水线同时出货，逐项比对
+    example: 臂① 与臂② 逐折指纹逐位一致（G-code PASS）；臂③ vs B0' ΔCAGR +0.45pp、ΔMaxDD −3.77pp 经 F11 归因闭合
+    source: P3 实施规划 §19；docs/plans/v2/p3_implementation_plan_20261020.md
+    related: [B0', G-code, G-data]
+    introduced: "2026-10-25"
+
+  - term: "B0'"
+    aliases: [B0 prime, B0p]
+    one_liner: 臂①（legacy×cs_train）冻结出的基线——配置指纹 + 逐折收益路径 + 链式指标 + 数据态/代码态身份
+    layman: 把老流水线那次验收跑出来的成绩单复印盖章，之后所有新流水线都拿它当对照
+    example: B0' 链式 22.5687% / −25.4338% / 0.9152；冻结清单 data/frozen_reference/v2_p3/b0_prime/freeze_manifest.json
+    source: P3 实施规划 §19.21；Q12-A
+    related: [三臂, G-data]
+    introduced: "2026-10-25"
+
+  - term: G-code
+    aliases: [代码等价门, gcode]
+    one_liner: 臂① vs 臂② 的代码等价门——逐折指纹逐位 + 成交逐笔 + 链式净值 1e-6 + 信号/评估 top-k 辅证
+    layman: 换引擎不换数据时，两台机器必须吐出完全相同的单子；连并列股票的先后都要一致
+    example: 14/14 折指纹一致、批指纹 8878aff8…、净值 max|Δ|=0.0、top-k 零互换 ⇒ PASS
+    source: P3 实施规划 §19.4；data/frozen_reference/v2_p3/t5_gcode_verdict_20261025.json
+    related: [三臂, B0', 回归边]
+    introduced: "2026-10-25"
+
+  - term: G-data
+    aliases: [数据面判定表, gdata]
+    one_liner: 臂③ vs B0' 的数据面判定表——ΔCAGR ±8pp（严格大于）、ΔSharpe 记录、ΔMaxDD 零容忍 + 归因出口
+    layman: 换数据源后成绩单允许小幅出入，但回撤变差别想蒙混过关：必须把每一处输入差异说清楚才放行
+    example: ΔCAGR +0.4452pp（带内）、ΔMaxDD −3.7669pp（归因闭合后登记放行）、ΔSharpe −0.00964 ⇒ PASS
+    source: P3 实施规划 §19.22；data/frozen_reference/v2_p3/t5_gdata_verdict_20261025.json
+    related: [三臂, B0', 归因闭合]
+    introduced: "2026-10-25"
+
+  - term: 归因闭合
+    aliases: [attribution closure, F11 closure]
+    one_liner: F11 归因闭合 = a 节输入差异 100% 词表分类且无拒绝项 + 输出级一致性（零输入⇒零输出、逐折对应）
+    layman: 不是"差异消失了"，而是"每一处差异都能对上已登记的账"；对不上就不算闭合
+    example: F11-r2：136 个差异列、拒绝 0、结构破坏 0、已登记结构差异 40、输出一致性 consistent=true ⇒ 闭合
+    source: P3 实施规划 §19.22/§19.23；docs/reports/v2_p3_data_impact_20261025_r2.md
+    related: [归因门, G-data]
+    introduced: "2026-10-25"
+
+  - term: 闭市排除日
+    aliases: [Stock Connect closure exclusion, excluded_days]
+    one_liner: 北向闭市日 north_net_buy 全空的合法排除日；两侧排除集合必须完全一致，其余拒绝/缺日仍 FAIL
+    layman: 港交所休市时北向数据本来就没有；这种"空"不是坏数据，登记后跳过，但不能拿它掩盖别的缺失
+    example: 6 日：20211224 / 20220414 / 20220506 / 20220630 / 20221223 / 20230406；臂①/②/③ 排除集合一致
+    source: P3 实施规划 §19.18；按用户裁决的窄口径
+    related: [三臂, 归因闭合]
+    introduced: "2026-10-25"
+
+  - term: CYQ5 结构白名单
+    aliases: [CYQ5 columns, cyq schema evolution]
+    one_liner: 5 个 cyq 物化列（cost_concentration/weight_avg_bias/winner_rate/winner_rate_chg_5/20）在 2014~2017 仅 panel 侧存在的合法 schema 演进（末日 20171229）
+    layman: 老账本早期没有这 5 页，新账本一直保留空白页；空白页不算"多出来的内容"
+    example: split03~10 各 5 列、合计登记 40 项，不计结构破坏；2018-01-02 起两侧列与值均一致
+    source: v2/store/reconcile_rules.py（CYQ5_COLUMNS/CYQ5_LAST_DAY）；F11 §19.23
+    related: [归因门, 差异台账]
+    introduced: "2026-10-25"
+
+  - term: 回归边
+    aliases: [regression edge]
+    one_liner: 冻结旧模型 + P2b legacy_bypass 关闭模式复跑，与 P2b 冻结批成对精确比较的回归门
+    layman: 用同一批老模型再跑一遍新引擎，和上次的成绩单逐格对比，确认这段时间的改造没有改坏老路径
+    example: t5_regression_edge_closed_20261025 vs p2b_t5_closed_20261017_203508：14 折 errors=[] ⇒ PASS
+    source: P3 实施规划 §19.4/§19.22；data/frozen_reference/v2_p3/t5_regression_edge_verdict_20261025.json
+    related: [G-code, 差异台账]
+    introduced: "2026-10-25"

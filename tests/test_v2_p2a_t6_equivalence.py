@@ -7,8 +7,9 @@
 - ensemble / factory 行为等价（C / D 组）；
 - 改指与退役符号扫描（E 组）：v2/core/signal 不引用旧 ``signals.*`` 模块、
   不残留退役 downside_penalty 符号（归属判定：保留签名的参数名 /
-  ``self.downside_penalty`` 状态属性 / 文档文本不计）；只读过渡依赖与旧侧
-  为同一模块对象（B5 口径）；
+  ``self.downside_penalty`` 状态属性 / 文档文本不计）；只读过渡依赖对象身份
+  （B5 口径；P3-T2 清偿后 = 注册表磁盘状态共享、类对象按侧分置、
+  freshness/配置单例同一对象）；
 - 禁止真实配置读取永久回归（F 组，范式同 T4 R2-T4-01 / T5）。
 
 真实注册模型冒烟按评审 2 注记为**手工证据**，测试套件不依赖生产模型文件。
@@ -945,9 +946,21 @@ def test_importer_package_of_v2_signal_files_exact():
 
 
 def test_shared_dependency_object_identity():
-    """只读过渡依赖与旧侧为同一模块对象（B5 口径：无第二份配置/注册表状态）。"""
+    """只读过渡依赖对象身份（B5 口径；P3-T2 清偿后修订）。
+
+    B5 原始口径「无第二份配置/注册表状态」在 P3-T2 注册表整移后演进为：
+    注册表**磁盘状态**（同一 models_dir 文件集）两侧共享，**类对象按侧分置**
+    （v2 侧改指整移件 ``v2.common.model_registry.ModelRegistry``，§3.3 T2 行；
+    S3 读路径差异已登记）；配置单例与 availability 仍为同一对象；
+    freshness 衰减经 shim 归一到 ``v2.common.freshness`` 同一对象。
+    """
     assert old_ml.get_stock_selection_models_root is new_ml.get_stock_selection_models_root
-    assert old_ml.ModelRegistry is new_ml.ModelRegistry
+    # P3-T2：注册表整移 v2/common（读写一体）；v2 侧改指整移件，旧侧保持原类
+    import src.lazybull.ml.model_registry as old_registry_mod
+    import src.lazybull.v2.common.model_registry as new_registry_mod
+
+    assert old_ml.ModelRegistry is old_registry_mod.ModelRegistry
+    assert new_ml.ModelRegistry is new_registry_mod.ModelRegistry
     assert old_ml.ensure_availability_markers is new_ml.ensure_availability_markers
     assert old_ml.apply_event_freshness_decay is new_ml.apply_event_freshness_decay
     assert (
@@ -982,6 +995,13 @@ def test_t6_suite_forbids_real_config_read(monkeypatch):
     **立即抛 RuntimeError 的禁止读取替身**，在该替身下复跑整个 T6 测试文件
     （本项除外，防递归）：必须全绿、真实配置读取 0 次。任一测试绕过合成
     stub 直接读取真实配置 ⇒ 替身抛出 ⇒ 该测试失败。
+
+    加固（R2-T5AE 收口处置 §19.31，2026-10-26）：进程内嵌套复跑在全量长序列下
+    曾在 inner ``pytest_sessionfinish`` 的 tmp 目录清理处被 IDE sitecustomize
+    shim 的 shutil.rmtree bulk-delete 保护打断（SystemExit(1)；inner 测试内容
+    本身全绿，跨会话 garbage 累积触发）——inner 复跑改用仓库 ``temp/`` 下
+    ``--basetemp`` 隔离（绕开默认编号目录清理路径）+ 重试一次保留；
+    **守卫本体不放宽**——任何一次运行 ``real_reads`` 非空立即 FAIL。
     """
     real_reads: List[int] = []
 
@@ -993,16 +1013,27 @@ def test_t6_suite_forbids_real_config_read(monkeypatch):
         monkeypatch.setattr(module, "get_stock_selection_models_root", _reject_configuration_read)
 
     counter = _PassedCounter()
-    exit_code = pytest.main(
-        [
-            "-q",
-            "-k",
-            "not test_t6_suite_forbids_real_config_read",
-            str(Path(__file__)),
-        ],
-        plugins=[counter],
-    )
-    assert exit_code == 0, "禁止真实配置读取下 T6 套件存在失败项"
-    assert real_reads == [], f"真实配置读取发生 {len(real_reads)} 次"
+    # --basetemp 指向仓库 temp/（R2-T5AE 收口处置 §19.31 根因修复）：避开默认
+    # ``pytest-of-<user>`` 编号目录的会话末 garbage 清理——IDE sitecustomize shim
+    # 对 shutil.rmtree 的 bulk-delete 保护在跨会话累积量大时抛 SystemExit(1)，
+    # 使 inner pytest.main 在 sessionfinish 异常终止（测试内容本身全绿）。
+    inner_args = [
+        "-q",
+        "-k",
+        "not test_t6_suite_forbids_real_config_read",
+        "--basetemp",
+        str(Path(__file__).resolve().parents[1] / "temp" / "t6_inner_pytest"),
+        str(Path(__file__)),
+    ]
+    last_exit: Optional[int] = None
+    for _attempt in range(2):
+        real_reads.clear()
+        counter.passed = 0
+        last_exit = pytest.main(list(inner_args), plugins=[counter])
+        # 守卫本体：任何一次运行发生真实读取 ⇒ 立即 FAIL（不参与重试）
+        assert real_reads == [], f"真实配置读取发生 {len(real_reads)} 次"
+        if last_exit == 0:
+            break
+    assert last_exit == 0, "禁止真实配置读取下 T6 套件存在失败项（含一次重试）"
     # 复跑非空跑：当前文件 46 项（含本项），inner 应跑 45 项；下限防未来漂移
     assert counter.passed >= 44, f"inner 复跑通过数异常: {counter.passed}"

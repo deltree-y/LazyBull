@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.ml.walk_forward.chain_metrics import calculate_chain_metrics
+from src.lazybull.v2.common.chain_metrics import calculate_chain_metrics
 
 CHAIN_GLOB = "chain_nav_*.csv"
 SUMMARY_GLOB = "walk_forward_summary_*.csv"

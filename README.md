@@ -771,7 +771,7 @@ python scripts/compare_wf_fold_subset.py \
 ```
 
 该工具只读既有 `chain_nav` / summary / 数据态快照，按折子集重算链式指标（子集净值先
-归一化到子集起点，再复用 `ml/walk_forward/chain_metrics.py` 口径），输出 `折子集对比.csv`
+归一化到子集起点，再复用 `v2/common/chain_metrics.py` 口径；`ml/walk_forward/chain_metrics.py` 为 re-export shim），输出 `折子集对比.csv`
 （含 ΔCAGR / Δ最大回撤 / Δ夏普 与逐折同向数）与 `逐折对比.csv`（中文表头，默认落
 `data/reports/wf_fold_subset/<时间戳>/`）。折集合、逐折窗口或数据态 ID 不一致会直接报错终止。
 
@@ -908,6 +908,27 @@ python scripts/v2_p1/recover_manifest.py --data-root data
 v2 panel/labels 供 P3 只读消费，P3 开工硬门与训练适配契约见实施规划（本地
 `docs/plans/v2/p3_pre_label_refresh_store_t0_plan_20261017.md`）§6。
 
+**P3 迁移验收工具（内部使用）：** `scripts/v2_p3/` 的信号辅证复用回放的股票池与当日
+clean 行情，应用相同的 ST、上市天数和停牌/无行情筛选；评估 Top-K 明细必须覆盖全部预期折。
+归因报告会核验实际交易日历及特征文件的消费身份，读取前后或报告结束时发现漂移即失败，
+缓存命中也执行身份检查。北向（Stock Connect）闭市日仅在 raw `moneyflow_hsgt` 的
+`hgt/sgt/north_money` 全空且源侧 `north_net_buy` 全空时登记为 `excluded_days`，
+不参与日频指纹评分；其余缺失或被拒日仍直接失败。袖子身份对非 `V2Trainer` 调用方
+保持现状（视为未携带）；宿主携带身份时必须由 trainer 实现 `bind_sleeve_identity`
+同步到模型 metadata，否则明确报错。工具仍按阶段分次授权运行，生产链路保持上述现状。
+
+**v2 训练迁移验收（P3 T5，v0.208.0）：** 三臂验收全部通过——臂① legacy×cs_train、
+臂② v2×cs_train、臂③ v2×panel。**G-code**（臂① vs 臂②）：14/14 逐折指纹逐位一致、
+成交逐笔精确、链式净值 max|Δ|=0、信号/评估 top-k 零互换；**G-data**（臂③ vs B0'）：
+ΔCAGR +0.445pp（±8pp 带内）、ΔMaxDD −3.77pp 经 F11 归因闭合后放行登记、ΔSharpe
+−0.0096；**G-data PASS 的语义是“差异可归因”，不是“panel ≈ cs_train”**：实测成交键集
+对称差逐折 >80%、预测同键改分近全量（max|Δ| 0.3~1.3）、max|Δnav| 5.689e-01、
+ΔMaxDD −3.77pp，P4 消费必须带此量级登记；**F11 归因**：136 个差异列 100% 词表分类、
+拒绝 0、结构破坏 0（CYQ5 结构白名单登记 40 项）、输出级一致性通过；**回归边**：冻结旧模型 + P2b `legacy_bypass`
+复跑 vs `p2b_t5_closed_20261017_203508` 成对精确 PASS。三臂证据根
+`data/frozen_reference/v2_p3/`。**注意：P3 仍未切换生产链路**——v2 panel/labels 供
+P4 消费，现役训练/回测/纸面继续走 cs_train/cs_infer 与旧内核。
+
 **ML 模型特点：**
 - 使用全量特征列训练 XGBoost 回归模型
 - 标签为 `y_ret_5`（未来 5 日收益率，T+1 收盘买入 / T+1+5 开盘卖出口径）
@@ -1022,6 +1043,9 @@ pytest
 pytest tests/test_cost.py
 pytest tests/test_features.py
 pytest tests/test_cleaner.py
+
+# 默认临时目录不可访问时，在仓库 temp/ 下指定本次运行的独立目录
+pytest tests/test_v2_p3_t5_arm_runner.py --basetemp=temp/pytest_t5_arm_runner
 
 # 查看覆盖率
 pytest --cov=src/lazybull --cov-report=html

@@ -53,8 +53,12 @@ DIVIDEND_HIST_MISSING_COL = "dividend_hist_missing"  # 从未分红=1/有历史=
 
 # 分红政策因子 schema 哨兵：handler 对当日全截面恒写当前版本号（含无数据股票），
 # 训练入口校验哨兵列缺失、NaN 或版本不符必须失败；语义重做时递增哨兵值。
-DIVIDEND_POLICY_SCHEMA_VERSION = 3
-DIVIDEND_POLICY_VERSION_COL = "dividend_schema_v1"
+# schema 描述唯一来源 = v2/common/model_schema.py（P3-T2 上移，R2-02；factors → common 合规），
+# 本模块 re-export 保持旧导入路径（同一对象，行为逐位不变）。
+from src.lazybull.v2.common.model_schema import (  # noqa: F401
+    DIVIDEND_POLICY_SCHEMA_VERSION,
+    DIVIDEND_POLICY_VERSION_COL,
+)
 
 # lookup 中间列（近 12 个月每股现金分红累计分子，handler 除以未复权收盘价）
 _CASH_12M_ADJ_COL = "dividend_cash_12m_adj"

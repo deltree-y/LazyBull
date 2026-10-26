@@ -51,8 +51,12 @@ CONSENSUS_REVISION_COLS = [
 ]
 
 CONSENSUS_REVISION_FRESHNESS_COL = "cons_revision_freshness_days"
-CONSENSUS_REVISION_VERSION_COL = "cons_revision_schema_v2"
-CONSENSUS_REVISION_SCHEMA_VERSION = 2
+# schema 描述唯一来源 = v2/common/model_schema.py（P3-T2 上移，与 R2-02 同模式扩展；
+# factors → common 合规），本模块 re-export 保持旧导入路径（同一对象，行为逐位不变）。
+from src.lazybull.v2.common.model_schema import (  # noqa: F401
+    CONSENSUS_REVISION_SCHEMA_VERSION,
+    CONSENSUS_REVISION_VERSION_COL,
+)
 
 _MAX_STATE_AGE_DAYS = 365
 _RECENT_WINDOW_DAYS = 90

@@ -15,10 +15,11 @@ v2 迁移复制件（P2a-T6，行为冻结）：与旧模块 ``signals/ml_signal
   ``_classify_feature_column_quality``（elif 链改早返回，分支互斥语义不变）。
   公开签名、数值操作顺序、日志文本逐字保留。
 
-依赖处置（§3.5 登记表）：
+依赖处置（§3.5 登记表；P3-T2 清偿，§3.3）：
 - ``common.config``：只读过渡依赖（同一模块对象同一单例，去除节点 P4 展平）；
-- ``ml.model_registry`` / ``ml.train_core``：只读过渡依赖（去除节点 P3 改指
-  ``train/*``）；
+- ``ml.model_registry`` / ``ml.train_core``：**已随 P3-T2 清偿**——注册表整移
+  ``v2/common/model_registry.py``（读路径 S3：sidecar 缺失即报错）；freshness
+  衰减与共享常量上移 ``v2/common/freshness.py``（同一实现/同一对象）；
 - ``factors.availability``：只读，**永久沿用**（§4.3 factors 沿用）。
 
 基于训练好的机器学习模型生成交易信号
@@ -33,13 +34,13 @@ from loguru import logger
 
 from src.lazybull.common.config import get_stock_selection_models_root
 from src.lazybull.factors.availability import ensure_availability_markers
-from src.lazybull.ml import ModelRegistry
-from src.lazybull.ml.train_core import (
+from src.lazybull.v2.common.freshness import (
     DEFAULT_EVENT_FRESHNESS_HALF_LIFE_DAYS,
     EVENT_FRESHNESS_TO_VALUE_COLUMNS,
     FRESHNESS_STRATEGY_STATE_KEEP_EVENT_DECAY,
     apply_event_freshness_decay,
 )
+from src.lazybull.v2.common.model_registry import ModelRegistry
 
 from .base import Signal
 

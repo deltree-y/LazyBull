@@ -18,7 +18,7 @@ D6 摘除：旧实现此处的 3 个 exposure mixin 关联初始化不迁——
   ``PendingOrderManager`` 改指 v2 ``core.execution.pending_order``（均 T1/T4 已迁）；
 - ``Signal`` 改指 v2 ``core.signal.base``（T4 同批交付）；
 - ``Universe`` 只读引用旧 ``universe.base``（永久沿用，§3.5）；
-- ``DataLoader`` 只读过渡依赖旧 ``data.loader``（去除节点 P2b/P3 数据面切换，D2）；
+- ``DataLoader`` 只读过渡依赖旧 ``data.loader``（去除节点 P4（F14），D2）；
 - ``load_industry_mapping`` 改指 v2 ``core/decision/industry_constraint``
   （T3 已归位；原 T4 期的旧 ``portfolio`` 只读过渡依赖随之去除）。
 """
@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from src.lazybull.data.loader import DataLoader  # 只读过渡依赖（§3.5；去除节点 P2b/P3）
+from src.lazybull.data.loader import DataLoader  # 只读过渡依赖（§3.5；去除节点 P4（F14））
 from src.lazybull.universe.base import Universe  # 永久沿用（§3.5）
 from src.lazybull.v2.common.cost import CostModel
 from src.lazybull.v2.common.rules.stop_loss import StopLossConfig, StopLossMonitor

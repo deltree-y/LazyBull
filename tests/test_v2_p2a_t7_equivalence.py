@@ -394,6 +394,10 @@ def _replay_call_kwargs() -> Dict[str, object]:
         initial_capital=1000000.0,
         split_num=0,
         stock_domain="main",
+        # P3-T3（§17.4）：replay 默认特征源已切换 panel；本测试锚定 cs_train 路径
+        # 装配等价，显式声明验收例外（tests/ 在白名单内）
+        feature_source="cs_train_verify",
+        acceptance_purpose="regression_edge",
     )
 
 
@@ -439,12 +443,19 @@ def test_replay_assembly_equivalence(monkeypatch):
 
     storage_old, storage_new = _SynthStorage(), _SynthStorage()
     kwargs = _replay_call_kwargs()
+    # P3-T3：feature_source/acceptance_purpose 为新件签名参数（旧件无）——
+    # 旧侧调用剔除（旧侧恒 cs_train 单通道），新侧显式 cs_train_verify 验收例外
+    kwargs_old = {
+        key: value
+        for key, value in kwargs.items()
+        if key not in ("feature_source", "acceptance_purpose")
+    }
     out_old = old_replay.run_oos_backtest(
         storage=storage_old,
         loader=_SynthLoader(),
         trade_cal=_synth_trade_cal(),
         stock_basic=_synth_stock_basic(),
-        **kwargs,
+        **kwargs_old,
     )
     out_new = new_replay.run_oos_backtest(
         storage=storage_new,
@@ -1517,7 +1528,7 @@ def test_compare_attribution_unconditional_and_strict(tmp_path):
 #: v2/hosts 旧侧依赖白名单（登记口径 = 规划 §3.5 过渡依赖表 + factors/universe 永久沿用）
 _ALLOWED_OLD_IMPORT_PREFIXES = (
     "src.lazybull.common.config",  # 只读过渡（全局单例），去除节点 P4
-    "src.lazybull.data",  # 只读过渡（loader/storage），去除节点 P2b/P3
+    "src.lazybull.data",  # 只读过渡（loader/storage）；P3-T3 起仅限 cs_train_verify 验收例外 + 行情读(P4)
     "src.lazybull.factors.holdertrade",  # 运行时派生四族（永久沿用）
     "src.lazybull.factors.repurchase",
     "src.lazybull.factors.top10_floatholders",
@@ -1822,6 +1833,11 @@ def test_t7_suite_forbids_real_config_read(monkeypatch):
             "-q",
             "-k",
             "not test_t7_suite_forbids_real_config_read",
+            # --basetemp 指向仓库 temp/（§19.31 根因修复，同 T6）：避开默认
+            # pytest-of-<user> 编号目录 garbage 清理被 IDE sitecustomize shim
+            # 的 shutil.rmtree bulk-delete 保护打断（SystemExit(1)）
+            "--basetemp",
+            str(Path(__file__).resolve().parents[1] / "temp" / "t7_inner_pytest"),
             str(Path(__file__)),
         ],
         plugins=[counter],

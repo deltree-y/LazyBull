@@ -54,10 +54,33 @@ import check_inuse_closure as cic  # noqa: E402
 # P3-pre-T2（2026-10-18）新增 v2/store/row_domain 1 模块，不在两条主链路闭包内
 # ⇒ 不在用 106→107、全仓 306→307；静态闭包与在用数不变；
 # P3-pre-T3（2026-10-18）新增 v2/store 交付件 2 模块（label_refresh/store_identity），
-# 均不在两条主链路闭包内 ⇒ 不在用 107→109、全仓 307→309；静态闭包与在用数不变）
-INUSE_BASELINE = 200
-NOTIN_BASELINE = 109
-STATIC_BASELINE = 196
+# 均不在两条主链路闭包内 ⇒ 不在用 107→109、全仓 307→309；静态闭包与在用数不变；
+# P3-T1（2026-10-20）新增 v2/train 交付件 2 模块（包 __init__ + data_adapter
+# 训练数据只读适配层），均不在两条主链路闭包内
+# ⇒ 不在用 109→111、全仓 309→311；静态闭包与在用数不变；
+# P3-T2（2026-10-21）新增 v2/common 交付件 5 模块（model_schema/freshness/eval_utils/
+# chain_metrics/model_registry）+ v2/train 交付件 13 模块（core 包 __init__ + 10 模块
+# 〔constants/split/prepare/prepare_families/xgb/eval/labels/features/weights/runtime_derive〕
+# + ensemble + frame_cache）；旧文件 shim 化（ml.eval_utils / ml.walk_forward.chain_metrics /
+# ml.train_core.freshness / ml.train_core.constants 部分符号 / factors×3 schema 符号）
+# 使 v2.common.{eval_utils, freshness, model_schema, chain_metrics} 4 模块进入两条主链路
+# 闭包 ⇒ 在用 200→204、静态闭包 196→200；其余 14 模块不在用（含复杂度拆分的
+# prepare_families）⇒ 不在用 111→125、全仓 311→329;
+# P3-T3（2026-10-22）新增 v2/train 交付件 15 模块(run_logger + trainer +
+# walk_forward 包 13 〔__init__/utils/training_core/training/training_reporting/
+# reporting/summary/split_training/deploy_training/orchestrator/backtest/data_state/
+# skip_meta〕),均不在两条主链路闭包内
+# ⇒ 不在用 125→140、全仓 329→344;静态闭包与在用数不变;
+# P3-T3 评审处置轮(2026-10-22)新增 identity_collect 1 模块(orchestrator
+# 数据态身份收集组拆分件),不在两条主链路闭包内
+# ⇒ 不在用 140→141、全仓 344→345;静态闭包与在用数不变;
+# P3-T4（2026-10-22）新增 v2/sleeves 交付件 6 模块（包 __init__ + spec 值对象 +
+# _registry 封闭注册表 + value 包 __init__ + value/spec + value/feature_columns
+# 候选超集声明），均不在两条主链路闭包内
+# ⇒ 不在用 141→147、全仓 345→351；静态闭包与在用数不变
+INUSE_BASELINE = 204
+NOTIN_BASELINE = 147
+STATIC_BASELINE = 200
 
 
 @pytest.fixture()

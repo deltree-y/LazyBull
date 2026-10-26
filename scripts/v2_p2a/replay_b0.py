@@ -11,10 +11,10 @@ B0 配置按 ``docs/contracts/baseline_freeze.md`` §2 写死为常量（其来�
 | 依赖 | 形态 | 去除节点 |
 |---|---|---|
 | ``common.config``（get_data_root / get_stock_selection_models_root） | 只读（全局单例） | P4 展平/切换评审 |
-| ``data``（Storage / DataLoader） | 只读过渡 | P2b/P3 数据面切换 |
-| ``ml.walk_forward.utils``（切分生成） | 只读过渡 | P3 WF 编排迁移段 |
-| ``ml.walk_forward.data_state``（数据态采集） | 只读过渡 | P3 WF 编排迁移段 |
-| ``ml.train_core.constants``（CONSENSUS_REVISION_FEATURE_COLUMNS） | 只读 | P3 train/* 归位 |
+| ``data``（Storage / DataLoader） | 只读过渡 | P2b/P3 数据面切换；P3-T3 起 replay 默认 panel，本脚本显式 cs_train_verify 回归边例外 |
+| ``ml.walk_forward.utils``（切分生成） | 只读过渡 | **已随 P3-T3 归位 ``v2.train.walk_forward.utils``**（搬运原样，同一性对跑锁定） |
+| ``ml.walk_forward.data_state``（数据态采集） | 只读过渡 | **已随 P3-T3 归位 ``v2.train.walk_forward.data_state``**（旧口径函数逐字保留） |
+| ``ml.train_core.constants``（CONSENSUS_REVISION_FEATURE_COLUMNS） | 只读 | **已随 P3-T2 归位 ``v2.train.core.constants``** |
 | ``factors.cashflow_quality``（cashflow_quality_live_columns） | 只读 | 永久（factors 沿用） |
 | ``universe.domains``（resolve_stock_domain） | 只读 | 永久（universe 沿用） |
 
@@ -55,18 +55,23 @@ from src.lazybull.common.config import (
 )
 from src.lazybull.data import DataLoader, Storage
 from src.lazybull.factors.cashflow_quality import cashflow_quality_live_columns
-from src.lazybull.ml.train_core.constants import CONSENSUS_REVISION_FEATURE_COLUMNS
-from src.lazybull.ml.walk_forward.data_state import collect_data_state, compute_data_state_id
-from src.lazybull.ml.walk_forward.utils import (
-    WalkForwardSplit,
-    generate_walk_forward_splits_by_count,
-)
 from src.lazybull.universe.domains import resolve_stock_domain
 from src.lazybull.v2.core.signal.ml_signal import MLSignal
 from src.lazybull.v2.evidence.fingerprint_keys import fingerprint
 from src.lazybull.v2.hosts.backtest.replay import run_oos_backtest
 from src.lazybull.v2.hosts.backtest.runs_writer import write_runs_batch
 from src.lazybull.v2.hosts.backtest.runtime import MERGER_SLEEVE_ID, validate_merger_mode
+from src.lazybull.v2.train.core.constants import CONSENSUS_REVISION_FEATURE_COLUMNS
+
+# P3-T3 改指（§17.1-C②）：旧口径函数在 v2 侧逐字保留，行为不变（等价验证 = 既有 P2a 测试全绿）
+from src.lazybull.v2.train.walk_forward.data_state import (
+    collect_data_state,
+    compute_data_state_id,
+)
+from src.lazybull.v2.train.walk_forward.utils import (
+    WalkForwardSplit,
+    generate_walk_forward_splits_by_count,
+)
 
 # ── B0 配置常量（baseline_freeze.md §2 写死；指纹键值与冻结批次的核对 = 验收门 3） ──
 B0_SPLIT_COUNT = 14
@@ -377,6 +382,10 @@ def _run_b0_split(
         top10fh_panel=None,
         top_inst_lookup=None,
         merger_mode=merger_mode,
+        # P3-T3（§17.4）：B0 重放 = §7.1 回归边明文允许的 cs_train 验收源使用方，
+        # 显式声明（replay 默认已切换 panel；本工具重放 B0 冻结口径，数据面不变）
+        feature_source="cs_train_verify",
+        acceptance_purpose="regression_edge",
     )
     if not metrics:
         raise RuntimeError(f"Split {split.split_index} OOS 回测返回空（数据缺失或日历异常）")
